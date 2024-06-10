@@ -1,0 +1,12 @@
+This is lib/ from https://github.com/Cyan4973/lz4
+
+as of revision:
+e95781dc2a30953a37d812175bf4fc8f0af7143a
+
+Update with:
+    git clone https://github.com/Cyan4973/lz4
+    cp lz4/lib/*.{c,h} .
+
+    (it's okay xxhash.{c,h} is also here because modern lz4 includes it all
+     as static. sure, now we have multiple xxhash implementations in our code,
+     but it's the simplest build process.)
