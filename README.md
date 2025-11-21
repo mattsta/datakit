@@ -57,13 +57,26 @@ make -j8
 - [databox](docs/modules/core/DATABOX.md) - Universal 16-byte container
 - [flex](docs/modules/flex/FLEX.md) - Compressed variable-length arrays
 - [mflex](docs/modules/flex/MFLEX.md) - Transparent LZ4 compression wrapper
-- [String utilities](docs/modules/string/) - str, dks (mds/mdsc), strDoubleFormat
+- **String utilities:**
+  - [str](docs/modules/string/STR.md) - Core string operations
+  - [dks](docs/modules/string/DKS.md) - Dynamic key strings (mds/mdsc)
+  - [strDoubleFormat](docs/modules/string/STR_DOUBLE_FORMAT.md) - Efficient double formatting
+  - [String utils](docs/modules/string/STR_UTILS.md) - Additional utilities
 
 **Scale-Aware Containers:**
 
-- [multimap](docs/modules/multimap/) - Key-value store (small/medium/full/atom variants)
-- [multilist](docs/modules/multilist/) - Linked lists with multi-element nodes
-- [multiarray](docs/modules/multiarray/) - Dynamic arrays (small/medium/large variants)
+- **multimap** - Key-value store (small/medium/full/atom variants)
+  - [Overview](docs/modules/multimap/MULTIMAP.md) - Core functionality
+  - [Variants](docs/modules/multimap/VARIANTS.md) - Choosing the right size
+  - [Examples](docs/modules/multimap/EXAMPLES.md) - Usage patterns
+- **multilist** - Linked lists with multi-element nodes
+  - [Overview](docs/modules/multilist/MULTILIST.md) - Core functionality
+  - [Variants](docs/modules/multilist/VARIANTS.md) - Choosing the right size
+  - [Examples](docs/modules/multilist/EXAMPLES.md) - Usage patterns
+- **multiarray** - Dynamic arrays (small/medium/large variants)
+  - [Overview](docs/modules/multiarray/MULTIARRAY.md) - Core functionality
+  - [Variants](docs/modules/multiarray/VARIANTS.md) - Choosing the right size
+  - [Examples](docs/modules/multiarray/EXAMPLES.md) - Usage patterns
 - [multidict](docs/modules/multi/MULTIDICT.md) - Generic hash table
 - [multilru](docs/modules/multi/MULTILRU.md) - Multi-level LRU cache
 - [multiroar](docs/modules/multi/MULTIROAR.md) - Roaring bitmaps
@@ -85,7 +98,13 @@ make -j8
 - [membound](docs/modules/memory/MEMBOUND.md) - Memory allocation limits
 - [fibbuf](docs/modules/memory/FIBBUF.md) - Fibonacci buffer sizing
 - [jebuf](docs/modules/memory/JEBUF.md) - Jemalloc-aligned allocation
-- [System modules](docs/modules/system/) - OS integration, timers, mutexes
+- **System modules:**
+  - [fastmutex](docs/modules/system/FASTMUTEX.md) - Fast mutex primitives
+  - [multiTimer](docs/modules/system/MULTI_TIMER.md) - High-performance timers
+  - [osRegulate](docs/modules/system/OS_REGULATE.md) - Resource regulation
+  - [setproctitle](docs/modules/system/SETPROCTITLE.md) - Process title setting
+  - [timeUtil](docs/modules/system/TIME_UTIL.md) - Time utilities
+  - [versionOSRuntime](docs/modules/system/VERSION_OS_RUNTIME.md) - OS version detection
 
 ### Advanced Topics
 
