@@ -31,17 +31,20 @@ A task-oriented quick reference for common operations across all datakit modules
 ### "I want to create a map/dictionary"
 
 **multimap** (sorted key-value, auto-scaling):
+
 ```c
 multimap *m = multimapNew(2);  // 2 = key+value
 ```
 
 **multidict** (hash table with custom storage):
+
 ```c
 multidictClass *class = /* your storage class */;
 multidict *d = multidictNew(&multidictTypeExactKey, class, 0);
 ```
 
 **multiroar** (sparse bitmap/set):
+
 ```c
 multiroar *r = multiroarBitNew();  // For set membership
 ```
@@ -49,16 +52,19 @@ multiroar *r = multiroarBitNew();  // For set membership
 ### "I want to create a list"
 
 **multilist** (linked list of packed arrays):
+
 ```c
 multilist *ml = multilistNew(FLEX_CAP_LEVEL_2048, 0);
 ```
 
 **flex** (compact variable-length array):
+
 ```c
 flex *f = flexNew();
 ```
 
 **mflex** (auto-compressed flex):
+
 ```c
 mflex *m = mflexNew();
 mflexState *state = mflexStateCreate();
@@ -67,11 +73,13 @@ mflexState *state = mflexStateCreate();
 ### "I want to create an array"
 
 **multiarray** (dynamic array, auto-scaling):
+
 ```c
 multiarray *arr = multiarrayNew(sizeof(int64_t), 1024);
 ```
 
 **Native inline array**:
+
 ```c
 MyStruct *arr = multiarrayNativeNew(arr[1024]);
 ```
@@ -79,16 +87,19 @@ MyStruct *arr = multiarrayNativeNew(arr[1024]);
 ### "I want to create a set"
 
 **intset** (variable-width integer set):
+
 ```c
 intset *is = intsetNew();  // Starts with 16-bit encoding
 ```
 
 **multimap as set** (sorted, unique keys):
+
 ```c
 multimap *set = multimapSetNew(1);  // 1 element per entry
 ```
 
 **multiroar** (sparse integer bitmap):
+
 ```c
 multiroar *r = multiroarBitNew();
 ```
@@ -96,6 +107,7 @@ multiroar *r = multiroarBitNew();
 ### "I want to create a cache"
 
 **multilru** (multi-level LRU):
+
 ```c
 multilru *lru = multilruNew();  // Default 7 levels
 ```
@@ -103,11 +115,13 @@ multilru *lru = multilruNew();  // Default 7 levels
 ### "I want to create a string"
 
 **databox** (small strings, embedded):
+
 ```c
 databox str = databoxNewBytesString("hello");
 ```
 
 **DKS** (dynamic string buffer):
+
 ```c
 dksstr *s = dksstr_new();
 ```
@@ -149,6 +163,7 @@ mflexReset(&mf);        // mflex
 ### "I want to add to a map"
 
 **multimap**:
+
 ```c
 databox key = databoxNewBytesString("username");
 databox val = databoxNewBytesString("alice");
@@ -157,6 +172,7 @@ multimapInsert(&m, elements);
 ```
 
 **multidict**:
+
 ```c
 databox key = databoxNewBytesString("key");
 databox val = databoxNewSigned(42);
@@ -166,6 +182,7 @@ multidictAdd(d, &key, &val);
 ### "I want to add to a list"
 
 **multilist (queue - push tail)**:
+
 ```c
 databox item = databoxNewBytesString("task");
 mflexState *state = mflexStateCreate();
@@ -173,18 +190,21 @@ multilistPushByTypeTail(&ml, state, &item);
 ```
 
 **multilist (stack - push head)**:
+
 ```c
 databox item = databoxNewSigned(42);
 multilistPushByTypeHead(&ml, state, &item);
 ```
 
 **flex (append)**:
+
 ```c
 flexPushBytes(&f, "hello", 5, FLEX_ENDPOINT_TAIL);
 flexPushSigned(&f, 42, FLEX_ENDPOINT_TAIL);
 ```
 
 **mflex (compressed)**:
+
 ```c
 mflexPushDouble(&mf, state, 3.14, FLEX_ENDPOINT_TAIL);
 ```
@@ -192,6 +212,7 @@ mflexPushDouble(&mf, state, 3.14, FLEX_ENDPOINT_TAIL);
 ### "I want to add to an array"
 
 **multiarray**:
+
 ```c
 double value = 3.14;
 multiarrayInsertAfter(&arr, 0, &value);
@@ -200,12 +221,14 @@ multiarrayInsertAfter(&arr, 0, &value);
 ### "I want to add to a set"
 
 **intset**:
+
 ```c
 bool added;
 intsetAdd(&is, 42, &added);  // added = true if new
 ```
 
 **multiroar**:
+
 ```c
 multiroarBitSet(r, 12345);
 ```
@@ -213,12 +236,14 @@ multiroarBitSet(r, 12345);
 ### "I want to insert in sorted order"
 
 **multimap** (auto-sorted):
+
 ```c
 const databox *elements[2] = {&key, &val};
 multimapInsert(&m, elements);  // Maintains sort order
 ```
 
 **flex** (manual sorted insert):
+
 ```c
 flexEntry *middle = NULL;
 databox box = databoxNewSigned(42);
@@ -232,12 +257,14 @@ flexInsertByTypeSortedWithMiddle(&f, &box, &middle);
 ### "I want to remove from a map"
 
 **multimap**:
+
 ```c
 databox key = databoxNewBytesString("username");
 multimapDelete(&m, &key);
 ```
 
 **multidict**:
+
 ```c
 multidictDelete(d, &key);
 ```
@@ -245,6 +272,7 @@ multidictDelete(d, &key);
 ### "I want to remove from a list"
 
 **multilist (pop from head - queue)**:
+
 ```c
 databox result;
 if (multilistPopHead(&ml, state, &result)) {
@@ -254,6 +282,7 @@ if (multilistPopHead(&ml, state, &result)) {
 ```
 
 **multilist (pop from tail - stack)**:
+
 ```c
 databox result;
 if (multilistPopTail(&ml, state, &result)) {
@@ -262,12 +291,14 @@ if (multilistPopTail(&ml, state, &result)) {
 ```
 
 **flex (delete at position)**:
+
 ```c
 flexEntry *fe = flexIndex(f, 5);
 flexDelete(&f, &fe);
 ```
 
 **flex (delete range)**:
+
 ```c
 flexDeleteRange(&f, 0, 10);  // Delete first 10 elements
 ```
@@ -275,6 +306,7 @@ flexDeleteRange(&f, 0, 10);  // Delete first 10 elements
 ### "I want to remove from an array"
 
 **multiarray**:
+
 ```c
 multiarrayDelete(&arr, 5);  // Delete at index 5
 ```
@@ -282,12 +314,14 @@ multiarrayDelete(&arr, 5);  // Delete at index 5
 ### "I want to remove from a set"
 
 **intset**:
+
 ```c
 bool removed;
 intsetRemove(&is, 42, &removed);
 ```
 
 **multiroar**:
+
 ```c
 multiroarRemove(r, 12345);
 ```
@@ -295,6 +329,7 @@ multiroarRemove(r, 12345);
 ### "I want to evict LRU item"
 
 **multilru**:
+
 ```c
 multilruPtr evicted;
 if (multilruRemoveMinimum(lru, &evicted)) {
@@ -309,6 +344,7 @@ if (multilruRemoveMinimum(lru, &evicted)) {
 ### "I want to find by key"
 
 **multimap**:
+
 ```c
 databox searchKey = databoxNewBytesString("username");
 databox value;
@@ -319,6 +355,7 @@ if (multimapLookup(m, &searchKey, results)) {
 ```
 
 **multidict**:
+
 ```c
 databox foundValue;
 if (multidictFind(d, &key, &foundValue)) {
@@ -327,12 +364,14 @@ if (multidictFind(d, &key, &foundValue)) {
 ```
 
 **flex (linear search)**:
+
 ```c
 databox search = databoxNewBytesString("needle");
 flexEntry *found = flexFindByType(f, flexHead(f), &search, 0);
 ```
 
 **flex (binary search - sorted)**:
+
 ```c
 flexEntry *middle = flexMiddle(f, 1);
 databox search = databoxNewSigned(42);
@@ -342,6 +381,7 @@ flexEntry *found = flexFindByTypeSortedWithMiddle(f, 1, &search, middle);
 ### "I want to check membership"
 
 **intset**:
+
 ```c
 if (intsetFind(is, 42)) {
     // 42 is in set
@@ -349,6 +389,7 @@ if (intsetFind(is, 42)) {
 ```
 
 **multiroar**:
+
 ```c
 if (multiroarBitGet(r, 12345)) {
     // Bit is set
@@ -356,6 +397,7 @@ if (multiroarBitGet(r, 12345)) {
 ```
 
 **multimap**:
+
 ```c
 if (multimapExists(m, &key)) {
     // Key exists
@@ -385,6 +427,7 @@ bool exists = multiroarBitGet(r, position);
 ### "I want to iterate a map"
 
 **multimap**:
+
 ```c
 multimapIterator iter;
 multimapIteratorInit(m, &iter, true);  // true = forward
@@ -397,6 +440,7 @@ while (multimapIteratorNext(&iter, elements)) {
 ```
 
 **multidict (safe - can modify)**:
+
 ```c
 multidictIterator iter;
 multidictIteratorGetSafe(d, &iter);
@@ -409,6 +453,7 @@ multidictIteratorRelease(&iter);
 ```
 
 **multidict (SCAN - stateless)**:
+
 ```c
 void callback(void *privdata, const databox *key, const databox *val) {
     printf("Key: %s\n", key->data.bytes.start);
@@ -423,6 +468,7 @@ do {
 ### "I want to iterate a list"
 
 **multilist (forward)**:
+
 ```c
 multimapIterator iter;
 multilistIteratorInitForward(ml, state, &iter);
@@ -435,6 +481,7 @@ multilistIteratorRelease(&iter);
 ```
 
 **multilist (reverse)**:
+
 ```c
 multilistIteratorInitReverse(ml, state, &iter);
 while (multilistNext(&iter, &entry)) {
@@ -443,6 +490,7 @@ while (multilistNext(&iter, &entry)) {
 ```
 
 **flex (forward)**:
+
 ```c
 flexEntry *fe = flexHead(f);
 while (fe && flexEntryIsValid(f, fe)) {
@@ -454,6 +502,7 @@ while (fe && flexEntryIsValid(f, fe)) {
 ```
 
 **flex (reverse)**:
+
 ```c
 flexEntry *fe = flexTail(f);
 while (fe && flexEntryIsValid(f, fe)) {
@@ -467,6 +516,7 @@ while (fe && flexEntryIsValid(f, fe)) {
 ### "I want to iterate an array"
 
 **multiarray (all elements)**:
+
 ```c
 size_t count = multiarrayCount(arr);
 for (size_t i = 0; i < count; i++) {
@@ -478,6 +528,7 @@ for (size_t i = 0; i < count; i++) {
 ### "I want to iterate a set"
 
 **intset**:
+
 ```c
 for (uint32_t i = 0; i < intsetCount(is); i++) {
     int64_t value;
@@ -494,6 +545,7 @@ for (uint32_t i = 0; i < intsetCount(is); i++) {
 ### "I want to get by index"
 
 **multiarray**:
+
 ```c
 int64_t *value = (int64_t *)multiarrayGet(arr, 42);
 int64_t *first = (int64_t *)multiarrayGetHead(arr);
@@ -501,6 +553,7 @@ int64_t *last = (int64_t *)multiarrayGetTail(arr);
 ```
 
 **flex**:
+
 ```c
 flexEntry *fe = flexIndex(f, 5);      // Positive index
 flexEntry *last = flexIndex(f, -1);   // Negative index from end
@@ -509,6 +562,7 @@ flexEntry *tail = flexTail(f);
 ```
 
 **multilist**:
+
 ```c
 multilistEntry entry;
 if (multilistIndexGet(ml, state, 5, &entry)) {
@@ -517,6 +571,7 @@ if (multilistIndexGet(ml, state, 5, &entry)) {
 ```
 
 **intset** (sorted position):
+
 ```c
 int64_t value;
 intsetGet(is, 10, &value);  // 10th smallest value
@@ -597,6 +652,7 @@ bool empty = (intsetCount(is) == 0);
 ### "I want to know compression status"
 
 **mflex**:
+
 ```c
 bool compressed = mflexIsCompressed(mf);
 size_t uncompressed = mflexBytesUncompressed(mf);
@@ -635,17 +691,20 @@ databoxFree(&copy);
 ### "I want to grow a buffer efficiently"
 
 **Using fibbuf (Fibonacci growth)**:
+
 ```c
 size_t newSize = fibbufNextSizeBuffer(currentSize);
 ```
 
 **Using jebuf (jemalloc size class)**:
+
 ```c
 size_t allocSize = jebufSizeAllocation(requestedSize);
 void *ptr = malloc(allocSize);  // No wasted memory!
 ```
 
 **Combined (optimal)**:
+
 ```c
 size_t fibSize = fibbufNextSizeBuffer(currentSize);
 size_t allocSize = jebufSizeAllocation(fibSize);
@@ -683,6 +742,7 @@ multilru *lru = multilruNewWithLevelsCapacity(7, 10000);
 ### "I want to convert string to number"
 
 **Reliable round-trip conversion**:
+
 ```c
 databox result;
 if (StrScanScanReliable("3.14", 4, &result)) {
@@ -694,6 +754,7 @@ if (StrScanScanReliable("3.14", 4, &result)) {
 ```
 
 **Fast integer parsing**:
+
 ```c
 uint64_t value;
 if (StrBufToUInt64("12345", 5, &value)) {
@@ -702,6 +763,7 @@ if (StrBufToUInt64("12345", 5, &value)) {
 ```
 
 **LuaJIT-style scanning**:
+
 ```c
 databox result;
 StrScanFmt fmt = StrScanScan("42", &result, STRSCAN_OPT_TOINT, false, false);
@@ -713,6 +775,7 @@ if (fmt == STRSCAN_INT) {
 ### "I want to convert number to string"
 
 **Integer to string**:
+
 ```c
 char buf[32];
 size_t len = StrInt64ToBuf(buf, sizeof(buf), -12345);
@@ -720,6 +783,7 @@ printf("%.*s\n", (int)len, buf);  // "-12345"
 ```
 
 **Double to string**:
+
 ```c
 char buf[64];
 size_t len = StrDoubleFormatToBufNice(buf, sizeof(buf), 3.14159);
@@ -833,6 +897,7 @@ dksstr_free(s);
 ### "I want automatic compression"
 
 **mflex (transparent)**:
+
 ```c
 mflexState *state = mflexStateCreate();
 mflex *m = mflexNew();
@@ -850,6 +915,7 @@ printf("Ratio: %.2fx\n",
 ### "I want manual compression control"
 
 **Disable compression**:
+
 ```c
 mflex *m = mflexNewNoCompress();  // Never compress
 // OR
@@ -857,6 +923,7 @@ mflexSetCompressNever(&m, state);
 ```
 
 **Enable compression**:
+
 ```c
 mflexSetCompressAuto(&m, state);  // Try to compress
 ```
@@ -864,6 +931,7 @@ mflexSetCompressAuto(&m, state);  // Try to compress
 ### "I want to work with compressed data"
 
 **Open/close pattern**:
+
 ```c
 // Open (decompresses if needed)
 flex *f = mflexOpen(m, state);
@@ -876,6 +944,7 @@ mflexCloseGrow(&m, state, f);
 ```
 
 **Read-only access** (no recompression):
+
 ```c
 const flex *f = mflexOpenReadOnly(m, state);
 // Read operations...
@@ -889,6 +958,7 @@ const flex *f = mflexOpenReadOnly(m, state);
 ### "I want union/intersection/difference"
 
 **multiroar (bitmaps)**:
+
 ```c
 multiroar *a = multiroarBitNew();
 multiroar *b = multiroarBitNew();
@@ -908,6 +978,7 @@ multiroar *xor = multiroarNewXor(a, b);
 ```
 
 **multimap (sorted sets)**:
+
 ```c
 multimap *result = multimapNew(1);
 
@@ -927,6 +998,7 @@ multimapDifferenceKeys(&result, &iter1, &iter2, false);
 ### "I want to set a range of bits"
 
 **multiroar**:
+
 ```c
 multiroarBitSetRange(r, 1000, 100);  // Set bits 1000-1099
 ```
@@ -1080,6 +1152,7 @@ while (fe) {
    - Sparse sets → multiroar
 
 2. **Batch operations when possible**
+
    ```c
    // Open once, many ops, close once (mflex)
    flex *f = mflexOpen(m, state);
@@ -1090,6 +1163,7 @@ while (fe) {
    ```
 
 3. **Use middle hints for sorted operations**
+
    ```c
    flexEntry *middle = NULL;
    for (int i = 0; i < 1000; i++) {
@@ -1099,6 +1173,7 @@ while (fe) {
    ```
 
 4. **Disable resizing during bulk inserts**
+
    ```c
    multimapResizeDisable(m);
    // ... bulk inserts ...
@@ -1107,12 +1182,14 @@ while (fe) {
    ```
 
 5. **Use jebuf to avoid wasted memory**
+
    ```c
    size_t allocSize = jebufSizeAllocation(requestedSize);
    void *ptr = malloc(allocSize);  // Uses full jemalloc allocation
    ```
 
 6. **Use fibbuf for efficient growth**
+
    ```c
    size_t newSize = fibbufNextSizeBuffer(currentSize);
    ```

@@ -121,10 +121,10 @@ flexEntry *found = flexFindByTypeSortedWithMiddle(map, 2, &key, middle);
 #### Variant Selection Impact
 
 | Variant | Insert (1000 keys) | Lookup (1000 keys) | Iteration |
-|---------|-------------------|-------------------|-----------|
-| Small   | 100 ms            | 5 ms              | 2 ms      |
-| Medium  | 60 ms             | 6 ms              | 2.5 ms    |
-| Full    | 40 ms             | 8 ms              | 4 ms      |
+| ------- | ------------------ | ------------------ | --------- |
+| Small   | 100 ms             | 5 ms               | 2 ms      |
+| Medium  | 60 ms              | 6 ms               | 2.5 ms    |
+| Full    | 40 ms              | 8 ms               | 4 ms      |
 
 **Conclusion**: Full variant is fastest for inserts, Small for lookups on small datasets.
 
@@ -272,12 +272,12 @@ for (int i = 0; i < 1000; i++) {
 
 **Compression ratios** depend on data pattern:
 
-| Data Pattern | Compression Ratio | Speed (encode) |
-|-------------|------------------|----------------|
-| Constant values | 64x | 20 ns/value |
-| Slowly varying (sensors) | 10-20x | 20 ns/value |
-| Random walk (stocks) | 4-8x | 20 ns/value |
-| Random values | 1-2x | 20 ns/value |
+| Data Pattern             | Compression Ratio | Speed (encode) |
+| ------------------------ | ----------------- | -------------- |
+| Constant values          | 64x               | 20 ns/value    |
+| Slowly varying (sensors) | 10-20x            | 20 ns/value    |
+| Random walk (stocks)     | 4-8x              | 20 ns/value    |
+| Random values            | 1-2x              | 20 ns/value    |
 
 **Best Practice**: Use for time-series with temporal locality.
 
@@ -321,11 +321,13 @@ float f32 = float16Decode(f16);       // ~12 ns (24x slower)
 #### membound Allocation
 
 **Best case** (exact size available in freelist):
+
 ```c
 void *ptr = memboundAlloc(m, 256);  // O(1) - 10 ns
 ```
 
 **Worst case** (must split blocks):
+
 ```c
 void *ptr = memboundAlloc(m, size);  // O(log k) - 50 ns
 // k = number of size classes
@@ -356,57 +358,57 @@ fibbuf *fb = fibbufNew();
 
 ### flex Operations
 
-| Operation | Complexity | Notes |
-|-----------|-----------|-------|
-| Push tail | O(1) amortized | Single realloc |
-| Push head | O(n) | Must shift all data |
-| Index access | O(n) | Sequential scan |
-| Binary search | O(log n) | Sorted flex only |
-| Find with middle | O(log n/2) | ~2x faster |
-| Delete | O(n) | Must shift data |
-| Merge | O(n+m) | Concatenation |
+| Operation        | Complexity     | Notes               |
+| ---------------- | -------------- | ------------------- |
+| Push tail        | O(1) amortized | Single realloc      |
+| Push head        | O(n)           | Must shift all data |
+| Index access     | O(n)           | Sequential scan     |
+| Binary search    | O(log n)       | Sorted flex only    |
+| Find with middle | O(log n/2)     | ~2x faster          |
+| Delete           | O(n)           | Must shift data     |
+| Merge            | O(n+m)         | Concatenation       |
 
 ### multimap Operations
 
-| Operation | Small | Medium | Full |
-|-----------|-------|--------|------|
-| Insert | O(n) | O(n/2) | O(log M + n/M) |
-| Lookup | O(log n) | O(log n/2) | O(log M + log n/M) |
-| Delete | O(n) | O(n/2) | O(log M + n/M) |
-| Iterate | O(n) | O(n) | O(n) |
+| Operation | Small    | Medium     | Full               |
+| --------- | -------- | ---------- | ------------------ |
+| Insert    | O(n)     | O(n/2)     | O(log M + n/M)     |
+| Lookup    | O(log n) | O(log n/2) | O(log M + log n/M) |
+| Delete    | O(n)     | O(n/2)     | O(log M + n/M)     |
+| Iterate   | O(n)     | O(n)       | O(n)               |
 
 Where M = number of maps, n = elements per map
 
 ### multilist Operations
 
-| Operation | All Variants | Notes |
-|-----------|-------------|-------|
+| Operation      | All Variants   | Notes               |
+| -------------- | -------------- | ------------------- |
 | Push head/tail | O(1) amortized | May create new node |
-| Pop head/tail | O(1) | May delete node |
-| Index | O(n) | Must traverse nodes |
-| Iterator | O(1) per step | Cached traversal |
-| Insert middle | O(n) | Find + insert |
+| Pop head/tail  | O(1)           | May delete node     |
+| Index          | O(n)           | Must traverse nodes |
+| Iterator       | O(1) per step  | Cached traversal    |
+| Insert middle  | O(n)           | Find + insert       |
 
 ### multiarray Operations
 
-| Operation | Native | Small | Medium | Large |
-|-----------|--------|-------|--------|-------|
-| Get | O(1) | O(1) | O(1) | O(n) from head |
-| GetForward | O(1) | O(1) | O(1) | O(1) cached |
-| Insert middle | O(n) | O(n) | O(n/M) | O(n) traverse |
-| Append | O(1) | O(1) | O(1) | O(1) |
+| Operation     | Native | Small | Medium | Large          |
+| ------------- | ------ | ----- | ------ | -------------- |
+| Get           | O(1)   | O(1)  | O(1)   | O(n) from head |
+| GetForward    | O(1)   | O(1)  | O(1)   | O(1) cached    |
+| Insert middle | O(n)   | O(n)  | O(n/M) | O(n) traverse  |
+| Append        | O(1)   | O(1)  | O(1)   | O(1)           |
 
 Where M = number of nodes
 
 ### intset Operations
 
-| Operation | Complexity | Notes |
-|-----------|-----------|-------|
-| Add (no upgrade) | O(n) | Binary search + memmove |
-| Add (upgrade) | O(n) | Convert all elements |
-| Find | O(log n) | Binary search |
-| Remove | O(n) | Binary search + memmove |
-| Get by position | O(1) | Direct array access |
+| Operation        | Complexity | Notes                   |
+| ---------------- | ---------- | ----------------------- |
+| Add (no upgrade) | O(n)       | Binary search + memmove |
+| Add (upgrade)    | O(n)       | Convert all elements    |
+| Find             | O(log n)   | Binary search           |
+| Remove           | O(n)       | Binary search + memmove |
+| Get by position  | O(1)       | Direct array access     |
 
 ## Benchmarking Guidelines
 

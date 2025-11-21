@@ -849,19 +849,20 @@ void compressionExample(void) {
 
 ## Common Patterns Summary
 
-| Pattern | Operations | Use Case |
-|---------|-----------|----------|
-| Queue (FIFO) | PushTail + PopHead | Task processing, message queues |
-| Stack (LIFO) | PushHead + PopHead | Undo/redo, call stack simulation |
-| Deque | Push/Pop both ends | Work stealing, sliding windows |
-| Circular Buffer | PushTail + PopHead with size limit | Streaming data, recent history |
-| LRU Cache | Search + move to front + evict tail | Cache management |
-| Priority Queue | Multiple lists | Task scheduling by importance |
-| History | Insert at position + delete range | Browser history, document editing |
+| Pattern         | Operations                          | Use Case                          |
+| --------------- | ----------------------------------- | --------------------------------- |
+| Queue (FIFO)    | PushTail + PopHead                  | Task processing, message queues   |
+| Stack (LIFO)    | PushHead + PopHead                  | Undo/redo, call stack simulation  |
+| Deque           | Push/Pop both ends                  | Work stealing, sliding windows    |
+| Circular Buffer | PushTail + PopHead with size limit  | Streaming data, recent history    |
+| LRU Cache       | Search + move to front + evict tail | Cache management                  |
+| Priority Queue  | Multiple lists                      | Task scheduling by importance     |
+| History         | Insert at position + delete range   | Browser history, document editing |
 
 ## Best Practices from Examples
 
 1. **Always create and free mflexState:**
+
    ```c
    mflexState *state = mflexStateCreate();
    /* ... use state ... */
@@ -874,6 +875,7 @@ void compressionExample(void) {
    - Large data: `FLEX_CAP_LEVEL_4096` or `FLEX_CAP_LEVEL_8192`
 
 3. **Free popped data:**
+
    ```c
    databox result;
    if (multilistPopHead(&ml, state, &result)) {
@@ -883,6 +885,7 @@ void compressionExample(void) {
    ```
 
 4. **Release iterators:**
+
    ```c
    multilistIterator iter;
    multilistIteratorInitForward(ml, s, &iter);

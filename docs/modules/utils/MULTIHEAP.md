@@ -5,6 +5,7 @@
 `multiheap` is a **specialized wrapper around multimap** that provides a simple interface for storing arbitrary objects indexed by integer references. It functions as a "heap" of objects that can be stored, retrieved, and resized by reference ID.
 
 **Key Features:**
+
 - Store arbitrary C objects by integer reference
 - Direct pointer access to stored objects
 - In-place object resizing with automatic reallocation
@@ -19,6 +20,7 @@
 ## Architecture
 
 `multiheap` is implemented as a thin macro layer over multimap, using:
+
 - **Keys**: 64-bit unsigned integer references
 - **Values**: Raw byte arrays containing serialized objects
 - **Storage**: Leverages multimap's scale-aware storage optimization
@@ -51,6 +53,7 @@ typedef multimap multiheap;
 **Storage Format:**
 
 Each entry in the multiheap contains:
+
 - **Key**: uint64_t reference ID (stored as DATABOX_UNSIGNED_64)
 - **Value**: Raw bytes of the object (stored as DATABOX_BYTES)
 
@@ -215,6 +218,7 @@ char *ptr = multiheapRealloc(heap, 100, 512);
 ```
 
 **Critical Notes on Resizing:**
+
 1. The heap pointer itself may change (underlying multimap reallocation)
 2. The object pointer will change if expansion requires relocation
 3. Always use the returned pointer after `multiheapRealloc()`
@@ -476,14 +480,14 @@ multiheapRealloc(heap, ref, newSize)
 
 ## Performance Characteristics
 
-| Operation | Complexity | Notes |
-|-----------|-----------|-------|
-| New | O(1) | Creates multimap with 2 fields |
-| Insert | O(log n) | Binary search in sorted multimap |
-| Read | O(log n) | Binary search to find entry |
-| Restore | O(log n + k) | Search + memcpy of k bytes |
-| Realloc | O(log n + k) | Search + potential reallocation |
-| Free | O(n) | Must free all stored objects |
+| Operation | Complexity   | Notes                            |
+| --------- | ------------ | -------------------------------- |
+| New       | O(1)         | Creates multimap with 2 fields   |
+| Insert    | O(log n)     | Binary search in sorted multimap |
+| Read      | O(log n)     | Binary search to find entry      |
+| Restore   | O(log n + k) | Search + memcpy of k bytes       |
+| Realloc   | O(log n + k) | Search + potential reallocation  |
+| Free      | O(n)         | Must free all stored objects     |
 
 ### Memory Overhead
 
@@ -624,16 +628,17 @@ typedef struct node {
 
 ## Comparison with Alternatives
 
-| Feature | multiheap | hash table | array | malloc pool |
-|---------|-----------|------------|-------|-------------|
-| Lookup | O(log n) | O(1) avg | O(1) | O(1) |
-| Insert | O(log n) | O(1) avg | O(1) append | O(1) |
-| Resize | O(log n) | N/A | O(n) | Complex |
-| Ordered | Yes (by ref) | No | Yes (by index) | No |
-| Memory | Medium | High | Low | Variable |
-| Sparse IDs | Efficient | Efficient | Wasteful | Wasteful |
+| Feature    | multiheap    | hash table | array          | malloc pool |
+| ---------- | ------------ | ---------- | -------------- | ----------- |
+| Lookup     | O(log n)     | O(1) avg   | O(1)           | O(1)        |
+| Insert     | O(log n)     | O(1) avg   | O(1) append    | O(1)        |
+| Resize     | O(log n)     | N/A        | O(n)           | Complex     |
+| Ordered    | Yes (by ref) | No         | Yes (by index) | No          |
+| Memory     | Medium       | High       | Low            | Variable    |
+| Sparse IDs | Efficient    | Efficient  | Wasteful       | Wasteful    |
 
 **Choose multiheap when:**
+
 - Need to store objects by integer ID
 - IDs may be sparse or non-sequential
 - Need to resize objects in-place
@@ -641,6 +646,7 @@ typedef struct node {
 - Prefer sorted storage
 
 **Choose alternatives when:**
+
 - Need O(1) lookup (use hash table)
 - IDs are dense/sequential (use array)
 - Need pointer stability (use custom allocator)
@@ -680,6 +686,7 @@ void *threadSafeRead(uint64_t ref) {
 `multiheap` is entirely implemented as macros in `multiheap.h` - there is no `.c` file. All functionality delegates to the multimap implementation.
 
 The key design decisions:
+
 1. **Set mode**: Uses `multimapSetNew(2)` to ensure unique reference IDs
 2. **Type safety**: Macros use `sizeof(*obj)` to avoid size errors
 3. **Pointer returns**: All operations return updated pointers for safety

@@ -1,5 +1,4 @@
-IMath
-=====
+# IMath
 
 ## Branch Note
 
@@ -16,7 +15,6 @@ dependencies required and is still highly performing compared to other simple-to
 bignum libraries.
 
 ---
-
 
 Arbitrary precision integer and rational arithmetic library.
 
@@ -37,33 +35,30 @@ IMath is copyright &copy; 2002-2009 Michael J. Fromberger.
 >
 > THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 > IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-> FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+> FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
 > AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 > LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 > OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 > SOFTWARE.
 
-
-About IMath
------------
+## About IMath
 
 IMath is a library written in portable ANSI C that allows you to perform
-arithmetic on integers and rational numbers of arbitrary precision.  While many
+arithmetic on integers and rational numbers of arbitrary precision. While many
 programming languages, including Java, Perl, and Python provide arbitrary
 precision numbers as a standard library or language feature, C does not.
 
 IMath was designed to be small, self-contained, easy to understand and use, and
-as portable as possible across various platforms.  The API is simple, and the
-code should be comparatively easy to modify or extend.  Simplicity and
+as portable as possible across various platforms. The API is simple, and the
+code should be comparatively easy to modify or extend. Simplicity and
 portability are useful goals for some applications&#8212;however, IMath does
-not attempt to break performance records.  If you need the fastest possible
+not attempt to break performance records. If you need the fastest possible
 implementation, you might consider some other libraries, such as GNU MP (GMP),
 MIRACL, or the bignum library from OpenSSL.
 
-Programming with IMath
-----------------------
+## Programming with IMath
 
-Detailed descriptions of the IMath API can be found in `doc.txt`.  However, the
+Detailed descriptions of the IMath API can be found in `doc.txt`. However, the
 following is a brief synopsis of how to get started with some simple tasks.
 
 To do basic integer arithmetic, you must declare variables of type `mpz_t` in

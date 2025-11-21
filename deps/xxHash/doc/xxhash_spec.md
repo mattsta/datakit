@@ -1,5 +1,4 @@
-xxHash fast digest algorithm
-======================
+# xxHash fast digest algorithm
 
 ### Notices
 
@@ -18,18 +17,15 @@ Distribution of this document is unlimited.
 
 0.1.1 (10/10/18)
 
+## Table of Contents
 
-Table of Contents
----------------------
 - [Introduction](#introduction)
 - [XXH32 algorithm description](#xxh32-algorithm-description)
 - [XXH64 algorithm description](#xxh64-algorithm-description)
 - [Performance considerations](#performance-considerations)
 - [Reference Implementation](#reference-implementation)
 
-
-Introduction
-----------------
+## Introduction
 
 This document describes the xxHash digest algorithm, for both 32 and 64 variants, named `XXH32` and `XXH64`. The algorithm takes as input a message of arbitrary length and an optional seed value, it then produces an output of 32 or 64-bit as "fingerprint" or "digest".
 
@@ -47,13 +43,11 @@ All operations are performed modulo {32,64} bits. Arithmetic overflows are expec
 
 - `+` : denote modular addition
 - `*` : denote modular multiplication
-- `X <<< s` : denote the value obtained by circularly shifting (rotating) `X` left by `s` bit positions.  
-- `X >> s` : denote the value obtained by shifting `X` right by s bit positions. Upper `s` bits become `0`.  
+- `X <<< s` : denote the value obtained by circularly shifting (rotating) `X` left by `s` bit positions.
+- `X >> s` : denote the value obtained by shifting `X` right by s bit positions. Upper `s` bits become `0`.
 - `X xor Y` : denote the bit-wise XOR of `X` and `Y` (same width).
 
-
-XXH32 Algorithm Description
--------------------------------------
+## XXH32 Algorithm Description
 
 ### Overview
 
@@ -96,7 +90,7 @@ A stripe is a contiguous segment of 16 bytes.
 It is evenly divided into 4 _lanes_, of 4 bytes each.
 The first lane is used to update accumulator 1, the second lane is used to update accumulator 2, and so on.
 
-Each lane read its associated 32-bit value using __little-endian__ convention.
+Each lane read its associated 32-bit value using **little-endian** convention.
 
 For each {lane, accumulator}, the update process is called a _round_, and applies the following formula :
 
@@ -158,11 +152,9 @@ The final mix ensures that all input bits have a chance to impact any bit in the
 
 The `XXH32()` function produces an unsigned 32-bit value as output.
 
-For systems which require to store and/or display the result in binary or hexadecimal format, the canonical format is defined to reproduce the same value as the natural decimal format, hence follows __big-endian__ convention (most significant byte first).
+For systems which require to store and/or display the result in binary or hexadecimal format, the canonical format is defined to reproduce the same value as the natural decimal format, hence follows **big-endian** convention (most significant byte first).
 
-
-XXH64 Algorithm Description
--------------------------------------
+## XXH64 Algorithm Description
 
 ### Overview
 
@@ -205,7 +197,7 @@ A stripe is a contiguous segment of 32 bytes.
 It is evenly divided into 4 _lanes_, of 8 bytes each.
 The first lane is used to update accumulator 1, the second lane is used to update accumulator 2, and so on.
 
-Each lane read its associated 64-bit value using __little-endian__ convention.
+Each lane read its associated 64-bit value using **little-endian** convention.
 
 For each {lane, accumulator}, the update process is called a _round_, and applies the following formula :
 
@@ -288,10 +280,9 @@ The final mix ensures that all input bits have a chance to impact any bit in the
 
 The `XXH64()` function produces an unsigned 64-bit value as output.
 
-For systems which require to store and/or display the result in binary or hexadecimal format, the canonical format is defined to reproduce the same value as the natural decimal format, hence follows __big-endian__ convention (most significant byte first).
+For systems which require to store and/or display the result in binary or hexadecimal format, the canonical format is defined to reproduce the same value as the natural decimal format, hence follows **big-endian** convention (most significant byte first).
 
-Performance considerations
-----------------------------------
+## Performance considerations
 
 The xxHash algorithms are simple and compact to implement. They provide a system independent "fingerprint" or digest of a message of arbitrary length.
 
@@ -301,16 +292,13 @@ On 64-bit systems, the 64-bit variant `XXH64` is generally faster to compute, so
 
 On 32-bit systems though, positions are reversed : `XXH64` performance is reduced, due to its usage of 64-bit arithmetic. `XXH32` becomes a faster variant.
 
-
-Reference Implementation
-----------------------------------------
+## Reference Implementation
 
 A reference library written in C is available at http://www.xxhash.com .
 The web page also links to multiple other implementations written in many different languages.
 It links to the [github project page](https://github.com/Cyan4973/xxHash) where an [issue board](https://github.com/Cyan4973/xxHash/issues) can be used for further public discussions on the topic.
 
+## Version changes
 
-Version changes
---------------------
 v0.1.1 : added a note on rationale for selection of constants
 v0.1.0 : initial release

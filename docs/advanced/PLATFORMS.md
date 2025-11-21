@@ -8,27 +8,27 @@ datakit is designed to be **highly portable** across different operating systems
 
 ### Operating Systems
 
-| Platform | Status | Notes |
-|----------|--------|-------|
-| **Linux** | Primary | Fully supported, extensively tested |
-| **macOS** | Supported | Darwin/BSD features |
-| **FreeBSD** | Supported | BSD variants fully supported |
-| **OpenBSD** | Supported | BSD variants fully supported |
-| **NetBSD** | Supported | BSD variants fully supported |
-| **Solaris** | Supported | Legacy Unix support |
-| **AIX** | Supported | IBM Unix support |
-| **Windows** | Partial | Cygwin, MinGW supported |
+| Platform    | Status    | Notes                               |
+| ----------- | --------- | ----------------------------------- |
+| **Linux**   | Primary   | Fully supported, extensively tested |
+| **macOS**   | Supported | Darwin/BSD features                 |
+| **FreeBSD** | Supported | BSD variants fully supported        |
+| **OpenBSD** | Supported | BSD variants fully supported        |
+| **NetBSD**  | Supported | BSD variants fully supported        |
+| **Solaris** | Supported | Legacy Unix support                 |
+| **AIX**     | Supported | IBM Unix support                    |
+| **Windows** | Partial   | Cygwin, MinGW supported             |
 
 ### CPU Architectures
 
-| Architecture | Status | Special Features |
-|-------------|--------|-----------------|
-| **x86_64** | Primary | F16C, AVX, SSE support |
-| **ARM64** | Supported | NEON available |
-| **ARM32** | Supported | Limited SIMD |
-| **RISC-V** | Experimental | Basic support |
-| **PowerPC** | Supported | Big-endian testing |
-| **MIPS** | Supported | Basic support |
+| Architecture | Status       | Special Features       |
+| ------------ | ------------ | ---------------------- |
+| **x86_64**   | Primary      | F16C, AVX, SSE support |
+| **ARM64**    | Supported    | NEON available         |
+| **ARM32**    | Supported    | Limited SIMD           |
+| **RISC-V**   | Experimental | Basic support          |
+| **PowerPC**  | Supported    | Big-endian testing     |
+| **MIPS**     | Supported    | Basic support          |
 
 ## Feature Detection
 
@@ -101,6 +101,7 @@ float float16Decode(uint16_t value) {
 ```
 
 **Compile flags:**
+
 ```bash
 # Enable F16C on modern x86_64
 gcc -mf16c -O3 -o program program.c
@@ -110,6 +111,7 @@ gcc -march=native -dM -E - < /dev/null | grep F16C
 ```
 
 **Performance impact:**
+
 ```
 Hardware (F16C):  0.5 ns/conversion  (200M conversions/sec)
 Software:        15.0 ns/conversion  (66M conversions/sec)
@@ -142,6 +144,7 @@ Different platforms provide different random sources:
 ```
 
 **Performance comparison:**
+
 ```
 getrandom():      ~500 ns for 16 bytes
 getentropy():     ~1200 ns for 16 bytes
@@ -173,6 +176,7 @@ getentropy():     ~1200 ns for 16 bytes
 ```
 
 **Use cases:**
+
 ```c
 /* Large sequential scan */
 flex *large = /* ... allocate 100 MB ... */;
@@ -276,6 +280,7 @@ datakit handles both little-endian and big-endian systems:
 ```
 
 **Testing on big-endian:**
+
 ```bash
 # QEMU can emulate big-endian systems
 qemu-system-ppc64 -M pseries -cpu POWER9 ...

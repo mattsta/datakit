@@ -5,6 +5,7 @@
 `xof` (XOR Filter) is a **high-efficiency compression algorithm for double-precision floating-point values** based on the Gorilla time-series compression algorithm developed by Facebook. It achieves excellent compression ratios for time-series data by exploiting temporal locality - consecutive values often have similar bit patterns.
 
 **Key Features:**
+
 - Lossless compression for IEEE 754 double-precision floats
 - Optimized for time-series data with smooth changes
 - Achieves 10-20x compression for typical sensor data
@@ -534,24 +535,24 @@ void exampleSensorArray(void) {
 
 Typical compression ratios for different data patterns:
 
-| Data Pattern | Compression Ratio | Example |
-|-------------|------------------|---------|
-| Constant | ~64x | Same value repeated |
-| Slowly varying | 10-20x | Temperature sensors |
-| Linearly increasing | 8-15x | Timestamps, counters |
-| Random walk | 4-8x | Stock prices |
-| Random values | 1-2x | White noise |
+| Data Pattern        | Compression Ratio | Example              |
+| ------------------- | ----------------- | -------------------- |
+| Constant            | ~64x              | Same value repeated  |
+| Slowly varying      | 10-20x            | Temperature sensors  |
+| Linearly increasing | 8-15x             | Timestamps, counters |
+| Random walk         | 4-8x              | Stock prices         |
+| Random values       | 1-2x              | White noise          |
 
 ### Speed
 
 Operations are very fast due to bit-level operations:
 
-| Operation | Time | Notes |
-|-----------|------|-------|
-| Write | ~20 ns | XOR + bit operations |
-| Sequential read | ~30 ns | Cached state |
-| Random read | ~500 ns | Must replay from start |
-| Decompress all | ~30 ns per value | Optimized loop |
+| Operation       | Time             | Notes                  |
+| --------------- | ---------------- | ---------------------- |
+| Write           | ~20 ns           | XOR + bit operations   |
+| Sequential read | ~30 ns           | Cached state           |
+| Random read     | ~500 ns          | Must replay from start |
+| Decompress all  | ~30 ns per value | Optimized loop         |
 
 ### Memory Usage
 
@@ -645,6 +646,7 @@ Run the xof test suite:
 ```
 
 The test suite includes:
+
 - Constant value compression
 - Slowly varying values
 - Random values

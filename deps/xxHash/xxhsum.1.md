@@ -1,8 +1,6 @@
-xxhsum(1) -- print or check xxHash non-cryptographic checksums
-==============================================================
+# xxhsum(1) -- print or check xxHash non-cryptographic checksums
 
-SYNOPSIS
---------
+## SYNOPSIS
 
 `xxhsum [<OPTION>] ... [<FILE>] ...`  
 `xxhsum -b [<OPTION>] ...`
@@ -10,15 +8,13 @@ SYNOPSIS
 `xxh32sum` is equivalent to `xxhsum -H0`  
 `xxh64sum` is equivalent to `xxhsum -H1`
 
+## DESCRIPTION
 
-DESCRIPTION
------------
-
-Print or check xxHash (32 or 64bit) checksums.  When <FILE> is `-`, read
+Print or check xxHash (32 or 64bit) checksums. When <FILE> is `-`, read
 standard input.
 
 `xxhsum` supports a command line syntax similar but not identical to
-md5sum(1).  Differences are:
+md5sum(1). Differences are:
 `xxhsum` doesn't have text/binary mode switch (`-b`, `-t`);
 `xxhsum` always treats file as binary file;
 `xxhsum` has hash bit width switch (`-H`);
@@ -28,63 +24,60 @@ As xxHash is a fast non-cryptographic checksum algorithm,
 
 `xxhsum -b` invokes benchmark mode. See [OPTIONS](#OPTIONS) and [EXAMPLES](#EXAMPLES) for details.
 
-OPTIONS
--------
+## OPTIONS
 
-* `-V`, `--version`:
+- `-V`, `--version`:
   Display xxhsum version
 
-* `-H`<HASHTYPE>:
-  Hash selection.  <HASHTYPE> means `0`=32bits, `1`=64bits.
+- `-H`<HASHTYPE>:
+  Hash selection. <HASHTYPE> means `0`=32bits, `1`=64bits.
   Default value is `1` (64bits)
 
-* `--little-endian`:
+- `--little-endian`:
   Set output hexadecimal checksum value as little endian convention.
   By default, value is displayed as big endian.
 
-* `-h`, `--help`:
+- `-h`, `--help`:
   Display help and exit
 
 **The following four options are useful only when verifying checksums (`-c`)**
 
-* `-c`, `--check`:
+- `-c`, `--check`:
   Read xxHash sums from the <FILE>s and check them
 
-* `--quiet`:
+- `--quiet`:
   Exit non-zero for improperly formatted checksum lines
 
-* `--strict`:
+- `--strict`:
   Don't print OK for each successfully verified file
 
-* `--status`:
+- `--status`:
   Don't output anything, status code shows success
 
-* `-w`, `--warn`:
+- `-w`, `--warn`:
   Warn about improperly formatted checksum lines
 
 **The following options are useful only benchmark purpose**
 
-* `-b`:
-  Benchmark mode.  See [EXAMPLES](#EXAMPLES) for details.
+- `-b`:
+  Benchmark mode. See [EXAMPLES](#EXAMPLES) for details.
 
-* `-B`<BLOCKSIZE>:
+- `-B`<BLOCKSIZE>:
   Only useful for benchmark mode (`-b`). See [EXAMPLES](#EXAMPLES) for details.
   <BLOCKSIZE> specifies benchmark mode's test data block size in bytes.
   Default value is 102400
 
-* `-i`<ITERATIONS>:
+- `-i`<ITERATIONS>:
   Only useful for benchmark mode (`-b`). See [EXAMPLES](#EXAMPLES) for details.
   <ITERATIONS> specifies number of iterations in benchmark. Single iteration
   takes at least 2500 milliseconds. Default value is 3
 
-EXIT STATUS
------------
+## EXIT STATUS
 
 `xxhsum` exit `0` on success, `1` if at least one file couldn't be read or
 doesn't have the same checksum as the `-c` option.
 
-EXAMPLES
---------
+## EXAMPLES
 
 Output xxHash (64bit) checksum values of specific files to standard output
 
@@ -102,23 +95,20 @@ Read xxHash sums from specific files and check them
 
 Benchmark xxHash algorithm for 16384 bytes data in 10 times. `xxhsum`
 benchmarks xxHash algorithm for 32-bit and 64-bit and output results to
-standard output.  First column means algorithm, second column is source data
+standard output. First column means algorithm, second column is source data
 size in bytes, last column means hash generation speed in mega-bytes per
 seconds.
 
     $ xxhsum -b -i10 -B16384
 
-BUGS
-----
+## BUGS
 
 Report bugs at: https://github.com/Cyan4973/xxHash/issues/
 
-AUTHOR
-------
+## AUTHOR
 
 Yann Collet
 
-SEE ALSO
---------
+## SEE ALSO
 
 md5sum(1)

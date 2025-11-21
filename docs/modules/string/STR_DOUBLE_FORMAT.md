@@ -5,6 +5,7 @@
 `strDoubleFormat` provides **high-performance, shortest-representation double-to-string conversion** based on the Dragon4 algorithm. It guarantees correctly rounded output with minimal digits while maintaining exact precision.
 
 **Key Features:**
+
 - Shortest possible representation (no trailing zeros)
 - Correctly rounded to nearest digit
 - Three implementation strategies (64-bit, 128-bit, bignum)
@@ -18,6 +19,7 @@
 ## Algorithm Overview
 
 The implementation is based on the **Dragon4 algorithm** (also used in mochinum), which:
+
 - Generates shortest decimal representation
 - Maintains exact precision
 - Uses scaling to avoid floating-point errors
@@ -35,7 +37,7 @@ The code automatically selects the optimal implementation based on the input val
 2. **128-bit Native** (fast)
    - For exponents in range [-122, 122]
    - Values in range [-1e36, 1e36]
-   - Uses compiler __uint128_t support
+   - Uses compiler \_\_uint128_t support
 
 3. **Bignum** (slower, handles all values)
    - For values outside native ranges
@@ -90,14 +92,17 @@ size_t StrDoubleFormatToBufNice(void *buf, size_t len, double v);
 ```
 
 **Parameters:**
+
 - `buf` - Output buffer (must be at least 23 bytes)
 - `len` - Buffer size
 - `v` - Double value to convert
 
 **Returns:**
+
 - Number of bytes written to buffer
 
 **Example:**
+
 ```c
 char buf[64];
 double value = 3.14159;
@@ -147,6 +152,7 @@ StrDoubleFormatToBufNice(buf, len, 1e-20);       /* "1.0e-20" */
 ### Exponential Notation Rules
 
 Exponential notation is used when:
+
 - Places > 5 (large numbers)
 - Places < -6 (small numbers)
 
@@ -170,6 +176,7 @@ static uint64_t fractionAndExponent(const double v, int32_t *exponent);
 ```
 
 This function:
+
 1. Casts double to appropriate layout struct
 2. Extracts 52-bit fraction
 3. Extracts 11-bit exponent
@@ -185,10 +192,12 @@ static size_t niceDoubleHelper(double v, int32_t exp, uint64_t frac,
 ```
 
 Used when:
+
 - Exponent in [-58, 58]
 - Value in [-1e17, 1e17]
 
 Strategy:
+
 ```c
 if (exp >= 0) {
     uint64_t bexp = 1ULL << exp;
@@ -209,6 +218,7 @@ static size_t OniceDoubleHelper(double v, int32_t exp, uint64_t frac,
 ```
 
 Used when:
+
 - Exponent in [-122, 122]
 - Value in [-1e36, 1e36]
 - Not in 64-bit range
@@ -224,6 +234,7 @@ static size_t BniceDoubleHelper(double v, int32_t exp, uint64_t frac,
 ```
 
 Used when:
+
 - Value outside 128-bit range
 - Handles DBL_MAX, DBL_MIN, etc.
 
@@ -238,6 +249,7 @@ static size_t niceDoubleDispatch(const double v, int32_t exp,
 ```
 
 Automatically selects optimal implementation:
+
 ```c
 #define SAFE_EXPONENT(width) ((width) - 6)
 #define SAFE_I754_EXPONENT(width) \
@@ -405,23 +417,26 @@ All 65,536 possible 16-bit float values tested successfully.
 ### Random Double Testing
 
 10 million random doubles tested through:
+
 1. Random bit construction (any bit pattern)
 2. Random double generation (mathematical construction)
 
 Implementation selection statistics:
+
 - 64-bit path: ~60% of values
 - 128-bit path: ~35% of values
 - Bignum path: ~5% of values
 
 ## Performance Characteristics
 
-| Value Range | Implementation | Relative Speed |
-|-------------|---------------|----------------|
-| [-1e17, 1e17] | 64-bit native | 1.0x (fastest) |
-| [-1e36, 1e36] | 128-bit native | 1.5x |
-| Extreme values | Bignum | 3-10x (slower) |
+| Value Range    | Implementation | Relative Speed |
+| -------------- | -------------- | -------------- |
+| [-1e17, 1e17]  | 64-bit native  | 1.0x (fastest) |
+| [-1e36, 1e36]  | 128-bit native | 1.5x           |
+| Extreme values | Bignum         | 3-10x (slower) |
 
 **Typical performance:**
+
 - Common values: ~100-200 cycles
 - Large values: ~200-500 cycles
 - Extreme values: ~1000+ cycles
@@ -431,6 +446,7 @@ Implementation selection statistics:
 Minimum buffer size: **23 bytes**
 
 Breakdown:
+
 - Sign: 1 byte
 - Digits: up to 18 bytes (DBL_DIG + margin)
 - Decimal point: 1 byte
@@ -441,6 +457,7 @@ Recommended: **64 bytes** (provides comfortable margin)
 ## Thread Safety
 
 `StrDoubleFormatToBufNice` is **fully thread-safe**:
+
 - No global state
 - No static variables
 - Only stack allocations (except bignum path)
@@ -529,6 +546,7 @@ Run the double formatting test suite:
 ```
 
 The test suite validates:
+
 - All known edge cases
 - All 65,536 float16 values
 - 10 million random doubles

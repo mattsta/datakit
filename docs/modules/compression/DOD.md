@@ -5,6 +5,7 @@
 `dod` (Delta-of-Delta) is a **high-efficiency compression algorithm for signed 64-bit integers** that excels at compressing monotonically increasing sequences like timestamps, counters, and sequential IDs. It achieves compression by storing only the changes between differences (delta-of-deltas) using variable-length bit encoding.
 
 **Key Features:**
+
 - Lossless compression for int64_t values
 - Optimized for monotonically increasing sequences (timestamps, counters)
 - Achieves 10-50x compression for typical timestamp data
@@ -23,6 +24,7 @@
 ### Core Concept
 
 Delta-of-delta exploits the observation that timestamps and counters often increase at a regular rate. Instead of storing values directly, we store:
+
 - The difference between consecutive values (delta)
 - The difference between consecutive deltas (delta-of-delta)
 
@@ -56,13 +58,13 @@ Decompression:
 
 DOD uses hierarchical encoding based on the magnitude of the delta-of-delta:
 
-| Value Range | Encoding | Total Bits | Example |
-|------------|----------|-----------|---------|
-| 0 | `0` | 1 bit | Constant rate |
-| [-64, 64] | `100` + 6 bits | 9 bits | Small change |
-| [-320, 320] | `1100` + 8 bits | 12 bits | Medium change |
-| [-2368, 2368] | `11100` + 11 bits | 16 bits | Larger change |
-| > 2368 | `11110000` + var | 16-72 bits | Big change |
+| Value Range   | Encoding          | Total Bits | Example       |
+| ------------- | ----------------- | ---------- | ------------- |
+| 0             | `0`               | 1 bit      | Constant rate |
+| [-64, 64]     | `100` + 6 bits    | 9 bits     | Small change  |
+| [-320, 320]   | `1100` + 8 bits   | 12 bits    | Medium change |
+| [-2368, 2368] | `11100` + 11 bits | 16 bits    | Larger change |
+| > 2368        | `11110000` + var  | 16-72 bits | Big change    |
 
 **Stacked Ranges**: Each encoding level includes all smaller ranges, providing smooth fallback for varying data patterns.
 
@@ -526,22 +528,22 @@ void exampleEventStream(void) {
 
 Typical compression ratios for different patterns:
 
-| Data Pattern | Compression Ratio | Example |
-|-------------|------------------|---------|
-| Constant increment | 30-60x | `t, t+1, t+2, t+3...` |
-| Regular timestamps | 20-40x | Events every second |
-| Variable increment | 10-20x | `t, t+1, t+3, t+4, t+8...` |
-| Random increasing | 4-8x | Irregular timestamps |
-| Random values | 1-2x | No pattern |
+| Data Pattern       | Compression Ratio | Example                    |
+| ------------------ | ----------------- | -------------------------- |
+| Constant increment | 30-60x            | `t, t+1, t+2, t+3...`      |
+| Regular timestamps | 20-40x            | Events every second        |
+| Variable increment | 10-20x            | `t, t+1, t+3, t+4, t+8...` |
+| Random increasing  | 4-8x              | Irregular timestamps       |
+| Random values      | 1-2x              | No pattern                 |
 
 ### Speed
 
-| Operation | Time | Notes |
-|-----------|------|-------|
-| Write | ~25 ns | Delta calculation + bit encode |
-| Sequential read | ~40 ns | Delta reconstruction |
-| Random read | ~800 ns | Must replay from start |
-| Decompress all | ~35 ns per value | Optimized loop |
+| Operation       | Time             | Notes                          |
+| --------------- | ---------------- | ------------------------------ |
+| Write           | ~25 ns           | Delta calculation + bit encode |
+| Sequential read | ~40 ns           | Delta reconstruction           |
+| Random read     | ~800 ns          | Must replay from start         |
+| Decompress all  | ~35 ns per value | Optimized loop                 |
 
 ### Memory Usage
 
@@ -663,6 +665,7 @@ Run the dod test suite:
 ```
 
 The test suite includes:
+
 - Sequential timestamp compression
 - Counter sequences
 - Negative value handling

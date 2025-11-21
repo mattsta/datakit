@@ -5,6 +5,7 @@
 `databox` is a **universal 16-byte fixed-size container** that can hold any data type through a tagged union. It provides type-safe polymorphic storage without heap allocation for most common types.
 
 **Key Features:**
+
 - Fixed 16-byte size for predictable memory layout
 - Type tagging for runtime type safety
 - Inline storage for small values (≤ 8 bytes)
@@ -693,14 +694,14 @@ DATABOX_SET_SIGNED(&num, 42);
 
 ## Performance Characteristics
 
-| Operation | Complexity | Notes |
-|-----------|-----------|-------|
-| Creation | O(1) | Constant time, may embed |
-| Copy | O(n) | n = byte length if allocated |
-| Compare | O(n) | n = min(len_a, len_b) for bytes |
-| Type Check | O(1) | Macro expansion, no cost |
-| Access | O(1) | Direct union access |
-| Free | O(1) | Single free call if needed |
+| Operation  | Complexity | Notes                           |
+| ---------- | ---------- | ------------------------------- |
+| Creation   | O(1)       | Constant time, may embed        |
+| Copy       | O(n)       | n = byte length if allocated    |
+| Compare    | O(n)       | n = min(len_a, len_b) for bytes |
+| Type Check | O(1)       | Macro expansion, no cost        |
+| Access     | O(1)       | Direct union access             |
+| Free       | O(1)       | Single free call if needed      |
 
 ## Memory Usage
 
@@ -782,6 +783,7 @@ Run the databox test suite:
 ```
 
 The test suite includes:
+
 - Type checking and conversion
 - Embedding optimization
 - Comparison and equality

@@ -5,6 +5,7 @@
 `SetProcTitle` provides **cross-platform process title manipulation** for Unix-like systems. It allows changing the process name visible in system tools like `ps`, `top`, and `htop`, which is useful for identifying server states, worker roles, or debugging.
 
 **Key Features:**
+
 - Cross-platform process title modification
 - Automatic memory management for title storage
 - Native BSD support with fallback for Linux/macOS/Solaris
@@ -127,12 +128,14 @@ int main(int argc, char *argv[]) {
 ```
 
 **Before:**
+
 ```bash
 $ ps aux | grep myserver
 user  12345  myserver --port 8080 --workers 4
 ```
 
 **After:**
+
 ```bash
 $ ps aux | grep myserver
 user  12345  server: ready, port 8080
@@ -189,6 +192,7 @@ void workerMain(int workerID) {
 ```
 
 **Terminal output:**
+
 ```bash
 $ ps aux | grep worker
 user  12346  worker 0: idle
@@ -260,6 +264,7 @@ int main(int argc, char *argv[]) {
 ```
 
 **Terminal output:**
+
 ```bash
 $ ps aux | grep myserver
 user  10000  master process
@@ -359,15 +364,15 @@ When a program starts, `argv[]` and `environ[]` are stored contiguously in memor
 
 ## Platform Support
 
-| Platform | Support | Method | Notes |
-|----------|---------|--------|-------|
-| FreeBSD | Native | System call | No initialization needed |
-| NetBSD | Native | System call | No initialization needed |
-| OpenBSD | Native | System call | No initialization needed |
-| Linux | Custom | argv manipulation | Requires initialization |
-| macOS | Custom | argv manipulation | Requires initialization |
-| Solaris | Custom | argv manipulation | Requires `/usr/ucb/ps -w` to view |
-| Others | No-op | Macros | Functions compile but do nothing |
+| Platform | Support | Method            | Notes                             |
+| -------- | ------- | ----------------- | --------------------------------- |
+| FreeBSD  | Native  | System call       | No initialization needed          |
+| NetBSD   | Native  | System call       | No initialization needed          |
+| OpenBSD  | Native  | System call       | No initialization needed          |
+| Linux    | Custom  | argv manipulation | Requires initialization           |
+| macOS    | Custom  | argv manipulation | Requires initialization           |
+| Solaris  | Custom  | argv manipulation | Requires `/usr/ucb/ps -w` to view |
+| Others   | No-op   | Macros            | Functions compile but do nothing  |
 
 ## Best Practices
 
@@ -453,6 +458,7 @@ if (!setProctitleInit(argv)) {
 **Problem**: Title doesn't change in `ps` output
 
 **Solutions**:
+
 1. Ensure `setProctitleInit()` was called
 2. On Solaris, use `/usr/ucb/ps -w` instead of `/bin/ps`
 3. Check if title is too long (may be truncated)
@@ -463,6 +469,7 @@ if (!setProctitleInit(argv)) {
 **Problem**: `setProctitleInit()` returns false
 
 **Possible Causes**:
+
 1. Memory allocation failed
 2. Platform not supported
 3. Called after argv/environ were modified
@@ -510,6 +517,7 @@ int main(int argc, char *argv[]) {
 ```
 
 Run in terminal:
+
 ```bash
 # Terminal 1
 $ ./test-program --some-args

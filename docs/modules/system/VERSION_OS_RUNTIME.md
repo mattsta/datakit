@@ -5,6 +5,7 @@
 `VersionOSRuntime` provides **automatic OS kernel version detection** at program startup. It captures the running kernel version and provides compile-time macros to check for feature availability based on kernel version requirements.
 
 **Key Features:**
+
 - Automatic initialization via constructor attribute
 - Single global version variable for zero runtime overhead
 - Compile-time macros for Linux kernel feature detection
@@ -78,6 +79,7 @@ Versions are encoded using the `_DK_MK_VERSION` macro:
 ```
 
 **Examples:**
+
 - Linux 3.9.0 → `(3 << 16) | (9 << 8) | 0` = `0x030900` = 199936
 - Linux 4.15.3 → `(4 << 16) | (15 << 8) | 3` = `0x040F03` = 265987
 - Linux 5.10.0 → `(5 << 16) | (10 << 8) | 0` = `0x050A00` = 330240
@@ -109,6 +111,7 @@ static void __attribute__((constructor)) init() {
 ```
 
 **Key Points:**
+
 - Runs before `main()` executes
 - Parses kernel version from `uname().release`
 - Thread-safe (completes before any user code runs)
@@ -144,6 +147,7 @@ void printKernelInfo(void) {
 ```
 
 **Output on Linux 5.10.0:**
+
 ```
 Running kernel: 5.10.0
 Running Linux 5.0 or newer
@@ -214,6 +218,7 @@ void printTcpFeatures(void) {
 ```
 
 **Output on Linux 3.7.0:**
+
 ```
 TCP Fast Open Support:
   Client:       yes
@@ -222,6 +227,7 @@ TCP Fast Open Support:
 ```
 
 **Output on Linux 3.16.0:**
+
 ```
 TCP Fast Open Support:
   Client:       yes
@@ -351,6 +357,7 @@ int main(void) {
 ### Constructor Execution Order
 
 The `__attribute__((constructor))` ensures initialization happens:
+
 - After static initialization
 - Before `main()` executes
 - Before any other code runs
@@ -362,6 +369,7 @@ This guarantees `versionOSRuntimeKernelVersion` is valid when accessed.
 The implementation uses `sscanf()` to parse the kernel version from `uname().release`:
 
 **Example release strings:**
+
 - `"5.10.0-8-amd64"` → `5.10.0`
 - `"4.15.0-112-generic"` → `4.15.0`
 - `"3.10.0-1160.el7.x86_64"` → `3.10.0`
@@ -382,13 +390,13 @@ Only the first three numeric components are extracted; suffixes are ignored.
 
 ## Platform Support
 
-| Platform | uname() | Version Detection | Notes |
-|----------|---------|-------------------|-------|
-| Linux | ✓ | ✓ | Primary use case |
-| FreeBSD | ✓ | ✓ | Works but BSD-specific features not included |
-| macOS | ✓ | ✓ | Works but macOS-specific features not included |
-| Solaris | ✓ | ✓ | Works but Solaris-specific features not included |
-| Other Unix | ✓ | ✓ | Generic version detection |
+| Platform   | uname() | Version Detection | Notes                                            |
+| ---------- | ------- | ----------------- | ------------------------------------------------ |
+| Linux      | ✓       | ✓                 | Primary use case                                 |
+| FreeBSD    | ✓       | ✓                 | Works but BSD-specific features not included     |
+| macOS      | ✓       | ✓                 | Works but macOS-specific features not included   |
+| Solaris    | ✓       | ✓                 | Works but Solaris-specific features not included |
+| Other Unix | ✓       | ✓                 | Generic version detection                        |
 
 **Note**: The pre-defined feature macros (`linuxKernelHasREUSEPORT`, etc.) are specific to Linux kernel features. On other platforms, you can still use `osVersionGTE()` to create custom checks.
 
@@ -472,20 +480,20 @@ if (osVersionGTE(4, 15, 0)) {
 
 ### Linux Kernel Features by Version
 
-| Version | Notable Features |
-|---------|-----------------|
-| 2.6.27 | epoll improvements |
-| 3.5.0 | seccomp mode 2 (filter) |
-| 3.6.0 | TCP Fast Open (client) |
-| 3.7.0 | TCP Fast Open (server, IPv4) |
-| 3.8.0 | User namespaces |
-| 3.9.0 | SO_REUSEPORT |
-| 3.16.0 | TCP Fast Open (server, IPv6) |
-| 3.18.0 | Classic BPF |
-| 4.1.0 | Extended BPF (eBPF) |
-| 4.5.0 | Unified cgroups (cgroup v2) |
-| 5.1.0 | io_uring |
-| 5.6.0 | WireGuard |
+| Version | Notable Features             |
+| ------- | ---------------------------- |
+| 2.6.27  | epoll improvements           |
+| 3.5.0   | seccomp mode 2 (filter)      |
+| 3.6.0   | TCP Fast Open (client)       |
+| 3.7.0   | TCP Fast Open (server, IPv4) |
+| 3.8.0   | User namespaces              |
+| 3.9.0   | SO_REUSEPORT                 |
+| 3.16.0  | TCP Fast Open (server, IPv6) |
+| 3.18.0  | Classic BPF                  |
+| 4.1.0   | Extended BPF (eBPF)          |
+| 4.5.0   | Unified cgroups (cgroup v2)  |
+| 5.1.0   | io_uring                     |
+| 5.6.0   | WireGuard                    |
 
 ## Use Cases
 

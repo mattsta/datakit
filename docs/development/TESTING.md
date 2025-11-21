@@ -241,17 +241,20 @@ int myModuleTest(int argc, char *argv[]) {
 After writing your test, add it to `/home/user/datakit/src/datakit-test.c`:
 
 1. Include your header:
+
 ```c
 #include "mymodule.h"
 ```
 
 2. Add test case in the `main()` function:
+
 ```c
 } else if (!strcasecmp(argv[2], "mymodule")) {
     return myModuleTest(argc - 2, argv + 2);
 ```
 
 3. Add to the ALL test suite:
+
 ```c
 } else if (!strcasecmp(argv[2], "ALL")) {
     uint32_t result = 0;
@@ -262,6 +265,7 @@ After writing your test, add it to `/home/user/datakit/src/datakit-test.c`:
 ```
 
 4. Add to CMake test list in `/home/user/datakit/src/CMakeLists.txt`:
+
 ```cmake
 set(datakitTests
     # ... existing tests ...
@@ -400,6 +404,7 @@ Tests are organized as follows:
 ### Test Not Found
 
 If you get "Test not found!" error:
+
 - Check spelling of test name (case-insensitive)
 - Ensure test is registered in datakit-test.c
 - Verify test binary was rebuilt after adding test
@@ -407,6 +412,7 @@ If you get "Test not found!" error:
 ### Segmentation Faults
 
 If tests crash:
+
 1. Run under GDB: `gdb --args ./src/datakit-test test <name>`
 2. Run with valgrind: `valgrind ./src/datakit-test test <name>`
 3. Check for uninitialized variables
@@ -416,6 +422,7 @@ If tests crash:
 ### Assertion Failures
 
 If asserts fail:
+
 - Check the assertion message and location
 - Review recent changes to that code path
 - Run in debug build for better error messages
@@ -424,6 +431,7 @@ If asserts fail:
 ### Intermittent Failures
 
 If tests fail randomly:
+
 - May indicate race conditions (check threading)
 - May indicate uninitialized memory
 - Run under valgrind's helgrind or DRD tools

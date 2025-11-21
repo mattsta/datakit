@@ -5,6 +5,7 @@
 `multiarray` is a **self-optimizing dynamic array** that automatically transitions between three internal representations based on data size. It provides O(1) indexed access with minimal memory overhead by using the most efficient storage format for your current dataset size.
 
 **Key Features:**
+
 - Automatic scaling from 8 bytes (native) → 24 bytes (small) → variable size (medium) → linked list (large)
 - Random access by index with O(1) performance
 - Pointer-stable variants for fixed-size elements
@@ -32,6 +33,7 @@ The multiarray family uses **pointer tagging** to transparently manage four unde
 ```
 
 When you call operations on multiarray:
+
 1. The implementation checks the current variant via pointer tag
 2. Routes to the appropriate function (Native/Small/Medium/Large)
 3. Automatically upgrades to the next variant if size threshold exceeded
@@ -512,21 +514,21 @@ multiarraySmallDirectFree(points);
 
 ### Time Complexity
 
-| Operation | Small | Medium | Large |
-|-----------|-------|--------|-------|
-| Get | O(1) | O(1) per node + linear search nodes | O(n) traverse list |
-| Insert | O(n) memmove | O(n) in node | O(n) traverse + insert |
-| Delete | O(n) memmove | O(n) in node | O(n) traverse + delete |
-| Head/Tail | O(1) | O(1) | O(1) |
+| Operation | Small        | Medium                              | Large                  |
+| --------- | ------------ | ----------------------------------- | ---------------------- |
+| Get       | O(1)         | O(1) per node + linear search nodes | O(n) traverse list     |
+| Insert    | O(n) memmove | O(n) in node                        | O(n) traverse + insert |
+| Delete    | O(n) memmove | O(n) in node                        | O(n) traverse + delete |
+| Head/Tail | O(1)         | O(1)                                | O(1)                   |
 
 ### Space Complexity
 
-| Variant | Fixed Overhead | Per Element | Best For |
-|---------|---------------|-------------|----------|
-| Native | 0 bytes | element size | < 1024 elements, stack-friendly |
-| Small | 16 bytes | element size | < 2048 elements |
-| Medium | 16 bytes + 16N | element size | 2K - 100K elements |
-| Large | 24 bytes + 24N | element size | 100K+ elements |
+| Variant | Fixed Overhead | Per Element  | Best For                        |
+| ------- | -------------- | ------------ | ------------------------------- |
+| Native  | 0 bytes        | element size | < 1024 elements, stack-friendly |
+| Small   | 16 bytes       | element size | < 2048 elements                 |
+| Medium  | 16 bytes + 16N | element size | 2K - 100K elements              |
+| Large   | 24 bytes + 24N | element size | 100K+ elements                  |
 
 ### Automatic Upgrade Thresholds
 
@@ -687,6 +689,7 @@ Run the multiarray test suite:
 ```
 
 The test suite includes:
+
 - Native → Small → Medium → Large automatic transitions
 - Insertion and deletion across all variants
 - Random access and sequential access

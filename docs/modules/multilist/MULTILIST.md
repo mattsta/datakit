@@ -5,6 +5,7 @@
 `multilist` is a **high-performance linked list** that stores multiple elements per node instead of one element per node. By packing multiple values into compact memory arrays (flex), multilist dramatically reduces pointer overhead and improves cache locality compared to traditional linked lists.
 
 **Key Features:**
+
 - Automatic scaling from 8 bytes (small) → 16 bytes (medium) → 24+ bytes (full)
 - Multi-element nodes reduce pointer overhead by 8-32x
 - O(1) push/pop at both ends (efficient queue/stack/deque)
@@ -51,12 +52,14 @@ Multilist:
 ```
 
 **Benefits:**
+
 - **Reduced Overhead**: One 8-byte pointer per 100-200 elements instead of per element
 - **Cache Efficiency**: Elements packed together in memory
 - **Compression**: Full variant can compress middle nodes with LZ4
 - **Flexibility**: Nodes grow/shrink as needed
 
 When you call `multilistPushHead()`, the implementation:
+
 1. Checks the current variant via pointer tag
 2. Routes to the appropriate function (Small/Medium/Full)
 3. Automatically upgrades to the next variant if size threshold exceeded
@@ -501,25 +504,25 @@ for (int round = 0; round < 1000; round++) {
 
 ### Time Complexity
 
-| Operation | Small | Medium | Full |
-|-----------|-------|--------|------|
-| Push Head/Tail | O(1) - O(n)* | O(1) - O(n)* | O(1) amortized |
-| Pop Head/Tail | O(1) | O(1) | O(1) |
-| Index Access | O(n) | O(n) | O(n) |
-| Insert | O(n) | O(n) | O(n) |
-| Delete | O(n) | O(n) | O(n) |
-| Iteration | O(n) | O(n) | O(n) |
-| Rotate | O(1) | O(1) | O(1) |
+| Operation      | Small         | Medium        | Full           |
+| -------------- | ------------- | ------------- | -------------- |
+| Push Head/Tail | O(1) - O(n)\* | O(1) - O(n)\* | O(1) amortized |
+| Pop Head/Tail  | O(1)          | O(1)          | O(1)           |
+| Index Access   | O(n)          | O(n)          | O(n)           |
+| Insert         | O(n)          | O(n)          | O(n)           |
+| Delete         | O(n)          | O(n)          | O(n)           |
+| Iteration      | O(n)          | O(n)          | O(n)           |
+| Rotate         | O(1)          | O(1)          | O(1)           |
 
 \* O(1) if space available in current node, O(n) if node must be split or list must be upgraded to next variant.
 
 ### Space Complexity
 
-| Variant | Fixed Overhead | Per Element | Max Recommended Size |
-|---------|---------------|-------------|---------------------|
-| Small | 8 bytes | ~varies~ | < 2KB total |
-| Medium | 16 bytes | ~varies~ | 2KB - 6KB total |
-| Full | 24+ bytes + N*20 | ~varies~ | Unlimited (TBs) |
+| Variant | Fixed Overhead    | Per Element | Max Recommended Size |
+| ------- | ----------------- | ----------- | -------------------- |
+| Small   | 8 bytes           | ~varies~    | < 2KB total          |
+| Medium  | 16 bytes          | ~varies~    | 2KB - 6KB total      |
+| Full    | 24+ bytes + N\*20 | ~varies~    | Unlimited (TBs)      |
 
 ### Automatic Upgrade Thresholds
 
@@ -531,19 +534,22 @@ Medium → Full:   when bytes > limit * 3
 ### vs Traditional Linked List
 
 **Traditional Linked List:**
+
 - 16 bytes overhead per element (prev + next pointers on 64-bit)
 - Poor cache locality
 - No compression
 
 **Multilist:**
+
 - 8 bytes overhead per ~100-200 elements
 - Excellent cache locality (elements packed together)
 - Optional compression (Full variant)
 - 8-32x less memory overhead
 
 **Example:** Storing 10,000 integers:
-- Traditional list: 10,000 * (8 bytes data + 16 bytes pointers) = 240 KB
-- Multilist: 10,000 * 8 bytes + ~500 bytes overhead = 80.5 KB
+
+- Traditional list: 10,000 \* (8 bytes data + 16 bytes pointers) = 240 KB
+- Multilist: 10,000 \* 8 bytes + ~500 bytes overhead = 80.5 KB
 - **Savings: 66% less memory**
 
 ## Common Patterns
@@ -748,6 +754,7 @@ Run the multilist test suite:
 ```
 
 The test suite includes:
+
 - Small → Medium → Full automatic transitions
 - Push/pop operations on all variants
 - Forward and reverse iteration

@@ -5,6 +5,7 @@
 `fibbuf` provides **Fibonacci-based buffer growth calculations** for dynamic memory structures. Instead of exponential growth (doubling), it uses Fibonacci sequences to achieve sub-exponential growth with better memory efficiency and reduced over-allocation.
 
 **Key Features:**
+
 - Sub-exponential growth reduces memory waste
 - Three optimized lookup tables (16-bit, 32-bit, 64-bit)
 - Branch-free binary search for O(log n) performance
@@ -19,6 +20,7 @@
 ## What is Fibonacci Buffer Growth?
 
 Traditional buffer growth strategies use **exponential growth** (doubling):
+
 ```
 32 → 64 → 128 → 256 → 512 → 1024 → ...
 ```
@@ -26,11 +28,13 @@ Traditional buffer growth strategies use **exponential growth** (doubling):
 This wastes memory when you need, say, 300 bytes but get 512.
 
 **Fibonacci growth** is gentler:
+
 ```
 34 → 55 → 89 → 144 → 233 → 377 → 610 → 987 → ...
 ```
 
 This provides:
+
 1. **Better memory efficiency** - Smaller growth steps
 2. **Still fast growth** - Sub-exponential but not linear
 3. **Predictable behavior** - Mathematical sequence
@@ -160,6 +164,7 @@ fibbuf uses a **branch-free binary search** for cache efficiency:
 ```
 
 **Why branch-free?**
+
 - No conditional jumps → better CPU pipeline utilization
 - More predictable performance
 - Cache-friendly memory access patterns
@@ -349,11 +354,11 @@ Size    Fibonacci   Doubling    Fib Waste   Double Waste
 
 ## Performance Characteristics
 
-| Operation | Complexity | Notes |
-|-----------|-----------|-------|
-| fibbufNextSizeBuffer | O(log n) | n = table size (max 23) |
-| fibbufNextSizeAllocation | O(log n) | Includes jebuf lookup |
-| Table lookup | O(1) | Select table by range check |
+| Operation                | Complexity | Notes                       |
+| ------------------------ | ---------- | --------------------------- |
+| fibbufNextSizeBuffer     | O(log n)   | n = table size (max 23)     |
+| fibbufNextSizeAllocation | O(log n)   | Includes jebuf lookup       |
+| Table lookup             | O(1)       | Select table by range check |
 
 ### Benchmark Results
 
@@ -505,12 +510,12 @@ count = bytes / sizeof(int);
 
 ## Comparison Table
 
-| Strategy | Growth Rate | Memory Efficiency | Complexity |
-|----------|-------------|-------------------|------------|
-| Linear (+k) | Slow | Excellent | O(1) |
-| Fibonacci | Sub-exponential | Good | O(log n) |
-| Doubling (×2) | Exponential | Poor | O(1) |
-| Custom | Varies | Varies | Varies |
+| Strategy      | Growth Rate     | Memory Efficiency | Complexity |
+| ------------- | --------------- | ----------------- | ---------- |
+| Linear (+k)   | Slow            | Excellent         | O(1)       |
+| Fibonacci     | Sub-exponential | Good              | O(log n)   |
+| Doubling (×2) | Exponential     | Poor              | O(1)       |
+| Custom        | Varies          | Varies            | Varies     |
 
 ## See Also
 
@@ -526,6 +531,7 @@ Run the fibbuf test suite:
 ```
 
 The test suite validates:
+
 - Correct Fibonacci sequence generation
 - Binary search correctness
 - Table boundary conditions

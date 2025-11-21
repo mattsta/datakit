@@ -5,6 +5,7 @@
 `str` provides **high-performance string manipulation and conversion utilities** extracted and optimized from SQLite and LuaJIT. It offers fast, reliable conversions between strings and native types with comprehensive UTF-8 support.
 
 **Key Features:**
+
 - Fast string-to-number conversions with overflow detection
 - Reliable round-trip number parsing (converts back to exact same string)
 - UTF-8 character counting and manipulation
@@ -14,7 +15,7 @@
 
 **Headers**: `str.h`
 
-**Source**: `str.c` (includes all str/*.c files)
+**Source**: `str.c` (includes all str/\*.c files)
 
 ## Core Character Operations
 
@@ -125,6 +126,7 @@ if (StrScanScanReliable(str, strlen(str), &result)) {
 ```
 
 The reliable scanner guarantees:
+
 - No leading zeros (except "0" or "0.xxx")
 - No leading decimal points (".123" fails)
 - No trailing zeros after decimal (except "X.0")
@@ -381,6 +383,7 @@ printf("Estimated rows: %lu (actual: %lu)\n", estimated, rowCount);
 ```
 
 LogEst stores quantities as `10 * log2(X)`, giving a range from ~1e-986 to ~1e986:
+
 - 1 → 0
 - 10 → 33
 - 100 → 66
@@ -425,12 +428,14 @@ if (!StrBloomTest(filter, 99)) {
 ```
 
 **False Positive Rates (64-bit filter):**
+
 - 8 elements: 11%
 - 16 elements: 22%
 - 32 elements: 39%
 - 64 elements: 63%
 
 **False Positive Rates (128-bit filter):**
+
 - 8 elements: 6%
 - 16 elements: 11%
 - 32 elements: 22%
@@ -589,14 +594,14 @@ bool isValidPositiveInteger(const char *str, size_t len) {
 
 ## Performance Characteristics
 
-| Operation | Complexity | Notes |
-|-----------|-----------|-------|
-| StrIsDigitsFast | O(n) | SSE2: ~4x faster than individual checks |
-| StrBufToUInt64Fast | O(n) | No validation, maximum speed |
-| StrUInt64ToBuf | O(1) | Uses SWAR, ~60 cycles typical |
-| StrLenUtf8 | O(n) | SIMD optimized for large strings |
-| StrScanScanReliable | O(n) | With round-trip validation |
-| Bloom filter test | O(1) | Single bit check |
+| Operation           | Complexity | Notes                                   |
+| ------------------- | ---------- | --------------------------------------- |
+| StrIsDigitsFast     | O(n)       | SSE2: ~4x faster than individual checks |
+| StrBufToUInt64Fast  | O(n)       | No validation, maximum speed            |
+| StrUInt64ToBuf      | O(1)       | Uses SWAR, ~60 cycles typical           |
+| StrLenUtf8          | O(n)       | SIMD optimized for large strings        |
+| StrScanScanReliable | O(n)       | With round-trip validation              |
+| Bloom filter test   | O(1)       | Single bit check                        |
 
 ## Thread Safety
 
@@ -660,6 +665,7 @@ Run the str test suite:
 ```
 
 The test suite includes:
+
 - Round-trip number conversion validation
 - UTF-8 character counting accuracy
 - Overflow detection

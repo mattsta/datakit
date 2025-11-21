@@ -5,6 +5,7 @@
 `membound` is a **memory allocator with bounded allocation from a pre-allocated pool**. It provides malloc/free semantics within a fixed memory region, using a buddy allocation algorithm for efficient space management without relying on the system allocator.
 
 **Key Features:**
+
 - Fixed-size memory pool (no dynamic growth beyond initial size)
 - Power-of-two buddy allocation algorithm
 - Thread-safe with mutex protection
@@ -32,6 +33,7 @@ Bounded memory allocators solve the problem of **unpredictable memory usage** by
 ### When to Use membound
 
 **Use membound when:**
+
 - You need strict memory limits (e.g., embedded systems, containers)
 - Predictable memory usage is critical
 - You want to isolate allocations from the system heap
@@ -39,6 +41,7 @@ Bounded memory allocators solve the problem of **unpredictable memory usage** by
 - Testing memory pressure scenarios
 
 **Don't use membound when:**
+
 - You need unlimited dynamic allocation
 - Single allocations exceed 1 GiB
 - You need very fine-grained allocation sizes (< 256 bytes wastes space)
@@ -425,16 +428,16 @@ void testOOM(void) {
 
 ## Performance Characteristics
 
-| Operation | Complexity | Notes |
-|-----------|-----------|-------|
-| Create | O(n) | n = pool size, must initialize control array |
-| Alloc (best) | O(1) | When exact size available in freelist |
-| Alloc (worst) | O(log k) | k = size classes, must split blocks |
-| Free (best) | O(1) | No coalescing possible |
-| Free (worst) | O(log k) | Full coalescing up to largest block |
-| Realloc (shrink) | O(1) | Returns same pointer |
-| Realloc (grow) | O(n) | Allocates new, copies n bytes, frees old |
-| Shutdown | O(1) | Just unmaps memory |
+| Operation        | Complexity | Notes                                        |
+| ---------------- | ---------- | -------------------------------------------- |
+| Create           | O(n)       | n = pool size, must initialize control array |
+| Alloc (best)     | O(1)       | When exact size available in freelist        |
+| Alloc (worst)    | O(log k)   | k = size classes, must split blocks          |
+| Free (best)      | O(1)       | No coalescing possible                       |
+| Free (worst)     | O(log k)   | Full coalescing up to largest block          |
+| Realloc (shrink) | O(1)       | Returns same pointer                         |
+| Realloc (grow)   | O(n)       | Allocates new, copies n bytes, frees old     |
+| Shutdown         | O(1)       | Just unmaps memory                           |
 
 ### Memory Overhead
 
@@ -648,6 +651,7 @@ memboundMemBoundDump(m, "membound-state.txt");
 ```
 
 Output includes:
+
 - Free list statistics per size class
 - Total allocations, current usage
 - Maximum usage statistics
@@ -668,6 +672,7 @@ Run the membound test suite:
 ```
 
 The test suite validates:
+
 - Allocation and freeing patterns
 - Out-of-memory conditions
 - Statistics tracking

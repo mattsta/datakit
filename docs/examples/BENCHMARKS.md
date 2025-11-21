@@ -994,5 +994,6 @@ All benchmark code is available in the test suite:
 ```
 
 For more examples, see:
+
 - [PATTERNS.md](PATTERNS.md) - Common coding patterns
 - [USE_CASES.md](USE_CASES.md) - Real-world applications

@@ -8,12 +8,12 @@ The multimap family implements a **scale-aware architecture** with four distinct
 
 ### Summary Table
 
-| Variant | Size | Maps | Overhead | Best For | Max Recommended |
-|---------|------|------|----------|----------|----------------|
-| **Small** | 16 bytes | 1 flex | 16 bytes | < 100 entries | 2KB total |
-| **Medium** | 28 bytes | 2 flex | 28 bytes | 100-1000 entries | 6KB total |
-| **Full** | 40+ bytes | N flex | 40 + N×20 bytes | 1000+ entries | Unlimited (TBs) |
-| **Atom** | N/A | 2 multimaps | Wrapper | Reference counting | Special purpose |
+| Variant    | Size      | Maps        | Overhead        | Best For           | Max Recommended |
+| ---------- | --------- | ----------- | --------------- | ------------------ | --------------- |
+| **Small**  | 16 bytes  | 1 flex      | 16 bytes        | < 100 entries      | 2KB total       |
+| **Medium** | 28 bytes  | 2 flex      | 28 bytes        | 100-1000 entries   | 6KB total       |
+| **Full**   | 40+ bytes | N flex      | 40 + N×20 bytes | 1000+ entries      | Unlimited (TBs) |
+| **Atom**   | N/A       | 2 multimaps | Wrapper         | Reference counting | Special purpose |
 
 ## multimapSmall
 
@@ -55,17 +55,20 @@ struct multimapSmall {
 ### Characteristics
 
 **Advantages:**
+
 - **Minimal overhead**: Only 16 bytes for the entire container
 - **Cache-friendly**: Single contiguous allocation
 - **Fast sequential access**: All data in one array
 - **Simple implementation**: Single binary search
 
 **Disadvantages:**
+
 - **Slow inserts**: O(n) memory moves for insertions
 - **Limited scalability**: Becomes inefficient beyond 2KB
 - **No parallelism**: Single map prevents multi-threaded operations
 
 **Upgrade Trigger:**
+
 ```c
 /* Upgrades to Medium when: */
 if (bytes > sizeLimit && count > elementsPerEntry * 2) {
@@ -142,11 +145,13 @@ struct multimapMedium {
 ### How Medium Works
 
 When Small upgrades to Medium, it:
+
 1. Splits the single flex at its middle point
 2. Creates two new flex arrays: `map[0]` (lower) and `map[1]` (higher)
 3. Distributes elements: lower keys → map[0], higher keys → map[1]
 
 **Binary Search Strategy:**
+
 ```c
 /* To find a key: */
 1. Check head of map[1]
@@ -159,17 +164,20 @@ This provides a **2-way branching** that reduces search space by ~50%.
 ### Characteristics
 
 **Advantages:**
+
 - **Better insert performance**: Only move ~half the data on average
 - **Improved cache behavior**: Smaller individual maps
 - **Stepping stone**: Prepares for Full variant
 - **Still compact**: Only 12 extra bytes vs Small
 
 **Disadvantages:**
+
 - **More complex**: Two binary searches possible
 - **Conformance overhead**: Must keep map[0] populated
 - **Limited scaling**: Still only 2 maps
 
 **Upgrade Trigger:**
+
 ```c
 /* Upgrades to Full when: */
 if (bytes > sizeLimit * 3 && count > elementsPerEntry * 2) {
@@ -288,6 +296,7 @@ map[N]: [K(N*100)...K(N*100+100)]
 ```
 
 Example with 5 maps:
+
 ```
 rangeBox[0] = 100    (map[1] starts at 100)
 rangeBox[1] = 500    (map[2] starts at 500)
@@ -303,6 +312,7 @@ Looking for key 750:
 **Map Splitting:**
 
 When a map exceeds `maxSize` bytes:
+
 1. Find the middle element
 2. Split into [LOW, HIGH]
 3. Insert HIGH as new map after LOW
@@ -311,12 +321,14 @@ When a map exceeds `maxSize` bytes:
 ### Characteristics
 
 **Advantages:**
+
 - **Unlimited scaling**: Grows to terabytes
 - **Efficient large inserts**: Only realloc small arrays
 - **Parallelizable**: Different maps can be accessed concurrently
 - **Balanced performance**: O(log N) map find + O(log M) element find
 
 **Disadvantages:**
+
 - **Higher overhead**: 40 + (N × 20) bytes base cost
 - **Complex memory management**: Multiple dynamic arrays
 - **Indirection cost**: Extra pointer chasing
@@ -472,6 +484,7 @@ Full:    40 + (25×20) + 40,000 = 40,540 bytes  (1.3% overhead)
 ### Performance Comparison
 
 **Insertion (1000 random keys):**
+
 ```
 Small:   ~100 ms   (many large memmoves)
 Medium:  ~60 ms    (smaller memmoves)
@@ -479,6 +492,7 @@ Full:    ~40 ms    (minimal memmoves per map)
 ```
 
 **Lookup (1000 random keys):**
+
 ```
 Small:   ~5 ms     (single binary search)
 Medium:  ~6 ms     (map select + binary search)
@@ -486,6 +500,7 @@ Full:    ~8 ms     (rangeBox search + map search + binary search)
 ```
 
 **Iteration (1000 entries):**
+
 ```
 Small:   ~2 ms     (single array)
 Medium:  ~2.5 ms   (two arrays)
