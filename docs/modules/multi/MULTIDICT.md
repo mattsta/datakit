@@ -5,6 +5,7 @@
 `multidict` is a **generic hash table implementation** that provides a flexible foundation for building custom dictionary types with configurable storage strategies. Unlike traditional hash tables, multidict uses a **slot-based architecture** where each hash slot can contain arbitrary data structures through a pluggable class system.
 
 **Key Features:**
+
 - Pluggable storage classes via `multidictClass` interface
 - Incremental rehashing for smooth performance
 - Dual hash table design (for rehashing)
@@ -34,6 +35,7 @@ multidict uses a **two-table incremental rehashing** design similar to Redis:
 ```
 
 When the hash table needs to grow:
+
 1. `ht[1]` is allocated with new size
 2. Elements are incrementally moved from `ht[0]` to `ht[1]`
 3. Once complete, `ht[1]` becomes `ht[0]`
@@ -252,11 +254,13 @@ multidictIteratorRelease(&iter);
 ### Safe vs Unsafe Iteration
 
 **Unsafe Iterator**:
+
 - Cannot call `multidictAdd`, `multidictDelete`, etc. during iteration
 - Detects modifications via fingerprint
 - Faster (no overhead tracking)
 
 **Safe Iterator**:
+
 - Can modify dictionary during iteration
 - Tracks active safe iterators
 - Prevents rehashing while iterators are active
@@ -307,6 +311,7 @@ do {
 ```
 
 The SCAN algorithm:
+
 - **Stateless**: No iterator to maintain between calls
 - **Consistent**: All elements present throughout scan are returned
 - **Resilient**: Handles rehashing gracefully
@@ -509,24 +514,26 @@ multidictClass myFlexClass = {
 
 ### Time Complexity
 
-| Operation | Average | Worst Case | Notes |
-|-----------|---------|------------|-------|
-| Insert | O(1) | O(n) | Amortized O(1) with incremental rehash |
-| Lookup | O(1) | O(n) | Depends on slot implementation |
-| Delete | O(1) | O(n) | Must find key in slot |
-| Iteration | O(n) | O(n) | Iterates all slots and entries |
-| SCAN | O(1) per call | O(n) | Full scan is O(n) |
-| Rehash Step | O(1) | O(k) | k = entries in single slot |
+| Operation   | Average       | Worst Case | Notes                                  |
+| ----------- | ------------- | ---------- | -------------------------------------- |
+| Insert      | O(1)          | O(n)       | Amortized O(1) with incremental rehash |
+| Lookup      | O(1)          | O(n)       | Depends on slot implementation         |
+| Delete      | O(1)          | O(n)       | Must find key in slot                  |
+| Iteration   | O(n)          | O(n)       | Iterates all slots and entries         |
+| SCAN        | O(1) per call | O(n)       | Full scan is O(n)                      |
+| Rehash Step | O(1)          | O(k)       | k = entries in single slot             |
 
 ### Space Complexity
 
 **Per Dictionary**:
+
 - 96 bytes (multidict struct)
 - 32 bytes × 2 (ht[0] and ht[1])
 - 8 bytes × slot_count (pointer array)
 - Variable (slot contents via multidictClass)
 
 **Rehashing Overhead**:
+
 - During rehash: ~2x memory (two hash tables)
 - After rehash: back to normal
 
@@ -583,6 +590,7 @@ multidictIteratorGetSafe(d, &safeIter);
 ### 4. Implement Efficient Slot Classes
 
 Your `multidictClass` should:
+
 - Use memory-efficient data structures
 - Implement fast key comparison
 - Minimize allocations per operation
@@ -685,6 +693,7 @@ pthread_rwlock_unlock(&lock);
 ## Testing
 
 The test suite in `multidict.c` includes:
+
 - Basic insertion and lookup
 - Deletion operations
 - Iterator functionality
@@ -704,6 +713,7 @@ The test suite in `multidict.c` includes:
 **Origin**: Based on Redis dict.c by Salvatore Sanfilippo, enhanced by Matt Stancliff
 
 **Key Enhancements**:
+
 - Pluggable storage via multidictClass
 - Integration with databox type system
 - Incremental rehashing optimizations

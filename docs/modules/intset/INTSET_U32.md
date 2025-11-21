@@ -5,6 +5,7 @@
 `intsetU32` is a **fixed-width sorted set of unsigned 32-bit integers**. Unlike the variable-width `intset`, it always uses exactly 4 bytes per element, providing predictable performance and simpler implementation at the cost of limited range.
 
 **Key Features:**
+
 - Fixed 32-bit unsigned integer storage
 - No encoding changes (always 4 bytes per element)
 - Sorted storage with O(log n) binary search
@@ -21,6 +22,7 @@
 ## Why Use intsetU32 Instead of intset?
 
 ### Advantages of intsetU32:
+
 1. **Simpler** - No encoding complexity
 2. **Faster** - No upgrade checks or conversions
 3. **Predictable** - Always 4 bytes per element
@@ -28,16 +30,19 @@
 5. **Better for known ranges** - When you know values fit in 32 bits
 
 ### Disadvantages of intsetU32:
+
 1. **Limited range** - Only 0 to 4,294,967,295
 2. **Less memory efficient** - Uses 4 bytes even for small values
 3. **Unsigned only** - No negative numbers
 
 **Choose intsetU32 when:**
+
 - All values are unsigned 32-bit (e.g., hash values, counters, IDs)
 - Performance is critical and values fit in 32 bits
 - You need set operations (merge, subset, equality)
 
 **Choose intset when:**
+
 - Values may be negative
 - Values have wide range (some small, some large)
 - Memory efficiency is paramount
@@ -611,21 +616,22 @@ intsetU32Free(inter);
 
 ## Performance Characteristics
 
-| Operation | Complexity | Notes |
-|-----------|-----------|-------|
-| Create | O(1) | Minimal allocation |
-| Add | O(n) | Binary search O(log n) + memmove O(n) |
-| Remove | O(n) | Binary search O(log n) + memmove O(n) |
-| Exists | O(log n) | Binary search on sorted array |
-| Get by position | O(1) | Direct array access |
-| Random | O(1) | Random index selection |
-| Merge | O(n + m) | Iterate one set, add to other |
-| Equal | O(n) | memcmp if same size |
-| Subset | O(n log m) | Check each element of subset |
-| Count | O(1) | Cached in structure |
-| Bytes | O(1) | Simple calculation |
+| Operation       | Complexity | Notes                                 |
+| --------------- | ---------- | ------------------------------------- |
+| Create          | O(1)       | Minimal allocation                    |
+| Add             | O(n)       | Binary search O(log n) + memmove O(n) |
+| Remove          | O(n)       | Binary search O(log n) + memmove O(n) |
+| Exists          | O(log n)   | Binary search on sorted array         |
+| Get by position | O(1)       | Direct array access                   |
+| Random          | O(1)       | Random index selection                |
+| Merge           | O(n + m)   | Iterate one set, add to other         |
+| Equal           | O(n)       | memcmp if same size                   |
+| Subset          | O(n log m) | Check each element of subset          |
+| Count           | O(1)       | Cached in structure                   |
+| Bytes           | O(1)       | Simple calculation                    |
 
 **Comparison with intset:**
+
 - **Faster**: No encoding checks or upgrades
 - **More predictable**: Always 4 bytes per element
 - **Simpler code**: No conditional logic for encoding
@@ -792,6 +798,7 @@ Run the intsetU32 test suite:
 ```
 
 The test suite validates:
+
 - Basic insertion and removal
 - Duplicate detection
 - Binary search correctness

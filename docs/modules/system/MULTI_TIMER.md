@@ -5,6 +5,7 @@
 `MultiTimer` provides a **scalable multi-timer event management system** for scheduling and executing timer callbacks. It efficiently manages thousands of concurrent timers with microsecond precision, supporting both one-shot and repeating timers.
 
 **Key Features:**
+
 - Efficient timer scheduling using sorted multimap structure
 - One-shot and repeating timer support
 - Microsecond precision timing
@@ -26,6 +27,7 @@
 ### Timer Event
 
 A timer event consists of:
+
 - **Start Time**: When the timer should first fire (microseconds from now)
 - **Repeat Interval**: How often to repeat (0 for one-shot)
 - **Callback**: Function to call when timer fires
@@ -75,11 +77,13 @@ typedef bool multiTimerCallback(multiTimer *t, multiTimerId id, void *clientData
 ```
 
 **Parameters:**
+
 - `t`: Timer manager that triggered this callback
 - `id`: Timer ID of the firing timer
 - `clientData`: User data registered with timer
 
 **Returns:**
+
 - `true`: Reschedule repeating timer (if repeat interval > 0)
 - `false`: Don't reschedule (one-shot timer or cancel repeat)
 
@@ -671,6 +675,7 @@ This allows timers to use smaller numbers and delays overflow.
 ### Context Switching
 
 During callback execution:
+
 - Context switches from `MULTI_TIMER_CONTEXT_USER` to `MULTI_TIMER_CONTEXT_TIMER`
 - New timer registrations go to `pendingScheduling` map
 - After all callbacks complete, context returns to `USER`
@@ -681,6 +686,7 @@ This prevents modifying the timer map while iterating it.
 ### Deletion Handling
 
 When `multiTimerUnregister()` is called:
+
 1. Timer ID is added to `stopEvents` map
 2. `stopLowest` and `stopHighest` are updated
 3. During processing, timers are checked against this range
@@ -688,20 +694,22 @@ When `multiTimerUnregister()` is called:
 
 ## Performance Characteristics
 
-| Operation | Complexity | Notes |
-|-----------|-----------|-------|
-| Register | O(log n) | Insert into sorted multimap |
-| Unregister | O(log n) | Insert into stop map |
-| Process | O(k log n) | k = expired timers, n = total timers |
-| Next timer | O(1) | Query first element of map |
-| Count | O(1) | Multimap maintains count |
+| Operation  | Complexity | Notes                                |
+| ---------- | ---------- | ------------------------------------ |
+| Register   | O(log n)   | Insert into sorted multimap          |
+| Unregister | O(log n)   | Insert into stop map                 |
+| Process    | O(k log n) | k = expired timers, n = total timers |
+| Next timer | O(1)       | Query first element of map           |
+| Count      | O(1)       | Multimap maintains count             |
 
 **Memory Usage:**
+
 - Base overhead: ~200 bytes per multiTimer
 - Per timer: ~80 bytes (multimap entry + overhead)
 - Scales linearly with number of active timers
 
 **Timing Precision:**
+
 - Resolution: 1 microsecond (software)
 - Accuracy: Depends on `multiTimerProcessTimerEvents()` call frequency
 - Jitter: Minimal if processing is regular
@@ -713,11 +721,13 @@ When `multiTimerUnregister()` is called:
 The `timersInclusiveOfTimerRuntime` flag controls repeat behavior:
 
 **Inclusive (true):**
+
 - Next fire time = previous fire time + interval
 - Maintains exact intervals even if callback is slow
 - May fire multiple times rapidly if far behind
 
 **Exclusive (false - default):**
+
 - Next fire time = current time + interval
 - Interval represents gap between callback completions
 - More forgiving of slow callbacks
@@ -725,16 +735,17 @@ The `timersInclusiveOfTimerRuntime` flag controls repeat behavior:
 ## Platform Support
 
 MultiTimer works on all platforms supported by:
+
 - `multimap` (all platforms)
 - `timeUtil` (all POSIX platforms)
 
-| Platform | Support | Notes |
-|----------|---------|-------|
-| Linux | ✓ | Full support |
-| macOS | ✓ | Full support |
-| FreeBSD | ✓ | Full support |
-| Windows | Partial | Requires POSIX compatibility layer |
-| Others | ✓ | Any POSIX system |
+| Platform | Support | Notes                              |
+| -------- | ------- | ---------------------------------- |
+| Linux    | ✓       | Full support                       |
+| macOS    | ✓       | Full support                       |
+| FreeBSD  | ✓       | Full support                       |
+| Windows  | Partial | Requires POSIX compatibility layer |
+| Others   | ✓       | Any POSIX system                   |
 
 ## Best Practices
 
@@ -967,6 +978,7 @@ void testUnregister(void) {
 ```
 
 Performance benchmarks should test:
+
 - Scalability with many timers (1K, 10K, 100K)
 - Processing overhead for expired timers
 - Registration/unregistration cost

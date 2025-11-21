@@ -5,6 +5,7 @@
 `jebuf` provides **jemalloc size class calculations** to determine the actual memory allocation size for a given request. This prevents memory waste by allowing you to use the full allocation that jemalloc will provide anyway.
 
 **Key Features:**
+
 - Rounds allocation requests to jemalloc size classes
 - Prevents wasted memory from internal fragmentation
 - Three optimized lookup tables (16-bit, 32-bit, 64-bit)
@@ -58,6 +59,7 @@ jebuf maintains size class tables matching jemalloc's allocation strategy. The t
 ```
 
 **Pattern**:
+
 - Quantum: 16 bytes (8, 16, 32, 48...)
 - Then powers of 2 with ±25% steps
 - Designed to minimize waste for small objects
@@ -76,6 +78,7 @@ Step 512 MiB: 2.5 GiB, 3 GiB, 3.5 GiB
 ```
 
 **Pattern**:
+
 - Continues quantum spacing through KiB range
 - Switches to exponentially increasing steps
 - Balances granularity vs table size
@@ -90,6 +93,7 @@ Step 2 TiB:  10 TiB, 12 TiB, 14 TiB, 16 TiB
 ```
 
 **Pattern**:
+
 - Very large step sizes
 - For huge allocations (databases, caches, etc.)
 
@@ -366,11 +370,11 @@ Total waste: 408 / 16600 (2.5% overhead)
 
 ## Performance Characteristics
 
-| Operation | Complexity | Notes |
-|-----------|-----------|-------|
-| jebufSizeAllocation | O(log n) | n = table size (max 69) |
-| jebufUseNewAllocation | O(log n) | Two table lookups |
-| Table selection | O(1) | Simple range checks |
+| Operation             | Complexity | Notes                   |
+| --------------------- | ---------- | ----------------------- |
+| jebufSizeAllocation   | O(log n)   | n = table size (max 69) |
+| jebufUseNewAllocation | O(log n)   | Two table lookups       |
+| Table selection       | O(1)       | Simple range checks     |
 
 ### Benchmark Results
 
@@ -594,6 +598,7 @@ Run the jebuf test suite:
 ```
 
 The test suite validates:
+
 - Correct size class rounding
 - All size ranges (8 bytes to 16 TiB)
 - Edge cases and boundaries

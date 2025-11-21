@@ -5,6 +5,7 @@
 `ptrPrevNext` provides **compact storage for doubly-linked list node pointers** using variable-length integer encoding. Instead of storing full 64-bit pointers (24 bytes total for atom index + prev + next), it uses 1-9 bytes per value through varint encoding.
 
 **Key Features:**
+
 - Variable-length encoding (1-9 bytes per value)
 - Stores atom index + previous offset + next offset
 - Automatic memory management with gap filling
@@ -100,6 +101,7 @@ Offset 7   → NOT ALLOWED (aligned to 12)
 ```
 
 **Why 6 bytes?**
+
 - Minimum entry size is 3 bytes (3 × 1-byte varints)
 - Allows 2 minimum entries per alignment
 - Good trade-off between alignment overhead and flexibility
@@ -440,15 +442,15 @@ void demonstrateRelocation(void) {
 
 ## Performance Characteristics
 
-| Operation | Complexity | Notes |
-|-----------|-----------|-------|
-| Create | O(1) | Allocates 4096-byte pool |
-| Add (space available) | O(1) | Append to writeFromEnd |
-| Add (need growth) | O(n) | Reallocates and copies pool |
-| Read | O(1) | Direct varint decode |
-| Update (in-place) | O(1) | Overwrites existing space |
-| Update (relocate) | O(1) | Adds to end, marks old as free |
-| Release | O(1) | Marks space free |
+| Operation             | Complexity | Notes                          |
+| --------------------- | ---------- | ------------------------------ |
+| Create                | O(1)       | Allocates 4096-byte pool       |
+| Add (space available) | O(1)       | Append to writeFromEnd         |
+| Add (need growth)     | O(n)       | Reallocates and copies pool    |
+| Read                  | O(1)       | Direct varint decode           |
+| Update (in-place)     | O(1)       | Overwrites existing space      |
+| Update (relocate)     | O(1)       | Adds to end, marks old as free |
+| Release               | O(1)       | Marks space free               |
 
 ### Memory Overhead
 
@@ -621,6 +623,7 @@ Run the ptrPrevNext test suite:
 ```
 
 The test suite validates:
+
 - Basic add/read/update/release operations
 - Sequential value insertion (4M+ entries)
 - Random value insertion and updates

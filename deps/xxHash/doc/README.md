@@ -1,5 +1,4 @@
-xxHash Specification
-=======================
+# xxHash Specification
 
 This directory contains material defining the xxHash algorithm.
 It's described in [this specification document](xxhash_spec.md_).

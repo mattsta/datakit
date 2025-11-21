@@ -22,6 +22,7 @@ datakit originated from Redis internals and shares similar design philosophies.
 ### Redis String → dks String Buffer
 
 **Redis (C API):**
+
 ```c
 /* Redis SDS (Simple Dynamic String) */
 sds s = sdsnew("hello");
@@ -31,6 +32,7 @@ sdsfree(s);
 ```
 
 **datakit:**
+
 ```c
 /* dks string buffer */
 dksstr *s = dksstr_new();
@@ -43,6 +45,7 @@ dksstr_free(s);
 ### Redis List → multilist
 
 **Redis:**
+
 ```c
 /* Redis listpack-based list */
 list *l = listCreate();
@@ -60,6 +63,7 @@ listRelease(l);
 ```
 
 **datakit:**
+
 ```c
 /* multilist (similar to Redis's list implementation) */
 multilist *ml = multilistNew(FLEX_CAP_LEVEL_2048, 0);
@@ -87,6 +91,7 @@ multilistFree(ml);
 ### Redis Hash → multimap
 
 **Redis:**
+
 ```c
 /* Redis hash */
 dict *d = dictCreate(&hashDictType, NULL);
@@ -110,6 +115,7 @@ dictRelease(d);
 ```
 
 **datakit:**
+
 ```c
 /* multimap */
 multimap *m = multimapNew(2);  /* key + value */
@@ -153,6 +159,7 @@ multimapFree(m);
 ### Redis Sorted Set → multimap with Score Key
 
 **Redis:**
+
 ```c
 /* Redis sorted set (zset) */
 zset *zs = zsetCreate();
@@ -173,6 +180,7 @@ for (unsigned long i = 0; i < count; i++) {
 ```
 
 **datakit:**
+
 ```c
 /* multimap with score as key (automatically sorted) */
 multimap *scores = multimapNew(2);  /* score + name */
@@ -215,6 +223,7 @@ multimapFree(scores);
 ### Redis HyperLogLog → hyperloglog
 
 **Redis:**
+
 ```c
 /* Redis HyperLogLog */
 struct hllhdr *hll = createHLLObject();
@@ -229,6 +238,7 @@ freeHLLObject(hll);
 ```
 
 **datakit:**
+
 ```c
 /* hyperloglog (same algorithm as Redis) */
 hyperloglog *hll = hyperloglogCreate();
@@ -246,6 +256,7 @@ hyperloglogFree(hll);
 ### Redis Intset → intset
 
 **Redis:**
+
 ```c
 /* Redis intset */
 intset *is = intsetNew();
@@ -265,6 +276,7 @@ zfree(is);
 ```
 
 **datakit:**
+
 ```c
 /* intset (compatible API) */
 intset *is = intsetNew();
@@ -290,6 +302,7 @@ intsetFree(is);
 ### std::vector → multiarray
 
 **C++ STL:**
+
 ```cpp
 /* std::vector */
 std::vector<int> vec;
@@ -307,6 +320,7 @@ vec.clear();
 ```
 
 **datakit:**
+
 ```c
 /* multiarray */
 multiarray *arr = multiarrayNew(sizeof(int), 1000);
@@ -326,6 +340,7 @@ for (size_t i = 0; i < multiarrayCount(arr); i++) {
 ### std::list → multilist
 
 **C++ STL:**
+
 ```cpp
 /* std::list */
 std::list<std::string> lst;
@@ -345,6 +360,7 @@ lst.clear();
 ```
 
 **datakit:**
+
 ```c
 /* multilist */
 multilist *ml = multilistNew(FLEX_CAP_LEVEL_2048, 0);
@@ -386,6 +402,7 @@ multilistFree(ml);
 ### std::map → multimap
 
 **C++ STL:**
+
 ```cpp
 /* std::map (sorted) */
 std::map<std::string, int> m;
@@ -407,6 +424,7 @@ m.clear();
 ```
 
 **datakit:**
+
 ```c
 /* multimap (sorted) */
 multimap *m = multimapNew(2);
@@ -454,6 +472,7 @@ multimapFree(m);
 ### std::unordered_map → multidict
 
 **C++ STL:**
+
 ```cpp
 /* std::unordered_map (hash table) */
 std::unordered_map<std::string, int> um;
@@ -477,6 +496,7 @@ um.clear();
 ```
 
 **datakit:**
+
 ```c
 /* multidict (hash table) */
 multidictClass *class = /* your class */;
@@ -524,6 +544,7 @@ multidictFree(d);
 ### std::set → intset or multimap
 
 **C++ STL:**
+
 ```cpp
 /* std::set<int> */
 std::set<int> s;
@@ -545,6 +566,7 @@ s.clear();
 ```
 
 **datakit (using intset):**
+
 ```c
 /* intset (for integers) */
 intset *is = intsetNew();
@@ -571,6 +593,7 @@ intsetFree(is);
 ```
 
 **datakit (using multimap for non-integers):**
+
 ```c
 /* multimap as set (single element) */
 multimap *set = multimapSetNew(1);
@@ -598,6 +621,7 @@ multimapFree(set);
 ### GHashTable → multimap or multidict
 
 **glib:**
+
 ```c
 /* GHashTable */
 GHashTable *hash = g_hash_table_new(g_str_hash, g_str_equal);
@@ -614,6 +638,7 @@ g_hash_table_destroy(hash);
 ```
 
 **datakit:**
+
 ```c
 /* multimap */
 multimap *m = multimapNew(2);
@@ -643,6 +668,7 @@ multimapFree(m);
 ### GList → multilist
 
 **glib:**
+
 ```c
 /* GList */
 GList *list = NULL;
@@ -659,6 +685,7 @@ g_list_free(list);
 ```
 
 **datakit:**
+
 ```c
 /* multilist */
 multilist *ml = multilistNew(FLEX_CAP_LEVEL_2048, 0);
@@ -690,6 +717,7 @@ multilistFree(ml);
 ### GArray → multiarray
 
 **glib:**
+
 ```c
 /* GArray */
 GArray *arr = g_array_new(FALSE, FALSE, sizeof(int));
@@ -707,6 +735,7 @@ g_array_free(arr, TRUE);
 ```
 
 **datakit:**
+
 ```c
 /* multiarray */
 multiarray *arr = multiarrayNew(sizeof(int), 100);
@@ -730,6 +759,7 @@ for (size_t i = 0; i < multiarrayCount(arr); i++) {
 ### DB Hash → multimap
 
 **Berkeley DB:**
+
 ```c
 /* Berkeley DB Hash */
 DB *dbp;
@@ -755,6 +785,7 @@ dbp->close(dbp, 0);
 ```
 
 **datakit:**
+
 ```c
 /* multimap (in-memory, but can be serialized) */
 multimap *m = multimapNew(2);
@@ -784,6 +815,7 @@ multimapFree(m);
 ### Simple Table → multimap
 
 **SQLite:**
+
 ```c
 /* SQLite */
 sqlite3 *db;
@@ -814,6 +846,7 @@ sqlite3_close(db);
 ```
 
 **datakit:**
+
 ```c
 /* multimap (for in-memory structured data) */
 multimap *users = multimapNew(4);  /* id + name + score */
@@ -852,6 +885,7 @@ multimapFree(users);
 ### Message Fields → multimap or flex
 
 **Protocol Buffers:**
+
 ```protobuf
 message User {
   int64 id = 1;
@@ -862,6 +896,7 @@ message User {
 ```
 
 **datakit:**
+
 ```c
 /* Option 1: multimap for structured data */
 typedef struct {
@@ -912,6 +947,7 @@ flexAppendMultiple(&fields, 2, field);
 ### Pattern 1: Error Handling
 
 **Before (errno-based):**
+
 ```c
 void *ptr = malloc(size);
 if (!ptr) {
@@ -921,6 +957,7 @@ if (!ptr) {
 ```
 
 **After (datakit):**
+
 ```c
 multimap *m = multimapNew(2);
 if (!m) {
@@ -939,6 +976,7 @@ if (!success) {
 ### Pattern 2: Iterator Patterns
 
 **Before (callback-based):**
+
 ```c
 void processItem(void *item, void *userdata) {
     printf("Item: %s\n", (char *)item);
@@ -948,6 +986,7 @@ listForEach(list, processItem, NULL);
 ```
 
 **After (datakit iterators):**
+
 ```c
 multimapIterator iter;
 multilistIteratorInitForward(ml, state, &iter);
@@ -964,6 +1003,7 @@ multilistIteratorRelease(&iter);
 ### Pattern 3: Memory Management
 
 **Before (manual ref counting):**
+
 ```c
 typedef struct {
     int refcount;
@@ -986,6 +1026,7 @@ if (rc->refcount == 0) {
 ```
 
 **After (datakit - container owns data):**
+
 ```c
 /* Containers manage their own memory */
 multimap *m = multimapNew(2);
@@ -1006,38 +1047,38 @@ multimapFree(m);  /* Frees all data */
 
 ### Container Creation
 
-| Other Library | datakit |
-|--------------|---------|
-| `sdsnew()` | `dksstr_new()` |
-| `listCreate()` | `multilistNew()` |
-| `dictCreate()` | `multimapNew()` or `multidictNew()` |
-| `std::vector<T>()` | `multiarrayNew(sizeof(T), capacity)` |
-| `std::map<K,V>()` | `multimapNew(2)` |
-| `std::set<T>()` | `intsetNew()` or `multimapSetNew(1)` |
-| `g_hash_table_new()` | `multimapNew(2)` |
-| `intsetNew()` (Redis) | `intsetNew()` |
+| Other Library         | datakit                              |
+| --------------------- | ------------------------------------ |
+| `sdsnew()`            | `dksstr_new()`                       |
+| `listCreate()`        | `multilistNew()`                     |
+| `dictCreate()`        | `multimapNew()` or `multidictNew()`  |
+| `std::vector<T>()`    | `multiarrayNew(sizeof(T), capacity)` |
+| `std::map<K,V>()`     | `multimapNew(2)`                     |
+| `std::set<T>()`       | `intsetNew()` or `multimapSetNew(1)` |
+| `g_hash_table_new()`  | `multimapNew(2)`                     |
+| `intsetNew()` (Redis) | `intsetNew()`                        |
 
 ### Container Operations
 
-| Operation | Other Library | datakit |
-|-----------|--------------|---------|
-| Insert | `dictAdd(d, k, v)` | `multimapInsert(&m, elements)` |
-| Lookup | `dictFind(d, k)` | `multimapLookup(m, &key, results)` |
-| Delete | `dictDelete(d, k)` | `multimapDelete(&m, &key)` |
-| Count | `dictSize(d)` | `multimapCount(m)` |
-| Push back | `vec.push_back(x)` | `multilistPushByTypeTail(&ml, state, &x)` |
-| Push front | `list.push_front(x)` | `multilistPushByTypeHead(&ml, state, &x)` |
-| Pop | `list.pop_front()` | `multilistPopHead(&ml, state, &result)` |
-| Iterate | `for (auto& x : container)` | `while (multimapIteratorNext(&iter, elements))` |
+| Operation  | Other Library               | datakit                                         |
+| ---------- | --------------------------- | ----------------------------------------------- |
+| Insert     | `dictAdd(d, k, v)`          | `multimapInsert(&m, elements)`                  |
+| Lookup     | `dictFind(d, k)`            | `multimapLookup(m, &key, results)`              |
+| Delete     | `dictDelete(d, k)`          | `multimapDelete(&m, &key)`                      |
+| Count      | `dictSize(d)`               | `multimapCount(m)`                              |
+| Push back  | `vec.push_back(x)`          | `multilistPushByTypeTail(&ml, state, &x)`       |
+| Push front | `list.push_front(x)`        | `multilistPushByTypeHead(&ml, state, &x)`       |
+| Pop        | `list.pop_front()`          | `multilistPopHead(&ml, state, &result)`         |
+| Iterate    | `for (auto& x : container)` | `while (multimapIteratorNext(&iter, elements))` |
 
 ### Memory Management
 
-| Operation | Other Library | datakit |
-|-----------|--------------|---------|
-| Free | `sdsfree(s)` | `dksstr_free(s)` |
-| Free | `listRelease(l)` | `multilistFree(ml)` |
-| Free | `dictRelease(d)` | `multimapFree(m)` |
-| Free | `container.clear()` | Container-specific free function |
+| Operation | Other Library       | datakit                          |
+| --------- | ------------------- | -------------------------------- |
+| Free      | `sdsfree(s)`        | `dksstr_free(s)`                 |
+| Free      | `listRelease(l)`    | `multilistFree(ml)`              |
+| Free      | `dictRelease(d)`    | `multimapFree(m)`                |
+| Free      | `container.clear()` | Container-specific free function |
 
 ---
 

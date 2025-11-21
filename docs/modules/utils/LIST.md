@@ -5,6 +5,7 @@
 `list` is a **generic doubly-linked list implementation** providing O(1) insertion/deletion and bidirectional iteration. This is a legacy implementation from Redis, used only for some tests and not by the main data structures.
 
 **Key Features:**
+
 - Generic value storage via void pointers
 - O(1) head/tail insertion and deletion
 - Bidirectional iteration
@@ -511,19 +512,19 @@ void notifyAll(void *eventData) {
 
 ## Performance Characteristics
 
-| Operation | Complexity | Notes |
-|-----------|-----------|-------|
-| Create | O(1) | Single allocation |
-| AddNodeHead | O(1) | Direct insertion |
-| AddNodeTail | O(1) | Direct insertion with tail pointer |
-| InsertNode | O(1) | Direct insertion at known position |
-| DelNode | O(1) | Direct deletion with known node |
-| Index | O(n) | Must traverse from head or tail |
-| SearchKey | O(n) | Linear search |
-| Length | O(1) | Cached in structure |
-| Rotate | O(1) | Just pointer updates |
-| Dup | O(n) | Must copy all nodes |
-| Release | O(n) | Must free all nodes |
+| Operation   | Complexity | Notes                              |
+| ----------- | ---------- | ---------------------------------- |
+| Create      | O(1)       | Single allocation                  |
+| AddNodeHead | O(1)       | Direct insertion                   |
+| AddNodeTail | O(1)       | Direct insertion with tail pointer |
+| InsertNode  | O(1)       | Direct insertion at known position |
+| DelNode     | O(1)       | Direct deletion with known node    |
+| Index       | O(n)       | Must traverse from head or tail    |
+| SearchKey   | O(n)       | Linear search                      |
+| Length      | O(1)       | Cached in structure                |
+| Rotate      | O(1)       | Just pointer updates               |
+| Dup         | O(n)       | Must copy all nodes                |
+| Release     | O(n)       | Must free all nodes                |
 
 ### Memory Usage
 
@@ -654,15 +655,15 @@ listReleaseIterator(iter);
 
 ## Comparison with Other Structures
 
-| Feature | list | array | hash table |
-|---------|------|-------|------------|
-| Ordered | Yes | Yes | No |
-| Random access | O(n) | O(1) | N/A |
-| Insert/Delete | O(1)* | O(n) | O(1) avg |
-| Search | O(n) | O(n) | O(1) avg |
-| Memory | Medium | Low | High |
+| Feature       | list   | array | hash table |
+| ------------- | ------ | ----- | ---------- |
+| Ordered       | Yes    | Yes   | No         |
+| Random access | O(n)   | O(1)  | N/A        |
+| Insert/Delete | O(1)\* | O(n)  | O(1) avg   |
+| Search        | O(n)   | O(n)  | O(1) avg   |
+| Memory        | Medium | Low   | High       |
 
-*O(1) when node is known, O(n) for search
+\*O(1) when node is known, O(n) for search
 
 ## See Also
 

@@ -5,6 +5,7 @@
 `hyperloglog` is a **probabilistic data structure for estimating the cardinality (count of unique elements) in a set**. It provides approximate counts with remarkable memory efficiency - typically using only 12 KB to count billions of unique items with ~0.81% standard error.
 
 **Key Features:**
+
 - Estimates unique counts with ~0.81% standard error
 - Fixed memory usage (12 KB in dense mode)
 - Two representations: sparse (memory-efficient for low cardinality) and dense (fixed size)
@@ -52,6 +53,7 @@ Saw 10 heads in a row? You probably flipped ~1024 times (2^10).
 ```
 
 HyperLogLog does this with hashed values:
+
 1. Hash each element
 2. Count leading zeros in binary representation
 3. Track the maximum leading zeros seen
@@ -73,6 +75,7 @@ typedef struct hyperloglogHeader {
 ```
 
 **Encoding Types:**
+
 - **SPARSE** - Run-length encoded, memory-efficient for low cardinality
 - **DENSE** - Fixed 12 KB, uses 16,384 6-bit registers
 - **RAW** - Internal-only encoding for merging
@@ -80,6 +83,7 @@ typedef struct hyperloglogHeader {
 ### Memory Layout
 
 **Sparse Representation** (for low cardinality):
+
 ```
 Low cardinality (< ~3000 unique elements):
 +----------+----------+-------------------+
@@ -93,6 +97,7 @@ Example with 1000 unique elements: ~1882 bytes
 ```
 
 **Dense Representation** (for high cardinality):
+
 ```
 High cardinality (>= ~3000 unique elements):
 +----------+----------+------------------+
@@ -109,6 +114,7 @@ Register storage: (16384 * 6) / 8 = 12,288 bytes
 ### Register Encoding
 
 **Dense Format** - Packed 6-bit values:
+
 ```
 Bits:  543210 543210 543210 543210
       +------+------+------+------+
@@ -337,6 +343,7 @@ hyperloglogFree(week);
 ### Sparse Mode (Default)
 
 **Characteristics:**
+
 - Memory efficient for low cardinality
 - Variable size (grows as elements added)
 - Uses run-length encoding
@@ -347,17 +354,18 @@ hyperloglogFree(week);
 **Memory Efficiency:**
 
 | Unique Elements | Avg Sparse Size |
-|-----------------|-----------------|
-| 100 | 267 bytes |
-| 500 | 1,033 bytes |
-| 1,000 | 1,882 bytes |
-| 2,000 | 3,480 bytes |
-| 3,000 | 4,879 bytes |
-| 5,000+ | → Dense (12 KB) |
+| --------------- | --------------- |
+| 100             | 267 bytes       |
+| 500             | 1,033 bytes     |
+| 1,000           | 1,882 bytes     |
+| 2,000           | 3,480 bytes     |
+| 3,000           | 4,879 bytes     |
+| 5,000+          | → Dense (12 KB) |
 
 ### Dense Mode
 
 **Characteristics:**
+
 - Fixed 12,296 bytes
 - Faster access (no decompression)
 - Better for high cardinality
@@ -685,6 +693,7 @@ So: max_zeros ≈ log2(number_of_unique_elements)
 ```
 
 **Estimation formula:**
+
 ```
 cardinality ≈ 2^(average_max_zeros) * correction_factor
 ```
@@ -716,6 +725,7 @@ if (leading_zeros > registers[register_index]) {
 ### Why 16,384 Registers?
 
 The number of registers (m = 16,384 = 2^14) provides:
+
 ```
 Standard error = 1.04 / sqrt(m)
                = 1.04 / sqrt(16384)
@@ -748,23 +758,25 @@ hyperloglogFree(hll);
 ```
 
 **Error bound:**
+
 - Standard error: ~0.81%
 - Typical range: ±1-2% for most counts
 - 99% confidence: within ±3 standard errors (~2.4%)
 
 ## Performance Characteristics
 
-| Operation | Complexity | Notes |
-|-----------|-----------|-------|
-| Create | O(1) sparse, O(1) dense | Small sparse init, fixed dense |
-| Add (sparse) | O(log n) | Binary search + insertion |
-| Add (dense) | O(1) | Direct register update |
-| Count (sparse) | O(n) | Decompress and compute |
-| Count (dense) | O(m) | m = 16,384 registers |
-| Merge | O(m) | Compare all 16,384 registers |
-| Memory | O(1) | 12 KB dense, variable sparse |
+| Operation      | Complexity              | Notes                          |
+| -------------- | ----------------------- | ------------------------------ |
+| Create         | O(1) sparse, O(1) dense | Small sparse init, fixed dense |
+| Add (sparse)   | O(log n)                | Binary search + insertion      |
+| Add (dense)    | O(1)                    | Direct register update         |
+| Count (sparse) | O(n)                    | Decompress and compute         |
+| Count (dense)  | O(m)                    | m = 16,384 registers           |
+| Merge          | O(m)                    | Compare all 16,384 registers   |
+| Memory         | O(1)                    | 12 KB dense, variable sparse   |
 
 **Sparse → Dense Promotion:**
+
 - Adds O(n) overhead when triggered
 - Only happens once per HLL
 - Configurable threshold (~4 KB default)
@@ -801,6 +813,7 @@ HyperLogLog:
 ### When to Use HyperLogLog
 
 **Use HyperLogLog when:**
+
 - Counting billions of unique items
 - Memory is limited
 - ~1% error is acceptable
@@ -808,6 +821,7 @@ HyperLogLog:
 - Approximate count is sufficient
 
 **Don't use HyperLogLog when:**
+
 - Need exact counts
 - Small cardinality (< 1000) where memory doesn't matter
 - Need to retrieve individual elements
@@ -964,6 +978,7 @@ Run the HyperLogLog test suite:
 ```
 
 The test suite validates:
+
 - Register access and encoding
 - Approximation error bounds
 - Sparse to dense promotion
@@ -973,8 +988,8 @@ The test suite validates:
 
 ## References
 
-1. **Original Paper**: Flajolet, P., Fusy, É., Gandouet, O., & Meunier, F. (2007). "HyperLogLog: the analysis of a near-optimal cardinality estimation algorithm." *AofA: Analysis of Algorithms*, 127-146.
+1. **Original Paper**: Flajolet, P., Fusy, É., Gandouet, O., & Meunier, F. (2007). "HyperLogLog: the analysis of a near-optimal cardinality estimation algorithm." _AofA: Analysis of Algorithms_, 127-146.
 
-2. **Improved Estimator**: Heule, S., Nunkesser, M., & Hall, A. (2013). "HyperLogLog in Practice: Algorithmic Engineering of a State of The Art Cardinality Estimation Algorithm." *EDBT 2013*.
+2. **Improved Estimator**: Heule, S., Nunkesser, M., & Hall, A. (2013). "HyperLogLog in Practice: Algorithmic Engineering of a State of The Art Cardinality Estimation Algorithm." _EDBT 2013_.
 
-3. **Better Bias Correction**: Ertl, O. (2017). "New cardinality estimation algorithms for HyperLogLog sketches." *arXiv:1702.01284*.
+3. **Better Bias Correction**: Ertl, O. (2017). "New cardinality estimation algorithms for HyperLogLog sketches." _arXiv:1702.01284_.

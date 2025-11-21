@@ -5,6 +5,7 @@
 `mflex` is a **transparent compression wrapper** for `flex` arrays that automatically compresses and decompresses data using LZ4. It provides the same API as flex but with automatic compression when beneficial, reducing memory usage while maintaining high performance.
 
 **Key Features:**
+
 - Transparent LZ4 compression/decompression
 - Automatic compression decisions (compress only when beneficial)
 - Pointer tagging to track compressed vs uncompressed state
@@ -34,6 +35,7 @@ mflex uses **low-bit pointer tagging** to track compression state:
 ```
 
 **Tag bits**:
+
 - `MFLEX_TYPE_FLEX = 1`: Points to regular flex
 - `MFLEX_TYPE_CFLEX = 2`: Points to compressed flex (cflex)
 - `MFLEX_TYPE_NO_COMPRESS = 3`: Points to flex, compression disabled
@@ -58,6 +60,7 @@ typedef struct mflexState {
 ```
 
 **Benefits**:
+
 - Reuse buffers across many compress/decompress cycles
 - Grow buffers to "preferred" size
 - Avoid malloc/free churn in hot loops
@@ -144,6 +147,7 @@ The state contains **two buffers**:
    - Swapped with mflex when compression succeeds
 
 **Retained flag**:
+
 - When `retained = true`, the buffer is "owned" by user code
 - When `retained = false`, the buffer is available for state operations
 - Prevents double-free and use-after-free bugs
@@ -372,11 +376,13 @@ mflexSetCompressAuto(&coldData, state);   /* Try to compress */
 ### When Compression Happens
 
 mflex attempts compression after:
+
 - Push operations (`mflexPush*`)
 - Manual close with `mflexCloseGrow`
 - Conversion from flex with `mflexConvertFromFlex`
 
 mflex does **not** compress if:
+
 - Type is `MFLEX_TYPE_NO_COMPRESS`
 - Compressed size >= uncompressed size
 - Compressed size not in smaller allocator size class
@@ -426,16 +432,17 @@ Result: USE UNCOMPRESSED (no real savings)
 
 ### Time Complexity
 
-| Operation | Compressed | Uncompressed | Notes |
-|-----------|-----------|--------------|-------|
-| Open | O(n) decompress | O(1) | Decompress only if needed |
-| Close | O(n) compress | O(1) | Compress only if beneficial |
-| Push (compressed) | O(n) open + O(1) push + O(n) close | | Full cycle |
-| Push (uncompressed) | O(1) push | O(1) | Direct operation |
-| Get metadata | O(1) | O(1) | Always fast |
-| IsCompressed | O(1) | O(1) | Check tag bits |
+| Operation           | Compressed                         | Uncompressed | Notes                       |
+| ------------------- | ---------------------------------- | ------------ | --------------------------- |
+| Open                | O(n) decompress                    | O(1)         | Decompress only if needed   |
+| Close               | O(n) compress                      | O(1)         | Compress only if beneficial |
+| Push (compressed)   | O(n) open + O(1) push + O(n) close |              | Full cycle                  |
+| Push (uncompressed) | O(1) push                          | O(1)         | Direct operation            |
+| Get metadata        | O(1)                               | O(1)         | Always fast                 |
+| IsCompressed        | O(1)                               | O(1)         | Check tag bits              |
 
 **Notes**:
+
 - n = size of flex data
 - LZ4 compression is very fast (~500 MB/s)
 - LZ4 decompression is very fast (~2000 MB/s)
@@ -444,16 +451,19 @@ Result: USE UNCOMPRESSED (no real savings)
 ### Space Complexity
 
 **Per mflex**:
+
 - If compressed: cflexBytes(cflex) + overhead
 - If uncompressed: flexBytes(flex)
 - No wrapper struct overhead (just pointer tagging)
 
 **Per mflexState**:
+
 - Two buffers: ~128 KB by default (64 KB each)
 - Adjustable via `mflexStateNew(size)`
 - Buffers shrink/grow to `lenPreferred` on reset
 
 **Compression Ratio** (typical):
+
 - Repeated integers: 10-20x
 - Sequential integers: 5-10x
 - Random integers: 1-2x
@@ -463,12 +473,14 @@ Result: USE UNCOMPRESSED (no real savings)
 ### Compression Overhead
 
 **When to use mflex**:
+
 - Large arrays (> 4KB)
 - Compressible data (repeated values, patterns)
 - Infrequent modifications
 - Memory-constrained environments
 
 **When NOT to use mflex**:
+
 - Small arrays (< 1KB)
 - Incompressible data (random, encrypted)
 - Frequent modifications
@@ -745,19 +757,21 @@ void operation(mflex **m) {
 
 ## Comparison with Other Approaches
 
-| Approach | Pros | Cons |
-|----------|------|------|
-| mflex (transparent) | No API changes | Overhead on every operation |
-| Manual compress/decompress | Full control | Error-prone, verbose |
-| Always compressed | Maximum savings | Slow for frequent access |
-| Never compressed | Fast access | High memory usage |
+| Approach                   | Pros            | Cons                        |
+| -------------------------- | --------------- | --------------------------- |
+| mflex (transparent)        | No API changes  | Overhead on every operation |
+| Manual compress/decompress | Full control    | Error-prone, verbose        |
+| Always compressed          | Maximum savings | Slow for frequent access    |
+| Never compressed           | Fast access     | High memory usage           |
 
 **When to use mflex**:
+
 - Want compression without API changes
 - Mixed access patterns (hot/cold data)
 - Memory is more important than CPU
 
 **When to use manual**:
+
 - Need fine-grained control
 - Know exact access patterns
 - Want to optimize specific operations
@@ -772,6 +786,7 @@ void operation(mflex **m) {
 ## Implementation Notes
 
 **Design Philosophy**:
+
 - Transparency: Same API as flex
 - Lazy: Only compress when closing
 - Smart: Only compress if beneficial
@@ -779,6 +794,7 @@ void operation(mflex **m) {
 
 **Pointer Tagging**:
 Using low 2 bits for tags (pointers are always 4-byte aligned):
+
 ```c
 #define _PTRLIB_TYPE(ptr) ((uintptr_t)(ptr) & 0x03)
 #define _PTRLIB_USE(ptr) ((void *)((uintptr_t)(ptr) & ~0x03))
@@ -787,10 +803,12 @@ Using low 2 bits for tags (pointers are always 4-byte aligned):
 
 **LZ4 Integration**:
 Uses LZ4 from the flex/cflex layer:
+
 - `flexConvertToCFlex()` - compress flex to cflex
 - `cflexConvertToFlex()` - decompress cflex to flex
 
 **Use Cases**:
+
 - Compressed logs and metrics
 - Cold data in caches
 - Large datasets with low access frequency

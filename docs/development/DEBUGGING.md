@@ -25,6 +25,7 @@ make -j8
 ```
 
 Debug build characteristics:
+
 - **No optimization** (`-O0`) - easier to step through
 - **Debug symbols** - variable names and line numbers
 - **No inlining** - easier to trace function calls
@@ -173,6 +174,7 @@ ulimit -c unlimited
 ### Segmentation Faults
 
 #### Symptom
+
 ```
 Segmentation fault (core dumped)
 ```
@@ -180,6 +182,7 @@ Segmentation fault (core dumped)
 #### Debugging Steps
 
 1. **Run under debugger:**
+
 ```bash
 gdb ./src/datakit-test
 (gdb) run test flex
@@ -187,6 +190,7 @@ gdb ./src/datakit-test
 ```
 
 2. **Check for NULL pointers:**
+
 ```c
 if (!ptr) {
     printf("Pointer is NULL!\n");
@@ -195,6 +199,7 @@ if (!ptr) {
 ```
 
 3. **Use valgrind:**
+
 ```bash
 valgrind --leak-check=full ./src/datakit-test test flex
 ```
@@ -210,6 +215,7 @@ valgrind --leak-check=full ./src/datakit-test test flex
 ### Assertion Failures
 
 #### Symptom
+
 ```
 datakit-test: flex.c:1234: flexNew: Assertion `size > 0' failed.
 Aborted (core dumped)
@@ -224,6 +230,7 @@ Aborted (core dumped)
    - Condition: `size > 0`
 
 2. **Check the failing condition:**
+
 ```bash
 gdb ./src/datakit-test
 (gdb) break flex.c:1234
@@ -232,6 +239,7 @@ gdb ./src/datakit-test
 ```
 
 3. **Trace back to see why condition failed:**
+
 ```bash
 (gdb) backtrace
 (gdb) up
@@ -257,6 +265,7 @@ gdb ./src/datakit-test
 #### Debugging Techniques
 
 1. **Electric Fence:**
+
 ```bash
 # Install electric fence
 sudo apt-get install electric-fence  # Linux
@@ -269,11 +278,13 @@ export LD_PRELOAD=/usr/lib/libefence.so.0.0
 2. **Address Sanitizer:**
 
 Edit `/home/user/datakit/src/CMakeLists.txt`:
+
 ```cmake
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address -fno-omit-frame-pointer")
 ```
 
 Rebuild and run:
+
 ```bash
 cd build-debug
 cmake ..
@@ -287,6 +298,7 @@ make -j8
 ### Test Failures
 
 #### Symptom
+
 ```
 test — Basic operations
 flex.c:flexTest:1234    ERROR! Expected 5 but got 3
@@ -301,6 +313,7 @@ Sorry, not all tests passed!  In fact, 1 tests failed.
    - Line: `1234`
 
 2. **Run under debugger:**
+
 ```bash
 gdb ./src/datakit-test
 (gdb) break flex.c:1234
@@ -308,6 +321,7 @@ gdb ./src/datakit-test
 ```
 
 3. **Add debug output:**
+
 ```c
 printf("DEBUG: Before operation, count=%d\n", count);
 result = flexDoSomething(f);
@@ -347,6 +361,7 @@ less valgrind-output.txt
 #### Common Valgrind Output
 
 **Memory Leak:**
+
 ```
 ==12345== 48 bytes in 1 blocks are definitely lost
 ==12345==    at 0x4C2FB0F: malloc (in /usr/lib/valgrind/...)
@@ -357,6 +372,7 @@ less valgrind-output.txt
 **Solution:** Add `flexFree(f)` before returning.
 
 **Invalid Read:**
+
 ```
 ==12345== Invalid read of size 8
 ==12345==    at 0x10A789: flexNext (flex.c:456)
@@ -367,6 +383,7 @@ less valgrind-output.txt
 **Solution:** Buffer overflow - check array bounds.
 
 **Uninitialized Value:**
+
 ```
 ==12345== Conditional jump or move depends on uninitialised value(s)
 ==12345==    at 0x10ADEF: flexCompare (flex.c:1234)
@@ -415,6 +432,7 @@ cmake .. && make clean && make -j8
 ```
 
 Catches:
+
 - Integer overflow
 - Division by zero
 - Null pointer dereference
@@ -426,6 +444,7 @@ Catches:
 ### gprof
 
 1. **Build with profiling:**
+
 ```bash
 cmake -DCMAKE_C_FLAGS="-pg" ..
 make clean
@@ -433,11 +452,13 @@ make -j8
 ```
 
 2. **Run program:**
+
 ```bash
 ./src/datakit-test test flex
 ```
 
 3. **Generate profile:**
+
 ```bash
 gprof ./src/datakit-test gmon.out > profile.txt
 less profile.txt
@@ -529,6 +550,7 @@ find src -name '*.c' | xargs clang-tidy
 ```
 
 Common checks:
+
 ```bash
 clang-tidy -checks='*' src/flex.c
 clang-tidy -checks='modernize-*,readability-*' src/flex.c
@@ -573,6 +595,7 @@ Add debug logging:
 ```
 
 Build with tracing:
+
 ```bash
 cmake -DCMAKE_C_FLAGS="-DDEBUG_TRACE" ..
 ```
@@ -622,6 +645,7 @@ Use debug-only code:
 ### Rubber Duck Debugging
 
 When stuck:
+
 1. Explain the problem to someone (or a rubber duck)
 2. Walk through code line by line
 3. Often you'll find the issue while explaining
@@ -631,6 +655,7 @@ When stuck:
 ### Data Structure Corruption
 
 1. **Add validation functions:**
+
 ```c
 bool flexValidate(flex *f) {
     // Check structure invariants
@@ -642,6 +667,7 @@ bool flexValidate(flex *f) {
 ```
 
 2. **Call after each operation:**
+
 ```c
 flexPush(&f, value);
 assert(flexValidate(f));

@@ -5,6 +5,7 @@
 `multiroar` is a **space-efficient compressed bitmap** implementation based on the Roaring Bitmap algorithm. It stores sparse sets of integers using adaptive encoding that automatically switches between packed arrays, bitmaps, and inverted bitmaps depending on density.
 
 **Key Features:**
+
 - Automatic encoding selection (sparse/dense/inverted)
 - 8192-bit chunks for optimal memory usage
 - Packed 13-bit position arrays for sparse data
@@ -253,15 +254,17 @@ for (int i = 0; i < 500; i++) {
 ```
 
 **Format**:
+
 ```
 [Type:1 byte][Count:1-2 bytes][Pos0:13bits][Pos1:13bits]...
 ```
 
 **Packed Array Properties**:
+
 - Uses varint for count (1-2 bytes)
 - Each position: 13 bits
 - Sorted for binary search
-- Storage: 1 + varintLen(count) + ceil(count * 13 / 8) bytes
+- Storage: 1 + varintLen(count) + ceil(count \* 13 / 8) bytes
 
 ### Dense Encoding
 
@@ -277,6 +280,7 @@ for (int i = 0; i < 2000; i++) {
 ```
 
 **Format**:
+
 ```
 [Type:1 byte][Bitmap:1024 bytes]
 ```
@@ -298,6 +302,7 @@ for (int i = 0; i < 8192; i++) {
 ```
 
 **Format**:
+
 ```
 [Type:1 byte][Count:1-2 bytes][NotSetPos0:13bits][NotSetPos1:13bits]...
 ```
@@ -315,6 +320,7 @@ for (int i = 0; i < 8192; i++) {
 ```
 
 **Format**:
+
 ```
 [Type:1 byte]
 ```
@@ -382,14 +388,15 @@ for (int i = 7700; i < 8192; i++) {
 
 ### Time Complexity
 
-| Operation | Chunk Lookup | Within Chunk | Total |
-|-----------|--------------|--------------|-------|
-| Set | O(log chunks) | O(n) worst | O(log chunks + n) |
-| Get | O(log chunks) | O(1) bitmap, O(log n) packed | O(log chunks + log n) |
-| Remove | O(log chunks) | O(n) worst | O(log chunks + n) |
-| AND/OR/XOR | O(chunks) | O(1) bitmap, O(n) packed | O(chunks × n) |
+| Operation  | Chunk Lookup  | Within Chunk                 | Total                 |
+| ---------- | ------------- | ---------------------------- | --------------------- |
+| Set        | O(log chunks) | O(n) worst                   | O(log chunks + n)     |
+| Get        | O(log chunks) | O(1) bitmap, O(log n) packed | O(log chunks + log n) |
+| Remove     | O(log chunks) | O(n) worst                   | O(log chunks + n)     |
+| AND/OR/XOR | O(chunks)     | O(1) bitmap, O(n) packed     | O(chunks × n)         |
 
 **Notes**:
+
 - n = number of set positions in chunk (max 631 for packed)
 - "chunks" = number of non-empty chunks
 - Bitmap operations within a chunk are O(1) with SIMD
@@ -397,23 +404,26 @@ for (int i = 7700; i < 8192; i++) {
 ### Space Complexity
 
 **Per bit (sparse)**:
+
 - Packed array: ~1.625 bits per set bit (13 bits / 8)
 - Overhead: ~3 bytes per chunk
 
 **Per bit (dense)**:
+
 - Bitmap: 1 bit per bit position
 - Overhead: 1 byte per chunk
 
 **Per bit (inverted)**:
+
 - Packed array: ~1.625 bits per unset bit
 - Overhead: ~3 bytes per chunk
 
 **Comparison** (1M random bits):
 
-| Encoding | Memory |
-|----------|--------|
-| Naive bitmap | 125 KB |
-| Roaring (sparse) | ~20-40 KB |
+| Encoding            | Memory    |
+| ------------------- | --------- |
+| Naive bitmap        | 125 KB    |
+| Roaring (sparse)    | ~20-40 KB |
 | Roaring (clustered) | ~10-20 KB |
 
 ### Automatic Encoding Selection
@@ -655,6 +665,7 @@ void multiroarTestCompare(multiroar *r, size_t highest) {
 ```
 
 **Example output**:
+
 ```
 Final size: 4352 bytes; Highest bit set: 71999; Size if linear: 9000 bytes
 Savings: 1.07x
@@ -676,6 +687,7 @@ varintPacked13DeleteMember(array, count, pos);  /* O(n) delete */
 ```
 
 **Why 13 bits?**
+
 - 8192 positions require 13 bits (2^13 = 8192)
 - Packing efficiency: 13/8 = 1.625 bits per position
 - Better than 16 bits/position (2 bytes) by 23%
@@ -715,6 +727,7 @@ uint16_t bitmapToSetPositions(const void *bitmap, uint8_t positions[]) {
 ```
 
 This is **62x faster** than using `varintPacked13InsertSorted()` because:
+
 1. Bits are emitted in sorted order
 2. No binary search needed
 3. Direct index writes instead of shifting
@@ -748,18 +761,21 @@ pthread_rwlock_unlock(&lock);
 **Based on**: Roaring Bitmap algorithm by Lemire et al.
 
 **Key Differences from CRoaring**:
+
 - Uses multimap instead of specialized array/bitmap containers
 - Integrates with datakit's databox system
 - Custom 13-bit varint packing
 - Simplified encoding transitions
 
 **Chunk Size Choice** (8192 bits):
+
 - Large enough to amortize multimap overhead
 - Small enough for cache-friendly operations
 - 13-bit addressing (clean power-of-2-ish)
 - 1KB bitmaps fit in L1 cache
 
 **Use Cases**:
+
 - Sparse integer sets (user IDs, document IDs)
 - Large-scale filtering (billions of IDs)
 - Bitwise operations on sparse sets

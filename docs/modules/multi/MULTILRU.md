@@ -5,6 +5,7 @@
 `multilru` is a **multi-level LRU (Least Recently Used) cache** that organizes entries into access frequency tiers. Instead of a simple LRU list, multilru maintains multiple levels where entries graduate to higher levels as they're accessed more frequently, providing more sophisticated cache replacement policies.
 
 **Key Features:**
+
 - Multi-tiered access tracking (default 7 levels)
 - Configurable number of levels
 - O(1) insert, access, and eviction operations
@@ -36,6 +37,7 @@ Legend:
 ```
 
 **Entry Structure** (9 bytes with packed attribute):
+
 ```c
 typedef struct lruEntry {
     uint32_t prev;           /* Previous entry index */
@@ -101,6 +103,7 @@ for (int i = 0; i < 1000; i++) {
 ```
 
 **How it works**:
+
 1. Allocates a new entry from the free list or grows array
 2. Inserts at head of Level 0 (before H0 marker)
 3. Returns `multilruPtr` index
@@ -133,6 +136,7 @@ multilruIncrease(mlru, p2);
 ```
 
 **Level Promotion Logic**:
+
 - Each call moves entry to `currentLevel + 1`
 - If already at max level, moves to head of max level
 - Automatically updates `lowest` pointer if necessary
@@ -182,6 +186,7 @@ void cacheRemove(multilru *mlru, multilruPtr ptr) {
 ```
 
 **Delete vs RemoveMinimum**:
+
 - `multilruDelete`: Remove any entry by pointer
 - `multilruRemoveMinimum`: Always removes lowest (LRU) entry
 
@@ -244,11 +249,13 @@ mlru = NULL;
 ### Standard LRU vs Multi-Level LRU
 
 **Standard LRU**:
+
 - Single list ordered by access time
 - Every access moves entry to head
 - Evict from tail
 
 **Multi-Level LRU** (multilru):
+
 - Multiple lists by access frequency
 - Access promotes to next level (not always to head)
 - Better discrimination between hot and cold data
@@ -256,11 +263,13 @@ mlru = NULL;
 ### Eviction Behavior
 
 Given:
+
 ```
 [H0] -> e1 -> [H1] -> e2 -> e3 -> [H2] -> e4 -> [H3]
 ```
 
 Where:
+
 - e1 at Level 0 (accessed once)
 - e2, e3 at Level 1 (accessed 2-3 times)
 - e4 at Level 2 (accessed 4+ times)
@@ -268,6 +277,7 @@ Where:
 **Eviction order**: e1, e2, e3, e4
 
 **After access to e2**:
+
 ```
 [H0] -> e1 -> [H1] -> e3 -> [H2] -> e2 -> e4 -> [H3]
 ```
@@ -302,6 +312,7 @@ uint32_t freePosition[256];  /* Up to 256 cached free entries */
 ```
 
 **How it works**:
+
 1. On delete, entry index is added to `freePosition[]`
 2. On insert, checks `freePosition[]` first
 3. If no free entries, allocates from `highestAllocated`
@@ -314,30 +325,33 @@ When `freePosition[]` is exhausted, `markFreeDiscover()` scans the entire array 
 
 ### Time Complexity
 
-| Operation | Complexity | Notes |
-|-----------|-----------|-------|
-| Insert | O(1) | Amortized due to array growth |
-| Increase | O(1) | Just updates pointers |
-| RemoveMinimum | O(1) | Direct access to lowest |
-| Delete | O(1) | Direct index access |
-| GetNLowest | O(n) | Walks linked list |
-| GetNHighest | O(n) | Walks linked list backwards |
-| Count | O(1) | Cached value |
+| Operation     | Complexity | Notes                         |
+| ------------- | ---------- | ----------------------------- |
+| Insert        | O(1)       | Amortized due to array growth |
+| Increase      | O(1)       | Just updates pointers         |
+| RemoveMinimum | O(1)       | Direct access to lowest       |
+| Delete        | O(1)       | Direct index access           |
+| GetNLowest    | O(n)       | Walks linked list             |
+| GetNHighest   | O(n)       | Walks linked list backwards   |
+| Count         | O(1)       | Cached value                  |
 
 ### Space Complexity
 
 **Per Entry**: 9 bytes (with packed struct)
+
 - 4 bytes: `prev`
 - 4 bytes: `next`
 - 1 byte: bitfields (level, populated, headNode)
 
 **Per LRU**:
+
 - Base struct: ~56 bytes
 - Entries array: 9 × capacity bytes
 - Level markers: 8 × maxLevels bytes
 - Free list: 4 × 256 = 1024 bytes
 
 **Example**: 10,000 entry LRU with 7 levels
+
 - Entries: 90,000 bytes
 - Overhead: ~1,200 bytes
 - **Total**: ~91 KB (9.1 bytes per entry)
@@ -455,6 +469,7 @@ multilru *finegrained = multilruNewWithLevels(15);
 ```
 
 **Trade-offs**:
+
 - More levels = Better frequency discrimination
 - More levels = More memory overhead (8 bytes per level marker)
 - More levels = Slower promotion to "hot" tier
@@ -571,21 +586,23 @@ pthread_mutex_unlock(&lock);
 
 ## Comparison with Other LRU Implementations
 
-| Feature | multilru | Hash + DLL | Clock/CLOCK-Pro |
-|---------|----------|------------|----------------|
-| Eviction | O(1) | O(1) | O(n) worst case |
-| Access | O(1) | O(1) | O(1) |
-| Memory/Entry | 9 bytes | 24-40 bytes | 1-2 bytes |
-| Frequency Tracking | Multi-level | Single list | Bit flags |
-| Scan Resistance | Good | Poor | Excellent |
+| Feature            | multilru    | Hash + DLL  | Clock/CLOCK-Pro |
+| ------------------ | ----------- | ----------- | --------------- |
+| Eviction           | O(1)        | O(1)        | O(n) worst case |
+| Access             | O(1)        | O(1)        | O(1)            |
+| Memory/Entry       | 9 bytes     | 24-40 bytes | 1-2 bytes       |
+| Frequency Tracking | Multi-level | Single list | Bit flags       |
+| Scan Resistance    | Good        | Poor        | Excellent       |
 
 **When to use multilru**:
+
 - Need better than LRU (frequency + recency)
 - Want compact representation
 - Can tolerate index-based references
 - Don't need true LFU (Least Frequently Used)
 
 **When to use alternatives**:
+
 - Need O(1) lookup by key (use hash + DLL)
 - Need true LFU counting (use LFU-based algorithm)
 - Extremely memory-constrained (use CLOCK)
@@ -599,6 +616,7 @@ pthread_mutex_unlock(&lock);
 ## Implementation Notes
 
 **Design Philosophy**:
+
 - Index-based architecture allows 9-byte entries
 - Multi-level design balances recency and frequency
 - Free list optimization for high churn workloads
@@ -606,11 +624,13 @@ pthread_mutex_unlock(&lock);
 
 **Packed Struct**:
 Using `__attribute__((packed))` saves 7 bytes per entry:
+
 - Without: 16 bytes (standard alignment)
 - With: 9 bytes (packed)
 - Savings: 43% memory reduction
 
 **Use Cases**:
+
 - Page caches
 - Object caches
 - Database buffer pools

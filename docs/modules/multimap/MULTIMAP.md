@@ -5,6 +5,7 @@
 `multimap` is a **self-optimizing sorted key-value container** that automatically transitions between three internal representations based on data size. It provides O(log n) lookups with minimal memory overhead by using the most efficient storage format for your current dataset size.
 
 **Key Features:**
+
 - Automatic scaling from 16 bytes (small) → 28 bytes (medium) → variable size (full)
 - Multi-column support: store N values per key (up to 65,535 columns!)
 - Sorted storage with binary search for O(log n) operations
@@ -33,6 +34,7 @@ The multimap family uses **pointer tagging** to transparently manage three under
 ```
 
 When you call `multimapInsert()`, the implementation:
+
 1. Checks the current variant via pointer tag
 2. Routes to the appropriate function (Small/Medium/Full)
 3. Automatically upgrades to the next variant if size threshold exceeded
@@ -610,21 +612,21 @@ The multimap family supports **reference containers** (`multimapAtom`) for autom
 
 ### Time Complexity
 
-| Operation | Small | Medium | Full |
-|-----------|-------|--------|------|
-| Insert | O(n) | O(n) | O(n) in largest map |
-| Lookup | O(log n) | O(log n) | O(log n) with map binary search |
-| Delete | O(n) | O(n) | O(n) in specific map |
-| Iteration | O(n) | O(n) | O(n) |
-| First/Last | O(1) | O(1) | O(1) |
+| Operation  | Small    | Medium   | Full                            |
+| ---------- | -------- | -------- | ------------------------------- |
+| Insert     | O(n)     | O(n)     | O(n) in largest map             |
+| Lookup     | O(log n) | O(log n) | O(log n) with map binary search |
+| Delete     | O(n)     | O(n)     | O(n) in specific map            |
+| Iteration  | O(n)     | O(n)     | O(n)                            |
+| First/Last | O(1)     | O(1)     | O(1)                            |
 
 ### Space Complexity
 
-| Variant | Fixed Overhead | Per Entry | Max Recommended Size |
-|---------|---------------|-----------|---------------------|
-| Small | 16 bytes | ~varies~ | < 2KB total |
-| Medium | 28 bytes | ~varies~ | 2KB - 6KB total |
-| Full | 40+ bytes + N*(8+4+8) | ~varies~ | Unlimited (TBs) |
+| Variant | Fixed Overhead         | Per Entry | Max Recommended Size |
+| ------- | ---------------------- | --------- | -------------------- |
+| Small   | 16 bytes               | ~varies~  | < 2KB total          |
+| Medium  | 28 bytes               | ~varies~  | 2KB - 6KB total      |
+| Full    | 40+ bytes + N\*(8+4+8) | ~varies~  | Unlimited (TBs)      |
 
 ### Automatic Upgrade Thresholds
 
@@ -831,6 +833,7 @@ Run the multimap test suite:
 ```
 
 The test suite includes:
+
 - Small → Medium → Full automatic transitions
 - Insertion, lookup, deletion across all variants
 - Full-width operations

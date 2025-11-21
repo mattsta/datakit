@@ -1005,6 +1005,7 @@ These real-world use cases demonstrate how datakit modules work together to solv
 6. **Leaderboard** - Sorted multimap for efficient rank queries
 
 For more examples, see:
+
 - [PATTERNS.md](PATTERNS.md) - Common coding patterns
 - [MIGRATION.md](MIGRATION.md) - Migrating from other libraries
 - [BENCHMARKS.md](BENCHMARKS.md) - Performance comparisons

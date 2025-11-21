@@ -18,11 +18,11 @@ Instead of choosing upfront, datakit containers **automatically transition** bet
 
 ### Multi-Container Variants
 
-| Module | Small | Medium | Large/Full | Native |
-|--------|-------|--------|------------|--------|
-| **multimap** | 16 bytes | 28 bytes | 40+ bytes | N/A |
-| **multilist** | 8 bytes | 16 bytes | 24+ bytes | N/A |
-| **multiarray** | 16 bytes | 16+ bytes | 24+ bytes | 0 bytes |
+| Module         | Small    | Medium    | Large/Full | Native  |
+| -------------- | -------- | --------- | ---------- | ------- |
+| **multimap**   | 16 bytes | 28 bytes  | 40+ bytes  | N/A     |
+| **multilist**  | 8 bytes  | 16 bytes  | 24+ bytes  | N/A     |
+| **multiarray** | 16 bytes | 16+ bytes | 24+ bytes  | 0 bytes |
 
 ### Detailed Variant Breakdown
 
@@ -40,11 +40,13 @@ Instead of choosing upfront, datakit containers **automatically transition** bet
 ```
 
 **Key Characteristics:**
+
 - **Small**: Single sorted flex, binary search, O(n) inserts
 - **Medium**: Two-way branching, ~50% search space reduction
 - **Full**: Dynamic multi-way branching, unlimited scalability
 
 **Upgrade Triggers:**
+
 - Small → Medium: `bytes > sizeLimit && count > elementsPerEntry * 2`
 - Medium → Full: `bytes > sizeLimit * 3 && count > elementsPerEntry * 2`
 
@@ -61,11 +63,13 @@ Instead of choosing upfront, datakit containers **automatically transition** bet
 ```
 
 **Key Characteristics:**
+
 - **Small**: Minimal overhead, perfect for temporary lists
 - **Medium**: Head/tail split, rebalancing logic
 - **Full**: LZ4 compression support, massive scalability
 
 **Compression (Full only):**
+
 ```c
 compress = 0:  No compression
 compress = 1:  Head and tail uncompressed (most compression)
@@ -87,6 +91,7 @@ compress = N:  First N and last N nodes uncompressed
 ```
 
 **Key Characteristics:**
+
 - **Native**: Zero overhead, automatic upgrade when full
 - **Small**: Simple dynamic array with realloc
 - **Medium**: Chunked storage, reduced realloc cost
@@ -207,20 +212,20 @@ multiarray *log = multiarrayLargeNew(sizeof(LogEntry), 1024);
 
 ### Insert Performance
 
-| Operation | Small | Medium | Full/Large |
-|-----------|-------|--------|------------|
-| Insert head | O(n) | O(n) | O(1) amortized |
-| Insert tail | O(1) | O(1) | O(1) amortized |
-| Insert middle | O(n) | O(n) | O(n/N) where N=nodes |
-| Binary insert (sorted) | O(n) | O(n/2) avg | O(log M + n/N) |
+| Operation              | Small | Medium     | Full/Large           |
+| ---------------------- | ----- | ---------- | -------------------- |
+| Insert head            | O(n)  | O(n)       | O(1) amortized       |
+| Insert tail            | O(1)  | O(1)       | O(1) amortized       |
+| Insert middle          | O(n)  | O(n)       | O(n/N) where N=nodes |
+| Binary insert (sorted) | O(n)  | O(n/2) avg | O(log M + n/N)       |
 
 ### Lookup Performance
 
-| Operation | Small | Medium | Full/Large |
-|-----------|-------|--------|------------|
-| Random access (map) | O(log n) | O(log n/2) | O(log M + log n) |
-| Sequential scan | O(n) | O(n) | O(n) |
-| Binary search (sorted) | O(log n) | O(log n) | O(log M + log n/M) |
+| Operation              | Small    | Medium     | Full/Large         |
+| ---------------------- | -------- | ---------- | ------------------ |
+| Random access (map)    | O(log n) | O(log n/2) | O(log M + log n)   |
+| Sequential scan        | O(n)     | O(n)       | O(n)               |
+| Binary search (sorted) | O(log n) | O(log n)   | O(log M + log n/M) |
 
 ### Memory Efficiency
 

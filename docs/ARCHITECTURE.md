@@ -40,11 +40,13 @@ One of the most important patterns in datakit is **scale-aware design**. Many co
 ```
 
 **Examples:**
+
 - `multimapSmall`, `multimapMedium`, `multimapFull`
 - `multilistSmall`, `multilistMedium`, `multilistFull`
 - `multiarraySmall`, `multiarrayMedium`, `multiarrayLarge`
 
 **Why This Matters:**
+
 - Small data doesn't need complex indexing structures
 - Large data benefits from sophisticated algorithms
 - Automatic promotion is possible in some containers
@@ -90,6 +92,7 @@ void multimapFree(multimap **m);
 ```
 
 **Why?**
+
 - Allows in-place reallocation (container can grow/shrink)
 - Simplifies memory management
 - Makes NULL handling clearer
@@ -128,6 +131,7 @@ typedef struct databox {
 ```
 
 **Use Cases:**
+
 - Polymorphic storage (store different types in same container)
 - Avoiding heap allocation for small values
 - Type-safe access with runtime checks
@@ -169,6 +173,7 @@ The `flex` module is the **foundation** of many datakit containers:
 ```
 
 **Features:**
+
 - Variable-length entries
 - Compressed headers (small integers use fewer bytes)
 - Automatic reallocation
@@ -176,6 +181,7 @@ The `flex` module is the **foundation** of many datakit containers:
 - Insert/delete at any position
 
 **Used By:**
+
 - multilist (nodes stored as flex)
 - multiarray (elements stored as flex)
 - multimap values
@@ -210,10 +216,12 @@ The `dks.h` header is a **C template** (using preprocessor) that generates two s
 ```
 
 **Generated API:**
+
 - `mdsNew()`, `mdsFree()`, `mdsLen()`, `mdsAppend()`, etc.
 - `mdscNew()`, `mdscFree()`, `mdscLen()`, `mdscAppend()`, etc.
 
 **When to Use:**
+
 - **mds**: When you need reference counting or large strings
 - **mdsc**: When memory is tight and you don't need ref counting
 
@@ -238,6 +246,7 @@ flexIteratorFree(rev);
 ```
 
 **Containers with Iterators:**
+
 - flex
 - multilist
 - multimap
@@ -394,6 +403,7 @@ uint64_t estimate = hyperloglogCount(hll);
 ```
 
 **Modes:**
+
 - **Sparse**: For low cardinality (< 10K elements)
 - **Dense**: Automatically promoted for high cardinality
 
@@ -509,6 +519,7 @@ Need to store data?
 3. **Copy-on-Write**: Clone containers for readers
 
 **Thread-Safe Modules:**
+
 - `membound` - Uses internal locking
 - `fastmutex` - Thread-safe mutex implementation
 - `OSRegulate` - Thread-safe resource limiting
@@ -542,6 +553,7 @@ datakit supports multiple platforms through:
 3. **CMake**: Build system configuration
 
 **Supported Platforms:**
+
 - Linux (primary target)
 - macOS / Darwin
 - FreeBSD, OpenBSD, NetBSD
@@ -549,6 +561,7 @@ datakit supports multiple platforms through:
 - Windows (Cygwin, MinGW)
 
 **Feature Detection:**
+
 - Random number generation (getrandom, getentropy, /dev/urandom)
 - CPU instructions (F16C for float16, AVX for vectorization)
 - System calls (madvise, mlock, etc.)
@@ -741,6 +754,7 @@ Key architectural concepts:
 8. **Performance Focus**: Every design choice optimized for speed/memory
 
 Next steps:
+
 - Read module-specific documentation for detailed APIs
 - Study test code for usage examples
 - Experiment with different size variants

@@ -5,6 +5,7 @@
 `float16` provides **conversion between standard 32-bit floats and 16-bit half-precision floats** (IEEE 754-2008 binary16 format), as well as **brain float16 (bfloat16)** format used in machine learning. These formats sacrifice precision for 50% space savings, making them ideal for applications where memory and bandwidth are more critical than precision.
 
 **Key Features:**
+
 - IEEE 754-2008 binary16 (float16) encoding/decoding
 - Brain float16 (bfloat16) encoding/decoding
 - Hardware acceleration on supported CPUs (F16C instruction set)
@@ -613,6 +614,7 @@ Run the float16 test suite:
 ```
 
 The test suite includes:
+
 - Round-trip conversion accuracy
 - Special value handling (NaN, infinity, zero)
 - Range testing

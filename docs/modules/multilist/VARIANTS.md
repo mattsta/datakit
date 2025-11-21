@@ -6,14 +6,14 @@ The multilist family provides three variants optimized for different data scales
 
 ## Quick Comparison
 
-| Feature | Small | Medium | Full |
-|---------|-------|--------|------|
-| **Overhead** | 8 bytes | 16 bytes | 24+ bytes |
-| **Node Count** | 1 flex | 2 flexes | N flexes (dynamic) |
-| **Best For** | < 2KB total | 2KB - 6KB total | > 6KB, unlimited |
-| **Compression** | No | No | Yes (LZ4) |
-| **API Complexity** | Simplest | Simple | Full-featured |
-| **Upgrade To** | Medium | Full | N/A (final) |
+| Feature            | Small       | Medium          | Full               |
+| ------------------ | ----------- | --------------- | ------------------ |
+| **Overhead**       | 8 bytes     | 16 bytes        | 24+ bytes          |
+| **Node Count**     | 1 flex      | 2 flexes        | N flexes (dynamic) |
+| **Best For**       | < 2KB total | 2KB - 6KB total | > 6KB, unlimited   |
+| **Compression**    | No          | No              | Yes (LZ4)          |
+| **API Complexity** | Simplest    | Simple          | Full-featured      |
+| **Upgrade To**     | Medium      | Full            | N/A (final)        |
 
 ## Architecture Details
 
@@ -26,12 +26,14 @@ struct multilistSmall {
 ```
 
 **Structure:**
+
 - Single flex array containing all elements
 - Minimal 8-byte overhead
 - No compression support
 - Perfect for small, temporary lists
 
 **Memory Layout:**
+
 ```
 multilistSmall (8 bytes)
     |
@@ -40,6 +42,7 @@ multilistSmall (8 bytes)
 ```
 
 **When to Use:**
+
 - Temporary work queues
 - Small caches (< 2KB)
 - Function-local lists
@@ -47,6 +50,7 @@ multilistSmall (8 bytes)
 
 **Automatic Upgrade:**
 Upgrades to Medium when:
+
 ```c
 bytes > flexOptimizationSizeLimit[limit]
 ```
@@ -60,6 +64,7 @@ struct multilistMedium {
 ```
 
 **Structure:**
+
 - Two flex arrays: `fl[0]` (head) and `fl[1]` (tail)
 - `fl[0]` always contains head element (if any data exists)
 - `fl[1]` may be empty
@@ -67,6 +72,7 @@ struct multilistMedium {
 - No compression support
 
 **Memory Layout:**
+
 ```
 multilistMedium (16 bytes)
     |
@@ -76,17 +82,20 @@ multilistMedium (16 bytes)
 ```
 
 **Balancing Rules:**
+
 - New elements added to tail grow `fl[1]`
 - If `fl[0]` is empty but `fl[1]` has data, they swap
 - `fl[0]` must always have elements (if list is non-empty)
 
 **When to Use:**
+
 - Medium-sized queues (2-6KB)
 - Growing lists that haven't hit full size yet
 - Lists with mixed push head/tail patterns
 
 **Automatic Upgrade:**
 Upgrades to Full when:
+
 ```c
 bytes > flexOptimizationSizeLimit[limit] * 3
 ```
@@ -104,12 +113,14 @@ struct multilistFull {
 ```
 
 **Structure:**
+
 - Dynamic array of mflex nodes (managed flex with compression)
 - Each node can be LZ4 compressed
 - Compression depth controls which nodes compress
 - 24-byte base overhead + ~20 bytes per node
 
 **Memory Layout:**
+
 ```
 multilistFull (24 bytes)
     |
@@ -129,6 +140,7 @@ multilistFull (24 bytes)
 ```
 
 **Compression Depth:**
+
 ```
 compress = 0:  No compression
 compress = 1:  Head and tail nodes uncompressed
@@ -137,6 +149,7 @@ compress = N:  First N and last N nodes uncompressed
 ```
 
 **When to Use:**
+
 - Large lists (> 6KB)
 - Long-lived data structures
 - When compression would save space
@@ -151,6 +164,7 @@ Full is the final variant and can grow without bounds.
 ### Memory Overhead
 
 **Small:**
+
 ```
 8 bytes (single pointer)
 + flex overhead (~6 bytes)
@@ -158,6 +172,7 @@ Full is the final variant and can grow without bounds.
 ```
 
 **Medium:**
+
 ```
 16 bytes (two pointers)
 + flex overhead * 2 (~12 bytes)
@@ -165,6 +180,7 @@ Full is the final variant and can grow without bounds.
 ```
 
 **Full:**
+
 ```
 24 bytes (struct)
 + multiarray overhead (~variable)
@@ -178,21 +194,25 @@ Example with 100 nodes:
 ### Performance Characteristics
 
 **Push Head/Tail:**
+
 - **Small:** O(1) if space available, else O(n) to upgrade
 - **Medium:** O(1) if space available in target flex, else O(n) to rebalance or upgrade
 - **Full:** O(1) amortized (may need to create new node or compress)
 
 **Pop Head/Tail:**
+
 - **Small:** O(1)
 - **Medium:** O(1) with possible flex swap
 - **Full:** O(1) with possible node deletion
 
 **Index Access:**
+
 - **Small:** O(n) - must traverse flex
 - **Medium:** O(n) - must check which flex, then traverse
 - **Full:** O(n) - must find node, decompress if needed, then traverse
 
 **Iteration:**
+
 - **Small:** O(n) - single flex traversal
 - **Medium:** O(n) - traverse fl[0] then fl[1]
 - **Full:** O(n) - traverse all nodes, decompress as needed
@@ -200,6 +220,7 @@ Example with 100 nodes:
 ### Insert/Delete Complexity
 
 **Small:**
+
 ```c
 /* Insert is straightforward - modify single flex */
 void multilistSmallPushByTypeTail(multilistSmall *ml, const databox *box) {
@@ -208,6 +229,7 @@ void multilistSmallPushByTypeTail(multilistSmall *ml, const databox *box) {
 ```
 
 **Medium:**
+
 ```c
 /* Insert must choose correct flex and possibly rebalance */
 void multilistMediumPushByTypeTail(multilistMedium *ml, const databox *box) {
@@ -222,6 +244,7 @@ void multilistMediumPushByTypeTail(multilistMedium *ml, const databox *box) {
 ```
 
 **Full:**
+
 ```c
 /* Insert must find/create node, handle compression */
 void multilistFullPushByTypeTail(multilistFull *ml, mflexState *state,
@@ -242,6 +265,7 @@ void multilistFullPushByTypeTail(multilistFull *ml, mflexState *state,
 ### Small → Medium Upgrade
 
 **Trigger:**
+
 ```c
 if (multilistSmallBytes(small) > flexOptimizationSizeLimit[limit]) {
     upgrade_to_medium();
@@ -249,6 +273,7 @@ if (multilistSmallBytes(small) > flexOptimizationSizeLimit[limit]) {
 ```
 
 **Process:**
+
 1. Allocate new `multilistMedium` struct
 2. Split the single flex in half
 3. Assign first half to `fl[0]`, second half to `fl[1]`
@@ -256,6 +281,7 @@ if (multilistSmallBytes(small) > flexOptimizationSizeLimit[limit]) {
 5. Update pointer with Medium tag
 
 **Example:**
+
 ```
 Before (Small):
 [flex: a b c d e f g h]
@@ -268,6 +294,7 @@ fl[1]: [flex: e f g h]
 ### Medium → Full Upgrade
 
 **Trigger:**
+
 ```c
 if (multilistMediumBytes(medium) > (flexOptimizationSizeLimit[limit] * 3)) {
     upgrade_to_full();
@@ -275,6 +302,7 @@ if (multilistMediumBytes(medium) > (flexOptimizationSizeLimit[limit] * 3)) {
 ```
 
 **Process:**
+
 1. Allocate new `multilistFull` struct
 2. Convert `fl[0]` and `fl[1]` to mflex nodes
 3. Insert both into new multiarray
@@ -283,6 +311,7 @@ if (multilistMediumBytes(medium) > (flexOptimizationSizeLimit[limit] * 3)) {
 6. Update pointer with Full tag
 
 **Example:**
+
 ```
 Before (Medium):
 fl[0]: [flex: a b c d e f]
@@ -349,11 +378,13 @@ node[N]:   [UNCOMPRESSED] - tail (fast access)
 ### Compression Benefits
 
 **Space Savings:**
+
 - Text data: 50-70% reduction
 - Numeric sequences: 30-50% reduction
 - Random data: Minimal (LZ4 skips incompressible data)
 
 **Performance Trade-offs:**
+
 - Compressed nodes must decompress before access
 - Head/tail always uncompressed for fast push/pop
 - Automatic compression/decompression during iteration
@@ -375,6 +406,7 @@ multilist *ml = multilistNew(FLEX_CAP_LEVEL_4096, 10);
 ```
 
 **Guidelines:**
+
 - `depth = 0`: No compression (maximum speed)
 - `depth = 1`: Compress most nodes (maximum space savings)
 - `depth = 2-5`: Balanced (good for most use cases)
@@ -445,7 +477,7 @@ multilist *ml = multilistNew(FLEX_CAP_LEVEL_2048, 0);  /* CORRECT */
 
 ### Manual Variant Selection (Advanced)
 
-If you *know* your data will be large from the start, you can create the variant directly:
+If you _know_ your data will be large from the start, you can create the variant directly:
 
 ```c
 /* If you KNOW you'll have millions of elements */
@@ -498,25 +530,25 @@ void multilistFullPushByTypeTail(multilistFull *ml, mflexState *state,
 
 **Test:** Store 10,000 64-byte strings
 
-| Variant | Overhead | Total Size | Efficiency |
-|---------|----------|------------|------------|
-| Traditional List | 160 KB | 800 KB | 80% overhead |
-| Small (if fits) | 14 bytes | 640 KB | 0.002% overhead |
-| Medium | 28 bytes | 640 KB | 0.004% overhead |
-| Full (10 nodes) | 224 bytes | 640 KB | 0.035% overhead |
-| Full (100 nodes) | 2,024 bytes | 642 KB | 0.3% overhead |
+| Variant          | Overhead    | Total Size | Efficiency      |
+| ---------------- | ----------- | ---------- | --------------- |
+| Traditional List | 160 KB      | 800 KB     | 80% overhead    |
+| Small (if fits)  | 14 bytes    | 640 KB     | 0.002% overhead |
+| Medium           | 28 bytes    | 640 KB     | 0.004% overhead |
+| Full (10 nodes)  | 224 bytes   | 640 KB     | 0.035% overhead |
+| Full (100 nodes) | 2,024 bytes | 642 KB     | 0.3% overhead   |
 
 ### Operation Speed
 
 **Test:** 1 million push/pop operations
 
 | Operation | Small | Medium | Full | Traditional List |
-|-----------|-------|--------|------|------------------|
-| Push Head | 2.1s | 2.3s | 2.5s | 3.8s |
-| Push Tail | 2.1s | 2.3s | 2.5s | 3.8s |
-| Pop Head | 1.8s | 1.9s | 2.0s | 2.1s |
-| Pop Tail | 1.8s | 1.9s | 2.0s | 2.1s |
-| Iteration | 0.9s | 1.0s | 1.2s | 1.5s |
+| --------- | ----- | ------ | ---- | ---------------- |
+| Push Head | 2.1s  | 2.3s   | 2.5s | 3.8s             |
+| Push Tail | 2.1s  | 2.3s   | 2.5s | 3.8s             |
+| Pop Head  | 1.8s  | 1.9s   | 2.0s | 2.1s             |
+| Pop Tail  | 1.8s  | 1.9s   | 2.0s | 2.1s             |
+| Iteration | 0.9s  | 1.0s   | 1.2s | 1.5s             |
 
 **Conclusion:** Multilist is **faster** than traditional linked lists while using **8-32x less memory**.
 

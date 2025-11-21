@@ -5,6 +5,7 @@
 `flex` is a **memory-efficient, pointer-free, variable-length encoded array** that serves as a universal sequential container for storing mixed-type data with minimal overhead. It automatically compresses data using optimal encodings and supports bidirectional traversal, sorted operations, and in-place modifications.
 
 **Key Features:**
+
 - **Pointer-free design**: Single contiguous memory allocation with no internal pointers
 - **Variable-length encoding**: Automatic selection of minimal storage size for each element
 - **Multi-type storage**: Seamlessly stores integers, floats, strings, booleans, and nested containers
@@ -112,17 +113,17 @@ typedef enum flexType {
 
 Flex automatically selects the most compact encoding:
 
-| Data Type | Storage | Example |
-|-----------|---------|---------|
-| Small strings (≤64 bytes) | 1 + N + 1 bytes | "hello" → 6 bytes total |
-| Medium strings (≤16KB) | 2 + N + 2 bytes | |
-| Large strings (>16KB) | 3-9 + N + 3-9 bytes | |
-| Integers -128 to 127 | 1 + 1 + 1 = 3 bytes | 42 → 3 bytes |
-| Integers -32768 to 32767 | 1 + 2 + 1 = 4 bytes | |
-| Float16 | 1 + 2 + 1 = 4 bytes | 0.578125 → 4 bytes |
-| Float32 | 1 + 4 + 1 = 6 bytes | |
-| Float64 | 1 + 8 + 1 = 10 bytes | |
-| true/false/null | 1 byte | |
+| Data Type                 | Storage              | Example                 |
+| ------------------------- | -------------------- | ----------------------- |
+| Small strings (≤64 bytes) | 1 + N + 1 bytes      | "hello" → 6 bytes total |
+| Medium strings (≤16KB)    | 2 + N + 2 bytes      |                         |
+| Large strings (>16KB)     | 3-9 + N + 3-9 bytes  |                         |
+| Integers -128 to 127      | 1 + 1 + 1 = 3 bytes  | 42 → 3 bytes            |
+| Integers -32768 to 32767  | 1 + 2 + 1 = 4 bytes  |                         |
+| Float16                   | 1 + 2 + 1 = 4 bytes  | 0.578125 → 4 bytes      |
+| Float32                   | 1 + 4 + 1 = 6 bytes  |                         |
+| Float64                   | 1 + 8 + 1 = 10 bytes |                         |
+| true/false/null           | 1 byte               |                         |
 
 ## Basic Types
 
@@ -1033,21 +1034,21 @@ flexFree(f);
 
 ## Performance Characteristics
 
-| Operation | Complexity | Notes |
-|-----------|-----------|-------|
-| **Creation** | O(1) | Allocates 2 bytes |
-| **Push to tail** | O(1) amortized | Single realloc |
-| **Push to head** | O(n) | Must shift all data |
-| **Index access** | O(n) | Sequential scan required |
-| **Head/tail access** | O(1) | Direct calculation |
-| **Next/prev** | O(1) | Length encoded in entry |
-| **Insert at position** | O(n) | Must shift data after insert |
-| **Delete at position** | O(n) | Must shift data after delete |
-| **Find (linear)** | O(n) | Full scan |
-| **Find (sorted)** | O(log n) | Binary search |
-| **Find with middle hint** | O(log n/2) | Binary search from middle |
-| **Merge** | O(n + m) | Concatenation |
-| **Split** | O(1) | Just allocate new header |
+| Operation                 | Complexity     | Notes                        |
+| ------------------------- | -------------- | ---------------------------- |
+| **Creation**              | O(1)           | Allocates 2 bytes            |
+| **Push to tail**          | O(1) amortized | Single realloc               |
+| **Push to head**          | O(n)           | Must shift all data          |
+| **Index access**          | O(n)           | Sequential scan required     |
+| **Head/tail access**      | O(1)           | Direct calculation           |
+| **Next/prev**             | O(1)           | Length encoded in entry      |
+| **Insert at position**    | O(n)           | Must shift data after insert |
+| **Delete at position**    | O(n)           | Must shift data after delete |
+| **Find (linear)**         | O(n)           | Full scan                    |
+| **Find (sorted)**         | O(log n)       | Binary search                |
+| **Find with middle hint** | O(log n/2)     | Binary search from middle    |
+| **Merge**                 | O(n + m)       | Concatenation                |
+| **Split**                 | O(1)           | Just allocate new header     |
 
 ### Performance Tips
 
@@ -1728,6 +1729,7 @@ Run the flex test suite:
 ```
 
 The test suite includes:
+
 - Basic push/pop operations
 - Index access (positive and negative)
 - Forward and backward iteration
@@ -1743,12 +1745,14 @@ The test suite includes:
 ## References
 
 The flex encoding is inspired by:
+
 - **ziplist** from Redis (compact list encoding)
 - **listpack** from Redis (improved ziplist successor)
 - **Variable-length encoding** from Protocol Buffers
 - **Split varints** for efficient byte count storage
 
 Key improvements over predecessors:
+
 - Symmetric forward/backward encoding for O(1) reverse traversal
 - Wider type support (128-bit ints, float16, nested containers)
 - Better sorted operation support with middle hints

@@ -985,6 +985,7 @@ These patterns cover the most common use cases across datakit modules:
 8. **Leverage specialized containers** (intset for integers, multiroar for sparse bitmaps)
 
 For more detailed examples, see:
+
 - [USE_CASES.md](USE_CASES.md) - Real-world application examples
 - [MIGRATION.md](MIGRATION.md) - Migrating from other libraries
 - [BENCHMARKS.md](BENCHMARKS.md) - Performance comparisons

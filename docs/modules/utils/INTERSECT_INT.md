@@ -5,6 +5,7 @@
 `intersectInt` provides **state-of-the-art algorithms for computing set intersections of sorted integer arrays**. It implements multiple SIMD-optimized strategies and automatically selects the best algorithm based on input characteristics, achieving significantly better performance than naive scalar approaches.
 
 **Key Features:**
+
 - Multiple specialized intersection algorithms
 - Automatic algorithm selection based on size ratios
 - SSE4.1 and AVX2 SIMD optimizations
@@ -54,6 +55,7 @@ size_t intersectInt(const uint32_t *set1, const size_t length1,
 ```
 
 **Selection Logic:**
+
 - If size ratio ≥ 1000:1 → Use `SIMDgalloping()` (exponential search)
 - If size ratio ≥ 50:1 → Use `v3()` (32-way SIMD)
 - Otherwise → Use `v1()` (2-way SIMD)
@@ -461,13 +463,13 @@ These thresholds were determined empirically by D. Lemire through extensive benc
 
 ### Time Complexity
 
-| Algorithm | Best Case | Average Case | Worst Case | Notes |
-|-----------|-----------|--------------|------------|-------|
-| scalar | O(n+m) | O(n+m) | O(n+m) | Simple merge |
-| v1 | O(n+m/8) | O(n+m/4) | O(n+m) | 2×4 SIMD |
-| v3 | O(n+m/32) | O(n+m/16) | O(n+m) | 32-way SIMD |
-| SIMDgalloping | O(n×log(m/n)) | O(n×log(m/n)) | O(n+m) | Exponential skip |
-| galloping | O(n×log(m/n)) | O(n×log(m/n)) | O(n×log(m)) | No SIMD |
+| Algorithm     | Best Case     | Average Case  | Worst Case  | Notes            |
+| ------------- | ------------- | ------------- | ----------- | ---------------- |
+| scalar        | O(n+m)        | O(n+m)        | O(n+m)      | Simple merge     |
+| v1            | O(n+m/8)      | O(n+m/4)      | O(n+m)      | 2×4 SIMD         |
+| v3            | O(n+m/32)     | O(n+m/16)     | O(n+m)      | 32-way SIMD      |
+| SIMDgalloping | O(n×log(m/n)) | O(n×log(m/n)) | O(n+m)      | Exponential skip |
+| galloping     | O(n×log(m/n)) | O(n×log(m/n)) | O(n×log(m)) | No SIMD          |
 
 Where n = size of smaller set, m = size of larger set
 
@@ -475,19 +477,20 @@ Where n = size of smaller set, m = size of larger set
 
 Empirical results from original benchmarks (D. Lemire):
 
-| Size Ratio | Algorithm | Speedup | Notes |
-|------------|-----------|---------|-------|
-| 1:1 | v1 | 3-4× | Similar sizes |
-| 10:1 | v1 | 3-5× | Moderate skew |
-| 50:1 | v3 | 5-8× | High skew |
-| 100:1 | v3 | 6-10× | Very high skew |
-| 1000:1 | SIMDgalloping | 10-50× | Extreme skew |
+| Size Ratio | Algorithm     | Speedup | Notes          |
+| ---------- | ------------- | ------- | -------------- |
+| 1:1        | v1            | 3-4×    | Similar sizes  |
+| 10:1       | v1            | 3-5×    | Moderate skew  |
+| 50:1       | v3            | 5-8×    | High skew      |
+| 100:1      | v3            | 6-10×   | Very high skew |
+| 1000:1     | SIMDgalloping | 10-50×  | Extreme skew   |
 
 **AVX2 versions** provide additional 1.5-2× speedup over SSE versions.
 
 ### Space Complexity
 
 All algorithms use **O(1) extra space** beyond the output buffer:
+
 - No temporary arrays
 - In-place pointer manipulation
 - SIMD registers (128-bit SSE or 256-bit AVX2)
@@ -683,12 +686,12 @@ gcc -O3 -march=native -mtune=native \
 
 ## Platform Support
 
-| Platform | SSE Version | AVX2 Version | Notes |
-|----------|-------------|--------------|-------|
-| x86-64 | ✓ | ✓ | Full support |
-| x86 (32-bit) | ✓ | ✓ | Requires SSE4.1/AVX2 CPU |
-| ARM | ✗ | ✗ | Falls back to scalar |
-| RISC-V | ✗ | ✗ | Falls back to scalar |
+| Platform     | SSE Version | AVX2 Version | Notes                    |
+| ------------ | ----------- | ------------ | ------------------------ |
+| x86-64       | ✓           | ✓            | Full support             |
+| x86 (32-bit) | ✓           | ✓            | Requires SSE4.1/AVX2 CPU |
+| ARM          | ✗           | ✗            | Falls back to scalar     |
+| RISC-V       | ✗           | ✗            | Falls back to scalar     |
 
 **Note**: On non-x86 platforms, the code will compile but use only scalar algorithms.
 

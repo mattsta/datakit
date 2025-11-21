@@ -28,12 +28,12 @@ void thread2(void *arg) {
 
 Only these modules have internal synchronization:
 
-| Module | Thread-Safe | Notes |
-|--------|------------|-------|
-| **membound** | Yes | Mutex-protected allocations |
-| **fastmutex** | Yes | Mutex implementation itself |
-| **OSRegulate** | Yes | Process resource limiting |
-| **All others** | No | Require external synchronization |
+| Module         | Thread-Safe | Notes                            |
+| -------------- | ----------- | -------------------------------- |
+| **membound**   | Yes         | Mutex-protected allocations      |
+| **fastmutex**  | Yes         | Mutex implementation itself      |
+| **OSRegulate** | Yes         | Process resource limiting        |
+| **All others** | No          | Require external synchronization |
 
 ## Synchronization Patterns
 
@@ -74,11 +74,13 @@ void cleanup_map(void) {
 ```
 
 **Advantages:**
+
 - Simple to implement
 - Guarantees safety
 - No data races possible
 
 **Disadvantages:**
+
 - Serializes all access
 - High contention under load
 - No parallelism
@@ -112,11 +114,13 @@ void exclusive_insert(const void *key, size_t klen,
 ```
 
 **Advantages:**
+
 - Concurrent reads (no contention)
 - Good for read-heavy workloads
 - Better scalability than mutex
 
 **Disadvantages:**
+
 - Still serializes writes
 - More complex than simple mutex
 - Higher overhead per operation
@@ -173,11 +177,13 @@ void merge_results(void) {
 ```
 
 **Advantages:**
+
 - Zero contention
 - Maximum parallelism
 - No locking overhead
 
 **Disadvantages:**
+
 - Higher memory usage (N copies)
 - Must merge results
 - Not suitable for shared state
@@ -233,11 +239,13 @@ void cowWrite(COWContainer *cow, const void *key, size_t klen,
 ```
 
 **Advantages:**
+
 - Lock-free reads
 - Excellent for read-heavy workloads
 - Consistent snapshots
 
 **Disadvantages:**
+
 - Expensive writes (copy entire structure)
 - Memory overhead (multiple versions)
 - Complex garbage collection
@@ -292,11 +300,13 @@ bool shardedLookup(ShardedMap *sm, const void *key, size_t klen,
 ```
 
 **Advantages:**
+
 - Reduces contention (N-way parallelism)
 - Scales well with cores
 - Balanced approach
 
 **Disadvantages:**
+
 - More complex than single lock
 - May have hot shards
 - Iteration requires locking all shards

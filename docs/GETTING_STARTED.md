@@ -82,6 +82,7 @@ cd build
 Here are all the available test modules:
 
 **Core Data Structures:**
+
 - `flex` - Flexible compressed array
 - `mflex` - Compressed flex wrapper
 - `multimap` - Key-value map with multi-element values
@@ -89,39 +90,46 @@ Here are all the available test modules:
 - `multiarray` - Dynamic array with multi-element support
 
 **Size Variants:**
+
 - `multimapFull`, `multimap` (small/medium implied)
 - `multilistFull`, `multilistSmall`, `multilist`
 - `multiarrayLarge`, `multiarrayMedium`, `multiarraySmall`
 
 **Integer Sets:**
+
 - `intset` - Variable-width integer set
 - `intsetU32` - 32-bit unsigned integer set
 - `intsetBig` - 64-bit large integer set (x86_64 only)
 - `hyperloglog` or `hll` - Cardinality estimation
 
 **Specialized Containers:**
+
 - `multiroar` - Roaring bitmap
 - `multilru` - LRU cache
 - `multimapatom` or `atom` - Atom-based map
 
 **Compression/Encoding:**
+
 - `xof` - XOR filter float compression
 - `dod` - Delta-of-delta integer encoding
 - `float16` or `f16` - Half-precision floats
 
 **String/Buffer:**
+
 - `str` - String utilities
 - `mds` / `mdsbench` - Full string buffer
 - `mdsc` / `mdscbench` - Compact string buffer
 - `strDoubleFormat` - Double-to-string formatting
 
 **Memory/System:**
+
 - `membound` - Memory allocation limits
 - `fibbuf` - Fibonacci buffer sizing
 - `jebuf` - Jemalloc buffer sizing
 - `ptrprevnext` or `ppn` - Pointer linking
 
 **Utilities:**
+
 - `databox` - Universal container
 - `offsetArray` - Offset-based arrays
 - `util` - General utilities
@@ -311,6 +319,7 @@ Now that you have datakit built and running:
 ### Build Failures
 
 **Issue**: `cmake: command not found`
+
 ```bash
 # Install CMake
 sudo apt-get install cmake  # Debian/Ubuntu
@@ -318,12 +327,14 @@ brew install cmake          # macOS
 ```
 
 **Issue**: Missing dependencies
+
 ```bash
 # The dependencies are included in deps/
 # Make sure you have the full source tree
 ```
 
 **Issue**: Platform-specific features not available
+
 ```bash
 # Some features require specific platform support
 # Check src/config.h for detected features
@@ -332,14 +343,17 @@ brew install cmake          # macOS
 ### Runtime Issues
 
 **Issue**: Segmentation fault
+
 - Make sure to initialize pointers to NULL before creating containers
 - Example: `multimap *m = NULL; multimapNew(&m);`
 
 **Issue**: Memory leaks
+
 - Always call the corresponding free function for each container
 - Use valgrind to detect leaks: `valgrind --leak-check=full ./myapp`
 
 **Issue**: Assertion failures
+
 - Debug builds include assertions for safety
 - Read the assertion message for hints
 - Common: accessing NULL pointers, invalid indices

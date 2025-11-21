@@ -5,6 +5,7 @@
 `OSRegulate` provides **cross-platform OS resource management and system queries**. It handles process daemonization, resource limits, CPU detection, memory monitoring, network validation, and system configuration checks.
 
 **Key Features:**
+
 - Process daemonization and management
 - File descriptor limit adjustment
 - CPU count detection
@@ -386,12 +387,14 @@ if (OSRegulateNetworkIsPrivate(ai)) {
 ```
 
 **Private IPv4 Ranges Detected:**
+
 - `127.0.0.0/8` - Loopback
 - `192.168.0.0/16` - Private
 - `172.16.0.0/12` - Private
 - `10.0.0.0/8` - Private
 
 **Private IPv6 Ranges Detected:**
+
 - `::1/128` - Loopback
 - `fc00::/7` - Unique Local (ULA)
 - `fe80::/10` - Link-Local
@@ -581,22 +584,22 @@ bool bindToAddress(const char *host, const char *port) {
 
 ## Platform Support
 
-| Feature | Linux | macOS | FreeBSD | Other |
-|---------|-------|-------|---------|-------|
-| Daemonize | ✓ | ✓ | ✓ | ✓ |
-| PID file | ✓ | ✓ | ✓ | ✓ |
-| Parent death signal | ✓ | ✗ | ✗ | ✗ |
-| CPU count | ✓ | ✓ | ✓ | ✓ |
-| FD limit adjust | ✓ | ✓ | ✓ | ✓ |
-| TFO mode | ✓ | ✗ | ✗ | ✗ |
-| TCP backlog check | ✓ | ✗ | ✗ | ✗ |
-| Total memory | ✓ | ✓ | ✓ | ✗ |
-| RSS | ✓ | ✓ | ✗ | ✗ |
-| Overcommit check | ✓ | ✗ | ✗ | ✗ |
-| THP check | ✓ | ✗ | ✗ | ✗ |
-| SMAP parsing | ✓ | ✗ | ✗ | ✗ |
-| Resource usage | ✓ | ✓ | ✓ | ✓ |
-| Network validation | ✓ | ✓ | ✓ | ✓ |
+| Feature             | Linux | macOS | FreeBSD | Other |
+| ------------------- | ----- | ----- | ------- | ----- |
+| Daemonize           | ✓     | ✓     | ✓       | ✓     |
+| PID file            | ✓     | ✓     | ✓       | ✓     |
+| Parent death signal | ✓     | ✗     | ✗       | ✗     |
+| CPU count           | ✓     | ✓     | ✓       | ✓     |
+| FD limit adjust     | ✓     | ✓     | ✓       | ✓     |
+| TFO mode            | ✓     | ✗     | ✗       | ✗     |
+| TCP backlog check   | ✓     | ✗     | ✗       | ✗     |
+| Total memory        | ✓     | ✓     | ✓       | ✗     |
+| RSS                 | ✓     | ✓     | ✗       | ✗     |
+| Overcommit check    | ✓     | ✗     | ✗       | ✗     |
+| THP check           | ✓     | ✗     | ✗       | ✗     |
+| SMAP parsing        | ✓     | ✗     | ✗       | ✗     |
+| Resource usage      | ✓     | ✓     | ✓       | ✓     |
+| Network validation  | ✓     | ✓     | ✓       | ✓     |
 
 ## Best Practices
 

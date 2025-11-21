@@ -77,6 +77,7 @@ Efficiency: ~8% overhead
 ### multimap Overhead
 
 **Small variant** (< 100 entries):
+
 ```
 Overhead: 16 bytes (fixed)
 Data: 1 flex (variable)
@@ -88,6 +89,7 @@ Overhead: 1.3%
 ```
 
 **Medium variant** (100-1000 entries):
+
 ```
 Overhead: 28 bytes (fixed)
 Data: 2 flex (variable)
@@ -98,6 +100,7 @@ Overhead: 0.3%
 ```
 
 **Full variant** (1000+ entries):
+
 ```
 Overhead: 40 bytes (base) + (M * 20 bytes) where M = map count
 Data: M flex (variable)
@@ -114,6 +117,7 @@ Overhead: 0.5%
 **Full**: 24 bytes + N mflex nodes
 
 **With compression** (Full variant only):
+
 ```c
 /* Text data compression ratios */
 No compression:     100%
@@ -167,6 +171,7 @@ std::set: ~40 bytes per node (pointer + color + padding)
 ### String Overhead
 
 **mds (full string):**
+
 ```c
 struct mds {
     size_t len;      // 8 bytes
@@ -179,6 +184,7 @@ struct mds {
 ```
 
 **mdsc (compact string):**
+
 ```c
 struct mdsc {
     size_t len;    // 8 bytes
@@ -188,6 +194,7 @@ struct mdsc {
 ```
 
 **Comparison:**
+
 ```c
 "hello" (5 chars)
 mds:  24 + 5 + 1 (null) = 30 bytes
@@ -316,6 +323,7 @@ Fragmentation: Bounded by Robson's theorem
 ```
 
 **Use cases:**
+
 - Embedded systems
 - Container memory limits
 - Preventing OOM kills
@@ -340,6 +348,7 @@ void *mem3 = fibbufGrow(fb);  // Size: 3
 ```
 
 **Advantages over 2x doubling:**
+
 - Less aggressive growth (less memory waste)
 - Still amortized O(1)
 - Better for medium-sized datasets

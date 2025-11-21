@@ -5,6 +5,7 @@
 The `str/` directory contains **specialized high-performance string utilities** optimized for specific operations. These include fast integer conversions, UTF-8 processing, bit manipulation, and numeric validation.
 
 **Key Features:**
+
 - SIMD-optimized digit validation (SSE2)
 - SWAR-based fast integer-to-string conversion
 - Optimized UTF-8 character counting
@@ -14,7 +15,7 @@ The `str/` directory contains **specialized high-performance string utilities** 
 
 **Location**: `/src/str/` directory
 
-**Included by**: `str.c` (automatically includes all str/*.c files)
+**Included by**: `str.c` (automatically includes all str/\*.c files)
 
 ## Fast Integer-to-String Conversion
 
@@ -53,6 +54,7 @@ void StrUInt4DigitsToBuf(void *p, uint32_t u);
 ```
 
 **Example:**
+
 ```c
 char buf[20];
 
@@ -90,6 +92,7 @@ This processes **4 digits in parallel** using a single multiply and shift.
 ### Performance
 
 Typical performance on modern CPUs:
+
 - `StrUInt64ToBuf`: ~60 cycles
 - `StrUInt128ToBuf`: ~100-200 cycles
 - ~3-5x faster than `snprintf`
@@ -107,6 +110,7 @@ size_t StrInt64ToBufTable(void *dst, size_t dstLen, int64_t value);
 ```
 
 **When to use:**
+
 - Platforms without efficient multiply instructions
 - CPUs with large fast caches
 - Benchmarking shows superiority on your platform
@@ -134,6 +138,7 @@ bool StrBufToInt128(const void *buf, size_t bufLen, __int128_t *value);
 ```
 
 **Validation Rules:**
+
 - No leading zeros (except "0" alone)
 - No leading/trailing spaces
 - No + sign
@@ -141,6 +146,7 @@ bool StrBufToInt128(const void *buf, size_t bufLen, __int128_t *value);
 - Must not overflow
 
 **Example:**
+
 ```c
 int64_t value;
 
@@ -172,6 +178,7 @@ bool StrBufToUInt64FastCheckOverflow(const void *buf, size_t len,
 ```
 
 **Example:**
+
 ```c
 const char *digits = "123456789";
 
@@ -210,6 +217,7 @@ bool StrBufToUInt128(const void *buf, size_t bufLen, __uint128_t *value) {
 ```
 
 **Example:**
+
 ```c
 const char *huge = "170141183460469231731687303715884105727";
 __int128_t value;
@@ -265,6 +273,7 @@ After processing:
 ```
 
 **Example:**
+
 ```c
 const char *text = "Hello 💛";  /* 6 ASCII + 1 emoji (4 bytes) */
 
@@ -306,6 +315,7 @@ size_t extractUtf8Chars(const char *str, size_t maxChars,
 ### Performance
 
 Typical throughput:
+
 - ASCII text: ~10-15 GB/s (modern CPU)
 - UTF-8 text: ~8-12 GB/s
 - ~5-10x faster than byte-by-byte iteration
@@ -322,6 +332,7 @@ bool StrIsDigitsIndividual(const void *buf, size_t size);
 ```
 
 **Example:**
+
 ```c
 assert(StrIsDigitsIndividual("123456", 6));
 assert(!StrIsDigitsIndividual("12a456", 6));
@@ -335,6 +346,7 @@ bool StrIsDigitsFast(const void *buf, size_t size);
 ```
 
 **Implementation:**
+
 ```c
 #if __SSE2__
 bool StrIsDigitsFast(const void *buf, size_t size) {
@@ -364,6 +376,7 @@ bool StrIsDigitsFast(const void *buf, size_t size) {
 ```
 
 **Example:**
+
 ```c
 const char *bigNumber = "12345678901234567890";
 
@@ -376,10 +389,10 @@ if (StrIsDigitsFast(bigNumber, strlen(bigNumber))) {
 
 ### Performance
 
-| Method | Speed | Notes |
-|--------|-------|-------|
-| Individual | 1.0x | Baseline |
-| SSE2 | 4.0x | 16 bytes per iteration |
+| Method     | Speed | Notes                  |
+| ---------- | ----- | ---------------------- |
+| Individual | 1.0x  | Baseline               |
+| SSE2       | 4.0x  | 16 bytes per iteration |
 
 ## Digit Counting
 
@@ -396,6 +409,7 @@ size_t StrDigitCountInt64(int64_t v);  /* Includes minus sign */
 ```
 
 **Implementation:**
+
 ```c
 size_t StrDigitCountUInt64(uint64_t v) {
     if (v < 10) return 1;
@@ -410,6 +424,7 @@ size_t StrDigitCountUInt64(uint64_t v) {
 ```
 
 **Example:**
+
 ```c
 size_t d1 = StrDigitCountUInt64(123);        /* 3 */
 size_t d2 = StrDigitCountUInt64(UINT64_MAX); /* 20 */
@@ -441,6 +456,7 @@ uint64_t StrPopCntAligned(const void *data, size_t len);
 ```
 
 **Implementation breaks false dependencies:**
+
 ```c
 #if __x86_64__
 /* Use separate accumulators to avoid CPU pipeline stalls */
@@ -474,6 +490,7 @@ uint64_t StrPopCntExact(const void *data, size_t len);
 ```
 
 **Example:**
+
 ```c
 /* Count set bits in bitmap */
 uint64_t bitmap[1024];  /* 64 KB */
@@ -489,11 +506,11 @@ uint64_t count = StrPopCntExact(aligned, 1024);
 
 ### Performance
 
-| Method | Speed | Notes |
-|--------|-------|-------|
-| 8-bit lookup | 1.0x | No POPCNT instruction |
-| Aligned (compiler) | 2.0x | POPCNT with false dependencies |
-| Aligned (asm) | 4.0x | Manual dependency breaking |
+| Method             | Speed | Notes                          |
+| ------------------ | ----- | ------------------------------ |
+| 8-bit lookup       | 1.0x  | No POPCNT instruction          |
+| Aligned (compiler) | 2.0x  | POPCNT with false dependencies |
+| Aligned (asm)      | 4.0x  | Manual dependency breaking     |
 
 ## Bitmap Position Extraction
 
@@ -525,6 +542,7 @@ uint32_t StrBitmapGetUnsetPositionsExact8(const void *data, size_t len,
 ```
 
 **Example:**
+
 ```c
 /* Bitmap: 0b11000000110000001100000011000000... (repeated) */
 const uint64_t bitmap = 0xc0c0c0c0c0c0c0c0ULL;
@@ -587,6 +605,7 @@ uint64_t splitmix64(uint64_t *x);
 ```
 
 **Example:**
+
 ```c
 /* Initialize */
 uint64_t state[2] = {12345, 67890};
@@ -607,13 +626,13 @@ for (int i = 0; i < 16; i++) {
 
 ### Performance
 
-| Generator | Speed | Period | Quality |
-|-----------|-------|--------|---------|
-| splitmix64 | Fastest | 2^64 | Good for seeding |
-| xorshift64star | Fast | 2^64-1 | Good |
-| xorshift128plus | Fast | 2^128-1 | Good |
-| xoroshiro128plus | Fast | 2^128-1 | Better |
-| xorshift1024star | Slower | 2^1024-1 | Excellent |
+| Generator        | Speed   | Period   | Quality          |
+| ---------------- | ------- | -------- | ---------------- |
+| splitmix64       | Fastest | 2^64     | Good for seeding |
+| xorshift64star   | Fast    | 2^64-1   | Good             |
+| xorshift128plus  | Fast    | 2^128-1  | Good             |
+| xoroshiro128plus | Fast    | 2^128-1  | Better           |
+| xorshift1024star | Slower  | 2^1024-1 | Excellent        |
 
 **Note:** None are cryptographically secure. Use for simulations, testing, and non-security applications only.
 
@@ -632,6 +651,7 @@ __uint128_t StrTenPowBig(size_t exp);
 ```
 
 **Example:**
+
 ```c
 uint64_t thousand = StrTenPow(3);      /* 1000 */
 uint64_t million = StrTenPow(6);       /* 1000000 */
@@ -728,6 +748,7 @@ size_t countMatching(const uint64_t *bitmap, size_t bitmapWords,
 ## Thread Safety
 
 All functions in str/ are **fully thread-safe** as they:
+
 - Operate on caller-provided buffers
 - Have no global mutable state
 - Use only stack or heap allocations
@@ -736,13 +757,13 @@ The RNG functions modify state passed by pointer, so the caller must protect con
 
 ## Performance Summary
 
-| Operation | Throughput | vs. Standard |
-|-----------|-----------|--------------|
-| StrUInt64ToBuf | ~60 cycles | 3-5x faster than snprintf |
-| StrBufToUInt64Fast | ~20 cycles | 2-3x faster than atoi |
-| StrIsDigitsFast | 10-15 GB/s | 4x faster than loop |
-| StrLenUtf8 | 8-12 GB/s | 5-10x faster than byte loop |
-| StrPopCntAligned | ~4 GB/s | 2x faster than compiler builtin |
+| Operation          | Throughput | vs. Standard                    |
+| ------------------ | ---------- | ------------------------------- |
+| StrUInt64ToBuf     | ~60 cycles | 3-5x faster than snprintf       |
+| StrBufToUInt64Fast | ~20 cycles | 2-3x faster than atoi           |
+| StrIsDigitsFast    | 10-15 GB/s | 4x faster than loop             |
+| StrLenUtf8         | 8-12 GB/s  | 5-10x faster than byte loop     |
+| StrPopCntAligned   | ~4 GB/s    | 2x faster than compiler builtin |
 
 ## See Also
 

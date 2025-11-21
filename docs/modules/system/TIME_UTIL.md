@@ -5,6 +5,7 @@
 `TimeUtil` provides **cross-platform high-resolution time measurement** utilities. It offers both wall-clock time and monotonic time functions with microsecond and millisecond precision, abstracting platform differences between Linux, macOS, FreeBSD, and other Unix systems.
 
 **Key Features:**
+
 - Wall-clock time (can go backwards due to NTP, timezone changes)
 - Monotonic time (guaranteed never to go backwards)
 - Microsecond, millisecond, and second precision
@@ -45,12 +46,14 @@ uint64_t timeUtilS(void);
 ```
 
 **When to Use:**
+
 - Recording actual timestamps (log entries, database records)
 - Comparing with external time sources
 - Displaying time to users
 - Serialization/deserialization of time values
 
 **When NOT to Use:**
+
 - Measuring elapsed time (use monotonic time instead)
 - Timeouts or intervals
 - Performance measurements
@@ -80,6 +83,7 @@ uint64_t timeUtilMonotonicMs(void);
 ```
 
 **When to Use:**
+
 - Measuring elapsed time
 - Timeouts and deadlines
 - Performance benchmarking
@@ -87,6 +91,7 @@ uint64_t timeUtilMonotonicMs(void);
 - Retry intervals
 
 **When NOT to Use:**
+
 - Absolute timestamps (use wall-clock time)
 - Comparing across reboots (monotonic time resets)
 - Comparing across different machines
@@ -496,12 +501,12 @@ void processRequest(void) {
 
 ### Time Resolution
 
-| Platform | Wall Clock | Monotonic Clock | Resolution |
-|----------|------------|-----------------|------------|
-| Linux | `gettimeofday()` | `CLOCK_MONOTONIC` | ~1μs |
-| macOS | `gettimeofday()` | `mach_absolute_time()` | ~1ns |
-| FreeBSD | `gettimeofday()` | `CLOCK_MONOTONIC_FAST` | ~1μs |
-| Others | `gettimeofday()` | `CLOCK_MONOTONIC` | ~1μs |
+| Platform | Wall Clock       | Monotonic Clock        | Resolution |
+| -------- | ---------------- | ---------------------- | ---------- |
+| Linux    | `gettimeofday()` | `CLOCK_MONOTONIC`      | ~1μs       |
+| macOS    | `gettimeofday()` | `mach_absolute_time()` | ~1ns       |
+| FreeBSD  | `gettimeofday()` | `CLOCK_MONOTONIC_FAST` | ~1μs       |
+| Others   | `gettimeofday()` | `CLOCK_MONOTONIC`      | ~1μs       |
 
 ### Constructor Attribute (macOS Only)
 
@@ -524,22 +529,24 @@ This eliminates a branch on every call after initialization.
 ### Thread Safety
 
 All TimeUtil functions are **thread-safe** and reentrant:
+
 - Wall-clock functions use `gettimeofday()` (thread-safe system call)
 - Monotonic functions use `clock_gettime()` or `mach_absolute_time()` (thread-safe)
 - macOS timebase initialization uses static variables (safe after first call)
 
 ### Performance Characteristics
 
-| Function | Typical Latency |
-|----------|----------------|
-| `timeUtilUs()` | ~50-100ns |
-| `timeUtilMs()` | ~50-100ns |
-| `timeUtilS()` | ~50-100ns |
-| `timeUtilMonotonicNs()` | ~20-50ns |
-| `timeUtilMonotonicUs()` | ~20-50ns |
-| `timeUtilMonotonicMs()` | ~20-50ns |
+| Function                | Typical Latency |
+| ----------------------- | --------------- |
+| `timeUtilUs()`          | ~50-100ns       |
+| `timeUtilMs()`          | ~50-100ns       |
+| `timeUtilS()`           | ~50-100ns       |
+| `timeUtilMonotonicNs()` | ~20-50ns        |
+| `timeUtilMonotonicUs()` | ~20-50ns        |
+| `timeUtilMonotonicMs()` | ~20-50ns        |
 
 Monotonic time is typically faster because:
+
 - No timezone conversion
 - No leap second handling
 - Direct hardware counter access (on some platforms)
@@ -549,12 +556,14 @@ Monotonic time is typically faster because:
 ### Wall Clock Time Characteristics
 
 **Advantages:**
+
 - Absolute timestamps
 - Can be compared across systems (if synchronized)
 - Meaningful to humans
 - Persistent across reboots
 
 **Disadvantages:**
+
 - Can jump backwards (NTP adjustments)
 - Can jump forwards (DST, timezone changes)
 - Not suitable for measuring intervals
@@ -563,12 +572,14 @@ Monotonic time is typically faster because:
 ### Monotonic Time Characteristics
 
 **Advantages:**
+
 - Never goes backwards
 - Perfect for measuring elapsed time
 - Unaffected by clock adjustments
 - Usually faster than wall clock
 
 **Disadvantages:**
+
 - Arbitrary zero point
 - Not comparable across systems
 - Not comparable across reboots
@@ -576,27 +587,27 @@ Monotonic time is typically faster because:
 
 ### Decision Matrix
 
-| Use Case | Use Wall Clock | Use Monotonic |
-|----------|----------------|---------------|
-| Log timestamp | ✓ | ✗ |
-| Database timestamp | ✓ | ✗ |
-| Measure duration | ✗ | ✓ |
-| Timeout/deadline | ✗ | ✓ |
-| Performance benchmark | ✗ | ✓ |
-| Rate limiting | ✗ | ✓ |
-| Display to user | ✓ | ✗ |
-| Compare with external system | ✓ | ✗ |
+| Use Case                     | Use Wall Clock | Use Monotonic |
+| ---------------------------- | -------------- | ------------- |
+| Log timestamp                | ✓              | ✗             |
+| Database timestamp           | ✓              | ✗             |
+| Measure duration             | ✗              | ✓             |
+| Timeout/deadline             | ✗              | ✓             |
+| Performance benchmark        | ✗              | ✓             |
+| Rate limiting                | ✗              | ✓             |
+| Display to user              | ✓              | ✗             |
+| Compare with external system | ✓              | ✗             |
 
 ## Platform Support
 
 | Platform | Wall Clock | Monotonic | CLOCK_MONOTONIC_FAST | mach_absolute_time |
-|----------|------------|-----------|----------------------|-------------------|
-| Linux | ✓ | ✓ | ✗ | ✗ |
-| macOS | ✓ | ✓ | ✗ | ✓ |
-| iOS | ✓ | ✓ | ✗ | ✓ |
-| FreeBSD | ✓ | ✓ | ✓ | ✗ |
-| OpenBSD | ✓ | ✓ | ✗ | ✗ |
-| Solaris | ✓ | ✓ | ✗ | ✗ |
+| -------- | ---------- | --------- | -------------------- | ------------------ |
+| Linux    | ✓          | ✓         | ✗                    | ✗                  |
+| macOS    | ✓          | ✓         | ✗                    | ✓                  |
+| iOS      | ✓          | ✓         | ✗                    | ✓                  |
+| FreeBSD  | ✓          | ✓         | ✓                    | ✗                  |
+| OpenBSD  | ✓          | ✓         | ✗                    | ✗                  |
+| Solaris  | ✓          | ✓         | ✗                    | ✗                  |
 
 ## Best Practices
 

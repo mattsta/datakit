@@ -5,6 +5,7 @@
 `offsetArray` provides **macro-based sparse arrays** that automatically adjust their base offset to avoid wasting memory on unused indices. When your integer indices don't start at zero, offsetArray lets you use them directly without allocating empty slots.
 
 **Key Features:**
+
 - Zero memory waste for non-zero-based indices
 - Automatic offset adjustment as indices change
 - Direct array access (no hash table overhead)
@@ -59,6 +60,7 @@ offsetArrayGet(&arr, 8080) = connections8080;
 ## How It Works
 
 offsetArray tracks three values:
+
 1. **offset** - Lowest index in the array
 2. **highest** - Highest index in the array
 3. **obj** - Pointer to the actual array
@@ -379,14 +381,14 @@ for (int year = companyData.offset; year <= companyData.highest; year++) {
 
 ## Performance Characteristics
 
-| Operation | Complexity | Notes |
-|-----------|-----------|-------|
-| Create | O(1) | Just zero initialization |
-| Grow (extend) | O(n) | n = new array size, realloc + possible copy |
-| Grow (prepend) | O(n) | Must memmove existing data |
-| Get/Set | O(1) | Simple offset subtraction + array access |
-| Count | O(1) | Simple calculation |
-| Free | O(1) | Single free call |
+| Operation      | Complexity | Notes                                       |
+| -------------- | ---------- | ------------------------------------------- |
+| Create         | O(1)       | Just zero initialization                    |
+| Grow (extend)  | O(n)       | n = new array size, realloc + possible copy |
+| Grow (prepend) | O(n)       | Must memmove existing data                  |
+| Get/Set        | O(1)       | Simple offset subtraction + array access    |
+| Count          | O(1)       | Simple calculation                          |
+| Free           | O(1)       | Single free call                            |
 
 ### Growth Patterns
 
@@ -572,12 +574,12 @@ offsetArrayGrow(&arr, 1000000);  /* 2 grows total */
 
 ## Comparison Table
 
-| Data Structure | Access Time | Memory | Insert Time | Use Case |
-|----------------|-------------|--------|-------------|----------|
-| Regular array | O(1) | Wasteful | O(1) | Dense, zero-based |
-| offsetArray | O(1) | Efficient | O(n) grow | Sparse, non-zero |
-| Hash table | O(1) avg | Overhead | O(1) avg | Very sparse |
-| Binary search tree | O(log n) | Efficient | O(log n) | Ordered iteration |
+| Data Structure     | Access Time | Memory    | Insert Time | Use Case          |
+| ------------------ | ----------- | --------- | ----------- | ----------------- |
+| Regular array      | O(1)        | Wasteful  | O(1)        | Dense, zero-based |
+| offsetArray        | O(1)        | Efficient | O(n) grow   | Sparse, non-zero  |
+| Hash table         | O(1) avg    | Overhead  | O(1) avg    | Very sparse       |
+| Binary search tree | O(log n)    | Efficient | O(log n)    | Ordered iteration |
 
 ## See Also
 
@@ -593,6 +595,7 @@ Run the offsetArray test suite:
 ```
 
 The test suite validates:
+
 - Growing upward (increasing indices)
 - Growing downward (decreasing indices)
 - Random access patterns

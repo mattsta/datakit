@@ -8,12 +8,12 @@ The multiarray family implements a **scale-aware architecture** with four distin
 
 ### Summary Table
 
-| Variant | Size | Storage | Overhead | Best For | Max Recommended |
-|---------|------|---------|----------|----------|----------------|
-| **Native** | 0 bytes | Direct array | 0 bytes | Stack arrays, inline storage | < 1024 elements |
-| **Small** | 16 bytes | Single array | 16 bytes | Simple dynamic arrays | < 2048 elements |
-| **Medium** | 16+ bytes | Pointer array | 16 + N×16 | Moderate datasets | 2K - 100K elements |
-| **Large** | 24+ bytes | XOR linked list | 24 + N×24 | Massive datasets | Unlimited (millions+) |
+| Variant    | Size      | Storage         | Overhead  | Best For                     | Max Recommended       |
+| ---------- | --------- | --------------- | --------- | ---------------------------- | --------------------- |
+| **Native** | 0 bytes   | Direct array    | 0 bytes   | Stack arrays, inline storage | < 1024 elements       |
+| **Small**  | 16 bytes  | Single array    | 16 bytes  | Simple dynamic arrays        | < 2048 elements       |
+| **Medium** | 16+ bytes | Pointer array   | 16 + N×16 | Moderate datasets            | 2K - 100K elements    |
+| **Large**  | 24+ bytes | XOR linked list | 24 + N×24 | Massive datasets             | Unlimited (millions+) |
 
 ## Native Variant
 
@@ -55,6 +55,7 @@ MyData *native = multiarrayNativeNew(native[1024]);
 ### Characteristics
 
 **Advantages:**
+
 - **Zero overhead**: No struct allocation, just the data array
 - **Maximum cache efficiency**: Contiguous memory
 - **Direct access**: Normal array indexing
@@ -62,11 +63,13 @@ MyData *native = multiarrayNativeNew(native[1024]);
 - **Automatic upgrade**: Seamlessly becomes Medium when full
 
 **Disadvantages:**
+
 - **Fixed size initially**: Must know max size upfront
 - **No resize without upgrade**: Growing requires conversion to Medium
 - **Manual count tracking**: You track count, not the structure
 
 **Upgrade Trigger:**
+
 ```c
 /* Upgrades to Medium when: */
 if (localCount == rowMax) {
@@ -178,18 +181,21 @@ void multiarraySmallInsert(multiarraySmall *mar, uint16_t idx, void *s) {
 ### Characteristics
 
 **Advantages:**
+
 - **Minimal overhead**: Only 16 bytes for the entire container
 - **Cache-friendly**: Single contiguous allocation
 - **Simple implementation**: Direct array manipulation
 - **Fast sequential access**: No pointer chasing
 
 **Disadvantages:**
+
 - **Slow inserts/deletes**: O(n) memmove operations
 - **Realloc thrashing**: Frequent reallocations on growth
 - **Limited scalability**: Inefficient beyond ~2000 elements
 - **Memory fragmentation**: Large reallocs can fragment heap
 
 **Upgrade Trigger:**
+
 ```c
 /* Small is typically created from Native upgrade */
 /* No automatic upgrade from Small - must manually upgrade to Medium */
@@ -282,11 +288,13 @@ typedef struct multiarrayMediumNode {
 ### How Medium Works
 
 **Node-Based Storage:**
+
 - Each node holds up to `rowMax` elements
 - Nodes stored in a dynamic array for O(1) access
 - Elements within each node are contiguous
 
 **Finding an Element:**
+
 ```c
 /* Pseudo-code for get operation */
 void *multiarrayMediumGet(mar, idx) {
@@ -326,18 +334,21 @@ if (node->count >= mar->rowMax) {
 ### Characteristics
 
 **Advantages:**
+
 - **Better insert performance**: Only moves elements within one node
 - **Reduced reallocs**: Nodes grow independently
 - **Chunked memory**: Better for large datasets
 - **Moderate overhead**: 16 bytes per node
 
 **Disadvantages:**
+
 - **Two-level access**: Must find node, then element within node
 - **More complex**: Harder to debug and reason about
 - **Pointer indirection**: Extra memory access per lookup
 - **Fragmentation**: Multiple small allocations
 
 **Upgrade Trigger:**
+
 ```c
 /* Upgrades to Large when: */
 if ((sizeof(void *) * medium->count) > (sizeof(element) * rowMax)) {
@@ -446,6 +457,7 @@ Node *getNext(Node *prev, Node *current) {
 ```
 
 **XOR Linked List Properties:**
+
 - `current->prevNext = prev XOR next`
 - Given `prev` and `current`, can find `next`: `next = prev XOR current->prevNext`
 - Given `next` and `current`, can find `prev`: `prev = next XOR current->prevNext`
@@ -454,6 +466,7 @@ Node *getNext(Node *prev, Node *current) {
 ### How Large Works
 
 **Finding an Element:**
+
 ```c
 /* Must traverse from head */
 void *multiarrayLargeGet(mar, idx) {
@@ -476,6 +489,7 @@ void *multiarrayLargeGet(mar, idx) {
 ```
 
 **Forward Iteration Optimization:**
+
 ```c
 /* GetForward maintains state for sequential access */
 void *multiarrayLargeGetForward(mar, idx) {
@@ -488,12 +502,14 @@ void *multiarrayLargeGetForward(mar, idx) {
 ### Characteristics
 
 **Advantages:**
+
 - **Unlimited scaling**: No practical size limit
 - **Memory efficient**: XOR links save 8 bytes per node
 - **Large dataset support**: Designed for millions of elements
 - **Head/Tail O(1)**: Direct access to ends
 
 **Disadvantages:**
+
 - **O(n) random access**: Must traverse from head
 - **Complex traversal**: XOR pointer arithmetic
 - **No backwards efficient**: Forward-only optimization
@@ -580,6 +596,7 @@ Large actually has less overhead than Medium at this scale!
 ### Performance Comparison
 
 **Random Access (100K elements):**
+
 ```
 Native:   N/A (would need upgrade)
 Small:    O(1) ~5 ns     (single array index)
@@ -588,6 +605,7 @@ Large:    O(n) ~500 ns   (traverse from head)
 ```
 
 **Sequential Access (100K elements):**
+
 ```
 Native:   N/A
 Small:    ~0.5 ms total  (perfect cache locality)
@@ -596,6 +614,7 @@ Large:    ~1.0 ms total  (pointer chasing, but GetForward helps)
 ```
 
 **Insertion at middle (100K elements):**
+
 ```
 Native:   N/A
 Small:    ~250 ms        (memmove 50K elements)
@@ -616,14 +635,14 @@ Large:    ~50 ms         (traverse 50 nodes + memmove in node)
 
 **Decision Matrix:**
 
-| Scenario | Best Variant | Why |
-|----------|-------------|-----|
-| Fixed size < 1000 | Native | Zero overhead, stack-friendly |
-| Dynamic, sequential access | Small | Simple, cache-friendly |
-| 1K-100K, random access | Medium | Balanced overhead and performance |
-| 100K+, sequential access | Large | XOR links save memory |
-| Frequent inserts/deletes | Medium | Per-node operations |
-| Unknown final size | Native → auto | Starts cheap, grows optimally |
+| Scenario                   | Best Variant  | Why                               |
+| -------------------------- | ------------- | --------------------------------- |
+| Fixed size < 1000          | Native        | Zero overhead, stack-friendly     |
+| Dynamic, sequential access | Small         | Simple, cache-friendly            |
+| 1K-100K, random access     | Medium        | Balanced overhead and performance |
+| 100K+, sequential access   | Large         | XOR links save memory             |
+| Frequent inserts/deletes   | Medium        | Per-node operations               |
+| Unknown final size         | Native → auto | Starts cheap, grows optimally     |
 
 ## Transition Mechanics
 

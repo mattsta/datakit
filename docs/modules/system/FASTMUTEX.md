@@ -5,6 +5,7 @@
 `FastMutex` provides a **high-performance mutex** implementation optimized for low-contention scenarios. It uses atomic operations for fast-path locking and falls back to pthread primitives only when necessary, resulting in significantly better performance than standard `pthread_mutex_t` in common cases.
 
 **Key Features:**
+
 - Fast-path locking using atomic compare-and-swap (lock-free when uncontended)
 - Automatic adaptive behavior (spins before sleeping)
 - Condition variable support compatible with fast mutexes
@@ -31,6 +32,7 @@ typedef struct fastMutex {
 ```
 
 The primary mutex type. Internally uses a 64-bit atomic word to store:
+
 - Lock state (bit 0)
 - Queue lock state (bit 1)
 - Waiter queue pointer (remaining bits)
@@ -490,10 +492,12 @@ void workQueueShutdown(WorkQueue *wq) {
 ### Locking Algorithm
 
 **Fast Path (Uncontended):**
+
 1. Attempt atomic CAS from 0 → 1
 2. If successful, lock acquired (1-2 CPU cycles)
 
 **Slow Path (Contended):**
+
 1. **Adaptive Spin**: Spin up to 40-100 iterations checking lock state
 2. **Sleep Preparation**: Set "has waiters" bit (bit 1)
 3. **Queue Management**: Add thread to FIFO waiter queue
@@ -503,6 +507,7 @@ void workQueueShutdown(WorkQueue *wq) {
 ### Memory Layout
 
 The 64-bit `word` field encodes:
+
 - **Bit 0**: Lock state (0 = unlocked, 1 = locked)
 - **Bit 1**: Queue lock (for modifying waiter queue)
 - **Bits 2-63**: Pointer to waiter queue (or 0 if no waiters)
@@ -510,6 +515,7 @@ The 64-bit `word` field encodes:
 ### Fairness
 
 FastMutex provides **FIFO fairness** under contention:
+
 - Waiters form a queue
 - Unlock wakes the first waiter
 - Prevents starvation
@@ -517,13 +523,14 @@ FastMutex provides **FIFO fairness** under contention:
 ### Performance Characteristics
 
 | Operation | Uncontended | Low Contention | High Contention |
-|-----------|-------------|----------------|-----------------|
-| Lock | ~5ns | ~50ns | ~1μs |
-| Unlock | ~5ns | ~50ns | ~1μs |
-| TryLock | ~5ns | ~5ns | ~5ns |
-| IsLocked | ~1ns | ~1ns | ~1ns |
+| --------- | ----------- | -------------- | --------------- |
+| Lock      | ~5ns        | ~50ns          | ~1μs            |
+| Unlock    | ~5ns        | ~50ns          | ~1μs            |
+| TryLock   | ~5ns        | ~5ns           | ~5ns            |
+| IsLocked  | ~1ns        | ~1ns           | ~1ns            |
 
 **Comparison to pthread_mutex_t:**
+
 - Uncontended: **10-100x faster**
 - Low contention: **2-5x faster**
 - High contention: **Similar performance**
@@ -554,6 +561,7 @@ while (true) {
 ```
 
 **Strategy:**
+
 - Iterations 1-40: Busy-wait (expect quick unlock)
 - Iterations 41-100: Sleep 100μs between checks
 - After 100: Give up and use pthread wait queue
@@ -570,26 +578,29 @@ struct fastCond {
 ```
 
 **Wait Process:**
+
 1. Add thread to condition's wait queue
 2. Unlock the fastMutex
 3. Sleep on pthread condition variable
 4. On wake, re-lock the fastMutex
 
 **Signal Process:**
+
 1. Remove first waiter from queue
 2. Wake that waiter's condition variable
 
 ## Platform Support
 
-| Platform | Support | Atomics | Notes |
-|----------|---------|---------|-------|
-| Linux | ✓ | C11 | Full support |
-| macOS | ✓ | C11 | Full support |
-| FreeBSD | ✓ | C11 | Full support |
-| Windows | Partial | C11 | Needs pthread-win32 |
-| Others | ✓ | C11 | Requires C11 atomics and pthreads |
+| Platform | Support | Atomics | Notes                             |
+| -------- | ------- | ------- | --------------------------------- |
+| Linux    | ✓       | C11     | Full support                      |
+| macOS    | ✓       | C11     | Full support                      |
+| FreeBSD  | ✓       | C11     | Full support                      |
+| Windows  | Partial | C11     | Needs pthread-win32               |
+| Others   | ✓       | C11     | Requires C11 atomics and pthreads |
 
 **Requirements:**
+
 - C11 atomics (`<stdatomic.h>`)
 - POSIX threads (`pthread.h`)
 - 64-bit atomic operations
@@ -676,6 +687,7 @@ fast_mutex_lock(&lock);  /* May crash or deadlock */
 ### Common Issues
 
 **Deadlock:**
+
 ```c
 /* BAD - Self-deadlock */
 fast_mutex_lock(&m);
@@ -683,12 +695,14 @@ fast_mutex_lock(&m);  /* Deadlock! */
 ```
 
 **Lock/Unlock Mismatch:**
+
 ```c
 /* BAD - Unlock without lock */
 fastMutexUnlock(&m);  /* Undefined behavior! */
 ```
 
 **Forgot Unlock:**
+
 ```c
 /* BAD - Leaked lock */
 fast_mutex_lock(&m);

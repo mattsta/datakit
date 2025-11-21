@@ -5,6 +5,7 @@
 `dks` is a **template-based dynamic string buffer system** that generates two implementations from a single codebase: `mds` (full) and `mdsc` (compact). It provides efficient string manipulation with automatic memory management and space-optimized headers.
 
 **Key Features:**
+
 - Template system generates `mds` (full) and `mdsc` (compact) from single source
 - Automatic header size optimization (1 to 6 bytes overhead)
 - Binary-safe string operations
@@ -16,6 +17,7 @@
 **Template Header**: `dks.h`
 
 **Generated Types**:
+
 - `mds` - Full variant with rich metadata
 - `mdsc` - Compact variant optimized for space
 
@@ -50,6 +52,7 @@ The DKS system uses **C preprocessor templates** to generate two distinct string
 ```
 
 This generates all functions prefixed with `mds`:
+
 - `mdsnewlen()`, `mdscat()`, `mdsfree()`, etc.
 
 ### Generating mdsc (Compact)
@@ -61,6 +64,7 @@ This generates all functions prefixed with `mds`:
 ```
 
 This generates all functions prefixed with `mdsc`:
+
 - `mdscnewlen()`, `mdsccat()`, `mdscfree()`, etc.
 
 ## Difference Between mds and mdsc
@@ -95,14 +99,14 @@ typedef char mdsc;
 
 Both variants use the same type progression, but `mdsc` packs more aggressively:
 
-| Type | Header Size | Max String Length | Max Free Space |
-|------|-------------|-------------------|----------------|
-| DKS_8 | 2 bytes | 255 bytes | 63 bytes (2-bit type) |
-| DKS_16 | 4 bytes | 64 KB | 16 KB (2-bit type) |
-| DKS_24 | 6 bytes | 16 MB | 2 MB (3-bit type) |
-| DKS_32 | 8 bytes | 4 GB | 536 MB (3-bit type) |
-| DKS_40 | 10 bytes | 1 TB | 137 GB (3-bit type) |
-| DKS_48 | 12 bytes | 281 TB | 35 TB (3-bit type) |
+| Type   | Header Size | Max String Length | Max Free Space        |
+| ------ | ----------- | ----------------- | --------------------- |
+| DKS_8  | 2 bytes     | 255 bytes         | 63 bytes (2-bit type) |
+| DKS_16 | 4 bytes     | 64 KB             | 16 KB (2-bit type)    |
+| DKS_24 | 6 bytes     | 16 MB             | 2 MB (3-bit type)     |
+| DKS_32 | 8 bytes     | 4 GB              | 536 MB (3-bit type)   |
+| DKS_40 | 10 bytes    | 1 TB              | 137 GB (3-bit type)   |
+| DKS_48 | 12 bytes    | 281 TB            | 35 TB (3-bit type)    |
 
 Headers automatically upgrade when string grows beyond current type's capacity.
 
@@ -718,23 +722,23 @@ for (int i = 0; i < 10000; i++) {
 
 ## Performance Characteristics
 
-| Operation | Complexity | Notes |
-|-----------|-----------|-------|
-| mdsnew/mdscnew | O(n) | n = initial length |
-| mdscat | O(n) | Amortized O(1) with pre-allocation |
-| mdscatprintf | O(n) | n = formatted output length |
-| mdssplitlen | O(n) | n = string length |
-| mdscmp | O(n) | n = min(len1, len2) |
-| Header upgrade | O(n) | Only when crossing type boundary |
+| Operation      | Complexity | Notes                              |
+| -------------- | ---------- | ---------------------------------- |
+| mdsnew/mdscnew | O(n)       | n = initial length                 |
+| mdscat         | O(n)       | Amortized O(1) with pre-allocation |
+| mdscatprintf   | O(n)       | n = formatted output length        |
+| mdssplitlen    | O(n)       | n = string length                  |
+| mdscmp         | O(n)       | n = min(len1, len2)                |
+| Header upgrade | O(n)       | Only when crossing type boundary   |
 
 ## Memory Overhead
 
-| String Size | DKS_8 | DKS_16 | DKS_24 | DKS_32 |
-|-------------|-------|--------|--------|--------|
-| 10 bytes | 2 bytes (20%) | - | - | - |
-| 100 bytes | - | 4 bytes (4%) | - | - |
-| 1 KB | - | 4 bytes (0.4%) | - | - |
-| 1 MB | - | - | 6 bytes (0.0006%) | - |
+| String Size | DKS_8         | DKS_16         | DKS_24            | DKS_32 |
+| ----------- | ------------- | -------------- | ----------------- | ------ |
+| 10 bytes    | 2 bytes (20%) | -              | -                 | -      |
+| 100 bytes   | -             | 4 bytes (4%)   | -                 | -      |
+| 1 KB        | -             | 4 bytes (0.4%) | -                 | -      |
+| 1 MB        | -             | -              | 6 bytes (0.0006%) | -      |
 
 ## Thread Safety
 
@@ -765,6 +769,7 @@ Run the dks test suite:
 ```
 
 The test suite validates:
+
 - Header type progression
 - Memory management
 - String operations

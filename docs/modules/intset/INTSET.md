@@ -5,6 +5,7 @@
 `intset` is a **memory-efficient sorted set of integers** with automatic width promotion. It stores integers in the smallest possible encoding (16/32/64-bit) that can hold all current elements, automatically upgrading when larger values are added.
 
 **Key Features:**
+
 - Automatic encoding promotion (16-bit → 32-bit → 64-bit)
 - Sorted storage with O(log n) binary search
 - Compact memory representation
@@ -31,6 +32,7 @@ Integer sets are specialized data structures for storing sorted collections of u
 ### When to Use Integer Sets
 
 **Use intset when:**
+
 - Storing unique integer IDs or identifiers
 - Memory efficiency is critical
 - Elements are primarily added, rarely removed
@@ -38,6 +40,7 @@ Integer sets are specialized data structures for storing sorted collections of u
 - You need sorted iteration
 
 **Don't use intset when:**
+
 - Frequent insertions/deletions at scale
 - Elements are mostly non-integers
 - Need O(1) lookup (use hash table instead)
@@ -103,6 +106,7 @@ INT64: -9,223,372,036,854,775,808 to 9,223,372,036,854,775,807  (8 bytes)
 ```
 
 **Promotion Rules:**
+
 1. All values fit in INT16 → use INT16 encoding
 2. Any value requires INT32 → upgrade all to INT32
 3. Any value requires INT64 → upgrade all to INT64
@@ -490,23 +494,25 @@ intsetFree(intersectSet);
 
 ## Performance Characteristics
 
-| Operation | Complexity | Notes |
-|-----------|-----------|-------|
-| Create | O(1) | Allocates small header + minimal array |
-| Add (no upgrade) | O(n) | Binary search O(log n) + memmove O(n) |
-| Add (upgrade) | O(n) | Must convert all elements |
-| Remove | O(n) | Binary search O(log n) + memmove O(n) |
-| Find | O(log n) | Binary search on sorted array |
-| Get by position | O(1) | Direct array access (after encoding calc) |
-| Random | O(1) | Random index selection |
-| Count | O(1) | Cached in structure |
-| Bytes | O(1) | Simple calculation |
+| Operation        | Complexity | Notes                                     |
+| ---------------- | ---------- | ----------------------------------------- |
+| Create           | O(1)       | Allocates small header + minimal array    |
+| Add (no upgrade) | O(n)       | Binary search O(log n) + memmove O(n)     |
+| Add (upgrade)    | O(n)       | Must convert all elements                 |
+| Remove           | O(n)       | Binary search O(log n) + memmove O(n)     |
+| Find             | O(log n)   | Binary search on sorted array             |
+| Get by position  | O(1)       | Direct array access (after encoding calc) |
+| Random           | O(1)       | Random index selection                    |
+| Count            | O(1)       | Cached in structure                       |
+| Bytes            | O(1)       | Simple calculation                        |
 
 **Insertion Performance:**
+
 - Best case: O(log n) for finding position
 - Worst case: O(n) for memmove + potential upgrade
 
 **Memory Efficiency:**
+
 ```
 Overhead: 8 bytes (encoding + length)
 Per element: 2, 4, or 8 bytes depending on encoding
@@ -726,6 +732,7 @@ Run the intset test suite:
 ```
 
 The test suite validates:
+
 - Value encoding detection
 - Encoding upgrades (16→32→64)
 - Binary search correctness

@@ -23,6 +23,7 @@ Rates vary between use cases and scale.
 ```
 
 **Before contributing:**
+
 - Understand that this is **not an open source project**
 - Usage requires compensation/licensing
 - Contact the copyright holder before making contributions
@@ -36,12 +37,14 @@ This guide assumes you have permission to work on the codebase.
 ### Setting Up Development Environment
 
 1. **Clone the repository:**
+
 ```bash
 git clone <repository-url>
 cd datakit
 ```
 
 2. **Create development build:**
+
 ```bash
 mkdir build-debug
 cd build-debug
@@ -50,6 +53,7 @@ make -j8
 ```
 
 3. **Verify tests pass:**
+
 ```bash
 make check
 ```
@@ -142,6 +146,7 @@ Each data structure typically has:
 ### Adding a New Data Structure
 
 1. **Create header file** (`src/newmodule.h`):
+
 ```c
 #pragma once
 
@@ -165,6 +170,7 @@ __END_DECLS
 ```
 
 2. **Create implementation file** (`src/newmodule.c`):
+
 ```c
 #include "newmodule.h"
 
@@ -201,6 +207,7 @@ int newModuleTest(int argc, char *argv[]) {
 ```
 
 3. **Add to build system** (`src/CMakeLists.txt`):
+
 ```cmake
 add_library(${PROJECT_NAME} OBJECT
     # ... existing files ...
@@ -214,6 +221,7 @@ set(datakitTests
 ```
 
 4. **Register test** (`src/datakit-test.c`):
+
 ```c
 #include "newmodule.h"
 
@@ -237,12 +245,14 @@ result += newModuleTest(argc, argv);
 ### Naming Conventions
 
 **Types:**
+
 ```c
 typedef struct flexEntry flexEntry;    // Lower camelCase
 typedef enum flexEndpoint flexEndpoint;
 ```
 
 **Functions:**
+
 ```c
 flex *flexNew(void);                   // moduleName + Action
 void flexPushBytes(flex **ff, ...);    // moduleName + Verb + Object
@@ -250,18 +260,21 @@ int64_t flexAddSigned(const flex *f);  // moduleName + Verb + Type
 ```
 
 **Constants:**
+
 ```c
 #define FLEX_ENDPOINT_TAIL -1          // SCREAMING_SNAKE_CASE
 #define FLEX_EMPTY_SIZE 2
 ```
 
 **Macros:**
+
 ```c
 #define flexDeleteHead(ff) ...         // Function-like: camelCase
 #define DK_FN_PURE ...                 // Attribute: DK_ prefix
 ```
 
 **Variables:**
+
 ```c
 flex *f;                               // Short, descriptive
 int count;
@@ -271,10 +284,12 @@ size_t totalBytes;
 ### Code Style
 
 **Indentation:**
+
 - 4 spaces (no tabs except in Makefiles)
 - Configure editor: `sw=4 ts=4 expandtab`
 
 **Braces:**
+
 ```c
 // Function braces on new line (K&R style for functions)
 void functionName(void)
@@ -294,6 +309,7 @@ if (condition) return;
 ```
 
 **Spacing:**
+
 ```c
 // Space after keywords
 if (condition)
@@ -314,11 +330,13 @@ flex * f;          // Avoid
 ```
 
 **Line Length:**
+
 - Prefer lines under 80 characters
 - Maximum 100 characters for readability
 - Break long lines at logical points
 
 **Function Length:**
+
 - Keep functions focused and manageable
 - Split complex functions into helpers
 - Aim for < 100 lines per function
@@ -326,6 +344,7 @@ flex * f;          // Avoid
 ### Memory Management
 
 **Always:**
+
 ```c
 // Use datakit allocators
 void *ptr = zmalloc(size);
@@ -344,6 +363,7 @@ zfree(container); // Then container
 ```
 
 **Never:**
+
 ```c
 // Don't use standard allocators directly
 malloc(size);     // Use zmalloc
@@ -351,6 +371,7 @@ free(ptr);        // Use zfree
 ```
 
 **Pointer Safety:**
+
 ```c
 // Always check before dereferencing
 if (!ptr) return;
@@ -373,6 +394,7 @@ void moduleFree(module *m) {
 ### Error Handling
 
 **Return values:**
+
 ```c
 // Use bool for success/failure
 bool moduleInsert(module *m, key k, value v);
@@ -393,6 +415,7 @@ int moduleOperation(module *m) {
 ```
 
 **Assertions:**
+
 ```c
 // Use asserts for invariants
 assert(sizeof(databox) == 16);
@@ -405,6 +428,7 @@ assert(flexCount(f) == expectedCount);
 ### Comments
 
 **Header comments:**
+
 ```c
 /* Brief description of what this function does.
  *
@@ -415,6 +439,7 @@ void complexFunction(void);
 ```
 
 **Inline comments:**
+
 ```c
 // Explain non-obvious logic
 count++; // Include the terminating entry
@@ -425,6 +450,7 @@ count++; // Include the terminating entry
 ```
 
 **TODO comments:**
+
 ```c
 // TODO: Optimize this loop
 // FIXME: Handle edge case where n == 0
@@ -432,6 +458,7 @@ count++; // Include the terminating entry
 ```
 
 **Documentation:**
+
 - Explain **why**, not what (code shows what)
 - Document assumptions and invariants
 - Explain algorithmic choices
@@ -440,12 +467,14 @@ count++; // Include the terminating entry
 ### Platform Compatibility
 
 **Endianness:**
+
 ```c
 #include "conformLittleEndian.h"
 // Use conversion macros when needed
 ```
 
 **64-bit assumptions:**
+
 ```c
 // Check for 64-bit where required
 #if __x86_64__
@@ -454,6 +483,7 @@ count++; // Include the terminating entry
 ```
 
 **Platform-specific code:**
+
 ```c
 #if __APPLE__
 // macOS-specific
@@ -480,6 +510,7 @@ See [TESTING.md](TESTING.md) for details.
 ### Test Quality
 
 Good tests:
+
 - ✅ Are deterministic (same results every run)
 - ✅ Are independent (don't depend on other tests)
 - ✅ Clean up all resources
@@ -488,6 +519,7 @@ Good tests:
 - ✅ Are fast (sub-second for most tests)
 
 Bad tests:
+
 - ❌ Use random input without seeds
 - ❌ Leak memory
 - ❌ Depend on execution order
@@ -622,6 +654,7 @@ Fixes #123
 ```
 
 Bad commit messages:
+
 ```
 fix bug
 update code
@@ -630,6 +663,7 @@ wip
 ```
 
 Format:
+
 ```
 <type>: <short summary>
 
@@ -645,6 +679,7 @@ Types: `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `style`
 ### Before Submitting
 
 1. **Run full test suite:**
+
 ```bash
 cd build-debug
 make clean
@@ -653,6 +688,7 @@ make check
 ```
 
 2. **Check for memory leaks:**
+
 ```bash
 for test in flex multimap multilist; do
     valgrind --leak-check=full ./src/datakit-test test $test
@@ -660,12 +696,14 @@ done
 ```
 
 3. **Verify no warnings:**
+
 ```bash
 make clean
 make 2>&1 | grep -i warning
 ```
 
 4. **Run static analysis:**
+
 ```bash
 scan-build make
 ```
@@ -679,6 +717,7 @@ scan-build make
 **Note**: Given the proprietary nature of this project, coordinate with the maintainer before submitting changes.
 
 1. **Create feature branch:**
+
 ```bash
 git checkout -b feature/descriptive-name
 ```
@@ -686,12 +725,14 @@ git checkout -b feature/descriptive-name
 2. **Make changes** following guidelines above
 
 3. **Commit with clear messages:**
+
 ```bash
 git add src/mymodule.c src/mymodule.h
 git commit -m "feat: add new module with tests"
 ```
 
 4. **Push to repository:**
+
 ```bash
 git push origin feature/descriptive-name
 ```
@@ -705,6 +746,7 @@ git push origin feature/descriptive-name
 ### Review Process
 
 Expect review feedback on:
+
 - Code style and standards
 - Test coverage
 - Performance implications
@@ -713,6 +755,7 @@ Expect review feedback on:
 - Memory management
 
 Be prepared to:
+
 - Address review comments
 - Add more tests
 - Refactor code
