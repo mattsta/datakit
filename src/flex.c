@@ -4092,6 +4092,10 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKey(
 
 void flexAppendMultiple(flex **ff, const uint_fast32_t elementsPerEntry,
                         const databox **const box) {
+    if (elementsPerEntry == 0) {
+        return;
+    }
+
     /* TODO: verify non-auto-array these */
     databox copyBox[elementsPerEntry];
     flexInsertContents *contents[elementsPerEntry];
@@ -6912,7 +6916,7 @@ int32_t flexTest(int32_t argc, char **argv) {
      * reals (float/double) into a flex only as strings, then
      * flexInsertBytes() attempts to convert the string to integer/float
      * as appropriate. */
-    for (int preallocate = true; preallocate >= false; preallocate--) {
+    for (int preallocate = 1; preallocate >= 0; preallocate--) {
         printf("Stress with random payloads of different encodings (%s):\n",
                preallocate ? "PREALLOCATED" : "REGULAR");
         {

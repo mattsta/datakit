@@ -159,7 +159,7 @@ int multiarrayTest(int argc, char *argv[]) {
 
         int count = 0;
         int idx = 0;
-        s16 _s;
+        s16 _s = {0};
         multiarrayNativeInsert(s, s16, rowMax, count, idx, &_s);
 
         multiarrayNativeFree(s);

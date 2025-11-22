@@ -437,7 +437,7 @@ abstractDelete(multimapMedium *m, const databox **elements,
                const bool fullWidth, const bool useReference,
                const struct multimapAtom *referenceContainer,
                databox *foundReference) {
-    size_t mapIdx;
+    size_t mapIdx = 0;
 
     if (useReference) {
         if (fullWidth) {
