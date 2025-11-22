@@ -23,8 +23,8 @@ bool multimapAtomInsertIfNewConvertAndRetain(multimapAtom *ma, databox *key);
 void multimapAtomInsertWithExactAtomID(multimapAtom *ma, const uint64_t atomRef,
                                        const databox *key);
 
-bool multimapAtomLookup(const multimapAtom *ma, const databox *key,
-                        databox *val);
+bool multimapAtomLookup(const multimapAtom *ma, const databox *ref,
+                        databox *key);
 void multimapAtomLookupConvert(const multimapAtom *ma, databox *box);
 void multimapAtomLookupResult(const multimapAtom *ma, const databox *key,
                               multimapAtomResult *result);
