@@ -424,6 +424,7 @@ bool populateSet(void *userData, const databox *elements[]) {
 
 #include "ctest.h"
 #include "multimapFull.h"
+#include <inttypes.h>
 int multimapAtomTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -432,7 +433,7 @@ int multimapAtomTest(int argc, char *argv[]) {
 
     uint32_t seed = time(NULL);
     srandom(seed);
-    printf("Random seed: %d\n", seed);
+    printf("Random seed: %" PRIu32 "\n", seed);
 
     TEST("create / free") {
         multimapAtom *ma = multimapAtomNew();
@@ -1155,7 +1156,7 @@ int multimapAtomTest(int argc, char *argv[]) {
 
         const size_t setSize = multimapCount(duplicateHolder);
         if (setSize != doUntil) {
-            ERR("Expected %zu but got %zu instead!", doUntil, setSize);
+            ERR("Expected %zd but got %zu instead!", doUntil, setSize);
             multimapAtomRepr(ma);
         }
 

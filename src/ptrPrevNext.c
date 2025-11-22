@@ -373,7 +373,7 @@ int ptrPrevNextTest(int argc, char *argv[]) {
         ptrPrevNextFree(ppn);
     }
 
-    TEST_DESC("create fill %u sequential values", 1 << 22) {
+    TEST_DESC("create fill %" PRId32 " sequential values", (int32_t)(1 << 22)) {
         ptrPrevNext *ppn = ptrPrevNextNew();
         for (uint32_t i = 1; i <= 1 << 22; i++) {
             const ptrPrevNextPtr ptr = ptrPrevNextAdd(ppn, i, i, i);
