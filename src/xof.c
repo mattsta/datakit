@@ -228,8 +228,8 @@ bool xofReadAll(const xof *x, double *vals, size_t count) {
     uint64_t currentValueBits = varintBitstreamGet(x, 0, 64);
     size_t bitOffset = 64;
 
-    /* Write first entry... */
-    vals[0] = (double)currentValueBits;
+    /* Write first entry (bit reinterpret, not numeric cast)... */
+    vals[0] = *(double *)&currentValueBits;
 
     /* Fetch remaining entries... */
     for (size_t i = 1; i < count; i++) {

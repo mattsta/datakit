@@ -247,7 +247,7 @@ multimap *multimapCopy(const multimap *m) {
     const multimapType type = multimapType_(m);
     if (type == MULTIMAP_TYPE_SMALL) {
         copy = (multimap *)multimapSmallCopy(mms(m));
-    } else if (type == MULTIMAP_TYPE_SMALL) {
+    } else if (type == MULTIMAP_TYPE_MEDIUM) {
         copy = (multimap *)multimapMediumCopy(mmm(m));
     } else {
         copy = (multimap *)multimapFullCopy(mmf(m));

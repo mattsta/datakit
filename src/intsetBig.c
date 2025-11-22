@@ -542,7 +542,9 @@ bool intsetBigEqual(const intsetBig *const a, const intsetBig *const b) {
              * check inside intsetU32Equal() is for (a == b), but we know
              * iA != iB here, so maybe clang can optimize away the initial
              * (iA == iB) branch at the start of intsetU32Equal() */
+#ifdef __clang__
             __builtin_assume(iA != iB);
+#endif
 
             if (!intsetU32Equal(iA, iB)) {
                 return false;

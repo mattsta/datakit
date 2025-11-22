@@ -35,7 +35,7 @@ bool bbitsDodDodAppend(bbitsDodDod *dd, const dodVal newKey,
 
             /* conform allocation size of unused space */
             const size_t kwCeil = DOD_DIV_CEIL(kw->usedBits, 8);
-            const size_t vwCeil = DOD_DIV_CEIL(kw->usedBits, 8);
+            const size_t vwCeil = DOD_DIV_CEIL(vw->usedBits, 8);
             if (kwCeil < BYTES_PER_BITMAP) {
                 kw->d = zrealloc(kw->d, kwCeil);
             }
@@ -155,9 +155,9 @@ bool bbitsDodDodGetOffsetCount(bbitsDodDod *dd, ssize_t offset,
         *mean = 0;
         *variance = 0;
         for (size_t j = 0; j < *count; j++) {
-            const double delta = (double)(*val[j]) - *mean;
-            *mean += delta / (i + 1); /* fix zero-based index */
-            *variance += delta * (*val[j] - *mean);
+            const double delta = (double)((*val)[j]) - *mean;
+            *mean += delta / (j + 1); /* fix zero-based index */
+            *variance += delta * ((*val)[j] - *mean);
         }
 
         *stddev = sqrt(*variance / *count);
@@ -201,7 +201,7 @@ bool bbitsDodXofAppend(bbitsDodXof *dx, const dodVal newKey,
 
             /* conform allocation size of unused space */
             const size_t kwCeil = DOD_DIV_CEIL(kw->usedBits, 8);
-            const size_t vwCeil = DOD_DIV_CEIL(kw->usedBits, 8);
+            const size_t vwCeil = DOD_DIV_CEIL(vw->usedBits, 8);
             if (kwCeil < BYTES_PER_BITMAP) {
                 kw->d = zrealloc(kw->d, kwCeil);
             }
