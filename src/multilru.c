@@ -3,7 +3,8 @@
 #include "jebuf.h"
 #include "multilru.h"
 
-#include <string.h> /* memcmp */
+#include <inttypes.h> /* PRIu32 */
+#include <string.h>   /* memcmp */
 
 #define ENTRY_SIZE 9
 #define USE_PACKED 1
@@ -714,7 +715,7 @@ void multilruRepr(const multilru *mlru) {
     for (uint32_t i = 0; i < mlru->maxLevels; i++) {
         lruEntry *e = entry(mlru->level[i]);
         lruEntry *prev = entry(e->prev);
-        printf("[%d] -> %d; ", i, prev->isHeadNode ? 0 : e->prev);
+        printf("[%" PRIu32 "] -> %d; ", i, prev->isHeadNode ? 0 : e->prev);
     }
 
     printf("\n");
@@ -1132,7 +1133,7 @@ int multilruTest(int argc, char *argv[]) {
         assert(mlru->count == 0);
 
         multilruRepr(mlru);
-        printf("Traversed Size: %zu\n", multilruTraverseSize(mlru));
+        printf("Traversed Size: %zd\n", multilruTraverseSize(mlru));
         assert(multilruTraverseSize(mlru) == 0);
         printf("Total bytes used: %zu for %zu entries with %zu capacity\n",
                multilruBytes(mlru), multilruCount(mlru),

@@ -766,7 +766,7 @@ DK_STATIC void multilistFullInsert_(multilistFull *ml, mflexState *state[2],
     bool full = false;
     /* Populate accounting flag for easier boolean checks later */
     if (!mflexAllowInsert_(ml, entry->nodeIdx, DATABOX_SIZE(box))) {
-        D("Current node is full with values %zu and requested fill %zu",
+        D("Current node is full with values %zu and requested fill %" PRIu16,
           mflexCount(*node), ml->fill);
         full = true;
     }
@@ -1145,7 +1145,7 @@ bool multilistFullIndex(multilistFull *ml, mflexState *state, mlOffsetId index,
             currentCount = mflexCount(currentNode);
         }
 
-        D("Found node: %p at accum %llu, idx %llu, sub+ %llu, sub- %llu",
+        D("Found node: %p at accum %" PRId64 ", idx %" PRId64 ", sub+ %" PRId64 ", sub- %" PRId64,
           (void *)currentNode, accum, index, index - accum,
           (-index) - 1 + accum);
 

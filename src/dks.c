@@ -2308,8 +2308,8 @@ int DKS_TEST(int argc, char *argv[]) {
         DKS_RANDBYTES(belowlimitbuf, belowSize);
 
         DKS_TYPE *testing = DKS_NEWLEN(belowlimitbuf, belowSize);
-        testCond("dks created properly below limit", DKS_TYPE_GET(testing),
-                 limit.startType, "%u");
+        testCond("dks created properly below limit", (uint32_t)DKS_TYPE_GET(testing),
+                 (uint32_t)limit.startType, "%" PRIu32);
         testCond("dks has no avail", DKS_AVAIL(testing), (size_t)0, "%zu");
         testCond("dks content matches source buffer",
                  memcmp(testing, belowlimitbuf, belowSize), 0, "%d");
@@ -2353,8 +2353,8 @@ int DKS_TEST(int argc, char *argv[]) {
 
         testing = DKS_REMOVEFREESPACE(testing);
         testCond("dks has no avail", DKS_AVAIL(testing), (size_t)0, "%zu");
-        testCond("dks grew to new type", DKS_TYPE_GET(testing), limit.newType,
-                 "%u");
+        testCond("dks grew to new type", (uint32_t)DKS_TYPE_GET(testing), (uint32_t)limit.newType,
+                 "%" PRIu32);
 
         testCond("dks initial contents _still_ match source buffer",
                  memcmp(testing, belowlimitbuf, belowSize), 0, "%d");

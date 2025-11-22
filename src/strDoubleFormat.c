@@ -8,6 +8,7 @@
 #include <float.h>
 #include <math.h> /* trunc, fpclassify */
 
+#include <inttypes.h>
 #include <stdio.h>
 
 #include "strDoubleFormat.h"
@@ -833,8 +834,8 @@ int strDoubleFormatTest(int argc, char *argv[]) {
             uint8_t buf[64] = {0};
             uint32_t resultLen =
                 StrDoubleFormatToBufNice(buf, sizeof(buf), digits[i]);
-            printf("Got: %s (len %d) (expecting: %s (len %zu))\n", buf,
-                   resultLen, results[i], strlen(results[i]));
+            printf("Got: %s (len %" PRIu32 ") (expecting: %s (len %zu))\n", buf,
+                   (uint32_t)resultLen, results[i], strlen(results[i]));
             assert(resultLen == strlen(results[i]));
             assert(!memcmp(buf, results[i], strlen(results[i])));
         }

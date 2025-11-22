@@ -522,8 +522,8 @@ bool multidictRehash(multidict *d, int32_t n) {
              * also doesn't exist yet, just move entire HT 0 slot
              * instead of {create, copy, free original} into HT 1. */
             if ((slotCount == 1) && (!*target)) {
-                printf("Moving single for %.*s and slot size: %d\n", (int)klen,
-                       key, shared->countSlot(current));
+                printf("Moving single for %.*s and slot size: %" PRIu32 "\n",
+                       (int)klen, key, shared->countSlot(current));
                 *target = current;
                 freeCurrentContainer = false;
                 current = NULL; /* breaks loop next time around */
@@ -1175,7 +1175,7 @@ void multidictRepr(const multidict *d) {
     printf("multidict %p has:\n", (void *)d);
     for (int i = 0; i < 2; i++) {
         printf("\tHT %d:\n", i);
-        printf("\t\tSIZE: %d\n", HTSIZE(d, i));
+        printf("\t\tSIZE: %" PRIu32 "\n", HTSIZE(d, i));
         printf("\t\tCOUNT: %" PRIu64 "\n", HTCOUNT(d, i));
         printf("\t\tUSED BYTES: %" PRIu64 "\n", HTBYTES(d, i));
     }
