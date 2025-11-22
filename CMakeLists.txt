@@ -9,6 +9,9 @@ if (TARGET ${PROJECT_NAME})
     return()
 endif()
 
+# Enable testing at the top level so tests are properly registered
+enable_testing()
+
 add_subdirectory(deps)
 add_subdirectory(src)
 # vi:ai et sw=4 ts=4:

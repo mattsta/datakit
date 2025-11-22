@@ -870,7 +870,7 @@ int databoxCompare(const databox *restrict a, const databox *restrict b) {
             return -databoxCompareInt128Float(b, a);
         default:
 #ifndef NDEBUG
-            printf("Attempted to compare: %d and %d?", a->type, b->type);
+            printf("Attempted to compare: %" PRIu32 " and %" PRIu32 "?", (uint32_t)a->type, (uint32_t)b->type);
 #endif
             assert(NULL && "Either you tried to compare against DATABOX_VOID "
                            "or we created new numeric types and didn't add "

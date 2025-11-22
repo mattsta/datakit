@@ -316,41 +316,165 @@ if(BuildTestBinary)
 
     enable_testing()
 
+    # Comprehensive test list
     set(datakitTests
+        # Core data structures
         flex
+        mflex
+
+        # Multilist variants
+        multilistSmall
+        multilistMedium
         multilistFull
-        util
-        mds
-        mdsc
-        hyperloglog
-        offsetArray
+
+        # Multimap variants
+        multimapSmall
+        multimapMedium
         multimapFull
         multimap
-        multiarrayLarge
+
+        # Multiarray variants
         multiarraySmall
         multiarrayMedium
+        multiarrayLarge
         multiarray
-        databox
+
+        # Other containers
+        multiroar
+        multiPriorityQueue
+
+        # Integer sets
+        intset
+        intsetU32
+        intsetBig
+
+        # String processing
         str
         strDoubleFormat
-        multiroar
+        mds
+        mdsc
+
+        # Compression/encoding
         dod
         xof
         fibbuf
         jebuf
-        mflex
+
+        # Cardinality
+        hyperloglog
+
+        # Utilities
+        util
+        databox
+        offsetArray
         membound
-        multiPriorityQueue
         )
 
-    add_custom_target(check
-        COMMAND ${CMAKE_CTEST_COMMAND} -VV
-        DEPENDS ${PROJECT_NAME}-test)
-
+    # Create test targets
     foreach(test ${datakitTests})
         add_test(NAME ${test} COMMAND ${PROJECT_NAME}-test test ${test})
     endforeach()
 
+    # check target - runs all tests with verbose output
+    add_custom_target(check
+        COMMAND ${CMAKE_CTEST_COMMAND} -VV
+        DEPENDS ${PROJECT_NAME}-test)
+
+    # quickcheck target - runs tests without verbose output
+    add_custom_target(quickcheck
+        COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
+        DEPENDS ${PROJECT_NAME}-test)
+
+endif()
+
+# ============================================================================
+# Static Analysis with cppcheck
+# ============================================================================
+find_program(CPPCHECK_EXECUTABLE cppcheck)
+
+if(CPPCHECK_EXECUTABLE)
+    message(STATUS "Found cppcheck: ${CPPCHECK_EXECUTABLE}")
+
+    # Get all source files
+    file(GLOB_RECURSE ALL_SOURCE_FILES
+        ${CMAKE_CURRENT_SOURCE_DIR}/*.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/*.h)
+
+    # Exclude test file from analysis
+    list(FILTER ALL_SOURCE_FILES EXCLUDE REGEX ".*datakit-test\\.c$")
+    list(FILTER ALL_SOURCE_FILES EXCLUDE REGEX ".*ctest\\.h$")
+
+    # cppcheck target - quick analysis
+    add_custom_target(cppcheck
+        COMMAND ${CPPCHECK_EXECUTABLE}
+            --enable=warning,style,performance,portability
+            --suppress=missingIncludeSystem
+            --suppress=unusedFunction
+            --suppress=unmatchedSuppression
+            --inline-suppr
+            --quiet
+            --error-exitcode=0
+            -I${CMAKE_CURRENT_SOURCE_DIR}
+            -I${CMAKE_CURRENT_SOURCE_DIR}/../deps/lz4/lib
+            -I${CMAKE_CURRENT_SOURCE_DIR}/../deps/varint/src
+            -I${CMAKE_CURRENT_SOURCE_DIR}/../deps/imath/src
+            -I${CMAKE_CURRENT_SOURCE_DIR}/../deps/xxHash
+            ${ALL_SOURCE_FILES}
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Running cppcheck static analysis...")
+
+    # cppcheck-full target - comprehensive analysis with all checks
+    add_custom_target(cppcheck-full
+        COMMAND ${CPPCHECK_EXECUTABLE}
+            --enable=all
+            --suppress=missingIncludeSystem
+            --suppress=unusedFunction
+            --suppress=unmatchedSuppression
+            --inline-suppr
+            --inconclusive
+            --force
+            --error-exitcode=0
+            -I${CMAKE_CURRENT_SOURCE_DIR}
+            -I${CMAKE_CURRENT_SOURCE_DIR}/../deps/lz4/lib
+            -I${CMAKE_CURRENT_SOURCE_DIR}/../deps/varint/src
+            -I${CMAKE_CURRENT_SOURCE_DIR}/../deps/imath/src
+            -I${CMAKE_CURRENT_SOURCE_DIR}/../deps/xxHash
+            ${ALL_SOURCE_FILES}
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Running comprehensive cppcheck analysis...")
+
+    # cppcheck-xml target - generate XML report for CI integration
+    add_custom_target(cppcheck-xml
+        COMMAND ${CPPCHECK_EXECUTABLE}
+            --enable=all
+            --suppress=missingIncludeSystem
+            --suppress=unusedFunction
+            --suppress=unmatchedSuppression
+            --inline-suppr
+            --xml
+            --xml-version=2
+            -I${CMAKE_CURRENT_SOURCE_DIR}
+            -I${CMAKE_CURRENT_SOURCE_DIR}/../deps/lz4/lib
+            -I${CMAKE_CURRENT_SOURCE_DIR}/../deps/varint/src
+            -I${CMAKE_CURRENT_SOURCE_DIR}/../deps/imath/src
+            -I${CMAKE_CURRENT_SOURCE_DIR}/../deps/xxHash
+            ${ALL_SOURCE_FILES}
+            2> ${CMAKE_BINARY_DIR}/cppcheck-report.xml
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Generating cppcheck XML report...")
+
+else()
+    message(STATUS "cppcheck not found - static analysis targets disabled")
+endif()
+
+# ============================================================================
+# Lint target - combines multiple checks
+# ============================================================================
+add_custom_target(lint
+    COMMENT "Running all lint checks...")
+
+if(CPPCHECK_EXECUTABLE)
+    add_dependencies(lint cppcheck)
 endif()
 
 if(Build32Bit)
