@@ -24,6 +24,8 @@
 
 #include "dks.h"
 #include "fibbuf.h"
+
+#include <inttypes.h>
 #include "jebuf.h"
 #include "str.h"
 #include "strDoubleFormat.h"
@@ -2212,8 +2214,9 @@ int DKS_TEST(int argc, char *argv[]) {
         DKS_TYPE *testing = DKS_NEWLEN(buf, startSize);
         printf("Initial type: %d\n", DKS_TYPE_GET(testing));
 
-        testCond("dks created as expected type", DKS_TYPE_GET(testing),
-                 limit.startType, "%u");
+        testCond("dks created as expected type",
+                 (uint32_t)DKS_TYPE_GET(testing), (uint32_t)limit.startType,
+                 "%" PRIu32);
         testCond("dks has no avail", DKS_AVAIL(testing), (size_t)0, "%zu");
         testCond("dks content matches source buffer",
                  memcmp(testing, buf, startSize), 0, "%d");
@@ -2423,8 +2426,9 @@ int DKS_TEST(int argc, char *argv[]) {
         DKS_RANDBYTES(startbuf, startSize);
 
         DKS_TYPE *testing = DKS_NEWLEN(startbuf, startSize);
-        testCond("dks created properly below limit", DKS_TYPE_GET(testing),
-                 limit.startType, "%u");
+        testCond("dks created properly below limit",
+                 (uint32_t)DKS_TYPE_GET(testing), (uint32_t)limit.startType,
+                 "%" PRIu32);
         testCond("dks has no avail", DKS_AVAIL(testing), (size_t)0, "%zu");
         testCond("dks contents match source buffer",
                  memcmp(testing, startbuf, startSize), 0, "%d");
@@ -2436,8 +2440,8 @@ int DKS_TEST(int argc, char *argv[]) {
         testCond("dks has correct avail", DKS_AVAIL(testing),
                  (startSize - shrinkSize), "%zu");
 #endif
-        testCond("dks type remains same", DKS_TYPE_GET(testing),
-                 limit.startType, "%u");
+        testCond("dks type remains same", (uint32_t)DKS_TYPE_GET(testing),
+                 (uint32_t)limit.startType, "%" PRIu32);
         testCond("dks initial contents still match source buffer",
                  memcmp(testing, startbuf, shrinkSize), 0, "%d");
 
@@ -2500,8 +2504,9 @@ int DKS_TEST(int argc, char *argv[]) {
         DKS_RANDBYTES(startbuf, startSize);
 
         DKS_TYPE *testing = DKS_NEWLEN(startbuf, startSize);
-        testCond("dks created properly below limit", DKS_TYPE_GET(testing),
-                 limit.startType, "%u");
+        testCond("dks created properly below limit",
+                 (uint32_t)DKS_TYPE_GET(testing), (uint32_t)limit.startType,
+                 "%" PRIu32);
         testCond("dks has no avail", DKS_AVAIL(testing), (size_t)0, "%zu");
         testCond("dks contents match source buffer",
                  memcmp(testing, startbuf, startSize), 0, "%d");
@@ -2512,8 +2517,8 @@ int DKS_TEST(int argc, char *argv[]) {
 #if !defined(DATAKIT_DKS_COMPACT)
         testCondGte("dks has correct avail", DKS_AVAIL(testing), growby, "%zu");
 #endif
-        testCond("dks type upgraded itself", DKS_TYPE_GET(testing),
-                 limit.newType, "%u");
+        testCond("dks type upgraded itself", (uint32_t)DKS_TYPE_GET(testing),
+                 (uint32_t)limit.newType, "%" PRIu32);
         testCond("dks initial contents still match source buffer",
                  memcmp(testing, startbuf, startSize), 0, "%d");
 

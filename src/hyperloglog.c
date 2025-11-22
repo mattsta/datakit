@@ -1517,7 +1517,7 @@ int hyperloglogTest(int argc, char *argv[]) {
     uint32_t shash = HYPERHASH(&sseed, sizeof(sseed), 0xadc83b19ULL);
     srand(shash);
 
-    printf("Testing (using seed: %u) for %u cycles\n", shash, HLL_TEST_CYCLES);
+    printf("Testing (using seed: %" PRIu32 ") for %" PRId32 " cycles\n", (uint32_t)shash, (int32_t)HLL_TEST_CYCLES);
 
     mdsc *bitcounters = mdscnewlen(NULL, HLL_DENSE_SIZE);
     hyperloglogHeader *hdr = (hyperloglogHeader *)bitcounters, *hdr2;
@@ -1550,8 +1550,8 @@ int hyperloglogTest(int argc, char *argv[]) {
 
             HLL_DENSE_GET_REGISTER(val, hdr->registers, i);
             if (val != bytecounters[i]) {
-                printf("TESTFAILED Register %d should be %d but is %d\n", i,
-                       bytecounters[i], val);
+                printf("TESTFAILED Register %" PRIu32 " should be %" PRIu8 " but is %" PRIu32 "\n", (uint32_t)i,
+                       (uint8_t)bytecounters[i], (uint32_t)val);
                 errors++;
                 goto cleanup;
             }

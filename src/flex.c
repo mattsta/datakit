@@ -76,6 +76,7 @@
 
 #if DK_TEST_VERBOSE
 #include <stdio.h>
+#include <inttypes.h>
 #endif
 
 #include "../deps/varint/src/varintExternal.h"        /* user integers */
@@ -4279,15 +4280,15 @@ DK_STATIC flexEntry *flexFindByTypeDirectional_(flex *const f,
     case DATABOX_BYTES_EMBED:
         flexFind__(forward, databoxBytes(box), databoxLen(box),
                    flexEntryCompareString__);
-        break;
+        return NULL; /* flexFind__ macro returns, but this satisfies static analyzers */
     case DATABOX_SIGNED_64:
         flexFind__(forward, (uint8_t *)&box->data.i64, sizeof(box->data.i64),
                    flexEntryCompareSigned__);
-        break;
+        return NULL; /* flexFind__ macro returns, but this satisfies static analyzers */
     case DATABOX_UNSIGNED_64:
         flexFind__(forward, (uint8_t *)&box->data.u64, sizeof(box->data.u64),
                    flexEntryCompareUnsigned__);
-        break;
+        return NULL; /* flexFind__ macro returns, but this satisfies static analyzers */
     case DATABOX_FLOAT_32:
     //        flexFind__(forward, (uint8_t *)&box->data.f32,
     //        sizeof(box->data.f32), flexEntryCompareFloat__);
@@ -4624,6 +4625,7 @@ bool cflexConvertToFlex(const cflex *c, flex **fBuffer, size_t *fBufferLen) {
 
 #ifdef DATAKIT_TEST
 
+#include <inttypes.h>
 #include "strDoubleFormat.h"
 
 /* Note: including list.c source directly since we don't
@@ -4708,12 +4710,12 @@ void flexRepr(const flex *f) {
         printf("{"
                "%p, "
                "index %3zu (%3zu), "
-               "offset %5zu, "
+               "offset %5" PRIdPTR ", "
                "len %3zu, "
                "meta %2u, "
                "data %3zu"
                "} ",
-               fe, index, (howMany - index), (fe - f),
+               (void *)fe, index, (howMany - index), (ptrdiff_t)(fe - f),
                FLEX_ENTRY_SIZE_TOTAL(&entry), FLEX_ENTRY_META_SIZE(&entry),
                entry.len);
 
@@ -5074,17 +5076,17 @@ int32_t flexTest(int32_t argc, char **argv) {
         const uint32_t typeCount =
             highestNonStaticNumericType - FLEX_UINT_8B + numberOfImmediateTypes;
         const uint32_t typeCountMax = FLEX_SAME - FLEX_FIXED_START;
-        printf("Type range: [%d, %d] (+ %d top-down types) (%d total used; %d "
-               "max limit; %d "
+        printf("Type range: [%" PRIu32 ", %" PRIu32 "] (+ %" PRIu32 " top-down types) (%" PRIu32 " total used; %" PRIu32 " "
+               "max limit; %" PRIu32 " "
                "remaining)\n\n",
-               FLEX_UINT_8B, highestNonStaticNumericType,
+               (uint32_t)FLEX_UINT_8B, highestNonStaticNumericType,
                numberOfImmediateTypes, typeCount, typeCountMax,
                typeCountMax - typeCount);
 
         if (highestNonStaticNumericType >= lowestTopDownType) {
             printf("Too many types!  Highest grow-up type is bigger than "
                    "lowest top-down type!\n");
-            printf("Highest grow up is %d, but lowest top-down is %d\n",
+            printf("Highest grow up is %" PRIu32 ", but lowest top-down is %" PRIu32 "\n",
                    highestNonStaticNumericType, lowestTopDownType);
             assert(highestNonStaticNumericType < lowestTopDownType);
         }
@@ -5161,8 +5163,8 @@ int32_t flexTest(int32_t argc, char **argv) {
             printf("No entry\n");
         } else {
             printf("ERROR: Out of range index should return NULL, returned "
-                   "offset: %ld\n",
-                   fe - f);
+                   "offset: %" PRIdPTR "\n",
+                   (ptrdiff_t)(fe - f));
             assert(NULL);
         }
 
@@ -5224,8 +5226,8 @@ int32_t flexTest(int32_t argc, char **argv) {
             printf("No entry\n");
         } else {
             printf("ERROR: Out of range index should return NULL, returned "
-                   "offset: %ld\n",
-                   fe - f);
+                   "offset: %" PRIdPTR "\n",
+                   (ptrdiff_t)(fe - f));
             assert(NULL);
         }
 
@@ -7087,24 +7089,24 @@ int32_t flexTest(int32_t argc, char **argv) {
                     if (memcmp(buf, refnodeval, buflen) != 0) {
                         for (ssize_t joo = 0; joo < buflen; joo++) {
                             if (buf[joo] != refnodeval[joo]) {
-                                printf("ERROR! flex[%zu] = %d vs. "
-                                       "reference[%zu] "
+                                printf("ERROR! flex[%" PRIdPTR "] = %d vs. "
+                                       "reference[%" PRIdPTR "] "
                                        "= %d\n",
-                                       joo, buf[joo], joo, refnodeval[joo]);
+                                       (ptrdiff_t)joo, buf[joo], (ptrdiff_t)joo, refnodeval[joo]);
                             }
                         }
                         ssize_t refnodelen = strlen(refnodeval);
                         printf("ERROR! flex result != reference node; %.*s "
-                               "(%f, %f; %d) "
+                               "(%f, %f; %" PRIu32 ") "
                                "!= %s\n",
                                (int)buflen, (char *)buf, got.data.f32,
-                               got.data.d64, got.type, refnodeval);
+                               got.data.d64, (uint32_t)got.type, refnodeval);
 
                         if (buflen != refnodelen) {
                             printf("ERROR! flex element size != reference "
                                    "node "
-                                   "size; %zu != %zu\n",
-                                   buflen, refnodelen);
+                                   "size; %" PRIdPTR " != %" PRIdPTR "\n",
+                                   (ptrdiff_t)buflen, (ptrdiff_t)refnodelen);
                         }
 
                         assert(NULL);

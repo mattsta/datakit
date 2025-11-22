@@ -43,7 +43,7 @@ __attribute__((optnone)) static double instruction(void) {
 __attribute__((optnone)) static double loop(void) {
     const size_t itersTotal = (1 << 25);
     size_t iters = itersTotal;
-    printf("Now running a quick CPU speed test for %zd iterations...\n", iters);
+    printf("Now running a quick CPU speed test for %zu iterations...\n", iters);
     PERF_TIMERS_STAT_START;
     while (iters--)
         ;

@@ -5,6 +5,7 @@
 #include "../deps/varint/src/varintTagged.h"
 
 #include "str.h" /* optimized popcnt helpers */
+#include <inttypes.h>
 
 struct multiroar {
     multimap *map;
@@ -205,8 +206,8 @@ DK_STATIC uint16_t insertPositionalNumber(multiroar *r, const databox *key,
     const uint16_t currentElementCount = PACKED_COUNT_FROM_VALUE(value);
     const uint16_t newElementCount = currentElementCount + 1;
 
-    D("count: %d, len: %d (required: %f)\n", currentElementCount,
-      GET_CHUNK_PACKED_LEN(value), ((double)currentElementCount * 13) / 8);
+    D("count: %" PRIu16 ", len: %zu (required: %f)\n", currentElementCount,
+      (size_t)GET_CHUNK_PACKED_LEN(value), ((double)currentElementCount * 13) / 8);
     if (varintPacked13Member(GET_CHUNK_PACKED_START(value), currentElementCount,
                              positionalNumber) >= 0) {
         /* element found!  do no further processing. */
@@ -341,7 +342,7 @@ DK_STATIC uint16_t _bitmapToPositions(const void *bitmap, uint8_t positions[],
              *            so we get a nice latency minimization boost
              *            since we don't have to do binary searches
              *            on each insert here. */
-            D("setting [%d] = %d\n", idx, i * 64 + r);
+            D("setting [%zu] = %zu\n", idx, i * 64 + (size_t)r);
             varintPacked13Set(positions, idx++, i * 64 + r);
             myword ^= unsetAfterCheck;
         }
@@ -487,7 +488,7 @@ bool multiroarBitSet(multiroar *r, size_t position) {
             const uint32_t bitOffset = BIT_OFFSET(position);
             uint8_t *bitmapStart = GET_CHUNK_BITMAP_START(&value);
 
-            D("Byte offset: %d, bit offset: %d\n", byteOffset, bitOffset);
+            D("Byte offset: %zu, bit offset: %" PRIu32 "\n", byteOffset, bitOffset);
             previouslySet = (bitmapStart[byteOffset] >> bitOffset) & 0x01;
             bitmapStart[byteOffset] |= (1 << bitOffset);
 
@@ -584,8 +585,8 @@ bool multiroarBitGet(multiroar *r, size_t position) {
             return true;
             break;
         case CHUNK_TYPE_UNDER_FULL_DIRECT_POSITION_NUMBERS: {
-            D("Looking up direct (%d, %d)...\n",
-              PACKED_COUNT_FROM_VALUE(&value), DIRECT_BIT_POSITION(position));
+            D("Looking up direct (%" PRIu64 ", %" PRIu64 ")...\n",
+              (uint64_t)PACKED_COUNT_FROM_VALUE(&value), (uint64_t)DIRECT_BIT_POSITION(position));
             if (varintPacked13Member(GET_CHUNK_PACKED_START(&value),
                                      PACKED_COUNT_FROM_VALUE(&value),
                                      DIRECT_BIT_POSITION(position)) >= 0) {
