@@ -33,7 +33,7 @@ typedef uint64_t linearBloomCount;
 
 /* See comment for this in linearBloom.h */
 #define LINEARBLOOMCOUNT_EXTENT_BYTES                                          \
-    (divCeil(divCeil(LINEARBLOOMCOUNT_EXTENT_ENTIRES * LINEAR_BLOOM_BITS, 8),  \
+    (divCeil(divCeil(LINEARBLOOMCOUNT_EXTENT_ENTRIES * LINEAR_BLOOM_BITS, 8),  \
              sizeof(linearBloomCount)) *                                       \
      sizeof(linearBloomCount))
 
@@ -42,7 +42,7 @@ DK_INLINE_ALWAYS linearBloomCount *linearBloomCountNew(void) {
     /* We need to use 'divCeil' here because regular division would give us
      * a floor and that could break some very end-of-array math if our
      * bit length isn't evenly divisible by 8 */
-    return zcalloc(1, LINEARBLOOM_EXTENT_BYTES);
+    return zcalloc(1, LINEARBLOOMCOUNT_EXTENT_BYTES);
 }
 
 DK_INLINE_ALWAYS void linearBloomCountFree(linearBloomCount *bloom) {
@@ -53,7 +53,7 @@ DK_INLINE_ALWAYS void linearBloomCountFree(linearBloomCount *bloom) {
 
 DK_INLINE_ALWAYS void
 linearBloomCountReset(linearBloomCount *restrict const bloom) {
-    memset(bloom, 0, LINEARBLOOM_EXTENT_BYTES);
+    memset(bloom, 0, LINEARBLOOMCOUNT_EXTENT_BYTES);
 }
 
 DK_INLINE_ALWAYS void

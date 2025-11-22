@@ -1473,7 +1473,7 @@ DK_INLINE_ALWAYS hyperloglog *pfvmerge(hyperloglog *first, va_list ap) {
 
     /* Write the resulting HLL to the destination HLL registers and
      * invalidate the cached value. */
-    for (int j = 0; j < HLL_REGISTERS / 8; j += 8) {
+    for (int j = 0; j < HLL_REGISTERS; j++) {
         if (max[j] == 0) {
             continue;
         }

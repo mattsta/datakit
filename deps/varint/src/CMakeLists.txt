@@ -8,7 +8,7 @@ endif()
 
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -pedantic -std=c99")
 #set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wshadow -march=native")
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wshadow -mcpu=native")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wshadow -mtune=native")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wstrict-aliasing -Wstrict-overflow")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-missing-field-initializers")
 
@@ -29,6 +29,9 @@ add_library(${PROJECT_NAME} OBJECT
 
 set(DIMENSION ${PROJECT_NAME}Dimension)
 set(PACKED ${PROJECT_NAME}Packed)
+
+# varintDimension.c uses F16C intrinsics on x86_64
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mf16c")
 
 add_library(${DIMENSION} OBJECT
     varintExternal.c

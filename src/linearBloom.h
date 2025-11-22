@@ -62,7 +62,7 @@ linearBloomHashSet(linearBloom *restrict const bloom, uint64_t hash[2]) {
         const size_t byte = setBit / 8;
         const size_t offset = byte / sizeof(linearBloom);
         const linearBloom mask = 1ULL << (setBit % LB_BITS_PER_SLOT);
-        exists += (bloom[offset] & mask);
+        exists += !!(bloom[offset] & mask);
         bloom[offset] |= mask;
     }
 

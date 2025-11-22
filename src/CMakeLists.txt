@@ -146,15 +146,18 @@ endif()
 
 # If you need debug, build with:
 # cmake -DCMAKE_BUILD_TYPE=Debug ..
+add_definitions(-D_GNU_SOURCE)  # For memmem and other GNU extensions
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Winline -Wextra -std=gnu99 -Wno-missing-field-initializers")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mssse3")  # For SSSE3 intrinsics like _mm_shuffle_epi8
 #set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wstrict-overflow=5 -Wfloat-equal")
 #set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wsuggest-attribute=const -Wsuggest-attribute=pure -Wsuggest-attribute=noreturn -Wsuggest-attribute=format")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wshadow -fstrict-aliasing -Wunused-macros")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wformat -Wignored-attributes")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-math-errno") # We don't use errno for libc math
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wempty-init-stmt -Wextra-semi-stmt")
 
 if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+    # Clang-specific warnings
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wempty-init-stmt -Wextra-semi-stmt")
 # We know we're using computed gotos on clang and it's really okay
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-gnu-label-as-value")
 endif()
@@ -247,9 +250,9 @@ add_library(${PROJECT_NAME} OBJECT
 
     # patternTrie.c
     # Temporary (?) reductions due to not compiling on ARM.
-    # Fix, or make conditional to only include if X64
-    # intersectInt.c
-    # intsetBig.c
+    # TODO: make conditional to only include if X64
+    intersectInt.c
+    intsetBig.c
     intset.c
     intsetU32.c
     hyperloglog.c
