@@ -782,7 +782,7 @@ abstractFlexInsert(multimapFull *const m, const multimapFullIdx mapIdx,
                    const bool keysCanBecomePointers, void **keyAsPointer) {
     flexEntry *middle = GET_MIDDLE(m, mapIdx, *map);
 
-    bool found;
+    bool found = false;
 
     if (useSurrogateKey) {
         assert(!keysCanBecomePointers);

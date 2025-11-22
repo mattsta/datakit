@@ -143,6 +143,10 @@ int fastMutexCondTimedWait(fastCond *c, fastMutex *m, struct timespec *ts) {
 
     pthread_mutex_lock(&c->m);
     if (!c->w) {
+        /* cppcheck-suppress autoVariables
+         * Safe: waiter is guaranteed to be removed from the queue before this
+         * function returns (either by signal/broadcast or self-removal on timeout).
+         * The function blocks until waiter.waiting becomes false. */
         c->w = &waiter;
         waiter.tail = &waiter;
     } else {

@@ -543,7 +543,7 @@ size_t OSRegulateRSSGet(void) {
 
 size_t OSRegulateRSSGet(void) {
     task_t task = MACH_PORT_NULL;
-    struct task_basic_info t_info;
+    struct task_basic_info t_info = {0};
     mach_msg_type_number_t t_info_count = TASK_BASIC_INFO_COUNT;
 
     if (task_for_pid(current_task(), getpid(), &task) != KERN_SUCCESS) {

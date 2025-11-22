@@ -80,6 +80,11 @@ bool bbitsDodDodGetOffsetCount(bbitsDodDod *dd, ssize_t offset,
     dodWriter *kw;
     dodWriter *vw;
 
+    /* Early return if structure is empty - no data to read */
+    if (dd->count == 0) {
+        return false;
+    }
+
     /* If offset from tail, convert to offset from forward */
     if (offset < 0) {
         offset += dd->elements;
@@ -261,6 +266,11 @@ bool bbitsDodXofGetOffsetCount(bbitsDodXof *dx, ssize_t offset, ssize_t *count,
                                double *variance, double *stddev) {
     dodWriter *kw;
     xofWriter *vw;
+
+    /* Early return if structure is empty - no data to read */
+    if (dx->count == 0) {
+        return false;
+    }
 
     /* If offset from tail, convert to offset from forward */
     if (offset < 0) {
