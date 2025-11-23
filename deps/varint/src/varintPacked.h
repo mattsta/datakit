@@ -444,7 +444,9 @@ PACKED_STATIC int64_t PACKED_ARRAY_MEMBER(const void *src_,
                                           const VALUE_TYPE val) {
     PACKED_LEN_TYPE min = PACKED_ARRAY_BINARY_SEARCH(src_, len, val);
 
-    if (PACKED_ARRAY_GET(src_, min) == val) {
+    /* Check bounds before accessing - binary search may return 'len' if
+     * element should be inserted past the end of the array */
+    if (min < len && PACKED_ARRAY_GET(src_, min) == val) {
         return min;
     }
 
