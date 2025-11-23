@@ -757,6 +757,156 @@ int multiTimerTest(int argc, char *argv[]) {
         multiTimerFree(t);
     }
 
+    /* ================================================================
+     * High-Scale Performance Tests
+     * ================================================================ */
+
+    TEST("multiTimer: high-scale million timer registration") {
+        multiTimer *t = multiTimerNew();
+        testCallbackState state = {0};
+        const size_t numTimers = 1000000;
+
+        printf("    Registering %zu timers...\n", numTimers);
+
+        PERF_TIMERS_SETUP;
+
+        for (size_t i = 0; i < numTimers; i++) {
+            /* Spread timers across 1 hour window */
+            multiTimerRegister(t, (i % 3600000) * 1000, 0, testCountingCallback, &state);
+        }
+
+        PERF_TIMERS_FINISH_PRINT_RESULTS(numTimers, "million timer registrations");
+
+        size_t count = multitimerCount(t);
+        printf("    Total registered: %zu timers\n", count);
+
+        if (count != numTimers) {
+            ERR("Expected %zu timers, got %zu", numTimers, count);
+        }
+
+        /* Test lookup performance at scale */
+        PERF_TIMERS_SETUP;
+
+        volatile multiTimerSystemMonotonicUs next = 0;
+        for (size_t i = 0; i < 100000; i++) {
+            next = multiTimerNextTimerEventStartUs(t);
+        }
+        (void)next;
+
+        PERF_TIMERS_FINISH_PRINT_RESULTS(100000, "lookups with 1M timers");
+
+        multiTimerFree(t);
+    }
+
+    TEST("multiTimer: high-scale batch expiration") {
+        multiTimer *t = multiTimerNew();
+        const size_t numTimers = 100000;
+        int32_t totalFired = 0;
+
+        testCallbackState *states = zcalloc(numTimers, sizeof(testCallbackState));
+
+        /* All timers expire immediately */
+        for (size_t i = 0; i < numTimers; i++) {
+            states[i].shouldReschedule = false;
+            multiTimerRegister(t, 0, 0, testCountingCallback, &states[i]);
+        }
+
+        printf("    Processing %zu expired timers...\n", numTimers);
+
+        PERF_TIMERS_SETUP;
+
+        multiTimerProcessTimerEvents(t);
+
+        PERF_TIMERS_FINISH_PRINT_RESULTS(numTimers, "batch expirations");
+
+        for (size_t i = 0; i < numTimers; i++) {
+            totalFired += states[i].callCount;
+        }
+
+        printf("    Total fired: %d\n", totalFired);
+
+        if ((size_t)totalFired != numTimers) {
+            ERR("Expected %zu firings, got %d", numTimers, totalFired);
+        }
+
+        zfree(states);
+        multiTimerFree(t);
+    }
+
+    TEST("multiTimer: high-scale mixed operations simulation") {
+        multiTimer *t = multiTimerNew();
+        testCallbackState state = {.callCount = 0, .shouldReschedule = true};
+        const size_t warmupTimers = 100000;
+        const size_t ops = 50000;
+
+        /* Warmup: register many timers spread across time */
+        for (size_t i = 0; i < warmupTimers; i++) {
+            multiTimerRegister(t, (i % 1000) * 1000 + 1000000, 0, testCountingCallback, &state);
+        }
+
+        printf("    Simulating %zu mixed ops with %zu existing timers...\n",
+               ops, warmupTimers);
+
+        PERF_TIMERS_SETUP;
+
+        /* Mixed operations: register, unregister, process */
+        for (size_t i = 0; i < ops; i++) {
+            /* Register new timer */
+            multiTimerId id = multiTimerRegister(t, 1000 + (i % 10000), 0,
+                                                  testCountingCallback, &state);
+
+            /* Occasionally unregister */
+            if (i % 3 == 0) {
+                multiTimerUnregister(t, id);
+            }
+
+            /* Occasionally process */
+            if (i % 100 == 0) {
+                multiTimerProcessTimerEvents(t);
+            }
+
+            /* Always check next event */
+            (void)multiTimerNextTimerEventStartUs(t);
+        }
+
+        PERF_TIMERS_FINISH_PRINT_RESULTS(ops, "mixed operations");
+
+        printf("    Final timer count: %zu\n", multitimerCount(t));
+
+        multiTimerFree(t);
+    }
+
+    TEST("multiTimer: memory efficiency analysis") {
+        const size_t numTimers = 100000;
+        testCallbackState state = {0};
+
+        multiTimer *t = multiTimerNew();
+
+        /* Measure memory before */
+        size_t memBefore = multimapBytes(t->scheduled);
+
+        for (size_t i = 0; i < numTimers; i++) {
+            multiTimerRegister(t, i * 1000, 0, testCountingCallback, &state);
+        }
+
+        size_t memAfter = multimapBytes(t->scheduled);
+        double bytesPerTimer = (double)(memAfter - memBefore) / numTimers;
+
+        printf("    Memory for %zu timers: %zu bytes (%.2f MB)\n",
+               numTimers, memAfter, (double)memAfter / (1024 * 1024));
+        printf("    Bytes per timer: %.2f\n", bytesPerTimer);
+        printf("    Theoretical minimum (5 uint64s): %zu bytes\n", 5 * sizeof(uint64_t));
+
+        /* Each timer entry has 5 elements (runAt, callback, clientData, id, repeat)
+         * Minimum would be 5 * 8 = 40 bytes per entry
+         * With multimap overhead, expect ~50-100 bytes per entry */
+        if (bytesPerTimer > 150) {
+            ERR("Memory usage too high: %.2f bytes/timer (expected < 150)", bytesPerTimer);
+        }
+
+        multiTimerFree(t);
+    }
+
     TEST_FINAL_RESULT;
 }
 #endif
