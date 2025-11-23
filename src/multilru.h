@@ -9,7 +9,6 @@ multilru *multilruNewWithLevelsCapacity(size_t maxLevels, size_t startCapacity);
 void multilruFree(multilru *mlru);
 size_t multilruBytes(const multilru *mlru);
 size_t multilruCount(const multilru *mlru);
-size_t multilruCount(const multilru *mlru);
 
 multilruPtr multilruInsert(multilru *mlru);
 void multilruIncrease(multilru *mlru, const multilruPtr currentPtr);
