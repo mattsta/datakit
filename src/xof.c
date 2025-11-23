@@ -210,8 +210,15 @@ double xofGet(const xof *const x, const size_t offset) {
 }
 
 void xofWrite(xofWriter *const w, const double val) {
-    xofAppend(w->d, &w->usedBits, &w->currentLeadingZeroes,
-              &w->currentTrailingZeroes, w->prevVal, val);
+    if (w->count == 0) {
+        /* First value: use xofInit to write raw 64-bit double */
+        xofInit(w->d, &w->usedBits, val);
+    } else {
+        /* Subsequent values: encode as XOR delta from previous */
+        xofAppend(w->d, &w->usedBits, &w->currentLeadingZeroes,
+                  &w->currentTrailingZeroes, w->prevVal, val);
+    }
+
     w->prevVal = val;
     w->count++;
 }
