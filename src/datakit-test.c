@@ -57,6 +57,7 @@
 #include "list.h"
 #include "timeUtil.h"
 #include "linearBloom.h"
+#include "multiTimer.h"
 
 #if __x86_64__
 #define USE_INTSET_BIG 1
@@ -181,6 +182,9 @@ int main(int argc, char *argv[]) {
         } else if (!strcasecmp(argv[2], "linearBloom") ||
                    !strcasecmp(argv[2], "bloom")) {
             return linearBloomTest(argc - 2, argv + 2);
+        } else if (!strcasecmp(argv[2], "multiTimer") ||
+                   !strcasecmp(argv[2], "timer")) {
+            return multiTimerTest(argc - 2, argv + 2);
         } else if (!strcasecmp(argv[2], "ALL")) {
             uint32_t result = 0;
             result += flexTest(argc, argv);
@@ -223,6 +227,7 @@ int main(int argc, char *argv[]) {
             result += listTest(argc, argv);
             result += bbitsTest(argc, argv);
             result += linearBloomTest(argc, argv);
+            result += multiTimerTest(argc, argv);
             return result;
         }
     }

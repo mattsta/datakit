@@ -119,13 +119,30 @@ bool multiTimerUnregister(multiTimer *t, multiTimerId id) {
     const databox stop = boxUnsigned64(id);
     const databox *stopTimer[1] = {&stop};
 
+    /* Update stopLowest/stopHighest bounds for efficient range checking */
+    if (multimapCount(t->stopEvents) == 0) {
+        /* First stop event - initialize both bounds */
+        t->stopLowest = id;
+        t->stopHighest = id;
+    } else {
+        /* Update bounds if new id extends the range */
+        if (id < t->stopLowest) {
+            t->stopLowest = id;
+        }
+
+        if (id > t->stopHighest) {
+            t->stopHighest = id;
+        }
+    }
+
     multimapInsert(&t->stopEvents, stopTimer);
 
     return true;
 }
 
 bool multiTimerStopAll(multiTimer *t) {
-    for (size_t i = 1; i < t->nextTimerId; i++) {
+    /* Timer IDs start at 1 and go up to nextTimerId (inclusive) */
+    for (size_t i = 1; i <= t->nextTimerId; i++) {
         multiTimerUnregister(t, i);
     }
 
@@ -141,28 +158,41 @@ static bool timerCopyRunner(void *userData, const databox *elements[]) {
 static bool checkTimerExceptions(multiTimer *t, const databox *timerId) {
     const multiTimerId tid = timerId->data.u64;
 
+    /* Quick check: if no stop events, nothing to do */
+    if (multimapCount(t->stopEvents) == 0) {
+        return false;
+    }
+
     /* If 'timerId' is in the range of timers requested for deletion,
      * then delete timer from timer deletion map and update endpoints
      * for deleted timer ranges. */
     if (tid <= t->stopHighest && tid >= t->stopLowest) {
         if (multimapExists(t->stopEvents, timerId)) {
-            databox high;
-            databox *highs[1] = {&high};
-
-            databox low;
-            databox *lows[1] = {&low};
-
             /* Remove from times to stop since we're not running it. */
             multimapDelete(&t->stopEvents, timerId);
 
-            /* New Highest */
-            multimapLast(t->stopEvents, highs);
+            /* Update bounds only if stop events remain */
+            if (multimapCount(t->stopEvents) > 0) {
+                databox high;
+                databox *highs[1] = {&high};
 
-            /* New Lowest */
-            multimapFirst(t->stopEvents, lows);
+                databox low;
+                databox *lows[1] = {&low};
 
-            t->stopHighest = high.data.u64;
-            t->stopLowest = low.data.u64;
+                /* New Highest */
+                multimapLast(t->stopEvents, highs);
+
+                /* New Lowest */
+                multimapFirst(t->stopEvents, lows);
+
+                t->stopHighest = high.data.u64;
+                t->stopLowest = low.data.u64;
+            } else {
+                /* All stop events processed - reset bounds */
+                t->stopHighest = 0;
+                t->stopLowest = 0;
+            }
+
             return true;
         }
     }
@@ -318,4 +348,12 @@ multiTimerSystemMonotonicUs multiTimerNextTimerEventStartUs(multiTimer *t) {
 
 multiTimerUs multiTimerNextTimerEventOffsetFromNowUs(multiTimer *t) {
     return multiTimerNextTimerEventStartUs(t) - timeUtilMonotonicUs();
+}
+
+multiTimerSystemMonotonicUs multiTimerGetNs(void) {
+    return (multiTimerSystemMonotonicUs)timeUtilMonotonicNs();
+}
+
+multiTimerSystemMonotonicUs multiTimerGetUs(void) {
+    return (multiTimerSystemMonotonicUs)timeUtilMonotonicUs();
 }

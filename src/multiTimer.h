@@ -37,3 +37,7 @@ multiTimerId multiTimerRegister(multiTimer *t, uint64_t startAfterMicroseconds,
                                 multiTimerCallback *cb, void *clientData);
 bool multiTimerUnregister(multiTimer *t, multiTimerId id);
 bool multiTimerStopAll(multiTimer *t);
+
+#ifdef DATAKIT_TEST
+int multiTimerTest(int argc, char *argv[]);
+#endif
