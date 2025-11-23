@@ -208,8 +208,8 @@ void multimapAtomLookupRefcount(const multimapAtom *ma, const databox *key,
  * Further Query / Act
  * ==================================================================== */
 bool multimapAtomLookupMin(const multimapAtom *ma, databox *minRef) {
-    databox value;
-    databox *elements[2] = {minRef, &value};
+    /* mapAtomReverse is a 1-map, so we only need 1 element */
+    databox *elements[1] = {minRef};
     return multimapFirst(ma->mapAtomReverse, elements);
 }
 
@@ -424,6 +424,7 @@ bool populateSet(void *userData, const databox *elements[]) {
 
 #include "ctest.h"
 #include "multimapFull.h"
+#include "timeUtil.h"
 #include <inttypes.h>
 int multimapAtomTest(int argc, char *argv[]) {
     (void)argc;
@@ -1161,6 +1162,221 @@ int multimapAtomTest(int argc, char *argv[]) {
         }
 
         multimapFree(duplicateHolder);
+        multimapAtomFree(ma);
+    }
+
+    TEST("high-scale stress test (100k entries)") {
+        multimapAtom *ma = multimapAtomNew();
+        const size_t numEntries = 100000;
+
+        /* Insert all entries */
+        int64_t startNs = timeUtilMonotonicNs();
+        for (size_t i = 0; i < numEntries; i++) {
+            databox box = {.type = DATABOX_SIGNED_64, .data.i = (int64_t)i};
+            multimapAtomInsertIfNewConvert(ma, &box);
+        }
+        int64_t insertNs = timeUtilMonotonicNs() - startNs;
+
+        assert(multimapAtomCount(ma) == numEntries);
+        printf("Inserted %zu entries in %.3f ms (%.0f/sec)\n",
+               numEntries, insertNs / 1e6,
+               numEntries / (insertNs / 1e9));
+
+        /* Lookup all entries by reference */
+        startNs = timeUtilMonotonicNs();
+        for (size_t i = 0; i < numEntries; i++) {
+            databox key = {.type = DATABOX_SIGNED_64, .data.i = (int64_t)i};
+            databox ref;
+            bool found = multimapAtomLookupReference(ma, &key, &ref);
+            assert(found);
+            (void)found;
+        }
+        int64_t lookupRefNs = timeUtilMonotonicNs() - startNs;
+        printf("Lookup by key (reference): %zu lookups in %.3f ms (%.0f/sec)\n",
+               numEntries, lookupRefNs / 1e6,
+               numEntries / (lookupRefNs / 1e9));
+
+        /* Lookup all entries by atom ID */
+        startNs = timeUtilMonotonicNs();
+        for (size_t i = 0; i < numEntries; i++) {
+            databox ref = {.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL,
+                           .data.u = i};
+            databox key;
+            bool found = multimapAtomLookup(ma, &ref, &key);
+            assert(found);
+            (void)found;
+        }
+        int64_t lookupIdNs = timeUtilMonotonicNs() - startNs;
+        printf("Lookup by ID (key): %zu lookups in %.3f ms (%.0f/sec)\n",
+               numEntries, lookupIdNs / 1e6,
+               numEntries / (lookupIdNs / 1e9));
+
+        /* Retain and release */
+        startNs = timeUtilMonotonicNs();
+        for (size_t i = 0; i < numEntries; i++) {
+            databox ref = {.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL,
+                           .data.u = i};
+            multimapAtomRetainByRef(ma, &ref);
+        }
+        int64_t retainNs = timeUtilMonotonicNs() - startNs;
+        printf("Retain: %zu ops in %.3f ms (%.0f/sec)\n",
+               numEntries, retainNs / 1e6,
+               numEntries / (retainNs / 1e9));
+
+        /* Memory efficiency */
+        size_t bytesUsed = multimapAtomBytes(ma);
+        printf("Memory: %zu bytes for %zu entries (%.2f bytes/entry)\n",
+               bytesUsed, multimapAtomCount(ma),
+               (double)bytesUsed / multimapAtomCount(ma));
+
+        /* Release all (should not delete due to +1 retain) */
+        for (size_t i = 0; i < numEntries; i++) {
+            databox ref = {.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL,
+                           .data.u = i};
+            multimapAtomReleaseById(ma, &ref);
+        }
+        assert(multimapAtomCount(ma) == numEntries);
+
+        /* Release again (should delete all) */
+        startNs = timeUtilMonotonicNs();
+        for (size_t i = 0; i < numEntries; i++) {
+            databox ref = {.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL,
+                           .data.u = i};
+            multimapAtomReleaseById(ma, &ref);
+        }
+        int64_t releaseNs = timeUtilMonotonicNs() - startNs;
+        printf("Release (delete): %zu ops in %.3f ms (%.0f/sec)\n",
+               numEntries, releaseNs / 1e6,
+               numEntries / (releaseNs / 1e9));
+
+        assert(multimapAtomCount(ma) == 0);
+        multimapAtomFree(ma);
+    }
+
+    TEST("lookup min/max correctness") {
+        multimapAtom *ma = multimapAtomNew();
+
+        /* Insert keys in random order */
+        int64_t keys[] = {500, 100, 900, 300, 700, 200, 800, 400, 600, 1000};
+        for (size_t i = 0; i < 10; i++) {
+            databox box = {.type = DATABOX_SIGNED_64, .data.i = keys[i]};
+            multimapAtomInsert(ma, &box);
+        }
+
+        /* Lookup minimum - should be 100 */
+        databox minRef;
+        bool found = multimapAtomLookupMin(ma, &minRef);
+        assert(found);
+        printf("Min ref: %lu (expected ref for key 100)\n", minRef.data.u);
+
+        /* Verify the min ref maps to key 100 */
+        databox minKey;
+        found = multimapAtomLookup(ma, &minRef, &minKey);
+        assert(found);
+        printf("Min key: %ld (expected 100)\n", minKey.data.i);
+        if (minKey.data.i != 100) {
+            ERR("Expected min key to be 100 but got %ld", minKey.data.i);
+        }
+
+        multimapAtomFree(ma);
+    }
+
+    TEST("string key stress test") {
+        multimapAtom *ma = multimapAtomNew();
+
+        /* Insert string keys */
+        const size_t numStrings = 10000;
+        char buf[64];
+        int64_t startNs = timeUtilMonotonicNs();
+        for (size_t i = 0; i < numStrings; i++) {
+            snprintf(buf, sizeof(buf), "key_%08zu_test", i);
+            databox box = {.type = DATABOX_BYTES,
+                           .len = strlen(buf),
+                           .data.bytes.cstart = buf};
+            multimapAtomInsertIfNewConvert(ma, &box);
+        }
+        int64_t insertNs = timeUtilMonotonicNs() - startNs;
+        printf("Inserted %zu string keys in %.3f ms (%.0f/sec)\n",
+               numStrings, insertNs / 1e6,
+               numStrings / (insertNs / 1e9));
+
+        assert(multimapAtomCount(ma) == numStrings);
+
+        /* Lookup all string keys */
+        startNs = timeUtilMonotonicNs();
+        for (size_t i = 0; i < numStrings; i++) {
+            snprintf(buf, sizeof(buf), "key_%08zu_test", i);
+            databox key = {.type = DATABOX_BYTES,
+                           .len = strlen(buf),
+                           .data.bytes.cstart = buf};
+            databox ref;
+            bool found = multimapAtomLookupReference(ma, &key, &ref);
+            assert(found);
+            (void)found;
+        }
+        int64_t lookupNs = timeUtilMonotonicNs() - startNs;
+        printf("String key lookups: %zu in %.3f ms (%.0f/sec)\n",
+               numStrings, lookupNs / 1e6,
+               numStrings / (lookupNs / 1e9));
+
+        multimapAtomFree(ma);
+    }
+
+    TEST("performance benchmark summary") {
+        printf("\n=== MULTIMAP ATOM PERFORMANCE SUMMARY ===\n");
+
+        multimapAtom *ma = multimapAtomNew();
+        const size_t benchCount = 50000;
+
+        /* Benchmark insert */
+        int64_t startNs = timeUtilMonotonicNs();
+        for (size_t i = 0; i < benchCount; i++) {
+            databox box = {.type = DATABOX_SIGNED_64, .data.i = (int64_t)i};
+            multimapAtomInsertIfNewConvert(ma, &box);
+        }
+        int64_t insertNs = timeUtilMonotonicNs() - startNs;
+
+        /* Benchmark lookup by key */
+        startNs = timeUtilMonotonicNs();
+        for (size_t i = 0; i < benchCount; i++) {
+            databox key = {.type = DATABOX_SIGNED_64, .data.i = (int64_t)i};
+            databox ref;
+            multimapAtomLookupReference(ma, &key, &ref);
+        }
+        int64_t lookupKeyNs = timeUtilMonotonicNs() - startNs;
+
+        /* Benchmark lookup by ID */
+        startNs = timeUtilMonotonicNs();
+        for (size_t i = 0; i < benchCount; i++) {
+            databox ref = {.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL,
+                           .data.u = i};
+            databox key;
+            multimapAtomLookup(ma, &ref, &key);
+        }
+        int64_t lookupIdNs = timeUtilMonotonicNs() - startNs;
+
+        /* Benchmark retain */
+        startNs = timeUtilMonotonicNs();
+        for (size_t i = 0; i < benchCount; i++) {
+            databox ref = {.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL,
+                           .data.u = i};
+            multimapAtomRetainByRef(ma, &ref);
+        }
+        int64_t retainNs = timeUtilMonotonicNs() - startNs;
+
+        printf("Insert rate:     %.0f ops/sec (%.1f us/op)\n",
+               benchCount / (insertNs / 1e9), insertNs / (double)benchCount / 1000);
+        printf("Lookup (by key): %.0f ops/sec (%.1f us/op)\n",
+               benchCount / (lookupKeyNs / 1e9), lookupKeyNs / (double)benchCount / 1000);
+        printf("Lookup (by ID):  %.0f ops/sec (%.1f us/op)\n",
+               benchCount / (lookupIdNs / 1e9), lookupIdNs / (double)benchCount / 1000);
+        printf("Retain rate:     %.0f ops/sec (%.1f us/op)\n",
+               benchCount / (retainNs / 1e9), retainNs / (double)benchCount / 1000);
+        printf("Memory used:     %zu bytes for %zu entries (%.2f bytes/entry)\n",
+               multimapAtomBytes(ma), multimapAtomCount(ma),
+               (double)multimapAtomBytes(ma) / multimapAtomCount(ma));
+        printf("==========================================\n\n");
+
         multimapAtomFree(ma);
     }
 

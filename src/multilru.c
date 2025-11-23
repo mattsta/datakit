@@ -2,6 +2,7 @@
 
 #include "jebuf.h"
 #include "multilru.h"
+#include "timeUtil.h"
 
 #include <inttypes.h> /* PRIu32 */
 #include <string.h>   /* memcmp */
@@ -648,7 +649,8 @@ void multilruGetNLowest(multilru *mlru, multilruPtr N[], size_t n) {
 }
 
 void multilruGetNHighest(multilru *mlru, multilruPtr N[], size_t n) {
-    multilruPtr current = mlru->maxLevels - 1;
+    /* Start from the head node of the highest level */
+    multilruPtr current = mlru->level[mlru->maxLevels - 1];
 
     for (size_t i = 0; i < n && current; i++) {
         /* Walk backward */
@@ -1181,6 +1183,214 @@ int multilruTest(int argc, char *argv[]) {
         }
 
         assert(multilruTraverseSize(mlru) == 0);
+        multilruFree(mlru);
+    }
+
+    TEST("multilruGetNHighest correctness verification") {
+        multilru *mlru = multilruNew();
+
+        /* Insert 100 entries and promote some to different levels */
+        multilruPtr ptrs[100] = {0};
+        for (size_t i = 0; i < 100; i++) {
+            ptrs[i] = multilruInsert(mlru);
+        }
+
+        /* Promote entries to various levels:
+         * ptrs[90-99] get 6 increases -> level 6 (highest)
+         * ptrs[80-89] get 5 increases -> level 5
+         * ptrs[70-79] get 4 increases -> level 4
+         * etc. */
+        for (size_t i = 90; i < 100; i++) {
+            for (size_t j = 0; j < 6; j++) {
+                multilruIncrease(mlru, ptrs[i]);
+            }
+        }
+        for (size_t i = 80; i < 90; i++) {
+            for (size_t j = 0; j < 5; j++) {
+                multilruIncrease(mlru, ptrs[i]);
+            }
+        }
+        for (size_t i = 70; i < 80; i++) {
+            for (size_t j = 0; j < 4; j++) {
+                multilruIncrease(mlru, ptrs[i]);
+            }
+        }
+
+        /* Get the N highest entries */
+        multilruPtr highest[20] = {0};
+        multilruGetNHighest(mlru, highest, 20);
+
+        /* Verify we get the entries from highest levels first */
+        printf("Highest entries after promotion:\n");
+        for (size_t i = 0; i < 20; i++) {
+            printf("  highest[%zu] = %zu\n", i, highest[i]);
+            /* First 10 should be from ptrs[90-99] (highest level) */
+            if (i < 10) {
+                bool found = false;
+                for (size_t k = 90; k < 100; k++) {
+                    if (highest[i] == ptrs[k]) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    ERR("Expected highest[%zu] to be from level 6 entries", i);
+                }
+            }
+        }
+
+        /* Also verify GetNLowest */
+        multilruPtr lowest[20] = {0};
+        multilruGetNLowest(mlru, lowest, 20);
+
+        printf("Lowest entries:\n");
+        for (size_t i = 0; i < 10; i++) {
+            printf("  lowest[%zu] = %zu\n", i, lowest[i]);
+        }
+
+        multilruFree(mlru);
+    }
+
+    TEST("high-scale stress test (100k entries)") {
+        multilru *mlru = multilruNewWithLevelsCapacity(7, 65536);
+
+        const size_t numEntries = 100000;
+        multilruPtr *ptrs = zcalloc(numEntries, sizeof(multilruPtr));
+
+        /* Insert all entries */
+        int64_t startNs = timeUtilMonotonicNs();
+        for (size_t i = 0; i < numEntries; i++) {
+            ptrs[i] = multilruInsert(mlru);
+        }
+        int64_t insertNs = timeUtilMonotonicNs() - startNs;
+
+        assert(multilruCount(mlru) == numEntries);
+        printf("Inserted %zu entries in %.3f ms (%.0f/sec)\n",
+               numEntries, insertNs / 1e6,
+               numEntries / (insertNs / 1e9));
+
+        /* Increase entries randomly */
+        startNs = timeUtilMonotonicNs();
+        for (size_t i = 0; i < numEntries; i++) {
+            size_t increaseCount = i % 7;  /* 0-6 increases per entry */
+            for (size_t j = 0; j < increaseCount; j++) {
+                multilruIncrease(mlru, ptrs[i]);
+            }
+        }
+        int64_t increaseNs = timeUtilMonotonicNs() - startNs;
+        printf("Increased entries in %.3f ms\n", increaseNs / 1e6);
+
+        /* Query highest and lowest */
+        multilruPtr highest[100] = {0};
+        multilruPtr lowest[100] = {0};
+
+        startNs = timeUtilMonotonicNs();
+        for (size_t i = 0; i < 1000; i++) {
+            multilruGetNHighest(mlru, highest, 100);
+            multilruGetNLowest(mlru, lowest, 100);
+        }
+        int64_t queryNs = timeUtilMonotonicNs() - startNs;
+        printf("2000 queries (100 entries each) in %.3f ms (%.0f queries/sec)\n",
+               queryNs / 1e6, 2000.0 / (queryNs / 1e9));
+
+        /* Remove minimum entries */
+        startNs = timeUtilMonotonicNs();
+        size_t removeCount = numEntries / 2;
+        for (size_t i = 0; i < removeCount; i++) {
+            multilruPtr removed;
+            bool ok = multilruRemoveMinimum(mlru, &removed);
+            assert(ok);
+            (void)ok;
+        }
+        int64_t removeNs = timeUtilMonotonicNs() - startNs;
+        printf("Removed %zu entries via RemoveMinimum in %.3f ms (%.0f/sec)\n",
+               removeCount, removeNs / 1e6,
+               removeCount / (removeNs / 1e9));
+
+        assert(multilruCount(mlru) == numEntries - removeCount);
+
+        /* Memory efficiency report */
+        size_t bytesUsed = multilruBytes(mlru);
+        size_t entriesRemaining = multilruCount(mlru);
+        printf("Memory: %zu bytes for %zu entries (%.2f bytes/entry)\n",
+               bytesUsed, entriesRemaining,
+               entriesRemaining > 0 ? (double)bytesUsed / entriesRemaining : 0);
+
+        zfree(ptrs);
+        multilruFree(mlru);
+    }
+
+    TEST("random delete stress test") {
+        multilru *mlru = multilruNew();
+
+        const size_t numEntries = 10000;
+        multilruPtr *ptrs = zcalloc(numEntries, sizeof(multilruPtr));
+
+        /* Insert and randomly promote */
+        for (size_t i = 0; i < numEntries; i++) {
+            ptrs[i] = multilruInsert(mlru);
+            size_t promotes = random() % 8;
+            for (size_t j = 0; j < promotes; j++) {
+                multilruIncrease(mlru, ptrs[i]);
+            }
+        }
+
+        /* Delete in random order */
+        for (size_t i = numEntries; i > 0; i--) {
+            size_t idx = random() % i;
+            multilruDelete(mlru, ptrs[idx]);
+            /* Move last to current position */
+            ptrs[idx] = ptrs[i - 1];
+        }
+
+        assert(multilruCount(mlru) == 0);
+        assert(multilruTraverseSize(mlru) == 0);
+
+        zfree(ptrs);
+        multilruFree(mlru);
+    }
+
+    TEST("performance benchmark summary") {
+        printf("\n=== MULTILRU PERFORMANCE SUMMARY ===\n");
+
+        /* Benchmark insert */
+        multilru *mlru = multilruNewWithLevelsCapacity(7, 131072);
+        const size_t benchCount = 500000;
+
+        int64_t startNs = timeUtilMonotonicNs();
+        for (size_t i = 0; i < benchCount; i++) {
+            multilruInsert(mlru);
+        }
+        int64_t insertNs = timeUtilMonotonicNs() - startNs;
+
+        /* Benchmark increase (promotes to higher level) */
+        multilruPtr testPtr = mlru->lowest;
+        startNs = timeUtilMonotonicNs();
+        for (size_t i = 0; i < 100000 && testPtr; i++) {
+            multilruIncrease(mlru, testPtr);
+        }
+        int64_t increaseNs = timeUtilMonotonicNs() - startNs;
+
+        /* Benchmark remove minimum */
+        startNs = timeUtilMonotonicNs();
+        for (size_t i = 0; i < 100000; i++) {
+            multilruPtr removed;
+            multilruRemoveMinimum(mlru, &removed);
+        }
+        int64_t removeNs = timeUtilMonotonicNs() - startNs;
+
+        printf("Insert rate:   %.0f ops/sec (%.1f ns/op)\n",
+               benchCount / (insertNs / 1e9), (double)insertNs / benchCount);
+        printf("Increase rate: %.0f ops/sec (%.1f ns/op)\n",
+               100000.0 / (increaseNs / 1e9), (double)increaseNs / 100000);
+        printf("Remove rate:   %.0f ops/sec (%.1f ns/op)\n",
+               100000.0 / (removeNs / 1e9), (double)removeNs / 100000);
+        printf("Memory used:   %zu bytes for %zu entries (%.2f bytes/entry)\n",
+               multilruBytes(mlru), multilruCount(mlru),
+               multilruCount(mlru) > 0 ?
+                   (double)multilruBytes(mlru) / multilruCount(mlru) : 0);
+        printf("=====================================\n\n");
+
         multilruFree(mlru);
     }
 
