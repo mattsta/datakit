@@ -223,6 +223,7 @@ add_library(${PROJECT_NAME} OBJECT
     xof.c
     bbits.c
     linearBloomTest.c
+    multiTimerTest.c
 
     flex.c
     mflex.c
