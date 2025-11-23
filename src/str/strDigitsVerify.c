@@ -62,6 +62,42 @@ bool StrIsDigitsFast(const void *buf_, size_t size) {
     /* Cleanup < 16 bytes remaining */
     return StrIsDigitsIndividual((uint8_t *)mover, leftover);
 }
+#elif defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+#include <arm_neon.h>
+
+/* ARM NEON StrIsDigitsFast() - processes 16 bytes at a time */
+bool StrIsDigitsFast(const void *buf_, size_t size) {
+    const uint8_t *buf = (const uint8_t *)buf_;
+
+    /* Create vectors of '0' and '9' for comparison */
+    const uint8x16_t ascii0 = vdupq_n_u8('0');
+    const uint8x16_t ascii9 = vdupq_n_u8('9');
+
+    const size_t n = size / 16;
+    const size_t leftover = size % 16;
+
+    for (size_t i = 0; i < n; i++) {
+        /* Load 16 bytes (unaligned load is fine on ARM64) */
+        const uint8x16_t v = vld1q_u8(buf + i * 16);
+
+        /* Check if any byte < '0' (unsigned comparison: v < ascii0) */
+        const uint8x16_t lt0 = vcltq_u8(v, ascii0);
+
+        /* Check if any byte > '9' (unsigned comparison: v > ascii9) */
+        const uint8x16_t gt9 = vcgtq_u8(v, ascii9);
+
+        /* Combine: any byte outside ['0', '9'] range */
+        const uint8x16_t outside = vorrq_u8(lt0, gt9);
+
+        /* Check if any lane is non-zero using horizontal max */
+        if (vmaxvq_u8(outside)) {
+            return false;
+        }
+    }
+
+    /* Cleanup < 16 bytes remaining */
+    return StrIsDigitsIndividual(buf + n * 16, leftover);
+}
 #else
 #warning "Using unoptimized StrIsDigitsFast()!"
 bool StrIsDigitsFast(const void *buf_, const size_t size) {

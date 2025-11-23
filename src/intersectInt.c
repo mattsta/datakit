@@ -13,9 +13,13 @@
 #include <stdlib.h>
 #include <sys/types.h>
 
+/* x86 SIMD intrinsics - only available on x86/x64 */
+#if defined(__x86_64__) || defined(__i386__)
 #include <pmmintrin.h>
 #include <smmintrin.h>
+#endif
 
+#if defined(__x86_64__) || defined(__i386__)
 #if USE_ALIGNED
 #define MM_LOAD_SI_128 _mm_load_si128
 #define MM_STORE_SI_128 _mm_store_si128
@@ -23,6 +27,7 @@
 #define MM_LOAD_SI_128 _mm_loadu_si128
 // #define MM_STORE_SI_128 _mm_storeu_si128
 #endif
+#endif /* x86 */
 
 /* clang-format off */
 #define or ||
@@ -200,6 +205,11 @@ size_t match_scalar(const uint32_t *A, const size_t lenA, const uint32_t *B,
 FINISH:
     return (out - initout);
 }
+
+/* ============================================================================
+ * x86 SIMD implementations (SSE/AVX2)
+ * ============================================================================ */
+#if defined(__x86_64__) || defined(__i386__)
 
 #ifdef __GNUC__
 // #define COMPILER_LIKELY(x) __builtin_expect((x), 1)
@@ -701,6 +711,266 @@ size_t intersectInt(const uint32_t *set1, const size_t length1,
     return v1(set2, length2, set1, length1, out);
 }
 
+#elif defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+/* ============================================================================
+ * ARM NEON SIMD implementations
+ * ============================================================================ */
+#include <arm_neon.h>
+
+/**
+ * ARM NEON version of v1 intersection algorithm.
+ * Intersects two sorted arrays using NEON SIMD operations.
+ */
+size_t v1_neon(const uint32_t *rare, size_t lenRare, const uint32_t *freq,
+               size_t lenFreq, uint32_t *matchOut) {
+    assert(lenRare <= lenFreq);
+    const uint32_t *matchOrig = matchOut;
+    if (lenFreq == 0 || lenRare == 0) {
+        return 0;
+    }
+
+    const uint64_t kFreqSpace = 2 * 4 * (0 + 1) - 1;
+    const uint64_t kRareSpace = 0;
+
+    const uint32_t *stopFreq = &freq[lenFreq] - kFreqSpace;
+    const uint32_t *stopRare = &rare[lenRare] - kRareSpace;
+
+    if ((rare >= stopRare) || (freq >= stopFreq)) {
+        goto FINISH_SCALAR;
+    }
+
+    uint32_t valRare = rare[0];
+    uint64_t maxFreq = freq[2 * 4 - 1];
+
+    uint32x4_t Rare = vdupq_n_u32(valRare);
+    uint32x4_t F0 = vld1q_u32(freq);
+    uint32x4_t F1 = vld1q_u32(freq + 4);
+
+    if (maxFreq < valRare) {
+        goto ADVANCE_FREQ;
+    }
+
+ADVANCE_RARE:
+    do {
+        *matchOut = valRare;
+        rare += 1;
+        if (rare >= stopRare) {
+            rare -= 1;
+            goto FINISH_SCALAR;
+        }
+
+        valRare = rare[0];
+        uint32x4_t cmp0 = vceqq_u32(F0, Rare);
+        uint32x4_t cmp1 = vceqq_u32(F1, Rare);
+        Rare = vdupq_n_u32(valRare);
+        uint32x4_t combined = vorrq_u32(cmp0, cmp1);
+
+        /* Check if any match found using horizontal max */
+        if (vmaxvq_u32(combined) != 0) {
+            matchOut++;
+        }
+
+        F0 = vld1q_u32(freq);
+        F1 = vld1q_u32(freq + 4);
+
+    } while (maxFreq >= valRare);
+
+    uint64_t maxProbe;
+
+ADVANCE_FREQ:
+    do {
+        const uint64_t kProbe = (0 + 1) * 2 * 4;
+        const uint32_t *probeFreq = freq + kProbe;
+
+        if (probeFreq >= stopFreq) {
+            goto FINISH_SCALAR;
+        }
+
+        maxProbe = freq[(0 + 2) * 2 * 4 - 1];
+        freq = probeFreq;
+
+    } while (maxProbe < valRare);
+
+    maxFreq = maxProbe;
+
+    F0 = vld1q_u32(freq);
+    F1 = vld1q_u32(freq + 4);
+
+    goto ADVANCE_RARE;
+
+    size_t count;
+FINISH_SCALAR:
+    count = matchOut - matchOrig;
+
+    lenFreq = stopFreq + kFreqSpace - freq;
+    lenRare = stopRare + kRareSpace - rare;
+
+    size_t tail = match_scalar(freq, lenFreq, rare, lenRare, matchOut);
+
+    return count + tail;
+}
+
+/**
+ * ARM NEON version of v3 intersection algorithm.
+ * Better for larger size differences between arrays.
+ */
+size_t v3_neon(const uint32_t *rare, const size_t lenRare, const uint32_t *freq,
+               const size_t lenFreq, uint32_t *out) {
+    if (lenFreq == 0 || lenRare == 0) {
+        return 0;
+    }
+
+    assert(lenRare <= lenFreq);
+    const uint32_t *const initout = out;
+    const uint32_t *stopFreq = freq + lenFreq - 8;
+    const uint32_t *stopRare = rare + lenRare;
+
+    if (freq > stopFreq) {
+        return match_scalar(freq, lenFreq, rare, lenRare, out);
+    }
+
+    while (rare < stopRare && freq <= stopFreq) {
+        const uint32_t matchRare = *rare;
+        uint32x4_t Match = vdupq_n_u32(matchRare);
+
+        /* Skip freq chunks until we might find a match */
+        while (freq[7] < matchRare) {
+            freq += 8;
+            if (freq > stopFreq) {
+                goto FINISH_SCALAR;
+            }
+        }
+
+        uint32x4_t Q0 = vld1q_u32(freq);
+        uint32x4_t Q1 = vld1q_u32(freq + 4);
+
+        uint32x4_t cmp0 = vceqq_u32(Q0, Match);
+        uint32x4_t cmp1 = vceqq_u32(Q1, Match);
+        uint32x4_t combined = vorrq_u32(cmp0, cmp1);
+
+        if (vmaxvq_u32(combined) != 0) {
+            *out++ = matchRare;
+        }
+        rare++;
+    }
+
+FINISH_SCALAR:;
+    /* Handle remaining elements with scalar code */
+    size_t freqRemain = (stopFreq + 8) - freq;
+    size_t rareRemain = stopRare - rare;
+    size_t tailCount = match_scalar(freq, freqRemain, rare, rareRemain, out);
+
+    return (out - initout) + tailCount;
+}
+
+/**
+ * ARM NEON version of SIMD galloping intersection.
+ * Good for highly skewed distributions.
+ */
+size_t SIMDgalloping_neon(const uint32_t *rare, const size_t lenRare,
+                          const uint32_t *freq, const size_t lenFreq,
+                          uint32_t *out) {
+    if (lenFreq == 0 || lenRare == 0) {
+        return 0;
+    }
+
+    assert(lenRare <= lenFreq);
+    const uint32_t *const initout = out;
+    const uint32_t *stopFreq = freq + lenFreq - 8;
+    const uint32_t *stopRare = rare + lenRare;
+
+    if (freq > stopFreq) {
+        return intersectIntOneSidedGalloping(rare, lenRare, freq, lenFreq, out);
+    }
+
+    while (rare < stopRare) {
+        const uint32_t matchRare = *rare;
+        uint32x4_t Match = vdupq_n_u32(matchRare);
+
+        /* Galloping search */
+        size_t jump = 8;
+        while (freq + jump <= stopFreq && freq[jump + 7] < matchRare) {
+            freq += jump;
+            jump *= 2;
+        }
+
+        /* Binary search refinement within jump range */
+        while (freq <= stopFreq && freq[7] < matchRare) {
+            freq += 8;
+        }
+
+        if (freq > stopFreq) {
+            break;
+        }
+
+        uint32x4_t Q0 = vld1q_u32(freq);
+        uint32x4_t Q1 = vld1q_u32(freq + 4);
+
+        uint32x4_t cmp0 = vceqq_u32(Q0, Match);
+        uint32x4_t cmp1 = vceqq_u32(Q1, Match);
+        uint32x4_t combined = vorrq_u32(cmp0, cmp1);
+
+        if (vmaxvq_u32(combined) != 0) {
+            *out++ = matchRare;
+        }
+        rare++;
+    }
+
+    /* Handle remaining with scalar galloping */
+    size_t freqRemain = (stopFreq + 8) - freq;
+    size_t rareRemain = stopRare - rare;
+    size_t tailCount = intersectIntOneSidedGalloping(rare, rareRemain, freq,
+                                                     freqRemain, out);
+
+    return (out - initout) + tailCount;
+}
+
+/**
+ * ARM NEON main heuristic - selects best algorithm based on size ratio.
+ */
+size_t intersectInt(const uint32_t *set1, const size_t length1,
+                    const uint32_t *set2, const size_t length2, uint32_t *out) {
+    if ((length1 == 0) || (length2 == 0)) {
+        return 0;
+    }
+
+    if ((1000 * length1 <= length2) || (1000 * length2 <= length1)) {
+        if (length1 <= length2) {
+            return SIMDgalloping_neon(set1, length1, set2, length2, out);
+        }
+        return SIMDgalloping_neon(set2, length2, set1, length1, out);
+    }
+
+    if ((50 * length1 <= length2) || (50 * length2 <= length1)) {
+        if (length1 <= length2) {
+            return v3_neon(set1, length1, set2, length2, out);
+        }
+        return v3_neon(set2, length2, set1, length1, out);
+    }
+
+    if (length1 <= length2) {
+        return v1_neon(set1, length1, set2, length2, out);
+    }
+
+    return v1_neon(set2, length2, set1, length1, out);
+}
+
+#else /* non-x86, non-ARM: use scalar fallback */
+
+/**
+ * Scalar fallback for platforms without SIMD support.
+ */
+size_t intersectInt(const uint32_t *set1, const size_t length1,
+                    const uint32_t *set2, const size_t length2, uint32_t *out) {
+    if ((length1 == 0) || (length2 == 0)) {
+        return 0;
+    }
+
+    return scalar(set1, length1, set2, length2, out);
+}
+
+#endif /* platform selection */
+
 #if __AVX2__
 size_t v1_avx2(const uint32_t *rare, size_t lenRare, const uint32_t *freq,
                size_t lenFreq, uint32_t *matchOut) {
@@ -1145,6 +1415,9 @@ size_t intersectIntAVX2(const uint32_t *set1, const size_t length1,
 
 #endif
 
+/* Additional x86 SIMD functions */
+#if defined(__x86_64__) || defined(__i386__)
+
 /**
  * Shuffle mask table for compacting matching elements to the front of SSE register.
  * More or less from http://highlyscalable.wordpress.com/2012/06/05/fast-intersection-sorted-lists-sse/
@@ -1346,6 +1619,8 @@ size_t lemire_highlyscalable_intersect_SIMD(const uint32_t *A, const size_t s_a,
 
     return out - initout;
 }
+
+#endif /* x86 for highlyscalable functions */
 
 #ifdef DATAKIT_TEST
 #include "ctest.h"
@@ -1661,7 +1936,8 @@ static int32_t runTestsForFunction(intersectFn fn, const char *fnName) {
     return err;
 }
 
-/* Wrapper functions for asymmetric APIs */
+/* Wrapper functions for asymmetric APIs - x86 only */
+#if defined(__x86_64__) || defined(__i386__)
 static size_t wrapV1(const uint32_t *a, size_t lenA, const uint32_t *b,
                      size_t lenB, uint32_t *out) {
     if (lenA == 0 || lenB == 0) {
@@ -1694,6 +1970,44 @@ static size_t wrapSIMDgalloping(const uint32_t *a, size_t lenA, const uint32_t *
     }
     return SIMDgalloping(b, lenB, a, lenA, out);
 }
+#endif /* x86 wrappers */
+
+/* Wrapper functions for ARM NEON APIs */
+#if defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+static size_t wrapV1Neon(const uint32_t *a, size_t lenA, const uint32_t *b,
+                         size_t lenB, uint32_t *out) {
+    if (lenA == 0 || lenB == 0) {
+        return 0;
+    }
+    if (lenA <= lenB) {
+        return v1_neon(a, lenA, b, lenB, out);
+    }
+    return v1_neon(b, lenB, a, lenA, out);
+}
+
+static size_t wrapV3Neon(const uint32_t *a, size_t lenA, const uint32_t *b,
+                         size_t lenB, uint32_t *out) {
+    if (lenA == 0 || lenB == 0) {
+        return 0;
+    }
+    if (lenA <= lenB) {
+        return v3_neon(a, lenA, b, lenB, out);
+    }
+    return v3_neon(b, lenB, a, lenA, out);
+}
+
+static size_t wrapSIMDgallopingNeon(const uint32_t *a, size_t lenA,
+                                    const uint32_t *b, size_t lenB,
+                                    uint32_t *out) {
+    if (lenA == 0 || lenB == 0) {
+        return 0;
+    }
+    if (lenA <= lenB) {
+        return SIMDgalloping_neon(a, lenA, b, lenB, out);
+    }
+    return SIMDgalloping_neon(b, lenB, a, lenA, out);
+}
+#endif /* ARM NEON wrappers */
 
 #if __AVX2__
 static size_t wrapV1AVX2(const uint32_t *a, size_t lenA, const uint32_t *b,
@@ -1730,6 +2044,491 @@ static size_t wrapSIMDgallopingAVX2(const uint32_t *a, size_t lenA,
     return SIMDgalloping_avx2(b, lenB, a, lenA, out);
 }
 #endif
+
+/* ====================================================================
+ * Comprehensive Stress Tests for Scalar vs SIMD Consistency
+ * ==================================================================== */
+
+/* Simple linear congruential generator for reproducible random numbers */
+static uint32_t stressTestRand(uint32_t *seed) {
+    *seed = (*seed * 1103515245 + 12345) & 0x7fffffff;
+    return *seed;
+}
+
+/* Compare two intersection results - returns number of errors */
+static int32_t compareResults(const char *testName,
+                              const uint32_t *out1, size_t len1,
+                              const uint32_t *out2, size_t len2,
+                              const char *name1, const char *name2) {
+    int32_t err = 0;
+    if (len1 != len2) {
+        printf("  [%s] FAIL: %s returned %" PRIu64 ", %s returned %" PRIu64 "\n",
+               testName, name1, (uint64_t)len1, name2, (uint64_t)len2);
+        return 1;
+    }
+    for (size_t i = 0; i < len1; i++) {
+        if (out1[i] != out2[i]) {
+            printf("  [%s] FAIL: mismatch at index %" PRIu64
+                   ": %s=%" PRIu32 ", %s=%" PRIu32 "\n",
+                   testName, (uint64_t)i, name1, out1[i], name2, out2[i]);
+            err++;
+            if (err >= 10) {
+                printf("  [%s] ... (stopping after 10 errors)\n", testName);
+                break;
+            }
+        }
+    }
+    return err > 0 ? 1 : 0;
+}
+
+/* Stress test: Various array sizes */
+static int32_t stressTestSizes(void) {
+    int32_t err = 0;
+    printf("  Testing various array sizes...\n");
+
+    /* Test sizes that exercise different code paths */
+    size_t sizes[] = {0, 1, 2, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33,
+                      63, 64, 65, 100, 127, 128, 129, 255, 256, 257,
+                      500, 512, 1000, 1024, 2000, 4096, 8192};
+    size_t numSizes = sizeof(sizes) / sizeof(sizes[0]);
+
+    /* Allocate buffers for largest test */
+    uint32_t *a = malloc(8192 * sizeof(uint32_t));
+    uint32_t *b = malloc(8192 * sizeof(uint32_t));
+    uint32_t *out_scalar = malloc(8192 * sizeof(uint32_t));
+    uint32_t *out_simd = malloc(8192 * sizeof(uint32_t));
+
+    if (!a || !b || !out_scalar || !out_simd) {
+        printf("  FAIL: Memory allocation failed\n");
+        free(a); free(b); free(out_scalar); free(out_simd);
+        return 1;
+    }
+
+    for (size_t si = 0; si < numSizes; si++) {
+        size_t sizeA = sizes[si];
+        for (size_t sj = 0; sj < numSizes; sj++) {
+            size_t sizeB = sizes[sj];
+
+            /* Generate sequential arrays with 50% expected overlap */
+            for (size_t i = 0; i < sizeA; i++) {
+                a[i] = (uint32_t)(i * 2);
+            }
+            for (size_t i = 0; i < sizeB; i++) {
+                b[i] = (uint32_t)(i * 2 + (i % 2));  /* Interleaved */
+            }
+
+            size_t len_scalar = scalar(a, sizeA, b, sizeB, out_scalar);
+            size_t len_simd = intersectInt(a, sizeA, b, sizeB, out_simd);
+
+            char testName[64];
+            snprintf(testName, sizeof(testName), "size_%zu_x_%zu", sizeA, sizeB);
+
+            err |= compareResults(testName, out_scalar, len_scalar,
+                                  out_simd, len_simd, "scalar", "intersectInt");
+        }
+    }
+
+    free(a); free(b); free(out_scalar); free(out_simd);
+    return err;
+}
+
+/* Stress test: Random data with various densities */
+static int32_t stressTestRandom(void) {
+    int32_t err = 0;
+    printf("  Testing random data patterns...\n");
+
+    const size_t maxSize = 10000;
+    uint32_t *a = malloc(maxSize * sizeof(uint32_t));
+    uint32_t *b = malloc(maxSize * sizeof(uint32_t));
+    uint32_t *out_scalar = malloc(maxSize * sizeof(uint32_t));
+    uint32_t *out_simd = malloc(maxSize * sizeof(uint32_t));
+
+    if (!a || !b || !out_scalar || !out_simd) {
+        printf("  FAIL: Memory allocation failed\n");
+        free(a); free(b); free(out_scalar); free(out_simd);
+        return 1;
+    }
+
+    /* Test with different random seeds and densities */
+    uint32_t seeds[] = {12345, 67890, 11111, 99999, 0xDEADBEEF};
+    size_t testSizes[] = {100, 500, 1000, 5000, 10000};
+
+    for (size_t seedIdx = 0; seedIdx < 5; seedIdx++) {
+        for (size_t sizeIdx = 0; sizeIdx < 5; sizeIdx++) {
+            uint32_t seed = seeds[seedIdx];
+            size_t size = testSizes[sizeIdx];
+
+            /* Generate sorted random arrays */
+            uint32_t val = 0;
+            for (size_t i = 0; i < size; i++) {
+                val += 1 + (stressTestRand(&seed) % 10);
+                a[i] = val;
+            }
+
+            val = stressTestRand(&seed) % 5;  /* Different starting point */
+            for (size_t i = 0; i < size; i++) {
+                val += 1 + (stressTestRand(&seed) % 10);
+                b[i] = val;
+            }
+
+            size_t len_scalar = scalar(a, size, b, size, out_scalar);
+            size_t len_simd = intersectInt(a, size, b, size, out_simd);
+
+            char testName[64];
+            snprintf(testName, sizeof(testName), "random_seed%u_size%zu",
+                     seeds[seedIdx], size);
+
+            err |= compareResults(testName, out_scalar, len_scalar,
+                                  out_simd, len_simd, "scalar", "intersectInt");
+        }
+    }
+
+    free(a); free(b); free(out_scalar); free(out_simd);
+    return err;
+}
+
+/* Stress test: Edge cases */
+static int32_t stressTestEdgeCases(void) {
+    int32_t err = 0;
+    printf("  Testing edge cases...\n");
+
+    const size_t maxSize = 1000;
+    uint32_t *a = malloc(maxSize * sizeof(uint32_t));
+    uint32_t *b = malloc(maxSize * sizeof(uint32_t));
+    uint32_t *out_scalar = malloc(maxSize * sizeof(uint32_t));
+    uint32_t *out_simd = malloc(maxSize * sizeof(uint32_t));
+
+    if (!a || !b || !out_scalar || !out_simd) {
+        printf("  FAIL: Memory allocation failed\n");
+        free(a); free(b); free(out_scalar); free(out_simd);
+        return 1;
+    }
+
+    /* Test 1: No overlap - disjoint ranges */
+    for (size_t i = 0; i < 500; i++) {
+        a[i] = (uint32_t)i;          /* 0-499 */
+        b[i] = (uint32_t)(i + 1000); /* 1000-1499 */
+    }
+    {
+        size_t len_scalar = scalar(a, 500, b, 500, out_scalar);
+        size_t len_simd = intersectInt(a, 500, b, 500, out_simd);
+        err |= compareResults("no_overlap", out_scalar, len_scalar,
+                              out_simd, len_simd, "scalar", "intersectInt");
+        if (len_scalar != 0 || len_simd != 0) {
+            printf("  [no_overlap] FAIL: Expected 0 results\n");
+            err = 1;
+        }
+    }
+
+    /* Test 2: Complete overlap - identical arrays */
+    for (size_t i = 0; i < 500; i++) {
+        a[i] = (uint32_t)(i * 2);
+        b[i] = (uint32_t)(i * 2);
+    }
+    {
+        size_t len_scalar = scalar(a, 500, b, 500, out_scalar);
+        size_t len_simd = intersectInt(a, 500, b, 500, out_simd);
+        err |= compareResults("complete_overlap", out_scalar, len_scalar,
+                              out_simd, len_simd, "scalar", "intersectInt");
+        if (len_scalar != 500) {
+            printf("  [complete_overlap] FAIL: Expected 500 results, got %" PRIu64 "\n",
+                   (uint64_t)len_scalar);
+            err = 1;
+        }
+    }
+
+    /* Test 3: Single element overlap at start */
+    a[0] = 42;
+    for (size_t i = 1; i < 500; i++) a[i] = (uint32_t)(i + 100);
+    b[0] = 42;
+    for (size_t i = 1; i < 500; i++) b[i] = (uint32_t)(i + 1000);
+    {
+        size_t len_scalar = scalar(a, 500, b, 500, out_scalar);
+        size_t len_simd = intersectInt(a, 500, b, 500, out_simd);
+        err |= compareResults("single_overlap_start", out_scalar, len_scalar,
+                              out_simd, len_simd, "scalar", "intersectInt");
+        if (len_scalar != 1 || out_scalar[0] != 42) {
+            printf("  [single_overlap_start] FAIL: Expected [42]\n");
+            err = 1;
+        }
+    }
+
+    /* Test 4: Single element overlap at end */
+    for (size_t i = 0; i < 499; i++) a[i] = (uint32_t)i;
+    a[499] = 99999;
+    for (size_t i = 0; i < 499; i++) b[i] = (uint32_t)(i + 1000);
+    b[499] = 99999;
+    {
+        size_t len_scalar = scalar(a, 500, b, 500, out_scalar);
+        size_t len_simd = intersectInt(a, 500, b, 500, out_simd);
+        err |= compareResults("single_overlap_end", out_scalar, len_scalar,
+                              out_simd, len_simd, "scalar", "intersectInt");
+        if (len_scalar != 1 || out_scalar[0] != 99999) {
+            printf("  [single_overlap_end] FAIL: Expected [99999]\n");
+            err = 1;
+        }
+    }
+
+    /* Test 5: All same values */
+    for (size_t i = 0; i < 500; i++) {
+        a[i] = 12345;
+        b[i] = 12345;
+    }
+    {
+        size_t len_scalar = scalar(a, 500, b, 500, out_scalar);
+        size_t len_simd = intersectInt(a, 500, b, 500, out_simd);
+        err |= compareResults("all_same", out_scalar, len_scalar,
+                              out_simd, len_simd, "scalar", "intersectInt");
+    }
+
+    /* Test 6: Alternating overlap (every other element) */
+    for (size_t i = 0; i < 500; i++) {
+        a[i] = (uint32_t)(i * 2);      /* 0, 2, 4, 6, ... */
+        b[i] = (uint32_t)(i);          /* 0, 1, 2, 3, ... */
+    }
+    {
+        size_t len_scalar = scalar(a, 500, b, 500, out_scalar);
+        size_t len_simd = intersectInt(a, 500, b, 500, out_simd);
+        err |= compareResults("alternating", out_scalar, len_scalar,
+                              out_simd, len_simd, "scalar", "intersectInt");
+    }
+
+    /* Test 7: Large values near UINT32_MAX */
+    for (size_t i = 0; i < 500; i++) {
+        a[i] = UINT32_MAX - 1000 + (uint32_t)(i * 2);
+        b[i] = UINT32_MAX - 1000 + (uint32_t)(i * 2);
+    }
+    {
+        size_t len_scalar = scalar(a, 500, b, 500, out_scalar);
+        size_t len_simd = intersectInt(a, 500, b, 500, out_simd);
+        err |= compareResults("large_values", out_scalar, len_scalar,
+                              out_simd, len_simd, "scalar", "intersectInt");
+    }
+
+    /* Test 8: One tiny array, one large array (tests galloping) */
+    a[0] = 5000;
+    a[1] = 15000;
+    a[2] = 25000;
+    for (size_t i = 0; i < 1000; i++) {
+        b[i] = (uint32_t)(i * 30);  /* 0, 30, 60, ... 29970 */
+    }
+    {
+        size_t len_scalar = scalar(a, 3, b, 1000, out_scalar);
+        size_t len_simd = intersectInt(a, 3, b, 1000, out_simd);
+        err |= compareResults("tiny_vs_large", out_scalar, len_scalar,
+                              out_simd, len_simd, "scalar", "intersectInt");
+    }
+
+    free(a); free(b); free(out_scalar); free(out_simd);
+    return err;
+}
+
+/* Stress test: Skewed size ratios (exercises galloping paths) */
+static int32_t stressTestSkewedRatios(void) {
+    int32_t err = 0;
+    printf("  Testing skewed size ratios (galloping paths)...\n");
+
+    const size_t maxSize = 50000;
+    uint32_t *a = malloc(maxSize * sizeof(uint32_t));
+    uint32_t *b = malloc(maxSize * sizeof(uint32_t));
+    uint32_t *out_scalar = malloc(maxSize * sizeof(uint32_t));
+    uint32_t *out_simd = malloc(maxSize * sizeof(uint32_t));
+
+    if (!a || !b || !out_scalar || !out_simd) {
+        printf("  FAIL: Memory allocation failed\n");
+        free(a); free(b); free(out_scalar); free(out_simd);
+        return 1;
+    }
+
+    /* Test ratios that trigger different algorithm selections:
+     * - ratio >= 1000:1 triggers SIMDgalloping
+     * - ratio >= 50:1 triggers v3
+     * - otherwise uses v1 */
+    size_t smallSizes[] = {1, 5, 10, 20, 50, 100};
+    size_t largeSizes[] = {1000, 5000, 10000, 50000};
+
+    for (size_t si = 0; si < 6; si++) {
+        for (size_t li = 0; li < 4; li++) {
+            size_t smallSize = smallSizes[si];
+            size_t largeSize = largeSizes[li];
+
+            /* Generate arrays with known overlap */
+            for (size_t i = 0; i < smallSize; i++) {
+                a[i] = (uint32_t)(i * 1000);  /* Sparse: 0, 1000, 2000, ... */
+            }
+            for (size_t i = 0; i < largeSize; i++) {
+                b[i] = (uint32_t)i;  /* Dense: 0, 1, 2, ... */
+            }
+
+            size_t len_scalar = scalar(a, smallSize, b, largeSize, out_scalar);
+            size_t len_simd = intersectInt(a, smallSize, b, largeSize, out_simd);
+
+            char testName[64];
+            snprintf(testName, sizeof(testName), "ratio_%zu_to_%zu",
+                     smallSize, largeSize);
+
+            err |= compareResults(testName, out_scalar, len_scalar,
+                                  out_simd, len_simd, "scalar", "intersectInt");
+
+            /* Also test with reversed order */
+            len_scalar = scalar(b, largeSize, a, smallSize, out_scalar);
+            len_simd = intersectInt(b, largeSize, a, smallSize, out_simd);
+
+            snprintf(testName, sizeof(testName), "ratio_%zu_to_%zu_rev",
+                     largeSize, smallSize);
+
+            err |= compareResults(testName, out_scalar, len_scalar,
+                                  out_simd, len_simd, "scalar", "intersectInt");
+        }
+    }
+
+    free(a); free(b); free(out_scalar); free(out_simd);
+    return err;
+}
+
+/* Stress test: Platform-specific SIMD functions directly */
+static int32_t stressTestPlatformSIMD(void) {
+    int32_t err = 0;
+    printf("  Testing platform-specific SIMD implementations...\n");
+
+    const size_t maxSize = 10000;
+    uint32_t *a = malloc(maxSize * sizeof(uint32_t));
+    uint32_t *b = malloc(maxSize * sizeof(uint32_t));
+    uint32_t *out_scalar = malloc(maxSize * sizeof(uint32_t));
+    uint32_t *out_v1 = malloc(maxSize * sizeof(uint32_t));
+    uint32_t *out_v3 = malloc(maxSize * sizeof(uint32_t));
+    uint32_t *out_gallop = malloc(maxSize * sizeof(uint32_t));
+
+    if (!a || !b || !out_scalar || !out_v1 || !out_v3 || !out_gallop) {
+        printf("  FAIL: Memory allocation failed\n");
+        free(a); free(b); free(out_scalar); free(out_v1); free(out_v3); free(out_gallop);
+        return 1;
+    }
+
+    uint32_t seed = 0xCAFEBABE;
+    size_t sizes[] = {100, 500, 1000, 2000, 5000};
+
+    for (size_t sizeIdx = 0; sizeIdx < 5; sizeIdx++) {
+        size_t size = sizes[sizeIdx];
+
+        /* Generate random sorted arrays */
+        uint32_t val = 0;
+        for (size_t i = 0; i < size; i++) {
+            val += 1 + (stressTestRand(&seed) % 5);
+            a[i] = val;
+        }
+        val = stressTestRand(&seed) % 3;
+        for (size_t i = 0; i < size; i++) {
+            val += 1 + (stressTestRand(&seed) % 5);
+            b[i] = val;
+        }
+
+        size_t len_scalar = scalar(a, size, b, size, out_scalar);
+
+#if defined(__x86_64__) || defined(__i386__)
+        /* Test x86 SIMD functions */
+        size_t len_v1 = v1(a, size, b, size, out_v1);
+        size_t len_v3 = v3(a, size, b, size, out_v3);
+        size_t len_gallop = SIMDgalloping(a, size, b, size, out_gallop);
+
+        char testName[64];
+        snprintf(testName, sizeof(testName), "x86_v1_size%zu", size);
+        err |= compareResults(testName, out_scalar, len_scalar, out_v1, len_v1,
+                              "scalar", "v1");
+
+        snprintf(testName, sizeof(testName), "x86_v3_size%zu", size);
+        err |= compareResults(testName, out_scalar, len_scalar, out_v3, len_v3,
+                              "scalar", "v3");
+
+        snprintf(testName, sizeof(testName), "x86_gallop_size%zu", size);
+        err |= compareResults(testName, out_scalar, len_scalar, out_gallop, len_gallop,
+                              "scalar", "SIMDgalloping");
+#endif
+
+#if defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+        /* Test ARM NEON functions */
+        size_t len_v1 = v1_neon(a, size, b, size, out_v1);
+        size_t len_v3 = v3_neon(a, size, b, size, out_v3);
+        size_t len_gallop = SIMDgalloping_neon(a, size, b, size, out_gallop);
+
+        char testName[64];
+        snprintf(testName, sizeof(testName), "neon_v1_size%zu", size);
+        err |= compareResults(testName, out_scalar, len_scalar, out_v1, len_v1,
+                              "scalar", "v1_neon");
+
+        snprintf(testName, sizeof(testName), "neon_v3_size%zu", size);
+        err |= compareResults(testName, out_scalar, len_scalar, out_v3, len_v3,
+                              "scalar", "v3_neon");
+
+        snprintf(testName, sizeof(testName), "neon_gallop_size%zu", size);
+        err |= compareResults(testName, out_scalar, len_scalar, out_gallop, len_gallop,
+                              "scalar", "SIMDgalloping_neon");
+#endif
+    }
+
+    free(a); free(b); free(out_scalar); free(out_v1); free(out_v3); free(out_gallop);
+    return err;
+}
+
+/* Stress test: Boundary conditions around SIMD vector widths */
+static int32_t stressTestBoundaries(void) {
+    int32_t err = 0;
+    printf("  Testing SIMD boundary conditions...\n");
+
+    /* Test sizes around 4 (SSE/NEON 128-bit = 4x32-bit) and 8 (AVX 256-bit) */
+    size_t sizes[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
+                      31, 32, 33, 63, 64, 65};
+    size_t numSizes = sizeof(sizes) / sizeof(sizes[0]);
+
+    uint32_t a[128], b[128], out_scalar[128], out_simd[128];
+
+    for (size_t si = 0; si < numSizes; si++) {
+        size_t size = sizes[si];
+
+        /* Generate consecutive arrays with 100% overlap */
+        for (size_t i = 0; i < size; i++) {
+            a[i] = (uint32_t)(i + 1);
+            b[i] = (uint32_t)(i + 1);
+        }
+
+        size_t len_scalar = scalar(a, size, b, size, out_scalar);
+        size_t len_simd = intersectInt(a, size, b, size, out_simd);
+
+        char testName[64];
+        snprintf(testName, sizeof(testName), "boundary_full_overlap_%zu", size);
+        err |= compareResults(testName, out_scalar, len_scalar,
+                              out_simd, len_simd, "scalar", "intersectInt");
+
+        /* Generate arrays with 0% overlap */
+        for (size_t i = 0; i < size; i++) {
+            a[i] = (uint32_t)(i);
+            b[i] = (uint32_t)(i + 1000);
+        }
+
+        len_scalar = scalar(a, size, b, size, out_scalar);
+        len_simd = intersectInt(a, size, b, size, out_simd);
+
+        snprintf(testName, sizeof(testName), "boundary_no_overlap_%zu", size);
+        err |= compareResults(testName, out_scalar, len_scalar,
+                              out_simd, len_simd, "scalar", "intersectInt");
+    }
+
+    return err;
+}
+
+/* Main stress test runner */
+static int32_t stressTestScalarVsSIMD(void) {
+    int32_t err = 0;
+
+    err |= stressTestSizes();
+    err |= stressTestRandom();
+    err |= stressTestEdgeCases();
+    err |= stressTestSkewedRatios();
+    err |= stressTestPlatformSIMD();
+    err |= stressTestBoundaries();
+
+    return err;
+}
 
 /* Test that all algorithms produce identical results */
 static int32_t testConsistency(void) {
@@ -1810,6 +2609,7 @@ int intersectIntTest(int argc, char *argv[]) {
     err |= runTestsForFunction(intersectIntOneSidedGalloping,
                                "intersectIntOneSidedGalloping");
 
+#if defined(__x86_64__) || defined(__i386__)
     printf("Testing v1 (wrapped)...\n");
     err |= runTestsForFunction(wrapV1, "v1");
 
@@ -1826,6 +2626,18 @@ int intersectIntTest(int argc, char *argv[]) {
     printf("Testing lemire_highlyscalable_intersect_SIMD...\n");
     err |= runTestsForFunction(lemire_highlyscalable_intersect_SIMD,
                                "lemire_highlyscalable_intersect_SIMD");
+#endif /* x86 tests */
+
+#if defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+    printf("Testing v1_neon (wrapped)...\n");
+    err |= runTestsForFunction(wrapV1Neon, "v1_neon");
+
+    printf("Testing v3_neon (wrapped)...\n");
+    err |= runTestsForFunction(wrapV3Neon, "v3_neon");
+
+    printf("Testing SIMDgalloping_neon (wrapped)...\n");
+    err |= runTestsForFunction(wrapSIMDgallopingNeon, "SIMDgalloping_neon");
+#endif /* ARM NEON tests */
 
 #if __AVX2__
     printf("Testing intersectIntAVX2...\n");
@@ -1840,6 +2652,9 @@ int intersectIntTest(int argc, char *argv[]) {
     printf("Testing SIMDgalloping_avx2 (wrapped)...\n");
     err |= runTestsForFunction(wrapSIMDgallopingAVX2, "SIMDgalloping_avx2");
 #endif
+
+    printf("Running scalar vs SIMD stress tests...\n");
+    err |= stressTestScalarVsSIMD();
 
     printf("Testing cross-algorithm consistency...\n");
     err |= testConsistency();

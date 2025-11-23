@@ -477,7 +477,25 @@ void dumpX86Calls(void *addr, size_t len) {
 
 #ifdef DATAKIT_TEST
 #include "ctest.h"
+#include "asmUtils.h"
 #include <assert.h>
+
+/* Reference implementation of pow2Ceiling64 for testing */
+static uint64_t pow2Ceiling64_reference(uint64_t x) {
+    if (x <= 1) {
+        return 2;
+    }
+
+    x--;
+    x |= x >> 1;
+    x |= x >> 2;
+    x |= x >> 4;
+    x |= x >> 8;
+    x |= x >> 16;
+    x |= x >> 32;
+    x++;
+    return x;
+}
 
 int utilTest(int argc, char **argv) {
     (void)argc;
@@ -498,6 +516,109 @@ int utilTest(int argc, char **argv) {
         const uint64_t GB__12 = humanToBytes("12   GB", 7, &errr);
         assert(!errr);
         assert(GB__12 == (12ULL * 1000 * 1000 * 1000));
+    }
+
+    TEST("pow2Ceiling64 stress test") {
+        printf("  Testing pow2Ceiling64 against reference...\n");
+
+        /* Test edge cases */
+        const uint64_t edgeCases[] = {
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            7,
+            8,
+            9,
+            15,
+            16,
+            17,
+            31,
+            32,
+            33,
+            63,
+            64,
+            65,
+            127,
+            128,
+            129,
+            255,
+            256,
+            257,
+            511,
+            512,
+            513,
+            1023,
+            1024,
+            1025,
+            (1ULL << 16) - 1,
+            (1ULL << 16),
+            (1ULL << 16) + 1,
+            (1ULL << 32) - 1,
+            (1ULL << 32),
+            (1ULL << 32) + 1,
+            (1ULL << 62) - 1,
+            (1ULL << 62),
+            (1ULL << 62) + 1,
+            (1ULL << 63) - 1,
+        };
+
+        for (size_t i = 0; i < sizeof(edgeCases) / sizeof(edgeCases[0]); i++) {
+            uint64_t x = edgeCases[i];
+            uint64_t result = pow2Ceiling64(x);
+            uint64_t expected = pow2Ceiling64_reference(x);
+            if (result != expected) {
+                ERR("pow2Ceiling64 mismatch for %" PRIu64
+                    ": got %" PRIu64 ", expected %" PRIu64,
+                    x, result, expected);
+            }
+        }
+
+        /* Test all values around powers of 2 */
+        for (int shift = 1; shift < 63; shift++) {
+            uint64_t powerOf2 = 1ULL << shift;
+            for (int64_t offset = -2; offset <= 2; offset++) {
+                uint64_t x = powerOf2 + offset;
+                if (x == 0) {
+                    continue; /* Skip underflow case */
+                }
+
+                uint64_t result = pow2Ceiling64(x);
+                uint64_t expected = pow2Ceiling64_reference(x);
+                if (result != expected) {
+                    ERR("pow2Ceiling64 power-of-2 mismatch for %" PRIu64
+                        " (2^%d + %" PRId64 "): got %" PRIu64
+                        ", expected %" PRIu64,
+                        x, shift, offset, result, expected);
+                }
+            }
+        }
+
+        /* Random stress test */
+        uint64_t rngState = 0xDEADBEEF12345678ULL;
+        for (int i = 0; i < 100000; i++) {
+            rngState = rngState * 6364136223846793005ULL + 1;
+            uint64_t x = rngState;
+
+            /* Also test smaller values more frequently */
+            if (i % 3 == 0) {
+                x = x % (1ULL << 32);
+            } else if (i % 3 == 1) {
+                x = x % (1ULL << 16);
+            }
+
+            uint64_t result = pow2Ceiling64(x);
+            uint64_t expected = pow2Ceiling64_reference(x);
+            if (result != expected) {
+                ERR("pow2Ceiling64 random mismatch for %" PRIu64
+                    ": got %" PRIu64 ", expected %" PRIu64,
+                    x, result, expected);
+            }
+        }
+
+        printf("    pow2Ceiling64 stress test passed!\n");
     }
 
     return err;

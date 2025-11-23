@@ -12,8 +12,9 @@
 #include <emmintrin.h>
 #endif
 
-/* good luck */
-#if __ARM_NEON__
+/* ARM NEON detection - check all common macros */
+#if defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+#define DJ_USE_NEON 1
 #include <arm_neon.h>
 #endif
 
@@ -557,7 +558,7 @@ static bool findNextEscapeByteSIMD(djState *state, const void *data_,
     assert(*processedLen <= len);
     return *processedLen != len;
 }
-#elif __ARM_NEON__
+#elif DJ_USE_NEON
 static bool findNextEscapeByteSIMD(djState *state, const void *data_,
                                    size_t len, size_t *const processedLen,
                                    uint8_t maxSplatWrite[SPLATLEN],
@@ -598,51 +599,53 @@ static bool findNextEscapeByteSIMD(djState *state, const void *data_,
     assert(((uintptr_t)data & 15) == 0);
 
     /* Now we are aligned and can do big things... */
-    const uint8x16_t s0 = vmovq_n_u8('"');
-    const uint8x16_t s1 = vmovq_n_u8('\\');
-    const uint8x16_t s2 = vmovq_n_u8('\b');
-    const uint8x16_t s3 = vmovq_n_u8(32);
+    /* Characters that need escaping: '"', '\\', and control chars < 0x20 */
+    const uint8x16_t dq = vdupq_n_u8('"');
+    const uint8x16_t bs = vdupq_n_u8('\\');
+    const uint8x16_t sp = vdupq_n_u8(0x20); /* space = 32 */
+
     for (; data != endAligned; data += 16) {
         const uint8x16_t s = vld1q_u8(data);
-        uint8x16_t x = vceqq_u8(s, s0);
-        x = vorrq_u8(x, vceqq_u8(s, s1));
-        x = vorrq_u8(x, vceqq_u8(s, s2));
-        x = vorrq_u8(x, vcltq_u8(s, s3));
+
+        /* Check for '"' or '\\' */
+        uint8x16_t x = vceqq_u8(s, dq);
+        x = vorrq_u8(x, vceqq_u8(s, bs));
+
+        /* Check for control characters: s < 0x20 */
+        x = vorrq_u8(x, vcltq_u8(s, sp));
+
+        /* Quick check: if no escape chars in this block, continue */
+        if (vmaxvq_u8(x) == 0) {
+            /* No escaping needed - copy all 16 bytes directly */
+            SPLAT_ENSURE(16);
+            vst1q_u8(SPLAT_OFFSET, s);
+            *splatWritten += 16;
+            *processedLen += 16;
+            continue;
+        }
+
+        /* Found escape char - need to find exact position.
+         * Reverse bytes within each 64-bit lane so we can use CLZ
+         * to find the first set byte from the beginning. */
         x = vrev64q_u8(x);
         uint64_t low = vgetq_lane_u64(vreinterpretq_u64_u8(x), 0);
         uint64_t high = vgetq_lane_u64(vreinterpretq_u64_u8(x), 1);
-        size_t ilen = 0;
-        bool escaped = false;
-        if (low == 0) {
-            if (high != 0) {
-                uint32_t lz = __builtin_clzll(high);
-                ilen = 8 + (lz >> 3);
-                escaped = true;
-            }
-        } else {
+
+        size_t okayLen;
+        if (low != 0) {
+            /* Escape char in first 8 bytes */
             uint32_t lz = __builtin_clzll(low);
-            ilen = lz >> 3;
-            escaped = true;
+            okayLen = lz >> 3; /* Convert bit position to byte position */
+        } else {
+            /* Escape char in second 8 bytes */
+            uint32_t lz = __builtin_clzll(high);
+            okayLen = 8 + (lz >> 3);
         }
 
-        if (escaped) {
-            SPLAT_ENSURE(ilen);
-            SPLAT_LEN(data, ilen);
-            *processedLen += ilen;
-            break;
-        }
-
-        /* If we get here, none of the 16 bytes tested have forbidden
-         * characters, so we can write them directly to the buffer. */
-
-        /* Manually dump the 16 byte vector into splat then update splat length
-         * ourselves since this isn't a common enough operation to warrant its
-         * own macro. */
-        SPLAT_ENSURE(16);
-        vst1q_u8(SPLAT_OFFSET, s);
-        *splatWritten += 16;
-
-        *processedLen += 16;
+        SPLAT_ENSURE(okayLen);
+        SPLAT_LEN(data, okayLen);
+        *processedLen += okayLen;
+        break;
     }
 
     assert(*processedLen <= len);
@@ -871,6 +874,48 @@ writeNumberBytesDirectly:
 
 #ifdef DATAKIT_TEST
 #include "ctest.h"
+
+/* Helper to run djString and get output for testing */
+static mds *djTestEscapeString(const void *data, size_t len) {
+    djState testState_ = {{0}};
+    djState *testState = &testState_;
+    djInit(testState);
+    djString(testState, data, len, false);
+    return djFinalize(testState);
+}
+
+/* Helper to build expected escape output using reference scalar implementation */
+static mds *djBuildExpectedEscape(const uint8_t *data, size_t len) {
+    mds *expected = mdsnew("\""); /* Open quote */
+    for (size_t i = 0; i < len; i++) {
+        const uint8_t c = data[i];
+        if (c == '"') {
+            expected = mdscatlen(expected, "\\\"", 2);
+        } else if (c == '\\') {
+            expected = mdscatlen(expected, "\\\\", 2);
+        } else if (c == '\n') {
+            expected = mdscatlen(expected, "\\n", 2);
+        } else if (c == '\r') {
+            expected = mdscatlen(expected, "\\r", 2);
+        } else if (c == '\t') {
+            expected = mdscatlen(expected, "\\t", 2);
+        } else if (c == '\b') {
+            expected = mdscatlen(expected, "\\b", 2);
+        } else if (c == '\f') {
+            expected = mdscatlen(expected, "\\f", 2);
+        } else if (c < 0x20) {
+            /* Control char: \u00XX */
+            char hex[7];
+            snprintf(hex, sizeof(hex), "\\u00%02X", c);
+            expected = mdscatlen(expected, hex, 6);
+        } else {
+            expected = mdscatlen(expected, &c, 1);
+        }
+    }
+    expected = mdscatlen(expected, "\"", 1); /* Close quote */
+    return expected;
+}
+
 int djTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -1207,6 +1252,193 @@ int djTest(int argc, char *argv[]) {
         mds *out = djFinalize(testA);
         printf("%s\n", out);
         mdsfree(out);
+    }
+
+    TEST("SIMD escape detection - comprehensive stress test") {
+        printf("Testing escape detection with various string lengths...\n");
+        uint32_t testCount = 0;
+        uint32_t passCount = 0;
+
+        /* Test 1: Strings with NO escape characters at various lengths */
+        for (size_t len = 1; len <= 100; len++) {
+            uint8_t *data = zmalloc(len);
+            for (size_t i = 0; i < len; i++) {
+                /* Use printable ASCII chars that don't need escaping */
+                data[i] = 'A' + (i % 26);
+            }
+
+            mds *result = djTestEscapeString(data, len);
+            mds *expected = djBuildExpectedEscape(data, len);
+
+            testCount++;
+            if (mdslen(result) == mdslen(expected) &&
+                memcmp(result, expected, mdslen(result)) == 0) {
+                passCount++;
+            } else {
+                printf("FAIL len=%zu no-escape: got [%s] expected [%s]\n",
+                       len, result, expected);
+            }
+
+            mdsfree(result);
+            mdsfree(expected);
+            zfree(data);
+        }
+
+        /* Test 2: Single escape char at each position for various lengths */
+        const uint8_t escapeChars[] = {'"', '\\', '\n', '\t', '\r', 0, 1, 0x1F};
+        for (size_t ec = 0; ec < sizeof(escapeChars); ec++) {
+            for (size_t len = 1; len <= 64; len++) {
+                for (size_t pos = 0; pos < len; pos++) {
+                    uint8_t *data = zmalloc(len);
+                    for (size_t i = 0; i < len; i++) {
+                        data[i] = 'A' + (i % 26);
+                    }
+                    data[pos] = escapeChars[ec];
+
+                    mds *result = djTestEscapeString(data, len);
+                    mds *expected = djBuildExpectedEscape(data, len);
+
+                    testCount++;
+                    if (mdslen(result) == mdslen(expected) &&
+                        memcmp(result, expected, mdslen(result)) == 0) {
+                        passCount++;
+                    } else {
+                        printf("FAIL esc=0x%02X len=%zu pos=%zu: "
+                               "got [%s] expected [%s]\n",
+                               escapeChars[ec], len, pos, result, expected);
+                    }
+
+                    mdsfree(result);
+                    mdsfree(expected);
+                    zfree(data);
+                }
+            }
+        }
+
+        /* Test 3: Multiple escape chars in same string */
+        for (size_t len = 16; len <= 64; len += 8) {
+            uint8_t *data = zmalloc(len);
+            for (size_t i = 0; i < len; i++) {
+                data[i] = 'X';
+            }
+            /* Put escapes at SIMD boundaries */
+            if (len > 0) data[0] = '"';
+            if (len > 15) data[15] = '\\';
+            if (len > 16) data[16] = '\n';
+            if (len > 31) data[31] = '\t';
+            if (len > 32) data[32] = 0x01;
+
+            mds *result = djTestEscapeString(data, len);
+            mds *expected = djBuildExpectedEscape(data, len);
+
+            testCount++;
+            if (mdslen(result) == mdslen(expected) &&
+                memcmp(result, expected, mdslen(result)) == 0) {
+                passCount++;
+            } else {
+                printf("FAIL multi-escape len=%zu: got [%s] expected [%s]\n",
+                       len, result, expected);
+            }
+
+            mdsfree(result);
+            mdsfree(expected);
+            zfree(data);
+        }
+
+        /* Test 4: Long strings with escape at specific SIMD boundary positions */
+        const size_t boundaryPos[] = {0, 1, 15, 16, 17, 31, 32, 33, 47, 48, 63, 64};
+        for (size_t bp = 0; bp < sizeof(boundaryPos) / sizeof(boundaryPos[0]); bp++) {
+            const size_t pos = boundaryPos[bp];
+            const size_t len = 128;
+
+            uint8_t *data = zmalloc(len);
+            for (size_t i = 0; i < len; i++) {
+                data[i] = 'Y';
+            }
+            data[pos] = '\\';
+
+            mds *result = djTestEscapeString(data, len);
+            mds *expected = djBuildExpectedEscape(data, len);
+
+            testCount++;
+            if (mdslen(result) == mdslen(expected) &&
+                memcmp(result, expected, mdslen(result)) == 0) {
+                passCount++;
+            } else {
+                printf("FAIL boundary pos=%zu: got [%s] expected [%s]\n",
+                       pos, result, expected);
+            }
+
+            mdsfree(result);
+            mdsfree(expected);
+            zfree(data);
+        }
+
+        /* Test 5: All control characters (0x00-0x1F) */
+        for (uint8_t ctrl = 0; ctrl < 0x20; ctrl++) {
+            const size_t len = 32;
+            uint8_t *data = zmalloc(len);
+            for (size_t i = 0; i < len; i++) {
+                data[i] = 'Z';
+            }
+            data[17] = ctrl; /* Position past first SIMD block */
+
+            mds *result = djTestEscapeString(data, len);
+            mds *expected = djBuildExpectedEscape(data, len);
+
+            testCount++;
+            if (mdslen(result) == mdslen(expected) &&
+                memcmp(result, expected, mdslen(result)) == 0) {
+                passCount++;
+            } else {
+                printf("FAIL ctrl=0x%02X: got [%s] expected [%s]\n",
+                       ctrl, result, expected);
+            }
+
+            mdsfree(result);
+            mdsfree(expected);
+            zfree(data);
+        }
+
+        /* Test 6: Random stress test */
+        srandom(12345); /* Fixed seed for reproducibility */
+        for (uint32_t trial = 0; trial < 1000; trial++) {
+            const size_t len = 1 + (random() % 200);
+            uint8_t *data = zmalloc(len);
+
+            for (size_t i = 0; i < len; i++) {
+                /* Mix of printable and escape chars */
+                const uint32_t r = random() % 100;
+                if (r < 85) {
+                    data[i] = 'A' + (random() % 26);
+                } else if (r < 90) {
+                    data[i] = '"';
+                } else if (r < 95) {
+                    data[i] = '\\';
+                } else {
+                    data[i] = random() % 0x20; /* Control char */
+                }
+            }
+
+            mds *result = djTestEscapeString(data, len);
+            mds *expected = djBuildExpectedEscape(data, len);
+
+            testCount++;
+            if (mdslen(result) == mdslen(expected) &&
+                memcmp(result, expected, mdslen(result)) == 0) {
+                passCount++;
+            } else {
+                printf("FAIL random trial=%u len=%zu\n", trial, len);
+                /* Don't print full strings - could be huge */
+            }
+
+            mdsfree(result);
+            mdsfree(expected);
+            zfree(data);
+        }
+
+        printf("SIMD escape detection: %u/%u tests passed\n", passCount, testCount);
+        assert(passCount == testCount);
     }
 
     return 0;

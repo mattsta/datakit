@@ -30,7 +30,9 @@ struct multiroar {
 
 #define BITMAP_SIZE_IN_BYTES (BITMAP_SIZE_IN_BITS / 8)
 
+__attribute__((unused))
 static const uint64_t _allZeroes[BITMAP_SIZE_IN_BYTES / sizeof(uint64_t)] = {0};
+__attribute__((unused))
 static const uint64_t _allOnes[BITMAP_SIZE_IN_BYTES / sizeof(uint64_t)] = {
     0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
     0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
@@ -86,7 +88,8 @@ static const uint64_t _allOnes[BITMAP_SIZE_IN_BYTES / sizeof(uint64_t)] = {
 #define MAX_ENTRIES_PER_DIRECT_LISTING                                         \
     ((BITMAP_SIZE_IN_BITS / DIRECT_STORAGE_BITS) - 1)
 
-#define BYTES_FOR_PACKED_ARRAY_COUNT(count) divCeil(count, 8)
+/* Unused but kept for potential future use */
+/* #define BYTES_FOR_PACKED_ARRAY_COUNT(count) divCeil(count, 8) */
 
 #define MAX_BITMAP_ENTIRES_BEFORE_NEGATIVE_LISTING                             \
     (BITMAP_SIZE_IN_BITS - MAX_ENTRIES_PER_DIRECT_LISTING)
@@ -109,8 +112,9 @@ static const uint64_t _allOnes[BITMAP_SIZE_IN_BYTES / sizeof(uint64_t)] = {
 #define _metaOffsetToRowValue(r)                                               \
     ((r)->meta + 1 + varintSplitFullGetLenQuick_(_metaOffsetToColValue(r)))
 
-#define _metaCols(r) varintSplitFullGet(_metaOffsetToColValue_(r))
-#define _metaRows(r) varintSplitFullGet(_metaOffsetToRowValue_(r))
+/* Unused but kept for potential future use */
+/* #define _metaCols(r) varintSplitFullGet(_metaOffsetToColValue_(r)) */
+/* #define _metaRows(r) varintSplitFullGet(_metaOffsetToRowValue_(r)) */
 
 /* 2 elements per entry because our layout is:
  *   - chunk number (unsigned integer)
@@ -305,6 +309,7 @@ DK_STATIC void convertPositionPackedArrayToBitmap(multiroar *r,
     _convertPositionPackedArrayToBitmap(r, key, value, me, true);
 }
 
+__attribute__((unused))
 DK_STATIC void convertNegativePositionPackedArrayToBitmap(multiroar *r,
                                                           const databox *key,
                                                           const databox *value,
@@ -351,17 +356,20 @@ DK_STATIC uint16_t _bitmapToPositions(const void *bitmap, uint8_t positions[],
     return idx;
 }
 
+__attribute__((unused))
 DK_STATIC inline uint16_t bitmapToSetPositions(const void *bitmap,
                                                uint8_t positions[]) {
     return _bitmapToPositions(bitmap, positions, true);
 }
 
+__attribute__((unused))
 DK_STATIC inline uint16_t bitmapToNegativePositions(const void *bitmap,
                                                     uint8_t positions[]) {
     return _bitmapToPositions(bitmap, positions, false);
 }
 
-DK_STATIC void convertBitmapToPositionList(multiroar *r, const databox *key,
+DK_STATIC void convertBitmapToPositionList(multiroar *r,
+                                           const databox *key __attribute__((unused)),
                                            const databox *value,
                                            multimapEntry *me,
                                            bool trackSetPositions) {
@@ -388,6 +396,7 @@ DK_STATIC void convertBitmapToPositionList(multiroar *r, const databox *key,
     multimapReplaceEntry(&r->map, me, &box);
 }
 
+__attribute__((unused))
 DK_STATIC void convertBitmapToSparsePositionPackedArray(multiroar *r,
                                                         const databox *key,
                                                         const databox *value,

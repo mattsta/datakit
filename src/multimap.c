@@ -9,6 +9,8 @@
 #include "multimapFull.h"
 #include "multimapFullInternal.h"
 
+#include "timeUtil.h"
+
 #if MULTIMAP_INLINE
 #include "multimapFull.c"
 #include "multimapMedium.c"
@@ -1512,6 +1514,9 @@ int multimapTest(int argc, char *argv[]) {
             prevType = newType;
         }
 
+        /* smallToMediumTransition is for debug info only */
+        (void)smallToMediumTransition;
+
         /* Verify all entries still exist after transitions */
         size_t count = multimapCount(m);
         for (size_t i = 0; i < count; i++) {
@@ -1543,7 +1548,7 @@ int multimapTest(int argc, char *argv[]) {
         databox *firstElements[2] = {&firstKey, &firstVal};
         bool gotFirst = multimapFirst(m, firstElements);
         if (!gotFirst || firstKey.data.i != 0) {
-            ERR("First element wrong: got %" PRId64 ", expected 0",
+            ERR("First element wrong: got %" PRIdMAX ", expected 0",
                 firstKey.data.i);
         }
 
@@ -1553,7 +1558,7 @@ int multimapTest(int argc, char *argv[]) {
         databox *lastElements[2] = {&lastKey, &lastVal};
         bool gotLast = multimapLast(m, lastElements);
         if (!gotLast || lastKey.data.i != 1000) {
-            ERR("Last element wrong: got %" PRId64 ", expected 1000",
+            ERR("Last element wrong: got %" PRIdMAX ", expected 1000",
                 lastKey.data.i);
         }
 
@@ -1583,7 +1588,7 @@ int multimapTest(int argc, char *argv[]) {
         int64_t iterCount = 0;
         while (multimapIteratorNext(&iter, elements)) {
             if (key.data.i != expected) {
-                ERR("Forward iter: expected %" PRId64 ", got %" PRId64,
+                ERR("Forward iter: expected %" PRId64 ", got %" PRIdMAX,
                     expected, key.data.i);
             }
             expected++;
@@ -1600,7 +1605,7 @@ int multimapTest(int argc, char *argv[]) {
         iterCount = 0;
         while (multimapIteratorNext(&iter, elements)) {
             if (key.data.i != expected) {
-                ERR("Backward iter: expected %" PRId64 ", got %" PRId64,
+                ERR("Backward iter: expected %" PRId64 ", got %" PRIdMAX,
                     expected, key.data.i);
             }
             expected--;

@@ -546,6 +546,210 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
 
     int err = 0;
 
+    /* ====================================================================
+     * Stress tests for SIMD vs baseline implementations - run first!
+     * ==================================================================== */
+    TEST("StrIsDigitsFast vs StrIsDigitsIndividual stress test") {
+        printf("  Testing StrIsDigitsFast matches baseline...\n");
+
+        /* Test all-digits strings of various sizes */
+        for (size_t size = 0; size <= 256; size++) {
+            char *buf = zmalloc(size + 1);
+            for (size_t i = 0; i < size; i++) {
+                buf[i] = '0' + (i % 10);
+            }
+            buf[size] = '\0';
+
+            bool fastResult = StrIsDigitsFast(buf, size);
+            bool baseResult = StrIsDigitsIndividual(buf, size);
+            if (fastResult != baseResult) {
+                ERR("StrIsDigitsFast mismatch at size %zu (all digits): "
+                    "fast=%d base=%d",
+                    size, fastResult, baseResult);
+            }
+            zfree(buf);
+        }
+
+        /* Test strings with non-digit at various positions */
+        for (size_t size = 1; size <= 128; size++) {
+            for (size_t badPos = 0; badPos < size; badPos++) {
+                char *buf = zmalloc(size + 1);
+                for (size_t i = 0; i < size; i++) {
+                    buf[i] = '0' + (i % 10);
+                }
+                buf[badPos] = 'X'; /* Insert non-digit */
+                buf[size] = '\0';
+
+                bool fastResult = StrIsDigitsFast(buf, size);
+                bool baseResult = StrIsDigitsIndividual(buf, size);
+                if (fastResult != baseResult) {
+                    ERR("StrIsDigitsFast mismatch at size %zu, badPos %zu: "
+                        "fast=%d base=%d",
+                        size, badPos, fastResult, baseResult);
+                }
+                zfree(buf);
+            }
+        }
+
+        /* Test boundary characters */
+        const char boundaryChars[] = {'\0', '/', ':', 'a', 'A', ' ', 0x7F,
+                                      (char)0xFF};
+        for (size_t ci = 0; ci < sizeof(boundaryChars); ci++) {
+            for (size_t size = 1; size <= 64; size++) {
+                char *buf = zmalloc(size + 1);
+                for (size_t i = 0; i < size; i++) {
+                    buf[i] = '5';
+                }
+                buf[size / 2] = boundaryChars[ci];
+                buf[size] = '\0';
+
+                bool fastResult = StrIsDigitsFast(buf, size);
+                bool baseResult = StrIsDigitsIndividual(buf, size);
+                if (fastResult != baseResult) {
+                    ERR("StrIsDigitsFast boundary mismatch at size %zu, "
+                        "char 0x%02X: fast=%d base=%d",
+                        size, (uint8_t)boundaryChars[ci], fastResult,
+                        baseResult);
+                }
+                zfree(buf);
+            }
+        }
+
+        printf("    StrIsDigitsFast stress test passed!\n");
+    }
+
+    TEST("StrUInt9DigitsToBuf correctness stress test") {
+        printf("  Testing StrUInt9DigitsToBuf correctness...\n");
+
+        /* Test all 9-digit boundary values */
+        const uint32_t testValues[] = {
+            0,         1,         9,         10,        99,        100,
+            999,       1000,      9999,      10000,     99999,     100000,
+            999999,    1000000,   9999999,   10000000,  99999999,  100000000,
+            999999999, 123456789, 987654321, 111111111, 500000000};
+
+        for (size_t i = 0; i < sizeof(testValues) / sizeof(testValues[0]); i++) {
+            uint32_t val = testValues[i];
+            char buf[10] = {0};
+            StrUInt9DigitsToBuf(buf, val);
+
+            /* Verify by parsing back */
+            uint64_t parsed = 0;
+            for (int j = 0; j < 9; j++) {
+                if (buf[j] < '0' || buf[j] > '9') {
+                    ERR("StrUInt9DigitsToBuf produced non-digit at pos %d for "
+                        "value %u: 0x%02X",
+                        j, val, (uint8_t)buf[j]);
+                }
+                parsed = parsed * 10 + (buf[j] - '0');
+            }
+            if (parsed != val) {
+                ERR("StrUInt9DigitsToBuf mismatch for %u: got %s (parsed as "
+                    "%" PRIu64 ")",
+                    val, buf, parsed);
+            }
+        }
+
+        /* Exhaustive test for smaller ranges */
+        for (uint32_t val = 0; val < 100000; val++) {
+            char buf[10] = {0};
+            StrUInt9DigitsToBuf(buf, val);
+
+            uint64_t parsed = 0;
+            for (int j = 0; j < 9; j++) {
+                parsed = parsed * 10 + (buf[j] - '0');
+            }
+            if (parsed != val) {
+                ERR("StrUInt9DigitsToBuf exhaustive mismatch for %u", val);
+            }
+        }
+
+        /* Random test for larger values */
+        uint64_t rngState = 0x12345678;
+        for (int i = 0; i < 100000; i++) {
+            rngState = rngState * 6364136223846793005ULL + 1;
+            uint32_t val = (uint32_t)(rngState >> 32) % 1000000000;
+
+            char buf[10] = {0};
+            StrUInt9DigitsToBuf(buf, val);
+
+            uint64_t parsed = 0;
+            for (int j = 0; j < 9; j++) {
+                parsed = parsed * 10 + (buf[j] - '0');
+            }
+            if (parsed != val) {
+                ERR("StrUInt9DigitsToBuf random mismatch for %u", val);
+            }
+        }
+
+        printf("    StrUInt9DigitsToBuf stress test passed!\n");
+    }
+
+#if __SSE2__ || defined(__aarch64__) || defined(__ARM_NEON) || \
+    defined(__ARM_NEON__)
+    TEST("StrUInt4DigitsToBuf and StrUInt8DigitsToBuf stress test") {
+        printf("  Testing StrUInt4/8DigitsToBuf correctness...\n");
+
+        /* Test StrUInt4DigitsToBuf */
+        for (uint32_t val = 0; val < 10000; val++) {
+            char buf[5] = {0};
+            StrUInt4DigitsToBuf(buf, val);
+
+            uint32_t parsed = 0;
+            for (int j = 0; j < 4; j++) {
+                if (buf[j] < '0' || buf[j] > '9') {
+                    ERR("StrUInt4DigitsToBuf non-digit at pos %d for %u", j,
+                        val);
+                }
+                parsed = parsed * 10 + (buf[j] - '0');
+            }
+            if (parsed != val) {
+                ERR("StrUInt4DigitsToBuf mismatch for %u: got %s", val, buf);
+            }
+        }
+
+        /* Test StrUInt8DigitsToBuf */
+        const uint32_t test8Values[] = {0,        1,        99,
+                                        999,      9999,     99999,
+                                        999999,   9999999,  99999999,
+                                        12345678, 87654321, 50000000};
+        for (size_t i = 0; i < sizeof(test8Values) / sizeof(test8Values[0]);
+             i++) {
+            uint32_t val = test8Values[i];
+            char buf[9] = {0};
+            StrUInt8DigitsToBuf(buf, val);
+
+            uint32_t parsed = 0;
+            for (int j = 0; j < 8; j++) {
+                if (buf[j] < '0' || buf[j] > '9') {
+                    ERR("StrUInt8DigitsToBuf non-digit at pos %d for %u", j,
+                        val);
+                }
+                parsed = parsed * 10 + (buf[j] - '0');
+            }
+            if (parsed != val) {
+                ERR("StrUInt8DigitsToBuf mismatch for %u: got %s", val, buf);
+            }
+        }
+
+        /* Exhaustive test for StrUInt8DigitsToBuf on smaller range */
+        for (uint32_t val = 0; val < 100000; val++) {
+            char buf[9] = {0};
+            StrUInt8DigitsToBuf(buf, val);
+
+            uint32_t parsed = 0;
+            for (int j = 0; j < 8; j++) {
+                parsed = parsed * 10 + (buf[j] - '0');
+            }
+            if (parsed != val) {
+                ERR("StrUInt8DigitsToBuf exhaustive mismatch for %u", val);
+            }
+        }
+
+        printf("    StrUInt4/8DigitsToBuf stress test passed!\n");
+    }
+#endif
+
 #if 1
     TEST("verify empty string doesn't convert to zero") {
         databox got;
@@ -624,6 +828,7 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
             }
         }
 
+        (void)result; /* Used for benchmarking only */
         TIME_FINISH(loopers * 15, "Byte Lengths Type A");
     }
 
@@ -646,6 +851,7 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
             }
         }
 
+        (void)result; /* Used for benchmarking only */
         TIME_FINISH(loopers * 15, "Byte Lengths Type B");
     }
 
