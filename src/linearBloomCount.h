@@ -31,13 +31,14 @@ typedef uint64_t linearBloomCount;
 #define PACK_FUNCTION_PREFIX varintPacked
 #include "../deps/varint/src/varintPacked.h"
 
+/* Define divCeil BEFORE using it */
+#define divCeil(a, b) (((a) + (b)-1) / (b))
+
 /* See comment for this in linearBloom.h */
 #define LINEARBLOOMCOUNT_EXTENT_BYTES                                          \
     (divCeil(divCeil(LINEARBLOOMCOUNT_EXTENT_ENTRIES * LINEAR_BLOOM_BITS, 8),  \
              sizeof(linearBloomCount)) *                                       \
      sizeof(linearBloomCount))
-
-#define divCeil(a, b) (((a) + (b)-1) / (b))
 DK_INLINE_ALWAYS linearBloomCount *linearBloomCountNew(void) {
     /* We need to use 'divCeil' here because regular division would give us
      * a floor and that could break some very end-of-array math if our

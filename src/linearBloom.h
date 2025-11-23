@@ -83,9 +83,15 @@ linearBloomHashCheck(const linearBloom *restrict const bloom,
 
         /* Note: this isn't an "if (!exists)" because that would introduce
          *       a branch inside the loop and we just want to run all the
-         *       bits then check at the end instead. */
-        exists += (bloom[offset] & mask);
+         *       bits then check at the end instead.
+         * IMPORTANT: We must use !! to convert mask to 0/1, otherwise we'd
+         * accumulate mask values instead of counting set bits. */
+        exists += !!(bloom[offset] & mask);
     }
 
     return exists == LINEARBLOOM_HASHES;
 }
+
+#ifdef DATAKIT_TEST
+int linearBloomTest(int argc, char *argv[]);
+#endif
