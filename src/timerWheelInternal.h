@@ -10,5 +10,5 @@
 #include "timerWheel.h"
 
 /* Context values for tracking callback state */
-#define TIMER_WHEEL_CONTEXT_USER  0
+#define TIMER_WHEEL_CONTEXT_USER 0
 #define TIMER_WHEEL_CONTEXT_TIMER 1

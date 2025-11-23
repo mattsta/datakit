@@ -11,7 +11,7 @@
 #if (PTRLIB_BITS_LOW == 1 || PTRLIB_BITS_LOW == 2 || PTRLIB_BITS_LOW == 3) ||  \
     (PTRLIB_BITS_LOW == 4 && DK_WORDSIZE == 64) ||                             \
     PTRLIB_BITS_ALIGNMENT_CUSTOM
-#define _PTRLIB_TAGGED_PTR_MASK (uintptr_t) _PTRLIB_GENMASK(PTRLIB_BITS_LOW)
+#define _PTRLIB_TAGGED_PTR_MASK (uintptr_t)_PTRLIB_GENMASK(PTRLIB_BITS_LOW)
 #else
 #error "PTRLIB_BITS_LOW must be <= 4 (64-bit) or <= 3 (32-bit)"
 #endif
@@ -34,9 +34,9 @@
 #if PTRLIB_BITS_HIGH
 #define _PTRLIB_EXTRA_USE 1
 
-#define _PTRLIB_TOP_1_MASK (uintptr_t) _PTRLIB_GENMASK(1)
-#define _PTRLIB_TOP_8_MASK (uintptr_t) _PTRLIB_GENMASK(8)
-#define _PTRLIB_TOP_16_MASK (uintptr_t) _PTRLIB_GENMASK(16)
+#define _PTRLIB_TOP_1_MASK (uintptr_t)_PTRLIB_GENMASK(1)
+#define _PTRLIB_TOP_8_MASK (uintptr_t)_PTRLIB_GENMASK(8)
+#define _PTRLIB_TOP_16_MASK (uintptr_t)_PTRLIB_GENMASK(16)
 
 #define _PTRLIB_TOP_1_N_MASK(n) (uintptr_t)(_PTRLIB_TOP_1_MASK << (64 - (n)))
 #define _PTRLIB_TOP_8_1_MASK (uintptr_t)(_PTRLIB_TOP_8_MASK << (64 - 16))

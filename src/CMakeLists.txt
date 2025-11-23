@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.10)
 
 set(DK_VERSION 0.3.0)
 set(DK_ABI_UPDATE 0.3.0)
@@ -148,7 +148,10 @@ endif()
 # cmake -DCMAKE_BUILD_TYPE=Debug ..
 add_definitions(-D_GNU_SOURCE)  # For memmem and other GNU extensions
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Winline -Wextra -std=gnu99 -Wno-missing-field-initializers")
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mssse3")  # For SSSE3 intrinsics like _mm_shuffle_epi8
+# SSSE3 intrinsics like _mm_shuffle_epi8 are only available on x86_64
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "(x86_64|AMD64|i[3-6]86)")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mssse3")
+endif()
 #set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wstrict-overflow=5 -Wfloat-equal")
 #set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wsuggest-attribute=const -Wsuggest-attribute=pure -Wsuggest-attribute=noreturn -Wsuggest-attribute=format")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wshadow -fstrict-aliasing -Wunused-macros")
@@ -176,9 +179,9 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-sanitize=alignment")
 #set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=safe-stack")
 
 if(CMAKE_BUILD_TYPE MATCHES Debug)
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O0 -Wno-format")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O0 -g -Wno-format")
 else()
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -g")
 endif()
 
 add_library(${PROJECT_NAME} OBJECT

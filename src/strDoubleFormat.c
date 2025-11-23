@@ -495,7 +495,7 @@ static size_t niceDoubleDispatch(const double v, int32_t exp /* 11 bits */,
 
 /* 64-bit safe exponent: (64 - 6) = 58
  * 128-bit safe exponent: (128 - 6) = 122 */
-#define SAFE_EXPONENT(width) ((width)-6)
+#define SAFE_EXPONENT(width) ((width) - 6)
 
 /* Safe exponent restricts 'exp' to interval based on integer bit width */
 #define SAFE_I754_EXPONENT(width)                                              \

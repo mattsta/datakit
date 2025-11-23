@@ -10,7 +10,8 @@ typedef struct bbitsDodDod {
     dodWriter *val;
 
     /* Original t0/t1 values for each bitmap segment (needed for reading) */
-    /* These store the first two values written to each segment before rotation */
+    /* These store the first two values written to each segment before rotation
+     */
     dodVal *keyT0;
     dodVal *keyT1;
     dodVal *valT0;

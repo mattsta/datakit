@@ -199,29 +199,65 @@ static size_t jebufSizeAllocation64(const size_t currentBufSize) {
     static const uint64_t jebuf[] = {
         4096 MiB,
         /* Step size: 1024 MiB */
-        5120 MiB, 6144 MiB, 7168 MiB, 8192 MiB,
+        5120 MiB,
+        6144 MiB,
+        7168 MiB,
+        8192 MiB,
         /* Step size: 2048 MiB */
-        10240 MiB, 12288 MiB, 14336 MiB, 16384 MiB,
+        10240 MiB,
+        12288 MiB,
+        14336 MiB,
+        16384 MiB,
         /* Step size: 4096 MiB */
-        20480 MiB, 24576 MiB, 28672 MiB, 32768 MiB,
+        20480 MiB,
+        24576 MiB,
+        28672 MiB,
+        32768 MiB,
         /* Step size: 8192 MiB */
-        40960 MiB, 49152 MiB, 57344 MiB, 65536 MiB,
+        40960 MiB,
+        49152 MiB,
+        57344 MiB,
+        65536 MiB,
         /* Step size: 16384 MiB */
-        81920 MiB, 98304 MiB, 114688 MiB, 131072 MiB,
+        81920 MiB,
+        98304 MiB,
+        114688 MiB,
+        131072 MiB,
         /* Step size: 32768 MiB */
-        163840 MiB, 196608 MiB, 229376 MiB, 262144 MiB,
+        163840 MiB,
+        196608 MiB,
+        229376 MiB,
+        262144 MiB,
         /* Step size: 65536 MiB */
-        327680 MiB, 393216 MiB, 458752 MiB, 524288 MiB,
+        327680 MiB,
+        393216 MiB,
+        458752 MiB,
+        524288 MiB,
         /* Step size: 131072 MiB */
-        655360 MiB, 786432 MiB, 917504 MiB, 1048576 MiB,
+        655360 MiB,
+        786432 MiB,
+        917504 MiB,
+        1048576 MiB,
         /* Step size: 262144 MiB */
-        1310720 MiB, 1572864 MiB, 1835008 MiB, 2097152 MiB,
+        1310720 MiB,
+        1572864 MiB,
+        1835008 MiB,
+        2097152 MiB,
         /* Step size: 524288 MiB */
-        2621440 MiB, 3145728 MiB, 3670016 MiB, 4194304 MiB,
+        2621440 MiB,
+        3145728 MiB,
+        3670016 MiB,
+        4194304 MiB,
         /* Step size: 1048576 MiB */ /* <-- 1 TB steps! */
-        5242880 MiB, 6291456 MiB, 7340032 MiB, 8388608 MiB,
+        5242880 MiB,
+        6291456 MiB,
+        7340032 MiB,
+        8388608 MiB,
         /* Step size: 2097152 MiB */ /* <-- 2 TB steps! */
-        10485760 MiB, 12582912 MiB, 14680064 MiB, 16777216 MiB,
+        10485760 MiB,
+        12582912 MiB,
+        14680064 MiB,
+        16777216 MiB,
         /* 16 TB should be enough for now.
          * any larger requests will assert failure. */
     };

@@ -91,4 +91,4 @@ pow2Ceiling32(uint32_t x) {
 #define LG_FLOOR_64(x)                                                         \
     (x < (1ULL << 32) ? LG_FLOOR_32(x) : 32 + LG_FLOOR_32(x >> 32))
 
-#define LG_CEIL(x) (LG_FLOOR(x) + (((x) & ((x)-1)) == 0 ? 0 : 1))
+#define LG_CEIL(x) (LG_FLOOR(x) + (((x) & ((x) - 1)) == 0 ? 0 : 1))

@@ -15,7 +15,7 @@
     })
 
 #if 0
-#define DOD_DIV_CEIL(a, b) (((a) + (b)-1) / (b))
+#define DOD_DIV_CEIL(a, b) (((a) + (b) - 1) / (b))
 #define DOD_BYTESUSED(value)                                                   \
     (value ? DOD_DIV_CEIL(((sizeof(value) * 8) - __builtin_clzll(value)), 8)   \
            : 0)

@@ -75,8 +75,8 @@
 #define DK_TEST_VERBOSE 0
 
 #if DK_TEST_VERBOSE
-#include <stdio.h>
 #include <inttypes.h>
+#include <stdio.h>
 #endif
 
 #include "../deps/varint/src/varintExternal.h"        /* user integers */
@@ -278,13 +278,13 @@ typedef enum flexType {
 #define FLEX_INTEGER_ENCODING_STEP (FLEX_UINT_16B - FLEX_UINT_8B)
 
 #define EXTERNAL_VARINT_WIDTH_FROM_ENCODING_(encoding)                         \
-    ((((encoding)-FLEX_NEG_8B) / FLEX_INTEGER_ENCODING_STEP) + 1)
+    ((((encoding) - FLEX_NEG_8B) / FLEX_INTEGER_ENCODING_STEP) + 1)
 
 /* + 1 because our minimum reference is a 1 byte integer */
 #define EXTERNAL_VARINT_WIDTH_FROM_REFERENCE_(encoding)                        \
-    (((encoding)-FLEX_CONTAINER_REFERENCE_EXTERNAL_8) + 1)
+    (((encoding) - FLEX_CONTAINER_REFERENCE_EXTERNAL_8) + 1)
 
-#define FLEX_CONTAINER_OFFSET(type) ((type)-FLEX_CONTAINER_MAP)
+#define FLEX_CONTAINER_OFFSET(type) ((type) - FLEX_CONTAINER_MAP)
 
 /* ====================================================================
  * Macros for accessing flex metadata contents
@@ -835,7 +835,7 @@ DK_STATIC uint_fast8_t flexWriteEncodingReversedForward(
     return 1;
 }
 
-#define divCeil(a, b) (((a) + (b)-1) / (b))
+#define divCeil(a, b) (((a) + (b) - 1) / (b))
 DK_STATIC DK_FN_CONST flexEncoding flexEncodingUnsigned(uint64_t value) {
     /* Determine the smallest encoding for 'value' */
 
@@ -902,8 +902,8 @@ DK_STATIC DK_FN_CONST flexEncoding flexEncodingUnsignedBig(__uint128_t value) {
 #define REFERENCE_MAX_56 ((uint64_t)REFERENCE_MAX_48 + ((1ULL << 56) - 1))
 #define REFERENCE_MAX_64 (UINT64_MAX)
 
-DK_STATIC DK_FN_CONST uint64_t
-flexEncodingReferenceUnsignedEncode(uint64_t value) {
+DK_STATIC
+DK_FN_CONST uint64_t flexEncodingReferenceUnsignedEncode(uint64_t value) {
     /* TODO: we could rearrange this to be binary search */
     if (value <= REFERENCE_MAX_8) {
         return value;
@@ -1022,7 +1022,7 @@ flexEncodingReferenceUnsigned(uint64_t encodedValue) {
 #define SIGNED_PREPARE(v) ((v) + 1)
 
 /* restore the sign bit then go one lower to reverse SIGNED_PREPARE */
-#define SIGNED_RESTORE(v) (-(v)-1)
+#define SIGNED_RESTORE(v) (-(v) - 1)
 
 DK_STATIC DK_FN_CONST inline int64_t flexPrepareSigned(int64_t value) {
     /* We don't store "signed zero," so we can save
@@ -4282,15 +4282,18 @@ DK_STATIC flexEntry *flexFindByTypeDirectional_(flex *const f,
     case DATABOX_BYTES_EMBED:
         flexFind__(forward, databoxBytes(box), databoxLen(box),
                    flexEntryCompareString__);
-        return NULL; /* flexFind__ macro returns, but this satisfies static analyzers */
+        return NULL; /* flexFind__ macro returns, but this satisfies static
+                        analyzers */
     case DATABOX_SIGNED_64:
         flexFind__(forward, (uint8_t *)&box->data.i64, sizeof(box->data.i64),
                    flexEntryCompareSigned__);
-        return NULL; /* flexFind__ macro returns, but this satisfies static analyzers */
+        return NULL; /* flexFind__ macro returns, but this satisfies static
+                        analyzers */
     case DATABOX_UNSIGNED_64:
         flexFind__(forward, (uint8_t *)&box->data.u64, sizeof(box->data.u64),
                    flexEntryCompareUnsigned__);
-        return NULL; /* flexFind__ macro returns, but this satisfies static analyzers */
+        return NULL; /* flexFind__ macro returns, but this satisfies static
+                        analyzers */
     case DATABOX_FLOAT_32:
     //        flexFind__(forward, (uint8_t *)&box->data.f32,
     //        sizeof(box->data.f32), flexEntryCompareFloat__);
@@ -4627,8 +4630,8 @@ bool cflexConvertToFlex(const cflex *c, flex **fBuffer, size_t *fBufferLen) {
 
 #ifdef DATAKIT_TEST
 
-#include <inttypes.h>
 #include "strDoubleFormat.h"
+#include <inttypes.h>
 
 /* Define KEYGEN/VALGEN before any ctest.h includes (including via list.c) */
 #define CTEST_INCLUDE_KEYGEN
@@ -5079,7 +5082,8 @@ int32_t flexTest(int32_t argc, char **argv) {
         const uint32_t typeCount =
             highestNonStaticNumericType - FLEX_UINT_8B + numberOfImmediateTypes;
         const uint32_t typeCountMax = FLEX_SAME - FLEX_FIXED_START;
-        printf("Type range: [%" PRIu32 ", %" PRIu32 "] (+ %" PRIu32 " top-down types) (%" PRIu32 " total used; %" PRIu32 " "
+        printf("Type range: [%" PRIu32 ", %" PRIu32 "] (+ %" PRIu32
+               " top-down types) (%" PRIu32 " total used; %" PRIu32 " "
                "max limit; %" PRIu32 " "
                "remaining)\n\n",
                (uint32_t)FLEX_UINT_8B, highestNonStaticNumericType,
@@ -5089,7 +5093,8 @@ int32_t flexTest(int32_t argc, char **argv) {
         if (highestNonStaticNumericType >= lowestTopDownType) {
             printf("Too many types!  Highest grow-up type is bigger than "
                    "lowest top-down type!\n");
-            printf("Highest grow up is %" PRIu32 ", but lowest top-down is %" PRIu32 "\n",
+            printf("Highest grow up is %" PRIu32
+                   ", but lowest top-down is %" PRIu32 "\n",
                    highestNonStaticNumericType, lowestTopDownType);
             assert(highestNonStaticNumericType < lowestTopDownType);
         }
@@ -7095,7 +7100,8 @@ int32_t flexTest(int32_t argc, char **argv) {
                                 printf("ERROR! flex[%" PRIdPTR "] = %d vs. "
                                        "reference[%" PRIdPTR "] "
                                        "= %d\n",
-                                       (ptrdiff_t)joo, buf[joo], (ptrdiff_t)joo, refnodeval[joo]);
+                                       (ptrdiff_t)joo, buf[joo], (ptrdiff_t)joo,
+                                       refnodeval[joo]);
                             }
                         }
                         ssize_t refnodelen = strlen(refnodeval);

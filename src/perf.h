@@ -103,11 +103,11 @@ enum firstThing { FIRST_SECONDS, FIRST_CYCLES, FIRST_RATE };
 #define _PERF_TIMERS_STAT_STOP(i, subField, dataPoint)                         \
     do {                                                                       \
         const double delta =                                                   \
-            (double)(dataPoint)-lps.stat.subField.runningMean;                 \
+            (double)(dataPoint) - lps.stat.subField.runningMean;               \
         lps.stat.subField.runningMean +=                                       \
             delta / (i + 1); /* assume zero-based indexing */                  \
         lps.stat.subField.runningVariance +=                                   \
-            delta * ((dataPoint)-lps.stat.subField.runningMean);               \
+            delta * ((dataPoint) - lps.stat.subField.runningMean);             \
     } while (0)
 
 #define PERF_TIMERS_STAT_STOP(i)                                               \

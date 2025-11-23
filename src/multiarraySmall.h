@@ -33,7 +33,7 @@ void multiarraySmallDelete(multiarraySmall *mar, uint16_t idx);
 #define multiarraySmallDirectGet(e, idx) (&(e)[idx])
 #define multiarraySmallDirectGetHead(e) multiarraySmallDirectGet(e, 0)
 #define multiarraySmallDirectGetTail(e, count)                                 \
-    multiarraySmallDirectGet(e, (count)-1)
+    multiarraySmallDirectGet(e, (count) - 1)
 
 /* Native API allows you to use uint8_t to store arbitrary objects by letting
  * you specify the individual element width with each access. */
@@ -43,7 +43,7 @@ void multiarraySmallDelete(multiarraySmall *mar, uint16_t idx);
 #define multiarraySmallNativeGetHead(e, what)                                  \
     multiarraySmallNativeGet(e, what, 0)
 #define multiarraySmallNativeGetTail(e, what, count)                           \
-    multiarraySmallNativeGet(e, what, (count)-1)
+    multiarraySmallNativeGet(e, what, (count) - 1)
 
 /* SmallDirect macros work directly on an array where each entry
  * has width sizeof(*e).  These let you work on an array directly without
@@ -112,7 +112,7 @@ int multiarraySmallTest(int argc, char *argv[]);
     do {                                                                       \
         /* Decrease => move elements *then* realloc smaller */                 \
         _multiarraySmallNativeMemmoveCloseSlot(what, holder, count, idx);      \
-        _multiarraySmallNativeGrowShrink(what, holder, (count)-1);             \
+        _multiarraySmallNativeGrowShrink(what, holder, (count) - 1);           \
     } while (0)
 
 #define _multiarraySmallNativeMemmoveClose(what, holder, count, idx,           \
@@ -129,7 +129,7 @@ int multiarraySmallTest(int argc, char *argv[]);
         /* Basically: If we just deleted the last slot, we don't need to       \
          * memmove anything because it got realloc()'d away into nothing. */   \
         if ((idx) < (count)) {                                                 \
-            const uint32_t remaining = ((count) - (idx)-1);                    \
+            const uint32_t remaining = ((count) - (idx) - 1);                  \
             _multiarraySmallNativeMemmoveClose(what, holder, count, idx,       \
                                                remaining);                     \
         }                                                                      \
@@ -179,7 +179,7 @@ int multiarraySmallTest(int argc, char *argv[]);
     do {                                                                       \
         /* Decrease => move elements *then* realloc smaller */                 \
         _multiarraySmallDirectMemmoveCloseSlot(what, count, idx);              \
-        _multiarraySmallDirectGrowShrink(what, (count)-1);                     \
+        _multiarraySmallDirectGrowShrink(what, (count) - 1);                   \
     } while (0)
 
 #define _multiarraySmallDirectMemmoveClose(what, count, idx, remaining)        \
@@ -195,7 +195,7 @@ int multiarraySmallTest(int argc, char *argv[]);
         /* Basically: If we just deleted the last slot, we don't need to       \
          * memmove anything because it got realloc()'d away into nothing. */   \
         if ((idx) < (count)) {                                                 \
-            const uint32_t remaining = ((count) - (idx)-1);                    \
+            const uint32_t remaining = ((count) - (idx) - 1);                  \
             _multiarraySmallDirectMemmoveClose(what, count, idx, remaining);   \
         }                                                                      \
     } while (0)

@@ -525,7 +525,7 @@ static uint64_t microTestB(uint32_t start) {
 /* from:
  * https://graphics.stanford.edu/~seander/bithacks.html##ValueInWord
  * modified using our own constants above */
-#define haszero(v) (((v)-TEST_ONEMASK) & ~(v) & (TEST_ONEMASK * 0x80))
+#define haszero(v) (((v) - TEST_ONEMASK) & ~(v) & (TEST_ONEMASK * 0x80))
 #define hasvalue(x, n) (haszero((x) ^ (n)))
 #define hasnewline(x) (hasvalue(x, newLineCheck))
 
@@ -592,8 +592,8 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
         }
 
         /* Test boundary characters */
-        const char boundaryChars[] = {'\0', '/', ':', 'a', 'A', ' ', 0x7F,
-                                      (char)0xFF};
+        const char boundaryChars[] = {'\0', '/', ':',  'a',
+                                      'A',  ' ', 0x7F, (char)0xFF};
         for (size_t ci = 0; ci < sizeof(boundaryChars); ci++) {
             for (size_t size = 1; size <= 64; size++) {
                 char *buf = zmalloc(size + 1);
@@ -623,12 +623,13 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
 
         /* Test all 9-digit boundary values */
         const uint32_t testValues[] = {
-            0,         1,         9,         10,        99,        100,
-            999,       1000,      9999,      10000,     99999,     100000,
-            999999,    1000000,   9999999,   10000000,  99999999,  100000000,
+            0,         1,         9,         10,        99,       100,
+            999,       1000,      9999,      10000,     99999,    100000,
+            999999,    1000000,   9999999,   10000000,  99999999, 100000000,
             999999999, 123456789, 987654321, 111111111, 500000000};
 
-        for (size_t i = 0; i < sizeof(testValues) / sizeof(testValues[0]); i++) {
+        for (size_t i = 0; i < sizeof(testValues) / sizeof(testValues[0]);
+             i++) {
             uint32_t val = testValues[i];
             char buf[10] = {0};
             StrUInt9DigitsToBuf(buf, val);
@@ -685,7 +686,7 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
         printf("    StrUInt9DigitsToBuf stress test passed!\n");
     }
 
-#if __SSE2__ || defined(__aarch64__) || defined(__ARM_NEON) || \
+#if __SSE2__ || defined(__aarch64__) || defined(__ARM_NEON) ||                 \
     defined(__ARM_NEON__)
     TEST("StrUInt4DigitsToBuf and StrUInt8DigitsToBuf stress test") {
         printf("  Testing StrUInt4/8DigitsToBuf correctness...\n");
@@ -709,10 +710,9 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
         }
 
         /* Test StrUInt8DigitsToBuf */
-        const uint32_t test8Values[] = {0,        1,        99,
-                                        999,      9999,     99999,
-                                        999999,   9999999,  99999999,
-                                        12345678, 87654321, 50000000};
+        const uint32_t test8Values[] = {0,        1,        99,       999,
+                                        9999,     99999,    999999,   9999999,
+                                        99999999, 12345678, 87654321, 50000000};
         for (size_t i = 0; i < sizeof(test8Values) / sizeof(test8Values[0]);
              i++) {
             uint32_t val = test8Values[i];

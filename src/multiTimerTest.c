@@ -25,7 +25,8 @@ typedef struct testCallbackState {
 } testCallbackState;
 
 /* Simple callback that counts invocations */
-static bool testCountingCallback(multiTimer *t, multiTimerId id, void *clientData) {
+static bool testCountingCallback(multiTimer *t, multiTimerId id,
+                                 void *clientData) {
     (void)t;
     testCallbackState *state = clientData;
     state->callCount++;
@@ -34,7 +35,8 @@ static bool testCountingCallback(multiTimer *t, multiTimerId id, void *clientDat
 }
 
 /* Callback that creates a new timer during execution */
-static bool testNestedTimerCallback(multiTimer *t, multiTimerId id, void *clientData) {
+static bool testNestedTimerCallback(multiTimer *t, multiTimerId id,
+                                    void *clientData) {
     (void)id;
     testCallbackState *state = clientData;
     state->callCount++;
@@ -48,7 +50,8 @@ static bool testNestedTimerCallback(multiTimer *t, multiTimerId id, void *client
 }
 
 /* Callback that unregisters itself */
-static bool testSelfUnregisterCallback(multiTimer *t, multiTimerId id, void *clientData) {
+static bool testSelfUnregisterCallback(multiTimer *t, multiTimerId id,
+                                       void *clientData) {
     testCallbackState *state = clientData;
     state->callCount++;
     multiTimerUnregister(t, id);
@@ -103,7 +106,8 @@ int multiTimerTest(int argc, char *argv[]) {
         multiTimer *t = multiTimerNew();
         testCallbackState state = {0};
 
-        multiTimerId id = multiTimerRegister(t, 1000, 0, testCountingCallback, &state);
+        multiTimerId id =
+            multiTimerRegister(t, 1000, 0, testCountingCallback, &state);
         if (id == 0) {
             ERRR("Timer ID should not be 0");
         }
@@ -187,7 +191,8 @@ int multiTimerTest(int argc, char *argv[]) {
         }
 
         if (state.callCount < 3) {
-            ERR("Repeating timer fired only %d times, expected >= 3", state.callCount);
+            ERR("Repeating timer fired only %d times, expected >= 3",
+                state.callCount);
         }
 
         /* Timer should still be scheduled */
@@ -203,23 +208,29 @@ int multiTimerTest(int argc, char *argv[]) {
         testCallbackState states[3] = {{0}, {0}, {0}};
 
         /* Register timers in reverse order of when they should fire */
-        multiTimerRegister(t, 15000, 0, testCountingCallback, &states[2]); /* ID 1, fires 3rd */
-        multiTimerRegister(t, 5000, 0, testCountingCallback, &states[0]);  /* ID 2, fires 1st */
-        multiTimerRegister(t, 10000, 0, testCountingCallback, &states[1]); /* ID 3, fires 2nd */
+        multiTimerRegister(t, 15000, 0, testCountingCallback,
+                           &states[2]); /* ID 1, fires 3rd */
+        multiTimerRegister(t, 5000, 0, testCountingCallback,
+                           &states[0]); /* ID 2, fires 1st */
+        multiTimerRegister(t, 10000, 0, testCountingCallback,
+                           &states[1]); /* ID 3, fires 2nd */
 
         /* Wait for all to expire */
         sleepUs(20000);
         multiTimerProcessTimerEvents(t);
 
         /* All timers should have fired once */
-        if (states[0].callCount != 1 || states[1].callCount != 1 || states[2].callCount != 1) {
+        if (states[0].callCount != 1 || states[1].callCount != 1 ||
+            states[2].callCount != 1) {
             ERR("Not all timers fired: %d, %d, %d (expected 1, 1, 1)",
                 states[0].callCount, states[1].callCount, states[2].callCount);
         }
 
         /* Verify IDs were captured correctly */
-        if (states[0].lastId != 2 || states[1].lastId != 3 || states[2].lastId != 1) {
-            ERR("Wrong IDs: %" PRIu64 ", %" PRIu64 ", %" PRIu64 " (expected 2, 3, 1)",
+        if (states[0].lastId != 2 || states[1].lastId != 3 ||
+            states[2].lastId != 1) {
+            ERR("Wrong IDs: %" PRIu64 ", %" PRIu64 ", %" PRIu64
+                " (expected 2, 3, 1)",
                 states[0].lastId, states[1].lastId, states[2].lastId);
         }
 
@@ -234,7 +245,8 @@ int multiTimerTest(int argc, char *argv[]) {
         multiTimer *t = multiTimerNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = false};
 
-        multiTimerId id = multiTimerRegister(t, 100000, 0, testCountingCallback, &state);
+        multiTimerId id =
+            multiTimerRegister(t, 100000, 0, testCountingCallback, &state);
 
         /* Unregister before it fires */
         multiTimerUnregister(t, id);
@@ -258,7 +270,8 @@ int multiTimerTest(int argc, char *argv[]) {
         multiTimerId ids[5];
         for (int32_t i = 0; i < 5; i++) {
             states[i].shouldReschedule = false;
-            ids[i] = multiTimerRegister(t, 50000, 0, testCountingCallback, &states[i]);
+            ids[i] = multiTimerRegister(t, 50000, 0, testCountingCallback,
+                                        &states[i]);
         }
 
         /* Unregister even-indexed timers (IDs 1, 3, 5) */
@@ -271,14 +284,15 @@ int multiTimerTest(int argc, char *argv[]) {
         multiTimerProcessTimerEvents(t);
 
         /* Only odd-indexed timers should have fired */
-        if (states[0].callCount != 0 || states[2].callCount != 0 || states[4].callCount != 0) {
-            ERR("Unregistered timers fired: %d, %d, %d",
-                states[0].callCount, states[2].callCount, states[4].callCount);
+        if (states[0].callCount != 0 || states[2].callCount != 0 ||
+            states[4].callCount != 0) {
+            ERR("Unregistered timers fired: %d, %d, %d", states[0].callCount,
+                states[2].callCount, states[4].callCount);
         }
 
         if (states[1].callCount != 1 || states[3].callCount != 1) {
-            ERR("Registered timers did not fire: %d, %d",
-                states[1].callCount, states[3].callCount);
+            ERR("Registered timers did not fire: %d, %d", states[1].callCount,
+                states[3].callCount);
         }
 
         multiTimerFree(t);
@@ -368,7 +382,8 @@ int multiTimerTest(int argc, char *argv[]) {
         multiTimerProcessTimerEvents(t);
 
         if (state.callCount != 1) {
-            ERR("Self-unregistered timer fired again, callCount=%d", state.callCount);
+            ERR("Self-unregistered timer fired again, callCount=%d",
+                state.callCount);
         }
 
         multiTimerFree(t);
@@ -421,9 +436,11 @@ int multiTimerTest(int argc, char *argv[]) {
 
         multiTimerUs offset = multiTimerNextTimerEventOffsetFromNowUs(t);
 
-        /* Offset should be close to delayUs (slightly less due to elapsed time) */
+        /* Offset should be close to delayUs (slightly less due to elapsed time)
+         */
         if (offset < 0 || offset > (multiTimerUs)delayUs + 5000) {
-            ERR("nextTimerEventOffsetFromNowUs returned %" PRId64 ", expected ~%" PRIu64,
+            ERR("nextTimerEventOffsetFromNowUs returned %" PRId64
+                ", expected ~%" PRIu64,
                 offset, delayUs);
         }
 
@@ -476,12 +493,14 @@ int multiTimerTest(int argc, char *argv[]) {
         int32_t totalCallCount = 0;
 
         /* Use array of state to count total firings */
-        testCallbackState *states = zcalloc(numTimers, sizeof(testCallbackState));
+        testCallbackState *states =
+            zcalloc(numTimers, sizeof(testCallbackState));
 
         for (int32_t i = 0; i < numTimers; i++) {
             states[i].shouldReschedule = false;
             /* All fire at approximately the same time */
-            multiTimerRegister(t, 10000 + (uint64_t)i, 0, testCountingCallback, &states[i]);
+            multiTimerRegister(t, 10000 + (uint64_t)i, 0, testCountingCallback,
+                               &states[i]);
         }
 
         if (multitimerCount(t) != (size_t)numTimers) {
@@ -552,7 +571,8 @@ int multiTimerTest(int argc, char *argv[]) {
         multiTimerProcessTimerEvents(t);
 
         if (state.callCount != 1) {
-            ERR("Timer repeated despite returning false, callCount=%d", state.callCount);
+            ERR("Timer repeated despite returning false, callCount=%d",
+                state.callCount);
         }
 
         multiTimerFree(t);
@@ -610,7 +630,8 @@ int multiTimerTest(int argc, char *argv[]) {
 
         /* Register many timers */
         for (size_t i = 0; i < numTimers; i++) {
-            multiTimerRegister(t, 1000000 + i * 100, 0, testCountingCallback, &state);
+            multiTimerRegister(t, 1000000 + i * 100, 0, testCountingCallback,
+                               &state);
         }
 
         PERF_TIMERS_SETUP;
@@ -631,7 +652,8 @@ int multiTimerTest(int argc, char *argv[]) {
         const size_t numTimers = 10000;
         int32_t totalFired = 0;
 
-        testCallbackState *states = zcalloc(numTimers, sizeof(testCallbackState));
+        testCallbackState *states =
+            zcalloc(numTimers, sizeof(testCallbackState));
 
         /* Register many timers that expire immediately */
         for (size_t i = 0; i < numTimers; i++) {
@@ -674,14 +696,15 @@ int multiTimerTest(int argc, char *argv[]) {
         sleepUs(15000);
         multiTimerProcessTimerEvents(t);
 
-        /* In inclusive mode, next timer should fire at originalTime + 2*interval,
-         * not at now + interval */
+        /* In inclusive mode, next timer should fire at originalTime +
+         * 2*interval, not at now + interval */
         sleepUs(15000);
         multiTimerProcessTimerEvents(t);
 
         /* Should have fired at least twice */
         if (state.callCount < 2) {
-            ERR("Expected at least 2 firings in inclusive mode, got %d", state.callCount);
+            ERR("Expected at least 2 firings in inclusive mode, got %d",
+                state.callCount);
         }
 
         multiTimerFree(t);
@@ -730,9 +753,12 @@ int multiTimerTest(int argc, char *argv[]) {
         testCallbackState state = {.callCount = 0, .shouldReschedule = false};
 
         /* Register 3 timers */
-        multiTimerId id1 = multiTimerRegister(t, 50000, 0, testCountingCallback, &state);
-        multiTimerId id2 = multiTimerRegister(t, 50000, 0, testCountingCallback, &state);
-        multiTimerId id3 = multiTimerRegister(t, 50000, 0, testCountingCallback, &state);
+        multiTimerId id1 =
+            multiTimerRegister(t, 50000, 0, testCountingCallback, &state);
+        multiTimerId id2 =
+            multiTimerRegister(t, 50000, 0, testCountingCallback, &state);
+        multiTimerId id3 =
+            multiTimerRegister(t, 50000, 0, testCountingCallback, &state);
 
         /* Unregister all */
         multiTimerUnregister(t, id1);
@@ -751,7 +777,8 @@ int multiTimerTest(int argc, char *argv[]) {
 
         /* No timers should have fired */
         if (state.callCount != 0) {
-            ERR("Timers fired despite being unregistered, count=%d", state.callCount);
+            ERR("Timers fired despite being unregistered, count=%d",
+                state.callCount);
         }
 
         multiTimerFree(t);
@@ -772,10 +799,12 @@ int multiTimerTest(int argc, char *argv[]) {
 
         for (size_t i = 0; i < numTimers; i++) {
             /* Spread timers across 1 hour window */
-            multiTimerRegister(t, (i % 3600000) * 1000, 0, testCountingCallback, &state);
+            multiTimerRegister(t, (i % 3600000) * 1000, 0, testCountingCallback,
+                               &state);
         }
 
-        PERF_TIMERS_FINISH_PRINT_RESULTS(numTimers, "million timer registrations");
+        PERF_TIMERS_FINISH_PRINT_RESULTS(numTimers,
+                                         "million timer registrations");
 
         size_t count = multitimerCount(t);
         printf("    Total registered: %zu timers\n", count);
@@ -803,7 +832,8 @@ int multiTimerTest(int argc, char *argv[]) {
         const size_t numTimers = 100000;
         int32_t totalFired = 0;
 
-        testCallbackState *states = zcalloc(numTimers, sizeof(testCallbackState));
+        testCallbackState *states =
+            zcalloc(numTimers, sizeof(testCallbackState));
 
         /* All timers expire immediately */
         for (size_t i = 0; i < numTimers; i++) {
@@ -841,7 +871,8 @@ int multiTimerTest(int argc, char *argv[]) {
 
         /* Warmup: register many timers spread across time */
         for (size_t i = 0; i < warmupTimers; i++) {
-            multiTimerRegister(t, (i % 1000) * 1000 + 1000000, 0, testCountingCallback, &state);
+            multiTimerRegister(t, (i % 1000) * 1000 + 1000000, 0,
+                               testCountingCallback, &state);
         }
 
         printf("    Simulating %zu mixed ops with %zu existing timers...\n",
@@ -853,7 +884,7 @@ int multiTimerTest(int argc, char *argv[]) {
         for (size_t i = 0; i < ops; i++) {
             /* Register new timer */
             multiTimerId id = multiTimerRegister(t, 1000 + (i % 10000), 0,
-                                                  testCountingCallback, &state);
+                                                 testCountingCallback, &state);
 
             /* Occasionally unregister */
             if (i % 3 == 0) {
@@ -892,16 +923,18 @@ int multiTimerTest(int argc, char *argv[]) {
         size_t memAfter = multimapBytes(t->scheduled);
         double bytesPerTimer = (double)(memAfter - memBefore) / numTimers;
 
-        printf("    Memory for %zu timers: %zu bytes (%.2f MB)\n",
-               numTimers, memAfter, (double)memAfter / (1024 * 1024));
+        printf("    Memory for %zu timers: %zu bytes (%.2f MB)\n", numTimers,
+               memAfter, (double)memAfter / (1024 * 1024));
         printf("    Bytes per timer: %.2f\n", bytesPerTimer);
-        printf("    Theoretical minimum (5 uint64s): %zu bytes\n", 5 * sizeof(uint64_t));
+        printf("    Theoretical minimum (5 uint64s): %zu bytes\n",
+               5 * sizeof(uint64_t));
 
-        /* Each timer entry has 5 elements (runAt, callback, clientData, id, repeat)
-         * Minimum would be 5 * 8 = 40 bytes per entry
-         * With multimap overhead, expect ~50-100 bytes per entry */
+        /* Each timer entry has 5 elements (runAt, callback, clientData, id,
+         * repeat) Minimum would be 5 * 8 = 40 bytes per entry With multimap
+         * overhead, expect ~50-100 bytes per entry */
         if (bytesPerTimer > 150) {
-            ERR("Memory usage too high: %.2f bytes/timer (expected < 150)", bytesPerTimer);
+            ERR("Memory usage too high: %.2f bytes/timer (expected < 150)",
+                bytesPerTimer);
         }
 
         multiTimerFree(t);

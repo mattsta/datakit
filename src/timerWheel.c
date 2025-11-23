@@ -8,9 +8,9 @@
 #include "timerWheel.h"
 #include "timerWheelInternal.h"
 
-#include "timeUtil.h"
 #include "databox.h"
 #include "intsetU32.h"
+#include "timeUtil.h"
 
 #include <string.h>
 
@@ -20,31 +20,31 @@
 
 /* Wheel 0: Fine granularity (1ms resolution) */
 #define WHEEL0_BITS 8
-#define WHEEL0_SIZE (1 << WHEEL0_BITS)        /* 256 slots */
+#define WHEEL0_SIZE (1 << WHEEL0_BITS) /* 256 slots */
 #define WHEEL0_MASK (WHEEL0_SIZE - 1)
-#define WHEEL0_RESOLUTION_US 1000ULL          /* 1ms per slot */
-#define WHEEL0_SPAN_US (WHEEL0_SIZE * WHEEL0_RESOLUTION_US)  /* 256ms */
+#define WHEEL0_RESOLUTION_US 1000ULL                        /* 1ms per slot */
+#define WHEEL0_SPAN_US (WHEEL0_SIZE * WHEEL0_RESOLUTION_US) /* 256ms */
 
 /* Wheel 1: Medium granularity */
 #define WHEEL1_BITS 6
-#define WHEEL1_SIZE (1 << WHEEL1_BITS)        /* 64 slots */
+#define WHEEL1_SIZE (1 << WHEEL1_BITS) /* 64 slots */
 #define WHEEL1_MASK (WHEEL1_SIZE - 1)
-#define WHEEL1_RESOLUTION_US WHEEL0_SPAN_US   /* 256ms per slot */
-#define WHEEL1_SPAN_US (WHEEL1_SIZE * WHEEL1_RESOLUTION_US)  /* ~16.4s */
+#define WHEEL1_RESOLUTION_US WHEEL0_SPAN_US                 /* 256ms per slot */
+#define WHEEL1_SPAN_US (WHEEL1_SIZE * WHEEL1_RESOLUTION_US) /* ~16.4s */
 
 /* Wheel 2: Coarse granularity */
 #define WHEEL2_BITS 6
-#define WHEEL2_SIZE (1 << WHEEL2_BITS)        /* 64 slots */
+#define WHEEL2_SIZE (1 << WHEEL2_BITS) /* 64 slots */
 #define WHEEL2_MASK (WHEEL2_SIZE - 1)
-#define WHEEL2_RESOLUTION_US WHEEL1_SPAN_US   /* ~16.4s per slot */
-#define WHEEL2_SPAN_US (WHEEL2_SIZE * WHEEL2_RESOLUTION_US)  /* ~17.5min */
+#define WHEEL2_RESOLUTION_US WHEEL1_SPAN_US /* ~16.4s per slot */
+#define WHEEL2_SPAN_US (WHEEL2_SIZE * WHEEL2_RESOLUTION_US) /* ~17.5min */
 
 /* Wheel 3: Very coarse granularity */
 #define WHEEL3_BITS 6
-#define WHEEL3_SIZE (1 << WHEEL3_BITS)        /* 64 slots */
+#define WHEEL3_SIZE (1 << WHEEL3_BITS) /* 64 slots */
 #define WHEEL3_MASK (WHEEL3_SIZE - 1)
-#define WHEEL3_RESOLUTION_US WHEEL2_SPAN_US   /* ~17.5min per slot */
-#define WHEEL3_SPAN_US (WHEEL3_SIZE * WHEEL3_RESOLUTION_US)  /* ~18.6h */
+#define WHEEL3_RESOLUTION_US WHEEL2_SPAN_US /* ~17.5min per slot */
+#define WHEEL3_SPAN_US (WHEEL3_SIZE * WHEEL3_RESOLUTION_US) /* ~18.6h */
 
 #define NUM_WHEELS 4
 #define ELEMENTS_PER_TIMER 5
@@ -58,8 +58,8 @@
 
 struct timerWheel {
     /* Current time tracking */
-    uint64_t currentTimeUs;      /* Current wheel time (adjusted) */
-    uint64_t initialStartTime;   /* Real monotonic start time */
+    uint64_t currentTimeUs;    /* Current wheel time (adjusted) */
+    uint64_t initialStartTime; /* Real monotonic start time */
 
     /* Current slot indices for each wheel */
     uint32_t slotIndex[NUM_WHEELS];
@@ -106,7 +106,8 @@ static inline uint64_t adjustedNowUs(const timerWheel *tw) {
     return timeUtilMonotonicUs() - tw->initialStartTime;
 }
 
-static inline uint64_t adjustedToAbsolute(const timerWheel *tw, uint64_t adjusted) {
+static inline uint64_t adjustedToAbsolute(const timerWheel *tw,
+                                          uint64_t adjusted) {
     return adjusted + tw->initialStartTime;
 }
 
@@ -121,7 +122,7 @@ static inline int32_t getWheelLevel(uint64_t delay) {
     } else if (delay < WHEEL3_SPAN_US) {
         return 3;
     } else {
-        return -1;  /* Overflow */
+        return -1; /* Overflow */
     }
 }
 
@@ -132,13 +133,17 @@ static inline uint32_t getSlotIndex(timerWheel *tw, int32_t level,
 
     switch (level) {
     case 0:
-        return (tw->slotIndex[0] + (timeDiff / WHEEL0_RESOLUTION_US)) & WHEEL0_MASK;
+        return (tw->slotIndex[0] + (timeDiff / WHEEL0_RESOLUTION_US)) &
+               WHEEL0_MASK;
     case 1:
-        return (tw->slotIndex[1] + (timeDiff / WHEEL1_RESOLUTION_US)) & WHEEL1_MASK;
+        return (tw->slotIndex[1] + (timeDiff / WHEEL1_RESOLUTION_US)) &
+               WHEEL1_MASK;
     case 2:
-        return (tw->slotIndex[2] + (timeDiff / WHEEL2_RESOLUTION_US)) & WHEEL2_MASK;
+        return (tw->slotIndex[2] + (timeDiff / WHEEL2_RESOLUTION_US)) &
+               WHEEL2_MASK;
     case 3:
-        return (tw->slotIndex[3] + (timeDiff / WHEEL3_RESOLUTION_US)) & WHEEL3_MASK;
+        return (tw->slotIndex[3] + (timeDiff / WHEEL3_RESOLUTION_US)) &
+               WHEEL3_MASK;
     default:
         return 0;
     }
@@ -147,22 +152,32 @@ static inline uint32_t getSlotIndex(timerWheel *tw, int32_t level,
 /* Get pointer to slot flex for a wheel level and index */
 static inline flex **getSlot(timerWheel *tw, int32_t level, uint32_t idx) {
     switch (level) {
-    case 0: return &tw->wheel0[idx];
-    case 1: return &tw->wheel1[idx];
-    case 2: return &tw->wheel2[idx];
-    case 3: return &tw->wheel3[idx];
-    default: return NULL;
+    case 0:
+        return &tw->wheel0[idx];
+    case 1:
+        return &tw->wheel1[idx];
+    case 2:
+        return &tw->wheel2[idx];
+    case 3:
+        return &tw->wheel3[idx];
+    default:
+        return NULL;
     }
 }
 
 /* Get wheel size for a level */
 static inline uint32_t getWheelSize(int32_t level) {
     switch (level) {
-    case 0: return WHEEL0_SIZE;
-    case 1: return WHEEL1_SIZE;
-    case 2: return WHEEL2_SIZE;
-    case 3: return WHEEL3_SIZE;
-    default: return 0;
+    case 0:
+        return WHEEL0_SIZE;
+    case 1:
+        return WHEEL1_SIZE;
+    case 2:
+        return WHEEL2_SIZE;
+    case 3:
+        return WHEEL3_SIZE;
+    default:
+        return 0;
     }
 }
 
@@ -170,18 +185,14 @@ static inline uint32_t getWheelSize(int32_t level) {
  * Timer Entry Operations
  * ==================================================================== */
 
-#define boxUnsigned64(us) \
-    { .type = DATABOX_UNSIGNED_64, .data.u64 = (us) }
-#define boxPtr(ptr) \
-    { .type = DATABOX_UNSIGNED_64, .data.u64 = ((uintptr_t)(ptr)) }
+#define boxUnsigned64(us) {.type = DATABOX_UNSIGNED_64, .data.u64 = (us)}
+#define boxPtr(ptr)                                                            \
+    {.type = DATABOX_UNSIGNED_64, .data.u64 = ((uintptr_t)(ptr))}
 
 /* Insert a timer entry into a slot's flex */
-static void insertTimerIntoSlot(flex **slot,
-                                 uint64_t expireTimeUs,
-                                 timerWheelCallback *cb,
-                                 void *clientData,
-                                 timerWheelId id,
-                                 uint64_t repeatIntervalUs) {
+static void insertTimerIntoSlot(flex **slot, uint64_t expireTimeUs,
+                                timerWheelCallback *cb, void *clientData,
+                                timerWheelId id, uint64_t repeatIntervalUs) {
     if (*slot == NULL) {
         *slot = flexNew();
     }
@@ -198,25 +209,21 @@ static void insertTimerIntoSlot(flex **slot,
     flexPushByType(slot, &dataBox, FLEX_ENDPOINT_TAIL);
     flexPushByType(slot, &idBox, FLEX_ENDPOINT_TAIL);
     flexPushByType(slot, &repeatBox, FLEX_ENDPOINT_TAIL);
-
 }
 
 /* Insert timer into overflow multimap (sorted by expiry time) */
-static void insertTimerIntoOverflow(timerWheel *tw,
-                                     uint64_t expireTimeUs,
-                                     timerWheelCallback *cb,
-                                     void *clientData,
-                                     timerWheelId id,
-                                     uint64_t repeatIntervalUs) {
+static void insertTimerIntoOverflow(timerWheel *tw, uint64_t expireTimeUs,
+                                    timerWheelCallback *cb, void *clientData,
+                                    timerWheelId id,
+                                    uint64_t repeatIntervalUs) {
     const databox expireBox = boxUnsigned64(expireTimeUs);
     const databox cbBox = boxPtr(cb);
     const databox dataBox = boxPtr(clientData);
     const databox idBox = boxUnsigned64(id);
     const databox repeatBox = boxUnsigned64(repeatIntervalUs);
 
-    const databox *entry[ELEMENTS_PER_TIMER] = {
-        &expireBox, &cbBox, &dataBox, &idBox, &repeatBox
-    };
+    const databox *entry[ELEMENTS_PER_TIMER] = {&expireBox, &cbBox, &dataBox,
+                                                &idBox, &repeatBox};
 
     multimapInsert(&tw->overflow, entry);
     tw->stats.overflowCount++;
@@ -323,8 +330,8 @@ void timerWheelFree(timerWheel *tw) {
  * ==================================================================== */
 
 timerWheelId timerWheelRegister(timerWheel *tw, uint64_t startAfterMicroseconds,
-                                 uint64_t repeatEveryMicroseconds,
-                                 timerWheelCallback *cb, void *clientData) {
+                                uint64_t repeatEveryMicroseconds,
+                                timerWheelCallback *cb, void *clientData) {
     timerWheelId id = ++tw->nextTimerId;
     uint64_t now = adjustedNowUs(tw);
     uint64_t expireTimeUs = now + startAfterMicroseconds;
@@ -336,14 +343,14 @@ timerWheelId timerWheelRegister(timerWheel *tw, uint64_t startAfterMicroseconds,
     /* If we're in a timer callback, defer to pending */
     if (tw->context == TIMER_WHEEL_CONTEXT_TIMER) {
         insertTimerIntoSlot(&tw->pendingTimers, expireTimeUs, cb, clientData,
-                           id, repeatEveryMicroseconds);
+                            id, repeatEveryMicroseconds);
         return id;
     }
 
     /* Zero-delay timers go to pending to ensure they fire on next process */
     if (startAfterMicroseconds == 0) {
         insertTimerIntoSlot(&tw->pendingTimers, expireTimeUs, cb, clientData,
-                           id, repeatEveryMicroseconds);
+                            id, repeatEveryMicroseconds);
         return id;
     }
 
@@ -356,11 +363,11 @@ timerWheelId timerWheelRegister(timerWheel *tw, uint64_t startAfterMicroseconds,
         uint32_t slotIdx = getSlotIndex(tw, level, expireTimeUs);
         flex **slot = getSlot(tw, level, slotIdx);
         insertTimerIntoSlot(slot, expireTimeUs, cb, clientData, id,
-                           repeatEveryMicroseconds);
+                            repeatEveryMicroseconds);
     } else {
         /* Very long timer - use overflow */
         insertTimerIntoOverflow(tw, expireTimeUs, cb, clientData, id,
-                               repeatEveryMicroseconds);
+                                repeatEveryMicroseconds);
     }
 
     return id;
@@ -466,7 +473,8 @@ static void processSlot(timerWheel *tw, flex **slot, uint64_t currentTime) {
         }
 
         uint64_t expireTimeUs = boxes[0].data.u64;
-        timerWheelCallback *cb = (timerWheelCallback *)(uintptr_t)boxes[1].data.u64;
+        timerWheelCallback *cb =
+            (timerWheelCallback *)(uintptr_t)boxes[1].data.u64;
         void *clientData = (void *)(uintptr_t)boxes[2].data.u64;
         timerWheelId id = boxes[3].data.u64;
         uint64_t repeatIntervalUs = boxes[4].data.u64;
@@ -499,11 +507,11 @@ static void processSlot(timerWheel *tw, flex **slot, uint64_t currentTime) {
                     uint32_t slotIdx = getSlotIndex(tw, level, newExpireTime);
                     flex **newSlot = getSlot(tw, level, slotIdx);
                     insertTimerIntoSlot(newSlot, newExpireTime, cb, clientData,
-                                       id, repeatIntervalUs);
+                                        id, repeatIntervalUs);
                     tw->timerCount++;
                 } else {
                     insertTimerIntoOverflow(tw, newExpireTime, cb, clientData,
-                                           id, repeatIntervalUs);
+                                            id, repeatIntervalUs);
                     tw->timerCount++;
                 }
             }
@@ -517,19 +525,19 @@ static void processSlot(timerWheel *tw, flex **slot, uint64_t currentTime) {
                 flex **newSlot = getSlot(tw, level, slotIdx);
                 if (newSlot != slot) {
                     insertTimerIntoSlot(newSlot, expireTimeUs, cb, clientData,
-                                       id, repeatIntervalUs);
+                                        id, repeatIntervalUs);
                 } else {
                     /* Same slot - will be processed on next tick */
                     insertTimerIntoSlot(&tw->pendingTimers, expireTimeUs, cb,
-                                       clientData, id, repeatIntervalUs);
+                                        clientData, id, repeatIntervalUs);
                 }
             } else {
                 insertTimerIntoOverflow(tw, expireTimeUs, cb, clientData, id,
-                                       repeatIntervalUs);
+                                        repeatIntervalUs);
             }
         }
 
-        (void)current;  /* Silence unused warning */
+        (void)current; /* Silence unused warning */
     }
 
     /* Clear the processed slot */
@@ -568,7 +576,8 @@ static void cascadeWheel(timerWheel *tw, int32_t level) {
         }
 
         uint64_t expireTimeUs = boxes[0].data.u64;
-        timerWheelCallback *cb = (timerWheelCallback *)(uintptr_t)boxes[1].data.u64;
+        timerWheelCallback *cb =
+            (timerWheelCallback *)(uintptr_t)boxes[1].data.u64;
         void *clientData = (void *)(uintptr_t)boxes[2].data.u64;
         timerWheelId id = boxes[3].data.u64;
         uint64_t repeatIntervalUs = boxes[4].data.u64;
@@ -581,22 +590,23 @@ static void cascadeWheel(timerWheel *tw, int32_t level) {
         }
 
         /* Determine new wheel level */
-        uint64_t delay = expireTimeUs > currentTime ? expireTimeUs - currentTime : 0;
+        uint64_t delay =
+            expireTimeUs > currentTime ? expireTimeUs - currentTime : 0;
         int32_t newLevel = getWheelLevel(delay);
 
         if (newLevel >= 0 && newLevel < level) {
             uint32_t newSlotIdx = getSlotIndex(tw, newLevel, expireTimeUs);
             flex **newSlot = getSlot(tw, newLevel, newSlotIdx);
             insertTimerIntoSlot(newSlot, expireTimeUs, cb, clientData, id,
-                               repeatIntervalUs);
+                                repeatIntervalUs);
         } else if (newLevel == -1) {
             /* Shouldn't happen during cascade, but handle gracefully */
             insertTimerIntoOverflow(tw, expireTimeUs, cb, clientData, id,
-                                   repeatIntervalUs);
+                                    repeatIntervalUs);
         } else {
             /* Keep in same level (edge case) */
-            insertTimerIntoSlot(&tw->pendingTimers, expireTimeUs, cb, clientData,
-                               id, repeatIntervalUs);
+            insertTimerIntoSlot(&tw->pendingTimers, expireTimeUs, cb,
+                                clientData, id, repeatIntervalUs);
         }
     }
 
@@ -642,14 +652,15 @@ static void processOverflow(timerWheel *tw, uint64_t currentTime) {
             }
 
             /* Insert into appropriate wheel */
-            uint64_t delay = expireTimeUs > currentTime ? expireTimeUs - currentTime : 0;
+            uint64_t delay =
+                expireTimeUs > currentTime ? expireTimeUs - currentTime : 0;
             int32_t level = getWheelLevel(delay);
 
             if (level >= 0) {
                 uint32_t slotIdx = getSlotIndex(tw, level, expireTimeUs);
                 flex **slot = getSlot(tw, level, slotIdx);
                 insertTimerIntoSlot(slot, expireTimeUs, cb, clientData, id,
-                                   repeatIntervalUs);
+                                    repeatIntervalUs);
             } else {
                 /* Fire immediately if overdue */
                 tw->context = TIMER_WHEEL_CONTEXT_TIMER;
@@ -694,7 +705,8 @@ static void processPending(timerWheel *tw) {
         }
 
         uint64_t expireTimeUs = boxes[0].data.u64;
-        timerWheelCallback *cb = (timerWheelCallback *)(uintptr_t)boxes[1].data.u64;
+        timerWheelCallback *cb =
+            (timerWheelCallback *)(uintptr_t)boxes[1].data.u64;
         void *clientData = (void *)(uintptr_t)boxes[2].data.u64;
         timerWheelId id = boxes[3].data.u64;
         uint64_t repeatIntervalUs = boxes[4].data.u64;
@@ -725,12 +737,12 @@ static void processPending(timerWheel *tw) {
                 if (level >= 0) {
                     uint32_t slotIdx = getSlotIndex(tw, level, newExpireTime);
                     flex **slot = getSlot(tw, level, slotIdx);
-                    insertTimerIntoSlot(slot, newExpireTime, cb, clientData,
-                                       id, repeatIntervalUs);
+                    insertTimerIntoSlot(slot, newExpireTime, cb, clientData, id,
+                                        repeatIntervalUs);
                     tw->timerCount++;
                 } else {
                     insertTimerIntoOverflow(tw, newExpireTime, cb, clientData,
-                                           id, repeatIntervalUs);
+                                            id, repeatIntervalUs);
                     tw->timerCount++;
                 }
             }
@@ -743,10 +755,10 @@ static void processPending(timerWheel *tw) {
                 uint32_t slotIdx = getSlotIndex(tw, level, expireTimeUs);
                 flex **slot = getSlot(tw, level, slotIdx);
                 insertTimerIntoSlot(slot, expireTimeUs, cb, clientData, id,
-                                   repeatIntervalUs);
+                                    repeatIntervalUs);
             } else {
                 insertTimerIntoOverflow(tw, expireTimeUs, cb, clientData, id,
-                                       repeatIntervalUs);
+                                        repeatIntervalUs);
             }
         }
     }
@@ -761,7 +773,6 @@ static void processPending(timerWheel *tw) {
 void timerWheelProcessTimerEvents(timerWheel *tw) {
     uint64_t now = adjustedNowUs(tw);
     tw->nextExpiryCacheValid = false;
-
 
     /* Process overflow timers that may have come into range */
     processOverflow(tw, now);
@@ -800,7 +811,8 @@ void timerWheelProcessTimerEvents(timerWheel *tw) {
 
                 if (nextSlot2Idx == 0) {
                     /* Wheel 2 wrapped - advance wheel 3 */
-                    uint32_t nextSlot3Idx = (tw->slotIndex[3] + 1) & WHEEL3_MASK;
+                    uint32_t nextSlot3Idx =
+                        (tw->slotIndex[3] + 1) & WHEEL3_MASK;
                     cascadeWheel(tw, 3);
                     tw->slotIndex[3] = nextSlot3Idx;
                 }
@@ -824,7 +836,8 @@ void timerWheelAdvanceTime(timerWheel *tw, uint64_t microseconds) {
 
 timerWheelSystemMonotonicUs timerWheelNextTimerEventStartUs(timerWheel *tw) {
     if (tw->nextExpiryCacheValid) {
-        return (timerWheelSystemMonotonicUs)adjustedToAbsolute(tw, tw->cachedNextExpiry);
+        return (timerWheelSystemMonotonicUs)adjustedToAbsolute(
+            tw, tw->cachedNextExpiry);
     }
 
     uint64_t earliest = UINT64_MAX;
@@ -839,7 +852,7 @@ timerWheelSystemMonotonicUs timerWheelNextTimerEventStartUs(timerWheel *tw) {
             if (box.data.u64 < earliest) {
                 earliest = box.data.u64;
             }
-            break;  /* Found nearest in wheel 0 */
+            break; /* Found nearest in wheel 0 */
         }
     }
 

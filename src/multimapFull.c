@@ -44,8 +44,8 @@
             /* Use (count - 1) because there's no rangeBox for map[0] */       \
             enterCount_ = (m)->count - 1;                                      \
             multiarrayNativeInsert((m)->rangeBox, databox,                     \
-                                   RANGEBOX_STORAGE_MAX, enterCount_, (idx)-1, \
-                                   &(newRangeBox));                            \
+                                   RANGEBOX_STORAGE_MAX, enterCount_,          \
+                                   (idx) - 1, &(newRangeBox));                 \
         }                                                                      \
                                                                                \
         (m)->count++;                                                          \
@@ -78,7 +78,7 @@
              * to be a ternary again: whichIdx = idx ? idx - 1 : 0 */          \
             size_t whichIdx = 0;                                               \
             if ((idx) > 0) {                                                   \
-                whichIdx = (idx)-1;                                            \
+                whichIdx = (idx) - 1;                                          \
                 databox *rangeBox_ = getRangeBox(m, whichIdx);                 \
                 databoxFreeData(rangeBox_);                                    \
             }                                                                  \
@@ -153,7 +153,7 @@ static inline void setMiddle(multimapFull *m, multimapFullIdx idx,
         /* TODO: optimize rangeBox to only update if head changed? */          \
         if ((idx) > 0 && flexCount(map_) > 0) {                                \
             /* Minus one becase rangeBox[0] is for map[1], etc */              \
-            flexGetByType(flexHead(map_), getRangeBox(m, (idx)-1));            \
+            flexGetByType(flexHead(map_), getRangeBox(m, (idx) - 1));          \
         }                                                                      \
     } while (0)
 
@@ -169,7 +169,7 @@ static inline void setMiddle(multimapFull *m, multimapFullIdx idx,
          * after this update. */                                               \
         if ((idx) > 0 && flexCount(map_) > 0) {                                \
             /* Minus one becase rangeBox[0] is for map[1], etc */              \
-            databox *rangeBox = getRangeBox(m, (idx)-1);                       \
+            databox *rangeBox = getRangeBox(m, (idx) - 1);                     \
             databoxFreeData(rangeBox);                                         \
                                                                                \
             /* This looks weird, but we want to COPY the value inside rangeBox \
@@ -753,8 +753,8 @@ multimapFullBinarySearchFullWidth(multimapFull *m, const databox *elements[]) {
              * again real soon now. */
             const flex *nextMap = getMap(m, mid + 1);
             __builtin_prefetch(nextMap, 0, 1);
-            const int nextHeadCompared = flexCompareEntries(
-                nextMap, elements, m->elementsPerEntry, 0);
+            const int nextHeadCompared =
+                flexCompareEntries(nextMap, elements, m->elementsPerEntry, 0);
             if (nextHeadCompared > 0) {
                 /* (LOW, ELEMENT[i], HIGH) */
                 /* Found map containing this element range */
