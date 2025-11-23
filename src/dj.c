@@ -649,13 +649,30 @@ static bool findNextEscapeByteSIMD(djState *state, const void *data_,
     return *processedLen != len;
 }
 #else
-/* else, no SIMD available, so always use the scalar loop to check bytes. */
+/* else, no SIMD available, so use scalar loop to check bytes. */
 static bool findNextEscapeByteSIMD(djState *state, const void *data_,
                                    size_t len, size_t *const processedLen,
-                                   uint8_t splatSpace[SPLATLEN],
-                                   size_t *splatLen) {
-    /* TODO: this probably crashes currently */
-    return len != 0;
+                                   uint8_t maxSplatWrite[SPLATLEN],
+                                   size_t *const splatWritten) {
+    const uint8_t *data = data_;
+    *processedLen = 0;
+
+    while (*processedLen < len) {
+        const uint8_t p = data[*processedLen];
+
+        /* If character needs escaping, return so caller handles it. */
+        if (p < 0x20 || p == '\"' || p == '\\') {
+            return true;
+        }
+
+        /* Byte is okay, copy to splat buffer if space available. */
+        SPLAT_ENSURE(1);
+        SPLAT(p);
+        (*processedLen)++;
+    }
+
+    /* Processed all bytes without finding escape character. */
+    return false;
 }
 #endif
 

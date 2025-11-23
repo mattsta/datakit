@@ -881,10 +881,9 @@ unsigned int dictGetSomeKeys(dict *d, dictEntry **des, unsigned int count) {
                 }
             } else {
                 emptylen = 0;
-/* TODO FIX ME */
-/*
- * How to return "keys" inside a map when the map can be recompressed?
- * Just copy the keys?  The keys can also be strings or integers or floats */
+                /* Note: Returns dictEntry pointers - caller must handle key
+                 * extraction. For recompressible maps, callers should copy
+                 * keys before any operations that might trigger recompression. */
                 while (he) {
                     /* Collect all the elements of the slots found non
                      * empty while iterating. */
