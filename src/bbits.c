@@ -22,13 +22,18 @@ bool bbitsDodDodAppend(bbitsDodDod *dd, const dodVal newKey,
                        const dodVal newVal) {
     /* Always use last elements of arrays */
     /* {k,v}w = {k,v}write */
-    dodWriter *kw = &dd->key[dd->count - 1];
-    dodWriter *vw = &dd->val[dd->count - 1];
+    dodWriter *kw = NULL;
+    dodWriter *vw = NULL;
 
-    /* If current bitmaps are too big, create new holders
-     * (or if this is the first time and we need to create everything...) */
-    if ((TOO_BIG_DOD(kw->usedBits) || TOO_BIG_DOD(vw->usedBits)) ||
-        !dd->count) {
+    /* If first time, or current bitmaps are too big, create new holders */
+    bool needNewBitmap = !dd->count;
+    if (dd->count > 0) {
+        kw = &dd->key[dd->count - 1];
+        vw = &dd->val[dd->count - 1];
+        needNewBitmap = TOO_BIG_DOD(kw->usedBits) || TOO_BIG_DOD(vw->usedBits);
+    }
+
+    if (needNewBitmap) {
         if (dd->count > 0) {
             dodCloseWrites(kw);
             dodCloseWrites(vw);
@@ -193,13 +198,18 @@ bool bbitsDodXofAppend(bbitsDodXof *dx, const dodVal newKey,
                        const double newVal) {
     /* Always use last elements of arrays */
     /* {k,v}w = {k,v}write */
-    dodWriter *kw = &dx->key[dx->count - 1];
-    xofWriter *vw = &dx->val[dx->count - 1];
+    dodWriter *kw = NULL;
+    xofWriter *vw = NULL;
 
-    /* If current bitmaps are too big, create new holders
-     * (or if this is the first time and we need to create everything...) */
-    if ((TOO_BIG_DOD(kw->usedBits) || TOO_BIG_XOF(vw->usedBits)) ||
-        !dx->count) {
+    /* If first time, or current bitmaps are too big, create new holders */
+    bool needNewBitmap = !dx->count;
+    if (dx->count > 0) {
+        kw = &dx->key[dx->count - 1];
+        vw = &dx->val[dx->count - 1];
+        needNewBitmap = TOO_BIG_DOD(kw->usedBits) || TOO_BIG_XOF(vw->usedBits);
+    }
+
+    if (needNewBitmap) {
         if (dx->count > 0) {
             dodCloseWrites(kw);
             //            dodCloseWrites(vw);
@@ -281,7 +291,7 @@ bool bbitsDodXofGetOffsetCount(bbitsDodXof *dx, ssize_t offset, ssize_t *count,
     }
 
     /* If negative count, return all elements */
-    if (*count < 0 || *count > dx->elements) {
+    if (*count < 0 || *count > (ssize_t)dx->elements) {
         *count = dx->elements;
     }
 
@@ -293,7 +303,7 @@ bool bbitsDodXofGetOffsetCount(bbitsDodXof *dx, ssize_t offset, ssize_t *count,
         vw = &dx->val[i];
 
         /* If we found the offset match, use the 'kw' and 'vw' we just set */
-        if (currentCount >= offset) {
+        if (currentCount >= (size_t)offset) {
             break;
         }
 
@@ -325,7 +335,7 @@ bool bbitsDodXofGetOffsetCount(bbitsDodXof *dx, ssize_t offset, ssize_t *count,
     totalCountRead += (kw->count - startReadingFirstBitsAtOffset);
     i += 1;
 
-    while (totalCountRead < *count) {
+    while (totalCountRead < (size_t)*count) {
         /* We fixed the element count on entry to this function, so we will
          * never outrun our number of dod arrays... */
         assert(i < dx->count);
@@ -346,10 +356,10 @@ bool bbitsDodXofGetOffsetCount(bbitsDodXof *dx, ssize_t offset, ssize_t *count,
     if (mean && variance && stddev) {
         *mean = 0;
         *variance = 0;
-        for (size_t j = 0; j < *count; j++) {
-            const double delta = *val[j] - *mean;
-            *mean += delta / (i + 1); /* fix zero-based index */
-            *variance += delta * (*val[j] - *mean);
+        for (size_t j = 0; j < (size_t)*count; j++) {
+            const double delta = (*val)[j] - *mean;
+            *mean += delta / (j + 1); /* fix zero-based index */
+            *variance += delta * ((*val)[j] - *mean);
         }
 
         *stddev = sqrt(*variance / *count);
@@ -357,3 +367,138 @@ bool bbitsDodXofGetOffsetCount(bbitsDodXof *dx, ssize_t offset, ssize_t *count,
 
     return true;
 }
+
+#ifdef DATAKIT_TEST
+#include "ctest.h"
+
+int bbitsTest(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+
+    int32_t err = 0;
+
+    /* Note: The bbits module has a design issue where it uses dodWrite()
+     * which stores t0/t1 in the writer struct, but dodReadAll() expects
+     * them encoded in the bitmap. Full read-back testing requires fixing
+     * the bbits/dod integration. For now, we test basic lifecycle. */
+
+    /* Test bbitsDodDod basic append lifecycle */
+    printf("Testing bbitsDodDod append lifecycle...\n");
+    {
+        bbitsDodDod dd = {0};
+
+        /* Append some key-value pairs */
+        for (uint64_t i = 0; i < 100; i++) {
+            bool result = bbitsDodDodAppend(&dd, (dodVal)i * 1000, (dodVal)i * 2);
+            if (!result) {
+                ERR("bbitsDodDodAppend failed at i=%" PRIu64, i);
+            }
+        }
+
+        if (dd.elements != 100) {
+            ERR("Expected 100 elements, got %zu", dd.elements);
+        }
+
+        if (dd.count == 0) {
+            ERR("Expected at least one bitmap segment%s", "");
+        }
+
+        /* Verify writers have data */
+        if (dd.key == NULL || dd.val == NULL) {
+            ERR("Key/val arrays should not be NULL after append%s", "");
+        }
+
+        bbitsDodDodFree(&dd);
+    }
+
+    /* Test bbitsDodDod with larger dataset */
+    printf("Testing bbitsDodDod with large dataset...\n");
+    {
+        bbitsDodDod dd = {0};
+
+        const size_t numElements = 5000;
+        for (uint64_t i = 0; i < numElements; i++) {
+            bool result = bbitsDodDodAppend(&dd, (dodVal)(i * 100),
+                                             (dodVal)(i * 3 + 7));
+            if (!result) {
+                ERR("bbitsDodDodAppend failed at i=%" PRIu64, i);
+            }
+        }
+
+        if (dd.elements != numElements) {
+            ERR("Expected %zu elements, got %zu", numElements, dd.elements);
+        }
+
+        printf("  Created %zu bitmap segments for %zu elements\n",
+               dd.count, numElements);
+
+        bbitsDodDodFree(&dd);
+    }
+
+    /* Test bbitsDodXof basic append lifecycle */
+    printf("Testing bbitsDodXof append lifecycle...\n");
+    {
+        bbitsDodXof dx = {0};
+
+        /* Append key-double pairs */
+        for (uint64_t i = 0; i < 100; i++) {
+            double value = (double)i * 1.5 + 0.25;
+            bool result = bbitsDodXofAppend(&dx, (dodVal)i * 1000, value);
+            if (!result) {
+                ERR("bbitsDodXofAppend failed at i=%" PRIu64, i);
+            }
+        }
+
+        if (dx.elements != 100) {
+            ERR("Expected 100 elements, got %zu", dx.elements);
+        }
+
+        if (dx.count == 0) {
+            ERR("Expected at least one bitmap segment%s", "");
+        }
+
+        /* Verify writers have data */
+        if (dx.key == NULL || dx.val == NULL) {
+            ERR("Key/val arrays should not be NULL after append%s", "");
+        }
+
+        bbitsDodXofFree(&dx);
+    }
+
+    /* Test empty structure handling */
+    printf("Testing empty structure handling...\n");
+    {
+        bbitsDodDod dd = {0};
+        ssize_t count = -1;
+        uint64_t *keys = NULL;
+        uint64_t *vals = NULL;
+
+        bool result = bbitsDodDodGetOffsetCount(&dd, 0, &count, &keys, &vals,
+                                                 NULL, NULL, NULL);
+        if (result) {
+            ERR("bbitsDodDodGetOffsetCount should return false for empty%s", "");
+        }
+
+        bbitsDodXof dx = {0};
+        double *dvals = NULL;
+
+        result = bbitsDodXofGetOffsetCount(&dx, 0, &count, &keys, &dvals,
+                                            NULL, NULL, NULL);
+        if (result) {
+            ERR("bbitsDodXofGetOffsetCount should return false for empty%s", "");
+        }
+    }
+
+    /* Test free on NULL/empty structures */
+    printf("Testing free on empty structures...\n");
+    {
+        bbitsDodDod dd = {0};
+        bbitsDodDodFree(&dd); /* Should not crash */
+
+        bbitsDodXof dx = {0};
+        bbitsDodXofFree(&dx); /* Should not crash */
+    }
+
+    TEST_FINAL_RESULT;
+}
+#endif
