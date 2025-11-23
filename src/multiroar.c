@@ -1121,6 +1121,575 @@ int multiroarTest(int argc, char *argv[]) {
         multiroarFree(r);
     }
 
+    /* ================================================================
+     * Edge Case and Boundary Tests
+     * ================================================================ */
+
+    TEST("UNDER_FULL growth to exactly MAX_ENTRIES") {
+        /* Test growth from 1 to exactly 629 entries (conversion threshold) */
+        multiroar *r = multiroarBitNew();
+        const size_t maxDirect = 629; /* MAX_ENTRIES_PER_DIRECT_LISTING */
+
+        /* Insert exactly 628 entries (one below threshold) */
+        for (size_t i = 0; i < maxDirect - 1; i++) {
+            multiroarBitSet(r, i * 13); /* Spread to stay in one chunk */
+        }
+
+        /* Verify all are still set (should still be UNDER_FULL) */
+        for (size_t i = 0; i < maxDirect - 1; i++) {
+            if (!multiroarBitGet(r, i * 13)) {
+                ERR("Position %zu not set before threshold!", i * 13);
+            }
+        }
+
+        /* Insert the 629th entry - triggers conversion to FULL_BITMAP */
+        multiroarBitSet(r, (maxDirect - 1) * 13);
+
+        /* Verify all entries including the new one */
+        for (size_t i = 0; i < maxDirect; i++) {
+            if (!multiroarBitGet(r, i * 13)) {
+                ERR("Position %zu not set after conversion!", i * 13);
+            }
+        }
+
+        multiroarFree(r);
+    }
+
+    TEST("FULL_BITMAP exact boundary positions") {
+        /* Test bits at exact byte and word boundaries within bitmap */
+        multiroar *r = multiroarBitNew();
+
+        /* Fill to get into bitmap mode */
+        for (size_t i = 0; i < 700; i++) {
+            multiroarBitSet(r, i);
+        }
+
+        /* Test byte boundary positions: 0, 7, 8, 15, 16, ... */
+        const size_t byteBoundaries[] = {0, 7, 8, 15, 16, 23, 24, 31, 32,
+                                          63, 64, 127, 128, 255, 256, 511, 512};
+        for (size_t i = 0; i < sizeof(byteBoundaries)/sizeof(byteBoundaries[0]); i++) {
+            size_t pos = byteBoundaries[i];
+            if (pos < 700) {
+                if (!multiroarBitGet(r, pos)) {
+                    ERR("Byte boundary position %zu should be set!", pos);
+                }
+            }
+        }
+
+        /* Test 64-bit word boundary positions */
+        const size_t wordBoundaries[] = {63, 64, 127, 128, 191, 192, 255, 256,
+                                          319, 320, 383, 384, 447, 448, 511, 512};
+        for (size_t i = 0; i < sizeof(wordBoundaries)/sizeof(wordBoundaries[0]); i++) {
+            size_t pos = wordBoundaries[i];
+            if (pos < 700) {
+                if (!multiroarBitGet(r, pos)) {
+                    ERR("Word boundary position %zu should be set!", pos);
+                }
+            }
+        }
+
+        multiroarFree(r);
+    }
+
+    TEST("sparse positions across chunk boundary") {
+        /* Test sparse positions that span multiple chunks */
+        multiroar *r = multiroarBitNew();
+        const size_t chunkBits = 8192;
+
+        /* Set sparse positions across 4 chunks */
+        const size_t positions[] = {
+            0, 100, 1000,                           /* Chunk 0 */
+            chunkBits + 50, chunkBits + 500,        /* Chunk 1 */
+            chunkBits * 2 + 1, chunkBits * 2 + 999, /* Chunk 2 */
+            chunkBits * 3 + 8191                    /* Chunk 3, last bit */
+        };
+        const size_t numPositions = sizeof(positions) / sizeof(positions[0]);
+
+        for (size_t i = 0; i < numPositions; i++) {
+            multiroarBitSet(r, positions[i]);
+        }
+
+        /* Verify all positions */
+        for (size_t i = 0; i < numPositions; i++) {
+            if (!multiroarBitGet(r, positions[i])) {
+                ERR("Sparse cross-chunk position %zu not set!", positions[i]);
+            }
+        }
+
+        /* Verify positions between are NOT set */
+        if (multiroarBitGet(r, 50)) {
+            ERRR("Position 50 should not be set!");
+        }
+        if (multiroarBitGet(r, chunkBits + 100)) {
+            ERRR("Position in chunk 1 should not be set!");
+        }
+
+        multiroarFree(r);
+    }
+
+    TEST("set and immediate re-read in UNDER_FULL mode") {
+        /* Test that set followed by immediate get works in UNDER_FULL */
+        multiroar *r = multiroarBitNew();
+
+        /* Set and verify in sequence, staying in UNDER_FULL mode */
+        for (size_t i = 0; i < 100; i++) {
+            size_t pos = i * 100; /* Spread positions */
+            multiroarBitSet(r, pos);
+
+            /* Immediate verification */
+            if (!multiroarBitGet(r, pos)) {
+                ERR("UNDER_FULL: position %zu not set immediately!", pos);
+            }
+
+            /* Verify previously set positions still exist */
+            for (size_t j = 0; j <= i; j++) {
+                if (!multiroarBitGet(r, j * 100)) {
+                    ERR("UNDER_FULL: earlier position %zu lost!", j * 100);
+                }
+            }
+        }
+
+        multiroarFree(r);
+    }
+
+    TEST("set and immediate re-read in FULL_BITMAP mode") {
+        /* Test that set followed by immediate get works in FULL_BITMAP */
+        multiroar *r = multiroarBitNew();
+
+        /* First, fill to trigger bitmap mode */
+        for (size_t i = 0; i < 700; i++) {
+            multiroarBitSet(r, i);
+        }
+
+        /* Now set additional positions and verify immediately */
+        for (size_t i = 700; i < 1000; i++) {
+            multiroarBitSet(r, i);
+
+            if (!multiroarBitGet(r, i)) {
+                ERR("FULL_BITMAP: position %zu not set immediately!", i);
+            }
+        }
+
+        /* Verify all positions are still set */
+        for (size_t i = 0; i < 1000; i++) {
+            if (!multiroarBitGet(r, i)) {
+                ERR("FULL_BITMAP: position %zu lost!", i);
+            }
+        }
+
+        multiroarFree(r);
+    }
+
+    TEST("previouslySet behavior across all chunk types") {
+        multiroar *r = multiroarBitNew();
+
+        /* Test in UNDER_FULL mode */
+        bool prev = multiroarBitSet(r, 100);
+        if (prev) {
+            ERRR("UNDER_FULL: first set should return false!");
+        }
+        prev = multiroarBitSet(r, 100);
+        if (!prev) {
+            ERRR("UNDER_FULL: second set should return true!");
+        }
+
+        /* Fill to get into FULL_BITMAP mode */
+        for (size_t i = 0; i < 700; i++) {
+            multiroarBitSet(r, i);
+        }
+
+        /* Test in FULL_BITMAP mode with new position */
+        prev = multiroarBitSet(r, 5000);
+        if (prev) {
+            ERRR("FULL_BITMAP: first set of new pos should return false!");
+        }
+        prev = multiroarBitSet(r, 5000);
+        if (!prev) {
+            ERRR("FULL_BITMAP: second set should return true!");
+        }
+
+        /* Test in FULL_BITMAP mode with existing position */
+        prev = multiroarBitSet(r, 100); /* Was set earlier */
+        if (!prev) {
+            ERRR("FULL_BITMAP: set of existing pos should return true!");
+        }
+
+        multiroarFree(r);
+    }
+
+    TEST("large position values near SIZE_MAX") {
+        multiroar *r = multiroarBitNew();
+
+        /* Test very large positions */
+        const size_t largePositions[] = {
+            SIZE_MAX - 1,
+            SIZE_MAX - 8192,
+            SIZE_MAX - 8193,
+            SIZE_MAX / 2,
+            SIZE_MAX / 2 + 1
+        };
+        const size_t numLarge = sizeof(largePositions) / sizeof(largePositions[0]);
+
+        for (size_t i = 0; i < numLarge; i++) {
+            multiroarBitSet(r, largePositions[i]);
+        }
+
+        for (size_t i = 0; i < numLarge; i++) {
+            if (!multiroarBitGet(r, largePositions[i])) {
+                ERR("Large position %zu not set!", largePositions[i]);
+            }
+        }
+
+        /* Verify nearby positions are NOT set */
+        if (multiroarBitGet(r, SIZE_MAX - 2)) {
+            ERRR("Position SIZE_MAX-2 should not be set!");
+        }
+
+        multiroarFree(r);
+    }
+
+    TEST("interleaved set pattern") {
+        /* Set every other bit, then fill in the gaps */
+        multiroar *r = multiroarBitNew();
+        const size_t testRange = 2000;
+
+        /* Set even positions first */
+        for (size_t i = 0; i < testRange; i += 2) {
+            multiroarBitSet(r, i);
+        }
+
+        /* Verify even positions are set, odd are not */
+        for (size_t i = 0; i < testRange; i++) {
+            bool isSet = multiroarBitGet(r, i);
+            if (i % 2 == 0 && !isSet) {
+                ERR("Even position %zu should be set!", i);
+            }
+            if (i % 2 == 1 && isSet) {
+                ERR("Odd position %zu should NOT be set!", i);
+            }
+        }
+
+        /* Now set odd positions */
+        for (size_t i = 1; i < testRange; i += 2) {
+            multiroarBitSet(r, i);
+        }
+
+        /* Verify all positions are now set */
+        for (size_t i = 0; i < testRange; i++) {
+            if (!multiroarBitGet(r, i)) {
+                ERR("After fill: position %zu should be set!", i);
+            }
+        }
+
+        multiroarFree(r);
+    }
+
+    TEST("reverse order insertion") {
+        /* Insert bits in reverse order */
+        multiroar *r = multiroarBitNew();
+        const size_t testCount = 1000;
+
+        for (size_t i = testCount; i > 0; i--) {
+            multiroarBitSet(r, i - 1);
+
+            /* Verify this position is set */
+            if (!multiroarBitGet(r, i - 1)) {
+                ERR("Reverse insert: position %zu not set!", i - 1);
+            }
+        }
+
+        /* Verify all positions are set */
+        for (size_t i = 0; i < testCount; i++) {
+            if (!multiroarBitGet(r, i)) {
+                ERR("Reverse insert: position %zu lost!", i);
+            }
+        }
+
+        multiroarFree(r);
+    }
+
+    TEST("random order insertion with verification") {
+        /* Insert bits in pseudo-random order using LCG */
+        multiroar *r = multiroarBitNew();
+        const size_t testCount = 500;
+        size_t *positions = zcalloc(testCount, sizeof(size_t));
+
+        /* Generate pseudo-random positions */
+        uint32_t seed = 12345;
+        for (size_t i = 0; i < testCount; i++) {
+            seed = seed * 1103515245 + 12345;
+            positions[i] = (seed >> 8) % 10000;
+        }
+
+        /* Insert all positions */
+        for (size_t i = 0; i < testCount; i++) {
+            multiroarBitSet(r, positions[i]);
+        }
+
+        /* Verify all positions are set */
+        for (size_t i = 0; i < testCount; i++) {
+            if (!multiroarBitGet(r, positions[i])) {
+                ERR("Random order: position %zu not set!", positions[i]);
+            }
+        }
+
+        zfree(positions);
+        multiroarFree(r);
+    }
+
+    TEST("chunk type transitions (UNDER_FULL -> FULL_BITMAP)") {
+        /* Carefully test the transition from UNDER_FULL to FULL_BITMAP */
+        multiroar *r = multiroarBitNew();
+
+        /* Insert 628 positions (just under threshold) */
+        for (size_t i = 0; i < 628; i++) {
+            multiroarBitSet(r, i);
+            if (!multiroarBitGet(r, i)) {
+                ERR("Pre-transition: position %zu not set!", i);
+            }
+        }
+
+        /* Insert 629th position - triggers transition */
+        multiroarBitSet(r, 628);
+        if (!multiroarBitGet(r, 628)) {
+            ERRR("Transition position 628 not set!");
+        }
+
+        /* Verify all previous positions survived transition */
+        for (size_t i = 0; i < 629; i++) {
+            if (!multiroarBitGet(r, i)) {
+                ERR("Post-transition: position %zu lost!", i);
+            }
+        }
+
+        /* Continue inserting to verify bitmap mode works */
+        for (size_t i = 629; i < 1000; i++) {
+            multiroarBitSet(r, i);
+            if (!multiroarBitGet(r, i)) {
+                ERR("Bitmap mode: position %zu not set!", i);
+            }
+        }
+
+        multiroarFree(r);
+    }
+
+    TEST("OVER_FULL transition (FULL_BITMAP -> negative list)") {
+        /* Test transition to OVER_FULL when most bits are set */
+        multiroar *r = multiroarBitNew();
+        const size_t chunkBits = 8192;
+        const size_t threshold = 7564; /* Just past OVER_FULL threshold */
+
+        /* Set bits sequentially up to threshold */
+        for (size_t i = 0; i < threshold; i++) {
+            multiroarBitSet(r, i);
+
+            /* Verify immediately */
+            if (!multiroarBitGet(r, i)) {
+                ERR("OVER_FULL transition: position %zu not set immediately!", i);
+            }
+        }
+
+        /* Verify all positions still set after potential transition */
+        size_t failures = 0;
+        for (size_t i = 0; i < threshold; i++) {
+            if (!multiroarBitGet(r, i)) {
+                if (failures < 10) {
+                    ERR("OVER_FULL: position %zu lost!", i);
+                }
+                failures++;
+            }
+        }
+        if (failures > 10) {
+            printf("... and %zu more positions lost\n", failures - 10);
+        }
+
+        /* Verify positions past threshold are NOT set */
+        for (size_t i = threshold; i < chunkBits; i += 100) {
+            if (multiroarBitGet(r, i)) {
+                ERR("OVER_FULL: position %zu incorrectly set!", i);
+            }
+        }
+
+        multiroarFree(r);
+    }
+
+    TEST("ALL_1 transition (fill entire chunk)") {
+        /* Fill an entire chunk to trigger ALL_1 type */
+        multiroar *r = multiroarBitNew();
+        const size_t chunkBits = 8192;
+
+        printf("    Filling entire chunk (%zu bits)...\n", chunkBits);
+
+        /* Set all bits in chunk 0 */
+        for (size_t i = 0; i < chunkBits; i++) {
+            multiroarBitSet(r, i);
+
+            /* Periodic verification */
+            if (i % 1000 == 0 || i == chunkBits - 1) {
+                if (!multiroarBitGet(r, i)) {
+                    ERR("ALL_1 fill: position %zu not set!", i);
+                }
+            }
+        }
+
+        /* Verify all bits in chunk are set */
+        size_t failures = 0;
+        for (size_t i = 0; i < chunkBits; i++) {
+            if (!multiroarBitGet(r, i)) {
+                if (failures < 5) {
+                    ERR("ALL_1 verify: position %zu not set!", i);
+                }
+                failures++;
+            }
+        }
+        if (failures > 5) {
+            printf("    ... and %zu more bits not set (total failures: %zu)\n",
+                   failures - 5, failures);
+        }
+
+        /* Verify bits in next chunk are NOT set */
+        if (multiroarBitGet(r, chunkBits)) {
+            ERRR("Bit in next chunk should not be set!");
+        }
+        if (multiroarBitGet(r, chunkBits + 100)) {
+            ERRR("Bit in next chunk should not be set!");
+        }
+
+        /* Setting a bit in the ALL_1 chunk should return true (already set) */
+        bool prev = multiroarBitSet(r, 4096);
+        if (!prev) {
+            ERRR("ALL_1: setting existing bit should return true!");
+        }
+
+        multiroarFree(r);
+    }
+
+    TEST("mixed chunk types in single roar") {
+        /* Create a roar with all different chunk types */
+        multiroar *r = multiroarBitNew();
+        const size_t chunkBits = 8192;
+
+        /* Chunk 0: UNDER_FULL (sparse, few bits) */
+        multiroarBitSet(r, 10);
+        multiroarBitSet(r, 100);
+        multiroarBitSet(r, 500);
+
+        /* Chunk 1: FULL_BITMAP (moderate density) */
+        for (size_t i = chunkBits; i < chunkBits + 2000; i++) {
+            multiroarBitSet(r, i);
+        }
+
+        /* Chunk 2: High density (triggers OVER_FULL if working) */
+        for (size_t i = chunkBits * 2; i < chunkBits * 2 + 7600; i++) {
+            multiroarBitSet(r, i);
+        }
+
+        /* Verify chunk 0 */
+        if (!multiroarBitGet(r, 10) || !multiroarBitGet(r, 100) ||
+            !multiroarBitGet(r, 500)) {
+            ERRR("Chunk 0 bits not set!");
+        }
+        if (multiroarBitGet(r, 50) || multiroarBitGet(r, 200)) {
+            ERRR("Chunk 0 has unexpected bits set!");
+        }
+
+        /* Verify chunk 1 */
+        for (size_t i = chunkBits; i < chunkBits + 2000; i += 100) {
+            if (!multiroarBitGet(r, i)) {
+                ERR("Chunk 1 position %zu not set!", i);
+            }
+        }
+
+        /* Verify chunk 2 */
+        for (size_t i = chunkBits * 2; i < chunkBits * 2 + 7600; i += 100) {
+            if (!multiroarBitGet(r, i)) {
+                ERR("Chunk 2 position %zu not set!", i);
+            }
+        }
+
+        multiroarFree(r);
+    }
+
+    TEST("packed array sorted insertion stress") {
+        /* Stress test the sorted insertion in UNDER_FULL mode */
+        multiroar *r = multiroarBitNew();
+
+        /* Insert positions that stress the sorted insert algorithm */
+        const size_t positions[] = {
+            500, 100, 900, 50, 950, 25, 975, 12, 988, 6, 994, 3, 997, 1, 999,
+            0, 1000, 2, 998, 4, 996, 8, 992, 16, 984, 32, 968, 64, 936, 128,
+            872, 256, 744, 512
+        };
+        const size_t numPos = sizeof(positions) / sizeof(positions[0]);
+
+        for (size_t i = 0; i < numPos; i++) {
+            multiroarBitSet(r, positions[i]);
+        }
+
+        /* Verify all positions are set */
+        for (size_t i = 0; i < numPos; i++) {
+            if (!multiroarBitGet(r, positions[i])) {
+                ERR("Sorted insert stress: position %zu not set!", positions[i]);
+            }
+        }
+
+        multiroarFree(r);
+    }
+
+    TEST("empty chunk queries") {
+        /* Test queries on chunks that don't exist (empty) */
+        multiroar *r = multiroarBitNew();
+
+        /* Query various positions without setting anything */
+        if (multiroarBitGet(r, 0)) {
+            ERRR("Empty roar: position 0 should not be set!");
+        }
+        if (multiroarBitGet(r, 100)) {
+            ERRR("Empty roar: position 100 should not be set!");
+        }
+        if (multiroarBitGet(r, 8192)) {
+            ERRR("Empty roar: position 8192 should not be set!");
+        }
+        if (multiroarBitGet(r, SIZE_MAX / 2)) {
+            ERRR("Empty roar: large position should not be set!");
+        }
+
+        /* Set one position, verify others still not set */
+        multiroarBitSet(r, 5000);
+        if (!multiroarBitGet(r, 5000)) {
+            ERRR("Position 5000 should be set!");
+        }
+        if (multiroarBitGet(r, 4999) || multiroarBitGet(r, 5001)) {
+            ERRR("Adjacent positions should not be set!");
+        }
+
+        multiroarFree(r);
+    }
+
+    TEST("PERF: sparse lookup performance") {
+        const size_t numPositions = 1000;
+        const size_t positionSpread = 1000000;
+        multiroar *r = multiroarBitNew();
+
+        /* Create sparse bitmap across many chunks */
+        for (size_t i = 0; i < numPositions; i++) {
+            multiroarBitSet(r, i * positionSpread);
+        }
+
+        int64_t startNs = timeUtilMonotonicNs();
+        for (size_t round = 0; round < 100; round++) {
+            for (size_t i = 0; i < numPositions; i++) {
+                multiroarBitGet(r, i * positionSpread);
+            }
+        }
+        int64_t elapsed = timeUtilMonotonicNs() - startNs;
+        printf("Sparse lookup: %.1f ns/op, %.0f ops/sec\n",
+               (double)elapsed / (numPositions * 100),
+               (numPositions * 100) / (elapsed / 1e9));
+
+        multiroarFree(r);
+    }
+
     TEST_FINAL_RESULT;
 }
 
