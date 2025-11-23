@@ -53,6 +53,7 @@
 #include "util.h"
 #include "xof.h"
 #include "intersectInt.h"
+#include "timeUtil.h"
 
 #if __x86_64__
 #define USE_INTSET_BIG 1
@@ -145,6 +146,9 @@ int main(int argc, char *argv[]) {
             return xofTest(argc - 2, argv + 2);
         } else if (!strcasecmp(argv[2], "intersectInt")) {
             return intersectIntTest(argc - 2, argv + 2);
+        } else if (!strcasecmp(argv[2], "timeUtil") ||
+                   !strcasecmp(argv[2], "time")) {
+            return timeUtilTest(argc - 2, argv + 2);
         } else if (!strcasecmp(argv[2], "fibbuf")) {
             return fibbufTest(argc - 2, argv + 2);
         } else if (!strcasecmp(argv[2], "jebuf")) {
@@ -197,6 +201,7 @@ int main(int argc, char *argv[]) {
             result += dodTest(argc, argv);
             result += xofTest(argc, argv);
             result += intersectIntTest(argc, argv);
+            result += timeUtilTest(argc, argv);
             result += fibbufTest(argc, argv);
             result += jebufTest(argc, argv);
             result += mflexTest(argc, argv);
