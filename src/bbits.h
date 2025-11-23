@@ -9,6 +9,13 @@ typedef struct bbitsDodDod {
     dodWriter *key;
     dodWriter *val;
 
+    /* Original t0/t1 values for each bitmap segment (needed for reading) */
+    /* These store the first two values written to each segment before rotation */
+    dodVal *keyT0;
+    dodVal *keyT1;
+    dodVal *valT0;
+    dodVal *valT1;
+
     /* Length of both 'key' and 'val' arrays. */
     size_t count;
 
@@ -21,6 +28,10 @@ typedef struct bbitsDodXof {
     /* Arrays of key and value writers */
     dodWriter *key;
     xofWriter *val;
+
+    /* Original t0/t1 values for key bitmap segments (needed for reading) */
+    dodVal *keyT0;
+    dodVal *keyT1;
 
     /* Length of both 'key' and 'val' arrays. */
     size_t count;
