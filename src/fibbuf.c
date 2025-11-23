@@ -21,8 +21,11 @@ size_t fibbufNextSizeBuffer(const size_t currentBufSize) {
         return fibbufNextBuffer16(currentBufSize);
     }
 
-    /* On 32 bit systems we can't use fibbufNextBuffer64 */
-    if (currentBufSize <= 2971215073 || sizeof(void *) == 4) {
+    /* On 32 bit systems we can't use fibbufNextBuffer64.
+     * Also use 32-bit path for values below the first 64-bit fib,
+     * allowing 20% growth fallback for values between last 32-bit fib
+     * (2971215073) and first 64-bit fib (4807526976). */
+    if (currentBufSize < 4807526976 || sizeof(void *) == 4) {
         return fibbufNextBuffer32(currentBufSize);
     }
 

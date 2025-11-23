@@ -199,8 +199,8 @@ New:
 }
 
 double xofGet(const xof *const x, const size_t offset) {
-    uint32_t currentLeadingZeroes = 0;
-    uint32_t currentLengthOfBits = 0;
+    uint_fast32_t currentLeadingZeroes = 0;
+    uint_fast32_t currentLengthOfBits = 0;
 
     uint64_t currentValueBits = varintBitstreamGet(x, 0, 64);
     size_t bitOffset = 64;
@@ -271,8 +271,8 @@ int xofTest(int argc, char *argv[]) {
                 size_t bitsUsed = 0;
                 xofInit(bits, &bitsUsed, val);
 
-                int32_t prevLZ = -1;
-                int32_t prevTZ = -1;
+                int_fast32_t prevLZ = -1;
+                int_fast32_t prevTZ = -1;
                 for (size_t i = 2; i < loopers; i++) {
                     xofAppend(bits, &bitsUsed, &prevLZ, &prevTZ, val, val);
                 }
@@ -325,8 +325,8 @@ int xofTest(int argc, char *argv[]) {
                 size_t bitsUsed = 0;
                 xofInit(bits, &bitsUsed, val);
 
-                int32_t prevLZ = -1;
-                int32_t prevTZ = -1;
+                int_fast32_t prevLZ = -1;
+                int_fast32_t prevTZ = -1;
                 double prevVal = val;
                 for (size_t i = 2; i < loopers + 1; i++) {
                     double currentVal = i % 2 == 0 ? val + 1 : val;
@@ -383,8 +383,8 @@ int xofTest(int argc, char *argv[]) {
             xofInit(bits, &bitsUsed, 1);
 
             double prevVal = 1;
-            int32_t prevLZ = -1;
-            int32_t prevTZ = -1;
+            int_fast32_t prevLZ = -1;
+            int_fast32_t prevTZ = -1;
             for (size_t i = 2; i < loopers; i++) {
                 xofAppend(bits, &bitsUsed, &prevLZ, &prevTZ, prevVal, i);
                 prevVal = i;
@@ -439,8 +439,8 @@ int xofTest(int argc, char *argv[]) {
             size_t bitsUsed = 0;
             xofInit(bits, &bitsUsed, values[0]);
 
-            int32_t prevLZ = -1;
-            int32_t prevTZ = -1;
+            int_fast32_t prevLZ = -1;
+            int_fast32_t prevTZ = -1;
             for (size_t i = 1; i < loopers; i++) {
                 xofAppend(bits, &bitsUsed, &prevLZ, &prevTZ, values[i - 1],
                           values[i]);
@@ -499,8 +499,8 @@ int xofTest(int argc, char *argv[]) {
                 size_t bitsUsed = 0;
                 xofInit(bits, &bitsUsed, values[0]);
 
-                int32_t prevLZ = -1;
-                int32_t prevTZ = -1;
+                int_fast32_t prevLZ = -1;
+                int_fast32_t prevTZ = -1;
                 for (size_t i = 1; i < loopers; i++) {
                     xofAppend(bits, &bitsUsed, &prevLZ, &prevTZ, values[i - 1],
                               values[i]);
@@ -564,8 +564,8 @@ int xofTest(int argc, char *argv[]) {
                 size_t bitsUsed = 0;
                 xofInit(bits, &bitsUsed, values[0]);
 
-                int32_t prevLZ = -1;
-                int32_t prevTZ = -1;
+                int_fast32_t prevLZ = -1;
+                int_fast32_t prevTZ = -1;
                 for (size_t i = 1; i < loopers; i++) {
                     xofAppend(bits, &bitsUsed, &prevLZ, &prevTZ, values[i - 1],
                               values[i]);
