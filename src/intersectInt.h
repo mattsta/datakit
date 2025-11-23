@@ -40,3 +40,7 @@ size_t intersectIntOneSidedGalloping(const uint32_t *smallset,
                                      const size_t smalllength,
                                      const uint32_t *largeset,
                                      const size_t largelength, uint32_t *out);
+
+#ifdef DATAKIT_TEST
+int intersectIntTest(int argc, char *argv[]);
+#endif

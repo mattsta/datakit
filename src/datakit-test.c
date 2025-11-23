@@ -52,6 +52,7 @@
 #include "strDoubleFormat.h"
 #include "util.h"
 #include "xof.h"
+#include "intersectInt.h"
 
 #if __x86_64__
 #define USE_INTSET_BIG 1
@@ -142,6 +143,8 @@ int main(int argc, char *argv[]) {
             return dodTest(argc - 2, argv + 2);
         } else if (!strcasecmp(argv[2], "xof")) {
             return xofTest(argc - 2, argv + 2);
+        } else if (!strcasecmp(argv[2], "intersectInt")) {
+            return intersectIntTest(argc - 2, argv + 2);
         } else if (!strcasecmp(argv[2], "fibbuf")) {
             return fibbufTest(argc - 2, argv + 2);
         } else if (!strcasecmp(argv[2], "jebuf")) {
@@ -193,6 +196,7 @@ int main(int argc, char *argv[]) {
             result += multiroarTest(argc, argv);
             result += dodTest(argc, argv);
             result += xofTest(argc, argv);
+            result += intersectIntTest(argc, argv);
             result += fibbufTest(argc, argv);
             result += jebufTest(argc, argv);
             result += mflexTest(argc, argv);
