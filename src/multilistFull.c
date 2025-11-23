@@ -90,7 +90,7 @@ struct multilistFull {
 /* We're doing more exact math now, so we don't need these ± 1 guards. */
 #if 0
 #define mlNextExists(ml, idx) ((idx) + 1 < (ml)->count)
-#define mlPrevExists(ml, idx) ((int32_t)(idx)-1 > 0)
+#define mlPrevExists(ml, idx) ((int32_t)(idx) - 1 > 0)
 #endif
 
 static inline mflex *getNodeMl(const multilistFull *ml, const mlOffsetId idx) {
@@ -1145,7 +1145,8 @@ bool multilistFullIndex(multilistFull *ml, mflexState *state, mlOffsetId index,
             currentCount = mflexCount(currentNode);
         }
 
-        D("Found node: %p at accum %" PRId64 ", idx %" PRId64 ", sub+ %" PRId64 ", sub- %" PRId64,
+        D("Found node: %p at accum %" PRId64 ", idx %" PRId64 ", sub+ %" PRId64
+          ", sub- %" PRId64,
           (void *)currentNode, accum, index, index - accum,
           (-index) - 1 + accum);
 

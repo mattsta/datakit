@@ -135,7 +135,7 @@
 #define dk_fallthrough (void)0
 #endif
 
-#define DK_DIV_CEIL(a, b) (((a) + (b)-1) / (b))
+#define DK_DIV_CEIL(a, b) (((a) + (b) - 1) / (b))
 #define DK_BYTESUSED(value)                                                    \
     (value ? DK_DIV_CEIL(((sizeof(value) * 8) - __builtin_clzll(value)), 8) : 0)
 
@@ -289,7 +289,8 @@
  * Alignment helpers
  * ==================================================================== */
 /* On 64 bits, this is (ptr & 7); on 32 bits this is (ptr & 3) */
-#define DK_STEP_UNALIGNMENT(stepBytes, ptr) ((uintptr_t)(ptr) & ((stepBytes)-1))
+#define DK_STEP_UNALIGNMENT(stepBytes, ptr)                                    \
+    ((uintptr_t)(ptr) & ((stepBytes) - 1))
 #define DK_WORD_UNALIGNMENT(ptr) DK_STEP_UNALIGNMENT(sizeof(void *), ptr)
 
 #define DK_IS_STEP_ALIGNED(stepBytes, ptr)                                     \

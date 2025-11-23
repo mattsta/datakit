@@ -870,7 +870,8 @@ int databoxCompare(const databox *restrict a, const databox *restrict b) {
             return -databoxCompareInt128Float(b, a);
         default:
 #ifndef NDEBUG
-            printf("Attempted to compare: %" PRIu32 " and %" PRIu32 "?", (uint32_t)a->type, (uint32_t)b->type);
+            printf("Attempted to compare: %" PRIu32 " and %" PRIu32 "?",
+                   (uint32_t)a->type, (uint32_t)b->type);
 #endif
             assert(NULL && "Either you tried to compare against DATABOX_VOID "
                            "or we created new numeric types and didn't add "
@@ -1118,8 +1119,9 @@ int databoxTest(int argc, char *argv[]) {
     TEST("comparison reflexivity - same value equals itself") {
         /* Test signed integers at boundaries */
         int64_t signedVals[] = {INT64_MIN, INT64_MIN + 1, -1000000, -1, 0, 1,
-                                1000000, INT64_MAX - 1, INT64_MAX};
-        for (size_t i = 0; i < sizeof(signedVals) / sizeof(signedVals[0]); i++) {
+                                1000000,   INT64_MAX - 1, INT64_MAX};
+        for (size_t i = 0; i < sizeof(signedVals) / sizeof(signedVals[0]);
+             i++) {
             databox a = databoxNewSigned(signedVals[i]);
             if (databoxCompare(&a, &a) != 0) {
                 ERR("Reflexivity failed for signed %" PRId64, signedVals[i]);
@@ -1132,12 +1134,14 @@ int databoxTest(int argc, char *argv[]) {
              i++) {
             databox a = databoxNewUnsigned(unsignedVals[i]);
             if (databoxCompare(&a, &a) != 0) {
-                ERR("Reflexivity failed for unsigned %" PRIu64, unsignedVals[i]);
+                ERR("Reflexivity failed for unsigned %" PRIu64,
+                    unsignedVals[i]);
             }
         }
 
         /* Test floats/doubles */
-        double realVals[] = {-1e38, -1e10, -1.0, -0.5, 0.0, 0.5, 1.0, 1e10, 1e38};
+        double realVals[] = {-1e38, -1e10, -1.0, -0.5, 0.0,
+                             0.5,   1.0,   1e10, 1e38};
         for (size_t i = 0; i < sizeof(realVals) / sizeof(realVals[0]); i++) {
             databox a = databoxNewReal(realVals[i]);
             if (databoxCompare(&a, &a) != 0) {
@@ -1331,7 +1335,8 @@ int databoxTest(int argc, char *argv[]) {
         s2 = databoxNewBytesString("file10.txt");
         /* "file2.txt" < "file10.txt" because 2 < 10 */
         if (databoxCompare(&s1, &s2) >= 0) {
-            ERRR("'file2.txt' should be less than 'file10.txt' in natural sort");
+            ERRR(
+                "'file2.txt' should be less than 'file10.txt' in natural sort");
         }
     }
 
@@ -1583,13 +1588,19 @@ int databoxTest(int argc, char *argv[]) {
 
             /* Consistency with actual values */
             if (val1 < val2 && cmpAB >= 0) {
-                ERR("Comparison doesn't match actual values: %" PRId64 " vs %" PRId64, val1, val2);
+                ERR("Comparison doesn't match actual values: %" PRId64
+                    " vs %" PRId64,
+                    val1, val2);
             }
             if (val1 > val2 && cmpAB <= 0) {
-                ERR("Comparison doesn't match actual values: %" PRId64 " vs %" PRId64, val1, val2);
+                ERR("Comparison doesn't match actual values: %" PRId64
+                    " vs %" PRId64,
+                    val1, val2);
             }
             if (val1 == val2 && cmpAB != 0) {
-                ERR("Comparison doesn't match actual values: %" PRId64 " vs %" PRId64, val1, val2);
+                ERR("Comparison doesn't match actual values: %" PRId64
+                    " vs %" PRId64,
+                    val1, val2);
             }
         }
     }
@@ -1619,7 +1630,8 @@ int databoxTest(int argc, char *argv[]) {
             /* Anti-symmetry */
             if (!((cmpAB < 0 && cmpBA > 0) || (cmpAB > 0 && cmpBA < 0) ||
                   (cmpAB == 0 && cmpBA == 0))) {
-                ERR("String anti-symmetry failed in stress test for '%s' vs '%s'",
+                ERR("String anti-symmetry failed in stress test for '%s' vs "
+                    "'%s'",
                     buf1, buf2);
             }
 
@@ -1627,7 +1639,8 @@ int databoxTest(int argc, char *argv[]) {
             int stdCmp = strcmp(buf1, buf2);
             if ((stdCmp < 0 && cmpAB >= 0) || (stdCmp > 0 && cmpAB <= 0) ||
                 (stdCmp == 0 && cmpAB != 0)) {
-                ERR("Alphabetic comparison doesn't match strcmp for '%s' vs '%s'",
+                ERR("Alphabetic comparison doesn't match strcmp for '%s' vs "
+                    "'%s'",
                     buf1, buf2);
             }
 
@@ -1640,19 +1653,10 @@ int databoxTest(int argc, char *argv[]) {
 
     TEST("large value ranges for binary search correctness") {
         /* Test with values spread across the int64 range */
-        int64_t testVals[] = {INT64_MIN,
-                              INT64_MIN / 2,
-                              -1000000000LL,
-                              -1000000LL,
-                              -1000LL,
-                              -1LL,
-                              0LL,
-                              1LL,
-                              1000LL,
-                              1000000LL,
-                              1000000000LL,
-                              INT64_MAX / 2,
-                              INT64_MAX};
+        int64_t testVals[] = {
+            INT64_MIN,    INT64_MIN / 2, -1000000000LL, -1000000LL, -1000LL,
+            -1LL,         0LL,           1LL,           1000LL,     1000000LL,
+            1000000000LL, INT64_MAX / 2, INT64_MAX};
         const int N = sizeof(testVals) / sizeof(testVals[0]);
 
         /* Create sorted array */

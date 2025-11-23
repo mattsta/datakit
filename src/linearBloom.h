@@ -20,7 +20,7 @@ typedef uint_fast32_t linearBloom;
 #define LINEARBLOOM_EXTENT_BITS (1ULL << 23)
 #endif
 
-#define divCeil(a, b) (((a) + (b)-1) / (b))
+#define divCeil(a, b) (((a) + (b) - 1) / (b))
 
 /* This is a bit of a mess because we need a:
  *  - CEILING ROUND from bits to whole bytes

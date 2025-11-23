@@ -32,7 +32,7 @@ typedef uint64_t linearBloomCount;
 #include "../deps/varint/src/varintPacked.h"
 
 /* Define divCeil BEFORE using it */
-#define divCeil(a, b) (((a) + (b)-1) / (b))
+#define divCeil(a, b) (((a) + (b) - 1) / (b))
 
 /* See comment for this in linearBloom.h */
 #define LINEARBLOOMCOUNT_EXTENT_BYTES                                          \

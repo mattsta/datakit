@@ -29,7 +29,7 @@ typedef struct testCallbackState {
 } testCallbackState;
 
 static bool testCountingCallback(timerWheel *tw, timerWheelId id,
-                                  void *clientData) {
+                                 void *clientData) {
     (void)tw;
     testCallbackState *state = clientData;
     state->callCount++;
@@ -38,7 +38,7 @@ static bool testCountingCallback(timerWheel *tw, timerWheelId id,
 }
 
 static bool testNestedTimerCallback(timerWheel *tw, timerWheelId id,
-                                     void *clientData) {
+                                    void *clientData) {
     (void)id;
     testCallbackState *state = clientData;
     state->callCount++;
@@ -51,7 +51,7 @@ static bool testNestedTimerCallback(timerWheel *tw, timerWheelId id,
 }
 
 static bool testSelfUnregisterCallback(timerWheel *tw, timerWheelId id,
-                                        void *clientData) {
+                                       void *clientData) {
     testCallbackState *state = clientData;
     state->callCount++;
     timerWheelUnregister(tw, id);
@@ -60,7 +60,7 @@ static bool testSelfUnregisterCallback(timerWheel *tw, timerWheelId id,
 
 /* Equivalent callbacks for multiTimer comparison */
 static bool mtCountingCallback(multiTimer *t, multiTimerId id,
-                                void *clientData) {
+                               void *clientData) {
     (void)t;
     testCallbackState *state = clientData;
     state->callCount++;
@@ -99,8 +99,8 @@ int timerWheelTest(int argc, char *argv[]) {
         timerWheel *tw = timerWheelNew();
         testCallbackState state = {0};
 
-        timerWheelId id = timerWheelRegister(tw, 1000, 0,
-                                              testCountingCallback, &state);
+        timerWheelId id =
+            timerWheelRegister(tw, 1000, 0, testCountingCallback, &state);
         if (id == 0) {
             ERRR("Timer ID should not be 0");
         }
@@ -119,7 +119,7 @@ int timerWheelTest(int argc, char *argv[]) {
         timerWheelId ids[5];
         for (int32_t i = 0; i < 5; i++) {
             ids[i] = timerWheelRegister(tw, (uint64_t)(i + 1) * 1000, 0,
-                                         testCountingCallback, &state);
+                                        testCountingCallback, &state);
         }
 
         for (int32_t i = 0; i < 5; i++) {
@@ -198,8 +198,8 @@ int timerWheelTest(int argc, char *argv[]) {
 
         if (states[0].callCount != 1 || states[1].callCount != 1 ||
             states[2].callCount != 1) {
-            ERR("Not all timers fired: %d, %d, %d",
-                states[0].callCount, states[1].callCount, states[2].callCount);
+            ERR("Not all timers fired: %d, %d, %d", states[0].callCount,
+                states[1].callCount, states[2].callCount);
         }
 
         timerWheelFree(tw);
@@ -213,8 +213,8 @@ int timerWheelTest(int argc, char *argv[]) {
         timerWheel *tw = timerWheelNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = false};
 
-        timerWheelId id = timerWheelRegister(tw, 100000, 0,
-                                              testCountingCallback, &state);
+        timerWheelId id =
+            timerWheelRegister(tw, 100000, 0, testCountingCallback, &state);
         timerWheelUnregister(tw, id);
 
         timerWheelAdvanceTime(tw, 150000);
@@ -233,8 +233,8 @@ int timerWheelTest(int argc, char *argv[]) {
         timerWheelId ids[5];
         for (int32_t i = 0; i < 5; i++) {
             states[i].shouldReschedule = false;
-            ids[i] = timerWheelRegister(tw, 50000, 0,
-                                         testCountingCallback, &states[i]);
+            ids[i] = timerWheelRegister(tw, 50000, 0, testCountingCallback,
+                                        &states[i]);
         }
 
         timerWheelUnregister(tw, ids[0]);
@@ -245,13 +245,13 @@ int timerWheelTest(int argc, char *argv[]) {
 
         if (states[0].callCount != 0 || states[2].callCount != 0 ||
             states[4].callCount != 0) {
-            ERR("Unregistered timers fired: %d, %d, %d",
-                states[0].callCount, states[2].callCount, states[4].callCount);
+            ERR("Unregistered timers fired: %d, %d, %d", states[0].callCount,
+                states[2].callCount, states[4].callCount);
         }
 
         if (states[1].callCount != 1 || states[3].callCount != 1) {
-            ERR("Registered timers did not fire: %d, %d",
-                states[1].callCount, states[3].callCount);
+            ERR("Registered timers did not fire: %d, %d", states[1].callCount,
+                states[3].callCount);
         }
 
         timerWheelFree(tw);
@@ -379,12 +379,13 @@ int timerWheelTest(int argc, char *argv[]) {
         const int32_t numTimers = 1000;
         int32_t totalCallCount = 0;
 
-        testCallbackState *states = zcalloc(numTimers, sizeof(testCallbackState));
+        testCallbackState *states =
+            zcalloc(numTimers, sizeof(testCallbackState));
 
         for (int32_t i = 0; i < numTimers; i++) {
             states[i].shouldReschedule = false;
-            timerWheelRegister(tw, 10000 + (uint64_t)i, 0,
-                               testCountingCallback, &states[i]);
+            timerWheelRegister(tw, 10000 + (uint64_t)i, 0, testCountingCallback,
+                               &states[i]);
         }
 
         if (timerWheelCount(tw) != (size_t)numTimers) {
@@ -459,7 +460,8 @@ int timerWheelTest(int argc, char *argv[]) {
         timerWheelGetStats(tw, &stats);
 
         if (stats.totalRegistrations != 100) {
-            ERR("Expected 100 registrations, got %zu", stats.totalRegistrations);
+            ERR("Expected 100 registrations, got %zu",
+                stats.totalRegistrations);
         }
 
         if (stats.totalExpirations != 100) {
@@ -481,7 +483,8 @@ int timerWheelTest(int argc, char *argv[]) {
         PERF_TIMERS_SETUP;
 
         for (size_t i = 0; i < numOps; i++) {
-            timerWheelRegister(tw, 1000000 + i, 0, testCountingCallback, &state);
+            timerWheelRegister(tw, 1000000 + i, 0, testCountingCallback,
+                               &state);
         }
 
         PERF_TIMERS_FINISH_PRINT_RESULTS(numOps, "timerWheel registrations");
@@ -497,7 +500,8 @@ int timerWheelTest(int argc, char *argv[]) {
         const size_t numOps = 10000;
 
         for (size_t i = 0; i < numOps; i++) {
-            timerWheelRegister(tw, 1000000 + i, 0, testCountingCallback, &state);
+            timerWheelRegister(tw, 1000000 + i, 0, testCountingCallback,
+                               &state);
         }
 
         PERF_TIMERS_SETUP;
@@ -516,7 +520,8 @@ int timerWheelTest(int argc, char *argv[]) {
         const size_t numTimers = 10000;
         int32_t totalFired = 0;
 
-        testCallbackState *states = zcalloc(numTimers, sizeof(testCallbackState));
+        testCallbackState *states =
+            zcalloc(numTimers, sizeof(testCallbackState));
 
         for (size_t i = 0; i < numTimers; i++) {
             states[i].shouldReschedule = false;
@@ -584,7 +589,8 @@ int timerWheelTest(int argc, char *argv[]) {
 
     TEST("COMPARISON: batch expiration (timerWheel vs multiTimer)") {
         const size_t numTimers = 50000;
-        testCallbackState *states = zcalloc(numTimers, sizeof(testCallbackState));
+        testCallbackState *states =
+            zcalloc(numTimers, sizeof(testCallbackState));
 
         /* timerWheel */
         timerWheel *tw = timerWheelNew();
@@ -652,15 +658,16 @@ int timerWheelTest(int argc, char *argv[]) {
         uint64_t mtStart = timeUtilMonotonicNs();
 
         for (size_t i = 0; i < numTimers; i++) {
-            multiTimerRegister(mt, (i % 3600000) * 1000, 0,
-                               mtCountingCallback, &state);
+            multiTimerRegister(mt, (i % 3600000) * 1000, 0, mtCountingCallback,
+                               &state);
         }
 
         uint64_t mtEnd = timeUtilMonotonicNs();
         double mtMs = (double)(mtEnd - mtStart) / 1000000.0;
         multiTimerFree(mt);
 
-        printf("    timerWheel:  %.1f ms, %zu bytes\n", twMs, twStats.memoryBytes);
+        printf("    timerWheel:  %.1f ms, %zu bytes\n", twMs,
+               twStats.memoryBytes);
         printf("    multiTimer:  %.1f ms\n", mtMs);
         printf("    Time speedup: %.2fx\n", mtMs / twMs);
     }
@@ -684,7 +691,7 @@ int timerWheelTest(int argc, char *argv[]) {
 
         for (size_t i = 0; i < ops; i++) {
             timerWheelId id = timerWheelRegister(tw, 1000 + (i % 10000), 0,
-                                                  testCountingCallback, &state);
+                                                 testCountingCallback, &state);
             if (i % 3 == 0) {
                 timerWheelUnregister(tw, id);
             }
@@ -708,7 +715,7 @@ int timerWheelTest(int argc, char *argv[]) {
 
         for (size_t i = 0; i < ops; i++) {
             multiTimerId id = multiTimerRegister(mt, 1000 + (i % 10000), 0,
-                                                  mtCountingCallback, &state);
+                                                 mtCountingCallback, &state);
             if (i % 3 == 0) {
                 multiTimerUnregister(mt, id);
             }
@@ -744,9 +751,8 @@ int timerWheelTest(int argc, char *argv[]) {
 
         double bytesPerTimer = (double)stats.memoryBytes / numTimers;
 
-        printf("    Memory for %zu timers: %zu bytes (%.2f MB)\n",
-               numTimers, stats.memoryBytes,
-               (double)stats.memoryBytes / (1024 * 1024));
+        printf("    Memory for %zu timers: %zu bytes (%.2f MB)\n", numTimers,
+               stats.memoryBytes, (double)stats.memoryBytes / (1024 * 1024));
         printf("    Bytes per timer: %.2f\n", bytesPerTimer);
         printf("    Overflow timers: %zu\n", stats.overflowCount);
 
@@ -775,13 +781,15 @@ int timerWheelTest(int argc, char *argv[]) {
         timerWheelRegister(tw, 60000000, 0, testCountingCallback, &states[2]);
 
         /* Wheel 3: 17min - 18h */
-        timerWheelRegister(tw, 3600000000ULL, 0, testCountingCallback, &states[3]);
+        timerWheelRegister(tw, 3600000000ULL, 0, testCountingCallback,
+                           &states[3]);
 
         timerWheelStats stats;
         timerWheelGetStats(tw, &stats);
 
         if (timerWheelCount(tw) != 4) {
-            ERR("Expected 4 timers across levels, got %zu", timerWheelCount(tw));
+            ERR("Expected 4 timers across levels, got %zu",
+                timerWheelCount(tw));
         }
 
         printf("    Timers spread across 4 wheel levels\n");

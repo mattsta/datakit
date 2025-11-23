@@ -89,7 +89,8 @@ int linearBloomTest(int argc, char *argv[]) {
         }
 
         if (falseNegatives > 0) {
-            ERR("Bloom filter had %zu false negatives (must be 0)!", falseNegatives);
+            ERR("Bloom filter had %zu false negatives (must be 0)!",
+                falseNegatives);
         }
 
         linearBloomFree(bloom);
@@ -110,7 +111,8 @@ int linearBloomTest(int argc, char *argv[]) {
         /* Check items numItemsToAdd to numItemsToAdd+numItemsToCheck-1 */
         /* These were NOT added, so any positive is a false positive */
         size_t falsePositives = 0;
-        for (size_t i = numItemsToAdd; i < numItemsToAdd + numItemsToCheck; i++) {
+        for (size_t i = numItemsToAdd; i < numItemsToAdd + numItemsToCheck;
+             i++) {
             hashFromInt(i, hash);
             if (linearBloomHashCheck(bloom, hash)) {
                 falsePositives++;
@@ -118,13 +120,14 @@ int linearBloomTest(int argc, char *argv[]) {
         }
 
         double fpRate = (double)falsePositives / numItemsToCheck;
-        printf("    False positive rate: %.4f%% (%zu/%zu)\n",
-               fpRate * 100, falsePositives, numItemsToCheck);
+        printf("    False positive rate: %.4f%% (%zu/%zu)\n", fpRate * 100,
+               falsePositives, numItemsToCheck);
 
         /* Expected FP rate ~0.01% (1 in 10,000) for 100k items in 8MB filter
          * Allow up to 1% for test stability */
         if (fpRate > 0.01) {
-            ERR("False positive rate %.4f%% exceeds 1%% threshold", fpRate * 100);
+            ERR("False positive rate %.4f%% exceeds 1%% threshold",
+                fpRate * 100);
         }
 
         linearBloomFree(bloom);
@@ -162,10 +165,9 @@ int linearBloomTest(int argc, char *argv[]) {
         linearBloom *bloom = linearBloomNew();
         uint64_t hash[2];
 
-        const char *strings[] = {
-            "hello", "world", "bloom", "filter", "test",
-            "datakit", "performance", "correctness", NULL
-        };
+        const char *strings[] = {"hello",       "world",       "bloom",
+                                 "filter",      "test",        "datakit",
+                                 "performance", "correctness", NULL};
 
         /* Add all strings */
         for (size_t i = 0; strings[i] != NULL; i++) {
@@ -350,7 +352,8 @@ int linearBloomTest(int argc, char *argv[]) {
         }
 
         if (falseNegatives > 0) {
-            ERR("Counting bloom filter had %zu false negatives!", falseNegatives);
+            ERR("Counting bloom filter had %zu false negatives!",
+                falseNegatives);
         }
 
         linearBloomCountFree(bloom);
@@ -414,7 +417,8 @@ int linearBloomTest(int argc, char *argv[]) {
          * bloom filter, totalCount may be higher than numOps. It should never
          * be zero or significantly lower than numOps though. */
         if (totalCount < numOps) {
-            ERR("Total count %zu unexpectedly lower than %zu", totalCount, numOps);
+            ERR("Total count %zu unexpectedly lower than %zu", totalCount,
+                numOps);
         }
         printf("    Total count: %zu (expected >= %zu due to collisions)\n",
                totalCount, numOps);
@@ -465,8 +469,8 @@ int linearBloomTest(int argc, char *argv[]) {
     TEST("linearBloom: memory layout validation") {
         /* Verify the size calculations are correct */
         size_t expectedBytes = LINEARBLOOM_EXTENT_BYTES;
-        printf("    linearBloom size: %zu bytes (%.2f MB)\n",
-               expectedBytes, (double)expectedBytes / (1024 * 1024));
+        printf("    linearBloom size: %zu bytes (%.2f MB)\n", expectedBytes,
+               (double)expectedBytes / (1024 * 1024));
         printf("    linearBloom bits: %" PRIu64 " (%.2f million)\n",
                (uint64_t)LINEARBLOOM_EXTENT_BITS,
                (double)LINEARBLOOM_EXTENT_BITS / 1000000);
@@ -476,7 +480,11 @@ int linearBloomTest(int argc, char *argv[]) {
         linearBloom *bloom = linearBloomNew();
 
         /* Set bits at various positions including near the end */
-        uint64_t positions[] = {0, 100, 1000, 10000, 100000,
+        uint64_t positions[] = {0,
+                                100,
+                                1000,
+                                10000,
+                                100000,
                                 LINEARBLOOM_EXTENT_BITS - 100,
                                 LINEARBLOOM_EXTENT_BITS - 1};
 

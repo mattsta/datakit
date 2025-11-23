@@ -63,7 +63,7 @@
 
 /* Helpers for circular buffer. */
 #define DNEXT(a) (((a) + 1) & STRSCAN_DMASK)
-#define DPREV(a) (((a)-1) & STRSCAN_DMASK)
+#define DPREV(a) (((a) - 1) & STRSCAN_DMASK)
 #define DLEN(lo, hi) ((int32_t)(((lo) - (hi)) & STRSCAN_DMASK))
 
 #define casecmp(c, k) (((c) | 0x20) == (k))
@@ -154,7 +154,7 @@ DK_STATIC StrScanFmt StrScanHex(const uint8_t *p, databox *box, StrScanFmt fmt,
             return STRSCAN_ERROR;
         }
 
-        DATABOX_SET_UNSIGNED(box, neg ? (uint64_t) - (int64_t)x : x);
+        DATABOX_SET_UNSIGNED(box, neg ? (uint64_t)-(int64_t)x : x);
         return fmt;
     default:
         break;
@@ -206,7 +206,7 @@ DK_STATIC StrScanFmt StrScanOctal(const uint8_t *p, databox *box,
     default:
     case STRSCAN_I64:
     case STRSCAN_U64:
-        DATABOX_SET_UNSIGNED(box, neg ? (uint64_t) - (int64_t)x : x);
+        DATABOX_SET_UNSIGNED(box, neg ? (uint64_t)-(int64_t)x : x);
         break;
     }
 
@@ -311,7 +311,7 @@ DK_STATIC StrScanFmt StrScanDecimal(const uint8_t *p, databox *box,
                 return STRSCAN_U32;
             case STRSCAN_I64:
             case STRSCAN_U64:
-                DATABOX_SET_UNSIGNED(box, neg ? (uint64_t) - (int64_t)x : x);
+                DATABOX_SET_UNSIGNED(box, neg ? (uint64_t)-(int64_t)x : x);
                 return fmt;
             default:
             plainnumber: /* Fast path for plain numbers < 2^63. */

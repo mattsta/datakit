@@ -30,58 +30,58 @@ struct multiroar {
 
 #define BITMAP_SIZE_IN_BYTES (BITMAP_SIZE_IN_BITS / 8)
 
-__attribute__((unused))
-static const uint64_t _allZeroes[BITMAP_SIZE_IN_BYTES / sizeof(uint64_t)] = {0};
-__attribute__((unused))
-static const uint64_t _allOnes[BITMAP_SIZE_IN_BYTES / sizeof(uint64_t)] = {
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
-    0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL};
+__attribute__((unused)) static const uint64_t
+    _allZeroes[BITMAP_SIZE_IN_BYTES / sizeof(uint64_t)] = {0};
+__attribute__((unused)) static const uint64_t
+    _allOnes[BITMAP_SIZE_IN_BYTES / sizeof(uint64_t)] = {
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL,
+        0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL};
 
 /* 13 bits because log2(8192) == 13 */
 #define DIRECT_STORAGE_BITS 13
 
-#define divCeil(a, b) (((a) + (b)-1) / (b))
+#define divCeil(a, b) (((a) + (b) - 1) / (b))
 
 /* This MAX_ENTRIES calculation makes sure we don't store more elements in
  * our explicit lists than would be used by just using a bitmap directly. */
@@ -211,7 +211,8 @@ DK_STATIC uint16_t insertPositionalNumber(multiroar *r, const databox *key,
     const uint16_t newElementCount = currentElementCount + 1;
 
     D("count: %" PRIu16 ", len: %zu (required: %f)\n", currentElementCount,
-      (size_t)GET_CHUNK_PACKED_LEN(value), ((double)currentElementCount * 13) / 8);
+      (size_t)GET_CHUNK_PACKED_LEN(value),
+      ((double)currentElementCount * 13) / 8);
     if (varintPacked13Member(GET_CHUNK_PACKED_START(value), currentElementCount,
                              positionalNumber) >= 0) {
         /* element found!  do no further processing. */
@@ -271,7 +272,8 @@ _convertPositionPackedArrayToBitmap(multiroar *r, const databox *key,
     uint8_t newBitmap[BITMAP_SIZE_IN_BYTES + 1] = {0};
 
     /* If converting Unset Positions, start with a fully set bitmap.
-     * Use 0xFF to set all bits to 1 (not 0x01 which only sets 1 bit per byte) */
+     * Use 0xFF to set all bits to 1 (not 0x01 which only sets 1 bit per byte)
+     */
     if (!convertToSetPositions) {
         memset(newBitmap, 0xFF, sizeof(newBitmap));
     }
@@ -309,11 +311,10 @@ DK_STATIC void convertPositionPackedArrayToBitmap(multiroar *r,
     _convertPositionPackedArrayToBitmap(r, key, value, me, true);
 }
 
-__attribute__((unused))
-DK_STATIC void convertNegativePositionPackedArrayToBitmap(multiroar *r,
-                                                          const databox *key,
-                                                          const databox *value,
-                                                          multimapEntry *me) {
+__attribute__((unused)) DK_STATIC void
+convertNegativePositionPackedArrayToBitmap(multiroar *r, const databox *key,
+                                           const databox *value,
+                                           multimapEntry *me) {
     _convertPositionPackedArrayToBitmap(r, key, value, me, false);
 }
 
@@ -356,23 +357,19 @@ DK_STATIC uint16_t _bitmapToPositions(const void *bitmap, uint8_t positions[],
     return idx;
 }
 
-__attribute__((unused))
-DK_STATIC inline uint16_t bitmapToSetPositions(const void *bitmap,
-                                               uint8_t positions[]) {
+__attribute__((unused)) DK_STATIC inline uint16_t
+bitmapToSetPositions(const void *bitmap, uint8_t positions[]) {
     return _bitmapToPositions(bitmap, positions, true);
 }
 
-__attribute__((unused))
-DK_STATIC inline uint16_t bitmapToNegativePositions(const void *bitmap,
-                                                    uint8_t positions[]) {
+__attribute__((unused)) DK_STATIC inline uint16_t
+bitmapToNegativePositions(const void *bitmap, uint8_t positions[]) {
     return _bitmapToPositions(bitmap, positions, false);
 }
 
-DK_STATIC void convertBitmapToPositionList(multiroar *r,
-                                           const databox *key __attribute__((unused)),
-                                           const databox *value,
-                                           multimapEntry *me,
-                                           bool trackSetPositions) {
+DK_STATIC void convertBitmapToPositionList(
+    multiroar *r, const databox *key __attribute__((unused)),
+    const databox *value, multimapEntry *me, bool trackSetPositions) {
     uint8_t packedArray[BITMAP_SIZE_IN_BYTES + 16] = {0};
     uint8_t *packedArrayStart = packedArray + 1;
 
@@ -396,11 +393,8 @@ DK_STATIC void convertBitmapToPositionList(multiroar *r,
     multimapReplaceEntry(&r->map, me, &box);
 }
 
-__attribute__((unused))
-DK_STATIC void convertBitmapToSparsePositionPackedArray(multiroar *r,
-                                                        const databox *key,
-                                                        const databox *value,
-                                                        multimapEntry *me) {
+__attribute__((unused)) DK_STATIC void convertBitmapToSparsePositionPackedArray(
+    multiroar *r, const databox *key, const databox *value, multimapEntry *me) {
     convertBitmapToPositionList(r, key, value, me, true);
 }
 
@@ -504,7 +498,8 @@ bool multiroarBitSet(multiroar *r, size_t position) {
             const uint32_t bitOffset = BIT_OFFSET(position);
             uint8_t *bitmapStart = GET_CHUNK_BITMAP_START(&value);
 
-            D("Byte offset: %zu, bit offset: %" PRIu32 "\n", byteOffset, bitOffset);
+            D("Byte offset: %zu, bit offset: %" PRIu32 "\n", byteOffset,
+              bitOffset);
             previouslySet = (bitmapStart[byteOffset] >> bitOffset) & 0x01;
             bitmapStart[byteOffset] |= (1 << bitOffset);
 
@@ -602,7 +597,8 @@ bool multiroarBitGet(multiroar *r, size_t position) {
             break;
         case CHUNK_TYPE_UNDER_FULL_DIRECT_POSITION_NUMBERS: {
             D("Looking up direct (%" PRIu64 ", %" PRIu64 ")...\n",
-              (uint64_t)PACKED_COUNT_FROM_VALUE(&value), (uint64_t)DIRECT_BIT_POSITION(position));
+              (uint64_t)PACKED_COUNT_FROM_VALUE(&value),
+              (uint64_t)DIRECT_BIT_POSITION(position));
             if (varintPacked13Member(GET_CHUNK_PACKED_START(&value),
                                      PACKED_COUNT_FROM_VALUE(&value),
                                      DIRECT_BIT_POSITION(position)) >= 0) {
@@ -847,8 +843,8 @@ int multiroarTest(int argc, char *argv[]) {
     TEST("chunk boundary correctness") {
         /* Test bits at and around chunk boundaries (8192 bits per chunk) */
         multiroar *r = multiroarBitNew();
-        const size_t boundaries[] = {0, 8191, 8192, 8193, 16383, 16384, 16385,
-                                     24575, 24576, 24577};
+        const size_t boundaries[] = {0,     8191,  8192,  8193,  16383,
+                                     16384, 16385, 24575, 24576, 24577};
         const size_t numBoundaries = sizeof(boundaries) / sizeof(boundaries[0]);
 
         /* Set all boundary bits */
@@ -937,9 +933,10 @@ int multiroarTest(int argc, char *argv[]) {
         multiroar *r = multiroarBitNew();
 
         /* Set positions to trigger bitmap mode, then verify */
-        const size_t positions[] = {0, 100, 200, 300, 400, 500, 600, 700, 800,
-                                    900, 1000, 1500, 2000, 2500, 3000, 3500,
-                                    4000, 4500, 5000, 5500, 6000, 6500, 7000};
+        const size_t positions[] = {0,    100,  200,  300,  400,  500,
+                                    600,  700,  800,  900,  1000, 1500,
+                                    2000, 2500, 3000, 3500, 4000, 4500,
+                                    5000, 5500, 6000, 6500, 7000};
         const size_t numPositions = sizeof(positions) / sizeof(positions[0]);
 
         /* First, fill up to trigger bitmap conversion */
@@ -1174,9 +1171,11 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         /* Test byte boundary positions: 0, 7, 8, 15, 16, ... */
-        const size_t byteBoundaries[] = {0, 7, 8, 15, 16, 23, 24, 31, 32,
-                                          63, 64, 127, 128, 255, 256, 511, 512};
-        for (size_t i = 0; i < sizeof(byteBoundaries)/sizeof(byteBoundaries[0]); i++) {
+        const size_t byteBoundaries[] = {0,   7,   8,   15,  16, 23,
+                                         24,  31,  32,  63,  64, 127,
+                                         128, 255, 256, 511, 512};
+        for (size_t i = 0;
+             i < sizeof(byteBoundaries) / sizeof(byteBoundaries[0]); i++) {
             size_t pos = byteBoundaries[i];
             if (pos < 700) {
                 if (!multiroarBitGet(r, pos)) {
@@ -1186,9 +1185,11 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         /* Test 64-bit word boundary positions */
-        const size_t wordBoundaries[] = {63, 64, 127, 128, 191, 192, 255, 256,
-                                          319, 320, 383, 384, 447, 448, 511, 512};
-        for (size_t i = 0; i < sizeof(wordBoundaries)/sizeof(wordBoundaries[0]); i++) {
+        const size_t wordBoundaries[] = {63,  64,  127, 128, 191, 192,
+                                         255, 256, 319, 320, 383, 384,
+                                         447, 448, 511, 512};
+        for (size_t i = 0;
+             i < sizeof(wordBoundaries) / sizeof(wordBoundaries[0]); i++) {
             size_t pos = wordBoundaries[i];
             if (pos < 700) {
                 if (!multiroarBitGet(r, pos)) {
@@ -1207,10 +1208,14 @@ int multiroarTest(int argc, char *argv[]) {
 
         /* Set sparse positions across 4 chunks */
         const size_t positions[] = {
-            0, 100, 1000,                           /* Chunk 0 */
-            chunkBits + 50, chunkBits + 500,        /* Chunk 1 */
-            chunkBits * 2 + 1, chunkBits * 2 + 999, /* Chunk 2 */
-            chunkBits * 3 + 8191                    /* Chunk 3, last bit */
+            0,
+            100,
+            1000, /* Chunk 0 */
+            chunkBits + 50,
+            chunkBits + 500, /* Chunk 1 */
+            chunkBits * 2 + 1,
+            chunkBits * 2 + 999, /* Chunk 2 */
+            chunkBits * 3 + 8191 /* Chunk 3, last bit */
         };
         const size_t numPositions = sizeof(positions) / sizeof(positions[0]);
 
@@ -1330,14 +1335,11 @@ int multiroarTest(int argc, char *argv[]) {
         multiroar *r = multiroarBitNew();
 
         /* Test very large positions */
-        const size_t largePositions[] = {
-            SIZE_MAX - 1,
-            SIZE_MAX - 8192,
-            SIZE_MAX - 8193,
-            SIZE_MAX / 2,
-            SIZE_MAX / 2 + 1
-        };
-        const size_t numLarge = sizeof(largePositions) / sizeof(largePositions[0]);
+        const size_t largePositions[] = {SIZE_MAX - 1, SIZE_MAX - 8192,
+                                         SIZE_MAX - 8193, SIZE_MAX / 2,
+                                         SIZE_MAX / 2 + 1};
+        const size_t numLarge =
+            sizeof(largePositions) / sizeof(largePositions[0]);
 
         for (size_t i = 0; i < numLarge; i++) {
             multiroarBitSet(r, largePositions[i]);
@@ -1494,7 +1496,8 @@ int multiroarTest(int argc, char *argv[]) {
 
             /* Verify immediately */
             if (!multiroarBitGet(r, i)) {
-                ERR("OVER_FULL transition: position %zu not set immediately!", i);
+                ERR("OVER_FULL transition: position %zu not set immediately!",
+                    i);
             }
         }
 
@@ -1625,10 +1628,9 @@ int multiroarTest(int argc, char *argv[]) {
 
         /* Insert positions that stress the sorted insert algorithm */
         const size_t positions[] = {
-            500, 100, 900, 50, 950, 25, 975, 12, 988, 6, 994, 3, 997, 1, 999,
-            0, 1000, 2, 998, 4, 996, 8, 992, 16, 984, 32, 968, 64, 936, 128,
-            872, 256, 744, 512
-        };
+            500, 100, 900, 50, 950,  25,  975, 12,  988, 6,  994, 3,
+            997, 1,   999, 0,  1000, 2,   998, 4,   996, 8,  992, 16,
+            984, 32,  968, 64, 936,  128, 872, 256, 744, 512};
         const size_t numPos = sizeof(positions) / sizeof(positions[0]);
 
         for (size_t i = 0; i < numPos; i++) {
@@ -1638,7 +1640,8 @@ int multiroarTest(int argc, char *argv[]) {
         /* Verify all positions are set */
         for (size_t i = 0; i < numPos; i++) {
             if (!multiroarBitGet(r, positions[i])) {
-                ERR("Sorted insert stress: position %zu not set!", positions[i]);
+                ERR("Sorted insert stress: position %zu not set!",
+                    positions[i]);
             }
         }
 

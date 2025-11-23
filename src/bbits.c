@@ -17,7 +17,7 @@
 /* ====================================================================
  * Dod - Dod
  * ==================================================================== */
-#define DOD_DIV_CEIL(a, b) (((a) + (b)-1) / (b))
+#define DOD_DIV_CEIL(a, b) (((a) + (b) - 1) / (b))
 bool bbitsDodDodAppend(bbitsDodDod *dd, const dodVal newKey,
                        const dodVal newVal) {
     /* Always use last elements of arrays */
@@ -101,8 +101,8 @@ bool bbitsDodDodAppend(bbitsDodDod *dd, const dodVal newKey,
 }
 
 /* Helper: Read all values from a dod bitmap using stored t0/t1 values */
-static void bbitsReadDodAll(const dod *d, dodVal t0, dodVal t1,
-                            uint64_t *vals, size_t elemCount) {
+static void bbitsReadDodAll(const dod *d, dodVal t0, dodVal t1, uint64_t *vals,
+                            size_t elemCount) {
     if (elemCount == 0) {
         return;
     }
@@ -188,7 +188,8 @@ bool bbitsDodDodGetOffsetCount(bbitsDodDod *dd, ssize_t offset,
 
     /* Read from first bitmap starting at startOffset */
     size_t elementsAvailable = kw->count - startOffset;
-    size_t elementsToRead = (elementsAvailable < remaining) ? elementsAvailable : remaining;
+    size_t elementsToRead =
+        (elementsAvailable < remaining) ? elementsAvailable : remaining;
 
     /* Read to temp buffer then copy needed portion */
     uint64_t *tmpKey = zmalloc(kw->count * sizeof(*tmpKey));
@@ -416,7 +417,8 @@ bool bbitsDodXofGetOffsetCount(bbitsDodXof *dx, ssize_t offset, ssize_t *count,
 
     /* Read from first bitmap starting at startOffset */
     size_t elementsAvailable = kw->count - startOffset;
-    size_t elementsToRead = (elementsAvailable < remaining) ? elementsAvailable : remaining;
+    size_t elementsToRead =
+        (elementsAvailable < remaining) ? elementsAvailable : remaining;
 
     /* Read to temp buffers then copy needed portion */
     uint64_t *tmpKey = zmalloc(kw->count * sizeof(*tmpKey));
@@ -511,7 +513,7 @@ int bbitsTest(int argc, char *argv[]) {
         double mean, variance, stddev;
 
         bool result = bbitsDodDodGetOffsetCount(&dd, 0, &count, &keys, &vals,
-                                                 &mean, &variance, &stddev);
+                                                &mean, &variance, &stddev);
         if (!result) {
             ERR("bbitsDodDodGetOffsetCount failed%s", "");
         }
@@ -561,8 +563,8 @@ int bbitsTest(int argc, char *argv[]) {
             ERR("Expected %zu elements, got %zu", numElements, dd.elements);
         }
 
-        printf("  Created %zu bitmap segments for %zu elements\n",
-               dd.count, numElements);
+        printf("  Created %zu bitmap segments for %zu elements\n", dd.count,
+               numElements);
 
         /* Read back and verify all values */
         ssize_t count = -1;
@@ -570,7 +572,7 @@ int bbitsTest(int argc, char *argv[]) {
         uint64_t *vals = NULL;
 
         bool result = bbitsDodDodGetOffsetCount(&dd, 0, &count, &keys, &vals,
-                                                 NULL, NULL, NULL);
+                                                NULL, NULL, NULL);
         if (!result) {
             ERR("bbitsDodDodGetOffsetCount failed%s", "");
         }
@@ -627,7 +629,7 @@ int bbitsTest(int argc, char *argv[]) {
         double mean, variance, stddev;
 
         bool result = bbitsDodXofGetOffsetCount(&dx, 0, &count, &keys, &vals,
-                                                 &mean, &variance, &stddev);
+                                                &mean, &variance, &stddev);
         if (!result) {
             ERR("bbitsDodXofGetOffsetCount failed%s", "");
         }
@@ -648,8 +650,8 @@ int bbitsTest(int argc, char *argv[]) {
 
             /* Compare doubles with small epsilon for floating point errors */
             if (fabs(vals[i] - expectedVal) > 1e-10) {
-                ERR("Val mismatch at %zu: expected %f, got %f",
-                    i, expectedVal, vals[i]);
+                ERR("Val mismatch at %zu: expected %f, got %f", i, expectedVal,
+                    vals[i]);
             }
         }
 
@@ -678,8 +680,8 @@ int bbitsTest(int argc, char *argv[]) {
             ERR("Expected %zu elements, got %zu", numElements, dx.elements);
         }
 
-        printf("  Created %zu bitmap segments for %zu elements\n",
-               dx.count, numElements);
+        printf("  Created %zu bitmap segments for %zu elements\n", dx.count,
+               numElements);
 
         /* Read back and verify all values */
         ssize_t count = -1;
@@ -687,7 +689,7 @@ int bbitsTest(int argc, char *argv[]) {
         double *vals = NULL;
 
         bool result = bbitsDodXofGetOffsetCount(&dx, 0, &count, &keys, &vals,
-                                                 NULL, NULL, NULL);
+                                                NULL, NULL, NULL);
         if (!result) {
             ERR("bbitsDodXofGetOffsetCount failed%s", "");
         }
@@ -707,8 +709,8 @@ int bbitsTest(int argc, char *argv[]) {
             }
 
             if (fabs(vals[i] - expectedVal) > 1e-10) {
-                ERR("Val mismatch at %zu: expected %f, got %f",
-                    i, expectedVal, vals[i]);
+                ERR("Val mismatch at %zu: expected %f, got %f", i, expectedVal,
+                    vals[i]);
             }
         }
 
@@ -726,18 +728,20 @@ int bbitsTest(int argc, char *argv[]) {
         uint64_t *vals = NULL;
 
         bool result = bbitsDodDodGetOffsetCount(&dd, 0, &count, &keys, &vals,
-                                                 NULL, NULL, NULL);
+                                                NULL, NULL, NULL);
         if (result) {
-            ERR("bbitsDodDodGetOffsetCount should return false for empty%s", "");
+            ERR("bbitsDodDodGetOffsetCount should return false for empty%s",
+                "");
         }
 
         bbitsDodXof dx = {0};
         double *dvals = NULL;
 
-        result = bbitsDodXofGetOffsetCount(&dx, 0, &count, &keys, &dvals,
-                                            NULL, NULL, NULL);
+        result = bbitsDodXofGetOffsetCount(&dx, 0, &count, &keys, &dvals, NULL,
+                                           NULL, NULL);
         if (result) {
-            ERR("bbitsDodXofGetOffsetCount should return false for empty%s", "");
+            ERR("bbitsDodXofGetOffsetCount should return false for empty%s",
+                "");
         }
     }
 
@@ -758,7 +762,7 @@ int bbitsTest(int argc, char *argv[]) {
         uint64_t *vals = NULL;
 
         bool result = bbitsDodDodGetOffsetCount(&dd, 20, &count, &keys, &vals,
-                                                 NULL, NULL, NULL);
+                                                NULL, NULL, NULL);
         if (!result) {
             ERR("bbitsDodDodGetOffsetCount with offset failed%s", "");
         }
@@ -770,12 +774,14 @@ int bbitsTest(int argc, char *argv[]) {
             uint64_t expectedVal = srcIdx + 100;
 
             if (keys[i] != expectedKey) {
-                ERR("Offset key mismatch at %zu: expected %" PRIu64 ", got %" PRIu64,
+                ERR("Offset key mismatch at %zu: expected %" PRIu64
+                    ", got %" PRIu64,
                     i, expectedKey, keys[i]);
             }
 
             if (vals[i] != expectedVal) {
-                ERR("Offset val mismatch at %zu: expected %" PRIu64 ", got %" PRIu64,
+                ERR("Offset val mismatch at %zu: expected %" PRIu64
+                    ", got %" PRIu64,
                     i, expectedVal, vals[i]);
             }
         }
@@ -811,7 +817,7 @@ int bbitsTest(int argc, char *argv[]) {
         uint64_t *vals = NULL;
 
         bool result = bbitsDodDodGetOffsetCount(&dd, -10, &count, &keys, &vals,
-                                                 NULL, NULL, NULL);
+                                                NULL, NULL, NULL);
         if (!result) {
             ERR("bbitsDodDodGetOffsetCount with negative offset failed%s", "");
         }
@@ -823,12 +829,14 @@ int bbitsTest(int argc, char *argv[]) {
             uint64_t expectedVal = srcIdx * 7;
 
             if (keys[i] != expectedKey) {
-                ERR("Neg offset key mismatch at %zu: expected %" PRIu64 ", got %" PRIu64,
+                ERR("Neg offset key mismatch at %zu: expected %" PRIu64
+                    ", got %" PRIu64,
                     i, expectedKey, keys[i]);
             }
 
             if (vals[i] != expectedVal) {
-                ERR("Neg offset val mismatch at %zu: expected %" PRIu64 ", got %" PRIu64,
+                ERR("Neg offset val mismatch at %zu: expected %" PRIu64
+                    ", got %" PRIu64,
                     i, expectedVal, vals[i]);
             }
         }
@@ -856,7 +864,7 @@ int bbitsTest(int argc, char *argv[]) {
         double mean, variance, stddev;
 
         bool result = bbitsDodDodGetOffsetCount(&dd, 0, &count, &keys, &vals,
-                                                 &mean, &variance, &stddev);
+                                                &mean, &variance, &stddev);
         if (!result) {
             ERR("bbitsDodDodGetOffsetCount for stats failed%s", "");
         }

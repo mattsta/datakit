@@ -24,7 +24,7 @@ typedef struct __attribute__((packed)) databoxLinear {
             (box)->type = DATABOX_BYTES;                                       \
                                                                                \
             /* Drop the type byte from total length for BYTES length */        \
-            (box)->len = (linearLength)-1;                                     \
+            (box)->len = (linearLength) - 1;                                   \
         } else {                                                               \
             /* else, data is a known-length based on the type */               \
             databoxLinearDecode(dl, box);                                      \

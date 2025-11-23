@@ -99,7 +99,7 @@ typedef enum databoxType {
 
 #ifndef INT128_MAX
 #define INT128_MAX                                                             \
-    ((__int128_t)-1 + ((__int128_t)1 << 126) + ((__int128_t)1 << 126))
+    ((__int128_t) - 1 + ((__int128_t)1 << 126) + ((__int128_t)1 << 126))
 #endif
 
 #ifndef UINT128_MAX
@@ -201,7 +201,7 @@ typedef struct databoxStr {
 #define DATABOX_SIZE(box) (((box)->type >= DATABOX_BYTES) ? (box)->len : 8)
 
 #define DATABOX_CONTAINER_OFFSET(encoding)                                     \
-    ((encoding)-DATABOX_CONTAINER_FLEX_MAP)
+    ((encoding) - DATABOX_CONTAINER_FLEX_MAP)
 
 /* C99 Compound Literals */
 /* These look nice, but the compiler implements them by creating a temporary

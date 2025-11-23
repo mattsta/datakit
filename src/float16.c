@@ -65,7 +65,7 @@ float16Encode_(const float value) {
     v.si ^= sign;
     sign >>= shiftSign; // logical shift
     // cppcheck-suppress overlappingWriteUnion
-    s.si = s.f * v.f;   // correct subnormals (intentional union type-punning)
+    s.si = s.f * v.f; // correct subnormals (intentional union type-punning)
     v.si ^= (s.si ^ v.si) & -(minN > v.si);
     v.si ^= (infN ^ v.si) & -((infN > v.si) & (v.si > maxN));
     v.si ^= (nanN ^ v.si) & -((nanN > v.si) & (v.si > infN));

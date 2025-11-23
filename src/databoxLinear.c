@@ -49,7 +49,7 @@ typedef enum databoxLinearType {
 #define DL_INTEGER_ENCODING_STEP (DL_UINT_16B - DL_UINT_8B)
 
 #define DL_WIDTH_FROM_ENCODING(encoding)                                       \
-    ((((encoding)-DL_NEG_8B) / DL_INTEGER_ENCODING_STEP) + 1)
+    ((((encoding) - DL_NEG_8B) / DL_INTEGER_ENCODING_STEP) + 1)
 
 /* ====================================================================
  * Number Prep
@@ -82,10 +82,10 @@ databoxLinearEncodingUnsigned(uint64_t value) {
 #define SIGNED_PREPARE(v) ((v) + 1)
 
 /* restore the sign bit then go one lower to reverse SIGNED_PREPARE */
-#define SIGNED_RESTORE(v) (-(v)-1)
+#define SIGNED_RESTORE(v) (-(v) - 1)
 
-DK_STATIC DK_FN_CONST databoxLinearType
-databoxLinearEncodingSigned(int64_t value) {
+DK_STATIC
+DK_FN_CONST databoxLinearType databoxLinearEncodingSigned(int64_t value) {
     /* Determine the smallest encoding for 'value' */
 
     if (value < 0) {

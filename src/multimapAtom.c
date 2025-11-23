@@ -1178,9 +1178,8 @@ int multimapAtomTest(int argc, char *argv[]) {
         int64_t insertNs = timeUtilMonotonicNs() - startNs;
 
         assert(multimapAtomCount(ma) == numEntries);
-        printf("Inserted %zu entries in %.3f ms (%.0f/sec)\n",
-               numEntries, insertNs / 1e6,
-               numEntries / (insertNs / 1e9));
+        printf("Inserted %zu entries in %.3f ms (%.0f/sec)\n", numEntries,
+               insertNs / 1e6, numEntries / (insertNs / 1e9));
 
         /* Lookup all entries by reference */
         startNs = timeUtilMonotonicNs();
@@ -1193,8 +1192,7 @@ int multimapAtomTest(int argc, char *argv[]) {
         }
         int64_t lookupRefNs = timeUtilMonotonicNs() - startNs;
         printf("Lookup by key (reference): %zu lookups in %.3f ms (%.0f/sec)\n",
-               numEntries, lookupRefNs / 1e6,
-               numEntries / (lookupRefNs / 1e9));
+               numEntries, lookupRefNs / 1e6, numEntries / (lookupRefNs / 1e9));
 
         /* Lookup all entries by atom ID */
         startNs = timeUtilMonotonicNs();
@@ -1208,8 +1206,7 @@ int multimapAtomTest(int argc, char *argv[]) {
         }
         int64_t lookupIdNs = timeUtilMonotonicNs() - startNs;
         printf("Lookup by ID (key): %zu lookups in %.3f ms (%.0f/sec)\n",
-               numEntries, lookupIdNs / 1e6,
-               numEntries / (lookupIdNs / 1e9));
+               numEntries, lookupIdNs / 1e6, numEntries / (lookupIdNs / 1e9));
 
         /* Retain and release */
         startNs = timeUtilMonotonicNs();
@@ -1219,9 +1216,8 @@ int multimapAtomTest(int argc, char *argv[]) {
             multimapAtomRetainByRef(ma, &ref);
         }
         int64_t retainNs = timeUtilMonotonicNs() - startNs;
-        printf("Retain: %zu ops in %.3f ms (%.0f/sec)\n",
-               numEntries, retainNs / 1e6,
-               numEntries / (retainNs / 1e9));
+        printf("Retain: %zu ops in %.3f ms (%.0f/sec)\n", numEntries,
+               retainNs / 1e6, numEntries / (retainNs / 1e9));
 
         /* Memory efficiency */
         size_t bytesUsed = multimapAtomBytes(ma);
@@ -1245,9 +1241,8 @@ int multimapAtomTest(int argc, char *argv[]) {
             multimapAtomReleaseById(ma, &ref);
         }
         int64_t releaseNs = timeUtilMonotonicNs() - startNs;
-        printf("Release (delete): %zu ops in %.3f ms (%.0f/sec)\n",
-               numEntries, releaseNs / 1e6,
-               numEntries / (releaseNs / 1e9));
+        printf("Release (delete): %zu ops in %.3f ms (%.0f/sec)\n", numEntries,
+               releaseNs / 1e6, numEntries / (releaseNs / 1e9));
 
         assert(multimapAtomCount(ma) == 0);
         multimapAtomFree(ma);
@@ -1296,9 +1291,8 @@ int multimapAtomTest(int argc, char *argv[]) {
             multimapAtomInsertIfNewConvert(ma, &box);
         }
         int64_t insertNs = timeUtilMonotonicNs() - startNs;
-        printf("Inserted %zu string keys in %.3f ms (%.0f/sec)\n",
-               numStrings, insertNs / 1e6,
-               numStrings / (insertNs / 1e9));
+        printf("Inserted %zu string keys in %.3f ms (%.0f/sec)\n", numStrings,
+               insertNs / 1e6, numStrings / (insertNs / 1e9));
 
         assert(multimapAtomCount(ma) == numStrings);
 
@@ -1315,9 +1309,8 @@ int multimapAtomTest(int argc, char *argv[]) {
             (void)found;
         }
         int64_t lookupNs = timeUtilMonotonicNs() - startNs;
-        printf("String key lookups: %zu in %.3f ms (%.0f/sec)\n",
-               numStrings, lookupNs / 1e6,
-               numStrings / (lookupNs / 1e9));
+        printf("String key lookups: %zu in %.3f ms (%.0f/sec)\n", numStrings,
+               lookupNs / 1e6, numStrings / (lookupNs / 1e9));
 
         multimapAtomFree(ma);
     }
@@ -1365,16 +1358,21 @@ int multimapAtomTest(int argc, char *argv[]) {
         int64_t retainNs = timeUtilMonotonicNs() - startNs;
 
         printf("Insert rate:     %.0f ops/sec (%.1f us/op)\n",
-               benchCount / (insertNs / 1e9), insertNs / (double)benchCount / 1000);
+               benchCount / (insertNs / 1e9),
+               insertNs / (double)benchCount / 1000);
         printf("Lookup (by key): %.0f ops/sec (%.1f us/op)\n",
-               benchCount / (lookupKeyNs / 1e9), lookupKeyNs / (double)benchCount / 1000);
+               benchCount / (lookupKeyNs / 1e9),
+               lookupKeyNs / (double)benchCount / 1000);
         printf("Lookup (by ID):  %.0f ops/sec (%.1f us/op)\n",
-               benchCount / (lookupIdNs / 1e9), lookupIdNs / (double)benchCount / 1000);
+               benchCount / (lookupIdNs / 1e9),
+               lookupIdNs / (double)benchCount / 1000);
         printf("Retain rate:     %.0f ops/sec (%.1f us/op)\n",
-               benchCount / (retainNs / 1e9), retainNs / (double)benchCount / 1000);
-        printf("Memory used:     %zu bytes for %zu entries (%.2f bytes/entry)\n",
-               multimapAtomBytes(ma), multimapAtomCount(ma),
-               (double)multimapAtomBytes(ma) / multimapAtomCount(ma));
+               benchCount / (retainNs / 1e9),
+               retainNs / (double)benchCount / 1000);
+        printf(
+            "Memory used:     %zu bytes for %zu entries (%.2f bytes/entry)\n",
+            multimapAtomBytes(ma), multimapAtomCount(ma),
+            (double)multimapAtomBytes(ma) / multimapAtomCount(ma));
         printf("==========================================\n\n");
 
         multimapAtomFree(ma);

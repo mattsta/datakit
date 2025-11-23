@@ -83,10 +83,8 @@ static multiTimerAdjustedUs adjustedNowUs(multiTimer *t) {
     return nativeToAdjusted(t, timeUtilMonotonicUs());
 }
 
-#define boxUnsigned64(us)                                                      \
-    { .type = DATABOX_UNSIGNED_64, .data.u64 = (us) }
-#define boxPtr(ptr)                                                            \
-    { .type = DATABOX_UNSIGNED_64, .data.u64 = ((uintptr_t)ptr) }
+#define boxUnsigned64(us) {.type = DATABOX_UNSIGNED_64, .data.u64 = (us)}
+#define boxPtr(ptr) {.type = DATABOX_UNSIGNED_64, .data.u64 = ((uintptr_t)ptr)}
 multiTimerId multiTimerRegister(multiTimer *t, uint64_t startAfterMicroseconds,
                                 uint64_t repeatEveryMicroseconds,
                                 multiTimerCallback *cb, void *clientData) {

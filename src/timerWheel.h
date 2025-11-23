@@ -41,8 +41,9 @@
  * TIMER PROCESSING - IMPORTANT!
  * ============================================================================
  *
- * Timer processing is NOT automatic. You MUST call timerWheelProcessTimerEvents()
- * periodically in your event loop. This function:
+ * Timer processing is NOT automatic. You MUST call
+ * timerWheelProcessTimerEvents() periodically in your event loop. This
+ * function:
  *   - Checks current wall-clock time
  *   - Fires all callbacks for timers that have expired
  *   - Handles timer cascading between wheel levels
@@ -93,9 +94,12 @@
  *
  * Timer types:
  *   - One-shot:   timerWheelRegister(tw, 5000, 0, cb, data);     // Fire once
- *   - Repeating:  timerWheelRegister(tw, 1000, 1000, cb, data);  // Fire every 1ms
- *   - Immediate:  timerWheelRegister(tw, 0, 0, cb, data);        // Fire on next process
- *   - Delayed repeat: timerWheelRegister(tw, 5000, 1000, cb, data); // Start in 5ms, then every 1ms
+ *   - Repeating:  timerWheelRegister(tw, 1000, 1000, cb, data);  // Fire every
+ * 1ms
+ *   - Immediate:  timerWheelRegister(tw, 0, 0, cb, data);        // Fire on
+ * next process
+ *   - Delayed repeat: timerWheelRegister(tw, 5000, 1000, cb, data); // Start in
+ * 5ms, then every 1ms
  *
  * Returns: Timer ID (always > 0 on success), used for unregistration.
  *
@@ -206,7 +210,7 @@ typedef int64_t timerWheelSystemMonotonicUs;
  * @return true to continue repeating, false to stop
  */
 typedef bool timerWheelCallback(timerWheel *tw, timerWheelId id,
-                                 void *clientData);
+                                void *clientData);
 
 /* ====================================================================
  * Lifecycle
@@ -250,8 +254,8 @@ void timerWheelDeinit(timerWheel *tw);
  * @return Timer ID (never 0 on success)
  */
 timerWheelId timerWheelRegister(timerWheel *tw, uint64_t startAfterMicroseconds,
-                                 uint64_t repeatEveryMicroseconds,
-                                 timerWheelCallback *cb, void *clientData);
+                                uint64_t repeatEveryMicroseconds,
+                                timerWheelCallback *cb, void *clientData);
 
 /**
  * Unregister a timer by ID.
@@ -353,12 +357,13 @@ timerWheelUs timerWheelNextTimerEventOffsetFromNowUs(timerWheel *tw);
  * Statistics structure for performance monitoring and debugging.
  */
 typedef struct timerWheelStats {
-    size_t totalRegistrations;  /* Total timers registered since creation/reset */
-    size_t totalCancellations;  /* Total timers cancelled via unregister */
-    size_t totalExpirations;    /* Total timer callbacks executed */
-    size_t totalCascades;       /* Timer migrations between wheel levels */
-    size_t overflowCount;       /* Current timers in overflow (>18.6h) */
-    size_t memoryBytes;         /* Current memory usage in bytes */
+    size_t
+        totalRegistrations; /* Total timers registered since creation/reset */
+    size_t totalCancellations; /* Total timers cancelled via unregister */
+    size_t totalExpirations;   /* Total timer callbacks executed */
+    size_t totalCascades;      /* Timer migrations between wheel levels */
+    size_t overflowCount;      /* Current timers in overflow (>18.6h) */
+    size_t memoryBytes;        /* Current memory usage in bytes */
 } timerWheelStats;
 
 /**

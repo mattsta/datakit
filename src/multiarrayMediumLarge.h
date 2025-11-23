@@ -26,7 +26,7 @@
             memmove((node)->data + (offsetLen),                                \
                     (node)->data + (offsetLen) + (len), remainingLen);         \
         }                                                                      \
-        (node)->data = zrealloc((node)->data, (len) * ((count)-1));            \
+        (node)->data = zrealloc((node)->data, (len) * ((count) - 1));          \
     } while (0)
 
 #define multiarrayMediumLargeNodeNewAfter(nodeNew, nodeOld, remaining,         \

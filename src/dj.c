@@ -884,7 +884,8 @@ static mds *djTestEscapeString(const void *data, size_t len) {
     return djFinalize(testState);
 }
 
-/* Helper to build expected escape output using reference scalar implementation */
+/* Helper to build expected escape output using reference scalar implementation
+ */
 static mds *djBuildExpectedEscape(const uint8_t *data, size_t len) {
     mds *expected = mdsnew("\""); /* Open quote */
     for (size_t i = 0; i < len; i++) {
@@ -1275,8 +1276,8 @@ int djTest(int argc, char *argv[]) {
                 memcmp(result, expected, mdslen(result)) == 0) {
                 passCount++;
             } else {
-                printf("FAIL len=%zu no-escape: got [%s] expected [%s]\n",
-                       len, result, expected);
+                printf("FAIL len=%zu no-escape: got [%s] expected [%s]\n", len,
+                       result, expected);
             }
 
             mdsfree(result);
@@ -1322,11 +1323,21 @@ int djTest(int argc, char *argv[]) {
                 data[i] = 'X';
             }
             /* Put escapes at SIMD boundaries */
-            if (len > 0) data[0] = '"';
-            if (len > 15) data[15] = '\\';
-            if (len > 16) data[16] = '\n';
-            if (len > 31) data[31] = '\t';
-            if (len > 32) data[32] = 0x01;
+            if (len > 0) {
+                data[0] = '"';
+            }
+            if (len > 15) {
+                data[15] = '\\';
+            }
+            if (len > 16) {
+                data[16] = '\n';
+            }
+            if (len > 31) {
+                data[31] = '\t';
+            }
+            if (len > 32) {
+                data[32] = 0x01;
+            }
 
             mds *result = djTestEscapeString(data, len);
             mds *expected = djBuildExpectedEscape(data, len);
@@ -1345,9 +1356,12 @@ int djTest(int argc, char *argv[]) {
             zfree(data);
         }
 
-        /* Test 4: Long strings with escape at specific SIMD boundary positions */
-        const size_t boundaryPos[] = {0, 1, 15, 16, 17, 31, 32, 33, 47, 48, 63, 64};
-        for (size_t bp = 0; bp < sizeof(boundaryPos) / sizeof(boundaryPos[0]); bp++) {
+        /* Test 4: Long strings with escape at specific SIMD boundary positions
+         */
+        const size_t boundaryPos[] = {0,  1,  15, 16, 17, 31,
+                                      32, 33, 47, 48, 63, 64};
+        for (size_t bp = 0; bp < sizeof(boundaryPos) / sizeof(boundaryPos[0]);
+             bp++) {
             const size_t pos = boundaryPos[bp];
             const size_t len = 128;
 
@@ -1365,8 +1379,8 @@ int djTest(int argc, char *argv[]) {
                 memcmp(result, expected, mdslen(result)) == 0) {
                 passCount++;
             } else {
-                printf("FAIL boundary pos=%zu: got [%s] expected [%s]\n",
-                       pos, result, expected);
+                printf("FAIL boundary pos=%zu: got [%s] expected [%s]\n", pos,
+                       result, expected);
             }
 
             mdsfree(result);
@@ -1391,8 +1405,8 @@ int djTest(int argc, char *argv[]) {
                 memcmp(result, expected, mdslen(result)) == 0) {
                 passCount++;
             } else {
-                printf("FAIL ctrl=0x%02X: got [%s] expected [%s]\n",
-                       ctrl, result, expected);
+                printf("FAIL ctrl=0x%02X: got [%s] expected [%s]\n", ctrl,
+                       result, expected);
             }
 
             mdsfree(result);
@@ -1437,7 +1451,8 @@ int djTest(int argc, char *argv[]) {
             zfree(data);
         }
 
-        printf("SIMD escape detection: %u/%u tests passed\n", passCount, testCount);
+        printf("SIMD escape detection: %u/%u tests passed\n", passCount,
+               testCount);
         assert(passCount == testCount);
     }
 

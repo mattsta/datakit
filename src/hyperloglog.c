@@ -445,15 +445,15 @@ typedef enum hyperloglogEncoding {
 #define HLL_SPARSE_XZERO_MAX_LEN 16384
 #define HLL_SPARSE_VAL_SET(p, val, len)                                        \
     do {                                                                       \
-        *(p) = (((val)-1) << 2 | ((len)-1)) | HLL_SPARSE_VAL_BIT;              \
+        *(p) = (((val) - 1) << 2 | ((len) - 1)) | HLL_SPARSE_VAL_BIT;          \
     } while (0)
 #define HLL_SPARSE_ZERO_SET(p, len)                                            \
     do {                                                                       \
-        *(p) = (len)-1;                                                        \
+        *(p) = (len) - 1;                                                      \
     } while (0)
 #define HLL_SPARSE_XZERO_SET(p, len)                                           \
     do {                                                                       \
-        int32_t _l = (len)-1;                                                  \
+        int32_t _l = (len) - 1;                                                \
         *(p) = (_l >> 8) | HLL_SPARSE_XZERO_BIT;                               \
         *((p) + 1) = (_l & 0xff);                                              \
     } while (0)
@@ -1177,8 +1177,8 @@ bool hyperloglogMerge(hyperloglog *restrict target,
 
     if (isDense(hdr)) {
 #if HLL_USE_NEON && HLL_REGISTERS == 16384 && HLL_BITS == 6
-        /* ARM NEON optimized merge: process 16 registers (12 packed bytes) at a time.
-         * Unpacks 6-bit registers to 8-bit, then uses vector max. */
+        /* ARM NEON optimized merge: process 16 registers (12 packed bytes) at a
+         * time. Unpacks 6-bit registers to 8-bit, then uses vector max. */
         uint8_t *r = (uint8_t *)hdr->registers;
         for (size_t j = 0; j < 1024; j++) {
             /* Unpack 16 6-bit registers from 12 bytes into temporary buffer */
@@ -1594,7 +1594,8 @@ int hyperloglogTest(int argc, char *argv[]) {
     uint32_t shash = HYPERHASH(&sseed, sizeof(sseed), 0xadc83b19ULL);
     srand(shash);
 
-    printf("Testing (using seed: %" PRIu32 ") for %" PRId32 " cycles\n", (uint32_t)shash, (int32_t)HLL_TEST_CYCLES);
+    printf("Testing (using seed: %" PRIu32 ") for %" PRId32 " cycles\n",
+           (uint32_t)shash, (int32_t)HLL_TEST_CYCLES);
 
     mdsc *bitcounters = mdscnewlen(NULL, HLL_DENSE_SIZE);
     hyperloglogHeader *hdr = (hyperloglogHeader *)bitcounters, *hdr2;
@@ -1627,8 +1628,9 @@ int hyperloglogTest(int argc, char *argv[]) {
 
             HLL_DENSE_GET_REGISTER(val, hdr->registers, i);
             if (val != bytecounters[i]) {
-                printf("TESTFAILED Register %" PRIu32 " should be %" PRIu8 " but is %" PRIu32 "\n", (uint32_t)i,
-                       (uint8_t)bytecounters[i], (uint32_t)val);
+                printf("TESTFAILED Register %" PRIu32 " should be %" PRIu8
+                       " but is %" PRIu32 "\n",
+                       (uint32_t)i, (uint8_t)bytecounters[i], (uint32_t)val);
                 errors++;
                 goto cleanup;
             }

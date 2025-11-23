@@ -25,10 +25,10 @@
 #include "dks.h"
 #include "fibbuf.h"
 
-#include <inttypes.h>
 #include "jebuf.h"
 #include "str.h"
 #include "strDoubleFormat.h"
+#include <inttypes.h>
 
 /* Type Definitions */
 
@@ -196,18 +196,18 @@ DK_STATIC size_t DKS_MAXSHAREDFORTYPE(dksType type) {
  *      (DKS_16 - DKS_8 is the fixed offset)
  *      then we add 1 because our 2 bit types start at 1 byte of usage. */
 #define _dksHeaderElementSize(type)                                            \
-    (_dksTypeIsTwoBits(type) ? ((((type)-DKS_8) / DKS_TYPE_DIFF_2) + 1)        \
-                             : ((((type)-DKS_24) / DKS_TYPE_DIFF_3) + 3))
+    (_dksTypeIsTwoBits(type) ? ((((type) - DKS_8) / DKS_TYPE_DIFF_2) + 1)      \
+                             : ((((type) - DKS_24) / DKS_TYPE_DIFF_3) + 3))
 
 /* Grab the 2 MASK bits from (buf - 1) */
-#define DKS_TYPE_2(buf) ((uint8_t)((*((buf)-1) & DKS_TYPE_2_MASK)))
+#define DKS_TYPE_2(buf) ((uint8_t)((*((buf) - 1) & DKS_TYPE_2_MASK)))
 
 /* Grab the 3 MASK bits from (buf - 1) */
-#define DKS_TYPE_3(buf) ((uint8_t)((*((buf)-1) & DKS_TYPE_3_MASK)))
+#define DKS_TYPE_3(buf) ((uint8_t)((*((buf) - 1) & DKS_TYPE_3_MASK)))
 
 /* if type determination bit is 0, extract 2 bits, else extract 3 bits. */
 #define DKS_TYPE_GET(buf)                                                      \
-    (_dksTypeIsTwoBits((uint8_t) * ((buf)-1)) ? DKS_TYPE_2(buf)                \
+    (_dksTypeIsTwoBits((uint8_t)*((buf) - 1)) ? DKS_TYPE_2(buf)                \
                                               : DKS_TYPE_3(buf))
 
 #define TYPEBITS(type) (_dksTypeIsTwoBits(type) ? 2 : 3)
@@ -2308,8 +2308,9 @@ int DKS_TEST(int argc, char *argv[]) {
         DKS_RANDBYTES(belowlimitbuf, belowSize);
 
         DKS_TYPE *testing = DKS_NEWLEN(belowlimitbuf, belowSize);
-        testCond("dks created properly below limit", (uint32_t)DKS_TYPE_GET(testing),
-                 (uint32_t)limit.startType, "%" PRIu32);
+        testCond("dks created properly below limit",
+                 (uint32_t)DKS_TYPE_GET(testing), (uint32_t)limit.startType,
+                 "%" PRIu32);
         testCond("dks has no avail", DKS_AVAIL(testing), (size_t)0, "%zu");
         testCond("dks content matches source buffer",
                  memcmp(testing, belowlimitbuf, belowSize), 0, "%d");
@@ -2353,8 +2354,8 @@ int DKS_TEST(int argc, char *argv[]) {
 
         testing = DKS_REMOVEFREESPACE(testing);
         testCond("dks has no avail", DKS_AVAIL(testing), (size_t)0, "%zu");
-        testCond("dks grew to new type", (uint32_t)DKS_TYPE_GET(testing), (uint32_t)limit.newType,
-                 "%" PRIu32);
+        testCond("dks grew to new type", (uint32_t)DKS_TYPE_GET(testing),
+                 (uint32_t)limit.newType, "%" PRIu32);
 
         testCond("dks initial contents _still_ match source buffer",
                  memcmp(testing, belowlimitbuf, belowSize), 0, "%d");

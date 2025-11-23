@@ -321,7 +321,7 @@ bool stringmatchlen(const char *pattern, int patternLen, const char *string,
             pattern++;
             patternLen--;
             not = pattern[0] == '^';
-            if (not ) {
+            if (not) {
                 pattern++;
                 patternLen--;
             }
@@ -378,7 +378,7 @@ bool stringmatchlen(const char *pattern, int patternLen, const char *string,
                 patternLen--;
             }
 
-            if (not ) {
+            if (not) {
                 match = !match;
             }
 
@@ -476,8 +476,8 @@ void dumpX86Calls(void *addr, size_t len) {
 #endif
 
 #ifdef DATAKIT_TEST
-#include "ctest.h"
 #include "asmUtils.h"
+#include "ctest.h"
 #include <assert.h>
 
 /* Reference implementation of pow2Ceiling64 for testing */
@@ -570,8 +570,8 @@ int utilTest(int argc, char **argv) {
             uint64_t result = pow2Ceiling64(x);
             uint64_t expected = pow2Ceiling64_reference(x);
             if (result != expected) {
-                ERR("pow2Ceiling64 mismatch for %" PRIu64
-                    ": got %" PRIu64 ", expected %" PRIu64,
+                ERR("pow2Ceiling64 mismatch for %" PRIu64 ": got %" PRIu64
+                    ", expected %" PRIu64,
                     x, result, expected);
             }
         }

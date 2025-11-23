@@ -1249,8 +1249,8 @@ int multimapTest(int argc, char *argv[]) {
         multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_512);
 
         /* Test extreme integer values */
-        int64_t extremeKeys[] = {INT64_MIN, INT64_MIN + 1, -1, 0, 1,
-                                  INT64_MAX - 1, INT64_MAX};
+        int64_t extremeKeys[] = {INT64_MIN, INT64_MIN + 1, -1,       0,
+                                 1,         INT64_MAX - 1, INT64_MAX};
         size_t numKeys = sizeof(extremeKeys) / sizeof(extremeKeys[0]);
 
         /* Insert all extreme values */
@@ -1459,11 +1459,18 @@ int multimapTest(int argc, char *argv[]) {
 
         /* Insert string keys that stress binary search */
         const char *stringKeys[] = {
-            "", "a", "aa", "aaa", "ab", "b", "ba", "bb",
+            "",
+            "a",
+            "aa",
+            "aaa",
+            "ab",
+            "b",
+            "ba",
+            "bb",
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            "\x00\x01\x02", "\xFF\xFE\xFD"
-        };
+            "\x00\x01\x02",
+            "\xFF\xFE\xFD"};
         const size_t numKeys = sizeof(stringKeys) / sizeof(stringKeys[0]);
 
         for (size_t i = 0; i < numKeys; i++) {
@@ -1727,8 +1734,7 @@ int multimapTest(int argc, char *argv[]) {
         int64_t elapsed = timeUtilMonotonicNs() - startNs;
         int64_t totalOps = numEntries * 10;
         printf("    Lookup: %.1f ns/op, %.0f ops/sec\n",
-               (double)elapsed / totalOps,
-               totalOps / (elapsed / 1e9));
+               (double)elapsed / totalOps, totalOps / (elapsed / 1e9));
 
         multimapFree(m);
     }

@@ -1265,14 +1265,13 @@ int multilruTest(int argc, char *argv[]) {
         int64_t insertNs = timeUtilMonotonicNs() - startNs;
 
         assert(multilruCount(mlru) == numEntries);
-        printf("Inserted %zu entries in %.3f ms (%.0f/sec)\n",
-               numEntries, insertNs / 1e6,
-               numEntries / (insertNs / 1e9));
+        printf("Inserted %zu entries in %.3f ms (%.0f/sec)\n", numEntries,
+               insertNs / 1e6, numEntries / (insertNs / 1e9));
 
         /* Increase entries randomly */
         startNs = timeUtilMonotonicNs();
         for (size_t i = 0; i < numEntries; i++) {
-            size_t increaseCount = i % 7;  /* 0-6 increases per entry */
+            size_t increaseCount = i % 7; /* 0-6 increases per entry */
             for (size_t j = 0; j < increaseCount; j++) {
                 multilruIncrease(mlru, ptrs[i]);
             }
@@ -1290,8 +1289,9 @@ int multilruTest(int argc, char *argv[]) {
             multilruGetNLowest(mlru, lowest, 100);
         }
         int64_t queryNs = timeUtilMonotonicNs() - startNs;
-        printf("2000 queries (100 entries each) in %.3f ms (%.0f queries/sec)\n",
-               queryNs / 1e6, 2000.0 / (queryNs / 1e9));
+        printf(
+            "2000 queries (100 entries each) in %.3f ms (%.0f queries/sec)\n",
+            queryNs / 1e6, 2000.0 / (queryNs / 1e9));
 
         /* Remove minimum entries */
         startNs = timeUtilMonotonicNs();
@@ -1304,8 +1304,7 @@ int multilruTest(int argc, char *argv[]) {
         }
         int64_t removeNs = timeUtilMonotonicNs() - startNs;
         printf("Removed %zu entries via RemoveMinimum in %.3f ms (%.0f/sec)\n",
-               removeCount, removeNs / 1e6,
-               removeCount / (removeNs / 1e9));
+               removeCount, removeNs / 1e6, removeCount / (removeNs / 1e9));
 
         assert(multilruCount(mlru) == numEntries - removeCount);
 
@@ -1387,8 +1386,9 @@ int multilruTest(int argc, char *argv[]) {
                100000.0 / (removeNs / 1e9), (double)removeNs / 100000);
         printf("Memory used:   %zu bytes for %zu entries (%.2f bytes/entry)\n",
                multilruBytes(mlru), multilruCount(mlru),
-               multilruCount(mlru) > 0 ?
-                   (double)multilruBytes(mlru) / multilruCount(mlru) : 0);
+               multilruCount(mlru) > 0
+                   ? (double)multilruBytes(mlru) / multilruCount(mlru)
+                   : 0);
         printf("=====================================\n\n");
 
         multilruFree(mlru);
