@@ -1942,8 +1942,10 @@ bool multimapFullIteratorNext(multimapIterator *iter, databox *elements[]) {
 
     /* If moving reverse and reached beginning of map,
      * begin iterating over previous map (if exists). */
-    iter->mapIndex--;
+    /* Note: we check BEFORE decrementing to ensure we process map 0.
+     * If we decrement first, then check > 0, we would skip map 0. */
     if (!iter->forward && iter->mapIndex > 0) {
+        iter->mapIndex--;
         multimapFull *local = (multimapFull *)iter->mm;
         iter->map = getMap(local, iter->mapIndex);
         iter->entry = flexTail(iter->map);

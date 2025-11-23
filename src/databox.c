@@ -1115,6 +1115,576 @@ int databoxTest(int argc, char *argv[]) {
         PERF_TIMERS_FINISH_PRINT_RESULTS(loopers, "compares");
     }
 
+    TEST("comparison reflexivity - same value equals itself") {
+        /* Test signed integers at boundaries */
+        int64_t signedVals[] = {INT64_MIN, INT64_MIN + 1, -1000000, -1, 0, 1,
+                                1000000, INT64_MAX - 1, INT64_MAX};
+        for (size_t i = 0; i < sizeof(signedVals) / sizeof(signedVals[0]); i++) {
+            databox a = databoxNewSigned(signedVals[i]);
+            if (databoxCompare(&a, &a) != 0) {
+                ERR("Reflexivity failed for signed %" PRId64, signedVals[i]);
+            }
+        }
+
+        /* Test unsigned integers */
+        uint64_t unsignedVals[] = {0, 1, 1000000, UINT64_MAX - 1, UINT64_MAX};
+        for (size_t i = 0; i < sizeof(unsignedVals) / sizeof(unsignedVals[0]);
+             i++) {
+            databox a = databoxNewUnsigned(unsignedVals[i]);
+            if (databoxCompare(&a, &a) != 0) {
+                ERR("Reflexivity failed for unsigned %" PRIu64, unsignedVals[i]);
+            }
+        }
+
+        /* Test floats/doubles */
+        double realVals[] = {-1e38, -1e10, -1.0, -0.5, 0.0, 0.5, 1.0, 1e10, 1e38};
+        for (size_t i = 0; i < sizeof(realVals) / sizeof(realVals[0]); i++) {
+            databox a = databoxNewReal(realVals[i]);
+            if (databoxCompare(&a, &a) != 0) {
+                ERR("Reflexivity failed for real %f", realVals[i]);
+            }
+        }
+
+        /* Test bytes */
+        const char *strings[] = {"", "a", "ab", "abc", "hello world"};
+        for (size_t i = 0; i < sizeof(strings) / sizeof(strings[0]); i++) {
+            databox a = databoxNewBytesString(strings[i]);
+            if (databoxCompare(&a, &a) != 0) {
+                ERR("Reflexivity failed for string '%s'", strings[i]);
+            }
+        }
+    }
+
+    TEST("comparison anti-symmetry - if a < b then b > a") {
+        /* Test signed integers */
+        databox a = databoxNewSigned(-100);
+        databox b = databoxNewSigned(100);
+        int cmpAB = databoxCompare(&a, &b);
+        int cmpBA = databoxCompare(&b, &a);
+        if (!((cmpAB < 0 && cmpBA > 0) || (cmpAB > 0 && cmpBA < 0) ||
+              (cmpAB == 0 && cmpBA == 0))) {
+            ERR("Anti-symmetry failed for signed: %d vs %d", cmpAB, cmpBA);
+        }
+
+        /* Test with boundaries */
+        a = databoxNewSigned(INT64_MIN);
+        b = databoxNewSigned(INT64_MAX);
+        cmpAB = databoxCompare(&a, &b);
+        cmpBA = databoxCompare(&b, &a);
+        if (!(cmpAB < 0 && cmpBA > 0)) {
+            ERR("Anti-symmetry failed at boundaries: %d vs %d", cmpAB, cmpBA);
+        }
+
+        /* Test strings */
+        a = databoxNewBytesString("apple");
+        b = databoxNewBytesString("banana");
+        cmpAB = databoxCompare(&a, &b);
+        cmpBA = databoxCompare(&b, &a);
+        if (!(cmpAB < 0 && cmpBA > 0)) {
+            ERR("Anti-symmetry failed for strings: %d vs %d", cmpAB, cmpBA);
+        }
+    }
+
+    TEST("comparison transitivity - if a < b and b < c then a < c") {
+        /* Test with signed integers */
+        databox a = databoxNewSigned(-1000);
+        databox b = databoxNewSigned(0);
+        databox c = databoxNewSigned(1000);
+        if (!(databoxCompare(&a, &b) < 0 && databoxCompare(&b, &c) < 0 &&
+              databoxCompare(&a, &c) < 0)) {
+            ERRR("Transitivity failed for signed integers");
+        }
+
+        /* Test with extreme values */
+        a = databoxNewSigned(INT64_MIN);
+        b = databoxNewSigned(0);
+        c = databoxNewSigned(INT64_MAX);
+        if (!(databoxCompare(&a, &b) < 0 && databoxCompare(&b, &c) < 0 &&
+              databoxCompare(&a, &c) < 0)) {
+            ERRR("Transitivity failed at boundaries");
+        }
+
+        /* Test with strings */
+        a = databoxNewBytesString("aaa");
+        b = databoxNewBytesString("bbb");
+        c = databoxNewBytesString("ccc");
+        if (!(databoxCompare(&a, &b) < 0 && databoxCompare(&b, &c) < 0 &&
+              databoxCompare(&a, &c) < 0)) {
+            ERRR("Transitivity failed for strings");
+        }
+
+        /* Test with floats */
+        databox f1 = databoxNewReal(-100.0f);
+        databox f2 = databoxNewReal(0.0f);
+        databox f3 = databoxNewReal(100.0f);
+        if (!(databoxCompare(&f1, &f2) < 0 && databoxCompare(&f2, &f3) < 0 &&
+              databoxCompare(&f1, &f3) < 0)) {
+            ERRR("Transitivity failed for floats");
+        }
+    }
+
+    TEST("signed vs unsigned integer comparison consistency") {
+        /* Positive values should compare equal regardless of signed/unsigned */
+        databox s = databoxNewSigned(100);
+        databox u = databoxNewUnsigned(100);
+        if (databoxCompare(&s, &u) != 0) {
+            ERRR("Same positive value differs between signed/unsigned");
+        }
+
+        /* Zero */
+        s = databoxNewSigned(0);
+        u = databoxNewUnsigned(0);
+        if (databoxCompare(&s, &u) != 0) {
+            ERRR("Zero differs between signed/unsigned");
+        }
+
+        /* Negative signed should be less than any unsigned */
+        s = databoxNewSigned(-1);
+        u = databoxNewUnsigned(0);
+        if (databoxCompare(&s, &u) >= 0) {
+            ERRR("Negative signed should be less than unsigned 0");
+        }
+
+        /* Large unsigned values */
+        s = databoxNewSigned(INT64_MAX);
+        u = databoxNewUnsigned((uint64_t)INT64_MAX + 1);
+        if (databoxCompare(&s, &u) >= 0) {
+            ERRR("INT64_MAX should be less than INT64_MAX+1 unsigned");
+        }
+    }
+
+    TEST("integer vs float comparison consistency") {
+        /* Equal values */
+        databox ibox = databoxNewSigned(100);
+        databox fbox = databoxNewReal(100.0f);
+        if (databoxCompare(&ibox, &fbox) != 0) {
+            ERRR("100 int should equal 100.0 float");
+        }
+
+        /* Integer less than float */
+        ibox = databoxNewSigned(99);
+        fbox = databoxNewReal(99.5f);
+        if (databoxCompare(&ibox, &fbox) >= 0) {
+            ERRR("99 int should be less than 99.5 float");
+        }
+
+        /* Integer greater than float */
+        ibox = databoxNewSigned(100);
+        fbox = databoxNewReal(99.5f);
+        if (databoxCompare(&ibox, &fbox) <= 0) {
+            ERRR("100 int should be greater than 99.5 float");
+        }
+
+        /* Negative values */
+        ibox = databoxNewSigned(-50);
+        fbox = databoxNewReal(-50.0);
+        if (databoxCompare(&ibox, &fbox) != 0) {
+            ERRR("-50 int should equal -50.0 double");
+        }
+    }
+
+    TEST("float vs double comparison consistency") {
+        databox f = databoxNewReal(1.5f);
+        databox d = databoxNewReal(1.5);
+        if (databoxCompare(&f, &d) != 0) {
+            ERRR("1.5 float should equal 1.5 double");
+        }
+
+        f = databoxNewReal(1.0f);
+        d = databoxNewReal(1.1);
+        if (databoxCompare(&f, &d) >= 0) {
+            ERRR("1.0 float should be less than 1.1 double");
+        }
+
+        f = databoxNewReal(-100.5f);
+        d = databoxNewReal(-100.5);
+        if (databoxCompare(&f, &d) != 0) {
+            ERRR("-100.5 float should equal -100.5 double");
+        }
+    }
+
+    TEST("string comparison with numeric prefixes (natural sort)") {
+        /* databox uses natural sort where numeric strings compare by value */
+        databox s1 = databoxNewBytesString("10");
+        databox s2 = databoxNewBytesString("2");
+        /* "10" > "2" in natural sort because 10 > 2 numerically */
+        if (databoxCompare(&s1, &s2) <= 0) {
+            ERRR("'10' should be greater than '2' in natural sort");
+        }
+
+        s1 = databoxNewBytesString("100");
+        s2 = databoxNewBytesString("99");
+        /* "100" > "99" in natural sort because 100 > 99 numerically */
+        if (databoxCompare(&s1, &s2) <= 0) {
+            ERRR("'100' should be greater than '99' in natural sort");
+        }
+
+        /* Same prefix, different length (non-numeric) */
+        s1 = databoxNewBytesString("abc");
+        s2 = databoxNewBytesString("abcd");
+        if (databoxCompare(&s1, &s2) >= 0) {
+            ERRR("'abc' should be less than 'abcd'");
+        }
+
+        /* Verify natural sort with mixed content */
+        s1 = databoxNewBytesString("file2.txt");
+        s2 = databoxNewBytesString("file10.txt");
+        /* "file2.txt" < "file10.txt" because 2 < 10 */
+        if (databoxCompare(&s1, &s2) >= 0) {
+            ERRR("'file2.txt' should be less than 'file10.txt' in natural sort");
+        }
+    }
+
+    TEST("empty string comparisons") {
+        databox empty = databoxNewBytesString("");
+        databox nonEmpty = databoxNewBytesString("a");
+        if (databoxCompare(&empty, &nonEmpty) >= 0) {
+            ERRR("Empty string should be less than any non-empty string");
+        }
+
+        databox empty2 = databoxNewBytesString("");
+        if (databoxCompare(&empty, &empty2) != 0) {
+            ERRR("Empty strings should be equal");
+        }
+    }
+
+    TEST("embedded vs non-embedded bytes comparison") {
+        /* Short string that can be embedded */
+        const char *shortStr = "hello";
+        databox embed = databoxNewBytesAllowEmbed(shortStr, strlen(shortStr));
+        databox noEmbed = databoxNewBytes(shortStr, strlen(shortStr));
+        if (databoxCompare(&embed, &noEmbed) != 0) {
+            ERRR("Embedded and non-embedded same string should be equal");
+        }
+
+        /* Long string that won't be embedded */
+        const char *longStr = "this is a longer string that cannot be embedded";
+        databox long1 = databoxNewBytesString(longStr);
+        databox long2 = databoxNewBytesAllowEmbed(longStr, strlen(longStr));
+        if (databoxCompare(&long1, &long2) != 0) {
+            ERRR("Long strings should compare equal regardless of type");
+        }
+    }
+
+    TEST("boundary value sorting consistency") {
+        /* Create array of boundary values and verify sort order */
+        databox boxes[10];
+        int idx = 0;
+        boxes[idx++] = databoxNewSigned(INT64_MIN);
+        boxes[idx++] = databoxNewSigned(-1);
+        boxes[idx++] = databoxNewSigned(0);
+        boxes[idx++] = databoxNewUnsigned(0);
+        boxes[idx++] = databoxNewSigned(1);
+        boxes[idx++] = databoxNewUnsigned(1);
+        boxes[idx++] = databoxNewSigned(INT64_MAX);
+        boxes[idx++] = databoxNewUnsigned((uint64_t)INT64_MAX);
+        boxes[idx++] = databoxNewUnsigned((uint64_t)INT64_MAX + 1);
+        boxes[idx++] = databoxNewUnsigned(UINT64_MAX);
+
+        /* Verify ascending order */
+        for (int i = 0; i < idx - 1; i++) {
+            int cmp = databoxCompare(&boxes[i], &boxes[i + 1]);
+            if (cmp > 0) {
+                ERR("Boundary sort order violated at index %d", i);
+            }
+        }
+    }
+
+    TEST("consistent sort order across many iterations") {
+        /* Verify same comparison always produces same result */
+        databox a = databoxNewSigned(12345);
+        databox b = databoxNewSigned(54321);
+        int firstCmp = databoxCompare(&a, &b);
+        for (int i = 0; i < 10000; i++) {
+            int cmp = databoxCompare(&a, &b);
+            if (cmp != firstCmp) {
+                ERR("Comparison result changed at iteration %d", i);
+            }
+        }
+
+        /* Test with strings */
+        a = databoxNewBytesString("consistent");
+        b = databoxNewBytesString("ordering");
+        firstCmp = databoxCompare(&a, &b);
+        for (int i = 0; i < 10000; i++) {
+            int cmp = databoxCompare(&a, &b);
+            if (cmp != firstCmp) {
+                ERR("String comparison result changed at iteration %d", i);
+            }
+        }
+    }
+
+    TEST("binary search simulation - integers in sorted array") {
+        /* Simulate binary search with databox comparisons */
+        const int N = 1000;
+        databox sorted[N];
+        for (int i = 0; i < N; i++) {
+            sorted[i] = databoxNewSigned(i * 10); /* 0, 10, 20, ... */
+        }
+
+        /* Search for existing values */
+        for (int target = 0; target < N * 10; target += 10) {
+            databox tbox = databoxNewSigned(target);
+            int lo = 0, hi = N - 1;
+            bool found = false;
+            while (lo <= hi) {
+                int mid = lo + (hi - lo) / 2;
+                int cmp = databoxCompare(&tbox, &sorted[mid]);
+                if (cmp == 0) {
+                    found = true;
+                    break;
+                } else if (cmp < 0) {
+                    hi = mid - 1;
+                } else {
+                    lo = mid + 1;
+                }
+            }
+            if (!found) {
+                ERR("Binary search failed to find existing value %d", target);
+            }
+        }
+
+        /* Search for non-existing values */
+        for (int target = 5; target < N * 10; target += 10) {
+            databox tbox = databoxNewSigned(target);
+            int lo = 0, hi = N - 1;
+            bool found = false;
+            while (lo <= hi) {
+                int mid = lo + (hi - lo) / 2;
+                int cmp = databoxCompare(&tbox, &sorted[mid]);
+                if (cmp == 0) {
+                    found = true;
+                    break;
+                } else if (cmp < 0) {
+                    hi = mid - 1;
+                } else {
+                    lo = mid + 1;
+                }
+            }
+            if (found) {
+                ERR("Binary search found non-existing value %d", target);
+            }
+        }
+    }
+
+    TEST("binary search simulation - strings in sorted array") {
+        const char *strings[] = {"apple",  "banana",   "cherry", "date",
+                                 "elder",  "fig",      "grape",  "honeydew",
+                                 "indigo", "jackfruit"};
+        const int N = sizeof(strings) / sizeof(strings[0]);
+        databox sorted[10];
+        for (int i = 0; i < N; i++) {
+            sorted[i] = databoxNewBytesString(strings[i]);
+        }
+
+        /* Verify array is sorted */
+        for (int i = 0; i < N - 1; i++) {
+            if (databoxCompare(&sorted[i], &sorted[i + 1]) >= 0) {
+                ERR("String array not sorted at index %d", i);
+            }
+        }
+
+        /* Search for existing values */
+        for (int i = 0; i < N; i++) {
+            databox tbox = databoxNewBytesString(strings[i]);
+            int lo = 0, hi = N - 1;
+            bool found = false;
+            while (lo <= hi) {
+                int mid = lo + (hi - lo) / 2;
+                int cmp = databoxCompare(&tbox, &sorted[mid]);
+                if (cmp == 0) {
+                    found = true;
+                    break;
+                } else if (cmp < 0) {
+                    hi = mid - 1;
+                } else {
+                    lo = mid + 1;
+                }
+            }
+            if (!found) {
+                ERR("Binary search failed to find '%s'", strings[i]);
+            }
+        }
+
+        /* Search for non-existing values */
+        const char *missing[] = {"apricot", "blueberry", "coconut"};
+        for (int i = 0; i < 3; i++) {
+            databox tbox = databoxNewBytesString(missing[i]);
+            int lo = 0, hi = N - 1;
+            bool found = false;
+            while (lo <= hi) {
+                int mid = lo + (hi - lo) / 2;
+                int cmp = databoxCompare(&tbox, &sorted[mid]);
+                if (cmp == 0) {
+                    found = true;
+                    break;
+                } else if (cmp < 0) {
+                    hi = mid - 1;
+                } else {
+                    lo = mid + 1;
+                }
+            }
+            if (found) {
+                ERR("Binary search found non-existing '%s'", missing[i]);
+            }
+        }
+    }
+
+    TEST("mixed type array sorting verification") {
+        /* Create array with mixed types and verify databox compares work */
+        databox arr[20];
+        int idx = 0;
+        arr[idx++] = databoxNewSigned(-100);
+        arr[idx++] = databoxNewSigned(-50);
+        arr[idx++] = databoxNewSigned(-1);
+        arr[idx++] = databoxNewSigned(0);
+        arr[idx++] = databoxNewSigned(1);
+        arr[idx++] = databoxNewSigned(50);
+        arr[idx++] = databoxNewSigned(100);
+        arr[idx++] = databoxNewUnsigned(100);
+        arr[idx++] = databoxNewUnsigned(1000);
+        arr[idx++] = databoxNewUnsigned(UINT64_MAX);
+
+        /* Verify ascending order for numeric types */
+        for (int i = 0; i < idx - 1; i++) {
+            int cmp = databoxCompare(&arr[i], &arr[i + 1]);
+            if (cmp > 0) {
+                ERR("Mixed numeric sort violated at index %d", i);
+            }
+        }
+    }
+
+    TEST("stress test - random comparisons maintain consistency") {
+        /* Generate random values and verify comparison properties */
+        srand(12345); /* Fixed seed for reproducibility */
+        for (int iter = 0; iter < 1000; iter++) {
+            int64_t val1 = (int64_t)rand() - RAND_MAX / 2;
+            int64_t val2 = (int64_t)rand() - RAND_MAX / 2;
+            databox a = databoxNewSigned(val1);
+            databox b = databoxNewSigned(val2);
+
+            int cmpAB = databoxCompare(&a, &b);
+            int cmpBA = databoxCompare(&b, &a);
+            int cmpAA = databoxCompare(&a, &a);
+            int cmpBB = databoxCompare(&b, &b);
+
+            /* Reflexivity */
+            if (cmpAA != 0 || cmpBB != 0) {
+                ERR("Reflexivity failed in stress test: cmpAA=%d, cmpBB=%d",
+                    cmpAA, cmpBB);
+            }
+
+            /* Anti-symmetry */
+            if (!((cmpAB < 0 && cmpBA > 0) || (cmpAB > 0 && cmpBA < 0) ||
+                  (cmpAB == 0 && cmpBA == 0))) {
+                ERR("Anti-symmetry failed in stress test: cmpAB=%d, cmpBA=%d",
+                    cmpAB, cmpBA);
+            }
+
+            /* Consistency with actual values */
+            if (val1 < val2 && cmpAB >= 0) {
+                ERR("Comparison doesn't match actual values: %" PRId64 " vs %" PRId64, val1, val2);
+            }
+            if (val1 > val2 && cmpAB <= 0) {
+                ERR("Comparison doesn't match actual values: %" PRId64 " vs %" PRId64, val1, val2);
+            }
+            if (val1 == val2 && cmpAB != 0) {
+                ERR("Comparison doesn't match actual values: %" PRId64 " vs %" PRId64, val1, val2);
+            }
+        }
+    }
+
+    TEST("stress test - random string comparisons") {
+        srand(54321);
+        char buf1[32], buf2[32];
+        for (int iter = 0; iter < 1000; iter++) {
+            /* Use only alphabetic chars to avoid natural sort complexity */
+            int len1 = rand() % 20 + 1;
+            int len2 = rand() % 20 + 1;
+            for (int i = 0; i < len1; i++) {
+                buf1[i] = 'a' + (rand() % 26);
+            }
+            buf1[len1] = '\0';
+            for (int i = 0; i < len2; i++) {
+                buf2[i] = 'a' + (rand() % 26);
+            }
+            buf2[len2] = '\0';
+
+            databox a = databoxNewBytesString(buf1);
+            databox b = databoxNewBytesString(buf2);
+
+            int cmpAB = databoxCompare(&a, &b);
+            int cmpBA = databoxCompare(&b, &a);
+
+            /* Anti-symmetry */
+            if (!((cmpAB < 0 && cmpBA > 0) || (cmpAB > 0 && cmpBA < 0) ||
+                  (cmpAB == 0 && cmpBA == 0))) {
+                ERR("String anti-symmetry failed in stress test for '%s' vs '%s'",
+                    buf1, buf2);
+            }
+
+            /* For pure alphabetic strings (no digits), should match strcmp */
+            int stdCmp = strcmp(buf1, buf2);
+            if ((stdCmp < 0 && cmpAB >= 0) || (stdCmp > 0 && cmpAB <= 0) ||
+                (stdCmp == 0 && cmpAB != 0)) {
+                ERR("Alphabetic comparison doesn't match strcmp for '%s' vs '%s'",
+                    buf1, buf2);
+            }
+
+            /* Verify reflexivity */
+            if (databoxCompare(&a, &a) != 0 || databoxCompare(&b, &b) != 0) {
+                ERR("Reflexivity failed for '%s' or '%s'", buf1, buf2);
+            }
+        }
+    }
+
+    TEST("large value ranges for binary search correctness") {
+        /* Test with values spread across the int64 range */
+        int64_t testVals[] = {INT64_MIN,
+                              INT64_MIN / 2,
+                              -1000000000LL,
+                              -1000000LL,
+                              -1000LL,
+                              -1LL,
+                              0LL,
+                              1LL,
+                              1000LL,
+                              1000000LL,
+                              1000000000LL,
+                              INT64_MAX / 2,
+                              INT64_MAX};
+        const int N = sizeof(testVals) / sizeof(testVals[0]);
+
+        /* Create sorted array */
+        databox sorted[13];
+        for (int i = 0; i < N; i++) {
+            sorted[i] = databoxNewSigned(testVals[i]);
+        }
+
+        /* Binary search for each value */
+        for (int t = 0; t < N; t++) {
+            databox target = databoxNewSigned(testVals[t]);
+            int lo = 0, hi = N - 1;
+            int foundIdx = -1;
+            while (lo <= hi) {
+                int mid = lo + (hi - lo) / 2;
+                int cmp = databoxCompare(&target, &sorted[mid]);
+                if (cmp == 0) {
+                    foundIdx = mid;
+                    break;
+                } else if (cmp < 0) {
+                    hi = mid - 1;
+                } else {
+                    lo = mid + 1;
+                }
+            }
+            if (foundIdx != t) {
+                ERR("Binary search found at wrong index: expected %d, got %d",
+                    t, foundIdx);
+            }
+        }
+    }
+
     TEST_FINAL_RESULT;
 }
 #endif /* DATAKIT_TEST */

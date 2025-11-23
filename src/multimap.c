@@ -1199,6 +1199,578 @@ int multimapTest(int argc, char *argv[]) {
         }
     }
 
+    /* ================================================================
+     * Edge Case and Boundary Tests
+     * ================================================================ */
+
+    TEST("duplicate key insertion behavior") {
+        /* Test that duplicate keys work correctly across all map types */
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_512);
+
+        /* Insert same key multiple times with different values */
+        for (int32_t i = 0; i < 100; i++) {
+            databox key = databoxNewSigned(42); /* Same key */
+            databox val = databoxNewSigned(i);
+            const databox *elements[2] = {&key, &val};
+            multimapInsertFullWidth(&m, elements);
+        }
+
+        assert(multimapCount(m) == 100);
+
+        /* Verify all entries exist */
+        for (int32_t i = 0; i < 100; i++) {
+            databox key = databoxNewSigned(42);
+            databox val = databoxNewSigned(i);
+            const databox *elements[2] = {&key, &val};
+            bool found = multimapExistsFullWidth(m, elements);
+            if (!found) {
+                ERR("Duplicate key entry %d not found!", i);
+            }
+        }
+
+        /* Delete all entries one by one */
+        for (int32_t i = 0; i < 100; i++) {
+            databox key = databoxNewSigned(42);
+            databox val = databoxNewSigned(i);
+            const databox *elements[2] = {&key, &val};
+            bool deleted = multimapDeleteFullWidth(&m, elements);
+            if (!deleted) {
+                ERR("Failed to delete duplicate key entry %d!", i);
+            }
+        }
+
+        assert(multimapCount(m) == 0);
+        multimapFree(m);
+    }
+
+    TEST("boundary values (INT64_MIN, INT64_MAX, 0)") {
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_512);
+
+        /* Test extreme integer values */
+        int64_t extremeKeys[] = {INT64_MIN, INT64_MIN + 1, -1, 0, 1,
+                                  INT64_MAX - 1, INT64_MAX};
+        size_t numKeys = sizeof(extremeKeys) / sizeof(extremeKeys[0]);
+
+        /* Insert all extreme values */
+        for (size_t i = 0; i < numKeys; i++) {
+            databox key = databoxNewSigned(extremeKeys[i]);
+            databox val = databoxNewSigned((int64_t)i);
+            const databox *elements[2] = {&key, &val};
+            multimapInsert(&m, elements);
+        }
+
+        assert(multimapCount(m) == numKeys);
+
+        /* Verify all exist and can be looked up */
+        for (size_t i = 0; i < numKeys; i++) {
+            databox key = databoxNewSigned(extremeKeys[i]);
+            bool exists = multimapExists(m, &key);
+            if (!exists) {
+                ERR("Extreme key %" PRId64 " not found!", extremeKeys[i]);
+            }
+
+            databox foundVal = {{0}};
+            databox *values[1] = {&foundVal};
+            bool found = multimapLookup(m, &key, values);
+            if (!found) {
+                ERR("Extreme key %" PRId64 " lookup failed!", extremeKeys[i]);
+            }
+            if (foundVal.data.i != (int64_t)i) {
+                ERR("Extreme key %" PRId64 " has wrong value!", extremeKeys[i]);
+            }
+        }
+
+        /* Delete in random order */
+        size_t order[] = {3, 0, 6, 2, 5, 1, 4};
+        for (size_t i = 0; i < numKeys; i++) {
+            databox key = databoxNewSigned(extremeKeys[order[i]]);
+            bool deleted = multimapDelete(&m, &key);
+            if (!deleted) {
+                ERR("Failed to delete extreme key %" PRId64 "!",
+                    extremeKeys[order[i]]);
+            }
+        }
+
+        assert(multimapCount(m) == 0);
+        multimapFree(m);
+    }
+
+    TEST("map split boundary correctness") {
+        /* Force map splits and verify boundary lookups */
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+
+        /* Insert enough to trigger multiple splits */
+        const int32_t numEntries = 500;
+        for (int32_t i = 0; i < numEntries; i++) {
+            databox key = databoxNewSigned(i * 10); /* Spread keys */
+            databox val = databoxNewSigned(i);
+            const databox *elements[2] = {&key, &val};
+            multimapInsert(&m, elements);
+        }
+
+        /* Verify ALL entries are findable after splits */
+        for (int32_t i = 0; i < numEntries; i++) {
+            databox key = databoxNewSigned(i * 10);
+            bool exists = multimapExists(m, &key);
+            if (!exists) {
+                ERR("Key %d lost after splits!", i * 10);
+            }
+        }
+
+        /* Verify non-existent keys between entries */
+        for (int32_t i = 0; i < numEntries - 1; i++) {
+            databox key = databoxNewSigned(i * 10 + 5); /* Between entries */
+            bool exists = multimapExists(m, &key);
+            if (exists) {
+                ERR("Non-existent key %d incorrectly found!", i * 10 + 5);
+            }
+        }
+
+        multimapVerify(m);
+        multimapFree(m);
+    }
+
+    TEST("interleaved insert/delete across boundaries") {
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+
+        /* Insert many entries */
+        for (int32_t i = 0; i < 300; i++) {
+            databox key = databoxNewSigned(i);
+            databox val = databoxNewSigned(i * 100);
+            const databox *elements[2] = {&key, &val};
+            multimapInsert(&m, elements);
+        }
+
+        /* Delete every other entry */
+        for (int32_t i = 0; i < 300; i += 2) {
+            databox key = databoxNewSigned(i);
+            bool deleted = multimapDelete(&m, &key);
+            if (!deleted) {
+                ERR("Failed to delete key %d!", i);
+            }
+        }
+
+        /* Verify remaining entries */
+        for (int32_t i = 0; i < 300; i++) {
+            databox key = databoxNewSigned(i);
+            bool exists = multimapExists(m, &key);
+            if (i % 2 == 0 && exists) {
+                ERR("Deleted key %d still exists!", i);
+            }
+            if (i % 2 == 1 && !exists) {
+                ERR("Remaining key %d not found!", i);
+            }
+        }
+
+        /* Re-insert deleted entries */
+        for (int32_t i = 0; i < 300; i += 2) {
+            databox key = databoxNewSigned(i);
+            databox val = databoxNewSigned(i * 100 + 1);
+            const databox *elements[2] = {&key, &val};
+            multimapInsert(&m, elements);
+        }
+
+        /* Verify all entries */
+        assert(multimapCount(m) == 300);
+        for (int32_t i = 0; i < 300; i++) {
+            databox key = databoxNewSigned(i);
+            bool exists = multimapExists(m, &key);
+            if (!exists) {
+                ERR("Re-inserted key %d not found!", i);
+            }
+        }
+
+        multimapVerify(m);
+        multimapFree(m);
+    }
+
+    TEST("reverse order insertion") {
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+
+        /* Insert in reverse order to stress binary search */
+        for (int32_t i = 500; i >= 0; i--) {
+            databox key = databoxNewSigned(i);
+            databox val = databoxNewSigned(i);
+            const databox *elements[2] = {&key, &val};
+            multimapInsert(&m, elements);
+
+            /* Verify immediately */
+            bool exists = multimapExists(m, &key);
+            if (!exists) {
+                ERR("Reverse insert: key %d not found immediately!", i);
+            }
+        }
+
+        /* Verify final state */
+        assert(multimapCount(m) == 501);
+        for (int32_t i = 0; i <= 500; i++) {
+            databox key = databoxNewSigned(i);
+            bool exists = multimapExists(m, &key);
+            if (!exists) {
+                ERR("Reverse insert final: key %d not found!", i);
+            }
+        }
+
+        multimapVerify(m);
+        multimapFree(m);
+    }
+
+    TEST("random order insertion with verification") {
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+
+        /* Generate pseudo-random keys using LCG */
+        const int32_t numEntries = 1000;
+        int32_t *keys = zcalloc(numEntries, sizeof(int32_t));
+        uint32_t seed = 54321;
+
+        for (int32_t i = 0; i < numEntries; i++) {
+            seed = seed * 1103515245 + 12345;
+            keys[i] = (int32_t)(seed % 100000);
+        }
+
+        /* Insert all keys */
+        for (int32_t i = 0; i < numEntries; i++) {
+            databox key = databoxNewSigned(keys[i]);
+            databox val = databoxNewSigned(i);
+            const databox *elements[2] = {&key, &val};
+            multimapInsertFullWidth(&m, elements);
+        }
+
+        /* Verify all entries exist */
+        for (int32_t i = 0; i < numEntries; i++) {
+            databox key = databoxNewSigned(keys[i]);
+            databox val = databoxNewSigned(i);
+            const databox *elements[2] = {&key, &val};
+            bool found = multimapExistsFullWidth(m, elements);
+            if (!found) {
+                ERR("Random insert: entry [%d, %d] not found!", keys[i], i);
+            }
+        }
+
+        zfree(keys);
+        multimapVerify(m);
+        multimapFree(m);
+    }
+
+    TEST("string key boundary handling") {
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+
+        /* Insert string keys that stress binary search */
+        const char *stringKeys[] = {
+            "", "a", "aa", "aaa", "ab", "b", "ba", "bb",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "\x00\x01\x02", "\xFF\xFE\xFD"
+        };
+        const size_t numKeys = sizeof(stringKeys) / sizeof(stringKeys[0]);
+
+        for (size_t i = 0; i < numKeys; i++) {
+            databox key = databoxNewBytesString(stringKeys[i]);
+            databox val = databoxNewSigned((int64_t)i);
+            const databox *elements[2] = {&key, &val};
+            multimapInsert(&m, elements);
+        }
+
+        /* Verify all exist */
+        for (size_t i = 0; i < numKeys; i++) {
+            databox key = databoxNewBytesString(stringKeys[i]);
+            bool exists = multimapExists(m, &key);
+            if (!exists) {
+                ERR("String key '%s' not found!", stringKeys[i]);
+            }
+        }
+
+        multimapVerify(m);
+        multimapFree(m);
+    }
+
+    TEST("upgrade path Small -> Medium -> Full") {
+        /* Use very small limits to force upgrades */
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_64);
+
+        multimapType prevType = multimapType_(m);
+        int32_t smallToMediumTransition = -1;
+        int32_t mediumToFullTransition = -1;
+
+        /* Insert until we've seen all transitions */
+        for (int32_t i = 0; i < 10000 && mediumToFullTransition < 0; i++) {
+            databox key = databoxNewSigned(i);
+            databox val = databoxNewSigned(i);
+            const databox *elements[2] = {&key, &val};
+            multimapInsert(&m, elements);
+
+            multimapType newType = multimapType_(m);
+            if (prevType == MULTIMAP_TYPE_SMALL &&
+                newType == MULTIMAP_TYPE_MEDIUM) {
+                smallToMediumTransition = i;
+                printf("    Small->Medium at entry %d\n", i);
+            } else if (prevType == MULTIMAP_TYPE_MEDIUM &&
+                       newType == MULTIMAP_TYPE_FULL) {
+                mediumToFullTransition = i;
+                printf("    Medium->Full at entry %d\n", i);
+            }
+            prevType = newType;
+        }
+
+        /* Verify all entries still exist after transitions */
+        size_t count = multimapCount(m);
+        for (size_t i = 0; i < count; i++) {
+            databox key = databoxNewSigned((int64_t)i);
+            bool exists = multimapExists(m, &key);
+            if (!exists) {
+                ERR("Entry %zu lost after type transitions!", i);
+            }
+        }
+
+        multimapVerify(m);
+        multimapFree(m);
+    }
+
+    TEST("first/last element retrieval across boundaries") {
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+
+        /* Insert entries spanning multiple internal maps */
+        for (int32_t i = 1000; i >= 0; i--) {
+            databox key = databoxNewSigned(i);
+            databox val = databoxNewSigned(i * 10);
+            const databox *elements[2] = {&key, &val};
+            multimapInsert(&m, elements);
+        }
+
+        /* Verify first element */
+        databox firstKey = {{0}};
+        databox firstVal = {{0}};
+        databox *firstElements[2] = {&firstKey, &firstVal};
+        bool gotFirst = multimapFirst(m, firstElements);
+        if (!gotFirst || firstKey.data.i != 0) {
+            ERR("First element wrong: got %" PRId64 ", expected 0",
+                firstKey.data.i);
+        }
+
+        /* Verify last element */
+        databox lastKey = {{0}};
+        databox lastVal = {{0}};
+        databox *lastElements[2] = {&lastKey, &lastVal};
+        bool gotLast = multimapLast(m, lastElements);
+        if (!gotLast || lastKey.data.i != 1000) {
+            ERR("Last element wrong: got %" PRId64 ", expected 1000",
+                lastKey.data.i);
+        }
+
+        multimapVerify(m);
+        multimapFree(m);
+    }
+
+    TEST("iterator across all map boundaries") {
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+
+        /* Insert entries */
+        for (int32_t i = 0; i < 500; i++) {
+            databox key = databoxNewSigned(i);
+            databox val = databoxNewSigned(i * 2);
+            const databox *elements[2] = {&key, &val};
+            multimapInsert(&m, elements);
+        }
+
+        /* Forward iteration */
+        multimapIterator iter;
+        multimapIteratorInit(m, &iter, true);
+        databox key = {{0}};
+        databox val = {{0}};
+        databox *elements[2] = {&key, &val};
+
+        int64_t expected = 0;
+        int64_t iterCount = 0;
+        while (multimapIteratorNext(&iter, elements)) {
+            if (key.data.i != expected) {
+                ERR("Forward iter: expected %" PRId64 ", got %" PRId64,
+                    expected, key.data.i);
+            }
+            expected++;
+            iterCount++;
+        }
+
+        if (iterCount != 500) {
+            ERR("Forward iter: expected 500 entries, got %" PRId64, iterCount);
+        }
+
+        /* Backward iteration */
+        multimapIteratorInit(m, &iter, false);
+        expected = 499;
+        iterCount = 0;
+        while (multimapIteratorNext(&iter, elements)) {
+            if (key.data.i != expected) {
+                ERR("Backward iter: expected %" PRId64 ", got %" PRId64,
+                    expected, key.data.i);
+            }
+            expected--;
+            iterCount++;
+        }
+
+        if (iterCount != 500) {
+            ERR("Backward iter: expected 500 entries, got %" PRId64, iterCount);
+        }
+
+        multimapVerify(m);
+        multimapFree(m);
+    }
+
+    TEST("delete causing map merge") {
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+
+        /* Insert to create multiple maps */
+        for (int32_t i = 0; i < 500; i++) {
+            databox key = databoxNewSigned(i);
+            databox val = databoxNewSigned(i);
+            const databox *elements[2] = {&key, &val};
+            multimapInsert(&m, elements);
+        }
+
+        /* Delete most entries to trigger potential merges */
+        for (int32_t i = 0; i < 490; i++) {
+            databox key = databoxNewSigned(i);
+            bool deleted = multimapDelete(&m, &key);
+            if (!deleted) {
+                ERR("Failed to delete key %d!", i);
+            }
+        }
+
+        assert(multimapCount(m) == 10);
+
+        /* Verify remaining entries */
+        for (int32_t i = 490; i < 500; i++) {
+            databox key = databoxNewSigned(i);
+            bool exists = multimapExists(m, &key);
+            if (!exists) {
+                ERR("Remaining key %d not found after mass delete!", i);
+            }
+        }
+
+        multimapVerify(m);
+        multimapFree(m);
+    }
+
+    TEST("mixed type keys (integers and strings)") {
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+
+        /* Insert integer keys */
+        for (int32_t i = 0; i < 100; i++) {
+            databox key = databoxNewSigned(i);
+            databox val = databoxNewSigned(i);
+            const databox *elements[2] = {&key, &val};
+            multimapInsert(&m, elements);
+        }
+
+        /* Insert string keys */
+        for (int32_t i = 0; i < 100; i++) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "key_%03d", i);
+            databox key = databoxNewBytesString(buf);
+            databox val = databoxNewSigned(i + 1000);
+            const databox *elements[2] = {&key, &val};
+            multimapInsert(&m, elements);
+        }
+
+        assert(multimapCount(m) == 200);
+
+        /* Verify integer keys */
+        for (int32_t i = 0; i < 100; i++) {
+            databox key = databoxNewSigned(i);
+            bool exists = multimapExists(m, &key);
+            if (!exists) {
+                ERR("Integer key %d not found!", i);
+            }
+        }
+
+        /* Verify string keys */
+        for (int32_t i = 0; i < 100; i++) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "key_%03d", i);
+            databox key = databoxNewBytesString(buf);
+            bool exists = multimapExists(m, &key);
+            if (!exists) {
+                ERR("String key '%s' not found!", buf);
+            }
+        }
+
+        multimapVerify(m);
+        multimapFree(m);
+    }
+
+    TEST("PERF: lookup performance across many maps") {
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+
+        /* Insert enough to create many internal maps */
+        const int32_t numEntries = 10000;
+        for (int32_t i = 0; i < numEntries; i++) {
+            databox key = databoxNewSigned(i);
+            databox val = databoxNewSigned(i);
+            const databox *elements[2] = {&key, &val};
+            multimapInsert(&m, elements);
+        }
+
+        printf("    Entry count: %zu\n", multimapCount(m));
+
+        /* Benchmark lookups */
+        int64_t startNs = timeUtilMonotonicNs();
+        for (int32_t round = 0; round < 10; round++) {
+            for (int32_t i = 0; i < numEntries; i++) {
+                databox key = databoxNewSigned(i);
+                multimapExists(m, &key);
+            }
+        }
+        int64_t elapsed = timeUtilMonotonicNs() - startNs;
+        int64_t totalOps = numEntries * 10;
+        printf("    Lookup: %.1f ns/op, %.0f ops/sec\n",
+               (double)elapsed / totalOps,
+               totalOps / (elapsed / 1e9));
+
+        multimapFree(m);
+    }
+
+    TEST("stress test: insert/delete/lookup random mix") {
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+        uint32_t seed = 98765;
+        int32_t *inserted = zcalloc(10000, sizeof(int32_t));
+        size_t insertedCount = 0;
+
+        /* Random mix of operations */
+        for (int32_t i = 0; i < 5000; i++) {
+            seed = seed * 1103515245 + 12345;
+            int32_t op = seed % 10; /* 0-6: insert, 7-8: delete, 9: verify */
+            int32_t key = seed % 10000;
+
+            if (op < 7) {
+                /* Insert */
+                databox k = databoxNewSigned(key);
+                databox v = databoxNewSigned(i);
+                const databox *elements[2] = {&k, &v};
+                multimapInsertFullWidth(&m, elements);
+                inserted[insertedCount++] = key;
+            } else if (op < 9 && insertedCount > 0) {
+                /* Delete random existing */
+                size_t idx = seed % insertedCount;
+                databox k = databoxNewSigned(inserted[idx]);
+                multimapDelete(&m, &k);
+            } else if (insertedCount > 0) {
+                /* Verify random existing */
+                size_t idx = seed % insertedCount;
+                databox k = databoxNewSigned(inserted[idx]);
+                /* Key might have been deleted, so don't assert on exists */
+                multimapExists(m, &k);
+            }
+
+            /* Periodic verification */
+            if (i % 1000 == 0) {
+                multimapVerify(m);
+            }
+        }
+
+        zfree(inserted);
+        multimapVerify(m);
+        multimapFree(m);
+    }
+
     TEST_FINAL_RESULT;
 }
 #endif /* DATAKIT_TEST */
