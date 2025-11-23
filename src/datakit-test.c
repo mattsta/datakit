@@ -56,6 +56,7 @@
 #include "intersectInt.h"
 #include "list.h"
 #include "timeUtil.h"
+#include "linearBloom.h"
 
 #if __x86_64__
 #define USE_INTSET_BIG 1
@@ -177,6 +178,9 @@ int main(int argc, char *argv[]) {
             return listTest(argc - 2, argv + 2);
         } else if (!strcasecmp(argv[2], "bbits")) {
             return bbitsTest(argc - 2, argv + 2);
+        } else if (!strcasecmp(argv[2], "linearBloom") ||
+                   !strcasecmp(argv[2], "bloom")) {
+            return linearBloomTest(argc - 2, argv + 2);
         } else if (!strcasecmp(argv[2], "ALL")) {
             uint32_t result = 0;
             result += flexTest(argc, argv);
@@ -218,6 +222,7 @@ int main(int argc, char *argv[]) {
             result += databoxLinearTest(argc, argv);
             result += listTest(argc, argv);
             result += bbitsTest(argc, argv);
+            result += linearBloomTest(argc, argv);
             return result;
         }
     }
