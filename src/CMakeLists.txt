@@ -213,6 +213,8 @@ add_library(${PROJECT_NAME} OBJECT
     multidict.c
 
     multiTimer.c
+    timerWheel.c
+    timerWheelTest.c
     timeUtil.c
 
     mds.c

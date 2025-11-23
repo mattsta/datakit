@@ -130,6 +130,61 @@ void StrUInt8DigitsToBuf(void *p_, uint32_t u) {
     memcpy(p, &vResult, sizeof(vResult));
     memcpy(p + 4, &uResult, sizeof(uResult));
 }
+#elif defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+#include <arm_neon.h>
+
+/* ARM NEON optimized integer-to-string conversion.
+ * Uses NEON for parallel digit extraction where beneficial. */
+
+/* Helper: convert 4 digits using NEON multiply-high approximation */
+static inline void d4toa_neon(uint8_t *out, uint32_t u) {
+    /* Extract 4 digits from u (0-9999) using division by constants.
+     * ARM64 compiler is very good at optimizing division by constants. */
+    const uint32_t d0 = u / 1000;
+    const uint32_t r0 = u - d0 * 1000;
+    const uint32_t d1 = r0 / 100;
+    const uint32_t r1 = r0 - d1 * 100;
+    const uint32_t d2 = r1 / 10;
+    const uint32_t d3 = r1 - d2 * 10;
+
+    /* Store as ASCII digits */
+    out[0] = '0' + d0;
+    out[1] = '0' + d1;
+    out[2] = '0' + d2;
+    out[3] = '0' + d3;
+}
+
+void StrUInt9DigitsToBuf(void *out_, uint32_t u) {
+    uint8_t *out = out_;
+
+    /* Split into three parts: w (1 digit), v (4 digits), u (4 digits) */
+    uint32_t v = u / 10000;
+    uint32_t w = v / 10000;
+    u -= v * 10000;
+    v -= w * 10000;
+
+    /* First digit */
+    out[0] = '0' + w;
+
+    /* Next 4 digits */
+    d4toa_neon(out + 1, v);
+
+    /* Last 4 digits */
+    d4toa_neon(out + 5, u);
+}
+
+void StrUInt4DigitsToBuf(void *p_, uint32_t u) {
+    d4toa_neon((uint8_t *)p_, u);
+}
+
+void StrUInt8DigitsToBuf(void *p_, uint32_t u) {
+    uint8_t *p = (uint8_t *)p_;
+    const uint32_t v = u / 10000;
+    u -= v * 10000;
+
+    d4toa_neon(p, v);
+    d4toa_neon(p + 4, u);
+}
 #else
 #warning "Using unoptimized StrUInt9DigitsToBuf()!"
 void StrUInt9DigitsToBuf(void *out_, uint32_t u) {

@@ -3497,20 +3497,18 @@ flexFind_(const flex *f, flexEntry *fe, const uint32_t skip, const bool forward,
         if (diff > 0) {                                                        \
             /* basically flexNext() up to the next element */                  \
             while (diff--) {                                                   \
-                /*                                                             \
-                printf("[%p] %p: walking forward... %d %zu\n", f, fe_, diff,   \
-                       flexRawEntryLength(fe_));                               \
-                       */                                                      \
-                (fe_) += flexRawEntryLength(fe_);                              \
+                const size_t entryLen = flexRawEntryLength(fe_);               \
+                /* Prefetch next entry to hide memory latency */               \
+                __builtin_prefetch((fe_) + entryLen, 0, 1);                    \
+                (fe_) += entryLen;                                             \
             }                                                                  \
         } else if (diff < 0) {                                                 \
             /* basically flexPrev() down to the prev element */                \
             while (diff++) {                                                   \
-                /*                                                             \
-                printf("[%p] %p: (%d) walking back... %d %p\n", f, fe_,        \
-                       fe_[0], diff, flexGetPreviousEntry(fe_));               \
-                       */                                                      \
-                (fe_) = flexGetPreviousEntry(fe_);                             \
+                flexEntry *prevEntry = flexGetPreviousEntry(fe_);              \
+                /* Prefetch previous entry to hide memory latency */           \
+                __builtin_prefetch(prevEntry, 0, 1);                           \
+                (fe_) = prevEntry;                                             \
                 assert((fe_) > (f));                                           \
             }                                                                  \
         } /* else, diff == 0 and we don't advance or retreat. */               \

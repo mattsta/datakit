@@ -18,6 +18,26 @@ DK_FN_UNUSED DK_FN_PURE DK_INLINE_ALWAYS uint64_t pow2Ceiling64(uint64_t x) {
     asm("bsrq %1, %0" : "=r"(indexOfHighestBitSet) : "r"(x - 1));
 
     return 1ULL << (indexOfHighestBitSet + 1);
+#elif defined(__aarch64__)
+    if (unlikely(x <= 1)) {
+        /* Let's make power of 2 ceiling of 0 and 1 == 2 */
+        return 2;
+    }
+
+    /* On ARM64, use CLZ (count leading zeros) instruction.
+     * CLZ returns 0-63 for the number of leading zeros.
+     * For x-1, if CLZ returns n, then the highest bit set is at position 63-n.
+     * So we need to shift 1 by (64 - n) = (64 - CLZ(x-1)) positions.
+     *
+     * Note: For x > 2^63, the result would be 2^64 which overflows uint64_t.
+     * We return 0 in this case to match overflow behavior. */
+    const int leadingZeros = __builtin_clzll(x - 1);
+    if (leadingZeros == 0) {
+        /* Result would be 2^64, which overflows - return 0 */
+        return 0;
+    }
+
+    return 1ULL << (64 - leadingZeros);
 #else
 #warning "Using unoptimized version..."
     x--;

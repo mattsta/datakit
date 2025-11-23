@@ -58,6 +58,7 @@
 #include "timeUtil.h"
 #include "linearBloom.h"
 #include "multiTimer.h"
+#include "timerWheel.h"
 
 #if __x86_64__
 #define USE_INTSET_BIG 1
@@ -185,6 +186,9 @@ int main(int argc, char *argv[]) {
         } else if (!strcasecmp(argv[2], "multiTimer") ||
                    !strcasecmp(argv[2], "timer")) {
             return multiTimerTest(argc - 2, argv + 2);
+        } else if (!strcasecmp(argv[2], "timerWheel") ||
+                   !strcasecmp(argv[2], "tw")) {
+            return timerWheelTest(argc - 2, argv + 2);
         } else if (!strcasecmp(argv[2], "ALL")) {
             uint32_t result = 0;
             result += flexTest(argc, argv);

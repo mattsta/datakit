@@ -42,8 +42,15 @@
 #define HYPERHASH XXH3_64bits_withSeed
 #endif
 
-#if __AVX__
+/* SIMD support for optimized HLL operations */
+#if __AVX__ || __SSE2__
+#define HLL_USE_SSE 1
 #include <immintrin.h>
+#endif
+
+#if defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+#define HLL_USE_NEON 1
+#include <arm_neon.h>
 #endif
 
 /* 'hyperloglog' is actually an mdsc, but we cast the
@@ -1163,18 +1170,87 @@ bool hyperloglogMerge(hyperloglog *restrict target,
                       const hyperloglog *restrict hdr) {
     uint8_t *max = target->registers;
 
-    assert(target->encoding != HLL_RAW);
+    /* Target must use 8-bit per register (HLL_RAW) for direct array access.
+     * Source should be DENSE or SPARSE, not RAW. */
+    assert(target->encoding == HLL_RAW);
     assert(hdr->encoding != HLL_RAW);
 
     if (isDense(hdr)) {
-        uint8_t val; /* size matches max[i] compare/equal size */
+#if HLL_USE_NEON && HLL_REGISTERS == 16384 && HLL_BITS == 6
+        /* ARM NEON optimized merge: process 16 registers (12 packed bytes) at a time.
+         * Unpacks 6-bit registers to 8-bit, then uses vector max. */
+        uint8_t *r = (uint8_t *)hdr->registers;
+        for (size_t j = 0; j < 1024; j++) {
+            /* Unpack 16 6-bit registers from 12 bytes into temporary buffer */
+            uint8_t unpacked[16];
+            unpacked[0] = r[0] & 63;
+            unpacked[1] = (r[0] >> 6 | r[1] << 2) & 63;
+            unpacked[2] = (r[1] >> 4 | r[2] << 4) & 63;
+            unpacked[3] = (r[2] >> 2) & 63;
+            unpacked[4] = r[3] & 63;
+            unpacked[5] = (r[3] >> 6 | r[4] << 2) & 63;
+            unpacked[6] = (r[4] >> 4 | r[5] << 4) & 63;
+            unpacked[7] = (r[5] >> 2) & 63;
+            unpacked[8] = r[6] & 63;
+            unpacked[9] = (r[6] >> 6 | r[7] << 2) & 63;
+            unpacked[10] = (r[7] >> 4 | r[8] << 4) & 63;
+            unpacked[11] = (r[8] >> 2) & 63;
+            unpacked[12] = r[9] & 63;
+            unpacked[13] = (r[9] >> 6 | r[10] << 2) & 63;
+            unpacked[14] = (r[10] >> 4 | r[11] << 4) & 63;
+            unpacked[15] = (r[11] >> 2) & 63;
 
+            /* NEON vector max operation - 16 bytes at once */
+            uint8x16_t src = vld1q_u8(unpacked);
+            uint8x16_t dst = vld1q_u8(max);
+            uint8x16_t result = vmaxq_u8(src, dst);
+            vst1q_u8(max, result);
+
+            max += 16;
+            r += 12;
+        }
+#elif HLL_USE_SSE && HLL_REGISTERS == 16384 && HLL_BITS == 6
+        /* SSE optimized merge: same approach as NEON */
+        uint8_t *r = (uint8_t *)hdr->registers;
+        for (size_t j = 0; j < 1024; j++) {
+            /* Unpack 16 6-bit registers from 12 bytes into temporary buffer */
+            uint8_t unpacked[16];
+            unpacked[0] = r[0] & 63;
+            unpacked[1] = (r[0] >> 6 | r[1] << 2) & 63;
+            unpacked[2] = (r[1] >> 4 | r[2] << 4) & 63;
+            unpacked[3] = (r[2] >> 2) & 63;
+            unpacked[4] = r[3] & 63;
+            unpacked[5] = (r[3] >> 6 | r[4] << 2) & 63;
+            unpacked[6] = (r[4] >> 4 | r[5] << 4) & 63;
+            unpacked[7] = (r[5] >> 2) & 63;
+            unpacked[8] = r[6] & 63;
+            unpacked[9] = (r[6] >> 6 | r[7] << 2) & 63;
+            unpacked[10] = (r[7] >> 4 | r[8] << 4) & 63;
+            unpacked[11] = (r[8] >> 2) & 63;
+            unpacked[12] = r[9] & 63;
+            unpacked[13] = (r[9] >> 6 | r[10] << 2) & 63;
+            unpacked[14] = (r[10] >> 4 | r[11] << 4) & 63;
+            unpacked[15] = (r[11] >> 2) & 63;
+
+            /* SSE vector max operation - 16 bytes at once */
+            __m128i src = _mm_loadu_si128((__m128i *)unpacked);
+            __m128i dst = _mm_loadu_si128((__m128i *)max);
+            __m128i result = _mm_max_epu8(src, dst);
+            _mm_storeu_si128((__m128i *)max, result);
+
+            max += 16;
+            r += 12;
+        }
+#else
+        /* Scalar fallback */
+        uint8_t val;
         for (size_t i = 0; i < HLL_REGISTERS; i++) {
             HLL_DENSE_GET_REGISTER(val, hdr->registers, i);
             if (val > max[i]) {
                 max[i] = val;
             }
         }
+#endif
     } else {
         uint8_t *p = (uint8_t *)hdr;
         uint8_t *end = p + mdsclen(toMDSC(hdr));
@@ -1504,6 +1580,7 @@ hyperloglog *pfmerge(hyperloglog *h, ...) {
 
 #ifdef DATAKIT_TEST
 #include "datakit.h"
+#include "timeUtil.h"
 
 /* PFSELFTEST
  * This command performs a self-test of the HLL registers implementation.
@@ -1642,6 +1719,96 @@ cleanup:
     if (errors) {
         printf("TESTS FAILED!  Error count: %d\n", errors);
     }
+
+    /* Test 3: SIMD merge correctness.
+     * Verify that merging dense HLLs produces correct results. */
+    printf("[merge correctness]: Testing SIMD merge...\n");
+    {
+        hyperloglog *h1 = hyperloglogNewDense();
+        hyperloglog *h2 = hyperloglogNewDense();
+
+        /* Add different elements to each HLL */
+        for (uint64_t i = 0; i < 10000; i++) {
+            uint64_t v1 = i * 2;
+            uint64_t v2 = i * 2 + 1;
+            hyperloglogAdd(&h1, &v1, sizeof(v1));
+            hyperloglogAdd(&h2, &v2, sizeof(v2));
+        }
+
+        uint64_t count1 = pfcountSingle(h1);
+        uint64_t count2 = pfcountSingle(h2);
+
+        /* Merge h2 into a new HLL that also has h1's data */
+        hyperloglog *merged = pfmerge(h1, h2, NULL);
+        uint64_t countMerged = pfcountSingle(merged);
+
+        /* Merged count should be approximately count1 + count2 */
+        /* Allow 10% error margin */
+        uint64_t expectedMin = (count1 + count2) * 90 / 100;
+        uint64_t expectedMax = (count1 + count2) * 110 / 100;
+
+        if (countMerged < expectedMin || countMerged > expectedMax) {
+            printf("TESTFAILED merge count %" PRIu64 " not in range [%" PRIu64
+                   ", %" PRIu64 "] (h1=%" PRIu64 ", h2=%" PRIu64 ")\n",
+                   countMerged, expectedMin, expectedMax, count1, count2);
+            errors++;
+        } else {
+            printf("[merge correctness]: PASSED (merged=%" PRIu64
+                   ", expected ~%" PRIu64 ")\n",
+                   countMerged, count1 + count2);
+        }
+
+        hyperloglogFree(h1);
+        hyperloglogFree(h2);
+        hyperloglogFree(merged);
+    }
+
+    /* Test 4: SIMD merge performance benchmark.
+     * Measures merge throughput with SIMD optimizations. */
+    printf("[merge benchmark]: Benchmarking SIMD merge performance...\n");
+    {
+        const int numHlls = 100;
+        const int mergeIterations = 1000;
+
+        /* Create test HLLs with data */
+        hyperloglog *hlls[numHlls];
+        for (int i = 0; i < numHlls; i++) {
+            hlls[i] = hyperloglogNewDense();
+            for (uint64_t j = 0; j < 1000; j++) {
+                uint64_t v = i * 1000 + j;
+                hyperloglogAdd(&hlls[i], &v, sizeof(v));
+            }
+        }
+
+        /* Benchmark merge operations */
+        uint64_t startTime = timeUtilMonotonicNs();
+
+        for (int iter = 0; iter < mergeIterations; iter++) {
+            hyperloglog *result = pfmerge(hlls[0], hlls[1], NULL);
+            for (int i = 2; i < numHlls; i++) {
+                hyperloglog *newResult = pfmerge(result, hlls[i], NULL);
+                hyperloglogFree(result);
+                result = newResult;
+            }
+            hyperloglogFree(result);
+        }
+
+        uint64_t endTime = timeUtilMonotonicNs();
+        uint64_t totalNs = endTime - startTime;
+        uint64_t totalMerges = (uint64_t)mergeIterations * (numHlls - 1);
+        double nsPerMerge = (double)totalNs / totalMerges;
+        double mergesPerSec = 1e9 / nsPerMerge;
+
+        printf("[merge benchmark]: %.1f ns/merge, %.0f merges/sec "
+               "(%d iterations x %d merges)\n",
+               nsPerMerge, mergesPerSec, mergeIterations, numHlls - 1);
+
+        /* Cleanup */
+        for (int i = 0; i < numHlls; i++) {
+            hyperloglogFree(hlls[i]);
+        }
+    }
+
     return errors;
 }
 #endif

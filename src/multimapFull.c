@@ -736,6 +736,9 @@ multimapFullBinarySearchFullWidth(multimapFull *m, const databox *elements[]) {
         const size_t mid = (min + max) >> 1;
         const flex *map = getMap(m, mid);
 
+        /* Prefetch the map data for comparison */
+        __builtin_prefetch(map, 0, 1);
+
         const int compared =
             flexCompareEntries(map, elements, m->elementsPerEntry, 0);
         if (compared < 0) {
@@ -748,8 +751,10 @@ multimapFullBinarySearchFullWidth(multimapFull *m, const databox *elements[]) {
              * at another iteration of the binary search, and by reading here,
              * it will already be in our cache hierarchy when (maybe) needed
              * again real soon now. */
+            const flex *nextMap = getMap(m, mid + 1);
+            __builtin_prefetch(nextMap, 0, 1);
             const int nextHeadCompared = flexCompareEntries(
-                getMap(m, mid + 1), elements, m->elementsPerEntry, 0);
+                nextMap, elements, m->elementsPerEntry, 0);
             if (nextHeadCompared > 0) {
                 /* (LOW, ELEMENT[i], HIGH) */
                 /* Found map containing this element range */
