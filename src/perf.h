@@ -124,7 +124,7 @@ enum firstThing { FIRST_SECONDS, FIRST_CYCLES, FIRST_RATE };
 
 #define PERF_TIMERS_CYCLE_STAT_STOP(i)                                         \
     do {                                                                       \
-        lps.stat.tsc.stop _perfTSC();                                          \
+        lps.stat.tsc.stop = _perfTSC();                                        \
         lps.stat.tsc.duration = lps.stat.tsc.stop - lps.stat.tsc.start;        \
         _PERF_TIMERS_STAT_STOP(i, tsc, lps.stat.tsc.duration);                 \
     } while (0)
