@@ -91,4 +91,8 @@ void listRewind(list *list, listIter *li);
 void listRewindTail(list *list, listIter *li);
 void listRotate(list *list);
 
+#ifdef DATAKIT_TEST
+int listTest(int argc, char *argv[]);
+#endif
+
 #endif /* ADLIST_H */

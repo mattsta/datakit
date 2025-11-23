@@ -221,6 +221,7 @@ add_library(${PROJECT_NAME} OBJECT
 
     dod.c
     xof.c
+    bbits.c
 
     flex.c
     mflex.c

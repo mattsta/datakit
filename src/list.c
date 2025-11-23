@@ -371,3 +371,479 @@ void listRotate(list *l) {
     tail->next = l->head;
     l->head = tail;
 }
+
+#ifdef DATAKIT_TEST
+#include "ctest.h"
+
+int listTest(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+
+    int32_t err = 0;
+
+    /* Test listCreate and listRelease */
+    printf("Testing listCreate and listRelease...\n");
+    {
+        list *l = listCreate();
+        if (l == NULL) {
+            ERR("listCreate returned NULL%s", "");
+        }
+
+        if (listLength(l) != 0) {
+            ERR("New list should have length 0, got %lu", listLength(l));
+        }
+
+        if (listFirst(l) != NULL) {
+            ERR("New list head should be NULL%s", "");
+        }
+
+        if (listLast(l) != NULL) {
+            ERR("New list tail should be NULL%s", "");
+        }
+
+        listRelease(l);
+    }
+
+    /* Test listAddNodeHead */
+    printf("Testing listAddNodeHead...\n");
+    {
+        list *l = listCreate();
+        int32_t values[] = {1, 2, 3, 4, 5};
+
+        for (int32_t i = 0; i < 5; i++) {
+            list *result = listAddNodeHead(l, &values[i]);
+            if (result == NULL) {
+                ERR("listAddNodeHead returned NULL for value %d", i);
+            }
+        }
+
+        if (listLength(l) != 5) {
+            ERR("Expected length 5, got %lu", listLength(l));
+        }
+
+        /* Head should be the last added (5), tail should be first added (1) */
+        if (*(int32_t *)listNodeValue(listFirst(l)) != 5) {
+            ERR("Expected head value 5, got %d",
+                *(int32_t *)listNodeValue(listFirst(l)));
+        }
+
+        if (*(int32_t *)listNodeValue(listLast(l)) != 1) {
+            ERR("Expected tail value 1, got %d",
+                *(int32_t *)listNodeValue(listLast(l)));
+        }
+
+        listRelease(l);
+    }
+
+    /* Test listAddNodeTail */
+    printf("Testing listAddNodeTail...\n");
+    {
+        list *l = listCreate();
+        int32_t values[] = {1, 2, 3, 4, 5};
+
+        for (int32_t i = 0; i < 5; i++) {
+            list *result = listAddNodeTail(l, &values[i]);
+            if (result == NULL) {
+                ERR("listAddNodeTail returned NULL for value %d", i);
+            }
+        }
+
+        if (listLength(l) != 5) {
+            ERR("Expected length 5, got %lu", listLength(l));
+        }
+
+        /* Head should be first added (1), tail should be last added (5) */
+        if (*(int32_t *)listNodeValue(listFirst(l)) != 1) {
+            ERR("Expected head value 1, got %d",
+                *(int32_t *)listNodeValue(listFirst(l)));
+        }
+
+        if (*(int32_t *)listNodeValue(listLast(l)) != 5) {
+            ERR("Expected tail value 5, got %d",
+                *(int32_t *)listNodeValue(listLast(l)));
+        }
+
+        listRelease(l);
+    }
+
+    /* Test listDelNode */
+    printf("Testing listDelNode...\n");
+    {
+        list *l = listCreate();
+        int32_t values[] = {1, 2, 3};
+
+        for (int32_t i = 0; i < 3; i++) {
+            listAddNodeTail(l, &values[i]);
+        }
+
+        /* Delete middle node */
+        listNode *middle = listFirst(l)->next;
+        listDelNode(l, middle);
+
+        if (listLength(l) != 2) {
+            ERR("Expected length 2 after delete, got %lu", listLength(l));
+        }
+
+        /* Verify structure: head -> tail */
+        if (*(int32_t *)listNodeValue(listFirst(l)) != 1) {
+            ERR("Expected head value 1 after delete, got %d",
+                *(int32_t *)listNodeValue(listFirst(l)));
+        }
+
+        if (*(int32_t *)listNodeValue(listLast(l)) != 3) {
+            ERR("Expected tail value 3 after delete, got %d",
+                *(int32_t *)listNodeValue(listLast(l)));
+        }
+
+        /* Verify linkage */
+        if (listFirst(l)->next != listLast(l)) {
+            ERR("Head->next should point to tail%s", "");
+        }
+
+        if (listLast(l)->prev != listFirst(l)) {
+            ERR("Tail->prev should point to head%s", "");
+        }
+
+        listRelease(l);
+    }
+
+    /* Test listGetIterator and listNext (head to tail) */
+    printf("Testing listGetIterator head to tail...\n");
+    {
+        list *l = listCreate();
+        int32_t values[] = {1, 2, 3, 4, 5};
+
+        for (int32_t i = 0; i < 5; i++) {
+            listAddNodeTail(l, &values[i]);
+        }
+
+        listIter *iter = listGetIterator(l, true);
+        if (iter == NULL) {
+            ERR("listGetIterator returned NULL%s", "");
+        }
+
+        listNode *node;
+        int32_t expected = 1;
+        while ((node = listNext(iter)) != NULL) {
+            int32_t val = *(int32_t *)listNodeValue(node);
+            if (val != expected) {
+                ERR("Iterator expected %d, got %d", expected, val);
+            }
+            expected++;
+        }
+
+        if (expected != 6) {
+            ERR("Iterator didn't visit all nodes, expected count 6, got %d",
+                expected);
+        }
+
+        listReleaseIterator(iter);
+        listRelease(l);
+    }
+
+    /* Test listGetIterator and listNext (tail to head) */
+    printf("Testing listGetIterator tail to head...\n");
+    {
+        list *l = listCreate();
+        int32_t values[] = {1, 2, 3, 4, 5};
+
+        for (int32_t i = 0; i < 5; i++) {
+            listAddNodeTail(l, &values[i]);
+        }
+
+        listIter *iter = listGetIterator(l, false);
+        if (iter == NULL) {
+            ERR("listGetIterator returned NULL%s", "");
+        }
+
+        listNode *node;
+        int32_t expected = 5;
+        while ((node = listNext(iter)) != NULL) {
+            int32_t val = *(int32_t *)listNodeValue(node);
+            if (val != expected) {
+                ERR("Iterator expected %d, got %d", expected, val);
+            }
+            expected--;
+        }
+
+        if (expected != 0) {
+            ERR("Iterator didn't visit all nodes, expected count 0, got %d",
+                expected);
+        }
+
+        listReleaseIterator(iter);
+        listRelease(l);
+    }
+
+    /* Test listRewind and listRewindTail */
+    printf("Testing listRewind and listRewindTail...\n");
+    {
+        list *l = listCreate();
+        int32_t values[] = {1, 2, 3};
+
+        for (int32_t i = 0; i < 3; i++) {
+            listAddNodeTail(l, &values[i]);
+        }
+
+        listIter li;
+        listRewind(l, &li);
+
+        listNode *node = listNext(&li);
+        if (*(int32_t *)listNodeValue(node) != 1) {
+            ERR("listRewind should start at head (1), got %d",
+                *(int32_t *)listNodeValue(node));
+        }
+
+        listRewindTail(l, &li);
+        node = listNext(&li);
+        if (*(int32_t *)listNodeValue(node) != 3) {
+            ERR("listRewindTail should start at tail (3), got %d",
+                *(int32_t *)listNodeValue(node));
+        }
+
+        listRelease(l);
+    }
+
+    /* Test listDup */
+    printf("Testing listDup...\n");
+    {
+        list *orig = listCreate();
+        int32_t values[] = {10, 20, 30, 40, 50};
+
+        for (int32_t i = 0; i < 5; i++) {
+            listAddNodeTail(orig, &values[i]);
+        }
+
+        list *copy = listDup(orig);
+        if (copy == NULL) {
+            ERR("listDup returned NULL%s", "");
+        }
+
+        if (listLength(copy) != listLength(orig)) {
+            ERR("Copy length %lu != orig length %lu", listLength(copy),
+                listLength(orig));
+        }
+
+        /* Verify values match */
+        listIter *origIter = listGetIterator(orig, true);
+        listIter *copyIter = listGetIterator(copy, true);
+        listNode *origNode, *copyNode;
+
+        while ((origNode = listNext(origIter)) != NULL) {
+            copyNode = listNext(copyIter);
+            if (copyNode == NULL) {
+                ERR("Copy has fewer nodes than original%s", "");
+                break;
+            }
+
+            /* Without dup method, pointers should be the same */
+            if (listNodeValue(origNode) != listNodeValue(copyNode)) {
+                ERR("Value pointers should be identical without dup method%s",
+                    "");
+            }
+        }
+
+        listReleaseIterator(origIter);
+        listReleaseIterator(copyIter);
+        listRelease(orig);
+        listRelease(copy);
+    }
+
+    /* Test listSearchKey */
+    printf("Testing listSearchKey...\n");
+    {
+        list *l = listCreate();
+        int32_t values[] = {100, 200, 300, 400, 500};
+
+        for (int32_t i = 0; i < 5; i++) {
+            listAddNodeTail(l, &values[i]);
+        }
+
+        /* Search for existing value (by pointer) */
+        listNode *found = listSearchKey(l, &values[2]);
+        if (found == NULL) {
+            ERR("listSearchKey didn't find existing key%s", "");
+        } else if (*(int32_t *)listNodeValue(found) != 300) {
+            ERR("listSearchKey found wrong value: %d",
+                *(int32_t *)listNodeValue(found));
+        }
+
+        /* Search for non-existing pointer */
+        int32_t notInList = 300; /* Same value but different pointer */
+        found = listSearchKey(l, &notInList);
+        if (found != NULL) {
+            ERR("listSearchKey should not find different pointer%s", "");
+        }
+
+        listRelease(l);
+    }
+
+    /* Test listIndex */
+    printf("Testing listIndex...\n");
+    {
+        list *l = listCreate();
+        int32_t values[] = {10, 20, 30, 40, 50};
+
+        for (int32_t i = 0; i < 5; i++) {
+            listAddNodeTail(l, &values[i]);
+        }
+
+        /* Positive indices */
+        listNode *node = listIndex(l, 0);
+        if (node == NULL || *(int32_t *)listNodeValue(node) != 10) {
+            ERR("listIndex(0) should return 10%s", "");
+        }
+
+        node = listIndex(l, 2);
+        if (node == NULL || *(int32_t *)listNodeValue(node) != 30) {
+            ERR("listIndex(2) should return 30%s", "");
+        }
+
+        node = listIndex(l, 4);
+        if (node == NULL || *(int32_t *)listNodeValue(node) != 50) {
+            ERR("listIndex(4) should return 50%s", "");
+        }
+
+        /* Negative indices */
+        node = listIndex(l, -1);
+        if (node == NULL || *(int32_t *)listNodeValue(node) != 50) {
+            ERR("listIndex(-1) should return 50%s", "");
+        }
+
+        node = listIndex(l, -3);
+        if (node == NULL || *(int32_t *)listNodeValue(node) != 30) {
+            ERR("listIndex(-3) should return 30%s", "");
+        }
+
+        node = listIndex(l, -5);
+        if (node == NULL || *(int32_t *)listNodeValue(node) != 10) {
+            ERR("listIndex(-5) should return 10%s", "");
+        }
+
+        /* Out of bounds */
+        node = listIndex(l, 5);
+        if (node != NULL) {
+            ERR("listIndex(5) should return NULL for 5-element list%s", "");
+        }
+
+        node = listIndex(l, -6);
+        if (node != NULL) {
+            ERR("listIndex(-6) should return NULL for 5-element list%s", "");
+        }
+
+        listRelease(l);
+    }
+
+    /* Test listRotate */
+    printf("Testing listRotate...\n");
+    {
+        list *l = listCreate();
+        int32_t values[] = {1, 2, 3, 4, 5};
+
+        for (int32_t i = 0; i < 5; i++) {
+            listAddNodeTail(l, &values[i]);
+        }
+
+        /* Initial: 1 -> 2 -> 3 -> 4 -> 5 */
+        /* After rotate: 5 -> 1 -> 2 -> 3 -> 4 */
+        listRotate(l);
+
+        if (*(int32_t *)listNodeValue(listFirst(l)) != 5) {
+            ERR("After rotate, head should be 5, got %d",
+                *(int32_t *)listNodeValue(listFirst(l)));
+        }
+
+        if (*(int32_t *)listNodeValue(listLast(l)) != 4) {
+            ERR("After rotate, tail should be 4, got %d",
+                *(int32_t *)listNodeValue(listLast(l)));
+        }
+
+        /* Verify full order: 5, 1, 2, 3, 4 */
+        int32_t expected[] = {5, 1, 2, 3, 4};
+        listIter *iter = listGetIterator(l, true);
+        listNode *node;
+        int32_t idx = 0;
+        while ((node = listNext(iter)) != NULL) {
+            if (*(int32_t *)listNodeValue(node) != expected[idx]) {
+                ERR("After rotate, index %d expected %d, got %d", idx,
+                    expected[idx], *(int32_t *)listNodeValue(node));
+            }
+            idx++;
+        }
+        listReleaseIterator(iter);
+
+        listRelease(l);
+    }
+
+    /* Test empty list rotation */
+    printf("Testing listRotate on empty/single-element list...\n");
+    {
+        list *l = listCreate();
+
+        /* Rotate empty list should not crash */
+        listRotate(l);
+        if (listLength(l) != 0) {
+            ERR("Empty list rotation changed length%s", "");
+        }
+
+        /* Single element */
+        int32_t val = 42;
+        listAddNodeTail(l, &val);
+        listRotate(l);
+
+        if (listLength(l) != 1) {
+            ERR("Single element rotation changed length%s", "");
+        }
+
+        if (*(int32_t *)listNodeValue(listFirst(l)) != 42) {
+            ERR("Single element rotation changed value%s", "");
+        }
+
+        listRelease(l);
+    }
+
+    /* Test deletion during iteration */
+    printf("Testing deletion during iteration...\n");
+    {
+        list *l = listCreate();
+        int32_t values[] = {1, 2, 3, 4, 5};
+
+        for (int32_t i = 0; i < 5; i++) {
+            listAddNodeTail(l, &values[i]);
+        }
+
+        /* Delete every other node */
+        listIter *iter = listGetIterator(l, true);
+        listNode *node;
+        int32_t count = 0;
+        while ((node = listNext(iter)) != NULL) {
+            if (count % 2 == 1) {
+                listDelNode(l, node);
+            }
+            count++;
+        }
+        listReleaseIterator(iter);
+
+        /* Should have 1, 3, 5 remaining */
+        if (listLength(l) != 3) {
+            ERR("Expected 3 nodes after deletion, got %lu", listLength(l));
+        }
+
+        int32_t expectedVals[] = {1, 3, 5};
+        iter = listGetIterator(l, true);
+        int32_t idx = 0;
+        while ((node = listNext(iter)) != NULL) {
+            if (*(int32_t *)listNodeValue(node) != expectedVals[idx]) {
+                ERR("Expected value %d at index %d, got %d", expectedVals[idx],
+                    idx, *(int32_t *)listNodeValue(node));
+            }
+            idx++;
+        }
+        listReleaseIterator(iter);
+
+        listRelease(l);
+    }
+
+    TEST_FINAL_RESULT;
+}
+#endif

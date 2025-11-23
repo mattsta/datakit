@@ -48,3 +48,7 @@ bool bbitsDodXofGetOffsetCount(bbitsDodXof *dx, ssize_t offset, ssize_t *count,
                                uint64_t **key, double **val, double *mean,
                                double *variance, double *stddev);
 void bbitsDodXofFree(bbitsDodXof *dx);
+
+#ifdef DATAKIT_TEST
+int bbitsTest(int argc, char *argv[]);
+#endif

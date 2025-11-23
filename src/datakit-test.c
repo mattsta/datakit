@@ -52,7 +52,9 @@
 #include "strDoubleFormat.h"
 #include "util.h"
 #include "xof.h"
+#include "bbits.h"
 #include "intersectInt.h"
+#include "list.h"
 #include "timeUtil.h"
 
 #if __x86_64__
@@ -171,6 +173,10 @@ int main(int argc, char *argv[]) {
         } else if (!strcasecmp(argv[2], "ppn") ||
                    !strcasecmp(argv[2], "ptrprevnext")) {
             return ptrPrevNextTest(argc - 2, argv + 2);
+        } else if (!strcasecmp(argv[2], "list")) {
+            return listTest(argc - 2, argv + 2);
+        } else if (!strcasecmp(argv[2], "bbits")) {
+            return bbitsTest(argc - 2, argv + 2);
         } else if (!strcasecmp(argv[2], "ALL")) {
             uint32_t result = 0;
             result += flexTest(argc, argv);
@@ -210,6 +216,8 @@ int main(int argc, char *argv[]) {
             result += ptrPrevNextTest(argc, argv);
             result += multimapAtomTest(argc, argv);
             result += databoxLinearTest(argc, argv);
+            result += listTest(argc, argv);
+            result += bbitsTest(argc, argv);
             return result;
         }
     }

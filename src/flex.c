@@ -4632,6 +4632,11 @@ bool cflexConvertToFlex(const cflex *c, flex **fBuffer, size_t *fBufferLen) {
 #include <inttypes.h>
 #include "strDoubleFormat.h"
 
+/* Define KEYGEN/VALGEN before any ctest.h includes (including via list.c) */
+#define CTEST_INCLUDE_KEYGEN
+#define CTEST_INCLUDE_VALGEN
+#include "ctest.h"
+
 /* Note: including list.c source directly since we don't
  *       want to link it into the whole library. */
 #include "list.c"
@@ -4641,10 +4646,6 @@ bool cflexConvertToFlex(const cflex *c, flex **fBuffer, size_t *fBufferLen) {
 #include "mdsc.h"
 
 #include "timeUtil.h" /* we time some things... */
-
-#define CTEST_INCLUDE_KEYGEN
-#define CTEST_INCLUDE_VALGEN
-#include "ctest.h"
 
 /* Old flexGet() is used for testing and we haven't converted all tests to
  * flexGetByType() yet. */
