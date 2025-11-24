@@ -15,9 +15,9 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-missing-field-initializers")
 # If you need debug, build with:
 # cmake -DCMAKE_BUILD_TYPE=Debug ..
 if(CMAKE_BUILD_TYPE MATCHES Debug)
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O0")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O0 -g")
 else()
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -g")
 endif()
 
 add_library(${PROJECT_NAME} OBJECT
@@ -31,7 +31,9 @@ set(DIMENSION ${PROJECT_NAME}Dimension)
 set(PACKED ${PROJECT_NAME}Packed)
 
 # varintDimension.c uses F16C intrinsics on x86_64
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mf16c")
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "(x86_64|AMD64|i[3-6]86)")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mf16c")
+endif()
 
 add_library(${DIMENSION} OBJECT
     varintExternal.c
