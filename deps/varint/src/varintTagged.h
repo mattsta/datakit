@@ -27,13 +27,11 @@ __BEGIN_DECLS
 
 /* lol automated formatting */
 #define varintTaggedLenQuick(v)                                                \
-    ((v) <= VARINT_TAGGED_MAX_1                                                \
-         ? 1                                                                   \
-         : (v) <= VARINT_TAGGED_MAX_2                                          \
-               ? 2                                                             \
-               : (v) <= VARINT_TAGGED_MAX_3                                    \
-                     ? 3                                                       \
-                     : (v) <= VARINT_TAGGED_MAX_4 ? 4 : varintTaggedLen(v))
+    ((v) <= VARINT_TAGGED_MAX_1   ? 1                                          \
+     : (v) <= VARINT_TAGGED_MAX_2 ? 2                                          \
+     : (v) <= VARINT_TAGGED_MAX_3 ? 3                                          \
+     : (v) <= VARINT_TAGGED_MAX_4 ? 4                                          \
+                                  : varintTaggedLen(v))
 
 varintWidth varintTaggedPut64(uint8_t *z, uint64_t x);
 varintWidth varintTaggedPut64FixedWidth(uint8_t *z, uint64_t x,
@@ -61,15 +59,15 @@ varintWidth varintTaggedAddGrow(uint8_t *z, int64_t add);
         uint32_t _vimp_y;                                                      \
         switch (encoding) {                                                    \
         case VARINT_WIDTH_8B:                                                  \
-            (dst)[0] = (val);                                                  \
+            (dst)[0] = (uint8_t)(val);                                         \
             break;                                                             \
         case VARINT_WIDTH_16B:                                                 \
-            _vimp_y = (uint32_t)((val)-240);                                   \
+            _vimp_y = (uint32_t)((val) - 240);                                 \
             (dst)[0] = (uint8_t)(_vimp_y / 256 + 241);                         \
             (dst)[1] = (uint8_t)(_vimp_y % 256);                               \
             break;                                                             \
         case VARINT_WIDTH_24B:                                                 \
-            _vimp_y = (uint32_t)((val)-2288);                                  \
+            _vimp_y = (uint32_t)((val) - 2288);                                \
             (dst)[0] = 249;                                                    \
             (dst)[1] = (uint8_t)(_vimp_y / 256);                               \
             (dst)[2] = (uint8_t)(_vimp_y % 256);                               \
@@ -81,11 +79,9 @@ varintWidth varintTaggedAddGrow(uint8_t *z, int64_t add);
 
 /* These are the first four cases from varintTaggedGet64() */
 #define varintTaggedGet64Quick_(src)                                           \
-    ((src)[0] <= 240                                                           \
-         ? (src)[0]                                                            \
-         : (src)[0] <= 248                                                     \
-               ? ((src)[0] - 241U) * 256 + (src)[1] + 240                      \
-               : (src)[0] == 249 ? 2288U + 256 * (src)[1] + (src)[2]           \
-                                 : varintTaggedGet64ReturnValue(src))
+    ((src)[0] <= 240   ? (src)[0]                                              \
+     : (src)[0] <= 248 ? ((src)[0] - 241U) * 256 + (src)[1] + 240              \
+     : (src)[0] == 249 ? 2288U + 256 * (src)[1] + (src)[2]                     \
+                       : varintTaggedGet64ReturnValue(src))
 
 __END_DECLS

@@ -17,7 +17,7 @@ __BEGIN_DECLS
  *         for reading (at known-widths of 8, 16, 32, 64).
  *   Con: Must track width/type of varint external to the varint itself. */
 
-#define varintSignBitOffset_(width) (((width)*8) - 1)
+#define varintSignBitOffset_(width) (((width) * 8) - 1)
 
 /* Native signed value to varint signed value */
 /* Sign bit is greater than our storage size, so move it down to our
@@ -106,7 +106,7 @@ varintWidth varintExternalAddGrow(uint8_t *p, varintWidth encoding,
             varint_fallthrough;                                                \
         case VARINT_WIDTH_16B:                                                 \
             _vimp_dst[1] = ((val) >> 8) & 0xff;                                \
-            _vimp_dst[0] = (val)&0xff;                                         \
+            _vimp_dst[0] = (val) & 0xff;                                       \
             break;                                                             \
         default:                                                               \
             varintExternalPutFixedWidth((dst), (val), (encoding));             \
@@ -122,7 +122,7 @@ varintWidth varintExternalAddGrow(uint8_t *p, varintWidth encoding,
             varint_fallthrough;                                                \
         case VARINT_WIDTH_16B:                                                 \
             _vimp_dst[1] = ((val) >> 8) & 0xff;                                \
-            _vimp_dst[0] = (val)&0xff;                                         \
+            _vimp_dst[0] = (val) & 0xff;                                       \
             break;                                                             \
         default:                                                               \
             varintExternalPutFixedWidth(_vimp_dst, (val), (encoding));         \
@@ -139,10 +139,11 @@ varintWidth varintExternalAddGrow(uint8_t *p, varintWidth encoding,
             (result) = (vimp_src_)[0];                                         \
             break;                                                             \
         case VARINT_WIDTH_16B:                                                 \
-            (result) = vimp_src_[1] << 8 | vimp_src_[0];                       \
+            (result) = ((uint64_t)vimp_src_[1] << 8) | (uint64_t)vimp_src_[0]; \
             break;                                                             \
         case VARINT_WIDTH_24B:                                                 \
-            (result) = vimp_src_[2] << 16 | vimp_src_[1] << 8 | vimp_src_[0];  \
+            (result) = ((uint64_t)vimp_src_[2] << 16) |                        \
+                       ((uint64_t)vimp_src_[1] << 8) | (uint64_t)vimp_src_[0]; \
             break;                                                             \
         default:                                                               \
             (result) = varintExternalGet((src), (width));                      \
@@ -154,10 +155,11 @@ varintWidth varintExternalAddGrow(uint8_t *p, varintWidth encoding,
         const uint8_t *restrict vimp_src_ = (uint8_t *)(src);                  \
         switch (width) {                                                       \
         case VARINT_WIDTH_24B:                                                 \
-            (result) = vimp_src_[2] << 16 | vimp_src_[1] << 8 | vimp_src_[0];  \
+            (result) = ((uint64_t)vimp_src_[2] << 16) |                        \
+                       ((uint64_t)vimp_src_[1] << 8) | (uint64_t)vimp_src_[0]; \
             break;                                                             \
         case VARINT_WIDTH_16B:                                                 \
-            (result) = vimp_src_[1] << 8 | vimp_src_[0];                       \
+            (result) = ((uint64_t)vimp_src_[1] << 8) | (uint64_t)vimp_src_[0]; \
             break;                                                             \
         default:                                                               \
             (result) = varintExternalGet(vimp_src_, (width));                  \
@@ -167,7 +169,7 @@ varintWidth varintExternalAddGrow(uint8_t *p, varintWidth encoding,
 #define varintExternalGetQuickMediumReturnValue_(src, width)                   \
     ((width) == VARINT_WIDTH_24B                                               \
          ? (uint32_t)((src)[2] << 16 | (src)[1] << 8 | (src)[0])               \
-         : (width) == VARINT_WIDTH_16B ? (uint16_t)((src)[1] << 8 | (src)[0])  \
-                                       : varintExternalGet((src), (width)))
+     : (width) == VARINT_WIDTH_16B ? (uint16_t)((src)[1] << 8 | (src)[0])      \
+                                   : varintExternalGet((src), (width)))
 
 __END_DECLS

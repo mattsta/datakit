@@ -9,6 +9,17 @@
  * The unrolled loop version is about 20% faster than a direct loop. */
 /* Little endian is simple because our storage format is little endian as well.
  * We can copy to/from storage and system just by copying bytes in order. */
+/* Suppress false positive warnings from aggressive optimization.
+ * The switch statement ensures we only access valid array indices.
+ * -Wstringop-overflow: False positive when compiler doesn't track that widths >
+ * 64B are handled separately with larger buffers -Wstringop-overread: False
+ * positive for __uint128_t case (16 bytes from 8-byte pointer) */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds"
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
+#pragma GCC diagnostic ignored "-Wstringop-overread"
+#endif
 static void
 varintExternalCopyToEncodingLittleEndian_(uint8_t *restrict dst,
                                           const uint8_t *restrict src,
@@ -82,6 +93,7 @@ varintExternalCopyToEncodingLittleEndian_(uint8_t *restrict dst,
         __builtin_unreachable();
     }
 }
+#pragma GCC diagnostic pop
 
 /* automatically determine 'encoding' then copy relevant bytes into 'dst' */
 static varintWidth
@@ -105,7 +117,7 @@ static void varintExternalCopyToEncodingBigEndian_(uint8_t *restrict dst,
     /* so, for encoding of 8 bytes, this does:
      *  dst[0] = src[7]; dst[1] = src[6]; ...; dst[7] = src[0] */
     uint8_t resPos = 0;
-    uint8_t srcPos = encoding;
+    uint8_t srcPos = (uint8_t)encoding;
 
     while (srcPos > 0) {
         dst[resPos++] = src[--srcPos];
@@ -147,7 +159,7 @@ varintExternalLoadFromEncodingBigEndian_(const uint8_t *restrict src,
      * we stop when we run out of encoded bytes
      * (number of bytes == encoding value) */
     uint8_t resPos = 0;
-    uint8_t srcPos = encoding;
+    uint8_t srcPos = (uint8_t)encoding;
 
     while (srcPos > 0) {
         resarr[resPos++] = src[--srcPos];
@@ -180,7 +192,7 @@ varintBigExternalLoadFromEncodingBigEndian_(const uint8_t *restrict src,
      * we stop when we run out of encoded bytes
      * (number of bytes == encoding value) */
     uint8_t resPos = 0;
-    uint8_t srcPos = encoding;
+    uint8_t srcPos = (uint8_t)encoding;
 
     while (srcPos > 0) {
         resarr[resPos++] = src[--srcPos];
@@ -199,7 +211,7 @@ varintWidth varintExternalSignedEncoding(int64_t value) {
     }
 
     varintWidth encoding;
-    varintExternalUnsignedEncoding(value, encoding);
+    varintExternalUnsignedEncoding((uint64_t)value, encoding);
     return encoding;
 }
 
@@ -260,7 +272,7 @@ static varintWidth varintExternalAdd_(uint8_t *p, varintWidth origEncoding,
     VARINT_ADD_OR_ABORT_OVERFLOW_(updatingVal, add, newVal);
 
     varintWidth newEncoding;
-    varintExternalUnsignedEncoding(updatingVal, newEncoding);
+    varintExternalUnsignedEncoding((uint64_t)updatingVal, newEncoding);
 
     /* If new encoding is larger than current encoding, we don't
      * want to overwrite memory beyond our current varint.
@@ -269,7 +281,7 @@ static varintWidth varintExternalAdd_(uint8_t *p, varintWidth origEncoding,
         return newEncoding;
     }
 
-    varintExternalPut(p, newVal);
+    varintExternalPut(p, (uint64_t)newVal);
     return newEncoding;
 }
 

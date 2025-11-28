@@ -1,0 +1,55 @@
+# Test script for interactive trie system
+# This tests all interactive commands end-to-end
+
+# Add patterns with subscribers
+add stock.nasdaq.aapl 1 AppleSubscriber
+add stock.nasdaq.aapl 2 AnotherApple
+add stock.*.goog 10 GoogleWildcard
+add forex.# 20 ForexCatchAll
+add forex.eur.usd 21 EURUSDSpecific
+add crypto.*.btc 30 BitcoinTracker
+
+# Try to add duplicate (should be rejected)
+add stock.nasdaq.aapl 1 AppleSubscriber
+
+# List all patterns
+list
+
+# Test matching
+match stock.nasdaq.aapl
+match stock.nyse.goog
+match forex.eur.usd
+match forex.jpy.usd.cross
+match crypto.binance.btc
+match unknown.pattern
+
+# Add more subscribers to existing pattern
+subscribe forex.# 22 AnotherForexSub
+
+# Show stats
+stats
+
+# Save to file
+save /tmp/trie_batch_test.dat
+
+# Remove a subscriber
+unsubscribe forex.# 20
+
+# Remove entire pattern
+remove crypto.*.btc
+
+# Verify changes
+list
+stats
+
+# Load from file (should restore original state)
+load /tmp/trie_batch_test.dat
+
+# Verify restored state
+list
+stats
+match forex.eur.usd
+
+# Test edge cases - remove non-existent
+remove nonexistent.pattern
+unsubscribe stock.nasdaq.aapl 999

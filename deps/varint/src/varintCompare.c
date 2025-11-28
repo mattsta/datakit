@@ -27,8 +27,8 @@ static uint32_t randInt(void) {
 
 #define GIVE_XZ                                                                \
     uint64_t x = randInt();                                                    \
-    x = (x << 32) + randInt();                                                 \
-    int32_t nbit = randInt() % 65;                                             \
+    x = (x << 32) + (uint64_t)randInt();                                       \
+    int32_t nbit = (int32_t)(randInt() % 65U);                                 \
     if (nbit < 64) {                                                           \
         x &= (((uint64_t)1) << nbit) - 1;                                      \
     }                                                                          \
@@ -39,11 +39,12 @@ static uint32_t randInt(void) {
     x = x % smallBias;
 
 #define SETUP(name, small)                                                     \
-    min = max = 0;                                                             \
+    min = 0;                                                                   \
+    max = 0;                                                                   \
     int _plen = printf("Testing " name "...\n");                               \
-    char *_smallname = small;                                                  \
+    const char *_smallname = small;                                            \
     char _eqs[_plen];                                                          \
-    memset(_eqs, '=', _plen);                                                  \
+    memset(_eqs, '=', (size_t)_plen);                                          \
     printf("%.*s\n", _plen, _eqs);                                             \
     PERF_TIMERS_SETUP;
 
@@ -52,7 +53,7 @@ static uint32_t randInt(void) {
         if (x > max) {                                                         \
             max = x;                                                           \
         } else if ((int64_t)x < min) {                                         \
-            min = x;                                                           \
+            min = (int64_t)x;                                                  \
         }                                                                      \
     } while (0)
 
@@ -60,7 +61,7 @@ static uint32_t randInt(void) {
     PERF_TIMERS_FINISH_PRINT_RESULTS(i, _smallname);                           \
     printf("Largest tested number: %" PRIu64 "\n", max);                       \
     printf("Smallest tested number: %" PRIi64 "\n", min);                      \
-    memset(_eqs, '-', _plen);                                                  \
+    memset(_eqs, '-', (size_t)_plen);                                          \
     printf("%.*s\n\n", _plen, _eqs);
 
 #include "perf.h"
@@ -82,9 +83,18 @@ int32_t main(int argc, char **argv) {
     {
         SETUP("baseline overhead with no encode/decode", "baseline")
         for (i = 0; i < maxLoop; i++) {
-            GIVE_XZ;
+            uint64_t x = randInt();
+            x = (x << 32) + (uint64_t)randInt();
+            int32_t nbit = (int32_t)(randInt() % 65U);
+            if (nbit < 64) {
+                x &= (((uint64_t)1) << nbit) - 1;
+            }
+            const uint8_t z[20] = {0};
 
+            /* Baseline overhead check - intentional self-comparison */
+            // cppcheck-suppress duplicateExpression
             assert(x == x);
+            // cppcheck-suppress duplicateExpression
             assert(z[0] == z[0]);
             ACCOUNT_LOOP;
         }
@@ -98,7 +108,7 @@ int32_t main(int argc, char **argv) {
         for (i = 0; i < maxLoop; i++) {
             GIVE_XZ;
 
-            int n1 = varintTaggedPut64(z, x);
+            int n1 = (int)varintTaggedPut64(z, x);
             uint64_t y = 0;
             varintTaggedGet(z, n1, &y);
             assert(x == y);
@@ -145,10 +155,10 @@ int32_t main(int argc, char **argv) {
         for (i = 0; i < maxLoop; i++) {
             GIVE_XZ;
 
-            int32_t n1 = varintChainedPutVarint(z, x);
+            int32_t n1 = (int32_t)varintChainedPutVarint(z, x);
             assert(n1 >= 1 && n1 <= 9);
             uint64_t y = 0;
-            int32_t n2 = varintChainedGetVarint(z, &y);
+            int32_t n2 = (int32_t)varintChainedGetVarint(z, &y);
             assert(n1 == n2);
             assert(x == y);
 
@@ -180,10 +190,10 @@ int32_t main(int argc, char **argv) {
         for (i = 0; i < maxLoop; i++) {
             GIVE_XZ;
 
-            int32_t n1 = varintChainedSimpleEncode64(z, x);
+            int32_t n1 = (int32_t)varintChainedSimpleEncode64(z, x);
             assert(n1 >= 1 && n1 <= 9);
             uint64_t y = 0;
-            int32_t n2 = varintChainedSimpleDecode64(z, &y);
+            int32_t n2 = (int32_t)varintChainedSimpleDecode64(z, &y);
             assert(n1 == n2);
             assert(x == y);
 
@@ -199,12 +209,12 @@ int32_t main(int argc, char **argv) {
         for (i = 0; i < maxLoop; i++) {
             GIVE_SMALL_XZ
 
-            int32_t n1 = varintChainedSimpleEncode32(z, x);
+            int32_t n1 = (int32_t)varintChainedSimpleEncode32(z, (uint32_t)x);
             assert(n1 >= 1 && n1 <= 5);
             uint32_t y = 0;
-            int32_t n2 = varintChainedSimpleDecode32(z, &y);
+            int32_t n2 = (int32_t)varintChainedSimpleDecode32(z, &y);
             assert(n1 == n2);
-            assert(x == y);
+            assert(x == (uint64_t)y);
 
             ACCOUNT_LOOP;
         }
@@ -326,10 +336,12 @@ int32_t main(int argc, char **argv) {
 
             varintSplitFullNoZeroPut_(z, len, i);
 
+            /* Document encoding boundaries (loop max < 4210750) */
             if (i <= 64) {
                 assert(len == 1);
             } else if (i <= 16447) {
                 assert(len == 2);
+                // cppcheck-suppress knownConditionTrueFalse
             } else if (i <= 4210750) {
                 assert(len == 3);
             }
@@ -793,10 +805,12 @@ int32_t main(int argc, char **argv) {
 
             varintSplitFullNoZeroReversedPutForward_(z, len, i);
 
+            /* Document encoding boundaries (loop max < 4210750) */
             if (i <= 64) {
                 assert(len == 1);
             } else if (i <= 16447) {
                 assert(len == 2);
+                // cppcheck-suppress knownConditionTrueFalse
             } else if (i <= 4210750) {
                 assert(len == 3);
             }
@@ -822,17 +836,20 @@ int32_t main(int argc, char **argv) {
  */
 #ifdef VARINT_TOOL
 static int32_t hexToInt(char c) {
-    if (c >= '0' && c <= '9')
+    if (c >= '0' && c <= '9') {
         return c - '0';
-    if (c >= 'a' && c <= 'f')
+    }
+    if (c >= 'a' && c <= 'f') {
         return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F')
+    }
+    if (c >= 'A' && c <= 'F') {
         return c - 'A' + 10;
+    }
     return 0;
 }
 
 int32_t main(int32_t argc, char **argv) {
-    int32_t i, j, n;
+    int32_t i, j;
     uint64_t x;
     char out[20];
     if (argc <= 1) {
@@ -858,10 +875,11 @@ int32_t main(int32_t argc, char **argv) {
                 z++;
             }
         }
-        n = varintTaggedPut64(out, x);
+        int32_t n = varintTaggedPut64(out, x);
         printf("%llu = ", (long long unsigned)x);
-        for (j = 0; j < n; j++)
+        for (j = 0; j < n; j++) {
             printf("%02x", out[j] & 0xff);
+        }
         printf("\n");
     }
 

@@ -63,8 +63,8 @@
 ** bit clear.  Except, if we get to the 9th byte, it stores the full
 ** 8 bits and is the last byte.
 */
-static varintWidth __attribute__((noinline))
-putVarint64(uint8_t *p, uint64_t v) {
+static varintWidth __attribute__((noinline)) putVarint64(uint8_t *p,
+                                                         uint64_t v) {
     int32_t i, j, n;
     uint8_t buf[10];
     if (v & (((uint64_t)0xff000000) << 32)) {
@@ -89,7 +89,7 @@ putVarint64(uint8_t *p, uint64_t v) {
         p[i] = buf[j];
     }
 
-    return n;
+    return (varintWidth)n;
 }
 
 varintWidth varintChainedPutVarint(uint8_t *p, uint64_t v) {
@@ -336,7 +336,7 @@ varintWidth varintChainedGetVarint32(const uint8_t *p, uint32_t *v) {
         uint8_t n;
 
         p -= 2;
-        n = varintChainedGetVarint(p, &v64);
+        n = (uint8_t)varintChainedGetVarint(p, &v64);
         assert(n > 3 && n <= 9);
         if ((v64 & SQLITE_MAX_U32) != v64) {
             *v = 0xffffffff;
