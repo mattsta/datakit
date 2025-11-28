@@ -1,4 +1,5 @@
 #include "../str.h"
+#include "../floatExtended.h"
 #include <float.h> /* DBL_MANT_DIG */
 
 /* ====================================================================
@@ -262,10 +263,12 @@ int32_t StrNIcmp(const char *zLeft, const char *zRight, int32_t N) {
 ** E==2 results in 100.  E==50 results in 1.0e50.
 **
 ** This routine only works for values of E between 1 and 341.
+** Uses extended precision (dk_float_extended) when available for
+** better accuracy with large exponents.
 */
-static long double StrLDPow10(int E) {
-    long double x = 10.0;
-    long double r = 1.0;
+static dk_float_extended StrLDPow10(int E) {
+    dk_float_extended x = 10.0;
+    dk_float_extended r = 1.0;
     while (1) {
         if (E & 1) {
             r *= x;
@@ -474,7 +477,7 @@ do_atof_calc:
         if (e) {
             /* attempt to handle extremely small/large numbers better */
             if (e > 307 && e < 342) {
-                const long double scale = StrLDPow10(e - 308);
+                const dk_float_extended scale = StrLDPow10(e - 308);
 
                 if (esign < 0) {
                     result = s / scale;
@@ -490,7 +493,7 @@ do_atof_calc:
                     result = 1e308 * 1e308 * s; /* Infinity */
                 }
             } else {
-                const long double scale = StrLDPow10(e);
+                const dk_float_extended scale = StrLDPow10(e);
                 if (esign < 0) {
                     result = s / scale;
                 } else {
@@ -514,10 +517,11 @@ do_atof_calc:
 ** E==2 results in 100.  E==50 results in 1.0e50.
 **
 ** This routine only works for values of E between 1 and 341.
+** Uses extended precision (dk_float_extended) when available.
 */
-static long double strPow10(int32_t E) {
-    long double x = 10.0;
-    long double r = 1.0;
+static dk_float_extended strPow10(int32_t E) {
+    dk_float_extended x = 10.0;
+    dk_float_extended r = 1.0;
     while (true) {
         if (E & 1) {
             r *= x;
@@ -617,7 +621,7 @@ DK_INLINE_ALWAYS bool StrAtoFReliable(int64_t s, const int32_t sign,
        */
             /* attempt to handle extremely small/large numbers better */
             if (e > 307 && e < 342) {
-                const long double scale = strPow10(e - 308);
+                const dk_float_extended scale = strPow10(e - 308);
 
                 if (esign < 0) {
                     result = s / scale;
@@ -634,10 +638,9 @@ DK_INLINE_ALWAYS bool StrAtoFReliable(int64_t s, const int32_t sign,
                 }
             } else {
 #endif
-            /* This could be slightly cleaner if our compiler
-             * supported __float128, but clang is a little
-             * behind with releases at the moment. */
-            const long double scale = strPow10(e);
+            /* Uses dk_float_extended for extended precision when available.
+             * See floatExtended.h for platform-specific type selection. */
+            const dk_float_extended scale = strPow10(e);
             if (esign < 0) {
                 result = s / scale;
             } else {
