@@ -1,4 +1,5 @@
 #include "databox.h"
+#include "floatExtended.h"
 #include "str.h"
 
 #if DATABOX_ENABLE_PTR_MDSC
@@ -644,67 +645,12 @@ DK_INLINE_ALWAYS int databoxCompareInt64Float(const databox *a,
     const double r =
         b->type == DATABOX_FLOAT_32 ? (double)b->data.f32 : b->data.d64;
 
-    /* If we have usable long double type, just compare directly. */
-    if (sizeof(long double) > 8) {
-        const long double x =
-            aIsUnsigned ? (long double)a->data.u : (long double)a->data.i;
-        _gtlteqReturn(x, r);
-    }
-
-    /* On modern platfoms we never reach here because at compile time the
-     * previous if() is true, so the rest of this code is entire ommitted
-     * from builds. */
-
-    /* These are fallback cases if we end up on a platform without
-     * 80+ bit long doubles, but why would we be on those platforms? */
-    if (r < -9223372036854775808.0) {
-        return +1;
-    }
-
-    if (r > 9223372036854775807.0) {
-        return -1;
-    }
-
-    const int64_t i = a->data.i;
-    const uint64_t u = a->data.u;
+    /* Use the portable comparison helpers from floatExtended.h */
     if (aIsUnsigned) {
-        /* If a is unsigned but b is negative, b is less than a. */
-        if (r < 0) {
-            return -1;
-        }
-
-        const uint64_t y = (uint64_t)r;
-        if (u < y) {
-            return -1;
-        }
-
-        if (u > y) {
-            if ((int64_t)y == INT64_MIN && r > 0.0) {
-                return -1;
-            }
-
-            return +1;
-        }
-
-        const double s = (double)i;
-        _gtlteqReturn(s, r);
-    } else {
-        const int64_t y = (int64_t)r;
-        if (i < y) {
-            return -1;
-        }
-
-        if (i > y) {
-            if (y == INT64_MIN && r > 0.0) {
-                return -1;
-            }
-
-            return +1;
-        }
-
-        const double s = (double)i;
-        _gtlteqReturn(s, r);
+        return dk_compare_uint64_double(a->data.u, r);
     }
+
+    return dk_compare_int64_double(a->data.i, r);
 }
 
 DK_INLINE_ALWAYS int databoxCompareInt128Float(const databox *a,
@@ -716,87 +662,96 @@ DK_INLINE_ALWAYS int databoxCompareInt128Float(const databox *a,
     const double r =
         b->type == DATABOX_FLOAT_32 ? (double)b->data.f32 : b->data.d64;
 
-    /* If we have usable long double type, just compare directly. */
-#if __x86_64__
-    _Static_assert(sizeof(long double) > 8,
-                   "Your long double isn't long enough and we don't have a "
-                   "fallback here!");
+#if DK_HAS_FLOAT_EXTENDED
+    /* Extended precision path - can directly compare 128-bit integers with
+     * floats because dk_float_extended has enough mantissa bits. */
+    if (aIsUnsigned) {
+        const __uint128_t ua =
+            (a->type == DATABOX_UNSIGNED_64) ? a->data.u : *a->data.u128;
+        const dk_float_extended x = (dk_float_extended)ua;
+        const dk_float_extended y = (dk_float_extended)r;
+        _gtlteqReturn(x, y);
+    }
+
+    const __int128_t ia =
+        (a->type == DATABOX_SIGNED_64) ? a->data.i : *a->data.i128;
+    const dk_float_extended x = (dk_float_extended)ia;
+    const dk_float_extended y = (dk_float_extended)r;
+    _gtlteqReturn(x, y);
 #else
-#warning                                                                       \
-    "Using unoptimized float compare because system doesn't have a valid long double."
-#endif
-
-    if (sizeof(long double) > 8) {
-        /* Convert 64-bit integers to > 8 byte floats for direct compares
-         * without needing any bounds checking. */
-        if (aIsUnsigned) {
-            const __uint128_t ua =
-                (a->type == DATABOX_UNSIGNED_64) ? a->data.u : *a->data.u128;
-            const long double x = (long double)ua;
-            _gtlteqReturn(x, r);
+    /* Fallback path - no extended precision available.
+     * We convert the float to __int128 and compare integer parts.
+     * This may lose fractional precision but maintains consistent ordering. */
+    if (aIsUnsigned) {
+        /* Negative double is always less than unsigned */
+        if (r < 0) {
+            return 1; /* a > b */
         }
 
-        const __int128_t ia =
-            (a->type == DATABOX_SIGNED_64) ? a->data.i : *a->data.i128;
-        const long double x = (long double)ia;
-        _gtlteqReturn(x, r);
-
-    } else {
-        /* else, do the opposite and convert the float to __int128 (loses float
-         * precision) then smash that like button. this may cause loss of
-         * precision, but does it? somebody should test outcomes here. */
-        /* TODO: should probably do better range checking here like:
-         *          - if r > UINT128_MAX, r is bigger
-         *          - if r < 0 and unsigned, r is smaller
-         *          - if r > INT128_MAX, r is bigeger if signed
-         *          - if r < INT128_MIN, r is smaller, etc
-         *          - else we know r is in the INT128 range so we can cast and
-         * compare.
-         *          - note though: can give false order if like BIGNUMBER.333 is
-         * float and BIGNUMBER is float128 but the conversion just kills the
-         * .333, so maybe a ceiling conversion for order compare? */
-        /* TODO: these need mondo tests and perhaps better type constraints...
-         */
-        if (aIsUnsigned) {
-            if (r < 0) {
-                /* A > B */
-                return 1;
-            }
-
-            if (r > (double)UINT128_MAX) {
-                /* A < B */
-                return -1;
-            }
-
-            const __uint128_t ua =
-                (a->type == DATABOX_UNSIGNED_64) ? a->data.u : *a->data.u128;
-
-            /* Now we know 'r' can fit in the UINT128 range... */
-            /* We don't necessarily care about exact accuracy here as
-             * long as the result is just consistent for same-ordering of
-             * same-data each time. Only risk here is if two items compare equal
-             * when they are not equal so their orders are not stable in a
-             * discovery process. */
-            const __uint128_t r_t = (__uint128_t)r;
-            _gtlteqReturn(ua, r_t);
+        /* Check if double exceeds uint128 range */
+        if (r > (double)UINT128_MAX) {
+            return -1; /* a < b */
         }
 
-        if (r < (double)INT128_MIN) {
-            /* A > B */
-            return 1;
-        }
+        const __uint128_t ua =
+            (a->type == DATABOX_UNSIGNED_64) ? a->data.u : *a->data.u128;
 
-        if (r > (double)INT128_MAX) {
-            /* A < B */
+        /* Truncate double to integer for comparison.
+         * For ordering consistency, we compare integer parts first,
+         * then handle fractional part to break ties. */
+        const __uint128_t r_truncated = (__uint128_t)r;
+
+        if (ua < r_truncated) {
             return -1;
         }
 
-        const __int128_t ia =
-            (a->type == DATABOX_SIGNED_64) ? a->data.i : *a->data.i128;
+        if (ua > r_truncated) {
+            return 1;
+        }
 
-        const __int128_t r_t = (__int128_t)r;
-        _gtlteqReturn(ia, r_t);
+        /* Integer parts equal - check fractional part */
+        const double frac = r - (double)r_truncated;
+        if (frac > 0.0) {
+            return -1; /* a < b because b has positive fractional part */
+        }
+
+        return 0;
     }
+
+    /* Signed path */
+    if (r < (double)INT128_MIN) {
+        return 1; /* a > b */
+    }
+
+    if (r > (double)INT128_MAX) {
+        return -1; /* a < b */
+    }
+
+    const __int128_t ia =
+        (a->type == DATABOX_SIGNED_64) ? a->data.i : *a->data.i128;
+
+    const __int128_t r_truncated = (__int128_t)r;
+
+    if (ia < r_truncated) {
+        return -1;
+    }
+
+    if (ia > r_truncated) {
+        return 1;
+    }
+
+    /* Integer parts equal - check fractional part */
+    const double frac = r - (double)r_truncated;
+    if (frac > 0.0) {
+        return -1; /* a < b */
+    }
+
+    if (frac < 0.0) {
+        return 1; /* a > b */
+    }
+
+    return 0;
+#endif
 }
 
 int databoxCompare(const databox *restrict a, const databox *restrict b) {

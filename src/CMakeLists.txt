@@ -16,8 +16,12 @@ else()
 endif()
 
 option(Build32Bit "Build 32-bit Library" OFF)
+option(UseC23 "Use C23 standard (enables _Float128 if available)" OFF)
+option(UseFloat128 "Force enable __float128 support (requires libquadmath on some platforms)" OFF)
+option(ForceNoFloat128 "Force disable all float128 support (for testing fallback paths)" OFF)
 
 include(CheckCSourceRuns)
+include(CheckCSourceCompiles)
 
 check_c_source_runs("
 #include <math.h>
@@ -144,10 +148,84 @@ if(DK_HAVE_GETENTROPY_SYS_RANDOM)
     add_definitions(-DDK_HAVE_GETENTROPY_SYS_RANDOM)
 endif()
 
+# ============================================================================
+# Extended Precision Float Detection (float128 / long double)
+# ============================================================================
+# Priority:
+#   1. ForceNoFloat128 - disables all extended precision (for testing)
+#   2. UseFloat128 - force enable __float128
+#   3. UseC23 - enable C23 with _Float128
+#   4. Auto-detect __float128 support
+#   5. Check if long double has extended precision (x86)
+
+if(ForceNoFloat128)
+    message(STATUS "Float128: Disabled (ForceNoFloat128=ON)")
+    add_definitions(-DDK_FORCE_NO_FLOAT128=1)
+else()
+    # Check for __float128 support
+    check_c_source_compiles("
+    int main() {
+        __float128 x = 1.0Q;
+        __float128 y = x * 2.0Q;
+        return (int)y;
+    }" DK_HAS_FLOAT128_NATIVE)
+
+    # Check for _Float128 support (C23)
+    set(CMAKE_REQUIRED_FLAGS "-std=c23")
+    check_c_source_compiles("
+    int main() {
+        _Float128 x = 1.0F128;
+        _Float128 y = x * 2.0F128;
+        return (int)y;
+    }" DK_HAS_FLOAT128_C23)
+    set(CMAKE_REQUIRED_FLAGS)
+
+    # Check long double precision
+    check_c_source_runs("
+    #include <float.h>
+    int main() {
+        /* Return 0 (success) if long double has >= 64 bit mantissa */
+        return (LDBL_MANT_DIG >= 64) ? 0 : 1;
+    }" DK_LONG_DOUBLE_EXTENDED)
+
+    if(UseFloat128 AND DK_HAS_FLOAT128_NATIVE)
+        message(STATUS "Float128: Enabled via __float128 (UseFloat128=ON)")
+        add_definitions(-DDK_HAS_FLOAT128=1)
+        # On some platforms (e.g., ARM Linux with GCC), libquadmath is needed
+        if(NOT APPLE)
+            find_library(QUADMATH_LIBRARY quadmath)
+            if(QUADMATH_LIBRARY)
+                message(STATUS "Float128: Found libquadmath: ${QUADMATH_LIBRARY}")
+            endif()
+        endif()
+    elseif(UseC23 AND DK_HAS_FLOAT128_C23)
+        message(STATUS "Float128: Enabled via C23 _Float128 (UseC23=ON)")
+        add_definitions(-DDK_HAS_FLOAT128=1)
+    elseif(DK_HAS_FLOAT128_NATIVE AND NOT CMAKE_SYSTEM_PROCESSOR MATCHES "arm|aarch64")
+        # Auto-enable on x86 where it's well-supported
+        message(STATUS "Float128: Auto-enabled via __float128 (x86)")
+        add_definitions(-DDK_HAS_FLOAT128=1)
+    elseif(DK_LONG_DOUBLE_EXTENDED)
+        message(STATUS "Float128: Using native long double (LDBL_MANT_DIG >= 64)")
+    else()
+        message(STATUS "Float128: Not available - using integer fallback for precision-sensitive comparisons")
+    endif()
+endif()
+
 # If you need debug, build with:
 # cmake -DCMAKE_BUILD_TYPE=Debug ..
 add_definitions(-D_GNU_SOURCE)  # For memmem and other GNU extensions
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Winline -Wextra -std=gnu99 -Wno-missing-field-initializers")
+
+# Set C standard based on UseC23 option
+if(UseC23)
+    set(DK_C_STANDARD "-std=gnu23")
+    message(STATUS "C Standard: C23 (gnu23)")
+else()
+    set(DK_C_STANDARD "-std=gnu11")
+    message(STATUS "C Standard: C11 (gnu11)")
+endif()
+
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Winline -Wextra ${DK_C_STANDARD} -Wno-missing-field-initializers")
 # SSSE3 intrinsics like _mm_shuffle_epi8 are only available on x86_64
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "(x86_64|AMD64|i[3-6]86)")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mssse3")
@@ -266,6 +344,7 @@ add_library(${PROJECT_NAME} OBJECT
     hyperloglog.c
     databox.c
     databoxLinear.c
+    floatExtendedTest.c
     datakit.c)
 
 # No optimizations on speed test so results don't get evaluated at compile time
@@ -310,7 +389,8 @@ set_target_properties(${PROJECT_NAME}-library PROPERTIES VERSION ${DK_VERSION} S
 option(BuildTestBinary "Build test binary" On)
 
 if(BuildTestBinary)
-    # str is C11 instead of C99 for testing
+    # Enable native CPU optimizations for performance-critical code
+    # Note: str.c requires -std=c11 to ensure consistent floating-point behavior
     set_source_files_properties(str.c PROPERTIES COMPILE_FLAGS "-std=c11 -mcpu=native")
     set_source_files_properties(bigmath-libbf.c PROPERTIES COMPILE_FLAGS "-std=c11 -mcpu=native")
     add_definitions(-DDATAKIT_TEST=1)
@@ -374,6 +454,7 @@ if(BuildTestBinary)
         # Utilities
         util
         databox
+        floatExtended
         offsetArray
         membound
         )
@@ -384,12 +465,12 @@ if(BuildTestBinary)
     endforeach()
 
     # check target - runs all tests with verbose output
-    add_custom_target(check
+    add_custom_target(datakit-check
         COMMAND ${CMAKE_CTEST_COMMAND} -VV
         DEPENDS ${PROJECT_NAME}-test)
 
     # quickcheck target - runs tests without verbose output
-    add_custom_target(quickcheck
+    add_custom_target(datakit-quickcheck
         COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
         DEPENDS ${PROJECT_NAME}-test)
 

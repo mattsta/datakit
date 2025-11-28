@@ -32,6 +32,7 @@
 #include "dod.h"
 #include "fibbuf.h"
 #include "float16.h"
+#include "floatExtended.h"
 #include "intersectInt.h"
 #include "intset.h"
 #include "intsetU32.h"
@@ -139,6 +140,10 @@ int main(int argc, char *argv[]) {
             return multiarrayTest(argc - 2, argv + 2);
         } else if (!strcasecmp(argv[2], "databox")) {
             return databoxTest(argc - 2, argv + 2);
+        } else if (!strcasecmp(argv[2], "floatExtended") ||
+                   !strcasecmp(argv[2], "float128") ||
+                   !strcasecmp(argv[2], "fe")) {
+            return floatExtendedTest(argc - 2, argv + 2);
         } else if (!strcasecmp(argv[2], "str")) {
             return strTest(argc - 2, argv + 2);
         } else if (!strcasecmp(argv[2], "strDoubleFormat")) {
@@ -213,6 +218,7 @@ int main(int argc, char *argv[]) {
             result += multiarrayMediumTest(argc, argv);
             result += multiarrayTest(argc, argv);
             result += databoxTest(argc, argv);
+            result += floatExtendedTest(argc, argv);
             result += strTest(argc, argv);
             result += strDoubleFormatTest(argc, argv);
             result += multiroarTest(argc, argv);
