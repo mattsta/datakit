@@ -87,7 +87,7 @@ typedef enum varintSplitFullNoZeroStorage {
 #if __GNUC__ > 5 || __has_builtin(__builtin_saddll_overflow)
 #define VARINT_ADD_OR_ABORT_OVERFLOW_(updatingVal, add, newVal)                \
     do {                                                                       \
-        if (__builtin_saddll_overflow((updatingVal), (add), &(newVal)) == 0) { \
+        if (__builtin_saddll_overflow((updatingVal), (add), &(newVal)) != 0) { \
             return VARINT_WIDTH_INVALID;                                       \
         }                                                                      \
     } while (0)

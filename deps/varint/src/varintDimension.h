@@ -45,12 +45,12 @@ typedef enum varintDimensionPacked {
 #define VARINT_DIMENSION_PAIR_IS_SPARSE(dim) ((dim) & 0x01)
 
 #define VARINT_DIMENSION_PAIR_PAIR(x, y, sparse)                               \
-    (((x) << 4) | (((y)-1) << 1) | (sparse))
+    (((x) << 4) | (((y) - 1) << 1) | (sparse))
 
-#define VARINT_DIMENSION_PAIR_DEPAIR(x, y, sparse)                             \
+#define VARINT_DIMENSION_PAIR_DEPAIR(x, y, dim)                                \
     do {                                                                       \
-        (x) = VARINT_DIMENSION_PAIR_WIDTH_ROW_COUNT(dimension);                \
-        (y) = VARINT_DIMENSION_PAIR_WIDTH_COL_COUNT(dimension);                \
+        (x) = VARINT_DIMENSION_PAIR_WIDTH_ROW_COUNT(dim);                      \
+        (y) = VARINT_DIMENSION_PAIR_WIDTH_COL_COUNT(dim);                      \
     } while (0)
 
 /* Please ignore the ugly verbosity. Big prefixed namespaces take up space. */
@@ -214,7 +214,7 @@ bool varintDimensionPack(const size_t row, const size_t col, uint64_t *result,
 void varintDimensionUnpack(size_t *rows, size_t *cols, const uint64_t packed,
                            const varintDimensionPacked dimension);
 
-#define VARINT_DIMENSION_PACKED_TO_BITS(dim) ((dim)*4)
+#define VARINT_DIMENSION_PACKED_TO_BITS(dim) ((dim) * 4)
 
 #define varintDimensionUnpack_(x, y, packed, dimension)                        \
     do {                                                                       \
@@ -223,9 +223,10 @@ void varintDimensionUnpack(size_t *rows, size_t *cols, const uint64_t packed,
                             << VARINT_DIMENSION_PACKED_TO_BITS(dimension)));   \
     } while (0)
 
-varintDimensionPair varintDimensionPairEncode(void *dst, size_t row,
-                                              size_t col);
-varintDimensionPair varintDimensionPairDimension(size_t row, size_t col);
+varintDimensionPair varintDimensionPairEncode(void *dst, const size_t row,
+                                              const size_t col);
+varintDimensionPair varintDimensionPairDimension(const size_t row,
+                                                 const size_t col);
 
 #define VARINT_DIMENSION_PAIR_BYTE_LENGTH(dim)                                 \
     (VARINT_DIMENSION_PAIR_WIDTH_ROW_COUNT(dim) +                              \
@@ -255,19 +256,38 @@ void varintDimensionPairEntrySetUnsigned(void *_dst, const size_t row,
 void varintDimensionPairEntrySetFloat(void *_dst, const size_t row,
                                       const size_t col, const float entryValue,
                                       const varintDimensionPair dimension);
+float varintDimensionPairEntryGetFloat(const void *_src, const size_t row,
+                                       const size_t col,
+                                       const varintDimensionPair dimension);
 void varintDimensionPairEntrySetDouble(void *_dst, const size_t row,
                                        const size_t col,
                                        const double entryValue,
                                        const varintDimensionPair dimension);
+double varintDimensionPairEntryGetDouble(const void *_src, const size_t row,
+                                         const size_t col,
+                                         const varintDimensionPair dimension);
+
+/* Half-precision (FP16) float operations using hardware intrinsics.
+ * Available on x86/x64 with F16C or ARM with FP16 NEON. */
+#if defined(__F16C__) ||                                                       \
+    (defined(__ARM_NEON) && defined(__ARM_FP16_FORMAT_IEEE))
+void varintDimensionPairEntrySetFloatHalf(void *_dst, const size_t row,
+                                          const size_t col,
+                                          const float entryValue,
+                                          const varintDimensionPair dimension);
+float varintDimensionPairEntryGetFloatHalf(const void *_src, const size_t row,
+                                           const size_t col,
+                                           const varintDimensionPair dimension);
+#endif
 
 bool varintDimensionPairEntryGetBit(const void *_src, const size_t row,
                                     const size_t col,
                                     const varintDimensionPair dimension);
-void varintDimensionPairEntrySetBit(const void *_dst, const size_t row,
+void varintDimensionPairEntrySetBit(void *_dst, const size_t row,
                                     const size_t col, const bool setBit,
                                     const varintDimensionPair dimension);
 /* Returns previous value of bit */
-bool varintDimensionPairEntryToggleBit(const void *_dst, const size_t row,
+bool varintDimensionPairEntryToggleBit(void *_dst, const size_t row,
                                        const size_t col,
                                        const varintDimensionPair dimension);
 

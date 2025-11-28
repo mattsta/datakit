@@ -16,31 +16,39 @@ static inline uint64_t _perfTimeUs(void) {
     struct timeval tv;
     gettimeofday(&tv, NULL);
 
-    uint64_t us = (uint64_t)tv.tv_sec * 1e6;
-    us += tv.tv_usec;
+    uint64_t us = (uint64_t)tv.tv_sec * 1000000UL;
+    us += (uint64_t)tv.tv_usec;
 
     return us;
 }
 
 static inline uint64_t _perfTSC(void) {
-#if __has_builtin(__builtin_readcyclecounter) && !__arm64__
-    return __builtin_readcyclecounter();                                                                                         
-#elif __arm64__                                                                                                                  
-    uint64_t result;                                                                           
-    __asm __volatile("mrs %0, CNTVCT_EL0" : "=&r" (result));                  
-    return result;
-#elif __x86_64__                                                                                                                 
-    uint32_t lo = 0;                                                                                                             
-    uint32_t hi = 0;                                                                                                             
-                                                                                                                                 
-    /* ask for something that can't be executed out-of-order                                                                     
-     * to force the next _perf_rdtsc to not get re-ordered. */                                                                   
-    __sync_synchronize();                                                                                                        
-    __asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));                                                                          
-    return ((uint64_t)hi << 32) | lo;                                                                                            
-#else                                                                                         
-#error "No TSC found?"                                                                                                                                                   
-#endif                                                                                                                                                                   
+#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) ||             \
+    defined(_M_IX86)
+    /* x86/x64: use RDTSC instruction */
+    uint32_t lo = 0;
+    uint32_t hi = 0;
+
+    /* ask for something that can't be executed out-of-order
+     * to force the next _perf_rdtsc to not get re-ordered. */
+    __sync_synchronize();
+    __asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | lo;
+#elif defined(__aarch64__) || defined(__arm64__)
+    /* ARM64: use virtual counter register for cycle counting */
+    uint64_t val;
+    __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(val));
+    return val;
+#elif defined(__arm__)
+    /* ARM32: use performance monitor cycle counter if available */
+    uint32_t val;
+    __asm__ __volatile__("mrc p15, 0, %0, c9, c13, 0" : "=r"(val));
+    return val;
+#else
+    /* Fallback for other architectures: use microsecond timer * 1000 as
+     * approximation */
+    return _perfTimeUs() * 1000;
+#endif
 }
 
 typedef struct perfStateGlobal {
@@ -50,6 +58,15 @@ typedef struct perfStateGlobal {
 
 } perfStateGlobal;
 
+/* Compile-time size guarantees to prevent regressions */
+_Static_assert(
+    sizeof(perfStateGlobal) == 24,
+    "perfStateGlobal size changed! Expected 24 bytes (3×8-byte, ZERO padding). "
+    "This struct achieved 100% efficiency - do not break it!");
+_Static_assert(sizeof(perfStateGlobal) <= 64,
+               "perfStateGlobal exceeds single cache line (64 bytes)! "
+               "Keep performance measurement structs cache-friendly.");
+
 typedef struct perfStateStat {
     uint64_t start;
     uint64_t stop;
@@ -58,6 +75,15 @@ typedef struct perfStateStat {
     double runningVariance;
     double stddev;
 } perfStateStat;
+
+/* Compile-time size guarantees to prevent regressions */
+_Static_assert(
+    sizeof(perfStateStat) == 48,
+    "perfStateStat size changed! Expected 48 bytes (6×8-byte, ZERO padding). "
+    "This struct achieved 100% efficiency - do not break it!");
+_Static_assert(sizeof(perfStateStat) <= 64,
+               "perfStateStat exceeds single cache line (64 bytes)! "
+               "Keep performance statistics cache-friendly.");
 
 typedef struct perfState {
     struct {
@@ -70,8 +96,18 @@ typedef struct perfState {
     } stat;
 } perfState;
 
+/* Compile-time size guarantees to prevent regressions */
+_Static_assert(sizeof(perfState) == 144,
+               "perfState size changed! Expected 144 bytes (2×perfStateGlobal "
+               "+ 2×perfStateStat). "
+               "Struct contains nested performance measurement state.");
+_Static_assert(sizeof(perfState) <= 192,
+               "perfState exceeds 3 cache lines (192 bytes)! "
+               "Performance measurement struct spans multiple cache lines by "
+               "design (global in line 1, stat across lines 2-3).");
+
 /* local perf state */
-static perfState lps = {{{0}}};
+static perfState lps = {0};
 
 #define PERF_TIMERS_SETUP                                                      \
     do {                                                                       \
@@ -100,11 +136,11 @@ enum firstThing { FIRST_SECONDS, FIRST_CYCLES, FIRST_RATE };
 #define _PERF_TIMERS_STAT_STOP(i, subField, dataPoint)                         \
     do {                                                                       \
         const double delta =                                                   \
-            (double)(dataPoint)-lps.stat.subField.runningMean;                 \
+            (double)(dataPoint) - lps.stat.subField.runningMean;               \
         lps.stat.subField.runningMean +=                                       \
             delta / (i + 1); /* assume zero-based indexing */                  \
         lps.stat.subField.runningVariance +=                                   \
-            delta * ((dataPoint)-lps.stat.subField.runningMean);               \
+            delta * ((dataPoint) - lps.stat.subField.runningMean);             \
     } while (0)
 
 #define PERF_TIMERS_STAT_STOP(i)                                               \
@@ -128,7 +164,8 @@ enum firstThing { FIRST_SECONDS, FIRST_CYCLES, FIRST_RATE };
 
 #define PERF_TIMERS_STAT_RESULT(totalLoops)                                    \
     do {                                                                       \
-        lps.stat.us.stddev = sqrt(lps.stat.us.runningVariance / (totalLoops)); \
+        lps.stat.us.stddev =                                                   \
+            sqrt(lps.stat.us.runningVariance / (double)(totalLoops));          \
     } while (0)
 
 /* GCC -pedantic complains about the %'0.2f format specifier, so let's disable
@@ -140,9 +177,9 @@ static void PERF_TIMERS_RESULT_PRINT(const size_t i, const char *units) {
 
     const double totalSeconds =
         (double)(lps.global.us.stop - lps.global.us.start) / 1e6;
-    const double speed = i / totalSeconds;
+    const double speed = (double)i / totalSeconds;
     const double cycles =
-        (double)(lps.global.tsc.stop - lps.global.tsc.start) / i;
+        (double)(lps.global.tsc.stop - lps.global.tsc.start) / (double)i;
 
     char deviations[128] = {0};
 

@@ -1,0 +1,213 @@
+name: Nightly Extended Testing
+
+on:
+  schedule:
+    # Run at 2 AM UTC every day
+    - cron: '0 2 * * *'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  extended-sanitizer-testing:
+    name: Extended Sanitizers (${{ matrix.sanitizer }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [asan, ubsan, both, tsan]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc clang cmake build-essential
+
+      - name: Run extended tests with ${{ matrix.sanitizer }}
+        timeout-minutes: 30
+        run: |
+          chmod +x scripts/test/run_all_tests.sh scripts/test/test_all_comprehensive.sh scripts/test/run_unit_tests.sh
+
+          echo "=== Running unit tests ==="
+          ./scripts/test/run_unit_tests.sh 2>&1 | tee unit_test_output.log
+
+          echo ""
+          echo "=== Running comprehensive examples ==="
+          ./scripts/test/test_all_comprehensive.sh 2>&1 | tee comprehensive_output.log
+
+          echo ""
+          echo "=== Running all tests with ${{ matrix.sanitizer }} ==="
+          ./scripts/test/run_all_tests.sh ${{ matrix.sanitizer }} 2>&1 | tee all_tests_output.log
+
+      - name: Check for sanitizer violations
+        run: |
+          if grep -i "sanitizer" *.log | grep -i "error\|leak\|violation"; then
+            echo "❌ Sanitizer violations detected!"
+            exit 1
+          fi
+          echo "✅ No sanitizer violations detected"
+
+      - name: Upload nightly test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-${{ matrix.sanitizer }}-results
+          path: |
+            unit_test_output.log
+            comprehensive_output.log
+            all_tests_output.log
+          retention-days: 7
+
+  compiler-matrix:
+    name: Compiler Matrix (GCC-${{ matrix.gcc }}, Clang-${{ matrix.clang }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        gcc: ['10', '11', '12', '13']
+        clang: ['11', '12', '13', '14', '15']
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install GCC ${{ matrix.gcc }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-${{ matrix.gcc }} g++-${{ matrix.gcc }} || true
+
+      - name: Install Clang ${{ matrix.clang }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-${{ matrix.clang }} || true
+
+      - name: Test with GCC ${{ matrix.gcc }}
+        continue-on-error: true
+        run: |
+          if command -v gcc-${{ matrix.gcc }} &> /dev/null; then
+            export CC=gcc-${{ matrix.gcc }}
+            export CXX=g++-${{ matrix.gcc }}
+            chmod +x scripts/build/run_all_compilers.sh
+            ./scripts/build/run_all_compilers.sh 2>&1 | tee gcc_${{ matrix.gcc }}_results.log
+          fi
+
+      - name: Test with Clang ${{ matrix.clang }}
+        continue-on-error: true
+        run: |
+          if command -v clang-${{ matrix.clang }} &> /dev/null; then
+            export CC=clang-${{ matrix.clang }}
+            export CXX=clang++-${{ matrix.clang }}
+            chmod +x scripts/build/run_all_compilers.sh
+            ./scripts/build/run_all_compilers.sh 2>&1 | tee clang_${{ matrix.clang }}_results.log
+          fi
+
+      - name: Upload compiler matrix results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiler-matrix-gcc${{ matrix.gcc }}-clang${{ matrix.clang }}
+          path: |
+            gcc_*_results.log
+            clang_*_results.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+  performance-benchmarks:
+    name: Performance Benchmarks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc cmake build-essential valgrind
+
+      - name: Build performance tests
+        run: |
+          gcc -O3 -I. -o varintCompare_perf \
+              src/varintCompare.c \
+              src/varintExternal.c \
+              src/varintExternalBigEndian.c \
+              src/varintTagged.c \
+              src/varintChained.c \
+              src/varintChainedSimple.c \
+              -lm
+
+      - name: Run performance benchmarks
+        timeout-minutes: 10
+        run: |
+          echo "=== Performance Benchmarks ===" | tee perf_results.log
+          timeout 300 ./varintCompare_perf 100 2>&1 | tee -a perf_results.log || true
+
+      - name: Upload performance results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-benchmarks
+          path: perf_results.log
+          retention-days: 30
+
+  valgrind-analysis:
+    name: Valgrind Memory Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc cmake build-essential valgrind
+
+      - name: Build tests without sanitizers
+        run: |
+          mkdir -p build_valgrind
+          cd build_valgrind
+          cmake -DCMAKE_BUILD_TYPE=Debug ..
+          cmake --build . || true
+
+      - name: Run valgrind on unit tests
+        continue-on-error: true
+        timeout-minutes: 30
+        run: |
+          chmod +x scripts/test/run_unit_tests.sh
+          # Run a subset with valgrind (full run is very slow)
+          valgrind --leak-check=full --show-leak-kinds=all \
+                   --track-origins=yes --verbose \
+                   --log-file=valgrind_output.log \
+                   ./scripts/test/run_unit_tests.sh 2>&1 || true
+
+      - name: Upload valgrind results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: valgrind-analysis
+          path: valgrind_output.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+  summary:
+    name: Nightly Summary
+    runs-on: ubuntu-latest
+    needs: [extended-sanitizer-testing, compiler-matrix, performance-benchmarks]
+    if: always()
+
+    steps:
+      - name: Generate nightly summary
+        run: |
+          echo "# Nightly Extended Testing Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Run Date: $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Extended Sanitizers | ${{ needs.extended-sanitizer-testing.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Compiler Matrix | ${{ needs.compiler-matrix.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Performance | ${{ needs.performance-benchmarks.result }} |" >> $GITHUB_STEP_SUMMARY

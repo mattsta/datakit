@@ -44,12 +44,12 @@ varintWidth varintChainedSimpleEncode64(uint8_t *p, uint64_t v) {
         v >>= 7;
     }
 
-    *writeP = v;
+    *writeP = (uint8_t)v;
     /* Plus one because 'writeP' only advances at the end of
      * the loop.  If we're the first time through,
      * we processed one byte, but writeP == p, but the writeP
      * counter never advanced, so we need to account for it here. */
-    return 1 + writeP - p;
+    return (varintWidth)(1 + writeP - p);
 }
 
 varintWidth varintChainedSimpleLength(uint64_t v) {
@@ -76,7 +76,7 @@ varintWidth varintChainedSimpleDecode64(const uint8_t *p, uint64_t *v) {
             /* Below, +1 is because 'mover' only advances at the end of
              * the loop.  If we're the first time through,
              * we processed one byte, but mover == p, so return 1. */
-            return 1 + mover - p;
+            return (varintWidth)(1 + mover - p);
         }
     }
     return VARINT_WIDTH_INVALID;
@@ -85,35 +85,35 @@ varintWidth varintChainedSimpleDecode64(const uint8_t *p, uint64_t *v) {
 varintWidth varintChainedSimpleEncode32(uint8_t *p, uint32_t v) {
     uint8_t *ptr = p;
     if (v < (1 << 7)) {
-        *(ptr++) = v;
+        *(ptr++) = (uint8_t)v;
     } else if (v < (1 << 14)) {
-        *(ptr++) = v | extent;
-        *(ptr++) = v >> 7;
+        *(ptr++) = (uint8_t)(v | extent);
+        *(ptr++) = (uint8_t)(v >> 7);
     } else if (v < (1 << 21)) {
-        *(ptr++) = v | extent;
-        *(ptr++) = (v >> 7) | extent;
-        *(ptr++) = v >> 14;
+        *(ptr++) = (uint8_t)(v | extent);
+        *(ptr++) = (uint8_t)((v >> 7) | extent);
+        *(ptr++) = (uint8_t)(v >> 14);
     } else if (v < (1 << 28)) {
-        *(ptr++) = v | extent;
-        *(ptr++) = (v >> 7) | extent;
-        *(ptr++) = (v >> 14) | extent;
-        *(ptr++) = v >> 21;
+        *(ptr++) = (uint8_t)(v | extent);
+        *(ptr++) = (uint8_t)((v >> 7) | extent);
+        *(ptr++) = (uint8_t)((v >> 14) | extent);
+        *(ptr++) = (uint8_t)(v >> 21);
     } else {
-        *(ptr++) = v | extent;
-        *(ptr++) = (v >> 7) | extent;
-        *(ptr++) = (v >> 14) | extent;
-        *(ptr++) = (v >> 21) | extent;
-        *(ptr++) = v >> 28;
+        *(ptr++) = (uint8_t)(v | extent);
+        *(ptr++) = (uint8_t)((v >> 7) | extent);
+        *(ptr++) = (uint8_t)((v >> 14) | extent);
+        *(ptr++) = (uint8_t)((v >> 21) | extent);
+        *(ptr++) = (uint8_t)(v >> 28);
     }
 
-    return ptr - p;
+    return (varintWidth)(ptr - p);
 }
 
 varintWidth varintChainedSimpleDecode32Fallback(const uint8_t *p,
                                                 uint32_t *value) {
     uint64_t v = 0;
     varintWidth len = varintChainedSimpleDecode64(p, &v);
-    *value = v;
+    *value = (uint32_t)v;
     return len;
 }
 

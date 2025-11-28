@@ -16,6 +16,7 @@
 **/
 
 #include "varint.h"
+#include <string.h>
 
 /*
 **
@@ -108,15 +109,20 @@
 **
 ** If the decode fails because there are not enough bytes in z[] then
 ** return 0;
+**
+** Note: Uses memcpy for potentially unaligned writes to avoid UBSan errors
 */
 varintWidth varintTaggedGet(const uint8_t *__restrict z, int32_t n,
                             uint64_t *pResult) {
+    uint64_t result;
+
     if (n < 1) {
         return 0;
     }
 
     if (z[0] <= 240) {
-        *pResult = z[0];
+        result = z[0];
+        memcpy(pResult, &result, sizeof(result));
         return 1;
     }
 
@@ -125,7 +131,8 @@ varintWidth varintTaggedGet(const uint8_t *__restrict z, int32_t n,
             return 0;
         }
 
-        *pResult = (z[0] - 241) * 256 + z[1] + 240;
+        result = (z[0] - 241) * 256 + z[1] + 240;
+        memcpy(pResult, &result, sizeof(result));
         return 2;
     }
 
@@ -135,31 +142,40 @@ varintWidth varintTaggedGet(const uint8_t *__restrict z, int32_t n,
 
     switch (z[0]) {
     case 249:
-        *pResult = 2288 + 256 * z[1] + z[2];
+        result = 2288 + 256 * z[1] + z[2];
+        memcpy(pResult, &result, sizeof(result));
         return 3;
     case 250:
-        *pResult = (z[1] << 16) | (z[2] << 8) | z[3];
+        result =
+            ((uint64_t)z[1] << 16) | ((uint64_t)z[2] << 8) | (uint64_t)z[3];
+        memcpy(pResult, &result, sizeof(result));
         return 4;
     default: {
-        uint64_t x =
-            (((uint64_t)z[1]) << 24) | (z[2] << 16) | (z[3] << 8) | z[4];
+        uint64_t x = (((uint64_t)z[1]) << 24) | ((uint64_t)z[2] << 16) |
+                     ((uint64_t)z[3] << 8) | (uint64_t)z[4];
         switch (z[0]) {
         case 251:
-            *pResult = x;
+            memcpy(pResult, &x, sizeof(x));
             return 5;
         case 252:
-            *pResult = (x << 8) | z[5];
+            result = (x << 8) | z[5];
+            memcpy(pResult, &result, sizeof(result));
             return 6;
         case 253:
-            *pResult = (x << 16) | (z[5] << 8) | z[6];
+            result = (x << 16) | ((uint64_t)z[5] << 8) | (uint64_t)z[6];
+            memcpy(pResult, &result, sizeof(result));
             return 7;
         case 254:
-            *pResult = (x << 24) | (z[5] << 16) | (z[6] << 8) | z[7];
+            result = (x << 24) | ((uint64_t)z[5] << 16) |
+                     ((uint64_t)z[6] << 8) | (uint64_t)z[7];
+            memcpy(pResult, &result, sizeof(result));
             return 8;
         case 255:
-            *pResult =
-                (x << 32) | (0xffffffff & ((((uint64_t)z[5]) << 24) |
-                                           (z[6] << 16) | (z[7] << 8) | z[8]));
+            result = (x << 32) |
+                     (0xffffffff &
+                      ((((uint64_t)z[5]) << 24) | ((uint64_t)z[6] << 16) |
+                       ((uint64_t)z[7] << 8) | (uint64_t)z[8]));
+            memcpy(pResult, &result, sizeof(result));
             return 9;
         default:
             return 0;
@@ -418,7 +434,7 @@ static varintWidth varintTaggedAdd(uint8_t *p, int64_t add, bool force) {
 
     VARINT_ADD_OR_ABORT_OVERFLOW_(updatingVal, add, newVal);
 
-    varintWidth newEncoding = varintTaggedLen(newVal);
+    varintWidth newEncoding = varintTaggedLen((uint64_t)newVal);
 
     /* If new encoding is larger than current encoding, we don't
      * want to overwrite memory beyond our current varint.
@@ -427,7 +443,7 @@ static varintWidth varintTaggedAdd(uint8_t *p, int64_t add, bool force) {
         return newEncoding;
     }
 
-    varintTaggedPut64(p, newVal);
+    varintTaggedPut64(p, (uint64_t)newVal);
     return newEncoding;
 }
 

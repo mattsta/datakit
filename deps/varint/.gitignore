@@ -1,1 +1,32 @@
+# Build artifacts
 build
+build_tests
+build_examples_sanitizers
+build_sanitizers
+
+# Compiler check results
+compiler_check_results
+
+# Compiled examples (no extension)
+examples/standalone/example_*
+!examples/standalone/example_*.c
+
+# Sanitized test binaries
+examples/standalone/*_sanitized
+examples/integration/*_sanitized
+examples/advanced/*_sanitized
+examples/reference/*_sanitized
+
+# Test binaries
+test_bitmap
+test_delta
+test_float
+test_for
+
+# Tool binaries
+tools/struct_audit
+tools/struct_size_check
+tools/struct_audit_dwarf
+
+# cmake / ctest output?
+Testing/

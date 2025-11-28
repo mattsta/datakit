@@ -6,7 +6,7 @@
 
 /* Generate new string concatenating integer i against string 'prefix' */
 #define CTEST_INCLUDE_GEN(named)                                               \
-    static char *gen##named(char *prefix, int i) {                             \
+    static char *gen##named(const char *prefix, int i) {                       \
         static char result[64] = {0};                                          \
         snprintf(result, sizeof(result), "%s%d", prefix, i);                   \
         return result;                                                         \
