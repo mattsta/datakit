@@ -1837,6 +1837,195 @@ size_t DKS_LENUTF8(DKS_TYPE *s) {
     return StrLenUtf8(s, DKS_LEN(s));
 }
 
+bool DKS_UTF8VALID(const DKS_TYPE *s) {
+    return StrUtf8Valid(s, DKS_LEN(s));
+}
+
+size_t DKS_UTF8VALIDCOUNT(const DKS_TYPE *s, bool *valid) {
+    return StrUtf8ValidCount(s, DKS_LEN(s), valid);
+}
+
+const uint8_t *DKS_UTF8ADVANCE(const DKS_TYPE *s, size_t n) {
+    return StrUtf8Advance(s, DKS_LEN(s), n);
+}
+
+const uint8_t *DKS_UTF8RETREAT(const DKS_TYPE *s, const uint8_t *pos,
+                               size_t n) {
+    return StrUtf8Retreat(s, DKS_LEN(s), pos, n);
+}
+
+uint32_t DKS_UTF8PEEK(const DKS_TYPE *s, const uint8_t *pos) {
+    return StrUtf8Peek(s, DKS_LEN(s), pos);
+}
+
+size_t DKS_UTF8OFFSETAT(const DKS_TYPE *s, size_t charIndex) {
+    return StrUtf8OffsetAt(s, DKS_LEN(s), charIndex);
+}
+
+size_t DKS_UTF8INDEXAT(const DKS_TYPE *s, size_t byteOffset) {
+    return StrUtf8IndexAt(s, DKS_LEN(s), byteOffset);
+}
+
+size_t DKS_UTF8TRUNCATE(const DKS_TYPE *s, size_t maxChars) {
+    return StrUtf8Truncate(s, DKS_LEN(s), maxChars);
+}
+
+size_t DKS_UTF8TRUNCATEBYTES(const DKS_TYPE *s, size_t maxBytes) {
+    return StrUtf8TruncateBytes(s, DKS_LEN(s), maxBytes);
+}
+
+void DKS_UTF8SUBSTRING(const DKS_TYPE *s, size_t startChar, size_t endChar,
+                       size_t *outOffset, size_t *outLen) {
+    StrUtf8Substring(s, DKS_LEN(s), startChar, endChar, outOffset, outLen);
+}
+
+size_t DKS_UTF8SUBSTRINGCOPY(const DKS_TYPE *s, size_t startChar,
+                             size_t endChar, void *buf, size_t bufLen) {
+    return StrUtf8SubstringCopy(s, DKS_LEN(s), startChar, endChar, buf, bufLen);
+}
+
+size_t DKS_UTF8SPLIT(const DKS_TYPE *s, size_t charIndex) {
+    return StrUtf8Split(s, DKS_LEN(s), charIndex);
+}
+
+int DKS_UTF8COMPARE(const DKS_TYPE *s1, const DKS_TYPE *s2) {
+    return StrUtf8Compare(s1, DKS_LEN(s1), s2, DKS_LEN(s2));
+}
+
+int DKS_UTF8COMPAREN(const DKS_TYPE *s1, const DKS_TYPE *s2, size_t n) {
+    return StrUtf8CompareN(s1, DKS_LEN(s1), s2, DKS_LEN(s2), n);
+}
+
+int DKS_UTF8COMPARECASEINSENSITIVEASCII(const DKS_TYPE *s1,
+                                        const DKS_TYPE *s2) {
+    return StrUtf8CompareCaseInsensitiveAscii(s1, DKS_LEN(s1), s2, DKS_LEN(s2));
+}
+
+bool DKS_UTF8STARTSWITH(const DKS_TYPE *s, const void *prefix,
+                        size_t prefixLen) {
+    return StrUtf8StartsWith(s, DKS_LEN(s), prefix, prefixLen);
+}
+
+bool DKS_UTF8ENDSWITH(const DKS_TYPE *s, const void *suffix, size_t suffixLen) {
+    return StrUtf8EndsWith(s, DKS_LEN(s), suffix, suffixLen);
+}
+
+bool DKS_UTF8EQUAL(const DKS_TYPE *s1, const DKS_TYPE *s2) {
+    return StrUtf8Equal(s1, DKS_LEN(s1), s2, DKS_LEN(s2));
+}
+
+bool DKS_UTF8EQUALCASEINSENSITIVEASCII(const DKS_TYPE *s1, const DKS_TYPE *s2) {
+    return StrUtf8EqualCaseInsensitiveAscii(s1, DKS_LEN(s1), s2, DKS_LEN(s2));
+}
+
+size_t DKS_UTF8FIND(const DKS_TYPE *s, const void *needle, size_t needleLen) {
+    return StrUtf8Find(s, DKS_LEN(s), needle, needleLen);
+}
+
+size_t DKS_UTF8FINDLAST(const DKS_TYPE *s, const void *needle,
+                        size_t needleLen) {
+    return StrUtf8FindLast(s, DKS_LEN(s), needle, needleLen);
+}
+
+size_t DKS_UTF8FINDCHAR(const DKS_TYPE *s, uint32_t codepoint) {
+    return StrUtf8FindChar(s, DKS_LEN(s), codepoint);
+}
+
+size_t DKS_UTF8FINDCHARLAST(const DKS_TYPE *s, uint32_t codepoint) {
+    return StrUtf8FindCharLast(s, DKS_LEN(s), codepoint);
+}
+
+size_t DKS_UTF8FINDCHARNTH(const DKS_TYPE *s, uint32_t codepoint, size_t n) {
+    return StrUtf8FindCharNth(s, DKS_LEN(s), codepoint, n);
+}
+
+bool DKS_UTF8CONTAINS(const DKS_TYPE *s, const void *needle, size_t needleLen) {
+    return StrUtf8Contains(s, DKS_LEN(s), needle, needleLen);
+}
+
+size_t DKS_UTF8COUNT(const DKS_TYPE *s, const void *needle, size_t needleLen) {
+    return StrUtf8Count(s, DKS_LEN(s), needle, needleLen);
+}
+
+size_t DKS_UTF8COUNTCHAR(const DKS_TYPE *s, uint32_t codepoint) {
+    return StrUtf8CountChar(s, DKS_LEN(s), codepoint);
+}
+
+size_t DKS_UTF8FINDANYCHAR(const DKS_TYPE *s, const void *charSet,
+                           size_t charSetLen) {
+    return StrUtf8FindAnyChar(s, DKS_LEN(s), charSet, charSetLen);
+}
+
+size_t DKS_UTF8FINDNOTCHAR(const DKS_TYPE *s, const void *charSet,
+                           size_t charSetLen) {
+    return StrUtf8FindNotChar(s, DKS_LEN(s), charSet, charSetLen);
+}
+
+size_t DKS_UTF8SPANCHAR(const DKS_TYPE *s, const void *charSet,
+                        size_t charSetLen) {
+    return StrUtf8SpanChar(s, DKS_LEN(s), charSet, charSetLen);
+}
+
+size_t DKS_UTF8SPANNOTCHAR(const DKS_TYPE *s, const void *charSet,
+                           size_t charSetLen) {
+    return StrUtf8SpanNotChar(s, DKS_LEN(s), charSet, charSetLen);
+}
+
+/* Width calculation */
+size_t DKS_UTF8WIDTH(const DKS_TYPE *s) {
+    return StrUtf8Width(s, DKS_LEN(s));
+}
+
+size_t DKS_UTF8WIDTHN(const DKS_TYPE *s, size_t n) {
+    return StrUtf8WidthN(s, DKS_LEN(s), n);
+}
+
+size_t DKS_UTF8TRUNCATEWIDTH(const DKS_TYPE *s, size_t maxWidth) {
+    return StrUtf8TruncateWidth(s, DKS_LEN(s), maxWidth);
+}
+
+size_t DKS_UTF8INDEXATWIDTH(const DKS_TYPE *s, size_t targetWidth) {
+    return StrUtf8IndexAtWidth(s, DKS_LEN(s), targetWidth);
+}
+
+size_t DKS_UTF8PADWIDTH(const DKS_TYPE *s, size_t targetWidth) {
+    return StrUtf8PadWidth(s, DKS_LEN(s), targetWidth);
+}
+
+bool DKS_UTF8ISNARROW(const DKS_TYPE *s) {
+    return StrUtf8IsNarrow(s, DKS_LEN(s));
+}
+
+bool DKS_UTF8HASWIDE(const DKS_TYPE *s) {
+    return StrUtf8HasWide(s, DKS_LEN(s));
+}
+
+/* Grapheme cluster operations */
+size_t DKS_UTF8GRAPHEMENEXT(const DKS_TYPE *s) {
+    return StrUtf8GraphemeNext(s, DKS_LEN(s));
+}
+
+size_t DKS_UTF8GRAPHEMECOUNT(const DKS_TYPE *s) {
+    return StrUtf8GraphemeCount(s, DKS_LEN(s));
+}
+
+size_t DKS_UTF8GRAPHEMEADVANCE(const DKS_TYPE *s, size_t n) {
+    return StrUtf8GraphemeAdvance(s, DKS_LEN(s), n);
+}
+
+bool DKS_UTF8GRAPHEMEAT(const DKS_TYPE *s, size_t n, size_t *startOut,
+                        size_t *endOut) {
+    return StrUtf8GraphemeAt(s, DKS_LEN(s), n, startOut, endOut);
+}
+
+size_t DKS_UTF8GRAPHEMEWIDTH(const DKS_TYPE *s) {
+    return StrUtf8GraphemeWidth(s, DKS_LEN(s));
+}
+
+size_t DKS_UTF8GRAPHEMETRUNCATE(const DKS_TYPE *s, size_t n) {
+    return StrUtf8GraphemeTruncate(s, DKS_LEN(s), n);
+}
+
 /* ====================================================================
  * Testing
  * ==================================================================== */
@@ -2239,6 +2428,402 @@ int DKS_TEST(int argc, char *argv[]) {
                 "%d");
 
             DKS_FREE(x);
+        }
+
+        /* UTF-8 Validation Tests */
+        {
+            /* Valid ASCII string */
+            x = DKS_NEW("Hello, World!");
+            testCond("DKS_UTF8VALID() - ASCII valid", DKS_UTF8VALID(x), true,
+                     "%d");
+            DKS_FREE(x);
+
+            /* Valid UTF-8 with multibyte characters */
+            x = DKS_NEW("Hello 世界 " _TU8MIDDLES);
+            testCond("DKS_UTF8VALID() - multibyte valid", DKS_UTF8VALID(x),
+                     true, "%d");
+
+            bool valid = false;
+            size_t count = DKS_UTF8VALIDCOUNT(x, &valid);
+            testCond("DKS_UTF8VALIDCOUNT() - valid flag", valid, true, "%d");
+            /* "Hello 世界 " = 9 chars + 5 emoji = 14 chars */
+            testCond("DKS_UTF8VALIDCOUNT() - count chars", (int)count, 14,
+                     "%d");
+            DKS_FREE(x);
+
+            /* Empty string is valid */
+            x = DKS_EMPTY();
+            testCond("DKS_UTF8VALID() - empty valid", DKS_UTF8VALID(x), true,
+                     "%d");
+            DKS_FREE(x);
+        }
+
+        /* UTF-8 Cursor Operation Tests */
+        {
+            /* Test with mixed ASCII and multibyte */
+            x = DKS_NEW("Hello 世界!");
+            size_t xlen = DKS_LEN(x);
+
+            /* Test DKS_UTF8ADVANCE */
+            const uint8_t *pos = DKS_UTF8ADVANCE(x, 0);
+            testCond("DKS_UTF8ADVANCE() - advance 0",
+                     (int)(pos - (const uint8_t *)x), 0, "%d");
+
+            pos = DKS_UTF8ADVANCE(x, 6);
+            testCond("DKS_UTF8ADVANCE() - advance to 世",
+                     (int)(pos - (const uint8_t *)x), 6, "%d");
+
+            pos = DKS_UTF8ADVANCE(x, 7);
+            testCond("DKS_UTF8ADVANCE() - advance past 世",
+                     (int)(pos - (const uint8_t *)x), 9, "%d");
+
+            /* Test DKS_UTF8RETREAT */
+            const uint8_t *end = (const uint8_t *)x + xlen;
+            pos = DKS_UTF8RETREAT(x, end, 1);
+            testCond("DKS_UTF8RETREAT() - back 1 from end", (int)(end - pos), 1,
+                     "%d");
+
+            pos = DKS_UTF8RETREAT(x, end, 2);
+            testCond("DKS_UTF8RETREAT() - back 2 (past 界)", (int)(end - pos),
+                     4, "%d");
+
+            /* Test DKS_UTF8PEEK */
+            uint32_t cp = DKS_UTF8PEEK(x, (const uint8_t *)x);
+            testCond("DKS_UTF8PEEK() - first char 'H'", cp, 'H', "%u");
+
+            cp = DKS_UTF8PEEK(x, (const uint8_t *)x + 6);
+            testCond("DKS_UTF8PEEK() - '世' (U+4E16)", cp, 0x4E16, "%u");
+
+            /* Test DKS_UTF8OFFSETAT */
+            size_t offset = DKS_UTF8OFFSETAT(x, 0);
+            testCond("DKS_UTF8OFFSETAT() - index 0", (int)offset, 0, "%d");
+
+            offset = DKS_UTF8OFFSETAT(x, 6);
+            testCond("DKS_UTF8OFFSETAT() - index 6 (世)", (int)offset, 6, "%d");
+
+            offset = DKS_UTF8OFFSETAT(x, 7);
+            testCond("DKS_UTF8OFFSETAT() - index 7 (界)", (int)offset, 9, "%d");
+
+            /* Test DKS_UTF8INDEXAT */
+            size_t idx = DKS_UTF8INDEXAT(x, 0);
+            testCond("DKS_UTF8INDEXAT() - byte 0", (int)idx, 0, "%d");
+
+            idx = DKS_UTF8INDEXAT(x, 6);
+            testCond("DKS_UTF8INDEXAT() - byte 6", (int)idx, 6, "%d");
+
+            idx = DKS_UTF8INDEXAT(x, 9);
+            testCond("DKS_UTF8INDEXAT() - byte 9", (int)idx, 7, "%d");
+
+            DKS_FREE(x);
+
+            /* Test with pure ASCII (fast path) */
+            x = DKS_NEW("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+            pos = DKS_UTF8ADVANCE(x, 10);
+            testCond("DKS_UTF8ADVANCE() - ASCII fast path",
+                     (int)(pos - (const uint8_t *)x), 10, "%d");
+
+            offset = DKS_UTF8OFFSETAT(x, 10);
+            testCond("DKS_UTF8OFFSETAT() - ASCII", (int)offset, 10, "%d");
+            DKS_FREE(x);
+
+            /* Test empty string */
+            x = DKS_EMPTY();
+            pos = DKS_UTF8ADVANCE(x, 5);
+            testCond("DKS_UTF8ADVANCE() - empty string",
+                     (int)(pos - (const uint8_t *)x), 0, "%d");
+            DKS_FREE(x);
+        }
+
+        /* UTF-8 Truncation/Substring Tests */
+        {
+            /* Test with mixed ASCII and multibyte: "Hello 世界!" = 9 chars, 13
+             * bytes */
+            x = DKS_NEW("Hello 世界!");
+
+            /* Test DKS_UTF8TRUNCATE */
+            testCond("DKS_UTF8TRUNCATE() - 0 chars",
+                     (int)DKS_UTF8TRUNCATE(x, 0), 0, "%d");
+            testCond("DKS_UTF8TRUNCATE() - 6 chars",
+                     (int)DKS_UTF8TRUNCATE(x, 6), 6, "%d");
+            testCond("DKS_UTF8TRUNCATE() - 7 chars (past 世)",
+                     (int)DKS_UTF8TRUNCATE(x, 7), 9, "%d");
+            testCond("DKS_UTF8TRUNCATE() - 9 chars (full)",
+                     (int)DKS_UTF8TRUNCATE(x, 9), 13, "%d");
+
+            /* Test DKS_UTF8TRUNCATEBYTES */
+            testCond("DKS_UTF8TRUNCATEBYTES() - 6 bytes",
+                     (int)DKS_UTF8TRUNCATEBYTES(x, 6), 6, "%d");
+            testCond("DKS_UTF8TRUNCATEBYTES() - 7 bytes (mid-世)",
+                     (int)DKS_UTF8TRUNCATEBYTES(x, 7), 6, "%d");
+            testCond("DKS_UTF8TRUNCATEBYTES() - 9 bytes",
+                     (int)DKS_UTF8TRUNCATEBYTES(x, 9), 9, "%d");
+
+            /* Test DKS_UTF8SUBSTRING */
+            size_t offset, len;
+            DKS_UTF8SUBSTRING(x, 6, 8, &offset, &len);
+            testCond("DKS_UTF8SUBSTRING() - offset", (int)offset, 6, "%d");
+            testCond("DKS_UTF8SUBSTRING() - len", (int)len, 6, "%d");
+
+            /* Test DKS_UTF8SUBSTRINGCOPY */
+            char buf[32];
+            size_t written = DKS_UTF8SUBSTRINGCOPY(x, 6, 8, buf, sizeof(buf));
+            testCond("DKS_UTF8SUBSTRINGCOPY() - bytes written", (int)written, 6,
+                     "%d");
+            testCond("DKS_UTF8SUBSTRINGCOPY() - content",
+                     memcmp(buf, "世界", 6), 0, "%d");
+
+            /* Test DKS_UTF8SPLIT */
+            testCond("DKS_UTF8SPLIT() - at 6", (int)DKS_UTF8SPLIT(x, 6), 6,
+                     "%d");
+            testCond("DKS_UTF8SPLIT() - at 7", (int)DKS_UTF8SPLIT(x, 7), 9,
+                     "%d");
+
+            DKS_FREE(x);
+        }
+
+        /* Test UTF-8 Comparison operations */
+        {
+            DKS_TYPE *a = DKS_NEW("Hello");
+            DKS_TYPE *b = DKS_NEW("Hello");
+            DKS_TYPE *c = DKS_NEW("Helloworld");
+            DKS_TYPE *d = DKS_NEW("HELLO");
+            DKS_TYPE *e = DKS_NEW("World");
+
+            /* Basic comparison */
+            testCond("DKS_UTF8COMPARE() - equal", DKS_UTF8COMPARE(a, b), 0,
+                     "%d");
+            testCond("DKS_UTF8COMPARE() - less (length)",
+                     DKS_UTF8COMPARE(a, c) < 0, 1, "%d");
+            testCond("DKS_UTF8COMPARE() - less (lexical)",
+                     DKS_UTF8COMPARE(a, e) < 0, 1, "%d");
+
+            /* Compare N codepoints */
+            testCond("DKS_UTF8COMPAREN() - first 5 match",
+                     DKS_UTF8COMPAREN(a, c, 5), 0, "%d");
+            testCond("DKS_UTF8COMPAREN() - n=0 always equal",
+                     DKS_UTF8COMPAREN(a, e, 0), 0, "%d");
+
+            /* Case-insensitive comparison */
+            testCond("DKS_UTF8COMPARECASEINSENSITIVEASCII() - equal",
+                     DKS_UTF8COMPARECASEINSENSITIVEASCII(a, d), 0, "%d");
+            testCond("DKS_UTF8COMPARECASEINSENSITIVEASCII() - not equal",
+                     DKS_UTF8COMPARECASEINSENSITIVEASCII(a, e) != 0, 1, "%d");
+
+            /* Equality */
+            testCond("DKS_UTF8EQUAL() - equal", DKS_UTF8EQUAL(a, b), true,
+                     "%d");
+            testCond("DKS_UTF8EQUAL() - not equal", DKS_UTF8EQUAL(a, c), false,
+                     "%d");
+            testCond("DKS_UTF8EQUALCASEINSENSITIVEASCII() - equal",
+                     DKS_UTF8EQUALCASEINSENSITIVEASCII(a, d), true, "%d");
+
+            /* StartsWith / EndsWith */
+            testCond("DKS_UTF8STARTSWITH() - true",
+                     DKS_UTF8STARTSWITH(c, "Hello", 5), true, "%d");
+            testCond("DKS_UTF8STARTSWITH() - false",
+                     DKS_UTF8STARTSWITH(c, "World", 5), false, "%d");
+            testCond("DKS_UTF8ENDSWITH() - true",
+                     DKS_UTF8ENDSWITH(c, "world", 5), true, "%d");
+            testCond("DKS_UTF8ENDSWITH() - false",
+                     DKS_UTF8ENDSWITH(c, "Hello", 5), false, "%d");
+
+            DKS_FREE(e);
+            DKS_FREE(d);
+            DKS_FREE(c);
+            DKS_FREE(b);
+            DKS_FREE(a);
+        }
+
+        /* Test UTF-8 Comparison with multibyte strings */
+        {
+            DKS_TYPE *utf8a = DKS_NEW("世界");
+            DKS_TYPE *utf8b = DKS_NEW("世界");
+            DKS_TYPE *utf8c = DKS_NEW("世人");
+
+            testCond("DKS_UTF8COMPARE() - UTF-8 equal",
+                     DKS_UTF8COMPARE(utf8a, utf8b), 0, "%d");
+            testCond("DKS_UTF8COMPARE() - UTF-8 not equal",
+                     DKS_UTF8COMPARE(utf8a, utf8c) != 0, 1, "%d");
+            testCond("DKS_UTF8COMPAREN() - UTF-8 first codepoint",
+                     DKS_UTF8COMPAREN(utf8a, utf8c, 1), 0, "%d");
+            testCond("DKS_UTF8EQUAL() - UTF-8 equal",
+                     DKS_UTF8EQUAL(utf8a, utf8b), true, "%d");
+            testCond("DKS_UTF8STARTSWITH() - UTF-8",
+                     DKS_UTF8STARTSWITH(utf8a, "世", 3), true, "%d");
+            testCond("DKS_UTF8ENDSWITH() - UTF-8",
+                     DKS_UTF8ENDSWITH(utf8a, "界", 3), true, "%d");
+
+            DKS_FREE(utf8c);
+            DKS_FREE(utf8b);
+            DKS_FREE(utf8a);
+        }
+
+        /* Test UTF-8 Search operations */
+        {
+            DKS_TYPE *str = DKS_NEW("Hello, World!");
+
+            /* Find */
+            testCond("DKS_UTF8FIND() - found",
+                     (int)DKS_UTF8FIND(str, "World", 5), 7, "%d");
+            testCond("DKS_UTF8FIND() - not found", DKS_UTF8FIND(str, "xyz", 3),
+                     SIZE_MAX, "%zu");
+
+            /* FindLast */
+            DKS_TYPE *dup = DKS_NEW("abcabc");
+            testCond("DKS_UTF8FINDLAST()", (int)DKS_UTF8FINDLAST(dup, "abc", 3),
+                     3, "%d");
+            DKS_FREE(dup);
+
+            /* FindChar */
+            testCond("DKS_UTF8FINDCHAR() - found",
+                     (int)DKS_UTF8FINDCHAR(str, 'W'), 7, "%d");
+            testCond("DKS_UTF8FINDCHAR() - not found",
+                     DKS_UTF8FINDCHAR(str, 'x'), SIZE_MAX, "%zu");
+
+            /* FindCharLast */
+            testCond("DKS_UTF8FINDCHARLAST()",
+                     (int)DKS_UTF8FINDCHARLAST(str, 'o'), 8, "%d");
+
+            /* FindCharNth */
+            DKS_TYPE *rep = DKS_NEW("ababab");
+            testCond("DKS_UTF8FINDCHARNTH() - 0th",
+                     (int)DKS_UTF8FINDCHARNTH(rep, 'a', 0), 0, "%d");
+            testCond("DKS_UTF8FINDCHARNTH() - 2nd",
+                     (int)DKS_UTF8FINDCHARNTH(rep, 'a', 2), 4, "%d");
+            DKS_FREE(rep);
+
+            /* Contains */
+            testCond("DKS_UTF8CONTAINS() - true",
+                     DKS_UTF8CONTAINS(str, "World", 5), true, "%d");
+            testCond("DKS_UTF8CONTAINS() - false",
+                     DKS_UTF8CONTAINS(str, "xyz", 3), false, "%d");
+
+            /* Count */
+            testCond("DKS_UTF8COUNT()", (int)DKS_UTF8COUNT(str, "o", 1), 2,
+                     "%d");
+
+            /* CountChar */
+            testCond("DKS_UTF8COUNTCHAR()", (int)DKS_UTF8COUNTCHAR(str, 'l'), 3,
+                     "%d");
+
+            /* FindAnyChar */
+            testCond("DKS_UTF8FINDANYCHAR()",
+                     (int)DKS_UTF8FINDANYCHAR(str, "aeiou", 5), 1, "%d");
+
+            /* FindNotChar */
+            DKS_TYPE *aaa = DKS_NEW("aaabbb");
+            testCond("DKS_UTF8FINDNOTCHAR()",
+                     (int)DKS_UTF8FINDNOTCHAR(aaa, "a", 1), 3, "%d");
+            DKS_FREE(aaa);
+
+            /* SpanChar */
+            DKS_TYPE *span = DKS_NEW("aaabbbccc");
+            testCond("DKS_UTF8SPANCHAR()", (int)DKS_UTF8SPANCHAR(span, "ab", 2),
+                     6, "%d");
+
+            /* SpanNotChar */
+            testCond("DKS_UTF8SPANNOTCHAR()",
+                     (int)DKS_UTF8SPANNOTCHAR(span, "b", 1), 3, "%d");
+            DKS_FREE(span);
+
+            DKS_FREE(str);
+        }
+
+        /* Test UTF-8 Search with multibyte strings */
+        {
+            DKS_TYPE *utf8 = DKS_NEW("Hello 世界世!");
+
+            testCond("DKS_UTF8FIND() - UTF-8",
+                     (int)DKS_UTF8FIND(utf8, "世界", 6), 6, "%d");
+            testCond("DKS_UTF8FINDCHAR() - UTF-8",
+                     (int)DKS_UTF8FINDCHAR(utf8, 0x4E16), 6, "%d"); /* 世 */
+            testCond("DKS_UTF8COUNTCHAR() - UTF-8",
+                     (int)DKS_UTF8COUNTCHAR(utf8, 0x4E16), 2,
+                     "%d"); /* 世 twice */
+            testCond("DKS_UTF8CONTAINS() - UTF-8",
+                     DKS_UTF8CONTAINS(utf8, "世", 3), true, "%d");
+
+            DKS_FREE(utf8);
+        }
+
+        /* Test UTF-8 Width functions */
+        {
+            DKS_TYPE *ascii = DKS_NEW("hello");
+            DKS_TYPE *cjk =
+                DKS_NEWLEN("\xE4\xB8\xAD\xE6\x96\x87", 6); /* 中文 */
+            DKS_TYPE *mix = DKS_NEWLEN("a\xE4\xB8\xAD"
+                                       "b",
+                                       5); /* a中b */
+
+            testCond("DKS_UTF8WIDTH() - ASCII", (int)DKS_UTF8WIDTH(ascii), 5,
+                     "%d");
+            testCond("DKS_UTF8WIDTH() - CJK", (int)DKS_UTF8WIDTH(cjk), 4,
+                     "%d"); /* 2 chars * 2 width */
+            testCond("DKS_UTF8WIDTH() - mix", (int)DKS_UTF8WIDTH(mix), 4,
+                     "%d"); /* 1 + 2 + 1 */
+
+            testCond("DKS_UTF8WIDTHN()", (int)DKS_UTF8WIDTHN(mix, 2), 3,
+                     "%d"); /* a + 中 */
+
+            testCond("DKS_UTF8TRUNCATEWIDTH()",
+                     (int)DKS_UTF8TRUNCATEWIDTH(mix, 3), 4, "%d"); /* a中 */
+
+            testCond("DKS_UTF8INDEXATWIDTH()",
+                     (int)DKS_UTF8INDEXATWIDTH(mix, 3), 4, "%d");
+
+            testCond("DKS_UTF8PADWIDTH()", (int)DKS_UTF8PADWIDTH(ascii, 10), 5,
+                     "%d");
+
+            testCond("DKS_UTF8ISNARROW() - ASCII", DKS_UTF8ISNARROW(ascii),
+                     true, "%d");
+            testCond("DKS_UTF8ISNARROW() - CJK", DKS_UTF8ISNARROW(cjk), false,
+                     "%d");
+
+            testCond("DKS_UTF8HASWIDE() - ASCII", DKS_UTF8HASWIDE(ascii), false,
+                     "%d");
+            testCond("DKS_UTF8HASWIDE() - CJK", DKS_UTF8HASWIDE(cjk), true,
+                     "%d");
+
+            DKS_FREE(ascii);
+            DKS_FREE(cjk);
+            DKS_FREE(mix);
+        }
+
+        /* Test UTF-8 Grapheme functions */
+        {
+            DKS_TYPE *ascii = DKS_NEW("abc");
+            DKS_TYPE *combining = DKS_NEWLEN("ae\xCC\x81"
+                                             "b",
+                                             5); /* a + é + b */
+
+            testCond("DKS_UTF8GRAPHEMECOUNT() - ASCII",
+                     (int)DKS_UTF8GRAPHEMECOUNT(ascii), 3, "%d");
+            testCond("DKS_UTF8GRAPHEMECOUNT() - combining",
+                     (int)DKS_UTF8GRAPHEMECOUNT(combining), 3, "%d");
+
+            testCond("DKS_UTF8GRAPHEMENEXT()", (int)DKS_UTF8GRAPHEMENEXT(ascii),
+                     1, "%d");
+
+            testCond("DKS_UTF8GRAPHEMEADVANCE()",
+                     (int)DKS_UTF8GRAPHEMEADVANCE(combining, 2), 4,
+                     "%d"); /* past é */
+
+            size_t start, end;
+            testCond("DKS_UTF8GRAPHEMEAT()",
+                     DKS_UTF8GRAPHEMEAT(combining, 1, &start, &end), true,
+                     "%d");
+            testCond("DKS_UTF8GRAPHEMEAT() start", (int)start, 1, "%d");
+            testCond("DKS_UTF8GRAPHEMEAT() end", (int)end, 4, "%d");
+
+            testCond("DKS_UTF8GRAPHEMEWIDTH()",
+                     (int)DKS_UTF8GRAPHEMEWIDTH(combining), 3,
+                     "%d"); /* a + é + b */
+
+            testCond("DKS_UTF8GRAPHEMETRUNCATE()",
+                     (int)DKS_UTF8GRAPHEMETRUNCATE(combining, 2), 4, "%d");
+
+            DKS_FREE(ascii);
+            DKS_FREE(combining);
         }
 
         x = DKS_FROMINT64(16384);

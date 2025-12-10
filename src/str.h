@@ -123,6 +123,207 @@ size_t StrLenUtf8CountBytes(const void *_ss, size_t len,
                             size_t countCharacters);
 
 /* ====================================================================
+ * UTF-8 Validation
+ * ==================================================================== */
+/* Validate UTF-8 encoding with known length (SIMD-optimized) */
+bool StrUtf8Valid(const void *_str, size_t len);
+/* Validate null-terminated UTF-8 string (SIMD-optimized) */
+bool StrUtf8ValidCStr(const char *str);
+/* Scalar implementations for benchmarking */
+bool StrUtf8ValidScalar(const void *_str, size_t len);
+bool StrUtf8ValidCStrScalar(const char *str);
+
+/* Validate and count codepoints in one pass */
+size_t StrUtf8ValidCount(const void *_str, size_t len, bool *valid);
+/* Get byte length for N codepoints (validates while counting) */
+size_t StrUtf8ValidCountBytes(const void *_str, size_t len,
+                              size_t numCodepoints, bool *valid);
+
+/* ====================================================================
+ * UTF-8 Encoding/Decoding
+ * ==================================================================== */
+/* Decode a UTF-8 sequence to a Unicode codepoint.
+ * Returns codepoint and advances *str, or 0xFFFFFFFF on error. */
+uint32_t StrUtf8Decode(const uint8_t **str, size_t *remaining);
+/* Encode a Unicode codepoint to UTF-8. Returns bytes written (1-4) or 0. */
+size_t StrUtf8Encode(uint8_t *dst, uint32_t codepoint);
+/* Get expected byte length for a codepoint (1-4, or 0 if invalid) */
+size_t StrUtf8CodepointLen(uint32_t codepoint);
+/* Get byte length of UTF-8 sequence from first byte (0 if invalid start) */
+size_t StrUtf8SequenceLen(uint8_t firstByte);
+
+/* ====================================================================
+ * UTF-8 Cursor/Iterator Operations
+ * ==================================================================== */
+/* Advance cursor by N codepoints, returns new position */
+const uint8_t *StrUtf8Advance(const void *str, size_t len, size_t n);
+/* Move cursor back by N codepoints, returns new position */
+const uint8_t *StrUtf8Retreat(const void *str, size_t len, const uint8_t *pos,
+                              size_t n);
+/* Get codepoint at position without advancing */
+uint32_t StrUtf8Peek(const void *str, size_t len, const uint8_t *pos);
+/* Get byte offset for Nth codepoint (0-indexed) */
+size_t StrUtf8OffsetAt(const void *str, size_t len, size_t charIndex);
+/* Get codepoint index for byte offset */
+size_t StrUtf8IndexAt(const void *str, size_t len, size_t byteOffset);
+/* Scalar implementation for benchmarking */
+const uint8_t *StrUtf8AdvanceScalar(const void *str, size_t len, size_t n);
+
+/* ====================================================================
+ * UTF-8 Truncation/Substring Operations
+ * ==================================================================== */
+/* Get byte length for first N codepoints */
+size_t StrUtf8Truncate(const void *str, size_t len, size_t maxChars);
+/* Truncate to max bytes at valid UTF-8 boundary */
+size_t StrUtf8TruncateBytes(const void *str, size_t len, size_t maxBytes);
+/* Extract substring by codepoint indices (start inclusive, end exclusive) */
+void StrUtf8Substring(const void *str, size_t len, size_t startChar,
+                      size_t endChar, size_t *outOffset, size_t *outLen);
+/* Extract substring and copy to buffer, returns bytes written */
+size_t StrUtf8SubstringCopy(const void *str, size_t len, size_t startChar,
+                            size_t endChar, void *buf, size_t bufLen);
+/* Find byte offset that splits string at Nth codepoint */
+size_t StrUtf8Split(const void *str, size_t len, size_t charIndex);
+
+/* ====================================================================
+ * UTF-8 String Comparison Operations
+ * ==================================================================== */
+/* Compare two UTF-8 strings byte-by-byte */
+int StrUtf8Compare(const void *s1, size_t len1, const void *s2, size_t len2);
+/* Compare first N codepoints */
+int StrUtf8CompareN(const void *s1, size_t len1, const void *s2, size_t len2,
+                    size_t n);
+/* ASCII case-insensitive comparison */
+int StrUtf8CompareCaseInsensitiveAscii(const void *s1, size_t len1,
+                                       const void *s2, size_t len2);
+/* Check if string starts with prefix (by codepoints) */
+bool StrUtf8StartsWith(const void *str, size_t strLen, const void *prefix,
+                       size_t prefixLen);
+/* Check if string ends with suffix (by codepoints) */
+bool StrUtf8EndsWith(const void *str, size_t strLen, const void *suffix,
+                     size_t suffixLen);
+/* Equality check (convenience wrapper) */
+bool StrUtf8Equal(const void *s1, size_t len1, const void *s2, size_t len2);
+/* Equality check (ASCII case-insensitive) */
+bool StrUtf8EqualCaseInsensitiveAscii(const void *s1, size_t len1,
+                                      const void *s2, size_t len2);
+
+/* ====================================================================
+ * UTF-8 Search Operations
+ * ==================================================================== */
+/* Find first occurrence of substring, returns byte offset or SIZE_MAX */
+size_t StrUtf8Find(const void *haystack, size_t haystackLen, const void *needle,
+                   size_t needleLen);
+/* Find last occurrence of substring */
+size_t StrUtf8FindLast(const void *haystack, size_t haystackLen,
+                       const void *needle, size_t needleLen);
+/* Find first occurrence of codepoint */
+size_t StrUtf8FindChar(const void *str, size_t len, uint32_t codepoint);
+/* Find last occurrence of codepoint */
+size_t StrUtf8FindCharLast(const void *str, size_t len, uint32_t codepoint);
+/* Find Nth occurrence of codepoint (0-indexed) */
+size_t StrUtf8FindCharNth(const void *str, size_t len, uint32_t codepoint,
+                          size_t n);
+/* Check if substring exists */
+bool StrUtf8Contains(const void *haystack, size_t haystackLen,
+                     const void *needle, size_t needleLen);
+/* Count non-overlapping occurrences of substring */
+size_t StrUtf8Count(const void *haystack, size_t haystackLen,
+                    const void *needle, size_t needleLen);
+/* Count occurrences of codepoint */
+size_t StrUtf8CountChar(const void *str, size_t len, uint32_t codepoint);
+/* Find first occurrence of any codepoint from set */
+size_t StrUtf8FindAnyChar(const void *str, size_t len, const void *charSet,
+                          size_t charSetLen);
+/* Find first codepoint NOT in set */
+size_t StrUtf8FindNotChar(const void *str, size_t len, const void *charSet,
+                          size_t charSetLen);
+/* Byte length of initial segment containing only chars from set */
+size_t StrUtf8SpanChar(const void *str, size_t len, const void *charSet,
+                       size_t charSetLen);
+/* Byte length of initial segment containing no chars from set */
+size_t StrUtf8SpanNotChar(const void *str, size_t len, const void *charSet,
+                          size_t charSetLen);
+
+/* ====================================================================
+ * ASCII Case Conversion
+ * ==================================================================== */
+/* In-place lowercase conversion (ASCII letters only) */
+void StrAsciiToLower(void *str, size_t len);
+/* In-place uppercase conversion (ASCII letters only) */
+void StrAsciiToUpper(void *str, size_t len);
+/* Copy with lowercase conversion */
+size_t StrAsciiToLowerCopy(void *dst, size_t dstLen, const void *src,
+                           size_t srcLen);
+/* Copy with uppercase conversion */
+size_t StrAsciiToUpperCopy(void *dst, size_t dstLen, const void *src,
+                           size_t srcLen);
+/* Check if all ASCII letters are lowercase */
+bool StrAsciiIsLower(const void *str, size_t len);
+/* Check if all ASCII letters are uppercase */
+bool StrAsciiIsUpper(const void *str, size_t len);
+
+/* ====================================================================
+ * Unicode Character Properties
+ * ==================================================================== */
+/* Get East Asian Width (0=zero-width, 1=narrow, 2=wide) */
+int StrUnicodeEastAsianWidth(uint32_t codepoint);
+/* Check if codepoint is a letter */
+bool StrUnicodeIsLetter(uint32_t cp);
+/* Check if codepoint is a digit */
+bool StrUnicodeIsDigit(uint32_t cp);
+/* Check if codepoint is whitespace */
+bool StrUnicodeIsSpace(uint32_t cp);
+/* Check if codepoint is alphanumeric */
+bool StrUnicodeIsAlnum(uint32_t cp);
+/* Get Grapheme Break Property */
+int StrUnicodeGraphemeBreak(uint32_t cp);
+/* Check if there's a grapheme break between two codepoints */
+bool StrUnicodeIsGraphemeBreak(uint32_t cp1, uint32_t cp2);
+
+/* ====================================================================
+ * UTF-8 Display Width
+ * ==================================================================== */
+/* Calculate display width in terminal cells */
+size_t StrUtf8Width(const void *str, size_t len);
+/* Calculate width of first n codepoints */
+size_t StrUtf8WidthN(const void *str, size_t len, size_t n);
+/* Truncate to fit within maxWidth display cells */
+size_t StrUtf8TruncateWidth(const void *str, size_t len, size_t maxWidth);
+/* Find byte index at target display width */
+size_t StrUtf8IndexAtWidth(const void *str, size_t len, size_t targetWidth);
+/* Get display width from start to byte offset */
+size_t StrUtf8WidthAt(const void *str, size_t len, size_t offset);
+/* Calculate padding needed for target width */
+size_t StrUtf8PadWidth(const void *str, size_t len, size_t targetWidth);
+/* Calculate width between two byte offsets */
+size_t StrUtf8WidthBetween(const void *str, size_t len, size_t startOffset,
+                           size_t endOffset);
+/* Check if all characters are narrow (width 1) */
+bool StrUtf8IsNarrow(const void *str, size_t len);
+/* Check if string contains wide characters */
+bool StrUtf8HasWide(const void *str, size_t len);
+
+/* ====================================================================
+ * UTF-8 Grapheme Cluster Operations
+ * ==================================================================== */
+/* Find byte offset of end of next grapheme cluster */
+size_t StrUtf8GraphemeNext(const void *str, size_t len);
+/* Count grapheme clusters in string */
+size_t StrUtf8GraphemeCount(const void *str, size_t len);
+/* Advance by n grapheme clusters, returns byte offset */
+size_t StrUtf8GraphemeAdvance(const void *str, size_t len, size_t n);
+/* Get byte range of nth grapheme cluster (0-indexed) */
+bool StrUtf8GraphemeAt(const void *str, size_t len, size_t n, size_t *startOut,
+                       size_t *endOut);
+/* Display width counting grapheme clusters correctly */
+size_t StrUtf8GraphemeWidth(const void *str, size_t len);
+/* Truncate to n grapheme clusters */
+size_t StrUtf8GraphemeTruncate(const void *str, size_t len, size_t n);
+/* Reverse by grapheme clusters in-place */
+void StrUtf8GraphemeReverse(void *str, size_t len);
+
+/* ====================================================================
  * String to Native Type Conversions (from luajit)
  * ==================================================================== */
 typedef enum StrScanFmt {
