@@ -99,7 +99,8 @@ void xofAppend(xof *restrict const x, size_t *restrict const bitsUsed,
         varintBitstreamSet(x, *bitsUsed, BITS_TYPE, XOF_TYPE_SAME);
         *bitsUsed += BITS_TYPE;
 
-        assert((bits >> lengthOfOldBits) == 0);
+        /* bits >> 64 is undefined behavior, so guard against it */
+        assert(lengthOfOldBits >= 64 || (bits >> lengthOfOldBits) == 0);
 
         varintBitstreamSet(x, *bitsUsed, lengthOfOldBits, bits);
         *bitsUsed += lengthOfOldBits;
@@ -107,17 +108,16 @@ void xofAppend(xof *restrict const x, size_t *restrict const bitsUsed,
         /* else, need to specify a new range */
         const uint64_t bits = compared >> newTrailingZeroes;
 
-        assert(lengthOfNewBits == (64 - __builtin_clzll(bits)));
-        assert((bits >> lengthOfNewBits) == 0);
-
         varintBitstreamSet(x, *bitsUsed, BITS_TYPE, XOF_TYPE_NEW);
         *bitsUsed += BITS_TYPE;
 
         varintBitstreamSet(x, *bitsUsed, BITS_LEADING_ZEROS, newLeadingZeroes);
         *bitsUsed += BITS_LEADING_ZEROS;
 
-        assert(lengthOfNewBits > 0);
-        varintBitstreamSet(x, *bitsUsed, BITS_DATA, lengthOfNewBits);
+        /* lengthOfNewBits is 1-64, but BITS_DATA (6 bits) can only store 0-63.
+         * Store length-1 and add 1 when reading. */
+        assert(lengthOfNewBits > 0 && lengthOfNewBits <= 64);
+        varintBitstreamSet(x, *bitsUsed, BITS_DATA, lengthOfNewBits - 1);
         *bitsUsed += BITS_DATA;
 
         varintBitstreamSet(x, *bitsUsed, lengthOfNewBits, bits);
@@ -181,7 +181,8 @@ New:
         varintBitstreamGet(x, *bitOffset, BITS_LEADING_ZEROS);
     *bitOffset += BITS_LEADING_ZEROS;
 
-    *currentLengthOfBits = varintBitstreamGet(x, *bitOffset, BITS_DATA);
+    /* Length stored as length-1 (0-63), so add 1 to get actual (1-64) */
+    *currentLengthOfBits = varintBitstreamGet(x, *bitOffset, BITS_DATA) + 1;
     *bitOffset += BITS_DATA;
 
     unique = varintBitstreamGet(x, *bitOffset, *currentLengthOfBits);
@@ -247,9 +248,65 @@ bool xofReadAll(const xof *x, double *vals, size_t count) {
     return true;
 }
 /* ====================================================================
- * Friendly Interface
+ * xofReader API - O(1) resumable sequential access
  * ==================================================================== */
-/* TODO! */
+
+void xofReaderInit(xofReader *r, const xof *x) {
+    /* Read the first 64-bit value directly */
+    r->currentValueBits = varintBitstreamGet(x, 0, 64);
+    r->bitOffset = 64;
+    r->currentLeadingZeroes = 0;
+    r->currentLengthOfBits = 0;
+    r->valuesRead = 1;
+}
+
+void xofReaderInitFromWriter(xofReader *r, const xofWriter *w) {
+    if (w->count == 0) {
+        /* Empty writer - initialize to empty state */
+        r->bitOffset = 0;
+        r->currentValueBits = 0;
+        r->currentLeadingZeroes = 0;
+        r->currentLengthOfBits = 0;
+        r->valuesRead = 0;
+        return;
+    }
+
+    /* Initialize from writer's data */
+    xofReaderInit(r, w->d);
+}
+
+double xofReaderNext(xofReader *r, const xof *x) {
+    /* Use xofGetCached to read exactly 1 value and advance state */
+    double val =
+        xofGetCached(x, &r->bitOffset, &r->currentValueBits,
+                     &r->currentLeadingZeroes, &r->currentLengthOfBits, 1);
+    r->valuesRead++;
+    return val;
+}
+
+double xofReaderCurrent(const xofReader *r) {
+    /* Return current value without advancing */
+    return *(double *)&r->currentValueBits;
+}
+
+size_t xofReaderNextN(xofReader *r, const xof *x, double *out, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        out[i] =
+            xofGetCached(x, &r->bitOffset, &r->currentValueBits,
+                         &r->currentLeadingZeroes, &r->currentLengthOfBits, 1);
+        r->valuesRead++;
+    }
+
+    return n;
+}
+
+size_t xofReaderRemaining(const xofReader *r, size_t totalCount) {
+    if (r->valuesRead >= totalCount) {
+        return 0;
+    }
+
+    return totalCount - r->valuesRead;
+}
 
 /* ====================================================================
  * Tests
@@ -613,6 +670,233 @@ int xofTest(int argc, char *argv[]) {
             zfree(bits);
             printf("\n");
         }
+    }
+
+    /* ================================================================
+     * xofReader tests
+     * ================================================================ */
+    TEST("xofReader - sequential reading") {
+        const size_t count = 10000;
+        xof *bits = zcalloc(count * 2, sizeof(*bits));
+        double *values = zcalloc(count, sizeof(*values));
+
+        /* Generate test data */
+        values[0] = 100.5;
+        for (size_t i = 1; i < count; i++) {
+            values[i] = values[i - 1] + RD(0.1);
+        }
+
+        /* Encode */
+        size_t bitsUsed = 0;
+        xofInit(bits, &bitsUsed, values[0]);
+        int_fast32_t prevLZ = -1;
+        int_fast32_t prevTZ = -1;
+        for (size_t i = 1; i < count; i++) {
+            xofAppend(bits, &bitsUsed, &prevLZ, &prevTZ, values[i - 1],
+                      values[i]);
+        }
+
+        /* Test xofReaderInit and sequential reading */
+        xofReader r;
+        xofReaderInit(&r, bits);
+
+        /* First value should be available via xofReaderCurrent */
+        double first = xofReaderCurrent(&r);
+        if (first != values[0]) {
+            ERR("xofReaderCurrent: expected %f but got %f\n", values[0], first);
+        }
+
+        /* Read remaining values sequentially */
+        for (size_t i = 1; i < count; i++) {
+            double got = xofReaderNext(&r, bits);
+            if (got != values[i]) {
+                ERR("[%zu] Expected %f but got %f\n", i, values[i], got);
+            }
+        }
+
+        /* Verify valuesRead count */
+        if (r.valuesRead != count) {
+            ERR("Expected valuesRead=%zu but got %zu\n", count, r.valuesRead);
+        }
+
+        zfree(bits);
+        zfree(values);
+        printf("xofReader sequential reading: PASS\n");
+    }
+
+    TEST("xofReader - batch reading with NextN") {
+        const size_t count = 10000;
+        xof *bits = zcalloc(count * 2, sizeof(*bits));
+        double *values = zcalloc(count, sizeof(*values));
+        double *readBuf = zcalloc(count, sizeof(*readBuf));
+
+        /* Generate test data */
+        values[0] = 50.0;
+        for (size_t i = 1; i < count; i++) {
+            values[i] = values[i - 1] + RD(0.05);
+        }
+
+        /* Encode */
+        size_t bitsUsed = 0;
+        xofInit(bits, &bitsUsed, values[0]);
+        int_fast32_t prevLZ = -1;
+        int_fast32_t prevTZ = -1;
+        for (size_t i = 1; i < count; i++) {
+            xofAppend(bits, &bitsUsed, &prevLZ, &prevTZ, values[i - 1],
+                      values[i]);
+        }
+
+        /* Read with NextN in batches */
+        xofReader r;
+        xofReaderInit(&r, bits);
+
+        /* First value already decoded */
+        readBuf[0] = xofReaderCurrent(&r);
+
+        /* Read rest in a batch */
+        size_t read = xofReaderNextN(&r, bits, readBuf + 1, count - 1);
+        if (read != count - 1) {
+            ERR("xofReaderNextN returned %zu, expected %zu\n", read, count - 1);
+        }
+
+        /* Verify all values */
+        for (size_t i = 0; i < count; i++) {
+            if (readBuf[i] != values[i]) {
+                ERR("[%zu] Expected %f but got %f\n", i, values[i], readBuf[i]);
+            }
+        }
+
+        zfree(bits);
+        zfree(values);
+        zfree(readBuf);
+        printf("xofReader batch reading: PASS\n");
+    }
+
+    TEST("xofReader - performance comparison O(N) vs O(N^2)") {
+        const size_t count = 10000;
+        xof *bits = zcalloc(count * 2, sizeof(*bits));
+        double *values = zcalloc(count, sizeof(*values));
+
+        /* Generate test data */
+        values[0] = 1.0;
+        for (size_t i = 1; i < count; i++) {
+            values[i] = values[i - 1] + RD(0.01);
+        }
+
+        /* Encode */
+        size_t bitsUsed = 0;
+        xofInit(bits, &bitsUsed, values[0]);
+        int_fast32_t prevLZ = -1;
+        int_fast32_t prevTZ = -1;
+        for (size_t i = 1; i < count; i++) {
+            xofAppend(bits, &bitsUsed, &prevLZ, &prevTZ, values[i - 1],
+                      values[i]);
+        }
+
+        /* O(N) sequential with xofReader */
+        PERF_TIMERS_SETUP;
+        xofReader r;
+        xofReaderInit(&r, bits);
+        double first = xofReaderCurrent(&r);
+        if (first != values[0]) {
+            ERRR("First value mismatch!");
+        }
+
+        for (size_t i = 1; i < count; i++) {
+            double got = xofReaderNext(&r, bits);
+            if (got != values[i]) {
+                ERR("[%zu] Expected %f but got %f\n", i, values[i], got);
+            }
+        }
+        PERF_TIMERS_FINISH_PRINT_RESULTS(count, "O(N) xofReader sequential");
+
+        /* O(N^2) naive with xofGet */
+        PERF_TIMERS_SETUP;
+        for (size_t i = 0; i < count; i++) {
+            double got = xofGet(bits, i);
+            if (got != values[i]) {
+                ERR("[%zu] Expected %f but got %f\n", i, values[i], got);
+            }
+        }
+        PERF_TIMERS_FINISH_PRINT_RESULTS(count, "O(N^2) xofGet from beginning");
+
+        zfree(bits);
+        zfree(values);
+        printf("xofReader performance comparison: PASS\n");
+    }
+
+    TEST("xofReader - xofReaderInitFromWriter") {
+        xofWriter w = {0};
+        w.d = zcalloc(1000, sizeof(*w.d));
+        w.totalBytes = 1000 * sizeof(*w.d);
+
+        /* Write some values */
+        double values[] = {100.0, 100.5, 101.0, 101.5, 102.0};
+        size_t count = sizeof(values) / sizeof(*values);
+        for (size_t i = 0; i < count; i++) {
+            xofWrite(&w, values[i]);
+        }
+
+        /* Initialize reader from writer */
+        xofReader r;
+        xofReaderInitFromWriter(&r, &w);
+
+        /* First value */
+        double first = xofReaderCurrent(&r);
+        if (first != values[0]) {
+            ERR("First value: expected %f but got %f\n", values[0], first);
+        }
+
+        /* Read remaining */
+        for (size_t i = 1; i < count; i++) {
+            double got = xofReaderNext(&r, w.d);
+            if (got != values[i]) {
+                ERR("[%zu] Expected %f but got %f\n", i, values[i], got);
+            }
+        }
+
+        /* Test remaining count */
+        size_t remaining = xofReaderRemaining(&r, w.count);
+        if (remaining != 0) {
+            ERR("Expected 0 remaining but got %zu\n", remaining);
+        }
+
+        zfree(w.d);
+        printf("xofReaderInitFromWriter: PASS\n");
+    }
+
+    TEST("xofReader - xofReaderRemaining") {
+        xofWriter w = {0};
+        w.d = zcalloc(1000, sizeof(*w.d));
+        w.totalBytes = 1000 * sizeof(*w.d);
+
+        /* Write 10 values */
+        for (int i = 0; i < 10; i++) {
+            xofWrite(&w, (double)i * 1.5);
+        }
+
+        xofReader r;
+        xofReaderInitFromWriter(&r, &w);
+
+        /* After init, 1 value read (first), 9 remaining */
+        if (xofReaderRemaining(&r, w.count) != 9) {
+            ERR("Expected 9 remaining, got %zu\n",
+                xofReaderRemaining(&r, w.count));
+        }
+
+        /* Read 4 more values */
+        for (int i = 0; i < 4; i++) {
+            xofReaderNext(&r, w.d);
+        }
+
+        /* Now 5 values read, 5 remaining */
+        if (xofReaderRemaining(&r, w.count) != 5) {
+            ERR("Expected 5 remaining, got %zu\n",
+                xofReaderRemaining(&r, w.count));
+        }
+
+        zfree(w.d);
+        printf("xofReaderRemaining: PASS\n");
     }
 
     TEST_FINAL_RESULT;

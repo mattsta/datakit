@@ -24,7 +24,7 @@
 
 #include "flexCapacityManagement.h"
 
-#define multimapType_(map) _PTRLIB_TYPE(map)
+#define multimapType_(map) ((multimapType)_PTRLIB_TYPE(map))
 #define MULTIMAP_USE_(map) _PTRLIB_TOP_USE_ALL(map)
 #define MULTIMAP_TAG_(map, type) ((multimap *)_PTRLIB_TAG(map, type))
 
@@ -791,6 +791,8 @@ void multimapCopyKeys(multimap **restrict dst, const multimap *restrict src) {
 #define DOUBLE_NEWLINE 0
 #include "perf.h"
 
+#include "str.h" /* for xoroshiro128plus */
+
 #define REPORT_TIME 1
 #if REPORT_TIME
 #define TIME_INIT PERF_TIMERS_SETUP
@@ -905,14 +907,117 @@ int multimapTest(int argc, char *argv[]) {
         databox *values[1] = {&value};
         bool found = multimapLookup(m, &key, values);
         assert(found);
+        (void)found;
         assert(databoxEqual(&val, &value));
 
         multimapDelete(&m, &key);
         exists = multimapExists(m, &key);
         assert(!exists);
+        (void)exists;
 
         assert(multimapType_(m) == MULTIMAP_TYPE_SMALL);
         multimapReport(m);
+        multimapFree(m);
+    }
+
+    /* Regression test for mapIsSet inversion bug: inserting same key with
+     * different value should replace, not create a duplicate entry. */
+    TEST("key replacement regression (mapIsSet fix)...") {
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_2048);
+
+        /* Insert key=100, val=200 */
+        databox key1 = databoxNewSigned(100);
+        databox val1 = databoxNewSigned(200);
+        const databox *elements1[2] = {&key1, &val1};
+        bool replaced = multimapInsert(&m, elements1);
+        assert(!replaced); /* First insert is not a replacement */
+        assert(multimapCount(m) == 1);
+
+        /* Verify initial value */
+        databox result = {{0}};
+        databox *results[1] = {&result};
+        bool found = multimapLookup(m, &key1, results);
+        assert(found);
+        (void)found;
+        assert(databoxEqual(&val1, &result));
+
+        /* Insert same key with different value - should replace */
+        databox val2 = databoxNewSigned(999);
+        const databox *elements2[2] = {&key1, &val2};
+        replaced = multimapInsert(&m, elements2);
+        assert(replaced); /* This MUST return true - key was replaced */
+        assert(multimapCount(m) == 1); /* Size must stay at 1, not grow to 2 */
+
+        /* Verify value was updated */
+        result = (databox){{0}};
+        found = multimapLookup(m, &key1, results);
+        assert(found);
+        assert(databoxEqual(&val2, &result)); /* Value must be 999, not 200 */
+
+        /* Insert another different key - should NOT replace */
+        databox key2 = databoxNewSigned(101);
+        databox val3 = databoxNewSigned(300);
+        const databox *elements3[2] = {&key2, &val3};
+        replaced = multimapInsert(&m, elements3);
+        assert(!replaced);
+        (void)replaced;
+        assert(multimapCount(m) == 2); /* Now we have 2 entries */
+
+        multimapFree(m);
+    }
+
+    /* Test key replacement works across all multimap representations */
+    TEST("key replacement across Small/Medium/Full representations...") {
+        /* Use a small max size to force transitions between representations */
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_64);
+
+        /* Insert many keys to transition through Small->Medium->Full */
+        for (int i = 0; i < 1000; i++) {
+            char keyBuf[32];
+            snprintf(keyBuf, sizeof(keyBuf), "key%d", i);
+            databox key = databoxNewBytesString(keyBuf);
+            databox val = databoxNewSigned(i);
+            const databox *elements[2] = {&key, &val};
+            bool replaced = multimapInsert(&m, elements);
+            assert(!replaced);
+            (void)replaced;
+        }
+        assert(multimapCount(m) == 1000);
+
+        /* Now update all keys - each should report replaced=true */
+        for (int i = 0; i < 1000; i++) {
+            char keyBuf[32];
+            snprintf(keyBuf, sizeof(keyBuf), "key%d", i);
+            databox key = databoxNewBytesString(keyBuf);
+            databox val = databoxNewSigned(i + 10000); /* Different value */
+            const databox *elements[2] = {&key, &val};
+            bool replaced = multimapInsert(&m, elements);
+            if (!replaced) {
+                ERR("Key %s was not recognized as duplicate at iteration %d!",
+                    keyBuf, i);
+                assert(replaced);
+            }
+        }
+        /* Size must still be 1000, not 2000 */
+        assert(multimapCount(m) == 1000);
+
+        /* Verify all values were updated */
+        for (int i = 0; i < 1000; i++) {
+            char keyBuf[32];
+            snprintf(keyBuf, sizeof(keyBuf), "key%d", i);
+            databox key = databoxNewBytesString(keyBuf);
+            databox result = {{0}};
+            databox *results[1] = {&result};
+            bool found = multimapLookup(m, &key, results);
+            assert(found);
+            (void)found;
+            databox expected = databoxNewSigned(i + 10000);
+            if (!databoxEqual(&expected, &result)) {
+                ERR("Key %s has wrong value at iteration %d!", keyBuf, i);
+                assert(databoxEqual(&expected, &result));
+            }
+        }
+
         multimapFree(m);
     }
 
@@ -1781,6 +1886,1181 @@ int multimapTest(int argc, char *argv[]) {
         multimapVerify(m);
         multimapFree(m);
     }
+
+    /* ================================================================
+     * COMPREHENSIVE BINARY SEARCH FUZZ TESTS
+     * ================================================================
+     * These tests use an oracle (shadow data structure) to verify that
+     * every inserted element can ALWAYS be found via binary search,
+     * regardless of key distribution, map type, or insertion order.
+     * ================================================================ */
+
+    TEST("FUZZ: binary search correctness - sequential keys") {
+        /* Test sequential key insertion - stresses in-order binary search */
+        for (int limit = 0; limit < 4; limit++) {
+            flexCapSizeLimit capLimit = (flexCapSizeLimit[]){
+                FLEX_CAP_LEVEL_64, FLEX_CAP_LEVEL_256, FLEX_CAP_LEVEL_512,
+                FLEX_CAP_LEVEL_2048}[limit];
+
+            multimap *m = multimapNewLimit(2, capLimit);
+            const int32_t numKeys = 2000;
+
+            /* Insert sequential keys */
+            for (int32_t i = 0; i < numKeys; i++) {
+                databox key = databoxNewSigned(i);
+                databox val = databoxNewSigned(i * 100);
+                const databox *elements[2] = {&key, &val};
+                multimapInsert(&m, elements);
+
+                /* Verify ALL previously inserted keys can still be found */
+                for (int32_t j = 0; j <= i; j++) {
+                    databox checkKey = databoxNewSigned(j);
+                    if (!multimapExists(m, &checkKey)) {
+                        ERR("FUZZ FAIL: Sequential key %d not found after "
+                            "inserting key %d (limit=%d, type=%d)!",
+                            j, i, capLimit, multimapType_(m));
+                        assert(NULL);
+                    }
+                }
+            }
+
+            /* Final comprehensive check */
+            for (int32_t i = 0; i < numKeys; i++) {
+                databox key = databoxNewSigned(i);
+                databox gotVal = {{0}};
+                databox *vals[1] = {&gotVal};
+                bool found = multimapLookup(m, &key, vals);
+                if (!found || gotVal.data.i != i * 100) {
+                    ERR("FUZZ FAIL: Sequential lookup failed for key %d!", i);
+                    assert(NULL);
+                }
+            }
+
+            printf("    limit=%d type=%d count=%zu: OK\n", capLimit,
+                   multimapType_(m), multimapCount(m));
+            multimapFree(m);
+        }
+    }
+
+    TEST("FUZZ: binary search correctness - reverse sequential keys") {
+        /* Reverse insertion stresses insertions at the beginning */
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+        const int32_t numKeys = 1500;
+
+        /* Insert in reverse order */
+        for (int32_t i = numKeys - 1; i >= 0; i--) {
+            databox key = databoxNewSigned(i);
+            databox val = databoxNewSigned(i);
+            const databox *elements[2] = {&key, &val};
+            multimapInsert(&m, elements);
+
+            /* Verify this key and a sample of others */
+            if (!multimapExists(m, &key)) {
+                ERR("FUZZ FAIL: Reverse key %d not found immediately!", i);
+                assert(NULL);
+            }
+
+            /* Check first 10 keys inserted (highest values) */
+            for (int32_t j = numKeys - 1; j > numKeys - 11 && j >= i; j--) {
+                databox checkKey = databoxNewSigned(j);
+                if (!multimapExists(m, &checkKey)) {
+                    ERR("FUZZ FAIL: Reverse key %d lost after inserting %d!", j,
+                        i);
+                    assert(NULL);
+                }
+            }
+        }
+
+        /* Final comprehensive verification */
+        for (int32_t i = 0; i < numKeys; i++) {
+            databox key = databoxNewSigned(i);
+            if (!multimapExists(m, &key)) {
+                ERR("FUZZ FAIL: Reverse final check failed for key %d!", i);
+                assert(NULL);
+            }
+        }
+
+        printf("    type=%d count=%zu: OK\n", multimapType_(m),
+               multimapCount(m));
+        multimapFree(m);
+    }
+
+    TEST("FUZZ: binary search correctness - random keys with oracle") {
+        /* Use oracle (sorted array) to track what should exist */
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+        const int32_t numKeys = 3000;
+
+        /* Oracle: simple sorted array of inserted keys */
+        int64_t *oracle = zcalloc(numKeys, sizeof(int64_t));
+        size_t oracleCount = 0;
+
+        uint64_t seed[2] = {0xDEADBEEF12345678ULL, 0xCAFEBABE87654321ULL};
+
+        for (int32_t i = 0; i < numKeys; i++) {
+            /* Generate random key */
+            int64_t keyVal =
+                (int64_t)(xoroshiro128plus(seed) % 1000000) - 500000;
+
+            databox key = databoxNewSigned(keyVal);
+            databox val = databoxNewSigned(i);
+            const databox *elements[2] = {&key, &val};
+
+            /* Check if key already exists (duplicate) */
+            bool alreadyExists = multimapExists(m, &key);
+
+            multimapInsert(&m, elements);
+
+            /* Add to oracle if new */
+            if (!alreadyExists) {
+                /* Insert sorted */
+                size_t insertPos = oracleCount;
+                for (size_t j = 0; j < oracleCount; j++) {
+                    if (oracle[j] > keyVal) {
+                        insertPos = j;
+                        break;
+                    }
+                }
+                memmove(&oracle[insertPos + 1], &oracle[insertPos],
+                        (oracleCount - insertPos) * sizeof(int64_t));
+                oracle[insertPos] = keyVal;
+                oracleCount++;
+            }
+
+            /* Periodic full oracle verification */
+            if (i % 500 == 0 || i == numKeys - 1) {
+                for (size_t j = 0; j < oracleCount; j++) {
+                    databox checkKey = databoxNewSigned(oracle[j]);
+                    if (!multimapExists(m, &checkKey)) {
+                        ERR("FUZZ FAIL: Oracle key %" PRId64
+                            " (idx %zu) not found "
+                            "after %d inserts!",
+                            oracle[j], j, i);
+                        assert(NULL);
+                    }
+                }
+            }
+        }
+
+        printf("    type=%d count=%zu oracle=%zu: OK\n", multimapType_(m),
+               multimapCount(m), oracleCount);
+
+        zfree(oracle);
+        multimapFree(m);
+    }
+
+    TEST("FUZZ: binary search correctness - clustered keys") {
+        /* Keys clustered in narrow ranges stress map splitting */
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+        const int32_t numClusters = 10;
+        const int32_t keysPerCluster = 200;
+
+        int64_t *allKeys =
+            zcalloc(numClusters * keysPerCluster, sizeof(int64_t));
+        size_t keyCount = 0;
+
+        uint64_t seed[2] = {42, 123};
+
+        /* Create clusters at widely spaced base values */
+        for (int32_t c = 0; c < numClusters; c++) {
+            int64_t clusterBase = c * 100000;
+
+            for (int32_t k = 0; k < keysPerCluster; k++) {
+                /* Keys within ±50 of cluster base */
+                int64_t offset = (int64_t)(xoroshiro128plus(seed) % 100) - 50;
+                int64_t keyVal = clusterBase + offset;
+
+                databox key = databoxNewSigned(keyVal);
+                databox val = databoxNewSigned(c * 1000 + k);
+                const databox *elements[2] = {&key, &val};
+
+                if (!multimapExists(m, &key)) {
+                    multimapInsert(&m, elements);
+                    allKeys[keyCount++] = keyVal;
+                }
+            }
+
+            /* Verify all keys in this and previous clusters */
+            for (size_t j = 0; j < keyCount; j++) {
+                databox checkKey = databoxNewSigned(allKeys[j]);
+                if (!multimapExists(m, &checkKey)) {
+                    ERR("FUZZ FAIL: Clustered key %" PRId64
+                        " not found after cluster "
+                        "%d!",
+                        allKeys[j], c);
+                    assert(NULL);
+                }
+            }
+        }
+
+        printf("    type=%d count=%zu clusters=%d: OK\n", multimapType_(m),
+               multimapCount(m), numClusters);
+
+        zfree(allKeys);
+        multimapFree(m);
+    }
+
+    TEST("FUZZ: binary search correctness - interleaved insert/delete") {
+        /* Interleaved operations stress binary search with changing data */
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+
+        /* Oracle tracks current state */
+        int64_t *oracle = zcalloc(10000, sizeof(int64_t));
+        size_t oracleCount = 0;
+
+        uint64_t seed[2] = {99999, 11111};
+
+        for (int32_t round = 0; round < 5000; round++) {
+            uint64_t op = xoroshiro128plus(seed);
+
+            if (op % 3 != 0 || oracleCount == 0) {
+                /* Insert (2/3 probability) */
+                int64_t keyVal = (int64_t)(xoroshiro128plus(seed) % 50000);
+                databox key = databoxNewSigned(keyVal);
+                databox val = databoxNewSigned(round);
+                const databox *elements[2] = {&key, &val};
+
+                if (!multimapExists(m, &key)) {
+                    multimapInsert(&m, elements);
+
+                    /* Add to oracle (keep sorted) */
+                    size_t insertPos = oracleCount;
+                    for (size_t j = 0; j < oracleCount; j++) {
+                        if (oracle[j] > keyVal) {
+                            insertPos = j;
+                            break;
+                        }
+                    }
+                    memmove(&oracle[insertPos + 1], &oracle[insertPos],
+                            (oracleCount - insertPos) * sizeof(int64_t));
+                    oracle[insertPos] = keyVal;
+                    oracleCount++;
+                }
+            } else {
+                /* Delete (1/3 probability) */
+                size_t delIdx = xoroshiro128plus(seed) % oracleCount;
+                int64_t keyVal = oracle[delIdx];
+                databox key = databoxNewSigned(keyVal);
+
+                bool deleted = multimapDelete(&m, &key);
+                if (!deleted) {
+                    ERR("FUZZ FAIL: Delete of oracle key %" PRId64 " failed!",
+                        keyVal);
+                    assert(NULL);
+                }
+
+                /* Remove from oracle */
+                memmove(&oracle[delIdx], &oracle[delIdx + 1],
+                        (oracleCount - delIdx - 1) * sizeof(int64_t));
+                oracleCount--;
+            }
+
+            /* Periodic full verification */
+            if (round % 500 == 0) {
+                for (size_t j = 0; j < oracleCount; j++) {
+                    databox checkKey = databoxNewSigned(oracle[j]);
+                    if (!multimapExists(m, &checkKey)) {
+                        ERR("FUZZ FAIL: Oracle key %" PRId64
+                            " missing at round %d!",
+                            oracle[j], round);
+                        assert(NULL);
+                    }
+                }
+                assert(multimapCount(m) == oracleCount);
+            }
+        }
+
+        printf("    type=%d final_count=%zu: OK\n", multimapType_(m),
+               oracleCount);
+
+        zfree(oracle);
+        multimapFree(m);
+    }
+
+    TEST("FUZZ: binary search correctness - boundary values") {
+        /* Test extreme and boundary integer values */
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+
+        int64_t boundaryKeys[] = {
+            INT64_MIN,
+            INT64_MIN + 1,
+            INT64_MIN + 2,
+            -1000000000000LL,
+            -1000000LL,
+            -1000,
+            -100,
+            -10,
+            -2,
+            -1,
+            0,
+            1,
+            2,
+            10,
+            100,
+            1000,
+            1000000LL,
+            1000000000000LL,
+            INT64_MAX - 2,
+            INT64_MAX - 1,
+            INT64_MAX,
+        };
+        size_t numBoundary = sizeof(boundaryKeys) / sizeof(boundaryKeys[0]);
+
+        /* Insert all boundary values */
+        for (size_t i = 0; i < numBoundary; i++) {
+            databox key = databoxNewSigned(boundaryKeys[i]);
+            databox val = databoxNewSigned((int64_t)i);
+            const databox *elements[2] = {&key, &val};
+            multimapInsert(&m, elements);
+        }
+
+        /* Verify all can be found */
+        for (size_t i = 0; i < numBoundary; i++) {
+            databox key = databoxNewSigned(boundaryKeys[i]);
+            if (!multimapExists(m, &key)) {
+                ERR("FUZZ FAIL: Boundary key %" PRId64 " not found!",
+                    boundaryKeys[i]);
+                assert(NULL);
+            }
+
+            databox gotVal = {{0}};
+            databox *vals[1] = {&gotVal};
+            bool found = multimapLookup(m, &key, vals);
+            if (!found || gotVal.data.i != (int64_t)i) {
+                ERR("FUZZ FAIL: Boundary lookup wrong for %" PRId64 "!",
+                    boundaryKeys[i]);
+                assert(NULL);
+            }
+        }
+
+        /* Now interleave with normal values */
+        for (int32_t i = -1000; i <= 1000; i++) {
+            databox key = databoxNewSigned(i);
+            databox val = databoxNewSigned(i + 10000);
+            const databox *elements[2] = {&key, &val};
+            if (!multimapExists(m, &key)) {
+                multimapInsert(&m, elements);
+            }
+        }
+
+        /* Re-verify boundaries still work */
+        for (size_t i = 0; i < numBoundary; i++) {
+            databox key = databoxNewSigned(boundaryKeys[i]);
+            if (!multimapExists(m, &key)) {
+                ERR("FUZZ FAIL: Boundary key %" PRId64
+                    " lost after interleave!",
+                    boundaryKeys[i]);
+                assert(NULL);
+            }
+        }
+
+        printf("    type=%d count=%zu boundaries=%zu: OK\n", multimapType_(m),
+               multimapCount(m), numBoundary);
+        multimapFree(m);
+    }
+
+    TEST("FUZZ: binary search correctness - mixed types (int/string)") {
+        /* Mix integer and string keys - tests databoxCompare across types */
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+
+        const int32_t numInts = 500;
+        const int32_t numStrings = 500;
+
+        /* Insert integers */
+        for (int32_t i = 0; i < numInts; i++) {
+            databox key = databoxNewSigned(i * 7 - 1000);
+            databox val = databoxNewSigned(i);
+            const databox *elements[2] = {&key, &val};
+            multimapInsert(&m, elements);
+        }
+
+        /* Insert strings */
+        for (int32_t i = 0; i < numStrings; i++) {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "key_%05d", i);
+            databox key = databoxNewBytesString(buf);
+            databox val = databoxNewSigned(i + 10000);
+            const databox *elements[2] = {&key, &val};
+            multimapInsert(&m, elements);
+        }
+
+        /* Verify all integers */
+        for (int32_t i = 0; i < numInts; i++) {
+            databox key = databoxNewSigned(i * 7 - 1000);
+            if (!multimapExists(m, &key)) {
+                ERR("FUZZ FAIL: Mixed-type int key %d not found!",
+                    i * 7 - 1000);
+                assert(NULL);
+            }
+        }
+
+        /* Verify all strings */
+        for (int32_t i = 0; i < numStrings; i++) {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "key_%05d", i);
+            databox key = databoxNewBytesString(buf);
+            if (!multimapExists(m, &key)) {
+                ERR("FUZZ FAIL: Mixed-type string key %s not found!", buf);
+                assert(NULL);
+            }
+        }
+
+        /* Verify non-existent keys return false */
+        databox noKey1 = databoxNewSigned(999999);
+        databox noKey2 = databoxNewBytesString("nonexistent_key");
+        if (multimapExists(m, &noKey1) || multimapExists(m, &noKey2)) {
+            ERR("FUZZ FAIL: Non-existent key found! %s", "");
+            assert(NULL);
+        }
+
+        printf("    type=%d count=%zu ints=%d strings=%d: OK\n",
+               multimapType_(m), multimapCount(m), numInts, numStrings);
+        multimapFree(m);
+    }
+
+    TEST("FUZZ: binary search correctness - type transitions") {
+        /* Verify binary search works correctly during Small→Medium→Full */
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_64);
+
+        int64_t *oracle = zcalloc(5000, sizeof(int64_t));
+        size_t oracleCount = 0;
+        uint64_t seed[2] = {777, 888};
+
+        multimapType lastType = MULTIMAP_TYPE_SMALL;
+
+        for (int32_t i = 0; i < 5000; i++) {
+            int64_t keyVal = (int64_t)(xoroshiro128plus(seed) % 100000);
+            databox key = databoxNewSigned(keyVal);
+            databox val = databoxNewSigned(i);
+            const databox *elements[2] = {&key, &val};
+
+            if (!multimapExists(m, &key)) {
+                multimapInsert(&m, elements);
+                oracle[oracleCount++] = keyVal;
+            }
+
+            multimapType curType = multimapType_(m);
+            if (curType != lastType) {
+                /* Type transition occurred - full verification */
+                printf("      Transition at %d: %d -> %d (count=%zu)\n", i,
+                       lastType, curType, oracleCount);
+
+                for (size_t j = 0; j < oracleCount; j++) {
+                    databox checkKey = databoxNewSigned(oracle[j]);
+                    if (!multimapExists(m, &checkKey)) {
+                        ERR("FUZZ FAIL: Key %" PRId64 " lost during %d->%d "
+                            "transition!",
+                            oracle[j], lastType, curType);
+                        assert(NULL);
+                    }
+                }
+                lastType = curType;
+            }
+        }
+
+        /* Final verification */
+        for (size_t j = 0; j < oracleCount; j++) {
+            databox checkKey = databoxNewSigned(oracle[j]);
+            if (!multimapExists(m, &checkKey)) {
+                ERR("FUZZ FAIL: Final check - key %" PRId64 " missing!",
+                    oracle[j]);
+                assert(NULL);
+            }
+        }
+
+        printf("    final_type=%d count=%zu: OK\n", multimapType_(m),
+               oracleCount);
+
+        zfree(oracle);
+        multimapFree(m);
+    }
+
+    TEST("FUZZ: binary search correctness - duplicate keys (full width)") {
+        /* Same key with different values - stresses full-width search */
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+
+        const int32_t numUniqueKeys = 50;
+        const int32_t valsPerKey = 100;
+
+        /* Insert many values for each key */
+        for (int32_t k = 0; k < numUniqueKeys; k++) {
+            for (int32_t v = 0; v < valsPerKey; v++) {
+                databox key = databoxNewSigned(k * 1000);
+                databox val = databoxNewSigned(k * 10000 + v);
+                const databox *elements[2] = {&key, &val};
+                multimapInsertFullWidth(&m, elements);
+            }
+
+            /* Verify all values for this key exist */
+            for (int32_t v = 0; v < valsPerKey; v++) {
+                databox key = databoxNewSigned(k * 1000);
+                databox val = databoxNewSigned(k * 10000 + v);
+                const databox *elements[2] = {&key, &val};
+                if (!multimapExistsFullWidth(m, elements)) {
+                    ERR("FUZZ FAIL: FullWidth key=%d val=%d not found!",
+                        k * 1000, k * 10000 + v);
+                    assert(NULL);
+                }
+            }
+        }
+
+        /* Verify total count */
+        size_t expected = (size_t)numUniqueKeys * valsPerKey;
+        if (multimapCount(m) != expected) {
+            ERR("FUZZ FAIL: FullWidth count %zu != expected %zu!",
+                multimapCount(m), expected);
+            assert(NULL);
+        }
+
+        printf("    type=%d count=%zu keys=%d vals_per=%d: OK\n",
+               multimapType_(m), multimapCount(m), numUniqueKeys, valsPerKey);
+        multimapFree(m);
+    }
+
+    TEST("FUZZ: binary search correctness - string keys comprehensive") {
+        /* String keys with various lengths and content */
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+
+        /* Store all inserted strings for verification */
+        char **oracle = zcalloc(2000, sizeof(char *));
+        size_t oracleCount = 0;
+
+        uint64_t seed[2] = {12345, 67890};
+
+        /* Various string patterns */
+        const char *prefixes[] = {"", "a", "aa", "aaa", "b", "ab", "ba", "z"};
+        size_t numPrefixes = sizeof(prefixes) / sizeof(prefixes[0]);
+
+        for (int32_t i = 0; i < 1000; i++) {
+            char buf[128];
+            size_t prefixIdx = xoroshiro128plus(seed) % numPrefixes;
+            int32_t suffix = (int32_t)(xoroshiro128plus(seed) % 10000);
+            snprintf(buf, sizeof(buf), "%s%05d", prefixes[prefixIdx], suffix);
+
+            databox key = databoxNewBytesString(buf);
+            databox val = databoxNewSigned(i);
+            const databox *elements[2] = {&key, &val};
+
+            if (!multimapExists(m, &key)) {
+                multimapInsert(&m, elements);
+                size_t len = strlen(buf) + 1;
+                oracle[oracleCount] = zmalloc(len);
+                memcpy(oracle[oracleCount], buf, len);
+                oracleCount++;
+            }
+        }
+
+        /* Verify all strings */
+        for (size_t j = 0; j < oracleCount; j++) {
+            databox key = databoxNewBytesString(oracle[j]);
+            if (!multimapExists(m, &key)) {
+                ERR("FUZZ FAIL: String key '%s' not found!", oracle[j]);
+                assert(NULL);
+            }
+        }
+
+        /* Cleanup */
+        for (size_t j = 0; j < oracleCount; j++) {
+            zfree(oracle[j]);
+        }
+        zfree(oracle);
+
+        printf("    type=%d count=%zu: OK\n", multimapType_(m), oracleCount);
+        multimapFree(m);
+    }
+
+    TEST("FUZZ: rangeBox consistency in Full maps") {
+        /* Verify rangeBox correctly reflects first key of each map */
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_64);
+
+        /* Insert enough to create Full map with multiple internal maps */
+        for (int32_t i = 0; i < 3000; i++) {
+            databox key = databoxNewSigned(i);
+            databox val = databoxNewSigned(i * 10);
+            const databox *elements[2] = {&key, &val};
+            multimapInsert(&m, elements);
+        }
+
+        if (multimapType_(m) != MULTIMAP_TYPE_FULL) {
+            printf("    Skipped (didn't reach Full type)\n");
+            multimapFree(m);
+        } else {
+            /* Verify all entries can be found via iteration AND lookup */
+            multimapIterator iter;
+            multimapIteratorInit(m, &iter, true);
+            databox iterKey = {{0}};
+            databox iterVal = {{0}};
+            databox *iterElements[2] = {&iterKey, &iterVal};
+            int32_t count = 0;
+            intmax_t prevKey = INTMAX_MIN;
+
+            while (multimapIteratorNext(&iter, iterElements)) {
+                /* Verify sorted order */
+                if (iterKey.data.i < prevKey) {
+                    ERR("FUZZ FAIL: Iterator out of order! %" PRIdMAX
+                        " < %" PRIdMAX,
+                        iterKey.data.i, prevKey);
+                    assert(NULL);
+                }
+                prevKey = iterKey.data.i;
+
+                /* Verify lookup works for this key */
+                if (!multimapExists(m, &iterKey)) {
+                    ERR("FUZZ FAIL: Iterator key %" PRIdMAX
+                        " not found via lookup!",
+                        iterKey.data.i);
+                    assert(NULL);
+                }
+                count++;
+            }
+
+            if (count != 3000) {
+                ERR("FUZZ FAIL: Iterator count %d != 3000!", count);
+                assert(NULL);
+            }
+
+            printf("    type=FULL count=%d verified_order=OK: OK\n", count);
+            multimapFree(m);
+        }
+    }
+
+    TEST("FUZZ: stress test - massive random operations") {
+        /* High-volume random insert/delete/lookup */
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+
+        /* Use bitmap as lightweight oracle for existence */
+        const size_t keySpace = 100000;
+        uint8_t *exists = zcalloc((keySpace + 7) / 8, 1);
+        size_t existCount = 0;
+
+#define BIT_SET(arr, idx) ((arr)[(idx) / 8] |= (1 << ((idx) % 8)))
+#define BIT_CLR(arr, idx) ((arr)[(idx) / 8] &= ~(1 << ((idx) % 8)))
+#define BIT_GET(arr, idx) (((arr)[(idx) / 8] >> ((idx) % 8)) & 1)
+
+        uint64_t seed[2] = {0xABCDEF, 0x123456};
+        int insertOps = 0, deleteOps = 0, lookupOps = 0;
+
+        for (int32_t round = 0; round < 50000; round++) {
+            uint64_t op = xoroshiro128plus(seed) % 10;
+            size_t keyIdx = xoroshiro128plus(seed) % keySpace;
+            databox key = databoxNewSigned((int64_t)keyIdx);
+
+            if (op < 5) {
+                /* Insert (50%) */
+                databox val = databoxNewSigned((int64_t)round);
+                const databox *elements[2] = {&key, &val};
+                if (!BIT_GET(exists, keyIdx)) {
+                    multimapInsert(&m, elements);
+                    BIT_SET(exists, keyIdx);
+                    existCount++;
+                }
+                insertOps++;
+            } else if (op < 8) {
+                /* Lookup (30%) */
+                bool found = multimapExists(m, &key);
+                bool shouldExist = BIT_GET(exists, keyIdx);
+                if (found != shouldExist) {
+                    ERR("FUZZ FAIL: Lookup mismatch for key %zu! found=%d "
+                        "should=%d",
+                        keyIdx, found, shouldExist);
+                    assert(NULL);
+                }
+                lookupOps++;
+            } else {
+                /* Delete (20%) */
+                if (BIT_GET(exists, keyIdx)) {
+                    bool deleted = multimapDelete(&m, &key);
+                    if (!deleted) {
+                        ERR("FUZZ FAIL: Delete of existing key %zu failed!",
+                            keyIdx);
+                        assert(NULL);
+                    }
+                    BIT_CLR(exists, keyIdx);
+                    existCount--;
+                }
+                deleteOps++;
+            }
+
+            /* Periodic count verification */
+            if (round % 5000 == 0) {
+                if (multimapCount(m) != existCount) {
+                    ERR("FUZZ FAIL: Count mismatch! map=%zu oracle=%zu",
+                        multimapCount(m), existCount);
+                    assert(NULL);
+                }
+            }
+        }
+
+#undef BIT_SET
+#undef BIT_CLR
+#undef BIT_GET
+
+        printf("    type=%d count=%zu ops(I/D/L)=%d/%d/%d: OK\n",
+               multimapType_(m), existCount, insertOps, deleteOps, lookupOps);
+
+        zfree(exists);
+        multimapFree(m);
+    }
+
+    TEST("FUZZ: explicit Small map verification") {
+        /* Stay in Small map and verify binary search works correctly */
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_2048);
+        assert(multimapType_(m) == MULTIMAP_TYPE_SMALL);
+
+        /* Insert few enough entries to stay in Small */
+        const int32_t numKeys = 20;
+        uint64_t seed[2] = {111, 222};
+
+        for (int32_t i = 0; i < numKeys; i++) {
+            int64_t keyVal = (int64_t)(xoroshiro128plus(seed) % 1000);
+            databox key = databoxNewSigned(keyVal);
+            databox val = databoxNewSigned(i);
+            const databox *elements[2] = {&key, &val};
+            if (!multimapExists(m, &key)) {
+                multimapInsert(&m, elements);
+            }
+        }
+
+        /* Verify still Small */
+        if (multimapType_(m) != MULTIMAP_TYPE_SMALL) {
+            ERR("FUZZ FAIL: Expected Small map, got type %d!",
+                multimapType_(m));
+            assert(NULL);
+        }
+
+        /* Verify all entries findable */
+        seed[0] = 111;
+        seed[1] = 222;
+        for (int32_t i = 0; i < numKeys; i++) {
+            int64_t keyVal = (int64_t)(xoroshiro128plus(seed) % 1000);
+            databox key = databoxNewSigned(keyVal);
+            /* Just verify lookup doesn't crash and returns consistent result */
+            multimapExists(m, &key);
+        }
+
+        printf("    type=SMALL count=%zu: OK\n", multimapCount(m));
+        multimapFree(m);
+    }
+
+    TEST("FUZZ: explicit Medium map verification") {
+        /* Stay in Medium map and verify binary search works correctly */
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_64);
+
+        int64_t *oracle = zcalloc(100, sizeof(int64_t));
+        size_t oracleCount = 0;
+
+        /* Insert enough to transition Small->Medium but not to Full */
+        for (int32_t i = 0; i < 50; i++) {
+            databox key = databoxNewSigned(i * 2);
+            databox val = databoxNewSigned(i);
+            const databox *elements[2] = {&key, &val};
+            multimapInsert(&m, elements);
+            oracle[oracleCount++] = i * 2;
+
+            /* Check if we've reached Medium */
+            if (multimapType_(m) == MULTIMAP_TYPE_MEDIUM) {
+                /* Verify all keys still findable in Medium */
+                for (size_t j = 0; j < oracleCount; j++) {
+                    databox checkKey = databoxNewSigned(oracle[j]);
+                    if (!multimapExists(m, &checkKey)) {
+                        ERR("FUZZ FAIL: Key %" PRId64 " lost in Medium!",
+                            oracle[j]);
+                        assert(NULL);
+                    }
+                }
+                printf("    Reached Medium at count=%zu: verified\n",
+                       oracleCount);
+            }
+
+            /* Stop before reaching Full */
+            if (multimapType_(m) == MULTIMAP_TYPE_FULL) {
+                break;
+            }
+        }
+
+        /* Final verification if still Medium */
+        if (multimapType_(m) == MULTIMAP_TYPE_MEDIUM) {
+            for (size_t j = 0; j < oracleCount; j++) {
+                databox checkKey = databoxNewSigned(oracle[j]);
+                if (!multimapExists(m, &checkKey)) {
+                    ERR("FUZZ FAIL: Final Medium check - key %" PRId64
+                        " missing!",
+                        oracle[j]);
+                    assert(NULL);
+                }
+            }
+        }
+
+        printf("    type=%d count=%zu: OK\n", multimapType_(m), oracleCount);
+        zfree(oracle);
+        multimapFree(m);
+    }
+
+    TEST("FUZZ: explicit Full map with many submaps") {
+        /* Create Full map with many internal submaps */
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_64);
+
+        int64_t *oracle = zcalloc(5000, sizeof(int64_t));
+        size_t oracleCount = 0;
+
+        /* Insert to create Full map with splits */
+        for (int32_t i = 0; i < 5000; i++) {
+            databox key = databoxNewSigned(i);
+            databox val = databoxNewSigned(i * 10);
+            const databox *elements[2] = {&key, &val};
+            multimapInsert(&m, elements);
+            oracle[oracleCount++] = i;
+        }
+
+        assert(multimapType_(m) == MULTIMAP_TYPE_FULL);
+
+        /* Random access pattern to stress binary search across submaps */
+        uint64_t seed[2] = {333, 444};
+        for (int32_t round = 0; round < 10000; round++) {
+            size_t idx = xoroshiro128plus(seed) % oracleCount;
+            databox key = databoxNewSigned(oracle[idx]);
+            if (!multimapExists(m, &key)) {
+                ERR("FUZZ FAIL: Full random access - key %" PRId64
+                    " not found!",
+                    oracle[idx]);
+                assert(NULL);
+            }
+        }
+
+        printf("    type=FULL count=%zu random_accesses=10000: OK\n",
+               oracleCount);
+        zfree(oracle);
+        multimapFree(m);
+    }
+
+    TEST("FUZZ: binary search at exact transition boundaries") {
+        /* Test binary search works correctly AT the exact transition points */
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_64);
+
+        int64_t *oracle = zcalloc(200, sizeof(int64_t));
+        size_t oracleCount = 0;
+        int transitions = 0;
+        multimapType prevType = MULTIMAP_TYPE_SMALL;
+
+        for (int32_t i = 0; i < 200; i++) {
+            databox key = databoxNewSigned(i);
+            databox val = databoxNewSigned(i);
+            const databox *elements[2] = {&key, &val};
+            multimapInsert(&m, elements);
+            oracle[oracleCount++] = i;
+
+            multimapType curType = multimapType_(m);
+            if (curType != prevType) {
+                transitions++;
+                printf("      Transition %d: %s->%s at i=%d\n", transitions,
+                       prevType == 1 ? "Small"
+                                     : (prevType == 2 ? "Medium" : "Full"),
+                       curType == 1 ? "Small"
+                                    : (curType == 2 ? "Medium" : "Full"),
+                       i);
+
+                /* At transition, verify EVERY key */
+                for (size_t j = 0; j < oracleCount; j++) {
+                    databox checkKey = databoxNewSigned(oracle[j]);
+                    if (!multimapExists(m, &checkKey)) {
+                        ERR("FUZZ FAIL: Transition boundary - key %" PRId64
+                            " lost!",
+                            oracle[j]);
+                        assert(NULL);
+                    }
+                }
+
+                /* Also delete and re-insert at boundary */
+                databox boundaryKey = databoxNewSigned(i);
+                bool deleted = multimapDelete(&m, &boundaryKey);
+                assert(deleted);
+                (void)deleted;
+                assert(!multimapExists(m, &boundaryKey));
+                multimapInsert(&m, elements);
+                assert(multimapExists(m, &boundaryKey));
+
+                prevType = curType;
+            }
+        }
+
+        assert(transitions >=
+               2); /* Should see Small->Medium and Medium->Full */
+        printf("    transitions=%d final_type=%d count=%zu: OK\n", transitions,
+               multimapType_(m), oracleCount);
+
+        zfree(oracle);
+        multimapFree(m);
+    }
+
+    TEST("FUZZ: lookup nonexistent keys at all sizes") {
+        /* Verify lookups for keys that DON'T exist work at all map sizes */
+        for (int limit = 0; limit < 3; limit++) {
+            flexCapSizeLimit capLimit = (flexCapSizeLimit[]){
+                FLEX_CAP_LEVEL_2048, /* Stay Small longer */
+                FLEX_CAP_LEVEL_256,  /* Transition to Medium/Full */
+                FLEX_CAP_LEVEL_64    /* Quick Full transition */
+            }[limit];
+
+            multimap *m = multimapNewLimit(2, capLimit);
+
+            /* Insert even keys only */
+            for (int32_t i = 0; i < 500; i += 2) {
+                databox key = databoxNewSigned(i);
+                databox val = databoxNewSigned(i);
+                const databox *elements[2] = {&key, &val};
+                multimapInsert(&m, elements);
+            }
+
+            /* Lookup odd keys - should all return false */
+            for (int32_t i = 1; i < 500; i += 2) {
+                databox key = databoxNewSigned(i);
+                if (multimapExists(m, &key)) {
+                    ERR("FUZZ FAIL: Non-existent key %d found! type=%d", i,
+                        multimapType_(m));
+                    assert(NULL);
+                }
+            }
+
+            /* Verify even keys exist */
+            for (int32_t i = 0; i < 500; i += 2) {
+                databox key = databoxNewSigned(i);
+                if (!multimapExists(m, &key)) {
+                    ERR("FUZZ FAIL: Existing key %d not found! type=%d", i,
+                        multimapType_(m));
+                    assert(NULL);
+                }
+            }
+
+            printf("    capLimit=%d type=%d: OK\n", capLimit, multimapType_(m));
+            multimapFree(m);
+        }
+    }
+
+    printf("\n=== All multimap binary search fuzz tests passed! ===\n\n");
+
+    /* ================================================================
+     * DIRECT IMPLEMENTATION TESTS - Key Replacement Regression
+     * Test each implementation (Small, Medium, Full) directly
+     * ================================================================ */
+
+    TEST("DIRECT: multimapSmall key replacement") {
+        /* Test Small implementation directly */
+        multimapSmall *s =
+            multimapSmallNew(2, false); /* mapIsSet=false = MAP */
+
+        /* Insert 10 key/value pairs */
+        for (int i = 0; i < 10; i++) {
+            databox key = databoxNewSigned(i);
+            databox val = databoxNewSigned(i * 100);
+            const databox *elements[2] = {&key, &val};
+            bool replaced = multimapSmallInsert(s, elements);
+            assert(!replaced); /* First insert is not replacement */
+            (void)replaced;
+        }
+        assert(multimapSmallCount(s) == 10);
+
+        /* Update all keys - should replace, count stays at 10 */
+        for (int i = 0; i < 10; i++) {
+            databox key = databoxNewSigned(i);
+            databox val = databoxNewSigned(i * 1000); /* Different value */
+            const databox *elements[2] = {&key, &val};
+            bool replaced = multimapSmallInsert(s, elements);
+            if (!replaced) {
+                ERR("multimapSmallInsert: key %d not recognized as duplicate!",
+                    i);
+                assert(replaced);
+            }
+        }
+        assert(multimapSmallCount(s) == 10); /* Count must stay at 10 */
+
+        /* Verify values were updated */
+        for (int i = 0; i < 10; i++) {
+            databox key = databoxNewSigned(i);
+            databox result = {{0}};
+            databox *results[1] = {&result};
+            bool found = multimapSmallLookup(s, &key, results);
+            assert(found);
+            (void)found;
+            databox expected = databoxNewSigned(i * 1000);
+            assert(databoxEqual(&expected, &result));
+            (void)expected;
+        }
+
+        multimapSmallFree(s);
+    }
+
+    TEST("DIRECT: multimapMedium key replacement") {
+        /* Create Medium by splitting Small */
+        multimapSmall *small = multimapSmallNew(2, false);
+
+        /* Insert enough to make meaningful split */
+        for (int i = 0; i < 20; i++) {
+            databox key = databoxNewSigned(i);
+            databox val = databoxNewSigned(i * 100);
+            const databox *elements[2] = {&key, &val};
+            multimapSmallInsert(small, elements);
+        }
+
+        /* Create Medium from Small */
+        multimapMedium *m = multimapMediumNewFromOneGrow(
+            small, small->map, small->middle, 2, false);
+
+        /* Update all keys in Medium - should replace */
+        for (int i = 0; i < 20; i++) {
+            databox key = databoxNewSigned(i);
+            databox val = databoxNewSigned(i * 1000); /* Different value */
+            const databox *elements[2] = {&key, &val};
+            bool replaced = multimapMediumInsert(m, elements);
+            if (!replaced) {
+                ERR("multimapMediumInsert: key %d not recognized as duplicate!",
+                    i);
+                assert(replaced);
+            }
+        }
+        assert(multimapMediumCount(m) == 20); /* Count must stay at 20 */
+
+        /* Verify values were updated */
+        for (int i = 0; i < 20; i++) {
+            databox key = databoxNewSigned(i);
+            databox result = {{0}};
+            databox *results[1] = {&result};
+            bool found = multimapMediumLookup(m, &key, results);
+            assert(found);
+            (void)found;
+            databox expected = databoxNewSigned(i * 1000);
+            assert(databoxEqual(&expected, &result));
+            (void)expected;
+        }
+
+        multimapMediumFree(m);
+    }
+
+    TEST("DIRECT: multimapFull key replacement") {
+        /* Create Full by creating a Small and growing it */
+        multimapSmall *small = multimapSmallNew(2, false);
+
+        /* Insert enough to grow to Full */
+        for (int i = 0; i < 100; i++) {
+            databox key = databoxNewSigned(i);
+            databox val = databoxNewSigned(i * 100);
+            const databox *elements[2] = {&key, &val};
+            multimapSmallInsert(small, elements);
+        }
+
+        /* Convert to Full (via Medium) */
+        multimapMedium *medium = multimapMediumNewFromOneGrow(
+            small, small->map, small->middle, 2, false);
+
+        flex *maps[2] = {medium->map[0], medium->map[1]};
+        multimapFullMiddle middles[2] = {medium->middle[0], medium->middle[1]};
+        multimapFull *f =
+            multimapFullNewFromTwoGrow(medium, maps, middles, 2, false);
+
+        assert(multimapFullCount(f) == 100);
+
+        /* Update all keys - should replace, count stays at 100 */
+        for (int i = 0; i < 100; i++) {
+            databox key = databoxNewSigned(i);
+            databox val = databoxNewSigned(i * 1000); /* Different value */
+            const databox *elements[2] = {&key, &val};
+            bool replaced = multimapFullInsert(f, elements);
+            if (!replaced) {
+                ERR("multimapFullInsert: key %d not recognized as duplicate!",
+                    i);
+                assert(replaced);
+            }
+        }
+        assert(multimapFullCount(f) == 100); /* Count must stay at 100 */
+
+        /* Verify values were updated */
+        for (int i = 0; i < 100; i++) {
+            databox key = databoxNewSigned(i);
+            databox result = {{0}};
+            databox *results[1] = {&result};
+            bool found = multimapFullLookup(f, &key, results);
+            assert(found);
+            (void)found;
+            databox expected = databoxNewSigned(i * 1000);
+            assert(databoxEqual(&expected, &result));
+            (void)expected;
+        }
+
+        multimapFullFree(f);
+    }
+
+    TEST("DIRECT: multimapFull key replacement with many splits") {
+        /* Use multimap wrapper to create Full with many splits */
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_64);
+
+        /* Insert 500 keys - will force Full representation with many splits */
+        for (int i = 0; i < 500; i++) {
+            databox key = databoxNewSigned(i);
+            databox val = databoxNewSigned(i * 100);
+            const databox *elements[2] = {&key, &val};
+            bool replaced = multimapInsert(&m, elements);
+            assert(!replaced);
+            (void)replaced;
+        }
+
+        /* Verify we're in Full representation */
+        assert(multimapType_(m) == MULTIMAP_TYPE_FULL);
+        assert(multimapCount(m) == 500);
+
+        /* Update all keys - count must stay at 500 */
+        for (int i = 0; i < 500; i++) {
+            databox key = databoxNewSigned(i);
+            databox val = databoxNewSigned(i * 1000);
+            const databox *elements[2] = {&key, &val};
+            bool replaced = multimapInsert(&m, elements);
+            if (!replaced) {
+                ERR("multimapFull (wrapper): key %d not recognized!", i);
+                assert(replaced);
+            }
+        }
+        assert(multimapCount(m) == 500);
+
+        multimapFree(m);
+    }
+
+    TEST("DIRECT: multimapFull key replacement - string keys") {
+        /* Use multimap wrapper to create Full with string keys */
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_128);
+
+        /* Insert with string keys - will grow to Full */
+        for (int i = 0; i < 200; i++) {
+            char keyBuf[32];
+            snprintf(keyBuf, sizeof(keyBuf), "key_%04d", i);
+            databox key = databoxNewBytesString(keyBuf);
+            databox val = databoxNewSigned(i);
+            const databox *elements[2] = {&key, &val};
+            bool replaced = multimapInsert(&m, elements);
+            assert(!replaced);
+            (void)replaced;
+        }
+
+        /* Verify in Full and count is correct */
+        assert(multimapType_(m) == MULTIMAP_TYPE_FULL);
+        assert(multimapCount(m) == 200);
+
+        /* Update all string keys */
+        for (int i = 0; i < 200; i++) {
+            char keyBuf[32];
+            snprintf(keyBuf, sizeof(keyBuf), "key_%04d", i);
+            databox key = databoxNewBytesString(keyBuf);
+            databox val = databoxNewSigned(i + 10000);
+            const databox *elements[2] = {&key, &val};
+            bool replaced = multimapInsert(&m, elements);
+            if (!replaced) {
+                ERR("multimapFull (string): key %s not recognized!", keyBuf);
+                assert(replaced);
+            }
+        }
+        assert(multimapCount(m) == 200);
+
+        multimapFree(m);
+    }
+
+    printf(
+        "\n=== All DIRECT implementation key replacement tests passed! ===\n");
 
     TEST_FINAL_RESULT;
 }

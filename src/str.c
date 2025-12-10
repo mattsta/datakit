@@ -2161,6 +2161,164 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
         TIME_FINISH(xorBooster, "xorshift128plus");
     }
 
+    /* ================================================================
+     * SIMD vs Scalar Performance Comparison Benchmarks
+     * ================================================================ */
+    TEST("Benchmark: StrBufToUInt64 SWAR vs Scalar") {
+        printf("  Comparing string-to-integer: SWAR vs Scalar...\n");
+        const char *testNumbers[] = {
+            "12345678",         /* 8 digits - SWAR path */
+            "1234567890123456", /* 16 digits - 2x SWAR */
+            "1234",             /* 4 digits - scalar only */
+        };
+        const size_t iterations = 2000000;
+
+        for (size_t t = 0; t < sizeof(testNumbers) / sizeof(testNumbers[0]);
+             t++) {
+            const char *num = testNumbers[t];
+            const size_t len = strlen(num);
+            uint64_t resultSWAR = 0;
+            uint64_t resultScalar = 0;
+
+            /* SWAR version */
+            TIME_INIT;
+            for (size_t i = 0; i < iterations; i++) {
+                resultSWAR = StrBufToUInt64Fast(num, len);
+            }
+            TIME_FINISH(iterations, "SWAR");
+
+            /* Scalar version */
+            TIME_INIT;
+            for (size_t i = 0; i < iterations; i++) {
+                resultScalar = StrBufToUInt64Scalar(num, len);
+            }
+            TIME_FINISH(iterations, "Scalar");
+
+            /* Verify correctness */
+            if (resultSWAR != resultScalar) {
+                ERR("Mismatch! SWAR=%lu Scalar=%lu", (unsigned long)resultSWAR,
+                    (unsigned long)resultScalar);
+            }
+            printf("    %zu digits: result=%lu (verified)\n", len,
+                   (unsigned long)resultSWAR);
+        }
+    }
+
+    TEST("Benchmark: StrPopCnt NEON/SIMD vs Scalar") {
+        printf("  Comparing popcount: Optimized vs Scalar (lookup table)...\n");
+        const size_t bufSize = 4096;
+        uint8_t *buf = zmalloc(bufSize);
+        for (size_t i = 0; i < bufSize; i++) {
+            buf[i] = (uint8_t)(i * 31 + 17);
+        }
+
+        const size_t iterations = 100000;
+        uint64_t resultOpt = 0;
+        uint64_t resultScalar = 0;
+
+        /* Optimized version */
+        TIME_INIT;
+        for (size_t i = 0; i < iterations; i++) {
+            resultOpt = StrPopCntAligned(buf, bufSize);
+        }
+        TIME_FINISH(iterations, "Optimized");
+        PERF_TIMERS_RESULT_PRINT_BYTES(iterations, bufSize);
+
+        /* Scalar version */
+        TIME_INIT;
+        for (size_t i = 0; i < iterations; i++) {
+            resultScalar = StrPopCntScalar(buf, bufSize);
+        }
+        TIME_FINISH(iterations, "Scalar");
+        PERF_TIMERS_RESULT_PRINT_BYTES(iterations, bufSize);
+
+        if (resultOpt != resultScalar) {
+            ERR("Mismatch! Opt=%lu Scalar=%lu", (unsigned long)resultOpt,
+                (unsigned long)resultScalar);
+        }
+        printf("    4KB popcount: %lu bits (verified)\n",
+               (unsigned long)resultOpt);
+        zfree(buf);
+    }
+
+    TEST("Benchmark: StrLenUtf8 SIMD vs Scalar") {
+        printf("  Comparing UTF-8 strlen: SIMD vs Scalar...\n");
+        const size_t bufSize = 4096;
+        char *buf = zmalloc(bufSize);
+        memset(buf, 'a', bufSize - 1);
+        buf[bufSize - 1] = '\0';
+
+        const size_t iterations = 100000;
+        size_t resultOpt = 0;
+        size_t resultScalar = 0;
+
+        /* SIMD version */
+        TIME_INIT;
+        for (size_t i = 0; i < iterations; i++) {
+            resultOpt = StrLenUtf8(buf, bufSize - 1);
+        }
+        TIME_FINISH(iterations, "SIMD");
+        PERF_TIMERS_RESULT_PRINT_BYTES(iterations, bufSize - 1);
+
+        /* Scalar version */
+        TIME_INIT;
+        for (size_t i = 0; i < iterations; i++) {
+            resultScalar = StrLenUtf8Scalar(buf, bufSize - 1);
+        }
+        TIME_FINISH(iterations, "Scalar");
+        PERF_TIMERS_RESULT_PRINT_BYTES(iterations, bufSize - 1);
+
+        if (resultOpt != resultScalar) {
+            ERR("Mismatch! SIMD=%zu Scalar=%zu", resultOpt, resultScalar);
+        }
+        printf("    4KB ASCII: %zu chars (verified)\n", resultOpt);
+        zfree(buf);
+    }
+
+    TEST("Benchmark: StrLenUtf8 on mixed UTF-8") {
+        printf("  Comparing UTF-8 strlen on mixed content...\n");
+        const char *mixedUtf8 = "Hello 世界! 🎉 Testing UTF-8 lengths 日本語";
+        const size_t len = strlen(mixedUtf8);
+        const size_t iterations = 2000000;
+        size_t resultOpt = 0;
+        size_t resultScalar = 0;
+
+        /* SIMD version */
+        TIME_INIT;
+        for (size_t i = 0; i < iterations; i++) {
+            resultOpt = StrLenUtf8(mixedUtf8, len);
+        }
+        TIME_FINISH(iterations, "SIMD");
+
+        /* Scalar version */
+        TIME_INIT;
+        for (size_t i = 0; i < iterations; i++) {
+            resultScalar = StrLenUtf8Scalar(mixedUtf8, len);
+        }
+        TIME_FINISH(iterations, "Scalar");
+
+        if (resultOpt != resultScalar) {
+            ERR("Mismatch! SIMD=%zu Scalar=%zu", resultOpt, resultScalar);
+        }
+        printf("    %zu bytes -> %zu chars (verified)\n", len, resultOpt);
+    }
+
+    TEST("Benchmark: StrUInt9DigitsToBuf") {
+        printf("  Benchmarking integer-to-string conversion...\n");
+        const size_t iterations = 1000000;
+        uint8_t buf[16];
+        uint64_t checksum = 0;
+
+        TIME_INIT;
+        for (size_t i = 0; i < iterations; i++) {
+            StrUInt9DigitsToBuf(buf, (uint32_t)(i % 1000000000));
+            checksum += buf[0];
+        }
+        TIME_FINISH(iterations, "StrUInt9DigitsToBuf");
+
+        printf("    Checksum: %lu\n", (unsigned long)checksum);
+    }
+
     TEST_FINAL_RESULT;
 }
 

@@ -30,6 +30,13 @@
 #include "strDoubleFormat.h"
 #include <inttypes.h>
 
+/* SIMD intrinsics for case conversion */
+#if defined(__SSE2__)
+#include <emmintrin.h>
+#elif defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+#include <arm_neon.h>
+#endif
+
 /* Type Definitions */
 
 /* NOTE! Our data layout is: [LEN][FREE_TYPE][BYTES...]
@@ -120,6 +127,45 @@ typedef enum dksType {
  * It seems unlikely we will be creating in-memory strings
  * larger than 35 TB or 281 TB at our present historical juncture. */
 
+/* ====================================================================
+ * Type Lookup Tables
+ * ==================================================================== */
+/* Direct lookup tables indexed by dksType enum value (0-7).
+ * Eliminates branches and arithmetic in hot paths.
+ * Type values: DKS_8=0, DKS_24=1, DKS_16=2, DKS_32=3, DKS_40=5, DKS_48=7 */
+static const uint8_t dksElementSize_[8] = {
+    1, /* 0x00 = DKS_8  -> 1 byte element  */
+    3, /* 0x01 = DKS_24 -> 3 byte element  */
+    2, /* 0x02 = DKS_16 -> 2 byte element  */
+    4, /* 0x03 = DKS_32 -> 4 byte element  */
+    0, /* 0x04 = invalid                   */
+    5, /* 0x05 = DKS_40 -> 5 byte element  */
+    0, /* 0x06 = invalid                   */
+    6, /* 0x07 = DKS_48 -> 6 byte element  */
+};
+
+static const uint8_t dksTypeBits_[8] = {
+    2, /* 0x00 = DKS_8  -> 2 type bits */
+    3, /* 0x01 = DKS_24 -> 3 type bits */
+    2, /* 0x02 = DKS_16 -> 2 type bits */
+    3, /* 0x03 = DKS_32 -> 3 type bits */
+    0, /* 0x04 = invalid               */
+    3, /* 0x05 = DKS_40 -> 3 type bits */
+    0, /* 0x06 = invalid               */
+    3, /* 0x07 = DKS_48 -> 3 type bits */
+};
+
+static const size_t dksMaxShared_[8] = {
+    DKS_8_SHARED_MAX,  /* 0x00 = DKS_8  */
+    DKS_24_SHARED_MAX, /* 0x01 = DKS_24 */
+    DKS_16_SHARED_MAX, /* 0x02 = DKS_16 */
+    DKS_32_SHARED_MAX, /* 0x03 = DKS_32 */
+    0,                 /* 0x04 = invalid */
+    DKS_40_SHARED_MAX, /* 0x05 = DKS_40 */
+    0,                 /* 0x06 = invalid */
+    DKS_48_SHARED_MAX, /* 0x07 = DKS_48 */
+};
+
 #define DKS_TYPE_DIFF_2 (DKS_16 - DKS_8)
 #define DKS_TYPE_DIFF_3 (DKS_32 - DKS_24)
 
@@ -155,62 +201,28 @@ DK_STATIC void DKS_SETPREVIOUSINTEGERANDTYPE(DKS_TYPE *s, const size_t free,
 DK_STATIC size_t DKS_GETPREVIOUSINTEGERWITHTYPEREMOVED(const DKS_TYPE *s,
                                                        dksType type);
 
-DK_STATIC size_t DKS_MAXSHAREDFORTYPE(dksType type) {
-    switch (type) {
-    case DKS_8:
-        return DKS_8_SHARED_MAX;
-    case DKS_16:
-        return DKS_16_SHARED_MAX;
-    case DKS_24:
-        return DKS_24_SHARED_MAX;
-    case DKS_32:
-        return DKS_32_SHARED_MAX;
-    case DKS_40:
-        return DKS_40_SHARED_MAX;
-    case DKS_48:
-        return DKS_48_SHARED_MAX;
-    }
-
-    assert(NULL);
-    __builtin_unreachable();
-}
+/* Direct table lookup for max shared size by type.
+ * Note: We use _dksMaxSharedForType internally because DKS_MAXSHAREDFORTYPE
+ * is redefined by dks.h for external API namespacing (mds_/mdsc_ prefixes). */
+#define _dksMaxSharedForType(type) (dksMaxShared_[(type)])
 
 /* If type is even, it's a 2 bit type, otherwise, it's a 3 bit type. */
 #define _dksTypeIsTwoBits(type) (((type) & DKS_TYPE_DETERMINATION_MASK) == 0)
 
-/* Since our types are encoded as fixed offset integers, we can
- * use {{math}} to determine metadata sizes instead of needing
- * to use a lookup table.
- *
- * Basically:
- *   For 3 bit types (DKS_24, DKS_32, DKS_40, DKS_48),
- *      we subtract the target type from our first 3 bit type (DKS_24),
- *      then we divide by the fixed offsets between each 3 bit types
- *      (DKS_32 - DKS_24 just gives us the offset between all 3 bit types)
- *      then we add 3 because our 3 bit types start at 3 bytes of usage.
- *      This "normalizes" all 3 bit types to how many bytes they use based
- *      on the first 3 bit type.
- *   For 2 bit types (DKS_8, DKS_16),
- *      we subtract the target type from our first 2 bit type (DKS_8),
- *      then we divide by the fixed offsets between our 2 bit types
- *      (DKS_16 - DKS_8 is the fixed offset)
- *      then we add 1 because our 2 bit types start at 1 byte of usage. */
-#define _dksHeaderElementSize(type)                                            \
-    (_dksTypeIsTwoBits(type) ? ((((type) - DKS_8) / DKS_TYPE_DIFF_2) + 1)      \
-                             : ((((type) - DKS_24) / DKS_TYPE_DIFF_3) + 3))
+/* Direct table lookup for header element size by type.
+ * Element sizes: DKS_8=1, DKS_16=2, DKS_24=3, DKS_32=4, DKS_40=5, DKS_48=6 */
+#define _dksHeaderElementSize(type) (dksElementSize_[(type)])
 
-/* Grab the 2 MASK bits from (buf - 1) */
-#define DKS_TYPE_2(buf) ((uint8_t)((*((buf) - 1) & DKS_TYPE_2_MASK)))
-
-/* Grab the 3 MASK bits from (buf - 1) */
-#define DKS_TYPE_3(buf) ((uint8_t)((*((buf) - 1) & DKS_TYPE_3_MASK)))
-
-/* if type determination bit is 0, extract 2 bits, else extract 3 bits. */
+/* Extract type from the byte before buf using single memory read.
+ * If LSB is 0, mask with 2 bits; if LSB is 1, mask with 3 bits. */
 #define DKS_TYPE_GET(buf)                                                      \
-    (_dksTypeIsTwoBits((uint8_t)*((buf) - 1)) ? DKS_TYPE_2(buf)                \
-                                              : DKS_TYPE_3(buf))
+    ({                                                                         \
+        const uint8_t _b = *((const uint8_t *)(buf) - 1);                      \
+        (dksType)((_b & 1) ? (_b & DKS_TYPE_3_MASK) : (_b & DKS_TYPE_2_MASK)); \
+    })
 
-#define TYPEBITS(type) (_dksTypeIsTwoBits(type) ? 2 : 3)
+/* Direct table lookup for type bit count. */
+#define TYPEBITS(type) (dksTypeBits_[(type)])
 
 /* Set 'val' with bottom TYPEBITS set to 'type' */
 DK_STATIC void DKS_SETPREVIOUSINTEGERANDTYPE(DKS_TYPE *restrict s,
@@ -431,7 +443,7 @@ void DKS_CLEAR(DKS_TYPE *s) {
          * but if the user needs a larger buffer, they will
          * ExpandBy then the realloc will still use
          * the extra space to expand the dks allocation. */
-        newFree = DKS_MAXSHAREDFORTYPE(info.type);
+        newFree = _dksMaxSharedForType(info.type);
     }
 
     DKS_INFOUPDATELENFREE(&info, newLen, newFree);
@@ -1229,18 +1241,120 @@ void DKS_SUBSTR_UTF8(DKS_TYPE *s, size_t start, size_t length) {
 /* Apply tolower() to every character */
 void DKS_TOLOWER(DKS_TYPE *s) {
     size_t len = DKS_LEN(s);
+    uint8_t *data = (uint8_t *)s;
 
+#if defined(__SSE2__)
+    /* SSE2: Process 16 bytes at a time
+     * For ASCII: tolower adds 32 to bytes in range ['A', 'Z'] */
+    const __m128i upperA = _mm_set1_epi8('A');
+    const __m128i upperZ = _mm_set1_epi8('Z');
+    const __m128i diff = _mm_set1_epi8(32); /* 'a' - 'A' = 32 */
+
+    while (len >= 16) {
+        __m128i chunk = _mm_loadu_si128((const __m128i *)data);
+
+        /* Find bytes >= 'A': subtract 'A', check if result < 26 */
+        __m128i geA =
+            _mm_cmpgt_epi8(chunk, _mm_sub_epi8(upperA, _mm_set1_epi8(1)));
+        __m128i leZ =
+            _mm_cmpgt_epi8(_mm_add_epi8(upperZ, _mm_set1_epi8(1)), chunk);
+        __m128i mask = _mm_and_si128(geA, leZ);
+
+        /* Add 32 to bytes where mask is set */
+        __m128i toAdd = _mm_and_si128(mask, diff);
+        chunk = _mm_add_epi8(chunk, toAdd);
+
+        _mm_storeu_si128((__m128i *)data, chunk);
+        data += 16;
+        len -= 16;
+    }
+#elif defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+    /* ARM NEON: Process 16 bytes at a time */
+    const uint8x16_t upperA = vdupq_n_u8('A');
+    const uint8x16_t upperZ = vdupq_n_u8('Z');
+    const uint8x16_t diff = vdupq_n_u8(32);
+
+    while (len >= 16) {
+        uint8x16_t chunk = vld1q_u8(data);
+
+        /* Find bytes in range ['A', 'Z'] */
+        uint8x16_t geA = vcgeq_u8(chunk, upperA);
+        uint8x16_t leZ = vcleq_u8(chunk, upperZ);
+        uint8x16_t mask = vandq_u8(geA, leZ);
+
+        /* Add 32 where mask is set */
+        uint8x16_t toAdd = vandq_u8(mask, diff);
+        chunk = vaddq_u8(chunk, toAdd);
+
+        vst1q_u8(data, chunk);
+        data += 16;
+        len -= 16;
+    }
+#endif
+
+    /* Handle remaining bytes with scalar */
     for (size_t j = 0; j < len; j++) {
-        s[j] = StrTolower(s[j]);
+        data[j] = StrTolower(data[j]);
     }
 }
 
 /* Apply toupper() to every character */
 void DKS_TOUPPER(DKS_TYPE *s) {
     size_t len = DKS_LEN(s);
+    uint8_t *data = (uint8_t *)s;
 
+#if defined(__SSE2__)
+    /* SSE2: Process 16 bytes at a time
+     * For ASCII: toupper subtracts 32 from bytes in range ['a', 'z'] */
+    const __m128i lowerA = _mm_set1_epi8('a');
+    const __m128i lowerZ = _mm_set1_epi8('z');
+    const __m128i diff = _mm_set1_epi8(32); /* 'a' - 'A' = 32 */
+
+    while (len >= 16) {
+        __m128i chunk = _mm_loadu_si128((const __m128i *)data);
+
+        /* Find bytes >= 'a' and <= 'z' */
+        __m128i geA =
+            _mm_cmpgt_epi8(chunk, _mm_sub_epi8(lowerA, _mm_set1_epi8(1)));
+        __m128i leZ =
+            _mm_cmpgt_epi8(_mm_add_epi8(lowerZ, _mm_set1_epi8(1)), chunk);
+        __m128i mask = _mm_and_si128(geA, leZ);
+
+        /* Subtract 32 from bytes where mask is set */
+        __m128i toSub = _mm_and_si128(mask, diff);
+        chunk = _mm_sub_epi8(chunk, toSub);
+
+        _mm_storeu_si128((__m128i *)data, chunk);
+        data += 16;
+        len -= 16;
+    }
+#elif defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+    /* ARM NEON: Process 16 bytes at a time */
+    const uint8x16_t lowerA = vdupq_n_u8('a');
+    const uint8x16_t lowerZ = vdupq_n_u8('z');
+    const uint8x16_t diff = vdupq_n_u8(32);
+
+    while (len >= 16) {
+        uint8x16_t chunk = vld1q_u8(data);
+
+        /* Find bytes in range ['a', 'z'] */
+        uint8x16_t geA = vcgeq_u8(chunk, lowerA);
+        uint8x16_t leZ = vcleq_u8(chunk, lowerZ);
+        uint8x16_t mask = vandq_u8(geA, leZ);
+
+        /* Subtract 32 where mask is set */
+        uint8x16_t toSub = vandq_u8(mask, diff);
+        chunk = vsubq_u8(chunk, toSub);
+
+        vst1q_u8(data, chunk);
+        data += 16;
+        len -= 16;
+    }
+#endif
+
+    /* Handle remaining bytes with scalar */
     for (size_t j = 0; j < len; j++) {
-        s[j] = StrToupper(s[j]);
+        data[j] = StrToupper(data[j]);
     }
 }
 
@@ -2151,6 +2265,86 @@ int DKS_TEST(int argc, char *argv[]) {
         DKS_FREE(x);
     }
 
+    /* ====================================================================
+     * Case Conversion Tests (SIMD vs Scalar correctness)
+     * ==================================================================== */
+    {
+        /* Test correctness of TOLOWER */
+        DKS_TYPE *x = DKS_NEW("HELLO WORLD 123 ABC XYZ");
+        DKS_TOLOWER(x);
+        testCond("DKS_TOLOWER() converts uppercase",
+                 memcmp(x, "hello world 123 abc xyz", 23), 0, "%d");
+        DKS_FREE(x);
+
+        /* Test correctness of TOUPPER */
+        x = DKS_NEW("hello world 123 abc xyz");
+        DKS_TOUPPER(x);
+        testCond("DKS_TOUPPER() converts lowercase",
+                 memcmp(x, "HELLO WORLD 123 ABC XYZ", 23), 0, "%d");
+        DKS_FREE(x);
+
+        /* Test edge cases - non-alphabetic characters unchanged */
+        x = DKS_NEW("!@#$%^&*()1234567890");
+        DKS_TOLOWER(x);
+        testCond("DKS_TOLOWER() preserves non-alpha",
+                 memcmp(x, "!@#$%^&*()1234567890", 20), 0, "%d");
+        DKS_FREE(x);
+
+        x = DKS_NEW("!@#$%^&*()1234567890");
+        DKS_TOUPPER(x);
+        testCond("DKS_TOUPPER() preserves non-alpha",
+                 memcmp(x, "!@#$%^&*()1234567890", 20), 0, "%d");
+        DKS_FREE(x);
+
+        /* Test mixed case - boundary chars */
+        x = DKS_NEW("AaBbZz@[`{");
+        DKS_TOLOWER(x);
+        testCond("DKS_TOLOWER() boundary chars", memcmp(x, "aabbzz@[`{", 10), 0,
+                 "%d");
+        DKS_FREE(x);
+
+        x = DKS_NEW("AaBbZz@[`{");
+        DKS_TOUPPER(x);
+        testCond("DKS_TOUPPER() boundary chars", memcmp(x, "AABBZZ@[`{", 10), 0,
+                 "%d");
+        DKS_FREE(x);
+
+        /* Test long string (exercises SIMD path) */
+        const size_t longLen = 1024;
+        x = DKS_EMPTYLEN(longLen);
+        for (size_t i = 0; i < longLen; i++) {
+            x[i] = 'A' + (i % 26);
+        }
+        DKS_UPDATELENFORCE(x, longLen);
+        DKS_TOLOWER(x);
+        bool allLower = true;
+        for (size_t i = 0; i < longLen; i++) {
+            if (x[i] != 'a' + (i % 26)) {
+                allLower = false;
+                break;
+            }
+        }
+        testCond("DKS_TOLOWER() long string SIMD", allLower, true, "%d");
+        DKS_FREE(x);
+
+        /* Test long string TOUPPER */
+        x = DKS_EMPTYLEN(longLen);
+        for (size_t i = 0; i < longLen; i++) {
+            x[i] = 'a' + (i % 26);
+        }
+        DKS_UPDATELENFORCE(x, longLen);
+        DKS_TOUPPER(x);
+        bool allUpper = true;
+        for (size_t i = 0; i < longLen; i++) {
+            if (x[i] != 'A' + (i % 26)) {
+                allUpper = false;
+                break;
+            }
+        }
+        testCond("DKS_TOUPPER() long string SIMD", allUpper, true, "%d");
+        DKS_FREE(x);
+    }
+
     if (!bigTests) {
         printf("Stopping early because requested skip big allocation tests\n");
         testReport();
@@ -2209,6 +2403,11 @@ int DKS_TEST(int argc, char *argv[]) {
         size_t startSize = limit.maxContentSize; /* a size in this type */
 
         uint8_t *buf = zmalloc(startSize); /* WARNING: can be big (> 4 GB) */
+        if (!buf) {
+            printf("SKIPPED: Unable to allocate %zu bytes for %s test\n",
+                   startSize, DKS_TYPENAME(limit.startType));
+            continue;
+        }
         DKS_RANDBYTES(buf, startSize);
 
         DKS_TYPE *testing = DKS_NEWLEN(buf, startSize);
@@ -2228,7 +2427,7 @@ int DKS_TEST(int argc, char *argv[]) {
 
 #if !defined(DATAKIT_DKS_COMPACT)
         /* 'free' can't always hold total length, so adjust for MAX FREE */
-        size_t maxfree = DKS_MAXSHAREDFORTYPE(DKS_TYPE_GET(testing));
+        size_t maxfree = _dksMaxSharedForType(DKS_TYPE_GET(testing));
         printf("Max free suggested as: %zu\n", maxfree);
         if (startSize > maxfree) {
             startSize = maxfree;
@@ -2305,6 +2504,11 @@ int DKS_TEST(int argc, char *argv[]) {
 
         uint8_t *belowlimitbuf =
             zmalloc(belowSize); /* WARNING: can be big (> 4 GB) */
+        if (!belowlimitbuf) {
+            printf("SKIPPED: Unable to allocate %zu bytes for %s test\n",
+                   belowSize, DKS_TYPENAME(limit.startType));
+            continue;
+        }
         DKS_RANDBYTES(belowlimitbuf, belowSize);
 
         DKS_TYPE *testing = DKS_NEWLEN(belowlimitbuf, belowSize);
@@ -2546,6 +2750,86 @@ int DKS_TEST(int argc, char *argv[]) {
         /* implicit test for DKS_NATIVE() */
         zfree(DKS_NATIVE(testing, NULL));
         zfree(startbuf);
+    }
+
+    /* ====================================================================
+     * Case Conversion Tests (SIMD vs Scalar correctness + performance)
+     * ==================================================================== */
+    {
+        /* Test correctness of TOLOWER */
+        DKS_TYPE *x = DKS_NEW("HELLO WORLD 123 ABC XYZ");
+        DKS_TOLOWER(x);
+        testCond("DKS_TOLOWER() converts uppercase",
+                 memcmp(x, "hello world 123 abc xyz", 23), 0, "%d");
+        DKS_FREE(x);
+
+        /* Test correctness of TOUPPER */
+        x = DKS_NEW("hello world 123 abc xyz");
+        DKS_TOUPPER(x);
+        testCond("DKS_TOUPPER() converts lowercase",
+                 memcmp(x, "HELLO WORLD 123 ABC XYZ", 23), 0, "%d");
+        DKS_FREE(x);
+
+        /* Test edge cases - non-alphabetic characters unchanged */
+        x = DKS_NEW("!@#$%^&*()1234567890");
+        DKS_TOLOWER(x);
+        testCond("DKS_TOLOWER() preserves non-alpha",
+                 memcmp(x, "!@#$%^&*()1234567890", 20), 0, "%d");
+        DKS_FREE(x);
+
+        x = DKS_NEW("!@#$%^&*()1234567890");
+        DKS_TOUPPER(x);
+        testCond("DKS_TOUPPER() preserves non-alpha",
+                 memcmp(x, "!@#$%^&*()1234567890", 20), 0, "%d");
+        DKS_FREE(x);
+
+        /* Test mixed case - boundary chars */
+        x = DKS_NEW("AaBbZz@[`{");
+        DKS_TOLOWER(x);
+        testCond("DKS_TOLOWER() boundary chars", memcmp(x, "aabbzz@[`{", 10), 0,
+                 "%d");
+        DKS_FREE(x);
+
+        x = DKS_NEW("AaBbZz@[`{");
+        DKS_TOUPPER(x);
+        testCond("DKS_TOUPPER() boundary chars", memcmp(x, "AABBZZ@[`{", 10), 0,
+                 "%d");
+        DKS_FREE(x);
+
+        /* Test long string (exercises SIMD path) */
+        const size_t longLen = 1024;
+        x = DKS_EMPTYLEN(longLen);
+        for (size_t i = 0; i < longLen; i++) {
+            x[i] = 'A' + (i % 26);
+        }
+        DKS_UPDATELENFORCE(x, longLen);
+        DKS_TOLOWER(x);
+        bool allLower = true;
+        for (size_t i = 0; i < longLen; i++) {
+            if (x[i] != 'a' + (i % 26)) {
+                allLower = false;
+                break;
+            }
+        }
+        testCond("DKS_TOLOWER() long string SIMD", allLower, true, "%d");
+        DKS_FREE(x);
+
+        /* Test long string TOUPPER */
+        x = DKS_EMPTYLEN(longLen);
+        for (size_t i = 0; i < longLen; i++) {
+            x[i] = 'a' + (i % 26);
+        }
+        DKS_UPDATELENFORCE(x, longLen);
+        DKS_TOUPPER(x);
+        bool allUpper = true;
+        for (size_t i = 0; i < longLen; i++) {
+            if (x[i] != 'A' + (i % 26)) {
+                allUpper = false;
+                break;
+            }
+        }
+        testCond("DKS_TOUPPER() long string SIMD", allUpper, true, "%d");
+        DKS_FREE(x);
     }
 
     testReport();

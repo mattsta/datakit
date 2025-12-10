@@ -105,11 +105,12 @@ multiarrayMediumGetForwardWorker(multiarrayMedium *mar, int32_t idx) {
     }
 
     idx = idx - accum;
-    multiarrayMediumResult worker = {.current = getNode(nodeIdx),
-                                     .entry = getNode(nodeIdx)->data +
-                                              (mar->len * idx),
-                                     .offset = idx,
-                                     .nodeIdx = nodeIdx};
+    void *nodeData = getNode(nodeIdx)->data;
+    multiarrayMediumResult worker = {
+        .current = getNode(nodeIdx),
+        .entry = nodeData ? nodeData + (mar->len * idx) : NULL,
+        .offset = idx,
+        .nodeIdx = nodeIdx};
 
     return worker;
 }

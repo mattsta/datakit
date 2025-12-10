@@ -24,8 +24,11 @@ size_t fibbufNextSizeBuffer(const size_t currentBufSize) {
     /* On 32 bit systems we can't use fibbufNextBuffer64.
      * Also use 32-bit path for values below the first 64-bit fib,
      * allowing 20% growth fallback for values between last 32-bit fib
-     * (2971215073) and first 64-bit fib (4807526976). */
-    if (currentBufSize < 4807526976 || sizeof(void *) == 4) {
+     * (2971215073) and first 64-bit fib (4807526976).
+     * IMPORTANT: Don't use 32-bit path for values > UINT32_MAX to avoid
+     * truncation when casting to uint32_t parameter. */
+    if ((currentBufSize < 4807526976 && currentBufSize <= UINT32_MAX) ||
+        sizeof(void *) == 4) {
         return fibbufNextBuffer32(currentBufSize);
     }
 
@@ -53,23 +56,25 @@ size_t fibbufNextSizeBuffer(const size_t currentBufSize) {
             return *result;                                                    \
         }                                                                      \
                                                                                \
+        /* result points to largest value < currentBufSize.                    \
+         * We want the smallest fib value > currentBufSize. */                 \
         if ((result + 1) <= FIBEND) {                                          \
-            /* else, we found an *exact* fib match, but that's                 \
-             * wrong, we want the *next* fib match, so use the                 \
-             * next fib match only if it's within the bounds                   \
-             * of our current fib array.. */                                   \
-            return *(result + 1);                                              \
+            if (*(result + 1) > currentBufSize) {                              \
+                /* Next fib is larger, use it */                               \
+                return *(result + 1);                                          \
+            }                                                                  \
+            /* *(result + 1) == currentBufSize (exact fib match).              \
+             * We need to return the NEXT fib after the match. */              \
+            if ((result + 2) <= FIBEND) {                                      \
+                return *(result + 2);                                          \
+            }                                                                  \
+            /* Exact match at last element, fall through to 20% growth */      \
         }                                                                      \
                                                                                \
-        if (result == FIBEND) {                                                \
-            /* else, the requested buffer size is beyond the extent of our     \
-             * fib array, so just increase requested buffer by 20%. */         \
-            /* Note: no check for overflow here, hence MOSTLY_SAFE. */         \
-            return currentBufSize * 1.2;                                       \
-        }                                                                      \
-                                                                               \
-        assert(NULL && "unexpected combination of conditions");                \
-        __builtin_unreachable();                                               \
+        /* The requested buffer size is beyond the extent of our               \
+         * fib array, so just increase requested buffer by 20%. */             \
+        /* Note: no check for overflow here, hence MOSTLY_SAFE. */             \
+        return currentBufSize * 1.2;                                           \
     } while (0)
 
 static uint16_t fibbufNextBuffer16(const uint16_t currentBufSize) {
@@ -162,6 +167,59 @@ int fibbufTest(int argc, char *argv[]) {
 
     int err = 0;
 
+    TEST("exact fibonacci boundary (regression for infinite loop bug)") {
+        /* When input is exactly a fibonacci number, we must return the NEXT
+         * fibonacci, not the same value. This caused infinite loops in code
+         * that grows buffers like: while (size < minSize) size =
+         * fibbufNext(size); */
+        uint64_t next;
+
+        /* Test all 16-bit fibonacci numbers */
+        next = fibbufNextSizeBuffer(34);
+        if (next != 55) {
+            ERR("fibbuf(34) should be 55, got %" PRIu64, next);
+        }
+
+        next = fibbufNextSizeBuffer(377);
+        if (next != 610) {
+            ERR("fibbuf(377) should be 610, got %" PRIu64, next);
+        }
+
+        next = fibbufNextSizeBuffer(610);
+        if (next != 987) {
+            ERR("fibbuf(610) should be 987, got %" PRIu64, next);
+        }
+
+        next = fibbufNextSizeBuffer(46368);
+        if (next != 75025) {
+            ERR("fibbuf(46368) should be 75025, got %" PRIu64, next);
+        }
+
+        /* Test 32-bit fibonacci numbers */
+        next = fibbufNextSizeBuffer(75025);
+        if (next != 121393) {
+            ERR("fibbuf(75025) should be 121393, got %" PRIu64, next);
+        }
+
+        /* 2971215073 is last element of 32-bit array, uses 20% growth */
+        next = fibbufNextSizeBuffer(2971215073);
+        if (next != (uint64_t)(2971215073 * 1.2)) {
+            ERR("fibbuf(2971215073) should be 20%% growth, got %" PRIu64, next);
+        }
+
+        /* Test 64-bit fibonacci numbers */
+        next = fibbufNextSizeBuffer(4807526976);
+        if (next != 7778742049) {
+            ERR("fibbuf(4807526976) should be 7778742049, got %" PRIu64, next);
+        }
+
+        /* Test last element - should use 20% growth */
+        next = fibbufNextSizeBuffer(1548008755920);
+        if (next != (uint64_t)(1548008755920 * 1.2)) {
+            ERR("fibbuf(last) should be 20%% growth, got %" PRIu64, next);
+        }
+    }
+
     TEST("valid result 16") {
         uint64_t next = fibbufNextSizeBuffer(22);
         if (next != 34) {
@@ -222,6 +280,7 @@ int fibbufTest(int argc, char *argv[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = fibbufNextSizeBuffer(0);
                 assert(next);
+                (void)next;
             }
             TIME_FINISH(loopers, "perf 16 — 0");
         }
@@ -231,6 +290,7 @@ int fibbufTest(int argc, char *argv[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = fibbufNextSizeBuffer(5000);
                 assert(next);
+                (void)next;
             }
             TIME_FINISH(loopers, "perf 16 — 5000");
         }
@@ -240,6 +300,7 @@ int fibbufTest(int argc, char *argv[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = fibbufNextSizeBuffer(30000);
                 assert(next);
+                (void)next;
             }
             TIME_FINISH(loopers, "perf 16 — 30000");
         }
@@ -249,6 +310,7 @@ int fibbufTest(int argc, char *argv[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = fibbufNextSizeBuffer(2178309 + 1);
                 assert(next);
+                (void)next;
             }
             TIME_FINISH(loopers, "perf 16 — 2178309 + 1");
         }
@@ -260,6 +322,7 @@ int fibbufTest(int argc, char *argv[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = fibbufNextSizeBuffer(0);
                 assert(next);
+                (void)next;
             }
             TIME_FINISH(loopers, "perf 32 — 0");
         }
@@ -269,6 +332,7 @@ int fibbufTest(int argc, char *argv[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = fibbufNextSizeBuffer(5000);
                 assert(next);
+                (void)next;
             }
             TIME_FINISH(loopers, "perf 32 — 5000");
         }
@@ -278,6 +342,7 @@ int fibbufTest(int argc, char *argv[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = fibbufNextSizeBuffer(30000);
                 assert(next);
+                (void)next;
             }
             TIME_FINISH(loopers, "perf 32 — 30000");
         }
@@ -287,6 +352,7 @@ int fibbufTest(int argc, char *argv[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = fibbufNextSizeBuffer(2178309 + 1);
                 assert(next);
+                (void)next;
             }
             TIME_FINISH(loopers, "perf 32 — 2178309 + 1");
         }
@@ -296,6 +362,7 @@ int fibbufTest(int argc, char *argv[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = fibbufNextSizeBuffer(16777216);
                 assert(next);
+                (void)next;
             }
             TIME_FINISH(loopers, "perf 32 — 16777216");
         }
@@ -307,6 +374,7 @@ int fibbufTest(int argc, char *argv[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = fibbufNextSizeBuffer(0);
                 assert(next);
+                (void)next;
             }
             TIME_FINISH(loopers, "perf 64 — 0");
         }
@@ -316,6 +384,7 @@ int fibbufTest(int argc, char *argv[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = fibbufNextSizeBuffer(5000);
                 assert(next);
+                (void)next;
             }
             TIME_FINISH(loopers, "perf 64 — 5000");
         }
@@ -325,6 +394,7 @@ int fibbufTest(int argc, char *argv[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = fibbufNextSizeBuffer(30000);
                 assert(next);
+                (void)next;
             }
             TIME_FINISH(loopers, "perf 64 — 30000");
         }
@@ -334,6 +404,7 @@ int fibbufTest(int argc, char *argv[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = fibbufNextSizeBuffer(2178309 + 1);
                 assert(next);
+                (void)next;
             }
             TIME_FINISH(loopers, "perf 64 — 2178309 + 1");
         }
@@ -343,6 +414,7 @@ int fibbufTest(int argc, char *argv[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = fibbufNextSizeBuffer(16777216);
                 assert(next);
+                (void)next;
             }
             TIME_FINISH(loopers, "perf 64 — 16777216");
         }
@@ -352,6 +424,7 @@ int fibbufTest(int argc, char *argv[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = fibbufNextSizeBuffer(139583862445);
                 assert(next);
+                (void)next;
             }
             TIME_FINISH(loopers, "perf 64 — 139583862445");
         }

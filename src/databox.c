@@ -1644,6 +1644,451 @@ int databoxTest(int argc, char *argv[]) {
         }
     }
 
+    /* ========================================
+     * FUZZ TESTS - Oracle-Based Verification
+     * ======================================== */
+    printf("\n=== DATABOX FUZZ TESTING ===\n\n");
+
+    TEST("FUZZ: all type creation and basic properties") {
+        /* Test void/error types */
+        databox voidBox = databoxVoid();
+        if (voidBox.type != DATABOX_VOID) {
+            ERRR("void type incorrect");
+        }
+
+        /* Test signed integers at boundaries */
+        int64_t signedTests[] = {INT64_MIN, INT64_MIN + 1, -1,       0,
+                                 1,         INT64_MAX - 1, INT64_MAX};
+        for (size_t i = 0; i < sizeof(signedTests) / sizeof(signedTests[0]);
+             i++) {
+            databox box = databoxNewSigned(signedTests[i]);
+            if (box.type != DATABOX_SIGNED_64 ||
+                box.data.i64 != signedTests[i]) {
+                ERR("Signed creation failed for %" PRId64, signedTests[i]);
+            }
+        }
+
+        /* Test unsigned integers at boundaries */
+        uint64_t unsignedTests[] = {0, 1, UINT64_MAX - 1, UINT64_MAX};
+        for (size_t i = 0; i < sizeof(unsignedTests) / sizeof(unsignedTests[0]);
+             i++) {
+            databox box = databoxNewUnsigned(unsignedTests[i]);
+            if (box.type != DATABOX_UNSIGNED_64 ||
+                box.data.u64 != unsignedTests[i]) {
+                ERR("Unsigned creation failed for %" PRIu64, unsignedTests[i]);
+            }
+        }
+
+        /* Test float/double */
+        float floatTests[] = {-1e38f, -1.0f, 0.0f, 1.0f, 1e38f};
+        for (size_t i = 0; i < sizeof(floatTests) / sizeof(floatTests[0]);
+             i++) {
+            databox box;
+            DATABOX_SET_FLOAT(&box, floatTests[i]);
+            if (box.type != DATABOX_FLOAT_32 || box.data.f32 != floatTests[i]) {
+                ERR("Float creation failed for %f", floatTests[i]);
+            }
+        }
+
+        /* Note: databoxNewReal optimizes by storing values that fit in float
+         * as FLOAT_32. So we only check extreme values that require DOUBLE_64
+         */
+        double doubleTests[] = {-1e308, 1e308};
+        for (size_t i = 0; i < sizeof(doubleTests) / sizeof(doubleTests[0]);
+             i++) {
+            databox box = databoxNewReal(doubleTests[i]);
+            if (box.type != DATABOX_DOUBLE_64 ||
+                box.data.d64 != doubleTests[i]) {
+                ERR("Double creation failed for %f", doubleTests[i]);
+            }
+        }
+        /* Test values that fit in float get stored as FLOAT_32 */
+        double floatCompatible[] = {-1.0, 0.0, 1.0, 100.0};
+        for (size_t i = 0;
+             i < sizeof(floatCompatible) / sizeof(floatCompatible[0]); i++) {
+            databox box = databoxNewReal(floatCompatible[i]);
+            /* These get optimized to FLOAT_32 */
+            if (box.type != DATABOX_FLOAT_32) {
+                ERR("Float-compatible double creation: expected FLOAT_32 for "
+                    "%f",
+                    floatCompatible[i]);
+            }
+        }
+
+        /* Test boolean types */
+        databox trueBox = databoxBool(true);
+        databox falseBox = databoxBool(false);
+        if (trueBox.type != DATABOX_TRUE) {
+            ERRR("True type incorrect");
+        }
+        if (falseBox.type != DATABOX_FALSE) {
+            ERRR("False type incorrect");
+        }
+
+        /* Test NULL */
+        databox nullBox = databoxNull();
+        if (nullBox.type != DATABOX_NULL) {
+            ERRR("Null type incorrect");
+        }
+
+        printf("  verified all basic type creation\n");
+    }
+
+    TEST("FUZZ: embedded vs allocated bytes threshold") {
+        /* Test bytes at and around the 8-byte embed threshold */
+        for (size_t len = 0; len <= 16; len++) {
+            char buf[17];
+            for (size_t i = 0; i < len; i++) {
+                buf[i] = 'a' + (i % 26);
+            }
+            buf[len] = '\0';
+
+            databox box = databoxNewBytesAllowEmbed(buf, len);
+
+            if (len <= 8) {
+                /* Should be embedded */
+                if (box.type != DATABOX_BYTES_EMBED) {
+                    ERR("Length %zu should be embedded, got type %d", len,
+                        box.type);
+                }
+            } else {
+                /* Should be non-embedded bytes */
+                if (box.type != DATABOX_BYTES) {
+                    ERR("Length %zu should be BYTES, got type %d", len,
+                        box.type);
+                }
+            }
+
+            if (box.len != len) {
+                ERR("Length mismatch: expected %zu, got %" PRIu64, len,
+                    (uint64_t)box.len);
+            }
+        }
+
+        printf("  verified embed threshold (0-16 bytes)\n");
+    }
+
+    TEST("FUZZ: 128-bit integer operations") {
+        /* Test 128-bit signed integers */
+        databoxBig bigBox;
+        __int128_t signedVals[] = {
+            INT128_MIN,    INT128_MIN + 1, (__int128_t)-1, (__int128_t)0,
+            (__int128_t)1, INT128_MAX - 1, INT128_MAX};
+
+        for (size_t i = 0; i < sizeof(signedVals) / sizeof(signedVals[0]);
+             i++) {
+            DATABOX_BIG_SIGNED_128(&bigBox, signedVals[i]);
+            if (bigBox.type != DATABOX_SIGNED_128) {
+                ERR("128-bit signed type incorrect for index %zu", i);
+            }
+            if (*bigBox.data.i128 != signedVals[i]) {
+                ERR("128-bit signed value mismatch for index %zu", i);
+            }
+        }
+
+        /* Test 128-bit unsigned integers */
+        __uint128_t unsignedVals[] = {(__uint128_t)0, (__uint128_t)1,
+                                      UINT128_MAX - 1, UINT128_MAX};
+
+        for (size_t i = 0; i < sizeof(unsignedVals) / sizeof(unsignedVals[0]);
+             i++) {
+            DATABOX_BIG_UNSIGNED_128(&bigBox, unsignedVals[i]);
+            if (bigBox.type != DATABOX_UNSIGNED_128) {
+                ERR("128-bit unsigned type incorrect for index %zu", i);
+            }
+            if (*bigBox.data.u128 != unsignedVals[i]) {
+                ERR("128-bit unsigned value mismatch for index %zu", i);
+            }
+        }
+
+        printf("  verified 128-bit integer operations\n");
+    }
+
+    TEST("FUZZ: random signed comparison with oracle") {
+        srand(12345);
+        const int numTests = 10000;
+        int mismatches = 0;
+
+        for (int i = 0; i < numTests; i++) {
+            int64_t a = ((int64_t)rand() << 32) | rand();
+            int64_t b = ((int64_t)rand() << 32) | rand();
+
+            /* Random sign flip */
+            if (rand() % 2) {
+                a = -a;
+            }
+            if (rand() % 2) {
+                b = -b;
+            }
+
+            databox boxA = databoxNewSigned(a);
+            databox boxB = databoxNewSigned(b);
+
+            int cmp = databoxCompare(&boxA, &boxB);
+
+            /* Oracle: simple comparison */
+            int expected;
+            if (a < b) {
+                expected = -1;
+            } else if (a > b) {
+                expected = 1;
+            } else {
+                expected = 0;
+            }
+
+            /* Verify sign matches */
+            if ((cmp < 0) != (expected < 0) || (cmp > 0) != (expected > 0) ||
+                (cmp == 0) != (expected == 0)) {
+                if (mismatches < 5) {
+                    ERR("Signed compare mismatch: %" PRId64 " vs %" PRId64
+                        ": got %d expected %d",
+                        a, b, cmp, expected);
+                }
+                mismatches++;
+            }
+        }
+
+        printf("  %d random signed comparisons, %d mismatches\n", numTests,
+               mismatches);
+    }
+
+    TEST("FUZZ: random unsigned comparison with oracle") {
+        srand(23456);
+        const int numTests = 10000;
+        int mismatches = 0;
+
+        for (int i = 0; i < numTests; i++) {
+            uint64_t a = ((uint64_t)rand() << 32) | rand();
+            uint64_t b = ((uint64_t)rand() << 32) | rand();
+
+            databox boxA = databoxNewUnsigned(a);
+            databox boxB = databoxNewUnsigned(b);
+
+            int cmp = databoxCompare(&boxA, &boxB);
+
+            /* Oracle */
+            int expected;
+            if (a < b) {
+                expected = -1;
+            } else if (a > b) {
+                expected = 1;
+            } else {
+                expected = 0;
+            }
+
+            if ((cmp < 0) != (expected < 0) || (cmp > 0) != (expected > 0) ||
+                (cmp == 0) != (expected == 0)) {
+                if (mismatches < 5) {
+                    ERR("Unsigned compare mismatch: %" PRIu64 " vs %" PRIu64
+                        ": got %d expected %d",
+                        a, b, cmp, expected);
+                }
+                mismatches++;
+            }
+        }
+
+        printf("  %d random unsigned comparisons, %d mismatches\n", numTests,
+               mismatches);
+    }
+
+    TEST("FUZZ: random double comparison with oracle") {
+        srand(34567);
+        const int numTests = 5000;
+        int mismatches = 0;
+
+        for (int i = 0; i < numTests; i++) {
+            /* Generate random doubles across a reasonable range */
+            double a = ((double)rand() / RAND_MAX - 0.5) * 2e10;
+            double b = ((double)rand() / RAND_MAX - 0.5) * 2e10;
+
+            databox boxA = databoxNewReal(a);
+            databox boxB = databoxNewReal(b);
+
+            int cmp = databoxCompare(&boxA, &boxB);
+
+            /* Oracle */
+            int expected;
+            if (a < b) {
+                expected = -1;
+            } else if (a > b) {
+                expected = 1;
+            } else {
+                expected = 0;
+            }
+
+            if ((cmp < 0) != (expected < 0) || (cmp > 0) != (expected > 0) ||
+                (cmp == 0) != (expected == 0)) {
+                if (mismatches < 5) {
+                    ERR("Double compare mismatch: %f vs %f: got %d expected %d",
+                        a, b, cmp, expected);
+                }
+                mismatches++;
+            }
+        }
+
+        printf("  %d random double comparisons, %d mismatches\n", numTests,
+               mismatches);
+    }
+
+    TEST("FUZZ: cross-type comparison consistency") {
+        /* Compare signed vs unsigned (same value should be equal) */
+        for (int64_t val = 0; val < 1000; val++) {
+            databox signedBox = databoxNewSigned(val);
+            databox unsignedBox = databoxNewUnsigned((uint64_t)val);
+
+            int cmp = databoxCompare(&signedBox, &unsignedBox);
+            if (cmp != 0) {
+                ERR("Same value %" PRId64
+                    " compares unequal across signed/unsigned",
+                    val);
+            }
+        }
+
+        /* Compare float vs double with same value */
+        float floatVals[] = {-1000.0f, -1.0f, 0.0f, 1.0f, 1000.0f};
+        for (size_t i = 0; i < sizeof(floatVals) / sizeof(floatVals[0]); i++) {
+            databox floatBox;
+            DATABOX_SET_FLOAT(&floatBox, floatVals[i]);
+            databox doubleBox = databoxNewReal((double)floatVals[i]);
+
+            int cmp = databoxCompare(&floatBox, &doubleBox);
+            if (cmp != 0) {
+                ERR("Same value %f compares unequal across float/double",
+                    floatVals[i]);
+            }
+        }
+
+        printf("  cross-type consistency verified\n");
+    }
+
+    TEST("FUZZ: bytes comparison with oracle") {
+        srand(45678);
+        const int numTests = 5000;
+        int mismatches = 0;
+        char buf1[64], buf2[64];
+
+        for (int i = 0; i < numTests; i++) {
+            /* Generate random lengths */
+            int len1 = rand() % 32 + 1;
+            int len2 = rand() % 32 + 1;
+
+            /* Fill with alphabetic chars for predictable comparison */
+            for (int j = 0; j < len1; j++) {
+                buf1[j] = 'a' + (rand() % 26);
+            }
+            buf1[len1] = '\0';
+
+            for (int j = 0; j < len2; j++) {
+                buf2[j] = 'a' + (rand() % 26);
+            }
+            buf2[len2] = '\0';
+
+            databox boxA = databoxNewBytesString(buf1);
+            databox boxB = databoxNewBytesString(buf2);
+
+            int cmp = databoxCompare(&boxA, &boxB);
+            int expected = strcmp(buf1, buf2);
+
+            /* Just check sign consistency */
+            if ((cmp < 0) != (expected < 0) || (cmp > 0) != (expected > 0) ||
+                (cmp == 0) != (expected == 0)) {
+                if (mismatches < 5) {
+                    ERR("Bytes compare mismatch: '%s' vs '%s': got %d expected "
+                        "%d",
+                        buf1, buf2, cmp, expected);
+                }
+                mismatches++;
+            }
+        }
+
+        printf("  %d random bytes comparisons, %d mismatches\n", numTests,
+               mismatches);
+    }
+
+    TEST("FUZZ: stress test - 100K random comparisons") {
+        srand(99999);
+        const int numTests = 100000;
+        int errors = 0;
+
+        for (int i = 0; i < numTests; i++) {
+            int type = rand() % 4;
+            databox boxA, boxB;
+            char buf1[16], buf2[16]; /* Must be in loop scope for case 3 */
+
+            switch (type) {
+            case 0: {
+                /* Signed */
+                int64_t a = ((int64_t)rand() << 32) | rand();
+                int64_t b = ((int64_t)rand() << 32) | rand();
+                if (rand() % 2) {
+                    a = -a;
+                }
+                if (rand() % 2) {
+                    b = -b;
+                }
+                boxA = databoxNewSigned(a);
+                boxB = databoxNewSigned(b);
+                break;
+            }
+            case 1: {
+                /* Unsigned */
+                uint64_t a = ((uint64_t)rand() << 32) | rand();
+                uint64_t b = ((uint64_t)rand() << 32) | rand();
+                boxA = databoxNewUnsigned(a);
+                boxB = databoxNewUnsigned(b);
+                break;
+            }
+            case 2: {
+                /* Double */
+                double a = ((double)rand() / RAND_MAX - 0.5) * 1e10;
+                double b = ((double)rand() / RAND_MAX - 0.5) * 1e10;
+                boxA = databoxNewReal(a);
+                boxB = databoxNewReal(b);
+                break;
+            }
+            case 3: {
+                /* Bytes */
+                int len1 = rand() % 15 + 1;
+                int len2 = rand() % 15 + 1;
+                for (int j = 0; j < len1; j++) {
+                    buf1[j] = 'a' + (rand() % 26);
+                }
+                buf1[len1] = '\0';
+                for (int j = 0; j < len2; j++) {
+                    buf2[j] = 'a' + (rand() % 26);
+                }
+                buf2[len2] = '\0';
+                boxA = databoxNewBytesString(buf1);
+                boxB = databoxNewBytesString(buf2);
+                break;
+            }
+            }
+
+            /* Test properties */
+            int cmpAB = databoxCompare(&boxA, &boxB);
+            int cmpBA = databoxCompare(&boxB, &boxA);
+            int cmpAA = databoxCompare(&boxA, &boxA);
+
+            /* Reflexivity */
+            if (cmpAA != 0) {
+                errors++;
+            }
+
+            /* Anti-symmetry */
+            if (!((cmpAB < 0 && cmpBA > 0) || (cmpAB > 0 && cmpBA < 0) ||
+                  (cmpAB == 0 && cmpBA == 0))) {
+                errors++;
+            }
+        }
+
+        printf("  100K random comparisons, %d errors\n", errors);
+        if (errors > 0) {
+            ERR("Stress test had %d errors", errors);
+        }
+    }
+
+    printf("\n=== All databox fuzz tests completed! ===\n\n");
+
     TEST_FINAL_RESULT;
 }
 #endif /* DATAKIT_TEST */

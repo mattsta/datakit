@@ -174,9 +174,12 @@ void multimapMediumInsertWithSurrogateKey(
         m, elements[0], referenceContainer);
 
     flexEntry *middle = GET_MIDDLE(m, mapIdx);
+    /* compareUsingKeyElementOnly: For maps (!mapIsSet), compare only key.
+     * For sets (mapIsSet), compare all elements to check for full-width dups.
+     */
     flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKey(
         &m->map[mapIdx], m->elementsPerEntry, elements, insertKey, &middle,
-        m->mapIsSet, referenceContainer);
+        !m->mapIsSet, referenceContainer);
     SET_MIDDLE(m, mapIdx, middle);
 }
 
@@ -184,8 +187,11 @@ bool multimapMediumInsert(multimapMedium *m, const databox *elements[]) {
     size_t mapIdx = multimapMediumBinarySearch(m, elements[0]);
 
     flexEntry *middle = GET_MIDDLE(m, mapIdx);
+    /* compareUsingKeyElementOnly: For maps (!mapIsSet), compare only key.
+     * For sets (mapIsSet), compare all elements to check for full-width dups.
+     */
     const bool replaced = flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
-        &m->map[mapIdx], m->elementsPerEntry, elements, &middle, m->mapIsSet);
+        &m->map[mapIdx], m->elementsPerEntry, elements, &middle, !m->mapIsSet);
     SET_MIDDLE(m, mapIdx, middle);
     return replaced;
 }
@@ -195,8 +201,10 @@ void multimapMediumInsertFullWidth(multimapMedium *m,
     size_t mapIdx = multimapMediumBinarySearchFullWidth(m, elements);
 
     flexEntry *middle = GET_MIDDLE(m, mapIdx);
+    /* InsertFullWidth: Always compare ALL elements (key+value) to allow
+     * multiple entries with same key but different values (sorted set). */
     flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
-        &m->map[mapIdx], m->elementsPerEntry, elements, &middle, m->mapIsSet);
+        &m->map[mapIdx], m->elementsPerEntry, elements, &middle, false);
     SET_MIDDLE(m, mapIdx, middle);
 }
 
@@ -204,8 +212,11 @@ void multimapMediumAppend(multimapMedium *m, const databox *elements[]) {
     static const size_t mapIdx = 1; /* always insert into highest map! */
 
     flexEntry *middle = GET_MIDDLE(m, mapIdx);
+    /* compareUsingKeyElementOnly: For maps (!mapIsSet), compare only key.
+     * For sets (mapIsSet), compare all elements to check for full-width dups.
+     */
     flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
-        &m->map[mapIdx], m->elementsPerEntry, elements, &middle, m->mapIsSet);
+        &m->map[mapIdx], m->elementsPerEntry, elements, &middle, !m->mapIsSet);
     SET_MIDDLE(m, mapIdx, middle);
 }
 
@@ -424,8 +435,21 @@ bool multimapMediumDeleteRandomValue(multimapMedium *m,
                                      const bool deleteFromTail,
                                      databox **deletedBox) {
     multimapEntry me;
-    if (!multimapMediumRandomValue(m, deleteFromTail, deletedBox, &me)) {
+    /* Pass NULL for deletedBox to multimapMediumRandomValue, then manually
+     * copy the data using flexGetByTypeCopy. This avoids use-after-free
+     * since flexGetByType returns pointers to internal flex data which
+     * become invalid after multimapMediumDeleteEntry. */
+    if (!multimapMediumRandomValue(m, deleteFromTail, NULL, &me)) {
         return false;
+    }
+
+    /* Copy the data before deletion so caller has valid data */
+    if (deletedBox) {
+        flexEntry *fe = me.fe;
+        for (size_t i = 0; i < m->elementsPerEntry; i++) {
+            flexGetByTypeCopy(fe, deletedBox[i]);
+            fe = flexNext(*me.map, fe);
+        }
     }
 
     multimapMediumDeleteEntry(m, &me);

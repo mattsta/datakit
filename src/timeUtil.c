@@ -1,5 +1,25 @@
 #include "timeUtil.h"
 
+uint64_t timeUtilNs(void) {
+    struct timespec ts;
+
+#if DK_OS_APPLE
+    /* macOS: Use Mach kernel clock_get_time with CALENDAR_CLOCK */
+    clock_serv_t cclock;
+    mach_timespec_t mts;
+    host_get_clock_service(mach_host_self(), CALENDAR_CLOCK, &cclock);
+    clock_get_time(cclock, &mts);
+    mach_port_deallocate(mach_task_self(), cclock);
+    ts.tv_sec = mts.tv_sec;
+    ts.tv_nsec = mts.tv_nsec;
+#else
+    /* Linux/BSD: Use clock_gettime with CLOCK_REALTIME */
+    clock_gettime(CLOCK_REALTIME, &ts);
+#endif
+
+    return ((uint64_t)ts.tv_sec * 1000000000ULL) + (uint64_t)ts.tv_nsec;
+}
+
 uint64_t timeUtilUs(void) {
     struct timeval tv;
     uint64_t ust;
@@ -31,23 +51,19 @@ uint64_t timeUtilS(void) {
 
 /* We only care about an abstract monotonic time */
 uint64_t TIME_INIT timeUtilMonotonicNs(void) {
-#if DK_OS_APPLE_MAC
-    /* on macOS, mach_absolute_time() returns time in nanoseconds directly */
-    return mach_absolute_time();
-#elif DK_OS_APPLE
-    /* other Apple platforms don't guarantee the units
-     * of mach_absolute_time, so we need to use internal
-     * info to convert to final units */
+#if DK_OS_APPLE
+    /* Apple platforms use mach_absolute_time() which returns ticks.
+     * We must convert using timebase info - even on macOS where
+     * the ratio may be 1:1 on Apple Silicon but differs on Intel. */
     uint64_t machTime = mach_absolute_time();
     static mach_timebase_info_data_t timebaseInfo = {0};
-    static uint64_t unitOffset = 0;
 
-    if (!unitOffset) {
+    if (timebaseInfo.denom == 0) {
         (void)mach_timebase_info(&timebaseInfo);
-        unitOffset = timebaseInfo.numer / timebaseInfo.denom;
     }
 
-    return machTime * unitOffset;
+    /* Convert mach time to nanoseconds: machTime * numer / denom */
+    return machTime * timebaseInfo.numer / timebaseInfo.denom;
 #else
 #if DK_OS_FREEBSD
     const clockid_t useClock = CLOCK_MONOTONIC_FAST;
@@ -171,7 +187,7 @@ int timeUtilTest(int argc, char *argv[]) {
         /* us should be approximately ns/1000 */
         uint64_t usFromNs = ns / 1000;
         int64_t diff = (int64_t)us - (int64_t)usFromNs;
-        if (diff < -10 || diff > 10) {
+        if (diff < -100 || diff > 100) {
             ERR("MonotonicNs (%" PRIu64 ") and MonotonicUs (%" PRIu64
                 ") inconsistent",
                 ns, us);

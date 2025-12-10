@@ -4,54 +4,76 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Note that these encodings are ordered, so:
- * INTSET_ENC_INT16 < INTSET_ENC_INT32 < INTSET_ENC_INT64. */
+/* Tiered intset implementation using pointer tagging
+ * - Small tier: int16_t values only (single contiguous array)
+ * - Medium tier: int16_t and int32_t values (separate sorted arrays)
+ * - Full tier: int16_t, int32_t, and int64_t values (three sorted arrays)
+ *
+ * This avoids the old problem where adding one large value would
+ * upgrade the entire array from int16 to int64 encoding.
+ */
+
+/* Opaque pointer type - actual tier determined by pointer tagging */
+typedef struct intset intset;
+
+/* For backward compatibility */
 typedef enum intsetEnc {
     INTSET_ENC_INT16 = sizeof(int16_t),
     INTSET_ENC_INT32 = sizeof(int32_t),
     INTSET_ENC_INT64 = sizeof(int64_t)
 } intsetEnc;
 
-typedef struct intset {
-    intsetEnc encoding;
-
-    /* technically, 'length' should be a size_t, but in reality if a user has
-     * more than 2^32 elements, their set will be over 35 GB rendering most
-     * usage of it really bad performance-wise since 'contents' is a linearly
-     * realloc'd array for additions/removals. */
-    uint32_t length;
-
-    /* variable elements fit the smallest storage type possible for all elements
-     * during insert, but does not shrink on removal.
-     * (e.g. if you add 5, 10, 20, it'll use int16_t storage.
-     *       if you add 5, 10, 20, 200, it'll use int32_t storage.
-     *       if you add 5, 10, INT_MAX + 1, it'll use int64_t storage.)
-     *       NOTE: storage does NOT shrink. If you get upgraded to 8 byte
-     *             storage then remove all 8 byte values, it remains 8 byte
-     *             storage forever.
-     *       Also, you're out of luck if you want to store larger than INT64_MAX
-     */
-    int8_t contents[];
-} intset;
-
+/* Create new intset */
 intset *intsetNew(void);
+
+/* Free intset */
 void intsetFree(intset *is);
+
+/* Add value to intset
+ * is: pointer to intset pointer (may be modified due to reallocation/upgrade)
+ * value: value to add
+ * success: set to true if added, false if already exists */
 void intsetAdd(intset **is, int64_t value, bool *success);
+
+/* Remove value from intset
+ * is: pointer to intset pointer (may be modified due to reallocation)
+ * value: value to remove
+ * success: set to true if removed, false if not found */
 void intsetRemove(intset **is, int64_t value, bool *success);
+
+/* Find if value exists in intset */
 bool intsetFind(intset *is, int64_t value);
+
+/* Get value at position (0-indexed)
+ * Note: In tiered implementation, this performs virtual merge of arrays.
+ * For Medium/Full tiers, this is O(n) worst case. Use iterator for traversal.
+ */
 bool intsetGet(intset *is, uint32_t pos, int64_t *value);
+
+/* Get random value from intset */
 int64_t intsetRandom(intset *is);
+
+/* Get total count of elements */
 size_t intsetCount(const intset *is);
+
+/* Get total bytes used */
 size_t intsetBytes(intset *is);
 
 #ifdef DATAKIT_TEST
+/* Print representation of intset */
 void intsetRepr(const intset *is);
+
+/* Run intset tests */
 int intsetTest(int argc, char *argv[]);
 #endif
 
 /*
+ * Original intset implementation:
  * Copyright (c) 2009-2012, Pieter Noordhuis <pcnoordhuis at gmail dot com>
  * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ *
+ * Tiered implementation enhancements:
+ * Copyright (c) 2024, Matt Stancliff
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without

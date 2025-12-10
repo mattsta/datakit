@@ -167,8 +167,8 @@ static int testInt64DoubleComparison(void) {
         /* Beyond 2^53, double loses precision */
         const int64_t beyondExact = twoTo53 + 1;
         double d_beyond = (double)beyondExact;
-        printf("  2^53 + 1 = %lld, (double)(2^53+1) = %.0f\n",
-               (long long)beyondExact, d_beyond);
+        printf("  2^53 + 1 = %" PRId64 ", (double)(2^53+1) = %.0f\n",
+               beyondExact, d_beyond);
         /* The double representation rounds, so comparison may not be 0 */
     }
 
@@ -323,7 +323,7 @@ static int testFallbackEdgeCases(void) {
         const int64_t slightlyBeyond = (1LL << 53) + 100;
         d = (double)slightlyBeyond;
         /* When converted back, there may be rounding */
-        printf("  %lld vs %.0f: cmp=%d\n", (long long)slightlyBeyond, d,
+        printf("  %" PRId64 " vs %.0f: cmp=%d\n", slightlyBeyond, d,
                dk_compare_int64_double(slightlyBeyond, d));
     }
 
@@ -337,15 +337,15 @@ static int testFallbackEdgeCases(void) {
             int cmp = dk_compare_int64_double(values[i], (double)values[i + 1]);
             if (cmp >= 0 && values[i] < values[i + 1]) {
                 /* May happen due to double precision loss at extremes */
-                printf("  Warning: %lld vs %.0f = %d (precision loss)\n",
-                       (long long)values[i], (double)values[i + 1], cmp);
+                printf("  Warning: %" PRId64 " vs %.0f = %d (precision loss)\n",
+                       values[i], (double)values[i + 1], cmp);
             }
         }
 
         /* Self-comparison should always be 0 for values that fit exactly */
         for (int64_t v = -1000; v <= 1000; v++) {
             if (dk_compare_int64_double(v, (double)v) != 0) {
-                ERR("Self-comparison failed for %lld", (long long)v);
+                ERR("Self-comparison failed for %" PRId64, v);
             }
         }
     }
@@ -383,7 +383,7 @@ static int testPerformance(void) {
         }
         PERF_TIMERS_FINISH;
         PERF_TIMERS_RESULT_PRINT(iterations, "comparisons");
-        printf("  (sum=%lld to prevent optimization)\n", (long long)sum);
+        printf("  (sum=%" PRId64 " to prevent optimization)\n", sum);
     }
 
     TEST("Performance: pow10 computation throughput") {

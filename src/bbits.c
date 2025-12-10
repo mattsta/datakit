@@ -38,9 +38,11 @@ bool bbitsDodDodAppend(bbitsDodDod *dd, const dodVal newKey,
             dodCloseWrites(kw);
             dodCloseWrites(vw);
 
-            /* conform allocation size of unused space */
-            const size_t kwCeil = DOD_DIV_CEIL(kw->usedBits, 8);
-            const size_t vwCeil = DOD_DIV_CEIL(vw->usedBits, 8);
+            /* conform allocation size of unused space
+             * Note: Add 8 bytes padding because varintBitstreamGet may read
+             * up to 8 bytes ahead when bits span word boundaries */
+            const size_t kwCeil = DOD_DIV_CEIL(kw->usedBits, 8) + 8;
+            const size_t vwCeil = DOD_DIV_CEIL(vw->usedBits, 8) + 8;
             if (kwCeil < BYTES_PER_BITMAP) {
                 kw->d = zrealloc(kw->d, kwCeil);
             }
@@ -290,9 +292,11 @@ bool bbitsDodXofAppend(bbitsDodXof *dx, const dodVal newKey,
             dodCloseWrites(kw);
             //            dodCloseWrites(vw);
 
-            /* conform allocation size of unused space */
-            const size_t kwCeil = DOD_DIV_CEIL(kw->usedBits, 8);
-            const size_t vwCeil = DOD_DIV_CEIL(vw->usedBits, 8);
+            /* conform allocation size of unused space
+             * Note: Add 8 bytes padding because varintBitstreamGet may read
+             * up to 8 bytes ahead when bits span word boundaries */
+            const size_t kwCeil = DOD_DIV_CEIL(kw->usedBits, 8) + 8;
+            const size_t vwCeil = DOD_DIV_CEIL(vw->usedBits, 8) + 8;
             if (kwCeil < BYTES_PER_BITMAP) {
                 kw->d = zrealloc(kw->d, kwCeil);
             }

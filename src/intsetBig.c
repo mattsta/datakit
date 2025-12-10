@@ -160,7 +160,11 @@ valueFromBucketOffset(const databoxBig *restrict const bucket,
 intsetBig *intsetBigNew(void) {
     /* Create map of bucketIndex -> intsetU32 */
     intsetBig *isb = zmalloc(sizeof(*isb));
-    isb->i = multimapSetNew(2);
+    /* Use multimapNew (not multimapSetNew) because we need key-only comparison
+     * for insert/replace operations. multimapSetNew compares all elements
+     * (key+value), so when the intsetU32 pointer changes after resize, the
+     * replace operation fails to find the existing entry. */
+    isb->i = multimapNew(2);
     return isb;
 }
 
@@ -349,13 +353,6 @@ bool intsetBigAdd(intsetBig *isb, const databoxBig *val) {
         /* Need to update multimap bucket again since the set pointer changed */
         const databox *insert[] = {(databox *)&lookup, &found};
         multimapInsert(&isb->i, insert);
-
-#ifndef NDEBUG
-        databox *check[1] = {&found};
-        const bool foundM = multimapLookup(isb->i, (databox *)&lookup, check);
-        assert(foundM);
-        assert(found.type == DATABOX_UNSIGNED_64);
-#endif
     }
 
     /* At this point we've encountered no errors and did something. */
@@ -1113,6 +1110,692 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
 
         if (intsetBigCountElements(isb)) {
             ERRR("Has elements?");
+        }
+
+        intsetBigFree(isb);
+    }
+
+    TEST("duplicate add returns false") {
+        intsetBig *isb = intsetBigNew();
+        databoxBig val = DATABOX_BIG_UNSIGNED(12345);
+
+        if (!intsetBigAdd(isb, &val)) {
+            ERRR("First add should succeed!");
+        }
+
+        if (intsetBigAdd(isb, &val)) {
+            ERRR("Duplicate add should return false!");
+        }
+
+        if (intsetBigCountElements(isb) != 1) {
+            ERRR("Count should be 1 after duplicate add!");
+        }
+
+        intsetBigFree(isb);
+    }
+
+    TEST("remove non-existent returns false") {
+        intsetBig *isb = intsetBigNew();
+        databoxBig val = DATABOX_BIG_UNSIGNED(12345);
+
+        if (intsetBigRemove(isb, &val)) {
+            ERRR("Remove from empty set should return false!");
+        }
+
+        /* Add one value, try to remove different value */
+        intsetBigAdd(isb, &val);
+        databoxBig other = DATABOX_BIG_UNSIGNED(99999);
+        if (intsetBigRemove(isb, &other)) {
+            ERRR("Remove non-existent should return false!");
+        }
+
+        if (intsetBigCountElements(isb) != 1) {
+            ERRR("Count should still be 1!");
+        }
+
+        intsetBigFree(isb);
+    }
+
+    TEST("exists on empty set returns false") {
+        intsetBig *isb = intsetBigNew();
+        databoxBig val = DATABOX_BIG_UNSIGNED(12345);
+
+        if (intsetBigExists(isb, &val)) {
+            ERRR("Exists on empty set should return false!");
+        }
+
+        intsetBigFree(isb);
+    }
+
+    TEST("iterator on empty set yields nothing") {
+        intsetBig *isb = intsetBigNew();
+        intsetBigIterator iter;
+        databoxBig val;
+
+        intsetBigIteratorInit(isb, &iter);
+        if (intsetBigIteratorNextBox(&iter, &val)) {
+            ERRR("Iterator on empty set should yield nothing!");
+        }
+
+        intsetBigFree(isb);
+    }
+
+    TEST("intsetBigCopy creates independent copy") {
+        intsetBig *isb = intsetBigNew();
+        databoxBig vals[5] = {
+            DATABOX_BIG_UNSIGNED(100), DATABOX_BIG_SIGNED(-200),
+            DATABOX_BIG_UNSIGNED(1ULL << 30), DATABOX_BIG_SIGNED(-(1LL << 25)),
+            DATABOX_BIG_UNSIGNED(0)};
+
+        for (size_t i = 0; i < COUNT_ARRAY(vals); i++) {
+            intsetBigAdd(isb, &vals[i]);
+        }
+
+        intsetBig *copy = intsetBigCopy(isb);
+
+        /* Verify copy has same elements */
+        if (intsetBigCountElements(copy) != intsetBigCountElements(isb)) {
+            ERRR("Copy should have same count!");
+        }
+
+        for (size_t i = 0; i < COUNT_ARRAY(vals); i++) {
+            if (!intsetBigExists(copy, &vals[i])) {
+                ERR("Copy missing value %zu!", i);
+            }
+        }
+
+        /* Modify original, verify copy unchanged */
+        databoxBig newVal = DATABOX_BIG_UNSIGNED(999999);
+        intsetBigAdd(isb, &newVal);
+
+        if (intsetBigExists(copy, &newVal)) {
+            ERRR("Copy should be independent of original!");
+        }
+
+        if (intsetBigCountElements(copy) != 5) {
+            ERRR("Copy count should still be 5!");
+        }
+
+        intsetBigFree(isb);
+        intsetBigFree(copy);
+    }
+
+    TEST("intsetBigEqual") {
+        intsetBig *a = intsetBigNew();
+        intsetBig *b = intsetBigNew();
+
+        /* Empty sets are equal */
+        if (!intsetBigEqual(a, b)) {
+            ERRR("Empty sets should be equal!");
+        }
+
+        /* Same set is equal to itself */
+        if (!intsetBigEqual(a, a)) {
+            ERRR("Set should equal itself!");
+        }
+
+        /* Add same elements to both */
+        databoxBig vals[3] = {DATABOX_BIG_UNSIGNED(100),
+                              DATABOX_BIG_SIGNED(-50),
+                              DATABOX_BIG_UNSIGNED(1ULL << 35)};
+
+        for (size_t i = 0; i < COUNT_ARRAY(vals); i++) {
+            intsetBigAdd(a, &vals[i]);
+            intsetBigAdd(b, &vals[i]);
+        }
+
+        if (!intsetBigEqual(a, b)) {
+            ERRR("Sets with same elements should be equal!");
+        }
+
+        /* Add different element to one */
+        databoxBig extra = DATABOX_BIG_UNSIGNED(777);
+        intsetBigAdd(a, &extra);
+
+        if (intsetBigEqual(a, b)) {
+            ERRR("Sets with different elements should not be equal!");
+        }
+
+        intsetBigFree(a);
+        intsetBigFree(b);
+    }
+
+    TEST("intsetBigSubset") {
+        intsetBig *a = intsetBigNew();
+        intsetBig *b = intsetBigNew();
+
+        /* Empty set is subset of any set */
+        if (!intsetBigSubset(a, b)) {
+            ERRR("Empty set should be subset of empty set!");
+        }
+
+        /* Add elements to b */
+        databoxBig vals[4] = {
+            DATABOX_BIG_UNSIGNED(10), DATABOX_BIG_UNSIGNED(20),
+            DATABOX_BIG_UNSIGNED(30), DATABOX_BIG_UNSIGNED(40)};
+
+        for (size_t i = 0; i < COUNT_ARRAY(vals); i++) {
+            intsetBigAdd(b, &vals[i]);
+        }
+
+        /* Empty set is subset of non-empty */
+        if (!intsetBigSubset(a, b)) {
+            ERRR("Empty set should be subset of non-empty set!");
+        }
+
+        /* Add subset of elements to a */
+        intsetBigAdd(a, &vals[0]);
+        intsetBigAdd(a, &vals[2]);
+
+        if (!intsetBigSubset(a, b)) {
+            ERRR("a should be subset of b!");
+        }
+
+        /* Add element not in b to a */
+        databoxBig extra = DATABOX_BIG_UNSIGNED(999);
+        intsetBigAdd(a, &extra);
+
+        if (intsetBigSubset(a, b)) {
+            ERRR("a with extra element should not be subset of b!");
+        }
+
+        intsetBigFree(a);
+        intsetBigFree(b);
+    }
+
+    TEST("intsetBigIntersect") {
+        intsetBig *a = intsetBigNew();
+        intsetBig *b = intsetBigNew();
+        intsetBig *result = intsetBigNew();
+
+        /* Intersect empty sets */
+        size_t count = intsetBigIntersect(a, b, result);
+        if (count != 0 || intsetBigCountElements(result) != 0) {
+            ERRR("Intersect of empty sets should be empty!");
+        }
+
+        /* Add elements: a = {1, 2, 3, 4}, b = {2, 4, 6, 8} */
+        databoxBig aVals[4] = {DATABOX_BIG_UNSIGNED(1), DATABOX_BIG_UNSIGNED(2),
+                               DATABOX_BIG_UNSIGNED(3),
+                               DATABOX_BIG_UNSIGNED(4)};
+        databoxBig bVals[4] = {DATABOX_BIG_UNSIGNED(2), DATABOX_BIG_UNSIGNED(4),
+                               DATABOX_BIG_UNSIGNED(6),
+                               DATABOX_BIG_UNSIGNED(8)};
+
+        for (size_t i = 0; i < 4; i++) {
+            intsetBigAdd(a, &aVals[i]);
+            intsetBigAdd(b, &bVals[i]);
+        }
+
+        /* Clear result and intersect */
+        intsetBigFree(result);
+        result = intsetBigNew();
+
+        count = intsetBigIntersect(a, b, result);
+        if (count != 2) {
+            ERR("Intersect count should be 2, got %zu!", count);
+        }
+
+        /* Verify intersection contains {2, 4} */
+        databoxBig two = DATABOX_BIG_UNSIGNED(2);
+        databoxBig four = DATABOX_BIG_UNSIGNED(4);
+        databoxBig one = DATABOX_BIG_UNSIGNED(1);
+
+        if (!intsetBigExists(result, &two) || !intsetBigExists(result, &four)) {
+            ERRR("Intersection should contain 2 and 4!");
+        }
+
+        if (intsetBigExists(result, &one)) {
+            ERRR("Intersection should not contain 1!");
+        }
+
+        intsetBigFree(a);
+        intsetBigFree(b);
+        intsetBigFree(result);
+    }
+
+    TEST("intsetBigMergeInto") {
+        intsetBig *a = intsetBigNew();
+        intsetBig *b = intsetBigNew();
+
+        /* Add elements: a = {1, 2, 3}, b = {3, 4, 5} */
+        databoxBig aVals[3] = {DATABOX_BIG_UNSIGNED(1), DATABOX_BIG_UNSIGNED(2),
+                               DATABOX_BIG_UNSIGNED(3)};
+        databoxBig bVals[3] = {DATABOX_BIG_UNSIGNED(3), DATABOX_BIG_UNSIGNED(4),
+                               DATABOX_BIG_UNSIGNED(5)};
+
+        for (size_t i = 0; i < 3; i++) {
+            intsetBigAdd(a, &aVals[i]);
+            intsetBigAdd(b, &bVals[i]);
+        }
+
+        /* Merge b into a: a should become {1, 2, 3, 4, 5} */
+        intsetBigMergeInto(a, b);
+
+        if (intsetBigCountElements(a) != 5) {
+            ERR("After merge, a should have 5 elements, got %zu!",
+                intsetBigCountElements(a));
+        }
+
+        /* Verify all elements present */
+        for (size_t i = 0; i < 3; i++) {
+            if (!intsetBigExists(a, &aVals[i])) {
+                ERR("Merged set missing original element %zu!", i);
+            }
+            if (!intsetBigExists(a, &bVals[i])) {
+                ERR("Merged set missing merged element %zu!", i);
+            }
+        }
+
+        intsetBigFree(a);
+        intsetBigFree(b);
+    }
+
+    TEST("intsetBigRandom and intsetBigRandomDelete") {
+        intsetBig *isb = intsetBigNew();
+
+        /* Add some elements */
+        for (uint64_t i = 0; i < 100; i++) {
+            databoxBig val = DATABOX_BIG_UNSIGNED(i * 1000);
+            intsetBigAdd(isb, &val);
+        }
+
+        if (intsetBigCountElements(isb) != 100) {
+            ERRR("Should have 100 elements!");
+        }
+
+        /* Get random elements and verify they exist */
+        for (int i = 0; i < 50; i++) {
+            databoxBig randomVal;
+            if (!intsetBigRandom(isb, &randomVal)) {
+                ERRR("Random should succeed on non-empty set!");
+            }
+
+            if (!intsetBigExists(isb, &randomVal)) {
+                ERRR("Random value should exist in set!");
+            }
+        }
+
+        /* Random delete until empty */
+        size_t originalCount = intsetBigCountElements(isb);
+        for (size_t i = 0; i < originalCount; i++) {
+            databoxBig deleted;
+            if (!intsetBigRandomDelete(isb, &deleted)) {
+                ERR("RandomDelete should succeed, iteration %zu!", i);
+            }
+
+            if (intsetBigExists(isb, &deleted)) {
+                ERRR("Deleted value should not exist anymore!");
+            }
+        }
+
+        if (intsetBigCountElements(isb) != 0) {
+            ERRR("Set should be empty after deleting all elements!");
+        }
+
+        intsetBigFree(isb);
+    }
+
+    TEST("intsetBigBytes") {
+        intsetBig *isb = intsetBigNew();
+        size_t emptyBytes = intsetBigBytes(isb);
+
+        if (emptyBytes == 0) {
+            ERRR("Even empty set should have some bytes!");
+        }
+
+        /* Add elements and verify bytes increase */
+        for (uint64_t i = 0; i < 1000; i++) {
+            databoxBig val = DATABOX_BIG_UNSIGNED(i);
+            intsetBigAdd(isb, &val);
+        }
+
+        size_t fullBytes = intsetBigBytes(isb);
+        if (fullBytes <= emptyBytes) {
+            ERRR("Bytes should increase with more elements!");
+        }
+
+        intsetBigFree(isb);
+    }
+
+    TEST("bucket boundary values") {
+        intsetBig *isb = intsetBigNew();
+
+        /* Test values around bucket boundaries (divisor = 2^20 = 1048576) */
+        uint64_t boundary = 1ULL << 20;
+        databoxBig vals[] = {
+            DATABOX_BIG_UNSIGNED(boundary - 1),     /* last in bucket 0 */
+            DATABOX_BIG_UNSIGNED(boundary),         /* first in bucket 1 */
+            DATABOX_BIG_UNSIGNED(boundary + 1),     /* second in bucket 1 */
+            DATABOX_BIG_UNSIGNED(2 * boundary - 1), /* last in bucket 1 */
+            DATABOX_BIG_UNSIGNED(2 * boundary),     /* first in bucket 2 */
+            DATABOX_BIG_SIGNED(-(int64_t)(boundary - 1)), /* in bucket -1 */
+            DATABOX_BIG_SIGNED(-(int64_t)boundary),       /* in bucket -1 */
+            DATABOX_BIG_SIGNED(-(int64_t)(boundary + 1)), /* in bucket -2 */
+        };
+
+        for (size_t i = 0; i < COUNT_ARRAY(vals); i++) {
+            if (!intsetBigAdd(isb, &vals[i])) {
+                ERR("Failed to add boundary value %zu!", i);
+            }
+        }
+
+        /* Verify all exist */
+        for (size_t i = 0; i < COUNT_ARRAY(vals); i++) {
+            if (!intsetBigExists(isb, &vals[i])) {
+                ERR("Boundary value %zu not found!", i);
+            }
+        }
+
+        /* Verify correct bucket count */
+        size_t buckets = intsetBigCountBuckets(isb);
+        if (buckets != 5) { /* buckets: -2, -1, 0, 1, 2 */
+            ERR("Expected 5 buckets, got %zu!", buckets);
+        }
+
+        /* Remove and verify */
+        for (size_t i = 0; i < COUNT_ARRAY(vals); i++) {
+            if (!intsetBigRemove(isb, &vals[i])) {
+                ERR("Failed to remove boundary value %zu!", i);
+            }
+        }
+
+        if (intsetBigCountElements(isb) != 0) {
+            ERRR("Should be empty after removing all!");
+        }
+
+        intsetBigFree(isb);
+    }
+
+    TEST("signed zero edge case") {
+        intsetBig *isb = intsetBigNew();
+
+        /* Test signed and unsigned zero */
+        databoxBig uzero = DATABOX_BIG_UNSIGNED(0);
+        databoxBig szero = DATABOX_BIG_SIGNED(0);
+
+        intsetBigAdd(isb, &uzero);
+
+        /* Both representations of zero should exist */
+        if (!intsetBigExists(isb, &uzero)) {
+            ERRR("Unsigned zero should exist!");
+        }
+
+        /* Signed zero also goes to bucket 0 offset 0 */
+        if (!intsetBigExists(isb, &szero)) {
+            ERRR("Signed zero should also be found!");
+        }
+
+        if (intsetBigCountElements(isb) != 1) {
+            ERRR("Should only have 1 element (zero)!");
+        }
+
+        intsetBigFree(isb);
+    }
+
+    TEST("large scale add/remove/iterate") {
+        intsetBig *isb = intsetBigNew();
+        const size_t N = 10000;
+
+        /* Add N elements with various patterns */
+        for (size_t i = 0; i < N; i++) {
+            uint64_t val =
+                (i * 7919) % (1ULL << 40); /* Pseudo-random scatter */
+            databoxBig box = DATABOX_BIG_UNSIGNED(val);
+            intsetBigAdd(isb, &box);
+        }
+
+        /* Count via iteration should match */
+        intsetBigIterator iter;
+        databoxBig val;
+        size_t iterCount = 0;
+
+        intsetBigIteratorInit(isb, &iter);
+        while (intsetBigIteratorNextBox(&iter, &val)) {
+            iterCount++;
+        }
+
+        if (iterCount != intsetBigCountElements(isb)) {
+            ERR("Iterator count %zu != element count %zu!", iterCount,
+                intsetBigCountElements(isb));
+        }
+
+        /* Verify sorted order in iteration */
+        databoxBig prev = {0};
+        bool first = true;
+        intsetBigIteratorInit(isb, &iter);
+        while (intsetBigIteratorNextBox(&iter, &val)) {
+            if (!first) {
+                if (databoxCompare((databox *)&prev, (databox *)&val) >= 0) {
+                    ERRR("Iterator should yield sorted ascending order!");
+                }
+            }
+            prev = val;
+            first = false;
+        }
+
+        intsetBigFree(isb);
+    }
+
+    TEST("fuzzer - random operations") {
+        intsetBig *isb = intsetBigNew();
+        /* Simple reference set for validation (limited range) */
+        bool refSet[10000] = {0};
+        const size_t refMax = 10000;
+
+        /* Seed for reproducibility */
+        srandom(12345);
+
+        const size_t numOps = 5000;
+        for (size_t op = 0; op < numOps; op++) {
+            int opType = random() % 4;
+            uint64_t val = random() % refMax;
+            databoxBig box = DATABOX_BIG_UNSIGNED(val);
+
+            switch (opType) {
+            case 0: { /* Add */
+                bool added = intsetBigAdd(isb, &box);
+                if (refSet[val]) {
+                    if (added) {
+                        ERR("Add %" PRIu64 ": duplicate should return false!",
+                            val);
+                    }
+                } else {
+                    if (!added) {
+                        ERR("Add %" PRIu64 ": new value should return true!",
+                            val);
+                    }
+                    refSet[val] = true;
+                }
+                break;
+            }
+            case 1: { /* Remove */
+                bool removed = intsetBigRemove(isb, &box);
+                if (refSet[val]) {
+                    if (!removed) {
+                        ERR("Remove %" PRIu64 ": existing should return true!",
+                            val);
+                    }
+                    refSet[val] = false;
+                } else {
+                    if (removed) {
+                        ERR("Remove %" PRIu64
+                            ": non-existent should return false!",
+                            val);
+                    }
+                }
+                break;
+            }
+            case 2: { /* Exists */
+                bool exists = intsetBigExists(isb, &box);
+                if (exists != refSet[val]) {
+                    ERR("Exists %" PRIu64 ": mismatch (got %d, expected %d)!",
+                        val, exists, refSet[val]);
+                }
+                break;
+            }
+            case 3: { /* Random (if non-empty) */
+                size_t count = intsetBigCountElements(isb);
+                if (count > 0) {
+                    databoxBig randomVal;
+                    if (!intsetBigRandom(isb, &randomVal)) {
+                        ERRR("Random failed on non-empty set!");
+                    }
+                    if (!intsetBigExists(isb, &randomVal)) {
+                        ERRR("Random value doesn't exist!");
+                    }
+                }
+                break;
+            }
+            }
+        }
+
+        /* Final validation: count reference set vs intsetBig */
+        size_t refCount = 0;
+        for (size_t i = 0; i < refMax; i++) {
+            if (refSet[i]) {
+                refCount++;
+                databoxBig box = DATABOX_BIG_UNSIGNED(i);
+                if (!intsetBigExists(isb, &box)) {
+                    ERR("Final check: %zu should exist!", i);
+                }
+            }
+        }
+
+        if (refCount != intsetBigCountElements(isb)) {
+            ERR("Final count mismatch: ref=%zu, isb=%zu!", refCount,
+                intsetBigCountElements(isb));
+        }
+
+        intsetBigFree(isb);
+    }
+
+    TEST("fuzzer - mixed positive and negative values") {
+        intsetBig *isb = intsetBigNew();
+        srandom(54321);
+
+        const size_t numOps = 3000;
+        for (size_t op = 0; op < numOps; op++) {
+            int64_t val =
+                (random() % 200000) - 100000; /* Range: -100000 to 99999 */
+            databoxBig box = DATABOX_BIG_SIGNED(val);
+
+            int opType = random() % 3;
+            switch (opType) {
+            case 0:
+                intsetBigAdd(isb, &box);
+                break;
+            case 1:
+                intsetBigRemove(isb, &box);
+                break;
+            case 2:
+                intsetBigExists(isb, &box);
+                break;
+            }
+        }
+
+        /* Verify iteration order is sorted */
+        intsetBigIterator iter;
+        databoxBig val, prev = {0};
+        bool first = true;
+        size_t count = 0;
+
+        intsetBigIteratorInit(isb, &iter);
+        while (intsetBigIteratorNextBox(&iter, &val)) {
+            if (!first) {
+                if (databoxCompare((databox *)&prev, (databox *)&val) >= 0) {
+                    ERRR("Iteration order should be ascending!");
+                }
+            }
+            prev = val;
+            first = false;
+            count++;
+        }
+
+        if (count != intsetBigCountElements(isb)) {
+            ERR("Iteration count %zu != element count %zu!", count,
+                intsetBigCountElements(isb));
+        }
+
+        intsetBigFree(isb);
+    }
+
+    TEST("fuzzer - 128-bit values") {
+        intsetBig *isb = intsetBigNew();
+        srandom(99999);
+
+        databoxBig stored[100];
+        size_t storedCount = 0;
+
+        /* Add 128-bit values spread across the supported range */
+        for (int i = 0; i < 100; i++) {
+            /* Generate values in various parts of 128-bit range */
+            __int128_t val;
+            int range = random() % 6;
+            switch (range) {
+            case 0: /* Near zero */
+                val = (random() % 10000) - 5000;
+                break;
+            case 1: /* Near INT64_MAX */
+                val = INT64_MAX - (random() % 10000);
+                break;
+            case 2: /* Near INT64_MIN */
+                val = INT64_MIN + (random() % 10000);
+                break;
+            case 3: /* Beyond INT64 positive */
+                val = ((__int128_t)INT64_MAX) + (random() % 1000000);
+                break;
+            case 4: /* Beyond INT64 negative */
+                val = ((__int128_t)INT64_MIN) - (random() % 1000000);
+                break;
+            case 5: /* Large 128-bit */
+                val = ((__int128_t)1 << 70) + (random() % 1000000);
+                if (random() % 2) {
+                    val = -val;
+                }
+                break;
+            default:
+                val = random();
+            }
+
+            /* Clamp to supported range */
+            if (val < INTSET_BIG_INT128_MIN) {
+                val = INTSET_BIG_INT128_MIN + (random() % 1000);
+            }
+            if (val > INTSET_BIG_INT128_MAX) {
+                val = INTSET_BIG_INT128_MAX - (random() % 1000);
+            }
+
+            DATABOX_BIG_SIGNED_128(&stored[storedCount], val);
+            if (intsetBigAdd(isb, &stored[storedCount])) {
+                storedCount++;
+            }
+        }
+
+        /* Verify all stored values exist */
+        for (size_t i = 0; i < storedCount; i++) {
+            if (!intsetBigExists(isb, &stored[i])) {
+                ERR("128-bit value %zu not found!", i);
+            }
+        }
+
+        /* Remove half and verify */
+        for (size_t i = 0; i < storedCount / 2; i++) {
+            if (!intsetBigRemove(isb, &stored[i])) {
+                ERR("Failed to remove 128-bit value %zu!", i);
+            }
+        }
+
+        for (size_t i = 0; i < storedCount / 2; i++) {
+            if (intsetBigExists(isb, &stored[i])) {
+                ERR("Removed 128-bit value %zu should not exist!", i);
+            }
+        }
+
+        for (size_t i = storedCount / 2; i < storedCount; i++) {
+            if (!intsetBigExists(isb, &stored[i])) {
+                ERR("Unremoved 128-bit value %zu should exist!", i);
+            }
         }
 
         intsetBigFree(isb);

@@ -52,8 +52,10 @@ typedef uint32_t multimapFullMiddle;
  *     - then 'count' == 'values'
  *   - 1024 key-value pairs per map
  *     - then 'values' need to be larger than 'count' if
- *       'count' approaches 'count'/'values' */
-typedef uint32_t multimapFullValues;
+ *       'count' approaches 'count'/'values'
+ *
+ * Uses uint64_t to support large multimaps with >4B total key-value pairs. */
+typedef uint64_t multimapFullValues;
 
 typedef struct multimapIterator {
     void *mm; /* pointer back to the multimap (untagged) instance itself */

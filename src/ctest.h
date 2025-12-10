@@ -1,10 +1,6 @@
 #ifndef CTEST_H
 #define CTEST_H
 
-#ifdef NDEBUG
-#error "Including testing in a production build?"
-#endif
-
 #include <stdio.h>
 #include <string.h> /* strchr */
 
@@ -43,6 +39,7 @@ CTEST_INCLUDE_GEN(val)
 #define ERROR                                                                  \
     do {                                                                       \
         printf("\tERROR!\n");                                                  \
+        fflush(stdout);                                                        \
         err++;                                                                 \
     } while (0)
 
@@ -50,6 +47,7 @@ CTEST_INCLUDE_GEN(val)
     do {                                                                       \
         currentFilename();                                                     \
         printf("ERROR! " x "\n", __VA_ARGS__);                                 \
+        fflush(stdout);                                                        \
         err++;                                                                 \
     } while (0)
 
@@ -57,11 +55,16 @@ CTEST_INCLUDE_GEN(val)
     do {                                                                       \
         currentFilename();                                                     \
         printf("ERROR! " x "\n");                                              \
+        fflush(stdout);                                                        \
         err++;                                                                 \
     } while (0)
 
-#define TEST(name) printf("test — %s\n", name);
-#define TEST_DESC(name, ...) printf("test — " name "\n", __VA_ARGS__);
+#define TEST(name)                                                             \
+    printf("test — %s\n", name);                                               \
+    fflush(stdout);
+#define TEST_DESC(name, ...)                                                   \
+    printf("test — " name "\n", __VA_ARGS__);                                  \
+    fflush(stdout);
 
 #define TEST_FINAL_RESULT                                                      \
     do {                                                                       \

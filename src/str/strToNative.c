@@ -148,15 +148,83 @@ bool StrBufToUInt64(const void *s, const size_t slen,
 /* Fast string to uint64_t conversion with no error checking,
  * so as a caller you must only pass in numbers of exactly
  * length len.  Number must not be higher than UINT64_MAX */
+
+/* SWAR (SIMD Within A Register) conversion for 8 ASCII digits to integer.
+ * This uses standard C operations on a 64-bit integer - no intrinsics needed.
+ *
+ * Algorithm: Pack 8 digits into uint64_t, then use parallel
+ * multiply-add to combine: d0*10^7 + d1*10^6 + ... + d7*10^0
+ */
+DK_INLINE_ALWAYS uint64_t parse8DigitsSWAR(const uint8_t *buf) {
+    uint64_t val;
+    memcpy(&val, buf, sizeof(val));
+
+    /* Subtract '0' (0x30) from each byte */
+    val -= 0x3030303030303030ULL;
+
+    /* The key insight: we can combine pairs of digits efficiently.
+     * First, pack adjacent pairs: ab cd ef gh -> (a*10+b) (c*10+d) (e*10+f)
+     * (g*10+h) as 16-bit values, then combine those pairs, etc.
+     *
+     * Step 1: Combine pairs of digits into 16-bit values
+     * For little-endian: val = [d0, d1, d2, d3, d4, d5, d6, d7]
+     * We want: [d0*10+d1, d2*10+d3, d4*10+d5, d6*10+d7] as 16-bit values
+     *
+     * Mask even bytes (indices 0,2,4,6 in little-endian = d0,d2,d4,d6):
+     * even = val & 0x00FF00FF00FF00FF = [d0, 0, d2, 0, d4, 0, d6, 0]
+     *
+     * Shift odd bytes down (indices 1,3,5,7 = d1,d3,d5,d7):
+     * odd = (val >> 8) & 0x00FF00FF00FF00FF = [d1, 0, d3, 0, d5, 0, d7, 0]
+     *
+     * Combine: even * 10 + odd
+     */
+    const uint64_t mask = 0x00FF00FF00FF00FFULL;
+
+    /* Combine pairs of digits: d0d1, d2d3, d4d5, d6d7 as 16-bit values */
+    val = (val & mask) * 10 + ((val >> 8) & mask);
+
+    /* Now val has 4 x 16-bit values: [d0d1, d2d3, d4d5, d6d7]
+     * Combine pairs into 32-bit: [d0d1d2d3, d4d5d6d7] */
+    val = (val & 0x0000FFFF0000FFFFULL) * 100 +
+          ((val >> 16) & 0x0000FFFF0000FFFFULL);
+
+    /* Finally combine into single 64-bit value */
+    val = (val & 0x00000000FFFFFFFFULL) * 10000 + (val >> 32);
+
+    return val;
+}
+
+/* Scalar baseline for comparison benchmarking */
+DK_INLINE_ALWAYS uint64_t strBufToUInt64Scalar(const uint8_t *buf, size_t len) {
+    uint64_t ret = 0;
+    for (size_t i = 0; i < len; i++, buf++) {
+        ret = (ret * 10ULL) + (*buf - '0');
+    }
+    return ret;
+}
+
 uint64_t StrBufToUInt64Fast(const void *buf_, size_t len) {
     const uint8_t *buf = (const uint8_t *)buf_;
     uint64_t ret = 0;
 
+    /* For 8+ digits, use SWAR conversion */
+    while (len >= 8) {
+        ret = ret * 100000000ULL + parse8DigitsSWAR(buf);
+        buf += 8;
+        len -= 8;
+    }
+
+    /* Handle remaining digits with scalar loop */
     for (size_t i = 0; i < len; i++, buf++) {
         ret = (ret * 10ULL) + (*buf - '0');
     }
 
     return ret;
+}
+
+/* Expose scalar version for benchmarking comparison */
+uint64_t StrBufToUInt64Scalar(const void *buf_, size_t len) {
+    return strBufToUInt64Scalar((const uint8_t *)buf_, len);
 }
 
 bool StrBufToUInt64FastCheckNumeric(const void *restrict buf_, size_t len,

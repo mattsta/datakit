@@ -52,18 +52,22 @@ DK_INLINE_ALWAYS void linearBloomReset(linearBloom *restrict bloom) {
 }
 
 #define LB_BITS_PER_SLOT (sizeof(linearBloom) * 8)
+
+/* Simplified bit indexing: directly compute slot and bit position */
+#define LB_SLOT(bitPos) ((bitPos) / LB_BITS_PER_SLOT)
+#define LB_MASK(bitPos) ((linearBloom)1 << ((bitPos) % LB_BITS_PER_SLOT))
+
 DK_INLINE_ALWAYS uint_fast8_t
 linearBloomHashSet(linearBloom *restrict const bloom, uint64_t hash[2]) {
     uint_fast32_t exists = 0;
     for (uint32_t i = 0; i < LINEARBLOOM_HASHES; i++) {
-        const uint64_t setBit =
+        const uint64_t bitPos =
             LINEARBLOOM_KIRSCHMITZENMACHER(i, hash[0], hash[1]) %
             LINEARBLOOM_EXTENT_BITS;
-        const size_t byte = setBit / 8;
-        const size_t offset = byte / sizeof(linearBloom);
-        const linearBloom mask = 1ULL << (setBit % LB_BITS_PER_SLOT);
-        exists += !!(bloom[offset] & mask);
-        bloom[offset] |= mask;
+        const size_t slot = LB_SLOT(bitPos);
+        const linearBloom mask = LB_MASK(bitPos);
+        exists += !!(bloom[slot] & mask);
+        bloom[slot] |= mask;
     }
 
     return exists == LINEARBLOOM_HASHES;
@@ -72,24 +76,37 @@ linearBloomHashSet(linearBloom *restrict const bloom, uint64_t hash[2]) {
 DK_INLINE_ALWAYS bool
 linearBloomHashCheck(const linearBloom *restrict const bloom,
                      uint64_t hash[2]) {
+    /* Branch-free version: check all bits, compare count at end.
+     * This avoids branch mispredictions in the hot path. */
     uint_fast32_t exists = 0;
     for (uint32_t i = 0; i < LINEARBLOOM_HASHES; i++) {
-        const uint64_t setBit =
+        const uint64_t bitPos =
             LINEARBLOOM_KIRSCHMITZENMACHER(i, hash[0], hash[1]) %
             LINEARBLOOM_EXTENT_BITS;
-        const size_t byte = setBit / 8;
-        const size_t offset = byte / sizeof(linearBloom);
-        const linearBloom mask = 1ULL << (setBit % LB_BITS_PER_SLOT);
-
-        /* Note: this isn't an "if (!exists)" because that would introduce
-         *       a branch inside the loop and we just want to run all the
-         *       bits then check at the end instead.
-         * IMPORTANT: We must use !! to convert mask to 0/1, otherwise we'd
-         * accumulate mask values instead of counting set bits. */
-        exists += !!(bloom[offset] & mask);
+        const size_t slot = LB_SLOT(bitPos);
+        const linearBloom mask = LB_MASK(bitPos);
+        exists += !!(bloom[slot] & mask);
     }
 
     return exists == LINEARBLOOM_HASHES;
+}
+
+/* Early-exit check variant - faster when most queries are negative */
+DK_INLINE_ALWAYS bool
+linearBloomHashCheckEarlyExit(const linearBloom *restrict const bloom,
+                              uint64_t hash[2]) {
+    for (uint32_t i = 0; i < LINEARBLOOM_HASHES; i++) {
+        const uint64_t bitPos =
+            LINEARBLOOM_KIRSCHMITZENMACHER(i, hash[0], hash[1]) %
+            LINEARBLOOM_EXTENT_BITS;
+        const size_t slot = LB_SLOT(bitPos);
+        const linearBloom mask = LB_MASK(bitPos);
+        if (!(bloom[slot] & mask)) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 #ifdef DATAKIT_TEST

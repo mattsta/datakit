@@ -56,14 +56,12 @@ static void abstractInsert(multimapAtom *ma, const databox *reverseKey,
                            const uint64_t id) {
     const databox atomId = {.data.u = id,
                             .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
-#if 0
-    const databox refcount = {.data.u = 1, .type = DATABOX_UNSIGNED_64};
-#else
     /* Use 'false' as "only one requested so far" so if we don't have any
-     * more ref counts, it only takes one byte in the multimap */
-    /* multimapIncr() knows how to do math on bool types */
+     * more ref counts, it only takes one byte in the multimap (vs 3 bytes
+     * for encoding the number 1). multimapIncr() knows how to do math on
+     * bool types, so this works correctly with retain/release.
+     * Internal: 0 = 1 ref, 1 = 2 refs, etc. API layer adds +1 for display. */
     const databox refcount = {.type = DATABOX_FALSE};
-#endif
     const databox *elements[3] = {&atomId, reverseKey, &refcount};
 
     const bool replaced = multimapInsert(&ma->mapAtomForward, elements);
@@ -267,17 +265,14 @@ void multimapAtomRetainConvert(multimapAtom *ma, databox *key) {
  * ==================================================================== */
 DK_INLINE_ALWAYS bool conformRefcountDecr(multimapAtom *ma,
                                           const databox *foundRef) {
-    /* Note: we always decrement refcount then delete based on the new value.
-     *
-     * We *could* check the value then, if zero, delete without decrement, but
-     * that requires an additional read instead of just always running the
-     * decrement and letting it flip negative for delete. */
+    /* Decrement refcount first, then delete if it goes negative.
+     * We use 0-based internal refcounts for memory efficiency:
+     * Internal 0 = 1 ref, 1 = 2 refs, etc. (DATABOX_FALSE = 1 byte vs 3 bytes)
+     * When it goes negative, no more references exist. */
     const int64_t checkedOut =
         multimapFieldIncr(&ma->mapAtomForward, foundRef, 2, -1);
 
-    /* We use 0-based reference counts, so they start at zero.
-     * ergo, deleting an atom with only one reference has a count of 0 and
-     * goes negative on delete, meaning no more refcounts were requested. */
+    /* Internal 0-based: goes negative when last reference released */
     if (checkedOut < 0) {
         const bool deleted = multimapAtomDeleteByRef(ma, foundRef);
         assert(deleted);

@@ -105,9 +105,9 @@ multiTimerId multiTimerRegister(multiTimer *t, uint64_t startAfterMicroseconds,
         /* We can't modify timers while we're executing a timer,
          * so creating a timer while in a timer means we
          * insert into the to-schedule-timers map. */
-        multimapInsert(&t->pendingScheduling, timerEntry);
+        multimapInsertFullWidth(&t->pendingScheduling, timerEntry);
     } else {
-        multimapInsert(&t->scheduled, timerEntry);
+        multimapInsertFullWidth(&t->scheduled, timerEntry);
     }
 
     return id;
@@ -149,7 +149,7 @@ bool multiTimerStopAll(multiTimer *t) {
 
 static bool timerCopyRunner(void *userData, const databox *elements[]) {
     multiTimer *t = userData;
-    multimapInsert(&t->scheduled, elements);
+    multimapInsertFullWidth(&t->scheduled, elements);
     return true;
 }
 
@@ -303,7 +303,7 @@ static bool timerRunner(void *userData, const databox *elements[]) {
             const databox *scheduleTimer[5] = {
                 &newStart, elements[1], elements[2], elements[3], elements[4]};
 
-            multimapInsert(&t->pendingScheduling, scheduleTimer);
+            multimapInsertFullWidth(&t->pendingScheduling, scheduleTimer);
         }
     }
 

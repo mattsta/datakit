@@ -869,8 +869,60 @@ bool dodReadAll(const dod *const d, uint64_t *vals, size_t count) {
 }
 
 /* ====================================================================
- * Read all values from dod
+ * dodReader - O(1) resumable sequential access
  * ==================================================================== */
+
+void dodReaderInit(dodReader *r, dodVal firstVal, dodVal secondVal) {
+    r->consumedBits = 0;
+    r->t0 = firstVal;
+    r->t1 = secondVal;
+    r->valuesRead = 2; /* We already have the first two values */
+}
+
+void dodReaderInitFromWriter(dodReader *r, const dodWriter *w) {
+    r->consumedBits = 0;
+    r->t0 = w->t[0];
+    r->t1 = w->t[1];
+    r->valuesRead = 2; /* We already have the first two values */
+}
+
+dodVal dodReaderNext(dodReader *r, const dod *d) {
+    /* Read one value forward from current position */
+    dodVal val = dodGet(d, &r->consumedBits, r->t0, r->t1, 1);
+
+    /* Rotate state for next read */
+    r->t0 = r->t1;
+    r->t1 = val;
+    r->valuesRead++;
+
+    return val;
+}
+
+dodVal dodReaderCurrent(const dodReader *r) {
+    return r->t1;
+}
+
+size_t dodReaderNextN(dodReader *r, const dod *d, dodVal *out, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        dodVal val = dodGet(d, &r->consumedBits, r->t0, r->t1, 1);
+        out[i] = val;
+
+        /* Rotate state for next read */
+        r->t0 = r->t1;
+        r->t1 = val;
+        r->valuesRead++;
+    }
+
+    return n;
+}
+
+size_t dodReaderRemaining(const dodReader *r, size_t totalCount) {
+    if (r->valuesRead >= totalCount) {
+        return 0;
+    }
+
+    return totalCount - r->valuesRead;
+}
 
 /* ====================================================================
  * Tests
@@ -1263,6 +1315,72 @@ int dodTest(int argc, char *argv[]) {
             zfree(bits);
             zfree(values);
         }
+    }
+
+    TEST("dodReader - O(1) sequential access") {
+        dodVal *values = zcalloc(loopers, sizeof(*values));
+        dod *bits = zcalloc(loopers * 2, sizeof(*bits));
+
+        /* Generate monotonic timestamps */
+        for (size_t i = 0; i < loopers; i++) {
+            values[i] = 1700000000000LL + (int64_t)i * 1000;
+        }
+
+        /* Encode */
+        dodVal t0 = values[0];
+        dodVal t1 = values[1];
+        size_t bitsUsed = 0;
+        for (size_t i = 2; i < loopers; i++) {
+            dodAppend(bits, t0, t1, values[i], &bitsUsed);
+            t0 = t1;
+            t1 = values[i];
+        }
+
+        /* Test dodReaderNext() */
+        dodReader r;
+        dodReaderInit(&r, values[0], values[1]);
+
+        /* Verify first two values via dodReaderCurrent */
+        if (dodReaderCurrent(&r) != values[1]) {
+            ERRR("dodReaderCurrent returned wrong initial value!");
+        }
+
+        /* Read remaining values */
+        for (size_t i = 2; i < loopers; i++) {
+            dodVal retrieved = dodReaderNext(&r, bits);
+            if (retrieved != values[i]) {
+                ERR("[%zu] dodReaderNext: expected %" PRId64
+                    " but got %" PRId64,
+                    i, values[i], retrieved);
+            }
+        }
+
+        /* Test dodReaderRemaining */
+        if (dodReaderRemaining(&r, loopers) != 0) {
+            ERRR("dodReaderRemaining should be 0 after reading all values!");
+        }
+
+        /* Test dodReaderNextN - encode and read again */
+        dodReaderInit(&r, values[0], values[1]);
+        dodVal *batch = zcalloc(loopers, sizeof(*batch));
+        size_t read = dodReaderNextN(&r, bits, batch, loopers - 2);
+        if (read != loopers - 2) {
+            ERR("dodReaderNextN returned wrong count: %zu vs %zu", read,
+                loopers - 2);
+        }
+        for (size_t i = 0; i < read; i++) {
+            if (batch[i] != values[i + 2]) {
+                ERR("[%zu] dodReaderNextN: expected %" PRId64
+                    " but got %" PRId64,
+                    i, values[i + 2], batch[i]);
+            }
+        }
+
+        printf("dodReader passed with %zu values!\n", loopers);
+
+        zfree(batch);
+        zfree(bits);
+        zfree(values);
     }
 
     TEST_FINAL_RESULT;

@@ -118,6 +118,7 @@ uint64_t StrLogEstToInt(LogEst x);
  * UTF-8 Codepoint Counting
  * ==================================================================== */
 size_t StrLenUtf8(const void *_ss, size_t len);
+size_t StrLenUtf8Scalar(const void *_ss, size_t len); /* For benchmarking */
 size_t StrLenUtf8CountBytes(const void *_ss, size_t len,
                             size_t countCharacters);
 
@@ -228,6 +229,8 @@ bool StrBufToInt64(const void *s, size_t slen, int64_t *value);
 bool StrBufToUInt64(const void *s, size_t slen, uint64_t *value);
 bool StrBufToLongDouble(const void *s, size_t slen, long double *dp);
 uint64_t StrBufToUInt64Fast(const void *buf, size_t len);
+uint64_t StrBufToUInt64Scalar(const void *buf,
+                              size_t len); /* For benchmarking */
 bool StrBufToUInt64FastCheckNumeric(const void *buf_, size_t len,
                                     uint64_t *value);
 bool StrBufToUInt64FastCheckOverflow(const void *buf, size_t len,
@@ -254,6 +257,7 @@ size_t StrDigitCountUInt128(__uint128_t v);
 uint64_t StrPopCnt8Bit(const void *_data, const size_t len);
 uint64_t StrPopCntAligned(const void *_data, size_t len);
 uint64_t StrPopCntExact(const void *_data, size_t len);
+uint64_t StrPopCntScalar(const void *_data, size_t len); /* For benchmarking */
 
 /* ====================================================================
  * Fast Bitmap Readers

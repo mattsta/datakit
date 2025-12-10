@@ -28,6 +28,123 @@
  *   32-bit: 00000001000000010000000100000001
  */
 #define ONEMASK ((STRLEN_UTF8_STEP)(-1) / 0xFF)
+
+/* ====================================================================
+ * SIMD-optimized UTF-8 character counting
+ * ====================================================================
+ * Algorithm: Count UTF-8 continuation bytes (bytes matching 10xxxxxx)
+ * and subtract from total byte length to get character count.
+ *
+ * A continuation byte has the pattern: high bit = 1, second bit = 0
+ * In other words: (byte & 0xC0) == 0x80
+ *
+ * For SIMD, we process 16-32 bytes at a time by:
+ * 1. Treating bytes as signed: continuation bytes are in range [-128, -65]
+ * 2. Using signed comparison: byte > -65 (0xBF as signed) means NOT
+ * continuation
+ * 3. Count bytes that ARE continuation (i.e., byte <= -65)
+ */
+
+#if defined(__SSE2__)
+#include <emmintrin.h>
+
+/* SSE2 optimized: process 16 bytes at a time */
+size_t StrLenUtf8(const void *_ss, size_t len) {
+    const uint8_t *s = (const uint8_t *)_ss;
+    size_t continuationBytes = 0;
+    const size_t originalLen = len;
+
+    /* Process 16 bytes at a time with SSE2 */
+    if (len >= 16) {
+        /* Threshold for continuation bytes: -65 (0xBF as signed int8)
+         * Continuation bytes are 10xxxxxx = 0x80-0xBF = -128 to -65 signed
+         * We count bytes where (signed)byte <= -65 */
+        const __m128i threshold = _mm_set1_epi8(-65);
+
+        while (len >= 16) {
+            __m128i chunk = _mm_loadu_si128((const __m128i *)s);
+
+            /* Compare greater than threshold: result is 0xFF where NOT cont */
+            __m128i notCont = _mm_cmpgt_epi8(chunk, threshold);
+
+            /* Count zeros (continuation bytes) = 16 - count of 0xFF bytes */
+            /* movemask gives us 1 bit per byte where comparison was true */
+            uint32_t mask = (uint32_t)_mm_movemask_epi8(notCont);
+
+            /* popcount of mask = non-continuation bytes, so:
+             * continuation bytes = 16 - popcount(mask) */
+            continuationBytes += 16 - __builtin_popcount(mask);
+
+            s += 16;
+            len -= 16;
+        }
+    }
+
+    /* Handle remaining bytes with scalar code */
+    while (len--) {
+        /* Continuation byte check: (byte & 0xC0) == 0x80 */
+        continuationBytes += ((*s >> 7) & ((~*s) >> 6));
+        s++;
+    }
+
+    return originalLen - continuationBytes;
+}
+
+#elif defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
+#include <arm_neon.h>
+
+/* ARM NEON optimized: process 16 bytes at a time */
+size_t StrLenUtf8(const void *_ss, size_t len) {
+    const uint8_t *s = (const uint8_t *)_ss;
+    size_t continuationBytes = 0;
+    const size_t originalLen = len;
+
+    /* Process 16 bytes at a time with NEON */
+    if (len >= 16) {
+        /* For NEON, we use unsigned comparison.
+         * Continuation bytes: 0x80 <= byte <= 0xBF
+         * We check: byte >= 0x80 AND byte <= 0xBF */
+        const uint8x16_t low = vdupq_n_u8(0x80);
+        const uint8x16_t high = vdupq_n_u8(0xBF);
+
+        while (len >= 16) {
+            uint8x16_t chunk = vld1q_u8(s);
+
+            /* Check if byte >= 0x80 (high bit set) */
+            uint8x16_t gelow = vcgeq_u8(chunk, low);
+
+            /* Check if byte <= 0xBF */
+            uint8x16_t lehigh = vcleq_u8(chunk, high);
+
+            /* Continuation byte if both conditions true */
+            uint8x16_t isCont = vandq_u8(gelow, lehigh);
+
+            /* Count continuation bytes using horizontal add.
+             * Each lane is 0xFF if continuation, 0x00 otherwise.
+             * We need to count the 0xFF values. */
+            /* Sum all bytes (each 0xFF = 255, but we want count of 1s) */
+            /* First, convert 0xFF to 0x01 by right-shifting by 7 */
+            uint8x16_t ones = vshrq_n_u8(isCont, 7);
+
+            /* Horizontal sum: add all 16 bytes */
+            continuationBytes += vaddvq_u8(ones);
+
+            s += 16;
+            len -= 16;
+        }
+    }
+
+    /* Handle remaining bytes with scalar code */
+    while (len--) {
+        continuationBytes += ((*s >> 7) & ((~*s) >> 6));
+        s++;
+    }
+
+    return originalLen - continuationBytes;
+}
+
+#else
+/* Fallback: use SWAR (SIMD Within A Register) on 8 bytes at a time */
 size_t StrLenUtf8(const void *_ss, size_t len) {
     const uint8_t *_s = (const uint8_t *)_ss;
     const uint8_t *s = (const uint8_t *)_s;
@@ -208,6 +325,7 @@ done:
      * the total byte length using (end - start) */
     return (s - _s) - countMultibyteExtra;
 }
+#endif /* SIMD/NEON/fallback selection */
 
 /* ====================================================================
  * UTF-8 bytes used by a requested number of characters
@@ -391,4 +509,20 @@ size_t StrLenUtf8CountBytes(const void *_ss, size_t len,
      * Note: we aren't signaling to the user we are early terminating
      * their requested character count search because we ran out of bytes. */
     return s - _s;
+}
+
+/* ====================================================================
+ * Scalar baseline for benchmarking comparison
+ * ==================================================================== */
+/* Pure byte-by-byte scalar implementation for performance comparison */
+size_t StrLenUtf8Scalar(const void *_ss, size_t len) {
+    const uint8_t *s = (const uint8_t *)_ss;
+    size_t continuationBytes = 0;
+
+    for (size_t i = 0; i < len; i++) {
+        /* Count continuation bytes: (byte & 0xC0) == 0x80 */
+        continuationBytes += ((s[i] >> 7) & ((~s[i]) >> 6));
+    }
+
+    return len - continuationBytes;
 }
