@@ -225,10 +225,10 @@ See [`examples/README.md`](examples/README.md) for full catalog and learning pat
 make test
 
 # Run comprehensive test suite with sanitizers
-make test-comprehensive
+make varint-test-comprehensive
 
 # Check for compiler warnings
-make check-warnings
+make varint-check-warnings
 ```
 
 ### Manual Testing

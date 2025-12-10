@@ -24,8 +24,6 @@ static inline bool size_mul_overflow(size_t a, size_t b, size_t *result) {
  */
 
 #define IEEE754_DOUBLE_EXPONENT_BIAS 1023
-#define IEEE754_DOUBLE_MANTISSA_BITS 52
-#define IEEE754_DOUBLE_EXPONENT_BITS 11
 
 /* Decompose IEEE 754 double into components */
 bool varintFloatDecompose(double value, uint64_t *sign, int16_t *exponent,

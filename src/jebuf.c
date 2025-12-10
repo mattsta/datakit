@@ -348,6 +348,7 @@ int jebufTest(int argc, char *argv[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = jebufSizeAllocation(0);
                 assert(next);
+                (void)next;
             }
             TIME_FINISH(loopers, "perf SizeClass - 0");
         }
@@ -357,6 +358,7 @@ int jebufTest(int argc, char *argv[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = jebufSizeAllocation(5000);
                 assert(next);
+                (void)next;
             }
             TIME_FINISH(loopers, "perf SizeClass - 5000");
         }
@@ -366,6 +368,7 @@ int jebufTest(int argc, char *argv[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = jebufSizeAllocation(30000);
                 assert(next);
+                (void)next;
             }
             TIME_FINISH(loopers, "perf SizeClass - 30000");
         }
@@ -375,6 +378,7 @@ int jebufTest(int argc, char *argv[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = jebufSizeAllocation(16777216);
                 assert(next);
+                (void)next;
             }
             TIME_FINISH(loopers, "perf SizeClass - 16777216");
         }
@@ -384,6 +388,7 @@ int jebufTest(int argc, char *argv[]) {
             for (size_t i = 0; i < loopers; i++) {
                 size_t next = jebufSizeAllocation(139583862445);
                 assert(next);
+                (void)next;
             }
             TIME_FINISH(loopers, "perf SizeClass - 139583862445");
         }

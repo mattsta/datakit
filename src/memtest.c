@@ -1,531 +1,948 @@
-/* memtest - simple Linux in-process memory testing
+/* memtest - In-process memory testing
  *
  * Copyright 2017 Matt Stancliff <matt@genges.com>
+ * Based on Redis memtest by Salvatore Sanfilippo <antirez@gmail.com>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
  *   http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
+
+#include "memtest.h"
 
 #include <assert.h>
 #include <errno.h>
+#include <inttypes.h>
 #include <limits.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <termios.h>
+#include <time.h>
+#include <unistd.h>
+
 #if defined(__sun)
 #include <stropts.h>
+#endif
+
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#include <mach/vm_region.h>
+#elif defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) ||   \
+    defined(__DragonFly__)
+#include <sys/sysctl.h>
+#include <sys/types.h>
+#include <sys/user.h>
+#if defined(__FreeBSD__)
+#include <libprocstat.h>
+#endif
 #endif
 
 #define IKNOWWHATIMDOING /* allow malloc usage */
 #include "datakit.h"
 
+/* Pattern constants */
 #if (ULONG_MAX == 4294967295UL)
-/* 32 bit */
 #define ULONG_ONEZERO 0xaaaaaaaaUL
 #define ULONG_ZEROONE 0x55555555UL
 #elif (ULONG_MAX == 18446744073709551615ULL)
-/* 64 bit */
 #define ULONG_ONEZERO 0xaaaaaaaaaaaaaaaaUL
 #define ULONG_ZEROONE 0x5555555555555555UL
 #else
 #error "ULONG_MAX value not supported."
 #endif
 
-/* ====================================================================
- * Memory Manipulation Womps
- * ==================================================================== */
-static struct winsize ws;
-size_t progress_printed; /* Printed chars in screen-wide progress bar. */
-size_t progress_full;    /* How many chars to write to fill the progress bar. */
+/* ============================================================================
+ * Timing Helpers
+ * ============================================================================
+ */
+static uint64_t memtest_time_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
 
-void memtest_progress_start(char *title, int pass) {
-    printf("\x1b[H\x1b[2J"); /* Cursor home, clear screen. */
-    /* Fill with dots. */
-    for (int j = 0; j < ws.ws_col * (ws.ws_row - 2); j++) {
-        printf(".");
+/* ============================================================================
+ * Progress Reporting Context
+ * ============================================================================
+ */
+typedef struct {
+    memtestProgressFn callback;
+    void *userdata;
+    const char *phase;
+    size_t total;
+    size_t current;
+    /* Terminal progress (for interactive mode) */
+    struct winsize ws;
+    size_t progress_printed;
+    size_t progress_full;
+    bool interactive;
+} memtestContext;
+
+static void ctx_init(memtestContext *ctx) {
+    memset(ctx, 0, sizeof(*ctx));
+}
+
+static void ctx_set_callback(memtestContext *ctx, memtestProgressFn fn,
+                             void *userdata) {
+    ctx->callback = fn;
+    ctx->userdata = userdata;
+}
+
+static void ctx_set_interactive(memtestContext *ctx) {
+    ctx->interactive = true;
+    if (ioctl(1, TIOCGWINSZ, &ctx->ws) == -1) {
+        ctx->ws.ws_col = 80;
+        ctx->ws.ws_row = 20;
+    }
+}
+
+static void ctx_start_phase(memtestContext *ctx, const char *phase,
+                            size_t total) {
+    ctx->phase = phase;
+    ctx->total = total;
+    ctx->current = 0;
+
+    if (ctx->interactive) {
+        printf("\x1b[H\x1b[2J"); /* Cursor home, clear screen */
+        for (int j = 0; j < ctx->ws.ws_col * (ctx->ws.ws_row - 2); j++) {
+            printf(".");
+        }
+        printf("\x1b[H\x1b[2K");
+        printf("%s\n", phase);
+        ctx->progress_printed = 0;
+        ctx->progress_full = ctx->ws.ws_col * (ctx->ws.ws_row - 3);
+        fflush(stdout);
     }
 
-    printf("Please keep the test running several minutes per GB of memory.\n");
-    printf("Also check http://www.memtest86.com/ and "
-           "http://pyropus.ca/software/memtester/");
-    printf("\x1b[H\x1b[2K");          /* Cursor home, clear current line.  */
-    printf("%s [%d]\n", title, pass); /* Print title. */
-    progress_printed = 0;
-    progress_full = ws.ws_col * (ws.ws_row - 3);
-    fflush(stdout);
+    if (ctx->callback) {
+        ctx->callback(phase, 0.0, ctx->userdata);
+    }
 }
 
-void memtest_progress_end(void) {
-    printf("\x1b[H\x1b[2J"); /* Cursor home, clear screen. */
-}
+static void ctx_update(memtestContext *ctx, size_t current, char sym) {
+    ctx->current = current;
 
-void memtest_progress_step(size_t curr, size_t size, char c) {
-    size_t chars = ((uint64_t)curr * progress_full) / size;
-
-    for (size_t j = 0; j < chars - progress_printed; j++) {
-        printf("%c", c);
+    if (ctx->interactive && ctx->total > 0) {
+        size_t chars = ((uint64_t)current * ctx->progress_full) / ctx->total;
+        for (size_t j = ctx->progress_printed; j < chars; j++) {
+            printf("%c", sym);
+        }
+        ctx->progress_printed = chars;
+        fflush(stdout);
     }
 
-    progress_printed = chars;
-    fflush(stdout);
+    if (ctx->callback && ctx->total > 0) {
+        double progress = (double)current / (double)ctx->total;
+        ctx->callback(ctx->phase, progress, ctx->userdata);
+    }
 }
 
-/* Test that addressing is fine. Every location is populated with its own
- * address, and finally verified. This test is very fast but may detect
- * ASAP big issues with the memory subsystem. */
-int memtest_addressing(uint64_t *l, size_t bytes, int interactive) {
-    uint64_t words = bytes / sizeof(uint64_t);
+static void ctx_end_phase(memtestContext *ctx) {
+    if (ctx->interactive) {
+        printf("\x1b[H\x1b[2J");
+        fflush(stdout);
+    }
+    if (ctx->callback) {
+        ctx->callback(ctx->phase, 1.0, ctx->userdata);
+    }
+}
+
+/* ============================================================================
+ * Core Test Patterns
+ * ============================================================================
+ */
+
+/* xorshift64* PRNG - no external dependencies */
+#define XORSHIFT_NEXT(rseed, rout)                                             \
+    do {                                                                       \
+        (rseed) ^= (rseed) >> 12;                                              \
+        (rseed) ^= (rseed) << 25;                                              \
+        (rseed) ^= (rseed) >> 27;                                              \
+        (rout) = (rseed) * UINT64_C(2685821657736338717);                      \
+    } while (0)
+
+/* Address test: each location stores its own address */
+static int memtest_addressing_ctx(uint64_t *mem, size_t bytes,
+                                  memtestContext *ctx) {
+    size_t words = bytes / sizeof(uint64_t);
     uint64_t *p;
 
-    /* Fill */
-    p = l;
-    for (uint64_t j = 0; j < words; j++) {
-        *p = (uint64_t)p;
+    if (ctx) {
+        ctx_start_phase(ctx, "Addressing test", words * 2);
+    }
+
+    /* Fill phase */
+    p = mem;
+    for (size_t j = 0; j < words; j++) {
+        *p = (uint64_t)(uintptr_t)p;
         p++;
-        if ((j & 0xffff) == 0 && interactive) {
-            memtest_progress_step(j, words * 2, 'A');
+        if (ctx && (j & 0xffff) == 0) {
+            ctx_update(ctx, j, 'A');
         }
     }
 
-    /* Test */
-    p = l;
-    for (uint64_t j = 0; j < words; j++) {
-        if (*p != (uint64_t)p) {
-            if (interactive) {
-                printf("\n*** MEMORY ADDRESSING ERROR: %p contains %" PRIu64
-                       "\n",
-                       (void *)p, *p);
-                exit(1);
+    /* Verify phase */
+    p = mem;
+    for (size_t j = 0; j < words; j++) {
+        if (*p != (uint64_t)(uintptr_t)p) {
+            if (ctx) {
+                ctx_end_phase(ctx);
             }
-
-            return 1;
+            return 1; /* Error found */
         }
-
         p++;
-        if ((j & 0xffff) == 0 && interactive) {
-            memtest_progress_step(j + words, words * 2, 'A');
+        if (ctx && (j & 0xffff) == 0) {
+            ctx_update(ctx, words + j, 'A');
         }
     }
 
+    if (ctx) {
+        ctx_end_phase(ctx);
+    }
     return 0;
 }
 
-/* Fill words stepping a single page at every write, so we continue to
- * touch all the pages in the smallest amount of time reducing the
- * effectiveness of caches, and making it hard for the OS to transfer
- * pages on the swap.
- *
- * In this test we can't call rand() since the system may be completely
- * unable to handle library calls, so we have to resort to our own
- * PRNG that only uses local state. We use an xorshift* PRNG. */
-#define xorshift64star_next()                                                  \
-    do {                                                                       \
-        rseed ^= rseed >> 12;                                                  \
-        rseed ^= rseed << 25;                                                  \
-        rseed ^= rseed >> 27;                                                  \
-        rout = rseed * UINT64_C(2685821657736338717);                          \
-    } while (0)
+int memtestAddressing(uint64_t *mem, size_t bytes) {
+    return memtest_addressing_ctx(mem, bytes, NULL);
+}
 
-void memtest_fill_random(uint64_t *l, size_t bytes, bool interactive) {
-    uint64_t step = 4096 / sizeof(uint64_t);
-    uint64_t words = bytes / sizeof(uint64_t) / 2;
-    uint64_t iwords = words / step; /* words per iteration */
-    uint64_t off;
-    uint64_t *l1;
-    uint64_t *l2;
-    uint64_t rseed = UINT64_C(0xd13133de9afdb566); /* Just a random seed. */
+/* Random fill: page-strided access pattern with xorshift64* */
+static void memtest_fill_random_ctx(uint64_t *mem, size_t bytes,
+                                    memtestContext *ctx) {
+    size_t step = 4096 / sizeof(uint64_t);
+    size_t words = bytes / sizeof(uint64_t) / 2;
+    size_t iwords = words / step;
+    uint64_t rseed = UINT64_C(0xd13133de9afdb566);
     uint64_t rout = 0;
 
     assert((bytes & 4095) == 0);
-    for (off = 0; off < step; off++) {
-        l1 = l + off;
-        l2 = l1 + words;
-        for (uint64_t w = 0; w < iwords; w++) {
-            xorshift64star_next();
-            *l1 = *l2 = (uint64_t)rout;
+
+    if (ctx) {
+        ctx_start_phase(ctx, "Random fill", words);
+    }
+
+    for (size_t off = 0; off < step; off++) {
+        uint64_t *l1 = mem + off;
+        uint64_t *l2 = l1 + words;
+        for (size_t w = 0; w < iwords; w++) {
+            XORSHIFT_NEXT(rseed, rout);
+            *l1 = *l2 = rout;
             l1 += step;
             l2 += step;
-            if ((w & 0xffff) == 0 && interactive) {
-                memtest_progress_step(w + iwords * off, words, 'R');
+            if (ctx && (w & 0xffff) == 0) {
+                ctx_update(ctx, w + iwords * off, 'R');
             }
         }
     }
+
+    if (ctx) {
+        ctx_end_phase(ctx);
+    }
 }
 
-/* Like memtest_fill_random() but uses the two specified values to fill
- * memory, in an alternated way (v1|v2|v1|v2|...) */
-void memtest_fill_value(uint64_t *l, size_t bytes, uint64_t v1, uint64_t v2,
-                        char sym, int interactive) {
-    uint64_t step = 4096 / sizeof(uint64_t);
-    uint64_t words = bytes / sizeof(uint64_t) / 2;
-    uint64_t iwords = words / step; /* words per iteration */
-    uint64_t off;
-    uint64_t *l1;
-    uint64_t *l2;
-    uint64_t v;
+void memtestFillRandom(uint64_t *mem, size_t bytes) {
+    memtest_fill_random_ctx(mem, bytes, NULL);
+}
+
+/* Pattern fill: alternating v1/v2 pattern */
+static void memtest_fill_pattern_ctx(uint64_t *mem, size_t bytes, uint64_t v1,
+                                     uint64_t v2, char sym,
+                                     memtestContext *ctx) {
+    size_t step = 4096 / sizeof(uint64_t);
+    size_t words = bytes / sizeof(uint64_t) / 2;
+    size_t iwords = words / step;
 
     assert((bytes & 4095) == 0);
-    for (off = 0; off < step; off++) {
-        l1 = l + off;
-        l2 = l1 + words;
-        v = (off & 1) ? v2 : v1;
-        for (uint64_t w = 0; w < iwords; w++) {
+
+    if (ctx) {
+        const char *phase = (v1 == 0) ? "Solid fill" : "Checkerboard fill";
+        ctx_start_phase(ctx, phase, words);
+    }
+
+    for (size_t off = 0; off < step; off++) {
+        uint64_t *l1 = mem + off;
+        uint64_t *l2 = l1 + words;
+        uint64_t v = (off & 1) ? v2 : v1;
 #ifdef MEMTEST_32BIT
-            *l1 = *l2 = ((uint64_t)v) | (((uint64_t)v) << 16);
+        uint64_t pattern = ((uint64_t)v) | (((uint64_t)v) << 16);
 #else
-            *l1 = *l2 = ((uint64_t)v) | (((uint64_t)v) << 16) |
-                        (((uint64_t)v) << 32) | (((uint64_t)v) << 48);
+        uint64_t pattern = ((uint64_t)v) | (((uint64_t)v) << 16) |
+                           (((uint64_t)v) << 32) | (((uint64_t)v) << 48);
 #endif
+        for (size_t w = 0; w < iwords; w++) {
+            *l1 = *l2 = pattern;
             l1 += step;
             l2 += step;
-            if ((w & 0xffff) == 0 && interactive) {
-                memtest_progress_step(w + iwords * off, words, sym);
+            if (ctx && (w & 0xffff) == 0) {
+                ctx_update(ctx, w + iwords * off, sym);
             }
         }
     }
+
+    if (ctx) {
+        ctx_end_phase(ctx);
+    }
 }
 
-int memtest_compare(uint64_t *l, size_t bytes, int interactive) {
-    uint64_t words = bytes / sizeof(uint64_t) / 2;
-    uint64_t *l1;
-    uint64_t *l2;
+void memtestFillPattern(uint64_t *mem, size_t bytes, uint64_t v1, uint64_t v2) {
+    memtest_fill_pattern_ctx(mem, bytes, v1, v2, 'P', NULL);
+}
+
+/* Compare: verify first half equals second half */
+static int memtest_compare_ctx(uint64_t *mem, size_t bytes,
+                               memtestContext *ctx) {
+    size_t words = bytes / sizeof(uint64_t) / 2;
+    uint64_t *l1 = mem;
+    uint64_t *l2 = mem + words;
+    int errors = 0;
 
     assert((bytes & 4095) == 0);
-    l1 = l;
-    l2 = l1 + words;
-    for (uint64_t w = 0; w < words; w++) {
+
+    if (ctx) {
+        ctx_start_phase(ctx, "Compare", words);
+    }
+
+    for (size_t w = 0; w < words; w++) {
         if (*l1 != *l2) {
-            if (interactive) {
-                printf("\n*** MEMORY ERROR DETECTED: %p != %p (%" PRIu64
-                       " vs %" PRIu64 ")\n",
-                       (void *)l1, (void *)l2, *l1, *l2);
-                exit(1);
-            }
-
-            return 1;
+            errors++;
         }
-
         l1++;
         l2++;
-        if ((w & 0xffff) == 0 && interactive) {
-            memtest_progress_step(w, words, '=');
+        if (ctx && (w & 0xffff) == 0) {
+            ctx_update(ctx, w, '=');
         }
     }
 
-    return 0;
+    if (ctx) {
+        ctx_end_phase(ctx);
+    }
+    return errors;
 }
 
-int memtest_compare_times(uint64_t *m, size_t bytes, int pass, int times,
-                          int interactive) {
+int memtestCompare(uint64_t *mem, size_t bytes) {
+    return memtest_compare_ctx(mem, bytes, NULL);
+}
+
+/* ============================================================================
+ * Main Test Functions
+ * ============================================================================
+ */
+
+/* Run a complete test pass */
+static int memtest_run_pass(uint64_t *mem, size_t bytes, memtestContext *ctx) {
     int errors = 0;
+    const int compare_times = 4;
 
-    for (int j = 0; j < times; j++) {
-        if (interactive) {
-            memtest_progress_start("Compare", pass);
-        }
+    /* Address test */
+    errors += memtest_addressing_ctx(mem, bytes, ctx);
 
-        errors += memtest_compare(m, bytes, interactive);
-        if (interactive) {
-            memtest_progress_end();
-        }
+    /* Random fill + compare */
+    memtest_fill_random_ctx(mem, bytes, ctx);
+    for (int i = 0; i < compare_times; i++) {
+        errors += memtest_compare_ctx(mem, bytes, ctx);
+    }
+
+    /* Solid fill (0/0xFF) + compare */
+    memtest_fill_pattern_ctx(mem, bytes, 0, (uint64_t)-1, 'S', ctx);
+    for (int i = 0; i < compare_times; i++) {
+        errors += memtest_compare_ctx(mem, bytes, ctx);
+    }
+
+    /* Checkerboard (0xAA/0x55) + compare */
+    memtest_fill_pattern_ctx(mem, bytes, ULONG_ONEZERO, ULONG_ZEROONE, 'C',
+                             ctx);
+    for (int i = 0; i < compare_times; i++) {
+        errors += memtest_compare_ctx(mem, bytes, ctx);
     }
 
     return errors;
 }
 
-/* Test the specified memory. The number of bytes must be multiple of 4096.
- * If interactive is true the program exists with an error and prints
- * ASCII arts to show progresses. Instead when interactive is 0, it can
- * be used as an API call, and returns 1 if memory errors were found or
- * 0 if there were no errors detected. */
-int memtest_test(uint64_t *m, size_t bytes, int passes, int interactive) {
-    int pass = 0;
-    int errors = 0;
+/* Destructive test */
+static size_t memtest_destructive(void *mem, size_t bytes, int passes,
+                                  memtestContext *ctx, memtestResult *result) {
+    uint64_t start = memtest_time_ns();
+    size_t errors = 0;
 
-    while (pass != passes) {
-        pass++;
-
-        if (interactive) {
-            memtest_progress_start("Addressing test", pass);
+    for (int pass = 0; pass < passes; pass++) {
+        errors += memtest_run_pass(mem, bytes, ctx);
+        if (result) {
+            result->passes_complete = pass + 1;
         }
+    }
 
-        errors += memtest_addressing(m, bytes, interactive);
-        if (interactive) {
-            memtest_progress_end();
-        }
-
-        if (interactive) {
-            memtest_progress_start("Random fill", pass);
-        }
-
-        memtest_fill_random(m, bytes, interactive);
-        if (interactive) {
-            memtest_progress_end();
-        }
-
-        errors += memtest_compare_times(m, bytes, pass, 4, interactive);
-
-        if (interactive) {
-            memtest_progress_start("Solid fill", pass);
-        }
-
-        memtest_fill_value(m, bytes, 0, (uint64_t)-1, 'S', interactive);
-        if (interactive) {
-            memtest_progress_end();
-        }
-
-        errors += memtest_compare_times(m, bytes, pass, 4, interactive);
-
-        if (interactive) {
-            memtest_progress_start("Checkerboard fill", pass);
-        }
-
-        memtest_fill_value(m, bytes, ULONG_ONEZERO, ULONG_ZEROONE, 'C',
-                           interactive);
-        if (interactive) {
-            memtest_progress_end();
-        }
-
-        errors += memtest_compare_times(m, bytes, pass, 4, interactive);
+    if (result) {
+        result->bytes_tested = bytes;
+        result->errors_found = errors;
+        result->duration_s = (memtest_time_ns() - start) / 1e9;
     }
 
     return errors;
 }
 
-/* A version of memtest_test() that tests memory in small pieces
- * in order to restore the memory content at exit.
- *
- * One problem we have with this approach, is that the cache can avoid
- * real memory accesses, and we can't test big chunks of memory at the
- * same time, because we need to backup them on the stack (the allocator
- * may not be usable or we may be already in an out of memory condition).
- * So what we do is to try to trash the cache with useless memory accesses
- * between the fill and compare cycles. */
-#define MEMTEST_BACKUP_WORDS (1024 * (1024 / sizeof(long)))
-/* Random accesses of MEMTEST_DECACHE_SIZE are performed at the start and
- * end of the region between fill and compare cycles in order to trash
- * the cache. */
+/* Non-destructive (preserving) test */
+#define MEMTEST_BACKUP_WORDS (1024 * 1024 / sizeof(uint64_t))
 #define MEMTEST_DECACHE_SIZE (1024 * 8)
-int memtest_preserving_test(uint64_t *m, size_t bytes, int passes) {
+
+static size_t memtest_preserving(void *mem, size_t bytes, int passes,
+                                 memtestContext *ctx, memtestResult *result) {
     uint64_t backup[MEMTEST_BACKUP_WORDS];
-    uint64_t *p = m;
-    uint64_t *end =
-        (uint64_t *)(((unsigned char *)m) + (bytes - MEMTEST_DECACHE_SIZE));
+    uint64_t *p = mem;
+    uint64_t *end = (uint64_t *)((char *)mem + bytes - MEMTEST_DECACHE_SIZE);
     size_t left = bytes;
-    int errors = 0;
+    size_t errors = 0;
+    uint64_t start = memtest_time_ns();
 
-    if (bytes & 4095) {
-        return 0; /* Can't test across 4k page boundaries. */
-    }
-
-    if (bytes < 4096 * 2) {
-        return 0; /* Can't test a single page. */
+    if ((bytes & 4095) != 0 || bytes < 8192) {
+        if (result) {
+            result->bytes_tested = 0;
+            result->errors_found = 0;
+            result->passes_complete = 0;
+            result->duration_s = 0;
+        }
+        return 0;
     }
 
     while (left) {
-        /* If we have to test a single final page, go back a single page
-         * so that we can test two pages, since the code can't test a single
-         * page but at least two. */
+        /* Handle single final page */
         if (left == 4096) {
             left += 4096;
             p -= 4096 / sizeof(uint64_t);
         }
 
-        int pass = 0;
         size_t len = (left > sizeof(backup)) ? sizeof(backup) : left;
-
-        /* Always test an even number of pages. */
-        if (len / 4096 % 2) {
+        if ((len / 4096) % 2) {
             len -= 4096;
         }
 
-        memcpy(backup, p, len); /* Backup. */
-        while (pass != passes) {
-            pass++;
-            errors += memtest_addressing(p, len, 0);
-            memtest_fill_random(p, len, 0);
+        memcpy(backup, p, len);
+
+        for (int pass = 0; pass < passes; pass++) {
+            errors += memtest_addressing_ctx(p, len, NULL);
+            memtest_fill_random_ctx(p, len, NULL);
+
+            /* Cache-defeating accesses */
             if (bytes >= MEMTEST_DECACHE_SIZE) {
-                memtest_compare_times(m, MEMTEST_DECACHE_SIZE, pass, 1, 0);
-                memtest_compare_times(end, MEMTEST_DECACHE_SIZE, pass, 1, 0);
+                memtest_compare_ctx(mem, MEMTEST_DECACHE_SIZE, NULL);
+                memtest_compare_ctx(end, MEMTEST_DECACHE_SIZE, NULL);
             }
 
-            errors += memtest_compare_times(p, len, pass, 4, 0);
-            memtest_fill_value(p, len, 0, (uint64_t)-1, 'S', 0);
-            if (bytes >= MEMTEST_DECACHE_SIZE) {
-                memtest_compare_times(m, MEMTEST_DECACHE_SIZE, pass, 1, 0);
-                memtest_compare_times(end, MEMTEST_DECACHE_SIZE, pass, 1, 0);
+            for (int i = 0; i < 4; i++) {
+                errors += memtest_compare_ctx(p, len, NULL);
             }
 
-            errors += memtest_compare_times(p, len, pass, 4, 0);
-            memtest_fill_value(p, len, ULONG_ONEZERO, ULONG_ZEROONE, 'C', 0);
+            memtest_fill_pattern_ctx(p, len, 0, (uint64_t)-1, 'S', NULL);
             if (bytes >= MEMTEST_DECACHE_SIZE) {
-                memtest_compare_times(m, MEMTEST_DECACHE_SIZE, pass, 1, 0);
-                memtest_compare_times(end, MEMTEST_DECACHE_SIZE, pass, 1, 0);
+                memtest_compare_ctx(mem, MEMTEST_DECACHE_SIZE, NULL);
+                memtest_compare_ctx(end, MEMTEST_DECACHE_SIZE, NULL);
+            }
+            for (int i = 0; i < 4; i++) {
+                errors += memtest_compare_ctx(p, len, NULL);
             }
 
-            errors += memtest_compare_times(p, len, pass, 4, 0);
+            memtest_fill_pattern_ctx(p, len, ULONG_ONEZERO, ULONG_ZEROONE, 'C',
+                                     NULL);
+            if (bytes >= MEMTEST_DECACHE_SIZE) {
+                memtest_compare_ctx(mem, MEMTEST_DECACHE_SIZE, NULL);
+                memtest_compare_ctx(end, MEMTEST_DECACHE_SIZE, NULL);
+            }
+            for (int i = 0; i < 4; i++) {
+                errors += memtest_compare_ctx(p, len, NULL);
+            }
         }
 
-        memcpy(p, backup, len); /* Restore. */
+        memcpy(p, backup, len);
         left -= len;
         p += len / sizeof(uint64_t);
+
+        if (ctx) {
+            double progress = (double)(bytes - left) / (double)bytes;
+            ctx_update(ctx, (size_t)(progress * 100), '.');
+        }
+    }
+
+    if (result) {
+        result->bytes_tested = bytes;
+        result->errors_found = errors;
+        result->passes_complete = passes;
+        result->duration_s = (memtest_time_ns() - start) / 1e9;
     }
 
     return errors;
 }
 
-/* Perform an interactive test allocating the specified number of megabytes. */
-void memtest_alloc_and_test(size_t megabytes, int passes) {
+/* ============================================================================
+ * Public API
+ * ============================================================================
+ */
+
+size_t memtest(void *mem, size_t bytes, int passes, bool preserving) {
+    if (preserving) {
+        return memtest_preserving(mem, bytes, passes, NULL, NULL);
+    } else {
+        return memtest_destructive(mem, bytes, passes, NULL, NULL);
+    }
+}
+
+void memtestWithResult(void *mem, size_t bytes, int passes, bool preserving,
+                       memtestResult *result) {
+    if (preserving) {
+        memtest_preserving(mem, bytes, passes, NULL, result);
+    } else {
+        memtest_destructive(mem, bytes, passes, NULL, result);
+    }
+}
+
+void memtestWithProgress(void *mem, size_t bytes, int passes, bool preserving,
+                         memtestProgressFn progress_fn, void *userdata,
+                         memtestResult *result) {
+    memtestContext ctx;
+    ctx_init(&ctx);
+    ctx_set_callback(&ctx, progress_fn, userdata);
+
+    if (preserving) {
+        memtest_preserving(mem, bytes, passes, &ctx, result);
+    } else {
+        memtest_destructive(mem, bytes, passes, &ctx, result);
+    }
+}
+
+size_t memtestAllocAndTest(size_t megabytes, int passes,
+                           memtestResult *result) {
     size_t bytes = megabytes * 1024 * 1024;
-    uint64_t *m = malloc(bytes);
+    void *mem = malloc(bytes);
 
-    if (m == NULL) {
-        fprintf(stderr, "Unable to allocate %zu megabytes: %s", megabytes,
+    if (!mem) {
+        if (result) {
+            result->bytes_tested = 0;
+            result->errors_found = 0;
+            result->passes_complete = 0;
+            result->duration_s = 0;
+        }
+        return (size_t)-1; /* Allocation failure */
+    }
+
+    size_t errors = memtest_destructive(mem, bytes, passes, NULL, result);
+    free(mem);
+    return errors;
+}
+
+void memtestInteractive(size_t megabytes, int passes, memtestResult *result) {
+    size_t bytes = megabytes * 1024 * 1024;
+    void *mem = malloc(bytes);
+
+    if (!mem) {
+        fprintf(stderr, "Unable to allocate %zu MB: %s\n", megabytes,
                 strerror(errno));
-        exit(1);
+        if (result) {
+            memset(result, 0, sizeof(*result));
+        }
+        return;
     }
 
-    memtest_test(m, bytes, passes, 1);
-    free(m);
-}
+    memtestContext ctx;
+    ctx_init(&ctx);
+    ctx_set_interactive(&ctx);
 
-void memtest(size_t megabytes, int passes) {
-    if (ioctl(1, TIOCGWINSZ, &ws) == -1) {
-        ws.ws_col = 80;
-        ws.ws_row = 20;
+    memtest_destructive(mem, bytes, passes, &ctx, result);
+    free(mem);
+
+    /* Clear screen and show result */
+    printf("\x1b[H\x1b[2J");
+    if (result && result->errors_found == 0) {
+        printf("Memory test PASSED\n");
+        printf("Tested: %zu MB, %zu passes, %.1f seconds\n", megabytes,
+               result->passes_complete, result->duration_s);
+    } else if (result) {
+        printf("Memory test FAILED: %zu errors detected\n",
+               result->errors_found);
     }
-
-    memtest_alloc_and_test(megabytes, passes);
-    printf("\nYour memory passed this test.\n");
-    printf("Please if you are still in doubt use the following two tools:\n");
-    printf("1) memtest86: http://www.memtest86.com/\n");
-    printf("2) memtester: http://pyropus.ca/software/memtester/\n");
-    exit(0);
 }
 
-/* ====================================================================
- * Memory Reporting Womps
- * ==================================================================== */
-#if HAVE_PROC_MAPS
+/* ============================================================================
+ * Platform-Specific Process Memory Test
+ * ============================================================================
+ */
+
+#if defined(__linux__)
 #define MEMTEST_MAX_REGIONS 128
-/* A non destructive memory test */
-/* Returns count of errors detected. */
-size_t memcheckLinux(const int writeToFd) {
-    FILE *fp;
-    const int fd = writeToFd;
-    char line[1024] = {0};
-    char logbuf[1024] = {0};
-    size_t start_addr;
-    size_t end_addr;
-    size_t size;
-    size_t start_vect[MEMTEST_MAX_REGIONS] = {0};
-    size_t size_vect[MEMTEST_MAX_REGIONS] = {0};
-    int regions = 0;
 
-    fp = fopen("/proc/self/maps", "r");
+size_t memtestProcessMemory(int passes) {
+    FILE *fp = fopen("/proc/self/maps", "r");
     if (!fp) {
         return 0;
     }
 
-    while (fgets(line, sizeof(line), fp) != NULL) {
-        char *start;
-        char *end;
-        char *p = line;
+    char line[1024];
+    size_t start_vect[MEMTEST_MAX_REGIONS];
+    size_t size_vect[MEMTEST_MAX_REGIONS];
+    int regions = 0;
 
-        start = p;
-        p = strchr(p, '-');
+    while (fgets(line, sizeof(line), fp) && regions < MEMTEST_MAX_REGIONS) {
+        char *start = line;
+        char *p = strchr(line, '-');
         if (!p) {
             continue;
         }
         *p++ = '\0';
-        end = p;
+        char *end = p;
         p = strchr(p, ' ');
         if (!p) {
             continue;
         }
-
         *p++ = '\0';
+
+        /* Skip special regions */
         if (strstr(p, "stack") || strstr(p, "vdso") || strstr(p, "vsyscall")) {
             continue;
         }
-
-        if (!strstr(p, "00:00")) {
+        if (!strstr(p, "00:00") || !strstr(p, "rw")) {
             continue;
         }
 
-        if (!strstr(p, "rw")) {
-            continue;
-        }
-
-        start_addr = strtoul(start, NULL, 16);
-        end_addr = strtoul(end, NULL, 16);
-        size = end_addr - start_addr;
-
-        start_vect[regions] = start_addr;
-        size_vect[regions] = size;
-        snprintf(logbuf, sizeof(logbuf), "Testing %lx (%lu bytes)\n",
-                 (uint64_t)start_vect[regions], (uint64_t)size_vect[regions]);
-        write(fd, logbuf, strlen(logbuf));
-
+        start_vect[regions] = strtoul(start, NULL, 16);
+        size_vect[regions] = strtoul(end, NULL, 16) - start_vect[regions];
         regions++;
     }
 
-    size_t errors = 0;
-    for (int j = 0; j < regions; j++) {
-        write(fd, ".", 1);
+    fclose(fp);
 
-        errors +=
-            memtest_preserving_test((void *)start_vect[j], size_vect[j], 1);
-        write(fd, errors ? "E" : "O", 1);
+    size_t errors = 0;
+    for (int i = 0; i < regions; i++) {
+        errors += memtest_preserving((void *)start_vect[i], size_vect[i],
+                                     passes, NULL, NULL);
     }
 
-    write(fd, "\n", 1);
+    return errors;
+}
 
-    /* NOTE: It is very important to close the file descriptor only now
-     * because closing it before may result into unmapping of some memory
-     * region that we are testing. */
+#elif defined(__APPLE__)
+
+/* macOS: Process memory testing via Mach VM is unreliable due to guard pages
+ * and other protected regions that can cause crashes. Return unsupported. */
+size_t memtestProcessMemory(int passes) {
+    (void)passes;
+    return 0; /* Not reliably supported on macOS */
+}
+
+#elif defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) ||   \
+    defined(__DragonFly__)
+
+/* BSD: Try /proc if mounted, otherwise not supported */
+size_t memtestProcessMemory(int passes) {
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%d/map", (int)getpid());
+
+    FILE *fp = fopen(path, "r");
+    if (!fp) {
+        /* procfs not mounted - can't enumerate memory regions */
+        return 0;
+    }
+
+    char line[1024];
+    size_t errors = 0;
+
+    /* BSD /proc/pid/map format: start end resident private_resident ... */
+    while (fgets(line, sizeof(line), fp)) {
+        size_t start_addr, end_addr;
+        if (sscanf(line, "%zx %zx", &start_addr, &end_addr) != 2) {
+            continue;
+        }
+
+        /* Check for rw permissions in the line */
+        if (!strstr(line, "rw")) {
+            continue;
+        }
+
+        size_t size = end_addr - start_addr;
+        if (size >= 8192) {
+            errors += memtest_preserving((void *)start_addr, size, passes, NULL,
+                                         NULL);
+        }
+    }
+
     fclose(fp);
     return errors;
 }
-#endif /* SMAPS */
 
-/*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *   * Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
- *   * Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+#else
+
+size_t memtestProcessMemory(int passes) {
+    (void)passes;
+    return 0; /* Not supported on this platform */
+}
+
+#endif
+
+/* ============================================================================
+ * Test Suite
+ * ============================================================================
  */
+
+#ifdef DATAKIT_TEST
+#include "ctest.h"
+
+static void memtest_print_usage(void) {
+    printf("Usage: datakit-test test memtest [options]\n\n");
+    printf("Options:\n");
+    printf("  (no args)     Run quick unit tests (default)\n");
+    printf("  <MB>          Test specified megabytes of memory\n");
+    printf("  <MB> <passes> Test with specified number of passes\n");
+    printf("  --process     Test process memory (Linux only)\n");
+    printf("\nExamples:\n");
+    printf("  memtest              Quick unit tests\n");
+    printf("  memtest 1024         Test 1 GB with 1 pass\n");
+    printf("  memtest 4096 3       Test 4 GB with 3 passes\n");
+    printf("\nFor thorough testing, run several minutes per GB.\n");
+}
+
+static int memtest_run_unit_tests(void) {
+    int err = 0;
+
+    /* Test addressing on small buffer */
+    TEST("addressing - 64KB") {
+        size_t bytes = 64 * 1024;
+        uint64_t *mem = aligned_alloc(4096, bytes);
+        assert(mem);
+        int errors = memtestAddressing(mem, bytes);
+        if (errors != 0) {
+            ERRR("Addressing test found errors on good memory");
+        }
+        free(mem);
+    }
+
+    /* Test random fill + compare */
+    TEST("random fill - 64KB") {
+        size_t bytes = 64 * 1024;
+        uint64_t *mem = aligned_alloc(4096, bytes);
+        assert(mem);
+        memtestFillRandom(mem, bytes);
+        int errors = memtestCompare(mem, bytes);
+        if (errors != 0) {
+            ERRR("Random fill does not produce matching halves");
+        }
+        free(mem);
+    }
+
+    /* Test pattern fill + compare */
+    TEST("pattern fill - 64KB") {
+        size_t bytes = 64 * 1024;
+        uint64_t *mem = aligned_alloc(4096, bytes);
+        assert(mem);
+
+        memtestFillPattern(mem, bytes, 0, (uint64_t)-1);
+        int errors = memtestCompare(mem, bytes);
+        if (errors != 0) {
+            ERRR("Solid fill does not produce matching halves");
+        }
+
+        memtestFillPattern(mem, bytes, ULONG_ONEZERO, ULONG_ZEROONE);
+        errors = memtestCompare(mem, bytes);
+        if (errors != 0) {
+            ERRR("Checkerboard fill does not produce matching halves");
+        }
+
+        free(mem);
+    }
+
+    /* Test full pass on 1MB */
+    TEST("full test - 1MB") {
+        size_t bytes = 1024 * 1024;
+        void *mem = aligned_alloc(4096, bytes);
+        assert(mem);
+
+        memtestResult result;
+        memtestWithResult(mem, bytes, 1, false, &result);
+
+        if (result.errors_found != 0) {
+            ERR("Found %zu errors on 1MB test", result.errors_found);
+        }
+        if (result.passes_complete != 1) {
+            ERRR("Did not complete 1 pass");
+        }
+        if (result.bytes_tested != bytes) {
+            ERRR("Did not test correct size");
+        }
+        if (result.duration_s <= 0) {
+            ERRR("Duration not recorded");
+        }
+
+        free(mem);
+    }
+
+    /* Test preserving mode */
+    TEST("preserving test - 64KB") {
+        size_t bytes = 64 * 1024;
+        uint64_t *mem = aligned_alloc(4096, bytes);
+        assert(mem);
+
+        /* Fill with known pattern */
+        for (size_t i = 0; i < bytes / sizeof(uint64_t); i++) {
+            mem[i] = 0xDEADBEEFCAFEBABEULL;
+        }
+
+        memtestResult result;
+        memtestWithResult(mem, bytes, 1, true, &result);
+
+        if (result.errors_found != 0) {
+            ERR("Found %zu errors in preserving mode", result.errors_found);
+        }
+
+        /* Verify pattern preserved */
+        bool preserved = true;
+        for (size_t i = 0; i < bytes / sizeof(uint64_t); i++) {
+            if (mem[i] != 0xDEADBEEFCAFEBABEULL) {
+                preserved = false;
+                break;
+            }
+        }
+        if (!preserved) {
+            ERRR("Original data not preserved after test");
+        }
+
+        free(mem);
+    }
+
+    /* Test allocate and test */
+    TEST("alloc and test - 1MB") {
+        memtestResult result;
+        size_t errors = memtestAllocAndTest(1, 1, &result);
+        if (errors != 0) {
+            ERR("Found %zu errors on allocated memory", errors);
+        }
+        if (result.bytes_tested != 1024 * 1024) {
+            ERRR("Did not test 1MB");
+        }
+    }
+
+    TEST_FINAL_RESULT;
+}
+
+int memtestTest(int argc, char *argv[]) {
+    /* argc includes test name at argv[0], real args start at argv[1] */
+    int nargs = argc - 1;
+    char **args = argv + 1;
+
+    /* No args: run unit tests */
+    if (nargs == 0) {
+        return memtest_run_unit_tests();
+    }
+
+    /* Help */
+    if (strcmp(args[0], "-h") == 0 || strcmp(args[0], "--help") == 0) {
+        memtest_print_usage();
+        return 0;
+    }
+
+    /* Process memory test (Linux only) */
+    if (strcmp(args[0], "--process") == 0) {
+#if defined(__linux__)
+        printf("memtest: process memory... ");
+        fflush(stdout);
+        size_t errors = memtestProcessMemory(1);
+        if (errors == 0) {
+            printf("PASSED\n");
+            return 0;
+        } else {
+            printf("%zu ERRORS\n", errors);
+            return 1;
+        }
+#else
+        printf("memtest: --process is only supported on Linux\n");
+        return 1;
+#endif
+    }
+
+    /* Parse MB and optional passes */
+    size_t megabytes = (size_t)atol(args[0]);
+    int passes = 1;
+
+    if (megabytes == 0 || megabytes > 1024 * 1024) {
+        fprintf(stderr, "Error: Invalid size '%s' (must be 1-%zu MB)\n",
+                args[0], (size_t)(1024 * 1024));
+        memtest_print_usage();
+        return 1;
+    }
+
+    if (nargs >= 2) {
+        passes = atoi(args[1]);
+        if (passes <= 0 || passes > 1000) {
+            fprintf(stderr, "Error: Invalid passes '%s' (must be 1-1000)\n",
+                    args[1]);
+            return 1;
+        }
+    }
+
+    /* Run the full memory test with live progress */
+    printf("memtest: %zu MB, %d pass%s\n", megabytes, passes,
+           passes == 1 ? "" : "es");
+
+    size_t bytes = megabytes * 1024 * 1024;
+    void *mem = malloc(bytes);
+    if (!mem) {
+        printf("  FAILED: cannot allocate %zu MB\n", megabytes);
+        return 1;
+    }
+
+    uint64_t start = memtest_time_ns();
+    size_t total_errors = 0;
+
+    for (int pass = 0; pass < passes; pass++) {
+        printf("  pass %d/%d: ", pass + 1, passes);
+        fflush(stdout);
+
+        /* Address test */
+        printf("addr");
+        fflush(stdout);
+        int errors = memtestAddressing(mem, bytes);
+        total_errors += errors;
+
+        /* Random fill + compare */
+        printf(" random");
+        fflush(stdout);
+        memtestFillRandom(mem, bytes);
+        for (int i = 0; i < 4; i++) {
+            total_errors += memtestCompare(mem, bytes);
+        }
+
+        /* Solid fill + compare */
+        printf(" solid");
+        fflush(stdout);
+        memtestFillPattern(mem, bytes, 0, (uint64_t)-1);
+        for (int i = 0; i < 4; i++) {
+            total_errors += memtestCompare(mem, bytes);
+        }
+
+        /* Checkerboard + compare */
+        printf(" checker");
+        fflush(stdout);
+        memtestFillPattern(mem, bytes, ULONG_ONEZERO, ULONG_ZEROONE);
+        for (int i = 0; i < 4; i++) {
+            total_errors += memtestCompare(mem, bytes);
+        }
+
+        printf(" OK\n");
+    }
+
+    free(mem);
+
+    double duration = (memtest_time_ns() - start) / 1e9;
+    double throughput = (bytes * passes) / (duration * 1024 * 1024);
+
+    printf("  ---\n");
+    printf("  %zu MB × %d passes in %.1fs (%.0f MB/s)\n", megabytes, passes,
+           duration, throughput);
+
+    if (total_errors == 0) {
+        printf("  PASSED\n");
+        return 0;
+    } else {
+        printf("  FAILED: %zu errors\n", total_errors);
+        return 1;
+    }
+}
+#endif

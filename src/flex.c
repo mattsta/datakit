@@ -4862,17 +4862,17 @@ static flex *createIntList() {
     flex *f = flexNew();
     char buf[32] = {0};
 
-    sprintf(buf, "100");
+    snprintf(buf, sizeof(buf), "100");
     flexPushBytes(&f, buf, strlen(buf), FLEX_ENDPOINT_TAIL);
-    sprintf(buf, "128000");
+    snprintf(buf, sizeof(buf), "128000");
     flexPushBytes(&f, buf, strlen(buf), FLEX_ENDPOINT_TAIL);
-    sprintf(buf, "-100");
+    snprintf(buf, sizeof(buf), "-100");
     flexPushBytes(&f, buf, strlen(buf), FLEX_ENDPOINT_HEAD);
-    sprintf(buf, "4294967296");
+    snprintf(buf, sizeof(buf), "4294967296");
     flexPushBytes(&f, buf, strlen(buf), FLEX_ENDPOINT_HEAD);
-    sprintf(buf, "non integer");
+    snprintf(buf, sizeof(buf), "non integer");
     flexPushBytes(&f, buf, strlen(buf), FLEX_ENDPOINT_TAIL);
-    sprintf(buf, "much much longer non integer");
+    snprintf(buf, sizeof(buf), "much much longer non integer");
     flexPushBytes(&f, buf, strlen(buf), FLEX_ENDPOINT_TAIL);
     return f;
 }
@@ -6649,7 +6649,7 @@ int32_t flexTest(int32_t argc, char **argv) {
                        (loops - i));
             }
 
-            len = sprintf(buf, "%" PRIi64 "", i);
+            len = snprintf(buf, sizeof(buf), "%" PRIi64 "", i);
             flexPushBytes(&f, buf, len, FLEX_ENDPOINT_TAIL);
         }
 
@@ -6988,25 +6988,25 @@ int32_t flexTest(int32_t argc, char **argv) {
                         switch (rand() % 9) {
                         case 0:
                             /* unsigned tiny integer */
-                            buflen = sprintf(buf, "%" PRIu64,
-                                             (uint64_t)(0LL + rand()) >> 20);
+                            buflen = snprintf(buf, bufbuflen, "%" PRIu64,
+                                              (uint64_t)(0LL + rand()) >> 20);
                             break;
                         case 1:
                             /* unsigned integer */
-                            buflen = sprintf(buf, "%" PRIu64,
-                                             (uint64_t)(0LL + rand()));
+                            buflen = snprintf(buf, bufbuflen, "%" PRIu64,
+                                              (uint64_t)(0LL + rand()));
                             break;
                         case 2:
                             /* unsigned big integer */
-                            buflen = sprintf(buf, "%" PRIu64,
-                                             (uint64_t)(0LL + rand()) << 20);
+                            buflen = snprintf(buf, bufbuflen, "%" PRIu64,
+                                              (uint64_t)(0LL + rand()) << 20);
                             break;
                         case 3:
                         case 4:
                         case 5:
                             /* signed (randomly negative) big integers */
-                            buflen = sprintf(
-                                buf, "%" PRId64,
+                            buflen = snprintf(
+                                buf, bufbuflen, "%" PRId64,
                                 (int64_t)(rand() % 2 ? -1 : 1) *
                                         (int64_t)(0LL + rand())
                                     /* triggers sanitizer but not a problem */
@@ -7057,7 +7057,7 @@ int32_t flexTest(int32_t argc, char **argv) {
                     printf("Loopers: i = %d\n", i);
                     printf("Expected length: %d\n", elements);
                     printf("Flex count: %zu\n", flexCount(f));
-                    printf("List length: %lu\n", listLength(ref));
+                    printf("List length: %zu\n", listLength(ref));
                     flexRepr(f);
                     assert(NULL);
                 }
@@ -7079,9 +7079,11 @@ int32_t flexTest(int32_t argc, char **argv) {
                         buflen = len;
                         memcpy(buf, str, buflen);
                     } else if (got.type == DATABOX_SIGNED_64) {
-                        buflen = sprintf(buf, "%" PRIdMAX, got.data.i);
+                        buflen =
+                            snprintf(buf, bufbuflen, "%" PRIdMAX, got.data.i);
                     } else if (got.type == DATABOX_UNSIGNED_64) {
-                        buflen = sprintf(buf, "%" PRIuMAX, got.data.u);
+                        buflen =
+                            snprintf(buf, bufbuflen, "%" PRIuMAX, got.data.u);
                     } else if (got.type == DATABOX_FLOAT_32) {
                         buflen = StrDoubleFormatToBufNice(buf, bufbuflen,
                                                           got.data.f32);
@@ -7170,6 +7172,771 @@ int32_t flexTest(int32_t argc, char **argv) {
         printf("SUCCESS (%f sec head)\nSUCCESS (%f sec tail)\n\n",
                headTotal / 1e6, tailTotal / 1e6);
     }
+
+    /* ================================================================
+     * COMPREHENSIVE FUZZ TESTS
+     * ================================================================ */
+
+    printf("\n=== FLEX FUZZ TESTING ===\n\n");
+
+    printf("FUZZ: integer encoding round-trip - signed boundaries: ");
+    {
+        f = flexNew();
+
+        /* Test all boundary values for each integer width */
+        const int64_t testVals[] = {
+            /* 8-bit boundaries */
+            INT8_MIN, INT8_MAX, INT8_MIN + 1, INT8_MAX - 1,
+            /* 16-bit boundaries */
+            INT16_MIN, INT16_MAX, INT16_MIN + 1, INT16_MAX - 1,
+            /* 24-bit boundaries */
+            -(1LL << 23), (1LL << 23) - 1,
+            /* 32-bit boundaries */
+            INT32_MIN, INT32_MAX, INT32_MIN + 1, INT32_MAX - 1,
+            /* 40-bit boundaries */
+            -(1LL << 39), (1LL << 39) - 1,
+            /* 48-bit boundaries */
+            -(1LL << 47), (1LL << 47) - 1,
+            /* 56-bit boundaries */
+            -(1LL << 55), (1LL << 55) - 1,
+            /* 64-bit boundaries */
+            INT64_MIN, INT64_MAX, INT64_MIN + 1, INT64_MAX - 1,
+            /* Common values */
+            -1, 0, 1, -100, 100, -1000, 1000};
+
+        for (size_t i = 0; i < sizeof(testVals) / sizeof(testVals[0]); i++) {
+            flexPushSigned(&f, testVals[i], FLEX_ENDPOINT_TAIL);
+        }
+
+        /* Verify all values can be retrieved correctly */
+        fe = flexHead(f);
+        for (size_t i = 0; i < sizeof(testVals) / sizeof(testVals[0]); i++) {
+            databox box;
+            flexGetByType(fe, &box);
+            int64_t retrieved;
+            if (box.type == DATABOX_SIGNED_64) {
+                retrieved = box.data.i;
+            } else if (box.type == DATABOX_UNSIGNED_64) {
+                retrieved = (int64_t)box.data.u;
+            } else {
+                printf("\nFAIL: unexpected type %d for index %zu\n", box.type,
+                       i);
+                assert(NULL);
+            }
+            if (retrieved != testVals[i]) {
+                printf("\nFAIL: expected %" PRId64 ", got %" PRId64
+                       " at index %zu\n",
+                       testVals[i], retrieved, i);
+                assert(NULL);
+            }
+            fe = flexNext(f, fe);
+        }
+
+        flexFree(f);
+        printf("OK\n");
+    }
+
+    printf("FUZZ: integer encoding round-trip - unsigned boundaries: ");
+    {
+        f = flexNew();
+
+        const uint64_t testVals[] = {0,
+                                     1,
+                                     UINT8_MAX,
+                                     UINT16_MAX,
+                                     (1ULL << 24) - 1, /* 24-bit max */
+                                     UINT32_MAX,
+                                     (1ULL << 40) - 1, /* 40-bit max */
+                                     (1ULL << 48) - 1, /* 48-bit max */
+                                     (1ULL << 56) - 1, /* 56-bit max */
+                                     UINT64_MAX,
+                                     UINT64_MAX - 1};
+
+        for (size_t i = 0; i < sizeof(testVals) / sizeof(testVals[0]); i++) {
+            flexPushUnsigned(&f, testVals[i], FLEX_ENDPOINT_TAIL);
+        }
+
+        fe = flexHead(f);
+        for (size_t i = 0; i < sizeof(testVals) / sizeof(testVals[0]); i++) {
+            databox box;
+            flexGetByType(fe, &box);
+            uint64_t retrieved = (box.type == DATABOX_UNSIGNED_64)
+                                     ? box.data.u
+                                     : (uint64_t)box.data.i;
+            if (retrieved != testVals[i]) {
+                printf("\nFAIL: expected %" PRIu64 ", got %" PRIu64
+                       " at index %zu\n",
+                       testVals[i], retrieved, i);
+                assert(NULL);
+            }
+            fe = flexNext(f, fe);
+        }
+
+        flexFree(f);
+        printf("OK\n");
+    }
+
+    printf("FUZZ: bytes encoding round-trip - various lengths: ");
+    {
+        f = flexNew();
+
+        /* Test string lengths from 0 to 8192 */
+        uint8_t buf[8192];
+        for (size_t i = 0; i < sizeof(buf); i++) {
+            buf[i] = (uint8_t)(i & 0xFF);
+        }
+
+        const size_t testLens[] = {0,    1,    2,    7,    8,    15,   16,
+                                   31,   32,   63,   64, /* embedded boundary */
+                                   127,  128,  255,  256,  511,  512,  1023,
+                                   1024, 2047, 2048, 4095, 4096, 8191, 8192};
+
+        for (size_t i = 0; i < sizeof(testLens) / sizeof(testLens[0]); i++) {
+            flexPushBytes(&f, buf, testLens[i], FLEX_ENDPOINT_TAIL);
+        }
+
+        fe = flexHead(f);
+        for (size_t i = 0; i < sizeof(testLens) / sizeof(testLens[0]); i++) {
+            databox box;
+            flexGetByType(fe, &box);
+            size_t len = databoxLen(&box);
+            if (len != testLens[i]) {
+                printf("\nFAIL: expected len %zu, got %zu at index %zu\n",
+                       testLens[i], len, i);
+                assert(NULL);
+            }
+            if (testLens[i] > 0) {
+                const uint8_t *data = (const uint8_t *)box.data.bytes.start;
+                if (memcmp(data, buf, testLens[i]) != 0) {
+                    printf("\nFAIL: data mismatch at index %zu\n", i);
+                    assert(NULL);
+                }
+            }
+            fe = flexNext(f, fe);
+        }
+
+        flexFree(f);
+        printf("OK\n");
+    }
+
+    printf("FUZZ: float encoding round-trip: ");
+    {
+        f = flexNew();
+
+        static const float floatVals[] = {0.0f,
+                                          -0.0f,
+                                          1.0f,
+                                          -1.0f,
+                                          1.175494351e-38f,
+                                          3.402823466e+38f,
+                                          -3.402823466e+38f,
+                                          3.14159f,
+                                          -2.71828f,
+                                          1e-10f,
+                                          1e10f};
+        static const size_t floatCount = 11;
+
+        static const double doubleVals[] = {0.0,
+                                            -0.0,
+                                            1.0,
+                                            -1.0,
+                                            2.2250738585072014e-308,
+                                            1.7976931348623157e+308,
+                                            -1.7976931348623157e+308,
+                                            3.14159265358979,
+                                            -2.71828182845904,
+                                            1e-100,
+                                            1e100};
+        static const size_t doubleCount = 11;
+
+        for (size_t i = 0; i < floatCount; i++) {
+            flexPushFloat(&f, floatVals[i], FLEX_ENDPOINT_TAIL);
+        }
+        for (size_t i = 0; i < doubleCount; i++) {
+            flexPushDouble(&f, doubleVals[i], FLEX_ENDPOINT_TAIL);
+        }
+
+        fe = flexHead(f);
+        for (size_t i = 0; i < floatCount; i++) {
+            databox box;
+            flexGetByType(fe, &box);
+            /* flex may convert certain float values to integers for efficiency
+             */
+            double retrieved = 0;
+            if (box.type == DATABOX_FLOAT_32) {
+                retrieved = box.data.f32;
+            } else if (box.type == DATABOX_DOUBLE_64) {
+                retrieved = box.data.d64;
+            } else if (box.type == DATABOX_SIGNED_64) {
+                retrieved = (double)box.data.i;
+            } else if (box.type == DATABOX_UNSIGNED_64) {
+                retrieved = (double)box.data.u;
+            }
+            /* Compare with tolerance for float */
+            double diff = retrieved - (double)floatVals[i];
+            if (diff < 0) {
+                diff = -diff;
+            }
+            if (floatVals[i] != 0.0f && diff / (double)floatVals[i] > 1e-5) {
+                printf("\nFAIL: float mismatch at index %zu: got %g, expected "
+                       "%g\n",
+                       i, retrieved, (double)floatVals[i]);
+                assert(NULL);
+            }
+            fe = flexNext(f, fe);
+        }
+        for (size_t i = 0; i < doubleCount; i++) {
+            databox box;
+            flexGetByType(fe, &box);
+            /* flex may convert certain double values to integers for efficiency
+             */
+            double retrieved = 0;
+            if (box.type == DATABOX_DOUBLE_64) {
+                retrieved = box.data.d64;
+            } else if (box.type == DATABOX_FLOAT_32) {
+                retrieved = box.data.f32;
+            } else if (box.type == DATABOX_SIGNED_64) {
+                retrieved = (double)box.data.i;
+            } else if (box.type == DATABOX_UNSIGNED_64) {
+                retrieved = (double)box.data.u;
+            }
+            double diff = retrieved - doubleVals[i];
+            if (diff < 0) {
+                diff = -diff;
+            }
+            if (doubleVals[i] != 0.0 && diff / doubleVals[i] > 1e-14) {
+                printf("\nFAIL: double mismatch at index %zu: got %g, expected "
+                       "%g\n",
+                       i, retrieved, doubleVals[i]);
+                assert(NULL);
+            }
+            fe = flexNext(f, fe);
+        }
+
+        flexFree(f);
+        printf("OK\n");
+    }
+
+    printf("FUZZ: sorted insert and binary search - integers: ");
+    {
+        f = flexNew();
+        flexEntry *middle = NULL;
+        const size_t count = 1000;
+
+        /* Insert unique sequential values, track in oracle */
+        int64_t *oracle = zcalloc(count, sizeof(int64_t));
+
+        srand(11111);
+        for (size_t i = 0; i < count; i++) {
+            /* Use unique values: multiply by prime to spread out */
+            int64_t val = (int64_t)i * 7 - 3500;
+            oracle[i] = val;
+
+            databox box = databoxNewSigned(val);
+            flexInsertByTypeSortedWithMiddle(&f, &box, &middle);
+        }
+
+        /* Verify count */
+        if (flexCount(f) != count) {
+            printf("\nFAIL: count mismatch: flex=%zu expected=%zu\n",
+                   flexCount(f), count);
+            assert(NULL);
+        }
+
+        /* Verify all values can be found */
+        for (size_t i = 0; i < count; i++) {
+            databox box = databoxNewSigned(oracle[i]);
+            flexEntry *found =
+                flexFindByTypeSortedWithMiddle(f, 1, &box, middle);
+            if (!found) {
+                printf("\nFAIL: value %" PRId64 " not found!\n", oracle[i]);
+                assert(NULL);
+            }
+        }
+
+        /* Verify sorted order by iterating */
+        int64_t prev = INT64_MIN;
+        fe = flexHead(f);
+        for (size_t i = 0; i < count; i++) {
+            databox box;
+            flexGetByType(fe, &box);
+            int64_t val = (box.type == DATABOX_SIGNED_64) ? box.data.i
+                                                          : (int64_t)box.data.u;
+            if (val <= prev) {
+                printf("\nFAIL: not sorted at %zu: %" PRId64 " <= %" PRId64
+                       "\n",
+                       i, val, prev);
+                assert(NULL);
+            }
+            prev = val;
+            fe = flexNext(f, fe);
+        }
+
+        zfree(oracle);
+        flexFree(f);
+        printf("OK\n");
+    }
+
+    printf("FUZZ: sorted insert and binary search - strings: ");
+    {
+        f = flexNew();
+        flexEntry *middle = NULL;
+        const size_t count = 500;
+
+        /* Insert unique strings */
+        for (size_t i = 0; i < count; i++) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "key_%06zu", i);
+
+            databox box = databoxNewBytesString(buf);
+            flexInsertByTypeSortedWithMiddle(&f, &box, &middle);
+        }
+
+        /* Verify count */
+        if (flexCount(f) != count) {
+            printf("\nFAIL: count mismatch: flex=%zu expected=%zu\n",
+                   flexCount(f), count);
+            assert(NULL);
+        }
+
+        /* Verify all strings can be found */
+        for (size_t i = 0; i < count; i++) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "key_%06zu", i);
+            databox box = databoxNewBytesString(buf);
+            flexEntry *found =
+                flexFindByTypeSortedWithMiddle(f, 1, &box, middle);
+            if (!found) {
+                printf("\nFAIL: '%s' not found!\n", buf);
+                assert(NULL);
+            }
+        }
+
+        /* Verify sorted order */
+        char prevBuf[32] = "";
+        fe = flexHead(f);
+        for (size_t i = 0; i < count; i++) {
+            databox box;
+            flexGetByType(fe, &box);
+            const char *str = (const char *)box.data.bytes.start;
+            if (strcmp(str, prevBuf) <= 0 && i > 0) {
+                printf("\nFAIL: not sorted at %zu\n", i);
+                assert(NULL);
+            }
+            snprintf(prevBuf, sizeof(prevBuf), "%.*s", (int)databoxLen(&box),
+                     str);
+            fe = flexNext(f, fe);
+        }
+
+        flexFree(f);
+        printf("OK\n");
+    }
+
+    printf("FUZZ: random push/pop with oracle verification: ");
+    {
+        f = flexNew();
+        const size_t maxSize = 1000;
+        int64_t *oracle = zcalloc(maxSize, sizeof(int64_t));
+        size_t oracleCount = 0;
+
+        srand(33333);
+        size_t pushOps = 0, popOps = 0;
+
+        for (size_t round = 0; round < 10000; round++) {
+            int op = rand() % 10;
+
+            if (op < 6 && oracleCount < maxSize) {
+                /* Push (60%) */
+                int64_t val = (int64_t)(rand() % 100000) - 50000;
+                int where = rand() % 2;
+
+                if (where == 0) {
+                    /* Push head */
+                    flexPushSigned(&f, val, FLEX_ENDPOINT_HEAD);
+                    memmove(&oracle[1], &oracle[0],
+                            oracleCount * sizeof(int64_t));
+                    oracle[0] = val;
+                } else {
+                    /* Push tail */
+                    flexPushSigned(&f, val, FLEX_ENDPOINT_TAIL);
+                    oracle[oracleCount] = val;
+                }
+                oracleCount++;
+                pushOps++;
+            } else if (oracleCount > 0) {
+                /* Pop (40%) */
+                int where = rand() % 2;
+
+                if (where == 0) {
+                    /* Pop head */
+                    fe = flexHead(f);
+                    databox box;
+                    flexGetByType(fe, &box);
+                    int64_t got = (box.type == DATABOX_SIGNED_64)
+                                      ? box.data.i
+                                      : (int64_t)box.data.u;
+                    if (got != oracle[0]) {
+                        printf("\nFAIL: head mismatch: got %" PRId64
+                               " expected %" PRId64 "\n",
+                               got, oracle[0]);
+                        assert(NULL);
+                    }
+                    flexDeleteHead(&f);
+                    memmove(&oracle[0], &oracle[1],
+                            (oracleCount - 1) * sizeof(int64_t));
+                } else {
+                    /* Pop tail */
+                    fe = flexTail(f);
+                    databox box;
+                    flexGetByType(fe, &box);
+                    int64_t got = (box.type == DATABOX_SIGNED_64)
+                                      ? box.data.i
+                                      : (int64_t)box.data.u;
+                    if (got != oracle[oracleCount - 1]) {
+                        printf("\nFAIL: tail mismatch: got %" PRId64
+                               " expected %" PRId64 "\n",
+                               got, oracle[oracleCount - 1]);
+                        assert(NULL);
+                    }
+                    flexDeleteTail(&f);
+                }
+                oracleCount--;
+                popOps++;
+            }
+
+            /* Periodic full verification */
+            if (round % 1000 == 0) {
+                if (flexCount(f) != oracleCount) {
+                    printf("\nFAIL: count mismatch at round %zu\n", round);
+                    assert(NULL);
+                }
+            }
+        }
+
+        /* Final verification */
+        if (flexCount(f) != oracleCount) {
+            printf("\nFAIL: final count mismatch\n");
+            assert(NULL);
+        }
+
+        fe = flexHead(f);
+        for (size_t i = 0; i < oracleCount; i++) {
+            databox box;
+            flexGetByType(fe, &box);
+            int64_t got = (box.type == DATABOX_SIGNED_64) ? box.data.i
+                                                          : (int64_t)box.data.u;
+            if (got != oracle[i]) {
+                printf("\nFAIL: final verification mismatch at %zu\n", i);
+                assert(NULL);
+            }
+            fe = flexNext(f, fe);
+        }
+
+        zfree(oracle);
+        flexFree(f);
+        printf("push=%zu pop=%zu final=%zu... OK\n", pushOps, popOps,
+               oracleCount);
+    }
+
+    printf("FUZZ: mixed type insertions: ");
+    {
+        f = flexNew();
+
+        srand(44444);
+        for (size_t i = 0; i < 1000; i++) {
+            int type = rand() % 5;
+            switch (type) {
+            case 0: {
+                int64_t val = (int64_t)(rand() % 100000) - 50000;
+                flexPushSigned(&f, val, FLEX_ENDPOINT_TAIL);
+                break;
+            }
+            case 1: {
+                uint64_t val = rand() % 100000;
+                flexPushUnsigned(&f, val, FLEX_ENDPOINT_TAIL);
+                break;
+            }
+            case 2: {
+                char buf[64];
+                snprintf(buf, sizeof(buf), "str_%d", rand());
+                flexPushBytes(&f, buf, strlen(buf), FLEX_ENDPOINT_TAIL);
+                break;
+            }
+            case 3: {
+                float val = (float)(rand() % 10000) / 100.0f;
+                flexPushFloat(&f, val, FLEX_ENDPOINT_TAIL);
+                break;
+            }
+            case 4: {
+                double val = (double)(rand() % 10000) / 100.0;
+                flexPushDouble(&f, val, FLEX_ENDPOINT_TAIL);
+                break;
+            }
+            }
+        }
+
+        if (flexCount(f) != 1000) {
+            printf("\nFAIL: expected 1000 elements, got %zu\n", flexCount(f));
+            assert(NULL);
+        }
+
+        /* Iterate through and verify all entries are readable */
+        fe = flexHead(f);
+        size_t count = 0;
+        while (fe) {
+            databox box;
+            flexGetByType(fe, &box);
+            /* Just verify we can read it without crashing */
+            count++;
+            fe = flexNext(f, fe);
+        }
+
+        if (count != 1000) {
+            printf("\nFAIL: iteration count %zu != 1000\n", count);
+            assert(NULL);
+        }
+
+        flexFree(f);
+        printf("OK\n");
+    }
+
+    printf("FUZZ: iterator forward and backward consistency: ");
+    {
+        f = flexNew();
+        const size_t count = 500;
+
+        for (size_t i = 0; i < count; i++) {
+            flexPushSigned(&f, (int64_t)i, FLEX_ENDPOINT_TAIL);
+        }
+
+        /* Forward iteration */
+        fe = flexHead(f);
+        for (size_t i = 0; i < count; i++) {
+            databox box;
+            flexGetByType(fe, &box);
+            if ((size_t)box.data.i != i) {
+                printf("\nFAIL: forward iteration at %zu\n", i);
+                assert(NULL);
+            }
+            fe = flexNext(f, fe);
+        }
+
+        /* Backward iteration */
+        fe = flexTail(f);
+        for (size_t i = 0; i < count; i++) {
+            databox box;
+            flexGetByType(fe, &box);
+            if ((size_t)box.data.i != (count - 1 - i)) {
+                printf("\nFAIL: backward iteration at %zu\n", i);
+                assert(NULL);
+            }
+            fe = flexPrev(f, fe);
+        }
+
+        flexFree(f);
+        printf("OK\n");
+    }
+
+    printf("FUZZ: delete operations with verification: ");
+    {
+        f = flexNew();
+        const size_t count = 100;
+
+        for (size_t i = 0; i < count; i++) {
+            flexPushSigned(&f, (int64_t)i, FLEX_ENDPOINT_TAIL);
+        }
+
+        /* Delete from middle */
+        fe = flexIndex(f, 50);
+        flexDelete(&f, &fe);
+        if (flexCount(f) != count - 1) {
+            printf("\nFAIL: delete from middle failed\n");
+            assert(NULL);
+        }
+
+        /* Verify element 49 is followed by 51 */
+        fe = flexIndex(f, 49);
+        databox box;
+        flexGetByType(fe, &box);
+        if (box.data.i != 49) {
+            printf("\nFAIL: element before deleted is wrong\n");
+            assert(NULL);
+        }
+        fe = flexNext(f, fe);
+        flexGetByType(fe, &box);
+        if (box.data.i != 51) {
+            printf("\nFAIL: element after deleted is wrong\n");
+            assert(NULL);
+        }
+
+        flexFree(f);
+        printf("OK\n");
+    }
+
+    printf("FUZZ: range delete: ");
+    {
+        f = flexNew();
+
+        for (int i = 0; i < 100; i++) {
+            flexPushSigned(&f, i, FLEX_ENDPOINT_TAIL);
+        }
+
+        /* Delete range [20, 30) */
+        flexDeleteRange(&f, 20, 10);
+
+        if (flexCount(f) != 90) {
+            printf("\nFAIL: count after range delete: %zu\n", flexCount(f));
+            assert(NULL);
+        }
+
+        /* Verify 19 is followed by 30 */
+        fe = flexIndex(f, 19);
+        databox box;
+        flexGetByType(fe, &box);
+        if (box.data.i != 19) {
+            printf("\nFAIL: element before range is wrong\n");
+            assert(NULL);
+        }
+        fe = flexNext(f, fe);
+        flexGetByType(fe, &box);
+        if (box.data.i != 30) {
+            printf("\nFAIL: element after range is wrong\n");
+            assert(NULL);
+        }
+
+        flexFree(f);
+        printf("OK\n");
+    }
+
+    printf("FUZZ: search for nonexistent keys in sorted flex: ");
+    {
+        f = flexNew();
+        flexEntry *middle = NULL;
+
+        /* Insert even numbers only */
+        for (int i = 0; i < 100; i += 2) {
+            databox box = databoxNewSigned(i);
+            flexInsertByTypeSortedWithMiddle(&f, &box, &middle);
+        }
+
+        /* Search for odd numbers - should all fail */
+        for (int i = 1; i < 100; i += 2) {
+            databox box = databoxNewSigned(i);
+            flexEntry *found =
+                flexFindByTypeSortedWithMiddle(f, 1, &box, middle);
+            if (found) {
+                printf("\nFAIL: found nonexistent %d\n", i);
+                assert(NULL);
+            }
+        }
+
+        /* Search for out-of-range values */
+        databox box = databoxNewSigned(-100);
+        if (flexFindByTypeSortedWithMiddle(f, 1, &box, middle)) {
+            printf("\nFAIL: found -100\n");
+            assert(NULL);
+        }
+        box = databoxNewSigned(1000);
+        if (flexFindByTypeSortedWithMiddle(f, 1, &box, middle)) {
+            printf("\nFAIL: found 1000\n");
+            assert(NULL);
+        }
+
+        flexFree(f);
+        printf("OK\n");
+    }
+
+    printf("FUZZ: stress sorted operations - 5K inserts/finds/deletes: ");
+    {
+        f = flexNew();
+        flexEntry *middle = NULL;
+
+        /*
+         * IMPORTANT: flexInsertByTypeSortedWithMiddle ALLOWS duplicates!
+         * It's a sorted list, not a set. The return value indicates if
+         * the key existed before, but it still inserts.
+         *
+         * For set-like behavior, we must check before inserting.
+         */
+        const size_t keySpace = 10000;
+        uint8_t *exists = zcalloc((keySpace + 7) / 8, 1);
+        size_t existCount = 0;
+
+#define FUZZ_BIT_SET(arr, idx) ((arr)[(idx) / 8] |= (1 << ((idx) % 8)))
+#define FUZZ_BIT_CLR(arr, idx) ((arr)[(idx) / 8] &= ~(1 << ((idx) % 8)))
+#define FUZZ_BIT_GET(arr, idx) (((arr)[(idx) / 8] >> ((idx) % 8)) & 1)
+
+        srand(55555);
+        size_t insertOps = 0, deleteOps = 0, findOps = 0;
+
+        for (size_t round = 0; round < 5000; round++) {
+            int op = rand() % 10;
+            int key = rand() % keySpace;
+            databox box = databoxNewSigned(key);
+
+            if (op < 5) {
+                /* Insert (50%) - only insert if not already present */
+                if (!FUZZ_BIT_GET(exists, key)) {
+                    flexInsertByTypeSortedWithMiddle(&f, &box, &middle);
+                    FUZZ_BIT_SET(exists, key);
+                    existCount++;
+                }
+                insertOps++;
+            } else if (op < 8) {
+                /* Find (30%) */
+                flexEntry *found =
+                    flexFindByTypeSortedWithMiddle(f, 1, &box, middle);
+                bool shouldExist = FUZZ_BIT_GET(exists, key);
+                if (found && !shouldExist) {
+                    printf("\nFAIL: found nonexistent %d\n", key);
+                    assert(NULL);
+                }
+                if (!found && shouldExist) {
+                    printf("\nFAIL: existing %d not found\n", key);
+                    assert(NULL);
+                }
+                findOps++;
+            } else {
+                /* Delete (20%) */
+                if (FUZZ_BIT_GET(exists, key)) {
+                    flexEntry *found =
+                        flexFindByTypeSortedWithMiddle(f, 1, &box, middle);
+                    if (found) {
+                        flexDeleteSortedValueWithMiddle(&f, 1, found, &middle);
+                        FUZZ_BIT_CLR(exists, key);
+                        existCount--;
+                    } else {
+                        printf("\nFAIL: key %d marked as existing but not "
+                               "found for delete\n",
+                               key);
+                        assert(NULL);
+                    }
+                }
+                deleteOps++;
+            }
+
+            /* Periodic verification */
+            if (round % 500 == 0) {
+                if (flexCount(f) != existCount) {
+                    printf("\nFAIL: count mismatch at round %zu: flex=%zu "
+                           "oracle=%zu\n",
+                           round, flexCount(f), existCount);
+                    assert(NULL);
+                }
+            }
+        }
+
+#undef FUZZ_BIT_SET
+#undef FUZZ_BIT_CLR
+#undef FUZZ_BIT_GET
+
+        zfree(exists);
+        flexFree(f);
+        printf("I=%zu D=%zu F=%zu final=%zu... OK\n", insertOps, deleteOps,
+               findOps, existCount);
+    }
+
+    printf("\n=== All flex fuzz tests passed! ===\n\n");
 
     return 0;
 }

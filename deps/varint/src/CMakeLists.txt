@@ -55,13 +55,36 @@ if(NOT APPLE)
     target_link_libraries(${DIMENSION}-library m)
 endif()
 
+# ============================================================================
+# Public include directories (for FetchContent / add_subdirectory consumers)
+# ============================================================================
+# These use generator expressions to work both at build time and after install
+target_include_directories(${PROJECT_NAME}-static PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/varint>
+)
+target_include_directories(${PROJECT_NAME}-library PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/varint>
+)
+target_include_directories(${DIMENSION}-static PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/varint>
+)
+target_include_directories(${DIMENSION}-library PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/varint>
+)
+
 # Don't prefix "lib"
 set(CMAKE_STATIC_LIBRARY_PREFIX "")
 set(CMAKE_SHARED_MODULE_PREFIX "")
 #set(CMAKE_SHARED_LIBRARY_PREFIX "")
 
-option(BuildTestBinary "Build test binary" On)
-if(BuildTestBinary)
+# ============================================================================
+# Test binaries (controlled by VARINT_BUILD_TESTS from parent)
+# ============================================================================
+if(VARINT_BUILD_TESTS)
     add_executable(${PACKED}Test varintPackedTest.c)
 
     add_definitions(-DVARINT_DIMENSION_TEST)

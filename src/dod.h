@@ -27,6 +27,16 @@ typedef struct dodWriter {
     size_t totalBytes;
 } dodWriter;
 
+/* ====================================================================
+ * Resumable Reader - O(1) sequential access
+ * ==================================================================== */
+typedef struct dodReader {
+    size_t consumedBits; /* Bit position in stream */
+    dodVal t0;           /* Second-to-last value (for delta-of-delta) */
+    dodVal t1;           /* Last decoded value */
+    size_t valuesRead;   /* Count of values decoded so far */
+} dodReader;
+
 dodVal dodGet(const dod *d, size_t *consumedBits, dodVal originalStartVal,
               dodVal currentVal, size_t valueOffsetToReturn);
 void dodAppend(dod *d, dodVal t0, dodVal t1, dodVal newVal,
@@ -38,6 +48,28 @@ void dodInitFromExisting(dodWriter *const w, const dod *d);
 void dodCloseWrites(dodWriter *const w);
 
 bool dodReadAll(const dod *w, uint64_t *vals, size_t count);
+
+/* ====================================================================
+ * dodReader API - O(1) resumable sequential access
+ * ==================================================================== */
+
+/* Initialize reader from first two values (t0, t1) */
+void dodReaderInit(dodReader *r, dodVal firstVal, dodVal secondVal);
+
+/* Initialize reader from a writer (reads first two values from writer state) */
+void dodReaderInitFromWriter(dodReader *r, const dodWriter *w);
+
+/* Read next value - O(1) operation. Advances iterator state. */
+dodVal dodReaderNext(dodReader *r, const dod *d);
+
+/* Peek at current value without advancing (returns t1) */
+dodVal dodReaderCurrent(const dodReader *r);
+
+/* Batch read - reads up to n values into out[], returns count read */
+size_t dodReaderNextN(dodReader *r, const dod *d, dodVal *out, size_t n);
+
+/* Get count of values remaining (requires knowing total count) */
+size_t dodReaderRemaining(const dodReader *r, size_t totalCount);
 
 #ifdef DATAKIT_TEST
 int dodTest(int argc, char *argv[]);

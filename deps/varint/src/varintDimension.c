@@ -395,7 +395,10 @@ int varintDimensionTest(int argc, char *argv[]) {
         for (int i = 0; i < 3600; i++) {
             uint16_t num = rand() % 0xfff;
             varintPacked12InsertSorted(holder, 5 + i, num);
-            if (varintPacked12Member(holder, 5 + i, num) == -1) {
+            /* After inserting at position (5+i), array now has (5+i+1)
+             * elements. The length parameter must be the element count, not the
+             * old count. */
+            if (varintPacked12Member(holder, 5 + i + 1, num) == -1) {
                 ERR("Failed to find %d after insert!\n", num);
             }
         }
@@ -408,6 +411,223 @@ int varintDimensionTest(int argc, char *argv[]) {
             }
 
             prev = current;
+        }
+    }
+
+    TEST("PACKED_ARRAY_MEMBER edge cases: empty array") {
+        uint8_t empty[16] = {0};
+        /* Member on empty array (len=0) should return -1 for any value */
+        if (varintPacked12Member(empty, 0, 0) != -1) {
+            ERRR("Member(empty, len=0, val=0) should return -1");
+        }
+        if (varintPacked12Member(empty, 0, 100) != -1) {
+            ERRR("Member(empty, len=0, val=100) should return -1");
+        }
+        if (varintPacked12Member(empty, 0, 4095) != -1) {
+            ERRR("Member(empty, len=0, val=4095) should return -1");
+        }
+    }
+
+    TEST("PACKED_ARRAY_MEMBER edge cases: single element") {
+        uint8_t arr[16] = {0};
+        varintPacked12Set(arr, 0, 500);
+
+        /* Find exact match */
+        if (varintPacked12Member(arr, 1, 500) != 0) {
+            ERRR("Member should find 500 at position 0");
+        }
+        /* Value smaller than element - not found */
+        if (varintPacked12Member(arr, 1, 100) != -1) {
+            ERRR("Member(100) should return -1, not in array");
+        }
+        /* Value larger than element - not found (tests min < len boundary) */
+        if (varintPacked12Member(arr, 1, 1000) != -1) {
+            ERRR("Member(1000) should return -1, not in array");
+        }
+        /* Maximum 12-bit value - not found */
+        if (varintPacked12Member(arr, 1, 4095) != -1) {
+            ERRR("Member(4095) should return -1, not in array");
+        }
+    }
+
+    TEST("PACKED_ARRAY_MEMBER edge cases: value at boundaries") {
+        uint8_t arr[64] = {0};
+        /* Create sorted array: [10, 20, 30, 40, 50] */
+        varintPacked12Set(arr, 0, 10);
+        varintPacked12Set(arr, 1, 20);
+        varintPacked12Set(arr, 2, 30);
+        varintPacked12Set(arr, 3, 40);
+        varintPacked12Set(arr, 4, 50);
+
+        /* Find first element */
+        if (varintPacked12Member(arr, 5, 10) != 0) {
+            ERRR("Should find 10 at position 0");
+        }
+        /* Find last element (critical: tests min < len when min == len-1) */
+        if (varintPacked12Member(arr, 5, 50) != 4) {
+            ERRR("Should find 50 at position 4");
+        }
+        /* Value smaller than first - not found */
+        if (varintPacked12Member(arr, 5, 5) != -1) {
+            ERRR("Member(5) should return -1");
+        }
+        /* Value larger than last - not found (tests min == len case) */
+        if (varintPacked12Member(arr, 5, 100) != -1) {
+            ERRR("Member(100) should return -1");
+        }
+        /* Value between elements - not found */
+        if (varintPacked12Member(arr, 5, 25) != -1) {
+            ERRR("Member(25) should return -1");
+        }
+    }
+
+    TEST("PACKED_ARRAY_MEMBER edge cases: all same values") {
+        uint8_t arr[64] = {0};
+        /* Array of identical values: [100, 100, 100, 100, 100] */
+        for (int i = 0; i < 5; i++) {
+            varintPacked12Set(arr, i, 100);
+        }
+
+        /* Binary search should find FIRST occurrence (lower bound) */
+        int64_t pos = varintPacked12Member(arr, 5, 100);
+        if (pos != 0) {
+            ERR("Should find first 100 at position 0, got %" PRId64, pos);
+        }
+        /* Value just below duplicates */
+        if (varintPacked12Member(arr, 5, 99) != -1) {
+            ERRR("Member(99) should return -1");
+        }
+        /* Value just above duplicates */
+        if (varintPacked12Member(arr, 5, 101) != -1) {
+            ERRR("Member(101) should return -1");
+        }
+    }
+
+    TEST("PACKED_ARRAY_MEMBER edge cases: max 12-bit values") {
+        uint8_t arr[64] = {0};
+        /* Test with maximum 12-bit values */
+        varintPacked12Set(arr, 0, 4093);
+        varintPacked12Set(arr, 1, 4094);
+        varintPacked12Set(arr, 2, 4095);
+
+        if (varintPacked12Member(arr, 3, 4093) != 0) {
+            ERRR("Should find 4093 at position 0");
+        }
+        if (varintPacked12Member(arr, 3, 4094) != 1) {
+            ERRR("Should find 4094 at position 1");
+        }
+        if (varintPacked12Member(arr, 3, 4095) != 2) {
+            ERRR("Should find 4095 at position 2");
+        }
+        /* Value 0 not in array */
+        if (varintPacked12Member(arr, 3, 0) != -1) {
+            ERRR("Member(0) should return -1");
+        }
+    }
+
+    TEST("InsertSorted + Member: verify length tracking") {
+        /* This test explicitly verifies correct length handling that was
+         * the root cause of the original bug */
+        uint8_t arr[256] = {0};
+        uint32_t len = 0;
+
+        /* Insert and immediately verify with CORRECT length */
+        varintPacked12InsertSorted(arr, len++, 500);
+        if (varintPacked12Member(arr, len, 500) != 0) {
+            ERRR("After insert 500: should find at pos 0");
+        }
+
+        varintPacked12InsertSorted(arr, len++, 200);
+        if (varintPacked12Member(arr, len, 200) != 0) {
+            ERRR("After insert 200: should find at pos 0 (sorted)");
+        }
+        if (varintPacked12Member(arr, len, 500) != 1) {
+            ERRR("After insert 200: 500 should now be at pos 1");
+        }
+
+        varintPacked12InsertSorted(arr, len++, 800);
+        if (varintPacked12Member(arr, len, 800) != 2) {
+            ERRR("After insert 800: should find at pos 2 (end)");
+        }
+
+        /* Critical: Insert value at very end (largest), verify with correct len
+         */
+        varintPacked12InsertSorted(arr, len++, 4000);
+        if (varintPacked12Member(arr, len, 4000) != 3) {
+            ERRR("After insert 4000: should find at pos 3 (new end)");
+        }
+
+        /* Verify all values still findable */
+        if (varintPacked12Member(arr, len, 200) != 0) {
+            ERRR("200 should be at pos 0");
+        }
+        if (varintPacked12Member(arr, len, 500) != 1) {
+            ERRR("500 should be at pos 1");
+        }
+        if (varintPacked12Member(arr, len, 800) != 2) {
+            ERRR("800 should be at pos 2");
+        }
+        if (varintPacked12Member(arr, len, 4000) != 3) {
+            ERRR("4000 should be at pos 3");
+        }
+
+        /* Values NOT in array should return -1 */
+        if (varintPacked12Member(arr, len, 100) != -1) {
+            ERRR("100 should not be found");
+        }
+        if (varintPacked12Member(arr, len, 4095) != -1) {
+            ERRR("4095 should not be found");
+        }
+    }
+
+    TEST("DeleteMember: verify correct behavior with bounds") {
+        uint8_t arr[64] = {0};
+        /* Create sorted array: [10, 20, 30, 40, 50] */
+        uint32_t len = 0;
+        varintPacked12InsertSorted(arr, len++, 30);
+        varintPacked12InsertSorted(arr, len++, 10);
+        varintPacked12InsertSorted(arr, len++, 50);
+        varintPacked12InsertSorted(arr, len++, 20);
+        varintPacked12InsertSorted(arr, len++, 40);
+
+        /* Delete middle element */
+        if (!varintPacked12DeleteMember(arr, len, 30)) {
+            ERRR("Should successfully delete 30");
+        }
+        len--;
+        if (varintPacked12Member(arr, len, 30) != -1) {
+            ERRR("30 should no longer be found");
+        }
+
+        /* Delete first element */
+        if (!varintPacked12DeleteMember(arr, len, 10)) {
+            ERRR("Should successfully delete 10");
+        }
+        len--;
+        if (varintPacked12Member(arr, len, 10) != -1) {
+            ERRR("10 should no longer be found");
+        }
+
+        /* Delete last element (tests boundary) */
+        if (!varintPacked12DeleteMember(arr, len, 50)) {
+            ERRR("Should successfully delete 50");
+        }
+        len--;
+        if (varintPacked12Member(arr, len, 50) != -1) {
+            ERRR("50 should no longer be found");
+        }
+
+        /* Try to delete non-existent element */
+        if (varintPacked12DeleteMember(arr, len, 100)) {
+            ERRR("Should fail to delete non-existent 100");
+        }
+
+        /* Remaining elements should still be findable */
+        if (varintPacked12Member(arr, len, 20) == -1) {
+            ERRR("20 should still be found");
+        }
+        if (varintPacked12Member(arr, len, 40) == -1) {
+            ERRR("40 should still be found");
         }
     }
 

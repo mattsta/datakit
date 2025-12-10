@@ -20,9 +20,18 @@ option(UseC23 "Use C23 standard (enables _Float128 if available)" OFF)
 option(UseFloat128 "Force enable __float128 support (requires libquadmath on some platforms)" OFF)
 option(ForceNoFloat128 "Force disable all float128 support (for testing fallback paths)" OFF)
 
+# Sanitizer options - enable with cmake -DEnableASAN=ON, etc.
+option(EnableASAN "Enable AddressSanitizer" OFF)
+option(EnableUBSAN "Enable UndefinedBehaviorSanitizer" OFF)
+option(EnableMSAN "Enable MemorySanitizer (Clang only)" OFF)
+option(EnableTSAN "Enable ThreadSanitizer" OFF)
+
 include(CheckCSourceRuns)
 include(CheckCSourceCompiles)
 
+# ============================================================================
+# Feature Detection: Math Functions
+# ============================================================================
 check_c_source_runs("
 #include <math.h>
 int main() {
@@ -47,39 +56,84 @@ int main() {
 }"
 DK_HAS_ISINF)
 
-set(CMAKE_REQUIRED_FLAGS "${CMAKE_C_FLAGS} -mf16c")
-check_c_source_runs("
-#include <emmintrin.h>
-#include <assert.h>
+# ============================================================================
+# Feature Detection: x86 SIMD Extensions
+# ============================================================================
 
-#define convertFloatToHalf(v) _cvtss_sh(v, 0)
-#define convertHalfToFloat(v) _cvtsh_ss(v)
-int main() {
-    const float convertThis = 1.25;
-    assert(convertHalfToFloat(convertFloatToHalf(convertThis)) == convertThis);
-    return 0;
-}"
-DK_HAS_FLOAT16)
-# Reset check flags
-set(CMAKE_REQUIRED_FLAGS)
+# Float16 (F16C) is x86-specific
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "(x86_64|AMD64|i[3-6]86)")
+    set(CMAKE_REQUIRED_FLAGS "${CMAKE_C_FLAGS} -mf16c")
+    check_c_source_runs("
+    #include <emmintrin.h>
+    #include <assert.h>
 
+    #define convertFloatToHalf(v) _cvtss_sh(v, 0)
+    #define convertHalfToFloat(v) _cvtsh_ss(v)
+    int main() {
+        const float convertThis = 1.25;
+        assert(convertHalfToFloat(convertFloatToHalf(convertThis)) == convertThis);
+        return 0;
+    }"
+    DK_HAS_FLOAT16)
+    set(CMAKE_REQUIRED_FLAGS)
+endif()
+
+# Check for AVX-512 VPOPCNT support (Ice Lake+ CPUs, ~2019)
+# This requires both AVX-512F (foundation) and AVX-512 VPOPCNTDQ extension
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "(x86_64|AMD64)")
+    set(CMAKE_REQUIRED_FLAGS "${CMAKE_C_FLAGS} -mavx512f -mavx512vpopcntdq")
+    check_c_source_compiles("
+    #include <immintrin.h>
+    int main() {
+        __m512i v = _mm512_setzero_si512();
+        __m512i p = _mm512_popcnt_epi64(v);
+        long long sum = _mm512_reduce_add_epi64(p);
+        return (int)sum;
+    }"
+    DK_HAS_AVX512_VPOPCNT)
+    set(CMAKE_REQUIRED_FLAGS)
+
+    if(DK_HAS_AVX512_VPOPCNT)
+        message(STATUS "AVX-512 VPOPCNT: Supported - enabling optimized popcount")
+    else()
+        message(STATUS "AVX-512 VPOPCNT: Not supported (requires Ice Lake+ CPU or cross-compile flags)")
+    endif()
+endif()
+
+# ============================================================================
+# Apply Detected Features: Math Functions
+# ============================================================================
 if(DK_HAS_ISNAN)
-	add_definitions(-DDK_HAS_ISNAN)
+    add_definitions(-DDK_HAS_ISNAN)
 endif()
 
 if(DK_HAS_ISFINITE)
-	add_definitions(-DDK_HAS_ISFINITE)
+    add_definitions(-DDK_HAS_ISFINITE)
 endif()
 
 if(DK_HAS_ISINF)
-	add_definitions(-DDK_HAS_ISINF)
+    add_definitions(-DDK_HAS_ISINF)
 endif()
 
+# ============================================================================
+# Apply Detected Features: x86 SIMD
+# ============================================================================
 if(DK_HAS_FLOAT16)
-	add_definitions(-DDK_HAS_FL16)
+    add_definitions(-DDK_HAS_FL16)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mf16c")
+    message(STATUS "Float16 (F16C): Enabled")
 endif()
 
+# AVX-512 VPOPCNT: Apply flags globally since str.c (which includes strPopcnt.c)
+# is compiled as part of the main library. The code has fallback paths for when
+# these intrinsics aren't available.
+if(DK_HAS_AVX512_VPOPCNT)
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mavx512f -mavx512vpopcntdq")
+endif()
+
+# ============================================================================
+# Feature Detection: Random Number Sources
+# ============================================================================
 check_c_source_runs("
 #include <unistd.h>
 #include <sys/random.h>
@@ -132,7 +186,10 @@ int main(void) {
     return 0;
 }" DK_HAVE_GETENTROPY_SYS_RANDOM)
 
-if (DK_HAVE_GETRANDOM)
+# ============================================================================
+# Apply Detected Features: Random Number Sources
+# ============================================================================
+if(DK_HAVE_GETRANDOM)
     add_definitions(-DDK_HAVE_GETRANDOM)
 endif()
 
@@ -212,8 +269,9 @@ else()
     endif()
 endif()
 
-# If you need debug, build with:
-# cmake -DCMAKE_BUILD_TYPE=Debug ..
+# ============================================================================
+# Compiler Configuration
+# ============================================================================
 add_definitions(-D_GNU_SOURCE)  # For memmem and other GNU extensions
 
 # Set C standard based on UseC23 option
@@ -243,23 +301,58 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-gnu-label-as-value")
 endif()
 
-#set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address -fno-omit-frame-pointer -fno-optimize-sibling-calls")
+# ============================================================================
+# Sanitizer Configuration
+# ============================================================================
+# Enable with: cmake -DEnableASAN=ON ..
+# Note: ASAN and TSAN are mutually exclusive
 
-#set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address")
-#set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=undefined")
-#set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=memory")
+if(EnableASAN)
+    message(STATUS "Sanitizer: AddressSanitizer enabled")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address -fno-omit-frame-pointer -fno-optimize-sibling-calls")
+endif()
 
-# We know we abuse system alignment in a few places. Don't warn us.
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-sanitize=alignment")
+if(EnableUBSAN)
+    message(STATUS "Sanitizer: UndefinedBehaviorSanitizer enabled")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=undefined")
+    # We know we abuse system alignment in a few places. Don't warn us.
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-sanitize=alignment")
+endif()
 
-#set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=dataflow")
-#set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=cfi")
-#set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=safe-stack")
+if(EnableMSAN)
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+        message(STATUS "Sanitizer: MemorySanitizer enabled")
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=memory")
+    else()
+        message(WARNING "MemorySanitizer requires Clang - ignoring EnableMSAN")
+    endif()
+endif()
+
+if(EnableTSAN)
+    message(STATUS "Sanitizer: ThreadSanitizer enabled")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=thread")
+endif()
+
+# Even without sanitizers, disable alignment sanitizer (we intentionally use unaligned access)
+if(NOT EnableUBSAN)
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-sanitize=alignment")
+endif()
 
 if(CMAKE_BUILD_TYPE MATCHES Debug)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O0 -g -Wno-format")
 else()
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -g")
+endif()
+
+# DATAKIT_TEST mode enables debug/repr functions like databoxReprStr, flexRepr, etc.
+# This can be enabled independently of BuildTestBinary so consuming projects can
+# use debug symbols without building the datakit test executable.
+option(DatakitTestMode "Enable DATAKIT_TEST mode for debug symbols (independent of BuildTestBinary)" On)
+
+if(DatakitTestMode)
+    add_definitions(-DDATAKIT_TEST=1)
+    # Tests require assertions - ensure NDEBUG is not defined
+    add_definitions(-UNDEBUG)
 endif()
 
 add_library(${PROJECT_NAME} OBJECT
@@ -282,12 +375,20 @@ add_library(${PROJECT_NAME} OBJECT
 
     multimapAtom.c
 
+    stringPool.c
+    atomPool.c
+
     multiarray.c
     multiarraySmall.c
     multiarrayMedium.c
     multiarrayLarge.c
 
     multiroar.c
+
+    multiOrderedSet.c
+    multiOrderedSetSmall.c
+    multiOrderedSetMedium.c
+    multiOrderedSetFull.c
 
     multilru.c
 
@@ -304,6 +405,7 @@ add_library(${PROJECT_NAME} OBJECT
 
     dod.c
     xof.c
+    compressionBench.c
     bbits.c
     linearBloomTest.c
     multiTimerTest.c
@@ -336,16 +438,62 @@ add_library(${PROJECT_NAME} OBJECT
 
     # patternTrie.c
     # Temporary (?) reductions due to not compiling on ARM.
-    # TODO: make conditional to only include if X64
     intersectInt.c
     intsetBig.c
     intset.c
+    intsetSmall.c
+    intsetMedium.c
+    intsetFull.c
+    intsetTest.c
     intsetU32.c
+
+    # Fenwick & Segment tree implementations (2-tier template system)
+    # Note: Old fenwick.c, segment.c files moved to old/ directory
+    # Using new type-specific implementations added via add_subdirectory()
+
+    # multiFenwick wraps multiple Fenwick trees - separate system
+    multiFenwick.c
+    multiFenwickTest.c
+
+    # multiSegment wraps multiple Segment trees - separate system
+    # DISABLED: multiSegment.c
+    # DISABLED: multiSegmentTest.c
+
     hyperloglog.c
     databox.c
     databoxLinear.c
     floatExtendedTest.c
-    datakit.c)
+    datakit.c
+    ulid.c
+    persist.c
+
+    # Persistent data structure wrappers
+    persist/persistCtx.c
+    persist/multimapP.c
+    persist/multilistP.c
+    persist/multidictP.c
+    persist/flexP.c
+    persist/intsetP.c
+    persist/multiOrderedSetP.c
+    persist/multilruP.c
+    persist/multiroarP.c
+)
+
+# ============================================================================
+# Fenwick Tree Template System (2-Tier Architecture)
+# ============================================================================
+# Add all type-specific Fenwick tree implementations
+# Architecture: Small (cache-friendly) → Full (unlimited)
+# 10 types × 4 files = 40 files generated from 3 templates
+add_subdirectory(fenwick)
+
+# ============================================================================
+# Segment Tree Template System (2-Tier Architecture)
+# ============================================================================
+# Add all type-specific Segment tree implementations
+# Architecture: Small (eager) → Full (lazy propagation)
+# 10 types × 4 files = 40 files generated from 3 templates
+add_subdirectory(segment)
 
 # No optimizations on speed test so results don't get evaluated at compile time
 set_source_files_properties(dataspeed.c
@@ -362,9 +510,17 @@ set(deps $<TARGET_OBJECTS:lz4>
          # include it all static inline.
          $<TARGET_OBJECTS:xxhash>)
 
-add_library(${PROJECT_NAME}-shared  MODULE $<TARGET_OBJECTS:${PROJECT_NAME}> ${deps})
-add_library(${PROJECT_NAME}-static  STATIC $<TARGET_OBJECTS:${PROJECT_NAME}> ${deps})
-add_library(${PROJECT_NAME}-library SHARED $<TARGET_OBJECTS:${PROJECT_NAME}> ${deps})
+# Additional varint modules for compression benchmarking
+# These are not in the core varint library but are standalone implementations
+set(VARINT_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../deps/varint/src)
+set(VARINT_EXTRA_SOURCES
+    ${VARINT_SRC_DIR}/varintDelta.c
+    ${VARINT_SRC_DIR}/varintFloat.c
+    ${VARINT_SRC_DIR}/varintBP128.c)
+
+add_library(${PROJECT_NAME}-shared  MODULE $<TARGET_OBJECTS:${PROJECT_NAME}> ${deps} ${VARINT_EXTRA_SOURCES})
+add_library(${PROJECT_NAME}-static  STATIC $<TARGET_OBJECTS:${PROJECT_NAME}> ${deps} ${VARINT_EXTRA_SOURCES})
+add_library(${PROJECT_NAME}-library SHARED $<TARGET_OBJECTS:${PROJECT_NAME}> ${deps} ${VARINT_EXTRA_SOURCES})
 
 # Don't prefix "lib"
 set(CMAKE_STATIC_LIBRARY_PREFIX "")
@@ -391,73 +547,69 @@ option(BuildTestBinary "Build test binary" On)
 if(BuildTestBinary)
     # Enable native CPU optimizations for performance-critical code
     # Note: str.c requires -std=c11 to ensure consistent floating-point behavior
-    set_source_files_properties(str.c PROPERTIES COMPILE_FLAGS "-std=c11 -mcpu=native")
-    set_source_files_properties(bigmath-libbf.c PROPERTIES COMPILE_FLAGS "-std=c11 -mcpu=native")
-    add_definitions(-DDATAKIT_TEST=1)
+    # Use -march=native on x86, -mcpu=native on ARM
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "(x86_64|AMD64|i[3-6]86)")
+        set(DK_NATIVE_FLAG "-march=native")
+    else()
+        set(DK_NATIVE_FLAG "-mcpu=native")
+    endif()
+    set_source_files_properties(str.c PROPERTIES COMPILE_FLAGS "-std=c11 ${DK_NATIVE_FLAG}")
+    set_source_files_properties(bigmath-libbf.c PROPERTIES COMPILE_FLAGS "-std=c11 ${DK_NATIVE_FLAG}")
 
-    add_executable(${PROJECT_NAME}-test datakit-test.c)
+    add_executable(${PROJECT_NAME}-test datakit-test.c
+                   fenwick/fenwickI64Test.c
+                   segment/segmentI64Test.c)
     target_link_libraries(${PROJECT_NAME}-test ${PROJECT_NAME}-static)
 
     if(APPLE)
         add_custom_command(TARGET ${PROJECT_NAME}-test POST_BUILD COMMAND dsymutil ${PROJECT_NAME}-test COMMENT "Generating OS X Debug Info")
     endif()
 
-    enable_testing()
+    # Note: enable_testing() is called in top-level CMakeLists.txt
 
-    # Comprehensive test list
-    set(datakitTests
-        # Core data structures
-        flex
-        mflex
+    # ========================================================================
+    # Auto-extract test names from datakit-test.c (single source of truth)
+    # ========================================================================
+    # Parse the testRegistry in datakit-test.c to extract test names.
+    # This eliminates duplicate maintenance - just add tests to the C file.
 
-        # Multilist variants
-        multilistSmall
-        multilistMedium
-        multilistFull
+    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/datakit-test.c" DATAKIT_TEST_SOURCE)
 
-        # Multimap variants
-        multimapSmall
-        multimapMedium
-        multimapFull
-        multimap
+    # Extract the testRegistry block (between "testRegistry[] = {" and "T_END")
+    string(REGEX MATCH "testRegistry\\[\\] = \\{[^}]+T_END" TEST_REGISTRY_BLOCK "${DATAKIT_TEST_SOURCE}")
 
-        # Multiarray variants
-        multiarraySmall
-        multiarrayMedium
-        multiarrayLarge
-        multiarray
+    # Extract test names from T(name), T_A(name, ...), T_ADJ(name), T_A_ADJ(name, ...)
+    # Pattern matches: T(foo) or T_A(foo, "...") or T_ADJ(foo) or T_A_ADJ(foo, "...")
+    string(REGEX MATCHALL "T(_A)?(_ADJ)?\\([a-zA-Z0-9_]+" TEST_ENTRIES "${TEST_REGISTRY_BLOCK}")
 
-        # Other containers
-        multiroar
-        multiPriorityQueue
+    set(datakitTests "")
+    foreach(entry ${TEST_ENTRIES})
+        # Extract just the test name (after the opening paren)
+        string(REGEX REPLACE "T(_A)?(_ADJ)?\\(" "" testName "${entry}")
+        list(APPEND datakitTests ${testName})
+    endforeach()
 
-        # Integer sets
-        intset
-        intsetU32
-        intsetBig
+    # Handle conditional tests: intsetBig requires 128-bit integer support
+    # The regex extracts ALL test names including intsetBig from inside #if blocks.
+    # We need to remove it if the platform doesn't support int128.
+    list(FIND datakitTests "intsetBig" INTSETBIG_INDEX)
+    if(NOT INTSETBIG_INDEX EQUAL -1)
+        check_c_source_compiles("
+        int main() {
+            __int128_t a = 1;
+            __uint128_t b = 1;
+            return (int)(a + b);
+        }"
+        DK_HAS_INT128)
+        if(NOT DK_HAS_INT128)
+            list(REMOVE_ITEM datakitTests "intsetBig")
+            message(STATUS "Removed intsetBig test (no __int128 support)")
+        endif()
+    endif()
 
-        # String processing
-        str
-        strDoubleFormat
-        mds
-        mdsc
-
-        # Compression/encoding
-        dod
-        xof
-        fibbuf
-        jebuf
-
-        # Cardinality
-        hyperloglog
-
-        # Utilities
-        util
-        databox
-        floatExtended
-        offsetArray
-        membound
-        )
+    # Report discovered tests
+    list(LENGTH datakitTests NUM_TESTS)
+    message(STATUS "Auto-discovered ${NUM_TESTS} tests from datakit-test.c")
 
     # Create test targets
     foreach(test ${datakitTests})
@@ -566,13 +718,4 @@ if(CPPCHECK_EXECUTABLE)
     add_dependencies(lint cppcheck)
 endif()
 
-if(Build32Bit)
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -m32")
-    set_target_properties(${PROJECT_NAME}-shared
-        PROPERTIES COMPILE_FLAGS "-m32" LINK_FLAGS "-m32")
-    set_target_properties(${PROJECT_NAME}-static
-        PROPERTIES COMPILE_FLAGS "-m32" LINK_FLAGS "-m32")
-    set_target_properties(${PROJECT_NAME}-library
-        PROPERTIES COMPILE_FLAGS "-m32" LINK_FLAGS "-m32")
-endif()
 # vi:ai et sw=4 ts=4:

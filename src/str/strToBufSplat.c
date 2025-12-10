@@ -133,13 +133,21 @@ void StrUInt8DigitsToBuf(void *p_, uint32_t u) {
 #elif defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
 #include <arm_neon.h>
 
-/* ARM NEON optimized integer-to-string conversion.
- * Uses NEON for parallel digit extraction where beneficial. */
+/* ARM64 optimized integer-to-string conversion.
+ *
+ * This uses compiler-optimized constant division which generates
+ * excellent UMULH (unsigned multiply high) + shift sequences on ARM64.
+ * The result is packed into a 32-bit word for single-store.
+ *
+ * Benchmarks show this approach is competitive with full NEON vectorization
+ * for 4-digit numbers due to ARM64's efficient multiply-high instructions.
+ */
 
-/* Helper: convert 4 digits using NEON multiply-high approximation */
-static inline void d4toa_neon(uint8_t *out, uint32_t u) {
-    /* Extract 4 digits from u (0-9999) using division by constants.
-     * ARM64 compiler is very good at optimizing division by constants. */
+/* Convert 4 digits (0-9999) to packed ASCII (little-endian order) */
+DK_INLINE_ALWAYS uint32_t d4toa_arm64(uint32_t u) {
+    /* ARM64 compilers optimize division by constants to:
+     * UMULH + shift for division, followed by MSUB for remainder.
+     * This is very efficient on ARM64 cores. */
     const uint32_t d0 = u / 1000;
     const uint32_t r0 = u - d0 * 1000;
     const uint32_t d1 = r0 / 100;
@@ -147,17 +155,28 @@ static inline void d4toa_neon(uint8_t *out, uint32_t u) {
     const uint32_t d2 = r1 / 10;
     const uint32_t d3 = r1 - d2 * 10;
 
-    /* Store as ASCII digits */
-    out[0] = '0' + d0;
-    out[1] = '0' + d1;
-    out[2] = '0' + d2;
-    out[3] = '0' + d3;
+    /* Pack as ASCII digits into a 32-bit word (little-endian) */
+    return (('0' + d0)) | (('0' + d1) << 8) | (('0' + d2) << 16) |
+           (('0' + d3) << 24);
+}
+
+/* Convert 8 digits (0-99999999) to packed ASCII (little-endian order) */
+DK_INLINE_ALWAYS uint64_t d8toa_arm64(uint32_t u) {
+    const uint32_t hi = u / 10000;
+    const uint32_t lo = u - hi * 10000;
+
+    const uint32_t hi_digits = d4toa_arm64(hi);
+    const uint32_t lo_digits = d4toa_arm64(lo);
+
+    /* Pack hi in low 32 bits, lo in high 32 bits (little-endian memory order)
+     */
+    return ((uint64_t)lo_digits << 32) | hi_digits;
 }
 
 void StrUInt9DigitsToBuf(void *out_, uint32_t u) {
     uint8_t *out = out_;
 
-    /* Split into three parts: w (1 digit), v (4 digits), u (4 digits) */
+    /* Split into: w (1 digit), v (4 digits), u (4 digits) */
     uint32_t v = u / 10000;
     uint32_t w = v / 10000;
     u -= v * 10000;
@@ -166,24 +185,21 @@ void StrUInt9DigitsToBuf(void *out_, uint32_t u) {
     /* First digit */
     out[0] = '0' + w;
 
-    /* Next 4 digits */
-    d4toa_neon(out + 1, v);
-
-    /* Last 4 digits */
-    d4toa_neon(out + 5, u);
+    /* Remaining 8 digits as two packed 32-bit stores */
+    const uint32_t v_digits = d4toa_arm64(v);
+    const uint32_t u_digits = d4toa_arm64(u);
+    memcpy(out + 1, &v_digits, 4);
+    memcpy(out + 5, &u_digits, 4);
 }
 
 void StrUInt4DigitsToBuf(void *p_, uint32_t u) {
-    d4toa_neon((uint8_t *)p_, u);
+    const uint32_t digits = d4toa_arm64(u);
+    memcpy(p_, &digits, 4);
 }
 
 void StrUInt8DigitsToBuf(void *p_, uint32_t u) {
-    uint8_t *p = (uint8_t *)p_;
-    const uint32_t v = u / 10000;
-    u -= v * 10000;
-
-    d4toa_neon(p, v);
-    d4toa_neon(p + 4, u);
+    const uint64_t digits = d8toa_arm64(u);
+    memcpy(p_, &digits, 8);
 }
 #else
 #warning "Using unoptimized StrUInt9DigitsToBuf()!"

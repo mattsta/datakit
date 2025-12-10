@@ -2,6 +2,7 @@
 
 #include "datakit.h"
 
+uint64_t timeUtilNs(void);
 uint64_t timeUtilUs(void);
 uint64_t timeUtilMs(void);
 uint64_t timeUtilS(void);

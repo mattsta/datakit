@@ -1021,6 +1021,78 @@ DK_STATIC void hyperloglogSparseRegisterHistogram(uint8_t *sparse,
 /* Implements the register histogram calculation for uint8_t data type
  * which is only used internally as speedup for PFCOUNT with multiple keys. */
 void hyperloglogRawRegisterHistogram(uint8_t *registers, int32_t *reghisto) {
+#if HLL_USE_SSE
+    /* SSE2 optimized: check 16 bytes at a time for all-zeros */
+    const __m128i *vec = (const __m128i *)registers;
+    const __m128i zero = _mm_setzero_si128();
+
+    for (int_fast32_t j = 0; j < HLL_REGISTERS / 16; j++) {
+        __m128i chunk = _mm_loadu_si128(&vec[j]);
+        __m128i cmp = _mm_cmpeq_epi8(chunk, zero);
+        int mask = _mm_movemask_epi8(cmp);
+
+        if (mask == 0xFFFF) {
+            /* All 16 bytes are zero */
+            reghisto[0] += 16;
+        } else {
+            /* At least one non-zero byte - process individually */
+            const uint8_t *bytes = (const uint8_t *)&vec[j];
+            for (int k = 0; k < 16; k++) {
+                reghisto[bytes[k]]++;
+            }
+        }
+    }
+
+#elif HLL_USE_NEON
+    /* ARM NEON optimized: check 16 bytes at a time for all-zeros */
+    const uint8_t *data = registers;
+    const uint8x16_t zero = vdupq_n_u8(0);
+
+    for (int_fast32_t j = 0; j < HLL_REGISTERS / 16; j++, data += 16) {
+        uint8x16_t chunk = vld1q_u8(data);
+        uint8x16_t cmp = vceqq_u8(chunk, zero);
+
+        /* Check if all bytes are zero using horizontal min.
+         * vceqq_u8 returns 0xFF for matching bytes.
+         * If min of comparison is 0xFF, all bytes matched zero */
+        if (vminvq_u8(cmp) == 0xFF) {
+            /* All 16 bytes are zero */
+            reghisto[0] += 16;
+        } else {
+            /* At least one non-zero byte - process individually */
+            for (int k = 0; k < 16; k++) {
+                reghisto[data[k]]++;
+            }
+        }
+    }
+
+#else
+    /* Scalar fallback: check 8 bytes at a time */
+    const uint64_t *word = (uint64_t *)registers;
+    uint8_t *bytes;
+
+    for (int_fast32_t j = 0; j < HLL_REGISTERS / 8; j++) {
+        if (*word == 0) {
+            reghisto[0] += 8;
+        } else {
+            bytes = (uint8_t *)word;
+            reghisto[bytes[0]]++;
+            reghisto[bytes[1]]++;
+            reghisto[bytes[2]]++;
+            reghisto[bytes[3]]++;
+            reghisto[bytes[4]]++;
+            reghisto[bytes[5]]++;
+            reghisto[bytes[6]]++;
+            reghisto[bytes[7]]++;
+        }
+        word++;
+    }
+#endif
+}
+
+/* Scalar baseline for benchmarking comparison */
+void hyperloglogRawRegisterHistogramScalar(uint8_t *registers,
+                                           int32_t *reghisto) {
     const uint64_t *word = (uint64_t *)registers;
     uint8_t *bytes;
 
@@ -1809,6 +1881,77 @@ cleanup:
         for (int i = 0; i < numHlls; i++) {
             hyperloglogFree(hlls[i]);
         }
+    }
+
+    /* Test 5: Raw Register Histogram SIMD Performance Benchmark.
+     * Compares SIMD-optimized histogram against scalar baseline. */
+    printf("[histogram benchmark]: Benchmarking register histogram...\n");
+    {
+        const int histoIterations = 10000;
+
+        /* Create test registers: mix of zeros and values */
+        uint8_t *testRegisters = zcalloc(HLL_REGISTERS, sizeof(uint8_t));
+
+        /* Seed with some non-zero values (simulating a partially filled HLL)
+         * Use values 1 to HLL_Q (50) which are valid for the histogram array */
+        for (int i = 0; i < HLL_REGISTERS / 4; i++) {
+            testRegisters[i * 4] = (i % HLL_Q) + 1;
+        }
+
+        int32_t reghistoSIMD[HLL_Q + 2] = {0};
+        int32_t reghistoScalar[HLL_Q + 2] = {0};
+
+        /* Benchmark SIMD version */
+        uint64_t startSIMD = timeUtilMonotonicNs();
+        for (int iter = 0; iter < histoIterations; iter++) {
+            memset(reghistoSIMD, 0, sizeof(reghistoSIMD));
+            hyperloglogRawRegisterHistogram(testRegisters, reghistoSIMD);
+        }
+        uint64_t endSIMD = timeUtilMonotonicNs();
+
+        /* Benchmark Scalar version */
+        uint64_t startScalar = timeUtilMonotonicNs();
+        for (int iter = 0; iter < histoIterations; iter++) {
+            memset(reghistoScalar, 0, sizeof(reghistoScalar));
+            hyperloglogRawRegisterHistogramScalar(testRegisters,
+                                                  reghistoScalar);
+        }
+        uint64_t endScalar = timeUtilMonotonicNs();
+
+        /* Verify correctness: SIMD result should match scalar */
+        memset(reghistoSIMD, 0, sizeof(reghistoSIMD));
+        memset(reghistoScalar, 0, sizeof(reghistoScalar));
+        hyperloglogRawRegisterHistogram(testRegisters, reghistoSIMD);
+        hyperloglogRawRegisterHistogramScalar(testRegisters, reghistoScalar);
+
+        int histoMismatch = 0;
+        for (int i = 0; i < HLL_Q + 2; i++) {
+            if (reghistoSIMD[i] != reghistoScalar[i]) {
+                if (histoMismatch < 5) {
+                    printf("  Histogram mismatch at [%d]: SIMD=%d Scalar=%d\n",
+                           i, reghistoSIMD[i], reghistoScalar[i]);
+                }
+                histoMismatch++;
+            }
+        }
+
+        if (histoMismatch == 0) {
+            printf("  [OK] Histogram: SIMD matches Scalar\n");
+        } else {
+            printf("  [WARN] Histogram: %d mismatches\n", histoMismatch);
+            errors++;
+        }
+
+        double nsPerHistoSIMD = (double)(endSIMD - startSIMD) / histoIterations;
+        double nsPerHistoScalar =
+            (double)(endScalar - startScalar) / histoIterations;
+        double speedup = nsPerHistoScalar / nsPerHistoSIMD;
+
+        printf("  SIMD: %.1f ns/histogram, Scalar: %.1f ns/histogram\n",
+               nsPerHistoSIMD, nsPerHistoScalar);
+        printf("  Speedup: %.2fx\n", speedup);
+
+        zfree(testRegisters);
     }
 
     return errors;

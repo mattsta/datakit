@@ -533,6 +533,7 @@ int multilistTest(int argc, char *argv[]) {
             databox box = {{0}};
             bool found = multilistPopHead(&ml, s0, &box);
             assert(!found);
+            (void)found;
             multilistFree(ml);
         }
 
@@ -565,6 +566,7 @@ int multilistTest(int argc, char *argv[]) {
             multilistPopHead(&ml, s0, &box);
             lv = box.data.i;
             assert(lv == 55513);
+            (void)lv;
             databoxFreeData(&box);
             multilistFree(ml);
         }
@@ -583,6 +585,7 @@ int multilistTest(int argc, char *argv[]) {
                 data = box.data.bytes.start;
                 bytes = box.len;
                 assert(found);
+                (void)found;
                 assert(data != NULL);
                 assert(bytes == 32);
                 if (strcmp(genstr("hello", 499 - i), (char *)data)) {
@@ -621,6 +624,7 @@ int multilistTest(int argc, char *argv[]) {
                 } else {
                     assert(!found);
                 }
+                (void)found;
                 databoxFreeData(&box);
             }
             multilistFree(ml);
@@ -793,6 +797,7 @@ int multilistTest(int argc, char *argv[]) {
                     ERR("Value 5 didn't match, instead got: %.*s",
                         (int32_t)entry.box.len, entry.box.data.bytes.start);
                 }
+                (void)got;
 
                 multilistFree(ml);
             }
@@ -1554,6 +1559,344 @@ int multilistTest(int argc, char *argv[]) {
     fprintf(stderr, "Final Stress Loop: %0.2f seconds.\n",
             (float)(stop - start) / 1000);
     printf("\n");
+
+    /* ================================================================
+     * COMPREHENSIVE FUZZ TESTS
+     * ================================================================ */
+
+    printf("\n=== MULTILIST FUZZ TESTING ===\n\n");
+
+    TEST("FUZZ: push/pop operations with oracle verification") {
+        multilist *ml = multilistNew(4, 2);
+        const size_t maxSize = 1000;
+        int64_t *oracle = zcalloc(maxSize, sizeof(int64_t));
+        size_t oracleCount = 0;
+
+        srand(12345);
+        size_t pushOps = 0, popOps = 0;
+
+        for (size_t round = 0; round < 5000; round++) {
+            int op = rand() % 10;
+
+            if (op < 6 && oracleCount < maxSize) {
+                /* Push (60%) */
+                int64_t val = (int64_t)(rand() % 100000) - 50000;
+                int where = rand() % 2;
+                databox box = databoxNewSigned(val);
+
+                if (where == 0) {
+                    /* Push head */
+                    multilistPushByTypeHead(&ml, s0, &box);
+                    memmove(&oracle[1], &oracle[0],
+                            oracleCount * sizeof(int64_t));
+                    oracle[0] = val;
+                } else {
+                    /* Push tail */
+                    multilistPushByTypeTail(&ml, s0, &box);
+                    oracle[oracleCount] = val;
+                }
+                oracleCount++;
+                pushOps++;
+            } else if (oracleCount > 0) {
+                /* Pop (40%) */
+                int where = rand() % 2;
+                databox got;
+
+                if (where == 0) {
+                    /* Pop head */
+                    multilistPopHead(&ml, s0, &got);
+                    int64_t expected = oracle[0];
+                    int64_t actual = (got.type == DATABOX_SIGNED_64)
+                                         ? got.data.i
+                                         : (int64_t)got.data.u;
+                    if (actual != expected) {
+                        ERR("head mismatch: got %" PRId64 " expected %" PRId64,
+                            actual, expected);
+                    }
+                    memmove(&oracle[0], &oracle[1],
+                            (oracleCount - 1) * sizeof(int64_t));
+                } else {
+                    /* Pop tail */
+                    multilistPopTail(&ml, s0, &got);
+                    int64_t expected = oracle[oracleCount - 1];
+                    int64_t actual = (got.type == DATABOX_SIGNED_64)
+                                         ? got.data.i
+                                         : (int64_t)got.data.u;
+                    if (actual != expected) {
+                        ERR("tail mismatch: got %" PRId64 " expected %" PRId64,
+                            actual, expected);
+                    }
+                }
+                oracleCount--;
+                popOps++;
+            }
+
+            /* Periodic verification */
+            if (round % 500 == 0) {
+                if (multilistCount(ml) != oracleCount) {
+                    ERR("count mismatch at round %zu: ml=%zu oracle=%zu", round,
+                        multilistCount(ml), oracleCount);
+                }
+            }
+        }
+
+        /* Final verification */
+        if (multilistCount(ml) != oracleCount) {
+            ERR("final count mismatch: ml=%zu oracle=%zu", multilistCount(ml),
+                oracleCount);
+        }
+
+        printf("  push=%zu pop=%zu final=%zu\n", pushOps, popOps, oracleCount);
+        zfree(oracle);
+        multilistFree(ml);
+    }
+
+    TEST("FUZZ: index access verification") {
+        multilist *ml = multilistNew(4, 2);
+        const size_t count = 500;
+
+        /* Populate list */
+        for (size_t i = 0; i < count; i++) {
+            databox box = databoxNewSigned((int64_t)i);
+            multilistPushByTypeTail(&ml, s0, &box);
+        }
+
+        /* Verify positive index access */
+        for (size_t i = 0; i < count; i++) {
+            multilistEntry entry;
+            if (!multilistIndexGet(ml, s0, i, &entry)) {
+                ERR("index %zu failed", i);
+            }
+            int64_t val = (entry.box.type == DATABOX_SIGNED_64)
+                              ? entry.box.data.i
+                              : (int64_t)entry.box.data.u;
+            if ((size_t)val != i) {
+                ERR("index %zu returned %" PRId64, i, val);
+            }
+        }
+
+        /* Verify negative index access */
+        for (size_t i = 0; i < count; i++) {
+            multilistEntry entry;
+            int64_t negIdx = -(int64_t)(i + 1);
+            if (!multilistIndexGet(ml, s0, negIdx, &entry)) {
+                ERR("negative index %" PRId64 " failed", negIdx);
+            }
+            int64_t val = (entry.box.type == DATABOX_SIGNED_64)
+                              ? entry.box.data.i
+                              : (int64_t)entry.box.data.u;
+            int64_t expected = (int64_t)(count - 1 - i);
+            if (val != expected) {
+                ERR("negative index %" PRId64 " returned %" PRId64
+                    ", expected %" PRId64,
+                    negIdx, val, expected);
+            }
+        }
+
+        printf("  verified %zu positive and %zu negative indices\n", count,
+               count);
+        multilistFree(ml);
+    }
+
+    TEST("FUZZ: iterator forward/backward consistency") {
+        multilist *ml = multilistNew(4, 2);
+        const size_t count = 200;
+
+        /* Populate list */
+        for (size_t i = 0; i < count; i++) {
+            databox box = databoxNewSigned((int64_t)i);
+            multilistPushByTypeTail(&ml, s0, &box);
+        }
+
+        /* Forward iteration */
+        multilistIterator iter;
+        multilistIteratorInitForwardReadOnly(ml, s, &iter);
+        multilistEntry entry;
+        size_t idx = 0;
+        while (multilistNext(&iter, &entry)) {
+            int64_t val = (entry.box.type == DATABOX_SIGNED_64)
+                              ? entry.box.data.i
+                              : (int64_t)entry.box.data.u;
+            if ((size_t)val != idx) {
+                ERR("forward iter at %zu: got %" PRId64, idx, val);
+            }
+            idx++;
+        }
+        multilistIteratorRelease(&iter);
+
+        if (idx != count) {
+            ERR("forward iteration count: got %zu expected %zu", idx, count);
+        }
+
+        /* Backward iteration */
+        multilistIteratorInitReverseReadOnly(ml, s, &iter);
+        idx = 0;
+        while (multilistNext(&iter, &entry)) {
+            int64_t val = (entry.box.type == DATABOX_SIGNED_64)
+                              ? entry.box.data.i
+                              : (int64_t)entry.box.data.u;
+            int64_t expected = (int64_t)(count - 1 - idx);
+            if (val != expected) {
+                ERR("backward iter at %zu: got %" PRId64 " expected %" PRId64,
+                    idx, val, expected);
+            }
+            idx++;
+        }
+        multilistIteratorRelease(&iter);
+
+        if (idx != count) {
+            ERR("backward iteration count: got %zu expected %zu", idx, count);
+        }
+
+        printf("  verified forward and backward iteration of %zu elements\n",
+               count);
+        multilistFree(ml);
+    }
+
+    TEST("FUZZ: mixed types in list") {
+        multilist *ml = multilistNew(4, 2);
+        const size_t count = 300;
+
+        srand(77777);
+        for (size_t i = 0; i < count; i++) {
+            int type = rand() % 4;
+            databox box;
+            char buf[64]; /* Declare outside switch to keep in scope */
+            switch (type) {
+            case 0:
+                box = databoxNewSigned((int64_t)(rand() % 100000) - 50000);
+                break;
+            case 1:
+                box = databoxNewUnsigned(rand() % 100000);
+                break;
+            case 2:
+                snprintf(buf, sizeof(buf), "str_%d", rand());
+                box = databoxNewBytesString(buf);
+                break;
+            case 3:
+                box.type = DATABOX_DOUBLE_64;
+                box.data.d64 = (double)(rand() % 10000) / 100.0;
+                break;
+            }
+            multilistPushByTypeTail(&ml, s0, &box);
+        }
+
+        if (multilistCount(ml) != count) {
+            ERR("mixed type count: got %zu expected %zu", multilistCount(ml),
+                count);
+        }
+
+        /* Verify we can iterate all elements */
+        multilistIterator iter;
+        multilistIteratorInitForwardReadOnly(ml, s, &iter);
+        multilistEntry entry;
+        size_t iterCount = 0;
+        while (multilistNext(&iter, &entry)) {
+            iterCount++;
+        }
+        multilistIteratorRelease(&iter);
+
+        if (iterCount != count) {
+            ERR("mixed type iter count: got %zu expected %zu", iterCount,
+                count);
+        }
+
+        printf("  verified %zu mixed-type elements\n", count);
+        multilistFree(ml);
+    }
+
+    TEST("FUZZ: tier transitions - small to medium to full") {
+        /* Test that lists correctly transition between tiers */
+        for (size_t fill = 1; fill <= 8; fill++) {
+            multilist *ml = multilistNew(fill, 0);
+
+            /* Keep pushing until we force tier transitions */
+            const size_t targetCount = 1000;
+            for (size_t i = 0; i < targetCount; i++) {
+                databox box = databoxNewSigned((int64_t)i);
+                multilistPushByTypeTail(&ml, s0, &box);
+
+                /* Periodically verify count */
+                if ((i + 1) % 100 == 0) {
+                    if (multilistCount(ml) != i + 1) {
+                        ERR("fill %zu at i=%zu: count=%zu expected=%zu", fill,
+                            i, multilistCount(ml), i + 1);
+                    }
+                }
+            }
+
+            /* Verify final state */
+            if (multilistCount(ml) != targetCount) {
+                ERR("fill %zu final: count=%zu expected=%zu", fill,
+                    multilistCount(ml), targetCount);
+            }
+
+            /* Pop half and verify */
+            for (size_t i = 0; i < targetCount / 2; i++) {
+                databox got;
+                if (!multilistPopTail(&ml, s0, &got)) {
+                    ERR("fill %zu: pop failed at %zu", fill, i);
+                }
+            }
+
+            if (multilistCount(ml) != targetCount / 2) {
+                ERR("fill %zu after pops: count=%zu expected=%zu", fill,
+                    multilistCount(ml), targetCount / 2);
+            }
+
+            multilistFree(ml);
+        }
+        printf("  verified tier transitions across fill levels 1-8\n");
+    }
+
+    TEST("FUZZ: stress random operations") {
+        multilist *ml = multilistNew(4, 2);
+        size_t count = 0;
+
+        srand(99999);
+        for (size_t round = 0; round < 10000; round++) {
+            int op = rand() % 10;
+
+            if (op < 4) {
+                /* Push head (40%) */
+                databox box = databoxNewSigned((int64_t)rand());
+                multilistPushByTypeHead(&ml, s0, &box);
+                count++;
+            } else if (op < 8) {
+                /* Push tail (40%) */
+                databox box = databoxNewSigned((int64_t)rand());
+                multilistPushByTypeTail(&ml, s0, &box);
+                count++;
+            } else if (count > 0) {
+                /* Pop (20%) */
+                databox got;
+                if (rand() % 2) {
+                    multilistPopHead(&ml, s0, &got);
+                } else {
+                    multilistPopTail(&ml, s0, &got);
+                }
+                count--;
+            }
+
+            /* Periodic verification */
+            if (round % 1000 == 0) {
+                if (multilistCount(ml) != count) {
+                    ERR("round %zu: ml=%zu oracle=%zu", round,
+                        multilistCount(ml), count);
+                }
+            }
+        }
+
+        if (multilistCount(ml) != count) {
+            ERR("final: ml=%zu oracle=%zu", multilistCount(ml), count);
+        }
+
+        printf("  completed 10K random operations, final count=%zu\n", count);
+        multilistFree(ml);
+    }
+
+    printf("\n=== All multilist fuzz tests completed! ===\n\n");
+
     mflexStateFree(s0);
     mflexStateFree(s1);
 

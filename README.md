@@ -14,29 +14,7 @@ cd build
 cmake ..
 make -j8
 
-./src/datakit-test test multimap
-./src/datakit-test test multimapFull
-./src/datakit-test test multilist
-./src/datakit-test test multilistFull
-./src/datakit-test test multiarray
-./src/datakit-test test multiarraySmall
-./src/datakit-test test multiarrayMedium
-./src/datakit-test test multiarrayLarge
-./src/datakit-test test xof
-./src/datakit-test test dod
-./src/datakit-test test intset
-./src/datakit-test test intsetU32
-./src/datakit-test test hll
-./src/datakit-test test strDoubleFormat
-./src/datakit-test test multiroar
-./src/datakit-test test fibbuf
-./src/datakit-test test jebuf
-./src/datakit-test test mflex
-./src/datakit-test test flex
-./src/datakit-test test membound
-./src/datakit-test test multimapatom
-./src/datakit-test test multilru
-./src/datakit-test test ptrprevnext
+ctest -j8 --output-on-failure --stop-on-failure
 ```
 
 ## Documentation
@@ -131,5 +109,3 @@ This is a recently updated development snapshot.
 Many components are complete and now fully documented.
 
 Some components are a first or second draft and need another feature refactoring cycle or two.
-
-Some components may be abandoned experiments and I just forgot to remove them from this snapshot.

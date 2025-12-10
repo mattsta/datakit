@@ -82,6 +82,8 @@
 #include <unistd.h>   /* getpid / load available feature flags */
 
 #if DK_OS_APPLE
+#include <mach/clock.h>     /* OS X calendar clock */
+#include <mach/mach.h>      /* OS X mach kernel */
 #include <mach/mach_time.h> /* OS X time interfaces */
 #endif
 

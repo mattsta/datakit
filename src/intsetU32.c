@@ -361,7 +361,7 @@ int intsetU32Test(int argc, char **argv) {
         for (i = 0; i < num; i++) {
             intsetU32Search(is, random() % ((1 << bits) - 1), NULL);
         }
-        printf("%ld lookups, %ld element set, %lldusec\n", num, size,
+        printf("%ld lookups, %ld element set, %" PRId64 "usec\n", num, size,
                usec() - start);
     }
 

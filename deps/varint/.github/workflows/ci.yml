@@ -217,7 +217,7 @@ jobs:
       - name: Run comprehensive test suite
         run: |
           cd build
-          make test-comprehensive
+          make varint-test-comprehensive
           echo "✅ All comprehensive tests passed"
 
       - name: Verify build artifacts

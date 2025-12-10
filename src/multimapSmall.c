@@ -50,23 +50,33 @@ void multimapSmallInsertWithSurrogateKey(
     multimapSmall *m, const databox *elements[], const databox *insertKey,
     const struct multimapAtom *referenceContainer) {
     flexEntry *middle = GET_MIDDLE(m);
+    /* compareUsingKeyElementOnly: For maps (!mapIsSet), compare only key.
+     * For sets (mapIsSet), compare all elements to check for full-width dups.
+     */
     flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKey(
-        &m->map, m->elementsPerEntry, elements, insertKey, &middle, m->mapIsSet,
-        referenceContainer);
+        &m->map, m->elementsPerEntry, elements, insertKey, &middle,
+        !m->mapIsSet, referenceContainer);
     SET_MIDDLE(m, middle);
 }
 
 bool multimapSmallInsert(multimapSmall *m, const databox *elements[]) {
     flexEntry *middle = GET_MIDDLE(m);
+    /* compareUsingKeyElementOnly: For maps (!mapIsSet), compare only key.
+     * For sets (mapIsSet), compare all elements to check for full-width dups.
+     */
     const bool replaced = flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
-        &m->map, m->elementsPerEntry, elements, &middle, m->mapIsSet);
+        &m->map, m->elementsPerEntry, elements, &middle, !m->mapIsSet);
     SET_MIDDLE(m, middle);
     return replaced;
 }
 
 void multimapSmallInsertFullWidth(multimapSmall *m, const databox *elements[]) {
-    /* Same implementation because we only have one map. */
-    multimapSmallInsert(m, elements);
+    flexEntry *middle = GET_MIDDLE(m);
+    /* InsertFullWidth: Always compare ALL elements (key+value) to allow
+     * multiple entries with same key but different values (sorted set). */
+    flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
+        &m->map, m->elementsPerEntry, elements, &middle, false);
+    SET_MIDDLE(m, middle);
 }
 
 void multimapSmallAppend(multimapSmall *m, const databox *elements[]) {
@@ -224,8 +234,21 @@ void multimapSmallDeleteEntry(multimapSmall *m, multimapEntry *me) {
 bool multimapSmallDeleteRandomValue(multimapSmall *m, const bool deleteFromTail,
                                     databox **deletedBox) {
     multimapEntry me;
-    if (!multimapSmallRandomValue(m, deleteFromTail, deletedBox, &me)) {
+    /* Pass NULL for deletedBox to multimapSmallRandomValue, then manually
+     * copy the data using flexGetByTypeCopy. This avoids use-after-free
+     * since flexGetByType returns pointers to internal flex data which
+     * become invalid after multimapSmallDeleteEntry. */
+    if (!multimapSmallRandomValue(m, deleteFromTail, NULL, &me)) {
         return false;
+    }
+
+    /* Copy the data before deletion so caller has valid data */
+    if (deletedBox) {
+        flexEntry *fe = me.fe;
+        for (size_t i = 0; i < m->elementsPerEntry; i++) {
+            flexGetByTypeCopy(fe, deletedBox[i]);
+            fe = flexNext(m->map, fe);
+        }
     }
 
     multimapSmallDeleteEntry(m, &me);
