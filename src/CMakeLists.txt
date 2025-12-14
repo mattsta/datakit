@@ -394,6 +394,8 @@ add_library(${PROJECT_NAME} OBJECT
 
     multidict.c
 
+    clusterRing.c
+
     multiTimer.c
     timerWheel.c
     timerWheelTest.c
