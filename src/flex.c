@@ -3902,9 +3902,9 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMulti(
             zmalloc(copyLen + contentsLen + contentLen + bigBufferLen);
         uint8_t *blockBytes = (uint8_t *)block;
         copyBox = (databox *)blockBytes;
-        contents = (flexEntry **)(blockBytes + copyLen);
-        content = (databox *)(blockBytes + copyLen + contentsLen);
-        bigBuffer = (uint8_t *)(blockBytes + copyLen + contentLen);
+        contents = (flexInsertContents **)(blockBytes + copyLen);
+        content = (flexInsertContents *)(blockBytes + copyLen + contentsLen);
+        bigBuffer = (__int128_t *)(blockBytes + copyLen + contentLen);
 #endif
     }
 

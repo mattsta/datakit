@@ -33,7 +33,11 @@
 #endif
 
 #if defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
-#define DATASPEED_USE_NEON 1
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-macros"
+#define DATASPEED_USE_NEON 1 /* Configuration flag for ARM NEON availability   \
+                              */
+#pragma GCC diagnostic pop
 #include <arm_neon.h>
 #endif
 
@@ -491,8 +495,8 @@ static void benchmark_bandwidth(const char *name, size_t size_bytes,
                result->bandwidth_gbs, result->cycles_per_byte);
     }
 
-    free(data);
-    free(data2);
+    zfree(data);
+    zfree(data2);
 }
 
 /* Wrapper functions for benchmark_bandwidth */
@@ -538,10 +542,10 @@ static void **create_pointer_chain(size_t size_bytes) {
     assert(chain);
 
     /* Create indices and shuffle (Fisher-Yates) */
-    size_t *indices = malloc(count * sizeof(size_t));
+    size_t *indices = zmalloc(count * sizeof(size_t));
     if (!indices) {
-        free(chain); /* Free previously allocated chain */
-        return NULL; /* Memory allocation failed */
+        zfree(chain); /* Free previously allocated chain */
+        return NULL;  /* Memory allocation failed */
     }
     for (size_t i = 0; i < count; i++) {
         indices[i] = i;
@@ -559,7 +563,7 @@ static void **create_pointer_chain(size_t size_bytes) {
     }
     chain[indices[count - 1]] = &chain[indices[0]]; /* Circular */
 
-    free(indices);
+    zfree(indices);
     return chain;
 }
 
@@ -630,7 +634,7 @@ static void benchmark_latency_at_size(size_t size_bytes,
                result->cycles);
     }
 
-    free(chain);
+    zfree(chain);
 }
 
 void dataspeedBenchmarkLatency(dataspeedLatencyResults *results) {
@@ -1220,7 +1224,7 @@ DATASPEED_NO_OPTIMIZE size_t dataspeed(double MB, size_t iterations) {
                iterations);
 
         size_t sizeBytes = (size_t)(MB * (1 << 20));
-        char *mem = malloc(sizeBytes);
+        char *mem = zmalloc(sizeBytes);
         assert(mem);
 
         uint64_t totalStart = dataspeed_time_ns();
@@ -1240,7 +1244,7 @@ DATASPEED_NO_OPTIMIZE size_t dataspeed(double MB, size_t iterations) {
         printf("  Total: %.2f GB in %.2f seconds = %.2f GB/s\n", totalGB,
                seconds, totalGB / seconds);
 
-        free(mem);
+        zfree(mem);
     }
 
     /* Print summary report */

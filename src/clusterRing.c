@@ -4027,8 +4027,9 @@ static int testFuzzPlacementConsistency(void) {
                 clusterPlacement p;
                 clusterRingLocate(ring, key, strlen(key), &p);
                 if (p.primary->id != primaryIds[i]) {
-                    ERR("Key %d: inconsistent placement %lu vs %lu", i,
-                        p.primary->id, primaryIds[i]);
+                    ERR("Key %d: inconsistent placement %" PRIu64
+                        " vs %" PRIu64,
+                        i, p.primary->id, primaryIds[i]);
                     err++;
                 }
                 clusterPlacementFree(&p);
@@ -4203,8 +4204,8 @@ static int testFuzzStateTransitions(void) {
                 /* Verify primary is healthy */
                 if (p.primary && p.primary->state != CLUSTER_NODE_UP) {
                     /* Primary should be UP if placement succeeded */
-                    ERR("Op %d: primary node %lu is not UP (state=%d)", op,
-                        p.primary->id, p.primary->state);
+                    ERR("Op %d: primary node %" PRIu64 " is not UP (state=%d)",
+                        op, p.primary->id, p.primary->state);
                     err++;
                 }
                 clusterPlacementFree(&p);
@@ -4490,7 +4491,8 @@ static int testFuzzLargeScale(void) {
                 if (node) {
                     for (size_t j = 0; j < i; j++) {
                         if (seen[j] == node->id) {
-                            ERR("Duplicate replica: node %lu at positions %zu "
+                            ERR("Duplicate replica: node %" PRIu64
+                                " at positions %zu "
                                 "and %zu",
                                 node->id, j, i);
                             err++;
@@ -4535,7 +4537,7 @@ static int testFuzzEdgeCases(void) {
                 ERR("Single node placement failed: %d", result);
                 err++;
             } else if (p.primary->id != 1) {
-                ERR("Wrong primary: expected 1, got %lu", p.primary->id);
+                ERR("Wrong primary: expected 1, got %" PRIu64, p.primary->id);
                 err++;
             }
             clusterPlacementFree(&p);

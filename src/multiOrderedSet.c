@@ -144,12 +144,6 @@ static inline double mosDataboxToDouble(const databox *box) {
  * Tier Promotion
  * ==================================================================== */
 
-/* Threshold for Small → Medium promotion */
-#define MOS_SMALL_MAX_BYTES 2048
-
-/* Threshold for Medium → Full promotion (3x the small limit) */
-#define MOS_MEDIUM_MAX_BYTES (MOS_SMALL_MAX_BYTES * 3)
-
 /* Minimum entry count for promotion (must have 2 entries to split) */
 #define MOS_MIN_ENTRIES_FOR_PROMOTION 2
 
@@ -1154,7 +1148,6 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         multiOrderedSet *mos = multiOrderedSetNewLimit(FLEX_CAP_LEVEL_64);
 
         /* Add entries and track tier transitions - use pseudo-random scores */
-        multiOrderedSetType prevType = MOS_TYPE_SMALL;
         for (int i = 0; i < 30; i++) {
             int64_t scoreVal =
                 (i * 997) % 10000; /* Pseudo-random distribution */
@@ -1181,7 +1174,6 @@ int multiOrderedSetTest(int argc, char *argv[]) {
                 ERR("Entry m0 has wrong score %ld after inserting m%d!",
                     gotScore.data.i, i);
             }
-            prevType = type;
         }
 
         /* Verify we reached Full tier */
@@ -1242,7 +1234,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
                     }
                     if (gotScore.data.i != oracleScores[j]) {
                         ERR("FUZZ FAIL: Score mismatch for '%s': expected "
-                            "%" PRId64 " got %" PRId64,
+                            "%" PRId64 " got %" PRIdMAX,
                             oracleMembers[j], oracleScores[j], gotScore.data.i);
                     }
                 }
@@ -1422,7 +1414,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
                 precisionErrors++;
                 if (precisionErrors <= 3) {
                     printf("      WARNING: Score precision issue at %" PRIu64
-                           " (got %" PRIu64 ")\n",
+                           " (got %" PRIuMAX ")\n",
                            testValues[i], gotScore.data.u);
                 }
             }
@@ -1432,7 +1424,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         int sortErrors = 0;
         mosIterator iter;
         multiOrderedSetIteratorInit(mos, &iter, true);
-        databox prevMember = {0}, prevScore = {0};
+        databox prevScore = {0};
         databox gotMember, gotScore;
         bool first = true;
         while (multiOrderedSetIteratorNext(&iter, &gotMember, &gotScore)) {
@@ -1442,14 +1434,14 @@ int multiOrderedSetTest(int argc, char *argv[]) {
                 if (cmp >= 0) {
                     sortErrors++;
                     if (sortErrors <= 3) {
-                        printf("      SORT ERROR: %" PRIu64 " >= %" PRIu64 "\n",
+                        printf("      SORT ERROR: %" PRIuMAX " >= %" PRIuMAX
+                               "\n",
                                prevScore.data.u, gotScore.data.u);
                     }
                 }
             }
             first = false;
             prevScore = gotScore;
-            prevMember = gotMember;
         }
 
         printf("      Large uint64 precision_errors=%d sort_errors=%d: %s\n",

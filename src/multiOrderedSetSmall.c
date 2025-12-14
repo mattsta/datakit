@@ -80,9 +80,9 @@ static bool mosDataboxAdd(const databox *base, const databox *delta,
 /* Find entry position for a score (binary search).
  * Returns the entry where we should insert, or the entry with matching score.
  * 'found' is set to true if exact score match found. */
-static flexEntry *mosFindScorePosition(const multiOrderedSetSmall *m,
-                                       const databox *score,
-                                       const flexEntry *middle, bool *found) {
+static __attribute__((unused)) flexEntry *
+mosFindScorePosition(const multiOrderedSetSmall *m, const databox *score,
+                     const flexEntry *middle, bool *found) {
     *found = false;
     flexEntry *entry = flexFindByTypeSortedWithMiddle(
         m->map, MOS_ELEMENTS_PER_ENTRY, score, (flexEntry *)middle);
@@ -820,21 +820,21 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
             ERRR("GetByRank(0) failed");
         }
         if (s.data.i != 50) {
-            ERR("Rank 0 should have score 50, got %" PRId64, s.data.i);
+            ERR("Rank 0 should have score 50, got %" PRIdMAX, s.data.i);
         }
 
         if (!multiOrderedSetSmallGetByRank(mos, 1, &m, &s)) {
             ERRR("GetByRank(1) failed");
         }
         if (s.data.i != 75) {
-            ERR("Rank 1 should have score 75, got %" PRId64, s.data.i);
+            ERR("Rank 1 should have score 75, got %" PRIdMAX, s.data.i);
         }
 
         if (!multiOrderedSetSmallGetByRank(mos, 2, &m, &s)) {
             ERRR("GetByRank(2) failed");
         }
         if (s.data.i != 100) {
-            ERR("Rank 2 should have score 100, got %" PRId64, s.data.i);
+            ERR("Rank 2 should have score 100, got %" PRIdMAX, s.data.i);
         }
 
         /* Test GetScore */
@@ -849,12 +849,12 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
         /* Test GetRank */
         int64_t rank = multiOrderedSetSmallGetRank(mos, &member2);
         if (rank != 0) {
-            ERR("member2 rank should be 0, got %ld", rank);
+            ERR("member2 rank should be 0, got %" PRId64, rank);
         }
 
         rank = multiOrderedSetSmallGetRank(mos, &member1);
         if (rank != 2) {
-            ERR("member1 rank should be 2, got %ld", rank);
+            ERR("member1 rank should be 2, got %" PRId64, rank);
         }
 
         multiOrderedSetSmallFree(mos);
