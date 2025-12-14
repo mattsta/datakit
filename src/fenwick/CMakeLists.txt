@@ -58,13 +58,3 @@ if(DATAKIT_INSTALL_HEADERS)
     install(FILES ${FENWICK_HEADERS} ${FENWICK_CORE_HEADERS}
             DESTINATION include/datakit/fenwick)
 endif()
-
-# Testing - tests are added to datakit-test binary, not datakit library
-# Test registration handled by datakit-test.c test registry
-
-# Print summary
-list(LENGTH FENWICK_SOURCES FENWICK_SOURCE_COUNT)
-list(LENGTH FENWICK_HEADERS FENWICK_HEADER_COUNT)
-message(STATUS "Fenwick: Generated ${FENWICK_SOURCE_COUNT} source files from 3 templates")
-message(STATUS "Fenwick: ${FENWICK_HEADER_COUNT} type-specific headers")
-message(STATUS "Fenwick: 2-tier architecture (Small → Full)")
