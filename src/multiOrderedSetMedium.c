@@ -1036,7 +1036,7 @@ int multiOrderedSetMediumTest(int argc, char *argv[]) {
                 ERR("GetByRank(%d) failed", i);
             }
             if (s.data.i != i * 10) {
-                ERR("Rank %d should have score %d, got %" PRId64, i, i * 10,
+                ERR("Rank %d should have score %d, got %" PRIdMAX, i, i * 10,
                     s.data.i);
             }
         }

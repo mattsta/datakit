@@ -2737,8 +2737,8 @@ static void memboundDump(const membound *m, const char *filename) {
     fprintf(out, "=== membound dump ===\n");
     fprintf(out, "Mode: %s\n",
             m->mode == MEMBOUND_MODE_FIXED ? "FIXED" : "DYNAMIC");
-    fprintf(out, "Extents: %u\n", m->extentCount);
-    fprintf(out, "Capacity: %zu bytes\n", m->totalCapacity);
+    fprintf(out, "Extents: %zu\n", m->extentCount);
+    fprintf(out, "Capacity: %" PRIu64 " bytes\n", m->totalCapacity);
     fprintf(out, "Current: %" PRIu64 " bytes, %" PRIu64 " allocs\n",
             m->currentOut, m->currentCount);
     fprintf(out, "Peak: %" PRIu64 " bytes, %" PRIu64 " allocs\n", m->maxOut,
@@ -3251,7 +3251,7 @@ memboundCompactPool *memboundCompactPoolCreate(size_t size, bool threadSafe) {
     size_t totalSize = sizeof(memboundCompactPool) + poolDataSize + ctrlSize;
 
     /* Allocate all-in-one */
-    void *mem = malloc(totalSize);
+    void *mem = zmalloc(totalSize);
     if (!mem) {
         return NULL;
     }
@@ -3275,7 +3275,7 @@ memboundCompactPool *memboundCompactPoolCreate(size_t size, bool threadSafe) {
     /* Initialize mutex if thread-safe */
     if (threadSafe) {
         if (pthread_mutex_init(&m->mutex, NULL) != 0) {
-            free(mem);
+            zfree(mem);
             return NULL;
         }
         m->mutexInitialized = true;
@@ -3310,7 +3310,7 @@ void memboundCompactPoolDestroy(memboundCompactPool *m) {
         pthread_mutex_destroy(&m->mutex);
     }
 
-    free(m);
+    zfree(m);
 }
 
 /* Reset COMPACT tier pool */

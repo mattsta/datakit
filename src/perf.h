@@ -139,7 +139,8 @@ enum firstThing { FIRST_SECONDS, FIRST_CYCLES, FIRST_RATE };
 
 /* GCC -pedantic complains about the %'0.2f format specifier, so let's disable
  * format warnings for that one line of code. */
-static void PERF_TIMERS_RESULT_PRINT(const size_t i, const char *units) {
+static void __attribute__((unused))
+PERF_TIMERS_RESULT_PRINT(const size_t i, const char *units) {
     setlocale(LC_ALL, "");
 
     PERF_TIMERS_STAT_RESULT(i);

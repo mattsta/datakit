@@ -354,7 +354,8 @@ static bool verifyMultilistMatchesTracker(multilistP *ml,
                                           const ptestBoxTracker *tracker) {
     uint64_t mlCount = multilistCountP(ml);
     if (mlCount != tracker->count) {
-        printf("  [verify] Count mismatch: multilist has %lu, tracker has %u\n",
+        printf("  [verify] Count mismatch: multilist has %" PRIu64
+               ", tracker has %u\n",
                mlCount, tracker->count);
         return false;
     }
