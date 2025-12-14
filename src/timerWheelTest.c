@@ -11,6 +11,7 @@
 
 #include <inttypes.h>
 #include <string.h>
+#include <time.h>
 
 #ifdef DATAKIT_TEST
 #include "ctest.h"
@@ -443,6 +444,395 @@ int timerWheelTest(int argc, char *argv[]) {
     }
 
     /* ================================================================
+     * Edge Cases: Zero-Delay and Sub-Resolution Timers
+     * ================================================================ */
+
+    TEST("timerWheel: zero delay timer goes to pending queue") {
+        timerWheel *tw = timerWheelNew();
+        testCallbackState state = {.callCount = 0, .shouldReschedule = false};
+
+        timerWheelId id =
+            timerWheelRegister(tw, 0, 0, testCountingCallback, &state);
+        if (id == 0) {
+            ERRR("Timer ID should not be 0");
+        }
+
+        /* Timer should be in pending, not yet fired */
+        if (state.callCount != 0) {
+            ERR("Zero-delay timer should not fire until process, callCount=%d",
+                state.callCount);
+        }
+
+        /* nextTimerEventStartUs should report the pending timer */
+        timerWheelSystemMonotonicUs next = timerWheelNextTimerEventStartUs(tw);
+        if (next == 0) {
+            ERRR("nextTimerEventStartUs should return non-zero for pending "
+                 "timer");
+        }
+
+        timerWheelProcessTimerEvents(tw);
+
+        if (state.callCount != 1) {
+            ERR("Zero-delay timer did not fire after process, callCount=%d",
+                state.callCount);
+        }
+
+        timerWheelFree(tw);
+    }
+
+    TEST("timerWheel: sub-resolution repeating timer fires rapidly") {
+        timerWheel *tw = timerWheelNew();
+        testCallbackState state = {.callCount = 0, .shouldReschedule = true};
+
+        /* 100μs repeat interval (< 1000μs wheel resolution) */
+        timerWheelRegister(tw, 0, 100, testCountingCallback, &state);
+
+        /* First call should fire immediately (0 delay) */
+        timerWheelProcessTimerEvents(tw);
+        if (state.callCount != 1) {
+            ERR("Initial fire failed, callCount=%d", state.callCount);
+        }
+
+        /* Advance time and process - timer should fire again after interval */
+        for (int i = 1; i < 10; i++) {
+            timerWheelAdvanceTime(tw, 100); /* Advance by repeat interval */
+            if (state.callCount != i + 1) {
+                ERR("Timer should fire after advance %d, callCount=%d "
+                    "(expected %d)",
+                    i, state.callCount, i + 1);
+            }
+        }
+
+        if (state.callCount < 10) {
+            ERR("Sub-resolution timer should fire 10 times, "
+                "callCount=%d (expected >= 10)",
+                state.callCount);
+        }
+
+        timerWheelFree(tw);
+    }
+
+    TEST("timerWheel: 1μs repeating timer stays in pending queue") {
+        timerWheel *tw = timerWheelNew();
+        testCallbackState state = {.callCount = 0, .shouldReschedule = true};
+
+        /* 1μs repeat interval (minimum sub-resolution) */
+        timerWheelRegister(tw, 0, 1, testCountingCallback, &state);
+
+        /* First fire (0 delay) */
+        timerWheelProcessTimerEvents(tw);
+        if (state.callCount != 1) {
+            ERR("Initial fire failed, callCount=%d", state.callCount);
+        }
+
+        /* Process 4 more times with time advancing */
+        for (int i = 1; i < 5; i++) {
+            /* After each reschedule, nextTimerEventStartUs should return
+             * non-zero because timer is in pending queue */
+            timerWheelSystemMonotonicUs next =
+                timerWheelNextTimerEventStartUs(tw);
+            if (next == 0) {
+                ERR("nextTimerEventStartUs returned 0 before advance %d, "
+                    "callCount=%d",
+                    i, state.callCount);
+            }
+
+            timerWheelAdvanceTime(tw, 1); /* Advance by 1μs */
+
+            if (state.callCount != i + 1) {
+                ERR("Timer should fire after advance %d, callCount=%d "
+                    "(expected %d)",
+                    i, state.callCount, i + 1);
+            }
+        }
+
+        if (state.callCount < 5) {
+            ERR("1μs repeating timer should fire 5 times, callCount=%d",
+                state.callCount);
+        }
+
+        timerWheelFree(tw);
+    }
+
+    TEST("timerWheel: nextTimerEventStartUs with only pending timers") {
+        timerWheel *tw = timerWheelNew();
+        testCallbackState state = {.callCount = 0, .shouldReschedule = false};
+
+        /* Register only zero-delay timers */
+        timerWheelRegister(tw, 0, 0, testCountingCallback, &state);
+        timerWheelRegister(tw, 0, 0, testCountingCallback, &state);
+        timerWheelRegister(tw, 0, 0, testCountingCallback, &state);
+
+        /* nextTimerEventStartUs should return non-zero */
+        timerWheelSystemMonotonicUs next = timerWheelNextTimerEventStartUs(tw);
+        if (next == 0) {
+            ERRR("nextTimerEventStartUs should not be 0 with pending timers");
+        }
+
+        /* Offset should be <= 0 (timer is due now) */
+        timerWheelUs offset = timerWheelNextTimerEventOffsetFromNowUs(tw);
+        if (offset > 1000) { /* Allow small timing variance */
+            ERR("Offset should be ~0 for pending timer, got %" PRId64, offset);
+        }
+
+        timerWheelProcessTimerEvents(tw);
+
+        if (state.callCount != 3) {
+            ERR("Expected 3 timers to fire, callCount=%d", state.callCount);
+        }
+
+        timerWheelFree(tw);
+    }
+
+    TEST("timerWheel: mixed pending and wheel timers") {
+        timerWheel *tw = timerWheelNew();
+        testCallbackState pendingState = {.callCount = 0,
+                                          .shouldReschedule = false};
+        testCallbackState wheelState = {.callCount = 0,
+                                        .shouldReschedule = false};
+
+        /* Pending timer (0 delay) */
+        timerWheelRegister(tw, 0, 0, testCountingCallback, &pendingState);
+
+        /* Wheel timer (5ms delay) */
+        timerWheelRegister(tw, 5000, 0, testCountingCallback, &wheelState);
+
+        /* nextTimerEventStartUs should return the pending timer's time */
+        timerWheelSystemMonotonicUs next = timerWheelNextTimerEventStartUs(tw);
+        if (next == 0) {
+            ERRR("nextTimerEventStartUs should return non-zero");
+        }
+
+        timerWheelProcessTimerEvents(tw);
+
+        if (pendingState.callCount != 1) {
+            ERR("Pending timer should fire, callCount=%d",
+                pendingState.callCount);
+        }
+        if (wheelState.callCount != 0) {
+            ERR("Wheel timer should not fire yet, callCount=%d",
+                wheelState.callCount);
+        }
+
+        /* Now advance time to fire wheel timer */
+        timerWheelAdvanceTime(tw, 10000);
+
+        if (wheelState.callCount != 1) {
+            ERR("Wheel timer should fire after advance, callCount=%d",
+                wheelState.callCount);
+        }
+
+        timerWheelFree(tw);
+    }
+
+    TEST("timerWheel: sub-resolution timer after wheel timer") {
+        timerWheel *tw = timerWheelNew();
+        testCallbackState state = {.callCount = 0, .shouldReschedule = true};
+
+        /* First a normal delay, then sub-resolution repeat */
+        timerWheelRegister(tw, 5000, 100, testCountingCallback, &state);
+
+        /* Initially no fires */
+        timerWheelProcessTimerEvents(tw);
+        if (state.callCount != 0) {
+            ERR("Timer should not fire before delay, callCount=%d",
+                state.callCount);
+        }
+
+        /* After delay plus one resolution unit (wheel slot granularity),
+         * timer should fire. Wheel resolution is 1000μs. */
+        timerWheelAdvanceTime(tw, 6000);
+        if (state.callCount != 1) {
+            ERR("Timer should fire after delay, callCount=%d", state.callCount);
+        }
+
+        /* Now timer is rescheduled with 100μs sub-resolution repeat.
+         * It's now in pending queue. Advance time to trigger subsequent fires
+         */
+        timerWheelAdvanceTime(tw, 100);
+        if (state.callCount != 2) {
+            ERR("Timer should fire after first sub-res advance, callCount=%d",
+                state.callCount);
+        }
+
+        timerWheelAdvanceTime(tw, 100);
+        if (state.callCount != 3) {
+            ERR("Timer should fire after second sub-res advance, callCount=%d",
+                state.callCount);
+        }
+
+        timerWheelAdvanceTime(tw, 100);
+        if (state.callCount != 4) {
+            ERR("Timer should fire after third sub-res advance, callCount=%d",
+                state.callCount);
+        }
+
+        timerWheelFree(tw);
+    }
+
+    TEST("timerWheel: multiple sub-resolution timers") {
+        timerWheel *tw = timerWheelNew();
+        testCallbackState states[3];
+        memset(states, 0, sizeof(states));
+        for (int i = 0; i < 3; i++) {
+            states[i].shouldReschedule = true;
+        }
+
+        /* Register multiple sub-resolution repeating timers with different
+         * intervals */
+        timerWheelRegister(tw, 0, 100, testCountingCallback,
+                           &states[0]); /* 100μs */
+        timerWheelRegister(tw, 0, 200, testCountingCallback,
+                           &states[1]); /* 200μs */
+        timerWheelRegister(tw, 0, 500, testCountingCallback,
+                           &states[2]); /* 500μs */
+
+        /* First call fires all three (0 delay) */
+        timerWheelProcessTimerEvents(tw);
+        for (int i = 0; i < 3; i++) {
+            if (states[i].callCount != 1) {
+                ERR("Sub-res timer %d should fire initially, callCount=%d", i,
+                    states[i].callCount);
+            }
+        }
+
+        /* Advance time multiple times - each timer fires once per call
+         * when its interval has elapsed */
+        for (int i = 0; i < 10; i++) {
+            timerWheelAdvanceTime(tw, 100); /* Advance 100μs per iteration */
+        }
+
+        /* After 1000μs total:
+         * Timer 0 (100μs) should have fired ~10 additional times (1 + 10 = 11)
+         * Timer 1 (200μs) should have fired ~5 additional times (1 + 5 = 6)
+         * Timer 2 (500μs) should have fired ~2 additional times (1 + 2 = 3) */
+        if (states[0].callCount < 8) {
+            ERR("100μs timer should fire ~11 times in 1000μs, callCount=%d",
+                states[0].callCount);
+        }
+        if (states[1].callCount < 4) {
+            ERR("200μs timer should fire ~6 times in 1000μs, callCount=%d",
+                states[1].callCount);
+        }
+        if (states[2].callCount < 2) {
+            ERR("500μs timer should fire ~3 times in 1000μs, callCount=%d",
+                states[2].callCount);
+        }
+
+        timerWheelFree(tw);
+    }
+
+    TEST("timerWheel: zero delay with repeat goes to pending then wheel") {
+        timerWheel *tw = timerWheelNew();
+        testCallbackState state = {.callCount = 0, .shouldReschedule = true};
+
+        /* Zero initial delay, normal repeat interval (>= resolution) */
+        timerWheelRegister(tw, 0, 5000, testCountingCallback, &state);
+
+        /* Should fire immediately from pending */
+        timerWheelProcessTimerEvents(tw);
+        if (state.callCount != 1) {
+            ERR("First fire from pending failed, callCount=%d",
+                state.callCount);
+        }
+
+        /* Should not fire again until time advances */
+        timerWheelProcessTimerEvents(tw);
+        if (state.callCount != 1) {
+            ERR("Should not fire again without time advance, callCount=%d",
+                state.callCount);
+        }
+
+        /* Advance time, should fire again */
+        timerWheelAdvanceTime(tw, 10000);
+        if (state.callCount != 2) {
+            ERR("Second fire after advance failed, callCount=%d",
+                state.callCount);
+        }
+
+        timerWheelFree(tw);
+    }
+
+    TEST("timerWheel: offset returns negative for overdue timer") {
+        timerWheel *tw = timerWheelNew();
+        testCallbackState state = {.callCount = 0, .shouldReschedule = false};
+
+        /* Register a zero-delay timer */
+        timerWheelRegister(tw, 0, 0, testCountingCallback, &state);
+
+        /* Small delay to ensure timer is "overdue" */
+        struct timespec ts = {0, 1000000}; /* 1ms */
+        nanosleep(&ts, NULL);
+
+        /* Offset should be negative or very small (timer is due) */
+        timerWheelUs offset = timerWheelNextTimerEventOffsetFromNowUs(tw);
+        if (offset > 5000) { /* Allow 5ms variance */
+            ERR("Offset should be <= 0 for overdue timer, got %" PRId64,
+                offset);
+        }
+
+        timerWheelFree(tw);
+    }
+
+    TEST("timerWheel: stress sub-resolution timers") {
+        timerWheel *tw = timerWheelNew();
+        testCallbackState state = {.callCount = 0, .shouldReschedule = true};
+
+        /* Single 1μs repeating timer */
+        timerWheelRegister(tw, 0, 1, testCountingCallback, &state);
+
+        /* First fire (0 delay) */
+        timerWheelProcessTimerEvents(tw);
+        if (state.callCount != 1) {
+            ERR("Initial fire failed, callCount=%d", state.callCount);
+        }
+
+        /* Advance time to trigger subsequent fires */
+        for (int i = 1; i < 100; i++) {
+            timerWheelAdvanceTime(tw, 1); /* Advance 1μs per iteration */
+        }
+
+        if (state.callCount < 100) {
+            ERR("Stress test: expected >= 100 fires, got %d", state.callCount);
+        }
+
+        /* Verify nextTimerEventStartUs still works */
+        timerWheelSystemMonotonicUs next = timerWheelNextTimerEventStartUs(tw);
+        if (next == 0) {
+            ERRR("nextTimerEventStartUs returned 0 after stress test");
+        }
+
+        timerWheelFree(tw);
+    }
+
+    TEST("timerWheel: sub-resolution timer stops correctly") {
+        timerWheel *tw = timerWheelNew();
+        testCallbackState state = {.callCount = 0, .shouldReschedule = true};
+
+        timerWheelId id =
+            timerWheelRegister(tw, 0, 1, testCountingCallback, &state);
+
+        /* Process a few times */
+        timerWheelProcessTimerEvents(tw);
+        timerWheelProcessTimerEvents(tw);
+        int32_t countBefore = state.callCount;
+
+        /* Unregister */
+        timerWheelUnregister(tw, id);
+
+        /* Process more - should not increment */
+        timerWheelProcessTimerEvents(tw);
+        timerWheelProcessTimerEvents(tw);
+
+        if (state.callCount > countBefore) {
+            ERR("Timer fired after unregister, before=%d after=%d", countBefore,
+                state.callCount);
+        }
+
+        timerWheelFree(tw);
+    }
+
+    /* ================================================================
      * Statistics Tests
      * ================================================================ */
 
@@ -814,6 +1204,439 @@ int timerWheelTest(int argc, char *argv[]) {
         }
 
         timerWheelFree(tw);
+    }
+
+    /* ================================================================
+     * Detailed Performance Benchmark Suite (timerWheel vs multiTimer)
+     *
+     * Uses PERF_ macros for cycle-accurate measurements and provides
+     * comprehensive throughput/latency comparisons across workloads.
+     * ================================================================ */
+
+    TEST("BENCHMARK: registration throughput scaling") {
+        printf(
+            "    Measuring registration throughput at different scales...\n");
+        testCallbackState state = {0};
+        const size_t scales[] = {1000, 10000, 100000, 500000};
+        const size_t numScales = sizeof(scales) / sizeof(scales[0]);
+
+        printf("    %-12s  %12s  %12s  %8s\n", "Count", "timerWheel",
+               "multiTimer", "Speedup");
+        printf("    %-12s  %12s  %12s  %8s\n", "-----", "----------",
+               "----------", "-------");
+
+        for (size_t s = 0; s < numScales; s++) {
+            const size_t count = scales[s];
+
+            /* timerWheel */
+            timerWheel *tw = timerWheelNew();
+            PERF_TIMERS_SETUP;
+            for (size_t i = 0; i < count; i++) {
+                timerWheelRegister(tw, 1000000 + (i % 100000), 0,
+                                   testCountingCallback, &state);
+            }
+            PERF_TIMERS_FINISH;
+            double twCycles =
+                (double)(lps.global.tsc.stop - lps.global.tsc.start) / count;
+            timerWheelFree(tw);
+
+            /* multiTimer */
+            multiTimer *mt = multiTimerNew();
+            PERF_TIMERS_SETUP;
+            for (size_t i = 0; i < count; i++) {
+                multiTimerRegister(mt, 1000000 + (i % 100000), 0,
+                                   mtCountingCallback, &state);
+            }
+            PERF_TIMERS_FINISH;
+            double mtCycles =
+                (double)(lps.global.tsc.stop - lps.global.tsc.start) / count;
+            multiTimerFree(mt);
+
+            printf("    %-12zu  %9.1f cy  %9.1f cy  %7.2fx\n", count, twCycles,
+                   mtCycles, mtCycles / twCycles);
+        }
+        printf("\n");
+    }
+
+    TEST("BENCHMARK: unregistration throughput (ID lookup)") {
+        printf("    Measuring unregistration (ID lookup) performance...\n");
+        testCallbackState state = {0};
+        const size_t scales[] = {1000, 10000, 50000};
+        const size_t numScales = sizeof(scales) / sizeof(scales[0]);
+
+        printf("    %-12s  %12s  %12s  %8s\n", "Count", "timerWheel",
+               "multiTimer", "Speedup");
+        printf("    %-12s  %12s  %12s  %8s\n", "-----", "----------",
+               "----------", "-------");
+
+        for (size_t s = 0; s < numScales; s++) {
+            const size_t count = scales[s];
+
+            /* timerWheel - register then unregister */
+            timerWheel *tw = timerWheelNew();
+            for (size_t i = 0; i < count; i++) {
+                timerWheelRegister(tw, 1000000 + i, 0, testCountingCallback,
+                                   &state);
+            }
+
+            PERF_TIMERS_SETUP;
+            for (size_t i = 1; i <= count; i++) {
+                timerWheelUnregister(tw, (timerWheelId)i);
+            }
+            PERF_TIMERS_FINISH;
+            double twCycles =
+                (double)(lps.global.tsc.stop - lps.global.tsc.start) / count;
+            timerWheelFree(tw);
+
+            /* multiTimer - register then unregister */
+            multiTimer *mt = multiTimerNew();
+            for (size_t i = 0; i < count; i++) {
+                multiTimerRegister(mt, 1000000 + i, 0, mtCountingCallback,
+                                   &state);
+            }
+
+            PERF_TIMERS_SETUP;
+            for (size_t i = 1; i <= count; i++) {
+                multiTimerUnregister(mt, (multiTimerId)i);
+            }
+            PERF_TIMERS_FINISH;
+            double mtCycles =
+                (double)(lps.global.tsc.stop - lps.global.tsc.start) / count;
+            multiTimerFree(mt);
+
+            printf("    %-12zu  %9.1f cy  %9.1f cy  %7.2fx\n", count, twCycles,
+                   mtCycles, mtCycles / twCycles);
+        }
+        printf("\n");
+    }
+
+    TEST("BENCHMARK: expiration throughput (batch fire)") {
+        printf("    Measuring batch timer expiration throughput...\n");
+        const size_t scales[] = {1000, 10000, 50000, 100000};
+        const size_t numScales = sizeof(scales) / sizeof(scales[0]);
+
+        printf("    %-12s  %12s  %12s  %8s\n", "Count", "timerWheel",
+               "multiTimer", "Speedup");
+        printf("    %-12s  %12s  %12s  %8s\n", "-----", "----------",
+               "----------", "-------");
+
+        for (size_t s = 0; s < numScales; s++) {
+            const size_t count = scales[s];
+            testCallbackState *states =
+                zcalloc(count, sizeof(testCallbackState));
+
+            /* timerWheel */
+            timerWheel *tw = timerWheelNew();
+            for (size_t i = 0; i < count; i++) {
+                states[i].shouldReschedule = false;
+                timerWheelRegister(tw, 0, 0, testCountingCallback, &states[i]);
+            }
+
+            PERF_TIMERS_SETUP;
+            timerWheelProcessTimerEvents(tw);
+            PERF_TIMERS_FINISH;
+            double twCycles =
+                (double)(lps.global.tsc.stop - lps.global.tsc.start) / count;
+            timerWheelFree(tw);
+
+            /* Reset states */
+            memset(states, 0, count * sizeof(testCallbackState));
+
+            /* multiTimer */
+            multiTimer *mt = multiTimerNew();
+            for (size_t i = 0; i < count; i++) {
+                states[i].shouldReschedule = false;
+                multiTimerRegister(mt, 0, 0, mtCountingCallback, &states[i]);
+            }
+
+            PERF_TIMERS_SETUP;
+            multiTimerProcessTimerEvents(mt);
+            PERF_TIMERS_FINISH;
+            double mtCycles =
+                (double)(lps.global.tsc.stop - lps.global.tsc.start) / count;
+            multiTimerFree(mt);
+
+            zfree(states);
+
+            printf("    %-12zu  %9.1f cy  %9.1f cy  %7.2fx\n", count, twCycles,
+                   mtCycles, mtCycles / twCycles);
+        }
+        printf("\n");
+    }
+
+    TEST("BENCHMARK: nextTimerEvent query latency") {
+        printf("    Measuring next-timer-event query latency...\n");
+        testCallbackState state = {0};
+        const size_t timerCounts[] = {100, 1000, 10000, 100000};
+        const size_t numCounts = sizeof(timerCounts) / sizeof(timerCounts[0]);
+        const size_t queries = 100000;
+
+        printf("    %-12s  %12s  %12s  %8s\n", "Timers", "timerWheel",
+               "multiTimer", "Speedup");
+        printf("    %-12s  %12s  %12s  %8s\n", "------", "----------",
+               "----------", "-------");
+
+        for (size_t c = 0; c < numCounts; c++) {
+            const size_t count = timerCounts[c];
+
+            /* timerWheel */
+            timerWheel *tw = timerWheelNew();
+            for (size_t i = 0; i < count; i++) {
+                timerWheelRegister(tw, 1000000 + (i * 100), 0,
+                                   testCountingCallback, &state);
+            }
+
+            volatile int64_t sink = 0;
+            PERF_TIMERS_SETUP;
+            for (size_t i = 0; i < queries; i++) {
+                sink += timerWheelNextTimerEventStartUs(tw);
+            }
+            PERF_TIMERS_FINISH;
+            double twCycles =
+                (double)(lps.global.tsc.stop - lps.global.tsc.start) / queries;
+            timerWheelFree(tw);
+            (void)sink;
+
+            /* multiTimer */
+            multiTimer *mt = multiTimerNew();
+            for (size_t i = 0; i < count; i++) {
+                multiTimerRegister(mt, 1000000 + (i * 100), 0,
+                                   mtCountingCallback, &state);
+            }
+
+            sink = 0;
+            PERF_TIMERS_SETUP;
+            for (size_t i = 0; i < queries; i++) {
+                sink += multiTimerNextTimerEventStartUs(mt);
+            }
+            PERF_TIMERS_FINISH;
+            double mtCycles =
+                (double)(lps.global.tsc.stop - lps.global.tsc.start) / queries;
+            multiTimerFree(mt);
+            (void)sink;
+
+            printf("    %-12zu  %9.1f cy  %9.1f cy  %7.2fx\n", count, twCycles,
+                   mtCycles, mtCycles / twCycles);
+        }
+        printf("\n");
+    }
+
+    TEST("BENCHMARK: timer delay distribution impact") {
+        printf("    Measuring performance across delay distributions...\n");
+        testCallbackState state = {0};
+        const size_t count = 50000;
+
+        struct {
+            const char *name;
+            uint64_t minUs;
+            uint64_t maxUs;
+        } distributions[] = {
+            {"Uniform short", 1000, 10000},       /* 1-10ms */
+            {"Uniform medium", 100000, 1000000},  /* 100ms-1s */
+            {"Uniform long", 1000000, 60000000},  /* 1s-60s */
+            {"Clustered", 5000, 5100},            /* 5ms ± 50μs */
+            {"Wide spread", 1000, 3600000000ULL}, /* 1ms-1hr */
+        };
+        const size_t numDists =
+            sizeof(distributions) / sizeof(distributions[0]);
+
+        printf("    %-16s  %12s  %12s  %8s\n", "Distribution", "timerWheel",
+               "multiTimer", "Speedup");
+        printf("    %-16s  %12s  %12s  %8s\n", "------------", "----------",
+               "----------", "-------");
+
+        for (size_t d = 0; d < numDists; d++) {
+            uint64_t minUs = distributions[d].minUs;
+            uint64_t range = distributions[d].maxUs - minUs;
+
+            /* timerWheel */
+            timerWheel *tw = timerWheelNew();
+            PERF_TIMERS_SETUP;
+            for (size_t i = 0; i < count; i++) {
+                uint64_t delay = minUs + (i * 7919) % (range + 1);
+                timerWheelRegister(tw, delay, 0, testCountingCallback, &state);
+            }
+            PERF_TIMERS_FINISH;
+            double twCycles =
+                (double)(lps.global.tsc.stop - lps.global.tsc.start) / count;
+            timerWheelFree(tw);
+
+            /* multiTimer */
+            multiTimer *mt = multiTimerNew();
+            PERF_TIMERS_SETUP;
+            for (size_t i = 0; i < count; i++) {
+                uint64_t delay = minUs + (i * 7919) % (range + 1);
+                multiTimerRegister(mt, delay, 0, mtCountingCallback, &state);
+            }
+            PERF_TIMERS_FINISH;
+            double mtCycles =
+                (double)(lps.global.tsc.stop - lps.global.tsc.start) / count;
+            multiTimerFree(mt);
+
+            printf("    %-16s  %9.1f cy  %9.1f cy  %7.2fx\n",
+                   distributions[d].name, twCycles, mtCycles,
+                   mtCycles / twCycles);
+        }
+        printf("\n");
+    }
+
+    TEST("BENCHMARK: register-then-cancel pattern") {
+        printf("    Measuring register-then-immediate-cancel pattern...\n");
+        testCallbackState state = {0};
+        const size_t scales[] = {10000, 50000, 100000};
+        const size_t numScales = sizeof(scales) / sizeof(scales[0]);
+
+        printf("    %-12s  %12s  %12s  %8s\n", "Count", "timerWheel",
+               "multiTimer", "Speedup");
+        printf("    %-12s  %12s  %12s  %8s\n", "-----", "----------",
+               "----------", "-------");
+
+        for (size_t s = 0; s < numScales; s++) {
+            const size_t count = scales[s];
+
+            /* timerWheel - register then immediately cancel */
+            timerWheel *tw = timerWheelNew();
+            PERF_TIMERS_SETUP;
+            for (size_t i = 0; i < count; i++) {
+                timerWheelId id = timerWheelRegister(
+                    tw, 1000000, 0, testCountingCallback, &state);
+                timerWheelUnregister(tw, id);
+            }
+            PERF_TIMERS_FINISH;
+            double twCycles =
+                (double)(lps.global.tsc.stop - lps.global.tsc.start) / count;
+            timerWheelFree(tw);
+
+            /* multiTimer - register then immediately cancel */
+            multiTimer *mt = multiTimerNew();
+            PERF_TIMERS_SETUP;
+            for (size_t i = 0; i < count; i++) {
+                multiTimerId id = multiTimerRegister(
+                    mt, 1000000, 0, mtCountingCallback, &state);
+                multiTimerUnregister(mt, id);
+            }
+            PERF_TIMERS_FINISH;
+            double mtCycles =
+                (double)(lps.global.tsc.stop - lps.global.tsc.start) / count;
+            multiTimerFree(mt);
+
+            printf("    %-12zu  %9.1f cy  %9.1f cy  %7.2fx\n", count, twCycles,
+                   mtCycles, mtCycles / twCycles);
+        }
+        printf("\n");
+    }
+
+    TEST("BENCHMARK: steady-state churn simulation") {
+        printf("    Simulating steady-state timer churn...\n");
+        testCallbackState state = {.callCount = 0, .shouldReschedule = false};
+        const size_t baseTimers = 10000;
+        const size_t iterations = 100000;
+
+        printf("    %zu base timers, %zu churn iterations\n\n", baseTimers,
+               iterations);
+
+        /* timerWheel steady-state */
+        timerWheel *tw = timerWheelNew();
+        for (size_t i = 0; i < baseTimers; i++) {
+            timerWheelRegister(tw, 1000000 + (i * 100), 0, testCountingCallback,
+                               &state);
+        }
+
+        PERF_TIMERS_SETUP;
+        for (size_t i = 0; i < iterations; i++) {
+            /* Register new timer */
+            timerWheelId id = timerWheelRegister(tw, 500000 + (i % 500000), 0,
+                                                 testCountingCallback, &state);
+            /* Cancel ~50% */
+            if (i % 2 == 0) {
+                timerWheelUnregister(tw, id);
+            }
+            /* Periodic query (no time advance - just measure churn overhead) */
+            if (i % 100 == 0) {
+                (void)timerWheelNextTimerEventStartUs(tw);
+            }
+        }
+        PERF_TIMERS_FINISH;
+        double twCycles =
+            (double)(lps.global.tsc.stop - lps.global.tsc.start) / iterations;
+        double twUsPerIter =
+            (double)(lps.global.us.stop - lps.global.us.start) / iterations;
+        timerWheelFree(tw);
+
+        /* multiTimer steady-state */
+        multiTimer *mt = multiTimerNew();
+        for (size_t i = 0; i < baseTimers; i++) {
+            multiTimerRegister(mt, 1000000 + (i * 100), 0, mtCountingCallback,
+                               &state);
+        }
+
+        PERF_TIMERS_SETUP;
+        for (size_t i = 0; i < iterations; i++) {
+            /* Register new timer */
+            multiTimerId id = multiTimerRegister(mt, 500000 + (i % 500000), 0,
+                                                 mtCountingCallback, &state);
+            /* Cancel ~50% */
+            if (i % 2 == 0) {
+                multiTimerUnregister(mt, id);
+            }
+            /* Periodic query (no time advance - just measure churn overhead) */
+            if (i % 100 == 0) {
+                (void)multiTimerNextTimerEventStartUs(mt);
+            }
+        }
+        PERF_TIMERS_FINISH;
+        double mtCycles =
+            (double)(lps.global.tsc.stop - lps.global.tsc.start) / iterations;
+        double mtUsPerIter =
+            (double)(lps.global.us.stop - lps.global.us.start) / iterations;
+        multiTimerFree(mt);
+
+        printf("    timerWheel:  %.1f cycles/iter (%.3f us/iter)\n", twCycles,
+               twUsPerIter);
+        printf("    multiTimer:  %.1f cycles/iter (%.3f us/iter)\n", mtCycles,
+               mtUsPerIter);
+        printf("    Speedup:     %.2fx\n\n", mtCycles / twCycles);
+    }
+
+    TEST("BENCHMARK: timerWheel memory at scale") {
+        printf("    timerWheel memory usage at scale...\n");
+        testCallbackState state = {0};
+        const size_t scales[] = {10000, 100000, 500000, 1000000};
+        const size_t numScales = sizeof(scales) / sizeof(scales[0]);
+
+        printf("    %-12s  %14s  %12s\n", "Timers", "Memory", "Bytes/Timer");
+        printf("    %-12s  %14s  %12s\n", "------", "------", "-----------");
+
+        for (size_t s = 0; s < numScales; s++) {
+            const size_t count = scales[s];
+
+            timerWheel *tw = timerWheelNew();
+            for (size_t i = 0; i < count; i++) {
+                timerWheelRegister(tw, i * 1000, 0, testCountingCallback,
+                                   &state);
+            }
+            timerWheelStats twStats;
+            timerWheelGetStats(tw, &twStats);
+            timerWheelFree(tw);
+
+            printf("    %-12zu  %10zu B    %10.1f\n", count,
+                   twStats.memoryBytes, (double)twStats.memoryBytes / count);
+        }
+        printf("\n");
+    }
+
+    TEST("BENCHMARK: summary") {
+        printf("=== BENCHMARK SUMMARY ===\n");
+        printf("timerWheel advantages:\n");
+        printf("  - O(1) registration (amortized)\n");
+        printf("  - O(1) next-timer query\n");
+        printf("  - Efficient batch expiration\n");
+        printf("  - Better cache locality for dense timers\n");
+        printf("\nmultiTimer advantages:\n");
+        printf("  - Lower overhead under debug/sanitizers\n");
+        printf("  - More predictable per-operation cost\n");
+        printf("\nRecommendation: Use timerWheel for production workloads\n");
+        printf("                with -O2/-O3 optimization.\n\n");
     }
 
     TEST_FINAL_RESULT;
