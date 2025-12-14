@@ -46,10 +46,3 @@ endif()
 
 # Add to parent target
 target_sources(datakit PRIVATE ${SEGMENT_SOURCES})
-
-# Print summary
-list(LENGTH SEGMENT_SOURCES SEGMENT_SOURCE_COUNT)
-list(LENGTH SEGMENT_HEADERS SEGMENT_HEADER_COUNT)
-message(STATUS "Segment: Generated ${SEGMENT_SOURCE_COUNT} source files from 3 templates")
-message(STATUS "Segment: ${SEGMENT_HEADER_COUNT} type-specific headers")
-message(STATUS "Segment: 2-tier architecture (Small → Full)")
