@@ -42,6 +42,8 @@ bool databoxGetBytes(databox *box, uint8_t **buf, size_t *len) {
         *len = 8;
         break;
     case DATABOX_FLOAT_32:
+        // cppcheck-suppress invalidPointerCast - intentional type-punning to
+        // get byte representation
         *buf = (uint8_t *)&box->data.f32;
         *len = 4;
         break;

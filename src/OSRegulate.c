@@ -94,7 +94,7 @@ void OSRegulateDaemonizeThenExitNoWait(void) {
     /* child process continues */
 }
 
-bool OSRegulateWritePidToFile(char *path) {
+bool OSRegulateWritePidToFile(const char *path) {
     FILE *fp = fopen(path, "w");
     if (fp) {
         /* Lock the pid so we aren't running twice */
@@ -160,6 +160,8 @@ size_t OSRegulateCPUCountGet(void) {
     cpuCount = sysconf(_SC_NPROCESSORS_ONLN);
 #endif
 
+    // cppcheck-suppress knownConditionTrueFalse - sysconf can return -1 on
+    // error in _SC_NPROCESSORS_ONLN path
     if (cpuCount == -1) {
         return 1;
     }

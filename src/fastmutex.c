@@ -24,7 +24,11 @@ static void fast_waiter_init(fastWaiter *w) {
 }
 
 static void fast_waiter_destroy(fastWaiter *w) {
+    // cppcheck-suppress intToPointerCast - intentional poison value to detect
+    // use-after-destroy
     w->next = (void *)1;
+    // cppcheck-suppress intToPointerCast - intentional poison value to detect
+    // use-after-destroy
     w->tail = (void *)1;
     pthread_mutex_destroy(&w->lock);
     pthread_cond_destroy(&w->cond);

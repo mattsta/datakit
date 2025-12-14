@@ -820,21 +820,21 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
             ERRR("GetByRank(0) failed");
         }
         if (s.data.i != 50) {
-            ERR("Rank 0 should have score 50, got %ld", s.data.i);
+            ERR("Rank 0 should have score 50, got %" PRId64, s.data.i);
         }
 
         if (!multiOrderedSetSmallGetByRank(mos, 1, &m, &s)) {
             ERRR("GetByRank(1) failed");
         }
         if (s.data.i != 75) {
-            ERR("Rank 1 should have score 75, got %ld", s.data.i);
+            ERR("Rank 1 should have score 75, got %" PRId64, s.data.i);
         }
 
         if (!multiOrderedSetSmallGetByRank(mos, 2, &m, &s)) {
             ERRR("GetByRank(2) failed");
         }
         if (s.data.i != 100) {
-            ERR("Rank 2 should have score 100, got %ld", s.data.i);
+            ERR("Rank 2 should have score 100, got %" PRId64, s.data.i);
         }
 
         /* Test GetScore */

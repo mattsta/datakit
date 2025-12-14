@@ -36,16 +36,16 @@ bool memboundShutdownSafe(membound *m);
 /* === Allocation Functions === */
 
 /* Allocate memory from the pool. Returns NULL if exhausted. */
-void *memboundAlloc(membound *m, size_t size);
+void *memboundAlloc(membound *m, size_t nBytes);
 
 /* Allocate zero-initialized memory (like calloc). */
 void *memboundCalloc(membound *m, size_t count, size_t size);
 
 /* Resize an allocation. Returns NULL on failure (original preserved). */
-void *memboundRealloc(membound *m, void *p, size_t newlen);
+void *memboundRealloc(membound *m, void *pPrior, size_t nBytes);
 
 /* Free memory back to the pool. NULL pointers are safely ignored. */
-void memboundFree(membound *m, void *p);
+void memboundFree(membound *m, void *pPrior);
 
 /* === Pool Management === */
 

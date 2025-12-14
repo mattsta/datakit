@@ -13,13 +13,13 @@ hyperloglog *hyperloglogNewDense(void);
 hyperloglog *hyperloglogCopy(const hyperloglog *src);
 void hyperloglogFree(hyperloglog *h);
 bool hyperloglogDetect(hyperloglog *h);
-uint64_t hyperloglogCount(hyperloglog *h, bool *invalid);
-int hyperloglogAdd(hyperloglog **hh, const void *data, size_t size);
-bool hyperloglogMerge(hyperloglog *target, const hyperloglog *src);
+uint64_t hyperloglogCount(hyperloglog *hdr, bool *invalid);
+int hyperloglogAdd(hyperloglog **inHll, const void *data, size_t size);
+bool hyperloglogMerge(hyperloglog *target, const hyperloglog *hdr);
 void hyperloglogInvalidateCache(hyperloglog *h);
 
 /* User-friendly API */
-int pfadd(hyperloglog **inHyperloglog, ...);
+int pfadd(hyperloglog **hh, ...);
 uint64_t pfcount(hyperloglog *h, ...);
 uint64_t pfcountSingle(hyperloglog *h);
 hyperloglog *pfmerge(hyperloglog *h, ...);

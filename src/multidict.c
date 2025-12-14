@@ -2708,6 +2708,8 @@ DK_STATIC void *mmSlotRemove(multidictClass *qdc, multidictSlot **slot,
 
     mmSlotWrapper *wrapper = (mmSlotWrapper *)*slot;
     bool deleted = multimapDelete(&wrapper->m, keybox);
+    // cppcheck-suppress intToPointerCast - non-NULL sentinel to indicate
+    // deletion occurred
     return deleted ? (void *)1 : NULL;
 }
 
@@ -5606,11 +5608,14 @@ int multidictTest(int argc, char *argv[]) {
     printf("Test 20.1: EnableLRU/HasLRU/DisableLRU basics...\n");
     {
         assert(!multidictHasLRU(d)); /* Initially disabled */
-        assert(multidictEnableLRU(d, 7));
+        bool enabled1 = multidictEnableLRU(d, 7);
+        assert(enabled1);
         assert(multidictHasLRU(d));
         multidictDisableLRU(d);
         assert(!multidictHasLRU(d));
-        assert(multidictEnableLRU(d, 4)); /* Re-enable with different levels */
+        bool enabled2 =
+            multidictEnableLRU(d, 4); /* Re-enable with different levels */
+        assert(enabled2);
         assert(multidictHasLRU(d));
     }
 

@@ -420,7 +420,8 @@ typedef struct databoxStr {
         if ((len) <= sizeof((box)->data.bytes.embed)) {                        \
             /* No point in storing an offset if we can embed directly. */      \
             (box)->type = DATABOX_BYTES_EMBED;                                 \
-            memcpy((box)->data.bytes.embed, (ptr) + (offset), len);            \
+            memcpy((box)->data.bytes.embed, (const uint8_t *)(ptr) + (offset), \
+                   len);                                                       \
         } else {                                                               \
             (box)->type = DATABOX_BYTES_OFFSET;                                \
             (box)->data.bytes.offset = (offset);                               \

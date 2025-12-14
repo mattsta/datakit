@@ -76,20 +76,20 @@ typedef struct list {
 
 /* Prototypes */
 list *listCreate(void);
-void listRelease(list *list);
-list *listAddNodeHead(list *list, void *value);
-list *listAddNodeTail(list *list, void *value);
+void listRelease(list *l);
+list *listAddNodeHead(list *l, void *value);
+list *listAddNodeTail(list *l, void *value);
 list *listInsertNode(list *list, listNode *oldNode, void *value, int after);
-void listDelNode(list *list, listNode *node);
+void listDelNode(list *l, listNode *node);
 listIter *listGetIterator(list *list, bool headToTail);
 listNode *listNext(listIter *iter);
 void listReleaseIterator(listIter *iter);
 list *listDup(list *orig);
-listNode *listSearchKey(list *list, void *key);
-listNode *listIndex(list *list, int64_t index);
-void listRewind(list *list, listIter *li);
-void listRewindTail(list *list, listIter *li);
-void listRotate(list *list);
+listNode *listSearchKey(list *l, void *key);
+listNode *listIndex(list *l, int64_t index);
+void listRewind(list *l, listIter *li);
+void listRewindTail(list *l, listIter *li);
+void listRotate(list *l);
 
 #ifdef DATAKIT_TEST
 int listTest(int argc, char *argv[]);

@@ -435,11 +435,13 @@ int stringPoolTest(int argc, char *argv[]) {
 
         /* Lookup by ID */
         databox result;
-        assert(stringPoolLookup(pool, id1, &result) == true);
+        bool found1 = stringPoolLookup(pool, id1, &result);
+        assert(found1 == true);
         assert(result.len == 5);
         assert(memcmp(result.data.bytes.start, "hello", 5) == 0);
 
-        assert(stringPoolLookup(pool, id2, &result) == true);
+        bool found2 = stringPoolLookup(pool, id2, &result);
+        assert(found2 == true);
         assert(result.len == 5);
         assert(memcmp(result.data.bytes.start, "world", 5) == 0);
 

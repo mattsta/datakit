@@ -539,6 +539,10 @@ static void **create_pointer_chain(size_t size_bytes) {
 
     /* Create indices and shuffle (Fisher-Yates) */
     size_t *indices = malloc(count * sizeof(size_t));
+    if (!indices) {
+        free(chain); /* Free previously allocated chain */
+        return NULL; /* Memory allocation failed */
+    }
     for (size_t i = 0; i < count; i++) {
         indices[i] = i;
     }

@@ -386,7 +386,7 @@ typedef uint_fast8_t flexData;
 
 DK_INLINE_ALWAYS size_t flexDataSizeForFixedWidthEncodingWithInnerEntry(
     const flexEncoding encoding, const flexEntry *innerFe,
-    varintWidth *dataSize, const bool isForward);
+    varintWidth *encodingSize, const bool isForward);
 
 DK_INLINE_ALWAYS void abstractGetLength(const flexEntry *restrict fe,
                                         varintWidth *restrict lensize,
@@ -3900,10 +3900,11 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMulti(
         const size_t bigBufferLen = elementsPerEntry * sizeof(*bigBuffer);
         void *block =
             zmalloc(copyLen + contentsLen + contentLen + bigBufferLen);
-        copyBox = block;
-        contents = block + copyLen;
-        content = block + copyLen + contentsLen;
-        bigBuffer = block + copyLen + contentLen;
+        uint8_t *blockBytes = (uint8_t *)block;
+        copyBox = (databox *)blockBytes;
+        contents = (flexEntry **)(blockBytes + copyLen);
+        content = (databox *)(blockBytes + copyLen + contentsLen);
+        bigBuffer = (uint8_t *)(blockBytes + copyLen + contentLen);
 #endif
     }
 
@@ -5689,7 +5690,8 @@ int32_t flexTest(int32_t argc, char **argv) {
             assert(databoxEqual(&keybox, &got));
 
             databox got2 = {{0}};
-            assert(flexGetNextByType(f, &found, &got2));
+            bool getNext = flexGetNextByType(f, &found, &got2);
+            assert(getNext);
             assert(databoxEqual(&valbox, &got2));
 
             assert(flexCount(f) <= (2 * 2));
@@ -5722,7 +5724,8 @@ int32_t flexTest(int32_t argc, char **argv) {
             assert(databoxEqual(&keybox, &got));
 
             databox got2 = {{0}};
-            assert(flexGetNextByType(f, &found, &got2));
+            bool getNext = flexGetNextByType(f, &found, &got2);
+            assert(getNext);
             assert(databoxEqual(&valbox, &got2));
         }
 
@@ -5753,7 +5756,8 @@ int32_t flexTest(int32_t argc, char **argv) {
             assert(databoxEqual(&keybox, &got));
 
             databox got2 = {{0}};
-            assert(flexGetNextByType(f, &found, &got2));
+            bool getNext = flexGetNextByType(f, &found, &got2);
+            assert(getNext);
             assert(databoxEqual(&valbox, &got2));
         }
 
@@ -5777,7 +5781,8 @@ int32_t flexTest(int32_t argc, char **argv) {
             assert(databoxEqual(&keybox, &got));
 
             databox got2 = {{0}};
-            assert(flexGetNextByType(f, &found, &got2));
+            bool getNext = flexGetNextByType(f, &found, &got2);
+            assert(getNext);
             assert(databoxEqual(&valbox, &got2));
         }
 
@@ -5796,7 +5801,8 @@ int32_t flexTest(int32_t argc, char **argv) {
             assert(databoxEqual(&keybox, &got));
 
             databox got2 = {{0}};
-            assert(flexGetNextByType(f, &found, &got2));
+            bool getNext = flexGetNextByType(f, &found, &got2);
+            assert(getNext);
             assert(databoxEqual(&valbox, &got2));
         }
 
@@ -5815,7 +5821,8 @@ int32_t flexTest(int32_t argc, char **argv) {
             assert(databoxEqual(&keybox, &got));
 
             databox got2 = {{0}};
-            assert(flexGetNextByType(f, &found, &got2));
+            bool getNext = flexGetNextByType(f, &found, &got2);
+            assert(getNext);
             assert(databoxEqual(&valbox, &got2));
         }
 
@@ -5990,7 +5997,8 @@ int32_t flexTest(int32_t argc, char **argv) {
             assert(databoxEqual(&key, &got));
 
             databox got2 = {{0}};
-            assert(flexGetNextByType(f, &found, &got2));
+            bool getNext = flexGetNextByType(f, &found, &got2);
+            assert(getNext);
             assert(databoxEqual(&val, &got2));
         }
 
@@ -6017,7 +6025,8 @@ int32_t flexTest(int32_t argc, char **argv) {
             assert(databoxEqual(&key, &got));
 
             databox got2 = {{0}};
-            assert(flexGetNextByType(f, &found, &got2));
+            bool getNext = flexGetNextByType(f, &found, &got2);
+            assert(getNext);
             assert(databoxEqual(&val, &got2));
         }
 
@@ -6045,7 +6054,8 @@ int32_t flexTest(int32_t argc, char **argv) {
             assert(databoxEqual(&key, &got));
 
             databox got2 = {{0}};
-            assert(flexGetNextByType(f, &found, &got2));
+            bool getNext = flexGetNextByType(f, &found, &got2);
+            assert(getNext);
             assert(databoxEqual(&val, &got2));
         }
 
@@ -7220,8 +7230,8 @@ int32_t flexTest(int32_t argc, char **argv) {
             } else if (box.type == DATABOX_UNSIGNED_64) {
                 retrieved = (int64_t)box.data.u;
             } else {
-                printf("\nFAIL: unexpected type %d for index %zu\n", box.type,
-                       i);
+                printf("\nFAIL: unexpected type %d for index %zu\n",
+                       (int)box.type, i);
                 assert(NULL);
             }
             if (retrieved != testVals[i]) {
