@@ -1129,7 +1129,7 @@ int databoxLinearTest(int argc, char *argv[]) {
                        !(inputs[i].type == DATABOX_DOUBLE_64 &&
                          b.type == DATABOX_FLOAT_32)) {
                 ERR("DecodeParts type mismatch for input[%zu]: %d vs %d", i,
-                    inputs[i].type, b.type);
+                    (int)inputs[i].type, (int)b.type);
             }
         }
     }

@@ -20,7 +20,7 @@ typedef enum OSRegulateDaemonizeStatus {
 OSRegulateDaemonizeStatus OSRegulateDaemonize(const char **errMsg);
 void OSRegulateDaemonizeThenExit(OSRegulateDaemonizeParentExitCallback *cb,
                                  void *userData);
-bool OSRegulateWritePidToFile(char *path);
+bool OSRegulateWritePidToFile(const char *path);
 void OSRegulateDaemonizeThenExitNoWait(void);
 void OSRegulateExitClean(void);
 

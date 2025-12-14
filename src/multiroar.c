@@ -7770,7 +7770,7 @@ int multiroarTest(int argc, char *argv[]) {
         multiroarIterator iter;
         multiroarIteratorInit(r, &iter);
 
-        uint64_t expected[] = {10, 20, 30, 40, 50};
+        const uint64_t expected[] = {10, 20, 30, 40, 50};
         for (int i = 0; i < 5; i++) {
             uint64_t pos;
             if (!multiroarIteratorNext(&iter, &pos) || pos != expected[i]) {
@@ -7825,7 +7825,7 @@ int multiroarTest(int argc, char *argv[]) {
         multiroarIterator iter;
         multiroarIteratorInit(r, &iter);
 
-        uint64_t expected[] = {100, 8200, 16400};
+        const uint64_t expected[] = {100, 8200, 16400};
         for (int i = 0; i < 3; i++) {
             uint64_t pos;
             if (!multiroarIteratorNext(&iter, &pos) || pos != expected[i]) {

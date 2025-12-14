@@ -34,22 +34,23 @@ void flexBulkAppendFlex(flex **ff, const flex *zzb);
 flex *flexBulkMergeFlex(const flex *const *const fs, const size_t count);
 
 /* Insert to head or tail of flex */
-void flexPushBytes(flex **ff, const void *s, size_t len, flexEndpoint where);
+void flexPushBytes(flex **ff, const void *data, size_t len, flexEndpoint where);
 void flexPushSigned(flex **ff, int64_t i, flexEndpoint where);
 void flexPushUnsigned(flex **ff, uint64_t u, flexEndpoint where);
-void flexPushFloat16(flex **ff, float f, flexEndpoint where);
+void flexPushFloat16(flex **ff, float value, flexEndpoint where);
 void flexPushFloatB16(flex **ff, float f, flexEndpoint where);
-void flexPushFloat(flex **ff, float f, flexEndpoint where);
-void flexPushDouble(flex **ff, double d, flexEndpoint where);
+void flexPushFloat(flex **ff, float value, flexEndpoint where);
+void flexPushDouble(flex **ff, double value, flexEndpoint where);
 void flexPushByType(flex **ff, const databox *box, flexEndpoint where);
 
 /* Insert at existing position 'fe' */
-void flexInsertBytes(flex **ff, flexEntry *fe, const void *s, const size_t len);
+void flexInsertBytes(flex **ff, flexEntry *fe, const void *data,
+                     const size_t len);
 void flexInsertSigned(flex **ff, flexEntry *fe, int64_t i);
 void flexInsertUnsigned(flex **ff, flexEntry *fe, uint64_t u);
 void flexInsertHalfFloat(flex **ff, flexEntry *fe, float f);
-void flexInsertFloat(flex **ff, flexEntry *fe, float f);
-void flexInsertDouble(flex **ff, flexEntry *fe, double d);
+void flexInsertFloat(flex **ff, flexEntry *fe, float value);
+void flexInsertDouble(flex **ff, flexEntry *fe, double dvalue);
 void flexInsertByType(flex **ff, flexEntry *fe, const databox *box);
 bool flexInsertByTypeSortedWithMiddle(flex **ff, const databox *box,
                                       flexEntry **middleEntry);
@@ -58,7 +59,7 @@ flexEntry *flexFindByTypeSortedWithMiddleGetEntry(
     const databox *compareAgainst, const flexEntry *middleFE);
 bool flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
     flex **ff, uint_fast32_t elementsPerEntry, const databox *box[],
-    flexEntry **middleEntry, bool replace);
+    flexEntry **middleEntry, bool compareUsingKeyElementOnly);
 bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectLongKeysBecomePointers(
     flex **ff, const uint_fast32_t elementsPerEntry, const databox **box,
     flexEntry **middleEntry, bool compareUsingKeyElementOnly,
@@ -114,7 +115,7 @@ flexEntry DK_FN_PURE *flexTailWithElements(const flex *const f,
     ((endpoint) == FLEX_ENDPOINT_HEAD ? flexHead(f) : flexIndex(f, endpoint))
 
 /* Retrieve data */
-void flexGetByType(const flexEntry *fe, databox *outbox);
+void flexGetByType(const flexEntry *fe, databox *box);
 void flexGetByTypeWithReference(const flexEntry *const fe, databox *box,
                                 const struct multimapAtom *referenceContainer);
 void flexGetByTypeCopy(const flexEntry *const fe, databox *box);
@@ -127,7 +128,7 @@ bool flexGetUnsigned(flexEntry *fe, uint64_t *value);
 /* Replace */
 void flexReplaceByType(flex **ff, flexEntry *fe, const databox *box);
 void flexReplaceBytes(flex **ff, flexEntry *fe, const void *s,
-                      const size_t slen);
+                      const size_t len);
 bool flexReplaceSigned(flex **ff, flexEntry *fe, int64_t value);
 bool flexReplaceUnsigned(flex **ff, flexEntry *fe, uint64_t value);
 bool flexIncrbySigned(flex **ff, flexEntry *fe, int64_t incrby,
@@ -138,22 +139,22 @@ bool flexIncrbyUnsigned(flex **ff, flexEntry *fe, int64_t incrby,
 /* ADD automatic float vs. double detection */
 
 /* Compares */
-bool flexCompareBytes(flex *fe, const void *s, size_t slen);
-bool flexCompareString(flexEntry *fe, const void *sstr, size_t slen);
-bool flexCompareUnsigned(flexEntry *fe, uint64_t sval);
-bool flexCompareSigned(flexEntry *fe, int64_t sval);
+bool flexCompareBytes(flex *fe, const void *data, size_t len);
+bool flexCompareString(flexEntry *fe, const void *str, size_t len);
+bool flexCompareUnsigned(flexEntry *fe, uint64_t val);
+bool flexCompareSigned(flexEntry *fe, int64_t val);
 
 /* Finding (head to tail) */
 flexEntry *flexFind(flex *f, const void *vstr, uint32_t vlen, uint32_t skip);
-flexEntry *flexFindSigned(const flex *f, flexEntry *fe, int64_t sval,
+flexEntry *flexFindSigned(const flex *f, flexEntry *fe, int64_t val,
                           uint32_t skip);
-flexEntry *flexFindUnsigned(const flex *f, flexEntry *fe, uint64_t sval,
+flexEntry *flexFindUnsigned(const flex *f, flexEntry *fe, uint64_t val,
                             uint32_t skip);
-flexEntry *flexFindString(const flex *f, flexEntry *fe, const void *sval,
-                          const size_t slen, uint32_t skip);
+flexEntry *flexFindString(const flex *f, flexEntry *fe, const void *val,
+                          const size_t len, uint32_t skip);
 flexEntry *flexFindByType(flex *f, flexEntry *fe, const databox *box,
                           uint32_t skip);
-flexEntry *flexFindByTypeSorted(const flex *f, uint_fast32_t nextElementOffset,
+flexEntry *flexFindByTypeSorted(const flex *f, uint_fast32_t elementsPerEntry,
                                 const databox *compareAgainst);
 flexEntry *flexFindByTypeSortedFullWidth(const flex *f,
                                          uint_fast32_t elementsPerEntry,
@@ -161,23 +162,23 @@ flexEntry *flexFindByTypeSortedFullWidth(const flex *f,
 flexEntry *flexGetByTypeSortedWithMiddle(const flex *f,
                                          uint_fast32_t elementsPerEntry,
                                          const databox *compareAgainst,
-                                         const flexEntry *middleP);
+                                         const flexEntry *middleFE);
 flexEntry *flexFindByTypeSortedWithMiddle(const flex *f,
                                           uint_fast32_t elementsPerEntry,
                                           const databox *compareAgainst,
-                                          const flexEntry *middleP);
+                                          const flexEntry *middleFE);
 flexEntry *flexFindByTypeSortedWithMiddleFullWidth(
     const flex *f, uint_fast32_t elementsPerEntry,
-    const databox **compareAgainst, const flexEntry *middleP);
+    const databox **compareAgainst, const flexEntry *middleFE);
 flexEntry *flexFindByTypeHead(flex *f, const databox *box, uint32_t skip);
 
 /* Finding (tail to head) */
-flexEntry *flexFindSignedReverse(const flex *f, flexEntry *fe, int64_t sval,
+flexEntry *flexFindSignedReverse(const flex *f, flexEntry *fe, int64_t val,
                                  uint32_t skip);
-flexEntry *flexFindUnsignedReverse(const flex *f, flexEntry *fe, uint64_t sval,
+flexEntry *flexFindUnsignedReverse(const flex *f, flexEntry *fe, uint64_t val,
                                    uint32_t skip);
-flexEntry *flexFindStringReverse(const flex *f, flexEntry *fe, const void *sval,
-                                 const size_t slen, uint32_t skip);
+flexEntry *flexFindStringReverse(const flex *f, flexEntry *fe, const void *val,
+                                 const size_t len, uint32_t skip);
 flexEntry *flexFindByTypeReverse(flex *f, flexEntry *fe, const databox *box,
                                  uint32_t skip);
 
@@ -196,7 +197,7 @@ void flexDeleteNoUpdateEntry(flex **ff, flexEntry *fe);
 void flexDeleteDrain(flex **ff, flexEntry **fe);
 void flexDeleteCount(flex **ff, flexEntry **fe, uint32_t count);
 void flexDeleteOffsetCount(flex **ff, int32_t offset, uint32_t count);
-void flexDeleteRange(flex **ff, int32_t index, uint32_t num);
+void flexDeleteRange(flex **ff, int32_t index, uint32_t count);
 void flexDeleteUpToInclusive(flex **ff, flexEntry *fe);
 void flexDeleteUpToInclusivePlusN(flex **ff, flexEntry *fe,
                                   const int32_t nMore);

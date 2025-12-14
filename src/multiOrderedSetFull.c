@@ -317,9 +317,9 @@ multiOrderedSetFull *multiOrderedSetFullNew(void) {
     m->memberIndex = multidictNew(&multidictTypeExactKey, m->mdClass, 0);
 
     /* Create initial sub-map */
-    m->scoreMap = multiarrayNativeNew(sizeof(flex *));
-    m->middle = multiarrayNativeNew(sizeof(uint32_t));
-    m->rangeBox = multiarrayNativeNew(sizeof(databox));
+    m->scoreMap = multiarrayNativeNew(flex *);
+    m->middle = multiarrayNativeNew(uint32_t);
+    m->rangeBox = multiarrayNativeNew(databox);
 
     flex *initialMap = flexNew();
     uint32_t initialMiddle = FLEX_EMPTY_SIZE;
@@ -415,9 +415,9 @@ multiOrderedSetFull *multiOrderedSetFullCopy(const multiOrderedSetFull *m) {
     }
     multidictIteratorRelease(&iter);
 
-    copy->scoreMap = multiarrayNativeNew(sizeof(flex *));
-    copy->middle = multiarrayNativeNew(sizeof(uint32_t));
-    copy->rangeBox = multiarrayNativeNew(sizeof(databox));
+    copy->scoreMap = multiarrayNativeNew(flex *);
+    copy->middle = multiarrayNativeNew(uint32_t);
+    copy->rangeBox = multiarrayNativeNew(databox);
 
     uint32_t copyCount = 0;
     for (uint32_t i = 0; i < m->mapCount; i++) {
@@ -600,9 +600,9 @@ void multiOrderedSetFullReset(multiOrderedSetFull *m) {
     multiarrayNativeFree(m->middle);
     multiarrayNativeFree(m->rangeBox);
 
-    m->scoreMap = multiarrayNativeNew(sizeof(flex *));
-    m->middle = multiarrayNativeNew(sizeof(uint32_t));
-    m->rangeBox = multiarrayNativeNew(sizeof(databox));
+    m->scoreMap = multiarrayNativeNew(flex *);
+    m->middle = multiarrayNativeNew(uint32_t);
+    m->rangeBox = multiarrayNativeNew(databox);
 
     flex *initialMap = flexNew();
     uint32_t initialMiddle = FLEX_EMPTY_SIZE;

@@ -11,7 +11,7 @@ void bigmathInit(bigmath *b);
 void bigmathInitUnsigned(bigmath *b, uint64_t value);
 void bigmathInitSigned(bigmath *b, int64_t value);
 bool bigmathInitFromString(bigmath *b, const void *str);
-void bigmathInitCopy(bigmath *a, bigmath *b);
+void bigmathInitCopy(bigmath *dst, bigmath *src);
 void bigmathFree(bigmath *b);
 void bigmathRepr(bigmath *b);
 

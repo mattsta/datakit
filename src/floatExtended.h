@@ -337,9 +337,12 @@ static inline int dk_compare_uint64_double(uint64_t u, double d) {
     }
 
     /* At this point:
-     * - d is in range [0, 2^64)
+     * - d is in range [0, 2^64) - guaranteed by check at line 321
      * - u does not fit exactly in double
-     * We can safely truncate d to uint64_t */
+     * We can safely truncate d to uint64_t
+     * cppcheck doesn't track the range check, but the cast is safe */
+    // cppcheck-suppress floatConversionOverflow - d < 2^64 guaranteed by early
+    // return above
     const uint64_t truncated = (uint64_t)d;
 
     if (u < truncated) {

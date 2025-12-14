@@ -404,7 +404,7 @@ typedef enum hyperloglogEncoding {
  * 'p' is an array of unsigned bytes. */
 #define HLL_DENSE_GET_REGISTER(target, p, regnum)                              \
     do {                                                                       \
-        uint8_t *_p = (uint8_t *)p;                                            \
+        const uint8_t *_p = (const uint8_t *)p;                                \
         uint64_t _byte = regnum * HLL_BITS / 8;                                \
         uint64_t _fb = regnum * HLL_BITS & 7;                                  \
         uint64_t _fb8 = 8 - _fb;                                               \
@@ -542,25 +542,23 @@ DK_STATIC void hyperloglogDenseRegisterHistogram(uint8_t *registers,
      * we take a faster path with unrolled loops. */
     if (HLL_REGISTERS == 16384 && HLL_BITS == 6) {
         uint8_t *r = registers;
-        uint64_t r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13,
-            r14, r15;
         for (uint_fast32_t j = 0; j < 1024; j++) {
-            r0 = r[0] & 63;
-            r1 = (r[0] >> 6 | r[1] << 2) & 63;
-            r2 = (r[1] >> 4 | r[2] << 4) & 63;
-            r3 = (r[2] >> 2) & 63;
-            r4 = r[3] & 63;
-            r5 = (r[3] >> 6 | r[4] << 2) & 63;
-            r6 = (r[4] >> 4 | r[5] << 4) & 63;
-            r7 = (r[5] >> 2) & 63;
-            r8 = r[6] & 63;
-            r9 = (r[6] >> 6 | r[7] << 2) & 63;
-            r10 = (r[7] >> 4 | r[8] << 4) & 63;
-            r11 = (r[8] >> 2) & 63;
-            r12 = r[9] & 63;
-            r13 = (r[9] >> 6 | r[10] << 2) & 63;
-            r14 = (r[10] >> 4 | r[11] << 4) & 63;
-            r15 = (r[11] >> 2) & 63;
+            uint64_t r0 = r[0] & 63;
+            uint64_t r1 = (r[0] >> 6 | r[1] << 2) & 63;
+            uint64_t r2 = (r[1] >> 4 | r[2] << 4) & 63;
+            uint64_t r3 = (r[2] >> 2) & 63;
+            uint64_t r4 = r[3] & 63;
+            uint64_t r5 = (r[3] >> 6 | r[4] << 2) & 63;
+            uint64_t r6 = (r[4] >> 4 | r[5] << 4) & 63;
+            uint64_t r7 = (r[5] >> 2) & 63;
+            uint64_t r8 = r[6] & 63;
+            uint64_t r9 = (r[6] >> 6 | r[7] << 2) & 63;
+            uint64_t r10 = (r[7] >> 4 | r[8] << 4) & 63;
+            uint64_t r11 = (r[8] >> 2) & 63;
+            uint64_t r12 = r[9] & 63;
+            uint64_t r13 = (r[9] >> 6 | r[10] << 2) & 63;
+            uint64_t r14 = (r[10] >> 4 | r[11] << 4) & 63;
+            uint64_t r15 = (r[11] >> 2) & 63;
 
             reghisto[r0]++;
             reghisto[r1]++;
@@ -609,7 +607,7 @@ DK_STATIC bool hyperloglogSparseToDense(hyperloglog **inHll) {
     int32_t runlen;
     int32_t regval;
     uint8_t *p = (uint8_t *)sparse;
-    uint8_t *end = p + mdsclen(sparse);
+    const uint8_t *end = p + mdsclen(sparse);
 
     /* If the representation is already the right one return ASAP. */
     hdr = (hyperloglogHeader *)sparse;
@@ -1813,7 +1811,7 @@ cleanup:
         uint64_t count2 = pfcountSingle(h2);
 
         /* Merge h2 into a new HLL that also has h1's data */
-        hyperloglog *merged = pfmerge(h1, h2, NULL);
+        hyperloglog *merged = pfmerge(h1, h2, (hyperloglog *)NULL);
         uint64_t countMerged = pfcountSingle(merged);
 
         /* Merged count should be approximately count1 + count2 */
@@ -1858,9 +1856,11 @@ cleanup:
         uint64_t startTime = timeUtilMonotonicNs();
 
         for (int iter = 0; iter < mergeIterations; iter++) {
-            hyperloglog *result = pfmerge(hlls[0], hlls[1], NULL);
+            hyperloglog *result =
+                pfmerge(hlls[0], hlls[1], (hyperloglog *)NULL);
             for (int i = 2; i < numHlls; i++) {
-                hyperloglog *newResult = pfmerge(result, hlls[i], NULL);
+                hyperloglog *newResult =
+                    pfmerge(result, hlls[i], (hyperloglog *)NULL);
                 hyperloglogFree(result);
                 result = newResult;
             }

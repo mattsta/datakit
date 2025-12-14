@@ -53,8 +53,8 @@ mds *djConsumeBuffer(djState *state, bool reset);
 void djAppend(djState *dst, djState *src);
 void djFree(djState *state);
 mds *djFinalize(djState *state);
-mds **djGetMulti(djState *state, size_t *ssCount);
-mds **djFinalizeMulti(djState *state, size_t *ssCount);
+mds **djGetMulti(djState *state, size_t *arrayCount);
+mds **djFinalizeMulti(djState *state, size_t *arrayCount);
 
 /* Auto-detect whether closing list or map and do the right thing */
 void djCloseElement(djState *state);

@@ -390,7 +390,7 @@ int listTest(int argc, char *argv[]) {
         }
 
         if (listLength(l) != 0) {
-            ERR("New list should have length 0, got %lu", listLength(l));
+            ERR("New list should have length 0, got %zu", listLength(l));
         }
 
         if (listFirst(l) != NULL) {
@@ -418,7 +418,7 @@ int listTest(int argc, char *argv[]) {
         }
 
         if (listLength(l) != 5) {
-            ERR("Expected length 5, got %lu", listLength(l));
+            ERR("Expected length 5, got %zu", listLength(l));
         }
 
         /* Head should be the last added (5), tail should be first added (1) */
@@ -449,7 +449,7 @@ int listTest(int argc, char *argv[]) {
         }
 
         if (listLength(l) != 5) {
-            ERR("Expected length 5, got %lu", listLength(l));
+            ERR("Expected length 5, got %zu", listLength(l));
         }
 
         /* Head should be first added (1), tail should be last added (5) */
@@ -481,7 +481,7 @@ int listTest(int argc, char *argv[]) {
         listDelNode(l, middle);
 
         if (listLength(l) != 2) {
-            ERR("Expected length 2 after delete, got %lu", listLength(l));
+            ERR("Expected length 2 after delete, got %zu", listLength(l));
         }
 
         /* Verify structure: head -> tail */
@@ -620,7 +620,7 @@ int listTest(int argc, char *argv[]) {
         }
 
         if (listLength(copy) != listLength(orig)) {
-            ERR("Copy length %lu != orig length %lu", listLength(copy),
+            ERR("Copy length %lu != orig length %zu", listLength(copy),
                 listLength(orig));
         }
 
@@ -826,7 +826,7 @@ int listTest(int argc, char *argv[]) {
 
         /* Should have 1, 3, 5 remaining */
         if (listLength(l) != 3) {
-            ERR("Expected 3 nodes after deletion, got %lu", listLength(l));
+            ERR("Expected 3 nodes after deletion, got %zu", listLength(l));
         }
 
         int32_t expectedVals[] = {1, 3, 5};

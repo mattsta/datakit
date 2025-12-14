@@ -184,7 +184,7 @@ DKS_TYPE *DKS_CATLEN_NOQUOTE_RAW(DKS_TYPE *s, const void *t, size_t len,
 DKS_TYPE *DKS_PREPENDLEN(DKS_TYPE *s, const void *t, const size_t len);
 DKS_TYPE *DKS_CAT(DKS_TYPE *s, const char *t);
 DKS_TYPE *DKS_CATANOTHER(DKS_TYPE *s, const DKS_TYPE *t);
-DKS_TYPE *DKS_COPYLEN(DKS_TYPE *s, const char *t, size_t len);
+DKS_TYPE *DKS_COPYLEN(DKS_TYPE *s, const char *t, size_t newLength);
 DKS_TYPE *DKS_COPY(DKS_TYPE *s, const char *t);
 size_t DKS_LEN(const DKS_TYPE *s);
 size_t DKS_AVAIL(const DKS_TYPE *s);
@@ -207,10 +207,10 @@ void DKS_UPDATELEN(DKS_TYPE *s);
 void DKS_UPDATELENFORCE(DKS_TYPE *s, size_t newlen);
 void DKS_CLEAR(DKS_TYPE *s);
 int DKS_CMP(const DKS_TYPE *s1, const DKS_TYPE *s2);
-DKS_TYPE **DKS_SPLITLEN(const void *s, size_t len, const void *sep,
-                        size_t seplen, size_t *count);
-DKS_TYPE **DKS_SPLITLEN_MAX(const void *s, size_t len, const void *sep,
-                            size_t seplen, size_t *count, size_t maxCount);
+DKS_TYPE **DKS_SPLITLEN(const void *s_, size_t len, const void *sep_,
+                        size_t sepLen, size_t *count);
+DKS_TYPE **DKS_SPLITLEN_MAX(const void *s_, size_t len, const void *sep_,
+                            size_t sepLen, size_t *count, size_t maxCount);
 void DKS_SPLITLENFREE(DKS_TYPE **tokens, size_t count);
 void DKS_TOLOWER(DKS_TYPE *s);
 void DKS_TOUPPER(DKS_TYPE *s);

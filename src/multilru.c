@@ -1124,6 +1124,8 @@ do_grow:;
         mlru->entries = zcalloc(actualNewCapacity, mlru->entryWidth);
         if (mlru->weights) {
             /* weights might be the marker value (1) - allocate fresh */
+            // cppcheck-suppress intToPointerCast - checking for disabled
+            // sentinel value
             if (mlru->weights == (uint64_t *)1) {
                 mlru->weights = NULL;
             }
@@ -1349,6 +1351,8 @@ multilru *multilruNewWithConfig(const multilruConfig *config) {
         config->evictStrategy == MLRU_EVICT_SIZE_WEIGHTED ||
         config->evictStrategy == MLRU_EVICT_SIZE_LRU) {
         /* Will be allocated during grow() */
+        // cppcheck-suppress intToPointerCast - sentinel value marks weights for
+        // deferred allocation
         mlru->weights = (uint64_t *)1; /* Non-NULL marker */
     }
 
@@ -1356,6 +1360,8 @@ multilru *multilruNewWithConfig(const multilruConfig *config) {
     grow(mlru);
 
     /* Fix weights pointer after grow */
+    // cppcheck-suppress intToPointerCast - checking for deferred allocation
+    // sentinel
     if (mlru->weights == (uint64_t *)1) {
         mlru->weights = zcalloc(mlru->capacity, sizeof(uint64_t));
     }

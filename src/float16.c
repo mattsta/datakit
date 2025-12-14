@@ -99,10 +99,14 @@ float16Decode_(const uint16_t value) {
 #include "endianIsLittle.h"
 uint16_t bfloat16Encode_(const float value) {
     if (endianIsLittle()) {
+        // cppcheck-suppress invalidPointerCast - intentional type-punning for
+        // bfloat16 encoding
         const uint16_t *MSB = (uint16_t *)&value;
         return MSB[1];
     }
 
+    // cppcheck-suppress invalidPointerCast - intentional type-punning for
+    // bfloat16 encoding
     return *(uint16_t *)&value;
 }
 

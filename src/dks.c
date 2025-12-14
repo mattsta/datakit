@@ -196,7 +196,7 @@ typedef struct dksInfo {
 
 /* Code */
 
-DK_STATIC void DKS_SETPREVIOUSINTEGERANDTYPE(DKS_TYPE *s, const size_t free,
+DK_STATIC void DKS_SETPREVIOUSINTEGERANDTYPE(DKS_TYPE *s, const size_t val,
                                              const dksType type);
 DK_STATIC size_t DKS_GETPREVIOUSINTEGERWITHTYPEREMOVED(const DKS_TYPE *s,
                                                        dksType type);
@@ -315,6 +315,8 @@ __attribute__((optnone)) void DKS_FREEZERO(DKS_TYPE *s) {
 uint8_t *DKS_NATIVE(DKS_TYPE *s, size_t *len) {
     dksInfo info;
     uint8_t *base = (uint8_t *)(DKS_BASE(s, &info));
+    // cppcheck-suppress uselessAssignmentPtrArg - defensive: prevent
+    // use-after-free of invalidated pointer
     s = NULL;
 
     if (len) {
@@ -2489,10 +2491,12 @@ int DKS_TEST(int argc, char *argv[]) {
 
             /* Test DKS_UTF8PEEK */
             uint32_t cp = DKS_UTF8PEEK(x, (const uint8_t *)x);
-            testCond("DKS_UTF8PEEK() - first char 'H'", cp, 'H', "%u");
+            testCond("DKS_UTF8PEEK() - first char 'H'", cp, (uint32_t)'H',
+                     "%u");
 
             cp = DKS_UTF8PEEK(x, (const uint8_t *)x + 6);
-            testCond("DKS_UTF8PEEK() - '世' (U+4E16)", cp, 0x4E16, "%u");
+            testCond("DKS_UTF8PEEK() - '世' (U+4E16)", cp, (uint32_t)0x4E16,
+                     "%u");
 
             /* Test DKS_UTF8OFFSETAT */
             size_t offset = DKS_UTF8OFFSETAT(x, 0);

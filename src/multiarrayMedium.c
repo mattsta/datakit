@@ -108,7 +108,7 @@ multiarrayMediumGetForwardWorker(multiarrayMedium *mar, int32_t idx) {
     void *nodeData = getNode(nodeIdx)->data;
     multiarrayMediumResult worker = {
         .current = getNode(nodeIdx),
-        .entry = nodeData ? nodeData + (mar->len * idx) : NULL,
+        .entry = nodeData ? (uint8_t *)nodeData + (mar->len * idx) : NULL,
         .offset = idx,
         .nodeIdx = nodeIdx};
 

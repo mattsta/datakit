@@ -1435,7 +1435,8 @@ uint32_t clusterLocateKetama(const clusterRing *ring, const void *key,
 
         /* Prefetch next vnode for better cache behavior */
         if (checked + 1 < data->vnodeCount) {
-            CLUSTER_PREFETCH(&data->vnodes[(lo + checked + 1) % data->vnodeCount]);
+            CLUSTER_PREFETCH(
+                &data->vnodes[(lo + checked + 1) % data->vnodeCount]);
         }
 
         /* Use nodePtr directly instead of hash table lookup */
@@ -1577,8 +1578,10 @@ uint32_t clusterLocateMaglev(const clusterRing *ring, const void *key,
     /* Rebuild lookup table if needed (non-const operation) */
     if (CLUSTER_UNLIKELY(data->needsRebuild)) {
         clusterRingRebuildMaglev((clusterRing *)ring);
-        /* Re-read after rebuild - defensive programming in case rebuild implementation changes */
-        // cppcheck-suppress redundantAssignment - intentional re-read after rebuild for future-proofing
+        /* Re-read after rebuild - defensive programming in case rebuild
+         * implementation changes */
+        // cppcheck-suppress redundantAssignment - intentional re-read after
+        // rebuild for future-proofing
         data = &ring->strategyData.maglev;
     }
 

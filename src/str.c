@@ -2893,7 +2893,7 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
 
         /* Empty string */
         pos = StrUtf8Advance("", 0, 5);
-        assert(pos == (const uint8_t *)"");
+        assert(*pos == '\0');
     }
 
     TEST("StrUtf8Advance - multibyte sequences") {

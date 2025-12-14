@@ -63,9 +63,8 @@ static size_t frogadvanceUntil__(const uint32_t *array, const size_t pos,
     lower += (spansize / 2);
 
     // else begin binary search
-    size_t mid = 0;
     while (lower + 1 != upper) {
-        mid = (lower + upper) / 2;
+        size_t mid = (lower + upper) / 2;
         if (array[mid] == min) {
             return mid;
         } else if (array[mid] < min) {
@@ -1703,31 +1702,31 @@ static int32_t testSingleElements(intersectFn fn, const char *fnName) {
     int32_t err = 0;
 
     /* Single element, match */
-    uint32_t a1[] = {42};
-    uint32_t b1[] = {42};
-    uint32_t exp1[] = {42};
+    const uint32_t a1[] = {42};
+    const uint32_t b1[] = {42};
+    const uint32_t exp1[] = {42};
     if (!testIntersection(fn, fnName, a1, 1, b1, 1, exp1, 1)) {
         ERR("[%s] Single match failed", fnName);
     }
 
     /* Single element, no match */
-    uint32_t a2[] = {10};
-    uint32_t b2[] = {20};
+    const uint32_t a2[] = {10};
+    const uint32_t b2[] = {20};
     if (!testIntersection(fn, fnName, a2, 1, b2, 1, NULL, 0)) {
         ERR("[%s] Single no-match failed", fnName);
     }
 
     /* Single vs multiple, match */
-    uint32_t a3[] = {5};
-    uint32_t b3[] = {1, 3, 5, 7, 9};
-    uint32_t exp3[] = {5};
+    const uint32_t a3[] = {5};
+    const uint32_t b3[] = {1, 3, 5, 7, 9};
+    const uint32_t exp3[] = {5};
     if (!testIntersection(fn, fnName, a3, 1, b3, 5, exp3, 1)) {
         ERR("[%s] Single vs multiple match failed", fnName);
     }
 
     /* Single vs multiple, no match */
-    uint32_t a4[] = {6};
-    uint32_t b4[] = {1, 3, 5, 7, 9};
+    const uint32_t a4[] = {6};
+    const uint32_t b4[] = {1, 3, 5, 7, 9};
     if (!testIntersection(fn, fnName, a4, 1, b4, 5, NULL, 0)) {
         ERR("[%s] Single vs multiple no-match failed", fnName);
     }
@@ -1740,15 +1739,15 @@ static int32_t testDisjoint(intersectFn fn, const char *fnName) {
     int32_t err = 0;
 
     /* Interleaved disjoint */
-    uint32_t a[] = {2, 4, 6, 8, 10};
-    uint32_t b[] = {1, 3, 5, 7, 9};
+    const uint32_t a[] = {2, 4, 6, 8, 10};
+    const uint32_t b[] = {1, 3, 5, 7, 9};
     if (!testIntersection(fn, fnName, a, 5, b, 5, NULL, 0)) {
         ERR("[%s] Interleaved disjoint failed", fnName);
     }
 
     /* Non-overlapping ranges */
-    uint32_t a2[] = {1, 2, 3, 4, 5};
-    uint32_t b2[] = {10, 20, 30, 40, 50};
+    const uint32_t a2[] = {1, 2, 3, 4, 5};
+    const uint32_t b2[] = {10, 20, 30, 40, 50};
     if (!testIntersection(fn, fnName, a2, 5, b2, 5, NULL, 0)) {
         ERR("[%s] Non-overlapping ranges failed", fnName);
     }
@@ -1760,9 +1759,9 @@ static int32_t testDisjoint(intersectFn fn, const char *fnName) {
 static int32_t testIdentical(intersectFn fn, const char *fnName) {
     int32_t err = 0;
 
-    uint32_t a[] = {1, 2, 3, 4, 5, 6, 7, 8};
-    uint32_t b[] = {1, 2, 3, 4, 5, 6, 7, 8};
-    uint32_t expected[] = {1, 2, 3, 4, 5, 6, 7, 8};
+    const uint32_t a[] = {1, 2, 3, 4, 5, 6, 7, 8};
+    const uint32_t b[] = {1, 2, 3, 4, 5, 6, 7, 8};
+    const uint32_t expected[] = {1, 2, 3, 4, 5, 6, 7, 8};
     if (!testIntersection(fn, fnName, a, 8, b, 8, expected, 8)) {
         ERR("[%s] Identical sets failed", fnName);
     }
@@ -1775,17 +1774,17 @@ static int32_t testPartialOverlap(intersectFn fn, const char *fnName) {
     int32_t err = 0;
 
     /* Beginning overlap */
-    uint32_t a1[] = {1, 2, 3, 4, 5};
-    uint32_t b1[] = {1, 2, 3, 10, 20};
-    uint32_t exp1[] = {1, 2, 3};
+    const uint32_t a1[] = {1, 2, 3, 4, 5};
+    const uint32_t b1[] = {1, 2, 3, 10, 20};
+    const uint32_t exp1[] = {1, 2, 3};
     if (!testIntersection(fn, fnName, a1, 5, b1, 5, exp1, 3)) {
         ERR("[%s] Beginning overlap failed", fnName);
     }
 
     /* End overlap */
-    uint32_t a2[] = {1, 2, 8, 9, 10};
-    uint32_t b2[] = {5, 6, 8, 9, 10};
-    uint32_t exp2[] = {8, 9, 10};
+    const uint32_t a2[] = {1, 2, 8, 9, 10};
+    const uint32_t b2[] = {5, 6, 8, 9, 10};
+    const uint32_t exp2[] = {8, 9, 10};
     if (!testIntersection(fn, fnName, a2, 5, b2, 5, exp2, 3)) {
         ERR("[%s] End overlap failed", fnName);
     }
@@ -1855,6 +1854,8 @@ static int32_t testLargeArrays(intersectFn fn, const char *fnName) {
         }
     }
 
+    // cppcheck-suppress uninitvar - loop above always executes (v=0 < 398),
+    // expected is initialized
     if (!testIntersection(fn, fnName, a, 200, b, 200, expected, expLen)) {
         ERR("[%s] Large arrays test failed", fnName);
     }
@@ -2541,6 +2542,8 @@ static int32_t stressTestBoundaries(void) {
             b[i] = (uint32_t)(i + 1);
         }
 
+        // cppcheck-suppress uninitvar - sizes array contains only non-zero
+        // values, a and b always initialized
         size_t len_scalar = scalar(a, size, b, size, out_scalar);
         size_t len_simd = intersectInt(a, size, b, size, out_simd);
 
