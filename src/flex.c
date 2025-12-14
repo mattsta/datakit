@@ -2836,6 +2836,7 @@ void flexPushByType(flex **const ff, const databox *box, flexEndpoint where) {
         flexPush_(flexInsertSigned, box->data.i64);
         break;
     case DATABOX_UNSIGNED_64:
+    case DATABOX_PTR:
         flexPush_(flexInsertUnsigned, box->data.u64);
         break;
     case DATABOX_FLOAT_32:

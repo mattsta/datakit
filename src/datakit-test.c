@@ -11,6 +11,7 @@
 #include "../deps/sha1/sha1.h"
 #include "atomPool.h"
 #include "bbits.h"
+#include "clusterRing.h"
 #include "compressionBench.h"
 #include "databox.h"
 #include "databoxLinear.h"
@@ -196,6 +197,9 @@ static const TestEntry testRegistry[] = {
     T_A(multidictP, "mdP"), T_A(flexP, "fP"), T_A(intsetP, "isP"),
     T_A(multiOrderedSetP, "mosP"), T_A(multiroarP, "mrP"),
     T_A(multilruP, "mlruP"),
+
+    /* Distributed / Cluster */
+    T_A_ADJ(clusterRing, "ring,cluster,chr"),
 
     /* Benchmarks */
     T_A_ADJ(compressionBench, "compress,cbench"),
