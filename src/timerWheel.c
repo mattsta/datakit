@@ -500,40 +500,58 @@ static void processSlot(timerWheel *tw, flex **slot, uint64_t currentTime) {
             if (reschedule && repeatIntervalUs > 0) {
                 /* Re-register with same parameters */
                 uint64_t newExpireTime = currentTime + repeatIntervalUs;
-                uint64_t delay = repeatIntervalUs;
-                int32_t level = getWheelLevel(delay);
 
-                if (level >= 0) {
-                    uint32_t slotIdx = getSlotIndex(tw, level, newExpireTime);
-                    flex **newSlot = getSlot(tw, level, slotIdx);
-                    insertTimerIntoSlot(newSlot, newExpireTime, cb, clientData,
-                                        id, repeatIntervalUs);
+                /* Sub-resolution timers go to pending for immediate fire */
+                if (repeatIntervalUs < WHEEL0_RESOLUTION_US) {
+                    insertTimerIntoSlot(&tw->pendingTimers, newExpireTime, cb,
+                                        clientData, id, repeatIntervalUs);
                     tw->timerCount++;
                 } else {
-                    insertTimerIntoOverflow(tw, newExpireTime, cb, clientData,
-                                            id, repeatIntervalUs);
-                    tw->timerCount++;
+                    uint64_t delay = repeatIntervalUs;
+                    int32_t level = getWheelLevel(delay);
+
+                    if (level >= 0) {
+                        uint32_t slotIdx =
+                            getSlotIndex(tw, level, newExpireTime);
+                        flex **newSlot = getSlot(tw, level, slotIdx);
+                        insertTimerIntoSlot(newSlot, newExpireTime, cb,
+                                            clientData, id, repeatIntervalUs);
+                        tw->timerCount++;
+                    } else {
+                        insertTimerIntoOverflow(tw, newExpireTime, cb,
+                                                clientData, id,
+                                                repeatIntervalUs);
+                        tw->timerCount++;
+                    }
                 }
             }
         } else {
-            /* Timer not ready yet - re-insert into appropriate slot */
+            /* Timer not ready yet - re-insert into appropriate location */
             uint64_t delay = expireTimeUs - currentTime;
-            int32_t level = getWheelLevel(delay);
 
-            if (level >= 0) {
-                uint32_t slotIdx = getSlotIndex(tw, level, expireTimeUs);
-                flex **newSlot = getSlot(tw, level, slotIdx);
-                if (newSlot != slot) {
-                    insertTimerIntoSlot(newSlot, expireTimeUs, cb, clientData,
-                                        id, repeatIntervalUs);
-                } else {
-                    /* Same slot - will be processed on next tick */
-                    insertTimerIntoSlot(&tw->pendingTimers, expireTimeUs, cb,
-                                        clientData, id, repeatIntervalUs);
-                }
+            /* Sub-resolution delays stay in pending for prompt firing */
+            if (delay < WHEEL0_RESOLUTION_US) {
+                insertTimerIntoSlot(&tw->pendingTimers, expireTimeUs, cb,
+                                    clientData, id, repeatIntervalUs);
             } else {
-                insertTimerIntoOverflow(tw, expireTimeUs, cb, clientData, id,
-                                        repeatIntervalUs);
+                int32_t level = getWheelLevel(delay);
+
+                if (level >= 0) {
+                    uint32_t slotIdx = getSlotIndex(tw, level, expireTimeUs);
+                    flex **newSlot = getSlot(tw, level, slotIdx);
+                    if (newSlot != slot) {
+                        insertTimerIntoSlot(newSlot, expireTimeUs, cb,
+                                            clientData, id, repeatIntervalUs);
+                    } else {
+                        /* Same slot - will be processed on next tick */
+                        insertTimerIntoSlot(&tw->pendingTimers, expireTimeUs,
+                                            cb, clientData, id,
+                                            repeatIntervalUs);
+                    }
+                } else {
+                    insertTimerIntoOverflow(tw, expireTimeUs, cb, clientData,
+                                            id, repeatIntervalUs);
+                }
             }
         }
 
@@ -592,21 +610,28 @@ static void cascadeWheel(timerWheel *tw, int32_t level) {
         /* Determine new wheel level */
         uint64_t delay =
             expireTimeUs > currentTime ? expireTimeUs - currentTime : 0;
-        int32_t newLevel = getWheelLevel(delay);
 
-        if (newLevel >= 0 && newLevel < level) {
-            uint32_t newSlotIdx = getSlotIndex(tw, newLevel, expireTimeUs);
-            flex **newSlot = getSlot(tw, newLevel, newSlotIdx);
-            insertTimerIntoSlot(newSlot, expireTimeUs, cb, clientData, id,
-                                repeatIntervalUs);
-        } else if (newLevel == -1) {
-            /* Shouldn't happen during cascade, but handle gracefully */
-            insertTimerIntoOverflow(tw, expireTimeUs, cb, clientData, id,
-                                    repeatIntervalUs);
-        } else {
-            /* Keep in same level (edge case) */
+        /* Sub-resolution delays go to pending for prompt firing */
+        if (delay < WHEEL0_RESOLUTION_US) {
             insertTimerIntoSlot(&tw->pendingTimers, expireTimeUs, cb,
                                 clientData, id, repeatIntervalUs);
+        } else {
+            int32_t newLevel = getWheelLevel(delay);
+
+            if (newLevel >= 0 && newLevel < level) {
+                uint32_t newSlotIdx = getSlotIndex(tw, newLevel, expireTimeUs);
+                flex **newSlot = getSlot(tw, newLevel, newSlotIdx);
+                insertTimerIntoSlot(newSlot, expireTimeUs, cb, clientData, id,
+                                    repeatIntervalUs);
+            } else if (newLevel == -1) {
+                /* Shouldn't happen during cascade, but handle gracefully */
+                insertTimerIntoOverflow(tw, expireTimeUs, cb, clientData, id,
+                                        repeatIntervalUs);
+            } else {
+                /* Keep in same level (edge case) */
+                insertTimerIntoSlot(&tw->pendingTimers, expireTimeUs, cb,
+                                    clientData, id, repeatIntervalUs);
+            }
         }
     }
 
@@ -651,28 +676,27 @@ static void processOverflow(timerWheel *tw, uint64_t currentTime) {
                 continue;
             }
 
-            /* Insert into appropriate wheel */
+            /* Insert into appropriate location */
             uint64_t delay =
                 expireTimeUs > currentTime ? expireTimeUs - currentTime : 0;
-            int32_t level = getWheelLevel(delay);
 
-            if (level >= 0) {
-                uint32_t slotIdx = getSlotIndex(tw, level, expireTimeUs);
-                flex **slot = getSlot(tw, level, slotIdx);
-                insertTimerIntoSlot(slot, expireTimeUs, cb, clientData, id,
-                                    repeatIntervalUs);
+            /* Sub-resolution delays go to pending for prompt firing */
+            if (delay < WHEEL0_RESOLUTION_US) {
+                insertTimerIntoSlot(&tw->pendingTimers, expireTimeUs, cb,
+                                    clientData, id, repeatIntervalUs);
             } else {
-                /* Fire immediately if overdue */
-                tw->context = TIMER_WHEEL_CONTEXT_TIMER;
-                bool reschedule = cb(tw, id, clientData);
-                tw->context = TIMER_WHEEL_CONTEXT_USER;
+                int32_t level = getWheelLevel(delay);
 
-                tw->stats.totalExpirations++;
-                tw->timerCount--;
-
-                if (reschedule && repeatIntervalUs > 0) {
-                    timerWheelRegister(tw, repeatIntervalUs, repeatIntervalUs,
-                                       cb, clientData);
+                if (level >= 0) {
+                    uint32_t slotIdx = getSlotIndex(tw, level, expireTimeUs);
+                    flex **slot = getSlot(tw, level, slotIdx);
+                    insertTimerIntoSlot(slot, expireTimeUs, cb, clientData, id,
+                                        repeatIntervalUs);
+                } else {
+                    /* Shouldn't happen - timer is within range but level is -1
+                     */
+                    insertTimerIntoSlot(&tw->pendingTimers, expireTimeUs, cb,
+                                        clientData, id, repeatIntervalUs);
                 }
             }
         } else {
@@ -731,34 +755,51 @@ static void processPending(timerWheel *tw) {
             /* Handle rescheduling */
             if (reschedule && repeatIntervalUs > 0) {
                 uint64_t newExpireTime = now + repeatIntervalUs;
-                uint64_t delay = repeatIntervalUs;
-                int32_t level = getWheelLevel(delay);
 
-                if (level >= 0) {
-                    uint32_t slotIdx = getSlotIndex(tw, level, newExpireTime);
-                    flex **slot = getSlot(tw, level, slotIdx);
-                    insertTimerIntoSlot(slot, newExpireTime, cb, clientData, id,
-                                        repeatIntervalUs);
+                /* Sub-resolution timers go to pending for immediate fire */
+                if (repeatIntervalUs < WHEEL0_RESOLUTION_US) {
+                    insertTimerIntoSlot(&tw->pendingTimers, newExpireTime, cb,
+                                        clientData, id, repeatIntervalUs);
                     tw->timerCount++;
                 } else {
-                    insertTimerIntoOverflow(tw, newExpireTime, cb, clientData,
+                    uint64_t delay = repeatIntervalUs;
+                    int32_t level = getWheelLevel(delay);
+
+                    if (level >= 0) {
+                        uint32_t slotIdx =
+                            getSlotIndex(tw, level, newExpireTime);
+                        flex **slot = getSlot(tw, level, slotIdx);
+                        insertTimerIntoSlot(slot, newExpireTime, cb, clientData,
                                             id, repeatIntervalUs);
-                    tw->timerCount++;
+                        tw->timerCount++;
+                    } else {
+                        insertTimerIntoOverflow(tw, newExpireTime, cb,
+                                                clientData, id,
+                                                repeatIntervalUs);
+                        tw->timerCount++;
+                    }
                 }
             }
         } else {
-            /* Timer not due yet - insert into appropriate wheel */
+            /* Timer not due yet - insert into appropriate location */
             uint64_t delay = expireTimeUs - now;
-            int32_t level = getWheelLevel(delay);
 
-            if (level >= 0) {
-                uint32_t slotIdx = getSlotIndex(tw, level, expireTimeUs);
-                flex **slot = getSlot(tw, level, slotIdx);
-                insertTimerIntoSlot(slot, expireTimeUs, cb, clientData, id,
-                                    repeatIntervalUs);
+            /* Sub-resolution timers stay in pending for prompt firing */
+            if (delay < WHEEL0_RESOLUTION_US) {
+                insertTimerIntoSlot(&tw->pendingTimers, expireTimeUs, cb,
+                                    clientData, id, repeatIntervalUs);
             } else {
-                insertTimerIntoOverflow(tw, expireTimeUs, cb, clientData, id,
+                int32_t level = getWheelLevel(delay);
+
+                if (level >= 0) {
+                    uint32_t slotIdx = getSlotIndex(tw, level, expireTimeUs);
+                    flex **slot = getSlot(tw, level, slotIdx);
+                    insertTimerIntoSlot(slot, expireTimeUs, cb, clientData, id,
                                         repeatIntervalUs);
+                } else {
+                    insertTimerIntoOverflow(tw, expireTimeUs, cb, clientData,
+                                            id, repeatIntervalUs);
+                }
             }
         }
     }
@@ -841,6 +882,13 @@ timerWheelSystemMonotonicUs timerWheelNextTimerEventStartUs(timerWheel *tw) {
     }
 
     uint64_t earliest = UINT64_MAX;
+
+    /* Check pending timers first - they fire immediately */
+    if (tw->pendingTimers && flexCount(tw->pendingTimers) > 0) {
+        databox box;
+        flexGetByType(flexHead(tw->pendingTimers), &box);
+        earliest = box.data.u64;
+    }
 
     /* Check wheel 0 first (most likely to have nearest timer) */
     for (uint32_t i = 0; i < WHEEL0_SIZE; i++) {
