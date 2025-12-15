@@ -4,6 +4,7 @@
 #include <errno.h>        /* strerror */
 #include <fcntl.h>        /* open */
 #include <stdio.h>        /* snprintf */
+#include <sys/file.h>     /* flock */
 #include <sys/resource.h> /* getrlimit */
 #include <unistd.h>       /* _exit */
 
