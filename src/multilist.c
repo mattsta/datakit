@@ -1849,6 +1849,288 @@ int multilistTest(int argc, char *argv[]) {
         printf("  verified tier transitions across fill levels 1-8\n");
     }
 
+    TEST("MEDIUM: unbalanced head-only push through tier") {
+        /* Push only to head - F0 grows large, F1 stays empty.
+         * This tests the unbalanced scenario where rebalancing TODO
+         * is not yet implemented (multilistMedium.c lines 143, 156, 479).
+         * Use limit=6 (2048 bytes) so Medium→Full is at 6144 bytes,
+         * giving room to stay in Medium with ~100 small integers. */
+        multilist *ml = multilistNew(6, 0);
+
+        /* Push enough to get into Medium tier but not Full tier */
+        const size_t targetCount = 100;
+        for (size_t i = 0; i < targetCount; i++) {
+            databox box = databoxNewSigned((int64_t)i);
+            multilistPushByTypeHead(&ml, s0, &box);
+        }
+
+        /* Verify count is correct */
+        if (multilistCount(ml) != targetCount) {
+            ERR("head-only count: got %zu expected %zu", multilistCount(ml),
+                targetCount);
+        }
+
+        /* Verify index access works across the unbalanced structure */
+        for (size_t i = 0; i < targetCount; i++) {
+            multilistEntry entry;
+            if (!multilistIndex(ml, s0, (int64_t)i, &entry, false)) {
+                ERR("head-only index failed at %zu", i);
+            }
+            /* Head push inverts order: index 0 = value (targetCount-1) */
+            int64_t expected = (int64_t)(targetCount - 1 - i);
+            int64_t got;
+            if (DATABOX_IS_SIGNED_INTEGER(&entry.box)) {
+                got = entry.box.data.i64;
+            } else if (DATABOX_IS_UNSIGNED_INTEGER(&entry.box)) {
+                got = (int64_t)entry.box.data.u64;
+            } else {
+                got = -9999;
+            }
+            if (got != expected) {
+                ERR("head-only index %zu: got %" PRId64 " expected %" PRId64, i,
+                    got, expected);
+            }
+        }
+
+        /* Verify forward iteration */
+        multilistIterator iter;
+        multilistIteratorInitForwardReadOnly(ml, s, &iter);
+        multilistEntry entry;
+        size_t iterCount = 0;
+        int64_t expectedVal = (int64_t)(targetCount - 1);
+        while (multilistNext(&iter, &entry)) {
+            int64_t got = (entry.box.type == DATABOX_SIGNED_64)
+                              ? entry.box.data.i
+                              : (int64_t)entry.box.data.u;
+            if (got != expectedVal) {
+                ERR("head-only iter at %zu: got %" PRId64 " expected %" PRId64,
+                    iterCount, got, expectedVal);
+            }
+            expectedVal--;
+            iterCount++;
+        }
+        multilistIteratorRelease(&iter);
+
+        if (iterCount != targetCount) {
+            ERR("head-only iter count: got %zu expected %zu", iterCount,
+                targetCount);
+        }
+
+        /* Verify backward iteration - reverse iter still uses multilistNext */
+        multilistIteratorInitReverseReadOnly(ml, s, &iter);
+        iterCount = 0;
+        expectedVal = 0;
+        while (multilistNext(&iter, &entry)) {
+            int64_t got = (entry.box.type == DATABOX_SIGNED_64)
+                              ? entry.box.data.i
+                              : (int64_t)entry.box.data.u;
+            if (got != expectedVal) {
+                ERR("head-only reverse iter at %zu: got %" PRId64
+                    " expected %" PRId64,
+                    iterCount, got, expectedVal);
+            }
+            expectedVal++;
+            iterCount++;
+        }
+        multilistIteratorRelease(&iter);
+
+        if (iterCount != targetCount) {
+            ERR("head-only reverse iter count: got %zu expected %zu", iterCount,
+                targetCount);
+        }
+
+        printf("  verified unbalanced head-only push (%zu elements)\n",
+               targetCount);
+        multilistFree(ml);
+    }
+
+    TEST("MEDIUM: unbalanced tail-only push through tier") {
+        /* Push only to tail - F1 grows large, F0 starts minimal.
+         * After NewFromFlex, F0 has half the initial flex, F1 has other half,
+         * then all new pushes go to F1 only.
+         * Use limit=6 (2048 bytes) to stay in Medium tier. */
+        multilist *ml = multilistNew(6, 0);
+
+        const size_t targetCount = 100;
+        for (size_t i = 0; i < targetCount; i++) {
+            databox box = databoxNewSigned((int64_t)i);
+            multilistPushByTypeTail(&ml, s0, &box);
+        }
+
+        if (multilistCount(ml) != targetCount) {
+            ERR("tail-only count: got %zu expected %zu", multilistCount(ml),
+                targetCount);
+        }
+
+        /* Verify index access - tail push maintains order */
+        for (size_t i = 0; i < targetCount; i++) {
+            multilistEntry entry;
+            if (!multilistIndex(ml, s0, (int64_t)i, &entry, false)) {
+                ERR("tail-only index failed at %zu", i);
+            }
+            int64_t expected = (int64_t)i;
+            int64_t got = (entry.box.type == DATABOX_SIGNED_64)
+                              ? entry.box.data.i
+                              : (int64_t)entry.box.data.u;
+            if (got != expected) {
+                ERR("tail-only index %zu: got %" PRId64 " expected %" PRId64, i,
+                    got, expected);
+            }
+        }
+
+        /* Verify forward iteration */
+        multilistIterator iter;
+        multilistIteratorInitForwardReadOnly(ml, s, &iter);
+        multilistEntry entry;
+        size_t iterCount = 0;
+        while (multilistNext(&iter, &entry)) {
+            int64_t expected = (int64_t)iterCount;
+            int64_t got = (entry.box.type == DATABOX_SIGNED_64)
+                              ? entry.box.data.i
+                              : (int64_t)entry.box.data.u;
+            if (got != expected) {
+                ERR("tail-only iter at %zu: got %" PRId64 " expected %" PRId64,
+                    iterCount, got, expected);
+            }
+            iterCount++;
+        }
+        multilistIteratorRelease(&iter);
+
+        if (iterCount != targetCount) {
+            ERR("tail-only iter count: got %zu expected %zu", iterCount,
+                targetCount);
+        }
+
+        printf("  verified unbalanced tail-only push (%zu elements)\n",
+               targetCount);
+        multilistFree(ml);
+    }
+
+    TEST("MEDIUM: alternating head/tail maintains balance") {
+        /* Alternating pushes should keep F0 and F1 roughly balanced.
+         * Use limit=6 (2048 bytes) to stay in Medium tier. */
+        multilist *ml = multilistNew(6, 0);
+
+        const size_t targetCount = 100;
+        for (size_t i = 0; i < targetCount; i++) {
+            databox box = databoxNewSigned((int64_t)i);
+            if (i % 2 == 0) {
+                multilistPushByTypeHead(&ml, s0, &box);
+            } else {
+                multilistPushByTypeTail(&ml, s0, &box);
+            }
+        }
+
+        if (multilistCount(ml) != targetCount) {
+            ERR("alternating count: got %zu expected %zu", multilistCount(ml),
+                targetCount);
+        }
+
+        /* Verify we can iterate all elements */
+        multilistIterator iter;
+        multilistIteratorInitForwardReadOnly(ml, s, &iter);
+        multilistEntry entry;
+        size_t iterCount = 0;
+        while (multilistNext(&iter, &entry)) {
+            iterCount++;
+        }
+        multilistIteratorRelease(&iter);
+
+        if (iterCount != targetCount) {
+            ERR("alternating iter count: got %zu expected %zu", iterCount,
+                targetCount);
+        }
+
+        printf("  verified alternating head/tail push (%zu elements)\n",
+               targetCount);
+        multilistFree(ml);
+    }
+
+    TEST("MEDIUM: unbalanced delete operations") {
+        /* Build a balanced list, then delete from one end only.
+         * Use limit=6 (2048 bytes) to stay in Medium tier. */
+        multilist *ml = multilistNew(6, 0);
+
+        const size_t buildCount = 80;
+        for (size_t i = 0; i < buildCount; i++) {
+            databox box = databoxNewSigned((int64_t)i);
+            if (i % 2 == 0) {
+                multilistPushByTypeHead(&ml, s0, &box);
+            } else {
+                multilistPushByTypeTail(&ml, s0, &box);
+            }
+        }
+
+        /* Pop only from head until half remain */
+        size_t remaining = buildCount;
+        while (remaining > buildCount / 2) {
+            databox got;
+            if (!multilistPopHead(&ml, s0, &got)) {
+                ERR("unbalanced delete pop failed at remaining=%zu", remaining);
+            }
+            remaining--;
+        }
+
+        if (multilistCount(ml) != remaining) {
+            ERR("unbalanced delete count: got %zu expected %zu",
+                multilistCount(ml), remaining);
+        }
+
+        /* Verify iteration still works after unbalanced deletions */
+        multilistIterator iter;
+        multilistIteratorInitForwardReadOnly(ml, s, &iter);
+        multilistEntry entry;
+        size_t iterCount = 0;
+        while (multilistNext(&iter, &entry)) {
+            iterCount++;
+        }
+        multilistIteratorRelease(&iter);
+
+        if (iterCount != remaining) {
+            ERR("unbalanced delete iter: got %zu expected %zu", iterCount,
+                remaining);
+        }
+
+        printf("  verified unbalanced delete operations (%zu remaining)\n",
+               remaining);
+        multilistFree(ml);
+    }
+
+    TEST("MEDIUM: negative index access with unbalanced structure") {
+        /* Test negative indexing when F0/F1 are unbalanced.
+         * Use limit=6 (2048 bytes) to stay in Medium tier. */
+        multilist *ml = multilistNew(6, 0);
+
+        const size_t targetCount = 100;
+        /* Push all to head - creates unbalanced F0 */
+        for (size_t i = 0; i < targetCount; i++) {
+            databox box = databoxNewSigned((int64_t)i);
+            multilistPushByTypeHead(&ml, s0, &box);
+        }
+
+        /* Test negative indices */
+        for (size_t i = 1; i <= targetCount; i++) {
+            multilistEntry entry;
+            int64_t negIdx = -(int64_t)i;
+            if (!multilistIndex(ml, s0, negIdx, &entry, false)) {
+                ERR("negative index failed at %" PRId64, negIdx);
+            }
+            /* -1 should be value 0, -2 should be value 1, etc. */
+            int64_t expected = (int64_t)(i - 1);
+            int64_t got = (entry.box.type == DATABOX_SIGNED_64)
+                              ? entry.box.data.i
+                              : (int64_t)entry.box.data.u;
+            if (got != expected) {
+                ERR("negative index %" PRId64 ": got %" PRId64
+                    " expected %" PRId64,
+                    negIdx, got, expected);
+            }
+        }
+
+        printf("  verified negative index access with unbalanced structure\n");
+        multilistFree(ml);
+    }
+
     TEST("FUZZ: stress random operations") {
         multilist *ml = multilistNew(4, 2);
         size_t count = 0;

@@ -942,5 +942,304 @@ int intsetTest(int argc, char *argv[]) {
         intsetFree(is);
     }
 
+    /* ===== CROSS-TIER VIRTUAL MERGE ITERATION TESTS ===== */
+
+    TEST("MEDIUM: virtual merge iteration with interleaved values") {
+        /* Test that intsetGet returns values in sorted order when
+         * int16 and int32 values are interleaved in the sorted sequence.
+         * This exercises the virtual merge algorithm in intsetMediumGet. */
+        intset *is = intsetNew();
+
+        /* Add int16 values: 10, 30, 50, 70, 90 */
+        intsetAdd(&is, 10, NULL);
+        intsetAdd(&is, 30, NULL);
+        intsetAdd(&is, 50, NULL);
+        intsetAdd(&is, 70, NULL);
+        intsetAdd(&is, 90, NULL);
+
+        /* Add int32 values that interleave: 20000, 40000, 60000, 80000 */
+        intsetAdd(&is, 20000, NULL);
+        intsetAdd(&is, 40000, NULL);
+        intsetAdd(&is, 60000, NULL);
+        intsetAdd(&is, 80000, NULL);
+
+        if (INTSET_TYPE(is) != INTSET_TYPE_MEDIUM) {
+            ERRR("Should be MEDIUM tier");
+        }
+
+        /* Expected sorted order: 10, 30, 50, 70, 90, 20000, 40000, 60000, 80000
+         */
+        int64_t expected[] = {10, 30, 50, 70, 90, 20000, 40000, 60000, 80000};
+        size_t count = sizeof(expected) / sizeof(expected[0]);
+
+        if (intsetCount(is) != count) {
+            ERR("Count should be %zu, got %zu", count, intsetCount(is));
+        }
+
+        /* Verify intsetGet returns values in sorted order */
+        int64_t prev = INT64_MIN;
+        for (size_t i = 0; i < count; i++) {
+            int64_t val;
+            if (!intsetGet(is, (uint32_t)i, &val)) {
+                ERR("intsetGet failed at position %zu", i);
+                break;
+            }
+            if (val != expected[i]) {
+                ERR("Position %zu: got %" PRId64 " expected %" PRId64, i, val,
+                    expected[i]);
+            }
+            if (val <= prev) {
+                ERR("Out of order at position %zu: %" PRId64 " <= %" PRId64, i,
+                    val, prev);
+            }
+            prev = val;
+        }
+
+        intsetFree(is);
+    }
+
+    TEST("MEDIUM: virtual merge with densely interleaved widths") {
+        /* Test with values that truly interleave across width boundaries.
+         * int16 max is 32767, so values like 32760, 32765, 32770, 32775
+         * cross the int16/int32 boundary. */
+        intset *is = intsetNew();
+
+        /* Add values that cross the int16/int32 boundary */
+        int64_t values[] = {32760, 32765, 32770, 32775, 32780, 32785};
+        size_t count = sizeof(values) / sizeof(values[0]);
+
+        for (size_t i = 0; i < count; i++) {
+            intsetAdd(&is, values[i], NULL);
+        }
+
+        if (INTSET_TYPE(is) != INTSET_TYPE_MEDIUM) {
+            ERRR("Should be MEDIUM tier (has int32 values)");
+        }
+
+        /* Verify sorted iteration */
+        int64_t prev = INT64_MIN;
+        for (size_t i = 0; i < count; i++) {
+            int64_t val;
+            if (!intsetGet(is, (uint32_t)i, &val)) {
+                ERR("intsetGet failed at position %zu", i);
+                break;
+            }
+            if (val <= prev) {
+                ERR("Out of order at position %zu: %" PRId64 " <= %" PRId64, i,
+                    val, prev);
+            }
+            prev = val;
+        }
+
+        /* Also verify specific positions match expected values */
+        for (size_t i = 0; i < count; i++) {
+            int64_t val;
+            intsetGet(is, (uint32_t)i, &val);
+            if (val != values[i]) {
+                ERR("Position %zu: got %" PRId64 " expected %" PRId64, i, val,
+                    values[i]);
+            }
+        }
+
+        intsetFree(is);
+    }
+
+    TEST("FULL: virtual 3-way merge iteration") {
+        /* Test that intsetGet returns values in sorted order when
+         * int16, int32, and int64 values are all present.
+         * This exercises the virtual 3-way merge algorithm in intsetFullGet. */
+        intset *is = intsetNew();
+
+        /* Add values across all three width categories */
+        /* int16 values */
+        intsetAdd(&is, 100, NULL);
+        intsetAdd(&is, 200, NULL);
+        intsetAdd(&is, 300, NULL);
+
+        /* int32 values */
+        intsetAdd(&is, 100000, NULL);
+        intsetAdd(&is, 200000, NULL);
+        intsetAdd(&is, 300000, NULL);
+
+        /* int64 values - trigger upgrade to FULL */
+        intsetAdd(&is, INT32_MAX + 1000LL, NULL);
+        intsetAdd(&is, INT32_MAX + 2000LL, NULL);
+        intsetAdd(&is, INT32_MAX + 3000LL, NULL);
+
+        if (INTSET_TYPE(is) != INTSET_TYPE_FULL) {
+            ERRR("Should be FULL tier");
+        }
+
+        /* Expected sorted order */
+        int64_t expected[] = {100,
+                              200,
+                              300,
+                              100000,
+                              200000,
+                              300000,
+                              INT32_MAX + 1000LL,
+                              INT32_MAX + 2000LL,
+                              INT32_MAX + 3000LL};
+        size_t count = sizeof(expected) / sizeof(expected[0]);
+
+        if (intsetCount(is) != count) {
+            ERR("Count should be %zu, got %zu", count, intsetCount(is));
+        }
+
+        /* Verify intsetGet returns values in sorted order */
+        int64_t prev = INT64_MIN;
+        for (size_t i = 0; i < count; i++) {
+            int64_t val;
+            if (!intsetGet(is, (uint32_t)i, &val)) {
+                ERR("intsetGet failed at position %zu", i);
+                break;
+            }
+            if (val != expected[i]) {
+                ERR("Position %zu: got %" PRId64 " expected %" PRId64, i, val,
+                    expected[i]);
+            }
+            if (val <= prev) {
+                ERR("Out of order at position %zu: %" PRId64 " <= %" PRId64, i,
+                    val, prev);
+            }
+            prev = val;
+        }
+
+        intsetFree(is);
+    }
+
+    TEST("FULL: 3-way merge with interleaved values across all widths") {
+        /* Create a scenario where values from all three widths
+         * interleave in the final sorted order. */
+        intset *is = intsetNew();
+
+        /* Create interleaved pattern by using negative numbers too */
+        /* int16: -1000, -100, 0, 100, 1000 */
+        intsetAdd(&is, -1000, NULL);
+        intsetAdd(&is, -100, NULL);
+        intsetAdd(&is, 0, NULL);
+        intsetAdd(&is, 100, NULL);
+        intsetAdd(&is, 1000, NULL);
+
+        /* int32: -50000, 50000 */
+        intsetAdd(&is, -50000, NULL);
+        intsetAdd(&is, 50000, NULL);
+
+        /* int64: values outside int32 range */
+        intsetAdd(&is, INT32_MIN - 1LL, NULL);
+        intsetAdd(&is, INT32_MAX + 1LL, NULL);
+
+        if (INTSET_TYPE(is) != INTSET_TYPE_FULL) {
+            ERRR("Should be FULL tier");
+        }
+
+        size_t count = intsetCount(is);
+        if (count != 9) {
+            ERR("Count should be 9, got %zu", count);
+        }
+
+        /* Verify strict sorted order */
+        int64_t prev = INT64_MIN;
+        for (size_t i = 0; i < count; i++) {
+            int64_t val;
+            if (!intsetGet(is, (uint32_t)i, &val)) {
+                ERR("intsetGet failed at position %zu", i);
+                break;
+            }
+            if (val <= prev) {
+                ERR("Out of order at position %zu: %" PRId64 " <= %" PRId64, i,
+                    val, prev);
+                break;
+            }
+            prev = val;
+        }
+
+        /* Verify expected order:
+         * INT32_MIN-1, -50000, -1000, -100, 0, 100, 1000, 50000, INT32_MAX+1 */
+        int64_t val;
+        intsetGet(is, 0, &val);
+        if (val != INT32_MIN - 1LL) {
+            ERR("Position 0 should be INT32_MIN-1, got %" PRId64, val);
+        }
+        intsetGet(is, 4, &val);
+        if (val != 0) {
+            ERR("Position 4 should be 0, got %" PRId64, val);
+        }
+        intsetGet(is, 8, &val);
+        if (val != INT32_MAX + 1LL) {
+            ERR("Position 8 should be INT32_MAX+1, got %" PRId64, val);
+        }
+
+        intsetFree(is);
+    }
+
+    TEST("virtual merge: randomized cross-tier iteration") {
+        /* Generate random values across all width categories and verify
+         * that intsetGet always returns sorted order. */
+        intset *is = intsetNew();
+        const int NUM_VALUES = 200;
+        int64_t *oracle = zcalloc(NUM_VALUES, sizeof(int64_t));
+
+        /* Generate values across all three width categories */
+        for (int i = 0; i < NUM_VALUES; i++) {
+            int category = rand() % 3;
+            int64_t val;
+            switch (category) {
+            case 0: /* int16 range */
+                val = (rand() % 60000) - 30000;
+                break;
+            case 1: /* int32 range */
+                val = ((int64_t)rand() * rand()) % 2000000000LL;
+                if (rand() % 2) {
+                    val = -val;
+                }
+                break;
+            case 2: /* int64 range */
+                val = ((int64_t)rand() << 32) | rand();
+                if (rand() % 2) {
+                    val = -val;
+                }
+                break;
+            default:
+                val = rand();
+            }
+            oracle[i] = val;
+            intsetAdd(&is, val, NULL);
+        }
+
+        size_t count = intsetCount(is);
+
+        /* intsetAdd deduplicates, so count may be less than NUM_VALUES */
+        if (count > (size_t)NUM_VALUES) {
+            ERR("Count %zu exceeds inserted %d", count, NUM_VALUES);
+        }
+
+        /* Verify strict sorted order through intsetGet */
+        int64_t prev = INT64_MIN;
+        bool orderOK = true;
+        for (size_t i = 0; i < count && orderOK; i++) {
+            int64_t val;
+            if (!intsetGet(is, (uint32_t)i, &val)) {
+                ERR("intsetGet failed at position %zu", i);
+                orderOK = false;
+                break;
+            }
+            if (val <= prev) {
+                ERR("Out of order at position %zu: %" PRId64 " <= %" PRId64, i,
+                    val, prev);
+                orderOK = false;
+            }
+            prev = val;
+        }
+
+        if (orderOK) {
+            printf("  Verified sorted order across %zu values (tier=%d)\n",
+                   count, INTSET_TYPE(is));
+        }
+
+        zfree(oracle);
+        intsetFree(is);
+    }
+
     TEST_FINAL_RESULT;
 }

@@ -382,12 +382,13 @@ bool multilistMediumIndex(multilistMedium *ml, mlOffsetId index,
     /* if index is beyond F0, jump over F0 into F1 */
     const mlOffsetId countF0 = flexCount(F0);
     mlNodeId useNode = 0;
-    if (countF0 >= index) {
+    if (index >= countF0) {
         index -= countF0;
         useNode = 1;
     }
 
-    /* Record offset index used by this lookup */
+    /* Record which node and offset used by this lookup */
+    entry->nodeIdx = useNode;
     entry->offset = index;
     assert(entry->offset < (mlOffsetId)flexCount(ml->fl[useNode]));
 
