@@ -705,21 +705,21 @@ void intsetBigMergeInto(intsetBig *a, const intsetBig *b) {
 
     /* Now look up each common bucket in 'a' and 'b' and retrieve
      * both underlying intsetU32 pointers. */
-    /* element-by-element zipper algoirthm for intersecting two sorted lists. */
+    /* element-by-element zipper algorithm for merging two sorted lists. */
     while (foundA && foundB) {
         const int compared = databoxCompare(ea[0], eb[0]);
         intsetU32 *eaai = val[0].data.ptr;
         intsetU32 *ebbi = val[1].data.ptr;
+
         if (compared < 0) {
-            /* No match! add B to A! */
-            intsetBigAddByBucketDirectOverwriteBulkUpdateIterator(
-                a, &key[0], intsetU32Copy(ebbi), &ia);
-            a->count += intsetU32Count(ebbi);
+            /* A < B: A's bucket is already in result (from initial copy), just
+             * advance A */
             foundA = multimapIteratorNext(&ia, ea);
         } else if (compared > 0) {
-            /* No match! Add B to A! */
+            /* B < A: B's bucket not in result yet, add it using B's key */
             intsetBigAddByBucketDirectOverwriteBulkUpdateIterator(
-                a, &key[0], intsetU32Copy(ebbi), &ia);
+                a, &key[1], intsetU32Copy(ebbi),
+                &ia); // FIX: Use key[1] (B's key), not key[0]
             a->count += intsetU32Count(ebbi);
             foundB = multimapIteratorNext(&ib, eb);
         } else {
@@ -741,6 +741,16 @@ void intsetBigMergeInto(intsetBig *a, const intsetBig *b) {
             foundA = multimapIteratorNext(&ia, ea);
             foundB = multimapIteratorNext(&ib, eb);
         }
+    }
+
+    /* After main zipper loop, add any remaining elements from B */
+    /* FIX: Original code was missing this remainder loop! */
+    while (foundB) {
+        intsetU32 *ebbi = val[1].data.ptr;
+        intsetBigAddByBucketDirectOverwriteBulkUpdateIterator(
+            a, &key[1], intsetU32Copy(ebbi), &ia);
+        a->count += intsetU32Count(ebbi);
+        foundB = multimapIteratorNext(&ib, eb);
     }
 }
 
@@ -1800,6 +1810,941 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
 
         intsetBigFree(isb);
     }
+
+    /* ====================================================================
+     * COMPREHENSIVE MULTI-BUCKET TESTS
+     * These tests specifically exercise the zipper algorithm across
+     * multiple buckets to catch edge cases like the key[0]/key[1] bug
+     * and the missing remainder loop bug in intsetBigMergeInto.
+     * ==================================================================== */
+
+#define BUCKET_SIZE (1ULL << 20) /* 1,048,576 - matches DIVISOR_WIDTH */
+
+    TEST("intsetBigMergeInto - multiple buckets, B extends past A") {
+        intsetBig *a = intsetBigNew();
+        intsetBig *b = intsetBigNew();
+
+        /* A has buckets 0 and 1 */
+        databoxBig a0 = DATABOX_BIG_UNSIGNED(100);              /* bucket 0 */
+        databoxBig a1 = DATABOX_BIG_UNSIGNED(BUCKET_SIZE + 50); /* bucket 1 */
+        intsetBigAdd(a, &a0);
+        intsetBigAdd(a, &a1);
+
+        /* B has buckets 1, 2, and 3 (extends past A) */
+        databoxBig b1 = DATABOX_BIG_UNSIGNED(BUCKET_SIZE + 200); /* bucket 1 */
+        databoxBig b2 =
+            DATABOX_BIG_UNSIGNED(2 * BUCKET_SIZE + 100); /* bucket 2 */
+        databoxBig b3 =
+            DATABOX_BIG_UNSIGNED(3 * BUCKET_SIZE + 100); /* bucket 3 */
+        intsetBigAdd(b, &b1);
+        intsetBigAdd(b, &b2);
+        intsetBigAdd(b, &b3);
+
+        intsetBigMergeInto(a, b);
+
+        /* Result should have 5 elements: a0, a1, b1, b2, b3 */
+        if (intsetBigCountElements(a) != 5) {
+            ERR("Expected 5 elements after merge, got %zu!",
+                intsetBigCountElements(a));
+        }
+
+        /* Verify all elements present */
+        if (!intsetBigExists(a, &a0)) {
+            ERRR("Missing a0!");
+        }
+        if (!intsetBigExists(a, &a1)) {
+            ERRR("Missing a1!");
+        }
+        if (!intsetBigExists(a, &b1)) {
+            ERRR("Missing b1!");
+        }
+        if (!intsetBigExists(a, &b2)) {
+            ERRR("Missing b2 (from B's bucket 2)!");
+        }
+        if (!intsetBigExists(a, &b3)) {
+            ERRR("Missing b3 (from B's bucket 3)!");
+        }
+
+        /* Verify bucket count */
+        if (intsetBigCountBuckets(a) != 4) {
+            ERR("Expected 4 buckets, got %zu!", intsetBigCountBuckets(a));
+        }
+
+        intsetBigFree(a);
+        intsetBigFree(b);
+    }
+
+    TEST("intsetBigMergeInto - completely disjoint buckets") {
+        intsetBig *a = intsetBigNew();
+        intsetBig *b = intsetBigNew();
+
+        /* A has only even buckets: 0, 2, 4 */
+        databoxBig a0 = DATABOX_BIG_UNSIGNED(100);
+        databoxBig a2 = DATABOX_BIG_UNSIGNED(2 * BUCKET_SIZE + 100);
+        databoxBig a4 = DATABOX_BIG_UNSIGNED(4 * BUCKET_SIZE + 100);
+        intsetBigAdd(a, &a0);
+        intsetBigAdd(a, &a2);
+        intsetBigAdd(a, &a4);
+
+        /* B has only odd buckets: 1, 3, 5 */
+        databoxBig b1 = DATABOX_BIG_UNSIGNED(1 * BUCKET_SIZE + 100);
+        databoxBig b3 = DATABOX_BIG_UNSIGNED(3 * BUCKET_SIZE + 100);
+        databoxBig b5 = DATABOX_BIG_UNSIGNED(5 * BUCKET_SIZE + 100);
+        intsetBigAdd(b, &b1);
+        intsetBigAdd(b, &b3);
+        intsetBigAdd(b, &b5);
+
+        intsetBigMergeInto(a, b);
+
+        /* Result should have 6 elements across 6 buckets */
+        if (intsetBigCountElements(a) != 6) {
+            ERR("Expected 6 elements, got %zu!", intsetBigCountElements(a));
+        }
+        if (intsetBigCountBuckets(a) != 6) {
+            ERR("Expected 6 buckets, got %zu!", intsetBigCountBuckets(a));
+        }
+
+        /* Verify all elements */
+        if (!intsetBigExists(a, &a0) || !intsetBigExists(a, &a2) ||
+            !intsetBigExists(a, &a4)) {
+            ERRR("Missing A elements!");
+        }
+        if (!intsetBigExists(a, &b1) || !intsetBigExists(a, &b3) ||
+            !intsetBigExists(a, &b5)) {
+            ERRR("Missing B elements!");
+        }
+
+        intsetBigFree(a);
+        intsetBigFree(b);
+    }
+
+    TEST("intsetBigMergeInto - interleaved buckets") {
+        intsetBig *a = intsetBigNew();
+        intsetBig *b = intsetBigNew();
+
+        /* A = buckets {0, 2, 4} */
+        /* B = buckets {1, 2, 3} (partially overlapping) */
+        databoxBig a0 = DATABOX_BIG_UNSIGNED(100);
+        databoxBig a2 = DATABOX_BIG_UNSIGNED(2 * BUCKET_SIZE + 100);
+        databoxBig a4 = DATABOX_BIG_UNSIGNED(4 * BUCKET_SIZE + 100);
+        intsetBigAdd(a, &a0);
+        intsetBigAdd(a, &a2);
+        intsetBigAdd(a, &a4);
+
+        databoxBig b1 = DATABOX_BIG_UNSIGNED(1 * BUCKET_SIZE + 50);
+        databoxBig b2 = DATABOX_BIG_UNSIGNED(
+            2 * BUCKET_SIZE + 200); /* different offset in bucket 2 */
+        databoxBig b3 = DATABOX_BIG_UNSIGNED(3 * BUCKET_SIZE + 50);
+        intsetBigAdd(b, &b1);
+        intsetBigAdd(b, &b2);
+        intsetBigAdd(b, &b3);
+
+        intsetBigMergeInto(a, b);
+
+        /* Should have 6 elements (a2 and b2 are in same bucket but different
+         * values) */
+        if (intsetBigCountElements(a) != 6) {
+            ERR("Expected 6 elements, got %zu!", intsetBigCountElements(a));
+        }
+
+        /* Should have 5 buckets: 0, 1, 2, 3, 4 */
+        if (intsetBigCountBuckets(a) != 5) {
+            ERR("Expected 5 buckets, got %zu!", intsetBigCountBuckets(a));
+        }
+
+        /* Verify all elements */
+        databoxBig allVals[] = {a0, a2, a4, b1, b2, b3};
+        for (size_t i = 0; i < COUNT_ARRAY(allVals); i++) {
+            if (!intsetBigExists(a, &allVals[i])) {
+                ERR("Missing element %zu!", i);
+            }
+        }
+
+        intsetBigFree(a);
+        intsetBigFree(b);
+    }
+
+    TEST("intsetBigMergeInto - A extends past B") {
+        intsetBig *a = intsetBigNew();
+        intsetBig *b = intsetBigNew();
+
+        /* A has buckets 0, 1, 5, 6 */
+        intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(100));
+        intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(BUCKET_SIZE + 100));
+        intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(5 * BUCKET_SIZE + 100));
+        intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(6 * BUCKET_SIZE + 100));
+
+        /* B has only bucket 2 */
+        intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(2 * BUCKET_SIZE + 50));
+        intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(2 * BUCKET_SIZE + 60));
+
+        intsetBigMergeInto(a, b);
+
+        if (intsetBigCountElements(a) != 6) {
+            ERR("Expected 6 elements, got %zu!", intsetBigCountElements(a));
+        }
+        if (intsetBigCountBuckets(a) != 5) { /* 0, 1, 2, 5, 6 */
+            ERR("Expected 5 buckets, got %zu!", intsetBigCountBuckets(a));
+        }
+
+        intsetBigFree(a);
+        intsetBigFree(b);
+    }
+
+    TEST("intsetBigMergeInto - B is empty") {
+        intsetBig *a = intsetBigNew();
+        intsetBig *b = intsetBigNew();
+
+        intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(100));
+        intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(BUCKET_SIZE + 100));
+
+        intsetBigMergeInto(a, b);
+
+        if (intsetBigCountElements(a) != 2) {
+            ERR("Expected 2 elements, got %zu!", intsetBigCountElements(a));
+        }
+
+        intsetBigFree(a);
+        intsetBigFree(b);
+    }
+
+    TEST("intsetBigMergeInto - A is empty") {
+        intsetBig *a = intsetBigNew();
+        intsetBig *b = intsetBigNew();
+
+        intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(100));
+        intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(BUCKET_SIZE + 100));
+        intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(2 * BUCKET_SIZE + 100));
+
+        intsetBigMergeInto(a, b);
+
+        if (intsetBigCountElements(a) != 3) {
+            ERR("Expected 3 elements, got %zu!", intsetBigCountElements(a));
+        }
+        if (intsetBigCountBuckets(a) != 3) {
+            ERR("Expected 3 buckets, got %zu!", intsetBigCountBuckets(a));
+        }
+
+        /* Verify values are correct */
+        databoxBig v0 = DATABOX_BIG_UNSIGNED(100);
+        databoxBig v1 = DATABOX_BIG_UNSIGNED(BUCKET_SIZE + 100);
+        databoxBig v2 = DATABOX_BIG_UNSIGNED(2 * BUCKET_SIZE + 100);
+        if (!intsetBigExists(a, &v0) || !intsetBigExists(a, &v1) ||
+            !intsetBigExists(a, &v2)) {
+            ERRR("Missing merged elements!");
+        }
+
+        intsetBigFree(a);
+        intsetBigFree(b);
+    }
+
+    TEST("intsetBigMergeInto - negative buckets") {
+        intsetBig *a = intsetBigNew();
+        intsetBig *b = intsetBigNew();
+
+        /* A has negative buckets -2 and -1 */
+        intsetBigAdd(a, &DATABOX_BIG_SIGNED(-(int64_t)(2 * BUCKET_SIZE + 100)));
+        intsetBigAdd(a, &DATABOX_BIG_SIGNED(-100));
+
+        /* B has negative bucket -3 and positive bucket 0 */
+        intsetBigAdd(b, &DATABOX_BIG_SIGNED(-(int64_t)(3 * BUCKET_SIZE + 100)));
+        intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(50));
+
+        intsetBigMergeInto(a, b);
+
+        if (intsetBigCountElements(a) != 4) {
+            ERR("Expected 4 elements, got %zu!", intsetBigCountElements(a));
+        }
+
+        /* Verify negative values preserved correctly */
+        databoxBig neg3 = DATABOX_BIG_SIGNED(-(int64_t)(3 * BUCKET_SIZE + 100));
+        databoxBig neg2 = DATABOX_BIG_SIGNED(-(int64_t)(2 * BUCKET_SIZE + 100));
+        databoxBig neg1 = DATABOX_BIG_SIGNED(-100);
+        databoxBig pos0 = DATABOX_BIG_UNSIGNED(50);
+
+        if (!intsetBigExists(a, &neg3) || !intsetBigExists(a, &neg2) ||
+            !intsetBigExists(a, &neg1) || !intsetBigExists(a, &pos0)) {
+            ERRR("Missing elements after negative bucket merge!");
+        }
+
+        intsetBigFree(a);
+        intsetBigFree(b);
+    }
+
+    TEST("intsetBigMergeInto - many elements per bucket") {
+        intsetBig *a = intsetBigNew();
+        intsetBig *b = intsetBigNew();
+
+        /* A has 100 elements in bucket 0, 50 in bucket 2 */
+        for (uint64_t i = 0; i < 100; i++) {
+            intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(i));
+        }
+        for (uint64_t i = 0; i < 50; i++) {
+            intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(2 * BUCKET_SIZE + i));
+        }
+
+        /* B has 75 elements in bucket 1, 25 in bucket 2 (different offsets) */
+        for (uint64_t i = 0; i < 75; i++) {
+            intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(BUCKET_SIZE + i));
+        }
+        for (uint64_t i = 0; i < 25; i++) {
+            intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(2 * BUCKET_SIZE + 1000 + i));
+        }
+
+        intsetBigMergeInto(a, b);
+
+        /* 100 + 50 + 75 + 25 = 250 */
+        if (intsetBigCountElements(a) != 250) {
+            ERR("Expected 250 elements, got %zu!", intsetBigCountElements(a));
+        }
+        if (intsetBigCountBuckets(a) != 3) {
+            ERR("Expected 3 buckets, got %zu!", intsetBigCountBuckets(a));
+        }
+
+        intsetBigFree(a);
+        intsetBigFree(b);
+    }
+
+    TEST("intsetBigMergeInto - verify iteration order after merge") {
+        intsetBig *a = intsetBigNew();
+        intsetBig *b = intsetBigNew();
+
+        /* Add in non-sorted order across buckets */
+        intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(3 * BUCKET_SIZE + 500));
+        intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(BUCKET_SIZE + 100));
+        intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(2 * BUCKET_SIZE + 200));
+        intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(50));
+
+        intsetBigMergeInto(a, b);
+
+        /* Verify sorted iteration order */
+        intsetBigIterator iter;
+        databoxBig val, prev = {0};
+        bool first = true;
+        size_t count = 0;
+
+        intsetBigIteratorInit(a, &iter);
+        while (intsetBigIteratorNextBox(&iter, &val)) {
+            if (!first) {
+                if (databoxCompare((databox *)&prev, (databox *)&val) >= 0) {
+                    ERRR("Iteration order not sorted after merge!");
+                }
+            }
+            prev = val;
+            first = false;
+            count++;
+        }
+
+        if (count != 4) {
+            ERR("Expected 4 elements in iteration, got %zu!", count);
+        }
+
+        intsetBigFree(a);
+        intsetBigFree(b);
+    }
+
+    /* ====================================================================
+     * COMPREHENSIVE MULTI-BUCKET INTERSECT TESTS
+     * ==================================================================== */
+
+    TEST("intsetBigIntersect - multiple buckets, partial overlap") {
+        intsetBig *a = intsetBigNew();
+        intsetBig *b = intsetBigNew();
+        intsetBig *result = intsetBigNew();
+
+        /* A has buckets 0, 1, 2 */
+        intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(100));
+        intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(200));
+        intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(BUCKET_SIZE + 100));
+        intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(2 * BUCKET_SIZE + 100));
+
+        /* B has buckets 1, 2, 3 */
+        intsetBigAdd(b,
+                     &DATABOX_BIG_UNSIGNED(BUCKET_SIZE + 100)); /* matches A */
+        intsetBigAdd(b,
+                     &DATABOX_BIG_UNSIGNED(BUCKET_SIZE + 200)); /* no match */
+        intsetBigAdd(
+            b, &DATABOX_BIG_UNSIGNED(2 * BUCKET_SIZE + 100)); /* matches A */
+        intsetBigAdd(
+            b, &DATABOX_BIG_UNSIGNED(3 * BUCKET_SIZE + 100)); /* no match */
+
+        size_t count = intsetBigIntersect(a, b, result);
+
+        if (count != 2) {
+            ERR("Expected intersection count 2, got %zu!", count);
+        }
+        if (intsetBigCountElements(result) != 2) {
+            ERR("Expected 2 elements in result, got %zu!",
+                intsetBigCountElements(result));
+        }
+
+        /* Verify correct values */
+        databoxBig v1 = DATABOX_BIG_UNSIGNED(BUCKET_SIZE + 100);
+        databoxBig v2 = DATABOX_BIG_UNSIGNED(2 * BUCKET_SIZE + 100);
+        if (!intsetBigExists(result, &v1) || !intsetBigExists(result, &v2)) {
+            ERRR("Intersection missing expected values!");
+        }
+
+        intsetBigFree(a);
+        intsetBigFree(b);
+        intsetBigFree(result);
+    }
+
+    TEST("intsetBigIntersect - completely disjoint buckets") {
+        intsetBig *a = intsetBigNew();
+        intsetBig *b = intsetBigNew();
+        intsetBig *result = intsetBigNew();
+
+        /* A has buckets 0, 2, 4 */
+        intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(100));
+        intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(2 * BUCKET_SIZE + 100));
+        intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(4 * BUCKET_SIZE + 100));
+
+        /* B has buckets 1, 3, 5 */
+        intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(BUCKET_SIZE + 100));
+        intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(3 * BUCKET_SIZE + 100));
+        intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(5 * BUCKET_SIZE + 100));
+
+        size_t count = intsetBigIntersect(a, b, result);
+
+        if (count != 0) {
+            ERR("Expected intersection count 0, got %zu!", count);
+        }
+        if (intsetBigCountElements(result) != 0) {
+            ERR("Expected 0 elements in result, got %zu!",
+                intsetBigCountElements(result));
+        }
+
+        intsetBigFree(a);
+        intsetBigFree(b);
+        intsetBigFree(result);
+    }
+
+    TEST("intsetBigIntersect - same bucket different values") {
+        intsetBig *a = intsetBigNew();
+        intsetBig *b = intsetBigNew();
+        intsetBig *result = intsetBigNew();
+
+        /* A and B have same bucket but no overlapping values */
+        intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(100));
+        intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(200));
+        intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(300));
+
+        intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(400));
+        intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(500));
+        intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(600));
+
+        size_t count = intsetBigIntersect(a, b, result);
+
+        if (count != 0) {
+            ERR("Expected 0, got %zu!", count);
+        }
+
+        intsetBigFree(a);
+        intsetBigFree(b);
+        intsetBigFree(result);
+    }
+
+    TEST("intsetBigIntersect - negative bucket overlap") {
+        intsetBig *a = intsetBigNew();
+        intsetBig *b = intsetBigNew();
+        intsetBig *result = intsetBigNew();
+
+        /* A has negative and positive buckets */
+        intsetBigAdd(a, &DATABOX_BIG_SIGNED(-100));
+        intsetBigAdd(a, &DATABOX_BIG_SIGNED(-(int64_t)(BUCKET_SIZE + 50)));
+        intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(100));
+
+        /* B overlaps on negative bucket */
+        intsetBigAdd(b, &DATABOX_BIG_SIGNED(-100)); /* matches */
+        intsetBigAdd(b, &DATABOX_BIG_SIGNED(-(int64_t)(2 * BUCKET_SIZE + 50)));
+        intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(200));
+
+        size_t count = intsetBigIntersect(a, b, result);
+
+        if (count != 1) {
+            ERR("Expected 1, got %zu!", count);
+        }
+
+        databoxBig expected = DATABOX_BIG_SIGNED(-100);
+        if (!intsetBigExists(result, &expected)) {
+            ERRR("Missing expected intersection value!");
+        }
+
+        intsetBigFree(a);
+        intsetBigFree(b);
+        intsetBigFree(result);
+    }
+
+    /* ====================================================================
+     * COMPREHENSIVE MULTI-BUCKET EQUAL/SUBSET TESTS
+     * ==================================================================== */
+
+    TEST("intsetBigEqual - multiple buckets") {
+        intsetBig *a = intsetBigNew();
+        intsetBig *b = intsetBigNew();
+
+        /* Add same values across multiple buckets */
+        uint64_t vals[] = {100, BUCKET_SIZE + 50, 2 * BUCKET_SIZE + 200,
+                           5 * BUCKET_SIZE + 1000};
+
+        for (size_t i = 0; i < COUNT_ARRAY(vals); i++) {
+            intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(vals[i]));
+            intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(vals[i]));
+        }
+
+        if (!intsetBigEqual(a, b)) {
+            ERRR("Sets with same multi-bucket values should be equal!");
+        }
+
+        /* Add one more to a */
+        intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(3 * BUCKET_SIZE + 100));
+        if (intsetBigEqual(a, b)) {
+            ERRR("Sets with different bucket counts should not be equal!");
+        }
+
+        intsetBigFree(a);
+        intsetBigFree(b);
+    }
+
+    TEST("intsetBigSubset - across multiple buckets") {
+        intsetBig *a = intsetBigNew();
+        intsetBig *b = intsetBigNew();
+
+        /* B has elements across buckets 0, 1, 2, 3 */
+        intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(100));
+        intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(200));
+        intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(BUCKET_SIZE + 100));
+        intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(2 * BUCKET_SIZE + 100));
+        intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(3 * BUCKET_SIZE + 100));
+
+        /* A has subset from buckets 0 and 2 */
+        intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(100));
+        intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(2 * BUCKET_SIZE + 100));
+
+        if (!intsetBigSubset(a, b)) {
+            ERRR("A should be subset of B!");
+        }
+
+        /* Add element not in B */
+        intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(4 * BUCKET_SIZE + 999));
+        if (intsetBigSubset(a, b)) {
+            ERRR("A with extra bucket should not be subset of B!");
+        }
+
+        intsetBigFree(a);
+        intsetBigFree(b);
+    }
+
+    /* ====================================================================
+     * FUZZER TESTS FOR SET OPERATIONS
+     * ==================================================================== */
+
+    TEST("fuzzer - MergeInto correctness across many buckets") {
+        srandom(11111);
+
+        for (int trial = 0; trial < 20; trial++) {
+            intsetBig *a = intsetBigNew();
+            intsetBig *b = intsetBigNew();
+            intsetBig *reference = intsetBigNew();
+
+            /* Generate random elements across many buckets */
+            size_t aCount = 10 + (random() % 50);
+            size_t bCount = 10 + (random() % 50);
+
+            for (size_t i = 0; i < aCount; i++) {
+                uint64_t bucket = random() % 20;
+                uint64_t offset = random() % 1000;
+                uint64_t val = bucket * BUCKET_SIZE + offset;
+                databoxBig box = DATABOX_BIG_UNSIGNED(val);
+                intsetBigAdd(a, &box);
+                intsetBigAdd(reference, &box);
+            }
+
+            for (size_t i = 0; i < bCount; i++) {
+                uint64_t bucket = random() % 20;
+                uint64_t offset = random() % 1000;
+                uint64_t val = bucket * BUCKET_SIZE + offset;
+                databoxBig box = DATABOX_BIG_UNSIGNED(val);
+                intsetBigAdd(b, &box);
+                intsetBigAdd(reference, &box);
+            }
+
+            intsetBigMergeInto(a, b);
+
+            /* Verify merge result equals reference */
+            if (!intsetBigEqual(a, reference)) {
+                ERR("Trial %d: Merge result doesn't match reference!", trial);
+                ERR("  a has %zu elements, reference has %zu",
+                    intsetBigCountElements(a),
+                    intsetBigCountElements(reference));
+            }
+
+            /* Verify all reference elements exist in merged set */
+            intsetBigIterator iter;
+            databoxBig val;
+            intsetBigIteratorInit(reference, &iter);
+            while (intsetBigIteratorNextBox(&iter, &val)) {
+                if (!intsetBigExists(a, &val)) {
+                    ERR("Trial %d: Merged set missing element!", trial);
+                }
+            }
+
+            intsetBigFree(a);
+            intsetBigFree(b);
+            intsetBigFree(reference);
+        }
+    }
+
+    TEST("fuzzer - Intersect correctness across many buckets") {
+        srandom(22222);
+
+        for (int trial = 0; trial < 20; trial++) {
+            intsetBig *a = intsetBigNew();
+            intsetBig *b = intsetBigNew();
+            intsetBig *result = intsetBigNew();
+
+            /* Generate random elements */
+            size_t aCount = 20 + (random() % 100);
+            size_t bCount = 20 + (random() % 100);
+
+            for (size_t i = 0; i < aCount; i++) {
+                uint64_t bucket = random() % 15;
+                uint64_t offset = random() % 500;
+                uint64_t val = bucket * BUCKET_SIZE + offset;
+                intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(val));
+            }
+
+            for (size_t i = 0; i < bCount; i++) {
+                uint64_t bucket = random() % 15;
+                uint64_t offset = random() % 500;
+                uint64_t val = bucket * BUCKET_SIZE + offset;
+                intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(val));
+            }
+
+            size_t count = intsetBigIntersect(a, b, result);
+
+            /* Verify every element in result exists in both A and B */
+            intsetBigIterator iter;
+            databoxBig val;
+            size_t verifiedCount = 0;
+
+            intsetBigIteratorInit(result, &iter);
+            while (intsetBigIteratorNextBox(&iter, &val)) {
+                if (!intsetBigExists(a, &val)) {
+                    ERR("Trial %d: Intersection element not in A!", trial);
+                }
+                if (!intsetBigExists(b, &val)) {
+                    ERR("Trial %d: Intersection element not in B!", trial);
+                }
+                verifiedCount++;
+            }
+
+            if (verifiedCount != count) {
+                ERR("Trial %d: Count mismatch %zu vs %zu!", trial,
+                    verifiedCount, count);
+            }
+
+            /* Verify no element in both A and B is missing from result */
+            intsetBigIteratorInit(a, &iter);
+            while (intsetBigIteratorNextBox(&iter, &val)) {
+                if (intsetBigExists(b, &val)) {
+                    if (!intsetBigExists(result, &val)) {
+                        ERR("Trial %d: Element in both A and B missing from "
+                            "result!",
+                            trial);
+                    }
+                }
+            }
+
+            intsetBigFree(a);
+            intsetBigFree(b);
+            intsetBigFree(result);
+        }
+    }
+
+    TEST("fuzzer - MergeInto with signed values across buckets") {
+        srandom(33333);
+
+        for (int trial = 0; trial < 15; trial++) {
+            intsetBig *a = intsetBigNew();
+            intsetBig *b = intsetBigNew();
+            intsetBig *reference = intsetBigNew();
+
+            /* Generate random signed values across positive and negative
+             * buckets */
+            size_t aCount = 10 + (random() % 40);
+            size_t bCount = 10 + (random() % 40);
+
+            for (size_t i = 0; i < aCount; i++) {
+                int64_t bucket = (random() % 20) - 10; /* -10 to +9 */
+                int64_t offset = random() % 1000;
+                int64_t val;
+                if (bucket < 0) {
+                    val = bucket * (int64_t)BUCKET_SIZE - offset;
+                } else {
+                    val = bucket * (int64_t)BUCKET_SIZE + offset;
+                }
+                databoxBig box = DATABOX_BIG_SIGNED(val);
+                intsetBigAdd(a, &box);
+                intsetBigAdd(reference, &box);
+            }
+
+            for (size_t i = 0; i < bCount; i++) {
+                int64_t bucket = (random() % 20) - 10;
+                int64_t offset = random() % 1000;
+                int64_t val;
+                if (bucket < 0) {
+                    val = bucket * (int64_t)BUCKET_SIZE - offset;
+                } else {
+                    val = bucket * (int64_t)BUCKET_SIZE + offset;
+                }
+                databoxBig box = DATABOX_BIG_SIGNED(val);
+                intsetBigAdd(b, &box);
+                intsetBigAdd(reference, &box);
+            }
+
+            intsetBigMergeInto(a, b);
+
+            if (intsetBigCountElements(a) !=
+                intsetBigCountElements(reference)) {
+                ERR("Trial %d: Element count mismatch after signed merge!",
+                    trial);
+            }
+
+            /* Verify sorted order preserved */
+            intsetBigIterator iter;
+            databoxBig val, prev = {0};
+            bool first = true;
+
+            intsetBigIteratorInit(a, &iter);
+            while (intsetBigIteratorNextBox(&iter, &val)) {
+                if (!first) {
+                    if (databoxCompare((databox *)&prev, (databox *)&val) >=
+                        0) {
+                        ERR("Trial %d: Sort order violated after signed merge!",
+                            trial);
+                    }
+                }
+                prev = val;
+                first = false;
+            }
+
+            intsetBigFree(a);
+            intsetBigFree(b);
+            intsetBigFree(reference);
+        }
+    }
+
+    TEST("fuzzer - sequential operations stress test") {
+        srandom(44444);
+        intsetBig *sets[5];
+
+        for (int i = 0; i < 5; i++) {
+            sets[i] = intsetBigNew();
+        }
+
+        /* Perform many random operations */
+        for (int op = 0; op < 500; op++) {
+            int opType = random() % 4;
+            int setIdx = random() % 5;
+
+            switch (opType) {
+            case 0: { /* Add random value */
+                uint64_t bucket = random() % 30;
+                uint64_t offset = random() % 2000;
+                uint64_t val = bucket * BUCKET_SIZE + offset;
+                intsetBigAdd(sets[setIdx], &DATABOX_BIG_UNSIGNED(val));
+                break;
+            }
+            case 1: { /* Merge two sets */
+                int other = random() % 5;
+                if (other != setIdx) {
+                    intsetBig *copy = intsetBigCopy(sets[other]);
+                    intsetBigMergeInto(sets[setIdx], copy);
+                    intsetBigFree(copy);
+                }
+                break;
+            }
+            case 2: { /* Intersect two sets */
+                int other = random() % 5;
+                if (other != setIdx &&
+                    intsetBigCountElements(sets[setIdx]) > 0 &&
+                    intsetBigCountElements(sets[other]) > 0) {
+                    intsetBig *result = intsetBigNew();
+                    intsetBigIntersect(sets[setIdx], sets[other], result);
+                    intsetBigFree(sets[setIdx]);
+                    sets[setIdx] = result;
+                }
+                break;
+            }
+            case 3: { /* Remove random value */
+                uint64_t bucket = random() % 30;
+                uint64_t offset = random() % 2000;
+                uint64_t val = bucket * BUCKET_SIZE + offset;
+                intsetBigRemove(sets[setIdx], &DATABOX_BIG_UNSIGNED(val));
+                break;
+            }
+            }
+        }
+
+        /* Verify all sets are in valid state */
+        for (int i = 0; i < 5; i++) {
+            /* Check iteration works and is sorted */
+            intsetBigIterator iter;
+            databoxBig val, prev = {0};
+            bool first = true;
+            size_t count = 0;
+
+            intsetBigIteratorInit(sets[i], &iter);
+            while (intsetBigIteratorNextBox(&iter, &val)) {
+                if (!first) {
+                    if (databoxCompare((databox *)&prev, (databox *)&val) >=
+                        0) {
+                        ERR("Set %d: Sort order violated after stress test!",
+                            i);
+                    }
+                }
+                prev = val;
+                first = false;
+                count++;
+            }
+
+            if (count != intsetBigCountElements(sets[i])) {
+                ERR("Set %d: Count mismatch %zu vs %zu!", i, count,
+                    intsetBigCountElements(sets[i]));
+            }
+
+            intsetBigFree(sets[i]);
+        }
+    }
+
+    TEST("fuzzer - 128-bit values in multi-bucket operations") {
+        srandom(55555);
+        intsetBig *a = intsetBigNew();
+        intsetBig *b = intsetBigNew();
+
+        /* Add 128-bit values that span multiple buckets */
+        for (int i = 0; i < 50; i++) {
+            __uint128_t bucket = random() % 100;
+            __uint128_t offset = random() % 100000;
+            __uint128_t val = bucket * BUCKET_SIZE + offset;
+
+            /* Also add some very large 128-bit values */
+            if (random() % 3 == 0) {
+                val = ((__uint128_t)1 << 70) + (random() % 1000000);
+            }
+
+            databoxBig box;
+            DATABOX_BIG_UNSIGNED_128(&box, val);
+            if (random() % 2) {
+                intsetBigAdd(a, &box);
+            } else {
+                intsetBigAdd(b, &box);
+            }
+        }
+
+        /* Test merge */
+        size_t aOrigCount = intsetBigCountElements(a);
+        size_t bOrigCount = intsetBigCountElements(b);
+        intsetBig *aCopy = intsetBigCopy(a);
+
+        intsetBigMergeInto(aCopy, b);
+
+        /* Merged count should be at least max(aCount, bCount) */
+        size_t mergedCount = intsetBigCountElements(aCopy);
+        size_t maxOrig = aOrigCount > bOrigCount ? aOrigCount : bOrigCount;
+        if (mergedCount < maxOrig) {
+            ERR("Merged count %zu less than max original %zu!", mergedCount,
+                maxOrig);
+        }
+
+        /* Verify all original A and B elements exist in merge */
+        intsetBigIterator iter;
+        databoxBig val;
+
+        intsetBigIteratorInit(a, &iter);
+        while (intsetBigIteratorNextBox(&iter, &val)) {
+            if (!intsetBigExists(aCopy, &val)) {
+                ERRR("128-bit merge missing element from A!");
+            }
+        }
+
+        intsetBigIteratorInit(b, &iter);
+        while (intsetBigIteratorNextBox(&iter, &val)) {
+            if (!intsetBigExists(aCopy, &val)) {
+                ERRR("128-bit merge missing element from B!");
+            }
+        }
+
+        intsetBigFree(a);
+        intsetBigFree(b);
+        intsetBigFree(aCopy);
+    }
+
+    TEST("regression - MergeInto uses correct bucket key") {
+        /* This test specifically catches the bug where key[0] was used
+         * instead of key[1] when inserting B's bucket into A */
+        intsetBig *a = intsetBigNew();
+        intsetBig *b = intsetBigNew();
+
+        /* A has bucket 0 only */
+        intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(100));
+
+        /* B has bucket 5 only */
+        uint64_t bVal = 5 * BUCKET_SIZE + 200;
+        intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(bVal));
+
+        intsetBigMergeInto(a, b);
+
+        /* After merge, we should find the exact value from B */
+        databoxBig check = DATABOX_BIG_UNSIGNED(bVal);
+        if (!intsetBigExists(a, &check)) {
+            ERRR("Value from B's bucket not found - wrong bucket key used!");
+        }
+
+        if (intsetBigCountElements(a) != 2) {
+            ERR("Expected 2 elements, got %zu!", intsetBigCountElements(a));
+        }
+
+        intsetBigFree(a);
+        intsetBigFree(b);
+    }
+
+    TEST("regression - MergeInto remainder loop") {
+        /* This test specifically catches the missing remainder loop bug */
+        intsetBig *a = intsetBigNew();
+        intsetBig *b = intsetBigNew();
+
+        /* A has bucket 0 */
+        intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(100));
+
+        /* B has buckets 10, 11, 12 (all beyond A's highest bucket) */
+        databoxBig b10 = DATABOX_BIG_UNSIGNED(10 * BUCKET_SIZE + 100);
+        databoxBig b11 = DATABOX_BIG_UNSIGNED(11 * BUCKET_SIZE + 100);
+        databoxBig b12 = DATABOX_BIG_UNSIGNED(12 * BUCKET_SIZE + 100);
+        intsetBigAdd(b, &b10);
+        intsetBigAdd(b, &b11);
+        intsetBigAdd(b, &b12);
+
+        intsetBigMergeInto(a, b);
+
+        /* All 4 elements must exist */
+        if (intsetBigCountElements(a) != 4) {
+            ERR("Expected 4 elements, got %zu (remainder loop bug)!",
+                intsetBigCountElements(a));
+        }
+
+        if (!intsetBigExists(a, &b10) || !intsetBigExists(a, &b11) ||
+            !intsetBigExists(a, &b12)) {
+            ERRR("Missing B's high bucket elements (remainder loop bug)!");
+        }
+
+        intsetBigFree(a);
+        intsetBigFree(b);
+    }
+
+#undef BUCKET_SIZE
 
     TEST_FINAL_RESULT;
 }
