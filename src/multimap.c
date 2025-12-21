@@ -28,6 +28,9 @@
 #define MULTIMAP_USE_(map) _PTRLIB_TOP_USE_ALL(map)
 #define MULTIMAP_TAG_(map, type) ((multimap *)_PTRLIB_TAG(map, type))
 
+/* Stack allocation threshold for iterator element arrays to avoid VLA blowup */
+#define MULTIMAP_STACK_THRESHOLD 8
+
 #define mms(m) ((multimapSmall *)MULTIMAP_USE_(m))
 #define mmm(m) ((multimapMedium *)MULTIMAP_USE_(m))
 #define mmf(m) ((multimapFull *)MULTIMAP_USE_(m))
@@ -664,26 +667,54 @@ size_t multimapProcessUntil(multimap *m, const multimapPredicate *p,
 void multimapIntersectKeys(multimap **restrict dst,
                            multimapIterator *restrict const a,
                            multimapIterator *restrict const b) {
-    /* TODO: remove the VLAs here */
-    databox ea_[a->elementsPerEntry];
-    databox eb_[b->elementsPerEntry];
-    databox *ea[a->elementsPerEntry];
-    databox *eb[b->elementsPerEntry];
+    const size_t epeA = a->elementsPerEntry;
+    const size_t epeB = b->elementsPerEntry;
 
-    if (a->elementsPerEntry == b->elementsPerEntry) {
+    /* Use stack for small element counts, heap for larger to avoid overflow */
+    databox eaStack_[MULTIMAP_STACK_THRESHOLD];
+    databox ebStack_[MULTIMAP_STACK_THRESHOLD];
+    databox *eaStack[MULTIMAP_STACK_THRESHOLD];
+    databox *ebStack[MULTIMAP_STACK_THRESHOLD];
+
+    databox *eaHeap_ = NULL, *ebHeap_ = NULL;
+    databox **eaHeap = NULL, **ebHeap = NULL;
+
+    databox *ea_, *eb_;
+    databox **ea, **eb;
+
+    if (epeA <= MULTIMAP_STACK_THRESHOLD) {
+        ea_ = eaStack_;
+        ea = eaStack;
+    } else {
+        eaHeap_ = zmalloc(epeA * sizeof(databox));
+        eaHeap = zmalloc(epeA * sizeof(databox *));
+        ea_ = eaHeap_;
+        ea = eaHeap;
+    }
+
+    if (epeB <= MULTIMAP_STACK_THRESHOLD) {
+        eb_ = ebStack_;
+        eb = ebStack;
+    } else {
+        ebHeap_ = zmalloc(epeB * sizeof(databox));
+        ebHeap = zmalloc(epeB * sizeof(databox *));
+        eb_ = ebHeap_;
+        eb = ebHeap;
+    }
+
+    if (epeA == epeB) {
         /* If maps have the same element count, assign both at once */
-        for (size_t i = 0; i < a->elementsPerEntry; i++) {
+        for (size_t i = 0; i < epeA; i++) {
             ea[i] = &ea_[i];
             eb[i] = &eb_[i];
         }
     } else {
         /* else, different element accounts so we need two loops */
-        for (size_t i = 0; i < a->elementsPerEntry; i++) {
+        for (size_t i = 0; i < epeA; i++) {
             ea[i] = &ea_[i];
         }
 
-        /* We could combine these if we check element counts are the same... */
-        for (size_t i = 0; i < b->elementsPerEntry; i++) {
+        for (size_t i = 0; i < epeB; i++) {
             eb[i] = &eb_[i];
         }
     }
@@ -691,7 +722,7 @@ void multimapIntersectKeys(multimap **restrict dst,
     bool foundA = multimapIteratorNext(a, ea);
     bool foundB = multimapIteratorNext(b, eb);
 
-    /* element-by-element zipper algoirthm for intersecting two sorted lists. */
+    /* element-by-element zipper algorithm for intersecting two sorted lists. */
     while (foundA && foundB) {
         const int compared = databoxCompare(ea[0], eb[0]);
         if (compared < 0) {
@@ -704,6 +735,15 @@ void multimapIntersectKeys(multimap **restrict dst,
             foundA = multimapIteratorNext(a, ea);
             foundB = multimapIteratorNext(b, eb);
         }
+    }
+
+    if (eaHeap_) {
+        zfree(eaHeap_);
+        zfree(eaHeap);
+    }
+    if (ebHeap_) {
+        zfree(ebHeap_);
+        zfree(ebHeap);
     }
 }
 
@@ -730,20 +770,19 @@ void multimapDifferenceKeys(multimap **restrict dst,
 
     while (foundA && foundB) {
         const int compared = databoxCompare(ea[0], eb[0]);
-        if (compared) {
-            /* elements not equal, meaning they are different!
-             * Only add the first map element to the result because of how later
-             * usage expects just [A] - [B], not the complete symmetric set
-             * difference of A and B. */
+        if (compared < 0) {
+            /* ea < eb: element in A is smaller than current B element.
+             * Since B is sorted and we haven't found ea yet, ea is NOT in B.
+             * Add it to the difference and advance A. */
             multimapInsert(dst, (const databox **)ea);
-
-            if (compared < 0) {
-                foundA = multimapIteratorNext(a, ea);
-            } else {
-                foundB = multimapIteratorNext(b, eb);
-            }
+            foundA = multimapIteratorNext(a, ea);
+        } else if (compared > 0) {
+            /* ea > eb: element in B is smaller than current A element.
+             * Just advance B to catch up - ea might still be in B. */
+            foundB = multimapIteratorNext(b, eb);
         } else {
-            /* else, elements are equal so they definitely aren't different. */
+            /* ea == eb: element exists in both A and B.
+             * Don't add to difference, advance both. */
             foundA = multimapIteratorNext(a, ea);
             foundB = multimapIteratorNext(b, eb);
         }
@@ -773,10 +812,38 @@ void multimapCopyKeys(multimap **restrict dst, const multimap *restrict src) {
     multimapIterator msrc;
     multimapIteratorInit(src, &msrc, true);
 
-    databox *bsrc[msrc.elementsPerEntry];
+    const size_t epe = msrc.elementsPerEntry;
+
+    /* Use stack for small element counts, heap for larger to avoid overflow */
+    databox bsrcStack_[MULTIMAP_STACK_THRESHOLD];
+    databox *bsrcStack[MULTIMAP_STACK_THRESHOLD];
+    databox *bsrcHeap_ = NULL;
+    databox **bsrcHeap = NULL;
+
+    databox *bsrc_;
+    databox **bsrc;
+
+    if (epe <= MULTIMAP_STACK_THRESHOLD) {
+        bsrc_ = bsrcStack_;
+        bsrc = bsrcStack;
+    } else {
+        bsrcHeap_ = zmalloc(epe * sizeof(databox));
+        bsrcHeap = zmalloc(epe * sizeof(databox *));
+        bsrc_ = bsrcHeap_;
+        bsrc = bsrcHeap;
+    }
+
+    for (size_t i = 0; i < epe; i++) {
+        bsrc[i] = &bsrc_[i];
+    }
 
     while (multimapIteratorNext(&msrc, bsrc)) {
         multimapInsert(dst, (const databox **)&bsrc[0]);
+    }
+
+    if (bsrcHeap_) {
+        zfree(bsrcHeap_);
+        zfree(bsrcHeap);
     }
 }
 
@@ -3061,6 +3128,502 @@ int multimapTest(int argc, char *argv[]) {
 
     printf(
         "\n=== All DIRECT implementation key replacement tests passed! ===\n");
+
+    /* ====================================================================
+     * Cross-Tier Set Operations Tests
+     * These test multimapIntersectKeys, multimapDifferenceKeys, and
+     * multimapCopyKeys across Small/Medium/Full tier combinations.
+     * Previously these functions had ZERO test coverage!
+     * ==================================================================== */
+    printf("\n=== Testing Cross-Tier Set Operations ===\n");
+
+    /* Helper to create a map at specific tier with given values */
+#define CREATE_MAP_AT_TIER(name, tier, count, startVal)                        \
+    multimap *name = multimapNewLimit(1, FLEX_CAP_LEVEL_64);                   \
+    for (int64_t i = startVal; i < startVal + (count); i++) {                  \
+        databox v = databoxNewSigned(i);                                       \
+        const databox *elems[1] = {&v};                                        \
+        multimapInsert(&name, elems);                                          \
+    }                                                                          \
+    if (tier == MULTIMAP_TYPE_MEDIUM || tier == MULTIMAP_TYPE_FULL) {          \
+        /* Force to Medium by adding more elements */                          \
+        for (int64_t i = startVal + 1000; i < startVal + 1100; i++) {          \
+            databox v = databoxNewSigned(i);                                   \
+            const databox *elems[1] = {&v};                                    \
+            multimapInsert(&name, elems);                                      \
+        }                                                                      \
+    }                                                                          \
+    if (tier == MULTIMAP_TYPE_FULL) {                                          \
+        /* Force to Full by adding even more elements */                       \
+        for (int64_t i = startVal + 2000; i < startVal + 2500; i++) {          \
+            databox v = databoxNewSigned(i);                                   \
+            const databox *elems[1] = {&v};                                    \
+            multimapInsert(&name, elems);                                      \
+        }                                                                      \
+    }
+
+    /* Helper to verify a map contains expected value */
+#define VERIFY_MAP_CONTAINS(m, val)                                            \
+    do {                                                                       \
+        databox searchKey = databoxNewSigned(val);                             \
+        if (!multimapExists(m, &searchKey)) {                                  \
+            ERR("Expected value %lld not found in result map!",                \
+                (long long)(val));                                             \
+            assert(false);                                                     \
+        }                                                                      \
+    } while (0)
+
+#define VERIFY_MAP_NOT_CONTAINS(m, val)                                        \
+    do {                                                                       \
+        databox searchKey = databoxNewSigned(val);                             \
+        if (multimapExists(m, &searchKey)) {                                   \
+            ERR("Value %lld should NOT be in result map!", (long long)(val));  \
+            assert(false);                                                     \
+        }                                                                      \
+    } while (0)
+
+    TEST("multimapIntersectKeys - Small ∩ Small") {
+        multimap *a = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        multimap *b = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+
+        /* A = {1, 2, 3, 4, 5} */
+        for (int64_t i = 1; i <= 5; i++) {
+            databox v = databoxNewSigned(i);
+            const databox *elems[1] = {&v};
+            multimapInsert(&a, elems);
+        }
+
+        /* B = {3, 4, 5, 6, 7} */
+        for (int64_t i = 3; i <= 7; i++) {
+            databox v = databoxNewSigned(i);
+            const databox *elems[1] = {&v};
+            multimapInsert(&b, elems);
+        }
+
+        assert(multimapType_(a) == MULTIMAP_TYPE_SMALL);
+        assert(multimapType_(b) == MULTIMAP_TYPE_SMALL);
+
+        /* Intersect: A ∩ B should be {3, 4, 5} */
+        multimap *result = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        multimapIterator ia, ib;
+        multimapIteratorInit(a, &ia, true);
+        multimapIteratorInit(b, &ib, true);
+        multimapIntersectKeys(&result, &ia, &ib);
+
+        assert(multimapCount(result) == 3);
+        VERIFY_MAP_CONTAINS(result, 3);
+        VERIFY_MAP_CONTAINS(result, 4);
+        VERIFY_MAP_CONTAINS(result, 5);
+        VERIFY_MAP_NOT_CONTAINS(result, 1);
+        VERIFY_MAP_NOT_CONTAINS(result, 2);
+        VERIFY_MAP_NOT_CONTAINS(result, 6);
+        VERIFY_MAP_NOT_CONTAINS(result, 7);
+
+        multimapFree(a);
+        multimapFree(b);
+        multimapFree(result);
+    }
+
+    TEST("multimapIntersectKeys - Small ∩ Full (cross-tier)") {
+        multimap *a = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        multimap *b = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+
+        /* A = {10, 20, 30, 40, 50} - stays Small */
+        int64_t aVals[] = {10, 20, 30, 40, 50};
+        for (int i = 0; i < 5; i++) {
+            databox v = databoxNewSigned(aVals[i]);
+            const databox *elems[1] = {&v};
+            multimapInsert(&a, elems);
+        }
+
+        /* B = many elements to force Full tier, including 20, 30, 40 */
+        for (int64_t i = 0; i < 600; i++) {
+            databox v = databoxNewSigned(i);
+            const databox *elems[1] = {&v};
+            multimapInsert(&b, elems);
+        }
+
+        assert(multimapType_(a) == MULTIMAP_TYPE_SMALL);
+        assert(multimapType_(b) == MULTIMAP_TYPE_FULL);
+
+        /* Intersect: Should find {10, 20, 30, 40, 50} since all are in B */
+        multimap *result = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        multimapIterator ia, ib;
+        multimapIteratorInit(a, &ia, true);
+        multimapIteratorInit(b, &ib, true);
+        multimapIntersectKeys(&result, &ia, &ib);
+
+        assert(multimapCount(result) == 5);
+        for (int i = 0; i < 5; i++) {
+            VERIFY_MAP_CONTAINS(result, aVals[i]);
+        }
+
+        multimapFree(a);
+        multimapFree(b);
+        multimapFree(result);
+    }
+
+    TEST("multimapIntersectKeys - Full ∩ Full (both large, partial overlap)") {
+        multimap *a = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        multimap *b = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+
+        /* A = {0..599} */
+        for (int64_t i = 0; i < 600; i++) {
+            databox v = databoxNewSigned(i);
+            const databox *elems[1] = {&v};
+            multimapInsert(&a, elems);
+        }
+
+        /* B = {300..899} */
+        for (int64_t i = 300; i < 900; i++) {
+            databox v = databoxNewSigned(i);
+            const databox *elems[1] = {&v};
+            multimapInsert(&b, elems);
+        }
+
+        assert(multimapType_(a) == MULTIMAP_TYPE_FULL);
+        assert(multimapType_(b) == MULTIMAP_TYPE_FULL);
+
+        /* Intersect: Should be {300..599} = 300 elements */
+        multimap *result = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        multimapIterator ia, ib;
+        multimapIteratorInit(a, &ia, true);
+        multimapIteratorInit(b, &ib, true);
+        multimapIntersectKeys(&result, &ia, &ib);
+
+        assert(multimapCount(result) == 300);
+        VERIFY_MAP_CONTAINS(result, 300);
+        VERIFY_MAP_CONTAINS(result, 450);
+        VERIFY_MAP_CONTAINS(result, 599);
+        VERIFY_MAP_NOT_CONTAINS(result, 299);
+        VERIFY_MAP_NOT_CONTAINS(result, 600);
+
+        multimapFree(a);
+        multimapFree(b);
+        multimapFree(result);
+    }
+
+    TEST("multimapIntersectKeys - disjoint sets (no overlap)") {
+        multimap *a = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        multimap *b = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+
+        /* A = {0..99} */
+        for (int64_t i = 0; i < 100; i++) {
+            databox v = databoxNewSigned(i);
+            const databox *elems[1] = {&v};
+            multimapInsert(&a, elems);
+        }
+
+        /* B = {1000..1099} */
+        for (int64_t i = 1000; i < 1100; i++) {
+            databox v = databoxNewSigned(i);
+            const databox *elems[1] = {&v};
+            multimapInsert(&b, elems);
+        }
+
+        /* Intersect: Should be empty */
+        multimap *result = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        multimapIterator ia, ib;
+        multimapIteratorInit(a, &ia, true);
+        multimapIteratorInit(b, &ib, true);
+        multimapIntersectKeys(&result, &ia, &ib);
+
+        assert(multimapCount(result) == 0);
+
+        multimapFree(a);
+        multimapFree(b);
+        multimapFree(result);
+    }
+
+    TEST("multimapDifferenceKeys - Small \\ Small (basic difference)") {
+        multimap *a = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        multimap *b = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+
+        /* A = {1, 2, 3, 4, 5} */
+        for (int64_t i = 1; i <= 5; i++) {
+            databox v = databoxNewSigned(i);
+            const databox *elems[1] = {&v};
+            multimapInsert(&a, elems);
+        }
+
+        /* B = {3, 4, 5, 6, 7} */
+        for (int64_t i = 3; i <= 7; i++) {
+            databox v = databoxNewSigned(i);
+            const databox *elems[1] = {&v};
+            multimapInsert(&b, elems);
+        }
+
+        /* Difference A \ B should be {1, 2} (in A but not B) */
+        multimap *result = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        multimapIterator ia, ib;
+        multimapIteratorInit(a, &ia, true);
+        multimapIteratorInit(b, &ib, true);
+        multimapDifferenceKeys(&result, &ia, &ib, false);
+
+        assert(multimapCount(result) == 2);
+        VERIFY_MAP_CONTAINS(result, 1);
+        VERIFY_MAP_CONTAINS(result, 2);
+        VERIFY_MAP_NOT_CONTAINS(result, 3);
+        VERIFY_MAP_NOT_CONTAINS(result, 6);
+
+        multimapFree(a);
+        multimapFree(b);
+        multimapFree(result);
+    }
+
+    TEST("multimapDifferenceKeys - Full \\ Small (cross-tier, A longer)") {
+        multimap *a = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        multimap *b = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+
+        /* A = {0..599} (Full tier) */
+        for (int64_t i = 0; i < 600; i++) {
+            databox v = databoxNewSigned(i);
+            const databox *elems[1] = {&v};
+            multimapInsert(&a, elems);
+        }
+
+        /* B = {100, 200, 300} (Small tier) */
+        int64_t bVals[] = {100, 200, 300};
+        for (int i = 0; i < 3; i++) {
+            databox v = databoxNewSigned(bVals[i]);
+            const databox *elems[1] = {&v};
+            multimapInsert(&b, elems);
+        }
+
+        assert(multimapType_(a) == MULTIMAP_TYPE_FULL);
+        assert(multimapType_(b) == MULTIMAP_TYPE_SMALL);
+
+        /* Difference A \ B should be 597 elements (600 - 3 shared) */
+        multimap *result = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        multimapIterator ia, ib;
+        multimapIteratorInit(a, &ia, true);
+        multimapIteratorInit(b, &ib, true);
+        multimapDifferenceKeys(&result, &ia, &ib, false);
+
+        assert(multimapCount(result) == 597);
+        VERIFY_MAP_CONTAINS(result, 0);
+        VERIFY_MAP_CONTAINS(result, 99);
+        VERIFY_MAP_CONTAINS(result, 101);
+        VERIFY_MAP_CONTAINS(result, 599);
+        VERIFY_MAP_NOT_CONTAINS(result, 100);
+        VERIFY_MAP_NOT_CONTAINS(result, 200);
+        VERIFY_MAP_NOT_CONTAINS(result, 300);
+
+        multimapFree(a);
+        multimapFree(b);
+        multimapFree(result);
+    }
+
+    TEST("multimapDifferenceKeys - A exhausts before B (remainder handling)") {
+        multimap *a = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        multimap *b = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+
+        /* A = {1, 2, 3} */
+        for (int64_t i = 1; i <= 3; i++) {
+            databox v = databoxNewSigned(i);
+            const databox *elems[1] = {&v};
+            multimapInsert(&a, elems);
+        }
+
+        /* B = {1, 2, 3, 100, 200, 300, 400} */
+        int64_t bVals[] = {1, 2, 3, 100, 200, 300, 400};
+        for (int i = 0; i < 7; i++) {
+            databox v = databoxNewSigned(bVals[i]);
+            const databox *elems[1] = {&v};
+            multimapInsert(&b, elems);
+        }
+
+        /* A \ B = {} since all of A is in B */
+        multimap *result = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        multimapIterator ia, ib;
+        multimapIteratorInit(a, &ia, true);
+        multimapIteratorInit(b, &ib, true);
+        multimapDifferenceKeys(&result, &ia, &ib, false);
+
+        assert(multimapCount(result) == 0);
+
+        multimapFree(a);
+        multimapFree(b);
+        multimapFree(result);
+    }
+
+    TEST("multimapCopyKeys - Small into Full (union across tiers)") {
+        multimap *dst = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        multimap *src = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+
+        /* dst = {0..599} (Full tier) */
+        for (int64_t i = 0; i < 600; i++) {
+            databox v = databoxNewSigned(i);
+            const databox *elems[1] = {&v};
+            multimapInsert(&dst, elems);
+        }
+
+        /* src = {500, 600, 700, 800} - overlaps on 500, new: 600,700,800 */
+        int64_t srcVals[] = {500, 600, 700, 800};
+        for (int i = 0; i < 4; i++) {
+            databox v = databoxNewSigned(srcVals[i]);
+            const databox *elems[1] = {&v};
+            multimapInsert(&src, elems);
+        }
+
+        assert(multimapType_(dst) == MULTIMAP_TYPE_FULL);
+        assert(multimapType_(src) == MULTIMAP_TYPE_SMALL);
+
+        size_t countBefore = multimapCount(dst);
+        multimapCopyKeys(&dst, src);
+        size_t countAfter = multimapCount(dst);
+
+        /* Should add 3 new elements (600, 700, 800) */
+        assert(countAfter == countBefore + 3);
+        VERIFY_MAP_CONTAINS(dst, 0);
+        VERIFY_MAP_CONTAINS(dst, 599);
+        VERIFY_MAP_CONTAINS(dst, 600);
+        VERIFY_MAP_CONTAINS(dst, 700);
+        VERIFY_MAP_CONTAINS(dst, 800);
+
+        multimapFree(dst);
+        multimapFree(src);
+    }
+
+    TEST("multimapCopyKeys - Full into empty (full copy)") {
+        multimap *dst = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        multimap *src = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+
+        /* src = {0..599} */
+        for (int64_t i = 0; i < 600; i++) {
+            databox v = databoxNewSigned(i);
+            const databox *elems[1] = {&v};
+            multimapInsert(&src, elems);
+        }
+
+        assert(multimapType_(src) == MULTIMAP_TYPE_FULL);
+        assert(multimapCount(dst) == 0);
+
+        multimapCopyKeys(&dst, src);
+
+        assert(multimapCount(dst) == 600);
+        VERIFY_MAP_CONTAINS(dst, 0);
+        VERIFY_MAP_CONTAINS(dst, 299);
+        VERIFY_MAP_CONTAINS(dst, 599);
+
+        multimapFree(dst);
+        multimapFree(src);
+    }
+
+    TEST("FUZZ: multimapIntersectKeys across random tier combinations") {
+        uint64_t seed[2] = {0x1234567890ABCDEFULL, 0xFEDCBA0987654321ULL};
+
+        for (int trial = 0; trial < 20; trial++) {
+            multimap *a = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+            multimap *b = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+
+            /* Random size for A: 5-700 elements */
+            int64_t sizeA = 5 + (int64_t)(xoroshiro128plus(seed) % 696);
+            int64_t startA = (int64_t)(xoroshiro128plus(seed) % 1000);
+            for (int64_t i = 0; i < sizeA; i++) {
+                databox v = databoxNewSigned(startA + i);
+                const databox *elems[1] = {&v};
+                multimapInsert(&a, elems);
+            }
+
+            /* Random size for B: 5-700 elements */
+            int64_t sizeB = 5 + (int64_t)(xoroshiro128plus(seed) % 696);
+            int64_t startB = (int64_t)(xoroshiro128plus(seed) % 1000);
+            for (int64_t i = 0; i < sizeB; i++) {
+                databox v = databoxNewSigned(startB + i);
+                const databox *elems[1] = {&v};
+                multimapInsert(&b, elems);
+            }
+
+            /* Calculate expected intersection */
+            int64_t overlapStart = (startA > startB) ? startA : startB;
+            int64_t endA = startA + sizeA;
+            int64_t endB = startB + sizeB;
+            int64_t overlapEnd = (endA < endB) ? endA : endB;
+            size_t expectedCount = (overlapEnd > overlapStart)
+                                       ? (size_t)(overlapEnd - overlapStart)
+                                       : 0;
+
+            multimap *result = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+            multimapIterator ia, ib;
+            multimapIteratorInit(a, &ia, true);
+            multimapIteratorInit(b, &ib, true);
+            multimapIntersectKeys(&result, &ia, &ib);
+
+            if (multimapCount(result) != expectedCount) {
+                ERR("Trial %d: Expected intersection count %zu, got %zu "
+                    "(A: [%lld..%lld], B: [%lld..%lld], overlap: [%lld..%lld])",
+                    trial, expectedCount, multimapCount(result),
+                    (long long)startA, (long long)(startA + sizeA - 1),
+                    (long long)startB, (long long)(startB + sizeB - 1),
+                    (long long)overlapStart, (long long)(overlapEnd - 1));
+                assert(false);
+            }
+
+            multimapFree(a);
+            multimapFree(b);
+            multimapFree(result);
+        }
+    }
+
+    TEST("FUZZ: multimapDifferenceKeys across random tier combinations") {
+        uint64_t seed[2] = {0xFEDCBA0987654321ULL, 0x1234567890ABCDEFULL};
+
+        for (int trial = 0; trial < 20; trial++) {
+            multimap *a = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+            multimap *b = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+
+            /* Random size for A: 5-700 elements */
+            int64_t sizeA = 5 + (int64_t)(xoroshiro128plus(seed) % 696);
+            int64_t startA = (int64_t)(xoroshiro128plus(seed) % 1000);
+            for (int64_t i = 0; i < sizeA; i++) {
+                databox v = databoxNewSigned(startA + i);
+                const databox *elems[1] = {&v};
+                multimapInsert(&a, elems);
+            }
+
+            /* Random size for B: 5-700 elements */
+            int64_t sizeB = 5 + (int64_t)(xoroshiro128plus(seed) % 696);
+            int64_t startB = (int64_t)(xoroshiro128plus(seed) % 1000);
+            for (int64_t i = 0; i < sizeB; i++) {
+                databox v = databoxNewSigned(startB + i);
+                const databox *elems[1] = {&v};
+                multimapInsert(&b, elems);
+            }
+
+            /* Calculate expected difference (A \ B) */
+            int64_t endA = startA + sizeA;
+            int64_t endB = startB + sizeB;
+            int64_t overlapStart = (startA > startB) ? startA : startB;
+            int64_t overlapEnd = (endA < endB) ? endA : endB;
+            size_t overlapCount = (overlapEnd > overlapStart)
+                                      ? (size_t)(overlapEnd - overlapStart)
+                                      : 0;
+            size_t expectedCount = (size_t)sizeA - overlapCount;
+
+            multimap *result = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+            multimapIterator ia, ib;
+            multimapIteratorInit(a, &ia, true);
+            multimapIteratorInit(b, &ib, true);
+            multimapDifferenceKeys(&result, &ia, &ib, false);
+
+            if (multimapCount(result) != expectedCount) {
+                ERR("Trial %d: Expected difference count %zu, got %zu", trial,
+                    expectedCount, multimapCount(result));
+                assert(false);
+            }
+
+            multimapFree(a);
+            multimapFree(b);
+            multimapFree(result);
+        }
+    }
+
+    printf("\n=== Cross-Tier Set Operations Tests Passed! ===\n");
+
+#undef CREATE_MAP_AT_TIER
+#undef VERIFY_MAP_CONTAINS
+#undef VERIFY_MAP_NOT_CONTAINS
 
     TEST_FINAL_RESULT;
 }
