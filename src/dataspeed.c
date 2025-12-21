@@ -35,8 +35,7 @@
 #if defined(__aarch64__) || defined(__ARM_NEON) || defined(__ARM_NEON__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-macros"
-#define DATASPEED_USE_NEON 1 /* Configuration flag for ARM NEON availability   \
-                              */
+#define DATASPEED_USE_NEON 1
 #pragma GCC diagnostic pop
 #include <arm_neon.h>
 #endif
