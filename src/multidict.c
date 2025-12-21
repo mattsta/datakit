@@ -3269,6 +3269,195 @@ int multidictTest(int argc, char *argv[]) {
         multidictEmpty(d);
     }
 
+    printf("Test 3.5: Safe iterator prevents auto-rehash step...\n");
+    {
+        /* Add enough entries to allow expansion to start */
+        for (int i = 0; i < 100; i++) {
+            char keyBuf[32];
+            snprintf(keyBuf, sizeof(keyBuf), "block_rehash_%d", i);
+            databox key = databoxNewBytesString(keyBuf);
+            databox val = databoxNewSigned(i);
+            multidictAdd(d, &key, &val);
+        }
+
+        /* Force an expand to start rehashing */
+        bool expanded = multidictExpand(d, 1024);
+        assert(expanded == true);
+        assert(multidictIsRehashing(d) == true);
+
+        uint32_t rehashIdxBefore = d->rehashidx;
+
+        /* Start a safe iterator */
+        multidictIterator iter;
+        multidictIteratorGetSafe(d, &iter);
+
+        /* Advance iterator once to register it */
+        multidictEntry entry;
+        assert(multidictIteratorNext(&iter, &entry) == true);
+
+        /* Verify iterator count is incremented */
+        assert(d->iterators == 1);
+
+        /* The MULTIDICT_REHASH_STEP_IF_SAFE macro should not rehash
+         * when iterators are active. Adding an entry invokes this. */
+        databox testKey = databoxNewBytesString("rehash_test");
+        databox testVal = databoxNewSigned(999);
+        multidictAdd(d, &testKey, &testVal);
+
+        /* Rehash index should not have advanced due to iterator */
+        assert(d->rehashidx == rehashIdxBefore);
+
+        /* Release the iterator */
+        multidictIteratorRelease(&iter);
+        assert(d->iterators == 0);
+
+        /* Now operations should trigger rehash steps */
+        databox testKey2 = databoxNewBytesString("rehash_test2");
+        multidictAdd(d, &testKey2, &testVal);
+
+        /* Complete the rehash */
+        while (multidictIsRehashing(d)) {
+            multidictRehash(d, 100);
+        }
+        multidictEmpty(d);
+    }
+
+    printf("Test 3.6: Iterator release without advancing...\n");
+    {
+        /* Add some entries */
+        for (int i = 0; i < 50; i++) {
+            char keyBuf[32];
+            snprintf(keyBuf, sizeof(keyBuf), "no_advance_%d", i);
+            databox key = databoxNewBytesString(keyBuf);
+            databox val = databoxNewSigned(i);
+            multidictAdd(d, &key, &val);
+        }
+
+        /* Init safe iterator but don't advance it */
+        multidictIterator iter;
+        multidictIteratorGetSafe(d, &iter);
+
+        /* Iterator count should still be 0 (not advanced yet) */
+        assert(d->iterators == 0);
+
+        /* Release without advancing - should be safe */
+        multidictIteratorRelease(&iter);
+
+        /* Count should still be 0 */
+        assert(d->iterators == 0);
+
+        multidictEmpty(d);
+    }
+
+    printf("Test 3.7: Multiple safe iterators counted correctly...\n");
+    {
+        for (int i = 0; i < 100; i++) {
+            char keyBuf[32];
+            snprintf(keyBuf, sizeof(keyBuf), "multi_safe_%d", i);
+            databox key = databoxNewBytesString(keyBuf);
+            databox val = databoxNewSigned(i);
+            multidictAdd(d, &key, &val);
+        }
+
+        /* Start two safe iterators */
+        multidictIterator iter1, iter2;
+        multidictIteratorGetSafe(d, &iter1);
+        multidictIteratorGetSafe(d, &iter2);
+
+        /* Advance both */
+        multidictEntry e1, e2;
+        multidictIteratorNext(&iter1, &e1);
+        multidictIteratorNext(&iter2, &e2);
+
+        /* Both should be counted */
+        assert(d->iterators == 2);
+
+        /* Release one iterator */
+        multidictIteratorRelease(&iter1);
+        assert(d->iterators == 1);
+
+        /* Release second iterator */
+        multidictIteratorRelease(&iter2);
+        assert(d->iterators == 0);
+
+        multidictEmpty(d);
+    }
+
+    printf("Test 3.8: Iterator during active rehash sees all entries...\n");
+    {
+        /* Add entries */
+        for (int i = 0; i < 200; i++) {
+            char keyBuf[32];
+            snprintf(keyBuf, sizeof(keyBuf), "iter_rehash_%d", i);
+            databox key = databoxNewBytesString(keyBuf);
+            databox val = databoxNewSigned(i);
+            multidictAdd(d, &key, &val);
+        }
+
+        /* Start rehashing */
+        assert(multidictExpand(d, 1024) == true);
+
+        /* Do partial rehash */
+        multidictRehash(d, 50);
+        assert(multidictIsRehashing(d) == true);
+
+        /* Now iterate - should see all entries even during rehashing */
+        multidictIterator iter;
+        multidictIteratorInit(d, &iter);
+        multidictEntry entry;
+        int count = 0;
+        while (multidictIteratorNext(&iter, &entry)) {
+            count++;
+        }
+        multidictIteratorRelease(&iter);
+
+        /* Must see all 200 entries */
+        assert(count == 200);
+
+        /* Complete rehash */
+        while (multidictIsRehashing(d)) {
+            multidictRehash(d, 100);
+        }
+        multidictEmpty(d);
+    }
+
+    printf("Test 3.9: Re-init iterator mid-iteration...\n");
+    {
+        /* Add entries */
+        for (int i = 0; i < 100; i++) {
+            char keyBuf[32];
+            snprintf(keyBuf, sizeof(keyBuf), "reinit_%d", i);
+            databox key = databoxNewBytesString(keyBuf);
+            databox val = databoxNewSigned(i);
+            multidictAdd(d, &key, &val);
+        }
+
+        /* Start safe iterator */
+        multidictIterator iter;
+        multidictIteratorGetSafe(d, &iter);
+
+        /* Advance a few times */
+        multidictEntry entry;
+        for (int i = 0; i < 50; i++) {
+            multidictIteratorNext(&iter, &entry);
+        }
+        assert(d->iterators == 1);
+
+        /* Release iterator properly before re-init */
+        multidictIteratorRelease(&iter);
+        assert(d->iterators == 0);
+
+        /* Re-init the same iterator variable */
+        multidictIteratorGetSafe(d, &iter);
+        multidictIteratorNext(&iter, &entry);
+        assert(d->iterators == 1);
+
+        /* Clean up */
+        multidictIteratorRelease(&iter);
+        assert(d->iterators == 0);
+        multidictEmpty(d);
+    }
+
     /* ================================================================
      * SECTION 4: Rehash Tests
      * ================================================================ */

@@ -20,6 +20,47 @@
 #include "perf.h"
 
 /* ====================================================================
+ * Sanitizer Detection for Benchmark Scaling
+ *
+ * When running under sanitizers (ASan, MSan, etc.), operations are
+ * significantly slower. We reduce benchmark scales to keep test times
+ * reasonable while still verifying correctness.
+ * ==================================================================== */
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(memory_sanitizer) ||     \
+    __has_feature(thread_sanitizer)
+#define SANITIZER_BUILD 1
+#endif
+#endif
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+#define SANITIZER_BUILD 1
+#endif
+
+#ifdef SANITIZER_BUILD
+/* Reduced scales for sanitizer builds (~100x smaller for large tests) */
+#define BENCH_SCALE_1K 100
+#define BENCH_SCALE_10K 1000
+#define BENCH_SCALE_50K 5000
+#define BENCH_SCALE_100K 10000
+#define BENCH_SCALE_500K 50000
+#define BENCH_SCALE_1M 100000
+#define BENCH_QUERY_COUNT 10000
+#define BENCH_CHURN_BASE 1000
+#define BENCH_CHURN_ITERS 10000
+#else
+/* Full scales for regular builds */
+#define BENCH_SCALE_1K 1000
+#define BENCH_SCALE_10K 10000
+#define BENCH_SCALE_50K 50000
+#define BENCH_SCALE_100K 100000
+#define BENCH_SCALE_500K 500000
+#define BENCH_SCALE_1M 1000000
+#define BENCH_QUERY_COUNT 100000
+#define BENCH_CHURN_BASE 10000
+#define BENCH_CHURN_ITERS 100000
+#endif
+
+/* ====================================================================
  * Test State and Helpers
  * ==================================================================== */
 
@@ -868,7 +909,7 @@ int timerWheelTest(int argc, char *argv[]) {
     TEST("timerWheel: PERF registration performance") {
         timerWheel *tw = timerWheelNew();
         testCallbackState state = {0};
-        const size_t numOps = 100000;
+        const size_t numOps = BENCH_SCALE_100K;
 
         PERF_TIMERS_SETUP;
 
@@ -941,7 +982,7 @@ int timerWheelTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("COMPARISON: registration performance (timerWheel vs multiTimer)") {
-        const size_t numOps = 100000;
+        const size_t numOps = BENCH_SCALE_100K;
         testCallbackState state = {0};
 
         /* timerWheel */
@@ -1021,7 +1062,7 @@ int timerWheelTest(int argc, char *argv[]) {
     }
 
     TEST("COMPARISON: million timer registration") {
-        const size_t numTimers = 1000000;
+        const size_t numTimers = BENCH_SCALE_1M;
         testCallbackState state = {0};
 
         printf("    Registering %zu timers...\n", numTimers);
@@ -1063,8 +1104,8 @@ int timerWheelTest(int argc, char *argv[]) {
     }
 
     TEST("COMPARISON: mixed operations simulation") {
-        const size_t warmupTimers = 100000;
-        const size_t ops = 50000;
+        const size_t warmupTimers = BENCH_SCALE_100K;
+        const size_t ops = BENCH_SCALE_50K;
         testCallbackState state = {.callCount = 0, .shouldReschedule = true};
 
         printf("    Simulating %zu mixed ops with %zu existing timers...\n",
@@ -1127,7 +1168,7 @@ int timerWheelTest(int argc, char *argv[]) {
     }
 
     TEST("timerWheel: memory efficiency") {
-        const size_t numTimers = 100000;
+        const size_t numTimers = BENCH_SCALE_100K;
         testCallbackState state = {0};
 
         timerWheel *tw = timerWheelNew();
@@ -1217,7 +1258,8 @@ int timerWheelTest(int argc, char *argv[]) {
         printf(
             "    Measuring registration throughput at different scales...\n");
         testCallbackState state = {0};
-        const size_t scales[] = {1000, 10000, 100000, 500000};
+        const size_t scales[] = {BENCH_SCALE_1K, BENCH_SCALE_10K,
+                                 BENCH_SCALE_100K, BENCH_SCALE_500K};
         const size_t numScales = sizeof(scales) / sizeof(scales[0]);
 
         printf("    %-12s  %12s  %12s  %8s\n", "Count", "timerWheel",
@@ -1261,7 +1303,8 @@ int timerWheelTest(int argc, char *argv[]) {
     TEST("BENCHMARK: unregistration throughput (ID lookup)") {
         printf("    Measuring unregistration (ID lookup) performance...\n");
         testCallbackState state = {0};
-        const size_t scales[] = {1000, 10000, 50000};
+        const size_t scales[] = {BENCH_SCALE_1K, BENCH_SCALE_10K,
+                                 BENCH_SCALE_50K};
         const size_t numScales = sizeof(scales) / sizeof(scales[0]);
 
         printf("    %-12s  %12s  %12s  %8s\n", "Count", "timerWheel",
@@ -1312,7 +1355,8 @@ int timerWheelTest(int argc, char *argv[]) {
 
     TEST("BENCHMARK: expiration throughput (batch fire)") {
         printf("    Measuring batch timer expiration throughput...\n");
-        const size_t scales[] = {1000, 10000, 50000, 100000};
+        const size_t scales[] = {BENCH_SCALE_1K, BENCH_SCALE_10K,
+                                 BENCH_SCALE_50K, BENCH_SCALE_100K};
         const size_t numScales = sizeof(scales) / sizeof(scales[0]);
 
         printf("    %-12s  %12s  %12s  %8s\n", "Count", "timerWheel",
@@ -1367,9 +1411,10 @@ int timerWheelTest(int argc, char *argv[]) {
     TEST("BENCHMARK: nextTimerEvent query latency") {
         printf("    Measuring next-timer-event query latency...\n");
         testCallbackState state = {0};
-        const size_t timerCounts[] = {100, 1000, 10000, 100000};
+        const size_t timerCounts[] = {100, BENCH_SCALE_1K, BENCH_SCALE_10K,
+                                      BENCH_SCALE_100K};
         const size_t numCounts = sizeof(timerCounts) / sizeof(timerCounts[0]);
-        const size_t queries = 100000;
+        const size_t queries = BENCH_QUERY_COUNT;
 
         printf("    %-12s  %12s  %12s  %8s\n", "Timers", "timerWheel",
                "multiTimer", "Speedup");
@@ -1424,7 +1469,7 @@ int timerWheelTest(int argc, char *argv[]) {
     TEST("BENCHMARK: timer delay distribution impact") {
         printf("    Measuring performance across delay distributions...\n");
         testCallbackState state = {0};
-        const size_t count = 50000;
+        const size_t count = BENCH_SCALE_50K;
 
         struct {
             const char *name;
@@ -1483,7 +1528,8 @@ int timerWheelTest(int argc, char *argv[]) {
     TEST("BENCHMARK: register-then-cancel pattern") {
         printf("    Measuring register-then-immediate-cancel pattern...\n");
         testCallbackState state = {0};
-        const size_t scales[] = {10000, 50000, 100000};
+        const size_t scales[] = {BENCH_SCALE_10K, BENCH_SCALE_50K,
+                                 BENCH_SCALE_100K};
         const size_t numScales = sizeof(scales) / sizeof(scales[0]);
 
         printf("    %-12s  %12s  %12s  %8s\n", "Count", "timerWheel",
@@ -1529,8 +1575,8 @@ int timerWheelTest(int argc, char *argv[]) {
     TEST("BENCHMARK: steady-state churn simulation") {
         printf("    Simulating steady-state timer churn...\n");
         testCallbackState state = {.callCount = 0, .shouldReschedule = false};
-        const size_t baseTimers = 10000;
-        const size_t iterations = 100000;
+        const size_t baseTimers = BENCH_CHURN_BASE;
+        const size_t iterations = BENCH_CHURN_ITERS;
 
         printf("    %zu base timers, %zu churn iterations\n\n", baseTimers,
                iterations);
@@ -1601,7 +1647,8 @@ int timerWheelTest(int argc, char *argv[]) {
     TEST("BENCHMARK: timerWheel memory at scale") {
         printf("    timerWheel memory usage at scale...\n");
         testCallbackState state = {0};
-        const size_t scales[] = {10000, 100000, 500000, 1000000};
+        const size_t scales[] = {BENCH_SCALE_10K, BENCH_SCALE_100K,
+                                 BENCH_SCALE_500K, BENCH_SCALE_1M};
         const size_t numScales = sizeof(scales) / sizeof(scales[0]);
 
         printf("    %-12s  %14s  %12s\n", "Timers", "Memory", "Bytes/Timer");
@@ -1638,6 +1685,321 @@ int timerWheelTest(int argc, char *argv[]) {
         printf("\nRecommendation: Use timerWheel for production workloads\n");
         printf("                with -O2/-O3 optimization.\n\n");
     }
+
+    /* ================================================================
+     * MULTI-LEVEL CASCADE TESTS
+     *
+     * Timer wheel uses 4 wheels with cascading:
+     * - Wheel 0: 256 slots × 1ms = 256ms span (timers < 256ms)
+     * - Wheel 1: 64 slots × 256ms = ~16.4s span (timers 256ms - 16.4s)
+     * - Wheel 2: 64 slots × 16.4s = ~17.5min span
+     * - Wheel 3: 64 slots × 17.5min = ~18.6h span
+     *
+     * Key insight: slot = (currentIndex + delay/resolution)
+     * A 300ms timer goes to wheel 1 slot 1 (since 300/256 = 1).
+     * Wheel 1 slot 0 cascades at 256ms, slot 1 at 512ms, slot 2 at 768ms.
+     * Cascade counter only increments when there ARE timers in the slot.
+     *
+     * Timer wheel trades timing precision for O(1) operations. Timers in
+     * higher wheels fire at cascade boundaries, not exact scheduled times.
+     * ================================================================ */
+
+    printf("\n=== Multi-Level Cascade Tests ===\n\n");
+
+    TEST("CASCADE: wheel 0 timers fire accurately") {
+        /* Wheel 0 timers should fire at their scheduled time */
+        timerWheel *tw = timerWheelNew();
+        testCallbackState state = {0};
+
+        /* Register timer for 100ms - stays in wheel 0 */
+        timerWheelRegister(tw, 100000, 0, testCountingCallback, &state);
+
+        timerWheelAdvanceTime(tw, 95000);
+        if (state.callCount != 0) {
+            ERR("Timer fired too early at 95ms, count=%d", state.callCount);
+        }
+
+        timerWheelAdvanceTime(tw, 10000); /* Now at 105ms */
+        if (state.callCount != 1) {
+            ERR("Timer should fire at 100ms, count=%d", state.callCount);
+        }
+
+        timerWheelFree(tw);
+    }
+
+    TEST("CASCADE: wheel 1 timer fires at cascade boundary") {
+        /* A 300ms timer goes to wheel 1 slot 1, cascades at 512ms */
+        timerWheel *tw = timerWheelNew();
+        testCallbackState state = {0};
+
+        /* Register 300ms timer - goes to wheel 1 slot 1 (300/256 = 1) */
+        timerWheelRegister(tw, 300000, 0, testCountingCallback, &state);
+
+        /* Advance to 300ms - timer should NOT fire yet (still in wheel 1) */
+        timerWheelAdvanceTime(tw, 300000);
+        if (state.callCount != 0) {
+            ERR("Timer shouldn't fire at 300ms (still in wheel 1), count=%d",
+                state.callCount);
+        }
+
+        /* Advance to 512ms - wheel 1 slot 1 cascades, timer fires (overdue) */
+        timerWheelAdvanceTime(tw, 212000); /* Now at 512ms */
+        if (state.callCount != 1) {
+            ERR("Timer should fire at 512ms cascade, count=%d",
+                state.callCount);
+        }
+
+        timerWheelFree(tw);
+    }
+
+    TEST("CASCADE: cascade counter only increments for non-empty slots") {
+        timerWheel *tw = timerWheelNew();
+        testCallbackState state = {0};
+
+        /* Register 520ms timer - goes to wheel 1 slot 2 (520/256 = 2) */
+        timerWheelRegister(tw, 520000, 0, testCountingCallback, &state);
+
+        timerWheelStats stats;
+
+        /* Advance to 256ms - slot 0 cascades (empty), counter should be 0 */
+        timerWheelAdvanceTime(tw, 256000);
+        timerWheelGetStats(tw, &stats);
+        if (stats.totalCascades != 0) {
+            ERR("Expected 0 cascades at 256ms (slot 0 empty), got %zu",
+                stats.totalCascades);
+        }
+
+        /* Advance to 512ms - slot 1 cascades (empty), counter should be 0 */
+        timerWheelAdvanceTime(tw, 256000);
+        timerWheelGetStats(tw, &stats);
+        if (stats.totalCascades != 0) {
+            ERR("Expected 0 cascades at 512ms (slot 1 empty), got %zu",
+                stats.totalCascades);
+        }
+
+        /* Timer should not have fired yet */
+        if (state.callCount != 0) {
+            ERR("Timer shouldn't fire before cascade, count=%d",
+                state.callCount);
+        }
+
+        /* Advance to 768ms - slot 2 cascades (has timer!), counter = 1 */
+        timerWheelAdvanceTime(tw, 256000);
+        timerWheelGetStats(tw, &stats);
+        if (stats.totalCascades != 1) {
+            ERR("Expected 1 cascade at 768ms (slot 2 has timer), got %zu",
+                stats.totalCascades);
+        }
+
+        /* Timer should have fired (overdue by 248ms) */
+        if (state.callCount != 1) {
+            ERR("Timer should fire when cascaded, count=%d", state.callCount);
+        }
+
+        timerWheelFree(tw);
+    }
+
+    TEST("CASCADE: multiple timers in same slot cascade together") {
+        timerWheel *tw = timerWheelNew();
+        testCallbackState states[3] = {0};
+
+        /* All these go to wheel 1 slot 1 (since 260-400/256 = 1) */
+        timerWheelRegister(tw, 260000, 0, testCountingCallback, &states[0]);
+        timerWheelRegister(tw, 350000, 0, testCountingCallback, &states[1]);
+        timerWheelRegister(tw, 400000, 0, testCountingCallback, &states[2]);
+
+        /* Advance to 500ms - no cascade yet (slot 1 cascades at 512ms) */
+        timerWheelAdvanceTime(tw, 500000);
+        int firedBefore =
+            states[0].callCount + states[1].callCount + states[2].callCount;
+        if (firedBefore != 0) {
+            ERR("Timers shouldn't fire before cascade, count=%d", firedBefore);
+        }
+
+        /* Advance to 520ms - slot 1 cascades, all 3 timers fire together */
+        timerWheelAdvanceTime(tw, 20000);
+        int firedAfter =
+            states[0].callCount + states[1].callCount + states[2].callCount;
+        if (firedAfter != 3) {
+            ERR("All 3 timers should fire at cascade, count=%d", firedAfter);
+        }
+
+        timerWheelStats stats;
+        timerWheelGetStats(tw, &stats);
+        if (stats.totalCascades != 1) {
+            ERR("Expected exactly 1 cascade event, got %zu",
+                stats.totalCascades);
+        }
+
+        timerWheelFree(tw);
+    }
+
+    TEST(
+        "CASCADE: timers inserted into wheel 0 after cascade fire accurately") {
+        /* When a timer cascades to wheel 0, it should fire at its slot */
+        timerWheel *tw = timerWheelNew();
+        testCallbackState state = {0};
+
+        /* 700ms timer goes to wheel 1 slot 2 (700/256 = 2), cascades at 768ms
+         */
+        timerWheelRegister(tw, 700000, 0, testCountingCallback, &state);
+
+        /* Advance to 768ms - timer cascades to wheel 0 but not yet due */
+        /* Wait, at 768ms the timer is overdue (700 < 768), so fires immediately
+         */
+        timerWheelAdvanceTime(tw, 768000);
+        if (state.callCount != 1) {
+            ERR("Timer should fire when cascaded (overdue), count=%d",
+                state.callCount);
+        }
+
+        timerWheelFree(tw);
+    }
+
+    TEST("CASCADE: timer cascades to wheel 0 and fires at correct slot") {
+        /* Test a timer that cascades to wheel 0 but isn't overdue yet */
+        timerWheel *tw = timerWheelNew();
+        testCallbackState state = {0};
+
+        /* 520ms timer goes to wheel 1 slot 2 (520/256 = 2), cascades at 768ms
+           But at 768ms, timer is overdue. Let's try a longer timer. */
+
+        /* 780ms timer: slot = 780/256 = 3, cascades at 1024ms */
+        timerWheelRegister(tw, 780000, 0, testCountingCallback, &state);
+
+        /* Advance to 780ms - timer still in wheel 1 */
+        timerWheelAdvanceTime(tw, 780000);
+        if (state.callCount != 0) {
+            ERR("Timer shouldn't fire before cascade at 1024ms, count=%d",
+                state.callCount);
+        }
+
+        /* Advance to 1024ms - slot 3 cascades, timer is overdue, fires */
+        timerWheelAdvanceTime(tw, 244000);
+        if (state.callCount != 1) {
+            ERR("Timer should fire at cascade, count=%d", state.callCount);
+        }
+
+        timerWheelFree(tw);
+    }
+
+    TEST("CASCADE: nested wheel 2 to wheel 1 to wheel 0") {
+        /* Timer far enough to start in wheel 2, then cascade down */
+        timerWheel *tw = timerWheelNew();
+        testCallbackState state = {0};
+
+        /* 20s timer: wheel 1 span = 16.4s, so this goes to wheel 2 */
+        /* Wheel 1 slot = 20000000 / (64*256000) = 1.2, so slot 1 of wheel 2 */
+        timerWheelRegister(tw, 20000000, 0, testCountingCallback, &state);
+
+        timerWheelStats stats;
+
+        /* Verify timer is registered */
+        if (timerWheelCount(tw) != 1) {
+            ERR("Expected 1 timer, got %zu", timerWheelCount(tw));
+        }
+
+        /* Advance 16.4s (wheel 1 span) - wheel 1 wraps, wheel 2 slot 0 cascades
+         */
+        timerWheelAdvanceTime(tw, 16384000); /* 64 * 256ms = 16.384s */
+        timerWheelGetStats(tw, &stats);
+
+        /* Timer is in wheel 2 slot 1, slot 0 cascades (empty) */
+        if (state.callCount != 0) {
+            ERR("Timer shouldn't fire yet, count=%d", state.callCount);
+        }
+
+        /* Advance another 16.4s - wheel 2 slot 1 cascades */
+        timerWheelAdvanceTime(tw, 16384000); /* Now at ~32.8s */
+        timerWheelGetStats(tw, &stats);
+
+        /* Timer should have cascaded from wheel 2 → wheel 1, then possibly
+         * fired */
+        /* At 32.8s, a 20s timer is overdue by 12.8s, should fire */
+        if (state.callCount != 1) {
+            ERR("Timer should fire after cascading from wheel 2, count=%d",
+                state.callCount);
+        }
+
+        if (stats.totalCascades < 1) {
+            ERR("Expected at least 1 cascade (from wheel 2), got %zu",
+                stats.totalCascades);
+        }
+
+        printf("    20s timer fired after %zu cascades\n", stats.totalCascades);
+
+        timerWheelFree(tw);
+    }
+
+    TEST("CASCADE: cancellation removes timer before cascade") {
+        timerWheel *tw = timerWheelNew();
+        testCallbackState states[3] = {0};
+
+        /* All go to wheel 1 slot 1 */
+        timerWheelId id1 =
+            timerWheelRegister(tw, 300000, 0, testCountingCallback, &states[0]);
+        timerWheelId id2 =
+            timerWheelRegister(tw, 350000, 0, testCountingCallback, &states[1]);
+        timerWheelId id3 =
+            timerWheelRegister(tw, 400000, 0, testCountingCallback, &states[2]);
+
+        /* Cancel middle timer before cascade */
+        timerWheelUnregister(tw, id2);
+
+        (void)id1;
+        (void)id3;
+
+        /* Advance past cascade point (512ms) */
+        timerWheelAdvanceTime(tw, 520000);
+
+        /* First and third should fire, second (cancelled) should not */
+        if (states[0].callCount != 1) {
+            ERR("First timer should fire, count=%d", states[0].callCount);
+        }
+        if (states[1].callCount != 0) {
+            ERR("Cancelled timer should NOT fire, count=%d",
+                states[1].callCount);
+        }
+        if (states[2].callCount != 1) {
+            ERR("Third timer should fire, count=%d", states[2].callCount);
+        }
+
+        timerWheelFree(tw);
+    }
+
+    TEST("CASCADE: repeated timer reschedules after cascade fire") {
+        timerWheel *tw = timerWheelNew();
+        testCallbackState state = {.callCount = 0, .shouldReschedule = true};
+
+        /* 300ms initial delay, 100ms repeat - starts in wheel 1
+         * First fire at cascade (512ms), then reschedules every 100ms */
+        timerWheelRegister(tw, 300000, 100000, testCountingCallback, &state);
+
+        /* Advance to 520ms - fires at cascade (~512ms) */
+        timerWheelAdvanceTime(tw, 520000);
+        if (state.callCount < 1) {
+            ERR("Timer should fire after cascade, count=%d", state.callCount);
+        }
+
+        int countAfterCascade = state.callCount;
+
+        /* Advance another 500ms (to 1020ms) - should fire ~5 more times */
+        timerWheelAdvanceTime(tw, 500000);
+
+        /* With 100ms repeat, expect 4-6 more fires in 500ms */
+        int additionalFires = state.callCount - countAfterCascade;
+        if (additionalFires < 4 || additionalFires > 6) {
+            ERR("Expected 4-6 additional fires with 100ms repeat, got %d",
+                additionalFires);
+        }
+
+        printf("    Timer fired %d times total (%d after cascade)\n",
+               state.callCount, additionalFires);
+
+        timerWheelFree(tw);
+    }
+
+    printf("=== Multi-Level Cascade Tests Complete ===\n\n");
 
     TEST_FINAL_RESULT;
 }

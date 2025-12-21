@@ -498,15 +498,22 @@ static void processSlot(timerWheel *tw, flex **slot, uint64_t currentTime) {
 
             /* Handle rescheduling */
             if (reschedule && repeatIntervalUs > 0) {
-                /* Re-register with same parameters */
-                uint64_t newExpireTime = currentTime + repeatIntervalUs;
+                /* Schedule relative to wheel's current position (after this
+                 * slot), NOT the final target time. This ensures repeating
+                 * timers fire at each interval as the wheel advances, rather
+                 * than jumping to the final target and missing intermediate
+                 * fires. */
+                uint64_t slotEndTime = tw->currentTimeUs + WHEEL0_RESOLUTION_US;
+                uint64_t newExpireTime = slotEndTime + repeatIntervalUs;
 
-                /* Sub-resolution timers go to pending for immediate fire */
+                /* Sub-resolution timers go to pending for prompt fire */
                 if (repeatIntervalUs < WHEEL0_RESOLUTION_US) {
                     insertTimerIntoSlot(&tw->pendingTimers, newExpireTime, cb,
                                         clientData, id, repeatIntervalUs);
                     tw->timerCount++;
                 } else {
+                    /* Place in appropriate wheel slot relative to where
+                     * we ARE now, not where we'll END UP */
                     uint64_t delay = repeatIntervalUs;
                     int32_t level = getWheelLevel(delay);
 
@@ -754,9 +761,12 @@ static void processPending(timerWheel *tw) {
 
             /* Handle rescheduling */
             if (reschedule && repeatIntervalUs > 0) {
+                /* Schedule relative to current time (now). processPending
+                 * runs after the wheel has advanced to `now`, so we use
+                 * `now` directly (unlike processSlot which uses wheel pos). */
                 uint64_t newExpireTime = now + repeatIntervalUs;
 
-                /* Sub-resolution timers go to pending for immediate fire */
+                /* Sub-resolution timers go to pending for prompt fire */
                 if (repeatIntervalUs < WHEEL0_RESOLUTION_US) {
                     insertTimerIntoSlot(&tw->pendingTimers, newExpireTime, cb,
                                         clientData, id, repeatIntervalUs);

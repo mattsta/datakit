@@ -8832,6 +8832,550 @@ int multiroarTest(int argc, char *argv[]) {
 
     printf("\n=== Serialization tests completed! ===\n\n");
 
+    /* ================================================================
+     * CROSS-CONTAINER-TYPE OPERATION TESTS
+     *
+     * Roaring bitmaps use different container types based on density:
+     * - UNDER_FULL: sparse array of positions (< 629 bits)
+     * - FULL_BITMAP: actual 8192-bit bitmap (629-7563 bits)
+     * - OVER_FULL: negative listing (> 7563 bits)
+     * - ALL_1: implicit all-ones (all 8192 bits set)
+     *
+     * These tests verify set operations work correctly when combining
+     * chunks of different container types.
+     * ================================================================ */
+
+    printf("\n=== Cross-Container-Type Operation Tests ===\n\n");
+
+/* Helper to create a chunk with specific container type by population */
+#define FILL_SPARSE(r, chunk, count)                                           \
+    do {                                                                       \
+        uint64_t base = (uint64_t)(chunk) * 8192;                              \
+        for (int i = 0; i < (count); i++) {                                    \
+            multiroarBitSet((r), base + (i * 12));                             \
+        }                                                                      \
+    } while (0)
+
+#define FILL_DENSE(r, chunk, start, end)                                       \
+    do {                                                                       \
+        uint64_t base = (uint64_t)(chunk) * 8192;                              \
+        for (int i = (start); i < (end); i++) {                                \
+            multiroarBitSet((r), base + i);                                    \
+        }                                                                      \
+    } while (0)
+
+#define FILL_ALL_ONES(r, chunk)                                                \
+    do {                                                                       \
+        uint64_t base = (uint64_t)(chunk) * 8192;                              \
+        for (int i = 0; i < 8192; i++) {                                       \
+            multiroarBitSet((r), base + i);                                    \
+        }                                                                      \
+    } while (0)
+
+    TEST("AND: UNDER_FULL x UNDER_FULL (same chunk)") {
+        multiroar *a = multiroarBitNew();
+        multiroar *b = multiroarBitNew();
+
+        /* Create sparse chunks (< 629 positions) */
+        FILL_SPARSE(a, 0, 100); /* Positions 0, 12, 24, ... */
+        FILL_SPARSE(b, 0, 50);  /* Overlaps first 50 positions of a */
+
+        multiroar *result = multiroarNewAnd(a, b);
+
+        /* Result should have 50 bits (the overlap) */
+        uint64_t countResult = multiroarBitCount(result);
+        if (countResult != 50) {
+            ERR("UNDER_FULL x UNDER_FULL: expected 50, got %" PRIu64,
+                countResult);
+        }
+
+        /* Verify specific bits */
+        for (int i = 0; i < 50; i++) {
+            if (!multiroarBitGet(result, i * 12)) {
+                ERR("Missing bit at position %d", i * 12);
+            }
+        }
+        for (int i = 50; i < 100; i++) {
+            if (multiroarBitGet(result, i * 12)) {
+                ERR("Unexpected bit at position %d", i * 12);
+            }
+        }
+
+        multiroarFree(a);
+        multiroarFree(b);
+        multiroarFree(result);
+    }
+
+    TEST("AND: FULL_BITMAP x FULL_BITMAP") {
+        multiroar *a = multiroarBitNew();
+        multiroar *b = multiroarBitNew();
+
+        /* Create bitmap chunks (> 629 positions, contiguous) */
+        FILL_DENSE(a, 0, 0, 4096);    /* First half of chunk */
+        FILL_DENSE(b, 0, 2048, 6144); /* Middle portion, overlaps [2048,4096) */
+
+        multiroar *result = multiroarNewAnd(a, b);
+
+        /* Result should have 2048 bits (the overlap [2048, 4096)) */
+        uint64_t countResult = multiroarBitCount(result);
+        if (countResult != 2048) {
+            ERR("FULL_BITMAP x FULL_BITMAP: expected 2048, got %" PRIu64,
+                countResult);
+        }
+
+        /* Verify boundaries */
+        if (multiroarBitGet(result, 2047)) {
+            ERRR("Bit 2047 should NOT be set");
+        }
+        if (!multiroarBitGet(result, 2048)) {
+            ERRR("Bit 2048 should be set");
+        }
+        if (!multiroarBitGet(result, 4095)) {
+            ERRR("Bit 4095 should be set");
+        }
+        if (multiroarBitGet(result, 4096)) {
+            ERRR("Bit 4096 should NOT be set");
+        }
+
+        multiroarFree(a);
+        multiroarFree(b);
+        multiroarFree(result);
+    }
+
+    TEST("AND: UNDER_FULL x FULL_BITMAP") {
+        multiroar *a = multiroarBitNew();
+        multiroar *b = multiroarBitNew();
+
+        /* a: sparse (100 positions spread out) */
+        FILL_SPARSE(a, 0, 100);
+        /* b: dense bitmap covering first 2000 positions */
+        FILL_DENSE(b, 0, 0, 2000);
+
+        multiroar *result = multiroarNewAnd(a, b);
+
+        /* Positions 0,12,24,...,1188 (i*12 where i*12 < 2000) are in both
+         * 1188 / 12 = 99 positions, but we need i*12 < 2000
+         * Max i where i*12 < 2000: i < 166.67, so i <= 166
+         * But we only filled 100 sparse positions, so all 100 should match */
+        uint64_t countResult = multiroarBitCount(result);
+        if (countResult != 100) {
+            ERR("UNDER_FULL x FULL_BITMAP: expected 100, got %" PRIu64,
+                countResult);
+        }
+
+        multiroarFree(a);
+        multiroarFree(b);
+        multiroarFree(result);
+    }
+
+    TEST("AND: FULL_BITMAP x OVER_FULL (negative listing)") {
+        multiroar *a = multiroarBitNew();
+        multiroar *b = multiroarBitNew();
+
+        /* a: bitmap covering [0, 4096) */
+        FILL_DENSE(a, 0, 0, 4096);
+
+        /* b: negative listing - almost all bits set (> 7563) */
+        FILL_ALL_ONES(b, 0);
+        /* Clear just a few bits to verify difference */
+        multiroarRemove(b, 100);
+        multiroarRemove(b, 200);
+        multiroarRemove(b, 300);
+
+        multiroar *result = multiroarNewAnd(a, b);
+
+        /* Should have 4096 - 3 bits (the ones we cleared in b) */
+        uint64_t countResult = multiroarBitCount(result);
+        if (countResult != 4093) {
+            ERR("FULL_BITMAP x OVER_FULL: expected 4093, got %" PRIu64,
+                countResult);
+        }
+
+        /* Verify the cleared bits are not set */
+        if (multiroarBitGet(result, 100)) {
+            ERRR("Bit 100 should NOT be set");
+        }
+        if (multiroarBitGet(result, 200)) {
+            ERRR("Bit 200 should NOT be set");
+        }
+        if (multiroarBitGet(result, 300)) {
+            ERRR("Bit 300 should NOT be set");
+        }
+
+        multiroarFree(a);
+        multiroarFree(b);
+        multiroarFree(result);
+    }
+
+    TEST("AND: ALL_1 x UNDER_FULL") {
+        multiroar *a = multiroarBitNew();
+        multiroar *b = multiroarBitNew();
+
+        /* a: all ones */
+        FILL_ALL_ONES(a, 0);
+        /* b: sparse */
+        FILL_SPARSE(b, 0, 200);
+
+        multiroar *result = multiroarNewAnd(a, b);
+
+        /* Result should equal b */
+        uint64_t countResult = multiroarBitCount(result);
+        if (countResult != 200) {
+            ERR("ALL_1 x UNDER_FULL: expected 200, got %" PRIu64, countResult);
+        }
+
+        if (!multiroarEquals(result, b)) {
+            ERRR("ALL_1 AND sparse should equal sparse");
+        }
+
+        multiroarFree(a);
+        multiroarFree(b);
+        multiroarFree(result);
+    }
+
+    TEST("OR: UNDER_FULL x FULL_BITMAP") {
+        multiroar *a = multiroarBitNew();
+        multiroar *b = multiroarBitNew();
+
+        /* a: sparse in chunk 0, positions 0,12,24,...,1188 */
+        FILL_SPARSE(a, 0, 100);
+        /* b: dense in chunk 0, positions [2000, 4000) */
+        FILL_DENSE(b, 0, 2000, 4000);
+
+        multiroar *result = multiroarNewOr(a, b);
+
+        /* Result should have 100 + 2000 = 2100 bits (no overlap) */
+        uint64_t countResult = multiroarBitCount(result);
+        if (countResult != 2100) {
+            ERR("OR UNDER_FULL x FULL_BITMAP: expected 2100, got %" PRIu64,
+                countResult);
+        }
+
+        multiroarFree(a);
+        multiroarFree(b);
+        multiroarFree(result);
+    }
+
+    TEST("OR: UNDER_FULL x OVER_FULL across different chunks") {
+        multiroar *a = multiroarBitNew();
+        multiroar *b = multiroarBitNew();
+
+        /* a: sparse in chunk 0 */
+        FILL_SPARSE(a, 0, 100);
+        /* b: negative listing in chunk 1 (almost all ones) */
+        FILL_ALL_ONES(b, 1);
+        multiroarRemove(b, 8192 + 50);
+
+        multiroar *result = multiroarNewOr(a, b);
+
+        /* Result: 100 bits in chunk 0, 8191 bits in chunk 1 */
+        uint64_t countResult = multiroarBitCount(result);
+        if (countResult != 100 + 8191) {
+            ERR("OR across chunks: expected %d, got %" PRIu64, 100 + 8191,
+                countResult);
+        }
+
+        multiroarFree(a);
+        multiroarFree(b);
+        multiroarFree(result);
+    }
+
+    TEST("XOR: FULL_BITMAP x FULL_BITMAP (partial overlap)") {
+        multiroar *a = multiroarBitNew();
+        multiroar *b = multiroarBitNew();
+
+        /* a: [0, 3000) */
+        FILL_DENSE(a, 0, 0, 3000);
+        /* b: [2000, 5000) */
+        FILL_DENSE(b, 0, 2000, 5000);
+
+        multiroar *result = multiroarNewXor(a, b);
+
+        /* XOR: [0,2000) + [3000,5000) = 2000 + 2000 = 4000 */
+        uint64_t countResult = multiroarBitCount(result);
+        if (countResult != 4000) {
+            ERR("XOR FULL_BITMAP x FULL_BITMAP: expected 4000, got %" PRIu64,
+                countResult);
+        }
+
+        /* Verify boundaries */
+        if (!multiroarBitGet(result, 1999)) {
+            ERRR("Bit 1999 should be set (in a only)");
+        }
+        if (multiroarBitGet(result, 2000)) {
+            ERRR("Bit 2000 should NOT be set (in both)");
+        }
+        if (multiroarBitGet(result, 2999)) {
+            ERRR("Bit 2999 should NOT be set (in both)");
+        }
+        if (!multiroarBitGet(result, 3000)) {
+            ERRR("Bit 3000 should be set (in b only)");
+        }
+
+        multiroarFree(a);
+        multiroarFree(b);
+        multiroarFree(result);
+    }
+
+    TEST("XOR: ALL_1 x FULL_BITMAP") {
+        multiroar *a = multiroarBitNew();
+        multiroar *b = multiroarBitNew();
+
+        /* a: all ones in chunk 0 */
+        FILL_ALL_ONES(a, 0);
+        /* b: [0, 4096) in chunk 0 */
+        FILL_DENSE(b, 0, 0, 4096);
+
+        multiroar *result = multiroarNewXor(a, b);
+
+        /* XOR: bits [4096, 8192) should be set (8192 - 4096 = 4096 bits) */
+        uint64_t countResult = multiroarBitCount(result);
+        if (countResult != 4096) {
+            ERR("XOR ALL_1 x FULL_BITMAP: expected 4096, got %" PRIu64,
+                countResult);
+        }
+
+        if (multiroarBitGet(result, 4095)) {
+            ERRR("Bit 4095 should NOT be set");
+        }
+        if (!multiroarBitGet(result, 4096)) {
+            ERRR("Bit 4096 should be set");
+        }
+
+        multiroarFree(a);
+        multiroarFree(b);
+        multiroarFree(result);
+    }
+
+    TEST("ANDNOT: FULL_BITMAP - UNDER_FULL") {
+        multiroar *a = multiroarBitNew();
+        multiroar *b = multiroarBitNew();
+
+        /* a: dense [0, 2000) */
+        FILL_DENSE(a, 0, 0, 2000);
+        /* b: sparse at 0,12,24,...,588 (50 positions) */
+        FILL_SPARSE(b, 0, 50);
+
+        multiroar *result = multiroarNewAndNot(a, b);
+
+        /* Result: 2000 - 50 = 1950 bits */
+        uint64_t countResult = multiroarBitCount(result);
+        if (countResult != 1950) {
+            ERR("ANDNOT FULL_BITMAP - UNDER_FULL: expected 1950, got %" PRIu64,
+                countResult);
+        }
+
+        /* Verify removed bits */
+        for (int i = 0; i < 50; i++) {
+            if (multiroarBitGet(result, i * 12)) {
+                ERR("Bit %d should be removed", i * 12);
+            }
+        }
+
+        multiroarFree(a);
+        multiroarFree(b);
+        multiroarFree(result);
+    }
+
+    TEST("ANDNOT: OVER_FULL - FULL_BITMAP") {
+        multiroar *a = multiroarBitNew();
+        multiroar *b = multiroarBitNew();
+
+        /* a: almost all ones (negative listing) */
+        FILL_ALL_ONES(a, 0);
+        multiroarRemove(a, 100); /* 8191 bits set */
+
+        /* b: dense [0, 4096) */
+        FILL_DENSE(b, 0, 0, 4096);
+
+        multiroar *result = multiroarNewAndNot(a, b);
+
+        /* Result: bits in a not in b = [4096, 8192) minus bit 100 wasn't in a
+         * But bit 100 is in [0,4096) so it's removed by ANDNOT anyway
+         * a has all except 100, b has [0,4096)
+         * a - b = [4096, 8192) = 4096 bits */
+        uint64_t countResult = multiroarBitCount(result);
+        if (countResult != 4096) {
+            ERR("ANDNOT OVER_FULL - FULL_BITMAP: expected 4096, got %" PRIu64,
+                countResult);
+        }
+
+        multiroarFree(a);
+        multiroarFree(b);
+        multiroarFree(result);
+    }
+
+    TEST("Complex: mixed container types across multiple chunks") {
+        multiroar *a = multiroarBitNew();
+        multiroar *b = multiroarBitNew();
+
+        /* Chunk 0: a=sparse, b=bitmap */
+        FILL_SPARSE(a, 0, 100);
+        FILL_DENSE(b, 0, 0, 1000);
+
+        /* Chunk 1: a=bitmap, b=sparse */
+        FILL_DENSE(a, 1, 0, 2000);
+        FILL_SPARSE(b, 1, 150);
+
+        /* Chunk 2: a=all_ones, b=over_full */
+        FILL_ALL_ONES(a, 2);
+        FILL_ALL_ONES(b, 2);
+        multiroarRemove(b, 2 * 8192 + 500);
+
+        /* Chunk 3: a=empty, b=bitmap */
+        FILL_DENSE(b, 3, 1000, 3000);
+
+        /* Chunk 4: a=over_full, b=empty */
+        FILL_ALL_ONES(a, 4);
+        multiroarRemove(a, 4 * 8192 + 100);
+
+        /* Test AND */
+        multiroar *andResult = multiroarNewAnd(a, b);
+        /* Chunk 0: sparse 100 positions at i*12, dense [0,1000)
+         *          i*12 < 1000 for i < 83.33, so 84 positions match (i=0..83)
+         */
+        /* Chunk 1: dense [0,2000), sparse 150 positions at i*12
+         *          i*12 < 2000 for i < 167, we have 150 positions, all match */
+        /* Chunk 2: 8192 AND (8192-1) = 8191 */
+        /* Chunk 3: empty AND bitmap = empty */
+        /* Chunk 4: over_full AND empty = empty */
+        uint64_t expectedAnd = 84 + 150 + 8191;
+
+        if (multiroarBitCount(andResult) != expectedAnd) {
+            ERR("Complex AND: expected %" PRIu64 ", got %" PRIu64, expectedAnd,
+                multiroarBitCount(andResult));
+        }
+        multiroarFree(andResult);
+
+        /* Test OR */
+        multiroar *orResult = multiroarNewOr(a, b);
+        /* Chunk 0: 100 sparse + 1000 dense with overlap */
+        /* Chunk 1: 2000 dense + 150 sparse with overlap */
+        /* Chunk 2: all_ones OR (all-1) = all_ones = 8192 */
+        /* Chunk 3: empty + 2000 = 2000 */
+        /* Chunk 4: 8191 + 0 = 8191 */
+
+        /* Chunk 0: positions 0,12,24,...1188 (100) union [0,1000)
+         *          The sparse positions i*12 for i<84 are in [0,1000)
+         *          So union is [0,1000) + positions 1008,1020,...,1188 = 16
+         * more = 1000 + (100-84) = 1016 */
+        /* Chunk 1: [0,2000) union positions i*12 for i in [0,150)
+         *          i*12 < 2000 for i < 167, so all 150 in [0,2000)
+         *          = 2000 (no additional) */
+        /* So OR = 1016 + 2000 + 8192 + 2000 + 8191 = 21399 */
+        /* Actually let me recalculate chunk 0:
+         * sparse has i*12 for i in [0,100), so max is 99*12 = 1188
+         * dense has [0,1000)
+         * overlap: i*12 < 1000 for i < 83.33, so i <= 83 -> positions
+         * 0,12,...996 union: 1000 + (100 - 84) = 1000 + 16 = 1016 */
+
+        uint64_t expectedOr = 1016 + 2000 + 8192 + 2000 + 8191;
+        if (multiroarBitCount(orResult) != expectedOr) {
+            ERR("Complex OR: expected %" PRIu64 ", got %" PRIu64, expectedOr,
+                multiroarBitCount(orResult));
+        }
+        multiroarFree(orResult);
+
+        multiroarFree(a);
+        multiroarFree(b);
+    }
+
+    TEST("FUZZ: random cross-container operations") {
+        uint64_t seed[2] = {0xDEADBEEF12345678ULL, 0x8765432100000001ULL};
+
+        for (int trial = 0; trial < 20; trial++) {
+            multiroar *a = multiroarBitNew();
+            multiroar *b = multiroarBitNew();
+
+            /* Randomly fill chunks with different densities */
+            for (int chunk = 0; chunk < 4; chunk++) {
+                uint64_t base = chunk * 8192ULL;
+                uint64_t densityA = xoroshiro128plus(seed) % 100;
+                uint64_t densityB = xoroshiro128plus(seed) % 100;
+
+                /* 0-20%: empty, 20-40%: sparse, 40-80%: bitmap, 80-100%: dense
+                 */
+                if (densityA >= 20) {
+                    int count = (densityA < 40)   ? 50 + (densityA % 100)
+                                : (densityA < 80) ? 1000 + (densityA % 2000)
+                                                  : 7500 + (densityA % 692);
+                    for (int i = 0; i < count; i++) {
+                        multiroarBitSet(a,
+                                        base + (xoroshiro128plus(seed) % 8192));
+                    }
+                }
+                if (densityB >= 20) {
+                    int count = (densityB < 40)   ? 50 + (densityB % 100)
+                                : (densityB < 80) ? 1000 + (densityB % 2000)
+                                                  : 7500 + (densityB % 692);
+                    for (int i = 0; i < count; i++) {
+                        multiroarBitSet(b,
+                                        base + (xoroshiro128plus(seed) % 8192));
+                    }
+                }
+            }
+
+            uint64_t countA = multiroarBitCount(a);
+            uint64_t countB = multiroarBitCount(b);
+
+            /* Test AND: result count <= min(countA, countB) */
+            multiroar *andResult = multiroarNewAnd(a, b);
+            uint64_t andCount = multiroarBitCount(andResult);
+            uint64_t minAB = (countA < countB) ? countA : countB;
+            if (andCount > minAB) {
+                ERR("Trial %d: AND count %" PRIu64 " > min(%" PRIu64 ",%" PRIu64
+                    ")",
+                    trial, andCount, countA, countB);
+            }
+
+            /* Test OR: result count >= max(countA, countB) */
+            multiroar *orResult = multiroarNewOr(a, b);
+            uint64_t orCount = multiroarBitCount(orResult);
+            uint64_t maxAB = (countA > countB) ? countA : countB;
+            if (orCount < maxAB) {
+                ERR("Trial %d: OR count %" PRIu64 " < max(%" PRIu64 ",%" PRIu64
+                    ")",
+                    trial, orCount, countA, countB);
+            }
+
+            /* Test XOR: result count should satisfy |countA - countB| <=
+             * xorCount <= countA + countB */
+            multiroar *xorResult = multiroarNewXor(a, b);
+            uint64_t xorCount = multiroarBitCount(xorResult);
+            uint64_t diffAB =
+                (countA > countB) ? (countA - countB) : (countB - countA);
+            if (xorCount < diffAB || xorCount > countA + countB) {
+                ERR("Trial %d: XOR count %" PRIu64 " out of range [%" PRIu64
+                    ", %" PRIu64 "]",
+                    trial, xorCount, diffAB, countA + countB);
+            }
+
+            /* Verify AND + XOR = OR (set theory identity) */
+            /* Actually: |A ∪ B| = |A| + |B| - |A ∩ B|
+             * and: |A △ B| = |A| + |B| - 2|A ∩ B|
+             * So: |A △ B| + |A ∩ B| = |A| + |B| - |A ∩ B|... no
+             * |A △ B| = |A ∪ B| - |A ∩ B|
+             * So: xorCount = orCount - andCount */
+            if (xorCount != orCount - andCount) {
+                ERR("Trial %d: set identity failed: XOR=%" PRIu64
+                    " != OR=%" PRIu64 " - AND=%" PRIu64,
+                    trial, xorCount, orCount, andCount);
+            }
+
+            multiroarFree(andResult);
+            multiroarFree(orResult);
+            multiroarFree(xorResult);
+            multiroarFree(a);
+            multiroarFree(b);
+        }
+    }
+
+#undef FILL_SPARSE
+#undef FILL_DENSE
+#undef FILL_ALL_ONES
+
+    printf("=== Cross-Container-Type Tests Passed! ===\n\n");
+
     TEST_FINAL_RESULT;
 }
 

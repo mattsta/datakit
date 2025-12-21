@@ -7949,6 +7949,349 @@ int32_t flexTest(int32_t argc, char **argv) {
 
     printf("\n=== All flex fuzz tests passed! ===\n\n");
 
+    /* ================================================================
+     * VARINT ENCODING BOUNDARY TESTS
+     *
+     * The flex encoding uses varintSplitFullNoZero for length encoding:
+     * - 1 byte:  0-64 bytes (VARINT_SPLIT_FULL_NO_ZERO_MAX_6 = 64)
+     * - 2 bytes: 65-16447 bytes (VARINT_SPLIT_FULL_NO_ZERO_MAX_14)
+     * - 3 bytes: 16448+ bytes (VARINT_SPLIT_FULL_NO_ZERO_MAX_22)
+     *
+     * These tests verify correct behavior at encoding boundaries.
+     * ================================================================ */
+
+    printf("Test varint encoding boundary: 1-byte to 2-byte (64 bytes):\n");
+    {
+        /* Test strings at exactly the encoding boundary lengths.
+         * The encoding stores the *data* length, so we test data lengths
+         * of 63, 64, 65 bytes. */
+        f = flexNew();
+
+        /* Create test strings at boundary lengths */
+        char str63[64]; /* 63 bytes of data + null */
+        char str64[65]; /* 64 bytes of data + null */
+        char str65[66]; /* 65 bytes of data + null */
+
+        memset(str63, 'A', 63);
+        str63[63] = '\0';
+        memset(str64, 'B', 64);
+        str64[64] = '\0';
+        memset(str65, 'C', 65);
+        str65[65] = '\0';
+
+        /* Insert 63-byte string (should use 1-byte encoding) */
+        flexPushBytes(&f, str63, 63, FLEX_ENDPOINT_TAIL);
+        assert(flexCount(f) == 1);
+        size_t bytes63 = flexBytes(f);
+
+        /* Insert 64-byte string (boundary: should still use 1-byte encoding) */
+        flexPushBytes(&f, str64, 64, FLEX_ENDPOINT_TAIL);
+        assert(flexCount(f) == 2);
+        size_t bytes64 = flexBytes(f);
+
+        /* Insert 65-byte string (should use 2-byte encoding) */
+        flexPushBytes(&f, str65, 65, FLEX_ENDPOINT_TAIL);
+        assert(flexCount(f) == 3);
+        size_t bytes65 = flexBytes(f);
+
+        /* Verify all strings can be read back correctly */
+        flexEntry *fe63 = flexIndex(f, 0);
+        flexEntry *fe64 = flexIndex(f, 1);
+        flexEntry *fe65 = flexIndex(f, 2);
+
+        databox box63 = {{0}};
+        databox box64 = {{0}};
+        databox box65 = {{0}};
+        flexGetByType(fe63, &box63);
+        flexGetByType(fe64, &box64);
+        flexGetByType(fe65, &box65);
+
+        assert(box63.len == 63);
+        assert(memcmp(box63.data.bytes.start, str63, 63) == 0);
+        assert(box64.len == 64);
+        assert(memcmp(box64.data.bytes.start, str64, 64) == 0);
+        assert(box65.len == 65);
+        assert(memcmp(box65.data.bytes.start, str65, 65) == 0);
+
+        /* The 65-byte entry uses 2-byte encoding vs 1-byte for 64-byte.
+         * So we expect (bytes65 - bytes64) > (bytes64 - bytes63) due to
+         * the extra encoding byte on both forward and backward headers. */
+        printf("  Sizes: 63B entry in %zu bytes, 64B in %zu (+%zu), "
+               "65B in %zu (+%zu)\n",
+               bytes63, bytes64, bytes64 - bytes63, bytes65, bytes65 - bytes64);
+
+        /* Delete middle element and verify structure integrity */
+        flexEntry *toDelete = flexIndex(f, 1);
+        flexDelete(&f, &toDelete);
+        assert(flexCount(f) == 2);
+
+        /* Verify remaining elements */
+        fe63 = flexIndex(f, 0);
+        fe65 = flexIndex(f, 1);
+        flexGetByType(fe63, &box63);
+        flexGetByType(fe65, &box65);
+        assert(box63.len == 63);
+        assert(box65.len == 65);
+
+        flexFree(f);
+        printf("  OK\n");
+    }
+
+    printf("Test varint encoding boundary: 2-byte to 3-byte (16447 bytes):\n");
+    {
+        /* The 2-byte→3-byte boundary is at 16447 bytes.
+         * Testing exact boundary: 16446, 16447, 16448 bytes. */
+        f = flexNew();
+
+        /* Create large test strings at boundary lengths */
+        char *str16446 = zmalloc(16447);
+        char *str16447 = zmalloc(16448);
+        char *str16448 = zmalloc(16449);
+
+        memset(str16446, 'X', 16446);
+        str16446[16446] = '\0';
+        memset(str16447, 'Y', 16447);
+        str16447[16447] = '\0';
+        memset(str16448, 'Z', 16448);
+        str16448[16448] = '\0';
+
+        /* Insert strings at each boundary */
+        flexPushBytes(&f, str16446, 16446, FLEX_ENDPOINT_TAIL);
+        assert(flexCount(f) == 1);
+        size_t bytes16446 = flexBytes(f);
+
+        flexPushBytes(&f, str16447, 16447, FLEX_ENDPOINT_TAIL);
+        assert(flexCount(f) == 2);
+        size_t bytes16447 = flexBytes(f);
+
+        flexPushBytes(&f, str16448, 16448, FLEX_ENDPOINT_TAIL);
+        assert(flexCount(f) == 3);
+        size_t bytes16448 = flexBytes(f);
+
+        /* Verify all strings can be read back correctly */
+        flexEntry *fe16446 = flexIndex(f, 0);
+        flexEntry *fe16447 = flexIndex(f, 1);
+        flexEntry *fe16448 = flexIndex(f, 2);
+
+        databox box16446 = {{0}};
+        databox box16447 = {{0}};
+        databox box16448 = {{0}};
+        flexGetByType(fe16446, &box16446);
+        flexGetByType(fe16447, &box16447);
+        flexGetByType(fe16448, &box16448);
+
+        assert(box16446.len == 16446);
+        assert(memcmp(box16446.data.bytes.start, str16446, 16446) == 0);
+        assert(box16447.len == 16447);
+        assert(memcmp(box16447.data.bytes.start, str16447, 16447) == 0);
+        assert(box16448.len == 16448);
+        assert(memcmp(box16448.data.bytes.start, str16448, 16448) == 0);
+
+        printf("  Sizes: 16446B entry total %zu, 16447B total %zu (+%zu), "
+               "16448B total %zu (+%zu)\n",
+               bytes16446, bytes16447, bytes16447 - bytes16446, bytes16448,
+               bytes16448 - bytes16447);
+
+        /* Test iteration across large entries */
+        flexEntry *iter = flexHead(f);
+        int count = 0;
+        while (iter) {
+            databox box = {{0}};
+            flexGetByType(iter, &box);
+            if (count == 0) {
+                assert(box.len == 16446);
+            } else if (count == 1) {
+                assert(box.len == 16447);
+            } else if (count == 2) {
+                assert(box.len == 16448);
+            }
+            iter = flexNext(f, iter);
+            count++;
+        }
+        assert(count == 3);
+
+        /* Test reverse iteration */
+        iter = flexTail(f);
+        count = 0;
+        while (iter) {
+            databox box = {{0}};
+            flexGetByType(iter, &box);
+            if (count == 0) {
+                assert(box.len == 16448);
+            } else if (count == 1) {
+                assert(box.len == 16447);
+            } else if (count == 2) {
+                assert(box.len == 16446);
+            }
+            iter = flexPrev(f, iter);
+            count++;
+        }
+        assert(count == 3);
+
+        /* Delete and re-insert to test encoding transitions */
+        flexEntry *toDelete = flexIndex(f, 1); /* Delete 16447 */
+        flexDelete(&f, &toDelete);
+        assert(flexCount(f) == 2);
+
+        /* Re-insert at head */
+        flexPushBytes(&f, str16447, 16447, FLEX_ENDPOINT_HEAD);
+        assert(flexCount(f) == 3);
+
+        /* Verify order: 16447, 16446, 16448 */
+        databox b0 = {{0}}, b1 = {{0}}, b2 = {{0}};
+        flexGetByType(flexIndex(f, 0), &b0);
+        flexGetByType(flexIndex(f, 1), &b1);
+        flexGetByType(flexIndex(f, 2), &b2);
+        assert(b0.len == 16447);
+        assert(b1.len == 16446);
+        assert(b2.len == 16448);
+
+        zfree(str16446);
+        zfree(str16447);
+        zfree(str16448);
+        flexFree(f);
+        printf("  OK\n");
+    }
+
+    printf("Test encoding boundary transitions with in-place replacement:\n");
+    {
+        /* Test replacing entries near encoding boundaries to verify
+         * the flex correctly handles encoding size changes. */
+        f = flexNew();
+
+        /* Start with a 64-byte string (1-byte encoding) */
+        char str64[65];
+        memset(str64, 'A', 64);
+        str64[64] = '\0';
+        flexPushBytes(&f, str64, 64, FLEX_ENDPOINT_TAIL);
+
+        /* Also add a small marker entry */
+        flexPushSigned(&f, 12345, FLEX_ENDPOINT_TAIL);
+
+        size_t origBytes = flexBytes(f);
+        flexEntry *feReplace = flexIndex(f, 0);
+
+        /* Replace with 65-byte string (forces 2-byte encoding) */
+        char str65[66];
+        memset(str65, 'B', 65);
+        str65[65] = '\0';
+        databox replacement = databoxNewBytes(str65, 65);
+        flexReplaceByType(&f, feReplace, &replacement);
+
+        size_t newBytes = flexBytes(f);
+        assert(newBytes > origBytes); /* Should grow due to encoding change */
+
+        /* Verify replacement worked */
+        databox got = {{0}};
+        flexGetByType(flexIndex(f, 0), &got);
+        assert(got.len == 65);
+        assert(memcmp(got.data.bytes.start, str65, 65) == 0);
+
+        /* Verify second entry wasn't corrupted */
+        databox marker = {{0}};
+        flexGetByType(flexIndex(f, 1), &marker);
+        assert(marker.data.i == 12345);
+
+        /* Now shrink back to 63 bytes (back to 1-byte encoding) */
+        char str63[64];
+        memset(str63, 'C', 63);
+        str63[63] = '\0';
+        databox shrink = databoxNewBytes(str63, 63);
+        fe = flexIndex(f, 0);
+        flexReplaceByType(&f, fe, &shrink);
+
+        /* Verify shrink worked */
+        flexGetByType(flexIndex(f, 0), &got);
+        assert(got.len == 63);
+        assert(memcmp(got.data.bytes.start, str63, 63) == 0);
+
+        /* Marker still valid */
+        flexGetByType(flexIndex(f, 1), &marker);
+        assert(marker.data.i == 12345);
+
+        flexFree(f);
+        printf("  OK\n");
+    }
+
+    printf("Test sorted operations at encoding boundaries:\n");
+    {
+        /* Test sorted insert/find/delete with entries near encoding
+         * boundaries to ensure the comparison and middle-tracking
+         * logic handles variable-width encodings correctly. */
+        f = flexNew();
+        flexEntry *middle = NULL;
+
+        /* Insert strings that sort around encoding boundaries */
+        char key63[64], key64[65], key65[66];
+        memset(key63, 'M', 63);
+        key63[63] = '\0';
+        memset(key64, 'N', 64);
+        key64[64] = '\0';
+        memset(key65, 'O', 65);
+        key65[65] = '\0';
+
+        /* Insert in non-sorted order to test insertion logic */
+        databox box64 = databoxNewBytes(key64, 64);
+        databox val64 = databoxNewSigned(64);
+        const databox *elems64[2] = {&box64, &val64};
+        flexInsertByTypeSortedWithMiddleMultiDirect(&f, 2, elems64, &middle);
+
+        databox box63 = databoxNewBytes(key63, 63);
+        databox val63 = databoxNewSigned(63);
+        const databox *elems63[2] = {&box63, &val63};
+        flexInsertByTypeSortedWithMiddleMultiDirect(&f, 2, elems63, &middle);
+
+        databox box65 = databoxNewBytes(key65, 65);
+        databox val65 = databoxNewSigned(65);
+        const databox *elems65[2] = {&box65, &val65};
+        flexInsertByTypeSortedWithMiddleMultiDirect(&f, 2, elems65, &middle);
+
+        assert(flexCount(f) == 6); /* 3 key-value pairs */
+
+        /* Find each key and verify value */
+        flexEntry *found63 =
+            flexFindByTypeSortedWithMiddle(f, 2, &box63, middle);
+        flexEntry *found64 =
+            flexFindByTypeSortedWithMiddle(f, 2, &box64, middle);
+        flexEntry *found65 =
+            flexFindByTypeSortedWithMiddle(f, 2, &box65, middle);
+
+        assert(found63 != NULL);
+        assert(found64 != NULL);
+        assert(found65 != NULL);
+
+        databox gotVal = {{0}};
+        flexEntry *valEntry = flexNext(f, found63);
+        flexGetByType(valEntry, &gotVal);
+        assert(gotVal.data.i == 63);
+
+        valEntry = flexNext(f, found64);
+        flexGetByType(valEntry, &gotVal);
+        assert(gotVal.data.i == 64);
+
+        valEntry = flexNext(f, found65);
+        flexGetByType(valEntry, &gotVal);
+        assert(gotVal.data.i == 65);
+
+        /* Delete middle entry and verify structure */
+        flexDeleteSortedValueWithMiddle(&f, 2, found64, &middle);
+        assert(flexCount(f) == 4);
+
+        /* Verify remaining entries */
+        found63 = flexFindByTypeSortedWithMiddle(f, 2, &box63, middle);
+        found64 = flexFindByTypeSortedWithMiddle(f, 2, &box64, middle);
+        found65 = flexFindByTypeSortedWithMiddle(f, 2, &box65, middle);
+
+        assert(found63 != NULL);
+        assert(found64 == NULL); /* Should be deleted */
+        assert(found65 != NULL);
+
+        flexFree(f);
+        printf("  OK\n");
+    }
+
+    printf("\n=== All varint encoding boundary tests passed! ===\n\n");
+
     return 0;
 }
 #endif
