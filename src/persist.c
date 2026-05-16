@@ -746,6 +746,10 @@ mflexState *persistGetReplayState(void) {
     return replayMflexState;
 }
 
+void persistSetReplayState(mflexState *state) {
+    replayMflexState = state;
+}
+
 bool persistReplayWAL(persist *p, void *structure) {
     if (!p || !structure || !p->walStore || !p->ops->applyOp) {
         return false;
@@ -1507,6 +1511,9 @@ static uint8_t *flexPersistSnapshot(const void *structure, size_t *len) {
 }
 
 static void *flexPersistRestore(const uint8_t *data, size_t len) {
+    if (!flexValidateBuffer(data, len)) {
+        return NULL;
+    }
     flex *f = zmalloc(len);
     memcpy(f, data, len);
     return f;
@@ -1643,13 +1650,21 @@ static uint8_t *intsetPersistSnapshot(const void *structure, size_t *len) {
 
 static void *intsetPersistRestore(const uint8_t *data, size_t len) {
     /* Minimum valid length: count field */
-    if (len < sizeof(uint64_t)) {
+    if (!data || len < sizeof(uint64_t)) {
         return NULL;
     }
 
     /* Read count */
     uint64_t count;
     memcpy(&count, data, sizeof(uint64_t));
+
+    /* Refuse counts when could overflow size_t when
+     * multiplied by sizeof(int64_t).  Without this, a hostile or
+     * corrupted input could pass len-check via integer wrap then
+     * cause out-of-bounds reads inside the values loop. */
+    if (count > (SIZE_MAX - sizeof(uint64_t)) / sizeof(int64_t)) {
+        return NULL;
+    }
 
     /* Validate length */
     size_t expectedLen = sizeof(uint64_t) + (count * sizeof(int64_t));
@@ -1760,6 +1775,353 @@ const persistOps persistOpsIntset = {
 };
 
 /* ============================================================================
+ * Structure-Specific Operations: intsetBig
+ * ============================================================================
+ *
+ * On-disk / wire format:
+ *   [count: u64 LE]
+ *   N entries of [type: u8][payload: 8 bytes for i64/u64, 16 for i128/u128]
+ *   type values:
+ *     1 = SIGNED_64
+ *     2 = UNSIGNED_64
+ *     3 = SIGNED_128
+ *     4 = UNSIGNED_128
+ *
+ * intsetBig stores numeric values directly with no atom-table
+ * indirection — single byte content represents the same value on every
+ * serialized output, so no multi-data-structure binding is needed for
+ * set details or compares or auditing of different representations here.
+ */
+#include "intsetBig.h"
+
+#define INTSETBIG_TAG_S64 ((uint8_t)1)
+#define INTSETBIG_TAG_U64 ((uint8_t)2)
+#define INTSETBIG_TAG_S128 ((uint8_t)3)
+#define INTSETBIG_TAG_U128 ((uint8_t)4)
+
+static size_t intsetBigPersistEntrySize(const databoxBig *b) {
+    switch (b->type) {
+    case DATABOX_SIGNED_64: /* fallthrough */
+    case DATABOX_UNSIGNED_64:
+        return 1 + 8;
+    case DATABOX_SIGNED_128: /* fallthrough */
+    case DATABOX_UNSIGNED_128:
+        return 1 + 16;
+    default:
+        return 0;
+    }
+}
+
+static uint8_t *intsetBigPersistSnapshot(const void *structure, size_t *len) {
+    const intsetBig *isb = structure;
+    if (!isb) {
+        *len = sizeof(uint64_t);
+        uint8_t *empty = zcalloc(1, sizeof(uint64_t));
+        return empty;
+    }
+
+    /* Pass 1: compute size by walking iterator. */
+    intsetBigIterator it = {0};
+    intsetBigIteratorInit(isb, &it);
+    size_t total = sizeof(uint64_t);
+    uint64_t count = 0;
+    databoxBig dbig = {0};
+    while (intsetBigIteratorNextBox(&it, &dbig)) {
+        const size_t esz = intsetBigPersistEntrySize(&dbig);
+        if (esz == 0) {
+            continue;
+        }
+        total += esz;
+        count++;
+    }
+
+    uint8_t *buf = zmalloc(total);
+    if (!buf) {
+        *len = 0;
+        return NULL;
+    }
+    /* Header: count (LE). */
+    memcpy(buf, &count, sizeof(uint64_t));
+    size_t pos = sizeof(uint64_t);
+
+    /* Pass 2: emit entries. */
+    intsetBigIteratorInit(isb, &it);
+    while (intsetBigIteratorNextBox(&it, &dbig)) {
+        switch (dbig.type) {
+        case DATABOX_SIGNED_64: {
+            buf[pos++] = INTSETBIG_TAG_S64;
+            int64_t v = dbig.data.i;
+            memcpy(buf + pos, &v, 8);
+            pos += 8;
+            break;
+        }
+        case DATABOX_UNSIGNED_64: {
+            buf[pos++] = INTSETBIG_TAG_U64;
+            uint64_t v = dbig.data.u;
+            memcpy(buf + pos, &v, 8);
+            pos += 8;
+            break;
+        }
+        case DATABOX_SIGNED_128: {
+            buf[pos++] = INTSETBIG_TAG_S128;
+            __int128_t v = *dbig.data.i128;
+            memcpy(buf + pos, &v, 16);
+            pos += 16;
+            break;
+        }
+        case DATABOX_UNSIGNED_128: {
+            buf[pos++] = INTSETBIG_TAG_U128;
+            __uint128_t v = *dbig.data.u128;
+            memcpy(buf + pos, &v, 16);
+            pos += 16;
+            break;
+        }
+        default:
+            /* Skip unknown — the size pass excluded these too. */
+            break;
+        }
+    }
+    *len = pos;
+    return buf;
+}
+
+static void intsetBigPersistAddOne(intsetBig *isb, const uint8_t *data,
+                                   size_t len, size_t *consumed) {
+    if (len < 1) {
+        *consumed = 0;
+        return;
+    }
+    const uint8_t tag = data[0];
+    databoxBig dbig = {0};
+    DATABOX_BIG_INIT(&dbig);
+    switch (tag) {
+    case INTSETBIG_TAG_S64: {
+        if (len < 9) {
+            *consumed = 0;
+            return;
+        }
+        int64_t v;
+        memcpy(&v, data + 1, 8);
+        dbig.type = DATABOX_SIGNED_64;
+        dbig.data.i = v;
+        intsetBigAdd(isb, &dbig);
+        *consumed = 9;
+        return;
+    }
+    case INTSETBIG_TAG_U64: {
+        if (len < 9) {
+            *consumed = 0;
+            return;
+        }
+        uint64_t v;
+        memcpy(&v, data + 1, 8);
+        dbig.type = DATABOX_UNSIGNED_64;
+        dbig.data.u = v;
+        intsetBigAdd(isb, &dbig);
+        *consumed = 9;
+        return;
+    }
+    case INTSETBIG_TAG_S128: {
+        if (len < 17) {
+            *consumed = 0;
+            return;
+        }
+        __int128_t v;
+        memcpy(&v, data + 1, 16);
+        dbig.type = DATABOX_SIGNED_128;
+        memcpy(dbig.extra, &v, 16);
+        dbig.data.i128 = (__int128_t *)dbig.extra;
+        intsetBigAdd(isb, &dbig);
+        *consumed = 17;
+        return;
+    }
+    case INTSETBIG_TAG_U128: {
+        if (len < 17) {
+            *consumed = 0;
+            return;
+        }
+        __uint128_t v;
+        memcpy(&v, data + 1, 16);
+        dbig.type = DATABOX_UNSIGNED_128;
+        memcpy(dbig.extra, &v, 16);
+        dbig.data.u128 = (__uint128_t *)dbig.extra;
+        intsetBigAdd(isb, &dbig);
+        *consumed = 17;
+        return;
+    }
+    default:
+        *consumed = 0; /* unknown tag — bail */
+        return;
+    }
+}
+
+static void *intsetBigPersistRestore(const uint8_t *data, size_t len) {
+    if (!data || len < sizeof(uint64_t)) {
+        return NULL;
+    }
+    uint64_t count;
+    memcpy(&count, data, sizeof(uint64_t));
+    intsetBig *isb = intsetBigNew();
+    if (!isb) {
+        return NULL;
+    }
+    size_t pos = sizeof(uint64_t);
+    for (uint64_t i = 0; i < count; i++) {
+        if (pos >= len) {
+            break;
+        }
+        size_t consumed = 0;
+        intsetBigPersistAddOne(isb, data + pos, len - pos, &consumed);
+        if (consumed == 0) {
+            break; /* malformed — return what we have */
+        }
+        pos += consumed;
+    }
+    return isb;
+}
+
+static size_t intsetBigPersistCount(const void *structure) {
+    return intsetBigCountElements(structure);
+}
+
+static size_t intsetBigPersistEstimateSize(const void *structure) {
+    return intsetBigBytes((intsetBig *)structure);
+}
+
+/* applyOp: PERSIST_OP_INSERT adds, PERSIST_OP_DELETE removes a single
+ * value encoded with the same single-entry shape. */
+static bool intsetBigPersistApplyOp(void *structure, persistOp op,
+                                    const uint8_t *data, size_t len) {
+    intsetBig **isb_p = structure;
+    intsetBig *isb = *isb_p;
+    if (len < 1) {
+        return false;
+    }
+    const uint8_t tag = data[0];
+    databoxBig dbig = {0};
+    DATABOX_BIG_INIT(&dbig);
+    switch (tag) {
+    case INTSETBIG_TAG_S64:
+        if (len < 9) {
+            return false;
+        }
+        dbig.type = DATABOX_SIGNED_64;
+        memcpy(&dbig.data.i, data + 1, 8);
+        break;
+    case INTSETBIG_TAG_U64:
+        if (len < 9) {
+            return false;
+        }
+        dbig.type = DATABOX_UNSIGNED_64;
+        memcpy(&dbig.data.u, data + 1, 8);
+        break;
+    case INTSETBIG_TAG_S128:
+        if (len < 17) {
+            return false;
+        }
+        dbig.type = DATABOX_SIGNED_128;
+        memcpy(dbig.extra, data + 1, 16);
+        dbig.data.i128 = (__int128_t *)dbig.extra;
+        break;
+    case INTSETBIG_TAG_U128:
+        if (len < 17) {
+            return false;
+        }
+        dbig.type = DATABOX_UNSIGNED_128;
+        memcpy(dbig.extra, data + 1, 16);
+        dbig.data.u128 = (__uint128_t *)dbig.extra;
+        break;
+    default:
+        return false;
+    }
+    switch (op) {
+    case PERSIST_OP_INSERT:
+        intsetBigAdd(isb, &dbig);
+        break;
+    case PERSIST_OP_DELETE:
+        intsetBigRemove(isb, &dbig);
+        break;
+    default:
+        return false;
+    }
+    return true;
+}
+
+static uint8_t *intsetBigPersistEncodeOp(persistOp op, const void *args,
+                                         size_t argc, size_t *len) {
+    (void)op;
+    (void)argc;
+    /* args is a const databoxBig *. */
+    const databoxBig *b = args;
+    const size_t esz = intsetBigPersistEntrySize(b);
+    if (esz == 0) {
+        *len = 0;
+        return NULL;
+    }
+    uint8_t *buf = zmalloc(esz);
+    if (!buf) {
+        *len = 0;
+        return NULL;
+    }
+    switch (b->type) {
+    case DATABOX_SIGNED_64: {
+        buf[0] = INTSETBIG_TAG_S64;
+        int64_t v = b->data.i;
+        memcpy(buf + 1, &v, 8);
+        break;
+    }
+    case DATABOX_UNSIGNED_64: {
+        buf[0] = INTSETBIG_TAG_U64;
+        uint64_t v = b->data.u;
+        memcpy(buf + 1, &v, 8);
+        break;
+    }
+    case DATABOX_SIGNED_128: {
+        buf[0] = INTSETBIG_TAG_S128;
+        __int128_t v = *b->data.i128;
+        memcpy(buf + 1, &v, 16);
+        break;
+    }
+    case DATABOX_UNSIGNED_128: {
+        buf[0] = INTSETBIG_TAG_U128;
+        __uint128_t v = *b->data.u128;
+        memcpy(buf + 1, &v, 16);
+        break;
+    }
+    default:
+        zfree(buf);
+        *len = 0;
+        return NULL;
+    }
+    *len = esz;
+    return buf;
+}
+
+static void *intsetBigPersistNewEmpty(void) {
+    return intsetBigNew();
+}
+
+static void intsetBigPersistFree(void *structure) {
+    intsetBigFree(structure);
+}
+
+const persistOps persistOpsIntsetBig = {
+    .type = PERSIST_TYPE_INTSETBIG,
+    .name = "intsetBig",
+    .snapshot = intsetBigPersistSnapshot,
+    .restore = intsetBigPersistRestore,
+    .newEmpty = intsetBigPersistNewEmpty,
+    .count = intsetBigPersistCount,
+    .estimateSize = intsetBigPersistEstimateSize,
+    .encodeOp = intsetBigPersistEncodeOp,
+    .applyOp = intsetBigPersistApplyOp,
+    .streamSnapshot = NULL,
+    .streamRestore = NULL,
+    .validate = NULL,
+    .free = intsetBigPersistFree,
+};
+
+/* ============================================================================
  * Structure-Specific Operations: multiroar
  * ============================================================================
  */
@@ -1785,6 +2147,9 @@ static uint8_t *multiroarPersistSnapshot(const void *structure, size_t *len) {
 }
 
 static void *multiroarPersistRestore(const uint8_t *data, size_t len) {
+    if (!data || len == 0) {
+        return NULL;
+    }
     /* Deserialize multiroar from snapshot */
     return multiroarDeserialize(data, len);
 }
@@ -1862,11 +2227,16 @@ static void multiroarPersistFree(void *structure) {
     multiroarFree(structure);
 }
 
+static void *multiroarPersistNewEmpty(void) {
+    return multiroarBitNew();
+}
+
 const persistOps persistOpsMultiroar = {
     .type = PERSIST_TYPE_MULTIROAR,
     .name = "multiroar",
     .snapshot = multiroarPersistSnapshot,
     .restore = multiroarPersistRestore,
+    .newEmpty = multiroarPersistNewEmpty,
     .count = multiroarPersistCount,
     .estimateSize = multiroarPersistEstimateSize,
     .encodeOp = multiroarPersistEncodeOp,
@@ -1875,6 +2245,104 @@ const persistOps persistOpsMultiroar = {
     .streamRestore = NULL,
     .validate = NULL,
     .free = multiroarPersistFree,
+};
+
+/* ============================================================================
+ * Structure-Specific Operations: hyperloglog
+ * ============================================================================
+ *
+ * The HLL is stored internally as an mdsc-prefixed byte buffer
+ * (hyperloglog* and mdsc* are layout-compatible — toHLL/toMDSC inside
+ * hyperloglog.c are file-static identity casts).  Snapshots are the
+ * raw bytes; restore mdscnewlen's a fresh copy; PFADD deltas carry
+ * the value bytes that hyperloglogAdd hashes internally.
+ */
+#include "hyperloglog.h"
+#include "mdsc.h"
+
+static uint8_t *hyperloglogPersistSnapshot(const void *structure, size_t *len) {
+    const mdsc *m = (const mdsc *)structure;
+    size_t l = mdsclen(m);
+    uint8_t *buf = zmalloc(l);
+    if (l > 0) {
+        memcpy(buf, structure, l);
+    }
+    *len = l;
+    return buf;
+}
+
+static void *hyperloglogPersistRestore(const uint8_t *data, size_t len) {
+    if (!data || len == 0) {
+        return NULL;
+    }
+
+    return (void *)mdscnewlen(data, len);
+}
+
+static void *hyperloglogPersistNewEmpty(void) {
+    return hyperloglogNew();
+}
+
+static size_t hyperloglogPersistCount(const void *structure) {
+    /* hyperloglogCount needs a non-const handle because it may
+     * recompute the cached cardinality.  The const-cast matches
+     * datakit convention for these read-mostly probes. */
+    bool invalid = false;
+    return (size_t)hyperloglogCount((hyperloglog *)structure, &invalid);
+}
+
+static size_t hyperloglogPersistEstimateSize(const void *structure) {
+    return mdsclen((const mdsc *)structure);
+}
+
+static uint8_t *hyperloglogPersistEncodeOp(persistOp op, const void *args,
+                                           size_t argc, size_t *len) {
+    /* For PFADD: args points at the raw value bytes; argc is the
+     * byte count.  hyperloglogAdd hashes internally, so the WAL
+     * carries the original member bytes verbatim. */
+    if (op == PERSIST_OP_INSERT) {
+        uint8_t *buf = NULL;
+        if (argc > 0) {
+            buf = zmalloc(argc);
+            memcpy(buf, args, argc);
+        }
+        *len = argc;
+        return buf;
+    }
+    *len = 0;
+    return NULL;
+}
+
+static bool hyperloglogPersistApplyOp(void *structure, persistOp op,
+                                      const uint8_t *data, size_t len) {
+    /* structure is hyperloglog**; hyperloglogAdd may reallocate
+     * (sparse → dense conversion). */
+    hyperloglog **r = structure;
+    if (op == PERSIST_OP_INSERT) {
+        hyperloglogAdd(r, data, len);
+        return true;
+    }
+    return false;
+}
+
+static void hyperloglogPersistFree(void *structure) {
+    hyperloglogFree(structure);
+}
+
+const persistOps persistOpsHyperloglog = {
+    .type = PERSIST_TYPE_HYPERLOGLOG,
+    .name = "hyperloglog",
+    .snapshot = hyperloglogPersistSnapshot,
+    .restore = hyperloglogPersistRestore,
+    .newEmpty = hyperloglogPersistNewEmpty,
+    .count = hyperloglogPersistCount,
+    .estimateSize = hyperloglogPersistEstimateSize,
+    .encodeOp = hyperloglogPersistEncodeOp,
+    .applyOp = hyperloglogPersistApplyOp,
+    .streamSnapshot = NULL,
+    .streamRestore = NULL,
+    .validate = NULL,
+    .free = hyperloglogPersistFree,
 };
 
 /* ============================================================================
@@ -1925,7 +2393,7 @@ static uint8_t *multimapPersistSnapshot(const void *structure, size_t *len) {
 
 static void *multimapPersistRestore(const uint8_t *data, size_t len) {
     /* Snapshot format: [elementsPerEntry: 4 bytes][flex data: N bytes] */
-    if (len < sizeof(uint32_t)) {
+    if (!data || len < sizeof(uint32_t)) {
         return NULL;
     }
 
@@ -1936,8 +2404,12 @@ static void *multimapPersistRestore(const uint8_t *data, size_t len) {
         return NULL; /* Sanity check */
     }
 
-    /* Restore the flex from remaining data */
     size_t flexLen = len - sizeof(uint32_t);
+    if (!flexValidateBuffer(data + sizeof(uint32_t), flexLen)) {
+        return NULL;
+    }
+
+    /* Restore the flex from remaining data */
     flex *f = zmalloc(flexLen);
     memcpy(f, data + sizeof(uint32_t), flexLen);
 
@@ -2154,11 +2626,16 @@ static void multimapPersistFree(void *structure) {
     multimapFree(structure);
 }
 
+static void *multimapPersistNewEmpty(void) {
+    return multimapSetNew(1);
+}
+
 const persistOps persistOpsMultimap = {
     .type = PERSIST_TYPE_MULTIMAP,
     .name = "multimap",
     .snapshot = multimapPersistSnapshot,
     .restore = multimapPersistRestore,
+    .newEmpty = multimapPersistNewEmpty,
     .count = multimapPersistCount,
     .estimateSize = multimapPersistEstimateSize,
     .encodeOp = multimapPersistEncodeOp,
@@ -2204,6 +2681,10 @@ static uint8_t *multilistPersistSnapshot(const void *structure, size_t *len) {
 }
 
 static void *multilistPersistRestore(const uint8_t *data, size_t len) {
+    if (!flexValidateBuffer(data, len)) {
+        return NULL;
+    }
+
     /* Restore the flex */
     flex *f = zmalloc(len);
     memcpy(f, data, len);
@@ -2462,11 +2943,16 @@ static void multilistPersistFree(void *structure) {
     multilistFree(structure);
 }
 
+static void *multilistPersistNewEmpty(void) {
+    return multilistNew(FLEX_CAP_LEVEL_16384, 2);
+}
+
 const persistOps persistOpsMultilist = {
     .type = PERSIST_TYPE_MULTILIST,
     .name = "multilist",
     .snapshot = multilistPersistSnapshot,
     .restore = multilistPersistRestore,
+    .newEmpty = multilistPersistNewEmpty,
     .count = multilistPersistCount,
     .estimateSize = multilistPersistEstimateSize,
     .encodeOp = multilistPersistEncodeOp,
@@ -2509,6 +2995,9 @@ static uint8_t *multidictPersistSnapshot(const void *structure, size_t *len) {
 }
 
 static void *multidictPersistRestore(const uint8_t *data, size_t len) {
+    if (!flexValidateBuffer(data, len)) {
+        return NULL;
+    }
     /* Restore the flex */
     flex *f = zmalloc(len);
     memcpy(f, data, len);
@@ -2780,6 +3269,9 @@ static uint8_t *multilruPersistSnapshot(const void *structure, size_t *len) {
 }
 
 static void *multilruPersistRestore(const uint8_t *data, size_t len) {
+    if (!flexValidateBuffer(data, len)) {
+        return NULL;
+    }
     /* Restore flex from data */
     flex *f = zmalloc(len);
     memcpy(f, data, len);
@@ -3218,6 +3710,9 @@ static uint8_t *multiOrderedSetPersistSnapshot(const void *structure,
 }
 
 static void *multiOrderedSetPersistRestore(const uint8_t *data, size_t len) {
+    if (!flexValidateBuffer(data, len)) {
+        return NULL;
+    }
     /* Restore flex from data */
     flex *f = zmalloc(len);
     memcpy(f, data, len);
@@ -5692,6 +6187,208 @@ int persistTest(int argc, char *argv[]) {
         multilistFree(ml);
         multilistFree(recovered);
         persistClose(p);
+    }
+
+    /* ============================================================
+     * Adversarial restore tests for the defensive bounds checks
+     * recently added to flex/multimap/multilist/multidict/multilru/
+     * multiOrderedSet/intset restore paths.  Each ops->restore must:
+     *   - return NULL on NULL input
+     *   - return NULL on zero/undersize input
+     *   - return NULL when the embedded length header doesn't match
+     *     the supplied buffer length
+     * These tests invoke restore directly (not through the snapshot
+     * file format) so we can hand it crafted malformed bytes. */
+    TEST("restore: NULL input is rejected by all flex-backed ops") {
+        if (persistOpsFlex.restore(NULL, 0) != NULL) {
+            ERRR("flex restore accepted NULL input");
+        }
+        if (persistOpsFlex.restore(NULL, 1024) != NULL) {
+            ERRR("flex restore accepted NULL with nonzero len");
+        }
+        if (persistOpsMultimap.restore(NULL, 0) != NULL) {
+            ERRR("multimap restore accepted NULL input");
+        }
+        if (persistOpsMultilist.restore(NULL, 0) != NULL) {
+            ERRR("multilist restore accepted NULL input");
+        }
+        if (persistOpsMultidict.restore(NULL, 0) != NULL) {
+            ERRR("multidict restore accepted NULL input");
+        }
+        if (persistOpsIntset.restore(NULL, 0) != NULL) {
+            ERRR("intset restore accepted NULL input");
+        }
+        if (persistOpsIntsetBig.restore(NULL, 0) != NULL) {
+            ERRR("intsetBig restore accepted NULL input");
+        }
+        if (persistOpsHyperloglog.restore(NULL, 0) != NULL) {
+            ERRR("hyperloglog restore accepted NULL input");
+        }
+        if (persistOpsMultiroar.restore(NULL, 0) != NULL) {
+            ERRR("multiroar restore accepted NULL input");
+        }
+    }
+
+    TEST("restore: truncated flex header is rejected") {
+        /* Anything under FLEX_EMPTY_HEADER_SIZE cannot be a valid
+         * flex envelope.  Verify the flex-backed ops bail without
+         * touching the bytes past the end. */
+        const uint8_t tiny[1] = {0xff};
+        if (persistOpsFlex.restore(tiny, 0) != NULL) {
+            ERRR("flex restore accepted zero-length buffer");
+        }
+        if (persistOpsFlex.restore(tiny, 1) != NULL) {
+            ERRR("flex restore accepted 1-byte buffer");
+        }
+        if (persistOpsMultilist.restore(tiny, 1) != NULL) {
+            ERRR("multilist restore accepted 1-byte buffer");
+        }
+        if (persistOpsMultidict.restore(tiny, 1) != NULL) {
+            ERRR("multidict restore accepted 1-byte buffer");
+        }
+    }
+
+    TEST("restore: flex with mismatched total_bytes is rejected") {
+        /* Build a valid flex, then claim a wrong length to the
+         * restore function.  Both too-short and too-long must be
+         * rejected because the header self-describes the length. */
+        flex *valid = flexNew();
+        flexPushSigned(&valid, 1, FLEX_ENDPOINT_TAIL);
+        flexPushSigned(&valid, 2, FLEX_ENDPOINT_TAIL);
+        flexPushSigned(&valid, 3, FLEX_ENDPOINT_TAIL);
+        const size_t real = flexBytes(valid);
+
+        if (persistOpsFlex.restore((uint8_t *)valid, real - 1) != NULL) {
+            ERRR("flex restore accepted buffer 1 byte shorter than "
+                 "header claims");
+        }
+        if (persistOpsFlex.restore((uint8_t *)valid, real + 1) != NULL) {
+            ERRR("flex restore accepted buffer 1 byte longer than "
+                 "header claims");
+        }
+        /* Real length must round-trip cleanly. */
+        flex *ok = persistOpsFlex.restore((uint8_t *)valid, real);
+        if (!ok) {
+            ERRR("flex restore rejected a valid buffer");
+        } else {
+            flexFree(ok);
+        }
+        flexFree(valid);
+    }
+
+    TEST("restore: intset count*sizeof overflow is rejected") {
+        /* Header claims a count that, when multiplied by sizeof(int64_t),
+         * would overflow size_t.  Without the overflow guard, the
+         * `expectedLen = sizeof(uint64_t) + count*8` arithmetic wraps
+         * and the underflow check passes — letting subsequent reads
+         * walk off the end. */
+        uint8_t buf[16];
+        const uint64_t overflowing = (SIZE_MAX / 8) + 1;
+        memcpy(buf, &overflowing, sizeof(uint64_t));
+        memset(buf + 8, 0, 8);
+        if (persistOpsIntset.restore(buf, sizeof(buf)) != NULL) {
+            ERRR("intset restore accepted count that overflows "
+                 "size_t when multiplied by sizeof(int64_t)");
+        }
+    }
+
+    TEST("restore: hyperloglog rejects empty input but accepts valid") {
+        if (persistOpsHyperloglog.restore(NULL, 0) != NULL) {
+            ERRR("hyperloglog restore accepted NULL");
+        }
+
+        /* Round-trip: build a real HLL, snapshot it, restore. */
+        hyperloglog *h = hyperloglogNew();
+        hyperloglogAdd(&h, "abc", 3);
+        hyperloglogAdd(&h, "def", 3);
+        size_t snapLen = 0;
+        uint8_t *snap = persistOpsHyperloglog.snapshot(h, &snapLen);
+        assert(snap != NULL && snapLen > 0);
+        hyperloglog *restored = persistOpsHyperloglog.restore(snap, snapLen);
+        if (!restored) {
+            ERRR("hyperloglog restore rejected its own snapshot");
+        } else {
+            persistOpsHyperloglog.free(restored);
+        }
+        zfree(snap);
+        hyperloglogFree(h);
+    }
+
+    TEST("restore: intsetBig rejects malformed and round-trips valid") {
+        if (persistOpsIntsetBig.restore(NULL, 0) != NULL) {
+            ERRR("intsetBig restore accepted NULL");
+        }
+        const uint8_t tooShort[4] = {1, 0, 0, 0};
+        if (persistOpsIntsetBig.restore(tooShort, sizeof(tooShort)) != NULL) {
+            ERRR("intsetBig restore accepted buffer shorter than count "
+                 "header");
+        }
+
+        /* Round-trip: build a real intsetBig, snapshot, restore,
+         * count must match. */
+        intsetBig *isb = intsetBigNew();
+        databoxBig dbig = {0};
+        DATABOX_BIG_INIT(&dbig);
+        dbig.type = DATABOX_SIGNED_64;
+        dbig.data.i = -42;
+        intsetBigAdd(isb, &dbig);
+        dbig.data.i = 7;
+        intsetBigAdd(isb, &dbig);
+        dbig.type = DATABOX_UNSIGNED_64;
+        dbig.data.u = (uint64_t)1 << 63;
+        intsetBigAdd(isb, &dbig);
+
+        size_t snapLen = 0;
+        uint8_t *snap = persistOpsIntsetBig.snapshot(isb, &snapLen);
+        assert(snap != NULL && snapLen > 0);
+        intsetBig *restored = persistOpsIntsetBig.restore(snap, snapLen);
+        if (!restored) {
+            ERRR("intsetBig restore rejected its own snapshot");
+        } else {
+            if (intsetBigCountElements(restored) !=
+                intsetBigCountElements(isb)) {
+                ERR("intsetBig round-trip count mismatch: %zu vs %zu",
+                    intsetBigCountElements(restored),
+                    intsetBigCountElements(isb));
+            }
+            persistOpsIntsetBig.free(restored);
+        }
+        zfree(snap);
+        intsetBigFree(isb);
+    }
+
+    TEST("restore: newEmpty present where WAL-replay-from-bare needs it") {
+        /* The newEmpty hook lets restore engines apply a delta WAL
+         * that begins without a snapshot.  Verify the hook is wired
+         * for the ops that intend to support that flow. */
+        if (!persistOpsIntsetBig.newEmpty) {
+            ERRR("persistOpsIntsetBig.newEmpty is NULL");
+        }
+        if (!persistOpsHyperloglog.newEmpty) {
+            ERRR("persistOpsHyperloglog.newEmpty is NULL");
+        }
+        if (!persistOpsMultiroar.newEmpty) {
+            ERRR("persistOpsMultiroar.newEmpty is NULL");
+        }
+        if (!persistOpsMultimap.newEmpty) {
+            ERRR("persistOpsMultimap.newEmpty is NULL");
+        }
+        if (!persistOpsMultilist.newEmpty) {
+            ERRR("persistOpsMultilist.newEmpty is NULL");
+        }
+        /* Spot-check that newEmpty returns a usable object. */
+        void *empty = persistOpsIntsetBig.newEmpty();
+        if (!empty) {
+            ERRR("persistOpsIntsetBig.newEmpty returned NULL");
+        } else {
+            persistOpsIntsetBig.free(empty);
+        }
+        empty = persistOpsHyperloglog.newEmpty();
+        if (!empty) {
+            ERRR("persistOpsHyperloglog.newEmpty returned NULL");
+        } else {
+            persistOpsHyperloglog.free(empty);
+        }
     }
 
     TEST_FINAL_RESULT;

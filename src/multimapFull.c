@@ -1069,7 +1069,35 @@ abstractInsert(multimapFull *m, const databox *elements[],
            m->elementsPerEntry);
 #endif
 
-    if ((mapBytes <= m->maxSize) || mapElementCount == 0) {
+    /* Any REPLACE on an existing key MUST stay in the
+     * map that already holds it.  If we instead route REPLACE
+     * through the split-or-new-map path below, we end up with
+     * two maps containing the same key, which corrupts
+     * subsequent lookups (the binary search by range box
+     * picks the WRONG map for keys equal to a range
+     * boundary).  Symptom: SET on an existing large value
+     * silently leaves the prior value behind.
+     *
+     * Detection: when the map exceeds maxSize but the
+     * incoming key already exists in this map, we're doing a
+     * REPLACE — flexInsertReplace handles in-place updates
+     * (grow/shrink the flex by delta, no need to split). */
+    bool wouldBeReplaceInThisMap = false;
+    if ((mapBytes > m->maxSize) && mapElementCount > 0 && !useSurrogateKey) {
+        /* useSurrogateKey path uses a different lookup (with
+         * reference container) — leave it on the existing
+         * code path; this check is for the common
+         * full-key-comparison case. */
+        flexEntry *foundEntry = flexFindByTypeSortedWithMiddle(
+            *map, m->elementsPerEntry, elements[0],
+            GET_MIDDLE(m, mapIdx, *map));
+        if (foundEntry) {
+            wouldBeReplaceInThisMap = true;
+        }
+    }
+
+    if ((mapBytes <= m->maxSize) || mapElementCount == 0 ||
+        wouldBeReplaceInThisMap) {
         /* TODO: better (any) size checking on the incoming elements.
          * We could be inserting 1 GB of elements
          * and we don't seem to care at the moment. */
@@ -2451,6 +2479,77 @@ int multimapFullTest(int argc, char *argv[]) {
 
         multimapFullFree(m);
         printf("\n");
+    }
+
+    /* Regression: REPLACE on an existing key when the holding map has
+     * already grown past maxSize must update IN PLACE.  Before the
+     * fix, that path routed through the split-or-new-map branch, which
+     * inserted a second copy into a different map.  Downstream lookups
+     * then used the binary-search-by-range box to pick a map and got
+     * the WRONG one for keys equal to a range boundary, silently
+     * returning stale data.
+     *
+     * This test forces the failure shape:
+     *   1. maxSize is small (256B) so the very first big-value insert
+     *      pushes the map over maxSize without making it eligible for
+     *      a clean split (we only have one element).
+     *   2. We REPLACE that key with a different big value.
+     *   3. Count must stay at 1; lookup must return the NEW value;
+     *      multimapFullVerify must accept the resulting structure. */
+    TEST("regression: REPLACE on existing key with map exceeding maxSize") {
+        multimapFull *m = multimapFullNew(2);
+        m->maxSize = 256;
+
+        /* Build a value larger than maxSize so a single insert is
+         * already enough to trip mapBytes > maxSize. */
+        char bigVal1[512];
+        char bigVal2[512];
+        memset(bigVal1, 'A', sizeof(bigVal1) - 1);
+        bigVal1[sizeof(bigVal1) - 1] = '\0';
+        memset(bigVal2, 'B', sizeof(bigVal2) - 1);
+        bigVal2[sizeof(bigVal2) - 1] = '\0';
+
+        const databox keybox = databoxNewBytesString("the-key");
+        const databox v1box = databoxNewBytesString(bigVal1);
+        const databox v2box = databoxNewBytesString(bigVal2);
+
+        const databox *insert1[2] = {&keybox, &v1box};
+        const bool existed1 = multimapFullInsert(m, insert1);
+        assert(!existed1);
+        assert(multimapFullCount(m) == 1);
+
+        /* Now the map is over maxSize and contains exactly one key.
+         * A REPLACE of that key must stay in this same map. */
+        const databox *insert2[2] = {&keybox, &v2box};
+        const bool existed2 = multimapFullInsert(m, insert2);
+        if (!existed2) {
+            ERRR("REPLACE on existing key reported as new insert "
+                 "(returned !existed) — bug regressed!");
+        }
+
+        if (multimapFullCount(m) != 1) {
+            ERR("After REPLACE, count is %zu but should be 1 — duplicate "
+                "key was inserted in a second map (the regressed bug)!",
+                multimapFullCount(m));
+        }
+
+        /* Verify the new value is what comes back, not the old one. */
+        databox foundVal = {0};
+        databox *out[1] = {&foundVal};
+        const bool ok = multimapFullLookup(m, &keybox, out);
+        assert(ok);
+        assert(foundVal.type == DATABOX_BYTES);
+        if (foundVal.len != v2box.len ||
+            memcmp(foundVal.data.bytes.start, v2box.data.bytes.start,
+                   v2box.len) != 0) {
+            ERRR("Lookup after REPLACE returned the OLD value (binary "
+                 "search picked the wrong map) — bug regressed!");
+        }
+
+        /* Structural invariants — verify no duplicate keys leaked
+         * into a second map. */
+        multimapFullVerify(m);
+        multimapFullFree(m);
     }
 
     TEST_FINAL_RESULT;

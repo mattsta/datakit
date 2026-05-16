@@ -767,6 +767,10 @@ bool multimapMediumDeleteByPredicate(multimapMedium *m,
 }
 
 #ifdef DATAKIT_TEST
+#define CTEST_INCLUDE_KEYGEN
+#define CTEST_INCLUDE_VALGEN
+#include "ctest.h"
+
 void multimapMediumRepr(const multimapMedium *m) {
     printf("MAPS {totalCount %zu}\n", multimapMediumCount(m));
     printf("Map Counts: ");
@@ -781,5 +785,243 @@ void multimapMediumRepr(const multimapMedium *m) {
 
     flexRepr(m->map[0]);
     flexRepr(m->map[1]);
+}
+
+/* Build a multimapMedium populated with `count` key/value pairs split
+ * across the two maps at `splitAt` (logical entry index within the
+ * combined sorted run).  Keys are integers k = 0..count-1.  Values
+ * are bytes initialized to 'v'.  The test asserts the split lands on
+ * a valid entry boundary. */
+static multimapMedium *buildSplitMedium(size_t count, size_t splitAt) {
+    assert(splitAt < count);
+    flex *f = flexNew();
+    for (size_t i = 0; i < count; i++) {
+        const databox keybox = {.data.u = i, .type = DATABOX_UNSIGNED_64};
+        const databox valbox = databoxNewBytesString("v");
+        flexPushByType(&f, &keybox, FLEX_ENDPOINT_TAIL);
+        flexPushByType(&f, &valbox, FLEX_ENDPOINT_TAIL);
+    }
+
+    /* Find the byte offset of the split entry (splitAt-th key). */
+    flexEntry *splitEntry = flexIndex(f, (int32_t)(splitAt * 2));
+    assert(splitEntry != NULL);
+    const uint32_t middle = (uint32_t)(splitEntry - f);
+
+    return multimapMediumNewFromOneGrow(NULL, f, middle, 2, false);
+}
+
+/* Count how many of the inserted keys live in each map. */
+static void countByMap(multimapMedium *m, size_t expectedKeys, size_t *outMap0,
+                       size_t *outMap1) {
+    *outMap0 = 0;
+    *outMap1 = 0;
+    for (size_t i = 0; i < expectedKeys; i++) {
+        const databox keybox = {.data.u = i, .type = DATABOX_UNSIGNED_64};
+        multimapEntry me = {0};
+        if (multimapMediumGetUnderlyingEntry(m, &keybox, &me)) {
+            if (me.mapIdx == 0) {
+                (*outMap0)++;
+            } else {
+                (*outMap1)++;
+            }
+        }
+    }
+}
+
+int multimapMediumTest(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+    int err = 0;
+
+    /* multimapMedium has a fixed 2-map layout: map[0] holds keys
+     * strictly less than head[map[1]], map[1] holds the rest.  Unlike
+     * multimapFull, there is NO split-on-overflow path — every insert
+     * lands in exactly one map chosen by binary search.  These tests
+     * pin down the boundary behavior so that any future change to the
+     * routing or insertion paths is caught.
+     *
+     * The risk shape we're checking for (the same shape as the
+     * recently-fixed multimapFull bug): a REPLACE on an existing key
+     * could be misrouted to the OTHER map, leaving two copies that
+     * desynchronize the structure. */
+
+    TEST("medium: REPLACE on key in map[0] stays in map[0]") {
+        multimapMedium *m = buildSplitMedium(10, 5);
+        /* Pre-state: keys 0..4 in map[0], 5..9 in map[1]. */
+        const size_t startCount = multimapMediumCount(m);
+        assert(startCount == 10);
+
+        /* REPLACE key=2 with a much larger value to also force a
+         * flex realloc — exercises the in-place grow path. */
+        char bigVal[256];
+        memset(bigVal, 'X', sizeof(bigVal) - 1);
+        bigVal[sizeof(bigVal) - 1] = '\0';
+
+        const databox keybox = {.data.u = 2, .type = DATABOX_UNSIGNED_64};
+        const databox valbox = databoxNewBytesString(bigVal);
+        const databox *insert[2] = {&keybox, &valbox};
+        const bool replaced = multimapMediumInsert(m, insert);
+        if (!replaced) {
+            ERRR("REPLACE on existing key in map[0] reported as new "
+                 "insert — duplicate likely created!");
+        }
+        if (multimapMediumCount(m) != startCount) {
+            ERR("Count changed from %zu to %zu after REPLACE — duplicate "
+                "key created across maps!",
+                startCount, multimapMediumCount(m));
+        }
+
+        /* Verify split invariant still holds: keys 0..4 in map[0],
+         * keys 5..9 in map[1]. */
+        size_t inMap0, inMap1;
+        countByMap(m, 10, &inMap0, &inMap1);
+        if (inMap0 != 5 || inMap1 != 5) {
+            ERR("Split invariant broken: map[0]=%zu, map[1]=%zu after "
+                "in-map[0] REPLACE",
+                inMap0, inMap1);
+        }
+        multimapMediumFree(m);
+    }
+
+    TEST("medium: REPLACE on key in map[1] stays in map[1]") {
+        multimapMedium *m = buildSplitMedium(10, 5);
+        char bigVal[256];
+        memset(bigVal, 'Y', sizeof(bigVal) - 1);
+        bigVal[sizeof(bigVal) - 1] = '\0';
+
+        const databox keybox = {.data.u = 7, .type = DATABOX_UNSIGNED_64};
+        const databox valbox = databoxNewBytesString(bigVal);
+        const databox *insert[2] = {&keybox, &valbox};
+        const bool replaced = multimapMediumInsert(m, insert);
+        if (!replaced) {
+            ERRR("REPLACE on existing key in map[1] reported as new "
+                 "insert");
+        }
+        assert(multimapMediumCount(m) == 10);
+
+        size_t inMap0, inMap1;
+        countByMap(m, 10, &inMap0, &inMap1);
+        if (inMap0 != 5 || inMap1 != 5) {
+            ERR("Split invariant broken: map[0]=%zu, map[1]=%zu after "
+                "in-map[1] REPLACE",
+                inMap0, inMap1);
+        }
+        multimapMediumFree(m);
+    }
+
+    TEST("medium: REPLACE on boundary key (head of map[1])") {
+        /* The most dangerous case: the key equals head[map[1]] exactly.
+         * Binary search uses `compared <= 0 → map[1]`, so the REPLACE
+         * routes to map[1] correctly.  But if the comparator ever
+         * flipped to strict-less-than, the REPLACE would go to map[0],
+         * leaving the original copy in map[1] orphaned and creating a
+         * silent duplicate.  This test pins down current behavior. */
+        multimapMedium *m = buildSplitMedium(10, 5);
+        char bigVal[256];
+        memset(bigVal, 'Z', sizeof(bigVal) - 1);
+        bigVal[sizeof(bigVal) - 1] = '\0';
+
+        /* key=5 is the head of map[1]. */
+        const databox keybox = {.data.u = 5, .type = DATABOX_UNSIGNED_64};
+        const databox valbox = databoxNewBytesString(bigVal);
+        const databox *insert[2] = {&keybox, &valbox};
+        const bool replaced = multimapMediumInsert(m, insert);
+        if (!replaced) {
+            ERRR("REPLACE on boundary key (head of map[1]) reported as "
+                 "new insert — routing must treat == as match!");
+        }
+        if (multimapMediumCount(m) != 10) {
+            ERR("Boundary-key REPLACE changed count from 10 to %zu — "
+                "key was inserted into map[0] as a duplicate!",
+                multimapMediumCount(m));
+        }
+
+        /* Look up the boundary key and verify the new value (not the
+         * stale "v") is returned. */
+        databox foundVal = {0};
+        databox *out[1] = {&foundVal};
+        const bool ok = multimapMediumLookup(m, &keybox, out);
+        assert(ok);
+        if (foundVal.type != DATABOX_BYTES || foundVal.len != strlen(bigVal) ||
+            memcmp(foundVal.data.bytes.start, bigVal, foundVal.len) != 0) {
+            ERRR("Lookup on boundary key returned stale value — "
+                 "binary search picked the wrong map!");
+        }
+        multimapMediumFree(m);
+    }
+
+    TEST("medium: many alternating REPLACEs across the boundary") {
+        /* Stress: repeatedly REPLACE on both sides of the boundary
+         * with varying value sizes.  If any insert is misrouted, the
+         * count will diverge from the expected fixed total. */
+        multimapMedium *m = buildSplitMedium(20, 10);
+        assert(multimapMediumCount(m) == 20);
+
+        for (int round = 0; round < 50; round++) {
+            for (size_t k = 0; k < 20; k++) {
+                /* Vary value size each round so the flex grows/shrinks. */
+                char buf[64];
+                const int sz = 8 + (int)((round + k) % 48);
+                memset(buf, 'a' + (int)(k % 26), (size_t)sz);
+                buf[sz] = '\0';
+                const databox keybox = {.data.u = k,
+                                        .type = DATABOX_UNSIGNED_64};
+                const databox valbox = databoxNewBytesString(buf);
+                const databox *insert[2] = {&keybox, &valbox};
+                multimapMediumInsert(m, insert);
+            }
+            if (multimapMediumCount(m) != 20) {
+                ERR("Round %d: count drifted to %zu (expected 20) — "
+                    "REPLACEs misrouted!",
+                    round, multimapMediumCount(m));
+                break;
+            }
+        }
+        multimapMediumFree(m);
+    }
+
+    TEST("medium: INSERT new key that equals current head[map[1]] "
+         "is a REPLACE, not a duplicate") {
+        /* If a caller hands us a key that happens to equal the
+         * existing boundary key, that must be detected as a REPLACE
+         * (since the key already exists).  This is the same property
+         * as the boundary-REPLACE test above, expressed from the
+         * INSERT direction. */
+        multimapMedium *m = buildSplitMedium(10, 5);
+        const databox keybox = {.data.u = 5, .type = DATABOX_UNSIGNED_64};
+        const databox valbox = databoxNewBytesString("brand-new");
+        const databox *insert[2] = {&keybox, &valbox};
+        const bool replaced = multimapMediumInsert(m, insert);
+        assert(replaced);
+        assert(multimapMediumCount(m) == 10);
+        multimapMediumFree(m);
+    }
+
+    TEST("medium: empty map[1] routes all inserts to map[0]") {
+        /* Construct a degenerate medium where map[1] is empty (this
+         * can happen briefly during certain transitions).  Binary
+         * search must short-circuit to map[0] without dereferencing
+         * an empty map[1]. */
+        multimapMedium *m = multimapMediumNew(2);
+        for (size_t i = 0; i < 5; i++) {
+            const databox keybox = {.data.u = i, .type = DATABOX_UNSIGNED_64};
+            const databox valbox = databoxNewBytesString("v");
+            const databox *insert[2] = {&keybox, &valbox};
+            multimapMediumInsert(m, insert);
+        }
+        assert(multimapMediumCount(m) == 5);
+        assert(flexCount(m->map[1]) == 0);
+
+        /* REPLACE one of them. */
+        const databox keybox = {.data.u = 2, .type = DATABOX_UNSIGNED_64};
+        const databox valbox = databoxNewBytesString("v2");
+        const databox *insert[2] = {&keybox, &valbox};
+        const bool replaced = multimapMediumInsert(m, insert);
+        assert(replaced);
+        assert(multimapMediumCount(m) == 5);
+        multimapMediumFree(m);
+    }
+
+    TEST_FINAL_RESULT;
 }
 #endif

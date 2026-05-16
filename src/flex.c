@@ -4431,6 +4431,54 @@ size_t flexBytesLength(const flex *f) {
     return FLEX_TOTAL_BYTES_WIDTH(f);
 }
 
+bool flexValidateBuffer(const uint8_t *buf, size_t buflen) {
+    /* Minimum: 2 bytes (1 byte split varint for total_bytes that
+     * encodes a small value, plus 1 byte for the count varint).  Any
+     * shorter input cannot be a valid flex envelope. */
+    if (!buf || buflen < FLEX_EMPTY_HEADER_SIZE) {
+        return false;
+    }
+
+    /* The leading varint encodes its own width in its top bits.  We
+     * can compute that width from byte 0 alone — that read is in-
+     * bounds since buflen >= 2.  If the encoding claims a multi-byte
+     * width that doesn't fit in `buflen`, refuse — reading past would
+     * be UB and would let a malformed buffer dictate where we read. */
+    size_t total_bytes_width = varintSplitFullNoZeroGetLenQuick_(buf);
+    if (total_bytes_width == 0 || total_bytes_width > buflen) {
+        return false;
+    }
+
+    /* Decode total_bytes safely now that we know the bytes the
+     * decoder will read are all within `buflen`. */
+    size_t valsize = 0;
+    uint64_t total_bytes_claim = 0;
+    varintSplitFullNoZeroGet_(buf, valsize, total_bytes_claim);
+
+    /* Defense-in-depth: the macro should set valsize == width above,
+     * but mismatch indicates a varint decoder behavior change — fail
+     * closed rather than trust a stale assumption. */
+    if (valsize != total_bytes_width) {
+        return false;
+    }
+
+    /* The flex header self-describes the buffer's total length.  For
+     * a well-formed buffer that length must equal the input length;
+     * any other value means the input is truncated or padded with
+     * garbage neither end can interpret consistently. */
+    if (total_bytes_claim != (uint64_t)buflen) {
+        return false;
+    }
+
+    /* Count varint immediately follows the total-bytes varint.  Need
+     * at least 1 byte for it. */
+    if (total_bytes_width >= buflen) {
+        return false;
+    }
+
+    return true;
+}
+
 /* ====================================================================
  * compressed flex storage
  * ==================================================================== */
@@ -8291,6 +8339,102 @@ int32_t flexTest(int32_t argc, char **argv) {
     }
 
     printf("\n=== All varint encoding boundary tests passed! ===\n\n");
+
+    /* ================================================================
+     * FLEX VALIDATE BUFFER TESTS
+     *
+     * flexValidateBuffer() is the O(1) envelope check used by
+     * persistRestore paths that consume flex bytes from untrusted
+     * sources (WAL replay, cross-node replication, on-disk recovery).
+     * The function must:
+     *   - reject NULL / undersize input without dereferencing
+     *   - reject buffers whose leading varint claims a width that
+     *     would read past the end of the input
+     *   - reject buffers whose self-described total-bytes != buflen
+     *   - accept a freshly-built valid flex
+     *   - accept after the buffer grows past the 1B→2B header
+     *     varint boundary
+     * ================================================================ */
+
+    printf("Test flexValidateBuffer rejects NULL / undersize input:\n");
+    {
+        assert(flexValidateBuffer(NULL, 0) == false);
+        assert(flexValidateBuffer(NULL, 1024) == false);
+        const uint8_t empty[1] = {0};
+        assert(flexValidateBuffer(empty, 0) == false);
+        assert(flexValidateBuffer(empty, 1) == false);
+        printf("  OK\n");
+    }
+
+    printf("Test flexValidateBuffer accepts a fresh empty flex:\n");
+    {
+        flex *fresh = flexNew();
+        const size_t bytes = flexBytes(fresh);
+        assert(flexValidateBuffer((const uint8_t *)fresh, bytes) == true);
+        flexFree(fresh);
+        printf("  OK\n");
+    }
+
+    printf("Test flexValidateBuffer accepts a populated small flex:\n");
+    {
+        flex *small = flexNew();
+        for (int i = 0; i < 32; i++) {
+            const databox b = {.data.i = i, .type = DATABOX_SIGNED_64};
+            flexPushSigned(&small, b.data.i, FLEX_ENDPOINT_TAIL);
+        }
+        const size_t bytes = flexBytes(small);
+        assert(flexValidateBuffer((const uint8_t *)small, bytes) == true);
+        flexFree(small);
+        printf("  OK\n");
+    }
+
+    printf("Test flexValidateBuffer rejects mismatched total_bytes:\n");
+    {
+        /* Buffer claims one length in its header but caller passes a
+         * different buflen.  Both directions (too short and too long)
+         * must fail. */
+        flex *built = flexNew();
+        for (int i = 0; i < 16; i++) {
+            const databox b = {.data.i = i, .type = DATABOX_SIGNED_64};
+            flexPushSigned(&built, b.data.i, FLEX_ENDPOINT_TAIL);
+        }
+        const size_t bytes = flexBytes(built);
+        assert(flexValidateBuffer((const uint8_t *)built, bytes - 1) == false);
+        assert(flexValidateBuffer((const uint8_t *)built, bytes + 1) == false);
+        flexFree(built);
+        printf("  OK\n");
+    }
+
+    printf("Test flexValidateBuffer rejects truncated header (1B claim,"
+           " missing count byte):\n");
+    {
+        /* A 1-byte total_bytes varint that claims length 1 leaves no
+         * room for the count varint that must follow.  Catches the
+         * "header-says-OK but body missing" failure shape. */
+        const uint8_t truncated[1] = {0x01};
+        assert(flexValidateBuffer(truncated, 1) == false);
+        printf("  OK\n");
+    }
+
+    printf("Test flexValidateBuffer accepts flex spanning header"
+           " varint width boundary:\n");
+    {
+        /* Push enough payload that the total_bytes varint promotes
+         * past its 1-byte form, ensuring the multi-byte header path
+         * is exercised. */
+        flex *grow = flexNew();
+        for (int i = 0; i < 256; i++) {
+            const databox b = {.data.i = i, .type = DATABOX_SIGNED_64};
+            flexPushSigned(&grow, b.data.i, FLEX_ENDPOINT_TAIL);
+        }
+        const size_t bytes = flexBytes(grow);
+        assert(bytes > 64); /* past 1-byte varint range */
+        assert(flexValidateBuffer((const uint8_t *)grow, bytes) == true);
+        flexFree(grow);
+        printf("  OK\n");
+    }
+
+    printf("\n=== All flexValidateBuffer tests passed! ===\n\n");
 
     return 0;
 }

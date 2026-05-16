@@ -117,6 +117,7 @@ typedef enum persistType {
     /* Core linear structures */
     PERSIST_TYPE_FLEX = 1,
     PERSIST_TYPE_INTSET = 2,
+    PERSIST_TYPE_INTSETBIG = 4, /* signed/unsigned 64/128 set */
 
     /* Multi-tier structures */
     PERSIST_TYPE_MULTILIST = 10,
@@ -265,6 +266,16 @@ struct persistOps {
      * Returns allocated structure (caller frees).
      * Returns NULL on error. */
     void *(*restore)(const uint8_t *data, size_t len);
+
+    /* Allocate a fresh, empty structure of this type — the moral
+     * equivalent of "calling the structure's plain constructor".
+     * Used by restore engines that need to apply a delta WAL whose
+     * leading op is not a snapshot (the structure's identity is
+     * defined only by its leading newEmpty + applied deltas).
+     * Caller frees via .free.  May be NULL for types that have no
+     * meaningful empty state; restore engines treat NULL as "skip
+     * this key" with a diagnostic. */
+    void *(*newEmpty)(void);
 
     /* Get current element count (for header) */
     size_t (*count)(const void *structure);
@@ -485,6 +496,18 @@ bool persistLogOp(persist *p, persistOp op, const void *args, size_t argc);
 /* Replay WAL entries, applying each to structure */
 bool persistReplayWAL(persist *p, void *structure);
 
+/* Thread-local mflexState used by per-op applyOp implementations
+ * (multilist push/pop need a working mflexState to compress/decompress
+ * intermediate flex chunks).  persistRecover sets this internally for
+ * the duration of the WAL replay; callers that invoke persistOps
+ * applyOp OUTSIDE the recover path (e.g. cluster apply mailbox folding
+ * delta ops on a follower) must set it before each call and clear
+ * after.  Pass NULL to clear.  Safe to call from any thread; affects
+ * only the calling thread. */
+struct mflexState;
+void persistSetReplayState(struct mflexState *state);
+struct mflexState *persistGetReplayState(void);
+
 /* Iterate WAL entries without applying */
 typedef bool (*persistWALCallback)(const persistWALEntry *entry, void *ctx);
 bool persistIterateWAL(persist *p, persistWALCallback cb, void *ctx);
@@ -538,7 +561,9 @@ const uint8_t *persistStoreMemoryBuffer(persistStore *store, size_t *len);
 
 extern const persistOps persistOpsFlex;
 extern const persistOps persistOpsIntset;
+extern const persistOps persistOpsIntsetBig;
 extern const persistOps persistOpsMultiroar;
+extern const persistOps persistOpsHyperloglog;
 extern const persistOps persistOpsMultilist;
 extern const persistOps persistOpsMultimap;
 extern const persistOps persistOpsMultidict;

@@ -26,6 +26,28 @@ void flexReset(flex **ff);
 flex *flexDuplicate(const flex *f);
 void flexFree(flex *f);
 
+/* flexValidateBuffer — defensive bounds-check on a putative flex buffer.
+ *
+ * Returns true iff `buf` of length `buflen` parses as a well-formed
+ * flex header whose self-described total-bytes equals `buflen`.
+ *
+ * Designed for callers that consume flex bytes from untrusted sources
+ * (cross-node replication, on-disk recovery, plugin-supplied byte
+ * blobs, etc.) and must NOT crash on malformed input.  Use this as a
+ * gate before passing a buffer into flexCount / flexHead / flexNext /
+ * flexGetByType — those iterate based on the header's claim and will
+ * walk past the end if the header lies.
+ *
+ * Conservative: does NOT walk every entry's bytes (that would
+ * duplicate flex's internal logic); it only validates the outer
+ * envelope.  This catches the common failure modes:
+ *   - input shorter than the minimum header size
+ *   - leading varint claims a width that doesn't fit in `buflen`
+ *   - decoded total-bytes != actual `buflen`
+ *
+ * Cost: O(1).  Reads at most 5 bytes from the head of the buffer. */
+bool flexValidateBuffer(const uint8_t *buf, size_t buflen);
+
 flexEntry *flexMiddle(const flex *f, uint_fast32_t elementsPerEntry);
 
 /* Merge */
