@@ -11,6 +11,7 @@
 #include "../deps/xxHash/xxhash.h"
 #include "datakit.h"
 #include "flex.h"
+#include "persist.h"
 #include "timeUtil.h"
 
 #include <assert.h>
@@ -2522,313 +2523,574 @@ void clusterRingIterateNodesByLocation(const clusterRing *ring,
 }
 
 /* ====================================================================
- * Serialization
- * ==================================================================== */
+ * Serialization (Wire Format v3 — flex-based)
+ * ====================================================================
+ *
+ * Wire format v3 (a single self-describing flex buffer).  Every field
+ * is a typed flex entry — there are no raw memcpy'd structs, no hand-
+ * rolled length prefixes, no enum casts without range checks.
+ *
+ *   Validation gates:
+ *     - flexValidateBuffer() guards the outer envelope before iteration.
+ *     - flexGetByTypeCopy() with explicit type+value checks on every
+ *       entry guards individual field reads.
+ *     - clusterRingPersistValidate() re-checks invariants post-restore.
+ *
+ *   Layout (entry counts strict; deserializer asserts on miscount):
+ *
+ *     Header section (18 entries):
+ *       [ 0] version                 (unsigned, MUST equal
+ * CLUSTER_RING_WIRE_VERSION) [ 1] ring name               (bytes, may be empty)
+ *       [ 2] defaultQuorum.replicaCount      (unsigned, 0..255)
+ *       [ 3] defaultQuorum.writeQuorum       (unsigned, 0..255)
+ *       [ 4] defaultQuorum.writeSync         (unsigned, 0..255)
+ *       [ 5] defaultQuorum.readQuorum        (unsigned, 0..255)
+ *       [ 6] defaultQuorum.readRepairEnabled (unsigned, 0|1)
+ *       [ 7] defaultQuorum.consistency       (unsigned, 0..5)
+ *       [ 8] vnodeConfig.vnodeMultiplier  (unsigned, 0..UINT32_MAX)
+ *       [ 9] vnodeConfig.minVnodesPerNode (unsigned, 0..UINT32_MAX)
+ *       [10] vnodeConfig.maxVnodesPerNode (unsigned, 0..UINT32_MAX)
+ *       [11] vnodeConfig.replicaPointSpread (unsigned, 0|1)
+ *       [12] strategyType            (unsigned, 0..5)
+ *       [13] hashSeed                (unsigned, 0..UINT32_MAX)
+ *       [14] nodeCount NN            (unsigned)
+ *       [15] keySpaceCount KK        (unsigned)
+ *       [16] reserved0               (unsigned, 0)
+ *       [17] reserved1               (unsigned, 0)
+ *
+ *     Per node (15 entries × NN nodes):
+ *       [ 0] id                      (unsigned)
+ *       [ 1] name                    (bytes)
+ *       [ 2] address                 (bytes)
+ *       [ 3] location.nodeId         (unsigned)
+ *       [ 4] location.rackId         (unsigned, 0..UINT32_MAX)
+ *       [ 5] location.cageId         (unsigned, 0..UINT32_MAX)
+ *       [ 6] location.dcId           (unsigned, 0..UINT32_MAX)
+ *       [ 7] location.azId           (unsigned, 0..UINT32_MAX)
+ *       [ 8] location.regionId       (unsigned, 0..UINT32_MAX)
+ *       [ 9] location.countryId      (unsigned, 0..UINT16_MAX)
+ *       [10] location.continentId    (unsigned, 0..UINT8_MAX)
+ *       [11] weight                  (unsigned, 0..UINT32_MAX)
+ *       [12] capacityBytes           (unsigned)
+ *       [13] state                   (unsigned, range-checked vs enum)
+ *       [14] usedBytes               (unsigned)
+ *
+ *     Per keyspace (11 fixed entries + 3 entries per rule × KK keyspaces):
+ *       [ 0] name                    (bytes)
+ *       [ 1] quorum.replicaCount     (unsigned, 0..255)
+ *       [ 2] quorum.writeQuorum      (unsigned, 0..255)
+ *       [ 3] quorum.writeSync        (unsigned, 0..255)
+ *       [ 4] quorum.readQuorum       (unsigned, 0..255)
+ *       [ 5] quorum.readRepairEnabled (unsigned, 0|1)
+ *       [ 6] quorum.consistency      (unsigned, 0..5)
+ *       [ 7] strategy                (unsigned, 0..5)
+ *       [ 8] ruleCount RR            (unsigned, 0..255)
+ *       [ 9] reserved0               (unsigned, 0)
+ *       [10] reserved1               (unsigned, 0)
+ *       [11..11+RR*3-1] for each rule: spreadLevel (unsigned, 0..7),
+ *                                      minSpread   (unsigned, 0..255),
+ *                                      required    (unsigned, 0|1)
+ *
+ * Wire-format compatibility: v2 (raw-struct) is *unreachable* in
+ * production because the only callers of clusterRingSerialize /
+ * clusterRingDeserialize are the persistOps descriptor (which has
+ * never been on disk before this code landed) and the in-process
+ * tests.  We therefore reject any version that is not v3.
+ * The static asserts below guard the historical struct layouts in
+ * case any code path attempts to revive raw-struct copies — if those
+ * structs change shape, the build breaks and forces the author to
+ * also update this file.
+ */
+
+#define CLUSTER_RING_WIRE_VERSION ((uint64_t)3)
+#define CLUSTER_RING_HEADER_ENTRY_COUNT ((size_t)18)
+#define CLUSTER_RING_NODE_ENTRY_COUNT ((size_t)15)
+#define CLUSTER_RING_KEYSPACE_FIXED_ENTRY_COUNT ((size_t)11)
+/* Per-rule entry width is 3 (spreadLevel, minSpread, required) — kept
+ * inline at the read site since it is used in exactly one place. */
+
+/* Compile-time guard against silent struct reorder of the raw layouts
+ * used by the (now-deprecated) v2 wire format.  The flex serializer
+ * does NOT read these structs raw — but if a future refactor brings
+ * back any memcpy() of them into a wire path, the assert below will
+ * trip and force the author to re-validate the wire format. */
+_Static_assert(sizeof(clusterLocation) == 32,
+               "clusterLocation layout drifted; see clusterRing.c wire format");
+_Static_assert(sizeof(clusterQuorum) == 12,
+               "clusterQuorum layout drifted; see clusterRing.c wire format");
+_Static_assert(
+    sizeof(clusterVnodeConfig) == 16,
+    "clusterVnodeConfig layout drifted; see clusterRing.c wire format");
+_Static_assert(
+    sizeof(clusterAffinityRule) == 8,
+    "clusterAffinityRule layout drifted; see clusterRing.c wire format");
+
+/* Range-check helpers for restore-time enum validation. */
+static bool clusterRingValidNodeState(uint64_t v) {
+    return v <= (uint64_t)CLUSTER_NODE_MAINTENANCE;
+}
+static bool clusterRingValidStrategyType(uint64_t v) {
+    return v <= (uint64_t)CLUSTER_STRATEGY_CUSTOM;
+}
+static bool clusterRingValidConsistencyLevel(uint64_t v) {
+    return v <= (uint64_t)CLUSTER_CONSISTENCY_LOCAL_ONE;
+}
+static bool clusterRingValidTopologyLevel(uint64_t v) {
+    return v < (uint64_t)CLUSTER_LEVEL_COUNT;
+}
+
+/* Push the ring's quorum (6 entries, in spec order). */
+static void crPushQuorum(flex **f, const clusterQuorum *q) {
+    flexPushUnsigned(f, (uint64_t)q->replicaCount, FLEX_ENDPOINT_TAIL);
+    flexPushUnsigned(f, (uint64_t)q->writeQuorum, FLEX_ENDPOINT_TAIL);
+    flexPushUnsigned(f, (uint64_t)q->writeSync, FLEX_ENDPOINT_TAIL);
+    flexPushUnsigned(f, (uint64_t)q->readQuorum, FLEX_ENDPOINT_TAIL);
+    flexPushUnsigned(f, (uint64_t)(q->readRepairEnabled ? 1u : 0u),
+                     FLEX_ENDPOINT_TAIL);
+    flexPushUnsigned(f, (uint64_t)q->consistency, FLEX_ENDPOINT_TAIL);
+}
+
+/* Build the canonical flex for this ring.  Returns a freshly-allocated
+ * flex (caller frees via flexFree).  Returns NULL on error.  Note that
+ * flex's wire encoding is naturally aligned and byte-order independent
+ * — there is no big-endian hazard. */
+static flex *clusterRingBuildSnapshotFlex(const clusterRing *ring) {
+    if (ring == NULL) {
+        return NULL;
+    }
+    flex *f = flexNew();
+    if (f == NULL) {
+        return NULL;
+    }
+
+    /* ---- Header (18 entries) ---- */
+    flexPushUnsigned(&f, CLUSTER_RING_WIRE_VERSION, FLEX_ENDPOINT_TAIL);
+    const size_t name_len = ring->name ? mdsclen(ring->name) : 0;
+    flexPushBytes(&f, name_len ? (const void *)ring->name : (const void *)"",
+                  name_len, FLEX_ENDPOINT_TAIL);
+    crPushQuorum(&f, &ring->defaultQuorum);
+    flexPushUnsigned(&f, (uint64_t)ring->vnodeConfig.vnodeMultiplier,
+                     FLEX_ENDPOINT_TAIL);
+    flexPushUnsigned(&f, (uint64_t)ring->vnodeConfig.minVnodesPerNode,
+                     FLEX_ENDPOINT_TAIL);
+    flexPushUnsigned(&f, (uint64_t)ring->vnodeConfig.maxVnodesPerNode,
+                     FLEX_ENDPOINT_TAIL);
+    flexPushUnsigned(&f,
+                     (uint64_t)(ring->vnodeConfig.replicaPointSpread ? 1u : 0u),
+                     FLEX_ENDPOINT_TAIL);
+    flexPushUnsigned(&f, (uint64_t)ring->strategyType, FLEX_ENDPOINT_TAIL);
+    flexPushUnsigned(&f, (uint64_t)ring->hashSeed, FLEX_ENDPOINT_TAIL);
+
+    /* Count only non-NULL slots so the deserializer can iterate
+     * sequentially without re-checking sparse positions. */
+    uint64_t live_nodes = 0;
+    for (uint32_t i = 0; i < ring->nodeCount; i++) {
+        if (ring->nodeArray[i]) {
+            live_nodes++;
+        }
+    }
+    uint64_t live_keyspaces = 0;
+    for (uint32_t i = 0; i < ring->keySpaceCount; i++) {
+        if (ring->keySpaces[i]) {
+            live_keyspaces++;
+        }
+    }
+    flexPushUnsigned(&f, live_nodes, FLEX_ENDPOINT_TAIL);
+    flexPushUnsigned(&f, live_keyspaces, FLEX_ENDPOINT_TAIL);
+    flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
+    flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
+
+    /* ---- Nodes (15 entries each) ---- */
+    for (uint32_t i = 0; i < ring->nodeCount; i++) {
+        const clusterNode *node = ring->nodeArray[i];
+        if (node == NULL) {
+            continue;
+        }
+        flexPushUnsigned(&f, node->id, FLEX_ENDPOINT_TAIL);
+        const size_t nn = node->name ? mdsclen(node->name) : 0;
+        flexPushBytes(&f, nn ? (const void *)node->name : (const void *)"", nn,
+                      FLEX_ENDPOINT_TAIL);
+        const size_t an = node->address ? mdsclen(node->address) : 0;
+        flexPushBytes(&f, an ? (const void *)node->address : (const void *)"",
+                      an, FLEX_ENDPOINT_TAIL);
+        flexPushUnsigned(&f, node->location.nodeId, FLEX_ENDPOINT_TAIL);
+        flexPushUnsigned(&f, (uint64_t)node->location.rackId,
+                         FLEX_ENDPOINT_TAIL);
+        flexPushUnsigned(&f, (uint64_t)node->location.cageId,
+                         FLEX_ENDPOINT_TAIL);
+        flexPushUnsigned(&f, (uint64_t)node->location.dcId, FLEX_ENDPOINT_TAIL);
+        flexPushUnsigned(&f, (uint64_t)node->location.azId, FLEX_ENDPOINT_TAIL);
+        flexPushUnsigned(&f, (uint64_t)node->location.regionId,
+                         FLEX_ENDPOINT_TAIL);
+        flexPushUnsigned(&f, (uint64_t)node->location.countryId,
+                         FLEX_ENDPOINT_TAIL);
+        flexPushUnsigned(&f, (uint64_t)node->location.continentId,
+                         FLEX_ENDPOINT_TAIL);
+        flexPushUnsigned(&f, (uint64_t)node->weight, FLEX_ENDPOINT_TAIL);
+        flexPushUnsigned(&f, node->capacityBytes, FLEX_ENDPOINT_TAIL);
+        flexPushUnsigned(&f, (uint64_t)node->state, FLEX_ENDPOINT_TAIL);
+        flexPushUnsigned(&f, node->usedBytes, FLEX_ENDPOINT_TAIL);
+    }
+
+    /* ---- Keyspaces ---- */
+    for (uint32_t i = 0; i < ring->keySpaceCount; i++) {
+        const clusterKeySpace *ks = ring->keySpaces[i];
+        if (ks == NULL) {
+            continue;
+        }
+        const size_t kn = ks->name ? mdsclen(ks->name) : 0;
+        flexPushBytes(&f, kn ? (const void *)ks->name : (const void *)"", kn,
+                      FLEX_ENDPOINT_TAIL);
+        crPushQuorum(&f, &ks->quorum);
+        flexPushUnsigned(&f, (uint64_t)ks->strategy, FLEX_ENDPOINT_TAIL);
+        flexPushUnsigned(&f, (uint64_t)ks->ruleCount, FLEX_ENDPOINT_TAIL);
+        flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
+        flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
+        for (uint8_t r = 0; r < ks->ruleCount; r++) {
+            const clusterAffinityRule *rr = &ks->rules[r];
+            flexPushUnsigned(&f, (uint64_t)rr->spreadLevel, FLEX_ENDPOINT_TAIL);
+            flexPushUnsigned(&f, (uint64_t)rr->minSpread, FLEX_ENDPOINT_TAIL);
+            flexPushUnsigned(&f, (uint64_t)(rr->required ? 1u : 0u),
+                             FLEX_ENDPOINT_TAIL);
+        }
+    }
+
+    return f;
+}
 
 size_t clusterRingSerializeSize(const clusterRing *ring) {
     if (!ring) {
         return 0;
     }
-
-    size_t size = 0;
-
-    /* Header */
-    size += 4; /* magic */
-    size += 4; /* version */
-    size +=
-        4 + (ring->name ? mdsclen(ring->name) : 0); /* ring name: len + data */
-    size += sizeof(clusterQuorum);
-    size += sizeof(clusterVnodeConfig);
-    size += 4; /* strategy type */
-    size += 4; /* hash seed */
-    size += 4; /* node count */
-
-    /* Nodes - serialize each individually with length-prefixed strings */
-    for (uint32_t i = 0; i < ring->nodeCount; i++) {
-        clusterNode *node = ring->nodeArray[i];
-        if (node) {
-            size += 8; /* id */
-            size += 4 + (node->name ? mdsclen(node->name)
-                                    : 0); /* name: len + data */
-            size += 4 + (node->address ? mdsclen(node->address)
-                                       : 0); /* address: len + data */
-            size += sizeof(clusterLocation);
-            size += 4; /* weight */
-            size += 8; /* capacityBytes */
-            size += 4; /* state */
-            size += 8; /* usedBytes */
-        }
+    flex *f = clusterRingBuildSnapshotFlex(ring);
+    if (f == NULL) {
+        return 0;
     }
-
-    /* Keyspace count */
-    size += 4;
-
-    /* Keyspaces */
-    for (uint32_t i = 0; i < ring->keySpaceCount; i++) {
-        const clusterKeySpace *ks = ring->keySpaces[i];
-        if (ks) {
-            size +=
-                4 + (ks->name ? mdsclen(ks->name) : 0); /* name: len + data */
-            size += sizeof(clusterQuorum);
-            size += 4; /* strategy */
-            size += 1; /* rule count */
-            size += ks->ruleCount * sizeof(clusterAffinityRule);
-        }
-    }
-
-    return size;
-}
-
-/* Helper to write length-prefixed string */
-static uint8_t *serializeString(uint8_t *p, const mdsc *s) {
-    uint32_t len = s ? mdsclen(s) : 0;
-    memcpy(p, &len, 4);
-    p += 4;
-    if (len > 0) {
-        memcpy(p, s, len);
-        p += len;
-    }
-    return p;
+    const size_t n = flexBytes(f);
+    flexFree(f);
+    return n;
 }
 
 size_t clusterRingSerialize(const clusterRing *ring, void *buf, size_t bufLen) {
     if (!ring || !buf) {
         return 0;
     }
-
-    size_t needed = clusterRingSerializeSize(ring);
-    if (bufLen < needed) {
+    flex *f = clusterRingBuildSnapshotFlex(ring);
+    if (f == NULL) {
         return 0;
     }
-
-    uint8_t *p = (uint8_t *)buf;
-
-    /* Magic */
-    memcpy(p, "DKCR", 4);
-    p += 4;
-
-    /* Version - bump to 2 for new format */
-    uint32_t ver = 2;
-    memcpy(p, &ver, 4);
-    p += 4;
-
-    /* Name (length-prefixed) */
-    p = serializeString(p, ring->name);
-
-    /* Default quorum */
-    memcpy(p, &ring->defaultQuorum, sizeof(clusterQuorum));
-    p += sizeof(clusterQuorum);
-
-    /* Vnode config */
-    memcpy(p, &ring->vnodeConfig, sizeof(clusterVnodeConfig));
-    p += sizeof(clusterVnodeConfig);
-
-    /* Strategy type */
-    uint32_t strat = (uint32_t)ring->strategyType;
-    memcpy(p, &strat, 4);
-    p += 4;
-
-    /* Hash seed */
-    memcpy(p, &ring->hashSeed, 4);
-    p += 4;
-
-    /* Node count */
-    memcpy(p, &ring->nodeCount, 4);
-    p += 4;
-
-    /* Nodes - serialize each with length-prefixed strings */
-    for (uint32_t i = 0; i < ring->nodeCount; i++) {
-        const clusterNode *node = ring->nodeArray[i];
-        if (node) {
-            /* id */
-            memcpy(p, &node->id, 8);
-            p += 8;
-
-            /* name (length-prefixed) */
-            p = serializeString(p, node->name);
-
-            /* address (length-prefixed) */
-            p = serializeString(p, node->address);
-
-            /* location */
-            memcpy(p, &node->location, sizeof(clusterLocation));
-            p += sizeof(clusterLocation);
-
-            /* weight */
-            memcpy(p, &node->weight, 4);
-            p += 4;
-
-            /* capacityBytes */
-            memcpy(p, &node->capacityBytes, 8);
-            p += 8;
-
-            /* state */
-            uint32_t state = (uint32_t)node->state;
-            memcpy(p, &state, 4);
-            p += 4;
-
-            /* usedBytes */
-            memcpy(p, &node->usedBytes, 8);
-            p += 8;
-        }
+    const size_t need = flexBytes(f);
+    if (bufLen < need) {
+        flexFree(f);
+        return 0;
     }
-
-    /* Keyspace count */
-    memcpy(p, &ring->keySpaceCount, 4);
-    p += 4;
-
-    /* Keyspaces */
-    for (uint32_t i = 0; i < ring->keySpaceCount; i++) {
-        const clusterKeySpace *ks = ring->keySpaces[i];
-        if (ks) {
-            /* name (length-prefixed) */
-            p = serializeString(p, ks->name);
-
-            memcpy(p, &ks->quorum, sizeof(clusterQuorum));
-            p += sizeof(clusterQuorum);
-            uint32_t ksstrat = (uint32_t)ks->strategy;
-            memcpy(p, &ksstrat, 4);
-            p += 4;
-            *p++ = ks->ruleCount;
-            if (ks->ruleCount > 0 && ks->rules) {
-                memcpy(p, ks->rules,
-                       ks->ruleCount * sizeof(clusterAffinityRule));
-                p += ks->ruleCount * sizeof(clusterAffinityRule);
-            }
-        }
-    }
-
-    return (size_t)(p - (uint8_t *)buf);
+    memcpy(buf, f, need);
+    flexFree(f);
+    return need;
 }
 
-/* Helper to read length-prefixed string.
- * Returns a temporary null-terminated buffer (caller must use before next
- * call). Sets *outLen to the string length. */
-static const uint8_t *deserializeString(const uint8_t *p, char *tempBuf,
-                                        size_t tempBufSize, uint32_t *outLen) {
-    uint32_t len;
-    memcpy(&len, p, 4);
-    p += 4;
-    *outLen = len;
-    if (len > 0) {
-        size_t copyLen = len < tempBufSize - 1 ? len : tempBufSize - 1;
-        memcpy(tempBuf, p, copyLen);
-        tempBuf[copyLen] = '\0';
-        p += len;
-    } else {
-        tempBuf[0] = '\0';
+/* ---- Restore helpers (range-checked, NULL-safe). --------------------- */
+
+/* Read an unsigned entry; *value* must be in [lo, hi].  Returns true on
+ * success.  On any error, returns false and leaves *out unchanged. */
+static bool crReadUnsignedRange(const flex *f, flexEntry **fe, uint64_t lo,
+                                uint64_t hi, uint64_t *out) {
+    if (*fe == NULL) {
+        return false;
     }
-    return p;
+    databox box = {0};
+    flexGetByTypeCopy(*fe, &box);
+    if (box.type != DATABOX_UNSIGNED_64) {
+        return false;
+    }
+    const uint64_t v = box.data.u64;
+    if (v < lo || v > hi) {
+        return false;
+    }
+    *out = v;
+    *fe = flexNext(f, *fe);
+    return true;
+}
+
+/* Read a bytes entry; *out is a pointer to the entry's payload (NOT
+ * owned by the caller — valid only as long as the source flex lives,
+ * or until the caller copies it).  Allocations from flexGetByTypeCopy
+ * are released here so the caller does not have to. */
+static bool crReadBytes(const flex *f, flexEntry **fe, char *out_buf,
+                        size_t out_cap, size_t *out_len) {
+    if (*fe == NULL) {
+        return false;
+    }
+    databox box = {0};
+    flexGetByTypeCopy(*fe, &box);
+    if (!DATABOX_IS_BYTES(&box)) {
+        if (box.allocated) {
+            zfree(box.data.bytes.start);
+        }
+        return false;
+    }
+    const size_t len = box.len;
+    if (len > out_cap) {
+        if (box.allocated) {
+            zfree(box.data.bytes.start);
+        }
+        return false;
+    }
+    if (len > 0) {
+        memcpy(out_buf, box.data.bytes.start, len);
+    }
+    *out_len = len;
+    if (box.allocated) {
+        zfree(box.data.bytes.start);
+    }
+    *fe = flexNext(f, *fe);
+    return true;
+}
+
+/* Read a 6-entry quorum block in spec order. */
+static bool crReadQuorum(const flex *f, flexEntry **fe, clusterQuorum *out) {
+    uint64_t v = 0;
+    if (!crReadUnsignedRange(f, fe, 0, UINT8_MAX, &v)) {
+        return false;
+    }
+    out->replicaCount = (uint8_t)v;
+    if (!crReadUnsignedRange(f, fe, 0, UINT8_MAX, &v)) {
+        return false;
+    }
+    out->writeQuorum = (uint8_t)v;
+    if (!crReadUnsignedRange(f, fe, 0, UINT8_MAX, &v)) {
+        return false;
+    }
+    out->writeSync = (uint8_t)v;
+    if (!crReadUnsignedRange(f, fe, 0, UINT8_MAX, &v)) {
+        return false;
+    }
+    out->readQuorum = (uint8_t)v;
+    if (!crReadUnsignedRange(f, fe, 0, 1, &v)) {
+        return false;
+    }
+    out->readRepairEnabled = (v != 0);
+    if (!crReadUnsignedRange(f, fe, 0, UINT64_MAX, &v)) {
+        return false;
+    }
+    if (!clusterRingValidConsistencyLevel(v)) {
+        return false;
+    }
+    out->consistency = (clusterConsistencyLevel)v;
+    return true;
 }
 
 clusterRing *clusterRingDeserialize(const void *buf, size_t bufLen) {
-    if (!buf || bufLen < 8) {
+    if (!buf || bufLen < FLEX_EMPTY_SIZE) {
+        return NULL;
+    }
+    if (!flexValidateBuffer((const uint8_t *)buf, bufLen)) {
         return NULL;
     }
 
-    const uint8_t *p = (const uint8_t *)buf;
-
-    /* Check magic */
-    if (memcmp(p, "DKCR", 4) != 0) {
+    const flex *f = (const flex *)buf;
+    const size_t total = flexCount(f);
+    if (total < CLUSTER_RING_HEADER_ENTRY_COUNT) {
         return NULL;
     }
-    p += 4;
 
-    /* Check version */
-    uint32_t ver;
-    memcpy(&ver, p, 4);
-    p += 4;
-    if (ver != 2) {
-        return NULL; /* Only support version 2 (dynamic strings) */
+    flexEntry *fe = flexHead(f);
+
+    /* ---- Header section ---- */
+    uint64_t v = 0;
+
+    /* [0] version */
+    if (!crReadUnsignedRange(f, &fe, CLUSTER_RING_WIRE_VERSION,
+                             CLUSTER_RING_WIRE_VERSION, &v)) {
+        return NULL;
     }
 
-    /* Temp buffer for string deserialization */
-    char tempBuf[4096];
-    uint32_t strLen;
+    /* [1] ring name */
+    char nameBuf[4096];
+    size_t nameLen = 0;
+    if (!crReadBytes(f, &fe, nameBuf, sizeof(nameBuf) - 1, &nameLen)) {
+        return NULL;
+    }
+    nameBuf[nameLen] = '\0';
 
-    /* Create config from serialized data */
-    clusterRingConfig config;
-    memset(&config, 0, sizeof(config));
+    clusterRingConfig config = {0};
+    config.name = nameBuf;
 
-    /* Name (length-prefixed) */
-    p = deserializeString(p, tempBuf, sizeof(tempBuf), &strLen);
-    config.name = tempBuf;
+    /* [2-7] defaultQuorum */
+    if (!crReadQuorum(f, &fe, &config.defaultQuorum)) {
+        return NULL;
+    }
 
-    /* Default quorum */
-    memcpy(&config.defaultQuorum, p, sizeof(clusterQuorum));
-    p += sizeof(clusterQuorum);
+    /* [8-11] vnodeConfig */
+    if (!crReadUnsignedRange(f, &fe, 0, UINT32_MAX, &v)) {
+        return NULL;
+    }
+    config.vnodes.vnodeMultiplier = (uint32_t)v;
+    if (!crReadUnsignedRange(f, &fe, 0, UINT32_MAX, &v)) {
+        return NULL;
+    }
+    config.vnodes.minVnodesPerNode = (uint32_t)v;
+    if (!crReadUnsignedRange(f, &fe, 0, UINT32_MAX, &v)) {
+        return NULL;
+    }
+    config.vnodes.maxVnodesPerNode = (uint32_t)v;
+    if (!crReadUnsignedRange(f, &fe, 0, 1, &v)) {
+        return NULL;
+    }
+    config.vnodes.replicaPointSpread = (v != 0);
 
-    /* Vnode config */
-    memcpy(&config.vnodes, p, sizeof(clusterVnodeConfig));
-    p += sizeof(clusterVnodeConfig);
+    /* [12] strategy */
+    if (!crReadUnsignedRange(f, &fe, 0, UINT64_MAX, &v)) {
+        return NULL;
+    }
+    if (!clusterRingValidStrategyType(v)) {
+        return NULL;
+    }
+    config.strategyType = (clusterStrategyType)v;
 
-    /* Strategy type */
-    uint32_t strat;
-    memcpy(&strat, p, 4);
-    p += 4;
-    config.strategyType = (clusterStrategyType)strat;
+    /* [13] hash seed */
+    if (!crReadUnsignedRange(f, &fe, 0, UINT32_MAX, &v)) {
+        return NULL;
+    }
+    config.hashSeed = (uint32_t)v;
 
-    /* Hash seed */
-    memcpy(&config.hashSeed, p, 4);
-    p += 4;
+    /* [14] nodeCount */
+    uint64_t nodeCount = 0;
+    if (!crReadUnsignedRange(f, &fe, 0, UINT32_MAX, &nodeCount)) {
+        return NULL;
+    }
+    config.expectedNodeCount = (uint32_t)nodeCount;
 
-    /* Node count */
-    uint32_t nodeCount;
-    memcpy(&nodeCount, p, 4);
-    p += 4;
-    config.expectedNodeCount = nodeCount;
+    /* [15] keySpaceCount */
+    uint64_t ksCount = 0;
+    if (!crReadUnsignedRange(f, &fe, 0, UINT32_MAX, &ksCount)) {
+        return NULL;
+    }
 
-    /* Create ring */
+    /* [16, 17] reserved entries */
+    if (!crReadUnsignedRange(f, &fe, 0, 0, &v)) {
+        return NULL;
+    }
+    if (!crReadUnsignedRange(f, &fe, 0, 0, &v)) {
+        return NULL;
+    }
+
+    /* Cross-check: remaining entries must be at least
+     *   NN*15 + KK*(11+0) */
+    const size_t already = CLUSTER_RING_HEADER_ENTRY_COUNT;
+    const size_t needed_min =
+        already + (size_t)nodeCount * CLUSTER_RING_NODE_ENTRY_COUNT +
+        (size_t)ksCount * CLUSTER_RING_KEYSPACE_FIXED_ENTRY_COUNT;
+    if (total < needed_min) {
+        return NULL;
+    }
+
+    /* Create ring. */
     clusterRing *ring = clusterRingNew(&config);
     if (!ring) {
         return NULL;
     }
 
-    /* Add nodes */
-    char nameBuf[4096];
+    /* ---- Nodes ---- */
+    char nodeNameBuf[4096];
     char addrBuf[4096];
-    for (uint32_t i = 0; i < nodeCount; i++) {
-        clusterNodeConfig nodeCfg;
-        memset(&nodeCfg, 0, sizeof(nodeCfg));
+    for (uint64_t i = 0; i < nodeCount; i++) {
+        clusterNodeConfig nodeCfg = {0};
 
-        /* id */
-        memcpy(&nodeCfg.id, p, 8);
-        p += 8;
+        /* [0] id */
+        if (!crReadUnsignedRange(f, &fe, 0, UINT64_MAX, &v)) {
+            goto fail;
+        }
+        nodeCfg.id = v;
 
-        /* name (length-prefixed) */
-        p = deserializeString(p, nameBuf, sizeof(nameBuf), &strLen);
-        nodeCfg.name = nameBuf;
+        /* Reject duplicate ids: if the ring already has a node with
+         * this id, the wire input is malformed or hostile. */
+        if (clusterRingGetNode(ring, nodeCfg.id) != NULL) {
+            goto fail;
+        }
 
-        /* address (length-prefixed) */
-        p = deserializeString(p, addrBuf, sizeof(addrBuf), &strLen);
+        /* [1] name */
+        size_t nl = 0;
+        if (!crReadBytes(f, &fe, nodeNameBuf, sizeof(nodeNameBuf) - 1, &nl)) {
+            goto fail;
+        }
+        nodeNameBuf[nl] = '\0';
+        nodeCfg.name = nodeNameBuf;
+
+        /* [2] address */
+        size_t al = 0;
+        if (!crReadBytes(f, &fe, addrBuf, sizeof(addrBuf) - 1, &al)) {
+            goto fail;
+        }
+        addrBuf[al] = '\0';
         nodeCfg.address = addrBuf;
 
-        /* location */
-        memcpy(&nodeCfg.location, p, sizeof(clusterLocation));
-        p += sizeof(clusterLocation);
+        /* [3-10] location fields */
+        if (!crReadUnsignedRange(f, &fe, 0, UINT64_MAX, &v)) {
+            goto fail;
+        }
+        nodeCfg.location.nodeId = v;
+        if (!crReadUnsignedRange(f, &fe, 0, UINT32_MAX, &v)) {
+            goto fail;
+        }
+        nodeCfg.location.rackId = (uint32_t)v;
+        if (!crReadUnsignedRange(f, &fe, 0, UINT32_MAX, &v)) {
+            goto fail;
+        }
+        nodeCfg.location.cageId = (uint32_t)v;
+        if (!crReadUnsignedRange(f, &fe, 0, UINT32_MAX, &v)) {
+            goto fail;
+        }
+        nodeCfg.location.dcId = (uint32_t)v;
+        if (!crReadUnsignedRange(f, &fe, 0, UINT32_MAX, &v)) {
+            goto fail;
+        }
+        nodeCfg.location.azId = (uint32_t)v;
+        if (!crReadUnsignedRange(f, &fe, 0, UINT32_MAX, &v)) {
+            goto fail;
+        }
+        nodeCfg.location.regionId = (uint32_t)v;
+        if (!crReadUnsignedRange(f, &fe, 0, UINT16_MAX, &v)) {
+            goto fail;
+        }
+        nodeCfg.location.countryId = (uint16_t)v;
+        if (!crReadUnsignedRange(f, &fe, 0, UINT8_MAX, &v)) {
+            goto fail;
+        }
+        nodeCfg.location.continentId = (uint8_t)v;
 
-        /* weight */
-        memcpy(&nodeCfg.weight, p, 4);
-        p += 4;
+        /* [11] weight */
+        if (!crReadUnsignedRange(f, &fe, 0, UINT32_MAX, &v)) {
+            goto fail;
+        }
+        nodeCfg.weight = (uint32_t)v;
 
-        /* capacityBytes */
-        memcpy(&nodeCfg.capacityBytes, p, 8);
-        p += 8;
+        /* [12] capacityBytes */
+        if (!crReadUnsignedRange(f, &fe, 0, UINT64_MAX, &v)) {
+            goto fail;
+        }
+        nodeCfg.capacityBytes = v;
 
-        /* state */
-        uint32_t state;
-        memcpy(&state, p, 4);
-        p += 4;
-        nodeCfg.initialState = (clusterNodeState)state;
+        /* [13] state — strict enum range check */
+        if (!crReadUnsignedRange(f, &fe, 0, UINT64_MAX, &v)) {
+            goto fail;
+        }
+        if (!clusterRingValidNodeState(v)) {
+            goto fail;
+        }
+        nodeCfg.initialState = (clusterNodeState)v;
 
-        /* usedBytes - read but apply after adding */
-        uint64_t usedBytes;
-        memcpy(&usedBytes, p, 8);
-        p += 8;
+        /* [14] usedBytes (applied post-add since AddNode does not
+         * accept it through the config). */
+        uint64_t usedBytes = 0;
+        if (!crReadUnsignedRange(f, &fe, 0, UINT64_MAX, &usedBytes)) {
+            goto fail;
+        }
 
-        clusterRingAddNode(ring, &nodeCfg);
+        if (clusterRingAddNode(ring, &nodeCfg) != CLUSTER_OK) {
+            goto fail;
+        }
 
-        /* Restore used bytes */
         databox keybox = {.type = DATABOX_UNSIGNED_64, .data.u64 = nodeCfg.id};
         databox valbox;
         if (multidictFind(ring->nodeById, &keybox, &valbox)) {
@@ -2837,63 +3099,255 @@ clusterRing *clusterRingDeserialize(const void *buf, size_t bufLen) {
         }
     }
 
-    /* Keyspace count */
-    uint32_t ksCount;
-    memcpy(&ksCount, p, 4);
-    p += 4;
+    /* ---- Keyspaces ---- */
+    char ksNameBuf[4096];
+    for (uint64_t i = 0; i < ksCount; i++) {
+        clusterKeySpaceConfig ksCfg = {0};
 
-    /* Add keyspaces */
-    for (uint32_t i = 0; i < ksCount; i++) {
-        clusterKeySpaceConfig ksCfg;
-        memset(&ksCfg, 0, sizeof(ksCfg));
+        /* [0] name */
+        size_t kl = 0;
+        if (!crReadBytes(f, &fe, ksNameBuf, sizeof(ksNameBuf) - 1, &kl)) {
+            goto fail;
+        }
+        ksNameBuf[kl] = '\0';
+        ksCfg.name = ksNameBuf;
 
-        /* name (length-prefixed) */
-        p = deserializeString(p, nameBuf, sizeof(nameBuf), &strLen);
-        ksCfg.name = nameBuf;
-
-        memcpy(&ksCfg.quorum, p, sizeof(clusterQuorum));
-        p += sizeof(clusterQuorum);
-
-        uint32_t ksstrat;
-        memcpy(&ksstrat, p, 4);
-        p += 4;
-        ksCfg.strategy = (clusterStrategyType)ksstrat;
-
-        uint8_t ruleCount = *p++;
-        if (ruleCount > 0) {
-            ksCfg.rules = (clusterAffinityRule *)p;
-            ksCfg.ruleCount = ruleCount;
-            p += ruleCount * sizeof(clusterAffinityRule);
+        /* [1-6] quorum */
+        if (!crReadQuorum(f, &fe, &ksCfg.quorum)) {
+            goto fail;
         }
 
-        clusterRingAddKeySpace(ring, &ksCfg, NULL);
+        /* [7] strategy */
+        if (!crReadUnsignedRange(f, &fe, 0, UINT64_MAX, &v)) {
+            goto fail;
+        }
+        if (!clusterRingValidStrategyType(v)) {
+            goto fail;
+        }
+        ksCfg.strategy = (clusterStrategyType)v;
+
+        /* [8] ruleCount */
+        uint64_t ruleCount = 0;
+        if (!crReadUnsignedRange(f, &fe, 0, UINT8_MAX, &ruleCount)) {
+            goto fail;
+        }
+        ksCfg.ruleCount = (uint8_t)ruleCount;
+
+        /* [9, 10] reserved entries */
+        if (!crReadUnsignedRange(f, &fe, 0, 0, &v)) {
+            goto fail;
+        }
+        if (!crReadUnsignedRange(f, &fe, 0, 0, &v)) {
+            goto fail;
+        }
+
+        /* Rules — read into a heap-allocated array (clusterRingAddKeySpace
+         * deep-copies). */
+        clusterAffinityRule *rules = NULL;
+        if (ruleCount > 0) {
+            rules = (clusterAffinityRule *)zcalloc((size_t)ruleCount,
+                                                   sizeof(*rules));
+            if (rules == NULL) {
+                goto fail;
+            }
+            for (uint64_t r = 0; r < ruleCount; r++) {
+                if (!crReadUnsignedRange(f, &fe, 0, UINT64_MAX, &v)) {
+                    zfree(rules);
+                    goto fail;
+                }
+                if (!clusterRingValidTopologyLevel(v)) {
+                    zfree(rules);
+                    goto fail;
+                }
+                rules[r].spreadLevel = (clusterTopologyLevel)v;
+                if (!crReadUnsignedRange(f, &fe, 0, UINT8_MAX, &v)) {
+                    zfree(rules);
+                    goto fail;
+                }
+                rules[r].minSpread = (uint8_t)v;
+                if (!crReadUnsignedRange(f, &fe, 0, 1, &v)) {
+                    zfree(rules);
+                    goto fail;
+                }
+                rules[r].required = (v != 0);
+            }
+        }
+        ksCfg.rules = rules;
+
+        const clusterResult ksr = clusterRingAddKeySpace(ring, &ksCfg, NULL);
+        if (rules) {
+            zfree(rules);
+        }
+        if (ksr != CLUSTER_OK) {
+            goto fail;
+        }
+    }
+
+    /* Surplus entries past the recorded counts mean the wire input
+     * is malformed.  We do not silently ignore trailing entries — a
+     * size mismatch is structurally suspicious and points at either
+     * a hostile sender or a divergent version we did not declare. */
+    if (fe != NULL) {
+        goto fail;
     }
 
     return ring;
+
+fail:
+    clusterRingFree(ring);
+    return NULL;
 }
 
 uint64_t clusterRingGetVersion(const clusterRing *ring) {
     return ring ? ring->version : 0;
 }
 
-size_t clusterRingSerializeDelta(const clusterRing *ring, uint64_t sinceVersion,
-                                 void *buf, size_t bufLen) {
-    /* For now, just do full serialization if version changed */
-    (void)sinceVersion;
-    if (ring && ring->version > sinceVersion) {
-        return clusterRingSerialize(ring, buf, bufLen);
+/* ====================================================================
+ * persistOps descriptor — integrity wrap via the persist framework
+ * ==================================================================== */
+
+static uint8_t *clusterRingPersistSnapshot(const void *structure, size_t *len) {
+    const clusterRing *ring = (const clusterRing *)structure;
+    const size_t need = clusterRingSerializeSize(ring);
+    if (need == 0) {
+        *len = 0;
+        return NULL;
     }
-    return 0;
+    uint8_t *out = zmalloc(need);
+    const size_t wrote = clusterRingSerialize(ring, out, need);
+    if (wrote == 0) {
+        zfree(out);
+        return NULL;
+    }
+    *len = wrote;
+    return out;
 }
 
-clusterResult clusterRingApplyDelta(clusterRing *ring, const void *buf,
-                                    size_t bufLen) {
-    /* For now, delta is full ring - deserialize and merge */
-    (void)ring;
-    (void)buf;
-    (void)bufLen;
-    return CLUSTER_ERR; /* Not implemented yet */
+static void *clusterRingPersistRestore(const uint8_t *data, size_t len) {
+    return clusterRingDeserialize(data, len);
 }
+
+/* Allocate a fresh, empty ring for the persist framework's WAL-replay
+ * path (which constructs an empty target via newEmpty when the WAL has
+ * no leading snapshot). Returns a default-configured ring with no
+ * nodes; caller frees via .free (clusterRingFree). */
+static void *crPersistNewEmpty(void) {
+    return clusterRingNewDefault();
+}
+
+static size_t clusterRingPersistCount(const void *structure) {
+    return clusterRingNodeCount((const clusterRing *)structure);
+}
+
+static size_t clusterRingPersistEstimateSize(const void *structure) {
+    return clusterRingSerializeSize((const clusterRing *)structure);
+}
+
+static void clusterRingPersistFree(void *structure) {
+    clusterRingFree((clusterRing *)structure);
+}
+
+/* Validate hook — runs after restore to re-check invariants that an
+ * adversarial wire input could violate even after passing field-level
+ * range checks.  The descriptor framework gates restored structures on
+ * this returning true before they reach application code. */
+static bool clusterRingPersistValidate(const void *structure) {
+    const clusterRing *ring = (const clusterRing *)structure;
+    if (ring == NULL) {
+        return false;
+    }
+
+    /* Strategy type must be a known enum. */
+    if (!clusterRingValidStrategyType((uint64_t)ring->strategyType)) {
+        return false;
+    }
+
+    /* Default quorum sanity. */
+    if (!clusterRingValidConsistencyLevel(
+            (uint64_t)ring->defaultQuorum.consistency)) {
+        return false;
+    }
+    /* writeQuorum and readQuorum must not exceed replicaCount (if any
+     * replicas at all).  Allow 0 (means "use consistency level"). */
+    if (ring->defaultQuorum.replicaCount > 0) {
+        if (ring->defaultQuorum.writeQuorum >
+                ring->defaultQuorum.replicaCount ||
+            ring->defaultQuorum.readQuorum > ring->defaultQuorum.replicaCount ||
+            ring->defaultQuorum.writeSync > ring->defaultQuorum.replicaCount) {
+            return false;
+        }
+    }
+
+    /* Per-node invariants.
+     *   - state must be a known enum value
+     *   - id must be unique across all nodes (a duplicate id would
+     *     have been refused at deserialize time, but check again as a
+     *     belt-and-braces guard against future allocator races). */
+    for (uint32_t i = 0; i < ring->nodeCount; i++) {
+        const clusterNode *a = ring->nodeArray[i];
+        if (a == NULL) {
+            continue;
+        }
+        if (!clusterRingValidNodeState((uint64_t)a->state)) {
+            return false;
+        }
+        for (uint32_t j = i + 1; j < ring->nodeCount; j++) {
+            const clusterNode *b = ring->nodeArray[j];
+            if (b == NULL) {
+                continue;
+            }
+            if (a->id == b->id) {
+                return false;
+            }
+        }
+    }
+
+    /* Per-keyspace invariants. */
+    for (uint32_t i = 0; i < ring->keySpaceCount; i++) {
+        const clusterKeySpace *ks = ring->keySpaces[i];
+        if (ks == NULL) {
+            continue;
+        }
+        if (!clusterRingValidStrategyType((uint64_t)ks->strategy)) {
+            return false;
+        }
+        if (!clusterRingValidConsistencyLevel(
+                (uint64_t)ks->quorum.consistency)) {
+            return false;
+        }
+        if (ks->quorum.replicaCount > 0) {
+            if (ks->quorum.writeQuorum > ks->quorum.replicaCount ||
+                ks->quorum.readQuorum > ks->quorum.replicaCount ||
+                ks->quorum.writeSync > ks->quorum.replicaCount) {
+                return false;
+            }
+        }
+        for (uint8_t r = 0; r < ks->ruleCount; r++) {
+            if (!clusterRingValidTopologyLevel(
+                    (uint64_t)ks->rules[r].spreadLevel)) {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+const persistOps persistOpsClusterRing = {
+    .type = PERSIST_TYPE_CLUSTER_RING,
+    .name = "clusterRing",
+    .snapshot = clusterRingPersistSnapshot,
+    .restore = clusterRingPersistRestore,
+    .newEmpty = crPersistNewEmpty,
+    .count = clusterRingPersistCount,
+    .estimateSize = clusterRingPersistEstimateSize,
+    .encodeOp = NULL,
+    .applyOp = NULL,
+    .streamSnapshot = NULL,
+    .streamRestore = NULL,
+    .validate = clusterRingPersistValidate,
+    .free = clusterRingPersistFree,
+};
 
 /* ====================================================================
  * Testing / Debug
@@ -5196,6 +5650,73 @@ int clusterRingTest(int argc, char *argv[]) {
     err += testFuzzConcurrentModification();
     err += testFuzzLargeScale();
     err += testFuzzEdgeCases();
+
+    /* persistOps descriptor round-trip — proves the same ring shape
+     * survives through the standard persist pipeline. */
+    TEST("persistOps round-trip via persistOpsClusterRing") {
+        clusterRingConfig config = {
+            .name = "persistops-roundtrip",
+            .strategyType = CLUSTER_STRATEGY_KETAMA,
+        };
+        clusterRing *ring = clusterRingNew(&config);
+        for (uint32_t i = 1u; i <= 5u; i++) {
+            clusterNodeConfig nc = {
+                .id = (uint64_t)i,
+                .weight = 100u,
+                .capacityBytes = 1024u * 1024u,
+                .initialState = CLUSTER_NODE_UP,
+            };
+            clusterRingAddNode(ring, &nc);
+        }
+        size_t snap_len = 0;
+        uint8_t *snap = persistOpsClusterRing.snapshot(ring, &snap_len);
+        if (snap == NULL || snap_len == 0) {
+            ERRR("persistOps snapshot returned empty");
+        }
+        if (persistOpsClusterRing.count(ring) != 5u) {
+            ERRR("persistOps count != 5");
+        }
+        if (persistOpsClusterRing.estimateSize(ring) != snap_len) {
+            ERRR("estimateSize must agree with snapshot length");
+        }
+        clusterRing *restored =
+            (clusterRing *)persistOpsClusterRing.restore(snap, snap_len);
+        if (restored == NULL) {
+            ERRR("persistOps restore returned NULL");
+        }
+        if (clusterRingNodeCount(restored) != 5u) {
+            ERR("Restored node count expected 5, got %u",
+                clusterRingNodeCount(restored));
+        }
+        persistOpsClusterRing.free(restored);
+        zfree(snap);
+        clusterRingFree(ring);
+    }
+
+    /* persistOps newEmpty must produce a fresh, empty ring suitable for
+     * WAL-replay paths that have no leading snapshot.  The framework
+     * documents NULL as "skip with diagnostic"; this descriptor must
+     * supply a usable constructor. */
+    TEST("persistOps newEmpty returns a fresh-empty ring") {
+        if (persistOpsClusterRing.newEmpty == NULL) {
+            ERRR("persistOpsClusterRing.newEmpty must not be NULL");
+        } else {
+            clusterRing *empty =
+                (clusterRing *)persistOpsClusterRing.newEmpty();
+            if (empty == NULL) {
+                ERRR("newEmpty() returned NULL");
+            } else {
+                if (clusterRingNodeCount(empty) != 0u) {
+                    ERR("newEmpty ring must have 0 nodes, got %u",
+                        clusterRingNodeCount(empty));
+                }
+                if (persistOpsClusterRing.count(empty) != 0u) {
+                    ERRR("newEmpty ring count via descriptor must be 0");
+                }
+                persistOpsClusterRing.free(empty);
+            }
+        }
+    }
 
     /* Benchmark tests */
     err += testBenchmarkLocate();

@@ -408,6 +408,19 @@ typedef struct databoxStr {
         (box)->len = (len_);                                                   \
     } while (0)
 
+/* Hand ownership of a heap-allocated buffer to the box.
+ * databoxFreeData zfree's the buffer when the box is released.
+ * Use this when you already have a heap pointer (snprintf
+ * result, parser output) instead of hand-writing the
+ * type/data.ptr/len/allocated four-field assignment. */
+#define databoxUpdateBytesOwned(box, ptr_, len_)                               \
+    do {                                                                       \
+        (box)->type      = DATABOX_BYTES;                                      \
+        (box)->data.ptr  = (ptr_);                                             \
+        (box)->len       = (len_);                                             \
+        (box)->allocated = true;                                               \
+    } while (0)
+
 #define databoxOffsetBoxToRealBox(box, base)                                   \
     do {                                                                       \
         assert((box)->type == DATABOX_BYTES_OFFSET);                           \
@@ -443,6 +456,7 @@ extern const databox DATABOX_BOX_VOID;
 bool databoxGetBytes(databox *box, uint8_t **buf, size_t *len);
 bool databoxGetSize(const databox *box, size_t *len);
 size_t databoxGetSizeMinimum(const databox *box);
+void databoxCopyBytes(databox *box, const void *ptr, size_t len);
 databox databoxNewBytes(const void *ptr, size_t len);
 databox databoxNewBytesString(const char *str);
 databox databoxNewBytesAllowEmbed(const void *ptr, size_t len);

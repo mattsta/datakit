@@ -314,9 +314,27 @@ endif()
 
 if(EnableUBSAN)
     message(STATUS "Sanitizer: UndefinedBehaviorSanitizer enabled")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=undefined")
-    # We know we abuse system alignment in a few places. Don't warn us.
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-sanitize=alignment")
+    # `-fno-sanitize=function` excludes the indirect-call signature
+    # check.  datakit's dod.c / multilist.c / multimap.c / xof.c /
+    # multiOrderedSet.c use computed gotos (`goto *(&&label + ...)`)
+    # for hot dispatch loops.  UBSAN's `function` check treats these
+    # like indirect calls and on macOS emits Mach-O relocations the
+    # linker rejects with `ld: invalid r_symbolnum=...`.  Mirror the
+    # top-level CMakeLists.txt UBSAN treatment.  Dropping just
+    # `function` keeps every other UBSAN check active.
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=undefined -fno-sanitize=function")
+    # Historic UBSAN config silently disabled the alignment check
+    # via -fno-sanitize=alignment.  That hid real alignment bugs from
+    # operators who turned UBSAN on expecting full coverage.  Off by
+    # default now; opt in with -DDATAKIT_UBSAN_ALLOW_UNALIGNED=ON if
+    # a specific consumer needs the old behavior.
+    option(DATAKIT_UBSAN_ALLOW_UNALIGNED
+           "Suppress UBSAN's alignment check (legacy behavior — masks real bugs)"
+           OFF)
+    if(DATAKIT_UBSAN_ALLOW_UNALIGNED)
+        message(STATUS "Sanitizer: UBSAN alignment check SUPPRESSED (legacy)")
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-sanitize=alignment")
+    endif()
 endif()
 
 if(EnableMSAN)
@@ -333,8 +351,12 @@ if(EnableTSAN)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=thread")
 endif()
 
-# Even without sanitizers, disable alignment sanitizer (we intentionally use unaligned access)
-if(NOT EnableUBSAN)
+# Legacy behavior: silently suppress UBSAN's alignment check on every
+# build (sanitizers on OR off).  That hid real alignment bugs from
+# operators who enabled UBSAN expecting full coverage.  Opt in via
+# DATAKIT_UBSAN_ALLOW_UNALIGNED for the legacy behavior.
+if(DATAKIT_UBSAN_ALLOW_UNALIGNED)
+    message(STATUS "datakit: UBSAN alignment check SUPPRESSED globally (legacy)")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-sanitize=alignment")
 endif()
 
@@ -354,6 +376,8 @@ if(DatakitTestMode)
     # Tests require assertions - ensure NDEBUG is not defined
     add_definitions(-UNDEBUG)
 endif()
+
+include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(${PROJECT_NAME} OBJECT
     fibbuf.c
@@ -413,6 +437,30 @@ add_library(${PROJECT_NAME} OBJECT
     multiTimerTest.c
 
     flex.c
+    flexEnvelope.c
+    blake3.c
+    chacha20poly1305.c
+    hash/chacha20Neon.c
+    hash/chacha20AVX2.c
+    hash/poly1305Neon.c
+    hash/poly1305AVX2.c
+    aesGcm.c
+    hash/aesGcmNi.c
+    hash/aesGcmArmCrypto.c
+    x25519.c
+    hash/blake3Neon.c
+    hash/blake3SSE41.c
+    hash/blake3AVX2.c
+    sha256.c
+    hash/sha256ArmCrypto.c
+    hash/sha256ShaNi.c
+    hmac.c
+    hmacKeyring.c
+    aeadNonceLog.c
+    rapidhash.c
+    clusterMailbox.c
+    clusterReplicator.c
+    perfRegression.c
     mflex.c
 
     OSRegulate.c

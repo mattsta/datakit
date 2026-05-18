@@ -6,40 +6,40 @@
  *
  * A clean abstraction for persisting datakit's memory-efficient data structures
  * to disk with support for:
- *   - Full snapshots (point-in-time serialization)
- *   - Write-Ahead Log (incremental operations)
- *   - Compaction (merge WAL into snapshot)
- *   - Crash recovery (snapshot + WAL replay)
+ * - Full snapshots (point-in-time serialization)
+ * - Write-Ahead Log (incremental operations)
+ * - Compaction (merge WAL into snapshot)
+ * - Crash recovery (snapshot + WAL replay)
  *
  * Architecture Overview:
  * ┌─────────────────────────────────────────────────────────────────────────┐
- * │                         Application Layer                               │
- * │   multimap, multilist, multidict, intset, multiOrderedSet, etc.         │
+ * │ Application Layer │
+ * │ multimap, multilist, multidict, intset, multiOrderedSet, etc. │
  * └─────────────────────────────────────────────────────────────────────────┘
- *                                    │
- *                     implements persistOps interface
- *                                    ▼
+ * │
+ * implements persistOps interface
+ * ▼
  * ┌─────────────────────────────────────────────────────────────────────────┐
- * │                      Persistence Abstraction                            │
- * │                                                                         │
- * │  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐               │
- * │  │  Snapshot    │    │     WAL      │    │  Compaction  │               │
- * │  │  Manager     │    │   Manager    │    │   Engine     │               │
- * │  └──────────────┘    └──────────────┘    └──────────────┘               │
- * │         │                   │                   │                       │
- * │         └───────────────────┴───────────────────┘                       │
- * │                             │                                           │
- * │                    persistStore interface                               │
+ * │ Persistence Abstraction │
+ * │ │
+ * │ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ │
+ * │ │ Snapshot │ │ WAL │ │ Compaction │ │
+ * │ │ Manager │ │ Manager │ │ Engine │ │
+ * │ └──────────────┘ └──────────────┘ └──────────────┘ │
+ * │ │ │ │ │
+ * │ └───────────────────┴───────────────────┘ │
+ * │ │ │
+ * │ persistStore interface │
  * └─────────────────────────────────────────────────────────────────────────┘
- *                                    │
- *                                    ▼
+ * │
+ * ▼
  * ┌─────────────────────────────────────────────────────────────────────────┐
- * │                        Storage Backends                                 │
- * │                                                                         │
- * │  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐               │
- * │  │    File      │    │   Memory     │    │   Custom     │               │
- * │  │   Backend    │    │   Backend    │    │   Backend    │               │
- * │  └──────────────┘    └──────────────┘    └──────────────┘               │
+ * │ Storage Backends │
+ * │ │
+ * │ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ │
+ * │ │ File │ │ Memory │ │ Custom │ │
+ * │ │ Backend │ │ Backend │ │ Backend │ │
+ * │ └──────────────┘ └──────────────┘ └──────────────┘ │
  * └─────────────────────────────────────────────────────────────────────────┘
  *
  * On-Disk Format:
@@ -47,47 +47,54 @@
  *
  * SNAPSHOT FILE (.snap):
  * ┌────────────────────────────────────────────────────────────────┐
- * │ Header (36 bytes)                                              │
- * │   magic[4]      = "DKSP"                                       │
- * │   version[2]    = format version                               │
- * │   flags[2]      = bit 0: compression                           │
- * │                   bit 1: has_checksum                          │
- * │                   bits 2-3: checksum type (0=none, 1=XXH32,    │
- * │                             2=XXH64, 3=XXH128)                 │
- * │   structType[4] = PERSIST_TYPE_* enum                          │
- * │   count[8]      = element count                                │
- * │   dataLen[8]    = body length                                  │
- * │   checksum[8]   = header checksum (XXH64)                      │
+ * │ Header (40 bytes, format version 2) │
+ * │ magic[4] = "DKSP" │
+ * │ version[2] = format version │
+ * │ flags[2] = reserved │
+ * │ structType[4] = PERSIST_TYPE_* enum │
+ * │ count[8] = element count │
+ * │ envelopeLen[8] = size of the body envelope in bytes │
+ * │ keyId[4] = attached keyring key_id (0 if no keyring) │
+ * │ headerXxh64[8] = XXH64 over bytes [0..31] (fast bootstrap) │
  * ├────────────────────────────────────────────────────────────────┤
- * │ Body (variable)                                                │
- * │   Compressed or raw structure-specific serialized data         │
- * ├────────────────────────────────────────────────────────────────┤
- * │ Footer (variable: 4, 8, or 16 bytes based on checksum type)   │
- * │   bodyChecksum[N] = checksum of body (length depends on type)  │
- * │                     XXH32:  4 bytes                            │
- * │                     XXH64:  8 bytes (default)                  │
- * │                     XXH128: 16 bytes (maximum protection)      │
+ * │ Body envelope (envelopeLen bytes) │
+ * │ flexEnvelopeWrap(serialized payload, configured algorithm). │
+ * │ Carries its own magic, length, algorithm id, and digest; │
+ * │ keyed algorithms (HMAC_*, BLAKE3_KEYED) require a key set │
+ * │ via persistSetIntegrityKey before snapshot/restore. │
  * └────────────────────────────────────────────────────────────────┘
+ *
+ * The `keyId` field lets a reader detect "operator pointed me at the
+ * wrong key" early: on verify, if a keyring is attached AND the on-
+ * disk keyId is non-zero AND it differs from the attached key_id, the
+ * verify fails with PERSIST_ERR_KEY_ID_MISMATCH (use
+ * persistLastExpectedKeyId to recover the expected id) rather than
+ * the opaque generic-VERIFY_FAILED an HMAC mismatch would produce.
  *
  * WAL FILE (.wal):
  * ┌────────────────────────────────────────────────────────────────┐
- * │ WAL Header (24 bytes)                                          │
- * │   magic[4]      = "DKWL"                                       │
- * │   version[2]    = format version                               │
- * │   flags[2]      = options                                      │
- * │   structType[4] = must match snapshot                          │
- * │   sequence[8]   = starting sequence number                     │
- * │   checksum[4]   = header checksum                              │
+ * │ WAL Header (28 bytes, format version 2) │
+ * │ magic[4] = "DKWL" │
+ * │ version[2] = format version │
+ * │ flags[2] = reserved │
+ * │ structType[4] = must match snapshot │
+ * │ sequence[8] = starting sequence number │
+ * │ keyId[4] = attached keyring key_id (0 if no keyring) │
+ * │ headerXxh32[4] = XXH32 over bytes [0..23] (fast bootstrap) │
  * ├────────────────────────────────────────────────────────────────┤
- * │ Entry 0                                                        │
- * │   len[4]        = entry length (excluding len field)           │
- * │   seq[8]        = sequence number                              │
- * │   op[1]         = operation type (PERSIST_OP_*)                │
- * │   data[...]     = operation-specific data                      │
- * │   checksum[4]   = entry checksum                               │
+ * │ Entry 0 │
+ * │ envelopeLen[4] = byte length of the entry envelope │
+ * │ envelope[envLen] = flexEnvelopeWrap(seq||op||opdata, algo). │
+ * │ seq is 8 bytes, op is 1 byte, then │
+ * │ persistOps.encodeOp output. │
  * ├────────────────────────────────────────────────────────────────┤
- * │ Entry 1...N                                                    │
+ * │ Entry 1...N │
  * └────────────────────────────────────────────────────────────────┘
+ *
+ * The 8-byte (snap) / 4-byte (WAL) header digest is a cheap consistency
+ * tag — its only job is to reject obviously-corrupt files before the
+ * envelope verify runs. The envelope is the source of truth for body /
+ * entry integrity.
  *
  * ============================================================================
  */
@@ -145,6 +152,16 @@ typedef enum persistType {
     PERSIST_TYPE_LINEARBLOOM = 80,
     PERSIST_TYPE_HYPERLOGLOG = 81,
 
+    /* Security / crypto state */
+    PERSIST_TYPE_HMAC_KEYRING = 90,
+    PERSIST_TYPE_CLUSTER_MAILBOX_WATERMARKS = 91,
+
+    /* Cluster topology */
+    PERSIST_TYPE_CLUSTER_RING = 92,
+
+    /* AEAD replay-protection state (per-key nonce log). */
+    PERSIST_TYPE_AEAD_NONCE_LOG = 93,
+
     /* Reserved for future use */
     PERSIST_TYPE_MAX = 255
 } persistType;
@@ -184,65 +201,47 @@ typedef enum persistOp {
 } persistOp;
 
 /* ============================================================================
- * Checksum Types
+ * Checksum Algorithms
  * ============================================================================
- * The persist framework supports multiple checksum algorithms with different
- * trade-offs between speed, collision resistance, and size.
+ * Snapshot bodies and WAL entries are wrapped in a flexEnvelope; the
+ * algorithm below names which digest the envelope carries. Algorithms
+ * fall into two classes:
  *
- * Architecture Design:
- *   - Checksum type is versioned and stored in snapshot/WAL headers
- *   - Variable-length checksums (4/8/16 bytes) for future extensibility
- *   - Type can be changed between snapshots (forward/backward compatible)
- *   - All algorithms use xxHash family for performance and quality
+ * - Checksum class (XXH64, XXH3_64, XXH3_128) — fast integrity, no key.
+ * Good for local on-disk persistence on a trusted host.
  *
- * Checksum Types:
- *   XXHASH32  - 4 bytes, compact
- *   XXHASH64  - 8 bytes, default (best balance)
- *   XXHASH128 - 16 bytes, maximum collision resistance
+ * - MAC class (BLAKE3_KEYED, HMAC_SHA256, HMAC_BLAKE3) — tamper-evident,
+ * requires a key set via persistSetIntegrityKey. Use these for
+ * cross-host replication, plugin ingest, or anywhere the bytes can be
+ * forged by an attacker between writer and reader.
  *
- * Chunk-Level Checksums:
- *   For data structures with internal chunks (multimap, multilist), the
- *   persistOps interface supports chunk-level checksumming via:
- *     - getChunkCount()    - returns number of chunks
- *     - snapshotChunk()    - serialize chunk with checksum
- *     - restoreChunk()     - restore chunk with verification
- *
- *   Structures without chunks (intset, flex, multiroar) get a single
- *   whole-structure checksum in the snapshot footer.
- *
- * Checksum Verification:
- *   - Snapshot header: XXH64 (8 bytes)
- *   - Snapshot body: configurable type (default XXH64)
- *   - WAL entries: XXH32 (4 bytes, compact for small entries)
- *   - All checksums verified on restore/recovery
+ * The persist header itself carries a small XXH64/XXH32 self-check so
+ * obviously-corrupt files fail fast without invoking the envelope work.
  */
+/* Snapshot bodies and WAL entries are always wrapped in a flexEnvelope.
+ * The envelope carries the algorithm id and digest internally, so the
+ * persist header no longer encodes a checksum type. Keyed algorithms
+ * (HMAC_SHA256, HMAC_BLAKE3, BLAKE3_KEYED) require a key supplied via
+ * persistSetIntegrityKey before snapshot/log; writes are refused if no
+ * key is set. */
 typedef enum persistChecksum {
-    PERSIST_CHECKSUM_NONE = 0,      /* No checksum (testing only) */
-    PERSIST_CHECKSUM_XXHASH32 = 1,  /* 32-bit xxHash (4 bytes) */
-    PERSIST_CHECKSUM_XXHASH64 = 2,  /* 64-bit xxHash (8 bytes, default) */
-    PERSIST_CHECKSUM_XXHASH128 = 3, /* 128-bit xxHash (16 bytes) */
+    PERSIST_CHECKSUM_NONE =
+        0,                             /* 0 B digest, test-only (refused
+                                                  unless built with
+                                                  -DDATAKIT_ENABLE_INSECURE_TEST_ALGOS) */
+    PERSIST_CHECKSUM_XXH64 = 1,        /* 8 B, no key */
+    PERSIST_CHECKSUM_XXH3_64 = 2,      /* 8 B, no key */
+    PERSIST_CHECKSUM_XXH3_128 = 3,     /* 16 B, no key */
+    PERSIST_CHECKSUM_BLAKE3_KEYED = 4, /* 32 B, keyed (native BLAKE3) */
+    PERSIST_CHECKSUM_HMAC_SHA256 = 5,  /* 32 B, keyed (RFC 4231) */
+    PERSIST_CHECKSUM_HMAC_BLAKE3 = 6,  /* 32 B, keyed (RFC 2104 over BLAKE3) */
 } persistChecksum;
 
-/* Maximum checksum size in bytes (for 128-bit hashes) */
-#define PERSIST_CHECKSUM_MAX_SIZE 16
-
-/* Checksum value holder supporting variable-length checksums.
- * This structure encapsulates the checksum type and value, allowing
- * different checksum algorithms to coexist in the same codebase and
- * enabling future algorithm additions without breaking compatibility. */
-typedef struct persistChecksumValue {
-    persistChecksum type; /* Checksum algorithm used */
-    uint8_t len;          /* Actual checksum length in bytes (4, 8, or 16) */
-    union {
-        uint32_t u32;      /* 32-bit checksums (XXH32) */
-        uint64_t u64;      /* 64-bit checksums (XXH64) */
-        uint8_t bytes[16]; /* Generic byte access (all types) */
-        struct {           /* 128-bit checksums (XXH128) */
-            uint64_t low64;
-            uint64_t high64;
-        } u128;
-    } value;
-} persistChecksumValue;
+/* True iff `t` is a keyed (tamper-evident) algorithm that requires a key. */
+#define PERSIST_CHECKSUM_IS_KEYED(t)                                           \
+    ((t) == PERSIST_CHECKSUM_HMAC_SHA256 ||                                    \
+     (t) == PERSIST_CHECKSUM_HMAC_BLAKE3 ||                                    \
+     (t) == PERSIST_CHECKSUM_BLAKE3_KEYED)
 
 /* ============================================================================
  * Persistence Operations Interface
@@ -264,7 +263,21 @@ struct persistOps {
 
     /* Deserialize buffer to structure.
      * Returns allocated structure (caller frees).
-     * Returns NULL on error. */
+     * Returns NULL on error.
+     *
+     * ALIGNMENT CONTRACT (important): `data` may point to ANY byte
+     * offset inside a larger envelope buffer — specifically, it sits
+     * just after a variable-length varint framing header, so the
+     * pointer is NOT guaranteed to be aligned for any multi-byte
+     * type. Restore implementations MUST use `memcpy` when reading
+     * fields wider than 1 byte (e.g.
+     * uint64_t count;
+     * memcpy(&count, data, sizeof(count));
+     * ). Pointer-cast reads such as `*(const uint64_t *)data` will
+     * trip UBSAN on every modern toolchain and may produce a bus
+     * fault on stricter platforms. On the targets where unaligned
+     * loads ARE permitted, memcpy compiles to a single load — there
+     * is no runtime cost. */
     void *(*restore)(const uint8_t *data, size_t len);
 
     /* Allocate a fresh, empty structure of this type — the moral
@@ -272,7 +285,7 @@ struct persistOps {
      * Used by restore engines that need to apply a delta WAL whose
      * leading op is not a snapshot (the structure's identity is
      * defined only by its leading newEmpty + applied deltas).
-     * Caller frees via .free.  May be NULL for types that have no
+     * Caller frees via .free. May be NULL for types that have no
      * meaningful empty state; restore engines treat NULL as "skip
      * this key" with a diagnostic. */
     void *(*newEmpty)(void);
@@ -305,7 +318,7 @@ struct persistOps {
     /* ---- Optional Optimization Hooks ---- */
 
     /* Stream snapshot incrementally (for very large structures).
-     * If NULL, snapshot() is used instead.
+     * If NULL, snapshot is used instead.
      * Callback is called with chunks of data.
      * Returns true on success. */
     bool (*streamSnapshot)(const void *structure,
@@ -314,7 +327,7 @@ struct persistOps {
                            void *ctx);
 
     /* Incremental restore (for very large structures).
-     * If NULL, restore() is used instead. */
+     * If NULL, restore is used instead. */
     void *(*streamRestore)(bool (*read)(uint8_t *buf, size_t len, void *ctx),
                            void *ctx);
 
@@ -324,35 +337,6 @@ struct persistOps {
 
     /* Free structure (if restore allocates) */
     void (*free)(void *structure);
-
-    /* ---- Chunk-Level Checksum Support ---- */
-
-    /* Get number of internal chunks (for chunk-level checksums).
-     * Returns 0 if structure doesn't have internal chunks.
-     * For structures with chunks (multimap, multilist, etc), returns chunk
-     * count. For simple structures (intset, flex, multiroar), returns 0. */
-    size_t (*getChunkCount)(const void *structure);
-
-    /* Serialize a specific chunk and return its checksum.
-     * chunkIndex: 0-based chunk index
-     * Returns allocated buffer with chunk data, sets *len and *checksum.
-     * The checksum is computed using the specified checksum type.
-     * Returns NULL if chunk doesn't exist or structure doesn't support chunks.
-     */
-    uint8_t *(*snapshotChunk)(const void *structure, size_t chunkIndex,
-                              size_t *len, persistChecksumValue *checksum,
-                              persistChecksum checksumType);
-
-    /* Restore a specific chunk with checksum verification.
-     * chunkIndex: 0-based chunk index
-     * data: chunk data buffer
-     * len: chunk data length
-     * expectedChecksum: expected checksum value with type
-     * Returns true if chunk restored and checksum matches.
-     * Returns false on error or checksum mismatch. */
-    bool (*restoreChunk)(void *structure, size_t chunkIndex,
-                         const uint8_t *data, size_t len,
-                         const persistChecksumValue *expectedChecksum);
 };
 
 /* ============================================================================
@@ -480,6 +464,120 @@ persistConfig persistDefaultConfig(void);
 void persistSetConfig(persist *p, const persistConfig *config);
 void persistGetConfig(const persist *p, persistConfig *config);
 
+/* ---- Integrity key (for keyed checksum algos) ------------------------
+ *
+ * Required when the configured `checksumType` is HMAC_SHA256, HMAC_BLAKE3,
+ * or BLAKE3_KEYED. Pointer is borrowed — the caller is responsible for
+ * keeping the key bytes alive for the lifetime of `p` (typical pattern:
+ * key is owned by a long-lived key-management module, persist just holds
+ * a reference).
+ *
+ * For HMAC algos any non-empty key is accepted (RFC 2104). For
+ * BLAKE3_KEYED the key MUST be exactly 32 bytes; shorter/longer keys
+ * cause snapshot/log to fail.
+ *
+ * Passing NULL/0 clears any previously set key. Returns false if the
+ * persist handle is NULL. Safe to call before any snapshot/log so that
+ * the very first write is keyed. Re-keying is supported between writes
+ * but does NOT re-key already-written data on disk; readers will see the
+ * new key applied to subsequent reads. */
+bool persistSetIntegrityKey(persist *p, const uint8_t *key, size_t key_len);
+
+/* Borrowed prepared-key handle for HMAC-class algos. When set, every
+ * verify (including the per-entry WAL replay loop, which is the canonical
+ * "many messages, one key" hot path) consumes the prepared inner+outer
+ * states directly and skips the two block compressions hmacInit would
+ * otherwise pay per envelope. Caller owns the handle and the storage
+ * it points into. Pass NULL to clear. Ignored for non-HMAC algos (the
+ * envelope simply falls back to raw-key path).
+ *
+ * Typically used as a building block under persistAttachKeyring, which
+ * pulls both the raw bytes and the prepared handle out of an hmacKeyring
+ * by id. */
+struct hmacKey;
+bool persistSetIntegrityPreparedKey(persist *p, const struct hmacKey *prep);
+
+/* Convenience: bind a persist instance to a (keyring, key_id) pair so
+ * every snapshot / WAL / replay call resolves both the raw key bytes
+ * and the prepared HMAC handle automatically.
+ *
+ * Lifetime contract: the binding stores `(ring, key_id, generation)`
+ * captured at attach time — NOT raw pointers into keyring-owned memory.
+ * Every subsequent persist operation re-resolves the key via
+ * hmacKeyringGetGeneration + hmacKeyringLookup; if the generation has
+ * advanced (because the key was retired, re-installed under the same
+ * id, or its AEAD salt was rotated) the operation fails with the typed
+ * error code PERSIST_ERR_KEY_GENERATION_MISMATCH (currently visible to
+ * the caller as the operation returning false; the typed-error API
+ * lives in persistLastError). Callers that intentionally rotated
+ * the key MUST call persistRebindKeyring to refresh the binding.
+ *
+ * Returns false if the keyring doesn't contain `key_id`. The keyring
+ * is borrowed — caller is responsible for keeping it alive until
+ * persistClose. */
+struct hmacKeyring;
+bool persistAttachKeyring(persist *p, struct hmacKeyring *ring,
+                          uint32_t key_id);
+
+/* Re-bind a persist instance to a (keyring, key_id) pair AFTER an
+ * intentional key rotation. Refreshes the cached generation so
+ * subsequent operations succeed under the new key bytes. This is the
+ * official "I know the key changed; please pick up the new one" entry
+ * point — distinct from persistAttachKeyring only in intent (Attach is
+ * for the first binding; Rebind documents at the call site that the
+ * caller has handled rotation). Internally identical to Attach but
+ * named separately so audit/log review can distinguish first-attach
+ * from post-rotation rebind. Returns false if `key_id` is not
+ * currently installed in `ring`. */
+bool persistRebindKeyring(persist *p, struct hmacKeyring *ring,
+                          uint32_t key_id);
+
+/* Typed error codes returned via persistLastError after an operation
+ * fails. Not all failure paths set a code yet (legacy code paths
+ * return plain false); the codes below are the ones consulted by the
+ * keyring-lifetime tests. */
+typedef enum persistErr {
+    PERSIST_ERR_NONE = 0,
+    PERSIST_ERR_KEY_GENERATION_MISMATCH = 1, /* attached keyring slot was
+                                                 rotated since attach */
+    PERSIST_ERR_KEY_NOT_FOUND = 2,           /* attached id no longer present */
+    PERSIST_ERR_NO_KEY_ATTACHED = 3,         /* keyed-algo op with no key */
+    PERSIST_ERR_KEY_ID_MISMATCH = 4,         /* snapshot/WAL header carries a
+                                                         key_id that doesn't match the
+                                                         currently-attached keyring's
+                                                         key_id (operator pointed the
+                                                         reader at the wrong key) */
+} persistErr;
+
+/* Read the typed error code from the most recent failed operation on
+ * `p`. Returns PERSIST_ERR_NONE if no error code has been set since
+ * the last successful operation. Safe to call after any return-false
+ * persist API; codes are sticky until the next call that explicitly
+ * clears them. Returns PERSIST_ERR_NONE for NULL `p`. */
+persistErr persistLastError(const persist *p);
+
+/* After a failed snapshot/WAL verify that set PERSIST_ERR_KEY_ID_MISMATCH,
+ * returns the `key_id` recorded in the on-disk header. The operator can
+ * use this value to rotate the reader's keyring back to the expected
+ * key. Returns 0 if no key_id mismatch has been observed since the
+ * last successful operation, or if `p` is NULL.
+ *
+ * The value is sticky in the same way as persistLastError — it
+ * remains valid until the next operation that clears the error state.
+ *
+ * Typical operator workflow on a cross-key mistake:
+ *
+ * if (!persistVerifySnapshot(p) &&
+ * persistLastError(p) == PERSIST_ERR_KEY_ID_MISMATCH) {
+ * uint32_t expected = persistLastExpectedKeyId(p);
+ * fprintf(stderr,
+ * "snapshot expects key_id=%u; reader currently bound to "
+ * "a different key — rebind via persistRebindKeyring\n",
+ * (unsigned)expected);
+ * }
+ */
+uint32_t persistLastExpectedKeyId(const persist *p);
+
 /* ---- Snapshot Operations ---- */
 
 /* Take a full snapshot of the structure */
@@ -498,11 +596,11 @@ bool persistReplayWAL(persist *p, void *structure);
 
 /* Thread-local mflexState used by per-op applyOp implementations
  * (multilist push/pop need a working mflexState to compress/decompress
- * intermediate flex chunks).  persistRecover sets this internally for
+ * intermediate flex chunks). persistRecover sets this internally for
  * the duration of the WAL replay; callers that invoke persistOps
  * applyOp OUTSIDE the recover path (e.g. cluster apply mailbox folding
  * delta ops on a follower) must set it before each call and clear
- * after.  Pass NULL to clear.  Safe to call from any thread; affects
+ * after. Pass NULL to clear. Safe to call from any thread; affects
  * only the calling thread. */
 struct mflexState;
 void persistSetReplayState(struct mflexState *state);
@@ -582,23 +680,11 @@ const char *persistTypeName(persistType type);
 /* Get human-readable name for operation */
 const char *persistOpName(persistOp op);
 
-/* Checksum helpers */
-uint32_t persistChecksum32(const void *data, size_t len);
-uint64_t persistChecksum64(const void *data, size_t len);
+/* Verify snapshot file integrity (parses header + unwraps body envelope). */
+bool persistVerifySnapshot(persist *p);
 
-/* Unified checksum computation and verification */
-void persistChecksumCompute(persistChecksum type, const void *data, size_t len,
-                            persistChecksumValue *out);
-bool persistChecksumVerify(const persistChecksumValue *expected,
-                           const void *data, size_t len);
-bool persistChecksumEqual(const persistChecksumValue *a,
-                          const persistChecksumValue *b);
-
-/* Verify snapshot file integrity */
-bool persistVerifySnapshot(persistStore *store);
-
-/* Verify WAL file integrity */
-bool persistVerifyWAL(persistStore *store);
+/* Verify WAL file integrity (parses header + unwraps every entry envelope). */
+bool persistVerifyWAL(persist *p);
 
 #ifdef DATAKIT_TEST
 int persistTest(int argc, char *argv[]);

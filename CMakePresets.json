@@ -1,0 +1,80 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+
+  "configurePresets": [
+    {
+      "name": "_base",
+      "hidden": true,
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build-${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+
+    {
+      "name": "debug",
+      "inherits": "_base",
+      "displayName": "Debug + all sanitizers (diagnostic)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "EnableASAN": "ON",
+        "EnableUBSAN": "ON"
+      }
+    },
+
+    {
+      "name": "dev",
+      "inherits": "_base",
+      "displayName": "Release-O3 + ASAN/UBSAN (default development)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "EnableASAN": "ON",
+        "EnableUBSAN": "ON"
+      }
+    },
+
+    {
+      "name": "perf",
+      "inherits": "_base",
+      "displayName": "Release-O3 + native CPU tuning, NO sanitizers (benchmarks)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "EnableASAN": "OFF",
+        "EnableUBSAN": "OFF",
+        "CMAKE_C_FLAGS_RELEASE": "-O3 -DNDEBUG -mcpu=native -flto"
+      }
+    },
+
+    {
+      "name": "safe",
+      "inherits": "_base",
+      "displayName": "Release-O3 + every sanitizer (strict CI)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "EnableASAN": "ON",
+        "EnableUBSAN": "ON"
+      }
+    }
+  ],
+
+  "buildPresets": [
+    {
+      "name": "debug", "configurePreset": "debug",
+      "targets": ["datakit-test", "datakit-static", "datakit-shared", "datakit-library"]
+    },
+    {
+      "name": "dev", "configurePreset": "dev",
+      "targets": ["datakit-test", "datakit-static", "datakit-shared", "datakit-library"]
+    },
+    {
+      "name": "perf", "configurePreset": "perf",
+      "targets": ["datakit-test", "datakit-static", "datakit-shared", "datakit-library"]
+    },
+    {
+      "name": "safe", "configurePreset": "safe",
+      "targets": ["datakit-test", "datakit-static", "datakit-shared", "datakit-library"]
+    }
+  ]
+}

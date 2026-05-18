@@ -605,16 +605,15 @@ size_t clusterRingSerializeSize(const clusterRing *ring);
 /* Deserialize ring from buffer */
 clusterRing *clusterRingDeserialize(const void *buf, size_t bufLen);
 
-/* Get ring version for delta serialization */
+/* Get current ring version (monotonically increasing on each modification). */
 uint64_t clusterRingGetVersion(const clusterRing *ring);
 
-/* Serialize changes since version */
-size_t clusterRingSerializeDelta(const clusterRing *ring, uint64_t sinceVersion,
-                                 void *buf, size_t bufLen);
-
-/* Apply delta to ring */
-clusterResult clusterRingApplyDelta(clusterRing *ring, const void *buf,
-                                    size_t bufLen);
+/* persistOps descriptor — routes clusterRingSerialize/Deserialize
+ * through the standard persist + flexEnvelope pipeline so the
+ * topology is integrity-protected end-to-end.  Use with
+ * persistAttachKeyring (or persistSetIntegrityKey) for tamper
+ * evidence across crash/restart boundaries.  See persist.h. */
+extern const struct persistOps persistOpsClusterRing;
 
 /* ====================================================================
  * Debugging / Testing

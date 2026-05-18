@@ -3,10 +3,10 @@
  * See persist.h for API documentation and architecture overview.
  *
  * Implementation follows datakit design principles:
- *   - Self-managing memory (zmalloc/zfree)
- *   - Linear memory-efficient structures
- *   - Clean encapsulation with opaque types
- *   - Comprehensive test coverage
+ * - Self-managing memory (zmalloc/zfree)
+ * - Linear memory-efficient structures
+ * - Clean encapsulation with opaque types
+ * - Comprehensive test coverage
  *
  * SCALABILITY NOTES:
  *
@@ -15,27 +15,29 @@
  * up to several GB. For terabyte-scale data (e.g., multilistFull with billions
  * of entries), use the streaming API:
  *
- *   1. streamSnapshot - Writes data in chunks via callback, never buffering
- *      the entire structure. For multilist: iterate nodes, serialize each
- *      node independently, call callback per node.
+ * 1. streamSnapshot - Writes data in chunks via callback, never buffering
+ * the entire structure. For multilist: iterate nodes, serialize each
+ * node independently, call callback per node.
  *
- *   2. streamRestore - Reads data in chunks via callback, building structure
- *      incrementally. For multilist: receive node data via callback, append
- *      each node to growing structure.
+ * 2. streamRestore - Reads data in chunks via callback, building structure
+ * incrementally. For multilist: receive node data via callback, append
+ * each node to growing structure.
  *
  * The streaming callbacks are defined in persistOps but implementations are
  * marked NULL for the current non-streaming approach. When streaming is needed,
  * implement streamSnapshot/streamRestore for the relevant data type.
  *
  * For extremely large structures, also consider:
- *   - Incremental snapshots (delta encoding between snapshots)
- *   - Parallel restore (multi-threaded node reconstruction)
- *   - Memory-mapped I/O for the storage backend
+ * - Incremental snapshots (delta encoding between snapshots)
+ * - Parallel restore (multi-threaded node reconstruction)
+ * - Memory-mapped I/O for the storage backend
  */
 
 #include "persist.h"
 #include "databoxLinear.h"
 #include "datakit.h"
+#include "flexEnvelope.h"
+#include "hmacKeyring.h"
 #include "mflex.h"
 
 #define XXH_STATIC_LINKING_ONLY
@@ -49,113 +51,44 @@
 #include "perf.h"
 #endif
 
+/* The on-disk header structs below are packed and written/read raw — no
+ * per-field byte-swap. That is correct on little-endian targets (every
+ * platform datakit currently runs on) but silently produces an
+ * unportable file on a big-endian host. Pin the assumption at compile
+ * time so a BE port is forced to confront it explicitly. */
+#if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__)
+_Static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__,
+               "persist.c on-disk format assumes little-endian; "
+               "big-endian hosts need explicit byte-swap helpers");
+#endif
+
 /* ============================================================================
  * Magic Numbers and Format Constants
  * ============================================================================
  */
-#define PERSIST_SNAP_MAGIC 0x50534B44 /* "DKSP" little-endian */
-#define PERSIST_WAL_MAGIC 0x4C574B44  /* "DKWL" little-endian */
-#define PERSIST_VERSION 1
+#define PERSIST_SNAP_MAGIC ((uint32_t)0x50534B44) /* "DKSP" little-endian */
+#define PERSIST_WAL_MAGIC ((uint32_t)0x4C574B44)  /* "DKWL" little-endian */
+/* Version 2 adds a `keyId` field to both snap+WAL headers.
+ * No backward compat with v1: pre-release software, readers reject the
+ * old size+digest layout outright via the version check. */
+#define PERSIST_VERSION ((uint16_t)2)
 
-#define PERSIST_SNAP_HEADER_SIZE 36
-#define PERSIST_WAL_HEADER_SIZE 24
+#define PERSIST_SNAP_HEADER_SIZE ((size_t)40)
+#define PERSIST_WAL_HEADER_SIZE ((size_t)28)
 
-/* ============================================================================
- * Checksum Implementation
- * ============================================================================
- * Unified checksum interface supporting multiple hash algorithms.
- * Uses xxHash for high performance and excellent distribution.
- *
- * Checksum Type Support:
- *   - PERSIST_CHECKSUM_NONE:      No checksum (returns 0)
- *   - PERSIST_CHECKSUM_XXHASH32:  XXH32 (32-bit, legacy header use)
- *   - PERSIST_CHECKSUM_XXHASH64:  XXH64 (64-bit, default for body/chunks)
- *   - PERSIST_CHECKSUM_XXHASH128: XXH128 (128-bit, future-proof)
- *   - PERSIST_CHECKSUM_CRC32C:    CRC32C (not yet implemented)
- *
- * For 128-bit checksums, we fold the hash down to 64 bits for storage
- * compatibility by XORing the high and low halves.
- */
+/* Header self-check digest sizes (raw XXH32/XXH64 on the persist header
+ * itself). The full body / entry integrity is carried by the envelope. */
+#define PERSIST_SNAP_HEADER_DIGEST_LEN ((size_t)8)
+#define PERSIST_SNAP_HEADER_PREFIX_LEN                                         \
+    (PERSIST_SNAP_HEADER_SIZE - PERSIST_SNAP_HEADER_DIGEST_LEN)
+#define PERSIST_WAL_HEADER_DIGEST_LEN ((size_t)4)
+#define PERSIST_WAL_HEADER_PREFIX_LEN                                          \
+    (PERSIST_WAL_HEADER_SIZE - PERSIST_WAL_HEADER_DIGEST_LEN)
 
-/* Compute checksum using specified algorithm */
-void persistChecksumCompute(persistChecksum type, const void *data, size_t len,
-                            persistChecksumValue *out) {
-    if (!out) {
-        return;
-    }
-
-    memset(out, 0, sizeof(*out));
-    out->type = type;
-
-    if (!data || len == 0) {
-        out->len = 0;
-        return;
-    }
-
-    switch (type) {
-    case PERSIST_CHECKSUM_NONE:
-        out->len = 0;
-        break;
-
-    case PERSIST_CHECKSUM_XXHASH32:
-        out->len = 4;
-        out->value.u32 = XXH32(data, len, 0);
-        break;
-
-    case PERSIST_CHECKSUM_XXHASH64:
-        out->len = 8;
-        out->value.u64 = XXH64(data, len, 0);
-        break;
-
-    case PERSIST_CHECKSUM_XXHASH128: {
-        out->len = 16;
-        XXH128_hash_t hash128 = XXH128(data, len, 0);
-        out->value.u128.low64 = hash128.low64;
-        out->value.u128.high64 = hash128.high64;
-        break;
-    }
-
-    default:
-        out->len = 0;
-        break;
-    }
-}
-
-/* Compare two checksum values for equality */
-bool persistChecksumEqual(const persistChecksumValue *a,
-                          const persistChecksumValue *b) {
-    if (!a || !b) {
-        return false;
-    }
-
-    if (a->type != b->type || a->len != b->len) {
-        return false;
-    }
-
-    /* Compare based on length */
-    return memcmp(a->value.bytes, b->value.bytes, a->len) == 0;
-}
-
-/* Verify checksum matches expected value */
-bool persistChecksumVerify(const persistChecksumValue *expected,
-                           const void *data, size_t len) {
-    if (!expected || !data) {
-        return false;
-    }
-
-    persistChecksumValue computed;
-    persistChecksumCompute(expected->type, data, len, &computed);
-    return persistChecksumEqual(expected, &computed);
-}
-
-/* Legacy wrappers for existing code (map to XXH32/XXH64) */
-uint32_t persistChecksum32(const void *data, size_t len) {
-    return (uint32_t)XXH32(data, len, 0);
-}
-
-uint64_t persistChecksum64(const void *data, size_t len) {
-    return XXH64(data, len, 0);
-}
+/* Upper bound on a single WAL entry envelope. Same value the old code
+ * used; protects readers from a bogus length field forcing a huge
+ * allocation before envelope verify can reject it. */
+#define PERSIST_WAL_ENTRY_MAX_BYTES ((uint32_t)(100u * 1024u * 1024u))
 
 /* ============================================================================
  * Persist Context
@@ -168,6 +101,55 @@ struct persist {
     persistStore *walStore;      /* WAL storage backend */
     persistStats stats;          /* Statistics */
 
+    /* Borrowed integrity key for keyed-class checksum algorithms. Lifetime
+     * is the caller's responsibility — see persistSetIntegrityKey in
+     * persist.h. NULL/0 when no key has been set.
+     *
+     * IMPORTANT: when persistAttachKeyring/persistRebindKeyring has been
+     * called, these raw fields are NOT used — every wrap/verify call
+     * resolves the live key via persistResolveAttachedKey (which
+     * checks the generation counter and returns NULL on rotation).
+     * They remain in use only when the caller went through the legacy
+     * persistSetIntegrityKey API directly. */
+    const uint8_t *integrityKey;
+    size_t integrityKeyLen;
+
+    /* Optional borrowed prepared-key handle (hmacKeyring or hand-crafted
+     * via hmacPrepareKey). When non-NULL AND the configured algorithm
+     * is HMAC-class, every verify call uses the prepared state directly,
+     * skipping the two K_ipad/K_opad block compressions per envelope.
+     * This is the hot-path acceleration for WAL replay / cluster apply
+     * mailbox. Ignored for BLAKE3_KEYED (no prepared form). Same note
+     * as integrityKey above: bypassed when an attached keyring binding
+     * is live. */
+    const struct hmacKey *integrityPreparedKey;
+
+    /* Attached keyring binding. When `attachedKeyring != NULL` the
+     * persist instance is in "attach mode" and resolves the integrity
+     * key on every operation via the keyring's generation API. See
+     * persistAttachKeyring and persistResolveAttachedKey. The
+     * cached generation is the value observed at attach time; any
+     * mismatch on resolve indicates the slot was rotated since attach
+     * and the operation MUST fail closed rather than use the (possibly
+     * freed) stale pointers. */
+    struct hmacKeyring *attachedKeyring; /* borrowed; never freed by us */
+    uint32_t attachedKeyId;
+    uint64_t attachedGeneration;
+
+    /* Sticky typed-error slot. Updated by failure paths inside
+     * persistResolveAttachedKey so callers can distinguish "key
+     * rotated" from other failure modes via persistLastError. Reset
+     * to PERSIST_ERR_NONE by successful operations on the attached
+     * keyring path. */
+    persistErr lastError;
+
+    /* When a snapshot/WAL verify fails with PERSIST_ERR_KEY_ID_MISMATCH
+     * this slot holds the key_id the on-disk header recorded. Cleared
+     * to zero on success and on errors that aren't KEY_ID_MISMATCH.
+     * Exposed via persistLastExpectedKeyId so the operator can decide
+     * which key to rotate the reader to. */
+    uint32_t lastExpectedKeyId;
+
     /* WAL state */
     uint64_t walSequence;  /* Next sequence number */
     uint8_t *walBuffer;    /* Write buffer */
@@ -175,6 +157,141 @@ struct persist {
     uint64_t lastSyncTime; /* Last sync timestamp (microseconds) */
     bool walInitialized;   /* Whether WAL header has been written */
 };
+
+/* ============================================================================
+ * Algorithm Mapping
+ * ============================================================================
+ * persistChecksum is the user-facing knob; flexEnvelopeAlgo is the on-wire
+ * identifier the envelope writes into its framing. These two enums share
+ * the same membership but are kept separate so persistChecksum can be
+ * documented and validated independently. */
+
+static flexEnvelopeAlgo persistChecksumToEnvelopeAlgo(persistChecksum t) {
+    switch (t) {
+    case PERSIST_CHECKSUM_NONE:
+        return FLEX_ENV_ALGO_NONE;
+    case PERSIST_CHECKSUM_XXH64:
+        return FLEX_ENV_ALGO_XXH64;
+    case PERSIST_CHECKSUM_XXH3_64:
+        return FLEX_ENV_ALGO_XXH3_64;
+    case PERSIST_CHECKSUM_XXH3_128:
+        return FLEX_ENV_ALGO_XXH3_128;
+    case PERSIST_CHECKSUM_BLAKE3_KEYED:
+        return FLEX_ENV_ALGO_BLAKE3_KEYED;
+    case PERSIST_CHECKSUM_HMAC_SHA256:
+        return FLEX_ENV_ALGO_HMAC_SHA256;
+    case PERSIST_CHECKSUM_HMAC_BLAKE3:
+        return FLEX_ENV_ALGO_HMAC_BLAKE3;
+    }
+    return FLEX_ENV_ALGO_NONE;
+}
+
+/* Compute the persist-header self-check digest (XXH64 over the header
+ * prefix). Used identically by writer and reader. */
+static uint64_t persistSnapHeaderDigest(const void *headerBytes) {
+    return (uint64_t)XXH64(headerBytes, PERSIST_SNAP_HEADER_PREFIX_LEN, 0);
+}
+
+static uint32_t persistWalHeaderDigest(const void *headerBytes) {
+    return (uint32_t)XXH32(headerBytes, PERSIST_WAL_HEADER_PREFIX_LEN, 0);
+}
+
+/* Build the envelope wrap params for a persist's current configuration.
+ * Returns true on success. Returns false if the configured algorithm is
+ * keyed-class but no integrity key has been set (would silently produce
+ * an unverifiable artifact otherwise), or if the attached-keyring
+ * binding (if any) has been invalidated by a rotation since attach —
+ * see persistResolveAttachedKey for the typed-error contract.
+ *
+ * Takes a non-const persist* because the attached-keyring path mutates
+ * the cached integrityKey pointers + lastError as part of resolve. */
+static bool persistResolveAttachedKey(persist *p);
+
+static bool persistBuildWrapParams(persist *p,
+                                   flexEnvelopeWrapParams *outParams,
+                                   flexEnvelopeAlgo *outAlgo) {
+    const flexEnvelopeAlgo algo =
+        persistChecksumToEnvelopeAlgo(p->config.checksumType);
+    /* When a keyring is attached, re-resolve every time so a Retire that
+     * happened between two snapshot calls is caught here rather than
+     * silently HMAC-ing with the freed (and zero-wiped) key bytes. The
+     * resolver sets p->lastError on failure so the caller can distinguish
+     * "key rotated" from other false returns. */
+    if (p->attachedKeyring != NULL) {
+        if (!persistResolveAttachedKey(p)) {
+            return false;
+        }
+    }
+    if (flexEnvelopeAlgoIsKeyed(algo) &&
+        (p->integrityKey == NULL || p->integrityKeyLen == 0)) {
+        p->lastError = PERSIST_ERR_NO_KEY_ATTACHED;
+        return false;
+    }
+    *outAlgo = algo;
+    *outParams = (flexEnvelopeWrapParams){
+        .key = p->integrityKey,
+        .key_len = p->integrityKeyLen,
+        .algo = algo,
+        .on_wire_flags = FLEX_ENV_FLAG_NONE,
+        .version = FLEX_ENVELOPE_VERSION_CURRENT,
+    };
+    return true;
+}
+
+/* Build verify params. Returns true on success, false if an attached-
+ * keyring binding has been invalidated. Like persistBuildWrapParams
+ * this takes non-const `persist *` because the resolver mutates cached
+ * pointers + lastError. */
+static bool persistBuildVerifyParams(persist *p,
+                                     flexEnvelopeVerifyParams *outParams) {
+    if (p->attachedKeyring != NULL) {
+        if (!persistResolveAttachedKey(p)) {
+            return false;
+        }
+    }
+    *outParams = (flexEnvelopeVerifyParams){
+        .max_payload_len = FLEX_ENVELOPE_DEFAULT_MAX_PAYLOAD,
+        .key = p->integrityKey,
+        .key_len = p->integrityKeyLen,
+        .prepared_key = p->integrityPreparedKey,
+        .opts = FLEX_ENV_VERIFY_DEFAULT,
+    };
+    return true;
+}
+
+/* Compare on-disk header key_id against the currently-attached keyring's
+ * key_id. Returns true if the verify can proceed (no mismatch); false
+ * if the reader is pointed at the wrong key. On false return, sets
+ * p->lastError = PERSIST_ERR_KEY_ID_MISMATCH and stashes the header's
+ * expected key_id into p->lastExpectedKeyId so the operator can read it
+ * back via persistLastExpectedKeyId.
+ *
+ * Semantics:
+ * - If no keyring is attached, accept any header (legacy direct-key
+ * callers still work; they get plain VERIFY_FAILED on key mismatch).
+ * - If the header's key_id is 0 (writer had no keyring attached when
+ * it wrote the file), accept — there is nothing to compare against,
+ * and the envelope's MAC still gates correctness.
+ * - Otherwise the two must match exactly. */
+static bool persistCheckHeaderKeyId(persist *p, uint32_t headerKeyId) {
+    if (p->attachedKeyring == NULL) {
+        return true;
+    }
+    if (headerKeyId == 0u) {
+        /* Writer had no keyring attached; treat as a "key_id-absent"
+         * header. The envelope MAC is still required to verify, so a
+         * cross-key paste-attack would still be caught — just later
+         * and as a generic VERIFY_FAILED instead of the typed early
+         * reject. */
+        return true;
+    }
+    if (headerKeyId != (uint32_t)p->attachedKeyId) {
+        p->lastError = PERSIST_ERR_KEY_ID_MISMATCH;
+        p->lastExpectedKeyId = headerKeyId;
+        return false;
+    }
+    return true;
+}
 
 /* ============================================================================
  * Time Utilities
@@ -194,10 +311,10 @@ persistConfig persistDefaultConfig(void) {
     return (persistConfig){
         .compression = PERSIST_COMPRESS_NONE,
         .compressionLevel = 0,
-        .checksumType = PERSIST_CHECKSUM_XXHASH32,
+        .checksumType = PERSIST_CHECKSUM_XXH64,
         .syncMode = PERSIST_SYNC_EVERYSEC,
-        .walMaxSize = 64 * 1024 * 1024, /* 64 MB */
-        .walBufferSize = 64 * 1024,     /* 64 KB */
+        .walMaxSize = (size_t)64 * 1024 * 1024, /* 64 MB */
+        .walBufferSize = (size_t)64 * 1024,     /* 64 KB */
         .autoCompact = true,
         .compactRatio = 2.0,
         .strictRecovery = false,
@@ -220,6 +337,16 @@ persist *persistCreate(const persistOps *ops, const persistConfig *config) {
     p->snapshotStore = NULL;
     p->walStore = NULL;
     memset(&p->stats, 0, sizeof(p->stats));
+
+    p->integrityKey = NULL;
+    p->integrityKeyLen = 0;
+    p->integrityPreparedKey = NULL;
+
+    p->attachedKeyring = NULL;
+    p->attachedKeyId = 0u;
+    p->attachedGeneration = 0u;
+    p->lastError = PERSIST_ERR_NONE;
+    p->lastExpectedKeyId = 0u;
 
     p->walSequence = 1;
     p->walBuffer = NULL;
@@ -249,6 +376,151 @@ bool persistAttachWAL(persist *p, persistStore *store) {
     }
     p->walStore = store;
     return true;
+}
+
+bool persistSetIntegrityKey(persist *p, const uint8_t *key, size_t key_len) {
+    if (!p) {
+        return false;
+    }
+    /* Direct-key API: detach from any attached keyring binding so the
+     * resolver doesn't override the caller's explicit choice. */
+    p->attachedKeyring = NULL;
+    p->attachedKeyId = 0u;
+    p->attachedGeneration = 0u;
+    if (key == NULL || key_len == 0) {
+        p->integrityKey = NULL;
+        p->integrityKeyLen = 0;
+        return true;
+    }
+    p->integrityKey = key;
+    p->integrityKeyLen = key_len;
+    return true;
+}
+
+bool persistSetIntegrityPreparedKey(persist *p, const struct hmacKey *prep) {
+    if (!p) {
+        return false;
+    }
+    p->integrityPreparedKey = prep;
+    return true;
+}
+
+/* Internal: refresh `p`'s cached raw + prepared key from the currently
+ * attached keyring slot. Validates that the slot's generation matches
+ * the value captured at attach/rebind time; mismatch sets lastError to
+ * PERSIST_ERR_KEY_GENERATION_MISMATCH and returns false WITHOUT
+ * touching p->integrityKey/integrityPreparedKey (the caller treats this
+ * as fail-closed and refuses the operation rather than silently using
+ * stale or freed pointers).
+ *
+ * On success returns true and refreshes integrityKey/integrityKeyLen/
+ * integrityPreparedKey to point into the live keyring slot. These
+ * pointers are valid for the duration of the immediate operation but
+ * the caller MUST re-resolve before each subsequent operation — the
+ * keyring's rwlock is released between calls and another writer could
+ * retire the slot in the meantime. In practice persistBuildWrapParams
+ * and persistBuildVerifyParams call this exactly once per snapshot /
+ * WAL append / verify; the resolved pointers feed straight into the
+ * envelope call and are not reused. */
+static bool persistResolveAttachedKey(persist *p) {
+    if (p == NULL || p->attachedKeyring == NULL) {
+        return false;
+    }
+    uint64_t current = 0u;
+    if (!hmacKeyringGetGeneration(p->attachedKeyring, p->attachedKeyId,
+                                  &current)) {
+        /* The id is gone entirely — retired and the slot is free. */
+        p->lastError = PERSIST_ERR_KEY_NOT_FOUND;
+        return false;
+    }
+    if (current != p->attachedGeneration) {
+        /* Slot has been mutated since attach — retire-then-reinstall,
+         * salt rotation, etc. Refuse to use whatever bytes are there
+         * now: the caller asked us to hold a specific (id, generation)
+         * pair and that contract is broken. */
+        p->lastError = PERSIST_ERR_KEY_GENERATION_MISMATCH;
+        return false;
+    }
+    /* Generation matches — resolve the live bytes + prepared handle. */
+    const uint8_t *bytes = NULL;
+    size_t blen = 0;
+    if (!hmacKeyringGetRaw(p->attachedKeyring, p->attachedKeyId, &bytes, &blen,
+                           NULL)) {
+        /* Should not happen given the generation matched, but treat as
+         * the same fail-closed case. */
+        p->lastError = PERSIST_ERR_KEY_NOT_FOUND;
+        return false;
+    }
+    p->integrityKey = bytes;
+    p->integrityKeyLen = blen;
+    p->integrityPreparedKey =
+        hmacKeyringLookup(p->attachedKeyring, p->attachedKeyId);
+    p->lastError = PERSIST_ERR_NONE;
+    p->lastExpectedKeyId = 0u;
+    return true;
+}
+
+/* Shared body for Attach + Rebind — same machinery, different names so
+ * the call site documents intent (first attach vs. post-rotation
+ * rebind). */
+static bool persistBindKeyringInternal(persist *p, hmacKeyring *ring,
+                                       hmacKeyId key_id) {
+    if (!p || !ring) {
+        return false;
+    }
+    /* Capture the generation BEFORE resolving the bytes — any mutation
+     * that happens between GetGeneration and GetRaw would be observed
+     * by a later persistResolveAttachedKey call (the cached gen would
+     * mismatch the next gen read). */
+    uint64_t gen = 0u;
+    if (!hmacKeyringGetGeneration(ring, key_id, &gen)) {
+        /* Don't clobber an existing attachment when the call fails;
+         * matches the documented "missing id leaves binding intact"
+         * semantic the existing test relies on. */
+        return false;
+    }
+    /* Resolve once now to make sure the id is genuinely live AND the
+     * algo has a prepared key shape we can use. Refusing here keeps
+     * the binding from going into a half-attached state where
+     * persistResolveAttachedKey would later succeed but with NULL key
+     * bytes (which the envelope would reject anyway, but earlier-is-
+     * cheaper). */
+    const uint8_t *bytes = NULL;
+    size_t blen = 0;
+    if (!hmacKeyringGetRaw(ring, key_id, &bytes, &blen, NULL)) {
+        return false;
+    }
+    p->attachedKeyring = ring;
+    p->attachedKeyId = key_id;
+    p->attachedGeneration = gen;
+    p->integrityKey = bytes;
+    p->integrityKeyLen = blen;
+    p->integrityPreparedKey = hmacKeyringLookup(ring, key_id);
+    p->lastError = PERSIST_ERR_NONE;
+    p->lastExpectedKeyId = 0u;
+    return true;
+}
+
+bool persistAttachKeyring(persist *p, hmacKeyring *ring, hmacKeyId key_id) {
+    return persistBindKeyringInternal(p, ring, key_id);
+}
+
+bool persistRebindKeyring(persist *p, hmacKeyring *ring, hmacKeyId key_id) {
+    return persistBindKeyringInternal(p, ring, key_id);
+}
+
+persistErr persistLastError(const persist *p) {
+    if (p == NULL) {
+        return PERSIST_ERR_NONE;
+    }
+    return p->lastError;
+}
+
+uint32_t persistLastExpectedKeyId(const persist *p) {
+    if (p == NULL) {
+        return 0u;
+    }
+    return p->lastExpectedKeyId;
 }
 
 void persistSetConfig(persist *p, const persistConfig *config) {
@@ -314,110 +586,148 @@ void persistClose(persist *p) {
  * ============================================================================
  */
 
-/* Snapshot header format (32 bytes):
- *   0-3:   magic (4 bytes)
- *   4-5:   version (2 bytes)
- *   6-7:   flags (2 bytes)
- *   8-11:  structType (4 bytes)
- *   12-19: count (8 bytes)
- *   20-27: dataLen (8 bytes)
- *   28-35: headerChecksum (8 bytes)
- */
+/* Snapshot header layout (40 bytes, packed; see persist.h for prose).
+ *
+ * 0-3: magic (PERSIST_SNAP_MAGIC, "DKSP")
+ * 4-5: version (PERSIST_VERSION = 2)
+ * 6-7: flags (reserved, must be 0 — readers reject unknown bits)
+ * 8-11: structType (must match p->ops->type at restore)
+ * 12-19: count (element count reported by p->ops->count)
+ * 20-27: envelopeLen (byte length of the body envelope that follows)
+ * 28-31: keyId (attached keyring key_id; 0 = none)
+ * 32-39: headerXxh64 (XXH64 over bytes 0..31 — see persistSnapHeaderDigest) */
 typedef struct __attribute__((packed)) persistSnapHeader {
     uint32_t magic;
     uint16_t version;
     uint16_t flags;
     uint32_t structType;
     uint64_t count;
-    uint64_t dataLen;
-    uint64_t headerChecksum;
+    uint64_t envelopeLen;
+    uint32_t keyId;
+    uint64_t headerXxh64;
 } persistSnapHeader;
 
 DK_SIZECHECK(persistSnapHeader, PERSIST_SNAP_HEADER_SIZE);
-
-/* Flags bit definitions */
-#define PERSIST_FLAG_HAS_CHECKSUM (1 << 1)
 
 bool persistSnapshot(persist *p, const void *structure) {
     if (!p || !structure || !p->snapshotStore || !p->ops->snapshot) {
         return false;
     }
 
-    uint64_t startTime = persistGetMicroseconds();
-
-    /* Serialize the structure */
-    size_t dataLen = 0;
-    uint8_t *data = p->ops->snapshot(structure, &dataLen);
-    if (!data) {
+    flexEnvelopeWrapParams wrap;
+    flexEnvelopeAlgo algo;
+    if (!persistBuildWrapParams(p, &wrap, &algo)) {
         return false;
     }
 
-    /* Build header */
+    const uint64_t startTime = persistGetMicroseconds();
+
+    size_t payloadLen = 0;
+    uint8_t *payload = p->ops->snapshot(structure, &payloadLen);
+    if (!payload) {
+        return false;
+    }
+
+    const size_t envelopeLen =
+        flexEnvelopeWrappedSize((uint64_t)payloadLen, algo, wrap.on_wire_flags);
+    if (envelopeLen == 0) {
+        zfree(payload);
+        return false;
+    }
+
+    uint8_t *envelope = zmalloc(envelopeLen);
+    size_t envelopeWritten = 0;
+    if (!flexEnvelopeWrap(envelope, envelopeLen, payload, (uint64_t)payloadLen,
+                          &wrap, &envelopeWritten) ||
+        envelopeWritten != envelopeLen) {
+        zfree(envelope);
+        zfree(payload);
+        return false;
+    }
+    zfree(payload);
+
     persistSnapHeader header = {
         .magic = PERSIST_SNAP_MAGIC,
         .version = PERSIST_VERSION,
-        .flags =
-            PERSIST_FLAG_HAS_CHECKSUM | ((p->config.checksumType & 0x3) << 2),
-        .structType = p->ops->type,
-        .count = p->ops->count ? p->ops->count(structure) : 0,
-        .dataLen = dataLen,
-        .headerChecksum = 0,
+        .flags = (uint16_t)0,
+        .structType = (uint32_t)p->ops->type,
+        .count =
+            p->ops->count ? (uint64_t)p->ops->count(structure) : (uint64_t)0,
+        .envelopeLen = (uint64_t)envelopeLen,
+        /* If a keyring is attached we stamp its key_id; otherwise 0. A
+         * verifier with a keyring attached compares this to the keyring's
+         * key_id and rejects with PERSIST_ERR_KEY_ID_MISMATCH on a
+         * mismatch (operator pointed reader at the wrong key). */
+        .keyId = (p->attachedKeyring != NULL) ? (uint32_t)p->attachedKeyId
+                                              : (uint32_t)0u,
+        .headerXxh64 = 0,
     };
+    header.headerXxh64 = persistSnapHeaderDigest(&header);
 
-    /* Compute header checksum (excluding the checksum field itself) */
-    header.headerChecksum = persistChecksum64(&header, 28);
-
-    /* Seek to beginning */
     persistStore *store = p->snapshotStore;
     if (store->seek(store->ctx, 0, SEEK_SET) < 0) {
-        zfree(data);
+        zfree(envelope);
         return false;
     }
 
-    /* Write header */
-    if (store->write(store->ctx, &header, sizeof(header)) != sizeof(header)) {
-        zfree(data);
+    if (store->write(store->ctx, &header, sizeof(header)) !=
+        (ssize_t)sizeof(header)) {
+        zfree(envelope);
         return false;
     }
 
-    /* Write body */
-    if (store->write(store->ctx, data, dataLen) != (ssize_t)dataLen) {
-        zfree(data);
+    if (store->write(store->ctx, envelope, envelopeLen) !=
+        (ssize_t)envelopeLen) {
+        zfree(envelope);
         return false;
     }
+    zfree(envelope);
 
-    /* Compute and write body checksum using configured type */
-    persistChecksumValue bodyChecksum;
-    persistChecksumCompute(p->config.checksumType, data, dataLen,
-                           &bodyChecksum);
-
-    /* Write checksum bytes (variable length based on type) */
-    if (bodyChecksum.len > 0) {
-        if (store->write(store->ctx, bodyChecksum.value.bytes,
-                         bodyChecksum.len) != (ssize_t)bodyChecksum.len) {
-            zfree(data);
-            return false;
-        }
-    }
-
-    /* Truncate any trailing data from previous snapshot */
     if (store->truncate) {
         store->truncate(store->ctx);
     }
-
-    /* Sync to disk */
     if (store->sync) {
         store->sync(store->ctx);
     }
 
-    zfree(data);
-
-    /* Update stats */
     p->stats.snapshotCount++;
-    p->stats.snapshotBytes += sizeof(header) + dataLen + bodyChecksum.len;
+    p->stats.snapshotBytes += sizeof(header) + envelopeLen;
     p->stats.lastSnapshotTime = startTime;
     p->stats.lastSnapshotDuration = persistGetMicroseconds() - startTime;
 
+    return true;
+}
+
+/* Read and verify a snapshot header from `store`. On success, *out is
+ * populated. Returns true iff the magic, version, and self-check digest
+ * all pass and structType matches `expectedType`. */
+static bool persistSnapHeaderReadVerify(persistStore *store,
+                                        persistType expectedType,
+                                        persistSnapHeader *out) {
+    persistSnapHeader header;
+    if (store->read(store->ctx, &header, sizeof(header)) !=
+        (ssize_t)sizeof(header)) {
+        return false;
+    }
+    if (header.magic != PERSIST_SNAP_MAGIC) {
+        return false;
+    }
+    if (header.version != PERSIST_VERSION) {
+        return false;
+    }
+    if (header.flags != 0) {
+        return false;
+    }
+    const uint64_t savedDigest = header.headerXxh64;
+    header.headerXxh64 = 0;
+    if (persistSnapHeaderDigest(&header) != savedDigest) {
+        return false;
+    }
+    header.headerXxh64 = savedDigest;
+    if (header.structType != (uint32_t)expectedType) {
+        return false;
+    }
+    *out = header;
     return true;
 }
 
@@ -427,83 +737,52 @@ void *persistRestore(persist *p) {
     }
 
     persistStore *store = p->snapshotStore;
-
-    /* Seek to beginning */
     if (store->seek(store->ctx, 0, SEEK_SET) < 0) {
         return NULL;
     }
 
-    /* Read header */
     persistSnapHeader header;
-    if (store->read(store->ctx, &header, sizeof(header)) != sizeof(header)) {
+    if (!persistSnapHeaderReadVerify(store, p->ops->type, &header)) {
+        return NULL;
+    }
+    /* Cross-key safety: identical contract to persistVerifySnapshot. */
+    if (!persistCheckHeaderKeyId(p, header.keyId)) {
+        return NULL;
+    }
+    if (header.envelopeLen == 0 ||
+        header.envelopeLen >
+            FLEX_ENVELOPE_DEFAULT_MAX_PAYLOAD + (uint64_t)(64 * 1024)) {
         return NULL;
     }
 
-    /* Verify magic */
-    if (header.magic != PERSIST_SNAP_MAGIC) {
+    uint8_t *envelope = zmalloc((size_t)header.envelopeLen);
+    if (store->read(store->ctx, envelope, (size_t)header.envelopeLen) !=
+        (ssize_t)header.envelopeLen) {
+        zfree(envelope);
         return NULL;
     }
 
-    /* Verify version */
-    if (header.version > PERSIST_VERSION) {
+    flexEnvelopeVerifyParams verify;
+    if (!persistBuildVerifyParams(p, &verify)) {
+        zfree(envelope);
         return NULL;
     }
 
-    /* Verify header checksum */
-    uint64_t savedChecksum = header.headerChecksum;
-    header.headerChecksum = 0;
-    uint64_t computedChecksum = persistChecksum64(&header, 28);
-    if (savedChecksum != computedChecksum) {
-        return NULL;
-    }
-    header.headerChecksum = savedChecksum;
-
-    /* Verify structure type matches */
-    if (header.structType != p->ops->type) {
+    const uint8_t *payload = NULL;
+    uint64_t payloadLen = 0;
+    if (!flexEnvelopeVerify(envelope, (size_t)header.envelopeLen, &verify,
+                            &payload, &payloadLen)) {
+        zfree(envelope);
         return NULL;
     }
 
-    /* Read body */
-    uint8_t *data = zmalloc(header.dataLen);
-    if (store->read(store->ctx, data, header.dataLen) !=
-        (ssize_t)header.dataLen) {
-        zfree(data);
-        return NULL;
-    }
+    /* The envelope's payload sits at an arbitrary offset inside the malloc'd
+     * envelope buffer (after the varint framing). ops->restore
+     * implementations must read multi-byte fields with memcpy rather than
+     * casting the pointer — they do not get an aligned buffer. */
+    void *structure = p->ops->restore(payload, (size_t)payloadLen);
+    zfree(envelope);
 
-    /* Verify body checksum if present */
-    if (header.flags & PERSIST_FLAG_HAS_CHECKSUM) {
-        /* Extract checksum type from flags (bits 2-3) */
-        persistChecksum checksumType = (header.flags >> 2) & 0x3;
-
-        /* Compute expected checksum */
-        persistChecksumValue expectedChecksum;
-        persistChecksumCompute(checksumType, data, header.dataLen,
-                               &expectedChecksum);
-
-        /* Read stored checksum bytes */
-        uint8_t storedBytes[PERSIST_CHECKSUM_MAX_SIZE];
-        if (expectedChecksum.len > 0) {
-            if (store->read(store->ctx, storedBytes, expectedChecksum.len) !=
-                (ssize_t)expectedChecksum.len) {
-                zfree(data);
-                return NULL;
-            }
-
-            /* Verify checksum matches */
-            if (memcmp(storedBytes, expectedChecksum.value.bytes,
-                       expectedChecksum.len) != 0) {
-                zfree(data);
-                return NULL;
-            }
-        }
-    }
-
-    /* Restore structure */
-    void *structure = p->ops->restore(data, header.dataLen);
-    zfree(data);
-
-    /* Validate if validator is available */
     if (structure && p->ops->validate && !p->ops->validate(structure)) {
         if (p->ops->free) {
             p->ops->free(structure);
@@ -519,26 +798,96 @@ void *persistRestore(persist *p) {
  * ============================================================================
  */
 
-/* WAL header format (24 bytes):
- *   0-3:   magic (4 bytes)
- *   4-5:   version (2 bytes)
- *   6-7:   flags (2 bytes)
- *   8-11:  structType (4 bytes)
- *   12-19: startSequence (8 bytes)
- *   20-23: headerChecksum (4 bytes)
- */
+/* WAL header layout (28 bytes, packed):
+ *
+ * 0-3: magic (PERSIST_WAL_MAGIC, "DKWL")
+ * 4-5: version (PERSIST_VERSION = 2)
+ * 6-7: flags (reserved, must be 0)
+ * 8-11: structType (must match snapshot's structType)
+ * 12-19: startSequence (sequence number of the first entry in this file)
+ * 20-23: keyId (attached keyring key_id; 0 = none)
+ * 24-27: headerXxh32 (XXH32 over bytes 0..23 — fast bootstrap check) */
 typedef struct __attribute__((packed)) persistWALHeader {
     uint32_t magic;
     uint16_t version;
     uint16_t flags;
     uint32_t structType;
     uint64_t startSequence;
-    uint32_t headerChecksum;
+    uint32_t keyId;
+    uint32_t headerXxh32;
 } persistWALHeader;
 
 DK_SIZECHECK(persistWALHeader, PERSIST_WAL_HEADER_SIZE);
 
-/* Initialize WAL file with header */
+/* Write a fresh WAL header at offset 0. Caller owns seeking afterward. */
+static bool persistWALWriteHeader(persist *p) {
+    persistStore *store = p->walStore;
+    persistWALHeader header = {
+        .magic = PERSIST_WAL_MAGIC,
+        .version = PERSIST_VERSION,
+        .flags = (uint16_t)0,
+        .structType = (uint32_t)p->ops->type,
+        .startSequence = p->walSequence,
+        .keyId = (p->attachedKeyring != NULL) ? (uint32_t)p->attachedKeyId
+                                              : (uint32_t)0u,
+        .headerXxh32 = 0,
+    };
+    header.headerXxh32 = persistWalHeaderDigest(&header);
+    if (store->seek(store->ctx, 0, SEEK_SET) < 0) {
+        return false;
+    }
+    if (store->write(store->ctx, &header, sizeof(header)) !=
+        (ssize_t)sizeof(header)) {
+        return false;
+    }
+    if (store->sync) {
+        store->sync(store->ctx);
+    }
+    return true;
+}
+
+/* Read+verify the WAL header that already exists in `store`. Returns
+ * true and leaves the file pointer positioned just after the header iff
+ * everything checks out (magic, version, flags, structType, digest).
+ * Caller-supplied `expectedType` is what the persist ops define.
+ * If `outHeader` is non-NULL, the parsed header (with digest restored)
+ * is written there on success. */
+static bool persistWALReadVerifyHeader(persistStore *store,
+                                       persistType expectedType,
+                                       persistWALHeader *outHeader) {
+    persistWALHeader header;
+    if (store->seek(store->ctx, 0, SEEK_SET) < 0) {
+        return false;
+    }
+    if (store->read(store->ctx, &header, sizeof(header)) !=
+        (ssize_t)sizeof(header)) {
+        return false;
+    }
+    if (header.magic != PERSIST_WAL_MAGIC) {
+        return false;
+    }
+    if (header.version != PERSIST_VERSION) {
+        return false;
+    }
+    if (header.flags != 0) {
+        return false;
+    }
+    if (header.structType != (uint32_t)expectedType) {
+        return false;
+    }
+    const uint32_t savedDigest = header.headerXxh32;
+    header.headerXxh32 = 0;
+    if (persistWalHeaderDigest(&header) != savedDigest) {
+        return false;
+    }
+    header.headerXxh32 = savedDigest;
+    if (outHeader != NULL) {
+        *outHeader = header;
+    }
+    return true;
+}
+
+/* Initialize WAL file with header — appending if one already exists. */
 static bool persistWALInit(persist *p) {
     if (!p->walStore) {
         return false;
@@ -546,45 +895,13 @@ static bool persistWALInit(persist *p) {
 
     persistStore *store = p->walStore;
 
-    /* Seek to beginning */
-    if (store->seek(store->ctx, 0, SEEK_SET) < 0) {
-        return false;
+    /* If a valid header already exists, just seek to end for appending. */
+    if (persistWALReadVerifyHeader(store, p->ops->type, NULL)) {
+        store->seek(store->ctx, 0, SEEK_END);
+        return true;
     }
 
-    /* Check if WAL already has a valid header */
-    persistWALHeader header;
-    if (store->read(store->ctx, &header, sizeof(header)) == sizeof(header)) {
-        if (header.magic == PERSIST_WAL_MAGIC) {
-            /* WAL exists, seek to end for appending */
-            store->seek(store->ctx, 0, SEEK_END);
-            return true;
-        }
-    }
-
-    /* Write new header */
-    header = (persistWALHeader){
-        .magic = PERSIST_WAL_MAGIC,
-        .version = PERSIST_VERSION,
-        .flags = 0,
-        .structType = p->ops->type,
-        .startSequence = p->walSequence,
-        .headerChecksum = 0,
-    };
-    header.headerChecksum = persistChecksum32(&header, 20);
-
-    if (store->seek(store->ctx, 0, SEEK_SET) < 0) {
-        return false;
-    }
-
-    if (store->write(store->ctx, &header, sizeof(header)) != sizeof(header)) {
-        return false;
-    }
-
-    if (store->sync) {
-        store->sync(store->ctx);
-    }
-
-    return true;
+    return persistWALWriteHeader(p);
 }
 
 /* Flush WAL buffer to storage */
@@ -642,12 +959,28 @@ static bool persistWALWrite(persist *p, const void *data, size_t len) {
     return true;
 }
 
+/* Each WAL entry on disk is:
+ *
+ * envelopeLen (4 bytes, little-endian uint32)
+ * envelope (envelopeLen bytes, flexEnvelopeWrap output)
+ *
+ * The envelope's payload is the 9-byte preamble (seq||op) concatenated
+ * with the persistOps.encodeOp body. The envelope carries its own magic,
+ * length, algorithm id, and digest, so there is no separate trailing
+ * checksum. */
+#define PERSIST_WAL_ENTRY_PREAMBLE_LEN ((size_t)9) /* seq(8) + op(1) */
+
 bool persistLogOp(persist *p, persistOp op, const void *args, size_t argc) {
     if (!p || !p->walStore || !p->ops->encodeOp) {
         return false;
     }
 
-    /* Initialize WAL if needed */
+    flexEnvelopeWrapParams wrap;
+    flexEnvelopeAlgo algo;
+    if (!persistBuildWrapParams(p, &wrap, &algo)) {
+        return false;
+    }
+
     if (!p->walInitialized) {
         if (!persistWALInit(p)) {
             return false;
@@ -655,59 +988,50 @@ bool persistLogOp(persist *p, persistOp op, const void *args, size_t argc) {
         p->walInitialized = true;
     }
 
-    /* Encode the operation */
-    size_t dataLen = 0;
-    uint8_t *data = p->ops->encodeOp(op, args, argc, &dataLen);
-    if (!data && dataLen > 0) {
+    size_t opDataLen = 0;
+    uint8_t *opData = p->ops->encodeOp(op, args, argc, &opDataLen);
+    if (!opData && opDataLen > 0) {
         return false;
     }
 
-    /* WAL entry format:
-     *   length (4 bytes) - total entry length excluding this field
-     *   sequence (8 bytes)
-     *   op (1 byte)
-     *   data (variable)
-     *   checksum (4 bytes)
-     */
-    uint32_t entryLen = 8 + 1 + dataLen + 4; /* seq + op + data + checksum */
-
-    /* Build entry header */
-    uint8_t entryHeader[13]; /* length(4) + seq(8) + op(1) */
-    memcpy(entryHeader, &entryLen, 4);
-    memcpy(entryHeader + 4, &p->walSequence, 8);
-    entryHeader[12] = (uint8_t)op;
-
-    /* Compute checksum over seq + op + data */
-    XXH32_state_t *state = XXH32_createState();
-    XXH32_reset(state, 0);
-    XXH32_update(state, entryHeader + 4, 9);
-    if (data && dataLen > 0) {
-        XXH32_update(state, data, dataLen);
+    const size_t payloadLen = PERSIST_WAL_ENTRY_PREAMBLE_LEN + opDataLen;
+    uint8_t *payload = zmalloc(payloadLen);
+    memcpy(payload, &p->walSequence, sizeof(uint64_t));
+    payload[sizeof(uint64_t)] = (uint8_t)op;
+    if (opData && opDataLen > 0) {
+        memcpy(payload + PERSIST_WAL_ENTRY_PREAMBLE_LEN, opData, opDataLen);
     }
-    uint32_t checksum = XXH32_digest(state);
-    XXH32_freeState(state);
+    zfree(opData);
 
-    /* Write entry */
-    if (!persistWALWrite(p, entryHeader, sizeof(entryHeader))) {
-        zfree(data);
+    const size_t envelopeLen =
+        flexEnvelopeWrappedSize((uint64_t)payloadLen, algo, wrap.on_wire_flags);
+    if (envelopeLen == 0 || envelopeLen > (size_t)PERSIST_WAL_ENTRY_MAX_BYTES) {
+        zfree(payload);
         return false;
     }
 
-    if (data && dataLen > 0) {
-        if (!persistWALWrite(p, data, dataLen)) {
-            zfree(data);
-            return false;
-        }
-    }
-
-    if (!persistWALWrite(p, &checksum, sizeof(checksum))) {
-        zfree(data);
+    uint8_t *envelope = zmalloc(envelopeLen);
+    size_t envelopeWritten = 0;
+    if (!flexEnvelopeWrap(envelope, envelopeLen, payload, (uint64_t)payloadLen,
+                          &wrap, &envelopeWritten) ||
+        envelopeWritten != envelopeLen) {
+        zfree(envelope);
+        zfree(payload);
         return false;
     }
+    zfree(payload);
 
-    zfree(data);
+    const uint32_t envelopeLen32 = (uint32_t)envelopeLen;
+    if (!persistWALWrite(p, &envelopeLen32, sizeof(envelopeLen32))) {
+        zfree(envelope);
+        return false;
+    }
+    if (!persistWALWrite(p, envelope, envelopeLen)) {
+        zfree(envelope);
+        return false;
+    }
+    zfree(envelope);
 
-    /* Update state */
     p->walSequence++;
     p->stats.walEntries++;
 
@@ -750,74 +1074,112 @@ void persistSetReplayState(mflexState *state) {
     replayMflexState = state;
 }
 
+/* Read the next WAL entry envelope from the current position of `store`,
+ * unwrap it under `p`'s verify policy, and present the payload's split as
+ * (seq, op, opData, opDataLen).
+ *
+ * Return codes:
+ * 1 — entry successfully read and verified. *envelope is malloc'd
+ * and OWNED by the caller (must zfree). opData points into it.
+ * 0 — clean end-of-file. Nothing allocated.
+ * -1 — corrupt or truncated entry. Nothing allocated. In strict
+ * recovery the caller must abort; in lenient recovery the caller
+ * must NOT continue iterating because there is no length-prefix
+ * anchor to recover to — the file is treated as ending here. */
+static int persistWALReadOneEntry(persist *p, uint8_t **envelopeOut,
+                                  size_t *envelopeLenOut, uint64_t *seqOut,
+                                  persistOp *opOut, const uint8_t **opDataOut,
+                                  size_t *opDataLenOut) {
+    persistStore *store = p->walStore;
+    uint32_t envelopeLen32 = 0;
+
+    const ssize_t headerRead =
+        store->read(store->ctx, &envelopeLen32, sizeof(envelopeLen32));
+    if (headerRead == 0) {
+        return 0; /* EOF on clean boundary */
+    }
+    if (headerRead != (ssize_t)sizeof(envelopeLen32)) {
+        return -1;
+    }
+    if (envelopeLen32 == 0 || envelopeLen32 > PERSIST_WAL_ENTRY_MAX_BYTES) {
+        return -1;
+    }
+
+    const size_t envelopeLen = (size_t)envelopeLen32;
+    uint8_t *envelope = zmalloc(envelopeLen);
+    if (store->read(store->ctx, envelope, envelopeLen) !=
+        (ssize_t)envelopeLen) {
+        zfree(envelope);
+        return -1;
+    }
+
+    flexEnvelopeVerifyParams verify;
+    if (!persistBuildVerifyParams(p, &verify)) {
+        zfree(envelope);
+        return -1;
+    }
+
+    const uint8_t *payload = NULL;
+    uint64_t payloadLen = 0;
+    if (!flexEnvelopeVerify(envelope, envelopeLen, &verify, &payload,
+                            &payloadLen)) {
+        zfree(envelope);
+        return -1;
+    }
+    if (payloadLen < (uint64_t)PERSIST_WAL_ENTRY_PREAMBLE_LEN) {
+        zfree(envelope);
+        return -1;
+    }
+
+    memcpy(seqOut, payload, sizeof(uint64_t));
+    *opOut = (persistOp)payload[sizeof(uint64_t)];
+    *opDataOut = payload + PERSIST_WAL_ENTRY_PREAMBLE_LEN;
+    *opDataLenOut = (size_t)payloadLen - PERSIST_WAL_ENTRY_PREAMBLE_LEN;
+
+    *envelopeOut = envelope;
+    *envelopeLenOut = envelopeLen;
+    return 1;
+}
+
 bool persistReplayWAL(persist *p, void *structure) {
     if (!p || !structure || !p->walStore || !p->ops->applyOp) {
         return false;
     }
 
     persistStore *store = p->walStore;
-
-    /* Seek past header */
-    if (store->seek(store->ctx, PERSIST_WAL_HEADER_SIZE, SEEK_SET) < 0) {
+    persistWALHeader walHdr;
+    if (!persistWALReadVerifyHeader(store, p->ops->type, &walHdr)) {
+        return false;
+    }
+    /* Cross-key safety: same contract as snapshot verify. A WAL keyed
+     * under a different id than the currently-attached key would still
+     * have produced VERIFY_FAILED on the very first envelope, but the
+     * typed early reject lets the caller distinguish "operator pointed
+     * me at the wrong key" from generic envelope corruption. */
+    if (!persistCheckHeaderKeyId(p, walHdr.keyId)) {
         return false;
     }
 
-    /* Read and apply entries */
     while (1) {
-        /* Read entry length */
-        uint32_t entryLen;
-        ssize_t n = store->read(store->ctx, &entryLen, 4);
-        if (n == 0) {
-            break; /* End of WAL */
-        }
-        if (n != 4) {
-            if (p->config.strictRecovery) {
-                return false;
-            }
-            break; /* Truncated entry */
-        }
+        uint8_t *envelope = NULL;
+        size_t envelopeLen = 0;
+        uint64_t seq = 0;
+        persistOp op = PERSIST_OP_NOP;
+        const uint8_t *opData = NULL;
+        size_t opDataLen = 0;
 
-        /* Sanity check entry length */
-        if (entryLen < 13 || entryLen > 100 * 1024 * 1024) { /* Max 100MB */
-            if (p->config.strictRecovery) {
-                return false;
-            }
-            break;
+        const int rc = persistWALReadOneEntry(p, &envelope, &envelopeLen, &seq,
+                                              &op, &opData, &opDataLen);
+        if (rc == 0) {
+            return true;
         }
-
-        /* Read entry body */
-        uint8_t *entry = zmalloc(entryLen);
-        if (store->read(store->ctx, entry, entryLen) != (ssize_t)entryLen) {
-            zfree(entry);
-            if (p->config.strictRecovery) {
-                return false;
-            }
-            break;
-        }
-
-        /* Parse entry */
-        uint64_t seq;
-        memcpy(&seq, entry, 8);
-        persistOp op = entry[8];
-        size_t dataLen = entryLen - 13;
-        const uint8_t *data = entry + 9;
-        uint32_t storedChecksum;
-        memcpy(&storedChecksum, entry + entryLen - 4, 4);
-
-        /* Verify checksum */
-        uint32_t computedChecksum = persistChecksum32(entry, entryLen - 4);
-        if (storedChecksum != computedChecksum) {
-            zfree(entry);
+        if (rc < 0) {
             p->stats.entriesSkipped++;
-            if (p->config.strictRecovery) {
-                return false;
-            }
-            continue; /* Skip bad entry in lenient mode */
+            return p->config.strictRecovery ? false : true;
         }
 
-        /* Apply operation */
-        if (!p->ops->applyOp(structure, op, data, dataLen)) {
-            zfree(entry);
+        if (!p->ops->applyOp(structure, op, opData, opDataLen)) {
+            zfree(envelope);
             p->stats.entriesSkipped++;
             if (p->config.strictRecovery) {
                 return false;
@@ -825,16 +1187,12 @@ bool persistReplayWAL(persist *p, void *structure) {
             continue;
         }
 
-        /* Update sequence to be after this entry */
         if (seq >= p->walSequence) {
             p->walSequence = seq + 1;
         }
-
         p->stats.entriesRecovered++;
-        zfree(entry);
+        zfree(envelope);
     }
-
-    return true;
 }
 
 bool persistIterateWAL(persist *p, persistWALCallback cb, void *ctx) {
@@ -843,47 +1201,36 @@ bool persistIterateWAL(persist *p, persistWALCallback cb, void *ctx) {
     }
 
     persistStore *store = p->walStore;
-
-    /* Seek past header */
-    if (store->seek(store->ctx, PERSIST_WAL_HEADER_SIZE, SEEK_SET) < 0) {
+    if (!persistWALReadVerifyHeader(store, p->ops->type, NULL)) {
         return false;
     }
 
-    /* Read entries */
     while (1) {
-        uint32_t entryLen;
-        if (store->read(store->ctx, &entryLen, 4) != 4) {
-            break;
+        uint8_t *envelope = NULL;
+        size_t envelopeLen = 0;
+        uint64_t seq = 0;
+        persistOp op = PERSIST_OP_NOP;
+        const uint8_t *opData = NULL;
+        size_t opDataLen = 0;
+
+        const int rc = persistWALReadOneEntry(p, &envelope, &envelopeLen, &seq,
+                                              &op, &opData, &opDataLen);
+        if (rc <= 0) {
+            return rc == 0;
         }
 
-        if (entryLen < 13 || entryLen > 100 * 1024 * 1024) {
-            break;
-        }
-
-        uint8_t *entry = zmalloc(entryLen);
-        if (store->read(store->ctx, entry, entryLen) != (ssize_t)entryLen) {
-            zfree(entry);
-            break;
-        }
-
-        /* Parse and invoke callback */
         persistWALEntry walEntry = {
-            .sequence = 0,
-            .op = entry[8],
-            .data = entry + 9,
-            .len = entryLen - 13,
+            .sequence = seq,
+            .op = op,
+            .data = opData,
+            .len = opDataLen,
         };
-        memcpy(&walEntry.sequence, entry, 8);
-
-        bool cont = cb(&walEntry, ctx);
-        zfree(entry);
-
+        const bool cont = cb(&walEntry, ctx);
+        zfree(envelope);
         if (!cont) {
-            break;
+            return true;
         }
     }
-
-    return true;
 }
 
 /* ============================================================================
@@ -925,12 +1272,10 @@ bool persistCompact(persist *p, void *structure) {
         return false;
     }
 
-    /* Take new snapshot */
     if (!persistSnapshot(p, structure)) {
         return false;
     }
 
-    /* Truncate WAL */
     if (p->walStore) {
         persistStore *store = p->walStore;
         if (store->seek(store->ctx, 0, SEEK_SET) >= 0) {
@@ -938,31 +1283,14 @@ bool persistCompact(persist *p, void *structure) {
                 store->truncate(store->ctx);
             }
         }
-
-        /* Clear any buffered WAL entries - they're now in the snapshot */
         p->walBufferUsed = 0;
-
-        /* Reinitialize WAL with new header */
-        persistWALHeader header = {
-            .magic = PERSIST_WAL_MAGIC,
-            .version = PERSIST_VERSION,
-            .flags = 0,
-            .structType = p->ops->type,
-            .startSequence = p->walSequence,
-            .headerChecksum = 0,
-        };
-        header.headerChecksum = persistChecksum32(&header, 20);
-
-        store->seek(store->ctx, 0, SEEK_SET);
-        store->write(store->ctx, &header, sizeof(header));
-        if (store->sync) {
-            store->sync(store->ctx);
+        if (!persistWALWriteHeader(p)) {
+            return false;
         }
     }
 
     p->stats.compactionCount++;
     p->stats.lastCompactionTime = persistGetMicroseconds();
-
     return true;
 }
 
@@ -973,9 +1301,16 @@ void *persistRecover(persist *p) {
 
     p->stats.recoveryCount++;
 
-    /* Create mflexState for this recovery session if structure uses multilist
-     */
-    if (p->ops->type == PERSIST_TYPE_MULTILIST) {
+    /* Create mflexState for this recovery session if structure uses multilist.
+     * Per-tier multilist types (SMALL/MEDIUM/FULL) route through the same
+     * apply path (multilistPersistApplyOp via persistGetReplayState), so
+     * each tier requires the same thread-local mflexState during WAL replay.
+     * Missing any tier here would re-introduce a per-tier replay deref of
+     * NULL mflexState → segfault. */
+    if (p->ops->type == PERSIST_TYPE_MULTILIST ||
+        p->ops->type == PERSIST_TYPE_MULTILIST_SMALL ||
+        p->ops->type == PERSIST_TYPE_MULTILIST_MEDIUM ||
+        p->ops->type == PERSIST_TYPE_MULTILIST_FULL) {
         replayMflexState = mflexStateCreate();
         if (!replayMflexState) {
             return NULL;
@@ -1051,134 +1386,89 @@ bool persistSync(persist *p) {
  * ============================================================================
  */
 
-bool persistVerifySnapshot(persistStore *store) {
-    if (!store) {
+bool persistVerifySnapshot(persist *p) {
+    if (!p || !p->snapshotStore || !p->ops) {
         return false;
     }
 
-    /* Seek to beginning */
+    persistStore *store = p->snapshotStore;
     if (store->seek(store->ctx, 0, SEEK_SET) < 0) {
         return false;
     }
 
-    /* Read and verify header */
     persistSnapHeader header;
-    if (store->read(store->ctx, &header, sizeof(header)) != sizeof(header)) {
+    if (!persistSnapHeaderReadVerify(store, p->ops->type, &header)) {
+        return false;
+    }
+    /* Cross-key safety: when a keyring is attached, reject early if the
+     * header's recorded key_id doesn't match. This turns the opaque
+     * VERIFY_FAILED an operator would otherwise get (HMAC mismatch on
+     * the body) into the typed PERSIST_ERR_KEY_ID_MISMATCH so the
+     * operator can recover via persistLastExpectedKeyId and
+     * persistRebindKeyring. */
+    if (!persistCheckHeaderKeyId(p, header.keyId)) {
+        return false;
+    }
+    if (header.envelopeLen == 0 ||
+        header.envelopeLen >
+            FLEX_ENVELOPE_DEFAULT_MAX_PAYLOAD + (uint64_t)(64 * 1024)) {
         return false;
     }
 
-    if (header.magic != PERSIST_SNAP_MAGIC) {
+    uint8_t *envelope = zmalloc((size_t)header.envelopeLen);
+    if (store->read(store->ctx, envelope, (size_t)header.envelopeLen) !=
+        (ssize_t)header.envelopeLen) {
+        zfree(envelope);
         return false;
     }
 
-    if (header.version > PERSIST_VERSION) {
+    flexEnvelopeVerifyParams verify;
+    if (!persistBuildVerifyParams(p, &verify)) {
+        zfree(envelope);
         return false;
     }
 
-    uint64_t savedChecksum = header.headerChecksum;
-    header.headerChecksum = 0;
-    if (persistChecksum64(&header, 28) != savedChecksum) {
-        return false;
-    }
-
-    /* Read body and verify checksum */
-    if (header.flags & PERSIST_FLAG_HAS_CHECKSUM) {
-        uint8_t *data = zmalloc(header.dataLen);
-        if (store->read(store->ctx, data, header.dataLen) !=
-            (ssize_t)header.dataLen) {
-            zfree(data);
-            return false;
-        }
-
-        /* Extract checksum type from flags (bits 2-3) */
-        persistChecksum checksumType = (header.flags >> 2) & 0x3;
-
-        /* Compute expected checksum */
-        persistChecksumValue expectedChecksum;
-        persistChecksumCompute(checksumType, data, header.dataLen,
-                               &expectedChecksum);
-
-        /* Read stored checksum bytes */
-        uint8_t storedBytes[PERSIST_CHECKSUM_MAX_SIZE];
-        if (expectedChecksum.len > 0) {
-            if (store->read(store->ctx, storedBytes, expectedChecksum.len) !=
-                (ssize_t)expectedChecksum.len) {
-                zfree(data);
-                return false;
-            }
-
-            /* Verify checksum matches */
-            if (memcmp(storedBytes, expectedChecksum.value.bytes,
-                       expectedChecksum.len) != 0) {
-                zfree(data);
-                return false;
-            }
-        }
-
-        zfree(data);
-    }
-
-    return true;
+    const uint8_t *payload = NULL;
+    uint64_t payloadLen = 0;
+    const bool ok = flexEnvelopeVerify(envelope, (size_t)header.envelopeLen,
+                                       &verify, &payload, &payloadLen);
+    zfree(envelope);
+    return ok;
 }
 
-bool persistVerifyWAL(persistStore *store) {
-    if (!store) {
+bool persistVerifyWAL(persist *p) {
+    if (!p || !p->walStore || !p->ops) {
         return false;
     }
 
-    /* Seek to beginning */
-    if (store->seek(store->ctx, 0, SEEK_SET) < 0) {
+    persistStore *store = p->walStore;
+    persistWALHeader walHdr;
+    if (!persistWALReadVerifyHeader(store, p->ops->type, &walHdr)) {
+        return false;
+    }
+    /* Cross-key safety: same contract as persistVerifySnapshot. */
+    if (!persistCheckHeaderKeyId(p, walHdr.keyId)) {
         return false;
     }
 
-    /* Read and verify header */
-    persistWALHeader header;
-    if (store->read(store->ctx, &header, sizeof(header)) != sizeof(header)) {
-        return false;
-    }
-
-    if (header.magic != PERSIST_WAL_MAGIC) {
-        return false;
-    }
-
-    if (header.version > PERSIST_VERSION) {
-        return false;
-    }
-
-    uint32_t savedChecksum = header.headerChecksum;
-    header.headerChecksum = 0;
-    if (persistChecksum32(&header, 20) != savedChecksum) {
-        return false;
-    }
-
-    /* Verify all entries */
     while (1) {
-        uint32_t entryLen;
-        if (store->read(store->ctx, &entryLen, 4) != 4) {
-            break; /* End of file */
-        }
+        uint8_t *envelope = NULL;
+        size_t envelopeLen = 0;
+        uint64_t seq = 0;
+        persistOp op = PERSIST_OP_NOP;
+        const uint8_t *opData = NULL;
+        size_t opDataLen = 0;
 
-        if (entryLen < 13 || entryLen > 100 * 1024 * 1024) {
+        const int rc = persistWALReadOneEntry(p, &envelope, &envelopeLen, &seq,
+                                              &op, &opData, &opDataLen);
+        if (rc == 0) {
+            return true;
+        }
+        if (rc < 0) {
             return false;
         }
-
-        uint8_t *entry = zmalloc(entryLen);
-        if (store->read(store->ctx, entry, entryLen) != (ssize_t)entryLen) {
-            zfree(entry);
-            return false; /* Truncated entry */
-        }
-
-        uint32_t storedChecksum;
-        memcpy(&storedChecksum, entry + entryLen - 4, 4);
-        uint32_t computed = persistChecksum32(entry, entryLen - 4);
-        zfree(entry);
-
-        if (computed != storedChecksum) {
-            return false;
-        }
+        zfree(envelope);
     }
-
-    return true;
 }
 
 /* ============================================================================
@@ -1192,6 +1482,8 @@ const char *persistTypeName(persistType type) {
         return "flex";
     case PERSIST_TYPE_INTSET:
         return "intset";
+    case PERSIST_TYPE_INTSETBIG:
+        return "intsetBig";
     case PERSIST_TYPE_MULTILIST:
         return "multilist";
     case PERSIST_TYPE_MULTILIST_SMALL:
@@ -1212,6 +1504,12 @@ const char *persistTypeName(persistType type) {
         return "multidict";
     case PERSIST_TYPE_MULTIARRAY:
         return "multiarray";
+    case PERSIST_TYPE_MULTIARRAY_SMALL:
+        return "multiarraySmall";
+    case PERSIST_TYPE_MULTIARRAY_MEDIUM:
+        return "multiarrayMedium";
+    case PERSIST_TYPE_MULTIARRAY_LARGE:
+        return "multiarrayLarge";
     case PERSIST_TYPE_MULTIORDEREDSET:
         return "multiOrderedSet";
     case PERSIST_TYPE_MULTILRU:
@@ -1222,6 +1520,14 @@ const char *persistTypeName(persistType type) {
         return "linearBloom";
     case PERSIST_TYPE_HYPERLOGLOG:
         return "hyperloglog";
+    case PERSIST_TYPE_HMAC_KEYRING:
+        return "hmacKeyring";
+    case PERSIST_TYPE_CLUSTER_MAILBOX_WATERMARKS:
+        return "clusterMailboxWatermarks";
+    case PERSIST_TYPE_CLUSTER_RING:
+        return "clusterRing";
+    case PERSIST_TYPE_AEAD_NONCE_LOG:
+        return "aeadNonceLog";
     default:
         return "unknown";
     }
@@ -1659,7 +1965,7 @@ static void *intsetPersistRestore(const uint8_t *data, size_t len) {
     memcpy(&count, data, sizeof(uint64_t));
 
     /* Refuse counts when could overflow size_t when
-     * multiplied by sizeof(int64_t).  Without this, a hostile or
+     * multiplied by sizeof(int64_t). Without this, a hostile or
      * corrupted input could pass len-check via integer wrap then
      * cause out-of-bounds reads inside the values loop. */
     if (count > (SIZE_MAX - sizeof(uint64_t)) / sizeof(int64_t)) {
@@ -1672,13 +1978,18 @@ static void *intsetPersistRestore(const uint8_t *data, size_t len) {
         return NULL;
     }
 
-    /* Create new intset and add all values */
+    /* Create new intset and add all values. Use memcpy rather than a
+     * pointer cast — the payload buffer may sit at an arbitrary offset
+     * inside the envelope wrapper, so an int64_t-aligned address is not
+     * guaranteed. On aarch64 / x86_64 the compiler folds this into a
+     * single load instruction; there is no runtime overhead. */
     intset *is = intsetNew();
-    const int64_t *values = (const int64_t *)(data + sizeof(uint64_t));
-
+    const uint8_t *valueBytes = data + sizeof(uint64_t);
     for (uint64_t i = 0; i < count; i++) {
+        int64_t value;
+        memcpy(&value, valueBytes + i * sizeof(int64_t), sizeof(int64_t));
         bool success;
-        intsetAdd(&is, values[i], &success);
+        intsetAdd(&is, value, &success);
     }
 
     return is;
@@ -1779,13 +2090,13 @@ const persistOps persistOpsIntset = {
  * ============================================================================
  *
  * On-disk / wire format:
- *   [count: u64 LE]
- *   N entries of [type: u8][payload: 8 bytes for i64/u64, 16 for i128/u128]
- *   type values:
- *     1 = SIGNED_64
- *     2 = UNSIGNED_64
- *     3 = SIGNED_128
- *     4 = UNSIGNED_128
+ * [count: u64 LE]
+ * N entries of [type: u8][payload: 8 bytes for i64/u64, 16 for i128/u128]
+ * type values:
+ * 1 = SIGNED_64
+ * 2 = UNSIGNED_64
+ * 3 = SIGNED_128
+ * 4 = UNSIGNED_128
  *
  * intsetBig stores numeric values directly with no atom-table
  * indirection — single byte content represents the same value on every
@@ -2253,7 +2564,7 @@ const persistOps persistOpsMultiroar = {
  *
  * The HLL is stored internally as an mdsc-prefixed byte buffer
  * (hyperloglog* and mdsc* are layout-compatible — toHLL/toMDSC inside
- * hyperloglog.c are file-static identity casts).  Snapshots are the
+ * hyperloglog.c are file-static identity casts). Snapshots are the
  * raw bytes; restore mdscnewlen's a fresh copy; PFADD deltas carry
  * the value bytes that hyperloglogAdd hashes internally.
  */
@@ -2285,7 +2596,7 @@ static void *hyperloglogPersistNewEmpty(void) {
 
 static size_t hyperloglogPersistCount(const void *structure) {
     /* hyperloglogCount needs a non-const handle because it may
-     * recompute the cached cardinality.  The const-cast matches
+     * recompute the cached cardinality. The const-cast matches
      * datakit convention for these read-mostly probes. */
     bool invalid = false;
     return (size_t)hyperloglogCount((hyperloglog *)structure, &invalid);
@@ -2298,7 +2609,7 @@ static size_t hyperloglogPersistEstimateSize(const void *structure) {
 static uint8_t *hyperloglogPersistEncodeOp(persistOp op, const void *args,
                                            size_t argc, size_t *len) {
     /* For PFADD: args points at the raw value bytes; argc is the
-     * byte count.  hyperloglogAdd hashes internally, so the WAL
+     * byte count. hyperloglogAdd hashes internally, so the WAL
      * carries the original member bytes verbatim. */
     if (op == PERSIST_OP_INSERT) {
         uint8_t *buf = NULL;
@@ -2525,13 +2836,13 @@ static uint8_t *multimapPersistEncodeOp(persistOp op, const void *args,
 /* Helper to determine encoded value length from databoxLinear type byte */
 static size_t databoxLinearTypeValueLen(uint8_t type) {
     /* Type byte encoding (from databoxLinear.c):
-     *   0: invalid
-     *   1: BYTES (variable, handled separately)
-     *   2-17: integers (2-3 = 1 byte, 4-5 = 2 bytes, ... 16-17 = 8 bytes)
-     *   18: REAL_16B (2 bytes)
-     *   19: REAL_32B (4 bytes)
-     *   20: REAL_64B (8 bytes)
-     *   21-23: TRUE/FALSE/NULL (0 bytes)
+     * 0: invalid
+     * 1: BYTES (variable, handled separately)
+     * 2-17: integers (2-3 = 1 byte, 4-5 = 2 bytes, ... 16-17 = 8 bytes)
+     * 18: REAL_16B (2 bytes)
+     * 19: REAL_32B (4 bytes)
+     * 20: REAL_64B (8 bytes)
+     * 21-23: TRUE/FALSE/NULL (0 bytes)
      */
     if (type >= 2 && type <= 17) {
         /* Integer types: ((type - 2) / 2) + 1 bytes */
@@ -3203,7 +3514,7 @@ const persistOps persistOpsMultiarray = {
  * - Config:
  * [maxLevels][enableWeights][policy][evictStrategy][maxCount][maxWeight]
  * - Entries: For each active entry in handle order:
- *   [handle (size_t)][level (uint8_t)][weight (uint64_t, if weights enabled)]
+ * [handle (size_t)][level (uint8_t)][weight (uint64_t, if weights enabled)]
  */
 
 static uint8_t *multilruPersistSnapshot(const void *structure, size_t *len) {
@@ -4034,222 +4345,509 @@ int persistTest(int argc, char *argv[]) {
         }
     }
 
-    TEST("checksum32 basic") {
-        const char *data = "hello world";
-        uint32_t c1 = persistChecksum32(data, strlen(data));
-        uint32_t c2 = persistChecksum32(data, strlen(data));
-        if (c1 != c2) {
-            ERRR("Same data should produce same checksum");
-        }
+    /* ================================================================
+     * Envelope Round-Trip and Corruption Tests
+     * ================================================================
+     * Each persist write goes through flexEnvelope. Cover one
+     * round-trip per algorithm, then prove that header / payload /
+     * digest corruption all fail verify, and that keyed algorithms
+     * refuse to snapshot without a key. */
 
-        uint32_t c3 = persistChecksum32("hello world!", 12);
-        if (c1 == c3) {
-            ERRR("Different data should produce different checksum");
-        }
-    }
+    {
+        const persistChecksum algos[] = {
+            PERSIST_CHECKSUM_XXH64,       PERSIST_CHECKSUM_XXH3_64,
+            PERSIST_CHECKSUM_XXH3_128,    PERSIST_CHECKSUM_BLAKE3_KEYED,
+            PERSIST_CHECKSUM_HMAC_SHA256, PERSIST_CHECKSUM_HMAC_BLAKE3,
+        };
+        const size_t algoCount = sizeof(algos) / sizeof(algos[0]);
 
-    TEST("checksum64 basic") {
-        const char *data = "hello world";
-        uint64_t c1 = persistChecksum64(data, strlen(data));
-        uint64_t c2 = persistChecksum64(data, strlen(data));
-        if (c1 != c2) {
-            ERRR("Same data should produce same checksum");
-        }
-    }
-
-    TEST("checksum types - XXH32/64/128") {
-        const char *data = "test data for checksums";
-        size_t len = strlen(data);
-
-        /* Test XXH32 */
-        persistChecksumValue cs32;
-        persistChecksumCompute(PERSIST_CHECKSUM_XXHASH32, data, len, &cs32);
-        if (cs32.type != PERSIST_CHECKSUM_XXHASH32) {
-            ERRR("XXH32 type mismatch");
-        }
-        if (cs32.len != 4) {
-            ERR("XXH32 should be 4 bytes, got %u", cs32.len);
-        }
-
-        /* Test XXH64 */
-        persistChecksumValue cs64;
-        persistChecksumCompute(PERSIST_CHECKSUM_XXHASH64, data, len, &cs64);
-        if (cs64.type != PERSIST_CHECKSUM_XXHASH64) {
-            ERRR("XXH64 type mismatch");
-        }
-        if (cs64.len != 8) {
-            ERR("XXH64 should be 8 bytes, got %u", cs64.len);
-        }
-
-        /* Test XXH128 */
-        persistChecksumValue cs128;
-        persistChecksumCompute(PERSIST_CHECKSUM_XXHASH128, data, len, &cs128);
-        if (cs128.type != PERSIST_CHECKSUM_XXHASH128) {
-            ERRR("XXH128 type mismatch");
-        }
-        if (cs128.len != 16) {
-            ERR("XXH128 should be 16 bytes, got %u", cs128.len);
-        }
-
-        /* Verify different algorithms produce different values */
-        if (cs32.value.u32 == (uint32_t)cs64.value.u64) {
-            ERRR("XXH32 and XXH64 should produce different values");
-        }
-    }
-
-    TEST("checksum equality and verification") {
-        const char *data = "verify this data";
-        size_t len = strlen(data);
-
-        persistChecksumValue cs1, cs2;
-        persistChecksumCompute(PERSIST_CHECKSUM_XXHASH64, data, len, &cs1);
-        persistChecksumCompute(PERSIST_CHECKSUM_XXHASH64, data, len, &cs2);
-
-        /* Same data should produce equal checksums */
-        if (!persistChecksumEqual(&cs1, &cs2)) {
-            ERRR("Equal checksums should match");
-        }
-
-        /* Verify should succeed */
-        if (!persistChecksumVerify(&cs1, data, len)) {
-            ERRR("Valid checksum should verify");
-        }
-
-        /* Different data should fail verification */
-        const char *otherData = "different data here";
-        if (persistChecksumVerify(&cs1, otherData, strlen(otherData))) {
-            ERRR("Invalid checksum should not verify");
-        }
-
-        /* Different checksum types should not be equal */
-        persistChecksumValue cs32;
-        persistChecksumCompute(PERSIST_CHECKSUM_XXHASH32, data, len, &cs32);
-        if (persistChecksumEqual(&cs1, &cs32)) {
-            ERRR("Different checksum types should not be equal");
-        }
-    }
-
-    TEST("snapshot with different checksum types") {
-        const persistChecksum types[] = {
-            PERSIST_CHECKSUM_XXHASH32,
-            PERSIST_CHECKSUM_XXHASH64,
-            PERSIST_CHECKSUM_XXHASH128,
+        /* 32-byte test key — required size for BLAKE3_KEYED; any size
+         * works for HMAC_*; ignored for unkeyed algorithms. */
+        static const uint8_t persistTestKey[32] = {
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a,
+            0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15,
+            0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
         };
 
-        for (size_t i = 0; i < sizeof(types) / sizeof(types[0]); i++) {
+        TEST("envelope snapshot round-trip across all algorithms") {
+            for (size_t i = 0; i < algoCount; i++) {
+                flex *f = flexNew();
+                flexPushSigned(&f, 42, FLEX_ENDPOINT_TAIL);
+                flexPushBytes(&f, "hello", 5, FLEX_ENDPOINT_TAIL);
+
+                persistConfig config = persistDefaultConfig();
+                config.checksumType = algos[i];
+
+                persist *p = persistCreate(&persistOpsFlex, &config);
+                persistStore *snapStore = persistStoreMemory(0);
+                persistAttachSnapshot(p, snapStore);
+                if (PERSIST_CHECKSUM_IS_KEYED(algos[i])) {
+                    persistSetIntegrityKey(p, persistTestKey,
+                                           sizeof(persistTestKey));
+                }
+
+                if (!persistSnapshot(p, f)) {
+                    ERR("Snapshot failed for algo %d", (int32_t)algos[i]);
+                }
+                if (!persistVerifySnapshot(p)) {
+                    ERR("Verify failed for algo %d", (int32_t)algos[i]);
+                }
+
+                flex *restored = persistRestore(p);
+                if (!restored) {
+                    ERR("Restore failed for algo %d", (int32_t)algos[i]);
+                }
+                if (flexCount(restored) != flexCount(f)) {
+                    ERR("Restored count mismatch for algo %d",
+                        (int32_t)algos[i]);
+                }
+
+                flexFree(f);
+                flexFree(restored);
+                persistClose(p);
+            }
+        }
+
+        TEST("envelope rejects keyed algorithm without key") {
+            persistConfig config = persistDefaultConfig();
+            config.checksumType = PERSIST_CHECKSUM_HMAC_SHA256;
+            persist *p = persistCreate(&persistOpsFlex, &config);
+            persistStore *snapStore = persistStoreMemory(0);
+            persistAttachSnapshot(p, snapStore);
+
             flex *f = flexNew();
-            flexPushSigned(&f, 42, FLEX_ENDPOINT_TAIL);
-            flexPushSigned(&f, 999, FLEX_ENDPOINT_TAIL);
-            flexPushBytes(&f, "test", 4, FLEX_ENDPOINT_TAIL);
+            flexPushSigned(&f, 1, FLEX_ENDPOINT_TAIL);
+            if (persistSnapshot(p, f)) {
+                ERRR("Keyed snapshot without key must be refused");
+            }
+            flexFree(f);
+            persistClose(p);
+        }
+
+        TEST("envelope detects header corruption") {
+            persistConfig config = persistDefaultConfig();
+            config.checksumType = PERSIST_CHECKSUM_XXH3_128;
+            persist *p = persistCreate(&persistOpsFlex, &config);
+            persistStore *snapStore = persistStoreMemory(0);
+            persistAttachSnapshot(p, snapStore);
+
+            flex *f = flexNew();
+            flexPushBytes(&f, "corrupt-header-test", 19, FLEX_ENDPOINT_TAIL);
+            if (!persistSnapshot(p, f)) {
+                ERRR("Snapshot setup failed");
+            }
+
+            size_t storeLen = 0;
+            const uint8_t *storeBytes =
+                persistStoreMemoryBuffer(snapStore, &storeLen);
+            if (storeLen < PERSIST_SNAP_HEADER_SIZE + 8) {
+                ERR("Snapshot too small: %zu bytes", storeLen);
+            }
+            /* Flip a byte in the header self-check digest. */
+            uint8_t saved = storeBytes[PERSIST_SNAP_HEADER_SIZE - 1];
+            ((uint8_t *)storeBytes)[PERSIST_SNAP_HEADER_SIZE - 1] = saved ^ 1u;
+            if (persistVerifySnapshot(p)) {
+                ERRR("Header-digest corruption must be rejected");
+            }
+            if (persistRestore(p)) {
+                ERRR("Header-digest corruption must reject restore");
+            }
+            ((uint8_t *)storeBytes)[PERSIST_SNAP_HEADER_SIZE - 1] = saved;
+            if (!persistVerifySnapshot(p)) {
+                ERRR("Restoring the byte should re-pass verify");
+            }
+
+            flexFree(f);
+            persistClose(p);
+        }
+
+        TEST("envelope detects payload corruption") {
+            persistConfig config = persistDefaultConfig();
+            config.checksumType = PERSIST_CHECKSUM_HMAC_BLAKE3;
+            persist *p = persistCreate(&persistOpsFlex, &config);
+            persistStore *snapStore = persistStoreMemory(0);
+            persistAttachSnapshot(p, snapStore);
+            persistSetIntegrityKey(p, persistTestKey, sizeof(persistTestKey));
+
+            flex *f = flexNew();
+            for (uint32_t i = 0; i < 32u; i++) {
+                flexPushSigned(&f, (int64_t)i, FLEX_ENDPOINT_TAIL);
+            }
+            if (!persistSnapshot(p, f)) {
+                ERRR("Snapshot setup failed");
+            }
+
+            size_t storeLen = 0;
+            const uint8_t *storeBytes =
+                persistStoreMemoryBuffer(snapStore, &storeLen);
+            /* Flip a byte well inside the envelope payload. */
+            const size_t target = PERSIST_SNAP_HEADER_SIZE + storeLen / 2u;
+            uint8_t saved = storeBytes[target];
+            ((uint8_t *)storeBytes)[target] = saved ^ 0x80u;
+            if (persistVerifySnapshot(p)) {
+                ERRR("Payload corruption must be rejected");
+            }
+            ((uint8_t *)storeBytes)[target] = saved;
+            if (!persistVerifySnapshot(p)) {
+                ERRR("Restoring the byte should re-pass verify");
+            }
+
+            flexFree(f);
+            persistClose(p);
+        }
+
+        TEST("envelope detects digest corruption") {
+            persistConfig config = persistDefaultConfig();
+            config.checksumType = PERSIST_CHECKSUM_XXH64;
+            persist *p = persistCreate(&persistOpsFlex, &config);
+            persistStore *snapStore = persistStoreMemory(0);
+            persistAttachSnapshot(p, snapStore);
+
+            flex *f = flexNew();
+            flexPushBytes(&f, "digest-bit-flip", 15, FLEX_ENDPOINT_TAIL);
+            if (!persistSnapshot(p, f)) {
+                ERRR("Snapshot setup failed");
+            }
+
+            size_t storeLen = 0;
+            const uint8_t *storeBytes =
+                persistStoreMemoryBuffer(snapStore, &storeLen);
+            /* Flip the last byte (the envelope's trailing digest). */
+            uint8_t saved = storeBytes[storeLen - 1u];
+            ((uint8_t *)storeBytes)[storeLen - 1u] = saved ^ 0xffu;
+            if (persistVerifySnapshot(p)) {
+                ERRR("Digest corruption must be rejected");
+            }
+            ((uint8_t *)storeBytes)[storeLen - 1u] = saved;
+            if (!persistVerifySnapshot(p)) {
+                ERRR("Restoring the byte should re-pass verify");
+            }
+
+            flexFree(f);
+            persistClose(p);
+        }
+
+        TEST("persist snapshot rejects tamper at every byte position") {
+            /* Exhaustive sweep: every byte in the persisted snapshot
+             * (header + envelope-wrapped body) flipped one at a time
+             * must cause verify+restore to reject. Catches subtle
+             * shifts in the wire format where some byte position
+             * isn't actually covered by either the header digest or
+             * the envelope's MAC. */
+            persistConfig config = persistDefaultConfig();
+            config.checksumType = PERSIST_CHECKSUM_HMAC_SHA256;
+            persist *p = persistCreate(&persistOpsFlex, &config);
+            persistStore *snapStore = persistStoreMemory(0);
+            persistAttachSnapshot(p, snapStore);
+            persistSetIntegrityKey(p, persistTestKey, sizeof(persistTestKey));
+
+            flex *f = flexNew();
+            for (uint32_t i = 0; i < 8u; i++) {
+                flexPushSigned(&f, (int64_t)(i * 100u + 1u),
+                               FLEX_ENDPOINT_TAIL);
+            }
+            if (!persistSnapshot(p, f)) {
+                ERRR("Baseline snapshot failed");
+            }
+
+            size_t storeLen = 0;
+            const uint8_t *storeBytes =
+                persistStoreMemoryBuffer(snapStore, &storeLen);
+            if (storeLen < PERSIST_SNAP_HEADER_SIZE + 16u) {
+                ERR("Snapshot unexpectedly small: %zu bytes", storeLen);
+            }
+
+            uint32_t accepted_after_tamper = 0;
+            for (size_t pos = 0; pos < storeLen; pos++) {
+                const uint8_t saved = storeBytes[pos];
+                ((uint8_t *)storeBytes)[pos] = saved ^ 0x01u;
+                if (persistVerifySnapshot(p)) {
+                    accepted_after_tamper++;
+                    if (accepted_after_tamper <= 4u) {
+                        ERR("Snapshot verify accepted tamper at offset %zu",
+                            pos);
+                    }
+                }
+                ((uint8_t *)storeBytes)[pos] = saved;
+            }
+            if (accepted_after_tamper > 0u) {
+                ERR("Total tamper-accept offsets: %u (must be 0)",
+                    accepted_after_tamper);
+            }
+            /* Sanity: the un-flipped snapshot still verifies. */
+            if (!persistVerifySnapshot(p)) {
+                ERRR("Post-sweep verify must still pass");
+            }
+
+            flexFree(f);
+            persistClose(p);
+        }
+
+        TEST("persist WAL rejects tamper at every byte position of a frame") {
+            /* Same sweep for the WAL — one entry, flip every byte of
+             * the WAL header AND the entry's length-prefixed envelope,
+             * verify each rejection. */
+            persistConfig config = persistDefaultConfig();
+            config.checksumType = PERSIST_CHECKSUM_HMAC_SHA256;
+            persist *p = persistCreate(&persistOpsFlex, &config);
+            persistStore *snapStore = persistStoreMemory(0);
+            persistStore *walStore = persistStoreMemory(0);
+            persistAttachSnapshot(p, snapStore);
+            persistAttachWAL(p, walStore);
+            persistSetIntegrityKey(p, persistTestKey, sizeof(persistTestKey));
+
+            flex *f = flexNew();
+            if (!persistSnapshot(p, f)) {
+                ERRR("Initial snapshot failed");
+            }
+            databox box = {.type = DATABOX_SIGNED_64, .data = {.i = 99}};
+            if (!persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box, 1)) {
+                ERRR("LogOp failed");
+            }
+            persistSync(p);
+
+            size_t walLen = 0;
+            const uint8_t *walBytes =
+                persistStoreMemoryBuffer(walStore, &walLen);
+            if (walLen < PERSIST_WAL_HEADER_SIZE + 4u) {
+                ERR("WAL unexpectedly small: %zu bytes", walLen);
+            }
+
+            uint32_t accepted_after_tamper = 0;
+            for (size_t pos = 0; pos < walLen; pos++) {
+                const uint8_t saved = walBytes[pos];
+                ((uint8_t *)walBytes)[pos] = saved ^ 0x01u;
+                if (persistVerifyWAL(p)) {
+                    accepted_after_tamper++;
+                    if (accepted_after_tamper <= 4u) {
+                        ERR("WAL verify accepted tamper at offset %zu", pos);
+                    }
+                }
+                ((uint8_t *)walBytes)[pos] = saved;
+            }
+            if (accepted_after_tamper > 0u) {
+                ERR("Total WAL tamper-accept offsets: %u (must be 0)",
+                    accepted_after_tamper);
+            }
+            if (!persistVerifyWAL(p)) {
+                ERRR("Post-sweep WAL verify must still pass");
+            }
+
+            flexFree(f);
+            persistClose(p);
+        }
+
+        TEST("envelope WAL round-trip + replay across keyed algorithm") {
+            persistConfig config = persistDefaultConfig();
+            config.checksumType = PERSIST_CHECKSUM_HMAC_SHA256;
+            persist *p = persistCreate(&persistOpsFlex, &config);
+            persistStore *snapStore = persistStoreMemory(0);
+            persistStore *walStore = persistStoreMemory(0);
+            persistAttachSnapshot(p, snapStore);
+            persistAttachWAL(p, walStore);
+            persistSetIntegrityKey(p, persistTestKey, sizeof(persistTestKey));
+
+            flex *f = flexNew();
+            if (!persistSnapshot(p, f)) {
+                ERRR("Initial snapshot failed");
+            }
+
+            databox boxes[3] = {
+                {.type = DATABOX_SIGNED_64, .data = {.i = 11}},
+                {.type = DATABOX_SIGNED_64, .data = {.i = 22}},
+                {.type = DATABOX_SIGNED_64, .data = {.i = 33}},
+            };
+            for (size_t i = 0; i < 3; i++) {
+                if (!persistLogOp(p, PERSIST_OP_PUSH_TAIL, &boxes[i], 1)) {
+                    ERR("LogOp failed at i=%zu", i);
+                }
+            }
+            persistSync(p);
+
+            if (!persistVerifyWAL(p)) {
+                ERRR("WAL verify failed");
+            }
+
+            flex *recovered = persistRecover(p);
+            if (!recovered) {
+                ERRR("Recover returned NULL");
+            }
+            if (flexCount(recovered) != 3) {
+                ERR("Expected 3 entries replayed, got %zu",
+                    (size_t)flexCount(recovered));
+            }
+
+            flexFree(f);
+            flexFree(recovered);
+            persistClose(p);
+        }
+
+        TEST("persist consumes keys from an hmacKeyring") {
+            /* End-to-end integration: keyring owns the key bytes; persist
+             * borrows them via hmacKeyringGetRaw. This is the pattern
+             * a cluster deployment will use — operators install keys in
+             * the keyring, every persist instance binds to a key id and
+             * resolves on demand. */
+            hmacKeyring *ring = hmacKeyringCreate();
+            const uint8_t keyBytes[32] = {
+                0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80,
+                0x90, 0xa0, 0xb0, 0xc0, 0xd0, 0xe0, 0xf0, 0x01,
+                0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09,
+                0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0xff, 0xfe,
+            };
+            const hmacKeyId currentKeyId = 42u;
+            if (!hmacKeyringInstallUnsalted(ring, currentKeyId, &hmacAlgoBLAKE3,
+                                            keyBytes, sizeof(keyBytes))) {
+                ERRR("Keyring install of current key failed");
+            }
+
+            const uint8_t *resolvedKey = NULL;
+            size_t resolvedLen = 0;
+            if (!hmacKeyringGetRaw(ring, currentKeyId, &resolvedKey,
+                                   &resolvedLen, NULL)) {
+                ERRR("Keyring lookup of current key failed");
+            }
 
             persistConfig config = persistDefaultConfig();
-            config.checksumType = types[i];
+            config.checksumType = PERSIST_CHECKSUM_HMAC_BLAKE3;
+            persist *p = persistCreate(&persistOpsFlex, &config);
+            persistStore *snapStore = persistStoreMemory(0);
+            persistAttachSnapshot(p, snapStore);
+            persistSetIntegrityKey(p, resolvedKey, resolvedLen);
 
+            flex *f = flexNew();
+            flexPushBytes(&f, "keyring-end-to-end", 18, FLEX_ENDPOINT_TAIL);
+            if (!persistSnapshot(p, f)) {
+                ERRR("Snapshot under keyring-supplied key failed");
+            }
+            if (!persistVerifySnapshot(p)) {
+                ERRR("Verify under same key failed");
+            }
+            flex *restored = persistRestore(p);
+            if (!restored || flexCount(restored) != flexCount(f)) {
+                ERRR("Restore content mismatch");
+            }
+
+            /* Rotation: install a new key, switch persist to the new id,
+             * snapshots written under the new key must verify against
+             * the new key — and the original snapshot still verifies
+             * against the original key. The keyring holds both during
+             * the rotation window. */
+            const uint8_t newKeyBytes[32] = {
+                0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x99, 0x88,
+            };
+            const hmacKeyId nextKeyId = 43u;
+            if (!hmacKeyringInstallUnsalted(ring, nextKeyId, &hmacAlgoBLAKE3,
+                                            newKeyBytes, sizeof(newKeyBytes))) {
+                ERRR("Keyring install of next key failed");
+            }
+
+            /* Persist still bound to the OLD key — verify of existing
+             * snapshot passes. */
+            if (!persistVerifySnapshot(p)) {
+                ERRR("Verify under OLD key after install of NEW must pass");
+            }
+
+            /* Switch to NEW key. Verify of existing snapshot now FAILS
+             * because the snapshot was MAC'd with the old key. */
+            const uint8_t *newResolved = NULL;
+            size_t newResolvedLen = 0;
+            hmacKeyringGetRaw(ring, nextKeyId, &newResolved, &newResolvedLen,
+                              NULL);
+            persistSetIntegrityKey(p, newResolved, newResolvedLen);
+            if (persistVerifySnapshot(p)) {
+                ERRR("Verify with wrong key MUST fail (tamper-evidence)");
+            }
+
+            /* Take a NEW snapshot under the new key — should round-trip. */
+            if (!persistSnapshot(p, f)) {
+                ERRR("Snapshot under new key failed");
+            }
+            if (!persistVerifySnapshot(p)) {
+                ERRR("Verify of new-key snapshot failed");
+            }
+
+            /* Retire the old key — keyring drops to one entry. */
+            if (!hmacKeyringRetire(ring, currentKeyId)) {
+                ERRR("Retire of old key failed");
+            }
+
+            flexFree(restored);
+            flexFree(f);
+            persistClose(p);
+            hmacKeyringFree(ring);
+        }
+
+        TEST("persistAttachKeyring wires prepared-key for WAL replay") {
+            /* persistAttachKeyring binds a persist instance to a
+             * (keyring, key_id) pair and pulls BOTH the raw bytes and
+             * the prepared handle in one call. WAL replay through
+             * flexEnvelopeVerify then uses the prepared fast path on
+             * every entry. */
+            hmacKeyring *ring = hmacKeyringCreate();
+            const uint8_t k[32] = {0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0xF6};
+            const hmacKeyId kid = 77u;
+            if (!hmacKeyringInstallUnsalted(ring, kid, &hmacAlgoSHA256, k,
+                                            sizeof(k))) {
+                ERRR("Keyring install failed");
+            }
+
+            persistConfig config = persistDefaultConfig();
+            config.checksumType = PERSIST_CHECKSUM_HMAC_SHA256;
             persist *p = persistCreate(&persistOpsFlex, &config);
             persistStore *snapStore = persistStoreMemory(0);
             persistStore *walStore = persistStoreMemory(0);
             persistAttachSnapshot(p, snapStore);
             persistAttachWAL(p, walStore);
 
-            /* Snapshot with this checksum type */
+            /* persistAttachKeyring replaces persistSetIntegrityKey: it
+             * resolves the raw bytes for Wrap and the prepared handle
+             * for Verify in a single call. */
+            if (!persistAttachKeyring(p, ring, kid)) {
+                ERRR("persistAttachKeyring failed");
+            }
+
+            flex *f = flexNew();
             if (!persistSnapshot(p, f)) {
-                ERR("Snapshot failed for checksum type %d", types[i]);
+                ERRR("Snapshot under keyring binding failed");
+            }
+            if (!persistVerifySnapshot(p)) {
+                ERRR("Verify under keyring binding failed");
             }
 
-            /* Verify snapshot */
-            if (!persistVerifySnapshot(snapStore)) {
-                ERR("Snapshot verification failed for checksum type %d",
-                    types[i]);
+            /* Write several WAL entries — each verify uses the
+             * prepared-key fast path automatically. */
+            for (uint32_t i = 0; i < 8u; i++) {
+                databox box = {.type = DATABOX_SIGNED_64,
+                               .data = {.i = (int64_t)i + 1}};
+                if (!persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box, 1)) {
+                    ERR("LogOp %u failed", i);
+                }
+            }
+            persistSync(p);
+
+            flex *recovered = persistRecover(p);
+            if (!recovered || flexCount(recovered) != 8u) {
+                ERR("Replay expected 8 entries, got %zu",
+                    recovered ? (size_t)flexCount(recovered) : 0);
             }
 
-            /* Restore and verify */
-            flex *restored = persistRestore(p);
-            if (!restored) {
-                ERR("Restore failed for checksum type %d", types[i]);
+            /* persistAttachKeyring on a missing id returns false and
+             * does not mutate the existing binding. */
+            if (persistAttachKeyring(p, ring, 999u)) {
+                ERRR("persistAttachKeyring must reject missing key id");
             }
-
-            if (flexCount(restored) != flexCount(f)) {
-                ERR("Restored count mismatch for checksum type %d", types[i]);
+            /* Subsequent verify must still work — the failed re-bind
+             * did not clear the existing one. */
+            if (!persistVerifySnapshot(p)) {
+                ERRR("Failed re-bind must not clear the existing binding");
             }
 
             flexFree(f);
-            flexFree(restored);
+            flexFree(recovered);
             persistClose(p);
+            hmacKeyringFree(ring);
         }
-    }
-
-    TEST("checksum performance") {
-        /* Test different data sizes */
-        const size_t sizes[] = {
-            64,               /* Small: header-sized */
-            1024,             /* 1KB */
-            64 * 1024,        /* 64KB */
-            1024 * 1024,      /* 1MB */
-            16 * 1024 * 1024, /* 16MB */
-        };
-
-        const char *sizeNames[] = {"64B", "1KB", "64KB", "1MB", "16MB"};
-
-        for (size_t s = 0; s < sizeof(sizes) / sizeof(sizes[0]); s++) {
-            size_t size = sizes[s];
-            uint8_t *data = zmalloc(size);
-
-            /* Fill with pseudo-random data */
-            for (size_t i = 0; i < size; i++) {
-                data[i] = (uint8_t)(i * 7919 + 104729);
-            }
-
-            printf("\n=== %s data ===\n", sizeNames[s]);
-
-            /* Adaptive iteration count based on data size */
-            const size_t iterations = size < 1024 * 1024 ? 10000 : 100;
-
-            /* Benchmark XXH32 */
-            {
-                printf("  XXH32:  ");
-                PERF_TIMERS_SETUP;
-
-                for (size_t i = 0; i < iterations; i++) {
-                    persistChecksumValue cs;
-                    persistChecksumCompute(PERSIST_CHECKSUM_XXHASH32, data,
-                                           size, &cs);
-                }
-
-                PERF_TIMERS_FINISH_PRINT_RESULTS(iterations, "checksums");
-            }
-
-            /* Benchmark XXH64 */
-            {
-                printf("  XXH64:  ");
-                PERF_TIMERS_SETUP;
-
-                for (size_t i = 0; i < iterations; i++) {
-                    persistChecksumValue cs;
-                    persistChecksumCompute(PERSIST_CHECKSUM_XXHASH64, data,
-                                           size, &cs);
-                }
-
-                PERF_TIMERS_FINISH_PRINT_RESULTS(iterations, "checksums");
-            }
-
-            /* Benchmark XXH128 */
-            {
-                printf("  XXH128: ");
-                PERF_TIMERS_SETUP;
-
-                for (size_t i = 0; i < iterations; i++) {
-                    persistChecksumValue cs;
-                    persistChecksumCompute(PERSIST_CHECKSUM_XXHASH128, data,
-                                           size, &cs);
-                }
-
-                PERF_TIMERS_FINISH_PRINT_RESULTS(iterations, "checksums");
-            }
-
-            zfree(data);
-        }
-
-        printf("\n");
     }
 
     /* ================================================================
@@ -4681,7 +5279,7 @@ int persistTest(int argc, char *argv[]) {
         persistAttachSnapshot(p, store);
         persistSnapshot(p, f);
 
-        if (!persistVerifySnapshot(store)) {
+        if (!persistVerifySnapshot(p)) {
             ERRR("Valid snapshot should verify");
         }
 
@@ -4690,10 +5288,10 @@ int persistTest(int argc, char *argv[]) {
         const uint8_t *buf = persistStoreMemoryBuffer(store, &len);
         if (len > 40) {
             /* Modify a byte in the body */
-            ((uint8_t *)buf)[40] ^= 0xFF;
+            ((uint8_t *)buf)[40] ^= 0xFFu;
         }
 
-        if (persistVerifySnapshot(store)) {
+        if (persistVerifySnapshot(p)) {
             ERRR("Corrupted snapshot should fail verification");
         }
 
@@ -6192,11 +6790,11 @@ int persistTest(int argc, char *argv[]) {
     /* ============================================================
      * Adversarial restore tests for the defensive bounds checks
      * recently added to flex/multimap/multilist/multidict/multilru/
-     * multiOrderedSet/intset restore paths.  Each ops->restore must:
-     *   - return NULL on NULL input
-     *   - return NULL on zero/undersize input
-     *   - return NULL when the embedded length header doesn't match
-     *     the supplied buffer length
+     * multiOrderedSet/intset restore paths. Each ops->restore must:
+     * - return NULL on NULL input
+     * - return NULL on zero/undersize input
+     * - return NULL when the embedded length header doesn't match
+     * the supplied buffer length
      * These tests invoke restore directly (not through the snapshot
      * file format) so we can hand it crafted malformed bytes. */
     TEST("restore: NULL input is rejected by all flex-backed ops") {
@@ -6231,7 +6829,7 @@ int persistTest(int argc, char *argv[]) {
 
     TEST("restore: truncated flex header is rejected") {
         /* Anything under FLEX_EMPTY_HEADER_SIZE cannot be a valid
-         * flex envelope.  Verify the flex-backed ops bail without
+         * flex envelope. Verify the flex-backed ops bail without
          * touching the bytes past the end. */
         const uint8_t tiny[1] = {0xff};
         if (persistOpsFlex.restore(tiny, 0) != NULL) {
@@ -6250,7 +6848,7 @@ int persistTest(int argc, char *argv[]) {
 
     TEST("restore: flex with mismatched total_bytes is rejected") {
         /* Build a valid flex, then claim a wrong length to the
-         * restore function.  Both too-short and too-long must be
+         * restore function. Both too-short and too-long must be
          * rejected because the header self-describes the length. */
         flex *valid = flexNew();
         flexPushSigned(&valid, 1, FLEX_ENDPOINT_TAIL);
@@ -6278,7 +6876,7 @@ int persistTest(int argc, char *argv[]) {
 
     TEST("restore: intset count*sizeof overflow is rejected") {
         /* Header claims a count that, when multiplied by sizeof(int64_t),
-         * would overflow size_t.  Without the overflow guard, the
+         * would overflow size_t. Without the overflow guard, the
          * `expectedLen = sizeof(uint64_t) + count*8` arithmetic wraps
          * and the underflow check passes — letting subsequent reads
          * walk off the end. */
@@ -6359,7 +6957,7 @@ int persistTest(int argc, char *argv[]) {
 
     TEST("restore: newEmpty present where WAL-replay-from-bare needs it") {
         /* The newEmpty hook lets restore engines apply a delta WAL
-         * that begins without a snapshot.  Verify the hook is wired
+         * that begins without a snapshot. Verify the hook is wired
          * for the ops that intend to support that flow. */
         if (!persistOpsIntsetBig.newEmpty) {
             ERRR("persistOpsIntsetBig.newEmpty is NULL");

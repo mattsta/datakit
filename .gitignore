@@ -4,3 +4,7 @@ compile_commands.json
 src/old
 CMakeFiles
 
+
+# Per-developer clangd LSP config (machine-specific SDK paths etc.).
+# Copy .clangd.sample to .clangd and customize; do not commit.
+.clangd

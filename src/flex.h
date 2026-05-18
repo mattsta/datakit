@@ -48,6 +48,43 @@ void flexFree(flex *f);
  * Cost: O(1).  Reads at most 5 bytes from the head of the buffer. */
 bool flexValidateBuffer(const uint8_t *buf, size_t buflen);
 
+/* flexValidateBufferDeep — strict O(N) validation of a putative flex
+ * buffer.  Walks every entry's length-encoding bytes and confirms each
+ * entry fits within the buffer; confirms the entry count claimed by the
+ * header matches the number of entries actually present; confirms the
+ * walk terminates exactly at the buffer's claimed end (no trailing
+ * garbage, no truncation).
+ *
+ * Returns true iff the buffer is structurally valid for safe iteration
+ * with flexHead / flexNext / flexGetByTypeCopy / flexCount.
+ *
+ * Designed for callers that consume flex bytes from untrusted sources
+ * WITHOUT a wrapping MAC (synthetic fuzzers, cross-process IPC, on-disk
+ * recovery prior to MAC verification, plugin-supplied blobs).  The O(1)
+ * flexValidateBuffer suffices when bytes are MAC-gated upstream; use
+ * this variant when they are not.
+ *
+ * Cost: O(N) in entry count.  Reads every entry's encoding byte plus
+ * its length-encoding bytes.  Does NOT decode entry payloads. */
+bool flexValidateBufferDeep(const uint8_t *buf, size_t buflen);
+
+/* flexPeekTotalBytes — safely read the leading total-bytes claim from a
+ * putative flex buffer WITHOUT requiring `buflen == claim`.
+ *
+ * Use this when a flex sits as a STRICT PREFIX of a larger buffer (e.g.
+ * the inner-frame header sealed inside a clusterMailbox envelope: the
+ * flex-encoded header is followed by opaque payload bytes that the flex
+ * itself does not cover).  Callers feed `buf` and the OUTER `buflen`;
+ * on success `*out_total` holds the prefix length the flex claims,
+ * which the caller can then pass to `flexValidateBuffer(buf, *out_total)`
+ * for the full header validation and treat `buf + *out_total` as the
+ * start of the post-flex region.
+ *
+ * Returns false on: NULL inputs; `buflen` smaller than the minimum flex
+ * envelope; leading-varint width exceeds `buflen`; claim larger than
+ * `buflen`.  Cost: O(1).  Reads at most 5 bytes from the head. */
+bool flexPeekTotalBytes(const uint8_t *buf, size_t buflen, size_t *out_total);
+
 flexEntry *flexMiddle(const flex *f, uint_fast32_t elementsPerEntry);
 
 /* Merge */

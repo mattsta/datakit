@@ -1,0 +1,2087 @@
+/* hmacKeyring — see hmacKeyring.h for the API contract and threading
+ * model. Implementation is a fixed-capacity flat array of slots; lookup
+ * is a linear scan because typical cluster rotations carry 2-3 active
+ * keys (current + previous + sometimes staged-next). Scanning 16 slots
+ * is faster than a hash-table probe at this size. */
+
+#include "hmacKeyring.h"
+
+#include "aesGcm.h"  /* aesGcmKey + aesGcmInit for the cached schedule */
+#include "ctmem.h"   /* dkSecureZero */
+#include "datakit.h" /* zmalloc / zfree */
+#include "flex.h"
+#include "persist.h"
+
+#include <pthread.h>
+#include <stdatomic.h>
+#include <string.h>
+
+#define HMAC_KEYRING_CAPACITY ((size_t)16)
+
+/* Layout: largest to smallest fields to minimize padding. */
+typedef struct hmacKeyringEntry {
+    const hmacHashAlgo *algo;  /* borrowed; descriptor is module-static */
+    uint8_t *raw_key_bytes;    /* zmalloc'd; zero-cleaned on retire/free */
+    uint8_t *prepared_storage; /* zmalloc'd; backs prepared.inner/outer_ctx */
+    /* AEAD key-schedule cache . When the installed key
+     * is a valid AES-GCM key length (16 == AES-128, 32 == AES-256), Install
+     * pre-runs aesGcmInit and stashes the expanded schedule here so the
+     * hot envelope-Open path can skip the per-frame key expansion. NULL
+     * when the key length is not a valid AES-GCM length (e.g. 20- or 64-
+     * byte HMAC keys) — callers must fall back to ad-hoc aesGcmInit on the
+     * raw bytes. Lifetime is bound to the slot: hmacKeyringEntryClear
+     * dkSecureZero's and frees this storage on Retire / re-Install so a
+     * leaked schedule cannot recover the round keys. */
+    aesGcmKey *aead_schedule;
+    hmacKey prepared;
+    _Atomic uint64_t aead_counter; /* next-to-be-issued AEAD nonce counter */
+    /* Generation counter — bumped on EVERY mutation of this slot
+     * (Install, Retire, SetAeadSalt). Attach-style consumers cache the
+     * value observed at attach time and refuse to use the key if the
+     * generation has advanced. Stays monotonic across the slot's full
+     * lifetime — Retire does NOT reset it to zero, so a retire-then-
+     * reinstall under the same id is still distinguishable from "the
+     * exact slot you attached to". */
+    uint64_t generation;
+    size_t raw_key_len;
+    hmacKeyId id; /* HMAC_KEY_ID_INVALID iff slot is free */
+    /* 4-byte salt suffix appended to every AEAD nonce. When the slot
+     * was installed via hmacKeyringInstallUnsalted this stays all-zero
+     * AND `is_unsalted` is set, which together suppress the fail-closed
+     * check in hmacKeyringNextAeadNonce. */
+    uint8_t aead_salt[HMAC_KEYRING_AEAD_SALT_BYTES];
+    bool is_unsalted; /* true => zero-salt nonces are explicitly OK */
+    uint8_t _pad[3];
+} hmacKeyringEntry;
+
+struct hmacKeyring {
+    pthread_rwlock_t lock;
+    hmacKeyringEntry entries[HMAC_KEYRING_CAPACITY];
+    size_t count;
+    /* Revoked key floor . Monotonically non-decreasing
+     * minimum key id permitted by floor-aware consumers
+     * (flexEnvelopeVerify reads it via hmacKeyringMinValidKeyId). Zero
+     * means "no floor"; any installed id is acceptable. Persisted via
+     * the snapshot sentinel record so a restart cannot silently un-
+     * revoke ids. */
+    hmacKeyId min_valid_key_id;
+};
+
+/* Thin forwarder kept so call sites stay self-describing. The actual
+ * DCE-resistant zero-write lives in `ctmem.h::dkSecureZero` and is shared
+ * with every other crypto module. */
+static inline void hmacKeyringSecureWipe(void *ptr, size_t len) {
+    dkSecureZero(ptr, len);
+}
+
+/* Zero-clean + free everything an entry owns. Caller MUST hold the
+ * write lock or be in the destructor path.
+ *
+ * Bumps the slot's `generation` counter so attach-style consumers that
+ * cached the pre-clear generation can detect the rotation and refuse to
+ * use the now-freed key bytes (see hmacKeyringGetGeneration docs). */
+static void hmacKeyringEntryClear(hmacKeyringEntry *e) {
+    if (e->raw_key_bytes != NULL) {
+        hmacKeyringSecureWipe(e->raw_key_bytes, e->raw_key_len);
+        zfree(e->raw_key_bytes);
+        e->raw_key_bytes = NULL;
+    }
+    if (e->prepared_storage != NULL && e->algo != NULL) {
+        hmacKeyringSecureWipe(e->prepared_storage, hmacPreparedSize(e->algo));
+        zfree(e->prepared_storage);
+        e->prepared_storage = NULL;
+    }
+    /* AEAD schedule : the expanded round keys are key-equivalent
+     * material — recovering them yields the AES key bits. Wipe DCE-
+     * resistantly before free so a heap-scrubbing analyzer (or a careless
+     * realloc) cannot harvest the schedule. */
+    if (e->aead_schedule != NULL) {
+        dkSecureZero(e->aead_schedule, sizeof(*e->aead_schedule));
+        zfree(e->aead_schedule);
+        e->aead_schedule = NULL;
+    }
+    e->algo = NULL;
+    e->raw_key_len = 0;
+    e->id = HMAC_KEY_ID_INVALID;
+    atomic_store_explicit(&e->aead_counter, 0u, memory_order_relaxed);
+    /* Salt is sensitive: it scopes AEAD nonce derivation; wipe DCE-resistantly
+     * even though most callers reach this via the destructor path. */
+    dkSecureZero(e->aead_salt, sizeof(e->aead_salt));
+    dkSecureZero(&e->prepared, sizeof(e->prepared));
+    /* Reset the unsalted flag so a recycled slot defaults back to the
+     * safe (fail-closed) state. A fresh Install must opt back in via
+     * hmacKeyringInstallUnsalted if it wants zero-salt behavior. */
+    e->is_unsalted = false;
+    /* Bump generation last — the counter is monotonic across the slot's
+     * full lifetime so a retire-then-reinstall under the same id stays
+     * distinguishable from "the exact slot you attached to". */
+    e->generation++;
+}
+
+/* Two variants of the slot lookup so the lock discipline shows up in
+ * the type system rather than via a const-cast. Read-lock holders
+ * call the Const form (and only get const access to the slot they
+ * find); write-lock holders call the Mut form.
+ *
+ * Bodies are identical — the Const form is the actual scan, the Mut
+ * form is a thin wrapper. The const-cast inside Mut is locally safe
+ * because the caller has guaranteed write-lock ownership; the cast
+ * is documented at the call site (lookup-then-mutate) rather than
+ * hidden inside one merged function. */
+static const hmacKeyringEntry *
+hmacKeyringFindLockedConst(const hmacKeyring *ring, hmacKeyId id) {
+    if (id == HMAC_KEY_ID_INVALID) {
+        return NULL;
+    }
+    for (size_t i = 0; i < HMAC_KEYRING_CAPACITY; i++) {
+        if (ring->entries[i].id == id) {
+            return &ring->entries[i];
+        }
+    }
+    return NULL;
+}
+
+static hmacKeyringEntry *hmacKeyringFindLockedMut(hmacKeyring *ring,
+                                                  hmacKeyId id) {
+    /* Caller holds the write lock — discard const safely. Keeps the
+     * body single-source and avoids two identical scan loops drifting. */
+    return (hmacKeyringEntry *)hmacKeyringFindLockedConst(ring, id);
+}
+
+/* Find a free slot (id == HMAC_KEY_ID_INVALID). Caller must hold the
+ * write lock. */
+static hmacKeyringEntry *hmacKeyringFindFreeLocked(hmacKeyring *ring) {
+    for (size_t i = 0; i < HMAC_KEYRING_CAPACITY; i++) {
+        if (ring->entries[i].id == HMAC_KEY_ID_INVALID) {
+            return &ring->entries[i];
+        }
+    }
+    return NULL;
+}
+
+hmacKeyring *hmacKeyringCreate(void) {
+    hmacKeyring *ring = zmalloc(sizeof(*ring));
+    memset(ring, 0, sizeof(*ring));
+    if (pthread_rwlock_init(&ring->lock, NULL) != 0) {
+        zfree(ring);
+        return NULL;
+    }
+    return ring;
+}
+
+void hmacKeyringFree(hmacKeyring *ring) {
+    if (ring == NULL) {
+        return;
+    }
+    /* No lock needed — destructor; caller guarantees no concurrent use. */
+    for (size_t i = 0; i < HMAC_KEYRING_CAPACITY; i++) {
+        hmacKeyringEntryClear(&ring->entries[i]);
+    }
+    pthread_rwlock_destroy(&ring->lock);
+    zfree(ring);
+}
+
+/* Constant-time check that the salt is all-zero. Constant-time isn't
+ * load-bearing for security here (the salt is non-secret), but matches
+ * the rest of the module's discipline against compiler short-circuits. */
+static bool
+hmacKeyringSaltIsZero(const uint8_t salt[HMAC_KEYRING_AEAD_SALT_BYTES]) {
+    uint8_t acc = 0;
+    for (size_t i = 0; i < HMAC_KEYRING_AEAD_SALT_BYTES; i++) {
+        acc = (uint8_t)(acc | salt[i]);
+    }
+    return acc == 0u;
+}
+
+/* Shared install body for the salted/unsalted public entry points. The
+ * caller has already validated `aead_salt` against the salted-API
+ * contract (or chosen to pass all-zero via the unsalted entry point). */
+static bool hmacKeyringInstallInternal(
+    hmacKeyring *ring, hmacKeyId id, const hmacHashAlgo *algo,
+    const uint8_t *key_bytes, size_t key_len,
+    const uint8_t aead_salt[HMAC_KEYRING_AEAD_SALT_BYTES], bool is_unsalted) {
+    if (ring == NULL || id == HMAC_KEY_ID_INVALID || algo == NULL ||
+        key_bytes == NULL || key_len == 0) {
+        return false;
+    }
+    /* Refuse oversized keys at install time so the cap is enforced
+     * uniformly across the in-memory and snapshot-restore entry paths.
+     * 256 bytes covers every supported algorithm with headroom (see
+     * HMAC_KEYRING_MAX_KEY_BYTES in the header). */
+    if (key_len > HMAC_KEYRING_MAX_KEY_BYTES) {
+        return false;
+    }
+
+    /* Pre-allocate everything OUTSIDE the lock — keeps the write critical
+     * section short and avoids holding the lock across malloc. */
+    const size_t prepared_size = hmacPreparedSize(algo);
+    if (prepared_size == 0) {
+        return false;
+    }
+    uint8_t *raw_copy = zmalloc(key_len);
+    uint8_t *prepared_storage = zmalloc(prepared_size);
+    memcpy(raw_copy, key_bytes, key_len);
+
+    hmacKey prepared;
+    hmacPrepareKey(&prepared, algo, prepared_storage, prepared_size, raw_copy,
+                   key_len);
+
+    /* pre-compute the AES-GCM key schedule whenever the
+     * key length is a valid AES-GCM length (16 == AES-128, 32 == AES-256).
+     * The schedule reuses the SAME aesGcmInit dispatcher the envelope-Open
+     * path calls per-frame today, so cache hits produce bit-identical
+     * ciphertext/tag to the cold path. We do this OUTSIDE the keyring
+     * lock and bind to the slot after the duplicate-id check passes; if
+     * either pre-flight (prepared_storage allocation, schedule init) trips
+     * we free everything before unlocking.
+     *
+     * Note: a 32-byte HMAC-SHA256 key technically has a valid AES-256 key
+     * length and so will be cached too — this costs ~280 bytes per slot
+     * and is never consumed unless the envelope-Open path explicitly asks
+     * via hmacKeyringGetAesGcmKey. */
+    aesGcmKey *aead_sched = NULL;
+    if (key_len == AES128_KEY_LEN || key_len == AES256_KEY_LEN) {
+        aead_sched = zmalloc(sizeof(*aead_sched));
+        if (!aesGcmInit(aead_sched, raw_copy, key_len)) {
+            /* Should be unreachable — aesGcmInit only rejects invalid
+             * lengths and we just gated on the valid set. Defensive
+             * cleanup keeps the failure path uniform with the duplicate-
+             * id / capacity branches below. */
+            dkSecureZero(aead_sched, sizeof(*aead_sched));
+            zfree(aead_sched);
+            hmacKeyringSecureWipe(raw_copy, key_len);
+            zfree(raw_copy);
+            hmacKeyringSecureWipe(prepared_storage, prepared_size);
+            zfree(prepared_storage);
+            return false;
+        }
+    }
+
+    pthread_rwlock_wrlock(&ring->lock);
+
+    if (hmacKeyringFindLockedMut(ring, id) != NULL) {
+        pthread_rwlock_unlock(&ring->lock);
+        hmacKeyringSecureWipe(raw_copy, key_len);
+        zfree(raw_copy);
+        hmacKeyringSecureWipe(prepared_storage, prepared_size);
+        zfree(prepared_storage);
+        if (aead_sched != NULL) {
+            dkSecureZero(aead_sched, sizeof(*aead_sched));
+            zfree(aead_sched);
+        }
+        return false;
+    }
+
+    hmacKeyringEntry *slot = hmacKeyringFindFreeLocked(ring);
+    if (slot == NULL) {
+        pthread_rwlock_unlock(&ring->lock);
+        hmacKeyringSecureWipe(raw_copy, key_len);
+        zfree(raw_copy);
+        hmacKeyringSecureWipe(prepared_storage, prepared_size);
+        zfree(prepared_storage);
+        if (aead_sched != NULL) {
+            dkSecureZero(aead_sched, sizeof(*aead_sched));
+            zfree(aead_sched);
+        }
+        return false;
+    }
+
+    slot->algo = algo;
+    slot->raw_key_bytes = raw_copy;
+    slot->prepared_storage = prepared_storage;
+    slot->prepared = prepared;
+    slot->aead_schedule = aead_sched;
+    slot->raw_key_len = key_len;
+    slot->id = id;
+    atomic_store_explicit(&slot->aead_counter, 0u, memory_order_relaxed);
+    memcpy(slot->aead_salt, aead_salt, HMAC_KEYRING_AEAD_SALT_BYTES);
+    slot->is_unsalted = is_unsalted;
+    /* Bump generation on Install — a previously-attached consumer holding
+     * the pre-Install generation must reject the now-different key bound
+     * to this id, even if the surrounding code never explicitly Retired
+     * the slot (e.g. fresh slot acquired via a different path). */
+    slot->generation++;
+    ring->count++;
+
+    pthread_rwlock_unlock(&ring->lock);
+    return true;
+}
+
+bool hmacKeyringInstall(hmacKeyring *ring, hmacKeyId id,
+                        const hmacHashAlgo *algo, const uint8_t *key_bytes,
+                        size_t key_len,
+                        const uint8_t aead_salt[HMAC_KEYRING_AEAD_SALT_BYTES]) {
+    /* Salted API: refuse NULL salt and all-zero salt. All-zero salt
+     * defeats the cross-process collision protection that motivates
+     * making `aead_salt` mandatory in the first place; callers wanting
+     * that behavior must reach for the explicit Unsalted entry point. */
+    if (aead_salt == NULL || hmacKeyringSaltIsZero(aead_salt)) {
+        return false;
+    }
+    return hmacKeyringInstallInternal(ring, id, algo, key_bytes, key_len,
+                                      aead_salt, /*is_unsalted=*/false);
+}
+
+bool hmacKeyringInstallUnsalted(hmacKeyring *ring, hmacKeyId id,
+                                const hmacHashAlgo *algo,
+                                const uint8_t *key_bytes, size_t key_len) {
+    static const uint8_t zero_salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {0};
+    return hmacKeyringInstallInternal(ring, id, algo, key_bytes, key_len,
+                                      zero_salt, /*is_unsalted=*/true);
+}
+
+bool hmacKeyringRetire(hmacKeyring *ring, hmacKeyId id) {
+    if (ring == NULL || id == HMAC_KEY_ID_INVALID) {
+        return false;
+    }
+    pthread_rwlock_wrlock(&ring->lock);
+    hmacKeyringEntry *slot = hmacKeyringFindLockedMut(ring, id);
+    if (slot == NULL) {
+        pthread_rwlock_unlock(&ring->lock);
+        return false;
+    }
+    hmacKeyringEntryClear(slot);
+    ring->count--;
+    pthread_rwlock_unlock(&ring->lock);
+    return true;
+}
+
+size_t hmacKeyringSize(const hmacKeyring *ring) {
+    if (ring == NULL) {
+        return 0;
+    }
+    pthread_rwlock_rdlock((pthread_rwlock_t *)&ring->lock);
+    const size_t n = ring->count;
+    pthread_rwlock_unlock((pthread_rwlock_t *)&ring->lock);
+    return n;
+}
+
+const hmacKey *hmacKeyringLookup(hmacKeyring *ring, hmacKeyId id) {
+    if (ring == NULL || id == HMAC_KEY_ID_INVALID) {
+        return NULL;
+    }
+    pthread_rwlock_rdlock(&ring->lock);
+    const hmacKeyringEntry *slot = hmacKeyringFindLockedConst(ring, id);
+    const hmacKey *result = (slot != NULL) ? &slot->prepared : NULL;
+    pthread_rwlock_unlock(&ring->lock);
+    return result;
+}
+
+bool hmacKeyringGetRaw(hmacKeyring *ring, hmacKeyId id,
+                       const uint8_t **out_key_bytes, size_t *out_key_len,
+                       const hmacHashAlgo **out_algo) {
+    if (ring == NULL || id == HMAC_KEY_ID_INVALID || out_key_bytes == NULL ||
+        out_key_len == NULL) {
+        return false;
+    }
+    pthread_rwlock_rdlock(&ring->lock);
+    const hmacKeyringEntry *slot = hmacKeyringFindLockedConst(ring, id);
+    if (slot == NULL) {
+        pthread_rwlock_unlock(&ring->lock);
+        return false;
+    }
+    *out_key_bytes = slot->raw_key_bytes;
+    *out_key_len = slot->raw_key_len;
+    if (out_algo != NULL) {
+        *out_algo = slot->algo;
+    }
+    pthread_rwlock_unlock(&ring->lock);
+    return true;
+}
+
+bool hmacKeyringGetRawCopy(hmacKeyring *ring, hmacKeyId id, uint8_t *out_buf,
+                           size_t out_cap, size_t *out_len,
+                           const hmacHashAlgo **out_algo) {
+    if (out_len != NULL) {
+        *out_len = 0;
+    }
+    if (ring == NULL || id == HMAC_KEY_ID_INVALID || out_buf == NULL) {
+        return false;
+    }
+    /* Copy under the read lock. Combined Find + memcpy is the entire
+     * point of this entry point: a concurrent Retire is serialised
+     * against the rdlock and cannot free the bytes between our find and
+     * our copy. Once we unlock, the caller owns a fresh copy that is
+     * independent of any subsequent keyring mutation. */
+    pthread_rwlock_rdlock(&ring->lock);
+    const hmacKeyringEntry *slot = hmacKeyringFindLockedConst(ring, id);
+    if (slot == NULL) {
+        pthread_rwlock_unlock(&ring->lock);
+        return false;
+    }
+    if (out_cap < slot->raw_key_len) {
+        pthread_rwlock_unlock(&ring->lock);
+        return false;
+    }
+    memcpy(out_buf, slot->raw_key_bytes, slot->raw_key_len);
+    const size_t copied = slot->raw_key_len;
+    const hmacHashAlgo *algo = slot->algo;
+    pthread_rwlock_unlock(&ring->lock);
+
+    if (out_len != NULL) {
+        *out_len = copied;
+    }
+    if (out_algo != NULL) {
+        *out_algo = algo;
+    }
+    return true;
+}
+
+const aesGcmKey *hmacKeyringGetAesGcmKey(hmacKeyring *ring, hmacKeyId id) {
+    if (ring == NULL || id == HMAC_KEY_ID_INVALID) {
+        return NULL;
+    }
+    pthread_rwlock_rdlock(&ring->lock);
+    const hmacKeyringEntry *slot = hmacKeyringFindLockedConst(ring, id);
+    const aesGcmKey *result = (slot != NULL) ? slot->aead_schedule : NULL;
+    pthread_rwlock_unlock(&ring->lock);
+    return result;
+}
+
+bool hmacKeyringGetAesGcmKeyCopy(hmacKeyring *ring, hmacKeyId id,
+                                 aesGcmKey *out_key) {
+    if (ring == NULL || id == HMAC_KEY_ID_INVALID || out_key == NULL) {
+        return false;
+    }
+    /* Copy the schedule under the read lock — a concurrent Retire is
+     * serialised against the rdlock and cannot free the slot's
+     * aead_schedule between our find and our memcpy. Once we unlock,
+     * the caller owns a self-contained struct independent of any
+     * subsequent keyring mutation. The round-key block is ~256 bytes;
+     * cheap to copy under the lock. */
+    pthread_rwlock_rdlock(&ring->lock);
+    const hmacKeyringEntry *slot = hmacKeyringFindLockedConst(ring, id);
+    if (slot == NULL || slot->aead_schedule == NULL) {
+        pthread_rwlock_unlock(&ring->lock);
+        return false;
+    }
+    memcpy(out_key, slot->aead_schedule, sizeof(*out_key));
+    pthread_rwlock_unlock(&ring->lock);
+    return true;
+}
+
+bool hmacKeyringGetGeneration(hmacKeyring *ring, hmacKeyId id,
+                              uint64_t *out_generation) {
+    if (ring == NULL || id == HMAC_KEY_ID_INVALID || out_generation == NULL) {
+        return false;
+    }
+    pthread_rwlock_rdlock(&ring->lock);
+    const hmacKeyringEntry *slot = hmacKeyringFindLockedConst(ring, id);
+    if (slot == NULL) {
+        pthread_rwlock_unlock(&ring->lock);
+        return false;
+    }
+    *out_generation = slot->generation;
+    pthread_rwlock_unlock(&ring->lock);
+    return true;
+}
+
+/* ---- Revoked key floor ----------------------------------------- */
+
+hmacKeyId hmacKeyringMinValidKeyId(const hmacKeyring *ring) {
+    if (ring == NULL) {
+        return HMAC_KEY_ID_INVALID;
+    }
+    pthread_rwlock_rdlock((pthread_rwlock_t *)&ring->lock);
+    const hmacKeyId floor = ring->min_valid_key_id;
+    pthread_rwlock_unlock((pthread_rwlock_t *)&ring->lock);
+    return floor;
+}
+
+bool hmacKeyringSetMinValidKeyId(hmacKeyring *ring, hmacKeyId floor) {
+    if (ring == NULL) {
+        return false;
+    }
+    pthread_rwlock_wrlock(&ring->lock);
+    /* Refuse backward moves: lowering the floor would silently re-permit
+     * ids the operator already declared revoked, re-opening the replay
+     * window this API exists to close. Equal value is treated as a
+     * no-op success so callers can idempotently re-apply policy. */
+    if (floor < ring->min_valid_key_id) {
+        pthread_rwlock_unlock(&ring->lock);
+        return false;
+    }
+    ring->min_valid_key_id = floor;
+    pthread_rwlock_unlock(&ring->lock);
+    return true;
+}
+
+/* ---- AEAD nonce-counter helpers --------------------------------------- */
+
+/* Encode a uint64_t in little-endian into 8 bytes. */
+static void hmacKeyringPutLe64(uint8_t out[8], uint64_t v) {
+    out[0] = (uint8_t)(v & 0xFFu);
+    out[1] = (uint8_t)((v >> 8) & 0xFFu);
+    out[2] = (uint8_t)((v >> 16) & 0xFFu);
+    out[3] = (uint8_t)((v >> 24) & 0xFFu);
+    out[4] = (uint8_t)((v >> 32) & 0xFFu);
+    out[5] = (uint8_t)((v >> 40) & 0xFFu);
+    out[6] = (uint8_t)((v >> 48) & 0xFFu);
+    out[7] = (uint8_t)((v >> 56) & 0xFFu);
+}
+
+bool hmacKeyringNextAeadNonce(hmacKeyring *ring, hmacKeyId id,
+                              uint8_t out_nonce[12]) {
+    if (ring == NULL || id == HMAC_KEY_ID_INVALID || out_nonce == NULL) {
+        return false;
+    }
+    pthread_rwlock_rdlock(&ring->lock);
+    const hmacKeyringEntry *slot = hmacKeyringFindLockedConst(ring, id);
+    if (slot == NULL) {
+        pthread_rwlock_unlock(&ring->lock);
+        return false;
+    }
+    /* Fail-closed: refuse to issue a nonce whose salt is all-zero unless
+     * the slot was explicitly installed as unsalted. A zero salt on a
+     * "supposed-to-be-salted" slot would silently reuse counter-0 nonces
+     * across processes that share the same key, which destroys both
+     * ChaCha20-Poly1305 confidentiality and integrity. */
+    if (!slot->is_unsalted && hmacKeyringSaltIsZero(slot->aead_salt)) {
+        pthread_rwlock_unlock(&ring->lock);
+        return false;
+    }
+    /* CAS-loop to allocate the next counter atomically and refuse to
+     * advance past UINT64_MAX (which would wrap on subsequent calls
+     * and silently reuse a nonce). Cast away const on the atomic field
+     * — the rwlock keeps the slot alive; the field itself is atomic. */
+    _Atomic uint64_t *ctr = (_Atomic uint64_t *)&slot->aead_counter;
+    uint64_t prev = atomic_load_explicit(ctr, memory_order_relaxed);
+    for (;;) {
+        if (prev == UINT64_MAX) {
+            /* Counter exhausted — caller must rotate the key. */
+            pthread_rwlock_unlock(&ring->lock);
+            return false;
+        }
+        if (atomic_compare_exchange_weak_explicit(ctr, &prev, prev + 1u,
+                                                  memory_order_relaxed,
+                                                  memory_order_relaxed)) {
+            break;
+        }
+        /* prev updated by the failed CAS; retry. */
+    }
+    /* Build the nonce: 8 bytes counter LE || 4 bytes salt. */
+    hmacKeyringPutLe64(out_nonce, prev);
+    out_nonce[8] = slot->aead_salt[0];
+    out_nonce[9] = slot->aead_salt[1];
+    out_nonce[10] = slot->aead_salt[2];
+    out_nonce[11] = slot->aead_salt[3];
+    pthread_rwlock_unlock(&ring->lock);
+    return true;
+}
+
+bool hmacKeyringSetAeadSalt(hmacKeyring *ring, hmacKeyId id,
+                            const uint8_t salt[HMAC_KEYRING_AEAD_SALT_BYTES]) {
+    if (ring == NULL || id == HMAC_KEY_ID_INVALID || salt == NULL) {
+        return false;
+    }
+    pthread_rwlock_wrlock(&ring->lock);
+    hmacKeyringEntry *slot = hmacKeyringFindLockedMut(ring, id);
+    if (slot == NULL) {
+        pthread_rwlock_unlock(&ring->lock);
+        return false;
+    }
+    memcpy(slot->aead_salt, salt, HMAC_KEYRING_AEAD_SALT_BYTES);
+    /* If the caller supplied a real (non-zero) salt, transition the slot
+     * out of the "unsalted" state — the slot is now safe for fail-closed
+     * nonce issuance. A zero salt leaves `is_unsalted` untouched: an
+     * unsalted slot stays unsalted; a salted slot stays salted (and will
+     * subsequently fail NextAeadNonce until a non-zero salt is set). */
+    if (!hmacKeyringSaltIsZero(slot->aead_salt)) {
+        slot->is_unsalted = false;
+    }
+    /* Bump generation — changing the salt rotates the AEAD nonce
+     * derivation surface for this key, which is a meaningful semantic
+     * change for attach-style consumers that may have cached the prior
+     * (key, salt) pairing. */
+    slot->generation++;
+    pthread_rwlock_unlock(&ring->lock);
+    return true;
+}
+
+bool hmacKeyringPeekAeadCounter(hmacKeyring *ring, hmacKeyId id,
+                                uint64_t *out_counter) {
+    if (ring == NULL || id == HMAC_KEY_ID_INVALID || out_counter == NULL) {
+        return false;
+    }
+    pthread_rwlock_rdlock(&ring->lock);
+    const hmacKeyringEntry *slot = hmacKeyringFindLockedConst(ring, id);
+    if (slot == NULL) {
+        pthread_rwlock_unlock(&ring->lock);
+        return false;
+    }
+    _Atomic uint64_t *ctr = (_Atomic uint64_t *)&slot->aead_counter;
+    *out_counter = atomic_load_explicit(ctr, memory_order_relaxed);
+    pthread_rwlock_unlock(&ring->lock);
+    return true;
+}
+
+bool hmacKeyringRestoreAeadCounter(hmacKeyring *ring, hmacKeyId id,
+                                   uint64_t value) {
+    if (ring == NULL || id == HMAC_KEY_ID_INVALID || value == UINT64_MAX) {
+        return false;
+    }
+    pthread_rwlock_wrlock(&ring->lock);
+    hmacKeyringEntry *slot = hmacKeyringFindLockedMut(ring, id);
+    if (slot == NULL) {
+        pthread_rwlock_unlock(&ring->lock);
+        return false;
+    }
+    /* Strict forward-only: never move the counter backwards. */
+    const uint64_t current =
+        atomic_load_explicit(&slot->aead_counter, memory_order_relaxed);
+    if (value < current) {
+        pthread_rwlock_unlock(&ring->lock);
+        return false;
+    }
+    atomic_store_explicit(&slot->aead_counter, value, memory_order_relaxed);
+    pthread_rwlock_unlock(&ring->lock);
+    return true;
+}
+
+/* ---- Snapshot / restore via flex --------------------------------------
+ *
+ * Per-slot encoding into a single flex: 5 entries per slot, in order:
+ *
+ * 1. id (unsigned)
+ * 2. algo_tag (unsigned: 0 = SHA-256, 1 = BLAKE3)
+ * 3. salt (4-byte bytes)
+ * 4. aead_counter (unsigned)
+ * 5. key (bytes, raw_key_len)
+ *
+ * Total entry count is always 5*N. flex framing is the wire wrapper —
+ * no hand-rolled magic/length integers, no custom LE writers. */
+
+#define HMAC_KEYRING_ENTRIES_PER_SLOT ((size_t)5)
+#define HMAC_KEYRING_ALGO_TAG_SHA256 ((uint64_t)0)
+#define HMAC_KEYRING_ALGO_TAG_BLAKE3 ((uint64_t)1)
+/* Reserved algo tag carried by the floor sentinel record. Picked at the
+ * top of the unsigned-8 range so a future real algorithm cannot collide.
+ * The sentinel always sits at slot id == HMAC_KEY_ID_INVALID (0), which
+ * is already invalid for a real slot, so the (id == 0, algo == 0xFF)
+ * pair unambiguously identifies the floor entry on restore. */
+#define HMAC_KEYRING_ALGO_TAG_FLOOR ((uint64_t)0xFF)
+
+/* Map an algo descriptor pointer to its persisted tag value. */
+static bool hkrAlgoToTag(const hmacHashAlgo *algo, uint64_t *out_tag) {
+    if (algo == &hmacAlgoSHA256) {
+        *out_tag = HMAC_KEYRING_ALGO_TAG_SHA256;
+        return true;
+    }
+    if (algo == &hmacAlgoBLAKE3) {
+        *out_tag = HMAC_KEYRING_ALGO_TAG_BLAKE3;
+        return true;
+    }
+    return false;
+}
+
+static const hmacHashAlgo *hkrTagToAlgo(uint64_t tag) {
+    switch (tag) {
+    case HMAC_KEYRING_ALGO_TAG_SHA256:
+        return &hmacAlgoSHA256;
+    case HMAC_KEYRING_ALGO_TAG_BLAKE3:
+        return &hmacAlgoBLAKE3;
+    default:
+        return NULL;
+    }
+}
+
+/* Build the flex encoding under the read lock. Returns a freshly
+ * zmalloc'd flex; caller owns and frees via flexFree. Returns NULL if
+ * any installed slot uses an algo we cannot tag. */
+static flex *hkrBuildSnapshotFlex(const hmacKeyring *ring) {
+    flex *f = flexNew();
+    pthread_rwlock_rdlock((pthread_rwlock_t *)&ring->lock);
+    /* leading floor sentinel. Only written when the floor is non-
+     * zero so a fresh keyring snapshot stays bit-identical to the legacy
+     * (pre-floor) format, which keeps the round-trip tests stable and
+     * avoids a wire bump. Old readers without floor awareness would
+     * reject id == 0 entries; the existing rejection path in Restore
+     * (see id-non-zero check) is exactly the safe behavior. */
+    if (ring->min_valid_key_id != HMAC_KEY_ID_INVALID) {
+        flexPushUnsigned(&f, (uint64_t)HMAC_KEY_ID_INVALID, FLEX_ENDPOINT_TAIL);
+        flexPushUnsigned(&f, HMAC_KEYRING_ALGO_TAG_FLOOR, FLEX_ENDPOINT_TAIL);
+        flexPushUnsigned(&f, (uint64_t)ring->min_valid_key_id,
+                         FLEX_ENDPOINT_TAIL);
+        flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
+        /* Final entry must be a bytes record to match the per-slot record
+         * shape so Restore's record-length math stays uniform. One
+         * harmless marker byte (0xFF) — zero-length bytes interacts
+         * poorly with flexGetByTypeCopy's allocator path. */
+        static const uint8_t marker = 0xFFu;
+        flexPushBytes(&f, &marker, 1, FLEX_ENDPOINT_TAIL);
+    }
+    for (size_t i = 0; i < HMAC_KEYRING_CAPACITY; i++) {
+        const hmacKeyringEntry *e = &ring->entries[i];
+        if (e->id == HMAC_KEY_ID_INVALID) {
+            continue;
+        }
+        uint64_t tag = 0;
+        if (!hkrAlgoToTag(e->algo, &tag)) {
+            pthread_rwlock_unlock((pthread_rwlock_t *)&ring->lock);
+            flexFree(f);
+            return NULL;
+        }
+        flexPushUnsigned(&f, (uint64_t)e->id, FLEX_ENDPOINT_TAIL);
+        flexPushUnsigned(&f, tag, FLEX_ENDPOINT_TAIL);
+        flexPushBytes(&f, e->aead_salt, sizeof(e->aead_salt),
+                      FLEX_ENDPOINT_TAIL);
+        flexPushUnsigned(
+            &f, atomic_load_explicit(&e->aead_counter, memory_order_relaxed),
+            FLEX_ENDPOINT_TAIL);
+        flexPushBytes(&f, e->raw_key_bytes, e->raw_key_len, FLEX_ENDPOINT_TAIL);
+    }
+    pthread_rwlock_unlock((pthread_rwlock_t *)&ring->lock);
+    return f;
+}
+
+size_t hmacKeyringSnapshotSize(const hmacKeyring *ring) {
+    if (ring == NULL) {
+        return 0;
+    }
+    flex *f = hkrBuildSnapshotFlex(ring);
+    if (f == NULL) {
+        return 0;
+    }
+    const size_t n = flexBytes(f);
+    flexFree(f);
+    return n;
+}
+
+bool hmacKeyringSnapshot(const hmacKeyring *ring, uint8_t *out, size_t out_cap,
+                         size_t *out_written) {
+    if (ring == NULL || out == NULL) {
+        return false;
+    }
+    flex *f = hkrBuildSnapshotFlex(ring);
+    if (f == NULL) {
+        return false;
+    }
+    const size_t need = flexBytes(f);
+    if (out_cap < need) {
+        flexFree(f);
+        return false;
+    }
+    memcpy(out, f, need);
+    flexFree(f);
+    if (out_written != NULL) {
+        *out_written = need;
+    }
+    return true;
+}
+
+/* Track installed ids so we can roll back on partial failure. */
+typedef struct hkrRestoreUndoLog {
+    hmacKeyId ids[HMAC_KEYRING_CAPACITY];
+    size_t count;
+} hkrRestoreUndoLog;
+
+bool hmacKeyringRestore(hmacKeyring *ring, const uint8_t *buf, size_t len) {
+    if (ring == NULL || buf == NULL) {
+        return false;
+    }
+    if (!flexValidateBuffer(buf, len)) {
+        return false;
+    }
+    const flex *f = (const flex *)buf;
+    const size_t count = flexCount(f);
+    if ((count % HMAC_KEYRING_ENTRIES_PER_SLOT) != 0u) {
+        return false;
+    }
+    size_t records = count / HMAC_KEYRING_ENTRIES_PER_SLOT;
+    hkrRestoreUndoLog undo = {0};
+    /* Hold the parsed floor (if any) and apply it AFTER all real slots
+     * have installed. Apply order is irrelevant for correctness — a
+     * rollback nukes the installed ids regardless of the floor — but
+     * applying-last keeps the rollback path code identical to the
+     * prior implementation: undo only walks installed ids, never the
+     * sentinel. */
+    hmacKeyId parsed_floor = HMAC_KEY_ID_INVALID;
+    bool have_floor_sentinel = false;
+
+    flexEntry *fe = flexHead(f);
+
+    /* Floor-sentinel detection. If the first record is (id == 0, algo ==
+     * 0xFF) it carries the persisted floor; consume it and continue with
+     * the remaining records as real slots. Otherwise the first record
+     * is a regular slot and we fall through to the per-slot loop with
+     * `fe` still pointing at entry 1.
+     *
+     * Implementation note: peek the first two entries (id + algo). If
+     * they match the sentinel pattern, read entries 3..5 and skip to
+     * the next record. If they DON'T, the per-slot loop below will
+     * re-walk those two entries via the regular id/algo decoders — which
+     * is correct only if our peek didn't advance the iterator. The flex
+     * API gives us flexGetByTypeCopy which is read-only, so the iterator
+     * stays put until we explicitly call flexNext. */
+    if (records > 0 && fe != NULL) {
+        databox peek_id;
+        flexGetByTypeCopy(fe, &peek_id);
+        if (peek_id.type == DATABOX_UNSIGNED_64 && peek_id.data.u64 == 0u) {
+            /* id == 0 means either (a) sentinel or (b) malformed slot.
+             * Disambiguate via the algo tag in entry 2. */
+            flexEntry *fe_algo = flexNext(f, fe);
+            if (fe_algo == NULL) {
+                return false;
+            }
+            databox peek_algo;
+            flexGetByTypeCopy(fe_algo, &peek_algo);
+            if (peek_algo.type != DATABOX_UNSIGNED_64 ||
+                peek_algo.data.u64 != HMAC_KEYRING_ALGO_TAG_FLOOR) {
+                /* id == 0 with a real-algo tag is a malformed slot.
+                 * Reject up front rather than letting the per-slot loop
+                 * trip on the same id == 0 check. */
+                return false;
+            }
+            /* Consume entries 3 (floor value), 4 (padding), 5 (padding). */
+            flexEntry *fe_floor = flexNext(f, fe_algo);
+            if (fe_floor == NULL) {
+                return false;
+            }
+            databox box_floor;
+            flexGetByTypeCopy(fe_floor, &box_floor);
+            if (box_floor.type != DATABOX_UNSIGNED_64 ||
+                box_floor.data.u64 > UINT32_MAX) {
+                return false;
+            }
+            parsed_floor = (hmacKeyId)box_floor.data.u64;
+            have_floor_sentinel = true;
+
+            flexEntry *fe_pad1 = flexNext(f, fe_floor);
+            if (fe_pad1 == NULL) {
+                return false;
+            }
+            databox box_pad1;
+            flexGetByTypeCopy(fe_pad1, &box_pad1);
+            if (box_pad1.type != DATABOX_UNSIGNED_64) {
+                return false;
+            }
+            flexEntry *fe_pad2 = flexNext(f, fe_pad1);
+            if (fe_pad2 == NULL) {
+                return false;
+            }
+            databox box_pad2;
+            flexGetByTypeCopy(fe_pad2, &box_pad2);
+            if (!DATABOX_IS_BYTES(&box_pad2) || box_pad2.len != 1u) {
+                if (box_pad2.allocated) {
+                    zfree(box_pad2.data.bytes.start);
+                }
+                return false;
+            }
+            if (box_pad2.allocated) {
+                zfree(box_pad2.data.bytes.start);
+            }
+            /* Advance the iterator past the sentinel and decrement the
+             * slot count we still have to consume. */
+            fe = flexNext(f, fe_pad2);
+            records -= 1u;
+        }
+    }
+
+    for (size_t i = 0; i < records; i++) {
+        if (fe == NULL) {
+            goto rollback;
+        }
+
+        /* Entry 1: id (unsigned). */
+        databox box_id;
+        flexGetByTypeCopy(fe, &box_id);
+        if (box_id.type != DATABOX_UNSIGNED_64 ||
+            box_id.data.u64 > UINT32_MAX || box_id.data.u64 == 0) {
+            goto rollback;
+        }
+        const hmacKeyId id = (hmacKeyId)box_id.data.u64;
+        fe = flexNext(f, fe);
+        if (fe == NULL) {
+            goto rollback;
+        }
+
+        /* Entry 2: algo tag (unsigned). */
+        databox box_algo;
+        flexGetByTypeCopy(fe, &box_algo);
+        if (box_algo.type != DATABOX_UNSIGNED_64) {
+            goto rollback;
+        }
+        const hmacHashAlgo *algo = hkrTagToAlgo(box_algo.data.u64);
+        if (algo == NULL) {
+            goto rollback;
+        }
+        fe = flexNext(f, fe);
+        if (fe == NULL) {
+            goto rollback;
+        }
+
+        /* Entry 3: salt (bytes, exactly 4). */
+        databox box_salt;
+        flexGetByTypeCopy(fe, &box_salt);
+        if (!DATABOX_IS_BYTES(&box_salt) || box_salt.len != 4) {
+            if (box_salt.allocated) {
+                zfree(box_salt.data.bytes.start);
+            }
+            goto rollback;
+        }
+        uint8_t salt[4];
+        memcpy(salt, box_salt.data.bytes.start, 4);
+        if (box_salt.allocated) {
+            zfree(box_salt.data.bytes.start);
+        }
+        fe = flexNext(f, fe);
+        if (fe == NULL) {
+            goto rollback;
+        }
+
+        /* Entry 4: counter (unsigned). */
+        databox box_ctr;
+        flexGetByTypeCopy(fe, &box_ctr);
+        if (box_ctr.type != DATABOX_UNSIGNED_64) {
+            goto rollback;
+        }
+        const uint64_t counter = box_ctr.data.u64;
+        fe = flexNext(f, fe);
+        if (fe == NULL) {
+            goto rollback;
+        }
+
+        /* Entry 5: key bytes. */
+        databox box_key;
+        flexGetByTypeCopy(fe, &box_key);
+        if (!DATABOX_IS_BYTES(&box_key) || box_key.len == 0 ||
+            box_key.len > HMAC_KEYRING_MAX_KEY_BYTES) {
+            /* Reject oversized keys explicitly. A tampered snapshot with
+             * box_key.len in the GiB range would otherwise drive a
+             * downstream Install allocation. The cap is the same one
+             * the in-memory Install path enforces, so this is symmetric
+             * not redundant. */
+            if (box_key.allocated) {
+                zfree(box_key.data.bytes.start);
+            }
+            goto rollback;
+        }
+        /* Snapshot wire format predates the explicit unsalted-vs-salted
+         * distinction. Infer the install path from the salt bytes:
+         * - all-zero salt => restore as Unsalted (preserves the legacy
+         * semantic that an all-zero salt is OK for nonce issuance);
+         * - non-zero salt => restore via the salted install path.
+         * Either way the post-install slot state matches what an
+         * Install / Set sequence would have produced before the
+         * fail-closed all-zero-salt-rejection contract landed. */
+        bool installed;
+        if (hmacKeyringSaltIsZero(salt)) {
+            installed = hmacKeyringInstallUnsalted(
+                ring, id, algo, box_key.data.bytes.start, box_key.len);
+        } else {
+            installed = hmacKeyringInstall(
+                ring, id, algo, box_key.data.bytes.start, box_key.len, salt);
+        }
+        if (box_key.allocated) {
+            zfree(box_key.data.bytes.start);
+        }
+        if (!installed) {
+            goto rollback;
+        }
+        hmacKeyringRestoreAeadCounter(ring, id, counter);
+        undo.ids[undo.count++] = id;
+        fe = flexNext(f, fe);
+    }
+    /* Apply the parsed floor only after every slot has installed
+     * cleanly. Done under the write lock directly (not via
+     * hmacKeyringSetMinValidKeyId) because the latter refuses backward
+     * moves — but a fresh keyring's floor starts at zero so any non-zero
+     * persisted floor is by definition a forward move. Be explicit
+     * about that via the helper rather than a raw assignment so the
+     * monotonic invariant has a single owner. */
+    if (have_floor_sentinel && parsed_floor != HMAC_KEY_ID_INVALID) {
+        if (!hmacKeyringSetMinValidKeyId(ring, parsed_floor)) {
+            /* Only reachable if a concurrent caller already raised the
+             * floor above the persisted value — possible on a hot
+             * restore over a non-empty keyring. Treat as malformed
+             * restore: rollback so the keyring is left exactly as it
+             * was before this call. */
+            goto rollback;
+        }
+    }
+    return true;
+
+rollback:
+    for (size_t i = 0; i < undo.count; i++) {
+        hmacKeyringRetire(ring, undo.ids[i]);
+    }
+    return false;
+}
+
+/* ---- persistOps descriptor ----------------------------------------- */
+
+static uint8_t *hkrPersistSnapshot(const void *structure, size_t *len) {
+    const hmacKeyring *ring = (const hmacKeyring *)structure;
+    const size_t need = hmacKeyringSnapshotSize(ring);
+    if (need == 0) {
+        *len = 0;
+        return NULL;
+    }
+    uint8_t *out = zmalloc(need);
+    size_t written = 0;
+    if (!hmacKeyringSnapshot(ring, out, need, &written)) {
+        zfree(out);
+        return NULL;
+    }
+    *len = written;
+    return out;
+}
+
+static void *hkrPersistRestore(const uint8_t *data, size_t len) {
+    hmacKeyring *ring = hmacKeyringCreate();
+    if (ring == NULL) {
+        return NULL;
+    }
+    if (!hmacKeyringRestore(ring, data, len)) {
+        hmacKeyringFree(ring);
+        return NULL;
+    }
+    return ring;
+}
+
+static void *hkrPersistNewEmpty(void) {
+    return hmacKeyringCreate();
+}
+
+static size_t hkrPersistCount(const void *structure) {
+    return hmacKeyringSize((const hmacKeyring *)structure);
+}
+
+static size_t hkrPersistEstimateSize(const void *structure) {
+    return hmacKeyringSnapshotSize((const hmacKeyring *)structure);
+}
+
+static void hkrPersistFree(void *structure) {
+    hmacKeyringFree((hmacKeyring *)structure);
+}
+
+const persistOps persistOpsHmacKeyring = {
+    .type = PERSIST_TYPE_HMAC_KEYRING,
+    .name = "hmacKeyring",
+    .snapshot = hkrPersistSnapshot,
+    .restore = hkrPersistRestore,
+    .newEmpty = hkrPersistNewEmpty,
+    .count = hkrPersistCount,
+    .estimateSize = hkrPersistEstimateSize,
+    .encodeOp = NULL, /* keyring changes are operator-rare; full
+                            re-snapshot is the durability model */
+    .applyOp = NULL,
+    .streamSnapshot = NULL,
+    .streamRestore = NULL,
+    .validate = NULL,
+    .free = hkrPersistFree,
+};
+
+/* ============================================================================
+ * Test driver
+ * ============================================================================
+ */
+
+#ifdef DATAKIT_TEST
+
+#include "ctest.h"
+
+/* Worker context for the multi-threaded contention test. Each worker
+ * runs `iters` lookups against a shared keyring; one designated writer
+ * thread interleaves install/retire to keep the slot churning. */
+typedef struct {
+    hmacKeyring *ring;
+    uint32_t iters;
+    uint32_t lookup_misses;
+    uint32_t digest_mismatches;
+    bool is_writer;
+    uint8_t _pad[3];
+} hmacKeyringMtCtx;
+
+/* Worker for the concurrent-nonce uniqueness test. Each worker drains
+ * `iters` nonces against id=21 and stores their counter value into `out`. */
+typedef struct hmacKeyringNonceWorkerCtx {
+    hmacKeyring *ring;
+    uint64_t *out;
+    uint32_t iters;
+    hmacKeyId id;
+} hmacKeyringNonceWorkerCtx;
+
+static void *hmacKeyringNonceWorker(void *arg) {
+    hmacKeyringNonceWorkerCtx *c = (hmacKeyringNonceWorkerCtx *)arg;
+    for (uint32_t i = 0; i < c->iters; i++) {
+        uint8_t n[12];
+        if (!hmacKeyringNextAeadNonce(c->ring, c->id, n)) {
+            c->out[i] = UINT64_MAX;
+            continue;
+        }
+        uint64_t v = 0;
+        for (int32_t j = 7; j >= 0; j--) {
+            v = (v << 8) | (uint64_t)n[(uint32_t)j];
+        }
+        c->out[i] = v;
+    }
+    return NULL;
+}
+
+static void *hmacKeyringMtWorker(void *arg) {
+    hmacKeyringMtCtx *ctx = (hmacKeyringMtCtx *)arg;
+    const uint8_t key[32] = {0xA1, 0xB2, 0xC3, 0xD4};
+    if (ctx->is_writer) {
+        /* The writer rapidly installs and retires id=100, id=101, id=102
+         * to exercise the install/retire path concurrently with
+         * lookups against id=1..16 (installed by the harness). */
+        for (uint32_t i = 0; i < ctx->iters; i++) {
+            const hmacKeyId tmp_id = 100u + (i % 3u);
+            /* Worker exercises install/retire concurrency; no AEAD nonces
+             * issued, so InstallUnsalted is the lighter-weight choice. */
+            if (hmacKeyringInstallUnsalted(ctx->ring, tmp_id, &hmacAlgoSHA256,
+                                           key, sizeof(key))) {
+                hmacKeyringRetire(ctx->ring, tmp_id);
+            }
+        }
+        return NULL;
+    }
+    /* Readers loop over ids 1..16 (pre-installed) and verify every
+     * lookup either returns a handle that produces the expected digest
+     * or returns NULL (which would be a regression — these ids are not
+     * retired). */
+    uint8_t expected[32];
+    hmacCompute(&hmacAlgoSHA256, key, sizeof(key), "ping", 4, expected);
+    for (uint32_t i = 0; i < ctx->iters; i++) {
+        const hmacKeyId id = 1u + (i % 16u);
+        const hmacKey *handle = hmacKeyringLookup(ctx->ring, id);
+        if (handle == NULL) {
+            ctx->lookup_misses++;
+            continue;
+        }
+        uint8_t observed[32];
+        hmacComputeWithKey(handle, "ping", 4, observed);
+        if (memcmp(expected, observed, sizeof(expected)) != 0) {
+            ctx->digest_mismatches++;
+        }
+    }
+    return NULL;
+}
+
+#include <pthread.h>
+
+int hmacKeyringTest(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+    int err = 0;
+
+    TEST("create + free roundtrip on empty keyring") {
+        hmacKeyring *ring = hmacKeyringCreate();
+        if (ring == NULL) {
+            ERRR("Create returned NULL");
+        }
+        if (hmacKeyringSize(ring) != 0) {
+            ERRR("Empty keyring should report size 0");
+        }
+        hmacKeyringFree(ring);
+    }
+
+    TEST("install + lookup + retire one key") {
+        hmacKeyring *ring = hmacKeyringCreate();
+        const uint8_t key[32] = {0x11, 0x22, 0x33, 0x44};
+        const uint8_t salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {0xC1, 0xA1, 0xC1,
+                                                            0xA1};
+        if (!hmacKeyringInstall(ring, 7u, &hmacAlgoSHA256, key, sizeof(key),
+                                salt)) {
+            ERRR("Install of id=7 should succeed");
+        }
+        if (hmacKeyringSize(ring) != 1) {
+            ERRR("Size should be 1 after install");
+        }
+        const hmacKey *handle = hmacKeyringLookup(ring, 7u);
+        if (handle == NULL) {
+            ERRR("Lookup of installed id should return a handle");
+        }
+        /* Round-trip the prepared key through hmacComputeWithKey and
+         * verify it matches a fresh one-shot computation. */
+        uint8_t expected[32], observed[32];
+        hmacCompute(&hmacAlgoSHA256, key, sizeof(key), "abc", 3, expected);
+        hmacComputeWithKey(handle, "abc", 3, observed);
+        if (memcmp(expected, observed, sizeof(expected)) != 0) {
+            ERRR("Prepared key disagreed with fresh hmacCompute");
+        }
+        if (!hmacKeyringRetire(ring, 7u)) {
+            ERRR("Retire of id=7 should succeed");
+        }
+        if (hmacKeyringLookup(ring, 7u) != NULL) {
+            ERRR("Retired id should no longer look up");
+        }
+        if (hmacKeyringSize(ring) != 0) {
+            ERRR("Size should be 0 after retire");
+        }
+        hmacKeyringFree(ring);
+    }
+
+    TEST("install refuses invalid id and duplicate id") {
+        hmacKeyring *ring = hmacKeyringCreate();
+        const uint8_t key[16] = {0xAA};
+        const uint8_t salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {0x12, 0x34, 0x56,
+                                                            0x78};
+        if (hmacKeyringInstall(ring, HMAC_KEY_ID_INVALID, &hmacAlgoSHA256, key,
+                               sizeof(key), salt)) {
+            ERRR("Install with id=0 must be refused");
+        }
+        if (!hmacKeyringInstall(ring, 1u, &hmacAlgoSHA256, key, sizeof(key),
+                                salt)) {
+            ERRR("Install of id=1 should succeed");
+        }
+        if (hmacKeyringInstall(ring, 1u, &hmacAlgoSHA256, key, sizeof(key),
+                               salt)) {
+            ERRR("Duplicate install of id=1 must be refused");
+        }
+        hmacKeyringFree(ring);
+    }
+
+    TEST("multiple algorithms coexist") {
+        hmacKeyring *ring = hmacKeyringCreate();
+        const uint8_t key[32] = {0xC0, 0xDE};
+        const uint8_t salt_a[HMAC_KEYRING_AEAD_SALT_BYTES] = {0x0A, 0x0B, 0x0C,
+                                                              0x0D};
+        const uint8_t salt_b[HMAC_KEYRING_AEAD_SALT_BYTES] = {0x10, 0x11, 0x12,
+                                                              0x13};
+        if (!hmacKeyringInstall(ring, 10u, &hmacAlgoSHA256, key, 32, salt_a)) {
+            ERRR("Install SHA256 id=10");
+        }
+        if (!hmacKeyringInstall(ring, 11u, &hmacAlgoBLAKE3, key, 32, salt_b)) {
+            ERRR("Install BLAKE3 id=11");
+        }
+        if (hmacKeyringSize(ring) != 2) {
+            ERR("Expected size=2, got %zu", hmacKeyringSize(ring));
+        }
+        const hmacKey *h_sha = hmacKeyringLookup(ring, 10u);
+        const hmacKey *h_b3 = hmacKeyringLookup(ring, 11u);
+        if (h_sha == NULL || h_b3 == NULL) {
+            ERRR("Both lookups should succeed");
+        }
+        /* Both must produce different digests on the same input — they
+         * are different MAC constructions. */
+        uint8_t out_sha[32], out_b3[32];
+        hmacComputeWithKey(h_sha, "hello", 5, out_sha);
+        hmacComputeWithKey(h_b3, "hello", 5, out_b3);
+        if (memcmp(out_sha, out_b3, 32) == 0) {
+            ERRR("HMAC-SHA256 and HMAC-BLAKE3 must produce different output");
+        }
+        hmacKeyringFree(ring);
+    }
+
+    TEST("install fills capacity and refuses beyond") {
+        hmacKeyring *ring = hmacKeyringCreate();
+        const uint8_t key[16] = {0x5A};
+        const uint8_t salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {0x5A, 0x5A, 0x5A,
+                                                            0x5A};
+        for (uint32_t i = 1u; i <= 16u; i++) {
+            if (!hmacKeyringInstall(ring, i, &hmacAlgoSHA256, key, 16, salt)) {
+                ERR("Install %u of 16 should succeed", i);
+            }
+        }
+        if (hmacKeyringInstall(ring, 17u, &hmacAlgoSHA256, key, 16, salt)) {
+            ERRR("17th install must be refused (capacity)");
+        }
+        /* Retire one and re-install should now succeed. */
+        if (!hmacKeyringRetire(ring, 5u)) {
+            ERRR("Retire id=5");
+        }
+        if (!hmacKeyringInstall(ring, 17u, &hmacAlgoSHA256, key, 16, salt)) {
+            ERRR("Re-install after retire should succeed");
+        }
+        hmacKeyringFree(ring);
+    }
+
+    TEST("concurrent lookups under installer churn stay consistent") {
+        hmacKeyring *ring = hmacKeyringCreate();
+        const uint8_t key[32] = {0xA1, 0xB2, 0xC3, 0xD4};
+        /* Pre-install ids 1..16; readers lookup these. */
+        for (uint32_t i = 1u; i <= 16u; i++) {
+            /* Test only exercises lookup/install/retire, not nonce issuance,
+             * so InstallUnsalted is the lighter-weight choice. */
+            if (!hmacKeyringInstallUnsalted(ring, i, &hmacAlgoSHA256, key,
+                                            sizeof(key))) {
+                ERR("Pre-install id=%u failed", i);
+            }
+        }
+        /* Capacity is full; the writer must retire-then-install
+         * a temporary id (handled inside the worker by retiring its
+         * own previous insert). Drop one slot first so the writer
+         * has room. */
+        if (!hmacKeyringRetire(ring, 16u)) {
+            ERRR("Pre-retire id=16 failed");
+        }
+
+        const uint32_t kReaders = 7u;
+        const uint32_t kIters = 4096u;
+        hmacKeyringMtCtx ctxs[8];
+        pthread_t tids[8];
+        for (uint32_t i = 0; i < kReaders; i++) {
+            ctxs[i] = (hmacKeyringMtCtx){.ring = ring,
+                                         .iters = kIters,
+                                         .lookup_misses = 0,
+                                         .digest_mismatches = 0,
+                                         .is_writer = false};
+        }
+        ctxs[kReaders] = (hmacKeyringMtCtx){.ring = ring,
+                                            .iters = kIters,
+                                            .lookup_misses = 0,
+                                            .digest_mismatches = 0,
+                                            .is_writer = true};
+        for (uint32_t i = 0; i <= kReaders; i++) {
+            if (pthread_create(&tids[i], NULL, hmacKeyringMtWorker, &ctxs[i]) !=
+                0) {
+                ERR("pthread_create thread %u", i);
+            }
+        }
+        for (uint32_t i = 0; i <= kReaders; i++) {
+            pthread_join(tids[i], NULL);
+        }
+        for (uint32_t i = 0; i < kReaders; i++) {
+            if (ctxs[i].digest_mismatches > 0) {
+                ERR("reader %u observed %u digest mismatches", i,
+                    ctxs[i].digest_mismatches);
+            }
+            /* Reader iterates over ids 1..16; id 16 was retired before
+             * spawning threads, so ~1/16 of its lookups will miss.
+             * That gives an expected miss count of kIters/16; double
+             * it to kIters/8 as the failure threshold to absorb noise
+             * from the concurrent installer churn on ids 100..102. */
+            const uint32_t expected_misses = kIters / 16u;
+            const uint32_t miss_threshold = kIters / 8u;
+            if (ctxs[i].lookup_misses > miss_threshold) {
+                ERR("reader %u observed %u misses "
+                    "(expected ≈%u, threshold %u)",
+                    i, ctxs[i].lookup_misses, expected_misses, miss_threshold);
+            }
+        }
+        hmacKeyringFree(ring);
+    }
+
+    TEST("AEAD nonce counter: starts at 0, monotonic per call") {
+        hmacKeyring *ring = hmacKeyringCreate();
+        const uint8_t key[32] = {0xAA};
+        /* Test asserts nonce[8..11] == 0; use the Unsalted entry point so
+         * NextAeadNonce will issue zero-salt nonces under the new
+         * fail-closed contract. */
+        hmacKeyringInstallUnsalted(ring, 7u, &hmacAlgoSHA256, key, sizeof(key));
+        uint8_t n0[12], n1[12], n2[12];
+        if (!hmacKeyringNextAeadNonce(ring, 7u, n0)) {
+            ERRR("NextAeadNonce 0 should succeed");
+        }
+        if (!hmacKeyringNextAeadNonce(ring, 7u, n1)) {
+            ERRR("NextAeadNonce 1 should succeed");
+        }
+        if (!hmacKeyringNextAeadNonce(ring, 7u, n2)) {
+            ERRR("NextAeadNonce 2 should succeed");
+        }
+        /* Counter low byte should be 0, 1, 2; remaining bytes all zero
+         * (no salt installed). */
+        const uint8_t expect0[12] = {0};
+        uint8_t expect1[12] = {0};
+        expect1[0] = 1u;
+        uint8_t expect2[12] = {0};
+        expect2[0] = 2u;
+        if (memcmp(n0, expect0, 12) != 0) {
+            ERRR("nonce0 layout");
+        }
+        if (memcmp(n1, expect1, 12) != 0) {
+            ERRR("nonce1 layout");
+        }
+        if (memcmp(n2, expect2, 12) != 0) {
+            ERRR("nonce2 layout");
+        }
+        uint64_t peek = 0;
+        if (!hmacKeyringPeekAeadCounter(ring, 7u, &peek)) {
+            ERRR("Peek should succeed");
+        }
+        if (peek != 3u) {
+            ERR("Peek expected 3, got %llu", (unsigned long long)peek);
+        }
+        hmacKeyringFree(ring);
+    }
+
+    TEST("AEAD nonce salt: prefixed correctly, counter unaffected") {
+        hmacKeyring *ring = hmacKeyringCreate();
+        const uint8_t key[32] = {0x11};
+        const uint8_t initial_salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {0x01, 0x02,
+                                                                    0x03, 0x04};
+        hmacKeyringInstall(ring, 9u, &hmacAlgoSHA256, key, sizeof(key),
+                           initial_salt);
+        const uint8_t salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {0xDE, 0xAD, 0xBE,
+                                                            0xEF};
+        if (!hmacKeyringSetAeadSalt(ring, 9u, salt)) {
+            ERRR("SetAeadSalt should succeed");
+        }
+        uint8_t n[12];
+        if (!hmacKeyringNextAeadNonce(ring, 9u, n)) {
+            ERRR("NextAeadNonce");
+        }
+        /* Counter LE in bytes 0..7, salt in bytes 8..11. */
+        if (n[0] != 0u || n[1] != 0u) {
+            ERRR("counter low bytes");
+        }
+        if (n[8] != 0xDE || n[9] != 0xAD || n[10] != 0xBE || n[11] != 0xEF) {
+            ERRR("salt bytes not propagated to nonce");
+        }
+        hmacKeyringFree(ring);
+    }
+
+    TEST("AEAD counter restore: forward ok, backward refused") {
+        hmacKeyring *ring = hmacKeyringCreate();
+        const uint8_t key[32] = {0x22};
+        /* Test calls NextAeadNonce after RestoreAeadCounter without
+         * setting a salt; use Unsalted to bypass the fail-closed check. */
+        hmacKeyringInstallUnsalted(ring, 11u, &hmacAlgoSHA256, key,
+                                   sizeof(key));
+        if (!hmacKeyringRestoreAeadCounter(ring, 11u, 1000u)) {
+            ERRR("Restore to 1000 should succeed");
+        }
+        uint8_t n[12];
+        if (!hmacKeyringNextAeadNonce(ring, 11u, n)) {
+            ERRR("NextAeadNonce");
+        }
+        if (n[0] != (uint8_t)(1000u & 0xFFu) ||
+            n[1] != (uint8_t)((1000u >> 8) & 0xFFu)) {
+            ERRR("counter did not pick up restored value");
+        }
+        /* Now at 1001; restore to 1500 forward — ok. */
+        if (!hmacKeyringRestoreAeadCounter(ring, 11u, 1500u)) {
+            ERRR("Forward restore should succeed");
+        }
+        /* Restore to 500 backward — refused. */
+        if (hmacKeyringRestoreAeadCounter(ring, 11u, 500u)) {
+            ERRR("Backward restore must be refused");
+        }
+        /* Restore to UINT64_MAX — refused (would exhaust). */
+        if (hmacKeyringRestoreAeadCounter(ring, 11u, UINT64_MAX)) {
+            ERRR("Restore to UINT64_MAX must be refused");
+        }
+        hmacKeyringFree(ring);
+    }
+
+    TEST("AEAD counter exhaustion: refuses past UINT64_MAX") {
+        hmacKeyring *ring = hmacKeyringCreate();
+        const uint8_t key[32] = {0x33};
+        hmacKeyringInstallUnsalted(ring, 13u, &hmacAlgoSHA256, key,
+                                   sizeof(key));
+        if (!hmacKeyringRestoreAeadCounter(ring, 13u, UINT64_MAX - 1u)) {
+            ERRR("Restore to UINT64_MAX-1 should succeed");
+        }
+        uint8_t n[12];
+        if (!hmacKeyringNextAeadNonce(ring, 13u, n)) {
+            ERRR("Last NextAeadNonce should succeed");
+        }
+        /* Counter now == UINT64_MAX; next call must refuse. */
+        if (hmacKeyringNextAeadNonce(ring, 13u, n)) {
+            ERRR("Past-exhaustion NextAeadNonce must refuse");
+        }
+        hmacKeyringFree(ring);
+    }
+
+    TEST("AEAD counter: concurrent NextAeadNonce yields unique values") {
+        hmacKeyring *ring = hmacKeyringCreate();
+        const uint8_t key[32] = {0x44};
+        /* Workers sort by counter prefix only — install Unsalted so the
+         * zero suffix is permitted under the fail-closed contract. */
+        hmacKeyringInstallUnsalted(ring, 21u, &hmacAlgoSHA256, key,
+                                   sizeof(key));
+
+        const uint32_t kThreads = 8u;
+        const uint32_t kIters = 4096u;
+        const size_t total = (size_t)kThreads * (size_t)kIters;
+        uint64_t *collected = zmalloc(total * sizeof(uint64_t));
+        hmacKeyringNonceWorkerCtx ctxs[8];
+        pthread_t tids[8];
+        for (uint32_t t = 0; t < kThreads; t++) {
+            ctxs[t].ring = ring;
+            ctxs[t].iters = kIters;
+            ctxs[t].out = collected + (size_t)t * kIters;
+            ctxs[t].id = 21u;
+        }
+        for (uint32_t t = 0; t < kThreads; t++) {
+            pthread_create(&tids[t], NULL, hmacKeyringNonceWorker, &ctxs[t]);
+        }
+        for (uint32_t t = 0; t < kThreads; t++) {
+            pthread_join(tids[t], NULL);
+        }
+        /* Sort and check uniqueness. */
+        for (size_t i = 1; i < total; i++) {
+            uint64_t cur = collected[i];
+            size_t j = i;
+            while (j > 0 && collected[j - 1] > cur) {
+                collected[j] = collected[j - 1];
+                j--;
+            }
+            collected[j] = cur;
+        }
+        for (size_t i = 1; i < total; i++) {
+            if (collected[i] == collected[i - 1]) {
+                ERR("duplicate nonce at index %zu (value %llu)", i,
+                    (unsigned long long)collected[i]);
+                break;
+            }
+        }
+        if (collected[0] != 0u ||
+            collected[total - 1] != (uint64_t)(total - 1)) {
+            ERR("expected range [0..%zu], got [%llu..%llu]", total - 1,
+                (unsigned long long)collected[0],
+                (unsigned long long)collected[total - 1]);
+        }
+        zfree(collected);
+        hmacKeyringFree(ring);
+    }
+
+    TEST("snapshot/restore: round-trip with counter + salt + multi-algo") {
+        hmacKeyring *src = hmacKeyringCreate();
+        const uint8_t key_a[32] = {0x10, 0x20, 0x30};
+        const uint8_t key_b[24] = {0x40, 0x50, 0x60};
+        /* id=11 is salted (test asserts nonce[8..11] == 0xAABBCCDD);
+         * id=22 is Unsalted because the test does not issue nonces from
+         * it and the snapshot must survive a slot with a zero salt. */
+        const uint8_t initial_salt_a[HMAC_KEYRING_AEAD_SALT_BYTES] = {
+            0x77, 0x77, 0x77, 0x77};
+        hmacKeyringInstall(src, 11u, &hmacAlgoSHA256, key_a, sizeof(key_a),
+                           initial_salt_a);
+        hmacKeyringInstallUnsalted(src, 22u, &hmacAlgoBLAKE3, key_b,
+                                   sizeof(key_b));
+        /* Set salt + advance counter on id=11. */
+        const uint8_t salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {0xAA, 0xBB, 0xCC,
+                                                            0xDD};
+        hmacKeyringSetAeadSalt(src, 11u, salt);
+        hmacKeyringRestoreAeadCounter(src, 11u, 7777u);
+
+        const size_t sz = hmacKeyringSnapshotSize(src);
+        if (sz < 8u) {
+            ERRR("snapshot size too small");
+        }
+        uint8_t *buf = zmalloc(sz);
+        size_t written = 0;
+        if (!hmacKeyringSnapshot(src, buf, sz, &written)) {
+            ERRR("snapshot should succeed");
+        }
+        if (written != sz) {
+            ERR("written %zu != sz %zu", written, sz);
+        }
+
+        hmacKeyring *dst = hmacKeyringCreate();
+        if (!hmacKeyringRestore(dst, buf, sz)) {
+            ERRR("restore should succeed on fresh keyring");
+        }
+        if (hmacKeyringSize(dst) != 2u) {
+            ERR("dst size expected 2, got %zu", hmacKeyringSize(dst));
+        }
+
+        /* Verify id=11 has the same MAC output. */
+        const hmacKey *prep = hmacKeyringLookup(dst, 11u);
+        uint8_t exp[32], got[32];
+        hmacCompute(&hmacAlgoSHA256, key_a, sizeof(key_a), "x", 1, exp);
+        hmacComputeWithKey(prep, "x", 1, got);
+        if (memcmp(exp, got, 32) != 0) {
+            ERRR("restored id=11 MAC mismatch");
+        }
+
+        /* Counter + salt survived. */
+        uint64_t ctr = 0;
+        hmacKeyringPeekAeadCounter(dst, 11u, &ctr);
+        if (ctr != 7777u) {
+            ERR("restored counter expected 7777, got %llu",
+                (unsigned long long)ctr);
+        }
+        uint8_t nonce[12];
+        hmacKeyringNextAeadNonce(dst, 11u, nonce);
+        if (nonce[8] != 0xAA || nonce[9] != 0xBB || nonce[10] != 0xCC ||
+            nonce[11] != 0xDD) {
+            ERRR("restored salt did not propagate to nonce");
+        }
+        /* The issued nonce's counter should equal 7777 (the saved
+         * value); subsequent peek should be 7778. */
+        uint8_t expect_lo = (uint8_t)(7777u & 0xFFu);
+        uint8_t expect_hi = (uint8_t)((7777u >> 8) & 0xFFu);
+        if (nonce[0] != expect_lo || nonce[1] != expect_hi) {
+            ERRR("restored counter did not advance from saved value");
+        }
+
+        zfree(buf);
+        hmacKeyringFree(src);
+        hmacKeyringFree(dst);
+    }
+
+    TEST("snapshot/restore: malformed inputs rejected, no partial state") {
+        hmacKeyring *src = hmacKeyringCreate();
+        const uint8_t key[16] = {0x77};
+        hmacKeyringInstallUnsalted(src, 5u, &hmacAlgoSHA256, key, sizeof(key));
+
+        uint8_t buf[256];
+        size_t written = 0;
+        hmacKeyringSnapshot(src, buf, sizeof(buf), &written);
+
+        /* Truncate by one byte. */
+        hmacKeyring *dst = hmacKeyringCreate();
+        if (hmacKeyringRestore(dst, buf, written - 1u)) {
+            ERRR("Truncated buffer must be rejected");
+        }
+        if (hmacKeyringSize(dst) != 0u) {
+            ERRR(
+                "Rollback failed: dst should be empty after malformed restore");
+        }
+
+        /* Bad magic. */
+        uint8_t bad[64];
+        memcpy(bad, buf, written);
+        bad[0] ^= 0xFF;
+        if (hmacKeyringRestore(dst, bad, written)) {
+            ERRR("Bad magic must be rejected");
+        }
+
+        /* Trailing junk. */
+        uint8_t big[256];
+        memcpy(big, buf, written);
+        big[written] = 0xCC;
+        if (hmacKeyringRestore(dst, big, written + 1u)) {
+            ERRR("Trailing junk must be rejected");
+        }
+
+        hmacKeyringFree(src);
+        hmacKeyringFree(dst);
+    }
+
+    TEST("testHmacKeyringRestoreOversizedKeyReject") {
+        /* Build a synthetic flex snapshot whose single slot declares a
+         * key longer than HMAC_KEYRING_MAX_KEY_BYTES. Restore must
+         * refuse, leaving the target keyring untouched. The cap is the
+         * defense against a tampered persist file driving an attacker-
+         * controlled zmalloc through Install. */
+        flex *f = flexNew();
+        const hmacKeyId id = 9u;
+        const uint64_t algo_tag = 0u; /* SHA-256 */
+        const uint8_t salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {0x01, 0x02, 0x03,
+                                                            0x04};
+        const uint64_t counter = 0u;
+
+        /* Oversized key: HMAC_KEYRING_MAX_KEY_BYTES + 1 bytes. */
+        const size_t oversize_len = HMAC_KEYRING_MAX_KEY_BYTES + 1u;
+        uint8_t *oversize_key = zmalloc(oversize_len);
+        memset(oversize_key, 0xAB, oversize_len);
+
+        flexPushUnsigned(&f, (uint64_t)id, FLEX_ENDPOINT_TAIL);
+        flexPushUnsigned(&f, algo_tag, FLEX_ENDPOINT_TAIL);
+        flexPushBytes(&f, salt, sizeof(salt), FLEX_ENDPOINT_TAIL);
+        flexPushUnsigned(&f, counter, FLEX_ENDPOINT_TAIL);
+        flexPushBytes(&f, oversize_key, oversize_len, FLEX_ENDPOINT_TAIL);
+
+        const size_t flex_bytes = flexBytes(f);
+        uint8_t *snap = zmalloc(flex_bytes);
+        memcpy(snap, f, flex_bytes);
+
+        hmacKeyring *dst = hmacKeyringCreate();
+        if (hmacKeyringRestore(dst, snap, flex_bytes)) {
+            ERRR("Restore of oversized-key snapshot MUST be rejected");
+        }
+        if (hmacKeyringSize(dst) != 0u) {
+            ERR("Oversized-key reject left %zu slots installed (must be 0)",
+                hmacKeyringSize(dst));
+        }
+
+        zfree(snap);
+        zfree(oversize_key);
+        flexFree(f);
+
+        /* Build a valid snapshot with key_len == HMAC_KEYRING_MAX_KEY_BYTES
+         * exactly — this must SUCCEED (cap is inclusive of equality). */
+        flex *f_ok = flexNew();
+        uint8_t *max_key = zmalloc(HMAC_KEYRING_MAX_KEY_BYTES);
+        memset(max_key, 0xCD, HMAC_KEYRING_MAX_KEY_BYTES);
+        flexPushUnsigned(&f_ok, (uint64_t)id, FLEX_ENDPOINT_TAIL);
+        flexPushUnsigned(&f_ok, algo_tag, FLEX_ENDPOINT_TAIL);
+        flexPushBytes(&f_ok, salt, sizeof(salt), FLEX_ENDPOINT_TAIL);
+        flexPushUnsigned(&f_ok, counter, FLEX_ENDPOINT_TAIL);
+        flexPushBytes(&f_ok, max_key, HMAC_KEYRING_MAX_KEY_BYTES,
+                      FLEX_ENDPOINT_TAIL);
+        const size_t ok_bytes = flexBytes(f_ok);
+        uint8_t *ok_snap = zmalloc(ok_bytes);
+        memcpy(ok_snap, f_ok, ok_bytes);
+
+        hmacKeyring *dst_ok = hmacKeyringCreate();
+        if (!hmacKeyringRestore(dst_ok, ok_snap, ok_bytes)) {
+            ERRR("Restore at the cap boundary must succeed");
+        }
+        if (hmacKeyringSize(dst_ok) != 1u) {
+            ERR("Boundary restore expected size 1, got %zu",
+                hmacKeyringSize(dst_ok));
+        }
+
+        zfree(ok_snap);
+        zfree(max_key);
+        flexFree(f_ok);
+        hmacKeyringFree(dst);
+        hmacKeyringFree(dst_ok);
+
+        /* Direct Install must also refuse oversized keys (symmetric
+         * enforcement so the API cannot be used to seed a slot that
+         * Restore would have refused). */
+        hmacKeyring *direct = hmacKeyringCreate();
+        uint8_t *over = zmalloc(HMAC_KEYRING_MAX_KEY_BYTES + 1u);
+        memset(over, 0xEF, HMAC_KEYRING_MAX_KEY_BYTES + 1u);
+        if (hmacKeyringInstallUnsalted(direct, 1u, &hmacAlgoSHA256, over,
+                                       HMAC_KEYRING_MAX_KEY_BYTES + 1u)) {
+            ERRR("InstallUnsalted with oversized key MUST be refused");
+        }
+        const uint8_t s[HMAC_KEYRING_AEAD_SALT_BYTES] = {0x11, 0x22, 0x33,
+                                                         0x44};
+        if (hmacKeyringInstall(direct, 1u, &hmacAlgoSHA256, over,
+                               HMAC_KEYRING_MAX_KEY_BYTES + 1u, s)) {
+            ERRR("Install with oversized key MUST be refused");
+        }
+        zfree(over);
+        hmacKeyringFree(direct);
+    }
+
+    TEST("snapshot/restore: duplicate id in target collides and rolls back") {
+        hmacKeyring *src = hmacKeyringCreate();
+        const uint8_t key[16] = {0xAB};
+        hmacKeyringInstallUnsalted(src, 9u, &hmacAlgoSHA256, key, sizeof(key));
+        hmacKeyringInstallUnsalted(src, 10u, &hmacAlgoBLAKE3, key, sizeof(key));
+        uint8_t buf[256];
+        size_t written = 0;
+        hmacKeyringSnapshot(src, buf, sizeof(buf), &written);
+
+        hmacKeyring *dst = hmacKeyringCreate();
+        /* Pre-install id=10 to force a collision on second record. */
+        hmacKeyringInstallUnsalted(dst, 10u, &hmacAlgoSHA256, key, sizeof(key));
+        if (hmacKeyringRestore(dst, buf, written)) {
+            ERRR("Collision must be rejected");
+        }
+        /* Rollback must have un-installed any partially-loaded records. */
+        if (hmacKeyringSize(dst) != 1u) {
+            ERR("Expected dst size 1 (pre-existing only), got %zu",
+                hmacKeyringSize(dst));
+        }
+        /* Pre-existing id=10 must remain untouched (SHA256 algo). */
+        const uint8_t *kb = NULL;
+        size_t kb_len = 0;
+        const hmacHashAlgo *algo = NULL;
+        hmacKeyringGetRaw(dst, 10u, &kb, &kb_len, &algo);
+        if (algo != &hmacAlgoSHA256) {
+            ERRR("Pre-existing id=10 should still be SHA256");
+        }
+
+        hmacKeyringFree(src);
+        hmacKeyringFree(dst);
+    }
+
+    TEST("getRaw exposes the bytes that were stored") {
+        hmacKeyring *ring = hmacKeyringCreate();
+        const uint8_t key[16] = {0x01, 0x02, 0x03, 0x04};
+        const uint8_t salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {0xAB, 0xCD, 0xEF,
+                                                            0x01};
+        hmacKeyringInstall(ring, 42u, &hmacAlgoSHA256, key, sizeof(key), salt);
+        const uint8_t *bytes = NULL;
+        size_t blen = 0;
+        const hmacHashAlgo *algo = NULL;
+        if (!hmacKeyringGetRaw(ring, 42u, &bytes, &blen, &algo)) {
+            ERRR("getRaw of installed id should succeed");
+        }
+        if (blen != sizeof(key) || memcmp(bytes, key, blen) != 0) {
+            ERRR("getRaw bytes did not match installed bytes");
+        }
+        if (algo != &hmacAlgoSHA256) {
+            ERRR("getRaw algo pointer did not match");
+        }
+        hmacKeyringFree(ring);
+    }
+
+    TEST("testKeyringGetRawCopy") {
+        /* hmacKeyringGetRawCopy makes a snapshot of the raw key bytes
+         * under the rwlock so callers can hold the bytes past a Retire/
+         * Install/SetAeadSalt without UAF. Validates the success path,
+         * the too-small-buffer reject, and the missing-id reject. Also
+         * confirms the copy is independent of subsequent keyring
+         * mutations (Retire after copy leaves the local buffer intact). */
+        hmacKeyring *ring = hmacKeyringCreate();
+        const uint8_t key[24] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66,
+                                 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC,
+                                 0xDD, 0xEE, 0xFF, 0x01, 0x02, 0x03,
+                                 0x04, 0x05, 0x06, 0x07, 0x08, 0x09};
+        const uint8_t salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {0x10, 0x20, 0x30,
+                                                            0x40};
+        if (!hmacKeyringInstall(ring, 17u, &hmacAlgoSHA256, key, sizeof(key),
+                                salt)) {
+            ERRR("setup install must succeed");
+        }
+
+        /* Success path: copy into a buffer large enough. */
+        uint8_t buf[32];
+        memset(buf, 0xCC, sizeof(buf));
+        size_t copied = 0;
+        const hmacHashAlgo *algo = NULL;
+        if (!hmacKeyringGetRawCopy(ring, 17u, buf, sizeof(buf), &copied,
+                                   &algo)) {
+            ERRR("GetRawCopy of installed id must succeed");
+        }
+        if (copied != sizeof(key)) {
+            ERR("GetRawCopy wrote %zu bytes, expected %zu", copied,
+                sizeof(key));
+        }
+        if (memcmp(buf, key, sizeof(key)) != 0) {
+            ERRR("GetRawCopy bytes did not match installed bytes");
+        }
+        if (algo != &hmacAlgoSHA256) {
+            ERRR("GetRawCopy algo pointer did not match");
+        }
+
+        /* Too-small buffer rejects with out_len set to zero. */
+        uint8_t tiny[8];
+        size_t tiny_len = 999u;
+        if (hmacKeyringGetRawCopy(ring, 17u, tiny, sizeof(tiny), &tiny_len,
+                                  NULL)) {
+            ERRR("GetRawCopy into too-small buffer must reject");
+        }
+        if (tiny_len != 0u) {
+            ERR("rejected GetRawCopy left out_len = %zu (must be 0)", tiny_len);
+        }
+
+        /* Missing id rejects. */
+        size_t missing_len = 999u;
+        if (hmacKeyringGetRawCopy(ring, 9999u, buf, sizeof(buf), &missing_len,
+                                  NULL)) {
+            ERRR("GetRawCopy of missing id must reject");
+        }
+        if (missing_len != 0u) {
+            ERR("missing-id reject left out_len = %zu (must be 0)",
+                missing_len);
+        }
+
+        /* NULL out_buf rejects. */
+        if (hmacKeyringGetRawCopy(ring, 17u, NULL, 16u, NULL, NULL)) {
+            ERRR("GetRawCopy with NULL out_buf must reject");
+        }
+
+        /* HMAC_KEY_ID_INVALID rejects. */
+        if (hmacKeyringGetRawCopy(ring, HMAC_KEY_ID_INVALID, buf, sizeof(buf),
+                                  NULL, NULL)) {
+            ERRR("GetRawCopy with id == 0 must reject");
+        }
+
+        /* NULL ring rejects. */
+        if (hmacKeyringGetRawCopy(NULL, 17u, buf, sizeof(buf), NULL, NULL)) {
+            ERRR("GetRawCopy on NULL ring must reject");
+        }
+
+        /* After Retire, the local copy still holds the original bytes
+         * — independence from keyring mutation is the whole point. */
+        if (!hmacKeyringRetire(ring, 17u)) {
+            ERRR("Retire after copy must succeed");
+        }
+        if (memcmp(buf, key, sizeof(key)) != 0) {
+            ERRR("local copy was disturbed by Retire — independence broken");
+        }
+        size_t after_retire_len = 999u;
+        if (hmacKeyringGetRawCopy(ring, 17u, buf, sizeof(buf),
+                                  &after_retire_len, NULL)) {
+            ERRR("post-Retire GetRawCopy must reject");
+        }
+        if (after_retire_len != 0u) {
+            ERRR("post-Retire reject left out_len non-zero");
+        }
+
+        hmacKeyringFree(ring);
+    }
+
+    TEST("testHmacKeyringGetAesGcmKeyCopy") {
+        /* hmacKeyringGetAesGcmKeyCopy mirrors GetRawCopy for the AES-GCM
+         * key schedule cache: copies the slot's prepared aesGcmKey into
+         * a caller-owned buffer under the rwlock so a concurrent Retire
+         * cannot race the cipher's read of the round keys. Validates
+         * the success path, missing-id reject, non-AES-key-length reject
+         * (the slot has no cached schedule), and that the copy is
+         * independent of post-call keyring mutations. */
+        hmacKeyring *ring = hmacKeyringCreate();
+        /* AES-256 key length triggers schedule caching. */
+        uint8_t key[AES256_KEY_LEN];
+        for (size_t i = 0; i < sizeof(key); i++) {
+            key[i] = (uint8_t)(i * 7u + 11u);
+        }
+        const uint8_t salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {0xAA, 0xBB, 0xCC,
+                                                            0xDD};
+        if (!hmacKeyringInstall(ring, 23u, &hmacAlgoSHA256, key, sizeof(key),
+                                salt)) {
+            ERRR("setup install with AES-256-length key must succeed");
+        }
+
+        /* Success path: copy populates a self-contained struct. Compare
+         * to the borrowed pointer to confirm bit-identical copy. */
+        const aesGcmKey *borrowed = hmacKeyringGetAesGcmKey(ring, 23u);
+        if (borrowed == NULL) {
+            ERRR("setup: borrowed AES schedule was NULL (slot lacks cache)");
+        }
+        aesGcmKey local;
+        memset(&local, 0xCC, sizeof(local));
+        if (!hmacKeyringGetAesGcmKeyCopy(ring, 23u, &local)) {
+            ERRR("GetAesGcmKeyCopy of installed AES-class id must succeed");
+        }
+        if (memcmp(&local, borrowed, sizeof(local)) != 0) {
+            ERRR("Copy did not match borrowed schedule bytes");
+        }
+        if (local.key_size != AES256_KEY_LEN) {
+            ERR("Copy reported key_size %u, expected %u",
+                (unsigned)local.key_size, (unsigned)AES256_KEY_LEN);
+        }
+
+        /* Missing id rejects. */
+        aesGcmKey miss;
+        memset(&miss, 0x77, sizeof(miss));
+        if (hmacKeyringGetAesGcmKeyCopy(ring, 9999u, &miss)) {
+            ERRR("GetAesGcmKeyCopy of missing id must reject");
+        }
+        /* Non-AES-key-length slot has no cached schedule — reject. */
+        const uint8_t hmac_key[20] = {1,  2,  3,  4,  5,  6,  7,  8,  9,  10,
+                                      11, 12, 13, 14, 15, 16, 17, 18, 19, 20};
+        if (!hmacKeyringInstall(ring, 24u, &hmacAlgoSHA256, hmac_key,
+                                sizeof(hmac_key), salt)) {
+            ERRR("setup install with 20-byte HMAC key must succeed");
+        }
+        if (hmacKeyringGetAesGcmKeyCopy(ring, 24u, &miss)) {
+            ERRR("GetAesGcmKeyCopy must reject slots without cached schedule");
+        }
+
+        /* NULL guards. */
+        if (hmacKeyringGetAesGcmKeyCopy(NULL, 23u, &miss)) {
+            ERRR("GetAesGcmKeyCopy on NULL ring must reject");
+        }
+        if (hmacKeyringGetAesGcmKeyCopy(ring, 23u, NULL)) {
+            ERRR("GetAesGcmKeyCopy with NULL out_key must reject");
+        }
+        if (hmacKeyringGetAesGcmKeyCopy(ring, HMAC_KEY_ID_INVALID, &miss)) {
+            ERRR("GetAesGcmKeyCopy with id == 0 must reject");
+        }
+
+        /* Independence: Retire the slot after the copy. The local copy
+         * must remain intact (this is the entire point of the API). */
+        if (!hmacKeyringRetire(ring, 23u)) {
+            ERRR("Retire after copy must succeed");
+        }
+        /* Re-snapshot a fresh copy from a known-clean local — proves the
+         * existing `local` is unchanged by the keyring teardown. */
+        aesGcmKey reference;
+        if (!aesGcmInit(&reference, key, sizeof(key))) {
+            ERRR("aesGcmInit of reference must succeed");
+        }
+        if (memcmp(&local, &reference, sizeof(local)) != 0) {
+            ERRR("local copy was disturbed by Retire — independence broken");
+        }
+        if (hmacKeyringGetAesGcmKeyCopy(ring, 23u, &miss)) {
+            ERRR("post-Retire GetAesGcmKeyCopy must reject");
+        }
+        dkSecureZero(&local, sizeof(local));
+        dkSecureZero(&reference, sizeof(reference));
+        dkSecureZero(&miss, sizeof(miss));
+
+        hmacKeyringFree(ring);
+    }
+
+    TEST("revoked key floor: default zero, monotonic, snapshot round-trip") {
+        hmacKeyring *ring = hmacKeyringCreate();
+
+        /* Default floor is zero. */
+        if (hmacKeyringMinValidKeyId(ring) != HMAC_KEY_ID_INVALID) {
+            ERRR("default floor should be HMAC_KEY_ID_INVALID (0)");
+        }
+
+        /* NULL-safe. */
+        if (hmacKeyringMinValidKeyId(NULL) != HMAC_KEY_ID_INVALID) {
+            ERRR("NULL ring should return floor=0");
+        }
+        if (hmacKeyringSetMinValidKeyId(NULL, 5u)) {
+            ERRR("Set on NULL ring must refuse");
+        }
+
+        /* Raise to 7; observe value. */
+        if (!hmacKeyringSetMinValidKeyId(ring, 7u)) {
+            ERRR("Set floor=7 should succeed from default 0");
+        }
+        if (hmacKeyringMinValidKeyId(ring) != 7u) {
+            ERR("floor expected 7 got %u",
+                (unsigned)hmacKeyringMinValidKeyId(ring));
+        }
+
+        /* Equal value is idempotent success. */
+        if (!hmacKeyringSetMinValidKeyId(ring, 7u)) {
+            ERRR("re-setting same floor must be idempotent success");
+        }
+
+        /* Forward move succeeds. */
+        if (!hmacKeyringSetMinValidKeyId(ring, 10u)) {
+            ERRR("forward move 7->10 should succeed");
+        }
+        if (hmacKeyringMinValidKeyId(ring) != 10u) {
+            ERRR("floor did not advance to 10");
+        }
+
+        /* Backward move refused. */
+        if (hmacKeyringSetMinValidKeyId(ring, 5u)) {
+            ERRR("backward move 10->5 MUST be refused");
+        }
+        if (hmacKeyringMinValidKeyId(ring) != 10u) {
+            ERRR("refused backward move corrupted floor");
+        }
+
+        /* Snapshot/restore preserves the floor. */
+        const uint8_t key[16] = {0xC3, 0xC3, 0xC3};
+        const uint8_t salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {0x01, 0x02, 0x03,
+                                                            0x04};
+        hmacKeyringInstall(ring, 50u, &hmacAlgoSHA256, key, sizeof(key), salt);
+        const size_t sz = hmacKeyringSnapshotSize(ring);
+        uint8_t *buf = zmalloc(sz);
+        size_t written = 0;
+        if (!hmacKeyringSnapshot(ring, buf, sz, &written)) {
+            ERRR("snapshot with floor set must succeed");
+        }
+        hmacKeyring *dst = hmacKeyringCreate();
+        if (!hmacKeyringRestore(dst, buf, written)) {
+            ERRR("restore with sentinel must succeed");
+        }
+        if (hmacKeyringMinValidKeyId(dst) != 10u) {
+            ERR("restored floor expected 10 got %u",
+                (unsigned)hmacKeyringMinValidKeyId(dst));
+        }
+        if (hmacKeyringSize(dst) != 1u) {
+            ERR("restored slot count expected 1 got %zu", hmacKeyringSize(dst));
+        }
+        zfree(buf);
+        hmacKeyringFree(ring);
+        hmacKeyringFree(dst);
+    }
+
+    TEST("revoked key floor: legacy (no sentinel) snapshot restores with "
+         "floor=0") {
+        /* Build a snapshot from a keyring with NO floor set — confirm
+         * the wire bytes do NOT carry a sentinel and that restoring
+         * yields floor == 0. Closes the regression risk that we
+         * accidentally start emitting sentinels for empty floors. */
+        hmacKeyring *src = hmacKeyringCreate();
+        const uint8_t key[16] = {0x88};
+        hmacKeyringInstallUnsalted(src, 1u, &hmacAlgoSHA256, key, sizeof(key));
+        const size_t sz = hmacKeyringSnapshotSize(src);
+        uint8_t *buf = zmalloc(sz);
+        hmacKeyringSnapshot(src, buf, sz, NULL);
+
+        /* Total flex entry count must be exactly HMAC_KEYRING_ENTRIES_PER_SLOT
+         * (== 5) — sentinel would have added 5 more. */
+        if (flexCount((const flex *)buf) != HMAC_KEYRING_ENTRIES_PER_SLOT) {
+            ERR("expected %zu flex entries (no sentinel), got %zu",
+                HMAC_KEYRING_ENTRIES_PER_SLOT, flexCount((const flex *)buf));
+        }
+        hmacKeyring *dst = hmacKeyringCreate();
+        if (!hmacKeyringRestore(dst, buf, sz)) {
+            ERRR("restore of legacy snapshot must succeed");
+        }
+        if (hmacKeyringMinValidKeyId(dst) != HMAC_KEY_ID_INVALID) {
+            ERR("legacy restore expected floor=0 got %u",
+                (unsigned)hmacKeyringMinValidKeyId(dst));
+        }
+        zfree(buf);
+        hmacKeyringFree(src);
+        hmacKeyringFree(dst);
+    }
+
+    TEST_FINAL_RESULT;
+}
+
+#endif /* DATAKIT_TEST */

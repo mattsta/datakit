@@ -4479,6 +4479,252 @@ bool flexValidateBuffer(const uint8_t *buf, size_t buflen) {
     return true;
 }
 
+bool flexPeekTotalBytes(const uint8_t *buf, size_t buflen, size_t *out_total) {
+    /* Mirror flexValidateBuffer's leading-varint extraction but return
+     * the claim INSTEAD OF requiring it match buflen — callers that
+     * embed a flex as a strict prefix of a larger buffer need this
+     * primitive so they can advance past the prefix to a trailing
+     * opaque region (e.g. clusterMailbox's inner-header + payload
+     * framing). */
+    if (buf == NULL || out_total == NULL || buflen < FLEX_EMPTY_HEADER_SIZE) {
+        return false;
+    }
+    size_t total_bytes_width = varintSplitFullNoZeroGetLenQuick_(buf);
+    if (total_bytes_width == 0 || total_bytes_width > buflen) {
+        return false;
+    }
+    size_t valsize = 0;
+    uint64_t total_bytes_claim = 0;
+    varintSplitFullNoZeroGet_(buf, valsize, total_bytes_claim);
+    if (valsize != total_bytes_width) {
+        return false;
+    }
+    /* Claim must fit in the outer buffer — otherwise a caller-supplied
+     * follow-up flexValidateBuffer(buf, claim) would read past the end. */
+    if (total_bytes_claim > (uint64_t)buflen) {
+        return false;
+    }
+    /* Claim must also leave at least one byte for the trailing count
+     * varint, matching flexValidateBuffer's invariant. */
+    if (total_bytes_claim <= (uint64_t)total_bytes_width) {
+        return false;
+    }
+    *out_total = (size_t)total_bytes_claim;
+    return true;
+}
+
+/* Decode the length-of-this-entry for the entry at `fe`, where `remaining`
+ * is the number of bytes available starting at `fe` (i.e. the byte budget
+ * between `fe` and the end of the buffer).  Sets *out_entry_len to the
+ * total number of bytes the entry consumes (encoding header + payload +
+ * reverse-encoding trailer) on success.  Returns false if any required
+ * byte read would exceed `remaining`, or if the entry's declared total
+ * size does not fit in `remaining`.
+ *
+ * This is the bounds-safe twin of `flexRawEntryLength` — the latter
+ * trusts its input and can over-read up to 16 bytes when fed a corrupted
+ * string-length varint.  This helper is the safe-walk primitive for
+ * flexValidateBufferDeep. */
+DK_INLINE_ALWAYS bool flexRawEntryLengthSafe(const flexEntry *const fe,
+                                             const size_t remaining,
+                                             size_t *const out_entry_len) {
+    /* Need at least the encoding byte. */
+    if (remaining == 0) {
+        return false;
+    }
+    const flexEncoding encoding = fe[0];
+
+    /* Immediate encodings are single-byte entries; no length varint, no
+     * trailer.  Total entry size = 1. */
+    if (FLEX_IS_IMMEDIATE(encoding)) {
+        *out_entry_len = 1;
+        return true;
+    }
+
+    size_t payload_len = 0;
+    varintWidth encodingSize = 0;
+
+    if (FLEX_IS_STR(encoding)) {
+        /* String types: byte 0 carries the length varint's tag plus the
+         * first chunk of bits.  varintSplitFullNoZeroGetLenQuick_ reads
+         * only byte 0 and returns the total varint width — bound-check
+         * it before invoking the full decoder. */
+        const size_t varint_width = varintSplitFullNoZeroGetLenQuick_(fe);
+        if (varint_width == 0 || varint_width > remaining) {
+            return false;
+        }
+        /* For the VAR form (top 2 bits 11) the low 4 bits encode an
+         * external width.  Only widths 2..8 are legitimate per the
+         * varintSplitFullNoZeroByte enum (BYTE_1 is "NOT USED" and
+         * BYTE_9..BYTE_15 are "available" / unused-reserved).  Widths
+         * outside that range produce undefined behaviour downstream —
+         * the underlying varintExternalLoadFromEncodingLittleEndian_
+         * helper would either write past its uint64_t result buffer
+         * (width 9..15) or hit the assert(NULL) default branch
+         * (width 0).  Reject here so a mutated encoding byte cannot
+         * tunnel through the validator into the loader's UB path. */
+        if ((encoding & 0xC0u) == 0xC0u) {
+            const uint8_t var_width = (uint8_t)(encoding & 0x0Fu);
+            if (var_width < 2u || var_width > 8u) {
+                return false;
+            }
+        }
+        varintSplitFullNoZeroGet_(fe, encodingSize, payload_len);
+        if (encodingSize != varint_width) {
+            return false;
+        }
+        /* The varint's own bytes are part of the "encoding"; the trailer
+         * mirrors them for reverse traversal.  Total meta = 2 * varint_width.
+         * Bound-check the trailer + payload below. */
+    } else if (FLEX_IS_FORWARD_DECLARE_SUBCONTAINER(encoding)) {
+        /* FLEX_IS_FORWARD_DECLARE_SUBCONTAINER spans [FLEX_CONTAINER_MAP,
+         * FLEX_SAME) which covers BOTH the implemented container tags
+         * (MAP/LIST/SET/TUPLE) and the reserved-but-unimplemented
+         * compressed variants (CMAP/CLIST/CSET/CTUPLE) plus a small
+         * unused gap before FLEX_SAME.  Only the four implemented tags
+         * are sizable by flexDataSizeForFixedWidthEncodingWithInnerEntry;
+         * the helper hits assert(NULL) for any other value in this range.
+         * Reject encodings the helper cannot size so a mutated tag byte
+         * cannot tunnel through the validator into the helper's
+         * assert / __builtin_unreachable path. */
+        if (encoding != FLEX_CONTAINER_MAP && encoding != FLEX_CONTAINER_LIST &&
+            encoding != FLEX_CONTAINER_SET &&
+            encoding != FLEX_CONTAINER_TUPLE) {
+            return false;
+        }
+        /* Container types: byte 0 is the encoding tag; the data segment
+         * starts at fe + 1 and begins with its OWN split-varint length.
+         * Need at least 2 bytes to inspect that inner varint's width. */
+        if (remaining < 2) {
+            return false;
+        }
+        const size_t inner_varint_width =
+            varintSplitFullNoZeroGetLenQuick_(fe + 1);
+        if (inner_varint_width == 0 || inner_varint_width > (remaining - 1)) {
+            return false;
+        }
+        /* Same VAR-form legitimate-width check as the STR branch — the
+         * inner varint feeds the same loader and is subject to the same
+         * width allowlist (2..8 for the external form). */
+        if ((fe[1] & 0xC0u) == 0xC0u) {
+            const uint8_t inner_var_width = (uint8_t)(fe[1] & 0x0Fu);
+            if (inner_var_width < 2u || inner_var_width > 8u) {
+                return false;
+            }
+        }
+        payload_len = flexDataSizeForFixedWidthEncodingWithInnerEntry(
+            encoding, fe + 1, &encodingSize, true);
+    } else {
+        /* All other non-immediate encodings are fixed-width (integers,
+         * floats, external references).
+         * flexDataSizeForFixedWidthEncodingWithInnerEntry does not read past
+         * byte 0 for these.  Two encodings in the fixed-width range —
+         * FLEX_REAL_32D and FLEX_REAL_64D — are declared but unimplemented; the
+         * helper falls through to its assert(NULL) default for them.  When
+         * FLEX_ENABLE_PTR_MDSC is disabled the helper also has no cases for
+         * FLEX_EXTERNAL_MDSC_*. Reject any of those here so a mutated tag byte
+         * cannot tunnel through the validator into the helper's fail-loud path.
+         */
+        if (encoding == FLEX_REAL_32D || encoding == FLEX_REAL_64D) {
+            return false;
+        }
+#if !FLEX_ENABLE_PTR_MDSC
+        if (encoding == FLEX_EXTERNAL_MDSC_48B ||
+            encoding == FLEX_EXTERNAL_MDSC_64B) {
+            return false;
+        }
+#endif
+        payload_len = flexDataSizeForFixedWidthEncodingWithInnerEntry(
+            encoding, fe + 1, &encodingSize, true);
+    }
+
+    /* Compute total bytes consumed by this entry (meta + payload).  The
+     * meta-size helper reads byte 0 only and returns either 1 (immediate;
+     * handled above) or encodingSize * 2 (mirrored forward + reverse
+     * encoding). */
+    const size_t meta = FLEX_ENCODING_SIZE_TOTAL_FORWARD(fe, encodingSize);
+    if (meta == 0) {
+        return false;
+    }
+    /* Defensive overflow check on (meta + payload_len). */
+    if (payload_len > (SIZE_MAX - meta)) {
+        return false;
+    }
+    const size_t total = meta + payload_len;
+    if (total == 0 || total > remaining) {
+        return false;
+    }
+    *out_entry_len = total;
+    return true;
+}
+
+bool flexValidateBufferDeep(const uint8_t *buf, size_t buflen) {
+    /* Step 1: O(1) envelope check — leading total-bytes varint widths,
+     * header room for count.  If this fails the deep walk would too. */
+    if (!flexValidateBuffer(buf, buflen)) {
+        return false;
+    }
+
+    /* Step 2: validate the count varint's byte-width fits within the
+     * header.  flexValidateBuffer already guarantees buflen >=
+     * total_bytes_width + 1 (room for at least one count byte).  Now
+     * make sure the tagged varint's encoded width fits inside what
+     * remains after the total-bytes varint. */
+    const size_t total_bytes_width = varintSplitFullNoZeroGetLenQuick_(buf);
+    const uint8_t *const count_start = buf + total_bytes_width;
+    const size_t count_byte_budget = buflen - total_bytes_width;
+    const size_t count_width = varintTaggedGetLenQuick_(count_start);
+    if (count_width == 0 || count_width > count_byte_budget) {
+        return false;
+    }
+    const uint64_t claimed_count = varintTaggedGet64Quick_(count_start);
+    const size_t header_size = total_bytes_width + count_width;
+
+    /* The header itself must fit inside buflen. */
+    if (header_size > buflen) {
+        return false;
+    }
+
+    /* Step 3: walk each entry, bound-checking every byte read.  After
+     * walking `claimed_count` entries, the cursor must land exactly at
+     * the buffer end (no leftover bytes, no truncation). */
+    const flex *const f = (const flex *)buf;
+    const uint8_t *cursor = (const uint8_t *)flexHead(f);
+    const uint8_t *const end = buf + buflen;
+    /* Sanity: flexHead returns buf + header_size, but FLEX_HEADER_SIZE
+     * re-derives the widths.  If those derivations diverge from what we
+     * computed above the buffer is malformed; refuse rather than walk
+     * an inconsistent header. */
+    if (cursor != buf + header_size) {
+        return false;
+    }
+
+    for (uint64_t i = 0; i < claimed_count; i++) {
+        if (cursor >= end) {
+            return false;
+        }
+        const size_t remaining = (size_t)(end - cursor);
+        size_t entry_len = 0;
+        if (!flexRawEntryLengthSafe((const flexEntry *)cursor, remaining,
+                                    &entry_len)) {
+            return false;
+        }
+        cursor += entry_len;
+    }
+
+    /* The walk must terminate exactly at the buffer's claimed end — no
+     * trailing slack (would mean the buffer carries extra bytes the
+     * iterators won't read but a flex consumer would treat as part of
+     * the structure) and no overrun (would mean entries spilled past
+     * the claimed length, which the per-entry bound check above already
+     * blocks). */
+    if (cursor != end) {
+        return false;
+    }
+
+    return true;
+}
+
 /* ====================================================================
  * compressed flex storage
  * ==================================================================== */
@@ -8435,6 +8681,426 @@ int32_t flexTest(int32_t argc, char **argv) {
     }
 
     printf("\n=== All flexValidateBuffer tests passed! ===\n\n");
+
+    /* ================================================================
+     * FLEX VALIDATE BUFFER DEEP TESTS
+     *
+     * flexValidateBufferDeep() is the O(N) strict validator.  Unlike
+     * flexValidateBuffer (O(1) envelope-only), it walks every entry's
+     * length-encoding bytes and verifies the entry count plus the
+     * trailing-byte-budget invariant.  Required by callers that consume
+     * flex bytes from un-MAC-gated sources (synthetic fuzzers, plugin
+     * blobs, on-disk recovery prior to MAC verification).
+     *
+     * The function must:
+     *   - reject anything flexValidateBuffer already rejects
+     *   - accept a well-formed flex of N entries
+     *   - reject a buffer whose internal entry length encoding claims
+     *     more bytes than remain
+     *   - reject a buffer whose header count claim disagrees with the
+     *     actual number of entries that fit in the body
+     *   - reject a buffer truncated by one byte at the tail
+     * ================================================================ */
+
+    printf("Test flexValidateBufferDeep rejects buffers flexValidateBuffer "
+           "already rejects:\n");
+    {
+        /* The deep validator must inherit every rejection the cheap
+         * validator already enforces. */
+        assert(flexValidateBufferDeep(NULL, 0) == false);
+        assert(flexValidateBufferDeep(NULL, 1024) == false);
+        const uint8_t empty[1] = {0};
+        assert(flexValidateBufferDeep(empty, 1) == false);
+        /* total-bytes-claim != buflen */
+        flex *built = flexNew();
+        for (int i = 0; i < 16; i++) {
+            flexPushSigned(&built, i, FLEX_ENDPOINT_TAIL);
+        }
+        const size_t bytes = flexBytes(built);
+        assert(flexValidateBufferDeep((const uint8_t *)built, bytes - 1) ==
+               false);
+        assert(flexValidateBufferDeep((const uint8_t *)built, bytes + 1) ==
+               false);
+        flexFree(built);
+        printf("  OK\n");
+    }
+
+    printf("Test flexValidateBufferDeep accepts a well-formed flex of N "
+           "entries:\n");
+    {
+        /* Build a real flex with a mix of unsigned ints and byte
+         * strings — both exercise the string-varint and fixed-width
+         * paths in the safe-walker. */
+        flex *good = flexNew();
+        flexPushUnsigned(&good, 1u, FLEX_ENDPOINT_TAIL);
+        flexPushBytes(&good, "alpha", 5u, FLEX_ENDPOINT_TAIL);
+        flexPushUnsigned(&good, 0xABCDEFu, FLEX_ENDPOINT_TAIL);
+        flexPushBytes(&good, "beta-and-some-padding-bytes", 27u,
+                      FLEX_ENDPOINT_TAIL);
+        flexPushUnsigned(&good, UINT32_MAX, FLEX_ENDPOINT_TAIL);
+        const size_t bytes = flexBytes(good);
+        assert(flexCount(good) == 5u);
+        assert(flexValidateBufferDeep((const uint8_t *)good, bytes) == true);
+        flexFree(good);
+        printf("  OK\n");
+    }
+
+    printf("Test flexValidateBufferDeep rejects entry-length varint claiming "
+           "oversize:\n");
+    {
+        /* Build a valid flex whose first entry is a short byte string,
+         * then corrupt that entry's leading length-varint byte to claim
+         * a string length far larger than the buffer can hold.  The O(1)
+         * envelope check would still pass (header total-bytes and count
+         * are intact), but the deep walk must reject. */
+        flex *fb = flexNew();
+        flexPushBytes(&fb, "abc", 3u, FLEX_ENDPOINT_TAIL);
+        flexPushBytes(&fb, "def", 3u, FLEX_ENDPOINT_TAIL);
+        const size_t bytes = flexBytes(fb);
+        uint8_t *tampered = zmalloc(bytes);
+        memcpy(tampered, fb, bytes);
+        flexFree(fb);
+        /* Header is [total_bytes_varint][count_varint] then entries.
+         * Walk past the header to the first entry's encoding byte. */
+        const size_t total_bytes_width =
+            varintSplitFullNoZeroGetLenQuick_(tampered);
+        const size_t count_width =
+            varintTaggedGetLenQuick_(tampered + total_bytes_width);
+        const size_t entry0_off = total_bytes_width + count_width;
+        /* For a small ASCII byte string, byte 0 of the entry holds the
+         * split-varint encoding for length 3 (a 1-byte varint).  Tamper
+         * it to claim "VAR encoding with an 8-byte external width" —
+         * VARINT_SPLIT_FULL_NO_ZERO_VAR (0xC0) | width 8 (0x08) = 0xC8.
+         * The encoded varint then "claims" a huge length that overshoots
+         * the remaining buffer; the deep walk must reject. */
+        tampered[entry0_off] = 0xC8u;
+        /* Sanity: cheap validator still passes (envelope intact). */
+        assert(flexValidateBuffer(tampered, bytes) == true);
+        /* Deep validator catches it. */
+        assert(flexValidateBufferDeep(tampered, bytes) == false);
+        zfree(tampered);
+        printf("  OK\n");
+    }
+
+    printf("Test flexValidateBufferDeep rejects header count claim that "
+           "disagrees with body:\n");
+    {
+        /* Build a valid 4-entry flex, then increment the tagged count
+         * varint so it claims 5 entries; the body still has only 4.
+         * The deep walk's per-entry budget check will run out of bytes
+         * trying to read entry 5 (since the buffer ends exactly after
+         * the four real entries) — must reject. */
+        flex *fc = flexNew();
+        for (int i = 1; i <= 4; i++) {
+            flexPushUnsigned(&fc, (uint64_t)i, FLEX_ENDPOINT_TAIL);
+        }
+        const size_t bytes = flexBytes(fc);
+        uint8_t *tampered = zmalloc(bytes);
+        memcpy(tampered, fc, bytes);
+        flexFree(fc);
+        const size_t total_bytes_width =
+            varintSplitFullNoZeroGetLenQuick_(tampered);
+        /* For counts in the tagged-varint 1-byte range (≤240), the
+         * count byte itself stores the count directly; +1 raises the
+         * stored count to 5. */
+        assert(tampered[total_bytes_width] == 4u);
+        tampered[total_bytes_width] = 5u;
+        /* Outer envelope still parses fine — header total-bytes and the
+         * count varint width are unchanged; only the count value lies. */
+        assert(flexValidateBuffer(tampered, bytes) == true);
+        /* Deep walk runs out of bytes when looking for entry 5. */
+        assert(flexValidateBufferDeep(tampered, bytes) == false);
+        zfree(tampered);
+        printf("  OK\n");
+    }
+
+    printf("Test flexValidateBufferDeep rejects buffer truncated by one "
+           "byte:\n");
+    {
+        /* A buffer the right size with a header that doesn't claim
+         * truncation, but missing its last byte, must be rejected.  We
+         * build a valid flex, then deliberately tell the deep validator
+         * it has one fewer byte than the buffer claims internally.  The
+         * envelope check rejects this on the buflen mismatch path,
+         * which is exactly what we want — the deep validator inherits
+         * that rejection. */
+        flex *fd = flexNew();
+        flexPushBytes(&fd, "hello-world", 11u, FLEX_ENDPOINT_TAIL);
+        flexPushBytes(&fd, "tail-string", 11u, FLEX_ENDPOINT_TAIL);
+        const size_t bytes = flexBytes(fd);
+        assert(flexValidateBufferDeep((const uint8_t *)fd, bytes - 1) == false);
+        /* Also test the opposite shape: a buffer with the right total
+         * bytes in the header but garbage extending past the end.  Pass
+         * the deep validator a buflen that mismatches the claim. */
+        assert(flexValidateBufferDeep((const uint8_t *)fd, bytes + 1) == false);
+        flexFree(fd);
+        printf("  OK\n");
+    }
+
+    printf("\n=== All flexValidateBufferDeep tests passed! ===\n\n");
+
+    /* ================================================================
+     * FLEX_RAW_ENTRY_LENGTH_SAFE CORNER CASES (via deep validator)
+     *
+     * flexRawEntryLengthSafe (src/flex.c:4528) is the bounds-safe twin
+     * of flexRawEntryLength; the deep validator (above) is its only
+     * caller.  The function is static, so we pin its corner cases by
+     * building malformed buffers that pass flexValidateBuffer's O(1)
+     * envelope check but trip a SPECIFIC bound check inside the safe
+     * walker.  Each corner test stages exactly one rejection path —
+     * if a future refactor moves the check or loses a guard, the test
+     * still catches the regression because the buffer is constructed
+     * to trip only that exact branch.
+     *
+     * Branches covered:
+     *   A) remaining == 0 at entry start (cursor lands at end with
+     *      claimed_count still expecting an entry).
+     *   B) FORWARD_DECLARE_SUBCONTAINER with remaining < 2 (only the
+     *      encoding tag byte fits; the mandatory inner varint width
+     *      check has no byte to read).
+     *   C) STR encoding whose split-varint width claim exceeds the
+     *      buffer remainder (varint header byte says "this varint is
+     *      9 bytes wide" but only 1 byte left).
+     *   D) STR encoding whose meta + payload total overshoots the
+     *      remaining bytes by exactly 1 (payload claimed = remaining,
+     *      so meta + payload = remaining + meta > remaining).
+     *   E) FORWARD_DECLARE_SUBCONTAINER whose inner-varint width
+     *      claim exceeds (remaining - 1), where the encoding tag
+     *      consumed byte 0 but the inner varint cannot fit in what's
+     *      left.
+     * ================================================================ */
+
+    printf("Test flexRawEntryLengthSafe corner: remaining==0 at entry "
+           "start (count claims one more than fits):\n");
+    {
+        /* Build the smallest possible "valid envelope" buffer:
+         * total_bytes_varint=1B encoding value 2, count_varint=1B
+         * encoding value 1, leaving ZERO bytes for the claimed single
+         * entry.  Outer envelope passes (total_bytes_claim == buflen
+         * == 2; count varint fits) but the deep walker enters the
+         * loop with i=0, remaining=0, and flexRawEntryLengthSafe's
+         * first guard (`if (remaining == 0) return false;`) must
+         * fire.
+         *
+         * Encoding details:
+         *   - split-varint top 2 bits == 00 -> 1-byte form, low 6
+         *     bits store (val - 1).  So byte = (val - 1) for
+         *     val in [1, 64].  For total_bytes=2 -> byte = 0x01.
+         *   - tagged varint for value 1 is a single byte = 0x01. */
+        uint8_t buf[2] = {0x01u, 0x01u};
+        /* Sanity: cheap envelope check passes. */
+        assert(flexValidateBuffer(buf, sizeof(buf)) == true);
+        /* Deep check rejects via the remaining==0 corner. */
+        assert(flexValidateBufferDeep(buf, sizeof(buf)) == false);
+        printf("  OK\n");
+    }
+
+    printf("Test flexRawEntryLengthSafe corner: FORWARD_DECLARE_SUBCONTAINER "
+           "with remaining==1 (tag byte but no room for inner varint):\n");
+    {
+        /* Build a buffer with one container-tag entry byte and nothing
+         * after it.  Layout: total_bytes=3 (1B tot-varint + 1B count
+         * + 1B tag), count=1, single entry = container tag.
+         * remaining at entry start is exactly 1; the container branch
+         * in flexRawEntryLengthSafe needs at least 2 bytes (tag +
+         * inner varint header) so the `if (remaining < 2) return false`
+         * guard fires. */
+        uint8_t buf[3];
+        buf[0] = 0x02u; /* split-varint: total_bytes = 3 (byte = 3-1) */
+        buf[1] = 0x01u; /* tagged-varint: count = 1 */
+        buf[2] = (uint8_t)FLEX_CONTAINER_MAP; /* container tag */
+        /* Sanity: cheap envelope passes. */
+        assert(flexValidateBuffer(buf, sizeof(buf)) == true);
+        /* Deep walker rejects via the container remaining<2 corner. */
+        assert(flexValidateBufferDeep(buf, sizeof(buf)) == false);
+        printf("  OK\n");
+    }
+
+    printf("Test flexRawEntryLengthSafe corner: STR varint width "
+           "exceeds remaining:\n");
+    {
+        /* Build a buffer whose single entry's encoding byte claims a
+         * 9-byte split-varint (top bits 11 + 8-byte external width) =
+         * 0xC8.  That requires 9 bytes for the varint alone; we give
+         * it only 1 byte (remaining=1 at entry start).  The
+         * `if (varint_width > remaining) return false` guard in the
+         * STR branch fires. */
+        uint8_t buf[3];
+        buf[0] = 0x02u; /* split-varint: total_bytes = 3 */
+        buf[1] = 0x01u; /* tagged-varint: count = 1 */
+        buf[2] = 0xC8u; /* 11001000 — split-varint claiming 9-byte width */
+        assert(flexValidateBuffer(buf, sizeof(buf)) == true);
+        assert(flexValidateBufferDeep(buf, sizeof(buf)) == false);
+        printf("  OK\n");
+    }
+
+    printf("Test flexRawEntryLengthSafe corner: STR meta+payload "
+           "overshoots remaining:\n");
+    {
+        /* Build a buffer whose single STR entry has a 1-byte varint
+         * header claiming a payload length that, combined with the
+         * mirrored meta bytes (varint_width * 2 = 2 bytes), exceeds
+         * the remaining body bytes — exercising the `total > remaining`
+         * guard at the end of flexRawEntryLengthSafe.
+         *
+         * Layout: 1B tot-varint + 1B count + 3B body = 5B total.
+         * Entry body starts with a 1-byte STR varint claiming
+         * payload_len = 3 (byte = 0x02 since the low-6-bit field
+         * stores val-1, decoded as 3).  Entry total = 2 + 3 = 5
+         * bytes, but only 3 bytes remain after the envelope header —
+         * overshoot by 2. */
+        uint8_t buf[5];
+        buf[0] = 0x04u; /* split-varint: total_bytes = 5 (byte = 5-1) */
+        buf[1] = 0x01u; /* tagged-varint: count = 1 */
+        buf[2] = 0x02u; /* STR length-varint claiming payload_len = 3 */
+        buf[3] = 0xAAu;
+        buf[4] = 0xBBu;
+        assert(flexValidateBuffer(buf, sizeof(buf)) == true);
+        assert(flexValidateBufferDeep(buf, sizeof(buf)) == false);
+        printf("  OK\n");
+    }
+
+    printf("Test flexRawEntryLengthSafe corner: container inner-varint "
+           "width exceeds (remaining - 1):\n");
+    {
+        /* Build a buffer with a container tag followed by an inner
+         * varint header byte that claims a 9-byte varint width — but
+         * only 1 byte (the header byte itself) is available after the
+         * outer tag.  Tag consumes byte 0 of the entry, leaving
+         * `remaining - 1` bytes for the inner varint.  The container
+         * branch's `if (inner_varint_width > (remaining - 1)) return
+         * false` guard fires.
+         *
+         * Layout: total=4, count=1, entry = [TAG][INNER_HEADER]. */
+        uint8_t buf[4];
+        buf[0] = 0x03u; /* split-varint: total_bytes = 4 (byte = 4-1) */
+        buf[1] = 0x01u; /* tagged-varint: count = 1 */
+        buf[2] = (uint8_t)FLEX_CONTAINER_MAP; /* container tag */
+        buf[3] = 0xC8u; /* inner split-varint header claiming 9 bytes */
+        assert(flexValidateBuffer(buf, sizeof(buf)) == true);
+        assert(flexValidateBufferDeep(buf, sizeof(buf)) == false);
+        printf("  OK\n");
+    }
+
+    printf("\n=== All flexRawEntryLengthSafe corner tests passed! ===\n\n");
+
+    /* ================================================================
+     * VARINT EXTERNAL GET OUT-OF-RANGE WIDTH REJECTION
+     *
+     * varintExternalGet dispatches into either the little-endian or
+     * big-endian uint64_t loader; both have an 8-byte result buffer on
+     * the stack.  The underlying byte-copy primitive handles widths
+     * 1..16 (the 9..16 widths are reserved for the __uint128_t loaders
+     * that own a 16-byte buffer).  If a caller passes width > 8 to the
+     * uint64_t loader, the copy would write past the result buffer —
+     * an 8-byte stack out-of-bounds write.  The loaders now reject
+     * widths outside [1, 8] up front, returning 0 cleanly.
+     *
+     * This test pins the runtime guard: a mutated width byte that
+     * survives upstream validation must NOT cause varintExternalGet
+     * to corrupt the caller's stack.
+     * ================================================================ */
+    printf("Test varintExternalGet rejects out-of-range widths:\n");
+    {
+        /* Provide a buffer big enough that, absent the guard, a width=16
+         * load would silently read 16 bytes and write all 16 into the
+         * 8-byte result; ASAN/UBSAN would catch the stack write.  With
+         * the guard, the function must return 0 with no UB. */
+        uint8_t buf[16];
+        for (size_t i = 0; i < sizeof(buf); i++) {
+            buf[i] = (uint8_t)(i + 1);
+        }
+
+        /* Width 0: invalid (VARINT_WIDTH_INVALID).  Must return 0. */
+        assert(varintExternalGet(buf, (varintWidth)0) == 0);
+
+        /* Widths 9..16: out of uint64_t loader range.  Must return 0. */
+        for (varintWidth w = 9; w <= 16; w++) {
+            assert(varintExternalGet(buf, w) == 0);
+        }
+
+        /* Width >16 (e.g. 17, 255): still out of range.  Must return 0. */
+        assert(varintExternalGet(buf, (varintWidth)17) == 0);
+        assert(varintExternalGet(buf, (varintWidth)255) == 0);
+
+        /* Sanity: width 1 (in-range) still works.  buf[0] is 0x01. */
+        assert(varintExternalGet(buf, VARINT_WIDTH_8B) == 0x01u);
+        printf("  OK\n");
+    }
+
+    /* ================================================================
+     * FLEX VALIDATOR REJECTS ENCODINGS THE SIZE HELPER CANNOT HANDLE
+     *
+     * FLEX_IS_FORWARD_DECLARE_SUBCONTAINER spans [FLEX_CONTAINER_MAP,
+     * FLEX_SAME), which includes the four implemented container tags
+     * plus reserved-but-unimplemented values (compressed-container
+     * variants 241..244 and the unused gap 245..250).  Only the four
+     * implemented tags are sizable by
+     * flexDataSizeForFixedWidthEncodingWithInnerEntry; the other
+     * values land on its assert(NULL) default.  The validator must
+     * reject them so a fuzzed tag byte cannot tunnel through to a
+     * fail-loud abort.
+     *
+     * Similarly the fixed-width range carries two declared-but-unused
+     * encodings (FLEX_REAL_32D, FLEX_REAL_64D); the validator must
+     * also reject those before they reach the helper.
+     * ================================================================ */
+    printf("Test flexValidateBufferDeep rejects unimplemented "
+           "container encodings:\n");
+    {
+        /* The four compressed-container reservations (CMAP, CLIST,
+         * CSET, CTUPLE) plus the unused gap before FLEX_SAME (245..250)
+         * are all in the FORWARD_DECLARE range but unsizable by the
+         * helper.  Build a buffer with a single entry whose tag byte
+         * is each candidate and confirm the deep validator rejects. */
+        const uint8_t bad_tags[] = {
+            (uint8_t)FLEX_CONTAINER_CMAP,
+            (uint8_t)FLEX_CONTAINER_CLIST,
+            (uint8_t)FLEX_CONTAINER_CSET,
+            (uint8_t)FLEX_CONTAINER_CTUPLE,
+            245u,
+            246u,
+            247u,
+            248u,
+            249u,
+            250u,
+        };
+        for (size_t i = 0; i < sizeof(bad_tags) / sizeof(bad_tags[0]); i++) {
+            uint8_t buf[4];
+            buf[0] = 0x03u;       /* split-varint: total_bytes = 4 */
+            buf[1] = 0x01u;       /* tagged-varint: count = 1 */
+            buf[2] = bad_tags[i]; /* unsizable container-range tag */
+            buf[3] = 0x01u;       /* inner varint header (1-byte form) */
+            /* Outer envelope passes (header is well-formed). */
+            assert(flexValidateBuffer(buf, sizeof(buf)) == true);
+            /* Deep walker rejects via the new helper-allowlist guard. */
+            assert(flexValidateBufferDeep(buf, sizeof(buf)) == false);
+        }
+        printf("  OK\n");
+    }
+
+    printf("Test flexValidateBufferDeep rejects unimplemented "
+           "fixed-width encodings (REAL_32D / REAL_64D):\n");
+    {
+        /* FLEX_REAL_32D / FLEX_REAL_64D are declared but unimplemented;
+         * the helper's switch has no case for them and falls through
+         * to assert(NULL).  Without the validator guard these would
+         * tunnel through. */
+        const uint8_t bad_tags[] = {(uint8_t)FLEX_REAL_32D,
+                                    (uint8_t)FLEX_REAL_64D};
+        for (size_t i = 0; i < sizeof(bad_tags) / sizeof(bad_tags[0]); i++) {
+            uint8_t buf[3];
+            buf[0] = 0x02u; /* split-varint: total_bytes = 3 */
+            buf[1] = 0x01u; /* tagged-varint: count = 1 */
+            buf[2] = bad_tags[i];
+            assert(flexValidateBuffer(buf, sizeof(buf)) == true);
+            assert(flexValidateBufferDeep(buf, sizeof(buf)) == false);
+        }
+        printf("  OK\n");
+    }
+
+    printf("\n=== All width-range and encoding-allowlist tests passed! "
+           "===\n\n");
 
     return 0;
 }

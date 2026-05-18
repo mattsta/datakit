@@ -1476,12 +1476,66 @@ bool multimapFullRegularizeMapWithReference(
 /* ====================================================================
  * Exists API
  * ==================================================================== */
+#ifndef MULTIMAP_EXISTS_MISS_DUMP
+#define MULTIMAP_EXISTS_MISS_DUMP 0
+#endif
 bool multimapFullExists(multimapFull *m, const databox *key) {
     /* TODO: bloom filter */
     const multimapFullIdx mapIdx = multimapFullBinarySearch(m, key);
     const flex *map = getMap(m, mapIdx);
-    return !!flexFindByTypeSortedWithMiddle(map, m->elementsPerEntry, key,
-                                            GET_MIDDLE(m, mapIdx, map));
+    bool found = !!flexFindByTypeSortedWithMiddle(map, m->elementsPerEntry, key,
+                                                  GET_MIDDLE(m, mapIdx, map));
+#if MULTIMAP_EXISTS_MISS_DUMP
+    /* Diagnostic: BinarySearch picked submap A; flexFind inside A
+     * said "not present"; but a key the caller just inserted might
+     * actually live in a different submap B (range-box drift) OR be
+     * in submap A but missed by the find-in-flex path itself.  Walk
+     * every submap to locate the actual home; dump submap geometry +
+     * range boxes so the caller can correlate insert sequences with
+     * structural state. */
+    if (!found) {
+        multimapFullIdx actualIdx = (multimapFullIdx)-1;
+        for (multimapFullIdx i = 0; i < m->count; i++) {
+            const flex *mi = getMap(m, i);
+            const flexEntry *mid = flexMiddle((flex *)mi, m->elementsPerEntry);
+            if (flexFindByTypeSortedWithMiddle(mi, m->elementsPerEntry, key,
+                                               mid)) {
+                actualIdx = i;
+                break;
+            }
+        }
+        fprintf(stderr,
+                "[MULTIMAP_EXISTS_MISS_DUMP] mapIdx_chosen=%u "
+                "actualIdx=%d total_submaps=%u total_values=%zu "
+                "key.type=%d key.len=%u\n",
+                (unsigned)mapIdx,
+                actualIdx == (multimapFullIdx)-1 ? -1 : (int)actualIdx,
+                (unsigned)m->count, (size_t)m->values, (int)key->type,
+                (unsigned)key->len);
+        for (multimapFullIdx i = 0; i < (m->count > 1 ? m->count - 1 : 0);
+             i++) {
+            const databox *rb = getRangeBox(m, i);
+            fprintf(stderr,
+                    "[MULTIMAP_EXISTS_MISS_DUMP]   rangeBox[%u]: "
+                    "type=%d len=%u\n",
+                    (unsigned)i, (int)rb->type, (unsigned)rb->len);
+        }
+        /* Walk every submap and report its bounds + iteration of its
+         * contents.  When actualIdx == -1 but iteration of the whole
+         * multimap finds the key, the bug is in the per-submap
+         * flexFindByTypeSortedWithMiddle path. */
+        for (multimapFullIdx i = 0; i < m->count; i++) {
+            const flex *mi = getMap(m, i);
+            const size_t mi_count = flexCount(mi) / m->elementsPerEntry;
+            fprintf(stderr,
+                    "[MULTIMAP_EXISTS_MISS_DUMP]   submap[%u]: "
+                    "values=%zu bytes=%zu\n",
+                    (unsigned)i, mi_count, (size_t)flexBytes(mi));
+        }
+        fflush(stderr);
+    }
+#endif
+    return found;
 }
 
 bool multimapFullExistsFullWidth(multimapFull *m, const databox *elements[]) {
@@ -2251,6 +2305,76 @@ int multimapFullTest(int argc, char *argv[]) {
         multimapFullFree(m);
     }
 
+    TEST("binary-search-vs-iteration agreement on mixed-length numeric keys") {
+        /* BUG-A regression: the previous databoxCompareBytes_
+         * natural-sort produced a non-transitive ordering on
+         * mixed-length numeric-suffix strings like the carrier
+         * persist test keyset ("g_0_..", "g_1_..", ..., "g_10_..").
+         * Sorted into a flex by that comparator, the resulting
+         * sequence was "locally sorted" but not "globally sorted":
+         * binary search walked the wrong branch and reported
+         * "not found" for keys that iteration could still see.
+         *
+         * Lock that down here.  We build a 4-element multimap of
+         * the same shape carrierStateMultimapNew() builds (the
+         * carrier kv[] storage), insert every key the BUG-A soak
+         * exposed, and then assert: for EVERY inserted key,
+         * multimapFullExists must find it AND
+         * multimapFullIteratorNext walking the whole map must also
+         * visit it. */
+        multimapFull *m = multimapFullNew(4);
+        char buf[600][16];
+        size_t n = 0;
+        for (int it = 0; it < 12; it++) {
+            for (int k = 0; k < 50; k++) {
+                snprintf(buf[n], sizeof(buf[n]), "g_%d_%d", it, k);
+                /* Match how carrier emits embed-form keys.  Use
+                 * databoxNewBytesAllowEmbed because keys ≤ 8 bytes
+                 * take the embed path. */
+                const databox key =
+                    databoxNewBytesAllowEmbed(buf[n], strlen(buf[n]));
+                const databox val =
+                    databoxNewBytesAllowEmbed(buf[n], strlen(buf[n]));
+                const databox expire = {.data.u = 0,
+                                        .type = DATABOX_UNSIGNED_64};
+                const databox type = {.data.u = 0, .type = DATABOX_UNSIGNED_64};
+                const databox *elements[4] = {&key, &expire, &type, &val};
+                multimapFullInsert(m, elements);
+                n++;
+            }
+        }
+        /* Every inserted key must be findable via Exists. */
+        size_t missing_via_exists = 0;
+        for (size_t i = 0; i < n; i++) {
+            const databox probe =
+                databoxNewBytesAllowEmbed(buf[i], strlen(buf[i]));
+            if (!multimapFullExists(m, &probe)) {
+                printf("multimapFullExists missed inserted key '%s'\n", buf[i]);
+                missing_via_exists++;
+            }
+        }
+        if (missing_via_exists > 0) {
+            printf("multimapFullExists missed %zu of %zu inserted keys\n",
+                   missing_via_exists, n);
+            ERRR("multimapFullExists missed keys that were just inserted "
+                 "(natural-sort comparator non-transitive — BUG-A regressed)");
+        }
+        /* Iteration must visit at least n distinct keys. */
+        multimapIterator iter;
+        multimapFullIteratorInit(m, &iter, true);
+        databox dk = {0}, dv0 = {0}, dv1 = {0}, dv2 = {0};
+        databox *ele[4] = {&dk, &dv0, &dv1, &dv2};
+        size_t walked = 0;
+        while (multimapFullIteratorNext(&iter, ele)) {
+            walked++;
+        }
+        if (walked != n) {
+            printf("iteration walked %zu but inserted %zu\n", walked, n);
+            ERRR("iteration entry count != insertion count");
+        }
+        multimapFullFree(m);
+    }
+
     TEST("test gaps") {
         multimapFull *m = multimapFullNew(2);
         m->maxSize = 1024;
@@ -2550,6 +2674,352 @@ int multimapFullTest(int argc, char *argv[]) {
          * into a second map. */
         multimapFullVerify(m);
         multimapFullFree(m);
+    }
+
+    TEST("exists after insert: small bytes-embed keys in 4-element map") {
+        /* Mirror a 4-element-per-entry usage pattern (key + 3 value
+         * boxes — the common shape downstream consumers use for
+         * (key, type, expire, value) tuples).  Insert ~30 short
+         * BYTES_EMBED keys, each followed immediately by
+         * multimapFullExists(key) → assert true.
+         *
+         * Each insert should be findable on its own bucket while the
+         * bucket is unsplit.  At ~30 entries of 6-byte keys (~20 B
+         * per tuple, ~600 B total) the structure stays a single
+         * submap (default maxSize 2048) — no split bookkeeping
+         * involved.  If exists returns false here, the find-in-flex
+         * path itself is dropping inserted keys, independent of any
+         * range-box / split logic. */
+        multimapFull *m = multimapFullNew(4);
+
+        const size_t howMany = 60;
+        char keybuf[16];
+        char valbuf[16];
+        for (size_t i = 0; i < howMany; i++) {
+            const int kn =
+                snprintf(keybuf, sizeof(keybuf), "k_%zu_%zu", i / 10, i % 10);
+            const int vn = snprintf(valbuf, sizeof(valbuf), "v_%zu", i);
+            assert(kn > 0 && (size_t)kn < sizeof(keybuf));
+            assert(vn > 0 && (size_t)vn < sizeof(valbuf));
+
+            const databox keybox =
+                databoxNewBytesAllocateOrEmbed(keybuf, (size_t)kn);
+            const databox typebox = databoxNewUnsigned(1);
+            const databox expirebox = DATABOX_BOX_FALSE;
+            const databox valbox =
+                databoxNewBytesAllocateOrEmbed(valbuf, (size_t)vn);
+            const databox *elements[4] = {&keybox, &typebox, &expirebox,
+                                          &valbox};
+
+            const bool existed = multimapFullInsert(m, elements);
+            if (existed) {
+                ERR("entry %zu: insert reported REPLACE of an "
+                    "already-present key during a fresh insert "
+                    "sequence",
+                    i);
+            }
+
+            if (!multimapFullExists(m, &keybox)) {
+                ERR("entry %zu: multimapFullExists returned false "
+                    "for key '%.*s' (len=%d, type=%d) immediately "
+                    "after multimapFullInsert returned new-insert."
+                    "  multimapFullCount=%zu m->count=%u",
+                    i, kn, keybuf, kn, (int)keybox.type, multimapFullCount(m),
+                    (unsigned)m->count);
+            }
+        }
+
+        multimapFullFree(m);
+    }
+
+    TEST("exists after insert: shuffled small bytes-embed keys") {
+        /* Sequential-order inserts are the easy case: every insert
+         * appends at the tail and the binary search trivially walks
+         * right.  Real-world consumers route by hash, so the insert
+         * order to any single multimap is effectively random.  This
+         * test inserts the SAME 60 short BYTES_EMBED keys but in a
+         * shuffled order so the binary search hits every code path
+         * (insert at head, insert in middle, growing prefix shifts
+         * the underlying flex bytes around). */
+        multimapFull *m = multimapFullNew(4);
+
+        const size_t howMany = 60;
+        char keybuf[16];
+        char valbuf[16];
+
+        /* Build a deterministic shuffle of [0, howMany) using a
+         * linear-congruential walk so the test is reproducible
+         * across runs but exercises non-sorted insert order. */
+        size_t order[60];
+        for (size_t i = 0; i < howMany; i++) {
+            order[i] = i;
+        }
+        /* Fisher-Yates with fixed seed for reproducibility. */
+        uint64_t rng = 0xdeadbeefcafebabeULL;
+        for (size_t i = howMany - 1; i > 0; i--) {
+            rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+            const size_t j = (size_t)(rng >> 32) % (i + 1);
+            const size_t tmp = order[i];
+            order[i] = order[j];
+            order[j] = tmp;
+        }
+
+        for (size_t k = 0; k < howMany; k++) {
+            const size_t i = order[k];
+            const int kn =
+                snprintf(keybuf, sizeof(keybuf), "k_%zu_%zu", i / 10, i % 10);
+            const int vn = snprintf(valbuf, sizeof(valbuf), "v_%zu", i);
+            assert(kn > 0 && (size_t)kn < sizeof(keybuf));
+            assert(vn > 0 && (size_t)vn < sizeof(valbuf));
+
+            const databox keybox =
+                databoxNewBytesAllocateOrEmbed(keybuf, (size_t)kn);
+            const databox typebox = databoxNewUnsigned(1);
+            const databox expirebox = DATABOX_BOX_FALSE;
+            const databox valbox =
+                databoxNewBytesAllocateOrEmbed(valbuf, (size_t)vn);
+            const databox *elements[4] = {&keybox, &typebox, &expirebox,
+                                          &valbox};
+
+            (void)multimapFullInsert(m, elements);
+            if (!multimapFullExists(m, &keybox)) {
+                ERR("shuffled-insert step %zu (key #%zu = '%.*s'): "
+                    "exists missed key immediately after insert "
+                    "(m->count=%u submaps, total values=%zu)",
+                    k, i, kn, keybuf, (unsigned)m->count, multimapFullCount(m));
+            }
+        }
+
+        /* Final sweep: re-verify every key after all inserts done. */
+        for (size_t i = 0; i < howMany; i++) {
+            const int kn =
+                snprintf(keybuf, sizeof(keybuf), "k_%zu_%zu", i / 10, i % 10);
+            const databox keybox =
+                databoxNewBytesAllocateOrEmbed(keybuf, (size_t)kn);
+            if (!multimapFullExists(m, &keybox)) {
+                ERR("shuffled-insert final sweep: key %zu ('%.*s') "
+                    "missing after full insert sequence",
+                    i, kn, keybuf);
+            }
+        }
+
+        multimapFullVerify(m);
+        multimapFullFree(m);
+    }
+
+    TEST("exists after insert: 200 small bytes-embed keys + split") {
+        /* Same shape but enough entries to force submap splits.
+         * Default maxSize=2048; 200 entries × ~20 B/entry ≈ 4 KB,
+         * so we should see at least 2 submaps form.  Same invariant:
+         * every key must be findable immediately after insert. */
+        multimapFull *m = multimapFullNew(4);
+
+        const size_t howMany = 200;
+        char keybuf[16];
+        char valbuf[16];
+        for (size_t i = 0; i < howMany; i++) {
+            const int kn =
+                snprintf(keybuf, sizeof(keybuf), "k_%zu_%zu", i / 50, i % 50);
+            const int vn = snprintf(valbuf, sizeof(valbuf), "v_%zu", i);
+            assert(kn > 0 && (size_t)kn < sizeof(keybuf));
+            assert(vn > 0 && (size_t)vn < sizeof(valbuf));
+
+            const databox keybox =
+                databoxNewBytesAllocateOrEmbed(keybuf, (size_t)kn);
+            const databox typebox = databoxNewUnsigned(1);
+            const databox expirebox = DATABOX_BOX_FALSE;
+            const databox valbox =
+                databoxNewBytesAllocateOrEmbed(valbuf, (size_t)vn);
+            const databox *elements[4] = {&keybox, &typebox, &expirebox,
+                                          &valbox};
+
+            (void)multimapFullInsert(m, elements);
+            if (!multimapFullExists(m, &keybox)) {
+                ERR("entry %zu of %zu: multimapFullExists missed "
+                    "key '%.*s' (m->count=%u submaps)",
+                    i, howMany, kn, keybuf, (unsigned)m->count);
+            }
+        }
+
+        /* Final whole-pass sweep — every inserted key must still be
+         * findable after the entire insert sequence completes. */
+        for (size_t i = 0; i < howMany; i++) {
+            const int kn =
+                snprintf(keybuf, sizeof(keybuf), "k_%zu_%zu", i / 50, i % 50);
+            assert(kn > 0 && (size_t)kn < sizeof(keybuf));
+            const databox keybox =
+                databoxNewBytesAllocateOrEmbed(keybuf, (size_t)kn);
+            if (!multimapFullExists(m, &keybox)) {
+                ERR("final sweep: key %zu ('%.*s') missing after "
+                    "all %zu inserts completed",
+                    i, kn, keybuf, howMany);
+            }
+        }
+
+        multimapFullVerify(m);
+        multimapFullFree(m);
+    }
+
+    TEST("exists-after-insert: 80 keys with DATABOX_BYTES (aliased) value") {
+        /* Some upstream consumers populate the value-box slot via a
+         * decode macro that points `data.bytes.start` at an external
+         * buffer (DATABOX_BYTES, not BYTES_EMBED).  The bytes are
+         * copied INTO the flex during insert, so the alias is fine
+         * for storage, but the test below exercises that input shape
+         * to make sure no path in the multimap depends on the value
+         * box being BYTES_EMBED specifically. */
+        multimapFull *m = multimapFullNew(4);
+
+        const size_t howMany = 80;
+        char keybuf[16];
+        /* One backing buffer that every value-box aliases into.  This
+         * is the closest match to how a streaming restore callback
+         * hands values to consumers — a pointer into the row buffer,
+         * not a freshly-allocated heap copy. */
+        char valuepool[16];
+
+        size_t order[80];
+        for (size_t i = 0; i < howMany; i++) {
+            order[i] = i;
+        }
+        uint64_t rng = 0xA5A5A5A5DEADBEEFULL;
+        for (size_t i = howMany - 1; i > 0; i--) {
+            rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+            const size_t j = (size_t)(rng >> 32) % (i + 1);
+            const size_t tmp = order[i];
+            order[i] = order[j];
+            order[j] = tmp;
+        }
+
+        for (size_t step = 0; step < howMany; step++) {
+            const size_t i = order[step];
+            const int kn =
+                snprintf(keybuf, sizeof(keybuf), "k_%zu_%zu", i / 16, i % 16);
+            const int vn = snprintf(valuepool, sizeof(valuepool), "v_%zu", i);
+
+            const databox keybox =
+                databoxNewBytesAllocateOrEmbed(keybuf, (size_t)kn);
+            const databox typebox = databoxNewUnsigned(1);
+            const databox expirebox = DATABOX_BOX_FALSE;
+            /* DATABOX_BYTES with start pointing at our shared
+             * backing buffer — re-aliased on every insert. */
+            const databox valbox = {
+                .type = DATABOX_BYTES,
+                .len = (size_t)vn,
+                .data.bytes.custart = (const uint8_t *)valuepool,
+            };
+            const databox *elements[4] = {&keybox, &typebox, &expirebox,
+                                          &valbox};
+
+            (void)multimapFullInsert(m, elements);
+            if (!multimapFullExists(m, &keybox)) {
+                ERR("aliased-value step %zu key #%zu '%.*s' missed", step, i,
+                    kn, keybuf);
+            }
+        }
+
+        for (size_t i = 0; i < howMany; i++) {
+            const int kn =
+                snprintf(keybuf, sizeof(keybuf), "k_%zu_%zu", i / 16, i % 16);
+            const databox keybox =
+                databoxNewBytesAllocateOrEmbed(keybuf, (size_t)kn);
+            if (!multimapFullExists(m, &keybox)) {
+                ERR("aliased-value final: key %zu '%.*s' missing", i, kn,
+                    keybuf);
+            }
+        }
+
+        multimapFullVerify(m);
+        multimapFullFree(m);
+    }
+
+    TEST("exists-after-insert stress: 500 rounds × ~80 random keys") {
+        /* Stress sweep: 500 rounds.  Each round creates a fresh
+         * multimapFull(4), inserts ~80 short BYTES_EMBED keys in
+         * fresh-shuffled order using a different LCG seed, and
+         * verifies multimapFullExists after every insert AND in a
+         * final whole-pass sweep.  If a specific insert order can
+         * cause exists to miss a key inserted in the same scope,
+         * one of the 500 rounds will surface it. */
+        const size_t rounds = 500;
+        const size_t keysPerRound = 80;
+        size_t round_failures = 0;
+
+        char keybuf[16];
+        char valbuf[16];
+
+        for (size_t r = 0; r < rounds; r++) {
+            multimapFull *m = multimapFullNew(4);
+
+            /* Deterministic shuffle seeded by round number. */
+            size_t order[80];
+            for (size_t i = 0; i < keysPerRound; i++) {
+                order[i] = i;
+            }
+            uint64_t rng = 0x9E3779B97F4A7C15ULL + r * 0xBF58476D1CE4E5B9ULL;
+            for (size_t i = keysPerRound - 1; i > 0; i--) {
+                rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+                const size_t j = (size_t)(rng >> 32) % (i + 1);
+                const size_t tmp = order[i];
+                order[i] = order[j];
+                order[j] = tmp;
+            }
+
+            bool round_ok = true;
+            for (size_t step = 0; step < keysPerRound; step++) {
+                const size_t i = order[step];
+                const int kn = snprintf(keybuf, sizeof(keybuf), "k_%zu_%zu",
+                                        i / 16, i % 16);
+                const int vn = snprintf(valbuf, sizeof(valbuf), "v_%zu", i);
+                (void)kn;
+                (void)vn;
+
+                const databox keybox =
+                    databoxNewBytesAllocateOrEmbed(keybuf, (size_t)kn);
+                const databox typebox = databoxNewUnsigned(1);
+                const databox expirebox = DATABOX_BOX_FALSE;
+                const databox valbox =
+                    databoxNewBytesAllocateOrEmbed(valbuf, (size_t)vn);
+                const databox *elements[4] = {&keybox, &typebox, &expirebox,
+                                              &valbox};
+                (void)multimapFullInsert(m, elements);
+                if (!multimapFullExists(m, &keybox)) {
+                    printf("\nround %zu step %zu key #%zu '%.*s' "
+                           "missed (m->count=%u, values=%zu)\n",
+                           r, step, i, kn, keybuf, (unsigned)m->count,
+                           multimapFullCount(m));
+                    round_ok = false;
+                    break;
+                }
+            }
+
+            if (round_ok) {
+                /* Final whole-pass sweep. */
+                for (size_t i = 0; i < keysPerRound; i++) {
+                    const int kn = snprintf(keybuf, sizeof(keybuf), "k_%zu_%zu",
+                                            i / 16, i % 16);
+                    const databox keybox =
+                        databoxNewBytesAllocateOrEmbed(keybuf, (size_t)kn);
+                    if (!multimapFullExists(m, &keybox)) {
+                        printf("\nround %zu final sweep: key #%zu "
+                               "'%.*s' missing\n",
+                               r, i, kn, keybuf);
+                        round_ok = false;
+                        break;
+                    }
+                }
+            }
+
+            if (!round_ok) {
+                round_failures++;
+            }
+            multimapFullFree(m);
+        }
+
+        if (round_failures > 0) {
+            ERR("%zu/%zu stress rounds failed exists-after-insert",
+                round_failures, rounds);
+        }
     }
 
     TEST_FINAL_RESULT;

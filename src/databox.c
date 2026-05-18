@@ -413,73 +413,70 @@ DK_INLINE_ALWAYS int databoxCompareBytes_(const uint8_t *aBytes,
                                           const size_t aLen,
                                           const uint8_t *bBytes,
                                           const size_t bLen) {
-    int_fast32_t biggerIntegerRepresentation = 0;
-    const bool longestIsA = aLen > bLen;
-    const size_t maxLen = longestIsA ? bLen : aLen;
-    for (size_t i = 0; i < maxLen; i++) {
-        uint_fast8_t aa = aBytes[i];
-        uint_fast8_t bb = bBytes[i];
-        if (StrIsdigit(aa) && StrIsdigit(bb)) {
-            if (biggerIntegerRepresentation == 0) {
-                /* If everything has been a number so far, only track
-                 * the first different integer as we go along */
-                if (aa < bb) {
-                    biggerIntegerRepresentation = -1;
-                } else if (aa > bb) {
-                    biggerIntegerRepresentation = 1;
-                }
+    /* Natural-sort byte comparison: digit RUNS compare numerically
+     * (longer run is the larger number, then lex on the digit
+     * bytes); everything else compares lexicographically.  This
+     * produces a strict total order so it is safe as a binary-search
+     * comparator.
+     *
+     * The previous formulation tracked only the FIRST digit
+     * difference between a and b and then made post-hoc decisions
+     * when one side's digit run ended before the other.  That
+     * produced a non-transitive ordering: comparing the triplet
+     * { "g_2_39", "g_10_0", "g_1_6" } reported A<B, B>C, A>C — a
+     * cycle.  Binary search over a flex sorted by such a comparator
+     * silently dropped keys that iteration could still find,
+     * because the search walked a wrong branch.
+     *
+     * Run-length-first comparison is transitive: digit runs of
+     * different length are ordered by length alone, runs of the
+     * same length fall back to memcmp.  Non-digit positions are
+     * pure byte comparison, which is trivially transitive. */
+    size_t ai = 0;
+    size_t bi = 0;
+    while (ai < aLen && bi < bLen) {
+        const uint_fast8_t aa = aBytes[ai];
+        const uint_fast8_t bb = bBytes[bi];
+        const bool aIsDigit = StrIsdigit(aa);
+        const bool bIsDigit = StrIsdigit(bb);
+        if (aIsDigit && bIsDigit) {
+            size_t aEnd = ai;
+            while (aEnd < aLen && StrIsdigit(aBytes[aEnd])) {
+                aEnd++;
             }
-
+            size_t bEnd = bi;
+            while (bEnd < bLen && StrIsdigit(bBytes[bEnd])) {
+                bEnd++;
+            }
+            const size_t aRun = aEnd - ai;
+            const size_t bRun = bEnd - bi;
+            if (aRun != bRun) {
+                return aRun < bRun ? -1 : 1;
+            }
+            const int cmp = memcmp(aBytes + ai, bBytes + bi, aRun);
+            if (cmp != 0) {
+                return cmp < 0 ? -1 : 1;
+            }
+            ai = aEnd;
+            bi = bEnd;
             continue;
         }
-
-        if (biggerIntegerRepresentation) {
-            if (!StrIsdigit(aa) && !StrIsdigit(bb)) {
-                goto stringIsNotEntirelyNumeric;
-            }
-
-            /* We were numeric up to this point, but... */
-
-            /* a is no longer numeric, so return a < b */
-            if (!StrIsdigit(aa)) {
-                return -1;
-            }
-
-            /* b is no longer numeric, so return a > b */
-            if (!StrIsdigit(bb)) {
-                return 1;
-            }
-        }
-
-    stringIsNotEntirelyNumeric:
         if (aa < bb) {
             return -1;
         }
-
         if (aa > bb) {
             return 1;
         }
-
-        /* else, bytes are equal and we need to check the next pair of bytes */
+        ai++;
+        bi++;
     }
-
-    /* If lengths are equal and all bytes have been numbers... */
-    if (aLen == bLen && biggerIntegerRepresentation) {
-        return biggerIntegerRepresentation;
-    }
-
-    /* As of here, strings are equal as of the smallest length,
-     * so if A is bigger than B, return positive. */
-    if (longestIsA) {
+    if (ai < aLen) {
         return 1;
     }
-
-    if (aLen == bLen) {
-        return 0;
+    if (bi < bLen) {
+        return -1;
     }
-
-    /* else, longestIsB */
-    return -1;
+    return 0;
 }
 
 DK_INLINE_ALWAYS int databoxCompareBytes(const databox *a, const databox *b) {
@@ -1294,6 +1291,158 @@ int databoxTest(int argc, char *argv[]) {
         if (databoxCompare(&s1, &s2) >= 0) {
             ERRR(
                 "'file2.txt' should be less than 'file10.txt' in natural sort");
+        }
+    }
+
+    TEST("natural sort comparator is a strict total order") {
+        /* Regression: a previous formulation of databoxCompareBytes_
+         * recorded only the FIRST differing digit and made post-hoc
+         * decisions when the digit runs ended at different
+         * positions.  That produced a non-transitive ordering for
+         * mixed-length numeric keys, which silently broke binary
+         * search inside multimapFull (BinarySearch missed keys that
+         * iteration found).  Lock the fix here. */
+        const char *cases[] = {
+            "g_2_39",  "g_10_0", "g_1_6",  "g_0_2",  "g_0_45",
+            "g_10_47", "g_1_47", "g_2_40", "g_2_42",
+        };
+        const size_t n = sizeof(cases) / sizeof(cases[0]);
+        databox boxes[9];
+        for (size_t i = 0; i < n; i++) {
+            boxes[i] = databoxNewBytesString(cases[i]);
+        }
+        /* Transitivity:  for every ordered triple (i, j, k) the
+         * comparator must agree:  if i<j and j<k then i<k.
+         * Equivalent: there must exist a permutation of indices
+         * such that sort order is monotonic against the
+         * comparator. */
+        for (size_t i = 0; i < n; i++) {
+            for (size_t j = 0; j < n; j++) {
+                for (size_t k = 0; k < n; k++) {
+                    const int ij = databoxCompare(&boxes[i], &boxes[j]);
+                    const int jk = databoxCompare(&boxes[j], &boxes[k]);
+                    const int ik = databoxCompare(&boxes[i], &boxes[k]);
+                    if (ij < 0 && jk < 0 && ik >= 0) {
+                        printf("transitivity broken: %s < %s and %s < %s "
+                               "but %s vs %s = %d\n",
+                               cases[i], cases[j], cases[j], cases[k], cases[i],
+                               cases[k], ik);
+                        ERRR("natural-sort comparator is not transitive");
+                    }
+                    if (ij > 0 && jk > 0 && ik <= 0) {
+                        printf("transitivity broken: %s > %s and %s > %s "
+                               "but %s vs %s = %d\n",
+                               cases[i], cases[j], cases[j], cases[k], cases[i],
+                               cases[k], ik);
+                        ERRR("natural-sort comparator is not transitive");
+                    }
+                    if (ij == 0 && jk == 0 && ik != 0) {
+                        ERRR("natural-sort equality is not transitive");
+                    }
+                }
+            }
+        }
+        /* Antisymmetry: cmp(a,b) and cmp(b,a) must be opposite signs
+         * (or both zero). */
+        for (size_t i = 0; i < n; i++) {
+            for (size_t j = 0; j < n; j++) {
+                const int ab = databoxCompare(&boxes[i], &boxes[j]);
+                const int ba = databoxCompare(&boxes[j], &boxes[i]);
+                if ((ab == 0) != (ba == 0)) {
+                    ERRR(
+                        "natural-sort antisymmetry violated (zero vs nonzero)");
+                }
+                if (ab > 0 && ba >= 0) {
+                    ERRR("natural-sort antisymmetry violated (both positive)");
+                }
+                if (ab < 0 && ba <= 0) {
+                    ERRR("natural-sort antisymmetry violated (both negative)");
+                }
+            }
+        }
+        /* Specific orderings the natural sort must preserve. */
+        databox a = databoxNewBytesString("g_2_39");
+        databox b = databoxNewBytesString("g_10_0");
+        databox c = databoxNewBytesString("g_1_6");
+        if (!(databoxCompare(&c, &a) < 0)) {
+            ERRR("'g_1_6' must be less than 'g_2_39' (1 < 2)");
+        }
+        if (!(databoxCompare(&a, &b) < 0)) {
+            ERRR("'g_2_39' must be less than 'g_10_0' (2 < 10)");
+        }
+        if (!(databoxCompare(&c, &b) < 0)) {
+            ERRR("'g_1_6' must be less than 'g_10_0' (1 < 10)");
+        }
+    }
+
+    TEST("natural sort handles leading zeros consistently") {
+        /* Different leading-zero counts on numerically-equal numbers
+         * must produce a stable total order (longer run = larger,
+         * preserved across calls). */
+        databox a = databoxNewBytesString("001");
+        databox b = databoxNewBytesString("1");
+        const int ab = databoxCompare(&a, &b);
+        const int ba = databoxCompare(&b, &a);
+        if (ab == 0) {
+            /* Equal is acceptable IF the comparator is consistent.
+             * Verify ba is also zero. */
+            if (ba != 0) {
+                ERRR("leading-zero compare asymmetric");
+            }
+        } else if ((ab > 0 && ba < 0) || (ab < 0 && ba > 0)) {
+            /* Good: opposite signs. */
+        } else {
+            ERRR("leading-zero compare has same sign in both directions");
+        }
+        databox c = databoxNewBytesString("0001");
+        const int ac = databoxCompare(&a, &c);
+        const int ca = databoxCompare(&c, &a);
+        if ((ac > 0 && ca >= 0) || (ac < 0 && ca <= 0)) {
+            ERRR("zero-run length compare violates antisymmetry");
+        }
+    }
+
+    TEST("natural sort total order on random key set") {
+        /* Generate keys with the same shape as the BUG-A
+         * reproduction (g_<N>_<M>) and verify that sorting them
+         * with the comparator produces a sequence that is monotonic
+         * under the comparator — i.e. no element compares less than
+         * any earlier element in the sorted output. */
+        char buf[600][16];
+        databox boxes[600];
+        size_t n = 0;
+        for (int it = 0; it < 12; it++) {
+            for (int k = 0; k < 50; k++) {
+                snprintf(buf[n], sizeof(buf[n]), "g_%d_%d", it, k);
+                boxes[n] = databoxNewBytesString(buf[n]);
+                n++;
+            }
+        }
+        /* Insertion sort (stable, O(n^2) but n=600 is fine for a
+         * test). */
+        for (size_t i = 1; i < n; i++) {
+            databox key = boxes[i];
+            char *kbuf = buf[i];
+            size_t j = i;
+            char tmpkey[16];
+            while (j > 0 && databoxCompare(&boxes[j - 1], &key) > 0) {
+                boxes[j] = boxes[j - 1];
+                /* shift buf in parallel so debug prints stay
+                 * aligned.  We only need it for the error path. */
+                memcpy(tmpkey, buf[j - 1], sizeof(tmpkey));
+                memcpy(buf[j], tmpkey, sizeof(tmpkey));
+                j--;
+            }
+            boxes[j] = key;
+            memcpy(buf[j], kbuf, sizeof(buf[j]));
+        }
+        /* Verify monotonic. */
+        for (size_t i = 1; i < n; i++) {
+            if (databoxCompare(&boxes[i - 1], &boxes[i]) > 0) {
+                printf("sort produced non-monotonic: idx %zu '%s' > %zu '%s'\n",
+                       i - 1, buf[i - 1], i, buf[i]);
+                ERRR("natural sort produces non-monotonic ordering");
+            }
         }
     }
 

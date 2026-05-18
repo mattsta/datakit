@@ -1,0 +1,30 @@
+# clangd language-server config template for datakit.
+#
+# clangd configures editor tooling only; it does NOT affect the CMake
+# build or any compiler. Copy this file to a local, untracked `.clangd`
+# (it is gitignored) and adjust for your machine.
+#
+# clangd reads compile_commands.json from the build directory named
+# below (generate it with CMake's CMAKE_EXPORT_COMPILE_COMMANDS=ON).
+
+CompileFlags:
+  CompilationDatabase: build
+
+  # macOS: CMake's compile_commands.json does not embed -isysroot, so
+  # clangd cannot find the SDK headers on its own. If your setup needs
+  # it, uncomment and set the path from `xcrun --show-sdk-path` (use the
+  # unversioned symlink so it survives SDK minor bumps):
+  #
+  # Add:
+  #   - -isysroot
+  #   - /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk
+
+Diagnostics:
+  # Drop clang-tidy's noisier style categories; keep real compiler
+  # diagnostics from the project's own flags.
+  ClangTidy:
+    Remove:
+      - readability-*
+      - bugprone-easily-swappable-parameters
+      - bugprone-narrowing-conversions
+      - cppcoreguidelines-*
