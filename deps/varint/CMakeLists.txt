@@ -5,6 +5,10 @@ project(varint
     LANGUAGES C
 )
 
+if (TARGET ${PROJECT_NAME})
+    return()
+endif()
+
 # ============================================================================
 # Options for when used as a dependency via FetchContent/add_subdirectory
 # ============================================================================

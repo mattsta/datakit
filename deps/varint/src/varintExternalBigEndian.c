@@ -105,6 +105,15 @@ _varintExternalBigEndianCopyUsedBytesBigEndian(uint8_t *dst,
 /* Read integer or float pointed to by 'src', store result in databox 'r' */
 static uint64_t _varintExternalBigEndianLoadFromEncodingLittleEndian(
     const uint8_t *src, const varintWidth encoding) {
+    /* Width-range guard: result is a uint64_t (8 bytes). Widths > 8
+     * would overflow the result buffer in the underlying copy helper.
+     * Callers must use the BigExternal __uint128_t variant for >8B
+     * widths; mis-routed widths fail closed here. */
+    assert(encoding >= VARINT_WIDTH_8B && encoding <= VARINT_WIDTH_64B);
+    if (encoding == 0 || encoding > VARINT_WIDTH_64B) {
+        return 0;
+    }
+
     uint64_t result = 0;
     uint8_t *resarr = (uint8_t *)&result;
 
@@ -117,6 +126,14 @@ static uint64_t _varintExternalBigEndianLoadFromEncodingLittleEndian(
 static uint64_t
 _varintExternalBigEndianLoadFromEncodingBigEndian(const uint8_t *__restrict src,
                                                   const varintWidth encoding) {
+    /* Width-range guard: result is a uint64_t (8 bytes). The byte-copy
+     * loop below would write resarr[8..encoding-1] if encoding > 8,
+     * overflowing the result buffer. Mis-routed >8B widths fail closed. */
+    assert(encoding >= VARINT_WIDTH_8B && encoding <= VARINT_WIDTH_64B);
+    if (encoding == 0 || encoding > VARINT_WIDTH_64B) {
+        return 0;
+    }
+
     uint64_t result = 0;
     uint8_t *resarr = (uint8_t *)&result;
 

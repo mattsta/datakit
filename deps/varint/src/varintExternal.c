@@ -134,10 +134,21 @@ static varintWidth varintExternalCopyUsedBytesBigEndian_(uint8_t *dst,
     return encoding;
 }
 
-/* Read integer or float pointed to by 'src', store result in databox 'r' */
+/* Read integer or float pointed to by 'src' */
+/* `encoding` must be in [VARINT_WIDTH_8B, VARINT_WIDTH_64B] for these
+ * uint64_t loaders.  The underlying byte-copy switch handles widths up
+ * to 16 bytes but the result buffer here is only 8 bytes; widths 9..16
+ * would write past the local on the stack.  Fail loud in debug; fail
+ * closed in production (return 0).  Note: the __uint128_t loaders
+ * below use a 16-byte result and legitimately accept widths up to 16. */
 static uint64_t
 varintExternalLoadFromEncodingLittleEndian_(const uint8_t *src,
                                             const varintWidth encoding) {
+    assert(encoding >= VARINT_WIDTH_8B && encoding <= VARINT_WIDTH_64B);
+    if (encoding == 0 || encoding > VARINT_WIDTH_64B) {
+        return 0;
+    }
+
     uint64_t result = 0;
     uint8_t *resarr = (uint8_t *)&result;
 
@@ -150,6 +161,11 @@ varintExternalLoadFromEncodingLittleEndian_(const uint8_t *src,
 static uint64_t
 varintExternalLoadFromEncodingBigEndian_(const uint8_t *restrict src,
                                          const varintWidth encoding) {
+    assert(encoding >= VARINT_WIDTH_8B && encoding <= VARINT_WIDTH_64B);
+    if (encoding == 0 || encoding > VARINT_WIDTH_64B) {
+        return 0;
+    }
+
     uint64_t result = 0;
     uint8_t *resarr = (uint8_t *)&result;
 

@@ -9,9 +9,19 @@ START: What are you storing?
 
 ├─ Single variable-width integers?
 │  ├─ Need sortable keys? → varintTagged
+│  ├─ Need a canonical (one-encoding-per-value) sortable key? → varintBijou
 │  ├─ Maximum space efficiency? → varintExternal
 │  ├─ Legacy compatibility (Protocol Buffers, SQLite3)? → varintChained
 │  └─ Need known bit boundaries for custom packing? → varintSplit
+│
+├─ Sequential / time-series integer arrays?
+│  ├─ Regular-interval timestamps or smooth sensor curves? → varintDeltaDelta
+│  ├─ Arithmetic progression (constant step), maybe with a few outliers? → varintStride
+│  └─ Monotonic but irregular? → varintDelta
+│
+├─ Not sure which codec wins on your data?
+│  └─ Let the library try several and keep the smallest → varintCompete
+│     (add -DVARINT_TELEMETRY to see per-codec win/call counts)
 │
 ├─ Arrays of fixed-width integers?
 │  ├─ Bit width is 8, 16, 32, or 64? → Use native arrays (uint8_t[], etc.)
@@ -42,12 +52,13 @@ START: What are you storing?
 
 ### Core Varint Types (for Variable-Width Single Values)
 
-| Type               | Space Efficiency | Speed   | Sortable | O(1) Length | Best For                         |
-| ------------------ | ---------------- | ------- | -------- | ----------- | -------------------------------- |
-| **varintTagged**   | Good             | Fast    | Yes      | Yes         | Database keys, sorted data       |
-| **varintExternal** | Best             | Fastest | No       | External    | Column stores, schemas           |
-| **varintSplit**    | Good             | Fast    | No       | Yes         | Custom packing, known boundaries |
-| **varintChained**  | Good             | Slowest | No       | No          | Legacy compatibility only        |
+| Type               | Space Efficiency | Speed   | Sortable | O(1) Length | Best For                          |
+| ------------------ | ---------------- | ------- | -------- | ----------- | --------------------------------- |
+| **varintTagged**   | Good             | Fast    | Yes      | Yes         | Database keys, sorted data        |
+| **varintBijou**    | Good             | Fast    | Yes      | Yes         | Canonical keys, content-addressed |
+| **varintExternal** | Best             | Fastest | No       | External    | Column stores, schemas            |
+| **varintSplit**    | Good             | Fast    | No       | Yes         | Custom packing, known boundaries  |
+| **varintChained**  | Good             | Slowest | No       | No          | Legacy compatibility only         |
 
 ### Advanced Features (for Arrays and Matrices)
 
@@ -59,11 +70,14 @@ START: What are you storing?
 
 ### Batch/Array Encodings (for Large Data Sets)
 
-| Type            | Use Case                         | Compression | Throughput | Best For                     |
-| --------------- | -------------------------------- | ----------- | ---------- | ---------------------------- |
-| **varintRLE**   | Consecutive repeated values      | 8-100x      | Moderate   | Audio silence, sparse data   |
-| **varintElias** | Small positive integers (1-1000) | 50-80%      | Moderate   | Huffman lengths, tree depths |
-| **varintBP128** | Sorted/clustered large arrays    | 2-8x        | 800+ MB/s  | Search indexes, time series  |
+| Type                 | Use Case                         | Compression | Throughput  | Best For                     |
+| -------------------- | -------------------------------- | ----------- | ----------- | ---------------------------- |
+| **varintRLE**        | Consecutive repeated values      | 8-100x      | Moderate    | Audio silence, sparse data   |
+| **varintElias**      | Small positive integers (1-1000) | 50-80%      | Moderate    | Huffman lengths, tree depths |
+| **varintBP128**      | Sorted/clustered large arrays    | 2-8x        | 800+ MB/s   | Search indexes, time series  |
+| **varintDeltaDelta** | Regular-interval time series     | 3-4x        | Fast        | Timestamps, smooth sensors   |
+| **varintStride**     | Arithmetic progressions          | ~24 B/any   | Fast (SIMD) | Paginated IDs, fixed grids   |
+| **varintCompete**    | Unknown / heterogeneous data     | best-of-N   | N× encode   | Encode-once, read-many       |
 
 ## Use Case Scenarios
 

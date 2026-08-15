@@ -16,14 +16,15 @@ The varint library provides a comprehensive suite of variable-length integer enc
 
 The library is organized into three architectural layers:
 
-### Layer 1: Core Varint Encodings (4 Types)
+### Layer 1: Core Varint Encodings (5 Types)
 
-The foundation layer provides four primary varint encoding strategies, each with different metadata storage approaches:
+The foundation layer provides five primary varint encoding strategies, each with different metadata storage approaches:
 
 1. **[varintTagged](modules/varintTagged.md)** - Metadata in first byte, sortable, big-endian
-2. **[varintExternal](modules/varintExternal.md)** - Metadata external to encoding, zero overhead
-3. **[varintSplit](modules/varintSplit.md)** - Three-level encoding with known bit boundaries
-4. **[varintChained](modules/varintChained.md)** - Continuation bits in each byte (legacy)
+2. **[varintBijou](modules/varintBijou.md)** - Tagged cousin (bijou64): canonical-by-construction, sortable, big-endian
+3. **[varintExternal](modules/varintExternal.md)** - Metadata external to encoding, zero overhead
+4. **[varintSplit](modules/varintSplit.md)** - Three-level encoding with known bit boundaries
+5. **[varintChained](modules/varintChained.md)** - Continuation bits in each byte (legacy)
 
 ### Layer 2: Variant Encodings (5 Specialized Types)
 
@@ -35,7 +36,7 @@ Enhanced versions of core encodings optimized for specific scenarios:
 4. **varintSplitReversed** - Reverse-traversable split varints
 5. **varintExternalBigEndian** - Big-endian external encoding
 
-### Layer 3: Advanced Features (6 Systems)
+### Layer 3: Advanced Features (8 Systems)
 
 High-level abstractions built on varint primitives:
 
@@ -45,12 +46,23 @@ High-level abstractions built on varint primitives:
 4. **[varintRLE](modules/varintRLE.md)** - Run-length encoding for consecutive repeated values
 5. **[varintElias](modules/varintElias.md)** - Elias Gamma/Delta universal codes for small integers
 6. **[varintBP128](modules/varintBP128.md)** - SIMD-accelerated block-packed encoding for large arrays
+7. **[varintDeltaDelta](modules/varintDeltaDelta.md)** - Second-order delta (Gorilla-style) for regular-interval time series
+8. **[varintStride](modules/varintStride.md)** - Arithmetic-progression detection with exact and fuzzy modes
+
+### Layer 4: Self-Managing Selection
+
+Cross-codec orchestration built on the modules above:
+
+1. **varintAdaptive** - Single-pass analyze → heuristic codec choice (fast, byte-stable)
+2. **[varintCompete](modules/varintCompete.md)** - Evidence-based competition: runs N codecs, keeps the smallest
+3. **varintTelemetry** - Opt-in atomic per-codec counters (calls, wins, bytes); zero-cost when off
 
 ## Quick Comparison Matrix
 
 | Type         | Metadata Location | Encoding      | Max Bytes | 1-Byte Max   | Sortable | Speed   | Best For                            |
 | ------------ | ----------------- | ------------- | --------- | ------------ | -------- | ------- | ----------------------------------- |
 | **Tagged**   | First byte        | Big-endian    | 9         | 240          | Yes      | Fast    | Database keys, sorted data          |
+| **Bijou**    | First byte        | Big-endian    | 9         | 247          | Yes      | Fast    | Canonical keys (content-addressed)  |
 | **External** | External          | Little-endian | 8         | 255          | No       | Fastest | Compact storage, metadata elsewhere |
 | **Split**    | First byte        | Hybrid        | 9         | 63           | No       | Fast    | Known bit boundaries, packing       |
 | **Chained**  | Continuation bits | Variable      | 9         | 127          | No       | Slowest | Legacy compatibility                |
@@ -212,6 +224,32 @@ Use **varintBP128** for:
 
 **Example**: 1M document IDs with delta BP128 achieves 8x compression with 1.2+ GB/s decode throughput.
 
+### Regular-Interval Time Series
+
+Use **varintDeltaDelta** for:
+
+- Monitoring/telemetry sampled at fixed intervals (Prometheus, InfluxDB pattern)
+- IoT sensors with steady cadence and smooth value curves
+- Financial tick data at regular sampling
+
+Second-order delta crushes the common case where successive _deltas_ repeat (e.g., timestamps every 60 s have constant inter-timestamp delta → delta-of-delta is zero almost everywhere).
+
+### Arithmetic Progressions
+
+Use **varintStride** for:
+
+- Paginated IDs, page offsets, cursor sequences
+- Polling intervals, scheduled batch indices
+- Cell-row / cell-column IDs in fixed-grid storage
+
+**Exact mode** is ~24 bytes regardless of count. **Fuzzy mode** tolerates outliers (capped at 20% of count by default) and stores `(base, stride, count, exceptions)`.
+
+### Self-Managing Selection
+
+Use **varintAdaptive** when you want fast heuristic choice with a 1-byte codec header (existing API, byte-stable).
+
+Use **varintCompete** when you want the library to _try_ a configurable set of codecs and emit the smallest. Output frame is `[VCMP magic][version][codec ID][bodyLen][body]` so unknown codec IDs can still skip safely. Pair with **varintTelemetry** (opt-in via `-DVARINT_TELEMETRY`) to learn which codecs actually win in your workload.
+
 ## Module Dependencies
 
 ```
@@ -236,8 +274,20 @@ varint.h (common types)
     ├── varintRLE.c/.h
     │   └── varintTagged.h (uses for length/value encoding)
     ├── varintElias.c/.h (bit-level Gamma/Delta codes)
-    └── varintBP128.c/.h
-        └── varintTagged.h (uses for delta first value)
+    ├── varintBP128.c/.h
+    │   └── varintTagged.h (uses for delta first value)
+    │
+    ├── varintDeltaDelta.c/.h
+    │   └── varintDelta.h + varintExternal.h
+    ├── varintStride.c/.h
+    │   └── varintDelta.h + varintTagged.h (exceptions via tagged)
+    │
+    ├── varintTelemetry.c/.h (opt-in atomic counters)
+    └── varintCompete.c/.h
+        ├── varintTelemetry.h
+        ├── varintDeltaDelta.h, varintStride.h, varintDelta.h
+        ├── varintRLE.h, varintFOR.h, varintPFOR.h, varintDict.h
+        └── varintTagged.h
 ```
 
 ## API Patterns

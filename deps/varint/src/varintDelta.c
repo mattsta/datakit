@@ -63,7 +63,9 @@ size_t varintDeltaEncode(uint8_t *output, const int64_t *values, size_t count) {
     /* Encode deltas */
     int64_t prev = base;
     for (size_t i = 1; i < count; i++) {
-        int64_t delta = values[i] - prev;
+        /* Wrapping subtraction: mod-2^64 deltas round-trip for any
+         * int64 pair, and signed overflow would be UB. */
+        int64_t delta = (int64_t)((uint64_t)values[i] - (uint64_t)prev);
         varintWidth deltaBytes = varintDeltaPut(p, delta);
         p += deltaBytes;
         prev = values[i];
@@ -95,7 +97,7 @@ size_t varintDeltaDecode(const uint8_t *input, size_t count, int64_t *output) {
         varintWidth deltaBytes = varintDeltaGet(p, &delta);
         p += deltaBytes;
 
-        current += delta;
+        current = (int64_t)((uint64_t)current + (uint64_t)delta);
         output[i] = current;
     }
 
@@ -157,7 +159,9 @@ size_t varintDeltaDecodeUnsigned(const uint8_t *input, size_t count,
         varintWidth deltaBytes = varintDeltaGet(p, &delta);
         p += deltaBytes;
 
-        current = (uint64_t)((int64_t)current + delta);
+        /* Unsigned addition wraps mod 2^64, exactly reversing the
+         * encoder's wrapped subtraction; a signed add here is UB. */
+        current = current + (uint64_t)delta;
         output[i] = current;
     }
 

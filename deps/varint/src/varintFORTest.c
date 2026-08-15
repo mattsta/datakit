@@ -34,7 +34,7 @@ int varintFORTest(int argc, char *argv[]) {
         const uint64_t values[] = {100, 105, 110, 115, 120};
         size_t count = 5;
         uint8_t buffer[256];
-        varintFORMeta meta;
+        varintFORMeta meta = {0};
 
         size_t encoded = varintFOREncode(buffer, values, count, &meta);
         if (encoded == 0) {
@@ -87,7 +87,7 @@ int varintFORTest(int argc, char *argv[]) {
         }
 
         uint8_t buffer[1024];
-        varintFORMeta meta;
+        varintFORMeta meta = {0};
         size_t encoded = varintFOREncode(buffer, values, 100, &meta);
 
         /* Should use 1 byte per offset (range < 256) */
@@ -115,7 +115,7 @@ int varintFORTest(int argc, char *argv[]) {
         const uint64_t values[] = {500, 510, 520, 530, 540};
         size_t count = 5;
         uint8_t buffer[256];
-        varintFORMeta meta;
+        varintFORMeta meta = {0};
 
         varintFOREncode(buffer, values, count, &meta);
 

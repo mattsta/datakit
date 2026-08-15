@@ -352,7 +352,10 @@ size_t varintAdaptiveEncodeWith(uint8_t *dst, const uint64_t *values,
     }
 
     case VARINT_ADAPTIVE_FOR: {
-        varintFORMeta forMeta;
+        /* Zero-init: varintFOREncode treats a meta whose count matches
+         * as "already analyzed" (intentional fast path), so passing
+         * stack garbage risks a bogus match and a garbage offsetWidth. */
+        varintFORMeta forMeta = {0};
         encodedSize = varintFOREncode(dst + offset, values, count, &forMeta);
 
         if (meta) {

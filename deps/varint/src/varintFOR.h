@@ -55,6 +55,11 @@ size_t varintFORSize(const varintFORMeta *meta);
 
 /* Encode array using Frame-of-Reference
  * Returns number of bytes written to 'dst' */
+/* CONTRACT: `meta` must be NULL, zero-initialized, or filled by a prior
+ * varintFORAnalyze on the same array. A meta whose `count` field equals
+ * `count` is trusted as already-analyzed (deliberate fast path — no
+ * per-call re-analysis), so uninitialized stack memory here can silently
+ * skip analysis and encode with a garbage width. */
 size_t varintFOREncode(uint8_t *dst, const uint64_t *values, const size_t count,
                        varintFORMeta *meta);
 

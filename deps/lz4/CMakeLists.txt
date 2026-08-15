@@ -21,6 +21,10 @@ add_library(lz4 OBJECT
     lz4hc.c
     lz4frame.c)
 
+# LZ4 uses xxHash symbols from lz4frame.c
+# We need to provide xxHash to all lz4 variants
+target_include_directories(lz4 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../xxHash)
+
 add_library(lz4-shared  MODULE $<TARGET_OBJECTS:lz4>)
 add_library(lz4-static  STATIC $<TARGET_OBJECTS:lz4>)
 add_library(lz4-library SHARED $<TARGET_OBJECTS:lz4>)
@@ -31,8 +35,11 @@ set_target_properties(lz4-shared  PROPERTIES OUTPUT_NAME lz4)
 set_target_properties(lz4-static  PROPERTIES OUTPUT_NAME lz4)
 set_target_properties(lz4-library PROPERTIES OUTPUT_NAME lz4)
 
-target_link_libraries(lz4-static xxhash-static)
-target_link_libraries(lz4-library xxhash-library)
+# Link all lz4 variants against xxHash
+# lz4 uses XXH32_* functions from lz4frame.c
+target_link_libraries(lz4-shared PRIVATE xxhash-static)
+target_link_libraries(lz4-static PRIVATE xxhash-static)
+target_link_libraries(lz4-library PRIVATE xxhash-library)
 
 # SOVERSION only needs to increment when introducing *breaking* changes.
 # Otherwise, just increase VERSION with normal feature additions or maint.

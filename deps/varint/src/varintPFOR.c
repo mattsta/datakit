@@ -78,11 +78,13 @@ varintWidth varintPFORComputeThreshold(const uint64_t *values, uint32_t count,
     /* Calculate exception marker */
     uint64_t marker = varintPFORCalculateMarker(width);
 
-    /* Count exceptions - values above threshold percentile */
+    /* Count exceptions: values above the threshold percentile, PLUS any
+     * value whose offset would equal the marker itself — storing such a
+     * value inline would be indistinguishable from an exception slot
+     * and desynchronize the decoder's exception list. */
     uint32_t exceptionCount = 0;
     for (uint32_t i = 0; i < count; i++) {
-        if (values[i] > thresholdValue) {
-            /* Value above threshold is an exception */
+        if (values[i] > thresholdValue || values[i] - min == marker) {
             exceptionCount++;
         }
     }
@@ -155,11 +157,15 @@ size_t varintPFOREncode(uint8_t *dst, const uint64_t *values, uint32_t count,
         }
     }
 
-    /* Write values (first pass: mark exceptions) */
+    /* Write values (first pass: mark exceptions). The predicate MUST
+     * match varintPFORComputeThreshold's exception count exactly,
+     * including the marker-collision clause. */
     for (uint32_t i = 0; i < count; i++) {
         uint64_t value = values[i];
 
-        if (value > meta->thresholdValue && exceptions) {
+        if ((value > meta->thresholdValue ||
+             value - meta->min == meta->exceptionMarker) &&
+            exceptions) {
             /* Above threshold: store exception marker */
             varintExternalPutFixedWidth(dst, meta->exceptionMarker,
                                         meta->width);
@@ -191,17 +197,24 @@ size_t varintPFOREncode(uint8_t *dst, const uint64_t *values, uint32_t count,
 size_t varintPFORReadMeta(const uint8_t *src, varintPFORMeta *meta) {
     const uint8_t *start = src;
 
-    /* Read header: min, width, count */
+    /* Read header: min, width, count. Tagged reads produce u64 — land
+     * them in locals rather than punning through the u32 struct fields
+     * (an 8-byte write at &count would clobber the neighboring field,
+     * and only accidentally works on little-endian). */
     src += varintTaggedGet64(src, &meta->min);
     meta->width = (varintWidth)*src++;
-    src += varintTaggedGet64(src, (uint64_t *)&meta->count);
+    uint64_t count64;
+    src += varintTaggedGet64(src, &count64);
+    meta->count = (uint32_t)count64;
 
     /* Calculate exception marker */
     meta->exceptionMarker = varintPFORCalculateMarker(meta->width);
 
     /* Skip to exception count (after all values) */
     const uint8_t *exceptionCountPtr = src + (meta->count * meta->width);
-    varintTaggedGet64(exceptionCountPtr, (uint64_t *)&meta->exceptionCount);
+    uint64_t excCount64;
+    varintTaggedGet64(exceptionCountPtr, &excCount64);
+    meta->exceptionCount = (uint32_t)excCount64;
 
     /* threshold is not stored, set to default */
     meta->threshold = VARINT_PFOR_THRESHOLD_95;

@@ -25,6 +25,9 @@ varintTaggedGet64(buf, &decoded);
 Need sortable keys? ──────────> varintTagged (big-endian, sortable)
         │ No
         v
+Need canonical sortable keys? ─> varintBijou (bijou64, one encoding per value)
+        │ No
+        v
 Have external width? ─────────> varintExternal (zero overhead, fastest)
         │ No
         v
@@ -35,6 +38,15 @@ Legacy compatibility? ────────> varintChained (continuation bits
         │ No
         v
 Fixed bit-width arrays? ──────> varintPacked (any bit width 1-64)
+        │ No
+        v
+Regular-interval series? ─────> varintDeltaDelta (Gorilla second-order delta)
+        │ No
+        v
+Arithmetic progression? ──────> varintStride (~24 bytes, any length)
+        │ No
+        v
+Unsure which is smallest? ────> varintCompete (runs N codecs, keeps smallest)
 ```
 
 ---
@@ -44,6 +56,7 @@ Fixed bit-width arrays? ──────> varintPacked (any bit width 1-64)
 | Type         | Best For           | 1-Byte Max | Overhead | Speed   | Sortable |
 | ------------ | ------------------ | ---------- | -------- | ------- | -------- |
 | **Tagged**   | DB keys, indexes   | 240        | Low      | Fast    | ✓        |
+| **Bijou**    | Canonical keys     | 247        | Low      | Fast    | ✓        |
 | **External** | Compact storage    | 255        | None     | Fastest | ✗        |
 | **Split**    | Known boundaries   | 63         | Low      | Fast    | ✗        |
 | **Chained**  | Legacy protocols   | 127        | High     | Slow    | ✗        |

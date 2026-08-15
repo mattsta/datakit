@@ -59,6 +59,7 @@ For storage, all varints are evaluated as unsigned byte quantities. Any conversi
 | varint             | length stored in  | 1 byte max | 2 byte max | 3 byte max |    4 byte max |
 | ------------------ | ----------------- | ---------: | ---------: | ---------: | ------------: |
 | Tagged             | first byte        |        240 |      2,287 |     67,823 |    16,777,215 |
+| Bijou (bijou64)    | first byte        |        247 |        503 |     66,039 |    16,843,255 |
 | Split              | first byte        |         63 |     16,701 |     81,982 |    16,793,661 |
 | Split Full         | first byte        |         63 |     16,446 |  4,276,284 |    20,987,964 |
 | Split Full No Zero | first byte        |         64 |     16,447 |  4,276,285 |    20,987,965 |
@@ -84,11 +85,11 @@ positions for the highest numbers capable of being stored:
 
 Varints are defined by how they track their size. Since varints have variable lengths, a varint must know how many bytes it contains.
 
-We have **eighteen types of varints** organized into three categories:
+We have **twenty-two types of varints** organized into three categories:
 
-**Basic Encodings** (4 types): tagged, external, split, and chained. The chained type is the slowest and is not recommended for use in new systems.
+**Basic Encodings** (5 types): tagged, bijou, external, split, and chained. The chained type is the slowest and is not recommended for use in new systems.
 
-**Advanced Encodings** (11 types): delta, FOR (Frame-of-Reference), group, PFOR (Patched FOR), dictionary, bitmap, adaptive, float, RLE (Run-Length Encoding), Elias (Gamma/Delta universal codes), and BP128 (SIMD block-packed). These provide 2-100x compression for specialized use cases like sorted data, clustered values, repetitive data, floating point arrays, repeated values, small integers, and large sorted arrays.
+**Advanced Encodings** (16 types): delta, delta-of-delta, stride, FOR (Frame-of-Reference), group, PFOR (Patched FOR), dictionary, bitmap, adaptive, compete, float, RLE (Run-Length Encoding), Elias (Gamma/Delta universal codes), BP128 (SIMD block-packed), palette (Huffman over top-16 values with verbatim-block outlier routing), and palette-of-deltas (palette coding over wrapped first differences for skewed gap alphabets). These provide 2-100x compression for specialized use cases like sorted data, regular-interval time series, arithmetic progressions, clustered values, repetitive data, floating point arrays, repeated values, small integers, and large sorted arrays. (The `compete` selector is supported by opt-in `varintTelemetry` per-codec counters.)
 
 **Specialized Encodings** (3 types): packed (fixed-width bit arrays), dimension (matrix encoding), and bitstream (bit-level operations).
 
@@ -99,6 +100,12 @@ The goal of a varint isn't to store the _most_ data in the least space (which is
 Tagged varints hold their full width metadata in the first byte. The first byte also contributes to the stored value and can, by itself, also hold a user value up to 240. The maximum length of a 64-bit tagged varint is 9 bytes.
 
 This is a varint format adapted from the abandoned sqlite4 project. Full encoding details are in [source comments](https://github.com/mattsta/varint/blob/main/src/varintTagged.c).
+
+### Bijou (bijou64)
+
+Bijou is a close cousin of Tagged: same tag-byte framing, big-endian payloads, `memcmp`-sortable, and length known from the first byte. It is a faithful port of [bijou64](https://github.com/inkandswitch/subduction/blob/main/bijou64/SPEC.md) (BIJective Offset U64) by Brooklyn Zelenka / Ink & Switch. Values 0–247 store as a single byte; tags `0xF8`–`0xFF` introduce 1–8 big-endian payload bytes holding `value − OFFSET[tier]`.
+
+The difference from Tagged is what the offsets buy: bijou applies a per-tier offset on **every** tier, so it is **canonical by construction** — every value has exactly one encoding and no "overlong" byte sequence can decode to a value that has a shorter form. Tagged (and the sqlite4 varint it derives from) only offsets the first two multi-byte tiers, reusing the spare tag values 241–248 for extra 2-byte capacity instead; this makes Tagged noticeably more compact in the 248–2,287 range but means tiers 3+ admit overlong encodings. Choose bijou when canonicality matters (content-addressed storage, hashing, dedup); choose Tagged when you want the smallest bytes for small values. Full encoding details are in [source comments](https://github.com/mattsta/varint/blob/main/src/varintBijou.c) and the upstream [SPEC](https://github.com/inkandswitch/subduction/blob/main/bijou64/SPEC.md).
 
 ### Split
 
@@ -171,6 +178,22 @@ Elias Gamma and Delta universal codes provide bit-level compression optimal for 
 
 Binary Packing with 128-value blocks optimized for SIMD processing (AVX2/NEON). Packs integers using minimum bit-width per block with optional delta encoding for sorted sequences. Achieves 2-8x compression for sorted/clustered data with 800+ MB/s encoding and 1.2+ GB/s decoding throughput. Ideal for search engine posting lists, time series timestamps, graph adjacency lists, and column store databases. Full details in [varintBP128.h](https://github.com/mattsta/varint/blob/main/src/varintBP128.h) and [module documentation](docs/modules/varintBP128.md).
 
+### Second-Order Delta (varintDeltaDelta)
+
+Delta-of-delta encoding stores the _difference between successive deltas_, so data arriving at a steady cadence (timestamps every 60 s, sensors at a fixed sample rate, monotonic counters) collapses to a near-zero second-order delta that packs into a 2-byte width-tagged record per element. This is the Gorilla time-series pattern, promoted to a first-class module with the same `Encode/Decode/Analyze` shape as the other codecs. Achieves ~3-4x compression on regular-interval series. Full details in [varintDeltaDelta.h](https://github.com/mattsta/varint/blob/main/src/varintDeltaDelta.h) and [module documentation](docs/modules/varintDeltaDelta.md).
+
+### Arithmetic-Progression Detection (varintStride)
+
+Stride encoding detects arithmetic progressions — sequences with a constant difference — and stores them in a constant-size record (~24 bytes) regardless of length. An **exact** mode requires every delta to match (with O(1) random access); a **fuzzy** mode tolerates up to 20% outliers, stored as `(index, value)` patches. SIMD-accelerated mismatch detection (NEON/AVX2). Ideal for paginated IDs, page offsets, fixed-grid coordinates, and polling intervals. Full details in [varintStride.h](https://github.com/mattsta/varint/blob/main/src/varintStride.h) and [module documentation](docs/modules/varintStride.md).
+
+### Palette Huffman Encoding (varintPalette)
+
+Palette encoding entropy-codes streams dominated by a small value set: the ≤16 most frequent values become a palette coded with canonical Huffman (skewed distributions compress toward their entropy, down to 1 bit/value), while any 64-value block containing an out-of-palette outlier is routed to verbatim storage via a bitmask — the decode hot path stays branchless (flat terminal tables decoding up to two symbols per lookup, no escape codes). Per-block bit offsets let the decoder run four independent bit cursors in lockstep, reaching ~1 Gval/s decode on skewed data (Apple M-series); the srcBytes-bounded decoder fully validates untrusted input and is hardened by a self-contained deterministic fuzzer (`varintPaletteFuzz`). Design adapted from Cloudflare's Unweight report (Cf-TR-2026.04) on lossless LLM weight compression. Ideal for status/enum columns, quantized readings, and mostly-clean data with rare wild outliers. Full details in [varintPalette.h](https://github.com/mattsta/varint/blob/main/src/varintPalette.h) and [module documentation](docs/modules/varintPalette.md).
+
+### Evidence-Based Selection (varintCompete + varintTelemetry)
+
+Where `varintAdaptive` picks a codec by a single-pass heuristic, `varintCompete` _runs_ a configurable subset of codecs, measures the actual encoded size each produces, and emits the smallest inside a self-describing frame (`[VCMP magic][version][codec ID][bodyLen][body]`) so the decoder selects the matching codec automatically. The companion `varintTelemetry` adds opt-in, lock-free atomic per-codec counters (calls/wins/bytes) that compile to zero-cost no-ops unless `-DVARINT_TELEMETRY` is set — use it to learn which codecs actually win on your data. Full details in [module documentation](docs/modules/varintCompete.md).
+
 ## Comprehensive Examples
 
 The `examples/` directory contains **43 production-quality examples** demonstrating real-world applications:
@@ -180,6 +203,9 @@ The `examples/` directory contains **43 production-quality examples** demonstrat
 - **Basic encodings**: Tagged, External, Split, Chained, Packed, Dimension, Bitstream
 - **Advanced encodings**: Delta, FOR, Group, PFOR, Dictionary, Bitmap, Adaptive, Float
 - **Run-Length Encoding** (RLE) with varint lengths (11x-2560x compression)
+- **Delta-of-Delta** (`varintDeltaDelta`) for regular-interval time series (Gorilla pattern, first-class module)
+- **Stride** (`varintStride`) for arithmetic progressions: exact mode ~24 bytes any length, fuzzy mode tolerates outliers
+- **Compete + Telemetry**: evidence-based codec selection runner with opt-in atomic per-codec wins/calls counters
 
 ### **9 Integration Examples** - Combining multiple varint types
 

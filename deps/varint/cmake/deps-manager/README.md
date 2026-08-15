@@ -32,6 +32,7 @@ cd your-project
 ```
 
 This creates:
+
 - `deps/deps.cmake` - Dependency declarations
 - `deps/.local.cmake` - Local overrides (gitignored)
 
@@ -118,20 +119,20 @@ set(DEPS_DEFAULT_MODE "local")
 
 ### Environment Variables
 
-| Variable | Description |
-|----------|-------------|
-| `DEPS_MODE` | Global mode: `auto`, `local`, `remote` |
-| `DEPS_LOCAL_ROOT` | Root directory for local checkouts (default: `~/repos`) |
-| `DEPS_<NAME>_PATH` | Per-dependency path override |
+| Variable           | Description                                             |
+| ------------------ | ------------------------------------------------------- |
+| `DEPS_MODE`        | Global mode: `auto`, `local`, `remote`                  |
+| `DEPS_LOCAL_ROOT`  | Root directory for local checkouts (default: `~/repos`) |
+| `DEPS_<NAME>_PATH` | Per-dependency path override                            |
 
 ### CMake Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DEPS_DEFAULT_MODE` | `auto` | Default mode for all dependencies |
-| `DEPS_LOCAL_ROOT` | `~/repos` | Root for local checkouts |
-| `DEPS_DIR` | `${CMAKE_SOURCE_DIR}/deps` | Dependencies directory |
-| `DEPS_VENDOR_DIRS` | `vendor;external;third_party;deps` | Vendor directory search list |
+| Variable            | Default                            | Description                       |
+| ------------------- | ---------------------------------- | --------------------------------- |
+| `DEPS_DEFAULT_MODE` | `auto`                             | Default mode for all dependencies |
+| `DEPS_LOCAL_ROOT`   | `~/repos`                          | Root for local checkouts          |
+| `DEPS_DIR`          | `${CMAKE_SOURCE_DIR}/deps`         | Dependencies directory            |
+| `DEPS_VENDOR_DIRS`  | `vendor;external;third_party;deps` | Vendor directory search list      |
 
 ## Mode Resolution
 
