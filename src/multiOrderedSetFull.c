@@ -152,26 +152,130 @@ static void updateMiddle(multiOrderedSetFull *m, uint32_t idx) {
     }
 }
 
-/* Find which sub-map a score belongs to */
+/* Find which sub-map a score belongs to: the LAST sub-map whose min score
+ * (rangeBox[i] = head/min of sub-map i) is <= score — i.e. the sub-map that
+ * should contain `score`. If score is below every sub-map's min, returns 0 (it
+ * belongs at the front and becomes the new min there).
+ *
+ * Must be "last min <= score", NOT "first min >= score": the latter overshoots
+ * interior scores to the next sub-map, mis-routing inserts (breaking global
+ * order) and member lookups (findEntryByMember scans only the returned
+ * sub-map). Masked while mapCount==1; sub-map splitting makes it mandatory.
+ * Relies on rangeBox being monotonic, which empty-sub-map reclaim guarantees
+ * (no interior INT64_MAX sentinels). */
 static int32_t findSubMapForScore(const multiOrderedSetFull *m,
                                   const databox *score) {
-    /* Binary search through rangeBox to find appropriate sub-map */
     int32_t left = 0;
     int32_t right = (int32_t)m->mapCount - 1;
 
     while (left < right) {
-        int32_t mid = (left + right) / 2;
+        const int32_t mid = (left + right + 1) / 2; /* upper mid: bias right */
         databox *rangeScorePtr;
         multiarrayNativeGet(m->rangeBox, databox, rangeScorePtr, mid);
 
-        if (rangeScorePtr && databoxCompare(score, rangeScorePtr) <= 0) {
-            right = mid;
+        if (rangeScorePtr && databoxCompare(rangeScorePtr, score) <= 0) {
+            left =
+                mid; /* sub-map mid's min <= score: candidate, search right */
         } else {
-            left = mid + 1;
+            right = mid - 1;
         }
     }
 
     return left;
+}
+
+/* Split an oversized sub-map at a score boundary so member lookups (which route
+ * by a single sub-map via findSubMapForScore) never have an equal-score run
+ * straddling two sub-maps. Lower [0,k) stays; upper [k,end) becomes a new
+ * sub-map at mapIdx+1, where k is a pair index with score[k] != score[k-1]. If
+ * the whole sub-map is one score value (no interior boundary), it is left
+ * oversized — it cannot be split safely. */
+static void splitSubMap(multiOrderedSetFull *m, uint32_t mapIdx) {
+    flex *map = getSubMap(m, mapIdx);
+    if (!map) {
+        return;
+    }
+
+    const size_t pairs = subMapCount(map);
+    if (pairs < 2) {
+        return;
+    }
+
+    /* Snap the cut to a score boundary at/around the geometric middle. k is a
+     * PAIR index in [1, pairs-1] with score[k] != score[k-1]. */
+    const size_t mid = pairs / 2;
+    size_t k = 0;
+    databox prevScore;
+    databox curScore;
+
+    for (size_t i = (mid < 1 ? 1 : mid); i < pairs; i++) {
+        flexGetByType(
+            flexIndex(map, (int32_t)((i - 1) * MOS_ELEMENTS_PER_ENTRY)),
+            &prevScore);
+        flexGetByType(flexIndex(map, (int32_t)(i * MOS_ELEMENTS_PER_ENTRY)),
+                      &curScore);
+        if (databoxCompare(&curScore, &prevScore) != 0) {
+            k = i;
+            break;
+        }
+    }
+
+    if (k == 0) {
+        for (size_t i = (mid < 1 ? 1 : mid); i >= 1; i--) {
+            flexGetByType(
+                flexIndex(map, (int32_t)((i - 1) * MOS_ELEMENTS_PER_ENTRY)),
+                &prevScore);
+            flexGetByType(flexIndex(map, (int32_t)(i * MOS_ELEMENTS_PER_ENTRY)),
+                          &curScore);
+            if (databoxCompare(&curScore, &prevScore) != 0) {
+                k = i;
+                break;
+            }
+            if (i == 1) {
+                break; /* avoid size_t underflow */
+            }
+        }
+    }
+
+    if (k == 0) {
+        return; /* one giant equal-score run: cannot split safely */
+    }
+
+    /* Lower [0,k) stays in 'map' (reallocated); upper [k,pairs) returns new.
+     * flexSplitRange is ELEMENT-indexed. */
+    const uint32_t splitElem = (uint32_t)(k * MOS_ELEMENTS_PER_ENTRY);
+    const uint32_t moveElems = (uint32_t)((pairs - k) * MOS_ELEMENTS_PER_ENTRY);
+    flex *upper = flexSplitRange(&map, (int32_t)splitElem, moveElems);
+
+    /* 'map' was reallocated by the split; store the lower half back. */
+    setSubMap(m, mapIdx, map);
+
+    /* Compute the upper half's middle + range BEFORE the inserts (the inserts
+     * can relocate the multiarrays, but 'upper' itself is not moved). */
+    flexEntry *upMid = flexMiddle(upper, MOS_ELEMENTS_PER_ENTRY);
+    uint32_t upperMiddle = upMid ? (uint32_t)(upMid - upper) : FLEX_EMPTY_SIZE;
+    databox upperRange;
+    flexGetByType(flexHead(upper), &upperRange);
+
+    /* Insert the upper half at mapIdx+1 across all 3 parallel arrays. Each
+     * insert needs that array's current element count (== m->mapCount); use a
+     * separate scratch per call (the macro does localCount++ and uses it for
+     * the native->medium promotion trigger). Bump m->mapCount once after. */
+    const uint32_t insertAt = mapIdx + 1;
+    uint32_t cScore = m->mapCount;
+    uint32_t cMid = m->mapCount;
+    uint32_t cRange = m->mapCount;
+    multiarrayNativeInsert(m->scoreMap, flex *, 64, cScore, insertAt, &upper);
+    multiarrayNativeInsert(m->middle, uint32_t, 64, cMid, insertAt,
+                           &upperMiddle);
+    multiarrayNativeInsert(m->rangeBox, databox, 64, cRange, insertAt,
+                           &upperRange);
+    m->mapCount++;
+
+    /* Lower half shrank: recompute its middle. rangeBox[mapIdx] is unchanged
+     * (its head/min score is the same after removing the tail). totalEntries
+     * is unchanged (split moves pairs, never adds/removes). */
+    updateMiddle(m, mapIdx);
 }
 
 /* Insert into specific sub-map */
@@ -204,9 +308,13 @@ static void insertIntoSubMap(multiOrderedSetFull *m, uint32_t mapIdx,
         }
     }
 
-    /* Check if we need to split */
-    if (flexBytes(map) > m->maxMapSize && m->mapCount < 1024) {
-        /* TODO: Implement map splitting for better scaling */
+    /* Split oversized sub-maps so the structure scales. Requires >=2 pairs;
+     * splitSubMap is a no-op when no interior score boundary exists (a single
+     * giant equal-score run stays oversized so member routing stays correct).
+     */
+    if (flexBytes(map) > m->maxMapSize && m->mapCount < 1024 &&
+        subMapCount(map) >= 2) {
+        splitSubMap(m, mapIdx);
     }
 }
 
@@ -246,6 +354,47 @@ static void removeFromSubMap(multiOrderedSetFull *m, uint32_t mapIdx,
             rangeScore->type = DATABOX_SIGNED_64;
             rangeScore->data.i = INT64_MAX;
         }
+    }
+}
+
+/* Reclaim an emptied sub-map slot so rangeBox stays monotonic for
+ * findSubMapForScore's binary search. Score updates can empty a *middle*
+ * sub-map; an empty middle keeps the INT64_MAX rangeBox sentinel, breaking the
+ * non-decreasing order the search relies on -> mis-routing -> duplicates.
+ * Never reclaims the last sub-map (mapCount must stay >= 1; a lone empty map
+ * with rangeBox==INT64_MAX is harmless, search returns 0 trivially).
+ * WARNING: shifts all sub-map indices > mapIdx down by one and frees the
+ * slot's flex — callers must NOT use a held mapIdx/flex* afterward. */
+static void reclaimEmptySubMap(multiOrderedSetFull *m, uint32_t mapIdx) {
+    if (m->mapCount <= 1) {
+        return;
+    }
+    flex *map = getSubMap(m, mapIdx);
+    if (!map || subMapCount(map) != 0) {
+        return; /* only reclaim genuinely empty sub-maps */
+    }
+
+    /* multiarray stores the flex pointer by value and won't free it on delete
+     * (mirrors Free/Reset), so free it here first. */
+    flexFree(map);
+
+    /* Separate scratch per array (the macro mutates its count lvalue). */
+    uint32_t cScore = m->mapCount;
+    multiarrayNativeDelete(m->scoreMap, flex *, cScore, mapIdx);
+    uint32_t cMiddle = m->mapCount;
+    multiarrayNativeDelete(m->middle, uint32_t, cMiddle, mapIdx);
+    uint32_t cRange = m->mapCount;
+    multiarrayNativeDelete(m->rangeBox, databox, cRange, mapIdx);
+
+    m->mapCount--;
+}
+
+/* Sweep all empty sub-maps (backward so each delete only shifts already-visited
+ * higher indices). For bulk remove/pop loops that hold a live mapIdx and so
+ * cannot reclaim inline — call this once after the loop. */
+static void reclaimAllEmptySubMaps(multiOrderedSetFull *m) {
+    for (int32_t i = (int32_t)m->mapCount - 1; i >= 0 && m->mapCount > 1; i--) {
+        reclaimEmptySubMap(m, (uint32_t)i);
     }
 }
 
@@ -661,6 +810,7 @@ bool multiOrderedSetFullAdd(multiOrderedSetFull *m, const databox *score,
         flexEntry *entry = findEntryByMember(m, member, &mapIdx);
         if (entry) {
             removeFromSubMap(m, mapIdx, entry);
+            reclaimEmptySubMap(m, mapIdx);
         }
     }
 
@@ -703,6 +853,7 @@ bool multiOrderedSetFullAddXX(multiOrderedSetFull *m, const databox *score,
     flexEntry *entry = findEntryByMember(m, member, &mapIdx);
     if (entry) {
         removeFromSubMap(m, mapIdx, entry);
+        reclaimEmptySubMap(m, mapIdx);
     }
 
     /* Update with new score (entry must exist since XX checked) */
@@ -724,6 +875,7 @@ bool multiOrderedSetFullAddGetPrevious(multiOrderedSetFull *m,
         flexEntry *entry = findEntryByMember(m, member, &mapIdx);
         if (entry) {
             removeFromSubMap(m, mapIdx, entry);
+            reclaimEmptySubMap(m, mapIdx);
         }
     }
 
@@ -749,6 +901,7 @@ bool multiOrderedSetFullIncrBy(multiOrderedSetFull *m, const databox *delta,
         flexEntry *entry = findEntryByMember(m, member, &mapIdx);
         if (entry) {
             removeFromSubMap(m, mapIdx, entry);
+            reclaimEmptySubMap(m, mapIdx);
         }
     } else {
         *result = *delta;
@@ -776,6 +929,7 @@ bool multiOrderedSetFullRemove(multiOrderedSetFull *m, const databox *member) {
     flexEntry *entry = findEntryByMember(m, member, &mapIdx);
     if (entry) {
         removeFromSubMap(m, mapIdx, entry);
+        reclaimEmptySubMap(m, mapIdx);
     }
 
     multidictDelete(m->memberIndex, member);
@@ -792,6 +946,7 @@ bool multiOrderedSetFullRemoveGetScore(multiOrderedSetFull *m,
     flexEntry *entry = findEntryByMember(m, member, &mapIdx);
     if (entry) {
         removeFromSubMap(m, mapIdx, entry);
+        reclaimEmptySubMap(m, mapIdx);
     }
 
     multidictDelete(m->memberIndex, member);
@@ -848,6 +1003,9 @@ size_t multiOrderedSetFullRemoveRangeByScore(multiOrderedSetFull *m,
         }
     }
 
+    /* Bulk loop held live mapIdx/map, so reclaim emptied sub-maps now (backward
+     * sweep) rather than inline, to restore monotonic rangeBox. */
+    reclaimAllEmptySubMaps(m);
     return removed;
 }
 
@@ -906,6 +1064,9 @@ size_t multiOrderedSetFullRemoveRangeByRank(multiOrderedSetFull *m,
         }
     }
 
+    /* Bulk loop held live mapIdx/map, so reclaim emptied sub-maps now (backward
+     * sweep) rather than inline, to restore monotonic rangeBox. */
+    reclaimAllEmptySubMaps(m);
     return removed;
 }
 
@@ -949,6 +1110,7 @@ size_t multiOrderedSetFullPopMin(multiOrderedSetFull *m, size_t count,
         }
     }
 
+    reclaimAllEmptySubMaps(m); /* backward sweep: bulk loop held live mapIdx */
     return popped;
 }
 
@@ -997,6 +1159,7 @@ size_t multiOrderedSetFullPopMax(multiOrderedSetFull *m, size_t count,
         }
     }
 
+    reclaimAllEmptySubMaps(m); /* backward sweep: bulk loop held live mapIdx */
     return popped;
 }
 
@@ -1476,6 +1639,50 @@ void multiOrderedSetFullRepr(const multiOrderedSetFull *m) {
     printf("}\n");
 }
 
+/* White-box invariant oracle for the sub-map structure (test only). Returns
+ * the number of violations (0 = healthy). Sub-map splitting and every
+ * mutation must preserve all of these; this is the fuzz oracle for the split
+ * path. Checks: (1) rangeBox[i] == head/min score of sub-map i;
+ * (2) global non-decreasing score order across sub-maps; (3) totalEntries ==
+ * sum of per-sub-map pair counts. Empty sub-maps (rangeBox == INT64_MAX
+ * sentinel) are skipped for (1)/(2). */
+static int mosFullCheckInvariants(const multiOrderedSetFull *m) {
+    int bad = 0;
+    uint64_t sum = 0;
+    databox prevLast = {0};
+    bool havePrev = false;
+    for (uint32_t i = 0; i < m->mapCount; i++) {
+        flex *map = getSubMap(m, i);
+        const size_t cnt = map ? subMapCount(map) : 0;
+        sum += cnt;
+        if (cnt == 0) {
+            continue; /* empty sub-map holds the INT64_MAX rangeBox sentinel */
+        }
+        databox headScore;
+        flexGetByType(flexHead(map), &headScore);
+        const databox *rb = getRangeBox(m, i);
+        if (rb && databoxCompare(rb, &headScore) != 0) {
+            printf("  INVARIANT FAIL: submap %u rangeBox != head score\n", i);
+            bad++;
+        }
+        if (havePrev && databoxCompare(&prevLast, &headScore) > 0) {
+            printf("  INVARIANT FAIL: submap %u breaks global score order\n",
+                   i);
+            bad++;
+        }
+        flexGetByType(flexIndex(map, (cnt - 1) * MOS_ELEMENTS_PER_ENTRY),
+                      &prevLast);
+        havePrev = true;
+    }
+    if (sum != m->totalEntries) {
+        printf("  INVARIANT FAIL: totalEntries %" PRIu64
+               " != sum of sub-map counts %" PRIu64 "\n",
+               m->totalEntries, sum);
+        bad++;
+    }
+    return bad;
+}
+
 int multiOrderedSetFullTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -1875,6 +2082,191 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
         printf("└─────────────────────────────────────────────────────────────┘"
                "\n");
         printf("\n");
+    }
+
+    /* ================================================================
+     * Sub-map invariant oracle — validates mosFullCheckInvariants itself on
+     * healthy sets, both single sub-map and split (mapCount > 1).
+     * ================================================================ */
+    TEST("MOS-Full: invariant oracle holds (ascending insert)") {
+        multiOrderedSetFull *m = multiOrderedSetFullNew();
+        for (int i = 0; i < 1000; i++) {
+            databox score = {.type = DATABOX_SIGNED_64, .data.i = i};
+            char buf[24];
+            int n = snprintf(buf, sizeof(buf), "m%06d", i);
+            databox member = databoxNewBytesAllowEmbed(buf, (size_t)n);
+            multiOrderedSetFullAdd(m, &score, &member);
+        }
+        if (mosFullCheckInvariants(m) != 0) {
+            ERRR("invariant oracle reported violations (ascending)");
+        }
+        if (multiOrderedSetFullCount(m) != 1000) {
+            ERR("count expected 1000, got %zu", multiOrderedSetFullCount(m));
+        }
+        multiOrderedSetFullFree(m);
+    }
+
+    TEST("MOS-Full: invariant oracle holds (random order + duplicate scores)") {
+        multiOrderedSetFull *m = multiOrderedSetFullNew();
+        /* Pseudo-random scrambled order with many equal scores (score = i%50),
+         * which is exactly the equal-score-run case the split gating
+         * must handle. */
+        uint64_t s = 0x9e3779b97f4a7c15ULL;
+        for (int i = 0; i < 1000; i++) {
+            s = s * 6364136223846793005ULL + 1442695040888963407ULL;
+            int key = (int)(s >> 40) % 4096;
+            databox score = {.type = DATABOX_SIGNED_64, .data.i = key % 50};
+            char buf[24];
+            int n = snprintf(buf, sizeof(buf), "k%08d", key);
+            databox member = databoxNewBytesAllowEmbed(buf, (size_t)n);
+            multiOrderedSetFullAdd(m, &score, &member);
+        }
+        if (mosFullCheckInvariants(m) != 0) {
+            ERRR("invariant oracle reported violations (random/dup scores)");
+        }
+        multiOrderedSetFullFree(m);
+    }
+
+    TEST("MOS-Full: forced splits keep invariants + lookups (boundary split)") {
+        multiOrderedSetFull *m = multiOrderedSetFullNew();
+        m->maxMapSize = 256; /* force many splits */
+
+        /* 600 ascending-score entries with a 20-wide equal-score run (score
+         * 250 repeated) to exercise the boundary-snap gating. */
+        const int N = 600;
+        for (int i = 0; i < N; i++) {
+            int sc = (i >= 300 && i < 320) ? 250 : i;
+            databox score = {.type = DATABOX_SIGNED_64, .data.i = sc};
+            char buf[24];
+            int n = snprintf(buf, sizeof(buf), "m%06d", i);
+            databox member = databoxNewBytesAllowEmbed(buf, (size_t)n);
+            multiOrderedSetFullAdd(m, &score, &member);
+        }
+        if (m->mapCount <= 1) {
+            ERR("expected splits, mapCount=%u", m->mapCount);
+        }
+        if (mosFullCheckInvariants(m) != 0) {
+            ERRR("invariant oracle reported violations after splits");
+        }
+        if (multiOrderedSetFullCount(m) != (size_t)N) {
+            ERR("count expected %d got %zu", N, multiOrderedSetFullCount(m));
+        }
+        for (int i = 0; i < N; i++) {
+            char buf[24];
+            int n = snprintf(buf, sizeof(buf), "m%06d", i);
+            databox member = databoxNewBytesAllowEmbed(buf, (size_t)n);
+            databox got;
+            int want = (i >= 300 && i < 320) ? 250 : i;
+            if (!multiOrderedSetFullGetScore(m, &member, &got)) {
+                ERR("GetScore missing m%06d after split", i);
+            } else if (got.data.i != want) {
+                ERR("GetScore m%06d expected %d got %" PRId64, i, want,
+                    (int64_t)got.data.i);
+            }
+        }
+        int64_t prevScore = INT64_MIN;
+        for (int r = 0; r < N; r++) {
+            databox member;
+            databox score;
+            if (!multiOrderedSetFullGetByRank(m, r, &member, &score)) {
+                ERR("GetByRank failed at rank %d", r);
+                continue;
+            }
+            if (score.data.i < prevScore) {
+                ERR("GetByRank not ordered at rank %d", r);
+            }
+            prevScore = score.data.i;
+        }
+        multiOrderedSetFullFree(m);
+    }
+
+    TEST("MOS-Full: score-update churn empties middle sub-maps (reclaim)") {
+        multiOrderedSetFull *m = multiOrderedSetFullNew();
+        m->maxMapSize = 256; /* force splits so middles can empty */
+        const int N = 1000;
+
+        for (int i = 0; i < N; i++) {
+            databox score = {.type = DATABOX_SIGNED_64, .data.i = i};
+            char buf[24];
+            int n = snprintf(buf, sizeof(buf), "m%06d", i);
+            databox member = databoxNewBytesAllowEmbed(buf, (size_t)n);
+            multiOrderedSetFullAdd(m, &score, &member);
+        }
+
+        /* Push every member's score upward each round; this drains low
+         * sub-maps into high ones, emptying middles — the exact pattern that
+         * exposed the rangeBox-sentinel bug. */
+        for (int round = 1; round <= 10; round++) {
+            for (int i = 0; i < N; i++) {
+                databox score = {.type = DATABOX_SIGNED_64,
+                                 .data.i = (int64_t)i + (int64_t)round * 1000};
+                char buf[24];
+                int n = snprintf(buf, sizeof(buf), "m%06d", i);
+                databox member = databoxNewBytesAllowEmbed(buf, (size_t)n);
+                multiOrderedSetFullAdd(m, &score, &member);
+            }
+            if (multiOrderedSetFullCount(m) != (size_t)N) {
+                ERR("round %d: count drifted to %zu (expected %d)", round,
+                    multiOrderedSetFullCount(m), N);
+            }
+            if (mosFullCheckInvariants(m) != 0) {
+                ERR("round %d: invariant oracle violations", round);
+            }
+            /* No empty sub-map may survive in the interior (reclaim check). */
+            for (uint32_t s = 0; s < m->mapCount; s++) {
+                flex *sm = getSubMap(m, s);
+                if ((sm ? subMapCount(sm) : 0) == 0 && s != m->mapCount - 1) {
+                    ERR("round %d: empty interior sub-map %u (reclaim failed)",
+                        round, s);
+                }
+            }
+        }
+        multiOrderedSetFullFree(m);
+    }
+
+    TEST("MOS-Full: delete-to-empty collapses to one sub-map, re-add works") {
+        multiOrderedSetFull *m = multiOrderedSetFullNew();
+        m->maxMapSize = 256;
+        const int N = 1000;
+        char buf[24];
+
+        for (int i = 0; i < N; i++) {
+            databox score = {.type = DATABOX_SIGNED_64, .data.i = i};
+            int n = snprintf(buf, sizeof(buf), "d%06d", i);
+            databox member = databoxNewBytesAllowEmbed(buf, (size_t)n);
+            multiOrderedSetFullAdd(m, &score, &member);
+        }
+        for (int i = 0; i < N; i++) {
+            int n = snprintf(buf, sizeof(buf), "d%06d", i);
+            databox member = databoxNewBytesAllowEmbed(buf, (size_t)n);
+            if (!multiOrderedSetFullRemove(m, &member)) {
+                ERR("remove of d%06d failed", i);
+            }
+            if (mosFullCheckInvariants(m) != 0) {
+                ERR("invariants violated mid-delete at i=%d", i);
+            }
+        }
+        if (multiOrderedSetFullCount(m) != 0) {
+            ERR("after full delete count expected 0, got %zu",
+                multiOrderedSetFullCount(m));
+        }
+        if (m->mapCount != 1) {
+            ERR("after full delete mapCount expected 1, got %u", m->mapCount);
+        }
+        for (int i = 0; i < 100; i++) {
+            databox score = {.type = DATABOX_SIGNED_64, .data.i = i};
+            int n = snprintf(buf, sizeof(buf), "r%06d", i);
+            databox member = databoxNewBytesAllowEmbed(buf, (size_t)n);
+            multiOrderedSetFullAdd(m, &score, &member);
+        }
+        if (multiOrderedSetFullCount(m) != 100) {
+            ERR("after re-add count expected 100, got %zu",
+                multiOrderedSetFullCount(m));
+        }
+        if (mosFullCheckInvariants(m) != 0) {
+            ERRR("invariants violated after re-add");
+        }
+        multiOrderedSetFullFree(m);
     }
 
     TEST_FINAL_RESULT;
