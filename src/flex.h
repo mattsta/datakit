@@ -102,6 +102,71 @@ void flexPushFloat(flex **ff, float value, flexEndpoint where);
 void flexPushDouble(flex **ff, double value, flexEndpoint where);
 void flexPushByType(flex **ff, const databox *box, flexEndpoint where);
 
+/* flex <-> databox single-element isomorphism.
+ *
+ * A flex and a databox carry the same type universe, so a flex holding
+ * exactly ONE element is interchangeable with a single databox.  These two
+ * helpers are the clean, validated wrapper/unwrapper for that case — use
+ * them instead of hand-rolling flexNew()+flexPushByType() /
+ * flexHead()+flexGetByType() (and instead of any ad-hoc [type][len][bytes]
+ * framing) whenever you need to carry one value as a self-describing byte
+ * buffer (a per-op delta, a single-value envelope, etc.).
+ *
+ * flexNewFromDatabox: allocate a fresh flex containing just `box`.  The
+ * returned flex IS the byte buffer (length via flexBytes); free with
+ * flexFree.  Returns NULL only on allocation failure.
+ *
+ * flexGetSingleDatabox: the defensive inverse for bytes from an untrusted
+ * source (replication / on-disk recovery).  Validates the buffer envelope
+ * and that it holds exactly one element, then extracts it into `*out`.
+ * Returns false (leaving *out untouched) on any malformation.  For BYTES
+ * the extracted box points INTO `buf`, so it is valid only while `buf`
+ * lives; copy via databox helpers if it must outlive the buffer. */
+flex *flexNewFromDatabox(const databox *box);
+bool flexGetSingleDatabox(const uint8_t *buf, size_t buflen, databox *out);
+
+/* Defensive 2-element flex unwrap — the [index,value] / [start,count] /
+ * [key,field] pair shape.  Validates the buffer + requires exactly two
+ * elements, then extracts them into *a and *b.  Returns false on any
+ * malformation.  (For BYTES the boxes point into `buf`; copy if they must
+ * outlive it.) */
+bool flexGetTwoDataboxes(const uint8_t *buf, size_t buflen, databox *a,
+                         databox *b);
+
+/* flexNewFromDataboxes: the multi-value member of the same factory family —
+ * build a fresh flex containing `n` values (boxes[0..n), in order).  Use this
+ * instead of open-coding flexNew()+a flexPushByType() loop everywhere a
+ * container needs to externalise its members as a flex (snapshots, multi-
+ * member deltas).  n==0 yields a valid empty flex.  Returns NULL only on
+ * allocation failure; free with flexFree. */
+flex *flexNewFromDataboxes(const databox *boxes, size_t n);
+
+/* Same as flexNewFromDataboxes but over an array of databox POINTERS — the
+ * convention multimap/persistOps use (const databox **).  Avoids copying the
+ * boxes into a contiguous value array just to build the flex. */
+flex *flexNewFromDataboxPtrs(const databox *const *boxes, size_t n);
+
+/* databoxBig arm of the factory — for values that may exceed 64 bits (numeric
+ * quantum sets / intsetBig).  A plain databox cannot hold a 128-bit value
+ * inline (its data.i128 is a pointer), and flexGetByType into a plain databox
+ * ASSERTS on a 128-bit element, so 128-bit-capable encode/decode must go
+ * through a databoxBig (which carries the 16-byte `extra` backing store).
+ *
+ * flexPushDataboxBig: append one numeric databoxBig (64- or 128-bit) to `*ff`.
+ *   128-bit values are normalised through DATABOX_BIG_*_128 so the push never
+ *   depends on the caller having set ->big.
+ * flexNewFromDataboxBig: a fresh 1-element flex holding `b` (free with flexFree).
+ * flexGetSingleDataboxBig: defensive inverse — validate + require exactly one
+ *   element + decode into `*out` (DATABOX_BIG_INIT'd internally so 128-bit has
+ *   storage).  Returns false on malformation. */
+void flexPushDataboxBig(flex **ff, const databoxBig *b, flexEndpoint where);
+flex *flexNewFromDataboxBig(const databoxBig *b);
+bool flexGetSingleDataboxBig(const uint8_t *buf, size_t buflen, databoxBig *out);
+
+/* Self-test for the flex<->databox factory (round-trip + defensive unwrap).
+ * Returns the number of failed checks (0 == all passed). */
+int flexFactorySelfTest(void);
+
 /* Insert at existing position 'fe' */
 void flexInsertBytes(flex **ff, flexEntry *fe, const void *data,
                      const size_t len);
@@ -119,6 +184,16 @@ flexEntry *flexFindByTypeSortedWithMiddleGetEntry(
 bool flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
     flex **ff, uint_fast32_t elementsPerEntry, const databox *box[],
     flexEntry **middleEntry, bool compareUsingKeyElementOnly);
+/* TRUE SET inserts: full-width compare AND dedupe — a found
+ * full-width-equal entry is a no-op returning true.  The Direct call
+ * above with compareUsingKeyElementOnly=false is the
+ * duplicates-ALLOWED sorted bag; mapIsSet multimaps must use these. */
+bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectSet(
+    flex **ff, uint_fast32_t elementsPerEntry, const databox *box[],
+    flexEntry **middleEntry);
+bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceSet(
+    flex **ff, uint_fast32_t elementsPerEntry, const databox **box,
+    flexEntry **middleEntry, const struct multimapAtom *referenceContainer);
 bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectLongKeysBecomePointers(
     flex **ff, const uint_fast32_t elementsPerEntry, const databox **box,
     flexEntry **middleEntry, bool compareUsingKeyElementOnly,
@@ -165,6 +240,16 @@ bool flexEntryIsValid(const flex *f, flexEntry *fe);
 
 /* Quick endpoint retrieval */
 flexEntry DK_FN_PURE *flexHead(const flex *f);
+/* flexHead for ITERATION: NULL when the flex holds no entries.
+ *
+ * flexHead returns an insertion POSITION and is deliberately non-NULL even
+ * for an empty flex — where it equals the end pointer.  A
+ * `fe = flexHead(f); while (fe) { read(fe); fe = flexNext(f, fe); }` loop
+ * therefore reads one entry PAST the buffer on an empty flex before
+ * flexNext ever gets to apply its end check.  Use this as the loop
+ * initializer instead: it applies the same end check flexNext does, so the
+ * loop is correct at both ends and empty is simply zero iterations. */
+flexEntry DK_FN_PURE *flexHeadIfAny(const flex *f);
 flexEntry DK_FN_PURE *flexTail(const flex *f);
 flexEntry DK_FN_PURE *flexTailWithElements(const flex *const f,
                                            uint_fast32_t elementsPerEntry);

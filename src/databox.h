@@ -415,9 +415,9 @@ typedef struct databoxStr {
  * type/data.ptr/len/allocated four-field assignment. */
 #define databoxUpdateBytesOwned(box, ptr_, len_)                               \
     do {                                                                       \
-        (box)->type      = DATABOX_BYTES;                                      \
-        (box)->data.ptr  = (ptr_);                                             \
-        (box)->len       = (len_);                                             \
+        (box)->type = DATABOX_BYTES;                                           \
+        (box)->data.ptr = (ptr_);                                              \
+        (box)->len = (len_);                                                   \
         (box)->allocated = true;                                               \
     } while (0)
 

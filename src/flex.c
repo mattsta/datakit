@@ -277,8 +277,20 @@ typedef enum flexType {
  * but this is more programatically explicit) */
 #define FLEX_INTEGER_ENCODING_STEP (FLEX_UINT_16B - FLEX_UINT_8B)
 
+/* Width (as a varintWidth) of a fixed-int flex encoding.
+ *
+ * The <=64-bit integer encodings are CONTIGUOUS (NEG/UINT pairs, STEP apart),
+ * so the position formula yields their width directly.  The big-int encodings
+ * are NOT contiguous with them — flex jumps 64B -> 96B -> 128B with no
+ * 72/80/88/104/112/120-bit encodings — so the bare formula under-counts them
+ * (FLEX_UINT_128B would resolve to VARINT_WIDTH_80B, i.e. 10 bytes, and the
+ * writer would fill only 10 of the 16 reserved bytes, corrupting the high
+ * half).  Special-case the two big widths; the common <=64-bit path keeps its
+ * single subtract+divide. */
 #define EXTERNAL_VARINT_WIDTH_FROM_ENCODING_(encoding)                         \
-    ((((encoding) - FLEX_NEG_8B) / FLEX_INTEGER_ENCODING_STEP) + 1)
+    ((encoding) <= FLEX_UINT_64B                                               \
+         ? ((((encoding) - FLEX_NEG_8B) / FLEX_INTEGER_ENCODING_STEP) + 1)     \
+         : ((encoding) <= FLEX_UINT_96B ? VARINT_WIDTH_96B : VARINT_WIDTH_128B))
 
 /* + 1 because our minimum reference is a 1 byte integer */
 #define EXTERNAL_VARINT_WIDTH_FROM_REFERENCE_(encoding)                        \
@@ -1038,13 +1050,18 @@ DK_STATIC DK_FN_CONST inline int64_t flexPrepareSigned(int64_t value) {
     return value;
 }
 
-DK_STATIC DK_FN_CONST inline int64_t flexPrepareSignedBig(__int128_t value) {
+DK_STATIC DK_FN_CONST inline __int128_t flexPrepareSignedBig(__int128_t value) {
     /* We don't store "signed zero," so we can save
      * one integer position on all negative numbers.
      *
      * This also protects us from attempting to store INT64_MIN
      * in an unsigned quantity since this will convert it into
-     * an opposite-sign-safe representation. */
+     * an opposite-sign-safe representation.
+     *
+     * Returns __int128_t (NOT int64_t): both callers store the result into a
+     * full 128-bit slot (the SIGNED_128 insert + the sorted-insert scratch
+     * buffer), so an int64_t return silently truncated every 128-bit value to
+     * its low 64 bits before it was ever encoded. */
     if (value < 0) {
         return SIGNED_PREPARE(value);
     }
@@ -1685,6 +1702,38 @@ abstractWriteFullEntry(flexEntry *restrict *restrict fe,
         feIsEntryHoldingData = ((fe + FLEX_LENGTH_OF_ENCODING(fe)) == data);   \
     }                                                                          \
                                                                                \
+    /* Per-i self-aliasing tracking for contents[i] in                         \
+     * [contentsStartOffset .. contentsCount-1].  The legacy macro only        \
+     * rebased contents[0]->data after realloc; the replace path               \
+     * (contentsStartOffset==1) writes contents[1..N-1] which can also         \
+     * alias inside this same flex (zero-copy databox views built from         \
+     * a prior in-place read on the same key, e.g. SET-after-GET round         \
+     * trip, set-algebra results that thread source bytes through into         \
+     * the destination flex).  Without per-i rebase, flexResize realloc        \
+     * freed the buffer and abstractWriteFullEntry → flexWritePayload          \
+     * memmove'd from the dangling pointer.  Restricted to FLEX_IS_STR         \
+     * because non-string encodings store inline values (no flex pointer).    \
+     * Bounded stack arrays: COMMON_INSERT_MAX_CONTENTS_ = 8 covers            \
+     * multimap arity up to 5 with headroom (assert guards). */                \
+    enum { COMMON_INSERT_MAX_CONTENTS_ = 8 };                                  \
+    assert(contentsCount <= COMMON_INSERT_MAX_CONTENTS_);                      \
+    int64_t commonFlexSelfOffset_[COMMON_INSERT_MAX_CONTENTS_] = {0};          \
+    bool    commonFlexSelfAfterFe_[COMMON_INSERT_MAX_CONTENTS_] = {0};         \
+    bool    commonFlexSelfAlias_[COMMON_INSERT_MAX_CONTENTS_] = {0};           \
+    for (uint_fast32_t commonFlex_i_ = (contentsStartOffset);                  \
+         commonFlex_i_ < contentsCount; commonFlex_i_++) {                     \
+        const uint8_t *commonFlex_d_ = contents[commonFlex_i_]->data;          \
+        if (FLEX_IS_STR(contents[commonFlex_i_]->encoding)                     \
+            && commonFlex_d_ > (const uint8_t *) f                             \
+            && commonFlex_d_ < ((const uint8_t *) f + flexSize)) {             \
+            commonFlexSelfAlias_[commonFlex_i_] = true;                        \
+            commonFlexSelfOffset_[commonFlex_i_] =                             \
+                commonFlex_d_ - (const uint8_t *) f;                           \
+            commonFlexSelfAfterFe_[commonFlex_i_] =                            \
+                commonFlex_d_ > (const uint8_t *) fe;                          \
+        }                                                                      \
+    }                                                                          \
+                                                                               \
     /* 'insertSize' is the sum of three things:                                \
      *   - size of data length (or the encoded type byte)                      \
      *   - actual size of the data.                                            \
@@ -1747,6 +1796,21 @@ abstractWriteFullEntry(flexEntry *restrict *restrict fe,
      * If we are *not* replacing, then 'contentsStartOffset' is 0              \
      * and we consume the entire contents[]. */                                \
     for (uint_fast32_t i = (contentsStartOffset); i < contentsCount; i++) {    \
+        /* Per-i self-aliasing rebase: when contents[i]->data pointed          \
+         * inside this flex before realloc, restore it relative to the         \
+         * post-realloc base.  contents[0] in the non-replace path was         \
+         * already restored by the copyFromSelf branch above; the per-i        \
+         * rebase here covers the replace path's contents[1..N-1] (and is      \
+         * a no-op when no aliasing was detected).  See the                    \
+         * commonFlexInsertCalculatePreconditions_ comment for why.            \
+         * The reallocSize bump for "after-fe" sources matches the existing    \
+         * contents[0] rebase at line ~1737 because the same memmove that      \
+         * shifted fe also shifted post-fe bytes. */                           \
+        if (commonFlexSelfAlias_[i] && !(i == 0 && (contentsStartOffset) == 0)) {\
+            contents[i]->data = (const uint8_t *) f                            \
+                + commonFlexSelfOffset_[i]                                     \
+                + (commonFlexSelfAfterFe_[i] ? (int64_t) reallocSize : 0);     \
+        }                                                                      \
         abstractWriteFullEntry(&fe, contents[i]);                              \
     }                                                                          \
                                                                                \
@@ -2818,6 +2882,17 @@ void flexPushBytes(flex **const ff, const void *data, size_t len,
     flexPush_(flexInsertBytes, data, len);
 }
 
+/* Push a databox to the head/tail of `*ff`.
+ *
+ * NOTE on the deliberate asymmetry vs flexInsertByType_: the DATABOX_BYTES
+ * cases below route through flexInsertBytes, which CANONICALISES a numeric
+ * byte string ("22" -> integer 22) via StrScanScanReliable.  flexInsertByType_
+ * stores DATABOX_BYTES raw (no canonicalisation).  Push's canonicalising
+ * behaviour is load-bearing — it matches how flex-backed containers
+ * (multimap/multilist) normalise members on insert — so the two are NOT
+ * interchangeable for byte strings and must stay separate switches.  Numeric /
+ * fixed-width types carry no such concern, so the wide-integer cases delegate
+ * to the shared insert path rather than duplicate a 128-bit encoder. */
 void flexPushByType(flex **const ff, const databox *box, flexEndpoint where) {
     /* Special case: if databox is NULL, insert NULL encoding. */
     if (!box) {
@@ -2839,6 +2914,17 @@ void flexPushByType(flex **const ff, const databox *box, flexEndpoint where) {
     case DATABOX_PTR:
         flexPush_(flexInsertUnsigned, box->data.u64);
         break;
+    case DATABOX_SIGNED_128:
+    case DATABOX_UNSIGNED_128:
+        /* No 128-bit flexPush_ helper exists, and wide integers need no
+         * bytes-canonicalisation — route through the shared insert path so
+         * push stays type-complete without a parallel 128-bit encoder. */
+        flexInsertByType(ff,
+                         (where == FLEX_ENDPOINT_HEAD)
+                             ? FLEX_ENTRY_HEAD(*ff)
+                             : FLEX_ENTRY_AFTER_TAIL(*ff),
+                         box);
+        break;
     case DATABOX_FLOAT_32:
         flexPush_(flexInsertFloat, box->data.f32);
         break;
@@ -2857,6 +2943,327 @@ void flexPushByType(flex **const ff, const databox *box, flexEndpoint where) {
     default:
         __builtin_unreachable();
     }
+}
+
+/* flex <-> databox single-element isomorphism (see flex.h). */
+flex *flexNewFromDatabox(const databox *box) {
+    flex *f = flexNew();
+    if (!f) {
+        return NULL;
+    }
+    flexPushByType(&f, box, FLEX_ENDPOINT_TAIL);
+    return f;
+}
+
+flex *flexNewFromDataboxes(const databox *boxes, size_t n) {
+    flex *f = flexNew();
+    if (!f) {
+        return NULL;
+    }
+    for (size_t i = 0; i < n; i++) {
+        flexPushByType(&f, &boxes[i], FLEX_ENDPOINT_TAIL);
+    }
+    return f;
+}
+
+flex *flexNewFromDataboxPtrs(const databox *const *boxes, size_t n) {
+    flex *f = flexNew();
+    if (!f) {
+        return NULL;
+    }
+    for (size_t i = 0; i < n; i++) {
+        flexPushByType(&f, boxes[i], FLEX_ENDPOINT_TAIL);
+    }
+    return f;
+}
+
+bool flexGetSingleDatabox(const uint8_t *buf, size_t buflen, databox *out) {
+    if (!buf || !out) {
+        return false;
+    }
+    /* Strict (deep) validation: these bytes arrive from replication / on-disk
+     * recovery, so refuse a lying header rather than walk past it into the
+     * entry decode below. */
+    if (!flexValidateBufferDeep(buf, buflen)) {
+        return false;
+    }
+    const flex *f = (const flex *) buf;
+    if (flexCount(f) != 1) {
+        return false;
+    }
+    flexEntry *fe = flexHead(f);
+    if (!fe) {
+        return false;
+    }
+    flexGetByType(fe, out);
+    return true;
+}
+
+void flexPushDataboxBig(flex **const ff, const databoxBig *b,
+                        flexEndpoint where) {
+    if (!b) {
+        return;
+    }
+    switch (b->type) {
+    case DATABOX_SIGNED_128: {
+        /* Reconstruct a fully-formed big databox (sets ->big + ->extra) so the
+         * push never trips flexInsertByType_'s assert(box->big), regardless of
+         * how the caller's databoxBig was assembled. */
+        databoxBig t;
+        DATABOX_BIG_SIGNED_128(&t, *b->data.i128);
+        flexPushByType(ff, (const databox *)&t, where);
+        break;
+    }
+    case DATABOX_UNSIGNED_128: {
+        databoxBig t;
+        DATABOX_BIG_UNSIGNED_128(&t, *b->data.u128);
+        flexPushByType(ff, (const databox *)&t, where);
+        break;
+    }
+    default:
+        /* 64-bit / fixed-width: the leading 16 bytes are a valid databox. */
+        flexPushByType(ff, (const databox *)b, where);
+        break;
+    }
+}
+
+flex *flexNewFromDataboxBig(const databoxBig *b) {
+    flex *f = flexNew();
+    if (!f) {
+        return NULL;
+    }
+    flexPushDataboxBig(&f, b, FLEX_ENDPOINT_TAIL);
+    return f;
+}
+
+bool flexGetSingleDataboxBig(const uint8_t *buf, size_t buflen,
+                             databoxBig *out) {
+    if (!buf || !out) {
+        return false;
+    }
+    if (!flexValidateBufferDeep(buf, buflen)) {
+        return false;
+    }
+    const flex *f = (const flex *)buf;
+    if (flexCount(f) != 1) {
+        return false;
+    }
+    flexEntry *fe = flexHead(f);
+    if (!fe) {
+        return false;
+    }
+    /* Point data.u128 at the inline `extra` store so a 128-bit decode has
+     * somewhere to land; harmless for narrower types (flexGetByType overwrites
+     * the union for those). */
+    DATABOX_BIG_INIT(out);
+    flexGetByType(fe, (databox *)out);
+    return true;
+}
+
+bool flexGetTwoDataboxes(const uint8_t *buf, size_t buflen, databox *a,
+                         databox *b) {
+    if (!buf || !a || !b) {
+        return false;
+    }
+    if (!flexValidateBufferDeep(buf, buflen)) {
+        return false;
+    }
+    const flex *f = (const flex *)buf;
+    if (flexCount(f) != 2) {
+        return false;
+    }
+    flexEntry *fe = flexHead(f);
+    if (!fe) {
+        return false;
+    }
+    flexGetByType(fe, a);
+    fe = flexNext(f, fe);
+    if (!fe) {
+        return false;
+    }
+    flexGetByType(fe, b);
+    return true;
+}
+
+int flexFactorySelfTest(void) {
+    int fails = 0;
+#define FFT(cond)                                                              \
+    do {                                                                       \
+        if (!(cond)) {                                                         \
+            fprintf(stderr, "flexFactorySelfTest FAIL: %s (%s:%d)\n", #cond,   \
+                    __FILE__, __LINE__);                                       \
+            fails++;                                                           \
+        }                                                                      \
+    } while (0)
+
+    /* single non-numeric bytes round-trip — stays bytes. */
+    {
+        databox in = databoxNewBytes("hello", 5);
+        flex   *f  = flexNewFromDatabox(&in);
+        FFT(f != NULL);
+        databox out = {0};
+        FFT(flexGetSingleDatabox((const uint8_t *)f, flexBytes(f), &out));
+        FFT(DATABOX_IS_BYTES(&out) && databoxLen(&out) == 5 &&
+            memcmp(databoxBytes(&out), "hello", 5) == 0);
+        flexFree(f);
+    }
+
+    /* numeric byte-string canonicalises to an integer (push semantics). */
+    {
+        databox in = databoxNewBytes("22", 2);
+        flex   *f  = flexNewFromDatabox(&in);
+        databox out = {0};
+        FFT(flexGetSingleDatabox((const uint8_t *)f, flexBytes(f), &out));
+        FFT((out.type == DATABOX_UNSIGNED_64 && out.data.u == 22) ||
+            (out.type == DATABOX_SIGNED_64 && out.data.i == 22));
+        flexFree(f);
+    }
+
+    /* signed integer round-trip. */
+    {
+        databox in = {.type = DATABOX_SIGNED_64, .data.i64 = -7};
+        flex   *f  = flexNewFromDatabox(&in);
+        databox out = {0};
+        FFT(flexGetSingleDatabox((const uint8_t *)f, flexBytes(f), &out));
+        FFT(out.data.i == -7);
+        flexFree(f);
+    }
+
+    /* multi-element factory: N values, correct count + iteration order. */
+    {
+        databox boxes[3];
+        boxes[0] = databoxNewBytes("alpha", 5);
+        boxes[1] = databoxNewBytes("zz", 2);
+        boxes[2] = (databox){.type = DATABOX_UNSIGNED_64, .data.u64 = 99};
+        flex *f  = flexNewFromDataboxes(boxes, 3);
+        FFT(f && flexCount(f) == 3);
+        size_t     i  = 0;
+        flexEntry *fe = flexHead(f);
+        while (fe) {
+            i++;
+            fe = flexNext(f, fe);
+        }
+        FFT(i == 3);
+        flexFree(f);
+    }
+
+    /* empty factory yields a valid zero-element flex. */
+    {
+        flex *f = flexNewFromDataboxes(NULL, 0);
+        FFT(f && flexCount(f) == 0);
+        flexFree(f);
+    }
+
+    /* pointer-array factory (multimap convention): N boxes incl a non-last
+     * BYTES value — the case the old hand-rolled multimap delta couldn't
+     * encode.  Verify count + that the leading BYTES element round-trips. */
+    {
+        databox        b0 = databoxNewBytes("member-key", 10);
+        databox        b1 = {.type = DATABOX_UNSIGNED_64, .data.u64 = 7};
+        databox        b2 = databoxNewBytes("tail", 4);
+        const databox *ptrs[3] = {&b0, &b1, &b2};
+        flex          *f = flexNewFromDataboxPtrs(ptrs, 3);
+        FFT(f && flexCount(f) == 3);
+        databox    out0 = {0};
+        flexEntry *fe   = flexHead(f);
+        flexGetByType(fe, &out0);
+        FFT(DATABOX_IS_BYTES(&out0) && databoxLen(&out0) == 10 &&
+            memcmp(databoxBytes(&out0), "member-key", 10) == 0);
+        flexFree(f);
+    }
+
+    /* defensive unwrap: a multi-element flex is rejected by the single-getter. */
+    {
+        databox boxes[2] = {databoxNewBytes("x", 1), databoxNewBytes("y", 1)};
+        flex   *f        = flexNewFromDataboxes(boxes, 2);
+        databox out      = {0};
+        FFT(!flexGetSingleDatabox((const uint8_t *)f, flexBytes(f), &out));
+        flexFree(f);
+    }
+
+    /* defensive unwrap: a garbage buffer is rejected, not walked. */
+    {
+        uint8_t garbage[4] = {0xFF, 0xFF, 0xFF, 0xFF};
+        databox out        = {0};
+        FFT(!flexGetSingleDatabox(garbage, sizeof(garbage), &out));
+    }
+
+    /* two-element unwrap ([index,value] shape) + arity rejection. */
+    {
+        databox        idx = {.type = DATABOX_UNSIGNED_64, .data.u64 = 3};
+        databox        val = databoxNewBytes("payload", 7);
+        const databox *ptrs[2] = {&idx, &val};
+        flex          *f = flexNewFromDataboxPtrs(ptrs, 2);
+        databox        a = {0}, b = {0};
+        FFT(flexGetTwoDataboxes((const uint8_t *)f, flexBytes(f), &a, &b));
+        FFT(a.data.u == 3 && DATABOX_IS_BYTES(&b) && databoxLen(&b) == 7 &&
+            memcmp(databoxBytes(&b), "payload", 7) == 0);
+        flexFree(f);
+        /* a 1-element flex must be rejected by the two-getter. */
+        flex *f1 = flexNewFromDatabox(&idx);
+        FFT(!flexGetTwoDataboxes((const uint8_t *)f1, flexBytes(f1), &a, &b));
+        flexFree(f1);
+    }
+
+    /* databoxBig arm — 64-bit round-trip. */
+    {
+        databoxBig in;
+        DATABOX_BIG_INIT(&in);
+        in.type     = DATABOX_UNSIGNED_64;
+        in.data.u64 = 1234567890123ULL;
+        flex      *f = flexNewFromDataboxBig(&in);
+        databoxBig out;
+        FFT(flexGetSingleDataboxBig((const uint8_t *)f, flexBytes(f), &out));
+        FFT(out.data.u == 1234567890123ULL);
+        flexFree(f);
+    }
+
+    /* databoxBig arm — NEGATIVE signed 128-bit round-trip (|value| > 2^64;
+     * stays SIGNED_128).  Exercises flexPrepareSignedBig — an int64_t return
+     * there silently truncated the high 64 bits. */
+    {
+        const __int128_t big = -(((__int128_t)1 << 100) + 7);
+        databoxBig       in;
+        DATABOX_BIG_SIGNED_128(&in, big);
+        flex      *f = flexNewFromDataboxBig(&in);
+        databoxBig out;
+        FFT(flexGetSingleDataboxBig((const uint8_t *)f, flexBytes(f), &out));
+        FFT(out.type == DATABOX_SIGNED_128 && *out.data.i128 == big);
+        flexFree(f);
+    }
+
+    /* A POSITIVE 128-bit value carried as SIGNED canonicalises to UNSIGNED_128
+     * (flex stores all positive integers unsigned) — value-preserving, which
+     * is all that matters for a numeric set. */
+    {
+        const __int128_t big = ((__int128_t)1 << 100) + 7;
+        databoxBig       in;
+        DATABOX_BIG_SIGNED_128(&in, big);
+        flex      *f = flexNewFromDataboxBig(&in);
+        databoxBig out;
+        FFT(flexGetSingleDataboxBig((const uint8_t *)f, flexBytes(f), &out));
+        FFT(out.type == DATABOX_UNSIGNED_128 &&
+            (__int128_t)*out.data.u128 == big);
+        flexFree(f);
+    }
+
+    /* databoxBig arm — unsigned 128-bit round-trip. */
+    {
+        const __uint128_t big = ((__uint128_t)1 << 120) + 99;
+        databoxBig        in;
+        DATABOX_BIG_UNSIGNED_128(&in, big);
+        flex      *f = flexNewFromDataboxBig(&in);
+        databoxBig out;
+        FFT(flexGetSingleDataboxBig((const uint8_t *)f, flexBytes(f), &out));
+        FFT(out.type == DATABOX_UNSIGNED_128 && *out.data.u128 == big);
+        flexFree(f);
+    }
+
+    if (fails == 0) {
+        fprintf(stderr, "flexFactorySelfTest: OK\n");
+    }
+#undef FFT
+    return fails;
 }
 
 /* ====================================================================
@@ -2944,6 +3351,11 @@ bool flexEntryIsValid(const flex *f, flexEntry *fe) {
 
 flexEntry DK_FN_PURE *flexHead(const flex *f) {
     return FLEX_ENTRY_HEAD(f);
+}
+
+flexEntry DK_FN_PURE *flexHeadIfAny(const flex *f) {
+    flexEntry *const head = FLEX_ENTRY_HEAD(f);
+    return head == GET_END(f) ? NULL : head;
 }
 
 flexEntry *flexMiddle(const flex *f, const uint_fast32_t elementsPerEntry) {
@@ -3820,7 +4232,7 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMulti(
     const struct multimapAtom *const referenceContainer,
     const bool useSurrogateKeyForInsert, const databox *const surrogateKey,
     const bool useHighestInsertPosition, const bool newKeysBecomeShared,
-    void **keyAsAllocation) {
+    void **keyAsAllocation, const bool fullWidthDedupe) {
     /* If no middle given, discover current middle (or head, if no
      * elements). */
     const size_t initialCount = flexCount_(*ff) / elementsPerEntry;
@@ -3868,6 +4280,19 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMulti(
                                                      &found, mid,
                                                      maxSubElementsToCompare);
         }
+    }
+
+    /* TRUE SET SEMANTICS: full-width compare AND no duplicate entry.
+     * The plain full-width mode below keeps its historical
+     * duplicates-allowed behavior (sorted-bag consumers such as
+     * InsertFullWidth rely on it); set-mode multimaps route through
+     * this dedupe instead — a found full-width-equal entry is
+     * reported found WITHOUT touching the flex.  Without this, every
+     * re-insert of an existing set member appended a duplicate row
+     * while returning 'found', so the caller's reply looked correct
+     * as the structure silently diverged. */
+    if (fullWidthDedupe && found) {
+        return true;
     }
 
     /* Only replace if we *found* the key.
@@ -4058,7 +4483,20 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
     const bool compareUsingKeyElementOnly) {
     return abstractInsertReplaceByTypeSortedWithMiddleMulti(
         ff, elementsPerEntry, box, middleEntry, compareUsingKeyElementOnly,
-        false, NULL, false, NULL, false, false, NULL);
+        false, NULL, false, NULL, false, false, NULL, false);
+}
+
+/* TRUE SET insert: full-width compare AND dedupe — a found
+ * full-width-equal entry is a no-op that returns true.  This is what
+ * mapIsSet multimaps mean by "set"; the plain Direct call above with
+ * compareUsingKeyElementOnly=false is the duplicates-allowed sorted
+ * bag (InsertFullWidth). */
+bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectSet(
+    flex **const ff, const uint_fast32_t elementsPerEntry,
+    const databox **const box, flexEntry **const middleEntry) {
+    return abstractInsertReplaceByTypeSortedWithMiddleMulti(
+        ff, elementsPerEntry, box, middleEntry, false,
+        false, NULL, false, NULL, false, false, NULL, true);
 }
 
 bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectLongKeysBecomePointers(
@@ -4067,7 +4505,7 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectLongKeysBecomePointers(
     const bool compareUsingKeyElementOnly, void **recoveredPointer) {
     return abstractInsertReplaceByTypeSortedWithMiddleMulti(
         ff, elementsPerEntry, box, middleEntry, compareUsingKeyElementOnly,
-        false, NULL, false, NULL, false, true, recoveredPointer);
+        false, NULL, false, NULL, false, true, recoveredPointer, false);
 }
 
 bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReference(
@@ -4077,7 +4515,18 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReference(
     const struct multimapAtom *const referenceContainer) {
     return abstractInsertReplaceByTypeSortedWithMiddleMulti(
         ff, elementsPerEntry, box, middleEntry, compareUsingKeyElementOnly,
-        true, referenceContainer, false, NULL, false, false, NULL);
+        true, referenceContainer, false, NULL, false, false, NULL, false);
+}
+
+/* TRUE SET insert with atom references — the reference-container
+ * sibling of the DirectSet variant above. */
+bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceSet(
+    flex **const ff, const uint_fast32_t elementsPerEntry,
+    const databox **const box, flexEntry **const middleEntry,
+    const struct multimapAtom *const referenceContainer) {
+    return abstractInsertReplaceByTypeSortedWithMiddleMulti(
+        ff, elementsPerEntry, box, middleEntry, false,
+        true, referenceContainer, false, NULL, false, false, NULL, true);
 }
 
 bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKey(
@@ -4087,7 +4536,8 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKey(
     const struct multimapAtom *const referenceContainer) {
     return abstractInsertReplaceByTypeSortedWithMiddleMulti(
         ff, elementsPerEntry, box, middleEntry, compareUsingKeyElementOnly,
-        true, referenceContainer, true, boxInsertKey, false, false, NULL);
+        true, referenceContainer, true, boxInsertKey, false, false, NULL,
+        false);
 }
 
 void flexAppendMultiple(flex **ff, const uint_fast32_t elementsPerEntry,
