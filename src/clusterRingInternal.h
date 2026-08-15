@@ -42,6 +42,12 @@ struct clusterNode {
     /* Virtual nodes (for Ketama) */
     uint32_t vnodeCount;
     uint32_t vnodeStartIndex; /* Index into ring's vnode array */
+
+    /* Current position in ring->nodeArray. Maintained on add and on
+     * compaction so nodeIdToIndex() is O(1) (via the nodeById dict) instead
+     * of an O(nodeCount) scan on every routing probe. Transient/runtime —
+     * not serialized; rebuilt when nodes are re-added on deserialize. */
+    uint32_t arrayIndex;
 };
 
 /* ====================================================================

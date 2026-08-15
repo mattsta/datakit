@@ -210,14 +210,17 @@ static inline void seenTrackerSet(seenTracker *st, uint32_t idx) {
  * node IDs to dense indices for bitmap operations.
  */
 
-/* For small node counts, linear search is faster than hash lookup */
+/* O(1) nodeId -> nodeArray index via the existing nodeById dict (which already
+ * maps id -> node*), reading the node's maintained arrayIndex. Called per
+ * slot/vnode/replica in the routing hot paths, so the old O(nodeCount) scan
+ * was effectively quadratic in node count. */
 static inline int32_t nodeIdToIndex(const clusterRing *ring, uint64_t nodeId) {
-    for (uint32_t i = 0; i < ring->nodeCount; i++) {
-        if (ring->nodeArray[i] && ring->nodeArray[i]->id == nodeId) {
-            return (int32_t)i;
-        }
+    databox keybox = {.type = DATABOX_UNSIGNED_64, .data.u64 = nodeId};
+    databox valbox;
+    if (!multidictFind(ring->nodeById, &keybox, &valbox)) {
+        return -1;
     }
-    return -1;
+    return (int32_t)((const clusterNode *)valbox.data.ptr)->arrayIndex;
 }
 
 /* ====================================================================
@@ -1056,6 +1059,9 @@ void clusterRingCompactNodeArray(clusterRing *ring) {
                 ring->nodeArray[writeIdx] = ring->nodeArray[readIdx];
                 ring->nodeArray[readIdx] = NULL;
             }
+            /* Keep arrayIndex consistent with the (possibly new) position so
+             * nodeIdToIndex stays O(1) and correct after compaction. */
+            ring->nodeArray[writeIdx]->arrayIndex = writeIdx;
             writeIdx++;
         }
     }
@@ -1094,7 +1100,8 @@ clusterResult clusterRingAddNode(clusterRing *ring,
     }
     clusterNodeInit(node, config);
 
-    /* Add to array */
+    /* Add to array (record its index for O(1) nodeIdToIndex) */
+    node->arrayIndex = ring->nodeCount;
     ring->nodeArray[ring->nodeCount++] = node;
 
     /* Add to lookup dict */
@@ -3607,6 +3614,34 @@ static int testNodeManagement(void) {
         const clusterNode *node = clusterRingGetNode(ring, 5);
         if (node) {
             ERRR("Node should be removed");
+            err++;
+        }
+    }
+
+    TEST("nodeIdToIndex reverse-index invariant after compaction") {
+        /* The removal above compacts nodeArray and reindexes survivors, so
+         * each node's cached arrayIndex must still equal its real position and
+         * the O(1) nodeIdToIndex must agree. Guards the reverse-index fix
+         * across the add/remove/compaction lifecycle. */
+        for (uint32_t i = 0; i < ring->nodeCount; i++) {
+            const clusterNode *n = ring->nodeArray[i];
+            if (!n) {
+                ERR("nodeArray[%u] NULL after compaction", i);
+                err++;
+                continue;
+            }
+            if (n->arrayIndex != i) {
+                ERR("arrayIndex mismatch: id %" PRIu64 " slot %u arrayIndex %u",
+                    n->id, i, n->arrayIndex);
+                err++;
+            }
+            if (nodeIdToIndex(ring, n->id) != (int32_t)i) {
+                ERR("nodeIdToIndex(%" PRIu64 ") != slot %u", n->id, i);
+                err++;
+            }
+        }
+        if (nodeIdToIndex(ring, 0xDEADBEEFULL) != -1) {
+            ERRR("nodeIdToIndex of unknown id must be -1");
             err++;
         }
     }
