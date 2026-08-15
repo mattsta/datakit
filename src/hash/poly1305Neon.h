@@ -15,7 +15,7 @@
  * tail (which goes through scalar Block).
  *
  * Output parity vs the scalar poly1305Block is enforced by
- * dkTestA7Poly1305SimdParity in the test driver.
+ * dkTestPoly1305SimdParity in the test driver.
  *
  * On non-aarch64 hosts the symbols are stubs: Available() returns
  * false; Block2x() asserts (callers must gate on the probe).  This

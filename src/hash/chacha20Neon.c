@@ -20,7 +20,7 @@
  *   rotr12 / rotr7 = vshlq + vsriq with literal shift counts.
  *
  * Differential parity vs the scalar chacha20Block is enforced by
- * dkTestA6ChaChaSimdParity in the test driver. */
+ * dkTestChaChaSimdParity in the test driver. */
 
 #include "chacha20Neon.h"
 

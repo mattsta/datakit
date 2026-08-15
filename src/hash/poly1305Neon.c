@@ -23,7 +23,7 @@
  * we extract and sum the two lanes per limb, then carry-reduce.
  *
  * Differential parity vs the scalar poly1305Block (one block at a time)
- * is enforced by dkTestA7Poly1305SimdParity. */
+ * is enforced by dkTestPoly1305SimdParity. */
 
 #include "poly1305Neon.h"
 

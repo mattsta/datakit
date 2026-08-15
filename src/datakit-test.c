@@ -187,7 +187,7 @@ static int mdscBenchWrapper(int argc, char *argv[]) {
  * That property rests on the volatile-store + asm("memory") pattern
  * in `ctmem.h` and is verified by inspection / disassembly in CI.
  * ==================================================================== */
-static int dkTestA1SecureZeroTest(int argc, char *argv[]) {
+static int dkTestSecureZeroTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
 
@@ -198,16 +198,15 @@ static int dkTestA1SecureZeroTest(int argc, char *argv[]) {
         size_t n = sizes[i];
         uint8_t *buf = (uint8_t *)zmalloc(n);
         if (buf == NULL) {
-            printf("dkTestA1SecureZero: alloc failed at n=%zu\n", n);
+            printf("dkTestSecureZero: alloc failed at n=%zu\n", n);
             return 1;
         }
         /* Populate with a non-zero pattern so a no-op clear is detected. */
         memset(buf, 0xAB, n);
         for (size_t j = 0; j < n; j++) {
             if (buf[j] != 0xAB) {
-                printf(
-                    "dkTestA1SecureZero: pre-condition fail at n=%zu j=%zu\n",
-                    n, j);
+                printf("dkTestSecureZero: pre-condition fail at n=%zu j=%zu\n",
+                       n, j);
                 zfree(buf);
                 return 1;
             }
@@ -217,9 +216,8 @@ static int dkTestA1SecureZeroTest(int argc, char *argv[]) {
 
         for (size_t j = 0; j < n; j++) {
             if (buf[j] != 0) {
-                printf(
-                    "dkTestA1SecureZero: byte %zu of %zu non-zero (0x%02x)\n",
-                    j, n, buf[j]);
+                printf("dkTestSecureZero: byte %zu of %zu non-zero (0x%02x)\n",
+                       j, n, buf[j]);
                 failures++;
                 break;
             }
@@ -235,14 +233,14 @@ static int dkTestA1SecureZeroTest(int argc, char *argv[]) {
     dkSecureZero(guard, 0);
     for (size_t j = 0; j < sizeof(guard); j++) {
         if (guard[j] != 0xCD) {
-            printf("dkTestA1SecureZero: zero-length call modified buffer\n");
+            printf("dkTestSecureZero: zero-length call modified buffer\n");
             failures++;
             break;
         }
     }
 
     if (failures == 0) {
-        printf("dkTestA1SecureZero: OK (%zu size classes + guards)\n",
+        printf("dkTestSecureZero: OK (%zu size classes + guards)\n",
                sizeof(sizes) / sizeof(sizes[0]));
         return 0;
     }
@@ -417,14 +415,14 @@ static int reportNonZeroCtxWipe(const char *label,
             nonZeroCount++;
         }
     }
-    printf("dkTestA2ChaChaStreamCtxWipe FAIL %s: %zu/%zu bytes non-zero, "
+    printf("dkTestChaChaStreamCtxWipe FAIL %s: %zu/%zu bytes non-zero, "
            "first at offset %zu (=0x%02x)\n",
            label, nonZeroCount, n, firstNonZero,
            (firstNonZero == (size_t)-1) ? 0 : p[firstNonZero]);
     return 1;
 }
 
-static int dkTestA2ChaChaStreamCtxWipeTest(int argc, char *argv[]) {
+static int dkTestChaChaStreamCtxWipeTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
 
@@ -435,7 +433,7 @@ static int dkTestA2ChaChaStreamCtxWipeTest(int argc, char *argv[]) {
         (chacha20poly1305StreamCtx *)zmalloc(ctxSize);
     uint8_t *zeroRef = (uint8_t *)zmalloc(ctxSize);
     if (ctx == NULL || zeroRef == NULL) {
-        printf("dkTestA2ChaChaStreamCtxWipe: alloc failed\n");
+        printf("dkTestChaChaStreamCtxWipe: alloc failed\n");
         zfree(ctx);
         zfree(zeroRef);
         return 1;
@@ -455,7 +453,7 @@ static int dkTestA2ChaChaStreamCtxWipeTest(int argc, char *argv[]) {
     uint8_t *cipher = (uint8_t *)zmalloc(plainLen);
     uint8_t *recovered = (uint8_t *)zmalloc(plainLen);
     if (plain == NULL || cipher == NULL || recovered == NULL) {
-        printf("dkTestA2ChaChaStreamCtxWipe: plaintext alloc failed\n");
+        printf("dkTestChaChaStreamCtxWipe: plaintext alloc failed\n");
         zfree(ctx);
         zfree(zeroRef);
         zfree(plain);
@@ -476,23 +474,23 @@ static int dkTestA2ChaChaStreamCtxWipeTest(int argc, char *argv[]) {
     uint8_t tag[CHACHA20_POLY1305_TAG_LEN];
     chacha20poly1305SealStreamInit(ctx, key, nonce);
     if (!chacha20poly1305SealStreamAad(ctx, aad, sizeof(aad))) {
-        printf("dkTestA2ChaChaStreamCtxWipe: Seal AAD failed\n");
+        printf("dkTestChaChaStreamCtxWipe: Seal AAD failed\n");
         failures++;
         goto done;
     }
     if (!chacha20poly1305SealStreamUpdate(ctx, plain, 73, cipher)) {
-        printf("dkTestA2ChaChaStreamCtxWipe: Seal Update#1 failed\n");
+        printf("dkTestChaChaStreamCtxWipe: Seal Update#1 failed\n");
         failures++;
         goto done;
     }
     if (!chacha20poly1305SealStreamUpdate(ctx, plain + 73, plainLen - 73,
                                           cipher + 73)) {
-        printf("dkTestA2ChaChaStreamCtxWipe: Seal Update#2 failed\n");
+        printf("dkTestChaChaStreamCtxWipe: Seal Update#2 failed\n");
         failures++;
         goto done;
     }
     if (!chacha20poly1305SealStreamFinal(ctx, tag)) {
-        printf("dkTestA2ChaChaStreamCtxWipe: Seal Final failed\n");
+        printf("dkTestChaChaStreamCtxWipe: Seal Final failed\n");
         failures++;
         goto done;
     }
@@ -506,29 +504,29 @@ static int dkTestA2ChaChaStreamCtxWipeTest(int argc, char *argv[]) {
     memset(ctx, 0xA5, ctxSize);
     chacha20poly1305OpenStreamInit(ctx, key, nonce);
     if (!chacha20poly1305OpenStreamAad(ctx, aad, sizeof(aad))) {
-        printf("dkTestA2ChaChaStreamCtxWipe: Open AAD failed\n");
+        printf("dkTestChaChaStreamCtxWipe: Open AAD failed\n");
         failures++;
         goto done;
     }
     if (!chacha20poly1305OpenStreamUpdate(ctx, cipher, 91, recovered)) {
-        printf("dkTestA2ChaChaStreamCtxWipe: Open Update#1 failed\n");
+        printf("dkTestChaChaStreamCtxWipe: Open Update#1 failed\n");
         failures++;
         goto done;
     }
     if (!chacha20poly1305OpenStreamUpdate(ctx, cipher + 91, plainLen - 91,
                                           recovered + 91)) {
-        printf("dkTestA2ChaChaStreamCtxWipe: Open Update#2 failed\n");
+        printf("dkTestChaChaStreamCtxWipe: Open Update#2 failed\n");
         failures++;
         goto done;
     }
     if (!chacha20poly1305OpenStreamFinal(ctx, tag)) {
-        printf("dkTestA2ChaChaStreamCtxWipe: Open Final returned false on "
+        printf("dkTestChaChaStreamCtxWipe: Open Final returned false on "
                "untampered ciphertext\n");
         failures++;
         goto done;
     }
     if (memcmp(recovered, plain, plainLen) != 0) {
-        printf("dkTestA2ChaChaStreamCtxWipe: Open recovered != plaintext\n");
+        printf("dkTestChaChaStreamCtxWipe: Open recovered != plaintext\n");
         failures++;
         goto done;
     }
@@ -542,17 +540,17 @@ static int dkTestA2ChaChaStreamCtxWipeTest(int argc, char *argv[]) {
     cipher[plainLen - 7] ^= 0x55;
     chacha20poly1305OpenStreamInit(ctx, key, nonce);
     if (!chacha20poly1305OpenStreamAad(ctx, aad, sizeof(aad))) {
-        printf("dkTestA2ChaChaStreamCtxWipe: Open AAD (tamper) failed\n");
+        printf("dkTestChaChaStreamCtxWipe: Open AAD (tamper) failed\n");
         failures++;
         goto done;
     }
     if (!chacha20poly1305OpenStreamUpdate(ctx, cipher, plainLen, recovered)) {
-        printf("dkTestA2ChaChaStreamCtxWipe: Open Update (tamper) failed\n");
+        printf("dkTestChaChaStreamCtxWipe: Open Update (tamper) failed\n");
         failures++;
         goto done;
     }
     if (chacha20poly1305OpenStreamFinal(ctx, tag)) {
-        printf("dkTestA2ChaChaStreamCtxWipe: Tampered CT not rejected\n");
+        printf("dkTestChaChaStreamCtxWipe: Tampered CT not rejected\n");
         failures++;
     }
     if (memcmp(ctx, zeroRef, ctxSize) != 0) {
@@ -563,7 +561,7 @@ static int dkTestA2ChaChaStreamCtxWipeTest(int argc, char *argv[]) {
     memset(ctx, 0xCD, ctxSize);
     chacha20poly1305SealStreamInit(ctx, key, nonce);
     if (chacha20poly1305SealStreamFinal(ctx, NULL)) {
-        printf("dkTestA2ChaChaStreamCtxWipe: SealFinal(NULL) should reject\n");
+        printf("dkTestChaChaStreamCtxWipe: SealFinal(NULL) should reject\n");
         failures++;
     }
     if (memcmp(ctx, zeroRef, ctxSize) != 0) {
@@ -573,7 +571,7 @@ static int dkTestA2ChaChaStreamCtxWipeTest(int argc, char *argv[]) {
     memset(ctx, 0xCD, ctxSize);
     chacha20poly1305OpenStreamInit(ctx, key, nonce);
     if (chacha20poly1305OpenStreamFinal(ctx, NULL)) {
-        printf("dkTestA2ChaChaStreamCtxWipe: OpenFinal(NULL) should reject\n");
+        printf("dkTestChaChaStreamCtxWipe: OpenFinal(NULL) should reject\n");
         failures++;
     }
     if (memcmp(ctx, zeroRef, ctxSize) != 0) {
@@ -588,7 +586,7 @@ done:
     zfree(zeroRef);
 
     if (failures == 0) {
-        printf("dkTestA2ChaChaStreamCtxWipe: OK "
+        printf("dkTestChaChaStreamCtxWipe: OK "
                "(Seal, Open, Open-tamper, NULL-tag guards)\n");
         return 0;
     }
@@ -602,7 +600,7 @@ done:
  * (3) Final-twice returns false on second call (Seal+Open) — pinned
  *     per the streamFinalise wipe-to-zero contract.
  * ==================================================================== */
-static int dkTestA8StreamMidTamperTest(int argc, char *argv[]) {
+static int dkTestStreamMidTamperTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -632,14 +630,14 @@ static int dkTestA8StreamMidTamperTest(int argc, char *argv[]) {
     for (int s = 0; s < kNumSegs; s++) {
         if (!chacha20poly1305SealStreamUpdate(&ctx, plain + s * kSegLen,
                                               kSegLen, cipher + s * kSegLen)) {
-            printf("dkTestA8StreamMidTamper: Seal Update#%d failed\n", s);
+            printf("dkTestStreamMidTamper: Seal Update#%d failed\n", s);
             failures++;
             goto done;
         }
     }
     uint8_t tag[CHACHA20_POLY1305_TAG_LEN];
     if (!chacha20poly1305SealStreamFinal(&ctx, tag)) {
-        printf("dkTestA8StreamMidTamper: Seal Final failed\n");
+        printf("dkTestStreamMidTamper: Seal Final failed\n");
         failures++;
         goto done;
     }
@@ -651,20 +649,20 @@ static int dkTestA8StreamMidTamperTest(int argc, char *argv[]) {
         if (!chacha20poly1305OpenStreamUpdate(
                 &ctx, baselineCipher + s * kSegLen, kSegLen,
                 recovered + s * kSegLen)) {
-            printf("dkTestA8StreamMidTamper: baseline Open Update#%d failed\n",
+            printf("dkTestStreamMidTamper: baseline Open Update#%d failed\n",
                    s);
             failures++;
             goto done;
         }
     }
     if (!chacha20poly1305OpenStreamFinal(&ctx, tag)) {
-        printf("dkTestA8StreamMidTamper: baseline Open Final rejected "
+        printf("dkTestStreamMidTamper: baseline Open Final rejected "
                "untampered CT\n");
         failures++;
         goto done;
     }
     if (memcmp(recovered, plain, kPayload) != 0) {
-        printf("dkTestA8StreamMidTamper: baseline plaintext mismatch\n");
+        printf("dkTestStreamMidTamper: baseline plaintext mismatch\n");
         failures++;
         goto done;
     }
@@ -676,7 +674,7 @@ static int dkTestA8StreamMidTamperTest(int argc, char *argv[]) {
     for (int s = 0; s < kNumSegs; s++) {
         if (!chacha20poly1305OpenStreamUpdate(
                 &ctx, cipher + s * kSegLen, kSegLen, recovered + s * kSegLen)) {
-            printf("dkTestA8StreamMidTamper: tamper Open Update#%d returned "
+            printf("dkTestStreamMidTamper: tamper Open Update#%d returned "
                    "false (expected true; mismatch caught at Final)\n",
                    s);
             failures++;
@@ -684,7 +682,7 @@ static int dkTestA8StreamMidTamperTest(int argc, char *argv[]) {
         }
     }
     if (chacha20poly1305OpenStreamFinal(&ctx, tag)) {
-        printf("dkTestA8StreamMidTamper: Open Final ACCEPTED tampered CT "
+        printf("dkTestStreamMidTamper: Open Final ACCEPTED tampered CT "
                "(bit 0 of byte %d flipped)\n",
                kTamperOffset);
         failures++;
@@ -693,7 +691,7 @@ static int dkTestA8StreamMidTamperTest(int argc, char *argv[]) {
 
 done:
     if (failures == 0) {
-        printf("dkTestA8StreamMidTamper: OK "
+        printf("dkTestStreamMidTamper: OK "
                "(4x64 segments, mid-stream byte-64 bit-0 flip caught at "
                "Final)\n");
         return 0;
@@ -701,7 +699,7 @@ done:
     return 1;
 }
 
-static int dkTestA8StreamUpdateAfterFinalTest(int argc, char *argv[]) {
+static int dkTestStreamUpdateAfterFinalTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -722,12 +720,12 @@ static int dkTestA8StreamUpdateAfterFinalTest(int argc, char *argv[]) {
     chacha20poly1305StreamCtx ctx;
     chacha20poly1305SealStreamInit(&ctx, key, nonce);
     if (!chacha20poly1305SealStreamUpdate(&ctx, pt, sizeof(pt), ct)) {
-        printf("dkTestA8StreamUpdateAfterFinal: Seal Update failed\n");
+        printf("dkTestStreamUpdateAfterFinal: Seal Update failed\n");
         failures++;
         goto done;
     }
     if (!chacha20poly1305SealStreamFinal(&ctx, tag)) {
-        printf("dkTestA8StreamUpdateAfterFinal: Seal Final failed\n");
+        printf("dkTestStreamUpdateAfterFinal: Seal Final failed\n");
         failures++;
         goto done;
     }
@@ -735,7 +733,7 @@ static int dkTestA8StreamUpdateAfterFinalTest(int argc, char *argv[]) {
     const uint8_t extraPt[8] = {1, 2, 3, 4, 5, 6, 7, 8};
     if (chacha20poly1305SealStreamUpdate(&ctx, extraPt, sizeof(extraPt),
                                          extraCt)) {
-        printf("dkTestA8StreamUpdateAfterFinal: Seal Update-after-Final "
+        printf("dkTestStreamUpdateAfterFinal: Seal Update-after-Final "
                "returned true (expected false: fail-closed contract)\n");
         failures++;
         goto done;
@@ -744,25 +742,25 @@ static int dkTestA8StreamUpdateAfterFinalTest(int argc, char *argv[]) {
     chacha20poly1305OpenStreamInit(&ctx, key, nonce);
     uint8_t recovered[64];
     if (!chacha20poly1305OpenStreamUpdate(&ctx, ct, sizeof(ct), recovered)) {
-        printf("dkTestA8StreamUpdateAfterFinal: Open Update failed\n");
+        printf("dkTestStreamUpdateAfterFinal: Open Update failed\n");
         failures++;
         goto done;
     }
     if (!chacha20poly1305OpenStreamFinal(&ctx, tag)) {
-        printf("dkTestA8StreamUpdateAfterFinal: Open Final rejected valid "
+        printf("dkTestStreamUpdateAfterFinal: Open Final rejected valid "
                "tag\n");
         failures++;
         goto done;
     }
     if (memcmp(recovered, pt, sizeof(pt)) != 0) {
-        printf("dkTestA8StreamUpdateAfterFinal: Open plaintext mismatch\n");
+        printf("dkTestStreamUpdateAfterFinal: Open plaintext mismatch\n");
         failures++;
         goto done;
     }
     uint8_t extraRec[8];
     if (chacha20poly1305OpenStreamUpdate(&ctx, ct, sizeof(extraRec),
                                          extraRec)) {
-        printf("dkTestA8StreamUpdateAfterFinal: Open Update-after-Final "
+        printf("dkTestStreamUpdateAfterFinal: Open Update-after-Final "
                "returned true (expected false: fail-closed contract)\n");
         failures++;
         goto done;
@@ -770,14 +768,14 @@ static int dkTestA8StreamUpdateAfterFinalTest(int argc, char *argv[]) {
 
 done:
     if (failures == 0) {
-        printf("dkTestA8StreamUpdateAfterFinal: OK "
+        printf("dkTestStreamUpdateAfterFinal: OK "
                "(Seal+Open Update after Final rejected)\n");
         return 0;
     }
     return 1;
 }
 
-static int dkTestA8StreamFinalTwiceTest(int argc, char *argv[]) {
+static int dkTestStreamFinalTwiceTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -799,18 +797,18 @@ static int dkTestA8StreamFinalTwiceTest(int argc, char *argv[]) {
     chacha20poly1305StreamCtx ctx;
     chacha20poly1305SealStreamInit(&ctx, key, nonce);
     if (!chacha20poly1305SealStreamUpdate(&ctx, pt, sizeof(pt), ct)) {
-        printf("dkTestA8StreamFinalTwice: Seal Update failed\n");
+        printf("dkTestStreamFinalTwice: Seal Update failed\n");
         failures++;
         goto done;
     }
     if (!chacha20poly1305SealStreamFinal(&ctx, tag1)) {
-        printf("dkTestA8StreamFinalTwice: first Seal Final failed\n");
+        printf("dkTestStreamFinalTwice: first Seal Final failed\n");
         failures++;
         goto done;
     }
     memset(tag2, 0xCC, sizeof(tag2));
     if (chacha20poly1305SealStreamFinal(&ctx, tag2)) {
-        printf("dkTestA8StreamFinalTwice: second Seal Final returned true "
+        printf("dkTestStreamFinalTwice: second Seal Final returned true "
                "(expected false: fail-closed double-Finalise)\n");
         failures++;
         goto done;
@@ -819,18 +817,18 @@ static int dkTestA8StreamFinalTwiceTest(int argc, char *argv[]) {
     chacha20poly1305OpenStreamInit(&ctx, key, nonce);
     uint8_t recovered[40];
     if (!chacha20poly1305OpenStreamUpdate(&ctx, ct, sizeof(ct), recovered)) {
-        printf("dkTestA8StreamFinalTwice: Open Update failed\n");
+        printf("dkTestStreamFinalTwice: Open Update failed\n");
         failures++;
         goto done;
     }
     if (!chacha20poly1305OpenStreamFinal(&ctx, tag1)) {
-        printf("dkTestA8StreamFinalTwice: first Open Final rejected valid "
+        printf("dkTestStreamFinalTwice: first Open Final rejected valid "
                "tag\n");
         failures++;
         goto done;
     }
     if (chacha20poly1305OpenStreamFinal(&ctx, tag1)) {
-        printf("dkTestA8StreamFinalTwice: second Open Final returned true "
+        printf("dkTestStreamFinalTwice: second Open Final returned true "
                "(expected false: fail-closed double-Finalise)\n");
         failures++;
         goto done;
@@ -838,7 +836,7 @@ static int dkTestA8StreamFinalTwiceTest(int argc, char *argv[]) {
 
 done:
     if (failures == 0) {
-        printf("dkTestA8StreamFinalTwice: OK "
+        printf("dkTestStreamFinalTwice: OK "
                "(second Seal/Open Final returns false; pinned fail-closed)\n");
         return 0;
     }
@@ -873,7 +871,7 @@ typedef struct a3Vector {
     const char *tag_hex;
 } a3Vector;
 
-static int dkTestA3AesNiTest(int argc, char *argv[]) {
+static int dkTestAesNiTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -916,13 +914,13 @@ static int dkTestA3AesNiTest(int argc, char *argv[]) {
     const aesGcmBackend default_backend = aesGcmActiveBackend();
 
     if (ni_here && default_backend != AES_GCM_BACKEND_AESNI) {
-        printf("dkTestA3AesNi: NI probe true but dispatcher backend=%d "
+        printf("dkTestAesNi: NI probe true but dispatcher backend=%d "
                "(expected AESNI=%d)\n",
                (int)default_backend, (int)AES_GCM_BACKEND_AESNI);
         failures++;
     }
     if (!ni_here && default_backend == AES_GCM_BACKEND_AESNI) {
-        printf("dkTestA3AesNi: dispatcher reports AESNI but probe says no\n");
+        printf("dkTestAesNi: dispatcher reports AESNI but probe says no\n");
         failures++;
     }
 
@@ -930,19 +928,19 @@ static int dkTestA3AesNiTest(int argc, char *argv[]) {
         aesGcmKey nk;
         const uint8_t k128[16] = {0};
         if (aesGcmNiInit(&nk, k128, 16)) {
-            printf("dkTestA3AesNi: ARM stub aesGcmNiInit must return false\n");
+            printf("dkTestAesNi: ARM stub aesGcmNiInit must return false\n");
             failures++;
         }
         uint8_t nonce[12] = {0}, pt[16] = {0}, ct[16] = {0}, tag[16] = {0};
         if (aesGcmNiSeal(&nk, nonce, NULL, 0, pt, 16, ct, tag)) {
-            printf("dkTestA3AesNi: ARM stub aesGcmNiSeal must return false\n");
+            printf("dkTestAesNi: ARM stub aesGcmNiSeal must return false\n");
             failures++;
         }
         if (aesGcmNiOpen(&nk, nonce, NULL, 0, ct, 16, tag, pt)) {
-            printf("dkTestA3AesNi: ARM stub aesGcmNiOpen must return false\n");
+            printf("dkTestAesNi: ARM stub aesGcmNiOpen must return false\n");
             failures++;
         }
-        printf("dkTestA3AesNi: AES-NI not present on this host; stub-guard "
+        printf("dkTestAesNi: AES-NI not present on this host; stub-guard "
                "checks passed; dispatcher backend=SCALAR\n");
         return failures == 0 ? 0 : 1;
     }
@@ -981,25 +979,25 @@ static int dkTestA3AesNiTest(int argc, char *argv[]) {
                    v->pt_len > 0 ? ni_ct : NULL, ni_tag);
 
         if (v->pt_len > 0 && memcmp(scalar_ct, ni_ct, v->pt_len) != 0) {
-            printf("dkTestA3AesNi: CT mismatch on %s\n", v->name);
+            printf("dkTestAesNi: CT mismatch on %s\n", v->name);
             failures++;
         }
         if (memcmp(scalar_tag, ni_tag, 16) != 0) {
-            printf("dkTestA3AesNi: TAG mismatch on %s\n", v->name);
+            printf("dkTestAesNi: TAG mismatch on %s\n", v->name);
             failures++;
         }
 
         uint8_t exp_tag[16];
         a3HexDec(v->tag_hex, exp_tag, 16);
         if (memcmp(ni_tag, exp_tag, 16) != 0) {
-            printf("dkTestA3AesNi: NI tag != NIST on %s\n", v->name);
+            printf("dkTestAesNi: NI tag != NIST on %s\n", v->name);
             failures++;
         }
         if (v->ct_hex != NULL && v->pt_len > 0) {
             uint8_t exp_ct[128];
             a3HexDec(v->ct_hex, exp_ct, v->pt_len);
             if (memcmp(ni_ct, exp_ct, v->pt_len) != 0) {
-                printf("dkTestA3AesNi: NI CT != NIST on %s\n", v->name);
+                printf("dkTestAesNi: NI CT != NIST on %s\n", v->name);
                 failures++;
             }
         }
@@ -1010,7 +1008,7 @@ static int dkTestA3AesNiTest(int argc, char *argv[]) {
         if (!aesGcmOpen(&sk, nonce, aad, v->aad_len,
                         v->pt_len > 0 ? scalar_ct : NULL, v->pt_len, scalar_tag,
                         v->pt_len > 0 ? rec_scalar : NULL)) {
-            printf("dkTestA3AesNi: scalar Open failed on %s\n", v->name);
+            printf("dkTestAesNi: scalar Open failed on %s\n", v->name);
             failures++;
         }
         aesGcmSetForceBackend(AES_GCM_FORCE_AESNI);
@@ -1018,15 +1016,15 @@ static int dkTestA3AesNiTest(int argc, char *argv[]) {
         if (!aesGcmOpen(&nk, nonce, aad, v->aad_len,
                         v->pt_len > 0 ? ni_ct : NULL, v->pt_len, ni_tag,
                         v->pt_len > 0 ? rec_ni : NULL)) {
-            printf("dkTestA3AesNi: NI Open failed on %s\n", v->name);
+            printf("dkTestAesNi: NI Open failed on %s\n", v->name);
             failures++;
         }
         if (v->pt_len > 0 && memcmp(rec_scalar, rec_ni, v->pt_len) != 0) {
-            printf("dkTestA3AesNi: recovered-PT mismatch on %s\n", v->name);
+            printf("dkTestAesNi: recovered-PT mismatch on %s\n", v->name);
             failures++;
         }
         if (v->pt_len > 0 && pt != NULL && memcmp(rec_ni, pt, v->pt_len) != 0) {
-            printf("dkTestA3AesNi: NI Open recovered != original on %s\n",
+            printf("dkTestAesNi: NI Open recovered != original on %s\n",
                    v->name);
             failures++;
         }
@@ -1073,13 +1071,11 @@ static int dkTestA3AesNiTest(int argc, char *argv[]) {
                        ni_tag);
 
             if (n > 0 && memcmp(scalar_ct, ni_ct, n) != 0) {
-                printf("dkTestA3AesNi: sweep CT mismatch kl=%zu n=%zu\n", kl,
-                       n);
+                printf("dkTestAesNi: sweep CT mismatch kl=%zu n=%zu\n", kl, n);
                 failures++;
             }
             if (memcmp(scalar_tag, ni_tag, 16) != 0) {
-                printf("dkTestA3AesNi: sweep TAG mismatch kl=%zu n=%zu\n", kl,
-                       n);
+                printf("dkTestAesNi: sweep TAG mismatch kl=%zu n=%zu\n", kl, n);
                 failures++;
             }
             if (pt) {
@@ -1095,15 +1091,15 @@ static int dkTestA3AesNiTest(int argc, char *argv[]) {
     }
     aesGcmSetForceBackend(AES_GCM_FORCE_AUTO);
 
-    printf("dkTestA3AesNi: NI present; %zu NIST vectors + %zu sweep sizes "
+    printf("dkTestAesNi: NI present; %zu NIST vectors + %zu sweep sizes "
            "x 2 key lengths cross-verified scalar vs AESNI; %d failures\n",
            n_vectors, n_sweep, failures);
     return failures == 0 ? 0 : 1;
 }
 
 /* ARMv8 AES + PMULL backend parity vs portable scalar.
- * Reuses a3HexDec / a3Vector from dkTestA3AesNi above. */
-static int dkTestA4AesArmCryptoTest(int argc, char *argv[]) {
+ * Reuses a3HexDec / a3Vector from dkTestAesNi above. */
+static int dkTestAesArmCryptoTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -1135,8 +1131,7 @@ static int dkTestA4AesArmCryptoTest(int argc, char *argv[]) {
     const bool arm_here = aesGcmArmCryptoAvailable();
 
     if (!arm_here) {
-        printf(
-            "dkTestA4AesArmCrypto: ARMv8 crypto not on this host; stubs OK\n");
+        printf("dkTestAesArmCrypto: ARMv8 crypto not on this host; stubs OK\n");
         return 0;
     }
 
@@ -1174,30 +1169,29 @@ static int dkTestA4AesArmCryptoTest(int argc, char *argv[]) {
                    v->pt_len > 0 ? arm_ct : NULL, arm_tag);
 
         if (v->pt_len > 0 && memcmp(scalar_ct, arm_ct, v->pt_len) != 0) {
-            printf("dkTestA4AesArmCrypto: CT mismatch on %s\n", v->name);
+            printf("dkTestAesArmCrypto: CT mismatch on %s\n", v->name);
             failures++;
         }
         if (memcmp(scalar_tag, arm_tag, 16) != 0) {
-            printf("dkTestA4AesArmCrypto: TAG mismatch on %s\n", v->name);
+            printf("dkTestAesArmCrypto: TAG mismatch on %s\n", v->name);
             failures++;
         }
         uint8_t exp_tag[16];
         a3HexDec(v->tag_hex, exp_tag, 16);
         if (memcmp(arm_tag, exp_tag, 16) != 0) {
-            printf("dkTestA4AesArmCrypto: ARM tag != NIST on %s\n", v->name);
+            printf("dkTestAesArmCrypto: ARM tag != NIST on %s\n", v->name);
             failures++;
         }
     }
     aesGcmSetForceBackend(AES_GCM_FORCE_AUTO);
 
-    printf(
-        "dkTestA4AesArmCrypto: ARMv8 crypto; %zu NIST vectors; %d failures\n",
-        n_vectors, failures);
+    printf("dkTestAesArmCrypto: ARMv8 crypto; %zu NIST vectors; %d failures\n",
+           n_vectors, failures);
     return failures == 0 ? 0 : 1;
 }
 
 /* X25519 canonical small-order list pre-reject. */
-static int dkTestA9X25519SmallOrderRejectTest(int argc, char *argv[]) {
+static int dkTestX25519SmallOrderRejectTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -1246,13 +1240,13 @@ static int dkTestA9X25519SmallOrderRejectTest(int argc, char *argv[]) {
         uint8_t out[32];
         memset(out, 0xCC, sizeof(out));
         if (x25519(out, priv, blacklist[e])) {
-            printf("dkTestA9X25519SmallOrderReject: entry %u must reject\n", e);
+            printf("dkTestX25519SmallOrderReject: entry %u must reject\n", e);
             failures++;
         }
         for (uint32_t i = 0; i < 32; i++) {
             if (out[i] != 0) {
                 printf(
-                    "dkTestA9X25519SmallOrderReject: entry %u out[%u]=0x%02x\n",
+                    "dkTestX25519SmallOrderReject: entry %u out[%u]=0x%02x\n",
                     e, i, out[i]);
                 failures++;
                 break;
@@ -1269,7 +1263,7 @@ static int dkTestA9X25519SmallOrderRejectTest(int argc, char *argv[]) {
         }
         uint8_t out[32];
         if (!x25519(out, priv, peer)) {
-            printf("dkTestA9X25519SmallOrderReject: random %u false-rejected\n",
+            printf("dkTestX25519SmallOrderReject: random %u false-rejected\n",
                    t);
             failures++;
         }
@@ -1289,15 +1283,15 @@ static int dkTestA9X25519SmallOrderRejectTest(int argc, char *argv[]) {
         0x71, 0xf7, 0x54, 0xb4, 0x07, 0x55, 0x77, 0xa2, 0x85, 0x52};
     uint8_t kat_out[32];
     if (!x25519(kat_out, kat_scalar, kat_u)) {
-        printf("dkTestA9X25519SmallOrderReject: KAT pre-rejected\n");
+        printf("dkTestX25519SmallOrderReject: KAT pre-rejected\n");
         failures++;
     } else if (memcmp(kat_out, kat_expect, 32) != 0) {
-        printf("dkTestA9X25519SmallOrderReject: KAT output mismatch\n");
+        printf("dkTestX25519SmallOrderReject: KAT output mismatch\n");
         failures++;
     }
 
     if (failures == 0) {
-        printf("dkTestA9X25519SmallOrderReject: OK\n");
+        printf("dkTestX25519SmallOrderReject: OK\n");
         return 0;
     }
     return 1;
@@ -1339,7 +1333,7 @@ static int a6OneSeal(chacha20ForceBackend backend, const uint8_t *key,
     return ok ? 0 : 1;
 }
 
-static int dkTestA6ChaChaSimdParityTest(int argc, char *argv[]) {
+static int dkTestChaChaSimdParityTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -1349,20 +1343,20 @@ static int dkTestA6ChaChaSimdParityTest(int argc, char *argv[]) {
 
     chacha20SetForceBackend(CHACHA20_FORCE_SCALAR);
     if (chacha20ActiveBackend() != CHACHA20_BACKEND_SCALAR) {
-        printf("dkTestA6ChaChaSimdParity: SCALAR force did not pin\n");
+        printf("dkTestChaChaSimdParity: SCALAR force did not pin\n");
         failures++;
     }
     if (neonOk) {
         chacha20SetForceBackend(CHACHA20_FORCE_NEON);
         if (chacha20ActiveBackend() != CHACHA20_BACKEND_NEON) {
-            printf("dkTestA6ChaChaSimdParity: NEON force did not pin\n");
+            printf("dkTestChaChaSimdParity: NEON force did not pin\n");
             failures++;
         }
     }
     if (avx2Ok) {
         chacha20SetForceBackend(CHACHA20_FORCE_AVX2);
         if (chacha20ActiveBackend() != CHACHA20_BACKEND_AVX2) {
-            printf("dkTestA6ChaChaSimdParity: AVX2 force did not pin\n");
+            printf("dkTestChaChaSimdParity: AVX2 force did not pin\n");
             failures++;
         }
     }
@@ -1393,7 +1387,7 @@ static int dkTestA6ChaChaSimdParityTest(int argc, char *argv[]) {
             }
             if (memcmp(ct, ct_scalar, sizeof(ct)) != 0 ||
                 memcmp(tag, tag_scalar, 16) != 0) {
-                printf("dkTestA6ChaChaSimdParity: NEON vs scalar mismatch RFC "
+                printf("dkTestChaChaSimdParity: NEON vs scalar mismatch RFC "
                        "2.8.2\n");
                 failures++;
             }
@@ -1474,14 +1468,14 @@ static int dkTestA6ChaChaSimdParityTest(int argc, char *argv[]) {
                     continue;
                 }
                 if (pt_len > 0 && memcmp(ct_scalar, ct_simd, pt_len) != 0) {
-                    printf("dkTestA6ChaChaSimdParity: NEON CT mismatch iter %d "
+                    printf("dkTestChaChaSimdParity: NEON CT mismatch iter %d "
                            "len=%zu\n",
                            iter, pt_len);
                     failures++;
                 }
                 if (memcmp(tag_scalar, tag_simd, 16) != 0) {
                     printf(
-                        "dkTestA6ChaChaSimdParity: NEON tag mismatch iter %d\n",
+                        "dkTestChaChaSimdParity: NEON tag mismatch iter %d\n",
                         iter);
                     failures++;
                 }
@@ -1542,7 +1536,7 @@ static int dkTestA6ChaChaSimdParityTest(int argc, char *argv[]) {
             failures++;
         }
         if (memcmp(one_ct, stream_ct, pl) != 0) {
-            printf("dkTestA6ChaChaSimdParity: streaming CT != one-shot\n");
+            printf("dkTestChaChaSimdParity: streaming CT != one-shot\n");
             failures++;
         }
         if (memcmp(one_tag, stream_tag, 16) != 0) {
@@ -1573,18 +1567,18 @@ a6_cleanup:
     chacha20SetForceBackend(CHACHA20_FORCE_AUTO);
 
     if (failures == 0) {
-        printf("dkTestA6ChaChaSimdParity: OK (RFC + 1000 random + streaming; "
+        printf("dkTestChaChaSimdParity: OK (RFC + 1000 random + streaming; "
                "backends: scalar%s%s)\n",
                neonOk ? " + NEON" : "", avx2Ok ? " + AVX2" : "");
         return 0;
     }
-    printf("dkTestA6ChaChaSimdParity: FAILED with %d issues\n", failures);
+    printf("dkTestChaChaSimdParity: FAILED with %d issues\n", failures);
     return 1;
 }
 
 /* Poly1305 SIMD parity — backend-pinned RFC 8439 vectors + 1000
  * random AEAD round-trips assert SIMD bit-identical to scalar. */
-static int dkTestA7Poly1305SimdParityTest(int argc, char *argv[]) {
+static int dkTestPoly1305SimdParityTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -1595,20 +1589,20 @@ static int dkTestA7Poly1305SimdParityTest(int argc, char *argv[]) {
     /* Pin checks: each force value MUST pin the corresponding backend. */
     poly1305SetForceBackend(POLY1305_FORCE_SCALAR);
     if (poly1305ActiveBackend() != POLY1305_BACKEND_SCALAR) {
-        printf("dkTestA7Poly1305SimdParity: SCALAR force did not pin\n");
+        printf("dkTestPoly1305SimdParity: SCALAR force did not pin\n");
         failures++;
     }
     if (pNeonOk) {
         poly1305SetForceBackend(POLY1305_FORCE_NEON);
         if (poly1305ActiveBackend() != POLY1305_BACKEND_NEON) {
-            printf("dkTestA7Poly1305SimdParity: NEON force did not pin\n");
+            printf("dkTestPoly1305SimdParity: NEON force did not pin\n");
             failures++;
         }
     }
     if (pAvx2Ok) {
         poly1305SetForceBackend(POLY1305_FORCE_AVX2);
         if (poly1305ActiveBackend() != POLY1305_BACKEND_AVX2) {
-            printf("dkTestA7Poly1305SimdParity: AVX2 force did not pin\n");
+            printf("dkTestPoly1305SimdParity: AVX2 force did not pin\n");
             failures++;
         }
     }
@@ -1683,13 +1677,13 @@ static int dkTestA7Poly1305SimdParityTest(int argc, char *argv[]) {
                 continue;
             }
             if (pt_len > 0 && memcmp(ct_scalar, ct_simd, pt_len) != 0) {
-                printf("dkTestA7Poly1305SimdParity: NEON CT mismatch iter %d "
+                printf("dkTestPoly1305SimdParity: NEON CT mismatch iter %d "
                        "len=%zu\n",
                        iter, pt_len);
                 failures++;
             }
             if (memcmp(tag_scalar, tag_simd, 16) != 0) {
-                printf("dkTestA7Poly1305SimdParity: NEON tag mismatch iter %d "
+                printf("dkTestPoly1305SimdParity: NEON tag mismatch iter %d "
                        "len=%zu\n",
                        iter, pt_len);
                 failures++;
@@ -1737,18 +1731,18 @@ a7_cleanup:
     chacha20SetForceBackend(CHACHA20_FORCE_AUTO);
 
     if (failures == 0) {
-        printf("dkTestA7Poly1305SimdParity: OK (1000 random AEAD round-trips; "
+        printf("dkTestPoly1305SimdParity: OK (1000 random AEAD round-trips; "
                "backends: scalar%s%s)\n",
                pNeonOk ? " + NEON" : "", pAvx2Ok ? " + AVX2" : "");
         return 0;
     }
-    printf("dkTestA7Poly1305SimdParity: FAILED with %d issues\n", failures);
+    printf("dkTestPoly1305SimdParity: FAILED with %d issues\n", failures);
     return 1;
 }
 
 /* Misc crypto tests bundle (X25519 iter KAT, BLAKE3 derive-key
  * variable input, SHA-256 backend parity). */
-static int dkTestA12X25519Iter1000KATTest(int argc, char *argv[]) {
+static int dkTestX25519Iter1000KATTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -1774,16 +1768,16 @@ static int dkTestA12X25519Iter1000KATTest(int argc, char *argv[]) {
         memcpy(u, k, 32);
         memcpy(k, kn, 32);
         if (i == 1 && memcmp(k, expect_iter1, 32) != 0) {
-            printf("dkTestA12X25519: iter1 mismatch\n");
+            printf("dkTestX25519Iter1000KAT: iter1 mismatch\n");
             failures++;
         }
     }
     if (memcmp(k, expect_iter1000, 32) != 0) {
-        printf("dkTestA12X25519: iter1000 mismatch\n");
+        printf("dkTestX25519Iter1000KAT: iter1000 mismatch\n");
         failures++;
     }
     if (failures == 0) {
-        printf("dkTestA12X25519Iter1000KAT: OK\n");
+        printf("dkTestX25519Iter1000KAT: OK\n");
         return 0;
     }
     return 1;
@@ -1808,7 +1802,7 @@ static void a12HexDec(const char *hex, uint8_t *out, size_t n) {
     }
 }
 
-static int dkTestA12Blake3DeriveKeyVarInputTest(int argc, char *argv[]) {
+static int dkTestBlake3DeriveKeyVarInputTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -1826,13 +1820,13 @@ static int dkTestA12Blake3DeriveKeyVarInputTest(int argc, char *argv[]) {
         uint8_t out[32];
         blake3DeriveKey(context, ctx_len, input, tv->input_len, out, 32);
         if (memcmp(out, expect, 32) != 0) {
-            printf("dkTestA12Blake3DK: KAT mismatch len=%zu\n", tv->input_len);
+            printf("dkTestBlake3DK: KAT mismatch len=%zu\n", tv->input_len);
             failures++;
         }
         zfree(input);
     }
     if (failures == 0) {
-        printf("dkTestA12Blake3DeriveKeyVarInput: OK (%zu KAT)\n",
+        printf("dkTestBlake3DeriveKeyVarInput: OK (%zu KAT)\n",
                BLAKE3_TEST_VECTOR_COUNT);
         return 0;
     }
@@ -1885,7 +1879,7 @@ static uint64_t a12Sha256SplitMix(uint64_t *st) {
     return s ^ (s >> 31);
 }
 
-static int dkTestA12Sha256AllBackendParityTest(int argc, char *argv[]) {
+static int dkTestSha256AllBackendParityTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -1908,7 +1902,9 @@ static int dkTestA12Sha256AllBackendParityTest(int argc, char *argv[]) {
         a12Sha256HashWith(sha256PortableCompressBlocks, buf, len, reference);
         sha256Hash(buf, len, dispatched);
         if (memcmp(reference, dispatched, 32) != 0) {
-            printf("dkTestA12Sha256: dispatched mismatch len=%zu\n", len);
+            printf(
+                "dkTestSha256AllBackendParity: dispatched mismatch len=%zu\n",
+                len);
             failures++;
         }
         if (armOk) {
@@ -1928,7 +1924,7 @@ static int dkTestA12Sha256AllBackendParityTest(int argc, char *argv[]) {
     }
     zfree(buf);
     if (failures == 0) {
-        printf("dkTestA12Sha256AllBackendParity: OK (arm=%d shani=%d)\n",
+        printf("dkTestSha256AllBackendParity: OK (arm=%d shani=%d)\n",
                (int)armOk, (int)shaniOk);
         return 0;
     }
@@ -1958,7 +1954,7 @@ static void a5HexDec(const char *hex, uint8_t *out, size_t out_len) {
     }
 }
 
-static int dkTestA5AesGcmExtendedVectorsTest(int argc, char *argv[]) {
+static int dkTestAesGcmExtendedVectorsTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -2020,28 +2016,31 @@ static int dkTestA5AesGcmExtendedVectorsTest(int argc, char *argv[]) {
         uint8_t ct[128] = {0}, tag[16] = {0};
         if (!aesGcmSeal(&k, nonce, aad, v->aad_len, pt, v->pt_len,
                         v->pt_len > 0 ? ct : NULL, tag)) {
-            printf("dkTestA5 V[%zu]: Seal failed\n", i);
+            printf("dkTestAesGcmExtendedVectors V[%zu]: Seal failed\n", i);
             failures++;
             continue;
         }
         uint8_t exp_tag[16];
         a5HexDec(v->tag_hex, exp_tag, 16);
         if (memcmp(tag, exp_tag, 16) != 0) {
-            printf("dkTestA5 V[%zu]: TAG mismatch on %s\n", i, v->name);
+            printf("dkTestAesGcmExtendedVectors V[%zu]: TAG mismatch on %s\n",
+                   i, v->name);
             failures++;
         }
         if (v->ct_hex != NULL && v->pt_len > 0) {
             uint8_t exp_ct[128];
             a5HexDec(v->ct_hex, exp_ct, v->pt_len);
             if (memcmp(ct, exp_ct, v->pt_len) != 0) {
-                printf("dkTestA5 V[%zu]: CT mismatch on %s\n", i, v->name);
+                printf(
+                    "dkTestAesGcmExtendedVectors V[%zu]: CT mismatch on %s\n",
+                    i, v->name);
                 failures++;
             }
         }
         uint8_t rec[128] = {0};
         if (!aesGcmOpen(&k, nonce, aad, v->aad_len, v->pt_len > 0 ? ct : NULL,
                         v->pt_len, tag, v->pt_len > 0 ? rec : NULL)) {
-            printf("dkTestA5 V[%zu]: Open failed\n", i);
+            printf("dkTestAesGcmExtendedVectors V[%zu]: Open failed\n", i);
             failures++;
             continue;
         }
@@ -2216,16 +2215,16 @@ static int dkTestA5AesGcmExtendedVectorsTest(int argc, char *argv[]) {
     aesGcmSetForceBackend(prev_force);
 
     if (failures == 0) {
-        printf("dkTestA5AesGcmExtendedVectors: OK (3 NIST + 108-sweep + tamper "
+        printf("dkTestAesGcmExtendedVectors: OK (3 NIST + 108-sweep + tamper "
                "+ bound)\n");
         return 0;
     }
-    printf("dkTestA5AesGcmExtendedVectors: %d failures\n", failures);
+    printf("dkTestAesGcmExtendedVectors: %d failures\n", failures);
     return 1;
 }
 
 /* BLAKE3 derive-key context-length test variations. */
-static int dkTestB4Blake3DeriveKeyContextsTest(int argc, char *argv[]) {
+static int dkTestBlake3DeriveKeyContextsTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -2258,13 +2257,17 @@ static int dkTestB4Blake3DeriveKeyContextsTest(int argc, char *argv[]) {
         blake3DeriveKey(ctx_buf, cl, ikm_a, sizeof(ikm_a), out1, OUT_LEN);
         blake3DeriveKey(ctx_buf, cl, ikm_a, sizeof(ikm_a), out2, OUT_LEN);
         if (memcmp(out1, out2, OUT_LEN) != 0) {
-            printf("dkTestB4: determinism fail at ctx_len=%zu\n", cl);
+            printf("dkTestBlake3DeriveKeyContexts: determinism fail at "
+                   "ctx_len=%zu\n",
+                   cl);
             failures++;
         }
         uint8_t out_b[OUT_LEN];
         blake3DeriveKey(ctx_buf, cl, ikm_b, sizeof(ikm_b), out_b, OUT_LEN);
         if (memcmp(out1, out_b, OUT_LEN) == 0) {
-            printf("dkTestB4: ikm-sensitivity fail at ctx_len=%zu\n", cl);
+            printf("dkTestBlake3DeriveKeyContexts: ikm-sensitivity fail at "
+                   "ctx_len=%zu\n",
+                   cl);
             failures++;
         }
         memcpy(per_ctx_out[i], out1, OUT_LEN);
@@ -2273,15 +2276,16 @@ static int dkTestB4Blake3DeriveKeyContextsTest(int argc, char *argv[]) {
     for (size_t a = 0; a < n_ctx; a++) {
         for (size_t b = a + 1; b < n_ctx; b++) {
             if (memcmp(per_ctx_out[a], per_ctx_out[b], OUT_LEN) == 0) {
-                printf("dkTestB4: ctx-len collision: %zu vs %zu\n", ctx_lens[a],
-                       ctx_lens[b]);
+                printf("dkTestBlake3DeriveKeyContexts: ctx-len collision: %zu "
+                       "vs %zu\n",
+                       ctx_lens[a], ctx_lens[b]);
                 failures++;
             }
         }
     }
 
     if (failures == 0) {
-        printf("dkTestB4Blake3DeriveKeyContexts: OK (%zu lengths, %zu pairs)\n",
+        printf("dkTestBlake3DeriveKeyContexts: OK (%zu lengths, %zu pairs)\n",
                n_ctx, (n_ctx * (n_ctx - 1)) / 2);
         return 0;
     }
@@ -2294,7 +2298,7 @@ static int dkTestB4Blake3DeriveKeyContextsTest(int argc, char *argv[]) {
  * unmapped codes MUST return "unknown" (default branch reachable).
  * Pins the 4 new entries 90/91/92/93.
  * ==================================================================== */
-static int dkTestE1PersistTypeNameAllRegisteredTest(int argc, char *argv[]) {
+static int dkTestPersistTypeNameAllRegisteredTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
 
@@ -2335,27 +2339,27 @@ static int dkTestE1PersistTypeNameAllRegisteredTest(int argc, char *argv[]) {
         const char *got = persistTypeName(known[i].code);
         if (got == NULL) {
             printf(
-                "dkTestE1PersistTypeNameAllRegistered: code=%u returned NULL\n",
+                "dkTestPersistTypeNameAllRegistered: code=%u returned NULL\n",
                 (unsigned)known[i].code);
             failures++;
             continue;
         }
         if (got[0] == '\0') {
-            printf("dkTestE1PersistTypeNameAllRegistered: code=%u returned "
+            printf("dkTestPersistTypeNameAllRegistered: code=%u returned "
                    "empty string\n",
                    (unsigned)known[i].code);
             failures++;
             continue;
         }
         if (strcmp(got, "unknown") == 0) {
-            printf("dkTestE1PersistTypeNameAllRegistered: code=%u (expected "
+            printf("dkTestPersistTypeNameAllRegistered: code=%u (expected "
                    "%s) returned \"unknown\"\n",
                    (unsigned)known[i].code, known[i].label);
             failures++;
             continue;
         }
         if (strcmp(got, known[i].label) != 0) {
-            printf("dkTestE1PersistTypeNameAllRegistered: code=%u returned "
+            printf("dkTestPersistTypeNameAllRegistered: code=%u returned "
                    "\"%s\", expected \"%s\"\n",
                    (unsigned)known[i].code, got, known[i].label);
             failures++;
@@ -2363,18 +2367,18 @@ static int dkTestE1PersistTypeNameAllRegisteredTest(int argc, char *argv[]) {
     }
 
     if (strcmp(persistTypeName(PERSIST_TYPE_INVALID), "unknown") != 0) {
-        printf("dkTestE1PersistTypeNameAllRegistered: PERSIST_TYPE_INVALID "
+        printf("dkTestPersistTypeNameAllRegistered: PERSIST_TYPE_INVALID "
                "must map to \"unknown\"\n");
         failures++;
     }
     if (strcmp(persistTypeName((persistType)200), "unknown") != 0) {
-        printf("dkTestE1PersistTypeNameAllRegistered: unmapped code 200 must "
+        printf("dkTestPersistTypeNameAllRegistered: unmapped code 200 must "
                "map to \"unknown\"\n");
         failures++;
     }
 
     if (failures == 0) {
-        printf("dkTestE1PersistTypeNameAllRegistered: OK (%zu types covered)\n",
+        printf("dkTestPersistTypeNameAllRegistered: OK (%zu types covered)\n",
                n);
         return 0;
     }
@@ -2387,8 +2391,8 @@ static int dkTestE1PersistTypeNameAllRegisteredTest(int argc, char *argv[]) {
  * count, size, restore non-NULL, and that the prepared HMAC produces
  * an identical tag in the restored ring for the same id+algo.
  * ==================================================================== */
-static int dkTestE1KeyringPersistOpsDescriptorRoundTripTest(int argc,
-                                                            char *argv[]) {
+static int dkTestKeyringPersistOpsDescriptorRoundTripTest(int argc,
+                                                          char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -2412,7 +2416,7 @@ static int dkTestE1KeyringPersistOpsDescriptorRoundTripTest(int argc,
 
     hmacKeyring *src = hmacKeyringCreate();
     if (src == NULL) {
-        printf("dkTestE1KeyringPersistOpsDescriptorRoundTrip: source create "
+        printf("dkTestKeyringPersistOpsDescriptorRoundTrip: source create "
                "failed\n");
         return 1;
     }
@@ -2420,20 +2424,20 @@ static int dkTestE1KeyringPersistOpsDescriptorRoundTripTest(int argc,
     if (!hmacKeyringInstall(src, ID_A, &hmacAlgoSHA256, key_a, sizeof(key_a),
                             salt_a)) {
         printf(
-            "dkTestE1KeyringPersistOpsDescriptorRoundTrip: install A failed\n");
+            "dkTestKeyringPersistOpsDescriptorRoundTrip: install A failed\n");
         hmacKeyringFree(src);
         return 1;
     }
     if (!hmacKeyringInstall(src, ID_B, &hmacAlgoBLAKE3, key_b, sizeof(key_b),
                             salt_b)) {
         printf(
-            "dkTestE1KeyringPersistOpsDescriptorRoundTrip: install B failed\n");
+            "dkTestKeyringPersistOpsDescriptorRoundTrip: install B failed\n");
         hmacKeyringFree(src);
         return 1;
     }
 
     if (persistOpsHmacKeyring.type != PERSIST_TYPE_HMAC_KEYRING) {
-        printf("dkTestE1KeyringPersistOpsDescriptorRoundTrip: descriptor type "
+        printf("dkTestKeyringPersistOpsDescriptorRoundTrip: descriptor type "
                "mismatch (got %u)\n",
                (unsigned)persistOpsHmacKeyring.type);
         failures++;
@@ -2442,7 +2446,7 @@ static int dkTestE1KeyringPersistOpsDescriptorRoundTripTest(int argc,
         persistOpsHmacKeyring.restore == NULL ||
         persistOpsHmacKeyring.count == NULL ||
         persistOpsHmacKeyring.free == NULL) {
-        printf("dkTestE1KeyringPersistOpsDescriptorRoundTrip: descriptor "
+        printf("dkTestKeyringPersistOpsDescriptorRoundTrip: descriptor "
                "missing required ops\n");
         hmacKeyringFree(src);
         return 1;
@@ -2450,7 +2454,7 @@ static int dkTestE1KeyringPersistOpsDescriptorRoundTripTest(int argc,
 
     const size_t src_count = persistOpsHmacKeyring.count(src);
     if (src_count != 2u) {
-        printf("dkTestE1KeyringPersistOpsDescriptorRoundTrip: descriptor count "
+        printf("dkTestKeyringPersistOpsDescriptorRoundTrip: descriptor count "
                "expected 2, got %zu\n",
                src_count);
         failures++;
@@ -2459,14 +2463,14 @@ static int dkTestE1KeyringPersistOpsDescriptorRoundTripTest(int argc,
     size_t snap_len = 0;
     uint8_t *snap = persistOpsHmacKeyring.snapshot(src, &snap_len);
     if (snap == NULL || snap_len == 0) {
-        printf("dkTestE1KeyringPersistOpsDescriptorRoundTrip: snapshot "
+        printf("dkTestKeyringPersistOpsDescriptorRoundTrip: snapshot "
                "returned empty\n");
         hmacKeyringFree(src);
         return 1;
     }
     if (persistOpsHmacKeyring.estimateSize != NULL &&
         persistOpsHmacKeyring.estimateSize(src) != snap_len) {
-        printf("dkTestE1KeyringPersistOpsDescriptorRoundTrip: estimateSize "
+        printf("dkTestKeyringPersistOpsDescriptorRoundTrip: estimateSize "
                "disagrees with snapshot length\n");
         failures++;
     }
@@ -2477,7 +2481,7 @@ static int dkTestE1KeyringPersistOpsDescriptorRoundTripTest(int argc,
     const hmacKey *src_a = hmacKeyringLookup(src, ID_A);
     const hmacKey *src_b = hmacKeyringLookup(src, ID_B);
     if (src_a == NULL || src_b == NULL) {
-        printf("dkTestE1KeyringPersistOpsDescriptorRoundTrip: source lookup "
+        printf("dkTestKeyringPersistOpsDescriptorRoundTrip: source lookup "
                "failed\n");
         zfree(snap);
         hmacKeyringFree(src);
@@ -2489,7 +2493,7 @@ static int dkTestE1KeyringPersistOpsDescriptorRoundTripTest(int argc,
     hmacKeyring *dst =
         (hmacKeyring *)persistOpsHmacKeyring.restore(snap, snap_len);
     if (dst == NULL) {
-        printf("dkTestE1KeyringPersistOpsDescriptorRoundTrip: descriptor "
+        printf("dkTestKeyringPersistOpsDescriptorRoundTrip: descriptor "
                "restore returned NULL\n");
         zfree(snap);
         hmacKeyringFree(src);
@@ -2497,7 +2501,7 @@ static int dkTestE1KeyringPersistOpsDescriptorRoundTripTest(int argc,
     }
 
     if (persistOpsHmacKeyring.count(dst) != src_count) {
-        printf("dkTestE1KeyringPersistOpsDescriptorRoundTrip: restored count "
+        printf("dkTestKeyringPersistOpsDescriptorRoundTrip: restored count "
                "mismatch (got %zu)\n",
                persistOpsHmacKeyring.count(dst));
         failures++;
@@ -2506,7 +2510,7 @@ static int dkTestE1KeyringPersistOpsDescriptorRoundTripTest(int argc,
     const hmacKey *dst_a = hmacKeyringLookup(dst, ID_A);
     const hmacKey *dst_b = hmacKeyringLookup(dst, ID_B);
     if (dst_a == NULL || dst_b == NULL) {
-        printf("dkTestE1KeyringPersistOpsDescriptorRoundTrip: restored lookup "
+        printf("dkTestKeyringPersistOpsDescriptorRoundTrip: restored lookup "
                "failed\n");
         failures++;
     } else {
@@ -2515,12 +2519,12 @@ static int dkTestE1KeyringPersistOpsDescriptorRoundTripTest(int argc,
         hmacComputeWithKey(dst_a, probe, sizeof(probe), mac_dst_a);
         hmacComputeWithKey(dst_b, probe, sizeof(probe), mac_dst_b);
         if (memcmp(mac_src_a, mac_dst_a, hmacAlgoSHA256.digest_size) != 0) {
-            printf("dkTestE1KeyringPersistOpsDescriptorRoundTrip: MAC under "
+            printf("dkTestKeyringPersistOpsDescriptorRoundTrip: MAC under "
                    "ID_A drifted after round-trip\n");
             failures++;
         }
         if (memcmp(mac_src_b, mac_dst_b, hmacAlgoBLAKE3.digest_size) != 0) {
-            printf("dkTestE1KeyringPersistOpsDescriptorRoundTrip: MAC under "
+            printf("dkTestKeyringPersistOpsDescriptorRoundTrip: MAC under "
                    "ID_B drifted after round-trip\n");
             failures++;
         }
@@ -2531,7 +2535,7 @@ static int dkTestE1KeyringPersistOpsDescriptorRoundTripTest(int argc,
     hmacKeyringFree(src);
 
     if (failures == 0) {
-        printf("dkTestE1KeyringPersistOpsDescriptorRoundTrip: OK (2 keys "
+        printf("dkTestKeyringPersistOpsDescriptorRoundTrip: OK (2 keys "
                "round-tripped, MACs match)\n");
         return 0;
     }
@@ -2543,8 +2547,7 @@ static int dkTestE1KeyringPersistOpsDescriptorRoundTripTest(int argc,
  * small 4-node ring, snapshots via descriptor, restores via descriptor,
  * asserts structural equality (node count, descriptor count agrees).
  * ==================================================================== */
-static int dkTestE1RingPersistOpsDescriptorRoundTripTest(int argc,
-                                                         char *argv[]) {
+static int dkTestRingPersistOpsDescriptorRoundTripTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -2555,8 +2558,7 @@ static int dkTestE1RingPersistOpsDescriptorRoundTripTest(int argc,
     };
     clusterRing *src = clusterRingNew(&config);
     if (src == NULL) {
-        printf(
-            "dkTestE1RingPersistOpsDescriptorRoundTrip: ring create failed\n");
+        printf("dkTestRingPersistOpsDescriptorRoundTrip: ring create failed\n");
         return 1;
     }
     const uint32_t kNodes = 4u;
@@ -2571,7 +2573,7 @@ static int dkTestE1RingPersistOpsDescriptorRoundTripTest(int argc,
     }
 
     if (persistOpsClusterRing.type != PERSIST_TYPE_CLUSTER_RING) {
-        printf("dkTestE1RingPersistOpsDescriptorRoundTrip: descriptor type "
+        printf("dkTestRingPersistOpsDescriptorRoundTrip: descriptor type "
                "mismatch (got %u)\n",
                (unsigned)persistOpsClusterRing.type);
         failures++;
@@ -2580,14 +2582,14 @@ static int dkTestE1RingPersistOpsDescriptorRoundTripTest(int argc,
         persistOpsClusterRing.restore == NULL ||
         persistOpsClusterRing.count == NULL ||
         persistOpsClusterRing.free == NULL) {
-        printf("dkTestE1RingPersistOpsDescriptorRoundTrip: descriptor missing "
+        printf("dkTestRingPersistOpsDescriptorRoundTrip: descriptor missing "
                "required ops\n");
         clusterRingFree(src);
         return 1;
     }
 
     if (persistOpsClusterRing.count(src) != (size_t)kNodes) {
-        printf("dkTestE1RingPersistOpsDescriptorRoundTrip: descriptor count "
+        printf("dkTestRingPersistOpsDescriptorRoundTrip: descriptor count "
                "expected %u, got %zu\n",
                kNodes, persistOpsClusterRing.count(src));
         failures++;
@@ -2596,14 +2598,14 @@ static int dkTestE1RingPersistOpsDescriptorRoundTripTest(int argc,
     size_t snap_len = 0;
     uint8_t *snap = persistOpsClusterRing.snapshot(src, &snap_len);
     if (snap == NULL || snap_len == 0) {
-        printf("dkTestE1RingPersistOpsDescriptorRoundTrip: snapshot returned "
+        printf("dkTestRingPersistOpsDescriptorRoundTrip: snapshot returned "
                "empty\n");
         clusterRingFree(src);
         return 1;
     }
     if (persistOpsClusterRing.estimateSize != NULL &&
         persistOpsClusterRing.estimateSize(src) != snap_len) {
-        printf("dkTestE1RingPersistOpsDescriptorRoundTrip: estimateSize "
+        printf("dkTestRingPersistOpsDescriptorRoundTrip: estimateSize "
                "disagrees with snapshot length\n");
         failures++;
     }
@@ -2611,20 +2613,20 @@ static int dkTestE1RingPersistOpsDescriptorRoundTripTest(int argc,
     clusterRing *dst =
         (clusterRing *)persistOpsClusterRing.restore(snap, snap_len);
     if (dst == NULL) {
-        printf("dkTestE1RingPersistOpsDescriptorRoundTrip: restore returned "
+        printf("dkTestRingPersistOpsDescriptorRoundTrip: restore returned "
                "NULL\n");
         zfree(snap);
         clusterRingFree(src);
         return 1;
     }
     if (clusterRingNodeCount(dst) != kNodes) {
-        printf("dkTestE1RingPersistOpsDescriptorRoundTrip: restored node count "
+        printf("dkTestRingPersistOpsDescriptorRoundTrip: restored node count "
                "expected %u, got %u\n",
                kNodes, clusterRingNodeCount(dst));
         failures++;
     }
     if (persistOpsClusterRing.count(dst) != (size_t)kNodes) {
-        printf("dkTestE1RingPersistOpsDescriptorRoundTrip: descriptor count "
+        printf("dkTestRingPersistOpsDescriptorRoundTrip: descriptor count "
                "after restore expected %u, got %zu\n",
                kNodes, persistOpsClusterRing.count(dst));
         failures++;
@@ -2635,7 +2637,7 @@ static int dkTestE1RingPersistOpsDescriptorRoundTripTest(int argc,
     clusterRingFree(src);
 
     if (failures == 0) {
-        printf("dkTestE1RingPersistOpsDescriptorRoundTrip: OK (%u-node ring "
+        printf("dkTestRingPersistOpsDescriptorRoundTrip: OK (%u-node ring "
                "round-tripped)\n",
                kNodes);
         return 0;
@@ -2649,22 +2651,22 @@ typedef struct {
     persistType type;
     bool sawReplayState;
     bool applyInvoked;
-} dkTestE11ApplyObservation;
+} dkTestTieredApplyObservation;
 
-static dkTestE11ApplyObservation *dkTestE11CurrentObservation = NULL;
+static dkTestTieredApplyObservation *dkTestTieredCurrentObservation = NULL;
 
-static bool dkTestE11ApplyOpWrapper(void *structure, persistOp op,
-                                    const uint8_t *data, size_t len) {
-    if (dkTestE11CurrentObservation) {
-        dkTestE11CurrentObservation->applyInvoked = true;
+static bool dkTestTieredApplyOpWrapper(void *structure, persistOp op,
+                                       const uint8_t *data, size_t len) {
+    if (dkTestTieredCurrentObservation) {
+        dkTestTieredCurrentObservation->applyInvoked = true;
         if (persistGetReplayState() != NULL) {
-            dkTestE11CurrentObservation->sawReplayState = true;
+            dkTestTieredCurrentObservation->sawReplayState = true;
         }
     }
     return persistOpsMultilist.applyOp(structure, op, data, len);
 }
 
-static int dkTestE11PersistMultilistTieredApplyTest(int argc, char *argv[]) {
+static int dkTestPersistMultilistTieredApplyTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
 
@@ -2686,20 +2688,22 @@ static int dkTestE11PersistMultilistTieredApplyTest(int argc, char *argv[]) {
     for (size_t t = 0; t < nTiers; t++) {
         persistOps tierOps = persistOpsMultilist;
         tierOps.type = tiers[t];
-        tierOps.applyOp = dkTestE11ApplyOpWrapper;
+        tierOps.applyOp = dkTestTieredApplyOpWrapper;
 
-        dkTestE11ApplyObservation obs = {
+        dkTestTieredApplyObservation obs = {
             .type = tiers[t],
             .sawReplayState = false,
             .applyInvoked = false,
         };
-        dkTestE11CurrentObservation = &obs;
+        dkTestTieredCurrentObservation = &obs;
 
         multilist *ml = multilistNew(FLEX_CAP_LEVEL_2048, 0);
         if (!ml) {
-            printf("dkTestE11[%s]: multilistNew failed\n", tierLabels[t]);
+            printf(
+                "dkTestPersistMultilistTieredApply[%s]: multilistNew failed\n",
+                tierLabels[t]);
             failures++;
-            dkTestE11CurrentObservation = NULL;
+            dkTestTieredCurrentObservation = NULL;
             continue;
         }
         databox seed = DATABOX_SIGNED(1);
@@ -2707,10 +2711,12 @@ static int dkTestE11PersistMultilistTieredApplyTest(int argc, char *argv[]) {
 
         persist *p = persistCreate(&tierOps, NULL);
         if (!p) {
-            printf("dkTestE11[%s]: persistCreate failed\n", tierLabels[t]);
+            printf(
+                "dkTestPersistMultilistTieredApply[%s]: persistCreate failed\n",
+                tierLabels[t]);
             multilistFree(ml);
             failures++;
-            dkTestE11CurrentObservation = NULL;
+            dkTestTieredCurrentObservation = NULL;
             continue;
         }
 
@@ -2720,47 +2726,55 @@ static int dkTestE11PersistMultilistTieredApplyTest(int argc, char *argv[]) {
         persistAttachWAL(p, walStore);
 
         if (!persistSnapshot(p, ml)) {
-            printf("dkTestE11[%s]: persistSnapshot failed\n", tierLabels[t]);
+            printf("dkTestPersistMultilistTieredApply[%s]: persistSnapshot "
+                   "failed\n",
+                   tierLabels[t]);
             multilistFree(ml);
             persistClose(p);
             failures++;
-            dkTestE11CurrentObservation = NULL;
+            dkTestTieredCurrentObservation = NULL;
             continue;
         }
 
         databox pushBox = DATABOX_SIGNED(42);
         if (!persistLogOp(p, PERSIST_OP_PUSH_TAIL, &pushBox, 1)) {
-            printf("dkTestE11[%s]: persistLogOp failed\n", tierLabels[t]);
+            printf(
+                "dkTestPersistMultilistTieredApply[%s]: persistLogOp failed\n",
+                tierLabels[t]);
             multilistFree(ml);
             persistClose(p);
             failures++;
-            dkTestE11CurrentObservation = NULL;
+            dkTestTieredCurrentObservation = NULL;
             continue;
         }
         persistSync(p);
 
         multilist *recovered = persistRecover(p);
         if (!recovered) {
-            printf("dkTestE11[%s]: persistRecover returned NULL\n",
+            printf("dkTestPersistMultilistTieredApply[%s]: persistRecover "
+                   "returned NULL\n",
                    tierLabels[t]);
             multilistFree(ml);
             persistClose(p);
             failures++;
-            dkTestE11CurrentObservation = NULL;
+            dkTestTieredCurrentObservation = NULL;
             continue;
         }
 
         if (!obs.applyInvoked) {
-            printf("dkTestE11[%s]: WAL apply callback never invoked\n",
+            printf("dkTestPersistMultilistTieredApply[%s]: WAL apply callback "
+                   "never invoked\n",
                    tierLabels[t]);
             failures++;
         } else if (!obs.sawReplayState) {
-            printf("dkTestE11[%s]: persistGetReplayState() NULL during apply\n",
+            printf("dkTestPersistMultilistTieredApply[%s]: "
+                   "persistGetReplayState() NULL during apply\n",
                    tierLabels[t]);
             failures++;
         }
         if (multilistCount(recovered) != 2) {
-            printf("dkTestE11[%s]: expected 2 elements after replay, got %zu\n",
+            printf("dkTestPersistMultilistTieredApply[%s]: expected 2 elements "
+                   "after replay, got %zu\n",
                    tierLabels[t], multilistCount(recovered));
             failures++;
         }
@@ -2768,11 +2782,11 @@ static int dkTestE11PersistMultilistTieredApplyTest(int argc, char *argv[]) {
         multilistFree(ml);
         multilistFree(recovered);
         persistClose(p);
-        dkTestE11CurrentObservation = NULL;
+        dkTestTieredCurrentObservation = NULL;
     }
 
     if (failures == 0) {
-        printf("dkTestE11PersistMultilistTieredApply: OK (%zu tiers covered)\n",
+        printf("dkTestPersistMultilistTieredApply: OK (%zu tiers covered)\n",
                nTiers);
         return 0;
     }
@@ -2786,8 +2800,8 @@ static bool dkE1MailboxAcceptApply(const clusterFrame *frame, void *ctx) {
     return true;
 }
 
-static int dkTestE1MailboxPersistOpsDescriptorRoundTripTest(int argc,
-                                                            char *argv[]) {
+static int dkTestMailboxPersistOpsDescriptorRoundTripTest(int argc,
+                                                          char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -2831,14 +2845,14 @@ static int dkTestE1MailboxPersistOpsDescriptorRoundTripTest(int argc,
             if (!clusterMailboxSeal(src, peers[p].origin_id, seq, 0x01, payload,
                                     sizeof(payload), KID, scratch,
                                     sizeof(scratch), &written)) {
-                printf("dkTestE1MailboxPersistOpsDescriptorRoundTrip: seal "
+                printf("dkTestMailboxPersistOpsDescriptorRoundTrip: seal "
                        "fail\n");
                 failures++;
                 goto done_src;
             }
             if (clusterMailboxIngest(src, scratch, written, KID) !=
                 CLUSTER_MAILBOX_OK) {
-                printf("dkTestE1MailboxPersistOpsDescriptorRoundTrip: ingest "
+                printf("dkTestMailboxPersistOpsDescriptorRoundTrip: ingest "
                        "fail\n");
                 failures++;
                 goto done_src;
@@ -2878,7 +2892,7 @@ static int dkTestE1MailboxPersistOpsDescriptorRoundTripTest(int argc,
     clusterMailbox *dst =
         (clusterMailbox *)persistOpsClusterMailbox.restore(snap, snap_len);
     if (dst == NULL) {
-        printf("dkTestE1MailboxPersistOpsDescriptorRoundTrip: restore NULL\n");
+        printf("dkTestMailboxPersistOpsDescriptorRoundTrip: restore NULL\n");
         failures++;
         zfree(snap);
         goto done_src;
@@ -2943,7 +2957,7 @@ done_src:
     clusterMailboxFree(src);
     hmacKeyringFree(ring);
     if (failures == 0) {
-        printf("dkTestE1MailboxPersistOpsDescriptorRoundTrip: OK (%zu origins, "
+        printf("dkTestMailboxPersistOpsDescriptorRoundTrip: OK (%zu origins, "
                "attach + post-attach ingest)\n",
                kPeers);
         return 0;
@@ -2957,7 +2971,7 @@ done_src:
  * around the AVX2-8 / NEON-4 thresholds. Skips the AVX2 assertion when
  * AVX2 is not present on the host (e.g. ARM dev machines).
  * ==================================================================== */
-static int dkTestB1Blake3Avx2DispatchTest(int argc, char *argv[]) {
+static int dkTestBlake3Avx2DispatchTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -2968,14 +2982,15 @@ static int dkTestB1Blake3Avx2DispatchTest(int argc, char *argv[]) {
     const bool avx2_here = blake3AVX2Available();
 
     if (avx2_here && backend != BLAKE3_BACKEND_AVX2) {
-        printf("dkTestB1: AVX2 available but dispatcher reports backend=%d "
+        printf("dkTestBlake3Avx2Dispatch: AVX2 available but dispatcher "
+               "reports backend=%d "
                "(expected %d)\n",
                (int)backend, (int)BLAKE3_BACKEND_AVX2);
         failures++;
     }
     if (!avx2_here && backend == BLAKE3_BACKEND_AVX2) {
-        printf(
-            "dkTestB1: dispatcher reports AVX2 but probe says unavailable\n");
+        printf("dkTestBlake3Avx2Dispatch: dispatcher reports AVX2 but probe "
+               "says unavailable\n");
         failures++;
     }
 
@@ -2984,7 +2999,7 @@ static int dkTestB1Blake3Avx2DispatchTest(int argc, char *argv[]) {
     const size_t N = 32u * 1024u;
     uint8_t *buf = (uint8_t *)zmalloc(N);
     if (buf == NULL) {
-        printf("dkTestB1: zmalloc(%zu) failed\n", N);
+        printf("dkTestBlake3Avx2Dispatch: zmalloc(%zu) failed\n", N);
         return 1;
     }
     uint64_t s = 0xB1A75D15B17C0DE5ULL;
@@ -3002,7 +3017,8 @@ static int dkTestB1Blake3Avx2DispatchTest(int argc, char *argv[]) {
     uint8_t got_auto[BLAKE3_OUT_LEN];
     blake3Hash(buf, N, got_auto);
     if (memcmp(expected, got_auto, BLAKE3_OUT_LEN) != 0) {
-        printf("dkTestB1: AUTO digest differs from scalar reference\n");
+        printf("dkTestBlake3Avx2Dispatch: AUTO digest differs from scalar "
+               "reference\n");
         failures++;
     }
 
@@ -3010,7 +3026,8 @@ static int dkTestB1Blake3Avx2DispatchTest(int argc, char *argv[]) {
     uint8_t got_simd[BLAKE3_OUT_LEN];
     blake3Hash(buf, N, got_simd);
     if (memcmp(expected, got_simd, BLAKE3_OUT_LEN) != 0) {
-        printf("dkTestB1: SIMD-forced digest differs from scalar reference "
+        printf("dkTestBlake3Avx2Dispatch: SIMD-forced digest differs from "
+               "scalar reference "
                "(backend=%d)\n",
                (int)blake3DispatcherActiveBackend());
         failures++;
@@ -3033,7 +3050,8 @@ static int dkTestB1Blake3Avx2DispatchTest(int argc, char *argv[]) {
         blake3SetForceImpl(BLAKE3_IMPL_AUTO);
         blake3Hash(buf, len, obs);
         if (memcmp(ref, obs, BLAKE3_OUT_LEN) != 0) {
-            printf("dkTestB1: dispatch digest mismatch at chunks=%zu "
+            printf("dkTestBlake3Avx2Dispatch: dispatch digest mismatch at "
+                   "chunks=%zu "
                    "(len=%zu)\n",
                    sweep_chunks[i], len);
             failures++;
@@ -3058,13 +3076,13 @@ static int dkTestB1Blake3Avx2DispatchTest(int argc, char *argv[]) {
     }
 
     if (!avx2_here) {
-        printf("dkTestB1Blake3Avx2Dispatch: skipped AVX2 assertion "
+        printf("dkTestBlake3Avx2Dispatch: skipped AVX2 assertion "
                "(AVX2 not present on this host); dispatcher selected "
                "backend=%s; %zu chunk-counts swept against scalar "
                "reference; %d failures\n",
                backend_name, n_sweep, failures);
     } else {
-        printf("dkTestB1Blake3Avx2Dispatch: AVX2 present; dispatcher "
+        printf("dkTestBlake3Avx2Dispatch: AVX2 present; dispatcher "
                "selected backend=%s; 32 KiB buffer and %zu chunk-counts "
                "swept against scalar reference; %d failures\n",
                backend_name, n_sweep, failures);
@@ -3080,7 +3098,7 @@ static int dkTestB1Blake3Avx2DispatchTest(int argc, char *argv[]) {
  * to issue a zero-salt nonce from a slot that wasn't installed as
  * unsalted. Closes the cross-process nonce-collision footgun.
  * ==================================================================== */
-static int dkTestC1KeyringRequireSaltTest(int argc, char *argv[]) {
+static int dkTestKeyringRequireSaltTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -3089,7 +3107,7 @@ static int dkTestC1KeyringRequireSaltTest(int argc, char *argv[]) {
     {
         hmacKeyring *ring = hmacKeyringCreate();
         if (ring == NULL) {
-            printf("dkTestC1KeyringRequireSalt: create failed\n");
+            printf("dkTestKeyringRequireSalt: create failed\n");
             return 1;
         }
         const uint8_t key[32] = {0xC1, 0xA1, 0xC1, 0xA1};
@@ -3097,25 +3115,25 @@ static int dkTestC1KeyringRequireSaltTest(int argc, char *argv[]) {
                                                             0xEF};
         if (!hmacKeyringInstall(ring, 1u, &hmacAlgoSHA256, key, sizeof(key),
                                 salt)) {
-            printf("dkTestC1KeyringRequireSalt: salted install must succeed\n");
+            printf("dkTestKeyringRequireSalt: salted install must succeed\n");
             failures++;
         } else {
             uint8_t nonce[12] = {0};
             if (!hmacKeyringNextAeadNonce(ring, 1u, nonce)) {
-                printf("dkTestC1KeyringRequireSalt: NextAeadNonce must succeed "
+                printf("dkTestKeyringRequireSalt: NextAeadNonce must succeed "
                        "on salted slot\n");
                 failures++;
             }
             if (nonce[8] != 0xDE || nonce[9] != 0xAD || nonce[10] != 0xBE ||
                 nonce[11] != 0xEF) {
-                printf("dkTestC1KeyringRequireSalt: nonce suffix "
+                printf("dkTestKeyringRequireSalt: nonce suffix "
                        "%02x%02x%02x%02x != salt\n",
                        nonce[8], nonce[9], nonce[10], nonce[11]);
                 failures++;
             }
             for (size_t i = 0; i < 8; i++) {
                 if (nonce[i] != 0) {
-                    printf("dkTestC1KeyringRequireSalt: nonce[%zu]=0x%02x != 0 "
+                    printf("dkTestKeyringRequireSalt: nonce[%zu]=0x%02x != 0 "
                            "(counter)\n",
                            i, nonce[i]);
                     failures++;
@@ -3132,20 +3150,19 @@ static int dkTestC1KeyringRequireSaltTest(int argc, char *argv[]) {
         const uint8_t key[32] = {0x11, 0x22, 0x33, 0x44};
         if (!hmacKeyringInstallUnsalted(ring, 2u, &hmacAlgoSHA256, key,
                                         sizeof(key))) {
-            printf(
-                "dkTestC1KeyringRequireSalt: InstallUnsalted must succeed\n");
+            printf("dkTestKeyringRequireSalt: InstallUnsalted must succeed\n");
             failures++;
         }
         uint8_t nonce[12];
         memset(nonce, 0xFF, sizeof(nonce));
         if (!hmacKeyringNextAeadNonce(ring, 2u, nonce)) {
-            printf("dkTestC1KeyringRequireSalt: NextAeadNonce must succeed on "
+            printf("dkTestKeyringRequireSalt: NextAeadNonce must succeed on "
                    "Unsalted slot\n");
             failures++;
         }
         for (size_t i = 0; i < 12; i++) {
             if (nonce[i] != 0) {
-                printf("dkTestC1KeyringRequireSalt: Unsalted nonce0 byte %zu "
+                printf("dkTestKeyringRequireSalt: Unsalted nonce0 byte %zu "
                        "non-zero (0x%02x)\n",
                        i, nonce[i]);
                 failures++;
@@ -3162,19 +3179,19 @@ static int dkTestC1KeyringRequireSaltTest(int argc, char *argv[]) {
         const uint8_t zero_salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {0};
         if (hmacKeyringInstall(ring, 3u, &hmacAlgoSHA256, key, sizeof(key),
                                zero_salt)) {
-            printf("dkTestC1KeyringRequireSalt: salted Install must REFUSE "
+            printf("dkTestKeyringRequireSalt: salted Install must REFUSE "
                    "zero salt\n");
             failures++;
         }
         if (hmacKeyringSize(ring) != 0) {
-            printf("dkTestC1KeyringRequireSalt: ring size %zu after refused "
+            printf("dkTestKeyringRequireSalt: ring size %zu after refused "
                    "install (expected 0)\n",
                    hmacKeyringSize(ring));
             failures++;
         }
         if (hmacKeyringInstall(ring, 3u, &hmacAlgoSHA256, key, sizeof(key),
                                NULL)) {
-            printf("dkTestC1KeyringRequireSalt: salted Install must REFUSE "
+            printf("dkTestKeyringRequireSalt: salted Install must REFUSE "
                    "NULL salt\n");
             failures++;
         }
@@ -3190,14 +3207,14 @@ static int dkTestC1KeyringRequireSaltTest(int argc, char *argv[]) {
         if (!hmacKeyringInstall(ring, 4u, &hmacAlgoSHA256, key, sizeof(key),
                                 salt)) {
             printf(
-                "dkTestC1KeyringRequireSalt: salted install (case 4) failed\n");
+                "dkTestKeyringRequireSalt: salted install (case 4) failed\n");
             failures++;
         }
         const uint8_t zero_salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {0};
         hmacKeyringSetAeadSalt(ring, 4u, zero_salt);
         uint8_t nonce[12];
         if (hmacKeyringNextAeadNonce(ring, 4u, nonce)) {
-            printf("dkTestC1KeyringRequireSalt: NextAeadNonce must REFUSE "
+            printf("dkTestKeyringRequireSalt: NextAeadNonce must REFUSE "
                    "zero-salt on salted slot\n");
             failures++;
         }
@@ -3205,7 +3222,7 @@ static int dkTestC1KeyringRequireSaltTest(int argc, char *argv[]) {
     }
 
     if (failures == 0) {
-        printf("dkTestC1KeyringRequireSalt: OK (4 cases)\n");
+        printf("dkTestKeyringRequireSalt: OK (4 cases)\n");
         return 0;
     }
     return 1;
@@ -3219,14 +3236,14 @@ static int dkTestC1KeyringRequireSaltTest(int argc, char *argv[]) {
  * PERSIST_ERR_KEY_GENERATION_MISMATCH. persistRebindKeyring is the
  * official rotation recovery entry point.
  * ==================================================================== */
-static int dkTestC2KeyringPersistRetireAfterAttachTest(int argc, char *argv[]) {
+static int dkTestKeyringPersistRetireAfterAttachTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
 
     hmacKeyring *ring = hmacKeyringCreate();
     if (ring == NULL) {
-        printf("dkTestC2KeyringPersistRetireAfterAttach: create failed\n");
+        printf("dkTestKeyringPersistRetireAfterAttach: create failed\n");
         return 1;
     }
     const uint8_t key1[32] = {
@@ -3239,8 +3256,7 @@ static int dkTestC2KeyringPersistRetireAfterAttachTest(int argc, char *argv[]) {
     const hmacKeyId kid1 = 101u;
     if (!hmacKeyringInstall(ring, kid1, &hmacAlgoSHA256, key1, sizeof(key1),
                             salt1)) {
-        printf(
-            "dkTestC2KeyringPersistRetireAfterAttach: install kid1 failed\n");
+        printf("dkTestKeyringPersistRetireAfterAttach: install kid1 failed\n");
         hmacKeyringFree(ring);
         return 1;
     }
@@ -3251,12 +3267,12 @@ static int dkTestC2KeyringPersistRetireAfterAttachTest(int argc, char *argv[]) {
     persistStore *snapStore = persistStoreMemory(0);
     persistAttachSnapshot(p, snapStore);
     if (!persistAttachKeyring(p, ring, kid1)) {
-        printf("dkTestC2KeyringPersistRetireAfterAttach: attach kid1 failed\n");
+        printf("dkTestKeyringPersistRetireAfterAttach: attach kid1 failed\n");
         failures++;
         goto cleanup;
     }
     if (persistLastError(p) != PERSIST_ERR_NONE) {
-        printf("dkTestC2KeyringPersistRetireAfterAttach: lastError non-zero "
+        printf("dkTestKeyringPersistRetireAfterAttach: lastError non-zero "
                "after attach (got %d)\n",
                (int)persistLastError(p));
         failures++;
@@ -3265,27 +3281,27 @@ static int dkTestC2KeyringPersistRetireAfterAttachTest(int argc, char *argv[]) {
     flex *payload = flexNew();
     flexPushBytes(&payload, "c2-pre-retire", 13, FLEX_ENDPOINT_TAIL);
     if (!persistSnapshot(p, payload)) {
-        printf("dkTestC2KeyringPersistRetireAfterAttach: pre-retire snapshot "
+        printf("dkTestKeyringPersistRetireAfterAttach: pre-retire snapshot "
                "failed (lastError=%d)\n",
                (int)persistLastError(p));
         failures++;
     }
     if (persistLastError(p) != PERSIST_ERR_NONE) {
-        printf("dkTestC2KeyringPersistRetireAfterAttach: pre-retire success "
+        printf("dkTestKeyringPersistRetireAfterAttach: pre-retire success "
                "left lastError=%d\n",
                (int)persistLastError(p));
         failures++;
     }
 
     if (!hmacKeyringRetire(ring, kid1)) {
-        printf("dkTestC2KeyringPersistRetireAfterAttach: retire kid1 failed\n");
+        printf("dkTestKeyringPersistRetireAfterAttach: retire kid1 failed\n");
         failures++;
         goto cleanup_payload;
     }
 
     const bool secondSnap = persistSnapshot(p, payload);
     if (secondSnap) {
-        printf("dkTestC2KeyringPersistRetireAfterAttach: post-retire snapshot "
+        printf("dkTestKeyringPersistRetireAfterAttach: post-retire snapshot "
                "MUST fail (it returned true; UAF / silent-zero hazard)\n");
         failures++;
     }
@@ -3293,7 +3309,7 @@ static int dkTestC2KeyringPersistRetireAfterAttachTest(int argc, char *argv[]) {
     if (err != PERSIST_ERR_KEY_GENERATION_MISMATCH &&
         err != PERSIST_ERR_KEY_NOT_FOUND) {
         printf(
-            "dkTestC2KeyringPersistRetireAfterAttach: post-retire "
+            "dkTestKeyringPersistRetireAfterAttach: post-retire "
             "lastError expected GENERATION_MISMATCH (1) or KEY_NOT_FOUND (2),"
             " got %d\n",
             (int)err);
@@ -3301,14 +3317,14 @@ static int dkTestC2KeyringPersistRetireAfterAttachTest(int argc, char *argv[]) {
     }
 
     if (persistVerifySnapshot(p)) {
-        printf("dkTestC2KeyringPersistRetireAfterAttach: post-retire verify "
+        printf("dkTestKeyringPersistRetireAfterAttach: post-retire verify "
                "MUST fail\n");
         failures++;
     }
     const persistErr verifyErr = persistLastError(p);
     if (verifyErr != PERSIST_ERR_KEY_GENERATION_MISMATCH &&
         verifyErr != PERSIST_ERR_KEY_NOT_FOUND) {
-        printf("dkTestC2KeyringPersistRetireAfterAttach: post-retire verify "
+        printf("dkTestKeyringPersistRetireAfterAttach: post-retire verify "
                "lastError expected GENERATION_MISMATCH or KEY_NOT_FOUND, "
                "got %d\n",
                (int)verifyErr);
@@ -3325,30 +3341,29 @@ static int dkTestC2KeyringPersistRetireAfterAttachTest(int argc, char *argv[]) {
     const hmacKeyId kid2 = 202u;
     if (!hmacKeyringInstall(ring, kid2, &hmacAlgoSHA256, key2, sizeof(key2),
                             salt2)) {
-        printf(
-            "dkTestC2KeyringPersistRetireAfterAttach: install kid2 failed\n");
+        printf("dkTestKeyringPersistRetireAfterAttach: install kid2 failed\n");
         failures++;
         goto cleanup_payload;
     }
     if (!persistRebindKeyring(p, ring, kid2)) {
-        printf("dkTestC2KeyringPersistRetireAfterAttach: rebind kid2 failed\n");
+        printf("dkTestKeyringPersistRetireAfterAttach: rebind kid2 failed\n");
         failures++;
         goto cleanup_payload;
     }
     if (persistLastError(p) != PERSIST_ERR_NONE) {
-        printf("dkTestC2KeyringPersistRetireAfterAttach: rebind left "
+        printf("dkTestKeyringPersistRetireAfterAttach: rebind left "
                "lastError=%d (expected 0)\n",
                (int)persistLastError(p));
         failures++;
     }
     if (!persistSnapshot(p, payload)) {
-        printf("dkTestC2KeyringPersistRetireAfterAttach: post-rebind snapshot "
+        printf("dkTestKeyringPersistRetireAfterAttach: post-rebind snapshot "
                "failed (lastError=%d)\n",
                (int)persistLastError(p));
         failures++;
     }
     if (!persistVerifySnapshot(p)) {
-        printf("dkTestC2KeyringPersistRetireAfterAttach: post-rebind verify "
+        printf("dkTestKeyringPersistRetireAfterAttach: post-rebind verify "
                "failed\n");
         failures++;
     }
@@ -3357,23 +3372,23 @@ static int dkTestC2KeyringPersistRetireAfterAttachTest(int argc, char *argv[]) {
                                                           0x55};
     hmacKeyringSetAeadSalt(ring, kid2, salt2b);
     if (persistSnapshot(p, payload)) {
-        printf("dkTestC2KeyringPersistRetireAfterAttach: post-SetAeadSalt "
+        printf("dkTestKeyringPersistRetireAfterAttach: post-SetAeadSalt "
                "snapshot MUST fail (generation should have advanced)\n");
         failures++;
     }
     if (persistLastError(p) != PERSIST_ERR_KEY_GENERATION_MISMATCH) {
-        printf("dkTestC2KeyringPersistRetireAfterAttach: post-SetAeadSalt "
+        printf("dkTestKeyringPersistRetireAfterAttach: post-SetAeadSalt "
                "lastError expected GENERATION_MISMATCH, got %d\n",
                (int)persistLastError(p));
         failures++;
     }
     if (!persistRebindKeyring(p, ring, kid2)) {
-        printf("dkTestC2KeyringPersistRetireAfterAttach: rebind after "
+        printf("dkTestKeyringPersistRetireAfterAttach: rebind after "
                "SetAeadSalt failed\n");
         failures++;
     }
     if (!persistSnapshot(p, payload)) {
-        printf("dkTestC2KeyringPersistRetireAfterAttach: snapshot after "
+        printf("dkTestKeyringPersistRetireAfterAttach: snapshot after "
                "rebind-after-SetAeadSalt failed\n");
         failures++;
     }
@@ -3385,7 +3400,7 @@ cleanup:
     hmacKeyringFree(ring);
 
     if (failures == 0) {
-        printf("dkTestC2KeyringPersistRetireAfterAttach: OK (retire + rebind +"
+        printf("dkTestKeyringPersistRetireAfterAttach: OK (retire + rebind +"
                " SetAeadSalt-rotation paths all caught)\n");
         return 0;
     }
@@ -3397,14 +3412,14 @@ cleanup:
  * rejects with FLEX_ENV_VERIFY_FAILED_KEY_REVOKED while K2+K3 pass;
  * snapshot+restore preserves the floor.
  * ==================================================================== */
-static int dkTestC3RevokedKeyFloorTest(int argc, char *argv[]) {
+static int dkTestRevokedKeyFloorTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
 
     hmacKeyring *ring = hmacKeyringCreate();
     if (ring == NULL) {
-        printf("dkTestC3RevokedKeyFloor: create failed\n");
+        printf("dkTestRevokedKeyFloor: create failed\n");
         return 1;
     }
 
@@ -3425,7 +3440,7 @@ static int dkTestC3RevokedKeyFloorTest(int argc, char *argv[]) {
                             salt2) ||
         !hmacKeyringInstall(ring, K3, &hmacAlgoSHA256, key3, sizeof(key3),
                             salt3)) {
-        printf("dkTestC3RevokedKeyFloor: install K1/K2/K3 failed\n");
+        printf("dkTestRevokedKeyFloor: install K1/K2/K3 failed\n");
         hmacKeyringFree(ring);
         return 1;
     }
@@ -3448,7 +3463,7 @@ static int dkTestC3RevokedKeyFloorTest(int argc, char *argv[]) {
         envs[i] = zmalloc(cap);
         if (!flexEnvelopeWrap(envs[i], cap, payload, sizeof(payload), &wp,
                               &env_lens[i])) {
-            printf("dkTestC3RevokedKeyFloor: wrap K%zu failed\n", i + 1);
+            printf("dkTestRevokedKeyFloor: wrap K%zu failed\n", i + 1);
             failures++;
         }
     }
@@ -3458,47 +3473,47 @@ static int dkTestC3RevokedKeyFloorTest(int argc, char *argv[]) {
     uint64_t out_len = 0;
     for (size_t i = 0; i < 3; i++) {
         if (!flexEnvelopeVerify(envs[i], env_lens[i], &vp, &out, &out_len)) {
-            printf("dkTestC3RevokedKeyFloor: pre-floor verify K%zu MUST pass\n",
+            printf("dkTestRevokedKeyFloor: pre-floor verify K%zu MUST pass\n",
                    i + 1);
             failures++;
         }
     }
 
     if (!hmacKeyringSetMinValidKeyId(ring, K2)) {
-        printf("dkTestC3RevokedKeyFloor: SetMinValidKeyId(K2) failed\n");
+        printf("dkTestRevokedKeyFloor: SetMinValidKeyId(K2) failed\n");
         failures++;
     }
     if (flexEnvelopeVerify(envs[0], env_lens[0], &vp, &out, &out_len)) {
-        printf("dkTestC3RevokedKeyFloor: K1 verify after floor MUST fail\n");
+        printf("dkTestRevokedKeyFloor: K1 verify after floor MUST fail\n");
         failures++;
     }
     if (flexEnvelopeLastVerifyError() != FLEX_ENV_VERIFY_FAILED_KEY_REVOKED) {
-        printf("dkTestC3RevokedKeyFloor: K1 err expected KEY_REVOKED got %d\n",
+        printf("dkTestRevokedKeyFloor: K1 err expected KEY_REVOKED got %d\n",
                (int)flexEnvelopeLastVerifyError());
         failures++;
     }
     if (!flexEnvelopeVerify(envs[1], env_lens[1], &vp, &out, &out_len)) {
-        printf("dkTestC3RevokedKeyFloor: K2 verify MUST succeed\n");
+        printf("dkTestRevokedKeyFloor: K2 verify MUST succeed\n");
         failures++;
     }
     if (flexEnvelopeLastVerifyError() != FLEX_ENV_VERIFY_OK) {
-        printf("dkTestC3RevokedKeyFloor: K2 err expected OK got %d\n",
+        printf("dkTestRevokedKeyFloor: K2 err expected OK got %d\n",
                (int)flexEnvelopeLastVerifyError());
         failures++;
     }
     if (!flexEnvelopeVerify(envs[2], env_lens[2], &vp, &out, &out_len)) {
-        printf("dkTestC3RevokedKeyFloor: K3 verify MUST succeed\n");
+        printf("dkTestRevokedKeyFloor: K3 verify MUST succeed\n");
         failures++;
     }
     if (flexEnvelopeLastVerifyError() != FLEX_ENV_VERIFY_OK) {
-        printf("dkTestC3RevokedKeyFloor: K3 err expected OK got %d\n",
+        printf("dkTestRevokedKeyFloor: K3 err expected OK got %d\n",
                (int)flexEnvelopeLastVerifyError());
         failures++;
     }
 
     if (hmacKeyringSetMinValidKeyId(ring, K1)) {
         printf(
-            "dkTestC3RevokedKeyFloor: backward SetMinValidKeyId MUST refuse\n");
+            "dkTestRevokedKeyFloor: backward SetMinValidKeyId MUST refuse\n");
         failures++;
     }
 
@@ -3506,32 +3521,32 @@ static int dkTestC3RevokedKeyFloorTest(int argc, char *argv[]) {
     uint8_t *snap = zmalloc(sz);
     size_t snap_w = 0;
     if (!hmacKeyringSnapshot(ring, snap, sz, &snap_w)) {
-        printf("dkTestC3RevokedKeyFloor: snapshot failed\n");
+        printf("dkTestRevokedKeyFloor: snapshot failed\n");
         failures++;
     }
     hmacKeyring *restored = hmacKeyringCreate();
     if (!hmacKeyringRestore(restored, snap, snap_w)) {
-        printf("dkTestC3RevokedKeyFloor: restore failed\n");
+        printf("dkTestRevokedKeyFloor: restore failed\n");
         failures++;
     }
     if (hmacKeyringMinValidKeyId(restored) != K2) {
-        printf("dkTestC3RevokedKeyFloor: restored floor expected %u got %u\n",
+        printf("dkTestRevokedKeyFloor: restored floor expected %u got %u\n",
                (unsigned)K2, (unsigned)hmacKeyringMinValidKeyId(restored));
         failures++;
     }
     flexEnvelopeVerifyParams vp_r = {.keyring = restored};
     if (flexEnvelopeVerify(envs[0], env_lens[0], &vp_r, &out, &out_len)) {
-        printf("dkTestC3RevokedKeyFloor: post-restore K1 MUST still reject\n");
+        printf("dkTestRevokedKeyFloor: post-restore K1 MUST still reject\n");
         failures++;
     }
     if (flexEnvelopeLastVerifyError() != FLEX_ENV_VERIFY_FAILED_KEY_REVOKED) {
-        printf("dkTestC3RevokedKeyFloor: post-restore K1 err expected "
+        printf("dkTestRevokedKeyFloor: post-restore K1 err expected "
                "KEY_REVOKED got %d\n",
                (int)flexEnvelopeLastVerifyError());
         failures++;
     }
     if (!flexEnvelopeVerify(envs[1], env_lens[1], &vp_r, &out, &out_len)) {
-        printf("dkTestC3RevokedKeyFloor: post-restore K2 MUST succeed\n");
+        printf("dkTestRevokedKeyFloor: post-restore K2 MUST succeed\n");
         failures++;
     }
 
@@ -3543,7 +3558,7 @@ static int dkTestC3RevokedKeyFloorTest(int argc, char *argv[]) {
     hmacKeyringFree(restored);
 
     if (failures == 0) {
-        printf("dkTestC3RevokedKeyFloor: OK\n");
+        printf("dkTestRevokedKeyFloor: OK\n");
         return 0;
     }
     return 1;
@@ -3554,7 +3569,7 @@ static int dkTestC3RevokedKeyFloorTest(int argc, char *argv[]) {
  * 6 scenarios: ring-only, key-only, both, unknown id, revoked floor,
  * no KEYID_PRESENT.
  * ==================================================================== */
-static int dkTestC4EnvelopeOpenKeyringResolveTest(int argc, char *argv[]) {
+static int dkTestEnvelopeOpenKeyringResolveTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -3648,7 +3663,7 @@ static int dkTestC4EnvelopeOpenKeyringResolveTest(int argc, char *argv[]) {
         flexEnvelopeVerifyParams vp = {.keyring = ring};
         if (!flexEnvelopeOpen(env_k1, env_k1_w, &vp, pt, plaintext_len,
                               &pt_w)) {
-            printf("dkTestC4EnvelopeOpenKeyringResolve: S1 must succeed\n");
+            printf("dkTestEnvelopeOpenKeyringResolve: S1 must succeed\n");
             failures++;
         } else if (memcmp(pt, plaintext, plaintext_len) != 0) {
             failures++;
@@ -3697,7 +3712,7 @@ static int dkTestC4EnvelopeOpenKeyringResolveTest(int argc, char *argv[]) {
         flexEnvelopeVerifyParams vp = {.keyring = ring};
         if (flexEnvelopeOpen(env_unknown, env_unknown_w, &vp, pt, plaintext_len,
                              &pt_w)) {
-            printf("dkTestC4EnvelopeOpenKeyringResolve: S4 unknown id MUST "
+            printf("dkTestEnvelopeOpenKeyringResolve: S4 unknown id MUST "
                    "fail\n");
             failures++;
         }
@@ -3711,12 +3726,12 @@ static int dkTestC4EnvelopeOpenKeyringResolveTest(int argc, char *argv[]) {
             flexEnvelopeVerifyParams vp = {.keyring = ring};
             if (flexEnvelopeOpen(env_k1, env_k1_w, &vp, pt, plaintext_len,
                                  &pt_w)) {
-                printf("dkTestC4EnvelopeOpenKeyringResolve: S5 below floor "
+                printf("dkTestEnvelopeOpenKeyringResolve: S5 below floor "
                        "MUST fail\n");
                 failures++;
             } else if (flexEnvelopeLastVerifyError() !=
                        FLEX_ENV_VERIFY_FAILED_KEY_REVOKED) {
-                printf("dkTestC4EnvelopeOpenKeyringResolve: S5 expected "
+                printf("dkTestEnvelopeOpenKeyringResolve: S5 expected "
                        "KEY_REVOKED got %d\n",
                        (int)flexEnvelopeLastVerifyError());
                 failures++;
@@ -3731,8 +3746,7 @@ static int dkTestC4EnvelopeOpenKeyringResolveTest(int argc, char *argv[]) {
         flexEnvelopeVerifyParams vp = {.keyring = ring};
         if (flexEnvelopeOpen(env_no_kid, env_no_kid_w, &vp, pt, plaintext_len,
                              &pt_w)) {
-            printf(
-                "dkTestC4EnvelopeOpenKeyringResolve: S6 no KEYID MUST fail\n");
+            printf("dkTestEnvelopeOpenKeyringResolve: S6 no KEYID MUST fail\n");
             failures++;
         }
     }
@@ -3753,7 +3767,7 @@ cleanup:
     hmacKeyringFree(ring);
 
     if (failures == 0) {
-        printf("dkTestC4EnvelopeOpenKeyringResolve: OK (6 scenarios)\n");
+        printf("dkTestEnvelopeOpenKeyringResolve: OK (6 scenarios)\n");
         return 0;
     }
     return 1;
@@ -3761,7 +3775,7 @@ cleanup:
 
 /* Ambiguous-key fail-safe: wire key_id + caller-supplied keyring must
  * not silently override caller intent. */
-static int dkTestC5WireKeyIdAmbiguityRejectTest(int argc, char *argv[]) {
+static int dkTestWireKeyIdAmbiguityRejectTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -3819,11 +3833,12 @@ static int dkTestC5WireKeyIdAmbiguityRejectTest(int argc, char *argv[]) {
         uint64_t out_pl = 0;
         flexEnvelopeVerifyParams vp = {.prepared_key = &prep, .keyring = ring};
         if (flexEnvelopeVerify(env, env_len, &vp, &out_p, &out_pl)) {
-            printf("dkTestC5: S1 must reject\n");
+            printf("dkTestWireKeyIdAmbiguityReject: S1 must reject\n");
             failures++;
         } else if (flexEnvelopeLastVerifyError() !=
                    FLEX_ENV_VERIFY_FAILED_AMBIGUOUS_KEY) {
-            printf("dkTestC5: S1 expected AMBIGUOUS_KEY got %d\n",
+            printf("dkTestWireKeyIdAmbiguityReject: S1 expected AMBIGUOUS_KEY "
+                   "got %d\n",
                    (int)flexEnvelopeLastVerifyError());
             failures++;
         }
@@ -3899,7 +3914,7 @@ cleanup_c5:
     hmacKeyringFree(ring);
 
     if (failures == 0) {
-        printf("dkTestC5WireKeyIdAmbiguityReject: OK (6 scenarios)\n");
+        printf("dkTestWireKeyIdAmbiguityReject: OK (6 scenarios)\n");
         return 0;
     }
     return 1;
@@ -3908,7 +3923,7 @@ cleanup_c5:
 /* ====================================================================
  * persist snapshot/WAL headers carry key_id + typed error.
  * ==================================================================== */
-static int dkTestC6PersistKeyIdHeaderTest(int argc, char *argv[]) {
+static int dkTestPersistKeyIdHeaderTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -3944,9 +3959,8 @@ static int dkTestC6PersistKeyIdHeaderTest(int argc, char *argv[]) {
     flex *payload = flexNew();
     flexPushBytes(&payload, "c6-payload", 10, FLEX_ENDPOINT_TAIL);
     if (!persistSnapshot(pW, payload)) {
-        printf(
-            "dkTestC6PersistKeyIdHeader: snapshot under K1 failed (err=%d)\n",
-            (int)persistLastError(pW));
+        printf("dkTestPersistKeyIdHeader: snapshot under K1 failed (err=%d)\n",
+               (int)persistLastError(pW));
         failures++;
         goto cleanup_payload;
     }
@@ -3990,17 +4004,17 @@ static int dkTestC6PersistKeyIdHeaderTest(int argc, char *argv[]) {
     }
 
     if (persistVerifySnapshot(pR)) {
-        printf("dkTestC6PersistKeyIdHeader: verify with WRONG key MUST fail\n");
+        printf("dkTestPersistKeyIdHeader: verify with WRONG key MUST fail\n");
         failures++;
     }
     if (persistLastError(pR) != PERSIST_ERR_KEY_ID_MISMATCH) {
-        printf("dkTestC6PersistKeyIdHeader: lastError expected "
+        printf("dkTestPersistKeyIdHeader: lastError expected "
                "KEY_ID_MISMATCH, got %d\n",
                (int)persistLastError(pR));
         failures++;
     }
     if (persistLastExpectedKeyId(pR) != (uint32_t)K1) {
-        printf("dkTestC6PersistKeyIdHeader: expected key_id must be K1 (%u), "
+        printf("dkTestPersistKeyIdHeader: expected key_id must be K1 (%u), "
                "got %u\n",
                (unsigned)K1, (unsigned)persistLastExpectedKeyId(pR));
         failures++;
@@ -4016,7 +4030,7 @@ static int dkTestC6PersistKeyIdHeaderTest(int argc, char *argv[]) {
         goto cleanup_reader_persist;
     }
     if (!persistVerifySnapshot(pR)) {
-        printf("dkTestC6PersistKeyIdHeader: verify after rebind to K1 MUST "
+        printf("dkTestPersistKeyIdHeader: verify after rebind to K1 MUST "
                "succeed (err=%d)\n",
                (int)persistLastError(pR));
         failures++;
@@ -4039,7 +4053,7 @@ cleanup_writer:
     hmacKeyringFree(ringW);
 
     if (failures == 0) {
-        printf("dkTestC6PersistKeyIdHeader: OK (key_id header + typed error + "
+        printf("dkTestPersistKeyIdHeader: OK (key_id header + typed error + "
                "rebind-recovery)\n");
         return 0;
     }
@@ -4051,7 +4065,7 @@ cleanup_writer:
  * between AVX2 and scalar; per-host dispatcher selection assertion;
  * direct-call differential test of blake3SSE41Compress4 vs portable.
  * ==================================================================== */
-static int dkTestB2Blake3Sse41BatchTest(int argc, char *argv[]) {
+static int dkTestBlake3Sse41BatchTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -4065,21 +4079,22 @@ static int dkTestB2Blake3Sse41BatchTest(int argc, char *argv[]) {
 
     const bool expect_sse41_dispatch = sse41_here && !avx2_here && !neon_here;
     if (expect_sse41_dispatch && backend != BLAKE3_BACKEND_SSE41) {
-        printf("dkTestB2: SSE4.1 available without AVX2/NEON but "
+        printf("dkTestBlake3Sse41Batch: SSE4.1 available without AVX2/NEON but "
                "dispatcher reports backend=%d (expected %d)\n",
                (int)backend, (int)BLAKE3_BACKEND_SSE41);
         failures++;
     }
     if (!sse41_here && backend == BLAKE3_BACKEND_SSE41) {
-        printf("dkTestB2: dispatcher reports SSE4.1 but probe says "
-               "unavailable\n");
+        printf(
+            "dkTestBlake3Sse41Batch: dispatcher reports SSE4.1 but probe says "
+            "unavailable\n");
         failures++;
     }
 
     const size_t N = 32u * 1024u;
     uint8_t *buf = (uint8_t *)zmalloc(N);
     if (buf == NULL) {
-        printf("dkTestB2: zmalloc(%zu) failed\n", N);
+        printf("dkTestBlake3Sse41Batch: zmalloc(%zu) failed\n", N);
         return 1;
     }
     uint64_t s = 0xB2A2BEEFC0FFEE42ULL;
@@ -4096,7 +4111,8 @@ static int dkTestB2Blake3Sse41BatchTest(int argc, char *argv[]) {
     uint8_t got_auto[BLAKE3_OUT_LEN];
     blake3Hash(buf, N, got_auto);
     if (memcmp(expected, got_auto, BLAKE3_OUT_LEN) != 0) {
-        printf("dkTestB2: AUTO digest differs from scalar reference\n");
+        printf("dkTestBlake3Sse41Batch: AUTO digest differs from scalar "
+               "reference\n");
         failures++;
     }
 
@@ -4104,7 +4120,8 @@ static int dkTestB2Blake3Sse41BatchTest(int argc, char *argv[]) {
     uint8_t got_simd[BLAKE3_OUT_LEN];
     blake3Hash(buf, N, got_simd);
     if (memcmp(expected, got_simd, BLAKE3_OUT_LEN) != 0) {
-        printf("dkTestB2: SIMD-forced digest differs from scalar reference "
+        printf("dkTestBlake3Sse41Batch: SIMD-forced digest differs from scalar "
+               "reference "
                "(backend=%d)\n",
                (int)blake3DispatcherActiveBackend());
         failures++;
@@ -4126,9 +4143,9 @@ static int dkTestB2Blake3Sse41BatchTest(int argc, char *argv[]) {
         blake3SetForceImpl(BLAKE3_IMPL_AUTO);
         blake3Hash(buf, len, obs);
         if (memcmp(ref, obs, BLAKE3_OUT_LEN) != 0) {
-            printf(
-                "dkTestB2: dispatch digest mismatch at chunks=%zu (len=%zu)\n",
-                sweep_chunks[i], len);
+            printf("dkTestBlake3Sse41Batch: dispatch digest mismatch at "
+                   "chunks=%zu (len=%zu)\n",
+                   sweep_chunks[i], len);
             failures++;
         }
     }
@@ -4180,7 +4197,8 @@ static int dkTestB2Blake3Sse41BatchTest(int argc, char *argv[]) {
                     expect_bytes[k * 4 + 3] = (uint8_t)(w >> 24);
                 }
                 if (memcmp(expect_bytes, batched[i], 32) != 0) {
-                    printf("dkTestB2: SSE41Compress4 lane=%u differs from "
+                    printf("dkTestBlake3Sse41Batch: SSE41Compress4 lane=%u "
+                           "differs from "
                            "portable at iter=%u\n",
                            i, iter);
                     failures++;
@@ -4211,24 +4229,24 @@ static int dkTestB2Blake3Sse41BatchTest(int argc, char *argv[]) {
     }
 
     if (expect_sse41_dispatch) {
-        printf("dkTestB2Blake3Sse41Batch: SSE4.1 dispatcher active "
+        printf("dkTestBlake3Sse41Batch: SSE4.1 dispatcher active "
                "(no AVX2/NEON on host); backend=%s; 32 KiB buffer and "
                "%zu chunk-counts swept against scalar reference; %d failures\n",
                backend_name, n_sweep, failures);
     } else if (sse41_here && avx2_here) {
-        printf("dkTestB2Blake3Sse41Batch: AVX2 wins on this host; SSE4.1 "
+        printf("dkTestBlake3Sse41Batch: AVX2 wins on this host; SSE4.1 "
                "dispatcher assertion skipped (AVX2 takes priority); "
                "backend=%s; SSE41Compress4 direct-call differential "
                "passed; %d failures\n",
                backend_name, failures);
     } else if (!sse41_here) {
-        printf("dkTestB2Blake3Sse41Batch: SSE4.1 not present on this host "
+        printf("dkTestBlake3Sse41Batch: SSE4.1 not present on this host "
                "(probe=false); dispatcher assertion skipped; backend=%s; "
                "SSE41Compress4 direct-call (stub-delegating to portable) "
                "agrees with scalar reference; %d failures\n",
                backend_name, failures);
     } else {
-        printf("dkTestB2Blake3Sse41Batch: backend=%s; %zu chunk-counts "
+        printf("dkTestBlake3Sse41Batch: backend=%s; %zu chunk-counts "
                "swept; %d failures\n",
                backend_name, n_sweep, failures);
     }
@@ -4256,7 +4274,7 @@ static void d1NonceFromValue(uint64_t lo, uint32_t hi, uint8_t out[12]) {
     memcpy(out + 8, &hi, 4);
 }
 
-static int dkTestD1NonceLogPersistRoundTripTest(int argc, char *argv[]) {
+static int dkTestNonceLogPersistRoundTripTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -4270,11 +4288,11 @@ static int dkTestD1NonceLogPersistRoundTripTest(int argc, char *argv[]) {
 
     aeadNonceLog *src = aeadNonceLogCreate(kCap);
     if (src == NULL) {
-        printf("dkTestD1NonceLogPersistRoundTrip: src create failed\n");
+        printf("dkTestNonceLogPersistRoundTrip: src create failed\n");
         return 1;
     }
     if (aeadNonceLogCapacity(src) != kCap) {
-        printf("dkTestD1NonceLogPersistRoundTrip: cap mismatch on src "
+        printf("dkTestNonceLogPersistRoundTrip: cap mismatch on src "
                "(want %zu got %zu)\n",
                kCap, aeadNonceLogCapacity(src));
         aeadNonceLogFree(src);
@@ -4291,15 +4309,14 @@ static int dkTestD1NonceLogPersistRoundTripTest(int argc, char *argv[]) {
         d1NonceFromValue(lo, hi, nonces[i]);
         key_ids[i] = kid;
         if (!aeadNonceLogObserve(src, kid, nonces[i])) {
-            printf(
-                "dkTestD1NonceLogPersistRoundTrip: src observe[%zu] failed\n",
-                i);
+            printf("dkTestNonceLogPersistRoundTrip: src observe[%zu] failed\n",
+                   i);
             failures++;
             goto done;
         }
     }
     if (aeadNonceLogSize(src) != kTotal) {
-        printf("dkTestD1NonceLogPersistRoundTrip: src size %zu != %zu\n",
+        printf("dkTestNonceLogPersistRoundTrip: src size %zu != %zu\n",
                aeadNonceLogSize(src), kTotal);
         failures++;
         goto done;
@@ -4307,7 +4324,7 @@ static int dkTestD1NonceLogPersistRoundTripTest(int argc, char *argv[]) {
 
     need = aeadNonceLogToBytes(src, NULL, 0);
     if (need == 0) {
-        printf("dkTestD1NonceLogPersistRoundTrip: sizing call returned 0\n");
+        printf("dkTestNonceLogPersistRoundTrip: sizing call returned 0\n");
         failures++;
         goto done;
     }
@@ -4317,20 +4334,20 @@ static int dkTestD1NonceLogPersistRoundTripTest(int argc, char *argv[]) {
         goto done;
     }
     if (aeadNonceLogToBytes(src, snap, need) != need) {
-        printf("dkTestD1NonceLogPersistRoundTrip: write mismatch\n");
+        printf("dkTestNonceLogPersistRoundTrip: write mismatch\n");
         zfree(snap);
         failures++;
         goto done;
     }
     if (aeadNonceLogToBytes(src, snap, 1u) != 0u) {
-        printf("dkTestD1NonceLogPersistRoundTrip: short cap should return 0\n");
+        printf("dkTestNonceLogPersistRoundTrip: short cap should return 0\n");
         failures++;
     }
 
     aeadNonceLog *dst = aeadNonceLogFromBytes(snap, need);
     if (dst == NULL || aeadNonceLogCapacity(dst) != kCap ||
         aeadNonceLogSize(dst) != kTotal) {
-        printf("dkTestD1NonceLogPersistRoundTrip: fromBytes restore failed\n");
+        printf("dkTestNonceLogPersistRoundTrip: fromBytes restore failed\n");
         if (dst) {
             aeadNonceLogFree(dst);
         }
@@ -4341,7 +4358,7 @@ static int dkTestD1NonceLogPersistRoundTripTest(int argc, char *argv[]) {
 
     for (size_t i = 0; i < kTotal; i++) {
         if (aeadNonceLogObserve(dst, key_ids[i], nonces[i])) {
-            printf("dkTestD1NonceLogPersistRoundTrip: dst observe[%zu] "
+            printf("dkTestNonceLogPersistRoundTrip: dst observe[%zu] "
                    "(kid=%u) unexpectedly accepted\n",
                    i, (unsigned)key_ids[i]);
             failures++;
@@ -4352,15 +4369,15 @@ static int dkTestD1NonceLogPersistRoundTripTest(int argc, char *argv[]) {
     uint8_t fresh_nonce[12];
     d1NonceFromValue(0xDEADBEEFCAFEBABEull, 0x12345678u, fresh_nonce);
     if (!aeadNonceLogObserve(dst, 99u, fresh_nonce)) {
-        printf("dkTestD1NonceLogPersistRoundTrip: fresh observe refused\n");
+        printf("dkTestNonceLogPersistRoundTrip: fresh observe refused\n");
         failures++;
     }
     if (aeadNonceLogObserve(dst, 99u, fresh_nonce)) {
-        printf("dkTestD1NonceLogPersistRoundTrip: fresh dup accepted\n");
+        printf("dkTestNonceLogPersistRoundTrip: fresh dup accepted\n");
         failures++;
     }
     if (!persistOpsAeadNonceLog.validate(dst)) {
-        printf("dkTestD1NonceLogPersistRoundTrip: validate(dst) rejected good "
+        printf("dkTestNonceLogPersistRoundTrip: validate(dst) rejected good "
                "log\n");
         failures++;
     }
@@ -4370,34 +4387,33 @@ static int dkTestD1NonceLogPersistRoundTripTest(int argc, char *argv[]) {
     size_t snap2_len = 0;
     uint8_t *snap2 = persistOpsAeadNonceLog.snapshot(src, &snap2_len);
     if (snap2 == NULL || snap2_len == 0) {
-        printf("dkTestD1NonceLogPersistRoundTrip: desc snapshot NULL\n");
+        printf("dkTestNonceLogPersistRoundTrip: desc snapshot NULL\n");
         failures++;
         goto done;
     }
     aeadNonceLog *dst2 =
         (aeadNonceLog *)persistOpsAeadNonceLog.restore(snap2, snap2_len);
     if (dst2 == NULL) {
-        printf("dkTestD1NonceLogPersistRoundTrip: desc restore NULL\n");
+        printf("dkTestNonceLogPersistRoundTrip: desc restore NULL\n");
         zfree(snap2);
         failures++;
         goto done;
     }
     if (persistOpsAeadNonceLog.count(dst2) != kTotal) {
-        printf("dkTestD1NonceLogPersistRoundTrip: desc count mismatch\n");
+        printf("dkTestNonceLogPersistRoundTrip: desc count mismatch\n");
         failures++;
     }
     if (persistOpsAeadNonceLog.estimateSize(dst2) != snap2_len) {
-        printf(
-            "dkTestD1NonceLogPersistRoundTrip: desc estimateSize mismatch\n");
+        printf("dkTestNonceLogPersistRoundTrip: desc estimateSize mismatch\n");
         failures++;
     }
     if (!persistOpsAeadNonceLog.validate(dst2)) {
-        printf("dkTestD1NonceLogPersistRoundTrip: validate(dst2) rejected\n");
+        printf("dkTestNonceLogPersistRoundTrip: validate(dst2) rejected\n");
         failures++;
     }
     for (size_t i = 0; i < kTotal; i++) {
         if (aeadNonceLogObserve(dst2, key_ids[i], nonces[i])) {
-            printf("dkTestD1NonceLogPersistRoundTrip: dst2 observe[%zu] "
+            printf("dkTestNonceLogPersistRoundTrip: dst2 observe[%zu] "
                    "accepted\n",
                    i);
             failures++;
@@ -4409,7 +4425,7 @@ static int dkTestD1NonceLogPersistRoundTripTest(int argc, char *argv[]) {
     if (snap2_len >= 1u) {
         void *bad = persistOpsAeadNonceLog.restore(snap2, snap2_len - 1u);
         if (bad != NULL) {
-            printf("dkTestD1NonceLogPersistRoundTrip: truncated accepted\n");
+            printf("dkTestNonceLogPersistRoundTrip: truncated accepted\n");
             persistOpsAeadNonceLog.free(bad);
             failures++;
         }
@@ -4420,7 +4436,7 @@ static int dkTestD1NonceLogPersistRoundTripTest(int argc, char *argv[]) {
         padded[snap2_len] = 0xAA;
         void *bad = persistOpsAeadNonceLog.restore(padded, snap2_len + 1u);
         if (bad != NULL) {
-            printf("dkTestD1NonceLogPersistRoundTrip: padded accepted\n");
+            printf("dkTestNonceLogPersistRoundTrip: padded accepted\n");
             persistOpsAeadNonceLog.free(bad);
             failures++;
         }
@@ -4428,7 +4444,7 @@ static int dkTestD1NonceLogPersistRoundTripTest(int argc, char *argv[]) {
     }
     uint8_t junk[16] = {0};
     if (persistOpsAeadNonceLog.restore(junk, sizeof(junk)) != NULL) {
-        printf("dkTestD1NonceLogPersistRoundTrip: junk accepted\n");
+        printf("dkTestNonceLogPersistRoundTrip: junk accepted\n");
         failures++;
     }
 
@@ -4441,7 +4457,7 @@ static int dkTestD1NonceLogPersistRoundTripTest(int argc, char *argv[]) {
                 if (aeadNonceLogToBytes(empty_src, ebuf, enseed) == enseed) {
                     aeadNonceLog *e2 = aeadNonceLogFromBytes(ebuf, enseed);
                     if (e2 == NULL || aeadNonceLogSize(e2) != 0u) {
-                        printf("dkTestD1NonceLogPersistRoundTrip: empty "
+                        printf("dkTestNonceLogPersistRoundTrip: empty "
                                "round-trip failed\n");
                         failures++;
                     }
@@ -4459,7 +4475,7 @@ static int dkTestD1NonceLogPersistRoundTripTest(int argc, char *argv[]) {
 done:
     aeadNonceLogFree(src);
     if (failures == 0) {
-        printf("dkTestD1NonceLogPersistRoundTrip: OK "
+        printf("dkTestNonceLogPersistRoundTrip: OK "
                "(cap=%zu, records=%zu, snap=%zu B)\n",
                kCap, kTotal, need);
         return 0;
@@ -4474,7 +4490,7 @@ done:
  * envelope rejected. Opt-out (nonceLog=NULL) preserves legacy behavior for both
  * sides.
  * ==================================================================== */
-static int dkTestD2EnvelopeNonceLogIntegrationTest(int argc, char *argv[]) {
+static int dkTestEnvelopeNonceLogIntegrationTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -4498,13 +4514,13 @@ static int dkTestD2EnvelopeNonceLogIntegrationTest(int argc, char *argv[]) {
         plaintext_len, FLEX_ENV_ALGO_AEAD_CHACHA20_POLY1305,
         FLEX_ENV_FLAG_KEYID_PRESENT);
     if (cap == 0u) {
-        printf("dkTestD2EnvelopeNonceLogIntegration: wrappedSize=0\n");
+        printf("dkTestEnvelopeNonceLogIntegration: wrappedSize=0\n");
         return 1;
     }
 
     aeadNonceLog *producerLog = aeadNonceLogCreate(1024u);
     if (producerLog == NULL) {
-        printf("dkTestD2EnvelopeNonceLogIntegration: producer log create "
+        printf("dkTestEnvelopeNonceLogIntegration: producer log create "
                "failed\n");
         return 1;
     }
@@ -4525,14 +4541,14 @@ static int dkTestD2EnvelopeNonceLogIntegrationTest(int argc, char *argv[]) {
     };
     if (!flexEnvelopeSeal(env1, cap, plaintext, plaintext_len, &sp1,
                           &env1_written)) {
-        printf("dkTestD2EnvelopeNonceLogIntegration: Seal#1 should succeed "
+        printf("dkTestEnvelopeNonceLogIntegration: Seal#1 should succeed "
                "(err=%d)\n",
                (int)flexEnvelopeLastVerifyError());
         failures++;
         goto cleanup;
     }
     if (aeadNonceLogSize(producerLog) != 1u) {
-        printf("dkTestD2EnvelopeNonceLogIntegration: producer log size "
+        printf("dkTestEnvelopeNonceLogIntegration: producer log size "
                "expected 1 got %zu\n",
                aeadNonceLogSize(producerLog));
         failures++;
@@ -4542,18 +4558,17 @@ static int dkTestD2EnvelopeNonceLogIntegrationTest(int argc, char *argv[]) {
     size_t replay_written = 0;
     if (flexEnvelopeSeal(env_replay, cap, plaintext, plaintext_len, &sp1,
                          &replay_written)) {
-        printf(
-            "dkTestD2EnvelopeNonceLogIntegration: duplicate Seal MUST fail\n");
+        printf("dkTestEnvelopeNonceLogIntegration: duplicate Seal MUST fail\n");
         failures++;
     } else if (flexEnvelopeLastVerifyError() !=
                FLEX_ENV_VERIFY_FAILED_NONCE_REUSED) {
-        printf("dkTestD2EnvelopeNonceLogIntegration: duplicate Seal err "
+        printf("dkTestEnvelopeNonceLogIntegration: duplicate Seal err "
                "expected NONCE_REUSED (3) got %d\n",
                (int)flexEnvelopeLastVerifyError());
         failures++;
     }
     if (aeadNonceLogSize(producerLog) != 1u) {
-        printf("dkTestD2EnvelopeNonceLogIntegration: duplicate Seal mutated "
+        printf("dkTestEnvelopeNonceLogIntegration: duplicate Seal mutated "
                "log\n");
         failures++;
     }
@@ -4563,13 +4578,13 @@ static int dkTestD2EnvelopeNonceLogIntegrationTest(int argc, char *argv[]) {
     size_t optout_written = 0;
     if (!flexEnvelopeSeal(env_replay, cap, plaintext, plaintext_len, &sp_optout,
                           &optout_written)) {
-        printf("dkTestD2EnvelopeNonceLogIntegration: opt-out Seal should "
+        printf("dkTestEnvelopeNonceLogIntegration: opt-out Seal should "
                "succeed (err=%d)\n",
                (int)flexEnvelopeLastVerifyError());
         failures++;
     }
     if (aeadNonceLogSize(producerLog) != 1u) {
-        printf("dkTestD2EnvelopeNonceLogIntegration: opt-out Seal mutated "
+        printf("dkTestEnvelopeNonceLogIntegration: opt-out Seal mutated "
                "producer log\n");
         failures++;
     }
@@ -4580,7 +4595,7 @@ static int dkTestD2EnvelopeNonceLogIntegrationTest(int argc, char *argv[]) {
     sp2.nonce = nonceN1;
     if (!flexEnvelopeSeal(env2, cap, plaintext, plaintext_len, &sp2,
                           &env2_written)) {
-        printf("dkTestD2EnvelopeNonceLogIntegration: Scenario4 Seal failed "
+        printf("dkTestEnvelopeNonceLogIntegration: Scenario4 Seal failed "
                "(err=%d)\n",
                (int)flexEnvelopeLastVerifyError());
         failures++;
@@ -4589,7 +4604,7 @@ static int dkTestD2EnvelopeNonceLogIntegrationTest(int argc, char *argv[]) {
 
     consumerLog = aeadNonceLogCreate(1024u);
     if (consumerLog == NULL) {
-        printf("dkTestD2EnvelopeNonceLogIntegration: consumer log create "
+        printf("dkTestEnvelopeNonceLogIntegration: consumer log create "
                "failed\n");
         failures++;
         goto cleanup;
@@ -4603,18 +4618,18 @@ static int dkTestD2EnvelopeNonceLogIntegrationTest(int argc, char *argv[]) {
     };
     if (!flexEnvelopeOpen(env2, env2_written, &vp_with_log, pt_buf,
                           plaintext_len, &pt_written)) {
-        printf("dkTestD2EnvelopeNonceLogIntegration: Scenario4 Open#1 should "
+        printf("dkTestEnvelopeNonceLogIntegration: Scenario4 Open#1 should "
                "succeed\n");
         failures++;
     }
     if (pt_written != plaintext_len ||
         memcmp(pt_buf, plaintext, plaintext_len) != 0) {
-        printf("dkTestD2EnvelopeNonceLogIntegration: Scenario4 Open#1 produced "
+        printf("dkTestEnvelopeNonceLogIntegration: Scenario4 Open#1 produced "
                "wrong plaintext\n");
         failures++;
     }
     if (aeadNonceLogSize(consumerLog) != 1u) {
-        printf("dkTestD2EnvelopeNonceLogIntegration: consumer log size after "
+        printf("dkTestEnvelopeNonceLogIntegration: consumer log size after "
                "Open#1 expected 1 got %zu\n",
                aeadNonceLogSize(consumerLog));
         failures++;
@@ -4623,19 +4638,19 @@ static int dkTestD2EnvelopeNonceLogIntegrationTest(int argc, char *argv[]) {
     memset(pt_buf, 0, plaintext_len);
     if (flexEnvelopeOpen(env2, env2_written, &vp_with_log, pt_buf,
                          plaintext_len, &pt_written)) {
-        printf("dkTestD2EnvelopeNonceLogIntegration: Scenario4 Open#2 (replay) "
+        printf("dkTestEnvelopeNonceLogIntegration: Scenario4 Open#2 (replay) "
                "MUST fail\n");
         failures++;
     } else if (flexEnvelopeLastVerifyError() !=
                FLEX_ENV_VERIFY_FAILED_NONCE_REUSED) {
-        printf("dkTestD2EnvelopeNonceLogIntegration: Scenario4 Open#2 err "
+        printf("dkTestEnvelopeNonceLogIntegration: Scenario4 Open#2 err "
                "expected NONCE_REUSED (3) got %d\n",
                (int)flexEnvelopeLastVerifyError());
         failures++;
     }
     for (size_t i = 0; i < plaintext_len; i++) {
         if (pt_buf[i] != 0u) {
-            printf("dkTestD2EnvelopeNonceLogIntegration: Open#2 did not scrub "
+            printf("dkTestEnvelopeNonceLogIntegration: Open#2 did not scrub "
                    "plaintext_out\n");
             failures++;
             break;
@@ -4646,7 +4661,7 @@ static int dkTestD2EnvelopeNonceLogIntegrationTest(int argc, char *argv[]) {
         .key = key, .key_len = sizeof(key), .nonceLog = NULL};
     if (!flexEnvelopeOpen(env2, env2_written, &vp_no_log, pt_buf, plaintext_len,
                           &pt_written)) {
-        printf("dkTestD2EnvelopeNonceLogIntegration: Scenario5 Open (no "
+        printf("dkTestEnvelopeNonceLogIntegration: Scenario5 Open (no "
                "consumer log) should succeed\n");
         failures++;
     }
@@ -4670,7 +4685,7 @@ cleanup:
     aeadNonceLogFree(producerLog);
 
     if (failures == 0) {
-        printf("dkTestD2EnvelopeNonceLogIntegration: OK (1 key, 2 nonces, 5 "
+        printf("dkTestEnvelopeNonceLogIntegration: OK (1 key, 2 nonces, 5 "
                "scenarios)\n");
         return 0;
     }
@@ -6076,14 +6091,14 @@ static int testMailboxRestoreWrappedStructAwareFuzzTest(int argc,
  * would evict then accept). Perf: per-insert with eviction at cap=4096
  * bounded under 5µs (ASAN+UBSAN).
  * ==================================================================== */
-static void dkTestD3MkNonce(uint64_t v, uint8_t out[12]) {
+static void dkTestNonceLogMkNonce(uint64_t v, uint8_t out[12]) {
     memset(out, 0, 12);
     for (size_t i = 0; i < 8; i++) {
         out[i] = (uint8_t)((v >> (i * 8u)) & 0xFFu);
     }
 }
 
-static int dkTestD3NonceLogEvictionPerfTest(int argc, char *argv[]) {
+static int dkTestNonceLogEvictionPerfTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -6095,14 +6110,14 @@ static int dkTestD3NonceLogEvictionPerfTest(int argc, char *argv[]) {
         const size_t kThreshold = kCap - (kCap / 8u);
         aeadNonceLog *log = aeadNonceLogCreate(kCap);
         if (log == NULL || aeadNonceLogCapacity(log) != kCap) {
-            printf("dkTestD3NonceLogEvictionPerf: A setup failed\n");
+            printf("dkTestNonceLogEvictionPerf: A setup failed\n");
             return 1;
         }
         uint8_t nonce[12];
         for (uint64_t i = 1u; i <= kCap; i++) {
-            dkTestD3MkNonce(i, nonce);
+            dkTestNonceLogMkNonce(i, nonce);
             if (!aeadNonceLogObserve(log, kKeyId, nonce)) {
-                printf("dkTestD3NonceLogEvictionPerf: A setup observe %llu "
+                printf("dkTestNonceLogEvictionPerf: A setup observe %llu "
                        "refused\n",
                        (unsigned long long)i);
                 failures++;
@@ -6111,37 +6126,36 @@ static int dkTestD3NonceLogEvictionPerfTest(int argc, char *argv[]) {
         }
         const size_t sz_before = aeadNonceLogSize(log);
         if (sz_before != kThreshold) {
-            printf("dkTestD3NonceLogEvictionPerf: A pre-probe size expected "
+            printf("dkTestNonceLogEvictionPerf: A pre-probe size expected "
                    "%zu got %zu\n",
                    kThreshold, sz_before);
             failures++;
             goto endA;
         }
-        dkTestD3MkNonce(9u, nonce);
+        dkTestNonceLogMkNonce(9u, nonce);
         if (aeadNonceLogObserve(log, kKeyId, nonce)) {
-            printf("dkTestD3NonceLogEvictionPerf: A PROBE-BEFORE-EVICT BUG\n");
+            printf("dkTestNonceLogEvictionPerf: A PROBE-BEFORE-EVICT BUG\n");
             failures++;
         }
         if (aeadNonceLogSize(log) != sz_before) {
-            printf("dkTestD3NonceLogEvictionPerf: A size mutated across "
+            printf("dkTestNonceLogEvictionPerf: A size mutated across "
                    "rejected observe\n");
             failures++;
         }
-        dkTestD3MkNonce(9u, nonce);
+        dkTestNonceLogMkNonce(9u, nonce);
         if (aeadNonceLogObserve(log, kKeyId, nonce)) {
             printf(
-                "dkTestD3NonceLogEvictionPerf: A second observe(9) accepted\n");
+                "dkTestNonceLogEvictionPerf: A second observe(9) accepted\n");
             failures++;
         }
-        dkTestD3MkNonce(65u, nonce);
+        dkTestNonceLogMkNonce(65u, nonce);
         if (!aeadNonceLogObserve(log, kKeyId, nonce)) {
-            printf(
-                "dkTestD3NonceLogEvictionPerf: A fresh observe(65) refused\n");
+            printf("dkTestNonceLogEvictionPerf: A fresh observe(65) refused\n");
             failures++;
         }
-        dkTestD3MkNonce(9u, nonce);
+        dkTestNonceLogMkNonce(9u, nonce);
         if (!aeadNonceLogObserve(log, kKeyId, nonce)) {
-            printf("dkTestD3NonceLogEvictionPerf: A post-eviction observe(9) "
+            printf("dkTestNonceLogEvictionPerf: A post-eviction observe(9) "
                    "refused\n");
             failures++;
         }
@@ -6157,26 +6171,25 @@ static int dkTestD3NonceLogEvictionPerfTest(int argc, char *argv[]) {
         const double kMaxPerInsertNs = 5000.0;
         aeadNonceLog *log = aeadNonceLogCreate(kCap);
         if (log == NULL || aeadNonceLogCapacity(log) != kCap) {
-            printf("dkTestD3NonceLogEvictionPerf: B setup failed\n");
+            printf("dkTestNonceLogEvictionPerf: B setup failed\n");
             return 1;
         }
         uint8_t nonce[12];
         for (uint64_t i = 1u; i <= kCap; i++) {
-            dkTestD3MkNonce(i, nonce);
+            dkTestNonceLogMkNonce(i, nonce);
             if (!aeadNonceLogObserve(log, kKeyId, nonce)) {
-                printf(
-                    "dkTestD3NonceLogEvictionPerf: B fill iter %llu refused\n",
-                    (unsigned long long)i);
+                printf("dkTestNonceLogEvictionPerf: B fill iter %llu refused\n",
+                       (unsigned long long)i);
                 failures++;
                 goto endB;
             }
         }
         const uint64_t t0 = timeUtilMonotonicNs();
         for (uint64_t i = 0; i < kEvictions; i++) {
-            dkTestD3MkNonce(kCap + 1u + i, nonce);
+            dkTestNonceLogMkNonce(kCap + 1u + i, nonce);
             if (!aeadNonceLogObserve(log, kKeyId, nonce)) {
                 printf(
-                    "dkTestD3NonceLogEvictionPerf: B evict iter %llu refused\n",
+                    "dkTestNonceLogEvictionPerf: B evict iter %llu refused\n",
                     (unsigned long long)i);
                 failures++;
                 break;
@@ -6185,12 +6198,12 @@ static int dkTestD3NonceLogEvictionPerfTest(int argc, char *argv[]) {
         const uint64_t t1 = timeUtilMonotonicNs();
         const double per_ns = (double)(t1 - t0) / (double)kEvictions;
         if (per_ns > kMaxPerInsertNs) {
-            printf("dkTestD3NonceLogEvictionPerf: B per-insert %.1f ns > limit "
+            printf("dkTestNonceLogEvictionPerf: B per-insert %.1f ns > limit "
                    "%.1f ns\n",
                    per_ns, kMaxPerInsertNs);
             failures++;
         }
-        printf("dkTestD3NonceLogEvictionPerf: B cap=%zu evictions=%llu "
+        printf("dkTestNonceLogEvictionPerf: B cap=%zu evictions=%llu "
                "per-insert=%.1f ns\n",
                kCap, (unsigned long long)kEvictions, per_ns);
     endB:
@@ -6198,7 +6211,7 @@ static int dkTestD3NonceLogEvictionPerfTest(int argc, char *argv[]) {
     }
 
     if (failures == 0) {
-        printf("dkTestD3NonceLogEvictionPerf: OK\n");
+        printf("dkTestNonceLogEvictionPerf: OK\n");
         return 0;
     }
     return 1;
@@ -6210,17 +6223,18 @@ static int dkTestD3NonceLogEvictionPerfTest(int argc, char *argv[]) {
  * consecutive rejects + bumps dropped_count + advances watermark past
  * it, (c) legacy Create (retries=0) preserves infinite-retry behavior.
  * ==================================================================== */
-typedef struct dkTestE5Ctx {
+typedef struct dkTestReplicatorRetryCtx {
     uint64_t reject_seq;   /* sequence that always rejects (0 = none) */
     uint64_t reject_count; /* how many times reject_seq was rejected */
     uint64_t accept_count; /* total accepted sequences */
     uint64_t accepted_seqs[16];
-} dkTestE5Ctx;
+} dkTestReplicatorRetryCtx;
 
-static bool dkTestE5Apply(uint32_t origin_id, uint64_t sequence,
-                          const persistOps *ops, void *structure, void *ctx) {
+static bool dkTestReplicatorRetryApply(uint32_t origin_id, uint64_t sequence,
+                                       const persistOps *ops, void *structure,
+                                       void *ctx) {
     (void)origin_id;
-    dkTestE5Ctx *t = (dkTestE5Ctx *)ctx;
+    dkTestReplicatorRetryCtx *t = (dkTestReplicatorRetryCtx *)ctx;
     if (t->reject_seq != 0 && sequence == t->reject_seq) {
         t->reject_count++;
         return false;
@@ -6235,7 +6249,7 @@ static bool dkTestE5Apply(uint32_t origin_id, uint64_t sequence,
     return true;
 }
 
-static int dkTestE5ReplicatorRetryDropTest(int argc, char *argv[]) {
+static int dkTestReplicatorRetryDropTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -6256,12 +6270,12 @@ static int dkTestE5ReplicatorRetryDropTest(int argc, char *argv[]) {
         const uint8_t key[32] = {0xE5};
         hmacKeyring *ring = hmacKeyringCreate();
         hmacKeyringInstallUnsalted(ring, 1u, &hmacAlgoSHA256, key, sizeof(key));
-        dkTestE5Ctx ctx_a = {0};
+        dkTestReplicatorRetryCtx ctx_a = {0};
         clusterReplicator *bad = clusterReplicatorCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, CLUSTER_MAILBOX_FLAG_NONE,
-            bad_table, 256u, dkTestE5Apply, &ctx_a);
+            bad_table, 256u, dkTestReplicatorRetryApply, &ctx_a);
         if (bad != NULL) {
-            printf("dkTestE5ReplicatorRetryDrop: Create accepted NULL-free "
+            printf("dkTestReplicatorRetryDrop: Create accepted NULL-free "
                    "typetable\n");
             failures++;
             clusterReplicatorFree(bad);
@@ -6269,9 +6283,9 @@ static int dkTestE5ReplicatorRetryDropTest(int argc, char *argv[]) {
         clusterReplicatorConfig cfg = {.max_apply_retries = 3};
         clusterReplicator *badEx = clusterReplicatorCreateEx(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, CLUSTER_MAILBOX_FLAG_NONE,
-            bad_table, 256u, dkTestE5Apply, &ctx_a, &cfg);
+            bad_table, 256u, dkTestReplicatorRetryApply, &ctx_a, &cfg);
         if (badEx != NULL) {
-            printf("dkTestE5ReplicatorRetryDrop: CreateEx accepted NULL-free "
+            printf("dkTestReplicatorRetryDrop: CreateEx accepted NULL-free "
                    "typetable\n");
             failures++;
             clusterReplicatorFree(badEx);
@@ -6286,13 +6300,13 @@ static int dkTestE5ReplicatorRetryDropTest(int argc, char *argv[]) {
         hmacKeyring *ring = hmacKeyringCreate();
         hmacKeyringInstallUnsalted(ring, KID, &hmacAlgoSHA256, key,
                                    sizeof(key));
-        dkTestE5Ctx ctx_b = {.reject_seq = 5};
+        dkTestReplicatorRetryCtx ctx_b = {.reject_seq = 5};
         clusterReplicatorConfig cfg = {.max_apply_retries = 3};
         clusterReplicator *rep = clusterReplicatorCreateEx(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, CLUSTER_MAILBOX_FLAG_NONE,
-            type_table, 256u, dkTestE5Apply, &ctx_b, &cfg);
+            type_table, 256u, dkTestReplicatorRetryApply, &ctx_b, &cfg);
         if (rep == NULL) {
-            printf("dkTestE5ReplicatorRetryDrop: CreateEx failed\n");
+            printf("dkTestReplicatorRetryDrop: CreateEx failed\n");
             failures++;
             hmacKeyringFree(ring);
             goto skip_case2;
@@ -6316,33 +6330,32 @@ static int dkTestE5ReplicatorRetryDropTest(int argc, char *argv[]) {
         }
 
         if (ctx_b.reject_count != 3) {
-            printf("dkTestE5ReplicatorRetryDrop: expected 3 rejects for seq 5, "
+            printf("dkTestReplicatorRetryDrop: expected 3 rejects for seq 5, "
                    "got %llu\n",
                    (unsigned long long)ctx_b.reject_count);
             failures++;
         }
         if (clusterReplicatorDroppedCount(rep) != 1) {
-            printf("dkTestE5ReplicatorRetryDrop: expected dropped_count=1, got "
+            printf("dkTestReplicatorRetryDrop: expected dropped_count=1, got "
                    "%llu\n",
                    (unsigned long long)clusterReplicatorDroppedCount(rep));
             failures++;
         }
         if (ctx_b.accept_count != 9) {
-            printf(
-                "dkTestE5ReplicatorRetryDrop: expected 9 accepts, got %llu\n",
-                (unsigned long long)ctx_b.accept_count);
+            printf("dkTestReplicatorRetryDrop: expected 9 accepts, got %llu\n",
+                   (unsigned long long)ctx_b.accept_count);
             failures++;
         }
         clusterMailbox *mb = clusterReplicatorMailbox(rep);
         if (clusterMailboxLastApplied(mb, 1u) != 10) {
-            printf("dkTestE5ReplicatorRetryDrop: expected watermark=10, got "
+            printf("dkTestReplicatorRetryDrop: expected watermark=10, got "
                    "%llu\n",
                    (unsigned long long)clusterMailboxLastApplied(mb, 1u));
             failures++;
         }
         for (uint64_t i = 0; i < ctx_b.accept_count && i < 16; i++) {
             if (ctx_b.accepted_seqs[i] == 5) {
-                printf("dkTestE5ReplicatorRetryDrop: accepted seq 5 (should "
+                printf("dkTestReplicatorRetryDrop: accepted seq 5 (should "
                        "never be accepted)\n");
                 failures++;
                 break;
@@ -6360,12 +6373,12 @@ skip_case2:
         hmacKeyring *ring = hmacKeyringCreate();
         hmacKeyringInstallUnsalted(ring, KID, &hmacAlgoSHA256, key,
                                    sizeof(key));
-        dkTestE5Ctx ctx_c = {.reject_seq = 1};
+        dkTestReplicatorRetryCtx ctx_c = {.reject_seq = 1};
         clusterReplicator *rep = clusterReplicatorCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, CLUSTER_MAILBOX_FLAG_NONE,
-            type_table, 256u, dkTestE5Apply, &ctx_c);
+            type_table, 256u, dkTestReplicatorRetryApply, &ctx_c);
         if (rep == NULL) {
-            printf("dkTestE5ReplicatorRetryDrop: legacy Create failed\n");
+            printf("dkTestReplicatorRetryDrop: legacy Create failed\n");
             failures++;
             hmacKeyringFree(ring);
             goto skip_case3;
@@ -6381,20 +6394,20 @@ skip_case2:
             clusterReplicatorIngest(rep, wire, written, KID);
         }
         if (clusterReplicatorDroppedCount(rep) != 0) {
-            printf("dkTestE5ReplicatorRetryDrop: legacy dropped_count expected "
+            printf("dkTestReplicatorRetryDrop: legacy dropped_count expected "
                    "0, got %llu\n",
                    (unsigned long long)clusterReplicatorDroppedCount(rep));
             failures++;
         }
         clusterMailbox *mb = clusterReplicatorMailbox(rep);
         if (clusterMailboxLastApplied(mb, 1u) != 0) {
-            printf("dkTestE5ReplicatorRetryDrop: legacy watermark expected 0, "
+            printf("dkTestReplicatorRetryDrop: legacy watermark expected 0, "
                    "got %llu\n",
                    (unsigned long long)clusterMailboxLastApplied(mb, 1u));
             failures++;
         }
         if (ctx_c.reject_count != 50) {
-            printf("dkTestE5ReplicatorRetryDrop: legacy reject_count expected "
+            printf("dkTestReplicatorRetryDrop: legacy reject_count expected "
                    "50, got %llu\n",
                    (unsigned long long)ctx_c.reject_count);
             failures++;
@@ -6407,7 +6420,7 @@ skip_case2:
 skip_case3:
 
     if (failures == 0) {
-        printf("dkTestE5ReplicatorRetryDrop: OK (NULL-free reject, "
+        printf("dkTestReplicatorRetryDrop: OK (NULL-free reject, "
                "drop-after-3, legacy infinite)\n");
         return 0;
     }
@@ -6421,17 +6434,17 @@ skip_case3:
  * Replay of wire bytes surfaces as CLUSTER_MAILBOX_ERR_REPLAY (mailbox
  * window fires before nonceLog observation under keyed-MAC algos).
  * ==================================================================== */
-typedef struct dkTestD8ReplCtx {
+typedef struct dkTestMailboxReplCtx {
     flex *restored[4];
     uint32_t origins[4];
     uint64_t seqs[4];
     size_t count;
-} dkTestD8ReplCtx;
+} dkTestMailboxReplCtx;
 
-static bool dkTestD8ReplApply(uint32_t origin_id, uint64_t sequence,
-                              const persistOps *ops, void *structure,
-                              void *ctx) {
-    dkTestD8ReplCtx *t = (dkTestD8ReplCtx *)ctx;
+static bool dkTestMailboxReplApply(uint32_t origin_id, uint64_t sequence,
+                                   const persistOps *ops, void *structure,
+                                   void *ctx) {
+    dkTestMailboxReplCtx *t = (dkTestMailboxReplCtx *)ctx;
     if (t->count >= 4 || ops->type != PERSIST_TYPE_FLEX) {
         ops->free(structure);
         return false;
@@ -6443,7 +6456,7 @@ static bool dkTestD8ReplApply(uint32_t origin_id, uint64_t sequence,
     return true;
 }
 
-static int dkTestD8MailboxReplicatorNonceLogWiredTest(int argc, char *argv[]) {
+static int dkTestMailboxReplicatorNonceLogWiredTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -6464,17 +6477,17 @@ static int dkTestD8MailboxReplicatorNonceLogWiredTest(int argc, char *argv[]) {
         clusterMailbox *mb =
             clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
         if (mb == NULL) {
-            printf("dkTestD8 s1 Create NULL\n");
+            printf("dkTestMailboxRepl s1 Create NULL\n");
             failures++;
             hmacKeyringFree(ring);
             goto s2;
         }
         if (clusterMailboxNonceLog(mb) == NULL) {
-            printf("dkTestD8 s1 nonceLog NULL\n");
+            printf("dkTestMailboxRepl s1 nonceLog NULL\n");
             failures++;
         } else if (aeadNonceLogCapacity(clusterMailboxNonceLog(mb)) <
                    CLUSTER_MAILBOX_DEFAULT_NONCE_LOG_CAP) {
-            printf("dkTestD8 s1 cap too small\n");
+            printf("dkTestMailboxRepl s1 cap too small\n");
             failures++;
         }
         const size_t sz = clusterMailboxSealedSize(mb, payload_len);
@@ -6482,17 +6495,17 @@ static int dkTestD8MailboxReplicatorNonceLogWiredTest(int argc, char *argv[]) {
         size_t written = 0;
         if (!clusterMailboxSeal(mb, 1u, 1u, 0x42, payload, payload_len, KID,
                                 buf, sz, &written)) {
-            printf("dkTestD8 s1 Seal failed\n");
+            printf("dkTestMailboxRepl s1 Seal failed\n");
             failures++;
         }
         if (clusterMailboxIngest(mb, buf, written, KID) != CLUSTER_MAILBOX_OK) {
-            printf("dkTestD8 s1 first Ingest failed\n");
+            printf("dkTestMailboxRepl s1 first Ingest failed\n");
             failures++;
         }
         const clusterMailboxIngestResult rc2 =
             clusterMailboxIngest(mb, buf, written, KID);
         if (rc2 != CLUSTER_MAILBOX_ERR_REPLAY) {
-            printf("dkTestD8 s1 expected REPLAY got %d\n", (int)rc2);
+            printf("dkTestMailboxRepl s1 expected REPLAY got %d\n", (int)rc2);
             failures++;
         }
         zfree(buf);
@@ -6517,7 +6530,7 @@ s2:
             goto s3;
         }
         if (clusterMailboxNonceLog(mb) != NULL) {
-            printf("dkTestD8 s2 nonceLog should be NULL\n");
+            printf("dkTestMailboxRepl s2 nonceLog should be NULL\n");
             failures++;
         }
         const size_t sz = clusterMailboxSealedSize(mb, payload_len);
@@ -6551,7 +6564,7 @@ s3:
         };
         clusterMailbox *mb = clusterMailboxCreateOpts(&opts);
         if (mb == NULL || clusterMailboxNonceLog(mb) != borrowed) {
-            printf("dkTestD8 s3 borrowed-log failed\n");
+            printf("dkTestMailboxRepl s3 borrowed-log failed\n");
             failures++;
         }
         clusterMailboxFree(mb);
@@ -6567,17 +6580,17 @@ s4:
         hmacKeyring *ring = hmacKeyringCreate();
         hmacKeyringInstallUnsalted(ring, KID, &hmacAlgoSHA256, key,
                                    sizeof(key));
-        dkTestD8ReplCtx app_ctx = {0};
+        dkTestMailboxReplCtx app_ctx = {0};
         clusterReplicator *rep = clusterReplicatorCreate(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, CLUSTER_MAILBOX_FLAG_NONE,
-            type_table4, 256u, dkTestD8ReplApply, &app_ctx);
+            type_table4, 256u, dkTestMailboxReplApply, &app_ctx);
         if (rep == NULL) {
             failures++;
             hmacKeyringFree(ring);
             goto s5;
         }
         if (clusterMailboxNonceLog(clusterReplicatorMailbox(rep)) == NULL) {
-            printf("dkTestD8 s4 replicator nonceLog NULL\n");
+            printf("dkTestMailboxRepl s4 replicator nonceLog NULL\n");
             failures++;
         }
         flex *src = flexNew();
@@ -6597,7 +6610,7 @@ s4:
         }
         if (clusterReplicatorIngest(rep, wire, written, KID) !=
             CLUSTER_MAILBOX_ERR_REPLAY) {
-            printf("dkTestD8 s4 expected REPLAY on duplicate\n");
+            printf("dkTestMailboxRepl s4 expected REPLAY on duplicate\n");
             failures++;
         }
         for (size_t i = 0; i < app_ctx.count; i++) {
@@ -6620,21 +6633,21 @@ s5:
         hmacKeyring *ring = hmacKeyringCreate();
         hmacKeyringInstallUnsalted(ring, KID, &hmacAlgoSHA256, key,
                                    sizeof(key));
-        dkTestD8ReplCtx app_ctx = {0};
+        dkTestMailboxReplCtx app_ctx = {0};
         const clusterReplicatorConfig cfg = {
             .max_apply_retries = CLUSTER_REPLICATOR_DEFAULT_MAX_APPLY_RETRIES,
             .disable_nonce_log = true,
         };
         clusterReplicator *rep = clusterReplicatorCreateEx(
             ring, FLEX_ENV_ALGO_HMAC_SHA256, CLUSTER_MAILBOX_FLAG_NONE,
-            type_table5, 256u, dkTestD8ReplApply, &app_ctx, &cfg);
+            type_table5, 256u, dkTestMailboxReplApply, &app_ctx, &cfg);
         if (rep == NULL) {
             failures++;
             hmacKeyringFree(ring);
             goto done_d8;
         }
         if (clusterMailboxNonceLog(clusterReplicatorMailbox(rep)) != NULL) {
-            printf("dkTestD8 s5 disabled nonceLog should be NULL\n");
+            printf("dkTestMailboxRepl s5 disabled nonceLog should be NULL\n");
             failures++;
         }
         clusterReplicatorFree(rep);
@@ -6642,7 +6655,7 @@ s5:
     }
 done_d8:
     if (failures == 0) {
-        printf("dkTestD8MailboxReplicatorNonceLogWired: OK (5 scenarios)\n");
+        printf("dkTestMailboxReplicatorNonceLogWired: OK (5 scenarios)\n");
         return 0;
     }
     return 1;
@@ -6654,7 +6667,7 @@ done_d8:
  * config; assert structural equivalence after the snapshot+restore
  * cycle (id, name, address, location, weight, capacity, state).
  * ==================================================================== */
-static int dkTestE2ClusterRingFlexSerializeTest(int argc, char *argv[]) {
+static int dkTestClusterRingFlexSerializeTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -6672,7 +6685,7 @@ static int dkTestE2ClusterRingFlexSerializeTest(int argc, char *argv[]) {
 
     clusterRing *src = clusterRingNew(&config);
     if (src == NULL) {
-        printf("dkTestE2ClusterRingFlexSerialize: ring create failed\n");
+        printf("dkTestClusterRingFlexSerialize: ring create failed\n");
         return 1;
     }
 
@@ -6783,7 +6796,7 @@ static int dkTestE2ClusterRingFlexSerializeTest(int argc, char *argv[]) {
             .initialState = src_nodes[i].state,
         };
         if (clusterRingAddNode(src, &nc) != CLUSTER_OK) {
-            printf("dkTestE2ClusterRingFlexSerialize: AddNode #%llu failed\n",
+            printf("dkTestClusterRingFlexSerialize: AddNode #%llu failed\n",
                    (unsigned long long)src_nodes[i].id);
             failures++;
         }
@@ -6792,13 +6805,13 @@ static int dkTestE2ClusterRingFlexSerializeTest(int argc, char *argv[]) {
     size_t snap_len = 0;
     uint8_t *snap = persistOpsClusterRing.snapshot(src, &snap_len);
     if (snap == NULL || snap_len == 0) {
-        printf("dkTestE2ClusterRingFlexSerialize: snapshot empty\n");
+        printf("dkTestClusterRingFlexSerialize: snapshot empty\n");
         clusterRingFree(src);
         return 1;
     }
 
     if (!flexValidateBuffer(snap, snap_len)) {
-        printf("dkTestE2ClusterRingFlexSerialize: snapshot is not a valid flex "
+        printf("dkTestClusterRingFlexSerialize: snapshot is not a valid flex "
                "buffer\n");
         zfree(snap);
         clusterRingFree(src);
@@ -6806,7 +6819,7 @@ static int dkTestE2ClusterRingFlexSerializeTest(int argc, char *argv[]) {
     }
 
     if (persistOpsClusterRing.estimateSize(src) != snap_len) {
-        printf("dkTestE2ClusterRingFlexSerialize: estimateSize disagrees with "
+        printf("dkTestClusterRingFlexSerialize: estimateSize disagrees with "
                "snapshot length\n");
         failures++;
     }
@@ -6814,7 +6827,7 @@ static int dkTestE2ClusterRingFlexSerializeTest(int argc, char *argv[]) {
     clusterRing *dst =
         (clusterRing *)persistOpsClusterRing.restore(snap, snap_len);
     if (dst == NULL) {
-        printf("dkTestE2ClusterRingFlexSerialize: restore returned NULL\n");
+        printf("dkTestClusterRingFlexSerialize: restore returned NULL\n");
         zfree(snap);
         clusterRingFree(src);
         return 1;
@@ -6822,13 +6835,13 @@ static int dkTestE2ClusterRingFlexSerializeTest(int argc, char *argv[]) {
 
     if (persistOpsClusterRing.validate == NULL ||
         !persistOpsClusterRing.validate(dst)) {
-        printf("dkTestE2ClusterRingFlexSerialize: validate hook rejected "
+        printf("dkTestClusterRingFlexSerialize: validate hook rejected "
                "restored ring\n");
         failures++;
     }
 
     if (clusterRingNodeCount(dst) != (uint32_t)kN) {
-        printf("dkTestE2ClusterRingFlexSerialize: node count expected %zu, got "
+        printf("dkTestClusterRingFlexSerialize: node count expected %zu, got "
                "%u\n",
                kN, clusterRingNodeCount(dst));
         failures++;
@@ -6837,26 +6850,26 @@ static int dkTestE2ClusterRingFlexSerializeTest(int argc, char *argv[]) {
     for (size_t i = 0; i < kN; i++) {
         const clusterNode *n = clusterRingGetNode(dst, src_nodes[i].id);
         if (n == NULL) {
-            printf("dkTestE2ClusterRingFlexSerialize: node id=%llu missing in "
+            printf("dkTestClusterRingFlexSerialize: node id=%llu missing in "
                    "restored ring\n",
                    (unsigned long long)src_nodes[i].id);
             failures++;
             continue;
         }
         if (clusterNodeGetState(n) != src_nodes[i].state) {
-            printf("dkTestE2ClusterRingFlexSerialize: node id=%llu state "
+            printf("dkTestClusterRingFlexSerialize: node id=%llu state "
                    "mismatch\n",
                    (unsigned long long)src_nodes[i].id);
             failures++;
         }
         if (clusterNodeGetWeight(n) != src_nodes[i].weight) {
-            printf("dkTestE2ClusterRingFlexSerialize: node id=%llu weight "
+            printf("dkTestClusterRingFlexSerialize: node id=%llu weight "
                    "mismatch\n",
                    (unsigned long long)src_nodes[i].id);
             failures++;
         }
         if (clusterNodeGetCapacity(n) != src_nodes[i].cap) {
-            printf("dkTestE2ClusterRingFlexSerialize: node id=%llu capacity "
+            printf("dkTestClusterRingFlexSerialize: node id=%llu capacity "
                    "mismatch\n",
                    (unsigned long long)src_nodes[i].id);
             failures++;
@@ -6870,21 +6883,21 @@ static int dkTestE2ClusterRingFlexSerializeTest(int argc, char *argv[]) {
             loc->regionId != src_nodes[i].loc.regionId ||
             loc->countryId != src_nodes[i].loc.countryId ||
             loc->continentId != src_nodes[i].loc.continentId) {
-            printf("dkTestE2ClusterRingFlexSerialize: node id=%llu location "
+            printf("dkTestClusterRingFlexSerialize: node id=%llu location "
                    "mismatch\n",
                    (unsigned long long)src_nodes[i].id);
             failures++;
         }
         const char *got_name = clusterNodeGetName(n);
         if (got_name == NULL || strcmp(got_name, src_nodes[i].name) != 0) {
-            printf("dkTestE2ClusterRingFlexSerialize: node id=%llu name "
+            printf("dkTestClusterRingFlexSerialize: node id=%llu name "
                    "mismatch\n",
                    (unsigned long long)src_nodes[i].id);
             failures++;
         }
         const char *got_addr = clusterNodeGetAddress(n);
         if (got_addr == NULL || strcmp(got_addr, src_nodes[i].addr) != 0) {
-            printf("dkTestE2ClusterRingFlexSerialize: node id=%llu address "
+            printf("dkTestClusterRingFlexSerialize: node id=%llu address "
                    "mismatch\n",
                    (unsigned long long)src_nodes[i].id);
             failures++;
@@ -6895,7 +6908,7 @@ static int dkTestE2ClusterRingFlexSerializeTest(int argc, char *argv[]) {
     uint8_t *snap2 = persistOpsClusterRing.snapshot(dst, &snap2_len);
     if (snap2 == NULL || snap2_len != snap_len ||
         memcmp(snap, snap2, snap_len) != 0) {
-        printf("dkTestE2ClusterRingFlexSerialize: re-snapshot is not "
+        printf("dkTestClusterRingFlexSerialize: re-snapshot is not "
                "byte-equivalent\n");
         failures++;
     }
@@ -6908,7 +6921,7 @@ static int dkTestE2ClusterRingFlexSerializeTest(int argc, char *argv[]) {
     clusterRingFree(src);
 
     if (failures == 0) {
-        printf("dkTestE2ClusterRingFlexSerialize: OK (%zu-node ring "
+        printf("dkTestClusterRingFlexSerialize: OK (%zu-node ring "
                "round-tripped via flex)\n",
                kN);
         return 0;
@@ -6919,7 +6932,7 @@ static int dkTestE2ClusterRingFlexSerializeTest(int argc, char *argv[]) {
 /* ====================================================================
  * persistOpsClusterRing must REJECT wire input with out-of-enum state.
  * ==================================================================== */
-static int dkTestE2ClusterRingMaliciousStateTest(int argc, char *argv[]) {
+static int dkTestClusterRingMaliciousStateTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -6957,7 +6970,7 @@ static int dkTestE2ClusterRingMaliciousStateTest(int argc, char *argv[]) {
     const size_t buflen = flexBytes(f);
     clusterRing *r = clusterRingDeserialize((const void *)f, buflen);
     if (r != NULL) {
-        printf("dkTestE2ClusterRingMaliciousState: deserialize accepted "
+        printf("dkTestClusterRingMaliciousState: deserialize accepted "
                "state=0xDEADBEEF\n");
         clusterRingFree(r);
         failures++;
@@ -6966,7 +6979,7 @@ static int dkTestE2ClusterRingMaliciousStateTest(int argc, char *argv[]) {
     clusterRing *r2 = (clusterRing *)persistOpsClusterRing.restore(
         (const uint8_t *)f, buflen);
     if (r2 != NULL) {
-        printf("dkTestE2ClusterRingMaliciousState: persistOps.restore accepted "
+        printf("dkTestClusterRingMaliciousState: persistOps.restore accepted "
                "state=0xDEADBEEF\n");
         persistOpsClusterRing.free(r2);
         failures++;
@@ -6975,7 +6988,7 @@ static int dkTestE2ClusterRingMaliciousStateTest(int argc, char *argv[]) {
     flexFree(f);
 
     if (failures == 0) {
-        printf("dkTestE2ClusterRingMaliciousState: OK (malicious state "
+        printf("dkTestClusterRingMaliciousState: OK (malicious state "
                "rejected)\n");
         return 0;
     }
@@ -6985,7 +6998,7 @@ static int dkTestE2ClusterRingMaliciousStateTest(int argc, char *argv[]) {
 /* ====================================================================
  * clusterRing wire input with two nodes sharing the same id must be REJECTED.
  * ==================================================================== */
-static int dkTestE2ClusterRingDuplicateIdTest(int argc, char *argv[]) {
+static int dkTestClusterRingDuplicateIdTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -7026,11 +7039,11 @@ static int dkTestE2ClusterRingDuplicateIdTest(int argc, char *argv[]) {
     const size_t buflen = flexBytes(f);
     clusterRing *r = clusterRingDeserialize((const void *)f, buflen);
     if (r != NULL) {
-        printf("dkTestE2ClusterRingDuplicateId: deserialize accepted duplicate "
+        printf("dkTestClusterRingDuplicateId: deserialize accepted duplicate "
                "ids\n");
         if (persistOpsClusterRing.validate != NULL &&
             persistOpsClusterRing.validate(r)) {
-            printf("dkTestE2ClusterRingDuplicateId: validate hook also "
+            printf("dkTestClusterRingDuplicateId: validate hook also "
                    "accepted dup-id ring\n");
         }
         clusterRingFree(r);
@@ -7040,7 +7053,7 @@ static int dkTestE2ClusterRingDuplicateIdTest(int argc, char *argv[]) {
     flexFree(f);
 
     if (failures == 0) {
-        printf("dkTestE2ClusterRingDuplicateId: OK (duplicate id rejected)\n");
+        printf("dkTestClusterRingDuplicateId: OK (duplicate id rejected)\n");
         return 0;
     }
     return 1;
@@ -7049,7 +7062,7 @@ static int dkTestE2ClusterRingDuplicateIdTest(int argc, char *argv[]) {
 /* ====================================================================
  * clusterRing truncated wire buffer must NOT crash and must return NULL.
  * ==================================================================== */
-static int dkTestE2ClusterRingTruncatedBufferTest(int argc, char *argv[]) {
+static int dkTestClusterRingTruncatedBufferTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -7060,7 +7073,7 @@ static int dkTestE2ClusterRingTruncatedBufferTest(int argc, char *argv[]) {
     };
     clusterRing *src = clusterRingNew(&config);
     if (src == NULL) {
-        printf("dkTestE2ClusterRingTruncatedBuffer: ring create failed\n");
+        printf("dkTestClusterRingTruncatedBuffer: ring create failed\n");
         return 1;
     }
     for (uint32_t i = 1u; i <= 4u; i++) {
@@ -7076,33 +7089,32 @@ static int dkTestE2ClusterRingTruncatedBufferTest(int argc, char *argv[]) {
     size_t snap_len = 0;
     uint8_t *snap = persistOpsClusterRing.snapshot(src, &snap_len);
     if (snap == NULL || snap_len < 16) {
-        printf("dkTestE2ClusterRingTruncatedBuffer: snapshot too small\n");
+        printf("dkTestClusterRingTruncatedBuffer: snapshot too small\n");
         clusterRingFree(src);
         return 1;
     }
 
     if (clusterRingDeserialize(snap, 0) != NULL) {
-        printf("dkTestE2ClusterRingTruncatedBuffer: accepted 0-byte input\n");
+        printf("dkTestClusterRingTruncatedBuffer: accepted 0-byte input\n");
         failures++;
     }
     if (clusterRingDeserialize(snap, 1) != NULL) {
-        printf("dkTestE2ClusterRingTruncatedBuffer: accepted 1-byte input\n");
+        printf("dkTestClusterRingTruncatedBuffer: accepted 1-byte input\n");
         failures++;
     }
     if (clusterRingDeserialize(snap, snap_len / 2) != NULL) {
-        printf("dkTestE2ClusterRingTruncatedBuffer: accepted half-truncated "
+        printf("dkTestClusterRingTruncatedBuffer: accepted half-truncated "
                "input\n");
         failures++;
     }
     if (clusterRingDeserialize(snap, snap_len - 1) != NULL) {
-        printf(
-            "dkTestE2ClusterRingTruncatedBuffer: accepted snap_len-1 input\n");
+        printf("dkTestClusterRingTruncatedBuffer: accepted snap_len-1 input\n");
         failures++;
     }
 
     clusterRing *ok = clusterRingDeserialize(snap, snap_len);
     if (ok == NULL) {
-        printf("dkTestE2ClusterRingTruncatedBuffer: full-length deserialize "
+        printf("dkTestClusterRingTruncatedBuffer: full-length deserialize "
                "failed\n");
         failures++;
     } else {
@@ -7113,7 +7125,7 @@ static int dkTestE2ClusterRingTruncatedBufferTest(int argc, char *argv[]) {
     clusterRingFree(src);
 
     if (failures == 0) {
-        printf("dkTestE2ClusterRingTruncatedBuffer: OK (truncation rejected, "
+        printf("dkTestClusterRingTruncatedBuffer: OK (truncation rejected, "
                "no crash)\n");
         return 0;
     }
@@ -7125,14 +7137,14 @@ static int dkTestE2ClusterRingTruncatedBufferTest(int argc, char *argv[]) {
  * Verifies install pre-runs aesGcmInit for AES-128/AES-256 lengths and
  * stashes the schedule alongside the slot for the hot Open path.
  * ==================================================================== */
-static int dkTestA11AeadKeyScheduleCacheTest(int argc, char *argv[]) {
+static int dkTestAeadKeyScheduleCacheTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
 
     hmacKeyring *ring = hmacKeyringCreate();
     if (ring == NULL) {
-        printf("dkTestA11AeadKeyScheduleCache: ring create failed\n");
+        printf("dkTestAeadKeyScheduleCache: ring create failed\n");
         return 1;
     }
 
@@ -7169,30 +7181,30 @@ static int dkTestA11AeadKeyScheduleCacheTest(int argc, char *argv[]) {
 
     if (!hmacKeyringInstall(ring, K1, &hmacAlgoSHA256, k1_aes128,
                             sizeof(k1_aes128), salt1)) {
-        printf("dkTestA11AeadKeyScheduleCache: K1 install failed\n");
+        printf("dkTestAeadKeyScheduleCache: K1 install failed\n");
         failures++;
         goto cleanup;
     }
     if (!hmacKeyringInstall(ring, K2, &hmacAlgoSHA256, k2_aes256,
                             sizeof(k2_aes256), salt2)) {
-        printf("dkTestA11AeadKeyScheduleCache: K2 install failed\n");
+        printf("dkTestAeadKeyScheduleCache: K2 install failed\n");
         failures++;
         goto cleanup;
     }
     if (!hmacKeyringInstall(ring, K3, &hmacAlgoSHA256, k3_sha1, sizeof(k3_sha1),
                             salt3)) {
-        printf("dkTestA11AeadKeyScheduleCache: K3 install failed\n");
+        printf("dkTestAeadKeyScheduleCache: K3 install failed\n");
         failures++;
         goto cleanup;
     }
 
     const aesGcmKey *cached1 = hmacKeyringGetAesGcmKey(ring, K1);
     if (cached1 == NULL) {
-        printf("dkTestA11AeadKeyScheduleCache: K1 (AES-128) MUST be cached\n");
+        printf("dkTestAeadKeyScheduleCache: K1 (AES-128) MUST be cached\n");
         failures++;
     } else if (cached1->key_size != AES128_KEY_LEN ||
                cached1->num_rounds != 10) {
-        printf("dkTestA11AeadKeyScheduleCache: K1 cached schedule shape wrong "
+        printf("dkTestAeadKeyScheduleCache: K1 cached schedule shape wrong "
                "(key_size=%u rounds=%u)\n",
                (unsigned)cached1->key_size, (unsigned)cached1->num_rounds);
         failures++;
@@ -7200,33 +7212,32 @@ static int dkTestA11AeadKeyScheduleCacheTest(int argc, char *argv[]) {
 
     const aesGcmKey *cached2 = hmacKeyringGetAesGcmKey(ring, K2);
     if (cached2 == NULL) {
-        printf("dkTestA11AeadKeyScheduleCache: K2 (AES-256) MUST be cached\n");
+        printf("dkTestAeadKeyScheduleCache: K2 (AES-256) MUST be cached\n");
         failures++;
     } else if (cached2->key_size != AES256_KEY_LEN ||
                cached2->num_rounds != 14) {
-        printf("dkTestA11AeadKeyScheduleCache: K2 cached schedule shape wrong "
+        printf("dkTestAeadKeyScheduleCache: K2 cached schedule shape wrong "
                "(key_size=%u rounds=%u)\n",
                (unsigned)cached2->key_size, (unsigned)cached2->num_rounds);
         failures++;
     }
 
     if (hmacKeyringGetAesGcmKey(ring, K3) != NULL) {
-        printf("dkTestA11AeadKeyScheduleCache: K3 (20-byte SHA-1) MUST be "
+        printf("dkTestAeadKeyScheduleCache: K3 (20-byte SHA-1) MUST be "
                "uncached\n");
         failures++;
     }
     if (hmacKeyringGetAesGcmKey(ring, HMAC_KEY_ID_INVALID) != NULL) {
-        printf("dkTestA11AeadKeyScheduleCache: HMAC_KEY_ID_INVALID MUST yield "
+        printf("dkTestAeadKeyScheduleCache: HMAC_KEY_ID_INVALID MUST yield "
                "NULL\n");
         failures++;
     }
     if (hmacKeyringGetAesGcmKey(ring, 0xDEADBEEFu) != NULL) {
-        printf(
-            "dkTestA11AeadKeyScheduleCache: unregistered id MUST yield NULL\n");
+        printf("dkTestAeadKeyScheduleCache: unregistered id MUST yield NULL\n");
         failures++;
     }
     if (hmacKeyringGetAesGcmKey(NULL, K1) != NULL) {
-        printf("dkTestA11AeadKeyScheduleCache: NULL ring MUST yield NULL\n");
+        printf("dkTestAeadKeyScheduleCache: NULL ring MUST yield NULL\n");
         failures++;
     }
 
@@ -7234,7 +7245,7 @@ static int dkTestA11AeadKeyScheduleCacheTest(int argc, char *argv[]) {
         for (int i = 0; i < 100; i++) {
             const aesGcmKey *probe = hmacKeyringGetAesGcmKey(ring, K1);
             if (probe != cached1) {
-                printf("dkTestA11AeadKeyScheduleCache: pointer stability "
+                printf("dkTestAeadKeyScheduleCache: pointer stability "
                        "failed at i=%d\n",
                        i);
                 failures++;
@@ -7244,22 +7255,21 @@ static int dkTestA11AeadKeyScheduleCacheTest(int argc, char *argv[]) {
     }
 
     if (!hmacKeyringRetire(ring, K1)) {
-        printf("dkTestA11AeadKeyScheduleCache: K1 retire failed\n");
+        printf("dkTestAeadKeyScheduleCache: K1 retire failed\n");
         failures++;
     } else if (hmacKeyringGetAesGcmKey(ring, K1) != NULL) {
-        printf(
-            "dkTestA11AeadKeyScheduleCache: post-retire K1 MUST yield NULL\n");
+        printf("dkTestAeadKeyScheduleCache: post-retire K1 MUST yield NULL\n");
         failures++;
     }
 
     if (!hmacKeyringInstall(ring, K4, &hmacAlgoSHA256, k4_aes128,
                             sizeof(k4_aes128), salt4)) {
-        printf("dkTestA11AeadKeyScheduleCache: K4 install failed\n");
+        printf("dkTestAeadKeyScheduleCache: K4 install failed\n");
         failures++;
         goto cleanup;
     }
     if (hmacKeyringGetAesGcmKey(ring, K4) == NULL) {
-        printf("dkTestA11AeadKeyScheduleCache: K4 cache MUST hit before E2E\n");
+        printf("dkTestAeadKeyScheduleCache: K4 cache MUST hit before E2E\n");
         failures++;
     }
 
@@ -7277,7 +7287,7 @@ static int dkTestA11AeadKeyScheduleCacheTest(int argc, char *argv[]) {
         flexEnvelopeWrappedSize(kPayloadLen, FLEX_ENV_ALGO_AEAD_AES128_GCM,
                                 FLEX_ENV_FLAG_KEYID_PRESENT);
     if (cap == 0u) {
-        printf("dkTestA11AeadKeyScheduleCache: wrappedSize returned 0\n");
+        printf("dkTestAeadKeyScheduleCache: wrappedSize returned 0\n");
         failures++;
         zfree(plaintext);
         goto cleanup;
@@ -7299,18 +7309,18 @@ static int dkTestA11AeadKeyScheduleCacheTest(int argc, char *argv[]) {
     };
     if (!flexEnvelopeSeal(envelope, cap, plaintext, (uint64_t)kPayloadLen, &sp,
                           &env_written)) {
-        printf("dkTestA11AeadKeyScheduleCache: E2E Seal failed\n");
+        printf("dkTestAeadKeyScheduleCache: E2E Seal failed\n");
         failures++;
     } else {
         flexEnvelopeVerifyParams vp = {.keyring = ring};
         if (!flexEnvelopeOpen(envelope, env_written, &vp, recovered,
                               kPayloadLen, &pt_written)) {
-            printf("dkTestA11AeadKeyScheduleCache: E2E Open failed (err=%d)\n",
+            printf("dkTestAeadKeyScheduleCache: E2E Open failed (err=%d)\n",
                    (int)flexEnvelopeLastVerifyError());
             failures++;
         } else if (pt_written != kPayloadLen ||
                    memcmp(recovered, plaintext, kPayloadLen) != 0) {
-            printf("dkTestA11AeadKeyScheduleCache: E2E plaintext mismatch\n");
+            printf("dkTestAeadKeyScheduleCache: E2E plaintext mismatch\n");
             failures++;
         }
     }
@@ -7323,7 +7333,7 @@ cleanup:
     hmacKeyringFree(ring);
 
     if (failures == 0) {
-        printf("dkTestA11AeadKeyScheduleCache: OK\n");
+        printf("dkTestAeadKeyScheduleCache: OK\n");
         return 0;
     }
     return 1;
@@ -7332,7 +7342,7 @@ cleanup:
 /* ====================================================================
  * clusterMailbox inner-header + rotate-announce flex tests.
  * ==================================================================== */
-int dkTestE4MailboxInnerHeaderFlexTest(int argc, char *argv[]) {
+int dkTestMailboxInnerHeaderFlexTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int err = 0;
@@ -7557,7 +7567,7 @@ int dkTestE4MailboxInnerHeaderFlexTest(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
-int dkTestE4MailboxRotateAnnounceFlexTest(int argc, char *argv[]) {
+int dkTestMailboxRotateAnnounceFlexTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int err = 0;
@@ -7703,7 +7713,7 @@ int dkTestE4MailboxRotateAnnounceFlexTest(int argc, char *argv[]) {
 /* ====================================================================
  * Assert flexEnvelopeHeader::_reserved is zero on parse.
  * ==================================================================== */
-static int dkTestE10EnvelopeReservedZeroAssertTest(int argc, char *argv[]) {
+static int dkTestEnvelopeReservedZeroAssertTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -7717,7 +7727,7 @@ static int dkTestE10EnvelopeReservedZeroAssertTest(int argc, char *argv[]) {
     const size_t wrapped =
         flexEnvelopeWrappedSize(plen, FLEX_ENV_ALGO_XXH64, 0);
     if (wrapped == 0) {
-        printf("dkTestE10EnvelopeReservedZeroAssert: wrappedSize == 0\n");
+        printf("dkTestEnvelopeReservedZeroAssert: wrappedSize == 0\n");
         return 1;
     }
     uint8_t *buf = (uint8_t *)zmalloc(wrapped);
@@ -7732,7 +7742,7 @@ static int dkTestE10EnvelopeReservedZeroAssertTest(int argc, char *argv[]) {
     size_t written = 0;
     if (!flexEnvelopeWrap(buf, wrapped, payload, plen, &wp, &written) ||
         written != wrapped) {
-        printf("dkTestE10EnvelopeReservedZeroAssert: wrap failed\n");
+        printf("dkTestEnvelopeReservedZeroAssert: wrap failed\n");
         zfree(buf);
         return 1;
     }
@@ -7741,13 +7751,12 @@ static int dkTestE10EnvelopeReservedZeroAssertTest(int argc, char *argv[]) {
         flexEnvelopeHeader hdr;
         memset(&hdr, 0xCC, sizeof(hdr));
         if (!flexEnvelopePeek(buf, wrapped, &hdr)) {
-            printf("dkTestE10EnvelopeReservedZeroAssert: Peek failed\n");
+            printf("dkTestEnvelopeReservedZeroAssert: Peek failed\n");
             failures++;
         } else if (hdr._reserved[0] != 0u || hdr._reserved[1] != 0u ||
                    hdr._reserved[2] != 0u) {
-            printf(
-                "dkTestE10EnvelopeReservedZeroAssert: _reserved={%u,%u,%u}\n",
-                hdr._reserved[0], hdr._reserved[1], hdr._reserved[2]);
+            printf("dkTestEnvelopeReservedZeroAssert: _reserved={%u,%u,%u}\n",
+                   hdr._reserved[0], hdr._reserved[1], hdr._reserved[2]);
             failures++;
         }
     }
@@ -7756,7 +7765,7 @@ static int dkTestE10EnvelopeReservedZeroAssertTest(int argc, char *argv[]) {
         const uint8_t *out_p = NULL;
         uint64_t out_pl = 0;
         if (!flexEnvelopeVerify(buf, wrapped, &vp, &out_p, &out_pl)) {
-            printf("dkTestE10EnvelopeReservedZeroAssert: untampered Verify "
+            printf("dkTestEnvelopeReservedZeroAssert: untampered Verify "
                    "failed\n");
             failures++;
         }
@@ -7768,12 +7777,12 @@ static int dkTestE10EnvelopeReservedZeroAssertTest(int argc, char *argv[]) {
         const uint8_t *out_p = NULL;
         uint64_t out_pl = 0;
         if (flexEnvelopeVerify(buf, wrapped, &vp, &out_p, &out_pl)) {
-            printf("dkTestE10EnvelopeReservedZeroAssert: Verify accepted "
+            printf("dkTestEnvelopeReservedZeroAssert: Verify accepted "
                    "reserved bit 0x04\n");
             failures++;
         } else if (flexEnvelopeLastVerifyError() !=
                    FLEX_ENV_VERIFY_FAILED_GENERIC) {
-            printf("dkTestE10EnvelopeReservedZeroAssert: expected "
+            printf("dkTestEnvelopeReservedZeroAssert: expected "
                    "FAILED_GENERIC got %d\n",
                    (int)flexEnvelopeLastVerifyError());
             failures++;
@@ -7787,7 +7796,7 @@ static int dkTestE10EnvelopeReservedZeroAssertTest(int argc, char *argv[]) {
         const uint8_t *out_p = NULL;
         uint64_t out_pl = 0;
         if (flexEnvelopeVerify(buf, wrapped, &vp, &out_p, &out_pl)) {
-            printf("dkTestE10EnvelopeReservedZeroAssert: Verify accepted "
+            printf("dkTestEnvelopeReservedZeroAssert: Verify accepted "
                    "reserved bit 0x80\n");
             failures++;
         }
@@ -7798,7 +7807,7 @@ static int dkTestE10EnvelopeReservedZeroAssertTest(int argc, char *argv[]) {
         const uint8_t *out_p = NULL;
         uint64_t out_pl = 0;
         if (!flexEnvelopeVerify(buf, wrapped, &vp, &out_p, &out_pl)) {
-            printf("dkTestE10EnvelopeReservedZeroAssert: restored Verify "
+            printf("dkTestEnvelopeReservedZeroAssert: restored Verify "
                    "failed\n");
             failures++;
         }
@@ -7809,19 +7818,19 @@ static int dkTestE10EnvelopeReservedZeroAssertTest(int argc, char *argv[]) {
         const size_t exp_off =
             offsetof(flexEnvelopeHeader, version) + sizeof(uint8_t);
         if (offsetof(flexEnvelopeHeader, _reserved) != exp_off) {
-            printf("dkTestE10EnvelopeReservedZeroAssert: _reserved offset "
+            printf("dkTestEnvelopeReservedZeroAssert: _reserved offset "
                    "drifted\n");
             failures++;
         }
         if (sizeof(((flexEnvelopeHeader *)0)->_reserved) != 3u) {
-            printf("dkTestE10EnvelopeReservedZeroAssert: _reserved size "
+            printf("dkTestEnvelopeReservedZeroAssert: _reserved size "
                    "drifted\n");
             failures++;
         }
     }
 
     if (failures == 0) {
-        printf("dkTestE10EnvelopeReservedZeroAssert: OK\n");
+        printf("dkTestEnvelopeReservedZeroAssert: OK\n");
         return 0;
     }
     return 1;
@@ -7830,7 +7839,7 @@ static int dkTestE10EnvelopeReservedZeroAssertTest(int argc, char *argv[]) {
 /* ====================================================================
  * flexEnvelopeWrapParams::_pad must be zero.
  * ==================================================================== */
-static int dkTestE14EnvelopeWrapPadPolicyTest(int argc, char *argv[]) {
+static int dkTestEnvelopeWrapPadPolicyTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -7852,7 +7861,7 @@ static int dkTestE14EnvelopeWrapPadPolicyTest(int argc, char *argv[]) {
         };
         size_t written = 0;
         if (!flexEnvelopeWrap(buf, wrapped, payload, plen, &wp, &written)) {
-            printf("dkTestE14EnvelopeWrapPadPolicy: zero-pad wrap failed\n");
+            printf("dkTestEnvelopeWrapPadPolicy: zero-pad wrap failed\n");
             failures++;
         }
         zfree(buf);
@@ -7868,7 +7877,7 @@ static int dkTestE14EnvelopeWrapPadPolicyTest(int argc, char *argv[]) {
         };
         size_t written = 0;
         if (flexEnvelopeWrap(buf, wrapped, payload, plen, &wp, &written)) {
-            printf("dkTestE14EnvelopeWrapPadPolicy: wrap accepted non-zero "
+            printf("dkTestEnvelopeWrapPadPolicy: wrap accepted non-zero "
                    "_pad\n");
             failures++;
         }
@@ -7893,9 +7902,8 @@ static int dkTestE14EnvelopeWrapPadPolicyTest(int argc, char *argv[]) {
             wp._pad[2] = kPadTriples[i][2];
             size_t written = 0;
             if (flexEnvelopeWrap(buf, wrapped, payload, plen, &wp, &written)) {
-                printf(
-                    "dkTestE14EnvelopeWrapPadPolicy: accepted _pad byte %zu\n",
-                    i);
+                printf("dkTestEnvelopeWrapPadPolicy: accepted _pad byte %zu\n",
+                       i);
                 failures++;
             }
             zfree(buf);
@@ -7908,19 +7916,18 @@ static int dkTestE14EnvelopeWrapPadPolicyTest(int argc, char *argv[]) {
         flexEnvelopeWrapParams wp = {.algo = FLEX_ENV_ALGO_XXH64};
         size_t written = 0;
         if (!flexEnvelopeWrap(buf, wrapped, payload, plen, &wp, &written)) {
-            printf("dkTestE14EnvelopeWrapPadPolicy: canonical wrap failed\n");
+            printf("dkTestEnvelopeWrapPadPolicy: canonical wrap failed\n");
             failures++;
         }
         flexEnvelopeVerifyParams vp = {.opts = FLEX_ENV_VERIFY_DEFAULT};
         const uint8_t *out_p = NULL;
         uint64_t out_pl = 0;
         if (!flexEnvelopeVerify(buf, wrapped, &vp, &out_p, &out_pl)) {
-            printf(
-                "dkTestE14EnvelopeWrapPadPolicy: round-trip verify failed\n");
+            printf("dkTestEnvelopeWrapPadPolicy: round-trip verify failed\n");
             failures++;
         }
         if (out_pl != plen || (out_p && memcmp(out_p, payload, plen) != 0)) {
-            printf("dkTestE14EnvelopeWrapPadPolicy: payload mismatch\n");
+            printf("dkTestEnvelopeWrapPadPolicy: payload mismatch\n");
             failures++;
         }
         zfree(buf);
@@ -7947,13 +7954,13 @@ static int dkTestE14EnvelopeWrapPadPolicyTest(int argc, char *argv[]) {
         };
         size_t written = 0;
         if (!flexEnvelopeSeal(buf, wrapped, payload, plen, &sp_ok, &written)) {
-            printf("dkTestE14EnvelopeWrapPadPolicy: zero-pad Seal failed\n");
+            printf("dkTestEnvelopeWrapPadPolicy: zero-pad Seal failed\n");
             failures++;
         }
         flexEnvelopeSealParams sp_bad = sp_ok;
         sp_bad._pad[0] = 0xFE;
         if (flexEnvelopeSeal(buf, wrapped, payload, plen, &sp_bad, &written)) {
-            printf("dkTestE14EnvelopeWrapPadPolicy: Seal accepted non-zero "
+            printf("dkTestEnvelopeWrapPadPolicy: Seal accepted non-zero "
                    "_pad[0]\n");
             failures++;
         }
@@ -7961,7 +7968,7 @@ static int dkTestE14EnvelopeWrapPadPolicyTest(int argc, char *argv[]) {
     }
 
     if (failures == 0) {
-        printf("dkTestE14EnvelopeWrapPadPolicy: OK\n");
+        printf("dkTestEnvelopeWrapPadPolicy: OK\n");
         return 0;
     }
     return 1;
@@ -7981,15 +7988,16 @@ static int dkTestE14EnvelopeWrapPadPolicyTest(int argc, char *argv[]) {
 #define D4_KEY_LEN ((size_t)32)
 #define D4_PAYLOAD_LEN ((size_t)64)
 
-typedef struct dkTestD4ApplyCtx {
+typedef struct dkTestClusterE2EApplyCtx {
     uint64_t apply_invocations;
-} dkTestD4ApplyCtx;
+} dkTestClusterE2EApplyCtx;
 
-static bool dkTestD4Apply(uint32_t origin_id, uint64_t sequence,
-                          const persistOps *ops, void *structure, void *ctx) {
+static bool dkTestClusterE2EApply(uint32_t origin_id, uint64_t sequence,
+                                  const persistOps *ops, void *structure,
+                                  void *ctx) {
     (void)origin_id;
     (void)sequence;
-    dkTestD4ApplyCtx *t = (dkTestD4ApplyCtx *)ctx;
+    dkTestClusterE2EApplyCtx *t = (dkTestClusterE2EApplyCtx *)ctx;
     t->apply_invocations++;
     if (ops != NULL && ops->free != NULL && structure != NULL) {
         ops->free(structure);
@@ -7997,21 +8005,21 @@ static bool dkTestD4Apply(uint32_t origin_id, uint64_t sequence,
     return true;
 }
 
-typedef struct dkTestD4Saved {
+typedef struct dkTestClusterE2ESaved {
     uint8_t *wire;
     size_t len;
     uint64_t sequence;
     hmacKeyId key_id;
-} dkTestD4Saved;
+} dkTestClusterE2ESaved;
 
-static int dkTestD4ClusterE2EReplayProtectionTest(int argc, char *argv[]) {
+static int dkTestClusterE2EReplayProtectionTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
 
     hmacKeyring *ring = hmacKeyringCreate();
     if (ring == NULL) {
-        printf("dkTestD4ClusterE2EReplayProtection: keyring create failed\n");
+        printf("dkTestClusterE2EReplayProtection: keyring create failed\n");
         return 1;
     }
 
@@ -8032,7 +8040,7 @@ static int dkTestD4ClusterE2EReplayProtectionTest(int argc, char *argv[]) {
     for (int i = 0; i < 3; i++) {
         if (!hmacKeyringInstall(ring, KIDS[i], &hmacAlgoSHA256, key_material[i],
                                 D4_KEY_LEN, salts[i])) {
-            printf("dkTestD4ClusterE2EReplayProtection: salted Install K%d "
+            printf("dkTestClusterE2EReplayProtection: salted Install K%d "
                    "failed\n",
                    i + 1);
             hmacKeyringFree(ring);
@@ -8040,14 +8048,14 @@ static int dkTestD4ClusterE2EReplayProtectionTest(int argc, char *argv[]) {
         }
     }
     if (hmacKeyringSize(ring) != 3u) {
-        printf("dkTestD4ClusterE2EReplayProtection: ring size %zu != 3\n",
+        printf("dkTestClusterE2EReplayProtection: ring size %zu != 3\n",
                hmacKeyringSize(ring));
         failures++;
     }
 
     aeadNonceLog *nonceLog = aeadNonceLogCreate(4096u);
     if (nonceLog == NULL) {
-        printf("dkTestD4ClusterE2EReplayProtection: nonceLog create failed\n");
+        printf("dkTestClusterE2EReplayProtection: nonceLog create failed\n");
         hmacKeyringFree(ring);
         return 1;
     }
@@ -8056,7 +8064,7 @@ static int dkTestD4ClusterE2EReplayProtectionTest(int argc, char *argv[]) {
     memset((void *)type_table, 0, sizeof(type_table));
     type_table[PERSIST_TYPE_FLEX] = &persistOpsFlex;
 
-    dkTestD4ApplyCtx app_ctx = {0};
+    dkTestClusterE2EApplyCtx app_ctx = {0};
 
     const clusterMailboxCreateOptions mb_opts = {
         .ring = ring,
@@ -8070,14 +8078,13 @@ static int dkTestD4ClusterE2EReplayProtectionTest(int argc, char *argv[]) {
     };
     clusterMailbox *mb = clusterMailboxCreateOpts(&mb_opts);
     if (mb == NULL) {
-        printf(
-            "dkTestD4ClusterE2EReplayProtection: mailbox createOpts failed\n");
+        printf("dkTestClusterE2EReplayProtection: mailbox createOpts failed\n");
         aeadNonceLogFree(nonceLog);
         hmacKeyringFree(ring);
         return 1;
     }
     if (clusterMailboxNonceLog(mb) != nonceLog) {
-        printf("dkTestD4ClusterE2EReplayProtection: mailbox did not bind "
+        printf("dkTestClusterE2EReplayProtection: mailbox did not bind "
                "borrowed nonceLog\n");
         failures++;
     }
@@ -8089,10 +8096,10 @@ static int dkTestD4ClusterE2EReplayProtectionTest(int argc, char *argv[]) {
     };
     clusterReplicator *rep = clusterReplicatorCreateEx(
         ring, FLEX_ENV_ALGO_HMAC_SHA256, CLUSTER_MAILBOX_FLAG_NONE, type_table,
-        256u, dkTestD4Apply, &app_ctx, &rep_cfg);
+        256u, dkTestClusterE2EApply, &app_ctx, &rep_cfg);
     if (rep == NULL) {
         printf(
-            "dkTestD4ClusterE2EReplayProtection: replicator CreateEx failed\n");
+            "dkTestClusterE2EReplayProtection: replicator CreateEx failed\n");
         clusterMailboxFree(mb);
         aeadNonceLogFree(nonceLog);
         hmacKeyringFree(ring);
@@ -8102,15 +8109,15 @@ static int dkTestD4ClusterE2EReplayProtectionTest(int argc, char *argv[]) {
     const uint8_t payload[D4_PAYLOAD_LEN] = {0xD4, 0xE2, 0xE1, 0x00};
     const size_t sealed_cap = clusterMailboxSealedSize(mb, D4_PAYLOAD_LEN);
     if (sealed_cap == 0u) {
-        printf("dkTestD4ClusterE2EReplayProtection: sealedSize = 0\n");
+        printf("dkTestClusterE2EReplayProtection: sealedSize = 0\n");
         failures++;
         goto cleanup_after_phase1;
     }
 
-    dkTestD4Saved *saved =
-        (dkTestD4Saved *)zcalloc(D4_VALID_INGESTS, sizeof(dkTestD4Saved));
+    dkTestClusterE2ESaved *saved = (dkTestClusterE2ESaved *)zcalloc(
+        D4_VALID_INGESTS, sizeof(dkTestClusterE2ESaved));
     if (saved == NULL) {
-        printf("dkTestD4ClusterE2EReplayProtection: saved alloc failed\n");
+        printf("dkTestClusterE2EReplayProtection: saved alloc failed\n");
         failures++;
         goto cleanup_after_phase1;
     }
@@ -8134,7 +8141,7 @@ static int dkTestD4ClusterE2EReplayProtectionTest(int argc, char *argv[]) {
         if (!clusterMailboxSeal(mb, D4_ORIGIN_ID, seq, (uint8_t)0x20, payload,
                                 D4_PAYLOAD_LEN, kid, wire, sealed_cap,
                                 &written)) {
-            printf("dkTestD4: valid Seal[%zu] failed\n", i);
+            printf("dkTestClusterE2EReplay: valid Seal[%zu] failed\n", i);
             failures++;
             zfree(wire);
             break;
@@ -8142,8 +8149,9 @@ static int dkTestD4ClusterE2EReplayProtectionTest(int argc, char *argv[]) {
         const clusterMailboxIngestResult rc =
             clusterMailboxIngest(mb, wire, written, kid);
         if (rc != CLUSTER_MAILBOX_OK) {
-            printf("dkTestD4: valid Ingest[%zu] expected OK got %d\n", i,
-                   (int)rc);
+            printf("dkTestClusterE2EReplay: valid Ingest[%zu] expected OK got "
+                   "%d\n",
+                   i, (int)rc);
             failures++;
             zfree(wire);
             break;
@@ -8158,19 +8166,20 @@ static int dkTestD4ClusterE2EReplayProtectionTest(int argc, char *argv[]) {
     clusterMailboxStats stats_after_valid;
     clusterMailboxGetStats(mb, &stats_after_valid);
     if (stats_after_valid.apply_ok != (uint64_t)D4_VALID_INGESTS) {
-        printf("dkTestD4: apply_ok=%llu expected %d after valid phase\n",
+        printf("dkTestClusterE2EReplay: apply_ok=%llu expected %d after valid "
+               "phase\n",
                (unsigned long long)stats_after_valid.apply_ok,
                D4_VALID_INGESTS);
         failures++;
     }
     if (valid_success != (uint64_t)D4_VALID_INGESTS) {
-        printf("dkTestD4: valid_success=%llu expected %d\n",
+        printf("dkTestClusterE2EReplay: valid_success=%llu expected %d\n",
                (unsigned long long)valid_success, D4_VALID_INGESTS);
         failures++;
     }
     if (clusterMailboxLastApplied(mb, D4_ORIGIN_ID) !=
         (uint64_t)D4_VALID_INGESTS) {
-        printf("dkTestD4: lastApplied=%llu expected %d\n",
+        printf("dkTestClusterE2EReplay: lastApplied=%llu expected %d\n",
                (unsigned long long)clusterMailboxLastApplied(mb, D4_ORIGIN_ID),
                D4_VALID_INGESTS);
         failures++;
@@ -8179,12 +8188,13 @@ static int dkTestD4ClusterE2EReplayProtectionTest(int argc, char *argv[]) {
     for (size_t i = 0; i < D4_ENV_REPLAYS; i++) {
         const size_t pick =
             (size_t)(((uint64_t)i * 17u + 3u) % D4_VALID_INGESTS);
-        const dkTestD4Saved *s = &saved[pick];
+        const dkTestClusterE2ESaved *s = &saved[pick];
         const clusterMailboxIngestResult rc =
             clusterMailboxIngest(mb, s->wire, s->len, s->key_id);
         if (rc != CLUSTER_MAILBOX_ERR_REPLAY) {
-            printf("dkTestD4: env-replay[%zu] expected ERR_REPLAY got %d\n", i,
-                   (int)rc);
+            printf("dkTestClusterE2EReplay: env-replay[%zu] expected "
+                   "ERR_REPLAY got %d\n",
+                   i, (int)rc);
             failures++;
         }
     }
@@ -8193,9 +8203,10 @@ static int dkTestD4ClusterE2EReplayProtectionTest(int argc, char *argv[]) {
     for (size_t i = 0; i < D4_FORGERIES; i++) {
         const size_t pick =
             (size_t)(((uint64_t)i * 23u + 5u) % D4_VALID_INGESTS);
-        const dkTestD4Saved *s = &saved[pick];
+        const dkTestClusterE2ESaved *s = &saved[pick];
         if (s->len <= hmac_sha256_digest_len) {
-            printf("dkTestD4: forgery[%zu] saved.len too small\n", i);
+            printf("dkTestClusterE2EReplay: forgery[%zu] saved.len too small\n",
+                   i);
             failures++;
             continue;
         }
@@ -8209,7 +8220,8 @@ static int dkTestD4ClusterE2EReplayProtectionTest(int argc, char *argv[]) {
         const clusterMailboxIngestResult rc =
             clusterMailboxIngest(mb, forged, s->len, s->key_id);
         if (rc != CLUSTER_MAILBOX_ERR_VERIFY_FAILED) {
-            printf("dkTestD4: forgery[%zu] expected ERR_VERIFY_FAILED got %d\n",
+            printf("dkTestClusterE2EReplay: forgery[%zu] expected "
+                   "ERR_VERIFY_FAILED got %d\n",
                    i, (int)rc);
             failures++;
         }
@@ -8219,7 +8231,7 @@ static int dkTestD4ClusterE2EReplayProtectionTest(int argc, char *argv[]) {
     for (size_t i = 0; i < D4_SEQ_REPLAYS; i++) {
         const size_t pick =
             (size_t)(((uint64_t)i * 31u + 7u) % D4_VALID_INGESTS);
-        const dkTestD4Saved *s = &saved[pick];
+        const dkTestClusterE2ESaved *s = &saved[pick];
         uint8_t alt_payload[D4_PAYLOAD_LEN];
         memcpy(alt_payload, payload, D4_PAYLOAD_LEN);
         alt_payload[0] = (uint8_t)(0xAA + (i & 0x0Fu));
@@ -8232,7 +8244,8 @@ static int dkTestD4ClusterE2EReplayProtectionTest(int argc, char *argv[]) {
         if (!clusterMailboxSeal(mb, D4_ORIGIN_ID, s->sequence, (uint8_t)0x30,
                                 alt_payload, D4_PAYLOAD_LEN, s->key_id, fresh,
                                 sealed_cap, &fresh_written)) {
-            printf("dkTestD4: seq-replay[%zu] re-seal failed\n", i);
+            printf("dkTestClusterE2EReplay: seq-replay[%zu] re-seal failed\n",
+                   i);
             failures++;
             zfree(fresh);
             continue;
@@ -8240,8 +8253,9 @@ static int dkTestD4ClusterE2EReplayProtectionTest(int argc, char *argv[]) {
         const clusterMailboxIngestResult rc =
             clusterMailboxIngest(mb, fresh, fresh_written, s->key_id);
         if (rc != CLUSTER_MAILBOX_ERR_REPLAY) {
-            printf("dkTestD4: seq-replay[%zu] expected ERR_REPLAY got %d\n", i,
-                   (int)rc);
+            printf("dkTestClusterE2EReplay: seq-replay[%zu] expected "
+                   "ERR_REPLAY got %d\n",
+                   i, (int)rc);
             failures++;
         }
         zfree(fresh);
@@ -8256,19 +8270,21 @@ static int dkTestD4ClusterE2EReplayProtectionTest(int argc, char *argv[]) {
         (uint64_t)(D4_ENV_REPLAYS + D4_SEQ_REPLAYS);
 
     if (final_stats.apply_ok != exp_apply_ok) {
-        printf("dkTestD4: final apply_ok=%llu expected %llu\n",
+        printf("dkTestClusterE2EReplay: final apply_ok=%llu expected %llu\n",
                (unsigned long long)final_stats.apply_ok,
                (unsigned long long)exp_apply_ok);
         failures++;
     }
     if (final_stats.verify_failed != exp_verify_failed) {
-        printf("dkTestD4: final verify_failed=%llu expected %llu\n",
-               (unsigned long long)final_stats.verify_failed,
-               (unsigned long long)exp_verify_failed);
+        printf(
+            "dkTestClusterE2EReplay: final verify_failed=%llu expected %llu\n",
+            (unsigned long long)final_stats.verify_failed,
+            (unsigned long long)exp_verify_failed);
         failures++;
     }
     if (final_stats.replay_rejected != exp_replay_rejected) {
-        printf("dkTestD4: final replay_rejected=%llu expected %llu\n",
+        printf("dkTestClusterE2EReplay: final replay_rejected=%llu expected "
+               "%llu\n",
                (unsigned long long)final_stats.replay_rejected,
                (unsigned long long)exp_replay_rejected);
         failures++;
@@ -8276,28 +8292,29 @@ static int dkTestD4ClusterE2EReplayProtectionTest(int argc, char *argv[]) {
     const uint64_t replay_class_caught =
         final_stats.replay_rejected + final_stats.verify_failed;
     if (replay_class_caught < (uint64_t)D4_ENV_REPLAYS) {
-        printf("dkTestD4: replay_class_caught=%llu < %d\n",
+        printf("dkTestClusterE2EReplay: replay_class_caught=%llu < %d\n",
                (unsigned long long)replay_class_caught, D4_ENV_REPLAYS);
         failures++;
     }
     if (final_stats.ingest_total != (uint64_t)D4_TOTAL_FRAMES) {
-        printf("dkTestD4: ingest_total=%llu expected %d\n",
+        printf("dkTestClusterE2EReplay: ingest_total=%llu expected %d\n",
                (unsigned long long)final_stats.ingest_total, D4_TOTAL_FRAMES);
         failures++;
     }
     if (final_stats.apply_rejected != 0u) {
-        printf("dkTestD4: apply_rejected=%llu expected 0\n",
+        printf("dkTestClusterE2EReplay: apply_rejected=%llu expected 0\n",
                (unsigned long long)final_stats.apply_rejected);
         failures++;
     }
     if (final_stats.algo_mismatch != 0u || final_stats.bad_frame != 0u ||
         final_stats.key_missing != 0u || final_stats.origin_table_full != 0u ||
         final_stats.param_error != 0u) {
-        printf("dkTestD4: unexpected non-zero misc counters\n");
+        printf("dkTestClusterE2EReplay: unexpected non-zero misc counters\n");
         failures++;
     }
     if (clusterMailboxNonceLog(mb) != nonceLog) {
-        printf("dkTestD4: nonceLog pointer no longer the borrowed one\n");
+        printf("dkTestClusterE2EReplay: nonceLog pointer no longer the "
+               "borrowed one\n");
         failures++;
     }
 
@@ -8307,20 +8324,21 @@ static int dkTestD4ClusterE2EReplayProtectionTest(int argc, char *argv[]) {
     const size_t rep_cap =
         clusterReplicatorSnapshotSize(rep, &persistOpsFlex, rep_src);
     if (rep_cap == 0u) {
-        printf("dkTestD4: replicator snapshotSize = 0\n");
+        printf("dkTestClusterE2EReplay: replicator snapshotSize = 0\n");
         failures++;
     } else {
         uint8_t *rep_wire = (uint8_t *)zmalloc(rep_cap);
         size_t rep_written = 0;
         if (!clusterReplicatorSeal(rep, &persistOpsFlex, rep_src, 1u, 1u,
                                    KIDS[0], rep_wire, rep_cap, &rep_written)) {
-            printf("dkTestD4: replicator Seal failed\n");
+            printf("dkTestClusterE2EReplay: replicator Seal failed\n");
             failures++;
         } else {
             const clusterMailboxIngestResult rep_rc =
                 clusterReplicatorIngest(rep, rep_wire, rep_written, KIDS[0]);
             if (rep_rc != CLUSTER_MAILBOX_OK) {
-                printf("dkTestD4: replicator Ingest expected OK got %d\n",
+                printf("dkTestClusterE2EReplay: replicator Ingest expected OK "
+                       "got %d\n",
                        (int)rep_rc);
                 failures++;
             }
@@ -8329,12 +8347,13 @@ static int dkTestD4ClusterE2EReplayProtectionTest(int argc, char *argv[]) {
     }
     flexFree(rep_src);
     if (app_ctx.apply_invocations != 1u) {
-        printf("dkTestD4: replicator apply_invocations=%llu expected 1\n",
+        printf("dkTestClusterE2EReplay: replicator apply_invocations=%llu "
+               "expected 1\n",
                (unsigned long long)app_ctx.apply_invocations);
         failures++;
     }
 
-    printf("dkTestD4 counters: apply_ok=%llu verify_failed=%llu "
+    printf("dkTestClusterE2EReplay counters: apply_ok=%llu verify_failed=%llu "
            "replay_rejected=%llu "
            "ingest_total=%llu nonceLog.size=%zu apply_invocations=%llu\n",
            (unsigned long long)final_stats.apply_ok,
@@ -8359,10 +8378,10 @@ cleanup_after_phase1:
     hmacKeyringFree(ring);
 
     if (failures == 0) {
-        printf("dkTestD4ClusterE2EReplayProtection: OK\n");
+        printf("dkTestClusterE2EReplayProtection: OK\n");
         return 0;
     }
-    printf("dkTestD4ClusterE2EReplayProtection: FAILED (%d failures)\n",
+    printf("dkTestClusterE2EReplayProtection: FAILED (%d failures)\n",
            failures);
     return 1;
 }
@@ -8371,7 +8390,7 @@ cleanup_after_phase1:
  * Structure-aware envelope fuzz per algorithm.
  * Every single-bit mutation across the wire MUST be rejected.
  * ==================================================================== */
-static int dkTestE7EnvelopeStructAwareFuzzTest(int argc, char *argv[]) {
+static int dkTestEnvelopeStructAwareFuzzTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -8429,7 +8448,7 @@ static int dkTestE7EnvelopeStructAwareFuzzTest(int argc, char *argv[]) {
     const size_t kMaxPayload = 4096;
     uint8_t *plaintext = (uint8_t *)zmalloc(kMaxPayload);
     if (plaintext == NULL) {
-        printf("dkTestE7EnvelopeStructAwareFuzz: zmalloc plaintext failed\n");
+        printf("dkTestEnvelopeStructAwareFuzz: zmalloc plaintext failed\n");
         return 1;
     }
     for (size_t i = 0; i < kMaxPayload; i++) {
@@ -8440,7 +8459,7 @@ static int dkTestE7EnvelopeStructAwareFuzzTest(int argc, char *argv[]) {
     uint8_t *wire = (uint8_t *)zmalloc(kMaxWireLen);
     uint8_t *plaintext_out = (uint8_t *)zmalloc(kMaxPayload);
     if (wire == NULL || plaintext_out == NULL) {
-        printf("dkTestE7EnvelopeStructAwareFuzz: zmalloc wire/out failed\n");
+        printf("dkTestEnvelopeStructAwareFuzz: zmalloc wire/out failed\n");
         zfree(plaintext);
         zfree(wire);
         zfree(plaintext_out);
@@ -8468,7 +8487,7 @@ static int dkTestE7EnvelopeStructAwareFuzzTest(int argc, char *argv[]) {
             const size_t plen = payload_sizes[pi];
             const size_t cap = flexEnvelopeWrappedSize((uint64_t)plen, algo, 0);
             if (cap == 0 || cap > kMaxWireLen) {
-                printf("dkTestE7EnvelopeStructAwareFuzz: %s wrappedSize bad "
+                printf("dkTestEnvelopeStructAwareFuzz: %s wrappedSize bad "
                        "(plen=%zu cap=%zu)\n",
                        kAlgoNames[ai], plen, cap);
                 failures++;
@@ -8486,7 +8505,7 @@ static int dkTestE7EnvelopeStructAwareFuzzTest(int argc, char *argv[]) {
                 };
                 if (!flexEnvelopeSeal(wire, cap, plaintext, (uint64_t)plen, &sp,
                                       &written)) {
-                    printf("dkTestE7EnvelopeStructAwareFuzz: %s Seal failed "
+                    printf("dkTestEnvelopeStructAwareFuzz: %s Seal failed "
                            "(plen=%zu)\n",
                            kAlgoNames[ai], plen);
                     failures++;
@@ -8500,7 +8519,7 @@ static int dkTestE7EnvelopeStructAwareFuzzTest(int argc, char *argv[]) {
                 }
                 if (!flexEnvelopeWrap(wire, cap, plaintext, (uint64_t)plen, &wp,
                                       &written)) {
-                    printf("dkTestE7EnvelopeStructAwareFuzz: %s Wrap failed "
+                    printf("dkTestEnvelopeStructAwareFuzz: %s Wrap failed "
                            "(plen=%zu)\n",
                            kAlgoNames[ai], plen);
                     failures++;
@@ -8508,7 +8527,7 @@ static int dkTestE7EnvelopeStructAwareFuzzTest(int argc, char *argv[]) {
                 }
             }
             if (written != cap) {
-                printf("dkTestE7EnvelopeStructAwareFuzz: %s written=%zu "
+                printf("dkTestEnvelopeStructAwareFuzz: %s written=%zu "
                        "cap=%zu mismatch\n",
                        kAlgoNames[ai], written, cap);
                 failures++;
@@ -8527,7 +8546,7 @@ static int dkTestE7EnvelopeStructAwareFuzzTest(int argc, char *argv[]) {
                                           kMaxPayload, &out_len);
                     if (ok && (out_len != plen ||
                                memcmp(plaintext_out, plaintext, plen) != 0)) {
-                        printf("dkTestE7EnvelopeStructAwareFuzz: %s Open "
+                        printf("dkTestEnvelopeStructAwareFuzz: %s Open "
                                "round-trip mismatch\n",
                                kAlgoNames[ai]);
                         failures++;
@@ -8539,14 +8558,14 @@ static int dkTestE7EnvelopeStructAwareFuzzTest(int argc, char *argv[]) {
                         flexEnvelopeVerify(wire, written, &vp, &out_p, &out_pl);
                     if (ok && (out_pl != plen ||
                                memcmp(out_p, plaintext, plen) != 0)) {
-                        printf("dkTestE7EnvelopeStructAwareFuzz: %s Verify "
+                        printf("dkTestEnvelopeStructAwareFuzz: %s Verify "
                                "payload mismatch\n",
                                kAlgoNames[ai]);
                         failures++;
                     }
                 }
                 if (!ok) {
-                    printf("dkTestE7EnvelopeStructAwareFuzz: %s untampered "
+                    printf("dkTestEnvelopeStructAwareFuzz: %s untampered "
                            "Verify/Open FAILED\n",
                            kAlgoNames[ai]);
                     failures++;
@@ -8604,7 +8623,7 @@ static int dkTestE7EnvelopeStructAwareFuzzTest(int argc, char *argv[]) {
                     if (!accepted) {
                         reject_mut[ai]++;
                     } else {
-                        printf("dkTestE7EnvelopeStructAwareFuzz: %s ACCEPTED "
+                        printf("dkTestEnvelopeStructAwareFuzz: %s ACCEPTED "
                                "mutated wire @ off=%zu bit=%d (plen=%zu "
                                "wire=%zu)\n",
                                kAlgoNames[ai], off, bit, plen, written);
@@ -8620,7 +8639,7 @@ static int dkTestE7EnvelopeStructAwareFuzzTest(int argc, char *argv[]) {
     zfree(wire);
     zfree(plaintext_out);
 
-    printf("dkTestE7EnvelopeStructAwareFuzz: per-algo rejection rates:\n");
+    printf("dkTestEnvelopeStructAwareFuzz: per-algo rejection rates:\n");
     for (size_t ai = 0; ai < kNumAlgos; ai++) {
         const double rate =
             total_mut[ai] == 0
@@ -8636,10 +8655,10 @@ static int dkTestE7EnvelopeStructAwareFuzzTest(int argc, char *argv[]) {
 #undef ENV_FUZZ_RNG_NEXT
 
     if (failures == 0) {
-        printf("dkTestE7EnvelopeStructAwareFuzz: OK\n");
+        printf("dkTestEnvelopeStructAwareFuzz: OK\n");
         return 0;
     }
-    printf("dkTestE7EnvelopeStructAwareFuzz: FAILED (%d failures)\n", failures);
+    printf("dkTestEnvelopeStructAwareFuzz: FAILED (%d failures)\n", failures);
     return 1;
 }
 
@@ -8648,15 +8667,15 @@ static int dkTestE7EnvelopeStructAwareFuzzTest(int argc, char *argv[]) {
  * Validates byte-identical output vs canonical Wrap/Seal + verify round-
  * trip + negative paths (undersized buf, NULL params, wrong header_len).
  * ==================================================================== */
-static int dkTestE9CompareWrapVsReserve(flexEnvelopeAlgo algo,
-                                        const uint8_t *key, size_t key_len,
-                                        const uint8_t *payload,
-                                        size_t payload_len, const char *label) {
+static int
+dkTestEnvelopeCompareWrapVsReserve(flexEnvelopeAlgo algo, const uint8_t *key,
+                                   size_t key_len, const uint8_t *payload,
+                                   size_t payload_len, const char *label) {
     int failures = 0;
     const size_t wrapped = flexEnvelopeWrappedSize((uint64_t)payload_len, algo,
                                                    FLEX_ENV_FLAG_NONE);
     if (wrapped == 0) {
-        printf("dkTestE9EnvelopeZeroCopy[%s]: wrappedSize == 0\n", label);
+        printf("dkTestEnvelopeZeroCopy[%s]: wrappedSize == 0\n", label);
         return 1;
     }
     uint8_t *buf_old = (uint8_t *)zmalloc(wrapped);
@@ -8678,7 +8697,7 @@ static int dkTestE9CompareWrapVsReserve(flexEnvelopeAlgo algo,
     size_t written_old = 0;
     if (!flexEnvelopeWrap(buf_old, wrapped, payload, (uint64_t)payload_len, &wp,
                           &written_old)) {
-        printf("dkTestE9EnvelopeZeroCopy[%s]: OLD Wrap failed\n", label);
+        printf("dkTestEnvelopeZeroCopy[%s]: OLD Wrap failed\n", label);
         failures++;
         goto out;
     }
@@ -8686,12 +8705,12 @@ static int dkTestE9CompareWrapVsReserve(flexEnvelopeAlgo algo,
     size_t header_len = 0;
     if (!flexEnvelopeReserveWrap(buf_new, wrapped, (uint64_t)payload_len, &wp,
                                  &region, &header_len)) {
-        printf("dkTestE9EnvelopeZeroCopy[%s]: ReserveWrap failed\n", label);
+        printf("dkTestEnvelopeZeroCopy[%s]: ReserveWrap failed\n", label);
         failures++;
         goto out;
     }
     if (region != buf_new + header_len) {
-        printf("dkTestE9EnvelopeZeroCopy[%s]: region offset wrong\n", label);
+        printf("dkTestEnvelopeZeroCopy[%s]: region offset wrong\n", label);
         failures++;
         goto out;
     }
@@ -8701,18 +8720,18 @@ static int dkTestE9CompareWrapVsReserve(flexEnvelopeAlgo algo,
     size_t written_new = 0;
     if (!flexEnvelopeFinalizeWrap(buf_new, wrapped, header_len,
                                   (uint64_t)payload_len, &wp, &written_new)) {
-        printf("dkTestE9EnvelopeZeroCopy[%s]: FinalizeWrap failed\n", label);
+        printf("dkTestEnvelopeZeroCopy[%s]: FinalizeWrap failed\n", label);
         failures++;
         goto out;
     }
     if (written_old != written_new) {
-        printf("dkTestE9EnvelopeZeroCopy[%s]: size mismatch %zu vs %zu\n",
-               label, written_old, written_new);
+        printf("dkTestEnvelopeZeroCopy[%s]: size mismatch %zu vs %zu\n", label,
+               written_old, written_new);
         failures++;
         goto out;
     }
     if (memcmp(buf_old, buf_new, written_old) != 0) {
-        printf("dkTestE9EnvelopeZeroCopy[%s]: BYTE MISMATCH\n", label);
+        printf("dkTestEnvelopeZeroCopy[%s]: BYTE MISMATCH\n", label);
         failures++;
         goto out;
     }
@@ -8724,14 +8743,14 @@ static int dkTestE9CompareWrapVsReserve(flexEnvelopeAlgo algo,
     const uint8_t *out_p = NULL;
     uint64_t out_pl = 0;
     if (!flexEnvelopeVerify(buf_new, written_new, &vp, &out_p, &out_pl)) {
-        printf("dkTestE9EnvelopeZeroCopy[%s]: Verify of new-API frame failed\n",
+        printf("dkTestEnvelopeZeroCopy[%s]: Verify of new-API frame failed\n",
                label);
         failures++;
         goto out;
     }
     if (out_pl != (uint64_t)payload_len ||
         (payload_len > 0 && memcmp(out_p, payload, payload_len) != 0)) {
-        printf("dkTestE9EnvelopeZeroCopy[%s]: payload mismatch on verify\n",
+        printf("dkTestEnvelopeZeroCopy[%s]: payload mismatch on verify\n",
                label);
         failures++;
         goto out;
@@ -8742,7 +8761,7 @@ out:
     return failures;
 }
 
-static int dkTestE9EnvelopeZeroCopyTest(int argc, char *argv[]) {
+static int dkTestEnvelopeZeroCopyTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
@@ -8763,11 +8782,11 @@ static int dkTestE9EnvelopeZeroCopyTest(int argc, char *argv[]) {
         0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xbb, 0xbc, 0xbd, 0xbe, 0xbf,
     };
 
-    failures += dkTestE9CompareWrapVsReserve(FLEX_ENV_ALGO_XXH64, NULL, 0,
-                                             payload, sizeof(payload), "xxh64");
-    failures += dkTestE9CompareWrapVsReserve(FLEX_ENV_ALGO_XXH64, NULL, 0, NULL,
-                                             0, "xxh64-empty");
-    failures += dkTestE9CompareWrapVsReserve(
+    failures += dkTestEnvelopeCompareWrapVsReserve(
+        FLEX_ENV_ALGO_XXH64, NULL, 0, payload, sizeof(payload), "xxh64");
+    failures += dkTestEnvelopeCompareWrapVsReserve(FLEX_ENV_ALGO_XXH64, NULL, 0,
+                                                   NULL, 0, "xxh64-empty");
+    failures += dkTestEnvelopeCompareWrapVsReserve(
         FLEX_ENV_ALGO_HMAC_SHA256, hmac_key, sizeof(hmac_key), payload,
         sizeof(payload), "hmac_sha256");
 
@@ -8803,7 +8822,7 @@ static int dkTestE9EnvelopeZeroCopyTest(int argc, char *argv[]) {
             if (!flexEnvelopeSeal(buf_old, wrapped, payload,
                                   (uint64_t)sizeof(payload), &sp,
                                   &written_old)) {
-                printf("dkTestE9EnvelopeZeroCopy[aead]: OLD Seal failed\n");
+                printf("dkTestEnvelopeZeroCopy[aead]: OLD Seal failed\n");
                 failures++;
             } else {
                 uint8_t *region = NULL;
@@ -8812,7 +8831,7 @@ static int dkTestE9EnvelopeZeroCopyTest(int argc, char *argv[]) {
                                              (uint64_t)sizeof(payload), &sp,
                                              &region, &hn)) {
                     printf(
-                        "dkTestE9EnvelopeZeroCopy[aead]: ReserveSeal failed\n");
+                        "dkTestEnvelopeZeroCopy[aead]: ReserveSeal failed\n");
                     failures++;
                 } else {
                     memcpy(region, payload, sizeof(payload));
@@ -8820,12 +8839,12 @@ static int dkTestE9EnvelopeZeroCopyTest(int argc, char *argv[]) {
                     if (!flexEnvelopeFinalizeSeal(buf_new, wrapped, hn,
                                                   (uint64_t)sizeof(payload),
                                                   &sp, &written_new)) {
-                        printf("dkTestE9EnvelopeZeroCopy[aead]: FinalizeSeal "
+                        printf("dkTestEnvelopeZeroCopy[aead]: FinalizeSeal "
                                "failed\n");
                         failures++;
                     } else if (written_new != written_old ||
                                memcmp(buf_old, buf_new, written_old) != 0) {
-                        printf("dkTestE9EnvelopeZeroCopy[aead]: byte mismatch "
+                        printf("dkTestEnvelopeZeroCopy[aead]: byte mismatch "
                                "%zu vs %zu\n",
                                written_old, written_new);
                         failures++;
@@ -8839,13 +8858,13 @@ static int dkTestE9EnvelopeZeroCopyTest(int argc, char *argv[]) {
                         size_t pt_written = 0;
                         if (!flexEnvelopeOpen(buf_new, written_new, &vp, pt_out,
                                               sizeof(payload), &pt_written)) {
-                            printf("dkTestE9EnvelopeZeroCopy[aead]: Open of "
+                            printf("dkTestEnvelopeZeroCopy[aead]: Open of "
                                    "new-API frame failed\n");
                             failures++;
                         } else if (pt_written != sizeof(payload) ||
                                    memcmp(pt_out, payload, sizeof(payload)) !=
                                        0) {
-                            printf("dkTestE9EnvelopeZeroCopy[aead]: open "
+                            printf("dkTestEnvelopeZeroCopy[aead]: open "
                                    "plaintext mismatch\n");
                             failures++;
                         }
@@ -8870,7 +8889,7 @@ static int dkTestE9EnvelopeZeroCopyTest(int argc, char *argv[]) {
         if (flexEnvelopeReserveWrap(tiny, sizeof(tiny),
                                     (uint64_t)sizeof(payload), &wp, &region,
                                     &hn)) {
-            printf("dkTestE9EnvelopeZeroCopy[neg-cap]: ReserveWrap accepted "
+            printf("dkTestEnvelopeZeroCopy[neg-cap]: ReserveWrap accepted "
                    "undersized buf\n");
             failures++;
         }
@@ -8882,7 +8901,7 @@ static int dkTestE9EnvelopeZeroCopyTest(int argc, char *argv[]) {
         size_t written = 0;
         if (flexEnvelopeFinalizeWrap(buf, sizeof(buf), 8, (uint64_t)4, NULL,
                                      &written)) {
-            printf("dkTestE9EnvelopeZeroCopy[neg-null]: FinalizeWrap accepted "
+            printf("dkTestEnvelopeZeroCopy[neg-null]: FinalizeWrap accepted "
                    "NULL params\n");
             failures++;
         }
@@ -8906,7 +8925,7 @@ static int dkTestE9EnvelopeZeroCopyTest(int argc, char *argv[]) {
                 if (flexEnvelopeFinalizeWrap(buf, wrapped, hn + 1,
                                              (uint64_t)sizeof(payload), &wp,
                                              &written)) {
-                    printf("dkTestE9EnvelopeZeroCopy[neg-hdrlen]: accepted "
+                    printf("dkTestEnvelopeZeroCopy[neg-hdrlen]: accepted "
                            "wrong header_len\n");
                     failures++;
                 }
@@ -8916,10 +8935,10 @@ static int dkTestE9EnvelopeZeroCopyTest(int argc, char *argv[]) {
     }
 
     if (failures == 0) {
-        printf("dkTestE9EnvelopeZeroCopy: OK\n");
+        printf("dkTestEnvelopeZeroCopy: OK\n");
         return 0;
     }
-    printf("dkTestE9EnvelopeZeroCopy: FAILED (%d failure(s))\n", failures);
+    printf("dkTestEnvelopeZeroCopy: FAILED (%d failure(s))\n", failures);
     return 1;
 }
 
@@ -8989,56 +9008,56 @@ static const TestEntry testRegistry[] = {
     T_A_ADJ(clusterRing, "ring,cluster,chr"),
 
     /* Crypto helpers (header-only; tests live in this file) */
-    T_A(dkTestA1SecureZero, "secureZero"),
-    T_A(dkTestA2ChaChaStreamCtxWipe, "chachaStreamCtxWipe"),
-    T_A(dkTestA8StreamMidTamper, "chachaStreamMidTamper"),
-    T_A(dkTestA8StreamUpdateAfterFinal, "chachaStreamUAF"),
-    T_A(dkTestA8StreamFinalTwice, "chachaStreamFinalTwice"),
-    T_A(dkTestA3AesNi, "aesNi"), T_A(dkTestA4AesArmCrypto, "aesArmCrypto"),
-    T_A(dkTestA9X25519SmallOrderReject, "x25519SmallOrder"),
-    T_A(dkTestA12X25519Iter1000KAT, "x25519Iter1000"),
-    T_A(dkTestA12Blake3DeriveKeyVarInput, "blake3DKVarInput"),
-    T_A(dkTestA12Sha256AllBackendParity, "sha256BackendParity"),
-    T_A(dkTestA5AesGcmExtendedVectors, "aesGcmExtended"),
-    T_A(dkTestA6ChaChaSimdParity, "chachaSimdParity"),
-    T_A(dkTestA7Poly1305SimdParity, "poly1305SimdParity"),
-    T_A(dkTestB1Blake3Avx2Dispatch, "blake3Avx2Dispatch"),
-    T_A(dkTestB2Blake3Sse41Batch, "blake3Sse41Batch"),
-    T_A(dkTestB4Blake3DeriveKeyContexts, "blake3DeriveKeyCtx"),
-    T_A(dkTestC1KeyringRequireSalt, "keyringRequireSalt"),
-    T_A(dkTestC2KeyringPersistRetireAfterAttach, "keyringPersistRetire"),
-    T_A(dkTestC3RevokedKeyFloor, "keyringRevokedFloor"),
-    T_A(dkTestC4EnvelopeOpenKeyringResolve, "envelopeOpenKeyring"),
-    T_A(dkTestC5WireKeyIdAmbiguityReject, "envelopeWireKeyIdFlag"),
-    T_A(dkTestC6PersistKeyIdHeader, "persistKeyIdHeader"),
-    T_A(dkTestD1NonceLogPersistRoundTrip, "nonceLogPersist"),
-    T_A(dkTestD2EnvelopeNonceLogIntegration, "envelopeNonceLog"),
-    T_A(dkTestD3NonceLogEvictionPerf, "nonceLogEvictPerf"),
-    T_A(dkTestD8MailboxReplicatorNonceLogWired, "mailboxReplicatorNonceLog"),
-    T_A(dkTestE2ClusterRingFlexSerialize, "clusterRingFlex"),
-    T_A(dkTestE2ClusterRingMaliciousState, "clusterRingMalicious"),
-    T_A(dkTestE2ClusterRingDuplicateId, "clusterRingDupId"),
-    T_A(dkTestE2ClusterRingTruncatedBuffer, "clusterRingTruncated"),
-    T_A(dkTestE11PersistMultilistTieredApply, "persistMultilistTier"),
-    T_A(dkTestE5ReplicatorRetryDrop, "replicatorRetry"),
-    T_A(dkTestD5MailboxWindowOrientation, "mailboxWindowOrient"),
-    T_A(dkTestD6MailboxStatsRace, "mailboxStatsRace"),
-    T_A(dkTestD7MailboxStatsAlignment, "mailboxStatsAlign"),
+    T_A(dkTestSecureZero, "secureZero"),
+    T_A(dkTestChaChaStreamCtxWipe, "chachaStreamCtxWipe"),
+    T_A(dkTestStreamMidTamper, "chachaStreamMidTamper"),
+    T_A(dkTestStreamUpdateAfterFinal, "chachaStreamUAF"),
+    T_A(dkTestStreamFinalTwice, "chachaStreamFinalTwice"),
+    T_A(dkTestAesNi, "aesNi"), T_A(dkTestAesArmCrypto, "aesArmCrypto"),
+    T_A(dkTestX25519SmallOrderReject, "x25519SmallOrder"),
+    T_A(dkTestX25519Iter1000KAT, "x25519Iter1000"),
+    T_A(dkTestBlake3DeriveKeyVarInput, "blake3DKVarInput"),
+    T_A(dkTestSha256AllBackendParity, "sha256BackendParity"),
+    T_A(dkTestAesGcmExtendedVectors, "aesGcmExtended"),
+    T_A(dkTestChaChaSimdParity, "chachaSimdParity"),
+    T_A(dkTestPoly1305SimdParity, "poly1305SimdParity"),
+    T_A(dkTestBlake3Avx2Dispatch, "blake3Avx2Dispatch"),
+    T_A(dkTestBlake3Sse41Batch, "blake3Sse41Batch"),
+    T_A(dkTestBlake3DeriveKeyContexts, "blake3DeriveKeyCtx"),
+    T_A(dkTestKeyringRequireSalt, "keyringRequireSalt"),
+    T_A(dkTestKeyringPersistRetireAfterAttach, "keyringPersistRetire"),
+    T_A(dkTestRevokedKeyFloor, "keyringRevokedFloor"),
+    T_A(dkTestEnvelopeOpenKeyringResolve, "envelopeOpenKeyring"),
+    T_A(dkTestWireKeyIdAmbiguityReject, "envelopeWireKeyIdFlag"),
+    T_A(dkTestPersistKeyIdHeader, "persistKeyIdHeader"),
+    T_A(dkTestNonceLogPersistRoundTrip, "nonceLogPersist"),
+    T_A(dkTestEnvelopeNonceLogIntegration, "envelopeNonceLog"),
+    T_A(dkTestNonceLogEvictionPerf, "nonceLogEvictPerf"),
+    T_A(dkTestMailboxReplicatorNonceLogWired, "mailboxReplicatorNonceLog"),
+    T_A(dkTestClusterRingFlexSerialize, "clusterRingFlex"),
+    T_A(dkTestClusterRingMaliciousState, "clusterRingMalicious"),
+    T_A(dkTestClusterRingDuplicateId, "clusterRingDupId"),
+    T_A(dkTestClusterRingTruncatedBuffer, "clusterRingTruncated"),
+    T_A(dkTestPersistMultilistTieredApply, "persistMultilistTier"),
+    T_A(dkTestReplicatorRetryDrop, "replicatorRetry"),
+    T_A(dkTestMailboxWindowOrientation, "mailboxWindowOrient"),
+    T_A(dkTestMailboxStatsRace, "mailboxStatsRace"),
+    T_A(dkTestMailboxStatsAlignment, "mailboxStatsAlign"),
     T_A(dkTestKeyringGetRawCopyMigrationCluster,
         "keyringGetRawCopyMigrationCluster"),
     T_A(dkTestFlexEnvelopeKeyringRetireRace, "flexEnvelopeKeyringRetireRace"),
-    T_A(dkTestE1PersistTypeNameAllRegistered, "persistTypeName"),
-    T_A(dkTestE1KeyringPersistOpsDescriptorRoundTrip, "keyringPersistOps"),
-    T_A(dkTestE1RingPersistOpsDescriptorRoundTrip, "ringPersistOps"),
-    T_A(dkTestE1MailboxPersistOpsDescriptorRoundTrip, "mailboxPersistOps"),
-    T_A(dkTestA11AeadKeyScheduleCache, "aeadKeyScheduleCache"),
-    T_A(dkTestE4MailboxInnerHeaderFlex, "mailboxInnerHeaderFlex"),
-    T_A(dkTestE4MailboxRotateAnnounceFlex, "mailboxRotateAnnounceFlex"),
-    T_A(dkTestE10EnvelopeReservedZeroAssert, "envelopeReservedZero"),
-    T_A(dkTestE14EnvelopeWrapPadPolicy, "envelopeWrapPadPolicy"),
-    T_A(dkTestD4ClusterE2EReplayProtection, "clusterE2EReplay"),
-    T_A(dkTestE7EnvelopeStructAwareFuzz, "envStructAwareFuzz"),
-    T_A(dkTestE9EnvelopeZeroCopy, "envelopeZeroCopy"),
+    T_A(dkTestPersistTypeNameAllRegistered, "persistTypeName"),
+    T_A(dkTestKeyringPersistOpsDescriptorRoundTrip, "keyringPersistOps"),
+    T_A(dkTestRingPersistOpsDescriptorRoundTrip, "ringPersistOps"),
+    T_A(dkTestMailboxPersistOpsDescriptorRoundTrip, "mailboxPersistOps"),
+    T_A(dkTestAeadKeyScheduleCache, "aeadKeyScheduleCache"),
+    T_A(dkTestMailboxInnerHeaderFlex, "mailboxInnerHeaderFlex"),
+    T_A(dkTestMailboxRotateAnnounceFlex, "mailboxRotateAnnounceFlex"),
+    T_A(dkTestEnvelopeReservedZeroAssert, "envelopeReservedZero"),
+    T_A(dkTestEnvelopeWrapPadPolicy, "envelopeWrapPadPolicy"),
+    T_A(dkTestClusterE2EReplayProtection, "clusterE2EReplay"),
+    T_A(dkTestEnvelopeStructAwareFuzz, "envStructAwareFuzz"),
+    T_A(dkTestEnvelopeZeroCopy, "envelopeZeroCopy"),
     T_A(testCtMemEqStructural, "ctMemEqStructural"),
     T_A(testNonceLogAllAeadAlgos, "nonceLogAllAead"),
     T_A(testChachaStreamOpenNonceFlip, "chachaStreamOpenNonceFlip"),

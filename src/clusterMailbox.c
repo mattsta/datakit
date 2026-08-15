@@ -3056,7 +3056,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
  * 3. Snapshot strictly AHEAD: re-orient current's bits forward into
  * the snapshot frame and OR.
  * 4. Snapshot at exactly the same last_applied: pure OR of bitmaps. */
-int dkTestD5MailboxWindowOrientationTest(int argc, char *argv[]) {
+int dkTestMailboxWindowOrientationTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int err = 0;
@@ -3471,7 +3471,7 @@ static void *cmStatsRaceReader(void *vctx) {
     return NULL;
 }
 
-int dkTestD6MailboxStatsRaceTest(int argc, char *argv[]) {
+int dkTestMailboxStatsRaceTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int err = 0;
@@ -3563,7 +3563,7 @@ int dkTestD6MailboxStatsRaceTest(int argc, char *argv[]) {
  * allocation pipeline (zmalloc). If zmalloc ever stopped returning
  * 64B-aligned pointers for an aligned struct, this test would catch
  * it. */
-int dkTestD7MailboxStatsAlignmentTest(int argc, char *argv[]) {
+int dkTestMailboxStatsAlignmentTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int err = 0;

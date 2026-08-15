@@ -16,7 +16,7 @@
  * Block4x after a positive runtime probe.
  *
  * Output parity vs the scalar poly1305Block is enforced by
- * dkTestA7Poly1305SimdParity in the test driver.
+ * dkTestPoly1305SimdParity in the test driver.
  *
  * On non-x86_64 hosts the symbols are stubs: Available() returns
  * false; Block4x() asserts (callers must gate on the probe).  This

@@ -177,7 +177,7 @@ Every crypto module ships compliant end-of-life wipes today:
 If you grep new code and find `memset(..., 0, ...)` on a buffer that
 just held a secret, replace it with `dkSecureZero` and add a test
 that hex-dumps the buffer immediately after end-of-life and asserts
-it is all-zero — the `dkTestA2ChaChaStreamCtxWipe` test pattern.
+it is all-zero — the `dkTestChaChaStreamCtxWipe` test pattern.
 
 ## Streaming AEAD state machine
 
@@ -193,14 +193,14 @@ runtime `false` return, not undefined behavior.
 2. **Final is single-shot.** A second call to
    `SealStreamFinal` / `OpenStreamFinal` returns `false` and emits no
    output. This contract is exercised by
-   `dkTestA8StreamFinalTwice`.
+   `dkTestStreamFinalTwice`.
 3. **Post-Final ctx is bytewise zero.** Once `Final` succeeds (and
    even when it fails because of a verify mismatch on Open), the
    entire `chacha20poly1305StreamCtx` is `dkSecureZero`-cleared
    before return. The key, the nonce, up to 64 bytes of unused
    keystream, and the Poly1305 accumulator are all gone from the
    stack frame. Pin this contract by
-   `memcmp`-against-zero in `dkTestA2ChaChaStreamCtxWipe`.
+   `memcmp`-against-zero in `dkTestChaChaStreamCtxWipe`.
 4. **Mid-stream tamper.** On Open, a single bit flipped anywhere in
    the ciphertext or AAD makes `Final` return `false`. Mid-stream
    tamper is **not** detected by `Update` (Poly1305 is an XOR-MAC

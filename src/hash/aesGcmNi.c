@@ -33,7 +33,7 @@
  * polynomial x^128 + x^7 + x^2 + x + 1 using two more clmul + xor
  * + shift sequences (the standard "Algorithm 5" reduction).
  *
- * Correctness is verified by `dkTestA3AesNi`: every existing aesGcm
+ * Correctness is verified by `dkTestAesNi`: every existing aesGcm
  * test vector is run through both the portable path and the NI path
  * and the ciphertext+tag bytes are compared. */
 

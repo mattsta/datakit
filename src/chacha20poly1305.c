@@ -273,7 +273,7 @@ static void chacha20Block(const uint8_t key[32], uint32_t counter,
  * iteration) falls through to the scalar chacha20Block path, which
  * also services hosts with neither SIMD backend available.  Bit-for-bit
  * output parity vs the pure-scalar path is verified by
- * dkTestA6ChaChaSimdParity. */
+ * dkTestChaChaSimdParity. */
 static void chacha20XorStream(const uint8_t key[32], uint32_t initial_counter,
                               const uint8_t nonce[12], const uint8_t *in,
                               uint8_t *out, size_t len) {
@@ -497,7 +497,7 @@ static void poly1305Update(poly1305State *st, const uint8_t *data, size_t len) {
      * follow.  NEON 2-block requires 1 square.  Threshold of 4 batches
      * is a conservative break-even for the precompute amortisation.
      * Output is bit-identical to scalar — enforced by
-     * dkTestA7Poly1305SimdParity. */
+     * dkTestPoly1305SimdParity. */
     const poly1305Backend pbk = poly1305ActiveBackend();
     if (pbk == POLY1305_BACKEND_AVX2 && len >= 64u * 4u) {
         uint32_t r2[5], r3[5], r4[5];

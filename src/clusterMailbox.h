@@ -622,9 +622,9 @@ extern const struct persistOps persistOpsClusterMailbox;
 
 #ifdef DATAKIT_TEST
 int clusterMailboxTest(int argc, char *argv[]);
-int dkTestD5MailboxWindowOrientationTest(int argc, char *argv[]);
-int dkTestD6MailboxStatsRaceTest(int argc, char *argv[]);
-int dkTestD7MailboxStatsAlignmentTest(int argc, char *argv[]);
+int dkTestMailboxWindowOrientationTest(int argc, char *argv[]);
+int dkTestMailboxStatsRaceTest(int argc, char *argv[]);
+int dkTestMailboxStatsAlignmentTest(int argc, char *argv[]);
 int dkTestKeyringGetRawCopyMigrationClusterTest(int argc, char *argv[]);
 #endif
 

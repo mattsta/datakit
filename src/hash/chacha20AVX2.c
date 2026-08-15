@@ -15,7 +15,7 @@
  * Block8 after a positive runtime probe.
  *
  * Differential parity vs the scalar chacha20Block is enforced by
- * dkTestA6ChaChaSimdParity in the test driver. */
+ * dkTestChaChaSimdParity in the test driver. */
 
 #include "chacha20AVX2.h"
 

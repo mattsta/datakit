@@ -33,7 +33,7 @@
  * Montgomery-style reduction used by the AES-NI backend.  The
  * pre-shifted H optimization is identical to the NI backend.
  *
- * Correctness is verified by `dkTestA4AesArmCrypto`: every existing
+ * Correctness is verified by `dkTestAesArmCrypto`: every existing
  * aesGcm test vector is run through both the portable path and the
  * ARM-crypto path and the ciphertext+tag bytes are compared. */
 
