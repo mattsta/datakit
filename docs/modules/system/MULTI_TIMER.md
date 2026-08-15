@@ -739,12 +739,12 @@ MultiTimer works on all platforms supported by:
 - `multimap` (all platforms)
 - `timeUtil` (all POSIX platforms)
 
-| Platform | Support | Notes                              |
-| -------- | ------- | ---------------------------------- |
-| Linux    | ✓       | Full support                       |
-| macOS    | ✓       | Full support                       |
-| FreeBSD  | ✓       | Full support                       |
-| Others   | ✓       | Any POSIX system                   |
+| Platform | Support | Notes            |
+| -------- | ------- | ---------------- |
+| Linux    | ✓       | Full support     |
+| macOS    | ✓       | Full support     |
+| FreeBSD  | ✓       | Full support     |
+| Others   | ✓       | Any POSIX system |
 
 ## Best Practices
 
