@@ -26,6 +26,7 @@
 #include "dataspeed.h"
 #include "dj.h"
 #include "dod.h"
+#include "fastmutex.h"
 #include "fenwick/fenwickI64.h" /* New 2-tier template system */
 #include "fibbuf.h"
 #include "flex.h"
@@ -8958,6 +8959,9 @@ static const TestEntry testRegistry[] = {
 #if USE_INTSET_BIG
     T(intsetBig),
 #endif
+
+    /* Concurrency primitives */
+    T(fastmutex),
 
     /* Strings */
     T(mds), T(mdsc), T_ADJ(str), T_ADJ(strDoubleFormat),

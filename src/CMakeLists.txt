@@ -429,6 +429,9 @@ add_library(${PROJECT_NAME} OBJECT
     timerWheelTest.c
     timeUtil.c
 
+    fastmutex.c
+    fastmutexTest.c
+
     mds.c
     mdsc.c
     dj.c

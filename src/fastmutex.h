@@ -40,14 +40,15 @@ static inline void fastMutexUnlock(fastMutex *m) {
     }
 }
 
+/* Try to acquire the lock without blocking.
+ * Returns true if the lock was acquired, false if it was already held.
+ * (Uses a strong CAS so a free lock is reliably acquired with no spurious
+ * false negatives.) Only acquires when fully unlocked (word == 0), matching
+ * the fast path of fast_mutex_lock(). */
 static inline bool fastMutexTryLock(fastMutex *m) {
     uint64_t prev = 0;
-    if (!atomic_compare_exchange_weak_explicit(
-            &m->word, &prev, 1, memory_order_acquire, memory_order_relaxed)) {
-        return true;
-    }
-
-    return false;
+    return atomic_compare_exchange_strong_explicit(
+        &m->word, &prev, 1, memory_order_acquire, memory_order_relaxed);
 }
 
 static inline bool fastMutexIsLocked(fastMutex *m) {
@@ -59,6 +60,7 @@ static inline void fastMutexInit(fastMutex *m) {
 }
 
 static inline int fastMutexCondInit(fastCond *c, void *unused) {
+    (void)unused;
     int ret;
     ret = pthread_mutex_init(&c->m, NULL);
     if (ret) {
@@ -73,3 +75,7 @@ static inline int fastMutexCondInit(fastCond *c, void *unused) {
 int fastMutexCondWait(fastCond *c, fastMutex *m);
 int fastMutexCondTimedWait(fastCond *c, fastMutex *m, struct timespec *ts);
 void fastMutexCondSignal(fastCond *c);
+
+#ifdef DATAKIT_TEST
+int fastmutexTest(int argc, char *argv[]);
+#endif
