@@ -79,29 +79,14 @@ static intsetSearchResult intsetFullFind16(const intsetFull *f, int16_t val16,
         return INTSET_NOT_FOUND;
     }
 
-    uint64_t left = 0;
-    uint64_t right = f->count16;
-
-    while (left < right) {
-        uint64_t mid = left + (right - left) / 2;
-        int16_t midval = f->values16[mid];
-
-        if (midval < val16) {
-            left = mid + 1;
-        } else if (midval > val16) {
-            right = mid;
-        } else {
-            if (pos) {
-                *pos = mid;
-            }
-            return INTSET_FOUND;
-        }
-    }
-
+    uint64_t idx;
+    bool hit;
+    INTSET_BRANCHLESS_LOWER_BOUND(int16_t, f->values16, f->count16, val16, idx,
+                                  hit);
     if (pos) {
-        *pos = left;
+        *pos = idx; /* hit: matching index; miss: insert point */
     }
-    return INTSET_NOT_FOUND;
+    return hit ? INTSET_FOUND : INTSET_NOT_FOUND;
 }
 
 /* Binary search in int32 array */
@@ -114,29 +99,14 @@ static intsetSearchResult intsetFullFind32(const intsetFull *f, int32_t val32,
         return INTSET_NOT_FOUND;
     }
 
-    uint64_t left = 0;
-    uint64_t right = f->count32;
-
-    while (left < right) {
-        uint64_t mid = left + (right - left) / 2;
-        int32_t midval = f->values32[mid];
-
-        if (midval < val32) {
-            left = mid + 1;
-        } else if (midval > val32) {
-            right = mid;
-        } else {
-            if (pos) {
-                *pos = mid;
-            }
-            return INTSET_FOUND;
-        }
-    }
-
+    uint64_t idx;
+    bool hit;
+    INTSET_BRANCHLESS_LOWER_BOUND(int32_t, f->values32, f->count32, val32, idx,
+                                  hit);
     if (pos) {
-        *pos = left;
+        *pos = idx;
     }
-    return INTSET_NOT_FOUND;
+    return hit ? INTSET_FOUND : INTSET_NOT_FOUND;
 }
 
 /* Binary search in int64 array */
@@ -149,29 +119,14 @@ static intsetSearchResult intsetFullFind64(const intsetFull *f, int64_t val64,
         return INTSET_NOT_FOUND;
     }
 
-    uint64_t left = 0;
-    uint64_t right = f->count64;
-
-    while (left < right) {
-        uint64_t mid = left + (right - left) / 2;
-        int64_t midval = f->values64[mid];
-
-        if (midval < val64) {
-            left = mid + 1;
-        } else if (midval > val64) {
-            right = mid;
-        } else {
-            if (pos) {
-                *pos = mid;
-            }
-            return INTSET_FOUND;
-        }
-    }
-
+    uint64_t idx;
+    bool hit;
+    INTSET_BRANCHLESS_LOWER_BOUND(int64_t, f->values64, f->count64, val64, idx,
+                                  hit);
     if (pos) {
-        *pos = left;
+        *pos = idx;
     }
-    return INTSET_NOT_FOUND;
+    return hit ? INTSET_FOUND : INTSET_NOT_FOUND;
 }
 
 /* Find value in full intset */

@@ -9,6 +9,41 @@
 #include <inttypes.h>
 #include <stdio.h>
 
+/* Differential oracle for INTSET_BRANCHLESS_LOWER_BOUND: a branchy
+ * reference lower-bound search and the branchless macro MUST agree on both the
+ * found flag and the index, for every probe. Arrays are sorted ascending and
+ * duplicate-free (the intset invariant), so the branchy hit index equals the
+ * lower bound. Returns 0 on agreement, 1 on mismatch. */
+#define DEFINE_BLB_ORACLE(NAME, T)                                             \
+    static int NAME(const T *arr, uint64_t n, T v) {                           \
+        uint64_t blo = 0;                                                      \
+        uint64_t bhi = n;                                                      \
+        bool bfound = false;                                                   \
+        uint64_t bidx = 0;                                                     \
+        while (blo < bhi) {                                                    \
+            const uint64_t mid = blo + (bhi - blo) / 2;                        \
+            if (arr[mid] < v) {                                                \
+                blo = mid + 1;                                                 \
+            } else if (arr[mid] > v) {                                         \
+                bhi = mid;                                                     \
+            } else {                                                           \
+                bfound = true;                                                 \
+                bidx = mid;                                                    \
+                break;                                                         \
+            }                                                                  \
+        }                                                                      \
+        const uint64_t refIdx = bfound ? bidx : blo;                           \
+        uint64_t lidx = 0;                                                     \
+        bool lhit = false;                                                     \
+        if (n > 0) {                                                           \
+            INTSET_BRANCHLESS_LOWER_BOUND(T, arr, n, v, lidx, lhit);           \
+        }                                                                      \
+        return (lhit == bfound && lidx == refIdx) ? 0 : 1;                     \
+    }
+DEFINE_BLB_ORACLE(blbOracle16, int16_t)
+DEFINE_BLB_ORACLE(blbOracle32, int32_t)
+DEFINE_BLB_ORACLE(blbOracle64, int64_t)
+
 /* Run tests */
 int intsetTest(int argc, char *argv[]) {
     int err = 0;
@@ -1239,6 +1274,90 @@ int intsetTest(int argc, char *argv[]) {
 
         zfree(oracle);
         intsetFree(is);
+    }
+
+    TEST(
+        "intset branchless lower-bound == branchy (oracle, all widths/edges)") {
+        static int32_t a32[4096];
+        const int sizes[] = {0,   1,    2,    3,    4,    5,   7,   8,
+                             16,  17,   31,   32,   63,   64,  255, 256,
+                             257, 1023, 1024, 1025, 4095, 4096};
+        for (size_t si = 0; si < sizeof(sizes) / sizeof(sizes[0]); si++) {
+            const int n = sizes[si];
+            for (int i = 0; i < n; i++) {
+                a32[i] = (int32_t)(i * 2 - n); /* sorted, unique, spans 0 */
+            }
+            for (int i = 0; i < n; i++) { /* every present value */
+                if (blbOracle32(a32, (uint64_t)n, a32[i])) {
+                    ERR("blb32 present mismatch n=%d i=%d", n, i);
+                }
+            }
+            for (int i = 0; i <= n; i++) { /* gaps + below + above */
+                const int32_t gap = (i < n)
+                                        ? (int32_t)(a32[i] - 1)
+                                        : (n ? (int32_t)(a32[n - 1] + 1) : 0);
+                if (blbOracle32(a32, (uint64_t)n, gap)) {
+                    ERR("blb32 gap mismatch n=%d i=%d", n, i);
+                }
+            }
+            if (blbOracle32(a32, (uint64_t)n, INT32_MIN) ||
+                blbOracle32(a32, (uint64_t)n, INT32_MAX)) {
+                ERR("blb32 extreme mismatch n=%d", n);
+            }
+        }
+
+        /* int16 + int64 width extremes */
+        static int16_t a16[400];
+        for (int i = 0; i < 400; i++) {
+            a16[i] = (int16_t)(i * 2 - 400);
+        }
+        for (int i = 0; i < 400; i++) {
+            if (blbOracle16(a16, 400, a16[i])) {
+                ERR("blb16 present mismatch i=%d", i);
+            }
+        }
+        if (blbOracle16(a16, 400, INT16_MIN) ||
+            blbOracle16(a16, 400, INT16_MAX) ||
+            blbOracle16(a16, 400, (int16_t)(a16[0] - 1)) ||
+            blbOracle16(a16, 400, (int16_t)(a16[399] + 1))) {
+            ERRR("blb16 edge mismatch");
+        }
+        static int64_t a64[400];
+        for (int i = 0; i < 400; i++) {
+            a64[i] = (int64_t)i * 1000000000LL - 200000000000LL;
+        }
+        for (int i = 0; i < 400; i++) {
+            if (blbOracle64(a64, 400, a64[i])) {
+                ERR("blb64 present mismatch i=%d", i);
+            }
+        }
+        if (blbOracle64(a64, 400, INT64_MIN) ||
+            blbOracle64(a64, 400, INT64_MAX)) {
+            ERRR("blb64 extreme mismatch");
+        }
+
+        /* Random sorted-unique arrays + arbitrary probes. */
+        uint64_t seed = 0x1234567ULL;
+        for (int iter = 0; iter < 4000; iter++) {
+            seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+            int n = (int)(seed % 600);
+            int32_t prev = INT32_MIN;
+            int built = 0;
+            for (int i = 0; i < n; i++) {
+                seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+                const int32_t step = (int32_t)(seed % 9) + 1;
+                if (prev > INT32_MAX - step) {
+                    break;
+                }
+                prev += step;
+                a32[built++] = prev;
+            }
+            seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+            const int32_t probe = (int32_t)(uint32_t)(seed >> 16);
+            if (blbOracle32(a32, (uint64_t)built, probe)) {
+                ERR("blb32 random mismatch n=%d probe=%d", built, probe);
+            }
+        }
     }
 
     TEST_FINAL_RESULT;

@@ -64,29 +64,14 @@ static intsetSearchResult intsetMediumFind16(const intsetMedium *m,
         return INTSET_NOT_FOUND;
     }
 
-    uint32_t left = 0;
-    uint32_t right = m->count16;
-
-    while (left < right) {
-        uint32_t mid = left + (right - left) / 2;
-        int16_t midval = m->values16[mid];
-
-        if (midval < val16) {
-            left = mid + 1;
-        } else if (midval > val16) {
-            right = mid;
-        } else {
-            if (pos) {
-                *pos = mid;
-            }
-            return INTSET_FOUND;
-        }
-    }
-
+    uint64_t idx;
+    bool hit;
+    INTSET_BRANCHLESS_LOWER_BOUND(int16_t, m->values16, m->count16, val16, idx,
+                                  hit);
     if (pos) {
-        *pos = left;
+        *pos = (uint32_t)idx; /* hit: matching index; miss: insert point */
     }
-    return INTSET_NOT_FOUND;
+    return hit ? INTSET_FOUND : INTSET_NOT_FOUND;
 }
 
 /* Binary search in int32 array */
@@ -99,29 +84,14 @@ static intsetSearchResult intsetMediumFind32(const intsetMedium *m,
         return INTSET_NOT_FOUND;
     }
 
-    uint32_t left = 0;
-    uint32_t right = m->count32;
-
-    while (left < right) {
-        uint32_t mid = left + (right - left) / 2;
-        int32_t midval = m->values32[mid];
-
-        if (midval < val32) {
-            left = mid + 1;
-        } else if (midval > val32) {
-            right = mid;
-        } else {
-            if (pos) {
-                *pos = mid;
-            }
-            return INTSET_FOUND;
-        }
-    }
-
+    uint64_t idx;
+    bool hit;
+    INTSET_BRANCHLESS_LOWER_BOUND(int32_t, m->values32, m->count32, val32, idx,
+                                  hit);
     if (pos) {
-        *pos = left;
+        *pos = (uint32_t)idx;
     }
-    return INTSET_NOT_FOUND;
+    return hit ? INTSET_FOUND : INTSET_NOT_FOUND;
 }
 
 /* Find value in medium intset */
