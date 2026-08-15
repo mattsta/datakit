@@ -18,11 +18,6 @@
 #include <arm_neon.h>
 #endif
 
-/* womp womp */
-#ifdef _MSC_VER
-#include <intrin.h>
-#endif
-
 /* default buffer length when allocated */
 /* Note: NOT 512 because leave some room for mds overhead in allocation block */
 #define DEFAULT_LEN 500
@@ -527,13 +522,7 @@ static bool findNextEscapeByteSIMD(djState *state, const void *data_,
 
         /* If mask populated, some elements require escaping... */
         if (r) {
-#ifdef _MSC_VER // Find the index of first escaped
-            unsigned long offset;
-            _BitScanForward(&offset, r);
-            size_t okayLen = offset;
-#else
             size_t okayLen = __builtin_ffs(r) - 1;
-#endif
 
             SPLAT_ENSURE(okayLen);
             SPLAT_LEN(data, okayLen);
