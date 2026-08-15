@@ -426,8 +426,8 @@ typedef struct multiarrayLargeNode {
   │Node│◄─────►│Node│◄─────►│Node│
   │  0 │ linked│  1 │ linked│  2 │
   └─┬──┘  list └─┬──┘  list └─┬──┘
-    │           │           │
-    ▼           ▼           ▼
+    │            │            │
+    ▼            ▼            ▼
   [data]      [data]      [data]
   (1024 elem) (1024 elem) (512 elem)
 ```

@@ -1,920 +1,284 @@
-# membound - Bounded Memory Allocator
+# membound — Bounded Buddy Memory Allocator
 
 ## Overview
 
-`membound` is a **memory allocator with bounded allocation from a pre-allocated pool**. It provides malloc/free semantics within a fixed memory region, using a buddy allocation algorithm for efficient space management without relying on the system allocator.
+`membound` is a **bounded memory allocator**: it serves
+`malloc`/`calloc`/`realloc`/`free` semantics from memory it obtains directly via
+`mmap`, using a power-of-two **buddy allocation** algorithm. After creation it
+makes no per-call trips to the system allocator.
 
-**Key Features:**
+It is offered in four **deployment tiers** that trade metadata overhead for
+features, from ~56-byte single-extent pools for millions of coroutines up to a
+multi-extent, per-extent-locked allocator for large multithreaded servers.
 
-- Fixed-size memory pool (no dynamic growth beyond initial size)
-- Power-of-two buddy allocation algorithm
-- Thread-safe with mutex protection
-- Process-shared memory support (via mmap with MAP_SHARED)
-- Zero external malloc dependencies after initialization
-- Automatic coalescing of adjacent free blocks
-- Maximum single allocation: 1 GiB
-- **O(1) freelist lookup** via bitmap + CTZ instruction
-- **SIMD-accelerated zeroing** for calloc (AVX-512/AVX2/SSE2/NEON)
-- **Fast size class computation** via CLZ/BSR intrinsics
+**Header**: `membound.h` **Source**: `membound.c`, `memboundInternal.h`
+**Origin**: buddy core derived from SQLite's `mem5.c` / J. M. Robson (JACM 1974)
 
-**Header**: `membound.h`
+For internal design, structures, and the invariants that govern safe extension,
+see **[MEMBOUND_ARCHITECTURE.md](MEMBOUND_ARCHITECTURE.md)**. This document is the
+user-facing API and usage guide.
 
-**Source**: `membound.c`
+**Key properties**
 
-**Origin**: Adapted from SQLite's mem5.c allocator
+- Power-of-two buddy allocation with automatic coalescing of free blocks
+- O(1) free-class lookup (bitmap + CTZ); O(log n) split/coalesce
+- Minimum allocation atom of 256 bytes; single-allocation cap of 1 GiB
+- Dynamic growth via additional "extents" (STANDARD/ENTERPRISE tiers)
+- Tiered thread-safety: none / optional / global mutex / global + per-extent
+- Process-shared capable (`mmap`, fork-safe pools)
+- SIMD-accelerated `calloc` zeroing and multi-extent ownership lookup
+- Optional pressure callbacks and opt-in relocating compaction
 
-## What is Bounded Memory Allocation?
+## Tiers at a glance
 
-Bounded memory allocators solve the problem of **unpredictable memory usage** by pre-allocating a fixed pool and serving all allocations from that pool. This provides:
+| Tier       | Create with                                                        | Mutex               | Growth        | Best for                                            |
+| ---------- | ------------------------------------------------------------------ | ------------------- | ------------- | --------------------------------------------------- |
+| MICRO      | `memboundCreateMicro(size)`                                        | none                | no            | millions of tiny pools (≤ 64 KB), coroutines/fibers |
+| COMPACT    | `memboundCreateCompact(size, threadSafe)`                          | optional            | no            | thousands of per-connection / task-local pools      |
+| STANDARD   | `memboundCreate` / `memboundCreateFixed` / `memboundCreateDynamic` | global              | yes (dynamic) | general-purpose, servers                            |
+| ENTERPRISE | `memboundCreateEnterprise(initial, max)`                           | global + per-extent | yes           | large multithreaded workloads                       |
 
-1. **Guaranteed memory limits** - Never exceed the pool size
-2. **No system malloc calls** - All allocations come from the pool
-3. **Predictable fragmentation** - Mathematically bounded by Robson's theorem
-4. **Zero overhead per allocation** - No malloc metadata per block
-5. **Process isolation** - Memory can be shared between processes via mmap
+Or build a `memboundConfig` with a preset and call `memboundCreateWithConfig`:
+`memboundPresetCoroutine` (MICRO/4 KB), `memboundPresetConnection(threadSafe)`
+(COMPACT/64 KB), `memboundPresetEmbedded(max)` (COMPACT/fixed),
+`memboundPresetGeneral` (STANDARD/1 MB), `memboundPresetDatabase`
+(ENTERPRISE/64 MB, size-class strategy, per-extent locking).
 
-### When to Use membound
+The tier is fixed for the pool's lifetime. MICRO and COMPACT are always
+fixed-mode single-extent pools; STANDARD and ENTERPRISE support dynamic growth.
 
-**Use membound when:**
+### When to use membound
 
-- You need strict memory limits (e.g., embedded systems, containers)
-- Predictable memory usage is critical
-- You want to isolate allocations from the system heap
-- Sharing memory between processes (fork-safe allocations)
-- Testing memory pressure scenarios
+Use it when you need strict memory bounds, predictable behaviour, an isolated
+heap, process-shared memory, or per-task arena allocation. Avoid it when you need
+sub-256-byte granularity, single allocations above 1 GiB, or when the system
+allocator is already adequate.
 
-**Don't use membound when:**
+## API
 
-- You need unlimited dynamic allocation
-- Single allocations exceed 1 GiB
-- You need very fine-grained allocation sizes (< 256 bytes wastes space)
-- Standard malloc performance is sufficient
-
-## Data Structure
-
-```c
-typedef struct membound {
-    /* Memory pool */
-    uint8_t *zPool;         /* Memory available for allocation */
-    int64_t szAtom;         /* Smallest possible allocation (typically 256 bytes) */
-    uint32_t atomShift;     /* log2(szAtom) for fast division via bit shift */
-    uint64_t size;          /* Total byte extent of 'zPool' */
-    int64_t nBlock;         /* Number of szAtom sized blocks in zPool */
-
-    /* Thread safety */
-    pthread_mutex_t mutex;  /* Mutex for thread-safe access */
-
-    /* Performance statistics (64-bit for large pools) */
-    uint64_t nAlloc;        /* Total number of malloc calls */
-    uint64_t totalAlloc;    /* Total of all malloc calls (including internal frag) */
-    uint64_t totalExcess;   /* Total internal fragmentation */
-    uint64_t currentOut;    /* Current bytes checked out (including frag) */
-    uint64_t currentCount;  /* Current number of distinct allocations */
-    uint64_t maxOut;        /* Maximum instantaneous currentOut */
-    uint64_t maxCount;      /* Maximum instantaneous currentCount */
-
-    /* Free lists - one per power-of-two size class */
-    int32_t aiFreelist[31]; /* Free block lists by size class */
-
-    /* Bitmap for O(1) freelist lookup - bit i set if aiFreelist[i] has blocks */
-    uint64_t freelistBitmap;
-
-    /* Control metadata - one byte per block */
-    uint8_t *aCtrl;         /* Tracks allocated/free status and size */
-} membound;
-```
-
-### Memory Layout
-
-```
-Total Memory = Pool + Control Array
-
-┌─────────────────────────────────────────┐
-│         Memory Pool (zPool)              │  User allocations
-│    nBlock * szAtom bytes                 │
-├─────────────────────────────────────────┤
-│      Control Array (aCtrl)               │  Metadata (1 byte per block)
-│         nBlock bytes                     │
-└─────────────────────────────────────────┘
-
-Example with 1 MB pool, 256-byte atoms:
-- nBlock = 1,048,576 / 257 = 4,079 blocks
-- Pool size = 4,079 * 256 = 1,044,224 bytes
-- Control size = 4,079 bytes
-- Total = 1,048,303 bytes
-```
-
-### Control Byte Format
+### Creation and shutdown
 
 ```c
-typedef enum memboundCtrl {
-    MEMBOUND_CTRL_LOGSIZE = 0x1f,  /* Bits 0-4: Log2(size in atoms) */
-    MEMBOUND_CTRL_FREE = 0x20       /* Bit 5: Free flag */
-} memboundCtrl;
+membound *memboundCreate(size_t size);                 /* fixed, STANDARD */
+membound *memboundCreateFixed(size_t size);            /* fixed, STANDARD */
+membound *memboundCreateDynamic(size_t initialSize,    /* dynamic, STANDARD */
+                                size_t maxSize,         /*   0 = unlimited  */
+                                size_t growthSize);     /*   0 = use initial */
+membound *memboundCreateMicro(size_t size);            /* MICRO (≤ 64 KB)  */
+membound *memboundCreateCompact(size_t size, bool threadSafe);
+membound *memboundCreateEnterprise(size_t initialSize, size_t maxSize);
+membound *memboundCreateWithConfig(const memboundConfig *config);
 
-Examples:
-0x00 = allocated, size = 2^0 = 1 atom
-0x03 = allocated, size = 2^3 = 8 atoms
-0x25 = free, size = 2^5 = 32 atoms
+bool memboundShutdown(membound *m);       /* destroy; invalidates all pointers */
+bool memboundShutdownSafe(membound *m);   /* fails if allocations outstanding  */
 ```
 
-## Buddy Allocation Algorithm
-
-The allocator uses the **binary buddy system**:
-
-1. **Power-of-two sizes**: All allocations are rounded up to powers of 2
-2. **Block splitting**: Large blocks are split into smaller buddies when needed
-3. **Block coalescing**: Adjacent free buddies are merged back together
-4. **Free lists**: One list per size class (2^0 atoms, 2^1 atoms, ..., 2^30 atoms)
-
-### Allocation Example
-
-```
-Initial state: One 1024-byte block free (assuming 256-byte atoms = 4 atoms)
-
-aiFreelist[2] → Block 0 (4 atoms = 1024 bytes)
-
-Request 256 bytes (1 atom):
-1. Need size class 0 (2^0 = 1 atom)
-2. No blocks in freelist[0], split from freelist[2]
-3. Split: [0-3] → [0-1] and [2-3]
-4. Split: [0-1] → [0] and [1]
-5. Allocate block 0, return blocks 1, 2-3 to freelists
-
-aiFreelist[0] → Block 1
-aiFreelist[1] → Block 2-3
-Block 0: allocated
-```
-
-### Deallocation and Coalescing
+### Allocation
 
 ```c
-Free block 0 (1 atom):
-1. Check buddy block 1 - is it free and same size?
-   Yes → Merge [0] + [1] = [0-1]
-2. Check buddy [2-3] - is it free and same size?
-   Yes → Merge [0-1] + [2-3] = [0-3]
-3. Add [0-3] back to freelist[2]
+void *memboundAlloc(membound *m, size_t nBytes);   /* NULL if 0 or exhausted */
+void *memboundCalloc(membound *m, size_t count, size_t size); /* zeroed; NULL on overflow */
+void *memboundRealloc(membound *m, void *p, size_t nBytes);   /* original preserved on failure */
+void  memboundFree(membound *m, void *p);          /* NULL safely ignored */
 
-Result: Back to initial state!
+/* Capability helpers (all tiers): */
+size_t memboundUsableSize(const membound *m, const void *p);  /* actual block size, 0 if unowned */
+size_t memboundGoodSize(const membound *m, size_t size);      /* size a request rounds up to */
+void  *memboundExpand(membound *m, void *p, size_t newSize);  /* in-place grow or NULL */
+void  *memboundRecalloc(membound *m, void *p, size_t count, size_t size); /* realloc + zero tail */
+void  *memboundAllocAligned(membound *m, size_t nBytes, size_t alignment); /* pow2 align */
 ```
 
-## API Reference
+`nBytes == 0` returns NULL (malloc-style); single allocations are capped at
+1 GiB. `memboundRealloc` copies under the pool lock, so the source is safe (and
+now correctly tier-dispatches MICRO/COMPACT). `memboundAllocAligned` exploits
+buddy blocks' natural self-alignment and verify-and-fails rather than ever
+under-aligning. `memboundGoodSize(m,n) == memboundUsableSize(m, memboundAlloc(m,n))`.
 
-### Creation and Destruction
+### Pool management and dynamic mode
 
 ```c
-/* Create new membound allocator with specified pool size
- * Returns: membound pointer on success, NULL on failure
- * Note: Uses mmap for process-shared memory
- */
-membound *memboundCreate(size_t size);
-
-/* Shutdown allocator (unsafe - may have outstanding allocations)
- * Returns: true on success, false on error
- */
-bool memboundShutdown(membound *m);
-
-/* Shutdown allocator only if no outstanding allocations
- * Returns: true on success, false if allocations still exist
- */
-bool memboundShutdownSafe(membound *m);
-
-/* Example: Create 10 MB allocator */
-membound *m = memboundCreate(10 * 1024 * 1024);
-if (!m) {
-    fprintf(stderr, "Failed to create allocator\n");
-    exit(1);
-}
-
-/* ... use allocator ... */
-
-/* Safe shutdown - only succeeds if all memory freed */
-if (!memboundShutdownSafe(m)) {
-    fprintf(stderr, "Memory leak detected!\n");
-}
+void   memboundReset(membound *m);                  /* bulk free all; invalidates pointers */
+bool   memboundIncreaseSize(membound *m, size_t size); /* grow only when empty */
+bool   memboundGrowBy(membound *m, size_t additionalBytes); /* pre-warm an extent */
+size_t memboundShrink(membound *m);                 /* release empty non-primary extents */
+size_t memboundCompact(membound *m);                /* consolidate (see Compaction) */
 ```
 
-### Growing the Pool
+### Strategy, queries, and callbacks
 
 ```c
-/* Increase pool size (only works when pool is empty!)
- * m: membound allocator
- * size: new total size (must be larger than current)
- * Returns: true on success, false if allocations exist or growth fails
- *
- * IMPORTANT: Can only be called when there are NO outstanding allocations.
- * All existing pointers would become invalid, so this is enforced.
- */
-bool memboundIncreaseSize(membound *m, size_t size);
+memboundExtentStrategy memboundSetStrategy(membound *m, memboundExtentStrategy s);
+memboundExtentStrategy memboundGetStrategy(const membound *m);
+void  memboundSetMinOccupancy(membound *m, float threshold);
+void  memboundSetShrinkThreshold(membound *m, float threshold);
+float memboundGetFragmentation(const membound *m);
 
-/* Example: Grow from 10 MB to 20 MB */
-/* First, ensure pool is empty */
-if (memboundCurrentAllocationCount(m) > 0) {
-    fprintf(stderr, "Cannot grow - allocations exist\n");
-}
-if (!memboundIncreaseSize(m, 20 * 1024 * 1024)) {
-    fprintf(stderr, "Failed to grow allocator\n");
-}
-```
-
-### Memory Allocation
-
-```c
-/* Allocate memory from pool
- * size: bytes to allocate (max 1 GiB)
- * Returns: pointer to memory, or NULL if insufficient space
- */
-void *memboundAlloc(membound *m, size_t size);
-
-/* Allocate zero-initialized memory (like calloc)
- * count: number of elements
- * size: size of each element
- * Returns: pointer to zeroed memory, or NULL on failure/overflow
- */
-void *memboundCalloc(membound *m, size_t count, size_t size);
-
-/* Free previously allocated memory
- * p: pointer returned by memboundAlloc (NULL is safely ignored)
- */
-void memboundFree(membound *m, void *p);
-
-/* Reallocate memory (resize existing allocation)
- * p: existing allocation (NULL acts like alloc)
- * newlen: new size in bytes (any positive value, 0 acts like free)
- * Returns: pointer to resized memory, or NULL on failure
- * Note: On failure, original allocation is preserved
- */
-void *memboundRealloc(membound *m, void *p, size_t newlen);
-
-/* Example: Basic allocation */
-void *data = memboundAlloc(m, 1024);
-if (!data) {
-    fprintf(stderr, "Out of memory\n");
-    return;
-}
-
-/* Use the memory */
-memset(data, 0, 1024);
-
-/* Free when done (NULL-safe) */
-memboundFree(m, data);
-
-/* Example: Calloc for arrays */
-int *numbers = memboundCalloc(m, 100, sizeof(int));
-/* All 100 integers are zero-initialized */
-```
-
-### Statistics and Monitoring
-
-```c
-/* Get current number of outstanding allocations
- * Returns: count of allocations not yet freed
- */
+memboundMode memboundGetMode(const membound *m);
+memboundTier memboundGetTier(const membound *m);
+size_t memboundExtentCount(const membound *m);
 size_t memboundCurrentAllocationCount(const membound *m);
-
-/* Get total bytes currently allocated (including internal fragmentation)
- * Returns: bytes in use
- */
 size_t memboundBytesUsed(const membound *m);
-
-/* Get approximate bytes available for new allocations
- * Returns: bytes free (actual may vary due to fragmentation)
- */
 size_t memboundBytesAvailable(const membound *m);
-
-/* Get total pool capacity in usable bytes
- * Returns: total capacity
- */
 size_t memboundCapacity(const membound *m);
+size_t memboundMaxSize(const membound *m);
+bool   memboundCanGrow(const membound *m);
+bool   memboundOwns(const membound *m, const void *p);
+bool   memboundGetExtentInfo(const membound *m, size_t index, memboundExtentInfo *info);
+void   memboundGetStats(const membound *m, memboundStats *stats);
 
-/* Check if a pointer belongs to this pool's memory region
- * Returns: true if pointer is within pool bounds
- */
-bool memboundOwns(const membound *m, const void *p);
-
-/* Reset allocator to initial state (frees all memory)
- * WARNING: Invalidates all outstanding pointers!
- * Useful for arena-style "bulk free" patterns.
- */
-void memboundReset(membound *m);
-
-/* Example: Check for leaks */
-size_t outstanding = memboundCurrentAllocationCount(m);
-if (outstanding > 0) {
-    fprintf(stderr, "Memory leak: %zu allocations not freed\n", outstanding);
-}
-
-/* Example: Monitor memory pressure */
-size_t used = memboundBytesUsed(m);
-size_t capacity = memboundCapacity(m);
-double utilization = (double)used / capacity * 100.0;
-printf("Pool utilization: %.1f%% (%zu / %zu bytes)\n",
-       utilization, used, capacity);
-
-/* Example: Validate pointer ownership */
-void *ptr = memboundAlloc(m, 256);
-assert(memboundOwns(m, ptr));      /* true - from this pool */
-int stackVar;
-assert(!memboundOwns(m, &stackVar)); /* false - stack variable */
+void memboundSetPressureCallback(membound *m, memboundPressureCallback cb, void *userData);
+void memboundSetRelocationCallback(membound *m, memboundRelocationCallback cb, void *userData);
 ```
 
-## Real-World Examples
+Selection strategies (dynamic mode): `FIRST_FIT` (default), `BEST_FIT`,
+`WORST_FIT`, `SIZE_CLASS`, `ADAPTIVE`. Pressure levels: `LOW` (< 50%),
+`MEDIUM` (50–80%), `HIGH` (80–95%), `CRITICAL` (≥ 95% or alloc failed). Pressure
+callbacks are invoked **outside** the lock, so they may safely call back into the
+pool.
 
-### Example 1: Fixed-Memory Cache
+## Thread safety
+
+| Tier       | Guarantee                                                                   |
+| ---------- | --------------------------------------------------------------------------- |
+| MICRO      | none — the **caller** must serialize all access                             |
+| COMPACT    | mutex only if created with `threadSafe = true`                              |
+| STANDARD   | fully thread-safe via a global mutex                                        |
+| ENTERPRISE | same global mutex; multithread _scaling_ comes from the opt-in thread cache |
+
+Where a mutex is present it is `PTHREAD_PROCESS_SHARED`, so pools placed in shared
+memory work across `fork()`. (After fork, a pointer freed in one process is freed
+for both — the pool is shared, not copied.)
+
+ENTERPRISE uses the same single global lock as STANDARD — there is no per-extent
+locking (it was removed: it taxed every allocation ~12 ns for the lock dance and
+_regressed_ under contention; the thread cache is the correct scaling mechanism).
+See [MEMBOUND_MT_STRATEGY_DECISION.md](../../MEMBOUND_MT_STRATEGY_DECISION.md).
+
+### Thread-local cache (ENTERPRISE, opt-in)
+
+Set `config.threadCache = true` on an ENTERPRISE pool to add a per-thread cache on
+both sides of the allocator, cutting global-lock traffic for hot multithreaded
+shared-pool workloads:
+
+- **Alloc** pops a block from a per-thread, per-size-class free list with no lock;
+  on a miss it refills a batch (`config.threadCacheBatch`, default 64) under a
+  single lock.
+- **Free** buffers the pointer in a per-thread array and returns the whole batch
+  to the buddy core under a single lock when full.
+
+**Tuning `threadCacheBatch`** (0 = default 64, clamped to 1..256): this is the
+throughput-vs-memory knob. A larger batch means fewer locked refills/flushes —
+more multithreaded throughput — but each thread reserves up to `batch` blocks per
+active size class out of the (bounded) pool. Measured at 4 threads / 64 B, a shared
+pool drops from ~56 ns/op at batch 16 to ~37 at 64 to ~30 at 256 (diminishing
+returns — it asymptotes to the buddy core's inherent per-op cost). Tune it **down**
+for many threads under strict memory bounds; **up** for throughput when reservation
+is cheap.
+
+Each thread's cache is drained automatically at thread exit; call
+`memboundFlushThreadCache(m)` to drain the calling thread's cache early (e.g.
+before `memboundShutdownSafe`, since cached/buffered blocks count as outstanding).
+`memboundReset` invalidates every thread's cache safely via an epoch counter — a
+stale cache discards its (already-freed) blocks instead of double-freeing.
+
+The thread cache is membound's recommended multithread mechanism — measured
+~**5× faster** than plain ENTERPRISE and ~1.6× faster than STANDARD at 4 threads.
+It does **not** turn membound into a lock-free allocator — it reduces lock
+_traffic_, not the serialized buddy work, and stays well behind `memshard`. **For
+hot multithreaded paths prefer `memshard`** (the lock-free per-thread-heap
+allocator); reach for `threadCache` when you want a bounded/arena/process-shared
+membound pool that _also_ behaves better under threads.
+
+## Compaction
+
+`memboundCompact` reduces extent count:
+
+- **Without** a relocation callback it behaves like `memboundShrink` — it only
+  releases fully empty non-primary extents; nothing is moved.
+- **With** a callback registered via `memboundSetRelocationCallback`
+  (STANDARD/ENTERPRISE), it relocates live allocations out of sparse non-primary
+  extents into free space in other existing extents, invokes the callback for
+  each moved block so you can fix up your pointers, and releases the emptied
+  extents. It never grows the pool and never moves out of the primary extent.
 
 ```c
-/* Image cache with strict memory limit */
-typedef struct imageCache {
-    membound *allocator;
-    struct {
-        char *key;
-        void *imageData;
-        size_t size;
-    } entries[1000];
-    size_t count;
-} imageCache;
-
-imageCache *imageCacheCreate(size_t maxMemoryBytes) {
-    imageCache *cache = malloc(sizeof(*cache));
-
-    /* Create bounded allocator for cache data */
-    cache->allocator = memboundCreate(maxMemoryBytes);
-    if (!cache->allocator) {
-        free(cache);
-        return NULL;
+/* Example: a slot table the callback keeps consistent across moves. */
+static void relocate(void *oldPtr, void *newPtr, size_t size, void *ud) {
+    SlotTable *t = ud;
+    for (size_t i = 0; i < t->n; i++) {
+        if (t->slot[i] == oldPtr) { t->slot[i] = newPtr; break; }
     }
-
-    cache->count = 0;
-    return cache;
+    /* MUST NOT call back into the same membound here. */
 }
 
-bool imageCacheAdd(imageCache *cache, const char *key,
-                   const void *imageData, size_t size) {
-    /* Try to allocate from bounded pool */
-    void *data = memboundAlloc(cache->allocator, size);
-    if (!data) {
-        /* Out of cache memory - eviction needed */
-        printf("Cache full, need to evict\n");
-        return false;
-    }
-
-    /* Copy image into cache */
-    memcpy(data, imageData, size);
-    cache->entries[cache->count].key = strdup(key);
-    cache->entries[cache->count].imageData = data;
-    cache->entries[cache->count].size = size;
-    cache->count++;
-
-    return true;
-}
-
-void imageCacheFree(imageCache *cache) {
-    for (size_t i = 0; i < cache->count; i++) {
-        free(cache->entries[i].key);
-        memboundFree(cache->allocator, cache->entries[i].imageData);
-    }
-
-    memboundShutdownSafe(cache->allocator);
-    free(cache);
-}
-
-/* Usage */
-imageCache *cache = imageCacheCreate(50 * 1024 * 1024); // 50 MB limit
-
-uint8_t imageData[1024 * 1024]; // 1 MB image
-if (!imageCacheAdd(cache, "photo.jpg", imageData, sizeof(imageData))) {
-    printf("Failed to add image\n");
-}
-
-imageCacheFree(cache);
+memboundSetRelocationCallback(m, relocate, &table);
+size_t released = memboundCompact(m);   /* extents freed after consolidation */
 ```
 
-### Example 2: Process-Shared Pool
+The callback runs with the pool lock held and **must not** re-enter the same
+pool; the application must ensure no other thread touches a block while it is
+being moved. See [MEMBOUND_ARCHITECTURE.md](MEMBOUND_ARCHITECTURE.md) §8 for the
+full contract.
+
+## Usage patterns
+
+### Arena allocation (recommended)
+
+Allocate freely during a unit of work, then bulk-free with `memboundReset` (reuse
+the pool) or `memboundShutdown` (release it). No per-object frees, no accumulated
+fragmentation, trivial leak detection.
 
 ```c
-/* Shared memory pool between parent and child */
-membound *sharedPool = memboundCreate(10 * 1024 * 1024);
-
-/* Allocate some data */
-int *sharedCounter = memboundAlloc(sharedPool, sizeof(int));
-*sharedCounter = 0;
-
-pid_t pid = fork();
-if (pid == 0) {
-    /* Child process */
-    for (int i = 0; i < 1000; i++) {
-        __sync_fetch_and_add(sharedCounter, 1);
-    }
-    exit(0);
-} else {
-    /* Parent process */
-    wait(NULL);
-    printf("Counter value: %d\n", *sharedCounter); // Should be 1000
-
-    memboundFree(sharedPool, sharedCounter);
-    memboundShutdown(sharedPool);
-}
-```
-
-### Example 3: Preventing Memory Exhaustion
-
-```c
-/* Server with memory limit per connection */
-typedef struct connection {
-    int fd;
-    membound *allocator;
-} connection;
-
-connection *connectionCreate(int fd) {
-    connection *conn = malloc(sizeof(*conn));
-    conn->fd = fd;
-
-    /* Each connection limited to 1 MB */
-    conn->allocator = memboundCreate(1 * 1024 * 1024);
-
-    return conn;
-}
-
-void *connectionAllocate(connection *conn, size_t size) {
-    void *mem = memboundAlloc(conn->allocator, size);
-    if (!mem) {
-        /* Connection exceeded its memory limit */
-        fprintf(stderr, "Connection %d exceeded memory limit\n", conn->fd);
-        close(conn->fd);
-    }
-    return mem;
-}
-
-void connectionClose(connection *conn) {
-    /* Verify no leaks */
-    if (memboundCurrentAllocationCount(conn->allocator) > 0) {
-        fprintf(stderr, "Warning: connection leaked memory\n");
-    }
-
-    memboundShutdown(conn->allocator);
-    close(conn->fd);
-    free(conn);
-}
-```
-
-### Example 4: Testing Memory Pressure
-
-```c
-/* Simulate OOM conditions for testing */
-void testOOM(void) {
-    membound *limited = memboundCreate(1024); // Only 1 KB!
-
-    /* This should succeed */
-    void *small = memboundAlloc(limited, 256);
-    assert(small != NULL);
-
-    /* This should succeed */
-    void *small2 = memboundAlloc(limited, 256);
-    assert(small2 != NULL);
-
-    /* This should fail - not enough space */
-    void *tooBig = memboundAlloc(limited, 1024);
-    assert(tooBig == NULL);
-    printf("OOM handled correctly\n");
-
-    memboundFree(limited, small);
-    memboundFree(limited, small2);
-    memboundShutdown(limited);
-}
-```
-
-### Example 5: Per-Task Memory Pools (Arena Allocation)
-
-```c
-/* Async task with dedicated memory pool - perfect for arena allocation pattern.
- * When task completes, just destroy the pool - no individual frees needed! */
-
-typedef struct asyncTask {
-    membound *pool;        /* Task-private memory pool */
-    void (*work)(struct asyncTask *);
-    void *userData;
-} asyncTask;
-
-asyncTask *asyncTaskCreate(size_t memoryBudget) {
-    asyncTask *task = malloc(sizeof(*task));
-    if (!task) return NULL;
-
-    /* Each task gets its own bounded memory pool */
-    task->pool = memboundCreate(memoryBudget);
-    if (!task->pool) {
-        free(task);
-        return NULL;
-    }
-
-    return task;
-}
-
-/* Allocate from task's private pool */
-void *asyncTaskAlloc(asyncTask *task, size_t size) {
-    return memboundAlloc(task->pool, size);
-}
-
-void *asyncTaskCalloc(asyncTask *task, size_t count, size_t size) {
-    return memboundCalloc(task->pool, count, size);
-}
-
-/* Check task memory usage */
-void asyncTaskPrintStats(asyncTask *task) {
-    printf("Task memory: %zu / %zu bytes (%.1f%% used)\n",
-           memboundBytesUsed(task->pool),
-           memboundCapacity(task->pool),
-           100.0 * memboundBytesUsed(task->pool) / memboundCapacity(task->pool));
-}
-
-/* Destroy task - all allocations freed automatically! */
-void asyncTaskDestroy(asyncTask *task) {
-    /* Option 1: Just destroy - all memory released at once */
-    memboundShutdown(task->pool);
-
-    /* Option 2: Verify no unexpected leaks first (debugging)
-    if (!memboundShutdownSafe(task->pool)) {
-        fprintf(stderr, "Task leaked %zu allocations!\n",
-                memboundCurrentAllocationCount(task->pool));
-        memboundShutdown(task->pool);  // Force cleanup anyway
-    }
-    */
-
-    free(task);
-}
-
-/* Usage example */
-void processRequest(void) {
-    /* Create task with 1 MB budget */
-    asyncTask *task = asyncTaskCreate(1 * 1024 * 1024);
-
-    /* All allocations come from task's private pool */
-    char *buffer = asyncTaskAlloc(task, 4096);
-    int *results = asyncTaskCalloc(task, 1000, sizeof(int));
-    /* ... do work ... */
-
-    /* Task complete - entire pool freed at once! */
-    /* No need to track or free individual allocations */
-    asyncTaskDestroy(task);
-}
-```
-
-**Benefits for async tasks:**
-
-1. **Isolation** - Each task's memory is completely separate
-2. **Bounded** - Task cannot exceed its memory budget
-3. **Fast cleanup** - Destroy pool = instant cleanup of all allocations
-4. **No leaks** - Pool destruction guarantees all memory is freed
-5. **Monitoring** - Easy to track per-task memory usage
-
-## Performance Characteristics
-
-| Operation        | Complexity | Notes                                        |
-| ---------------- | ---------- | -------------------------------------------- |
-| Create           | O(n)       | n = pool size, must initialize control array |
-| Alloc            | O(1)       | Bitmap + CTZ finds free block instantly      |
-| Alloc + split    | O(log k)   | k = size classes, when splitting needed      |
-| Free (best)      | O(1)       | No coalescing possible                       |
-| Free (worst)     | O(log k)   | Full coalescing up to largest block          |
-| Calloc           | O(n)       | Alloc + SIMD zeroing (n = allocation size)   |
-| Realloc (shrink) | O(1)       | Returns same pointer                         |
-| Realloc (grow)   | O(n)       | Allocates new, copies n bytes, frees old     |
-| Shutdown         | O(1)       | Just unmaps memory                           |
-
-### Optimization Details
-
-**O(1) Freelist Lookup**: Instead of scanning 31 freelist slots to find a free block, the allocator maintains a 64-bit bitmap where bit *i* indicates if `aiFreelist[i]` has free blocks. Finding the first available size class is a single CTZ (count trailing zeros) instruction.
-
-**Fast Size Class Computation**: Size class calculation uses CLZ (count leading zeros) on ARM64 or BSR (bit scan reverse) on x86-64, replacing the original loop with a single instruction.
-
-**Shift-Based Division**: All divisions by `szAtom` use bit shifts via the precomputed `atomShift` field (since szAtom is always a power of 2). This replaces ~20-80 cycle divisions with 1-cycle shifts.
-
-**SIMD Calloc Zeroing**: For allocations ≥256 bytes, `memboundCalloc()` uses explicit SIMD instructions (AVX-512, AVX2, SSE2, or NEON depending on platform) for faster zeroing than `memset()`.
-
-### Memory Overhead
-
-```
-Per-allocation overhead: 1 byte control + rounding to power-of-2
-
-Example: 300-byte allocation
-- Rounded to: 512 bytes (next power of 2)
-- Control: 1 byte
-- Waste: 212 bytes (41% internal fragmentation!)
-- Actual overhead: 213 bytes
-
-Best case: Requesting exactly power-of-2
-- 256-byte request → 256 bytes allocated
-- Overhead: 0 bytes
-
-Worst case: Just over power-of-2
-- 257-byte request → 512 bytes allocated
-- Overhead: 255 bytes (99% waste!)
-```
-
-### Fragmentation Bounds
-
-Robson's theorem guarantees bounded fragmentation:
-
-```
-N >= M * (1 + log2(n)/2) - n + 1
-
-Where:
-- N = total pool size
-- M = maximum outstanding memory
-- n = largest_alloc / smallest_alloc
-
-Example:
-- Pool: 10 MB (N = 10,485,760)
-- Atom: 256 bytes (smallest)
-- Max single alloc: 1 MB (n = 1,048,576/256 = 4,096)
-- Required: M * (1 + log2(4096)/2) - 4096 + 1 = M * 7 - 4095
-
-Maximum guaranteed M ≈ 1.5 MB of useful allocations
-```
-
-## Thread Safety
-
-membound is **fully thread-safe** via mutex protection:
-
-```c
-/* All operations are atomic and thread-safe */
-void workerThread(void *arg) {
-    membound *shared = (membound *)arg;
-
-    /* Safe: mutex protects allocation */
-    void *data = memboundAlloc(shared, 1024);
-
-    /* ... do work ... */
-
-    /* Safe: mutex protects deallocation */
-    memboundFree(shared, data);
-}
-
-/* Create shared allocator */
-membound *shared = memboundCreate(10 * 1024 * 1024);
-
-/* Launch multiple threads */
-pthread_t threads[10];
-for (int i = 0; i < 10; i++) {
-    pthread_create(&threads[i], NULL, workerThread, shared);
-}
-
-/* Wait for completion */
-for (int i = 0; i < 10; i++) {
-    pthread_join(threads[i], NULL);
-}
-
-memboundShutdownSafe(shared);
-```
-
-**Mutex type**: `PTHREAD_PROCESS_SHARED` - works across fork()!
-
-## Optimal Usage Patterns
-
-### Arena Allocation (Recommended)
-
-The most efficient way to use membound is the **arena pattern**: allocate freely during a task, then bulk-free everything with `memboundReset()` when done.
-
-```c
-/* Per-request/per-task memory pool */
 void handleRequest(Request *req) {
-    membound *arena = memboundCreate(1 << 20);  /* 1 MB arena */
-
-    /* Allocate freely - no need to track individual allocations */
-    char *buffer = memboundAlloc(arena, 4096);
-    Node *nodes = memboundCalloc(arena, 100, sizeof(Node));
-    Result *result = memboundAlloc(arena, sizeof(Result));
-
-    /* ... process request using arena memory ... */
-
-    /* Single cleanup - all memory released instantly */
-    memboundShutdown(arena);  /* Or memboundReset() to reuse */
+    membound *arena = memboundCreate(1 << 20);     /* 1 MB */
+    char   *buf  = memboundAlloc(arena, 4096);
+    Node   *node = memboundCalloc(arena, 100, sizeof(Node));
+    /* ... use arena memory ... */
+    memboundShutdown(arena);                        /* all freed at once */
 }
 ```
 
-**Why this is optimal:**
-1. No individual free() calls needed during work
-2. No fragmentation accumulates (reset clears everything)
-3. Leak detection is trivial (check count before shutdown)
-4. O(n) bulk free is faster than n individual frees
+For per-coroutine or per-connection pools, prefer the MICRO/COMPACT tiers or the
+matching presets — they have a fraction of the metadata overhead.
 
-### Why Compaction Isn't Needed
+### Sizing and fragmentation
 
-The buddy allocator handles fragmentation through **coalescing**, not compaction:
+Round requests to powers of two to avoid internal waste (a 300-byte request uses
+a 512-byte block). Size pools at roughly 2× peak working set. External
+fragmentation is structurally absent; internal fragmentation is Robson-bounded.
+When the number of extents (not bytes) is the concern, register a relocation
+callback and call `memboundCompact`.
 
-1. **Automatic merging**: When you free a block, it automatically merges with its buddy if both are free, recursively up to the largest possible block
+## Common pitfalls
 
-2. **Bounded fragmentation**: Robson's theorem mathematically guarantees fragmentation cannot exceed a known bound
-
-3. **Arena reset eliminates fragmentation**: `memboundReset()` returns the pool to pristine state - this IS the "compaction" for task-based workloads
-
-4. **Compaction would break pointers**: Moving allocated blocks invalidates all application pointers, requiring handle indirection - a fundamental API change
-
-**If you're seeing fragmentation issues**, the solution is usually:
-- Use `memboundReset()` between logical work units
-- Size your pool larger (2x working set is a good rule)
-- Use power-of-2 allocation sizes to minimize internal fragmentation
-
-### Minimizing Internal Fragmentation
-
-All allocations round up to the next power of 2. Choose sizes wisely:
-
-```c
-/* BAD: 50% wasted */
-void *p = memboundAlloc(m, 300);   /* Rounds to 512, wastes 212 bytes */
-
-/* GOOD: 0% wasted */
-void *p = memboundAlloc(m, 256);   /* Exactly 256 bytes */
-
-/* ACCEPTABLE: Design structs to power-of-2 sizes */
-typedef struct {
-    uint64_t id;
-    uint64_t timestamp;
-    char data[240];  /* Pad to 256 bytes total */
-} __attribute__((packed)) Record;  /* sizeof = 256 */
-```
-
-### Pool Sizing Guidelines
-
-```c
-/* Rule of thumb: 2x expected peak working set */
-size_t expectedPeak = maxObjects * avgObjectSize;
-size_t poolSize = expectedPeak * 2;  /* Headroom for fragmentation */
-
-/* For arena pattern: size for single task's lifetime */
-size_t taskPoolSize = estimatedTaskMemory * 1.5;
-```
-
-## Best Practices
-
-### 1. Size Pool Appropriately
-
-```c
-/* BAD - pool too small, frequent failures */
-membound *tiny = memboundCreate(1024);
-for (int i = 0; i < 100; i++) {
-    void *data = memboundAlloc(tiny, 512); // Fails after 2 iterations!
-}
-
-/* GOOD - size based on working set */
-size_t maxObjects = 1000;
-size_t objectSize = 1024;
-size_t overhead = 2; // Account for fragmentation
-membound *sized = memboundCreate(maxObjects * objectSize * overhead);
-```
-
-### 2. Free Memory Promptly
-
-```c
-/* BAD - leaks memory */
-for (int i = 0; i < 1000; i++) {
-    void *data = memboundAlloc(m, 1024);
-    doSomething(data);
-    // Never freed!
-}
-
-/* GOOD - free immediately after use */
-for (int i = 0; i < 1000; i++) {
-    void *data = memboundAlloc(m, 1024);
-    doSomething(data);
-    memboundFree(m, data);
-}
-```
-
-### 3. Use Power-of-2 Sizes
-
-```c
-/* BAD - wastes space */
-void *data = memboundAlloc(m, 300); // Allocates 512 bytes, wastes 212!
-
-/* GOOD - request power-of-2 */
-void *data = memboundAlloc(m, 256); // Allocates exactly 256 bytes
-```
-
-### 4. Check Allocation Failures
-
-```c
-/* BAD - assumes success */
-void *data = memboundAlloc(m, size);
-memset(data, 0, size); // CRASH if allocation failed!
-
-/* GOOD - check return value */
-void *data = memboundAlloc(m, size);
-if (!data) {
-    fprintf(stderr, "Out of memory\n");
-    return ERROR;
-}
-memset(data, 0, size);
-```
-
-## Common Pitfalls
-
-### 1. Forgetting Pool is Shared After Fork
-
-```c
-/* WRONG ASSUMPTION */
-membound *m = memboundCreate(1024);
-void *data = memboundAlloc(m, 256);
-
-if (fork() == 0) {
-    memboundFree(m, data); // Frees in BOTH processes!
-    exit(0);
-}
-
-wait(NULL);
-// 'data' is now invalid in parent too!
-```
-
-### 2. Growing Pool Requires Empty Pool
-
-```c
-/* memboundIncreaseSize() now enforces safety - returns false if allocations exist */
-void *ptr1 = memboundAlloc(m, 1024);
-bool grew = memboundIncreaseSize(m, newSize);
-// grew == false! Function refuses to grow with outstanding allocations.
-
-/* CORRECT - free allocations first, then grow */
-memboundFree(m, ptr1);
-// Or use memboundReset(m) to free all at once
-bool grew = memboundIncreaseSize(m, newSize); // Now succeeds
-void *ptr2 = memboundAlloc(m, 1024);
-```
-
-### 3. Exceeding 1 GiB Limit
-
-```c
-/* FAILS - exceeds max */
-void *huge = memboundAlloc(m, 2ULL * 1024 * 1024 * 1024); // 2 GB
-assert(huge == NULL); // Always fails
-
-/* Use multiple allocations instead */
-void *chunks[4];
-for (int i = 0; i < 4; i++) {
-    chunks[i] = memboundAlloc(m, 512 * 1024 * 1024); // 512 MB each
-}
-```
-
-### 4. Not Checking Shutdown Status
-
-```c
-/* BAD - may fail silently */
-memboundShutdown(m); // Returns false if allocations exist
-
-/* GOOD - check return */
-if (!memboundShutdownSafe(m)) {
-    fprintf(stderr, "Memory leak: %zu allocations remaining\n",
-            memboundCurrentAllocationCount(m));
-}
-```
-
-## Debugging
-
-### Memory Dump (Debug Builds Only)
-
-```c
-#ifndef NDEBUG
-/* Dump allocator state to file for debugging */
-void memboundMemBoundDump(membound *m, const char *filename);
-
-/* Usage */
-memboundMemBoundDump(m, "membound-state.txt");
-```
-
-Output includes:
-
-- Free list statistics per size class
-- Total allocations, current usage
-- Maximum usage statistics
-- Fragmentation information
-
-## See Also
-
-- [fibbuf](FIBBUF.md) - Fibonacci growth strategy for dynamic buffers
-- [jebuf](JEBUF.md) - Jemalloc size class calculator
-- [Architecture Overview](../../ARCHITECTURE.md) - Memory management design
+- **MICRO/COMPACT-without-`threadSafe` are not synchronized** — you must lock.
+- **`memboundIncreaseSize` requires an empty pool**; for dynamic growth use
+  `memboundCreateDynamic` / `memboundGrowBy`.
+- **Shared-after-fork**: a pool in shared memory is shared, not duplicated.
+- **Always check allocation results** and `memboundShutdownSafe`'s return value
+  to catch leaks.
 
 ## Testing
-
-Run the membound test suite:
 
 ```bash
 ./src/datakit-test test membound
 ```
 
-The test suite (22 tests) validates:
+The `TEST()` suite covers every tier, dynamic growth, all selection strategies,
+presets, index/ownership (including the SIMD path), compaction (both shrink
+fallback and relocation), the capability helpers, the opt-in thread cache
+(alloc + free side, thread-exit drain, reset-during-cache, and a 4-thread
+contention stress), safety (double-free / bounds / violation counters), and
+multi-threaded stress tests. The correctness gate runs under the `dev` preset
+(ASAN/UBSAN); the thread cache and the ENTERPRISE per-extent path are additionally
+validated under a TSAN build (`-DEnableTSAN=ON`, 0 races); benchmarks use the
+`perf` preset. Single-thread per-op alloc/free cost for the STANDARD / ENTERPRISE /
+threadCache tiers is a deterministic row in the CI perf gate
+(`datakit-test test perfRegression`, module `membound`); the multithreaded
+comparison lives in the separate `memboundBench` target.
 
-- Basic allocation and freeing patterns
-- Pool exhaustion and OOM handling
-- Calloc zero-initialization and overflow protection
-- Realloc grow/shrink semantics
-- Reset (arena-style bulk free)
-- Pool growth (memboundIncreaseSize)
-- Safe shutdown with allocation detection
-- Statistics tracking (bytes used/available/capacity)
-- Pointer ownership checking
-- NULL safety for all APIs
-- Various allocation sizes (including non-power-of-2)
-- Maximum allocation size (1 GiB limit)
-- Fragmentation and coalescing
-- **Stress test**: 100,000 rapid alloc/free cycles
-- **SIMD calloc stress test**: Verifies zeroing at various sizes
+## See also
+
+- [MEMBOUND_ARCHITECTURE.md](MEMBOUND_ARCHITECTURE.md) — internals & invariants
+- [Architecture Overview](../../ARCHITECTURE.md) — memory-management design

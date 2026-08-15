@@ -161,15 +161,15 @@ if (box.type == DATABOX_SIGNED_64) {
 The `flex` module is the **foundation** of many datakit containers:
 
 ```
-┌─────────────────────────────────────────────────────┐
+┌────────────────────────────────────────────────────┐
 │ flex - Compressed Byte Array                       │
-│                                                     │
+│                                                    │
 │  [Header: size, element count, metadata]           │
 │  [Entry 1: length prefix + data]                   │
 │  [Entry 2: length prefix + data]                   │
 │  [Entry 3: length prefix + data]                   │
-│  ...                                                │
-└─────────────────────────────────────────────────────┘
+│  ...                                               │
+└────────────────────────────────────────────────────┘
 ```
 
 **Features:**
@@ -345,9 +345,9 @@ The `intset` uses **variable-width encoding**:
 ┌────────────┬─────────────────────────────────┐
 │ Values     │ Encoding                        │
 ├────────────┼─────────────────────────────────┤
-│ -32K..32K  │ 16-bit (INTSET_ENC_INT16)      │
-│ -2B..2B    │ 32-bit (INTSET_ENC_INT32)      │
-│ Any        │ 64-bit (INTSET_ENC_INT64)      │
+│ -32K..32K  │ 16-bit (INTSET_ENC_INT16)       │
+│ -2B..2B    │ 32-bit (INTSET_ENC_INT32)       │
+│ Any        │ 64-bit (INTSET_ENC_INT64)       │
 └────────────┴─────────────────────────────────┘
 ```
 
@@ -493,17 +493,17 @@ Need to store data?
 ### Performance Characteristics
 
 ```
-┌──────────────┬───────────┬────────┬────────┬─────────────┐
-│ Container    │ Insert    │ Lookup │ Delete │ Memory      │
-├──────────────┼───────────┼────────┼────────┼─────────────┤
-│ flex         │ O(n)      │ O(n)   │ O(n)   │ Excellent   │
-│ multimap     │ O(1)      │ O(1)   │ O(1)   │ Good        │
-│ multilist    │ O(1)*     │ O(n)   │ O(1)*  │ Excellent   │
-│ multiarray   │ O(1)**    │ O(1)   │ O(n)   │ Good        │
+┌──────────────┬───────────┬─────────┬────────┬─────────────┐
+│ Container    │ Insert    │ Lookup  │ Delete │ Memory      │
+├──────────────┼───────────┼─────────┼────────┼─────────────┤
+│ flex         │ O(n)      │ O(n)    │ O(n)   │ Excellent   │
+│ multimap     │ O(1)      │ O(1)    │ O(1)   │ Good        │
+│ multilist    │ O(1)*     │ O(n)    │ O(1)*  │ Excellent   │
+│ multiarray   │ O(1)**    │ O(1)    │ O(n)   │ Good        │
 │ intset       │ O(log n)  │ O(log n)│ O(n)   │ Excellent   │
-│ hyperloglog  │ O(1)      │ N/A    │ N/A    │ Fixed (12KB)│
-│ multiroar    │ O(1)      │ O(1)   │ O(1)   │ Excellent   │
-└──────────────┴───────────┴────────┴────────┴─────────────┘
+│ hyperloglog  │ O(1)      │ N/A     │ N/A    │ Fixed (12KB)│
+│ multiroar    │ O(1)      │ O(1)    │ O(1)   │ Excellent   │
+└──────────────┴───────────┴─────────┴────────┴─────────────┘
 * When iterator positioned
 ** Amortized
 ```

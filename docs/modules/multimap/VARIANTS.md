@@ -47,8 +47,8 @@ struct multimapSmall {
         │  Single flex (sorted key-value)     │
         ├─────────────────────────────────────┤
         │ [K1][V1][K2][V2][K3][V3]...[Kn][Vn] │
-        │          ▲                           │
-        │          └─ middle points here       │
+        │          ▲                          │
+        │          └─ middle points here      │
         └─────────────────────────────────────┘
 ```
 
@@ -257,21 +257,21 @@ struct multimapFull {
 │ rangeBox ─┼─┼─┐                         │
 │ count = N │ │ │                         │
 │ values    │ │ │                         │
-└───────────┼─┼─┼───────────────────────┘
+└───────────┼─┼─┼─────────────────────────┘
             │ │ │
             │ │ │
     ┌───────┘ │ │
     │   ┌─────┘ │
     │   │  ┌────┘
     ▼   ▼  ▼
- ┌─────┬─────┬─────────┐
+ ┌─────┬─────┬──────────┐
  │map[]│mid[]│rangeBox[]│
  │  0  │  0  │    -     │
  │  1  │  1  │  RB[0]   │
  │  2  │  2  │  RB[1]   │
  │ ... │ ... │   ...    │
  │ N-1 │ N-1 │  RB[N-2] │
- └─────┴─────┴─────────┘
+ └─────┴─────┴──────────┘
    │     │       │
    │     │       └─ Head key of each map (for binary search)
    │     └───────── Middle offset for binary search within map
