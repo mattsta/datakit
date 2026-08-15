@@ -16,6 +16,12 @@
 #include <sys/prctl.h> /* for OSRegulateRequestSignalChildWhenParentExits() */
 #endif
 
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) ||       \
+    defined(__OpenBSD__) || defined(__DragonFly__)
+#define OS_REGULATE_HAVE_KQUEUE 1
+#include <sys/event.h> /* kqueue / EVFILT_PROC / NOTE_EXIT */
+#endif
+
 /* If errorMsg provided, set then return error.
  * If not provided, just return error */
 #define returnError(m, e)                                                      \
@@ -137,6 +143,39 @@ bool OSRegulateParentStillExisits(void) {
     /* If parent is '1' we got reparented!
      * Obviously doesn't apply to daemons directly attached to init. */
     return !(getppid() == 1);
+}
+
+int OSRegulateParentDeathKqueueFd(pid_t parent) {
+#ifdef OS_REGULATE_HAVE_KQUEUE
+    /* Event-driven parent-death watch for platforms without
+     * PR_SET_PDEATHSIG (macOS/BSD).  Returns a kqueue fd armed with a
+     * one-shot EVFILT_PROC/NOTE_EXIT filter on `parent`; a dedicated
+     * thread blocks in kevent() on the returned fd and receives an
+     * event the instant the parent process exits.  This replaces the
+     * getppid() poll that otherwise rides a data-plane (listener)
+     * thread, so parent-death detection no longer depends on that
+     * thread's health. */
+    const int kq = kqueue();
+    if (kq < 0) {
+        return -1;
+    }
+
+    struct kevent ev;
+    EV_SET(&ev, (uintptr_t)parent, EVFILT_PROC, EV_ADD | EV_ONESHOT, NOTE_EXIT,
+           0, NULL);
+
+    /* Register the filter (changelist of 1, no eventlist read yet). */
+    if (kevent(kq, &ev, 1, NULL, 0, NULL) < 0) {
+        close(kq);
+        return -1;
+    }
+
+    return kq;
+#else
+    /* Linux: PR_SET_PDEATHSIG covers parent death; no kqueue fd. */
+    (void)parent;
+    return -1;
+#endif
 }
 
 /* ====================================================================

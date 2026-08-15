@@ -27,6 +27,13 @@ void OSRegulateExitClean(void);
 bool OSRegulateRequestSignalChildWhenParentExits(int sig);
 bool OSRegulateParentStillExisits(void);
 
+/* Parent-death watch fd.  On kqueue platforms (macOS/BSD) returns a
+ * kqueue fd armed with a one-shot EVFILT_PROC/NOTE_EXIT filter on
+ * `parent`; block in kevent() on it to receive an event the instant
+ * the parent process exits.  Returns -1 on Linux (PR_SET_PDEATHSIG
+ * covers that case) or on error (caller should fall back to polling). */
+int OSRegulateParentDeathKqueueFd(pid_t parent);
+
 /* CPUs */
 size_t OSRegulateCPUCountGet(void);
 
