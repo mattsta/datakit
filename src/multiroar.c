@@ -6,6 +6,7 @@
 
 #include "str.h" /* optimized popcnt helpers */
 #include <inttypes.h>
+#include <stdlib.h> /* qsort */
 
 struct multiroar {
     multimap *map;
@@ -842,36 +843,46 @@ uint64_t multiroarBitCount(const multiroar *r) {
 
 /* Forward declaration for expandChunkToBitmap */
 DK_STATIC void expandChunkToBitmap(const databox *value, uint8_t *bitmap);
+/* Forward declaration: defined far below, used by multiroarNewAndNot. */
+DK_STATIC void compressBitmapToChunk(multiroar *r, const databox *key,
+                                     uint8_t *bitmap, multimapEntry *me,
+                                     bool chunkExists);
 
-/* Helper: Find first set bit in chunk bitmap */
+/* Helper: Find first set bit in chunk bitmap. Scans 64 bits at a time and uses
+ * CTZ; bit numbering is byte-array order, LSB-first within byte, which on a
+ * little-endian load (arm64/x86-64) is exactly the word's CTZ. */
 DK_STATIC uint64_t findFirstSetBitInBitmap(const uint8_t *bitmap,
                                            uint64_t bytes) {
-    for (uint64_t i = 0; i < bytes; i++) {
+    const uint64_t words = bytes / 8;
+    const uint64_t *w = (const uint64_t *)bitmap;
+    for (uint64_t i = 0; i < words; i++) {
+        if (w[i] != 0) {
+            return i * 64 + (uint64_t)__builtin_ctzll(w[i]);
+        }
+    }
+    for (uint64_t i = words * 8; i < bytes; i++) { /* tail bytes (if any) */
         if (bitmap[i] != 0) {
-            /* Find first set bit in this byte */
-            uint8_t byte = bitmap[i];
-            for (int bit = 0; bit < 8; bit++) {
-                if (byte & (1 << bit)) {
-                    return i * 8 + bit;
-                }
-            }
+            return i * 8 + (uint64_t)__builtin_ctz(bitmap[i]);
         }
     }
     return UINT64_MAX;
 }
 
-/* Helper: Find last set bit in chunk bitmap */
+/* Helper: Find last set bit in chunk bitmap. Highest addresses hold highest
+ * positions, so scan tail bytes (if any) before whole words; uses CLZ. */
 DK_STATIC uint64_t findLastSetBitInBitmap(const uint8_t *bitmap,
                                           uint64_t bytes) {
-    for (uint64_t i = bytes; i > 0; i--) {
+    const uint64_t words = bytes / 8;
+    const uint64_t *w = (const uint64_t *)bitmap;
+    for (uint64_t i = bytes; i > words * 8; i--) {
         if (bitmap[i - 1] != 0) {
-            /* Find last set bit in this byte */
-            uint8_t byte = bitmap[i - 1];
-            for (int bit = 7; bit >= 0; bit--) {
-                if (byte & (1 << bit)) {
-                    return (i - 1) * 8 + bit;
-                }
-            }
+            return (i - 1) * 8 +
+                   (uint64_t)(31 - __builtin_clz((uint32_t)bitmap[i - 1]));
+        }
+    }
+    for (uint64_t i = words; i > 0; i--) {
+        if (w[i - 1] != 0) {
+            return (i - 1) * 64 + (uint64_t)(63 - __builtin_clzll(w[i - 1]));
         }
     }
     return UINT64_MAX;
@@ -1073,9 +1084,11 @@ bool multiroarIntersects(const multiroar *a, const multiroar *b) {
         expandChunkToBitmap(&keyValue[1], bitmapA);
         expandChunkToBitmap(&valueB, bitmapB);
 
-        /* Check if any bit is set in both */
-        for (uint64_t i = 0; i < BITMAP_SIZE_IN_BYTES; i++) {
-            if ((bitmapA[i] & bitmapB[i]) != 0) {
+        /* Check if any bit is set in both (64 bits at a time) */
+        const uint64_t *a64 = (const uint64_t *)bitmapA;
+        const uint64_t *b64 = (const uint64_t *)bitmapB;
+        for (uint64_t i = 0; i < BITMAP_SIZE_IN_BYTES / 8; i++) {
+            if ((a64[i] & b64[i]) != 0) {
                 return true; /* Found overlap */
             }
         }
@@ -1118,8 +1131,10 @@ bool multiroarIsSubset(const multiroar *a, const multiroar *b) {
         expandChunkToBitmap(&keyValue[1], bitmapA);
         expandChunkToBitmap(&valueB, bitmapB);
 
-        for (uint64_t i = 0; i < BITMAP_SIZE_IN_BYTES; i++) {
-            if ((bitmapA[i] & bitmapB[i]) != bitmapA[i]) {
+        const uint64_t *a64 = (const uint64_t *)bitmapA;
+        const uint64_t *b64 = (const uint64_t *)bitmapB;
+        for (uint64_t i = 0; i < BITMAP_SIZE_IN_BYTES / 8; i++) {
+            if ((a64[i] & b64[i]) != a64[i]) {
                 return false; /* Found bit in a not in b */
             }
         }
@@ -1205,10 +1220,16 @@ DK_STATIC uint64_t countBitsInBitmapRange(const uint8_t *bitmap,
                                           uint64_t endPos) {
     uint64_t count = 0;
 
-    /* Count full bytes */
+    /* Count full bytes word-at-a-time (8 bytes per popcount), then any
+     * trailing full bytes that don't fill a word. */
     uint64_t fullBytes = endPos / 8;
-    for (uint64_t i = 0; i < fullBytes; i++) {
-        count += __builtin_popcount(bitmap[i]);
+    uint64_t fullWords = fullBytes / 8;
+    const uint64_t *w = (const uint64_t *)bitmap;
+    for (uint64_t i = 0; i < fullWords; i++) {
+        count += (uint64_t)__builtin_popcountll(w[i]);
+    }
+    for (uint64_t i = fullWords * 8; i < fullBytes; i++) {
+        count += (uint64_t)__builtin_popcount(bitmap[i]);
     }
 
     /* Count remaining bits in partial byte */
@@ -1513,24 +1534,25 @@ multiroar *multiroarNewAndNot(const multiroar *a, const multiroar *b) {
         expandChunkToBitmap(aValue, bitmapA);
 
         if (multimapLookup(b->map, &bKey, bValues)) {
-            /* Both have this chunk - perform AND NOT */
+            /* Both have this chunk - perform AND NOT (64 bits at a time) */
             uint8_t bitmapB[BITMAP_SIZE_IN_BYTES];
             expandChunkToBitmap(&bValue, bitmapB);
 
-            /* A & ~B */
-            for (uint64_t i = 0; i < BITMAP_SIZE_IN_BYTES; i++) {
-                bitmapA[i] &= ~bitmapB[i];
+            /* A &= ~B */
+            uint64_t *a64 = (uint64_t *)bitmapA;
+            const uint64_t *b64 = (const uint64_t *)bitmapB;
+            for (uint64_t i = 0; i < BITMAP_SIZE_IN_BYTES / 8; i++) {
+                a64[i] &= ~b64[i];
             }
         }
         /* else: b doesn't have this chunk, so keep all bits from a */
 
-        /* Set the resulting bits in result */
-        uint64_t chunkBase = chunkId * BITMAP_SIZE_IN_BITS;
-        for (uint64_t i = 0; i < BITMAP_SIZE_IN_BITS; i++) {
-            if (bitmapA[i / 8] & (1 << (i % 8))) {
-                multiroarBitSet(result, chunkBase + i);
-            }
-        }
+        /* Compress the resulting bitmap into the (fresh) result map in one
+         * shot — replaces an O(BITMAP_SIZE_IN_BITS) per-bit multiroarBitSet
+         * loop (each a full container insert) with a single chunk write, like
+         * multiroarOr/multiroarAnd. result is fresh, so chunkExists = false. */
+        multimapEntry me;
+        compressBitmapToChunk(result, key, bitmapA, &me, false);
     }
 
     return result;
@@ -1582,6 +1604,7 @@ void multiroarIteratorInit(const multiroar *r, multiroarIterator *iter) {
     iter->positionInChunk = 0;
     iter->indexInChunk = 0;
     iter->countInChunk = 0;
+    iter->unsetCursor = 0;
 }
 
 /* Get next set bit position */
@@ -1614,48 +1637,64 @@ bool multiroarIteratorNext(multiroarIterator *iter, uint64_t *position) {
             case CHUNK_TYPE_FULL_BITMAP: {
                 const uint8_t *bitmap =
                     GET_CHUNK_BITMAP_START(&iter->currentChunk);
-                const uint64_t bitmapLen =
-                    GET_CHUNK_BITMAP_LEN(&iter->currentChunk);
+                uint64_t bitmapLen = GET_CHUNK_BITMAP_LEN(&iter->currentChunk);
+                if (bitmapLen > BITMAP_SIZE_IN_BYTES) {
+                    bitmapLen = BITMAP_SIZE_IN_BYTES;
+                }
+                /* bitmapLen is word-aligned (it is passed to StrPopCntExact,
+                 * which requires step alignment), so whole 64-bit words cover
+                 * it exactly. */
+                const uint64_t nWords = bitmapLen / 8;
 
-                /* Scan for next set bit */
-                while (iter->positionInChunk < BITMAP_SIZE_IN_BITS) {
-                    uint64_t byteIdx = iter->positionInChunk / 8;
-                    uint64_t bitIdx = iter->positionInChunk % 8;
-
-                    if (byteIdx >= bitmapLen) {
-                        break;
-                    }
-
-                    if (bitmap[byteIdx] & (1 << bitIdx)) {
-                        *position = chunkBase + iter->positionInChunk;
-                        iter->positionInChunk++;
+                /* Scan for the next set bit 64 bits at a time, resuming from
+                 * positionInChunk: mask off bits before the cursor in the
+                 * starting word, then CTZ; zero words are skipped wholesale.
+                 * Bit numbering is byte-array order, LSB-first within byte,
+                 * which equals a little-endian word's CTZ (arm64/x86-64). */
+                uint64_t pos = iter->positionInChunk;
+                uint64_t wordIdx = pos >> 6;
+                while (wordIdx < nWords) {
+                    uint64_t w;
+                    memcpy(&w, bitmap + wordIdx * 8, sizeof(w));
+                    w &= ~(uint64_t)0 << (pos & 63); /* ignore bits < cursor */
+                    if (w != 0) {
+                        const uint64_t found =
+                            wordIdx * 64 + (uint64_t)__builtin_ctzll(w);
+                        *position = chunkBase + found;
+                        iter->positionInChunk = found + 1;
                         iter->indexInChunk++;
                         return true;
                     }
-                    iter->positionInChunk++;
+                    wordIdx++;
+                    pos = wordIdx * 64; /* later words: no masking */
                 }
                 break;
             }
 
             case CHUNK_TYPE_OVER_FULL_DIRECT_NOT_SET_POSITION_NUMBERS: {
-                /* Inverted: iterate all positions, skip unset ones */
+                /* Inverted: emit all positions except the unset ones. The unset
+                 * list is sorted ascending (see _bitmapToPositions), so we walk
+                 * a monotonic cursor instead of rescanning it per position —
+                 * O(BITMAP_SIZE_IN_BITS + unsetCount) per chunk, not O(N*M). */
                 const uint8_t *data =
                     GET_CHUNK_PACKED_START(&iter->currentChunk);
                 const uint16_t unsetCount =
                     PACKED_COUNT_FROM_VALUE(&iter->currentChunk);
 
                 while (iter->positionInChunk < BITMAP_SIZE_IN_BITS) {
-                    /* Check if current position is in unset list */
-                    bool isUnset = false;
-                    for (uint16_t i = 0; i < unsetCount; i++) {
-                        if (varintPacked13Get(data, i) ==
-                            iter->positionInChunk) {
-                            isUnset = true;
-                            break;
-                        }
+                    /* Advance the cursor to the first unset position >= the
+                     * current bit (cursor only moves forward across calls). */
+                    while (iter->unsetCursor < unsetCount &&
+                           varintPacked13Get(data, iter->unsetCursor) <
+                               iter->positionInChunk) {
+                        iter->unsetCursor++;
                     }
+                    const bool isUnset =
+                        iter->unsetCursor < unsetCount &&
+                        varintPacked13Get(data, iter->unsetCursor) ==
+                            iter->positionInChunk;
 
-                    uint64_t currentPos = iter->positionInChunk;
+                    const uint64_t currentPos = iter->positionInChunk;
                     iter->positionInChunk++;
 
                     if (!isUnset) {
@@ -1689,6 +1728,7 @@ bool multiroarIteratorNext(multiroarIterator *iter, uint64_t *position) {
         iter->currentChunk = *value;
         iter->positionInChunk = 0;
         iter->indexInChunk = 0;
+        iter->unsetCursor = 0; /* reset OVER_FULL unset-list cursor per chunk */
 
         /* Set count based on chunk type */
         switch (GET_CHUNK_TYPE(value)) {
@@ -2905,6 +2945,12 @@ multiroar *multiroarNewNot(const multiroar *r) {
  * ==================================================================== */
 
 /* Helper: Collect all unique chunk IDs across N multiroars */
+static int cmpChunkKeyAsc(const void *a, const void *b) {
+    const uint64_t x = *(const uint64_t *)a;
+    const uint64_t y = *(const uint64_t *)b;
+    return (x > y) - (x < y);
+}
+
 DK_STATIC uint64_t *collectAllChunkKeys(uint64_t n, multiroar **roars,
                                         uint64_t *outCount) {
     if (n == 0 || !roars) {
@@ -2925,7 +2971,11 @@ DK_STATIC uint64_t *collectAllChunkKeys(uint64_t n, multiroar **roars,
         return NULL;
     }
 
-    /* Collect all chunk keys */
+    /* Collect every chunk key (with duplicates across the N inputs) into a
+     * buffer sized for the worst case, then sort + collapse adjacent
+     * duplicates. This is O(K log K) vs the previous O(K^2) dedup-by-rescan.
+     * The resulting ascending order is fine for the N-way callers (per-chunk
+     * set ops are order-independent) and matches the multimap's own order. */
     uint64_t *allKeys = zmalloc(totalChunks * sizeof(uint64_t));
     uint64_t keyCount = 0;
 
@@ -2941,21 +2991,19 @@ DK_STATIC uint64_t *collectAllChunkKeys(uint64_t n, multiroar **roars,
         databox *kvPtr[2] = {&keyValue[0], &keyValue[1]};
 
         while (multimapIteratorNext(&iter, kvPtr)) {
-            uint64_t chunkId = keyValue[0].data.u;
+            allKeys[keyCount++] = keyValue[0].data.u;
+        }
+    }
 
-            /* Check if we already have this key */
-            bool found = false;
-            for (uint64_t j = 0; j < keyCount; j++) {
-                if (allKeys[j] == chunkId) {
-                    found = true;
-                    break;
-                }
-            }
-
-            if (!found) {
-                allKeys[keyCount++] = chunkId;
+    if (keyCount > 1) {
+        qsort(allKeys, keyCount, sizeof(uint64_t), cmpChunkKeyAsc);
+        uint64_t w = 1;
+        for (uint64_t r = 1; r < keyCount; r++) {
+            if (allKeys[r] != allKeys[w - 1]) {
+                allKeys[w++] = allKeys[r];
             }
         }
+        keyCount = w;
     }
 
     *outCount = keyCount;
@@ -5477,6 +5525,64 @@ int multiroarTest(int argc, char *argv[]) {
         multiroarFree(r2);
         multiroarFree(r3);
         multiroarFree(result);
+    }
+
+    TEST("N-way: heavy duplicate chunk keys (collectAllChunkKeys dedup)") {
+        /* Exercises the sort+dedup in collectAllChunkKeys: many roars all
+         * touching the SAME chunks, so the raw key list is full of duplicates
+         * that must collapse to the distinct chunk set. */
+        enum { NR = 6, NCHUNK = 5 };
+        multiroar *roars[NR];
+        for (int r = 0; r < NR; r++) {
+            roars[r] = multiroarBitNew();
+            /* Every roar sets one bit in each of the NCHUNK chunks (same
+             * chunk ids across all roars -> NR*NCHUNK raw keys -> NCHUNK
+             * distinct), plus a private bit unique to this roar. */
+            for (int c = 0; c < NCHUNK; c++) {
+                multiroarBitSet(roars[r],
+                                (uint64_t)c * BITMAP_SIZE_IN_BITS + 7);
+            }
+            multiroarBitSet(roars[r], (uint64_t)NCHUNK * BITMAP_SIZE_IN_BITS +
+                                          (uint64_t)r);
+        }
+
+        /* OR: union = the NCHUNK shared bits + NR private bits. */
+        multiroar *orRes = multiroarNewOrN(NR, roars);
+        for (int c = 0; c < NCHUNK; c++) {
+            if (!multiroarBitGet(orRes,
+                                 (uint64_t)c * BITMAP_SIZE_IN_BITS + 7)) {
+                ERR("OrN dedup: shared bit in chunk %d missing", c);
+            }
+        }
+        for (int r = 0; r < NR; r++) {
+            if (!multiroarBitGet(orRes, (uint64_t)NCHUNK * BITMAP_SIZE_IN_BITS +
+                                            (uint64_t)r)) {
+                ERR("OrN dedup: private bit of roar %d missing", r);
+            }
+        }
+        if (multiroarBitCount(orRes) != (uint64_t)(NCHUNK + NR)) {
+            ERR("OrN dedup: expected %d bits, got %" PRIu64, NCHUNK + NR,
+                multiroarBitCount(orRes));
+        }
+
+        /* AND: only the NCHUNK bits common to ALL roars survive. */
+        multiroar *andRes = multiroarNewAndN(NR, roars);
+        if (multiroarBitCount(andRes) != (uint64_t)NCHUNK) {
+            ERR("AndN dedup: expected %d common bits, got %" PRIu64, NCHUNK,
+                multiroarBitCount(andRes));
+        }
+        for (int c = 0; c < NCHUNK; c++) {
+            if (!multiroarBitGet(andRes,
+                                 (uint64_t)c * BITMAP_SIZE_IN_BITS + 7)) {
+                ERR("AndN dedup: common bit in chunk %d missing", c);
+            }
+        }
+
+        multiroarFree(orRes);
+        multiroarFree(andRes);
+        for (int r = 0; r < NR; r++) {
+            multiroarFree(roars[r]);
+        }
     }
 
     TEST("N-way operations equivalence to chained binary") {
@@ -9368,6 +9474,158 @@ int multiroarTest(int argc, char *argv[]) {
             multiroarFree(a);
             multiroarFree(b);
         }
+    }
+
+    /* ================================================================
+     * Edge cases for the word-at-a-time bitmap helpers (find-first/last
+     * via ctz/clz, rank via word popcount, subset via word compare, and
+     * NewAndNot's compress path). Dense fills force FULL_BITMAP storage so
+     * these exercise the expanded-bitmap word scans, including the chunk's
+     * last bit (8191, the clz boundary) and word-boundary positions.
+     * ================================================================ */
+    TEST("Min/Max/Rank: word-scan boundaries (FULL_BITMAP)") {
+        multiroar *a = multiroarBitNew();
+        FILL_DENSE(a, 0, 100, 2100); /* bits [100,2100): first set bit not 0 */
+        multiroarBitSet(a, 8191);    /* last bit in the chunk (clz boundary) */
+
+        uint64_t pos = 0;
+        if (!multiroarMin(a, &pos) || pos != 100) {
+            ERR("Min: expected 100, got %" PRIu64, pos);
+        }
+        if (!multiroarMax(a, &pos) || pos != 8191) {
+            ERR("Max: expected 8191, got %" PRIu64, pos);
+        }
+        /* rank(p) = set bits in [0,p); bits = [100,2100) (2000) + {8191}. */
+        const struct {
+            uint64_t at;
+            uint64_t want;
+        } cases[] = {{100, 0},     {101, 1},     {164, 64}, /* crosses word 1 */
+                     {2100, 2000}, {8191, 2000}, {8192, 2001}};
+        for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+            uint64_t got = multiroarRank(a, cases[i].at);
+            if (got != cases[i].want) {
+                ERR("Rank(%" PRIu64 "): expected %" PRIu64 ", got %" PRIu64,
+                    cases[i].at, cases[i].want, got);
+            }
+        }
+        multiroarFree(a);
+    }
+
+    TEST("IsSubset: word-wise compare (FULL_BITMAP)") {
+        multiroar *a = multiroarBitNew();
+        multiroar *b = multiroarBitNew();
+        FILL_DENSE(b, 0, 0, 4000);    /* [0,4000) */
+        FILL_DENSE(a, 0, 1000, 3000); /* [1000,3000) ⊆ b */
+        if (!multiroarIsSubset(a, b)) {
+            ERRR("IsSubset: [1000,3000) should be subset of [0,4000)");
+        }
+        multiroarBitSet(a, 5000); /* now a has a bit outside b */
+        if (multiroarIsSubset(a, b)) {
+            ERRR("IsSubset: should be false after adding bit 5000 not in b");
+        }
+        multiroar *empty = multiroarBitNew();
+        if (!multiroarIsSubset(empty, b)) {
+            ERRR("IsSubset: empty set must be a subset");
+        }
+        multiroarFree(a);
+        multiroarFree(b);
+        multiroarFree(empty);
+    }
+
+    TEST("ANDNOT: identical chunks compress to empty (popcount==0 path)") {
+        multiroar *a = multiroarBitNew();
+        multiroar *b = multiroarBitNew();
+        FILL_DENSE(a, 0, 0, 3000);
+        FILL_DENSE(b, 0, 0, 3000); /* a & ~b == 0 for the whole chunk */
+        multiroar *result = multiroarNewAndNot(a, b);
+        if (multiroarBitCount(result) != 0) {
+            ERR("ANDNOT identical: expected empty, got %" PRIu64,
+                multiroarBitCount(result));
+        }
+        uint64_t pos = 0;
+        if (multiroarMin(result, &pos)) {
+            ERRR("ANDNOT identical: empty result must have no min");
+        }
+        multiroarFree(a);
+        multiroarFree(b);
+        multiroarFree(result);
+    }
+
+    TEST("Iterator: FULL_BITMAP exact ordered sequence (word-skip resume)") {
+        /* Dense range forces FULL_BITMAP; bit 8191 sits past a long run of
+         * zero words. Exercises the word-skip scan resuming mid-word across
+         * every Next() call, word-boundary crossings, the zero-word skip, and
+         * the final bit. Asserts completeness + strict ascending order. */
+        multiroar *r = multiroarBitNew();
+        FILL_DENSE(r, 0, 100, 2100); /* bits [100,2100) */
+        multiroarBitSet(r, 8191);    /* last bit in the chunk */
+
+        multiroarIterator it;
+        multiroarIteratorInit(r, &it);
+        uint64_t pos = 0;
+        uint64_t prev = 0;
+        uint64_t n = 0;
+        bool first = true;
+        while (multiroarIteratorNext(&it, &pos)) {
+            if (first) {
+                if (pos != 100) {
+                    ERR("iter: first pos expected 100, got %" PRIu64, pos);
+                }
+                first = false;
+            } else if (pos <= prev) {
+                ERR("iter: not strictly ascending: %" PRIu64 " after %" PRIu64,
+                    pos, prev);
+            }
+            prev = pos;
+            n++;
+        }
+        if (n != 2001) {
+            ERR("iter: expected 2001 positions, got %" PRIu64, n);
+        }
+        if (prev != 8191) {
+            ERR("iter: last pos expected 8191, got %" PRIu64, prev);
+        }
+        multiroarFree(r);
+    }
+
+    TEST("Iterator: OVER_FULL exact ordered sequence (cursor skip)") {
+        /* A nearly-full chunk stores its UNSET positions (OVER_FULL). Removing
+         * a scattered few from an all-ones chunk produces one. The iterator
+         * must emit every set position ascending, skipping the unset ones via
+         * the monotonic cursor — incl. unset bits at word boundaries (63/64)
+         * and the last bit (8191). */
+        multiroar *r = multiroarBitNew();
+        FILL_ALL_ONES(r, 0);
+        const uint64_t unset[] = {0, 63, 64, 100, 4000, 8191};
+        const int U = (int)(sizeof(unset) / sizeof(unset[0]));
+        for (int i = 0; i < U; i++) {
+            multiroarRemove(r, unset[i]);
+        }
+
+        multiroarIterator it;
+        multiroarIteratorInit(r, &it);
+        uint64_t pos = 0;
+        uint64_t prev = 0;
+        uint64_t n = 0;
+        bool first = true;
+        while (multiroarIteratorNext(&it, &pos)) {
+            if (!first && pos <= prev) {
+                ERR("OVER_FULL iter: not ascending at %" PRIu64, pos);
+            }
+            for (int i = 0; i < U; i++) {
+                if (pos == unset[i]) {
+                    ERR("OVER_FULL iter: emitted unset position %" PRIu64, pos);
+                }
+            }
+            prev = pos;
+            first = false;
+            n++;
+        }
+        if (n != (uint64_t)(BITMAP_SIZE_IN_BITS - U)) {
+            ERR("OVER_FULL iter: expected %d positions, got %" PRIu64,
+                BITMAP_SIZE_IN_BITS - U, n);
+        }
+        multiroarFree(r);
     }
 
 #undef FILL_SPARSE

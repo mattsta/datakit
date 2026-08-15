@@ -89,6 +89,8 @@ typedef struct multiroarIterator {
     uint64_t positionInChunk;
     uint16_t countInChunk;
     uint16_t indexInChunk;
+    uint16_t
+        unsetCursor; /* OVER_FULL: monotonic index into sorted unset list */
     bool valid;
 } multiroarIterator;
 
