@@ -150,8 +150,21 @@ static void aeadNonceLogFifoUnlink(aeadNonceLog *log, size_t idx) {
 aeadNonceLog *aeadNonceLogCreate(size_t min_capacity) {
     const size_t cap = aeadNonceLogRoundCap(min_capacity);
     aeadNonceLog *log = zmalloc(sizeof(*log));
+    if (!log) {
+        return NULL;
+    }
     log->slots = zmalloc(cap * sizeof(aeadNonceLogSlot));
     log->links = zmalloc(cap * sizeof(aeadNonceLogLink));
+    if (!log->slots || !log->links) {
+        /* OOM: fail closed (return NULL) instead of dereferencing NULL below,
+         * so the caller's fail-closed path runs — e.g. clusterMailboxCreate
+         * refuses to construct a mailbox without replay protection rather than
+         * crashing under memory pressure. zfree(NULL) is safe. */
+        zfree(log->links);
+        zfree(log->slots);
+        zfree(log);
+        return NULL;
+    }
     memset(log->slots, 0, cap * sizeof(aeadNonceLogSlot));
     for (size_t i = 0; i < cap; i++) {
         log->links[i].prev = AEAD_NONCE_LOG_NIL;
@@ -857,6 +870,18 @@ static void *aeadNonceLogConcWorker(void *arg) {
     return NULL;
 }
 
+/* Always-failing allocators for the OOM fault-injection test below. zmalloc
+ * routes through localCalloc unless DK_MALLOC_REAL is set, so fail both. */
+static void *aeadOomFailMalloc(size_t n) {
+    (void)n;
+    return NULL;
+}
+static void *aeadOomFailCalloc(size_t count, size_t n) {
+    (void)count;
+    (void)n;
+    return NULL;
+}
+
 int aeadNonceLogTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -1011,6 +1036,25 @@ int aeadNonceLogTest(int argc, char *argv[]) {
             }
         }
         aeadNonceLogFree(log);
+    }
+
+    TEST("aeadNonceLogCreate fails closed under OOM (returns NULL, no crash)") {
+        /* Swap the global allocator's malloc for a failing one across exactly
+         * one Create call: it must return NULL (so a caller like
+         * clusterMailboxCreate refuses to construct without replay protection)
+         * rather than dereference NULL. Restore the allocator BEFORE asserting
+         * (ERR/printf themselves allocate). */
+        datakitConfig saved = datakitConfigMemory__;
+        datakitConfig failing = saved;
+        failing.localMalloc = aeadOomFailMalloc;
+        failing.localCalloc = aeadOomFailCalloc;
+        datakitConfigSet(&failing);
+        aeadNonceLog *log = aeadNonceLogCreate(1024);
+        datakitConfigSet(&saved); /* restore before any allocation */
+        if (log != NULL) {
+            ERRR("aeadNonceLogCreate must return NULL under OOM (fail closed)");
+            aeadNonceLogFree(log);
+        }
     }
 
     TEST_FINAL_RESULT;
