@@ -383,14 +383,23 @@ void *_mi_heap_realloc_zero(mi_heap_t *heap, void *p, size_t newsize, bool zero,
         }
         return p; // reallocation still fits and not more than 50% waste
     }
-    void *newp = mi_heap_umalloc(heap, newsize, usable_post);
+    size_t newusable = 0;
+    void *newp = mi_heap_umalloc(heap, newsize, &newusable);
+    if (usable_post != NULL) {
+        *usable_post = newusable;
+    }
     if mi_likely (newp != NULL) {
         if (zero && newsize > size) {
-            // also set last word in the previous allocation to zero to ensure
-            // any padding is zero-initialized
+            // zero through the FULL usable size of the new block, not just
+            // newsize — bytes in (newsize, usable] are reported available by
+            // mi_usable_size and must not leak uninitialized (upstream issue
+            // #763). Also zero the last word of the previous allocation so
+            // any padding is zero-initialized.
             const size_t start =
                 (size >= sizeof(intptr_t) ? size - sizeof(intptr_t) : 0);
-            _mi_memzero((uint8_t *)newp + start, newsize - start);
+            mi_assert_internal(newusable >= newsize);
+            _mi_memzero((uint8_t *)newp + start,
+                        (newusable > start ? newusable - start : 0));
         } else if (newsize == 0) {
             ((uint8_t *)newp)[0] =
                 0; // work around for applications that expect zero-reallocation
@@ -527,7 +536,6 @@ mi_decl_nodiscard mi_decl_restrict char *mi_strndup(const char *s,
     return mi_heap_strndup(mi_prim_get_default_heap(), s, n);
 }
 
-#ifndef __wasi__
 // `realpath` using mi_malloc
 
 #include <unistd.h> // pathconf
@@ -586,7 +594,6 @@ mi_decl_nodiscard mi_decl_restrict char *
 mi_realpath(const char *fname, char *resolved_name) mi_attr_noexcept {
     return mi_heap_realpath(mi_prim_get_default_heap(), fname, resolved_name);
 }
-#endif
 
 /*-------------------------------------------------------
 C++ new and new_aligned
@@ -594,27 +601,20 @@ The standard requires calling into `get_new_handler` and
 throwing the bad_alloc exception on failure. If we compile
 with a C++ compiler we can implement this precisely. If we
 use a C compiler we cannot throw a `bad_alloc` exception
-but we call `exit` instead (i.e. not returning).
+but we call `abort` instead (i.e. not returning).
+Also, the standard requires calling the new handler until
+it returns false, but we limit the total calls.
 -------------------------------------------------------*/
+#define MI_TRY_NEW_MAX (4)
 
 typedef void (*std_new_handler_t)(void);
 
-#if (defined(__GNUC__) ||                                                      \
-     (defined(__clang__) &&                                                    \
-      !defined(_MSC_VER))) // exclude clang-cl, see issue #631
 std_new_handler_t __attribute__((weak)) _ZSt15get_new_handlerv(void) {
     return NULL;
 }
 static std_new_handler_t mi_get_new_handler(void) {
     return _ZSt15get_new_handlerv();
 }
-#else
-// note: on windows we could dynamically link to
-// `?get_new_handler@std@@YAP6AXXZXZ`.
-static std_new_handler_t mi_get_new_handler(void) {
-    return NULL;
-}
-#endif
 
 static bool mi_try_new_handler(bool nothrow) {
     std_new_handler_t h = mi_get_new_handler();
@@ -633,7 +633,11 @@ static bool mi_try_new_handler(bool nothrow) {
 mi_decl_export mi_decl_noinline void *
 mi_heap_try_new(mi_heap_t *heap, size_t size, bool nothrow) {
     void *p = NULL;
-    while (p == NULL && mi_try_new_handler(nothrow)) {
+    for (int i = 0;
+         i < MI_TRY_NEW_MAX && p == NULL && mi_try_new_handler(nothrow); i++) {
+        if (size > MI_MAX_ALLOC_SIZE) {
+            return NULL; // call try_new_handler at least once
+        }
         p = mi_heap_malloc(heap, size);
     }
     return p;
@@ -681,29 +685,54 @@ mi_new_nothrow(size_t size) mi_attr_noexcept {
     return p;
 }
 
+static mi_decl_noinline void *mi_try_new_aligned(size_t size, size_t alignment,
+                                                 bool nothrow) {
+    void *p = NULL;
+    for (int i = 0;
+         i < MI_TRY_NEW_MAX && p == NULL && mi_try_new_handler(nothrow); i++) {
+        if (alignment == 0 || !_mi_is_power_of_two(alignment)) {
+            return NULL; // invalid alignment; never satisfiable
+        }
+        p = mi_malloc_aligned(size, alignment);
+    }
+    return p;
+}
+
 mi_decl_nodiscard mi_decl_restrict void *mi_new_aligned(size_t size,
                                                         size_t alignment) {
-    void *p;
-    do {
-        p = mi_malloc_aligned(size, alignment);
-    } while (p == NULL && mi_try_new_handler(false));
+    void *p = mi_malloc_aligned(size, alignment);
+    if mi_unlikely (p == NULL) {
+        return mi_try_new_aligned(size, alignment, false);
+    }
     return p;
 }
 
 mi_decl_nodiscard mi_decl_restrict void *
 mi_new_aligned_nothrow(size_t size, size_t alignment) mi_attr_noexcept {
-    void *p;
-    do {
-        p = mi_malloc_aligned(size, alignment);
-    } while (p == NULL && mi_try_new_handler(true));
+    void *p = mi_malloc_aligned(size, alignment);
+    if mi_unlikely (p == NULL) {
+        return mi_try_new_aligned(size, alignment, true);
+    }
     return p;
 }
 
-mi_decl_nodiscard void *mi_new_realloc(void *p, size_t newsize) {
-    void *q;
-    do {
+static mi_decl_noinline void *mi_try_new_realloc(void *p, size_t newsize) {
+    void *q = NULL;
+    for (int i = 0;
+         i < MI_TRY_NEW_MAX && q == NULL && mi_try_new_handler(false); i++) {
+        if (newsize > MI_MAX_ALLOC_SIZE) {
+            return NULL;
+        }
         q = mi_realloc(p, newsize);
-    } while (q == NULL && mi_try_new_handler(false));
+    }
+    return q;
+}
+
+mi_decl_nodiscard void *mi_new_realloc(void *p, size_t newsize) {
+    void *q = mi_realloc(p, newsize);
+    if (q == NULL) {
+        return mi_try_new_realloc(p, newsize);
+    }
     return q;
 }
 

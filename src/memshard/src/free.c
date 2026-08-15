@@ -51,7 +51,11 @@ static inline void mi_free_block_local(mi_page_t *page, mi_block_t *block,
 #if (MI_DEBUG > 0) && !MI_TRACK_ENABLED && !MI_TSAN
     if (!mi_page_is_huge(
             page)) { // huge page content may be already decommitted
-        memset(block, MI_DEBUG_FREED, mi_page_block_size(page));
+        size_t dbgsize = mi_page_block_size(page);
+        if (dbgsize > 1 * MI_MiB) {
+            dbgsize = 1 * MI_MiB; // avoid huge debug memsets
+        }
+        memset(block, MI_DEBUG_FREED, dbgsize);
     }
 #endif
     if (track_stats) {
@@ -213,6 +217,10 @@ static inline mi_segment_t *mi_checked_ptr_segment(const void *p,
 static inline void mi_free_ex(void *p, size_t *usable) mi_attr_noexcept {
     mi_segment_t *const segment = mi_checked_ptr_segment(p, "mi_free");
     if mi_unlikely (segment == NULL) {
+        // invalid pointer (or NULL): never leave the out-param uninitialized
+        if (usable != NULL) {
+            *usable = 0;
+        }
         return;
     }
 
@@ -412,7 +420,11 @@ static void mi_decl_noinline mi_free_block_mt(mi_page_t *page,
 #if (MI_DEBUG > 0) && !MI_TRACK_ENABLED &&                                     \
     !MI_TSAN // note: when tracking, cannot use mi_usable_size with
              // multi-threading
-        memset(block, MI_DEBUG_FREED, mi_usable_size(block));
+        size_t dbgsize = mi_usable_size(block);
+        if (dbgsize > 1 * MI_MiB) {
+            dbgsize = 1 * MI_MiB; // avoid huge debug memsets
+        }
+        memset(block, MI_DEBUG_FREED, dbgsize);
 #endif
     }
 
@@ -431,9 +443,11 @@ static size_t mi_decl_noinline mi_page_usable_aligned_size_of(
     const mi_block_t *block = _mi_page_ptr_unalign(page, p);
     const bool is_guarded = mi_block_ptr_is_guarded(block, p);
     const size_t size = mi_page_usable_size_of(page, block, is_guarded);
-    const ptrdiff_t adjust = (uint8_t *)p - (uint8_t *)block;
-    mi_assert_internal(adjust >= 0 && (size_t)adjust <= size);
-    const size_t aligned_size = (size - adjust);
+    mi_assert_internal((const void *)p >= (const void *)block);
+    const size_t adjust = (size_t)((const uint8_t *)p - (const uint8_t *)block);
+    mi_assert_internal(adjust <= size);
+    // size can be zero if the padding is corrupted (never underflow)
+    const size_t aligned_size = (adjust <= size ? size - adjust : 0);
     return aligned_size;
 }
 
@@ -501,12 +515,22 @@ void mi_free_aligned(void *p, size_t alignment) mi_attr_noexcept {
 #if (MI_ENCODE_FREELIST && (MI_SECURE >= 4 || MI_DEBUG != 0))
 // linear check if the free list contains a specific element
 static bool mi_list_contains(const mi_page_t *page, const mi_block_t *list,
-                             const mi_block_t *elem) {
-    while (list != NULL) {
+                             const mi_block_t *elem, const char *list_kind) {
+    // can never hold more blocks than the page capacity
+    const size_t max_count = page->capacity;
+    size_t count = 0;
+    // a double free can create cycles so bound the number of iterations
+    while (list != NULL && count <= max_count) {
         if (elem == list) {
             return true;
         }
         list = mi_block_next(page, list);
+        count++;
+    }
+    if mi_unlikely (count > max_count) {
+        _mi_error_message(EFAULT,
+                          "corrupted %s list (possibly due to a double free)\n",
+                          list_kind);
     }
     return false;
 }
@@ -515,9 +539,10 @@ static mi_decl_noinline bool mi_check_is_double_freex(const mi_page_t *page,
                                                       const mi_block_t *block) {
     // The decoded value is in the same page (or NULL).
     // Walk the free lists to verify positively if it is already freed
-    if (mi_list_contains(page, page->free, block) ||
-        mi_list_contains(page, page->local_free, block) ||
-        mi_list_contains(page, mi_page_thread_free(page), block)) {
+    if (mi_list_contains(page, page->free, block, "free") ||
+        mi_list_contains(page, page->local_free, block, "local free") ||
+        mi_list_contains(page, mi_page_thread_free(page), block,
+                         "thread free")) {
         _mi_error_message(EAGAIN,
                           "double free detected of block %p with size %zu\n",
                           block, mi_page_block_size(page));
@@ -533,23 +558,29 @@ static mi_decl_noinline bool mi_check_is_double_freex(const mi_page_t *page,
         mi_track_mem_##access(pstart, psize);                                  \
     }
 
+// Used for double free checking to avoid checking free lists too frequently
+static inline bool mi_block_could_be_double_free(const mi_page_t *page,
+                                                 const mi_block_t *block) {
+    // pretend it is freed, and get the decoded first field
+    mi_block_t *n = mi_block_nextx(page, block, page->keys);
+    return (((uintptr_t)n & (MI_INTPTR_SIZE - 1)) ==
+                0 && // quick check: aligned pointer?
+            (n == NULL ||
+             mi_is_in_same_page(block,
+                                n))); // quick check: in the same page or NULL?
+}
+
 static inline bool mi_check_is_double_free(const mi_page_t *page,
                                            const mi_block_t *block) {
-    bool is_double_free = false;
-    mi_block_t *n = mi_block_nextx(
-        page, block,
-        page->keys); // pretend it is freed, and get the decoded first field
-    if (((uintptr_t)n & (MI_INTPTR_SIZE - 1)) ==
-            0 && // quick check: aligned pointer?
-        (n == NULL ||
-         mi_is_in_same_page(block, n))) // quick check: in same page or NULL?
-    {
+    // quick check: next field is aligned in the same page or NULL?
+    if mi_unlikely (mi_block_could_be_double_free(page, block)) {
         // Suspicious: decoded value a in block is in the same page (or NULL) --
         // maybe a double free? (continue in separate function to improve code
         // generation)
-        is_double_free = mi_check_is_double_freex(page, block);
+        return mi_check_is_double_freex(page, block);
     }
-    return is_double_free;
+
+    return false;
 }
 #else
 static inline bool mi_check_is_double_free(const mi_page_t *page,
@@ -627,8 +658,12 @@ void _mi_padding_shrink(const mi_page_t *page, const mi_block_t *block,
 #else
 static size_t mi_page_usable_size_of(const mi_page_t *page,
                                      const mi_block_t *block, bool is_guarded) {
-    MI_UNUSED(is_guarded);
     MI_UNUSED(block);
+    if (is_guarded) {
+        const size_t bsize = mi_page_block_size(page);
+        return (bsize - _mi_os_page_size());
+    }
+
     return mi_page_usable_block_size(page);
 }
 

@@ -169,7 +169,9 @@ static mi_decl_noinline void *mi_heap_malloc_zero_aligned_at_overalloc(
         // start of the large block is defined
         mi_track_mem_undefined(aligned_p, size);
         if (zero) {
-            _mi_memzero_aligned(aligned_p, mi_usable_size(aligned_p));
+            // cannot use the aligned memzero variant: `aligned_p` can sit at an
+            // arbitrary offset inside the block (upstream issue #1271)
+            _mi_memzero(aligned_p, mi_usable_size(aligned_p));
         }
     }
 
@@ -190,7 +192,7 @@ static mi_decl_noinline void *mi_heap_malloc_zero_aligned_at_generic(
     // we don't allocate more than MI_MAX_ALLOC_SIZE (see
     // <https://sourceware.org/ml/libc-announce/2019/msg00001.html>)
     if mi_unlikely (size > (MI_MAX_ALLOC_SIZE - MI_PADDING_SIZE)) {
-        _mi_error_message(EOVERFLOW,
+        _mi_error_message(EINVAL,
                           "aligned allocation request is too large (size %zu, "
                           "alignment %zu)\n",
                           size, alignment);
@@ -221,6 +223,15 @@ static mi_decl_noinline void *mi_heap_malloc_zero_aligned_at_generic(
                                                     offset, zero, usable);
 }
 
+static mi_decl_cold mi_decl_noinline void *
+mi_error_bad_alignment(size_t size, size_t alignment, size_t offset) {
+    _mi_error_message(EINVAL,
+                      "aligned allocation requires the alignment to be a "
+                      "power-of-two (size %zu, alignment %zu, offset %zu)\n",
+                      size, alignment, offset);
+    return NULL;
+}
+
 // Primitive aligned allocation
 static void *mi_heap_malloc_zero_aligned_at(
     mi_heap_t *const heap, const size_t size, const size_t alignment,
@@ -232,13 +243,7 @@ static void *mi_heap_malloc_zero_aligned_at(
         !_mi_is_power_of_two(
             alignment)) { // require power-of-two (see
                           // <https://en.cppreference.com/w/c/memory/aligned_alloc>)
-#if MI_DEBUG > 0
-        _mi_error_message(EOVERFLOW,
-                          "aligned allocation requires the alignment to be a "
-                          "power-of-two (size %zu, alignment %zu)\n",
-                          size, alignment);
-#endif
-        return NULL;
+        return mi_error_bad_alignment(size, alignment, offset);
     }
 
 #if MI_GUARDED
@@ -396,6 +401,13 @@ static void *mi_heap_realloc_zero_aligned_at(mi_heap_t *heap, void *p,
                                              size_t offset,
                                              bool zero) mi_attr_noexcept {
     mi_assert(alignment > 0);
+    if mi_unlikely (
+        alignment == 0 ||
+        !_mi_is_power_of_two(
+            alignment)) { // require power-of-two (see
+                          // <https://en.cppreference.com/w/c/memory/aligned_alloc>)
+        return mi_error_bad_alignment(newsize, alignment, offset);
+    }
     if (alignment <= sizeof(uintptr_t) && offset == 0) {
         return _mi_heap_realloc_zero(heap, p, newsize, zero, NULL, NULL);
     }
@@ -403,25 +415,34 @@ static void *mi_heap_realloc_zero_aligned_at(mi_heap_t *heap, void *p,
         return mi_heap_malloc_zero_aligned_at(heap, newsize, alignment, offset,
                                               zero, NULL);
     }
-    size_t size = mi_usable_size(p);
+    const size_t size = mi_usable_size(p);
     if (newsize <= size && newsize >= (size - (size / 2)) &&
-        (((uintptr_t)p + offset) % alignment) == 0) {
-        return p; // reallocation still fits, is aligned and not more than 25%
+        (((uintptr_t)p + offset) & (alignment - 1)) == 0) {
+        return p; // reallocation still fits, is aligned and not more than 50%
                   // waste
     } else {
         // note: we don't zero allocate upfront so we only zero initialize the
-        // expanded part
-        void *newp =
+        // expanded part (at the cost of calling mi_usable_size)
+        void *const newp =
             mi_heap_malloc_aligned_at(heap, newsize, alignment, offset);
         if (newp != NULL) {
-            if (zero && newsize > size) {
-                // also set last word in the previous allocation to zero to
-                // ensure any padding is zero-initialized
-                size_t start =
-                    (size >= sizeof(intptr_t) ? size - sizeof(intptr_t) : 0);
-                _mi_memzero((uint8_t *)newp + start, newsize - start);
+            const size_t copy_size = (newsize > size ? size : newsize);
+            // also set last word in the previous allocation to zero to ensure
+            // any padding is zero-initialized
+            const size_t zero_start =
+                (copy_size >= sizeof(intptr_t) ? copy_size - sizeof(intptr_t)
+                                               : 0);
+            // zero up to the usable size and not just `newsize`
+            // (upstream issue #763)
+            const size_t usable = mi_usable_size(newp);
+            mi_assert_internal(usable >= newsize);
+            if (zero && usable > zero_start) {
+                _mi_memzero((uint8_t *)newp + zero_start, usable - zero_start);
             }
-            _mi_memcpy_aligned(newp, p, (newsize > size ? size : newsize));
+            // cannot use the aligned memcpy variant: an aligned allocation can
+            // sit at an arbitrary offset inside the block
+            // (upstream issue #1271)
+            _mi_memcpy(newp, p, copy_size);
             mi_free(p); // only free if successful
         }
         return newp;

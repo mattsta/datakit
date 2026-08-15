@@ -595,15 +595,10 @@ static bool _mi_thread_heap_done(mi_heap_t *heap) {
 // owned by the thread but not yet released can be abandoned
 // and re-owned by another thread.
 //
-// 1. windows dynamic library:
-//     call from DllMain on DLL_THREAD_DETACH
-// 2. windows static library:
-//     use `FlsAlloc` to call a destructor when the thread is done
-// 3. unix, pthreads:
+// unix, pthreads:
 //     use a pthread key to call a destructor when a pthread is done
 //
-// In the last two cases we also need to call `mi_process_init`
-// to set up the thread local keys.
+// We also need to call `mi_process_init` to set up the thread local keys.
 // --------------------------------------------------------
 
 // Set up handlers so `mi_thread_done` is called automatically
@@ -666,8 +661,8 @@ void _mi_thread_done(mi_heap_t *heap) {
     mi_atomic_decrement_relaxed(&thread_count);
     _mi_stat_decrease(&_mi_stats_main.threads, 1);
 
-    // check thread-id as on Windows shutdown with FLS the main (exit) thread
-    // may call this on thread-local heaps...
+    // check thread-id: at shutdown the main (exit) thread may call this on
+    // thread-local heaps belonging to other threads...
     if (heap->thread_id != _mi_thread_id()) {
         return;
     }
@@ -749,7 +744,7 @@ void _mi_auto_process_init(void) {
 }
 
 static void mi_detect_cpu_features(void) {
-    // nothing (Windows/MSVC __cpuid FSRM/ERMS detection removed)
+    // nothing (no runtime CPU feature detection is needed here)
 }
 
 // Initialize the process; called by thread_init or the process loader
@@ -794,9 +789,8 @@ void mi_process_init(void) mi_attr_noexcept {
     }
 }
 
-// Called when the process is done (cdecl as it is used with `at_exit` on some
-// platforms)
-void mi_cdecl mi_process_done(void) mi_attr_noexcept {
+// Called when the process is done
+static void mi_process_done_once(void) {
     // only shutdown if we were initialized
     if (!_mi_process_is_initialized) {
         return;
@@ -828,13 +822,13 @@ void mi_cdecl mi_process_done(void) mi_attr_noexcept {
 #endif
 
     // done with tracking tools
-    mi_track_done()
+    mi_track_done();
 
-        // Forcefully release all retained memory; this can be dangerous in
-        // general if overriding regular malloc/free since after process_done
-        // there might still be other code running that calls `free` (like
-        // at_exit routines, or C-runtime termination code.
-        if (mi_option_is_enabled(mi_option_destroy_on_exit)) {
+    // Forcefully release all retained memory; this can be dangerous in general
+    // if overriding regular malloc/free since after process_done there might
+    // still be other code running that calls `free` (like at_exit routines, or
+    // C-runtime termination code.
+    if (mi_option_is_enabled(mi_option_destroy_on_exit)) {
         mi_heap_collect(heap, true /* force */);
         _mi_heap_unsafe_destroy_all(
             heap); // forcefully release all memory held by all heaps (of this
@@ -850,6 +844,14 @@ void mi_cdecl mi_process_done(void) mi_attr_noexcept {
     _mi_allocator_done();
     _mi_verbose_message("process done: 0x%zx\n", _mi_heap_main.thread_id);
     os_preloading = true; // don't call the C runtime anymore
+}
+
+// Called when the process is done (cdecl as it is used with `at_exit` on some
+// platforms)
+void mi_cdecl mi_process_done(void) mi_attr_noexcept {
+    mi_atomic_do_once {
+        mi_process_done_once();
+    }
 }
 
 void mi_cdecl _mi_auto_process_done(void) mi_attr_noexcept {

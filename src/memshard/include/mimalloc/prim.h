@@ -31,10 +31,10 @@ typedef struct mi_os_mem_config_s {
     size_t physical_memory_in_kib; // physical memory size in KiB
     size_t virtual_address_bits;   // usually 48 or 56 bits on 64-bit systems.
                                    // (used to determine secure randomization)
-    bool has_overcommit;   // can we reserve more memory than can be actually
-                           // committed?
-    bool has_partial_free; // can allocated blocks be freed partially? (true for
-                           // mmap, false for VirtualAlloc)
+    bool has_overcommit;      // can we reserve more memory than can be actually
+                              // committed?
+    bool has_partial_free;    // can allocated blocks be freed partially?
+                              // (true for mmap)
     bool has_virtual_reserve; // supports virtual address space reservation? (if
                               // true we can reserve virtual address space
                               // without using commit or physical memory)
@@ -275,7 +275,7 @@ static inline void mi_prim_tls_slot_set(size_t slot,
     __APPLE__) /* on apple (M1) the wrong register is read (tpidr_el0 instead                   \
                   of tpidrro_el0) so fall back to TLS slot assembly                             \
                   (<https://github.com/microsoft/mimalloc/issues/343#issuecomment-763272369>)*/ \
-    && !defined(__CYGWIN__) && !defined(MI_LIBC_MUSL) &&                                        \
+    && !defined(MI_LIBC_MUSL) &&                                                                \
     (!defined(__clang_major__) ||                                                               \
      __clang_major__ >=                                                                         \
          14) /* older clang versions emit bad code; fall back                                   \

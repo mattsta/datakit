@@ -83,7 +83,7 @@ size_t _mi_strnlen(const char *s, size_t max_len) {
         return 0;
     }
     size_t len = 0;
-    while (s[len] != 0 && len < max_len) {
+    while (len < max_len && s[len] != 0) {
         len++;
     }
     return len;
@@ -207,6 +207,9 @@ static void mi_out_alignright(char fill, char *start, size_t len, size_t extra,
     }
 }
 
+/* a 512 bit number has 155 digits */
+#define MI_MAX_OUT_DIGITS (160)
+
 static void mi_out_num(uintmax_t x, size_t base, char prefix, char **out,
                        char *end) {
     if (x == 0 || base == 0 || base > 16) {
@@ -215,22 +218,21 @@ static void mi_out_num(uintmax_t x, size_t base, char prefix, char **out,
         }
         mi_outc('0', out, end);
     } else {
-        // output digits in reverse
-        char *start = *out;
-        while (x > 0) {
+        char num[MI_MAX_OUT_DIGITS];
+        int dcount = 0;
+        while (x > 0 && dcount < MI_MAX_OUT_DIGITS) {
             char digit = (char)(x % base);
-            mi_outc((digit <= 9 ? '0' + digit : 'A' + digit - 10), out, end);
+            num[dcount++] = (digit <= 9 ? '0' + digit : 'A' + digit - 10);
             x = x / base;
+        }
+        if (dcount >= MI_MAX_OUT_DIGITS) {
+            return; // don't output anything?
         }
         if (prefix != 0) {
             mi_outc(prefix, out, end);
         }
-        size_t len = *out - start;
-        // and reverse in-place
-        for (size_t i = 0; i < (len / 2); i++) {
-            char c = start[len - i - 1];
-            start[len - i - 1] = start[i];
-            start[i] = c;
+        while (dcount-- > 0) {
+            mi_outc(num[dcount], out, end);
         }
     }
 }
@@ -283,7 +285,9 @@ int _mi_vsnprintf(char *buf, size_t bufsize, const char *fmt, va_list args) {
                 width = (c - '0');
                 MI_NEXTC();
                 while (c >= '0' && c <= '9') {
-                    width = (10 * width) + (c - '0');
+                    if (width < SIZE_MAX / 1024) { // no overflow
+                        width = (10 * width) + (c - '0');
+                    }
                     MI_NEXTC();
                 }
                 if (c == 0) {
@@ -339,7 +343,9 @@ int _mi_vsnprintf(char *buf, size_t bufsize, const char *fmt, va_list args) {
                     if (width == 0) {
                         width = 2;
                     }
-                    fill = '0';
+                    if (alignright) {
+                        fill = '0';
+                    }
                 }
                 mi_out_num(x, (c == 'x' || c == 'p' ? 16 : 10), numplus, &out,
                            end);

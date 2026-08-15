@@ -108,9 +108,11 @@ size_t _mi_bin_size(size_t bin) {
 
 // Good size for allocation
 size_t mi_good_size(size_t size) mi_attr_noexcept {
-    if (size <= MI_MEDIUM_OBJ_SIZE_MAX) {
+    // compare against the padding-adjusted limits so `size + MI_PADDING_SIZE`
+    // can never overflow near the boundaries
+    if (size <= MI_MEDIUM_OBJ_SIZE_MAX - MI_PADDING_SIZE) {
         return _mi_bin_size(mi_bin(size + MI_PADDING_SIZE));
-    } else if (size <= MI_MAX_ALLOC_SIZE) {
+    } else if (size <= MI_MAX_ALLOC_SIZE - MI_PADDING_SIZE) {
         return _mi_align_up(size + MI_PADDING_SIZE, _mi_os_page_size());
     } else {
         return size;
@@ -305,17 +307,15 @@ static void mi_page_queue_push(mi_heap_t *heap, mi_page_queue_t *queue,
     mi_heap_queue_first_update(heap, queue);
     heap->page_count++;
 
-    // [specbot Q-NEW-1] first/last must be both null or both non-null (L1,
-    // O(1))
+    // first/last must be both null or both non-null
     mi_assert_internal((queue->first == NULL) == (queue->last == NULL));
-    // [specbot Q-NEW-2] last element must have no next (L1, O(1))
+    // last element must have no next
     mi_assert_internal(queue->last == NULL || queue->last->next == NULL);
     mi_assert_expensive(mi_page_queue_is_consistent(queue));
 }
 
 #if MI_DEBUG >= 3
-// [specbot Q-NEW-3] Verify doubly-linked list forward/backward consistency (L2,
-// O(n))
+// Verify doubly-linked list forward/backward consistency
 static bool mi_page_queue_is_consistent(const mi_page_queue_t *queue) {
     if (queue->first == NULL) {
         return (queue->last == NULL);

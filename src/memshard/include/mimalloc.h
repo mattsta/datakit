@@ -15,7 +15,7 @@ terms of the MIT license. A copy of the license can be found in the file
 // ------------------------------------------------------
 
 #ifdef __cplusplus
-#if (__cplusplus >= 201103L) || (_MSC_VER > 1900) // C++11
+#if (__cplusplus >= 201103L) // C++11
 #define mi_attr_noexcept noexcept
 #else
 #define mi_attr_noexcept throw()
@@ -27,40 +27,13 @@ terms of the MIT license. A copy of the license can be found in the file
 #if defined(__cplusplus) && (__cplusplus >= 201703)
 #define mi_decl_nodiscard [[nodiscard]]
 #elif (defined(__GNUC__) && (__GNUC__ >= 4)) ||                                \
-    defined(__clang__) // includes clang, icc, and clang-cl
+    defined(__clang__) // includes clang and icc
 #define mi_decl_nodiscard __attribute__((warn_unused_result))
-#elif defined(_HAS_NODISCARD)
-#define mi_decl_nodiscard _NODISCARD
-#elif (_MSC_VER >= 1700)
-#define mi_decl_nodiscard _Check_return_
 #else
 #define mi_decl_nodiscard
 #endif
 
-#if defined(_MSC_VER) || defined(__MINGW32__)
-#if !defined(MI_SHARED_LIB)
-#define mi_decl_export
-#elif defined(MI_SHARED_LIB_EXPORT)
-#define mi_decl_export __declspec(dllexport)
-#else
-#define mi_decl_export __declspec(dllimport)
-#endif
-#if defined(__MINGW32__)
-#define mi_decl_restrict
-#define mi_attr_malloc __attribute__((malloc))
-#else
-#if (_MSC_VER >= 1900) && !defined(__EDG__)
-#define mi_decl_restrict __declspec(allocator) __declspec(restrict)
-#else
-#define mi_decl_restrict __declspec(restrict)
-#endif
-#define mi_attr_malloc
-#endif
-#define mi_cdecl __cdecl
-#define mi_attr_alloc_size(s)
-#define mi_attr_alloc_size2(s1, s2)
-#define mi_attr_alloc_align(p)
-#elif defined(__GNUC__) // includes clang and icc
+#if defined(__GNUC__) // includes clang and icc
 #if defined(MI_SHARED_LIB) && defined(MI_SHARED_LIB_EXPORT)
 #define mi_decl_export __attribute__((visibility("default")))
 #else
@@ -251,7 +224,7 @@ mi_ucalloc(size_t count, size_t size,
 mi_decl_nodiscard mi_decl_export void *
 mi_urealloc(void *p, size_t newsize, size_t *block_size_pre,
             size_t *block_size_post) mi_attr_noexcept mi_attr_alloc_size(2);
-mi_decl_export void mi_ufree(void *p, size_t *block_size) mi_attr_noexcept;
+mi_decl_export void mi_ufree(void *p, size_t *usable) mi_attr_noexcept;
 
 mi_decl_nodiscard mi_decl_export mi_decl_restrict void *
 mi_umalloc_aligned(size_t size, size_t alignment,

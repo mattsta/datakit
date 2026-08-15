@@ -101,11 +101,7 @@ size_t _mi_commit_mask_committed_size(const mi_commit_mask_t *cm,
         if (~mask == 0) {
             count += MI_COMMIT_MASK_FIELD_BITS;
         } else {
-            for (; mask != 0; mask >>= 1) { // todo: use popcount
-                if ((mask & 1) != 0) {
-                    count++;
-                }
-            }
+            count += mi_popcount(mask);
         }
     }
     // we use total since for huge segments each commit bit may represent a
@@ -311,12 +307,11 @@ static bool mi_segment_is_valid(mi_segment_t *segment, mi_segments_tld_t *tld) {
         &segment->commit_mask,
         &segment->purge_mask)); // can only decommit committed blocks
 
-    // [specbot S-NEW-1] segment must have at least one slice (L1, O(1))
+    // segment must have at least one slice
     mi_assert_internal(segment->segment_slices > 0);
-    // [specbot S-NEW-2] info slices must leave room for at least one data slice
-    // (L1, O(1))
+    // info slices must leave room for at least one data slice
     mi_assert_internal(segment->segment_info_slices < segment->segment_slices);
-    // [specbot S-NEW-3] slice_entries must not exceed array bounds (L1, O(1))
+    // slice_entries must not exceed array bounds
     mi_assert_internal(segment->slice_entries <= MI_SLICES_PER_SEGMENT);
 
     // mi_assert_internal(segment->segment_info_size % MI_SEGMENT_SLICE_SIZE ==
@@ -381,8 +376,7 @@ static bool mi_segment_is_valid(mi_segment_t *segment, mi_segments_tld_t *tld) {
         slice = &segment->slices[maxindex + 1];
     }
     mi_assert_internal(slice == end);
-    // [specbot S-NEW-5] Total slice counts must sum to segment_slices (L2,
-    // O(n))
+    // total slice counts must sum to segment_slices
     mi_assert_internal(total_slice_count == segment->segment_slices);
     mi_assert_internal(used_count == segment->used + 1);
     return true;
@@ -1090,6 +1084,10 @@ mi_segment_os_alloc(size_t required, size_t page_alignment, bool eager_delayed,
     mi_commit_mask_t commit_mask;
     if (memid.initially_committed) {
         mi_commit_mask_create_full(&commit_mask);
+    } else if (required > 0) {
+        // huge segments must be fully committed
+        _mi_arena_free(segment, segment_size, 0, memid);
+        return NULL;
     } else {
         // at least commit the info slices
         const size_t commit_needed = _mi_divide_up(
@@ -1156,18 +1154,18 @@ static mi_segment_t *mi_segment_alloc(size_t required, size_t page_alignment,
 
     // zero the segment info? -- not always needed as it may be zero initialized
     // from the OS
+    const size_t slice_entries =
+        (segment_slices > MI_SLICES_PER_SEGMENT ? MI_SLICES_PER_SEGMENT
+                                                : segment_slices);
     if (!segment->memid.initially_zero) {
         ptrdiff_t ofs = offsetof(mi_segment_t, next);
         size_t prefix = offsetof(mi_segment_t, slices) - ofs;
         size_t zsize =
-            prefix + (sizeof(mi_slice_t) * (segment_slices + 1)); // one more
+            prefix + (sizeof(mi_slice_t) * (slice_entries + 1)); // one more
         _mi_memzero((uint8_t *)segment + ofs, zsize);
     }
 
     // initialize the rest of the segment info
-    const size_t slice_entries =
-        (segment_slices > MI_SLICES_PER_SEGMENT ? MI_SLICES_PER_SEGMENT
-                                                : segment_slices);
     segment->segment_slices = segment_slices;
     segment->segment_info_slices = info_slices;
     segment->thread_id = _mi_thread_id();

@@ -98,11 +98,8 @@ static inline void mi_atomic_yield(void);
 static inline intptr_t mi_atomic_addi(_Atomic(intptr_t) *p, intptr_t add);
 static inline intptr_t mi_atomic_subi(_Atomic(intptr_t) *p, intptr_t sub);
 
-#if defined(__cplusplus) || !defined(_MSC_VER)
-
-// In C++/C11 atomics we have polymorphic atomics so can use the typed `ptr`
-// variants (where `tp` is the type of atomic value) We use these macros so we
-// can provide a typed wrapper in MSVC in C compilation mode as well
+// In C++/C11 atomics we have polymorphic atomics so we can use the typed
+// `ptr` variants (where `tp` is the type of the atomic value)
 #define mi_atomic_load_ptr_acquire(tp, p) mi_atomic_load_acquire(p)
 #define mi_atomic_load_ptr_relaxed(tp, p) mi_atomic_load_relaxed(p)
 
@@ -159,8 +156,6 @@ static inline void mi_atomic_maxi64_relaxed(volatile int64_t *p, int64_t x) {
 #define mi_atomic_casi64_strong_acq_rel(p, e, d)                               \
     mi_atomic_cas_strong_acq_rel(p, e, d)
 #define mi_atomic_addi64_acq_rel(p, i) mi_atomic_add_acq_rel(p, i)
-
-#endif
 
 // Atomically add a signed value; returns the previous value.
 static inline intptr_t mi_atomic_addi(_Atomic(intptr_t) *p, intptr_t add) {
@@ -244,6 +239,29 @@ static inline void mi_atomic_yield(void) {
 }
 #endif
 
+#include <unistd.h>
+static inline void mi_sleep0(void) {
+    sleep(0);
+}
+
+// Backoff for contended spin loops: yield for `ticks_until_sleep`
+// iterations, then yield the whole timeslice once and reset (upstream
+// issue #1317).
+static inline void mi_atomic_yield_sleep(size_t *ticks,
+                                         const size_t ticks_until_sleep) {
+    const size_t n = *ticks;
+    if (n == 0 || n > ticks_until_sleep) {
+        *ticks = ticks_until_sleep; // reset
+    } else {
+        *ticks = n - 1;
+    }
+    if (n > 1) {
+        mi_atomic_yield();
+    } else {
+        mi_sleep0();
+    }
+}
+
 // ----------------------------------------------------------------------
 // Locks
 // These should be light-weight in-process only locks.
@@ -296,7 +314,7 @@ static inline void mi_lock_done(mi_lock_t *lock) {
 #else
 
 // fall back to poor man's locks.
-// this should only be the case in a single-threaded environment (like __wasi__)
+// this should only be the case in a single-threaded environment
 #include <errno.h>
 #ifndef EFAULT
 #define EFAULT (14)

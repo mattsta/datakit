@@ -24,7 +24,7 @@ typedef bool(heap_page_visitor_fun)(mi_heap_t *heap, mi_page_queue_t *pq,
 static bool mi_heap_visit_pages(mi_heap_t *heap, heap_page_visitor_fun *fn,
                                 bool include_full, void *arg1, void *arg2) {
     if (heap == NULL || heap->page_count == 0) {
-        return 0;
+        return true;
     }
 
 // visit all pages
@@ -161,7 +161,12 @@ static void mi_heap_collect_ex(mi_heap_t *heap, mi_collect_t collect) {
     // free all current thread delayed blocks.
     // (if abandoning, after this there are no more thread-delayed references
     // into the pages.)
-    _mi_heap_delayed_free_all(heap);
+    if (collect >= MI_ABANDON) {
+        _mi_heap_delayed_free_all(heap); // free all
+    } else {
+        // best-effort; contended blocks are retried next time (upstream #1317)
+        _mi_heap_delayed_free_partial(heap);
+    }
 
     // collect retired pages
     _mi_heap_collect_retired(heap, force);
@@ -505,12 +510,8 @@ static void mi_heap_absorb(mi_heap_t *heap, mi_heap_t *from) {
     // visits the list and calls a the regular `_mi_free_delayed_block` which is
     // safe.
     _mi_heap_delayed_free_all(from);
-#if !defined(_MSC_VER) ||                                                      \
-    (_MSC_VER >                                                                \
-     1900) // somehow the following line gives an error in VS2015, issue #353
     mi_assert_internal(mi_atomic_load_ptr_relaxed(
                            mi_block_t, &from->thread_delayed_free) == NULL);
-#endif
 
     // and reset the `from` heap
     mi_heap_reset_pages(from);

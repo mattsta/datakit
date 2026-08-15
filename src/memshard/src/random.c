@@ -148,7 +148,8 @@ static bool mi_random_is_initialized(mi_random_ctx_t *ctx) {
 void _mi_random_split(mi_random_ctx_t *ctx, mi_random_ctx_t *ctx_new) {
     mi_assert_internal(mi_random_is_initialized(ctx));
     mi_assert_internal(ctx != ctx_new);
-    chacha_split(ctx, (uintptr_t)ctx_new /*nonce*/, ctx_new);
+    const uintptr_t nonce_rnd = _mi_random_next(ctx);
+    chacha_split(ctx, (uintptr_t)ctx_new ^ nonce_rnd /*nonce*/, ctx_new);
 }
 
 uintptr_t _mi_random_next(mi_random_ctx_t *ctx) {
@@ -188,13 +189,11 @@ uintptr_t _mi_os_random_weak(uintptr_t extra_seed) {
 static void mi_random_init_ex(mi_random_ctx_t *ctx, bool use_weak) {
     uint8_t key[32];
     if (use_weak || !_mi_prim_random_buf(key, sizeof(key))) {
-// if we fail to get random data from the OS, we fall back to a
-// weak random source based on the current time
-#if !defined(__wasi__)
+        // if we fail to get random data from the OS, we fall back to a
+        // weak random source based on the current time
         if (!use_weak) {
             _mi_warning_message("unable to use secure randomness\n");
         }
-#endif
         uintptr_t x = _mi_os_random_weak(0);
         for (size_t i = 0; i < 32; i += 4, x++) {
             x = _mi_random_shuffle(x);

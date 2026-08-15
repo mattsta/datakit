@@ -357,6 +357,12 @@ static int unix_mmap_fd(void) {
 #endif
 }
 
+#if defined(MAP_ALIGNED_SUPER) || defined(MAP_HUGETLB) ||                      \
+    defined(MAP_HUGE_1GB) || defined(MAP_HUGE_2MB) ||                          \
+    defined(VM_FLAGS_SUPERPAGE_SIZE_2MB)
+#define MI_OS_HAS_HUGE_PAGES 1
+#endif
+
 static void *unix_mmap(void *addr, size_t size, size_t try_alignment,
                        int protect_flags, bool large_only, bool allow_large,
                        bool *is_large) {
@@ -376,6 +382,7 @@ static void *unix_mmap(void *addr, size_t size, size_t try_alignment,
     protect_flags |= PROT_MAX(PROT_READ | PROT_WRITE); // BSD
 #endif
     // huge page allocation
+#if MI_OS_HAS_HUGE_PAGES
     if (allow_large &&
         (large_only ||
          (_mi_os_canuse_large_page(size, try_alignment) &&
@@ -401,8 +408,10 @@ static void *unix_mmap(void *addr, size_t size, size_t try_alignment,
             lflags |= MAP_HUGETLB;
 #endif
 #ifdef MAP_HUGE_1GB
-            static bool mi_huge_pages_available = true;
-            if (large_only && (size % MI_GiB) == 0 && mi_huge_pages_available) {
+            static _Atomic(size_t) mi_huge_1gib_pages_unavailable;
+            if (large_only && (size % MI_GiB) == 0 &&
+                (mi_atomic_load_relaxed(&mi_huge_1gib_pages_unavailable) ==
+                 0)) {
                 lflags |= MAP_HUGE_1GB;
             } else
 #endif
@@ -421,8 +430,8 @@ static void *unix_mmap(void *addr, size_t size, size_t try_alignment,
                                            protect_flags, lflags, lfd);
 #ifdef MAP_HUGE_1GB
                 if (p == NULL && (lflags & MAP_HUGE_1GB) == MAP_HUGE_1GB) {
-                    mi_huge_pages_available =
-                        false; // don't try huge 1GiB pages again
+                    // don't try huge 1GiB pages again
+                    mi_atomic_store_relaxed(&mi_huge_1gib_pages_unavailable, 1);
                     if (large_only) {
                         _mi_warning_message(
                             "unable to allocate huge (1GiB) page, trying large "
@@ -445,15 +454,15 @@ static void *unix_mmap(void *addr, size_t size, size_t try_alignment,
                 }
             }
         }
-    }
+    } // huge pages
+#endif
     // regular allocation
     if (p == NULL) {
         *is_large = false;
         p = unix_mmap_prim_aligned(addr, size, try_alignment, protect_flags,
                                    flags, fd);
 #if !defined(MI_NO_THP)
-        if (p != NULL && allow_large &&
-            mi_option_is_enabled(mi_option_allow_thp) &&
+        if (p != NULL && mi_option_is_enabled(mi_option_allow_thp) &&
             _mi_os_canuse_large_page(size, try_alignment)) {
 #if defined(MADV_HUGEPAGE)
             // Many Linux systems don't allow MAP_HUGETLB but they support
@@ -617,7 +626,7 @@ int _mi_prim_protect(void *start, size_t size, bool protect) {
 // Huge page allocation
 //---------------------------------------------
 
-#if (MI_INTPTR_SIZE >= 8) && !defined(__HAIKU__) && !defined(__CYGWIN__)
+#if (MI_INTPTR_SIZE >= 8) && !defined(__HAIKU__)
 
 #ifndef MPOL_PREFERRED
 #define MPOL_PREFERRED 1
@@ -650,7 +659,7 @@ int _mi_prim_alloc_huge_os_pages(void *hint_addr, size_t size, int numa_node,
     *addr = unix_mmap(hint_addr, size, MI_SEGMENT_SIZE, PROT_READ | PROT_WRITE,
                       true, true, &is_large);
     if (*addr != NULL && numa_node >= 0 &&
-        numa_node < 8 * MI_INTPTR_SIZE) { // at most 64 nodes
+        numa_node < (8 * MI_INTPTR_SIZE - 1)) { // at most 63 nodes
         unsigned long numa_mask = (1UL << numa_node);
         // TODO: does `mbind` work correctly for huge OS pages? should we
         // use `set_mempolicy` before calling mmap instead?
@@ -660,7 +669,7 @@ int _mi_prim_alloc_huge_os_pages(void *hint_addr, size_t size, int numa_node,
         if (err != 0) {
             err = errno;
             _mi_warning_message("failed to bind huge (1GiB) pages to numa node "
-                                "%d (error: %d (0x%x))\n",
+                                "%d (error: %ld (0x%lx))\n",
                                 numa_node, err, err);
         }
     }
@@ -689,9 +698,9 @@ int _mi_prim_alloc_huge_os_pages(void *hint_addr, size_t size, int numa_node,
 
 size_t _mi_prim_numa_node(void) {
 #if defined(MI_HAS_SYSCALL_H) && defined(SYS_getcpu)
-    unsigned long node = 0;
-    unsigned long ncpu = 0;
-    long err = syscall(SYS_getcpu, &ncpu, &node, NULL);
+    unsigned int node = 0;
+    unsigned int ncpu = 0;
+    const int err = (int)syscall(SYS_getcpu, &ncpu, &node, NULL);
     if (err != 0) {
         return 0;
     }
@@ -704,12 +713,18 @@ size_t _mi_prim_numa_node(void) {
 size_t _mi_prim_numa_node_count(void) {
     char buf[128];
     unsigned node = 0;
+    size_t skipped = 0;
     for (node = 0; node < 256; node++) {
         // enumerate node entries -- todo: it there a more efficient way to do
         // this? (but ensure there is no allocation)
         _mi_snprintf(buf, 127, "/sys/devices/system/node/node%u", node + 1);
         if (mi_prim_access(buf, R_OK) != 0) {
-            break;
+            skipped++;
+            if (skipped > 4) {
+                break; // allow some sparseness of nodes but not more than 4
+            }
+        } else {
+            skipped = 0; // reset skipped count
         }
     }
     return (node + 1);
@@ -781,33 +796,39 @@ size_t _mi_prim_numa_node_count(void) {
 
 #include <time.h>
 
-#if defined(CLOCK_REALTIME) || defined(CLOCK_MONOTONIC)
-
-mi_msecs_t _mi_prim_clock_now(void) {
-    struct timespec t;
-#ifdef CLOCK_MONOTONIC
-    clock_gettime(CLOCK_MONOTONIC, &t);
-#else
-    clock_gettime(CLOCK_REALTIME, &t);
-#endif
-    return ((mi_msecs_t)t.tv_sec * 1000) + ((mi_msecs_t)t.tv_nsec / 1000000);
-}
-
-#else
-
 // low resolution timer
-mi_msecs_t _mi_prim_clock_now(void) {
-#if !defined(CLOCKS_PER_SEC) || (CLOCKS_PER_SEC == 1000) ||                    \
-    (CLOCKS_PER_SEC == 0)
-    return (mi_msecs_t)clock();
-#elif (CLOCKS_PER_SEC < 1000)
-    return (mi_msecs_t)clock() * (1000 / (mi_msecs_t)CLOCKS_PER_SEC);
+static mi_msecs_t mi_prim_clock_now_lowres(void) {
+    const int64_t ticks = (int64_t)clock();
+#if !defined(CLOCKS_PER_SEC)
+    return ticks;
 #else
-    return (mi_msecs_t)clock() / ((mi_msecs_t)CLOCKS_PER_SEC / 1000);
+    if (CLOCKS_PER_SEC <= 0 || CLOCKS_PER_SEC == 1000) {
+        return ticks;
+    }
+
+    if (CLOCKS_PER_SEC > 0 && CLOCKS_PER_SEC < 1000) {
+        return ticks * (1000 / (mi_msecs_t)CLOCKS_PER_SEC);
+    }
+
+    return ticks / ((mi_msecs_t)CLOCKS_PER_SEC / 1000);
 #endif
 }
 
+mi_msecs_t _mi_prim_clock_now(void) {
+#if defined(CLOCK_REALTIME) || defined(CLOCK_MONOTONIC)
+#ifdef CLOCK_MONOTONIC
+    const clockid_t clockid = CLOCK_MONOTONIC;
+#else
+    const clockid_t clockid = CLOCK_REALTIME;
 #endif
+    struct timespec t;
+    if (clock_gettime(clockid, &t) == 0) {
+        return ((mi_msecs_t)t.tv_sec * 1000) +
+               ((mi_msecs_t)t.tv_nsec / 1000000L);
+    }
+#endif
+    return mi_prim_clock_now_lowres();
+}
 
 //----------------------------------------------------------------
 // Process info
@@ -833,25 +854,32 @@ static mi_msecs_t timeval_secs(const struct timeval *tv) {
 
 void _mi_prim_process_info(mi_process_info_t *pinfo) {
     struct rusage rusage;
-    getrusage(RUSAGE_SELF, &rusage);
-    pinfo->utime = timeval_secs(&rusage.ru_utime);
-    pinfo->stime = timeval_secs(&rusage.ru_stime);
+    if (getrusage(RUSAGE_SELF, &rusage) == 0) {
+        pinfo->utime = timeval_secs(&rusage.ru_utime);
+        pinfo->stime = timeval_secs(&rusage.ru_stime);
 #if !defined(__HAIKU__)
-    pinfo->page_faults = rusage.ru_majflt;
+        pinfo->page_faults = rusage.ru_majflt;
 #endif
+#if defined(__APPLE__)
+        pinfo->peak_rss = rusage.ru_maxrss; // macos reports in bytes
+#else
+        pinfo->peak_rss = rusage.ru_maxrss * 1024; // Linux/BSD report in KiB
+#endif
+    }
+
 #if defined(__HAIKU__)
     // Haiku does not have (yet?) a way to
     // get these stats per process
     thread_info tid;
-    area_info mem;
-    ssize_t c;
-    get_thread_info(find_thread(0), &tid);
-    while (get_next_area_info(tid.team, &c, &mem) == B_OK) {
-        pinfo->peak_rss += mem.ram_size;
+    if (get_thread_info(find_thread(0), &tid) == B_OK) {
+        area_info mem;
+        ssize_t c;
+        while (get_next_area_info(tid.team, &c, &mem) == B_OK) {
+            pinfo->peak_rss += mem.ram_size;
+        }
     }
     pinfo->page_faults = 0;
 #elif defined(__APPLE__)
-    pinfo->peak_rss = rusage.ru_maxrss; // macos reports in bytes
 #ifdef MACH_TASK_BASIC_INFO
     struct mach_task_basic_info info;
     mach_msg_type_number_t infoCount = MACH_TASK_BASIC_INFO_COUNT;
@@ -867,18 +895,13 @@ void _mi_prim_process_info(mi_process_info_t *pinfo) {
         pinfo->current_rss = (size_t)info.resident_size;
     }
 #endif
-#else
-    pinfo->peak_rss = rusage.ru_maxrss * 1024; // Linux/BSD report in KiB
 #endif
     // use defaults for commit
 }
 
 #else
 
-#ifndef __wasi__
-// WebAssembly instances are not processes
 #pragma message("define a way to get process info")
-#endif
 
 void _mi_prim_process_info(mi_process_info_t *pinfo) {
     // use defaults
@@ -930,8 +953,14 @@ bool _mi_prim_getenv(const char *name, char *result, size_t result_size) {
         const char *s = env[i];
         if (_mi_strnicmp(name, s, len) == 0 &&
             s[len] == '=') { // case insensitive
-            // found it
-            _mi_strlcpy(result, s + len + 1, result_size);
+            // found it; reject values that would not fit in `result`
+            // instead of silently truncating them (issue #1271)
+            const char *value = s + len + 1;
+            if (_mi_strnlen(value, result_size) >= result_size) {
+                return false;
+            }
+
+            _mi_strlcpy(result, value, result_size);
             return true;
         }
     }
@@ -1034,7 +1063,11 @@ bool _mi_prim_random_buf(void *buf, size_t buf_len) {
     size_t count = 0;
     while (count < buf_len) {
         ssize_t ret = mi_prim_read(fd, (char *)buf + count, buf_len - count);
-        if (ret <= 0) {
+        if (ret == 0) {
+            break; // end-of-file: do not spin forever
+        }
+
+        if (ret < 0) {
             if (errno != EAGAIN && errno != EINTR) {
                 break;
             }
@@ -1072,7 +1105,14 @@ static void mi_pthread_done(void *value) {
 
 void _mi_prim_thread_init_auto_done(void) {
     mi_assert_internal(_mi_heap_default_key == (pthread_key_t)(-1));
-    pthread_key_create(&_mi_heap_default_key, &mi_pthread_done);
+    const int err = pthread_key_create(&_mi_heap_default_key, &mi_pthread_done);
+    if (err != 0) {
+        _mi_error_message(
+            err,
+            "unable to create a pthread thread local key (error %d (0x%x))",
+            err, err);
+        _mi_heap_default_key = (pthread_key_t)(-1);
+    }
 }
 
 void _mi_prim_thread_done_auto_done(void) {

@@ -197,9 +197,8 @@ static mi_option_desc_t options[_mi_option_last] = {
      MI_OPTION(disallow_arena_alloc)}, // 1 = do not use arena's for allocation
                                        // (except if using specific arena id's)
     {400, UNINIT,
-     MI_OPTION(
-         retry_on_oom)}, // windows only: retry on out-of-memory for N milli
-                         // seconds (=400), set to 0 to disable retries.
+     MI_OPTION(retry_on_oom)}, // retry on out-of-memory for N milli seconds
+                               // (=400), set to 0 to disable retries.
 #if defined(MI_VISIT_ABANDONED)
     {1, INITIALIZED,
      MI_OPTION(
@@ -271,8 +270,7 @@ void mi_options_print(void) mi_attr_noexcept {
     const int vermajor = MI_MALLOC_VERSION / 10000;
     const int verminor = (MI_MALLOC_VERSION % 10000) / 100;
     const int verpatch = (MI_MALLOC_VERSION % 100);
-    _mi_message("v%i.%i.%i%s%s (built on %s, %s)\n", vermajor, verminor,
-                verpatch,
+    _mi_message("v%i.%i.%i%s%s\n", vermajor, verminor, verpatch,
 #if defined(MI_CMAKE_BUILD_TYPE)
                 ", " mi_stringify(MI_CMAKE_BUILD_TYPE)
 #else
@@ -284,8 +282,7 @@ void mi_options_print(void) mi_attr_noexcept {
 #else
                 ""
 #endif
-                    ,
-                __DATE__, __TIME__);
+    );
 
     // show options
     for (int i = 0; i < _mi_option_last; i++) {
@@ -711,8 +708,8 @@ static void mi_error_default(int err) {
     }
 #endif
 #if defined(MI_XMALLOC)
-    if (err == ENOMEM ||
-        err == EOVERFLOW) { // abort on memory allocation fails in xmalloc mode
+    if (err == ENOMEM || err == EOVERFLOW ||
+        err == EINVAL) { // abort on memory allocation fails in xmalloc mode
         abort();
     }
 #endif
@@ -779,11 +776,11 @@ static void mi_option_init(mi_option_desc_t *desc) {
             desc->init = INITIALIZED;
         } else {
             char *end = buf;
+            errno = 0;
             long value = strtol(buf, &end, 10);
-            if (mi_option_has_size_in_kib(desc->option)) {
+            if (errno == 0 && mi_option_has_size_in_kib(desc->option)) {
                 // this option is interpreted in KiB to prevent overflow of
-                // `long` for large allocations (long is 32-bit on 64-bit
-                // windows, which allows for 4TiB max.)
+                // `long` for large allocations
                 size_t size = (value < 0 ? 0 : (size_t)value);
                 bool overflow = false;
                 if (*end == 'K') {
@@ -811,7 +808,7 @@ static void mi_option_init(mi_option_desc_t *desc) {
                 }
                 value = (size > LONG_MAX ? LONG_MAX : (long)size);
             }
-            if (*end == 0) {
+            if (errno == 0 && *end == 0) {
                 mi_option_set(desc->option, value);
             } else {
                 // set `init` first to avoid recursion through

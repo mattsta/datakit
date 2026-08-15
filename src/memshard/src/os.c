@@ -42,8 +42,7 @@ static mi_os_mem_config_t mi_os_mem_config = {
     MI_DEFAULT_PHYSICAL_MEMORY_IN_KIB, MI_DEFAULT_VIRTUAL_ADDRESS_BITS,
     true,  // has overcommit?  (if true we use MAP_NORESERVE on mmap systems)
     false, // can we partially free allocated blocks? (on mmap systems we can
-           // free anywhere in a mapped range, but on Windows we must free the
-           // entire span)
+           // free anywhere in a mapped range)
     true   // has virtual reserve? (if true we can reserve virtual address space
            // without using commit or physical memory)
 };
@@ -122,15 +121,13 @@ static mi_decl_cache_align _Atomic(uintptr_t) aligned_base;
 // Return a MI_SEGMENT_SIZE aligned address that is probably available.
 // If this returns NULL, the OS will determine the address but on some OS's that
 // may not be properly aligned which can be more costly as it needs to be
-// adjusted afterwards. For a size > 1GiB this always returns NULL in order to
-// guarantee good ASLR randomization; (otherwise an initial large allocation of
-// say 2TiB has a 50% chance to include (known) addresses
+// adjusted afterwards. In secure mode, for a size > 1GiB this always returns
+// NULL in order to guarantee good ASLR randomization; (otherwise an initial
+// large allocation of say 2TiB has a 50% chance to include (known) addresses
 //  in the middle of the 2TiB - 6TiB address range (see issue #372))
 
 #define MI_HINT_BASE ((uintptr_t)2 << 40) // 2TiB start
-#define MI_HINT_AREA                                                           \
-    ((uintptr_t)4 << 40) // upto (2+4) 6TiB  (since before win8 there is "only"
-                         // 8TiB available to processes)
+#define MI_HINT_AREA ((uintptr_t)4 << 40) // upto (2+4) 6TiB
 #define MI_HINT_MAX                                                            \
     ((uintptr_t)30                                                             \
      << 40) // wrap after 30TiB (area after 32TiB is used for huge OS pages)
@@ -143,10 +140,12 @@ void *_mi_os_get_aligned_hint(size_t try_alignment, size_t size) {
         return NULL; // < 64TiB virtual address space
     }
     size = _mi_align_up(size, MI_SEGMENT_SIZE);
+#if (MI_SECURE > 0)
     if (size > 1 * MI_GiB) {
         return NULL; // guarantee the chance of fixed valid address is at most
                      // 1/(MI_HINT_AREA / 1<<30) = 1/4096.
     }
+#endif
     size += MI_SEGMENT_SIZE; // put in `MI_SEGMENT_SIZE` virtual gaps between
                              // hinted blocks; this splits VLA's but increases
                              // guarded areas.
@@ -328,7 +327,7 @@ static void *mi_os_prim_alloc_aligned(size_t size, size_t alignment,
     size = _mi_align_up(size, _mi_os_page_size());
 
     // try first with a requested alignment hint (this will usually be aligned
-    // directly on Win 10+ or BSD)
+    // directly on BSD)
     bool os_is_large = false;
     bool os_is_zero = false;
     void *os_base = NULL;
@@ -358,9 +357,8 @@ static void *mi_os_prim_alloc_aligned(size_t size, size_t alignment,
         }
         const size_t over_size = size + alignment;
 
-        if (!mi_os_mem_config
-                 .has_partial_free) { // win32 virtualAlloc cannot free parts of
-                                      // an allocated block
+        if (!mi_os_mem_config.has_partial_free) { // the platform cannot free
+                                                  // parts of an allocated block
             // over-allocate uncommitted (virtual) memory
             p = mi_os_prim_alloc(over_size, 1 /*alignment*/,
                                  false /* commit? */, false /* allow_large */,
@@ -370,11 +368,12 @@ static void *mi_os_prim_alloc_aligned(size_t size, size_t alignment,
             }
 
             // set p to the aligned part in the full region
-            // note: this is dangerous on Windows as VirtualFree needs the
-            // actual base pointer this is handled though by having the `base`
-            // field in the memid's
+            // note: the unaligned base pointer is still required for the free,
+            // which is handled by having the `base` field in the memid's
             os_base = p; // remember the base
-            os_size = over_size;
+            // note: 'size' and not 'over_size' as otherwise we over-decrement
+            // the commit stats on free
+            os_size = size;
             p = _mi_align_up_ptr(p, alignment);
 
             // explicitly commit only the aligned part
@@ -777,7 +776,11 @@ static uint8_t *mi_os_claim_huge_pages(size_t pages, size_t *total_size) {
     if (total_size != NULL) {
         *total_size = 0;
     }
-    const size_t size = pages * MI_HUGE_OS_PAGE_SIZE;
+    size_t size = 0;
+    if (mi_mul_overflow(pages, MI_HUGE_OS_PAGE_SIZE, &size)) {
+        _mi_warning_message("too many huge pages requested: %zu\n", pages);
+        return NULL;
+    }
 
     uintptr_t start = 0;
     uintptr_t end = 0;
@@ -877,7 +880,8 @@ void *_mi_os_alloc_huge_os_pages(size_t pages, int numa_node,
         if (max_msecs > 0) {
             mi_msecs_t elapsed = _mi_clock_end(start_t);
             if (page >= 1) {
-                mi_msecs_t estimate = ((elapsed / (page + 1)) * pages);
+                mi_msecs_t estimate =
+                    ((elapsed / (page == 0 ? 1 : page)) * pages);
                 if (estimate > 2 * max_msecs) { // seems like we are going to
                                                 // timeout, break
                     elapsed = max_msecs + 1;
@@ -915,8 +919,7 @@ void *_mi_os_alloc_huge_os_pages(size_t pages, int numa_node,
 }
 
 // free every huge page in a range individually (as we allocated per page)
-// note: needed with VirtualAlloc but could potentially be done in one go on
-// mmap'd systems.
+// note: could potentially be done in one go on mmap'd systems.
 static void mi_os_free_huge_os_pages(void *p, size_t size) {
     if (p == NULL || size == 0) {
         return;

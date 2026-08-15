@@ -13,7 +13,7 @@ threads and need to be accessed using atomic operations.
 
 Arenas are also used to for huge OS page (1GiB) reservations or for reserving
 OS memory upfront which can be improve performance or is sometimes needed
-on embedded devices. We can also employ this with WASI or `sbrk` systems
+on embedded devices. We can also employ this with `sbrk` systems
 to reserve large arenas upfront and be able to reuse the memory more
 effectively.
 
@@ -879,8 +879,8 @@ void _mi_arena_free(void *p, size_t size, size_t committed_size,
         if (arena == NULL) {
             _mi_error_message(EINVAL,
                               "trying to free from an invalid arena: %p, size "
-                              "%zu, memid: 0x%zx\n",
-                              p, size, memid);
+                              "%zu, memkind: 0x%x\n",
+                              p, size, memid.memkind);
             return;
         }
         mi_assert_internal(arena->field_count >
@@ -888,8 +888,8 @@ void _mi_arena_free(void *p, size_t size, size_t committed_size,
         if (arena->field_count <= mi_bitmap_index_field(bitmap_idx)) {
             _mi_error_message(EINVAL,
                               "trying to free from an invalid arena block: %p, "
-                              "size %zu, memid: 0x%zx\n",
-                              p, size, memid);
+                              "size %zu, memkind: 0x%x\n",
+                              p, size, memid.memkind);
             return;
         }
 
@@ -1044,6 +1044,13 @@ static bool mi_manage_os_memory_ex2(void *start, size_t size, bool is_large,
             size);
         return false;
     }
+    if (size > MI_MAX_ALLOC_SIZE) {
+        _mi_error_message(
+            EOVERFLOW,
+            "the arena size is too large (memory at %p with size %zu)\n", start,
+            size);
+        return false;
+    }
     if (is_large) {
         mi_assert_internal(memid.initially_committed && memid.is_pinned);
     }
@@ -1139,7 +1146,15 @@ int mi_reserve_os_memory_ex(size_t size, bool commit, bool allow_large,
     if (arena_id != NULL) {
         *arena_id = _mi_arena_id_none();
     }
-    size = _mi_align_up(size, MI_ARENA_BLOCK_SIZE); // at least one block
+    if (size < MI_MAX_ALLOC_SIZE) {
+        size = _mi_align_up(size, MI_ARENA_BLOCK_SIZE); // at least one block
+    }
+    if (size > MI_MAX_ALLOC_SIZE) {
+        _mi_error_message(
+            EOVERFLOW, "memory reservation request is too large (size %zu)\n",
+            size);
+        return ENOMEM;
+    }
     mi_memid_t memid;
     void *start = _mi_os_alloc_aligned(size, MI_SEGMENT_ALIGN, commit,
                                        allow_large, &memid);

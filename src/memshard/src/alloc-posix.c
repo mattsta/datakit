@@ -54,13 +54,10 @@ int mi_posix_memalign(void **p, size_t alignment,
     if (p == NULL) {
         return EINVAL;
     }
-    if ((alignment % sizeof(void *)) != 0) {
-        return EINVAL; // natural alignment
-    }
-    // it is also required that alignment is a power of 2 and > 0; this is
-    // checked in `mi_malloc_aligned`
-    if (alignment == 0 || !_mi_is_power_of_two(alignment)) {
-        return EINVAL; // not a power of 2
+    // it is required that alignment is a power of 2 and a multiple of
+    // sizeof(void*)
+    if (alignment < sizeof(void *) || !_mi_is_power_of_two(alignment)) {
+        return EINVAL; // not a valid alignment
     }
     void *q = mi_malloc_aligned(size, alignment);
     if (q == NULL && size != 0) {
@@ -142,7 +139,7 @@ mi_decl_nodiscard int mi_reallocarr(void *ptrp, size_t count, size_t size)
     }
     void **op = (void **)ptrp;
     if (total == 0) {
-        free(*op);
+        mi_free(*op);
         *op = NULL;
         return 0;
     } else {

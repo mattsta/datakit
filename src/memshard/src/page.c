@@ -91,16 +91,13 @@ static bool mi_page_is_valid_init(mi_page_t *page) {
     mi_assert_internal(page->used <= page->capacity);
     mi_assert_internal(page->capacity <= page->reserved);
 
-    // [specbot P-NEW-1] block_size_shift must be consistent with block_size
-    // (L1, O(1))
+    // block_size_shift must be consistent with block_size
     mi_assert_internal(
         page->block_size_shift == 0 ||
         (mi_page_block_size(page) == ((size_t)1 << page->block_size_shift)));
-    // [specbot P-NEW-2] capacity must be nonzero when blocks are in use (L1,
-    // O(1))
+    // capacity must be nonzero when blocks are in use
     mi_assert_internal(page->used == 0 || page->capacity > 0);
-    // [specbot P-NEW-4] page_start must be non-null when capacity > 0 (L1,
-    // O(1))
+    // page_start must be non-null when capacity > 0
     mi_assert_internal(page->capacity == 0 || mi_page_start(page) != NULL);
 
     uint8_t *start = mi_page_start(page);
@@ -113,8 +110,7 @@ static bool mi_page_is_valid_init(mi_page_t *page) {
     mi_assert_internal(mi_page_list_is_valid(page, page->free));
     mi_assert_internal(mi_page_list_is_valid(page, page->local_free));
 
-    // [specbot P-NEW-7] All free list blocks are aligned to block_size (L2,
-    // O(n))
+    // all free list blocks are aligned to block_size
     {
         size_t bsize = mi_page_block_size(page);
         uint8_t *pstart = mi_page_start(page);
@@ -164,7 +160,7 @@ bool _mi_page_is_valid(mi_page_t *page) {
     if (mi_page_heap(page) != NULL) {
         mi_segment_t *segment = _mi_page_segment(page);
 
-        // [specbot P-NEW-6] heap_tag must match owning heap's tag (L1, O(1))
+        // heap_tag must match the owning heap's tag
         mi_assert_internal(page->heap_tag == mi_page_heap(page)->tag);
 
         mi_assert_internal(!_mi_process_is_initialized ||
@@ -189,8 +185,9 @@ bool _mi_page_is_valid(mi_page_t *page) {
 
 void _mi_page_use_delayed_free(mi_page_t *page, mi_delayed_t delay,
                                bool override_never) {
+    size_t ticks = 0;
     while (!_mi_page_try_use_delayed_free(page, delay, override_never)) {
-        mi_atomic_yield();
+        mi_atomic_yield_sleep(&ticks, 10);
     }
 }
 
@@ -261,7 +258,10 @@ static void _mi_page_thread_free_collect(mi_page_t *page) {
     // if `count > max_count` there was a memory corruption (possibly infinite
     // list due to double multi-threaded free)
     if mi_unlikely (count > max_count) {
-        _mi_error_message(EFAULT, "corrupted thread-free list\n");
+        _mi_error_message(
+            EFAULT,
+            "corrupted thread-free list (possibly due to a cross-thread double "
+            "free)\n");
         return; // the thread-free items cannot be freed
     }
     // if `count > page->used` there was another kind memory corruption (either
@@ -393,8 +393,9 @@ static mi_page_t *mi_page_fresh(mi_heap_t *heap, mi_page_queue_t *pq) {
    (put there by other threads if they deallocated in a full page)
 ----------------------------------------------------------- */
 void _mi_heap_delayed_free_all(mi_heap_t *heap) {
+    size_t ticks = 0;
     while (!_mi_heap_delayed_free_partial(heap)) {
-        mi_atomic_yield();
+        mi_atomic_yield_sleep(&ticks, 10);
     }
 }
 
@@ -546,8 +547,6 @@ void _mi_page_free(mi_page_t *page, mi_page_queue_t *pq, bool force) {
     _mi_segment_page_free(page, force, segments_tld);
 }
 
-#define MI_MAX_RETIRE_SIZE                                                     \
-    MI_MEDIUM_OBJ_SIZE_MAX // should be less than size for MI_BIN_HUGE
 #define MI_RETIRE_CYCLES (16)
 
 // Retire a page with no more used blocks
@@ -646,7 +645,7 @@ static void mi_page_free_list_extend_secure(mi_heap_t *const heap,
                                             const size_t extend,
                                             mi_stats_t *const stats) {
     MI_UNUSED(stats);
-#if (MI_SECURE <= 2)
+#if (MI_SECURE < 2)
     mi_assert_internal(page->free == NULL);
     mi_assert_internal(page->local_free == NULL);
 #endif
@@ -716,7 +715,7 @@ static mi_decl_noinline void mi_page_free_list_extend(mi_page_t *const page,
                                                       const size_t extend,
                                                       mi_stats_t *const stats) {
     MI_UNUSED(stats);
-#if (MI_SECURE <= 2)
+#if (MI_SECURE < 2)
     mi_assert_internal(page->free == NULL);
     mi_assert_internal(page->local_free == NULL);
 #endif
@@ -761,7 +760,7 @@ static mi_decl_noinline void mi_page_free_list_extend(mi_page_t *const page,
 static bool mi_page_extend_free(mi_heap_t *heap, mi_page_t *page,
                                 mi_tld_t *tld) {
     mi_assert_expensive(mi_page_is_valid_init(page));
-#if (MI_SECURE <= 2)
+#if (MI_SECURE < 2)
     mi_assert(page->free == NULL);
     mi_assert(page->local_free == NULL);
     if (page->free != NULL) {
