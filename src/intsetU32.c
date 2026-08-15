@@ -13,6 +13,10 @@ uint32_t *intsetU32Array(intsetU32 *is) {
     return is->contents;
 }
 
+/* The element buffer is a SEPARATE allocation reached through the handle;
+ * an empty set carries a NULL buffer.  See intsetU32.h for the stable-handle
+ * invariant these helpers uphold. */
+
 /* Set the value at pos, using the configured encoding. */
 DK_INLINE_ALWAYS void intsetU32Set_(intsetU32 *is, size_t pos,
                                     uint_fast32_t value) {
@@ -26,34 +30,45 @@ intsetU32 *intsetU32New(void) {
 }
 
 intsetU32 *intsetU32NewLen(const uint32_t len) {
-    intsetU32 *is = zcalloc(1, sizeof(intsetU32) + (sizeof(uint32_t) * len));
+    intsetU32 *is = zcalloc(1, sizeof(*is));
+    if (len) {
+        is->contents = zcalloc(len, sizeof(uint32_t));
+    }
     return is;
 }
 
 void intsetU32Free(intsetU32 *is) {
     if (is) {
+        zfree(is->contents);
         zfree(is);
     }
 }
 
 intsetU32 *intsetU32Copy(const intsetU32 *is) {
-    const size_t totalSize = intsetU32Bytes(is);
-    intsetU32 *result = zmalloc(totalSize);
-    memcpy(result, is, totalSize);
+    intsetU32 *result = zcalloc(1, sizeof(*result));
+    result->count = is->count;
+    if (is->count) {
+        const size_t bufBytes = sizeof(uint32_t) * is->count;
+        result->contents = zmalloc(bufBytes);
+        memcpy(result->contents, is->contents, bufBytes);
+    }
     return result;
 }
 
-/* Resize the intsetU32 */
-void intsetU32Resize(intsetU32 **is, const uint32_t len) {
-    /* TODO: if we are adding many sequential positions, should we
-     *       just grow the intsetU32 struct so it has a 'total length'
-     *       field so we can perform bulk allocations and continue
-     *       writing until count==totalLength, *then* realloc again? */
-    *is = zrealloc(*is, sizeof(intsetU32) + (sizeof(uint32_t) * len));
+/* Resize the element buffer to hold 'len' slots.  Reallocates the buffer
+ * behind the stable handle — the handle pointer itself never changes.
+ * 'len' == 0 releases the buffer (empty set carries a NULL buffer). */
+void intsetU32Resize(intsetU32 *is, const uint32_t len) {
+    if (len == 0) {
+        zfree(is->contents);
+        is->contents = NULL;
+        return;
+    }
+    is->contents = zrealloc(is->contents, sizeof(uint32_t) * len);
 }
 
-void intsetU32ShrinkToSize(intsetU32 **is) {
-    *is = zrealloc(*is, sizeof(intsetU32) + (sizeof(uint32_t) * (*is)->count));
+void intsetU32ShrinkToSize(intsetU32 *is) {
+    intsetU32Resize(is, is->count);
 }
 
 void intsetU32UpdateCount(intsetU32 *is, const uint32_t len) {
@@ -132,40 +147,42 @@ static void intsetU32MoveTail(intsetU32 *is, uint32_t from, uint32_t to) {
 /* Insert an integer in the intsetU32 */
 /* Returns 'true' if element is added as new.
  * Returns 'false' if element already existed. */
-bool intsetU32Add(intsetU32 **is, uint32_t value) {
+bool intsetU32Add(intsetU32 *is, uint32_t value) {
     uint32_t pos;
 
     /* Abort if the value is already present in the set.
      * This call will populate "pos" with the right position to insert
      * the value when it cannot be found. */
-    if (intsetU32Search(*is, value, &pos)) {
+    if (intsetU32Search(is, value, &pos)) {
         return false;
     }
 
-    intsetU32Resize(is, (*is)->count + 1);
-    if (pos < (*is)->count) {
-        intsetU32MoveTail(*is, pos, pos + 1);
+    intsetU32Resize(is, is->count + 1);
+    if (pos < is->count) {
+        intsetU32MoveTail(is, pos, pos + 1);
     }
 
-    intsetU32Set_(*is, pos, value);
-    (*is)->count++;
+    intsetU32Set_(is, pos, value);
+    is->count++;
     return true;
 }
 
 /* Delete integer from intsetU32 */
-bool intsetU32Remove(intsetU32 **is, uint32_t value) {
+bool intsetU32Remove(intsetU32 *is, uint32_t value) {
     uint32_t pos;
 
-    if (intsetU32Search(*is, value, &pos)) {
-        uint32_t len = (*is)->count;
+    if (intsetU32Search(is, value, &pos)) {
+        uint32_t len = is->count;
 
         /* Overwrite value with tail and update count */
         if (pos < (len - 1)) {
-            intsetU32MoveTail(*is, pos + 1, pos);
+            intsetU32MoveTail(is, pos + 1, pos);
         }
 
+        /* Update count BEFORE shrinking: Resize(0) frees the buffer, and
+         * MoveTail above already consumed the pre-shrink count. */
+        is->count = len - 1;
         intsetU32Resize(is, len - 1);
-        (*is)->count = len - 1;
 
         return true;
     }
@@ -207,7 +224,7 @@ bool intsetU32Subset(const intsetU32 *const a, const intsetU32 *const b) {
     return true;
 }
 
-uint32_t intsetU32Merge(intsetU32 **dst, const intsetU32 *b) {
+uint32_t intsetU32Merge(intsetU32 *dst, const intsetU32 *b) {
     uint32_t merged = 0;
     for (size_t i = 0; i < b->count; i++) {
         merged += intsetU32Add(dst, b->contents[i]);
@@ -221,8 +238,8 @@ uint32_t intsetU32Random(intsetU32 *is) {
     return intsetU32Get_(is, random() % is->count);
 }
 
-bool intsetU32RandomDelete(intsetU32 **is, uint32_t *deleted) {
-    *deleted = intsetU32Random(*is);
+bool intsetU32RandomDelete(intsetU32 *is, uint32_t *deleted) {
+    *deleted = intsetU32Random(is);
     return intsetU32Remove(is, *deleted);
 }
 
@@ -288,7 +305,7 @@ static intsetU32 *createSet(int bits, int size) {
             value = random() & mask;
         }
 
-        intsetU32Add(&is, value);
+        intsetU32Add(is, value);
     }
 
     return is;
@@ -305,16 +322,16 @@ int intsetU32Test(int argc, char **argv) {
     {
         is = intsetU32New();
         intsetU32Assert(is);
-        const bool s1 = intsetU32Add(&is, 5);
+        const bool s1 = intsetU32Add(is, 5);
         intsetU32Assert(is);
         intsetU32Assert(s1);
-        const bool s2 = intsetU32Add(&is, 6);
+        const bool s2 = intsetU32Add(is, 6);
         intsetU32Assert(is);
         intsetU32Assert(s2);
-        const bool s3 = intsetU32Add(&is, 4);
+        const bool s3 = intsetU32Add(is, 4);
         intsetU32Assert(is);
         intsetU32Assert(s3);
-        const bool s4 = intsetU32Add(&is, 4);
+        const bool s4 = intsetU32Add(is, 4);
         intsetU32Assert(is);
         intsetU32Assert(!s4);
         ok();
@@ -325,7 +342,7 @@ int intsetU32Test(int argc, char **argv) {
         uint32_t inserts = 0;
         is = intsetU32New();
         for (int i = 0; i < 1024; i++) {
-            if (intsetU32Add(&is, random() % 0x800)) {
+            if (intsetU32Add(is, random() % 0x800)) {
                 inserts++;
             }
         }
@@ -337,14 +354,14 @@ int intsetU32Test(int argc, char **argv) {
     printf("Upgrade from int16 to int32: ");
     {
         is = intsetU32New();
-        intsetU32Add(&is, 32);
-        intsetU32Add(&is, 65535);
+        intsetU32Add(is, 32);
+        intsetU32Add(is, 65535);
         intsetU32Assert(intsetU32Exists(is, 32));
         intsetU32Assert(intsetU32Exists(is, 65535));
 
         is = intsetU32New();
-        intsetU32Add(&is, 32);
-        intsetU32Add(&is, -65535);
+        intsetU32Add(is, 32);
+        intsetU32Add(is, -65535);
         intsetU32Assert(intsetU32Exists(is, 32));
         intsetU32Assert(intsetU32Exists(is, -65535));
         ok();
@@ -371,11 +388,11 @@ int intsetU32Test(int argc, char **argv) {
         is = intsetU32New();
         for (i = 0; i < 0xffff; i++) {
             v1 = random() % 0xfff;
-            intsetU32Add(&is, v1);
+            intsetU32Add(is, v1);
             intsetU32Assert(intsetU32Exists(is, v1));
 
             v2 = random() % 0xfff;
-            intsetU32Remove(&is, v2);
+            intsetU32Remove(is, v2);
             intsetU32Assert(!intsetU32Exists(is, v2));
         }
 

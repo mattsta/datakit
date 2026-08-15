@@ -4,28 +4,45 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* STABLE OUTER HANDLE.
+ *
+ * The handle (`intsetU32 *`) is a fixed-size header; the element buffer
+ * lives in a SEPARATELY heap-allocated block reached through `contents`.
+ * Growth and shrink (Add / Remove / Resize / ShrinkToSize / RandomDelete)
+ * reallocate `contents` IN PLACE and NEVER relocate the handle itself.
+ *
+ * INVARIANT: a pointer to an intsetU32 stays valid across any in-place
+ * mutation.  A holder of the handle (the keyspace value slot, a captured
+ * ZVM key databox, a deferred persist snapshot reading it later on another
+ * thread) may therefore keep the SAME pointer across mutations — the buffer
+ * moves underneath the handle, but the handle does not.  This is the same
+ * stable-outer-handle contract intsetBig exposes (its {multimap*;count}
+ * header never moves while its buckets grow).
+ *
+ * Because the handle never moves, the mutators take `intsetU32 *` (not
+ * `intsetU32 **`): there is no new handle to hand back. */
 typedef struct intsetU32 {
     uint32_t count;
-    uint32_t contents[];
+    uint32_t *contents;
 } intsetU32;
 
 intsetU32 *intsetU32New(void);
 intsetU32 *intsetU32NewLen(const uint32_t len);
 intsetU32 *intsetU32Copy(const intsetU32 *is);
 uint32_t *intsetU32Array(intsetU32 *is);
-void intsetU32Resize(intsetU32 **is, uint32_t len);
-void intsetU32ShrinkToSize(intsetU32 **is);
+void intsetU32Resize(intsetU32 *is, uint32_t len);
+void intsetU32ShrinkToSize(intsetU32 *is);
 void intsetU32UpdateCount(intsetU32 *is, uint32_t len);
 void intsetU32Free(intsetU32 *is);
-bool intsetU32Add(intsetU32 **is, uint32_t value);
-bool intsetU32Remove(intsetU32 **is, uint32_t value);
-uint32_t intsetU32Merge(intsetU32 **dst, const intsetU32 *b);
+bool intsetU32Add(intsetU32 *is, uint32_t value);
+bool intsetU32Remove(intsetU32 *is, uint32_t value);
+uint32_t intsetU32Merge(intsetU32 *dst, const intsetU32 *b);
 bool intsetU32Exists(const intsetU32 *is, uint32_t value);
 bool intsetU32Equal(const intsetU32 *a, const intsetU32 *b);
 bool intsetU32Subset(const intsetU32 *a, const intsetU32 *b);
 bool intsetU32Get(const intsetU32 *is, uint32_t pos, uint32_t *value);
 uint32_t intsetU32Random(intsetU32 *is);
-bool intsetU32RandomDelete(intsetU32 **is, uint32_t *deleted);
+bool intsetU32RandomDelete(intsetU32 *is, uint32_t *deleted);
 size_t intsetU32Count(const intsetU32 *is);
 size_t intsetU32Bytes(const intsetU32 *is);
 

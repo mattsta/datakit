@@ -333,12 +333,12 @@ bool intsetBigAdd(intsetBig *isb, const databoxBig *val) {
     /* Create lookup/storage criteria and attempt to fetch a set */
     if (setFromInput(isb, val, &offset, &isNegative, &lookup, &found)) {
         orig = boxPtrToU32(found);
-        added = intsetU32Add(boxPPtrToU32(found), offset);
+        added = intsetU32Add(boxPtrToU32(found), offset);
     } else {
         /* Existing bucket not found, so create a new set and add it */
         found.type = DATABOX_PTR;
         found.data.ptr = intsetU32NewLen(1);
-        added = intsetU32Add(boxPPtrToU32(found), offset);
+        added = intsetU32Add(boxPtrToU32(found), offset);
 
         /* 'added' must be true here because we're inserting into empty set */
         assert(added);
@@ -380,7 +380,7 @@ bool intsetBigRemove(intsetBig *isb, const databoxBig *val) {
     /* Create lookup/storage criteria and attempt to fetch a set */
     if (setFromInput(isb, val, &offset, &isNegative, &lookup, &found)) {
         orig = boxPtrToU32(found);
-        removed = intsetU32Remove(boxPPtrToU32(found), offset);
+        removed = intsetU32Remove(boxPtrToU32(found), offset);
         if (removed) {
             isb->count--;
 
@@ -654,7 +654,7 @@ size_t intsetBigIntersect(const intsetBig *a, const intsetBig *b,
             /* Resize and update metdata of 'tmpU32' */
             intsetU32UpdateCount(tmpU32, intersectedCount);
 #if 1
-            intsetU32ShrinkToSize(&tmpU32);
+            intsetU32ShrinkToSize(tmpU32);
 #endif
 
             /* Increment total incremented count for return value */
@@ -729,7 +729,7 @@ void intsetBigMergeInto(intsetBig *a, const intsetBig *b) {
             const intsetU32 *orig = eaai;
 
             /* Perform merge of b[bucket] into a[bucket] */
-            a->count += intsetU32Merge(&eaai, ebbi);
+            a->count += intsetU32Merge(eaai, ebbi);
 
             /* If 'eaai' moved, we need to update the result map */
             if (orig != eaai) {

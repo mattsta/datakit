@@ -379,7 +379,7 @@ bool timerWheelUnregister(timerWheel *tw, timerWheelId id) {
     }
 
     /* Add to cancelled set */
-    bool success = intsetU32Add(&tw->cancelledTimers, (uint32_t)id);
+    bool success = intsetU32Add(tw->cancelledTimers, (uint32_t)id);
 
     if (success) {
         tw->stats.totalCancellations++;
@@ -431,7 +431,7 @@ static bool isTimerCancelled(const timerWheel *tw, timerWheelId id) {
 }
 
 static void removeCancelledTimer(timerWheel *tw, timerWheelId id) {
-    bool success = intsetU32Remove(&tw->cancelledTimers, (uint32_t)id);
+    bool success = intsetU32Remove(tw->cancelledTimers, (uint32_t)id);
 
     size_t count = intsetU32Count(tw->cancelledTimers);
     if (success && count > 0) {
