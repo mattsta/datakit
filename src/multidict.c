@@ -697,6 +697,13 @@ bool multidictExpand(multidict *d, uint64_t newSlots) {
     }
 
     n.table = zcalloc(1, n.size * sizeof(*n.table));
+    if (!n.table) {
+        /* OOM: fail the expand cleanly rather than install a NULL table and set
+         * rehashing — that would defer the failure into a corrupt half-rehash
+         * state (NULL ht with rehashing=true). Rehash/grow is best-effort, so
+         * returning false here is safe; callers tolerate it. */
+        return false;
+    }
 
     /* If first Expand of this multidictionary, initialize HT 0 */
     if (d->ht[0].table == NULL) {
@@ -730,6 +737,13 @@ bool multidictRehash(multidict *d, int32_t n) {
     }
 
     multidictClass *shared = d->shared;
+
+    /* Max empty (NULL) slots to skip across this whole call, scaled by the
+     * requested step count. Computed ONCE from the original n: using the
+     * post-decrement loop counter made this 0 for single-step calls, so the
+     * emptyVisits-- below wrapped to UINT32_MAX and disabled the work cap. */
+    uint32_t emptyVisits = (uint32_t)(n > 0 ? n : 1) * 5u;
+
     while (n-- > 0 && HTCOUNT(d, 0) > 0) {
         /* rehashidx must never grow above HTSIZE-1 */
         assert(d->rehashidx < HTSIZE(d, 0));
@@ -738,7 +752,6 @@ bool multidictRehash(multidict *d, int32_t n) {
          * If we have large ranges of NULL slots, we want to jump past
          * them as efficiently as possible instead of needing to call
          * this function over and over again just to do nothing. */
-        uint32_t emptyVisits = n * 5; /* Max empty slots to visit. */
         multidictSlot *current;
         while ((current = SLOT(d, 0, d->rehashidx)) == NULL) {
             d->rehashidx++;
@@ -6413,6 +6426,67 @@ int multidictTest(int argc, char *argv[]) {
     }
 
     printf("=== Byte-based expansion tests passed! ===\n");
+
+    /* ================================================================
+     * Regression: single-step incremental rehash through a sparse table
+     * ================================================================
+     * multidictRehash() computed its empty-slot work cap from the
+     * POST-decrement loop counter, so a single-step rehash (n=1 -> n=0 in
+     * the body) set emptyVisits=0 and the `emptyVisits--` wrapped to
+     * UINT32_MAX, disabling the cap entirely. This drives many single steps
+     * over a populated-then-sparsified table (lots of NULL slot runs in HT0
+     * mid-rehash) and verifies the rehash terminates and preserves data. */
+    printf("--- Section: single-step rehash sparse-table regression ---\n");
+    {
+        enum { N = 4000 };
+        multidict *r = multidictNew(&multidictTypeExactKey, qdc, 0xABCDEF);
+        assert(r != NULL);
+
+        char kb[32];
+        for (int i = 0; i < N; i++) {
+            snprintf(kb, sizeof(kb), "rk:%d", i);
+            databox key = databoxNewBytesString(kb);
+            databox val = databoxNewUnsigned((uint64_t)i);
+            multidictAdd(r, &key, &val);
+        }
+        assert(multidictSize(r) == N);
+
+        /* Delete the odd keys to scatter NULL runs through the old table. */
+        for (int i = 1; i < N; i += 2) {
+            snprintf(kb, sizeof(kb), "rk:%d", i);
+            databox key = databoxNewBytesString(kb);
+            assert(multidictDelete(r, &key) == true);
+        }
+        assert(multidictSize(r) == N / 2);
+
+        /* Drain any active rehash one bucket at a time — the exact path that
+         * underflowed. Bounded loop so a regression (failure to terminate)
+         * fails loudly instead of hanging the suite. */
+        int guard = 0;
+        while (multidictRehash(r, 1)) {
+            /* Bounded so a regression (non-termination) fails loudly rather
+             * than hanging the suite. */
+            assert(++guard <= 16 * N &&
+                   "single-step rehash did not terminate (emptyVisits "
+                   "underflow regression)");
+        }
+
+        /* Integrity: every even key present with its value, every odd gone. */
+        for (int i = 0; i < N; i++) {
+            snprintf(kb, sizeof(kb), "rk:%d", i);
+            databox key = databoxNewBytesString(kb);
+            databox found;
+            if (i % 2 == 0) {
+                assert(multidictFind(r, &key, &found) == true);
+                assert(found.data.u == (uint64_t)i);
+            } else {
+                assert(multidictFind(r, &key, &found) == false);
+            }
+        }
+        assert(multidictSize(r) == N / 2);
+        multidictFree(r);
+        printf("=== single-step rehash regression passed! ===\n");
+    }
 
     /* ================================================================
      * Cleanup

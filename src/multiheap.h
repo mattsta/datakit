@@ -3,9 +3,28 @@
 #include "multimap.h"
 #include <assert.h>
 
-/* multiheap is a multimap of {key -> bytes} mappings */
+/* multiheap is a multimap of {key -> bytes} mappings.
+ *
+ * MAP MODE IS LOAD-BEARING, NOT A STYLE CHOICE.  A multiheap slot must
+ * behave as "save = overwrite this ref's value" (last write wins),
+ * because every reader (multiheapReadByKey below) looks the slot up by
+ * KEY ONLY.  Map mode gives exactly that: key-only compare, found =>
+ * replace the value in place (multimapSmall.c: "Maps (!mapIsSet):
+ * key-only compare, found => replace values").
+ *
+ * This was `multimapSetNew` — SET mode — which compares FULL WIDTH
+ * {key,value}, so re-saving a ref with a CHANGED value appended a
+ * SECOND row for that ref instead of replacing it.  The key-only
+ * reader then returned whichever duplicate the sorted search landed
+ * on, and because these values are raw little-endian integers stored
+ * as DATABOX_BYTES, "sorted" is memcmp order — numerically scrambled
+ * (extent=1500 sorts BEFORE extent=500).  A reader that saved
+ * yield-resume state more than once therefore restored a STALE value
+ * and could never converge: any iteration long enough to yield more
+ * than twice resumed from the stale cursor forever and never
+ * terminated. */
 typedef multimap multiheap;
-#define multiheapNew() (multiheap *)multimapSetNew(2)
+#define multiheapNew() (multiheap *)multimapNew(2)
 #define multiheapFree(mh) multimapFree(mh)
 
 #define multiheapInsert(heap, ref, obj)                                        \

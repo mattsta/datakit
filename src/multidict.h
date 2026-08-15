@@ -165,7 +165,8 @@ typedef struct multidictIterator {
     bool safe;
 } multidictIterator;
 
-/* databox = 20 bytes; 3 * databox = 60 byte total struct */
+/* databox = 16 bytes (static-asserted in databox.h); 3 * databox = 48-byte
+ * struct, no padding — already optimal, don't "fix" it. */
 typedef struct multidictEntry {
     /* used to have 'iterator' here, but... it wasn't used. */
     databox key;

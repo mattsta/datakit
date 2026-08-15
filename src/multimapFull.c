@@ -581,7 +581,12 @@ flex *multimapFullDump(const multimapFull *m) {
     if (m->count <= COUNT_ARRAY(localMaps)) {
         useMaps = localMaps;
     } else {
-        useMaps = zcalloc(1, m->count);
+        /* An array of m->count POINTERS — the element size must be
+         * sizeof(*useMaps), not 1: allocating m->count BYTES here
+         * under-allocated 8x and the pointer-fill loop below wrote
+         * past the block for any multimapFull spanning more than
+         * COUNT_ARRAY(localMaps) sub-maps. */
+        useMaps = zcalloc(m->count, sizeof(*useMaps));
     }
 
     for (multimapFullIdx i = 0; i < m->count; i++) {
@@ -818,6 +823,14 @@ abstractFlexInsert(multimapFull *const m, const multimapFullIdx mapIdx,
                 flexInsertReplaceByTypeSortedWithMiddleMultiDirectLongKeysBecomePointers(
                     map, m->elementsPerEntry, elements, &middle,
                     compareUsingKeyElementOnly, keyAsPointer);
+        } else if (m->mapIsSet && !forceFullWidthComparison) {
+            /* TRUE set semantics: full-width compare AND dedupe — the
+             * `values` accounting below already assumed found means
+             * no-dup ("For sets: 'found' means exact match (no dup)"),
+             * but the plain full-width insert appended a duplicate row
+             * anyway, desyncing count from physical rows. */
+            found = flexInsertReplaceByTypeSortedWithMiddleMultiDirectSet(
+                map, m->elementsPerEntry, elements, &middle);
         } else {
             found = flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
                 map, m->elementsPerEntry, elements, &middle,
@@ -2372,6 +2385,46 @@ int multimapFullTest(int argc, char *argv[]) {
             printf("iteration walked %zu but inserted %zu\n", walked, n);
             ERRR("iteration entry count != insertion count");
         }
+        multimapFullFree(m);
+    }
+
+    TEST("dump with more than 64 sub-maps (heap-overflow regression)") {
+        /* multimapFullDump's heap-spill arm allocated m->count BYTES
+         * for an array of m->count POINTERS whenever the map spans
+         * more than the 64-slot local array — an 8x under-allocation
+         * the pointer-fill loop then wrote past the end of.  Force
+         * more than 64 sub-maps with a small maxSize and dump: under
+         * sanitizers the pre-fix code faults inside the fill loop,
+         * and the merged flex must carry every inserted entry. */
+        multimapFull *m = multimapFullNew(2);
+        m->maxSize = 512;
+        char kb[32];
+        size_t inserted = 0;
+        for (size_t i = 0; i < 200000 && m->count <= 80; i++) {
+            snprintf(kb, sizeof(kb), "g13_%zu", i);
+            const databox key = databoxNewBytesAllowEmbed(kb, strlen(kb));
+            const databox val = databoxNewBytesAllowEmbed(kb, strlen(kb));
+            const databox *elements[2] = {&key, &val};
+            multimapFullInsert(m, elements);
+            inserted++;
+        }
+        if (m->count <= 64) {
+            printf("only %u sub-maps built from %zu inserts\n",
+                   (unsigned)m->count, inserted);
+            ERRR("failed to construct >64 sub-maps — the heap-spill "
+                 "dump arm was never exercised");
+        }
+        flex *combined = multimapFullDump(m);
+        if (!combined) {
+            ERRR("multimapFullDump returned NULL for a populated map");
+        }
+        const size_t dumped = flexCount(combined) / m->elementsPerEntry;
+        if (dumped != inserted) {
+            printf("dump carried %zu entries, inserted %zu\n", dumped,
+                   inserted);
+            ERRR("dump lost entries across the >64-submap merge");
+        }
+        flexFree(combined);
         multimapFullFree(m);
     }
 

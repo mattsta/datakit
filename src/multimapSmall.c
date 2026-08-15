@@ -61,11 +61,17 @@ void multimapSmallInsertWithSurrogateKey(
 
 bool multimapSmallInsert(multimapSmall *m, const databox *elements[]) {
     flexEntry *middle = GET_MIDDLE(m);
-    /* compareUsingKeyElementOnly: For maps (!mapIsSet), compare only key.
-     * For sets (mapIsSet), compare all elements to check for full-width dups.
-     */
-    const bool replaced = flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
-        &m->map, m->elementsPerEntry, elements, &middle, !m->mapIsSet);
+    /* Maps (!mapIsSet): key-only compare, found => replace values.
+     * Sets (mapIsSet): full-width compare AND dedupe — the Set variant
+     * makes a found full-width-equal entry a no-op.  The plain Direct
+     * call with compareUsingKeyElementOnly=false is the
+     * duplicates-ALLOWED sorted bag (InsertFullWidth), which silently
+     * duplicated every re-inserted set member here for years. */
+    const bool replaced = m->mapIsSet
+        ? flexInsertReplaceByTypeSortedWithMiddleMultiDirectSet(
+              &m->map, m->elementsPerEntry, elements, &middle)
+        : flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
+              &m->map, m->elementsPerEntry, elements, &middle, true);
     SET_MIDDLE(m, middle);
     return replaced;
 }

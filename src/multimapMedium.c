@@ -187,11 +187,13 @@ bool multimapMediumInsert(multimapMedium *m, const databox *elements[]) {
     size_t mapIdx = multimapMediumBinarySearch(m, elements[0]);
 
     flexEntry *middle = GET_MIDDLE(m, mapIdx);
-    /* compareUsingKeyElementOnly: For maps (!mapIsSet), compare only key.
-     * For sets (mapIsSet), compare all elements to check for full-width dups.
-     */
-    const bool replaced = flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
-        &m->map[mapIdx], m->elementsPerEntry, elements, &middle, !m->mapIsSet);
+    /* Maps: key-only compare, found => replace values.  Sets: the
+     * dedupe variant — see multimapSmallInsert. */
+    const bool replaced = m->mapIsSet
+        ? flexInsertReplaceByTypeSortedWithMiddleMultiDirectSet(
+              &m->map[mapIdx], m->elementsPerEntry, elements, &middle)
+        : flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
+              &m->map[mapIdx], m->elementsPerEntry, elements, &middle, true);
     SET_MIDDLE(m, mapIdx, middle);
     return replaced;
 }
@@ -212,11 +214,15 @@ void multimapMediumAppend(multimapMedium *m, const databox *elements[]) {
     static const size_t mapIdx = 1; /* always insert into highest map! */
 
     flexEntry *middle = GET_MIDDLE(m, mapIdx);
-    /* compareUsingKeyElementOnly: For maps (!mapIsSet), compare only key.
-     * For sets (mapIsSet), compare all elements to check for full-width dups.
-     */
-    flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
-        &m->map[mapIdx], m->elementsPerEntry, elements, &middle, !m->mapIsSet);
+    /* Maps: key-only compare.  Sets: the dedupe variant — see
+     * multimapSmallInsert. */
+    if (m->mapIsSet) {
+        flexInsertReplaceByTypeSortedWithMiddleMultiDirectSet(
+            &m->map[mapIdx], m->elementsPerEntry, elements, &middle);
+    } else {
+        flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
+            &m->map[mapIdx], m->elementsPerEntry, elements, &middle, true);
+    }
     SET_MIDDLE(m, mapIdx, middle);
 }
 
