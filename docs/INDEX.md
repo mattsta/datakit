@@ -105,6 +105,7 @@ These containers use **scale-aware** implementations with small/medium/large var
 ## Advanced Topics
 
 - [Performance Tuning](advanced/PERFORMANCE.md) - Optimization guidelines
+- [Performance Baselines Ledger](PERFORMANCE_BASELINES.md) - Dated benchmark captures and the decisions they support
 - [Memory Efficiency](advanced/MEMORY.md) - Understanding memory patterns
 - [Scale-Aware Collections](advanced/SCALE_AWARE.md) - Choosing the right size variant
 - [Thread Safety](advanced/THREAD_SAFETY.md) - Concurrent usage patterns
