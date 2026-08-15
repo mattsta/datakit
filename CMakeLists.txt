@@ -15,7 +15,16 @@ enable_testing()
 add_subdirectory(deps)
 add_subdirectory(src)
 
+# Allocator benchmark: membound vs memshard vs system malloc. Build with
+#   cmake --build <dir> --target memboundBench
 find_package(Threads REQUIRED)
+add_executable(memboundBench
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/memboundBench.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/memshardConfig.c)
+target_include_directories(memboundBench PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/memshard/include)
+target_link_libraries(memboundBench PRIVATE datakit-static memshard Threads::Threads)
 
 # memshard correctness tests (run under the `dev` preset for ASAN/UBSAN):
 #   cmake --build <dir> --target memshardTest && ./<dir>/memshardTest

@@ -19,6 +19,7 @@
 #include "hash/sha256ArmCrypto.h"
 #include "hmac.h"
 #include "hmacKeyring.h"
+#include "membound.h"
 #include "rapidhash.h"
 #include "sha256.h"
 
@@ -519,6 +520,27 @@ static void benchMailbox(size_t bytes) {
     hmacKeyringFree(ring);
 }
 
+/* ---- membound allocator: ns per alloc+free pair ------------------- */
+/* Single-threaded and deterministic by design: the pool is pre-created
+ * outside the timed window and one block is recycled, so the row is a
+ * stable sentinel for per-op alloc/free cost (it would have caught the
+ * ~1.5 ns regression from giving the per-extent counters seq_cst order).
+ * The multithreaded allocator comparison lives in `memboundBench` (too
+ * scheduling-noisy for a regression gate). "op" here = one alloc+free. */
+static void benchMembound(const char *name, membound *pool, size_t bytes) {
+    const uint32_t iters = 2000000u;
+    volatile void *sink = NULL;
+    const double t0 = monoNowSec();
+    for (uint32_t i = 0; i < iters; i++) {
+        void *p = memboundAlloc(pool, bytes);
+        sink = p;
+        memboundFree(pool, p);
+    }
+    const double secs = monoNowSec() - t0;
+    emitRow("membound", name, bytes, iters, secs);
+    (void)sink;
+}
+
 int perfRegressionTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -655,6 +677,32 @@ int perfRegressionTest(int argc, char *argv[]) {
              i < (uint32_t)(sizeof(sizes_mb) / sizeof(sizes_mb[0])); i++) {
             benchMailbox(sizes_mb[i]);
         }
+
+        /* membound allocator: per-op alloc/free cost for the three
+         * dynamic tiers — STANDARD (global lock), ENTERPRISE (per-extent
+         * locks), and ENTERPRISE+threadCache (the lock-free fast path).
+         * Single-thread by design; the MT comparison is in memboundBench. */
+        const size_t sizes_mb_alloc[] = {64u, 256u, 1024u};
+        membound *mbStd = memboundCreateDynamic(8u << 20, 0, 8u << 20);
+        membound *mbEnt = memboundCreateEnterprise(8u << 20, 0);
+        const memboundConfig mbTcCfg = {.mode = MEMBOUND_MODE_DYNAMIC,
+                                        .initialSize = 8u << 20,
+                                        .tier = MEMBOUND_TIER_ENTERPRISE,
+                                        .threadSafe = true,
+                                        .growthSize = 8u << 20,
+                                        .threadCache = true};
+        membound *mbTc = memboundCreateWithConfig(&mbTcCfg);
+        for (uint32_t i = 0;
+             i < (uint32_t)(sizeof(sizes_mb_alloc) / sizeof(sizes_mb_alloc[0]));
+             i++) {
+            benchMembound("standard", mbStd, sizes_mb_alloc[i]);
+            benchMembound("enterprise", mbEnt, sizes_mb_alloc[i]);
+            benchMembound("threadcache", mbTc, sizes_mb_alloc[i]);
+        }
+        memboundFlushThreadCache(mbTc);
+        memboundShutdown(mbStd);
+        memboundShutdown(mbEnt);
+        memboundShutdown(mbTc);
     }
 
     TEST_FINAL_RESULT;

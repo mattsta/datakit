@@ -250,7 +250,9 @@ typedef struct memboundExtent {
     int64_t aiFreelist[MEMBOUND_LOGMAX + 1];
     uint64_t freelistBitmap; /* O(1) free block lookup via CTZ */
 
-    /* Per-extent statistics */
+    /* Per-extent statistics. Protected by the pool's single global lock — every
+     * read and write happens under it (there is no per-extent locking), so
+     * plain (non-atomic) fields are correct. */
     uint64_t currentOut;   /* Bytes currently allocated */
     uint64_t currentCount; /* Outstanding allocation count */
     uint64_t nAlloc;       /* Total allocations from this extent */
@@ -269,12 +271,6 @@ typedef struct memboundExtent {
 
     /* Extent index in sorted lookup array */
     size_t sortedIndex;
-
-    /* Per-extent mutex (ENTERPRISE tier only)
-     * When enabled, allows parallel alloc/free across different extents.
-     * Note: This increases extent size to ~8 cache lines (512 bytes). */
-    pthread_mutex_t extentMutex;
-    bool extentMutexInitialized;
 } memboundExtent;
 
 /* Extent flags */
@@ -282,8 +278,7 @@ typedef struct memboundExtent {
 #define MEMBOUND_EXTENT_FLAG_DEDICATED 0x02 /* Dedicated to size class */
 #define MEMBOUND_EXTENT_FLAG_DRAINING 0x04  /* Being drained for shrink */
 
-/* Verify extent fits nicely in cache lines (8 cache lines with per-extent
- * mutex) */
+/* Verify extent stays compact. */
 _Static_assert(sizeof(memboundExtent) <= 512,
                "memboundExtent should fit in 8 cache lines");
 
@@ -462,15 +457,19 @@ _Static_assert(sizeof(memboundCompactPool) <= 256,
 /* ====================================================================
  * ENTERPRISE Tier Extensions
  * ====================================================================
- * Additional fields for per-extent locking and caching.
+ * Additional fields for the extent-selection cache hint, the opt-in
+ * thread-local allocation cache, and profiling.
  */
 typedef struct memboundEnterpriseExt {
     /* Extent selection cache */
     memboundExtent *lastAllocExtent; /* Last extent used for allocation */
     uint64_t lastAllocSeq;           /* Sequence at last cache use */
 
-    /* Per-extent lock support (extents have their own mutex) */
-    bool perExtentLocking; /* Enable per-extent locks */
+    /* Thread-local allocation cache (opt-in). cacheEpoch is bumped
+     * on reset/shutdown so a stale per-thread cache self-invalidates. */
+    bool threadCache;
+    uint16_t threadCacheBatch; /* blocks per locked refill/flush (1..256) */
+    _Atomic uint64_t cacheEpoch;
 
     /* Extended profiling */
     uint64_t extentSwitchCount; /* Times allocation switched extents */
@@ -567,6 +566,10 @@ struct membound {
     memboundPressureCallback pressureCallback;
     void *pressureUserData;
     memboundPressure lastPressureLevel;
+
+    /* Relocation callback (optional) - enables block-moving compaction */
+    memboundRelocationCallback relocationCallback;
+    void *relocationUserData;
 
     /* Enterprise tier extensions (NULL for STANDARD tier) */
     memboundEnterpriseExt *enterprise;

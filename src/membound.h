@@ -85,12 +85,13 @@
  *               Why: Connection pools don't need complex features
  *
  *   STANDARD:  450 bytes overhead - full features, reasonable default
- *               Trade-off: Single lock, no per-extent parallelism
+ *               Trade-off: single global lock
  *               Why: Covers 90% of use cases without complexity
  *
- *   ENTERPRISE: 650+ bytes overhead - maximum performance at scale
- *               Trade-off: Higher memory overhead, more complexity
- *               Why: Database buffer pools need every optimization
+ *   ENTERPRISE: 650+ bytes overhead - STANDARD plus an extent-selection cache
+ *               hint, the opt-in thread cache (the multithread mechanism), and
+ *               extended profiling
+ *               Why: large shared/concurrent buffer pools
  *
  * WHY BUDDY ALLOCATION?
  *
@@ -244,11 +245,10 @@
  *   ARM64:   YIELD instruction (similar purpose)
  *   Other:   No-op (spinning still helps, just less efficiently)
  *
- * ENTERPRISE tier extends this with per-extent locking:
- *   - Each extent has its own mutex
- *   - Allocations to different extents can proceed in parallel
- *   - Free operations only lock the owning extent
- *   - Global lock only needed for extent list operations
+ * ENTERPRISE tier uses the same single global lock as STANDARD. Its multithread
+ * scaling comes from the opt-in thread cache (per-thread, per-size-class free
+ * lists with batched refill/flush under the lock), not from sharding the lock.
+ * See MEMBOUND_MT_STRATEGY_DECISION.md for why per-extent locking was removed.
  *
  * ============================================================================
  * SAFETY VIOLATION TRACKING
@@ -305,13 +305,14 @@ typedef enum memboundMode {
  * Tiers trade off metadata overhead vs features. Choose based on:
  *   - Number of pools: 1M+ → MICRO, 1K+ → COMPACT, <100 → STANDARD/ENTERPRISE
  *   - Thread safety: Need mutex → COMPACT+, caller handles → MICRO
- *   - Features: Dynamic growth → STANDARD+, per-extent locks → ENTERPRISE
+ *   - Features: Dynamic growth → STANDARD+, thread cache/profiling → ENTERPRISE
  *
  * Performance characteristics (approximate):
  *   MICRO:      56 bytes/pool,  alloc ~50ns,   no mutex overhead
  *   COMPACT:   192 bytes/pool,  alloc ~80ns,   optional mutex
- *   STANDARD:  450 bytes/pool,  alloc ~100ns,  full mutex
- *   ENTERPRISE: 650+ bytes/pool, alloc ~120ns, per-extent parallel
+ *   STANDARD:  450 bytes/pool,  alloc ~20ns,   full mutex
+ *   ENTERPRISE: 650+ bytes/pool, alloc ~20ns + extent-cache hint; opt-in
+ *               thread cache for multithread scaling
  *
  * Note: STANDARD is 0 so that uninitialized/default configs get STANDARD tier.
  */
@@ -320,7 +321,8 @@ typedef enum memboundTier {
         0, /* Full-featured: default behavior (0 for safe default) */
     MEMBOUND_TIER_MICRO,     /* Ultra-compact: no mutex, inline extent */
     MEMBOUND_TIER_COMPACT,   /* Lightweight: optional mutex, embedded extent */
-    MEMBOUND_TIER_ENTERPRISE /* Extended: per-extent locks, profiling */
+    MEMBOUND_TIER_ENTERPRISE /* Extended: extent-cache hint, thread cache,
+                                profiling */
 } memboundTier;
 
 /* ====================================================================
@@ -337,6 +339,23 @@ typedef enum memboundPressure {
 /* Memory pressure callback type */
 typedef void (*memboundPressureCallback)(membound *m, memboundPressure level,
                                          void *userData);
+
+/* Relocation callback type, invoked by memboundCompact() for each live block
+ * it moves to a denser extent. The application MUST update every reference it
+ * holds from oldPtr to newPtr before returning.
+ *
+ * Contract:
+ *   - Called once per moved block, with the pool lock held. The callback MUST
+ *     NOT call back into this same membound instance (it would deadlock).
+ *   - The application MUST ensure no other thread accesses the moved block for
+ *     the duration of the compaction call (compaction is exclusive).
+ *   - Both oldPtr and newPtr hold valid copies of the data when the callback
+ *     runs; oldPtr is freed only after the callback returns, so it must not be
+ *     used afterward.
+ *   - size is the block's allocated size (a power-of-two multiple of the atom
+ *     size, >= the original request); copying the whole block is safe. */
+typedef void (*memboundRelocationCallback)(void *oldPtr, void *newPtr,
+                                           size_t size, void *userData);
 
 /* ====================================================================
  * Extent Selection Strategy (for dynamic mode)
@@ -430,7 +449,15 @@ typedef struct memboundConfig {
 
     /* ENTERPRISE tier options (only used when tier = MEMBOUND_TIER_ENTERPRISE)
      */
-    bool perExtentLocking; /* Enable per-extent locks for parallel alloc/free */
+    bool threadCache; /* Enable per-thread alloc/free cache (lock-free fast path
+                       * + batched refill/flush under the pool lock) */
+    uint16_t threadCacheBatch; /* blocks moved per locked refill/flush when
+                                * threadCache is on. 0 = default (64). Higher =
+                                * less lock traffic / more MT throughput but
+                                * more memory reserved per thread per size class
+                                * (bounded by the pool); clamped to 1..256. This
+                                * is the throughput-vs-memory knob — see
+                                * MEMBOUND.md "Thread-local cache". */
 
     /* Optional callbacks (STANDARD and ENTERPRISE tiers only) */
     memboundPressureCallback pressureCallback;
@@ -492,14 +519,16 @@ membound *memboundCreateMicro(size_t size);
  *   - ~192 bytes overhead per pool */
 membound *memboundCreateCompact(size_t size, bool threadSafe);
 
-/* Create an ENTERPRISE tier pool - full features plus per-extent parallelism.
+/* Create an ENTERPRISE tier pool - full features plus the extent-selection
+ * cache hint and profiling.
  * Parameters:
  *   initialSize - Initial extent size
  *   maxSize     - Maximum total capacity (0 = unlimited)
  * Notes:
- *   - Per-extent locks for parallel alloc/free across extents
  *   - Extent selection caching for O(1) repeated allocations
  *   - Extended profiling and diagnostics
+ *   - For multithread scaling, enable the thread cache via memboundConfig
+ *     (config.threadCache); this constructor leaves it off
  *   - ~650+ bytes overhead per pool */
 membound *memboundCreateEnterprise(size_t initialSize, size_t maxSize);
 
@@ -548,10 +577,13 @@ bool memboundShutdownSafe(membound *m);
  * Allocation Functions
  * ==================================================================== */
 
-/* Allocate memory from the pool. Returns NULL if exhausted. */
+/* Allocate memory from the pool. Returns NULL if exhausted, or if nBytes is 0
+ * (matching malloc()-style "no allocation" semantics). */
 void *memboundAlloc(membound *m, size_t nBytes);
 
-/* Allocate zero-initialized memory (like calloc). */
+/* Allocate zero-initialized memory (like calloc).
+ * Returns NULL if count or size is 0, on count*size overflow, or if exhausted.
+ */
 void *memboundCalloc(membound *m, size_t count, size_t size);
 
 /* Resize an allocation. Returns NULL on failure (original preserved). */
@@ -559,6 +591,38 @@ void *memboundRealloc(membound *m, void *pPrior, size_t nBytes);
 
 /* Free memory back to the pool. NULL pointers are safely ignored. */
 void memboundFree(membound *m, void *pPrior);
+
+/* Return the usable (actual allocated block) size for a pointer from this pool,
+ * which is >= the originally requested size. Returns 0 for NULL or a pointer
+ * not owned by the pool. Works on every tier. */
+size_t memboundUsableSize(const membound *m, const void *ptr);
+
+/* Return the block size a request of `size` would round up to, WITHOUT
+ * allocating. 0 for size 0 or a size exceeding the tier's largest block.
+ * Invariant: memboundGoodSize(m,n) == memboundUsableSize(m, memboundAlloc(m,n))
+ * for any n that allocates successfully. */
+size_t memboundGoodSize(const membound *m, size_t size);
+
+/* Grow `ptr` in place to `newSize` without moving. Returns `ptr` if its current
+ * block already satisfies newSize, else NULL (original untouched, not freed).
+ */
+void *memboundExpand(membound *m, void *ptr, size_t newSize);
+
+/* Reallocate to count*size, zeroing only the newly grown tail (calloc-style).
+ * NULL on count*size overflow; on a zero product frees ptr and returns NULL;
+ * original preserved on allocation failure. */
+void *memboundRecalloc(membound *m, void *ptr, size_t count, size_t size);
+
+/* Allocate `nBytes` aligned to `alignment` (a power of two). Freeable with
+ * plain memboundFree. Returns NULL on invalid args, exhaustion, or if the
+ * requested alignment exceeds what the pool base can satisfy. */
+void *memboundAllocAligned(membound *m, size_t nBytes, size_t alignment);
+
+/* Return the calling thread's ENTERPRISE thread-local allocation cache (opt-in
+ * via config.threadCache) to the pool. Call before the thread stops using the
+ * pool, or before shutdown if other threads cached from it. No-op if disabled.
+ */
+void memboundFlushThreadCache(membound *m);
 
 /* ====================================================================
  * Pool Management
@@ -586,11 +650,20 @@ bool memboundGrowBy(membound *m, size_t additionalBytes);
  * Returns number of extents released. */
 size_t memboundShrink(membound *m);
 
-/* Release empty extents to reduce memory footprint.
- * Currently equivalent to memboundShrink() - true compaction (moving
- * allocations between extents) is not yet implemented as it would
- * invalidate pointers and require application cooperation.
- * Returns number of extents that were released. */
+/* Reduce extent count by consolidating live allocations into fewer extents.
+ *
+ * Behavior depends on whether a relocation callback is registered (see
+ * memboundSetRelocationCallback):
+ *   - WITHOUT a callback: equivalent to memboundShrink() - only fully empty
+ *     non-primary extents are released. No allocation is moved.
+ *   - WITH a callback: live allocations are relocated out of sparse non-primary
+ *     extents into free space in other existing extents, the callback is fired
+ *     for each moved block so the application can fix up its pointers, and the
+ *     emptied extents are released. Never grows the pool and never relocates
+ *     out of the primary extent; an extent that cannot be fully drained into
+ *     existing free space is left in place.
+ *
+ * Returns the number of extents that were released. */
 size_t memboundCompact(membound *m);
 
 /* ====================================================================
@@ -669,6 +742,13 @@ bool memboundGetExtentInfo(const membound *m, size_t index,
 /* Set memory pressure callback (called when pressure level changes) */
 void memboundSetPressureCallback(membound *m, memboundPressureCallback cb,
                                  void *userData);
+
+/* Set the relocation callback that enables block-moving compaction in
+ * memboundCompact(). With no callback registered, memboundCompact() only
+ * releases empty extents. STANDARD and ENTERPRISE tiers only; ignored for
+ * MICRO/COMPACT (single inline extent, nothing to compact). */
+void memboundSetRelocationCallback(membound *m, memboundRelocationCallback cb,
+                                   void *userData);
 
 /* ====================================================================
  * Detailed Statistics

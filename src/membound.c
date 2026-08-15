@@ -43,6 +43,14 @@
         }                                                                      \
     } while (0)
 
+/* Thread-cache batch sizing (ENTERPRISE threadCache). The per-thread arrays are
+ * sized to MAX; the effective batch is per-pool (config.threadCacheBatch) so
+ * the throughput-vs-memory tradeoff is the caller's. DEFAULT 64 captures most
+ * of the MT win (batch 16 -> 64 nearly halves shared-pool wall ns/op) at modest
+ * per-thread reservation; see MEMBOUND.md. */
+#define MEMBOUND_TLS_BATCH_MAX 256
+#define MEMBOUND_TLS_BATCH_DEFAULT 64
+
 /* Validate a free operation and track violations.
  * Returns true if valid, false if invalid (and increments violation counter).
  */
@@ -193,6 +201,19 @@ memboundIndexBinarySearch(const memboundExtentRange *ranges, size_t count,
     return NULL;
 }
 
+#if defined(MEMBOUND_USE_AVX2) || defined(MEMBOUND_USE_SSE2)
+/* Reinterpret an address's bits as int64_t for signed SIMD lanes without
+ * relying on implementation-defined unsigned-to-signed conversion for values
+ * above INT64_MAX (high-half addresses). The XOR-with-sign-bit transform in
+ * the AVX2/SSE2 paths restores unsigned ordering on top of these bits. */
+static inline int64_t memboundAddrToI64(uintptr_t v) {
+    int64_t out;
+    const uint64_t u = (uint64_t)v;
+    memcpy(&out, &u, sizeof(out));
+    return out;
+}
+#endif
+
 /* SIMD-optimized lookup for 4+ extents using range comparison */
 #if defined(MEMBOUND_USE_AVX2) || defined(MEMBOUND_USE_SSE2) ||                \
     defined(MEMBOUND_USE_NEON)
@@ -217,24 +238,24 @@ memboundExtent *memboundIndexLookupSIMD(const memboundExtentIndex *index,
      *   unsigned MAX -> signed MAX_INT64 */
     const __m256i signBit = _mm256_set1_epi64x((int64_t)0x8000000000000000ULL);
     const __m256i addrVec =
-        _mm256_xor_si256(_mm256_set1_epi64x((int64_t)addr), signBit);
+        _mm256_xor_si256(_mm256_set1_epi64x(memboundAddrToI64(addr)), signBit);
 
     for (size_t i = 0; i + 4 <= count; i += 4) {
         /* Load 4 start addresses and convert to signed comparison space */
-        __m256i starts =
-            _mm256_xor_si256(_mm256_set_epi64x((int64_t)ranges[i + 3].start,
-                                               (int64_t)ranges[i + 2].start,
-                                               (int64_t)ranges[i + 1].start,
-                                               (int64_t)ranges[i + 0].start),
-                             signBit);
+        __m256i starts = _mm256_xor_si256(
+            _mm256_set_epi64x(memboundAddrToI64(ranges[i + 3].start),
+                              memboundAddrToI64(ranges[i + 2].start),
+                              memboundAddrToI64(ranges[i + 1].start),
+                              memboundAddrToI64(ranges[i + 0].start)),
+            signBit);
 
         /* Load 4 end addresses and convert to signed comparison space */
-        __m256i ends =
-            _mm256_xor_si256(_mm256_set_epi64x((int64_t)ranges[i + 3].end,
-                                               (int64_t)ranges[i + 2].end,
-                                               (int64_t)ranges[i + 1].end,
-                                               (int64_t)ranges[i + 0].end),
-                             signBit);
+        __m256i ends = _mm256_xor_si256(
+            _mm256_set_epi64x(memboundAddrToI64(ranges[i + 3].end),
+                              memboundAddrToI64(ranges[i + 2].end),
+                              memboundAddrToI64(ranges[i + 1].end),
+                              memboundAddrToI64(ranges[i + 0].end)),
+            signBit);
 
         /* addr >= start (unsigned) */
         __m256i geStart = _mm256_or_si256(_mm256_cmpgt_epi64(addrVec, starts),
@@ -267,16 +288,17 @@ memboundExtent *memboundIndexLookupSIMD(const memboundExtentIndex *index,
      * XOR with sign bit to convert unsigned comparison to signed space */
     const __m128i signBit = _mm_set1_epi64x((int64_t)0x8000000000000000ULL);
     const __m128i addrVec =
-        _mm_xor_si128(_mm_set1_epi64x((int64_t)addr), signBit);
+        _mm_xor_si128(_mm_set1_epi64x(memboundAddrToI64(addr)), signBit);
 
     for (size_t i = 0; i + 2 <= count; i += 2) {
-        __m128i starts =
-            _mm_xor_si128(_mm_set_epi64x((int64_t)ranges[i + 1].start,
-                                         (int64_t)ranges[i + 0].start),
+        __m128i starts = _mm_xor_si128(
+            _mm_set_epi64x(memboundAddrToI64(ranges[i + 1].start),
+                           memboundAddrToI64(ranges[i + 0].start)),
+            signBit);
+        __m128i ends =
+            _mm_xor_si128(_mm_set_epi64x(memboundAddrToI64(ranges[i + 1].end),
+                                         memboundAddrToI64(ranges[i + 0].end)),
                           signBit);
-        __m128i ends = _mm_xor_si128(_mm_set_epi64x((int64_t)ranges[i + 1].end,
-                                                    (int64_t)ranges[i + 0].end),
-                                     signBit);
 
         /* SSE2 doesn't have 64-bit compare, use subtraction trick
          * In signed comparison space, diff >= 0 means addr >= start (unsigned)
@@ -563,6 +585,13 @@ bool memboundExtentInit(memboundExtent *extent, void *space, size_t len) {
     extent->nBlock = (len / (extent->szAtom + sizeof(uint8_t)));
     extent->zPool = space;
 
+    /* Reject pools too small to hold even one atom plus its control byte.
+     * Without this guard nBlock == 0 would yield a zero-capacity extent that
+     * silently fails every allocation. */
+    if (extent->nBlock == 0) {
+        return false;
+    }
+
     /* Calculate pool data size with overflow check */
     const size_t poolDataSize =
         ((uint64_t)extent->nBlock > SIZE_MAX / (uint64_t)extent->szAtom)
@@ -710,7 +739,7 @@ void *memboundExtentAlloc(memboundExtent *extent, size_t nBytes) {
 
     extent->aCtrl[i] = iLogsize;
 
-    /* Update statistics */
+    /* Update statistics (under the global lock). */
     extent->nAlloc++;
     extent->totalAlloc += iFullSz;
     extent->totalExcess += iFullSz - nBytes;
@@ -1265,43 +1294,6 @@ static void memboundLeave(membound *m) {
     pthread_mutex_unlock(&m->mutex);
 }
 
-/* Per-extent locking for ENTERPRISE tier with perExtentLocking enabled.
- * These allow parallel alloc/free across different extents.
- * Uses same spin-then-block pattern as global lock for consistency. */
-static inline void memboundExtentEnter(memboundExtent *e) {
-    if (!e->extentMutexInitialized) {
-        return;
-    }
-
-    /* Fast path: try immediate acquisition */
-    if (pthread_mutex_trylock(&e->extentMutex) == 0) {
-        return;
-    }
-
-    /* Brief spin before blocking */
-    for (int i = 0; i < MEMBOUND_SPIN_ITERATIONS; i++) {
-        MEMBOUND_SPIN_PAUSE();
-        if (pthread_mutex_trylock(&e->extentMutex) == 0) {
-            return;
-        }
-    }
-
-    /* Must block */
-    pthread_mutex_lock(&e->extentMutex);
-}
-
-static inline void memboundExtentLeave(memboundExtent *e) {
-    if (e->extentMutexInitialized) {
-        pthread_mutex_unlock(&e->extentMutex);
-    }
-}
-
-/* Check if per-extent locking is enabled for this pool */
-static inline bool memboundUsesPerExtentLocking(const membound *m) {
-    return m->tier == MEMBOUND_TIER_ENTERPRISE && m->enterprise &&
-           m->enterprise->perExtentLocking;
-}
-
 /* Add a new extent to the pool */
 static bool memboundAddExtent(membound *m, size_t size) {
     memboundExtent *extent = memboundExtentCreate(size);
@@ -1399,14 +1391,6 @@ static bool memboundAddExtentToPool(membound *m, memboundExtent *extent) {
         return false;
     }
 
-    /* Initialize per-extent mutex for ENTERPRISE tier with per-extent locking
-     */
-    if (m->tier == MEMBOUND_TIER_ENTERPRISE && m->enterprise &&
-        m->enterprise->perExtentLocking) {
-        pthread_mutex_init(&extent->extentMutex, NULL);
-        extent->extentMutexInitialized = true;
-    }
-
     /* Link into extent list */
     extent->next = m->extents;
     if (m->extents) {
@@ -1424,57 +1408,12 @@ static bool memboundAddExtentToPool(membound *m, memboundExtent *extent) {
     return true;
 }
 
-/* Parallel allocation helper for ENTERPRISE tier with per-extent locking.
- * This function tries to allocate from a selected extent while allowing
- * concurrent allocations to other extents.
- *
- * Pattern: Acquire per-extent lock while holding global lock, then release
- * global lock, allocate under per-extent lock, release per-extent lock,
- * re-acquire global lock for stats.
- *
- * This ensures that once we've selected an extent, no other thread can
- * start an operation on it until we've completed ours.
- */
-static void *memboundAllocFromExtentParallel(membound *m, memboundExtent *e,
-                                             size_t nBytes,
-                                             size_t *outAllocSize) {
-    if (!e || !e->extentMutexInitialized) {
-        return NULL; /* Per-extent locking not enabled for this extent */
-    }
-
-    /* IMPORTANT: Acquire per-extent lock WHILE holding global lock.
-     * This prevents race where another thread selects the same extent
-     * before we can lock it. */
-    memboundExtentEnter(e);
-
-    /* Now release global lock - other threads can select different extents */
-    memboundLeave(m);
-
-    /* Try allocation under per-extent lock only */
-    void *p = memboundExtentAlloc(e, nBytes);
-    size_t allocSize = 0;
-    if (p) {
-        allocSize = memboundExtentSize(e, p);
-    }
-
-    /* Release per-extent lock */
-    memboundExtentLeave(e);
-
-    /* Re-acquire global lock for stats update */
-    memboundEnter(m);
-
-    if (outAllocSize) {
-        *outAllocSize = allocSize;
-    }
-    return p;
-}
-
-/* Core allocation for dynamic mode */
+/* Core allocation for dynamic mode. Runs entirely under the pool's global lock
+ * (the caller holds it); there is no per-extent locking. */
 static void *memboundAllocDynamic(membound *m, size_t nBytes) {
     void *p = NULL;
     memboundExtent *selectedExtent = NULL;
     size_t allocSize = 0;
-    const bool useParallel = memboundUsesPerExtentLocking(m);
     const bool useCache =
         m->tier == MEMBOUND_TIER_ENTERPRISE && m->enterprise != NULL;
 
@@ -1486,20 +1425,11 @@ static void *memboundAllocDynamic(membound *m, size_t nBytes) {
 
         /* Verify cached extent is still valid and has enough space */
         if (memboundExtentBytesAvailable(cached) >= nBytes) {
-            if (useParallel) {
-                p = memboundAllocFromExtentParallel(m, cached, nBytes,
-                                                    &allocSize);
-            } else {
-                p = memboundExtentAlloc(cached, nBytes);
-                if (p) {
-                    allocSize = memboundExtentSize(cached, p);
-                }
-            }
-
+            p = memboundExtentAlloc(cached, nBytes);
             if (p) {
                 m->enterprise->cacheHits++;
                 selectedExtent = cached;
-                goto success_parallel; /* Stats handled in success_parallel */
+                goto success;
             }
         }
         /* Cache miss - extent didn't have space or allocation failed */
@@ -1509,45 +1439,28 @@ static void *memboundAllocDynamic(membound *m, size_t nBytes) {
     /* 1. Use strategy to select an extent */
     selectedExtent = memboundSelectExtent(m, nBytes);
     if (selectedExtent) {
-        if (useParallel) {
-            /* ENTERPRISE tier: release global lock during allocation */
-            p = memboundAllocFromExtentParallel(m, selectedExtent, nBytes,
-                                                &allocSize);
-            if (p) {
-                goto success_parallel;
+        p = memboundExtentAlloc(selectedExtent, nBytes);
+        if (p) {
+            /* Update primary if this extent has more space */
+            if (memboundExtentBytesAvailable(selectedExtent) >
+                memboundExtentBytesAvailable(m->primary)) {
+                m->primary = selectedExtent;
             }
-        } else {
-            p = memboundExtentAlloc(selectedExtent, nBytes);
-            if (p) {
-                /* Update primary if this extent has more space */
-                if (memboundExtentBytesAvailable(selectedExtent) >
-                    memboundExtentBytesAvailable(m->primary)) {
-                    m->primary = selectedExtent;
-                }
-                goto success;
-            }
+            goto success;
         }
     }
 
     /* 2. Strategy didn't find suitable extent, try all extents (fallback) */
     for (memboundExtent *e = m->extents; e; e = e->next) {
-        if (useParallel) {
-            p = memboundAllocFromExtentParallel(m, e, nBytes, &allocSize);
-            if (p) {
-                selectedExtent = e;
-                goto success_parallel;
+        p = memboundExtentAlloc(e, nBytes);
+        if (p) {
+            /* Consider promoting this extent to primary */
+            if (memboundExtentBytesAvailable(e) >
+                memboundExtentBytesAvailable(m->primary)) {
+                m->primary = e;
             }
-        } else {
-            p = memboundExtentAlloc(e, nBytes);
-            if (p) {
-                /* Consider promoting this extent to primary */
-                if (memboundExtentBytesAvailable(e) >
-                    memboundExtentBytesAvailable(m->primary)) {
-                    m->primary = e;
-                }
-                selectedExtent = e;
-                goto success;
-            }
+            selectedExtent = e;
+            goto success;
         }
     }
 
@@ -1622,15 +1535,7 @@ static void *memboundAllocDynamic(membound *m, size_t nBytes) {
     }
 
     /* 6. Allocate from new extent */
-    if (useParallel) {
-        p = memboundAllocFromExtentParallel(m, m->primary, nBytes, &allocSize);
-        if (p) {
-            selectedExtent = m->primary;
-            goto success_parallel;
-        }
-    } else {
-        p = memboundExtentAlloc(m->primary, nBytes);
-    }
+    p = memboundExtentAlloc(m->primary, nBytes);
     if (!p) {
         /* This shouldn't happen with a fresh extent */
         return NULL;
@@ -1638,11 +1543,7 @@ static void *memboundAllocDynamic(membound *m, size_t nBytes) {
     selectedExtent = m->primary;
 
 success:
-    /* Non-parallel path: calculate allocSize here */
     allocSize = memboundExtentSize(selectedExtent, p);
-
-success_parallel: {
-    /* Both paths merge here with allocSize already set */
     m->currentOut += allocSize;
     m->currentCount++;
     m->nAlloc++;
@@ -1662,12 +1563,6 @@ success_parallel: {
         m->enterprise->lastAllocSeq = m->nAlloc;
     }
 
-    /* Update primary if this extent has more space (parallel path only) */
-    if (useParallel && memboundExtentBytesAvailable(selectedExtent) >
-                           memboundExtentBytesAvailable(m->primary)) {
-        m->primary = selectedExtent;
-    }
-
     if (m->currentOut > m->maxOut) {
         m->maxOut = m->currentOut;
     }
@@ -1676,7 +1571,6 @@ success_parallel: {
     }
 
     /* Pressure callback will be invoked by caller after releasing lock */
-}
 
     return p;
 }
@@ -1842,20 +1736,27 @@ membound *memboundCreateWithConfig(const memboundConfig *config) {
             m->tier = MEMBOUND_TIER_STANDARD;
         } else {
             memset(m->enterprise, 0, sizeof(memboundEnterpriseExt));
-            m->enterprise->perExtentLocking = config->perExtentLocking;
-
-            /* Initialize per-extent mutex for existing extent if enabled.
-             * Note: Using NULL for attributes (default mutex) since per-extent
-             * locks don't need process-shared attribute. */
-            if (m->enterprise->perExtentLocking && m->primary) {
-                pthread_mutex_init(&m->primary->extentMutex, NULL);
-                m->primary->extentMutexInitialized = true;
+            m->enterprise->threadCache = config->threadCache;
+            /* Thread-cache batch: 0 = default 64; clamp to [1, MAX]. Larger
+             * cuts lock traffic (more MT throughput) at the cost of more memory
+             * reserved per thread per size class. */
+            {
+                uint32_t b = config->threadCacheBatch;
+                if (b == 0) {
+                    b = MEMBOUND_TLS_BATCH_DEFAULT;
+                } else if (b > MEMBOUND_TLS_BATCH_MAX) {
+                    b = MEMBOUND_TLS_BATCH_MAX;
+                }
+                m->enterprise->threadCacheBatch = (uint16_t)b;
             }
         }
     }
 
     return m;
 }
+
+static void
+memboundTLSDetach(const membound *m); /* thread-cache, defined below */
 
 bool memboundShutdown(membound *m) {
     if (!m) {
@@ -1875,6 +1776,11 @@ bool memboundShutdown(membound *m) {
 
     /* STANDARD and ENTERPRISE tiers use full membound struct */
 
+    /* Detach this thread's cache (its blocks are about to be freed wholesale).
+     * Other threads that allocated from this pool must have already exited or
+     * called memboundFlushThreadCache (documented shutdown contract). */
+    memboundTLSDetach(m);
+
     /* Acquire lock to ensure no operations are in progress.
      * This also acts as a memory barrier to ensure all previous
      * operations are visible. */
@@ -1884,14 +1790,10 @@ bool memboundShutdown(membound *m) {
          * We don't release it since we're destroying the mutex. */
     }
 
-    /* Destroy all extents (and their per-extent mutexes for ENTERPRISE tier) */
+    /* Destroy all extents */
     memboundExtent *e = m->extents;
     while (e) {
         memboundExtent *next = e->next;
-        /* Destroy per-extent mutex if initialized (ENTERPRISE tier) */
-        if (e->extentMutexInitialized) {
-            pthread_mutex_destroy(&e->extentMutex);
-        }
         memboundExtentDestroy(e);
         e = next;
     }
@@ -1931,6 +1833,242 @@ bool memboundShutdownSafe(membound *m) {
     return memboundShutdown(m);
 }
 
+/* ====================================================================
+ * Thread-local allocation cache (ENTERPRISE, opt-in via config.threadCache)
+ * ====================================================================
+ * A cached block stays buddy-allocated (counted in currentOut/currentCount,
+ * owned, freeable); the cache is a thread-private reservation that serves
+ * repeated allocations without the global lock, refilling a batch under one
+ * lock acquisition on a miss. Cached blocks link through their own first word
+ * (unused while cached). Alloc-side only: free() uses the normal locked path,
+ * so the only lock-free state is each thread's own cache => no data races
+ * (ASAN, not TSAN, is the correctness gate).
+ *
+ * Lifecycle contract (matches the existing reset/shutdown contract):
+ *   - reset bumps cacheEpoch; a stale cache self-discards (its blocks were
+ *     already freed by the reset) on the owning thread's next allocation.
+ *   - before shutdown (or before another thread reuses the pool's memory) each
+ *     thread that allocated from the pool must have exited or called
+ *     memboundFlushThreadCache(m). The shutting-down thread detaches its own
+ *     cache automatically. */
+#define MEMBOUND_TLS_CLASSES 12 /* classes 0..11 (szAtom<<0 .. szAtom<<11) */
+
+typedef struct memboundTLSCache {
+    const membound *owner;
+    uint64_t epoch;
+    void *head[MEMBOUND_TLS_CLASSES]; /* alloc-side per-class free lists */
+    void *deferred[MEMBOUND_TLS_BATCH_MAX]; /* free-side batched returns */
+    int deferredN;
+} memboundTLSCache;
+
+static _Thread_local memboundTLSCache
+    *memboundTLSp; /* heap cache; freed by dtor */
+/* Set while draining/flushing the cache so memboundFree returns blocks straight
+ * to the pool instead of re-buffering them into this same cache (recursion). */
+static _Thread_local bool memboundTLSBypass;
+static pthread_key_t memboundTLSKey;
+static pthread_once_t memboundTLSOnce = PTHREAD_ONCE_INIT;
+
+/* Defined just above memboundFree; the free body run under the global lock.
+ * Used by the deferred-free flush (caller holds the pool lock). */
+static void memboundFreeLockedStandard(membound *m, void *pPrior);
+static void memboundTLSFlushDeferred(memboundTLSCache *c);
+
+static bool memboundUsesThreadCache(const membound *m) {
+    return m->tier == MEMBOUND_TIER_ENTERPRISE && m->enterprise &&
+           m->enterprise->threadCache;
+}
+
+/* Return all cached blocks for pool c->owner to the pool via the normal locked
+ * free, then detach. Caller must NOT hold the pool lock; c->owner must be live.
+ */
+static void memboundTLSDrain(memboundTLSCache *c) {
+    membound *m = (membound *)c->owner;
+    if (!m) {
+        return;
+    }
+    /* Return any deferred frees first (also goes to this same owner). */
+    memboundTLSFlushDeferred(c);
+    memboundTLSBypass = true;
+    for (int cls = 0; cls < MEMBOUND_TLS_CLASSES; cls++) {
+        void *p = c->head[cls];
+        c->head[cls] = NULL;
+        while (p) {
+            void *next = *(void **)p;
+            memboundFree(m, p);
+            p = next;
+        }
+    }
+    memboundTLSBypass = false;
+    c->owner = NULL;
+}
+
+/* pthread_key destructor: runs at thread exit with the heap cache pointer. We
+ * use that argument (NOT the _Thread_local, which can already be torn down on
+ * some platforms) so the surplus is reliably returned, then free the cache. */
+static void memboundTLSAtExit(void *cache) {
+    if (cache) {
+        memboundTLSDrain((memboundTLSCache *)cache);
+        zfree(cache);
+    }
+}
+
+static void memboundTLSKeyInit(void) {
+    pthread_key_create(&memboundTLSKey, memboundTLSAtExit);
+}
+
+/* Lazily create this thread's heap-allocated cache. Heap (not TLS) storage lets
+ * the key destructor reach it at thread exit even after _Thread_local teardown.
+ */
+static memboundTLSCache *memboundTLSGet(void) {
+    if (!memboundTLSp) {
+        pthread_once(&memboundTLSOnce, memboundTLSKeyInit);
+        memboundTLSp = (memboundTLSCache *)zcalloc(1, sizeof(memboundTLSCache));
+        if (memboundTLSp) {
+            pthread_setspecific(memboundTLSKey, memboundTLSp);
+        }
+    }
+    return memboundTLSp;
+}
+
+/* Detach the calling thread's cache from pool m WITHOUT freeing its blocks
+ * (used at shutdown, where the pool frees everything anyway). */
+static void memboundTLSDetach(const membound *m) {
+    if (memboundTLSp && memboundTLSp->owner == m) {
+        for (int i = 0; i < MEMBOUND_TLS_CLASSES; i++) {
+            memboundTLSp->head[i] = NULL;
+        }
+        memboundTLSp->deferredN = 0;
+        memboundTLSp->owner = NULL;
+    }
+}
+
+/* Reconcile this thread's cache with pool m at the current epoch. On a pool
+ * switch, the old pool's buffered frees and cached blocks are returned to it.
+ * On an epoch bump for the same pool (a reset), the held blocks were already
+ * wiped by the reset, so they are dropped, not freed. */
+static bool memboundTLSBind(membound *m, memboundTLSCache *c) {
+    const uint64_t epoch =
+        atomic_load_explicit(&m->enterprise->cacheEpoch, memory_order_acquire);
+    if (c->owner == m && c->epoch == epoch) {
+        return true;
+    }
+    if (c->owner == m) {
+        /* reset bumped the epoch: cached + deferred blocks are gone -> drop */
+        for (int i = 0; i < MEMBOUND_TLS_CLASSES; i++) {
+            c->head[i] = NULL;
+        }
+        c->deferredN = 0;
+    } else if (c->owner) {
+        /* switching pools: return the old pool's blocks before rebinding */
+        memboundTLSDrain(c); /* flushes deferred + drains, sets owner = NULL */
+    }
+    c->owner = m;
+    c->epoch = epoch;
+    c->deferredN = 0;
+    return true;
+}
+
+/* Map a request to its cache class (== buddy logsize), or -1 if not cacheable.
+ */
+static int memboundCacheClass(const membound *m, size_t nBytes) {
+    const memboundExtent *pri = m->primary;
+    if (!pri) {
+        return -1;
+    }
+    int cls;
+    if ((int64_t)nBytes <= pri->szAtom) {
+        cls = 0;
+    } else {
+        cls = memboundLog(
+            (int64_t)((nBytes + (size_t)pri->szAtom - 1) >> pri->atomShift));
+    }
+    return (cls >= 0 && cls < MEMBOUND_TLS_CLASSES) ? cls : -1;
+}
+
+/* Serve nBytes from the thread cache, refilling a batch under one lock on miss.
+ * Returns NULL when the cache can't serve (caller falls back to locked alloc).
+ */
+static void *memboundThreadCacheAlloc(membound *m, size_t nBytes) {
+    const int cls = memboundCacheClass(m, nBytes);
+    if (cls < 0) {
+        return NULL;
+    }
+    memboundTLSCache *c = memboundTLSGet();
+    if (!c) {
+        return NULL;
+    }
+
+    memboundTLSBind(m, c);
+
+    void *p = c->head[cls];
+    if (p) {
+        c->head[cls] = *(void **)p; /* lock-free hit */
+        return p;
+    }
+
+    const size_t blockSize = (size_t)m->primary->szAtom << cls;
+    const int batchN = m->enterprise->threadCacheBatch;
+    void *batch[MEMBOUND_TLS_BATCH_MAX];
+    int n = 0;
+    memboundEnter(m);
+    for (int i = 0; i < batchN; i++) {
+        void *b = (m->mode == MEMBOUND_MODE_FIXED)
+                      ? memboundAllocFixed(m, blockSize)
+                      : memboundAllocDynamic(m, blockSize);
+        if (!b) {
+            break;
+        }
+        batch[n++] = b;
+    }
+    memboundLeave(m);
+    if (n == 0) {
+        return NULL;
+    }
+    for (int i = 1; i < n; i++) {
+        *(void **)batch[i] = c->head[cls];
+        c->head[cls] = batch[i];
+    }
+    return batch[0];
+}
+
+/* Return every buffered free to the pool under a single lock acquisition. */
+static void memboundTLSFlushDeferred(memboundTLSCache *c) {
+    membound *m = (membound *)c->owner;
+    if (!m || c->deferredN == 0) {
+        c->deferredN = 0;
+        return;
+    }
+    memboundEnter(m);
+    for (int i = 0; i < c->deferredN; i++) {
+        memboundFreeLockedStandard(m, c->deferred[i]);
+    }
+    memboundLeave(m);
+    c->deferredN = 0;
+}
+
+/* Free-side fast path: buffer the pointer thread-locally and flush the whole
+ * batch under one lock when full. Always "succeeds" for a bound pool. */
+static bool memboundThreadCacheFree(membound *m, void *p) {
+    memboundTLSCache *c = memboundTLSGet();
+    if (!c) {
+        return false;
+    }
+    memboundTLSBind(m, c);
+    c->deferred[c->deferredN++] = p;
+    if (c->deferredN >= m->enterprise->threadCacheBatch) {
+        memboundTLSFlushDeferred(c);
+    }
+    return true;
+}
+
+void memboundFlushThreadCache(membound *m) {
+    if (m && memboundUsesThreadCache(m) && memboundTLSp &&
+        memboundTLSp->owner == m) {
+        memboundTLSDrain(memboundTLSp); /* flushes deferred, then drains */
+    }
+}
+
 void *memboundAlloc(membound *m, size_t nBytes) {
     if (!m || nBytes == 0) {
         return NULL;
@@ -1948,6 +2086,15 @@ void *memboundAlloc(membound *m, size_t nBytes) {
     /* STANDARD and ENTERPRISE tiers use full membound struct */
     if (nBytes > 0x40000000) {
         return NULL;
+    }
+
+    /* ENTERPRISE opt-in: try the lock-free thread-local cache first. */
+    if (memboundUsesThreadCache(m)) {
+        void *cp = memboundThreadCacheAlloc(m, nBytes);
+        if (cp) {
+            return cp;
+        }
+        /* miss/exhausted -> fall through to the normal locked path */
     }
 
     memboundEnter(m);
@@ -2016,6 +2163,35 @@ void *memboundRealloc(membound *m, void *pPrior, size_t nBytes) {
         return NULL;
     }
 
+    /* MICRO/COMPACT are separate structs with no m->index; dispatch before
+     * touching any STANDARD/ENTERPRISE membound field (else OOB read). */
+    if (memboundIsMicro(m)) {
+        memboundMicro *mm = (memboundMicro *)m;
+        const size_t oldSize = memboundMicroSize(mm, pPrior);
+        if (nBytes <= oldSize) {
+            return pPrior;
+        }
+        void *p = memboundMicroAlloc(mm, nBytes);
+        if (p) {
+            memcpy(p, pPrior, oldSize);
+            memboundMicroFree(mm, pPrior);
+        }
+        return p;
+    }
+    if (memboundIsCompact(m)) {
+        memboundCompactPool *cp = (memboundCompactPool *)m;
+        const size_t oldSize = memboundCompactPoolSize(cp, pPrior);
+        if (nBytes <= oldSize) {
+            return pPrior;
+        }
+        void *p = memboundCompactPoolAlloc(cp, nBytes);
+        if (p) {
+            memcpy(p, pPrior, oldSize);
+            memboundCompactPoolFree(cp, pPrior);
+        }
+        return p;
+    }
+
     memboundEnter(m);
 
     /* Find owning extent */
@@ -2061,6 +2237,139 @@ void *memboundRealloc(membound *m, void *pPrior, size_t nBytes) {
     return p;
 }
 
+size_t memboundUsableSize(const membound *m, const void *ptr) {
+    if (!m || !ptr) {
+        return 0;
+    }
+    if (memboundIsMicro(m)) {
+        return memboundMicroSize((const memboundMicro *)m, ptr);
+    }
+    if (memboundIsCompact(m)) {
+        return memboundCompactPoolSize((const memboundCompactPool *)m, ptr);
+    }
+    /* Cast away const for the mutex; we only read. */
+    memboundEnter((membound *)m);
+    const memboundExtent *owner = memboundIndexLookup(&m->index, ptr);
+    const size_t sz = owner ? memboundExtentSize(owner, ptr) : 0;
+    memboundLeave((membound *)m);
+    return sz;
+}
+
+/* Round a request up to the block size that would actually be allocated, using
+ * the same power-of-two-of-atoms rule as memboundExtentAlloc. Returns 0 if the
+ * request exceeds the tier's largest block (logmax). */
+static size_t memboundRoundupSize(int64_t szAtom, uint32_t atomShift,
+                                  size_t size, int logmax) {
+    if (size == 0) {
+        return 0;
+    }
+    if ((int64_t)size <= szAtom) {
+        return (size_t)szAtom;
+    }
+    const int iLog =
+        memboundLog((int64_t)((size + (size_t)szAtom - 1) >> atomShift));
+    if (iLog > logmax) {
+        return 0;
+    }
+    return (size_t)szAtom << iLog;
+}
+
+size_t memboundGoodSize(const membound *m, size_t size) {
+    if (!m || size == 0) {
+        return 0;
+    }
+    if (memboundIsMicro(m)) {
+        const memboundMicro *mm = (const memboundMicro *)m;
+        return memboundRoundupSize(mm->szAtom, mm->atomShift, size,
+                                   MEMBOUND_MICRO_LOGMAX);
+    }
+    if (memboundIsCompact(m)) {
+        const memboundCompactPool *cp = (const memboundCompactPool *)m;
+        return memboundRoundupSize(cp->szAtom, cp->atomShift, size,
+                                   MEMBOUND_COMPACT_LOGMAX);
+    }
+    if (!m->primary) {
+        return 0;
+    }
+    return memboundRoundupSize(m->primary->szAtom, m->primary->atomShift, size,
+                               MEMBOUND_LOGMAX);
+}
+
+void *memboundExpand(membound *m, void *ptr, size_t newSize) {
+    if (!m || !ptr) {
+        return NULL;
+    }
+    /* In-place only: succeed iff the current block already satisfies newSize.
+     */
+    return (newSize <= memboundUsableSize(m, ptr)) ? ptr : NULL;
+}
+
+void *memboundRecalloc(membound *m, void *ptr, size_t count, size_t size) {
+    if (!m) {
+        return NULL;
+    }
+    if (count != 0 && size != 0 && count > SIZE_MAX / size) {
+        return NULL; /* overflow */
+    }
+    const size_t total = count * size; /* 0 if either is 0 */
+    const size_t oldUsable = ptr ? memboundUsableSize(m, ptr) : 0;
+    void *np = memboundRealloc(m, ptr, total); /* total==0 frees ptr -> NULL */
+    if (np && total > oldUsable) {
+        /* zero only the newly grown tail; realloc preserved the head */
+        memset((uint8_t *)np + oldUsable, 0, total - oldUsable);
+    }
+    return np;
+}
+
+void *memboundAllocAligned(membound *m, size_t nBytes, size_t alignment) {
+    if (!m || nBytes == 0 || alignment == 0 ||
+        (alignment & (alignment - 1)) != 0) {
+        return NULL; /* alignment must be a non-zero power of two */
+    }
+    /* Buddy blocks are naturally aligned to their (power-of-two) size relative
+     * to the page-aligned pool base, so allocating at least `alignment` bytes
+     * yields an `alignment`-aligned block for alignments up to the pool base
+     * alignment. Verify and fail rather than ever return an under-aligned
+     * block (e.g. an alignment larger than the pool base). */
+    const size_t need = nBytes > alignment ? nBytes : alignment;
+    void *p = memboundAlloc(m, need);
+    if (p && ((uintptr_t)p % alignment) == 0) {
+        return p;
+    }
+    if (p) {
+        memboundFree(m, p);
+    }
+    return NULL;
+}
+
+/* The global-lock free body: lookup, validate, release, account, and
+ * opportunistically shrink. The caller MUST hold the pool lock. Invalid
+ * pointers bump the violation counter and are skipped (no early unlock — the
+ * caller owns the lock). */
+static void memboundFreeLockedStandard(membound *m, void *pPrior) {
+    memboundExtent *owner = memboundIndexLookup(&m->index, pPrior);
+    if (!owner) {
+        atomic_fetch_add_explicit(&m->safetyViolations, 1,
+                                  memory_order_relaxed);
+        return;
+    }
+    if (!memboundValidateFree(m, owner, pPrior)) {
+        return;
+    }
+    size_t freedSize = memboundExtentSize(owner, pPrior);
+    memboundExtentFree(owner, pPrior);
+    m->currentOut -= freedSize;
+    m->currentCount--;
+    if (m->mode == MEMBOUND_MODE_DYNAMIC &&
+        m->strategy.shrinkThreshold > 0.0f && owner->currentCount == 0 &&
+        owner != m->primary) {
+        float occ = memboundExtentOccupancy(owner);
+        if (occ < m->strategy.shrinkThreshold) {
+            memboundReleaseExtent(m, owner);
+        }
+    }
+}
+
 void memboundFree(membound *m, void *pPrior) {
     if (!m || !pPrior) {
         return;
@@ -2075,6 +2384,15 @@ void memboundFree(membound *m, void *pPrior) {
     if (memboundIsCompact(m)) {
         memboundCompactPoolFree((memboundCompactPool *)m, pPrior);
         return;
+    }
+
+    /* ENTERPRISE opt-in free-side fast path: buffer the return thread-locally
+     * and flush in one locked batch. Skipped while draining the cache (to avoid
+     * re-buffering blocks we are returning to the pool). */
+    if (!memboundTLSBypass && memboundUsesThreadCache(m)) {
+        if (memboundThreadCacheFree(m, pPrior)) {
+            return;
+        }
     }
 
     /* STANDARD and ENTERPRISE tiers use full membound struct */
@@ -2098,29 +2416,8 @@ void memboundFree(membound *m, void *pPrior) {
 
     size_t freedSize = memboundExtentSize(owner, pPrior);
 
-    /* ENTERPRISE tier with per-extent locking: release global lock during free
-     */
-    if (memboundUsesPerExtentLocking(m) && owner->extentMutexInitialized) {
-        /* IMPORTANT: Acquire per-extent lock WHILE holding global lock.
-         * This prevents race where another thread starts an operation on
-         * this extent before we can lock it. */
-        memboundExtentEnter(owner);
-
-        /* Now release global lock - other threads can work on other extents */
-        memboundLeave(m);
-
-        /* Do the actual free under per-extent lock */
-        memboundExtentFree(owner, pPrior);
-
-        /* Release per-extent lock */
-        memboundExtentLeave(owner);
-
-        /* Re-acquire global lock for stats update */
-        memboundEnter(m);
-    } else {
-        /* Standard path: free under global lock */
-        memboundExtentFree(owner, pPrior);
-    }
+    /* Free under the global lock (single lock domain). */
+    memboundExtentFree(owner, pPrior);
 
     /* Update aggregate stats */
     m->currentOut -= freedSize;
@@ -2184,6 +2481,13 @@ void memboundReset(membound *m) {
     /* Reset aggregate stats */
     m->currentOut = 0;
     m->currentCount = 0;
+
+    /* Invalidate any thread-local caches: their blocks were just freed, so a
+     * stale cache must self-discard (not double-free) on next use. */
+    if (m->enterprise) {
+        atomic_fetch_add_explicit(&m->enterprise->cacheEpoch, 1,
+                                  memory_order_release);
+    }
 
     memboundLeave(m);
 }
@@ -2339,12 +2643,188 @@ size_t memboundShrink(membound *m) {
     return released;
 }
 
-/* Attempt to consolidate memory by releasing empty extents.
- * Currently equivalent to memboundShrink() - true compaction would
- * require moving allocations between extents, which would invalidate
- * pointers and require application cooperation. */
+/* A live allocation captured during a drain, recorded before any relocation
+ * mutates the source extent's control bytes. */
+typedef struct memboundRelocBlock {
+    void *ptr;
+    size_t size; /* full allocated block size (atom-aligned power of two) */
+} memboundRelocBlock;
+
+/* Allocate a block of exactly `size` bytes in some extent other than `src`,
+ * trying existing extents only (compaction never grows the pool). Returns the
+ * new pointer, or NULL if no other extent can satisfy the request. Caller holds
+ * the lock. Prefers fuller extents to maximize consolidation. */
+static void *memboundRelocAlloc(membound *m, const memboundExtent *src,
+                                size_t size) {
+    void *best = NULL;
+    float bestOcc = -1.0f;
+    memboundExtent *bestExtent = NULL;
+
+    /* First pass: pick the fullest extent that has room, so we pack into
+     * already-busy extents rather than spreading across many. */
+    for (memboundExtent *e = m->extents; e; e = e->next) {
+        if (e == src) {
+            continue;
+        }
+        if (memboundExtentBytesAvailable(e) < size) {
+            continue;
+        }
+        float occ = memboundExtentOccupancy(e);
+        if (occ > bestOcc) {
+            bestOcc = occ;
+            bestExtent = e;
+        }
+    }
+
+    if (bestExtent) {
+        best = memboundExtentAlloc(bestExtent, size);
+        if (best) {
+            return best;
+        }
+    }
+
+    /* Fallback: free byte count was sufficient but the preferred extent could
+     * not place a contiguous buddy block. Try every other extent in order. */
+    for (memboundExtent *e = m->extents; e; e = e->next) {
+        if (e == src || e == bestExtent) {
+            continue;
+        }
+        if (memboundExtentBytesAvailable(e) < size) {
+            continue;
+        }
+        best = memboundExtentAlloc(e, size);
+        if (best) {
+            return best;
+        }
+    }
+
+    return NULL;
+}
+
+/* Relocate every live allocation out of extent E into other extents. Returns
+ * true only if E was fully drained (now empty). Caller holds the lock.
+ *
+ * Aggregate pool stats (m->currentOut / m->currentCount) are intentionally not
+ * touched: each block is moved at its exact size, so per-extent deltas cancel
+ * and the live totals are unchanged. */
+static bool memboundDrainExtent(membound *m, memboundExtent *e,
+                                memboundRelocationCallback cb, void *userData) {
+    /* Snapshot E's live blocks before relocation mutates its control bytes.
+     * Walk the buddy partition head-to-head: each head byte stores the block's
+     * log-size, and FREE distinguishes free vs. allocated heads. */
+    size_t cap = 16;
+    size_t n = 0;
+    memboundRelocBlock *blocks = zmalloc(cap * sizeof(*blocks));
+    if (!blocks) {
+        return false;
+    }
+
+    for (int64_t i = 0; i < e->nBlock;) {
+        const uint8_t c = e->aCtrl[i];
+        const int logsize = c & MEMBOUND_CTRL_LOGSIZE;
+        const int64_t blockAtoms = 1LL << logsize;
+        if (!(c & MEMBOUND_CTRL_FREE)) {
+            if (n == cap) {
+                cap *= 2;
+                memboundRelocBlock *grown =
+                    zrealloc(blocks, cap * sizeof(*blocks));
+                if (!grown) {
+                    zfree(blocks);
+                    return false;
+                }
+                blocks = grown;
+            }
+            blocks[n].ptr = &e->zPool[i * e->szAtom];
+            blocks[n].size = (size_t)e->szAtom << logsize;
+            n++;
+        }
+        i += blockAtoms;
+    }
+
+    bool drained = true;
+    for (size_t k = 0; k < n; k++) {
+        void *np = memboundRelocAlloc(m, e, blocks[k].size);
+        if (!np) {
+            /* No existing extent can hold this block - leave E in place. */
+            drained = false;
+            break;
+        }
+        memcpy(np, blocks[k].ptr, blocks[k].size);
+        if (cb) {
+            cb(blocks[k].ptr, np, blocks[k].size, userData);
+        }
+        memboundExtentFree(e, blocks[k].ptr);
+    }
+
+    zfree(blocks);
+    return drained;
+}
+
+/* Relocating compaction core. Caller holds the lock. Returns extents released.
+ */
+static size_t memboundCompactRelocate(membound *m) {
+    memboundRelocationCallback cb = m->relocationCallback;
+    void *userData = m->relocationUserData;
+    size_t released = 0;
+
+    /* Releasing an extent unlinks it, so capture next before touching e. */
+    memboundExtent *e = m->extents;
+    while (e) {
+        memboundExtent *next = e->next;
+
+        /* Never relocate out of the primary extent. */
+        if (e == m->primary) {
+            e = next;
+            continue;
+        }
+
+        if (e->currentCount == 0) {
+            /* Already empty - just release it. */
+            if (memboundReleaseExtent(m, e)) {
+                released++;
+            }
+        } else if (memboundDrainExtent(m, e, cb, userData) &&
+                   e->currentCount == 0) {
+            if (memboundReleaseExtent(m, e)) {
+                released++;
+            }
+        }
+
+        e = next;
+    }
+
+    return released;
+}
+
 size_t memboundCompact(membound *m) {
-    return memboundShrink(m);
+    if (!m) {
+        return 0;
+    }
+    /* MICRO and COMPACT pools are a single inline extent: nothing to compact.
+     */
+    if (memboundIsMicro(m) || memboundIsCompact(m)) {
+        return 0;
+    }
+
+    /* Return this thread's cached blocks before relocating: a cached block is
+     * "live" but held by the cache (not the app), so the relocation callback
+     * could not fix up its pointer. (Multi-thread contract: other threads must
+     * have flushed/exited before compacting with the thread cache enabled.) */
+    memboundFlushThreadCache(m);
+
+    memboundEnter(m);
+    const bool canRelocate =
+        m->mode == MEMBOUND_MODE_DYNAMIC && m->relocationCallback != NULL;
+    if (!canRelocate) {
+        /* No relocation callback: fall back to releasing empty extents.
+         * memboundShrink() takes the lock itself, so release first. */
+        memboundLeave(m);
+        return memboundShrink(m);
+    }
+
+    size_t released = memboundCompactRelocate(m);
+    memboundLeave(m);
+    return released;
 }
 
 /* ====================================================================
@@ -2378,10 +2858,22 @@ memboundExtentStrategy memboundSetStrategy(membound *m,
 }
 
 memboundExtentStrategy memboundGetStrategy(const membound *m) {
-    if (!m || m->mode != MEMBOUND_MODE_DYNAMIC) {
+    if (!m) {
         return MEMBOUND_STRATEGY_FIRST_FIT;
     }
-    return m->strategy.strategy;
+    /* MICRO and COMPACT tiers are always fixed mode - no strategy applies. */
+    if (memboundIsMicro(m) || memboundIsCompact(m)) {
+        return MEMBOUND_STRATEGY_FIRST_FIT;
+    }
+    if (m->mode != MEMBOUND_MODE_DYNAMIC) {
+        return MEMBOUND_STRATEGY_FIRST_FIT;
+    }
+    /* Cast away const for mutex - safe as we only lock, not modify data.
+     * Locking keeps the read consistent with memboundSetStrategy(). */
+    memboundEnter((membound *)m);
+    memboundExtentStrategy result = m->strategy.strategy;
+    memboundLeave((membound *)m);
+    return result;
 }
 
 void memboundSetMinOccupancy(membound *m, float threshold) {
@@ -2594,6 +3086,21 @@ void memboundSetPressureCallback(membound *m, memboundPressureCallback cb,
     memboundEnter(m);
     m->pressureCallback = cb;
     m->pressureUserData = userData;
+    memboundLeave(m);
+}
+
+void memboundSetRelocationCallback(membound *m, memboundRelocationCallback cb,
+                                   void *userData) {
+    if (!m) {
+        return;
+    }
+    /* Only STANDARD/ENTERPRISE pools have multiple extents to compact. */
+    if (memboundIsMicro(m) || memboundIsCompact(m)) {
+        return;
+    }
+    memboundEnter(m);
+    m->relocationCallback = cb;
+    m->relocationUserData = userData;
     memboundLeave(m);
 }
 
@@ -3528,6 +4035,20 @@ size_t memboundCompactPoolAllocationCount(const memboundCompactPool *m) {
     return m ? m->currentCount : 0;
 }
 
+size_t memboundCompactPoolSize(const memboundCompactPool *m, const void *ptr) {
+    if (!m || !ptr) {
+        return 0;
+    }
+    const uint8_t *z = (const uint8_t *)ptr;
+    if (z < m->zPool || z >= m->zPool + m->poolSize) {
+        return 0;
+    }
+    const int32_t i = (int32_t)((z - m->zPool) / m->szAtom);
+    /* COMPACT encodes the allocated flag in bit 0x80; logsize is the low 7 bits
+     * (NOT MEMBOUND_CTRL_LOGSIZE/0x1f used by STANDARD/MICRO). */
+    return (size_t)m->szAtom << (m->aCtrl[i] & 0x7F);
+}
+
 /* ====================================================================
  * COMPACT Tier Public API Wrappers
  * ==================================================================== */
@@ -3551,7 +4072,6 @@ membound *memboundCreateEnterprise(size_t initialSize, size_t maxSize) {
         .growthFactor = 0.0,
         .maxExtentCount = 0, /* Unlimited */
         .strategy = MEMBOUND_STRATEGY_FIRST_FIT,
-        .perExtentLocking = true, /* Enable per-extent parallelism by default */
     };
     return memboundCreateWithConfig(&config);
 }
@@ -3616,7 +4136,6 @@ memboundConfig memboundPresetDatabase(void) {
         .strategy = MEMBOUND_STRATEGY_SIZE_CLASS,
         .sizeClassSmall = 1024,   /* Small: <= 1KB */
         .sizeClassMedium = 65536, /* Medium: <= 64KB */
-        .perExtentLocking = true, /* Enable per-extent parallelism */
     };
     return config;
 }
@@ -3660,6 +4179,26 @@ static void testPressureCb(membound *mb, memboundPressure level, void *data) {
     testPressureCallCount++;
 }
 
+/* Relocation-callback test state: tracks one watched block's new address and
+ * counts moves, validating the callback contract on every invocation. */
+static int testRelocCount = 0;
+static void *testRelocWatchOld = NULL;
+static void *testRelocWatchNew = NULL;
+static size_t testRelocMinSize = 0;
+
+static void testRelocCb(void *oldPtr, void *newPtr, size_t size,
+                        void *userData) {
+    (void)userData;
+    testRelocCount++;
+    /* Contract checks: distinct addresses, block at least the requested size.
+     */
+    assert(oldPtr != newPtr);
+    assert(size >= testRelocMinSize);
+    if (oldPtr == testRelocWatchOld) {
+        testRelocWatchNew = newPtr;
+    }
+}
+
 /* ================================================================
  * Multi-threaded Test Infrastructure
  * ================================================================ */
@@ -3672,7 +4211,7 @@ typedef struct {
     membound *m;
     int threadId;
     int iterations;
-    volatile int *startFlag;
+    _Atomic int *startFlag;
     volatile int errors;
 } mtTestContext;
 
@@ -3680,7 +4219,7 @@ static void *mtAllocFreeWorker(void *arg) {
     mtTestContext *ctx = (mtTestContext *)arg;
 
     /* Wait for start signal */
-    while (!*ctx->startFlag) {
+    while (!atomic_load_explicit(ctx->startFlag, memory_order_acquire)) {
         /* spin */
     }
 
@@ -3733,7 +4272,7 @@ static void *mtReallocWorker(void *arg) {
     mtTestContext *ctx = (mtTestContext *)arg;
 
     /* Wait for start signal */
-    while (!*ctx->startFlag) {
+    while (!atomic_load_explicit(ctx->startFlag, memory_order_acquire)) {
         /* spin */
     }
 
@@ -3778,7 +4317,7 @@ static void *mtReallocWorker(void *arg) {
 static void *mtQueryWorker(void *arg) {
     mtTestContext *ctx = (mtTestContext *)arg;
 
-    while (!*ctx->startFlag) {
+    while (!atomic_load_explicit(ctx->startFlag, memory_order_acquire)) {
         /* spin */
     }
 
@@ -3847,6 +4386,46 @@ static void mtPressureCallback(membound *mb, memboundPressure level,
     }
 
     mtPressureCallbackExecuting = 0;
+}
+
+/* Worker for the thread-cache thread-exit test: allocs+frees on a shared pool,
+ * leaving refill surplus in its own thread cache, then exits (destructor
+ * drains). */
+static void *tcExitWorker(void *arg) {
+    membound *m = (membound *)arg;
+    void *p[100];
+    for (int i = 0; i < 100; i++) {
+        p[i] = memboundAlloc(m, 512);
+        assert(p[i]);
+    }
+    for (int i = 0; i < 100; i++) {
+        memboundFree(m, p[i]);
+    }
+    return NULL;
+}
+
+/* Hammer a thread-cache pool from several threads so the free-side batched
+ * flush runs under global-lock contention. Each thread keeps a private live
+ * set, writes a thread-unique tag, and verifies it survives -> catches a free
+ * handing the same block to two threads. */
+static void *tcStressWorker(void *arg) {
+    membound *m = (membound *)arg;
+    enum { LIVE = 64 };
+    void *p[LIVE];
+    const unsigned char tag = (unsigned char)((uintptr_t)pthread_self() >> 4);
+    for (int r = 0; r < 400; r++) {
+        for (int i = 0; i < LIVE; i++) {
+            const size_t sz = 64u << (i & 3); /* spans several cache classes */
+            p[i] = memboundAlloc(m, sz);
+            assert(p[i]);
+            ((unsigned char *)p[i])[0] = tag;
+        }
+        for (int i = 0; i < LIVE; i++) {
+            assert(((unsigned char *)p[i])[0] == tag); /* no shared block */
+            memboundFree(m, p[i]);
+        }
+    }
+    return NULL;
 }
 
 int memboundTest(int argc, char *argv[]) {
@@ -4737,7 +5316,6 @@ int memboundTest(int argc, char *argv[]) {
             .threadSafe = true,
             .maxTotalSize = 0, /* Unlimited */
             .growthSize = 1 << 20,
-            .perExtentLocking = false, /* Start without per-extent locks */
         };
 
         membound *m = memboundCreateWithConfig(&config);
@@ -4759,31 +5337,6 @@ int memboundTest(int argc, char *argv[]) {
         void *p = memboundAlloc(m, 4096);
         assert(p != NULL);
         memboundFree(m, p);
-        memboundShutdown(m);
-    }
-
-    TEST("ENTERPRISE: Per-extent locking enabled") {
-        memboundConfig config = {
-            .mode = MEMBOUND_MODE_DYNAMIC,
-            .initialSize = 1 << 20,
-            .tier = MEMBOUND_TIER_ENTERPRISE,
-            .threadSafe = true,
-            .maxTotalSize = 0,
-            .growthSize = 1 << 20,
-            .perExtentLocking = true, /* Enable per-extent locks */
-        };
-
-        membound *m = memboundCreateWithConfig(&config);
-        assert(m != NULL);
-        assert(memboundGetTier(m) == MEMBOUND_TIER_ENTERPRISE);
-
-        /* Basic operations work with per-extent locking */
-        void *p1 = memboundAlloc(m, 512);
-        void *p2 = memboundAlloc(m, 1024);
-        assert(p1 && p2);
-
-        memboundFree(m, p1);
-        memboundFree(m, p2);
         memboundShutdown(m);
     }
 
@@ -4872,7 +5425,6 @@ int memboundTest(int argc, char *argv[]) {
             .strategy = MEMBOUND_STRATEGY_SIZE_CLASS,
             .sizeClassSmall = 1024,
             .sizeClassMedium = 65536,
-            .perExtentLocking = true,
         };
 
         membound *m = memboundCreateWithConfig(&config);
@@ -4988,7 +5540,6 @@ int memboundTest(int argc, char *argv[]) {
         assert(config.mode == MEMBOUND_MODE_DYNAMIC);
         assert(config.initialSize == (64 << 20));
         assert(config.strategy == MEMBOUND_STRATEGY_SIZE_CLASS);
-        assert(config.perExtentLocking == true);
 
         membound *m = memboundCreateWithConfig(&config);
         assert(m != NULL);
@@ -5611,6 +6162,182 @@ int memboundTest(int argc, char *argv[]) {
         memboundShutdown(m);
     }
 
+    TEST("Strategy: getStrategy guards for non-dynamic and null pools") {
+        /* NULL pool is safe and returns the default. */
+        assert(memboundGetStrategy(NULL) == MEMBOUND_STRATEGY_FIRST_FIT);
+
+        /* Fixed-mode pools have no selection strategy; always FIRST_FIT. */
+        membound *fixed = memboundCreateFixed(1 << 16);
+        assert(fixed != NULL);
+        assert(memboundGetStrategy(fixed) == MEMBOUND_STRATEGY_FIRST_FIT);
+        memboundShutdown(fixed);
+
+        /* MICRO tier is fixed mode - the tier guard must short-circuit before
+         * reading m->mode, which would alias a different struct layout. */
+        membound *micro = memboundCreateMicro(4096);
+        assert(micro != NULL);
+        assert(memboundGetStrategy(micro) == MEMBOUND_STRATEGY_FIRST_FIT);
+        memboundShutdown(micro);
+    }
+
+    TEST("Edge: extent too small for one atom is rejected") {
+        /* A pool smaller than one atom plus its control byte must fail init
+         * rather than silently produce a zero-capacity extent. */
+        memboundExtent *tiny = memboundExtentCreate(64);
+        assert(tiny == NULL);
+
+        /* A pool large enough for at least one atom still succeeds. */
+        memboundExtent *ok = memboundExtentCreate(1 << 16);
+        assert(ok != NULL);
+        assert(ok->nBlock > 0);
+        memboundExtentDestroy(ok);
+    }
+
+    TEST("Index: ownership lookup across many extents (SIMD path)") {
+        /* Force enough extents to exercise the SIMD range-lookup path
+         * (MEMBOUND_EXTENT_SIMD_THRESHOLD). Fixed 16KB growth keeps extents
+         * small so each large allocation lands in a fresh extent. Each
+         * allocation must be correctly attributed, and a stack address to
+         * none. */
+        membound *m = memboundCreateDynamic(1 << 14, 0, 1 << 14);
+        assert(m != NULL);
+
+        void *ptrs[64];
+        int count = 0;
+        while (count < 64 && memboundExtentCount(m) < 16) {
+            void *p = memboundAlloc(m, 8192);
+            if (!p) {
+                break;
+            }
+            ptrs[count++] = p;
+        }
+        assert(memboundExtentCount(m) >= 8);
+
+        for (int i = 0; i < count; i++) {
+            assert(memboundOwns(m, ptrs[i]));
+        }
+
+        int onStack = 0;
+        assert(!memboundOwns(m, &onStack));
+
+        for (int i = 0; i < count; i++) {
+            memboundFree(m, ptrs[i]);
+        }
+        memboundShutdown(m);
+    }
+
+    TEST("Compact: without callback only releases empty extents") {
+        /* 64KB extents, fixed growth so a fresh extent is created on spill. */
+        membound *m = memboundCreateDynamic(1 << 16, 0, 1 << 16);
+        assert(m != NULL);
+
+        void *arr[64];
+        int k = 0;
+        while (memboundExtentCount(m) < 2 && k < 64) {
+            void *p = memboundAlloc(m, 4096);
+            if (!p) {
+                break;
+            }
+            arr[k++] = p;
+        }
+        assert(memboundExtentCount(m) == 2);
+
+        /* Free the entire first extent (everything except the spill block,
+         * which lives in the second extent). */
+        for (int i = 0; i < k - 1; i++) {
+            memboundFree(m, arr[i]);
+        }
+
+        /* No relocation callback registered -> compact == shrink: the now-empty
+         * first extent is released, the live block is untouched. */
+        size_t released = memboundCompact(m);
+        assert(released == 1);
+        assert(memboundExtentCount(m) == 1);
+        assert(memboundOwns(m, arr[k - 1]));
+
+        memboundFree(m, arr[k - 1]);
+        memboundShutdown(m);
+    }
+
+    TEST("Compact: relocation callback consolidates and moves a live block") {
+        /* Engineer a guaranteed relocation: fill extent 1, spill one block into
+         * extent 2, then free all of extent 1 except its first block. That
+         * block must relocate into extent 2's free space so extent 1 can be
+         * released. */
+        membound *m = memboundCreateDynamic(1 << 16, 0, 1 << 16);
+        assert(m != NULL);
+
+        void *arr[64];
+        int k = 0;
+        while (memboundExtentCount(m) < 2 && k < 64) {
+            void *p = memboundAlloc(m, 4096);
+            if (!p) {
+                break;
+            }
+            arr[k++] = p;
+        }
+        assert(memboundExtentCount(m) == 2);
+        assert(k >= 2);
+
+        /* Free extent 1's blocks except arr[0]; arr[k-1] is the extent-2 spill.
+         */
+        for (int i = 1; i < k - 1; i++) {
+            memboundFree(m, arr[i]);
+            arr[i] = NULL;
+        }
+
+        /* Stamp known patterns so we can prove data survives the move. */
+        memset(arr[0], 0xAB, 4096);
+        memset(arr[k - 1], 0xCD, 4096);
+
+        testRelocCount = 0;
+        testRelocWatchOld = arr[0];
+        testRelocWatchNew = NULL;
+        testRelocMinSize = 4096;
+        memboundSetRelocationCallback(m, testRelocCb, NULL);
+
+        size_t before = memboundExtentCount(m);
+        size_t liveBefore = memboundCurrentAllocationCount(m);
+        assert(liveBefore == 2);
+
+        size_t released = memboundCompact(m);
+
+        /* arr[0] was relocated into extent 2, emptying and releasing extent 1.
+         */
+        assert(testRelocCount >= 1);
+        assert(released >= 1);
+        assert(memboundExtentCount(m) < before);
+        assert(memboundExtentCount(m) == 1);
+        /* Live count is invariant across relocation (same blocks, new homes).
+         */
+        assert(memboundCurrentAllocationCount(m) == liveBefore);
+
+        void *moved = testRelocWatchNew;
+        assert(moved != NULL);
+        assert(moved != arr[0]);
+        assert(memboundOwns(m, moved));
+
+        /* Data preserved at both the moved block and the untouched spill block.
+         */
+        const unsigned char *mb = (const unsigned char *)moved;
+        for (int i = 0; i < 4096; i++) {
+            assert(mb[i] == 0xAB);
+        }
+        const unsigned char *sb = (const unsigned char *)arr[k - 1];
+        for (int i = 0; i < 4096; i++) {
+            assert(sb[i] == 0xCD);
+        }
+
+        /* Pool remains fully usable after compaction. */
+        void *q = memboundAlloc(m, 4096);
+        assert(q != NULL);
+        memboundFree(m, q);
+
+        memboundFree(m, moved);
+        memboundFree(m, arr[k - 1]);
+        memboundShutdown(m);
+    }
+
     /* ================================================================
      * Large Allocation Tests
      * ================================================================ */
@@ -5713,7 +6440,7 @@ int memboundTest(int argc, char *argv[]) {
 
         pthread_t threads[MT_NUM_THREADS];
         mtTestContext contexts[MT_NUM_THREADS];
-        volatile int startFlag = 0;
+        _Atomic int startFlag = 0;
 
         /* Create threads */
         for (int i = 0; i < MT_NUM_THREADS; i++) {
@@ -5728,7 +6455,7 @@ int memboundTest(int argc, char *argv[]) {
         }
 
         /* Start all threads at once */
-        startFlag = 1;
+        atomic_store_explicit(&startFlag, 1, memory_order_release);
 
         /* Wait for completion */
         int totalErrors = 0;
@@ -5751,7 +6478,7 @@ int memboundTest(int argc, char *argv[]) {
 
         pthread_t threads[MT_NUM_THREADS];
         mtTestContext contexts[MT_NUM_THREADS];
-        volatile int startFlag = 0;
+        _Atomic int startFlag = 0;
 
         for (int i = 0; i < MT_NUM_THREADS; i++) {
             contexts[i].m = m;
@@ -5765,7 +6492,7 @@ int memboundTest(int argc, char *argv[]) {
             assert(rc == 0);
         }
 
-        startFlag = 1;
+        atomic_store_explicit(&startFlag, 1, memory_order_release);
 
         for (int i = 0; i < MT_NUM_THREADS; i++) {
             pthread_join(threads[i], NULL);
@@ -5781,7 +6508,7 @@ int memboundTest(int argc, char *argv[]) {
 
         pthread_t threads[MT_NUM_THREADS];
         mtTestContext contexts[MT_NUM_THREADS];
-        volatile int startFlag = 0;
+        _Atomic int startFlag = 0;
 
         /* Half the threads do alloc/free, half do queries */
         for (int i = 0; i < MT_NUM_THREADS; i++) {
@@ -5797,7 +6524,7 @@ int memboundTest(int argc, char *argv[]) {
             assert(rc == 0);
         }
 
-        startFlag = 1;
+        atomic_store_explicit(&startFlag, 1, memory_order_release);
 
         int totalErrors = 0;
         for (int i = 0; i < MT_NUM_THREADS; i++) {
@@ -5855,7 +6582,7 @@ int memboundTest(int argc, char *argv[]) {
         assert(m != NULL);
 
         /* Reset state and run concurrent workers */
-        volatile int startFlag = 0;
+        _Atomic int startFlag = 0;
         mtTestContext contexts[MT_NUM_THREADS];
         pthread_t threads[MT_NUM_THREADS];
 
@@ -5869,7 +6596,7 @@ int memboundTest(int argc, char *argv[]) {
         }
 
         /* Start all threads simultaneously */
-        __atomic_store_n(&startFlag, 1, __ATOMIC_RELEASE);
+        atomic_store_explicit(&startFlag, 1, memory_order_release);
 
         /* Wait for completion */
         for (int i = 0; i < MT_NUM_THREADS; i++) {
@@ -5895,8 +6622,11 @@ int memboundTest(int argc, char *argv[]) {
         memboundShutdown(m);
     }
 
-    TEST("MT: ENTERPRISE per-extent parallel alloc/free") {
-        /* Create ENTERPRISE pool with per-extent locking enabled */
+    TEST("MT: ENTERPRISE concurrent alloc/free (global lock)") {
+        /* ENTERPRISE pool: concurrent alloc/free is serialized by the single
+         * global lock (per-extent locking was removed; the thread cache is the
+         * MT mechanism and is exercised separately). This verifies the tier is
+         * thread-safe and the extent-selection cache hint is race-free. */
         membound *m = memboundCreateEnterprise(1 << 16, 0); /* 64KB init */
         assert(m != NULL);
         assert(memboundGetTier(m) == MEMBOUND_TIER_ENTERPRISE);
@@ -5906,9 +6636,7 @@ int memboundTest(int argc, char *argv[]) {
         assert(bigAlloc != NULL);
         memboundFree(m, bigAlloc);
 
-        /* Run concurrent workers - they should be able to allocate from
-         * different extents in parallel with per-extent locking */
-        volatile int startFlag = 0;
+        _Atomic int startFlag = 0;
         mtTestContext contexts[MT_NUM_THREADS];
         pthread_t threads[MT_NUM_THREADS];
 
@@ -5922,7 +6650,7 @@ int memboundTest(int argc, char *argv[]) {
         }
 
         /* Start all threads simultaneously */
-        __atomic_store_n(&startFlag, 1, __ATOMIC_RELEASE);
+        atomic_store_explicit(&startFlag, 1, memory_order_release);
 
         /* Wait for completion */
         int totalErrors = 0;
@@ -5933,7 +6661,7 @@ int memboundTest(int argc, char *argv[]) {
 
         assert(totalErrors == 0);
 
-        /* Get stats to verify per-extent locking was used */
+        /* The global lock was exercised by the concurrent workers. */
         memboundStats stats;
         memboundGetStats(m, &stats);
         assert(stats.lockAcquisitions > 0);
@@ -6068,6 +6796,277 @@ int memboundTest(int argc, char *argv[]) {
         memboundGetStats(m, &stats);
         assert(stats.safetyViolations == 2);
 
+        memboundShutdown(m);
+    }
+
+    TEST("Realloc: MICRO/COMPACT tier dispatch (no m->index OOB)") {
+        /* Regression: memboundRealloc previously read m->index unconditionally,
+         * corrupting MICRO/COMPACT pools. Now it dispatches per tier. */
+        membound *micro = memboundCreateMicro(1 << 14);
+        assert(micro);
+        unsigned char *p = memboundAlloc(micro, 64);
+        assert(p);
+        for (int i = 0; i < 64; i++) {
+            p[i] = (unsigned char)i;
+        }
+        p = memboundRealloc(micro, p, 512); /* grow */
+        assert(p);
+        for (int i = 0; i < 64; i++) {
+            assert(p[i] == (unsigned char)i); /* preserved */
+        }
+        assert(memboundUsableSize(micro, p) >= 512);
+        assert(memboundRealloc(micro, p, 16) ==
+               p); /* shrink fits -> same ptr */
+        memboundFree(micro, p);
+        memboundShutdown(micro);
+
+        membound *comp = memboundCreateCompact(1 << 16, false);
+        assert(comp);
+        unsigned char *q = memboundAlloc(comp, 100);
+        assert(q);
+        memset(q, 0x5A, 100);
+        q = memboundRealloc(comp, q, 4096); /* grow */
+        assert(q && q[0] == 0x5A && q[99] == 0x5A);
+        assert(memboundUsableSize(comp, q) >= 4096);
+        memboundFree(comp, q);
+        memboundShutdown(comp);
+    }
+
+    TEST("UsableSize: returns >= request, 0 for NULL/unowned, all tiers") {
+        membound *m = memboundCreateDynamic(1 << 16, 0, 1 << 16);
+        assert(m);
+        void *p = memboundAlloc(m, 300);
+        assert(p);
+        size_t u = memboundUsableSize(m, p);
+        assert(u >= 300);             /* >= request */
+        assert(u == 512 || u >= 512); /* 300 rounds up (>=256 atom -> 512) */
+        assert(memboundUsableSize(m, NULL) == 0);
+        int onStack = 0;
+        assert(memboundUsableSize(m, &onStack) ==
+               0); /* unowned -> 0, no crash */
+        memboundFree(m, p);
+        memboundShutdown(m);
+    }
+
+    TEST("GoodSize: equals usableSize(alloc(n)) across tiers") {
+        membound *pools[3] = {memboundCreateDynamic(1 << 16, 0, 1 << 16),
+                              memboundCreateMicro(1 << 14),
+                              memboundCreateCompact(1 << 16, false)};
+        for (int t = 0; t < 3; t++) {
+            membound *m = pools[t];
+            assert(m);
+            for (size_t n = 1; n <= 4096; n = (n < 8 ? n + 1 : n * 2)) {
+                size_t good = memboundGoodSize(m, n);
+                void *p = memboundAlloc(m, n);
+                if (p) {
+                    assert(good == memboundUsableSize(m, p));
+                    memboundFree(m, p);
+                } else {
+                    /* alloc failed => goodSize may still be nonzero, skip */
+                }
+            }
+            assert(memboundGoodSize(m, 0) == 0);
+            memboundShutdown(m);
+        }
+    }
+
+    TEST("Expand: in-place only, no move/free") {
+        membound *m = memboundCreateDynamic(1 << 16, 0, 1 << 16);
+        assert(m);
+        void *p = memboundAlloc(m, 100); /* rounds up to >=256 */
+        assert(p);
+        size_t u = memboundUsableSize(m, p);
+        assert(memboundExpand(m, p, u) == p);        /* fits current block */
+        assert(memboundExpand(m, p, u + 1) == NULL); /* would need a move */
+        assert(memboundExpand(m, NULL, 8) == NULL);
+        memboundFree(m, p);
+        memboundShutdown(m);
+    }
+
+    TEST("Recalloc: zeroes grown tail, preserves head") {
+        membound *m = memboundCreateDynamic(1 << 16, 0, 1 << 16);
+        assert(m);
+        unsigned char *p = memboundAlloc(m, 64);
+        assert(p);
+        memset(p, 0xAB, 64);
+        p = memboundRecalloc(m, p, 1, 4096); /* grow */
+        assert(p);
+        for (int i = 0; i < 64; i++) {
+            assert(p[i] == 0xAB); /* head preserved */
+        }
+        for (int i = 64; i < 4096; i++) {
+            assert(p[i] == 0); /* grown tail zeroed */
+        }
+        assert(memboundRecalloc(m, NULL, (size_t)-1, 2) == NULL); /* overflow */
+        memboundFree(m, p);
+        memboundShutdown(m);
+    }
+
+    TEST("AllocAligned: honors power-of-two alignment, frees normally") {
+        membound *m = memboundCreateDynamic(1 << 20, 0, 1 << 20);
+        assert(m);
+        for (size_t a = 8; a <= 4096; a <<= 1) {
+            void *p = memboundAllocAligned(m, 1234, a);
+            assert(p);
+            assert(((uintptr_t)p % a) == 0);
+            assert(memboundUsableSize(m, p) >= 1234);
+            memboundFree(m, p); /* plain free works */
+        }
+        assert(memboundAllocAligned(m, 100, 3) == NULL); /* not power of two */
+        assert(memboundAllocAligned(m, 100, 0) == NULL);
+        assert(memboundAllocAligned(m, 0, 16) == NULL);
+        /* alloc/free cycle leaves the pool empty (no leak from over-alloc) */
+        assert(memboundCurrentAllocationCount(m) == 0);
+        memboundShutdown(m);
+    }
+
+    TEST("ThreadCache: churn correctness + flush leaves pool empty") {
+        memboundConfig cfg = {.mode = MEMBOUND_MODE_DYNAMIC,
+                              .initialSize = 1 << 18,
+                              .tier = MEMBOUND_TIER_ENTERPRISE,
+                              .threadSafe = true,
+                              .growthSize = 1 << 18,
+                              .threadCache = true};
+        membound *m = memboundCreateWithConfig(&cfg);
+        assert(m);
+        void *ptrs[200];
+        for (int r = 0; r < 50; r++) {
+            for (int i = 0; i < 200; i++) {
+                ptrs[i] = memboundAlloc(m, 256); /* served via thread cache */
+                assert(ptrs[i]);
+                ((unsigned char *)ptrs[i])[0] = (unsigned char)i;
+            }
+            for (int i = 0; i < 200; i++) {
+                assert(((unsigned char *)ptrs[i])[0] == (unsigned char)i);
+                memboundFree(m, ptrs[i]);
+            }
+        }
+        /* refill surplus stays reserved in the cache; flush returns it */
+        memboundFlushThreadCache(m);
+        assert(memboundCurrentAllocationCount(m) == 0);
+        memboundShutdown(m);
+    }
+
+    TEST("ThreadCache: thread-exit drains surplus (no leak)") {
+        memboundConfig cfg = {.mode = MEMBOUND_MODE_DYNAMIC,
+                              .initialSize = 1 << 18,
+                              .tier = MEMBOUND_TIER_ENTERPRISE,
+                              .threadSafe = true,
+                              .growthSize = 1 << 18,
+                              .threadCache = true};
+        membound *m = memboundCreateWithConfig(&cfg);
+        assert(m);
+        pthread_t th;
+        assert(pthread_create(&th, NULL, tcExitWorker, m) == 0);
+        pthread_join(th, NULL);
+        /* the worker's thread-exit destructor drained its cache back to the
+         * pool */
+        assert(memboundCurrentAllocationCount(m) == 0);
+        memboundShutdown(m);
+    }
+
+    TEST("ThreadCache: free-side batching returns memory without flush") {
+        memboundConfig cfg = {.mode = MEMBOUND_MODE_DYNAMIC,
+                              .initialSize = 1 << 20,
+                              .tier = MEMBOUND_TIER_ENTERPRISE,
+                              .threadSafe = true,
+                              .growthSize = 1 << 20,
+                              .threadCache = true};
+        membound *m = memboundCreateWithConfig(&cfg);
+        assert(m);
+        /* Free far more than one deferred batch so the buffer flushes itself
+         * mid-stream under one lock each time; no explicit flush below. */
+        const int batch = m->enterprise->threadCacheBatch;
+        const int N = batch * 4 + 7;
+        void **ptrs = zmalloc((size_t)N * sizeof(void *));
+        for (int i = 0; i < N; i++) {
+            ptrs[i] = memboundAlloc(m, 256);
+            assert(ptrs[i]);
+        }
+        for (int i = 0; i < N; i++) {
+            memboundFree(m, ptrs[i]);
+        }
+        /* Everything but the still-buffered tail (< one batch) plus any
+         * alloc-cache surplus must already be back in the pool. */
+        assert(memboundCurrentAllocationCount(m) < (size_t)(2 * batch));
+        memboundFlushThreadCache(m);
+        assert(memboundCurrentAllocationCount(m) == 0);
+        zfree(ptrs);
+        memboundShutdown(m);
+    }
+
+    TEST("ThreadCache: configurable batch (clamp + churn correctness)") {
+        /* Explicit small batch and an over-max batch (clamped to 256). */
+        const uint16_t wanted[] = {1, 8, 4000};
+        const uint16_t expect[] = {1, 8, 256};
+        for (int k = 0; k < 3; k++) {
+            memboundConfig cfg = {.mode = MEMBOUND_MODE_DYNAMIC,
+                                  .initialSize = 1 << 20,
+                                  .tier = MEMBOUND_TIER_ENTERPRISE,
+                                  .threadSafe = true,
+                                  .growthSize = 1 << 20,
+                                  .threadCache = true,
+                                  .threadCacheBatch = wanted[k]};
+            membound *m = memboundCreateWithConfig(&cfg);
+            assert(m);
+            assert(m->enterprise->threadCacheBatch == expect[k]);
+            void *p[300];
+            for (int r = 0; r < 20; r++) {
+                for (int i = 0; i < 300; i++) {
+                    p[i] = memboundAlloc(m, 128);
+                    assert(p[i]);
+                    ((unsigned char *)p[i])[0] = (unsigned char)i;
+                }
+                for (int i = 0; i < 300; i++) {
+                    assert(((unsigned char *)p[i])[0] == (unsigned char)i);
+                    memboundFree(m, p[i]);
+                }
+            }
+            memboundFlushThreadCache(m);
+            assert(memboundCurrentAllocationCount(m) == 0);
+            memboundShutdown(m);
+        }
+    }
+
+    TEST("ThreadCache: MT free-side batched flush under contention") {
+        memboundConfig cfg = {.mode = MEMBOUND_MODE_DYNAMIC,
+                              .initialSize = 4 << 20,
+                              .tier = MEMBOUND_TIER_ENTERPRISE,
+                              .threadSafe = true,
+                              .growthSize = 4 << 20,
+                              .threadCache = true};
+        membound *m = memboundCreateWithConfig(&cfg);
+        assert(m);
+        enum { NTH = 4 };
+        pthread_t th[NTH];
+        for (int i = 0; i < NTH; i++) {
+            assert(pthread_create(&th[i], NULL, tcStressWorker, m) == 0);
+        }
+        for (int i = 0; i < NTH; i++) {
+            pthread_join(th[i], NULL);
+        }
+        /* every worker drained its cache at exit */
+        assert(memboundCurrentAllocationCount(m) == 0);
+        memboundShutdown(m);
+    }
+
+    TEST("ThreadCache: reset invalidates stale cache safely (no double-free)") {
+        memboundConfig cfg = {.mode = MEMBOUND_MODE_DYNAMIC,
+                              .initialSize = 1 << 18,
+                              .tier = MEMBOUND_TIER_ENTERPRISE,
+                              .threadSafe = true,
+                              .growthSize = 1 << 18,
+                              .threadCache = true};
+        membound *m = memboundCreateWithConfig(&cfg);
+        assert(m);
+        void *a = memboundAlloc(m, 256); /* triggers refill -> surplus cached */
+        assert(a);
+        memboundReset(m); /* frees all + bumps cacheEpoch */
+        /* stale cache must self-discard (not double-free) on next use */
+        void *b = memboundAlloc(m, 256);
+        assert(b);
+        memboundFree(m, b);
+        memboundFlushThreadCache(m);
         memboundShutdown(m);
     }
 
