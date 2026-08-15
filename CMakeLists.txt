@@ -14,4 +14,23 @@ enable_testing()
 
 add_subdirectory(deps)
 add_subdirectory(src)
+
+find_package(Threads REQUIRED)
+
+# memshard correctness tests (run under the `dev` preset for ASAN/UBSAN):
+#   cmake --build <dir> --target memshardTest && ./<dir>/memshardTest
+add_executable(memshardTest ${CMAKE_CURRENT_SOURCE_DIR}/src/memshardTest.c)
+target_include_directories(memshardTest PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/memshard/include)
+target_link_libraries(memshardTest PRIVATE memshard Threads::Threads)
+
+# memshard-as-datakit-allocator adapter + its validation (opt-in integration:
+# routes datakit's global z* allocator through memshard).
+add_executable(memshardConfigTest
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/memshardConfigTest.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/memshardConfig.c)
+target_include_directories(memshardConfigTest PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/memshard/include)
+target_link_libraries(memshardConfigTest PRIVATE datakit-static memshard Threads::Threads)
 # vi:ai et sw=4 ts=4:

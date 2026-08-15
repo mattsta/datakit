@@ -15,6 +15,10 @@ else()
     # Untested platform?
 endif()
 
+# memshard allocator (vendored from mimalloc, being adapted). Added early so it
+# does not inherit datakit's per-build add_definitions (e.g. test -UNDEBUG).
+add_subdirectory(memshard)
+
 option(Build32Bit "Build 32-bit Library" OFF)
 option(UseC23 "Use C23 standard (enables _Float128 if available)" OFF)
 option(UseFloat128 "Force enable __float128 support (requires libquadmath on some platforms)" OFF)
