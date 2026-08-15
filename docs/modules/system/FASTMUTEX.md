@@ -596,7 +596,6 @@ struct fastCond {
 | Linux    | ✓       | C11     | Full support                      |
 | macOS    | ✓       | C11     | Full support                      |
 | FreeBSD  | ✓       | C11     | Full support                      |
-| Windows  | Partial | C11     | Needs pthread-win32               |
 | Others   | ✓       | C11     | Requires C11 atomics and pthreads |
 
 **Requirements:**

@@ -1186,16 +1186,11 @@ static inline size_t mi_popcount(size_t x) {
 }
 
 // ---------------------------------------------------------------------------------
-// Provide our own `_mi_memcpy` for potential performance optimizations.
-//
-// For now, only on Windows with msvc/clang-cl we optimize to `rep movsb` if
-// we happen to run on x86/x64 cpu's that have "fast short rep movsb" (FSRM)
-// support (AMD Zen3+ (~2020) or Intel Ice Lake+ (~2017). See also issue #201
-// and pr #253.
+// Provide our own `_mi_memcpy` as a seam for potential performance
+// optimizations (upstream issue #201 / pr #253).
+// datakit: plain libc memcpy/memset; a future optimization could route
+// _mi_memzero through datakit's SIMD zeroing.
 // ---------------------------------------------------------------------------------
-
-// datakit: plain libc memcpy/memset (Windows __movsb/__stosb path removed).
-// Phase 6 may route _mi_memzero through datakit's SIMD zeroing.
 static inline void _mi_memcpy(void *dst, const void *src, size_t n) {
     memcpy(dst, src, n);
 }

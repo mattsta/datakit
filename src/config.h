@@ -58,10 +58,6 @@ static const char DK_BITS = sizeof(void *) == 8   ? 64
 #endif
 #elif defined(sun) || defined(__sun)
 #define DK_OS_SOLARIS 1
-#elif defined(__CYGWIN__)
-#define DK_OS_CYGWIN 1
-#elif defined(_WIN32) || defined(__WIN32__) || defined(WIN32)
-#define DK_OS_WIN32 1
 #elif defined(_AIX)
 #define DK_OS_AIX 1
 #else
@@ -198,19 +194,11 @@ static const char DK_BITS = sizeof(void *) == 8   ? 64
 #ifndef DK_HAS_ISNAN
 #define dk_isnan(x) ((x) != (x))
 #else
-#if defined(_MSC_VER) && (_MSC_VER < 1900)
-#define dk_isnan(x) _isnan((x))
-#else
 #define dk_isnan(x) isnan(x)
-#endif
 #endif
 
 #ifndef DK_HAS_ISFINITE
-#ifdef _MSC_VER
-#define dk_isfinite(x) _finite((x))
-#else
 #define dk_isfinite(x) !dk_isnan((x) + (-(x)))
-#endif
 #else
 #define dk_isfinite(x) isfinite((x))
 #endif
@@ -218,11 +206,7 @@ static const char DK_BITS = sizeof(void *) == 8   ? 64
 #ifndef DK_HAS_ISINF
 #define dk_isinf(x) (!dk_isfinite(x) && !dk_isnan(x))
 #else
-#if defined(_MSC_VER) && (_MSC_VER < 1900)
-#define dk_isinf(x) (!_finite((x)) && !_isnan((x)))
-#else
 #define dk_isinf(x) isinf((x))
-#endif
 #endif
 
 /* ====================================================================

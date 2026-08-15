@@ -230,9 +230,7 @@
 /* ====================================================================
  * Known behavior helpers (always inline from lz4)
  * ==================================================================== */
-#if defined(_MSC_VER) /* Visual Studio */
-#define DK_INLINE_ALWAYS static __forceinline
-#elif DK_GNUC_VERSION_CODE || DK_CLANG_VERSION_CODE /* normal c99+ code */
+#if DK_GNUC_VERSION_CODE || DK_CLANG_VERSION_CODE /* normal c99+ code */
 #define DK_INLINE_ALWAYS static inline __attribute__((always_inline))
 #else /* fallback */
 #define DK_INLINE_ALWAYS static inline

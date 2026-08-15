@@ -185,18 +185,7 @@ int OSRegulateParentDeathKqueueFd(pid_t parent) {
 
 size_t OSRegulateCPUCountGet(void) {
     ssize_t cpuCount = 1;
-#ifdef _WIN32
-    SYSTEM_INFO si;
-    GetSystemInfo(&si);
-    cpuCount = si.dwNumberOfProcessors;
-#if 0
-#elif defined(_GNU_SOURCE) && defined(CPU_COUNT)
-    cpu_set_t set;
-    /* this crashes the process on mah linux server? */
-    pthread_getaffinity_np(pthread_self(), sizeof(set), &set);
-    cpuCount = CPU_COUNT(&set);
-#endif
-#elif defined(_SC_NPROCESSORS_ONLN)
+#if defined(_SC_NPROCESSORS_ONLN)
     cpuCount = sysconf(_SC_NPROCESSORS_ONLN);
 #endif
 

@@ -17,7 +17,6 @@ datakit is designed to be **highly portable** across different operating systems
 | **NetBSD**  | Supported | BSD variants fully supported        |
 | **Solaris** | Supported | Legacy Unix support                 |
 | **AIX**     | Supported | IBM Unix support                    |
-| **Windows** | Partial   | Cygwin, MinGW supported             |
 
 ### CPU Architectures
 
@@ -368,7 +367,7 @@ qemu-system-ppc64 -M pseries -cpu POWER9 ...
 
 ## Compiler Differences
 
-### GCC vs Clang vs MSVC
+### GCC vs Clang
 
 ```c
 /* Compiler detection */
@@ -376,8 +375,6 @@ qemu-system-ppc64 -M pseries -cpu POWER9 ...
     #define COMPILER_GCC 1
 #elif defined(__clang__)
     #define COMPILER_CLANG 1
-#elif defined(_MSC_VER)
-    #define COMPILER_MSVC 1
 #endif
 
 /* Inline hints */
@@ -386,11 +383,6 @@ qemu-system-ppc64 -M pseries -cpu POWER9 ...
     #define NEVER_INLINE __attribute__((noinline))
     #define LIKELY(x) __builtin_expect(!!(x), 1)
     #define UNLIKELY(x) __builtin_expect(!!(x), 0)
-#elif defined(COMPILER_MSVC)
-    #define ALWAYS_INLINE __forceinline
-    #define NEVER_INLINE __declspec(noinline)
-    #define LIKELY(x) (x)
-    #define UNLIKELY(x) (x)
 #endif
 
 /* Builtin functions */
@@ -398,11 +390,6 @@ qemu-system-ppc64 -M pseries -cpu POWER9 ...
     #define popcount(x) __builtin_popcountll(x)
     #define clz(x) __builtin_clzll(x)  /* Count leading zeros */
     #define ctz(x) __builtin_ctzll(x)  /* Count trailing zeros */
-#elif defined(COMPILER_MSVC)
-    #include <intrin.h>
-    #define popcount(x) __popcnt64(x)
-    #define clz(x) _lzcnt_u64(x)
-    #define ctz(x) _tzcnt_u64(x)
 #endif
 ```
 
@@ -420,11 +407,6 @@ qemu-system-ppc64 -M pseries -cpu POWER9 ...
 gcc -fprofile-generate -O3 program.c -o program
 ./program < test_data
 gcc -fprofile-use -O3 program.c -o program
-
-# MSVC
-/O2              # Maximum optimization
-/GL              # Whole program optimization
-/arch:AVX2       # Use AVX2 instructions
 ```
 
 ## Cross-Platform Build System
@@ -542,11 +524,8 @@ jobs:
   test:
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest]
         compiler: [gcc, clang]
-        exclude:
-          - os: windows-latest
-            compiler: gcc
 
     runs-on: ${{ matrix.os }}
 
@@ -607,13 +586,6 @@ jobs:
 
     #define atomic_inc(ptr) __sync_fetch_and_add(ptr, 1)
     #define atomic_load_relaxed(ptr) (*(ptr))
-
-/* MSVC intrinsics */
-#elif defined(_MSC_VER)
-    typedef volatile LONG64 atomic_counter;
-
-    #define atomic_inc(ptr) InterlockedIncrement64(ptr)
-    #define atomic_load_relaxed(ptr) (*(ptr))
 #endif
 ```
 
@@ -630,13 +602,6 @@ jobs:
 #elif defined(__APPLE__)
     #include <mach/mach_time.h>
     uint64_t ns = mach_absolute_time();
-
-#elif defined(_WIN32)
-    #include <windows.h>
-    LARGE_INTEGER freq, counter;
-    QueryPerformanceFrequency(&freq);
-    QueryPerformanceCounter(&counter);
-    uint64_t ns = (counter.QuadPart * 1000000000ULL) / freq.QuadPart;
 #endif
 ```
 
@@ -667,7 +632,6 @@ jobs:
 - Linux (glibc, musl)
 - macOS (latest, previous)
 - FreeBSD (latest)
-- Windows (MinGW, Cygwin)
 
 # Test architectures
 - x86_64

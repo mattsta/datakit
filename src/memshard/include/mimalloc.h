@@ -607,8 +607,7 @@ typedef enum mi_option_e {
     mi_option_disallow_arena_alloc, // 1 = do not use arena's for allocation
                                     // (except if using specific arena id's)
     mi_option_retry_on_oom,    // retry on out-of-memory for N milli seconds
-                               // (=400), set to 0 to disable retries. (only on
-                               // windows)
+                               // (=400), set to 0 to disable retries.
     mi_option_visit_abandoned, // allow visiting heap blocks from abandoned
                                // threads (=0)
     mi_option_guarded_min, // only used when building with MI_GUARDED: minimal
@@ -653,14 +652,13 @@ mi_decl_export void mi_option_set(mi_option_t option, long value);
 mi_decl_export void mi_option_set_default(mi_option_t option, long value);
 
 // -------------------------------------------------------------------------------------------------------
-// "mi" prefixed implementations of various posix, Unix, Windows, and C++
-// allocation functions. (This can be convenient when providing overrides of
-// these functions as done in `mimalloc-override.h`.) note: we use `mi_cfree` as
-// "checked free" and it checks if the pointer is in our heap before free-ing.
+// "mi" prefixed implementations of various posix, Unix, and C++
+// allocation functions.
+// note: we use `mi_cfree` as "checked free" and it checks if the pointer is in
+// our heap before free-ing.
 // -------------------------------------------------------------------------------------------------------
 
 mi_decl_export void mi_cfree(void *p) mi_attr_noexcept;
-mi_decl_export void *mi__expand(void *p, size_t newsize) mi_attr_noexcept;
 mi_decl_nodiscard mi_decl_export size_t mi_malloc_size(const void *p)
     mi_attr_noexcept;
 mi_decl_nodiscard mi_decl_export size_t mi_malloc_good_size(size_t size)
@@ -686,28 +684,11 @@ mi_reallocarray(void *p, size_t count, size_t size) mi_attr_noexcept
     mi_attr_alloc_size2(2, 3);
 mi_decl_nodiscard mi_decl_export int
 mi_reallocarr(void *ptrp, size_t count, size_t size) mi_attr_noexcept;
-mi_decl_nodiscard mi_decl_export void *
-mi_aligned_recalloc(void *p, size_t newcount, size_t size,
-                    size_t alignment) mi_attr_noexcept;
-mi_decl_nodiscard mi_decl_export void *
-mi_aligned_offset_recalloc(void *p, size_t newcount, size_t size,
-                           size_t alignment, size_t offset) mi_attr_noexcept;
 
 mi_decl_export void mi_free_size(void *p, size_t size) mi_attr_noexcept;
 mi_decl_export void mi_free_size_aligned(void *p, size_t size,
                                          size_t alignment) mi_attr_noexcept;
 mi_decl_export void mi_free_aligned(void *p, size_t alignment) mi_attr_noexcept;
-mi_decl_export int mi_dupenv_s(char **buf, size_t *size,
-                               const char *name) mi_attr_noexcept;
-
-// wide characters
-#include <wchar.h> // wchar_t
-mi_decl_export int mi_wdupenv_s(wchar_t **buf, size_t *size,
-                                const wchar_t *name) mi_attr_noexcept;
-mi_decl_nodiscard mi_decl_export mi_decl_restrict wchar_t *
-mi_wcsdup(const wchar_t *s) mi_attr_noexcept mi_attr_malloc;
-mi_decl_nodiscard mi_decl_export mi_decl_restrict unsigned char *
-mi_mbsdup(const unsigned char *s) mi_attr_noexcept mi_attr_malloc;
 
 // The `mi_new` wrappers implement C++ semantics on out-of-memory instead of
 // directly returning `NULL`. (and call `std::get_new_handler` and potentially

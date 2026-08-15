@@ -135,5 +135,5 @@ These containers use **scale-aware** implementations with small/medium/large var
 - **86+ header files** with comprehensive APIs
 - **30+ testable modules** with extensive test coverage
 - **10+ module categories** covering all common data structure needs
-- **Cross-platform** support for Linux, macOS, BSD, Solaris, AIX, Windows
+- **Cross-platform** support for Linux, macOS, BSD, Solaris, AIX
 - **Performance-focused** with aggressive optimizations and minimal overhead

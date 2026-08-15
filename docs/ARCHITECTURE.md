@@ -558,7 +558,6 @@ datakit supports multiple platforms through:
 - macOS / Darwin
 - FreeBSD, OpenBSD, NetBSD
 - Solaris, AIX
-- Windows (Cygwin, MinGW)
 
 **Feature Detection:**
 

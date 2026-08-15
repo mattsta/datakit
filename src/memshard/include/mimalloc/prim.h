@@ -12,7 +12,7 @@ terms of the MIT license. A copy of the license can be found in the file
 // --------------------------------------------------------------------------
 // This file specifies the primitive portability API.
 // Each OS/host needs to implement these primitives, see `src/prim`
-// for implementations on Window, macOS, WASI, and Linux/Unix.
+// for the macOS and Linux/Unix implementations.
 //
 // note: on all primitive functions, we always have result parameters != NULL,
 // and:
@@ -25,9 +25,8 @@ terms of the MIT license. A copy of the license can be found in the file
 typedef struct mi_os_mem_config_s {
     size_t page_size; // default to 4KiB
     size_t
-        large_page_size; // 0 if not supported, usually 2MiB (4MiB on Windows)
-    size_t alloc_granularity;      // smallest allocation size (usually 4KiB, on
-                                   // Windows 64KiB)
+        large_page_size;           // 0 if not supported, usually 2MiB
+    size_t alloc_granularity;      // smallest allocation size (usually 4KiB)
     size_t physical_memory_in_kib; // physical memory size in KiB
     size_t virtual_address_bits;   // usually 48 or 56 bits on 64-bit systems.
                                    // (used to determine secure randomization)
@@ -60,13 +59,13 @@ int _mi_prim_alloc(void *hint_addr, size_t size, size_t try_alignment,
 
 // Commit memory. Returns error code or 0 on success.
 // For example, on Linux this would make the memory PROT_READ|PROT_WRITE.
-// `is_zero` is set to true if the memory was zero initialized (e.g. on Windows)
+// `is_zero` is set to true if the memory was zero initialized
 int _mi_prim_commit(void *addr, size_t size, bool *is_zero);
 
 // Decommit memory. Returns error code or 0 on success. The `needs_recommit`
 // result is true if the memory would need to be re-committed. For example, on
-// Windows this is always true, but on Linux we could use MADV_DONTNEED to
-// decommit which does not need a recommit. pre: needs_recommit != NULL
+// Linux MADV_DONTNEED decommits without needing a recommit.
+// pre: needs_recommit != NULL
 int _mi_prim_decommit(void *addr, size_t size, bool *needs_recommit);
 
 // Reset memory. The range keeps being accessible but the content might be reset
@@ -352,7 +351,7 @@ Get the thread local default heap: `_mi_prim_get_default_heap()`
 
 This is inlined here as it is on the fast path for allocation functions.
 
-On most platforms (Windows, Linux, FreeBSD, NetBSD, etc), this just returns a
+On most platforms (Linux, FreeBSD, NetBSD, etc), this just returns a
 __thread local variable (`_mi_heap_default`). With the initial-exec TLS model
 this ensures that the storage will always be available (allocated on the thread
 stacks).

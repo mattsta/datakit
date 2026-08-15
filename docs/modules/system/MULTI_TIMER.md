@@ -744,7 +744,6 @@ MultiTimer works on all platforms supported by:
 | Linux    | ✓       | Full support                       |
 | macOS    | ✓       | Full support                       |
 | FreeBSD  | ✓       | Full support                       |
-| Windows  | Partial | Requires POSIX compatibility layer |
 | Others   | ✓       | Any POSIX system                   |
 
 ## Best Practices

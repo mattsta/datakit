@@ -83,21 +83,6 @@ memory is defined, undefined, or not accessible at all:
 #define mi_track_mem_undefined(p, size) ASAN_UNPOISON_MEMORY_REGION(p, size)
 #define mi_track_mem_noaccess(p, size) ASAN_POISON_MEMORY_REGION(p, size)
 
-#elif MI_TRACK_ETW
-// windows event tracing
-
-#define MI_TRACK_ENABLED 1
-#define MI_TRACK_HEAP_DESTROY 1
-#define MI_TRACK_TOOL "ETW"
-
-#include "../src/prim/windows/etw.h"
-
-#define mi_track_init() EventRegistermicrosoft_windows_mimalloc()
-#define mi_track_done() EventUnregistermicrosoft_windows_mimalloc()
-#define mi_track_malloc_size(p, reqsize, size, zero)                           \
-    EventWriteETW_MI_ALLOC((UINT64)(p), size)
-#define mi_track_free_size(p, size) EventWriteETW_MI_FREE((UINT64)(p), size)
-
 #else
 // no tracking
 
