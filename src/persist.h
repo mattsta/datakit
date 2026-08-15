@@ -187,6 +187,13 @@ typedef enum persistOp {
     PERSIST_OP_POP_TAIL = 13,  /* Pop from tail */
     PERSIST_OP_INSERT_AT = 14, /* Insert at index */
     PERSIST_OP_DELETE_AT = 15, /* Delete at index */
+    PERSIST_OP_TRIM = 16,      /* List trim; operand is the NORMALIZED
+                                * [head_cut, tail_cut] element counts
+                                * (2-elem flex) so replay applies the
+                                * exact effect the origin computed */
+    PERSIST_OP_ROTATE = 17,    /* Same-list tail->head rotate; no
+                                * operand.  NOT idempotent — WAL-local
+                                * exactly-once replay only */
 
     /* Bulk operations */
     PERSIST_OP_CLEAR = 20,       /* Remove all elements */
@@ -194,11 +201,72 @@ typedef enum persistOp {
     PERSIST_OP_BULK_DELETE = 22, /* Delete multiple elements */
     PERSIST_OP_MERGE = 23,       /* Merge another structure */
 
+    /* Range operations (operand: two raw uint64_t — [start, extent]).
+     * Fixed-width like the single-position bitmap ops, so no flex
+     * framing.  CLEAR_RANGE is idempotent; FLIP_RANGE is NOT (applying
+     * it twice un-flips), so it must never be re-folded on a replica
+     * without executor-identity dedupe. */
+    PERSIST_OP_CLEAR_RANGE = 24, /* Clear all bits in [start, start+extent) */
+    PERSIST_OP_FLIP_RANGE = 25,  /* Flip all bits in [start, start+extent) */
+
+    /* Numeric scalar deltas (operand: 1-element flex databox).
+     * The row carries the INCREMENT, never the absolute result, so
+     * concurrent increments from different origins fold correctly on
+     * every replica instead of last-writer-wins clobbering. */
+    /* String concatenation deltas (operand: RAW appended/prepended
+     * bytes, no framing — the payload IS the operand).  Emitters only
+     * choose these when the existing value is LONGER than the operand
+     * (else a REPLACE snapshot is strictly cheaper end-to-end). */
+    PERSIST_OP_STR_APPEND = 26,  /* value = value . operand */
+    PERSIST_OP_STR_PREPEND = 27, /* value = operand . value */
+
+    PERSIST_OP_NUM_INCR = 28,    /* Add operand to current value */
+    PERSIST_OP_NUM_DECR_F0 = 29, /* Subtract operand, floor at 0 */
+
+    /* Concat inverses (operand: raw uint64_t byte count).  Emitted
+     * ONLY by the pending-RMW ledger's truncation un-fold — a
+     * speculative STR_APPEND/STR_PREPEND fold that consensus
+     * truncated is reversed by cutting the same byte count off the
+     * same end.  Never written to a durable WAL row. */
+    PERSIST_OP_STR_TRUNC_TAIL = 30, /* drop last N bytes */
+    PERSIST_OP_STR_TRUNC_HEAD = 31, /* drop first N bytes */
+
+    /* Opaque whole-value write for host-defined (plugin) types.
+     * Operand shape is identical to a STRING snapshot
+     * ([encoded_type_byte][encoded_bytes]) because the value IS opaque
+     * bytes to everything below the plugin that produced it.
+     *
+     * Distinct from PERSIST_OP_REPLACE despite carrying a full value:
+     * REPLACE is the ABSOLUTE class (idempotent, unstamped, position-
+     * gated by the install frontier), while a plugin write is produced
+     * by executing host code against the value the executor read.  Only
+     * ONE node ran that code, so the row must carry executor identity
+     * and be suppressed on the executor's own re-apply — the same
+     * discipline the numeric deltas use.  Sharing REPLACE's op code
+     * would make those two contracts indistinguishable on the wire. */
+    PERSIST_OP_OPAQUE_SET = 32,
+
     /* Structure-specific operations (encoded in data) */
     PERSIST_OP_CUSTOM = 100,
 
     PERSIST_OP_MAX = 255
 } persistOp;
+
+/* Does this op's operand carry a COMPLETE serialized value rather than
+ * a delta?  Every replay/compaction/restore fold asks this instead of
+ * naming REPLACE directly: such a row RESETS the structure (restore the
+ * bytes, discard whatever was folded before it) and can never be routed
+ * through applyOp, whose per-type handlers accept only delta verbs.
+ *
+ * Two ops answer yes and they are NOT interchangeable on the wire —
+ * REPLACE is the absolute, unstamped, anyone-could-have-produced-it
+ * class, while OPAQUE_SET is the stamped output of host code that ran
+ * on exactly one node.  They agree only about operand SHAPE, which is
+ * precisely and only what this predicate asks about. */
+static inline bool persistOpCarriesFullValue(uint16_t op) {
+    return op == (uint16_t) PERSIST_OP_REPLACE
+        || op == (uint16_t) PERSIST_OP_OPAQUE_SET;
+}
 
 /* ============================================================================
  * Checksum Algorithms
@@ -337,6 +405,26 @@ struct persistOps {
 
     /* Free structure (if restore allocates) */
     void (*free)(void *structure);
+
+    /* ---- Optional Per-Fold Context Hooks ----
+     *
+     * Some codecs need ambient per-thread context beyond the bytes
+     * (e.g. Carrier's quantum-set codec resolves members through a
+     * shared atom table and must serialize against concurrent live
+     * mutators).  A fold engine that is about to call this type's
+     * restore/applyOp/snapshot/free MUST bracket the calls:
+     *
+     *     void *tok = ops->foldEnter ? ops->foldEnter() : NULL;
+     *     ... restore/applyOp/snapshot/free ...
+     *     if (ops->foldExit) ops->foldExit(tok);
+     *
+     * foldEnter acquires whatever locks/thread-locals the codec
+     * needs and returns an opaque token; foldExit releases them.
+     * Both NULL for codecs with no ambient context (the common
+     * case).  Hooks must be cheap and reentrancy-safe within one
+     * thread (an engine may bracket per-row or per-tail). */
+    void *(*foldEnter)(void);
+    void (*foldExit)(void *token);
 };
 
 /* ============================================================================

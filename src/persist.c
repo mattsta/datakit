@@ -2105,188 +2105,61 @@ const persistOps persistOpsIntset = {
  */
 #include "intsetBig.h"
 
-#define INTSETBIG_TAG_S64 ((uint8_t)1)
-#define INTSETBIG_TAG_U64 ((uint8_t)2)
-#define INTSETBIG_TAG_S128 ((uint8_t)3)
-#define INTSETBIG_TAG_U128 ((uint8_t)4)
-
-static size_t intsetBigPersistEntrySize(const databoxBig *b) {
-    switch (b->type) {
-    case DATABOX_SIGNED_64: /* fallthrough */
-    case DATABOX_UNSIGNED_64:
-        return 1 + 8;
-    case DATABOX_SIGNED_128: /* fallthrough */
-    case DATABOX_UNSIGNED_128:
-        return 1 + 16;
-    default:
-        return 0;
-    }
-}
-
 static uint8_t *intsetBigPersistSnapshot(const void *structure, size_t *len) {
     const intsetBig *isb = structure;
-    if (!isb) {
-        *len = sizeof(uint64_t);
-        uint8_t *empty = zcalloc(1, sizeof(uint64_t));
-        return empty;
-    }
-
-    /* Pass 1: compute size by walking iterator. */
-    intsetBigIterator it = {0};
-    intsetBigIteratorInit(isb, &it);
-    size_t total = sizeof(uint64_t);
-    uint64_t count = 0;
-    databoxBig dbig = {0};
-    while (intsetBigIteratorNextBox(&it, &dbig)) {
-        const size_t esz = intsetBigPersistEntrySize(&dbig);
-        if (esz == 0) {
-            continue;
-        }
-        total += esz;
-        count++;
-    }
-
-    uint8_t *buf = zmalloc(total);
-    if (!buf) {
+    /* A flex whose elements are the numeric members (one per member), built
+     * incrementally via the databoxBig factory push — no count header, no
+     * hand-rolled [tag][value] framing. */
+    flex *f = flexNew();
+    if (!f) {
         *len = 0;
         return NULL;
     }
-    /* Header: count (LE). */
-    memcpy(buf, &count, sizeof(uint64_t));
-    size_t pos = sizeof(uint64_t);
-
-    /* Pass 2: emit entries. */
-    intsetBigIteratorInit(isb, &it);
-    while (intsetBigIteratorNextBox(&it, &dbig)) {
-        switch (dbig.type) {
-        case DATABOX_SIGNED_64: {
-            buf[pos++] = INTSETBIG_TAG_S64;
-            int64_t v = dbig.data.i;
-            memcpy(buf + pos, &v, 8);
-            pos += 8;
-            break;
-        }
-        case DATABOX_UNSIGNED_64: {
-            buf[pos++] = INTSETBIG_TAG_U64;
-            uint64_t v = dbig.data.u;
-            memcpy(buf + pos, &v, 8);
-            pos += 8;
-            break;
-        }
-        case DATABOX_SIGNED_128: {
-            buf[pos++] = INTSETBIG_TAG_S128;
-            __int128_t v = *dbig.data.i128;
-            memcpy(buf + pos, &v, 16);
-            pos += 16;
-            break;
-        }
-        case DATABOX_UNSIGNED_128: {
-            buf[pos++] = INTSETBIG_TAG_U128;
-            __uint128_t v = *dbig.data.u128;
-            memcpy(buf + pos, &v, 16);
-            pos += 16;
-            break;
-        }
-        default:
-            /* Skip unknown — the size pass excluded these too. */
-            break;
+    if (isb) {
+        intsetBigIterator it = {0};
+        intsetBigIteratorInit(isb, &it);
+        databoxBig dbig = {0};
+        while (intsetBigIteratorNextBox(&it, &dbig)) {
+            flexPushDataboxBig(&f, &dbig, FLEX_ENDPOINT_TAIL);
         }
     }
-    *len = pos;
-    return buf;
-}
-
-static void intsetBigPersistAddOne(intsetBig *isb, const uint8_t *data,
-                                   size_t len, size_t *consumed) {
-    if (len < 1) {
-        *consumed = 0;
-        return;
-    }
-    const uint8_t tag = data[0];
-    databoxBig dbig = {0};
-    DATABOX_BIG_INIT(&dbig);
-    switch (tag) {
-    case INTSETBIG_TAG_S64: {
-        if (len < 9) {
-            *consumed = 0;
-            return;
-        }
-        int64_t v;
-        memcpy(&v, data + 1, 8);
-        dbig.type = DATABOX_SIGNED_64;
-        dbig.data.i = v;
-        intsetBigAdd(isb, &dbig);
-        *consumed = 9;
-        return;
-    }
-    case INTSETBIG_TAG_U64: {
-        if (len < 9) {
-            *consumed = 0;
-            return;
-        }
-        uint64_t v;
-        memcpy(&v, data + 1, 8);
-        dbig.type = DATABOX_UNSIGNED_64;
-        dbig.data.u = v;
-        intsetBigAdd(isb, &dbig);
-        *consumed = 9;
-        return;
-    }
-    case INTSETBIG_TAG_S128: {
-        if (len < 17) {
-            *consumed = 0;
-            return;
-        }
-        __int128_t v;
-        memcpy(&v, data + 1, 16);
-        dbig.type = DATABOX_SIGNED_128;
-        memcpy(dbig.extra, &v, 16);
-        dbig.data.i128 = (__int128_t *)dbig.extra;
-        intsetBigAdd(isb, &dbig);
-        *consumed = 17;
-        return;
-    }
-    case INTSETBIG_TAG_U128: {
-        if (len < 17) {
-            *consumed = 0;
-            return;
-        }
-        __uint128_t v;
-        memcpy(&v, data + 1, 16);
-        dbig.type = DATABOX_UNSIGNED_128;
-        memcpy(dbig.extra, &v, 16);
-        dbig.data.u128 = (__uint128_t *)dbig.extra;
-        intsetBigAdd(isb, &dbig);
-        *consumed = 17;
-        return;
-    }
-    default:
-        *consumed = 0; /* unknown tag — bail */
-        return;
-    }
+    *len = flexBytes(f);
+    return (uint8_t *)f;
 }
 
 static void *intsetBigPersistRestore(const uint8_t *data, size_t len) {
-    if (!data || len < sizeof(uint64_t)) {
+    /* Defensive: refuse a malformed flex from replication / on-disk recovery
+     * rather than walk past its header. */
+    if (!flexValidateBufferDeep(data, len)) {
         return NULL;
     }
-    uint64_t count;
-    memcpy(&count, data, sizeof(uint64_t));
     intsetBig *isb = intsetBigNew();
     if (!isb) {
         return NULL;
     }
-    size_t pos = sizeof(uint64_t);
-    for (uint64_t i = 0; i < count; i++) {
-        if (pos >= len) {
+    const flex *f = (const flex *)data;
+    /* flexHead returns non-NULL even for an EMPTY flex (it points to the end
+     * marker) — an empty intsetBig snapshots to a 2-byte empty flex, so a bare
+     * `while (fe)` walk would call flexGetByType on the terminator and read off
+     * the end.  Bound the walk by flexCount exactly like the multimap / qset
+     * restores do (an empty set restores to an empty intsetBig). */
+    const size_t count = flexCount(f);
+    flexEntry   *fe    = flexHead(f);
+    for (size_t i = 0; i < count && fe; i++) {
+        databoxBig dbig;
+        DATABOX_BIG_INIT(&dbig);
+        flexGetByType(fe, (databox *)&dbig);
+        switch (dbig.type) {
+        case DATABOX_SIGNED_64:
+        case DATABOX_UNSIGNED_64:
+        case DATABOX_SIGNED_128:
+        case DATABOX_UNSIGNED_128:
+            intsetBigAdd(isb, &dbig);
             break;
+        default:
+            break; /* skip non-numeric defensively */
         }
-        size_t consumed = 0;
-        intsetBigPersistAddOne(isb, data + pos, len - pos, &consumed);
-        if (consumed == 0) {
-            break; /* malformed — return what we have */
-        }
-        pos += consumed;
+        fe = flexNext(f, fe);
     }
     return isb;
 }
@@ -2304,46 +2177,21 @@ static size_t intsetBigPersistEstimateSize(const void *structure) {
 static bool intsetBigPersistApplyOp(void *structure, persistOp op,
                                     const uint8_t *data, size_t len) {
     intsetBig **isb_p = structure;
-    intsetBig *isb = *isb_p;
-    if (len < 1) {
+    intsetBig  *isb   = *isb_p;
+    /* Unwrap the 1-element flex back to the numeric member (128-bit-capable;
+     * defensive against malformed replicated bytes). */
+    databoxBig dbig;
+    if (!flexGetSingleDataboxBig(data, len, &dbig)) {
         return false;
     }
-    const uint8_t tag = data[0];
-    databoxBig dbig = {0};
-    DATABOX_BIG_INIT(&dbig);
-    switch (tag) {
-    case INTSETBIG_TAG_S64:
-        if (len < 9) {
-            return false;
-        }
-        dbig.type = DATABOX_SIGNED_64;
-        memcpy(&dbig.data.i, data + 1, 8);
-        break;
-    case INTSETBIG_TAG_U64:
-        if (len < 9) {
-            return false;
-        }
-        dbig.type = DATABOX_UNSIGNED_64;
-        memcpy(&dbig.data.u, data + 1, 8);
-        break;
-    case INTSETBIG_TAG_S128:
-        if (len < 17) {
-            return false;
-        }
-        dbig.type = DATABOX_SIGNED_128;
-        memcpy(dbig.extra, data + 1, 16);
-        dbig.data.i128 = (__int128_t *)dbig.extra;
-        break;
-    case INTSETBIG_TAG_U128:
-        if (len < 17) {
-            return false;
-        }
-        dbig.type = DATABOX_UNSIGNED_128;
-        memcpy(dbig.extra, data + 1, 16);
-        dbig.data.u128 = (__uint128_t *)dbig.extra;
+    switch (dbig.type) {
+    case DATABOX_SIGNED_64:
+    case DATABOX_UNSIGNED_64:
+    case DATABOX_SIGNED_128:
+    case DATABOX_UNSIGNED_128:
         break;
     default:
-        return false;
+        return false; /* only numeric members belong in an intsetBig */
     }
     switch (op) {
     case PERSIST_OP_INSERT:
@@ -2362,50 +2210,28 @@ static uint8_t *intsetBigPersistEncodeOp(persistOp op, const void *args,
                                          size_t argc, size_t *len) {
     (void)op;
     (void)argc;
-    /* args is a const databoxBig *. */
+    /* args is a const databoxBig *.  Only numeric members belong in an
+     * intsetBig; reject anything else (the factory would otherwise push it
+     * verbatim).  The member rides flex like every other Carrier value — a
+     * 1-element flex via the databoxBig factory arm. */
     const databoxBig *b = args;
-    const size_t esz = intsetBigPersistEntrySize(b);
-    if (esz == 0) {
-        *len = 0;
-        return NULL;
-    }
-    uint8_t *buf = zmalloc(esz);
-    if (!buf) {
-        *len = 0;
-        return NULL;
-    }
     switch (b->type) {
-    case DATABOX_SIGNED_64: {
-        buf[0] = INTSETBIG_TAG_S64;
-        int64_t v = b->data.i;
-        memcpy(buf + 1, &v, 8);
+    case DATABOX_SIGNED_64:
+    case DATABOX_UNSIGNED_64:
+    case DATABOX_SIGNED_128:
+    case DATABOX_UNSIGNED_128:
         break;
-    }
-    case DATABOX_UNSIGNED_64: {
-        buf[0] = INTSETBIG_TAG_U64;
-        uint64_t v = b->data.u;
-        memcpy(buf + 1, &v, 8);
-        break;
-    }
-    case DATABOX_SIGNED_128: {
-        buf[0] = INTSETBIG_TAG_S128;
-        __int128_t v = *b->data.i128;
-        memcpy(buf + 1, &v, 16);
-        break;
-    }
-    case DATABOX_UNSIGNED_128: {
-        buf[0] = INTSETBIG_TAG_U128;
-        __uint128_t v = *b->data.u128;
-        memcpy(buf + 1, &v, 16);
-        break;
-    }
     default:
-        zfree(buf);
         *len = 0;
         return NULL;
     }
-    *len = esz;
-    return buf;
+    flex *f = flexNewFromDataboxBig(b);
+    if (!f) {
+        *len = 0;
+        return NULL;
+    }
+    *len = flexBytes(f);
+    return (uint8_t *)f;
 }
 
 static void *intsetBigPersistNewEmpty(void) {
@@ -2473,6 +2299,10 @@ static size_t multiroarPersistEstimateSize(const void *structure) {
     return multiroarMemoryUsage(structure);
 }
 
+/* NOTE: a BITMAP op carries a single raw uint64_t bit position — a fixed-width
+ * value with no self-describing framing, so it is NOT a flex-migration target
+ * (unlike the multi-element set/list deltas).  Wrapping it in flex would only
+ * add header overhead for zero correctness benefit. */
 static uint8_t *multiroarPersistEncodeOp(persistOp op, const void *args,
                                          size_t argc, size_t *len) {
     (void)argc;
@@ -2485,6 +2315,17 @@ static uint8_t *multiroarPersistEncodeOp(persistOp op, const void *args,
         *len = sizeof(uint64_t);
         uint8_t *buf = zmalloc(*len);
         memcpy(buf, position, sizeof(uint64_t));
+        return buf;
+    }
+
+    case PERSIST_OP_CLEAR_RANGE:
+    case PERSIST_OP_FLIP_RANGE: {
+        /* args is uint64_t[2] ([start, extent]) — same fixed-width
+         * raw framing as the single-position ops. */
+        const uint64_t *range = args;
+        *len = 2 * sizeof(uint64_t);
+        uint8_t *buf = zmalloc(*len);
+        memcpy(buf, range, 2 * sizeof(uint64_t));
         return buf;
     }
 
@@ -2520,6 +2361,21 @@ static bool multiroarPersistApplyOp(void *structure, persistOp op,
         uint64_t position;
         memcpy(&position, data, sizeof(uint64_t));
         multiroarRemove(*r, position);
+        return true;
+    }
+
+    case PERSIST_OP_CLEAR_RANGE:
+    case PERSIST_OP_FLIP_RANGE: {
+        if (len != 2 * sizeof(uint64_t)) {
+            return false;
+        }
+        uint64_t range[2];
+        memcpy(range, data, sizeof(range));
+        if (op == PERSIST_OP_CLEAR_RANGE) {
+            multiroarBitClearRange(*r, range[0], range[1]);
+        } else {
+            multiroarBitFlipRange(*r, range[0], range[1]);
+        }
         return true;
     }
 
@@ -2610,7 +2466,12 @@ static uint8_t *hyperloglogPersistEncodeOp(persistOp op, const void *args,
                                            size_t argc, size_t *len) {
     /* For PFADD: args points at the raw value bytes; argc is the
      * byte count. hyperloglogAdd hashes internally, so the WAL
-     * carries the original member bytes verbatim. */
+     * carries the original member bytes verbatim.
+     *
+     * IMPORTANT: this MUST stay raw bytes — do NOT migrate to a flex element.
+     * flex canonicalises numeric strings (e.g. "1.50" -> 1.5), which would
+     * change the bytes fed to the hash and desync the cardinality estimate
+     * between leader and follower.  The exact member bytes are load-bearing. */
     if (op == PERSIST_OP_INSERT) {
         uint8_t *buf = NULL;
         if (argc > 0) {
@@ -2768,59 +2629,36 @@ static uint8_t *multimapPersistEncodeOp(persistOp op, const void *args,
 
     switch (op) {
     case PERSIST_OP_INSERT: {
-        /* Encode: [argc as varint][box0][box1]... */
-        /* First pass: calculate total length */
-        size_t totalLen = 1; /* 1 byte for argc (simple encoding) */
-        databoxLinear dls[argc];
-
-        for (size_t i = 0; i < argc; i++) {
-            size_t encodedLen;
-            const void *encodedVal;
-            uint8_t encodedType;
-            DATABOX_LINEAR_PARTS_ENCODE(boxes[i], encodedLen, encodedVal,
-                                        encodedType, &dls[i]);
-            (void)encodedVal;  /* Set by macro but only encodedLen is needed */
-            (void)encodedType; /* Set by macro but only encodedLen is needed */
-            totalLen += 1 + encodedLen; /* type + value */
+        /* All argc member boxes as a self-describing flex (no [argc] byte, no
+         * per-type length games — flex records each element's length, which
+         * the old hand-rolled multi-value path could not do for a non-last
+         * BYTES value). */
+        if (argc == 0 || !boxes) {
+            *len = 0;
+            return NULL;
         }
-
-        *len = totalLen;
-        uint8_t *buf = zmalloc(totalLen);
-        buf[0] = (uint8_t)argc;
-
-        size_t offset = 1;
-        for (size_t i = 0; i < argc; i++) {
-            size_t encodedLen;
-            const void *encodedVal;
-            uint8_t encodedType;
-            DATABOX_LINEAR_PARTS_ENCODE(boxes[i], encodedLen, encodedVal,
-                                        encodedType, &dls[i]);
-            buf[offset++] = encodedType;
-            memcpy(buf + offset, encodedVal, encodedLen);
-            offset += encodedLen;
+        flex *f = flexNewFromDataboxPtrs(boxes, argc);
+        if (!f) {
+            *len = 0;
+            return NULL;
         }
-        return buf;
+        *len = flexBytes(f);
+        return (uint8_t *)f;
     }
 
     case PERSIST_OP_DELETE: {
-        /* Just encode the key (first element) */
+        /* Just the key (first element) as a 1-element flex. */
         if (argc < 1 || !boxes[0]) {
             *len = 0;
             return NULL;
         }
-
-        databoxLinear dl;
-        size_t encodedLen;
-        const void *encodedVal;
-        uint8_t encodedType;
-        DATABOX_LINEAR_PARTS_ENCODE(boxes[0], encodedLen, encodedVal,
-                                    encodedType, &dl);
-
-        *len = 1 + encodedLen;
-        uint8_t *buf = zmalloc(*len);
-        buf[0] = encodedType;
-        memcpy(buf + 1, encodedVal, encodedLen);
-        return buf;
+        flex *f = flexNewFromDatabox(boxes[0]);
+        if (!f) {
+            *len = 0;
+            return NULL;
+        }
+        *len = flexBytes(f);
+        return (uint8_t *)f;
     }
 
     case PERSIST_OP_CLEAR:
@@ -2865,60 +2703,34 @@ static bool multimapPersistApplyOp(void *structure, persistOp op,
 
     switch (op) {
     case PERSIST_OP_INSERT: {
-        if (len < 2) {
+        /* Decode the member boxes from the self-describing flex (defensive
+         * against malformed replicated bytes).  Fixed-size stack arrays — the
+         * 32-element cap matches the encode-side limit, so no VLA. */
+        if (!flexValidateBufferDeep(data, len)) {
             return false;
         }
-
-        uint8_t argc = data[0];
+        const flex  *f    = (const flex *)data;
+        const size_t argc = flexCount(f);
         if (argc == 0 || argc > 32) {
             return false;
         }
-
-        databox boxes[argc];
-        const databox *boxPtrs[argc];
+        databox        boxes[32];
+        const databox *boxPtrs[32];
+        flexEntry     *fe = flexHead(f);
         for (size_t i = 0; i < argc; i++) {
+            flexGetByType(fe, &boxes[i]);
             boxPtrs[i] = &boxes[i];
+            fe = flexNext(f, fe);
         }
-
-        size_t offset = 1;
-        for (size_t i = 0; i < argc && offset < len; i++) {
-            uint8_t type = data[offset++];
-
-            /* Determine value length based on type */
-            size_t valueLen;
-            if (DATABOX_LINEAR_TYPE_IS_BYTES(type)) {
-                /* For bytes, remaining data is the value */
-                valueLen = len - offset;
-                if (i < argc - 1) {
-                    /* This is tricky - we need length prefix for BYTES in
-                     * multi-value */
-                    /* For now, assume single value or last value is BYTES */
-                    return false;
-                }
-            } else {
-                /* Fixed-width type - calculate actual length from type */
-                valueLen = databoxLinearTypeValueLen(type);
-                if (offset + valueLen > len) {
-                    return false; /* Not enough data */
-                }
-            }
-
-            DATABOX_LINEAR_PARTS_DECODE(type, data + offset, valueLen,
-                                        &boxes[i]);
-            offset += valueLen;
-        }
-
         multimapInsert(m, boxPtrs);
         return true;
     }
 
     case PERSIST_OP_DELETE: {
-        if (len < 1) {
+        databox key;
+        if (!flexGetSingleDatabox(data, len, &key)) {
             return false;
         }
-
-        databox key;
-        DATABOX_LINEAR_PARTS_DECODE(data[0], data + 1, len - 1, &key);
         multimapDelete(m, &key);
         return true;
     }
@@ -3048,20 +2860,15 @@ static uint8_t *multilistPersistEncodeOp(persistOp op, const void *args,
     switch (op) {
     case PERSIST_OP_PUSH_HEAD:
     case PERSIST_OP_PUSH_TAIL: {
-        /* args is const databox* */
-        const databox *box = args;
-        databoxLinear dl;
-        size_t encodedLen;
-        const void *encodedVal;
-        uint8_t encodedType;
-        DATABOX_LINEAR_PARTS_ENCODE(box, encodedLen, encodedVal, encodedType,
-                                    &dl);
-
-        *len = 1 + encodedLen;
-        uint8_t *buf = zmalloc(*len);
-        buf[0] = encodedType;
-        memcpy(buf + 1, encodedVal, encodedLen);
-        return buf;
+        /* args is a single const databox* — the pushed value — as a 1-element
+         * flex. */
+        flex *f = flexNewFromDatabox((const databox *)args);
+        if (!f) {
+            *len = 0;
+            return NULL;
+        }
+        *len = flexBytes(f);
+        return (uint8_t *)f;
     }
 
     case PERSIST_OP_POP_HEAD:
@@ -3071,46 +2878,28 @@ static uint8_t *multilistPersistEncodeOp(persistOp op, const void *args,
         *len = 0;
         return NULL;
 
+    case PERSIST_OP_ROTATE:
+        /* No arguments needed */
+        *len = 0;
+        return NULL;
+
     case PERSIST_OP_DELETE_AT:
+    case PERSIST_OP_TRIM:
     case PERSIST_OP_REPLACE: {
-        /* args is const databox*[] with [arg0, arg1] */
+        /* args is const databox*[2]: DELETE_AT = [start, count], TRIM =
+         * [head_cut, tail_cut], REPLACE = [index, value] — all as a
+         * 2-element flex. */
         if (argc < 2) {
             *len = 0;
             return NULL;
         }
-        const databox *const *boxes = args;
-
-        /* Calculate total length: 1 byte argc + encoded boxes */
-        size_t totalLen = 1;
-        databoxLinear dls[2];
-
-        for (size_t i = 0; i < 2; i++) {
-            size_t encodedLen;
-            const void *encodedVal;
-            uint8_t encodedType;
-            DATABOX_LINEAR_PARTS_ENCODE(boxes[i], encodedLen, encodedVal,
-                                        encodedType, &dls[i]);
-            (void)encodedVal;  /* Set by macro but only encodedLen is needed */
-            (void)encodedType; /* Set by macro but only encodedLen is needed */
-            totalLen += 1 + encodedLen;
+        flex *f = flexNewFromDataboxPtrs((const databox *const *)args, 2);
+        if (!f) {
+            *len = 0;
+            return NULL;
         }
-
-        *len = totalLen;
-        uint8_t *buf = zmalloc(totalLen);
-        buf[0] = 2; /* argc */
-
-        size_t offset = 1;
-        for (size_t i = 0; i < 2; i++) {
-            size_t encodedLen;
-            const void *encodedVal;
-            uint8_t encodedType;
-            DATABOX_LINEAR_PARTS_ENCODE(boxes[i], encodedLen, encodedVal,
-                                        encodedType, &dls[i]);
-            buf[offset++] = encodedType;
-            memcpy(buf + offset, encodedVal, encodedLen);
-            offset += encodedLen;
-        }
-        return buf;
+        *len = flexBytes(f);
+        return (uint8_t *)f;
     }
 
     default:
@@ -3128,13 +2917,10 @@ static bool multilistPersistApplyOp(void *structure, persistOp op,
     switch (op) {
     case PERSIST_OP_PUSH_HEAD:
     case PERSIST_OP_PUSH_TAIL: {
-        if (len < 1) {
+        databox box;
+        if (!flexGetSingleDatabox(data, len, &box)) {
             return false;
         }
-
-        databox box;
-        DATABOX_LINEAR_PARTS_DECODE(data[0], data + 1, len - 1, &box);
-
         if (op == PERSIST_OP_PUSH_HEAD) {
             multilistPushByTypeHead(ml, state, &box);
         } else {
@@ -3154,88 +2940,58 @@ static bool multilistPersistApplyOp(void *structure, persistOp op,
     }
 
     case PERSIST_OP_DELETE_AT: {
-        /* Decode [start, count] */
-        if (len < 2) {
+        /* [start, count] as a 2-element flex. */
+        databox startBox, countBox;
+        if (!flexGetTwoDataboxes(data, len, &startBox, &countBox)) {
             return false;
         }
-
-        const uint8_t *p = data;
-        const uint8_t *end = data + len;
-
-        /* Decode argc */
-        uint8_t argc = *p++;
-        if (argc < 2) {
-            return false;
-        }
-
-        /* Decode start */
-        if (p >= end) {
-            return false;
-        }
-        uint8_t type0 = *p++;
-        size_t valueLen0 = databoxLinearTypeValueLen(type0);
-        if (p + valueLen0 > end) {
-            return false;
-        }
-        databox startBox;
-        DATABOX_LINEAR_PARTS_DECODE(type0, p, valueLen0, &startBox);
-        p += valueLen0;
-
-        /* Decode count */
-        if (p >= end) {
-            return false;
-        }
-        uint8_t type1 = *p++;
-        size_t valueLen1 = databoxLinearTypeValueLen(type1);
-        if (p + valueLen1 > end) {
-            return false;
-        }
-        databox countBox;
-        DATABOX_LINEAR_PARTS_DECODE(type1, p, valueLen1, &countBox);
-
         return multilistDelRange(ml, state, startBox.data.i, countBox.data.i);
     }
 
+    case PERSIST_OP_TRIM: {
+        /* [head_cut, tail_cut] as a 2-element flex — the normalized
+         * element counts the origin's LTRIM removed from each end. */
+        databox headBox, tailBox;
+        if (!flexGetTwoDataboxes(data, len, &headBox, &tailBox)) {
+            return false;
+        }
+        const int64_t headCut = (int64_t) headBox.data.u;
+        const int64_t tailCut = (int64_t) tailBox.data.u;
+        if (headCut > 0) {
+            multilistDelRange(ml, state, 0, headCut);
+        }
+        if (tailCut > 0) {
+            multilistDelRange(ml, state, -tailCut, tailCut);
+        }
+        return true;
+    }
+
+    case PERSIST_OP_ROTATE: {
+        /* No operand.  Rotating a 0/1-element list is a no-op.
+         * multilistRotate stages the popped tail and the pushed head
+         * through TWO mflex scratch states — the replay thread-local
+         * provides one; borrow a temporary for the second. */
+        if (multilistCount(*ml) > 1) {
+            if (!state) {
+                return false;
+            }
+            mflexState *tmp = mflexStateCreate();
+            if (!tmp) {
+                return false;
+            }
+            mflexState *pair[2] = { state, tmp };
+            multilistRotate(*ml, pair);
+            mflexStateFree(tmp);
+        }
+        return true;
+    }
+
     case PERSIST_OP_REPLACE: {
-        /* Decode [index, value] */
-        if (len < 2) {
+        /* [index, value] as a 2-element flex. */
+        databox indexBox, valueBox;
+        if (!flexGetTwoDataboxes(data, len, &indexBox, &valueBox)) {
             return false;
         }
-
-        const uint8_t *p = data;
-        const uint8_t *end = data + len;
-
-        /* Decode argc */
-        uint8_t argc = *p++;
-        if (argc < 2) {
-            return false;
-        }
-
-        /* Decode index */
-        if (p >= end) {
-            return false;
-        }
-        uint8_t type0 = *p++;
-        size_t valueLen0 = databoxLinearTypeValueLen(type0);
-        if (p + valueLen0 > end) {
-            return false;
-        }
-        databox indexBox;
-        DATABOX_LINEAR_PARTS_DECODE(type0, p, valueLen0, &indexBox);
-        p += valueLen0;
-
-        /* Decode value */
-        if (p >= end) {
-            return false;
-        }
-        uint8_t type1 = *p++;
-        size_t valueLen1 = databoxLinearTypeValueLen(type1);
-        if (p + valueLen1 > end) {
-            return false;
-        }
-        databox valueBox;
-        DATABOX_LINEAR_PARTS_DECODE(type1, p, valueLen1, &valueBox);
-
         return multilistReplaceByTypeAtIndex(
             ml, state, (mlNodeId)indexBox.data.i, &valueBox);
     }
