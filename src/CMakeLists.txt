@@ -775,4 +775,29 @@ if(CPPCHECK_EXECUTABLE)
     add_dependencies(lint cppcheck)
 endif()
 
+# These two link datakit-static, so they are defined here (not at the top
+# level) to inherit this directory's per-preset CMAKE_C_FLAGS — otherwise a
+# sanitizer preset produces instrumented datakit objects linked without the
+# sanitizer runtime.
+
+# Allocator benchmark: membound vs memshard vs system malloc. Build with
+#   cmake --build <dir> --target memboundBench
+add_executable(memboundBench
+    ${CMAKE_CURRENT_SOURCE_DIR}/memboundBench.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/memshardConfig.c)
+target_include_directories(memboundBench PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/memshard/include)
+target_link_libraries(memboundBench PRIVATE datakit-static memshard Threads::Threads)
+
+# memshard-as-datakit-allocator adapter + its validation (opt-in integration:
+# routes datakit's global z* allocator through memshard).
+add_executable(memshardConfigTest
+    ${CMAKE_CURRENT_SOURCE_DIR}/memshardConfigTest.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/memshardConfig.c)
+target_include_directories(memshardConfigTest PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/memshard/include)
+target_link_libraries(memshardConfigTest PRIVATE datakit-static memshard Threads::Threads)
+
 # vi:ai et sw=4 ts=4:
