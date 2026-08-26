@@ -42,8 +42,8 @@ void mflexPushSigned(mflex **mm, mflexState *state, const int64_t i,
                      flexEndpoint where);
 void mflexPushUnsigned(mflex **mm, mflexState *state, const uint64_t u,
                        flexEndpoint where);
-void mflexPushHalfFloat(mflex **mm, mflexState *state, const float fl,
-                        flexEndpoint where);
+void mflexPushFloat16(mflex **mm, mflexState *state, const float fl,
+                      flexEndpoint where);
 void mflexPushFloat(mflex **mm, mflexState *state, const float fl,
                     flexEndpoint where);
 void mflexPushDouble(mflex **mm, mflexState *state, const double d,

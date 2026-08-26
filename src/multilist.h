@@ -89,6 +89,20 @@ bool multilistIndex(const multilist *ml, mflexState *state, mlOffsetId index,
 #define multilistIndexGet(ml, s, i, e) multilistIndex(ml, s, i, e, true)
 #define multilistIndexCheck(ml, s, i, e) multilistIndex(ml, s, i, e, false)
 
+/* Index starting from a caller-held anchor entry (with its known global
+ * index) when the anchor is closer than either endpoint; on the Full
+ * tier whole nodes are skipped by their counts from the anchor's node
+ * in either direction.  The anchor must have been obtained after the
+ * most recent mutation.  Never slower than multilistIndex. */
+bool multilistIndexNear(const multilist *ml, mflexState *state,
+                        mlOffsetId index, const multilistEntry *anchor,
+                        mlOffsetId anchorIdx, multilistEntry *entry,
+                        bool openNode);
+#define multilistIndexNearGet(ml, s, i, a, ai, e)                              \
+    multilistIndexNear(ml, s, i, a, ai, e, true)
+#define multilistIndexNearCheck(ml, s, i, a, ai, e)                            \
+    multilistIndexNear(ml, s, i, a, ai, e, false)
+
 void multilistRotate(multilist *m, mflexState *state[2]);
 bool multilistPop(multilist **m, mflexState *state, databox *got,
                   bool fromTail);

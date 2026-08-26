@@ -4,7 +4,8 @@ Reference numbers for hash and envelope throughput on the supported
 build configurations. Use these as a regression baseline.
 
 All numbers below measured with the **`perf` preset** (Release -O3
--mcpu=native -flto, no sanitizers) — see [BUILD_PRESETS.md](BUILD_PRESETS.md).
+-mcpu=native -flto, no sanitizers) — defined in `CMakePresets.json` and
+described in [development/BUILDING.md](development/BUILDING.md).
 On Apple Silicon (M-series), single-thread, 32 KiB working sets unless
 noted.
 
@@ -62,16 +63,16 @@ single change that produced each gain:
 
 ## Where additional wins are possible
 
-Not implemented in this iteration; tracked in the task list:
+Not implemented:
 
-- **AVX2 Compress8 transpose** (P7.6) — x86 only. Expected ~20% over
-  current AVX2 single-block. Requires x86 test host.
-- **BLAKE3 portable hot-path tuning** (P6.2) — diminishing returns on
+- **AVX2 Compress8 transpose** — x86 only. Expected ~20% over
+  current AVX2 single-block. Requires an x86 test host.
+- **BLAKE3 portable hot-path tuning** — diminishing returns on
   NEON-capable hosts since SIMD dispatch dominates. Matters on hosts
   without NEON/SSE4.1/AVX2 (rare in modern fleets).
-- **Single-chunk BLAKE3 SIMD finalize** (P7.3) — for ≤1024-byte inputs
+- **Single-chunk BLAKE3 SIMD finalize** — for ≤1024-byte inputs
   the bulk Compress4 path doesn't engage; could batch parents.
-- **Canonical BLAKE3 test-vector hex** (P8.2) — correctness, not perf.
+- **Canonical BLAKE3 test-vector hex** — correctness, not perf.
 
 ## Hardware-ceiling notes
 
@@ -90,8 +91,8 @@ Not implemented in this iteration; tracked in the task list:
 
 ## CI-suitable build
 
-For CI strict-correctness runs, use the `safe` preset (Release-O3 +
-all sanitizers):
+For CI strict-correctness runs, use the `safe` preset (Release-O3 with
+ASAN + UBSAN enabled):
 
 ```sh
 cmake --preset safe && cmake --build --preset safe

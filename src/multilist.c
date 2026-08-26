@@ -246,6 +246,22 @@ bool multilistIndex(const multilist *ml, mflexState *state,
     MULTILIST_RETURN(ml, Index, state, index, entry, openNode);
 }
 
+/* Index starting from a caller-held anchor (a previously located entry
+ * plus its known global index) when the anchor is closer to the target
+ * than either endpoint: "grab an existing reference and walk to the
+ * target" in either direction.  On the Full tier whole nodes are
+ * skipped by their counts from the anchor's node; Small/Medium have a
+ * single flex pair where the two-way endpoint walk is already optimal.
+ * The anchor must have been obtained after the most recent mutation.
+ * Never slower than multilistIndex. */
+bool multilistIndexNear(const multilist *ml, mflexState *state,
+                        const mlOffsetId index, const multilistEntry *anchor,
+                        const mlOffsetId anchorIdx, multilistEntry *entry,
+                        const bool openNode) {
+    MULTILIST_RETURN(ml, IndexNear, state, index, anchor, anchorIdx, entry,
+                     openNode);
+}
+
 void multilistIteratorInit(multilist *ml, mflexState *state[2],
                            multilistIterator *iter, bool forward,
                            bool readOnly) {
@@ -266,6 +282,20 @@ void multilistIteratorRelease(multilistIterator *iter) {
     if (iter->type == MULTILIST_TYPE_FULL) {
         multilistFullIteratorRelease(iter);
     }
+}
+
+/* Restart a PREVIOUSLY INITIALIZED iterator from the head (Rewind) or
+ * tail (RewindTail), reusing the iterator's retained mflex states and
+ * readOnly mode.  Any open node is released first, so rewinding is
+ * always safe mid-iteration. */
+void multilistRewind(multilist *ml, multilistIterator *iter) {
+    multilistIteratorRelease(iter);
+    multilistIteratorInit(ml, iter->state, iter, true, iter->readOnly);
+}
+
+void multilistRewindTail(multilist *ml, multilistIterator *iter) {
+    multilistIteratorRelease(iter);
+    multilistIteratorInit(ml, iter->state, iter, false, iter->readOnly);
 }
 
 bool multilistNext(multilistIterator *iter, multilistEntry *entry) {
@@ -392,6 +422,113 @@ int multilistTest(int argc, char *argv[]) {
             const databox pushBox = databoxNewBytesString("hello");
             multilistPushByTypeHead(&ml, s0, &pushBox);
             /* 1 for head and 1 for tail beacuse 1 node = head = tail */
+            multilistFree(ml);
+        }
+
+        TEST("IndexNear: anchored lookup matches Index across all tiers") {
+            /* Three configurations pinning each concrete tier: a large
+             * fill limit keeps the list Small, a mid-size limit with
+             * more data lands Medium, and limit 0 fragments a longer
+             * list into many Full-tier nodes (exercising the
+             * node-count skip from the anchor in both directions). */
+            const struct {
+                flexCapSizeLimit limit;
+                int total;
+                multilistType wantType;
+            } configs[] = {
+                {flexOptimizationSizeLimits - 1, 80, MULTILIST_TYPE_SMALL},
+                /* ~60 small ints (~182 bytes) sit between limit (128)
+                 * and the Medium->Full threshold (limit * 3 = 384) */
+                {FLEX_CAP_LEVEL_128, 60, MULTILIST_TYPE_MEDIUM},
+                {0, 500, MULTILIST_TYPE_FULL},
+            };
+
+            for (size_t c = 0; c < sizeof(configs) / sizeof(*configs); c++) {
+                const int total = configs[c].total;
+                multilist *ml = multilistNew(configs[c].limit, depth[_i]);
+                for (int i = 0; i < total; i++) {
+                    const databox pushBox = databoxNewSigned(i);
+                    multilistPushByTypeTail(&ml, s0, &pushBox);
+                }
+
+                if (_multilistType(ml) != configs[c].wantType) {
+                    /* Tier thresholds are size-based; skip silently
+                     * only if the config no longer lands its tier —
+                     * but loudly, because the test then lost tier
+                     * coverage. */
+                    ERR("config %zu landed tier %d, wanted %d!", c,
+                        (int)_multilistType(ml), (int)configs[c].wantType);
+                }
+
+                const int anchors[] = {0, total / 4, total / 2, 3 * total / 4,
+                                       total - 1};
+                for (size_t ai = 0; ai < sizeof(anchors) / sizeof(*anchors);
+                     ai++) {
+                    multilistEntry anchor = {0};
+                    assert(multilistIndexCheck(ml, s0, anchors[ai], &anchor));
+
+                    for (int t = -total; t < total; t += 3) {
+                        multilistEntry got = {0};
+                        const bool foundNear = multilistIndexNearGet(
+                            ml, s0, t, &anchor, anchors[ai], &got);
+                        assert(foundNear);
+                        const int64_t expect = t < 0 ? total + t : t;
+                        if (got.box.data.i != expect) {
+                            ERR("IndexNear(tier %d, anchor %d, target %d): "
+                                "got %" PRId64 " expected %" PRId64 "!",
+                                (int)_multilistType(ml), anchors[ai], t,
+                                (int64_t)got.box.data.i, expect);
+                            assert(NULL);
+                        }
+                    }
+
+                    /* Out of range stays out of range */
+                    multilistEntry miss = {0};
+                    assert(!multilistIndexNearGet(ml, s0, total, &anchor,
+                                                  anchors[ai], &miss));
+                    assert(!multilistIndexNearGet(ml, s0, -total - 1, &anchor,
+                                                  anchors[ai], &miss));
+                }
+
+                multilistFree(ml);
+            }
+        }
+
+        TEST("iterator rewind: head and tail restarts mid-iteration") {
+            multilist *ml = multilistNew(defaultCompressSizeLimit, depth[_i]);
+            for (int i = 0; i < 40; i++) {
+                const databox pushBox = databoxNewSigned(i);
+                multilistPushByTypeTail(&ml, s0, &pushBox);
+            }
+
+            multilistIterator iter;
+            multilistIteratorInitForward(ml, s, &iter);
+
+            /* consume a few entries, then rewind mid-iteration */
+            multilistEntry entry;
+            for (int i = 0; i < 7; i++) {
+                assert(multilistNext(&iter, &entry));
+            }
+
+            multilistRewind(ml, &iter);
+            assert(multilistNext(&iter, &entry));
+            assert(entry.box.data.i == 0);
+
+            /* full pass after rewind sees every element in order */
+            int64_t expect = 1;
+            while (multilistNext(&iter, &entry)) {
+                assert(entry.box.data.i == expect++);
+            }
+            assert(expect == 40);
+
+            /* rewind to the tail flips direction from the same iter */
+            multilistRewindTail(ml, &iter);
+            assert(multilistNext(&iter, &entry));
+            assert(entry.box.data.i == 39);
+            assert(multilistNext(&iter, &entry));
+            assert(entry.box.data.i == 38);
+
+            multilistIteratorRelease(&iter);
             multilistFree(ml);
         }
 

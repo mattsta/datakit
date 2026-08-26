@@ -13,6 +13,16 @@
 - Customizable hash functions (XXHash by default)
 - Safe and unsafe iteration modes
 - SCAN operation for stateless traversal
+- Conditional inserts (`AddNX` / `AddXX` / `Replace`) and atomic
+  get-and-delete
+- Numeric increment helpers for integer and float values
+- Whole-dictionary copy and merge
+- Structured statistics, including per-chain distribution and byte-based
+  load metrics
+- Optional self-management: memory ceiling, eviction callback, and
+  LRU/LFU eviction policies
+- Optional byte-based expansion driven by average slot size instead of
+  element count
 
 **Headers**: `multidict.h`
 
@@ -43,6 +53,16 @@ When the hash table needs to grow:
 
 This incremental approach avoids blocking operations on large dictionaries.
 
+Load factors are **percentages of slot count**, and the defaults are tuned
+for slots that hold many entries rather than one:
+
+| Setting              | Default | Meaning                                       |
+| -------------------- | ------- | --------------------------------------------- |
+| Expand load factor   | 200     | Expand when `count * 100 / slots` exceeds 200 |
+| Shrink load factor   | 10      | Shrink when the same ratio drops below 10     |
+| Minimum shrink slots | 8       | Never shrink below 8 slots                    |
+| Initial slot count   | 1       | `MULTIDICT_HT_INITIAL_SIZE`                   |
+
 ## Data Structures
 
 ### Core Types
@@ -50,6 +70,13 @@ This incremental approach avoids blocking operations on large dictionaries.
 ```c
 /* Forward declaration */
 typedef struct multidict multidict;
+
+/* Insert / update outcome */
+typedef enum {
+    MULTIDICT_ERR = -1,        /* Operation failed */
+    MULTIDICT_OK_REPLACED = 0, /* Key existed, value was replaced */
+    MULTIDICT_OK_INSERTED = 1  /* New key was inserted */
+} multidictResult;
 
 /* Hash table configuration */
 typedef struct multidictType {
@@ -60,7 +87,9 @@ typedef struct multidictType {
                           const uint32_t key2_sz);
 } multidictType;
 
-/* Pluggable storage class (124 bytes) */
+/* Pluggable storage class: 17 pointer-sized fields plus one flag byte.
+ * (The "124 byte" comment still in multidict.h predates later additions
+ * to this interface - do not rely on it.) */
 typedef struct multidictClass {
     void *privdata;  /* Private data for this class */
 
@@ -76,7 +105,7 @@ typedef struct multidictClass {
                            const databox *keybox, databox *valbox);
     void *(*createSlot)(void);
     uint32_t (*freeSlot)(struct multidictClass *qdc, multidictSlot *slot);
-    uint32_t (*sizeBytes)(multidictSlot *slot);
+    size_t (*sizeBytes)(multidictSlot *slot);
 
     /* Iteration */
     bool (*getIter)(struct multidictSlotIterator *iter, multidictSlot *slot);
@@ -126,12 +155,53 @@ typedef struct multidictIterator {
     bool safe;               /* Safe to modify during iteration? */
 } multidictIterator;
 
-/* Entry returned during iteration (60 bytes) */
+/* Entry returned during iteration.
+ * databox is statically asserted at 16 bytes, so this is exactly
+ * 48 bytes with no padding. */
 typedef struct multidictEntry {
     databox key;
     databox val;
     databox extra;  /* Optional third field */
 } multidictEntry;
+```
+
+### Statistics Types
+
+```c
+/* Lightweight, always available */
+typedef struct multidictStats {
+    uint64_t count;      /* Total number of key-value pairs */
+    uint64_t slots;      /* Total number of hash slots */
+    uint32_t loadFactor; /* count * 100 / slots */
+    uint64_t usedBytes;  /* Bytes used by slot structures */
+    uint64_t keyBytes;   /* Bytes used by keys */
+    uint64_t valBytes;   /* Bytes used by values */
+    uint64_t totalBytes; /* Total memory usage */
+    bool isRehashing;
+} multidictStats;
+
+/* Adds chain-length distribution and ht[1] stats during rehash */
+#define MULTIDICT_STATS_VECTLEN 50
+typedef struct multidictDetailedStats {
+    multidictStats basic;
+    uint64_t usedSlots;
+    uint64_t maxChainLen;
+    float avgChainLen;
+    uint64_t chainDistribution[MULTIDICT_STATS_VECTLEN];
+    bool hasRehashTable;
+    multidictStats rehashTable;
+} multidictDetailedStats;
+
+/* Count-based and byte-based load, side by side */
+typedef struct multidictLoadMetrics {
+    uint32_t countLoadFactor; /* (count * 100) / slots */
+    uint64_t avgSlotBytes;    /* usedBytes / usedSlots (0 if none) */
+    uint32_t byteLoadFactor;  /* (avgSlotBytes * 100) / targetSlotBytes */
+    uint64_t usedSlots;
+    uint64_t totalUsedBytes;
+    uint64_t maxSlotBytes;
+    uint64_t targetSlotBytes;
+} multidictLoadMetrics;
 ```
 
 ## Creation Functions
@@ -145,25 +215,38 @@ multidict *multidictNew(multidictType *type, multidictClass *qdc, int32_t seed);
 /* Get the class from an existing multidict (for creating siblings) */
 multidictClass *multidictGetClass(multidict *d);
 
-/* Example: Create with exact key matching */
-multidictClass *myClass = /* ... create custom class ... */;
-multidict *d = multidictNew(&multidictTypeExactKey, myClass, 42);
+/* Ready-made multimap-backed slot class - use this unless you need
+ * custom slot storage */
+multidictClass *multidictDefaultClassNew(void);
+void multidictDefaultClassFree(multidictClass *qdc);
+
+/* Example: Create with exact key matching using the built-in class */
+multidictClass *cls = multidictDefaultClassNew();
+multidict *d = multidictNew(&multidictTypeExactKey, cls, 42);
 
 /* Example: Create with case-insensitive keys */
-multidict *ci = multidictNew(&multidictTypeCaseKey, myClass, 42);
+multidict *ci = multidictNew(&multidictTypeCaseKey, cls, 42);
+
+/* The class is shared, so free it only after every dict using it is gone */
+multidictFree(ci);
+multidictFree(d);
+multidictDefaultClassFree(cls);
 ```
 
 ### Hash Function Seeding
 
 ```c
-/* Set hash seed (max 2^20) */
+/* Set hash seed. The seed is applied unconditionally; the return value
+ * reports whether it was inside the recommended bound of 2^20. */
 bool multidictSetHashFunctionSeed(multidict *d, uint32_t seed);
 
 /* Get current seed */
 uint32_t multidictGetHashFunctionSeed(multidict *d);
 
 /* Example */
-multidictSetHashFunctionSeed(d, 12345);
+if (!multidictSetHashFunctionSeed(d, 12345)) {
+    /* seed applied anyway, but it exceeded 2^20 */
+}
 ```
 
 ## Core Operations
@@ -171,17 +254,86 @@ multidictSetHashFunctionSeed(d, 12345);
 ### Insertion
 
 ```c
-/* Add key-value pair to dictionary */
-int64_t multidictAdd(multidict *d, const databox *keybox,
-                     const databox *valbox);
+/* Add or replace a key-value pair */
+multidictResult multidictAdd(multidict *d, const databox *keybox,
+                             const databox *valbox);
 
 /* Example: Insert string key-value */
 databox key = databoxNewBytesString("username");
 databox val = databoxNewBytesString("alice");
 
-int64_t result = multidictAdd(d, &key, &val);
-/* result indicates slot-specific insertion result */
+switch (multidictAdd(d, &key, &val)) {
+case MULTIDICT_OK_INSERTED: /* new key */ break;
+case MULTIDICT_OK_REPLACED: /* existing key, new value */ break;
+case MULTIDICT_ERR: /* slot class rejected the insert */ break;
+}
 ```
+
+`multidictAdd` is upsert semantics. While a rehash is in flight it first
+removes any copy of the key still living in `ht[0]`, so a key can never be
+duplicated across the two tables and the per-table counts stay exact.
+
+### Conditional Insert
+
+```c
+/* Insert only when the key does NOT already exist */
+multidictResult multidictAddNX(multidict *d, const databox *keybox,
+                               const databox *valbox);
+
+/* Update only when the key DOES already exist */
+multidictResult multidictAddXX(multidict *d, const databox *keybox,
+                               const databox *valbox);
+
+/* Explicit replace (same shape as Add, named for intent) */
+multidictResult multidictReplace(multidict *d, const databox *keybox,
+                                 const databox *valbox);
+
+/* Example: claim a name only if unclaimed */
+if (multidictAddNX(d, &key, &val) == MULTIDICT_OK_INSERTED) {
+    /* we won the race */
+}
+```
+
+`AddNX` returns `MULTIDICT_ERR` when the key already exists; `AddXX` and
+`multidictReplace` return `MULTIDICT_ERR` when it does not. `ERR` here means
+"precondition not met", not "something broke".
+
+### Bulk Insert and Delete
+
+```c
+/* Returns how many operations succeeded */
+uint32_t multidictAddMultiple(multidict *d, const databox *keys,
+                              const databox *vals, uint32_t count);
+uint32_t multidictDeleteMultiple(multidict *d, const databox *keys,
+                                 uint32_t count);
+```
+
+### Numeric Updates
+
+```c
+/* Increment an integer value in place; *result gets the new value */
+multidictResult multidictIncrBy(multidict *d, const databox *keybox,
+                                int64_t increment, int64_t *result);
+
+/* Increment a floating point value in place */
+multidictResult multidictIncrByFloat(multidict *d, const databox *keybox,
+                                     double increment, double *result);
+
+/* Example: counter that creates itself on first use */
+int64_t hits = 0;
+multidictIncrBy(d, &key, 1, &hits);
+printf("hits: %" PRId64 "\n", hits);
+```
+
+Both increment functions:
+
+- create the key with the increment as its value when the key is missing;
+- return `MULTIDICT_ERR` without touching anything when the key exists but
+  holds a non-numeric value;
+- write the result through `*result` before storing, so `result` is valid
+  whenever the call did not return `MULTIDICT_ERR`;
+- store the new value with `multidictAdd`, so they return
+  `MULTIDICT_OK_INSERTED` on first use and `MULTIDICT_OK_REPLACED` after.
 
 ### Lookup
 
@@ -191,6 +343,10 @@ bool multidictFind(multidict *d, const databox *keybox, databox *valbox);
 
 /* Convenience function for string keys */
 bool multidictFindByString(multidict *d, char *key, uint8_t **val);
+
+/* Existence checks that skip materializing the value */
+bool multidictExists(multidict *d, const databox *keybox);
+bool multidictExistsByString(multidict *d, const char *key);
 
 /* Example: Lookup */
 databox searchKey = databoxNewBytesString("username");
@@ -216,6 +372,47 @@ bool deleted = multidictDelete(d, &key);
 if (deleted) {
     printf("Entry deleted successfully\n");
 }
+
+/* Remove every entry but keep the dictionary alive */
+void multidictEmpty(multidict *d);
+```
+
+### Atomic Get-and-Delete
+
+```c
+/* Fetch the value and remove the key in one pass */
+bool multidictGetAndDelete(multidict *d, const databox *keybox,
+                           databox *valbox);
+
+/* Pop an arbitrary entry (useful for draining a work set) */
+bool multidictPopRandom(multidict *d, databox *keybox, databox *valbox);
+
+/* Example: drain the dictionary */
+databox k, v;
+while (multidictPopRandom(d, &k, &v)) {
+    process(&k, &v);
+}
+```
+
+## Copy and Merge
+
+```c
+/* Deep copy, including the dictionary's configuration */
+multidict *multidictCopy(const multidict *src);
+
+typedef enum {
+    MULTIDICT_MERGE_REPLACE, /* src wins on collision */
+    MULTIDICT_MERGE_KEEP     /* dst wins on collision */
+} multidictMergeMode;
+
+/* Fold src into dst; returns the number of src entries actually applied.
+ * With MULTIDICT_MERGE_KEEP, collisions are skipped and not counted. */
+uint64_t multidictMerge(multidict *dst, const multidict *src,
+                        multidictMergeMode mode);
+
+/* Example: layer defaults under user overrides */
+uint64_t added = multidictMerge(userConfig, defaults, MULTIDICT_MERGE_KEEP);
+printf("pulled in %" PRIu64 " defaults\n", added);
 ```
 
 ## Iteration
@@ -253,17 +450,29 @@ multidictIteratorRelease(&iter);
 
 ### Safe vs Unsafe Iteration
 
-**Unsafe Iterator**:
+**Unsafe Iterator** (`multidictIteratorInit`):
 
-- Cannot call `multidictAdd`, `multidictDelete`, etc. during iteration
-- Detects modifications via fingerprint
-- Faster (no overhead tracking)
+- Cannot call `multidictAdd`, `multidictDelete`, or anything that mutates the
+  dictionary during iteration
+- Captures a 64-bit fingerprint of the dictionary state and re-checks it in
+  `multidictIteratorRelease`
+- The fingerprint check is an `assert`, so it catches misuse in debug builds
+  and vanishes under `NDEBUG` — it is a development guard, not a runtime
+  safety net
+- Faster: no per-dictionary tracking
 
-**Safe Iterator**:
+**Safe Iterator** (`multidictIteratorGetSafe`):
 
-- Can modify dictionary during iteration
-- Tracks active safe iterators
-- Prevents rehashing while iterators are active
+- Can modify the dictionary during iteration
+- Increments the dictionary's active-iterator count
+- That count suppresses automatic rehashing for as long as any safe iterator
+  is outstanding
+
+Both flavors set up their bookkeeping on the **first** `multidictIteratorNext`
+call, not at init time. An iterator that is initialized and released without
+ever calling `Next` is a no-op on both paths, which is why the abandoned-loop
+case is harmless. Always pair a loop that did iterate with a `Release`,
+otherwise a safe iterator leaves rehashing pinned off forever.
 
 ```c
 /* Safe iteration with modifications */
@@ -324,6 +533,11 @@ The SCAN algorithm:
 /* Get random key from dictionary */
 bool multidictGetRandomKey(multidict *d, databox *keybox);
 
+/* Sample up to 'count' keys; returns how many were written.
+ * The count is clamped to the dictionary size, and the sampler also
+ * advances any in-flight rehash while it walks. */
+uint32_t multidictGetSomeKeys(multidict *d, databox *keys, uint32_t count);
+
 /* Example */
 databox randomKey;
 if (multidictGetRandomKey(d, &randomKey)) {
@@ -331,7 +545,18 @@ if (multidictGetRandomKey(d, &randomKey)) {
     databoxRepr(&randomKey);
     printf("\n");
 }
+
+/* Example: sample 16 keys for an approximate-eviction pass */
+databox sample[16];
+const uint32_t got = multidictGetSomeKeys(d, sample, 16);
+for (uint32_t i = 0; i < got; i++) {
+    consider(&sample[i]);
+}
 ```
+
+`multidictGetRandomKey` can transiently fail while a rehash is in flight if
+it lands on an empty slot; `multidictPopRandom` already retries internally
+for this reason.
 
 ## Resize Operations
 
@@ -347,6 +572,10 @@ bool multidictResize(multidict *d);
 /* Example: Expand to hold at least 10000 elements */
 multidictExpand(d, 10000);
 ```
+
+`multidictExpand` returns **false** without doing anything when a rehash is
+already in flight, or when the rounded-up power of two equals the current
+slot count. A false return is a normal outcome, not an error to abort on.
 
 ### Resize Control
 
@@ -377,7 +606,7 @@ int64_t multidictRehashMilliseconds(multidict *d, int64_t ms);
 
 /* Example: Rehash for 100ms */
 int64_t rehashed = multidictRehashMilliseconds(d, 100);
-printf("Rehashed %ld slots\n", rehashed);
+printf("Rehashed %" PRId64 " slots\n", rehashed);
 ```
 
 ## Memory Management
@@ -393,26 +622,141 @@ d = NULL;
 
 ## Metadata and Statistics
 
+`struct multidict` is **opaque** — it is defined in `multidict.c`, not in
+the header. Use the accessor functions; the old macro names remain only as
+thin aliases:
+
 ```c
-/* Get element count across all slots */
-#define multidictSize(d) ((d)->ht[0].count + (d)->ht[1].count)
+/* Accessors (the real API) */
+uint64_t multidictCount(const multidict *d);     /* Total key-value pairs */
+uint64_t multidictSlotCount(const multidict *d); /* Total hash slots */
+bool multidictIsRehashing_(const multidict *d);  /* Rehash in progress? */
 
-/* Get total slot count */
-#define multidictSlots(d) ((d)->ht[0].size + (d)->ht[1].size)
-
-/* Check if rehashing */
-#define multidictIsRehashing(d) ((d)->rehashing)
-
-/* Print statistics (debug builds only) */
-void multidictPrintStats(multidict *d);
+/* Backwards compatibility aliases */
+#define multidictSize(d) multidictCount(d)
+#define multidictSlots(d) multidictSlotCount(d)
+#define multidictIsRehashing(d) multidictIsRehashing_(d)
 
 /* Example */
-printf("Dictionary has %lu elements in %lu slots\n",
-       multidictSize(d), multidictSlots(d));
+printf("Dictionary has %" PRIu64 " elements in %" PRIu64 " slots\n",
+       multidictCount(d), multidictSlotCount(d));
 
 if (multidictIsRehashing(d)) {
     printf("Currently rehashing...\n");
 }
+```
+
+### Structured Statistics
+
+```c
+void multidictGetStats(multidict *d, multidictStats *stats);
+void multidictGetDetailedStats(multidict *d, multidictDetailedStats *stats);
+void multidictGetLoadMetrics(multidict *d, multidictLoadMetrics *metrics);
+
+uint32_t multidictLoadFactor(multidict *d);
+uint64_t multidictBytes(multidict *d);
+uint64_t multidictKeyBytes(multidict *d);
+uint64_t multidictValBytes(multidict *d);
+
+/* Example: report the worst chain in the table */
+multidictDetailedStats detailed;
+multidictGetDetailedStats(d, &detailed);
+printf("slots used %" PRIu64 ", longest chain %" PRIu64 ", avg %.2f\n",
+       detailed.usedSlots, detailed.maxChainLen,
+       (double)detailed.avgChainLen);
+```
+
+`multidictPrintStats()` is a human-readable dump of the same data, and is
+compiled **only when `DATAKIT_TEST` is defined**:
+
+```c
+#ifdef DATAKIT_TEST
+void multidictPrintStats(multidict *d);
+#endif
+```
+
+## Self-Management
+
+### Memory Ceiling and Eviction
+
+```c
+/* Called before an entry is evicted; return false to veto the eviction */
+typedef bool(multidictEvictionCallback)(void *privdata, const databox *key,
+                                        const databox *val);
+
+void multidictSetMaxMemory(multidict *d, uint64_t maxBytes); /* 0 = no limit */
+uint64_t multidictGetMaxMemory(multidict *d);
+void multidictSetEvictionCallback(multidict *d, multidictEvictionCallback *cb,
+                                  void *privdata);
+
+bool multidictIsOverLimit(multidict *d);
+uint32_t multidictEvictToLimit(multidict *d); /* returns entries evicted */
+
+/* Example: 64MB cap with cleanup notification */
+static bool onEvict(void *privdata, const databox *key, const databox *val) {
+    releaseExternalResource(key, val);
+    return true; /* allow */
+}
+
+multidictSetMaxMemory(d, 64ULL * 1024 * 1024);
+multidictSetEvictionCallback(d, onEvict, NULL);
+
+if (multidictIsOverLimit(d)) {
+    printf("evicted %" PRIu32 " entries\n", multidictEvictToLimit(d));
+}
+```
+
+### Eviction Policy and LRU Tracking
+
+LRU tracking is off by default and costs nothing while disabled.
+
+```c
+typedef enum multidictEvictPolicy {
+    MULTIDICT_EVICT_NONE = 0, /* No eviction (default) */
+    MULTIDICT_EVICT_RANDOM,   /* Random victim */
+    MULTIDICT_EVICT_LRU,      /* Least Recently Used */
+    MULTIDICT_EVICT_LFU,      /* Least Frequently Used (approximate) */
+    MULTIDICT_EVICT_SIZE_LRU, /* LRU weighted by entry size */
+} multidictEvictPolicy;
+
+bool multidictEnableLRU(multidict *d, size_t levels);
+void multidictDisableLRU(multidict *d);
+bool multidictHasLRU(multidict *d);
+
+void multidictSetEvictPolicy(multidict *d, multidictEvictPolicy policy);
+multidictEvictPolicy multidictGetEvictPolicy(multidict *d);
+
+void multidictTouch(multidict *d, const databox *keybox);
+int multidictGetLRULevel(multidict *d, const databox *keybox);
+
+/* Example: scan-resistant cache */
+multidictEnableLRU(d, 7);
+multidictSetEvictPolicy(d, MULTIDICT_EVICT_LRU);
+multidictSetMaxMemory(d, 256ULL * 1024 * 1024);
+```
+
+The LRU levels are backed by [multilru](MULTILRU.md), so the level count
+here means the same thing it does there.
+
+### Byte-Based Expansion
+
+By default expansion is driven by element count against slot count. Byte-based
+expansion instead watches the **average slot size**, which is the right signal
+when a slot class packs many entries into one allocation.
+
+```c
+void multidictEnableByteBasedExpansion(multidict *d, uint64_t targetSlotBytes,
+                                       uint64_t maxSlotBytes);
+void multidictDisableByteBasedExpansion(multidict *d);
+bool multidictIsByteBasedExpansion(multidict *d);
+
+/* Passing 0 for either bound selects the default: 2MB target, 8MB max */
+multidictEnableByteBasedExpansion(d, 0, 0);
+
+multidictLoadMetrics metrics;
+multidictGetLoadMetrics(d, &metrics);
+printf("avg slot %" PRIu64 " bytes (%" PRIu32 "%% of target)\n",
+       metrics.avgSlotBytes, metrics.byteLoadFactor);
 ```
 
 ## Hash Functions
@@ -426,7 +770,8 @@ uint32_t multidictIntHashFunction(uint32_t key);
 /* 64-bit integer hash (Thomas Wang's Mix Function) */
 uint32_t multidictLongLongHashFunction(uint64_t key);
 
-/* Generic byte hash (XXHash) */
+/* Generic byte hash: XXH64 on 64-bit builds, XXH32 otherwise, both
+ * seeded from the dictionary's seed */
 uint32_t multidictGenHashFunction(multidict *d, const void *key, int32_t len);
 
 /* Case-insensitive ASCII hash (djb hash variant) */
@@ -443,14 +788,20 @@ extern multidictType multidictTypeExactKey;
 /* Case-insensitive key matching */
 extern multidictType multidictTypeCaseKey;
 
-/* Example: Use predefined types */
-multidict *exact = multidictNew(&multidictTypeExactKey, myClass, 0);
-multidict *caseInsensitive = multidictNew(&multidictTypeCaseKey, myClass, 0);
+/* Example: Use predefined types with the built-in slot class */
+multidictClass *cls = multidictDefaultClassNew();
+multidict *exact = multidictNew(&multidictTypeExactKey, cls, 0);
+multidict *caseInsensitive = multidictNew(&multidictTypeCaseKey, cls, 0);
 ```
 
 ## Creating a Custom multidictClass
 
-A `multidictClass` defines how data is stored in each hash slot. Here's a minimal example using flex arrays:
+Most callers should start with `multidictDefaultClassNew()`, which supplies a
+complete multimap-backed slot class. Write your own only when you need a
+different slot representation.
+
+A `multidictClass` defines how data is stored in each hash slot. Here's a
+minimal sketch using flex arrays:
 
 ```c
 /* Simple flex-based slot implementation */
@@ -467,10 +818,17 @@ uint32_t freeSlotFlex(multidictClass *qdc, multidictSlot *slot) {
     return count;
 }
 
-uint32_t sizeBytesImpl(multidictSlot *slot) {
+size_t sizeBytesImpl(multidictSlot *slot) {
     return flexBytes((flex *)slot);
 }
 
+/* insertByType return contract (multidict.c relies on it):
+ *     1  -> a NEW key was inserted   (maps to MULTIDICT_OK_INSERTED)
+ *     0  -> an existing key's value was replaced (MULTIDICT_OK_REPLACED)
+ *   < 0  -> failure                  (maps to MULTIDICT_ERR)
+ * Getting this backwards corrupts the dictionary's count and byte
+ * accounting, because multidict trusts it to decide whether to bump
+ * count and keyBytes. */
 int64_t insertByTypeImpl(multidictClass *qdc, multidictSlot *slot,
                          const databox *keybox, const databox *valbox) {
     flex *f = slot;
@@ -486,7 +844,7 @@ int64_t insertByTypeImpl(multidictClass *qdc, multidictSlot *slot,
             flexGetByType(f, &fe, NULL);  /* skip old value */
             /* Delete old value and insert new one */
             /* ... implementation ... */
-            return 1;  /* replaced */
+            return 0;  /* replaced */
         }
 
         flexGetByType(f, &fe, NULL);  /* skip value */
@@ -495,7 +853,7 @@ int64_t insertByTypeImpl(multidictClass *qdc, multidictSlot *slot,
     /* Not found, append */
     flexPushByType(&f, keybox, FLEX_ENDPOINT_TAIL);
     flexPushByType(&f, valbox, FLEX_ENDPOINT_TAIL);
-    return 0;  /* inserted new */
+    return 1;  /* inserted new */
 }
 
 /* ... implement other required functions ... */
@@ -514,23 +872,37 @@ multidictClass myFlexClass = {
 
 ### Time Complexity
 
-| Operation   | Average       | Worst Case | Notes                                  |
-| ----------- | ------------- | ---------- | -------------------------------------- |
-| Insert      | O(1)          | O(n)       | Amortized O(1) with incremental rehash |
-| Lookup      | O(1)          | O(n)       | Depends on slot implementation         |
-| Delete      | O(1)          | O(n)       | Must find key in slot                  |
-| Iteration   | O(n)          | O(n)       | Iterates all slots and entries         |
-| SCAN        | O(1) per call | O(n)       | Full scan is O(n)                      |
-| Rehash Step | O(1)          | O(k)       | k = entries in single slot             |
+Every per-key cost here is "hash + slot dispatch + whatever the slot class
+charges". With the default expand load factor of 200, slots hold roughly two
+entries on average, so `k` below is small but never guaranteed to be 1.
+
+| Operation        | Average       | Worst Case | Notes                                                  |
+| ---------------- | ------------- | ---------- | ------------------------------------------------------ |
+| Insert           | O(1) + O(k)   | O(n)       | Amortized; also removes any `ht[0]` twin during rehash |
+| Lookup           | O(1) + O(k)   | O(n)       | k depends on the slot implementation                   |
+| Delete           | O(1) + O(k)   | O(n)       | Must find the key inside the slot                      |
+| AddNX/AddXX      | O(1) + O(k)   | O(n)       | Existence probe followed by an Add                     |
+| IncrBy           | O(1) + O(k)   | O(n)       | Find, then Add - two slot walks                        |
+| Iteration        | O(n)          | O(n)       | Iterates all slots and entries                         |
+| SCAN             | O(1) per call | O(n)       | Full scan is O(n)                                      |
+| Rehash Step      | O(1)          | O(k)       | k = entries in a single slot                           |
+| Copy/Merge       | O(n)          | O(n)       | Merge is one Add per source entry                      |
+| GetStats         | O(1)          | O(1)       | Counters are maintained incrementally                  |
+| GetDetailedStats | O(slots)      | O(slots)   | Walks every slot to build the histogram                |
 
 ### Space Complexity
 
 **Per Dictionary**:
 
-- 96 bytes (multidict struct)
-- 32 bytes × 2 (ht[0] and ht[1])
-- 8 bytes × slot_count (pointer array)
+- One `multidict` struct, which is considerably larger than the "140 bytes"
+  comment in `multidict.c` suggests: on top of the two hash tables it carries
+  memory-limit, eviction-callback, byte-expansion, and LRU fields
+- Two `multidictHT` structs, each holding a table pointer plus `size`,
+  `oversize`, `count`, `usedBytes`, `keyBytes`, `valBytes`, and `totalBytes`
+- 8 bytes x slot_count (pointer array), per live table
 - Variable (slot contents via multidictClass)
+- When LRU tracking is enabled: a `multilru`, a pointer-to-key side array,
+  and an auxiliary key-to-pointer dictionary
 
 **Rehashing Overhead**:
 
@@ -544,8 +916,13 @@ multidict performs **incremental rehashing**:
 1. On first operation after expansion, `ht[1]` is allocated
 2. Each subsequent operation rehashes 1 slot from `ht[0]` to `ht[1]`
 3. Lookups check both tables during rehashing
-4. Inserts always go to `ht[1]` during rehashing
+4. Inserts go to `ht[1]`, and `multidictAdd` explicitly removes any copy of
+   the key still sitting in `ht[0]` first, so no key is ever present in both
+   tables and each table's `count` stays exact
 5. Once `ht[0]` is empty, it's freed and `ht[1]` becomes `ht[0]`
+
+Safe iterators pin the dictionary: while any are outstanding, automatic
+rehashing is suppressed so entries do not move under the iterator.
 
 This spreads the rehashing cost across many operations instead of blocking.
 
@@ -554,12 +931,13 @@ This spreads the rehashing cost across many operations instead of blocking.
 ### 1. Choose Appropriate Hash Function
 
 ```c
-/* For integer keys */
-multidict *intDict = multidictNew(&multidictTypeExactKey, class, 0);
-/* Keys will be hashed using generic hash on bytes */
+multidictClass *cls = multidictDefaultClassNew();
 
-/* For case-insensitive string keys */
-multidict *ciDict = multidictNew(&multidictTypeCaseKey, class, 0);
+/* Exact (case-sensitive) keys: XXH64/XXH32 over the key bytes */
+multidict *exactDict = multidictNew(&multidictTypeExactKey, cls, 0);
+
+/* Case-insensitive string keys: a djb-style ASCII-folding hash */
+multidict *ciDict = multidictNew(&multidictTypeCaseKey, cls, 0);
 ```
 
 ### 2. Disable Resizing During Bulk Operations
@@ -601,8 +979,8 @@ Your `multidictClass` should:
 ### Pattern 1: String Dictionary
 
 ```c
-multidictClass *flexClass = /* ... flex-based implementation ... */;
-multidict *d = multidictNew(&multidictTypeExactKey, flexClass, 0);
+multidictClass *cls = multidictDefaultClassNew();
+multidict *d = multidictNew(&multidictTypeExactKey, cls, 0);
 
 /* Insert */
 databox key = databoxNewBytesString("name");
@@ -619,19 +997,14 @@ if (multidictFind(d, &key, &result)) {
 ### Pattern 2: Counting Occurrences
 
 ```c
-/* Using multidict to count string occurrences */
+/* Using multidict to count string occurrences.
+ * multidictIncrBy already handles the create-on-first-use case, so there
+ * is no find/branch/replace dance to write by hand. */
 databox key = databoxNewBytesString(word);
-databox count = {{0}};
 
-if (multidictFind(d, &key, &count)) {
-    /* Increment existing count */
-    int64_t current = count.data.i64;
-    count = databoxNewSigned(current + 1);
-    /* Replace with new count... */
-} else {
-    /* First occurrence */
-    count = databoxNewSigned(1);
-    multidictAdd(d, &key, &count);
+int64_t occurrences = 0;
+if (multidictIncrBy(d, &key, 1, &occurrences) != MULTIDICT_ERR) {
+    printf("%s seen %" PRId64 " times\n", word, occurrences);
 }
 ```
 
@@ -640,8 +1013,15 @@ if (multidictFind(d, &key, &count)) {
 ```c
 void filterPrint(void *privdata, const databox *key, const databox *val) {
     const char *prefix = privdata;
+    const size_t prefixLen = strlen(prefix);
 
-    if (databoxStartsWith(key, prefix)) {
+    /* Keys arrive as raw databoxes; resolve the bytes (which may be
+     * embedded in the box itself) before comparing. */
+    uint8_t *bytes = NULL;
+    size_t len = 0;
+    databoxGetBytes((databox *)key, &bytes, &len);
+
+    if (bytes && len >= prefixLen && memcmp(bytes, prefix, prefixLen) == 0) {
         printf("Matched: ");
         databoxRepr(key);
         printf("\n");
@@ -668,7 +1048,8 @@ void multidictOpRepr(const multidictOp *op);
 /* Example */
 #ifndef NDEBUG
 multidictRepr(d);
-printf("Size: %lu, Slots: %lu\n", multidictSize(d), multidictSlots(d));
+printf("Size: %" PRIu64 ", Slots: %" PRIu64 "\n",
+       multidictCount(d), multidictSlotCount(d));
 #endif
 ```
 
@@ -692,29 +1073,38 @@ pthread_rwlock_unlock(&lock);
 
 ## Testing
 
-The test suite in `multidict.c` includes:
+`multidict.c` carries its own suite behind `DATAKIT_TEST`, entered through
+`int multidictTest(int argc, char *argv[])`. It covers:
 
-- Basic insertion and lookup
-- Deletion operations
-- Iterator functionality
+- Basic insertion, lookup, and deletion
+- Conditional inserts and numeric increments
+- Copy and merge
+- Iterator functionality (safe and unsafe)
 - SCAN operations
-- Rehashing behavior
-- Slot migration during rehash
-- Statistics and introspection
+- Rehashing behavior and slot migration during rehash
+- Statistics, load metrics, and introspection
+- Memory limits, eviction, and LRU tracking
 
 ## See Also
 
-- [multimap](../multimap/MULTIMAP.md) - Higher-level sorted key-value container built on multidict concepts
+- [multimap](../multimap/MULTIMAP.md) - Sorted key-value container; the
+  default slot class is built on it
+- [multilru](MULTILRU.md) - Backs the optional LRU eviction levels
 - [databox](../core/DATABOX.md) - Universal value container used for keys/values
 - [flex](../flex/FLEX.md) - Packed array structure useful for slot implementations
 
 ## Implementation Notes
 
-**Key Enhancements**:
+**Design points**:
 
-- Pluggable storage via multidictClass
-- Integration with databox type system
-- Incremental rehashing optimizations
-- Support for arbitrary slot implementations
+- Pluggable storage via `multidictClass`, so the hash layer never assumes a
+  slot representation
+- Integration with the databox type system for keys and values
+- Incremental rehashing with explicit cross-table deduplication on insert
+- Byte-aware expansion for slot classes that pack many entries per slot
+- Optional self-management (memory ceiling, eviction policy, LRU levels)
+  that costs nothing while unused
 
-The multidict serves as a foundational building block, providing hash table semantics with complete control over how data is stored and accessed within each hash slot.
+The multidict serves as a foundational building block, providing hash table
+semantics with complete control over how data is stored and accessed within
+each hash slot.

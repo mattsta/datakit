@@ -41,7 +41,7 @@ typedef struct list {
     void *(*dup)(void *ptr);         /* Optional: duplicate value */
     void (*free)(void *ptr);         /* Optional: free value */
     int (*match)(void *ptr, void *key); /* Optional: match value */
-    unsigned long len;               /* Number of nodes */
+    size_t len;                      /* Number of nodes */
 } list;
 ```
 
@@ -119,9 +119,10 @@ listAddNodeHead(l, "new first"); // ["new first", "first", "last"]
  */
 void listDelNode(list *list, listNode *node);
 
-/* Example */
+/* Example: the Add functions return the list, so grab the node separately */
 list *l = listCreate();
-listNode *n = listAddNodeHead(l, "data");
+listAddNodeHead(l, "data");
+listNode *n = listFirst(l);
 
 // Later...
 listDelNode(l, n);  // Removes node
@@ -135,7 +136,7 @@ listDelNode(l, n);  // Removes node
  * index: index (0 = head, -1 = tail, -2 = second to last, etc.)
  * Returns: node or NULL if out of range
  */
-listNode *listIndex(list *list, long index);
+listNode *listIndex(list *list, int64_t index);
 
 /* Example */
 list *l = listCreate();
@@ -191,10 +192,15 @@ listNode *listNext(listIter *iter);
 /* Release iterator */
 void listReleaseIterator(listIter *iter);
 
-/* Rewind iterator to head (forward iteration) */
+/* Point a caller-provided iterator at the head (forward iteration).
+ * No allocation happens, so there is nothing to release:
+ *   listIter it;
+ *   listRewind(l, &it);
+ *   while ((node = listNext(&it))) { ... }
+ */
 void listRewind(list *list, listIter *li);
 
-/* Rewind iterator to tail (backward iteration) */
+/* Same, but points at the tail (backward iteration) */
 void listRewindTail(list *list, listIter *li);
 
 /* Example: Forward iteration */
@@ -337,11 +343,16 @@ listNode *found = listSearchKey(l, "banana");
 /* Get node value */
 #define listNodeValue(n)
 
+/* Read back configured callbacks */
+#define listGetDupMethod(l)
+#define listGetFree(l)
+#define listGetMatchMethod(l)
+
 /* Example */
 list *l = listCreate();
 listAddNodeTail(l, "data");
 
-printf("Length: %lu\n", listLength(l));
+printf("Length: %zu\n", listLength(l));
 listNode *first = listFirst(l);
 printf("First value: %s\n", (char *)listNodeValue(first));
 ```
@@ -466,7 +477,7 @@ void printHistory(void) {
 }
 
 /* Get command by index (negative = from end) */
-const char *getHistoryCommand(long index) {
+const char *getHistoryCommand(int64_t index) {
     listNode *node = listIndex(history, index);
     return node ? (const char *)listNodeValue(node) : NULL;
 }
@@ -527,14 +538,14 @@ void notifyAll(void *eventData) {
 ### Memory Usage
 
 ```
-Per list: 40 bytes (head, tail, callbacks, length)
+Per list: 48 bytes (head, tail, dup, free, match, len — 6 words on 64-bit)
 Per node: 24 bytes (prev, next, value pointers)
+Per iterator: 16 bytes (next pointer + direction flag, heap allocated)
 
-For 1000 nodes:
-- List overhead: 40 bytes
-- Node overhead: 24,000 bytes
-- Value pointers: 8,000 bytes (stored separately)
-- Total: 32,040 bytes
+For 1000 nodes (64-bit):
+- List overhead:  48 bytes
+- Node overhead:  24,000 bytes (includes the stored value pointer)
+- Total:          24,048 bytes
 ```
 
 ## Best Practices
@@ -568,23 +579,28 @@ listAddNodeTail(l, strdup("data"));
 listRelease(l);  // Memory leak - "data" not freed!
 ```
 
-### 3. Don't Modify During Iteration
+### 3. Only Delete the Node Just Returned
+
+`listNext()` advances the iterator before returning, so deleting the node it
+just handed back is safe. Deleting any _other_ node (in particular the one the
+iterator is already pointing at) leaves the iterator holding freed memory.
 
 ```c
-/* WRONG - modifying while iterating */
+/* SAFE - delete the node listNext() just returned */
 listIter *iter = listGetIterator(l, true);
 listNode *node;
 while ((node = listNext(iter)) != NULL) {
-    listDelNode(l, node);  // Breaks iterator!
+    if (shouldRemove(listNodeValue(node))) {
+        listDelNode(l, node);  // iterator already advanced past it
+    }
 }
+listReleaseIterator(iter);
 
-/* RIGHT - safe deletion */
+/* WRONG - deleting ahead of the cursor */
 listIter *iter = listGetIterator(l, true);
 listNode *node;
 while ((node = listNext(iter)) != NULL) {
-    listNode *toDelete = node;
-    node = listNext(iter);  // Advance first
-    listDelNode(l, toDelete);  // Safe
+    listDelNode(l, listNextNode(node));  // frees the iterator's next node!
 }
 ```
 

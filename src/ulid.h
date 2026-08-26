@@ -166,7 +166,7 @@ size_t ulidEncodeSWAR(const ulid_t *ulid, char *out, size_t outLen);
 bool ulidDecodeSWAR(const char *str, ulid_t *out);
 
 /* SSE2 implementation (x86/x64) */
-#if defined(__SSE2__) || defined(_M_X64) || defined(_M_AMD64)
+#if defined(__SSE2__)
 #define ULID_HAS_SSE2 1
 size_t ulidEncodeSSE2(const ulid_t *ulid, char *out, size_t outLen);
 bool ulidDecodeSSE2(const char *str, ulid_t *out);

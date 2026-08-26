@@ -39,7 +39,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#if defined(__x86_64__) || defined(_M_X64)
+#if defined(__x86_64__)
 #define POLY1305_AVX2_BUILD 1
 #else
 #define POLY1305_AVX2_BUILD 0

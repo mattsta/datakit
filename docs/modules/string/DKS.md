@@ -7,12 +7,12 @@
 **Key Features:**
 
 - Template system generates `mds` (full) and `mdsc` (compact) from single source
-- Automatic header size optimization (1 to 6 bytes overhead)
+- Automatic header size selection: 1-6 bytes for `mdsc`, 2-12 bytes for `mds`
 - Binary-safe string operations
 - Printf-style formatting
 - String splitting and joining
-- UTF-8 aware operations
-- Built-in hashing (XXH64, XXH3)
+- Extensive UTF-8 support (codepoints, grapheme clusters, display width)
+- Built-in hashing (XXH64, XXH3-64, XXH3-128)
 
 **Template Header**: `dks.h`
 
@@ -69,69 +69,108 @@ This generates all functions prefixed with `mdsc`:
 
 ## Difference Between mds and mdsc
 
-The key difference is in **header storage strategy**:
+The key difference is **how many header fields there are**, and therefore
+whether free space is tracked at all.
 
-### mds (Full) - Rich Metadata
+### mds (Full) - Tracks Free Space
 
 ```c
-/* Memory layout: [LEN][FREE_TYPE][BYTES...] */
+/* Memory layout: [LENGTH][FREE + TYPE][BYTES...][NUL] */
 typedef char mds;
-
-/* Header sizes grow dynamically based on string size:
-   - Can track more metadata
-   - Slightly larger overhead
-   - Better for frequently resized strings */
 ```
 
-### mdsc (Compact) - Space Optimized
+Two equal-sized header elements, so the header is **twice** the element
+size. The trailing element holds the free-space count with the type bits
+packed into its low bits; `mdsnewlen` also rounds the allocation up through
+`jebufSizeAllocation`, so an `mds` normally starts life with slack. That
+slack is what makes repeated appends cheap.
+
+### mdsc (Compact) - No Free Space At All
 
 ```c
-/* Memory layout: [LEN][FREE_TYPE][BYTES...] (more aggressive packing) */
+/* Memory layout: [LENGTH + TYPE][BYTES...][NUL] */
 typedef char mdsc;
-
-/* Header sizes optimized for minimal overhead:
-   - Tighter packing
-   - Less metadata space
-   - Better for many small strings */
 ```
+
+**One** header element, so the header is exactly the element size, and the
+type bits are packed into the length field itself. There is no free-space
+field: `mdscavail()` always returns 0 and `mdscbufallocsize()` always equals
+`mdsclen()`. Every mutation resizes to exactly what is needed.
+
+That is the real trade: `mdsc` is smaller per string and cheaper to hold in
+bulk; `mds` is cheaper to grow.
 
 ### Header Size Progression
 
-Both variants use the same type progression, but `mdsc` packs more aggressively:
+```c
+typedef enum dksType {
+    /* 2-bit types (the byte ends in 0) */
+    DKS_8  = 0x00,
+    DKS_16 = 0x02,
+    /* 3-bit types (the byte ends in 1) */
+    DKS_24 = 0x01,
+    DKS_32 = 0x03,
+    DKS_40 = 0x05,
+    DKS_48 = 0x07,
+} dksType;
+```
 
-| Type   | Header Size | Max String Length | Max Free Space        |
-| ------ | ----------- | ----------------- | --------------------- |
-| DKS_8  | 2 bytes     | 255 bytes         | 63 bytes (2-bit type) |
-| DKS_16 | 4 bytes     | 64 KB             | 16 KB (2-bit type)    |
-| DKS_24 | 6 bytes     | 16 MB             | 2 MB (3-bit type)     |
-| DKS_32 | 8 bytes     | 4 GB              | 536 MB (3-bit type)   |
-| DKS_40 | 10 bytes    | 1 TB              | 137 GB (3-bit type)   |
-| DKS_48 | 12 bytes    | 281 TB            | 35 TB (3-bit type)    |
+The element width per type is 1, 2, 3, 4, 5, and 6 bytes respectively. What
+each variant can hold differs because the type bits are stolen from
+different fields:
 
-Headers automatically upgrade when string grows beyond current type's capacity.
+**mds (full)** — header is 2 elements; `length` gets the whole element,
+`free` loses the type bits:
+
+| Type   | Header   | Max length | Max free space |
+| ------ | -------- | ---------- | -------------- |
+| DKS_8  | 2 bytes  | 255        | 63             |
+| DKS_16 | 4 bytes  | 65535      | 16383          |
+| DKS_24 | 6 bytes  | 16 MiB     | 2 MiB          |
+| DKS_32 | 8 bytes  | 4 GiB      | 512 MiB        |
+| DKS_40 | 10 bytes | 1 TiB      | 128 GiB        |
+| DKS_48 | 12 bytes | 256 TiB    | 32 TiB         |
+
+**mdsc (compact)** — header is 1 element and `length` itself loses the type
+bits, so the reachable length per type is the _shared_ maximum:
+
+| Type   | Header  | Max length |
+| ------ | ------- | ---------- |
+| DKS_8  | 1 byte  | 63         |
+| DKS_16 | 2 bytes | 16383      |
+| DKS_24 | 3 bytes | 2 MiB      |
+| DKS_32 | 4 bytes | 512 MiB    |
+| DKS_40 | 5 bytes | 128 GiB    |
+| DKS_48 | 6 bytes | 32 TiB     |
+
+There are deliberately no DKS_56 or DKS_64 types: DKS_48 already addresses
+256 TiB as a full length and 32 TiB as a shared one.
+
+Headers upgrade automatically when a string grows past its current type's
+capacity — the upgrade rewrites the header, so it is O(n).
 
 ## Data Structure
 
-```c
-/* Both mds and mdsc use same internal structure */
-typedef struct dksInfo {
-    uint8_t *start;   /* Start of allocation */
-    char *buf;        /* Start of string data */
-    size_t len;       /* Current string length */
-    size_t free;      /* Available space */
-    dksType type;     /* Header type (DKS_8, DKS_16, etc.) */
-} dksInfo;
+A `mds *` / `mdsc *` **is a `char *` pointing at the string bytes** — the
+header sits immediately _before_ it. That is what makes a dks string
+directly usable with `printf("%s")` and `memcmp`, and it is why every
+mutating call returns a (possibly new) pointer you must reassign.
 
-/* Type uses 2 or 3 bits stored in the FREE_TYPE field */
-typedef enum dksType {
-    DKS_8 = 0x00,   /* 2-bit type */
-    DKS_16 = 0x02,  /* 2-bit type */
-    DKS_24 = 0x01,  /* 3-bit type */
-    DKS_32 = 0x03,  /* 3-bit type */
-    DKS_40 = 0x05,  /* 3-bit type */
-    DKS_48 = 0x07,  /* 3-bit type */
-} dksType;
+Internally both variants decode their header into the same scratch struct:
+
+```c
+typedef struct dksInfo {
+    uint8_t *start;   /* Start of the allocation (before the header) */
+    DKS_TYPE *buf;    /* Start of the string data (what callers hold) */
+    size_t len;       /* Current string length */
+    size_t free;      /* Available space — always 0 for mdsc */
+    dksType type;     /* Header type (DKS_8, DKS_16, ...) */
+} dksInfo;
 ```
+
+The type bits live in the low bits of the header element that precedes the
+string data: the free-space field for `mds`, the length field for `mdsc`.
+Types whose value ends in `0` use 2 type bits, those ending in `1` use 3.
 
 ## Creation Functions
 
@@ -199,9 +238,14 @@ size_t mdscbufallocsize(const mdsc *s);
 
 /* Example usage */
 mds *s = mdsnew("Hello");
-printf("Length: %zu\n", mdslen(s));      /* 5 */
-printf("Avail: %zu\n", mdsavail(s));     /* Varies */
+printf("Length: %zu\n", mdslen(s));          /* 5 */
+printf("Avail: %zu\n", mdsavail(s));         /* varies with the allocator */
 printf("Total: %zu\n", mdsbufallocsize(s));  /* len + avail */
+
+/* On mdsc there is no free-space field at all */
+mdsc *c = mdscnew("Hello");
+assert(mdscavail(c) == 0);
+assert(mdscbufallocsize(c) == mdsclen(c));
 ```
 
 ### Append Operations
@@ -289,22 +333,36 @@ printf("%s\n", s);  /* "Count: 42, Value: 3.14" */
 
 ```c
 /* Custom fast format specifiers:
-   %s - C string
-   %S - dks string
-   %i - signed int
+   %s - NUL-terminated C string
+   %S - dks string (length taken from its header, so binary-safe)
+   %i - int32_t
    %I - int64_t
-   %u - unsigned int
+   %u - uint32_t
    %U - uint64_t
+   %b - databox, appended as raw bytes
+   %B - databox, rendered by type (bytes, signed, unsigned, float, double)
    %% - literal %
+   Any other %<char> emits that character literally.
 */
 mds *mdscatfmt(mds *s, const char *fmt, ...);
 mdsc *mdsccatfmt(mdsc *s, const char *fmt, ...);
 
 /* Example usage */
 mds *s = mdsempty();
-s = mdscatfmt(s, "Number: %i, Large: %I", 42, 9223372036854775807LL);
+s = mdscatfmt(s, "Number: %i, Large: %I", 42, INT64_MAX);
 printf("%s\n", s);
+
+/* %B renders a databox by its type, using the fast integer and
+ * double formatters rather than snprintf */
+const databox box = DATABOX_DOUBLE(3.5);
+s = mdscatfmt(s, " value=%B", &box);
 ```
+
+`mdscatfmt` is not `printf`: it has no width, precision, or padding, and it
+does no type checking. That is the point — each specifier dispatches
+straight to a fast writer. Use `mdscatprintf` when you need real `printf`
+semantics (it carries the `format(printf, 2, 3)` attribute, so the compiler
+checks those calls).
 
 ## String Manipulation
 
@@ -467,6 +525,23 @@ mds *joined = mdsjoin(words, 3, ", ");
 printf("%s\n", joined);  /* "apple, banana, cherry" */
 ```
 
+## Escaping and Quoting
+
+```c
+/* Append 'p' with non-printable bytes escaped, wrapped in quotes */
+mds *mdscatrepr(mds *s, const char *p, size_t len);
+mdsc *mdsccatrepr(mdsc *s, const char *p, size_t len);
+
+/* Append raw, quoting only when needed; 'append' is a trailing
+ * separator byte to emit (0 for none) */
+mds *mdscatlenquoteraw(mds *s, const void *t, size_t len, uint8_t append);
+mds *mdscatlennoquoteraw(mds *s, const void *t, size_t len, uint8_t append);
+
+/* Total allocation size including the header */
+size_t mdsallocsize(mds *s);
+size_t mdscallocsize(mdsc *s);
+```
+
 ## Comparison
 
 ```c
@@ -549,14 +624,19 @@ mdsfree(s);
 mds *secret = mdsnew("password123");
 mdsfreezero(secret);  /* Zeros memory before freeing */
 
-/* Convert to raw buffer */
+/* Convert to a plain buffer: the string bytes are moved to the front of
+ * the existing allocation and the base pointer is returned. */
 mds *s2 = mdsnew("Data");
-size_t len;
+size_t len = 0;
 uint8_t *buf = mdsnative(s2, &len);
-/* buf is now a regular malloc'd buffer */
-/* s2 is no longer valid */
-free(buf);
+/* s2 is no longer valid.  'buf' is the ORIGINAL allocation, so it is
+ * still zmalloc-owned and still sized for the old header — release it
+ * with zfree(), and zrealloc() it down yourself if you want it tight. */
+zfree(buf);
 ```
+
+`mdsnative` deliberately does not shrink the allocation: the caller may not
+want the `realloc`, and it returns `*len` precisely so the caller can decide.
 
 ## Hashing
 
@@ -576,21 +656,95 @@ __uint128_t mdscXXH3_128(const mdsc *s, uint64_t seed);
 /* Example usage */
 mds *s = mdsnew("Hello World");
 uint64_t hash = mdsXXH3_64(s, 0);
-printf("Hash: 0x%016lx\n", hash);
+printf("Hash: 0x%016" PRIx64 "\n", hash);
 ```
 
 ## UTF-8 Support
 
-```c
-/* Get UTF-8 character count */
-size_t mdslenutf8(mds *s);
-size_t mdsclenutf8(mdsc *s);
+Every `Str*` UTF-8 helper documented in
+[STR_UTILS](STR_UTILS.md) has a dks-flavored wrapper that takes the string's
+length from its header instead of a separate `len` argument. Shown here with
+the `mds` prefix; `mdsc` versions exist for all of them.
 
+```c
+/* Length and validation */
+size_t mdslenutf8(mds *s);
+bool mdsutf8valid(const mds *s);
+size_t mdsutf8validcount(const mds *s, bool *valid);
+
+/* Cursor movement */
+const uint8_t *mdsutf8advance(const mds *s, size_t n);
+const uint8_t *mdsutf8retreat(const mds *s, const uint8_t *pos, size_t n);
+uint32_t mdsutf8peek(const mds *s, const uint8_t *pos);
+size_t mdsutf8offsetat(const mds *s, size_t charIndex);
+size_t mdsutf8indexat(const mds *s, size_t byteOffset);
+
+/* Truncation and substrings */
+size_t mdsutf8truncate(const mds *s, size_t maxChars);
+size_t mdsutf8truncatebytes(const mds *s, size_t maxBytes);
+void mdsutf8substring(const mds *s, size_t startChar, size_t endChar,
+                      size_t *outOffset, size_t *outLen);
+size_t mdsutf8substringcopy(const mds *s, size_t startChar, size_t endChar,
+                            void *buf, size_t bufLen);
+size_t mdsutf8split(const mds *s, size_t charIndex);
+
+/* Comparison */
+int mdsutf8compare(const mds *s1, const mds *s2);
+int mdsutf8comparen(const mds *s1, const mds *s2, size_t n);
+int mdsutf8comparecaseinsensitiveascii(const mds *s1, const mds *s2);
+bool mdsutf8startswith(const mds *s, const void *prefix, size_t prefixLen);
+bool mdsutf8endswith(const mds *s, const void *suffix, size_t suffixLen);
+bool mdsutf8equal(const mds *s1, const mds *s2);
+bool mdsutf8equalcaseinsensitiveascii(const mds *s1, const mds *s2);
+
+/* Search (byte offset, or SIZE_MAX when not found) */
+size_t mdsutf8find(const mds *s, const void *needle, size_t needleLen);
+size_t mdsutf8findlast(const mds *s, const void *needle, size_t needleLen);
+size_t mdsutf8findchar(const mds *s, uint32_t codepoint);
+size_t mdsutf8findcharlast(const mds *s, uint32_t codepoint);
+size_t mdsutf8findcharnth(const mds *s, uint32_t codepoint, size_t n);
+bool mdsutf8contains(const mds *s, const void *needle, size_t needleLen);
+size_t mdsutf8count(const mds *s, const void *needle, size_t needleLen);
+size_t mdsutf8countchar(const mds *s, uint32_t codepoint);
+size_t mdsutf8findanychar(const mds *s, const void *charSet, size_t charSetLen);
+size_t mdsutf8findnotchar(const mds *s, const void *charSet, size_t charSetLen);
+size_t mdsutf8spanchar(const mds *s, const void *charSet, size_t charSetLen);
+size_t mdsutf8spannotchar(const mds *s, const void *charSet, size_t charSetLen);
+
+/* Terminal display width (East Asian Width aware) */
+size_t mdsutf8width(const mds *s);
+size_t mdsutf8widthn(const mds *s, size_t n);
+size_t mdsutf8truncatewidth(const mds *s, size_t maxWidth);
+size_t mdsutf8indexatwidth(const mds *s, size_t targetWidth);
+size_t mdsutf8padwidth(const mds *s, size_t targetWidth);
+bool mdsutf8isnarrow(const mds *s);
+bool mdsutf8haswide(const mds *s);
+
+/* Grapheme clusters (what a user perceives as one character) */
+size_t mdsutf8graphemenext(const mds *s);
+size_t mdsutf8graphemecount(const mds *s);
+size_t mdsutf8graphemeadvance(const mds *s, size_t n);
+bool mdsutf8graphemeat(const mds *s, size_t n, size_t *startOut,
+                       size_t *endOut);
+size_t mdsutf8graphemewidth(const mds *s);
+size_t mdsutf8graphemetruncate(const mds *s, size_t n);
+```
+
+```c
 /* Example usage */
 mds *s = mdsnew("Hello 💛");
-printf("Bytes: %zu\n", mdslen(s));        /* 10 */
-printf("Characters: %zu\n", mdslenutf8(s));  /* 7 */
+printf("Bytes: %zu\n", mdslen(s));           /* 10 */
+printf("Codepoints: %zu\n", mdslenutf8(s));  /* 7  */
+printf("Cells: %zu\n", mdsutf8width(s));     /* 8 — the emoji is wide */
 ```
+
+Three different "lengths" are in play and they are routinely different:
+**bytes** (`mdslen`), **codepoints** (`mdslenutf8`), and **display cells**
+(`mdsutf8width`). A grapheme cluster adds a fourth
+(`mdsutf8graphemecount`) — a base character plus its combining marks counts
+as one. Pick the one that matches what you are doing: buffer sizing wants
+bytes, indexing wants codepoints, terminal layout wants cells, and
+user-visible truncation wants graphemes.
 
 ## Utility Functions
 
@@ -705,40 +859,54 @@ mds *buildJSON(const char *name, int age) {
 ### Example 4: When to Use mds vs mdsc
 
 ```c
-/* Use mds for strings that grow/shrink frequently */
+/* mds: tracks free space, so repeated appends reuse slack instead of
+ * reallocating on every call */
 mds *log = mdsempty();
 for (int i = 0; i < 1000; i++) {
     log = mdscatprintf(log, "Entry %d\n", i);
-    /* mds handles frequent growth efficiently */
 }
 
-/* Use mdsc for many small, static strings */
+/* mdsc: one-element header and no free-space field, so each string
+ * costs a few bytes less — but every append resizes exactly. */
 mdsc *tags[10000];
 for (int i = 0; i < 10000; i++) {
-    tags[i] = mdscnew("tag");
-    /* mdsc uses less memory per string */
+    tags[i] = mdscnew("tag");   /* 1-byte header for a 3-byte string */
 }
 ```
 
+Rule of thumb: **`mds` for strings you build, `mdsc` for strings you keep.**
+Appending in a loop to an `mdsc` is the one pattern to avoid — with no free
+space to consume, it reallocates every time.
+
 ## Performance Characteristics
 
-| Operation      | Complexity | Notes                              |
-| -------------- | ---------- | ---------------------------------- |
-| mdsnew/mdscnew | O(n)       | n = initial length                 |
-| mdscat         | O(n)       | Amortized O(1) with pre-allocation |
-| mdscatprintf   | O(n)       | n = formatted output length        |
-| mdssplitlen    | O(n)       | n = string length                  |
-| mdscmp         | O(n)       | n = min(len1, len2)                |
-| Header upgrade | O(n)       | Only when crossing type boundary   |
+| Operation             | Complexity | Notes                                     |
+| --------------------- | ---------- | ----------------------------------------- |
+| mdsnew/mdscnew        | O(n)       | n = initial length                        |
+| mdslen/mdsclen        | O(1)       | decoded from the header, never a `strlen` |
+| mdscat (mds)          | O(n)       | amortized O(1) while free space lasts     |
+| mdsccat (mdsc)        | O(n)       | always reallocates: no free-space field   |
+| mdscatprintf          | O(n)       | n = formatted output length               |
+| mdssplitlen           | O(n)       | n = string length                         |
+| mdscmp                | O(n)       | n = min(len1, len2)                       |
+| Header upgrade        | O(n)       | only when crossing a type boundary        |
+| UTF-8 width/graphemes | O(n)       | must decode; no length field shortcut     |
 
 ## Memory Overhead
 
-| String Size | DKS_8         | DKS_16         | DKS_24            | DKS_32 |
-| ----------- | ------------- | -------------- | ----------------- | ------ |
-| 10 bytes    | 2 bytes (20%) | -              | -                 | -      |
-| 100 bytes   | -             | 4 bytes (4%)   | -                 | -      |
-| 1 KB        | -             | 4 bytes (0.4%) | -                 | -      |
-| 1 MB        | -             | -              | 6 bytes (0.0006%) | -      |
+Header cost for a string of a given length (the `mds` allocation is also
+rounded up by `jebufSizeAllocation`, so its real footprint is larger):
+
+| String length | mdsc header | mds header |
+| ------------- | ----------- | ---------- |
+| 10 bytes      | 1 byte      | 2 bytes    |
+| 100 bytes     | 2 bytes     | 2 bytes    |
+| 1 KiB         | 2 bytes     | 4 bytes    |
+| 1 MiB         | 3 bytes     | 6 bytes    |
+| 1 GiB         | 4 bytes     | 8 bytes    |
+
+`mdsc` crosses to DKS_16 at 64 bytes (its 1-byte length field loses 2 bits
+to the type), while `mds` keeps its 2-byte header all the way to 255.
 
 ## Thread Safety
 
@@ -746,16 +914,21 @@ DKS strings are **not thread-safe**. Concurrent access requires external synchro
 
 ```c
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
-mds *shared;
+mds *shared = mdsempty();
 
 pthread_mutex_lock(&lock);
-shared = mdscat(shared, "data");
+shared = mdscat(shared, "data");   /* must reassign: the pointer may move */
 pthread_mutex_unlock(&lock);
 ```
 
+Note the reassignment. Every growing operation may reallocate, so the
+returned pointer — not the one you passed in — is the valid string.
+
 ## See Also
 
-- [STR](STR.md) - Core string utilities
+- [STR](STR.md) - Scanning, conversion, and numeric formatting primitives
+- [STR_UTILS](STR_UTILS.md) - The `Str*` UTF-8, popcount, and bitmap helpers
+  that the dks UTF-8 wrappers call
 - [STR_DOUBLE_FORMAT](STR_DOUBLE_FORMAT.md) - Fast double formatting
 
 ## Testing

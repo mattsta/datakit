@@ -2,20 +2,24 @@
 
 ## Overview
 
-`intset` is a **memory-efficient sorted set of integers** with automatic width promotion. It stores integers in the smallest possible encoding (16/32/64-bit) that can hold all current elements, automatically upgrading when larger values are added.
+`intset` is a **memory-efficient sorted set of signed integers** built as a
+tiered structure. Each width class (`int16_t`, `int32_t`, `int64_t`) lives in
+its own sorted array, so adding one large value no longer widens every
+element that was already stored.
 
 **Key Features:**
 
-- Automatic encoding promotion (16-bit → 32-bit → 64-bit)
-- Sorted storage with O(log n) binary search
-- Compact memory representation
+- Three tiers selected by pointer tagging: Small, Medium, Full
+- Per-width sorted arrays with branchless binary search
 - Duplicate-free set semantics
-- No encoding downgrade (memory never shrinks)
-- Range: INT16_MIN to INT64_MAX
+- O(1) `intsetMin` / `intsetMax`
+- Range: `INT64_MIN` to `INT64_MAX`
 
 **Header**: `intset.h`
 
-**Source**: `intset.c`
+**Source**: `intset.c`, plus the tier implementations `intsetSmall.{c,h}`,
+`intsetMedium.{c,h}`, `intsetFull.{c,h}`, and shared helpers in
+`intsetCommon.h`
 
 ## What are Integer Sets?
 
@@ -23,7 +27,7 @@ Integer sets are specialized data structures for storing sorted collections of u
 
 1. **Use compact array storage** - Elements stored in contiguous memory
 2. **Automatically size themselves** - Start small (16-bit) and grow as needed
-3. **Maintain sorted order** - Binary search for O(log n) lookups
+3. **Maintain sorted order** - Binary search for lookups
 4. **Prevent duplicates** - Set semantics built-in
 5. **Trade CPU for memory** - Slower inserts/deletes, but minimal memory overhead
 
@@ -34,101 +38,128 @@ Integer sets are specialized data structures for storing sorted collections of u
 - Storing unique integer IDs or identifiers
 - Memory efficiency is critical
 - Elements are primarily added, rarely removed
-- Set size is small to medium (< 100K elements)
-- You need sorted iteration
+- Membership tests (`intsetFind`) dominate the workload
 
 **Don't use intset when:**
 
 - Frequent insertions/deletions at scale
 - Elements are mostly non-integers
-- Need O(1) lookup (use hash table instead)
-- Very large sets (> 1M elements, consider intsetBig)
+- You need O(1) lookup (use a hash table instead)
+- You need positional iteration over a Medium/Full tier — `intsetGet` walks
+  the virtual merge, so an index loop is quadratic (see
+  [Iteration](#iteration))
+- Values exceed 64 bits (use [intsetBig](INTSET_BIG.md))
 
 ## Data Structure
 
-### Encoding Types
+### Opaque Handle, Tagged Pointer
+
+```c
+/* intset is opaque: the tier lives in the low bits of the pointer */
+typedef struct intset intset;
+```
+
+There is no public struct. `intset *` is a **tagged pointer**: its low two
+bits carry the tier, and the rest points at the tier's own header. Never
+dereference an `intset *` — every field access must go through the API.
+
+```c
+typedef enum intsetType {
+    INTSET_TYPE_SMALL  = 1,  /* int16_t only */
+    INTSET_TYPE_MEDIUM = 2,  /* int16_t and int32_t */
+    INTSET_TYPE_FULL   = 3,  /* int16_t, int32_t, and int64_t */
+} intsetType;
+```
+
+`intsetEnc` still exists in `intset.h` for backward compatibility, and its
+values are element widths in bytes:
 
 ```c
 typedef enum intsetEnc {
-    INTSET_ENC_INT16 = 2,  /* 16-bit signed integers */
-    INTSET_ENC_INT32 = 4,  /* 32-bit signed integers */
-    INTSET_ENC_INT64 = 8   /* 64-bit signed integers */
+    INTSET_ENC_INT16 = sizeof(int16_t),  /* 2 */
+    INTSET_ENC_INT32 = sizeof(int32_t),  /* 4 */
+    INTSET_ENC_INT64 = sizeof(int64_t)   /* 8 */
 } intsetEnc;
 ```
 
-### Structure Layout
+It no longer describes the whole set — a Medium or Full intset holds several
+widths at once.
+
+### The Three Tiers
+
+Each tier keeps **one sorted, duplicate-free array per width**:
 
 ```c
-typedef struct intset {
-    intsetEnc encoding;   /* Current encoding: 2, 4, or 8 bytes */
-    uint32_t length;      /* Number of elements */
-    int8_t contents[];    /* Variable-length array (flexible) */
-} intset;
+/* Small: a single inline array — the header and values are one allocation */
+typedef struct intsetSmall {
+    uint32_t count16;
+    int16_t values16[];
+} intsetSmall;
+
+/* Medium: two independently allocated arrays */
+typedef struct intsetMedium {
+    uint32_t count16;
+    uint32_t count32;
+    int16_t *values16;
+    int32_t *values32;
+} intsetMedium;
+
+/* Full: three independently allocated arrays */
+typedef struct intsetFull {
+    uint64_t count16;
+    uint64_t count32;
+    uint64_t count64;
+    int16_t *values16;
+    int32_t *values32;
+    int64_t *values64;
+} intsetFull;
 ```
 
-**Memory Layout Example:**
+A value is filed by the **narrowest width that holds it**, so `5` stays two
+bytes even in a Full intset that also holds `INT64_MAX`. Sorted order across
+the whole set is a _virtual merge_ of the per-width arrays; it is never
+materialized.
 
-```
-For intset with values [5, 10, 20] in INT16 encoding:
+## Tier Promotion
 
-+----------+--------+------------------+
-| encoding | length |    contents      |
-+----------+--------+------------------+
-|    2     |   3    | [5, 10, 20]      |
-| (2 bytes)| (4B)   | (6 bytes total)  |
-+----------+--------+------------------+
-Total: 4 + 4 + 6 = 14 bytes
+### What Triggers an Upgrade
 
-After adding 70000 (requires INT32):
+Promotion happens before an add, and for either of two reasons — the value
+does not fit the tier's widths, or the tier has grown past its size budget:
 
-+----------+--------+-------------------------+
-| encoding | length |       contents          |
-+----------+--------+-------------------------+
-|    4     |   4    | [5, 10, 20, 70000]     |
-| (4 bytes)| (4B)   | (16 bytes total)        |
-+----------+--------+-------------------------+
-Total: 4 + 4 + 16 = 24 bytes
-```
+| From   | To     | Value trigger           | Size triggers                         |
+| ------ | ------ | ----------------------- | ------------------------------------- |
+| Small  | Medium | value outside `int16_t` | 32768 elements, or 64 KiB of storage  |
+| Medium | Full   | value outside `int32_t` | 2097152 elements, or 8 MiB of storage |
 
-## Variable-Width Encoding
+Full is terminal: there is no further tier, and every 64-bit value is
+representable there.
 
-### Automatic Promotion
-
-The intset automatically upgrades its encoding when a value is added that doesn't fit in the current encoding:
-
-```c
-/* Value ranges that trigger encoding */
-INT16: -32,768 to 32,767          (2 bytes per element)
-INT32: -2,147,483,648 to 2,147,483,647   (4 bytes per element)
-INT64: -9,223,372,036,854,775,808 to 9,223,372,036,854,775,807  (8 bytes)
-```
-
-**Promotion Rules:**
-
-1. All values fit in INT16 → use INT16 encoding
-2. Any value requires INT32 → upgrade all to INT32
-3. Any value requires INT64 → upgrade all to INT64
-4. **Never downgrade** - even if large values are removed
+**Promotion is one-way.** Removing the value that forced an upgrade does not
+demote the set back down. What it does _not_ do — and this is the difference
+from a flat width-promoting design — is rewrite the narrow elements: the
+`int16_t` array stays an `int16_t` array across every promotion.
 
 ### How Promotion Works
 
 ```c
-intset *is = intsetNew();  /* Starts as INT16 */
+intset *is = intsetNew();       /* Small tier */
 
-/* Add 100 - stays INT16 */
-intsetAdd(&is, 100, NULL);
-// encoding = INT16, contents = [100]
+intsetAdd(&is, 100, NULL);      /* Small: values16 = [100] */
 
-/* Add 50000 - requires INT32, ALL elements upgraded */
-intsetAdd(&is, 50000, NULL);
-// encoding = INT32, contents = [100, 50000]
-// Note: 100 now uses 4 bytes even though it fits in 2
+/* 50000 does not fit int16_t -> upgrade to Medium.
+ * 100 stays a 2-byte value; 50000 lands in the int32 array. */
+intsetAdd(&is, 50000, NULL);    /* Medium: values16=[100], values32=[50000] */
 
-/* Add INT64_MAX - upgrades to INT64 */
-intsetAdd(&is, 9223372036854775807LL, NULL);
-// encoding = INT64, contents = [100, 50000, 9223372036854775807]
-// All elements now use 8 bytes each
+/* INT64_MAX does not fit int32_t -> upgrade to Full.
+ * The 16- and 32-bit arrays are carried over unchanged. */
+intsetAdd(&is, INT64_MAX, NULL);
+/* Full: values16=[100], values32=[50000], values64=[INT64_MAX] */
 ```
+
+Because the tier is encoded in the pointer, **every mutating call may return
+a different `intset *`** — both for reallocation and for a tier change. That
+is why `intsetAdd` and `intsetRemove` take `intset **`.
 
 ## API Reference
 
@@ -199,7 +230,10 @@ assert(!removed);  // false - doesn't exist
 intsetFree(is);
 ```
 
-**Note**: Removal does NOT downgrade encoding. If you added a large value then removed it, the intset stays at the larger encoding.
+**Note**: Removal does NOT demote the tier. A set that was pushed to Full
+stays Full, keeping its (now possibly empty) wider arrays and their headers.
+The narrow values were never widened, though, so the cost of that is a few
+pointers and counters, not a per-element penalty.
 
 ### Searching
 
@@ -227,30 +261,63 @@ intsetFree(is);
 ### Accessing by Position
 
 ```c
-/* Get value at position (0-indexed)
+/* Get value at position (0-indexed) in the merged sorted order.
  * pos: position in sorted order
  * value: output pointer for the value
  * Returns: true if position valid, false otherwise
- */
+ *
+ * On the Medium and Full tiers this walks the virtual merge from the
+ * start, so it is O(pos) — NOT O(1). */
 bool intsetGet(intset *is, uint32_t pos, int64_t *value);
 
-/* Example: Iterate all elements */
+/* O(1) extremes; false when the set is empty */
+bool intsetMin(const intset *is, int64_t *value);
+bool intsetMax(const intset *is, int64_t *value);
+
+/* Example */
 intset *is = intsetNew();
 intsetAdd(&is, 30, NULL);
 intsetAdd(&is, 10, NULL);
 intsetAdd(&is, 20, NULL);
 
-/* Elements are sorted: [10, 20, 30] */
-for (uint32_t i = 0; i < intsetCount(is); i++) {
-    int64_t val;
-    if (intsetGet(is, i, &val)) {
-        printf("%ld ", val);  // Prints: 10 20 30
-    }
+int64_t lo = 0;
+int64_t hi = 0;
+if (intsetMin(is, &lo) && intsetMax(is, &hi)) {
+    printf("range %" PRId64 "..%" PRId64 "\n", lo, hi);  /* range 10..30 */
 }
-printf("\n");
 
 intsetFree(is);
 ```
+
+`intsetMin` / `intsetMax` are O(1) because every per-width array is sorted:
+the global minimum is the smallest of the array heads and the global maximum
+is the largest of the array tails.
+
+### Iteration
+
+```c
+/* WRONG for anything but a Small intset — O(n^2) total.
+ * Each intsetGet re-walks the merge from position 0. */
+for (uint32_t i = 0; i < intsetCount(is); i++) {
+    int64_t val;
+    intsetGet(is, i, &val);
+    consume(val);
+}
+```
+
+The public `intset.h` API deliberately exposes no iterator: the merged
+sorted order is virtual, so there is no cheap way to hand out a cursor
+through the opaque handle. When you need every element:
+
+- If **sorted order matters**, keep the count small enough that the
+  quadratic walk is acceptable, or track the values alongside the set.
+- If **order does not matter**, iterate each width array directly by
+  including the tier header (`intsetSmall.h` / `intsetMedium.h` /
+  `intsetFull.h`), which also declare per-tier iterators.
+
+`intsetRandom(is)` is likewise O(pos) on Medium and Full: it picks a random
+position and calls `intsetGet`. It returns `0` for an empty set, which is
+indistinguishable from a stored `0` — check `intsetCount` first.
 
 ### Random Access
 
@@ -266,8 +333,8 @@ for (int i = 1; i <= 100; i++) {
 
 /* Get 5 random samples */
 for (int i = 0; i < 5; i++) {
-    int64_t random = intsetRandom(is);
-    printf("%ld ", random);
+    int64_t sample = intsetRandom(is);
+    printf("%" PRId64 " ", sample);
 }
 printf("\n");
 
@@ -289,11 +356,16 @@ intsetAdd(&is, 100, NULL);
 intsetAdd(&is, 200, NULL);
 intsetAdd(&is, 300, NULL);
 
-printf("Elements: %zu\n", intsetCount(is));  // 3
-printf("Memory: %zu bytes\n", intsetBytes(is));  // 14 bytes (header + 6 bytes data)
+printf("Elements: %zu\n", intsetCount(is));     /* 3 */
+printf("Memory: %zu bytes\n", intsetBytes(is)); /* Small tier: 4 + 3*2 = 10 */
 
 intsetFree(is);
 ```
+
+`intsetBytes` reports the current tier's storage: the header plus the
+populated width arrays. Only the Small tier is a single allocation (its
+values are inline); Medium and Full hold separately allocated arrays, so the
+reported total spans several allocations.
 
 ## Real-World Examples
 
@@ -308,9 +380,9 @@ void userLogin(int64_t userId) {
     bool wasNew;
     intsetAdd(&activeUsers, userId, &wasNew);
     if (wasNew) {
-        printf("User %ld logged in (new session)\n", userId);
+        printf("User %" PRId64 " logged in (new session)\n", userId);
     } else {
-        printf("User %ld already active\n", userId);
+        printf("User %" PRId64 " already active\n", userId);
     }
 }
 
@@ -319,7 +391,7 @@ void userLogout(int64_t userId) {
     bool existed;
     intsetRemove(&activeUsers, userId, &existed);
     if (existed) {
-        printf("User %ld logged out\n", userId);
+        printf("User %" PRId64 " logged out\n", userId);
     }
 }
 
@@ -351,9 +423,12 @@ typedef struct article {
     intset *tags;
 } article;
 
+/* datakit deprecates strdup(); copy explicitly through zmalloc */
 article *articleNew(const char *title) {
-    article *a = malloc(sizeof(*a));
-    a->title = strdup(title);
+    article *a = zcalloc(1, sizeof(*a));
+    const size_t len = strlen(title) + 1;
+    a->title = zmalloc(len);
+    memcpy(a->title, title, len);
     a->tags = intsetNew();
     return a;
 }
@@ -366,20 +441,23 @@ bool articleHasTag(article *a, int64_t tagId) {
     return intsetFind(a->tags, tagId);
 }
 
+/* Tag IDs are small and few, so this stays on the Small tier where
+ * intsetGet is a direct array index. */
 void articlePrintTags(article *a) {
     printf("Tags for '%s': ", a->title);
     for (uint32_t i = 0; i < intsetCount(a->tags); i++) {
-        int64_t tag;
-        intsetGet(a->tags, i, &tag);
-        printf("%ld ", tag);
+        int64_t tag = 0;
+        if (intsetGet(a->tags, i, &tag)) {
+            printf("%" PRId64 " ", tag);
+        }
     }
     printf("\n");
 }
 
 void articleFree(article *a) {
-    free(a->title);
+    zfree(a->title);
     intsetFree(a->tags);
-    free(a);
+    zfree(a);
 }
 
 /* Usage */
@@ -393,37 +471,39 @@ articlePrintTags(post);  // Tags for 'Understanding intsets': 17 42 99
 articleFree(post);
 ```
 
-### Example 3: Encoding Upgrade Demonstration
+### Example 3: Tier Promotion Demonstration
+
+The tier is not observable through the public API — `intset` is opaque and
+there is no `is->encoding` to read. What you _can_ observe is `intsetBytes`,
+which reflects both the tier's header and its populated arrays.
 
 ```c
-/* Show automatic encoding upgrades */
-intset *is = intsetNew();
+intset *is = intsetNew();               /* Small tier */
 
-printf("Initial encoding: %d bytes per element\n", is->encoding);
-// Output: Initial encoding: 2 bytes per element
-
-/* Add small values - stays INT16 */
 intsetAdd(&is, 100, NULL);
 intsetAdd(&is, 200, NULL);
-printf("After adding 100, 200: %d bytes per element\n", is->encoding);
-// Output: After adding 100, 200: 2 bytes per element
+printf("two small values: %zu bytes\n", intsetBytes(is));
 
-/* Add value requiring INT32 - upgrades all elements */
+/* 100000 needs int32_t -> promotes to Medium.
+ * 100 and 200 stay in the int16 array at 2 bytes each. */
 intsetAdd(&is, 100000, NULL);
-printf("After adding 100000: %d bytes per element\n", is->encoding);
-// Output: After adding 100000: 4 bytes per element
+printf("after adding 100000: %zu bytes\n", intsetBytes(is));
 
-/* Remove large value - encoding stays INT32 */
-bool removed;
+/* Removing it frees the int32 slot but does NOT demote the tier */
+bool removed = false;
 intsetRemove(&is, 100000, &removed);
-printf("After removing 100000: %d bytes per element\n", is->encoding);
-// Output: After removing 100000: 4 bytes per element (NO DOWNGRADE)
-
-printf("Memory for 2 elements: %zu bytes\n", intsetBytes(is));
-// Output: Memory for 2 elements: 16 bytes
-// (8 byte header + 8 bytes for two INT32 values)
+printf("after removing 100000: %zu bytes\n", intsetBytes(is));
 
 intsetFree(is);
+```
+
+Under `DATAKIT_TEST` builds, `intsetRepr(is)` prints the tier and its arrays
+directly.
+
+```c
+#ifdef DATAKIT_TEST
+void intsetRepr(const intset *is);
+#endif
 ```
 
 ### Example 4: Set Operations (Manual Implementation)
@@ -492,136 +572,109 @@ intsetFree(intersectSet);
 
 ## Performance Characteristics
 
-| Operation        | Complexity | Notes                                     |
-| ---------------- | ---------- | ----------------------------------------- |
-| Create           | O(1)       | Allocates small header + minimal array    |
-| Add (no upgrade) | O(n)       | Binary search O(log n) + memmove O(n)     |
-| Add (upgrade)    | O(n)       | Must convert all elements                 |
-| Remove           | O(n)       | Binary search O(log n) + memmove O(n)     |
-| Find             | O(log n)   | Binary search on sorted array             |
-| Get by position  | O(1)       | Direct array access (after encoding calc) |
-| Random           | O(1)       | Random index selection                    |
-| Count            | O(1)       | Cached in structure                       |
-| Bytes            | O(1)       | Simple calculation                        |
+| Operation        | Complexity                     | Notes                                                     |
+| ---------------- | ------------------------------ | --------------------------------------------------------- |
+| Create           | O(1)                           | one small allocation                                      |
+| Add (no promote) | O(n)                           | branchless binary search + memmove within one width array |
+| Add (promote)    | O(n)                           | copies the existing arrays into the new tier              |
+| Remove           | O(n)                           | binary search + memmove within one width array            |
+| Find             | O(log n)                       | branchless lower-bound with prefetch, per width array     |
+| Get by position  | O(1) Small, O(pos) Medium/Full | walks the virtual merge on multi-array tiers              |
+| Min / Max        | O(1)                           | array heads / tails                                       |
+| Random           | O(1) Small, O(pos) Medium/Full | picks a position, then `intsetGet`                        |
+| Count            | O(1)                           | summed counters                                           |
+| Bytes            | O(1)                           | summed array sizes                                        |
 
-**Insertion Performance:**
-
-- Best case: O(log n) for finding position
-- Worst case: O(n) for memmove + potential upgrade
-
-**Memory Efficiency:**
-
-```
-Overhead: 8 bytes (encoding + length)
-Per element: 2, 4, or 8 bytes depending on encoding
-No pointers, no allocation headers per element
-
-Example with 1000 elements in INT16:
-- intset: 8 + (1000 * 2) = 2,008 bytes
-- Array of int64_t: 1000 * 8 = 8,000 bytes
-- Savings: ~75% memory reduction
-```
+The binary search is branchless (the midpoint step compiles to a
+conditional move) and issues two prefetches per level, measured 1.3-2.1x
+faster than a branchy search across all sizes.
 
 ## Memory Efficiency
 
-### Encoding Size Comparison
+### The Tier Advantage
+
+The point of the tiered design is that **a wide value costs only its own
+width**. A flat width-promoting set widens every element; a tiered set does
+not:
 
 ```c
-/* Compare memory usage across encodings */
-intset *small = intsetNew();  // INT16
-for (int i = 0; i < 1000; i++) {
-    intsetAdd(&small, i, NULL);
-}
-printf("1000 small ints: %zu bytes\n", intsetBytes(small));
-// Output: 1000 small ints: 2008 bytes (8 + 1000*2)
-
-intset *medium = intsetNew();  // INT32
-for (int i = 0; i < 1000; i++) {
-    intsetAdd(&medium, i * 100000, NULL);
-}
-printf("1000 medium ints: %zu bytes\n", intsetBytes(medium));
-// Output: 1000 medium ints: 4008 bytes (8 + 1000*4)
-
-intset *large = intsetNew();  // INT64
-for (int i = 0; i < 1000; i++) {
-    intsetAdd(&large, (int64_t)i * 10000000000LL, NULL);
-}
-printf("1000 large ints: %zu bytes\n", intsetBytes(large));
-// Output: 1000 large ints: 8008 bytes (8 + 1000*8)
-```
-
-### When Encoding Matters
-
-```c
-/* Bad: One large value wastes memory */
-intset *wasteful = intsetNew();
+/* 999 small values plus one huge one */
+intset *mixed = intsetNew();
 for (int i = 1; i <= 999; i++) {
-    intsetAdd(&wasteful, i, NULL);  // All fit in INT16
+    intsetAdd(&mixed, i, NULL);     /* int16 array */
 }
-intsetAdd(&wasteful, INT64_MAX, NULL);  // Forces INT64 for all!
-printf("Memory (wasteful): %zu bytes\n", intsetBytes(wasteful));
-// Output: 8008 bytes - all 1000 elements now use 8 bytes each
+intsetAdd(&mixed, INT64_MAX, NULL); /* promotes to Full */
 
-/* Good: Keep values in similar ranges */
-intset *efficient = intsetNew();
-for (int i = 1; i <= 1000; i++) {
-    intsetAdd(&efficient, i, NULL);  // All fit in INT16
-}
-printf("Memory (efficient): %zu bytes\n", intsetBytes(efficient));
-// Output: 2008 bytes - all elements use 2 bytes each
+printf("Memory: %zu bytes\n", intsetBytes(mixed));
+/* The 999 small values are still 2 bytes each; only INT64_MAX
+ * costs 8.  A flat int64 promotion would have charged 8 bytes
+ * for all 1000. */
+
+intsetFree(mixed);
 ```
+
+The residual cost of a promotion is the wider tier's header — extra counters
+and array pointers — not a per-element penalty.
+
+### Where the Bytes Go
+
+| Tier   | Header                                   | Arrays                     |
+| ------ | ---------------------------------------- | -------------------------- |
+| Small  | one `uint32_t` count, values inline      | single allocation          |
+| Medium | two `uint32_t` counts + two pointers     | two separate allocations   |
+| Full   | three `uint64_t` counts + three pointers | three separate allocations |
+
+`intsetBytes` sums the header and the populated arrays across all of those
+allocations.
 
 ## Best Practices
 
 ### 1. Pass Pointer to Pointer
 
 ```c
-/* WRONG - may crash after reallocation */
+/* WRONG - the handle is a TAGGED pointer; a promotion or a realloc
+ * makes the old value both stale and mis-tagged. */
+intset *is = intsetNew();
+intset *alias = is;
+intsetAdd(&is, 100000, NULL);   /* may promote Small -> Medium */
+intsetFind(alias, 100000);      /* reads a freed, wrongly-tagged pointer */
+
+/* RIGHT - one owner, always updated through the API */
 intset *is = intsetNew();
 intsetAdd(&is, 100, NULL);
-intsetAdd(&is, 200, NULL);  // 'is' may be invalid if reallocated!
-
-/* RIGHT - always pass address */
-intset *is = intsetNew();
-intsetAdd(&is, 100, NULL);  // Updates 'is' if reallocated
-intsetAdd(&is, 200, NULL);  // Safe
+intsetAdd(&is, 100000, NULL);
 ```
 
-### 2. Consider Value Ranges
+Never keep a second copy of an `intset *` across a mutation, and never
+compute anything from its bits — the low two bits are the tier tag.
+
+### 2. Let the Tiers Do Their Job
 
 ```c
-/* GOOD - Values in similar range */
-intset *ids = intsetNew();
-for (int i = 1; i <= 10000; i++) {
-    intsetAdd(&ids, i, NULL);
-}
-// Uses INT16 encoding: 2 bytes per element
-
-/* BAD - Wide value range */
+/* Fine.  The wide value costs 8 bytes; nothing else is affected. */
 intset *mixed = intsetNew();
 intsetAdd(&mixed, 1, NULL);
-intsetAdd(&mixed, 5000000000LL, NULL);  // Forces INT64 for everything!
-// Now element '1' wastes 8 bytes instead of 2
+intsetAdd(&mixed, 5000000000LL, NULL);
 ```
 
-### 3. Batch Operations When Possible
+There is no "add the biggest value first" trick to play any more: filing by
+width means insertion order does not change the final layout. The only thing
+still worth avoiding is repeatedly crossing a tier boundary, since each
+promotion copies the existing arrays.
+
+### 3. Prefer Find and Min/Max Over Positional Access
 
 ```c
-/* Less efficient - many small adds with potential upgrades */
-intset *is = intsetNew();
-for (int i = 0; i < 10000; i++) {
-    int64_t random = rand();
-    intsetAdd(&is, random, NULL);  // May trigger encoding upgrade each time
-}
+/* GOOD - O(log n), no merge walk */
+if (intsetFind(is, needle)) { ... }
 
-/* More efficient - pre-allocate if you know max value */
-// (Note: intset doesn't have pre-allocation, but you can avoid upgrades
-//  by adding largest values first)
-intset *is2 = intsetNew();
-intsetAdd(&is2, INT32_MAX, NULL);  // Force INT32 encoding upfront
-for (int i = 0; i < 10000; i++) {
-    int64_t random = rand() % INT32_MAX;
-    intsetAdd(&is2, random, NULL);  // No upgrades needed
+int64_t lo = 0;
+if (intsetMin(is, &lo)) { ... }        /* O(1) */
+
+/* AVOID on Medium/Full - O(n^2) across the loop */
+for (uint32_t i = 0; i < intsetCount(is); i++) {
+    int64_t v;
+    intsetGet(is, i, &v);
 }
 ```
 
@@ -651,51 +704,56 @@ if (removed) {
 
 ## Common Pitfalls
 
-### 1. Forgetting No Downgrade
+### 1. Expecting a Tier to Demote
 
 ```c
-/* WRONG ASSUMPTION */
 intset *is = intsetNew();
-intsetAdd(&is, INT64_MAX, NULL);  // Forces INT64
-intsetRemove(&is, INT64_MAX, NULL);  // Removed, but...
-// Encoding is STILL INT64! Memory doesn't shrink.
+intsetAdd(&is, INT64_MAX, NULL);     /* promotes all the way to Full */
+intsetRemove(&is, INT64_MAX, NULL);  /* removed, but the tier stays Full */
+```
 
-/* If you need downgrading, recreate the set */
-intset *old = is;
-intset *new = intsetNew();
-for (uint32_t i = 0; i < intsetCount(old); i++) {
-    int64_t val;
-    intsetGet(old, i, &val);
-    if (val != INT64_MAX) {  // Skip the large value
-        intsetAdd(&new, val, NULL);
+The int64 array is emptied, so the per-element cost is gone; what remains is
+the Full header. If you truly need to shed that, rebuild:
+
+```c
+intset *rebuilt = intsetNew();
+for (uint32_t i = 0; i < intsetCount(is); i++) {
+    int64_t val = 0;
+    if (intsetGet(is, i, &val)) {
+        intsetAdd(&rebuilt, val, NULL);
     }
 }
-intsetFree(old);
-is = new;  // New intset may use smaller encoding
+intsetFree(is);
+is = rebuilt;
 ```
+
+That rebuild is O(n^2) on Medium/Full because of `intsetGet` — only worth it
+for small sets, or drive it from the per-tier iterators instead.
 
 ### 2. Not Checking Return Values
 
 ```c
-/* BAD - ignoring return */
+/* BAD - ignoring the result */
 int64_t val;
-intsetGet(is, 1000, &val);  // What if position is invalid?
-printf("%ld\n", val);  // Undefined behavior!
+intsetGet(is, 1000, &val);            /* leaves val untouched if invalid */
+printf("%" PRId64 "\n", val);         /* reads uninitialized memory */
 
-/* GOOD - check return */
-int64_t val;
+/* GOOD - check the return */
+int64_t val = 0;
 if (intsetGet(is, 1000, &val)) {
-    printf("%ld\n", val);
+    printf("%" PRId64 "\n", val);
 } else {
     printf("Invalid position\n");
 }
 ```
 
+`intsetRandom` has no such signal: it returns `0` both for an empty set and
+for a set containing `0`. Guard with `intsetCount`.
+
 ### 3. Inefficient Set Operations
 
 ```c
-/* SLOW - O(n²) membership test */
-intset *a = ..., *b = ...;
+/* SLOW - nested positional scans; each intsetGet may walk the merge */
 for (uint32_t i = 0; i < intsetCount(a); i++) {
     int64_t val;
     intsetGet(a, i, &val);
@@ -706,7 +764,7 @@ for (uint32_t i = 0; i < intsetCount(a); i++) {
     }
 }
 
-/* FASTER - O(n log m) using binary search */
+/* FASTER - binary search the second set */
 for (uint32_t i = 0; i < intsetCount(a); i++) {
     int64_t val;
     intsetGet(a, i, &val);
@@ -714,10 +772,14 @@ for (uint32_t i = 0; i < intsetCount(a); i++) {
 }
 ```
 
+Even the second form still pays `intsetGet`'s merge walk on Medium and Full.
+For real set algebra over large sets, iterate the width arrays via the tier
+headers, or reach for a container built for it.
+
 ## See Also
 
-- [intsetU32](INTSET_U32.md) - Fixed 32-bit integer set (faster, no encoding changes)
-- [intsetBig](INTSET_BIG.md) - 128-bit integer set with bucketing
+- [intsetU32](INTSET_U32.md) - Fixed 32-bit unsigned integer set (stable handle, single array)
+- [intsetBig](INTSET_BIG.md) - Bucketed wide-range integer set for 128-bit inputs
 - [hyperloglog](HYPERLOGLOG.md) - Probabilistic cardinality estimation
 - [flex](../flex/FLEX.md) - Flexible arrays that can use intset internally
 
@@ -731,9 +793,9 @@ Run the intset test suite:
 
 The test suite validates:
 
-- Value encoding detection
-- Encoding upgrades (16→32→64)
-- Binary search correctness
+- Per-width value classification
+- Tier promotion (Small → Medium → Full) by value and by size budget
+- Binary search correctness (including the branchless lower bound)
 - Insertion and deletion
-- Sorted order maintenance
+- Sorted order maintenance across the virtual merge
 - Stress tests with random operations

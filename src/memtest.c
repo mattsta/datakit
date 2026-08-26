@@ -23,10 +23,6 @@
 #include <time.h>
 #include <unistd.h>
 
-#if defined(__sun)
-#include <stropts.h>
-#endif
-
 #if defined(__APPLE__)
 #include <mach/mach.h>
 #include <mach/vm_region.h>

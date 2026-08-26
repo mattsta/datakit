@@ -6,7 +6,7 @@
 /* Reference Container */
 #include "multimapAtom.h"
 
-/* multimapFull is a 40 byte struct describing a multimapFull.
+/* multimapFull is a 48 byte struct describing a multimapFull.
  * 'map' is a map for each tiny map. (count * sizeof(map))
  * 'middle' is an array of integer offsets into maps for midpoint memories.
  * 'count' is the total number of values across all map.
@@ -22,7 +22,7 @@ struct multimapFull {
     multimapFullValues values; /* count of all "rows" in every map */
     multimapElements elementsPerEntry; /* max 4 billion "columns" per row. */
     uint32_t maxSize : 17;             /* max 65536 cutoff for splitting */
-    uint32_t mapIsSet : 1;             /* bool; true if keys are unique */
+    uint32_t mapIsSet : 1;             /* bool; set mode dedupes WHOLE rows */
     uint32_t compress : 1;             /* bool; true if compression enabled */
     uint32_t isSurrogate : 1;          /* bool; true if all keys need refs */
     uint32_t unused : 12; /* more free flags! tiny flags for everybody! */

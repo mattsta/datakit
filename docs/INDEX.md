@@ -7,15 +7,18 @@
 - [Getting Started Guide](GETTING_STARTED.md) - Build instructions and first steps
 - [Architecture Overview](ARCHITECTURE.md) - Design patterns and philosophy
 - [API Quick Reference](API_QUICK_REFERENCE.md) - Common operations across modules
+- [Hashes, HMAC, and the flex envelope](HASH_AND_ENVELOPE.md) - Integrity and AEAD usage guide
 
 ## Module Documentation
 
 ### Core Infrastructure
 
-- [datakit Core](modules/core/DATAKIT.md) - Main configuration and platform abstraction
 - [databox](modules/core/DATABOX.md) - Universal 16-byte container for any data type
-- [Configuration System](modules/core/CONFIG.md) - Compile-time feature detection
-- [Utilities](modules/core/UTIL.md) - General utility functions
+
+Core platform plumbing has no standalone guide; read the headers
+directly: `src/datakit.h` (platform abstraction and shared macros),
+`src/config.h` (compile-time feature detection), `src/util.h` (general
+utility functions).
 
 ### String and Buffer Management
 
@@ -28,7 +31,9 @@
 
 - [flex](modules/flex/FLEX.md) - Core compressed byte array
 - [mflex](modules/flex/MFLEX.md) - Compressed/uncompressed flex wrapper
-- [Capacity Management](modules/flex/CAPACITY.md) - Allocation strategies
+
+Flex growth/capacity policy (`flexCapSizeLimit`, `FLEX_CAP_LEVEL_*`)
+lives in `src/flexCapacityManagement.h`.
 
 ### Multi-Container Modules
 
@@ -37,7 +42,7 @@ These containers use **scale-aware** implementations with small/medium/large var
 #### MultiMap - Key-Value Store with Multi-Element Values
 
 - [MultiMap Overview](modules/multimap/MULTIMAP.md) - API and usage guide
-- [Implementation Variants](modules/multimap/VARIANTS.md) - Small, Medium, Full, and Atom versions
+- [Implementation Variants](modules/multimap/VARIANTS.md) - Small, Medium, and Full size tiers, plus Atom (the reference-container variant, not a size tier)
 - [MultiMap Examples](modules/multimap/EXAMPLES.md) - Real-world usage patterns
 
 #### MultiList - Linked List with Multi-Element Nodes
@@ -49,7 +54,7 @@ These containers use **scale-aware** implementations with small/medium/large var
 #### MultiArray - Dynamic Arrays with Multi-Element Support
 
 - [MultiArray Overview](modules/multiarray/MULTIARRAY.md) - API and usage guide
-- [Implementation Variants](modules/multiarray/VARIANTS.md) - Small, Medium, and Large versions
+- [Implementation Variants](modules/multiarray/VARIANTS.md) - Small, Medium, and Large versions, plus the `multiarrayNative*` macros for caller-owned inline arrays
 - [MultiArray Examples](modules/multiarray/EXAMPLES.md) - Real-world usage patterns
 
 #### Other Multi-Containers
@@ -62,8 +67,12 @@ These containers use **scale-aware** implementations with small/medium/large var
 
 - [intset](modules/intset/INTSET.md) - Variable-width integer set (16/32/64-bit)
 - [intsetU32](modules/intset/INTSET_U32.md) - Fixed 32-bit unsigned integer set
-- [intsetBig](modules/intset/INTSET_BIG.md) - 64-bit integer sets (x86_64 only)
+- [intsetBig](modules/intset/INTSET_BIG.md) - Bucketed wide-range integer set (128-bit inputs)
 - [hyperloglog](modules/intset/HYPERLOGLOG.md) - Probabilistic cardinality estimation
+
+`src/intsetBig.h` adds 128-bit-backed integer sets; it is compiled only
+where the toolchain provides `__int128`, and its `intsetBig` test is
+dropped from the CTest list otherwise.
 
 ### Compression and Encoding
 
@@ -73,7 +82,7 @@ These containers use **scale-aware** implementations with small/medium/large var
 
 ### Memory Management
 
-- [membound](modules/memory/MEMBOUND.md) - Thread-safe memory allocation limits
+- [membound](modules/memory/MEMBOUND.md) - Bounded arena allocator (locking varies by tier)
 - [fibbuf](modules/memory/FIBBUF.md) - Fibonacci buffer sizing
 - [jebuf](modules/memory/JEBUF.md) - Jemalloc-aligned buffer management
 - [ptrPrevNext](modules/memory/PTR_PREV_NEXT.md) - Efficient pointer linking
@@ -87,20 +96,35 @@ These containers use **scale-aware** implementations with small/medium/large var
 - [fastmutex](modules/system/FASTMUTEX.md) - High-performance mutex
 - [timeUtil](modules/system/TIME_UTIL.md) - Time utilities
 - [multiTimer](modules/system/MULTI_TIMER.md) - Multi-timer management
+- [timerWheel](modules/system/TIMER_WHEEL.md) - Hierarchical timing wheel
 
 ### Data Structure Utilities
 
 - [list](modules/utils/LIST.md) - Doubly-linked list
-- [multiheap](modules/utils/MULTIHEAP.md) - Heap data structure
+- [multiheap](modules/utils/MULTIHEAP.md) - Keyed byte-region store (ref -> resizable bytes)
 - [intersectInt](modules/utils/INTERSECT_INT.md) - Set intersection operations
 
-### Dependencies
+### Bundled Dependencies
 
-- [lz4](modules/deps/LZ4.md) - LZ4 compression
-- [xxHash](modules/deps/XXHASH.md) - Fast hashing
-- [sha1](modules/deps/SHA1.md) - SHA1 cryptographic hash
-- [imath](modules/deps/IMATH.md) - Arbitrary precision integer math
-- [varint](modules/deps/VARINT.md) - Variable-length integer encoding
+All dependencies are vendored under `deps/`; nothing needs to be
+installed. They carry their own upstream documentation:
+
+- [deps overview](../deps/README.md) - What is vendored and why
+- [varint](../deps/varint/README.md) - Variable-length integer encoding
+  (see also its [architecture](../deps/varint/docs/ARCHITECTURE.md) and
+  [quick reference](../deps/varint/docs/QUICK_REFERENCE.md))
+- [imath](../deps/imath/README.md) - Arbitrary precision integer math
+- [xxHash](../deps/xxHash/README.md) - Fast non-cryptographic hashing
+- lz4 - Block/frame compression; API in `deps/lz4/lz4.h` and
+  `deps/lz4/lz4frame.h`
+- sha1 - SHA-1 digest; API in `deps/sha1/sha1.h`
+
+## Hashing, Integrity, and Encryption
+
+- [Hashes, HMAC, and the flex envelope](HASH_AND_ENVELOPE.md) - Usage guide for
+  BLAKE3, SHA-256, HMAC, the keyring, AEAD, and the envelope wire format
+- [Hash / envelope performance profile](HASH_PERFORMANCE.md) - Throughput and
+  latency reference for those paths
 
 ## Advanced Topics
 
@@ -122,7 +146,7 @@ These containers use **scale-aware** implementations with small/medium/large var
 
 - [Common Patterns](examples/PATTERNS.md) - Frequently used code patterns
 - [Use Cases](examples/USE_CASES.md) - Real-world application examples
-- [Performance Comparisons](examples/BENCHMARKS.md) - Benchmark results
+- [Benchmarking Guide](examples/BENCHMARKS.md) - How to measure datakit correctly (recorded numbers live in the [baselines ledger](PERFORMANCE_BASELINES.md))
 
 ## About
 
@@ -133,8 +157,9 @@ These containers use **scale-aware** implementations with small/medium/large var
 
 ## Quick Stats
 
-- **86+ header files** with comprehensive APIs
-- **30+ testable modules** with extensive test coverage
-- **10+ module categories** covering all common data structure needs
-- **Cross-platform** support for Linux, macOS, BSD, Solaris, AIX
+- **170+ header files** under `src/` with comprehensive APIs
+- **140+ registered tests** in `src/datakit-test.c`, each also a CTest target
+- **12 module categories** under `docs/modules/`
+- **POSIX platforms**: Linux, macOS, and the BSD family (there is no
+  Windows/MSVC support)
 - **Performance-focused** with aggressive optimizations and minimal overhead

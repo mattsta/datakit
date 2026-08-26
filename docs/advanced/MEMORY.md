@@ -244,11 +244,13 @@ for (int i = 0; i < 1440; i++) {
 For sequences of increasing integers:
 
 ```c
-/* Timestamps: 1000000, 1000060, 1000120, 1000180... */
-dod *d = dodNew();
+/* Timestamps: 1000000, 1000060, 1000120, 1000180...
+ * dod is a bitstream written through a dodWriter, not an object. */
+dodWriter w = {0};
 for (int64_t ts = 1000000; ts < 2000000; ts += 60) {
-    dodAdd(d, ts);
+    dodWrite(&w, ts);
 }
+dodCloseWrites(&w);
 
 /* Original: ~16,667 values * 8 bytes = 133 KB */
 /* Delta-of-delta: ~2-3 bytes per value = 33-50 KB */
@@ -289,8 +291,9 @@ multilist *logs = multilistNew(FLEX_CAP_LEVEL_4096, 1);
 
 for (int i = 0; i < 100000; i++) {
     char entry[200];
-    snprintf(entry, 200, "[INFO] User %d logged in at timestamp %ld",
-             i % 1000, time(NULL));
+    snprintf(entry, sizeof(entry),
+             "[INFO] User %d logged in at timestamp %" PRId64,
+             i % 1000, (int64_t)time(NULL));
     databox box = databoxNewBytesString(entry);
     multilistPushByTypeTail(&logs, state, &box);
 }
@@ -331,20 +334,18 @@ Fragmentation: Bounded by Robson's theorem
 
 ### fibbuf - Fibonacci Growth
 
+fibbuf is a stateless size calculator: you keep the buffer and its
+current size, and fibbuf tells you the next size to grow to (growth
+approaches the golden ratio, ~1.618x per step).
+
 ```c
-/* Growth sequence: 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144... */
-fibbuf *fb = fibbufNew();
+size_t currentSize = 1024;
+void *buf = zmalloc(currentSize);
 
-/* First allocation: 1 unit */
-void *mem1 = fibbufGrow(fb);  // Size: 1
-
-/* Second: 2 units (2x) */
-void *mem2 = fibbufGrow(fb);  // Size: 2
-
-/* Third: 3 units (1.5x) */
-void *mem3 = fibbufGrow(fb);  // Size: 3
-
-/* Eventually approaches golden ratio (~1.618x) */
+/* Need more room: ask for the next growth step */
+const size_t nextSize = fibbufNextSizeBuffer(currentSize);
+buf = zrealloc(buf, nextSize);
+currentSize = nextSize;
 ```
 
 **Advantages over 2x doubling:**
@@ -355,14 +356,20 @@ void *mem3 = fibbufGrow(fb);  // Size: 3
 
 ### jebuf - jemalloc Size Class Alignment
 
-```c
-/* Align allocations to jemalloc size classes */
-jebuf *jb = jebufNew();
+jebuf is also a stateless size calculator: it rounds a requested size
+up to the allocator's size class so a request doesn't strand unusable
+slack inside the allocation.
 
-/* Request 1000 bytes */
-void *mem = jebufAlloc(jb, 1000);
-// Actually allocates 1024 (next jemalloc size class)
-// Avoids internal fragmentation in jemalloc
+```c
+/* Request 1000 bytes -> next size class (1024) */
+const size_t allocSize = jebufSizeAllocation(1000);
+void *mem = zmalloc(allocSize);
+
+/* When growing, only realloc when the new size actually lands in a
+ * bigger allocation class: */
+if (jebufUseNewAllocation(currentSize, allocSize)) {
+    mem = zrealloc(mem, allocSize);
+}
 ```
 
 **jemalloc size classes**: 8, 16, 32, 48, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512, 640, 768, 896, 1024...
@@ -479,12 +486,20 @@ for (int64_t i = 1; i <= 30000; i++) {
 size_t flexMem = flexBytes(f);
 size_t multimapMem = multimapBytes(m);
 size_t multilistMem = multilistBytes(ml);
-size_t multiarrayMem = multiarrayBytes(ma);
 size_t intsetMem = intsetBytes(is);
+size_t lruMem = multilruBytes(lru);
+
+/* dod / xof are bitstreams: their writer carries the allocation size */
+size_t sensorMem = sensorWriter.totalBytes;
 
 /* membound statistics */
+size_t used = memboundBytesUsed(pool);
+size_t capacity = memboundCapacity(pool);
 size_t outstanding = memboundCurrentAllocationCount(pool);
 ```
+
+`multiarray` exports no byte-size accessor — compute it from your own
+element count and element size.
 
 ### Memory Profiling Example
 
@@ -498,14 +513,18 @@ void printMemoryBreakdown(void) {
     MemoryProfile profile[] = {
         {"User cache", multimapBytes(userCache)},
         {"Message queue", multilistBytes(messageQueue)},
-        {"Event log", multiarrayBytes(eventLog)},
         {"Active sessions", intsetBytes(activeSessions)},
-        {"Sensor data", xofWriterBytes(&sensorData)},
+        {"Sensor data", sensorData.totalBytes},
     };
 
+    const size_t n = sizeof(profile) / sizeof(profile[0]);
+
     size_t total = 0;
-    for (int i = 0; i < 5; i++) {
+    for (size_t i = 0; i < n; i++) {
         total += profile[i].bytes;
+    }
+
+    for (size_t i = 0; i < n; i++) {
         printf("%s: %.2f KB (%.1f%%)\n",
                profile[i].component,
                profile[i].bytes / 1024.0,
@@ -540,12 +559,13 @@ Application *appCreate(void) {
     /* Create bounded pool */
     app->pool = memboundCreate(100 * 1024 * 1024);
 
-    /* Allocate from pool with limits */
-    app->users = memboundMalloc(app->pool, 20 * 1024 * 1024);
-    app->logs = memboundMalloc(app->pool, 30 * 1024 * 1024);
-    app->events = memboundMalloc(app->pool, 10 * 1024 * 1024);
-    app->active_sessions = memboundMalloc(app->pool, 2 * 1024 * 1024);
-    app->sensor_data = memboundMalloc(app->pool, 8 * 1024 * 1024);
+    /* Allocate from pool. memboundAlloc returns NULL once the pool's
+     * bound is reached rather than growing past it. */
+    app->users = memboundAlloc(app->pool, 20 * 1024 * 1024);
+    app->logs = memboundAlloc(app->pool, 30 * 1024 * 1024);
+    app->events = memboundAlloc(app->pool, 10 * 1024 * 1024);
+    app->active_sessions = memboundAlloc(app->pool, 2 * 1024 * 1024);
+    app->sensor_data = memboundAlloc(app->pool, 8 * 1024 * 1024);
 
     /* Remaining 30 MB available for dynamic use */
 

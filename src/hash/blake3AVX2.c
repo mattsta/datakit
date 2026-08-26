@@ -50,7 +50,7 @@ static const uint32_t B3_IV[8] = {
     0x510E527Ful, 0x9B05688Cul, 0x1F83D9ABul, 0x5BE0CD19ul,
 };
 
-#if defined(__x86_64__) || defined(_M_X64)
+#if defined(__x86_64__)
 
 #include <immintrin.h>
 

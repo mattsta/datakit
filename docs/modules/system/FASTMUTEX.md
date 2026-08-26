@@ -6,20 +6,36 @@
 
 **Key Features:**
 
-- Fast-path locking using atomic compare-and-swap (lock-free when uncontended)
-- Automatic adaptive behavior (spins before sleeping)
+- Fast-path locking using atomic compare-and-swap (one CAS when uncontended)
+- Adaptive behavior: spins, then short-sleeps, then queues
 - Condition variable support compatible with fast mutexes
-- FIFO wait queue for fairness under contention
-- Zero overhead when uncontended
-- Drop-in replacement for pthread mutexes in most cases
+- FIFO wait queue built from stack-allocated waiter nodes
+- No allocation: a contended waiter's queue node lives on its own stack
 
 **Header**: `fastmutex.h`
 
-**Source**: `fastmutex.c`
+**Source**: `fastmutex.c`, `fastmutexTest.c`
 
-**Platforms**: All platforms with C11 atomics and pthreads
+**Platforms**: Linux, macOS, and the BSD family - anything with C11 atomics and
+POSIX threads
 
-**Origin**: Adapted from jemalloc's fast mutex implementation
+**Origin**: Adapted from a jemalloc pull request
+(<https://github.com/jemalloc/jemalloc/pull/1516>)
+
+### Not a drop-in pthread replacement
+
+`fastMutex` deliberately implements a subset of `pthread_mutex_t`:
+
+- **No destroy function.** There is no `fastMutexDestroy` / `fastMutexCondDestroy`.
+  A `fastMutex` is a plain atomic word with nothing to release; a `fastCond`
+  owns a `pthread_mutex_t` that is never destroyed, so a long-lived program
+  that creates and abandons condition variables leaks that pthread mutex.
+- **No condition broadcast.** Only `fastMutexCondSignal` (wake one) exists.
+  Wake-all patterns must signal in a loop, one wake per known waiter.
+- **No attributes, no recursion, no error checking.** Re-locking from the
+  owning thread deadlocks; unlocking an unheld mutex is undefined.
+- **No static initializer.** There is no `FASTMUTEX_INITIALIZER`; call
+  `fastMutexInit()`.
 
 ## Data Types
 
@@ -35,7 +51,11 @@ The primary mutex type. Internally uses a 64-bit atomic word to store:
 
 - Lock state (bit 0)
 - Queue lock state (bit 1)
-- Waiter queue pointer (remaining bits)
+- Waiter queue head pointer (remaining bits; waiter nodes are 4-byte aligned so
+  the low two bits are free - the implementation asserts this)
+
+The struct is one atomic word, so it is safe to embed directly in your own
+structs and to zero-init via `fastMutexInit()`.
 
 ### fastCond
 
@@ -46,9 +66,19 @@ typedef struct fastCond {
 } fastCond;
 ```
 
-Condition variable compatible with `fastMutex`.
+Condition variable compatible with `fastMutex`. `fastWaiter` is opaque - its
+definition lives in `fastmutex.c`.
 
 ## API Reference
+
+> **Naming note:** the lock entry point is `fast_mutex_lock()` (snake_case),
+> while everything else is camelCase (`fastMutexUnlock`, `fastMutexTryLock`, ...).
+> This is the actual spelling in `fastmutex.h`, inherited from the upstream
+> patch; `fastMutexLock` does not exist.
+
+The header also declares `fastMutexLockSlow()` and `fastMutexUnlockSlow()`.
+These are the out-of-line slow paths called by the inline fast paths. They are
+public only because the inline functions need them - do not call them directly.
 
 ### Mutex Operations
 
@@ -78,9 +108,12 @@ static inline void fast_mutex_lock(fastMutex *m);
 
 /* Try to lock the mutex without blocking
  * m: pointer to fastMutex
- * Returns: true if lock acquired, false if already locked
+ * Returns: true if lock acquired, false if already held
  *
- * Never blocks
+ * Never blocks. Uses a STRONG compare-exchange, so a free lock is
+ * reliably acquired with no spurious false negatives. Only acquires
+ * when the word is fully zero (unlocked with no waiters), matching the
+ * fast path of fast_mutex_lock().
  */
 static inline bool fastMutexTryLock(fastMutex *m);
 ```
@@ -105,8 +138,9 @@ static inline void fastMutexUnlock(fastMutex *m);
  * m: pointer to fastMutex
  * Returns: true if locked, false if unlocked
  *
- * Non-blocking, no synchronization guarantees
- * Useful for debugging/assertions only
+ * A relaxed atomic load of bit 0. No ordering, no synchronization
+ * guarantees, and the answer may be stale the instant it returns.
+ * Useful for debugging/assertions only.
  */
 static inline bool fastMutexIsLocked(fastMutex *m);
 ```
@@ -118,8 +152,12 @@ static inline bool fastMutexIsLocked(fastMutex *m);
 ```c
 /* Initialize a condition variable
  * c: pointer to fastCond
- * unused: reserved parameter (pass NULL)
- * Returns: 0 on success, error code on failure
+ * unused: ignored; exists for pthread_cond_init() signature compatibility
+ *         (pass NULL)
+ * Returns: 0 on success, the pthread_mutex_init() error code on failure
+ *
+ * There is no matching destroy function - see "Not a drop-in pthread
+ * replacement" above.
  */
 static inline int fastMutexCondInit(fastCond *c, void *unused);
 ```
@@ -140,11 +178,17 @@ int fastMutexCondWait(fastCond *c, fastMutex *m);
 /* Wait on condition variable with timeout
  * c: pointer to fastCond
  * m: pointer to fastMutex (must be locked by caller)
- * ts: absolute timeout (CLOCK_REALTIME)
+ * ts: absolute timeout (CLOCK_REALTIME); NULL means wait forever, which
+ *     is exactly what fastMutexCondWait() passes
  * Returns: 0 on success, ETIMEDOUT on timeout, other error on failure
  *
- * Atomically unlocks mutex and waits
- * Re-locks mutex before returning
+ * Enqueues the caller, unlocks the mutex, sleeps, and re-locks the mutex
+ * before returning - on the timeout path too.
+ *
+ * Timeout race: if the timeout fires at the same moment a signal removes
+ * this waiter from the queue, the timed-out thread cannot find its own
+ * node, so it waits for the pending wake and returns 0 rather than
+ * ETIMEDOUT. A signal is never lost.
  */
 int fastMutexCondTimedWait(fastCond *c, fastMutex *m, struct timespec *ts);
 ```
@@ -155,8 +199,11 @@ int fastMutexCondTimedWait(fastCond *c, fastMutex *m, struct timespec *ts);
 /* Wake one thread waiting on condition variable
  * c: pointer to fastCond
  *
- * If no threads waiting, has no effect
- * Does not require holding the associated mutex
+ * Wakes the queue head (FIFO). If no threads are waiting, has no effect -
+ * the signal is NOT remembered for a future waiter.
+ * Does not require holding the associated mutex.
+ *
+ * There is no broadcast. To wake N waiters, call this N times.
  */
 void fastMutexCondSignal(fastCond *c);
 ```
@@ -478,12 +525,16 @@ void *workerThread(void *arg) {
     return NULL;
 }
 
-void workQueueShutdown(WorkQueue *wq) {
+void workQueueShutdown(WorkQueue *wq, size_t workerCount) {
     fast_mutex_lock(&wq->lock);
     wq->shutdown = true;
-    /* Wake all workers (would need condBroadcast for this) */
-    fastMutexCondSignal(&wq->hasWork);
     fastMutexUnlock(&wq->lock);
+
+    /* There is no broadcast: signal once per worker so every one wakes.
+     * Extra signals are harmless - a signal with no waiter is a no-op. */
+    for (size_t i = 0; i < workerCount; i++) {
+        fastMutexCondSignal(&wq->hasWork);
+    }
 }
 ```
 
@@ -493,16 +544,28 @@ void workQueueShutdown(WorkQueue *wq) {
 
 **Fast Path (Uncontended):**
 
-1. Attempt atomic CAS from 0 → 1
-2. If successful, lock acquired (1-2 CPU cycles)
+1. Attempt a weak atomic CAS from 0 → 1 with acquire ordering
+2. If it succeeds, the lock is held and no function call was made
 
-**Slow Path (Contended):**
+**Slow Path (Contended, `fastMutexLockSlow`):**
 
-1. **Adaptive Spin**: Spin up to 40-100 iterations checking lock state
-2. **Sleep Preparation**: Set "has waiters" bit (bit 1)
-3. **Queue Management**: Add thread to FIFO waiter queue
-4. **Sleep**: Use pthread condition variable to sleep
-5. **Wake**: When unlocked, first waiter is woken
+1. **Retry the acquire**: CAS the lock bit on, preserving any waiter pointer
+2. **Adaptive Spin**: While the lock reads locked, spin; after 40 iterations
+   start `usleep(100)` between checks; after 100 iterations give up spinning
+3. **Take the queue lock**: CAS bit 1 on (retry the whole loop if the lock has
+   since been released, or if someone else holds the queue lock)
+4. **Enqueue**: Append a `fastWaiter` allocated _on this thread's stack_ to the
+   tail of the FIFO queue, then publish the new head and release the queue lock
+5. **Sleep**: Block on that waiter's own pthread condition variable
+6. **Wake**: The unlocking thread pops the head waiter and signals it
+
+**Unlock (`fastMutexUnlockSlow`):**
+
+1. Spin until the queue lock is free, then CAS it on
+2. Pop the head waiter, splice the tail pointer onto its successor
+3. Store the successor as the new word - this releases both the lock bit and
+   the queue lock in one store
+4. Signal the popped waiter's condition variable
 
 ### Memory Layout
 
@@ -510,34 +573,44 @@ The 64-bit `word` field encodes:
 
 - **Bit 0**: Lock state (0 = unlocked, 1 = locked)
 - **Bit 1**: Queue lock (for modifying waiter queue)
-- **Bits 2-63**: Pointer to waiter queue (or 0 if no waiters)
+- **Bits 2-63**: Pointer to the waiter queue head (or 0 if no waiters)
+
+Waiter nodes are stack objects, and the code asserts their 4-byte alignment so
+the two tag bits are always available.
 
 ### Fairness
 
-FastMutex provides **FIFO fairness** under contention:
+The wait queue is **FIFO**, but this is not a strict handoff:
 
-- Waiters form a queue
-- Unlock wakes the first waiter
-- Prevents starvation
+- Waiters are appended at the tail and woken from the head
+- Unlock **releases the lock before** signalling the woken waiter, so a thread
+  arriving on the fast path can barge in and take the lock first
+- The woken waiter then re-enters the slow path and re-queues
+
+So wake _order_ is fair; lock _acquisition_ order is not guaranteed. Under
+sustained heavy contention a queued waiter can be overtaken repeatedly.
 
 ### Performance Characteristics
 
-| Operation | Uncontended | Low Contention | High Contention |
-| --------- | ----------- | -------------- | --------------- |
-| Lock      | ~5ns        | ~50ns          | ~1μs            |
-| Unlock    | ~5ns        | ~50ns          | ~1μs            |
-| TryLock   | ~5ns        | ~5ns           | ~5ns            |
-| IsLocked  | ~1ns        | ~1ns           | ~1ns            |
+No benchmark numbers are published for this module. Qualitatively:
 
-**Comparison to pthread_mutex_t:**
+| Operation | Uncontended                   | Contended                                  |
+| --------- | ----------------------------- | ------------------------------------------ |
+| Lock      | one atomic CAS, fully inlined | spin, then `usleep(100)` polls, then queue |
+| Unlock    | one atomic CAS, fully inlined | queue-lock CAS + one `pthread_cond_signal` |
+| TryLock   | one atomic CAS, never blocks  | one failed CAS, never blocks               |
+| IsLocked  | one relaxed load              | one relaxed load                           |
 
-- Uncontended: **10-100x faster**
-- Low contention: **2-5x faster**
-- High contention: **Similar performance**
+The design targets the uncontended case: the fast paths are `static inline` and
+make no function call at all. Note the contended path uses a 100μs sleep rather
+than a futex, so a lock held longer than the spin budget costs at least that
+much latency. Measure your own workload with the cmake `perf` preset before
+choosing this over `pthread_mutex_t`.
 
 ### Adaptive Spinning
 
-The implementation uses adaptive spinning to avoid syscalls:
+The implementation spins before queueing, to avoid the queue cost when the
+holder is about to release:
 
 ```c
 uint64_t sleeptime = 1;
@@ -563,8 +636,12 @@ while (true) {
 **Strategy:**
 
 - Iterations 1-40: Busy-wait (expect quick unlock)
-- Iterations 41-100: Sleep 100μs between checks
-- After 100: Give up and use pthread wait queue
+- Iterations 41-100: `usleep(100)` between checks
+- After 100: Give up and enqueue on the pthread wait queue
+
+`sleeptime` is not reset between outer-loop passes, so a thread that loops back
+around (because it lost the queue-lock race) resumes at its previous count and
+goes straight to the queue.
 
 ## Condition Variable Implementation
 
@@ -577,32 +654,38 @@ struct fastCond {
 };
 ```
 
+The `pthread_mutex_t` inside `fastCond` protects only that waiter queue; it is
+never held while the caller's `fastMutex` is held.
+
 **Wait Process:**
 
-1. Add thread to condition's wait queue
-2. Unlock the fastMutex
-3. Sleep on pthread condition variable
-4. On wake, re-lock the fastMutex
+1. Append a stack-allocated waiter to the condition's FIFO queue (under `c->m`)
+2. Unlock the `fastMutex`
+3. Sleep on that waiter's own pthread condition variable
+4. On timeout, unlink the waiter from the queue
+5. Re-lock the `fastMutex` before returning
 
 **Signal Process:**
 
-1. Remove first waiter from queue
-2. Wake that waiter's condition variable
+1. Pop the head waiter from the queue (under `c->m`)
+2. Clear its `waiting` flag and signal its condition variable
 
 ## Platform Support
 
-| Platform | Support | Atomics | Notes                             |
-| -------- | ------- | ------- | --------------------------------- |
-| Linux    | ✓       | C11     | Full support                      |
-| macOS    | ✓       | C11     | Full support                      |
-| FreeBSD  | ✓       | C11     | Full support                      |
-| Others   | ✓       | C11     | Requires C11 atomics and pthreads |
+| Platform   | Support | Atomics | Notes                                  |
+| ---------- | ------- | ------- | -------------------------------------- |
+| Linux      | ✓       | C11     | Full support                           |
+| macOS      | ✓       | C11     | Full support                           |
+| BSD family | ✓       | C11     | FreeBSD / NetBSD / OpenBSD / DragonFly |
+
+There is no Windows support in datakit.
 
 **Requirements:**
 
 - C11 atomics (`<stdatomic.h>`)
 - POSIX threads (`pthread.h`)
 - 64-bit atomic operations
+- Pointers that fit in 62 bits with 4-byte alignment (asserted at runtime)
 
 ## Best Practices
 
@@ -741,12 +824,17 @@ void processData(Data *d) {
 
 - `pthread_mutex_t` - Standard POSIX mutex
 - Atomic operations (`<stdatomic.h>`)
-- jemalloc fast mutex implementation
+- jemalloc pull request 1516 - the origin of this implementation
 - Futex-based locking on Linux
 
 ## Testing
 
-FastMutex can be tested with standard multithreading tests:
+The module has a dedicated test registered as `fastmutex` (source:
+`fastmutexTest.c`, built under `DATAKIT_TEST`, entry point
+`int fastmutexTest(int argc, char *argv[])`). It covers trylock semantics,
+plain lock/unlock, and mutual exclusion under contention across 8 threads.
+
+The shape of those tests:
 
 ```c
 #include "fastmutex.h"

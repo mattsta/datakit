@@ -7,8 +7,8 @@
 **Key Features:**
 
 - Automatic initialization via constructor attribute
-- Single global version variable for zero runtime overhead
-- Compile-time macros for Linux kernel feature detection
+- Single global version variable; checks are one integer comparison
+- Named macros for Linux kernel feature detection
 - Support for major.minor.patch version comparisons
 - Zero configuration required
 
@@ -16,7 +16,12 @@
 
 **Source**: `versionOSRuntime.c`
 
-**Platforms**: All Unix-like systems with `uname()` support
+**Platforms**: Linux, macOS, and the BSD family - anything with `uname()`.
+Version _detection_ is portable; the pre-defined `linuxKernelHas*` macros only
+carry meaning on Linux (see [Platform Support](#platform-support)).
+
+The `_DK_MK_VERSION` encoding macro comes from `config.h` (reached through
+`datakit.h`), which `versionOSRuntime.h` includes.
 
 ## Global State
 
@@ -45,9 +50,15 @@ extern size_t versionOSRuntimeKernelVersion;
     (versionOSRuntimeKernelVersion >= _DK_MK_VERSION(major, minor, patch))
 ```
 
+This is a **runtime** comparison, not a preprocessor conditional: the right-hand
+side folds to a constant, but the left-hand side is a global read. Use it in
+ordinary `if` statements, never in `#if`.
+
 ### Linux Kernel Feature Detection
 
-Pre-defined macros for common Linux kernel features:
+Pre-defined macros for common Linux kernel features. They compare the _running
+kernel's_ version, so they are only meaningful when that kernel is Linux -
+see the warning under [Platform Support](#platform-support).
 
 ```c
 /* True if kernel supports SO_REUSEPORT (Linux 3.9.0+) */
@@ -110,12 +121,16 @@ static void __attribute__((constructor)) init() {
 }
 ```
 
+This is the actual implementation, not a sketch.
+
 **Key Points:**
 
 - Runs before `main()` executes
 - Parses kernel version from `uname().release`
 - Thread-safe (completes before any user code runs)
 - No initialization function needed
+- `versionOSRuntimeKernelVersion` starts at 0, so every `osVersionGTE()` check
+  would report false if the constructor somehow did not run
 
 ## Usage Examples
 
@@ -238,6 +253,7 @@ TCP Fast Open Support:
 ### Example 4: Feature-Based Configuration
 
 ```c
+#include "OSRegulate.h"  /* OSRegulateCPUCountGet */
 #include "versionOSRuntime.h"
 
 typedef struct ServerConfig {
@@ -259,7 +275,7 @@ ServerConfig getOptimalConfig(void) {
     /* If REUSEPORT available, spawn multiple workers
      * Otherwise, use single process with multiple threads */
     if (config.useReusePort) {
-        config.workerProcesses = OSRegulateCPUCountGet();
+        config.workerProcesses = (int)OSRegulateCPUCountGet();
         printf("Using %d worker processes with SO_REUSEPORT\n",
                config.workerProcesses);
     } else {
@@ -370,11 +386,17 @@ The implementation uses `sscanf()` to parse the kernel version from `uname().rel
 
 **Example release strings:**
 
-- `"5.10.0-8-amd64"` → `5.10.0`
-- `"4.15.0-112-generic"` → `4.15.0`
-- `"3.10.0-1160.el7.x86_64"` → `3.10.0`
+- `"5.10.0-8-amd64"` → `5.10.0` (Linux)
+- `"4.15.0-112-generic"` → `4.15.0` (Linux)
+- `"3.10.0-1160.el7.x86_64"` → `3.10.0` (Linux)
+- `"23.6.0"` → `23.6.0` (macOS - this is the **Darwin** version, not macOS 14)
 
 Only the first three numeric components are extracted; suffixes are ignored.
+
+Because the parse is a plain `sscanf("%d.%d.%d")` into an uninitialized local, a
+release string carrying fewer than three numeric components leaves the missing
+components unset. Every platform datakit supports reports all three, but do not
+rely on this parser for exotic `uname` formats.
 
 ### Thread Safety
 
@@ -384,21 +406,28 @@ Only the first three numeric components are extracted; suffixes are ignored.
 
 ### Performance
 
-- **Initialization**: One-time cost at startup (~microseconds)
-- **Version Checks**: Compile-time constants or single integer comparison
+- **Initialization**: One-time cost at startup (one `uname()` + one `sscanf()`)
+- **Version Checks**: A single integer comparison against a global
 - **Memory Overhead**: One `size_t` variable (8 bytes on 64-bit systems)
 
 ## Platform Support
 
-| Platform   | uname() | Version Detection | Notes                                            |
-| ---------- | ------- | ----------------- | ------------------------------------------------ |
-| Linux      | ✓       | ✓                 | Primary use case                                 |
-| FreeBSD    | ✓       | ✓                 | Works but BSD-specific features not included     |
-| macOS      | ✓       | ✓                 | Works but macOS-specific features not included   |
-| Solaris    | ✓       | ✓                 | Works but Solaris-specific features not included |
-| Other Unix | ✓       | ✓                 | Generic version detection                        |
+| Platform   | uname() | Version Detection | Notes                                       |
+| ---------- | ------- | ----------------- | ------------------------------------------- |
+| Linux      | ✓       | ✓                 | Primary use case; feature macros meaningful |
+| macOS      | ✓       | ✓                 | Reports the **Darwin** kernel version       |
+| BSD family | ✓       | ✓                 | FreeBSD / NetBSD / OpenBSD / DragonFly      |
 
-**Note**: The pre-defined feature macros (`linuxKernelHasREUSEPORT`, etc.) are specific to Linux kernel features. On other platforms, you can still use `osVersionGTE()` to create custom checks.
+> **The `linuxKernelHas*` macros lie on non-Linux systems.** They compare
+> `uname().release`, which on macOS is the Darwin version (23.x today) and on
+> the BSDs is that kernel's own version. Every one of them therefore evaluates
+> to _true_ on a modern macOS, even though SO_REUSEPORT-with-Linux-semantics and
+> `/proc/sys/net/ipv4/tcp_fastopen` do not exist there. Pair them with a
+> `#if DK_OS_LINUX` guard (or with the runtime probe in `OSRegulate`, which does
+> exactly that) before acting on them.
+
+On non-Linux platforms `osVersionGTE()` is still useful for building your own
+checks against that platform's own kernel versioning.
 
 ## Best Practices
 
@@ -535,6 +564,8 @@ int main(void) {
 
 ## See Also
 
+- [OSRegulate](OS_REGULATE.md) - the main consumer of these macros
+  (`OSRegulateTFOMode()` gates on `linuxKernelHasTFOServerIPv4`)
 - `uname(2)` - get system information
 - Linux kernel documentation
 - FreeBSD release notes

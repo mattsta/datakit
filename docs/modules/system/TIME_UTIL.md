@@ -2,22 +2,29 @@
 
 ## Overview
 
-`TimeUtil` provides **cross-platform high-resolution time measurement** utilities. It offers both wall-clock time and monotonic time functions with microsecond and millisecond precision, abstracting platform differences between Linux, macOS, FreeBSD, and other Unix systems.
+`timeUtil` provides **high-resolution time measurement** utilities. It offers
+both wall-clock time and monotonic time functions from nanosecond to second
+granularity, abstracting platform differences between Linux, macOS, and the BSD
+family.
 
 **Key Features:**
 
 - Wall-clock time (can go backwards due to NTP, timezone changes)
 - Monotonic time (guaranteed never to go backwards)
-- Microsecond, millisecond, and second precision
-- Cross-platform abstraction (Linux, macOS, FreeBSD, others)
-- Zero-overhead inline functions
+- Nanosecond, microsecond, millisecond, and second granularity
+- Platform abstraction across Linux, macOS, and BSD
 - Thread-safe operations
 
 **Header**: `timeUtil.h`
 
-**Source**: `timeUtil.c`
+**Source**: `timeUtil.c` (also carries the `timeUtilTest` suite under
+`DATAKIT_TEST`)
 
-**Platforms**: All POSIX-compliant systems
+**Platforms**: Linux, macOS, and the BSD family. There is no Windows support in
+datakit.
+
+The seven functions are plain external functions, not inline - each call is a
+real call into `timeUtil.c` plus the underlying clock read.
 
 ## API Reference
 
@@ -26,6 +33,16 @@
 Wall-clock time represents the actual time of day. It can jump forwards or backwards due to NTP adjustments, timezone changes, or manual clock settings.
 
 ```c
+/* Get current time in nanoseconds since Unix epoch
+ * Returns: nanoseconds since 1970-01-01 00:00:00 UTC
+ * Source: clock_gettime(CLOCK_REALTIME)
+ *
+ * This is WALL-CLOCK time despite the nanosecond granularity - do not
+ * confuse it with timeUtilMonotonicNs(). It is subject to every NTP
+ * step and manual clock change.
+ */
+uint64_t timeUtilNs(void);
+
 /* Get current time in microseconds since Unix epoch
  * Returns: microseconds since 1970-01-01 00:00:00 UTC
  * Source: gettimeofday()
@@ -40,10 +57,16 @@ uint64_t timeUtilMs(void);
 
 /* Get current time in seconds since Unix epoch
  * Returns: seconds since 1970-01-01 00:00:00 UTC
- * Source: gettimeofday()
+ * Source: gettimeofday() (tv_sec only; the microsecond field is discarded,
+ *         so this truncates rather than rounds)
  */
 uint64_t timeUtilS(void);
 ```
+
+Note that `timeUtilNs()` and the other three read _different_ clocks
+(`clock_gettime(CLOCK_REALTIME)` vs `gettimeofday()`). Both track the same wall
+clock, but do not assume `timeUtilNs() / 1000 == timeUtilUs()` for calls made at
+different instants.
 
 **When to Use:**
 
@@ -98,29 +121,24 @@ uint64_t timeUtilMonotonicMs(void);
 
 ## Platform-Specific Implementation
 
-### macOS (Darwin)
+### Apple platforms (macOS and friends)
 
 ```c
-/* macOS uses mach_absolute_time() */
-uint64_t timeUtilMonotonicNs(void) {
-#if DK_OS_APPLE_MAC
-    /* On macOS, mach_absolute_time() returns nanoseconds directly */
-    return mach_absolute_time();
-#elif DK_OS_APPLE
-    /* Other Apple platforms need timebase conversion */
-    uint64_t machTime = mach_absolute_time();
-    static mach_timebase_info_data_t timebaseInfo = {0};
-    static uint64_t unitOffset = 0;
+/* All Apple platforms use mach_absolute_time(), which returns TICKS,
+ * not nanoseconds - the timebase ratio is 1:1 on Apple Silicon but not
+ * on Intel, so the conversion is always applied. */
+uint64_t machTime = mach_absolute_time();
+static mach_timebase_info_data_t timebaseInfo = {0};
 
-    if (!unitOffset) {
-        mach_timebase_info(&timebaseInfo);
-        unitOffset = timebaseInfo.numer / timebaseInfo.denom;
-    }
-
-    return machTime * unitOffset;
-#endif
+if (timebaseInfo.denom == 0) {
+    (void)mach_timebase_info(&timebaseInfo);
 }
+
+return machTime * timebaseInfo.numer / timebaseInfo.denom;
 ```
+
+There is no separate "macOS returns nanoseconds directly" path; the timebase
+multiply/divide runs on every Apple build.
 
 ### FreeBSD
 
@@ -146,12 +164,16 @@ clock_gettime(CLOCK_MONOTONIC, &ts);
 return (uint64_t)ts.tv_sec * 1000000000ULL + ts.tv_nsec;
 ```
 
+`CLOCK_MONOTONIC_COARSE` is deliberately not used anywhere: its ~1ms resolution
+is too coarse for the timing this module exists to support.
+
 ## Usage Examples
 
 ### Example 1: Measuring Elapsed Time
 
 ```c
 #include "timeUtil.h"
+#include <inttypes.h>
 #include <stdio.h>
 
 void measureOperation(void) {
@@ -163,7 +185,7 @@ void measureOperation(void) {
     uint64_t end = timeUtilMonotonicUs();
     uint64_t elapsedUs = end - start;
 
-    printf("Operation took %lu microseconds (%.2f ms)\n",
+    printf("Operation took %" PRIu64 " microseconds (%.2f ms)\n",
            elapsedUs, elapsedUs / 1000.0);
 }
 
@@ -177,7 +199,7 @@ void measureMultipleOperations(void) {
     uint64_t end = timeUtilMonotonicMs();
     uint64_t elapsedMs = end - start;
 
-    printf("Processed 1000 items in %lu ms (%.2f items/sec)\n",
+    printf("Processed 1000 items in %" PRIu64 " ms (%.2f items/sec)\n",
            elapsedMs, 1000.0 / (elapsedMs / 1000.0));
 }
 ```
@@ -270,6 +292,7 @@ uint64_t rateLimiterTimeUntilNextAction(RateLimiter *rl) {
 
 ```c
 #include "timeUtil.h"
+#include <inttypes.h>
 #include <stdio.h>
 
 typedef struct Benchmark {
@@ -312,9 +335,9 @@ void benchmarkReport(Benchmark *b) {
 
     double avgUs = (double)b->totalUs / b->count;
 
-    printf("%s: %lu samples\n", b->name, b->count);
-    printf("  Min:  %lu μs\n", b->minUs);
-    printf("  Max:  %lu μs\n", b->maxUs);
+    printf("%s: %" PRIu64 " samples\n", b->name, b->count);
+    printf("  Min:  %" PRIu64 " μs\n", b->minUs);
+    printf("  Max:  %" PRIu64 " μs\n", b->maxUs);
     printf("  Avg:  %.2f μs\n", avgUs);
     printf("  Total: %.2f ms\n", b->totalUs / 1000.0);
 }
@@ -341,6 +364,7 @@ void runBenchmark(void) {
 
 ```c
 #include "timeUtil.h"
+#include <inttypes.h>
 #include <stdio.h>
 #include <time.h>
 
@@ -364,7 +388,7 @@ void logMessage(const char *format, ...) {
     /* Format: YYYY-MM-DD HH:MM:SS.uuuuuu */
     char timestamp[32];
     snprintf(timestamp, sizeof(timestamp),
-             "%04d-%02d-%02d %02d:%02d:%02d.%06lu",
+             "%04d-%02d-%02d %02d:%02d:%02d.%06" PRIu64,
              tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
              tm.tm_hour, tm.tm_min, tm.tm_sec,
              usComponent);
@@ -387,6 +411,7 @@ void logMessage(const char *format, ...) {
 
 ```c
 #include "timeUtil.h"
+#include <inttypes.h>
 #include <unistd.h>
 
 bool retryWithBackoff(bool (*operation)(void),
@@ -408,7 +433,7 @@ bool retryWithBackoff(bool (*operation)(void),
         usleep(delayMs * 1000);
 
         uint64_t elapsed = timeUtilMonotonicMs() - start;
-        printf("Actual delay: %lu ms\n", elapsed);
+        printf("Actual delay: %" PRIu64 " ms\n", elapsed);
 
         delayMs *= 2;  /* Double delay for next attempt */
         if (delayMs > 30000) {
@@ -501,16 +526,22 @@ void processRequest(void) {
 
 ### Time Resolution
 
-| Platform | Wall Clock       | Monotonic Clock        | Resolution |
-| -------- | ---------------- | ---------------------- | ---------- |
-| Linux    | `gettimeofday()` | `CLOCK_MONOTONIC`      | ~1μs       |
-| macOS    | `gettimeofday()` | `mach_absolute_time()` | ~1ns       |
-| FreeBSD  | `gettimeofday()` | `CLOCK_MONOTONIC_FAST` | ~1μs       |
-| Others   | `gettimeofday()` | `CLOCK_MONOTONIC`      | ~1μs       |
+| Platform  | Wall Clock (`timeUtilNs`)       | Wall Clock (Us/Ms/S) | Monotonic Clock        |
+| --------- | ------------------------------- | -------------------- | ---------------------- |
+| Linux     | `clock_gettime(CLOCK_REALTIME)` | `gettimeofday()`     | `CLOCK_MONOTONIC`      |
+| macOS     | `clock_gettime(CLOCK_REALTIME)` | `gettimeofday()`     | `mach_absolute_time()` |
+| FreeBSD   | `clock_gettime(CLOCK_REALTIME)` | `gettimeofday()`     | `CLOCK_MONOTONIC_FAST` |
+| Other BSD | `clock_gettime(CLOCK_REALTIME)` | `gettimeofday()`     | `CLOCK_MONOTONIC`      |
 
-### Constructor Attribute (macOS Only)
+`timeUtilNs()` uses `clock_gettime` on every platform including macOS
+(native there since 10.12); the module deliberately avoids a Mach
+`host_get_clock_service` round-trip, which costs microseconds per call.
 
-On macOS, the `timeUtilMonotonicNs()` function uses a constructor attribute to pre-initialize the timebase conversion:
+### Constructor Attribute (Apple Only)
+
+On Apple platforms `timeUtilMonotonicNs()` carries a constructor attribute so
+the static `mach_timebase_info_data_t` is populated once, before `main()`, with
+no race between threads racing to initialize it:
 
 ```c
 #if DK_OS_APPLE
@@ -524,32 +555,30 @@ uint64_t TIME_INIT timeUtilMonotonicNs(void) {
 }
 ```
 
-This eliminates a branch on every call after initialization.
+The `denom == 0` check remains in the body, so the function is still correct if
+called before the constructor runs. On non-Apple platforms `TIME_INIT` expands
+to nothing.
 
 ### Thread Safety
 
-All TimeUtil functions are **thread-safe** and reentrant:
+All timeUtil functions are **thread-safe** and reentrant:
 
-- Wall-clock functions use `gettimeofday()` (thread-safe system call)
+- Wall-clock functions use `gettimeofday()` / `clock_gettime()` (thread-safe)
 - Monotonic functions use `clock_gettime()` or `mach_absolute_time()` (thread-safe)
-- macOS timebase initialization uses static variables (safe after first call)
+- The Apple timebase static is filled by a constructor before any thread exists
 
 ### Performance Characteristics
 
-| Function                | Typical Latency |
-| ----------------------- | --------------- |
-| `timeUtilUs()`          | ~50-100ns       |
-| `timeUtilMs()`          | ~50-100ns       |
-| `timeUtilS()`           | ~50-100ns       |
-| `timeUtilMonotonicNs()` | ~20-50ns        |
-| `timeUtilMonotonicUs()` | ~20-50ns        |
-| `timeUtilMonotonicMs()` | ~20-50ns        |
+No published per-call benchmark numbers exist for this module. Structurally:
 
-Monotonic time is typically faster because:
+- Every function is one out-of-line call plus one clock read
+- `timeUtilMs()` is `timeUtilUs() / 1000`; `timeUtilMonotonicUs()` and
+  `timeUtilMonotonicMs()` divide down from `timeUtilMonotonicNs()`, so the
+  coarser variants cost the same as the finest one - pick by meaning, not speed
+- On Linux and FreeBSD the clock reads normally resolve in the vDSO (no syscall)
+- On Apple platforms the monotonic path adds a 64-bit multiply and divide
 
-- No timezone conversion
-- No leap second handling
-- Direct hardware counter access (on some platforms)
+Measure with the cmake `perf` preset if the call cost matters to your loop.
 
 ## Wall Clock vs. Monotonic Time
 
@@ -600,14 +629,17 @@ Monotonic time is typically faster because:
 
 ## Platform Support
 
-| Platform | Wall Clock | Monotonic | CLOCK_MONOTONIC_FAST | mach_absolute_time |
-| -------- | ---------- | --------- | -------------------- | ------------------ |
-| Linux    | ✓          | ✓         | ✗                    | ✗                  |
-| macOS    | ✓          | ✓         | ✗                    | ✓                  |
-| iOS      | ✓          | ✓         | ✗                    | ✓                  |
-| FreeBSD  | ✓          | ✓         | ✓                    | ✗                  |
-| OpenBSD  | ✓          | ✓         | ✗                    | ✗                  |
-| Solaris  | ✓          | ✓         | ✗                    | ✗                  |
+| Platform  | Wall Clock | Monotonic | CLOCK_MONOTONIC_FAST | mach_absolute_time |
+| --------- | ---------- | --------- | -------------------- | ------------------ |
+| Linux     | ✓          | ✓         | ✗                    | ✗                  |
+| macOS     | ✓          | ✓         | ✗                    | ✓                  |
+| FreeBSD   | ✓          | ✓         | ✓                    | ✗                  |
+| NetBSD    | ✓          | ✓         | ✗                    | ✗                  |
+| OpenBSD   | ✓          | ✓         | ✗                    | ✗                  |
+| DragonFly | ✓          | ✓         | ✗                    | ✗                  |
+
+The Apple branch is selected by `DK_OS_APPLE`, so it covers every Apple target,
+not just macOS. There is no Windows support in datakit.
 
 ## Best Practices
 
@@ -740,10 +772,17 @@ uint64_t now = timeUtilMonotonicUs();
 
 ## Testing
 
-TimeUtil functions can be tested for correctness and performance:
+The module ships a test registered as `timeUtil`, compiled into `timeUtil.c`
+under `DATAKIT_TEST` (entry point `int timeUtilTest(int argc, char *argv[])`).
+It checks that the wall-clock values are post-2020 and mutually consistent, that
+monotonic time strictly increases across a 1ms sleep, that the ns/us/ms monotonic
+variants agree with each other, and that repeated calls advance.
+
+Additional ad-hoc checks look like this:
 
 ```c
 #include "timeUtil.h"
+#include <inttypes.h>
 #include <stdio.h>
 #include <unistd.h>
 
@@ -753,13 +792,14 @@ void testWallClock(void) {
     uint64_t us = timeUtilUs();
 
     printf("Wall clock:\n");
-    printf("  Seconds: %lu\n", s);
-    printf("  Milliseconds: %lu\n", ms);
-    printf("  Microseconds: %lu\n", us);
+    printf("  Seconds: %" PRIu64 "\n", s);
+    printf("  Milliseconds: %" PRIu64 "\n", ms);
+    printf("  Microseconds: %" PRIu64 "\n", us);
 
-    /* Check conversions */
-    assert(ms / 1000 == s);
-    assert(us / 1000000 == s);
+    /* Check conversions - allow 1 unit of slack, the three reads are
+     * taken at slightly different instants */
+    assert(ms / 1000 >= s && ms / 1000 <= s + 1);
+    assert(us / 1000000 >= s && us / 1000000 <= s + 1);
 }
 
 void testMonotonic(void) {
@@ -774,9 +814,9 @@ void testMonotonic(void) {
     uint64_t ms2 = timeUtilMonotonicMs();
 
     printf("Monotonic time advances:\n");
-    printf("  Nanoseconds: %lu\n", ns2 - ns1);
-    printf("  Microseconds: %lu\n", us2 - us1);
-    printf("  Milliseconds: %lu\n", ms2 - ms1);
+    printf("  Nanoseconds: %" PRIu64 "\n", ns2 - ns1);
+    printf("  Microseconds: %" PRIu64 "\n", us2 - us1);
+    printf("  Milliseconds: %" PRIu64 "\n", ms2 - ms1);
 
     /* Check time advanced */
     assert(ns2 > ns1);
@@ -798,7 +838,7 @@ void testPerformance(void) {
         timeUtilUs();
     }
     end = timeUtilMonotonicNs();
-    printf("timeUtilUs: %lu ns/call\n",
+    printf("timeUtilUs: %" PRIu64 " ns/call\n",
            (end - start) / iterations);
 
     /* Benchmark timeUtilMonotonicNs() */
@@ -807,7 +847,7 @@ void testPerformance(void) {
         timeUtilMonotonicNs();
     }
     end = timeUtilMonotonicNs();
-    printf("timeUtilMonotonicNs: %lu ns/call\n",
+    printf("timeUtilMonotonicNs: %" PRIu64 " ns/call\n",
            (end - start) / iterations);
 }
 ```

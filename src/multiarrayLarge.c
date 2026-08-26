@@ -100,6 +100,27 @@ void multiarrayLargeFree(multiarrayLarge *mar) {
     zfree(mar);
 }
 
+size_t multiarrayLargeCount(const multiarrayLarge *mar) {
+    /* Walk the xor-linked node list summing per-node entry counts. */
+    size_t total = 0;
+    const multiarrayLargeNode *prev = NULL;
+    const multiarrayLargeNode *e = mar->head;
+    while (e) {
+        total += e->count;
+
+        const multiarrayLargeNode *loopCurrentE = e;
+        e = getNext(prev, loopCurrentE);
+        prev = loopCurrentE;
+    }
+
+    return total;
+}
+
+size_t multiarrayLargeBytes(const multiarrayLarge *mar) {
+    /* Bytes of element data storage (metadata overhead excluded) */
+    return (size_t)mar->len * multiarrayLargeCount(mar);
+}
+
 DK_STATIC inline multiarrayLargeResult
 multiarrayLargeGetForwardWorker(multiarrayLargeNode *e, int32_t idx,
                                 uint32_t len) {

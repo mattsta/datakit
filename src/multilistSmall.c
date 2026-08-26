@@ -198,11 +198,23 @@ bool multilistSmallNext(multilistIterator *iter, multilistEntry *entry) {
     return false;
 }
 
-bool multilistSmallIndex(multilistSmall *ml, mlOffsetId index,
-                         multilistEntry *entry) {
+/* The one positional-lookup engine for the Small tier: with a
+ * caller-held anchor (a previously located entry plus its known global
+ * index) the flex walk starts from the nearest of head / anchor /
+ * tail; without one it is the plain two-way endpoint walk. */
+bool multilistSmallIndexNear(multilistSmall *ml, mlOffsetId index,
+                             const multilistEntry *anchor, mlOffsetId anchorIdx,
+                             multilistEntry *entry) {
     entry->ml = ml;
-    entry->fe = flexIndex(ml->fl, index);
     entry->offset = index;
+
+    const mlOffsetId values = flexCount(ml->fl);
+    const mlOffsetId a = anchorIdx < 0 ? values + anchorIdx : anchorIdx;
+
+    entry->fe = (anchor && anchor->fe)
+                    ? flexIndexFromAnchor(ml->fl, (int32_t)index, anchor->fe,
+                                          (int32_t)a)
+                    : flexIndex(ml->fl, index);
 
     if (!entry->fe) {
         /* Used for requesting the 0 index in an empty list */
@@ -212,6 +224,11 @@ bool multilistSmallIndex(multilistSmall *ml, mlOffsetId index,
 
     flexGetByType(entry->fe, &entry->box);
     return true;
+}
+
+bool multilistSmallIndex(multilistSmall *ml, mlOffsetId index,
+                         multilistEntry *entry) {
+    return multilistSmallIndexNear(ml, index, NULL, 0, entry);
 }
 
 /* ====================================================================

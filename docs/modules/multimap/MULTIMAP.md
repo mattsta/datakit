@@ -2,76 +2,110 @@
 
 ## Overview
 
-`multimap` is a **self-optimizing sorted key-value container** that automatically transitions between three internal representations based on data size. It provides O(log n) lookups with minimal memory overhead by using the most efficient storage format for your current dataset size.
+`multimap` is a **self-optimizing sorted key-value container** that automatically
+transitions between three internal representations as data grows. Rows stay
+sorted at all times, so lookups are binary searches and iteration is ordered.
 
 **Key Features:**
 
-- Automatic scaling from 16 bytes (small) → 28 bytes (medium) → variable size (full)
-- Multi-column support: store N values per key (up to 65,535 columns!)
-- Sorted storage with binary search for O(log n) operations
-- Set mode (unique keys) or Map mode (duplicate keys allowed)
-- Reference container support for string deduplication
-- Forward/reverse iteration with flexible starting points
-- Predicate-based filtering and deletion
-- Optional LZ4 compression
+- Automatic scaling: 16-byte Small -> 28-byte Medium -> 48-byte Full (plus
+  per-submap metadata)
+- Multi-column rows: N elements per row (up to 65,535 for Small/Medium)
+- Sorted storage with binary search inside every submap
+- Map mode (unique keys, values replaced) or Set mode (unique whole rows)
+- Reference containers (`multimapAtom`) for string interning
+- Forward/reverse iteration with an arbitrary starting key
+- Predicate-driven walk (`multimapProcessUntil`) and bulk trim
+  (`multimapDeleteByPredicate`)
 
 **Headers**: `multimap.h`, `multimapCommon.h`
 
-**Source**: `multimap.c`, `multimapSmall.c`, `multimapMedium.c`, `multimapFull.c`
+**Source**: `multimap.c`, `multimapSmall.c`, `multimapMedium.c`,
+`multimapFull.c`
+
+Examples below use `PRId64` / `PRIu64` from `<inttypes.h>`. 64-bit values are
+always `int64_t` / `uint64_t` and are always printed through those macros.
+
+> **Compression note**: `multimapNewCompress()` and the `compress` argument of
+> `multimapNewConfigure()` record a compression flag in the tagged pointer and
+> in each variant's struct, but no variant currently reads it. Today those
+> constructors behave exactly like `multimapNewLimit()`. Do not size capacity
+> planning around compression.
 
 ## Architecture
 
-The multimap family uses **pointer tagging** to transparently manage three underlying implementations:
+The multimap family uses **pointer tagging** to manage three underlying
+implementations behind one opaque `multimap *`:
 
 ```
 ┌─────────────┐
-│  multimap*  │  Opaque pointer with 2-bit type tag
-└──────┬──────┘
+│  multimap*  │  low 2 bits: variant tag; high 16 bits: 2 x 8-bit metadata
+└──────┬──────┘  (compress flag, flexCapSizeLimit level)
        │
        ├──[tag=1]──> multimapSmall  (16 bytes, 1 flex)
        ├──[tag=2]──> multimapMedium (28 bytes, 2 flex arrays)
-       └──[tag=3]──> multimapFull   (40+ bytes, N flex arrays)
+       └──[tag=3]──> multimapFull   (48 bytes + N submaps)
 ```
+
+`multimap.c` sets `PTRLIB_BITS_LOW 2` and `PTRLIB_BITS_HIGH 16`, so the
+size-limit level and compression flag ride in the unused high bits of the
+pointer instead of costing struct space in every variant.
 
 When you call `multimapInsert()`, the implementation:
 
-1. Checks the current variant via pointer tag
-2. Routes to the appropriate function (Small/Medium/Full)
-3. Automatically upgrades to the next variant if size threshold exceeded
-4. Transparently updates your pointer to the new variant
+1. Reads the variant from the low tag bits
+2. Routes to the Small/Medium/Full function via a computed goto
+3. Checks the upgrade thresholds and, if exceeded, `zrealloc()`s the container
+   struct into the next larger variant
+4. Re-tags and writes the new pointer back through your `multimap **`
 
-**You never need to know which variant you're using** - the API is identical.
+**You never need to know which variant you are using** - the API is identical.
+Because the upgrade reallocates the container struct in place, every mutating
+entry point takes `multimap **`.
+
+There is no automatic downgrade: a map that reached Full stays Full even after
+deletions (Full does reclaim emptied submaps internally).
 
 ## Data Structures
 
 ### Common Types
 
+From `multimapCommon.h`:
+
 ```c
-/* Element count type - up to 65,535 "columns" per row */
+/* Element ("column") count type. Small and Medium store this in a 16-bit
+ * bitfield, so those two tiers cap at 65,535 elements per row. */
 typedef uint32_t multimapElements;
 
-/* Iterator for traversing multimap contents */
-typedef struct multimapIterator {
-    void *mm;                    /* Back pointer to multimap */
-    flexEntry *entry;            /* Current position */
-    flex *map;                   /* Current map being iterated */
-    uint32_t mapIndex;           /* For Medium/Full: which map index */
-    uint32_t elementsPerEntry : 16;
-    uint32_t type : 2;           /* Variant type: 1=Small, 2=Medium, 3=Full */
-    uint32_t forward : 1;        /* Direction of iteration */
-} multimapIterator;
+/* Storage class for the number of submaps in a multimapFull */
+typedef uint32_t multimapFullIdx;
 
-/* Entry reference for direct manipulation */
+/* Cached byte offset of the middle row of a submap (binary-search seed) */
+typedef uint32_t multimapFullMiddle;
+
+/* Total rows across every submap of a multimapFull */
+typedef uint64_t multimapFullValues;
+
+typedef struct multimapIterator {
+    void *mm;         /* untagged pointer back to the multimap */
+    flexEntry *entry; /* current position */
+    flex *map;        /* submap currently being iterated */
+    uint32_t mapIndex;              /* Medium/Full: which submap index */
+    uint32_t elementsPerEntry : 16; /* cached mm->elementsPerEntry */
+    uint32_t type : 2;              /* 1=Small, 2=Medium, 3=Full */
+    uint32_t forward : 1;           /* iterating forward? */
+    uint32_t unused : 13;
+} multimapIterator; /* statically asserted to be exactly 32 bytes */
+
 typedef struct multimapEntry {
-    flex **map;                  /* Pointer to the flex map */
-    flexEntry *fe;               /* Specific entry within map */
-    multimapFullIdx mapIdx;      /* For Full: which map contains entry */
+    flex **map;              /* pointer to the owning flex slot */
+    flexEntry *fe;           /* entry within that flex */
+    multimapFullIdx mapIdx;  /* Full: which submap holds the entry */
 } multimapEntry;
 
-/* Predicate for conditional operations */
 typedef enum multimapCondition {
     MULTIMAP_CONDITION_NONE = 0,
-    MULTIMAP_CONDITION_ALL,
+    MULTIMAP_CONDITION_ALL, /* foreach */
     MULTIMAP_CONDITION_LESS_THAN,
     MULTIMAP_CONDITION_LESS_THAN_EQUAL,
     MULTIMAP_CONDITION_EQUAL,
@@ -79,145 +113,189 @@ typedef enum multimapCondition {
     MULTIMAP_CONDITION_GREATER_THAN_EQUAL
 } multimapCondition;
 
+/* Reads as: [MAP CONTENTS] [CONDITION] [COMPARE AGAINST] */
 typedef struct multimapPredicate {
     multimapCondition condition;
     databox compareAgainst;
 } multimapPredicate;
+
+typedef enum multimapType {
+    MULTIMAP_TYPE_SMALL = 1,
+    MULTIMAP_TYPE_MEDIUM = 2,
+    MULTIMAP_TYPE_FULL = 3
+} multimapType;
 ```
+
+### Borrowed Values
+
+Every read API (`multimapLookup`, `multimapFirst`, `multimapLast`,
+`multimapIteratorNext`, `multimapRandomValue`) fills `databox` values that
+**point into the underlying flex storage** for byte-typed elements. Numeric,
+boolean and reference elements are immediate and always safe to keep.
+
+Byte pointers are valid only until the next mutation of that multimap. Copy
+them (`strndup`, `memcpy`, `databoxCopyBytesFromBox`) before inserting,
+deleting, replacing, or incrementing anything.
 
 ## Creation Functions
 
 ### Basic Creation
 
+Signatures exactly as declared in `multimap.h`:
+
 ```c
-/* Create new multimap with default 2KB max per map */
+/* Default size-limit level is FLEX_CAP_LEVEL_2048 */
 multimap *multimapNew(multimapElements elementsPerEntry);
 
-/* Create with explicit size limit */
+/* 'limit' is a flexCapSizeLimit level; the header spells it uint32_t */
 multimap *multimapNewLimit(multimapElements elementsPerEntry,
-                           flexCapSizeLimit limit);
+                           const uint32_t limit);
 
-/* Create with LZ4 compression enabled */
+/* Records a compression flag that no variant currently consumes */
 multimap *multimapNewCompress(multimapElements elementsPerEntry,
-                              flexCapSizeLimit limit);
+                              const uint32_t limit);
 
-/* Create in "set" mode (unique keys only) */
+/* Set mode: entire rows are unique (see "Insertion Semantics") */
 multimap *multimapSetNew(multimapElements elementsPerEntry);
 
-/* Create with full configuration */
-multimap *multimapNewConfigure(multimapElements elementsPerEntry,
-                               bool isSet, bool compress,
-                               flexCapSizeLimit sizeLimit);
+multimap *multimapNewConfigure(multimapElements elementsPerEntry, bool isSet,
+                               bool compress, flexCapSizeLimit sizeLimit);
+```
 
-/* Example usage */
-multimap *m = multimapNew(2);  /* Key + Value = 2 elements */
+Usage:
 
-/* Multi-column example: User ID, Name, Age, Score */
-multimap *users = multimapNew(4);
-
-/* Set mode: no duplicate keys allowed */
-multimap *uniqueIds = multimapSetNew(1);
-
-/* Compressed map for large text data */
-multimap *textIndex = multimapNewCompress(2, FLEX_CAP_LEVEL_4096);
+```c
+multimap *m = multimapNew(2);       /* key + value */
+multimap *users = multimapNew(4);   /* id, name, age, score */
+multimap *uniqueRows = multimapSetNew(1);
+multimap *bulk = multimapNewLimit(2, FLEX_CAP_LEVEL_4096);
 ```
 
 ### Size Limits
 
-Available `flexCapSizeLimit` values control when maps split:
+`flexCapSizeLimit` (from `flexCapacityManagement.h`) is an **index** into
+`flexOptimizationSizeLimit[]`, not a byte count:
 
 ```c
-FLEX_CAP_LEVEL_128     /* Split at 128 bytes */
-FLEX_CAP_LEVEL_256     /* Split at 256 bytes */
-FLEX_CAP_LEVEL_512     /* Split at 512 bytes (recommended for small data) */
-FLEX_CAP_LEVEL_1024    /* Split at 1KB */
-FLEX_CAP_LEVEL_2048    /* Split at 2KB (default) */
-FLEX_CAP_LEVEL_4096    /* Split at 4KB (recommended for large data) */
-FLEX_CAP_LEVEL_8192    /* Split at 8KB */
+FLEX_CAP_LEVEL_0     = 0   /*     0 bytes (degenerate) */
+FLEX_CAP_LEVEL_64    = 1   /*    64 bytes */
+FLEX_CAP_LEVEL_128   = 2   /*   128 bytes */
+FLEX_CAP_LEVEL_256   = 3   /*   256 bytes */
+FLEX_CAP_LEVEL_512   = 4   /*   512 bytes */
+FLEX_CAP_LEVEL_1024  = 5   /*  1024 bytes */
+FLEX_CAP_LEVEL_2048  = 6   /*  2048 bytes (multimap default) */
+FLEX_CAP_LEVEL_4096  = 7   /*  4096 bytes */
+FLEX_CAP_LEVEL_8192  = 8   /*  8192 bytes */
+FLEX_CAP_LEVEL_16384 = 9   /* 16384 bytes */
+FLEX_CAP_LEVEL_32768 = 10  /* 32768 bytes */
+FLEX_CAP_LEVEL_65536 = 11  /* 65536 bytes */
 ```
+
+The resolved byte value is used three different ways:
+
+- **Small**: upgrade to Medium once total bytes exceed the limit
+- **Medium**: upgrade to Full once total bytes exceed `limit * 3`
+- **Full**: becomes `maxSize`, the per-submap split cutoff
 
 ### Copying and Metadata
 
 ```c
-/* Deep copy entire multimap */
 multimap *multimapCopy(const multimap *m);
+size_t multimapCount(const multimap *m);   /* number of ROWS, not elements */
+size_t multimapBytes(const multimap *m);   /* flex data bytes only */
+flex *multimapDump(const multimap *m);     /* caller owns; flexFree() it */
+```
 
-/* Get element count (total rows) */
-size_t multimapCount(const multimap *m);
+`multimapCount()` divides the raw element count by `elementsPerEntry`, so it is
+the row count. `multimapBytes()` sums only the flex payloads; the container
+struct, the submap pointer array, the middle-offset array and the rangeBox
+array are **not** included.
 
-/* Get total bytes used by map data */
-size_t multimapBytes(const multimap *m);
-
-/* Dump all contents to a single flex */
-flex *multimapDump(const multimap *m);
-
-/* Example usage */
+```c
 multimap *original = multimapNew(2);
 /* ... populate ... */
 multimap *backup = multimapCopy(original);
 
-printf("Contains %zu entries\n", multimapCount(original));
-printf("Using %zu bytes\n", multimapBytes(original));
+printf("Contains %zu rows\n", multimapCount(original));
+printf("Flex payload: %zu bytes\n", multimapBytes(original));
 ```
 
-## Insertion Operations
+## Insertion Semantics
 
-### Basic Insertion
+There are three distinct insert behaviors. Choosing the wrong one is the most
+common multimap mistake.
+
+| Call                        | Compares     | Duplicate rows | Existing match      |
+| --------------------------- | ------------ | -------------- | ------------------- |
+| `multimapInsert` (map mode) | element 0    | no             | replaces values     |
+| `multimapInsert` (set mode) | all elements | no             | no-op               |
+| `multimapInsertFullWidth`   | all elements | **yes**        | inserts another row |
 
 ```c
-/* Insert or replace entry by key (first element) */
+/* Insert or replace by key; returns true when an existing row matched */
 bool multimapInsert(multimap **m, const databox *elements[]);
 
-/* Insert using all elements as compound key */
+/* Sorted bag: all elements form the key, duplicates are allowed */
 void multimapInsertFullWidth(multimap **m, const databox *elements[]);
 
-/* Append to end (assumes key > all existing keys) */
+/* Insert into the highest submap directly (see below) */
 void multimapAppend(multimap **m, const databox *elements[]);
+```
 
-/* Example: Key-Value insertion */
+### Map Mode (default)
+
+`multimapNew()` produces a map: element 0 is the key, and only element 0 is
+compared. Re-inserting an existing key overwrites elements 1..N-1 and returns
+`true`.
+
+```c
 multimap *m = multimapNew(2);
 
 databox key = databoxNewBytesString("username");
 databox val = databoxNewBytesString("alice");
 const databox *elements[2] = {&key, &val};
 
-bool replaced = multimapInsert(&m, elements);
-/* replaced is true if key existed and value was updated */
+bool replaced = multimapInsert(&m, elements);  /* false: new key */
 
-/* Example: Multi-column insertion */
-multimap *users = multimapNew(4);
-
-databox uid = databoxNewSigned(1001);
-databox name = databoxNewBytesString("Bob");
-databox age = databoxNewSigned(25);
-databox score = databoxNewReal(98.5);
-const databox *row[4] = {&uid, &name, &age, &score};
-
-multimapInsert(&users, row);
+databox val2 = databoxNewBytesString("bob");
+const databox *update[2] = {&key, &val2};
+replaced = multimapInsert(&m, update);         /* true: value replaced */
+assert(multimapCount(m) == 1);
 ```
 
-**Important**: Note that insertion takes `multimap **m` (pointer to pointer). This allows automatic upgrading between variants:
+### Set Mode
+
+`multimapSetNew()` / `multimapNewConfigure(..., isSet=true, ...)` produce a
+**set of whole rows**. Insert compares _all_ elements. A row that already
+exists verbatim is reported as found and the flex is left untouched; a row that
+differs in any element is a new, separate row.
 
 ```c
-multimap *m = multimapNew(2);  /* Starts as Small */
+multimap *s = multimapSetNew(2);
 
-/* After many inserts, 'm' may become Medium or Full */
-for (int i = 0; i < 10000; i++) {
-    databox k = databoxNewSigned(i);
-    databox v = databoxNewSigned(i * 100);
-    const databox *e[2] = {&k, &v};
-    multimapInsert(&m, e);  /* Pass &m to allow upgrade */
-}
+databox key = databoxNewBytesString("alice");
+databox v1 = databoxNewSigned(1);
+const databox *e1[2] = {&key, &v1};
+multimapInsert(&s, e1);                 /* false: inserted */
 
-/* 'm' now points to a different variant (Medium or Full) */
+bool dup = multimapInsert(&s, e1);      /* true: exact row already present */
+assert(dup && multimapCount(s) == 1);   /* deduped, not appended */
+
+databox v2 = databoxNewSigned(2);
+const databox *e2[2] = {&key, &v2};
+multimapInsert(&s, e2);                 /* false: DIFFERENT row, inserted */
+assert(multimapCount(s) == 2);          /* set mode does NOT replace by key */
 ```
 
-### Full-Width Operations
+If you want "one row per key, newest value wins", use map mode. Set mode only
+guarantees that no two rows are identical across all elements.
 
-Full-width operations use **all elements** as the key, allowing duplicate first elements:
+### Full-Width Insert
+
+`multimapInsertFullWidth()` is the duplicates-allowed sorted bag: all elements
+participate in the sort order and identical rows may repeat.
 
 ```c
-/* Time-series example: timestamp + measurement */
 multimap *timeseries = multimapNew(2);
 
 databox ts1 = databoxNewSigned(1000);
@@ -225,15 +303,40 @@ databox temp1 = databoxNewReal(20.5);
 const databox *row1[2] = {&ts1, &temp1};
 multimapInsertFullWidth(&timeseries, row1);
 
-/* Same timestamp, different measurement - both stored! */
-databox ts2 = databoxNewSigned(1000);  /* Same! */
-databox temp2 = databoxNewReal(21.0);   /* Different! */
+databox ts2 = databoxNewSigned(1000);   /* same timestamp */
+databox temp2 = databoxNewReal(21.0);   /* different reading */
 const databox *row2[2] = {&ts2, &temp2};
 multimapInsertFullWidth(&timeseries, row2);
 
-/* Now contains 2 entries, both with timestamp=1000 */
-assert(multimapCount(timeseries) == 2);
+assert(multimapCount(timeseries) == 2); /* both stored */
 ```
+
+Do not mix `multimapInsertFullWidth()` and `multimapInsert()` on the same
+container: the first allows duplicate keys, the second silently replaces one of
+them.
+
+### Append
+
+`multimapAppend()` skips the submap-selection step and inserts straight into the
+highest submap. It is **not** an O(1) push: the insert inside that submap is
+still a sorted insert (and, in map mode, still replaces an existing key).
+
+Its saving is the map-level search, which matters only for Medium and Full;
+Small routes `Append` directly to `Insert`.
+
+```c
+/* Correct use: keys are non-decreasing */
+for (int64_t i = 0; i < 10000; i++) {
+    databox k = databoxNewSigned(i);
+    databox v = databoxNewSigned(i * 2);
+    const databox *e[2] = {&k, &v};
+    multimapAppend(&m, e);
+}
+```
+
+Appending a key that sorts below an earlier submap places it in the wrong
+submap and corrupts range routing. Use `multimapInsert()` whenever key order is
+not guaranteed.
 
 ### Surrogate Key Insertion (Advanced)
 
@@ -241,79 +344,105 @@ For use with `multimapAtom` reference containers:
 
 ```c
 void multimapInsertWithSurrogateKey(
-    multimap **m, const databox *elements[],
-    const databox *insertKey,
+    multimap **m, const databox *elements[], const databox *insertKey,
     const struct multimapAtom *referenceContainer);
-
-/* Inserts with 'insertKey' instead of elements[0] for ordering */
-/* See multimapAtom.h for reference container usage */
 ```
+
+`insertKey` is used for ordering and storage in place of `elements[0]`, while
+comparisons resolve references through `referenceContainer`. See
+[VARIANTS.md](VARIANTS.md) for the atom API.
 
 ## Lookup Operations
 
 ### Basic Lookup
 
 ```c
-/* Check if key exists */
 bool multimapExists(const multimap *m, const databox *key);
+bool multimapExistsFullWidth(const multimap *m, const databox *elements[]);
+bool multimapExistsWithReference(const multimap *m, const databox *key,
+                                 databox *foundRef,
+                                 const struct multimapAtom *referenceContainer);
 
-/* Check if full-width entry exists */
-bool multimapExistsFullWidth(const multimap *m,
-                             const databox *elements[]);
-
-/* Lookup values by key */
 bool multimapLookup(const multimap *m, const databox *key,
                     databox *elements[]);
+```
 
-/* Example: Simple lookup */
-multimap *m = /* ... populated ... */;
+**`multimapLookup()` fills `elementsPerEntry - 1` boxes**: it skips the key you
+searched with, so `elements[0]` receives the row's _second_ element.
 
+```c
 databox searchKey = databoxNewBytesString("username");
 
 if (multimapExists(m, &searchKey)) {
     databox value;
-    databox *results[1] = {&value};
+    databox *results[1] = {&value};   /* 2 columns - 1 = 1 box */
 
     if (multimapLookup(m, &searchKey, results)) {
-        printf("Found: ");
         databoxRepr(&value);
     }
 }
 
-/* Example: Multi-column lookup */
-multimap *users = /* ... populated with 4 columns ... */;
-
+/* 4-column map: uid | name | age | score */
 databox uid = databoxNewSigned(1001);
 databox name, age, score;
-databox *results[3] = {&name, &age, &score};
+databox *results[3] = {&name, &age, &score};   /* 4 - 1 = 3 boxes */
 
 if (multimapLookup(users, &uid, results)) {
-    printf("Name: ");
     databoxRepr(&name);
-    printf("Age: ");
     databoxRepr(&age);
-    printf("Score: ");
     databoxRepr(&score);
 }
 ```
 
-**Important**: `multimapLookup()` returns N-1 values (skips the key you searched for).
+### Contiguous-Array Readers
+
+`multimap.h` ships inline helpers that build the pointer array for you, capped
+at `MULTIMAP_INTO_MAX` (16) boxes. They are zero-cost with a literal `n`.
+
+```c
+enum { MULTIMAP_INTO_MAX = 16 };
+
+/* n == elementsPerEntry - 1 (values only) */
+bool multimapLookupInto(const multimap *m, const databox *key,
+                        databox out[], uint32_t n);
+
+/* n == elementsPerEntry (full width) */
+bool multimapFirstInto(multimap *m, databox out[], uint32_t n);
+bool multimapLastInto(multimap *m, databox out[], uint32_t n);
+bool multimapIteratorNextInto(multimapIterator *iter, databox out[],
+                              uint32_t n);
+```
+
+`n` is a contract, not a request: these are never partial reads, so an
+undersized `out[]` is written past its end.
+
+```c
+databox row[4];
+if (multimapFirstInto(users, row, 4)) {
+    databoxRepr(&row[0]);   /* key */
+}
+
+databox values[3];
+if (multimapLookupInto(users, &uid, values, 3)) {
+    databoxRepr(&values[0]);  /* name */
+}
+```
 
 ### First and Last
 
 ```c
-/* Get first entry (lowest key) */
-bool multimapFirst(multimap *m, databox *elements[]);
+bool multimapFirst(multimap *m, databox *elements[]);  /* lowest key */
+bool multimapLast(multimap *m, databox *elements[]);   /* highest key */
+```
 
-/* Get last entry (highest key) */
-bool multimapLast(multimap *m, databox *elements[]);
+Both fill the **full** row (`elementsPerEntry` boxes) and return `false` on an
+empty container.
 
-/* Example */
+```c
 databox firstKey, firstName;
 databox *first[2] = {&firstKey, &firstName};
 
 if (multimapFirst(m, first)) {
-    printf("Lowest key: ");
     databoxRepr(&firstKey);
 }
 ```
@@ -321,40 +450,61 @@ if (multimapFirst(m, first)) {
 ### Random Access
 
 ```c
-/* Get random entry */
-bool multimapRandomValue(multimap *m, bool fromTail,
-                         databox **found, multimapEntry *me);
+bool multimapRandomValue(multimap *m, bool fromTail, databox **found,
+                         multimapEntry *me);
+```
 
-/* Example: Random sampling */
-databox *foundElements[2];
+`fromTail == true` selects the **last** row deterministically;
+`fromTail == false` selects a uniformly random row.
+
+Despite the `databox **` spelling, `found` is a **full-width pointer array**:
+pass `NULL`, or an array of `elementsPerEntry` pointers that each address a real
+`databox`. Passing the address of a single box overruns the caller's stack.
+
+```c
+databox boxes[2];
+databox *found[2] = {&boxes[0], &boxes[1]};
 multimapEntry me;
 
-if (multimapRandomValue(m, false, foundElements, &me)) {
-    printf("Random entry found!\n");
+if (multimapRandomValue(m, false, found, &me)) {
+    databoxRepr(found[0]);
+}
+
+/* Only the position is wanted: skip the fill entirely */
+if (multimapRandomValue(m, true, NULL, &me)) {
+    /* me now points at the tail row */
 }
 ```
 
 ### Underlying Entry Access (Advanced)
 
 ```c
-/* Get direct reference to entry for in-place modification */
 bool multimapGetUnderlyingEntry(multimap *m, const databox *key,
                                 multimapEntry *me);
+bool multimapGetUnderlyingEntryWithReference(
+    multimap *m, const databox *key, multimapEntry *me,
+    const struct multimapAtom *referenceContainer);
 
-/* Resize entry in place */
-void multimapResizeEntry(multimap **m, multimapEntry *me,
-                         size_t newLen);
+void multimapResizeEntry(multimap **m, multimapEntry *me, size_t newLen);
+void multimapReplaceEntry(multimap **m, multimapEntry *me, const databox *box);
+```
 
-/* Replace entry value in place */
-void multimapReplaceEntry(multimap **m, multimapEntry *me,
-                          const databox *box);
+`me->fe` lands on the row's **key**. Walk it forward with `flexNext()` to reach
+a later column, then mutate through `multimapReplaceEntry()` /
+`multimapResizeEntry()`.
 
-/* Example: In-place modification */
+Always mutate through the multimap wrappers, never with a raw
+`flexReplaceByType()` on `*me.map`. The wrappers rescan the cached middle offset
+(and, on Full, refresh the submap's rangeBox) after the write. A raw flex write
+leaves those caches pointing into stale bytes, and every later sorted search
+trusts them blindly.
+
+```c
 multimapEntry me;
 databox searchKey = databoxNewBytesString("counter");
 
 if (multimapGetUnderlyingEntry(m, &searchKey, &me)) {
-    /* Directly modify the value */
+    me.fe = flexNext(*me.map, me.fe);        /* move to column 1 */
     databox newValue = databoxNewSigned(999);
     multimapReplaceEntry(&m, &me, &newValue);
 }
@@ -365,126 +515,140 @@ if (multimapGetUnderlyingEntry(m, &searchKey, &me)) {
 ### Basic Deletion
 
 ```c
-/* Delete by key (first element) */
 bool multimapDelete(multimap **m, const databox *key);
-
-/* Delete by full-width match */
-bool multimapDeleteFullWidth(multimap **m,
-                             const databox *elements[]);
-
-/* Delete and retrieve deleted value */
+bool multimapDeleteFullWidth(multimap **m, const databox *elements[]);
 bool multimapDeleteWithFound(multimap **m, const databox *key,
                              databox *foundReference);
-
-/* Delete random entry */
+bool multimapDeleteWithReference(multimap **m, const databox *key,
+                                 const struct multimapAtom *referenceContainer,
+                                 databox *foundReference);
 bool multimapDeleteRandomValue(multimap **m, bool fromTail,
                                databox **deleted);
+```
 
-/* Example: Simple delete */
+`multimapDeleteRandomValue()` takes the same full-width `deleted` array contract
+as `multimapRandomValue()`, but the values it hands back are **copies**, so they
+stay valid after the row is gone.
+
+```c
 databox key = databoxNewBytesString("username");
-bool deleted = multimapDelete(&m, &key);
-
-if (deleted) {
+if (multimapDelete(&m, &key)) {
     printf("Entry deleted\n");
 }
 
-/* Example: Delete with retrieval */
-databox deletedValue;
-if (multimapDeleteWithFound(&m, &key, &deletedValue)) {
-    printf("Deleted value was: ");
-    databoxRepr(&deletedValue);
+databox deletedRef;
+if (multimapDeleteWithFound(&m, &key, &deletedRef)) {
+    databoxRepr(&deletedRef);
 }
 ```
+
+Deletion never shrinks a container back to a smaller variant. Full does free
+submaps that become empty and collapses to a single empty submap on
+`multimapReset()`.
 
 ### Predicate-Based Deletion
 
 ```c
-/* Delete all entries matching predicate */
-bool multimapDeleteByPredicate(multimap **m,
-                               const multimapPredicate *p);
+bool multimapDeleteByPredicate(multimap **m, const multimapPredicate *p);
+```
 
-/* Example: Delete all entries where key <= 100 */
+**Only `MULTIMAP_CONDITION_LESS_THAN_EQUAL` is implemented.** All three variants
+assert on any other condition. The call is a sorted-prefix trim: every row whose
+key is `<= compareAgainst` is removed in one shot, without a per-row walk.
+
+```c
 databox limit = databoxNewSigned(100);
-multimapPredicate pred = {
-    .condition = MULTIMAP_CONDITION_LESS_THAN_EQUAL,
-    .compareAgainst = limit
-};
+multimapPredicate pred = {.condition = MULTIMAP_CONDITION_LESS_THAN_EQUAL,
+                          .compareAgainst = limit};
 
-bool deleted = multimapDeleteByPredicate(&m, &pred);
-if (deleted) {
-    printf("Deleted all entries with key <= 100\n");
+if (multimapDeleteByPredicate(&m, &pred)) {
+    printf("Trimmed all rows with key <= 100\n");
 }
 ```
+
+For any other condition, iterate and delete explicitly, collecting keys first
+(copying byte keys) because deletion invalidates iterator position.
 
 ## Iteration
 
 ### Basic Iteration
 
 ```c
-/* Initialize iterator */
 void multimapIteratorInit(const multimap *m, multimapIterator *iter,
                           bool forward);
-
-/* Initialize at specific key */
 bool multimapIteratorInitAt(const multimap *m, multimapIterator *iter,
-                            bool forward, const databox *startAt);
+                            bool forward, const databox *box);
+bool multimapIteratorNext(multimapIterator *iter, databox **elements);
+```
 
-/* Advance iterator and get next entry */
-bool multimapIteratorNext(multimapIterator *iter,
-                          databox **elements);
+`multimapIteratorNext()` fills the **full** row. In reverse mode it walks rows
+from highest to lowest while still filling `elements[0..N-1]` in column order,
+so the same array works in both directions.
 
-/* Example: Forward iteration */
+`multimapIteratorInitAt()` seeds at the first row whose key is `>= box` and
+returns `false` when that position is past the end (the iterator is still
+initialized and simply yields nothing).
+
+```c
 multimapIterator iter;
-multimapIteratorInit(m, &iter, true);  /* true = forward */
-
 databox key, value;
 databox *elements[2] = {&key, &value};
 
+/* Forward */
+multimapIteratorInit(m, &iter, true);
 while (multimapIteratorNext(&iter, elements)) {
-    printf("Key: ");
     databoxRepr(&key);
-    printf("Value: ");
     databoxRepr(&value);
-    printf("\n");
 }
 
-/* Example: Reverse iteration */
-multimapIteratorInit(m, &iter, false);  /* false = reverse */
-
+/* Reverse */
+multimapIteratorInit(m, &iter, false);
 while (multimapIteratorNext(&iter, elements)) {
-    /* Process in reverse order */
+    /* highest key first */
 }
 
-/* Example: Start at specific key */
+/* Range scan from a key */
 databox startKey = databoxNewSigned(1000);
-multimapIteratorInitAt(m, &iter, true, &startKey);
-
-while (multimapIteratorNext(&iter, elements)) {
-    /* Iterate from key=1000 onwards */
+if (multimapIteratorInitAt(m, &iter, true, &startKey)) {
+    while (multimapIteratorNext(&iter, elements)) {
+        /* rows with key >= 1000 */
+    }
 }
 ```
 
-### Iteration Pattern
+Do not mutate a multimap while an iterator over it is live; insert and delete
+both move flex bytes.
+
+### Walking With a Predicate
 
 ```c
-typedef bool(multimapElementWalker)(void *userData,
-                                    const databox *elements[]);
+typedef bool(multimapElementWalker)(void *userData, const databox *elements[]);
 
-size_t multimapProcessUntil(multimap *m,
-                           const multimapPredicate *p,
-                           bool forward,
-                           multimapElementWalker *walker,
-                           void *userData);
+size_t multimapProcessUntil(multimap *m, const multimapPredicate *p,
+                            bool forward, multimapElementWalker *walker,
+                            void *userData);
 
-/* Example: Custom processing */
-bool printElement(void *userData, const databox *elements[]) {
-    int *count = userData;
-    printf("Entry %d: ", (*count)++);
+bool multimapProcessPredicate(const multimapPredicate *p, const databox *value);
+```
+
+`multimapProcessUntil()` walks rows and tests the predicate against
+`elements[0]` (the key). It **stops at the first row that fails** - it is an
+"until", not a filter - and returns how many rows were passed to `walker`.
+Returning `false` from the walker also stops the walk.
+
+Unlike `multimapDeleteByPredicate()`, this path supports every
+`multimapCondition`. Keep `elementsPerEntry <= 16`: that is the size of the
+stack-allocated box array the walk uses.
+
+```c
+static bool printElement(void *userData, const databox *elements[]) {
+    uint64_t *count = userData;
+    printf("Entry %" PRIu64 ": ", (*count)++);
     databoxRepr(elements[0]);
-    return true;  /* Continue iteration */
+    return true; /* continue */
 }
 
-int count = 0;
+uint64_t count = 0;
 multimapPredicate pred = {.condition = MULTIMAP_CONDITION_ALL};
 multimapProcessUntil(m, &pred, true, printElement, &count);
 ```
@@ -494,27 +658,40 @@ multimapProcessUntil(m, &pred, true, printElement, &count);
 ### Field Increment
 
 ```c
-/* Increment a numeric field at offset */
 int64_t multimapFieldIncr(multimap **m, const databox *key,
                           uint32_t fieldOffset, int64_t incrBy);
+```
 
-/* Example: Counter implementation */
-multimap *counters = multimapNew(2);  /* key + count */
+Behavior, exactly as implemented:
+
+- Looks the key up, then walks `fieldOffset` columns forward from the key.
+  `fieldOffset` must be `>= 1`; offset 0 is the key itself.
+- **A missing key returns 0** and touches nothing (no crash, no insert).
+- `incrBy == 0` returns the current value unchanged.
+- The target must hold a value in `int64_t` range; `DATABOX_UNSIGNED_64` above
+  `INT64_MAX` is rejected by assertion.
+- Booleans participate: `FALSE` acts as 0 and `TRUE` as 1. `FALSE + 1` becomes
+  `TRUE`, `TRUE - 1` becomes `FALSE`, and any other delta promotes the field to
+  a signed integer. `multimapAtom` relies on this to keep a one-reference
+  refcount down to a single byte.
+- Overflow is not checked.
+- Implemented as lookup + `multimapReplaceEntry()`, so it maintains the cached
+  middle but does not re-split an oversized submap.
+
+```c
+multimap *counters = multimapNew(2);
 
 databox key = databoxNewBytesString("pageviews");
 databox count = databoxNewSigned(0);
 const databox *init[2] = {&key, &count};
 multimapInsert(&counters, init);
 
-/* Increment counter by 1 */
 int64_t newCount = multimapFieldIncr(&counters, &key, 1, 1);
-printf("New count: %ld\n", newCount);
+printf("New count: %" PRId64 "\n", newCount);
 
-/* Increment by 10 */
 newCount = multimapFieldIncr(&counters, &key, 1, 10);
-printf("New count: %ld\n", newCount);
+printf("New count: %" PRId64 "\n", newCount);
 
-/* Example: Multi-column field increment */
 /* Row: [UserID, LoginCount, PointsEarned] */
 multimap *stats = multimapNew(3);
 
@@ -524,26 +701,31 @@ databox points = databoxNewSigned(0);
 const databox *row[3] = {&uid, &logins, &points};
 multimapInsert(&stats, row);
 
-/* Increment login count (offset 1) */
-multimapFieldIncr(&stats, &uid, 1, 1);
+multimapFieldIncr(&stats, &uid, 1, 1);     /* LoginCount */
+multimapFieldIncr(&stats, &uid, 2, 100);   /* PointsEarned */
 
-/* Increment points (offset 2) */
-multimapFieldIncr(&stats, &uid, 2, 100);
+/* Missing key: no crash, returns 0, inserts nothing */
+databox absent = databoxNewSigned(999999);
+assert(multimapFieldIncr(&stats, &absent, 1, 1) == 0);
 ```
 
 ## Set Operations
 
+All three helpers use element 0 of each row as the key and insert into `dst`
+with `multimapInsert()`, so `dst` should normally be a 1-element multimap.
+
 ### Intersection
 
 ```c
-/* Compute key intersection of two multimaps */
 void multimapIntersectKeys(multimap **restrict dst,
-                          multimapIterator *restrict const a,
-                          multimapIterator *restrict const b);
+                           multimapIterator *restrict const a,
+                           multimapIterator *restrict const b);
+```
 
-/* Example */
-multimap *map1 = /* ... */;
-multimap *map2 = /* ... */;
+A sorted zipper walk over two already-initialized iterators. The two sources may
+have different `elementsPerEntry`.
+
+```c
 multimap *result = multimapNew(1);
 
 multimapIterator iter1, iter2;
@@ -551,233 +733,258 @@ multimapIteratorInit(map1, &iter1, true);
 multimapIteratorInit(map2, &iter2, true);
 
 multimapIntersectKeys(&result, &iter1, &iter2);
-/* result now contains keys present in both map1 and map2 */
 ```
 
 ### Difference
 
 ```c
-/* Compute key difference */
 void multimapDifferenceKeys(multimap **restrict dst,
-                           multimapIterator *restrict const a,
-                           multimapIterator *restrict const b,
-                           bool symmetricDifference);
+                            multimapIterator *restrict const a,
+                            multimapIterator *restrict const b,
+                            const bool symmetricDifference);
+```
 
-/* Example: A - B (keys in A but not in B) */
+**Both iterators must come from 1-element multimaps**; the implementation
+asserts `a->elementsPerEntry == b->elementsPerEntry == 1`.
+
+```c
 multimap *difference = multimapNew(1);
-multimapIteratorInit(map1, &iter1, true);
-multimapIteratorInit(map2, &iter2, true);
+multimapIteratorInit(keysA, &iter1, true);
+multimapIteratorInit(keysB, &iter2, true);
 
-multimapDifferenceKeys(&difference, &iter1, &iter2, false);
+multimapDifferenceKeys(&difference, &iter1, &iter2, false); /* A - B */
 ```
 
 ### Copy Keys
 
 ```c
-/* Copy just the keys from source to destination */
-void multimapCopyKeys(multimap **restrict dst,
-                     const multimap *restrict src);
+void multimapCopyKeys(multimap **restrict dst, const multimap *restrict src);
+```
 
-/* Example */
+Effectively a union: every key of `src` is inserted into `dst`, so repeated
+calls accumulate.
+
+```c
 multimap *keysOnly = multimapNew(1);
 multimapCopyKeys(&keysOnly, sourceMap);
 ```
 
 ## Memory Management
 
-### Reset and Free
+```c
+void multimapReset(multimap *m);  /* drop all rows, keep the container */
+void multimapFree(multimap *m);   /* destroy; NULL-safe */
+```
+
+`multimapReset()` does not change the variant, but Full collapses back to a
+single empty submap so emptied submaps cannot keep stale metadata alive.
+`multimapFree(NULL)` is a no-op.
 
 ```c
-/* Clear all entries but keep structure */
-void multimapReset(multimap *m);
-
-/* Free entire multimap */
-void multimapFree(multimap *m);
-
-/* Example */
 multimap *m = multimapNew(2);
 /* ... use it ... */
-
-multimapReset(m);  /* Clear all data, keep allocated */
-/* ... reuse it ... */
-
-multimapFree(m);   /* Destroy completely */
+multimapReset(m);   /* reuse the container */
+multimapFree(m);    /* destroy */
 ```
+
+`multimapDump()` returns a freshly allocated `flex` containing every row
+concatenated; free it with `flexFree()`.
 
 ### Reference Containers (Advanced)
 
-The multimap family supports **reference containers** (`multimapAtom`) for automatic string deduplication and reference counting. See `MULTIMAP_ATOM.md` for details.
+`multimapAtom` interns byte strings into small integer references with
+reference counting. The `*WithReference` and `*WithSurrogateKey` entry points
+resolve those references during comparison so a multimap keyed by references
+still sorts by the underlying strings. See
+[VARIANTS.md](VARIANTS.md#multimapatom) for the full atom API.
 
 ## Performance Characteristics
 
-### Time Complexity
+`n` = rows in the searched submap, `M` = number of submaps in a Full.
 
-| Operation  | Small    | Medium   | Full                            |
-| ---------- | -------- | -------- | ------------------------------- |
-| Insert     | O(n)     | O(n)     | O(n) in largest map             |
-| Lookup     | O(log n) | O(log n) | O(log n) with map binary search |
-| Delete     | O(n)     | O(n)     | O(n) in specific map            |
-| Iteration  | O(n)     | O(n)     | O(n)                            |
-| First/Last | O(1)     | O(1)     | O(1)                            |
+| Operation      | Small                       | Medium              | Full                           |
+| -------------- | --------------------------- | ------------------- | ------------------------------ |
+| Lookup/Exists  | O(log n)                    | O(1) route + log n  | O(log M) route + O(log n)      |
+| Insert/Replace | O(log n) search + O(n) move | same, half the data | same, per-submap only          |
+| Delete         | O(log n) search + O(n) move | same                | same, per-submap only          |
+| Append         | = Insert                    | skips route         | skips route                    |
+| Iteration      | O(n)                        | O(n)                | O(n + M)                       |
+| First/Last     | O(1)                        | O(1)                | O(1)                           |
+| Trim (`<=`)    | one bulk delete             | one bulk delete     | submap drops + one bulk delete |
 
-### Space Complexity
+Binary search inside a submap is a real binary search: flex maintains a backward
+offset index, and each multimap tier caches the byte offset of the middle row as
+the search seed.
 
-| Variant | Fixed Overhead         | Per Entry | Max Recommended Size |
-| ------- | ---------------------- | --------- | -------------------- |
-| Small   | 16 bytes               | ~varies~  | < 2KB total          |
-| Medium  | 28 bytes               | ~varies~  | 2KB - 6KB total      |
-| Full    | 40+ bytes + N\*(8+4+8) | ~varies~  | Unlimited (TBs)      |
+### Space
+
+| Variant | Container | Per-submap metadata                                         | Growth trigger     |
+| ------- | --------- | ----------------------------------------------------------- | ------------------ |
+| Small   | 16 bytes  | none (1 flex)                                               | bytes > limit      |
+| Medium  | 28 bytes  | none (2 flex)                                               | bytes > limit \* 3 |
+| Full    | 48 bytes  | 8 (flex\*) + 4 (middle) + 16 (rangeBox, for submaps 1..N-1) | never              |
+
+Full's metadata lives in three `multiarray` containers, which add their own
+allocation overhead on top of the per-submap figures.
 
 ### Automatic Upgrade Thresholds
 
+As implemented in `multimapUpgradeIfNecessary_()`:
+
 ```c
-Small → Medium:  when bytes > limit AND count > elementsPerEntry * 2
-Medium → Full:   when bytes > limit * 3 AND count > elementsPerEntry * 2
+/* Small -> Medium */
+multimapSmallBytes(small) > flexOptimizationSizeLimit[limit] &&
+    multimapSmallCount(small) > (small->elementsPerEntry * 2)
+
+/* Medium -> Full */
+multimapMediumBytes(medium) > (flexOptimizationSizeLimit[limit] * 3) &&
+    flexCount(medium->map[0]) && flexCount(medium->map[1])
 ```
+
+The Small guard needs at least two complete rows so the split produces two
+non-empty halves. The Medium guard requires both submaps to be non-empty for the
+same reason. Thresholds are checked after every `Insert`, `InsertFullWidth`,
+`Append` and `InsertWithSurrogateKey`.
 
 ## Best Practices
 
-### 1. Choose Appropriate Size Limits
+### 1. Choose the size limit for your access pattern
 
 ```c
-/* Small, frequent updates - use smaller splits */
+/* Small rows, frequent random updates: smaller submaps mean smaller memmoves */
 multimap *hotCache = multimapNewLimit(2, FLEX_CAP_LEVEL_512);
 
-/* Large, bulk operations - use larger splits */
+/* Bulk load, mostly read: larger submaps mean fewer indirections */
 multimap *bulkData = multimapNewLimit(2, FLEX_CAP_LEVEL_4096);
 ```
 
-### 2. Use elementsPerEntry Wisely
+### 2. Keep rows narrow
 
 ```c
-/* Good: Natural column grouping */
-multimap *users = multimapNew(4);  /* ID, Name, Age, Email */
-
-/* Bad: Too many columns makes iteration slow */
-multimap *bad = multimapNew(100);  /* Hard to manage */
-
-/* Better: Split into multiple maps or use nested structures */
+/* Good: natural column grouping */
+multimap *users = multimapNew(4);  /* id, name, age, email */
 ```
 
-### 3. Leverage Set Mode for Uniqueness
+Every read API fills `elementsPerEntry` boxes, the `*Into` helpers stop at 16
+columns, and `multimapProcessUntil()` only has stack space for 16. Split wide
+rows across multiple multimaps rather than growing one.
+
+### 3. Pick map mode or set mode deliberately
 
 ```c
-/* Automatically prevents duplicate keys */
-multimap *uniqueUsers = multimapSetNew(2);
-
-databox key = databoxNewBytesString("alice");
-databox val1 = databoxNewSigned(1);
-const databox *e1[2] = {&key, &val1};
-multimapInsert(&uniqueUsers, e1);  /* Inserts */
-
-databox val2 = databoxNewSigned(2);
-const databox *e2[2] = {&key, &val2};
-bool replaced = multimapInsert(&uniqueUsers, e2);  /* Replaces */
-assert(replaced == true);
+multimap *byKey = multimapNew(2);      /* newest value per key wins */
+multimap *uniqueRows = multimapSetNew(2); /* no duplicate (key,value) pairs */
 ```
 
-### 4. Use Append When Possible
+### 4. Use Append only for non-decreasing keys
 
 ```c
-/* If inserting in sorted order, append is much faster */
-for (int i = 0; i < 10000; i++) {
-    databox k = databoxNewSigned(i);  /* Monotonically increasing */
+for (int64_t i = 0; i < 10000; i++) {
+    databox k = databoxNewSigned(i);
     databox v = databoxNewSigned(i * 2);
     const databox *e[2] = {&k, &v};
-    multimapAppend(&m, e);  /* O(1) append vs O(n) insert */
+    multimapAppend(&m, e);  /* skips the submap search */
+}
+```
+
+### 5. Copy byte values before mutating
+
+```c
+databox value;
+databox *results[1] = {&value};
+if (multimapLookup(m, &key, results)) {
+    char *owned = strndup((const char *)databoxCBytes(&value),
+                          databoxLen(&value));
+    multimapDelete(&m, &key);   /* 'value' is now dangling; 'owned' is not */
+    free(owned);
 }
 ```
 
 ## Common Patterns
 
-### Pattern 1: Dictionary/Hash Table Replacement
+### Pattern 1: Dictionary
 
 ```c
 multimap *dict = multimapNew(2);
 
-/* Insert */
 databox key = databoxNewBytesString("color");
 databox val = databoxNewBytesString("blue");
 const databox *kv[2] = {&key, &val};
 multimapInsert(&dict, kv);
 
-/* Lookup */
 databox result;
-databox *results[1] = {&result};
-if (multimapLookup(dict, &key, results)) {
-    /* Found! */
+if (multimapLookupInto(dict, &key, &result, 1)) {
+    databoxRepr(&result);
 }
 
-/* Delete */
 multimapDelete(&dict, &key);
 ```
 
-### Pattern 2: Time Series Storage
+### Pattern 2: Time Series
 
 ```c
 multimap *timeseries = multimapNew(2);  /* timestamp + value */
 
-/* Insert readings */
-for (int i = 0; i < 1000; i++) {
-    databox ts = databoxNewSigned(time(NULL) + i);
-    databox temp = databoxNewReal(20.0 + (rand() % 10));
+for (int64_t i = 0; i < 1000; i++) {
+    databox ts = databoxNewSigned(baseTimestamp + i);
+    databox temp = databoxNewReal(20.0 + (i % 10));
     const databox *reading[2] = {&ts, &temp};
-    multimapAppend(&timeseries, reading);
+    multimapAppend(&timeseries, reading);   /* timestamps only increase */
 }
 
-/* Query range: all readings from timestamp X onwards */
 databox startTime = databoxNewSigned(targetTimestamp);
 multimapIterator iter;
-multimapIteratorInitAt(timeseries, &iter, true, &startTime);
 
-databox ts, temp;
-databox *row[2] = {&ts, &temp};
-while (multimapIteratorNext(&iter, row)) {
-    printf("%ld: %.2f\n", ts.data.i64, temp.data.d64);
+if (multimapIteratorInitAt(timeseries, &iter, true, &startTime)) {
+    databox row[2];
+    while (multimapIteratorNextInto(&iter, row, 2)) {
+        printf("%" PRId64 ": %.2f\n", row[0].data.i64, row[1].data.d64);
+    }
 }
 ```
 
-### Pattern 3: Leaderboard/Ranking
+### Pattern 3: Leaderboard
+
+Scores repeat, so the store must allow duplicate keys: use full-width inserts
+and read the tail for the top entries.
 
 ```c
-/* Store: Score (key) + PlayerName (value) */
-/* Sorted automatically by score! */
+/* Row: score | playerName */
 multimap *leaderboard = multimapNew(2);
 
 databox score1 = databoxNewSigned(9500);
 databox player1 = databoxNewBytesString("Alice");
 const databox *entry1[2] = {&score1, &player1};
-multimapInsert(&leaderboard, entry1);
+multimapInsertFullWidth(&leaderboard, entry1);
 
 databox score2 = databoxNewSigned(8200);
 databox player2 = databoxNewBytesString("Bob");
 const databox *entry2[2] = {&score2, &player2};
-multimapInsert(&leaderboard, entry2);
+multimapInsertFullWidth(&leaderboard, entry2);
 
-/* Get top scorer */
-databox topScore, topPlayer;
-databox *top[2] = {&topScore, &topPlayer};
-if (multimapLast(leaderboard, top)) {
-    printf("Top player: %s with %ld points\n",
-           databoxCBytes(&topPlayer), topScore.data.i64);
+databox top[2];
+if (multimapLastInto(leaderboard, top, 2)) {
+    printf("Top player: %.*s with %" PRId64 " points\n",
+           (int)databoxLen(&top[1]), (const char *)databoxCBytes(&top[1]),
+           top[0].data.i64);
 }
 
-/* Iterate from highest to lowest */
 multimapIterator iter;
-multimapIteratorInit(leaderboard, &iter, false);  /* Reverse */
-while (multimapIteratorNext(&iter, top)) {
-    printf("%ld: %s\n", topScore.data.i64,
-           databoxCBytes(&topPlayer));
+multimapIteratorInit(leaderboard, &iter, false);  /* highest first */
+
+databox row[2];
+while (multimapIteratorNextInto(&iter, row, 2)) {
+    printf("%" PRId64 ": %.*s\n", row[0].data.i64,
+           (int)databoxLen(&row[1]), (const char *)databoxCBytes(&row[1]));
 }
 ```
 
-### Pattern 4: Multi-Column Database Table
+### Pattern 4: Multi-Column Table
 
 ```c
-/* Table: UserID | Name | Age | Status */
+/* Table: UserID | Name | Age | Active */
 multimap *users = multimapNew(4);
 
-/* Insert row */
 databox uid = databoxNewSigned(1001);
 databox name = databoxNewBytesString("Charlie");
 databox age = databoxNewSigned(30);
@@ -785,21 +992,21 @@ databox status = databoxBool(true);
 const databox *row[4] = {&uid, &name, &age, &status};
 multimapInsert(&users, row);
 
-/* Query row */
-databox foundName, foundAge, foundStatus;
-databox *cols[3] = {&foundName, &foundAge, &foundStatus};
-if (multimapLookup(users, &uid, cols)) {
-    printf("User %ld: %s, age %ld, active: %s\n",
+databox cols[3];   /* 4 columns - 1 key */
+if (multimapLookupInto(users, &uid, cols, 3)) {
+    printf("User %" PRId64 ": %.*s, age %" PRId64 ", active: %s\n",
            uid.data.i64,
-           databoxCBytes(&foundName),
-           foundAge.data.i64,
-           DATABOX_IS_TRUE(&foundStatus) ? "yes" : "no");
+           (int)databoxLen(&cols[0]), (const char *)databoxCBytes(&cols[0]),
+           cols[1].data.i64,
+           DATABOX_IS_TRUE(&cols[2]) ? "yes" : "no");
 }
 ```
 
 ## Thread Safety
 
-multimap is **not thread-safe** by default. For concurrent access, use external synchronization:
+multimap is **not thread-safe**. Every mutating call may reallocate both the
+flex payload and the container struct, so readers must be excluded during
+writes:
 
 ```c
 pthread_rwlock_t lock = PTHREAD_RWLOCK_INITIALIZER;
@@ -816,28 +1023,33 @@ multimapInsert(&shared, elements);
 pthread_rwlock_unlock(&lock);
 ```
 
+Borrowed byte values read under the read lock must be copied before the lock is
+released.
+
 ## See Also
 
-- [VARIANTS.md](VARIANTS.md) - Detailed comparison of Small/Medium/Full variants
-- [EXAMPLES.md](EXAMPLES.md) - Real-world usage examples
-- [databox](../core/DATABOX.md) - Universal container used for all values
-- [flex](../flex/FLEX.md) - Underlying storage for multimap variants
-- [multimapAtom](MULTIMAP_ATOM.md) - Reference counting and string interning
+- [VARIANTS.md](VARIANTS.md) - Small/Medium/Full internals and the atom API
+- [EXAMPLES.md](EXAMPLES.md) - Worked multimap programs
+- [databox](../core/DATABOX.md) - Universal value container
+- [flex](../flex/FLEX.md) - Underlying sorted byte-packed storage
+- [multiarray](../multiarray/MULTIARRAY.md) - Dynamic arrays behind Full
 
 ## Testing
 
-Run the multimap test suite:
-
 ```bash
 ./src/datakit-test test multimap
+./src/datakit-test test multimapMedium
+./src/datakit-test test multimapFull
+./src/datakit-test test multimapAtom   # alias: atom
 ```
 
-The test suite includes:
+The multimap suite covers:
 
-- Small → Medium → Full automatic transitions
-- Insertion, lookup, deletion across all variants
-- Full-width operations
-- Iteration forward and reverse
-- Field increment operations
-- Predicate-based operations
-- Performance benchmarks at different scale limits
+- Small -> Medium -> Full automatic transitions
+- Insert, lookup and delete across all three variants
+- Map/set/full-width insert semantics
+- Forward and reverse iteration
+- Field increment, including the missing-key and boolean cases
+- Sorted-prefix trim via `multimapDeleteByPredicate()`
+- `multimapVerify()` invariant checks (cached middles and Full rangeBoxes)
+  after mutations

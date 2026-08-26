@@ -555,6 +555,15 @@ bool timerWheelUnregister(timerWheel *tw, timerWheelId id) {
 }
 
 bool timerWheelStopAll(timerWheel *tw) {
+    /* Individual unregisters may have named already-fired ids, which
+     * inflates cancelledPending until reconciled - reconcile first so
+     * the cancellation billing below counts exactly the LIVE timers
+     * this call stops.  Mid-callback the walk is unsafe (detached
+     * slot); the counter is billed as-is in that rare case. */
+    if (tw->cancelsMaybeStale && tw->context != TIMER_WHEEL_CONTEXT_TIMER) {
+        timerWheelReconcileCancellations(tw);
+    }
+
     tw->stats.totalCancellations += timerWheelCount(tw);
     tw->nextExpiryCacheValid = false;
 
@@ -802,8 +811,15 @@ static void processSlot(timerWheel *tw, flex **slot,
                 tw->timerCount++;
             }
         } else {
-            /* Timer not ready yet - re-insert into appropriate location */
-            scheduleTimerEntry(tw, &e, e.expireTimeUs - currentTime);
+            /* Timer not ready yet - re-insert into appropriate location.
+             * The delay must be measured from the WHEEL's clock
+             * (tw->currentTimeUs, which lags 'currentTime' during
+             * catch-up), because getSlotIndex computes the slot offset
+             * from that same clock: a mixed-base delay can select a
+             * level whose span the wheel-clock offset then overflows,
+             * wrapping the timer into an already-passed slot (a full
+             * revolution late).  cascadeWheel uses the same base. */
+            scheduleTimerEntry(tw, &e, e.expireTimeUs - tw->currentTimeUs);
         }
     }
 
@@ -1125,23 +1141,27 @@ void timerWheelAdvanceTime(timerWheel *tw, timerWheelDurationUs microseconds) {
  * Timer Queries
  * ==================================================================== */
 
-/* Earliest expiry among all timer entries in a slot flex. Slots are
- * append-only (registration is the latency-critical path and firing
+/* Earliest expiry among all LIVE timer entries in a slot flex. Slots
+ * are append-only (registration is the latency-critical path and firing
  * visits every entry regardless of order), so this query-side scan is
  * where the unsortedness is paid for - and it runs at most once per
- * process cycle thanks to the next-expiry cache. */
-static timerWheelAdjustedUs flexMinExpiry(const flex *f) {
+ * process cycle thanks to the next-expiry cache.  Tombstoned
+ * (cancelled-but-unreclaimed) entries are skipped so the reported next
+ * event is a time at which something actually fires; the id check only
+ * runs while cancellations are pending. */
+static timerWheelAdjustedUs flexMinExpiry(const timerWheel *tw, const flex *f) {
     timerWheelAdjustedUs earliest = UINT64_MAX;
+    const bool checkCancelled = tw->cancelledPending > 0;
 
     for (flexEntry *fe = flexHeadIfAny(f); fe;) {
-        databox box;
-        flexGetByType(fe, &box);
-        if (box.data.u64 < earliest) {
-            earliest = box.data.u64;
+        timerWheelEntry e;
+        fe = readTimerEntry(f, fe, &e);
+        if (checkCancelled && isTimerCancelled(tw, e.id)) {
+            continue;
         }
 
-        for (int j = 0; j < ELEMENTS_PER_TIMER && fe; j++) {
-            fe = flexNext(f, fe);
+        if (e.expireTimeUs < earliest) {
+            earliest = e.expireTimeUs;
         }
     }
 
@@ -1159,7 +1179,7 @@ timerWheelSystemMonotonicUs timerWheelNextTimerEventStartUs(timerWheel *tw) {
     /* Pending is unsorted and may hold anything from overdue timers to
      * far-future ones registered inside callbacks - scan all of it */
     if (tw->pendingTimers && flexCount(tw->pendingTimers) > 0) {
-        earliest = flexMinExpiry(tw->pendingTimers);
+        earliest = flexMinExpiry(tw, tw->pendingTimers);
     }
 
     /* Check wheel 0 first (most likely to have nearest timer). The
@@ -1167,7 +1187,7 @@ timerWheelSystemMonotonicUs timerWheelNextTimerEventStartUs(timerWheel *tw) {
     const uint32_t w0Dist = wheel0OccupiedDistance(tw, tw->slotIndex[0]);
     if (w0Dist < WHEEL0_SIZE) {
         const uint32_t idx = (tw->slotIndex[0] + w0Dist) & WHEEL0_MASK;
-        const timerWheelAdjustedUs slotMin = flexMinExpiry(tw->wheel0[idx]);
+        const timerWheelAdjustedUs slotMin = flexMinExpiry(tw, tw->wheel0[idx]);
         if (slotMin < earliest) {
             earliest = slotMin;
         }
@@ -1182,7 +1202,7 @@ timerWheelSystemMonotonicUs timerWheelNextTimerEventStartUs(timerWheel *tw) {
             const uint32_t idx = (tw->slotIndex[level] + i) & (size - 1);
             flex **slot = getSlot(tw, level, idx);
             if (*slot && flexCount(*slot) > 0) {
-                const timerWheelAdjustedUs slotMin = flexMinExpiry(*slot);
+                const timerWheelAdjustedUs slotMin = flexMinExpiry(tw, *slot);
                 if (slotMin < earliest) {
                     earliest = slotMin;
                 }

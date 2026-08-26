@@ -1,120 +1,122 @@
-# multiarray Real-World Examples
+# multiarray Worked Examples
 
 ## Overview
 
-This guide demonstrates practical applications of the multiarray family through real-world examples. Each example includes complete, working code that you can adapt to your own projects.
+These walkthroughs go deep on multiarray specifics: which entry point to use,
+what each tier's struct fields actually mean, and how to iterate a chunked tier
+without paying O(K) per element. For generic container recipes that are not
+multiarray-specific, see the cross-module guides under `docs/examples/`.
 
-## Example 1: Time-Series Data Buffer
+Two module facts shape almost every example below:
 
-A circular-style buffer for storing recent time-series measurements with automatic growth.
+- **multiarray does not track a total element count.** `multiarrayCount()` and
+  `multiarrayBytes()` are compiled out behind `#if 0` in `multiarray.c`. Every
+  example keeps its own counter.
+- **Struct fields need the internal headers.** `multiarray.h` transitively
+  exposes `multiarraySmall` and `multiarrayMedium`; reaching into a
+  `multiarrayLarge` needs an explicit `#include "multiarrayLargeInternal.h"`.
+
+## Example 1: Bounded Time-Series Buffer (container API)
+
+A capped append-and-evict buffer over the tag-dispatching container API. The
+buffer owns the element count because the container does not.
 
 ```c
 #include "multiarray.h"
+
+#include <inttypes.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <time.h>
 
 typedef struct Measurement {
-    time_t timestamp;
+    int64_t timestamp;
     double value;
-    uint32_t sensor_id;
+    uint32_t sensorId;
 } Measurement;
 
 typedef struct TimeSeriesBuffer {
     multiarray *data;
-    size_t maxSize;
+    uint32_t count;   /* multiarray does not track this for us */
+    uint32_t maxSize;
 } TimeSeriesBuffer;
 
-TimeSeriesBuffer *tsBufferNew(size_t maxSize) {
-    TimeSeriesBuffer *buf = malloc(sizeof(*buf));
-    buf->data = multiarrayNew(sizeof(Measurement), 1024);
+TimeSeriesBuffer *tsBufferNew(uint32_t maxSize) {
+    TimeSeriesBuffer *buf = zcalloc(1, sizeof(*buf));
+
+    /* rowMax is the per-node element capacity, not a total capacity. */
+    buf->data = multiarrayNew(sizeof(Measurement), 512);
     buf->maxSize = maxSize;
     return buf;
 }
 
-void tsBufferAppend(TimeSeriesBuffer *buf, uint32_t sensor_id, double value) {
-    size_t count = multiarrayCount(buf->data);
-
-    /* Evict oldest if at capacity */
-    if (count >= buf->maxSize) {
+void tsBufferAppend(TimeSeriesBuffer *buf, uint32_t sensorId, double value) {
+    /* Evict the oldest element first so we stay at maxSize. */
+    if (buf->count >= buf->maxSize) {
         multiarrayDelete(&buf->data, 0);
-        count--;
+        buf->count--;
     }
 
-    /* Append new measurement */
-    Measurement m = {
-        .timestamp = time(NULL),
-        .value = value,
-        .sensor_id = sensor_id
-    };
+    /* Not const: multiarrayInsert() takes a non-const void *. */
+    Measurement m = {.timestamp = (int64_t)time(NULL),
+                     .value = value,
+                     .sensorId = sensorId};
 
-    multiarrayInsertAfter(&buf->data, count > 0 ? count - 1 : 0, &m);
+    /* idx is the position the new element will occupy, so count == append. */
+    multiarrayInsert(&buf->data, buf->count, &m);
+    buf->count++;
 }
 
-Measurement *tsBufferGetRecent(TimeSeriesBuffer *buf, size_t n) {
-    size_t count = multiarrayCount(buf->data);
-    if (n >= count) {
+const Measurement *tsBufferRecent(const TimeSeriesBuffer *buf, uint32_t back) {
+    if (back >= buf->count) {
         return NULL;
     }
 
-    return (Measurement *)multiarrayGet(buf->data, count - 1 - n);
-}
-
-void tsBufferQueryRange(TimeSeriesBuffer *buf, time_t start, time_t end,
-                        Measurement **results, size_t *count) {
-    size_t total = multiarrayCount(buf->data);
-    Measurement *tmp = malloc(sizeof(Measurement) * total);
-    size_t found = 0;
-
-    for (size_t i = 0; i < total; i++) {
-        Measurement *m = (Measurement *)multiarrayGet(buf->data, i);
-        if (m->timestamp >= start && m->timestamp <= end) {
-            tmp[found++] = *m;
-        }
-    }
-
-    *results = realloc(tmp, sizeof(Measurement) * found);
-    *count = found;
+    return (const Measurement *)multiarrayGet(buf->data,
+                                              buf->count - 1 - back);
 }
 
 void tsBufferFree(TimeSeriesBuffer *buf) {
     if (buf) {
-        /* Note: multiarray variants must be freed based on type */
-        free(buf);
+        multiarrayFree(buf->data); /* handles Small, Medium, and Large */
+        zfree(buf);
     }
 }
 
-/* Usage */
 void exampleTimeSeriesBuffer(void) {
     TimeSeriesBuffer *buf = tsBufferNew(10000);
 
-    /* Record measurements */
-    for (int i = 0; i < 50000; i++) {
-        double value = 20.0 + (rand() % 100) / 10.0;
-        tsBufferAppend(buf, i % 5, value);
+    for (uint32_t i = 0; i < 50000; i++) {
+        tsBufferAppend(buf, i % 5, 20.0 + (double)(i % 100) / 10.0);
     }
 
-    /* Get most recent */
-    Measurement *recent = tsBufferGetRecent(buf, 0);
-    printf("Most recent: sensor=%u, value=%.2f\n",
-           recent->sensor_id, recent->value);
-
-    /* Query time range */
-    time_t now = time(NULL);
-    Measurement *results;
-    size_t count;
-    tsBufferQueryRange(buf, now - 3600, now, &results, &count);
-    printf("Last hour: %zu measurements\n", count);
-    free(results);
+    const Measurement *recent = tsBufferRecent(buf, 0);
+    printf("most recent: sensor=%" PRIu32 " value=%.2f ts=%" PRId64 "\n",
+           recent->sensorId, recent->value, recent->timestamp);
 
     tsBufferFree(buf);
 }
 ```
 
-## Example 2: Dynamic Vertex Buffer for Graphics
+**What to notice.** `multiarrayInsert()` and `multiarrayDelete()` take
+`multiarray **` because the insert path may replace the pointer with a promoted
+container. Storing the `multiarray *` inside a struct and passing
+`&buf->data` is exactly right; passing a local copy would lose the promotion.
 
-A growing vertex buffer that automatically scales for 3D graphics applications.
+Head deletion is the expensive direction in every tier (Small memmoves the whole
+array; Medium and Large memmove within the head node and eventually free it).
+Evicting in batches rather than one per append cuts that cost.
+
+## Example 2: Vertex Buffer (Native macro API)
+
+The Native API has no container struct: it is a raw typed array plus your own
+count, promoted to Medium at `rowMax`.
 
 ```c
 #include "multiarray.h"
+
+#include <inttypes.h>
+#include <stdio.h>
 
 typedef struct Vertex {
     float position[3];
@@ -124,94 +126,96 @@ typedef struct Vertex {
 } Vertex;
 
 typedef struct VertexBuffer {
-    Vertex *vertices;
-    int count;
-    int capacity;
+    /* Must be multiarray *, NOT Vertex *: multiarrayNativeInsert() assigns a
+     * promoted container back into this variable once it outgrows Native. */
+    multiarray *vertices;
+    int32_t count;
+    int32_t rowMax;
 } VertexBuffer;
 
 VertexBuffer *vertexBufferNew(void) {
-    VertexBuffer *vb = malloc(sizeof(*vb));
-    vb->vertices = multiarrayNativeNew(vb->vertices[1024]);
+    VertexBuffer *vb = zcalloc(1, sizeof(*vb));
+
+    /* Takes the element TYPE and allocates room for exactly one element. */
+    vb->vertices = multiarrayNativeNew(Vertex);
     vb->count = 0;
-    vb->capacity = 1024;
+    vb->rowMax = 1024;
     return vb;
 }
 
-void vertexBufferAddVertex(VertexBuffer *vb, const Vertex *v) {
-    multiarrayNativeInsert(vb->vertices, Vertex, vb->capacity,
-                          vb->count, vb->count, v);
-    /* Automatically upgrades to Medium if capacity exceeded */
+void vertexBufferAdd(VertexBuffer *vb, const Vertex *v) {
+    /* Appends at index vb->count and increments vb->count for us. */
+    multiarrayNativeInsert(vb->vertices, Vertex, vb->rowMax, vb->count,
+                           vb->count, v);
 }
 
-void vertexBufferAddTriangle(VertexBuffer *vb,
-                            const Vertex *v0,
-                            const Vertex *v1,
-                            const Vertex *v2) {
-    vertexBufferAddVertex(vb, v0);
-    vertexBufferAddVertex(vb, v1);
-    vertexBufferAddVertex(vb, v2);
+void vertexBufferAddTriangle(VertexBuffer *vb, const Vertex *v0,
+                             const Vertex *v1, const Vertex *v2) {
+    vertexBufferAdd(vb, v0);
+    vertexBufferAdd(vb, v1);
+    vertexBufferAdd(vb, v2);
 }
 
-void vertexBufferAddQuad(VertexBuffer *vb,
-                        const Vertex *v0,
-                        const Vertex *v1,
-                        const Vertex *v2,
-                        const Vertex *v3) {
-    /* Two triangles */
-    vertexBufferAddTriangle(vb, v0, v1, v2);
-    vertexBufferAddTriangle(vb, v0, v2, v3);
-}
-
-Vertex *vertexBufferGetVertex(VertexBuffer *vb, int index) {
-    Vertex *v;
+Vertex *vertexBufferGet(VertexBuffer *vb, int32_t index) {
+    /* The Get macros are statements that write into a result variable. */
+    Vertex *v = NULL;
     multiarrayNativeGet(vb->vertices, Vertex, v, index);
     return v;
 }
 
-void vertexBufferGenerateCube(VertexBuffer *vb, float size) {
-    float h = size / 2.0f;
-
-    /* Front face */
-    Vertex v0 = {{-h, -h,  h}, {0, 0, 1}, {0, 0}, 0xFFFFFFFF};
-    Vertex v1 = {{ h, -h,  h}, {0, 0, 1}, {1, 0}, 0xFFFFFFFF};
-    Vertex v2 = {{ h,  h,  h}, {0, 0, 1}, {1, 1}, 0xFFFFFFFF};
-    Vertex v3 = {{-h,  h,  h}, {0, 0, 1}, {0, 1}, 0xFFFFFFFF};
-    vertexBufferAddQuad(vb, &v0, &v1, &v2, &v3);
-
-    /* Add remaining 5 faces... */
-    /* (back, left, right, top, bottom) */
-}
-
 void vertexBufferFree(VertexBuffer *vb) {
     if (vb) {
+        /* Dispatches on the tag: Native, Medium, or Large. */
         multiarrayNativeFree(vb->vertices);
-        free(vb);
+        zfree(vb);
     }
 }
 
-/* Usage */
 void exampleVertexBuffer(void) {
     VertexBuffer *vb = vertexBufferNew();
 
-    /* Generate geometry */
-    for (int i = 0; i < 100; i++) {
-        vertexBufferGenerateCube(vb, 1.0f + i * 0.1f);
+    const Vertex v0 = {{-1, -1, 1}, {0, 0, 1}, {0, 0}, 0xFFFFFFFF};
+    const Vertex v1 = {{1, -1, 1}, {0, 0, 1}, {1, 0}, 0xFFFFFFFF};
+    const Vertex v2 = {{1, 1, 1}, {0, 0, 1}, {1, 1}, 0xFFFFFFFF};
+
+    for (int32_t i = 0; i < 2000; i++) {
+        vertexBufferAddTriangle(vb, &v0, &v1, &v2);
     }
 
-    printf("Total vertices: %d\n", vb->count);
-    printf("Bytes used: %zu\n", multiarrayBytes((multiarray *)vb->vertices));
+    const Vertex *v = vertexBufferGet(vb, 3000);
+    printf("vertex 3000 color: 0x%08" PRIx32 "\n", v->color);
+    printf("total vertices: %" PRId32 "\n", vb->count);
 
     vertexBufferFree(vb);
 }
 ```
 
-## Example 3: Event Log with Filtering
+**Native cost model.** While the array is still Native, every insert is a
+`zrealloc()` to exactly `count + 1` elements — there is no geometric
+overallocation. For an append-heavy loop that is one allocator round trip per
+element. If that matters, either pick a small `rowMax` so the array reaches
+Medium quickly, or use the container API, whose Small tier has the same
+exact-fit behavior but whose Medium tier appends inside a node.
 
-An event logging system that stores events and allows filtering by type and time.
+**Do not** write `multiarrayNativeNew(arr[1024])` expecting 1024 elements of
+capacity. The macro is `zcalloc(1, sizeof(what))`, so an array-subscript
+expression just yields one element's width.
+
+## Example 3: Event Log (Small tier directly)
+
+When the working set genuinely stays small, use `multiarraySmall` directly and
+keep true O(1) indexing. A standalone Small never promotes — only the container
+API's `multiarrayInsert()` runs the upgrade check — so this is a deliberate
+"stay flat" choice.
 
 ```c
-#include "multiarray.h"
+#include "multiarraySmall.h"
+#include "multiarraySmallInternal.h" /* needed for ->count and ->data */
+
+#include <inttypes.h>
+#include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 typedef enum EventType {
     EVENT_INFO,
@@ -221,9 +225,9 @@ typedef enum EventType {
 } EventType;
 
 typedef struct Event {
-    time_t timestamp;
-    EventType type;
-    uint32_t source_id;
+    int64_t timestamp;
+    uint32_t type;
+    uint32_t sourceId;
     char message[128];
 } Event;
 
@@ -232,102 +236,88 @@ typedef struct EventLog {
 } EventLog;
 
 EventLog *eventLogNew(void) {
-    EventLog *log = malloc(sizeof(*log));
+    EventLog *log = zcalloc(1, sizeof(*log));
+
+    /* rowMax is unused by a standalone Small; it only matters when the
+     * container API upgrades one. */
     log->events = multiarraySmallNew(sizeof(Event), 2048);
     return log;
 }
 
-void eventLogAdd(EventLog *log, EventType type, uint32_t source_id,
-                const char *message) {
-    Event e = {
-        .timestamp = time(NULL),
-        .type = type,
-        .source_id = source_id
-    };
+void eventLogAdd(EventLog *log, EventType type, uint32_t sourceId,
+                 const char *message) {
+    Event e = {.timestamp = (int64_t)time(NULL),
+               .type = (uint32_t)type,
+               .sourceId = sourceId};
     strncpy(e.message, message, sizeof(e.message) - 1);
 
+    /* Appending at ->count is the cheap direction: no memmove. */
     multiarraySmallInsert(log->events, log->events->count, &e);
 }
 
-void eventLogInfo(EventLog *log, uint32_t source_id, const char *msg) {
-    eventLogAdd(log, EVENT_INFO, source_id, msg);
+void eventLogPrint(const EventLog *log) {
+    static const char *typeNames[] = {"INFO", "WARN", "ERROR", "DEBUG"};
+
+    for (uint16_t i = 0; i < log->events->count; i++) {
+        /* multiarraySmallGet() returns uint8_t *; cast it. */
+        const Event *e = (const Event *)multiarraySmallGet(log->events, i);
+        printf("[%s] source %" PRIu32 " @ %" PRId64 ": %s\n",
+               typeNames[e->type], e->sourceId, e->timestamp, e->message);
+    }
 }
 
-void eventLogWarning(EventLog *log, uint32_t source_id, const char *msg) {
-    eventLogAdd(log, EVENT_WARNING, source_id, msg);
-}
+uint32_t eventLogCountOfType(const EventLog *log, EventType type) {
+    uint32_t found = 0;
 
-void eventLogError(EventLog *log, uint32_t source_id, const char *msg) {
-    eventLogAdd(log, EVENT_ERROR, source_id, msg);
-}
-
-void eventLogFilter(EventLog *log, EventType type, Event **results, size_t *count) {
-    Event *tmp = malloc(sizeof(Event) * log->events->count);
-    size_t found = 0;
-
-    for (size_t i = 0; i < log->events->count; i++) {
-        Event *e = (Event *)multiarraySmallGet(log->events, i);
-        if (e->type == type) {
-            tmp[found++] = *e;
+    for (uint16_t i = 0; i < log->events->count; i++) {
+        const Event *e = (const Event *)multiarraySmallGet(log->events, i);
+        if (e->type == (uint32_t)type) {
+            found++;
         }
     }
 
-    *results = realloc(tmp, sizeof(Event) * found);
-    *count = found;
-}
-
-void eventLogPrint(EventLog *log) {
-    const char *typeNames[] = {"INFO", "WARN", "ERROR", "DEBUG"};
-
-    for (size_t i = 0; i < log->events->count; i++) {
-        Event *e = (Event *)multiarraySmallGet(log->events, i);
-        printf("[%s] Source %u: %s\n", typeNames[e->type],
-               e->source_id, e->message);
-    }
+    return found;
 }
 
 void eventLogFree(EventLog *log) {
     if (log) {
         multiarraySmallFree(log->events);
-        free(log);
+        zfree(log);
     }
 }
 
-/* Usage */
 void exampleEventLog(void) {
     EventLog *log = eventLogNew();
 
-    /* Log events */
-    eventLogInfo(log, 1, "System started");
-    eventLogInfo(log, 2, "Connection established");
-    eventLogWarning(log, 1, "High memory usage");
-    eventLogError(log, 3, "Connection lost");
-    eventLogInfo(log, 2, "Reconnecting...");
+    eventLogAdd(log, EVENT_INFO, 1, "system started");
+    eventLogAdd(log, EVENT_INFO, 2, "connection established");
+    eventLogAdd(log, EVENT_WARNING, 1, "high memory usage");
+    eventLogAdd(log, EVENT_ERROR, 3, "connection lost");
 
-    /* Print all events */
-    printf("All events:\n");
     eventLogPrint(log);
-
-    /* Filter errors */
-    Event *errors;
-    size_t errorCount;
-    eventLogFilter(log, EVENT_ERROR, &errors, &errorCount);
-    printf("\nErrors: %zu\n", errorCount);
-    for (size_t i = 0; i < errorCount; i++) {
-        printf("  %s\n", errors[i].message);
-    }
-    free(errors);
+    printf("errors: %" PRIu32 "\n", eventLogCountOfType(log, EVENT_ERROR));
 
     eventLogFree(log);
 }
 ```
 
-## Example 4: Particle System
+**Bounds.** `multiarraySmall.count` is a `uint16_t` and
+`multiarraySmallInsert()` takes a `uint16_t idx`, so a standalone Small holds at
+most 65535 elements. It also asserts `idx <= mar->count` on insert and
+`idx < mar->count` with `count > 0` on delete — deleting from an empty Small is
+a caller bug, not a no-op.
 
-A dynamic particle system that efficiently manages thousands of particles.
+## Example 4: Particle System (Medium tier, node-aware)
+
+This is the case where reading the Medium struct pays off: physics runs over
+every element, so iterate node by node instead of calling `Get()` per index.
 
 ```c
-#include "multiarray.h"
+#include "multiarrayMedium.h"
+#include "multiarrayMediumInternal.h" /* needed for ->node, ->count, ->len */
+
+#include <inttypes.h>
+#include <stdio.h>
 
 typedef struct Particle {
     float position[3];
@@ -338,120 +328,122 @@ typedef struct Particle {
 
 typedef struct ParticleSystem {
     multiarrayMedium *particles;
+    uint32_t count;  /* ELEMENTS; particles->count is NODES */
     float gravity[3];
 } ParticleSystem;
 
 ParticleSystem *particleSystemNew(void) {
-    ParticleSystem *ps = malloc(sizeof(*ps));
+    ParticleSystem *ps = zcalloc(1, sizeof(*ps));
+
     ps->particles = multiarrayMediumNew(sizeof(Particle), 512);
-    ps->gravity[0] = 0.0f;
     ps->gravity[1] = -9.8f;
-    ps->gravity[2] = 0.0f;
     return ps;
 }
 
-void particleSystemEmit(ParticleSystem *ps, float pos[3], float vel[3]) {
-    Particle p = {
-        .position = {pos[0], pos[1], pos[2]},
-        .velocity = {vel[0], vel[1], vel[2]},
-        .life = 1.0f,
-        .color = 0xFFFFFFFF
-    };
+void particleSystemEmit(ParticleSystem *ps, const float pos[3],
+                        const float vel[3]) {
+    Particle p = {.life = 1.0f, .color = 0xFFFFFFFF};
 
-    /* Insert at end */
-    size_t count = 0;
-    for (uint32_t i = 0; i < ps->particles->count; i++) {
-        count += ps->particles->node[i].count;
+    for (uint32_t i = 0; i < 3; i++) {
+        p.position[i] = pos[i];
+        p.velocity[i] = vel[i];
     }
 
-    multiarrayMediumInsert(ps->particles, count, &p);
+    /* Appending at the element count is the cheap position. */
+    multiarrayMediumInsert(ps->particles, (int32_t)ps->count, &p);
+    ps->count++;
 }
 
+/* Advance physics with a single linear pass over the node arrays.
+ * Dead particles are collected as global indexes and deleted afterwards,
+ * highest index first, so earlier deletions never shift a pending index and
+ * node-array reallocation never invalidates a live node pointer. */
 void particleSystemUpdate(ParticleSystem *ps, float deltaTime) {
-    /* Iterate through all nodes */
+    uint32_t *dead = zmalloc(ps->count * sizeof(*dead));
+    uint32_t deadCount = 0;
+    uint32_t globalIdx = 0;
+
     for (uint32_t nodeIdx = 0; nodeIdx < ps->particles->count; nodeIdx++) {
         multiarrayMediumNode *node = &ps->particles->node[nodeIdx];
 
-        /* Process particles in this node */
-        for (uint16_t i = 0; i < node->count; ) {
-            Particle *p = (Particle *)(node->data + i * ps->particles->len);
+        for (uint16_t i = 0; i < node->count; i++) {
+            Particle *p =
+                (Particle *)(node->data + (size_t)i * ps->particles->len);
 
-            /* Update physics */
-            p->velocity[0] += ps->gravity[0] * deltaTime;
-            p->velocity[1] += ps->gravity[1] * deltaTime;
-            p->velocity[2] += ps->gravity[2] * deltaTime;
-
-            p->position[0] += p->velocity[0] * deltaTime;
-            p->position[1] += p->velocity[1] * deltaTime;
-            p->position[2] += p->velocity[2] * deltaTime;
-
-            /* Age particle */
-            p->life -= deltaTime;
-
-            /* Remove dead particles */
-            if (p->life <= 0.0f) {
-                /* Calculate global index */
-                size_t globalIdx = 0;
-                for (uint32_t j = 0; j < nodeIdx; j++) {
-                    globalIdx += ps->particles->node[j].count;
-                }
-                globalIdx += i;
-
-                multiarrayMediumDelete(ps->particles, globalIdx);
-                /* Don't increment i - next particle shifted down */
-            } else {
-                i++;
+            for (uint32_t axis = 0; axis < 3; axis++) {
+                p->velocity[axis] += ps->gravity[axis] * deltaTime;
+                p->position[axis] += p->velocity[axis] * deltaTime;
             }
+
+            p->life -= deltaTime;
+            if (p->life <= 0.0f) {
+                dead[deadCount++] = globalIdx;
+            }
+
+            globalIdx++;
         }
     }
-}
 
-size_t particleSystemCount(ParticleSystem *ps) {
-    size_t count = 0;
-    for (uint32_t i = 0; i < ps->particles->count; i++) {
-        count += ps->particles->node[i].count;
+    while (deadCount > 0) {
+        deadCount--;
+        multiarrayMediumDelete(ps->particles, (int32_t)dead[deadCount]);
+        ps->count--;
     }
-    return count;
+
+    zfree(dead);
 }
 
 void particleSystemFree(ParticleSystem *ps) {
     if (ps) {
         multiarrayMediumFree(ps->particles);
-        free(ps);
+        zfree(ps);
     }
 }
 
-/* Usage */
 void exampleParticleSystem(void) {
     ParticleSystem *ps = particleSystemNew();
 
-    /* Emit particles */
-    for (int i = 0; i < 1000; i++) {
-        float pos[3] = {0.0f, 10.0f, 0.0f};
-        float vel[3] = {
-            (rand() / (float)RAND_MAX - 0.5f) * 2.0f,
-            (rand() / (float)RAND_MAX) * 5.0f,
-            (rand() / (float)RAND_MAX - 0.5f) * 2.0f
-        };
+    for (int32_t i = 0; i < 1000; i++) {
+        const float pos[3] = {0.0f, 10.0f, 0.0f};
+        const float vel[3] = {(float)(i % 7) - 3.0f, (float)(i % 5),
+                              (float)(i % 3) - 1.0f};
         particleSystemEmit(ps, pos, vel);
     }
 
-    /* Simulate */
-    for (int frame = 0; frame < 100; frame++) {
+    for (int32_t frame = 0; frame < 100; frame++) {
         particleSystemUpdate(ps, 1.0f / 60.0f);
-        printf("Frame %d: %zu particles\n", frame, particleSystemCount(ps));
+        printf("frame %" PRId32 ": %" PRIu32 " particles (%" PRIu32
+               " nodes)\n",
+               frame, ps->count, ps->particles->count);
     }
 
     particleSystemFree(ps);
 }
 ```
 
-## Example 5: Sorted Index with Binary Search
+**Why the deferred deletion.** `multiarrayMediumDelete()` can free a node whose
+element count reaches zero, which calls `multiarraySmallDirectDelete()` on
+`mar->node` — that reallocs the node array and memmoves the nodes after it. Any
+`multiarrayMediumNode *` you were holding is invalid afterwards. Collecting
+indexes during the read pass and deleting in descending order after it avoids
+both the dangling node pointer and the index-shifting problem.
 
-A sorted array that maintains order and supports binary search.
+**Why `ps->count` exists separately.** `ps->particles->count` is the number of
+**nodes**, not particles. Confusing the two is the most common Medium bug.
+
+## Example 5: Sorted Index with Binary Search (Small tier)
+
+Binary search needs O(1) indexing, which only Native and Small provide — in
+Medium and Large every probe costs an O(K) node walk, turning a
+`log(n)`-probe search into `log(n) * K` work.
 
 ```c
-#include "multiarray.h"
+#include "multiarraySmall.h"
+#include "multiarraySmallInternal.h"
+
+#include <inttypes.h>
+#include <stdbool.h>
+#include <stdio.h>
 
 typedef struct IndexEntry {
     uint64_t key;
@@ -463,19 +455,20 @@ typedef struct SortedIndex {
 } SortedIndex;
 
 SortedIndex *sortedIndexNew(void) {
-    SortedIndex *idx = malloc(sizeof(*idx));
+    SortedIndex *idx = zcalloc(1, sizeof(*idx));
     idx->entries = multiarraySmallNew(sizeof(IndexEntry), 1024);
     return idx;
 }
 
-/* Binary search to find insertion point */
-static int findInsertPosition(SortedIndex *idx, uint64_t key) {
-    int left = 0;
-    int right = idx->entries->count;
+/* Lower bound: first position whose key is >= 'key'. */
+static uint16_t sortedIndexLowerBound(const SortedIndex *idx, uint64_t key) {
+    uint16_t left = 0;
+    uint16_t right = idx->entries->count;
 
     while (left < right) {
-        int mid = (left + right) / 2;
-        IndexEntry *e = (IndexEntry *)multiarraySmallGet(idx->entries, mid);
+        const uint16_t mid = left + ((right - left) / 2);
+        const IndexEntry *e =
+            (const IndexEntry *)multiarraySmallGet(idx->entries, mid);
 
         if (e->key < key) {
             left = mid + 1;
@@ -488,28 +481,28 @@ static int findInsertPosition(SortedIndex *idx, uint64_t key) {
 }
 
 void sortedIndexInsert(SortedIndex *idx, uint64_t key, uint32_t value) {
-    int pos = findInsertPosition(idx, key);
+    const uint16_t pos = sortedIndexLowerBound(idx, key);
 
-    /* Check for duplicate */
     if (pos < idx->entries->count) {
         IndexEntry *e = (IndexEntry *)multiarraySmallGet(idx->entries, pos);
         if (e->key == key) {
-            /* Update existing */
-            e->value = value;
+            e->value = value; /* in-place update, no reallocation */
             return;
         }
     }
 
-    /* Insert at position */
+    /* pos <= count, which is exactly the contract multiarraySmallInsert()
+     * asserts (count itself means "append"). */
     IndexEntry entry = {.key = key, .value = value};
     multiarraySmallInsert(idx->entries, pos, &entry);
 }
 
-bool sortedIndexLookup(SortedIndex *idx, uint64_t key, uint32_t *value) {
-    int pos = findInsertPosition(idx, key);
+bool sortedIndexLookup(const SortedIndex *idx, uint64_t key, uint32_t *value) {
+    const uint16_t pos = sortedIndexLowerBound(idx, key);
 
     if (pos < idx->entries->count) {
-        IndexEntry *e = (IndexEntry *)multiarraySmallGet(idx->entries, pos);
+        const IndexEntry *e =
+            (const IndexEntry *)multiarraySmallGet(idx->entries, pos);
         if (e->key == key) {
             *value = e->value;
             return true;
@@ -519,63 +512,54 @@ bool sortedIndexLookup(SortedIndex *idx, uint64_t key, uint32_t *value) {
     return false;
 }
 
-void sortedIndexRange(SortedIndex *idx, uint64_t start, uint64_t end,
-                     IndexEntry **results, size_t *count) {
-    int startPos = findInsertPosition(idx, start);
-    int endPos = findInsertPosition(idx, end);
-
-    *count = endPos - startPos;
-    *results = malloc(sizeof(IndexEntry) * (*count));
-
-    for (int i = startPos; i < endPos; i++) {
-        IndexEntry *e = (IndexEntry *)multiarraySmallGet(idx->entries, i);
-        (*results)[i - startPos] = *e;
-    }
-}
-
 void sortedIndexFree(SortedIndex *idx) {
     if (idx) {
         multiarraySmallFree(idx->entries);
-        free(idx);
+        zfree(idx);
     }
 }
 
-/* Usage */
 void exampleSortedIndex(void) {
     SortedIndex *idx = sortedIndexNew();
 
-    /* Insert in random order */
-    uint64_t keys[] = {50, 10, 90, 30, 70, 20, 80, 40, 60, 100};
-    for (int i = 0; i < 10; i++) {
+    const uint64_t keys[] = {50, 10, 90, 30, 70, 20, 80, 40, 60, 100};
+    for (uint32_t i = 0; i < 10; i++) {
         sortedIndexInsert(idx, keys[i], i);
     }
 
-    /* Lookup */
-    uint32_t value;
+    uint32_t value = 0;
     if (sortedIndexLookup(idx, 70, &value)) {
-        printf("Key 70 -> Value %u\n", value);
+        printf("key 70 -> value %" PRIu32 "\n", value);
     }
 
-    /* Range query */
-    IndexEntry *range;
-    size_t count;
-    sortedIndexRange(idx, 30, 80, &range, &count);
-    printf("Range [30, 80): %zu entries\n", count);
-    for (size_t i = 0; i < count; i++) {
-        printf("  Key: %lu, Value: %u\n", range[i].key, range[i].value);
+    /* Range [30, 80) via two lower-bound probes. */
+    const uint16_t start = sortedIndexLowerBound(idx, 30);
+    const uint16_t end = sortedIndexLowerBound(idx, 80);
+    for (uint16_t i = start; i < end; i++) {
+        const IndexEntry *e =
+            (const IndexEntry *)multiarraySmallGet(idx->entries, i);
+        printf("  key %" PRIu64 " -> %" PRIu32 "\n", e->key, e->value);
     }
-    free(range);
 
     sortedIndexFree(idx);
 }
 ```
 
-## Example 6: Large Dataset Processing
+Every insert here is an O(n) memmove plus a `zrealloc()`, so this pattern suits
+read-heavy indexes. It also caps out at 65535 entries with the `uint16_t`
+counters.
 
-Processing millions of records with Large variant for memory efficiency.
+## Example 6: Large Dataset Node Walk
+
+The right way to consume a Large: never index it. Walk the XOR list once and
+process each node's contiguous data array.
 
 ```c
-#include "multiarray.h"
+#include "multiarrayLarge.h"
+#include "multiarrayLargeInternal.h" /* head, tail, prevNext, count */
+
+#include <inttypes.h>
+#include <stdio.h>
 
 typedef struct Record {
     uint64_t id;
@@ -583,105 +567,116 @@ typedef struct Record {
     double score;
 } Record;
 
-void processLargeDataset(const char *filename) {
-    /* Use Large variant for millions of records */
+void processLargeDataset(void) {
     multiarrayLarge *records = multiarrayLargeNew(sizeof(Record), 2048);
 
-    /* Load data (simulated) */
-    for (int i = 0; i < 10000000; i++) {
-        Record r = {
-            .id = i,
-            .category = i % 100,
-            .score = (rand() % 1000) / 10.0
-        };
+    for (int32_t i = 0; i < 10000000; i++) {
+        const Record r = {.id = (uint64_t)i,
+                          .category = (uint32_t)(i % 100),
+                          .score = (double)(i % 1000) / 10.0};
 
-        multiarrayLargeInsert(records, i, &r);
-
-        if (i % 1000000 == 0) {
-            printf("Loaded %d million records\n", i / 1000000);
-        }
+        multiarrayLargeInsert(records, i, &r); /* append */
     }
 
-    /* Process by iterating through nodes */
+    /* XOR traversal: you must carry 'prev' with you.
+     * next = prev ^ current->prevNext, starting from head with prev == NULL. */
     multiarrayLargeNode *prev = NULL;
     multiarrayLargeNode *current = records->head;
 
     double totalScore = 0.0;
     uint64_t count = 0;
+    uint64_t nodes = 0;
 
     while (current) {
-        /* Process entire node */
-        for (uint16_t i = 0; i < current->count; i++) {
-            Record *r = (Record *)(current->data + i * records->len);
+        for (uint64_t i = 0; i < current->count; i++) {
+            const Record *r =
+                (const Record *)(current->data + i * records->len);
             totalScore += r->score;
             count++;
         }
 
-        /* Next node via XOR */
-        multiarrayLargeNode *next = (multiarrayLargeNode *)(
-            (uintptr_t)prev ^ current->prevNext
-        );
+        nodes++;
+
+        multiarrayLargeNode *next = (multiarrayLargeNode *)((uintptr_t)prev ^
+                                                            current->prevNext);
         prev = current;
         current = next;
     }
 
-    printf("Processed %lu records\n", count);
-    printf("Average score: %.2f\n", totalScore / count);
+    printf("processed %" PRIu64 " records across %" PRIu64 " nodes\n", count,
+           nodes);
+    printf("average score: %.2f\n", totalScore / (double)count);
+
+    /* Ends are always O(1), regardless of size. */
+    const Record *first = (const Record *)multiarrayLargeGetHead(records);
+    const Record *last = (const Record *)multiarrayLargeGetTail(records);
+    printf("first id %" PRIu64 ", last id %" PRIu64 "\n", first->id, last->id);
 
     multiarrayLargeFree(records);
 }
 ```
 
-## Performance Tips
+**The XOR contract.** `prevNext` is a 48-bit bitfield sharing its 8-byte word
+with the node's 16-bit `count`, so the whole node is 16 bytes. Reading it back
+as a pointer works because the stored value is `prev XOR next` and both fit in
+48 bits on supported 64-bit targets. The consequence for callers: you cannot
+resume a walk from an arbitrary node — only from `head` (with `prev == NULL`) or
+`tail` (with `next == NULL`), carrying the neighbour along.
 
-### Tip 1: Use GetForward for Sequential Access
+## Performance Notes Specific to multiarray
 
-```c
-/* SLOW: Random access in Large */
-for (int i = 0; i < count; i++) {
-    void *elem = multiarrayLargeGet(large, i);  /* O(n) each time! */
-}
+### Never index a chunked tier in a loop
 
-/* FAST: Forward iteration */
-for (int i = 0; i < count; i++) {
-    void *elem = multiarrayLargeGetForward(large, i);  /* Maintains state */
-}
-```
-
-### Tip 2: Choose Appropriate rowMax
+`multiarrayMediumGetForward()` and `multiarrayLargeGetForward()` keep **no state
+between calls**. They are the forward-only entry points — no negative-index
+handling, plus a single-node fast path in Large — not stateful iterators.
 
 ```c
-/* Small rowMax - more nodes, less wasted space, more splits */
-multiarray *compact = multiarrayNew(sizeof(int), 128);
-
-/* Large rowMax - fewer nodes, more wasted space, fewer splits */
-multiarray *spacious = multiarrayNew(sizeof(int), 4096);
-```
-
-### Tip 3: Batch Inserts at End
-
-```c
-/* SLOW: Insert at random positions */
-for (int i = 0; i < 10000; i++) {
-    multiarraySmallInsert(small, rand() % small->count, &data);
+/* O(E * K): every call rescans from the first node. */
+for (uint32_t i = 0; i < count; i++) {
+    void *elem = multiarrayLargeGetForward(large, i);
 }
 
-/* FAST: Append to end */
-for (int i = 0; i < 10000; i++) {
-    multiarraySmallInsert(small, small->count, &data);
-}
+/* O(E): one pass over the node list, contiguous within each node. */
+/* See Example 6. */
 ```
 
-### Tip 4: Use Native for Fixed Size
+Medium has the same property, with the node scan running over a contiguous node
+array instead of a pointer chain.
 
-```c
-/* If you know the size won't exceed 1000 */
-MyStruct *arr = multiarrayNativeNew(arr[1000]);
-/* Zero overhead, direct access */
-```
+### rowMax controls node size, not total capacity
+
+`rowMax` is the per-node element capacity. It also decides when promotion
+happens, and the two ladders test it differently:
+
+- Container ladder: Small -> Medium at `count == rowMax` **elements**; Medium ->
+  Large at `count == rowMax` **nodes**.
+- Native ladder: Native -> Medium at `count == rowMax` elements; Medium -> Large
+  when `sizeof(void *) * nodeCount > sizeof(element) * rowMax`, which also
+  depends on the element width.
+
+Aiming for roughly 8 KB - 16 KB per node (`rowMax * sizeof(element)`) matches
+the sizing guidance in `multiarraySmall.h`.
+
+### Append is the cheap direction everywhere
+
+Head insertion memmoves a whole Small array. In Medium and Large it memmoves the
+whole head node while that node has room, and once the head node is full at
+`rowMax` every further head insert allocates a fresh single-element node in
+front of it — plus, in Medium, a realloc and memmove of the node array.
+Appending writes into the tail node instead, and a full tail node splits off a
+single-element node with nothing to copy.
+
+### Nothing shrinks back
+
+`multiarrayDelete()` reallocs node data downwards and frees emptied nodes, but
+there is no Large -> Medium or Medium -> Small demotion (there is an explicit
+`TODO` in `multiarray.c`). A container that spiked to ten million elements and
+drained back to ten keeps its Large representation and its 16-byte node per
+surviving chunk.
 
 ## See Also
 
 - [MULTIARRAY.md](MULTIARRAY.md) - Complete API reference
-- [VARIANTS.md](VARIANTS.md) - Understanding Native/Small/Medium/Large
+- [VARIANTS.md](VARIANTS.md) - Native, Small, Medium, and Large in detail
 - [databox](../core/DATABOX.md) - Universal container type

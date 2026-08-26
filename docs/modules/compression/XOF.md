@@ -1,8 +1,14 @@
-# XOF - XOR Filter Compression for Doubles
+# XOF - XOR-Encoded Compression for Doubles
 
 ## Overview
 
-`xof` (XOR Filter) is a **high-efficiency compression algorithm for double-precision floating-point values** based on the Gorilla time-series compression algorithm developed by Facebook. It achieves excellent compression ratios for time-series data by exploiting temporal locality - consecutive values often have similar bit patterns.
+`xof` is a **compression codec for double-precision floating-point values**
+using the XOR-with-previous-value encoding from the Gorilla time-series
+paper. It achieves good compression on time-series data by exploiting
+temporal locality: consecutive values often share most of their bit pattern.
+
+> Despite the name, `xof` is **not** an XOR filter (the probabilistic
+> membership structure). It is a lossless float codec.
 
 **Key Features:**
 
@@ -99,14 +105,17 @@ typedef struct xofWriter {
 
 ### xofReader
 
+The reader holds **only decode state** — no pointer to the stream. Every
+call takes the `xof *` explicitly, which is what makes the reader safe
+across reallocation of the compressed buffer.
+
 ```c
 typedef struct xofReader {
-    xof *d;                             /* Compressed data array */
-    size_t bitOffset;                   /* Current read position */
-    uint64_t currentValueBits;          /* Reconstructed value bits */
-    uint_fast32_t currentLeadingZeroes; /* Cached leading zeros */
-    uint_fast32_t currentLengthOfBits;  /* Cached bit length */
-    size_t offset;                      /* Value index */
+    size_t bitOffset;                   /* Bit position in the stream */
+    uint64_t currentValueBits;          /* Last decoded value, as bits */
+    uint_fast32_t currentLeadingZeroes; /* Cached XOR block metadata */
+    uint_fast32_t currentLengthOfBits;  /* Cached XOR block length */
+    size_t valuesRead;                  /* How many values decoded */
 } xofReader;
 ```
 
@@ -186,6 +195,50 @@ double values[100];
 xofReadAll(compressed, values, 100);
 ```
 
+### Resumable Reader (O(1) Sequential Access)
+
+`xofGet` replays the stream from the beginning on every call, so iterating
+with it is quadratic. `xofReader` carries the decode state forward instead:
+
+```c
+/* Seed the reader from raw stream bytes */
+void xofReaderInit(xofReader *r, const xof *x);
+
+/* Or from a writer */
+void xofReaderInitFromWriter(xofReader *r, const xofWriter *w);
+
+/* Decode the next value; O(1), advances the reader */
+double xofReaderNext(xofReader *r, const xof *x);
+
+/* Peek the current value without advancing */
+double xofReaderCurrent(const xofReader *r);
+
+/* Batch decode up to n values into out[]; returns how many were read */
+size_t xofReaderNextN(xofReader *r, const xof *x, double *out, size_t n);
+
+/* Values left, given the total count you track separately */
+size_t xofReaderRemaining(const xofReader *r, size_t totalCount);
+```
+
+```c
+xofReader r;
+xofReaderInitFromWriter(&r, &writer);
+
+/* Remaining shrinks as you read, so re-test rather than caching it */
+while (xofReaderRemaining(&r, writer.count) > 0) {
+    const double v = xofReaderNext(&r, writer.d);
+    consume(v);
+}
+```
+
+The reader stores no stream pointer, so passing `x` on each call is
+required — and is exactly what makes it safe if the compressed buffer is
+reallocated between calls.
+
+`xofGetCached` is the older manual form of the same idea: it takes the
+individual pieces of decode state by pointer instead of a `xofReader`. New
+code should use `xofReader`.
+
 ### Writer API
 
 ```c
@@ -194,7 +247,7 @@ void xofWrite(xofWriter *const w, const double val);
 
 /* Example: Using xofWriter */
 xofWriter writer = {
-    .d = calloc(1024, sizeof(xof)),
+    .d = zcalloc(1024, sizeof(xof)),
     .usedBits = 0,
     .currentLeadingZeroes = 0,
     .currentTrailingZeroes = 0,
@@ -220,7 +273,7 @@ printf("Compressed %zu values into %zu bits\n",
 printf("Compression ratio: %.2fx\n",
        (writer.count * 64.0) / writer.usedBits);
 
-free(writer.d);
+zfree(writer.d);
 ```
 
 ## Real-World Examples
@@ -238,9 +291,9 @@ typedef struct TempSensor {
 } TempSensor;
 
 TempSensor *tempSensorNew(void) {
-    TempSensor *sensor = malloc(sizeof(*sensor));
+    TempSensor *sensor = zcalloc(1, sizeof(*sensor));
 
-    sensor->writer.d = calloc(4096, sizeof(xof));
+    sensor->writer.d = zcalloc(4096, sizeof(xof));
     sensor->writer.usedBits = 0;
     sensor->writer.currentLeadingZeroes = 0;
     sensor->writer.currentTrailingZeroes = 0;
@@ -271,7 +324,7 @@ void tempSensorGetHistory(TempSensor *sensor, double *temps, size_t count) {
 }
 
 double tempSensorGetAverage(TempSensor *sensor) {
-    double *temps = malloc(sizeof(double) * sensor->writer.count);
+    double *temps = zmalloc(sizeof(double) * sensor->writer.count);
     xofReadAll(sensor->writer.d, temps, sensor->writer.count);
 
     double sum = 0.0;
@@ -279,7 +332,7 @@ double tempSensorGetAverage(TempSensor *sensor) {
         sum += temps[i];
     }
 
-    free(temps);
+    zfree(temps);
     return sum / sensor->writer.count;
 }
 
@@ -300,8 +353,8 @@ void tempSensorPrintStats(TempSensor *sensor) {
 
 void tempSensorFree(TempSensor *sensor) {
     if (sensor) {
-        free(sensor->writer.d);
-        free(sensor);
+        zfree(sensor->writer.d);
+        zfree(sensor);
     }
 }
 
@@ -342,10 +395,10 @@ typedef struct StockTick {
 } StockTick;
 
 StockTick *stockTickNew(const char *symbol) {
-    StockTick *stock = malloc(sizeof(*stock));
+    StockTick *stock = zcalloc(1, sizeof(*stock));
 
     /* Initialize price writer */
-    stock->prices.d = calloc(8192, sizeof(xof));
+    stock->prices.d = zcalloc(8192, sizeof(xof));
     stock->prices.usedBits = 0;
     stock->prices.currentLeadingZeroes = 0;
     stock->prices.currentTrailingZeroes = 0;
@@ -354,7 +407,7 @@ StockTick *stockTickNew(const char *symbol) {
     stock->prices.totalBytes = 8192 * sizeof(xof);
 
     /* Initialize volume writer */
-    stock->volumes.d = calloc(8192, sizeof(xof));
+    stock->volumes.d = zcalloc(8192, sizeof(xof));
     stock->volumes.usedBits = 0;
     stock->volumes.currentLeadingZeroes = 0;
     stock->volumes.currentTrailingZeroes = 0;
@@ -385,7 +438,7 @@ void stockTickRecord(StockTick *stock, double price, double volume) {
 
 void stockTickGetOHLC(StockTick *stock, double *open, double *high,
                      double *low, double *close) {
-    double *prices = malloc(sizeof(double) * stock->prices.count);
+    double *prices = zmalloc(sizeof(double) * stock->prices.count);
     xofReadAll(stock->prices.d, prices, stock->prices.count);
 
     *open = prices[0];
@@ -397,14 +450,14 @@ void stockTickGetOHLC(StockTick *stock, double *open, double *high,
         if (prices[i] < *low) *low = prices[i];
     }
 
-    free(prices);
+    zfree(prices);
 }
 
 void stockTickFree(StockTick *stock) {
     if (stock) {
-        free(stock->prices.d);
-        free(stock->volumes.d);
-        free(stock);
+        zfree(stock->prices.d);
+        zfree(stock->volumes.d);
+        zfree(stock);
     }
 }
 
@@ -449,10 +502,10 @@ typedef struct SensorArray {
 } SensorArray;
 
 SensorArray *sensorArrayNew(void) {
-    SensorArray *array = malloc(sizeof(*array));
+    SensorArray *array = zcalloc(1, sizeof(*array));
 
     for (int i = 0; i < NUM_SENSORS; i++) {
-        array->sensors[i].d = calloc(1024, sizeof(xof));
+        array->sensors[i].d = zcalloc(1024, sizeof(xof));
         array->sensors[i].usedBits = 0;
         array->sensors[i].currentLeadingZeroes = 0;
         array->sensors[i].currentTrailingZeroes = 0;
@@ -501,9 +554,9 @@ void sensorArrayPrintStats(SensorArray *array) {
 void sensorArrayFree(SensorArray *array) {
     if (array) {
         for (int i = 0; i < NUM_SENSORS; i++) {
-            free(array->sensors[i].d);
+            zfree(array->sensors[i].d);
         }
-        free(array);
+        zfree(array);
     }
 }
 
@@ -545,14 +598,16 @@ Typical compression ratios for different data patterns:
 
 ### Speed
 
-Operations are very fast due to bit-level operations:
+| Operation        | Complexity | Notes                                            |
+| ---------------- | ---------- | ------------------------------------------------ |
+| `xofWrite`       | O(1)       | one XOR, two bit-count builtins, a store         |
+| `xofReaderNext`  | O(1)       | carries decode state forward                     |
+| `xofReaderNextN` | O(n)       | batch form of the above                          |
+| `xofGet`         | O(offset)  | replays the stream from the start                |
+| `xofGetCached`   | O(1)       | when called with monotonically advancing offsets |
+| `xofReadAll`     | O(n)       | one pass over the whole stream                   |
 
-| Operation       | Time             | Notes                  |
-| --------------- | ---------------- | ---------------------- |
-| Write           | ~20 ns           | XOR + bit operations   |
-| Sequential read | ~30 ns           | Cached state           |
-| Random read     | ~500 ns          | Must replay from start |
-| Decompress all  | ~30 ns per value | Optimized loop         |
+Iterating with `xofGet(x, i)` is O(n^2). Use `xofReader` or `xofReadAll`.
 
 ### Memory Usage
 
@@ -596,12 +651,12 @@ for (int i = 0; i < count; i++) {
 }
 
 /* FAST: Decompress all at once */
-double *values = malloc(sizeof(double) * count);
+double *values = zmalloc(sizeof(double) * count);
 xofReadAll(compressed, values, count);
-for (int i = 0; i < count; i++) {
+for (size_t i = 0; i < count; i++) {
     /* Use values[i] */
 }
-free(values);
+zfree(values);
 ```
 
 ### 3. Allocate Sufficient Space
@@ -613,7 +668,7 @@ free(values);
 
 size_t count = 10000;
 size_t safeSize = (count * 78 + 63) / 64;  /* Round up */
-xof *compressed = calloc(safeSize, sizeof(xof));
+xof *compressed = zcalloc(safeSize, sizeof(xof));
 ```
 
 ### 4. Monitor Compression Ratio

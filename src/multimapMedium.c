@@ -369,38 +369,30 @@ bool multimapMediumLookupWithReference(multimapMedium *m, const databox *key,
     return abstractLookup(m, key, elements, true, referenceContainer);
 }
 
+DK_STATIC flexEntry *multimapMediumRowByPosition_(multimapMedium *m,
+                                                  int64_t keyIndex,
+                                                  size_t *mapIdxOut);
+
 bool multimapMediumRandomValue(multimapMedium *m, const bool fromTail,
                                databox **foundBox, multimapEntry *me) {
-    if (multimapMediumCount(m) == 0) {
+    const size_t rows = multimapMediumCount(m);
+    if (rows == 0) {
         return false;
     }
 
-    /* Step 1: pick victim map. Only a populated map is eligible - map
-     * 1 is legitimately empty for any Medium that hasn't split yet,
-     * and an empty pick would divide by zero below (or walk backward
-     * off an empty flex on the tail path). The total count above is
-     * nonzero, so at least one side always qualifies. */
-    size_t mapIdx = random() % 2;
-    if (flexCount(m->map[mapIdx]) == 0) {
-        mapIdx ^= 1;
-    }
+    /* Uniform selection: every row is equally likely.  Pick a global
+     * row, then locate it; fromTail addresses the container's last
+     * row. */
+    const int64_t row =
+        fromTail ? (int64_t)rows - 1
+                 : (int64_t)((((uint64_t)random() << 32) | (uint64_t)random()) %
+                             rows);
 
-    assert(flexCount(m->map[mapIdx]) > 0);
+    size_t mapIdx;
+    flexEntry *foundP = multimapMediumRowByPosition_(m, row, &mapIdx);
+    assert(foundP);
+
     flex **map = &m->map[mapIdx];
-
-    /* Step 2: pick victim element */
-    flexEntry *foundP = NULL;
-    if (fromTail) {
-        foundP = flexTailWithElements(*map, m->elementsPerEntry);
-    } else {
-        /* delete random entry in the map */
-        const size_t totalWholeElements = flexCount(*map) / m->elementsPerEntry;
-        const size_t randomElement = random() % totalWholeElements;
-
-        /* Restore random element to an offset inside the list */
-        foundP = flexIndex(*map, randomElement * m->elementsPerEntry);
-    }
-
     me->map = map;
     me->mapIdx = mapIdx;
     me->fe = foundP;
@@ -564,6 +556,60 @@ bool multimapMediumDeleteWithFound(multimapMedium *m, const databox *key,
 bool multimapMediumDeleteFullWidth(multimapMedium *m,
                                    const databox *elements[]) {
     return abstractDelete(m, elements, true, false, NULL, NULL);
+}
+
+/* Locate the row at position 'keyIndex' (0-based forward; negative =
+ * 1-based from the tail): pick the owning map by row counts, then walk
+ * that flex from the nearest of its head/middle/tail anchors. */
+DK_STATIC flexEntry *multimapMediumRowByPosition_(multimapMedium *m,
+                                                  int64_t keyIndex,
+                                                  size_t *mapIdxOut) {
+    const int64_t rows0 = flexCount(m->map[0]) / m->elementsPerEntry;
+    const int64_t rows1 = flexCount(m->map[1]) / m->elementsPerEntry;
+    const int64_t rows = rows0 + rows1;
+
+    int64_t row = keyIndex < 0 ? rows + keyIndex : keyIndex;
+    if (row < 0 || row >= rows) {
+        return NULL;
+    }
+
+    const size_t mapIdx = row < rows0 ? 0 : 1;
+    if (mapIdx == 1) {
+        row -= rows0;
+    }
+
+    *mapIdxOut = mapIdx;
+    return flexIndexWithMiddle(m->map[mapIdx], m->elementsPerEntry,
+                               row * m->elementsPerEntry,
+                               GET_MIDDLE(m, mapIdx));
+}
+
+bool multimapMediumLookupByPosition(multimapMedium *m, int64_t keyIndex,
+                                    databox *elements[]) {
+    size_t mapIdx;
+    flexEntry *fe = multimapMediumRowByPosition_(m, keyIndex, &mapIdx);
+    if (!fe) {
+        return false;
+    }
+
+    for (multimapElements i = 0; i < m->elementsPerEntry; i++) {
+        flexGetByType(fe, elements[i]);
+        fe = flexNext(m->map[mapIdx], fe);
+    }
+
+    return true;
+}
+
+bool multimapMediumDeleteByPosition(multimapMedium *m, int64_t keyIndex) {
+    size_t mapIdx;
+    flexEntry *fe = multimapMediumRowByPosition_(m, keyIndex, &mapIdx);
+    if (!fe) {
+        return false;
+    }
+
+    multimapEntry me = {.map = &m->map[mapIdx], .mapIdx = mapIdx, .fe = fe};
+    multimapMediumDeleteEntry(m, &me);
+    return true;
 }
 
 int64_t multimapMediumFieldIncr(multimapMedium *m, const databox *key,

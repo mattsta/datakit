@@ -1468,7 +1468,7 @@ static inline void deinterleaveBits64(__uint128_t interleaved, uint64_t *ts1,
 /* ====================================================================
  * SIMD-Optimized Bit Interleaving (SSE2)
  * ==================================================================== */
-#if defined(__SSE2__) || defined(_M_X64) || defined(_M_AMD64)
+#if defined(__SSE2__)
 #include <emmintrin.h>
 
 /* SSE2-optimized bit interleaving using pdep/pext emulation
@@ -1759,7 +1759,7 @@ static inline __uint128_t interleaveBits64Dispatch(uint64_t ts1, uint64_t ts2) {
     if (impl == INTERLEAVE_AUTO) {
 #if defined(__AVX2__) && defined(__BMI2__)
         impl = INTERLEAVE_AVX2;
-#elif defined(__SSE2__) || defined(_M_X64) || defined(_M_AMD64)
+#elif defined(__SSE2__)
         impl = INTERLEAVE_SSE2;
 #elif defined(__ARM_NEON) || defined(__ARM_NEON__)
         impl = INTERLEAVE_NEON;
@@ -1773,7 +1773,7 @@ static inline __uint128_t interleaveBits64Dispatch(uint64_t ts1, uint64_t ts2) {
     case INTERLEAVE_AVX2:
         return interleaveBits64AVX2(ts1, ts2);
 #endif
-#if defined(__SSE2__) || defined(_M_X64) || defined(_M_AMD64)
+#if defined(__SSE2__)
     case INTERLEAVE_SSE2:
         return interleaveBits64SSE2(ts1, ts2);
 #endif
@@ -1795,7 +1795,7 @@ static inline void deinterleaveBits64Dispatch(__uint128_t interleaved,
     if (impl == INTERLEAVE_AUTO) {
 #if defined(__AVX2__) && defined(__BMI2__)
         impl = INTERLEAVE_AVX2;
-#elif defined(__SSE2__) || defined(_M_X64) || defined(_M_AMD64)
+#elif defined(__SSE2__)
         impl = INTERLEAVE_SSE2;
 #elif defined(__ARM_NEON) || defined(__ARM_NEON__)
         impl = INTERLEAVE_NEON;
@@ -1810,7 +1810,7 @@ static inline void deinterleaveBits64Dispatch(__uint128_t interleaved,
         deinterleaveBits64AVX2(interleaved, ts1, ts2);
         break;
 #endif
-#if defined(__SSE2__) || defined(_M_X64) || defined(_M_AMD64)
+#if defined(__SSE2__)
     case INTERLEAVE_SSE2:
         deinterleaveBits64SSE2(interleaved, ts1, ts2);
         break;
@@ -3789,7 +3789,7 @@ int ulidTest(int argc, char *argv[]) {
         }
         printf("        SCALAR: All %zu tests passed ✓\n", num_tests);
 
-#if defined(__SSE2__) || defined(_M_X64) || defined(_M_AMD64)
+#if defined(__SSE2__)
         /* Test SSE2 implementation */
         printf("      Testing SSE2 implementation:\n");
         for (size_t i = 0; i < num_tests; i++) {
@@ -3904,7 +3904,7 @@ int ulidTest(int argc, char *argv[]) {
         }
         PERF_TIMERS_FINISH_PRINT_RESULTS(iterations, "SCALAR deinterleave ops");
 
-#if defined(__SSE2__) || defined(_M_X64) || defined(_M_AMD64)
+#if defined(__SSE2__)
         /* Benchmark SSE2 interleave */
         printf("\n      SSE2 interleave:\n");
         PERF_TIMERS_SETUP;
@@ -4035,7 +4035,7 @@ int ulidTest(int argc, char *argv[]) {
         if (selected == INTERLEAVE_SCALAR) {
             impl_name = "SCALAR";
         }
-#if defined(__SSE2__) || defined(_M_X64) || defined(_M_AMD64)
+#if defined(__SSE2__)
         else if (selected == INTERLEAVE_SSE2) {
             impl_name = "SSE2";
         }

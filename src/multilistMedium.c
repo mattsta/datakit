@@ -382,8 +382,14 @@ bool multilistMediumNext(multilistIterator *iter, multilistEntry *entry) {
     return multilistMediumNext(iter, entry);
 }
 
-bool multilistMediumIndex(multilistMedium *ml, mlOffsetId index,
-                          multilistEntry *entry) {
+/* The one positional-lookup engine for the Medium tier: the F0 element
+ * count routes to the owning flex, then — with a caller-held anchor (a
+ * previously located entry plus its known global index) living in that
+ * same flex — the walk starts from the nearest of head / anchor /
+ * tail; without one it is the plain two-way endpoint walk. */
+bool multilistMediumIndexNear(multilistMedium *ml, mlOffsetId index,
+                              const multilistEntry *anchor,
+                              mlOffsetId anchorIdx, multilistEntry *entry) {
     entry->ml = ml;
     entry->offset = index;
 
@@ -414,8 +420,18 @@ bool multilistMediumIndex(multilistMedium *ml, mlOffsetId index,
     entry->offset = index;
     assert(entry->offset < (mlOffsetId)flexCount(ml->fl[useNode]));
 
-    /* Get the actual element requested */
-    entry->fe = flexIndex(ml->fl[useNode], index);
+    /* The anchor helps only inside the flex that owns the target;
+     * its local element index is its (normalized) global index minus
+     * the F0 element count when it lives in F1. */
+    if (anchor && anchor->fe && anchor->nodeIdx == useNode) {
+        const mlOffsetId a = anchorIdx < 0 ? values + anchorIdx : anchorIdx;
+        const mlOffsetId aLocal = useNode == 1 ? a - countF0 : a;
+        entry->fe = flexIndexFromAnchor(ml->fl[useNode], (int32_t)index,
+                                        anchor->fe, (int32_t)aLocal);
+    } else {
+        entry->fe = flexIndex(ml->fl[useNode], index);
+    }
+
     if (!entry->fe) {
         entry->fe = flexHead(ml->fl[useNode]);
         return false;
@@ -423,6 +439,11 @@ bool multilistMediumIndex(multilistMedium *ml, mlOffsetId index,
 
     flexGetByType(entry->fe, &entry->box);
     return true;
+}
+
+bool multilistMediumIndex(multilistMedium *ml, mlOffsetId index,
+                          multilistEntry *entry) {
+    return multilistMediumIndexNear(ml, index, NULL, 0, entry);
 }
 
 /* ====================================================================

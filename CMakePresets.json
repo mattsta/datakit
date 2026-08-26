@@ -50,7 +50,7 @@
     {
       "name": "safe",
       "inherits": "_base",
-      "displayName": "Release-O3 + every sanitizer (strict CI)",
+      "displayName": "Release-O3 + ASAN/UBSAN (strict CI)",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "EnableASAN": "ON",

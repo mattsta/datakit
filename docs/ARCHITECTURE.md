@@ -41,9 +41,12 @@ One of the most important patterns in datakit is **scale-aware design**. Many co
 
 **Examples:**
 
-- `multimapSmall`, `multimapMedium`, `multimapFull`
+- `multimapSmall`, `multimapMedium`, `multimapFull` (plus
+  `multimapAtom`, which is NOT a size tier — it is the
+  reference-container variant other maps point into)
 - `multilistSmall`, `multilistMedium`, `multilistFull`
-- `multiarraySmall`, `multiarrayMedium`, `multiarrayLarge`
+- `multiarraySmall`, `multiarrayMedium`, `multiarrayLarge`, plus the
+  `multiarrayNative*` macro family for caller-owned inline arrays
 
 **Why This Matters:**
 
@@ -53,16 +56,20 @@ One of the most important patterns in datakit is **scale-aware design**. Many co
 
 **Choosing the Right Variant:**
 
+`multimap` picks and switches its own variant. Reach for the concrete
+variants only when you deliberately want to pin one:
+
 ```c
-/* For small, bounded collections (< 1KB) */
-multimapSmall *sm = multimapSmallNew();
+/* Normal use: the wrapper starts small and retiers as it grows.
+ * The argument is elementsPerEntry, e.g. 2 for key+value. */
+multimap *m = multimapNew(2);
 
-/* For medium-sized data (1KB - 100KB) */
-multimapMedium *mm = multimapMediumNew();
+/* Pin a size limit for the underlying flex instead of a variant */
+multimap *bounded = multimapNewLimit(2, FLEX_CAP_LEVEL_2048);
 
-/* For large or unbounded data (> 100KB) */
-multimap *fm = NULL;
-multimapNew(&fm);  /* Uses multimapFull internally */
+/* Pinned variants, if you really want one */
+multimapMedium *mm = multimapMediumNew(2);
+multimapFull *fm = multimapFullNew(2);
 ```
 
 ### 2. Opaque Types and Double Pointers
@@ -75,60 +82,85 @@ struct multimap {  /* Not visible to users */
     /* Internal fields hidden */
 };
 
-/* RIGHT - use API functions */
-multimap *m = NULL;
-multimapNew(&m);
-multimapInsert(&m, key, keylen, value, vallen);
+/* RIGHT - use API functions and databox */
+multimap *m = multimapNew(2);
+
+databox key = databoxNewBytesString("k");
+databox val = databoxNewBytesString("v");
+const databox *entry[2] = {&key, &val};
+multimapInsert(&m, entry);
 ```
 
 **Double Pointer Pattern:**
 
-Many functions take `container **` (pointer to pointer):
+Constructors RETURN the container. Only the operations that can
+reallocate take `container **`:
 
 ```c
-void multimapNew(multimap **m);
-void multimapInsert(multimap **m, ...);
-void multimapFree(multimap **m);
+multimap *multimapNew(multimapElements elementsPerEntry);  /* returns */
+bool multimapInsert(multimap **m, const databox *elements[]); /* may realloc */
+bool multimapDelete(multimap **m, const databox *key);        /* may realloc */
+void multimapFree(multimap *m);                               /* takes the value */
 ```
+
+The same split holds elsewhere: `flexNew()` / `intsetNew()` /
+`hyperloglogNew()` return, while `flexPushBytes(&f, ...)`,
+`intsetAdd(&is, ...)`, and `hyperloglogAdd(&hll, ...)` take the address
+because a growth step can move the allocation.
 
 **Why?**
 
 - Allows in-place reallocation (container can grow/shrink)
-- Simplifies memory management
-- Makes NULL handling clearer
+- Keeps the caller's handle valid across a retier
+- Makes the "this call can move the object" contract visible at the
+  call site
 
 **Usage Pattern:**
 
 ```c
-multimap *m = NULL;  /* Always initialize to NULL */
-multimapNew(&m);     /* Pass address of pointer */
-/* m now points to allocated multimap */
+multimap *m = multimapNew(2);  /* constructor returns the handle */
 
-multimapInsert(&m, ...);  /* May reallocate m */
-multimapFree(&m);         /* Frees and sets m = NULL */
-/* m is now NULL again */
+multimapInsert(&m, entry);     /* may reallocate m */
+multimapFree(m);               /* frees; m is dangling afterwards */
+m = NULL;                      /* clear it yourself */
 ```
 
 ### 3. Universal Container - databox
 
-The `databox` provides a **16-byte fixed-size container** that can hold any type:
+The `databox` is a **16-byte fixed-size container** that can hold any
+type: an 8-byte value union plus 8 bytes of packed metadata. A
+`_Static_assert` pins the size at 16, and `datakit-test` asserts it at
+startup.
 
 ```c
-typedef struct databox {
+/* Value half: 8 bytes, one of ~20 spellings of the same storage */
+typedef union databoxUnion {
+    int64_t i64;
+    uint64_t u64;
+    double d64;
+    void *ptr;
     union {
-        int64_t i64;
-        uint64_t u64;
-        double d64;
-        void *ptr;
-        struct {
-            uint32_t u32a;
-            uint32_t u32b;
-        };
-        uint8_t bytes[16];
-    } data;
-    databoxType type;  /* Type tag */
+        const char *ccstart;
+        uint8_t *start;
+        uint8_t embed[8];  /* <= 8 bytes stored inline, no allocation */
+        size_t offset;
+    } bytes;
+    /* ... plus i8/u8/i16/u16/i32/u32/f32 and 128-bit pointers */
+} databoxUnion;
+
+/* Metadata half: 8 bytes of bitfields */
+typedef struct databox {
+    databoxUnion data;      /* 8 bytes */
+    uint64_t type : 8;      /* databoxType tag */
+    uint64_t allocated : 1; /* data.bytes.start needs freeing */
+    uint64_t created : 1;
+    uint64_t big : 1;       /* actually a databoxBig */
+    uint64_t unused : 5;
+    uint64_t len : 48;      /* length of data.bytes */
 } databox;
 ```
+
+`databoxBig` extends it to 32 bytes with room for a 128-bit value.
 
 **Use Cases:**
 
@@ -136,23 +168,29 @@ typedef struct databox {
 - Avoiding heap allocation for small values
 - Type-safe access with runtime checks
 
-**Example:**
+**Example:** the constructors RETURN a box; they do not fill one
+through an out-parameter.
 
 ```c
-databox box;
+/* Store integers */
+databox i = databoxNewSigned(-42);
+databox u = databoxNewUnsigned(42);
 
-/* Store integer */
-databoxNewSignedInt(&box, -42);
+/* Store a double */
+databox d = databoxNewReal(3.14159);
 
-/* Store double */
-databoxNewDouble(&box, 3.14159);
-
-/* Store pointer */
-databoxNewPtr(&box, mydata);
+/* Store bytes; <= 8 bytes can live inline */
+databox s = databoxNewBytesString("hello");
+databox tiny = databoxNewBytesAllowEmbed("hi", 2);
 
 /* Retrieve with type checking */
-if (box.type == DATABOX_SIGNED_64) {
-    int64_t val = databoxGetSignedInt(&box);
+if (DATABOX_IS_SIGNED_INTEGER(&i)) {
+    int64_t val = i.data.i64;
+}
+
+if (DATABOX_IS_BYTES(&s)) {
+    const uint8_t *p = databoxCBytes(&s);
+    size_t n = databoxLen(&s);
 }
 ```
 
@@ -182,10 +220,13 @@ The `flex` module is the **foundation** of many datakit containers:
 
 **Used By:**
 
-- multilist (nodes stored as flex)
-- multiarray (elements stored as flex)
-- multimap values
-- mds/mdsc string buffers
+- multilist (nodes stored as flex, wrapped in mflex)
+- multimap (all three variants store entries in flex)
+- multiOrderedSet
+
+`multiarray` is the exception: it stores fixed-size elements in plain
+native arrays, not flex. `mds`/`mdsc` are also independent — they are
+generated from `dks.h`, not built on flex.
 
 **Comparison:**
 
@@ -194,64 +235,102 @@ The `flex` module is the **foundation** of many datakit containers:
 int array[100];  /* 400 bytes minimum */
 
 /* flex - variable element size */
-flex *f = NULL;
-flexPushBytes(&f, "a", 1);        /* 1 byte data + overhead */
-flexPushBytes(&f, "hello", 5);    /* 5 bytes data + overhead */
-flexPushBytes(&f, "x", 1);        /* 1 byte data + overhead */
+flex *f = flexNew();
+flexPushBytes(&f, "a", 1, FLEX_ENDPOINT_TAIL);      /* 1 byte + overhead */
+flexPushBytes(&f, "hello", 5, FLEX_ENDPOINT_TAIL);  /* 5 bytes + overhead */
+flexPushBytes(&f, "x", 1, FLEX_ENDPOINT_TAIL);      /* 1 byte + overhead */
 /* Total: ~10-15 bytes instead of 300+ for fixed strings */
 ```
 
+Every push takes a `flexEndpoint` (`FLEX_ENDPOINT_HEAD` or
+`FLEX_ENDPOINT_TAIL`), so head and tail insertion share one entry
+point.
+
 ### 5. String Buffer Template (dks)
 
-The `dks.h` header is a **C template** (using preprocessor) that generates two string buffer variants:
+The `dks.h` header is a **C template** (using the preprocessor) that
+generates two string-buffer variants from one implementation. The
+variant is selected by a define before the include:
 
 ```c
-/* Full variant - tracks length, allocated size, reference count */
-#define DK_MAKE_STRING mds
-#include "dks.h"
+/* Full variant: wider length/free headers, up to 48-bit lengths */
+#define DATAKIT_DKS_FULL
+#include "dks.h"      /* typedef char mds;  DKS_TYPE == mds */
 
-/* Compact variant - no reference count, minimal overhead */
-#define DK_MAKE_STRING mdsc
-#include "dks.h"
+/* Compact variant: smaller headers, minimal per-string overhead */
+#define DATAKIT_DKS_COMPACT
+#include "dks.h"      /* typedef char mdsc; DKS_TYPE == mdsc */
 ```
 
-**Generated API:**
+Both types are `char` typedefs, so an `mds *` IS the string — the
+length and free-space headers sit in the bytes immediately before the
+returned pointer. That means `printf("%s", s)` works, and every
+mutator returns a possibly-moved pointer you must reassign.
 
-- `mdsNew()`, `mdsFree()`, `mdsLen()`, `mdsAppend()`, etc.
-- `mdscNew()`, `mdscFree()`, `mdscLen()`, `mdscAppend()`, etc.
+**Generated API** (each `DKS_*` macro becomes `<type><suffix>`):
+
+- `mdsnew()`, `mdsempty()`, `mdsnewlen()`, `mdscat()`, `mdscatlen()`,
+  `mdscatprintf()`, `mdslen()`, `mdsclear()`, `mdsdup()`, `mdsfree()`
+- the same set with an `mdsc` prefix: `mdscnew()`, `mdsccat()`,
+  `mdsclen()`, `mdscfree()`, …
 
 **When to Use:**
 
-- **mds**: When you need reference counting or large strings
-- **mdsc**: When memory is tight and you don't need ref counting
+- **mds**: general-purpose, and for strings large enough to need the
+  wider headers
+- **mdsc**: when memory is tight and strings are small, so the smaller
+  header pays off
 
 ### 6. Iterator Pattern
 
-Most containers support **bidirectional iteration**:
+Most containers support **bidirectional iteration**, but the shape
+differs per module.
+
+`flex` has no iterator object at all — you walk raw entry pointers.
+Seed the forward loop with `flexHeadIfAny`, not `flexHead`:
+`flexHead` returns an insertion POSITION and stays non-NULL on an empty
+flex, so a `flexHead`-seeded loop reads one entry past the buffer.
 
 ```c
-/* flex iterator */
-flexIter *iter = flexIterator(f, FLEX_START_HEAD);  /* Forward */
-while (flexNext(iter, &entry)) {
-    /* Process entry */
+/* Forward */
+for (flexEntry *fe = flexHeadIfAny(f); fe; fe = flexNext(f, fe)) {
+    databox box;
+    flexGetByType(fe, &box);
+    /* Process box */
 }
-flexIteratorFree(iter);
 
-/* Reverse iteration */
-flexIter *rev = flexIterator(f, FLEX_START_TAIL);
-while (flexPrev(rev, &entry)) {
+/* Reverse */
+for (flexEntry *fe = flexTail(f); fe; fe = flexPrev(f, fe)) {
+    databox box;
+    flexGetByType(fe, &box);
     /* Process in reverse */
 }
-flexIteratorFree(rev);
+```
+
+`multimap` and `multilist` use caller-stack iterator structs:
+
+```c
+multimapIterator it;
+multimapIteratorInit(m, &it, true /* forward */);
+
+databox key, val;
+databox *elements[2] = {&key, &val};
+while (multimapIteratorNext(&it, elements)) {
+    /* Process key and val */
+}
 ```
 
 **Containers with Iterators:**
 
-- flex
-- multilist
-- multimap
-- multiarray
-- intset
+- flex (raw entry pointers, no iterator object)
+- multimap (`multimapIterator`)
+- multilist (`multilistIterator`; its init macros take `mflexState *[2]`)
+- multidict (`multidictIterator`, plus a stateless `multidictScan`)
+- intset (index-based via `intsetGet`, which is O(n) per call on the
+  Medium/Full tiers)
+
+`multiarray` exports no iterator and no count — index it yourself with
+`multiarrayGet`.
 
 ### 7. Compression and Encoding
 
@@ -266,27 +345,44 @@ For sequences of **increasing integers**:
 /* First deltas: 5, 3, 7, 5, ... */
 /* Delta-of-delta: 5, -2, 4, -2, ... (smaller values!) */
 
-dod *d = dodNew();
-for (int64_t val : values) {
-    dodAdd(d, val);
+/* dod is a bitstream, not an allocated object. Write through a
+ * dodWriter, read back through a dodReader. */
+dodWriter w = {0};
+for (size_t i = 0; i < count; i++) {
+    dodWrite(&w, values[i]);
 }
-/* Compressed storage, fast retrieval */
+dodCloseWrites(&w);
+
+dodReader r;
+dodReaderInitFromWriter(&r, &w);
+for (size_t i = 2; i < count; i++) {  /* first two seed the reader */
+    dodVal v = dodReaderNext(&r, w.d);
+    /* Process v */
+}
 ```
+
+`dodReadAll(d, vals, count)` decodes a whole stream in one call, and
+`dodReaderNextN()` decodes in batches.
 
 #### XOR Filter (xof)
 
 For sequences of **floating-point** numbers:
 
 ```c
-/* Use XOR of doubles + delta-of-delta */
-xof *x = xofNew();
-xofAdd(x, 1.234);
-xofAdd(x, 1.235);  /* Similar values compress well */
-xofAdd(x, 1.236);
+/* Like dod, xof is a bitstream written through a xofWriter. */
+xofWriter w = {0};
+xofWrite(&w, 1.234);
+xofWrite(&w, 1.235);  /* Similar values compress well */
+xofWrite(&w, 1.236);
 
-/* Retrieve compressed values */
-double val;
-xofGet(x, 0, &val);
+/* Sequential read */
+xofReader r;
+xofReaderInitFromWriter(&r, &w);
+double val = xofReaderNext(&r, w.d);
+
+/* Or random access by index, and bulk decode */
+double first = xofGet(w.d, 0);
+xofReadAll(w.d, out, w.count);
 ```
 
 #### Half-Precision Float (float16)
@@ -294,10 +390,15 @@ xofGet(x, 0, &val);
 Store floats in **16 bits** instead of 32/64:
 
 ```c
-/* Uses CPU F16C instructions if available */
+/* Macros that resolve to F16C intrinsics, NEON, or a scalar fallback
+ * at compile time. */
 float f = 3.14159f;
-uint16_t f16 = floatToFloat16(f);    /* 16-bit encoding */
-float restored = float16ToFloat(f16); /* Decode */
+uint16_t f16 = float16Encode(f);      /* 16-bit encoding */
+float restored = float16Decode(f16);  /* Decode */
+
+/* Whole arrays convert through the batch entry points */
+float16EncodeBatch(src, dst, count);
+float16DecodeBatch(dst, src, count);
 
 /* ~50% memory savings for float arrays */
 ```
@@ -306,101 +407,152 @@ float restored = float16ToFloat(f16); /* Decode */
 
 #### Memory Bounds (membound)
 
-Thread-safe global memory limits:
+`membound` is a bounded arena, created per-instance rather than
+configured globally. Every call carries its arena:
 
 ```c
-/* Set global limit: 100 MB */
-memboundSet(100 * 1024 * 1024);
+/* Create a 100 MB bounded pool */
+membound *m = memboundCreate(100 * 1024 * 1024);
 
-/* Allocations will fail if limit exceeded */
-void *ptr = memboundMalloc(1024);
+/* Allocations fail (return NULL) once the pool is exhausted */
+void *ptr = memboundAlloc(m, 1024);
 if (!ptr) {
     /* Out of memory budget */
 }
+
+memboundFree(m, ptr);
+
+/* Accounting */
+size_t used = memboundBytesUsed(m);
+size_t cap = memboundCapacity(m);
+
+memboundShutdown(m);
 ```
 
+Fixed, dynamic, micro, compact, and enterprise flavors have their own
+constructors (`memboundCreateFixed`, `memboundCreateDynamic`, …), and
+`memboundCreateWithConfig` takes a full `memboundConfig`.
+
 #### Allocation Strategies
+
+`fibbuf` and `jebuf` are pure size-arithmetic helpers — they compute
+sizes and allocate nothing:
 
 **Fibonacci Sizing (fibbuf):**
 
 ```c
-/* Grow by fibonacci numbers: 1, 2, 3, 5, 8, 13, 21, ... */
-fibbuf *fb = fibbufNew();
-void *mem = fibbufGrow(fb);  /* Allocates next fibonacci size */
+/* Next fibonacci-ish size up from the current buffer size */
+size_t next = fibbufNextSizeBuffer(currentSize);
 ```
 
 **Jemalloc Alignment (jebuf):**
 
 ```c
-/* Align to jemalloc size classes for efficiency */
-jebuf *jb = jebufNew();
-void *mem = jebufAlloc(jb, 1000);  /* Rounds to optimal jemalloc size */
+/* Round a request up to the enclosing jemalloc size class, so the
+ * slack the allocator would waste becomes usable capacity. */
+size_t allocSize = jebufSizeAllocation(requestedSize);
+
+/* Skip the realloc entirely when the new size lands in the same class */
+if (jebufUseNewAllocation(currentSize, newSize)) {
+    ptr = realloc(ptr, jebufSizeAllocation(newSize));
+}
 ```
 
 ### 9. Integer Set Encoding
 
-The `intset` uses **variable-width encoding**:
+The `intset` is **tiered**, not uniformly re-encoded. The tier is
+carried in the pointer itself (pointer tagging), and each tier holds
+separate sorted arrays per width:
 
 ```
-┌────────────┬─────────────────────────────────┐
-│ Values     │ Encoding                        │
-├────────────┼─────────────────────────────────┤
-│ -32K..32K  │ 16-bit (INTSET_ENC_INT16)       │
-│ -2B..2B    │ 32-bit (INTSET_ENC_INT32)       │
-│ Any        │ 64-bit (INTSET_ENC_INT64)       │
-└────────────┴─────────────────────────────────┘
+┌────────┬───────────────────────────────────────────────────┐
+│ Tier   │ Storage                                           │
+├────────┼───────────────────────────────────────────────────┤
+│ Small  │ one contiguous int16_t array                      │
+│ Medium │ separate sorted int16_t and int32_t arrays        │
+│ Full   │ separate sorted int16_t, int32_t, int64_t arrays  │
+└────────┴───────────────────────────────────────────────────┘
 ```
 
-**Auto-Promotion:**
+This is the point of the design: a single large value promotes the
+_container tier_, it does NOT widen the values already stored. A set
+of a million small integers that gains one 5-billion value keeps its
+million values in 16-bit storage and gains a one-element 64-bit array.
+
+**Retiering:**
 
 ```c
-intset *is = intsetNew();  /* Starts as 16-bit */
+intset *is = intsetNew();  /* Small tier */
+bool success;
 
-is = intsetAdd(is, 100, &success);     /* Still 16-bit */
-is = intsetAdd(is, 50000, &success);   /* Promotes to 32-bit! */
-is = intsetAdd(is, 5000000000L, &success);  /* Promotes to 64-bit! */
+intsetAdd(&is, 100, &success);          /* stays Small */
+intsetAdd(&is, 50000, &success);        /* retiers to Medium */
+intsetAdd(&is, INT64_C(5000000000), &success); /* retiers to Full */
 
-/* All previous values automatically converted */
+/* Existing entries stay in their original width arrays.
+ * intsetAdd takes intset ** because a retier reallocates. */
 ```
+
+Membership and counting fold across the tier's arrays; `intsetGet(is,
+pos, &value)` performs a virtual merge and is O(n) on Medium/Full, so
+prefer bulk reads over index loops.
 
 ### 10. Roaring Bitmap (multiroar)
 
 Compressed bitmap for **sparse integer sets**:
 
 ```c
-multiroar *mr = multiroarNew();
+multiroar *mr = multiroarBitNew();
 
 /* Add individual bits */
-multiroarSet(mr, 1000);
-multiroarSet(mr, 1000000);
-multiroarSet(mr, 1000000000);
+multiroarBitSet(mr, 1000);
+multiroarBitSet(mr, 1000000);
+multiroarBitSet(mr, 1000000000);
 
-/* Set operations */
-multiroar *result = multiroarAnd(mr1, mr2);  /* Intersection */
-multiroar *result = multiroarOr(mr1, mr2);   /* Union */
-multiroar *result = multiroarXor(mr1, mr2);  /* Symmetric diff */
+/* Bulk loads are far cheaper when positions are sorted/clustered —
+ * one map operation per chunk run instead of one per bit. */
+multiroarBitSetMany(mr, positions, count);
 
-/* Very efficient for sparse sets */
+/* Set operations. The multiroarNew* forms return a new bitmap; the
+ * unprefixed forms mutate the first argument in place. */
+multiroar *both = multiroarNewAnd(a, b);     /* Intersection */
+multiroar *either = multiroarNewOr(a, b);    /* Union */
+multiroar *odd = multiroarNewXor(a, b);      /* Symmetric difference */
+multiroar *only = multiroarNewAndNot(a, b);  /* Difference: A - B */
+
+uint64_t population = multiroarBitCount(mr);
 ```
+
+Use `multiroarNewAndNot` for set difference. Composing
+`multiroarNewNot` with `multiroarNewAnd` does NOT produce it: the
+complement is bounded to the chunks a bitmap has already materialized,
+so the result depends on which chunks happen to exist.
 
 ### 11. Probabilistic Counting (hyperloglog)
 
 **Approximate cardinality** with ~0.81% error:
 
 ```c
-hyperloglog *hll = hyperloglogCreate();
+hyperloglog *hll = hyperloglogNew();
 
-/* Add millions of elements */
+/* Add millions of elements. Takes hyperloglog ** because the sparse
+ * form grows and eventually gets promoted to dense. */
 for (int i = 0; i < 10000000; i++) {
     char buf[32];
-    int len = snprintf(buf, 32, "user:%d", i);
-    hyperloglogAdd(hll, (uint8_t *)buf, len);
+    int len = snprintf(buf, sizeof(buf), "user:%d", i);
+    hyperloglogAdd(&hll, buf, (size_t)len);
 }
 
-/* Get estimate - uses only ~12KB memory! */
-uint64_t estimate = hyperloglogCount(hll);
+/* Get estimate - dense form uses only ~12KB memory.
+ * 'invalid' reports a corrupt encoding rather than a bad estimate. */
+bool invalid = false;
+uint64_t estimate = hyperloglogCount(hll, &invalid);
 /* estimate ≈ 10000000 ± 0.81% */
 ```
+
+`hyperloglogNewSparse()` and `hyperloglogNewDense()` pin the
+representation, and `hyperloglogMergeInto(&dst, src)` folds one HLL
+into another (idempotent and commutative).
 
 **Modes:**
 
@@ -493,19 +645,23 @@ Need to store data?
 ### Performance Characteristics
 
 ```
-┌──────────────┬───────────┬─────────┬────────┬─────────────┐
-│ Container    │ Insert    │ Lookup  │ Delete │ Memory      │
-├──────────────┼───────────┼─────────┼────────┼─────────────┤
-│ flex         │ O(n)      │ O(n)    │ O(n)   │ Excellent   │
-│ multimap     │ O(1)      │ O(1)    │ O(1)   │ Good        │
-│ multilist    │ O(1)*     │ O(n)    │ O(1)*  │ Excellent   │
-│ multiarray   │ O(1)**    │ O(1)    │ O(n)   │ Good        │
-│ intset       │ O(log n)  │ O(log n)│ O(n)   │ Excellent   │
-│ hyperloglog  │ O(1)      │ N/A     │ N/A    │ Fixed (12KB)│
-│ multiroar    │ O(1)      │ O(1)    │ O(1)   │ Excellent   │
-└──────────────┴───────────┴─────────┴────────┴─────────────┘
+┌──────────────┬───────────┬──────────┬──────────┬──────────────┐
+│ Container    │ Insert    │ Lookup   │ Delete   │ Memory       │
+├──────────────┼───────────┼──────────┼──────────┼──────────────┤
+│ flex         │ O(n)      │ O(n)     │ O(n)     │ Excellent    │
+│ multimap     │ O(log n)† │ O(log n)†│ O(log n)†│ Good         │
+│ multidict    │ O(1)      │ O(1)     │ O(1)     │ Good         │
+│ multilist    │ O(1)*     │ O(n)     │ O(1)*    │ Excellent    │
+│ multiarray   │ O(1)**    │ O(1)     │ O(n)     │ Good         │
+│ intset       │ O(log n)  │ O(log n) │ O(n)     │ Excellent    │
+│ hyperloglog  │ O(1)      │ N/A      │ N/A      │ ~12KB dense  │
+│ multiroar    │ O(1)      │ O(1)     │ O(1)     │ Excellent    │
+└──────────────┴───────────┴──────────┴──────────┴──────────────┘
 * When iterator positioned
 ** Amortized
+† multimap is a SORTED container backed by flex, not a hash table:
+  binary search to locate, plus a memmove inside the target flex.
+  Use multidict when you want hashing.
 ```
 
 ## Thread Safety
@@ -528,19 +684,18 @@ Need to store data?
 
 ```c
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
-multimap *m = NULL;
-multimapNew(&m);
+multimap *m = multimapNew(2);
 
 /* Thread-safe insert */
+const databox *entry[2] = {&key, &val};
 pthread_mutex_lock(&lock);
-multimapInsert(&m, key, klen, val, vlen);
+multimapInsert(&m, entry);
 pthread_mutex_unlock(&lock);
 
 /* Thread-safe lookup */
+databox value;
 pthread_mutex_lock(&lock);
-void *result;
-size_t rlen;
-bool found = multimapLookup(m, key, klen, &result, &rlen);
+bool found = multimapLookupInto(m, &key, &value, 1);
 pthread_mutex_unlock(&lock);
 ```
 
@@ -555,9 +710,15 @@ datakit supports multiple platforms through:
 **Supported Platforms:**
 
 - Linux (primary target)
-- macOS / Darwin
-- FreeBSD, OpenBSD, NetBSD
-- Solaris, AIX
+- macOS / Darwin (primary target)
+- FreeBSD, OpenBSD, NetBSD, DragonFly
+- AIX has `DK_OS_AIX` detection but is neither built nor tested here —
+  treat it as best effort
+
+Windows and Solaris are **not** supported. The tree contains no
+`_WIN32`, `_MSC_VER`, Win32, or `__sun` code paths, and clang/gcc are
+the only supported compilers. See
+[Platform Support](advanced/PLATFORMS.md).
 
 **Feature Detection:**
 
@@ -574,7 +735,8 @@ datakit uses **multiple error handling strategies**:
 
 ```c
 /* Boolean success/failure */
-bool found = multimapLookup(m, key, klen, &value, &vlen);
+databox value;
+bool found = multimapLookupInto(m, &key, &value, 1);
 if (!found) {
     /* Handle not found */
 }
@@ -589,10 +751,10 @@ if (!f) {
 ### 2. Output Parameters
 
 ```c
-uint8_t success;
-intset *is = intsetAdd(is, value, &success);
+bool success;
+intsetAdd(&is, value, &success);
 if (!success) {
-    /* Value already exists or allocation failed */
+    /* Value already present */
 }
 ```
 
@@ -607,22 +769,23 @@ assert(index < count);  /* Catches out-of-bounds access */
 ### 4. Graceful Degradation
 
 ```c
-/* Some modules return best effort */
-uint64_t estimate = hyperloglogCount(hll);  /* Never fails, may be approximate */
+/* Some modules return best effort; 'invalid' separates a corrupt
+ * encoding from a merely approximate answer. */
+bool invalid = false;
+uint64_t estimate = hyperloglogCount(hll, &invalid);
 ```
 
 ## Best Practices
 
-### 1. Always Initialize to NULL
+### 1. Take the Handle the Constructor Returns
 
 ```c
-/* WRONG */
+/* WRONG - there is no out-parameter constructor */
 multimap *m;
-multimapNew(&m);  /* m has garbage value! */
+multimapNew(&m);
 
 /* RIGHT */
-multimap *m = NULL;
-multimapNew(&m);  /* Clear initialization */
+multimap *m = multimapNew(2);
 ```
 
 ### 2. Check Return Values
@@ -630,7 +793,7 @@ multimapNew(&m);  /* Clear initialization */
 ```c
 /* WRONG */
 flex *f = flexNew();
-flexPushBytes(&f, data, len);  /* What if flexNew failed? */
+flexPushBytes(&f, data, len, FLEX_ENDPOINT_TAIL);  /* What if flexNew failed? */
 
 /* RIGHT */
 flex *f = flexNew();
@@ -638,73 +801,68 @@ if (!f) {
     /* Handle allocation failure */
     return ERROR_NO_MEMORY;
 }
-flexPushBytes(&f, data, len);
+flexPushBytes(&f, data, len, FLEX_ENDPOINT_TAIL);
 ```
 
 ### 3. Always Free Resources
 
 ```c
-multimap *m = NULL;
-multimapNew(&m);
+multimap *m = multimapNew(2);
 
 /* ... use m ... */
 
-multimapFree(&m);  /* Free memory */
-/* m is now NULL */
+multimapFree(m);  /* Frees; takes the value, not the address */
+m = NULL;         /* Clear the handle yourself */
 ```
 
 ### 4. Use Appropriate Size Variant
 
 ```c
-/* WRONG - using Full variant for small data */
-multimap *m = NULL;  /* Uses multimapFull */
-multimapNew(&m);
-/* Only storing 10 elements - wasting memory on hash table */
+/* The wrapper already starts small and retiers upward, so this is
+ * fine for 10 elements and for 10 million. */
+multimap *m = multimapNew(2);
 
-/* RIGHT - using Small variant */
-multimapSmall *sm = multimapSmallNew();
-/* Optimized for small collections */
+/* What you CAN pin is the underlying flex size limit, which controls
+ * where the container splits. */
+multimap *bounded = multimapNewLimit(2, FLEX_CAP_LEVEL_2048);
 ```
 
 ### 5. Understand Ownership
 
 ```c
 /* flex stores COPIES of data */
-flexPushBytes(&f, data, len);
+flexPushBytes(&f, data, len, FLEX_ENDPOINT_TAIL);
 free(data);  /* Safe - flex has its own copy */
 
-/* multimap can store REFERENCES */
-multimapInsertByRef(&m, key, klen, value, vlen);
-/* value must remain valid while in map! */
-free(value);  /* WRONG - map still references it! */
+/* Reference-container APIs (the *WithReference / *WithSurrogateKey
+ * family, backed by multimapAtom) store references into a separate
+ * container instead of copying. */
+multimapInsertWithSurrogateKey(&m, elements, &insertKey, atomContainer);
+/* The referenced container must outlive the map. */
 ```
 
 ## Performance Optimization
 
-### 1. Pre-allocate When Possible
+### 1. Size the Container Up Front
 
 ```c
-/* Some containers support capacity hints */
-flex *f = flexNew();
-flexReserve(&f, expected_count);  /* Avoid multiple reallocations */
-
-for (int i = 0; i < expected_count; i++) {
-    flexPushBytes(&f, data, len);
-}
+/* flex has no reserve/capacity-hint API. Where it matters, set the
+ * size limit at construction time on the container that wraps it. */
+multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_4096);
+multilist *ml = multilistNew(FLEX_CAP_LEVEL_2048, 0);
 ```
 
-### 2. Batch Operations
+### 2. Append Instead of Insert for Sorted Input
 
 ```c
-/* WRONG - many small operations */
-for (int i = 0; i < 1000000; i++) {
-    multimapInsert(&m, key, klen, val, vlen);
+/* multimapInsert searches for the sorted position on every entry */
+for (size_t i = 0; i < n; i++) {
+    multimapInsert(&m, entries[i]);
 }
 
-/* BETTER - batch if possible */
-multimapReserve(&m, 1000000);  /* If supported */
-for (int i = 0; i < 1000000; i++) {
-    multimapInsert(&m, key, klen, val, vlen);
+/* multimapAppend skips that search when input is already ordered */
+for (size_t i = 0; i < n; i++) {
+    multimapAppend(&m, entries[i]);
 }
 ```
 
@@ -713,16 +871,20 @@ for (int i = 0; i < 1000000; i++) {
 ```c
 /* WRONG - index-based iteration (slow for lists) */
 for (size_t i = 0; i < multilistCount(ml); i++) {
-    void *val = multilistIndex(ml, i);  /* O(n) for each! */
+    multilistEntry e;
+    multilistIndexGet(ml, state, i, &e);  /* re-walks nodes each time */
 }
 
-/* RIGHT - iterator-based (fast) */
-multilistIter *iter = multilistIterator(ml, MULTILIST_FORWARD);
+/* RIGHT - iterator-based */
+mflexState *states[2] = {mflexStateCreate(), mflexStateCreate()};
+multilistIterator iter;
+multilistIteratorInitForward(ml, states, &iter);
+
 multilistEntry entry;
-while (multilistNext(iter, &entry)) {
-    /* O(1) for each */
+while (multilistNext(&iter, &entry)) {
+    /* amortized O(1) per entry */
 }
-multilistIteratorFree(iter);
+multilistIteratorRelease(&iter);
 ```
 
 ### 4. Choose Right Container
@@ -730,12 +892,11 @@ multilistIteratorFree(iter);
 ```c
 /* Need to count unique IPs seen? */
 
-/* WRONG - using multimap (overkill) */
-multimap *m = NULL;
-multimapNew(&m);  /* Hash table overhead */
+/* WRONG - a full map stores every distinct value */
+multimap *m = multimapNew(1);
 
 /* BETTER - using hyperloglog */
-hyperloglog *hll = hyperloglogCreate();  /* Fixed 12KB memory */
+hyperloglog *hll = hyperloglogNew();  /* ~12KB once dense */
 /* Count millions of IPs efficiently */
 ```
 
@@ -745,11 +906,12 @@ Key architectural concepts:
 
 1. **Scale-Aware**: Different implementations for different sizes
 2. **Opaque Types**: Hide implementation, allow optimization
-3. **Double Pointers**: Enable in-place reallocation
+3. **Constructors return, mutators take `&`**: the double pointer marks
+   exactly the calls that can move the object
 4. **Compression**: flex, dod, xof, float16 reduce memory usage
-5. **Variable Encoding**: intset adapts to data range
+5. **Tiered Encoding**: intset keeps narrow values narrow as it retiers
 6. **Iterators**: Efficient traversal of containers
-7. **Platform Abstraction**: Works across many OS and architectures
+7. **POSIX Abstraction**: Linux, macOS, and BSD; clang/gcc only
 8. **Performance Focus**: Every design choice optimized for speed/memory
 
 Next steps:

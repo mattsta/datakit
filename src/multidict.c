@@ -88,7 +88,7 @@ typedef struct multidictHT {
  *   - rehashidx = 4 bytes
  *   - iterators = 4 bytes
  *   - bitfield = 4 bytes
- *   - TOTAL: 140 bytes. */
+ *   - TOTAL: 140 bytes of fields, padded to 144. */
 struct multidict {
     multidictHT ht[2];
     multidictType *type;

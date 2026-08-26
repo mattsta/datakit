@@ -20,6 +20,8 @@ void multiarrayLargeInsert(multiarrayLarge *mar, const int32_t idx,
                            const void *s);
 void multiarrayLargeDelete(multiarrayLarge *mar, const int32_t idx);
 void *multiarrayLargeGet(const multiarrayLarge *mar, const int32_t idx);
+size_t multiarrayLargeCount(const multiarrayLarge *mar);
+size_t multiarrayLargeBytes(const multiarrayLarge *mar);
 void *multiarrayLargeGetForward(const multiarrayLarge *mar,
                                 const uint32_t index);
 void *multiarrayLargeGetHead(const multiarrayLarge *mar);

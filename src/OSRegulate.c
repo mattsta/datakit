@@ -502,7 +502,7 @@ size_t OSRegulateLinuxSmapBytesByFieldForPid(const char *field, int64_t pid) {
 #endif
 }
 
-int OSRegulateLinuxTransparentHugePagesGetAnonHugePagesSize(int64_t pid) {
+size_t OSRegulateLinuxTransparentHugePagesGetAnonHugePagesSize(int64_t pid) {
     return OSRegulateLinuxSmapBytesByFieldForPid("AnonHugePages:", pid);
 }
 
@@ -623,7 +623,7 @@ size_t OSRegulateTotalMemoryGet(void) {
     return 0; /* Failed? */
 
 #elif defined(_SC_PHYS_PAGES) && defined(_SC_PAGESIZE)
-    /* FreeBSD, Linux, OpenBSD, and Solaris. -------------------- */
+    /* FreeBSD, Linux, and OpenBSD. ----------------------------- */
     return (size_t)sysconf(_SC_PHYS_PAGES) * (size_t)sysconf(_SC_PAGESIZE);
 
 #elif defined(CTL_HW) && (defined(HW_PHYSMEM) || defined(HW_REALMEM))

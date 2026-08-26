@@ -1460,7 +1460,9 @@ bool hyperloglogDetect(hyperloglog *h) {
 
 /* Add elements to HLL.
  * Parameters alternate: data, len, data2, len2, ..., NULL
- * Return value is number of elements updated in HLL */
+ * Return value is the number of elements that updated a register
+ * (already-represented elements are no-ops, not errors), or -1 if the
+ * HLL is corrupt.  '*hh' is always updated (created if NULL on entry). */
 int pfadd(hyperloglog **hh, ...) {
     hyperloglog *h = *hh;
     uint_fast32_t updated = 0;
@@ -1470,30 +1472,28 @@ int pfadd(hyperloglog **hh, ...) {
     }
 
     va_list ap;
-    uint8_t *argData = 0;
-    uintptr_t argLen = 0;
-
     va_start(ap, hh);
     /* Perform the low level ADD operation for every element. */
-    for (int_fast32_t loopr = 0;; loopr++) {
-        if (loopr % 2 == 0) {
-            /* If we are on an even entry, add data using len */
-            if (hyperloglogAdd(&h, argData, argLen)) {
-                updated++;
-            } else {
-                va_end(ap);
-                return false;
-            }
-            /* If the next data is NULL, we have reached the end of args. */
-            if ((argData = va_arg(ap, uint8_t *)) == NULL) {
-                break;
-            }
-        } else {
-            /* If we are on an odd entry, just populate len.
-             * We are cheating the type system by storing
-             * the length as a direct pointer value then
-             * casting back to an integer type. */
-            argLen = va_arg(ap, uintptr_t);
+    bool corrupt = false;
+    for (;;) {
+        /* Args alternate: data, len, data2, len2, ..., NULL */
+        uint8_t *argData = va_arg(ap, uint8_t *);
+        if (!argData) {
+            break;
+        }
+
+        /* We are cheating the type system by storing the length as a
+         * direct pointer value then casting back to an integer type. */
+        const uintptr_t argLen = va_arg(ap, uintptr_t);
+
+        /* hyperloglogAdd: 1 = register updated, 0 = no change (an
+         * already-represented element; NOT an error), -1 = corrupt. */
+        const int added = hyperloglogAdd(&h, argData, argLen);
+        if (added > 0) {
+            updated++;
+        } else if (added < 0) {
+            corrupt = true;
+            break;
         }
     }
     va_end(ap);
@@ -1502,8 +1502,10 @@ int pfadd(hyperloglog **hh, ...) {
         HLL_INVALIDATE_CACHE(h);
     }
 
+    /* Always hand back the (possibly newly created or realloc'd) HLL,
+     * even on the corruption path, so the caller can free it. */
     *hh = h;
-    return updated;
+    return corrupt ? -1 : (int)updated;
 }
 
 /* PFCOUNT var -> approximated cardinality of set. */
@@ -1988,6 +1990,38 @@ cleanup:
         printf("  Speedup: %.2fx\n", speedup);
 
         zfree(testRegisters);
+    }
+
+    /* pfadd contract: every vararg element is added, duplicates are
+     * no-ops rather than failures, and a NULL *hh is populated. */
+    printf("Testing pfadd batches...\n");
+    {
+        hyperloglog *ph = NULL;
+        const int rc = pfadd(&ph, "alpha", (uintptr_t)5, "beta", (uintptr_t)4,
+                             "gamma", (uintptr_t)5, NULL);
+        if (!ph || rc != 3) {
+            printf("  [FAIL] pfadd batch: rc %d (expected 3), ph %p\n", rc,
+                   (void *)ph);
+            errors++;
+        }
+
+        /* Re-adding the same elements must be a clean no-op batch, and
+         * a fresh element after a duplicate must still land. */
+        const int rc2 =
+            pfadd(&ph, "alpha", (uintptr_t)5, "delta", (uintptr_t)5, NULL);
+        bool invalid = false;
+        const uint64_t est = hyperloglogCount(ph, &invalid);
+        if (rc2 < 0 || invalid || est != 4) {
+            printf("  [FAIL] pfadd dedupe: rc2 %d, invalid %d, count %" PRIu64
+                   " (expected 4)\n",
+                   rc2, (int)invalid, est);
+            errors++;
+        } else {
+            printf("  [OK] pfadd: batch adds, duplicate no-ops, exact "
+                   "4-element count\n");
+        }
+
+        hyperloglogFree(ph);
     }
 
     return errors;

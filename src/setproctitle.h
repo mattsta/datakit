@@ -8,7 +8,7 @@
 #define setProctitleInit() true
 #define setproctitle(title) setproctitle("%s", title)
 #else
-#if DK_OS_SOLARIS || DK_OS_LINUX || DK_OS_APPLE
+#if DK_OS_LINUX || DK_OS_APPLE
 bool setProctitleInit(char *argv[]);
 void setproctitle(char *title);
 #else

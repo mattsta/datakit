@@ -10,9 +10,9 @@ typedef struct multimap multimap;
 
 multimap *multimapNew(multimapElements elementsPerEntry);
 multimap *multimapNewLimit(multimapElements elementsPerEntry,
-                           const uint32_t limit);
+                           const flexCapSizeLimit limit);
 multimap *multimapNewCompress(multimapElements elementsPerEntry,
-                              const uint32_t limit);
+                              const flexCapSizeLimit limit);
 multimap *multimapNewConfigure(multimapElements elementsPerEntry, bool isSet,
                                bool compress, flexCapSizeLimit sizeLimit);
 multimap *multimapSetNew(multimapElements elementsPerEntry);
@@ -124,8 +124,13 @@ static inline bool multimapLastInto(multimap *m, databox out[], uint32_t n) {
     return multimapLast(m, ptrs);
 }
 
-/* ADD THESE */
-bool multimapDeleteByPosition(multimap *m, int64_t keyIndex);
+/* Positional row access: keyIndex is 0-based from the head, negative
+ * from the tail (-1 = last row).  Rows are located through maintained
+ * anchors (sub-map row counts, then the nearest of each flex's head /
+ * cached middle / tail), so the walk is over at most a quarter of the
+ * owning flex.  Lookup fills FULL-width rows (key included); Delete
+ * removes the EXACT addressed row. */
+bool multimapDeleteByPosition(multimap **m, int64_t keyIndex);
 bool multimapLookupByPosition(multimap *m, int64_t keyIndex,
                               databox *elements[]);
 

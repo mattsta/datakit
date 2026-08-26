@@ -15,7 +15,13 @@
 
 **Header**: `jebuf.h`
 
-**Source**: `jebuf.c`
+**Source**: `jebuf.c` (also carries the `jebuf` test under `DATAKIT_TEST`)
+
+> **Above 16 TiB the tables run out.** A request larger than the last 64-bit
+> entry trips `assert(NULL && "who needs this much memory?")` in an
+> assertions-enabled build. With assertions off it falls back to
+> `size + size/5` (20% growth, integer math), saturating at `SIZE_MAX` rather
+> than wrapping. Treat 16 TiB as the supported ceiling.
 
 ## What are Jemalloc Size Classes?
 
@@ -108,10 +114,14 @@ Step 2 TiB:  10 TiB, 12 TiB, 14 TiB, 16 TiB
  */
 size_t jebufSizeAllocation(size_t currentBufSize);
 
-/* Check if reallocating would use a smaller size class
+/* Check if reallocating would use a STRICTLY SMALLER size class
  * originalSize: current allocation size
  * newSize: desired new size
- * Returns: true if newSize maps to smaller size class than originalSize
+ * Returns: jebufSizeAllocation(newSize) < jebufSizeAllocation(originalSize)
+ *
+ * This is a SHRINK test only. For a growing newSize it always returns
+ * false, so never use it to decide whether a grow needs a realloc -
+ * compare the two size classes directly for that.
  */
 bool jebufUseNewAllocation(size_t originalSize, size_t newSize);
 
@@ -121,9 +131,9 @@ size_t actual = jebufSizeAllocation(request);
 printf("Requesting %zu → Getting %zu\n", request, actual);
 // Output: Requesting 100 → Getting 112
 
-/* Example: Should we reallocate? */
+/* Example: Is shrinking worth a realloc? */
 size_t current = 1024;
-size_t needed = 900;
+size_t needed = 900;   /* rounds to 1024 as well - answer is false */
 if (jebufUseNewAllocation(current, needed)) {
     // Shrinking would move to smaller size class
     void *newPtr = realloc(ptr, jebufSizeAllocation(needed));
@@ -151,18 +161,22 @@ Like fibbuf, jebuf uses **branch-free binary search**:
     } while (0)
 ```
 
-**Complexity**: O(log n) where n = table size (max 69 iterations for 64-bit table)
+**Complexity**: O(log n) where n = table size. The largest table has 64 entries,
+so the search runs about 6 steps.
 
 ### Table Selection
 
 ```c
 if (currentBufSize <= 54 KiB)
-    use 16-bit table (45 entries)
-else if (currentBufSize <= 3584 MiB OR on 32-bit system)
-    use 32-bit table (63 entries)
+    use 16-bit table (44 entries, 8 B .. 54 KiB)
+else if (currentBufSize <= 3584 MiB || sizeof(void *) == 4)
+    use 32-bit table (64 entries, 64 KiB .. 3584 MiB)
 else
-    use 64-bit table (69 entries)
+    use 64-bit table (49 entries, 4 GiB .. 16 TiB)
 ```
+
+On 32-bit builds the 64-bit tier is never selected, so requests above
+3584 MiB fall off the end of the 32-bit table and take the assert/20% path.
 
 ## Real-World Examples
 
@@ -378,16 +392,17 @@ Total waste: 408 / 16600 (2.5% overhead)
 
 ### Benchmark Results
 
-From the test suite (70 million iterations):
+The test suite runs timed loops over all three tiers and prints per-call
+timings rather than asserting fixed numbers, so no figures are quoted here.
+Measure with the cmake `perf` preset - sanitizer builds add 3-10x overhead and
+invalidate the numbers:
 
-```
-Operation                    Time per call
-jebuf small (< 54 KB)       ~2-3 ns
-jebuf medium (< 3.5 GB)     ~2-3 ns
-jebuf large (< 16 TB)       ~2-3 ns
+```bash
+./src/datakit-test test jebuf
 ```
 
-**Observation**: Constant performance across all size ranges.
+Expect near-constant cost across size ranges: the search is branch-free with a
+fixed small iteration count on tables that fit in a few cache lines.
 
 ## Memory Waste Reduction
 
@@ -440,18 +455,30 @@ void *ptr = malloc(needed);
 capacity = needed; // Missing out on extra space!
 ```
 
-### 2. Check Before Reallocating
+### 2. Check Before Shrinking
+
+`jebufUseNewAllocation()` answers exactly one question: _would shrinking to
+`newSize` actually land in a smaller size class?_ It returns false for any grow.
 
 ```c
-/* GOOD - avoid unnecessary realloc */
+/* GOOD - avoid a realloc that frees nothing */
 if (jebufUseNewAllocation(currentSize, newSize)) {
     ptr = realloc(ptr, jebufSizeAllocation(newSize));
 } else {
-    // Same size class, keep current allocation
+    // Same (or larger) size class - keep the current allocation
 }
 
-/* BAD - always reallocate */
-ptr = realloc(ptr, newSize); // May be wasted effort!
+/* GOOD - growing: compare classes directly */
+const size_t want = jebufSizeAllocation(newSize);
+if (want > jebufSizeAllocation(currentSize)) {
+    ptr = realloc(ptr, want);
+}
+
+/* BAD - a grow never satisfies jebufUseNewAllocation, so this
+ * silently never reallocates and then overruns the buffer */
+if (jebufUseNewAllocation(currentSize, biggerSize)) {
+    ptr = realloc(ptr, jebufSizeAllocation(biggerSize));
+}
 ```
 
 ### 3. Combine with Growth Strategies
@@ -541,21 +568,26 @@ size_t count = bytes / sizeof(int);
 Quick reference for common sizes:
 
 ```
-Requested → Actual
-100       → 112
-256       → 256
-500       → 512
-1000      → 1024
-1 KB      → 1024
-4 KB      → 4096
-8 KB      → 8192
-16 KB     → 16384
-64 KB     → 65536
-1 MB      → 1048576
-10 MB     → 10485760
-100 MB    → 104857600
-1 GB      → 1073741824
+Requested   → Actual
+100         → 112
+256         → 256
+500         → 512
+1000        → 1024
+1 KiB       → 1024
+4 KiB       → 4096
+8 KiB       → 8192
+16 KiB      → 16384
+64 KiB      → 65536
+1 MiB       → 1048576
+10 MiB      → 10485760
+100 MiB     → 117440512      (112 MiB - 100 MiB is NOT a size class)
+1 GiB       → 1073741824
+4 GiB       → 4294967296
 ```
+
+Note the 100 MiB row: above 64 MiB the 32-bit table steps by 16 MiB
+(80, 96, 112, 128 MiB), so a 100 MiB request rounds up to 112 MiB. Do not
+assume round decimal sizes are size classes - always call the function.
 
 ## Integration with Other Systems
 
@@ -572,13 +604,16 @@ See [fibbuf](FIBBUF.md) for details.
 
 ### With membound (Bounded Allocator)
 
+Don't use jebuf with membound. membound is a buddy allocator, so it rounds to
+powers of two, not to jemalloc classes - jebuf's answer would be the wrong
+shape. membound exposes its own equivalents:
+
 ```c
-/* membound uses power-of-2 internally,
-   so jebuf is less useful, but can still help
-   when requesting sizes from membound */
-size_t needed = 100;
-size_t rounded = jebufSizeAllocation(needed);
-void *ptr = memboundAlloc(m, rounded);
+/* What would this request actually cost? (no allocation performed) */
+size_t rounded = memboundGoodSize(m, 100);
+
+/* What did this pointer actually get? */
+size_t usable = memboundUsableSize(m, ptr);
 ```
 
 See [membound](MEMBOUND.md) for details.
@@ -599,8 +634,7 @@ Run the jebuf test suite:
 
 The test suite validates:
 
-- Correct size class rounding
-- All size ranges (8 bytes to 16 TiB)
-- Edge cases and boundaries
-- Performance benchmarks (70M iterations)
-- Integration with allocation functions
+- Correct size class rounding across all three tiers
+- Tier-selection boundaries (54 KiB and 3584 MiB)
+- Exact-size-class inputs returning themselves
+- Timed loops across the size ranges

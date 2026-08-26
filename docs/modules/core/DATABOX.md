@@ -41,6 +41,8 @@ typedef union databoxUnion {
     uint32_t u32;
     int64_t i64;
     uint64_t u64;
+    intmax_t i;
+    uintmax_t u;
     float f32;
     double d64;
 
@@ -56,6 +58,8 @@ typedef union databoxUnion {
         const uint8_t *custart;
         uint8_t *start;
         uint8_t embed[8];     /* Inline storage! */
+        uint8_t embed4[4];
+        uint8_t embed8[8];
         size_t offset;
     } bytes;
 
@@ -64,6 +68,36 @@ typedef union databoxUnion {
     uintptr_t uptr;
 } databoxUnion;
 ```
+
+### Metadata Flags
+
+The four metadata bits live in the same 8 bytes as `type` and `len`:
+
+| Flag        | Meaning                                                                    |
+| ----------- | -------------------------------------------------------------------------- |
+| `allocated` | `data.bytes.start` is owned heap memory; `databoxFreeData` will free it    |
+| `created`   | the box was created by a retrieve-and-create path                          |
+| `big`       | the box is really a `databoxBig` (its `data.i128`/`u128` point at `extra`) |
+| `unused`    | 5 reserved bits                                                            |
+
+**Zero-initialize boxes you hand to a fill-in API.** Container getters
+(`flexGetByType`, and the multimap getters layered on it) write `type`,
+`data`, and `len` but deliberately do **not** clear the flag bits — clearing
+them on every element read would be pure cost on the hot path. A box declared
+without an initializer therefore carries a garbage `allocated` bit into
+`databoxFreeData`. Always start from a zeroed box:
+
+```c
+databox box = {{0}};          /* zeroes data, type, flags, and len */
+flexGetByType(fe, &box);
+```
+
+The same applies to boxes filled by the `databoxNew*` constructors before
+they are inspected for ownership: `databoxNewBytes`, `databoxNewBytesAllowEmbed`,
+`databoxNewOffsetAllowEmbed`, and the embed arm of
+`databoxNewBytesAllocateOrEmbed` set only `type`/`data`/`len`, so testing
+`.allocated` on their result is not meaningful. Track ownership from the
+constructor you called, or zero the box and use the update macros.
 
 ## Type System
 
@@ -88,6 +122,13 @@ typedef enum databoxType {
     DATABOX_SIGNED_128 = 4,   /* __int128_t */
     DATABOX_UNSIGNED_128 = 5, /* __uint128_t */
 
+    /* Linear data structure markers */
+    DATABOX_ARRAY_START = 8,
+    DATABOX_ARRAY_END = 9,
+    DATABOX_MAP_START = 10,   /* implicit end because Key-Value */
+    DATABOX_LIST_START = 11,
+    DATABOX_LIST_END = 12,
+
     /* Pointer type */
     DATABOX_PTR = 16,         /* void * */
 
@@ -104,10 +145,28 @@ typedef enum databoxType {
     DATABOX_CONTAINER_FLEX_LIST = 24,
     DATABOX_CONTAINER_FLEX_SET = 25,
     DATABOX_CONTAINER_FLEX_TUPLE = 26,
+    DATABOX_CONTAINER_CFLEX_MAP = 27,
+    DATABOX_CONTAINER_CFLEX_LIST = 28,
+    DATABOX_CONTAINER_CFLEX_SET = 29,
+    DATABOX_CONTAINER_CFLEX_TUPLE = 30,
 
-    /* ... and more container variants */
+    DATABOX_MAX_EMBED = 31,   /* placeholder for math, not a real type */
+    DATABOX_PTR_MDSC = 32,    /* only when DATABOX_ENABLE_PTR_MDSC */
+
+    DATABOX_MAX = 255         /* the type field is ONE byte */
 } databoxType;
 ```
+
+Ordering is load-bearing in three places, so do not renumber:
+
+- `SIGNED_64` / `UNSIGNED_64` / `SIGNED_128` / `UNSIGNED_128` / `FLOAT_32` /
+  `DOUBLE_64` must stay adjacent at 2..7 (range checks and numeric-class
+  compares depend on it).
+- `type >= DATABOX_BYTES` is the "has a `len`" test, so every
+  variable-length and container type sits at or above 18.
+- `DATABOX_CONTAINER_OFFSET(encoding)` is
+  `encoding - DATABOX_CONTAINER_FLEX_MAP`, so the four FLEX and four CFLEX
+  container types must stay in matching order.
 
 ## Creation Functions
 
@@ -123,9 +182,18 @@ databox databoxNewReal(double value);
 
 /* Example usage */
 databox num = databoxNewSigned(-42);
-databox unum = databoxNewUnsigned(12345ULL);
+databox unum = databoxNewUnsigned(UINT64_C(12345));
 databox pi = databoxNewReal(3.14159);
 ```
+
+`databoxNewSigned`, `databoxNewUnsigned`, and `databoxNewPtr` are `static
+inline` in the header: they appear on hot boxing paths (flex/multimap
+inserts) where a call per element would dominate the work.
+
+`databoxNewReal` narrows: a `double` that round-trips exactly through
+`float` is stored as `DATABOX_FLOAT_32`, otherwise as `DATABOX_DOUBLE_64`.
+Test with `DATABOX_IS_FLOAT()` (which covers both) rather than assuming
+`DATABOX_DOUBLE_64`.
 
 ### Boolean and NULL
 
@@ -165,6 +233,9 @@ databox databoxNewBytesAllocateOrEmbed(const void *ptr, size_t len);
 /* Create offset-based reference */
 databox databoxNewOffsetAllowEmbed(const void *ptr, size_t offset, size_t len);
 
+/* Copy 'len' bytes into freshly allocated storage owned by 'box' */
+void databoxCopyBytes(databox *box, const void *ptr, size_t len);
+
 /* Example usage */
 const char *msg = "Hello, World!";
 databox str1 = databoxNewBytesString(msg);  /* 13 bytes - not embedded */
@@ -176,19 +247,68 @@ databox str2 = databoxNewBytesAllowEmbed(tiny, 2);  /* 2 bytes - EMBEDDED! */
 assert(str2.type == DATABOX_BYTES_EMBED);
 ```
 
+Which constructor copies:
+
+| Constructor                      | Copies?                             | `allocated`   |
+| -------------------------------- | ----------------------------------- | ------------- |
+| `databoxNewBytes`                | no, points at caller memory         | untouched     |
+| `databoxNewBytesString`          | no (`databoxNewBytes` + `strlen`)   | untouched     |
+| `databoxNewBytesAllowEmbed`      | only when `len <= 8` (into `embed`) | untouched     |
+| `databoxNewBytesAllocateOrEmbed` | always (embed when `len <= 8`)      | set when heap |
+| `databoxCopyBytes`               | always (`zmalloc`)                  | set           |
+
+### Bytes update macros
+
+```c
+/* Embed when <= 8 bytes, otherwise reference the caller's pointer */
+databoxUpdateBytesAllowEmbed(box, ptr, len);
+
+/* Same, but store an OFFSET into a base buffer for the non-embed case */
+databoxUpdateOffsetAllowEmbed(box, ptr, offset, len);
+
+/* Resolve an offset box against its base buffer */
+databoxOffsetBoxToRealBox(box, base);
+
+/* Hand ownership of an existing heap buffer to the box: sets
+ * type/data/len/allocated in one step so databoxFreeData() releases it. */
+databoxUpdateBytesOwned(box, ptr, len);
+
+/* Fill an iovec from a box (base + len) */
+databoxToIovec(box, iov);
+```
+
+Use `databoxUpdateBytesOwned` instead of hand-writing the four-field
+assignment whenever you already hold a heap pointer (an `snprintf` result,
+parser output, and similar).
+
 ### Pointers
 
 ```c
 /* Create from pointer */
-databox databoxNewPtr(void *ptr);
+databox databoxNewPtr(void *ptr);          /* type = DATABOX_PTR */
+
+/* Box a pointer as DATABOX_UNSIGNED_64 instead of DATABOX_PTR */
+databox databoxNewPtrAsUnsigned(const void *ptr);
+void *databoxRetrievePtrUnsigned(const databox *box);
 
 /* Example usage */
-int *mydata = malloc(sizeof(int) * 100);
+int *mydata = zmalloc(sizeof(int) * 100);
 databox ptrbox = databoxNewPtr(mydata);
 
 /* Later retrieve it */
 void *retrieved = ptrbox.data.ptr;
 ```
+
+**Sorted containers want `databoxNewPtrAsUnsigned`.** flex storage coerces
+`DATABOX_PTR` to unsigned, so a pointer stored in a sorted container comes
+back out of `flexGetByType` as `DATABOX_UNSIGNED_64`. Boxing it as unsigned
+up front keeps every element of an entry in one compare class and keeps the
+live box identical to the decoded one. Retrieve with
+`databoxRetrievePtrUnsigned()`, which is correct for both. (`databoxCompare`
+itself also coerces a `DATABOX_PTR` operand into the unsigned integer order
+so mixed comparisons stay transitive — but the type tag still differs, so
+prefer boxing as unsigned.) In-memory use only: a stored pointer is
+meaningless once persisted.
 
 ## Macros for Direct Creation
 
@@ -244,16 +364,23 @@ assert(box.data.d64 == 3.14);
 #define DATABOX_IS_UNSIGNED_INTEGER(box) /* True if unsigned */
 #define DATABOX_IS_FLOAT(box)            /* True if float or double */
 #define DATABOX_IS_NUMERIC(box)          /* True if integer or float */
-#define DATABOX_IS_PTR(box)              /* True if pointer */
+#define DATABOX_IS_PTR(box)              /* True if DATABOX_PTR */
+#define DATABOX_IS_REF(box)              /* True if external container reference */
 #define DATABOX_IS_TRUE(box)             /* True if DATABOX_TRUE */
 #define DATABOX_IS_FALSE(box)            /* True if DATABOX_FALSE */
 #define DATABOX_IS_NULL(box)             /* True if DATABOX_NULL */
 #define DATABOX_IS_VOID(box)             /* True if DATABOX_VOID */
 #define DATABOX_IS_FIXED(box)            /* True if fixed-size type */
 
-/* Boolean evaluation */
+/* Boolean evaluation (always exact inverses of each other) */
 #define DATABOX_IS_TRUEISH(box)   /* True if not false/null/0 */
 #define DATABOX_IS_FALSEISH(box)  /* True if false/null/0 */
+
+/* Size of the value: 'len' for BYTES and containers, else 8 */
+#define DATABOX_SIZE(box)
+
+/* Index of a container encoding within its family (FLEX_MAP == 0) */
+#define DATABOX_CONTAINER_OFFSET(encoding)
 
 /* Example usage */
 databox num = databoxNewSigned(42);
@@ -308,22 +435,30 @@ const uint8_t *data = databoxCBytes(&str);
 /* Access values directly through union */
 databox num = databoxNewSigned(-42);
 int64_t val = num.data.i64;
-printf("Value: %ld\n", val);
+printf("Value: %" PRId64 "\n", val);
 
 databox pi = databoxNewReal(3.14159);
-double d = pi.data.d64;
+/* databoxNewReal narrows to FLOAT_32 when the value round-trips exactly */
+double d = (pi.type == DATABOX_FLOAT_32) ? pi.data.f32 : pi.data.d64;
 printf("Pi: %.5f\n", d);
 
 /* Type-safe access with checking */
-databox unknown = /* ... from somewhere ... */;
+databox unknown = getSomeBox();
 if (DATABOX_IS_SIGNED_INTEGER(&unknown)) {
-    int64_t value = unknown.data.i64;
-    printf("Signed: %ld\n", value);
-} else if (DATABOX_IS_DOUBLE(&unknown)) {
-    double value = unknown.data.d64;
-    printf("Double: %f\n", value);
+    printf("Signed: %" PRId64 "\n", unknown.data.i64);
+} else if (DATABOX_IS_UNSIGNED_INTEGER(&unknown)) {
+    printf("Unsigned: %" PRIu64 "\n", unknown.data.u64);
+} else if (DATABOX_IS_FLOAT(&unknown)) {
+    /* DATABOX_IS_FLOAT covers both FLOAT_32 and DOUBLE_64 */
+    const double value = (unknown.type == DATABOX_FLOAT_32) ? unknown.data.f32
+                                                            : unknown.data.d64;
+    printf("Real: %f\n", value);
 }
 ```
+
+There is no `DATABOX_IS_DOUBLE` macro: use `DATABOX_IS_FLOAT` (float **or**
+double) and branch on `type == DATABOX_FLOAT_32` when the distinction
+matters.
 
 ## Memory Management
 
@@ -344,33 +479,55 @@ databox original = databoxNewBytesString("Original");
 databox copy = databoxCopy(&original);
 
 /* copy now has its own memory */
-databoxFree(&copy);
-/* original is still valid */
+databoxFreeData(&copy);
+/* original is still valid; it never owned the bytes */
 ```
+
+`databoxCopy` and `databoxCopyBytesFromBox` both short-circuit on
+`DATABOX_BYTES_EMBED` (nothing to copy, the bytes ride inside the box).
+`databoxCopyBytesFromBox` additionally re-embeds when the source is 8 bytes
+or fewer, so a copy can come out cheaper than its source.
+`databoxAllocateIfNeeded` returns `true` only when it actually allocated.
+None of the three handle `DATABOX_BYTES_OFFSET`: resolve an offset box with
+`databoxOffsetBoxToRealBox()` first.
 
 ### Freeing databoxes
 
 ```c
-/* Free allocated data but keep databox structure */
+/* Release the data the box owns; the box struct itself survives */
 void databoxFreeData(databox *box);
 
-/* Free data and reset to VOID */
+/* databoxFreeData() AND zfree(box) — for a HEAP-ALLOCATED databox */
 void databoxFree(databox *box);
+```
 
-/* Example usage */
-databox str = databoxNewBytesAllocateOrEmbed("Hello", 5);
+**These two are not interchangeable.** `databoxFree()` calls
+`databoxFreeData()` and then `zfree(box)`, so it must only be handed a
+pointer to a `databox` that was itself heap-allocated. Passing it the
+address of a stack or embedded `databox` frees a non-heap pointer.
 
-/* If this allocated memory: */
-if (str.allocated) {
-    databoxFree(&str);  /* Free memory */
-    assert(str.type == DATABOX_VOID);
-}
+```c
+/* Stack box: release owned data only */
+databox str = {{0}};
+databoxCopyBytes(&str, "a longer string than eight bytes", 32);
+databoxFreeData(&str);        /* frees the bytes, str becomes VOID */
 
-/* Embedded databoxes don't need freeing */
+/* Heap box: release data AND the box */
+databox *heapBox = zcalloc(1, sizeof(*heapBox));
+databoxCopyBytes(heapBox, payload, payloadLen);
+databoxFree(heapBox);         /* frees bytes, then frees heapBox */
+```
+
+`databoxFreeData` only releases when `allocated` is set **and** the type is
+`DATABOX_BYTES` (or `DATABOX_PTR_MDSC`, which is released with `mdscfree`).
+It is a no-op for every other type, so calling it on an embedded or
+reference box is always safe:
+
+```c
+/* Embedded databoxes hold no heap memory */
 databox tiny = databoxNewBytesAllowEmbed("Hi", 2);
-if (!tiny.allocated) {
-    /* No heap allocation, nothing to free! */
-}
+assert(tiny.type == DATABOX_BYTES_EMBED);
+databoxFreeData(&tiny);       /* safe no-op */
 ```
 
 ### Retain Cache (Advanced)
@@ -383,29 +540,47 @@ typedef struct databoxRetainCache {
 
 /* Retain bytes using cache */
 ssize_t databoxRetainBytesSelf(databox *dst, databoxRetainCache *cache);
+
+/* Pre-sized variant: caller already sized and supplied the destination */
 void databoxRetainBytesSelfExact(databox *dst, void *bytes);
 
 /* Example usage */
 databoxRetainCache cache = {0};
 
-/* Pre-allocate cache slots */
-for (int i = 0; i < 16; i++) {
-    size_t size = 128 << i;  /* 128, 256, 512, ... */
-    cache.bytes[i] = malloc(size);
+/* Pre-allocate cache slots (slot i holds 128 << i bytes) */
+for (size_t i = 0; i < COUNT_ARRAY(cache.bytes); i++) {
+    cache.bytes[i] = zmalloc((size_t)128 << i);
 }
 
 /* Use cache for efficient copying */
-databox box = databoxNewBytes(data, 1000);
-ssize_t slot = databoxRetainBytesSelf(&box, &cache);
-if (slot >= 0) {
-    printf("Used cache slot %zd\n", slot);
-}
+databox box = {{0}};
+box = databoxNewBytes(data, 1000);
+const ssize_t slot = databoxRetainBytesSelf(&box, &cache);
 
 /* Clean up cache */
-for (int i = 0; i < 16; i++) {
-    free(cache.bytes[i]);
+for (size_t i = 0; i < COUNT_ARRAY(cache.bytes); i++) {
+    zfree(cache.bytes[i]);
 }
 ```
+
+Return value of `databoxRetainBytesSelf`:
+
+| Result | Meaning                                                                        |
+| ------ | ------------------------------------------------------------------------------ |
+| `>= 0` | copied into `cache.bytes[slot]`; the box now points at **cache** memory        |
+| `-1`   | either re-embedded (`len <= 8`) or `zmalloc`'d because no slot was populated   |
+| `-2`   | nothing done: not a bytes-class type, or `len` exceeds the largest slot (4 MB) |
+
+A non-negative result means the box borrows the cache buffer while still
+having `allocated` set, so do **not** call `databoxFreeData()` on it — that
+would free the cache slot out from under the cache. Reset the box (or
+detach the pointer) before the next reuse of that slot.
+
+`databoxRetainBytesSelfExact` presupposes `DATABOX_BYTES` and that the
+caller has already sized `bytes` to `box->len`; it still prefers embedding
+when `len <= 8`, in which case `bytes` goes unused.
+
+Neither function handles `DATABOX_BYTES_OFFSET` boxes.
 
 ## Comparison and Equality
 
@@ -436,6 +611,27 @@ databox n2 = databoxNewSigned(200);
 assert(databoxCompare(&n1, &n2) < 0);
 ```
 
+`databoxEqual` is exactly `databoxCompare(a, b) == 0`.
+
+### Compare classes
+
+- **Bytes vs bytes** — natural sort, not plain `memcmp`. A run of ASCII
+  digits compares as a number: the longer run is the larger value, and
+  equal-length runs fall back to `memcmp` over the digit bytes. Everything
+  else compares byte-by-byte. So `"file2.txt" < "file10.txt"`, and
+  `"120abc" < "120zzz"`. The ordering is a strict total order (run-length
+  first is transitive), which is what makes it safe as the binary-search
+  comparator inside flex and multimap.
+- **Numeric vs numeric** — signed, unsigned, 128-bit, float, and double all
+  cross-compare by value, in either direction, without precision loss.
+- **`DATABOX_PTR`** — joins the unsigned integer order (raw pointer bits),
+  because flex storage decodes stored pointers back as `DATABOX_UNSIGNED_64`
+  and a container must not disagree with itself.
+- **Everything else** (`TRUE`, `FALSE`, `NULL`, bytes-vs-number, …) — equal
+  only to its own type; mismatched types sort by the global type order.
+
+Comparing a `DATABOX_VOID` box asserts in debug builds.
+
 ## Debugging and Display
 
 ```c
@@ -450,14 +646,19 @@ void databoxReprSay(const char *msg, const databox *box);
 
 /* Example usage */
 databox num = databoxNewSigned(42);
-databoxRepr(&num);  /* Prints: "[SIGNED_64: 42]" or similar */
+databoxRepr(&num);  /* Prints: "{SIGNED: 42}" — no trailing newline */
 
 databox str = databoxNewBytesString("Hello");
-databoxReprSay("My string:", &str);  /* Prints: "My string: [BYTES: ...]" */
+databoxReprSay("My string:", &str);  /* Prints: "My string: {BYTES: Hello}\n" */
 
 const char *repr = databoxReprStr(&str);
 printf("Repr: %s\n", repr);
 ```
+
+`databoxReprStr` formats into a `_Thread_local static` buffer, so the
+returned pointer is valid only until the next `databoxReprStr` call **on the
+same thread**. Copy it if you need to keep it. `databoxRepr` prints without
+a newline; `databoxReprSay` prints `msg`, a space, the repr, and a newline.
 
 ## Real-World Examples
 
@@ -478,9 +679,11 @@ values[count++] = databoxNull();
 /* Process them */
 for (int i = 0; i < count; i++) {
     if (DATABOX_IS_INTEGER(&values[i])) {
-        printf("Integer: %ld\n", values[i].data.i64);
+        printf("Integer: %" PRId64 "\n", values[i].data.i64);
     } else if (DATABOX_IS_FLOAT(&values[i])) {
-        printf("Float: %f\n", values[i].data.d64);
+        printf("Float: %f\n", (values[i].type == DATABOX_FLOAT_32)
+                                  ? (double)values[i].data.f32
+                                  : values[i].data.d64);
     } else if (DATABOX_IS_BYTES(&values[i])) {
         const uint8_t *str = databoxCBytes(&values[i]);
         printf("String: %.*s\n", (int)databoxLen(&values[i]), str);
@@ -564,7 +767,7 @@ databox *find(const char *key) {
 /* Retrieve and use */
 databox *result = find("count");
 if (result && DATABOX_IS_INTEGER(result)) {
-    printf("count = %ld\n", result->data.i64);
+    printf("count = %" PRId64 "\n", result->data.i64);
 }
 
 result = find("name");
@@ -611,19 +814,23 @@ for (int i = 0; i < 5; i++) {
 /* 32-byte databoxBig for 128-bit integers */
 typedef struct databoxBig {
     databoxUnion data;   /* 8 bytes */
-    /* Same metadata as databox */
-    uint8_t extra[16];   /* Extra storage for 128-bit values */
+    databoxInternals_;   /* 8 bytes: same type/flags/len as databox */
+    uint8_t extra[16];   /* Backing store for the 128-bit value */
 } databoxBig;
 
-/* Initialize a databoxBig */
-#define DATABOX_BIG_INIT(dbig) /* Initialize big variant */
+/* Sets big = true and points data.u128 at the box's own 'extra' */
+#define DATABOX_BIG_INIT(dbig)
 
-/* Set 128-bit values */
+/* Set 128-bit values (each does DATABOX_BIG_INIT first) */
 #define DATABOX_BIG_SIGNED_128(box, d)    /* Set as __int128_t */
 #define DATABOX_BIG_UNSIGNED_128(box, d)  /* Set as __uint128_t */
 
+/* Compound literals for 64-bit values in a databoxBig */
+#define DATABOX_BIG_SIGNED(d)
+#define DATABOX_BIG_UNSIGNED(d)
+
 /* Example usage */
-databoxBig bigbox;
+databoxBig bigbox = {{0}};
 DATABOX_BIG_INIT(&bigbox);
 
 __int128_t huge = (__int128_t)1 << 100;
@@ -632,6 +839,16 @@ DATABOX_BIG_SIGNED_128(&bigbox, huge);
 /* Access */
 __int128_t value = *bigbox.data.i128;
 ```
+
+`databox` and `databoxBig` share an identical prefix (`data` plus the
+metadata word), which is what lets one be passed where the other is
+expected. The difference is storage: `data.i128`/`data.u128` are
+**pointers**, so a plain 16-byte `databox` has nowhere to put a 128-bit
+value — it can only borrow one. `databoxBig` supplies that storage in
+`extra`, and `DATABOX_BIG_INIT` is what aims the pointer at it. Anything
+that may hold more than 64 bits (numeric quantum sets, `intsetBig`,
+`flexPushDataboxBig`, `flexGetSingleDataboxBig`) must therefore use a
+`databoxBig`; decoding a 128-bit element into a plain `databox` asserts.
 
 ## Best Practices
 
@@ -655,42 +872,53 @@ if (DATABOX_IS_SIGNED_INTEGER(&box)) {
 ### 2. Use Embedding for Small Data
 
 ```c
-/* WRONG - always allocates */
+/* Borrows the caller's memory: nothing is copied, and the box dies
+ * with whatever 'small_data' points at. */
 databox str = databoxNewBytes(small_data, 3);
-/* May allocate heap memory for 3 bytes! */
 
-/* RIGHT - embed when possible */
+/* Copies the 3 bytes into the box itself: no allocation, and the box
+ * outlives 'small_data'. */
 databox str = databoxNewBytesAllowEmbed(small_data, 3);
-/* Stores inline, no allocation! */
+
+/* Copies unconditionally: embeds at <= 8 bytes, otherwise zmalloc. */
+databox str = databoxNewBytesAllocateOrEmbed(small_data, 3);
 ```
+
+Prefer the `AllowEmbed` forms whenever the box may outlive its source: the
+copy is free for 8 bytes or fewer, and the box stays self-contained.
 
 ### 3. Clean Up Allocated Boxes
 
 ```c
-/* Remember to free allocated databoxes */
+/* A copying constructor may have allocated; releasing is unconditional
+ * because databoxFreeData() checks the 'allocated' flag itself. */
 databox str = databoxNewBytesAllocateOrEmbed(large_data, 1000);
 /* ... use it ... */
-if (str.allocated) {
-    databoxFree(&str);
-}
-
-/* Or always free (safe for non-allocated too) */
-databoxFree(&str);  /* Sets to VOID, handles allocated flag */
+databoxFreeData(&str);   /* stack box: data only, never the box */
 ```
+
+Use `databoxFree()` **only** on a `databox` that was itself heap-allocated —
+it ends with `zfree(box)`.
 
 ### 4. Use Macros for Performance
 
 ```c
-/* SLOWER - function call */
+/* Function call (a static inline, so usually free after inlining) */
 databox num = databoxNewSigned(42);
 
-/* FASTER - compile-time initialization */
+/* Compound literal: builds a temp struct then copies it */
 databox num = DATABOX_SIGNED(42);
 
-/* FASTEST - in-place modification */
-databox num;
+/* In-place: writes the two fields directly, no temp struct */
+databox num = {{0}};
 DATABOX_SET_SIGNED(&num, 42);
 ```
+
+The compound-literal macros read nicely, but compilers implement them by
+materializing a temporary struct and copying it back — the in-place
+`DATABOX_SET_*` macros avoid that. Note that neither form clears the flag
+bits, so declare with `= {{0}}` whenever the box's ownership flags will be
+read later.
 
 ## Performance Characteristics
 
@@ -716,7 +944,7 @@ databox itself is **not thread-safe**. Concurrent access requires external synch
 
 ```c
 pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
-databox shared_box;
+databox shared_box = {{0}};
 
 /* Thread-safe modification */
 pthread_mutex_lock(&lock);
@@ -726,18 +954,22 @@ pthread_mutex_unlock(&lock);
 
 ## Common Pitfalls
 
-### 1. Forgetting to Check Allocated Flag
+### 1. Calling databoxFree on a Stack Box
 
 ```c
-/* WRONG */
+/* WRONG - databoxFree() ends with zfree(box) */
 databox box = databoxNewBytesAllocateOrEmbed(data, len);
-/* ... use it ...*/
-/* Never freed if allocated! Memory leak! */
+databoxFree(&box);          /* frees a stack address! */
 
-/* RIGHT */
+/* RIGHT - release the owned data, leave the struct alone */
 databox box = databoxNewBytesAllocateOrEmbed(data, len);
 /* ... use it ... */
-databoxFree(&box);  /* Always safe to call */
+databoxFreeData(&box);
+
+/* RIGHT - databoxFree() is for heap-allocated databoxes */
+databox *box = zcalloc(1, sizeof(*box));
+databoxCopyBytes(box, data, len);
+databoxFree(box);
 ```
 
 ### 2. Using Offset Boxes Without Resolution
@@ -768,11 +1000,24 @@ databox copy = databoxNewBytesAllocateOrEmbed(buffer, 5);
 strcpy(buffer, "World");  /* copy still has "Hello" */
 ```
 
+### 4. Reading Flags From an Uninitialized Box
+
+```c
+/* WRONG - flexGetByType writes type/data/len but not the flag bits */
+databox box;
+flexGetByType(fe, &box);
+if (box.allocated) { /* reads uninitialized memory */ }
+
+/* RIGHT */
+databox box = {{0}};
+flexGetByType(fe, &box);
+```
+
 ## See Also
 
 - [flex](../flex/FLEX.md) - Flexible arrays often used with databox
 - [multimap](../multimap/MULTIMAP.md) - Uses databox for polymorphic storage
-- [Architecture Overview](../../ARCHITECTURE.md#universal-container---databox) - Design philosophy
+- [Architecture Overview](../../ARCHITECTURE.md#3-universal-container---databox) - Design philosophy
 
 ## Testing
 

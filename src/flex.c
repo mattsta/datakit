@@ -145,7 +145,7 @@ typedef enum flexType {
     FLEX_VARINT_SPLIT_MAX = VARINT_SPLIT_FULL_NO_ZERO_BYTE_8,
 
     /************ BEGIN INTEGER TYPES ************/
-    FLEX_NEG_8B = FLEX_FIXED_START, /* (FLEX_FIXED_START + 0) == 202 */
+    FLEX_NEG_8B = FLEX_FIXED_START, /* (FLEX_FIXED_START + 0) == 201 */
     FLEX_UINT_8B,
     FLEX_NEG_16B,
     FLEX_UINT_16B,
@@ -3496,12 +3496,6 @@ flexEntry *flexIndexDirect(const flex *f, int32_t index) {
 /* Pre-process index request.
  * If user asks for an element more than 50% through the list, rewrite
  * the traversal to be from the endpoint closest to the element. */
-/* TODO: We could create 'IndexWithMiddle' giving us the ability to traverse
- * closer to our target based on:
- *   - forward from head (first 25% of list),
- *   - reverse from middle (second 25% of list),
- *   - forward from middle (third 25% of list),
- *   - reverse from tail (final 25% of list). */
 flexEntry *flexIndex(const flex *f, int32_t index) {
     const int_fast32_t count = flexCount_(f);
     const int_fast32_t halfCount = count / 2;
@@ -3521,6 +3515,67 @@ flexEntry *flexIndex(const flex *f, int32_t index) {
     }
 
     return flexIndexDirect(f, index);
+}
+
+/* 3-way anchored index retrieval: walk to element 'index' from the
+ * nearest of head (forward), the caller's anchor entry (either
+ * direction), or tail (backward).  'anchorElemIdx' is the anchor
+ * entry's 0-based forward element index; a NULL anchor or out-of-range
+ * anchor index degrades to the two-way endpoint walk.  Index
+ * convention matches flexIndex(): 0-based forward, negative = 1-based
+ * from the tail; returns NULL when out of range. */
+flexEntry *flexIndexFromAnchor(const flex *f, int32_t index,
+                               const flexEntry *anchorFE,
+                               int32_t anchorElemIdx) {
+    const int_fast32_t count = flexCount_(f);
+
+    /* Normalize to a forward element index (negative is 1-based) */
+    const int_fast32_t fwdIdx = index < 0 ? count + index : index;
+    if (fwdIdx < 0 || fwdIdx >= count) {
+        return NULL;
+    }
+
+    if (anchorFE && anchorElemIdx >= 0 && anchorElemIdx < count) {
+        const int_fast32_t dHead = fwdIdx;
+        const int_fast32_t dTail = (count - 1) - fwdIdx;
+        const int_fast32_t dAnchor = fwdIdx > anchorElemIdx
+                                         ? fwdIdx - anchorElemIdx
+                                         : anchorElemIdx - fwdIdx;
+
+        if (dAnchor < dHead && dAnchor < dTail) {
+            /* The anchor is strictly nearest: walk out from it.  Steps
+             * stay inside [0, count - 1], so Next/Prev never run off
+             * either end. */
+            flexEntry *fe = (flexEntry *)anchorFE;
+            if (fwdIdx >= anchorElemIdx) {
+                for (int_fast32_t i = dAnchor; i; i--) {
+                    fe = flexNext(f, fe);
+                }
+            } else {
+                for (int_fast32_t i = dAnchor; i; i--) {
+                    fe = flexPrev(f, fe);
+                }
+            }
+
+            return fe;
+        }
+    }
+
+    /* head or tail is nearest: existing two-way endpoint logic */
+    return flexIndex(f, index);
+}
+
+/* Anchored index specialized to a MAINTAINED sorted-map middle (the
+ * entry flexMiddle() returns; multimap tiers cache one), whose element
+ * index is ((count / elementsPerEntry) / 2) * elementsPerEntry by
+ * construction. */
+flexEntry *flexIndexWithMiddle(const flex *f,
+                               const uint_fast32_t elementsPerEntry,
+                               int32_t index, const flexEntry *middle) {
+    const int_fast32_t count = flexCount_(f);
+    const int32_t middleIdx =
+        (int32_t)(((count / elementsPerEntry) / 2) * elementsPerEntry);
+    return flexIndexFromAnchor(f, index, middle, middleIdx);
 }
 
 bool flexEntryIsValid(const flex *f, flexEntry *fe) {
@@ -6070,8 +6125,7 @@ int32_t flexTest(int32_t argc, char **argv) {
     printf("Verify external-reference encoding round-trips every tier:\n");
     {
         /* Boundary values across all eight width tiers; the 56/64 pair
-         * pins a former off-by-one where encode subtracted the wrong
-         * tier max and the value came back 2^56-1 too large. */
+         * pins the tier-max subtraction at the encode/decode boundary. */
         const uint64_t refVals[] = {
             0,
             REFERENCE_MAX_8,
@@ -6102,6 +6156,43 @@ int32_t flexTest(int32_t argc, char **argv) {
                        v, (int)enc, encoded, decoded);
                 assert(NULL && "external reference encode/decode mismatch");
             }
+        }
+        printf("  SUCCESS\n\n");
+    }
+
+    printf("Verify flexIndexWithMiddle matches flexIndex at every index:\n");
+    {
+        /* Sorted 2-element rows with a live maintained middle; sweep
+         * every element index in both sign conventions and demand
+         * pointer equality with the 2-way flexIndex oracle.  Sizes
+         * cover empty, one row, even/odd row counts, and enough rows
+         * that all four anchor quadrants are exercised. */
+        const int rowCounts[] = {0, 1, 2, 3, 8, 63, 200};
+        for (size_t rc = 0; rc < COUNT_ARRAY(rowCounts); rc++) {
+            flex *sf = flexNew();
+            for (int r = 0; r < rowCounts[rc]; r++) {
+                const databox kbox = databoxNewSigned(r);
+                const databox vbox = databoxNewSigned(r * 7);
+                const databox *row[2] = {&kbox, &vbox};
+                flexEntry *mid = flexMiddle(sf, 2);
+                flexInsertReplaceByTypeSortedWithMiddleMultiDirect(&sf, 2, row,
+                                                                   &mid, true);
+            }
+
+            const int32_t count = (int32_t)flexCount(sf);
+            const flexEntry *mid = flexMiddle(sf, 2);
+            for (int32_t i = -count - 1; i <= count; i++) {
+                flexEntry *want = flexIndex(sf, i);
+                flexEntry *got = flexIndexWithMiddle(sf, 2, i, mid);
+                if (want != got) {
+                    printf("  MISMATCH rows=%d index=%" PRId32
+                           " (want %p, got %p)\n",
+                           rowCounts[rc], i, (void *)want, (void *)got);
+                    assert(NULL && "flexIndexWithMiddle diverged!");
+                }
+            }
+
+            flexFree(sf);
         }
         printf("  SUCCESS\n\n");
     }

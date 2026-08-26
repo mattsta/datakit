@@ -14,11 +14,11 @@ multimap *m = multimapNew(2);
 
 /* UNSAFE: Concurrent access from multiple threads */
 void thread1(void *arg) {
-    multimapInsert(&m, key1, klen1, val1, vlen1);  // DANGER
+    multimapInsert(&m, entry1);  // DANGER
 }
 
 void thread2(void *arg) {
-    multimapInsert(&m, key2, klen2, val2, vlen2);  // DANGER
+    multimapInsert(&m, entry2);  // DANGER
 }
 
 /* Result: Data corruption, crashes, undefined behavior */
@@ -48,20 +48,18 @@ pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 multimap *shared_map = NULL;
 
 void init_map(void) {
-    multimapNew(&shared_map);
+    shared_map = multimapNew(2);  /* constructor RETURNS the handle */
 }
 
-void thread_safe_insert(const void *key, size_t klen,
-                       const void *val, size_t vlen) {
+void thread_safe_insert(const databox *entry[]) {
     pthread_mutex_lock(&lock);
-    multimapInsert(&shared_map, key, klen, val, vlen);
+    multimapInsert(&shared_map, entry);  /* mutator takes the address */
     pthread_mutex_unlock(&lock);
 }
 
-bool thread_safe_lookup(const void *key, size_t klen,
-                       void **val, size_t *vlen) {
+bool thread_safe_lookup(const databox *key, databox *value) {
     pthread_mutex_lock(&lock);
-    bool found = multimapLookup(shared_map, key, klen, val, vlen);
+    bool found = multimapLookupInto(shared_map, key, value, 1);
     pthread_mutex_unlock(&lock);
     return found;
 }
@@ -152,7 +150,7 @@ void worker_thread(void *arg) {
 void create_workers(int num_threads) {
     for (int i = 0; i < num_threads; i++) {
         threads[i].thread_id = i;
-        multimapNew(&threads[i].local_map);
+        threads[i].local_map = multimapNew(2);
 
         pthread_create(&threads[i].thread, NULL,
                       worker_thread, &threads[i]);
@@ -161,15 +159,22 @@ void create_workers(int num_threads) {
 
 /* Merge results after threads complete */
 void merge_results(void) {
-    multimap *combined = NULL;
-    multimapNew(&combined);
+    multimap *combined = multimapNew(2);
 
     for (int i = 0; i < num_threads; i++) {
         pthread_join(threads[i].thread, NULL);
 
-        /* Copy data from local map to combined */
-        multimapIterator *iter = multimapIterator(threads[i].local_map);
-        /* ... iterate and insert into combined ... */
+        /* Copy data from local map to combined. The iterator is a
+         * caller-stack struct, not an allocated object. */
+        multimapIterator iter;
+        multimapIteratorInit(threads[i].local_map, &iter, true);
+
+        databox key, val;
+        databox *elements[2] = {&key, &val};
+        while (multimapIteratorNext(&iter, elements)) {
+            const databox *entry[2] = {&key, &val};
+            multimapInsert(&combined, entry);
+        }
 
         multimapFree(threads[i].local_map);
     }
@@ -202,31 +207,28 @@ typedef struct COWContainer {
 
 COWContainer *cowNew(void) {
     COWContainer *cow = malloc(sizeof(*cow));
-    multimap *initial = NULL;
-    multimapNew(&initial);
+    multimap *initial = multimapNew(2);
     atomic_init(&cow->current, (uintptr_t)initial);
     pthread_mutex_init(&cow->write_lock, NULL);
     return cow;
 }
 
 /* Readers don't need locks */
-bool cowRead(COWContainer *cow, const void *key, size_t klen,
-            void **val, size_t *vlen) {
+bool cowRead(COWContainer *cow, const databox *key, databox *value) {
     multimap *snapshot = (multimap *)atomic_load(&cow->current);
-    return multimapLookup(snapshot, key, klen, val, vlen);
+    return multimapLookupInto(snapshot, key, value, 1);
 }
 
 /* Writers copy-on-write */
-void cowWrite(COWContainer *cow, const void *key, size_t klen,
-             const void *val, size_t vlen) {
+void cowWrite(COWContainer *cow, const databox *entry[]) {
     pthread_mutex_lock(&cow->write_lock);
 
     /* Get current version */
     multimap *old = (multimap *)atomic_load(&cow->current);
 
     /* Create new version (copy + modify) */
-    multimap *new = multimapDuplicate(old);
-    multimapInsert(&new, key, klen, val, vlen);
+    multimap *new = multimapCopy(old);
+    multimapInsert(&new, entry);
 
     /* Atomically publish new version */
     atomic_store(&cow->current, (uintptr_t)new);
@@ -265,7 +267,7 @@ typedef struct ShardedMap {
 ShardedMap *shardedMapNew(void) {
     ShardedMap *sm = malloc(sizeof(*sm));
     for (int i = 0; i < NUM_SHARDS; i++) {
-        multimapNew(&sm->shards[i]);
+        sm->shards[i] = multimapNew(2);
         pthread_mutex_init(&sm->locks[i], NULL);
     }
     return sm;
@@ -278,12 +280,12 @@ int getShard(const void *key, size_t klen) {
 }
 
 void shardedInsert(ShardedMap *sm, const void *key, size_t klen,
-                  const void *val, size_t vlen) {
+                  const databox *entry[]) {
     int shard = getShard(key, klen);
 
     /* Lock only one shard */
     pthread_mutex_lock(&sm->locks[shard]);
-    multimapInsert(&sm->shards[shard], key, klen, val, vlen);
+    multimapInsert(&sm->shards[shard], entry);
     pthread_mutex_unlock(&sm->locks[shard]);
 }
 
@@ -481,7 +483,8 @@ typedef struct ConcurrentCache {
 
 ConcurrentCache *cacheNew(time_t ttl) {
     ConcurrentCache *cache = malloc(sizeof(*cache));
-    multimapNew(&cache->data);
+    /* 3 elements per entry: key, value, expiry */
+    cache->data = multimapNew(3);
     pthread_rwlock_init(&cache->lock, NULL);
     cache->default_ttl = ttl;
     return cache;
@@ -490,15 +493,10 @@ ConcurrentCache *cacheNew(time_t ttl) {
 void cacheSet(ConcurrentCache *cache, databox *key, databox *value) {
     pthread_rwlock_wrlock(&cache->lock);
 
-    CacheEntry entry = {
-        .key = *key,
-        .value = *value,
-        .expires_at = time(NULL) + cache->default_ttl
-    };
-
-    multimapInsert(&cache->data,
-                  databoxBytes(key), key->len,
-                  &entry, sizeof(entry));
+    databox expires =
+        databoxNewUnsigned((uint64_t)(time(NULL) + cache->default_ttl));
+    const databox *entry[3] = {key, value, &expires};
+    multimapInsert(&cache->data, entry);
 
     pthread_rwlock_unlock(&cache->lock);
 }
@@ -506,19 +504,14 @@ void cacheSet(ConcurrentCache *cache, databox *key, databox *value) {
 bool cacheGet(ConcurrentCache *cache, databox *key, databox *value) {
     pthread_rwlock_rdlock(&cache->lock);
 
-    void *data;
-    size_t len;
-    bool found = multimapLookup(cache->data,
-                               databoxBytes(key), key->len,
-                               &data, &len);
+    /* Lookup fills elementsPerEntry - 1 boxes: the values only. */
+    databox out[2];
+    bool found = multimapLookupInto(cache->data, key, out, 2);
 
     bool valid = false;
-    if (found) {
-        CacheEntry *entry = (CacheEntry *)data;
-        if (time(NULL) < entry->expires_at) {
-            *value = entry->value;
-            valid = true;
-        }
+    if (found && (uint64_t)time(NULL) < out[1].data.u64) {
+        *value = out[0];
+        valid = true;
     }
 
     pthread_rwlock_unlock(&cache->lock);
@@ -526,7 +519,7 @@ bool cacheGet(ConcurrentCache *cache, databox *key, databox *value) {
     /* Clean up expired entry if found but invalid */
     if (found && !valid) {
         pthread_rwlock_wrlock(&cache->lock);
-        multimapDelete(&cache->data, databoxBytes(key), key->len);
+        multimapDelete(&cache->data, key);
         pthread_rwlock_unlock(&cache->lock);
     }
 
@@ -630,8 +623,9 @@ void parallel_process(WorkItem *items, int count, int num_threads) {
     for (int i = 0; i < num_threads; i++) {
         pthread_join(workers[i].thread, NULL);
 
-        /* Aggregate results from each worker */
-        for (size_t j = 0; j < multiarrayCount(workers[i].results); j++) {
+        /* Aggregate results from each worker. multiarray exports no
+         * count, so each worker tracks its own. */
+        for (size_t j = 0; j < workers[i].resultCount; j++) {
             void **result_ptr = multiarrayGet(workers[i].results, j);
             process_result(*result_ptr);
         }

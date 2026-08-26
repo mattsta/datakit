@@ -64,8 +64,8 @@
 #define MULTIARRAY_SINGLE_NORETURN(m, func) _MULTIARRAY_SINGLE(, m, func)
 #define MULTIARRAY_SINGLE_RETURN(m, func) _MULTIARRAY_SINGLE(return, m, func)
 
-#if 0
-#define MULTIARRAY_LARGE_ELEMENTS_PER_ENTRY_MAX ((1 << (sizeof(multiarrayElements) * 8) - 1)
+/* Count/Bytes only apply to the tagged container API (multiarrayNew);
+ * the Native macro API tracks its count externally by design. */
 size_t multiarrayCount(const multiarray *m) {
     MULTIARRAY_SINGLE_RETURN(m, Count);
 }
@@ -73,9 +73,6 @@ size_t multiarrayCount(const multiarray *m) {
 size_t multiarrayBytes(const multiarray *m) {
     MULTIARRAY_SINGLE_RETURN(m, Bytes);
 }
-
-static uint32_t MAX_FULL_SIZE = 2048;
-#endif
 
 multiarray *multiarrayNew(uint16_t len, uint16_t rowMax) {
     multiarraySmall *mar = multiarraySmallNew(len, rowMax);
@@ -446,6 +443,66 @@ int multiarrayTest(int argc, char *argv[]) {
         }
 
         printf("  inserted %d elements through tier transitions\n",
+               targetCount);
+        multiarrayFree(mar);
+    }
+
+    TEST("Count/Bytes: exact across all tiers, inserts and deletes") {
+        /* Small rowMax so the sweep is cheap: Small upgrades to Medium
+         * at rowMax ELEMENTS, but Medium upgrades to Large only at
+         * rowMax NODES (rowMax^2 elements) — with 8 that's 8 and 64. */
+        const int tinyRowMax = 8;
+        multiarray *mar = multiarrayNew(sizeof(s16), tinyRowMax);
+        const int targetCount = tinyRowMax * tinyRowMax * 2;
+
+        /* Empty container reports zero */
+        assert(multiarrayCount(mar) == 0);
+        assert(multiarrayBytes(mar) == 0);
+
+        bool sawSmall = false;
+        bool sawMedium = false;
+        bool sawLarge = false;
+        for (int i = 0; i < targetCount; i++) {
+            s16 val = {.a = i, .b = -i};
+            multiarrayInsert(&mar, i, &val);
+
+            const size_t expect = (size_t)i + 1;
+            if (multiarrayCount(mar) != expect) {
+                ERR("Count after insert %d: got %zu expected %zu", i,
+                    multiarrayCount(mar), expect);
+            }
+
+            assert(multiarrayBytes(mar) == expect * sizeof(s16));
+
+            switch (_multiarrayType(mar)) {
+            case MULTIARRAY_TYPE_SMALL:
+                sawSmall = true;
+                break;
+            case MULTIARRAY_TYPE_MEDIUM:
+                sawMedium = true;
+                break;
+            case MULTIARRAY_TYPE_LARGE:
+                sawLarge = true;
+                break;
+            default:
+                assert(NULL);
+            }
+        }
+
+        /* The sweep must exercise every tier or the accessors are only
+         * partially covered. */
+        assert(sawSmall && sawMedium && sawLarge);
+
+        /* Deletes shrink the count symmetrically (Large tier). */
+        size_t remaining = targetCount;
+        while (remaining > (size_t)tinyRowMax) {
+            multiarrayDelete(&mar, 0);
+            remaining--;
+            assert(multiarrayCount(mar) == remaining);
+            assert(multiarrayBytes(mar) == remaining * sizeof(s16));
+        }
+
+        printf("  Count/Bytes verified across %d inserts + deletes\n",
                targetCount);
         multiarrayFree(mar);
     }

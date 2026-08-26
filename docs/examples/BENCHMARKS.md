@@ -1,999 +1,718 @@
-# Performance Benchmarks
+# Benchmarking datakit
 
-This guide provides performance comparisons and benchmarking examples for datakit modules, showing memory efficiency and execution speed across different scenarios.
+How to measure datakit code so the numbers mean something: the build
+configuration that makes measurement valid, the timing and reporting
+helpers the platform already provides, and worked harnesses for the
+containers people most often want to compare.
+
+**This file does not publish numbers.** Recorded, machine-tagged,
+dated results live in [PERFORMANCE_BASELINES.md](../PERFORMANCE_BASELINES.md),
+which is the only place performance claims should be quoted from.
 
 ## Table of Contents
 
-1. [Benchmark Methodology](#benchmark-methodology)
-2. [Integer Set Comparisons](#integer-set-comparisons)
-3. [Map/Dictionary Performance](#mapdictionary-performance)
-4. [List Performance](#list-performance)
-5. [Array Performance](#array-performance)
-6. [Compression Benchmarks](#compression-benchmarks)
-7. [String Operations](#string-operations)
-8. [Cardinality Estimation](#cardinality-estimation)
-9. [Memory Efficiency](#memory-efficiency)
-10. [Scale-Aware Variants](#scale-aware-variants)
+1. [Build Configuration](#build-configuration)
+2. [Running the Built-In Benchmarks](#running-the-built-in-benchmarks)
+3. [A Timing Harness](#a-timing-harness)
+4. [Measuring Memory](#measuring-memory)
+5. [Integer Set Benchmarks](#integer-set-benchmarks)
+6. [Map Benchmarks](#map-benchmarks)
+7. [List Benchmarks](#list-benchmarks)
+8. [Compression Benchmarks](#compression-benchmarks)
+9. [Cardinality Benchmarks](#cardinality-benchmarks)
+10. [Reporting Results](#reporting-results)
 
 ---
 
-## Benchmark Methodology
+## Build Configuration
 
-### Timing Utilities
+Benchmarks are only valid from the `perf` preset: Release `-O3`,
+`-mcpu=native`, LTO, and **no sanitizers**. ASAN/UBSAN add 3-10×
+overhead and invalidate every number you collect under them.
+
+```bash
+cmake --preset perf
+cmake --build build-perf
+```
+
+Rules that make a capture comparable to an earlier one:
+
+- Same preset, recorded alongside the numbers.
+- Record CPU model, architecture, compiler, and date.
+- Warm up before timing: the first pass through a fresh container pays
+  page faults and allocator growth that steady-state work does not.
+- Report a median (or minimum) of repeated runs, never a single run.
+- Never benchmark a debug build, and never compare across presets.
+
+---
+
+## Running the Built-In Benchmarks
+
+The test binary exposes benchmarks through a verb grammar. With no
+arguments it prints usage; `list` enumerates everything runnable.
+
+```bash
+# Discover what exists
+./build-perf/src/datakit-test list
+
+# String buffer benchmarks
+./build-perf/src/datakit-test bench mdsbench
+./build-perf/src/datakit-test bench mdscbench
+
+# Whole-system throughput sweep (default 64 MB working set)
+./build-perf/src/datakit-test speed
+./build-perf/src/datakit-test speed 128
+./build-perf/src/datakit-test speed --json
+./build-perf/src/datakit-test speed --csv
+
+# Row-level regression gate against a locally kept baseline TSV
+./build-perf/src/datakit-test test perfRegression
+```
+
+Two benchmarks build as standalone executables rather than test-binary
+subcommands:
+
+```bash
+cmake --build build-perf --target intsetSearchBench memboundBench
+./build-perf/intsetSearchBench
+./build-perf/memboundBench
+MEMBOUND_BENCH_MEMSHARD=1 ./build-perf/memboundBench
+```
+
+Run one named test rather than the whole suite: `datakit-test test ALL`
+is a long full-suite run and is not a benchmark.
+
+---
+
+## A Timing Harness
+
+Use `timeUtil` rather than hand-rolling `gettimeofday`. The
+**monotonic** clocks are the ones to subtract — wall clocks step when
+the system clock is adjusted, which silently corrupts a long capture.
 
 ```c
-#include <time.h>
-#include <sys/time.h>
+#include "timeUtil.h"
 
-/* High-resolution timing */
-typedef struct {
-    struct timeval start;
-    struct timeval end;
-} BenchTimer;
+#include <inttypes.h>
+#include <stdio.h>
 
-void benchTimerStart(BenchTimer *timer) {
-    gettimeofday(&timer->start, NULL);
-}
-
-double benchTimerEnd(BenchTimer *timer) {
-    gettimeofday(&timer->end, NULL);
-    double start_ms = timer->start.tv_sec * 1000.0 +
-                      timer->start.tv_usec / 1000.0;
-    double end_ms = timer->end.tv_sec * 1000.0 +
-                    timer->end.tv_usec / 1000.0;
-    return end_ms - start_ms;
-}
-
-/* Memory usage */
-size_t getCurrentRSS(void) {
-    FILE *f = fopen("/proc/self/statm", "r");
-    if (!f) return 0;
-
-    long rss;
-    fscanf(f, "%*s%ld", &rss);
-    fclose(f);
-
-    return rss * sysconf(_SC_PAGESIZE);
-}
-
-/* Benchmark runner */
-typedef struct {
+typedef struct benchResult {
     const char *name;
-    void (*func)(void);
-} Benchmark;
+    uint64_t elapsedNs;
+    uint64_t operations;
+    size_t bytes;
+} benchResult;
 
-void runBenchmark(Benchmark *bench) {
-    printf("\n=== %s ===\n", bench->name);
+static void benchReport(const benchResult *r) {
+    const double seconds = (double)r->elapsedNs / 1e9;
+    const double perOp = (double)r->elapsedNs / (double)r->operations;
 
-    size_t memBefore = getCurrentRSS();
-    BenchTimer timer;
+    printf("%-28s %9.3f ms  %10.1f ns/op  %12.0f ops/s",
+           r->name, (double)r->elapsedNs / 1e6, perOp,
+           (double)r->operations / seconds);
 
-    benchTimerStart(&timer);
-    bench->func();
-    double elapsed = benchTimerEnd(&timer);
+    if (r->bytes) {
+        printf("  %8.2f B/entry",
+               (double)r->bytes / (double)r->operations);
+    }
 
-    size_t memAfter = getCurrentRSS();
-    size_t memUsed = memAfter - memBefore;
+    printf("\n");
+}
 
-    printf("Time: %.2f ms\n", elapsed);
-    printf("Memory: %zu KB\n", memUsed / 1024);
+/* Median of N repeats: one run tells you about the scheduler, not
+ * about your code. */
+static uint64_t benchMedianNs(uint64_t (*run)(void *), void *userData,
+                              size_t repeats) {
+    uint64_t samples[16];
+    if (repeats > 16) {
+        repeats = 16;
+    }
+
+    for (size_t i = 0; i < repeats; i++) {
+        samples[i] = run(userData);
+    }
+
+    /* Insertion sort: repeats is tiny by construction. */
+    for (size_t i = 1; i < repeats; i++) {
+        const uint64_t v = samples[i];
+        size_t j = i;
+        while (j > 0 && samples[j - 1] > v) {
+            samples[j] = samples[j - 1];
+            j--;
+        }
+        samples[j] = v;
+    }
+
+    return samples[repeats / 2];
+}
+```
+
+Each `run` function is just a timed block:
+
+```c
+static uint64_t runSomething(void *userData) {
+    workload *w = userData;
+
+    const uint64_t start = timeUtilMonotonicNs();
+    workloadExecute(w);
+    return timeUtilMonotonicNs() - start;
+}
+```
+
+### Generating Input Data
+
+Use the `str.h` generators. They are fast, seeded, and reproducible, so
+a rerun measures your change rather than a different data set.
+
+```c
+#include "str.h"
+
+static void seedRng(uint64_t s[2], uint64_t seed) {
+    s[0] = splitmix64(&seed);
+    s[1] = splitmix64(&seed);
+}
+
+uint64_t rng[2];
+seedRng(rng, 0x9e3779b97f4a7c15ULL);
+
+for (size_t i = 0; i < count; i++) {
+    values[i] = (int64_t)(xoroshiro128plus(rng) % universeSize);
 }
 ```
 
 ---
 
-## Integer Set Comparisons
+## Measuring Memory
 
-### intset vs. Standard Array
+Every datakit container reports its own footprint. Prefer these to
+process RSS: RSS includes allocator slack, other subsystems, and
+whatever the OS has not reclaimed yet.
+
+```c
+size_t intsetBytes(intset *is);
+size_t multimapBytes(const multimap *m);
+size_t multilistBytes(const multilist *m);
+size_t multilruBytes(const multilru *mlru);
+size_t multimapAtomBytes(const multimapAtom *ma);
+uint64_t multidictBytes(multidict *d);
+uint64_t multiroarMemoryUsage(const multiroar *r);
+size_t mflexBytesUncompressed(const mflex *m);
+size_t mflexBytesActual(const mflex *m);
+```
+
+For arena-scoped work, `membound` reports its own usage directly —
+`memboundBytesUsed`, `memboundCapacity`, `memboundGetFragmentation` —
+which is far more precise than sampling RSS around the workload.
+
+---
+
+## Integer Set Benchmarks
+
+`intset` is a sorted, width-adaptive array: 2, 4, or 8 bytes per element
+depending on the widest value present, with branchless binary search for
+lookups. The two things worth measuring are **bytes per element** across
+encodings and **lookup cost** against the obvious alternatives.
 
 ```c
 #include "intset.h"
+#include "str.h"
+#include "timeUtil.h"
+
+#include <inttypes.h>
+#include <stdio.h>
 #include <stdlib.h>
 
-#define NUM_ELEMENTS 100000
+enum { INTSET_N = 100000 };
 
-void benchIntsetInsert(void) {
-    BenchTimer timer;
+/* Encoding width drives the memory story: build three sets whose
+ * contents differ only in the widest value present. */
+static void benchIntsetEncodings(void) {
+    const int64_t forcedWidth[3] = {0, INT64_C(100000), INT64_C(10000000000)};
+    const char *label[3] = {"int16", "int32", "int64"};
 
-    /* intset benchmark */
-    benchTimerStart(&timer);
-    intset *is = intsetNew();
+    for (size_t w = 0; w < 3; w++) {
+        intset *is = intsetNew();
+        if (forcedWidth[w]) {
+            intsetAdd(&is, forcedWidth[w], NULL);
+        }
 
-    for (int i = 0; i < NUM_ELEMENTS; i++) {
-        intsetAdd(&is, i, NULL);
+        const uint64_t start = timeUtilMonotonicNs();
+        for (int64_t i = 0; i < 10000; i++) {
+            intsetAdd(&is, i, NULL);
+        }
+        const uint64_t elapsedNs = timeUtilMonotonicNs() - start;
+
+        printf("%-6s %8.3f ms  %8zu bytes  %.2f B/element\n", label[w],
+               (double)elapsedNs / 1e6, intsetBytes(is),
+               (double)intsetBytes(is) / (double)intsetCount(is));
+
+        intsetFree(is);
     }
-
-    double intsetTime = benchTimerEnd(&timer);
-    size_t intsetMem = intsetBytes(is);
-
-    /* Standard array benchmark */
-    benchTimerStart(&timer);
-    int64_t *arr = malloc(sizeof(int64_t) * NUM_ELEMENTS);
-
-    for (int i = 0; i < NUM_ELEMENTS; i++) {
-        arr[i] = i;
-    }
-
-    double arrayTime = benchTimerEnd(&timer);
-    size_t arrayMem = sizeof(int64_t) * NUM_ELEMENTS;
-
-    printf("intset: %.2f ms, %zu bytes\n", intsetTime, intsetMem);
-    printf("array:  %.2f ms, %zu bytes\n", arrayTime, arrayMem);
-    printf("Memory savings: %.1f%%\n",
-           100.0 * (1.0 - (double)intsetMem / arrayMem));
-
-    intsetFree(is);
-    free(arr);
 }
 
-void benchIntsetLookup(void) {
+/* Lookup: intset binary search versus a linear scan over a plain
+ * array of the same contents. Probe with values drawn at random so
+ * neither side benefits from a predictable access pattern. */
+static void benchIntsetLookup(void) {
     intset *is = intsetNew();
-    int64_t *arr = malloc(sizeof(int64_t) * NUM_ELEMENTS);
+    int64_t *arr = zcalloc(INTSET_N, sizeof(*arr));
 
-    /* Populate both */
-    for (int i = 0; i < NUM_ELEMENTS; i++) {
+    for (int64_t i = 0; i < INTSET_N; i++) {
         intsetAdd(&is, i, NULL);
         arr[i] = i;
     }
 
-    BenchTimer timer;
+    uint64_t rng[2];
+    uint64_t seed = 1;
+    rng[0] = splitmix64(&seed);
+    rng[1] = splitmix64(&seed);
 
-    /* intset lookup (binary search) */
-    benchTimerStart(&timer);
-    for (int i = 0; i < NUM_ELEMENTS; i++) {
-        intsetFind(is, i);
+    int64_t *probes = zcalloc(INTSET_N, sizeof(*probes));
+    for (size_t i = 0; i < INTSET_N; i++) {
+        probes[i] = (int64_t)(xoroshiro128plus(rng) % INTSET_N);
     }
-    double intsetTime = benchTimerEnd(&timer);
 
-    /* Array linear search */
-    benchTimerStart(&timer);
-    for (int i = 0; i < NUM_ELEMENTS; i++) {
-        for (int j = 0; j < NUM_ELEMENTS; j++) {
-            if (arr[j] == i) break;
+    uint64_t found = 0;
+    uint64_t start = timeUtilMonotonicNs();
+    for (size_t i = 0; i < INTSET_N; i++) {
+        found += intsetFind(is, probes[i]);
+    }
+    const uint64_t setNs = timeUtilMonotonicNs() - start;
+
+    start = timeUtilMonotonicNs();
+    for (size_t i = 0; i < INTSET_N; i++) {
+        for (size_t j = 0; j < INTSET_N; j++) {
+            if (arr[j] == probes[i]) {
+                found++;
+                break;
+            }
         }
     }
-    double arrayTime = benchTimerEnd(&timer);
+    const uint64_t scanNs = timeUtilMonotonicNs() - start;
 
-    printf("intset lookup: %.2f ms\n", intsetTime);
-    printf("array search:  %.2f ms\n", arrayTime);
-    printf("Speedup: %.1fx\n", arrayTime / intsetTime);
+    printf("intset find   %8.3f ms (%.1f ns/op)\n", (double)setNs / 1e6,
+           (double)setNs / INTSET_N);
+    printf("linear scan   %8.3f ms (%.1f ns/op)\n", (double)scanNs / 1e6,
+           (double)scanNs / INTSET_N);
+    printf("checksum      %" PRIu64 "\n", found);  /* defeats DCE */
 
     intsetFree(is);
-    free(arr);
+    zfree(arr);
+    zfree(probes);
 }
-
-/* Results (typical):
- * === Insert 100K elements ===
- * intset: 12.5 ms, 200,008 bytes
- * array:  2.1 ms,  800,000 bytes
- * Memory savings: 75.0%
- *
- * === Lookup 100K elements ===
- * intset lookup: 15.3 ms  (binary search)
- * array search:  4250.7 ms  (linear search)
- * Speedup: 277.8x
- */
 ```
 
-### intset Encoding Performance
+The `checksum` print is not decoration: without consuming the result,
+`-O3` is free to delete the loop you meant to time. Every benchmark in
+this file consumes its output for that reason.
 
-```c
-void benchIntsetEncodings(void) {
-    printf("\n=== intset Encoding Performance ===\n");
-
-    /* INT16 encoding */
-    BenchTimer timer;
-    benchTimerStart(&timer);
-    intset *is16 = intsetNew();
-    for (int i = 0; i < 10000; i++) {
-        intsetAdd(&is16, i, NULL);  /* Fits in INT16 */
-    }
-    double time16 = benchTimerEnd(&timer);
-
-    /* INT32 encoding (force upgrade) */
-    benchTimerStart(&timer);
-    intset *is32 = intsetNew();
-    intsetAdd(&is32, 100000, NULL);  /* Force INT32 */
-    for (int i = 0; i < 10000; i++) {
-        intsetAdd(&is32, i, NULL);
-    }
-    double time32 = benchTimerEnd(&timer);
-
-    /* INT64 encoding (force upgrade) */
-    benchTimerStart(&timer);
-    intset *is64 = intsetNew();
-    intsetAdd(&is64, 10000000000LL, NULL);  /* Force INT64 */
-    for (int i = 0; i < 10000; i++) {
-        intsetAdd(&is64, i, NULL);
-    }
-    double time64 = benchTimerEnd(&timer);
-
-    printf("INT16: %.2f ms, %zu bytes\n", time16, intsetBytes(is16));
-    printf("INT32: %.2f ms, %zu bytes\n", time32, intsetBytes(is32));
-    printf("INT64: %.2f ms, %zu bytes\n", time64, intsetBytes(is64));
-
-    intsetFree(is16);
-    intsetFree(is32);
-    intsetFree(is64);
-}
-
-/* Results (typical):
- * INT16: 8.2 ms, 20,008 bytes   (2 bytes per element)
- * INT32: 9.8 ms, 40,008 bytes   (4 bytes per element)
- * INT64: 11.3 ms, 80,008 bytes  (8 bytes per element)
- */
-```
+`intsetSearchBench` is the maintained version of the lookup benchmark
+and is what the recorded baselines come from.
 
 ---
 
-## Map/Dictionary Performance
+## Map Benchmarks
 
-### multimap vs. Hash Table
+`multimap` keeps entries sorted, so it competes on ordered iteration and
+range scans, not on raw point-lookup throughput against a hash table.
+Measure both so the trade is visible.
 
 ```c
 #include "multimap.h"
-#include <search.h>  /* POSIX hsearch */
+#include "timeUtil.h"
 
-#define NUM_KEYS 50000
+#include <inttypes.h>
+#include <stdio.h>
 
-void benchMapInsert(void) {
-    BenchTimer timer;
+enum { MAP_N = 50000 };
 
-    /* multimap benchmark */
-    benchTimerStart(&timer);
+static void benchMultimap(void) {
     multimap *m = multimapNew(2);
 
-    for (int i = 0; i < NUM_KEYS; i++) {
-        char key[32], value[64];
-        snprintf(key, sizeof(key), "key_%d", i);
-        snprintf(value, sizeof(value), "value_%d", i);
+    char key[32];
+    char value[64];
 
-        databox keyBox = databoxNewBytesString(key);
-        databox valBox = databoxNewBytesString(value);
-        const databox *elements[2] = {&keyBox, &valBox};
+    uint64_t start = timeUtilMonotonicNs();
+    for (uint64_t i = 0; i < MAP_N; i++) {
+        const size_t keyLen =
+            (size_t)snprintf(key, sizeof(key), "key_%" PRIu64, i);
+        const size_t valueLen =
+            (size_t)snprintf(value, sizeof(value), "value_%" PRIu64, i);
 
-        multimapInsert(&m, elements);
+        const databox keyBox = databoxNewBytes(key, keyLen);
+        const databox valueBox = databoxNewBytes(value, valueLen);
+        const databox *entry[2] = {&keyBox, &valueBox};
+
+        multimapInsert(&m, entry);
     }
+    const uint64_t insertNs = timeUtilMonotonicNs() - start;
 
-    double mmapTime = benchTimerEnd(&timer);
-    size_t mmapMem = multimapBytes(m);
+    start = timeUtilMonotonicNs();
+    uint64_t hits = 0;
+    for (uint64_t i = 0; i < MAP_N; i++) {
+        const size_t keyLen =
+            (size_t)snprintf(key, sizeof(key), "key_%" PRIu64, i);
+        const databox keyBox = databoxNewBytes(key, keyLen);
 
-    /* hsearch hash table */
-    benchTimerStart(&timer);
-    hcreate(NUM_KEYS * 2);  /* Create hash table */
-
-    for (int i = 0; i < NUM_KEYS; i++) {
-        ENTRY e;
-        char *key = malloc(32);
-        char *value = malloc(64);
-        snprintf(key, 32, "key_%d", i);
-        snprintf(value, 64, "value_%d", i);
-
-        e.key = key;
-        e.data = value;
-        hsearch(e, ENTER);
+        databox found;
+        hits += multimapLookupInto(m, &keyBox, &found, 1);
     }
+    const uint64_t lookupNs = timeUtilMonotonicNs() - start;
 
-    double hashTime = benchTimerEnd(&timer);
-    /* hsearch doesn't report memory usage easily */
+    /* Ordered full scan: this is what the sorted layout buys. */
+    start = timeUtilMonotonicNs();
+    multimapIterator iter;
+    multimapIteratorInit(m, &iter, true);
 
-    printf("multimap: %.2f ms, %zu bytes\n", mmapTime, mmapMem);
-    printf("hsearch:  %.2f ms\n", hashTime);
+    uint64_t scanned = 0;
+    databox entry[2];
+    while (multimapIteratorNextInto(&iter, entry, 2)) {
+        scanned += databoxLen(&entry[1]);
+    }
+    const uint64_t scanNs = timeUtilMonotonicNs() - start;
+
+    printf("insert   %8.3f ms  %6.1f ns/op\n", (double)insertNs / 1e6,
+           (double)insertNs / MAP_N);
+    printf("lookup   %8.3f ms  %6.1f ns/op  (%" PRIu64 " hits)\n",
+           (double)lookupNs / 1e6, (double)lookupNs / MAP_N, hits);
+    printf("scan     %8.3f ms  %6.1f ns/entry (%" PRIu64 " bytes)\n",
+           (double)scanNs / 1e6, (double)scanNs / MAP_N, scanned);
+    printf("memory   %8zu bytes  %.2f B/entry\n", multimapBytes(m),
+           (double)multimapBytes(m) / (double)multimapCount(m));
 
     multimapFree(m);
-    hdestroy();
 }
-
-void benchMapLookup(void) {
-    multimap *m = multimapNew(2);
-    hcreate(NUM_KEYS * 2);
-
-    /* Populate both */
-    for (int i = 0; i < NUM_KEYS; i++) {
-        char key[32], value[64];
-        snprintf(key, sizeof(key), "key_%d", i);
-        snprintf(value, sizeof(value), "value_%d", i);
-
-        /* multimap */
-        databox keyBox = databoxNewBytesString(key);
-        databox valBox = databoxNewBytesString(value);
-        const databox *elements[2] = {&keyBox, &valBox};
-        multimapInsert(&m, elements);
-
-        /* hsearch */
-        ENTRY e;
-        e.key = strdup(key);
-        e.data = strdup(value);
-        hsearch(e, ENTER);
-    }
-
-    BenchTimer timer;
-
-    /* multimap lookup */
-    benchTimerStart(&timer);
-    for (int i = 0; i < NUM_KEYS; i++) {
-        char key[32];
-        snprintf(key, sizeof(key), "key_%d", i);
-
-        databox keyBox = databoxNewBytesString(key);
-        databox value;
-        databox *results[1] = {&value};
-
-        multimapLookup(m, &keyBox, results);
-    }
-    double mmapTime = benchTimerEnd(&timer);
-
-    /* hsearch lookup */
-    benchTimerStart(&timer);
-    for (int i = 0; i < NUM_KEYS; i++) {
-        char key[32];
-        snprintf(key, sizeof(key), "key_%d", i);
-
-        ENTRY e, *ep;
-        e.key = key;
-        ep = hsearch(e, FIND);
-    }
-    double hashTime = benchTimerEnd(&timer);
-
-    printf("multimap lookup: %.2f ms\n", mmapTime);
-    printf("hsearch lookup:  %.2f ms\n", hashTime);
-
-    multimapFree(m);
-    hdestroy();
-}
-
-/* Results (typical):
- * === Insert 50K key-value pairs ===
- * multimap: 18.3 ms, 1,234,567 bytes
- * hsearch:  12.7 ms
- *
- * === Lookup 50K keys ===
- * multimap lookup: 8.5 ms   (hash table)
- * hsearch lookup:  7.2 ms   (hash table)
- *
- * Note: multimap provides sorted iteration, hsearch doesn't
- */
 ```
+
+### Comparing Against multidict
+
+`multidict` is the unsorted hash table. A fair comparison runs the same
+key set through both and reports insert, lookup, and memory for each:
+
+```c
+#include "multidict.h"
+
+multidict *d = multidictNew(&multidictTypeExactKey,
+                            multidictDefaultClassNew(), 0);
+
+/* ... same workload, then: */
+printf("multidict %" PRIu64 " entries, %" PRIu64 " bytes\n",
+       multidictCount(d), multidictBytes(d));
+
+multidictFree(d);
+```
+
+Report the ordered-scan number alongside: a hash table has no equivalent
+operation, and that asymmetry is the whole reason both exist.
+
+### Variant Sweep
+
+`multimap` promotes itself Small → Medium → Full as it grows. To see
+where each representation stops paying, pin the variant and sweep sizes:
+
+```c
+static void benchMultimapVariants(void) {
+    const size_t sizes[] = {100, 1000, 10000, 100000};
+
+    for (size_t s = 0; s < 4; s++) {
+        const size_t n = sizes[s];
+
+        /* Pinned Small: no promotion, no tag dispatch. */
+        multimapSmall *small = multimapSmallNew(2, false);
+        uint64_t start = timeUtilMonotonicNs();
+        for (int64_t i = 0; i < (int64_t)n; i++) {
+            const databox k = databoxNewSigned(i);
+            const databox v = databoxNewSigned(i * 2);
+            const databox *e[2] = {&k, &v};
+            multimapSmallInsert(small, e);
+        }
+        const uint64_t smallNs = timeUtilMonotonicNs() - start;
+        const size_t smallBytes = multimapSmallBytes(small);
+
+        /* Generic handle: promotes as needed. */
+        multimap *full = multimapNew(2);
+        start = timeUtilMonotonicNs();
+        for (int64_t i = 0; i < (int64_t)n; i++) {
+            const databox k = databoxNewSigned(i);
+            const databox v = databoxNewSigned(i * 2);
+            const databox *e[2] = {&k, &v};
+            multimapInsert(&full, e);
+        }
+        const uint64_t genericNs = timeUtilMonotonicNs() - start;
+
+        printf("%7zu  small %9.3f ms / %8zu B   generic %9.3f ms / %8zu B\n",
+               n, (double)smallNs / 1e6, smallBytes,
+               (double)genericNs / 1e6, multimapBytes(full));
+
+        multimapSmallFree(small);
+        multimapFree(full);
+    }
+}
+```
+
+Pinned Small stays a single sorted `flex`: excellent while it is small,
+quadratic in insert cost once it is not. The crossover is the number
+this sweep exists to find on your hardware, for your key shape.
 
 ---
 
-## List Performance
-
-### multilist vs. Linked List
+## List Benchmarks
 
 ```c
 #include "multilist.h"
+#include "timeUtil.h"
 
-#define NUM_ITEMS 100000
+#include <inttypes.h>
+#include <stdio.h>
 
-typedef struct Node {
-    int value;
-    struct Node *next;
-} Node;
+enum { LIST_N = 100000 };
 
-void benchListAppend(void) {
-    BenchTimer timer;
-
-    /* multilist benchmark */
-    benchTimerStart(&timer);
+static void benchMultilist(void) {
     multilist *ml = multilistNew(FLEX_CAP_LEVEL_2048, 0);
-    mflexState *state = mflexStateCreate();
 
-    for (int i = 0; i < NUM_ITEMS; i++) {
-        databox item = databoxNewSigned(i);
-        multilistPushByTypeTail(&ml, state, &item);
+    mflexState *s0 = mflexStateCreate();
+    mflexState *s1 = mflexStateCreate();
+    mflexState *s[2] = {s0, s1};
+
+    uint64_t start = timeUtilMonotonicNs();
+    for (int64_t i = 0; i < LIST_N; i++) {
+        const databox item = databoxNewSigned(i);
+        multilistPushByTypeTail(&ml, s0, &item);
     }
+    const uint64_t appendNs = timeUtilMonotonicNs() - start;
 
-    double mlTime = benchTimerEnd(&timer);
-    size_t mlMem = multilistBytes(ml);
+    start = timeUtilMonotonicNs();
+    multilistIterator iter;
+    multilistIteratorInitForwardReadOnly(ml, s, &iter);
 
-    /* Linked list benchmark */
-    benchTimerStart(&timer);
-    Node *head = NULL, *tail = NULL;
-
-    for (int i = 0; i < NUM_ITEMS; i++) {
-        Node *node = malloc(sizeof(Node));
-        node->value = i;
-        node->next = NULL;
-
-        if (!head) {
-            head = tail = node;
-        } else {
-            tail->next = node;
-            tail = node;
-        }
-    }
-
-    double llTime = benchTimerEnd(&timer);
-    size_t llMem = NUM_ITEMS * sizeof(Node);
-
-    printf("multilist: %.2f ms, %zu bytes\n", mlTime, mlMem);
-    printf("linked list: %.2f ms, %zu bytes\n", llTime, llMem);
-    printf("Memory savings: %.1f%%\n",
-           100.0 * (1.0 - (double)mlMem / llMem));
-
-    mflexStateFree(state);
-    multilistFree(ml);
-
-    /* Free linked list */
-    while (head) {
-        Node *next = head->next;
-        free(head);
-        head = next;
-    }
-}
-
-void benchListIteration(void) {
-    multilist *ml = multilistNew(FLEX_CAP_LEVEL_2048, 0);
-    mflexState *state = mflexStateCreate();
-    Node *head = NULL, *tail = NULL;
-
-    /* Populate both */
-    for (int i = 0; i < NUM_ITEMS; i++) {
-        databox item = databoxNewSigned(i);
-        multilistPushByTypeTail(&ml, state, &item);
-
-        Node *node = malloc(sizeof(Node));
-        node->value = i;
-        node->next = NULL;
-        if (!head) {
-            head = tail = node;
-        } else {
-            tail->next = node;
-            tail = node;
-        }
-    }
-
-    BenchTimer timer;
-
-    /* multilist iteration */
-    benchTimerStart(&timer);
-    multimapIterator iter;
-    multilistIteratorInitForward(ml, state, &iter);
     multilistEntry entry;
-
     int64_t sum = 0;
     while (multilistNext(&iter, &entry)) {
         sum += entry.box.data.i64;
     }
-
     multilistIteratorRelease(&iter);
-    double mlTime = benchTimerEnd(&timer);
+    const uint64_t iterNs = timeUtilMonotonicNs() - start;
 
-    /* Linked list iteration */
-    benchTimerStart(&timer);
-    sum = 0;
-    Node *curr = head;
-    while (curr) {
-        sum += curr->value;
-        curr = curr->next;
-    }
-    double llTime = benchTimerEnd(&timer);
+    printf("append   %8.3f ms  %6.1f ns/op\n", (double)appendNs / 1e6,
+           (double)appendNs / LIST_N);
+    printf("iterate  %8.3f ms  %6.1f ns/entry (sum %" PRId64 ")\n",
+           (double)iterNs / 1e6, (double)iterNs / LIST_N, sum);
+    printf("memory   %8zu bytes  %.2f B/entry\n", multilistBytes(ml),
+           (double)multilistBytes(ml) / (double)multilistCount(ml));
 
-    printf("multilist iteration: %.2f ms\n", mlTime);
-    printf("linked list iteration: %.2f ms\n", llTime);
-
-    mflexStateFree(state);
     multilistFree(ml);
-    while (head) {
-        Node *next = head->next;
-        free(head);
-        head = next;
-    }
+    mflexStateFree(s0);
+    mflexStateFree(s1);
 }
-
-/* Results (typical):
- * === Append 100K items ===
- * multilist: 15.2 ms, 456,789 bytes
- * linked list: 18.7 ms, 2,400,000 bytes
- * Memory savings: 81.0%
- *
- * === Iterate 100K items ===
- * multilist iteration: 3.8 ms  (good cache locality)
- * linked list iteration: 12.5 ms  (poor cache locality)
- */
 ```
 
----
+Two knobs change the answer, so sweep them rather than guessing:
 
-## Array Performance
+- **Node size** (`FLEX_CAP_LEVEL_*`): larger nodes mean fewer nodes and
+  better scan locality, but costlier mid-list insert.
+- **Uncompressed depth** (second `multilistNew` argument): `0` compresses
+  everything eligible; `N` keeps the outermost `N` nodes at each end
+  uncompressed so head/tail work never decompresses.
 
-### multiarray vs. realloc Array
-
-```c
-#include "multiarray.h"
-
-#define NUM_ELEMENTS 100000
-
-typedef struct {
-    int id;
-    double value;
-    char name[32];
-} Record;
-
-void benchArrayAppend(void) {
-    BenchTimer timer;
-
-    /* multiarray benchmark */
-    benchTimerStart(&timer);
-    multiarray *arr = multiarrayNew(sizeof(Record), 1024);
-
-    for (int i = 0; i < NUM_ELEMENTS; i++) {
-        Record r = {i, i * 1.5, ""};
-        snprintf(r.name, sizeof(r.name), "record_%d", i);
-
-        multiarrayInsertAfter(&arr, i > 0 ? i - 1 : 0, &r);
-    }
-
-    double maTime = benchTimerEnd(&timer);
-    size_t maMem = multiarrayBytes(arr);
-
-    /* Standard realloc array */
-    benchTimerStart(&timer);
-    Record *stdArr = NULL;
-    size_t capacity = 1024;
-    size_t count = 0;
-
-    stdArr = malloc(sizeof(Record) * capacity);
-
-    for (int i = 0; i < NUM_ELEMENTS; i++) {
-        if (count >= capacity) {
-            capacity *= 2;
-            stdArr = realloc(stdArr, sizeof(Record) * capacity);
-        }
-
-        Record r = {i, i * 1.5, ""};
-        snprintf(r.name, sizeof(r.name), "record_%d", i);
-        stdArr[count++] = r;
-    }
-
-    double stdTime = benchTimerEnd(&timer);
-    size_t stdMem = capacity * sizeof(Record);
-
-    printf("multiarray: %.2f ms, %zu bytes\n", maTime, maMem);
-    printf("std array:  %.2f ms, %zu bytes\n", stdTime, stdMem);
-    printf("Memory overhead: %.1f%%\n",
-           100.0 * ((double)stdMem / maMem - 1.0));
-
-    free(stdArr);
-}
-
-void benchArrayRandomAccess(void) {
-    multiarray *arr = multiarrayNew(sizeof(int64_t), NUM_ELEMENTS);
-    int64_t *stdArr = malloc(sizeof(int64_t) * NUM_ELEMENTS);
-
-    /* Populate both */
-    for (int i = 0; i < NUM_ELEMENTS; i++) {
-        int64_t val = i;
-        multiarrayInsertAfter(&arr, i > 0 ? i - 1 : 0, &val);
-        stdArr[i] = val;
-    }
-
-    BenchTimer timer;
-
-    /* multiarray random access */
-    benchTimerStart(&timer);
-    int64_t sum = 0;
-    for (int i = 0; i < NUM_ELEMENTS; i++) {
-        int64_t *val = (int64_t *)multiarrayGet(arr, i);
-        sum += *val;
-    }
-    double maTime = benchTimerEnd(&timer);
-
-    /* Standard array random access */
-    benchTimerStart(&timer);
-    sum = 0;
-    for (int i = 0; i < NUM_ELEMENTS; i++) {
-        sum += stdArr[i];
-    }
-    double stdTime = benchTimerEnd(&timer);
-
-    printf("multiarray random access: %.2f ms\n", maTime);
-    printf("std array random access:  %.2f ms\n", stdTime);
-    printf("Overhead: %.1fx\n", maTime / stdTime);
-
-    free(stdArr);
-}
-
-/* Results (typical):
- * === Append 100K records ===
- * multiarray: 22.5 ms, 4,800,123 bytes
- * std array:  19.3 ms, 6,553,600 bytes  (over-allocated)
- * Memory overhead: 36.5%
- *
- * === Random access 100K elements ===
- * multiarray random access: 1.8 ms
- * std array random access:  1.2 ms
- * Overhead: 1.5x  (minimal cost for better memory management)
- */
-```
+Comparing against a hand-rolled linked list is a memory comparison more
+than a time one: measure `multilistBytes(ml)` against
+`LIST_N * sizeof(YourNode)` and report both figures.
 
 ---
 
 ## Compression Benchmarks
 
-### mflex Compression
+Compression benchmarks are only meaningful against realistic input. The
+useful experiment is the **same harness over inputs of different
+entropy**, because that spread is the result.
 
 ```c
 #include "mflex.h"
+#include "str.h" /* splitmix64 / xoroshiro128plus */
+#include "timeUtil.h"
 
-void benchCompression(void) {
+#include <stdio.h>
+
+static void benchMflex(const char *label, size_t count,
+                       void (*fill)(char *buf, size_t bufLen, size_t i,
+                                    uint64_t rng[2], size_t *outLen)) {
     mflexState *state = mflexStateCreate();
+    mflex *m = mflexNew();
 
-    printf("\n=== Compression Effectiveness ===\n");
+    uint64_t seed = 42;
+    uint64_t rng[2] = {splitmix64(&seed), splitmix64(&seed)};
 
-    /* Test 1: Repetitive data (compresses well) */
-    mflex *repetitive = mflexNew();
-    BenchTimer timer;
-
-    benchTimerStart(&timer);
-    for (int i = 0; i < 100000; i++) {
-        /* Repetitive string */
-        const char *msg = "This is a repetitive log message. Status: OK.";
-        mflexPushBytes(&repetitive, state, msg, strlen(msg),
-                      FLEX_ENDPOINT_TAIL);
+    char buf[128];
+    const uint64_t start = timeUtilMonotonicNs();
+    for (size_t i = 0; i < count; i++) {
+        size_t len = 0;
+        fill(buf, sizeof(buf), i, rng, &len);
+        mflexPushBytes(&m, state, buf, len, FLEX_ENDPOINT_TAIL);
     }
-    double repTime = benchTimerEnd(&timer);
+    const uint64_t elapsedNs = timeUtilMonotonicNs() - start;
 
-    size_t repUncomp = mflexBytesUncompressed(repetitive);
-    size_t repComp = mflexBytesActual(repetitive);
+    const size_t actual = mflexBytesActual(m);
+    const size_t uncompressed = mflexBytesUncompressed(m);
 
-    printf("Repetitive data:\n");
-    printf("  Time: %.2f ms\n", repTime);
-    printf("  Uncompressed: %zu bytes\n", repUncomp);
-    printf("  Compressed: %zu bytes\n", repComp);
-    printf("  Ratio: %.2fx\n", (double)repUncomp / repComp);
+    printf("%-16s %8.3f ms  actual %9zu B", label,
+           (double)elapsedNs / 1e6, actual);
 
-    /* Test 2: Random data (doesn't compress) */
-    mflex *random = mflexNew();
-
-    benchTimerStart(&timer);
-    for (int i = 0; i < 100000; i++) {
-        char buf[64];
-        for (int j = 0; j < 63; j++) {
-            buf[j] = 'a' + (rand() % 26);
-        }
-        buf[63] = '\0';
-
-        mflexPushBytes(&random, state, buf, strlen(buf),
-                      FLEX_ENDPOINT_TAIL);
+    if (mflexIsCompressed(m)) {
+        printf("  ratio %.2fx", (double)uncompressed / (double)actual);
+    } else {
+        printf("  (not compressed)");
     }
-    double randTime = benchTimerEnd(&timer);
 
-    size_t randUncomp = mflexBytesUncompressed(random);
-    size_t randComp = mflexBytesActual(random);
+    printf("\n");
 
-    printf("\nRandom data:\n");
-    printf("  Time: %.2f ms\n", randTime);
-    printf("  Uncompressed: %zu bytes\n", randUncomp);
-    printf("  Compressed: %zu bytes\n", randComp);
-    printf("  Ratio: %.2fx\n", (double)randUncomp / randComp);
-
+    mflexFree(m);
     mflexStateFree(state);
-    mflexFree(repetitive);
-    mflexFree(random);
 }
 
-/* Results (typical):
- * === Compression Effectiveness ===
- * Repetitive data:
- *   Time: 45.2 ms
- *   Uncompressed: 4,700,000 bytes
- *   Compressed: 523,456 bytes
- *   Ratio: 8.98x  (excellent compression)
- *
- * Random data:
- *   Time: 78.3 ms
- *   Uncompressed: 6,300,000 bytes
- *   Compressed: 6,350,123 bytes
- *   Ratio: 0.99x  (no compression, slight overhead)
- */
+static void fillRepetitive(char *buf, size_t bufLen, size_t i,
+                           uint64_t rng[2], size_t *outLen) {
+    (void)i;
+    (void)rng;
+    *outLen = (size_t)snprintf(buf, bufLen,
+                               "repetitive log line, status: OK");
+}
+
+static void fillRandom(char *buf, size_t bufLen, size_t i, uint64_t rng[2],
+                       size_t *outLen) {
+    (void)i;
+    const size_t len = 63 < bufLen ? 63 : bufLen - 1;
+    for (size_t j = 0; j < len; j++) {
+        buf[j] = (char)('a' + (xoroshiro128plus(rng) % 26));
+    }
+    *outLen = len;
+}
 ```
 
-### Delta-of-Delta Compression
+Run both and report the pair. High-entropy input compressing to slightly
+_more_ than its input is the expected, correct outcome — that overhead is
+the reason `mflex` decides per node whether compression is worth it, and
+why `mflexIsCompressed` is worth checking before quoting a ratio.
+
+### Delta-of-Delta and XOR Streams
+
+`dod` and `xof` are bit-packed streams rather than containers: you own
+the buffer, so "compressed size" is `(usedBits + 7) / 8`, and the
+baseline is `count * sizeof(int64_t)` or `count * sizeof(double)`.
 
 ```c
 #include "dod.h"
+#include "timeUtil.h"
 
-void benchDeltaOfDelta(void) {
-    printf("\n=== Delta-of-Delta Compression ===\n");
+enum { DOD_N = 100000 };
 
-    BenchTimer timer;
+static void benchDod(void) {
+    dod *bits = zcalloc(DOD_N * 2, sizeof(*bits));
 
-    /* Sequential timestamps (compress very well) */
-    benchTimerStart(&timer);
-    dod *timestamps = dodNew();
+    const int64_t base = 1700000000;
+    dodVal t0 = base;
+    dodVal t1 = base + 60;
+    size_t usedBits = 0;
 
-    int64_t baseTime = 1700000000;
-    for (int i = 0; i < 100000; i++) {
-        dodAdd(timestamps, baseTime + (i * 60));  /* Every minute */
+    const uint64_t start = timeUtilMonotonicNs();
+    for (size_t i = 2; i < DOD_N; i++) {
+        const dodVal next = base + (int64_t)i * 60;
+        dodAppend(bits, t0, t1, next, &usedBits);
+        t0 = t1;
+        t1 = next;
     }
+    const uint64_t elapsedNs = timeUtilMonotonicNs() - start;
 
-    double dodTime = benchTimerEnd(&timer);
-    size_t dodMem = dodBytes(timestamps);
+    const size_t encoded = (usedBits + 7) / 8;
+    const size_t raw = DOD_N * sizeof(int64_t);
 
-    /* Uncompressed array */
-    benchTimerStart(&timer);
-    int64_t *arr = malloc(sizeof(int64_t) * 100000);
-    for (int i = 0; i < 100000; i++) {
-        arr[i] = baseTime + (i * 60);
-    }
-    double arrTime = benchTimerEnd(&timer);
-    size_t arrMem = 100000 * sizeof(int64_t);
+    printf("dod encode  %8.3f ms  %8zu B vs %8zu B raw  (%.2fx, %.2f bits/value)\n",
+           (double)elapsedNs / 1e6, encoded, raw,
+           (double)raw / (double)encoded, (double)usedBits / DOD_N);
 
-    printf("Sequential timestamps:\n");
-    printf("  DoD: %.2f ms, %zu bytes\n", dodTime, dodMem);
-    printf("  Array: %.2f ms, %zu bytes\n", arrTime, arrMem);
-    printf("  Compression ratio: %.2fx\n", (double)arrMem / dodMem);
-
-    dodFree(timestamps);
-    free(arr);
+    zfree(bits);
 }
-
-/* Results (typical):
- * === Delta-of-Delta Compression ===
- * Sequential timestamps:
- *   DoD: 8.5 ms, 125,678 bytes
- *   Array: 1.2 ms, 800,000 bytes
- *   Compression ratio: 6.36x
- */
 ```
+
+Perfectly regular intervals are the best case and produce a number you
+cannot reproduce on real data. Always run the same harness over a real
+timestamp sample before quoting a ratio. `xof` follows the same shape
+with `xofInit` / `xofAppend`; see
+[PATTERNS.md](PATTERNS.md#compression).
 
 ---
 
-## Cardinality Estimation
+## Cardinality Benchmarks
 
-### hyperloglog vs. Exact Counting
+`hyperloglog` trades exactness for a fixed footprint. Measure the error,
+not just the speed — a cardinality estimator whose error you have not
+measured is not a benchmark result.
 
 ```c
 #include "hyperloglog.h"
+#include "timeUtil.h"
 
-#define NUM_UNIQUE 10000000
+#include <inttypes.h>
+#include <math.h>
 
-void benchCardinality(void) {
-    printf("\n=== Cardinality Estimation ===\n");
+static void benchHyperloglog(uint64_t unique) {
+    hyperloglog *hll = hyperloglogNew();
 
-    BenchTimer timer;
-
-    /* HyperLogLog */
-    benchTimerStart(&timer);
-    hyperloglog *hll = hyperloglogCreate();
-
-    for (int i = 0; i < NUM_UNIQUE; i++) {
-        char buf[32];
-        int len = snprintf(buf, sizeof(buf), "user_%d", i);
-        hyperloglogAdd(hll, (uint8_t *)buf, len);
+    const uint64_t start = timeUtilMonotonicNs();
+    for (uint64_t i = 0; i < unique; i++) {
+        /* hyperloglogAdd takes ** : a sparse HLL is reallocated and
+         * eventually promoted to dense as it fills. */
+        hyperloglogAdd(&hll, &i, sizeof(i));
     }
+    const uint64_t elapsedNs = timeUtilMonotonicNs() - start;
 
-    uint64_t estimate = hyperloglogCount(hll);
-    double hllTime = benchTimerEnd(&timer);
-    size_t hllMem = hyperloglogBytes(hll);
+    bool invalid = false;
+    const uint64_t estimate = hyperloglogCount(hll, &invalid);
 
-    /* Hash set (exact counting) */
-    benchTimerStart(&timer);
-    hcreate(NUM_UNIQUE * 2);
+    const double error =
+        100.0 * fabs((double)estimate - (double)unique) / (double)unique;
 
-    for (int i = 0; i < NUM_UNIQUE; i++) {
-        ENTRY e;
-        char *key = malloc(32);
-        snprintf(key, 32, "user_%d", i);
-
-        e.key = key;
-        e.data = NULL;
-        hsearch(e, ENTER);
-    }
-
-    double hashTime = benchTimerEnd(&timer);
-    /* hsearch uses ~200MB for 10M entries */
-
-    printf("HyperLogLog:\n");
-    printf("  Time: %.2f ms\n", hllTime);
-    printf("  Memory: %zu bytes (~12KB)\n", hllMem);
-    printf("  Estimate: %lu\n", estimate);
-    printf("  Actual: %d\n", NUM_UNIQUE);
-    printf("  Error: %.2f%%\n",
-           100.0 * fabs((double)estimate - NUM_UNIQUE) / NUM_UNIQUE);
-
-    printf("\nHash Set (exact):\n");
-    printf("  Time: %.2f ms\n", hashTime);
-    printf("  Memory: ~200MB\n");
-    printf("  Count: %d (exact)\n", NUM_UNIQUE);
+    printf("hll add     %8.3f ms  %6.1f ns/op\n", (double)elapsedNs / 1e6,
+           (double)elapsedNs / (double)unique);
+    printf("estimate    %" PRIu64 " vs %" PRIu64 " actual  (%.2f%% error)%s\n",
+           estimate, unique, error, invalid ? " [corrupt]" : "");
 
     hyperloglogFree(hll);
-    hdestroy();
-}
-
-/* Results (typical):
- * === Cardinality Estimation ===
- * HyperLogLog:
- *   Time: 2,345 ms
- *   Memory: 12,288 bytes (~12KB)
- *   Estimate: 10,082,456
- *   Actual: 10,000,000
- *   Error: 0.82%  (within expected range)
- *
- * Hash Set (exact):
- *   Time: 3,456 ms
- *   Memory: ~200MB
- *   Count: 10,000,000 (exact)
- *
- * HyperLogLog uses 16,000x less memory!
- */
-```
-
----
-
-## Memory Efficiency
-
-### Memory Usage Summary
-
-```c
-void printMemoryComparison(void) {
-    printf("\n=== Memory Efficiency Comparison ===\n");
-    printf("(100,000 integer elements)\n\n");
-
-    printf("Container          Memory      Notes\n");
-    printf("------------------------------------------------\n");
-    printf("intset (INT16)     200,008     2 bytes/element\n");
-    printf("intset (INT32)     400,008     4 bytes/element\n");
-    printf("intset (INT64)     800,008     8 bytes/element\n");
-    printf("int64_t array      800,000     8 bytes/element\n");
-    printf("std::set<int>      2,400,000   24 bytes/element (RB-tree)\n");
-    printf("std::unordered_set 1,600,000   16 bytes/element (hash)\n");
-    printf("\n");
-
-    printf("(100,000 list nodes with int)\n\n");
-    printf("Container          Memory      Notes\n");
-    printf("------------------------------------------------\n");
-    printf("multilist          456,789     Compressed nodes\n");
-    printf("std::list          2,400,000   24 bytes/node (prev+next+data)\n");
-    printf("std::vector        800,000     8 bytes/element\n");
-    printf("\n");
-
-    printf("(10M unique strings - cardinality)\n\n");
-    printf("Container          Memory      Notes\n");
-    printf("------------------------------------------------\n");
-    printf("hyperloglog        12,288      Fixed size, ~0.8%% error\n");
-    printf("std::unordered_set 200MB+      Stores actual strings\n");
 }
 ```
 
----
+Sweep `unique` across several orders of magnitude. A sparse HLL is small
+and exact-ish at low cardinality and promotes to a fixed-size dense
+encoding as it fills, so a single data point hides the whole behaviour.
 
-## Scale-Aware Variants
-
-### multimap: Small vs Medium vs Full
-
-```c
-void benchMultimapVariants(void) {
-    printf("\n=== multimap Variants Performance ===\n");
-
-    BenchTimer timer;
-
-    /* Test different sizes */
-    int sizes[] = {100, 1000, 10000, 100000};
-
-    for (int s = 0; s < 4; s++) {
-        int size = sizes[s];
-
-        printf("\n%d elements:\n", size);
-
-        /* Small variant */
-        benchTimerStart(&timer);
-        multimapSmall *small = multimapSmallNew();
-        for (int i = 0; i < size && i < 1000; i++) {  /* Small limited */
-            databox k = databoxNewSigned(i);
-            databox v = databoxNewSigned(i * 2);
-            const databox *e[2] = {&k, &v};
-            multimapSmallInsert(small, e);
-        }
-        double smallTime = size <= 1000 ? benchTimerEnd(&timer) : -1;
-
-        /* Full variant */
-        benchTimerStart(&timer);
-        multimap *full = NULL;
-        multimapNew(&full);
-        for (int i = 0; i < size; i++) {
-            databox k = databoxNewSigned(i);
-            databox v = databoxNewSigned(i * 2);
-            const databox *e[2] = {&k, &v};
-            multimapInsert(&full, e);
-        }
-        double fullTime = benchTimerEnd(&timer);
-
-        if (smallTime > 0) {
-            printf("  Small: %.2f ms\n", smallTime);
-        } else {
-            printf("  Small: N/A (size limit exceeded)\n");
-        }
-        printf("  Full:  %.2f ms\n", fullTime);
-
-        if (size <= 1000) {
-            multimapSmallFree(small);
-        }
-        multimapFree(full);
-    }
-}
-
-/* Results (typical):
- * === multimap Variants Performance ===
- *
- * 100 elements:
- *   Small: 0.15 ms  (optimized for small data)
- *   Full:  0.28 ms  (hash table overhead)
- *
- * 1000 elements:
- *   Small: 1.8 ms
- *   Full:  2.5 ms
- *
- * 10000 elements:
- *   Small: N/A (size limit exceeded)
- *   Full:  18.3 ms
- *
- * 100000 elements:
- *   Small: N/A
- *   Full:  245.7 ms
- *
- * Conclusion: Use Small for < 1KB, Full for larger datasets
- */
-```
+For an exact-membership comparison, run the same key set through
+`multiroar` (`multiroarBitSet` / `multiroarBitCount` /
+`multiroarMemoryUsage`) and report both footprints. They answer
+different questions — approximate count versus exact membership — so
+report what each one can do, not just how big it is.
 
 ---
 
-## Summary
+## Reporting Results
 
-### Performance Highlights
+A capture is worth keeping only if someone else can reproduce it. Record:
 
-1. **intset**: 75% memory savings vs arrays, 277x faster lookups vs linear search
-2. **multilist**: 81% memory savings vs linked lists, 3x faster iteration
-3. **hyperloglog**: 16,000x memory reduction for cardinality, <1% error
-4. **mflex**: Up to 9x compression for repetitive data
-5. **multimap**: Comparable to hash tables, with sorted iteration bonus
+- Date, CPU model and architecture, compiler and version.
+- Preset (`perf`) and the exact build and run commands.
+- Repeat count and whether you report median or minimum.
+- The workload shape: element count, key size, value size, data
+  distribution and RNG seed.
+- Both time and memory. A container that is 10% slower and 60% smaller
+  is a win in most of the places datakit gets used, and a table with
+  only one column cannot show that.
 
-### When to Use Each Container
+Append new captures to
+[PERFORMANCE_BASELINES.md](../PERFORMANCE_BASELINES.md) as a new dated
+section; never rewrite an old one. The point of that file is the time
+series. Row-level regressions are gated by `datakit-test test
+perfRegression` against a locally kept TSV.
 
-```
-Use intset when:
-  - Storing unique integers
-  - Memory is critical
-  - Binary search acceptable
+Next:
 
-Use multimap when:
-  - Need key-value storage
-  - Want sorted iteration
-  - Memory efficiency matters
-
-Use multilist when:
-  - Queue/stack operations
-  - Many insertions/deletions
-  - Good cache locality important
-
-Use hyperloglog when:
-  - Only need cardinality
-  - Can tolerate ~1% error
-  - Extreme memory constraints
-
-Use mflex when:
-  - Data is repetitive
-  - Compression beneficial
-  - Transparent decompression OK
-```
-
-### Benchmark Code
-
-All benchmark code is available in the test suite:
-
-```bash
-# Run performance benchmarks
-./src/datakit-test bench all
-
-# Run specific benchmarks
-./src/datakit-test bench intset
-./src/datakit-test bench multimap
-./src/datakit-test bench compression
-```
-
-For more examples, see:
-
-- [PATTERNS.md](PATTERNS.md) - Common coding patterns
-- [USE_CASES.md](USE_CASES.md) - Real-world applications
+- [PATTERNS.md](PATTERNS.md) — the idioms these harnesses use
+- [USE_CASES.md](USE_CASES.md) — the applications worth measuring
+- [PERFORMANCE_BASELINES.md](../PERFORMANCE_BASELINES.md) — recorded numbers

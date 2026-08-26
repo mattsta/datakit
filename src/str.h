@@ -396,7 +396,7 @@ typedef uintptr_t StrBloomFilter;
  *  for elements in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]] */
 typedef __uint128_t StrBloomFilterBig;
 #define _STR_BIG_BLOOM_MASK ((8 * sizeof(StrBloomFilterBig)) - 1)
-#define _StrBloomBigBit(x) ((StrBloomFilter)1 << ((x) & _STR_BIG_BLOOM_MASK))
+#define _StrBloomBigBit(x) ((StrBloomFilterBig)1 << ((x) & _STR_BIG_BLOOM_MASK))
 #define StrBloomBigSet(b, x) ((b) |= _StrBloomBigBit((x)))
 #define StrBloomBigTest(b, x) ((b) & _StrBloomBigBit((x)))
 

@@ -2,21 +2,31 @@
 
 ## Overview
 
-datakit is designed to be **highly portable** across different operating systems and CPU architectures while leveraging platform-specific optimizations when available. This guide explains platform differences, feature detection, and optimization opportunities.
+datakit is **POSIX-only** and portable across the Unix-like operating
+systems and CPU architectures below, leveraging platform-specific
+optimizations when available. This guide explains platform differences,
+feature detection, and optimization opportunities.
+
+**There is no Windows support.** No `_WIN32`/`_MSC_VER` code paths, no
+MSVC build, no MinGW target. The supported compilers are clang and gcc
+only; upstream code carrying MSVC branches has those branches stripped
+when it is vendored in.
 
 ## Supported Platforms
 
 ### Operating Systems
 
-| Platform    | Status    | Notes                               |
-| ----------- | --------- | ----------------------------------- |
-| **Linux**   | Primary   | Fully supported, extensively tested |
-| **macOS**   | Supported | Darwin/BSD features                 |
-| **FreeBSD** | Supported | BSD variants fully supported        |
-| **OpenBSD** | Supported | BSD variants fully supported        |
-| **NetBSD**  | Supported | BSD variants fully supported        |
-| **Solaris** | Supported | Legacy Unix support                 |
-| **AIX**     | Supported | IBM Unix support                    |
+| Platform      | Status      | Notes                                             |
+| ------------- | ----------- | ------------------------------------------------- |
+| **Linux**     | Primary     | Fully supported, extensively tested               |
+| **macOS**     | Primary     | Darwin; also the main Apple Silicon test host     |
+| **FreeBSD**   | Supported   | `config.h` detects it; BSD random/proctitle paths |
+| **OpenBSD**   | Supported   | `getentropy()` path                               |
+| **NetBSD**    | Supported   | `config.h` detects it                             |
+| **DragonFly** | Supported   | `config.h` detects it                             |
+| **AIX**       | Best effort | `DK_OS_AIX` exists; not built or tested by CI     |
+| **Solaris**   | Unsupported | Removed entirely; do not add `__sun` branches     |
+| **Windows**   | Unsupported | Removed entirely; do not add MSVC/Win32 branches  |
 
 ### CPU Architectures
 
@@ -66,12 +76,16 @@ Some features are detected at runtime:
 
 ```c
 /* CPU feature detection example */
-#if defined(__x86_64__) || defined(_M_X64)
+#if defined(__x86_64__)
     bool has_f16c = __builtin_cpu_supports("f16c");
     bool has_avx = __builtin_cpu_supports("avx");
     bool has_avx2 = __builtin_cpu_supports("avx2");
 #endif
 ```
+
+Guard on the compiler-defined architecture macros only (`__x86_64__`,
+`__aarch64__`, `__ARM_NEON`, …). MSVC's `_M_X64` / `_M_AMD64` spellings
+have no meaning in a clang/gcc-only tree.
 
 ## Platform-Specific Optimizations
 
@@ -211,21 +225,28 @@ madvise(random_access, multimapBytes(random_access), MADV_RANDOM);
 
 #### setproctitle - Process Name
 
-```c
-/* BSD, Linux with libsetproctitle */
-#if defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
-    #include <sys/types.h>
-    #include <unistd.h>
-    setproctitle("datakit-server: handling request");
-#endif
+datakit's `setproctitle.h` selects one of three variants at compile
+time: the BSDs alias the native `setproctitle(3)` behind a
+**zero-argument** `setProctitleInit()` macro, Linux/macOS use a real
+`setProctitleInit(char *argv[])` that relocates the argv/environ
+region, and other platforms compile both away. Portable code must
+guard the init call — `setProctitleInit(argv)` is a compile error on
+the macro platforms (see
+[SETPROCTITLE](../modules/system/SETPROCTITLE.md) for the full
+variant table):
 
-/* Linux native (via /proc/self/cmdline) */
-#ifdef __linux__
-    void setProcessTitle(const char *title) {
-        /* Custom implementation */
-        prctl(PR_SET_NAME, title, 0, 0, 0);
-    }
+```c
+#include "setproctitle.h"
+
+int main(int argc, char *argv[]) {
+#if DK_OS_LINUX || DK_OS_APPLE
+    setProctitleInit(argv);
+#else
+    setProctitleInit();
 #endif
+    setproctitle("datakit-server: handling request");
+    /* ... */
+}
 ```
 
 #### Process Limits
@@ -503,14 +524,13 @@ docker run -v $(pwd):/src ubuntu:22.04 \
 docker run -v $(pwd):/src alpine:latest \
     bash -c "cd /src && make test"
 
-# Test on CentOS
-docker run -v $(pwd):/src centos:8 \
+# Test on Fedora
+docker run -v $(pwd):/src fedora:latest \
     bash -c "cd /src && make test"
-
-# Test on FreeBSD
-docker run -v $(pwd):/src freebsd:13 \
-    bash -c "cd /src && gmake test"
 ```
+
+FreeBSD and the other BSDs cannot be covered by Docker — the kernel
+differs. Use a VM or a real host, and build with `gmake` there.
 
 ### CI/CD Pipeline
 

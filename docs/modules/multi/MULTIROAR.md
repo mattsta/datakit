@@ -6,14 +6,24 @@
 
 **Key Features:**
 
-- Automatic encoding selection (sparse/dense/inverted)
+- Automatic encoding selection (sparse/dense/inverted/all-ones)
 - 8192-bit chunks for optimal memory usage
 - Packed 13-bit position arrays for sparse data
 - Full bitmaps for dense data
 - Inverted position arrays for nearly-full chunks
-- Set operations (AND, OR, XOR, NOT)
-- Built on multimap for O(log n) chunk lookup
-- Support for both bitmaps and value matrices
+- Set operations (AND, OR, XOR, NOT, ANDNOT) in-place and copy forms, plus
+  N-way variants
+- Predicates (`Equals`, `IsSubset`, `Intersects`, `IsEmpty`) and extrema
+  (`Min`, `Max`)
+- Succinct primitives: `Rank`, `Select`, `RangeCount`
+- Forward iterator over set positions
+- Bulk get/set, array conversion, serialization
+- Similarity metrics (Jaccard, Hamming distance, overlap, Dice)
+- Built on multimap for chunk lookup
+- Value mode: sparse `position -> fixed-width unsigned value` maps
+  (see [Value Operations](#value-operations))
+
+All positions are `uint64_t`.
 
 **Headers**: `multiroar.h`
 
@@ -34,14 +44,14 @@ Position: 0        8191 8192      16383 16384     24575
 Each chunk is stored using one of several encodings based on density:
 
 ```
-Sparse (< 631 set bits):     Packed array of positions
-  [Type:1][Count:2][Pos1:13bits][Pos2:13bits]...
+Sparse (< 629 set bits):     Packed array of positions
+  [Type:1][Count:1-2][Pos1:13bits][Pos2:13bits]...
 
-Dense (631-7561 set bits):   Full 1024-byte bitmap
+Dense (629-7563 set bits):   Full 1024-byte bitmap
   [Type:1][Bitmap:8192bits]
 
-Nearly Full (> 7561 bits):   Inverted packed array (unset positions)
-  [Type:1][Count:2][NotPos1:13bits][NotPos2:13bits]...
+Nearly Full (> 7563 bits):   Inverted packed array (unset positions)
+  [Type:1][Count:1-2][NotPos1:13bits][NotPos2:13bits]...
 
 All Set:                     Single type byte
   [Type:1]
@@ -66,20 +76,16 @@ Missing chunks are implicitly all-zero.
 
 ### Main Structure
 
-```c
-typedef struct multiroar multiroar;
+`multiroar` is an **opaque handle** — `multiroar.h` only exposes
+`typedef struct multiroar multiroar;`. The definition lives in `multiroar.c`
+and must not be reached into by callers.
 
-struct multiroar {
-    multimap *map;  /* Maps chunk_id -> encoded_chunk */
-    uint8_t meta[];
-    /* meta contains:
-     *   - 1 byte: bit width (for value matrices)
-     *   - 1-9 bytes: column count (varint)
-     *   - 1-9 bytes: row count (varint) */
-};
-```
+Internally it is a `multimap *` (chunk id -> encoded chunk) followed by a
+flexible metadata array holding the element bit width, then column and row
+counts as varints (3 to 19 bytes total). Columns are stored before rows
+because a plain bitmap only ever consults the column count.
 
-### Chunk Types
+### Chunk Types (internal)
 
 ```c
 typedef enum chunkType {
@@ -88,18 +94,29 @@ typedef enum chunkType {
     CHUNK_TYPE_UNDER_FULL_DIRECT_POSITION_NUMBERS,     /* Sparse */
     CHUNK_TYPE_FULL_BITMAP,    /* Dense bitmap */
     CHUNK_TYPE_OVER_FULL_DIRECT_NOT_SET_POSITION_NUMBERS,  /* Inverted */
+    CHUNK_TYPE_MAX_TYPE = 255
 } chunkType;
 ```
 
-### Constants
+### Constants (internal, `multiroar.c`)
 
 ```c
-#define BITMAP_SIZE_IN_BITS 8192       /* 8KB per chunk */
-#define BITMAP_SIZE_IN_BYTES 1024      /* 1KB per chunk */
-#define DIRECT_STORAGE_BITS 13         /* 13 bits per position */
-#define MAX_ENTRIES_PER_DIRECT_LISTING 631   /* (8192/13)-1 */
-#define MAX_BITMAP_ENTIRES_BEFORE_NEGATIVE_LISTING 7561  /* 8192-631 */
+#define BITMAP_SIZE_IN_BITS 8192   /* 8192 bits per chunk */
+#define BITMAP_SIZE_IN_BYTES (BITMAP_SIZE_IN_BITS / 8)  /* 1024 */
+#define DIRECT_STORAGE_BITS 13     /* 13 bits per packed position */
+
+/* (8192 / 13) - 1 == 629 */
+#define MAX_ENTRIES_PER_DIRECT_LISTING                                         \
+    ((BITMAP_SIZE_IN_BITS / DIRECT_STORAGE_BITS) - 1)
+
+/* 8192 - 629 == 7563 */
+#define MAX_BITMAP_ENTIRES_BEFORE_NEGATIVE_LISTING                             \
+    (BITMAP_SIZE_IN_BITS - MAX_ENTRIES_PER_DIRECT_LISTING)
 ```
+
+These are computed, not spelled out, in the source: `8192 / 13` truncates to
+`630`, so `MAX_ENTRIES_PER_DIRECT_LISTING` is **629** and
+`MAX_BITMAP_ENTIRES_BEFORE_NEGATIVE_LISTING` is **7563**.
 
 ## Creation Functions
 
@@ -107,11 +124,12 @@ typedef enum chunkType {
 /* Create new bitmap (for tracking set bits) */
 multiroar *multiroarBitNew(void);
 
-/* Create value matrix (stores values, not just bits) */
-multiroar *multiroarValueNew(uint8_t bitWidth, size_t rows, size_t cols);
+/* Create value-mode multiroar (position -> bitWidth-bit values;
+ * see Value Operations below) */
+multiroar *multiroarValueNew(uint8_t bitWidth, uint64_t rows, uint64_t cols);
 
 /* Duplicate existing roar */
-multiroar *multiroarDuplicate(multiroar *r);
+multiroar *multiroarDuplicate(const multiroar *r);
 
 /* Free multiroar */
 void multiroarFree(multiroar *r);
@@ -119,7 +137,7 @@ void multiroarFree(multiroar *r);
 /* Example: Create bitmap */
 multiroar *r = multiroarBitNew();
 
-/* Example: Create 2D value matrix (8-bit values) */
+/* Example: Create 2D value map (8-bit values, 1000x1000) */
 multiroar *matrix = multiroarValueNew(8, 1000, 1000);
 ```
 
@@ -128,14 +146,17 @@ multiroar *matrix = multiroarValueNew(8, 1000, 1000);
 ### Set Bits
 
 ```c
-/* Set bit at position (returns previous state) */
-bool multiroarBitSet(multiroar *r, size_t position);
+/* Set bit at position; returns the PREVIOUS state of the bit */
+bool multiroarBitSet(multiroar *r, uint64_t position);
 
-/* Set bit and get previous state */
-bool multiroarBitSetGetPrevious(multiroar *r, size_t position);
+/* Set range [start, start + extent) */
+void multiroarBitSetRange(multiroar *r, uint64_t start, uint64_t extent);
 
-/* Set range of bits */
-void multiroarBitSetRange(multiroar *r, size_t start, size_t extent);
+/* Clear range [start, start + extent) */
+void multiroarBitClearRange(multiroar *r, uint64_t start, uint64_t extent);
+
+/* Flip range [start, start + extent) */
+void multiroarBitFlipRange(multiroar *r, uint64_t start, uint64_t extent);
 
 /* Example: Set individual bits */
 multiroar *r = multiroarBitNew();
@@ -154,7 +175,7 @@ multiroarBitSetRange(r, 5000, 1000);  /* Sets bits 5000-5999 */
 
 ```c
 /* Check if bit is set */
-bool multiroarBitGet(multiroar *r, size_t position);
+bool multiroarBitGet(const multiroar *r, uint64_t position);
 
 /* Example: Check membership */
 if (multiroarBitGet(r, 1000)) {
@@ -165,8 +186,8 @@ if (multiroarBitGet(r, 1000)) {
 ### Remove Bits
 
 ```c
-/* Clear bit at position */
-bool multiroarRemove(multiroar *r, size_t position);
+/* Clear bit at position; returns true if the bit was previously set */
+bool multiroarRemove(multiroar *r, uint64_t position);
 
 /* Example */
 multiroarBitSet(r, 500);
@@ -174,27 +195,170 @@ multiroarRemove(r, 500);
 assert(!multiroarBitGet(r, 500));
 ```
 
-## Value Operations
-
-For value matrices (created with `multiroarValueNew`):
+### Cardinality, Extrema, Rank/Select
 
 ```c
-/* Set value at position */
-bool multiroarValueSet(multiroar *r, size_t position, databox *value);
+/* Total set bits */
+uint64_t multiroarBitCount(const multiroar *r);
 
-/* Set value and get previous value */
-bool multiroarValueSetGetPrevious(multiroar *r, size_t position,
+/* True when no bits are set anywhere */
+bool multiroarIsEmpty(const multiroar *r);
+
+/* First / last set bit; false when the set is empty */
+bool multiroarMin(const multiroar *r, uint64_t *position);
+bool multiroarMax(const multiroar *r, uint64_t *position);
+
+/* Count set bits in [0, position) */
+uint64_t multiroarRank(const multiroar *r, uint64_t position);
+
+/* Find the k-th set bit (1-indexed); false when k > BitCount */
+bool multiroarSelect(const multiroar *r, uint64_t k, uint64_t *position);
+
+/* Count set bits in [start, end) */
+uint64_t multiroarRangeCount(const multiroar *r, uint64_t start, uint64_t end);
+
+/* Example: median-ish position of a set */
+uint64_t total = multiroarBitCount(r);
+uint64_t middle = 0;
+if (total && multiroarSelect(r, total / 2, &middle)) {
+    printf("middle set bit: %" PRIu64 "\n", middle);
+}
+```
+
+### Comparison Predicates
+
+```c
+bool multiroarIntersects(const multiroar *a, const multiroar *b);
+bool multiroarIsSubset(const multiroar *a, const multiroar *b);
+bool multiroarEquals(const multiroar *a, const multiroar *b);
+```
+
+### Iteration
+
+```c
+typedef struct multiroarIterator {
+    const multiroar *roar;
+    multimapIterator mapIter;
+    databox currentChunk;
+    uint64_t chunkId;
+    uint64_t positionInChunk;
+    uint16_t countInChunk;
+    uint16_t indexInChunk;
+    uint16_t unsetCursor;
+    bool valid;
+} multiroarIterator;
+
+void multiroarIteratorInit(const multiroar *r, multiroarIterator *iter);
+bool multiroarIteratorNext(multiroarIterator *iter, uint64_t *position);
+void multiroarIteratorReset(multiroarIterator *iter);
+
+/* Example: walk every set position in ascending order */
+multiroarIterator iter;
+multiroarIteratorInit(r, &iter);
+
+uint64_t position;
+while (multiroarIteratorNext(&iter, &position)) {
+    printf("set: %" PRIu64 "\n", position);
+}
+```
+
+The iterator is stack-allocated and requires no teardown.
+
+### Bulk and Array Conversion
+
+```c
+void multiroarBitSetMany(multiroar *r, const uint64_t *positions,
+                         uint64_t count);
+void multiroarBitGetMany(const multiroar *r, const uint64_t *positions,
+                         uint64_t count, bool *results);
+
+/* Drain up to maxCount set positions (ascending) into 'positions'.
+ * Returns how many were written. */
+uint64_t multiroarToArray(const multiroar *r, uint64_t *positions,
+                          uint64_t maxCount);
+
+/* Build a new bitmap from an array of positions (NULL when count == 0) */
+multiroar *multiroarFromArray(const uint64_t *positions, uint64_t count);
+```
+
+`multiroarToArray` is implemented on top of the iterator, so it stops at
+`maxCount` rather than reporting the full cardinality. Size the buffer with
+`multiroarBitCount()` first when you need everything.
+
+### Similarity Metrics
+
+```c
+double multiroarJaccard(const multiroar *a, const multiroar *b);
+uint64_t multiroarHammingDistance(const multiroar *a, const multiroar *b);
+double multiroarOverlap(const multiroar *a, const multiroar *b);
+double multiroarDice(const multiroar *a, const multiroar *b);
+```
+
+### Memory and Serialization
+
+```c
+uint64_t multiroarMemoryUsage(const multiroar *r);
+
+/* Size the buffer, serialize into it, restore from it */
+uint64_t multiroarSerializedSize(const multiroar *r);
+uint64_t multiroarSerialize(const multiroar *r, void *buf, uint64_t bufSize);
+multiroar *multiroarDeserialize(const void *buf, uint64_t bufSize);
+
+/* Example: round trip */
+const uint64_t needed = multiroarSerializedSize(r);
+uint8_t *buf = zmalloc(needed);
+const uint64_t written = multiroarSerialize(r, buf, needed);
+assert(written > 0);
+
+multiroar *restored = multiroarDeserialize(buf, written);
+assert(multiroarEquals(r, restored));
+
+multiroarFree(restored);
+zfree(buf);
+```
+
+The serialized stream begins with a 4-byte magic, a 1-byte version, and a
+1-byte flags field, followed by a varint chunk count and the encoded chunks.
+
+## Value Operations
+
+`multiroarValueNew(bitWidth, rows, cols)` creates a **value-mode** multiroar:
+a sparse map of `position -> unsigned value`, where every value must fit the
+declared `bitWidth` (1-64; out-of-range widths return NULL). `rows`/`cols`
+declare the addressable space — when both are nonzero, positions must be
+`< rows * cols` (asserted); either being 0 means unbounded.
+
+```c
+bool multiroarValueSet(multiroar *r, uint64_t position, databox *value);
+bool multiroarValueSetGetPrevious(multiroar *r, uint64_t position,
                                   databox *value, databox *overwritten);
-
-/* Remove value and get removed value */
-bool multiroarValueRemoveGetRemoved(multiroar *r, size_t position,
+bool multiroarValueGet(const multiroar *r, uint64_t position, databox *value);
+bool multiroarValueRemoveGetRemoved(multiroar *r, uint64_t position,
                                     databox *removed);
+```
 
-/* Example: 2D matrix of 8-bit values */
-multiroar *m = multiroarValueNew(8, 1000, 1000);
+Contracts:
 
-databox val = databoxNewSigned(42);
-multiroarValueSet(m, 500000, &val);  /* row 500, col 0 */
+- Values are unsigned integers (signed inputs must be `>= 0`; booleans store
+  as 0/1) and round-trip as unsigned databoxes.
+- `Set`/`SetGetPrevious` return whether the position was previously occupied;
+  `Get`/`RemoveGetRemoved` return whether the position held a value.
+- Bit ops and value ops share one keyspace and must **never** be mixed on the
+  same multiroar (asserted via the mode byte). A bit-mode multiroar comes from
+  `multiroarBitNew()`; a value-mode one from `multiroarValueNew()`.
+- `multiroarDuplicate` preserves value-mode metadata (bit width and bounds).
+
+```c
+multiroar *m = multiroarValueNew(16, 1000, 1000);
+databox v = databoxNewUnsigned(4242);
+multiroarValueSet(m, 7, &v);
+
+databox got = {{0}};
+if (multiroarValueGet(m, 7, &got)) {
+    /* got.data.u == 4242 */
+}
+
+multiroarFree(m);
 ```
 
 ## Set Operations
@@ -203,10 +367,11 @@ multiroarValueSet(m, 500000, &val);  /* row 500, col 0 */
 
 ```c
 /* Modify first argument in-place */
-void multiroarXor(multiroar *r, multiroar *b);  /* r = r XOR b */
-void multiroarAnd(multiroar *r, multiroar *b);  /* r = r AND b */
-void multiroarOr(multiroar *r, multiroar *b);   /* r = r OR b */
-void multiroarNot(multiroar *r);                /* r = NOT r */
+void multiroarXor(multiroar *r, multiroar *b);     /* r = r XOR b */
+void multiroarAnd(multiroar *r, multiroar *b);     /* r = r AND b */
+void multiroarOr(multiroar *r, multiroar *b);      /* r = r OR b */
+void multiroarAndNot(multiroar *r, multiroar *b);  /* r = r AND NOT b */
+void multiroarNot(multiroar *r);                   /* r = NOT r */
 
 /* Example: Set intersection */
 multiroar *set1 = multiroarBitNew();
@@ -225,21 +390,55 @@ multiroarAnd(set1, set2);
 
 ```c
 /* Create new multiroar with result */
-multiroar *multiroarNewXor(multiroar *r, multiroar *b);
-multiroar *multiroarNewAnd(multiroar *r, multiroar *b);
-multiroar *multiroarNewOr(multiroar *r, multiroar *b);
-multiroar *multiroarNewNot(multiroar *r);
+multiroar *multiroarNewXor(const multiroar *r, const multiroar *b);
+multiroar *multiroarNewAnd(const multiroar *r, const multiroar *b);
+multiroar *multiroarNewOr(const multiroar *r, const multiroar *b);
+multiroar *multiroarNewAndNot(const multiroar *a, const multiroar *b);
+multiroar *multiroarNewNot(const multiroar *r);
 
 /* Example: Set union */
 multiroar *result = multiroarNewOr(set1, set2);
 /* set1 and set2 unchanged, result has union */
 ```
 
+Every `New*` form is implemented as duplicate-then-apply, so it costs one
+full copy of the first operand plus the in-place operation.
+
+### Bounded Complement
+
+`multiroarNot` complements **only the chunks that already exist** in `r`.
+It never materializes chunks for an unbounded universe, so
+`multiroarNot(empty)` is a no-op and `NOT` of a sparse set only flips bits
+inside the 8192-bit windows that set has touched. For set difference, use
+`multiroarAndNot` / `multiroarNewAndNot` rather than `NOT` followed by `AND`.
+
+### N-Way Operations
+
+```c
+/* Fold N roars into roars[0] (N >= 2) */
+void multiroarAndN(uint64_t n, multiroar **roars);
+void multiroarOrN(uint64_t n, multiroar **roars);
+void multiroarXorN(uint64_t n, multiroar **roars);
+
+/* Fold N roars into a fresh result, leaving inputs untouched */
+multiroar *multiroarNewAndN(uint64_t n, multiroar **roars);
+multiroar *multiroarNewOrN(uint64_t n, multiroar **roars);
+multiroar *multiroarNewXorN(uint64_t n, multiroar **roars);
+
+/* Example: intersect four posting lists in one pass */
+multiroar *lists[4] = {a, b, c, d};
+multiroar *hits = multiroarNewAndN(4, lists);
+```
+
+The N-way forms collect the union of chunk ids once and process each chunk
+across all inputs, which beats repeated pairwise calls that re-walk the
+chunk index every time.
+
 ## Encoding Behavior
 
 ### Sparse Encoding
 
-When a chunk has **< 631 set bits**, it uses a **packed 13-bit position array**:
+When a chunk has **fewer than 629 set bits**, it uses a **packed 13-bit position array**:
 
 ```c
 /* Example: Setting sparse bits */
@@ -268,7 +467,7 @@ for (int i = 0; i < 500; i++) {
 
 ### Dense Encoding
 
-When a chunk has **631-7561 set bits**, it uses a **full 1024-byte bitmap**:
+When a chunk has **629-7563 set bits**, it uses a **full 1024-byte bitmap**:
 
 ```c
 /* Example: Dense chunk */
@@ -287,7 +486,7 @@ for (int i = 0; i < 2000; i++) {
 
 ### Inverted Encoding
 
-When a chunk has **> 7561 set bits**, it stores **unset positions** instead:
+When a chunk has **more than 7563 set bits**, it stores **unset positions** instead:
 
 ```c
 /* Example: Nearly full chunk */
@@ -343,14 +542,22 @@ ALL_0 (implicit)
   │
   ├──> SPARSE (1st bit set)
   │      │
-  │      └──> DENSE (631st bit set)
+  │      └──> DENSE (packed list reaches 629 positions)
   │             │
-  │             └──> INVERTED (7562nd bit set)
+  │             └──> INVERTED (population exceeds 7563)
   │                    │
   │                    └──> ALL_1 (last unset bit is set)
   │
   └──> ... (and reverse direction when clearing bits)
 ```
+
+Clearing bits walks the same ladder downward, with hysteresis so a chunk
+sitting exactly on a boundary does not thrash:
+
+- INVERTED demotes back to DENSE once the unset list reaches 629 entries.
+- DENSE demotes back to SPARSE only once the population drops below
+  `629 / 2` (that is, 314 set bits) — not at 629.
+- DENSE with population 0 deletes the chunk entirely (back to implicit ALL_0).
 
 **Example of automatic conversion**:
 
@@ -361,24 +568,26 @@ multiroar *r = multiroarBitNew();
 multiroarBitSet(r, 100);
 /* Now: SPARSE (packed array with 1 position) */
 
-for (int i = 0; i < 630; i++) {
+for (uint64_t i = 0; i < 628; i++) {
     multiroarBitSet(r, i);
 }
-/* Still: SPARSE (630 positions) */
+/* Still: SPARSE (fewer than 629 positions) */
 
 multiroarBitSet(r, 700);
 /* Now: DENSE (automatically converted to 1024-byte bitmap) */
 
-for (int i = 700; i < 7600; i++) {
+for (uint64_t i = 700; i < 7500; i++) {
     multiroarBitSet(r, i);
 }
-/* Still: DENSE (7600 bits set) */
+/* Still: DENSE */
 
-multiroarBitSet(r, 7700);
-/* Now: INVERTED (automatically converted to packed array of ~600 unset positions) */
+for (uint64_t i = 7500; i < 8100; i++) {
+    multiroarBitSet(r, i);
+}
+/* Now: INVERTED (packed array of the remaining unset positions) */
 
 /* Set remaining bits... */
-for (int i = 7700; i < 8192; i++) {
+for (uint64_t i = 8100; i < 8192; i++) {
     multiroarBitSet(r, i);
 }
 /* Now: ALL_1 (just 1 type byte) */
@@ -388,18 +597,26 @@ for (int i = 7700; i < 8192; i++) {
 
 ### Time Complexity
 
-| Operation  | Chunk Lookup  | Within Chunk                 | Total                 |
-| ---------- | ------------- | ---------------------------- | --------------------- |
-| Set        | O(log chunks) | O(n) worst                   | O(log chunks + n)     |
-| Get        | O(log chunks) | O(1) bitmap, O(log n) packed | O(log chunks + log n) |
-| Remove     | O(log chunks) | O(n) worst                   | O(log chunks + n)     |
-| AND/OR/XOR | O(chunks)     | O(1) bitmap, O(n) packed     | O(chunks × n)         |
+| Operation     | Chunk Lookup    | Within Chunk                 | Total           |
+| ------------- | --------------- | ---------------------------- | --------------- |
+| Set           | multimap seek   | O(n) worst                   | seek + O(n)     |
+| Get           | multimap seek   | O(1) bitmap, O(log n) packed | seek + O(log n) |
+| Remove        | multimap seek   | O(n) worst                   | seek + O(n)     |
+| AND/OR/XOR    | O(chunks)       | O(1) bitmap, O(n) packed     | O(chunks x n)   |
+| BitCount      | O(chunks)       | popcount over 1024 bytes     | O(chunks)       |
+| Min / Max     | O(chunks) worst | O(1) bitmap, O(1) packed     | O(chunks)       |
+| Rank          | O(chunks)       | popcount + partial word      | O(chunks)       |
+| Select        | O(chunks)       | popcount scan                | O(chunks)       |
+| Iterator Next | amortized O(1)  | O(1)                         | amortized O(1)  |
+| N-way ops     | O(chunks)       | O(N) per chunk               | O(chunks x N)   |
 
 **Notes**:
 
-- n = number of set positions in chunk (max 631 for packed)
+- n = number of set positions in a chunk (at most 629 for the packed forms)
 - "chunks" = number of non-empty chunks
-- Bitmap operations within a chunk are O(1) with SIMD
+- Chunk lookup cost is whatever the backing multimap charges for a sorted
+  key seek at its current size class; it is not a fixed O(log n) tree walk
+- Bitmap operations within a chunk use word-at-a-time popcount / SIMD helpers
 
 ### Space Complexity
 
@@ -431,25 +648,28 @@ for (int i = 7700; i < 8192; i++) {
 The thresholds are chosen so **each encoding is optimal** for its density range:
 
 ```
-Sparse (0-630 bits):
-  Packed array: 1 + 2 + ceil(630 * 13 / 8) = ~1025 bytes
-  Bitmap: 1024 bytes
-  Winner: Packed array (equal at 630, better below)
+Sparse (0-628 bits):
+  Packed array: 1 + varintLen(count) + ceil(628 * 13 / 8) = ~1023 bytes
+  Bitmap: 1 + 1024 bytes
+  Winner: Packed array
 
-Dense (631-7561 bits):
-  Bitmap: 1024 bytes
-  Packed array: > 1024 bytes
+Dense (629-7563 bits):
+  Bitmap: 1 + 1024 bytes
+  Packed array: >= bitmap size
   Winner: Bitmap
 
-Inverted (7562-8191 bits):
-  Packed unset: 1 + 2 + ceil(630 * 13 / 8) = ~1025 bytes
-  Bitmap: 1024 bytes
-  Winner: Packed unset (equal at 630 unset, better above)
+Inverted (7564-8191 bits):
+  Packed unset: 1 + varintLen(count) + ceil(628 * 13 / 8) = ~1023 bytes
+  Bitmap: 1 + 1024 bytes
+  Winner: Packed unset
 
 All-ones (8192 bits):
   Type byte: 1 byte
   Winner: Type byte
 ```
+
+The cutoff `(8192 / 13) - 1 == 629` is exactly the point where a 13-bit
+packed list stops being smaller than the raw bitmap it replaces.
 
 ## Common Patterns
 
@@ -459,17 +679,23 @@ All-ones (8192 bits):
 /* Track user IDs (sparse, large range) */
 multiroar *activeUsers = multiroarBitNew();
 
-void userLogin(size_t userId) {
+void userLogin(uint64_t userId) {
     multiroarBitSet(activeUsers, userId);
 }
 
-void userLogout(size_t userId) {
+void userLogout(uint64_t userId) {
     multiroarRemove(activeUsers, userId);
 }
 
-bool isUserActive(size_t userId) {
+bool isUserActive(uint64_t userId) {
     return multiroarBitGet(activeUsers, userId);
 }
+
+/* Snapshot the whole set without knowing the range up front */
+uint64_t total = multiroarBitCount(activeUsers);
+uint64_t *ids = zmalloc(total * sizeof(*ids));
+const uint64_t got = multiroarToArray(activeUsers, ids, total);
+assert(got == total);
 ```
 
 ### Pattern 2: Range Queries
@@ -514,11 +740,15 @@ multiroar *common = multiroarNewAnd(adminPerms, userPerms);
 multiroar *all = multiroarNewOr(adminPerms, userPerms);
 /* all = {1, 2, 3, 4, 5, 8} */
 
-/* Admin-only permissions (difference) */
-multiroar *adminOnly = multiroarDuplicate(adminPerms);
-multiroar *notUser = multiroarNewNot(userPerms);
-multiroarAnd(adminOnly, notUser);
+/* Admin-only permissions (difference).
+ * Use AndNot: NOT is bounded to existing chunks, so
+ * "NOT then AND" is not a general set difference. */
+multiroar *adminOnly = multiroarNewAndNot(adminPerms, userPerms);
 /* adminOnly = {1, 5, 8} */
+
+/* Relationship checks without materializing a result */
+assert(multiroarIntersects(adminPerms, userPerms));
+assert(!multiroarIsSubset(adminPerms, userPerms));
 ```
 
 ### Pattern 4: Bloom Filter Alternative
@@ -529,14 +759,31 @@ multiroar *seen = multiroarBitNew();
 
 void markSeen(uint64_t id) {
     /* Hash to position */
-    size_t pos = hash(id) % (1ULL << 32);
+    const uint64_t pos = hash(id) % (1ULL << 32);
     multiroarBitSet(seen, pos);
 }
 
 bool haveSeen(uint64_t id) {
-    size_t pos = hash(id) % (1ULL << 32);
+    const uint64_t pos = hash(id) % (1ULL << 32);
     return multiroarBitGet(seen, pos);
 }
+```
+
+### Pattern 5: Near-Duplicate Detection
+
+```c
+/* Shingle sets per document, compared by Jaccard similarity */
+multiroar *docA = multiroarFromArray(shinglesA, countA);
+multiroar *docB = multiroarFromArray(shinglesB, countB);
+
+const double similarity = multiroarJaccard(docA, docB);
+if (similarity > 0.8) {
+    printf("near-duplicate (jaccard %.3f, hamming %" PRIu64 ")\n",
+           similarity, multiroarHammingDistance(docA, docB));
+}
+
+multiroarFree(docA);
+multiroarFree(docB);
 ```
 
 ## Best Practices
@@ -559,49 +806,39 @@ for (int i = 0; i < 10000; i++) {
 
 ```c
 /* GOOD: Set multiple bits then perform operation */
-for (int i = 0; i < 1000; i++) {
-    multiroarBitSet(r1, positions[i]);
-}
+multiroarBitSetMany(r1, positions, 1000);
 multiroarAnd(r1, r2);
 
 /* BAD: Interleaved operations */
-for (int i = 0; i < 1000; i++) {
+for (uint64_t i = 0; i < 1000; i++) {
     multiroarBitSet(r1, positions[i]);
     multiroarAnd(r1, r2);  /* Don't do this! */
 }
 ```
 
-### 3. Monitor Encoding Transitions
-
-If you're seeing unexpected memory usage, check encoding:
+### 3. Fold Many Sets at Once
 
 ```c
-/* In debug builds, track encoding type */
-void checkEncoding(multiroar *r, size_t chunkId) {
-    databox value;
-    databox *values[1] = {&value};
-    databox key = {.data.u = chunkId, .type = DATABOX_UNSIGNED_64};
+/* GOOD: one chunk-id collection pass for all inputs */
+multiroar *inputs[8] = {a, b, c, d, e, f, g, h};
+multiroar *result = multiroarNewOrN(8, inputs);
 
-    if (multimapLookup(r->map, &key, values)) {
-        uint8_t type = value.data.bytes.start[0];
-        printf("Chunk %zu: type %d, size %lu bytes\n",
-               chunkId, type, value.len);
-    } else {
-        printf("Chunk %zu: ALL_0 (implicit)\n", chunkId);
-    }
+/* WORSE: re-walks the chunk index on every pairwise step */
+multiroar *acc = multiroarDuplicate(a);
+for (uint64_t i = 1; i < 8; i++) {
+    multiroarOr(acc, inputs[i]);
 }
 ```
 
-### 4. Pre-allocate for Large Sets
+### 4. Watch Memory, Not Encodings
+
+The chunk encoding is an internal detail and the handle is opaque, so there
+is no supported way to inspect a chunk's type from outside. Track actual
+footprint instead:
 
 ```c
-/* If you know approximate size, you can pre-grow multimap */
-multiroar *r = multiroarBitNew();
-multimapExpand(r->map, estimatedChunkCount);
-
-for (size_t i = 0; i < MANY; i++) {
-    multiroarBitSet(r, positions[i]);
-}
+printf("bitmap uses %" PRIu64 " bytes for %" PRIu64 " set bits\n",
+       multiroarMemoryUsage(r), multiroarBitCount(r));
 ```
 
 ## Testing
@@ -637,7 +874,7 @@ TEST("set random") {
     multiroar *r = multiroarBitNew();
 
     for (int32_t i = 0; i < 72000; i++) {
-        size_t position = (size_t)rand() % SIZE_MAX;
+        const uint64_t position = (uint64_t)rand();
         multiroarBitSet(r, position);
         assert(multiroarBitGet(r, position));
     }
@@ -648,19 +885,16 @@ TEST("set random") {
 
 ## Debugging
 
+`multiroar.c` provides two introspection helpers, both compiled only under
+`DATAKIT_TEST` and both taking `uint64_t highest`:
+
 ```c
 #ifdef DATAKIT_TEST
-/* Print chunk encoding info */
-void multiroarRepr(multiroar *r, size_t highest) {
-    for (size_t i = 0; i < divCeil(highest, 8192); i++) {
-        /* Print each chunk's type and size */
-    }
-}
+/* Print each chunk's type and size up to 'highest' */
+void multiroarRepr(multiroar *r, uint64_t highest);
 
-/* Compare with linear bitmap */
-void multiroarTestCompare(multiroar *r, size_t highest) {
-    /* Prints compression ratio */
-}
+/* Print size versus an equivalent linear bitmap (compression ratio) */
+void multiroarTestCompare(multiroar *r, uint64_t highest);
 #endif
 ```
 
@@ -677,13 +911,18 @@ Savings: 1.07x
 
 Positions are stored in **13-bit packed format** using varint encoding:
 
+The `varintPacked13*` family is generated by including
+`varintPacked.h` with `PACK_STORAGE_BITS 13`, `PACK_MAX_ELEMENTS` set to
+`MAX_ENTRIES_PER_DIRECT_LISTING`, and `PACK_FUNCTION_PREFIX varintPacked`:
+
 ```c
-/* From varintPacked.h */
 varintPacked13Set(array, index, position);      /* O(1) */
 varintPacked13Get(array, index);                /* O(1) */
-varintPacked13Member(array, count, position);   /* O(log n) binary search */
+varintPacked13Member(array, count, position);   /* O(log n) binary search;
+                                                 * returns the found index */
 varintPacked13InsertSorted(array, count, pos);  /* O(n) insert */
 varintPacked13DeleteMember(array, count, pos);  /* O(n) delete */
+varintPacked13Delete(array, count, index);      /* O(n) delete by index */
 ```
 
 **Why 13 bits?**
@@ -697,14 +936,15 @@ varintPacked13DeleteMember(array, count, pos);  /* O(n) delete */
 For transitioning from DENSE to INVERTED, we need to count set bits:
 
 ```c
-const uint32_t population = StrPopCntExact(bitmap, 1024);
+const uint32_t population = StrPopCntExact(bitmapStart, 1024);
 
-if (population > 7561) {
+if (population > MAX_BITMAP_ENTIRES_BEFORE_NEGATIVE_LISTING) { /* 7563 */
     /* Convert to inverted encoding */
 }
 ```
 
-This uses **SIMD-optimized popcount** (`__builtin_popcountll` or equivalent).
+`StrPopCntExact()` comes from `str.h` and uses the platform's widest
+available popcount path.
 
 ### Bitmap to Packed Array Conversion
 
@@ -760,12 +1000,15 @@ pthread_rwlock_unlock(&lock);
 
 **Based on**: Roaring Bitmap algorithm by Lemire et al.
 
-**Key Differences from CRoaring**:
+**Key Differences from the reference roaring implementations**:
 
 - Uses multimap instead of specialized array/bitmap containers
 - Integrates with datakit's databox system
 - Custom 13-bit varint packing
-- Simplified encoding transitions
+- Adds an explicit all-ones chunk type on top of the usual
+  array / bitmap / run trio
+- `NOT` is bounded to already-materialized chunks rather than a fixed
+  32-bit universe
 
 **Chunk Size Choice** (8192 bits):
 

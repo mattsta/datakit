@@ -58,7 +58,7 @@
  *   - Without weights: 5-16 bytes/entry (adaptive based on scale)
  *   - With weights:    13-24 bytes/entry (8 bytes added for weight tracking)
  *
- * Fixed overhead: ~180 bytes + 24 bytes per level
+ * Fixed overhead: ~200 bytes + 32 bytes per level
  *
  * PERFORMANCE
  * -----------

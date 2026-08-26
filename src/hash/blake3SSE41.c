@@ -41,7 +41,7 @@ extern void blake3PortableCompressXof(const uint32_t cv[8],
                                       uint8_t block_len, uint64_t counter,
                                       uint8_t flags, uint8_t out[64]);
 
-#if defined(__x86_64__) || defined(_M_X64)
+#if defined(__x86_64__)
 
 #include <immintrin.h>
 

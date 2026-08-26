@@ -66,16 +66,37 @@ To reduce variance, it uses **16,384 separate "buckets"** (called registers) and
 typedef struct hyperloglogHeader {
     uint64_t cardinality : 61;     /* Cached cardinality estimate */
     uint64_t cardinalityValid : 1; /* Is cached value valid? */
-    uint64_t encoding : 2;         /* SPARSE, DENSE, or RAW */
+    uint64_t encoding : 2;         /* DENSE, SPARSE, or RAW */
     uint8_t registers[];           /* Variable-length register data */
-} hyperloglogHeader;
+} __attribute__((packed)) hyperloglogHeader;
+
+_Static_assert(sizeof(hyperloglogHeader) == sizeof(uint64_t), "");
 ```
+
+**A `hyperloglog *` is an `mdsc`.** The allocation is an `mdsc` string whose
+data begins with this header — which is why `hyperloglogFree` is
+`mdscfree`, why the header carries no register length (the `mdsc` already
+knows the total length), and why the sparse form can grow in place through
+the `mdsc` expand path. Never `zfree` a `hyperloglog *`.
+
+Because the sparse form can grow and can promote, `hyperloglogAdd` takes
+`hyperloglog **` — the pointer may change.
 
 **Encoding Types:**
 
-- **SPARSE** - Run-length encoded, memory-efficient for low cardinality
-- **DENSE** - Fixed 12 KB, uses 16,384 6-bit registers
-- **RAW** - Internal-only encoding for merging
+```c
+typedef enum hyperloglogEncoding {
+    HLL_DENSE = 0,   /* 0 so a zeroed static buffer is already dense */
+    HLL_SPARSE = 1,
+    HLL_RAW = 2,     /* internal only; never persisted or exposed */
+} hyperloglogEncoding;
+```
+
+- **DENSE** - fixed 12,296 bytes: 16,384 registers packed 6 bits each
+- **SPARSE** - run-length encoded, memory-efficient for low cardinality
+- **RAW** - one **byte** per register (16,384 plain bytes), used only as
+  merge scratch. `hyperloglogDetect` rejects it, `hyperloglogCopy` asserts
+  on it, and it must never be stored.
 
 ### Memory Layout
 
@@ -87,7 +108,7 @@ Low cardinality (< ~3000 unique elements):
 | header   | encoding | compressed data   |
 | (8 bytes)| (sparse) | (variable size)   |
 +----------+----------+-------------------+
-Size: 8 bytes to ~4 KB (auto-promotes to dense at 4 KB)
+Size: 8 bytes to 4,096 bytes (auto-promotes to dense past 4,096)
 
 Example with 100 unique elements: ~267 bytes
 Example with 1000 unique elements: ~1882 bytes
@@ -148,9 +169,9 @@ XZERO:15362   (registers 1022-16383 = 0)
 ### Creation and Destruction
 
 ```c
-/* Create new HyperLogLog (starts in sparse mode) */
+/* Create new HyperLogLog (starts in sparse mode: an all-XZERO run) */
 hyperloglog *hyperloglogNew(void);
-hyperloglog *hyperloglogNewSparse(void);  /* Alias for hyperloglogNew() */
+hyperloglog *hyperloglogNewSparse(void);  /* calls hyperloglogNew() */
 
 /* Create HyperLogLog in dense mode */
 hyperloglog *hyperloglogNewDense(void);
@@ -170,8 +191,9 @@ hyperloglogFree(hll);
 ### Adding Elements
 
 ```c
-/* Add element to HyperLogLog
- * Returns: 1 if register changed, 0 if no change, -1 on error
+/* Add element to HyperLogLog.
+ * Takes hyperloglog ** because a sparse HLL may grow or promote.
+ * Returns: 1 if a register changed, 0 if no change, -1 on error
  */
 int hyperloglogAdd(hyperloglog **hh, const void *data, size_t size);
 
@@ -209,9 +231,9 @@ for (int i = 0; i < 10000; i++) {
 
 bool invalid = false;
 uint64_t estimate = hyperloglogCount(hll, &invalid);
-printf("Estimated unique count: %lu\n", estimate);
+printf("Estimated unique count: %" PRIu64 "\n", estimate);
 printf("Actual count: 10000\n");
-printf("Error: %.2f%%\n", fabs(estimate - 10000.0) / 10000.0 * 100);
+printf("Error: %.2f%%\n", fabs((double)estimate - 10000.0) / 10000.0 * 100);
 // Typically within ~0.8% of actual
 
 hyperloglogFree(hll);
@@ -219,12 +241,32 @@ hyperloglogFree(hll);
 
 ### Merging HyperLogLogs
 
-```c
-/* Merge 'src' into 'target'
- * Returns: true on success, false if HLL is invalid
- */
-bool hyperloglogMerge(hyperloglog *target, const hyperloglog *src);
+Two different merges exist, and picking the wrong one is a bug:
 
+```c
+/* PUBLIC merge: register-wise max-fold of 'src' into '*dst',
+ * reallocating *dst as needed (sparse growth, sparse->dense promotion).
+ * Idempotent and commutative.  Invalidates *dst's cached cardinality.
+ * 'src' must be SPARSE or DENSE, never RAW.
+ * Returns false if either side is invalid. */
+bool hyperloglogMergeInto(hyperloglog **dst, const hyperloglog *src);
+
+/* LOW-LEVEL accumulator: folds 'hdr' into 'target', where 'target'
+ * MUST already be a RAW scratch (one byte per register) and 'hdr' must
+ * NOT be RAW.  Both conditions are asserted.  This is the primitive
+ * hyperloglogMergeInto and pfmerge are built from — it is not a merge
+ * of two ordinary HLLs. */
+bool hyperloglogMerge(hyperloglog *target, const hyperloglog *hdr);
+
+/* Materialize a RAW scratch into a fresh storable HLL
+ * (sparse, or dense when 'dense' is set) */
+hyperloglog *hyperloglogNewFromRaw(const hyperloglog *raw, bool dense);
+```
+
+Passing an ordinary sparse or dense HLL as `hyperloglogMerge`'s `target`
+trips `assert(target->encoding == HLL_RAW)`.
+
+```c
 /* Example: Merge counts from multiple sources */
 hyperloglog *serverA = hyperloglogNew();
 hyperloglog *serverB = hyperloglogNew();
@@ -239,18 +281,22 @@ for (int i = 51; i <= 150; i++) {
     hyperloglogAdd(&serverB, &i, sizeof(i));
 }
 
-/* Merge to get total unique count */
+/* Fold B into a copy of A */
 hyperloglog *total = hyperloglogCopy(serverA);
-hyperloglogMerge(total, serverB);
+hyperloglogMergeInto(&total, serverB);
 
 uint64_t count = hyperloglogCount(total, NULL);
-printf("Estimated unique users: %lu\n", count);
-// Should be ~150 (actual unique: 1-150)
+printf("Estimated unique users: %" PRIu64 "\n", count);
+/* Should be ~150 (actual unique: 1-150) */
 
 hyperloglogFree(serverA);
 hyperloglogFree(serverB);
 hyperloglogFree(total);
 ```
+
+`pfmerge` is the other route: it accumulates every input into a RAW
+scratch and returns a **new** HLL, choosing dense output if any input was
+dense.
 
 ### Utility Functions
 
@@ -258,7 +304,10 @@ hyperloglogFree(total);
 /* Invalidate cached cardinality (forces recomputation) */
 void hyperloglogInvalidateCache(hyperloglog *h);
 
-/* Validate HyperLogLog structure
+/* Validate HyperLogLog structure.
+ * Checks: non-NULL, length at least the header, encoding is DENSE or
+ * SPARSE (RAW is rejected), and for DENSE that the length is exactly
+ * HLL_DENSE_SIZE.  It does NOT walk the sparse opcode stream.
  * Returns: true if valid, false if corrupted
  */
 bool hyperloglogDetect(hyperloglog *h);
@@ -283,21 +332,36 @@ Convenience functions with variadic arguments:
 ```c
 /* Add multiple elements (NULL-terminated)
  * Format: pfadd(&hll, data1, len1, data2, len2, ..., NULL)
- * Returns: number of registers modified
+ * Lengths are passed through the varargs as uintptr_t-width values.
+ * If *hh is NULL, a new sparse HLL is created and stored back.
+ * Returns: how many adds reported a register change.
  */
 int pfadd(hyperloglog **hh, ...);
 
-/* Count single HLL */
+/* Count a single HLL, using and refreshing its cached cardinality */
 uint64_t pfcountSingle(hyperloglog *h);
 
-/* Count merged cardinality of multiple HLLs (NULL-terminated) */
+/* Count the UNION cardinality of several HLLs (NULL-terminated).
+ * Does not modify the inputs. */
 uint64_t pfcount(hyperloglog *h, ...);
 
-/* Merge multiple HLLs (NULL-terminated)
- * Returns: newly allocated merged HyperLogLog
- */
+/* Merge several HLLs (NULL-terminated).
+ * Returns a NEWLY ALLOCATED merged HyperLogLog; the inputs are
+ * untouched and the caller frees all of them plus the result.
+ * The result is dense if any input was dense, otherwise sparse. */
 hyperloglog *pfmerge(hyperloglog *h, ...);
 ```
+
+**Caution on `pfadd`'s return value.** It counts adds that changed a
+register and stops early — returning `0` — as soon as one add reports "no
+change". A zero return therefore does not mean "nothing was stored", and a
+non-zero return is not a count of elements accepted. Treat it as a
+best-effort signal only; use `hyperloglogAdd` in a loop when you need a
+per-element result.
+
+`pfcountSingle` writes the freshly computed estimate back into the header's
+cached-cardinality field, so a "read" can dirty the object — relevant when
+deciding whether a read should trigger a persist or a cross-node write.
 
 ### Example: Using Friendly API
 
@@ -316,7 +380,7 @@ printf("Updated %d registers\n", updated);
 
 /* Count */
 uint64_t count = pfcountSingle(visitors);
-printf("Unique visitors: %lu\n", count);
+printf("Unique visitors: %" PRIu64 "\n", count);
 
 /* Merge multiple HLLs */
 hyperloglog *monday = hyperloglogNew();
@@ -327,7 +391,7 @@ pfadd(&tuesday, "user2", 5, "user3", 5, NULL);
 
 hyperloglog *week = pfmerge(monday, tuesday, NULL);
 count = pfcountSingle(week);
-printf("Unique visitors this week: %lu\n", count);  // ~3
+printf("Unique visitors this week: %" PRIu64 "\n", count);  /* ~3 */
 
 hyperloglogFree(visitors);
 hyperloglogFree(monday);
@@ -344,9 +408,13 @@ hyperloglogFree(week);
 - Memory efficient for low cardinality
 - Variable size (grows as elements added)
 - Uses run-length encoding
-- Automatically promotes to dense when:
-  - Register value exceeds 32 (requires 33-63)
-  - Sparse size exceeds ~4 KB
+- Automatically promotes to dense when either holds:
+  - A register must be set above 32 — the sparse `VAL` opcode cannot
+    encode 33-63, while dense registers go to 63
+  - The sparse encoding would exceed **4,096 bytes** (a fixed internal
+    constant, not tunable)
+
+Promotion is one-way: there is no dense-to-sparse path.
 
 **Memory Efficiency:**
 
@@ -430,7 +498,7 @@ typedef struct analytics {
 } analytics;
 
 analytics *analyticsNew(void) {
-    analytics *a = malloc(sizeof(*a));
+    analytics *a = zcalloc(1, sizeof(*a));
     a->totalVisitors = hyperloglogNew();
     for (int i = 0; i < 100; i++) {
         a->pageVisitors[i] = hyperloglogNew();
@@ -452,12 +520,12 @@ void analyticsRecordVisit(analytics *a, int pageId, const char *visitorId) {
 
 void analyticsPrintStats(analytics *a) {
     uint64_t total = hyperloglogCount(a->totalVisitors, NULL);
-    printf("Total unique visitors: %lu\n", total);
+    printf("Total unique visitors: %" PRIu64 "\n", total);
 
     for (int i = 0; i < 100; i++) {
         uint64_t pageCount = hyperloglogCount(a->pageVisitors[i], NULL);
         if (pageCount > 0) {
-            printf("  Page %d: %lu unique visitors\n", i, pageCount);
+            printf("  Page %d: %" PRIu64 " unique visitors\n", i, pageCount);
         }
     }
 }
@@ -467,7 +535,7 @@ void analyticsFree(analytics *a) {
     for (int i = 0; i < 100; i++) {
         hyperloglogFree(a->pageVisitors[i]);
     }
-    free(a);
+    zfree(a);
 }
 
 /* Usage */
@@ -499,7 +567,7 @@ typedef struct ipCounter {
 } ipCounter;
 
 ipCounter *ipCounterNew(void) {
-    ipCounter *ic = malloc(sizeof(*ic));
+    ipCounter *ic = zcalloc(1, sizeof(*ic));
     ic->uniqueIPs = hyperloglogNew();
     ic->totalRequests = 0;
     return ic;
@@ -512,15 +580,15 @@ void ipCounterAdd(ipCounter *ic, const char *ipAddress) {
 
 void ipCounterPrintStats(ipCounter *ic) {
     uint64_t unique = hyperloglogCount(ic->uniqueIPs, NULL);
-    printf("Total requests: %lu\n", ic->totalRequests);
-    printf("Unique IPs: %lu\n", unique);
+    printf("Total requests: %" PRIu64 "\n", ic->totalRequests);
+    printf("Unique IPs: %" PRIu64 "\n", unique);
     printf("Avg requests per IP: %.2f\n",
            (double)ic->totalRequests / unique);
 }
 
 void ipCounterFree(ipCounter *ic) {
     hyperloglogFree(ic->uniqueIPs);
-    free(ic);
+    zfree(ic);
 }
 
 /* Usage: Process log file */
@@ -556,7 +624,7 @@ typedef struct serverMetrics {
 } serverMetrics;
 
 serverMetrics *metricsNew(const char *name) {
-    serverMetrics *m = malloc(sizeof(*m));
+    serverMetrics *m = zcalloc(1, sizeof(*m));
     m->hll = hyperloglogNew();
     strncpy(m->serverName, name, sizeof(m->serverName) - 1);
     return m;
@@ -572,7 +640,7 @@ hyperloglog *metricsAggregateAll(serverMetrics **servers, int count) {
     hyperloglog *aggregate = hyperloglogCopy(servers[0]->hll);
 
     for (int i = 1; i < count; i++) {
-        hyperloglogMerge(aggregate, servers[i]->hll);
+        hyperloglogMergeInto(&aggregate, servers[i]->hll);
     }
 
     return aggregate;
@@ -580,7 +648,7 @@ hyperloglog *metricsAggregateAll(serverMetrics **servers, int count) {
 
 void metricsFree(serverMetrics *m) {
     hyperloglogFree(m->hll);
-    free(m);
+    zfree(m);
 }
 
 /* Usage: Multi-datacenter analytics */
@@ -596,14 +664,14 @@ for (uint64_t i = 100; i <= 200; i++) metricsAddEvent(dc3, i);
 serverMetrics *servers[] = {dc1, dc2, dc3};
 hyperloglog *global = metricsAggregateAll(servers, 3);
 
-printf("DC-US-East: %lu unique events\n",
-       hyperloglogCount(dc1->hll, NULL));  // ~100
-printf("DC-US-West: %lu unique events\n",
-       hyperloglogCount(dc2->hll, NULL));  // ~100
-printf("DC-EU: %lu unique events\n",
-       hyperloglogCount(dc3->hll, NULL));  // ~100
-printf("Global (merged): %lu unique events\n",
-       hyperloglogCount(global, NULL));  // ~200
+printf("DC-US-East: %" PRIu64 " unique events\n",
+       hyperloglogCount(dc1->hll, NULL));  /* ~100 */
+printf("DC-US-West: %" PRIu64 " unique events\n",
+       hyperloglogCount(dc2->hll, NULL));  /* ~101 */
+printf("DC-EU: %" PRIu64 " unique events\n",
+       hyperloglogCount(dc3->hll, NULL));  /* ~101 */
+printf("Global (merged): %" PRIu64 " unique events\n",
+       hyperloglogCount(global, NULL));    /* ~200 */
 
 metricsFree(dc1);
 metricsFree(dc2);
@@ -623,7 +691,7 @@ typedef struct streamCounter {
 } streamCounter;
 
 streamCounter *streamCounterNew(void) {
-    streamCounter *sc = malloc(sizeof(*sc));
+    streamCounter *sc = zcalloc(1, sizeof(*sc));
     sc->current = hyperloglogNew();
     sc->last5min = hyperloglogNew();
     sc->lastHour = hyperloglogNew();
@@ -657,11 +725,11 @@ void streamCounterRotate(streamCounter *sc) {
 }
 
 void streamCounterPrintStats(streamCounter *sc) {
-    printf("Current window: %lu unique\n",
+    printf("Current window: %" PRIu64 " unique\n",
            hyperloglogCount(sc->current, NULL));
-    printf("Last 5 minutes: %lu unique\n",
+    printf("Last 5 minutes: %" PRIu64 " unique\n",
            hyperloglogCount(sc->last5min, NULL));
-    printf("Last hour: %lu unique\n",
+    printf("Last hour: %" PRIu64 " unique\n",
            hyperloglogCount(sc->lastHour, NULL));
 }
 
@@ -669,7 +737,7 @@ void streamCounterFree(streamCounter *sc) {
     hyperloglogFree(sc->current);
     hyperloglogFree(sc->last5min);
     hyperloglogFree(sc->lastHour);
-    free(sc);
+    zfree(sc);
 }
 ```
 
@@ -698,25 +766,31 @@ cardinality ≈ 2^(average_max_zeros) * correction_factor
 ### Step-by-Step Process
 
 ```c
-/* Simplified HyperLogLog logic */
+/* This is what hyperloglogPatLen() actually does */
 
-// 1. Hash the input
-uint64_t hash = XXH3_64bits(data, len);
+/* 1. Hash the input (XXH3, fixed seed) */
+uint64_t hash = XXH3_64bits_withSeed(data, len, 0xadc83b19ULL);
 
-// 2. Use first 14 bits for register index (2^14 = 16384 registers)
-uint32_t register_index = hash & 0x3FFF;  // Last 14 bits
+/* 2. The LOW 14 bits select the register (2^14 = 16384 registers) */
+int64_t index = hash & (HLL_REGISTERS - 1);
 
-// 3. Count leading zeros in remaining 50 bits + 1
-hash >>= 14;  // Remove register bits
-int leading_zeros = __builtin_clzll(hash | (1ULL << 50)) + 1;
+/* 3. Drop those bits, then force a sentinel 1 at bit Q = 64 - 14 = 50
+ *    so the run length can never exceed Q + 1 */
+hash >>= HLL_P;
+hash |= (1ULL << HLL_Q);
 
-// 4. Update register if this is a new maximum
-if (leading_zeros > registers[register_index]) {
-    registers[register_index] = leading_zeros;
+/* 4. Count TRAILING zeros of what remains, plus 1.
+ *    (Trailing, not leading — the low bits are the ones left after the
+ *    register index was shifted off.) */
+uint_fast8_t count = __builtin_ctzll(hash) + 1;
+
+/* 5. Raise the register only if this run is longer */
+if (count > registers[index]) {
+    registers[index] = count;
 }
 
-// 5. To estimate cardinality, use harmonic mean of 2^register values
-// (actual algorithm uses improved estimator by Ertl)
+/* 6. Cardinality comes from the register distribution, using the
+ *    improved (Ertl) estimator rather than the original harmonic mean */
 ```
 
 ### Why 16,384 Registers?
@@ -747,7 +821,7 @@ uint64_t estimate = hyperloglogCount(hll, NULL);
 double error = (double)(estimate - actual) / actual * 100;
 
 printf("Actual: %d\n", actual);
-printf("Estimated: %lu\n", estimate);
+printf("Estimated: %" PRIu64 "\n", estimate);
 printf("Error: %.2f%%\n", error);
 // Typically: Error < ±1%
 
@@ -841,7 +915,7 @@ uint64_t count = hyperloglogCount(hll, NULL);
 // All are valid within error bounds!
 
 /* For small counts, error percentage can be larger */
-printf("Count: %lu (expected ~100, ±1%%)\n", count);
+printf("Count: %" PRIu64 " (expected ~100, ±1%%)\n", count);
 
 hyperloglogFree(hll);
 ```
@@ -895,11 +969,11 @@ for (int i = 0; i < 10; i++) {
 /* Merge all sources */
 hyperloglog *total = hyperloglogCopy(sources[0]);
 for (int i = 1; i < 10; i++) {
-    hyperloglogMerge(total, sources[i]);
+    hyperloglogMergeInto(&total, sources[i]);
 }
 
 uint64_t combined = hyperloglogCount(total, NULL);
-printf("Total unique across all sources: %lu\n", combined);
+printf("Total unique across all sources: %" PRIu64 "\n", combined);
 
 /* Clean up */
 for (int i = 0; i < 10; i++) {
@@ -935,12 +1009,12 @@ for (int i = 0; i < 10; i++) {
 }
 // Estimate: might be 9, 10, or 11
 
-/* GOOD - use hash set for small exact counts */
+/* GOOD - use an exact set for small exact counts */
 intset *exact = intsetNew();
-for (int i = 0; i < 10; i++) {
+for (int64_t i = 0; i < 10; i++) {
     intsetAdd(&exact, i, NULL);
 }
-// Count: exactly 10
+/* Count: exactly 10 */
 ```
 
 ### 3. Forgetting Merge Semantics
@@ -954,17 +1028,17 @@ hyperloglogAdd(&a, "x", 1);
 hyperloglogAdd(&b, "y", 1);
 
 hyperloglog *merged = hyperloglogCopy(a);
-hyperloglogMerge(merged, b);
+hyperloglogMergeInto(&merged, b);
 
-// merged estimates ~2 (union of {x} and {y})
-// NOT 0 (intersection would be empty)
+/* merged estimates ~2 (union of {x} and {y}),
+ * NOT 0 (the intersection would be empty).
+ * There is no HLL intersection operation. */
 ```
 
 ## See Also
 
 - [intset](INTSET.md) - Exact counting with sorted integers
 - [intsetU32](INTSET_U32.md) - Fixed 32-bit integer sets
-- [intsetBig](INTSET_BIG.md) - Large integer sets
 
 ## Testing
 

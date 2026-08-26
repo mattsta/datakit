@@ -1,1010 +1,655 @@
 # Real-World Use Cases
 
-This guide demonstrates practical, production-ready applications built with datakit, showing how to combine multiple modules to solve real problems.
+Complete, self-contained scenarios that combine several datakit modules
+to solve one production problem. Every API call is checked against the
+current headers in `src/`.
+
+Scope: this file holds **whole applications**. Small copy-paste idioms
+live in [PATTERNS.md](PATTERNS.md), measurement recipes live in
+[BENCHMARKS.md](BENCHMARKS.md), and single-module walkthroughs live in
+`docs/modules/<module>/EXAMPLES.md`.
 
 ## Table of Contents
 
-1. [Web Application Session Store](#web-application-session-store)
-2. [High-Performance Log Aggregator](#high-performance-log-aggregator)
+1. [Sharded LRU Cache](#sharded-lru-cache)
+2. [Compressed Log Aggregator](#compressed-log-aggregator)
 3. [Real-Time Analytics Dashboard](#real-time-analytics-dashboard)
-4. [Distributed Cache System](#distributed-cache-system)
-5. [Full-Text Search Engine](#full-text-search-engine)
-6. [Gaming Leaderboard Service](#gaming-leaderboard-service)
-7. [IoT Sensor Data Collector](#iot-sensor-data-collector)
-8. [Configuration Management System](#configuration-management-system)
-9. [Message Queue with Priorities](#message-queue-with-priorities)
-10. [Graph Database (Adjacency List)](#graph-database-adjacency-list)
+4. [Single-Module Scenarios](#single-module-scenarios)
 
 ---
 
-## Web Application Session Store
+## Sharded LRU Cache
 
-A production-ready session store with TTL, LRU eviction, and multi-field sessions.
+Combines `rapidhash` for shard selection, `multimap` for storage, and
+`multilru` for eviction. The interesting part is wiring `multilru`'s
+eviction callback to the map so entries actually disappear from storage
+when the LRU evicts them — an LRU that only tracks recency while the map
+grows forever is the classic way to get this wrong.
 
 ```c
 #include "multimap.h"
-#include "multimapAtom.h"
 #include "multilru.h"
-#include <time.h>
+#include "rapidhash.h"
+#include "timeUtil.h"
 
-typedef struct {
-    multimapAtom *atoms;      /* String interning for session IDs */
-    multimap *sessions;       /* sessionRef → {userId, data, lastAccess} */
-    multilru *lru;            /* LRU tracking */
-    size_t maxSessions;
-    time_t sessionTTL;
-} SessionStore;
+#include <inttypes.h>
+#include <stdio.h>
+#include <string.h>
 
-SessionStore *sessionStoreNew(size_t maxSessions, time_t ttl) {
-    SessionStore *store = malloc(sizeof(*store));
-    store->atoms = multimapAtomNew();
-    store->sessions = multimapNew(4);  /* sessionRef + userId + data + lastAccess */
-    store->lru = multilruNew();
-    store->maxSessions = maxSessions;
-    store->sessionTTL = ttl;
-    return store;
+enum { CACHE_SHARDS = 16 };
+
+typedef struct cacheShard {
+    multimap *data;    /* key -> {value, lruPtr}          */
+    multimap *byLru;   /* lruPtr -> key (reverse index)   */
+    multilru *lru;     /* recency ordering                */
+    uint64_t hits;
+    uint64_t misses;
+} cacheShard;
+
+typedef struct shardedCache {
+    cacheShard shards[CACHE_SHARDS];
+} shardedCache;
+
+/* multilru calls this immediately BEFORE it frees an evicted entry, so
+ * this is where the storage side of the eviction happens. */
+static void cacheOnEvict(size_t evictedPtr, void *userData) {
+    cacheShard *s = userData;
+
+    const databox lruBox = databoxNewUnsigned(evictedPtr);
+
+    databox key;
+    if (multimapLookupInto(s->byLru, &lruBox, &key, 1)) {
+        /* Copy the key: deleting from byLru invalidates the reference
+         * the lookup handed back. */
+        databox owned = databoxCopy(&key);
+        multimapDelete(&s->byLru, &lruBox);
+        multimapDelete(&s->data, &owned);
+        databoxFreeData(&owned);
+    }
 }
 
-typedef struct {
-    char sessionId[64];
-    uint64_t userId;
-    void *data;
-    size_t dataLen;
-    time_t lastAccess;
-} Session;
+shardedCache *cacheNew(uint64_t maxEntries) {
+    shardedCache *c = zcalloc(1, sizeof(*c));
+    const uint64_t perShard = maxEntries / CACHE_SHARDS;
 
-/* Create new session */
-bool sessionStoreCreate(SessionStore *store, const char *sessionId,
-                       uint64_t userId, const void *data, size_t dataLen) {
-    /* Evict if at capacity */
-    while (multimapCount(store->sessions) >= store->maxSessions) {
-        multilruPtr evicted;
-        if (!multilruRemoveMinimum(store->lru, &evicted)) {
-            break;
-        }
-        /* In production: track session→lru mapping for removal */
+    for (size_t i = 0; i < CACHE_SHARDS; i++) {
+        cacheShard *s = &c->shards[i];
+        s->data = multimapNew(3);   /* key + value + lruPtr */
+        s->byLru = multimapNew(2);  /* lruPtr + key         */
+        s->lru = multilruNew();
+
+        /* Automatic eviction: multilru enforces the cap on insert and
+         * tells us which entry left so we can drop its storage. */
+        multilruSetMaxCount(s->lru, perShard);
+        multilruSetEvictCallback(s->lru, cacheOnEvict, s);
     }
 
-    /* Intern session ID */
-    databox sidBox = databoxNewBytesString(sessionId);
-    multimapAtomInsertIfNewConvert(store->atoms, &sidBox);
-
-    /* Store session data */
-    databox userBox = databoxNewUnsigned(userId);
-    databox dataBox = databoxNewBytes(data, dataLen);
-    databox timeBox = databoxNewSigned(time(NULL));
-
-    const databox *elements[4] = {&sidBox, &userBox, &dataBox, &timeBox};
-    multimapInsert(&store->sessions, elements);
-
-    /* Track in LRU */
-    multilruInsert(store->lru);
-
-    return true;
+    return c;
 }
 
-/* Get session and update access time */
-bool sessionStoreGet(SessionStore *store, const char *sessionId,
-                    Session *outSession) {
-    /* Look up session ID reference */
-    databox sidBox = databoxNewBytesString(sessionId);
-    databox sidRef;
-
-    if (!multimapAtomLookupReference(store->atoms, &sidBox, &sidRef)) {
-        return false;  /* Session doesn't exist */
+void cacheFree(shardedCache *c) {
+    if (!c) {
+        return;
     }
 
-    /* Get session data */
-    databox userId, data, lastAccess;
-    databox *results[3] = {&userId, &data, &lastAccess};
+    for (size_t i = 0; i < CACHE_SHARDS; i++) {
+        multilruFree(c->shards[i].lru);
+        multimapFree(c->shards[i].data);
+        multimapFree(c->shards[i].byLru);
+    }
 
-    if (!multimapLookup(store->sessions, &sidRef, results)) {
+    zfree(c);
+}
+
+static cacheShard *cacheShardFor(shardedCache *c, const void *key,
+                                 size_t keyLen) {
+    return &c->shards[rapidhash(key, keyLen) % CACHE_SHARDS];
+}
+
+void cachePut(shardedCache *c, const void *key, size_t keyLen,
+              const void *value, size_t valueLen) {
+    cacheShard *s = cacheShardFor(c, key, keyLen);
+
+    const databox keyBox = databoxNewBytes(key, keyLen);
+
+    /* Replacing an existing key: retire its old LRU handle first so the
+     * reverse index never points at a stale entry. */
+    databox existing[2];
+    if (multimapLookupInto(s->data, &keyBox, existing, 2)) {
+        const databox oldLru = databoxNewUnsigned(existing[1].data.u64);
+        multimapDelete(&s->byLru, &oldLru);
+        multilruDelete(s->lru, (multilruPtr)existing[1].data.u64);
+    }
+
+    /* Insert can trigger eviction, which calls cacheOnEvict. */
+    const multilruPtr ptr = multilruInsert(s->lru);
+
+    const databox valueBox = databoxNewBytes(value, valueLen);
+    const databox lruBox = databoxNewUnsigned(ptr);
+
+    const databox *entry[3] = {&keyBox, &valueBox, &lruBox};
+    multimapInsert(&s->data, entry);
+
+    const databox *reverse[2] = {&lruBox, &keyBox};
+    multimapInsert(&s->byLru, reverse);
+}
+
+/* Returns a REFERENCE into the shard's storage: copy it before the next
+ * mutation of this shard if you need it to outlive the call. */
+bool cacheGet(shardedCache *c, const void *key, size_t keyLen,
+              databox *outValue) {
+    cacheShard *s = cacheShardFor(c, key, keyLen);
+
+    const databox keyBox = databoxNewBytes(key, keyLen);
+
+    databox found[2];  /* value + lruPtr */
+    if (!multimapLookupInto(s->data, &keyBox, found, 2)) {
+        s->misses++;
         return false;
     }
 
-    /* Check TTL */
-    time_t age = time(NULL) - lastAccess.data.i64;
-    if (age > store->sessionTTL) {
-        /* Expired */
-        multimapDelete(&store->sessions, &sidRef);
-        return false;
-    }
-
-    /* Update last access time */
-    multimapFieldUpdate(&store->sessions, &sidRef, 3,
-                       &(databox){.data.i64 = time(NULL),
-                                 .type = DATABOX_SIGNED_64});
-
-    /* Fill output */
-    strncpy(outSession->sessionId, sessionId, sizeof(outSession->sessionId) - 1);
-    outSession->userId = userId.data.u64;
-    outSession->data = malloc(databoxLen(&data));
-    memcpy(outSession->data, databoxCBytes(&data), databoxLen(&data));
-    outSession->dataLen = databoxLen(&data);
-    outSession->lastAccess = time(NULL);
-
+    multilruIncrease(s->lru, (multilruPtr)found[1].data.u64);
+    s->hits++;
+    *outValue = found[0];
     return true;
 }
 
-/* Delete session */
-void sessionStoreDelete(SessionStore *store, const char *sessionId) {
-    databox sidBox = databoxNewBytesString(sessionId);
-    databox sidRef;
+bool cacheDelete(shardedCache *c, const void *key, size_t keyLen) {
+    cacheShard *s = cacheShardFor(c, key, keyLen);
 
-    if (multimapAtomLookupReference(store->atoms, &sidBox, &sidRef)) {
-        multimapDelete(&store->sessions, &sidRef);
+    const databox keyBox = databoxNewBytes(key, keyLen);
+
+    databox found[2];
+    if (!multimapLookupInto(s->data, &keyBox, found, 2)) {
+        return false;
     }
+
+    const databox lruBox = databoxNewUnsigned(found[1].data.u64);
+    multilruDelete(s->lru, (multilruPtr)found[1].data.u64);
+    multimapDelete(&s->byLru, &lruBox);
+    multimapDelete(&s->data, &keyBox);
+    return true;
 }
 
-/* Expire old sessions */
-size_t sessionStoreExpireOld(SessionStore *store) {
-    time_t cutoff = time(NULL) - store->sessionTTL;
-    databox expired[1000];
-    size_t expiredCount = 0;
+void cacheReport(const shardedCache *c) {
+    size_t entries = 0;
+    size_t bytes = 0;
+    uint64_t hits = 0;
+    uint64_t misses = 0;
 
-    /* Find expired */
-    multimapIterator iter;
-    multimapIteratorInit(store->sessions, &iter, true);
-
-    databox sid, userId, data, lastAccess;
-    databox *elements[4] = {&sid, &userId, &data, &lastAccess};
-
-    while (multimapIteratorNext(&iter, elements) && expiredCount < 1000) {
-        if (lastAccess.data.i64 < cutoff) {
-            expired[expiredCount++] = sid;
-        }
+    for (size_t i = 0; i < CACHE_SHARDS; i++) {
+        const cacheShard *s = &c->shards[i];
+        entries += multimapCount(s->data);
+        bytes += multimapBytes(s->data) + multimapBytes(s->byLru) +
+                 multilruBytes(s->lru);
+        hits += s->hits;
+        misses += s->misses;
     }
 
-    /* Delete expired */
-    for (size_t i = 0; i < expiredCount; i++) {
-        multimapDelete(&store->sessions, &expired[i]);
-    }
-
-    return expiredCount;
+    const uint64_t total = hits + misses;
+    printf("entries %zu, bytes %zu, hit rate %.1f%%\n", entries, bytes,
+           total ? 100.0 * (double)hits / (double)total : 0.0);
 }
 
-void sessionStoreFree(SessionStore *store) {
-    if (store) {
-        multimapAtomFree(store->atoms);
-        multimapFree(store->sessions);
-        multilruFree(store->lru);
-        free(store);
-    }
-}
+void exampleShardedCache(void) {
+    shardedCache *c = cacheNew(10000);
 
-/* Example usage */
-void exampleSessionStore(void) {
-    SessionStore *store = sessionStoreNew(10000, 3600);  /* 10K sessions, 1hr TTL */
-
-    /* Create session */
-    char userData[] = "user_preferences_data";
-    sessionStoreCreate(store, "sess_abc123", 1001, userData, strlen(userData));
-
-    /* Retrieve session */
-    Session sess;
-    if (sessionStoreGet(store, "sess_abc123", &sess)) {
-        printf("User ID: %lu\n", sess.userId);
-        printf("Data: %.*s\n", (int)sess.dataLen, (char *)sess.data);
-        free(sess.data);
+    char key[32];
+    char value[64];
+    for (uint64_t i = 0; i < 50000; i++) {
+        const size_t keyLen =
+            (size_t)snprintf(key, sizeof(key), "key_%" PRIu64, i);
+        const size_t valueLen =
+            (size_t)snprintf(value, sizeof(value), "value_%" PRIu64, i);
+        cachePut(c, key, keyLen, value, valueLen);
     }
 
-    /* Periodic cleanup */
-    size_t expired = sessionStoreExpireOld(store);
-    printf("Expired %zu sessions\n", expired);
+    /* 50K inserts against a 10K cap: eviction kept it bounded. */
+    databox got;
+    const size_t probeLen =
+        (size_t)snprintf(key, sizeof(key), "key_%" PRIu64, UINT64_C(49999));
+    if (cacheGet(c, key, probeLen, &got)) {
+        printf("hit: %.*s\n", (int)databoxLen(&got),
+               (const char *)databoxCBytes(&got));
+    }
 
-    sessionStoreFree(store);
+    cacheReport(c);
+    cacheFree(c);
 }
 ```
 
+Notes on the shape of this:
+
+- `multilruSetMaxCount` plus `multilruSetEvictCallback` is the intended
+  eviction workflow. The alternative — `multilruSetAutoEvict(lru,
+false)` and a `while (multilruNeedsEviction(lru))` drain loop — is
+  documented in `multilru.h` and is the right choice when you want to
+  batch evictions rather than pay them on the insert path.
+- The reverse index (`byLru`) exists because eviction hands you an LRU
+  handle, not a key. Without it the callback has nothing to delete.
+- `multimapLookupInto` fills `elementsPerEntry - 1` boxes — values only,
+  since you already hold the key.
+
 ---
 
-## High-Performance Log Aggregator
+## Compressed Log Aggregator
 
-Collect, compress, and query millions of log entries efficiently.
+Collects log lines into a compressed `multilist`, interns repeated source
+names with `multimapAtom`, and keeps a sorted `multimap` index for range
+queries by time.
 
 ```c
 #include "multilist.h"
-#include "multimapAtom.h"
 #include "multimap.h"
-#include <time.h>
+#include "multimapAtom.h"
+#include "timeUtil.h"
 
-typedef struct {
-    multilist *logs;          /* Compressed log storage */
-    multimapAtom *atoms;      /* Interned log levels and sources */
-    multimap *index;          /* Timestamp index */
-} LogAggregator;
+#include <inttypes.h>
+#include <stdio.h>
+#include <string.h>
 
-typedef enum {
-    LOG_DEBUG,
+typedef enum logLevel {
+    LOG_DEBUG = 0,
     LOG_INFO,
     LOG_WARN,
     LOG_ERROR,
     LOG_FATAL
-} LogLevel;
+} logLevel;
 
-LogAggregator *logAggregatorNew(void) {
-    LogAggregator *agg = malloc(sizeof(*agg));
-    /* Use compression for logs (first/last 5 nodes uncompressed) */
-    agg->logs = multilistNew(FLEX_CAP_LEVEL_8192, 5);
-    agg->atoms = multimapAtomNew();
-    agg->index = multimapNew(2);  /* timestamp → logIndex */
+typedef struct logAggregator {
+    multilist *lines;     /* compressed message storage           */
+    multimapAtom *names;  /* interned source names                */
+    multimap *index;      /* timestampMs + sourceRef + lineOffset */
+    mflexState *state;    /* scratch for single-state list calls  */
+} logAggregator;
+
+logAggregator *logAggregatorNew(void) {
+    logAggregator *agg = zcalloc(1, sizeof(*agg));
+
+    /* 8 KB nodes; keep the newest 5 nodes at each end uncompressed so
+     * appends and tail reads never pay decompression. */
+    agg->lines = multilistNew(FLEX_CAP_LEVEL_8192, 5);
+    agg->names = multimapAtomNew();
+    agg->index = multimapNew(3);
+    agg->state = mflexStateCreate();
+
     return agg;
 }
 
-void logAggregatorAppend(LogAggregator *agg, LogLevel level,
-                        const char *source, const char *message) {
-    mflexState *state = mflexStateCreate();
+void logAggregatorFree(logAggregator *agg) {
+    if (!agg) {
+        return;
+    }
 
-    /* Build log entry */
-    char entry[2048];
-    time_t now = time(NULL);
-    struct tm *t = localtime(&now);
-
-    snprintf(entry, sizeof(entry),
-             "[%04d-%02d-%02d %02d:%02d:%02d] [%d] [%s] %s",
-             t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
-             t->tm_hour, t->tm_min, t->tm_sec,
-             level, source, message);
-
-    /* Intern level and source strings for deduplication */
-    databox levelBox = databoxNewSigned(level);
-    databox sourceBox = databoxNewBytesString(source);
-    multimapAtomInsertIfNewConvert(agg->atoms, &sourceBox);
-
-    /* Append to compressed log storage */
-    databox logBox = databoxNewBytesString(entry);
-    multilistPushByTypeTail(&agg->logs, state, &logBox);
-
-    /* Index by timestamp for fast range queries */
-    size_t logIndex = multilistCount(agg->logs) - 1;
-    databox tsBox = databoxNewSigned(now);
-    databox idxBox = databoxNewUnsigned(logIndex);
-    const databox *indexEntry[2] = {&tsBox, &idxBox};
-    multimapAppend(&agg->index, indexEntry);
-
-    mflexStateFree(state);
+    mflexStateFree(agg->state);
+    multilistFree(agg->lines);
+    multimapAtomFree(agg->names);
+    multimapFree(agg->index);
+    zfree(agg);
 }
 
-void logAggregatorQueryRange(LogAggregator *agg, time_t start, time_t end,
-                             void (*callback)(const char *)) {
-    databox startBox = databoxNewSigned(start);
+void logAggregatorAppend(logAggregator *agg, logLevel level,
+                         const char *source, const char *message) {
+    const uint64_t nowMs = timeUtilMs();
+
+    char line[2048];
+    const int lineLen =
+        snprintf(line, sizeof(line), "%" PRIu64 " [%d] %s: %s", nowMs,
+                 (int)level, source, message);
+    if (lineLen <= 0) {
+        return;
+    }
+
+    const databox lineBox = databoxNewBytes(line, (size_t)lineLen);
+    multilistPushByTypeTail(&agg->lines, agg->state, &lineBox);
+
+    /* Intern the source name. InsertIfNewConvert rewrites sourceBox
+     * IN PLACE into the atom reference, so after this call sourceBox is
+     * a small integer reference, not the string. */
+    databox sourceBox = databoxNewBytesString(source);
+    multimapAtomInsertIfNewConvert(agg->names, &sourceBox);
+
+    const databox tsBox = databoxNewUnsigned(nowMs);
+    const databox offsetBox =
+        databoxNewUnsigned(multilistCount(agg->lines) - 1);
+
+    /* Append, not Insert: timestamps arrive non-decreasing, and Append
+     * skips the sorted-position search entirely. */
+    const databox *entry[3] = {&tsBox, &sourceBox, &offsetBox};
+    multimapAppend(&agg->index, entry);
+}
+
+/* Walk every line logged in [startMs, endMs]. When sourceFilter is
+ * non-NULL, only lines from that source are reported. */
+void logAggregatorQuery(logAggregator *agg, uint64_t startMs, uint64_t endMs,
+                        const char *sourceFilter,
+                        void (*onLine)(const databox *line, void *userData),
+                        void *userData) {
+    databox filterRef;
+    bool haveFilter = false;
+
+    if (sourceFilter) {
+        const databox filterBox = databoxNewBytesString(sourceFilter);
+        if (!multimapAtomLookupReference(agg->names, &filterBox, &filterRef)) {
+            return;  /* that source never logged anything */
+        }
+        haveFilter = true;
+    }
+
+    const databox startBox = databoxNewUnsigned(startMs);
 
     multimapIterator iter;
     if (!multimapIteratorInitAt(agg->index, &iter, true, &startBox)) {
         return;
     }
 
-    mflexState *state = mflexStateCreate();
+    databox entry[3];
+    while (multimapIteratorNextInto(&iter, entry, 3)) {
+        if (entry[0].data.u64 > endMs) {
+            break;
+        }
 
-    databox timestamp, logIndex;
-    databox *elements[2] = {&timestamp, &logIndex};
+        if (haveFilter && entry[1].data.u64 != filterRef.data.u64) {
+            continue;
+        }
 
-    while (multimapIteratorNext(&iter, elements)) {
-        if (timestamp.data.i64 > end) break;
-
-        /* Retrieve log entry */
-        multilistEntry entry;
-        if (multilistIndexGet(agg->logs, state, logIndex.data.u64, &entry)) {
-            callback(entry.box.data.bytes.cstart);
+        multilistEntry line;
+        if (multilistIndexGet(agg->lines, agg->state, (mlOffsetId)entry[2].data.u64,
+                              &line)) {
+            onLine(&line.box, userData);
         }
     }
-
-    mflexStateFree(state);
 }
 
-void logAggregatorStats(LogAggregator *agg) {
-    printf("Total logs: %zu\n", multilistCount(agg->logs));
-    printf("Memory used: %zu bytes\n", multilistBytes(agg->logs));
-    printf("Interned strings: %zu\n", multimapAtomCount(agg->atoms));
-    printf("Index entries: %zu\n", multimapCount(agg->index));
+void logAggregatorReport(const logAggregator *agg) {
+    printf("lines          %zu\n", multilistCount(agg->lines));
+    printf("line bytes     %zu\n", multilistBytes(agg->lines));
+    printf("interned names %zu (%zu bytes)\n", multimapAtomCount(agg->names),
+           multimapAtomBytes(agg->names));
+    printf("index entries  %zu (%zu bytes)\n", multimapCount(agg->index),
+           multimapBytes(agg->index));
 }
 
-void logAggregatorFree(LogAggregator *agg) {
-    if (agg) {
-        multilistFree(agg->logs);
-        multimapAtomFree(agg->atoms);
-        multimapFree(agg->index);
-        free(agg);
-    }
+static void printLine(const databox *line, void *userData) {
+    (void)userData;
+    printf("%.*s\n", (int)databoxLen(line), (const char *)databoxCBytes(line));
 }
 
-/* Example usage */
 void exampleLogAggregator(void) {
-    LogAggregator *agg = logAggregatorNew();
+    logAggregator *agg = logAggregatorNew();
 
-    /* Simulate application logging */
-    logAggregatorAppend(agg, LOG_INFO, "app", "Application started");
-    logAggregatorAppend(agg, LOG_DEBUG, "db", "Connected to database");
+    const uint64_t startMs = timeUtilMs();
 
-    for (int i = 0; i < 100000; i++) {
-        char msg[256];
-        snprintf(msg, sizeof(msg), "Processing request #%d", i);
-        logAggregatorAppend(agg, LOG_DEBUG, "http", msg);
+    logAggregatorAppend(agg, LOG_INFO, "app", "starting up");
+
+    char message[256];
+    for (uint64_t i = 0; i < 100000; i++) {
+        snprintf(message, sizeof(message), "handled request %" PRIu64, i);
+        logAggregatorAppend(agg, LOG_DEBUG, "http", message);
     }
 
-    logAggregatorAppend(agg, LOG_ERROR, "db", "Connection lost");
-    logAggregatorAppend(agg, LOG_INFO, "app", "Shutting down");
+    logAggregatorAppend(agg, LOG_ERROR, "db", "connection lost");
+    logAggregatorAppend(agg, LOG_INFO, "app", "shutting down");
 
-    /* Query logs from last hour */
-    time_t now = time(NULL);
-    time_t hourAgo = now - 3600;
+    /* Only the "db" lines from this run. */
+    logAggregatorQuery(agg, startMs, timeUtilMs(), "db", printLine, NULL);
 
-    printf("\nLogs from last hour:\n");
-    logAggregatorQueryRange(agg, hourAgo, now, [](const char *log) {
-        printf("%s\n", log);
-    });
-
-    logAggregatorStats(agg);
+    logAggregatorReport(agg);
     logAggregatorFree(agg);
 }
 ```
+
+Notes:
+
+- The interned source reference is what lands in the index, so filtering
+  by source is an integer comparison rather than a string compare — and
+  100,000 lines from `"http"` store the name exactly once.
+- `multilistIndexGet` takes a **single** `mflexState *`. The multilist
+  _iterator_ entry points take a two-element `mflexState *state[2]`
+  instead; see [PATTERNS.md](PATTERNS.md#iteration).
+- Compression only pays for the nodes behind the uncompressed depth
+  (5 here). Recent lines stay hot and uncompressed; old ones shrink.
 
 ---
 
 ## Real-Time Analytics Dashboard
 
-Track metrics, compute aggregations, and detect anomalies in real-time.
+Combines a sorted `multimap` time series, `multimapAtom` for metric
+names, `hyperloglog` for unique-visitor cardinality, and `multiroar` for
+an exact set of currently-active user IDs.
 
 ```c
-#include "multimap.h"
 #include "hyperloglog.h"
-#include <time.h>
-
-typedef struct {
-    multimap *timeseries;     /* timestamp → metric values */
-    hyperloglog *uniqueUsers; /* Cardinality estimation */
-    multimap *counters;       /* metric_name → count */
-    time_t windowSize;
-} AnalyticsDashboard;
-
-AnalyticsDashboard *dashboardNew(time_t windowSize) {
-    AnalyticsDashboard *dash = malloc(sizeof(*dash));
-    dash->timeseries = multimapNew(3);  /* timestamp + metric + value */
-    dash->uniqueUsers = hyperloglogCreate();
-    dash->counters = multimapNew(2);  /* metric_name + count */
-    dash->windowSize = windowSize;
-    return dash;
-}
-
-void dashboardRecordMetric(AnalyticsDashboard *dash, const char *metric,
-                          double value) {
-    time_t now = time(NULL);
-
-    databox tsBox = databoxNewSigned(now);
-    databox metricBox = databoxNewBytesString(metric);
-    databox valueBox = databoxNewReal(value);
-
-    const databox *entry[3] = {&tsBox, &metricBox, &valueBox};
-    multimapAppend(&dash->timeseries, entry);
-
-    /* Update counter */
-    databox currentCount;
-    databox *results[1] = {&currentCount};
-
-    if (multimapLookup(dash->counters, &metricBox, results)) {
-        /* Increment existing */
-        multimapFieldIncr(&dash->counters, &metricBox, 1, 1);
-    } else {
-        /* Initialize */
-        databox one = databoxNewSigned(1);
-        const databox *counterEntry[2] = {&metricBox, &one};
-        multimapInsert(&dash->counters, counterEntry);
-    }
-}
-
-void dashboardRecordUser(AnalyticsDashboard *dash, const char *userId) {
-    hyperloglogAdd(dash->uniqueUsers, (uint8_t *)userId, strlen(userId));
-}
-
-double dashboardGetMetricAvg(AnalyticsDashboard *dash, const char *metric,
-                            time_t start, time_t end) {
-    databox startBox = databoxNewSigned(start);
-    databox metricBox = databoxNewBytesString(metric);
-
-    multimapIterator iter;
-    if (!multimapIteratorInitAt(dash->timeseries, &iter, true, &startBox)) {
-        return 0.0;
-    }
-
-    double sum = 0.0;
-    size_t count = 0;
-
-    databox timestamp, metricName, value;
-    databox *elements[3] = {&timestamp, &metricName, &value};
-
-    while (multimapIteratorNext(&iter, elements)) {
-        if (timestamp.data.i64 > end) break;
-
-        if (databoxLen(&metricName) == strlen(metric) &&
-            memcmp(databoxCBytes(&metricName), metric, strlen(metric)) == 0) {
-            sum += value.data.d64;
-            count++;
-        }
-    }
-
-    return count > 0 ? sum / count : 0.0;
-}
-
-uint64_t dashboardGetUniqueUsers(AnalyticsDashboard *dash) {
-    return hyperloglogCount(dash->uniqueUsers);
-}
-
-void dashboardGetTopMetrics(AnalyticsDashboard *dash, size_t n) {
-    /* Simple implementation - iterate and print top N */
-    multimapIterator iter;
-    multimapIteratorInit(dash->counters, &iter, false);  /* Reverse for high to low */
-
-    databox metric, count;
-    databox *elements[2] = {&metric, &count};
-
-    printf("Top %zu metrics:\n", n);
-    size_t shown = 0;
-
-    while (multimapIteratorNext(&iter, elements) && shown < n) {
-        printf("%zu. %.*s: %ld\n",
-               shown + 1,
-               (int)databoxLen(&metric),
-               databoxCBytes(&metric),
-               count.data.i64);
-        shown++;
-    }
-}
-
-void dashboardFree(AnalyticsDashboard *dash) {
-    if (dash) {
-        multimapFree(dash->timeseries);
-        hyperloglogFree(dash->uniqueUsers);
-        multimapFree(dash->counters);
-        free(dash);
-    }
-}
-
-/* Example usage */
-void exampleAnalyticsDashboard(void) {
-    AnalyticsDashboard *dash = dashboardNew(3600);  /* 1 hour window */
-
-    /* Simulate metrics */
-    for (int i = 0; i < 10000; i++) {
-        dashboardRecordMetric(dash, "page_views", 1.0);
-        dashboardRecordMetric(dash, "response_time_ms", 50.0 + (rand() % 100));
-
-        char userId[32];
-        snprintf(userId, sizeof(userId), "user_%d", rand() % 5000);
-        dashboardRecordUser(dash, userId);
-    }
-
-    /* Query analytics */
-    time_t now = time(NULL);
-    time_t hourAgo = now - 3600;
-
-    double avgResponseTime = dashboardGetMetricAvg(dash, "response_time_ms",
-                                                   hourAgo, now);
-    printf("Average response time: %.2f ms\n", avgResponseTime);
-
-    uint64_t uniqueUsers = dashboardGetUniqueUsers(dash);
-    printf("Unique users (estimated): %lu\n", uniqueUsers);
-
-    dashboardGetTopMetrics(dash, 5);
-
-    dashboardFree(dash);
-}
-```
-
----
-
-## Distributed Cache System
-
-Multi-level cache with sharding and consistent hashing.
-
-```c
-#include "multimap.h"
-#include "multilru.h"
-#include "xxHash/xxhash.h"
-
-#define NUM_SHARDS 16
-
-typedef struct {
-    multimap *data;
-    multilru *lru;
-    size_t maxSize;
-} CacheShard;
-
-typedef struct {
-    CacheShard shards[NUM_SHARDS];
-    size_t totalMaxSize;
-} DistributedCache;
-
-DistributedCache *dcacheNew(size_t totalMaxSize) {
-    DistributedCache *cache = malloc(sizeof(*cache));
-    cache->totalMaxSize = totalMaxSize;
-
-    size_t shardSize = totalMaxSize / NUM_SHARDS;
-    for (int i = 0; i < NUM_SHARDS; i++) {
-        cache->shards[i].data = multimapNew(3);  /* key + value + lruPtr */
-        cache->shards[i].lru = multilruNew();
-        cache->shards[i].maxSize = shardSize;
-    }
-
-    return cache;
-}
-
-/* Consistent hashing to select shard */
-static int dcacheGetShard(const void *key, size_t keyLen) {
-    uint64_t hash = XXH64(key, keyLen, 0);
-    return hash % NUM_SHARDS;
-}
-
-bool dcacheGet(DistributedCache *cache, const void *key, size_t keyLen,
-              void **outValue, size_t *outValueLen) {
-    int shard = dcacheGetShard(key, keyLen);
-    CacheShard *s = &cache->shards[shard];
-
-    databox keyBox = databoxNewBytes(key, keyLen);
-    databox value, lruPtr;
-    databox *results[2] = {&value, &lruPtr};
-
-    if (multimapLookup(s->data, &keyBox, results)) {
-        /* Update LRU */
-        multilruIncrease(s->lru, (multilruPtr)lruPtr.data.u64);
-
-        /* Return value */
-        *outValue = malloc(databoxLen(&value));
-        memcpy(*outValue, databoxCBytes(&value), databoxLen(&value));
-        *outValueLen = databoxLen(&value);
-        return true;
-    }
-
-    return false;
-}
-
-void dcachePut(DistributedCache *cache, const void *key, size_t keyLen,
-              const void *value, size_t valueLen) {
-    int shard = dcacheGetShard(key, keyLen);
-    CacheShard *s = &cache->shards[shard];
-
-    /* Evict if at capacity */
-    while (multimapCount(s->data) >= s->maxSize) {
-        multilruPtr evicted;
-        if (!multilruRemoveMinimum(s->lru, &evicted)) break;
-
-        /* Find and delete corresponding entry */
-        /* (Production: maintain reverse mapping) */
-    }
-
-    /* Insert */
-    databox keyBox = databoxNewBytes(key, keyLen);
-    databox valueBox = databoxNewBytes(value, valueLen);
-
-    multilruPtr ptr = multilruInsert(s->lru);
-    databox ptrBox = databoxNewUnsigned(ptr);
-
-    const databox *entry[3] = {&keyBox, &valueBox, &ptrBox};
-    multimapInsert(&s->data, entry);
-}
-
-void dcacheDelete(DistributedCache *cache, const void *key, size_t keyLen) {
-    int shard = dcacheGetShard(key, keyLen);
-    CacheShard *s = &cache->shards[shard];
-
-    databox keyBox = databoxNewBytes(key, keyLen);
-    multimapDelete(&s->data, &keyBox);
-}
-
-void dcacheStats(DistributedCache *cache) {
-    printf("Cache Statistics:\n");
-    size_t totalEntries = 0;
-    size_t totalBytes = 0;
-
-    for (int i = 0; i < NUM_SHARDS; i++) {
-        size_t entries = multimapCount(cache->shards[i].data);
-        size_t bytes = multimapBytes(cache->shards[i].data);
-        totalEntries += entries;
-        totalBytes += bytes;
-
-        printf("Shard %d: %zu entries, %zu bytes\n", i, entries, bytes);
-    }
-
-    printf("Total: %zu entries, %zu bytes\n", totalEntries, totalBytes);
-}
-
-void dcacheFree(DistributedCache *cache) {
-    if (cache) {
-        for (int i = 0; i < NUM_SHARDS; i++) {
-            multimapFree(cache->shards[i].data);
-            multilruFree(cache->shards[i].lru);
-        }
-        free(cache);
-    }
-}
-
-/* Example usage */
-void exampleDistributedCache(void) {
-    DistributedCache *cache = dcacheNew(10000);
-
-    /* Put entries */
-    for (int i = 0; i < 1000; i++) {
-        char key[32], value[64];
-        snprintf(key, sizeof(key), "key_%d", i);
-        snprintf(value, sizeof(value), "value_for_key_%d", i);
-
-        dcachePut(cache, key, strlen(key), value, strlen(value));
-    }
-
-    /* Get entry */
-    void *value;
-    size_t valueLen;
-    if (dcacheGet(cache, "key_500", 7, &value, &valueLen)) {
-        printf("Retrieved: %.*s\n", (int)valueLen, (char *)value);
-        free(value);
-    }
-
-    dcacheStats(cache);
-    dcacheFree(cache);
-}
-```
-
----
-
-## Full-Text Search Engine
-
-Inverted index for efficient full-text search with ranking.
-
-```c
 #include "multimap.h"
 #include "multimapAtom.h"
-#include "intset.h"
+#include "multiroar.h"
+#include "str.h" /* splitmix64 / xoroshiro128plus */
+#include "timeUtil.h"
 
-typedef struct {
-    multimapAtom *words;      /* Word → wordRef interning */
-    multimap *index;          /* wordRef → {docId, position, frequency} */
-    multimap *documents;      /* docId → {title, content, wordCount} */
-    uint64_t nextDocId;
-} SearchEngine;
+#include <inttypes.h>
+#include <math.h>
+#include <stdio.h>
+#include <string.h>
 
-SearchEngine *searchEngineNew(void) {
-    SearchEngine *se = malloc(sizeof(*se));
-    se->words = multimapAtomNew();
-    se->index = multimapNew(4);  /* wordRef + docId + position + frequency */
-    se->documents = multimapNew(3);  /* docId + title + wordCount */
-    se->nextDocId = 1;
-    return se;
+typedef struct dashboard {
+    multimap *series;         /* timestampS + metricRef + value  */
+    multimapAtom *metrics;    /* interned metric names           */
+    multimap *counters;       /* metricRef + observationCount    */
+    hyperloglog *uniqueUsers; /* approximate distinct users       */
+    multiroar *activeUsers;   /* exact set of active user IDs     */
+} dashboard;
+
+dashboard *dashboardNew(void) {
+    dashboard *d = zcalloc(1, sizeof(*d));
+    d->series = multimapNew(3);
+    d->metrics = multimapAtomNew();
+    d->counters = multimapNew(2);
+    d->uniqueUsers = hyperloglogNew();
+    d->activeUsers = multiroarBitNew();
+    return d;
 }
 
-/* Simple tokenizer */
-static void tokenize(const char *text, void (*callback)(const char *word)) {
-    char *copy = strdup(text);
-    char *word = strtok(copy, " \t\n.,;:!?");
-
-    while (word != NULL) {
-        /* Convert to lowercase */
-        for (char *p = word; *p; p++) {
-            *p = tolower(*p);
-        }
-
-        if (strlen(word) > 2) {  /* Skip very short words */
-            callback(word);
-        }
-
-        word = strtok(NULL, " \t\n.,;:!?");
+void dashboardFree(dashboard *d) {
+    if (!d) {
+        return;
     }
 
-    free(copy);
+    multimapFree(d->series);
+    multimapAtomFree(d->metrics);
+    multimapFree(d->counters);
+    hyperloglogFree(d->uniqueUsers);
+    multiroarFree(d->activeUsers);
+    zfree(d);
 }
 
-uint64_t searchEngineAddDocument(SearchEngine *se, const char *title,
-                                 const char *content) {
-    uint64_t docId = se->nextDocId++;
+void dashboardRecord(dashboard *d, const char *metric, double value) {
+    databox metricRef = databoxNewBytesString(metric);
+    multimapAtomInsertIfNewConvert(d->metrics, &metricRef);
 
-    /* Store document */
-    databox docIdBox = databoxNewUnsigned(docId);
-    databox titleBox = databoxNewBytesString(title);
-    databox wordCountBox = databoxNewUnsigned(0);  /* Will update */
+    const databox tsBox = databoxNewUnsigned(timeUtilS());
+    const databox valueBox = databoxNewReal(value);
 
-    const databox *docEntry[3] = {&docIdBox, &titleBox, &wordCountBox};
-    multimapInsert(&se->documents, docEntry);
+    /* Samples arrive in time order, so Append beats Insert here. The
+     * series is range-scanned, never keyed by timestamp, so repeated
+     * timestamps are fine. */
+    const databox *sample[3] = {&tsBox, &metricRef, &valueBox};
+    multimapAppend(&d->series, sample);
 
-    /* Index words */
-    typedef struct {
-        SearchEngine *se;
-        uint64_t docId;
-        uint32_t position;
-    } IndexContext;
-
-    IndexContext ctx = {se, docId, 0};
-
-    tokenize(content, [](const char *word, void *data) {
-        IndexContext *ctx = (IndexContext *)data;
-
-        /* Intern word */
-        databox wordBox = databoxNewBytesString(word);
-        multimapAtomInsertIfNewConvert(ctx->se->words, &wordBox);
-
-        /* Add to index */
-        databox docIdBox = databoxNewUnsigned(ctx->docId);
-        databox posBox = databoxNewUnsigned(ctx->position++);
-        databox freqBox = databoxNewUnsigned(1);  /* Simple freq for now */
-
-        const databox *indexEntry[4] = {&wordBox, &docIdBox, &posBox, &freqBox};
-        multimapInsertFullWidth(&ctx->se->index, indexEntry);
-    });
-
-    return docId;
-}
-
-typedef struct {
-    uint64_t docId;
-    char *title;
-    double score;
-} SearchResult;
-
-void searchEngineQuery(SearchEngine *se, const char *query,
-                      SearchResult **outResults, size_t *outCount) {
-    /* Tokenize query */
-    intset *matchingDocs = intsetNew();
-
-    tokenize(query, [](const char *word, void *data) {
-        SearchEngine *se = (SearchEngine *)((void **)data)[0];
-        intset **docs = (intset **)((void **)data)[1];
-
-        /* Look up word reference */
-        databox wordBox = databoxNewBytesString(word);
-        databox wordRef;
-
-        if (!multimapAtomLookupReference(se->words, &wordBox, &wordRef)) {
-            return;  /* Word not in index */
-        }
-
-        /* Find all documents containing this word */
-        multimapIterator iter;
-        if (!multimapIteratorInitAt(se->index, &iter, true, &wordRef)) {
-            return;
-        }
-
-        databox ref, docId, pos, freq;
-        databox *elements[4] = {&ref, &docId, &pos, &freq};
-
-        while (multimapIteratorNext(&iter, elements)) {
-            if (ref.data.u64 != wordRef.data.u64) break;
-
-            intsetAdd(docs, docId.data.u64, NULL);
-        }
-    });
-
-    /* Collect and score results */
-    SearchResult *results = malloc(sizeof(SearchResult) * intsetCount(matchingDocs));
-    size_t count = 0;
-
-    for (uint32_t i = 0; i < intsetCount(matchingDocs); i++) {
-        int64_t docId;
-        intsetGet(matchingDocs, i, &docId);
-
-        /* Get document info */
-        databox docIdBox = databoxNewUnsigned(docId);
-        databox title, wordCount;
-        databox *docResults[2] = {&title, &wordCount};
-
-        if (multimapLookup(se->documents, &docIdBox, docResults)) {
-            results[count].docId = docId;
-            results[count].title = strndup(
-                (char *)databoxCBytes(&title),
-                databoxLen(&title)
-            );
-            results[count].score = 1.0;  /* Simple scoring */
-            count++;
-        }
-    }
-
-    intsetFree(matchingDocs);
-
-    *outResults = results;
-    *outCount = count;
-}
-
-void searchEngineFree(SearchEngine *se) {
-    if (se) {
-        multimapAtomFree(se->words);
-        multimapFree(se->index);
-        multimapFree(se->documents);
-        free(se);
+    /* Per-metric observation count: increment field 1 of the entry, or
+     * seed it when this metric is new. */
+    if (multimapExists(d->counters, &metricRef)) {
+        multimapFieldIncr(&d->counters, &metricRef, 1, 1);
+    } else {
+        const databox one = databoxNewSigned(1);
+        const databox *counter[2] = {&metricRef, &one};
+        multimapInsert(&d->counters, counter);
     }
 }
 
-/* Example usage */
-void exampleSearchEngine(void) {
-    SearchEngine *se = searchEngineNew();
+void dashboardRecordUser(dashboard *d, uint64_t userId) {
+    /* hyperloglogAdd takes hyperloglog ** because a sparse HLL is
+     * reallocated (and eventually promoted to dense) as it fills. */
+    hyperloglogAdd(&d->uniqueUsers, &userId, sizeof(userId));
 
-    /* Add documents */
-    searchEngineAddDocument(se, "Introduction to datakit",
-        "datakit is a high-performance data structure library");
-    searchEngineAddDocument(se, "Using multimap",
-        "multimap provides efficient key-value storage");
-    searchEngineAddDocument(se, "Performance tips",
-        "datakit offers excellent performance for data structures");
+    /* Exact membership for the bounded, dense "currently active" set. */
+    multiroarBitSet(d->activeUsers, userId);
+}
 
-    /* Search */
-    SearchResult *results;
-    size_t count;
-    searchEngineQuery(se, "datakit performance", &results, &count);
+typedef struct metricWindow {
+    double sum;
+    double min;
+    double max;
+    uint64_t count;
+} metricWindow;
 
-    printf("Found %zu results:\n", count);
-    for (size_t i = 0; i < count; i++) {
-        printf("%zu. %s (score: %.2f)\n",
-               i + 1, results[i].title, results[i].score);
-        free(results[i].title);
+bool dashboardWindow(dashboard *d, const char *metric, uint64_t startS,
+                     uint64_t endS, metricWindow *out) {
+    const databox metricBox = databoxNewBytesString(metric);
+
+    databox metricRef;
+    if (!multimapAtomLookupReference(d->metrics, &metricBox, &metricRef)) {
+        return false;
     }
-    free(results);
 
-    searchEngineFree(se);
+    const databox startBox = databoxNewUnsigned(startS);
+
+    multimapIterator iter;
+    if (!multimapIteratorInitAt(d->series, &iter, true, &startBox)) {
+        return false;
+    }
+
+    *out = (metricWindow){.sum = 0.0, .min = INFINITY, .max = -INFINITY};
+
+    databox sample[3];
+    while (multimapIteratorNextInto(&iter, sample, 3)) {
+        if (sample[0].data.u64 > endS) {
+            break;
+        }
+
+        if (sample[1].data.u64 != metricRef.data.u64) {
+            continue;
+        }
+
+        const double v = sample[2].data.d64;
+        out->sum += v;
+        out->count++;
+        if (v < out->min) {
+            out->min = v;
+        }
+        if (v > out->max) {
+            out->max = v;
+        }
+    }
+
+    return out->count > 0;
+}
+
+void dashboardReport(dashboard *d) {
+    bool invalid = false;
+    const uint64_t approxUsers = hyperloglogCount(d->uniqueUsers, &invalid);
+
+    printf("unique users (approx) %" PRIu64 "%s\n", approxUsers,
+           invalid ? " [HLL corrupt]" : "");
+    printf("active users (exact)  %" PRIu64 " in %" PRIu64 " bitmap bytes\n",
+           multiroarBitCount(d->activeUsers),
+           multiroarMemoryUsage(d->activeUsers));
+    printf("samples               %zu (%zu bytes)\n", multimapCount(d->series),
+           multimapBytes(d->series));
+
+    /* Counters are keyed by atom reference; resolve names for display. */
+    multimapIterator iter;
+    multimapIteratorInit(d->counters, &iter, true);
+
+    databox counter[2];
+    while (multimapIteratorNextInto(&iter, counter, 2)) {
+        databox name;
+        if (multimapAtomLookup(d->metrics, &counter[0], &name)) {
+            printf("  %.*s: %" PRId64 "\n", (int)databoxLen(&name),
+                   (const char *)databoxCBytes(&name), counter[1].data.i64);
+        }
+    }
+}
+
+void exampleDashboard(void) {
+    dashboard *d = dashboardNew();
+
+    /* Deterministic pseudo-random traffic; see PATTERNS.md for seeding. */
+    uint64_t seed = 0x9e3779b97f4a7c15ULL;
+    uint64_t rng[2] = {splitmix64(&seed), splitmix64(&seed)};
+
+    const uint64_t startS = timeUtilS();
+
+    for (uint64_t i = 0; i < 10000; i++) {
+        dashboardRecord(d, "page_views", 1.0);
+        dashboardRecord(d, "response_time_ms",
+                        50.0 + (double)(xoroshiro128plus(rng) % 100));
+        dashboardRecordUser(d, xoroshiro128plus(rng) % 5000);
+    }
+
+    metricWindow w;
+    if (dashboardWindow(d, "response_time_ms", startS, timeUtilS(), &w)) {
+        printf("response_time_ms: avg %.2f, min %.2f, max %.2f over %" PRIu64
+               " samples\n",
+               w.sum / (double)w.count, w.min, w.max, w.count);
+    }
+
+    dashboardReport(d);
+    dashboardFree(d);
 }
 ```
+
+Notes:
+
+- `hyperloglog` answers "how many distinct?" in a fixed ~12 KB with
+  roughly 0.8% error, and cannot answer "is this ID present?".
+  `multiroar` answers membership exactly but scales with the ID space.
+  Using both is not redundancy — they answer different questions.
+- `hyperloglogCount`'s second argument reports a corrupt sparse
+  encoding; pass `NULL` when you do not want to check.
+- `multimapFieldIncr(&map, key, fieldOffset, incrBy)` mutates one field
+  of an existing entry in place, so a counter update does not rewrite
+  the whole entry.
 
 ---
 
-## Gaming Leaderboard Service
+## Single-Module Scenarios
 
-High-performance leaderboard with efficient rank queries.
+These scenarios exercise one module deeply and are maintained in that
+module's own examples file rather than duplicated here:
 
-```c
-#include "multimap.h"
-
-typedef struct {
-    multimap *scores;         /* score → {playerId, playerName, timestamp} */
-    multimap *playerLookup;   /* playerId → score */
-} Leaderboard;
-
-Leaderboard *leaderboardNew(void) {
-    Leaderboard *lb = malloc(sizeof(*lb));
-    lb->scores = multimapNew(4);  /* score + playerId + name + timestamp */
-    lb->playerLookup = multimapNew(2);  /* playerId + score */
-    return lb;
-}
-
-void leaderboardUpdateScore(Leaderboard *lb, uint64_t playerId,
-                           const char *playerName, int64_t newScore) {
-    databox playerIdBox = databoxNewUnsigned(playerId);
-
-    /* Check if player already has a score */
-    databox oldScore;
-    databox *lookupResults[1] = {&oldScore};
-
-    if (multimapLookup(lb->playerLookup, &playerIdBox, lookupResults)) {
-        /* Remove old score entry */
-        multimapDelete(&lb->scores, &oldScore);
-    }
-
-    /* Add new score */
-    databox scoreBox = databoxNewSigned(newScore);
-    databox nameBox = databoxNewBytesString(playerName);
-    databox timestampBox = databoxNewSigned(time(NULL));
-
-    const databox *scoreEntry[4] = {&scoreBox, &playerIdBox, &nameBox,
-                                   &timestampBox};
-    multimapInsert(&lb->scores, scoreEntry);
-
-    /* Update lookup */
-    const databox *lookupEntry[2] = {&playerIdBox, &scoreBox};
-    multimapInsert(&lb->playerLookup, lookupEntry);
-}
-
-typedef struct {
-    uint64_t playerId;
-    char *playerName;
-    int64_t score;
-    size_t rank;
-} LeaderboardEntry;
-
-void leaderboardGetTopN(Leaderboard *lb, size_t n,
-                       LeaderboardEntry **outEntries, size_t *outCount) {
-    LeaderboardEntry *entries = malloc(sizeof(LeaderboardEntry) * n);
-    size_t count = 0;
-
-    multimapIterator iter;
-    multimapIteratorInit(lb->scores, &iter, false);  /* Reverse = high to low */
-
-    databox score, playerId, playerName, timestamp;
-    databox *elements[4] = {&score, &playerId, &playerName, &timestamp};
-
-    while (multimapIteratorNext(&iter, elements) && count < n) {
-        entries[count].playerId = playerId.data.u64;
-        entries[count].playerName = strndup(
-            (char *)databoxCBytes(&playerName),
-            databoxLen(&playerName)
-        );
-        entries[count].score = score.data.i64;
-        entries[count].rank = count + 1;
-        count++;
-    }
-
-    *outEntries = entries;
-    *outCount = count;
-}
-
-int64_t leaderboardGetRank(Leaderboard *lb, uint64_t playerId) {
-    /* Get player's score */
-    databox playerIdBox = databoxNewUnsigned(playerId);
-    databox playerScore;
-    databox *results[1] = {&playerScore};
-
-    if (!multimapLookup(lb->playerLookup, &playerIdBox, results)) {
-        return -1;  /* Player not found */
-    }
-
-    /* Count players with higher scores */
-    int64_t rank = 1;
-
-    multimapIterator iter;
-    multimapIteratorInit(lb->scores, &iter, false);  /* High to low */
-
-    databox score, pid, name, ts;
-    databox *elements[4] = {&score, &pid, &name, &ts};
-
-    while (multimapIteratorNext(&iter, elements)) {
-        if (score.data.i64 > playerScore.data.i64) {
-            rank++;
-        } else {
-            break;
-        }
-    }
-
-    return rank;
-}
-
-void leaderboardFree(Leaderboard *lb) {
-    if (lb) {
-        multimapFree(lb->scores);
-        multimapFree(lb->playerLookup);
-        free(lb);
-    }
-}
-
-/* Example usage */
-void exampleLeaderboard(void) {
-    Leaderboard *lb = leaderboardNew();
-
-    /* Add scores */
-    leaderboardUpdateScore(lb, 1, "Alice", 9500);
-    leaderboardUpdateScore(lb, 2, "Bob", 8200);
-    leaderboardUpdateScore(lb, 3, "Charlie", 9100);
-    leaderboardUpdateScore(lb, 4, "Diana", 8500);
-    leaderboardUpdateScore(lb, 5, "Eve", 9800);
-
-    /* Update score */
-    leaderboardUpdateScore(lb, 2, "Bob", 9900);  /* Bob improved!*/
-
-    /* Get top 3 */
-    LeaderboardEntry *top;
-    size_t count;
-    leaderboardGetTopN(lb, 3, &top, &count);
-
-    printf("Top %zu players:\n", count);
-    for (size_t i = 0; i < count; i++) {
-        printf("%zu. %s: %ld\n", top[i].rank, top[i].playerName, top[i].score);
-        free(top[i].playerName);
-    }
-    free(top);
-
-    /* Get rank */
-    int64_t rank = leaderboardGetRank(lb, 3);
-    printf("Charlie's rank: %ld\n", rank);
-
-    leaderboardFree(lb);
-}
-```
+| Scenario                     | Location                              |
+| ---------------------------- | ------------------------------------- |
+| User session store with TTL  | `docs/modules/multimap/EXAMPLES.md`   |
+| Time-series metric storage   | `docs/modules/multimap/EXAMPLES.md`   |
+| Inverted index / text search | `docs/modules/multimap/EXAMPLES.md`   |
+| Leaderboard with rankings    | `docs/modules/multimap/EXAMPLES.md`   |
+| Query result cache           | `docs/modules/multimap/EXAMPLES.md`   |
+| Queue, stack, deque          | `docs/modules/multilist/EXAMPLES.md`  |
+| Circular buffer              | `docs/modules/multilist/EXAMPLES.md`  |
+| Priority message queue       | `docs/modules/multilist/EXAMPLES.md`  |
+| Browser history              | `docs/modules/multilist/EXAMPLES.md`  |
+| Vertex / particle buffers    | `docs/modules/multiarray/EXAMPLES.md` |
+| Sorted index + binary search | `docs/modules/multiarray/EXAMPLES.md` |
 
 ---
 
 ## Summary
 
-These real-world use cases demonstrate how datakit modules work together to solve production problems:
+| Use case            | Modules combined                                            |
+| ------------------- | ----------------------------------------------------------- |
+| Sharded LRU cache   | rapidhash + multimap + multilru                             |
+| Log aggregator      | multilist (compressed) + multimapAtom + multimap + timeUtil |
+| Analytics dashboard | multimap + multimapAtom + hyperloglog + multiroar + str     |
 
-1. **Session Store** - Combines multimap, multimapAtom, and multilru for efficient session management
-2. **Log Aggregator** - Uses multilist compression and multimap indexing for millions of logs
-3. **Analytics Dashboard** - Leverages hyperloglog for cardinality and multimap for time-series
-4. **Distributed Cache** - Implements sharding with consistent hashing and LRU eviction
-5. **Search Engine** - Builds inverted index with multimapAtom for string interning
-6. **Leaderboard** - Sorted multimap for efficient rank queries
+Three habits carry across all of them:
 
-For more examples, see:
+1. **Intern repeated strings once** with `multimapAtom` and store the
+   integer reference everywhere else.
+2. **Append instead of insert** when keys arrive in order.
+3. **Wire eviction to storage**, so a recency structure and a data
+   structure cannot drift apart.
 
-- [PATTERNS.md](PATTERNS.md) - Common coding patterns
-- [BENCHMARKS.md](BENCHMARKS.md) - Performance comparisons
+Next:
+
+- [PATTERNS.md](PATTERNS.md) — the idioms these examples are built from
+- [BENCHMARKS.md](BENCHMARKS.md) — how to measure what you built

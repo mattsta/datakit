@@ -2,40 +2,73 @@
 
 ## Overview
 
-`SetProcTitle` provides **cross-platform process title manipulation** for Unix-like systems. It allows changing the process name visible in system tools like `ps`, `top`, and `htop`, which is useful for identifying server states, worker roles, or debugging.
+`setproctitle` changes the process name visible in system tools like `ps`,
+`top`, and `htop`, which is useful for identifying server states, worker roles,
+or debugging.
 
 **Key Features:**
 
-- Cross-platform process title modification
-- Automatic memory management for title storage
-- Native BSD support with fallback for Linux/macOS/Solaris
-- Thread-safe initialization
+- Process title modification on Linux, macOS, and the BSD family
+- Native `setproctitle(3)` used directly where the platform provides it (BSD)
+- argv/environ relocation fallback on Linux and macOS
 - Zero overhead on platforms with native support
 
 **Header**: `setproctitle.h`
 
 **Source**: `setproctitle.c`
 
-**Platforms**: FreeBSD, NetBSD, OpenBSD (native), Linux, macOS, Solaris (custom implementation)
+**Platforms**: FreeBSD, NetBSD, OpenBSD (native), Linux and macOS (relocation
+implementation). Everything else compiles to no-op macros.
 
-**Origin**: Modified from nginx's setproctitle implementation (BSD-2 license)
+**Origin**: Modified from nginx's `ngx_setproctitle` implementation (BSD-2 license)
 
 ## API Reference
+
+The names are the same everywhere but **the shapes are not**. `setproctitle.h`
+selects one of three variants at compile time:
+
+| Platform group             | `setProctitleInit`                               | `setproctitle`                                                    |
+| -------------------------- | ------------------------------------------------ | ----------------------------------------------------------------- |
+| FreeBSD / NetBSD / OpenBSD | `#define setProctitleInit() true` (no arguments) | `#define setproctitle(t) setproctitle("%s", t)` - the native call |
+| Linux / macOS              | `bool setProctitleInit(char *argv[])`            | `void setproctitle(char *title)`                                  |
+| everything else            | `#define setProctitleInit() true` (no arguments) | `#define setproctitle(t)` - expands to nothing                    |
+
+> **Portability trap:** on the BSD and fallback paths `setProctitleInit` is a
+> **zero-argument macro**, so the natural `setProctitleInit(argv)` call is a
+> compile error there ("too many arguments provided to function-like macro").
+> Portable code must guard the init call:
+>
+> ```c
+> #if DK_OS_LINUX || DK_OS_APPLE
+>     setProctitleInit(argv);
+> #else
+>     setProctitleInit();
+> #endif
+> ```
+>
+> `setproctitle(title)` itself takes one argument in every variant and needs no
+> guard.
 
 ### Initialization
 
 ```c
-/* Initialize process title infrastructure
+/* Initialize process title infrastructure (Linux / macOS)
  * argv: original argv from main()
- * Returns: true on success, false on error
+ * Returns: true (this implementation has no failure path)
  *
- * Must be called before setproctitle() on Linux/macOS/Solaris
- * No-op on BSD platforms (native support)
+ * Required before setproctitle() on Linux/macOS.
+ * A no-argument macro returning true on BSD and unsupported platforms.
  */
 bool setProctitleInit(char *argv[]);
 ```
 
-**Important**: Must be called early in `main()` before `argv` or `environ` are modified.
+**Important**: Call it early in `main()`, before anything modifies `argv` or
+`environ`.
+
+> **`setProctitleInit()` sets `argv[1] = NULL`.** That happens during _init_, not
+> during the first `setproctitle()` call, so any argument parsing that walks
+> `argv` must run **before** init - or copy the strings it needs first. `argc` is
+> untouched, so an `argc`-driven loop run after init will read a NULL pointer.
 
 ### Setting Process Title
 
@@ -43,12 +76,18 @@ bool setProctitleInit(char *argv[]);
 /* Set process title
  * title: new process title string
  *
- * On BSD platforms: formats as "progname: title"
- * On Linux/macOS: replaces argv[0] with title
- * On Solaris: appends original command in parentheses if needed
+ * On BSD: forwarded to the native setproctitle("%s", title),
+ *         which renders as "progname: title"
+ * On Linux/macOS: overwrites the argv[0] region with title, then pads
+ *                 the remainder of the reclaimed region with '\0'
+ * Elsewhere: compiles to nothing
  */
 void setproctitle(char *title);
 ```
+
+On Linux/macOS the title is silently truncated to the space reclaimed by
+`setProctitleInit()` (the argv region plus whatever contiguous environment
+strings followed it). There is no error return and no length query.
 
 ## Platform Differences
 
@@ -64,11 +103,14 @@ BSD systems provide native `setproctitle()` support:
 #define setproctitle(title) setproctitle("%s", title)
 ```
 
-**No initialization required** - the system provides the functionality.
+**No initialization required** - the system provides the functionality. The
+header's `setproctitle(title)` macro forwards to the native
+`setproctitle("%s", title)` (a macro name is not re-expanded inside its own
+expansion, so this resolves to the real libc function).
 
-### Linux, macOS, Solaris
+### Linux and macOS
 
-These platforms require custom implementation:
+These platforms require the relocation implementation:
 
 ```c
 bool setProctitleInit(char *argv[]);
@@ -77,20 +119,19 @@ void setproctitle(char *title);
 
 **How It Works:**
 
-1. **Memory Relocation**: `setProctitleInit()` relocates `environ[]` to new memory
-2. **Space Calculation**: Determines available space from `argv[0]` to last environment variable
-3. **Title Storage**: `setproctitle()` writes title into the relocated space
-4. **Padding**: Fills remaining space with `\0` (Linux/macOS) or spaces (Solaris)
+1. **Space Calculation**: Walks `argv[]` and then `environ[]`, following the
+   contiguous run of strings that starts at `argv[0]`, to find the last usable
+   byte (`os_argv_last`)
+2. **Memory Relocation**: Copies each environment string that sits inside that
+   run into freshly allocated memory and repoints `environ[i]` at the copy, so
+   overwriting the region does not corrupt the environment
+3. **argv truncation**: Sets `argv[1] = NULL`
+4. **Title Storage**: `setproctitle()` copies the title over `argv[0]`, bounded
+   by `os_argv_last`
+5. **Padding**: Fills the remainder of the region with `\0`
 
-### Solaris Special Behavior
-
-The standard `/bin/ps` on Solaris doesn't show changed titles. Use `/usr/ucb/ps -w` instead.
-
-If the new title is shorter than the original command line, Solaris appends the original command in parentheses:
-
-```
-new-title (original command line arguments)
-```
+`setproctitle()` asserts that initialization has run; in a build with assertions
+disabled, calling it before `setProctitleInit()` dereferences NULL.
 
 ## Usage Examples
 
@@ -100,11 +141,11 @@ new-title (original command line arguments)
 #include "setproctitle.h"
 
 int main(int argc, char *argv[]) {
-    /* Initialize on program startup */
-    if (!setProctitleInit(argv)) {
-        fprintf(stderr, "Failed to initialize setproctitle\n");
-        return 1;
-    }
+    /* Parse arguments first - init nulls argv[1] */
+    parseArgs(argc, argv);
+
+    /* Then hand the argv region over (Linux/macOS form shown) */
+    setProctitleInit(argv);
 
     /* Initial state */
     setproctitle("server: starting");
@@ -328,7 +369,7 @@ int main(int argc, char *argv[]) {
 
 ## Implementation Details
 
-### Memory Layout (Linux/macOS/Solaris)
+### Memory Layout (Linux/macOS)
 
 When a program starts, `argv[]` and `environ[]` are stored contiguously in memory:
 
@@ -338,57 +379,67 @@ When a program starts, `argv[]` and `environ[]` are stored contiguously in memor
 
 **Initialization Process:**
 
-1. Calculate total size needed for environment variables
-2. Allocate new memory for environment
-3. Copy environment strings to new memory
-4. Update `environ[]` pointers to new memory
-5. Mark entire original region as available for title
+1. Allocate a buffer sized for the whole environment
+2. Follow the contiguous run of strings starting at `argv[0]` through `argv[]`
+   and into `environ[]`, tracking the last byte of that run
+3. Copy each environment string inside the run into the new buffer and repoint
+   `environ[i]` at the copy
+4. Set `argv[1] = NULL`
+5. The original region up to the tracked last byte is now available for titles
 
 **Title Setting Process:**
 
-1. Copy title to `argv[0]` location
-2. Set `argv[1] = NULL`
-3. Pad remaining space with `\0` or spaces
+1. Copy the title over `argv[0]`, bounded by the tracked last byte
+2. Pad the remaining space with `\0`
 
 ### Thread Safety
 
 - `setProctitleInit()` must be called once before any threads are created
-- `setproctitle()` is safe to call from multiple threads after initialization
-- No internal locking required (single write to argv region)
+- The module keeps two file-scope pointers (the saved `argv` and the region end)
+  written only by init
+- `setproctitle()` does no locking, so concurrent callers race on the argv
+  region; serialize it externally if more than one thread sets the title
 
 ### Performance
 
 - **Initialization**: O(n) where n = total environment variable size
 - **Setting Title**: O(m) where m = title length
-- **Memory Overhead**: Size of environment variables (typically < 1KB)
+- **Memory Overhead**: One allocation sized for the environment (typically < 1KB),
+  never freed - the relocated environment must stay live for the process lifetime
 
 ## Platform Support
 
-| Platform | Support | Method            | Notes                             |
-| -------- | ------- | ----------------- | --------------------------------- |
-| FreeBSD  | Native  | System call       | No initialization needed          |
-| NetBSD   | Native  | System call       | No initialization needed          |
-| OpenBSD  | Native  | System call       | No initialization needed          |
-| Linux    | Custom  | argv manipulation | Requires initialization           |
-| macOS    | Custom  | argv manipulation | Requires initialization           |
-| Solaris  | Custom  | argv manipulation | Requires `/usr/ucb/ps -w` to view |
-| Others   | No-op   | Macros            | Functions compile but do nothing  |
+| Platform | Support | Method            | Init call                      |
+| -------- | ------- | ----------------- | ------------------------------ |
+| FreeBSD  | Native  | libc setproctitle | `setProctitleInit()` - no args |
+| NetBSD   | Native  | libc setproctitle | `setProctitleInit()` - no args |
+| OpenBSD  | Native  | libc setproctitle | `setProctitleInit()` - no args |
+| Linux    | Custom  | argv relocation   | `setProctitleInit(argv)`       |
+| macOS    | Custom  | argv relocation   | `setProctitleInit(argv)`       |
+| Others   | No-op   | Empty macros      | `setProctitleInit()` - no args |
+
+There is no Windows support in datakit.
 
 ## Best Practices
 
-### 1. Initialize Early
+### 1. Parse Arguments First, Then Initialize
+
+Init nulls `argv[1]` and takes over the argv region, so argument parsing must
+already be done (or the strings copied) by the time it runs. It must also run
+before anything else touches `argv` or `environ`.
 
 ```c
-/* GOOD - First thing in main() */
+/* GOOD - parse first, then hand the region over */
 int main(int argc, char *argv[]) {
+    Config cfg = parseArgs(argc, argv);  /* copies what it needs */
     setProctitleInit(argv);
     /* ... rest of program ... */
 }
 
-/* BAD - After argv might be modified */
+/* BAD - argv[1] is already NULL here */
 int main(int argc, char *argv[]) {
-    parseArgs(argv);  /* May modify argv! */
-    setProctitleInit(argv);  /* Too late! */
+    setProctitleInit(argv);
+    Config cfg = parseArgs(argc, argv);  /* reads NULL at index 1 */
 }
 ```
 
@@ -423,32 +474,35 @@ setproctitle("server");
 /* Title never updated */
 ```
 
-### 4. Check Return Value of Init
+### 4. Don't Branch on the Init Return Value
+
+Every variant returns true: the Linux/macOS implementation has no failure path
+(allocation failure is fatal in datakit), and the BSD and fallback variants are
+macros that literally expand to `true`. Testing the result is dead code.
 
 ```c
-/* GOOD - Handle initialization failure */
-if (!setProctitleInit(argv)) {
-    fprintf(stderr, "Warning: setproctitle not available\n");
-    /* Continue anyway */
-}
+/* FINE - just call it */
+setProctitleInit(argv);
 
-/* Also GOOD - Critical error */
+/* POINTLESS - the false branch is unreachable */
 if (!setProctitleInit(argv)) {
     fprintf(stderr, "Failed to initialize process title\n");
     return 1;
 }
 ```
 
-### 5. Use Platform Guards for Advanced Features
+### 5. Guard the Init Call, Not the Title Call
 
 ```c
-/* GOOD - Handle Solaris differences */
-#if DK_OS_SOLARIS
-    /* Solaris needs longer titles to show properly */
-    setproctitle("server: ready (listening on port 8080)");
+/* GOOD - the init signature differs per platform */
+#if DK_OS_LINUX || DK_OS_APPLE
+    setProctitleInit(argv);
 #else
-    setproctitle("server: ready");
+    setProctitleInit();
 #endif
+
+/* setproctitle() itself is uniform - no guard needed */
+setproctitle("server: ready");
 ```
 
 ## Debugging
@@ -459,20 +513,26 @@ if (!setProctitleInit(argv)) {
 
 **Solutions**:
 
-1. Ensure `setProctitleInit()` was called
-2. On Solaris, use `/usr/ucb/ps -w` instead of `/bin/ps`
-3. Check if title is too long (may be truncated)
+1. Ensure `setProctitleInit()` was called (Linux/macOS)
+2. Check that the title fits: it is truncated to the reclaimed argv region, so a
+   short original command line means a short maximum title
+3. Confirm you are not on a platform where `setproctitle` compiles to nothing
 4. Some process viewers cache titles - restart them
 
-### Initialization Failures
+### Compile Error at the Init Call
 
-**Problem**: `setProctitleInit()` returns false
+**Problem**: "too many arguments provided to function-like macro invocation"
 
-**Possible Causes**:
+**Cause**: You called `setProctitleInit(argv)` on a BSD or fallback platform,
+where it is a zero-argument macro. Guard it - see
+[Guard the Init Call](#5-guard-the-init-call-not-the-title-call).
 
-1. Memory allocation failed
-2. Platform not supported
-3. Called after argv/environ were modified
+### Crash Inside setproctitle()
+
+**Problem**: assertion failure, or a NULL dereference with assertions disabled
+
+**Cause**: `setproctitle()` was called before `setProctitleInit()` on Linux/macOS.
+The saved `argv` pointer and region end are still NULL.
 
 ## Use Cases
 

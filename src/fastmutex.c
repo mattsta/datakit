@@ -224,7 +224,7 @@ void fastMutexCondSignal(fastCond *c) {
 
         c->w = waiter->next;
         if (c->w) {
-            assert(c->w->tail = waiter->tail);
+            assert(c->w->tail == waiter->tail);
         }
     }
 

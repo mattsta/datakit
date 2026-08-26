@@ -90,7 +90,7 @@ typedef void(multidictIterProcess)(void *privdata, const databox *key,
 typedef bool(multidictEvictionCallback)(void *privdata, const databox *key,
                                         const databox *val);
 
-/* multidictClass is a (15 * 8) + 4 = 124 byte struct. */
+/* multidictClass is a (17 * 8) + 1, padded = 144 byte struct. */
 /* RE-ORGANIZE BASED ON COMMON USAGE PER CACHE LINE. */
 typedef struct multidictClass {
     /* Private data this class needs (atom dict, key dict, etc) */

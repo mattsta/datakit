@@ -39,8 +39,9 @@ multimap *m = multimapNew(2);  // 2 = key+value
 **multidict** (hash table with custom storage):
 
 ```c
-multidictClass *class = /* your storage class */;
-multidict *d = multidictNew(&multidictTypeExactKey, class, 0);
+/* multidictNew(multidictType *type, multidictClass *qdc, int32_t seed) */
+multidictClass *storage = /* your storage class, or NULL for default */;
+multidict *d = multidictNew(&multidictTypeExactKey, storage, 0);
 ```
 
 **multiroar** (sparse bitmap/set):
@@ -75,13 +76,17 @@ mflexState *state = mflexStateCreate();
 **multiarray** (dynamic array, auto-scaling):
 
 ```c
-multiarray *arr = multiarrayNew(sizeof(int64_t), 1024);
+/* multiarrayNew(uint16_t elementLen, uint16_t rowMax):
+ * elementLen is the size of one element, rowMax the elements per row
+ * before the container splits. Neither is a total capacity. */
+multiarray *arr = multiarrayNew(sizeof(int64_t), 512);
 ```
 
-**Native inline array**:
+**Native inline array** (macro over a caller-owned holder):
 
 ```c
-MyStruct *arr = multiarrayNativeNew(arr[1024]);
+MyStruct *holder = NULL;
+multiarray *mar = multiarrayNativeNew(holder);
 ```
 
 ### "I want to create a set"
@@ -92,11 +97,16 @@ MyStruct *arr = multiarrayNativeNew(arr[1024]);
 intset *is = intsetNew();  // Starts with 16-bit encoding
 ```
 
-**multimap as set** (sorted, unique keys):
+**multimap as set** (sorted, deduplicated):
 
 ```c
 multimap *set = multimapSetNew(1);  // 1 element per entry
 ```
+
+Set mode dedupes on the WHOLE ROW, not on the key: with
+`elementsPerEntry > 1` two entries sharing a key but differing in any
+later element both survive. Normal (non-set) maps compare the key only
+and replace the values on a match.
 
 **multiroar** (sparse integer bitmap):
 
@@ -120,10 +130,13 @@ multilru *lru = multilruNew();  // Default 7 levels
 databox str = databoxNewBytesString("hello");
 ```
 
-**DKS** (dynamic string buffer):
+**dks** (dynamic string buffer): two variants generated from the same
+template. `mds` is the full form, `mdsc` the compact one. Both are
+`char *` typedefs, so they print with `%s`:
 
 ```c
-dksstr *s = dksstr_new();
+mds *s = mdsnew("hello");   /* or mdsempty() */
+mdsc *c = mdscnew("hello"); /* compact twin, same call shape */
 ```
 
 ---
@@ -136,7 +149,7 @@ dksstr *s = dksstr_new();
 multimapFree(m);        // multimap
 multidictFree(d);       // multidict
 multilistFree(ml);      // multilist
-multiarrayFree(arr);    // multiarray (not in API, free by variant)
+multiarrayFree(arr);    // multiarray
 flexFree(f);            // flex
 mflexFree(mf);          // mflex
 intsetFree(is);         // intset
@@ -144,7 +157,7 @@ multilruFree(lru);      // multilru
 multiroarFree(r);       // multiroar
 
 databoxFree(&box);      // databox (if allocated)
-dksstr_free(s);         // DKS string
+mdsfree(s);             // mds string  (mdscfree for mdsc)
 mflexStateFree(state);  // mflex state
 ```
 
@@ -215,7 +228,7 @@ mflexPushDouble(&mf, state, 3.14, FLEX_ENDPOINT_TAIL);
 
 ```c
 double value = 3.14;
-multiarrayInsertAfter(&arr, 0, &value);
+multiarrayInsert(&arr, 0, &value);  // copies elementLen bytes from 'what'
 ```
 
 ### "I want to add to a set"
@@ -328,13 +341,29 @@ multiroarRemove(r, 12345);
 
 ### "I want to evict LRU item"
 
-**multilru**:
+**multilru**: `multilruRemoveMinimum` is S4LRU, so it does NOT always
+evict. An entry above level 0 is DEMOTED to level-1 as a second chance;
+only a level-0 entry is truly evicted. Ask
+`multilruIsPopulated(lru, out)` which happened before freeing anything
+the entry owns.
 
 ```c
-multilruPtr evicted;
-if (multilruRemoveMinimum(lru, &evicted)) {
-    // evicted contains the LRU entry pointer
+multilruPtr out;
+if (multilruRemoveMinimum(lru, &out)) {
+    if (multilruIsPopulated(lru, out)) {
+        // demoted — the entry is still in the cache; do NOT free it
+    } else {
+        // truly evicted — the handle is dead, release your resource
+    }
 }
+```
+
+For unconditional bulk eviction, use the bulk entry points:
+
+```c
+multilruPtr gone[64];
+size_t n = multilruEvictN(lru, gone, 64);            // count actually evicted
+size_t m = multilruEvictToSize(lru, target, gone, 64); // evict to a weight
 ```
 
 ---
@@ -467,15 +496,18 @@ do {
 
 ### "I want to iterate a list"
 
-**multilist (forward)**:
+**multilist (forward)**: the iterator init macros take an array of TWO
+`mflexState *`, not a single state.
 
 ```c
-multimapIterator iter;
-multilistIteratorInitForward(ml, state, &iter);
+mflexState *states[2] = {mflexStateCreate(), mflexStateCreate()};
+
+multilistIterator iter;
+multilistIteratorInitForward(ml, states, &iter);
 
 multilistEntry entry;
 while (multilistNext(&iter, &entry)) {
-    // Process entry.box
+    // Process entry
 }
 multilistIteratorRelease(&iter);
 ```
@@ -483,43 +515,44 @@ multilistIteratorRelease(&iter);
 **multilist (reverse)**:
 
 ```c
-multilistIteratorInitReverse(ml, state, &iter);
+multilistIteratorInitReverse(ml, states, &iter);
 while (multilistNext(&iter, &entry)) {
     // Process in reverse
 }
+multilistIteratorRelease(&iter);
 ```
 
-**flex (forward)**:
+**flex (forward)**: seed the loop with `flexHeadIfAny`, never
+`flexHead`. `flexHead` returns an insertion POSITION and stays non-NULL
+on an empty flex, so a `flexHead`-seeded loop reads one entry past the
+buffer before `flexNext` can apply its end check.
 
 ```c
-flexEntry *fe = flexHead(f);
-while (fe && flexEntryIsValid(f, fe)) {
+for (flexEntry *fe = flexHeadIfAny(f); fe; fe = flexNext(f, fe)) {
     databox box;
     flexGetByType(fe, &box);
     // Process box
-    fe = flexNext(f, fe);
 }
 ```
 
 **flex (reverse)**:
 
 ```c
-flexEntry *fe = flexTail(f);
-while (fe && flexEntryIsValid(f, fe)) {
+for (flexEntry *fe = flexTail(f); fe; fe = flexPrev(f, fe)) {
     databox box;
     flexGetByType(fe, &box);
     // Process box
-    fe = flexPrev(f, fe);
 }
 ```
 
 ### "I want to iterate an array"
 
-**multiarray (all elements)**:
+**multiarray**: there is no exported count or iterator — the public
+surface is `multiarrayNew`/`Free`/`Get`/`GetHead`/`GetTail`/`Insert`/
+`Delete`. Track the element count yourself alongside the container.
 
 ```c
-size_t count = multiarrayCount(arr);
-for (size_t i = 0; i < count; i++) {
+for (size_t i = 0; i < myKnownCount; i++) {
     int64_t *elem = (int64_t *)multiarrayGet(arr, i);
     // Process elem
 }
@@ -561,7 +594,8 @@ flexEntry *head = flexHead(f);
 flexEntry *tail = flexTail(f);
 ```
 
-**multilist**:
+**multilist** (`multilistIndexGet` takes a single `mflexState *`,
+unlike the iterator macros):
 
 ```c
 multilistEntry entry;
@@ -598,9 +632,11 @@ flexEntry *tail = flexTail(f);
 ### "I want a random element"
 
 ```c
-// multimap
-databox randomKey;
-multimapGetRandomKey(m, &randomKey);
+// multimap — fills a FULL-WIDTH box array, plus the entry handle
+databox key, val;
+databox *found[2] = {&key, &val};
+multimapEntry me;
+multimapRandomValue(m, false /* fromTail */, found, &me);
 
 // multidict
 databox randomKey;
@@ -623,9 +659,8 @@ multilruGetNLowest(lru, candidates, 10);  // 10 LRU candidates
 ```c
 // Count elements
 size_t count = multimapCount(m);
-size_t count = multidictSize(d);
+size_t count = multidictSize(d);      // macro for multidictCount()
 size_t count = multilistCount(ml);
-size_t count = multiarrayCount(arr);
 size_t count = flexCount(f);
 size_t count = mflexCount(mf);
 size_t count = intsetCount(is);
@@ -634,11 +669,13 @@ size_t count = multilruCount(lru);
 // Memory bytes
 size_t bytes = multimapBytes(m);
 size_t bytes = multilistBytes(ml);
-size_t bytes = multiarrayBytes(arr);
 size_t bytes = flexBytes(f);
 size_t bytes = intsetBytes(is);
 size_t bytes = multilruBytes(lru);
 ```
+
+`multiarray` exports neither a count nor a byte-size accessor — track
+the element count yourself.
 
 ### "I want to check if empty"
 
@@ -725,11 +762,12 @@ if (jebufUseNewAllocation(currentSize, newSize)) {
 ### "I want to preallocate"
 
 ```c
-// multimap
-multimapExpand(m, 10000);  // Rounds to power of 2
+// multimap — choose the per-map flex size limit up front rather than
+// preallocating a count; the container retiers itself as it grows
+multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_2048);
 
-// multiarray
-multiarray *arr = multiarrayNew(sizeof(int64_t), 10000);
+// multiarray — rowMax is the per-row element budget before splitting
+multiarray *arr = multiarrayNew(sizeof(int64_t), 512);
 
 // multilru
 multilru *lru = multilruNewWithLevelsCapacity(7, 10000);
@@ -758,7 +796,7 @@ if (StrScanScanReliable("3.14", 4, &result)) {
 ```c
 uint64_t value;
 if (StrBufToUInt64("12345", 5, &value)) {
-    printf("Value: %lu\n", value);
+    printf("Value: %" PRIu64 "\n", value);  // <inttypes.h>
 }
 ```
 
@@ -768,7 +806,7 @@ if (StrBufToUInt64("12345", 5, &value)) {
 databox result;
 StrScanFmt fmt = StrScanScan("42", &result, STRSCAN_OPT_TOINT, false, false);
 if (fmt == STRSCAN_INT) {
-    printf("Integer: %ld\n", result.data.i64);
+    printf("Integer: %" PRId64 "\n", result.data.i64);
 }
 ```
 
@@ -878,17 +916,23 @@ if (StrNICmp("Hello", "HELP", 3) == 0) {
 
 ### "I want to build a dynamic string"
 
+Every `mds` mutator returns a possibly-new pointer, so always reassign.
+The buffer IS the string — no `.buf` member, no wrapper struct.
+
 ```c
-dksstr *s = dksstr_new();
+mds *s = mdsempty();
 
-dksstr_cat(s, "Hello");
-dksstr_cat(s, " ");
-dksstr_cat(s, "World");
+s = mdscat(s, "Hello");
+s = mdscat(s, " ");
+s = mdscatlen(s, "World", 5);
 
-printf("%s\n", s->buf);  // "Hello World"
+printf("%s (%zu bytes)\n", s, mdslen(s));  // "Hello World (11 bytes)"
 
-dksstr_free(s);
+mdsfree(s);
 ```
+
+Swap the `mds` prefix for `mdsc` to use the compact variant
+(`mdscempty`, `mdsccat`, `mdsclen`, `mdscfree`).
 
 ---
 
@@ -970,12 +1014,16 @@ multiroar *u = multiroarNewOr(a, b);
 multiroar *i = multiroarNewAnd(a, b);
 
 // Difference (a - b)
-multiroar *notB = multiroarNewNot(b);
-multiroar *diff = multiroarNewAnd(a, notB);
+multiroar *diff = multiroarNewAndNot(a, b);
 
 // XOR (symmetric difference)
-multiroar *xor = multiroarNewXor(a, b);
+multiroar *sym = multiroarNewXor(a, b);
 ```
+
+Use `multiroarNewAndNot` for difference. `multiroarNewNot` complements
+only the chunks a bitmap has already materialized, so
+NOT-then-AND is not set difference — the answer depends on which
+chunks happen to exist.
 
 **multimap (sorted sets)**:
 
@@ -1007,7 +1055,7 @@ multiroarBitSetRange(r, 1000, 100);  // Set bits 1000-1099
 
 ```c
 // multiroar - count all set bits
-size_t setBits = /* iterate and count */;
+uint64_t setBits = multiroarBitCount(r);
 
 // intset - count unique values
 size_t count = intsetCount(is);
@@ -1035,11 +1083,14 @@ cache *cacheNew() {
 }
 
 void cacheSet(cache *c, databox *key, databox *val) {
-    // Evict if full
+    // Evict if full. RemoveMinimum demotes above level 0, so check
+    // whether the handle actually died before dropping the payload.
     if (multilruCount(c->lru) >= MAX_SIZE) {
-        multilruPtr evicted;
-        multilruRemoveMinimum(c->lru, &evicted);
-        // Remove from data using evicted as key...
+        multilruPtr out;
+        if (multilruRemoveMinimum(c->lru, &out) &&
+            !multilruIsPopulated(c->lru, out)) {
+            // Truly evicted: remove the matching entry from c->data
+        }
     }
 
     // Insert into LRU and data
@@ -1078,7 +1129,7 @@ multimapIteratorInitAt(timeseries, &iter, true, &start);
 databox timestamp, temperature;
 databox *row[2] = {&timestamp, &temperature};
 while (multimapIteratorNext(&iter, row)) {
-    printf("%lu: %.2f\n", timestamp.data.u64, temperature.data.d64);
+    printf("%" PRIu64 ": %.2f\n", timestamp.data.u64, temperature.data.d64);
 }
 ```
 
@@ -1126,14 +1177,18 @@ for (size_t i = 0; i < 4; i++) {
 }
 
 // Lookup
-flexEntry *fe = flexHead(config);
+flexEntry *fe = flexHeadIfAny(config);
 while (fe) {
     databox key, val;
     flexGetByType(fe, &key);
+
     fe = flexNext(config, fe);
+    if (!fe) {
+        break;  // odd element count; nothing to pair with
+    }
     flexGetByType(fe, &val);
 
-    printf("%.*s = ", (int)key.len, databoxBytes(&key));
+    printf("%.*s = ", (int)databoxLen(&key), (const char *)databoxCBytes(&key));
     databoxRepr(&val);
     printf("\n");
 
@@ -1172,13 +1227,12 @@ while (fe) {
    }
    ```
 
-4. **Disable resizing during bulk inserts**
+4. **Append instead of insert when the input is already sorted**
 
    ```c
-   multimapResizeDisable(m);
-   // ... bulk inserts ...
-   multimapResizeEnable(m);
-   multimapResize(m);
+   /* multimapAppend skips the sorted-position search that
+    * multimapInsert performs on every entry. */
+   multimapAppend(&m, entry);
    ```
 
 5. **Use jebuf to avoid wasted memory**

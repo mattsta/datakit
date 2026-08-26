@@ -136,13 +136,22 @@ typedef enum chunkType {
  * Creation and Destruction
  * ==================================================================== */
 multiroar *multiroarBitNew(void) {
-    multiroar *r = zcalloc(1, sizeof(*r));
+    /* +1: meta[0] == 0 marks BIT mode so value/bit mode is always
+     * introspectable (value mode stores its nonzero bitWidth there). */
+    multiroar *r = zcalloc(1, sizeof(*r) + 1);
     r->map = multimapNew(ELEMENTS_PER_ENTRY);
     return r;
 }
 
 multiroar *multiroarValueNew(const uint8_t bitWidth, const uint64_t rows,
                              const uint64_t cols) {
+    /* A value multiroar stores fixed-width unsigned values; zero-width
+     * values don't exist and anything wider than 64 can't round-trip
+     * through the databox integer we accept. */
+    if (bitWidth == 0 || bitWidth > 64) {
+        return NULL;
+    }
+
     varintWidth rowWidth;
     varintWidth colWidth;
 
@@ -157,11 +166,19 @@ multiroar *multiroarValueNew(const uint8_t bitWidth, const uint64_t rows,
     multiroar *r = zcalloc(1, sizeof(*r) + 1 + colWidth + rowWidth);
     r->map = multimapNew(ELEMENTS_PER_ENTRY);
 
-    varintTaggedPut64FixedWidthQuick_(_metaOffsetToColValue(r), cols, colWidth);
-    varintTaggedPut64FixedWidthQuick_(_metaOffsetToRowValue(r), rows, rowWidth);
-
+    /* bitWidth must be written BEFORE the row offset is computed:
+     * _metaOffsetToRowValue reads the col varint length from meta. */
     uint8_t *valueBitWidth = _metaOffsetToBitWidthValue(r);
     *valueBitWidth = bitWidth;
+
+    /* SplitFull encode to match the SplitFull length/offset math above
+     * and in the _metaOffsetTo* readers. */
+    varintWidth used;
+    varintSplitFullPut_(_metaOffsetToColValue(r), used, cols);
+    assert(used == colWidth);
+    varintSplitFullPut_(_metaOffsetToRowValue(r), used, rows);
+    assert(used == rowWidth);
+    (void)used;
 
     return r;
 }
@@ -754,9 +771,143 @@ multiroar *multiroarDuplicate(const multiroar *r) {
         return NULL;
     }
 
-    multiroar *dup = zcalloc(1, sizeof(*dup));
+    /* meta length: 1 mode/bitWidth byte, plus (value mode only) the col
+     * and row SplitFull varints. */
+    size_t metaLen = 1;
+    if (r->meta[0] != 0) {
+        const size_t colLen =
+            varintSplitFullGetLenQuick_(_metaOffsetToColValue(r));
+        metaLen += colLen;
+        metaLen += varintSplitFullGetLenQuick_(r->meta + 1 + colLen);
+    }
+
+    multiroar *dup = zcalloc(1, sizeof(*dup) + metaLen);
+    memcpy(dup->meta, r->meta, metaLen);
     dup->map = multimapCopy(r->map);
     return dup;
+}
+
+/* ====================================================================
+ * Value Operations (value-mode multiroars from multiroarValueNew)
+ * ==================================================================== */
+/* Value mode stores 'position -> unsigned value' rows directly in the
+ * backing multimap.  Bit-mode chunk keys and value-mode position keys
+ * share the same integer keyspace, so bit ops and value ops must never
+ * be mixed on one multiroar — the meta mode byte enforces it here.
+ * Values round-trip as unsigned databoxes (booleans store as 0/1). */
+DK_STATIC void _multiroarValueModeCheck(const multiroar *r,
+                                        const uint64_t position) {
+    assert(r && r->map);
+    assert(r->meta[0] != 0 && "value ops require multiroarValueNew");
+
+    /* rows/cols of 0 mean "unbounded" in that dimension; when both are
+     * declared, position must address a cell inside rows * cols. */
+    varintWidth colLen;
+    uint64_t cols;
+    varintSplitFullGet_(_metaOffsetToColValue(r), colLen, cols);
+
+    varintWidth rowLen;
+    uint64_t rows;
+    varintSplitFullGet_(r->meta + 1 + colLen, rowLen, rows);
+    (void)rowLen;
+
+    if (rows && cols) {
+        uint64_t bound;
+        if (!__builtin_mul_overflow(rows, cols, &bound)) {
+            assert(position < bound && "position outside declared rows*cols");
+        }
+    }
+
+    (void)position;
+}
+
+DK_STATIC uint64_t _multiroarValueAsUnsigned(const multiroar *r,
+                                             const databox *value) {
+    uint64_t v;
+    switch (value->type) {
+    case DATABOX_UNSIGNED_64:
+        v = value->data.u;
+        break;
+    case DATABOX_SIGNED_64:
+        assert(value->data.i >= 0 && "value multiroars store unsigned values");
+        v = (uint64_t)value->data.i;
+        break;
+    case DATABOX_TRUE:
+        v = 1;
+        break;
+    case DATABOX_FALSE:
+        v = 0;
+        break;
+    default:
+        assert(NULL && "value multiroars store integer values only");
+        __builtin_unreachable();
+    }
+
+    const uint8_t width = r->meta[0];
+    assert(width == 64 || v < (UINT64_C(1) << width));
+    (void)width;
+    return v;
+}
+
+bool multiroarValueSetGetPrevious(multiroar *r, uint64_t position,
+                                  databox *value, databox *overwritten) {
+    _multiroarValueModeCheck(r, position);
+    const uint64_t v = _multiroarValueAsUnsigned(r, value);
+
+    const databox key = databoxNewUnsigned(position);
+
+    databox prev = {{0}};
+    databox *lookup[1] = {&prev};
+    const bool previouslySet = multimapLookup(r->map, &key, lookup);
+    if (previouslySet && overwritten) {
+        /* Integer values live by-value inside the box, so this copy
+         * stays valid after the insert below mutates the map. */
+        *overwritten = prev;
+    }
+
+    const databox store = databoxNewUnsigned(v);
+    const databox *elements[ELEMENTS_PER_ENTRY] = {&key, &store};
+    multimapInsert(&r->map, elements);
+    return previouslySet;
+}
+
+bool multiroarValueSet(multiroar *r, uint64_t position, databox *value) {
+    return multiroarValueSetGetPrevious(r, position, value, NULL);
+}
+
+bool multiroarValueGet(const multiroar *r, uint64_t position, databox *value) {
+    _multiroarValueModeCheck(r, position);
+
+    const databox key = databoxNewUnsigned(position);
+    databox got = {{0}};
+    databox *lookup[1] = {&got};
+    if (!multimapLookup(r->map, &key, lookup)) {
+        return false;
+    }
+
+    if (value) {
+        *value = got;
+    }
+
+    return true;
+}
+
+bool multiroarValueRemoveGetRemoved(multiroar *r, uint64_t position,
+                                    databox *removed) {
+    _multiroarValueModeCheck(r, position);
+
+    const databox key = databoxNewUnsigned(position);
+    databox prev = {{0}};
+    databox *lookup[1] = {&prev};
+    if (!multimapLookup(r->map, &key, lookup)) {
+        return false;
+    }
+
+    if (removed) {
+        *removed = prev;
+    }
+
+    return multimapDelete(&r->map, &key);
 }
 
 /* ====================================================================
@@ -3406,6 +3557,72 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         multiroarFree(r);
+    }
+
+    TEST("value mode: constructor bounds + set/get/previous/remove") {
+        /* Invalid widths refuse construction */
+        assert(multiroarValueNew(0, 4, 4) == NULL);
+        assert(multiroarValueNew(65, 4, 4) == NULL);
+
+        multiroar *v = multiroarValueNew(16, 100, 100);
+        assert(v);
+
+        /* Fresh position: Set reports no prior value */
+        databox val = databoxNewUnsigned(4242);
+        assert(!multiroarValueSet(v, 7, &val));
+
+        /* Get round-trips exactly */
+        databox got = {{0}};
+        assert(multiroarValueGet(v, 7, &got));
+        assert(got.type == DATABOX_UNSIGNED_64 && got.data.u == 4242);
+
+        /* Missing position: Get false, box untouched */
+        assert(!multiroarValueGet(v, 8, &got));
+
+        /* Overwrite reports and returns the previous value */
+        databox val2 = databoxNewUnsigned(65535); /* max for bitWidth 16 */
+        databox prev = {{0}};
+        assert(multiroarValueSetGetPrevious(v, 7, &val2, &prev));
+        assert(prev.data.u == 4242);
+        assert(multiroarValueGet(v, 7, &got) && got.data.u == 65535);
+
+        /* Booleans store as 0/1; signed non-negatives accepted */
+        databox tbox = databoxBool(true);
+        assert(!multiroarValueSet(v, 9998, &tbox)); /* max position 9999 */
+        assert(multiroarValueGet(v, 9998, &got) && got.data.u == 1);
+        databox sbox = databoxNewSigned(12);
+        assert(!multiroarValueSet(v, 0, &sbox));
+        assert(multiroarValueGet(v, 0, &got) && got.data.u == 12);
+
+        /* Remove returns the removed value; second remove reports miss */
+        databox removed = {{0}};
+        assert(multiroarValueRemoveGetRemoved(v, 7, &removed));
+        assert(removed.data.u == 65535);
+        assert(!multiroarValueGet(v, 7, NULL));
+        assert(!multiroarValueRemoveGetRemoved(v, 7, &removed));
+
+        /* Duplicate preserves value-mode meta (bitWidth + bounds): value
+         * ops on the duplicate must keep working, with content copied. */
+        multiroar *dupe = multiroarDuplicate(v);
+        assert(dupe);
+        assert(multiroarValueGet(dupe, 0, &got) && got.data.u == 12);
+        databox val3 = databoxNewUnsigned(77);
+        assert(!multiroarValueSet(dupe, 55, &val3));
+        assert(multiroarValueGet(dupe, 55, &got) && got.data.u == 77);
+        /* ...and the original is unaffected by writes to the copy */
+        assert(!multiroarValueGet(v, 55, NULL));
+
+        multiroarFree(dupe);
+        multiroarFree(v);
+
+        /* Unbounded (rows/cols 0) accepts any position */
+        multiroar *u = multiroarValueNew(64, 0, 0);
+        assert(u);
+        databox big = databoxNewUnsigned(UINT64_MAX);
+        assert(!multiroarValueSet(u, UINT64_MAX - 1, &big));
+        assert(multiroarValueGet(u, UINT64_MAX - 1, &got) &&
+               got.data.u == UINT64_MAX);
+        multiroarFree(u);
     }
 
     const int32_t lots = 72000;

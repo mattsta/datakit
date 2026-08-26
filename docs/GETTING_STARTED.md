@@ -6,160 +6,200 @@ This guide will help you build and start using the datakit library.
 
 ### Prerequisites
 
-- CMake 3.5 or higher
-- C99-compatible compiler (GCC, Clang, etc.)
-- Make or Ninja build system
-- 64-bit or 32-bit architecture supported
+- CMake 3.10 or higher (3.21+ to use the build presets)
+- clang or gcc with C11 support
+- Make (the presets use Unix Makefiles)
+- Linux, macOS, or a BSD. Windows/MSVC is not supported.
 
 ### Build Steps
 
-```bash
-# Clone the repository (if not already done)
-git clone <repository-url> datakit
+The presets in `CMakePresets.json` are the supported entry points:
+
+```sh
 cd datakit
 
-# Create build directory
-mkdir build
-cd build
+# Default development configuration: Release-O3 + ASAN/UBSAN
+cmake --preset dev
+cmake --build --preset dev
+```
 
-# Configure with CMake
+That produces `build-dev/`. The other presets are `debug` (-O0 +
+symbols + sanitizers), `perf` (native + LTO, no sanitizers — use this
+for every benchmark), and `safe` (sanitizers, for CI).
+
+A hand-configured out-of-source build also works:
+
+```sh
+mkdir build && cd build
 cmake ..
-
-# Build with parallel jobs
 make -j8
-
-# Optional: Install to system
-sudo make install
 ```
 
 ### Build Options
 
-```bash
-# Debug build with symbols
+```sh
+# Choose an optimization level in a hand-configured build
 cmake -DCMAKE_BUILD_TYPE=Debug ..
-
-# Release build with optimizations
 cmake -DCMAKE_BUILD_TYPE=Release ..
 
-# Enable sanitizers (Address Sanitizer and Undefined Behavior Sanitizer)
-cmake -DENABLE_ASAN=ON -DENABLE_UBSAN=ON ..
+# Sanitizers (note the exact option spelling; all default to OFF)
+cmake -DEnableASAN=ON -DEnableUBSAN=ON ..
+
+# Skip the test binary
+cmake -DBuildTestBinary=OFF ..
 ```
 
 ### Build Outputs
 
-After building, you'll have:
+After building, `build-dev/src/` (or `build/src/`) holds:
 
-1. **Static library**: `libdatakit.a` - Link statically into your application
-2. **Shared library**: `libdatakit.so` (`.dylib` on macOS) - Dynamic linking
-3. **Test executable**: `datakit-test` - Run tests and examples
+1. **Static library**: `datakit.a` - Link statically into your application
+2. **Shared library**: `libdatakit.so.0.3.0` (`.dylib` on macOS) - Dynamic linking
+3. **Loadable module**: `datakit.so` - For `dlopen`-style consumers
+4. **Test executable**: `datakit-test` - Run tests and examples
+
+Note the missing `lib` prefix on the static library and the module:
+the build clears `CMAKE_STATIC_LIBRARY_PREFIX` and
+`CMAKE_SHARED_MODULE_PREFIX`.
 
 ## Running Tests
 
 The test suite provides both validation and usage examples:
 
-```bash
-# From the build directory
-cd build
+```sh
+# Discover what exists — the binary is the source of truth
+./build-dev/src/datakit-test list
 
-# Run all tests
-./src/datakit-test test ALL
+# Run one module's tests
+./build-dev/src/datakit-test test multimap
+./build-dev/src/datakit-test test multilist
+./build-dev/src/datakit-test test flex
+./build-dev/src/datakit-test test intset
+./build-dev/src/datakit-test test hyperloglog
 
-# Run specific module tests
-./src/datakit-test test multimap
-./src/datakit-test test multilist
-./src/datakit-test test flex
-./src/datakit-test test intset
-./src/datakit-test test hyperloglog
+# Size-specific variants
+./build-dev/src/datakit-test test multimapFull
+./build-dev/src/datakit-test test multilistFull
+./build-dev/src/datakit-test test multiarrayLarge
 
-# Run size-specific variants
-./src/datakit-test test multimapFull
-./src/datakit-test test multilistSmall
-./src/datakit-test test multiarrayLarge
+# Everything (long)
+./build-dev/src/datakit-test test ALL
+```
+
+Every registered test is also a CTest target, which is the faster way
+to run several:
+
+```sh
+ctest --test-dir build-dev -j8 -R '^(flex|mflex|multimap)$'
 ```
 
 ### Available Tests
 
-Here are all the available test modules:
+A representative slice; run `datakit-test list` for the complete set
+with aliases.
 
 **Core Data Structures:**
 
 - `flex` - Flexible compressed array
 - `mflex` - Compressed flex wrapper
-- `multimap` - Key-value map with multi-element values
-- `multilist` - Linked list with multi-element nodes
-- `multiarray` - Dynamic array with multi-element support
+- `multimap`, `multimapMedium`, `multimapFull`, `multimapAtom` (`atom`)
+- `multilist` (`ml`), `multilistFull`
+- `multiarray`, `multiarraySmall`, `multiarrayMedium`, `multiarrayLarge`
+- `multidict` - Hash table
+- `list`, `ptrPrevNext` (`ppn`)
 
-**Size Variants:**
+**Integer Sets and Trees:**
 
-- `multimapFull`, `multimap` (small/medium implied)
-- `multilistFull`, `multilistSmall`, `multilist`
-- `multiarrayLarge`, `multiarrayMedium`, `multiarraySmall`
-
-**Integer Sets:**
-
-- `intset` - Variable-width integer set
+- `intset` - Tiered variable-width integer set
 - `intsetU32` - 32-bit unsigned integer set
-- `intsetBig` - 64-bit large integer set (x86_64 only)
-- `hyperloglog` or `hll` - Cardinality estimation
+- `intsetBig` - 128-bit-backed sets; registered only where the
+  toolchain provides `__int128`
+- `hyperloglog` (`hll`) - Cardinality estimation
+- `linearBloom` (`bloom`) - Bloom filter
+- `fenwickI64` (`fw`), `segmentI64` (`seg`), `multiFenwick` (`mfw`)
 
 **Specialized Containers:**
 
 - `multiroar` - Roaring bitmap
-- `multilru` - LRU cache
-- `multimapatom` or `atom` - Atom-based map
+- `multilru` (`lru`) - LRU cache
+- `multiOrderedSet` (`mos`) - Ordered set
 
 **Compression/Encoding:**
 
 - `xof` - XOR filter float compression
 - `dod` - Delta-of-delta integer encoding
-- `float16` or `f16` - Half-precision floats
+- `float16` (`f16`) - Half-precision floats
+- `compressionBench` (`compress`)
 
 **String/Buffer:**
 
 - `str` - String utilities
-- `mds` / `mdsbench` - Full string buffer
-- `mdsc` / `mdscbench` - Compact string buffer
+- `mds` - Full string buffer (benchmark: `bench mdsbench`)
+- `mdsc` - Compact string buffer (benchmark: `bench mdscbench`)
 - `strDoubleFormat` - Double-to-string formatting
 
 **Memory/System:**
 
-- `membound` - Memory allocation limits
+- `membound` - Bounded arena allocator
+- `memtest` - Memory subsystem checks
 - `fibbuf` - Fibonacci buffer sizing
-- `jebuf` - Jemalloc buffer sizing
-- `ptrprevnext` or `ppn` - Pointer linking
+- `jebuf` - Jemalloc size classes
+- `ptrlib`, `bigmath`, `bbits`, `ulid`
+
+**Timers:**
+
+- `timerWheel` (`tw`), `multiTimer` (`timer`), `timeUtil` (`time`)
+
+**Persistence:**
+
+- `persist`, `persistCtx` (`pctx`), plus per-type codec tests
+  (`multimapP`, `multilistP`, `multidictP`, `flexP`, `intsetP`,
+  `multiOrderedSetP`, `multiroarP`, `multilruP`)
+
+**Hashing / Integrity / Cluster:**
+
+- `blake3` (`b3`), `sha256`, `sha1`, `hmac`, `hmacKeyring` (`keyring`)
+- `chacha20poly1305` (`c20`), `aesGcm` (`aes`), `x25519` (`ecdh`),
+  `rapidhash` (`rh`)
+- `flexEnvelope` (`fenv`), `aeadNonceLog` (`noncelog`)
+- `clusterRing` (`ring`), `clusterMailbox` (`mb`),
+  `clusterReplicator` (`rep`)
 
 **Utilities:**
 
-- `databox` - Universal container
+- `databox`, `databoxLinear` - Universal container
 - `offsetArray` - Offset-based arrays
 - `util` - General utilities
-- `sha1` - SHA1 hashing
+- `intersectInt` - Integer set intersection
+- `perfRegression` (`perf-baseline`) - Regression gate
 
 ## Your First datakit Program
 
 ### Example 1: Using flex (Flexible Array)
 
 ```c
+#include "databox.h"
 #include "flex.h"
 #include <stdio.h>
-#include <string.h>
 
 int main(void) {
-    flex *f = NULL;
+    flex *f = flexNew();
 
-    /* Create new flex and add elements */
-    flexPushBytes(&f, "Hello", 5);
-    flexPushBytes(&f, "World", 5);
-    flexPushBytes(&f, "!", 1);
+    /* Append elements. The trailing argument picks the endpoint. */
+    flexPushBytes(&f, "Hello", 5, FLEX_ENDPOINT_TAIL);
+    flexPushBytes(&f, "World", 5, FLEX_ENDPOINT_TAIL);
+    flexPushBytes(&f, "!", 1, FLEX_ENDPOINT_TAIL);
 
-    /* Iterate through elements */
-    flexEntry entry;
-    flexIter *iter = flexIterator(f, FLEX_START_HEAD);
-    while (flexNext(iter, &entry)) {
-        printf("Element: %.*s (len=%zu)\n",
-               (int)entry.len, (char *)entry.data, entry.len);
+    /* Iterate. Use flexHeadIfAny, not flexHead: flexHead returns an
+     * insertion POSITION and is non-NULL even for an empty flex, so a
+     * flexHead-seeded loop reads one entry past the buffer when empty. */
+    for (flexEntry *fe = flexHeadIfAny(f); fe; fe = flexNext(f, fe)) {
+        databox box;
+        flexGetByType(fe, &box);
+        const size_t len = databoxLen(&box);
+        printf("Element: %.*s (len=%zu)\n", (int)len,
+               (const char *)databoxCBytes(&box), len);
     }
-    flexIteratorFree(iter);
 
     /* Cleanup */
     flexFree(f);
@@ -169,51 +209,65 @@ int main(void) {
 
 ### Example 2: Using multimap (Key-Value Store)
 
+Every multimap read and write goes through `databox`, and the entry
+width is fixed when the map is created.
+
 ```c
+#include "databox.h"
 #include "multimap.h"
 #include <stdio.h>
 
+static void put(multimap **m, const char *k, const char *v) {
+    databox key = databoxNewBytesString(k);
+    databox val = databoxNewBytesString(v);
+    const databox *entry[2] = {&key, &val};
+    multimapInsert(m, entry); /* replaces the entry when the key exists */
+}
+
 int main(void) {
-    multimap *m = NULL;
+    /* 2 elements per entry == key + value */
+    multimap *m = multimapNew(2);
 
-    /* Create new multimap */
-    multimapNew(&m);
+    put(&m, "user:1", "Alice");
+    put(&m, "user:2", "Bob");
+    put(&m, "user:1", "Alice Smith"); /* Update */
 
-    /* Insert key-value pairs */
-    multimapInsertWithSurrogateKey(&m, "user:1", 6, "Alice", 5);
-    multimapInsertWithSurrogateKey(&m, "user:2", 6, "Bob", 3);
-    multimapInsertWithSurrogateKey(&m, "user:1", 6, "Alice Smith", 11); /* Update */
-
-    /* Lookup value by key */
-    void *value;
-    size_t vlen;
-    if (multimapLookup(m, "user:1", 6, &value, &vlen)) {
-        printf("Found: %.*s\n", (int)vlen, (char *)value);
+    /* Lookup fills elementsPerEntry - 1 boxes: the values only. */
+    databox key = databoxNewBytesString("user:1");
+    databox value;
+    if (multimapLookupInto(m, &key, &value, 1)) {
+        printf("Found: %.*s\n", (int)databoxLen(&value),
+               (const char *)databoxCBytes(&value));
     }
 
-    /* Count elements */
-    printf("Total elements: %zu\n", multimapCount(m));
+    /* Count entries */
+    printf("Total entries: %zu\n", multimapCount(m));
 
     /* Cleanup */
-    multimapFree(&m);
+    multimapFree(m);
     return 0;
 }
 ```
 
 ### Example 3: Using intset (Integer Set)
 
+`intset` takes `intset **` because adding a value can retier and
+reallocate the set in place.
+
 ```c
 #include "intset.h"
+#include <inttypes.h>
+#include <stdbool.h>
 #include <stdio.h>
 
 int main(void) {
     intset *is = intsetNew();
 
     /* Add integers */
-    uint8_t success;
-    is = intsetAdd(is, 42, &success);
-    is = intsetAdd(is, 100, &success);
-    is = intsetAdd(is, -50, &success);
+    bool success;
+    intsetAdd(&is, 42, &success);
+    intsetAdd(&is, 100, &success);
+    intsetAdd(&is, -50, &success);
 
     /* Check membership */
     if (intsetFind(is, 42)) {
@@ -221,10 +275,17 @@ int main(void) {
     }
 
     /* Get size */
-    printf("Set size: %u\n", intsetLen(is));
+    printf("Set size: %zu\n", intsetCount(is));
+
+    /* Smallest and largest are O(1) */
+    int64_t lo;
+    int64_t hi;
+    if (intsetMin(is, &lo) && intsetMax(is, &hi)) {
+        printf("Range: %" PRId64 " .. %" PRId64 "\n", lo, hi);
+    }
 
     /* Remove element */
-    is = intsetRemove(is, 42, &success);
+    intsetRemove(&is, 42, &success);
 
     /* Cleanup */
     intsetFree(is);
@@ -234,23 +295,31 @@ int main(void) {
 
 ### Example 4: Using hyperloglog (Cardinality Estimation)
 
+`hyperloglogAdd` takes `hyperloglog **` because the sparse
+representation can grow and get promoted to dense as cardinality
+rises.
+
 ```c
 #include "hyperloglog.h"
+#include <inttypes.h>
+#include <stdbool.h>
 #include <stdio.h>
 
 int main(void) {
-    hyperloglog *hll = hyperloglogCreate();
+    hyperloglog *hll = hyperloglogNew();
 
     /* Add elements */
     for (int i = 0; i < 100000; i++) {
         char buf[32];
         int len = snprintf(buf, sizeof(buf), "element:%d", i);
-        hyperloglogAdd(hll, (uint8_t *)buf, len);
+        hyperloglogAdd(&hll, buf, (size_t)len);
     }
 
-    /* Estimate cardinality */
-    uint64_t estimate = hyperloglogCount(hll);
-    printf("Estimated unique elements: %lu (actual: 100000)\n", estimate);
+    /* Estimate cardinality. 'invalid' reports a corrupt encoding. */
+    bool invalid = false;
+    uint64_t estimate = hyperloglogCount(hll, &invalid);
+    printf("Estimated unique elements: %" PRIu64 " (actual: 100000)\n",
+           estimate);
     printf("Error rate: %.2f%%\n",
            ((double)estimate - 100000.0) / 1000.0);
 
@@ -264,44 +333,46 @@ int main(void) {
 
 ### Linking Against datakit
 
-```bash
-# Using static library
-gcc -o myapp myapp.c -I/path/to/datakit/src -L/path/to/datakit/build/src -ldatakit -lm -lpthread
+datakit installs nothing and ships no pkg-config file, so point the
+compiler at the source and build trees directly. The static library is
+`datakit.a` — no `lib` prefix — so link it by path rather than with
+`-ldatakit`.
 
-# Using shared library
-gcc -o myapp myapp.c -I/path/to/datakit/src -L/path/to/datakit/build/src -ldatakit -Wl,-rpath=/path/to/datakit/build/src
+```sh
+DK=../datakit    # wherever you checked datakit out
 
-# Using pkg-config (if installed)
-gcc -o myapp myapp.c $(pkg-config --cflags --libs datakit)
+# Static
+cc -o myapp myapp.c -I"$DK/src" "$DK/build-dev/src/datakit.a" -lm -lpthread
+
+# Versioned shared library
+cc -o myapp myapp.c -I"$DK/src" -L"$DK/build-dev/src" -ldatakit \
+   -Wl,-rpath,"$DK/build-dev/src"
 ```
+
+On macOS, drop `-lm -lpthread`: both live in libSystem.
 
 ### CMake Integration
 
-If you're using CMake for your project:
+`add_subdirectory` is the supported path, since there is no install
+tree or config package to find:
 
 ```cmake
-# CMakeLists.txt
-cmake_minimum_required(VERSION 3.5)
-project(MyApp)
+cmake_minimum_required(VERSION 3.10)
+project(MyApp C)
 
-# Find datakit
-find_library(DATAKIT_LIB datakit PATHS /path/to/datakit/build/src)
-include_directories(/path/to/datakit/src)
-
-# Add your executable
-add_executable(myapp myapp.c)
-target_link_libraries(myapp ${DATAKIT_LIB} m pthread)
-```
-
-Or using add_subdirectory:
-
-```cmake
-# Add datakit as subdirectory
 add_subdirectory(deps/datakit)
 
-# Link against it
 add_executable(myapp myapp.c)
-target_link_libraries(myapp datakit)
+target_include_directories(myapp PRIVATE deps/datakit/src)
+target_link_libraries(myapp datakit-static)   # or datakit-library
+```
+
+If you only want the library, set `BuildTestBinary=OFF` before the
+`add_subdirectory` call so the test runner is skipped:
+
+```cmake
+set(BuildTestBinary OFF CACHE BOOL "" FORCE)
+add_subdirectory(deps/datakit)
 ```
 
 ## Next Steps
@@ -309,9 +380,9 @@ target_link_libraries(myapp datakit)
 Now that you have datakit built and running:
 
 1. **Explore the Modules**: Read the [Architecture Overview](ARCHITECTURE.md) to understand design patterns
-2. **Choose Your Containers**: Learn about [Scale-Aware Collections](../advanced/SCALE_AWARE.md)
-3. **Study Examples**: Check out [Common Patterns](../examples/PATTERNS.md) for real-world usage
-4. **Performance Tuning**: Read [Performance Guide](../advanced/PERFORMANCE.md) for optimization tips
+2. **Choose Your Containers**: Learn about [Scale-Aware Collections](advanced/SCALE_AWARE.md)
+3. **Study Examples**: Check out [Common Patterns](examples/PATTERNS.md) for real-world usage
+4. **Performance Tuning**: Read [Performance Guide](advanced/PERFORMANCE.md) for optimization tips
 5. **Deep Dive**: Explore individual module documentation in the [Index](INDEX.md)
 
 ## Common Issues
@@ -344,13 +415,18 @@ brew install cmake          # macOS
 
 **Issue**: Segmentation fault
 
-- Make sure to initialize pointers to NULL before creating containers
-- Example: `multimap *m = NULL; multimapNew(&m);`
+- Check whether the API takes `container *` or `container **`. Anything
+  that can reallocate (`flexPush*`, `intsetAdd`, `multimapInsert`,
+  `hyperloglogAdd`) takes the double pointer, and passing a stale
+  single pointer afterwards reads freed memory.
+- Build under the `dev` or `debug` preset; ASAN names the offending
+  access directly.
 
 **Issue**: Memory leaks
 
 - Always call the corresponding free function for each container
-- Use valgrind to detect leaks: `valgrind --leak-check=full ./myapp`
+- ASAN's leak checker is on in the `dev`, `debug`, and `safe` presets
+- Or use valgrind: `valgrind --leak-check=full ./myapp`
 
 **Issue**: Assertion failures
 
@@ -361,7 +437,9 @@ brew install cmake          # macOS
 ## Getting Help
 
 - **Documentation**: Check the [Index](INDEX.md) for module-specific guides
-- **Examples**: Look at test code in `src/*-test.c` files or test functions at the end of implementation files
+- **Examples**: Read the `*Test()` functions at the end of each
+  implementation file (guarded by `#ifdef DATAKIT_TEST`) — they are the
+  most complete, always-compiled usage examples in the tree
 - **Source Code**: Headers in `src/*.h` have detailed API documentation
 - **Website**: Visit https://matt.sh/datakit for additional resources
 

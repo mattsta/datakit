@@ -132,7 +132,7 @@ size_t multilistFullBytes(const multilistFull *ml) {
     return totalBytes;
 }
 
-size_t multilistBytesActual(const multilistFull *ml) {
+size_t multilistFullBytesActual(const multilistFull *ml) {
     size_t totalBytes = 0;
     for (mlNodeId i = 0; i < ml->count; i++) {
         totalBytes += mflexBytesActual(getNode(i));
@@ -1085,13 +1085,102 @@ multilistFull *multilistFullDuplicate(multilistFull *orig) {
     return copy;
 }
 
-/* Populate 'entry' with the element at the specified zero-based index.
- * Negative integers count from the tail (-1 = tail, etc).
+/* The one positional-lookup engine: locates the element at 'index'
+ * (0-based forward; negative counts from the tail) by walking node
+ * counts from the cheapest available starting anchor.
+ *
+ * Without a caller anchor the anchors are head and tail (the endpoint
+ * walk below).  With a caller anchor — a previously located entry plus
+ * its known global index — the anchor's node is used as a third
+ * starting point whenever it is strictly closer than both endpoints,
+ * and when the target lands in the anchor's own (open) node the final
+ * flex walk starts from the anchor entry itself via
+ * flexIndexFromAnchor.
  *
  * Returns true if element found ('entry' populated).
  * Returns false if element out of range ('entry' not usable). */
-bool multilistFullIndex(multilistFull *ml, mflexState *state, mlOffsetId index,
-                        multilistEntry *entry, const bool openNode) {
+DK_STATIC bool multilistFullIndexEngine_(multilistFull *ml, mflexState *state,
+                                         mlOffsetId index,
+                                         const multilistEntry *anchor,
+                                         const mlOffsetId anchorIdx,
+                                         multilistEntry *entry,
+                                         const bool openNode) {
+    if (anchor && anchor->nodeIdx >= 0 && anchor->nodeIdx < ml->count) {
+        const mlOffsetId total = ml->values;
+
+        /* Normalize target and anchor to forward element ranks */
+        const mlOffsetId t = index < 0 ? total + index : index;
+        if (t < 0 || t >= total) {
+            return false;
+        }
+
+        const mlOffsetId a = anchorIdx < 0 ? total + anchorIdx : anchorIdx;
+
+        const mlOffsetId dHead = t;
+        const mlOffsetId dTail = (total - 1) - t;
+        const mlOffsetId dAnchor = t > a ? t - a : a - t;
+
+        if (a >= 0 && a < total && dAnchor < dHead && dAnchor < dTail) {
+            /* Anchor is strictly nearest: recover the rank of the
+             * anchor node's first element, then walk node counts
+             * toward the target. */
+            mlNodeId nearNodeIdx = anchor->nodeIdx;
+            mflex *node = getNode(nearNodeIdx);
+            mlOffsetId nodeCount = mflexCount(node);
+
+            /* anchor->offset may be tail-relative (negative) */
+            const mlOffsetId anchorOff = anchor->offset < 0
+                                             ? nodeCount + anchor->offset
+                                             : anchor->offset;
+            mlOffsetId nodeFirst = a - anchorOff;
+
+            while (t < nodeFirst) {
+                nearNodeIdx--;
+                assert(nearNodeIdx >= 0);
+                node = getNode(nearNodeIdx);
+                nodeCount = mflexCount(node);
+                nodeFirst -= nodeCount;
+            }
+
+            while (t >= nodeFirst + nodeCount) {
+                nodeFirst += nodeCount;
+                nearNodeIdx++;
+                assert(nearNodeIdx < ml->count);
+                node = getNode(nearNodeIdx);
+                nodeCount = mflexCount(node);
+            }
+
+            entry->ml = ml;
+            entry->nodeIdx = nearNodeIdx;
+            entry->offset = (int32_t)(t - nodeFirst);
+
+            if (openNode) {
+                if (nearNodeIdx == anchor->nodeIdx && anchor->f && anchor->fe) {
+                    /* Target shares the anchor's node and the anchor
+                     * was opened: reuse its open view and walk from
+                     * the anchor entry itself. */
+                    entry->f = anchor->f;
+                    entry->fe =
+                        flexIndexFromAnchor(entry->f, entry->offset, anchor->fe,
+                                            (int32_t)anchorOff);
+                } else {
+                    entry->f = mflexOpen(node, state);
+                    entry->fe = flexIndex(entry->f, entry->offset);
+                }
+
+                if (!entry->fe) {
+                    entry->fe = flexHead(entry->f);
+                    return false;
+                }
+
+                flexGetByType(entry->fe, &entry->box);
+            }
+
+            return true;
+        }
+        /* fallthrough: an endpoint is at least as close */
+    }
+
     mlNodeId nodeIdx = 0;
     const mlOffsetId originalIndex = index;
 
@@ -1181,6 +1270,31 @@ bool multilistFullIndex(multilistFull *ml, mflexState *state, mlOffsetId index,
     /* else, return true because we know the bounds exist,
      * but we didn't get them. */
     return true;
+}
+
+/* Populate 'entry' with the element at the specified zero-based index.
+ * Negative integers count from the tail (-1 = tail, etc).
+ *
+ * Returns true if element found ('entry' populated).
+ * Returns false if element out of range ('entry' not usable). */
+bool multilistFullIndex(multilistFull *ml, mflexState *state, mlOffsetId index,
+                        multilistEntry *entry, const bool openNode) {
+    return multilistFullIndexEngine_(ml, state, index, NULL, 0, entry,
+                                     openNode);
+}
+
+/* Explicit-anchor entry point into the shared positional-lookup
+ * engine: the anchor is a previously located entry (obtained after the
+ * most recent mutation) plus its known global index.  Never slower
+ * than multilistFullIndex — the engine only uses the anchor when it is
+ * strictly closer than both endpoints. */
+bool multilistFullIndexNear(multilistFull *ml, mflexState *state,
+                            const mlOffsetId index,
+                            const multilistEntry *anchor,
+                            const mlOffsetId anchorIdx, multilistEntry *entry,
+                            const bool openNode) {
+    return multilistFullIndexEngine_(ml, state, index, anchor, anchorIdx, entry,
+                                     openNode);
 }
 
 /* Rotate multilistFull by moving the tail element to the head. */

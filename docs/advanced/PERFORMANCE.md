@@ -29,29 +29,36 @@ struct node {
 
 Batch operations and pre-allocate when possible:
 
+There is no reserve/capacity API on multimap. What you control is the
+per-flex size limit chosen at construction, and whether each write has
+to search for a sorted position:
+
 ```c
-/* SLOW: Many allocations */
+/* SLOWER: every insert binary-searches for its sorted position */
 for (int i = 0; i < 10000; i++) {
-    multimapInsert(&m, key, klen, val, vlen);  // Potential realloc each time
+    multimapInsert(&m, entries[i]);
 }
 
-/* FAST: Reserve space upfront */
-multimapReserve(&m, 10000);  // Single allocation
+/* FASTER: input already ordered, so append and skip the search */
+multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_4096);
 for (int i = 0; i < 10000; i++) {
-    multimapInsert(&m, key, klen, val, vlen);  // No reallocs
+    multimapAppend(&m, entries[i]);
 }
 ```
+
+A larger `FLEX_CAP_LEVEL_*` means fewer container splits but larger
+memmoves inside each flex; measure both ends for your entry size.
 
 ### 3. Use Appropriate Variants
 
 Choose the right size variant for your data (see [SCALE_AWARE.md](SCALE_AWARE.md)):
 
 ```c
-/* WRONG: Full variant for small data */
-multimap *tiny = multimapNewFull();  // 40+ bytes overhead for 5 entries
+/* Pin a variant only when you have a reason to */
+multimapFull *big = multimapFullNew(2);
 
-/* RIGHT: Small variant */
-multimapSmall *tiny = multimapSmallNew();  // 16 bytes overhead
+/* Normally: let the wrapper start small and retier itself */
+multimap *m = multimapNew(2);
 ```
 
 ## Module-Specific Optimizations
@@ -168,17 +175,21 @@ multilist *compact = multilistNew(FLEX_CAP_LEVEL_4096, 1);
 
 ```c
 /* SLOW: Index-based iteration O(n²) */
+multilistEntry entry;
 for (size_t i = 0; i < multilistCount(ml); i++) {
-    void *val = multilistIndex(ml, i);  // O(n) each
+    multilistIndexGet(ml, state, i, &entry);  // re-walks nodes each time
 }
 
-/* FAST: Iterator-based O(n) */
-multilistIter *iter = multilistIterator(ml, MULTILIST_FORWARD);
-multilistEntry entry;
-while (multilistNext(iter, &entry)) {
-    // O(1) per iteration
+/* FAST: Iterator-based O(n).
+ * The iterator is a caller-stack struct, and the init macros take an
+ * ARRAY OF TWO mflexState pointers. */
+mflexState *states[2] = {mflexStateCreate(), mflexStateCreate()};
+multilistIterator iter;
+multilistIteratorInitForward(ml, states, &iter);
+while (multilistNext(&iter, &entry)) {
+    // amortized O(1) per iteration
 }
-multilistIteratorFree(iter);
+multilistIteratorRelease(&iter);
 ```
 
 ### multiarray Performance
@@ -511,18 +522,21 @@ multimapSmall *tiny = multimapSmallNew();
 ### 2. Not Using Iterators
 
 ```c
+multilistEntry entry;
+
 /* WRONG: Index-based iteration */
 for (size_t i = 0; i < multilistCount(ml); i++) {
-    void *val = multilistIndex(ml, i);  // O(n) per iteration!
+    multilistIndexGet(ml, state, i, &entry);  // re-walks nodes each time
 }
 
 /* RIGHT: Iterator-based */
-multilistIter *iter = multilistIterator(ml, MULTILIST_FORWARD);
-multilistEntry entry;
-while (multilistNext(iter, &entry)) {  // O(1) per iteration
-    void *val = entry.value;
+mflexState *states[2] = {mflexStateCreate(), mflexStateCreate()};
+multilistIterator iter;
+multilistIteratorInitForward(ml, states, &iter);
+while (multilistNext(&iter, &entry)) {  // amortized O(1)
+    /* entry holds the decoded element */
 }
-multilistIteratorFree(iter);
+multilistIteratorRelease(&iter);
 ```
 
 ### 3. Repeated Allocations

@@ -9,7 +9,11 @@
 #include "multimapFull.h"
 #include "multimapFullInternal.h"
 
+#include "cleaner.h"
 #include "timeUtil.h"
+
+defcleanerName(databox *, zfree, Databoxes);
+defcleanerName(databox **, zfree, DataboxPtrs);
 
 #if MULTIMAP_INLINE
 #include "multimapFull.c"
@@ -366,6 +370,58 @@ void multimapReplaceEntryWithReference(multimap **m, multimapEntry *me,
     }
 }
 
+static multimapElements multimapElementsPerEntry_(const multimap *m) {
+    switch (multimapType_(m)) {
+    case MULTIMAP_TYPE_SMALL:
+        return mms(m)->elementsPerEntry;
+    case MULTIMAP_TYPE_MEDIUM:
+        return mmm(m)->elementsPerEntry;
+    case MULTIMAP_TYPE_FULL:
+        return mmf(m)->elementsPerEntry;
+    default:
+        assert(NULL);
+        __builtin_unreachable();
+    }
+}
+
+/* Resize the FIRST VALUE field of the row with 'key' to 'newSize' bytes
+ * (rows wider than key+value: use multimapGetUnderlyingEntry +
+ * multimapResizeEntry to target other fields).  The key must exist
+ * (asserted).  Contents of the resized field are unspecified after the
+ * resize; repopulate through a fresh lookup. */
+void multimapEntryResize(multimap **m, const databox *key, size_t newSize) {
+    multimapEntry me;
+    const bool found = multimapGetUnderlyingEntry(*m, key, &me);
+    assert(found);
+    (void)found;
+
+    /* advance from the key entry to its first value field */
+    me.fe = flexNext(*me.map, me.fe);
+    multimapResizeEntry(m, &me, newSize);
+}
+
+/* Replace the VALUE fields of the row with 'key': elements[] holds
+ * elementsPerEntry - 1 replacement boxes, applied in field order.  The
+ * key stays in place (replacing a key would break sort order); the key
+ * must exist (asserted).  Each field replacement may reallocate the
+ * underlying storage, so the row is re-found per field. */
+void multimapEntryReplace(multimap **m, const databox *key,
+                          const databox *elements[]) {
+    const multimapElements epe = multimapElementsPerEntry_(*m);
+    for (multimapElements i = 0; i + 1 < epe; i++) {
+        multimapEntry me;
+        const bool found = multimapGetUnderlyingEntry(*m, key, &me);
+        assert(found);
+        (void)found;
+
+        for (multimapElements skip = 0; skip <= i; skip++) {
+            me.fe = flexNext(*me.map, me.fe);
+        }
+
+        multimapReplaceEntry(m, &me, elements[i]);
+    }
+}
+
 bool multimapExists(const multimap *m, const databox *key) {
     MULTIMAP_RETURN(m, Exists, key);
 }
@@ -515,6 +571,24 @@ void multimapFree(multimap *m) {
 }
 
 /* Positional Operations */
+/* Populate 'elements' (elementsPerEntry boxes, FULL width including the
+ * key) with the row at 'keyIndex' (0-based from the head; negative from
+ * the tail, -1 = last row).  Returns false when the position is out of
+ * range.  Each tier locates the row through its maintained anchors:
+ * sub-map row counts route to the owning flex, then the walk starts
+ * from the nearest of that flex's head, cached middle, or tail. */
+bool multimapLookupByPosition(multimap *m, int64_t keyIndex,
+                              databox *elements[]) {
+    MULTIMAP_RETURN(m, LookupByPosition, keyIndex, elements);
+}
+
+/* Delete the row at 'keyIndex' (position semantics as above).  Returns
+ * false when the position is out of range.  Deletes the EXACT addressed
+ * row (safe for duplicate keys and surrogate-keyed maps). */
+bool multimapDeleteByPosition(multimap **m, int64_t keyIndex) {
+    MULTIMAP_RETURN(*m, DeleteByPosition, keyIndex);
+}
+
 bool multimapFirst(multimap *m, databox *elements[]) {
     MULTIMAP_RETURN(m, First, elements);
 }
@@ -620,11 +694,21 @@ size_t multimapProcessUntil(multimap *m, const multimapPredicate *p,
 
     databox **elements = ee16;
 
-    databox *underlyingElements = NULL;
+    cleanerName(zfree, Databoxes) databox *underlyingElements = NULL;
+    cleanerName(zfree, DataboxPtrs) databox **heapElementPtrs = NULL;
     if (useHeapElements) {
+        /* The iterator populates through elements[0..N-1], so the heap
+         * path needs BOTH an array of N boxes AND an array of N
+         * pointers into it. */
         underlyingElements =
             zcalloc(iter.elementsPerEntry, sizeof(*underlyingElements));
-        elements = &underlyingElements;
+        heapElementPtrs =
+            zcalloc(iter.elementsPerEntry, sizeof(*heapElementPtrs));
+        for (multimapElements i = 0; i < iter.elementsPerEntry; i++) {
+            heapElementPtrs[i] = &underlyingElements[i];
+        }
+
+        elements = heapElementPtrs;
     }
 
     size_t processed = 0;
@@ -659,10 +743,6 @@ size_t multimapProcessUntil(multimap *m, const multimapPredicate *p,
     default:
         assert(NULL);
         __builtin_unreachable();
-    }
-
-    if (useHeapElements) {
-        zfree(underlyingElements);
     }
 
     return processed;
@@ -955,6 +1035,25 @@ static size_t multimapReport_(const multimap *m, const bool print) {
     fflush(stdout);
 
     return totalBytes;
+}
+
+/* Walker for the ProcessUntil wide-row regression: counts rows and sums
+ * every value field so a mispopulated element pointer shows up as a
+ * wrong sum (or a sanitizer trap) rather than passing silently. */
+typedef struct processUntilWideCheck {
+    size_t rows;
+    int64_t sum;
+    multimapElements elementsPerEntry;
+} processUntilWideCheck;
+
+static bool processUntilWideWalker(void *userData, const databox *elements[]) {
+    processUntilWideCheck *c = userData;
+    c->rows++;
+    for (multimapElements i = 1; i < c->elementsPerEntry; i++) {
+        c->sum += elements[i]->data.i;
+    }
+
+    return true;
 }
 
 int multimapTest(int argc, char *argv[]) {
@@ -1280,6 +1379,199 @@ int multimapTest(int argc, char *argv[]) {
         }
 
         zfree(buf);
+        multimapFree(m);
+    }
+
+    TEST("ProcessUntil: wide rows (> 16 elements) use a real heap "
+         "pointer array") {
+        /* elementsPerEntry > 16 forces the heap-elements path; every
+         * element pointer must be populated and readable. */
+        const multimapElements epe = 20;
+        multimap *m = multimapNew(epe);
+
+        int64_t expectSum = 0;
+        for (int row = 0; row < 3; row++) {
+            databox boxes[20];
+            const databox *elements[20];
+            boxes[0] = databoxNewSigned(row);
+            elements[0] = &boxes[0];
+            for (int i = 1; i < 20; i++) {
+                boxes[i] = databoxNewSigned((row * 100) + i);
+                elements[i] = &boxes[i];
+                expectSum += (row * 100) + i;
+            }
+
+            multimapInsert(&m, elements);
+        }
+
+        const multimapPredicate all = {.condition = MULTIMAP_CONDITION_ALL};
+        processUntilWideCheck check = {.elementsPerEntry = epe};
+        const size_t processed =
+            multimapProcessUntil(m, &all, true, processUntilWideWalker, &check);
+        assert(processed == 3);
+        assert(check.rows == 3);
+        if (check.sum != expectSum) {
+            ERR("wide ProcessUntil sum %" PRId64 " expected %" PRId64 "!",
+                check.sum, expectSum);
+            assert(check.sum == expectSum);
+        }
+
+        multimapFree(m);
+    }
+
+    TEST("EntryResize/EntryReplace + ByPosition: key-level and "
+         "positional row access") {
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_64);
+        for (int i = 0; i < 300; i++) {
+            char keyBuf[32];
+            snprintf(keyBuf, sizeof(keyBuf), "key%05d", i);
+            databox key = databoxNewBytesString(keyBuf);
+            databox val = databoxNewSigned(i);
+            const databox *elements[2] = {&key, &val};
+            multimapInsert(&m, elements);
+        }
+
+        assert(multimapType_(m) == MULTIMAP_TYPE_FULL);
+
+        /* LookupByPosition: full-width rows, forward and negative */
+        databox rk = {{0}};
+        databox rv = {{0}};
+        databox *row[2] = {&rk, &rv};
+        assert(multimapLookupByPosition(m, 0, row));
+        assert(rv.data.i == 0);
+        assert(multimapLookupByPosition(m, 137, row));
+        assert(rv.data.i == 137);
+        assert(multimapLookupByPosition(m, -1, row));
+        assert(rv.data.i == 299);
+        assert(multimapLookupByPosition(m, -300, row));
+        assert(rv.data.i == 0);
+        assert(!multimapLookupByPosition(m, 300, row));
+        assert(!multimapLookupByPosition(m, -301, row));
+
+        /* EntryReplace: values swap in place, key untouched */
+        databox findKey = databoxNewBytesString("key00137");
+        databox newVal = databoxNewSigned(-9137);
+        const databox *reps[1] = {&newVal};
+        multimapEntryReplace(&m, &findKey, reps);
+        multimapVerify(m);
+        databox got = {{0}};
+        databox *gotP[1] = {&got};
+        assert(multimapLookup(m, &findKey, gotP));
+        assert(got.data.i == -9137);
+
+        /* EntryResize: value becomes a byte region of the new size */
+        databox bytesVal = databoxNewBytesString("resize-me-payload");
+        const databox *reps2[1] = {&bytesVal};
+        multimapEntryReplace(&m, &findKey, reps2);
+        multimapEntryResize(&m, &findKey, 64);
+        multimapVerify(m);
+        assert(multimapLookup(m, &findKey, gotP));
+        assert(databoxLen(&got) == 64);
+
+        /* DeleteByPosition: forward and negative addressing */
+        assert(multimapDeleteByPosition(&m, 0)); /* key00000 */
+        assert(multimapCount(m) == 299);
+        databox gone = databoxNewBytesString("key00000");
+        assert(!multimapExists(m, &gone));
+
+        assert(multimapDeleteByPosition(&m, -1)); /* key00299 */
+        assert(multimapCount(m) == 298);
+        databox gone2 = databoxNewBytesString("key00299");
+        assert(!multimapExists(m, &gone2));
+
+        assert(!multimapDeleteByPosition(&m, 500));
+        multimapVerify(m);
+
+        /* Interior deletes land near the middle anchor; verify the
+         * neighborhood stays coherent afterwards. */
+        assert(multimapLookupByPosition(m, 150, row));
+        const int64_t midVal = rv.data.i;
+        assert(multimapDeleteByPosition(&m, 150));
+        multimapVerify(m);
+        assert(multimapLookupByPosition(m, 150, row));
+        assert(rv.data.i != midVal);
+        assert(multimapCount(m) == 297);
+
+        multimapFree(m);
+    }
+
+    TEST("ByPosition: every position addressable across all tiers") {
+        /* Grow one map through Small -> Medium -> Full; at each tier
+         * assert every position (both sign conventions) returns the
+         * exact expected row.  Values are keyed to insertion order so a
+         * positional miss or misroute is a value mismatch. */
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_64);
+        int inserted = 0;
+        multimapType lastType = MULTIMAP_TYPE_SMALL;
+        bool sawSmall = false;
+        bool sawMedium = false;
+        bool sawFull = false;
+
+        databox rk = {{0}};
+        databox rv = {{0}};
+        databox *row[2] = {&rk, &rv};
+
+        while (inserted < 600) {
+            char keyBuf[32];
+            snprintf(keyBuf, sizeof(keyBuf), "key%05d", inserted);
+            databox key = databoxNewBytesString(keyBuf);
+            databox val = databoxNewSigned(inserted);
+            const databox *elements[2] = {&key, &val};
+            multimapInsert(&m, elements);
+            inserted++;
+
+            const multimapType t = multimapType_(m);
+            const bool tierChanged = t != lastType;
+            lastType = t;
+
+            /* Full positional sweep at tier entry and periodically */
+            if (tierChanged || (inserted % 149) == 0 || inserted <= 4) {
+                switch (t) {
+                case MULTIMAP_TYPE_SMALL:
+                    sawSmall = true;
+                    break;
+                case MULTIMAP_TYPE_MEDIUM:
+                    sawMedium = true;
+                    break;
+                case MULTIMAP_TYPE_FULL:
+                    sawFull = true;
+                    break;
+                default:
+                    assert(NULL);
+                }
+
+                for (int i = 0; i < inserted; i++) {
+                    assert(multimapLookupByPosition(m, i, row));
+                    assert(rv.data.i == i);
+                    assert(multimapLookupByPosition(m, i - inserted, row));
+                    assert(rv.data.i == i);
+                }
+
+                assert(!multimapLookupByPosition(m, inserted, row));
+                assert(!multimapLookupByPosition(m, -inserted - 1, row));
+            }
+        }
+
+        assert(sawSmall && sawMedium && sawFull);
+
+        /* Delete every row positionally (alternating ends and middle)
+         * until empty; count and verifier stay exact throughout. */
+        int64_t remaining = 600;
+        int which = 0;
+        while (remaining > 0) {
+            const int64_t pos = (which % 3 == 0)   ? 0
+                                : (which % 3 == 1) ? -1
+                                                   : remaining / 2;
+            assert(multimapDeleteByPosition(&m, pos));
+            remaining--;
+            which++;
+            assert((int64_t)multimapCount(m) == remaining);
+            if ((remaining % 97) == 0) {
+                multimapVerify(m);
+            }
+        }
+
+        assert(!multimapDeleteByPosition(&m, 0));
         multimapFree(m);
     }
 

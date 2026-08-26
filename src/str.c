@@ -575,6 +575,37 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("StrBloom / StrBloomBig: full bit range usable") {
+        /* 64-bit filter round-trip */
+        StrBloomFilter small = 0;
+        StrBloomSet(small, 3);
+        StrBloomSet(small, 63);
+        assert(StrBloomTest(small, 3));
+        assert(StrBloomTest(small, 63));
+        assert(!StrBloomTest(small, 4));
+
+        /* 128-bit filter: high-half positions (>= 64) must be REAL bits
+         * distinct from their (x & 63) aliases, and each position must
+         * set exactly one bit. */
+        StrBloomFilterBig big = 0;
+        StrBloomBigSet(big, 100);
+        assert(StrBloomBigTest(big, 100));
+        assert(!StrBloomBigTest(big, 100 & 63)); /* no low-half aliasing */
+        assert(!StrBloomBigTest(big, 99));
+
+        StrBloomBigSet(big, 127);
+        StrBloomBigSet(big, 0);
+        assert(StrBloomBigTest(big, 127));
+        assert(StrBloomBigTest(big, 0));
+
+        /* every position 0..127 sets a distinct single bit */
+        for (uint32_t i = 0; i < 128; i++) {
+            StrBloomFilterBig one = 0;
+            StrBloomBigSet(one, i);
+            assert(one == ((StrBloomFilterBig)1 << i));
+        }
+    }
+
     /* ====================================================================
      * Stress tests for SIMD vs baseline implementations - run first!
      * ==================================================================== */

@@ -2,20 +2,29 @@
 
 ## Overview
 
-`ptrPrevNext` provides **compact storage for doubly-linked list node pointers** using variable-length integer encoding. Instead of storing full 64-bit pointers (24 bytes total for atom index + prev + next), it uses 1-9 bytes per value through varint encoding.
+`ptrPrevNext` provides **compact storage for doubly-linked list node pointers**
+using variable-length integer encoding. Instead of storing three full 64-bit
+words (24 bytes for atom index + prev + next), it uses 2-9 bytes per value
+through `varintSplitFull16` encoding.
 
 **Key Features:**
 
-- Variable-length encoding (1-9 bytes per value)
+- Variable-length encoding, 2-9 bytes per value (6-27 bytes per entry)
 - Stores atom index + previous offset + next offset
 - Automatic memory management with gap filling
-- 6-byte alignment for spatial locality
-- Dynamic growth when space exhausted
+- All entries start on a 6-byte boundary
+- Dynamic growth when space exhausted, sized through
+  [jebuf](JEBUF.md)'s size classes
 - In-place updates when possible, relocates when necessary
+- Handles are integer offsets, so they survive pool reallocation
 
 **Header**: `ptrPrevNext.h`
 
 **Source**: `ptrPrevNext.c`
+
+> **Handle 0 is a real, valid handle.** The first entry added always returns 0.
+> Do not use 0 as a null/sentinel value for handles — track emptiness
+> separately (a count, or a separate `hasHead` flag).
 
 ## What is Compact Pointer Storage?
 
@@ -36,29 +45,36 @@ For 1 million nodes: **24 MB** just for pointers!
 ptrPrevNext uses **varint encoding** for compact storage:
 
 ```c
-/* For small indices (< 128): 1 byte each
-   Total: 3 bytes (atom + prev + next)
+/* varintSplitFull16 has a TWO byte minimum:
 
-   For medium indices (< 16,384): 2 bytes each
-   Total: 6 bytes
-
-   For large indices (< 2,097,152): 3 bytes each
-   Total: 9 bytes
+   Values <= 16,383:        2 bytes each -> 6 bytes per entry
+   Values <= 4,210,686:     3 bytes each -> 9 bytes per entry
+   Values <= 1,077,952,509: 4 bytes each -> 12 bytes per entry
+   ... up to 9 bytes each  -> 27 bytes per entry (full 64-bit values)
 */
 ```
 
-For 1 million nodes with typical values: **~3-6 MB** savings!
+For a million nodes whose values all fit in 14 bits, that is 6 MB instead of
+24 MB.
 
 ## Data Structure
 
+The public header exposes only an opaque type and the handle typedef:
+
 ```c
-typedef struct ptrPrevNext {
+typedef struct ptrPrevNext ptrPrevNext;  /* opaque - defined in ptrPrevNext.c */
+typedef size_t ptrPrevNextPtr;           /* handle, NOT a pointer or byte offset */
+```
+
+Internals, for understanding only — none of these fields are reachable from
+outside `ptrPrevNext.c`:
+
+```c
+struct ptrPrevNext {
     memspace ms;  /* Internal memory space */
-} ptrPrevNext;
+};
 
-typedef size_t ptrPrevNextPtr;  /* Offset handle (not actual pointer) */
-
-/* Internal memspace structure */
+/* Internal memspace structure (40 bytes on 64-bit) */
 typedef struct memspace {
     void *mem;           /* Memory pool */
     size_t bestFree;     /* Offset to best free space */
@@ -79,44 +95,46 @@ typedef struct memspace {
 │             Unused Memory                  │  writeFromEnd → len
 └────────────────────────────────────────────┘
 
-Each entry (6-byte aligned):
+Each entry starts on a 6-byte boundary:
 ┌──────────┬──────────┬──────────┐
-│  atom    │   prev   │   next   │  Variable length (3-27 bytes)
+│  atom    │   prev   │   next   │  Variable length (6-27 bytes)
 │ (varint) │ (varint) │ (varint) │
 └──────────┴──────────┴──────────┘
 ```
 
 ### Spatial Offset Alignment
 
-All entries are **6-byte aligned** (`SPATIAL_OFFSET = 6`):
+All entries start at a multiple of 6 (`SPATIAL_OFFSET = 6`):
 
 ```c
 #define SPATIAL_OFFSET 6
 
-/* Offsets must be divisible by 6 */
+/* Byte offsets must be divisible by 6 */
 Offset 0   → OK
 Offset 6   → OK
 Offset 12  → OK
-Offset 7   → NOT ALLOWED (aligned to 12)
+Offset 7   → NOT ALLOWED (rounded up to 12)
 ```
 
-**Why 6 bytes?**
-
-- Minimum entry size is 3 bytes (3 × 1-byte varints)
-- Allows 2 minimum entries per alignment
-- Good trade-off between alignment overhead and flexibility
+**Why 6 bytes?** `varintSplitFull16` has a two-byte minimum, so the smallest
+possible entry is exactly 3 × 2 = 6 bytes. Aligning to that lets a handle be
+stored as `byteOffset / 6`, shrinking the handle itself.
 
 ## Varint Encoding
 
-ptrPrevNext uses **varintSplitFull16** encoding:
+ptrPrevNext uses **varintSplitFull16** encoding, which is 2 to 9 bytes wide
+(never 1):
 
-```c
-Value Range          Bytes   Encoding
-0 - 127             1       0xxxxxxx
-128 - 16,383        2       10xxxxxx xxxxxxxx
-16,384 - 2,097,151  3       110xxxxx xxxxxxxx xxxxxxxx
-...
-Up to 16 bytes for very large values
+```
+Bytes  Max value                Note
+2      16,383                   minimum width
+3      4,210,686
+4      1,077,952,509
+5      5,372,919,804            (~5 G)
+6      1,100,589,580,284        (~1 T)
+7      281,476,054,663,164      (~281 T)
+8      72,057,595,115,880,444   (~72 P)
+9      18,446,744,073,709,551,615 (full uint64_t)
 ```
 
 ### Encoding Examples
@@ -125,18 +143,20 @@ Up to 16 bytes for very large values
 atomIndex = 100, prevOffset = 50, nextOffset = 200
 
 Encoded as:
-- atomIndex: 100 → 1 byte [0x64]
-- prevOffset: 50 → 1 byte [0x32]
-- nextOffset: 200 → 2 bytes [0x80, 0xC8]
-Total: 4 bytes
+- atomIndex:  100 → 2 bytes (all values <= 16383 take 2 bytes)
+- prevOffset:  50 → 2 bytes
+- nextOffset: 200 → 2 bytes
+Total: 6 bytes, exactly one aligned slot
 
-If indices were full pointers:
-- atomIndex: 8 bytes
-- prevOffset: 8 bytes
-- nextOffset: 8 bytes
-Total: 24 bytes
+Three raw 64-bit words would be 24 bytes.
 
-Savings: 20 bytes (83%)!
+Savings: 18 bytes (75%)
+
+/* A worst case: three full-width values */
+atomIndex = prevOffset = nextOffset = UINT64_MAX
+- 9 + 9 + 9 = 27 bytes, rounded up to the next 6-byte boundary (30)
+Still better than 24 bytes? No - this is the case where the encoding
+costs more than raw words. Keep your indices small.
 ```
 
 ## API Reference
@@ -169,20 +189,24 @@ ptrPrevNextFree(ppn);
  * atomIndex: index of the atom/node
  * prevOffset: offset to previous node
  * nextOffset: offset to next node
- * Returns: memory offset handle (divide by 6 for storage offset)
+ * Returns: a handle, already divided down by 6.
+ *          Multiply by 6 to get the raw byte offset; the API never
+ *          asks you to do that, and you should not.
  */
 size_t ptrPrevNextAdd(ptrPrevNext *ppn,
                       const size_t atomIndex,
                       const size_t prevOffset,
                       const size_t nextOffset);
 
-/* Example: Building a linked list */
+/* Example: Building a linked list.
+ * NOTE: the FIRST handle returned is 0, so a separate flag - not a
+ * 0 handle - has to mark "no node". */
 ptrPrevNext *ppn = ptrPrevNextNew();
 
 /* Add first node (atom 0, no prev/next) */
-ptrPrevNextPtr ptr0 = ptrPrevNextAdd(ppn, 0, 0, 0);
+ptrPrevNextPtr ptr0 = ptrPrevNextAdd(ppn, 0, 0, 0);  /* ptr0 == 0 */
 
-/* Add second node (atom 1, prev=0, no next) */
+/* Add second node (atom 1, prev=ptr0, no next) */
 ptrPrevNextPtr ptr1 = ptrPrevNextAdd(ppn, 1, ptr0, 0);
 
 /* Add third node (atom 2, prev=ptr1, no next) */
@@ -260,11 +284,14 @@ ptrPrevNextRelease(ppn, ptr1);
 ### Example 1: Doubly-Linked List Implementation
 
 ```c
+/* Handle 0 is a valid handle, so this list carries an explicit
+ * `hasNext` bit per node instead of overloading 0 as "null". The bits
+ * live outside ptrPrevNext, which only stores three integers. */
 typedef struct compactList {
     ptrPrevNext *storage;
     ptrPrevNextPtr head;
     ptrPrevNextPtr tail;
-    size_t length;
+    size_t length;          /* 0 means head/tail are meaningless */
     size_t nextAtomIndex;
 } compactList;
 
@@ -274,7 +301,7 @@ compactList *compactListCreate(void) {
     list->head = 0;
     list->tail = 0;
     list->length = 0;
-    list->nextAtomIndex = 1; // Start from 1 (0 means null)
+    list->nextAtomIndex = 0;
     return list;
 }
 
@@ -304,9 +331,12 @@ void compactListAppend(compactList *list, void *data) {
 }
 
 void compactListIterate(compactList *list) {
+    /* Walk by COUNT, not by a 0 sentinel: handle 0 is the first real
+     * entry, so `while (current != 0)` would stop before visiting it
+     * (or loop forever once it wraps back to 0). */
     ptrPrevNextPtr current = list->head;
 
-    while (current != 0) {
+    for (size_t i = 0; i < list->length; i++) {
         size_t atom, prev, next;
         ptrPrevNextRead(list->storage, current, &atom, &prev, &next);
 
@@ -388,15 +418,20 @@ void compareMemoryUsage(size_t nodeCount) {
     printf("Traditional: %zu nodes × 24 bytes = %zu bytes\n",
            nodeCount, traditional);
 
-    /* ptrPrevNext approach */
+    /* ptrPrevNext approach.
+     * The struct is opaque, so pool usage is not queryable from outside;
+     * compute it from the entry width instead. Under DATAKIT_TEST,
+     * ptrPrevNextRepr() prints the real internal counters. */
     ptrPrevNext *ppn = ptrPrevNextNew();
 
     for (size_t i = 0; i < nodeCount; i++) {
         ptrPrevNextAdd(ppn, i, i > 0 ? i - 1 : 0, 0);
     }
 
-    size_t compact = ppn->ms.writeFromEnd;
-    printf("ptrPrevNext: %zu bytes (actual used)\n", compact);
+    /* All indices below fit in 14 bits here, so every entry is the
+     * 6-byte minimum. */
+    size_t compact = nodeCount * 6;
+    printf("ptrPrevNext: %zu bytes (entries only)\n", compact);
 
     float savings = (1.0 - (float)compact / traditional) * 100;
     printf("Savings: %.1f%%\n", savings);
@@ -406,7 +441,7 @@ void compareMemoryUsage(size_t nodeCount) {
 
 /* Example output for 10,000 nodes:
    Traditional: 10000 nodes × 24 bytes = 240000 bytes
-   ptrPrevNext: 60000 bytes (actual used)
+   ptrPrevNext: 60000 bytes (entries only)
    Savings: 75.0%
 */
 ```
@@ -417,7 +452,7 @@ void compareMemoryUsage(size_t nodeCount) {
 void demonstrateRelocation(void) {
     ptrPrevNext *ppn = ptrPrevNextNew();
 
-    /* Add entry with small values (uses ~3 bytes) */
+    /* Add entry with small values (three 2-byte varints = 6 bytes) */
     ptrPrevNextPtr ptr = ptrPrevNextAdd(ppn, 10, 5, 15);
     printf("Initial offset: %zu\n", ptr);
 
@@ -467,37 +502,50 @@ Total pool overhead:
 
 ### Space Savings
 
+Per entry, all three values in the same width class:
+
 ```
-Value Range       Traditional  ptrPrevNext  Savings
-0-127            24 bytes     3 bytes      87.5%
-128-16,383       24 bytes     6 bytes      75.0%
-16,384-2M        24 bytes     9 bytes      62.5%
-2M-268M          24 bytes     12 bytes     50.0%
+Value Range           Traditional  ptrPrevNext  Savings
+<= 16,383             24 bytes     6 bytes      75.0%
+<= 4,210,686          24 bytes     9 bytes      62.5%
+<= 1,077,952,509      24 bytes     12 bytes     50.0%
+<= ~5 G               24 bytes     15 bytes     37.5%
+<= ~1 T               24 bytes     18 bytes     25.0%
+<= ~281 T             24 bytes     21 bytes     12.5%
+<= ~72 P              24 bytes     24 bytes      0.0%
+full uint64_t         24 bytes     27 bytes    -12.5% (worse)
 ```
+
+The encoding only pays off while indices stay small. Above ~72 P per value it
+costs more than three raw words.
 
 ## Memory Management
 
 ### Automatic Growth
 
 ```c
-/* Pool starts at 4096 bytes */
+/* Pool starts at 4096 bytes, zero-filled */
 ptrPrevNext *ppn = ptrPrevNextNew();
 
-/* When full, automatically grows by 1.5× */
+/* When an add cannot fit, the pool grows by 1.5x and the result is
+ * then rounded up to a jemalloc size class via jebufSizeAllocation(),
+ * so the real steps follow jebuf's table rather than exact 1.5x. */
 for (int i = 0; i < 10000; i++) {
     ptrPrevNextAdd(ppn, i, i, i);
-    // Grows: 4096 → 6144 → 9216 → 13824 → ...
 }
 ```
+
+Growth uses `zrealloc`, so the pool's base address can move. Handles are
+integer offsets and stay valid across growth; raw pointers into the pool do not.
 
 ### Gap Filling
 
 When entries are released or relocated, gaps are created:
 
 ```c
-ptrPrevNextPtr ptr1 = ptrPrevNextAdd(ppn, 1, 0, 0);  // Offset 0
-ptrPrevNextPtr ptr2 = ptrPrevNextAdd(ppn, 2, 0, 0);  // Offset 6
-ptrPrevNextPtr ptr3 = ptrPrevNextAdd(ppn, 3, 0, 0);  // Offset 12
+ptrPrevNextPtr ptr1 = ptrPrevNextAdd(ppn, 1, 0, 0);  // handle 0, byte offset 0
+ptrPrevNextPtr ptr2 = ptrPrevNextAdd(ppn, 2, 0, 0);  // handle 1, byte offset 6
+ptrPrevNextPtr ptr3 = ptrPrevNextAdd(ppn, 3, 0, 0);  // handle 2, byte offset 12
 
 ptrPrevNextRelease(ppn, ptr2);  // Creates gap at offset 6
 
@@ -513,11 +561,15 @@ The allocator tracks `bestFree` and `bestFreeLen` to reuse gaps.
 
 ```c
 /* GOOD - keep indices small when possible */
-size_t atomIndex = 100;  // Uses 1 byte in varint
+size_t atomIndex = 100;  // 2 bytes (the minimum width)
 
 /* BAD - unnecessarily large indices */
-size_t atomIndex = (size_t)-1;  // Uses 9 bytes in varint!
+size_t atomIndex = (size_t)-1;  // 9 bytes, and forces a wide entry
 ```
+
+There is no width below 2 bytes, so shrinking a value from 100 to 5 saves
+nothing. What matters is staying under each width threshold: 16,383 then
+4,210,686 then 1,077,952,509.
 
 ### 2. Handle Relocation
 
@@ -556,13 +608,31 @@ ptrPrevNextRelease(ppn, ptr);
 ### 1. Using Offset as Pointer
 
 ```c
-/* WRONG - offset is not a pointer! */
+/* WRONG - a handle is not a pointer, and not even a byte offset */
 ptrPrevNextPtr off = ptrPrevNextAdd(ppn, 1, 0, 0);
 size_t *ptr = (size_t *)off; // CRASH!
 
 /* RIGHT - read through API */
 size_t atom, prev, next;
 ptrPrevNextRead(ppn, off, &atom, &prev, &next);
+```
+
+### 1b. Treating Handle 0 as Null
+
+```c
+/* WRONG - 0 is the first entry's handle, not "no entry" */
+ptrPrevNextPtr head = ptrPrevNextAdd(ppn, 1, 0, 0);  /* head == 0 */
+if (head) {                    /* false! */
+    ptrPrevNextRead(ppn, head, ...);
+}
+
+/* RIGHT - track presence separately */
+bool haveHead = false;
+ptrPrevNextPtr head = ptrPrevNextAdd(ppn, 1, 0, 0);
+haveHead = true;
+if (haveHead) {
+    ptrPrevNextRead(ppn, head, ...);
+}
 ```
 
 ### 2. Not Updating After Relocation
@@ -581,11 +651,16 @@ ptrPrevNextRead(ppn, ptr, ...); // Safe
 
 ### 3. Expecting Stable Offsets
 
+Handles stay valid across pool growth — they are integer offsets, not addresses.
+Raw pointers into the pool do not, because growth goes through `zrealloc`. The
+struct is opaque precisely so you cannot reach the base pointer and cache it;
+always go back through `ptrPrevNextRead` after any `Add` or `Update`.
+
 ```c
-/* Pool may grow and relocate memory */
-void *rawPtr = ppn->ms.mem; // DON'T STORE THIS
-// ... add more entries ...
-// rawPtr is now invalid if pool grew!
+/* This is why there is no accessor for the pool base:
+ * add/update may zrealloc, moving every byte in the pool. */
+size_t atom, prev, next;
+ptrPrevNextRead(ppn, handle, &atom, &prev, &next);  /* re-read, don't cache */
 ```
 
 ## Debugging
@@ -610,8 +685,9 @@ ptrPrevNextRepr(ppn);
 
 ## See Also
 
-- [list](../../utils/LIST.md) - Traditional doubly-linked list (for comparison)
+- [list](../utils/LIST.md) - Traditional doubly-linked list (for comparison)
 - [offsetArray](OFFSET_ARRAY.md) - Sparse array storage
+- [jebuf](JEBUF.md) - size classes used when the pool grows
 - [Varint Encoding](https://github.com/mattsta/varint) - Variable-length integer encoding
 
 ## Testing
@@ -619,7 +695,7 @@ ptrPrevNextRepr(ppn);
 Run the ptrPrevNext test suite:
 
 ```bash
-./src/datakit-test test ptrPrevNext
+./src/datakit-test test ptrPrevNext   # alias: ppn
 ```
 
 The test suite validates:

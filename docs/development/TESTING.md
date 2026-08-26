@@ -14,92 +14,167 @@ This guide covers how to run tests, write new tests, and work with the test fram
 
 ### Building the Test Binary
 
-Tests are built automatically when you build the project:
+The test binary is one of the four targets every build preset builds:
 
-```bash
-mkdir build
-cd build
-cmake ..
-make -j8
+```sh
+cmake --preset dev && cmake --build --preset dev
 ```
 
-The test binary will be created at `./src/datakit-test`.
+That produces `build-dev/src/datakit-test`. Substitute `debug`, `perf`,
+or `safe` for a different configuration (see
+[BUILDING.md](BUILDING.md)). A plain `mkdir build && cd build && cmake
+.. && make -j8` also works and puts the binary at `build/src/datakit-test`.
 
 To skip building the test binary (for production builds):
 
-```bash
+```sh
 cmake -DBuildTestBinary=OFF ..
-make -j8
+```
+
+### The datakit-test verb grammar
+
+`datakit-test` takes a command as its first argument:
+
+| Invocation       | Behavior                                               |
+| ---------------- | ------------------------------------------------------ |
+| _(no arguments)_ | Print usage and exit non-zero                          |
+| `help`           | Print usage                                            |
+| `list`           | List every registered test with its aliases            |
+| `list --json`    | Same listing as JSON, plus a `count` field             |
+| `test <name>`    | Run one test (name or alias, case-insensitive)         |
+| `test ALL`       | Run every registered test                              |
+| `bench <name>`   | Run a benchmark (`mdsbench`, `mdscbench`)              |
+| `speed [opts]`   | Run the dataspeed system benchmark (`--json`, `--csv`) |
+
+`test ALL` runs the whole suite and takes a long time. In day-to-day
+work, run only the tests covering what you changed, and batch them with
+ctest when you need several.
+
+### Discovering test names
+
+The registry in `src/datakit-test.c` is the single source of truth. Ask
+the binary rather than trusting a hand-maintained list:
+
+```sh
+./build-dev/src/datakit-test list
+./build-dev/src/datakit-test list --json
 ```
 
 ### Running Individual Tests
 
-Run a specific test by name:
-
-```bash
-./src/datakit-test test <test_name>
+```sh
+./build-dev/src/datakit-test test <name>
 ```
 
-Available tests include:
+Frequently used names, with aliases in comments:
 
-```bash
-# Data structure tests
-./src/datakit-test test flex
-./src/datakit-test test mflex
-./src/datakit-test test multimap
-./src/datakit-test test multimapFull
-./src/datakit-test test multilist
-./src/datakit-test test multilistFull
-./src/datakit-test test multiarray
-./src/datakit-test test multiarraySmall
-./src/datakit-test test multiarrayMedium
-./src/datakit-test test multiarrayLarge
-./src/datakit-test test multimapatom
-./src/datakit-test test multilru
-./src/datakit-test test multiroar
+```sh
+# Containers
+./build-dev/src/datakit-test test flex
+./build-dev/src/datakit-test test mflex
+./build-dev/src/datakit-test test multimap        # multimapFull, multimapMedium, multimapAtom (atom)
+./build-dev/src/datakit-test test multilist       # ml; also multilistFull
+./build-dev/src/datakit-test test multiarray      # multiarraySmall / Medium / Large
+./build-dev/src/datakit-test test multidict
+./build-dev/src/datakit-test test multiroar
+./build-dev/src/datakit-test test multilru        # lru, mlru
+./build-dev/src/datakit-test test multiOrderedSet # mos
+./build-dev/src/datakit-test test list
+./build-dev/src/datakit-test test ptrPrevNext     # ppn
 
-# Utility tests
-./src/datakit-test test intset
-./src/datakit-test test intsetU32
-./src/datakit-test test hll              # HyperLogLog
-./src/datakit-test test dod
-./src/datakit-test test xof
-./src/datakit-test test fibbuf
-./src/datakit-test test jebuf
-./src/datakit-test test membound
-./src/datakit-test test ptrprevnext
-./src/datakit-test test strDoubleFormat
+# Numeric / set types
+./build-dev/src/datakit-test test intset
+./build-dev/src/datakit-test test intsetU32
+./build-dev/src/datakit-test test hyperloglog     # hll
+./build-dev/src/datakit-test test linearBloom     # bloom
+./build-dev/src/datakit-test test float16         # f16
+./build-dev/src/datakit-test test fenwickI64      # fw, bit, fenwick
+./build-dev/src/datakit-test test segmentI64      # seg, segtree, segment
+./build-dev/src/datakit-test test multiFenwick    # mfw, mbit
 
-# String tests
-./src/datakit-test test str
-./src/datakit-test test mds
-./src/datakit-test test mdsc
-./src/datakit-test test util
+# Encoding / compression
+./build-dev/src/datakit-test test dod
+./build-dev/src/datakit-test test xof
+./build-dev/src/datakit-test test compressionBench # compress, cbench
 
-# Other
-./src/datakit-test test databox
-./src/datakit-test test offsetArray
+# Strings
+./build-dev/src/datakit-test test str
+./build-dev/src/datakit-test test strDoubleFormat
+./build-dev/src/datakit-test test mds
+./build-dev/src/datakit-test test mdsc
+
+# Buffers, memory, utilities
+./build-dev/src/datakit-test test fibbuf
+./build-dev/src/datakit-test test jebuf
+./build-dev/src/datakit-test test ptrlib
+./build-dev/src/datakit-test test bigmath
+./build-dev/src/datakit-test test membound
+./build-dev/src/datakit-test test memtest
+./build-dev/src/datakit-test test databox         # also databoxLinear
+./build-dev/src/datakit-test test offsetArray
+./build-dev/src/datakit-test test util
+./build-dev/src/datakit-test test ulid
+./build-dev/src/datakit-test test bbits
+
+# Timers
+./build-dev/src/datakit-test test timerWheel      # tw
+./build-dev/src/datakit-test test multiTimer      # timer
+./build-dev/src/datakit-test test timeUtil        # time
+
+# Persistence
+./build-dev/src/datakit-test test persist
+./build-dev/src/datakit-test test persistCtx      # pctx
+./build-dev/src/datakit-test test multimapP       # mmP; also multilistP, multidictP, flexP,
+                                                  # intsetP, multiOrderedSetP, multiroarP, multilruP
+
+# Hashing, MAC, AEAD, envelope
+./build-dev/src/datakit-test test blake3          # b3; also blake3Neon, blake3SSE41, blake3AVX2
+./build-dev/src/datakit-test test sha256          # also sha256ArmCrypto, sha256ShaNi
+./build-dev/src/datakit-test test hmac
+./build-dev/src/datakit-test test hmacKeyring     # keyring
+./build-dev/src/datakit-test test chacha20poly1305 # c20, chacha, aead-prim
+./build-dev/src/datakit-test test aesGcm          # aes, aesgcm
+./build-dev/src/datakit-test test x25519          # ecdh
+./build-dev/src/datakit-test test rapidhash       # rh, rapid
+./build-dev/src/datakit-test test flexEnvelope    # fenv, env
+./build-dev/src/datakit-test test aeadNonceLog    # noncelog, nonce-log
+
+# Cluster
+./build-dev/src/datakit-test test clusterRing     # ring, cluster, chr
+./build-dev/src/datakit-test test clusterMailbox  # mailbox, mb
+./build-dev/src/datakit-test test clusterReplicator # replicator, rep
+
+# Regression gate
+./build-dev/src/datakit-test test perfRegression  # perf-baseline, perfbase
 ```
+
+Several dozen narrow, focused crypto and cluster checks are registered
+alongside these (for example `envelopeZeroCopy`, `keyringPersistOps`,
+`mailboxRestoreFuzz`). Use `list` to see them all.
 
 ### Running All Tests
 
-Run all tests at once:
-
-```bash
-./src/datakit-test test ALL
+```sh
+./build-dev/src/datakit-test test ALL
 ```
 
-Or use CMake's test runner:
+CMake auto-discovers one CTest target per registered test by parsing
+the registry out of `src/datakit-test.c`, so ctest is the better way to
+run more than one:
 
-```bash
-make check
+```sh
+# Everything, 8 at a time
+ctest --test-dir build-dev -j8 --output-on-failure
+
+# Just the tests you touched
+ctest --test-dir build-dev -j8 -R '^(flex|mflex|multimap)$'
 ```
 
-Or using ctest directly:
+Two convenience targets wrap ctest:
 
-```bash
-ctest -VV  # Very verbose output
-ctest      # Regular output
+```sh
+cmake --build build-dev --target datakit-check       # ctest -VV
+cmake --build build-dev --target datakit-quickcheck  # ctest --output-on-failure
 ```
 
 ### Test Exit Codes
@@ -112,7 +187,10 @@ ctest      # Regular output
 
 ### Overview
 
-Datakit uses a custom lightweight testing framework called `ctest`, defined in `/home/user/datakit/src/ctest.h`. Tests are embedded directly in the source files and compiled conditionally based on the `DATAKIT_TEST` preprocessor flag.
+datakit uses a custom lightweight testing framework defined in
+`src/ctest.h` (unrelated to CMake's `ctest` runner). Tests are embedded
+directly in the source files and compiled conditionally based on the
+`DATAKIT_TEST` preprocessor flag.
 
 ### Key Macros
 
@@ -238,40 +316,41 @@ int myModuleTest(int argc, char *argv[]) {
 
 ### Adding Test to Test Runner
 
-After writing your test, add it to `/home/user/datakit/src/datakit-test.c`:
+There is exactly one place to register a test: the `testRegistry[]`
+table in `src/datakit-test.c`. `test ALL` walks that table, and
+`src/CMakeLists.txt` parses it at configure time to generate the CTest
+targets — so nothing else needs editing.
 
-1. Include your header:
+1. Include your header in `src/datakit-test.c`:
 
 ```c
 #include "mymodule.h"
 ```
 
-2. Add test case in the `main()` function:
+2. Add one entry to `testRegistry[]`, picking the macro that matches
+   your test function:
 
 ```c
-} else if (!strcasecmp(argv[2], "mymodule")) {
-    return myModuleTest(argc - 2, argv + 2);
+/* Plain: test name is the function prefix, args passed through */
+T(myModule),
+
+/* With aliases (comma-separated, matched case-insensitively) */
+T_A(myModule, "mm,mymod"),
+
+/* Adjusted args: the test sees argc - 2 / argv + 2, so argv[0] is
+ * the first argument AFTER "test <name>" */
+T_ADJ(myModule),
+
+/* Aliases plus adjusted args */
+T_A_ADJ(myModule, "mm,mymod"),
 ```
 
-3. Add to the ALL test suite:
+3. Rebuild. `datakit-test list` and `ctest -N` should both show the new
+   name.
 
-```c
-} else if (!strcasecmp(argv[2], "ALL")) {
-    uint32_t result = 0;
-    // ... existing tests ...
-    result += myModuleTest(argc, argv);
-    return result;
-}
-```
-
-4. Add to CMake test list in `/home/user/datakit/src/CMakeLists.txt`:
-
-```cmake
-set(datakitTests
-    # ... existing tests ...
-    mymodule
-    )
-```
+A test that only compiles under a feature guard belongs inside the same
+`#if` in the registry, and needs a matching removal in the CMake
+discovery block (see how `intsetBig` is handled for `__int128`).
 
 ## Test Coverage
 
@@ -291,7 +370,7 @@ Run tests under valgrind to detect memory leaks:
 
 ```bash
 valgrind --leak-check=full --show-leak-kinds=all \
-         ./src/datakit-test test flex
+         ./build-debug/src/datakit-test test flex
 ```
 
 For all tests:
@@ -299,10 +378,14 @@ For all tests:
 ```bash
 for test in flex multimap multilist; do
     echo "Testing $test..."
-    valgrind --leak-check=full ./src/datakit-test test $test 2>&1 | \
+    valgrind --leak-check=full ./build-debug/src/datakit-test test $test 2>&1 | \
         grep -E "definitely lost|indirectly lost|ERROR SUMMARY"
 done
 ```
+
+The `dev`, `debug`, and `safe` presets already build with ASAN and
+UBSAN, which catch most of what valgrind would — reach for valgrind
+when you need its specific reports or a sanitizer-free binary.
 
 ### Performance Testing
 
@@ -312,72 +395,67 @@ Some tests include timing information. Watch for output like:
 SUCCESS (0.123456 sec total; 0.012345 sec deletion; 1,234,567 total bytes)
 ```
 
-You can also use the dedicated speed test:
+`speed` is its own top-level command, not a test name:
 
-```bash
-./src/datakit-test test speed <arg1> <arg2>
+```sh
+./build-perf/src/datakit-test speed            # defaults: 64 MB working set
+./build-perf/src/datakit-test speed 64 10      # 64 MB, 10 legacy iterations
+./build-perf/src/datakit-test speed --json     # machine-readable
 ```
+
+Always measure with the `perf` preset. Sanitizer builds add 3-10x
+overhead and invalidate every number.
 
 ## Continuous Integration
 
 ### Pre-commit Testing
 
-Before committing, run the full test suite:
+Test what you changed, by name:
 
-```bash
-cd build
-make clean
-make -j8
-make check
+```sh
+cmake --build --preset dev
+./build-dev/src/datakit-test test <name>
+ctest --test-dir build-dev -j8 -R '^(<name>|<other>)$'
 ```
 
-Or test individual modules you modified:
+The full suite is long; run it deliberately rather than as a reflex:
 
-```bash
-./src/datakit-test test <module_name>
+```sh
+ctest --test-dir build-dev -j8 --output-on-failure
 ```
 
-### Release Testing
+### Configuration Coverage
 
-For release builds, test with optimizations enabled:
+Before a release, run the suite under more than one preset — the
+sanitizer builds and the optimized build find different bugs:
 
-```bash
-mkdir build-release
-cd build-release
-cmake -DCMAKE_BUILD_TYPE=Release ..
-make -j8
-./src/datakit-test test ALL
-```
+```sh
+cmake --preset safe && cmake --build --preset safe
+ctest --test-dir build-safe -j8 --output-on-failure
 
-### Platform Testing
-
-Test on both debug and release configurations:
-
-```bash
-# Debug build (default)
-mkdir build-debug
-cd build-debug
-cmake -DCMAKE_BUILD_TYPE=Debug ..
-make -j8
-make check
-
-# Release build
-mkdir build-release
-cd build-release
-cmake -DCMAKE_BUILD_TYPE=Release ..
-make -j8
-make check
+cmake --preset perf && cmake --build --preset perf
+ctest --test-dir build-perf -j8 --output-on-failure
 ```
 
 ## Benchmarking
 
-Some modules include benchmark tests:
+Benchmarks live in a separate registry and use the `bench` verb:
 
-```bash
-./src/datakit-test test mdsbench
-./src/datakit-test test mdscbench
-./src/datakit-test test allstr  # Runs both tests and benchmarks
+```sh
+./build-perf/src/datakit-test bench mdsbench
+./build-perf/src/datakit-test bench mdscbench
 ```
+
+`allstr` is a pseudo-test that runs `mds`, `mdsbench`, `mdsc`, and
+`mdscbench` together:
+
+```sh
+./build-perf/src/datakit-test test allstr
+```
+
+Some benchmarks are registered as ordinary tests instead, such as
+`compressionBench` (aliases `compress`, `cbench`) and the
+`perfRegression` gate.
 
 ## Test Organization
 
@@ -385,8 +463,8 @@ Tests are organized as follows:
 
 - **Source Files**: Tests are at the end of implementation files (`.c`)
 - **Test Declarations**: Declared in headers with `#ifdef DATAKIT_TEST`
-- **Test Runner**: `/home/user/datakit/src/datakit-test.c` dispatches to individual tests
-- **CMake Integration**: Tests are registered in `/home/user/datakit/src/CMakeLists.txt`
+- **Test Runner**: `src/datakit-test.c` holds `testRegistry[]` and dispatches to individual tests
+- **CMake Integration**: `src/CMakeLists.txt` parses `testRegistry[]` and emits one CTest target per name
 
 ## Tips for Effective Testing
 
@@ -395,7 +473,7 @@ Tests are organized as follows:
 3. **Check edge cases**: Empty, single element, maximum size
 4. **Use meaningful error messages**: Include actual vs expected values
 5. **Test both success and failure paths**: Ensure error handling works
-6. **Avoid platform dependencies**: Tests should work on Linux and macOS
+6. **Avoid platform dependencies**: Tests should work on Linux, macOS, and BSD
 7. **Keep tests fast**: Aim for sub-second execution for individual tests
 8. **Test incrementally**: Add tests as you develop features
 
@@ -413,11 +491,13 @@ If you get "Test not found!" error:
 
 If tests crash:
 
-1. Run under GDB: `gdb --args ./src/datakit-test test <name>`
-2. Run with valgrind: `valgrind ./src/datakit-test test <name>`
-3. Check for uninitialized variables
-4. Verify all pointers before dereferencing
-5. Ensure proper cleanup of resources
+1. Run under a debugger: `lldb -- ./build-debug/src/datakit-test test <name>`
+   (macOS) or `gdb --args ./build-debug/src/datakit-test test <name>` (Linux)
+2. Rebuild under the `debug` or `safe` preset and read the sanitizer report
+3. Run with valgrind: `valgrind ./build-debug/src/datakit-test test <name>`
+4. Check for uninitialized variables
+5. Verify all pointers before dereferencing
+6. Ensure proper cleanup of resources
 
 ### Assertion Failures
 

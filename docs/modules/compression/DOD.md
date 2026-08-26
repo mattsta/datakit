@@ -111,15 +111,32 @@ typedef enum dodType {
     DOD_TYPE_TWELVE_NEGATIVE = 0x1d,
 
     DOD_TYPE_VAR_8 = 0xf0,          /* 8 bits type + 8 bits data */
+    DOD_TYPE_VAR_8_NEGATIVE = 0xf1,
     DOD_TYPE_VAR_16 = 0xf2,         /* 8 bits type + 16 bits data */
+    DOD_TYPE_VAR_16_NEGATIVE = 0xf3,
     DOD_TYPE_VAR_24 = 0xf4,         /* 8 bits type + 24 bits data */
+    DOD_TYPE_VAR_24_NEGATIVE = 0xf5,
     DOD_TYPE_VAR_32 = 0xf6,         /* 8 bits type + 32 bits data */
+    DOD_TYPE_VAR_32_NEGATIVE = 0xf7,
     DOD_TYPE_VAR_40 = 0xf8,         /* 8 bits type + 40 bits data */
+    DOD_TYPE_VAR_40_NEGATIVE = 0xf9,
     DOD_TYPE_VAR_48 = 0xfa,         /* 8 bits type + 48 bits data */
+    DOD_TYPE_VAR_48_NEGATIVE = 0xfb,
     DOD_TYPE_VAR_56 = 0xfc,         /* 8 bits type + 56 bits data */
-    DOD_TYPE_VAR_64 = 0xfe          /* 8 bits type + 64 bits data */
-} dodType;
+    DOD_TYPE_VAR_56_NEGATIVE = 0xfd,
+    DOD_TYPE_VAR_64 = 0xfe,         /* 8 bits type + 64 bits data */
+    DOD_TYPE_VAR_64_NEGATIVE = 0xff
+} __attribute__((packed)) dodType;
 ```
+
+Every non-zero type comes in a positive/negative pair: the low bit of the
+designator carries the sign, and the payload stores the magnitude. The
+designator patterns are chosen so the narrow types (3/4/5-bit designators)
+cannot be mistaken for the wide ones — each narrow designator ends in a `0`
+where the wide family has a `1`.
+
+`dodType` is private to `dod.c`; it is shown here to explain the wire format,
+not as a public API.
 
 ## API Functions
 
@@ -138,7 +155,7 @@ void dodCloseWrites(dodWriter *const w);
 
 /* Example: Basic writing */
 dodWriter writer = {0};
-writer.d = calloc(1024, sizeof(dod));
+writer.d = zcalloc(1024, sizeof(dod));
 writer.totalBytes = 1024 * sizeof(dod);
 
 /* First two values stored in t[2] */
@@ -157,7 +174,7 @@ printf("Compressed %zu values from %zu bits to %zu bits (%.2fx)\n",
        writer.count, writer.count * 64, writer.usedBits,
        (writer.count * 64.0) / writer.usedBits);
 
-free(writer.d);
+zfree(writer.d);
 ```
 
 ### Reading Data
@@ -184,12 +201,62 @@ dodInitFromExisting(&reader, reader.d);
 
 /* Random access */
 int64_t value = dodRead(&reader, 42);
-printf("Value at index 42: %ld\n", value);
+printf("Value at index 42: %" PRId64 "\n", value);
 
 /* Read all */
-int64_t *values = malloc(sizeof(int64_t) * count);
+int64_t *values = zmalloc(sizeof(int64_t) * count);
 dodReadAll(reader.d, (uint64_t *)values, count);
+zfree(values);
 ```
+
+### Resumable Reader (O(1) Sequential Access)
+
+`dodRead` is a **random**-access call: it replays the stream from the start
+every time, so walking a stream with it is quadratic. For sequential reads
+use `dodReader`, which carries the decode state forward:
+
+```c
+typedef struct dodReader {
+    size_t consumedBits; /* Bit position in the stream */
+    dodVal t0;           /* Second-to-last decoded value */
+    dodVal t1;           /* Last decoded value */
+    size_t valuesRead;   /* How many values decoded so far */
+} dodReader;
+
+/* Seed from the first two values (which live in the writer's t[2]) */
+void dodReaderInit(dodReader *r, dodVal firstVal, dodVal secondVal);
+
+/* Or seed directly from a writer */
+void dodReaderInitFromWriter(dodReader *r, const dodWriter *w);
+
+/* Decode the next value; O(1), advances the reader */
+dodVal dodReaderNext(dodReader *r, const dod *d);
+
+/* Peek the current value (returns t1) without advancing */
+dodVal dodReaderCurrent(const dodReader *r);
+
+/* Batch decode up to n values into out[]; returns how many were read */
+size_t dodReaderNextN(dodReader *r, const dod *d, dodVal *out, size_t n);
+
+/* Values left, given the total count you are tracking separately */
+size_t dodReaderRemaining(const dodReader *r, size_t totalCount);
+```
+
+```c
+/* Sequential walk in O(n) total instead of O(n^2) */
+dodReader r;
+dodReaderInitFromWriter(&r, &writer);
+
+/* Remaining shrinks as you read, so re-test it rather than
+ * caching it as a loop bound. */
+while (dodReaderRemaining(&r, writer.count) > 0) {
+    const dodVal v = dodReaderNext(&r, writer.d);
+    consume(v);
+}
+```
+
+The stream carries no count of its own, so `dodReaderRemaining` needs the
+total you already track (`writer.count`).
 
 ## Real-World Examples
 
@@ -205,9 +272,9 @@ typedef struct TimestampLog {
 } TimestampLog;
 
 TimestampLog *timestampLogNew(void) {
-    TimestampLog *log = malloc(sizeof(*log));
+    TimestampLog *log = zcalloc(1, sizeof(*log));
 
-    log->writer.d = calloc(4096, sizeof(dod));
+    log->writer.d = zcalloc(4096, sizeof(dod));
     log->writer.t[0] = 0;
     log->writer.t[1] = 0;
     log->writer.count = 0;
@@ -245,7 +312,7 @@ time_t timestampLogGetAt(TimestampLog *log, size_t index) {
 
 void timestampLogGetAll(TimestampLog *log, time_t **timestamps, size_t *count) {
     *count = log->writer.count;
-    *timestamps = malloc(sizeof(time_t) * (*count));
+    *timestamps = zmalloc(sizeof(time_t) * (*count));
 
     if (log->writer.count <= 2) {
         /* Values still in t[2] */
@@ -262,9 +329,11 @@ void timestampLogPrintStats(TimestampLog *log) {
 
     printf("Timestamp Log Statistics:\n");
     printf("  Entries: %zu\n", log->writer.count);
-    printf("  Duration: %ld seconds\n",
-           log->writer.count > 0 ?
-           timestampLogGetAt(log, log->writer.count - 1) - log->startTime : 0);
+    printf("  Duration: %" PRId64 " seconds\n",
+           log->writer.count > 0
+               ? (int64_t)(timestampLogGetAt(log, log->writer.count - 1) -
+                           log->startTime)
+               : (int64_t)0);
 
     if (log->writer.count > 2) {
         printf("  Uncompressed: %zu bits (%.2f KB)\n",
@@ -278,8 +347,8 @@ void timestampLogPrintStats(TimestampLog *log) {
 
 void timestampLogFree(TimestampLog *log) {
     if (log) {
-        free(log->writer.d);
-        free(log);
+        zfree(log->writer.d);
+        zfree(log);
     }
 }
 
@@ -298,7 +367,7 @@ void exampleTimestampLog(void) {
 
     /* Retrieve specific timestamp */
     time_t ts = timestampLogGetAt(log, 1800);  /* 30 minutes in */
-    printf("Timestamp at 30min: %ld\n", ts);
+    printf("Timestamp at 30min: %" PRId64 "\n", (int64_t)ts);
 
     timestampLogFree(log);
 }
@@ -317,10 +386,10 @@ typedef struct CounterArray {
 } CounterArray;
 
 CounterArray *counterArrayNew(void) {
-    CounterArray *array = malloc(sizeof(*array));
+    CounterArray *array = zcalloc(1, sizeof(*array));
 
     for (int i = 0; i < NUM_COUNTERS; i++) {
-        array->counters[i].d = calloc(1024, sizeof(dod));
+        array->counters[i].d = zcalloc(1024, sizeof(dod));
         array->counters[i].t[0] = 0;
         array->counters[i].t[1] = 0;
         array->counters[i].count = 0;
@@ -369,9 +438,9 @@ void counterArrayPrintStats(CounterArray *array) {
 void counterArrayFree(CounterArray *array) {
     if (array) {
         for (int i = 0; i < NUM_COUNTERS; i++) {
-            free(array->counters[i].d);
+            zfree(array->counters[i].d);
         }
-        free(array);
+        zfree(array);
     }
 }
 
@@ -417,16 +486,16 @@ typedef struct EventStream {
 } EventStream;
 
 EventStream *eventStreamNew(void) {
-    EventStream *stream = malloc(sizeof(*stream));
+    EventStream *stream = zcalloc(1, sizeof(*stream));
 
-    stream->ids.d = calloc(4096, sizeof(dod));
+    stream->ids.d = zcalloc(4096, sizeof(dod));
     stream->ids.t[0] = 0;
     stream->ids.t[1] = 0;
     stream->ids.count = 0;
     stream->ids.usedBits = 0;
     stream->ids.totalBytes = 4096 * sizeof(dod);
 
-    stream->events = malloc(sizeof(Event) * 1000);
+    stream->events = zmalloc(sizeof(Event) * 1000);
     stream->count = 0;
     stream->capacity = 1000;
 
@@ -449,8 +518,8 @@ void eventStreamAdd(EventStream *stream, int64_t id,
     /* Store event data uncompressed */
     if (stream->count >= stream->capacity) {
         stream->capacity *= 2;
-        stream->events = realloc(stream->events,
-                                sizeof(Event) * stream->capacity);
+        stream->events = zrealloc(stream->events,
+                                 sizeof(Event) * stream->capacity);
     }
 
     Event *e = &stream->events[stream->count++];
@@ -488,9 +557,9 @@ void eventStreamPrintStats(EventStream *stream) {
 
 void eventStreamFree(EventStream *stream) {
     if (stream) {
-        free(stream->ids.d);
-        free(stream->events);
-        free(stream);
+        zfree(stream->ids.d);
+        zfree(stream->events);
+        zfree(stream);
     }
 }
 
@@ -538,12 +607,17 @@ Typical compression ratios for different patterns:
 
 ### Speed
 
-| Operation       | Time             | Notes                          |
-| --------------- | ---------------- | ------------------------------ |
-| Write           | ~25 ns           | Delta calculation + bit encode |
-| Sequential read | ~40 ns           | Delta reconstruction           |
-| Random read     | ~800 ns          | Must replay from start         |
-| Decompress all  | ~35 ns per value | Optimized loop                 |
+| Operation            | Complexity | Notes                               |
+| -------------------- | ---------- | ----------------------------------- |
+| `dodWrite`           | O(1)       | delta math plus a bit-packed append |
+| `dodReaderNext`      | O(1)       | carries decode state forward        |
+| `dodReaderNextN`     | O(n)       | batch form of the above             |
+| `dodRead` / `dodGet` | O(offset)  | replays the stream from the start   |
+| `dodReadAll`         | O(n)       | one pass over the whole stream      |
+
+The only operation with a bad shape is `dodRead`: it is a _random_-access
+call and re-decodes from the beginning each time. Iterating a stream with
+`dodRead(w, i)` in a loop is O(n^2) — use `dodReader` or `dodReadAll`.
 
 ### Memory Usage
 
@@ -597,7 +671,7 @@ for (int i = 0; i < count; i++) {
 dodCloseWrites(&writer);
 
 /* Now t[0] = first value, t[1] = last value */
-printf("Range: %ld to %ld\n", writer.t[0], writer.t[1]);
+printf("Range: %" PRId64 " to %" PRId64 "\n", writer.t[0], writer.t[1]);
 ```
 
 ### 3. Allocate Sufficient Space
@@ -608,7 +682,7 @@ printf("Range: %ld to %ld\n", writer.t[0], writer.t[1]);
 
 size_t count = 100000;
 size_t safeSize = (count * 72 + 63) / 64;
-dod *compressed = calloc(safeSize, sizeof(dod));
+dod *compressed = zcalloc(safeSize, sizeof(dod));
 ```
 
 ### 4. Monitor Compression Efficiency
@@ -652,7 +726,7 @@ Each range includes all smaller ranges, ensuring optimal encoding.
 
 ## See Also
 
-- [XOF.md](XOF.md) - XOR filter compression for doubles
+- [XOF.md](XOF.md) - XOR-encoded compression for doubles
 - [FLOAT16.md](FLOAT16.md) - Half-precision float encoding
 - [multiarray](../multiarray/MULTIARRAY.md) - Dynamic arrays for storing compressed data
 

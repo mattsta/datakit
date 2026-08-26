@@ -102,6 +102,9 @@ multilistMedium *multilistMediumDuplicate(multilistMedium *orig);
 /* Get entry based on index */
 bool multilistMediumIndex(multilistMedium *ml, mlOffsetId index,
                           multilistEntry *entry);
+bool multilistMediumIndexNear(multilistMedium *ml, mlOffsetId index,
+                              const multilistEntry *anchor,
+                              mlOffsetId anchorIdx, multilistEntry *entry);
 
 /* Move ends of list */
 void multilistMediumRotate(multilistMedium *ml);

@@ -35,6 +35,15 @@ void multiarraySmallInsert(multiarraySmall *mar, uint16_t idx, void *s) {
     mar->count++;
 }
 
+size_t multiarraySmallCount(const multiarraySmall *mar) {
+    return mar->count;
+}
+
+size_t multiarraySmallBytes(const multiarraySmall *mar) {
+    /* Bytes of element data storage (metadata overhead excluded) */
+    return (size_t)mar->len * mar->count;
+}
+
 void multiarraySmallDelete(multiarraySmall *mar, uint16_t idx) {
     /* Deleting from an empty array or past the end is a caller bug
      * (silently dropping the tail element or requesting a ~SIZE_MAX

@@ -6,16 +6,24 @@ The `str/` directory contains **specialized high-performance string utilities** 
 
 **Key Features:**
 
-- SIMD-optimized digit validation (SSE2)
+- SIMD-optimized digit validation (SSE2 and NEON)
 - SWAR-based fast integer-to-string conversion
-- Optimized UTF-8 character counting
+- A complete UTF-8 layer: validation, encode/decode, cursors, search,
+  comparison, display width, and grapheme clusters
 - Population count (popcount) with manual dependency breaking
 - Bitmap position extraction
 - Fast random number generators
 
-**Location**: `/src/str/` directory
+**Location**: `src/str/` directory
 
-**Included by**: `str.c` (automatically includes all str/\*.c files)
+**Included by**: `str.c`, which textually `#include`s each `str/*.c` file so
+the whole set compiles as one translation unit. There is no separate
+`strUtils.h` — everything here is declared in `str.h`.
+
+**Scope**: this document is the implementation-oriented tour of `src/str/`.
+[STR.md](STR.md) is the API reference for the same header; where the two
+overlap, STR.md describes _what to call_ and this file describes _how it
+works_.
 
 ## Fast Integer-to-String Conversion
 
@@ -91,11 +99,12 @@ This processes **4 digits in parallel** using a single multiply and shift.
 
 ### Performance
 
-Typical performance on modern CPUs:
-
-- `StrUInt64ToBuf`: ~60 cycles
-- `StrUInt128ToBuf`: ~100-200 cycles
-- ~3-5x faster than `snprintf`
+The SWAR converter generates four digits per multiply-and-shift instead of
+one digit per divide, and writes them without a `printf` format walk. That
+is where the win over `snprintf` comes from. `StrUInt64ToBufTable` trades
+the multiplies for a lookup table; which one wins is
+platform-dependent — benchmark both under the `perf` CMake preset rather
+than assuming.
 
 ## Table-Based Integer Conversion
 
@@ -188,13 +197,13 @@ uint64_t fast = StrBufToUInt64Fast(digits, 9);
 /* Validates digits but not overflow */
 uint64_t checked;
 if (StrBufToUInt64FastCheckNumeric(digits, 9, &checked)) {
-    printf("Value: %lu\n", checked);
+    printf("Value: %" PRIu64 "\n", checked);
 }
 
 /* Validates overflow but not digit characters */
 uint64_t safe;
 if (StrBufToUInt64FastCheckOverflow(digits, 9, &safe)) {
-    printf("Safe: %lu\n", safe);
+    printf("Safe: %" PRIu64 "\n", safe);
 }
 ```
 
@@ -312,13 +321,213 @@ size_t extractUtf8Chars(const char *str, size_t maxChars,
 }
 ```
 
-### Performance
+`StrLenUtf8Scalar` is the byte-at-a-time baseline, kept so the SWAR path can
+be benchmarked against it.
 
-Typical throughput:
+### Validation
 
-- ASCII text: ~10-15 GB/s (modern CPU)
-- UTF-8 text: ~8-12 GB/s
-- ~5-10x faster than byte-by-byte iteration
+Counting assumes well-formed input. Validate anything from outside the
+process first:
+
+```c
+/* Validate with a known length (SIMD-optimized) */
+bool StrUtf8Valid(const void *str, size_t len);
+bool StrUtf8ValidCStr(const char *str);       /* NUL-terminated */
+
+/* Scalar baselines, for benchmarking */
+bool StrUtf8ValidScalar(const void *str, size_t len);
+bool StrUtf8ValidCStrScalar(const char *str);
+
+/* Validate and count in one pass */
+size_t StrUtf8ValidCount(const void *str, size_t len, bool *valid);
+
+/* Byte length of N codepoints, validating on the way */
+size_t StrUtf8ValidCountBytes(const void *str, size_t len,
+                              size_t numCodepoints, bool *valid);
+```
+
+### Encoding and Decoding
+
+```c
+/* Decode one sequence; advances *str and *remaining.
+ * Returns the codepoint, or 0xFFFFFFFF on a malformed sequence. */
+uint32_t StrUtf8Decode(const uint8_t **str, size_t *remaining);
+
+/* Encode a codepoint into dst; returns 1-4 bytes written, or 0 if the
+ * codepoint is not encodable. */
+size_t StrUtf8Encode(uint8_t *dst, uint32_t codepoint);
+
+/* How many bytes this codepoint needs (1-4, or 0 if invalid) */
+size_t StrUtf8CodepointLen(uint32_t codepoint);
+
+/* How many bytes this sequence occupies, from its first byte
+ * (0 if the byte is not a valid sequence start) */
+size_t StrUtf8SequenceLen(uint8_t firstByte);
+```
+
+### Cursor Movement
+
+```c
+const uint8_t *StrUtf8Advance(const void *str, size_t len, size_t n);
+const uint8_t *StrUtf8Retreat(const void *str, size_t len,
+                              const uint8_t *pos, size_t n);
+uint32_t StrUtf8Peek(const void *str, size_t len, const uint8_t *pos);
+size_t StrUtf8OffsetAt(const void *str, size_t len, size_t charIndex);
+size_t StrUtf8IndexAt(const void *str, size_t len, size_t byteOffset);
+
+/* Scalar baseline */
+const uint8_t *StrUtf8AdvanceScalar(const void *str, size_t len, size_t n);
+```
+
+### Truncation and Substrings
+
+```c
+size_t StrUtf8Truncate(const void *str, size_t len, size_t maxChars);
+size_t StrUtf8TruncateBytes(const void *str, size_t len, size_t maxBytes);
+void StrUtf8Substring(const void *str, size_t len, size_t startChar,
+                      size_t endChar, size_t *outOffset, size_t *outLen);
+size_t StrUtf8SubstringCopy(const void *str, size_t len, size_t startChar,
+                            size_t endChar, void *buf, size_t bufLen);
+size_t StrUtf8Split(const void *str, size_t len, size_t charIndex);
+```
+
+`StrUtf8TruncateBytes` is the one to reach for when a byte budget is fixed
+(a fixed-width column, a wire field): it backs up to the nearest sequence
+boundary instead of splitting a codepoint.
+
+Substring ranges are `[startChar, endChar)` — start inclusive, end exclusive.
+
+### Comparison
+
+```c
+int StrUtf8Compare(const void *s1, size_t len1, const void *s2, size_t len2);
+int StrUtf8CompareN(const void *s1, size_t len1, const void *s2, size_t len2,
+                    size_t n);   /* first n codepoints */
+int StrUtf8CompareCaseInsensitiveAscii(const void *s1, size_t len1,
+                                       const void *s2, size_t len2);
+bool StrUtf8StartsWith(const void *str, size_t strLen,
+                       const void *prefix, size_t prefixLen);
+bool StrUtf8EndsWith(const void *str, size_t strLen,
+                     const void *suffix, size_t suffixLen);
+bool StrUtf8Equal(const void *s1, size_t len1, const void *s2, size_t len2);
+bool StrUtf8EqualCaseInsensitiveAscii(const void *s1, size_t len1,
+                                      const void *s2, size_t len2);
+```
+
+Case-insensitive here means **ASCII** case folding only — no Unicode
+case mapping, no locale awareness.
+
+### Search
+
+All search functions return a **byte offset**, or `SIZE_MAX` when not found.
+
+```c
+size_t StrUtf8Find(const void *haystack, size_t haystackLen,
+                   const void *needle, size_t needleLen);
+size_t StrUtf8FindLast(const void *haystack, size_t haystackLen,
+                       const void *needle, size_t needleLen);
+size_t StrUtf8FindChar(const void *str, size_t len, uint32_t codepoint);
+size_t StrUtf8FindCharLast(const void *str, size_t len, uint32_t codepoint);
+size_t StrUtf8FindCharNth(const void *str, size_t len, uint32_t codepoint,
+                          size_t n);
+bool StrUtf8Contains(const void *haystack, size_t haystackLen,
+                     const void *needle, size_t needleLen);
+size_t StrUtf8Count(const void *haystack, size_t haystackLen,
+                    const void *needle, size_t needleLen);  /* non-overlapping */
+size_t StrUtf8CountChar(const void *str, size_t len, uint32_t codepoint);
+
+/* Character-set scanning, in the spirit of strspn / strcspn */
+size_t StrUtf8FindAnyChar(const void *str, size_t len,
+                          const void *charSet, size_t charSetLen);
+size_t StrUtf8FindNotChar(const void *str, size_t len,
+                          const void *charSet, size_t charSetLen);
+size_t StrUtf8SpanChar(const void *str, size_t len,
+                       const void *charSet, size_t charSetLen);
+size_t StrUtf8SpanNotChar(const void *str, size_t len,
+                          const void *charSet, size_t charSetLen);
+```
+
+### ASCII Case Conversion
+
+```c
+void StrAsciiToLower(void *str, size_t len);   /* in place */
+void StrAsciiToUpper(void *str, size_t len);
+size_t StrAsciiToLowerCopy(void *dst, size_t dstLen,
+                           const void *src, size_t srcLen);
+size_t StrAsciiToUpperCopy(void *dst, size_t dstLen,
+                           const void *src, size_t srcLen);
+bool StrAsciiIsLower(const void *str, size_t len);
+bool StrAsciiIsUpper(const void *str, size_t len);
+```
+
+Non-ASCII bytes pass through untouched, so these are safe to run over UTF-8
+without corrupting multibyte sequences.
+
+### Unicode Character Properties
+
+```c
+/* 0 = zero-width, 1 = narrow, 2 = wide */
+int StrUnicodeEastAsianWidth(uint32_t codepoint);
+
+bool StrUnicodeIsLetter(uint32_t cp);
+bool StrUnicodeIsDigit(uint32_t cp);
+bool StrUnicodeIsSpace(uint32_t cp);
+bool StrUnicodeIsAlnum(uint32_t cp);
+
+int StrUnicodeGraphemeBreak(uint32_t cp);
+bool StrUnicodeIsGraphemeBreak(uint32_t cp1, uint32_t cp2);
+```
+
+### Display Width
+
+Terminal cells, not codepoints — East Asian wide characters count as two and
+combining marks as zero.
+
+```c
+size_t StrUtf8Width(const void *str, size_t len);
+size_t StrUtf8WidthN(const void *str, size_t len, size_t n);
+size_t StrUtf8TruncateWidth(const void *str, size_t len, size_t maxWidth);
+size_t StrUtf8IndexAtWidth(const void *str, size_t len, size_t targetWidth);
+size_t StrUtf8WidthAt(const void *str, size_t len, size_t offset);
+size_t StrUtf8WidthBetween(const void *str, size_t len,
+                           size_t startOffset, size_t endOffset);
+size_t StrUtf8PadWidth(const void *str, size_t len, size_t targetWidth);
+bool StrUtf8IsNarrow(const void *str, size_t len);
+bool StrUtf8HasWide(const void *str, size_t len);
+```
+
+`StrUtf8IsNarrow` is the fast path check: when it returns true, byte length,
+codepoint count, and cell width all agree and the width functions can be
+skipped entirely.
+
+### Grapheme Clusters
+
+A grapheme cluster is what a reader perceives as one character — a base
+codepoint plus its combining marks, a regional-indicator pair, and so on.
+This is the right unit for user-visible truncation.
+
+```c
+size_t StrUtf8GraphemeNext(const void *str, size_t len);
+size_t StrUtf8GraphemeCount(const void *str, size_t len);
+size_t StrUtf8GraphemeAdvance(const void *str, size_t len, size_t n);
+bool StrUtf8GraphemeAt(const void *str, size_t len, size_t n,
+                       size_t *startOut, size_t *endOut);
+size_t StrUtf8GraphemeWidth(const void *str, size_t len);
+size_t StrUtf8GraphemeTruncate(const void *str, size_t len, size_t n);
+void StrUtf8GraphemeReverse(void *str, size_t len);   /* in place */
+```
+
+### Four Different Lengths
+
+| Question                      | Function               |
+| ----------------------------- | ---------------------- |
+| How much memory?              | `len` (bytes)          |
+| How many characters to index? | `StrLenUtf8`           |
+| How many terminal cells?      | `StrUtf8Width`         |
+| How many user-visible marks?  | `StrUtf8GraphemeCount` |
+
+For `"é"` written as `e` plus a combining acute, those are 3, 2, 1, and 1.
+Using the wrong one is the usual source of UTF-8 layout bugs.
 
 ## Digit Validation
 
@@ -338,14 +547,16 @@ assert(StrIsDigitsIndividual("123456", 6));
 assert(!StrIsDigitsIndividual("12a456", 6));
 ```
 
-### SSE2 Optimized (4x faster)
+### SIMD Optimized
 
 ```c
-/* SIMD-optimized digit validation */
+/* SIMD-optimized digit validation: SSE2 on x86, NEON on ARM64,
+ * falling back to StrIsDigitsIndividual elsewhere and for the tail */
 bool StrIsDigitsFast(const void *buf, size_t size);
 ```
 
-**Implementation:**
+**Implementation (x86 arm; the NEON arm is the same idea over 16-byte
+vectors):**
 
 ```c
 #if __SSE2__
@@ -389,10 +600,10 @@ if (StrIsDigitsFast(bigNumber, strlen(bigNumber))) {
 
 ### Performance
 
-| Method     | Speed | Notes                  |
-| ---------- | ----- | ---------------------- |
-| Individual | 1.0x  | Baseline               |
-| SSE2       | 4.0x  | 16 bytes per iteration |
+`StrIsDigitsFast` checks 16 bytes per iteration where SIMD is available and
+delegates the sub-16-byte tail to `StrIsDigitsIndividual`. For short inputs
+the two are effectively the same; the gap opens with length. Measure with
+the `perf` CMake preset if the choice matters to you.
 
 ## Digit Counting
 
@@ -497,20 +708,22 @@ uint64_t bitmap[1024];  /* 64 KB */
 /* ... populate bitmap ... */
 
 uint64_t setBits = StrPopCntAligned(bitmap, sizeof(bitmap));
-printf("Set bits: %lu\n", setBits);
+printf("Set bits: %" PRIu64 "\n", setBits);
 
-/* For cache-line aligned data */
-uint64_t *aligned = aligned_alloc(32, 1024);
-uint64_t count = StrPopCntExact(aligned, 1024);
+/* StrPopCntExact expects exact 32-byte chunks */
+uint64_t count = StrPopCntExact(bitmap, sizeof(bitmap));
 ```
 
-### Performance
+### Why the Hand-Written Assembly
 
-| Method             | Speed | Notes                          |
-| ------------------ | ----- | ------------------------------ |
-| 8-bit lookup       | 1.0x  | No POPCNT instruction          |
-| Aligned (compiler) | 2.0x  | POPCNT with false dependencies |
-| Aligned (asm)      | 4.0x  | Manual dependency breaking     |
+On several Intel generations the `POPCNT` instruction carries a false
+dependency on its destination register: the result does not actually depend
+on the previous value, but the scheduler treats it as if it does, serializing
+a chain of popcounts. Using four independent accumulators breaks that chain
+so the counts issue in parallel. That is the whole reason this file contains
+inline assembly instead of `__builtin_popcountll` in a loop.
+
+`StrPopCntScalar` is the plain baseline, kept for benchmarking.
 
 ## Bitmap Position Extraction
 
@@ -563,16 +776,21 @@ for (uint32_t i = 0; i < count; i++) {
 
 ```c
 /* Iterate only over set positions in large bitmap */
-void processSparseData(const uint64_t *bitmap, size_t bitmapSize) {
-    uint32_t positions[8 * bitmapSize];
+void processSparseData(const uint64_t *bitmap, size_t bitmapWords) {
+    /* Worst case is every bit set: 64 positions per word.
+     * Heap-allocate — a VLA here is a stack overflow waiting to happen. */
+    const size_t bytes = bitmapWords * sizeof(uint64_t);
+    uint32_t *positions = zmalloc(bytes * 8 * sizeof(uint32_t));
 
-    uint32_t count = StrBitmapGetSetPositionsExact32(
-        bitmap, bitmapSize * sizeof(uint64_t), positions);
+    const uint32_t count =
+        StrBitmapGetSetPositionsExact32(bitmap, bytes, positions);
 
     /* Process only set positions */
     for (uint32_t i = 0; i < count; i++) {
         processItem(positions[i]);
     }
+
+    zfree(positions);
 }
 ```
 
@@ -613,7 +831,7 @@ uint64_t state[2] = {12345, 67890};
 /* Generate random numbers */
 for (int i = 0; i < 1000; i++) {
     uint64_t random = xoroshiro128plus(state);
-    printf("Random: %lu\n", random);
+    printf("Random: %" PRIu64 "\n", random);
 }
 
 /* For seeding other generators */
@@ -706,17 +924,25 @@ char *truncateUtf8Safe(const char *text, size_t maxChars) {
     size_t chars = StrLenUtf8(text, len);
 
     if (chars <= maxChars) {
-        return strdup(text);
+        /* datakit deprecates strdup(); copy through zmalloc */
+        char *copy = zmalloc(len + 1);
+        memcpy(copy, text, len + 1);
+        return copy;
     }
 
     size_t bytes = StrLenUtf8CountBytes(text, len, maxChars);
-    char *result = malloc(bytes + 4);  /* +3 for "..." */
+    char *result = zmalloc(bytes + 4);  /* +3 for "..." +1 for NUL */
     memcpy(result, text, bytes);
-    strcpy(result + bytes, "...");
+    memcpy(result + bytes, "...", 4);   /* copies the NUL too */
 
     return result;
 }
 ```
+
+Truncating by **codepoints** can still split a grapheme cluster and leave a
+dangling combining mark. When the result is shown to a person, use
+`StrUtf8GraphemeTruncate` instead; when it has to fit a fixed-width display,
+use `StrUtf8TruncateWidth`.
 
 ### Example 4: Count Matching Items in Bitmap
 
@@ -726,7 +952,7 @@ size_t countMatching(const uint64_t *bitmap, size_t bitmapWords,
     size_t matches = 0;
 
     /* Extract all set positions */
-    uint32_t *positions = malloc(bitmapWords * 64 * sizeof(uint32_t));
+    uint32_t *positions = zmalloc(bitmapWords * 64 * sizeof(uint32_t));
     uint32_t setPosCount = StrBitmapGetSetPositionsExact32(
         bitmap, bitmapWords * 8, positions);
 
@@ -740,7 +966,7 @@ size_t countMatching(const uint64_t *bitmap, size_t bitmapWords,
         }
     }
 
-    free(positions);
+    zfree(positions);
     return matches;
 }
 ```
@@ -755,15 +981,24 @@ All functions in str/ are **fully thread-safe** as they:
 
 The RNG functions modify state passed by pointer, so the caller must protect concurrent access.
 
-## Performance Summary
+## Benchmarking
 
-| Operation          | Throughput | vs. Standard                    |
-| ------------------ | ---------- | ------------------------------- |
-| StrUInt64ToBuf     | ~60 cycles | 3-5x faster than snprintf       |
-| StrBufToUInt64Fast | ~20 cycles | 2-3x faster than atoi           |
-| StrIsDigitsFast    | 10-15 GB/s | 4x faster than loop             |
-| StrLenUtf8         | 8-12 GB/s  | 5-10x faster than byte loop     |
-| StrPopCntAligned   | ~4 GB/s    | 2x faster than compiler builtin |
+Every accelerated routine here ships with a scalar twin so the two can be
+compared directly on the machine that matters:
+
+| Fast path            | Scalar baseline          |
+| -------------------- | ------------------------ |
+| `StrIsDigitsFast`    | `StrIsDigitsIndividual`  |
+| `StrLenUtf8`         | `StrLenUtf8Scalar`       |
+| `StrUtf8Valid`       | `StrUtf8ValidScalar`     |
+| `StrUtf8ValidCStr`   | `StrUtf8ValidCStrScalar` |
+| `StrUtf8Advance`     | `StrUtf8AdvanceScalar`   |
+| `StrBufToUInt64Fast` | `StrBufToUInt64Scalar`   |
+| `StrPopCntAligned`   | `StrPopCntScalar`        |
+| `StrUInt64ToBuf`     | `StrUInt64ToBufTable`    |
+
+Build benchmarks with the `perf` CMake preset. Sanitizer builds add several
+times the overhead and will make the scalar and SIMD paths look identical.
 
 ## See Also
 

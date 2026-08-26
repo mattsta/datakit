@@ -35,9 +35,14 @@ Instead of choosing upfront, datakit containers **automatically transition** bet
 │ Small        │ 16 bytes  │ 1 flex       │ < 100 entries       │
 │ Medium       │ 28 bytes  │ 2 flex       │ 100-1000 entries    │
 │ Full         │ 40 bytes  │ N flex       │ 1000+ entries       │
-│ Atom         │ Wrapper   │ 2 multimaps  │ Reference counting  │
 └──────────────┴───────────┴──────────────┴─────────────────────┘
 ```
+
+`multimapAtom` is NOT a fourth size tier. It is the reference
+container: a refcounted interning table other maps point into via the
+`*WithReference` / `*WithSurrogateKey` APIs. It has its own
+constructor, `multimapAtomNew()`, and is chosen for deduplication, not
+for size.
 
 **Key Characteristics:**
 
@@ -45,10 +50,20 @@ Instead of choosing upfront, datakit containers **automatically transition** bet
 - **Medium**: Two-way branching, ~50% search space reduction
 - **Full**: Dynamic multi-way branching, unlimited scalability
 
-**Upgrade Triggers:**
+**Upgrade Triggers** (from `multimapUpgradeIfNeeded` in `multimap.c`):
 
-- Small → Medium: `bytes > sizeLimit && count > elementsPerEntry * 2`
-- Medium → Full: `bytes > sizeLimit * 3 && count > elementsPerEntry * 2`
+- Small → Medium: `bytes > sizeLimit && count > elementsPerEntry * 2`.
+  The count guard exists because a Medium split needs two complete
+  entries to divide.
+- Medium → Full: `bytes > sizeLimit * 3` AND both underlying flexes are
+  non-empty.
+
+**`maxSize` is a target, not a hard cap.** Full re-splits a sub-map
+only when it is both over `maxSize` AND holds more than one entry — a
+single entry larger than `maxSize` is unsplittable and stays put. A
+replace into an already-oversized map also stays in that map rather
+than triggering a split, because routing it elsewhere would put the
+same key in two maps.
 
 #### multilist Variants
 
@@ -104,18 +119,22 @@ compress = N:  First N and last N nodes uncompressed
 ```
 Need key-value storage?
 │
-├─ Known to be tiny (< 50 entries)?
-│  └─ Create Small directly: multimapSmallNew()
+├─ Any size, known or unknown?
+│  └─ multimapNew(elementsPerEntry)
+│     (starts Small, upgrades automatically — the normal answer)
 │
-├─ Medium size (50-500 entries)?
-│  └─ Create Medium directly: multimapMediumNew()
+├─ Want to pin the per-flex size limit?
+│  └─ multimapNewLimit(elementsPerEntry, FLEX_CAP_LEVEL_*)
 │
-├─ Large or unknown size?
-│  └─ Use auto-scaling: multimapNew()
-│     (starts Small, upgrades automatically)
+├─ Deliberately pinning one variant?
+│  └─ multimapMediumNew(n) / multimapFullNew(n)
 │
-└─ Need string deduplication?
-   └─ Use Atom wrapper: multimapAtomNew()
+├─ Whole-row dedupe (a set, not a map)?
+│  └─ multimapSetNew(elementsPerEntry)
+│     (compares ALL elements, not just the key)
+│
+└─ Need string interning / reference counting?
+   └─ multimapAtomNew(), used with the *WithReference APIs
 ```
 
 ### Choosing multilist Variant
@@ -140,18 +159,22 @@ Need ordered sequence?
 ```
 Need dynamic array?
 │
-├─ Fixed maximum size known?
-│  └─ Use Native: multiarrayNativeNew(arr[1024])
-│     (zero overhead, auto-upgrades if exceeded)
+├─ Want the wrapper to pick and switch tiers for you?
+│  └─ multiarrayNew(elementLen, rowMax)
+│
+├─ Fixed-size holder you own, no container overhead?
+│  └─ multiarrayNativeNew(holder)
+│     (macro over multiarraySmallNativeNew; you keep the count)
 │
 ├─ Random access critical?
-│  └─ Use Medium: multiarrayMediumNew()
-│     (O(1) access with moderate overhead)
+│  └─ multiarrayMediumNew(elementLen, rowMax)
 │
 └─ Sequential access, huge dataset?
-   └─ Use Large: multiarrayLargeNew()
-      (XOR list, memory efficient)
+   └─ multiarrayLargeNew(elementLen, rowMax)
 ```
+
+Both `rowMax` and `elementLen` are 16-bit: `rowMax` is the number of
+elements a row holds before the container splits, NOT a total capacity.
 
 ## Size Guidelines
 
@@ -194,19 +217,26 @@ multilist *events = multilistNew(FLEX_CAP_LEVEL_4096, 5);
 ### multiarray Size Recommendations
 
 ```c
-/* Point array (fixed size) */
+/* Point array in a caller-owned holder */
 typedef struct Point { float x, y, z; } Point;
-Point *points = multiarrayNativeNew(points[1000]);
-// Native: 0 bytes overhead
+Point holder[1000];
+multiarray *points = multiarrayNativeNew(holder);
+// Native: no container header; you track the element count
 
 /* Growing collection (unknown size) */
-multiarray *items = multiarrayMediumNew(sizeof(Item), 512);
+multiarrayMedium *items = multiarrayMediumNew(sizeof(Item), 512);
 // Medium: chunked growth, good for insert-heavy
 
 /* Huge append-only log */
-multiarray *log = multiarrayLargeNew(sizeof(LogEntry), 1024);
-// Large: XOR list, efficient for millions of entries
+multiarrayLarge *log = multiarrayLargeNew(sizeof(LogEntry), 1024);
+// Large: efficient for millions of entries
+
+/* Or just let the wrapper choose */
+multiarray *auto_ = multiarrayNew(sizeof(Item), 512);
 ```
+
+None of the multiarray variants export a count or a byte size — keep
+your own element count next to the container.
 
 ## Performance Characteristics by Variant
 
@@ -304,21 +334,27 @@ m = small;  // Now Small variant again
 ### Direct Variant Creation
 
 ```c
-/* multimap - Direct creation */
-multimapSmall *ms = multimapSmallNew();
-multimapMedium *mm = multimapMediumNew();
-// Full is always wrapped, use multimapNew()
+/* multimap - Direct creation.
+ * Small also needs the set-mode flag; Medium and Full take just the
+ * entry width. */
+multimapSmall *ms = multimapSmallNew(2, false /* isSet */);
+multimapMedium *mm = multimapMediumNew(2);
+multimapFull *mf = multimapFullNew(2);
 
 /* multilist - Direct creation */
 multilistSmall *ls = multilistSmallCreate();
 multilistMedium *lm = multilistMediumCreate();
 multilistFull *lf = multilistFullNew(FLEX_CAP_LEVEL_4096, 2);
 
-/* multiarray - Direct creation */
+/* multiarray - Direct creation (elementLen, rowMax) */
 multiarraySmall *as = multiarraySmallNew(sizeof(T), 1024);
 multiarrayMedium *am = multiarrayMediumNew(sizeof(T), 512);
 multiarrayLarge *al = multiarrayLargeNew(sizeof(T), 1024);
 ```
+
+Pinning a variant opts out of automatic retiering: the pinned type will
+not upgrade itself when it outgrows its shape. Use `multimapNew()`
+unless you have measured a reason not to.
 
 **Warning**: Direct creation requires manual management and loses automatic upgrade benefits.
 

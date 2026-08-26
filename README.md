@@ -6,16 +6,79 @@ Also see:
 - https://matt.sh/best-database-ever
 - https://matt.sh/trillion-dollar-data-structure
 
-## Usage
+## Building
 
-```haskell
-mkdir build
-cd build
+datakit is POSIX-only: Linux, macOS, and the BSD family, built with
+clang or gcc. CMake 3.10+ is required for a plain build; 3.21+ for the
+presets below.
+
+The presets are the supported entry points. Each builds `datakit-test`
+plus the static, shared, and module library targets:
+
+```sh
+cmake --preset dev    && cmake --build --preset dev     # Release-O3 + ASAN/UBSAN (default)
+cmake --preset debug  && cmake --build --preset debug   # -O0 + symbols + ASAN/UBSAN
+cmake --preset perf   && cmake --build --preset perf    # Release-O3 + native + LTO, no sanitizers
+cmake --preset safe   && cmake --build --preset safe    # Release-O3 + sanitizers, for CI
+```
+
+Each preset builds into `build-<preset>/`. Use `perf` for any
+benchmark number — sanitizers add 3-10x overhead and invalidate
+measurements.
+
+A plain out-of-source build also works:
+
+```sh
+mkdir build && cd build
 cmake ..
 make -j8
-
-ctest -j8 --output-on-failure --stop-on-failure
 ```
+
+## Testing
+
+Every registered test is also a CTest target, so both of these work:
+
+```sh
+ctest --test-dir build-dev -j8 --output-on-failure
+./build-dev/src/datakit-test test flex
+```
+
+`datakit-test` uses a verb grammar: no arguments prints usage, `list`
+enumerates every test with its aliases, `list --json` emits the same as
+JSON, `test <name>` runs one test, `test ALL` runs the whole suite
+(long — prefer running the tests for what you changed), and
+`bench <name>` / `speed` run benchmarks.
+
+Frequently used names (aliases in parentheses):
+
+```sh
+./build-dev/src/datakit-test test flex
+./build-dev/src/datakit-test test mflex
+./build-dev/src/datakit-test test multimap          # also multimapFull, multimapMedium, multimapAtom (atom)
+./build-dev/src/datakit-test test multilist         # (ml), also multilistFull
+./build-dev/src/datakit-test test multiarray        # also multiarraySmall/Medium/Large
+./build-dev/src/datakit-test test multidict
+./build-dev/src/datakit-test test multiroar         # roaring bitmaps
+./build-dev/src/datakit-test test multilru          # (lru, mlru)
+./build-dev/src/datakit-test test multiOrderedSet   # (mos)
+./build-dev/src/datakit-test test intset            # also intsetU32, plus intsetBig where __int128 exists
+./build-dev/src/datakit-test test hyperloglog       # (hll)
+./build-dev/src/datakit-test test str               # also strDoubleFormat, mds, mdsc
+./build-dev/src/datakit-test test databox           # also databoxLinear
+./build-dev/src/datakit-test test persist           # also persistCtx (pctx) + the *P codec tests
+./build-dev/src/datakit-test test ulid
+./build-dev/src/datakit-test test bigmath
+./build-dev/src/datakit-test test timerWheel        # (tw), also multiTimer (timer), timeUtil (time)
+./build-dev/src/datakit-test test fenwickI64        # (fw, bit, fenwick), also segmentI64 (seg), multiFenwick (mfw)
+./build-dev/src/datakit-test test blake3            # (b3), also sha256, hmac, aesGcm (aes)
+./build-dev/src/datakit-test test flexEnvelope      # (fenv, env)
+./build-dev/src/datakit-test test clusterRing       # (ring, cluster, chr), also clusterMailbox (mb)
+./build-dev/src/datakit-test test perfRegression    # (perf-baseline) regression gate
+```
+
+Run `datakit-test list` for the full set — the registry in
+`src/datakit-test.c` is the single source of truth, and CMake
+auto-discovers CTest targets from it.
 
 ## Documentation
 
@@ -27,6 +90,7 @@ ctest -j8 --output-on-failure --stop-on-failure
 - **[Architecture Overview](docs/ARCHITECTURE.md)** - Design patterns and philosophy
 - **[API Quick Reference](docs/API_QUICK_REFERENCE.md)** - Common operations at a glance
 - **[Documentation Index](docs/INDEX.md)** - Complete module listing
+- **[Hashes, HMAC, and the flex envelope](docs/HASH_AND_ENVELOPE.md)** - Integrity, MAC, and AEAD guide
 
 ### Module Documentation
 
@@ -63,6 +127,7 @@ ctest -j8 --output-on-failure --stop-on-failure
 
 - [intset](docs/modules/intset/INTSET.md) - Variable-width integer sets (16/32/64-bit)
 - [intsetU32](docs/modules/intset/INTSET_U32.md) - Fixed 32-bit integer sets
+- [intsetBig](docs/modules/intset/INTSET_BIG.md) - Bucketed wide-range integer sets (128-bit inputs)
 - [hyperloglog](docs/modules/intset/HYPERLOGLOG.md) - Probabilistic cardinality estimation
 
 **Compression & Encoding:**
@@ -73,16 +138,25 @@ ctest -j8 --output-on-failure --stop-on-failure
 
 **Memory & System:**
 
-- [membound](docs/modules/memory/MEMBOUND.md) - Memory allocation limits
+- [membound](docs/modules/memory/MEMBOUND.md) - Bounded arena allocator
 - [fibbuf](docs/modules/memory/FIBBUF.md) - Fibonacci buffer sizing
 - [jebuf](docs/modules/memory/JEBUF.md) - Jemalloc-aligned allocation
+- [ptrPrevNext](docs/modules/memory/PTR_PREV_NEXT.md) - Varint-packed prev/next offset pairs
+- [offsetArray](docs/modules/memory/OFFSET_ARRAY.md) - Offset-based array addressing
 - **System modules:**
   - [fastmutex](docs/modules/system/FASTMUTEX.md) - Fast mutex primitives
   - [multiTimer](docs/modules/system/MULTI_TIMER.md) - High-performance timers
-  - [osRegulate](docs/modules/system/OS_REGULATE.md) - Resource regulation
+  - [OSRegulate](docs/modules/system/OS_REGULATE.md) - Resource regulation
   - [setproctitle](docs/modules/system/SETPROCTITLE.md) - Process title setting
+  - [timerWheel](docs/modules/system/TIMER_WHEEL.md) - Hierarchical timing wheel
   - [timeUtil](docs/modules/system/TIME_UTIL.md) - Time utilities
   - [versionOSRuntime](docs/modules/system/VERSION_OS_RUNTIME.md) - OS version detection
+
+**Data Structure Utilities:**
+
+- [list](docs/modules/utils/LIST.md) - Doubly-linked list
+- [multiheap](docs/modules/utils/MULTIHEAP.md) - Keyed byte-region store (ref -> resizable bytes)
+- [intersectInt](docs/modules/utils/INTERSECT_INT.md) - Integer set intersection
 
 ### Advanced Topics
 
@@ -96,10 +170,16 @@ ctest -j8 --output-on-failure --stop-on-failure
 
 - [Common Patterns](docs/examples/PATTERNS.md) - Frequently used code patterns
 - [Use Cases](docs/examples/USE_CASES.md) - Real-world applications
-- [Benchmarks](docs/examples/BENCHMARKS.md) - Performance comparisons
+- [Benchmarking Guide](docs/examples/BENCHMARKS.md) - How to measure datakit correctly
 - [Testing Guide](docs/development/TESTING.md) - Running and writing tests
 - [Building Guide](docs/development/BUILDING.md) - Detailed build instructions
 - [Debugging Guide](docs/development/DEBUGGING.md) - Troubleshooting techniques
+- [Contributing Guide](docs/development/CONTRIBUTING.md) - Style and workflow
+
+### Performance
+
+- [Performance Baselines Ledger](docs/PERFORMANCE_BASELINES.md) - Dated benchmark captures
+- [Hash / Envelope Performance](docs/HASH_PERFORMANCE.md) - Hash and envelope throughput reference
 
 ## Status
 

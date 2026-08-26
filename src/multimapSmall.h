@@ -54,6 +54,10 @@ bool multimapSmallDeleteWithReference(
 int64_t multimapSmallFieldIncr(multimapSmall *m, const databox *key,
                                uint32_t fieldOffset, int64_t incrBy);
 
+bool multimapSmallLookupByPosition(multimapSmall *m, int64_t keyIndex,
+                                   databox *elements[]);
+bool multimapSmallDeleteByPosition(multimapSmall *m, int64_t keyIndex);
+
 void multimapSmallReset(multimapSmall *m);
 void multimapSmallFree(multimapSmall *m);
 

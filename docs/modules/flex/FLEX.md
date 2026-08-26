@@ -38,6 +38,19 @@ A flex consists of a header followed by zero or more entries:
 - **COUNT**: Tagged varint encoding of element count (1-9 bytes)
 - **ENTRY**: Variable-length encoded elements
 
+**The header width is not fixed.** Both fields are varints, so the header
+grows and shrinks as the flex crosses a varint width boundary — and because
+the BYTES field counts _itself_, widening it can push the total across the
+next boundary, so the width is resolved by iterating until it stops
+changing. Two consequences:
+
+1. `flexBytes(f)` is the only source of truth for the total size; never
+   assume a constant header offset.
+2. Every insert and delete goes through the header-resize path, and that
+   path reallocates to the **exact** new size. flex has no capacity
+   concept — see [Bulk Operations](#bulk-operations) before appending in a
+   loop.
+
 ### Entry Layout
 
 Each entry has a symmetric forward/reverse encoding structure for bidirectional traversal:
@@ -62,68 +75,150 @@ Immediate Value Entry (true/false/null):
 
 ### Type System
 
+`flexType` is private to `flex.c` — it describes the physical in-memory and
+on-disk format, so any addition, removal, or reordering is a format change.
+The single encoding byte carries the type; string lengths ride in the same
+byte space as a split varint, which is why the non-string types start where
+that varint's tag space runs out.
+
 ```c
 typedef enum flexType {
-    /* String types (0-201): length-prefixed byte arrays */
-    /* Encoding bytes 0-201 indicate string with that length */
+    /* Strings occupy 0-200: the encoding byte IS the leading byte of a
+     * split varint holding the byte length.  FLEX_VARINT_SPLIT_MAX (200)
+     * is the last such value, so FLEX_IS_STR(enc) is (enc <= 200). */
+    FLEX_VARINT_SPLIT_MAX = 200,
 
-    /* Integer types (202-221): variable-width signed/unsigned */
-    FLEX_NEG_8B = 202,    /* Negative 8-bit integer */
-    FLEX_UINT_8B,         /* Unsigned 8-bit integer */
-    FLEX_NEG_16B,         /* Negative 16-bit integer */
-    FLEX_UINT_16B,        /* Unsigned 16-bit integer */
-    FLEX_NEG_24B,         /* 24-bit (saves space over 32-bit) */
-    FLEX_UINT_24B,
-    FLEX_NEG_32B,
-    FLEX_UINT_32B,
-    /* ... up to 64-bit, 96-bit, 128-bit */
+    /* 20 integer types (201-220): NEG/UINT pairs, two apart */
+    FLEX_NEG_8B = 201,    /* Negative, 1 byte of magnitude */
+    FLEX_UINT_8B,         /* 202 - Unsigned, 1 byte */
+    FLEX_NEG_16B,         /* 203 */
+    FLEX_UINT_16B,        /* 204 */
+    FLEX_NEG_24B,         /* 205 - 24-bit saves space over 32-bit */
+    FLEX_UINT_24B,        /* 206 */
+    FLEX_NEG_32B,         /* 207 */
+    FLEX_UINT_32B,        /* 208 */
+    FLEX_NEG_40B,         /* 209 */
+    FLEX_UINT_40B,        /* 210 */
+    FLEX_NEG_48B,         /* 211 */
+    FLEX_UINT_48B,        /* 212 */
+    FLEX_NEG_56B,         /* 213 */
+    FLEX_UINT_56B,        /* 214 */
+    FLEX_NEG_64B,         /* 215 */
+    FLEX_UINT_64B,        /* 216 - end of FLEX_IS_INTEGER */
+    /* no 72/80/88-bit encodings */
+    FLEX_NEG_96B,         /* 217 - start of FLEX_IS_INTEGER_BIG */
+    FLEX_UINT_96B,        /* 218 */
+    /* no 104/112/120-bit encodings */
+    FLEX_NEG_128B,        /* 219 */
+    FLEX_UINT_128B,       /* 220 */
 
-    /* Float types (222-227) */
-    FLEX_REAL_B16B,       /* bfloat16 (Google format) */
-    FLEX_REAL_16B,        /* IEEE 754 binary16 */
-    FLEX_REAL_32B,        /* IEEE 754 binary32 */
-    FLEX_REAL_64B,        /* IEEE 754 binary64 */
+    /* 6 float types (221-226) */
+    FLEX_REAL_B16B,       /* 221 - bfloat16 (truncated float32) */
+    FLEX_REAL_16B,        /* 222 - IEEE 754-2008 binary16 */
+    FLEX_REAL_32B,        /* 223 - IEEE 754-2008 binary32 */
+    FLEX_REAL_64B,        /* 224 - IEEE 754-2008 binary64 */
+    FLEX_REAL_32D,        /* 225 - decimal32 (reserved, unimplemented) */
+    FLEX_REAL_64D,        /* 226 - decimal64 (reserved, unimplemented) */
 
-    /* External reference types (228-243) */
-    FLEX_EXTERNAL_MDSC_48B,  /* 48-bit pointer to mdsc */
-    FLEX_EXTERNAL_MDSC_64B,  /* 64-bit pointer to mdsc */
-    FLEX_CONTAINER_REFERENCE_EXTERNAL_8,  /* 8-bit reference ID */
-    /* ... up to 64-bit reference IDs */
+    /* 2 mdsc pointer types (227-228) */
+    FLEX_EXTERNAL_MDSC_48B,  /* 227 - pointer with top 16 bits dropped */
+    FLEX_EXTERNAL_MDSC_64B,  /* 228 - full 64-bit pointer */
 
-    /* Container types (244-251) */
-    FLEX_CONTAINER_MAP,
-    FLEX_CONTAINER_LIST,
-    FLEX_CONTAINER_SET,
-    FLEX_CONTAINER_TUPLE,
-    /* Compressed variants */
-    FLEX_CONTAINER_CMAP,
-    FLEX_CONTAINER_CLIST,
-    FLEX_CONTAINER_CSET,
-    FLEX_CONTAINER_CTUPLE,
+    /* 8 logical reference types (229-236), 8..64-bit reference IDs */
+    FLEX_CONTAINER_REFERENCE_EXTERNAL_8,   /* 229 */
+    /* ... _16, _24, _32, _40, _48, _56 ... */
+    FLEX_CONTAINER_REFERENCE_EXTERNAL_64,  /* 236 */
 
-    /* Immediate types (252-255) */
-    FLEX_BYTES_EMPTY = 252,  /* Zero-length byte array */
+    /* 8 container types (237-244) — order must match databox's
+     * DATABOX_CONTAINER_FLEX_* / _CFLEX_* order */
+    FLEX_CONTAINER_MAP,    /* 237 */
+    FLEX_CONTAINER_LIST,   /* 238 */
+    FLEX_CONTAINER_SET,    /* 239 */
+    FLEX_CONTAINER_TUPLE,  /* 240 */
+    FLEX_CONTAINER_CMAP,   /* 241 - compressed variants */
+    FLEX_CONTAINER_CLIST,  /* 242 */
+    FLEX_CONTAINER_CSET,   /* 243 */
+    FLEX_CONTAINER_CTUPLE, /* 244 */
+
+    /* 245-250 unassigned */
+
+    /* Immediate (single-byte) types: FLEX_IS_IMMEDIATE(enc) is enc >= 251 */
+    FLEX_SAME = 251,         /* "same as previous entry" marker; UNUSED */
+    FLEX_BYTES_EMPTY = 252,  /* zero-length byte array */
     FLEX_TRUE = 253,         /* Boolean true */
     FLEX_FALSE = 254,        /* Boolean false */
     FLEX_NULL = 255          /* NULL value */
 } flexType;
 ```
 
+Notes that matter when reading flex bytes by hand:
+
+- A **non-negative** value always gets a `FLEX_UINT_*` encoding, even when
+  pushed through `flexPushSigned`. The `FLEX_NEG_*` encodings are used only
+  for values below zero, and they store the magnitude with a `-1` bias
+  (there is no signed zero to encode).
+- Integer encodings are chosen by _bytes actually used_, so `42` lands in
+  `FLEX_UINT_8B` and `-42` in `FLEX_NEG_8B`.
+- `FLEX_IS_INTEGER` covers 201-216 only; the 96/128-bit encodings are a
+  separate `FLEX_IS_INTEGER_BIG` class and require a `databoxBig`.
+- Immediate encodings occupy **one** byte total: there is no trailing
+  reverse encoding to skip, because there is no payload between them.
+
 ### Encoding Optimization
 
 Flex automatically selects the most compact encoding:
 
-| Data Type                 | Storage              | Example                 |
-| ------------------------- | -------------------- | ----------------------- |
-| Small strings (≤64 bytes) | 1 + N + 1 bytes      | "hello" → 6 bytes total |
-| Medium strings (≤16KB)    | 2 + N + 2 bytes      |                         |
-| Large strings (>16KB)     | 3-9 + N + 3-9 bytes  |                         |
-| Integers -128 to 127      | 1 + 1 + 1 = 3 bytes  | 42 → 3 bytes            |
-| Integers -32768 to 32767  | 1 + 2 + 1 = 4 bytes  |                         |
-| Float16                   | 1 + 2 + 1 = 4 bytes  | 0.578125 → 4 bytes      |
-| Float32                   | 1 + 4 + 1 = 6 bytes  |                         |
-| Float64                   | 1 + 8 + 1 = 10 bytes |                         |
-| true/false/null           | 1 byte               |                         |
+| Data Type                      | Storage              | Example                 |
+| ------------------------------ | -------------------- | ----------------------- |
+| Strings, length 1..64          | 1 + N + 1 bytes      | "hello" → 7 bytes total |
+| Strings, length 65..16447      | 2 + N + 2 bytes      |                         |
+| Strings, length 16448..4210750 | 3 + N + 3 bytes      |                         |
+| Strings, longer                | 5-9 + N + 5-9 bytes  |                         |
+| Integers -256 to 255           | 1 + 1 + 1 = 3 bytes  | 42 → 3 bytes            |
+| Integers -65536 to 65535       | 1 + 2 + 1 = 4 bytes  |                         |
+| Integers, wider                | 1 + 3..8 + 1 bytes   | 24/40/48/56-bit widths  |
+| Integers, 96- or 128-bit       | 1 + 12 or 16 + 1     | needs `databoxBig`      |
+| float16 / bfloat16             | 1 + 2 + 1 = 4 bytes  | 0.578125 → 4 bytes      |
+| float32                        | 1 + 4 + 1 = 6 bytes  |                         |
+| float64                        | 1 + 8 + 1 = 10 bytes |                         |
+| empty string / true/false/null | 1 byte               |                         |
+
+Length prefixes above 4210750 bytes jump from 3 to 5 bytes: the split varint
+has no 4-byte external form, so the next width up is `1 + 4`.
+
+### Automatic Value Canonicalisation
+
+`flexPushBytes` and `flexInsertBytes` run the byte string through
+`StrScanScanReliable` first. A string that parses cleanly as a number is
+stored in its **numeric** encoding, not as bytes — so pushing `"42"` and
+reading it back yields `DATABOX_UNSIGNED_64`, not `DATABOX_BYTES`:
+
+```c
+flexPushBytes(&f, "42", 2, FLEX_ENDPOINT_TAIL);
+
+databox box = {{0}};
+flexGetByType(flexHead(f), &box);
+assert(DATABOX_IS_INTEGER(&box));   /* NOT DATABOX_IS_BYTES */
+```
+
+This is a storage win for numeral-heavy data, and it is why round-tripping a
+flex is value-preserving rather than byte-preserving.
+
+`flexPushByType` routes `DATABOX_BYTES` / `DATABOX_BYTES_EMBED` through
+`flexInsertBytes`, so **endpoint pushes canonicalise too**. The positional
+`flexInsertByType` does not: it stores byte boxes verbatim. If you need
+digit strings preserved as bytes, insert at a position rather than pushing,
+or prefix/wrap the value so it no longer parses as a number.
+
+`flexPushByType` also stores `DATABOX_PTR` as an unsigned integer, which is
+why a pointer read back out of a flex arrives as `DATABOX_UNSIGNED_64` — see
+`databoxNewPtrAsUnsigned` in [databox](../core/DATABOX.md).
+
+Floats narrow the same way: `flexPushDouble` stores `FLEX_REAL_64B` only
+when the value does not round-trip exactly through `float`, and then narrows
+further to `FLEX_REAL_16B` or `FLEX_REAL_B16B` when those are exact. Use
+`flexPushFloat16` / `flexPushFloatB16` to force a 16-bit encoding regardless
+of truncation.
 
 ## Basic Types
 
@@ -161,9 +256,99 @@ void flexFree(flex *f);
 
 /* Example usage */
 flex *f = flexNew();
-// ... use flex ...
+/* ... use flex ... */
 flexFree(f);
 ```
+
+`flexReset` zeroes the buffer and rewrites a 2-byte header, but does not
+shrink the allocation — pair it with the `*Drain` deletes.
+
+### Validating Untrusted Bytes
+
+Iteration (`flexCount` / `flexHead` / `flexNext` / `flexGetByType`) trusts
+the header's self-described size and will walk past the end if that header
+lies. Gate any buffer that came from outside this process — replication, an
+on-disk snapshot, IPC, a plugin blob, a fuzzer:
+
+```c
+/* O(1): validates the outer envelope only.  True iff 'buf' parses as a
+ * well-formed header whose self-described total-bytes == buflen.
+ * Reads at most 5 bytes.  Sufficient when the bytes are MAC-gated. */
+bool flexValidateBuffer(const uint8_t *buf, size_t buflen);
+
+/* O(N): walks every entry's length encoding, confirms each entry fits,
+ * confirms the header's count matches the entries actually present, and
+ * confirms the walk lands exactly on the claimed end (no trailing garbage,
+ * no truncation).  Use when the bytes are NOT MAC-gated.  Does not decode
+ * payloads. */
+bool flexValidateBufferDeep(const uint8_t *buf, size_t buflen);
+
+/* O(1): read the leading total-bytes claim WITHOUT requiring
+ * buflen == claim — for a flex that is a strict PREFIX of a larger buffer
+ * (e.g. a flex-encoded frame header followed by opaque payload bytes).
+ * On success *out_total is the prefix length the flex claims; feed that to
+ * flexValidateBuffer and treat buf + *out_total as the post-flex region. */
+bool flexPeekTotalBytes(const uint8_t *buf, size_t buflen, size_t *out_total);
+```
+
+`flexPeekTotalBytes` returns false on NULL inputs, a `buflen` below the
+minimum envelope, a leading-varint width exceeding `buflen`, or a claim
+larger than `buflen`.
+
+### flex <-> databox Factory
+
+A flex and a databox carry the same type universe, so a one-element flex is
+interchangeable with a single databox. These are the validated
+wrapper/unwrapper for that case — use them instead of hand-rolling
+`flexNew()` + `flexPushByType()` / `flexHead()` + `flexGetByType()`, and
+instead of any ad-hoc `[type][len][bytes]` framing, whenever a value has to
+travel as a self-describing byte buffer:
+
+```c
+/* Build */
+flex *flexNewFromDatabox(const databox *box);
+flex *flexNewFromDataboxes(const databox *boxes, size_t n);      /* n == 0 ok */
+flex *flexNewFromDataboxPtrs(const databox *const *boxes, size_t n);
+flex *flexNewFromDataboxBig(const databoxBig *b);
+
+/* Defensive unwrap — validates the envelope AND the element count */
+bool flexGetSingleDatabox(const uint8_t *buf, size_t buflen, databox *out);
+bool flexGetTwoDataboxes(const uint8_t *buf, size_t buflen,
+                         databox *a, databox *b);
+bool flexGetSingleDataboxBig(const uint8_t *buf, size_t buflen,
+                             databoxBig *out);
+
+/* 64- or 128-bit numeric append; 128-bit values are normalised through
+ * the DATABOX_BIG_*_128 macros so the push never depends on the caller
+ * having set ->big */
+void flexPushDataboxBig(flex **ff, const databoxBig *b, flexEndpoint where);
+
+/* Round-trip + defensive-unwrap self test; returns the failure count */
+int flexFactorySelfTest(void);
+```
+
+The returned flex **is** the byte buffer (length via `flexBytes`); free it
+with `flexFree`. The unwrap calls return false and leave their outputs
+untouched on any malformation. For `DATABOX_BYTES` the extracted box points
+into `buf`, so it is valid only while `buf` lives.
+
+`flexNewFromDataboxPtrs` takes the `const databox **` convention that
+multimap and the persist ops use, avoiding a copy into a contiguous array
+just to build the flex.
+
+### Bulk Operations
+
+```c
+typedef struct flexBytesMember {
+    const void *data;
+    size_t len;
+} flexBytesMember;
+
+void flexBulkPushBytesMembers(flex **ff, const flexBytesMember *members,
+                              size_t count);
+```
+
+See [Allocation Behavior](#allocation-behavior) for why this exists.
 
 ### Working Example
 
@@ -272,18 +457,21 @@ void flexInsertSigned(flex **ff, flexEntry *fe, int64_t i);
 /* Insert unsigned integer */
 void flexInsertUnsigned(flex **ff, flexEntry *fe, uint64_t u);
 
-/* Insert float (auto-encoded) */
+/* Insert float (auto-encoded: float16 -> bfloat16 -> float32) */
 void flexInsertFloat(flex **ff, flexEntry *fe, float f);
 
-/* Insert half-precision float */
-void flexInsertHalfFloat(flex **ff, flexEntry *fe, float f);
-
-/* Insert double */
+/* Insert double (narrows to a float encoding when exact) */
 void flexInsertDouble(flex **ff, flexEntry *fe, double d);
 
 /* Insert any databox type */
 void flexInsertByType(flex **ff, flexEntry *fe, const databox *box);
 ```
+
+To force a 16-bit float encoding at a position, insert through a databox or
+use the endpoint pushes `flexPushFloat16` / `flexPushFloatB16`.
+
+`flexInsertBytes` runs the same numeral canonicalisation as `flexPushBytes`
+(see [Automatic Value Canonicalisation](#automatic-value-canonicalisation)).
 
 ### Insert Examples
 
@@ -304,23 +492,55 @@ flexFree(f);
 ### Sorted Insert (Binary Search)
 
 ```c
-/* Insert into sorted flex (single element) */
-bool flexInsertByTypeSorted(flex **ff, const databox *box);
-
-/* Insert with middle hint for faster search */
+/* Insert one element, keeping the flex sorted.
+ * 'middleEntry' is an in/out hint the caller owns and reuses. */
 bool flexInsertByTypeSortedWithMiddle(flex **ff, const databox *box,
                                       flexEntry **middleEntry);
 
-/* Insert multiple elements (e.g., key-value pair) */
+/* Insert a multi-element entry (e.g. a key-value pair): duplicates ALLOWED */
 bool flexInsertByTypeSortedWithMiddleMultiDirect(
     flex **ff, uint_fast32_t elementsPerEntry, const databox *box[],
     flexEntry **middleEntry);
 
-/* Insert or replace if exists */
+/* Insert, or replace the existing entry.
+ * compareUsingKeyElementOnly = true  -> match on element 0 only (map)
+ * compareUsingKeyElementOnly = false -> match on the full entry width
+ *                                       (a sorted BAG: duplicates allowed) */
 bool flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
     flex **ff, uint_fast32_t elementsPerEntry, const databox *box[],
-    flexEntry **middleEntry, bool replace);
+    flexEntry **middleEntry, bool compareUsingKeyElementOnly);
+
+/* TRUE SET insert: full-width compare AND dedupe.  A full-width-equal
+ * entry is a no-op returning true.  Set-semantics containers must use
+ * these, NOT the Direct call above with compareUsingKeyElementOnly=false. */
+bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectSet(
+    flex **ff, uint_fast32_t elementsPerEntry, const databox *box[],
+    flexEntry **middleEntry);
+bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceSet(
+    flex **ff, uint_fast32_t elementsPerEntry, const databox **box,
+    flexEntry **middleEntry, const struct multimapAtom *referenceContainer);
+
+/* Reference-container arms (see "With multimapAtom" below) */
+bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReference(
+    flex **ff, uint_fast32_t elementsPerEntry, const databox **box,
+    flexEntry **const middleEntry, bool compareUsingKeyElementOnly,
+    const struct multimapAtom *referenceContainer);
+bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKey(
+    flex **ff, uint_fast32_t elementsPerEntry, const databox **box,
+    const databox *boxInsertKey, flexEntry **middleEntry,
+    bool compareUsingKeyElementOnly,
+    const struct multimapAtom *referenceContainer);
+
+/* Long keys are promoted to pointers; the recovered pointer is returned */
+bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectLongKeysBecomePointers(
+    flex **ff, uint_fast32_t elementsPerEntry, const databox **box,
+    flexEntry **middleEntry, bool compareUsingKeyElementOnly,
+    void **recoveredPointer);
 ```
+
+There is no `flexInsertByTypeSorted()` without a middle hint — the hint
+parameter is part of every sorted-insert entry point. Pass a `flexEntry *`
+initialized to `NULL` and let the calls maintain it.
 
 ### Sorted Insert Examples
 
@@ -367,8 +587,11 @@ flexEntry *flexIndex(const flex *f, int32_t index);
 /* Get entry at index (direct, faster) */
 flexEntry *flexIndexDirect(const flex *f, int32_t index);
 
-/* Get head (first) entry */
+/* Get head (first) entry — an INSERTION POSITION, never NULL */
 flexEntry *flexHead(const flex *f);
+
+/* Get head for ITERATION — NULL when the flex holds no entries */
+flexEntry *flexHeadIfAny(const flex *f);
 
 /* Get tail (last) entry */
 flexEntry *flexTail(const flex *f);
@@ -407,6 +630,25 @@ flexEntry *tail = flexTail(f);  /* Same as flexIndex(f, -1) */
 
 flexFree(f);
 ```
+
+**`flexHead` vs `flexHeadIfAny`.** `flexHead` returns an insertion position
+and is deliberately non-NULL even for an empty flex, where it equals the end
+pointer. A loop written as
+
+```c
+fe = flexHead(f);
+while (fe) { read(fe); fe = flexNext(f, fe); }   /* WRONG */
+```
+
+therefore reads one entry past the buffer on an empty flex, before
+`flexNext` ever gets to apply its end check. Use `flexHeadIfAny` as the loop
+initializer — it applies the same end check, so the loop is correct at both
+ends and empty is simply zero iterations.
+
+`flexEntryIsValid(f, fe)` is a bounds test (`f <= fe < f + flexBytes(f)`),
+which is why `while (flexEntryIsValid(f, fe))` also terminates correctly:
+the end pointer fails it. It does **not** verify that `fe` lands on an entry
+boundary.
 
 ### Navigation
 
@@ -485,20 +727,33 @@ assert(DATABOX_IS_SIGNED_INTEGER(&box));
 assert(box.data.i64 == 42);
 
 /* Iterate and get all elements */
-fe = flexHead(f);
+fe = flexHeadIfAny(f);
 while (fe && flexGetNextByType(f, &fe, &box)) {
     if (DATABOX_IS_INTEGER(&box)) {
-        printf("Integer: %ld\n", box.data.i64);
+        printf("Integer: %" PRId64 "\n", box.data.i64);
     } else if (DATABOX_IS_BYTES(&box)) {
         printf("String: %.*s\n", (int)box.len,
                databoxBytes(&box));
     } else if (DATABOX_IS_FLOAT(&box)) {
-        printf("Float: %f\n", box.data.d64);
+        printf("Float: %f\n", (box.type == DATABOX_FLOAT_32)
+                                  ? (double)box.data.f32
+                                  : box.data.d64);
     }
 }
 
 flexFree(f);
 ```
+
+`flexGetByType` fills `type`, `data`, and `len` but leaves the databox flag
+bits alone — declare the box as `databox box = {{0}};` so `allocated` is
+false. The bytes it hands back point **into the flex buffer**, so they are
+valid only until the next flex mutation. Use `flexGetByTypeCopy` when the
+value must outlive the flex, and release it with `databoxFreeData`.
+
+A 128-bit element cannot be decoded into a plain `databox` (its `data.i128`
+is a pointer with nothing behind it) and will assert. Use
+`flexGetSingleDataboxBig` or decode into a `DATABOX_BIG_INIT`'d
+`databoxBig`.
 
 ## Finding Elements
 
@@ -551,27 +806,50 @@ flexEntry *flexFindByTypeReverse(flex *f, flexEntry *fe, const databox *box,
 ### Binary Search (Sorted Flexes)
 
 ```c
-/* Binary search in sorted flex */
-flexEntry *flexFindByTypeSorted(const flex *f, uint_fast32_t nextElementOffset,
+/* Binary search in sorted flex, comparing the KEY element of each entry */
+flexEntry *flexFindByTypeSorted(const flex *f, uint_fast32_t elementsPerEntry,
                                 const databox *compareAgainst);
 
-/* Binary search with middle hint (faster) */
+/* Binary search comparing the FULL entry width */
+flexEntry *flexFindByTypeSortedFullWidth(const flex *f,
+                                         uint_fast32_t elementsPerEntry,
+                                         const databox **compareAgainst);
+
+/* Same, with a middle hint */
 flexEntry *flexFindByTypeSortedWithMiddle(const flex *f,
                                           uint_fast32_t elementsPerEntry,
                                           const databox *compareAgainst,
-                                          const flexEntry *middleP);
-
-/* Binary search for full multi-element entries */
+                                          const flexEntry *middleFE);
 flexEntry *flexFindByTypeSortedWithMiddleFullWidth(
     const flex *f, uint_fast32_t elementsPerEntry,
-    const databox **compareAgainst, const flexEntry *middleP);
+    const databox **compareAgainst, const flexEntry *middleFE);
 
-/* Binary search with external references */
+/* Returns the ENTRY START even when the match is on a later element */
+flexEntry *flexFindByTypeSortedWithMiddleGetEntry(
+    const flex *f, uint_fast32_t elementsPerEntry,
+    const databox *compareAgainst, const flexEntry *middleFE);
+
+/* Locate the insertion POSITION for a value (not just an exact match) */
+flexEntry *flexGetByTypeSortedWithMiddle(const flex *f,
+                                         uint_fast32_t elementsPerEntry,
+                                         const databox *compareAgainst,
+                                         const flexEntry *middleFE);
+
+/* Binary search resolving entries stored as multimapAtom references */
 flexEntry *flexFindByTypeSortedWithMiddleWithReference(
-    const flex *const f, const uint_fast32_t elementsPerEntry,
+    const flex *f, uint_fast32_t elementsPerEntry,
     const databox *compareAgainst, const flexEntry *middleFE,
     const struct multimapAtom *referenceContainer);
+flexEntry *flexFindByTypeSortedWithMiddleFullWidthWithReference(
+    const flex *f, uint_fast32_t elementsPerEntry,
+    const databox **compareAgainst, const flexEntry *middleFE,
+    const struct multimapAtom *referenceContainer);
 ```
+
+`elementsPerEntry` is how many flex elements make up one logical entry: `1`
+for a plain sorted list, `2` for key-value pairs, `N` for wider records. It
+is also the stride the binary search uses, so passing the wrong value
+searches the wrong positions rather than merely returning "not found".
 
 ### Search Examples
 
@@ -804,15 +1082,22 @@ flexFree(f);
 ### Merging
 
 ```c
-/* Merge two flexes (both inputs consumed) */
+/* Merge two flexes in place.  Returns the merged flex, or NULL if either
+ * argument is NULL or both point at the SAME flex. */
 flex *flexMerge(flex **first, flex **second);
 
-/* Append one flex to another */
+/* Append one flex's entries to another */
 void flexBulkAppendFlex(flex **ff, const flex *zzb);
 
-/* Merge array of flexes */
+/* Fold an array of flexes into one new flex */
 flex *flexBulkMergeFlex(const flex *const *const fs, const size_t count);
 ```
+
+`flexMerge` reuses the **larger** of the two buffers rather than allocating
+a third. On return exactly one of `*first` / `*second` holds the merged flex
+(the same pointer the function returns) and the other has been freed and set
+to `NULL`. Which one survives depends on the input sizes, so always free
+through the returned pointer and never assume `*first` was the survivor.
 
 ### Splitting
 
@@ -840,10 +1125,11 @@ flex *f2 = flexNew();
 flexPushBytes(&f2, "world", 5, FLEX_ENDPOINT_TAIL);
 flexPushSigned(&f2, 200, FLEX_ENDPOINT_TAIL);
 
-/* Merge f1 and f2 (both are consumed, result in merged) */
+/* Merge f1 and f2: one buffer is reused, the other is freed and NULLed */
 flex *merged = flexMerge(&f1, &f2);
 /* merged: ["hello", 100, "world", 200] */
-/* f1 and f2 are now invalid (freed) */
+/* Exactly one of f1 / f2 now equals 'merged'; the other is NULL.
+ * Do not free f1 or f2 — free 'merged'. */
 
 /* Splitting */
 flex *secondHalf = flexSplitRange(&merged, 2, 2);
@@ -863,9 +1149,12 @@ bool flexIsEmpty(const flex *f);
 /* Get count of elements */
 size_t flexCount(const flex *f);
 
-/* Get total bytes used by flex */
+/* Get total bytes used by flex (header + all entries) */
 size_t flexBytes(const flex *f);
-size_t flexBytesLength(const flex *f);  /* Alias */
+
+/* Get the WIDTH of the total-bytes header varint (1-9) — NOT an alias
+ * for flexBytes.  Use this only when parsing the header by hand. */
+size_t flexBytesLength(const flex *f);
 
 /* Get middle entry (for sorted operations) */
 flexEntry *flexMiddle(const flex *f, uint_fast32_t elementsPerEntry);
@@ -939,14 +1228,18 @@ flexFree(numbers);
 
 For large flexes, compress to save memory:
 
-```c
-/* Minimum size to attempt compression */
-#define CFLEX_MINIMUM_COMPRESS_BYTES /* Implementation defined */
+A cflex is **not** an opaque blob: it begins with a verbatim copy of the
+source flex's header (the total-bytes and count varints), then a third
+varint holding the compressed payload length, then the LZ4 data. Because the
+header survives, `flexCount()` and `flexBytes()` read a cflex directly and
+report the _uncompressed_ count and size without decompressing.
 
-/* Get compressed size */
+```c
+/* Length of the LZ4 payload alone */
 size_t cflexBytesCompressed(const cflex *c);
 
-/* Get uncompressed size */
+/* TOTAL physical size of the cflex:
+ * header + payload-length varint + payload */
 size_t cflexBytes(const cflex *c);
 
 /* Duplicate compressed flex */
@@ -958,6 +1251,16 @@ bool flexConvertToCFlex(const flex *f, cflex *cBuffer, size_t cBufferLen);
 /* Convert compressed flex back to regular flex */
 bool cflexConvertToFlex(const cflex *c, flex **fBuffer, size_t *fBufferLen);
 ```
+
+`flexConvertToCFlex` returns false — and leaves `cBuffer` untouched — when
+the flex is smaller than an internal 64-byte floor, when `cBufferLen` is
+below that same floor, when the flex exceeds LZ4's single-shot maximum input
+size, or when LZ4 itself cannot fit the result in the buffer provided. That
+floor is private to `flex.c` and is not exported as a public constant; just
+check the return value. The function never grows `cBuffer` for you.
+
+For a managed, self-sizing wrapper around this, use
+[mflex](MFLEX.md) rather than driving cflex buffers by hand.
 
 ### Compression Examples
 
@@ -973,29 +1276,26 @@ for (int i = 0; i < 100000; i++) {
 size_t originalSize = flexBytes(f);
 printf("Original size: %zu bytes\n", originalSize);
 
-/* Compress if large enough */
-if (originalSize >= CFLEX_MINIMUM_COMPRESS_BYTES) {
-    void *compressBuffer = malloc(originalSize * 2);
-    cflex *c = (cflex *)compressBuffer;
+void *compressBuffer = zmalloc(originalSize * 2);
+cflex *c = (cflex *)compressBuffer;
 
-    if (flexConvertToCFlex(f, c, originalSize * 2)) {
-        size_t compressedSize = cflexBytesCompressed(c);
-        printf("Compressed to: %zu bytes (%.1f%% reduction)\n",
-               compressedSize,
-               100.0 * (1.0 - (double)compressedSize / originalSize));
+/* Returns false when the input is too small or would not shrink */
+if (flexConvertToCFlex(f, c, originalSize * 2)) {
+    size_t compressedSize = cflexBytesCompressed(c);
+    printf("Compressed to: %zu bytes (%.1f%% reduction)\n",
+           compressedSize,
+           100.0 * (1.0 - (double)compressedSize / originalSize));
 
-        /* Decompress when needed */
-        flex *restored = NULL;
-        size_t restoredSize = originalSize;
-        if (cflexConvertToFlex(c, &restored, &restoredSize)) {
-            assert(flexEqual(f, restored));
-            flexFree(restored);
-        }
+    /* Decompress when needed */
+    flex *restored = NULL;
+    size_t restoredSize = originalSize;
+    if (cflexConvertToFlex(c, &restored, &restoredSize)) {
+        assert(flexEqual(f, restored));
+        flexFree(restored);
     }
-
-    free(compressBuffer);
 }
 
+zfree(compressBuffer);
 flexFree(f);
 ```
 
@@ -1021,42 +1321,55 @@ flexPushDouble(&f, 3.14, FLEX_ENDPOINT_TAIL);
 
 #ifdef DATAKIT_TEST
 flexRepr(f);
-/* Output (example):
- * [3 entries, 28 bytes]
- * [0] "hello" (5 bytes, string)
- * [1] 42 (signed integer, FLEX_NEG_8B)
- * [2] 3.14 (double, FLEX_REAL_64B)
- */
 #endif
 
 flexFree(f);
 ```
 
+`flexRepr` first prints the header — total bytes, element count, the width
+of each header varint, the resulting header size, and the tail offset — then
+one brace-delimited record per entry carrying its address, forward and
+reverse index, byte offset within the flex, total entry size, metadata size
+(the two encoding copies), and payload length, followed by the decoded
+value. Immediate types render as `{{TRUE}}`, `{{FALSE}}`, `{{NULL}}`, or
+`{{EMPTY}}`.
+
+It is a debug dump, not a stable format: do not parse it.
+
 ## Performance Characteristics
 
-| Operation                 | Complexity     | Notes                        |
-| ------------------------- | -------------- | ---------------------------- |
-| **Creation**              | O(1)           | Allocates 2 bytes            |
-| **Push to tail**          | O(1) amortized | Single realloc               |
-| **Push to head**          | O(n)           | Must shift all data          |
-| **Index access**          | O(n)           | Sequential scan required     |
-| **Head/tail access**      | O(1)           | Direct calculation           |
-| **Next/prev**             | O(1)           | Length encoded in entry      |
-| **Insert at position**    | O(n)           | Must shift data after insert |
-| **Delete at position**    | O(n)           | Must shift data after delete |
-| **Find (linear)**         | O(n)           | Full scan                    |
-| **Find (sorted)**         | O(log n)       | Binary search                |
-| **Find with middle hint** | O(log n/2)     | Binary search from middle    |
-| **Merge**                 | O(n + m)       | Concatenation                |
-| **Split**                 | O(1)           | Just allocate new header     |
+| Operation                 | Complexity | Notes                                          |
+| ------------------------- | ---------- | ---------------------------------------------- |
+| **Creation**              | O(1)       | `zcalloc` of 2 bytes                           |
+| **Push to tail**          | O(n)       | exact-size realloc; may copy the buffer        |
+| **Push to head**          | O(n)       | realloc plus shifting all existing data        |
+| **Bulk push (members)**   | O(n)       | chunked build + one exact-sized merge          |
+| **Index access**          | O(n)       | sequential scan (from whichever end is nearer) |
+| **Head/tail access**      | O(1)       | direct calculation from the header             |
+| **Next/prev**             | O(1)       | length encoded on both sides of the entry      |
+| **Insert at position**    | O(n)       | must shift data after the insert point         |
+| **Delete at position**    | O(n)       | must shift data after the delete point         |
+| **Find (linear)**         | O(n)       | full scan                                      |
+| **Find (sorted)**         | O(log n)   | binary search                                  |
+| **Find with middle hint** | O(log n)   | same order, roughly one level saved            |
+| **Merge**                 | O(n + m)   | concatenation into one new allocation          |
+| **Split**                 | O(n)       | copies the extracted range into a new flex     |
+
+Note `flexIndex` halves the scan by converting a forward index past the
+midpoint into a reverse traversal (and vice versa) — still O(n), but with a
+better constant than a naive walk. `flexIndexDirect` skips that conversion.
 
 ### Performance Tips
 
-1. **Use middle hints**: For sorted flexes, always maintain a middle entry pointer
-2. **Batch operations**: Use drain variants when deleting many elements
-3. **Preallocate**: Use `zrealloc()` to grow flex before bulk inserts
-4. **Prefer tail operations**: Pushing to tail is O(1), head is O(n)
-5. **Keep sorted**: Binary search is 100-1000x faster than linear search
+1. **Carry middle hints**: for sorted flexes, keep one `flexEntry *` alive
+   across operations rather than re-deriving it
+2. **Batch deletes**: use the `*Drain` variants, then `flexReset` once
+3. **Batch appends**: `flexBulkPushBytesMembers` / `flexBulkMergeFlex` — a
+   manual `zrealloc` cannot pre-size a flex
+4. **Prefer tail operations**: head pushes pay for shifting the whole buffer
+   on top of the realloc
+5. **Keep sorted**: binary search beats linear scan by orders of magnitude
+   at container-sized element counts
 
 ## Memory Management
 
@@ -1072,12 +1385,16 @@ Empty flex (2 bytes):
 Small flex with one integer (5 bytes):
 [0x05][0x01][0xCA][0x2A][0xCA]
   ^     ^     ^     ^     ^
-  |     |     |     |     └─ reverse encoding
+  |     |     |     |     └─ reverse encoding (same byte, for prev walks)
   |     |     |     └─────── data (42)
-  |     |     └───────────── forward encoding (FLEX_NEG_8B)
+  |     |     └───────────── forward encoding: 0xCA = 202 = FLEX_UINT_8B
   |     └─────────────────── count = 1
   └───────────────────────── total bytes = 5
 ```
+
+42 is non-negative, so it takes the **UINT** encoding even though it was
+pushed with `flexPushSigned`. `-42` would use `FLEX_NEG_8B` (0xC9 = 201) and
+store the biased magnitude.
 
 ### Memory Efficiency
 
@@ -1110,26 +1427,39 @@ printf("Flex: %zu bytes\n", flexSize);
 flexFree(f);
 ```
 
-### Allocation Strategies
+### Allocation Behavior
+
+flex allocates **exactly** what it needs and nothing more. `flexNew()`
+`zcalloc`s two bytes; every subsequent insert or delete runs through the
+header-resize path, which `zrealloc`s to the exact new total size.
+
+There is no reserve, no slack, and no way to pre-size a flex: a manual
+`zrealloc` to a larger buffer is discarded by the next mutation, which
+reallocs back down to the exact size. Appending N members one at a time
+therefore moves O(total bytes squared).
+
+The two supported ways to build a large flex cheaply:
 
 ```c
-/* Strategy 1: Default (reallocate on each operation) */
-flex *f1 = flexNew();
-for (int i = 0; i < 1000; i++) {
-    flexPushSigned(&f1, i, FLEX_ENDPOINT_TAIL);
-}
+/* Many byte members at the tail */
+void flexBulkPushBytesMembers(flex **ff, const flexBytesMember *members,
+                              size_t count);
 
-/* Strategy 2: Preallocate (much faster for bulk insert) */
-flex *f2 = flexNew();
-f2 = zrealloc(f2, 10000);  /* Preallocate ~10KB */
-for (int i = 0; i < 1000; i++) {
-    flexPushSigned(&f2, i, FLEX_ENDPOINT_TAIL);
-}
-/* f2 is same size as f1, but created much faster */
-
-flexFree(f1);
-flexFree(f2);
+/* Fold an array of already-built flexes into one */
+flex *flexBulkMergeFlex(const flex *const *fs, size_t count);
 ```
+
+`flexBulkPushBytesMembers` builds bounded chunk flexes with the same
+`flexPushBytes` call (numeral canonicalisation included) and folds them with
+one exact-sized merge. The resulting bytes are identical to the direct loop:
+entry encodings carry their own forward and backward length prefixes and
+hold no cross-entry back-references, so no entry's encoding depends on its
+position — only the header varints are recomputed. `*ff` is replaced by the
+grown flex and the previous one is freed; content it already held keeps its
+position ahead of the new members.
+
+The one place deferred reallocation exists is deletion: the `*Drain`
+variants skip the shrink `zrealloc` so emptying a flex is not N reallocs.
 
 ## Real-World Examples
 
@@ -1187,7 +1517,7 @@ if (found) {
     flexEntry *valueEntry = flexNext(scores, found);
     flexGetByType(valueEntry, &valBox);
 
-    printf("Score for charlie: %ld\n", valBox.data.i64);  /* 92 */
+    printf("Score for charlie: %" PRId64 "\n", valBox.data.i64);  /* 92 */
 }
 
 flexFree(scores);
@@ -1224,18 +1554,20 @@ const databox *fieldPtrs[] = {&fields[0], &fields[1], &fields[2], &fields[3]};
 flexAppendMultiple(&record, 4, fieldPtrs);
 
 /* Decode from flex */
-flexEntry *fe = flexHead(record);
-databox decoded[4];
+flexEntry *fe = flexHeadIfAny(record);
+databox decoded[4] = {{{0}}};
 
-for (int i = 0; i < 4; i++) {
+for (int i = 0; i < 4 && fe; i++) {
     flexGetByType(fe, &decoded[i]);
     fe = flexNext(record, fe);
 }
 
-/* Verify */
+/* Verify.  Note: flex bytes are NOT NUL-terminated — compare with the
+ * box's length, never with strcmp(). */
 assert(decoded[0].data.u64 == user.id);
-assert(strcmp((char *)databoxBytes(&decoded[1]), user.name) == 0);
-assert(decoded[2].data.d64 == user.balance);
+assert(decoded[1].len == strlen(user.name));
+assert(memcmp(databoxBytes(&decoded[1]), user.name, decoded[1].len) == 0);
+assert(decoded[2].data.d64 == user.balance);  /* 1234.56 stays FLEX_REAL_64B */
 assert(DATABOX_IS_TRUE(&decoded[3]));
 
 flexFree(record);
@@ -1270,7 +1602,9 @@ while (flexEntryIsValid(timeseries, fe)) {
 
     databox tempBox = {{0}};
     flexGetByType(fe, &tempBox);
-    sum += tempBox.data.d64;
+    /* Values that round-trip exactly through float come back FLOAT_32 */
+    sum += (tempBox.type == DATABOX_FLOAT_32) ? (double)tempBox.data.f32
+                                              : tempBox.data.d64;
     count++;
 
     fe = flexNext(timeseries, fe);
@@ -1335,7 +1669,7 @@ while (flexEntryIsValid(f, fe)) {
     if (DATABOX_IS_BYTES(&box)) {
         printf("%.*s", (int)box.len, databoxBytes(&box));
     } else if (DATABOX_IS_INTEGER(&box)) {
-        printf("%ld", box.data.i64);
+        printf("%" PRId64, box.data.i64);
     }
     printf("\n");
 
@@ -1388,12 +1722,13 @@ void enqueue(flex **q, const databox *msg) {
     flexPushByType(q, msg, FLEX_ENDPOINT_TAIL);
 }
 
-/* Dequeue */
+/* Dequeue.  Copy the value out: the delete reallocs the buffer the
+ * decoded bytes point into.  Caller releases with databoxFreeData(). */
 bool dequeue(flex **q, databox *msg) {
     if (flexIsEmpty(*q)) return false;
 
-    flexEntry *fe = flexHead(*q);
-    flexGetByType(fe, msg);
+    *msg = (databox){{0}};
+    flexGetByTypeCopy(flexHead(*q), msg);
     flexDeleteHead(q);
     return true;
 }
@@ -1405,6 +1740,7 @@ enqueue(&queue, &msg);
 databox received = {{0}};
 if (dequeue(&queue, &received)) {
     printf("Received: %.*s\n", (int)received.len, databoxBytes(&received));
+    databoxFreeData(&received);
 }
 
 flexFree(queue);
@@ -1531,36 +1867,40 @@ Flex serves as the underlying storage for these higher-level structures:
 
 ### As Nested Container
 
-Flexes can contain other flexes:
+The encoding reserves eight container types (`FLEX_CONTAINER_MAP` through
+`FLEX_CONTAINER_CTUPLE`) whose payload is a nested flex or cflex, and the
+readers understand them: `flexGetByType` decodes such an entry into the
+matching `DATABOX_CONTAINER_FLEX_*` / `_CFLEX_*` box, and
+`flexGetByTypeCopy` copies the nested buffer out.
+
+The **writers do not accept them**: neither `flexPushByType` nor
+`flexInsertByType` has a case for a `DATABOX_CONTAINER_*` box, so passing
+one is undefined behavior, not an error return. Nested containers are
+produced by the higher-level containers that own the encoding, not by
+pushing a hand-built container databox.
+
+To carry one flex inside another today, store it as bytes and re-wrap on
+read:
 
 ```c
-/* Create nested structure */
 flex *inner = flexNew();
 flexPushSigned(&inner, 1, FLEX_ENDPOINT_TAIL);
 flexPushSigned(&inner, 2, FLEX_ENDPOINT_TAIL);
 flexPushSigned(&inner, 3, FLEX_ENDPOINT_TAIL);
 
-/* Store inner flex as container in outer flex */
-databox innerBox = {
-    .type = DATABOX_CONTAINER_FLEX_LIST,
-    .data.bytes.start = (uint8_t *)inner,
-    .len = flexBytes(inner)
-};
-
 flex *outer = flexNew();
-flexPushByType(&outer, &innerBox, FLEX_ENDPOINT_TAIL);
+flexPushBytes(&outer, inner, flexBytes(inner), FLEX_ENDPOINT_TAIL);
+flexFree(inner);   /* the bytes were copied into 'outer' */
 
-/* Retrieve nested flex */
-flexEntry *fe = flexHead(outer);
-databox retrieved = {{0}};
-flexGetByType(fe, &retrieved);
-
-assert(retrieved.type == DATABOX_CONTAINER_FLEX_LIST);
-flex *retrievedInner = (flex *)retrieved.data.bytes.start;
-assert(flexCount(retrievedInner) == 3);
+/* Read back, validating before iterating the nested bytes */
+databox box = {{0}};
+flexGetByType(flexHead(outer), &box);
+if (flexValidateBuffer(databoxBytes(&box), box.len)) {
+    const flex *nested = (const flex *)databoxBytes(&box);
+    assert(flexCount(nested) == 3);
+}
 
 flexFree(outer);
-flexFree(inner);
 ```
 
 ## Best Practices
@@ -1581,16 +1921,17 @@ if (fe && flexEntryIsValid(f, fe)) {
 }
 ```
 
-### 2. Use Middle Hints for Sorted Operations
+### 2. Carry the Middle Hint Across Sorted Operations
 
 ```c
-/* SLOW - O(log n) each time, searching from start */
+/* SLOW - a fresh hint every iteration is no hint at all */
 for (int i = 0; i < 1000; i++) {
     databox box = databoxNewSigned(i);
-    flexInsertByTypeSorted(&f, &box);
+    flexEntry *middle = NULL;
+    flexInsertByTypeSortedWithMiddle(&f, &box, &middle);
 }
 
-/* FAST - O(log n/2) average, reuses middle position */
+/* FAST - one hint, maintained by the calls themselves */
 flexEntry *middle = NULL;
 for (int i = 0; i < 1000; i++) {
     databox box = databoxNewSigned(i);
@@ -1598,21 +1939,31 @@ for (int i = 0; i < 1000; i++) {
 }
 ```
 
-### 3. Preallocate for Bulk Inserts
+The hint is a raw pointer into the flex buffer, so it is only valid for the
+flex the calls have been maintaining it against — reset it to `NULL` after
+any operation that did not update it.
+
+### 3. Never "Preallocate" — Use the Bulk Calls
+
+flex has **no capacity concept**. Every insert and delete reallocs to the
+exact new total size, so an oversized `zrealloc` is undone by the very next
+push. Batch instead:
 
 ```c
-/* SLOW - many reallocs */
+/* SLOW - O(total bytes^2): each push reallocs to the exact new size */
 flex *f = flexNew();
-for (int i = 0; i < 10000; i++) {
-    flexPushSigned(&f, i, FLEX_ENDPOINT_TAIL);
+for (size_t i = 0; i < 10000; i++) {
+    flexPushBytes(&f, values[i], lengths[i], FLEX_ENDPOINT_TAIL);
 }
 
-/* FAST - one allocation */
-flex *f2 = flexNew();
-f2 = zrealloc(f2, 100000);  /* Preallocate space */
-for (int i = 0; i < 10000; i++) {
-    flexPushSigned(&f2, i, FLEX_ENDPOINT_TAIL);
+/* FAST - chunked build folded with one exact-sized merge */
+flexBytesMember members[10000];
+for (size_t i = 0; i < 10000; i++) {
+    members[i] = (flexBytesMember){.data = values[i], .len = lengths[i]};
 }
+
+flex *f = flexNew();
+flexBulkPushBytesMembers(&f, members, COUNT_ARRAY(members));
 ```
 
 ### 4. Use Drain for Bulk Deletes
@@ -1694,6 +2045,49 @@ flexFindByTypeSortedWithMiddle(f, 1, &box3, mid);  /* May not find! */
 /* Either all sorted operations, or all unsorted operations */
 ```
 
+### 5. Expecting Pushed Bytes to Come Back as Bytes
+
+```c
+/* WRONG - "42" is canonicalised to an integer on the way in */
+flexPushBytes(&f, "42", 2, FLEX_ENDPOINT_TAIL);
+databox box = {{0}};
+flexGetByType(flexHead(f), &box);
+assert(DATABOX_IS_BYTES(&box));   /* fails: it is an integer */
+```
+
+Any push of a numeral-looking string lands in a numeric encoding. Test with
+`DATABOX_IS_INTEGER` / `DATABOX_IS_FLOAT` as well, or keep the value out of
+numeral form.
+
+### 6. Holding Decoded Bytes Across a Mutation
+
+```c
+/* WRONG - box.data points INTO the flex buffer */
+databox box = {{0}};
+flexGetByType(flexHead(f), &box);
+flexPushSigned(&f, 1, FLEX_ENDPOINT_TAIL);   /* reallocs */
+use(databoxBytes(&box));                      /* dangling */
+
+/* RIGHT - copy out first */
+databox box = {{0}};
+flexGetByTypeCopy(flexHead(f), &box);
+flexPushSigned(&f, 1, FLEX_ENDPOINT_TAIL);
+use(databoxBytes(&box));
+databoxFreeData(&box);
+```
+
+### 7. Iterating Bytes From an Untrusted Source
+
+```c
+/* WRONG - the header's claimed size is taken on faith */
+size_t n = flexCount((const flex *)buf);
+
+/* RIGHT - validate the envelope (or the whole structure) first */
+if (flexValidateBufferDeep(buf, buflen)) {
+    size_t n = flexCount((const flex *)buf);
+}
+```
+
 ## Thread Safety
 
 Flex is **not thread-safe**. Concurrent access requires external synchronization:
@@ -1715,9 +2109,10 @@ void thread_safe_push(databox *box) {
 ## See Also
 
 - [databox](../core/DATABOX.md) - Universal 16-byte container used by flex
-- [multimap](../multimap/MULTIMAP.md) - Hash table implementation using flex
+- [mflex](MFLEX.md) - Transparently compressed flex wrapper
+- [multimap](../multimap/MULTIMAP.md) - Sorted map built on flex
+- [multimapAtom](../multimap/VARIANTS.md#multimapatom) - Reference deduplication for flex
 - [multilist](../multilist/MULTILIST.md) - List abstraction using flex
-- [multimapAtom](../multi/MULTIMAPATOM.md) - Reference deduplication for flex
 - [Architecture Overview](../../ARCHITECTURE.md) - Design philosophy
 
 ## Testing
@@ -1745,6 +2140,7 @@ The test suite includes:
 ## References
 
 The flex encoding is inspired by:
+
 - **ziplist** (compact list encoding)
 - **listpack** (improved ziplist successor)
 - **Variable-length encoding** from Protocol Buffers

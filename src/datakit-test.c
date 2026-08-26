@@ -67,6 +67,7 @@
 #include "multiarrayMedium.h"
 #include "multiarraySmall.h"
 #include "multidict.h"
+#include "multiheap.h"
 #include "multilist.h"
 #include "multilistFull.h"
 #include "multilistMedium.h"
@@ -9002,7 +9003,7 @@ static const TestEntry testRegistry[] = {
     T_ADJ(fibbuf), T_ADJ(jebuf), T_ADJ(ptrlib), T_ADJ(bigmath),
 
     /* Utilities */
-    T(util), T_ADJ(databox), T_ADJ(databoxLinear), T(offsetArray),
+    T(util), T_ADJ(databox), T_ADJ(databoxLinear), T(offsetArray), T(multiheap),
     T_ADJ(membound), T_ADJ(memtest), T_ADJ(bbits), T_ADJ(ulid), T(persist),
     T_A(persistCtx, "pctx"), T_A(multimapP, "mmP"), T_A(multilistP, "mlP"),
     T_A(multidictP, "mdP"), T_A(flexP, "fP"), T_A(intsetP, "isP"),

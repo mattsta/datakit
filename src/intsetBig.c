@@ -188,15 +188,17 @@ void intsetBigFree(intsetBig *isb) {
 }
 
 intsetBig *intsetBigCopy(const intsetBig *const isb) {
-    /* Copy 'isb' for the bucket->intsetU32 mappings,
-     * then copy each intsetU32 from the source into
-     * the matching bucket in the result. */
+    /* Build the result fresh by walking the (never mutated) SOURCE
+     * map: every bucket key is numeric (held by value) and every
+     * intsetU32 is deep-copied straight into the result, so no
+     * iterate-while-mutate aliasing and no transient state where the
+     * copy shares live intsetU32 pointers with the source. */
     intsetBig *result = zmalloc(sizeof(*result));
     result->count = isb->count;
-    result->i = multimapCopy(isb->i);
+    result->i = multimapNew(2);
 
     multimapIterator iter;
-    multimapIteratorInit(result->i, &iter, true);
+    multimapIteratorInit(isb->i, &iter, true);
 
     databoxBig bucket;
     databox vptr;
@@ -626,6 +628,19 @@ size_t intsetBigIntersect(const intsetBig *a, const intsetBig *b,
     while (foundA && foundB) {
         const int compared = databoxCompare(ea[0], eb[0]);
         if (compared < 0) {
+            if (a == result) {
+                /* In-place: a bucket only in 'a' is NOT in the
+                 * intersection — remove it (bucket keys are numeric,
+                 * held by value, so they survive the delete).  The
+                 * delete invalidates the iterator; re-seek to the next
+                 * bucket past the removed key. */
+                intsetU32 *eaai = val[0].data.ptr;
+                result->count -= intsetU32Count(eaai);
+                intsetU32Free(eaai);
+                multimapDelete(&result->i, ea[0]);
+                multimapIteratorInitAt(a->i, &ia, true, (databox *)&key[0]);
+            }
+
             foundA = multimapIteratorNext(&ia, ea);
         } else if (compared > 0) {
             foundB = multimapIteratorNext(&ib, eb);
@@ -670,17 +685,38 @@ size_t intsetBigIntersect(const intsetBig *a, const intsetBig *b,
             result->count += intersectedCount;
             intsetBigAddByBucketDirectOverwriteBulk(result, &key[0], tmpU32);
             if (a == result) {
-                /* Re-create (and advance) iterator because Overwrite changed
-                 * underlying multimap */
+                /* The overwrite changed the underlying multimap, so the
+                 * iterator must be re-seeded.  When the intersection
+                 * emptied the bucket, the overwrite DELETED it: the
+                 * re-seek then already lands on the next bucket, and a
+                 * second advance would silently skip one. */
                 assert(a->i == result->i);
 
                 multimapIteratorInitAt(a->i, &ia, true, (databox *)&key[0]);
-                multimapIteratorNext(&ia, ea);
+                foundA = multimapIteratorNext(&ia, ea);
+                if (intersectedCount > 0 && foundA) {
+                    /* current position is the bucket just processed */
+                    foundA = multimapIteratorNext(&ia, ea);
+                }
+            } else {
+                foundA = multimapIteratorNext(&ia, ea);
             }
 
             /* Continue finding next matching buckets. */
-            foundA = multimapIteratorNext(&ia, ea);
             foundB = multimapIteratorNext(&ib, eb);
+        }
+    }
+
+    if (a == result) {
+        /* In-place: every bucket remaining after 'b' is exhausted has
+         * no partner in 'b' — none of it intersects. */
+        while (foundA) {
+            intsetU32 *eaai = val[0].data.ptr;
+            result->count -= intsetU32Count(eaai);
+            intsetU32Free(eaai);
+            multimapDelete(&result->i, ea[0]);
+            multimapIteratorInitAt(a->i, &ia, true, (databox *)&key[0]);
+            foundA = multimapIteratorNext(&ia, ea);
         }
     }
 
@@ -764,6 +800,10 @@ bool intsetBigRandom(const intsetBig *isb, databoxBig *val) {
      * Step 2: return value for random position. */
     /* TODO: if this random() is too slow, we could augment with
      *       xorshift128plus() */
+    if (isb->count == 0) {
+        return false;
+    }
+
     const uint64_t bigRandom = ((uint64_t)random() << 32) | random();
     const uint64_t selectedIndex = bigRandom % isb->count;
 
@@ -779,7 +819,11 @@ bool intsetBigRandom(const intsetBig *isb, databoxBig *val) {
         const size_t localCount = intsetU32Count(use);
         currentCount += localCount;
 
-        if (currentCount >= selectedIndex) {
+        /* Strict '>': selectedIndex is 0-based, so a bucket owns global
+         * indices [currentCount - localCount, currentCount - 1]; an
+         * index equal to currentCount belongs to the NEXT bucket (and
+         * would compute a -1 offset here). */
+        if (currentCount > selectedIndex) {
             /* random element is INSIDE THE HOUSE */
             const ssize_t useOffset = currentCount - selectedIndex - 1;
             assert(useOffset >= 0);
@@ -802,7 +846,11 @@ bool intsetBigRandomDelete(intsetBig *isb, databoxBig *deleted) {
      * (once for Random() and once for Remove()), but it's okay for now (not
      * perf tested though). */
 
-    intsetBigRandom(isb, deleted);
+    if (!intsetBigRandom(isb, deleted)) {
+        /* empty set: nothing to delete, 'deleted' is not populated */
+        return false;
+    }
+
     /* TODO: we could improve the performance here by making 'delete' a special
      * case of intsetBigRandom() itself since intsetBigRandom() already has the
      * bucket and intsetU32 values directly when it creates the return value
@@ -1438,6 +1486,45 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
 
         if (intsetBigCountElements(isb) != 0) {
             ERRR("Set should be empty after deleting all elements!");
+        }
+
+        /* Empty set: Random and RandomDelete report false, no crash */
+        databoxBig none;
+        if (intsetBigRandom(isb, &none)) {
+            ERRR("Random on an empty set must return false!");
+        }
+
+        if (intsetBigRandomDelete(isb, &none)) {
+            ERRR("RandomDelete on an empty set must return false!");
+        }
+
+        intsetBigFree(isb);
+    }
+
+    TEST("intsetBigRandom across multiple buckets") {
+        /* Values spread across several 2^20-wide buckets: every global
+         * index must map to a valid in-bucket offset, including the
+         * bucket-boundary indices. */
+        intsetBig *isb = intsetBigNew();
+        const uint64_t bucketSpan = UINT64_C(1) << 20;
+        for (uint64_t b = 0; b < 5; b++) {
+            for (uint64_t i = 0; i < 7; i++) {
+                databoxBig val = DATABOX_BIG_UNSIGNED((b * bucketSpan) + i);
+                intsetBigAdd(isb, &val);
+            }
+        }
+
+        assert(intsetBigCountElements(isb) == 35);
+
+        for (int i = 0; i < 2000; i++) {
+            databoxBig randomVal;
+            if (!intsetBigRandom(isb, &randomVal)) {
+                ERRR("Random should succeed on multi-bucket set!");
+            }
+
+            if (!intsetBigExists(isb, &randomVal)) {
+                ERRR("Random value should exist in multi-bucket set!");
+            }
         }
 
         intsetBigFree(isb);
@@ -2185,6 +2272,67 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
         intsetBigFree(a);
         intsetBigFree(b);
         intsetBigFree(result);
+    }
+
+    TEST("intsetBigIntersect - in-place (a == result) matches fresh result") {
+        /* Layout exercising every in-place branch: a leading a-only
+         * bucket, an interleaved match, a bucket whose element
+         * intersection is EMPTY (same bucket, different elements), a
+         * second match, and trailing a-only buckets past b's last. */
+        intsetBig *a = intsetBigNew();
+        intsetBig *b = intsetBigNew();
+
+        intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(50)); /* bucket 0: a-only */
+        intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(BUCKET_SIZE + 10)); /* match */
+        intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(BUCKET_SIZE + 20));
+        intsetBigAdd(
+            a, &DATABOX_BIG_UNSIGNED(2 * BUCKET_SIZE + 5)); /* empty isect */
+        intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(3 * BUCKET_SIZE + 7)); /* match */
+        intsetBigAdd(a,
+                     &DATABOX_BIG_UNSIGNED(4 * BUCKET_SIZE + 1)); /* trailing */
+        intsetBigAdd(a,
+                     &DATABOX_BIG_UNSIGNED(5 * BUCKET_SIZE + 2)); /* trailing */
+
+        intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(BUCKET_SIZE + 10));
+        intsetBigAdd(
+            b, &DATABOX_BIG_UNSIGNED(2 * BUCKET_SIZE + 6)); /* no overlap */
+        intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(3 * BUCKET_SIZE + 7));
+
+        /* Oracle: fresh-result intersect */
+        intsetBig *fresh = intsetBigNew();
+        const size_t freshCount = intsetBigIntersect(a, b, fresh);
+
+        /* In-place intersect on a copy of 'a' */
+        intsetBig *inplace = intsetBigCopy(a);
+        const size_t inplaceCount = intsetBigIntersect(inplace, b, inplace);
+
+        if (inplaceCount != freshCount) {
+            ERR("in-place count %zu != fresh count %zu!", inplaceCount,
+                freshCount);
+        }
+
+        if (intsetBigCountElements(inplace) != intsetBigCountElements(fresh)) {
+            ERR("in-place elements %zu != fresh elements %zu!",
+                intsetBigCountElements(inplace), intsetBigCountElements(fresh));
+        }
+
+        /* Exact set equality both directions */
+        if (!intsetBigSubset(inplace, fresh) ||
+            !intsetBigSubset(fresh, inplace)) {
+            ERRR("in-place intersection differs from fresh intersection!");
+        }
+
+        /* The known intersection: exactly the two matching values */
+        assert(intsetBigCountElements(inplace) == 2);
+        databoxBig m1 = DATABOX_BIG_UNSIGNED(BUCKET_SIZE + 10);
+        databoxBig m2 = DATABOX_BIG_UNSIGNED(3 * BUCKET_SIZE + 7);
+        assert(intsetBigExists(inplace, &m1));
+        assert(intsetBigExists(inplace, &m2));
+
+        intsetBigFree(a);
+        intsetBigFree(b);
+        intsetBigFree(fresh);
+        intsetBigFree(inplace);
     }
 
     TEST("intsetBigIntersect - completely disjoint buckets") {

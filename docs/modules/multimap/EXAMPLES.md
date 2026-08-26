@@ -1,376 +1,366 @@
-# multimap Real-World Examples
+# multimap Worked Examples
 
 ## Overview
 
-This guide demonstrates practical applications of the multimap family through real-world examples. Each example includes complete, working code that you can adapt to your own projects.
+These examples focus on mechanics that are specific to multimap: in-place row
+mutation through `multimapEntry`, the difference between map / set / full-width
+inserts, range scans anchored at a key, reference-keyed maps, and the
+sorted-prefix trim.
 
-## Example 1: User Session Store
+For cross-module recipes that combine multimap with other datakit containers,
+see [docs/examples/USE_CASES.md](../../examples/USE_CASES.md) and
+[docs/examples/PATTERNS.md](../../examples/PATTERNS.md).
 
-A session store that maps session IDs to user data with automatic expiration.
+Every snippet assumes:
 
 ```c
+#include <inttypes.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
 #include "multimap.h"
-#include <time.h>
+```
+
+Two rules apply throughout:
+
+- **Byte values read out of a multimap are borrowed.** `databoxCBytes()`
+  points into the flex until the next mutation. Copy before you mutate.
+- **Never write through `*me.map` with a raw flex call.** Use
+  `multimapReplaceEntry()` / `multimapResizeEntry()` so the cached middle offset
+  (and, on Full, the submap rangeBox) is refreshed.
+
+## Example 1: In-Place Row Mutation
+
+A session table demonstrating `multimapGetUnderlyingEntry()` +
+`multimapReplaceEntry()` (rewrite one column) and `multimapFieldIncr()`
+(bump a counter column) without rewriting the whole row.
+
+```c
+/* Row layout: sessionId | username | lastAccess | hitCount */
+enum { SESSION_COLUMNS = 4 };
+
+enum sessionColumn {
+    SESSION_COL_ID = 0,
+    SESSION_COL_USERNAME = 1,
+    SESSION_COL_LAST_ACCESS = 2,
+    SESSION_COL_HITS = 3
+};
 
 typedef struct {
-    uint64_t sessionId;
-    char *username;
-    time_t lastAccess;
-    bool isActive;
-} Session;
-
-typedef struct {
-    multimap *sessions;  /* sessionId → {username, lastAccess, isActive} */
+    multimap *sessions;
 } SessionStore;
 
 SessionStore *sessionStoreNew(void) {
-    SessionStore *store = malloc(sizeof(*store));
-    /* 4 elements: sessionId (key) + username + lastAccess + isActive */
-    store->sessions = multimapNew(4);
+    SessionStore *store = zcalloc(1, sizeof(*store));
+    store->sessions = multimapNew(SESSION_COLUMNS);
     return store;
-}
-
-void sessionStoreAdd(SessionStore *store, Session *session) {
-    databox sid = databoxNewUnsigned(session->sessionId);
-    databox user = databoxNewBytesString(session->username);
-    databox access = databoxNewSigned(session->lastAccess);
-    databox active = databoxBool(session->isActive);
-
-    const databox *elements[4] = {&sid, &user, &access, &active};
-    multimapInsert(&store->sessions, elements);
-}
-
-bool sessionStoreGet(SessionStore *store, uint64_t sessionId,
-                    Session *outSession) {
-    databox sid = databoxNewUnsigned(sessionId);
-    databox user, access, active;
-    databox *results[3] = {&user, &access, &active};
-
-    if (multimapLookup(store->sessions, &sid, results)) {
-        outSession->sessionId = sessionId;
-        outSession->username = strndup(
-            (char *)databoxCBytes(&user), databoxLen(&user)
-        );
-        outSession->lastAccess = access.data.i64;
-        outSession->isActive = DATABOX_IS_TRUE(&active);
-        return true;
-    }
-
-    return false;
-}
-
-void sessionStoreUpdate(SessionStore *store, uint64_t sessionId) {
-    databox sid = databoxNewUnsigned(sessionId);
-    multimapEntry me;
-
-    if (multimapGetUnderlyingEntry(store->sessions, &sid, &me)) {
-        /* Update lastAccess timestamp in-place */
-        flexEntry *accessField = flexNext(*me.map, flexNext(*me.map, me.fe));
-        databox newTime = databoxNewSigned(time(NULL));
-        flexReplaceByType(me.map, accessField, &newTime);
-    }
-}
-
-void sessionStoreExpireOld(SessionStore *store, time_t cutoffTime) {
-    multimapIterator iter;
-    multimapIteratorInit(store->sessions, &iter, true);
-
-    databox sid, user, lastAccess, active;
-    databox *elements[4] = {&sid, &user, &lastAccess, &active};
-
-    /* Collect expired session IDs */
-    databox expiredIds[1000];
-    size_t expiredCount = 0;
-
-    while (multimapIteratorNext(&iter, elements)) {
-        if (lastAccess.data.i64 < cutoffTime) {
-            expiredIds[expiredCount++] = sid;
-            if (expiredCount >= 1000) break;
-        }
-    }
-
-    /* Delete expired sessions */
-    for (size_t i = 0; i < expiredCount; i++) {
-        multimapDelete(&store->sessions, &expiredIds[i]);
-    }
-
-    printf("Expired %zu sessions\n", expiredCount);
 }
 
 void sessionStoreFree(SessionStore *store) {
     if (store) {
         multimapFree(store->sessions);
-        free(store);
+        zfree(store);
     }
 }
 
-/* Usage */
-void exampleSessionStore(void) {
-    SessionStore *store = sessionStoreNew();
+void sessionStoreAdd(SessionStore *store, uint64_t sessionId,
+                     const char *username, int64_t now) {
+    databox sid = databoxNewUnsigned(sessionId);
+    databox user = databoxNewBytesString(username);
+    databox access = databoxNewSigned(now);
+    databox hits = databoxNewSigned(0);
 
-    /* Add sessions */
-    Session s1 = {.sessionId = 12345, .username = "alice",
-                  .lastAccess = time(NULL), .isActive = true};
-    sessionStoreAdd(store, &s1);
+    const databox *elements[SESSION_COLUMNS] = {&sid, &user, &access, &hits};
 
-    Session s2 = {.sessionId = 67890, .username = "bob",
-                  .lastAccess = time(NULL) - 3600, .isActive = true};
-    sessionStoreAdd(store, &s2);
+    /* Map mode: re-adding an existing sessionId replaces columns 1..3 */
+    multimapInsert(&store->sessions, elements);
+}
 
-    /* Retrieve session */
-    Session retrieved;
-    if (sessionStoreGet(store, 12345, &retrieved)) {
-        printf("Session 12345: user=%s, active=%s\n",
-               retrieved.username, retrieved.isActive ? "yes" : "no");
-        free(retrieved.username);
+/* Rewrite ONE column in place: walk from the key to the target column,
+ * then replace through the multimap wrapper. */
+bool sessionStoreTouch(SessionStore *store, uint64_t sessionId, int64_t now) {
+    databox sid = databoxNewUnsigned(sessionId);
+    multimapEntry me;
+
+    if (!multimapGetUnderlyingEntry(store->sessions, &sid, &me)) {
+        return false;
     }
 
-    /* Update access time */
-    sessionStoreUpdate(store, 12345);
+    /* me.fe starts on the key; step forward to lastAccess */
+    for (uint32_t i = 0; i < SESSION_COL_LAST_ACCESS; i++) {
+        me.fe = flexNext(*me.map, me.fe);
+    }
 
-    /* Expire old sessions (older than 30 minutes) */
-    sessionStoreExpireOld(store, time(NULL) - 1800);
+    databox newTime = databoxNewSigned(now);
+    multimapReplaceEntry(&store->sessions, &me, &newTime);
+
+    /* Counter columns do not need the manual walk at all */
+    multimapFieldIncr(&store->sessions, &sid, SESSION_COL_HITS, 1);
+    return true;
+}
+
+/* Read a row out, copying the one byte-typed column we keep. */
+bool sessionStoreGet(SessionStore *store, uint64_t sessionId,
+                     char **outUsername, int64_t *outLastAccess,
+                     int64_t *outHits) {
+    databox sid = databoxNewUnsigned(sessionId);
+    databox values[SESSION_COLUMNS - 1]; /* Lookup skips the key */
+
+    if (!multimapLookupInto(store->sessions, &sid, values,
+                            SESSION_COLUMNS - 1)) {
+        return false;
+    }
+
+    /* values[0] borrows flex memory: copy it before any mutation */
+    *outUsername = strndup((const char *)databoxCBytes(&values[0]),
+                           (size_t)databoxLen(&values[0]));
+    *outLastAccess = values[1].data.i64;
+    *outHits = values[2].data.i64;
+    return true;
+}
+
+/* Collect-then-delete. The keys are unsigned integers, which databox stores
+ * immediately, so the collected boxes stay valid after the first delete.
+ * A byte-typed key would have to be copied here instead. */
+size_t sessionStoreExpireOlderThan(SessionStore *store, int64_t cutoff,
+                                   size_t maxToExpire) {
+    databox *expired = zcalloc(maxToExpire, sizeof(*expired));
+    size_t expiredCount = 0;
+
+    multimapIterator iter;
+    multimapIteratorInit(store->sessions, &iter, true);
+
+    databox row[SESSION_COLUMNS];
+    while (expiredCount < maxToExpire &&
+           multimapIteratorNextInto(&iter, row, SESSION_COLUMNS)) {
+        if (row[SESSION_COL_LAST_ACCESS].data.i64 < cutoff) {
+            expired[expiredCount++] = row[SESSION_COL_ID];
+        }
+    }
+
+    for (size_t i = 0; i < expiredCount; i++) {
+        multimapDelete(&store->sessions, &expired[i]);
+    }
+
+    zfree(expired);
+    return expiredCount;
+}
+
+void exampleSessionStore(int64_t now) {
+    SessionStore *store = sessionStoreNew();
+
+    sessionStoreAdd(store, 12345, "alice", now);
+    sessionStoreAdd(store, 67890, "bob", now - 3600);
+
+    sessionStoreTouch(store, 12345, now);
+
+    char *username;
+    int64_t lastAccess;
+    int64_t hits;
+    if (sessionStoreGet(store, 12345, &username, &lastAccess, &hits)) {
+        printf("session 12345: %s, last %" PRId64 ", hits %" PRId64 "\n",
+               username, lastAccess, hits);
+        free(username);
+    }
+
+    const size_t gone = sessionStoreExpireOlderThan(store, now - 1800, 1000);
+    printf("expired %zu sessions\n", gone);
 
     sessionStoreFree(store);
 }
 ```
 
-## Example 2: Time-Series Metrics
+**What to take away**
 
-Store and query time-series metrics with efficient range queries.
+- `me.fe` lands on the key; every other column is `flexNext()` steps away.
+- `multimapFieldIncr()` does the same walk internally, so a numeric column never
+  needs the manual version.
+- `multimapFieldIncr()` on an absent key returns 0 and changes nothing.
+- Mutating while iterating is unsafe: collect keys, finish the walk, then
+  delete.
+
+## Example 2: Time Series With Duplicate Timestamps
+
+Two readings can share a timestamp, so the store must allow duplicate keys.
+That means `multimapInsertFullWidth()` everywhere - mixing it with
+`multimapInsert()` on the same container would silently replace one of the
+duplicates.
 
 ```c
-#include "multimap.h"
-#include <time.h>
+/* Row layout: timestamp | value | tag */
+enum { TS_COLUMNS = 3 };
 
 typedef struct {
-    multimap *metrics;  /* timestamp → {value, tags} */
+    multimap *metrics;
     char *metricName;
 } TimeSeries;
 
 TimeSeries *timeSeriesNew(const char *name) {
-    TimeSeries *ts = malloc(sizeof(*ts));
-    /* 3 elements: timestamp (key) + value + tags */
-    ts->metrics = multimapNew(3);
+    TimeSeries *ts = zcalloc(1, sizeof(*ts));
+    /* Larger submaps: this map is append-heavy and scanned in ranges */
+    ts->metrics = multimapNewLimit(TS_COLUMNS, FLEX_CAP_LEVEL_4096);
     ts->metricName = strdup(name);
     return ts;
-}
-
-void timeSeriesRecord(TimeSeries *ts, time_t timestamp,
-                     double value, const char *tags) {
-    databox ts_box = databoxNewSigned(timestamp);
-    databox val_box = databoxNewReal(value);
-    databox tag_box = databoxNewBytesString(tags);
-
-    const databox *elements[3] = {&ts_box, &val_box, &tag_box};
-
-    /* Use InsertFullWidth to allow multiple readings per timestamp */
-    multimapInsertFullWidth(&ts->metrics, elements);
-}
-
-void timeSeriesRecordBatch(TimeSeries *ts, time_t *timestamps,
-                          double *values, size_t count) {
-    for (size_t i = 0; i < count; i++) {
-        databox ts_box = databoxNewSigned(timestamps[i]);
-        databox val_box = databoxNewReal(values[i]);
-        databox tag_box = databoxNewBytesString("");
-
-        const databox *elements[3] = {&ts_box, &val_box, &tag_box};
-
-        /* Use Append for chronologically sorted data (much faster!) */
-        multimapAppend(&ts->metrics, elements);
-    }
-}
-
-typedef struct {
-    time_t timestamp;
-    double value;
-    char *tags;
-} Metric;
-
-void timeSeriesQuery(TimeSeries *ts, time_t startTime, time_t endTime,
-                    Metric **outMetrics, size_t *outCount) {
-    multimapIterator iter;
-    databox start = databoxNewSigned(startTime);
-
-    /* Start iteration at startTime */
-    if (!multimapIteratorInitAt(ts->metrics, &iter, true, &start)) {
-        /* No data in range */
-        *outMetrics = NULL;
-        *outCount = 0;
-        return;
-    }
-
-    /* Collect matching metrics */
-    Metric *results = malloc(sizeof(Metric) * 10000);
-    size_t count = 0;
-
-    databox timestamp, value, tags;
-    databox *elements[3] = {&timestamp, &value, &tags};
-
-    while (multimapIteratorNext(&iter, elements)) {
-        time_t ts = timestamp.data.i64;
-
-        if (ts > endTime) {
-            break;  /* Past our range */
-        }
-
-        results[count].timestamp = ts;
-        results[count].value = value.data.d64;
-        results[count].tags = strndup(
-            (char *)databoxCBytes(&tags), databoxLen(&tags)
-        );
-        count++;
-
-        if (count >= 10000) break;
-    }
-
-    *outMetrics = results;
-    *outCount = count;
-}
-
-double timeSeriesAggregate(TimeSeries *ts, time_t startTime,
-                          time_t endTime, const char *aggregation) {
-    Metric *metrics;
-    size_t count;
-    timeSeriesQuery(ts, startTime, endTime, &metrics, &count);
-
-    if (count == 0) {
-        return 0.0;
-    }
-
-    double result = 0.0;
-
-    if (strcmp(aggregation, "sum") == 0) {
-        for (size_t i = 0; i < count; i++) {
-            result += metrics[i].value;
-        }
-    } else if (strcmp(aggregation, "avg") == 0) {
-        double sum = 0.0;
-        for (size_t i = 0; i < count; i++) {
-            sum += metrics[i].value;
-        }
-        result = sum / count;
-    } else if (strcmp(aggregation, "max") == 0) {
-        result = metrics[0].value;
-        for (size_t i = 1; i < count; i++) {
-            if (metrics[i].value > result) {
-                result = metrics[i].value;
-            }
-        }
-    } else if (strcmp(aggregation, "min") == 0) {
-        result = metrics[0].value;
-        for (size_t i = 1; i < count; i++) {
-            if (metrics[i].value < result) {
-                result = metrics[i].value;
-            }
-        }
-    }
-
-    /* Free allocated strings */
-    for (size_t i = 0; i < count; i++) {
-        free(metrics[i].tags);
-    }
-    free(metrics);
-
-    return result;
 }
 
 void timeSeriesFree(TimeSeries *ts) {
     if (ts) {
         multimapFree(ts->metrics);
         free(ts->metricName);
-        free(ts);
+        zfree(ts);
     }
 }
 
-/* Usage */
-void exampleTimeSeries(void) {
+void timeSeriesRecord(TimeSeries *ts, int64_t timestamp, double value,
+                      const char *tag) {
+    databox tsBox = databoxNewSigned(timestamp);
+    databox valBox = databoxNewReal(value);
+    databox tagBox = databoxNewBytesString(tag);
+
+    const databox *elements[TS_COLUMNS] = {&tsBox, &valBox, &tagBox};
+
+    /* Full width: (timestamp, value, tag) triples may repeat a timestamp */
+    multimapInsertFullWidth(&ts->metrics, elements);
+}
+
+typedef struct {
+    int64_t timestamp;
+    double value;
+    char *tag;
+} Metric;
+
+/* Range scan: seed the iterator at startTime, stop when keys pass endTime. */
+size_t timeSeriesQuery(TimeSeries *ts, int64_t startTime, int64_t endTime,
+                       Metric *out, size_t outMax) {
+    databox start = databoxNewSigned(startTime);
+    multimapIterator iter;
+
+    /* false means "startTime sorts past every row" - nothing to scan */
+    if (!multimapIteratorInitAt(ts->metrics, &iter, true, &start)) {
+        return 0;
+    }
+
+    size_t count = 0;
+    databox row[TS_COLUMNS];
+
+    while (count < outMax &&
+           multimapIteratorNextInto(&iter, row, TS_COLUMNS)) {
+        const int64_t stamp = row[0].data.i64;
+        if (stamp > endTime) {
+            break; /* sorted, so nothing later can match */
+        }
+
+        out[count].timestamp = stamp;
+        out[count].value = row[1].data.d64;
+        out[count].tag = strndup((const char *)databoxCBytes(&row[2]),
+                                 (size_t)databoxLen(&row[2]));
+        count++;
+    }
+
+    return count;
+}
+
+double timeSeriesMean(const Metric *metrics, size_t count) {
+    if (count == 0) {
+        return 0.0;
+    }
+
+    double sum = 0.0;
+    for (size_t i = 0; i < count; i++) {
+        sum += metrics[i].value;
+    }
+
+    return sum / (double)count;
+}
+
+void exampleTimeSeries(int64_t now) {
     TimeSeries *cpu = timeSeriesNew("cpu.usage");
 
-    /* Record individual measurements */
-    time_t now = time(NULL);
     timeSeriesRecord(cpu, now, 45.2, "host=server1");
+    timeSeriesRecord(cpu, now, 51.8, "host=server2"); /* same timestamp! */
     timeSeriesRecord(cpu, now + 60, 52.1, "host=server1");
     timeSeriesRecord(cpu, now + 120, 48.9, "host=server1");
 
-    /* Record batch (much faster for bulk inserts) */
-    time_t timestamps[1000];
-    double values[1000];
-    for (int i = 0; i < 1000; i++) {
-        timestamps[i] = now + (i * 60);  /* Every minute */
-        values[i] = 40.0 + (rand() % 30);  /* 40-70% CPU */
+    Metric window[1024];
+    const size_t found = timeSeriesQuery(cpu, now, now + 3600, window, 1024);
+
+    printf("%zu readings, mean %.2f%%\n", found, timeSeriesMean(window, found));
+
+    for (size_t i = 0; i < found; i++) {
+        printf("  %" PRId64 ": %.2f (%s)\n", window[i].timestamp,
+               window[i].value, window[i].tag);
+        free(window[i].tag);
     }
-    timeSeriesRecordBatch(cpu, timestamps, values, 1000);
 
-    /* Query last hour */
-    time_t hourAgo = now - 3600;
-    Metric *metrics;
-    size_t count;
-    timeSeriesQuery(cpu, hourAgo, now + 3600, &metrics, &count);
-
-    printf("Found %zu metrics in last hour\n", count);
-
-    /* Aggregate last hour */
-    double avgCpu = timeSeriesAggregate(cpu, hourAgo, now + 3600, "avg");
-    double maxCpu = timeSeriesAggregate(cpu, hourAgo, now + 3600, "max");
-
-    printf("Average CPU: %.2f%%\n", avgCpu);
-    printf("Max CPU: %.2f%%\n", maxCpu);
-
-    /* Free */
-    for (size_t i = 0; i < count; i++) {
-        free(metrics[i].tags);
-    }
-    free(metrics);
     timeSeriesFree(cpu);
 }
 ```
 
-## Example 3: Inverted Index for Full-Text Search
+**What to take away**
 
-Build an inverted index mapping words to document IDs.
+- `multimapIteratorInitAt()` seeds at the first key `>= startAt`, and returns
+  `false` only when that lands past the end.
+- The scan can stop early because rows are sorted; there is no "range end"
+  parameter.
+- A container is either a map (unique keys) or a full-width bag. Pick one and
+  use it consistently.
+
+## Example 3: Inverted Index Keyed by Atom References
+
+`multimapAtom` interns each word once; the index then stores the small integer
+reference as its key instead of repeating the string on every posting.
 
 ```c
-#include "multimap.h"
+#include <ctype.h>
+
 #include "multimapAtom.h"
 
+/* Row layout: wordRef | docId | position */
+enum { INDEX_COLUMNS = 3 };
+
 typedef struct {
-    multimapAtom *atoms;     /* Word interning for deduplication */
-    multimap *index;         /* wordRef → {docId, position} */
+    multimapAtom *atoms;
+    multimap *index;
 } InvertedIndex;
 
 InvertedIndex *invertedIndexNew(void) {
-    InvertedIndex *idx = malloc(sizeof(*idx));
+    InvertedIndex *idx = zcalloc(1, sizeof(*idx));
     idx->atoms = multimapAtomNew();
-    /* 3 elements: wordRef (key) + docId + position */
-    idx->index = multimapNew(3);
+    idx->index = multimapNew(INDEX_COLUMNS);
     return idx;
+}
+
+void invertedIndexFree(InvertedIndex *idx) {
+    if (idx) {
+        multimapFree(idx->index);
+        multimapAtomFree(idx->atoms);
+        zfree(idx);
+    }
 }
 
 void invertedIndexAddDocument(InvertedIndex *idx, uint64_t docId,
                               const char *text) {
-    /* Simple tokenization (split on spaces) */
     char *textCopy = strdup(text);
     char *word = strtok(textCopy, " \t\n.,;:!?");
-    uint32_t position = 0;
+    uint64_t position = 0;
 
-    while (word != NULL) {
-        /* Convert to lowercase */
+    while (word) {
         for (char *p = word; *p; p++) {
-            *p = tolower(*p);
+            *p = (char)tolower((unsigned char)*p);
         }
 
-        /* Intern the word to get a reference ID */
+        /* Rewrites wordBox in place into a reference databox.
+         * Returns true when the word was already interned. */
         databox wordBox = databoxNewBytesString(word);
         multimapAtomInsertIfNewConvert(idx->atoms, &wordBox);
-        /* wordBox is now a small integer reference */
 
-        /* Add to index: wordRef → {docId, position} */
         databox docBox = databoxNewUnsigned(docId);
         databox posBox = databoxNewUnsigned(position);
-        const databox *entry[3] = {&wordBox, &docBox, &posBox};
+        const databox *entry[INDEX_COLUMNS] = {&wordBox, &docBox, &posBox};
 
+        /* One word appears in many documents at many positions, so the
+         * index is a full-width bag, not a key->value map. */
         multimapInsertFullWidth(&idx->index, entry);
 
         position++;
@@ -382,576 +372,376 @@ void invertedIndexAddDocument(InvertedIndex *idx, uint64_t docId,
 
 typedef struct {
     uint64_t docId;
-    uint32_t position;
+    uint64_t position;
 } SearchResult;
 
-void invertedIndexSearch(InvertedIndex *idx, const char *searchWord,
-                        SearchResult **outResults, size_t *outCount) {
-    /* Convert search word to lowercase */
+size_t invertedIndexSearch(InvertedIndex *idx, const char *searchWord,
+                           SearchResult *out, size_t outMax) {
     char *lower = strdup(searchWord);
     for (char *p = lower; *p; p++) {
-        *p = tolower(*p);
+        *p = (char)tolower((unsigned char)*p);
     }
 
-    /* Look up word reference */
     databox wordBox = databoxNewBytesString(lower);
     databox wordRef;
-
-    if (!multimapAtomLookupReference(idx->atoms, &wordBox, &wordRef)) {
-        /* Word not in index */
-        free(lower);
-        *outResults = NULL;
-        *outCount = 0;
-        return;
-    }
-
+    const bool known = multimapAtomLookupReference(idx->atoms, &wordBox,
+                                                   &wordRef);
     free(lower);
 
-    /* Find all occurrences of this word */
-    multimapIterator iter;
-    if (!multimapIteratorInitAt(idx->index, &iter, true, &wordRef)) {
-        *outResults = NULL;
-        *outCount = 0;
-        return;
+    if (!known) {
+        return 0;
     }
 
-    SearchResult *results = malloc(sizeof(SearchResult) * 10000);
+    multimapIterator iter;
+    if (!multimapIteratorInitAt(idx->index, &iter, true, &wordRef)) {
+        return 0;
+    }
+
     size_t count = 0;
+    databox row[INDEX_COLUMNS];
 
-    databox keyRef, docId, position;
-    databox *elements[3] = {&keyRef, &docId, &position};
-
-    while (multimapIteratorNext(&iter, elements)) {
-        /* Stop when we move past this word */
-        if (keyRef.data.u != wordRef.data.u) {
+    while (count < outMax &&
+           multimapIteratorNextInto(&iter, row, INDEX_COLUMNS)) {
+        /* Postings for one word are contiguous; stop at the next word */
+        if (row[0].data.u != wordRef.data.u) {
             break;
         }
 
-        results[count].docId = docId.data.u;
-        results[count].position = position.data.u;
+        out[count].docId = row[1].data.u;
+        out[count].position = row[2].data.u;
         count++;
-
-        if (count >= 10000) break;
     }
 
-    *outResults = results;
-    *outCount = count;
+    return count;
 }
 
-void invertedIndexFree(InvertedIndex *idx) {
-    if (idx) {
-        multimapAtomFree(idx->atoms);
-        multimapFree(idx->index);
-        free(idx);
-    }
-}
-
-/* Usage */
 void exampleInvertedIndex(void) {
     InvertedIndex *idx = invertedIndexNew();
 
-    /* Add documents */
-    invertedIndexAddDocument(idx, 1, "the quick brown fox jumps over the lazy dog");
+    invertedIndexAddDocument(idx, 1,
+                             "the quick brown fox jumps over the lazy dog");
     invertedIndexAddDocument(idx, 2, "the lazy cat sleeps all day");
     invertedIndexAddDocument(idx, 3, "quick reflexes help the fox");
 
-    /* Search for "lazy" */
-    SearchResult *results;
-    size_t count;
-    invertedIndexSearch(idx, "lazy", &results, &count);
+    SearchResult hits[256];
+    size_t count = invertedIndexSearch(idx, "lazy", hits, 256);
 
-    printf("Found 'lazy' in %zu locations:\n", count);
+    printf("'lazy' found in %zu locations:\n", count);
     for (size_t i = 0; i < count; i++) {
-        printf("  Document %lu, position %u\n",
-               results[i].docId, results[i].position);
+        printf("  document %" PRIu64 ", position %" PRIu64 "\n", hits[i].docId,
+               hits[i].position);
     }
-    free(results);
-
-    /* Search for "fox" */
-    invertedIndexSearch(idx, "fox", &results, &count);
-    printf("Found 'fox' in %zu locations:\n", count);
-    for (size_t i = 0; i < count; i++) {
-        printf("  Document %lu, position %u\n",
-               results[i].docId, results[i].position);
-    }
-    free(results);
 
     invertedIndexFree(idx);
 }
 ```
 
-## Example 4: Leaderboard with Rankings
+**What to take away**
 
-Implement a game leaderboard with efficient top-N queries.
+- `multimapAtomInsertIfNewConvert()` converts the caller's box in place and
+  returns `true` when the string was already interned.
+- This index stores raw reference values as keys, so it sorts by **atom ID**
+  (first-sighting order), not alphabetically. Building the index through
+  `multimapInsertWithSurrogateKey()` with the atom container would sort by the
+  underlying strings instead.
+- Postings for one word are contiguous, which is why the scan can stop as soon
+  as the key changes.
+
+## Example 4: Leaderboard With Repeating Scores
+
+Two players can tie, so score cannot be a unique key. The store is a full-width
+bag keyed by `(score, playerId, playerName)`, read backwards for the top N.
 
 ```c
-#include "multimap.h"
+/* Row layout: score | playerId | playerName */
+enum { LB_COLUMNS = 3 };
 
 typedef struct {
-    multimap *scores;  /* score (key) → {playerId, playerName} */
+    multimap *scores;
 } Leaderboard;
 
 Leaderboard *leaderboardNew(void) {
-    Leaderboard *lb = malloc(sizeof(*lb));
-    /* 3 elements: score (key) + playerId + playerName */
-    /* Use SetNew to prevent duplicate score entries for same player */
-    lb->scores = multimapNew(3);
+    Leaderboard *lb = zcalloc(1, sizeof(*lb));
+    lb->scores = multimapNew(LB_COLUMNS);
     return lb;
-}
-
-void leaderboardAddScore(Leaderboard *lb, uint64_t playerId,
-                        const char *playerName, int64_t score) {
-    databox scoreBox = databoxNewSigned(score);
-    databox idBox = databoxNewUnsigned(playerId);
-    databox nameBox = databoxNewBytesString(playerName);
-
-    const databox *entry[3] = {&scoreBox, &idBox, &nameBox};
-
-    /* Insert or update score */
-    multimapInsert(&lb->scores, entry);
-}
-
-void leaderboardUpdateScore(Leaderboard *lb, uint64_t playerId,
-                           const char *playerName, int64_t scoreDelta) {
-    /* In a real implementation, you'd need to:
-     * 1. Find old score for playerId
-     * 2. Delete old entry
-     * 3. Insert new entry with updated score
-     * For simplicity, we'll just add a new score */
-    leaderboardAddScore(lb, playerId, playerName, scoreDelta);
-}
-
-typedef struct {
-    uint64_t playerId;
-    char *playerName;
-    int64_t score;
-} LeaderboardEntry;
-
-void leaderboardGetTopN(Leaderboard *lb, size_t n,
-                       LeaderboardEntry **outEntries, size_t *outCount) {
-    LeaderboardEntry *entries = malloc(sizeof(LeaderboardEntry) * n);
-    size_t count = 0;
-
-    multimapIterator iter;
-    multimapIteratorInit(lb->scores, &iter, false);  /* Reverse = high to low */
-
-    databox score, playerId, playerName;
-    databox *elements[3] = {&score, &playerId, &playerName};
-
-    while (multimapIteratorNext(&iter, elements) && count < n) {
-        entries[count].score = score.data.i64;
-        entries[count].playerId = playerId.data.u;
-        entries[count].playerName = strndup(
-            (char *)databoxCBytes(&playerName), databoxLen(&playerName)
-        );
-        count++;
-    }
-
-    *outEntries = entries;
-    *outCount = count;
-}
-
-int64_t leaderboardGetRank(Leaderboard *lb, int64_t targetScore) {
-    /* Count how many scores are higher */
-    int64_t rank = 1;
-
-    multimapIterator iter;
-    multimapIteratorInit(lb->scores, &iter, false);  /* High to low */
-
-    databox score, playerId, playerName;
-    databox *elements[3] = {&score, &playerId, &playerName};
-
-    while (multimapIteratorNext(&iter, elements)) {
-        if (score.data.i64 > targetScore) {
-            rank++;
-        } else {
-            break;
-        }
-    }
-
-    return rank;
 }
 
 void leaderboardFree(Leaderboard *lb) {
     if (lb) {
         multimapFree(lb->scores);
-        free(lb);
+        zfree(lb);
     }
 }
 
-/* Usage */
+void leaderboardAddScore(Leaderboard *lb, int64_t score, uint64_t playerId,
+                         const char *playerName) {
+    databox scoreBox = databoxNewSigned(score);
+    databox idBox = databoxNewUnsigned(playerId);
+    databox nameBox = databoxNewBytesString(playerName);
+
+    const databox *entry[LB_COLUMNS] = {&scoreBox, &idBox, &nameBox};
+    multimapInsertFullWidth(&lb->scores, entry);
+}
+
+/* Moving a player means removing the exact old row, not "the row with this
+ * score" - several players may share it. */
+void leaderboardMoveScore(Leaderboard *lb, int64_t oldScore, int64_t newScore,
+                          uint64_t playerId, const char *playerName) {
+    databox oldScoreBox = databoxNewSigned(oldScore);
+    databox idBox = databoxNewUnsigned(playerId);
+    databox nameBox = databoxNewBytesString(playerName);
+
+    const databox *oldEntry[LB_COLUMNS] = {&oldScoreBox, &idBox, &nameBox};
+    multimapDeleteFullWidth(&lb->scores, oldEntry);
+
+    leaderboardAddScore(lb, newScore, playerId, playerName);
+}
+
+typedef struct {
+    int64_t score;
+    uint64_t playerId;
+    char *playerName;
+} LeaderboardEntry;
+
+size_t leaderboardTopN(Leaderboard *lb, LeaderboardEntry *out, size_t n) {
+    multimapIterator iter;
+    multimapIteratorInit(lb->scores, &iter, false); /* highest score first */
+
+    size_t count = 0;
+    databox row[LB_COLUMNS];
+
+    while (count < n && multimapIteratorNextInto(&iter, row, LB_COLUMNS)) {
+        out[count].score = row[0].data.i64;
+        out[count].playerId = row[1].data.u;
+        out[count].playerName = strndup((const char *)databoxCBytes(&row[2]),
+                                        (size_t)databoxLen(&row[2]));
+        count++;
+    }
+
+    return count;
+}
+
+/* Rank = 1 + number of strictly higher scores. */
+uint64_t leaderboardRankOf(Leaderboard *lb, int64_t targetScore) {
+    multimapIterator iter;
+    multimapIteratorInit(lb->scores, &iter, false);
+
+    uint64_t higher = 0;
+    databox row[LB_COLUMNS];
+
+    while (multimapIteratorNextInto(&iter, row, LB_COLUMNS)) {
+        if (row[0].data.i64 <= targetScore) {
+            break; /* reverse order: everything after this is lower */
+        }
+
+        higher++;
+    }
+
+    return higher + 1;
+}
+
 void exampleLeaderboard(void) {
     Leaderboard *lb = leaderboardNew();
 
-    /* Add scores */
-    leaderboardAddScore(lb, 1, "Alice", 9500);
-    leaderboardAddScore(lb, 2, "Bob", 8200);
-    leaderboardAddScore(lb, 3, "Charlie", 7800);
-    leaderboardAddScore(lb, 4, "Diana", 9100);
-    leaderboardAddScore(lb, 5, "Eve", 8500);
+    leaderboardAddScore(lb, 9500, 1, "Alice");
+    leaderboardAddScore(lb, 8200, 2, "Bob");
+    leaderboardAddScore(lb, 8200, 3, "Charlie"); /* tie: both rows kept */
+    leaderboardAddScore(lb, 9100, 4, "Diana");
 
-    /* Get top 3 */
-    LeaderboardEntry *top;
-    size_t count;
-    leaderboardGetTopN(lb, 3, &top, &count);
+    LeaderboardEntry top[3];
+    const size_t count = leaderboardTopN(lb, top, 3);
 
     printf("Top %zu players:\n", count);
     for (size_t i = 0; i < count; i++) {
-        printf("%zu. %s: %ld\n", i + 1, top[i].playerName, top[i].score);
+        printf("%zu. %s: %" PRId64 "\n", i + 1, top[i].playerName,
+               top[i].score);
         free(top[i].playerName);
     }
-    free(top);
 
-    /* Get rank of score 8500 */
-    int64_t rank = leaderboardGetRank(lb, 8500);
-    printf("Score 8500 is rank %ld\n", rank);
+    printf("Score 8200 is rank %" PRIu64 "\n", leaderboardRankOf(lb, 8200));
+
+    leaderboardMoveScore(lb, 8200, 9800, 2, "Bob");
 
     leaderboardFree(lb);
 }
 ```
 
-## Example 5: LRU Cache with multimap
+**What to take away**
 
-Implement a Least Recently Used (LRU) cache.
+- Ties require `multimapInsertFullWidth()`; `multimapInsert()` would keep only
+  one player per score.
+- Reverse iteration still fills `row[0..N-1]` in column order, so the same array
+  works in both directions.
+- Removing one row of a duplicated key needs `multimapDeleteFullWidth()`;
+  `multimapDelete()` targets whichever row that key finds.
+
+## Example 5: Retention Trim and Key Set Algebra
+
+`multimapDeleteByPredicate()` is a **sorted-prefix trim**: it drops everything
+at or below a boundary in one operation instead of walking rows. Only
+`MULTIMAP_CONDITION_LESS_THAN_EQUAL` is implemented; every other condition
+asserts.
 
 ```c
-#include "multimap.h"
-#include <time.h>
+/* Drop every event whose timestamp key is <= cutoff. */
+bool eventsTrimOlderThan(multimap **events, int64_t cutoff) {
+    databox boundary = databoxNewSigned(cutoff);
+    const multimapPredicate trim = {
+        .condition = MULTIMAP_CONDITION_LESS_THAN_EQUAL,
+        .compareAgainst = boundary};
 
-typedef struct {
-    multimap *cache;  /* key → {value, lastAccess} */
-    size_t maxSize;
-    size_t currentSize;
-} LRUCache;
-
-LRUCache *lruCacheNew(size_t maxSize) {
-    LRUCache *cache = malloc(sizeof(*cache));
-    /* 3 elements: key + value + lastAccess timestamp */
-    cache->cache = multimapNew(3);
-    cache->maxSize = maxSize;
-    cache->currentSize = 0;
-    return cache;
+    return multimapDeleteByPredicate(events, &trim);
 }
 
-void lruCacheEvictOldest(LRUCache *cache) {
-    /* Find entry with smallest lastAccess timestamp */
-    multimapIterator iter;
-    multimapIteratorInit(cache->cache, &iter, true);
-
-    databox key, value, lastAccess;
-    databox *elements[3] = {&key, &value, &lastAccess};
-
-    databox oldestKey;
-    time_t oldestTime = LONG_MAX;
-
-    while (multimapIteratorNext(&iter, elements)) {
-        if (lastAccess.data.i64 < oldestTime) {
-            oldestTime = lastAccess.data.i64;
-            oldestKey = key;
-        }
-    }
-
-    /* Delete oldest entry */
-    if (oldestTime != LONG_MAX) {
-        multimapDelete(&cache->cache, &oldestKey);
-        cache->currentSize--;
-    }
+/* Counting walk. multimapProcessUntil STOPS at the first row whose key fails
+ * the predicate, so it is a prefix walk, not a filter. Unlike the trim, it
+ * accepts every multimapCondition. */
+static bool countRow(void *userData, const databox *elements[]) {
+    uint64_t *seen = userData;
+    (void)elements;
+    (*seen)++;
+    return true; /* returning false stops the walk early */
 }
 
-void lruCachePut(LRUCache *cache, const databox *key, const databox *value) {
-    /* Check if key exists */
-    if (multimapExists(cache->cache, key)) {
-        /* Update existing entry */
-        multimapEntry me;
-        if (multimapGetUnderlyingEntry(cache->cache, key, &me)) {
-            /* Update value and timestamp */
-            flexEntry *valueField = flexNext(*me.map, me.fe);
-            flexReplaceByType(me.map, valueField, value);
+uint64_t eventsCountUpTo(multimap *events, int64_t boundaryValue) {
+    databox boundary = databoxNewSigned(boundaryValue);
+    const multimapPredicate upTo = {
+        .condition = MULTIMAP_CONDITION_LESS_THAN_EQUAL,
+        .compareAgainst = boundary};
 
-            flexEntry *timeField = flexNext(*me.map, valueField);
-            databox now = databoxNewSigned(time(NULL));
-            flexReplaceByType(me.map, timeField, &now);
-        }
-    } else {
-        /* New entry */
-        if (cache->currentSize >= cache->maxSize) {
-            lruCacheEvictOldest(cache);
-        }
-
-        databox now = databoxNewSigned(time(NULL));
-        const databox *entry[3] = {key, value, &now};
-        multimapInsert(&cache->cache, entry);
-        cache->currentSize++;
-    }
+    uint64_t seen = 0;
+    multimapProcessUntil(events, &upTo, true, countRow, &seen);
+    return seen;
 }
 
-bool lruCacheGet(LRUCache *cache, const databox *key, databox *outValue) {
-    databox value, lastAccess;
-    databox *results[2] = {&value, &lastAccess};
+/* Key set algebra. All three helpers read element 0 of each row and insert
+ * into 'dst' with multimapInsert(), so 'dst' is normally a 1-element map. */
+void exampleKeySets(multimap *a, multimap *b) {
+    multimap *both = multimapNew(1);
+    multimapIterator ia;
+    multimapIterator ib;
 
-    if (multimapLookup(cache->cache, key, results)) {
-        *outValue = value;
+    multimapIteratorInit(a, &ia, true);
+    multimapIteratorInit(b, &ib, true);
+    multimapIntersectKeys(&both, &ia, &ib);
 
-        /* Update last access time */
-        multimapEntry me;
-        if (multimapGetUnderlyingEntry(cache->cache, key, &me)) {
-            flexEntry *timeField = flexNext(*me.map,
-                                           flexNext(*me.map, me.fe));
-            databox now = databoxNewSigned(time(NULL));
-            flexReplaceByType(me.map, timeField, &now);
-        }
+    /* multimapDifferenceKeys asserts BOTH iterators come from 1-element
+     * multimaps, so project the keys first. */
+    multimap *keysA = multimapNew(1);
+    multimap *keysB = multimapNew(1);
+    multimapCopyKeys(&keysA, a);
+    multimapCopyKeys(&keysB, b);
 
-        return true;
-    }
+    multimap *onlyInA = multimapNew(1);
+    multimapIteratorInit(keysA, &ia, true);
+    multimapIteratorInit(keysB, &ib, true);
+    multimapDifferenceKeys(&onlyInA, &ia, &ib, false);
 
-    return false;
-}
+    multimap *symmetric = multimapNew(1);
+    multimapIteratorInit(keysA, &ia, true);
+    multimapIteratorInit(keysB, &ib, true);
+    multimapDifferenceKeys(&symmetric, &ia, &ib, true);
 
-void lruCacheFree(LRUCache *cache) {
-    if (cache) {
-        multimapFree(cache->cache);
-        free(cache);
-    }
-}
+    /* multimapCopyKeys is a union: repeated calls accumulate into dst */
+    multimap *union_ = multimapNew(1);
+    multimapCopyKeys(&union_, a);
+    multimapCopyKeys(&union_, b);
 
-/* Usage */
-void exampleLRUCache(void) {
-    LRUCache *cache = lruCacheNew(3);  /* Max 3 entries */
+    printf("intersection %zu, A-only %zu, symmetric %zu, union %zu\n",
+           multimapCount(both), multimapCount(onlyInA),
+           multimapCount(symmetric), multimapCount(union_));
 
-    /* Put entries */
-    databox k1 = databoxNewBytesString("key1");
-    databox v1 = databoxNewSigned(100);
-    lruCachePut(cache, &k1, &v1);
-
-    databox k2 = databoxNewBytesString("key2");
-    databox v2 = databoxNewSigned(200);
-    lruCachePut(cache, &k2, &v2);
-
-    databox k3 = databoxNewBytesString("key3");
-    databox v3 = databoxNewSigned(300);
-    lruCachePut(cache, &k3, &v3);
-
-    /* Cache is full (3/3) */
-
-    /* Access key1 (updates its timestamp) */
-    databox retrieved;
-    if (lruCacheGet(cache, &k1, &retrieved)) {
-        printf("Retrieved: %ld\n", retrieved.data.i64);
-    }
-
-    sleep(1);
-
-    /* Add key4 - will evict key2 (oldest) */
-    databox k4 = databoxNewBytesString("key4");
-    databox v4 = databoxNewSigned(400);
-    lruCachePut(cache, &k4, &v4);
-
-    /* key2 should be evicted */
-    if (!lruCacheGet(cache, &k2, &retrieved)) {
-        printf("key2 was evicted\n");
-    }
-
-    /* key1 should still exist (was accessed recently) */
-    if (lruCacheGet(cache, &k1, &retrieved)) {
-        printf("key1 still in cache: %ld\n", retrieved.data.i64);
-    }
-
-    lruCacheFree(cache);
+    multimapFree(both);
+    multimapFree(onlyInA);
+    multimapFree(symmetric);
+    multimapFree(union_);
+    multimapFree(keysA);
+    multimapFree(keysB);
 }
 ```
 
-## Example 6: Database Query Result Cache
+**What to take away**
 
-Cache database query results with automatic invalidation.
+- The trim is the only bulk-delete path and it only understands
+  `MULTIMAP_CONDITION_LESS_THAN_EQUAL`. Anything else must iterate.
+- `multimapProcessUntil()` accepts all conditions but stops at the first
+  failing row; use it for prefix work, not filtering.
+- `multimapDifferenceKeys()` requires 1-element multimaps on both sides;
+  `multimapIntersectKeys()` does not.
+- Iterators are consumed by these calls: re-init before reusing one.
+
+## Performance Notes
+
+### Append only for non-decreasing keys
+
+`multimapAppend()` skips the submap-selection step and inserts straight into the
+highest submap. It is not O(1) - the insert inside that submap is still a sorted
+insert - and on Small it is literally `multimapInsert()`. Appending a key that
+sorts below an earlier submap puts the row in the wrong submap and corrupts
+range routing.
 
 ```c
-#include "multimap.h"
-#include "multimapAtom.h"
-
-typedef struct {
-    multimapAtom *queries;   /* Query string interning */
-    multimap *results;       /* queryRef → {resultData, timestamp, hitCount} */
-    time_t maxAge;
-} QueryCache;
-
-QueryCache *queryCacheNew(time_t maxAge) {
-    QueryCache *qc = malloc(sizeof(*qc));
-    qc->queries = multimapAtomNew();
-    /* 4 elements: queryRef + resultData + timestamp + hitCount */
-    qc->results = multimapNew(4);
-    qc->maxAge = maxAge;
-    return qc;
+/* Fine: keys never decrease */
+for (int64_t i = 0; i < 10000; i++) {
+    databox k = databoxNewSigned(i);
+    databox v = databoxNewSigned(i * 2);
+    const databox *e[2] = {&k, &v};
+    multimapAppend(&m, e);
 }
 
-void queryCachePut(QueryCache *qc, const char *query, const databox *result) {
-    /* Intern query string */
-    databox queryBox = databoxNewBytesString(query);
-    multimapAtomInsertIfNewConvert(qc->queries, &queryBox);
-
-    /* Store result */
-    databox timestamp = databoxNewSigned(time(NULL));
-    databox hitCount = databoxNewSigned(0);
-    const databox *entry[4] = {&queryBox, result, &timestamp, &hitCount};
-
-    multimapInsert(&qc->results, entry);
-}
-
-bool queryCacheGet(QueryCache *qc, const char *query, databox *outResult) {
-    /* Look up query reference */
-    databox queryBox = databoxNewBytesString(query);
-    databox queryRef;
-
-    if (!multimapAtomLookupReference(qc->queries, &queryBox, &queryRef)) {
-        /* Query not in cache */
-        return false;
-    }
-
-    /* Look up cached result */
-    databox result, timestamp, hitCount;
-    databox *values[3] = {&result, &timestamp, &hitCount};
-
-    if (!multimapLookup(qc->results, &queryRef, values)) {
-        return false;
-    }
-
-    /* Check if result is too old */
-    time_t age = time(NULL) - timestamp.data.i64;
-    if (age > qc->maxAge) {
-        /* Expired - delete it */
-        multimapDelete(&qc->results, &queryRef);
-        return false;
-    }
-
-    /* Increment hit count */
-    multimapFieldIncr(&qc->results, &queryRef, 3, 1);
-
-    *outResult = result;
-    return true;
-}
-
-void queryCacheInvalidate(QueryCache *qc, const char *query) {
-    databox queryBox = databoxNewBytesString(query);
-    databox queryRef;
-
-    if (multimapAtomLookupReference(qc->queries, &queryBox, &queryRef)) {
-        multimapDelete(&qc->results, &queryRef);
-    }
-}
-
-void queryCacheStats(QueryCache *qc) {
-    printf("Query Cache Statistics:\n");
-    printf("  Unique queries: %zu\n", multimapCount(qc->results));
-
-    multimapIterator iter;
-    multimapIteratorInit(qc->results, &iter, true);
-
-    databox queryRef, result, timestamp, hitCount;
-    databox *elements[4] = {&queryRef, &result, &timestamp, &hitCount};
-
-    size_t totalHits = 0;
-    while (multimapIteratorNext(&iter, elements)) {
-        totalHits += hitCount.data.i64;
-    }
-
-    printf("  Total hits: %zu\n", totalHits);
-}
-
-void queryCacheFree(QueryCache *qc) {
-    if (qc) {
-        multimapAtomFree(qc->queries);
-        multimapFree(qc->results);
-        free(qc);
-    }
-}
-
-/* Usage */
-void exampleQueryCache(void) {
-    QueryCache *qc = queryCacheNew(300);  /* 5 minute TTL */
-
-    /* Simulate database query */
-    databox result1 = databoxNewSigned(42);
-    queryCachePut(qc, "SELECT COUNT(*) FROM users", &result1);
-
-    /* Retrieve from cache */
-    databox cached;
-    if (queryCacheGet(qc, "SELECT COUNT(*) FROM users", &cached)) {
-        printf("Cache hit! Result: %ld\n", cached.data.i64);
-    }
-
-    /* Stats */
-    queryCacheStats(qc);
-
-    /* Invalidate after data change */
-    queryCacheInvalidate(qc, "SELECT COUNT(*) FROM users");
-
-    queryCacheFree(qc);
-}
+/* Not fine: random keys must go through multimapInsert() */
 ```
 
-## Performance Tips
+### Match the size limit to the workload
 
-### Tip 1: Use Append for Sorted Inserts
+The `flexCapSizeLimit` level decides when Small promotes, when Medium promotes,
+and how large a Full submap may grow before splitting. Smaller submaps mean
+smaller memmoves per write; larger submaps mean fewer indirections per read.
 
 ```c
-/* BAD: Random inserts cause many memmoves */
-for (int i = 0; i < 10000; i++) {
-    int random = rand();
-    databox k = databoxNewSigned(random);
-    databox v = databoxNewSigned(random * 2);
-    multimapInsert(&m, (const databox*[]){&k, &v});
-}
-
-/* GOOD: Sorted inserts with Append */
-int sorted[10000];
-/* ... fill and sort array ... */
-for (int i = 0; i < 10000; i++) {
-    databox k = databoxNewSigned(sorted[i]);
-    databox v = databoxNewSigned(sorted[i] * 2);
-    multimapAppend(&m, (const databox*[]){&k, &v});  /* Much faster! */
-}
+multimap *hot = multimapNewLimit(2, FLEX_CAP_LEVEL_512);   /* write-heavy */
+multimap *bulk = multimapNewLimit(2, FLEX_CAP_LEVEL_4096); /* read-heavy */
 ```
 
-### Tip 2: Batch Operations
+### Prefer the `*Into` readers
+
+`multimapLookupInto()`, `multimapFirstInto()`, `multimapLastInto()` and
+`multimapIteratorNextInto()` build the pointer array for you and compile to the
+same stores as a hand-rolled initializer. They cap at `MULTIMAP_INTO_MAX` (16)
+boxes; wider rows must use the raw pointer-array API.
+
+Remember the widths differ: `multimapLookupInto()` takes
+`elementsPerEntry - 1`, everything else takes `elementsPerEntry`. These are not
+partial reads, so an undersized array is written past its end.
+
+### Intern repeated strings
+
+When the same byte string repeats across many rows, intern it once and store the
+reference:
 
 ```c
-/* BAD: Many small transactions */
-for (int i = 0; i < 1000; i++) {
-    /* fetch data */
-    /* insert into multimap */
-}
-
-/* GOOD: Batch inserts */
-/* Fetch all data first, then insert in sorted order */
-```
-
-### Tip 3: Choose Appropriate Size Limits
-
-```c
-/* For small, frequently updated maps */
-multimap *hot = multimapNewLimit(2, FLEX_CAP_LEVEL_512);
-
-/* For large, bulk-loaded maps */
-multimap *bulk = multimapNewLimit(2, FLEX_CAP_LEVEL_4096);
-```
-
-### Tip 4: Use Reference Containers for Repeated Strings
-
-```c
-/* BAD: Store duplicate strings */
-multimap *logs = multimapNew(3);  /* timestamp + level + message */
-
-/* GOOD: Intern repeated log levels */
 multimapAtom *atoms = multimapAtomNew();
-multimap *logs = multimapNew(3);
+multimap *logs = multimapNew(3); /* timestamp | levelRef | message */
 
 databox level = databoxNewBytesString("ERROR");
 multimapAtomInsertIfNewConvert(atoms, &level);
-/* level is now a tiny integer reference */
+/* 'level' is now a small integer reference */
 ```
+
+Use `multimapInsertWithSurrogateKey()` and the `*WithReference` lookups when the
+map must still sort by the underlying strings.
+
+### Do not build an LRU on raw multimap
+
+Scanning every row to find the oldest timestamp is O(n) per eviction. datakit
+already ships an eviction-aware container; see
+[MULTILRU.md](../multi/MULTILRU.md).
 
 ## See Also
 
 - [MULTIMAP.md](MULTIMAP.md) - Complete API reference
-- [VARIANTS.md](VARIANTS.md) - Understanding Small/Medium/Full
+- [VARIANTS.md](VARIANTS.md) - Small/Medium/Full internals and the atom API
 - [databox](../core/DATABOX.md) - Value container
-- [multimapAtom](MULTIMAP_ATOM.md) - String interning
+- [flex](../flex/FLEX.md) - Underlying sorted storage
+- [docs/examples/USE_CASES.md](../../examples/USE_CASES.md) - Cross-module
+  application recipes

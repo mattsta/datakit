@@ -73,10 +73,12 @@
 /* Iterating */
 #define multilistSmallAdapterNext(iter, entry) multilistSmallNext(iter, entry)
 
-/* Reset iteration positions */
-#define multilistSmallAdapterRewind(ml, iter) multilistSmallRewind(ml, iter)
+/* Reset iteration positions (re-init from the retained direction;
+ * Small keeps no per-iterator state to release) */
+#define multilistSmallAdapterRewind(ml, iter)                                  \
+    multilistSmallIteratorInit(ml, iter, true)
 #define multilistSmallAdapterRewindTail(ml, iter)                              \
-    multilistSmallRewindTail(ml, iter)
+    multilistSmallIteratorInit(ml, iter, false)
 
 /* Close iterator */
 #define multilistSmallAdapterReleaseIterator(iter)                             \
@@ -88,6 +90,11 @@
 /* Get entry based on index */
 #define multilistSmallAdapterIndex(ml, state, index, entry, open)              \
     multilistSmallIndex(ml, index, entry)
+
+/* Anchored index (anchor walks within the single flex) */
+#define multilistSmallAdapterIndexNear(ml, state, index, anchor, anchorIdx,    \
+                                       entry, open)                            \
+    multilistSmallIndexNear(ml, index, anchor, anchorIdx, entry)
 
 /* Move ends of list */
 #define multilistSmallAdapterRotate(ml, state) multilistSmallRotate(ml)
@@ -168,10 +175,12 @@
 /* Iterating */
 #define multilistMediumAdapterNext(iter, entry) multilistMediumNext(iter, entry)
 
-/* Reset iteration positions */
-#define multilistMediumAdapterRewind(ml, iter) multilistMediumRewind(ml, iter)
+/* Reset iteration positions (re-init from the retained direction;
+ * Medium keeps no per-iterator state to release) */
+#define multilistMediumAdapterRewind(ml, iter)                                 \
+    multilistMediumIteratorInit(ml, iter, true)
 #define multilistMediumAdapterRewindTail(ml, iter)                             \
-    multilistMediumRewindTail(ml, iter)
+    multilistMediumIteratorInit(ml, iter, false)
 
 /* Close iterator */
 #define multilistMediumAdapterReleaseIterator(iter)                            \
@@ -183,6 +192,11 @@
 /* Get entry based on index */
 #define multilistMediumAdapterIndex(ml, state, index, entry, open)             \
     multilistMediumIndex(ml, index, entry)
+
+/* Anchored index (anchor walks within its owning flex) */
+#define multilistMediumAdapterIndexNear(ml, state, index, anchor, anchorIdx,   \
+                                        entry, open)                           \
+    multilistMediumIndexNear(ml, index, anchor, anchorIdx, entry)
 
 /* Move ends of list */
 #define multilistMediumAdapterRotate(ml, state) multilistMediumRotate(ml)

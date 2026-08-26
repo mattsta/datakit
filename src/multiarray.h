@@ -160,6 +160,11 @@ void *multiarrayGetTail(multiarray *m);
 void multiarrayInsert(multiarray **m, multiarrayIdx idx, void *what);
 void multiarrayDelete(multiarray **m, const uint32_t index);
 
+/* Element count and data-storage bytes (metadata overhead excluded).
+ * Container API only — the Native macro API tracks count externally. */
+size_t multiarrayCount(const multiarray *m);
+size_t multiarrayBytes(const multiarray *m);
+
 #if 0
 bool multiarrayDelRange(multiarray **m, const int64_t start, const int64_t stop);
 bool multiarrayReplaceAtIndex(multiarray **m, nodeId index, databox *box);

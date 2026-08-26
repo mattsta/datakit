@@ -22,6 +22,8 @@ void multiarrayMediumInsert(multiarrayMedium *mar, const int32_t idx,
                             const void *s);
 void multiarrayMediumDelete(multiarrayMedium *mar, const int32_t idx);
 void *multiarrayMediumGet(const multiarrayMedium *mar, const int32_t idx);
+size_t multiarrayMediumCount(const multiarrayMedium *mar);
+size_t multiarrayMediumBytes(const multiarrayMedium *mar);
 void *multiarrayMediumGetForward(const multiarrayMedium *mar,
                                  const uint32_t idx);
 void *multiarrayMediumGetHead(const multiarrayMedium *mar);

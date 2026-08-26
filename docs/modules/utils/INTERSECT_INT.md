@@ -8,20 +8,36 @@
 
 - Multiple specialized intersection algorithms
 - Automatic algorithm selection based on size ratios
-- SSE4.1 and AVX2 SIMD optimizations
+- SSE4.1, AVX2, and **ARM NEON** SIMD implementations, plus a scalar fallback
 - Galloping search for vastly different set sizes
-- Designed by Nathan Kurz and Daniel Lemire
-- Used in production for integer set operations
+- Output buffer may alias the smaller input array
 
 **Header**: `intersectInt.h`
 
-**Source**: `intersectInt.c`
+**Source**: `intersectInt.c` (also carries the `intersectInt` test suite under
+`DATAKIT_TEST`)
+
+### Platform dispatch happens at compile time
+
+`intersectInt()` has three mutually exclusive definitions in `intersectInt.c`,
+selected by the preprocessor:
+
+| Build target                                      | `intersectInt()` dispatches to               |
+| ------------------------------------------------- | -------------------------------------------- |
+| x86 with `__SSE4_1__`                             | `SIMDgalloping` / `v3` / `v1`                |
+| ARM (`__aarch64__`, `__ARM_NEON`, `__ARM_NEON__`) | `SIMDgalloping_neon` / `v3_neon` / `v1_neon` |
+| anything else                                     | `scalar()` only, no ratio heuristic          |
+
+There is no runtime CPU detection. The ratio heuristic is identical on the x86
+and ARM paths; the scalar fallback skips it entirely because there is nothing to
+choose between.
 
 **Origin**: Modified from [SIMDCompressionAndIntersection](https://github.com/lemire/SIMDCompressionAndIntersection) by Daniel Lemire (Apache License 2.0)
 
 ## Algorithms Implemented
 
-The library includes six specialized intersection algorithms:
+Three functions and one macro are public. Everything else named below is an
+internal implementation selected for you.
 
 ```
 ┌─────────────────────────────────────────────┐
@@ -33,16 +49,24 @@ The library includes six specialized intersection algorithms:
     │   Size Ratio Analysis   │
     └────────────┬────────────┘
                  │
-         ┌───────┴───────┬───────────┬──────────┐
-         │               │           │          │
-    ratio ≥ 1000   ratio ≥ 50   ratio < 50   Small
-         │               │           │        inputs
-         v               v           v          │
-   SIMDgalloping        v3          v1      scalar
-   (exponential)    (32-vector)  (2-vector)   │
-                                               v
-                                          match_scalar
+      ┌──────────┴────────┬──────────────┐
+      │                   │              │
+ 1000*min <= max     50*min <= max    otherwise
+      │                   │              │
+      v                   v              v
+ SIMDgalloping           v3             v1
+ (exponential)      (32-element)    (2-vector)
+      │                   │              │
+      └───────────────────┴──────────────┘
+                          │
+              tails handled by match_scalar
 ```
+
+The three comparisons are exact integer tests on the lengths
+(`1000 * length1 <= length2`, then `50 * length1 <= length2`, symmetric in both
+directions) — no division is performed. Empty inputs short-circuit to 0 before
+any of it runs, and whichever array is shorter is always passed as the `rare`
+argument.
 
 ### 1. intersectInt (Main Entry Point)
 
@@ -56,10 +80,19 @@ size_t intersectInt(const uint32_t *set1, const size_t length1,
 
 **Selection Logic:**
 
-- If size ratio ≥ 1000:1 → Use `SIMDgalloping()` (exponential search)
-- If size ratio ≥ 50:1 → Use `v3()` (32-way SIMD)
-- Otherwise → Use `v1()` (2-way SIMD)
-- Always ensures smaller set is "rare" parameter
+- Either length 0 → return 0 immediately
+- If size ratio ≥ 1000:1 → `SIMDgalloping()` (exponential search)
+- If size ratio ≥ 50:1 → `v3()` (32-element blocks)
+- Otherwise → `v1()` (2-vector)
+- Always passes the smaller set as the "rare" parameter
+
+On ARM builds the same three branches select the `_neon` variants; on a build
+with neither SSE4.1 nor NEON, this function is a direct call to `scalar()`.
+
+**Aliasing is permitted, in one direction:** `out` may be `set1` when
+`length1 <= length2`, or `set2` when `length1 > length2`. In other words the
+output may overwrite the _smaller_ input in place. Aliasing the larger input is
+not supported.
 
 ### 2. intersectIntAVX2 (AVX2 Optimized)
 
@@ -73,11 +106,15 @@ size_t intersectIntAVX2(const uint32_t *set1, const size_t length1,
 #endif
 ```
 
-Available only when compiled with AVX2 support (`__AVX2__` defined).
+**Both the declaration and the definition are guarded by `__AVX2__`.** On a build
+without AVX2 this symbol does not exist at all — it is not merely slower, it is
+absent, and a direct call will not compile. Use `intersectIntAuto` unless you
+have already guarded the call site yourself.
 
 ### 3. intersectIntAuto (Platform-Adaptive Macro)
 
-**Automatically selects best version** for current platform:
+**Selects the AVX2 entry point when the build has AVX2**, otherwise the
+platform's `intersectInt`:
 
 ```c
 #if __AVX2__
@@ -87,7 +124,10 @@ Available only when compiled with AVX2 support (`__AVX2__` defined).
 #endif
 ```
 
-Use this for optimal performance across different CPU architectures.
+Note what this does _not_ do: on ARM it resolves to `intersectInt`, which is
+already the NEON implementation, so NEON is reached through the fallback branch
+rather than a dedicated one. The macro is a compile-time alias, so it evaluates
+each argument exactly once and carries no runtime dispatch cost.
 
 ### 4. intersectIntOneSidedGalloping
 
@@ -104,6 +144,11 @@ size_t intersectIntOneSidedGalloping(const uint32_t *smallset,
 **Algorithm**: Exponential search (galloping) in large set, linear scan in small set.
 
 **Best for**: Size ratios > 100:1
+
+Unlike `intersectInt`, this one is **not** platform-dispatched and **not**
+SIMD — it is a single scalar implementation compiled on every target, and it
+requires you to pass the small set first. It is the right choice when you
+already know the skew and want to skip the heuristic.
 
 ## API Reference
 
@@ -268,7 +313,9 @@ printf("Found in %zu documents\n", docs->count);
 #include "intsetU32.h"
 #include "intersectInt.h"
 
-intsetU32 *intsetIntersect(const intsetU32 *a, const intsetU32 *b) {
+/* intsetU32Array() takes a non-const intsetU32 *, so the inputs are
+ * non-const here too. */
+intsetU32 *intsetIntersect(intsetU32 *a, intsetU32 *b) {
     /* Get array pointers and counts */
     const uint32_t *aArray = intsetU32Array(a);
     const uint32_t *bArray = intsetU32Array(b);
@@ -277,7 +324,7 @@ intsetU32 *intsetIntersect(const intsetU32 *a, const intsetU32 *b) {
 
     /* Allocate result set with max possible size */
     size_t maxSize = aCount < bCount ? aCount : bCount;
-    intsetU32 *result = intsetU32NewLen(maxSize);
+    intsetU32 *result = intsetU32NewLen((uint32_t)maxSize);
 
     /* Compute intersection directly into result array */
     size_t count = intersectIntAuto(
@@ -286,9 +333,11 @@ intsetU32 *intsetIntersect(const intsetU32 *a, const intsetU32 *b) {
         intsetU32Array(result)
     );
 
-    /* Update count and shrink to size */
-    intsetU32UpdateCount(result, count);
-    intsetU32ShrinkToSize(&result);
+    /* Update count and shrink to size.
+     * Both take intsetU32 *, not intsetU32 ** - the set is resized in
+     * place and the handle never moves. */
+    intsetU32UpdateCount(result, (uint32_t)count);
+    intsetU32ShrinkToSize(result);
 
     return result;
 }
@@ -299,15 +348,15 @@ intsetU32 *setB = intsetU32New();
 
 /* Add elements to sets... */
 for (uint32_t i = 0; i < 1000; i += 2) {
-    intsetU32Add(&setA, i);  /* Even numbers */
+    intsetU32Add(setA, i);  /* Even numbers */
 }
 for (uint32_t i = 0; i < 1000; i += 3) {
-    intsetU32Add(&setB, i);  /* Multiples of 3 */
+    intsetU32Add(setB, i);  /* Multiples of 3 */
 }
 
 /* Intersect: numbers divisible by both 2 and 3 (i.e., by 6) */
 intsetU32 *intersection = intsetIntersect(setA, setB);
-printf("Intersection size: %u\n", intsetU32Count(intersection));
+printf("Intersection size: %zu\n", intsetU32Count(intersection));
 /* Result: {0, 6, 12, 18, ..., 996} = 167 elements */
 ```
 
@@ -338,18 +387,23 @@ uint32_t *intersectMultiple(uint32_t **arrays, size_t *lengths,
         result
     );
 
-    /* Intersect with remaining arrays */
+    /* Intersect with remaining arrays.
+     * The running result only ever shrinks, so once it is the shorter
+     * side it may serve as its own output - no scratch buffer, no
+     * malloc/free per round. */
     for (size_t i = 2; i < numArrays && count > 0; i++) {
-        uint32_t *temp = malloc(count * sizeof(uint32_t));
-        size_t newCount = intersectIntAuto(
-            result, count,
-            arrays[i], lengths[i],
-            temp
-        );
-
-        free(result);
-        result = temp;
-        count = newCount;
+        if (count <= lengths[i]) {
+            count = intersectIntAuto(result, count,
+                                     arrays[i], lengths[i], result);
+        } else {
+            /* The accumulator is the LARGER side here, so it cannot
+             * alias; use a temporary for this round. */
+            uint32_t *temp = malloc(lengths[i] * sizeof(uint32_t));
+            count = intersectIntAuto(result, count,
+                                     arrays[i], lengths[i], temp);
+            memcpy(result, temp, count * sizeof(uint32_t));
+            free(temp);
+        }
     }
 
     /* Shrink to actual size */
@@ -370,9 +424,17 @@ uint32_t *matches = intersectMultiple(scans, scanLengths, 5, &resultCount);
 
 ## Algorithm Details
 
-### Scalar Algorithm (match_scalar)
+### Scalar Algorithms (`scalar` and `match_scalar`)
 
-**Fallback algorithm** for small inputs or tail processing:
+These are two distinct functions, both non-SIMD, with different roles:
+
+- **`scalar`** — the whole-input fallback. On a target with neither SSE4.1 nor
+  NEON, `intersectInt()` is nothing but a call to this.
+- **`match_scalar`** — the _tail_ handler. Every SIMD algorithm on every
+  platform finishes its remainder here, once the block loop can no longer fill a
+  vector.
+
+Both are two-pointer merges:
 
 ```
 Algorithm: Two-pointer merge
@@ -385,6 +447,9 @@ Algorithm: Two-pointer merge
 Time: O(n + m)
 Space: O(1)
 ```
+
+Both are also exercised directly by the test suite on every platform, which is
+what makes them the oracle the SIMD paths are checked against.
 
 ### v1 Algorithm (N. Kurz)
 
@@ -443,21 +508,25 @@ SIMD: O(1) comparison within block
 
 The main `intersectInt()` function uses these heuristics:
 
-```c
-ratio = max(length1, length2) / min(length1, length2)
+The real code never divides — it multiplies the shorter side instead, which
+avoids a division and any rounding question:
 
-if (ratio >= 1000) {
-    use SIMDgalloping  /* Exponential search */
-} else if (ratio >= 50) {
-    use v3             /* 32-way SIMD */
-} else {
-    use v1             /* 2-way SIMD */
+```c
+if (length1 == 0 || length2 == 0) {
+    return 0;
 }
 
-/* Always ensure smaller array is "rare" parameter */
+if (1000 * length1 <= length2 || 1000 * length2 <= length1) {
+    /* SIMDgalloping, smaller array first */
+} else if (50 * length1 <= length2 || 50 * length2 <= length1) {
+    /* v3, smaller array first */
+} else {
+    /* v1, smaller array first */
+}
 ```
 
-These thresholds were determined empirically by D. Lemire through extensive benchmarking.
+The thresholds come from the upstream project's benchmarking, not from
+measurements taken in this repository.
 
 ## Performance Characteristics
 
@@ -475,17 +544,19 @@ Where n = size of smaller set, m = size of larger set
 
 ### Speedup vs Scalar
 
-Empirical results from original benchmarks (D. Lemire):
+No speedup figures are published for this module — nothing in the repository
+measures them, and the upstream project's numbers were taken on different
+hardware with a different compiler. The structural expectation is:
 
-| Size Ratio | Algorithm     | Speedup | Notes          |
-| ---------- | ------------- | ------- | -------------- |
-| 1:1        | v1            | 3-4×    | Similar sizes  |
-| 10:1       | v1            | 3-5×    | Moderate skew  |
-| 50:1       | v3            | 5-8×    | High skew      |
-| 100:1      | v3            | 6-10×   | Very high skew |
-| 1000:1     | SIMDgalloping | 10-50×  | Extreme skew   |
+- `v1` beats scalar at similar sizes because it compares one rare element
+  against 8 frequent elements per step
+- `v3` widens that to 32-element blocks, so it pulls ahead as skew grows
+- `SIMDgalloping` wins at extreme skew because it _skips_ rather than scans
+- AVX2 doubles the vector width over SSE4.1; NEON matches SSE4.1's width
 
-**AVX2 versions** provide additional 1.5-2× speedup over SSE versions.
+Measure your own distribution under the cmake `perf` preset before choosing a
+specific entry point over `intersectIntAuto`. Sanitizer builds add 3-10x
+overhead and invalidate any timing taken from them.
 
 ### Space Complexity
 
@@ -493,9 +564,11 @@ All algorithms use **O(1) extra space** beyond the output buffer:
 
 - No temporary arrays
 - In-place pointer manipulation
-- SIMD registers (128-bit SSE or 256-bit AVX2)
+- SIMD registers (128-bit SSE4.1/NEON or 256-bit AVX2)
 
 Output buffer must be allocated by caller: `min(length1, length2)` elements.
+Because `out` may alias the smaller input, that buffer can be one of the inputs
+rather than a fresh allocation.
 
 ### Cache Behavior
 
@@ -526,6 +599,13 @@ _mm256_or_si256()      /* Bitwise OR (256-bit) */
 _mm256_testz_si256()   /* Test if all bits zero (256-bit) */
 _mm256_set1_epi32()    /* Broadcast scalar to 8×uint32_t */
 ```
+
+### ARM NEON
+
+The ARM path (`v1_neon`, `v3_neon`, `SIMDgalloping_neon`) uses `<arm_neon.h>`
+and works on 128-bit `uint32x4_t` vectors — the same 4-lane width as SSE4.1 —
+with the same block structure and the same `match_scalar` tail handling. It is
+compiled whenever `__aarch64__`, `__ARM_NEON`, or `__ARM_NEON__` is defined.
 
 ## Best Practices
 
@@ -569,29 +649,42 @@ size_t count = intersectInt(a, lenA, b, lenB, out);
 #endif
 ```
 
-### 4. Don't Reuse Input as Output
+### 4. Aliasing: Overwrite the Smaller Input, Never the Larger
+
+The output may be written straight over the **shorter** input array, which lets
+a repeated-intersection loop run without a scratch buffer. Overwriting the
+longer input is not supported.
 
 ```c
-/* WRONG - aliasing not supported */
-size_t count = intersectInt(set1, len1, set2, len2, set1);
+/* GOOD - out aliases the smaller array */
+size_t count = (len1 <= len2)
+                   ? intersectInt(set1, len1, set2, len2, set1)
+                   : intersectInt(set1, len1, set2, len2, set2);
 
-/* RIGHT - use separate output buffer */
-uint32_t *out = malloc(len1 * sizeof(uint32_t));
+/* GOOD - separate buffer always works */
+uint32_t *out = malloc((len1 < len2 ? len1 : len2) * sizeof(uint32_t));
 size_t count = intersectInt(set1, len1, set2, len2, out);
+
+/* WRONG - aliasing the LARGER input */
+size_t count = intersectInt(small, 10, large, 100000, large);
 ```
+
+A multi-way AND can therefore accumulate in place: the running result only ever
+shrinks, so it stays the smaller side and can be its own output.
 
 ### 5. Handle Empty Sets
 
 ```c
-/* Library handles empty inputs gracefully */
-uint32_t a[10] = {...};
-uint32_t b[0];  /* Empty */
+/* Library handles empty inputs gracefully: intersectInt() checks both
+ * lengths before touching anything and returns 0 without writing to out.
+ * (A zero-length array is not valid ISO C, so model "empty" with a NULL
+ * pointer and a 0 length, or with a length of 0 over a real buffer.) */
+uint32_t a[10] = {0};
+const uint32_t *b = NULL;  /* Empty */
 uint32_t out[10];
 
 size_t count = intersectInt(a, 10, b, 0, out);
 /* Returns 0, out is unmodified */
-
-/* But still allocate output buffer! */
 ```
 
 ## Common Pitfalls
@@ -658,42 +751,57 @@ size_t count = intersectInt(a, 3, b, lenB, out);
 
 ## Compiler Flags
 
+Within datakit these are set by the cmake presets; the flags below matter when
+compiling `intersectInt.c` into another project.
+
 ### Required for AVX2
 
-```bash
-# Enable AVX2 instructions
-gcc -mavx2 -O3 -o program program.c intersectInt.c
+`intersectIntAVX2` only exists when `__AVX2__` is defined:
 
-# Or in CMakeLists.txt
-add_compile_options(-mavx2)
+```bash
+clang -mavx2 -O3 -c intersectInt.c
 ```
 
 ### Required for SSE4.1
 
+The x86 SIMD path is gated on `__SSE4_1__`. Without it, an x86 build falls all
+the way through to `scalar()`:
+
 ```bash
-# Enable SSE4.1 instructions (usually default on x86-64)
-gcc -msse4.1 -O3 -o program program.c intersectInt.c
+clang -msse4.1 -O3 -c intersectInt.c
 ```
+
+### ARM NEON
+
+No flag is needed on ARM64 — `__aarch64__` is always defined there, so the NEON
+path is selected automatically.
 
 ### Optimization Flags
 
 ```bash
-# Recommended flags for maximum performance
-gcc -O3 -march=native -mtune=native \
-    -ffast-math -funroll-loops \
-    -o program program.c intersectInt.c
+clang -O3 -march=native -funroll-loops -c intersectInt.c
 ```
+
+`-march=native` picks up SSE4.1/AVX2/NEON in one step. Do **not** add
+`-ffast-math`: this module is entirely integer code, so it gains nothing and the
+flag weakens floating-point semantics everywhere else in the translation unit.
 
 ## Platform Support
 
-| Platform     | SSE Version | AVX2 Version | Notes                    |
-| ------------ | ----------- | ------------ | ------------------------ |
-| x86-64       | ✓           | ✓            | Full support             |
-| x86 (32-bit) | ✓           | ✓            | Requires SSE4.1/AVX2 CPU |
-| ARM          | ✗           | ✗            | Falls back to scalar     |
-| RISC-V       | ✗           | ✗            | Falls back to scalar     |
+| Platform         | SSE4.1 path | NEON path | AVX2 entry point  | `intersectInt()` uses |
+| ---------------- | ----------- | --------- | ----------------- | --------------------- |
+| x86-64           | ✓           | ✗         | ✓ when `-mavx2`   | SSE4.1 SIMD           |
+| x86 (32-bit)     | ✓           | ✗         | ✓ when `-mavx2`   | SSE4.1 SIMD           |
+| ARM64 / ARM NEON | ✗           | ✓         | ✗ (symbol absent) | NEON SIMD             |
+| Everything else  | ✗           | ✗         | ✗ (symbol absent) | `scalar()`            |
 
-**Note**: On non-x86 platforms, the code will compile but use only scalar algorithms.
+**Note**: ARM is **not** a scalar fallback — a full NEON implementation of all
+three algorithms exists and is what `intersectInt()` resolves to there. Only
+targets that are neither SSE4.1-capable x86 nor NEON-capable ARM drop to
+`scalar()`.
+
+Supported build targets are Linux, macOS, and the BSD family. There is no
+Windows support in datakit.
 
 ## Benchmarking
 
@@ -738,20 +846,40 @@ void benchmarkIntersection(void) {
 ## References
 
 - Original implementation: [SIMDCompressionAndIntersection](https://github.com/lemire/SIMDCompressionAndIntersection)
-- Algorithm designer: Nathan Kurz
-- Adaptation: Daniel Lemire
-- Paper: "Faster Population Counts using AVX2 Instructions" (Lemire et al.)
+- Paper: "SIMD Compression and the Intersection of Sorted Integers"
+  (Lemire, Boytsov, Kurz), Software: Practice and Experience
 - License: Apache License 2.0
 
 ## Implementation Notes
 
-The implementation uses several advanced techniques:
+The implementation uses several techniques:
 
-1. **Pointer tagging** for algorithm dispatch
-2. **Loop unrolling** for SIMD efficiency
-3. **Branch prediction hints** via `__builtin_expect`
-4. **Alignment assumptions** for faster loads (configurable)
+1. **Compile-time platform dispatch** — three separate definitions of
+   `intersectInt()`, chosen by the preprocessor, with no runtime branch
+2. **Multiplicative size comparison** instead of division for the ratio test
+3. **Loop unrolling** for SIMD efficiency
+4. **Unaligned loads** (`_mm_loadu_si128` / `_mm256_loadu_si256`) so callers do
+   not have to align their arrays
 5. **Shuffle masks** for efficient result packing
 6. **Galloping search** for skipping large gaps
+7. **`match_scalar` tail handling** wherever a block loop leaves a remainder
 
-The code is heavily optimized for modern x86-64 CPUs with out-of-order execution and deep pipelines.
+## Testing
+
+```bash
+./src/datakit-test test intersectInt
+```
+
+The suite runs the same battery — empty arrays, single elements, disjoint sets,
+identical sets, partial overlap, small and large arrays, several size ratios,
+commutativity, and large (near-`UINT32_MAX`) values — against every
+implementation available in the current build:
+
+- Always: `scalar`, `match_scalar`, `intersectInt`, `intersectIntOneSidedGalloping`
+- On x86: `v1`, `v3`, `SIMDgalloping`, and the two `highlyscalable_intersect_SIMD`
+  variants
+- On ARM: `v1_neon`, `v3_neon`, `SIMDgalloping_neon`
+- With AVX2: `intersectIntAVX2`, `v1_avx2`, `v3_avx2`, `SIMDgalloping_avx2`
+
+A cross-implementation consistency check confirms every variant agrees on the
+same inputs, so a SIMD path that diverges from `scalar` fails the suite.

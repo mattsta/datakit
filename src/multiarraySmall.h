@@ -18,6 +18,8 @@ multiarraySmall *multiarraySmallNew(uint16_t len, uint16_t rowMax);
 void multiarraySmallFree(multiarraySmall *mar);
 void multiarraySmallInsert(multiarraySmall *mar, uint16_t idx, void *s);
 void multiarraySmallDelete(multiarraySmall *mar, uint16_t idx);
+size_t multiarraySmallCount(const multiarraySmall *mar);
+size_t multiarraySmallBytes(const multiarraySmall *mar);
 #define multiarraySmallGet(mar, idx) ((mar)->data + _marsOff((mar)->len, idx))
 #define multiarraySmallGetHead(mar) multiarraySmallGet(mar, 0)
 #define multiarraySmallGetTail(mar) multiarraySmallGet(mar, (mar)->count - 1)

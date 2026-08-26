@@ -54,7 +54,7 @@ bool OSRegulateResourceUsageGet(long *selfMaxRSS, long *childMaxRSS,
 bool OSRegulateLinuxOvercommitEnabled(void);
 bool OSRegulateLinuxTransparentHugePagesEnabled(void);
 size_t OSRegulateLinuxSmapBytesByFieldForPid(const char *field, int64_t pid);
-int OSRegulateLinuxTransparentHugePagesGetAnonHugePagesSize(int64_t pid);
+size_t OSRegulateLinuxTransparentHugePagesGetAnonHugePagesSize(int64_t pid);
 size_t OSRegualteLinuxSmapPrivateDirtyGet(int64_t pid);
 bool OSRegulateLinuxMemorySettingsAreOkay(void);
 size_t OSRegulateTotalMemoryGet(void);

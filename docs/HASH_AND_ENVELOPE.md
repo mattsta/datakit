@@ -22,15 +22,15 @@ to know about variants; they just call the public API. See
 below for the dispatch table, introspection helpers, and force-override
 hooks (test-only).
 
-### Related docs
+### Related headers
 
-- [PERSIST_ARCHITECTURE.md](PERSIST_ARCHITECTURE.md) — how persist
-  binds a keyring + the `key_id`-tagged snapshot/WAL header.
 - `src/flexEnvelope.h` — wire format for the envelope itself,
   including the outer-header vs. inner-payload framing contract
   (documented at the top of the header).
-- [AEAD_NONCE_LOG.md](AEAD_NONCE_LOG.md) — defense-in-depth nonce
-  observer's architecture, persist format, and eviction policy.
+- `src/persist.h` — how persist binds a keyring and the
+  `key_id`-tagged snapshot/WAL header.
+- `src/aeadNonceLog.h` — defense-in-depth nonce observer's
+  architecture, persist format, and eviction policy.
 
 ## When to use which
 

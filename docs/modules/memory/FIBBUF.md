@@ -10,12 +10,15 @@
 - Three optimized lookup tables (16-bit, 32-bit, 64-bit)
 - Branch-free binary search for O(log n) performance
 - Starts at 34 bytes (Fibonacci 9) for sane minimum
-- Automatic 20% growth fallback beyond table limits
-- Integrates with jemalloc size classes
+- Automatic 20% growth fallback beyond table limits, computed in 64-bit
+  integer math and clamped to the tier's maximum
+- Strictly increasing: the result is always greater than the input, which is
+  what makes `while (size < want) size = fibbufNextSizeBuffer(size);` terminate
+- Integrates with jemalloc size classes via [jebuf](JEBUF.md)
 
 **Header**: `fibbuf.h`
 
-**Source**: `fibbuf.c`
+**Source**: `fibbuf.c` (also carries the `fibbuf` test under `DATAKIT_TEST`)
 
 ## What is Fibonacci Buffer Growth?
 
@@ -66,22 +69,30 @@ On average, Fibonacci wastes **less memory for large buffers** while keeping rea
 ### Buffer Size Calculation
 
 ```c
-/* Get next Fibonacci buffer size larger than current size
+/* Get next Fibonacci buffer size STRICTLY LARGER than current size
  * currentBufSize: current buffer capacity
- * Returns: next Fibonacci number >= currentBufSize
+ * Returns: the smallest tabled Fibonacci number > currentBufSize, or
+ *          currentBufSize + currentBufSize/5 (20% growth) past the table
+ *
+ * The result is never <= the input. Passing an exact Fibonacci number
+ * returns the NEXT one, not the same value.
  */
 size_t fibbufNextSizeBuffer(const size_t currentBufSize);
 
 /* Get allocation size rounded to jemalloc size class
  * currentBufSize: current buffer capacity
- * Returns: jemalloc-aligned size for fibbufNextSizeBuffer(currentBufSize)
+ * Returns: jebufSizeAllocation(fibbufNextSizeBuffer(currentBufSize))
  */
 size_t fibbufNextSizeAllocation(const size_t currentBufSize);
 
 /* Example: Basic buffer growth */
 size_t capacity = 100;
 size_t newCapacity = fibbufNextSizeBuffer(capacity);
-// newCapacity = 144 (next Fibonacci >= 100)
+// newCapacity = 144 (smallest Fibonacci > 100)
+
+/* Example: an empty buffer starts the sequence */
+size_t first = fibbufNextSizeBuffer(0);
+// first = 34 (Fibonacci 9, the table's first entry)
 
 /* Example: With jemalloc alignment */
 size_t allocSize = fibbufNextSizeAllocation(capacity);
@@ -136,13 +147,23 @@ static const uint64_t fibbuf64[] = {
 ### Table Selection Logic
 
 ```c
-if (size < 46,368)
+if (currentBufSize < 46368)
     use fibbuf16
-else if (size <= 2,971,215,073 OR on 32-bit system)
+else if (currentBufSize <= 3579139413 || sizeof(void *) == 4)
     use fibbuf32
 else
     use fibbuf64
 ```
+
+3,579,139,413 is the largest value whose 20% growth still fits in `uint32_t`;
+anything larger must take the 64-bit tier so growth is real rather than clamped.
+On 32-bit builds the 64-bit tier is never selected.
+
+> **Growth gap between the 32-bit and 64-bit tables.** Inputs from 2,971,215,073
+> (the last 32-bit entry) up to 3,579,139,413 still route to the 32-bit table,
+> fall off its end, and get 20% growth - even though the 64-bit table's first
+> entry (4,807,526,976) would be the true next Fibonacci. Growth in that window
+> is 20%, not Fibonacci. Every result is still strictly increasing.
 
 ## Algorithm Details
 
@@ -169,26 +190,44 @@ fibbuf uses a **branch-free binary search** for cache efficiency:
 - More predictable performance
 - Cache-friendly memory access patterns
 
-**Complexity**: O(log n) where n = table size (max 23 iterations)
+**Complexity**: O(log n) where n = table size (23 entries at most, so ~5 steps)
 
 ### Return Value Logic
 
+The search leaves `result` at the largest entry strictly below the input, so
+several cases have to be untangled - including an exact match, which must
+advance **two** slots:
+
 ```c
 if (*result > currentBufSize) {
-    /* Found larger value, return it */
+    /* Search already landed above the input */
     return *result;
 }
 
 if ((result + 1) <= TABLE_END) {
-    /* Exact match found, return next Fibonacci */
-    return *(result + 1);
+    if (*(result + 1) > currentBufSize) {
+        /* Next entry is larger, use it */
+        return *(result + 1);
+    }
+
+    /* *(result + 1) == currentBufSize: an exact Fibonacci match.
+     * Return the one AFTER the match so the result still grows. */
+    if ((result + 2) <= TABLE_END) {
+        return *(result + 2);
+    }
+    /* Exact match on the last entry falls through to 20% growth */
 }
 
-if (result == TABLE_END) {
-    /* Beyond table, grow by 20% */
-    return currentBufSize * 1.2;
-}
+/* Past the end of this tier's table: grow by 20%, computed in 64-bit
+ * and clamped to the tier's own maximum. A growth API must never return
+ * less than its input - truncated double math used to do exactly that. */
+const uint64_t grown = (uint64_t)currentBufSize + (uint64_t)currentBufSize / 5;
+return grown >= tierMax ? tierMax : grown;
 ```
+
+The 20% step is **integer** arithmetic (`x + x/5`), not `x * 1.2` in floating
+point. That matters at large sizes, where the double round-trip could return a
+value below the input and stall a growth loop forever.
 
 ## Real-World Examples
 
@@ -362,17 +401,18 @@ Size    Fibonacci   Doubling    Fib Waste   Double Waste
 
 ### Benchmark Results
 
-From the test suite (70 million iterations):
+The test suite includes timed loops of 70,000,000 iterations per case, covering
+the 16-bit, 32-bit, and 64-bit tiers plus the out-of-table 20% path. It prints
+per-call timings rather than asserting fixed numbers, so no figures are quoted
+here - run it yourself under the cmake `perf` preset (sanitizer builds add
+3-10x overhead and invalidate the numbers):
 
-```
-Operation                   Time per call
-fibbuf 16-bit (small)      ~2-3 ns
-fibbuf 32-bit (medium)     ~2-3 ns
-fibbuf 64-bit (large)      ~2-3 ns
-fibbuf out-of-range (×1.2) ~1-2 ns
+```bash
+./src/datakit-test test fibbuf
 ```
 
-**Observation**: Virtually identical performance across all ranges due to branch-free search.
+Expect near-identical cost across tiers: the search is branch-free with a fixed
+small iteration count, and all three tables fit in a cache line or two.
 
 ## Integration with jemalloc
 
@@ -460,12 +500,23 @@ int *array = malloc(100 * sizeof(int));
 ### 1. Requesting Exact Fibonacci Number
 
 ```c
-/* UNEXPECTED - returns NEXT Fibonacci */
+/* BY DESIGN - returns the NEXT Fibonacci */
 size_t size = fibbufNextSizeBuffer(144); // Returns 233, not 144!
 
-/* If you want >= 144, need to check */
+/* If you want >= 144, ask for one less */
 size_t size = fibbufNextSizeBuffer(143); // Returns 144
 ```
+
+This is deliberate, not a quirk: the growth loop
+
+```c
+while (size < minSize) {
+    size = fibbufNextSizeBuffer(size);
+}
+```
+
+only terminates because the result is _strictly_ greater than the input.
+Returning the matched value would spin forever.
 
 ### 2. Not Accounting for Waste
 
@@ -480,11 +531,14 @@ size_t size = fibbufNextSizeBuffer(143); // Returns 144
 ### 3. Very Large Buffers Beyond Table
 
 ```c
-/* Beyond 1.54 TB, uses 20% growth */
-size_t huge = 2ULL * 1024 * 1024 * 1024 * 1024; // 2 TB
+/* Beyond the last 64-bit entry (1,548,008,755,920), uses 20% growth */
+size_t huge = 2ULL * 1024 * 1024 * 1024 * 1024; // 2 TiB
 size_t next = fibbufNextSizeBuffer(huge);
-// next = 2TB * 1.2 = 2.4 TB (not Fibonacci!)
+// next = huge + huge/5 (not Fibonacci!)
 ```
+
+At the very top of the range the 20% step is clamped to `SIZE_MAX`, so growth
+saturates rather than wrapping.
 
 ### 4. Forgetting Size is in Bytes
 
@@ -532,8 +586,13 @@ Run the fibbuf test suite:
 
 The test suite validates:
 
-- Correct Fibonacci sequence generation
-- Binary search correctness
-- Table boundary conditions
-- Performance benchmarks (70M iterations)
-- Integration with jebuf sizing
+- **Exact-Fibonacci boundaries** (regression guard against the infinite-loop
+  bug): `fibbuf(34) == 55`, `fibbuf(377) == 610`, `fibbuf(610) == 987`,
+  `fibbuf(46368) == 75025`, `fibbuf(75025) == 121393`,
+  `fibbuf(4807526976) == 7778742049`
+- Binary search correctness on non-Fibonacci inputs
+  (`fibbuf(22) == 34`, `fibbuf(5000) == 6765`, `fibbuf(72000) == 75025`)
+- Tier boundaries and the out-of-table 20% path
+  (`fibbuf(2971215074) == 3565458088`,
+  `fibbuf(1548008755921) == 1857610507105`)
+- Timed loops of 70M iterations across all three tiers

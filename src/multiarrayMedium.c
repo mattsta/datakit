@@ -201,6 +201,21 @@ void multiarrayMediumInsert(multiarrayMedium *mar, const int32_t idx,
     }
 }
 
+size_t multiarrayMediumCount(const multiarrayMedium *mar) {
+    /* 'mar->count' is the NODE count; sum the entries in each node. */
+    size_t total = 0;
+    for (uint32_t i = 0; i < mar->count; i++) {
+        total += mar->node[i].count;
+    }
+
+    return total;
+}
+
+size_t multiarrayMediumBytes(const multiarrayMedium *mar) {
+    /* Bytes of element data storage (metadata overhead excluded) */
+    return (size_t)mar->len * multiarrayMediumCount(mar);
+}
+
 void *multiarrayMediumGet(const multiarrayMedium *mar, const int32_t idx) {
     int32_t index = idx;
     int32_t nodeIdx = 0;

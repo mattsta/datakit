@@ -15,12 +15,20 @@ This guide covers debugging techniques, common issues, and tools for developing 
 
 ### Creating a Debug Build
 
-Always use a debug build when debugging:
+Always use a debug build when debugging. The `debug` preset does this
+for you:
 
-```bash
+```sh
+cmake --preset debug && cmake --build --preset debug
+# binary at build-debug/src/datakit-test
+```
+
+Equivalent by hand:
+
+```sh
 mkdir build-debug
 cd build-debug
-cmake -DCMAKE_BUILD_TYPE=Debug ..
+cmake -DCMAKE_BUILD_TYPE=Debug -DEnableASAN=ON -DEnableUBSAN=ON ..
 make -j8
 ```
 
@@ -30,6 +38,8 @@ Debug build characteristics:
 - **Debug symbols** - variable names and line numbers
 - **No inlining** - easier to trace function calls
 - **Relaxed format warnings** - `-Wno-format`
+- **ASAN + UBSAN on** (via the preset) - most memory bugs report
+  themselves before you reach the debugger
 
 ### Verify Debug Symbols
 
@@ -277,19 +287,20 @@ export LD_PRELOAD=/usr/lib/libefence.so.0.0
 
 2. **Address Sanitizer:**
 
-Edit `/home/user/datakit/src/CMakeLists.txt`:
+ASAN is a build option, not a source edit, and the `dev`, `debug`, and
+`safe` presets already enable it:
 
-```cmake
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address -fno-omit-frame-pointer")
+```sh
+cmake --preset debug && cmake --build --preset debug
+./build-debug/src/datakit-test test flex
 ```
 
-Rebuild and run:
+In a hand-configured build:
 
-```bash
+```sh
 cd build-debug
-cmake ..
-make clean
-make -j8
+cmake -DEnableASAN=ON ..
+make clean && make -j8
 ./src/datakit-test test flex
 ```
 
@@ -407,14 +418,11 @@ less valgrind-output.txt
 
 Detect uninitialized memory reads:
 
-```bash
-# Edit CMakeLists.txt to enable
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=memory")
-
-# Rebuild
-cmake .. && make clean && make -j8
-
-# Run
+```sh
+# Clang only; ignored with a warning under gcc.
+# Enable on its own — MSAN does not compose with ASAN.
+cmake -DEnableMSAN=ON -DEnableASAN=OFF ..
+make clean && make -j8
 ./src/datakit-test test flex
 ```
 
@@ -422,14 +430,18 @@ cmake .. && make clean && make -j8
 
 Detect undefined behavior:
 
-```bash
-# Edit CMakeLists.txt
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=undefined")
-
-# Rebuild and run
-cmake .. && make clean && make -j8
+```sh
+cmake -DEnableUBSAN=ON ..
+make clean && make -j8
 ./src/datakit-test test flex
 ```
+
+datakit compiles UBSAN as `-fsanitize=undefined -fno-sanitize=function`
+— the `function` check misreads the computed-goto dispatch loops in
+`dod.c`, `multilist.c`, `multimap.c`, `xof.c`, and `multiOrderedSet.c`.
+Every other check, alignment included, is active. If a consumer needs
+the old, permissive alignment behavior, configure with
+`-DDATAKIT_UBSAN_ALLOW_UNALIGNED=ON`; be aware it masks real bugs.
 
 Catches:
 
@@ -678,8 +690,8 @@ assert(flexValidate(f));
 For multi-threaded code:
 
 ```bash
-# Thread sanitizer
-cmake -DCMAKE_C_FLAGS="-fsanitize=thread" ..
+# Thread sanitizer (mutually exclusive with ASAN)
+cmake -DEnableTSAN=ON -DEnableASAN=OFF ..
 make clean && make -j8
 
 # Helgrind (Valgrind)

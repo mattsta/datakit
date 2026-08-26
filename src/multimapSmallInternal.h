@@ -11,7 +11,7 @@ struct multimapSmall {
     uint32_t middle;                        /* offset to middle of sorted map */
     multimapElements elementsPerEntry : 16; /* max 64k "columns" per row */
     multimapElements compress : 1;    /* bool; true if compression enabled */
-    multimapElements mapIsSet : 1;    /* bool; true if keys must be unique. */
+    multimapElements mapIsSet : 1;    /* bool; set mode dedupes WHOLE rows */
     multimapElements isSurrogate : 1; /* bool; true if all keys need refs */
     multimapElements unused : 13;     /* free flags! */
 };

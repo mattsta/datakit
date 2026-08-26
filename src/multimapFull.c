@@ -1001,6 +1001,96 @@ DK_INLINE_ALWAYS bool multimapFullFlexDeleteFullWidthWithReference(
                               referenceContainer, foundReference);
 }
 
+/* Locate the row at position 'keyIndex' (0-based forward; negative =
+ * 1-based from the tail): skip whole sub-maps by their row counts,
+ * scanning from whichever END is nearer the target rank (O(maps / 2)
+ * worst case), then walk the owning flex from the nearest of its
+ * head/middle/tail anchors. */
+DK_STATIC flexEntry *multimapFullRowByPosition_(multimapFull *m,
+                                                int64_t keyIndex,
+                                                multimapFullIdx *mapIdxOut,
+                                                flex ***mapOut) {
+    const int64_t rows = (int64_t)m->values;
+    const int64_t row = keyIndex < 0 ? rows + keyIndex : keyIndex;
+    if (row < 0 || row >= rows) {
+        return NULL;
+    }
+
+    multimapFullIdx mapIdx;
+    flex **map;
+    int64_t local;
+
+    if (row <= rows / 2) {
+        /* Forward scan: 'remain' counts rows before the current map */
+        int64_t remain = row;
+        mapIdx = 0;
+        for (;; mapIdx++) {
+            assert(mapIdx < m->count);
+            map = getMapPtr(m, mapIdx);
+            const int64_t mapRows = flexCount(*map) / m->elementsPerEntry;
+            if (remain < mapRows) {
+                local = remain;
+                break;
+            }
+
+            remain -= mapRows;
+        }
+    } else {
+        /* Backward scan: 'fromEnd' counts rows at and after the
+         * current map's end */
+        int64_t fromEnd = rows - row;
+        mapIdx = m->count;
+        for (;;) {
+            assert(mapIdx > 0);
+            mapIdx--;
+            map = getMapPtr(m, mapIdx);
+            const int64_t mapRows = flexCount(*map) / m->elementsPerEntry;
+            if (fromEnd <= mapRows) {
+                local = mapRows - fromEnd;
+                break;
+            }
+
+            fromEnd -= mapRows;
+        }
+    }
+
+    *mapIdxOut = mapIdx;
+    *mapOut = map;
+    return flexIndexWithMiddle(*map, m->elementsPerEntry,
+                               local * m->elementsPerEntry,
+                               GET_MIDDLE(m, mapIdx, *map));
+}
+
+bool multimapFullLookupByPosition(multimapFull *m, int64_t keyIndex,
+                                  databox *elements[]) {
+    multimapFullIdx mapIdx;
+    flex **map;
+    flexEntry *fe = multimapFullRowByPosition_(m, keyIndex, &mapIdx, &map);
+    if (!fe) {
+        return false;
+    }
+
+    for (multimapElements i = 0; i < m->elementsPerEntry; i++) {
+        flexGetByType(fe, elements[i]);
+        fe = flexNext(*map, fe);
+    }
+
+    return true;
+}
+
+bool multimapFullDeleteByPosition(multimapFull *m, int64_t keyIndex) {
+    multimapFullIdx mapIdx;
+    flex **map;
+    flexEntry *fe = multimapFullRowByPosition_(m, keyIndex, &mapIdx, &map);
+    if (!fe) {
+        return false;
+    }
+
+    multimapEntry me = {.map = map, .mapIdx = mapIdx, .fe = fe};
+    multimapFullDeleteEntry(m, &me);
+    return true;
+}
+
 int64_t multimapFullFieldIncr(multimapFull *m, const databox *key,
                               uint32_t fieldOffset, int64_t incrBy) {
     uint32_t mapIdx = multimapFullBinarySearch(m, key);
@@ -1924,23 +2014,19 @@ bool multimapFullRandomValue(multimapFull *m, const bool fromTail,
         return false;
     }
 
-    /* Step 1: pick victim map */
-    const multimapFullIdx mapIdx = random() % m->count;
-    flex **map = getMapPtr(m, mapIdx);
+    /* Uniform selection: every row is equally likely.  Pick a global
+     * row, then locate it through the bidirectional map scan +
+     * middle-anchored flex walk; fromTail addresses the container's
+     * last row. */
+    const int64_t row =
+        fromTail ? (int64_t)m->values - 1
+                 : (int64_t)((((uint64_t)random() << 32) | (uint64_t)random()) %
+                             m->values);
 
-    /* Step 2: pick victim element */
-    flexEntry *foundP = NULL;
-    if (fromTail) {
-        foundP = flexTailWithElements(*map, m->elementsPerEntry);
-    } else {
-        /* delete random entry in the map */
-        const uint_fast32_t totalWholeElements =
-            flexCount(*map) / m->elementsPerEntry;
-        const uint_fast32_t randomElement = random() % totalWholeElements;
-
-        /* Restore random element to an offset inside the list */
-        foundP = flexIndex(*map, randomElement * m->elementsPerEntry);
-    }
+    multimapFullIdx mapIdx;
+    flex **map;
+    flexEntry *foundP = multimapFullRowByPosition_(m, row, &mapIdx, &map);
+    assert(foundP);
 
     me->map = map;
     me->mapIdx = mapIdx;
@@ -3191,11 +3277,9 @@ int multimapFullTest(int argc, char *argv[]) {
     }
 
     TEST("reset then reuse: inserts and lookups work after Reset") {
-        /* Reset used to keep every (now empty) internal map along with
-         * its stale middle offsets and range boxes referencing the
-         * discarded flex bytes; the next insert then binary-searched
-         * through dangling pointers and crashed. Reset must collapse
-         * back to a single empty map. */
+        /* Reset must collapse back to a single empty map — no leftover
+         * empty maps, stale middle offsets, or range boxes referencing
+         * discarded flex bytes. */
         multimapFull *m = multimapFullNew(2);
         const uint64_t n = 5000;
 
@@ -3247,8 +3331,8 @@ int multimapFullTest(int argc, char *argv[]) {
 
     TEST("wide entries: arity above the insert stack-array headroom") {
         /* The flex insert path keeps fixed stack scratch for entries up
-         * to 8 elements and spills wider entries to the heap; arity-12
-         * inserts used to assert out. */
+         * to 8 elements and must spill wider entries to the heap;
+         * arity-12 rows exercise the spill path. */
         const uint32_t arity = 12;
         multimapFull *m = multimapFullNew(arity);
 

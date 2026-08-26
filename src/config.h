@@ -56,8 +56,6 @@ static const char DK_BITS = sizeof(void *) == 8   ? 64
 #elif defined(__DragonFly__)
 #define DK_OS_DRAGONFLY 1
 #endif
-#elif defined(sun) || defined(__sun)
-#define DK_OS_SOLARIS 1
 #elif defined(_AIX)
 #define DK_OS_AIX 1
 #else

@@ -8,8 +8,9 @@
 
 - IEEE 754-2008 binary16 (float16) encoding/decoding
 - Brain float16 (bfloat16) encoding/decoding
-- Hardware acceleration on supported CPUs (F16C instruction set)
+- Hardware acceleration on x86 (F16C) and ARM64 (NEON FP16)
 - Software fallback for portability
+- SIMD batch conversion APIs, with scalar baselines for benchmarking
 - 50% space savings vs float32
 - Suitable for graphics, ML, and approximate computations
 
@@ -87,21 +88,60 @@ uint16_t bfloat16Encode_(float value);
 float bfloat16Decode_(uint16_t value);
 ```
 
+### Batch Conversion
+
+```c
+/* Convert 'count' values, using SIMD when available
+ * (AVX2/F16C on x86, NEON on ARM64).
+ * Returns the number of elements converted. */
+size_t float16EncodeBatch(const float *src, uint16_t *dst, size_t count);
+size_t float16DecodeBatch(const uint16_t *src, float *dst, size_t count);
+
+/* Scalar baselines, kept for benchmarking against the SIMD paths */
+size_t float16EncodeBatchScalar(const float *src, uint16_t *dst, size_t count);
+size_t float16DecodeBatchScalar(const uint16_t *src, float *dst, size_t count);
+```
+
+Prefer the batch calls over a per-element loop whenever you have a run of
+values: they amortize the SIMD setup and convert several lanes per
+instruction.
+
+There is no batch form for bfloat16 — its encode is a truncation and its
+decode a zero-fill, so a plain loop already vectorizes.
+
 ### Hardware Acceleration
 
-The macros automatically use hardware instructions when available:
+The single-value macros dispatch at compile time:
 
 ```c
 #if __F16C__
-/* On CPUs with F16C support (Intel Ivy Bridge+, AMD Jaguar+) */
-#define float16Encode(v) _cvtss_sh(v, 0)  /* Hardware instruction */
-#define float16Decode(v) _cvtsh_ss(v)     /* Hardware instruction */
+/* x86 with F16C (Intel Ivy Bridge and later, AMD Jaguar and later).
+ * The second argument is the rounding mode:
+ *   0x00 round to nearest, 0x01 down, 0x02 up, 0x03 truncate */
+#define float16Encode(v) _cvtss_sh(v, 0)
+#define float16Decode(v) _cvtsh_ss(v)
+
+#elif defined(__aarch64__)
+/* ARM64: NEON hardware conversion, deliberately used for single values
+ * too so that single and batch conversions produce IDENTICAL results */
+#define float16Encode(v) float16EncodeNeon_(v)
+#define float16Decode(v) float16DecodeNeon_(v)
+
 #else
 /* Software fallback */
 #define float16Encode(v) float16Encode_(v)
 #define float16Decode(v) float16Decode_(v)
 #endif
 ```
+
+bfloat16 has no hardware path today — `bfloat16Encode` / `bfloat16Decode`
+are macros over the `_` functions, written that way so an intrinsic can be
+slotted in later without touching callers.
+
+The `_`-suffixed function forms (`float16Encode_`, `float16Decode_`,
+`bfloat16Encode_`, `bfloat16Decode_`) are always available regardless of
+which path the macros take — use them when you need a real function pointer,
+or when you need the portable result specifically.
 
 ## Usage Examples
 
@@ -154,8 +194,8 @@ typedef struct VertexBuffer {
 } VertexBuffer;
 
 VertexBuffer *vertexBufferNew(size_t capacity) {
-    VertexBuffer *vb = malloc(sizeof(*vb));
-    vb->vertices = malloc(sizeof(Vertex) * capacity);
+    VertexBuffer *vb = zcalloc(1, sizeof(*vb));
+    vb->vertices = zmalloc(sizeof(Vertex) * capacity);
     vb->count = 0;
     return vb;
 }
@@ -204,8 +244,8 @@ void vertexBufferGetVertex(VertexBuffer *vb, size_t index,
 
 void vertexBufferFree(VertexBuffer *vb) {
     if (vb) {
-        free(vb->vertices);
-        free(vb);
+        zfree(vb->vertices);
+        zfree(vb);
     }
 }
 
@@ -245,11 +285,11 @@ typedef struct NeuralLayer {
 } NeuralLayer;
 
 NeuralLayer *neuralLayerNew(size_t inputSize, size_t outputSize) {
-    NeuralLayer *layer = malloc(sizeof(*layer));
+    NeuralLayer *layer = zcalloc(1, sizeof(*layer));
     layer->inputSize = inputSize;
     layer->outputSize = outputSize;
-    layer->weights = malloc(sizeof(uint16_t) * inputSize * outputSize);
-    layer->biases = malloc(sizeof(uint16_t) * outputSize);
+    layer->weights = zmalloc(sizeof(uint16_t) * inputSize * outputSize);
+    layer->biases = zmalloc(sizeof(uint16_t) * outputSize);
     return layer;
 }
 
@@ -297,9 +337,9 @@ void neuralLayerPrintStats(NeuralLayer *layer) {
 
 void neuralLayerFree(NeuralLayer *layer) {
     if (layer) {
-        free(layer->weights);
-        free(layer->biases);
-        free(layer);
+        zfree(layer->weights);
+        zfree(layer->biases);
+        zfree(layer);
     }
 }
 
@@ -330,7 +370,8 @@ typedef struct SensorReading {
     uint16_t temperature;  /* float16 */
     uint16_t humidity;     /* float16 */
     uint16_t pressure;     /* float16 */
-} SensorReading;  /* 14 bytes vs 20 bytes with float32 */
+} SensorReading;  /* 14 bytes of payload vs 20 with float32
+                   * (padded to 16 by the time_t alignment) */
 
 typedef struct SensorLog {
     SensorReading *readings;
@@ -339,8 +380,8 @@ typedef struct SensorLog {
 } SensorLog;
 
 SensorLog *sensorLogNew(void) {
-    SensorLog *log = malloc(sizeof(*log));
-    log->readings = malloc(sizeof(SensorReading) * 10000);
+    SensorLog *log = zcalloc(1, sizeof(*log));
+    log->readings = zmalloc(sizeof(SensorReading) * 10000);
     log->count = 0;
     log->capacity = 10000;
     return log;
@@ -349,8 +390,8 @@ SensorLog *sensorLogNew(void) {
 void sensorLogRecord(SensorLog *log, float temp, float humid, float press) {
     if (log->count >= log->capacity) {
         log->capacity *= 2;
-        log->readings = realloc(log->readings,
-                               sizeof(SensorReading) * log->capacity);
+        log->readings = zrealloc(log->readings,
+                                sizeof(SensorReading) * log->capacity);
     }
 
     SensorReading *r = &log->readings[log->count++];
@@ -377,8 +418,8 @@ void sensorLogGetStats(SensorLog *log, float *avgTemp, float *avgHumid,
 
 void sensorLogFree(SensorLog *log) {
     if (log) {
-        free(log->readings);
-        free(log);
+        zfree(log->readings);
+        zfree(log);
     }
 }
 
@@ -476,28 +517,23 @@ bfloat16:   0.00009999424  (slightly worse)
 
 ### Hardware vs Software
 
-On CPUs with F16C support:
+Relative cost, cheapest first:
 
-```c
-Hardware (F16C):
-  - Encode: ~0.5 ns
-  - Decode: ~0.5 ns
-  - Vector: 8 values in ~2 ns
+| Path                      | Work per value                                    |
+| ------------------------- | ------------------------------------------------- |
+| bfloat16 encode/decode    | a shift and a mask — truncate / zero-fill         |
+| float16 via F16C or NEON  | one hardware conversion instruction               |
+| float16 batch (SIMD)      | several lanes per instruction, setup amortized    |
+| float16 software fallback | exponent/mantissa rebuild with subnormal handling |
 
-Software fallback:
-  - Encode: ~15 ns
-  - Decode: ~12 ns
-```
+For real numbers on your target, run the benchmark rather than trusting a
+table: build with the `perf` CMake preset (sanitizers add multiples of
+overhead and invalidate the comparison) and compare
+`float16EncodeBatch` against `float16EncodeBatchScalar`.
 
-### BFloat16 Performance
-
-```c
-BFloat16 (always software):
-  - Encode: ~2 ns (simple truncation)
-  - Decode: ~2 ns (simple zero-fill)
-
-Much faster than float16 software fallback!
-```
+Note the ARM64 build routes single-value conversion through NEON on purpose
+so that a value converted one at a time is bit-identical to the same value
+converted in a batch. Do not "optimize" that back to the scalar function.
 
 ## When to Use Each Format
 
@@ -574,13 +610,19 @@ uint16_t sum16 = float16Encode(sum32);
 
 ```c
 #if __F16C__
-/* Compiler flag: -mf16c */
-/* Uses _cvtss_sh and _cvtsh_ss intrinsics */
-printf("Using hardware float16 conversion\n");
+/* x86, compiler flag -mf16c: _cvtss_sh / _cvtsh_ss intrinsics */
+printf("Using F16C hardware float16 conversion\n");
+#elif defined(__aarch64__)
+/* ARM64: NEON vcvt_f16_f32 / vcvt_f32_f16 */
+printf("Using NEON hardware float16 conversion\n");
 #else
 printf("Using software float16 conversion\n");
 #endif
 ```
+
+You do not normally need this check — the macros already pick the best
+available path, and the batch APIs dispatch internally. Reach for it only
+when a benchmark or a bit-exactness test needs to know which path ran.
 
 ### 4. Consider Precision Requirements
 
@@ -595,7 +637,7 @@ float precise = 3.141592653589793f;  /* Don't encode! */
 
 ## See Also
 
-- [XOF.md](XOF.md) - XOR filter compression for doubles
+- [XOF.md](XOF.md) - XOR-encoded compression for doubles
 - [DOD.md](DOD.md) - Delta-of-delta encoding for integers
 - [multiarray](../multiarray/MULTIARRAY.md) - Arrays for storing compressed data
 

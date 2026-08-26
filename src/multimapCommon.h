@@ -98,6 +98,6 @@ typedef struct multimapPredicate {
 
 typedef enum multimapType {
     MULTIMAP_TYPE_SMALL = 1,  /* 16 bytes, fixed. */
-    MULTIMAP_TYPE_MEDIUM = 2, /* 28 bytes, fixed. */
-    MULTIMAP_TYPE_FULL = 3,   /* 52 bytes, grows as necessary */
+    MULTIMAP_TYPE_MEDIUM = 2, /* 32 bytes, fixed. */
+    MULTIMAP_TYPE_FULL = 3,   /* 48 bytes + per-map growable arrays */
 } multimapType;

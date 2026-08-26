@@ -2,33 +2,49 @@
 
 ## Overview
 
-The multimap family implements a **scale-aware architecture** with four distinct implementations optimized for different dataset sizes. Your code uses a single `multimap*` pointer, and the implementation automatically chooses and transitions between variants as your data grows.
+The multimap family implements a **scale-aware architecture**: three storage
+tiers behind one opaque `multimap *`, plus `multimapAtom`, a reference-counting
+string-interning container built _out of_ multimaps rather than being a tier of
+its own.
 
-## The Four Variants
+Your code holds a single `multimap *` and the implementation picks the tier;
+the only requirement is that mutating calls take `multimap **` so the pointer
+can be rewritten after an upgrade.
 
-### Summary Table
+## The Tiers
 
-| Variant    | Size      | Maps        | Overhead        | Best For           | Max Recommended |
-| ---------- | --------- | ----------- | --------------- | ------------------ | --------------- |
-| **Small**  | 16 bytes  | 1 flex      | 16 bytes        | < 100 entries      | 2KB total       |
-| **Medium** | 28 bytes  | 2 flex      | 28 bytes        | 100-1000 entries   | 6KB total       |
-| **Full**   | 40+ bytes | N flex      | 40 + N×20 bytes | 1000+ entries      | Unlimited (TBs) |
-| **Atom**   | N/A       | 2 multimaps | Wrapper         | Reference counting | Special purpose |
+| Tier       | Container | Submaps     | Per-submap metadata | Promotes when         |
+| ---------- | --------- | ----------- | ------------------- | --------------------- |
+| **Small**  | 16 bytes  | 1 flex      | none                | bytes > limit         |
+| **Medium** | 28 bytes  | 2 flex      | none                | bytes > limit \* 3    |
+| **Full**   | 48 bytes  | N flex      | 8 + 4 + 16 bytes    | never (final tier)    |
+| **Atom**   | wrapper   | 2 multimaps | n/a                 | not a tier; see below |
+
+"limit" is `flexOptimizationSizeLimit[level]` for the `flexCapSizeLimit` level
+stored in the tagged pointer (default `FLEX_CAP_LEVEL_2048` = 2048 bytes).
+
+There is no downgrade path. A container that reached Full stays Full.
 
 ## multimapSmall
 
 ### Structure
 
-```c
-struct multimapSmall {
-    flex *map;                    /* Single flex array */
-    uint32_t middle;              /* Offset to middle element for binary search */
-    uint16_t elementsPerEntry;    /* Columns per row */
-    uint16_t flags;               /* compress, mapIsSet, etc. */
-};
+From `multimapSmallInternal.h`:
 
-/* Total: 16 bytes fixed overhead */
+```c
+/* 8 + 4 + 4 = 16 bytes */
+struct multimapSmall {
+    flex *map;                              /* single map */
+    uint32_t middle;                        /* byte offset of the middle row */
+    multimapElements elementsPerEntry : 16; /* max 64k columns per row */
+    multimapElements compress : 1;          /* recorded, not yet consumed */
+    multimapElements mapIsSet : 1;          /* true if rows must be unique */
+    multimapElements isSurrogate : 1;       /* true if all keys need refs */
+    multimapElements unused : 13;
+};
 ```
+
+A static assertion pins the size at `sizeof(flex *) + 2 * sizeof(uint32_t)`.
 
 ### Architecture
 
@@ -52,69 +68,79 @@ struct multimapSmall {
         └─────────────────────────────────────┘
 ```
 
+`middle` is a cached byte offset, not a row index. It seeds the binary search so
+a find does not have to locate the midpoint first. Every mutation path either
+maintains it incrementally or forces a full `flexMiddle()` rescan; a raw flex
+write that bypasses the multimap API leaves it stale and silently poisons every
+later search.
+
 ### Characteristics
 
-**Advantages:**
+**Advantages**
 
-- **Minimal overhead**: Only 16 bytes for the entire container
-- **Cache-friendly**: Single contiguous allocation
-- **Fast sequential access**: All data in one array
-- **Simple implementation**: Single binary search
+- Minimal overhead: 16 bytes of container for the whole structure
+- Cache friendly: one contiguous allocation
+- Simplest search: one binary search, no routing step
 
-**Disadvantages:**
+**Disadvantages**
 
-- **Slow inserts**: O(n) memory moves for insertions
-- **Limited scalability**: Becomes inefficient beyond 2KB
-- **No parallelism**: Single map prevents multi-threaded operations
+- Insert and delete memmove around the whole flex
+- One allocation means every write touches the entire structure
 
-**Upgrade Trigger:**
+**Upgrade trigger** (from `multimapUpgradeIfNecessary_()`):
 
 ```c
-/* Upgrades to Medium when: */
-if (bytes > sizeLimit && count > elementsPerEntry * 2) {
-    /* Need at least 2 complete entries to split properly */
-    upgrade_to_medium();
+if (multimapSmallBytes(small) > flexOptimizationSizeLimit[limit] &&
+    multimapSmallCount(small) > (small->elementsPerEntry * 2)) {
+    /* Need at least two complete rows so the split yields two non-empty
+     * halves; splitting [ROW, <nothing>] would leave map[1] empty and all
+     * later inserts would pile into map[0]. */
 }
 ```
 
+Note `multimapSmallCount()` already divides by `elementsPerEntry`, so the guard
+means "more than `2 * elementsPerEntry` rows".
+
 ### Best Use Cases
 
-1. **Small dictionaries** (< 100 entries)
-2. **Configuration maps**
-3. **Temporary lookups**
-4. **Embedded data structures**
+1. Small dictionaries and configuration maps
+2. Short-lived lookup tables
+3. Any container expected to stay under the size limit
 
 ### Example
 
 ```c
-/* Perfect for small config */
 multimap *config = multimapNewLimit(2, FLEX_CAP_LEVEL_512);
 
 databox k1 = databoxNewBytesString("timeout");
 databox v1 = databoxNewSigned(30);
-multimapInsert(&config, (const databox*[]){&k1, &v1});
+multimapInsert(&config, (const databox *[]){&k1, &v1});
 
 databox k2 = databoxNewBytesString("retries");
 databox v2 = databoxNewSigned(3);
-multimapInsert(&config, (const databox*[]){&k2, &v2});
+multimapInsert(&config, (const databox *[]){&k2, &v2});
 
-/* Still Small, only ~50 bytes total */
-assert(multimapBytes(config) < 100);
+/* Still Small: well under the 512-byte level */
+assert(multimapBytes(config) < 512);
 ```
 
 ## multimapMedium
 
 ### Structure
 
-```c
-struct multimapMedium {
-    flex *map[2];                 /* Two flex arrays */
-    uint32_t middle[2];           /* Middle offset for each map */
-    uint16_t elementsPerEntry;
-    uint16_t flags;
-};
+From `multimapMediumInternal.h`:
 
-/* Total: 28 bytes fixed overhead */
+```c
+/* 8 + 8 + 4 + 4 + 4 = 28 bytes */
+struct multimapMedium {
+    flex *map[2];       /* maps stored in low->high order */
+    uint32_t middle[2]; /* byte offsets of each map's middle row */
+    multimapElements elementsPerEntry : 16;
+    multimapElements compress : 1;
+    multimapElements mapIsSet : 1;
+    multimapElements isSurrogate : 1;
+    multimapElements unused : 13;
+};
 ```
 
 ### Architecture
@@ -127,7 +153,7 @@ struct multimapMedium {
 │ map[1] ────────┼─┐                 │
 │ middle[0]      │ │                 │
 │ middle[1]      │ │                 │
-│ elementsPerEntry│ │                │
+│ elementsPerEntry │ │               │
 │ flags          │ │                 │
 └────────────────┼─┼─────────────────┘
                  │ │
@@ -139,118 +165,127 @@ struct multimapMedium {
   ├──────────┤         ├──────────┤
   │ K1...Kn  │         │ Kn+1...Km│
   └──────────┘         └──────────┘
-   keys < split         keys >= split
+   keys < head(map[1])  keys >= head(map[1])
 ```
 
 ### How Medium Works
 
-When Small upgrades to Medium, it:
+Upgrading from Small `zrealloc()`s the 16-byte container into a 28-byte one and
+calls `flexSplitMiddle()` at the cached middle offset, producing `map[0]` (low)
+and `map[1]` (high). Both middles are then recomputed from scratch.
 
-1. Splits the single flex at its middle point
-2. Creates two new flex arrays: `map[0]` (lower) and `map[1]` (higher)
-3. Distributes elements: lower keys → map[0], higher keys → map[1]
-
-**Binary Search Strategy:**
+**Routing** (`multimapMediumBinarySearch_`) is a single comparison, not a search:
 
 ```c
-/* To find a key: */
-1. Check head of map[1]
-2. If key < head[1], search map[0]
-3. Else, search map[1]
+if (flexCount(map[1]) == 0) {
+    return 0;                       /* everything lives in map[0] */
+}
+compare head(map[1]) against key;
+return (head <= key) ? 1 : 0;
 ```
 
-This provides a **2-way branching** that reduces search space by ~50%.
+So a Medium lookup is O(1) routing plus one binary search over roughly half the
+rows.
 
 ### Characteristics
 
-**Advantages:**
+**Advantages**
 
-- **Better insert performance**: Only move ~half the data on average
-- **Improved cache behavior**: Smaller individual maps
-- **Stepping stone**: Prepares for Full variant
-- **Still compact**: Only 12 extra bytes vs Small
+- Insert/delete memmove touches about half the data
+- Two smaller allocations behave better in cache than one large one
+- Only 12 bytes more container state than Small
 
-**Disadvantages:**
+**Disadvantages**
 
-- **More complex**: Two binary searches possible
-- **Conformance overhead**: Must keep map[0] populated
-- **Limited scaling**: Still only 2 maps
+- Still only two submaps, so the halving does not compound
+- Every mutation must preserve the map[0]-non-empty invariant
 
-**Upgrade Trigger:**
+**Upgrade trigger**:
 
 ```c
-/* Upgrades to Full when: */
-if (bytes > sizeLimit * 3 && count > elementsPerEntry * 2) {
-    upgrade_to_full();
+if (multimapMediumBytes(medium) > (flexOptimizationSizeLimit[limit] * 3) &&
+    flexCount(medium->map[0]) && flexCount(medium->map[1])) {
+    /* Both submaps must be non-empty to seed a Full with two valid maps. */
 }
 ```
 
+Note this is a **non-emptiness** requirement, not a row-count multiple of
+`elementsPerEntry`.
+
 ### Best Use Cases
 
-1. **Medium-sized caches** (100-1000 entries)
-2. **Session stores**
-3. **Transitional datasets**
-4. **Index structures**
+1. Mid-size caches that have outgrown a single flex
+2. Session and index structures with steady growth
+3. Transitional datasets whose final size is unknown
 
 ### Example
 
 ```c
 multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_2048);
 
-/* Insert 500 entries - grows to Medium */
-for (int i = 0; i < 500; i++) {
+for (int64_t i = 0; i < 500; i++) {
     databox k = databoxNewSigned(i);
     databox v = databoxNewSigned(i * 2);
-    multimapInsert(&m, (const databox*[]){&k, &v});
+    multimapInsert(&m, (const databox *[]){&k, &v});
 }
 
-/* Now Medium with 2 maps */
-/* map[0]: keys 0-249 */
-/* map[1]: keys 250-499 */
+/* Whether this is still Small or already Medium depends on encoded byte
+ * size, not row count: small integers pack tightly. */
 ```
 
-### Conformance Rules
+### Conformance Rule
 
-Medium has a special rule: **map[0] must always have elements if any elements exist**.
+Medium requires: **if any rows exist, `map[0]` is non-empty.** Searches stop
+early on an empty `map[0]`, so data stranded in `map[1]` would be unreachable.
 
-If you delete all elements from map[0], Medium automatically moves map[1] → map[0]:
+`multimapMediumConform_()` enforces it by **swapping the two slots** (pointers
+and middles) whenever `map[0]` empties while `map[1]` still holds rows. Nothing
+is copied.
 
 ```c
-/* Before delete: */
-/* map[0]: [10, 20]  map[1]: [30, 40, 50] */
+/* Before:  map[0] = [10, 20]   map[1] = [30, 40, 50] */
 
 multimapDelete(&m, &key10);
 multimapDelete(&m, &key20);
 
-/* After delete: */
-/* map[0]: [30, 40, 50]  map[1]: [] */
-/* map[1] automatically moved to map[0]! */
+/* After:   map[0] = [30, 40, 50]   map[1] = []       */
 ```
+
+The same conform runs at the end of `multimapMediumAppend()`, because appending
+into `map[1]` while `map[0]` is empty (for instance, the first insert after a
+full drain) would otherwise strand the row.
 
 ## multimapFull
 
 ### Structure
 
+From `multimapFullInternal.h`:
+
 ```c
 struct multimapFull {
-    multiarray *map;              /* Array of flex* (dynamic) */
-    multiarray *middle;           /* Array of middle offsets */
-    multiarray *rangeBox;         /* Array of databox (range markers) */
-    uint32_t count;               /* Number of maps */
-    uint32_t values;              /* Total number of rows */
-    uint32_t elementsPerEntry;
-    uint32_t maxSize : 17;
-    uint32_t flags : 15;
+    multiarray *map;           /* flex *; maps in low->high order */
+    multiarray *middle;        /* multimapFullMiddle; middle byte offsets */
+    multiarray *rangeBox;      /* databox; head key of maps 1..N-1 */
+    multimapFullIdx count;     /* number of submaps */
+    multimapFullValues values; /* total rows across every submap */
+    multimapElements elementsPerEntry;
+    uint32_t maxSize : 17;     /* per-submap split cutoff, in bytes */
+    uint32_t mapIsSet : 1;
+    uint32_t compress : 1;
+    uint32_t isSurrogate : 1;
+    uint32_t unused : 12;
 };
-
-/* Total: 40 bytes + (count × 20 bytes) overhead */
 ```
+
+On a 64-bit target this lays out as 24 bytes of pointers, a 4-byte `count`,
+4 bytes of padding, an 8-byte `values`, then `elementsPerEntry` and the flag
+word: **48 bytes**, plus whatever the three `multiarray` containers allocate.
 
 ### Architecture
 
 ```
 ┌─────────────────────────────────────────┐
-│ multimapFull (40 bytes base)            │
+│ multimapFull (48 bytes)                 │
 ├─────────────────────────────────────────┤
 │ map ──────┐                             │
 │ middle ───┼─┐                           │
@@ -258,7 +293,6 @@ struct multimapFull {
 │ count = N │ │ │                         │
 │ values    │ │ │                         │
 └───────────┼─┼─┼─────────────────────────┘
-            │ │ │
             │ │ │
     ┌───────┘ │ │
     │   ┌─────┘ │
@@ -273,29 +307,26 @@ struct multimapFull {
  │ N-1 │ N-1 │  RB[N-2] │
  └─────┴─────┴──────────┘
    │     │       │
-   │     │       └─ Head key of each map (for binary search)
-   │     └───────── Middle offset for binary search within map
-   └─────────────── Actual flex* to data
-
-Maps grow dynamically:
-map[0]: [K1...K100]
-map[1]: [K101...K200]
-map[2]: [K201...K300]
-...
-map[N]: [K(N*100)...K(N*100+100)]
+   │     │       └─ head key of map[i+1] (routing)
+   │     └───────── cached middle byte offset per submap
+   └─────────────── the flex* holding the rows
 ```
+
+`rangeBox` has `count - 1` entries: `map[0]`'s range is implicitly "below
+`rangeBox[0]`", so no box is stored for it.
 
 ### How Full Works
 
-**Multi-Level Binary Search:**
+**Two-level search**:
 
 ```c
 /* To find key K: */
-1. Binary search rangeBox array to find which map
-2. Binary search within that specific map
+1. Binary search rangeBox[0 .. count-2] to pick the submap
+2. Binary search inside that submap's flex
 ```
 
-Example with 5 maps:
+Step 1 is a genuine binary search (`multimapFullBinarySearch`), so routing is
+O(log M) for M submaps.
 
 ```
 rangeBox[0] = 100    (map[1] starts at 100)
@@ -304,311 +335,373 @@ rangeBox[2] = 1000   (map[3] starts at 1000)
 rangeBox[3] = 5000   (map[4] starts at 5000)
 
 Looking for key 750:
-1. Binary search rangeBox: 750 is between 500 and 1000
-2. Therefore, search map[2]
-3. Binary search within map[2] to find exact position
+1. rangeBox search: 750 falls between 500 and 1000
+2. Search map[2]
 ```
 
-**Map Splitting:**
+**Splitting.** `maxSize` is a **performance cutoff, not a hard limit**. A submap
+is split only when both conditions hold:
 
-When a map exceeds `maxSize` bytes:
+```c
+flexCount(*map) > m->elementsPerEntry &&   /* more than ONE row */
+flexBytes(*map) > m->maxSize
+```
 
-1. Find the middle element
-2. Split into [LOW, HIGH]
-3. Insert HIGH as new map after LOW
-4. Update rangeBox for the new map
+A submap holding a single oversized row is never split, no matter how large it
+grows. `flexMiddle()` of a one-row map is its head, so "splitting" it would move
+the whole row to the high half and leave an empty low half whose rangeBox would
+still reference the freed pre-split allocation. Both the insert path and
+`multimapFullRegularizeMap()` refuse one-row splits for that reason.
+
+A REPLACE of a key that already lives in an oversized submap also stays in that
+submap rather than routing through the split path, otherwise two submaps could
+end up holding the same key and range routing would pick the wrong one.
+
+Right after a Small/Medium upgrade the new Full may hold submaps that already
+exceed `maxSize`; that is deliberate. Pre-splitting during the upgrade was
+measured as pure cost, so oversized submaps are split lazily on the next insert
+that touches them.
+
+**Merging.** When a delete leaves two adjacent submaps whose combined size fits
+under `maxSize`, they are merged and one slot is reclaimed. A submap that
+becomes completely empty is freed and its `map`/`middle`/`rangeBox` slots are
+removed. `multimapReset()` collapses everything back to a single empty submap.
 
 ### Characteristics
 
-**Advantages:**
+**Advantages**
 
-- **Unlimited scaling**: Grows to terabytes
-- **Efficient large inserts**: Only realloc small arrays
-- **Parallelizable**: Different maps can be accessed concurrently
-- **Balanced performance**: O(log N) map find + O(log M) element find
+- Scales without bound; writes only touch one submap
+- Deletes reclaim submaps instead of leaking empty slots
+- O(log M) routing plus O(log n) in-submap search
 
-**Disadvantages:**
+**Disadvantages**
 
-- **Higher overhead**: 40 + (N × 20) bytes base cost
-- **Complex memory management**: Multiple dynamic arrays
-- **Indirection cost**: Extra pointer chasing
-- **Not worth it for small data**: Overkill < 1000 entries
+- Three `multiarray` allocations plus per-submap metadata
+- Extra pointer chasing on every access
+- Overkill for data that fits in one or two flexes
 
-**No Further Upgrades**: Full is the final form.
+**No further upgrades**: Full is the final tier.
 
 ### Best Use Cases
 
-1. **Large databases** (10,000+ entries)
-2. **Analytics datasets**
-3. **Time-series at scale**
-4. **In-memory tables**
-5. **Big data structures**
+1. Large in-memory tables and indexes
+2. Analytics and time-series datasets
+3. Anything expected to outgrow a few kilobytes
 
 ### Example
 
 ```c
 multimap *big = multimapNewLimit(2, FLEX_CAP_LEVEL_2048);
 
-/* Insert 100,000 entries */
-for (int i = 0; i < 100000; i++) {
+for (int64_t i = 0; i < 100000; i++) {
     databox k = databoxNewSigned(i);
-    databox v = databoxNewReal(i * 3.14);
-    multimapInsert(&big, (const databox*[]){&k, &v});
+    databox v = databoxNewReal((double)i * 3.14);
+    multimapInsert(&big, (const databox *[]){&k, &v});
 }
 
-/* Now Full with ~50 maps (depends on maxSize) */
-/* Each map holds ~2000 entries */
+/* Now Full; submap count depends on encoded row size vs maxSize (2048). */
 ```
 
 ### Range Box Details
 
-The `rangeBox` array stores the **first key** of each map (except map[0]):
+`rangeBox[i]` holds the **head key of `map[i + 1]`**:
 
-```c
-/* With 4 maps containing keys: */
-/* map[0]: [1, 5, 10, 15] */
-/* map[1]: [20, 25, 30]    <- rangeBox[0] = 20 */
-/* map[2]: [50, 60, 70]    <- rangeBox[1] = 50 */
-/* map[3]: [100, 150, 200] <- rangeBox[2] = 100 */
+```
+map[0]: [1, 5, 10, 15]
+map[1]: [20, 25, 30]     <- rangeBox[0] = 20
+map[2]: [50, 60, 70]     <- rangeBox[1] = 50
+map[3]: [100, 150, 200]  <- rangeBox[2] = 100
 
-/* To find key 65: */
-/* rangeBox search: 65 is between 50 and 100 */
-/* Search map[2] */
+To find key 65: rangeBox search puts 65 between 50 and 100 -> search map[2]
 ```
 
-**Important**: Range boxes hold **actual key values**, not references, even when using reference containers. This ensures comparison always works.
+**Range boxes hold resolved key values, never references**, even when the
+multimap is keyed by `multimapAtom` references. Comparison must work without a
+reference container in hand.
+
+Range boxes may own an allocation (a copy of the head key's bytes) or point
+into the submap's flex. Any in-submap mutation that can realloc the flex -
+replace, resize, field increment - refreshes the owning rangeBox afterwards, so
+a stale box can never survive into the next range search.
 
 ## multimapAtom
 
 ### Purpose
 
-multimapAtom is **not a multimap variant** - it's a **reference counting system** for string deduplication.
+`multimapAtom` is **not a multimap tier**. It is a string-interning and
+reference-counting table built from two multimaps, letting callers store a small
+integer reference wherever a repeated byte string would otherwise go.
+
+**Header**: `multimapAtom.h` **Source**: `multimapAtom.c`
 
 ### Structure
 
 ```c
 struct multimapAtom {
-    multimap *mapAtomForward;  /* ID → {String, Refcount} */
-    multimap *mapAtomReverse;  /* String → ID (sorted by string) */
-    uint64_t highest;          /* Next ID to allocate */
+    multimap *mapAtomForward; /* 3-element rows: {ID, Key, Refcount} */
+    multimap *mapAtomReverse; /* 1-element rows: IDs sorted by their Key */
+    uint64_t highest;         /* next ID to hand out */
 };
 ```
 
-### How It Works
+Both inner multimaps are created with `FLEX_CAP_LEVEL_512`.
 
-**String Interning:**
+`mapAtomReverse` is a self-sorting list: it stores only the atom ID, but is
+inserted through `multimapInsertWithSurrogateKey()` so it sorts by the
+_resolved_ string. That is what makes "find the ID for this string" a binary
+search over the strings.
+
+### API
+
+```c
+multimapAtom *multimapAtomNew(void);
+void multimapAtomInit(multimapAtom *ma);
+void multimapAtomFree(multimapAtom *ma);
+
+void multimapAtomInsert(multimapAtom *ma, const databox *box);
+void multimapAtomInsertConvert(multimapAtom *ma, databox *box);
+bool multimapAtomInsertIfNewConvert(multimapAtom *ma, databox *key);
+bool multimapAtomInsertIfNewConvertAndRetain(multimapAtom *ma, databox *key);
+void multimapAtomInsertWithExactAtomID(multimapAtom *ma, uint64_t atomRef,
+                                       const databox *key);
+
+bool multimapAtomLookup(const multimapAtom *ma, const databox *ref,
+                        databox *key);
+void multimapAtomLookupConvert(const multimapAtom *ma, databox *box);
+void multimapAtomLookupResult(const multimapAtom *ma, const databox *key,
+                              multimapAtomResult *result);
+void multimapAtomLookupRefcount(const multimapAtom *ma, const databox *key,
+                                databox *count);
+bool multimapAtomLookupReference(const multimapAtom *ma, const databox *key,
+                                 databox *atomRef);
+bool multimapAtomLookupMin(const multimapAtom *ma, databox *minRef);
+
+void multimapAtomRetain(multimapAtom *ma, const databox *key);
+void multimapAtomRetainByRef(multimapAtom *ma, const databox *foundRef);
+void multimapAtomRetainById(multimapAtom *ma, uint64_t id);
+
+bool multimapAtomRelease(multimapAtom *ma, const databox *key);
+bool multimapAtomReleaseById(multimapAtom *ma, const databox *foundRef);
+bool multimapAtomDelete(multimapAtom *ma, const databox *key);
+bool multimapAtomDeleteByRef(multimapAtom *ma, const databox *ref);
+bool multimapAtomDeleteById(multimapAtom *ma, uint64_t id);
+
+size_t multimapAtomCount(const multimapAtom *ma);
+size_t multimapAtomBytes(const multimapAtom *ma);
+```
+
+`multimapAtomResult` is `{databox val; uint64_t refcount;}`.
+
+### String Interning
+
+The `*Convert` calls rewrite the caller's `databox` in place into a
+`DATABOX_CONTAINER_REFERENCE_EXTERNAL` box whose `data.u` is the atom ID.
 
 ```c
 multimapAtom *atoms = multimapAtomNew();
 
-/* First insert: "hello" */
 databox str1 = databoxNewBytesString("hello");
 multimapAtomInsertConvert(atoms, &str1);
-/* str1 is now: {type: REFERENCE, data: 0} */
-/* atoms contains: Forward[0] = {"hello", refcount=0} */
-/*                 Reverse["hello"] = 0 */
+/* str1 is now {type: CONTAINER_REFERENCE_EXTERNAL, data.u: 0} */
 
-/* Second insert: "hello" again */
 databox str2 = databoxNewBytesString("hello");
-multimapAtomInsertIfNewConvert(atoms, &str2);
-/* str2 is now: {type: REFERENCE, data: 0} (same ID!) */
-/* Both str1 and str2 now point to ID 0 */
+bool existed = multimapAtomInsertIfNewConvert(atoms, &str2);
+/* existed == true; str2 becomes the same reference, data.u == 0 */
 
-/* "world" gets a different ID */
 databox str3 = databoxNewBytesString("world");
 multimapAtomInsertConvert(atoms, &str3);
-/* str3 is now: {type: REFERENCE, data: 1} */
+/* str3 -> data.u == 1 */
 ```
+
+`multimapAtomInsertIfNewConvert()` returns **true when the string was already
+interned** and false when it created a new entry. It also sets the box's
+`created` flag to match.
 
 ### Reference Counting
 
-```c
-/* Increment reference count */
-multimapAtomRetain(atoms, &str1);  /* refcount: 0 → 1 */
+Refcounts are stored 0-based so that a single-reference entry costs one byte:
+internal 0 means one outstanding reference, internal 1 means two, and so on.
+`multimapAtomLookupRefcount()` / `multimapAtomLookupResult()` report the
+adjusted, human-facing count.
 
-/* Decrement reference count */
-bool deleted = multimapAtomRelease(atoms, &str1);  /* refcount: 1 → 0 */
-/* If refcount goes negative, entry is deleted */
+```c
+multimapAtomRetain(atoms, &helloKey);   /* one more reference */
+
+bool gone = multimapAtomRelease(atoms, &helloKey);
+/* Decrements; when the internal counter goes below zero the last reference
+ * is gone and the entry is deleted from both inner multimaps. */
 ```
 
-### Best Use Cases
+Releasing a string that is not in the table is a programming error and asserts.
 
-1. **String deduplication**: Many copies of same strings
-2. **Reference counting**: Track string lifetime
-3. **String interning**: Constant string pool
-4. **Memory optimization**: Reduce duplicate string storage
+> **ID reuse contract**: when the table drains to empty, the ID counter resets
+> to 0. Any reference handed out before that point may resolve to an unrelated
+> later entry. Do not cache bare atom IDs across a boundary where the table can
+> empty and refill; re-resolve them instead.
 
-### Example
+### Using an Atom Container With a multimap
+
+The `*WithReference` and `*WithSurrogateKey` multimap entry points take the atom
+container so comparisons resolve references to the underlying strings.
 
 ```c
 multimapAtom *atoms = multimapAtomNew();
+multimap *comments = multimapNew(3);   /* id | authorRef | text */
 
-/* Store user comments with deduplicated authors */
-multimap *comments = multimapNew(3);
-
-for (int i = 0; i < 1000; i++) {
+for (int64_t i = 0; i < 1000; i++) {
     databox id = databoxNewSigned(i);
 
-    /* Same authors appear multiple times */
-    databox author = databoxNewBytesString(
-        i % 10 == 0 ? "alice" :
-        i % 10 == 1 ? "bob" : "charlie"
-    );
-
-    /* Convert to atom reference */
+    databox author = databoxNewBytesString(i % 10 == 0   ? "alice"
+                                           : i % 10 == 1 ? "bob"
+                                                         : "charlie");
     multimapAtomInsertIfNewConvert(atoms, &author);
-    /* author is now a small integer reference! */
+    /* 'author' is now a small integer reference */
 
     databox text = databoxNewBytesString("Great post!");
-    multimapInsert(&comments, (const databox*[]){&id, &author, &text});
+    multimapInsert(&comments, (const databox *[]){&id, &author, &text});
 }
 
-/* "alice", "bob", "charlie" stored only once in atoms */
-/* comments stores small integer IDs instead of full strings */
+/* "alice", "bob" and "charlie" are stored once each in 'atoms';
+ * 'comments' stores references instead of repeated strings. */
+
+multimapFree(comments);
+multimapAtomFree(atoms);
 ```
 
-## Variant Comparison
+## Tier Comparison
 
-### Memory Overhead
+### Container Overhead
 
-For a map with 1000 entries, 2 elements per entry, avg 20 bytes per element:
-
-```
-Small:   16 + 40,000 = 40,016 bytes  (0.04% overhead)
-Medium:  28 + 40,000 = 40,028 bytes  (0.07% overhead)
-Full:    40 + (25×20) + 40,000 = 40,540 bytes  (1.3% overhead)
-         ^     ^        ^
-         base  maps     data
-```
-
-### Performance Comparison
-
-**Insertion (1000 random keys):**
+For 1000 rows of 2 elements averaging 20 bytes per element (about 40,000 bytes
+of flex payload):
 
 ```
-Small:   ~100 ms   (many large memmoves)
-Medium:  ~60 ms    (smaller memmoves)
-Full:    ~40 ms    (minimal memmoves per map)
+Small:   16 + 40,000                         (container is noise)
+Medium:  28 + 40,000                         (container is noise)
+Full:    48 + N * (8 + 4 + 16) + 40,000      (plus multiarray overhead)
 ```
 
-**Lookup (1000 random keys):**
+With a 2048-byte `maxSize` that payload lands in roughly 20 submaps, so Full's
+metadata is on the order of 600 bytes - still about 1.5% - while buying
+per-submap writes instead of whole-structure memmoves.
 
-```
-Small:   ~5 ms     (single binary search)
-Medium:  ~6 ms     (map select + binary search)
-Full:    ~8 ms     (rangeBox search + map search + binary search)
-```
+`multimapBytes()` reports only the flex payload; none of the container or
+metadata figures above are included.
 
-**Iteration (1000 entries):**
+### Where the Time Goes
 
-```
-Small:   ~2 ms     (single array)
-Medium:  ~2.5 ms   (two arrays)
-Full:    ~4 ms     (N arrays with overhead)
-```
+Rather than absolute timings, which depend entirely on key encoding and machine:
 
-### When to Use Each Variant
+| Cost                  | Small                  | Medium              | Full                     |
+| --------------------- | ---------------------- | ------------------- | ------------------------ |
+| Routing to a submap   | none                   | 1 comparison        | O(log M) binary search   |
+| Search within submap  | O(log n) over all rows | O(log n) over ~half | O(log n) over one submap |
+| Bytes moved on insert | whole flex             | ~half               | one submap (<= maxSize)  |
+| Iteration             | 1 array                | 2 arrays            | N arrays                 |
+
+Small wins on read-mostly data that fits in one flex. Full wins as soon as
+insert-time memmove dominates, because its move cost is bounded by `maxSize`
+rather than by total size.
+
+### When to Use Each Tier
 
 ```
        Small          Medium          Full
-         |              |              |
-    0 ──┴── 100 ───────┴──── 1000 ────┴──── ∞
+         │              │              │
+    0 ───┴──── limit ───┴── limit*3 ───┴──── ∞
+                (bytes, not rows)
 
-         ← Manual Selection Not Needed →
-
-         Automatic transitions handle it!
+         ← Manual selection not needed →
 ```
 
-**Manual Selection** (rare, for special cases):
+The thresholds are **byte** thresholds. Row count only matters through the
+guards that guarantee a split can produce two non-empty halves.
+
+**Influencing the tier** (rare):
 
 ```c
-/* Force staying Small for tiny embedded use */
+/* Stay Small for a tiny embedded map */
 multimap *tiny = multimapNewLimit(2, FLEX_CAP_LEVEL_128);
 
-/* Force early Full for known large data */
+/* Reach Full sooner, with small submaps, for insert-heavy workloads */
 multimap *big = multimapNewLimit(2, FLEX_CAP_LEVEL_512);
-/* Will upgrade to Full quickly */
 ```
 
 ## Transition Mechanics
 
-### Small → Medium Transition
+### Small -> Medium
 
 ```c
-/* Before: */
+/* Before */
 multimapSmall {
-    map = [K1,V1, K2,V2, K3,V3, K4,V4]
-    middle = offset to K3
+    map    = [K1,V1, K2,V2, K3,V3, K4,V4]
+    middle = byte offset of K3
 }
 
-/* Trigger: bytes > limit && count > 4 */
+/* Trigger: bytes > limit && rows > elementsPerEntry * 2 */
 
-/* After: */
+/* zrealloc() the 16-byte container into 28 bytes, then
+ * flexSplitMiddle() at the cached middle: */
 multimapMedium {
     map[0] = [K1,V1, K2,V2]
     map[1] = [K3,V3, K4,V4]
-    middle[0] = offset to K1-K2 split
-    middle[1] = offset to K3-K4 split
+    middle[0], middle[1] recomputed by full rescan
 }
 ```
 
-### Medium → Full Transition
+### Medium -> Full
 
 ```c
-/* Before: */
+/* Before */
 multimapMedium {
-    map[0] = [100 entries]
-    map[1] = [100 entries]
+    map[0] = [...]   map[1] = [...]     /* both non-empty */
 }
 
-/* Trigger: bytes > limit * 3 && count > 4 */
+/* Trigger: bytes > limit * 3 && both submaps non-empty */
 
-/* After: */
+/* After */
 multimapFull {
-    map[0] = [100 entries]
-    map[1] = [100 entries]
-    rangeBox[0] = head key of map[1]
     count = 2
+    map[0], map[1] adopted as-is (may exceed maxSize; split lazily)
+    middle[0], middle[1] carried over
+    rangeBox[0] = head key of map[1]
+    maxSize = flexOptimizationSizeLimit[limit]
 }
-
-/* As more data inserted, splits continue: */
-/* map[2], map[3], ... map[N] */
 ```
+
+Because the container struct is reallocated, the caller's pointer changes -
+which is exactly why every mutating API takes `multimap **`.
 
 ### Transition Transparency
 
 ```c
 multimap *m = multimapNew(2);
-printf("Type: Small\n");
 
-for (int i = 0; i < 10000; i++) {
+for (int64_t i = 0; i < 10000; i++) {
     databox k = databoxNewSigned(i);
     databox v = databoxNewSigned(i);
-    multimapInsert(&m, (const databox*[]){&k, &v});
-
-    /* Somewhere around i=100: transitions to Medium */
-    /* Somewhere around i=1000: transitions to Full */
-    /* Your code doesn't change! */
+    multimapInsert(&m, (const databox *[]){&k, &v});
+    /* 'm' may be rewritten to a different tier on any iteration;
+     * the call site never changes. */
 }
-
-printf("Type: Full\n");
-/* Same API, different implementation */
 ```
 
 ## Design Philosophy
 
-The multimap family follows the principle of **progressive enhancement**:
+The multimap family follows **progressive enhancement**:
 
 1. **Start minimal**: 16-byte Small for tiny datasets
-2. **Grow gracefully**: 28-byte Medium for intermediate scale
-3. **Scale infinitely**: Variable Full for unlimited growth
-4. **Transparent to user**: Same API throughout
+2. **Grow gracefully**: 28-byte Medium halves write cost
+3. **Scale without bound**: Full bounds write cost by `maxSize`
+4. **Stay transparent**: one API across all three tiers
 
-This approach optimizes for the **common case** (small data) while supporting the **exceptional case** (massive data) without requiring users to make upfront decisions about expected dataset size.
+This optimizes the common case (small data) while supporting the exceptional
+case (very large data) without asking callers to predict their final size.
 
 ## See Also
 
 - [MULTIMAP.md](MULTIMAP.md) - Main API documentation
-- [EXAMPLES.md](EXAMPLES.md) - Real-world usage patterns
-- [flex](../flex/FLEX.md) - Underlying storage mechanism
-- [multiarray](../multiarray/MULTIARRAY.md) - Dynamic array for Full variant
+- [EXAMPLES.md](EXAMPLES.md) - Worked multimap programs
+- [flex](../flex/FLEX.md) - Underlying sorted byte-packed storage
+- [multiarray](../multiarray/MULTIARRAY.md) - Dynamic arrays behind Full

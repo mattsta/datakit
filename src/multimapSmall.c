@@ -217,8 +217,11 @@ bool multimapSmallRandomValue(multimapSmall *m, const bool fromTail,
         const uint_fast32_t totalWholeElements = count / m->elementsPerEntry;
         const uint_fast32_t randomElement = random() % totalWholeElements;
 
-        /* Restore random element to an offset inside the list */
-        foundP = flexIndex(m->map, randomElement * m->elementsPerEntry);
+        /* Restore random element to an offset inside the list, walking
+         * from the nearest of head/middle/tail */
+        foundP = flexIndexWithMiddle(m->map, m->elementsPerEntry,
+                                     randomElement * m->elementsPerEntry,
+                                     GET_MIDDLE(m));
     }
 
     me->map = &m->map;
@@ -340,6 +343,47 @@ bool multimapSmallDeleteFullWidthWithReference(
     const multimapAtom *referenceContainer, databox *foundReference) {
     return abstractDelete(m, elements, true, true, referenceContainer,
                           foundReference);
+}
+
+/* Row entry at position 'keyIndex' (0-based forward; negative =
+ * 1-based from the tail), walking from the nearest of the maintained
+ * head/middle/tail anchors.  NULL when out of range. */
+DK_STATIC flexEntry *multimapSmallRowByPosition_(multimapSmall *m,
+                                                 int64_t keyIndex) {
+    const int64_t rows = flexCount(m->map) / m->elementsPerEntry;
+    const int64_t row = keyIndex < 0 ? rows + keyIndex : keyIndex;
+    if (row < 0 || row >= rows) {
+        return NULL;
+    }
+
+    return flexIndexWithMiddle(m->map, m->elementsPerEntry,
+                               row * m->elementsPerEntry, GET_MIDDLE(m));
+}
+
+bool multimapSmallLookupByPosition(multimapSmall *m, int64_t keyIndex,
+                                   databox *elements[]) {
+    flexEntry *fe = multimapSmallRowByPosition_(m, keyIndex);
+    if (!fe) {
+        return false;
+    }
+
+    for (multimapElements i = 0; i < m->elementsPerEntry; i++) {
+        flexGetByType(fe, elements[i]);
+        fe = flexNext(m->map, fe);
+    }
+
+    return true;
+}
+
+bool multimapSmallDeleteByPosition(multimapSmall *m, int64_t keyIndex) {
+    flexEntry *fe = multimapSmallRowByPosition_(m, keyIndex);
+    if (!fe) {
+        return false;
+    }
+
+    multimapEntry me = {.map = &m->map, .mapIdx = 0, .fe = fe};
+    multimapSmallDeleteEntry(m, &me);
+    return true;
 }
 
 int64_t multimapSmallFieldIncr(multimapSmall *m, const databox *key,

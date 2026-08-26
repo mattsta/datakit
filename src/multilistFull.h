@@ -32,6 +32,8 @@ multilistFull *multilistFullNew(uint32_t fill, uint32_t compress);
 /* Metadata */
 size_t multilistFullCount(const multilistFull *ml);
 size_t multilistFullBytes(const multilistFull *ml);
+/* Physical bytes (compressed nodes measured at stored size) */
+size_t multilistFullBytesActual(const multilistFull *ml);
 
 /* Settings */
 void multilistFullSetCompressDepth(multilistFull *ml, uint32_t depth);
@@ -124,6 +126,15 @@ bool multilistFullIndex(multilistFull *ml, mflexState *state, mlOffsetId index,
 #define multilistFullIndexGet(ml, s, i, e) multilistFullIndex(ml, s, i, e, true)
 #define multilistFullIndexCheck(ml, s, i, e)                                   \
     multilistFullIndex(ml, s, i, e, false)
+
+/* Index starting from a caller-held anchor entry (with its known global
+ * index) when that is closer than either endpoint; node counts are
+ * skipped whole from the anchor in either direction.  The anchor must
+ * have been obtained after the most recent mutation. */
+bool multilistFullIndexNear(multilistFull *ml, mflexState *state,
+                            mlOffsetId index, const multilistEntry *anchor,
+                            mlOffsetId anchorIdx, multilistEntry *entry,
+                            bool openNode);
 
 /* Move ends of list */
 void multilistFullRotate(multilistFull *ml, mflexState *state[2]);

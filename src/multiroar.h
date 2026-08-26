@@ -17,9 +17,16 @@ bool multiroarBitGet(const multiroar *r, uint64_t position);
 void multiroarBitSetRange(multiroar *r, uint64_t start, uint64_t extent);
 bool multiroarRemove(multiroar *r, uint64_t position);
 
+/* Value operations — ONLY for value-mode multiroars (multiroarValueNew).
+ * Bit ops and value ops share one keyspace and must never be mixed on
+ * the same multiroar (asserted).  Values are unsigned integers that
+ * must fit the declared bitWidth (signed inputs must be >= 0; booleans
+ * store as 0/1) and round-trip as unsigned databoxes.  Set returns
+ * whether the position was previously occupied. */
 bool multiroarValueSet(multiroar *r, uint64_t position, databox *value);
 bool multiroarValueSetGetPrevious(multiroar *r, uint64_t position,
                                   databox *value, databox *overwritten);
+bool multiroarValueGet(const multiroar *r, uint64_t position, databox *value);
 bool multiroarValueRemoveGetRemoved(multiroar *r, uint64_t position,
                                     databox *removed);
 

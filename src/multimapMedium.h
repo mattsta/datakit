@@ -62,6 +62,10 @@ bool multimapMediumDeleteWithFound(multimapMedium *m, const databox *key,
 int64_t multimapMediumFieldIncr(multimapMedium *m, const databox *key,
                                 uint32_t fieldOffset, int64_t incrBy);
 
+bool multimapMediumLookupByPosition(multimapMedium *m, int64_t keyIndex,
+                                    databox *elements[]);
+bool multimapMediumDeleteByPosition(multimapMedium *m, int64_t keyIndex);
+
 void multimapMediumReset(multimapMedium *m);
 void multimapMediumFree(multimapMedium *m);
 

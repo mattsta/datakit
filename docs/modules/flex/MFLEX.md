@@ -45,18 +45,20 @@ mflex uses **low-bit pointer tagging** to track compression state:
 To avoid repeated allocations during open/close cycles, mflex uses **reusable state buffers**:
 
 ```c
-typedef struct mflexState {
+/* mflexInternal.h */
+struct mflexState {
     struct {
         union {
-            flex *f;      /* Uncompressed buffer */
-            uint8_t *buf; /* Compressed buffer */
+            void *buf;
+            flex *f;
         } ptr;
         size_t len;       /* Buffer size */
-        bool retained;    /* Is buffer currently in use? */
-    } buf[2];  /* buf[0] = uncompressed, buf[1] = compressed */
+        bool retained;    /* true if 'buf' was returned directly to a user */
+    } buf[2];             /* buf[0] = decompression, buf[1] = compression */
 
+    void *prevPtr;
     size_t lenPreferred;  /* Target buffer size */
-} mflexState;
+};
 ```
 
 **Benefits**:
@@ -79,32 +81,25 @@ typedef struct mflexState mflexState;
  * The tag determines which. */
 ```
 
-### Internal State
+### Why a Compressed mflex Still Answers Metadata Questions
 
-```c
-struct mflexState {
-    struct {
-        union {
-            flex *f;
-            uint8_t *buf;
-        } ptr;
-        size_t len;
-        bool retained;
-    } buf[2];  /* UNCOMPRESSED=0, COMPRESSED=1 */
-
-    size_t lenPreferred;
-};
-```
+A cflex begins with a **verbatim copy of the source flex's header** — the
+total-bytes and count varints — followed by the compressed payload. That is
+why `mflexCount()` and `mflexBytesUncompressed()` read straight through a
+compressed mflex without decompressing anything: they call `flexCount()` /
+`flexBytes()` on the cflex's leading bytes, which are still a valid flex
+header describing the _uncompressed_ content.
 
 ## State Management
 
 ### Creation and Destruction
 
 ```c
-/* Create state with specific initial buffer size */
+/* Create state with a specific initial buffer size.  BOTH buffers are
+ * allocated at that size, rounded up by jebufSizeAllocation(). */
 mflexState *mflexStateNew(size_t initialBufferSize);
 
-/* Create state with default 64KB buffers */
+/* Create state with 64 KiB buffers (so ~128 KiB total) */
 mflexState *mflexStateCreate(void);
 
 /* Update preferred buffer size */
@@ -113,7 +108,9 @@ void mflexStatePreferredLenUpdate(mflexState *state, size_t len);
 /* Get current preferred size */
 size_t mflexStatePreferredLen(mflexState *state);
 
-/* Reset buffers to preferred size (shrink/grow if needed) */
+/* Re-size buffers toward the preferred size.  A buffer is left alone
+ * while it sits within [lenPreferred, lenPreferred * 2]; outside that
+ * band it is reallocated to exactly lenPreferred. */
 void mflexStateReset(mflexState *state);
 
 /* Free state */
@@ -189,13 +186,14 @@ bool mflexIsEmpty(const mflex *m);
 /* Get element count */
 size_t mflexCount(const mflex *m);
 
-/* Get uncompressed size */
+/* Uncompressed size: read from the flex header, which a cflex preserves */
 size_t mflexBytesUncompressed(const mflex *m);
 
-/* Get compressed size (0 if not compressed) */
+/* Total physical size of the cflex, or 0 when not compressed */
 size_t mflexBytesCompressed(const mflex *m);
 
-/* Get actual bytes used (compressed or uncompressed) */
+/* Actual bytes resident: same as mflexBytesCompressed when compressed,
+ * otherwise mflexBytesUncompressed */
 size_t mflexBytesActual(const mflex *m);
 
 /* Check if currently compressed */
@@ -225,8 +223,6 @@ void mflexPushSigned(mflex **mm, mflexState *state, const int64_t i,
                      flexEndpoint where);
 void mflexPushUnsigned(mflex **mm, mflexState *state, const uint64_t u,
                        flexEndpoint where);
-void mflexPushHalfFloat(mflex **mm, mflexState *state, const float fl,
-                        flexEndpoint where);
 void mflexPushFloat(mflex **mm, mflexState *state, const float fl,
                     flexEndpoint where);
 void mflexPushDouble(mflex **mm, mflexState *state, const double d,
@@ -248,6 +244,17 @@ printf("Count: %zu, Compressed: %zu bytes\n",
 
 **Important**: Note that push operations take `mflex **mm` (pointer-to-pointer). This allows the function to replace the mflex with a compressed version.
 
+Every one of these is a full open-modify-close cycle: on a compressed mflex
+that means decompress, mutate, and attempt recompression **per call**. For
+more than a couple of values, open once and push through the flex API
+directly — see [Pattern 3](#pattern-3-batch-operations).
+
+There is no usable 16-bit float push today: `mflex.h` declares
+`mflexPushHalfFloat`, but `mflex.c` implements the differently-named
+`mflexPushFloat16` and never declares it, so neither name both compiles and
+links from a caller. To store a 16-bit float, open the mflex and use
+`flexPushFloat16` / `flexPushFloatB16`, then close.
+
 ## Delete Operations
 
 ```c
@@ -265,16 +272,24 @@ mflexDeleteOffsetCount(&m, state, 0, 10);
 ## Memory Management
 
 ```c
-/* Reset to empty (frees data, creates new empty mflex) */
+/* Reset to empty: frees the old buffer and installs a new empty mflex */
 void mflexReset(mflex **mm);
 
 /* Free mflex */
 void mflexFree(mflex *m);
 
 /* Example */
-mflexReset(&m);  /* m is now empty */
+mflexReset(&m);  /* the old buffer is freed; *mm is a fresh empty mflex */
 mflexFree(m);    /* m is freed */
 ```
+
+`mflexReset` deliberately does not decompress just to delete everything — it
+frees and rebuilds. The replacement comes from `mflexNew()`, so a
+`MFLEX_TYPE_NO_COMPRESS` mflex comes back as an **auto-compress** one.
+Re-apply `mflexSetCompressNever()` after a reset if that mattered.
+
+`mflexFree` frees the tagged pointer's underlying allocation regardless of
+compression state; no state buffer is involved.
 
 ## Open/Close Pattern
 
@@ -314,12 +329,12 @@ flex *f = mflexOpen(m, state);
 /* Use regular flex operations */
 flexPushSigned(&f, 9999, FLEX_ENDPOINT_HEAD);
 
-flexEntry *fe = flexHead(f);
-databox box;
-flexGetByType(f, &fe, &box);
-printf("First element: %ld\n", box.data.i64);
+databox box = {{0}};
+flexGetByType(flexHead(f), &box);
+printf("First element: %" PRId64 "\n", box.data.i64);
 
-/* Close and recompress */
+/* Close and recompress.  ONLY the mflex updated here stays valid;
+ * 'f' must not be used afterward. */
 mflexCloseGrow(&m, state, f);
 
 printf("After operations: %zu bytes\n", mflexBytesActual(m));
@@ -334,15 +349,27 @@ mflexStateFree(state);
 /* If only reading, no need to close */
 const flex *f = mflexOpenReadOnly(m, state);
 
-flexEntry *fe = flexHead(f);
+flexEntry *fe = flexHeadIfAny(f);
 while (fe) {
-    databox box;
-    flexGetByType(f, &fe, &box);
-    printf("Element: %ld\n", box.data.i64);
+    databox box = {{0}};
+    flexGetByType(fe, &box);
+    printf("Element: %" PRId64 "\n", box.data.i64);
+    fe = flexNext(f, fe);
 }
 
 /* No close needed for read-only */
 ```
+
+**One live open per state.** `mflexOpen` on a _compressed_ mflex
+decompresses into the state's shared scratch buffer and returns a pointer
+into it. Opening a second compressed mflex through the same state overwrites
+that buffer and silently invalidates the earlier returned flex. Use separate
+states for concurrent opens.
+
+The returned pointer may be either the mflex's own buffer (uncompressed
+case) or the state's scratch buffer (compressed case) — you cannot tell from
+the pointer, which is why any modification **must** go through a close
+function and you must keep only what the close leaves behind.
 
 ## Compression Control
 
@@ -383,33 +410,56 @@ mflex attempts compression after:
 
 mflex does **not** compress if:
 
-- Type is `MFLEX_TYPE_NO_COMPRESS`
-- Compressed size >= uncompressed size
-- Compressed size not in smaller allocator size class
+- The type tag is `MFLEX_TYPE_NO_COMPRESS`
+- `flexConvertToCFlex` refuses or fails (below the 64-byte floor, above
+  LZ4's single-shot input maximum, or the result will not fit the buffer)
+- (grow path only) — nothing further; a successful compress is accepted
+- (shrink path only) the compressed result does not land in a **smaller
+  allocator size class**
 
 ### Compression Decision Algorithm
 
+The two close paths do not apply the same test.
+
 ```c
-/* Pseudocode from mflexCloseGrow */
-if (type != MFLEX_TYPE_NO_COMPRESS) {
-    size_t uncompressed = flexBytes(f);
-
-    if (flexConvertToCFlex(f, buffer, bufferSize)) {
-        size_t compressed = cflexBytes(cflex);
-
-        /* Only use compression if it reduces allocator class */
-        if (jebufUseNewAllocation(uncompressed, compressed)) {
-            /* Use compressed version */
-            return CFLEX;
-        }
-    }
+/* mflexCloseGrow — grew the flex, so compress into the state's
+ * compression buffer (growing that buffer first if needed) and accept
+ * any successful compression. */
+if (type == MFLEX_TYPE_NO_COMPRESS) {
+    return mflexCloseNoCompress(...);
 }
 
-/* Use uncompressed version */
-return FLEX;
+if (STATE_COMPRESSED_SIZE < flexBytes(f)) {
+    grow STATE_COMPRESSED to jebufSizeAllocation(flexBytes(f));
+}
+
+if (flexConvertToCFlex(f, STATE_COMPRESSED, STATE_COMPRESSED_SIZE)) {
+    swap the buffer into *mm, shrink it to cflexBytes(), tag CFLEX;
+    the old *mm buffer becomes the state's new scratch (no free/malloc)
+} else {
+    tag FLEX
+}
 ```
 
-**Key insight**: Compression must move to a **smaller allocator size class** to be worthwhile. Saving a few bytes within the same size class doesn't help.
+```c
+/* mflexCloseShrink — shrank the flex, so try to compress back INTO the
+ * mflex's existing allocation, and only keep the result if it buys a
+ * smaller allocator size class. */
+if (flexConvertToCFlex(f, mfc(*mm), mflexBytesActual(*mm)) &&
+    jebufUseNewAllocation(flexBytes(f), mflexBytesActual(*mm))) {
+    tag CFLEX
+} else {
+    tag FLEX
+}
+```
+
+**Key insight**: on the shrink path, compression must move the value into a
+smaller allocator size class to be worthwhile — saving a few bytes inside
+the same size class frees no memory. The grow path skips that test because
+it is already paying for a new allocation either way.
+
+Both paths recycle buffers rather than freeing them: whichever allocation
+the caller stops using becomes the state's scratch space for next time.
 
 ### Size Class Example
 
@@ -497,8 +547,8 @@ typedef struct logBuffer {
     mflexState *state;
 } logBuffer;
 
-logBuffer *logNew() {
-    logBuffer *log = malloc(sizeof(*log));
+logBuffer *logNew(void) {
+    logBuffer *log = zcalloc(1, sizeof(*log));
     log->state = mflexStateCreate();
     log->entries = mflexNew();
     return log;
@@ -513,16 +563,24 @@ void logAppend(logBuffer *log, const char *message) {
 void logPrint(logBuffer *log) {
     const flex *f = mflexOpenReadOnly(log->entries, log->state);
 
-    flexEntry *fe = flexHead(f);
+    flexEntry *fe = flexHeadIfAny(f);
     int i = 0;
     while (fe) {
-        databox box;
-        flexGetByType(f, &fe, &box);
-        printf("[%d] %.*s\n", i++,
-               (int)box.len, box.data.bytes.start);
+        databox box = {{0}};
+        flexGetByType(fe, &box);
+        printf("[%d] %.*s\n", i++, (int)box.len, databoxBytes(&box));
+        fe = flexNext(f, fe);
     }
 }
 ```
+
+`flexGetByType` returns string entries as `DATABOX_BYTES` pointing **into**
+the opened flex, so the printed bytes are only valid while that flex is
+open. Use `databoxBytes()` rather than reaching into `box.data.bytes.start`
+so the code stays correct if the box ever arrives embedded.
+
+Also remember flex canonicalises numeral-looking pushes: a log line of
+`"12345"` comes back as an integer, not bytes.
 
 ### Pattern 2: Adaptive Compression
 
@@ -725,12 +783,12 @@ if (mflexIsCompressed(m)) {
     printf("Uncompressed: %zu bytes\n", mflexBytesActual(m));
 }
 
-/* Check if state buffers are retained */
-#ifdef DATAKIT_TEST
-extern bool STATE_UNCOMPRESSED_RETAINED;
-assert(!STATE_UNCOMPRESSED_RETAINED);  /* Should be false after close */
-#endif
 ```
+
+The `retained` flags on `mflexState` are internal bookkeeping reached only
+through macros inside `mflex.c`; there is no exported symbol to assert on
+from outside the module. Include `mflexInternal.h` if you must inspect state
+buffers in a test.
 
 ## Thread Safety
 
@@ -778,10 +836,10 @@ void operation(mflex **m) {
 
 ## See Also
 
-- [flex](FLEX.md) - Underlying packed array structure
-- [cflex](CFLEX.md) - LZ4-compressed flex
+- [flex](FLEX.md) - Underlying packed array structure (cflex, the
+  LZ4-compressed form mflex wraps, is documented there too)
 - [databox](../core/DATABOX.md) - Universal value container
-- [jebuf](../mem/JEBUF.md) - Allocator size class utilities
+- [jebuf](../memory/JEBUF.md) - Allocator size class utilities
 
 ## Implementation Notes
 

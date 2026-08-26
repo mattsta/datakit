@@ -2,24 +2,27 @@
 
 ## Overview
 
-`OSRegulate` provides **cross-platform OS resource management and system queries**. It handles process daemonization, resource limits, CPU detection, memory monitoring, network validation, and system configuration checks.
+`OSRegulate` provides **POSIX OS resource management and system queries**. It handles process daemonization, resource limits, CPU detection, memory monitoring, network validation, and system configuration checks.
 
 **Key Features:**
 
 - Process daemonization and management
+- Parent-death detection (`PR_SET_PDEATHSIG` on Linux, kqueue on macOS/BSD)
 - File descriptor limit adjustment
 - CPU count detection
 - Memory usage and configuration checks
-- Network address validation (private/public detection)
+- Network address validation (private/wildcard detection)
 - TCP Fast Open and backlog configuration
 - Resource usage statistics (CPU time, RSS, etc.)
-- Linux-specific memory metrics (overcommit, THP, smap)
+- Linux-specific memory metrics (overcommit, THP, smaps)
 
 **Header**: `OSRegulate.h`
 
 **Source**: `OSRegulate.c`
 
-**Platforms**: Linux, macOS, FreeBSD, others (with feature detection)
+**Platforms**: Linux, macOS, and the BSD family (FreeBSD, NetBSD, OpenBSD,
+DragonFly), with per-feature detection. Some entry points are compiled only on
+Linux - see [Platform Support](#platform-support).
 
 ## Process Management
 
@@ -78,8 +81,16 @@ case OS_REGULATE_DAEMONIZE_ERROR:
 
 1. **Fork** - Creates child process
 2. **setsid()** - Creates new session (detaches from terminal)
-3. **Redirect stdio** - Sets stdin/stdout/stderr to /dev/null
+3. **Redirect stdio** - Points stdin and stdout at `/dev/null`.
+   **stderr is deliberately left connected**, so daemon error output still
+   reaches whatever the process was launched with; redirect it yourself if you
+   want it silenced.
 4. **Returns** - Parent gets PARENT status, child gets CHILD status
+
+Every failing step returns `OS_REGULATE_DAEMONIZE_ERROR` and, when `errMsg` is
+non-NULL, sets it to a static description (`"Failure to fork() daemon"`,
+`"Failed to run setsid()"`, `"Failed to open /dev/null"`, ...). The string is not
+owned by the caller and must not be freed.
 
 ### PID File Management
 
@@ -88,7 +99,7 @@ case OS_REGULATE_DAEMONIZE_ERROR:
  * path: file path to write PID
  * Returns: true on success, false if already locked (another instance running)
  */
-bool OSRegulateWritePidToFile(char *path);
+bool OSRegulateWritePidToFile(const char *path);
 
 /* Example: Ensure single instance */
 if (!OSRegulateWritePidToFile("/var/run/myapp.pid")) {
@@ -110,22 +121,56 @@ bool OSRegulateRequestSignalChildWhenParentExits(int sig);
 
 /* Check if parent process still exists
  * Returns: true if parent is not init (PID 1), false if reparented
+ *
+ * Note the spelling: "Exisits". This is a getppid() poll, so it only
+ * notices parent death the next time you call it.
  */
 bool OSRegulateParentStillExisits(void);
 
+/* Parent-death watch fd (kqueue platforms: macOS/BSD)
+ * parent: PID to watch
+ * Returns: a kqueue fd armed with a one-shot EVFILT_PROC/NOTE_EXIT filter
+ *          on `parent`, or -1 on Linux (PR_SET_PDEATHSIG covers that case)
+ *          or on error
+ *
+ * Block in kevent() on the returned fd to receive an event the instant the
+ * parent process exits - no polling, and no dependence on the health of a
+ * data-plane thread. On -1 the caller should fall back to polling
+ * OSRegulateParentStillExisits(). Close the fd with close() when done.
+ */
+int OSRegulateParentDeathKqueueFd(pid_t parent);
+
 /* Example: Child monitors parent */
 if (OSRegulateRequestSignalChildWhenParentExits(SIGTERM)) {
+    /* Linux: kernel signals us directly, nothing else to do */
     printf("Will receive SIGTERM if parent exits\n");
-}
-
-while (running) {
-    if (!OSRegulateParentStillExisits()) {
+} else {
+    /* macOS/BSD: block a dedicated thread on the kqueue fd */
+    const int kq = OSRegulateParentDeathKqueueFd(getppid());
+    if (kq >= 0) {
+        struct kevent ev;
+        (void)kevent(kq, NULL, 0, &ev, 1, NULL); /* blocks until parent exits */
         printf("Parent died, exiting\n");
-        break;
+        close(kq);
+    } else {
+        /* Last resort: poll */
+        while (running && OSRegulateParentStillExisits()) {
+            // ... do work ...
+        }
     }
-    // ... do work ...
 }
 ```
+
+**Choosing a parent-death mechanism:**
+
+| Platform  | Mechanism                                  | API                                           |
+| --------- | ------------------------------------------ | --------------------------------------------- |
+| Linux     | `prctl(PR_SET_PDEATHSIG)` - kernel signal  | `OSRegulateRequestSignalChildWhenParentExits` |
+| macOS/BSD | kqueue `EVFILT_PROC` / `NOTE_EXIT` - event | `OSRegulateParentDeathKqueueFd`               |
+| Fallback  | `getppid()` poll                           | `OSRegulateParentStillExisits`                |
+
+`OSRegulateRequestSignalChildWhenParentExits()` returns false on every non-Linux
+platform, which is the signal to reach for the kqueue fd instead.
 
 ## CPU Information
 
@@ -189,6 +234,10 @@ if (OSRegulateAdjustOpenFilesLimit(10000, &actualLimit, &msg)) {
 /* Get TCP Fast Open mode
  * Returns: 0 (disabled), 1 (client), 2 (server), 3 (both)
  * Reads from: /proc/sys/net/ipv4/tcp_fastopen (Linux)
+ *
+ * Gated on the running kernel version via versionOSRuntime's
+ * linuxKernelHasTFOServerIPv4 (>= 3.7). Returns 0 anywhere the file
+ * cannot be read, including all non-Linux platforms.
  */
 int OSRegulateTFOMode(void);
 
@@ -207,6 +256,9 @@ if (tfoMode & 2) {
  * tcpBacklogListenLength: desired listen() backlog
  * Returns: true if system limit >= requested
  * Reads from: /proc/sys/net/core/somaxconn (Linux)
+ *
+ * Where /proc/sys/net/core/somaxconn is unavailable there is nothing to
+ * check, so this returns true ("no known problem"), not false.
  */
 bool OSRegulateTcpBacklogMeetsLimit(int tcpBacklogListenLength);
 
@@ -245,6 +297,14 @@ printf("Process RSS: %zu MB (%.1f%% of total)\n",
 ```
 
 ### Linux Memory Configuration
+
+> **Linux-only symbols.** Everything in this section and the next
+> (`OSRegulateLinuxOvercommitEnabled`, `OSRegulateLinuxTransparentHugePagesEnabled`,
+> `OSRegulateLinuxMemorySettingsAreOkay`, `OSRegulateLinuxSmapBytesByFieldForPid`,
+> `OSRegulateLinuxTransparentHugePagesGetAnonHugePagesSize`,
+> `OSRegualteLinuxSmapPrivateDirtyGet`) is compiled only on Linux. The header
+> declares them unconditionally, so calling them elsewhere compiles but fails to
+> link. Guard the call sites with `#if DK_OS_LINUX`.
 
 ```c
 /* Check if memory overcommit is enabled
@@ -295,6 +355,11 @@ size_t OSRegulateLinuxSmapBytesByFieldForPid(
 /* Get anonymous huge pages size
  * pid: process ID, or -1 for self
  * Returns: total AnonHugePages in bytes
+ *
+ * Convenience wrapper over the "AnonHugePages:" field. Note the int
+ * return type: totals above INT_MAX (2 GB of huge pages) truncate. Call
+ * OSRegulateLinuxSmapBytesByFieldForPid("AnonHugePages:", pid) directly
+ * for a full-width size_t result.
  */
 int OSRegulateLinuxTransparentHugePagesGetAnonHugePagesSize(
     int64_t pid
@@ -516,7 +581,7 @@ void printMemoryStatus(void) {
            currentRSS / 1024 / 1024,
            (double)currentRSS / totalMem * 100);
 
-#ifdef __linux__
+#if DK_OS_LINUX
     size_t privateDirty = OSRegualteLinuxSmapPrivateDirtyGet(-1);
     size_t anonHuge = OSRegulateLinuxTransparentHugePagesGetAnonHugePagesSize(-1);
 
@@ -584,22 +649,29 @@ bool bindToAddress(const char *host, const char *port) {
 
 ## Platform Support
 
-| Feature             | Linux | macOS | FreeBSD | Other |
-| ------------------- | ----- | ----- | ------- | ----- |
-| Daemonize           | ✓     | ✓     | ✓       | ✓     |
-| PID file            | ✓     | ✓     | ✓       | ✓     |
-| Parent death signal | ✓     | ✗     | ✗       | ✗     |
-| CPU count           | ✓     | ✓     | ✓       | ✓     |
-| FD limit adjust     | ✓     | ✓     | ✓       | ✓     |
-| TFO mode            | ✓     | ✗     | ✗       | ✗     |
-| TCP backlog check   | ✓     | ✗     | ✗       | ✗     |
-| Total memory        | ✓     | ✓     | ✓       | ✗     |
-| RSS                 | ✓     | ✓     | ✗       | ✗     |
-| Overcommit check    | ✓     | ✗     | ✗       | ✗     |
-| THP check           | ✓     | ✗     | ✗       | ✗     |
-| SMAP parsing        | ✓     | ✗     | ✗       | ✗     |
-| Resource usage      | ✓     | ✓     | ✓       | ✓     |
-| Network validation  | ✓     | ✓     | ✓       | ✓     |
+Supported platforms are Linux, macOS, and the BSD family. There is no Windows
+support anywhere in datakit.
+
+| Feature                     | Linux | macOS | BSD family | Behavior elsewhere              |
+| --------------------------- | ----- | ----- | ---------- | ------------------------------- |
+| Daemonize                   | ✓     | ✓     | ✓          | POSIX fork/setsid               |
+| PID file                    | ✓     | ✓     | ✓          | POSIX flock                     |
+| Parent death signal (prctl) | ✓     | ✗     | ✗          | returns false                   |
+| Parent death kqueue fd      | ✗     | ✓     | ✓          | returns -1                      |
+| Parent poll (getppid)       | ✓     | ✓     | ✓          | always available                |
+| CPU count                   | ✓     | ✓     | ✓          | `_SC_NPROCESSORS_ONLN`          |
+| FD limit adjust             | ✓     | ✓     | ✓          | POSIX get/setrlimit             |
+| TFO mode                    | ✓     | ✗     | ✗          | returns 0                       |
+| TCP backlog check           | ✓     | ✗     | ✗          | returns true (nothing to check) |
+| Total memory                | ✓     | ✓     | ✓          | sysctl / sysconf, 0 if neither  |
+| RSS                         | ✓     | ✓     | partial    | 0 where unsupported             |
+| Overcommit / THP / smaps    | ✓     | ✗     | ✗          | **not compiled** - link error   |
+| Resource usage              | ✓     | ✓     | ✓          | POSIX getrusage                 |
+| Network validation          | ✓     | ✓     | ✓          | pure address math               |
+
+The "kqueue" rows cover macOS, FreeBSD, NetBSD, OpenBSD, and DragonFly.
+`OSRegulateRSSGet()` uses `/proc/self/stat` on Linux and Mach task info on macOS;
+elsewhere it returns 0.
 
 ## Best Practices
 
@@ -617,11 +689,15 @@ OSRegulateAdjustOpenFilesLimit(10000, NULL, NULL);
 // No error handling!
 ```
 
-### 2. Use Platform Guards
+### 2. Use Platform Guards for the Linux-Only Functions
+
+The `OSRegulate*Linux*` / `OSRegualte*Linux*` entry points are compiled only on
+Linux. Because the header declares them unconditionally, an unguarded call
+compiles fine and then fails at **link** time on macOS/BSD.
 
 ```c
 /* GOOD */
-#ifdef __linux__
+#if DK_OS_LINUX
     if (!OSRegulateLinuxOvercommitEnabled()) {
         // Handle Linux-specific setting...
     }
@@ -629,9 +705,13 @@ OSRegulateAdjustOpenFilesLimit(10000, NULL, NULL);
 
 /* BAD */
 if (!OSRegulateLinuxOvercommitEnabled()) {
-    // Fails to compile on non-Linux!
+    // Undefined symbol at link time on non-Linux!
 }
 ```
+
+Everything else is portable: functions with no implementation on a platform
+return a documented neutral value (false, 0, -1, or true for the backlog check)
+rather than failing to link.
 
 ### 3. Provide Fallbacks
 
@@ -651,8 +731,11 @@ if (totalMem == 0) {
 
 ## See Also
 
+- [versionOSRuntime](VERSION_OS_RUNTIME.md) - kernel version gates used by
+  `OSRegulateTFOMode()`
 - System documentation for resource limits (`man setrlimit`)
-- Linux proc filesystem (`man proc`)
+- Linux proc filesystem (`man proc`), `man 2 prctl` for `PR_SET_PDEATHSIG`
+- macOS/BSD event notification (`man 2 kqueue`, `EVFILT_PROC` / `NOTE_EXIT`)
 - TCP Fast Open (`man tcp`, search for TCP_FASTOPEN)
 
 ## Testing

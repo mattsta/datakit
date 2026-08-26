@@ -9,20 +9,13 @@
  * behave as "save = overwrite this ref's value" (last write wins),
  * because every reader (multiheapReadByKey below) looks the slot up by
  * KEY ONLY.  Map mode gives exactly that: key-only compare, found =>
- * replace the value in place (multimapSmall.c: "Maps (!mapIsSet):
- * key-only compare, found => replace values").
+ * replace the value in place.  SET mode would compare full-width
+ * {key,value} and append a second row for a re-saved ref instead of
+ * replacing it, leaving key-only readers on an arbitrary duplicate.
  *
- * This was `multimapSetNew` — SET mode — which compares FULL WIDTH
- * {key,value}, so re-saving a ref with a CHANGED value appended a
- * SECOND row for that ref instead of replacing it.  The key-only
- * reader then returned whichever duplicate the sorted search landed
- * on, and because these values are raw little-endian integers stored
- * as DATABOX_BYTES, "sorted" is memcmp order — numerically scrambled
- * (extent=1500 sorts BEFORE extent=500).  A reader that saved
- * yield-resume state more than once therefore restored a STALE value
- * and could never converge: any iteration long enough to yield more
- * than twice resumed from the stale cursor forever and never
- * terminated. */
+ * Pointer discipline: readers (multiheapRead/Restore) take the heap by
+ * value; mutators (multiheapInsert/Realloc) take a `multiheap **`
+ * because the underlying multimap may reallocate or change tiers. */
 typedef multimap multiheap;
 #define multiheapNew() (multiheap *)multimapNew(2)
 #define multiheapFree(mh) multimapFree(mh)
@@ -33,22 +26,28 @@ typedef multimap multiheap;
 #define multiheapRealloc(heap, ref, newSize)                                   \
     ({                                                                         \
         databox key_ = {.data.u = ref, .type = DATABOX_UNSIGNED_64};           \
-        multiheapReallocByKey(heap, &key_);                                    \
+        multiheapReallocByKey(heap, &key_, newSize);                           \
     })
 
 #define multiheapReallocByKey(heap, key, newSize)                              \
     ({                                                                         \
         multimapEntry entry_MHRBK;                                             \
-        const bool found =                                                     \
-            multimapGetUnderlyingEntry((multimap *)*heap, key, &entry_MHRBK);  \
+        const bool found = multimapGetUnderlyingEntry((multimap *)*(heap),     \
+                                                      key, &entry_MHRBK);      \
         assert(found);                                                         \
         (void)found;                                                           \
                                                                                \
-        multimapResizeEntry((multimap **)heap, &entry_MHRBK, newSize);         \
+        /* Advance from the key entry to its value entry before                \
+         * resizing: entry_MHRBK.fe points AT the key. */                      \
+        entry_MHRBK.fe = flexNext(*entry_MHRBK.map, entry_MHRBK.fe);           \
+        multimapResizeEntry((multimap **)(heap), &entry_MHRBK, newSize);       \
                                                                                \
-        /* Resize could have moved our base pointer, so caller must use the    \
-         * newly returned base pointer value. */                               \
-        multiheapReadByKey(heap, key);                                         \
+        /* Resize could have moved our base pointer, so caller must use        \
+         * the newly returned base pointer value — and must treat the        \
+         * region's CONTENTS as unspecified after a resize (flex entry         \
+         * resizing does not guarantee prefix preservation): repopulate        \
+         * through the returned pointer before reading. */                     \
+        multiheapReadByKey((multiheap *)*(heap), key);                         \
     })
 
 /* Macro returns the aligned pointer for 'ref' inside 'heap' */
@@ -100,3 +99,7 @@ multiheapReadByKey(multiheap *restrict const heap,
                                                                                \
         multimapInsert((multimap **)heap, insertBox);                          \
     } while (0)
+
+#ifdef DATAKIT_TEST
+int multiheapTest(int argc, char *argv[]);
+#endif

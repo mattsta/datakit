@@ -1,782 +1,686 @@
-# Multilist Examples - Real-World Usage
+# Multilist Examples - Module Walkthroughs
 
 ## Overview
 
-This document provides practical, real-world examples of using the multilist family for common data structure patterns and algorithms.
+This document holds **multilist-specific** walkthroughs: patterns where the
+interesting part is how multilist behaves (variant upgrades, `mflexState`
+lifetime, `databox` ownership on pop, compression, iterator invalidation).
+
+Generic cross-module recipes - iteration skeletons, memory-management rules,
+benchmark harnesses shared with flex/multimap/multiarray - live in
+[docs/examples/PATTERNS.md](../../examples/PATTERNS.md),
+[docs/examples/USE_CASES.md](../../examples/USE_CASES.md), and
+[docs/examples/BENCHMARKS.md](../../examples/BENCHMARKS.md). They are not
+repeated here.
+
+Every example below assumes these headers:
+
+```c
+#include "multilist.h"
+#include <inttypes.h>
+#include <stdio.h>
+#include <string.h>
+```
+
+## Ground Rules These Examples Follow
+
+Four rules explain most of the code shape in this file:
+
+1. **`mflexState` is expensive scratch memory.** `mflexStateCreate()` allocates
+   two working buffers. Create it once per owner (or per thread), not per
+   operation. Small and Medium lists ignore it, but any list can become Full on
+   the next push, so it must still be valid.
+2. **Push takes one state, insert/iterate/rotate take `mflexState *state[2]`.**
+   Keep both around: `mflexState *s[2]` plus `s[0]` for the single-state calls.
+3. **Pop copies; index/iterate borrow.** `multilistPop()` fills a box you must
+   release with `databoxFreeData()`. `multilistIndex()` and `multilistNext()`
+   fill a box pointing into list memory that you must _not_ free and that dies
+   at the next mutation.
+4. **Read popped bytes with `databoxCBytes()`.** Popped byte values of 8 bytes
+   or fewer are embedded in the box (`DATABOX_BYTES_EMBED`), so
+   `.data.bytes.cstart` is wrong for them.
 
 ## Basic Examples
 
-### Example 1: Simple Queue (FIFO)
+### Example 1: Task Queue (FIFO) with a Shared State
+
+The point of this example is state lifetime: one `mflexState` for the whole
+queue, not one per push.
 
 ```c
-#include "multilist.h"
+typedef struct taskQueue {
+    multilist *ml;
+    mflexState *s[2];
+} taskQueue;
 
-/* Task queue processor */
-typedef struct task {
-    int id;
-    char *description;
-} task;
+void taskQueueInit(taskQueue *q) {
+    q->ml = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+    q->s[0] = mflexStateCreate();
+    q->s[1] = mflexStateCreate();
+}
 
-void processTaskQueue(void) {
-    multilist *queue = multilistNew(FLEX_CAP_LEVEL_2048, 0);
-    mflexState *state = mflexStateCreate();
+void taskQueueDestroy(taskQueue *q) {
+    multilistFree(q->ml);
+    mflexStateFree(q->s[0]);
+    mflexStateFree(q->s[1]);
+}
 
-    /* Producer: Add tasks to queue */
-    for (int i = 0; i < 100; i++) {
-        char buf[256];
-        snprintf(buf, sizeof(buf), "Process item %d", i);
+void taskQueueSubmit(taskQueue *q, const char *description) {
+    /* databoxNewBytesString only points at 'description';
+     * the push copies the bytes into the flex node. */
+    databox task = databoxNewBytesString(description);
+    multilistPushByTypeTail(&q->ml, q->s[0], &task);
+}
 
-        databox taskData = databoxNewBytesString(buf);
-        multilistPushByTypeTail(&queue, state, &taskData);
+bool taskQueueRun(taskQueue *q) {
+    databox got;
+    if (!multilistPopHead(&q->ml, q->s[0], &got)) {
+        return false;
     }
 
-    printf("Queue has %zu tasks\n", multilistCount(queue));
+    printf("Processing: %.*s\n", (int)got.len, databoxCBytes(&got));
 
-    /* Consumer: Process tasks in order */
-    databox result;
-    while (multilistPopHead(&queue, state, &result)) {
-        printf("Processing: %s\n", result.data.bytes.cstart);
+    /* pop allocated (or embedded) a copy - release it */
+    databoxFreeData(&got);
+    return true;
+}
 
-        /* Do work here... */
+void taskQueueExample(void) {
+    taskQueue q;
+    taskQueueInit(&q);
 
-        databoxFreeData(&result);
+    for (uint32_t i = 0; i < 100; i++) {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "Process item %" PRIu32, i);
+        taskQueueSubmit(&q, buf);
     }
 
-    mflexStateFree(state);
-    multilistFree(queue);
+    printf("Queue has %zu tasks\n", multilistCount(q.ml));
+
+    while (taskQueueRun(&q)) {
+        /* keep draining */
+    }
+
+    taskQueueDestroy(&q);
 }
 ```
 
-### Example 2: Stack (LIFO)
+By the 100th push this list has already crossed 2 KB and become Medium. Nothing
+in the code above changed - only the pointer written back through `&q->ml`.
+
+### Example 2: Undo/Redo Stacks and Box Ownership
+
+Moving a value from one list to another is where pop-copy ownership matters: the
+push copies the bytes again, so the popped box still has to be freed.
 
 ```c
-#include "multilist.h"
+typedef struct editor {
+    multilist *undo;
+    multilist *redo;
+    mflexState *state;
+} editor;
 
-/* Undo/Redo system */
-typedef struct action {
-    char *operation;
-    void *data;
-} action;
+void editorInit(editor *e) {
+    e->undo = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+    e->redo = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+    e->state = mflexStateCreate();
+}
 
-void undoRedoExample(void) {
-    multilist *undoStack = multilistNew(FLEX_CAP_LEVEL_2048, 0);
-    multilist *redoStack = multilistNew(FLEX_CAP_LEVEL_2048, 0);
-    mflexState *state = mflexStateCreate();
+void editorRecord(editor *e, const char *action) {
+    databox box = databoxNewBytesString(action);
+    multilistPushByTypeHead(&e->undo, e->state, &box);
+}
 
-    /* User performs actions */
-    databox action1 = databoxNewBytesString("typed 'hello'");
-    multilistPushByTypeHead(&undoStack, state, &action1);
-
-    databox action2 = databoxNewBytesString("typed 'world'");
-    multilistPushByTypeHead(&undoStack, state, &action2);
-
-    databox action3 = databoxNewBytesString("deleted 'world'");
-    multilistPushByTypeHead(&undoStack, state, &action3);
-
-    printf("Undo stack has %zu actions\n", multilistCount(undoStack));
-
-    /* User clicks 'Undo' */
+bool editorUndo(editor *e) {
     databox undone;
-    if (multilistPopHead(&undoStack, state, &undone)) {
-        printf("Undoing: %s\n", undone.data.bytes.cstart);
-
-        /* Move to redo stack */
-        multilistPushByTypeHead(&redoStack, state, &undone);
+    if (!multilistPopHead(&e->undo, e->state, &undone)) {
+        return false;
     }
 
-    /* User clicks 'Redo' */
+    printf("Undoing: %.*s\n", (int)undone.len, databoxCBytes(&undone));
+
+    /* The push copies the bytes into the redo list... */
+    multilistPushByTypeHead(&e->redo, e->state, &undone);
+
+    /* ...so the popped copy is still ours to release. */
+    databoxFreeData(&undone);
+    return true;
+}
+
+bool editorRedo(editor *e) {
     databox redone;
-    if (multilistPopHead(&redoStack, state, &redone)) {
-        printf("Redoing: %s\n", redone.data.bytes.cstart);
-
-        /* Move back to undo stack */
-        multilistPushByTypeHead(&undoStack, state, &redone);
+    if (!multilistPopHead(&e->redo, e->state, &redone)) {
+        return false;
     }
 
-    mflexStateFree(state);
-    multilistFree(undoStack);
-    multilistFree(redoStack);
+    printf("Redoing: %.*s\n", (int)redone.len, databoxCBytes(&redone));
+
+    multilistPushByTypeHead(&e->undo, e->state, &redone);
+    databoxFreeData(&redone);
+    return true;
+}
+
+void editorDestroy(editor *e) {
+    multilistFree(e->undo);
+    multilistFree(e->redo);
+    mflexStateFree(e->state);
 }
 ```
 
-### Example 3: Deque (Double-Ended Queue)
+Forgetting the `databoxFreeData()` after re-pushing is the single most common
+multilist leak, because the code reads as if the push took ownership. It does
+not.
+
+### Example 3: Deque for Work Stealing
+
+Both ends are O(1), which is what makes a work-stealing deque viable. Note the
+direction convention: the owner takes from the end it pushes to (LIFO, hot in
+cache), and thieves take from the far end (FIFO, oldest work).
 
 ```c
-#include "multilist.h"
+typedef struct workDeque {
+    multilist *ml;
+    mflexState *state;
+} workDeque;
 
-/* Work stealing scheduler */
-void workStealingScheduler(void) {
-    multilist *localQueue = multilistNew(FLEX_CAP_LEVEL_2048, 0);
-    mflexState *state = mflexStateCreate();
+void workDequePush(workDeque *d, int64_t item) {
+    databox work = databoxNewSigned(item);
+    multilistPushByTypeTail(&d->ml, d->state, &work);
+}
 
-    /* Add work items */
-    for (int i = 0; i < 10; i++) {
-        databox work = databoxNewSigned(i);
-        multilistPushByTypeTail(&localQueue, state, &work);
+/* Owner: take from the tail - the most recently pushed item. */
+bool workDequeTakeOwn(workDeque *d, int64_t *out) {
+    databox got;
+    if (!multilistPopTail(&d->ml, d->state, &got)) {
+        return false;
     }
 
-    /* Local thread: Pop from head (LIFO for cache efficiency) */
-    databox localWork;
-    if (multilistPopHead(&localQueue, state, &localWork)) {
-        printf("Local thread processing: %ld\n", localWork.data.i);
+    *out = got.data.i64;
+    printf("Owner took: %" PRId64 "\n", got.data.i64);
+    databoxFreeData(&got);
+    return true;
+}
+
+/* Thief: take from the head - the oldest, coldest item. */
+bool workDequeSteal(workDeque *d, int64_t *out) {
+    databox got;
+    if (!multilistPopHead(&d->ml, d->state, &got)) {
+        return false;
     }
 
-    /* Stealing thread: Pop from tail (FIFO, least recently added) */
-    databox stolenWork;
-    if (multilistPopTail(&localQueue, state, &stolenWork)) {
-        printf("Stealing thread got: %ld\n", stolenWork.data.i);
-    }
-
-    mflexStateFree(state);
-    multilistFree(localQueue);
+    *out = got.data.i64;
+    printf("Thief stole: %" PRId64 "\n", got.data.i64);
+    databoxFreeData(&got);
+    return true;
 }
 ```
+
+Integers pushed with `databoxNewSigned()` come back as `DATABOX_SIGNED_64`;
+read `got.data.i64` and print with `PRId64`. `databoxFreeData()` on an integer
+box is a safe no-op, so the release call can stay unconditional.
+
+Real work stealing needs external synchronization - multilist itself is not
+thread-safe and `mflexState` cannot be shared across threads.
 
 ## Intermediate Examples
 
-### Example 4: LRU Cache
+### Example 4: Search-and-Promote (Iterator Invalidation)
+
+This is the canonical demonstration of what you may and may not do while an
+iterator is live: **delete is supported, insert/push is not**.
 
 ```c
-#include "multilist.h"
+typedef struct recentList {
+    multilist *ml;
+    mflexState *s[2];
+    size_t maxEntries;
+} recentList;
 
-/* Least Recently Used cache using multilist */
-typedef struct lruCache {
-    multilist *list;    /* Stores keys in LRU order */
-    size_t maxSize;
-} lruCache;
-
-lruCache *lruCacheCreate(size_t maxSize) {
-    lruCache *cache = malloc(sizeof(lruCache));
-    cache->list = multilistNew(FLEX_CAP_LEVEL_2048, 0);
-    cache->maxSize = maxSize;
-    return cache;
-}
-
-void lruCacheAccess(lruCache *cache, const char *key) {
-    mflexState *s[2] = {mflexStateCreate(), mflexStateCreate()};
-
-    /* Search for key in list */
-    multilistIterator iter;
-    multilistIteratorInitForward(cache->list, s, &iter);
-    multilistEntry entry;
+/* Move 'key' to the front if present; otherwise insert it and trim. */
+void recentListTouch(recentList *r, const char *key) {
+    const size_t keyLen = strlen(key);
     bool found = false;
 
+    multilistIterator iter = {0};
+    multilistIteratorInitForward(r->ml, r->s, &iter);
+
+    multilistEntry entry;
     while (multilistNext(&iter, &entry)) {
-        if (strcmp(entry.box.data.bytes.cstart, key) == 0) {
-            /* Found - move to front (most recently used) */
-            databox keyBox = databoxNewBytesString(key);
-
-            /* Remove from current position */
+        if (entry.box.len == keyLen &&
+            !memcmp(entry.box.data.bytes.cstart, key, keyLen)) {
+            /* Deleting during iteration is fine: multilistDelEntry()
+             * repositions the iterator for the current direction. */
             multilistDelEntry(&iter, &entry);
-
-            /* Add to front */
-            multilistPushByTypeHead(&cache->list, s[0], &keyBox);
-
             found = true;
+
+            /* But we are about to PUSH, which may split a node or
+             * upgrade the variant, so stop iterating first. */
             break;
         }
     }
 
-    if (!found) {
-        /* Not in cache - add to front */
-        databox keyBox = databoxNewBytesString(key);
-        multilistPushByTypeHead(&cache->list, s[0], &keyBox);
+    multilistIteratorRelease(&iter);
 
-        /* Evict if over capacity */
-        if (multilistCount(cache->list) > cache->maxSize) {
-            databox evicted;
-            if (multilistPopTail(&cache->list, s[0], &evicted)) {
-                printf("Evicting LRU item: %s\n", evicted.data.bytes.cstart);
-                databoxFreeData(&evicted);
-            }
+    databox keyBox = databoxNewBytesString(key);
+    multilistPushByTypeHead(&r->ml, r->s[0], &keyBox);
+
+    if (!found && multilistCount(r->ml) > r->maxEntries) {
+        databox evicted;
+        if (multilistPopTail(&r->ml, r->s[0], &evicted)) {
+            printf("Evicting: %.*s\n", (int)evicted.len,
+                   databoxCBytes(&evicted));
+            databoxFreeData(&evicted);
         }
     }
-
-    multilistIteratorRelease(&iter);
-    mflexStateFree(s[0]);
-    mflexStateFree(s[1]);
-}
-
-void lruCacheExample(void) {
-    lruCache *cache = lruCacheCreate(5);
-
-    /* Access pattern */
-    lruCacheAccess(cache, "page1");
-    lruCacheAccess(cache, "page2");
-    lruCacheAccess(cache, "page3");
-    lruCacheAccess(cache, "page4");
-    lruCacheAccess(cache, "page5");
-    lruCacheAccess(cache, "page6");  /* Evicts page1 */
-    lruCacheAccess(cache, "page2");  /* Moves page2 to front */
-    lruCacheAccess(cache, "page7");  /* Evicts page3 */
-
-    multilistFree(cache->list);
-    free(cache);
 }
 ```
 
-### Example 5: Circular Buffer
+Two multilist-specific details:
+
+- The push happens **after** `multilistIteratorRelease()`. Pushing while the
+  iterator is live is undefined: the push can reallocate the flex the iterator's
+  `fe` points into, or replace the whole variant.
+- The comparison uses `entry.box.len` + `memcmp`, not `strcmp`. Entry bytes are
+  not NUL-terminated.
+
+This is a linear scan per touch, so it is a teaching example, not a real cache.
+For an actual LRU use [multilru](../multi/MULTILRU.md).
+
+### Example 5: Bounded Buffer with Count-Based Eviction
+
+The generic bounded-buffer recipe is in
+[docs/examples/PATTERNS.md](../../examples/PATTERNS.md); what is worth saying
+here is the multilist-specific caveat.
 
 ```c
-#include "multilist.h"
-
-/* Circular buffer for streaming data */
-typedef struct circularBuffer {
-    multilist *list;
-    size_t maxSize;
-    size_t writePos;
-} circularBuffer;
-
-circularBuffer *circularBufferCreate(size_t maxSize) {
-    circularBuffer *cb = malloc(sizeof(circularBuffer));
-    cb->list = multilistNew(FLEX_CAP_LEVEL_4096, 0);
-    cb->maxSize = maxSize;
-    cb->writePos = 0;
-    return cb;
-}
-
-void circularBufferWrite(circularBuffer *cb, const void *data, size_t len) {
-    mflexState *state = mflexStateCreate();
+void boundedAppend(multilist **ml, mflexState *state, const void *data,
+                   size_t len, size_t maxEntries) {
     databox item = databoxNewBytes(data, len);
+    multilistPushByTypeTail(ml, state, &item);
 
-    /* Add new item */
-    multilistPushByTypeTail(&cb->list, state, &item);
-
-    /* Remove oldest if over capacity */
-    if (multilistCount(cb->list) > cb->maxSize) {
+    while (multilistCount(*ml) > maxEntries) {
         databox old;
-        multilistPopHead(&cb->list, state, &old);
+        if (!multilistPopHead(ml, state, &old)) {
+            break;
+        }
+
         databoxFreeData(&old);
     }
-
-    cb->writePos++;
-    mflexStateFree(state);
-}
-
-void circularBufferRead(circularBuffer *cb, void (*callback)(const databox *)) {
-    mflexState *s[2] = {mflexStateCreate(), mflexStateCreate()};
-
-    multilistIterator iter;
-    multilistIteratorInitForwardReadOnly(cb->list, s, &iter);
-    multilistEntry entry;
-
-    while (multilistNext(&iter, &entry)) {
-        callback(&entry.box);
-    }
-
-    multilistIteratorRelease(&iter);
-    mflexStateFree(s[0]);
-    mflexStateFree(s[1]);
-}
-
-void printData(const databox *box) {
-    printf("Data: %.*s\n", (int)box->len, box->data.bytes.cstart);
-}
-
-void circularBufferExample(void) {
-    circularBuffer *cb = circularBufferCreate(5);
-
-    /* Write sensor readings */
-    for (int i = 0; i < 10; i++) {
-        char reading[64];
-        snprintf(reading, sizeof(reading), "Sensor reading %d: %.2f°C",
-                 i, 20.0 + (i * 0.5));
-        circularBufferWrite(cb, reading, strlen(reading));
-    }
-
-    printf("Buffer contains last 5 readings:\n");
-    circularBufferRead(cb, printData);
-
-    multilistFree(cb->list);
-    free(cb);
 }
 ```
 
-### Example 6: Playlist Manager
+**Caveat:** a cap expressed in _elements_ does not cap memory, because node
+count and node occupancy follow byte size, not element count. If what you
+actually need to bound is memory, test `multilistBytes()` instead - but remember
+that `multilistBytes()` reports uncompressed logical bytes, so with a
+compression depth set it will not track real footprint either.
+
+Also note the eviction loop uses `while`, not `if`: a single push can only add
+one element, but reusing this helper after a bulk load needs to drain more than
+one.
+
+### Example 6: Round-Robin with `multilistRotate()`
+
+`multilistRotate()` moves the **tail** element to the **head**. That direction
+is the whole content of this example - reading index 0 and then rotating gives
+you the same element forever.
 
 ```c
-#include "multilist.h"
+typedef struct rotation {
+    multilist *ml;
+    mflexState *s[2];
+} rotation;
 
-/* Music playlist with rotation */
-typedef struct playlist {
-    multilist *songs;
-    char *name;
-} playlist;
-
-playlist *playlistCreate(const char *name) {
-    playlist *pl = malloc(sizeof(playlist));
-    pl->songs = multilistNew(FLEX_CAP_LEVEL_2048, 0);
-    pl->name = strdup(name);
-    return pl;
-}
-
-void playlistAdd(playlist *pl, const char *songName) {
-    mflexState *state = mflexStateCreate();
-    databox song = databoxNewBytesString(songName);
-    multilistPushByTypeTail(&pl->songs, state, &song);
-    mflexStateFree(state);
-}
-
-void playlistPlayNext(playlist *pl) {
-    mflexState *s[2] = {mflexStateCreate(), mflexStateCreate()};
+void rotationStep(rotation *r) {
     multilistEntry entry;
 
-    /* Get current song (at head) */
-    if (multilistIndexGet(pl->songs, s[0], 0, &entry)) {
-        printf("Now playing: %s\n", entry.box.data.bytes.cstart);
-
-        /* Rotate to put current song at end (for repeat mode) */
-        multilistRotate(pl->songs, s);
-    } else {
-        printf("Playlist is empty\n");
+    /* Read the TAIL, because that is what rotate is about to move. */
+    if (!multilistIndexGet(r->ml, r->s[0], -1, &entry)) {
+        printf("Nothing to rotate\n");
+        return;
     }
 
-    mflexStateFree(s[0]);
-    mflexStateFree(s[1]);
+    printf("Now current: %.*s\n", (int)entry.box.len,
+           entry.box.data.bytes.cstart);
+
+    /* Tail becomes the new head; the previous tail-1 becomes the tail. */
+    multilistRotate(r->ml, r->s);
 }
 
-void playlistExample(void) {
-    playlist *pl = playlistCreate("My Favorites");
+void rotationExample(void) {
+    rotation r = {.ml = multilistNew(FLEX_CAP_LEVEL_2048, 0),
+                  .s = {mflexStateCreate(), mflexStateCreate()}};
 
-    /* Build playlist */
-    playlistAdd(pl, "Song A");
-    playlistAdd(pl, "Song B");
-    playlistAdd(pl, "Song C");
-    playlistAdd(pl, "Song D");
-
-    /* Play through playlist (with rotation) */
-    for (int i = 0; i < 8; i++) {
-        printf("Track %d: ", i + 1);
-        playlistPlayNext(pl);
+    const char *tracks[] = {"Track A", "Track B", "Track C", "Track D"};
+    for (size_t i = 0; i < sizeof(tracks) / sizeof(*tracks); i++) {
+        databox box = databoxNewBytesString(tracks[i]);
+        multilistPushByTypeTail(&r.ml, r.s[0], &box);
     }
 
-    multilistFree(pl->songs);
-    free(pl->name);
-    free(pl);
+    /* Visits D, C, B, A, D, C, B, A */
+    for (uint32_t step = 0; step < 8; step++) {
+        rotationStep(&r);
+    }
+
+    multilistFree(r.ml);
+    mflexStateFree(r.s[0]);
+    mflexStateFree(r.s[1]);
 }
 ```
+
+`multilistRotate()` takes `multilist *`, not `multilist **`: rotation cannot
+change the element count, so it can never trigger a variant upgrade. Rotating a
+list of 0 or 1 elements is a no-op.
 
 ## Advanced Examples
 
-### Example 7: Compressed Log Buffer
+### Example 7: Append-Only Log with Interior Compression
+
+The compression depth only becomes meaningful once a list is Full and has more
+than `depth * 2` nodes, which makes an append-heavy log the natural fit: the
+recent end stays hot and uncompressed, and the cold interior compresses.
 
 ```c
-#include "multilist.h"
-
-/* High-performance log buffer with compression */
 typedef struct logBuffer {
-    multilist *logs;
+    multilist *ml;
+    mflexState *s[2];
     size_t totalLogs;
 } logBuffer;
 
-logBuffer *logBufferCreate(void) {
-    logBuffer *lb = malloc(sizeof(logBuffer));
-    /* Use Full variant with compression from the start */
-    lb->logs = multilistNew(FLEX_CAP_LEVEL_8192, 5);
-    /* compress=5 means first/last 5 nodes uncompressed */
+void logBufferInit(logBuffer *lb) {
+    /* 8 KB nodes; once Full, keep 5 nodes hot at each end. */
+    lb->ml = multilistNew(FLEX_CAP_LEVEL_8192, 5);
+    lb->s[0] = mflexStateCreate();
+    lb->s[1] = mflexStateCreate();
     lb->totalLogs = 0;
-    return lb;
 }
 
 void logBufferAppend(logBuffer *lb, const char *level, const char *message) {
-    mflexState *state = mflexStateCreate();
+    char line[1024];
+    const int len = snprintf(line, sizeof(line), "[%s] %s", level, message);
+    if (len < 0) {
+        return;
+    }
 
-    char logEntry[1024];
-    time_t now = time(NULL);
-    struct tm *t = localtime(&now);
-
-    snprintf(logEntry, sizeof(logEntry), "[%04d-%02d-%02d %02d:%02d:%02d] [%s] %s",
-             t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
-             t->tm_hour, t->tm_min, t->tm_sec,
-             level, message);
-
-    databox entry = databoxNewBytesString(logEntry);
-    multilistPushByTypeTail(&lb->logs, state, &entry);
-
+    databox entry = databoxNewBytes(line, (size_t)len);
+    multilistPushByTypeTail(&lb->ml, lb->s[0], &entry);
     lb->totalLogs++;
-    mflexStateFree(state);
 }
 
-void logBufferDump(logBuffer *lb, const char *filename) {
-    FILE *f = fopen(filename, "w");
-    if (!f) return;
+void logBufferDump(logBuffer *lb, FILE *out) {
+    multilistIterator iter = {0};
 
-    mflexState *s[2] = {mflexStateCreate(), mflexStateCreate()};
+    /* Read-only iteration: nodes decompressed into the state buffers
+     * are not marked dirty, so nothing needs recompressing afterwards. */
+    multilistIteratorInitForwardReadOnly(lb->ml, lb->s, &iter);
 
-    multilistIterator iter;
-    multilistIteratorInitForwardReadOnly(lb->logs, s, &iter);
     multilistEntry entry;
-
     while (multilistNext(&iter, &entry)) {
-        fprintf(f, "%s\n", entry.box.data.bytes.cstart);
+        fprintf(out, "%.*s\n", (int)entry.box.len,
+                entry.box.data.bytes.cstart);
     }
 
     multilistIteratorRelease(&iter);
-    mflexStateFree(s[0]);
-    mflexStateFree(s[1]);
-    fclose(f);
-
-    printf("Dumped %zu logs to %s\n", lb->totalLogs, filename);
 }
 
-void logBufferExample(void) {
-    logBuffer *lb = logBufferCreate();
-
-    /* Simulate application logging */
-    logBufferAppend(lb, "INFO", "Application started");
-    logBufferAppend(lb, "DEBUG", "Loading configuration");
-    logBufferAppend(lb, "INFO", "Configuration loaded successfully");
-
-    for (int i = 0; i < 10000; i++) {
-        char msg[128];
-        snprintf(msg, sizeof(msg), "Processing request #%d", i);
-        logBufferAppend(lb, "DEBUG", msg);
-    }
-
-    logBufferAppend(lb, "WARN", "High memory usage detected");
-    logBufferAppend(lb, "ERROR", "Connection timeout");
-    logBufferAppend(lb, "INFO", "Shutting down gracefully");
-
-    printf("Total logs: %zu\n", lb->totalLogs);
-    printf("Memory used: %zu bytes\n", multilistBytes(lb->logs));
-
-    logBufferDump(lb, "application.log");
-
-    multilistFree(lb->logs);
-    free(lb);
+void logBufferDestroy(logBuffer *lb) {
+    multilistFree(lb->ml);
+    mflexStateFree(lb->s[0]);
+    mflexStateFree(lb->s[1]);
 }
 ```
 
-### Example 8: Time Series Data
+Points specific to compressed multilists:
+
+- Use the **read-only** iterator for dumps. The read-write iterator exists so
+  `multilistDelEntry()` can work, and it forces the touched nodes back through
+  the compression path.
+- `multilistIteratorRelease()` matters here: for Full lists it is what releases
+  the iterator's hold on the decompression scratch buffers. For Small and
+  Medium it is a no-op, but writing it unconditionally is what makes the code
+  survive an upgrade.
+- Appending never decompresses an interior node, because the tail node is
+  always uncompressed.
+
+### Example 8: Typed Time-Series Entries
+
+Instead of `snprintf`-ing a record into a string, push each field as its own
+typed `databox`. flex encodes integers and floats in their compact numeric
+forms, so this is both smaller and faster than string packing - and it removes
+the `sscanf` round-trip entirely.
 
 ```c
-#include "multilist.h"
-
-/* Time series data storage */
-typedef struct dataPoint {
-    int64_t timestamp;
-    double value;
-} dataPoint;
-
 typedef struct timeSeries {
-    multilist *data;
-    char *metric;
+    multilist *ml;
+    mflexState *s[2];
 } timeSeries;
 
-timeSeries *timeSeriesCreate(const char *metric) {
-    timeSeries *ts = malloc(sizeof(timeSeries));
-    ts->data = multilistNew(FLEX_CAP_LEVEL_4096, 2);
-    ts->metric = strdup(metric);
-    return ts;
+/* Each sample occupies two consecutive elements: timestamp, then value. */
+void timeSeriesAdd(timeSeries *ts, int64_t timestamp, double value) {
+    databox stampBox = databoxNewSigned(timestamp);
+    multilistPushByTypeTail(&ts->ml, ts->s[0], &stampBox);
+
+    databox valueBox = databoxNewReal(value);
+    multilistPushByTypeTail(&ts->ml, ts->s[0], &valueBox);
 }
 
-void timeSeriesAdd(timeSeries *ts, int64_t timestamp, double value) {
-    mflexState *state = mflexStateCreate();
+static double sampleValue(const databox *box) {
+    /* databoxNewReal() narrows to DATABOX_FLOAT_32 when the double
+     * round-trips exactly, so handle both float widths. */
+    if (box->type == DATABOX_FLOAT_32) {
+        return (double)box->data.f32;
+    }
 
-    /* Pack timestamp and value into a single string for simplicity */
-    char buf[128];
-    snprintf(buf, sizeof(buf), "%ld:%.6f", timestamp, value);
-
-    databox point = databoxNewBytesString(buf);
-    multilistPushByTypeTail(&ts->data, state, &point);
-
-    mflexStateFree(state);
+    return box->data.d64;
 }
 
 void timeSeriesQuery(timeSeries *ts, int64_t startTime, int64_t endTime) {
-    mflexState *s[2] = {mflexStateCreate(), mflexStateCreate()};
+    multilistIterator iter = {0};
+    multilistIteratorInitForwardReadOnly(ts->ml, ts->s, &iter);
 
-    multilistIterator iter;
-    multilistIteratorInitForwardReadOnly(ts->data, s, &iter);
     multilistEntry entry;
-
-    printf("Query results for %s from %ld to %ld:\n",
-           ts->metric, startTime, endTime);
-
     while (multilistNext(&iter, &entry)) {
-        int64_t ts;
-        double val;
+        const int64_t stamp = entry.box.data.i64;
 
-        /* Parse the stored data */
-        sscanf(entry.box.data.bytes.cstart, "%ld:%lf", &ts, &val);
+        if (!multilistNext(&iter, &entry)) {
+            break; /* trailing timestamp with no value */
+        }
 
-        if (ts >= startTime && ts <= endTime) {
-            printf("  %ld: %.6f\n", ts, val);
+        const double value = sampleValue(&entry.box);
+
+        if (stamp >= startTime && stamp <= endTime) {
+            printf("  %" PRId64 ": %.6f\n", stamp, value);
         }
     }
 
     multilistIteratorRelease(&iter);
-    mflexStateFree(s[0]);
-    mflexStateFree(s[1]);
 }
 
 double timeSeriesAverage(timeSeries *ts) {
-    mflexState *s[2] = {mflexStateCreate(), mflexStateCreate()};
-
-    multilistIterator iter;
-    multilistIteratorInitForwardReadOnly(ts->data, s, &iter);
-    multilistEntry entry;
+    multilistIterator iter = {0};
+    multilistIteratorInitForwardReadOnly(ts->ml, ts->s, &iter);
 
     double sum = 0.0;
     size_t count = 0;
 
+    multilistEntry entry;
     while (multilistNext(&iter, &entry)) {
-        int64_t ts;
-        double val;
-        sscanf(entry.box.data.bytes.cstart, "%ld:%lf", &ts, &val);
-        sum += val;
+        if (!multilistNext(&iter, &entry)) {
+            break;
+        }
+
+        sum += sampleValue(&entry.box);
         count++;
     }
 
     multilistIteratorRelease(&iter);
-    mflexStateFree(s[0]);
-    mflexStateFree(s[1]);
 
-    return count > 0 ? sum / count : 0.0;
-}
-
-void timeSeriesExample(void) {
-    timeSeries *cpu = timeSeriesCreate("cpu.usage");
-
-    /* Simulate CPU usage over 1 hour (1 sample per second) */
-    int64_t baseTime = 1700000000;
-    for (int i = 0; i < 3600; i++) {
-        double usage = 30.0 + (rand() % 40);  /* 30-70% */
-        timeSeriesAdd(cpu, baseTime + i, usage);
-    }
-
-    printf("Total samples: %zu\n", multilistCount(cpu->data));
-    printf("Average CPU: %.2f%%\n", timeSeriesAverage(cpu));
-
-    /* Query a 5-minute window */
-    timeSeriesQuery(cpu, baseTime + 1000, baseTime + 1300);
-
-    multilistFree(cpu->data);
-    free(cpu->metric);
-    free(cpu);
+    return count > 0 ? sum / (double)count : 0.0;
 }
 ```
 
-### Example 9: Message Queue with Priorities
+Because a pair is two elements, `multilistCount()` is twice the sample count and
+`multilistIndexGet(ml, s[0], 2 * n, &entry)` addresses sample `n`'s timestamp.
+
+Watch the type discipline: a timestamp pushed with `databoxNewSigned()` comes
+back as `DATABOX_SIGNED_64`, but a _string_ of digits pushed with
+`databoxNewBytesString()` also comes back as an integer box, because flex stores
+it in its integer encoding. If you need "these bytes stay bytes", do not feed
+the container a bare numeric string.
+
+### Example 9: Several Lists Sharing One State
+
+Three priority lanes, one `mflexState`. Creating a state per call - the obvious
+first draft - allocates and frees two buffers on every enqueue.
 
 ```c
-#include "multilist.h"
-
-/* Priority message queue using multiple lists */
-typedef struct priorityQueue {
-    multilist *high;
-    multilist *medium;
-    multilist *low;
-} priorityQueue;
-
-priorityQueue *priorityQueueCreate(void) {
-    priorityQueue *pq = malloc(sizeof(priorityQueue));
-    pq->high = multilistNew(FLEX_CAP_LEVEL_2048, 0);
-    pq->medium = multilistNew(FLEX_CAP_LEVEL_2048, 0);
-    pq->low = multilistNew(FLEX_CAP_LEVEL_2048, 0);
-    return pq;
-}
-
 typedef enum priority {
-    PRIORITY_LOW,
-    PRIORITY_MEDIUM,
-    PRIORITY_HIGH
+    PRIORITY_LOW = 0,
+    PRIORITY_MEDIUM = 1,
+    PRIORITY_HIGH = 2,
+    PRIORITY_COUNT = 3
 } priority;
 
+typedef struct priorityQueue {
+    multilist *lane[PRIORITY_COUNT];
+    mflexState *state;
+} priorityQueue;
+
+void priorityQueueInit(priorityQueue *pq) {
+    for (size_t i = 0; i < PRIORITY_COUNT; i++) {
+        pq->lane[i] = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+    }
+
+    pq->state = mflexStateCreate();
+}
+
 void priorityQueueEnqueue(priorityQueue *pq, priority p, const char *message) {
-    mflexState *state = mflexStateCreate();
     databox msg = databoxNewBytesString(message);
-
-    switch (p) {
-    case PRIORITY_HIGH:
-        multilistPushByTypeTail(&pq->high, state, &msg);
-        break;
-    case PRIORITY_MEDIUM:
-        multilistPushByTypeTail(&pq->medium, state, &msg);
-        break;
-    case PRIORITY_LOW:
-        multilistPushByTypeTail(&pq->low, state, &msg);
-        break;
-    }
-
-    mflexStateFree(state);
+    multilistPushByTypeTail(&pq->lane[p], pq->state, &msg);
 }
 
+/* On success the caller owns 'result' and must databoxFreeData() it. */
 bool priorityQueueDequeue(priorityQueue *pq, databox *result) {
-    mflexState *state = mflexStateCreate();
-    bool found = false;
-
-    /* Try high priority first */
-    if (multilistPopHead(&pq->high, state, result)) {
-        found = true;
-    }
-    /* Then medium */
-    else if (multilistPopHead(&pq->medium, state, result)) {
-        found = true;
-    }
-    /* Finally low */
-    else if (multilistPopHead(&pq->low, state, result)) {
-        found = true;
+    for (int32_t p = PRIORITY_HIGH; p >= PRIORITY_LOW; p--) {
+        if (multilistPopHead(&pq->lane[p], pq->state, result)) {
+            return true;
+        }
     }
 
-    mflexStateFree(state);
-    return found;
+    return false;
 }
 
-void priorityQueueExample(void) {
-    priorityQueue *pq = priorityQueueCreate();
-
-    /* Enqueue messages with different priorities */
-    priorityQueueEnqueue(pq, PRIORITY_LOW, "Cleanup old logs");
-    priorityQueueEnqueue(pq, PRIORITY_HIGH, "Critical: Database down!");
-    priorityQueueEnqueue(pq, PRIORITY_MEDIUM, "Update user preferences");
-    priorityQueueEnqueue(pq, PRIORITY_LOW, "Send weekly report");
-    priorityQueueEnqueue(pq, PRIORITY_HIGH, "Alert: Security breach");
-    priorityQueueEnqueue(pq, PRIORITY_MEDIUM, "Process new signups");
-
-    /* Dequeue and process (high priority first) */
-    databox msg;
-    while (priorityQueueDequeue(pq, &msg)) {
-        printf("Processing: %s\n", msg.data.bytes.cstart);
-        databoxFreeData(&msg);
+void priorityQueueDestroy(priorityQueue *pq) {
+    for (size_t i = 0; i < PRIORITY_COUNT; i++) {
+        multilistFree(pq->lane[i]);
     }
 
-    multilistFree(pq->high);
-    multilistFree(pq->medium);
-    multilistFree(pq->low);
-    free(pq);
+    mflexStateFree(pq->state);
 }
 ```
 
-### Example 10: Browser History
+Sharing one state across lists is safe because the state is scratch space used
+only for the duration of a single call. Sharing it across _threads_ is not.
+
+### Example 10: Cursor Navigation and Borrowed Entry Lifetime
+
+A back/forward cursor over a list. The trap this example exists to show:
+`multilistIndexGet()` hands you a pointer into list memory, so returning
+`entry.box.data.bytes.cstart` to a caller who then mutates the list is a
+dangling read.
 
 ```c
-#include "multilist.h"
+typedef struct history {
+    multilist *ml;
+    mflexState *s[2];
+    size_t cursor; /* index of the current entry */
+} history;
 
-/* Browser history with back/forward navigation */
-typedef struct browserHistory {
-    multilist *history;
-    int currentPosition;
-} browserHistory;
-
-browserHistory *browserHistoryCreate(const char *homepage) {
-    browserHistory *bh = malloc(sizeof(browserHistory));
-    bh->history = multilistNew(FLEX_CAP_LEVEL_2048, 0);
-    bh->currentPosition = 0;
-
-    mflexState *state = mflexStateCreate();
-    databox page = databoxNewBytesString(homepage);
-    multilistPushByTypeTail(&bh->history, state, &page);
-    mflexStateFree(state);
-
-    return bh;
-}
-
-void browserHistoryVisit(browserHistory *bh, const char *url) {
-    mflexState *s[2] = {mflexStateCreate(), mflexStateCreate()};
-
-    /* Delete all pages after current position (can't go forward anymore) */
-    size_t total = multilistCount(bh->history);
-    if (bh->currentPosition < total - 1) {
-        size_t toDelete = total - bh->currentPosition - 1;
-        multilistDelRange(&bh->history, s[0], bh->currentPosition + 1, toDelete);
+void historyVisit(history *h, const char *url) {
+    /* Drop everything after the cursor - the forward branch is dead. */
+    const size_t total = multilistCount(h->ml);
+    if (total > h->cursor + 1) {
+        const int64_t toDelete = (int64_t)(total - h->cursor - 1);
+        multilistDelRange(&h->ml, h->s[0], (mlOffsetId)(h->cursor + 1),
+                          toDelete);
     }
 
-    /* Add new page */
     databox page = databoxNewBytesString(url);
-    multilistPushByTypeTail(&bh->history, s[0], &page);
+    multilistPushByTypeTail(&h->ml, h->s[0], &page);
 
-    bh->currentPosition++;
-
-    mflexStateFree(s[0]);
-    mflexStateFree(s[1]);
+    h->cursor = multilistCount(h->ml) - 1;
 }
 
-const char *browserHistoryBack(browserHistory *bh) {
-    if (bh->currentPosition > 0) {
-        bh->currentPosition--;
-
-        mflexState *state = mflexStateCreate();
-        multilistEntry entry;
-        if (multilistIndexGet(bh->history, state, bh->currentPosition, &entry)) {
-            mflexStateFree(state);
-            return entry.box.data.bytes.cstart;
-        }
-        mflexStateFree(state);
+/* Copies the current entry into 'out' (caller-provided buffer) because the
+ * entry box borrows list memory and dies on the next mutation. */
+bool historyCurrent(history *h, char *out, size_t outLen) {
+    multilistEntry entry;
+    if (!multilistIndexGet(h->ml, h->s[0], (mlOffsetId)h->cursor, &entry)) {
+        return false;
     }
 
-    return NULL;
+    const size_t copyLen =
+        entry.box.len < outLen - 1 ? entry.box.len : outLen - 1;
+    memcpy(out, entry.box.data.bytes.cstart, copyLen);
+    out[copyLen] = '\0';
+    return true;
 }
 
-const char *browserHistoryForward(browserHistory *bh) {
-    size_t total = multilistCount(bh->history);
-    if (bh->currentPosition < total - 1) {
-        bh->currentPosition++;
-
-        mflexState *state = mflexStateCreate();
-        multilistEntry entry;
-        if (multilistIndexGet(bh->history, state, bh->currentPosition, &entry)) {
-            mflexStateFree(state);
-            return entry.box.data.bytes.cstart;
-        }
-        mflexStateFree(state);
+bool historyBack(history *h) {
+    if (h->cursor == 0) {
+        return false;
     }
 
-    return NULL;
+    h->cursor--;
+    return true;
 }
 
-void browserHistoryExample(void) {
-    browserHistory *bh = browserHistoryCreate("https://example.com");
+bool historyForward(history *h) {
+    const size_t total = multilistCount(h->ml);
+    if (total == 0 || h->cursor + 1 >= total) {
+        return false;
+    }
 
-    printf("Visiting pages...\n");
-    browserHistoryVisit(bh, "https://news.example.com");
-    browserHistoryVisit(bh, "https://blog.example.com");
-    browserHistoryVisit(bh, "https://shop.example.com");
-
-    printf("\nGoing back...\n");
-    printf("Back to: %s\n", browserHistoryBack(bh));
-    printf("Back to: %s\n", browserHistoryBack(bh));
-
-    printf("\nGoing forward...\n");
-    printf("Forward to: %s\n", browserHistoryForward(bh));
-
-    printf("\nVisiting new page (clears forward history)...\n");
-    browserHistoryVisit(bh, "https://store.example.com");
-
-    printf("Can't go forward anymore: %s\n",
-           browserHistoryForward(bh) ? "FALSE" : "TRUE");
-
-    multilistFree(bh->history);
-    free(bh);
+    h->cursor++;
+    return true;
 }
 ```
+
+Two fixes worth copying:
+
+- `h->cursor + 1 >= total` instead of `cursor < total - 1`. With `size_t`,
+  `total - 1` on an empty list wraps to `SIZE_MAX` and the bound check passes.
+- `multilistDelRange()` takes a _count_, not an end index, and its `start`
+  accepts negative values counting from the tail.
 
 ## Performance Examples
 
-### Example 11: Benchmarking Different Variants
+### Example 11: Measuring the Effect of the Size Limit
+
+All of these end up as Full lists; what differs is node size, and therefore how
+often a node splits and how large each memmove is.
 
 ```c
-#include "multilist.h"
 #include <time.h>
 
 double measurePushPerformance(flexCapSizeLimit limit, size_t operations) {
     multilist *ml = multilistNew(limit, 0);
     mflexState *state = mflexStateCreate();
 
-    clock_t start = clock();
+    const clock_t start = clock();
 
     for (size_t i = 0; i < operations; i++) {
-        databox item = databoxNewSigned(i);
+        databox item = databoxNewSigned((int64_t)i);
         multilistPushByTypeTail(&ml, state, &item);
     }
 
-    clock_t end = clock();
-    double elapsed = ((double)(end - start)) / CLOCKS_PER_SEC;
+    const clock_t end = clock();
+    const double elapsed = ((double)(end - start)) / CLOCKS_PER_SEC;
 
-    printf("Limit %d: %zu ops in %.3f sec (%.0f ops/sec)\n",
-           limit, operations, elapsed, operations / elapsed);
-    printf("  Final size: %zu elements, %zu bytes\n",
-           multilistCount(ml), multilistBytes(ml));
+    printf("Limit level %d: %zu ops in %.3f sec (%.0f ops/sec)\n", (int)limit,
+           operations, elapsed, (double)operations / elapsed);
+    printf("  Final: %zu elements, %zu logical bytes\n", multilistCount(ml),
+           multilistBytes(ml));
 
     mflexStateFree(state);
     multilistFree(ml);
@@ -785,122 +689,86 @@ double measurePushPerformance(flexCapSizeLimit limit, size_t operations) {
 }
 
 void benchmarkExample(void) {
-    printf("=== Multilist Push Performance ===\n\n");
+    const size_t operations = 1000000;
 
-    size_t operations = 1000000;
-
-    printf("Small nodes:\n");
     measurePushPerformance(FLEX_CAP_LEVEL_512, operations);
-
-    printf("\nMedium nodes:\n");
     measurePushPerformance(FLEX_CAP_LEVEL_2048, operations);
-
-    printf("\nLarge nodes:\n");
     measurePushPerformance(FLEX_CAP_LEVEL_8192, operations);
 }
 ```
 
-### Example 12: Compression Effectiveness
+Build with the cmake `perf` preset before believing any of these numbers -
+sanitizer builds add 3-10x overhead and change the ranking.
+
+### Example 12: What Compression Does and Does Not Show Up In
+
+A common mistake is to compare `multilistBytes()` between a compressed and an
+uncompressed list and conclude compression is broken. It is not: for the Full
+variant `multilistBytes()` sums `mflexBytesUncompressed()` over the nodes, so it
+deliberately reports **logical** size and is identical either way.
 
 ```c
-#include "multilist.h"
-
 void compressionExample(void) {
-    printf("=== Compression Effectiveness ===\n\n");
+    multilist *plain = multilistNew(FLEX_CAP_LEVEL_4096, 0);
+    multilist *packed = multilistNew(FLEX_CAP_LEVEL_4096, 2);
 
-    /* Without compression */
-    multilist *uncompressed = multilistNew(FLEX_CAP_LEVEL_4096, 0);
     mflexState *s1 = mflexStateCreate();
-
-    /* With compression */
-    multilist *compressed = multilistNew(FLEX_CAP_LEVEL_4096, 2);
     mflexState *s2 = mflexStateCreate();
 
-    /* Add repetitive text data (compresses well) */
-    for (int i = 0; i < 100000; i++) {
+    for (uint32_t i = 0; i < 100000; i++) {
         char buf[200];
-        snprintf(buf, sizeof(buf),
-                 "This is a log message with repeated text. "
-                 "Entry number %d. Status: OK. "
-                 "Server: web-server-01. Time: 2024-01-01 12:00:%02d",
-                 i, i % 60);
+        const int len =
+            snprintf(buf, sizeof(buf),
+                     "This is a log message with repeated text. "
+                     "Entry number %" PRIu32 ". Status: OK. Server: web-01",
+                     i);
+        if (len < 0) {
+            continue;
+        }
 
-        databox item1 = databoxNewBytesString(buf);
-        databox item2 = databoxNewBytesString(buf);
-
-        multilistPushByTypeTail(&uncompressed, s1, &item1);
-        multilistPushByTypeTail(&compressed, s2, &item2);
+        databox item = databoxNewBytes(buf, (size_t)len);
+        multilistPushByTypeTail(&plain, s1, &item);
+        multilistPushByTypeTail(&packed, s2, &item);
     }
 
-    size_t uncompressedSize = multilistBytes(uncompressed);
-    size_t compressedSize = multilistBytes(compressed);
-    double savings = 100.0 * (1.0 - ((double)compressedSize / uncompressedSize));
-
-    printf("Uncompressed: %zu bytes\n", uncompressedSize);
-    printf("Compressed:   %zu bytes\n", compressedSize);
-    printf("Savings:      %.1f%%\n", savings);
+    /* These two print the SAME number. That is correct behavior. */
+    printf("plain  logical bytes: %zu\n", multilistBytes(plain));
+    printf("packed logical bytes: %zu\n", multilistBytes(packed));
 
     mflexStateFree(s1);
     mflexStateFree(s2);
-    multilistFree(uncompressed);
-    multilistFree(compressed);
+    multilistFree(plain);
+    multilistFree(packed);
 }
 ```
 
-## Common Patterns Summary
+To observe the actual saving you have to look outside the multilist API - at
+process RSS, or at allocator statistics around the two lists - because no public
+function exposes the compressed footprint of a multilist. The per-node
+primitives `mflexBytesCompressed()` and `mflexBytesActual()` exist in
+[mflex](../flex/MFLEX.md), but multilist does not aggregate them for you.
 
-| Pattern         | Operations                          | Use Case                          |
-| --------------- | ----------------------------------- | --------------------------------- |
-| Queue (FIFO)    | PushTail + PopHead                  | Task processing, message queues   |
-| Stack (LIFO)    | PushHead + PopHead                  | Undo/redo, call stack simulation  |
-| Deque           | Push/Pop both ends                  | Work stealing, sliding windows    |
-| Circular Buffer | PushTail + PopHead with size limit  | Streaming data, recent history    |
-| LRU Cache       | Search + move to front + evict tail | Cache management                  |
-| Priority Queue  | Multiple lists                      | Task scheduling by importance     |
-| History         | Insert at position + delete range   | Browser history, document editing |
+## Pattern Index
 
-## Best Practices from Examples
-
-1. **Always create and free mflexState:**
-
-   ```c
-   mflexState *state = mflexStateCreate();
-   /* ... use state ... */
-   mflexStateFree(state);
-   ```
-
-2. **Use appropriate size limits:**
-   - Small data: `FLEX_CAP_LEVEL_512` or `FLEX_CAP_LEVEL_1024`
-   - Medium data: `FLEX_CAP_LEVEL_2048` (default)
-   - Large data: `FLEX_CAP_LEVEL_4096` or `FLEX_CAP_LEVEL_8192`
-
-3. **Free popped data:**
-
-   ```c
-   databox result;
-   if (multilistPopHead(&ml, state, &result)) {
-       /* Use result... */
-       databoxFreeData(&result);  /* Important! */
-   }
-   ```
-
-4. **Release iterators:**
-
-   ```c
-   multilistIterator iter;
-   multilistIteratorInitForward(ml, s, &iter);
-   /* ... iterate ... */
-   multilistIteratorRelease(&iter);  /* Important for Full variant! */
-   ```
-
-5. **Choose compression wisely:**
-   - No compression (`depth=0`): Maximum speed
-   - Light compression (`depth=1-2`): Good balance
-   - Heavy compression (`depth=5+`): Maximum space savings
+| Pattern               | Operations                          | Example |
+| --------------------- | ----------------------------------- | ------- |
+| Queue (FIFO)          | PushTail + PopHead                  | 1       |
+| Stack / undo-redo     | PushHead + PopHead across two lists | 2       |
+| Deque                 | Push/Pop at both ends               | 3       |
+| Search-and-promote    | Iterate + DelEntry + PushHead       | 4       |
+| Bounded buffer        | PushTail + PopHead under a cap      | 5       |
+| Round-robin           | IndexGet(-1) + Rotate               | 6       |
+| Compressed append log | PushTail + read-only iteration      | 7       |
+| Typed records         | Paired typed databox elements       | 8       |
+| Multi-lane priority   | Several lists, one shared state     | 9       |
+| Cursor navigation     | IndexGet + DelRange + PushTail      | 10      |
 
 ## See Also
 
 - [MULTILIST.md](MULTILIST.md) - Complete API reference
-- [VARIANTS.md](VARIANTS.md) - Understanding Small/Medium/Full variants
-- [databox](../core/DATABOX.md) - Value container documentation
+- [VARIANTS.md](VARIANTS.md) - Small/Medium/Full internals and upgrade rules
+- [databox](../core/DATABOX.md) - Value container and ownership rules
 - [flex](../flex/FLEX.md) - Underlying storage format
+- [mflex](../flex/MFLEX.md) - Managed flex and compression primitives
+- [Generic patterns](../../examples/PATTERNS.md) - Cross-module recipes
+- [Benchmarks](../../examples/BENCHMARKS.md) - Cross-module benchmark harnesses

@@ -121,6 +121,9 @@ void flexBulkPushBytesMembers(flex **ff, const flexBytesMember *members,
                               size_t count);
 
 /* Insert to head or tail of flex */
+/* Bytes content that parses as a numeral is ALWAYS canonicalised to its
+ * minimum best representation — that is the platform contract.  Readers
+ * interpret the stored encoding; writers never force a wider one. */
 void flexPushBytes(flex **ff, const void *data, size_t len, flexEndpoint where);
 void flexPushSigned(flex **ff, int64_t i, flexEndpoint where);
 void flexPushUnsigned(flex **ff, uint64_t u, flexEndpoint where);
@@ -201,7 +204,8 @@ void flexInsertBytes(flex **ff, flexEntry *fe, const void *data,
                      const size_t len);
 void flexInsertSigned(flex **ff, flexEntry *fe, int64_t i);
 void flexInsertUnsigned(flex **ff, flexEntry *fe, uint64_t u);
-void flexInsertHalfFloat(flex **ff, flexEntry *fe, float f);
+void flexInsertFloat16(flex **ff, flexEntry *fe, float value);
+void flexInsertFloatB16(flex **ff, flexEntry *fe, float value);
 void flexInsertFloat(flex **ff, flexEntry *fe, float value);
 void flexInsertDouble(flex **ff, flexEntry *fe, double dvalue);
 void flexInsertByType(flex **ff, flexEntry *fe, const databox *box);
@@ -262,6 +266,16 @@ int flexCompareEntries(const flex *f, const databox *const *elements,
 /* Get pointer to entry */
 flexEntry *flexIndexDirect(const flex *f, int32_t index);
 flexEntry *flexIndex(const flex *f, int32_t index);
+/* Anchored index: walks from the nearest of head, a caller-held anchor
+ * entry at 'anchorElemIdx' (either direction), or tail.  Same index
+ * convention and NULL-out-of-range contract as flexIndex().
+ * flexIndexWithMiddle specializes the anchor to a MAINTAINED sorted-map
+ * middle (multimap tiers cache one). */
+flexEntry *flexIndexFromAnchor(const flex *f, int32_t index,
+                               const flexEntry *anchorFE,
+                               int32_t anchorElemIdx);
+flexEntry *flexIndexWithMiddle(const flex *f, uint_fast32_t elementsPerEntry,
+                               int32_t index, const flexEntry *middle);
 flexEntry *flexNext(const flex *f, flexEntry *fe);
 flexEntry *flexPrev(const flex *f, flexEntry *fe);
 

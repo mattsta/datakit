@@ -3,28 +3,18 @@
 #include "datakit.h"
 #include <assert.h>
 
-#if DK_OS_LINUX || DK_OS_APPLE || DK_OS_SOLARIS
-#if DK_OS_SOLARIS
-#define SETPROCTITLE_PAD ' '
-#else
+#if DK_OS_LINUX || DK_OS_APPLE
 #define SETPROCTITLE_PAD '\0'
-#endif
 
 /* Original comment from nginx */
 /*
- * To change the process title in Linux and Solaris we have to set argv[1]
+ * To change the process title in Linux we have to set argv[1]
  * to NULL and to copy the title to the same place where the argv[0] points to.
  * However, argv[0] may be too small to hold a new title.  Fortunately, Linux
- * and Solaris store argv[] and environ[] one after another.  So we should
+ * stores argv[] and environ[] one after another.  So we should
  * ensure that is the continuous memory and then we allocate the new memory
  * for environ[] and copy it.  After this we could use the memory starting
  * from argv[0] for our process title.
- *
- * The Solaris's standard /bin/ps does not show the changed process title.
- * You have to use "/usr/ucb/ps -w" instead.  Besides, the UCB ps does not
- * show a new title if its length less than the origin command line length.
- * To avoid it we append to a new title the origin command line in the
- * parenthesis.
  */
 
 extern char **environ;
@@ -79,31 +69,7 @@ void setproctitle(char *title) {
     strncpy(p, title, os_argv_last - p);
     p += strlen(p);
 
-#if DK_OS_SOLARIS
-    size_t size = 0;
-
-    for (int32_t i = 0; i < argc; i++) {
-        size += strlen(argv[i]) + 1;
-    }
-
-    if (size > (size_t)((char *)p - os_argv[0])) {
-        strncpy(p, (uint8_t *)" (", os_argv_last - (char *)p);
-        p += strlen(p);
-
-        for (i = 0; i < argc; i++) {
-            strncpy(p, (uint8_t *)argv[i], os_argv_last - (char *)p);
-            p += strlen(p);
-            strncpy(p, (uint8_t *)" ", os_argv_last - (char *)p);
-            p += strlen(p);
-        }
-
-        if (*(p - 1) == ' ') {
-            *(p - 1) = ')';
-        }
-    }
-#endif
-
-    /* Terminate as appropriate (null on darwin/linux, spaces on solaris) */
+    /* NUL-fill the remainder of the original argv region */
     if (os_argv_last - p) {
         memset(p, SETPROCTITLE_PAD, os_argv_last - p);
     }

@@ -8,7 +8,7 @@
  * Usage for Computing the GCM Mode" white paper (Gueron + Kounavis).
  *
  * Layout:
- *   - x86-only block guarded by `#if defined(__x86_64__) || defined(_M_X64)`
+ *   - x86-only block guarded by `#if defined(__x86_64__)`
  *   - Soft stubs on every other platform so the symbol set is stable
  *     and direct callers crash if (and only if) they ignore the probe.
  *
@@ -46,7 +46,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#if defined(__x86_64__) || defined(_M_X64)
+#if defined(__x86_64__)
 
 #include <emmintrin.h> /* SSE2 base */
 #include <tmmintrin.h> /* SSSE3: _mm_shuffle_epi8 */

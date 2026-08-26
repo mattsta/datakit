@@ -45,17 +45,17 @@ cd datakit
 
 2. **Create development build:**
 
-```bash
-mkdir build-debug
-cd build-debug
-cmake -DCMAKE_BUILD_TYPE=Debug ..
-make -j8
+```sh
+cmake --preset dev && cmake --build --preset dev
 ```
+
+Use `--preset debug` when you need `-O0` and full symbols, and
+`--preset perf` for any timing measurement.
 
 3. **Verify tests pass:**
 
-```bash
-make check
+```sh
+ctest --test-dir build-dev -j8 --output-on-failure
 ```
 
 ### Branch Strategy
@@ -74,21 +74,23 @@ git checkout -b fix/issue-description
 
 1. **Make changes** to source files
 2. **Rebuild** incrementally:
-   ```bash
-   cd build-debug
-   make -j8
+   ```sh
+   cmake --build --preset dev
    ```
-3. **Run tests** for affected modules:
-   ```bash
-   ./src/datakit-test test <module>
+3. **Run tests** for affected modules — by name, not the whole suite:
+   ```sh
+   ./build-dev/src/datakit-test test <module>
+   ctest --test-dir build-dev -j8 -R '^(<module>|<other>)$'
    ```
 4. **Check for warnings**:
-   ```bash
-   make 2>&1 | grep -i warning
+   ```sh
+   cmake --build --preset dev 2>&1 | grep -i warning
    ```
-5. **Run valgrind** on modified code:
-   ```bash
-   valgrind --leak-check=full ./src/datakit-test test <module>
+5. **Read the sanitizer output** — the `dev` preset runs ASAN and
+   UBSAN, so leaks and UB surface in the test run itself. Reach for
+   valgrind when you need its specific reports:
+   ```sh
+   valgrind --leak-check=full ./build-debug/src/datakit-test test <module>
    ```
 6. **Commit changes** when tests pass
 
@@ -97,7 +99,7 @@ git checkout -b fix/issue-description
 Before committing:
 
 - [ ] Code compiles without warnings
-- [ ] All tests pass (`make check`)
+- [ ] Tests for everything you changed pass, by name
 - [ ] New tests added for new functionality
 - [ ] Valgrind reports no memory leaks
 - [ ] Code follows style guidelines
@@ -206,41 +208,46 @@ int newModuleTest(int argc, char *argv[]) {
 #endif
 ```
 
-3. **Add to build system** (`src/CMakeLists.txt`):
+3. **Add the source to the build** (`src/CMakeLists.txt`) — only the
+   `.c` file; the test list is generated, not hand-written:
 
 ```cmake
 add_library(${PROJECT_NAME} OBJECT
     # ... existing files ...
     newmodule.c
 )
-
-set(datakitTests
-    # ... existing tests ...
-    newmodule
-)
 ```
 
-4. **Register test** (`src/datakit-test.c`):
+4. **Register the test** (`src/datakit-test.c`) — one include plus one
+   row in `testRegistry[]`. `test ALL` walks that table and
+   `src/CMakeLists.txt` parses it to emit CTest targets, so there is
+   nothing else to update:
 
 ```c
 #include "newmodule.h"
 
-// In main():
-} else if (!strcasecmp(argv[2], "newmodule")) {
-    return newModuleTest(argc - 2, argv + 2);
-}
-
-// In ALL test:
-result += newModuleTest(argc, argv);
+/* In testRegistry[]. T() passes argc/argv straight through;
+ * T_ADJ() passes argc - 2 / argv + 2; the _A variants add
+ * comma-separated aliases. The macro derives the function name by
+ * appending "Test", so T(newModule) calls newModuleTest(). */
+T(newModule),
+T_A(newModule, "nm,newmod"),
 ```
 
 ## Coding Standards
 
 ### C Language Standard
 
-- **Primary**: C99 (`-std=gnu99`)
-- **Some files**: C11 (`-std=c11`) where needed (e.g., str.c)
-- **Extensions**: GNU extensions allowed
+- **Primary**: C11 (`-std=gnu11`)
+- **Opt-in**: C23 (`-std=gnu23`) when configured with `-DUseC23=ON`,
+  which unlocks `_Float128` where the toolchain has it
+- **Some files**: pinned to strict `-std=c11` for consistent
+  floating-point behavior (`str.c`, `bigmath-libbf.c`)
+- **Extensions**: GNU extensions allowed (computed gotos, statement
+  expressions, `__builtin_*`)
+- **Types**: `<stdint.h>` fixed-width types only. No bare `long` or
+  `long long`; print with `<inttypes.h>` macros (`PRIu64`, `PRIx64`),
+  never `%llu` / `%llx`.
 
 ### Naming Conventions
 
@@ -485,14 +492,23 @@ count++; // Include the terminating entry
 **Platform-specific code:**
 
 ```c
-#if __APPLE__
-// macOS-specific
-#elif __linux__
-// Linux-specific
+#if defined(__APPLE__)
+/* macOS-specific */
+#elif defined(__linux__)
+/* Linux-specific */
+#elif defined(__FreeBSD__) || defined(__OpenBSD__) ||                          \
+    defined(__NetBSD__) || defined(__DragonFly__)
+/* BSD-specific */
 #else
-#error "Unsupported platform"
+/* Fall back to plain POSIX rather than #error where you can */
 #endif
 ```
+
+datakit targets POSIX systems built with clang or gcc. Do not
+introduce `_WIN32`, `_MSC_VER`, `_M_X64`, `<intrin.h>`,
+`__forceinline`, or any other MSVC construct — Windows support was
+removed deliberately, and vendored upstream code has its MSVC branches
+stripped as part of integration.
 
 ## Testing Requirements
 
@@ -678,34 +694,34 @@ Types: `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `style`
 
 ### Before Submitting
 
-1. **Run full test suite:**
+1. **Run the full test suite:**
 
-```bash
-cd build-debug
-make clean
-make -j8
-make check
+```sh
+cmake --preset dev && cmake --build --preset dev
+ctest --test-dir build-dev -j8 --output-on-failure
 ```
 
-2. **Check for memory leaks:**
+2. **Check for memory errors:**
 
-```bash
+The `dev` preset's ASAN/UBSAN already covers most of this. For a
+sanitizer-free cross-check:
+
+```sh
 for test in flex multimap multilist; do
-    valgrind --leak-check=full ./src/datakit-test test $test
+    valgrind --leak-check=full ./build-perf/src/datakit-test test $test
 done
 ```
 
 3. **Verify no warnings:**
 
-```bash
-make clean
-make 2>&1 | grep -i warning
+```sh
+cmake --build --preset dev --clean-first 2>&1 | grep -i warning
 ```
 
 4. **Run static analysis:**
 
-```bash
-scan-build make
+```sh
+cmake --build build-dev --target cppcheck
 ```
 
 5. **Test on multiple platforms** (if possible):

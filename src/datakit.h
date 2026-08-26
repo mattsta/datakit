@@ -29,10 +29,6 @@
 #define _XOPEN_SOURCE
 #endif
 
-#if DK_OS_SOLARIS
-#define _POSIX_C_SOURCE 199506L
-#endif
-
 #if DK_OS_APPLE
 #define _DARWIN_USE_64_BIT_INODE
 #endif

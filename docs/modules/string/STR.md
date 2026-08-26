@@ -13,9 +13,15 @@
 - Case-insensitive string comparison
 - Logarithmic estimation for query planning
 
-**Headers**: `str.h`
+**Header**: `str.h`
 
-**Source**: `str.c` (includes all str/\*.c files)
+**Source**: `str.c`, which textually `#include`s every `src/str/*.c` file so
+the whole set compiles as one translation unit.
+
+**Scope**: this file is the API reference for `str.h`.
+[STR_UTILS](STR_UTILS.md) is the implementation tour of `src/str/` — the SWAR
+converters, the SIMD paths, the full UTF-8 family, popcount, bitmap position
+extraction, and the random generators.
 
 ## Core Character Operations
 
@@ -83,7 +89,7 @@ int64_t value;
 const char *str = "12345";
 int32_t result = StrAtoi64(str, &value, strlen(str), STR_UTF8, false);
 if (result == 0) {
-    printf("Converted: %ld\n", value);  /* 12345 */
+    printf("Converted: %" PRId64 "\n", value);  /* 12345 */
 }
 ```
 
@@ -136,16 +142,24 @@ The reliable scanner guarantees:
 ### 128-bit Integer Support
 
 ```c
-/* Convert string to 128-bit integer */
+/* Convert string to 128-bit integer.
+ * 'small' receives the value when it fits in 64 bits, 'box' when it does
+ * not; '*use' is set to whichever one holds the result. */
 bool StrScanScanReliableConvert128(const void *p, const size_t len,
-                                   databox *small, databoxBig *big,
+                                   databox *small, databoxBig *box,
                                    databoxBig **use);
+
+/* Same, for input already known to be a valid numeral — skips
+ * re-validating the character content. */
+bool StrScanScanReliableConvert128PreVerified(const void *p, const size_t len,
+                                              databox *small, databoxBig *box,
+                                              databoxBig **use);
 
 /* Example usage */
 const char *huge = "170141183460469231731687303715884105727";
-databox sm;
-databoxBig bigbox;
-databoxBig *result;
+databox sm = {{0}};
+databoxBig bigbox = {{0}};
+databoxBig *result = NULL;
 
 if (StrScanScanReliableConvert128(huge, strlen(huge), &sm, &bigbox, &result)) {
     if (result->type == DATABOX_SIGNED_128) {
@@ -153,6 +167,10 @@ if (StrScanScanReliableConvert128(huge, strlen(huge), &sm, &bigbox, &result)) {
     }
 }
 ```
+
+The two-box signature exists because a plain `databox` cannot hold a 128-bit
+value inline — its `data.i128` is a pointer. Always read the result through
+`*use`, never from whichever box you guessed.
 
 ### LuaJIT-style Scanning
 
@@ -173,7 +191,7 @@ typedef enum StrScanOpt {
     STRSCAN_OPT_TOINT = 0x01,  /* Convert to int32_t if possible */
     STRSCAN_OPT_TONUM = 0x02,  /* Always convert to double */
     STRSCAN_OPT_IMAG = 0x04,   /* Allow imaginary numbers */
-    STRSCAN_OPT_LL = 0x08,     /* Allow long long */
+    STRSCAN_OPT_LL = 0x08,     /* Allow 64-bit integer suffixes */
     STRSCAN_OPT_C = 0x10,      /* C-style number parsing */
 } StrScanOpt;
 
@@ -191,7 +209,7 @@ const char *str = "42";
 StrScanFmt fmt = StrScanScan((const uint8_t *)str, &result,
                               STRSCAN_OPT_TOINT, false, false);
 if (fmt == STRSCAN_INT) {
-    printf("Integer: %ld\n", result.data.i64);
+    printf("Integer: %" PRId64 "\n", result.data.i64);
 }
 ```
 
@@ -238,16 +256,16 @@ size_t StrInt64ToBufTable(void *dst, size_t dstLen, int64_t value);
 ### Fast Multi-Digit Conversion
 
 ```c
-/* Fixed-width digit conversions (for internal use) */
-void StrUInt9DigitsToBuf(void *p, uint32_t u);   /* Requires 9 bytes */
-void StrUInt8DigitsToBuf(void *p, uint32_t u);   /* Requires 8 bytes */
-void StrUInt4DigitsToBuf(void *p, uint32_t u);   /* Requires 4 bytes */
-
-/* Example usage - batch convert digits */
-char buf[9];
-StrUInt9DigitsToBuf(buf, 123456789);
-/* buf contains "123456789" */
+/* Fixed-width digit writers.  These write EXACTLY that many digits,
+ * zero-padded, with no NUL and no length return — the caller must
+ * guarantee the buffer space and know the value fits. */
+void StrUInt9DigitsToBuf(void *p, uint32_t u);   /* needs 9 bytes */
+void StrUInt8DigitsToBuf(void *p, uint32_t u);   /* needs 8 bytes */
+void StrUInt4DigitsToBuf(void *p, uint32_t u);   /* needs 4 bytes */
 ```
+
+See [STR_UTILS](STR_UTILS.md#fast-integer-to-string-conversion) for how the
+SWAR digit generation works and when the table variant is preferable.
 
 ### String to Integer (Fast)
 
@@ -279,12 +297,12 @@ uint64_t fast = StrBufToUInt64Fast(str, 5);  /* Fastest, no checks */
 
 uint64_t checked;
 if (StrBufToUInt64FastCheckNumeric(str, 5, &checked)) {
-    printf("Valid number: %lu\n", checked);
+    printf("Valid number: %" PRIu64 "\n", checked);
 }
 
 int64_t safe;
 if (StrBufToInt64(str, 5, &safe)) {
-    printf("Safely converted: %ld\n", safe);
+    printf("Safely converted: %" PRId64 "\n", safe);
 }
 ```
 
@@ -309,7 +327,7 @@ size_t neg_digits = StrDigitCountInt64(-999);  /* 4 (includes minus sign) */
 ```c
 /* Check if buffer contains only ASCII digits [0-9] */
 bool StrIsDigitsIndividual(const void *buf, size_t size);  /* Simple loop */
-bool StrIsDigitsFast(const void *buf, size_t size);        /* SSE2 optimized */
+bool StrIsDigitsFast(const void *buf, size_t size);        /* SSE2 / NEON */
 
 /* Example usage */
 const char *digits = "123456789";
@@ -325,39 +343,40 @@ if (!StrIsDigitsFast(mixed, strlen(mixed))) {
 
 ## UTF-8 Support
 
-### Count UTF-8 Characters
+`str.h` carries a full UTF-8 layer: counting, validation, encode/decode,
+cursor movement, truncation and substrings, comparison, search, ASCII case
+conversion, Unicode character properties, terminal display width, and
+grapheme clusters. The complete listing lives in
+[STR_UTILS](STR_UTILS.md#utf-8-operations); the entry points most callers
+need are:
 
 ```c
-/* Count characters in UTF-8 string */
+/* Codepoint count */
 size_t StrLenUtf8(const void *ss, size_t len);
 
-/* Example usage */
-const char *str = "Hello 💛";  /* 6 ASCII + 1 emoji (4 bytes) = 10 bytes */
-size_t chars = StrLenUtf8(str, strlen(str));  /* 7 characters */
-size_t bytes = strlen(str);  /* 10 bytes */
-
-printf("Characters: %zu, Bytes: %zu\n", chars, bytes);
-```
-
-### Get Byte Count for N Characters
-
-```c
-/* How many bytes for first N UTF-8 characters? */
+/* Byte count for the first N codepoints */
 size_t StrLenUtf8CountBytes(const void *ss, size_t len,
                             size_t countCharacters);
 
-/* Example usage */
-const char *str = "ab💛cd";  /* 2 + 4 + 2 = 8 bytes, 5 chars */
-
-/* Get bytes for first 3 characters */
-size_t bytes = StrLenUtf8CountBytes(str, strlen(str), 3);  /* 6 bytes */
-
-/* Extract substring */
-char sub[7];
-memcpy(sub, str, bytes);
-sub[bytes] = '\0';
-printf("First 3 chars: %s\n", sub);  /* "ab💛" */
+/* Validate before trusting anything from outside this process */
+bool StrUtf8Valid(const void *str, size_t len);
 ```
+
+```c
+/* Example usage */
+const char *str = "Hello 💛";  /* 6 ASCII + 1 emoji (4 bytes) = 10 bytes */
+
+printf("Bytes: %zu\n", strlen(str));                 /* 10 */
+printf("Codepoints: %zu\n", StrLenUtf8(str, 10));    /* 7  */
+printf("Cells: %zu\n", StrUtf8Width(str, 10));       /* 8  */
+```
+
+The counting functions assume well-formed input — run `StrUtf8Valid` first
+on anything untrusted, or use `StrUtf8ValidCount` to validate and count in
+one pass.
+
+The `mds` / `mdsc` string types wrap all of these so the length argument
+comes from the string's own header; see [DKS](DKS.md#utf-8-support).
 
 ## Logarithmic Estimation
 
@@ -379,7 +398,8 @@ LogEst logRows = StrLogEst(rowCount);  /* Store as 10*log2(1000000) */
 
 /* Later, retrieve estimate */
 uint64_t estimated = StrLogEstToInt(logRows);
-printf("Estimated rows: %lu (actual: %lu)\n", estimated, rowCount);
+printf("Estimated rows: %" PRIu64 " (actual: %" PRIu64 ")\n",
+       estimated, rowCount);
 ```
 
 LogEst stores quantities as `10 * log2(X)`, giving a range from ~1e-986 to ~1e986:
@@ -441,21 +461,47 @@ if (!StrBloomTest(filter, 99)) {
 - 32 elements: 22%
 - 64 elements: 39%
 
+Rates are `1 - e^(-elements/bits)`: this is a single-hash filter with one bit
+per element, so it degrades quickly. It is a "definitely not present" fast
+path, nothing more — always confirm a positive with a real lookup.
+
+**Caveat on the 128-bit variant.** `StrBloomFilterBig` is a `__uint128_t`,
+but `_StrBloomBigBit` builds its bit from a 64-bit `StrBloomFilter` shifted
+by a mask of up to 127. Shifts of 64 or more on a 64-bit type are undefined,
+so bit selection for the upper half is not reliable. Prefer the 64-bit
+filter until that is fixed.
+
 ## Double Conversion Helpers
 
 ```c
-/* Check if double can be represented as int64 */
+/* True only when the double is EXACTLY an int64 value:
+ * the real->int->real round trip is a no-op, and the result is
+ * neither INT64_MIN nor INT64_MAX. */
 bool StrDoubleCanBeCastToInt64(double r);
 
-/* Convert double to int64 with proper rounding */
+/* Saturating TRUNCATION (not rounding):
+ *   r <= (double)INT64_MIN -> INT64_MIN
+ *   r >= (double)INT64_MAX -> INT64_MAX
+ *   otherwise              -> (int64_t)r, toward zero */
 int64_t StrDoubleToInt64(double r);
 
 /* Example usage */
 double d = 42.7;
-if (StrDoubleCanBeCastToInt64(d)) {
-    int64_t i = StrDoubleToInt64(d);  /* 43 (rounds) */
-}
+StrDoubleCanBeCastToInt64(d);        /* false: 42.7 is not an integer */
+int64_t i = StrDoubleToInt64(d);     /* 42 — TRUNCATED, not rounded */
+
+double e = 42.0;
+StrDoubleCanBeCastToInt64(e);        /* true */
+int64_t j = StrDoubleToInt64(e);     /* 42 */
+
+/* Saturation, not wraparound or UB */
+int64_t sat = StrDoubleToInt64(1e300);   /* INT64_MAX */
 ```
+
+The exclusion of `INT64_MIN` and `INT64_MAX` from
+`StrDoubleCanBeCastToInt64` is deliberate: those are exactly the values the
+saturating clamp produces for out-of-range inputs, so accepting them would
+make an overflow indistinguishable from a real conversion.
 
 ## Power of 10 Functions
 
@@ -469,6 +515,32 @@ uint64_t thousand = StrTenPow(3);      /* 1000 */
 uint64_t million = StrTenPow(6);       /* 1000000 */
 __uint128_t huge = StrTenPowBig(30);   /* 10^30 */
 ```
+
+## Bit and Random Utilities
+
+`str.h` also declares the population-count, bitmap-position, and PRNG
+families. They are listed and explained in
+[STR_UTILS](STR_UTILS.md#population-count-popcount):
+
+```c
+uint64_t StrPopCnt8Bit(const void *data, size_t len);
+uint64_t StrPopCntAligned(const void *data, size_t len);
+uint64_t StrPopCntExact(const void *data, size_t len);
+uint64_t StrPopCntScalar(const void *data, size_t len);  /* baseline */
+
+uint32_t StrBitmapGetSetPositionsExact8/16/32(const void *data, size_t len,
+                                              /* uintN_t */ position[]);
+uint64_t StrBitmapGetSetPositionsExact64(const void *data, size_t len,
+                                         uint64_t position[]);
+/* ...and the matching GetUnsetPositionsExact* set */
+
+uint64_t splitmix64(uint64_t *x);
+uint64_t xoroshiro128plus(uint64_t s[2]);
+/* ...and the other xorshift variants */
+```
+
+None of the generators are cryptographically secure. For anything
+security-relevant use the crypto module, not these.
 
 ## Utility Macros
 
@@ -498,10 +570,10 @@ void parseUserInput(const char *input) {
     if (StrScanScanReliable(input, strlen(input), &result)) {
         switch (result.type) {
         case DATABOX_SIGNED_64:
-            printf("Integer: %ld\n", result.data.i64);
+            printf("Integer: %" PRId64 "\n", result.data.i64);
             break;
         case DATABOX_UNSIGNED_64:
-            printf("Unsigned: %lu\n", result.data.u64);
+            printf("Unsigned: %" PRIu64 "\n", result.data.u64);
             break;
         case DATABOX_FLOAT_32:
             printf("Float: %f\n", result.data.f32);
@@ -513,17 +585,21 @@ void parseUserInput(const char *input) {
             printf("Unsupported type\n");
         }
 
-        /* Convert back - guaranteed exact match */
+        /* Convert back.  Because the reliable scanner ACCEPTS ONLY the
+         * canonical spelling of a number, the formatted output for an
+         * accepted input reproduces that input byte for byte. */
         char buf[64];
-        size_t len;
+        size_t len = 0;
         if (result.type == DATABOX_DOUBLE_64) {
             len = StrDoubleFormatToBufNice(buf, sizeof(buf), result.data.d64);
         } else if (result.type == DATABOX_SIGNED_64) {
             len = StrInt64ToBuf(buf, sizeof(buf), result.data.i64);
         }
 
-        assert(strlen(input) == len);
-        assert(memcmp(input, buf, len) == 0);
+        if (len) {
+            assert(strlen(input) == len);
+            assert(memcmp(input, buf, len) == 0);
+        }
     } else {
         printf("Not a valid number\n");
     }
@@ -556,13 +632,16 @@ char *truncateUtf8(const char *str, size_t maxChars) {
     size_t chars = StrLenUtf8(str, len);
 
     if (chars <= maxChars) {
-        return strdup(str);
+        /* datakit deprecates strdup(); copy through zmalloc */
+        char *copy = zmalloc(len + 1);
+        memcpy(copy, str, len + 1);
+        return copy;
     }
 
     /* Find byte count for maxChars characters */
     size_t bytes = StrLenUtf8CountBytes(str, len, maxChars);
 
-    char *result = malloc(bytes + 4);  /* +3 for "..." +1 for null */
+    char *result = zmalloc(bytes + 4);  /* +3 for "..." +1 for NUL */
     memcpy(result, str, bytes);
     memcpy(result + bytes, "...", 3);
     result[bytes + 3] = '\0';
@@ -594,14 +673,20 @@ bool isValidPositiveInteger(const char *str, size_t len) {
 
 ## Performance Characteristics
 
-| Operation           | Complexity | Notes                                   |
-| ------------------- | ---------- | --------------------------------------- |
-| StrIsDigitsFast     | O(n)       | SSE2: ~4x faster than individual checks |
-| StrBufToUInt64Fast  | O(n)       | No validation, maximum speed            |
-| StrUInt64ToBuf      | O(1)       | Uses SWAR, ~60 cycles typical           |
-| StrLenUtf8          | O(n)       | SIMD optimized for large strings        |
-| StrScanScanReliable | O(n)       | With round-trip validation              |
-| Bloom filter test   | O(1)       | Single bit check                        |
+| Operation           | Complexity | Notes                                              |
+| ------------------- | ---------- | -------------------------------------------------- |
+| StrIsDigitsFast     | O(n)       | 16 bytes per step via SSE2 or NEON                 |
+| StrBufToUInt64Fast  | O(n)       | no validation at all; caller must guarantee digits |
+| StrUInt64ToBuf      | O(digits)  | SWAR digit generation                              |
+| StrLenUtf8          | O(n)       | SIMD; `StrLenUtf8Scalar` is the baseline           |
+| StrScanScanReliable | O(n)       | includes canonical-form validation                 |
+| Bloom filter test   | O(1)       | single bit check                                   |
+
+Each SIMD-accelerated function has a `*Scalar` twin
+(`StrLenUtf8Scalar`, `StrUtf8ValidScalar`, `StrBufToUInt64Scalar`,
+`StrPopCntScalar`, `StrUtf8AdvanceScalar`) kept specifically so the two can
+be benchmarked against each other. Build benchmarks with the `perf` CMake
+preset — sanitizers invalidate the comparison.
 
 ## Thread Safety
 
@@ -631,7 +716,7 @@ memcpy(buf, str, 2);  /* Partial emoji! Invalid UTF-8 */
 
 /* RIGHT */
 size_t bytes = StrLenUtf8CountBytes(str, strlen(str), 1);
-char *buf = malloc(bytes + 1);
+char *buf = zmalloc(bytes + 1);
 memcpy(buf, str, bytes);
 buf[bytes] = '\0';
 ```

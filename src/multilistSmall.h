@@ -101,6 +101,9 @@ multilistSmall *multilistSmallDuplicate(multilistSmall *orig);
 /* Get entry based on index */
 bool multilistSmallIndex(multilistSmall *ml, mlOffsetId index,
                          multilistEntry *entry);
+bool multilistSmallIndexNear(multilistSmall *ml, mlOffsetId index,
+                             const multilistEntry *anchor, mlOffsetId anchorIdx,
+                             multilistEntry *entry);
 
 /* Move ends of list */
 void multilistSmallRotate(multilistSmall *ml);

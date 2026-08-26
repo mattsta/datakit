@@ -147,7 +147,9 @@ void databoxCopyBytes(databox *box, const void *ptr, size_t len) {
 
 /* A more pre-prepared version of databoxRetainBytesSelf() where the
  * memory size determination has been done out of band of databox.
- * This version also pre-supposes you're only passing in type DATABOX_BYTES */
+ * This version also pre-supposes you're only passing in type DATABOX_BYTES.
+ * OWNERSHIP: 'bytes' is handed to the box (allocated = true), so a later
+ * databoxFreeData() frees it — pass heap memory the box may keep. */
 void databoxRetainBytesSelfExact(databox *restrict dst, void *restrict bytes) {
     if (dst->len <= sizeof(dst->data.bytes.embed8)) {
         /* If source bytes small enough to become embed, do
@@ -169,8 +171,14 @@ void databoxRetainBytesSelfExact(databox *restrict dst, void *restrict bytes) {
 /* Uses bytes provided in 'cache' to copy bytes from 'dst' into a private
  * memory space if necessary.
  *
- * Returns the slot used in 'cache' if a slot is used or a negative number
- * if no slot is used. */
+ * Returns:
+ *   >= 0: the 'cache' slot now holding the bytes.  The CACHE owns that
+ *         memory (the box borrows it: 'allocated' stays false, so a
+ *         later databoxFreeData() will not free the cache's buffer);
+ *         the caller must keep the cache alive while the box is live.
+ *   -1:   bytes retained privately (embedded, or freshly allocated with
+ *         the box owning the allocation via 'allocated' = true).
+ *   -2:   the box type does not reference external bytes; untouched. */
 ssize_t databoxRetainBytesSelf(databox *restrict dst,
                                databoxRetainCache *restrict cache) {
     /* NOTE: this breaks with offset boxes */
@@ -188,31 +196,33 @@ ssize_t databoxRetainBytesSelf(databox *restrict dst,
 
         const uint8_t *restrict src = dst->data.bytes.start;
         size_t start = 128;
-        ssize_t slot = 0;
-        /* While bytes are too big for current slot
-         * AND
-         * slot is less than total slots
-         * AND
-         * slot is actually populated;
-         * increment slot position and check next power of two cache size */
-        for (; slot < (ssize_t)COUNT_ARRAY(cache->bytes); slot++, start *= 2) {
+        /* Find the smallest populated size class that fits; each slot
+         * doubles the previous slot's capacity. */
+        for (ssize_t slot = 0; slot < (ssize_t)COUNT_ARRAY(cache->bytes);
+             slot++, start *= 2) {
             if (dst->len <= start) {
-                /* Point bytes to new memory to use for copy */
                 if (cache->bytes[slot]) {
-                    /* use cached bytes! */
+                    /* Borrow the cache's buffer: the cache retains
+                     * ownership, so the box must NOT claim it (a
+                     * claimed borrow would let databoxFreeData free
+                     * the cache slot out from under the cache). */
                     dst->data.bytes.start = cache->bytes[slot];
-                } else {
-                    /* too big for any cached containers */
-                    dst->data.bytes.start = zmalloc(dst->len);
-                    slot = -1; /* return value; no slot used */
+                    memcpy(dst->data.bytes.start, src, dst->len);
+                    return slot;
                 }
 
-                /* do tha copy do do do da do do do — do tha copy */
-                dst->allocated = true;
-                memcpy(dst->data.bytes.start, src, dst->len);
-                return slot;
+                /* fitting slot is unpopulated: retain privately below */
+                break;
             }
         }
+
+        /* No usable cache slot (unpopulated, or larger than the largest
+         * size class): retain through a private allocation the box
+         * owns; the bytes are ALWAYS retained on this path. */
+        dst->data.bytes.start = zmalloc(dst->len);
+        dst->allocated = true;
+        memcpy(dst->data.bytes.start, src, dst->len);
+        return -1;
     }
 
     return -2;
@@ -309,8 +319,11 @@ void databoxFree(databox *box) {
     }
 }
 
+/* Zero-init in every constructor: the flag bits (.allocated, .created,
+ * .big) are contract state read by databoxFreeData and copy helpers, so
+ * they must never carry stack garbage. */
 databox databoxNewBytes(const void *ptr, size_t len) {
-    databox box;
+    databox box = {{0}};
     box.type = DATABOX_BYTES;
     box.data.bytes.custart = ptr;
     box.len = len;
@@ -318,13 +331,13 @@ databox databoxNewBytes(const void *ptr, size_t len) {
 }
 
 databox databoxNewBytesAllowEmbed(const void *ptr, size_t len) {
-    databox box;
+    databox box = {{0}};
     databoxUpdateBytesAllowEmbed(&box, ptr, len);
     return box;
 }
 
 databox databoxNewBytesAllocateOrEmbed(const void *ptr, size_t len) {
-    databox box;
+    databox box = {{0}};
     if (len <= sizeof(box.data.bytes.embed)) {
         box.type = DATABOX_BYTES_EMBED;
         box.len = len;
@@ -337,7 +350,7 @@ databox databoxNewBytesAllocateOrEmbed(const void *ptr, size_t len) {
 }
 
 databox databoxNewOffsetAllowEmbed(const void *ptr, size_t offset, size_t len) {
-    databox box;
+    databox box = {{0}};
     databoxUpdateOffsetAllowEmbed(&box, ptr, offset, len);
     return box;
 }
@@ -1044,6 +1057,60 @@ int databoxTest(int argc, char *argv[]) {
     int err = 0;
 
     assert(sizeof(databox) == 16);
+
+    TEST("retain cache: borrow vs own vs embed ownership") {
+        static const char payload[] =
+            "this payload is comfortably longer than the embed threshold";
+        const size_t payloadLen = sizeof(payload) - 1;
+
+        /* Slot path: box BORROWS cache memory (allocated stays false),
+         * so FreeData must not free the cache's buffer. */
+        databoxRetainCache cache = {{0}};
+        cache.bytes[0] = zmalloc(128);
+        uint8_t *const slot0 = cache.bytes[0];
+
+        databox borrowed = databoxNewBytes(payload, payloadLen);
+        assert(databoxRetainBytesSelf(&borrowed, &cache) == 0);
+        assert(!borrowed.allocated);
+        assert(borrowed.data.bytes.start == slot0);
+        assert(memcmp(borrowed.data.bytes.start, payload, payloadLen) == 0);
+        databoxFreeData(&borrowed); /* no-op: cache still owns slot0 */
+        assert(cache.bytes[0] == slot0);
+        assert(memcmp(slot0, payload, payloadLen) == 0);
+
+        /* Unpopulated-slot path: private allocation the box OWNS. */
+        databoxRetainCache empty = {{0}};
+        databox owned = databoxNewBytes(payload, payloadLen);
+        assert(databoxRetainBytesSelf(&owned, &empty) == -1);
+        assert(owned.allocated);
+        assert(owned.data.bytes.start != (const void *)payload);
+        assert(memcmp(owned.data.bytes.start, payload, payloadLen) == 0);
+        databoxFreeData(&owned); /* frees the private retain (ASAN checks) */
+
+        /* Oversized path (> largest 4 MiB size class): still retained. */
+        const size_t bigLen = (4 * 1024 * 1024) + 64;
+        uint8_t *big = zmalloc(bigLen);
+        memset(big, 0x5A, bigLen);
+        databox huge = databoxNewBytes(big, bigLen);
+        assert(databoxRetainBytesSelf(&huge, &cache) == -1);
+        assert(huge.allocated);
+        assert(huge.data.bytes.start != big);
+        assert(((const uint8_t *)huge.data.bytes.start)[bigLen - 1] == 0x5A);
+        databoxFreeData(&huge);
+        zfree(big);
+
+        /* Embed path: tiny bytes embed, no cache use, nothing to free. */
+        databox tiny = databoxNewBytes("hi", 2);
+        assert(databoxRetainBytesSelf(&tiny, &cache) == -1);
+        assert(tiny.type == DATABOX_BYTES_EMBED && !tiny.allocated);
+
+        /* Non-bytes types are untouched. */
+        databox num = databoxNewSigned(42);
+        assert(databoxRetainBytesSelf(&num, &cache) == -2);
+        assert(num.data.i == 42);
+
+        zfree(slot0);
+    }
 
     TEST("starting numbers don't ruin the sort") {
         const databox keybox = databoxNewBytesAllowEmbed("120abc", 6);

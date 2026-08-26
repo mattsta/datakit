@@ -65,6 +65,10 @@ void multimapFullReplaceEntry(multimapFull *m, multimapEntry *me,
                               const databox *box);
 void multimapFullDeleteEntry(multimapFull *m, multimapEntry *me);
 
+bool multimapFullLookupByPosition(multimapFull *m, int64_t keyIndex,
+                                  databox *elements[]);
+bool multimapFullDeleteByPosition(multimapFull *m, int64_t keyIndex);
+
 bool multimapFullRegularizeMap(multimapFull *m, multimapFullIdx mapIdx,
                                flex **map);
 bool multimapFullRegularizeMapWithReference(

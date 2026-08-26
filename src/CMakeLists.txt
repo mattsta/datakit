@@ -434,6 +434,8 @@ add_library(${PROJECT_NAME} OBJECT
     fastmutex.c
     fastmutexTest.c
 
+    multiheapTest.c
+
     mds.c
     mdsc.c
     dj.c

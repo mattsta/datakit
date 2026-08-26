@@ -6,6 +6,7 @@ This guide covers building datakit from source, including dependencies, build op
 
 - [Quick Start](#quick-start)
 - [Prerequisites](#prerequisites)
+- [Build Presets](#build-presets)
 - [Build Process](#build-process)
 - [Build Options](#build-options)
 - [Build Artifacts](#build-artifacts)
@@ -16,25 +17,24 @@ This guide covers building datakit from source, including dependencies, build op
 
 For the impatient:
 
-```bash
-mkdir build
-cd build
-cmake ..
-make -j8
+```sh
+cmake --preset dev && cmake --build --preset dev
 ```
 
-The test binary will be at `./src/datakit-test` and libraries in `./src/`.
+The test binary will be at `build-dev/src/datakit-test` and the
+libraries alongside it in `build-dev/src/`.
 
 ## Prerequisites
 
 ### Required Tools
 
-- **CMake** 3.5 or later
-- **C Compiler** with C99/C11 support:
-  - GCC 4.8+
-  - Clang 3.4+
-  - Apple Clang (Xcode Command Line Tools)
-- **Make** or other CMake-compatible build system
+- **CMake** 3.10 or later for a plain build; **3.21 or later** to use
+  the presets in `CMakePresets.json`
+- **C Compiler**: clang or gcc, with C11 support. Apple Clang from the
+  Xcode Command Line Tools works. MSVC is not supported and datakit
+  contains no MSVC-specific code paths.
+- **Make** or another CMake-compatible generator (the presets use Unix
+  Makefiles)
 
 ### System Libraries
 
@@ -73,11 +73,41 @@ All dependencies are included in the `deps/` directory:
 
 No external packages need to be installed.
 
+## Build Presets
+
+`CMakePresets.json` defines the four supported configurations. Each
+build preset builds the same four targets — `datakit-test`,
+`datakit-static`, `datakit-shared`, and `datakit-library` — into
+`build-<preset>/`.
+
+| Preset  | Build type | Sanitizers  | Extra flags               | Use for                           |
+| ------- | ---------- | ----------- | ------------------------- | --------------------------------- |
+| `dev`   | Release    | ASAN, UBSAN | —                         | Default day-to-day development    |
+| `debug` | Debug      | ASAN, UBSAN | —                         | Stepping in a debugger            |
+| `perf`  | Release    | none        | `-O3 -mcpu=native -flto`  | Every benchmark and timing number |
+| `safe`  | Release    | ASAN, UBSAN | —                         | Strict CI correctness runs        |
+
+```sh
+cmake --preset dev    && cmake --build --preset dev
+cmake --preset debug  && cmake --build --preset debug
+cmake --preset perf   && cmake --build --preset perf
+cmake --preset safe   && cmake --build --preset safe
+```
+
+Never benchmark with a sanitizer preset — ASAN/UBSAN add 3-10x
+overhead and invalidate the measurement.
+
+All presets set `CMAKE_EXPORT_COMPILE_COMMANDS=ON`, so
+`build-<preset>/compile_commands.json` is available for clangd and
+clang-tidy.
+
 ## Build Process
 
 ### Standard Build
 
-```bash
+If you cannot use presets (CMake older than 3.21), configure by hand:
+
+```sh
 # Create build directory
 mkdir build
 cd build
@@ -89,14 +119,14 @@ cmake ..
 make -j8    # Use 8 parallel jobs
 
 # Optionally run tests
-make check
+cmake --build . --target datakit-quickcheck
 ```
 
 ### Debug Build
 
 Debug builds include symbols and disable optimizations:
 
-```bash
+```sh
 mkdir build-debug
 cd build-debug
 cmake -DCMAKE_BUILD_TYPE=Debug ..
@@ -113,7 +143,7 @@ Debug build characteristics:
 
 Release builds enable optimizations:
 
-```bash
+```sh
 mkdir build-release
 cd build-release
 cmake -DCMAKE_BUILD_TYPE=Release ..
@@ -170,6 +200,21 @@ make -j8
 
 This adds `-m32` to compilation and linking flags.
 
+#### DatakitTestMode
+
+Enables `DATAKIT_TEST` mode (default: ON). It is independent of
+`BuildTestBinary` so consuming projects can keep the in-source test
+symbols without also building the runner.
+
+#### Language and float128 options
+
+- `UseC23` (default OFF) - compile as C23, which enables `_Float128`
+  where the toolchain provides it
+- `UseFloat128` (default OFF) - force-enable `__float128`; may require
+  libquadmath
+- `ForceNoFloat128` (default OFF) - force-disable every float128 path,
+  useful for exercising the fallback code
+
 #### CMAKE_BUILD_TYPE
 
 Control optimization level:
@@ -192,22 +237,35 @@ cmake -DCMAKE_BUILD_TYPE=MinSizeRel ..
 
 #### Sanitizers
 
-Various sanitizers are available but **commented out by default** in CMakeLists.txt. To enable, edit `/home/user/datakit/src/CMakeLists.txt`:
+Sanitizers are real CMake options, not source edits. The `dev`,
+`debug`, and `safe` presets already turn ASAN and UBSAN on; to control
+them in a hand-configured build:
 
-```cmake
-# Address Sanitizer (memory errors)
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address")
-
-# Undefined Behavior Sanitizer
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=undefined")
-
-# Memory Sanitizer (Clang only)
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=memory")
+```sh
+cmake -DEnableASAN=ON ..   # AddressSanitizer (memory errors)
+cmake -DEnableUBSAN=ON ..  # UndefinedBehaviorSanitizer
+cmake -DEnableMSAN=ON ..   # MemorySanitizer (Clang only)
+cmake -DEnableTSAN=ON ..   # ThreadSanitizer
 ```
+
+All four default to OFF. ASAN and TSAN are mutually exclusive — enable
+TSAN on its own. MSAN requires Clang; with gcc the option is ignored
+with a warning.
+
+UBSAN is enabled as `-fsanitize=undefined -fno-sanitize=function`. The
+`function` check is dropped because datakit's hot dispatch loops
+(`dod.c`, `multilist.c`, `multimap.c`, `xof.c`, `multiOrderedSet.c`)
+use computed gotos, which that check misreads as indirect calls and
+which produce relocations the macOS linker rejects. Every other UBSAN
+check stays active — including the alignment check.
+
+`DATAKIT_UBSAN_ALLOW_UNALIGNED` (default OFF) restores the legacy
+`-fno-sanitize=alignment` behavior. It masks real alignment bugs; turn
+it on only if a specific consumer needs the old behavior.
 
 Then rebuild:
 
-```bash
+```sh
 cd build
 cmake ..
 make clean
@@ -246,15 +304,21 @@ build/src/datakit-test.dSYM/    # Debug symbols
 
 ### Libraries
 
+Three library targets are built from one shared set of object files.
+The static and module prefixes are cleared, so the names have no `lib`:
+
 ```
-build/src/datakit.so            # Shared module (.dylib on macOS)
-build/src/datakit               # Static library
-build/src/libdatakit.so.0.3.0   # Versioned shared library
+build/src/datakit.a             # datakit-static  (STATIC)
+build/src/datakit.so            # datakit-shared  (MODULE; .so on Linux, .dylib on macOS)
+build/src/libdatakit.so.0.3.0   # datakit-library (versioned SHARED)
 ```
 
 Library versioning:
 - **VERSION**: 0.3.0 (full version)
 - **SOVERSION**: 0.3.0 (ABI version)
+
+`SOVERSION` only moves on a breaking ABI change; `VERSION` moves with
+ordinary feature and maintenance releases.
 
 ### Dependencies
 
@@ -280,14 +344,14 @@ cmake ..
 make -j$(nproc)
 ```
 
-#### Install System-Wide (Optional)
+#### Installing
 
-```bash
-sudo make install
-sudo ldconfig
-```
-
-Libraries install to `/usr/local/lib` by default.
+The build declares no `install()` rules and ships no pkg-config file,
+so `make install` does nothing useful. Consume datakit either by
+copying the built libraries and the `src/*.h` headers where you want
+them, or by adding the repository to your own build with
+`add_subdirectory()` and linking the `datakit-static` or
+`datakit-library` target directly.
 
 #### Thread Support
 
@@ -338,6 +402,18 @@ cd build-xcode
 cmake -G Xcode ..
 open datakit.xcodeproj
 ```
+
+### BSD (FreeBSD, OpenBSD, NetBSD, DragonFly)
+
+```sh
+mkdir build && cd build
+cmake ..
+gmake -j$(sysctl -n hw.ncpu)
+```
+
+Use `gmake` (GNU make) where the base system `make` is BSD make. BSD
+builds link `pthread` and `m` the same way Linux does, and pick up
+`getentropy()` for random-number generation.
 
 ### Cross-Compilation
 
@@ -396,16 +472,22 @@ Datakit builds with strict warnings:
 ### Clang-Specific
 
 ```
+-Wempty-init-stmt              # Empty initialization
+-Wextra-semi-stmt              # Extra semicolons
 -Wno-gnu-label-as-value        # Allow computed gotos
 ```
 
-### Disabled Sanitizers
+### Sanitizer check exclusions
+
+Only one UBSAN check is dropped, and only when UBSAN is on:
 
 ```
--fno-sanitize=alignment        # Allow alignment violations
+-fno-sanitize=function         # computed-goto dispatch loops (see Sanitizers above)
 ```
 
-This is intentional - datakit optimizes memory layout and occasionally uses non-aligned access patterns.
+The alignment check used to be suppressed unconditionally; it is now
+active by default, and re-suppressing it requires opting in to
+`DATAKIT_UBSAN_ALLOW_UNALIGNED`.
 
 ## Troubleshooting
 
@@ -414,8 +496,10 @@ This is intentional - datakit optimizes memory layout and occasionally uses non-
 #### "CMake version too old"
 
 ```
-CMake Error: CMake 3.5 or higher is required
+CMake Error: CMake 3.10 or higher is required
 ```
+
+A plain build needs 3.10; `--preset` needs 3.21.
 
 **Solution**: Upgrade CMake:
 ```bash
@@ -579,7 +663,7 @@ build/
     ├── CMakeFiles/
     ├── datakit-test           # Test executable
     ├── datakit.so             # Shared module
-    ├── datakit                # Static library
+    ├── datakit.a              # Static library
     └── libdatakit.so.0.3.0    # Versioned shared library
 ```
 

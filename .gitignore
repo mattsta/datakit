@@ -1,5 +1,15 @@
 build*
+# `build*` above is for build directories; don't let it swallow docs.
+!docs/BUILD_PRESETS.md
 compile_commands.json
+
+# Internal working material (plans, designs, audits, session notes,
+# scratch). Never committed; docs/ holds only the curated public docs.
+# Promote a file by moving it into docs/ and committing it explicitly.
+notes/
+
+# Per-developer prettier config (references local-only directories).
+.prettierignore
 
 src/old
 CMakeFiles
