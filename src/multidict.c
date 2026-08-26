@@ -6489,6 +6489,56 @@ int multidictTest(int argc, char *argv[]) {
     }
 
     /* ================================================================
+     * Empty then reuse (reset-family regression matrix)
+     * ================================================================ */
+    printf("\n--- Empty-then-reuse cycles ---\n");
+    {
+        /* Start from a clean slate: earlier suite sections leave
+         * entries in the long-lived dict */
+        multidictEmpty(d);
+
+        for (int cycle = 0; cycle < 2; cycle++) {
+            for (uint64_t i = 0; i < 500; i++) {
+                const databox keybox = databoxNewUnsigned(0x9000 + i);
+                const databox valbox = databoxNewUnsigned(i * 3);
+                multidictAdd(d, &keybox, &valbox);
+            }
+            if (multidictCount(d) != 500) {
+                printf("ERROR: cycle %d expected 500, got %" PRIu64 "\n", cycle,
+                       multidictCount(d));
+                err++;
+            }
+
+            multidictEmpty(d);
+            if (multidictCount(d) != 0) {
+                printf("ERROR: cycle %d expected 0 after Empty, got %" PRIu64
+                       "\n",
+                       cycle, multidictCount(d));
+                err++;
+            }
+        }
+
+        uint64_t missing = 0;
+        for (uint64_t i = 0; i < 500; i++) {
+            const databox keybox = databoxNewUnsigned(0x9000 + i);
+            const databox valbox = databoxNewUnsigned(i + 11);
+            multidictAdd(d, &keybox, &valbox);
+        }
+        for (uint64_t i = 0; i < 500; i++) {
+            const databox keybox = databoxNewUnsigned(0x9000 + i);
+            databox valbox;
+            if (!multidictFind(d, &keybox, &valbox)) {
+                missing++;
+            }
+        }
+        if (missing > 0) {
+            printf("ERROR: %" PRIu64 " of 500 keys missing after Empty-reuse\n",
+                   missing);
+            err++;
+        }
+    }
+
+    /* ================================================================
      * Cleanup
      * ================================================================ */
     printf("\n--- Cleanup ---\n");

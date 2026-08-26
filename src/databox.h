@@ -462,12 +462,43 @@ databox databoxNewBytesString(const char *str);
 databox databoxNewBytesAllowEmbed(const void *ptr, size_t len);
 databox databoxNewBytesAllocateOrEmbed(const void *ptr, size_t len);
 databox databoxNewOffsetAllowEmbed(const void *ptr, size_t offset, size_t len);
-databox databoxNewUnsigned(uint64_t val);
-databox databoxNewSigned(int64_t val);
 databox databoxNewReal(double value);
-databox databoxNewPtr(void *ptr);
 bool databoxEqual(const databox *a, const databox *b);
 int databoxCompare(const databox *a, const databox *b);
+
+/* Trivial constructors are inline: they appear on hot paths (boxing
+ * entries for flex/multimap inserts) where a function call per element
+ * would dominate the work. */
+static inline databox databoxNewUnsigned(uint64_t val) {
+    return (databox){.type = DATABOX_UNSIGNED_64, .data.u = val};
+}
+
+static inline databox databoxNewSigned(int64_t val) {
+    return (databox){.type = DATABOX_SIGNED_64, .data.i = val};
+}
+
+static inline databox databoxNewPtr(void *ptr) {
+    return (databox){.type = DATABOX_PTR, .data.ptr = ptr};
+}
+
+/* Box a pointer as DATABOX_UNSIGNED_64 instead of DATABOX_PTR.
+ * Use this when the pointer is an element of a SORTED container entry
+ * (multimap/flex sorted inserts): DATABOX_PTR sits outside the numeric
+ * compare classes, so databoxCompare orders it by type tag rather than
+ * by value against the DATABOX_UNSIGNED_64 that flex storage decodes
+ * back to. Boxing as unsigned keeps every element of an entry in one
+ * compare class. (In-memory use only: a stored pointer is meaningless
+ * once persisted.) */
+static inline databox databoxNewPtrAsUnsigned(const void *ptr) {
+    return (databox){.type = DATABOX_UNSIGNED_64, .data.u = (uintptr_t)ptr};
+}
+
+/* Retrieve a pointer stored via databoxNewPtrAsUnsigned() (also correct
+ * for such entries decoded back out of flex/multimap storage, which
+ * return them as DATABOX_UNSIGNED_64) */
+static inline void *databoxRetrievePtrUnsigned(const databox *box) {
+    return (void *)(uintptr_t)box->data.u64;
+}
 
 /* clang-format off */
 /* clang-format on */

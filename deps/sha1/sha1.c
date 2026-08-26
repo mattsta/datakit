@@ -17,8 +17,8 @@
 
 #define SHA1HANDSOFF /* Copies data before messing with it. */
 
-#include <sys/cdefs.h>
 #include "sha1.h"
+#include <sys/cdefs.h>
 
 #if defined(_KERNEL) || defined(_STANDALONE)
 __KERNEL_RCSID(0, "$NetBSD: sha1.c,v 1.6 2009/11/06 20:31:18 joerg Exp $");
@@ -31,14 +31,14 @@ __KERNEL_RCSID(0, "$NetBSD: sha1.c,v 1.6 2009/11/06 20:31:18 joerg Exp $");
 __RCSID("$NetBSD: sha1.c,v 1.6 2009/11/06 20:31:18 joerg Exp $");
 #endif /* LIBC_SCCS and not lint */
 
-//#include "namespace.h"
+// #include "namespace.h"
 #include <assert.h>
 #include <string.h>
 
 #endif
 
 #include <sys/types.h>
-//#include <sys/sha1.h>
+// #include <sys/sha1.h>
 
 #define _DIAGASSERT(x) (void)0
 
@@ -364,14 +364,16 @@ void SHA1Update(SHA1_CTX *context, const uint8_t *data, unsigned int len) {
     _DIAGASSERT(data != 0);
 
     j = context->count[0];
-    if ((context->count[0] += len << 3) < j)
+    if ((context->count[0] += len << 3) < j) {
         context->count[1] += (len >> 29) + 1;
+    }
     j = (j >> 3) & 63;
     if ((j + len) > 63) {
         (void)memcpy(&context->buffer[j], data, (i = 64 - j));
         SHA1Transform(context->state, context->buffer);
-        for (; i + 63 < len; i += 64)
+        for (; i + 63 < len; i += 64) {
             SHA1Transform(context->state, &data[i]);
+        }
         j = 0;
     } else {
         i = 0;
@@ -390,19 +392,22 @@ void SHA1Final(uint8_t digest[20], SHA1_CTX *context) {
     _DIAGASSERT(context != 0);
 
     for (i = 0; i < 8; i++) {
-        finalcount[i] = (uint8_t)(
-            (context->count[(i >= 4 ? 0 : 1)] >> ((3 - (i & 3)) * 8)) &
-            255); /* Endian independent */
+        finalcount[i] = (uint8_t)((context->count[(i >= 4 ? 0 : 1)] >>
+                                   ((3 - (i & 3)) * 8)) &
+                                  255); /* Endian independent */
     }
     SHA1Update(context, (const uint8_t *)"\200", 1);
-    while ((context->count[0] & 504) != 448)
+    while ((context->count[0] & 504) != 448) {
         SHA1Update(context, (const uint8_t *)"\0", 1);
+    }
     SHA1Update(context, finalcount, 8); /* Should cause a SHA1Transform() */
 
     if (digest) {
-        for (i = 0; i < 20; i++)
-            digest[i] = (uint8_t)(
-                (context->state[i >> 2] >> ((3 - (i & 3)) * 8)) & 255);
+        for (i = 0; i < 20; i++) {
+            digest[i] =
+                (uint8_t)((context->state[i >> 2] >> ((3 - (i & 3)) * 8)) &
+                          255);
+        }
     }
 }
 

@@ -1,8 +1,11 @@
 #pragma once
 #include "datakit.h"
 
+/* static: every translation unit that wants a cleaner defines its own
+ * copy, so two files using defcleaner on the same function never
+ * collide at link time. */
 #define defcleaner(type, cleanupFunction)                                      \
-    DK_FN_UNUSED void cleanupFunction##_cleanup(type *t) {                     \
+    static DK_FN_UNUSED void cleanupFunction##_cleanup(type *t) {              \
         if (*t) {                                                              \
             cleanupFunction(*t);                                               \
         }                                                                      \
@@ -11,7 +14,7 @@
 /* Sometimes we need the same 'cleanupFunction' but with different type params,
  * so allow unlimited name differences even for the same 'cleanupFunction' */
 #define defcleanerName(type, cleanupFunction, name)                            \
-    DK_FN_UNUSED void cleanupFunction##name##_cleanup(type *t) {               \
+    static DK_FN_UNUSED void cleanupFunction##name##_cleanup(type *t) {        \
         if (*t) {                                                              \
             cleanupFunction(*t);                                               \
         }                                                                      \
@@ -22,3 +25,22 @@
 
 #define cleanerName(cleanupFunction, name)                                     \
     __attribute__((cleanup(cleanupFunction##name##_cleanup)))
+
+/* Usage idioms:
+ *
+ * Scope-exit free (never leaks on any early return):
+ *     defcleaner(void *, zfree)         // once per file, top level
+ *     cleaner(zfree) void *buf = zmalloc(n);
+ *
+ * Ownership transfer ("disarm by NULLing"): when the success path
+ * hands the allocation to someone else, NULL the local so the cleaner
+ * (which skips NULL) does nothing:
+ *     cleaner(zfree) void *out = zmalloc(n);
+ *     ...
+ *     *result = out;
+ *     out = NULL;      // disarmed: caller owns it now
+ *     return true;     // failure paths above still free automatically
+ *
+ * State restore guard (undo a global tweak on every exit): make a
+ * cleanup fn for a small guard type whose cleanup performs the
+ * restore, e.g. restoring a forced backend selection. */

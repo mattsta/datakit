@@ -113,6 +113,12 @@ void multimapAtomInsertWithExactAtomID(multimapAtom *ma, const uint64_t atomRef,
         (void)deleted;
     }
 
+    /* Also clear any prior binding of this exact ID to a DIFFERENT key.
+     * mapAtomForward is a non-set map, so without this a colliding ID
+     * (e.g. restoring a table with previously-assigned ids) would keep
+     * two rows for one id and orphan one forever. */
+    multimapAtomDeleteByRef(ma, &atomId);
+
     multimapInsert(&ma->mapAtomForward, elements);
     multimapInsertWithSurrogateKey(&ma->mapAtomReverse, &reverseKey, &atomId,
                                    ma);
@@ -207,8 +213,7 @@ void multimapAtomLookupRefcount(const multimapAtom *ma, const databox *key,
  * ==================================================================== */
 bool multimapAtomLookupMin(const multimapAtom *ma, databox *minRef) {
     /* mapAtomReverse is a 1-map, so we only need 1 element */
-    databox *elements[1] = {minRef};
-    return multimapFirst(ma->mapAtomReverse, elements);
+    return multimapFirstInto(ma->mapAtomReverse, minRef, 1);
 }
 
 /* ====================================================================
@@ -287,8 +292,16 @@ DK_INLINE_ALWAYS bool conformRefcountDecr(multimapAtom *ma,
          * releases in our local multimapAtom struct to avoid this call out to
          * multimapCount() */
         if (multimapCount(ma->mapAtomForward) == 0) {
-            /* With zero elements, we can reset our atom counter to save on atom
-             * ID storage space! */
+            /* With zero elements, reset the atom counter so ids stay
+             * small (fewer external-reference storage bytes) - this
+             * compactness is the point of the atom table.
+             *
+             * CONTRACT: a full drain to empty invalidates every atom
+             * id/ref previously handed out. A caller MUST NOT cache a
+             * bare id/ref across a point where the table can empty and
+             * refill, or it may resolve to an unrelated later entry
+             * (ids are reused from 0). Re-resolve refs instead of
+             * holding them across that boundary. */
             ma->highest = 0;
         }
 
@@ -860,8 +873,7 @@ int multimapAtomTest(int argc, char *argv[]) {
                 const int16_t *remove = vals[i - backupDeleteBy];
 
                 for (size_t j = 0; j < loopExtent; j++) {
-                    databox box = {.type = DATABOX_SIGNED_64,
-                                   .data.i = remove[j]};
+                    databox box = databoxNewSigned(remove[j]);
                     const databox key = box;
 
                     databox count;
@@ -902,7 +914,7 @@ int multimapAtomTest(int argc, char *argv[]) {
             printf("Populating %zu\n", i);
 #endif
             for (size_t j = 0; j < loopExtent; j++) {
-                databox box = {.type = DATABOX_SIGNED_64, .data.i = use[j]};
+                databox box = databoxNewSigned(use[j]);
                 const databox key = box;
 #if 0
                     databoxReprSay("Adding", &key);
@@ -946,8 +958,7 @@ int multimapAtomTest(int argc, char *argv[]) {
             fflush(stdout);
             for (ssize_t i = 0; i < doUntil; i++) {
                 const int64_t populateVal = i % mod == 0 ? -i : i;
-                databox box = {.type = DATABOX_SIGNED_64,
-                               .data.i = populateVal};
+                databox box = databoxNewSigned(populateVal);
                 databox obox = box;
                 multimapAtomInsertIfNewConvert(ma, &box);
 
@@ -982,8 +993,7 @@ int multimapAtomTest(int argc, char *argv[]) {
             const ssize_t valAdjust = random() % multimapAtomCount(ma);
             for (ssize_t i = valAdjust; i < doUntil; i++) {
                 const int64_t populateVal = i % mod == 0 ? -i : i;
-                databox box = {.type = DATABOX_SIGNED_64,
-                               .data.i = populateVal};
+                databox box = databoxNewSigned(populateVal);
                 const bool found = multimapAtomLookupReference(ma, &box, &box);
                 if (!found) {
                     multimapAtomRepr(ma);
@@ -1011,8 +1021,7 @@ int multimapAtomTest(int argc, char *argv[]) {
             const ssize_t doUntil = 30 * j; /* 450 WAS CRASHING NUMBER */
             for (ssize_t i = 0; i < doUntil; i++) {
                 const int64_t populateVal = i; // % 2 == 0 ? -i : i;
-                databox box = {.type = DATABOX_SIGNED_64,
-                               .data.i = populateVal};
+                databox box = databoxNewSigned(populateVal);
                 databox obox = box;
                 multimapAtomInsertIfNewConvert(ma, &box);
 
@@ -1046,8 +1055,7 @@ int multimapAtomTest(int argc, char *argv[]) {
             /* GO AWAY */
             for (ssize_t i = 0; i < doUntil; i++) {
                 const int64_t populateVal = i; // % 2 == 0 ? -i : i;
-                databox box = {.type = DATABOX_SIGNED_64,
-                               .data.i = populateVal};
+                databox box = databoxNewSigned(populateVal);
                 const bool found = multimapAtomLookupReference(ma, &box, &box);
                 if (!found) {
                     multimapAtomRepr(ma);
@@ -1090,8 +1098,7 @@ int multimapAtomTest(int argc, char *argv[]) {
             const ssize_t doUntil = 30 * j;
             for (ssize_t i = 0; i < doUntil; i++) {
                 const int64_t populateVal = i % 2 == 0 ? -i : i;
-                const databox box = {.type = DATABOX_SIGNED_64,
-                                     .data.i = populateVal};
+                const databox box = databoxNewSigned(populateVal);
                 multimapAtomInsertWithExactAtomID(ma, i, &box);
 
                 const databox ref = {
@@ -1131,8 +1138,7 @@ int multimapAtomTest(int argc, char *argv[]) {
         const ssize_t doUntil = 70000;
         for (ssize_t i = 0; i < doUntil; i++) {
             const int64_t populateVal = i % 2 == 0 ? -i : i;
-            const databox box = {.type = DATABOX_SIGNED_64,
-                                 .data.i = populateVal};
+            const databox box = databoxNewSigned(populateVal);
             multimapAtomInsertWithExactAtomID(ma, i, &box);
         }
 
@@ -1167,7 +1173,7 @@ int multimapAtomTest(int argc, char *argv[]) {
         /* Insert all entries */
         int64_t startNs = timeUtilMonotonicNs();
         for (size_t i = 0; i < numEntries; i++) {
-            databox box = {.type = DATABOX_SIGNED_64, .data.i = (int64_t)i};
+            databox box = databoxNewSigned((int64_t)i);
             multimapAtomInsertIfNewConvert(ma, &box);
         }
         int64_t insertNs = timeUtilMonotonicNs() - startNs;
@@ -1179,7 +1185,7 @@ int multimapAtomTest(int argc, char *argv[]) {
         /* Lookup all entries by reference */
         startNs = timeUtilMonotonicNs();
         for (size_t i = 0; i < numEntries; i++) {
-            databox key = {.type = DATABOX_SIGNED_64, .data.i = (int64_t)i};
+            databox key = databoxNewSigned((int64_t)i);
             databox ref;
             bool found = multimapAtomLookupReference(ma, &key, &ref);
             assert(found);
@@ -1249,7 +1255,7 @@ int multimapAtomTest(int argc, char *argv[]) {
         /* Insert keys in random order */
         int64_t keys[] = {500, 100, 900, 300, 700, 200, 800, 400, 600, 1000};
         for (size_t i = 0; i < 10; i++) {
-            databox box = {.type = DATABOX_SIGNED_64, .data.i = keys[i]};
+            databox box = databoxNewSigned(keys[i]);
             multimapAtomInsert(ma, &box);
         }
 
@@ -1319,7 +1325,7 @@ int multimapAtomTest(int argc, char *argv[]) {
         /* Benchmark insert */
         int64_t startNs = timeUtilMonotonicNs();
         for (size_t i = 0; i < benchCount; i++) {
-            databox box = {.type = DATABOX_SIGNED_64, .data.i = (int64_t)i};
+            databox box = databoxNewSigned((int64_t)i);
             multimapAtomInsertIfNewConvert(ma, &box);
         }
         int64_t insertNs = timeUtilMonotonicNs() - startNs;
@@ -1327,7 +1333,7 @@ int multimapAtomTest(int argc, char *argv[]) {
         /* Benchmark lookup by key */
         startNs = timeUtilMonotonicNs();
         for (size_t i = 0; i < benchCount; i++) {
-            databox key = {.type = DATABOX_SIGNED_64, .data.i = (int64_t)i};
+            databox key = databoxNewSigned((int64_t)i);
             databox ref;
             multimapAtomLookupReference(ma, &key, &ref);
         }
@@ -1369,6 +1375,47 @@ int multimapAtomTest(int argc, char *argv[]) {
             multimapAtomBytes(ma), multimapAtomCount(ma),
             (double)multimapAtomBytes(ma) / multimapAtomCount(ma));
         printf("==========================================\n\n");
+
+        multimapAtomFree(ma);
+    }
+
+    TEST("exact atom id rebinding to a different key leaves no orphan") {
+        multimapAtom *ma = multimapAtomNew();
+
+        const databox keyA = databoxNewSigned(1111);
+        const databox keyB = databoxNewSigned(2222);
+
+        /* Bind id 5 -> keyA, then rebind the SAME id to keyB. */
+        multimapAtomInsertWithExactAtomID(ma, 5, &keyA);
+        multimapAtomInsertWithExactAtomID(ma, 5, &keyB);
+
+        /* No duplicate/orphan: exactly one row per side. */
+        if (multimapCount(ma->mapAtomForward) != 1) {
+            ERR("forward has %zu rows for one id, expected 1",
+                multimapCount(ma->mapAtomForward));
+        }
+        if (multimapCount(ma->mapAtomReverse) != 1) {
+            ERR("reverse has %zu rows, expected 1",
+                multimapCount(ma->mapAtomReverse));
+        }
+
+        /* id 5 resolves to the new key; the old key is unbound. */
+        const databox ref = {.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL,
+                             .data.u = 5};
+        databox foundKey;
+        if (!multimapAtomLookup(ma, &ref, &foundKey) ||
+            databoxCompare(&foundKey, &keyB) != 0) {
+            ERRR("id 5 did not resolve to the rebound key");
+        }
+
+        databox refOut;
+        if (multimapAtomLookupReference(ma, &keyA, &refOut)) {
+            ERRR("old key A still bound after id rebind");
+        }
+        if (!multimapAtomLookupReference(ma, &keyB, &refOut) ||
+            refOut.data.u != 5) {
+            ERRR("new key B not bound to id 5");
+        }
 
         multimapAtomFree(ma);
     }

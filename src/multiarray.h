@@ -152,14 +152,12 @@ typedef uint32_t multiarrayIdx;
  * Starting with containers...
  * ==================================================================== */
 multiarray *multiarrayNew(uint16_t len, uint16_t rowMax);
-size_t multiarrayCount(const multiarray *m);
-size_t multiarrayBytes(const multiarray *m);
+void multiarrayFree(multiarray *m);
 
 void *multiarrayGet(multiarray *m, multiarrayIdx idx);
 void *multiarrayGetHead(multiarray *m);
 void *multiarrayGetTail(multiarray *m);
-void multiarrayInsertAfter(multiarray **m, multiarrayIdx idx, void *what);
-void multiarrayInsertBefore(multiarray **m, multiarrayIdx idx, void *what);
+void multiarrayInsert(multiarray **m, multiarrayIdx idx, void *what);
 void multiarrayDelete(multiarray **m, const uint32_t index);
 
 #if 0

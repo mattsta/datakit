@@ -7070,6 +7070,33 @@ int memboundTest(int argc, char *argv[]) {
         memboundShutdown(m);
     }
 
+    TEST("reset then reuse: full alloc cycles reclaim everything") {
+        /* Reset must return the allocator to full capacity: alloc a
+         * batch, reset, and the same batch must succeed again */
+        membound *m = memboundCreate(1 << 20);
+        void *ptrs[64];
+
+        for (int cycle = 0; cycle < 3; cycle++) {
+            size_t got = 0;
+            for (size_t i = 0; i < 64; i++) {
+                ptrs[i] = memboundAlloc(m, 8192);
+                if (ptrs[i]) {
+                    got++;
+                    memset(ptrs[i], (int)(cycle + 1), 64);
+                }
+            }
+            if (got < 64) {
+                ERR("cycle %d: only %zu of 64 8KB allocs succeeded "
+                    "(reset failed to reclaim)",
+                    cycle, got);
+            }
+
+            memboundReset(m);
+        }
+
+        memboundShutdown(m);
+    }
+
     TEST_FINAL_RESULT;
 }
 #endif

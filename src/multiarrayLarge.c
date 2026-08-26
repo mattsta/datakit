@@ -55,10 +55,12 @@ multiarrayLarge *multiarrayLargeFromMedium(multiarrayMedium *medium) {
     /* All done with the medium inner node container */
     zfree(medium->node);
 
-    /* Now turn the medium container into a large container */
+    /* Now turn the medium container into a large container.
+     * A single-node medium never ran the InsertAfter loop, so tmp.tail
+     * stays NULL and the tail is the head itself. */
     multiarrayLarge *e = zrealloc(medium, sizeof(*e));
     e->head = head;
-    e->tail = tmp.tail;
+    e->tail = tmp.tail ? tmp.tail : head;
     e->len = len;
     e->rowMax = rowMax;
 
@@ -292,25 +294,29 @@ void multiarrayLargeInsert(multiarrayLarge *mar, const int32_t idx,
 }
 
 void *multiarrayLargeGet(const multiarrayLarge *mar, const int32_t idx) {
-    int32_t index = idx;
-    bool reverse = idx < 0 ? true : false; /* negative index == reverse */
-    multiarrayLargeNode *startNode = mar->head;
-    if (reverse) {
-        /* Convert reverse index into forward index */
-        index = (-idx) - 1;
-        startNode = mar->tail;
+    if (idx < 0) {
+        /* Reverse: accumulate node counts from the tail, then convert
+         * to a forward offset inside the landing node (mirror of
+         * multiarrayMediumGet's reverse arithmetic) */
+        const int32_t index = (-idx) - 1;
+        multiarrayLargeNode *prev = NULL;
+        multiarrayLargeNode *current = mar->tail;
+        multiarrayLargeNode *next = NULL;
+        int32_t accum = 0;
+
+        while ((next = getNext(prev, current)) &&
+               (accum + current->count) <= index) {
+            accum += current->count;
+            prev = current;
+            current = next;
+        }
+
+        const int32_t offset = (int32_t)current->count + idx + accum;
+        return current->data + (mar->len * offset);
     }
 
-    /* If we only have one node, no lookup, just
-     * return the index directly. */
-    const multiarrayLarge *prev = NULL;
-    if (getNext(prev, startNode) == NULL) {
-        return startNode->data + (mar->len * index);
-    }
-
-    /* TODO: verify index is proper for reverse after this return */
     multiarrayLargeResult worker =
-        multiarrayLargeGetForwardWorker(startNode, index, mar->len);
+        multiarrayLargeGetForwardWorker(mar->head, idx, mar->len);
     return worker.entry;
 }
 
@@ -559,6 +565,37 @@ int multiarrayLargeTest(int argc, char *argv[]) {
 
         assert(mar->head == mar->tail);
         assert((mar->head->prevNext ^ mar->tail->prevNext) == 0);
+
+        multiarrayLargeFree(mar);
+    }
+
+    TEST("reverse (negative) indexing across multiple nodes") {
+        /* Small rowMax forces multi-node lists; Get(-k) must return
+         * the k-th element from the end, node-boundary independent */
+        multiarrayLarge *mar = multiarrayLargeNew(sizeof(uint32_t), 4);
+
+        for (int32_t i = 0; i < 21; i++) {
+            uint32_t v = 1000 + (uint32_t)i;
+            multiarrayLargeInsert(mar, i, &v);
+        }
+
+        int32_t bad = 0;
+        for (int32_t k = 1; k <= 21; k++) {
+            const uint32_t want = 1000 + (uint32_t)(21 - k);
+            const uint32_t *got = multiarrayLargeGet(mar, -k);
+            if (!got || *got != want) {
+                bad++;
+            }
+        }
+        if (bad > 0) {
+            ERR("%d of 21 reverse lookups wrong", bad);
+        }
+
+        /* GetTail rides the same path */
+        const uint32_t *tail = multiarrayLargeGetTail(mar);
+        if (!tail || *tail != 1020) {
+            ERRR("GetTail returned wrong element");
+        }
 
         multiarrayLargeFree(mar);
     }

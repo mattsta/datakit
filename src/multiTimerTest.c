@@ -58,6 +58,50 @@ static bool testSelfUnregisterCallback(multiTimer *t, multiTimerId id,
     return true; /* Request reschedule but we unregistered */
 }
 
+/* Callback that unregisters itself and does not request repeat */
+static bool testSelfUnregisterNoRepeatCallback(multiTimer *t, multiTimerId id,
+                                               void *clientData) {
+    testCallbackState *state = clientData;
+    state->callCount++;
+    multiTimerUnregister(t, id);
+    return false;
+}
+
+/* Callback that unregisters a different (possibly already-fired) id */
+typedef struct testUnregisterOtherState {
+    multiTimerId target;
+    int callCount;
+} testUnregisterOtherState;
+
+static bool testUnregisterOtherCallback(multiTimer *t, multiTimerId id,
+                                        void *clientData) {
+    (void)id;
+    testUnregisterOtherState *state = clientData;
+    state->callCount++;
+    multiTimerUnregister(t, state->target);
+    return false;
+}
+
+/* Callback that stops all timers */
+static bool testStopAllCallback(multiTimer *t, multiTimerId id,
+                                void *clientData) {
+    (void)id;
+    testCallbackState *state = clientData;
+    state->callCount++;
+    multiTimerStopAll(t);
+    return true; /* reschedule request must be ignored after StopAll */
+}
+
+/* Callback that tries to re-enter timer processing */
+static bool testReentrantProcessCallback(multiTimer *t, multiTimerId id,
+                                         void *clientData) {
+    (void)id;
+    testCallbackState *state = clientData;
+    state->callCount++;
+    multiTimerProcessTimerEvents(t); /* must be a safe no-op */
+    return false;
+}
+
 /* Helper to sleep for microseconds (approximate) */
 static void sleepUs(uint64_t us) {
     usleep((useconds_t)us);
@@ -87,8 +131,8 @@ int multiTimerTest(int argc, char *argv[]) {
         if (!multiTimerInit(&t)) {
             ERRR("Failed to init multiTimer");
         } else {
-            if (multitimerCount(&t) != 0) {
-                ERR("Expected 0 timers, got %zu", multitimerCount(&t));
+            if (multiTimerCount(&t) != 0) {
+                ERR("Expected 0 timers, got %zu", multiTimerCount(&t));
             }
             multiTimerDeinit(&t);
         }
@@ -112,8 +156,8 @@ int multiTimerTest(int argc, char *argv[]) {
             ERRR("Timer ID should not be 0");
         }
 
-        if (multitimerCount(t) != 1) {
-            ERR("Expected 1 timer, got %zu", multitimerCount(t));
+        if (multiTimerCount(t) != 1) {
+            ERR("Expected 1 timer, got %zu", multiTimerCount(t));
         }
 
         multiTimerFree(t);
@@ -136,8 +180,8 @@ int multiTimerTest(int argc, char *argv[]) {
             }
         }
 
-        if (multitimerCount(t) != 5) {
-            ERR("Expected 5 timers, got %zu", multitimerCount(t));
+        if (multiTimerCount(t) != 5) {
+            ERR("Expected 5 timers, got %zu", multiTimerCount(t));
         }
 
         multiTimerFree(t);
@@ -170,8 +214,8 @@ int multiTimerTest(int argc, char *argv[]) {
         }
 
         /* Timer was one-shot, should be removed */
-        if (multitimerCount(t) != 0) {
-            ERR("Timer should be removed, count=%zu", multitimerCount(t));
+        if (multiTimerCount(t) != 0) {
+            ERR("Timer should be removed, count=%zu", multiTimerCount(t));
         }
 
         multiTimerFree(t);
@@ -196,7 +240,7 @@ int multiTimerTest(int argc, char *argv[]) {
         }
 
         /* Timer should still be scheduled */
-        if (multitimerCount(t) == 0) {
+        if (multiTimerCount(t) == 0) {
             ERRR("Repeating timer was incorrectly removed");
         }
 
@@ -348,7 +392,7 @@ int multiTimerTest(int argc, char *argv[]) {
         }
 
         /* Second timer (created by first) should be scheduled */
-        if (multitimerCount(t) == 0) {
+        if (multiTimerCount(t) == 0) {
             ERRR("Nested timer was not scheduled");
         }
 
@@ -503,8 +547,8 @@ int multiTimerTest(int argc, char *argv[]) {
                                &states[i]);
         }
 
-        if (multitimerCount(t) != (size_t)numTimers) {
-            ERR("Expected %d timers, got %zu", numTimers, multitimerCount(t));
+        if (multiTimerCount(t) != (size_t)numTimers) {
+            ERR("Expected %d timers, got %zu", numTimers, multiTimerCount(t));
         }
 
         /* Wait and process */
@@ -579,6 +623,399 @@ int multiTimerTest(int argc, char *argv[]) {
     }
 
     /* ================================================================
+     * Regression Tests
+     * ================================================================ */
+
+    TEST("multiTimer: stack init is fully deterministic") {
+        /* multiTimerInit must not inherit stack garbage: poison the
+         * struct first and verify ids start at 1 */
+        multiTimer t;
+        memset(&t, 0xA5, sizeof(t));
+
+        if (!multiTimerInit(&t)) {
+            ERRR("Failed to init multiTimer");
+        } else {
+            testCallbackState state = {0};
+            multiTimerId id =
+                multiTimerRegister(&t, 1000, 0, testCountingCallback, &state);
+            if (id != 1) {
+                ERR("First id should be 1, got %" PRIu64
+                    " (stack garbage leaked into nextTimerId)",
+                    id);
+            }
+            multiTimerDeinit(&t);
+        }
+    }
+
+    TEST("multiTimer: offset with no timers returns 0") {
+        multiTimer *t = multiTimerNew();
+
+        multiTimerUs offset = multiTimerNextTimerEventOffsetFromNowUs(t);
+        if (offset != 0) {
+            ERR("Expected 0 offset for empty timer, got %" PRId64
+                " (event loops would spin on a huge negative)",
+                offset);
+        }
+
+        multiTimerFree(t);
+    }
+
+    TEST("multiTimer: unregister validates ids") {
+        multiTimer *t = multiTimerNew();
+        testCallbackState state = {0};
+
+        if (multiTimerUnregister(t, 0)) {
+            ERRR("Unregister of id 0 should return false");
+        }
+        if (multiTimerUnregister(t, 9999)) {
+            ERRR("Unregister of never-issued id should return false");
+        }
+
+        /* A rejected id must not plant a stop entry that could block a
+         * future timer */
+        multiTimerStats stats;
+        multiTimerGetStats(t, &stats);
+        if (stats.stopPending != 0) {
+            ERR("Invalid unregister planted a stop entry, stopPending=%zu",
+                stats.stopPending);
+        }
+
+        multiTimerId id =
+            multiTimerRegister(t, 1000, 0, testCountingCallback, &state);
+        if (!multiTimerUnregister(t, id)) {
+            ERRR("Unregister of live id should return true");
+        }
+        if (!multiTimerUnregister(t, id)) {
+            ERRR("Double unregister should still return true");
+        }
+
+        multiTimerGetStats(t, &stats);
+        if (stats.stopPending != 1) {
+            ERR("Double unregister duplicated stop entry, stopPending=%zu",
+                stats.stopPending);
+        }
+
+        multiTimerFree(t);
+    }
+
+    TEST("multiTimer: unregister after fire keeps count sane") {
+        multiTimer *t = multiTimerNew();
+        testCallbackState state = {.callCount = 0, .shouldReschedule = false};
+
+        multiTimerId id =
+            multiTimerRegister(t, 1000, 0, testCountingCallback, &state);
+        sleepUs(3000);
+        multiTimerProcessTimerEvents(t);
+        if (state.callCount != 1) {
+            ERR("Timer did not fire, callCount=%d", state.callCount);
+        }
+
+        /* Stopping an already-fired id is a harmless no-op; the stale
+         * entry purges on the next drained process pass */
+        multiTimerUnregister(t, id);
+        multiTimerProcessTimerEvents(t);
+
+        multiTimerStats stats;
+        multiTimerGetStats(t, &stats);
+        if (stats.stopPending != 0) {
+            ERR("Stale stop entry lingered, stopPending=%zu",
+                stats.stopPending);
+        }
+
+        multiTimerRegister(t, 1000, 0, testCountingCallback, &state);
+        if (multiTimerCount(t) != 1) {
+            ERR("Expected 1 timer, got %zu", multiTimerCount(t));
+        }
+
+        multiTimerFree(t);
+    }
+
+    TEST("multiTimer: unregister of fired id is exact with live timers") {
+        multiTimer *t = multiTimerNew();
+        testCallbackState state = {.callCount = 0, .shouldReschedule = false};
+
+        multiTimerId a =
+            multiTimerRegister(t, 1000, 0, testCountingCallback, &state);
+        multiTimerRegister(t, 60000000, 0, testCountingCallback, &state);
+        sleepUs(3000);
+        multiTimerProcessTimerEvents(t);
+        if (state.callCount != 1) {
+            ERR("Near timer did not fire, callCount=%d", state.callCount);
+        }
+
+        /* The far timer keeps storage nonempty, so no drain purge can
+         * mask a stale stop entry: the unregister itself must detect
+         * the id is gone */
+        if (!multiTimerUnregister(t, a)) {
+            ERRR("Unregister of fired id should return true");
+        }
+        if (multiTimerCount(t) != 1) {
+            ERR("Fired-id unregister skewed count, got %zu",
+                multiTimerCount(t));
+        }
+
+        multiTimerStats stats;
+        multiTimerGetStats(t, &stats);
+        if (stats.stopPending != 0) {
+            ERR("Fired-id unregister planted a stop entry, stopPending=%zu",
+                stats.stopPending);
+        }
+
+        multiTimerFree(t);
+    }
+
+    TEST("multiTimer: mid-callback unregister of fired id reconciles") {
+        multiTimer *t = multiTimerNew();
+        testCallbackState state = {.callCount = 0, .shouldReschedule = false};
+
+        multiTimerId a =
+            multiTimerRegister(t, 1000, 0, testCountingCallback, &state);
+        multiTimerRegister(t, 60000000, 0, testCountingCallback, &state);
+        sleepUs(3000);
+        multiTimerProcessTimerEvents(t);
+        if (state.callCount != 1) {
+            ERR("Near timer did not fire, callCount=%d", state.callCount);
+        }
+
+        /* A later callback unregisters the long-dead id a; the
+         * end-of-batch reconcile must drop the stale stop entry */
+        testUnregisterOtherState unregState = {.target = a, .callCount = 0};
+        multiTimerRegister(t, 1000, 0, testUnregisterOtherCallback,
+                           &unregState);
+        sleepUs(3000);
+        multiTimerProcessTimerEvents(t);
+        if (unregState.callCount != 1) {
+            ERR("Unregistering callback did not fire, callCount=%d",
+                unregState.callCount);
+        }
+
+        if (multiTimerCount(t) != 1) {
+            ERR("Stale mid-callback stop skewed count, got %zu",
+                multiTimerCount(t));
+        }
+
+        multiTimerStats stats;
+        multiTimerGetStats(t, &stats);
+        if (stats.stopPending != 0) {
+            ERR("Stale mid-callback stop entry lingered, stopPending=%zu",
+                stats.stopPending);
+        }
+
+        multiTimerFree(t);
+    }
+
+    TEST("multiTimer: mid-callback unregister of live timer still stops it") {
+        multiTimer *t = multiTimerNew();
+        testCallbackState victim = {.callCount = 0, .shouldReschedule = false};
+
+        /* Victim fires later than the unregistering callback */
+        multiTimerId victimId =
+            multiTimerRegister(t, 100000, 0, testCountingCallback, &victim);
+        testUnregisterOtherState unregState = {.target = victimId,
+                                               .callCount = 0};
+        multiTimerRegister(t, 1000, 0, testUnregisterOtherCallback,
+                           &unregState);
+        sleepUs(3000);
+        multiTimerProcessTimerEvents(t);
+        if (unregState.callCount != 1) {
+            ERR("Unregistering callback did not fire, callCount=%d",
+                unregState.callCount);
+        }
+
+        /* The victim's stop entry matches a live stored timer, so the
+         * reconcile must keep it: count excludes the victim */
+        if (multiTimerCount(t) != 0) {
+            ERR("Live-victim stop lost by reconcile, count=%zu",
+                multiTimerCount(t));
+        }
+
+        sleepUs(150000);
+        multiTimerProcessTimerEvents(t);
+        if (victim.callCount != 0) {
+            ERR("Cancelled victim fired anyway, callCount=%d",
+                victim.callCount);
+        }
+        if (multiTimerCount(t) != 0) {
+            ERR("Expected empty timer set, got %zu", multiTimerCount(t));
+        }
+
+        multiTimerFree(t);
+    }
+
+    TEST("multiTimer: self-unregister without repeat leaves no stop entry") {
+        multiTimer *t = multiTimerNew();
+        testCallbackState state = {.callCount = 0};
+
+        multiTimerRegister(t, 1000, 0, testSelfUnregisterNoRepeatCallback,
+                           &state);
+        sleepUs(3000);
+        multiTimerProcessTimerEvents(t);
+        if (state.callCount != 1) {
+            ERR("Timer did not fire, callCount=%d", state.callCount);
+        }
+
+        multiTimerStats stats;
+        multiTimerGetStats(t, &stats);
+        if (stats.stopPending != 0) {
+            ERR("Self-unregister leaked a stop entry, stopPending=%zu",
+                stats.stopPending);
+        }
+
+        multiTimerFree(t);
+    }
+
+    TEST("multiTimer: stopAll then register new timers") {
+        multiTimer *t = multiTimerNew();
+        testCallbackState old = {.callCount = 0};
+        testCallbackState fresh = {.callCount = 0};
+
+        for (int32_t i = 0; i < 5; i++) {
+            multiTimerRegister(t, 50000, 0, testCountingCallback, &old);
+        }
+
+        multiTimerStopAll(t);
+        if (multiTimerCount(t) != 0) {
+            ERR("Expected 0 timers after StopAll, got %zu", multiTimerCount(t));
+        }
+
+        multiTimerRegister(t, 5000, 0, testCountingCallback, &fresh);
+        if (multiTimerCount(t) != 1) {
+            ERR("Expected 1 timer after re-register, got %zu",
+                multiTimerCount(t));
+        }
+
+        sleepUs(60000);
+        multiTimerProcessTimerEvents(t);
+        if (old.callCount != 0) {
+            ERR("Stopped timers fired, callCount=%d", old.callCount);
+        }
+        if (fresh.callCount != 1) {
+            ERR("New timer did not fire, callCount=%d", fresh.callCount);
+        }
+
+        multiTimerFree(t);
+    }
+
+    TEST("multiTimer: stopAll from within callback") {
+        multiTimer *t = multiTimerNew();
+        testCallbackState stopper = {.callCount = 0};
+        testCallbackState other = {.callCount = 0, .shouldReschedule = true};
+        testCallbackState fresh = {.callCount = 0};
+
+        multiTimerRegister(t, 5000, 5000, testStopAllCallback, &stopper);
+        multiTimerRegister(t, 50000, 5000, testCountingCallback, &other);
+
+        sleepUs(10000);
+        multiTimerProcessTimerEvents(t);
+        if (stopper.callCount != 1) {
+            ERR("Stopper did not fire, callCount=%d", stopper.callCount);
+        }
+
+        sleepUs(50000);
+        multiTimerProcessTimerEvents(t);
+        if (stopper.callCount != 1) {
+            ERR("Stopper rescheduled despite StopAll, callCount=%d",
+                stopper.callCount);
+        }
+        if (other.callCount != 0) {
+            ERR("Other timer fired despite StopAll, callCount=%d",
+                other.callCount);
+        }
+        if (multiTimerCount(t) != 0) {
+            ERR("Expected 0 timers after StopAll, got %zu", multiTimerCount(t));
+        }
+
+        multiTimerRegister(t, 1000, 0, testCountingCallback, &fresh);
+        sleepUs(3000);
+        multiTimerProcessTimerEvents(t);
+        if (fresh.callCount != 1) {
+            ERR("Post-StopAll timer did not fire, callCount=%d",
+                fresh.callCount);
+        }
+
+        multiTimerFree(t);
+    }
+
+    TEST("multiTimer: process from within callback is a safe no-op") {
+        multiTimer *t = multiTimerNew();
+        testCallbackState reentrant = {.callCount = 0};
+        testCallbackState later = {.callCount = 0};
+
+        multiTimerRegister(t, 1000, 0, testReentrantProcessCallback,
+                           &reentrant);
+        multiTimerRegister(t, 2000, 0, testCountingCallback, &later);
+
+        sleepUs(5000);
+        multiTimerProcessTimerEvents(t);
+
+        if (reentrant.callCount != 1) {
+            ERR("Reentrant callback fired %d times, expected 1",
+                reentrant.callCount);
+        }
+        if (later.callCount != 1) {
+            ERR("Second timer fired %d times, expected 1", later.callCount);
+        }
+
+        multiTimerFree(t);
+    }
+
+    TEST("multiTimer: count includes callback-registered timers") {
+        multiTimer *t = multiTimerNew();
+        testCallbackState state = {.callCount = 0, .shouldReschedule = false};
+
+        multiTimerRegister(t, 1000, 0, testNestedTimerCallback, &state);
+        sleepUs(3000);
+        multiTimerProcessTimerEvents(t);
+
+        /* Nested registration happened inside the callback; count must
+         * see it immediately after processing */
+        if (multiTimerCount(t) != 1) {
+            ERR("Expected 1 timer (nested), got %zu", multiTimerCount(t));
+        }
+
+        multiTimerFree(t);
+    }
+
+    TEST("multiTimer: PERF stopAll at scale is O(1)") {
+        multiTimer *t = multiTimerNew();
+        testCallbackState state = {.callCount = 0, .shouldReschedule = false};
+        const size_t numTimers = 50000;
+
+        /* Fire-and-forget a large population first so nextTimerId is
+         * large, then register a small live set: the old
+         * per-id-tombstone StopAll degraded on nextTimerId, not on the
+         * live count */
+        for (size_t i = 0; i < numTimers; i++) {
+            multiTimerRegister(t, 0, 0, testCountingCallback, &state);
+        }
+        multiTimerProcessTimerEvents(t);
+
+        for (size_t i = 0; i < 10; i++) {
+            multiTimerRegister(t, 1000000, 0, testCountingCallback, &state);
+        }
+
+        const uint64_t start = timeUtilMonotonicNs();
+        multiTimerStopAll(t);
+        const uint64_t elapsed = timeUtilMonotonicNs() - start;
+
+        printf("    StopAll with %zu lifetime ids: %" PRIu64 "ns\n",
+               numTimers + 10, elapsed);
+
+        if (multiTimerCount(t) != 0) {
+            ERR("Expected 0 timers after StopAll, got %zu", multiTimerCount(t));
+        }
+
+        multiTimerStats stats;
+        multiTimerGetStats(t, &stats);
+        if (stats.stopPending != 0) {
+            ERR("StopAll materialized stop entries, stopPending=%zu",
+                stats.stopPending);
+        }
+
+        multiTimerFree(t);
+    }
+
+    /* ================================================================
      * Performance Tests
      * ================================================================ */
 
@@ -595,7 +1032,7 @@ int multiTimerTest(int argc, char *argv[]) {
 
         PERF_TIMERS_FINISH_PRINT_RESULTS(numOps, "timer registrations");
 
-        printf("    Registered %zu timers\n", multitimerCount(t));
+        printf("    Registered %zu timers\n", multiTimerCount(t));
 
         multiTimerFree(t);
     }
@@ -806,7 +1243,7 @@ int multiTimerTest(int argc, char *argv[]) {
         PERF_TIMERS_FINISH_PRINT_RESULTS(numTimers,
                                          "million timer registrations");
 
-        size_t count = multitimerCount(t);
+        size_t count = multiTimerCount(t);
         printf("    Total registered: %zu timers\n", count);
 
         if (count != numTimers) {
@@ -902,7 +1339,7 @@ int multiTimerTest(int argc, char *argv[]) {
 
         PERF_TIMERS_FINISH_PRINT_RESULTS(ops, "mixed operations");
 
-        printf("    Final timer count: %zu\n", multitimerCount(t));
+        printf("    Final timer count: %zu\n", multiTimerCount(t));
 
         multiTimerFree(t);
     }

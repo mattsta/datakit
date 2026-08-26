@@ -16,15 +16,19 @@ void multiarraySmallFree(multiarraySmall *mar) {
     }
 }
 
-/* multiarray offset helper macro */
-#define _mo(offset) (mar->len * (offset))
+/* multiarray offset helper macro (size_t math: uint16*uint16 products
+ * would promote to int and can overflow at extreme len*count) */
+#define _mo(offset) ((size_t)mar->len * (offset))
 void multiarraySmallInsert(multiarraySmall *mar, uint16_t idx, void *s) {
+    /* Same contract the Medium/Large tiers assert: idx may be at most
+     * one past the end (append position) */
+    assert(idx <= mar->count);
+
     mar->data = zrealloc(mar->data, _mo(mar->count + 1));
 
     if (idx < mar->count) {
         const uint32_t remaining = mar->count - idx;
-        memmove(mar->data + _mo(idx + 1), mar->data + _mo(idx),
-                mar->len * remaining);
+        memmove(mar->data + _mo(idx + 1), mar->data + _mo(idx), _mo(remaining));
     }
 
     memcpy(mar->data + _mo(idx), s, mar->len);
@@ -32,6 +36,12 @@ void multiarraySmallInsert(multiarraySmall *mar, uint16_t idx, void *s) {
 }
 
 void multiarraySmallDelete(multiarraySmall *mar, uint16_t idx) {
+    /* Deleting from an empty array or past the end is a caller bug
+     * (silently dropping the tail element or requesting a ~SIZE_MAX
+     * realloc otherwise) */
+    assert(mar->count > 0);
+    assert(idx < mar->count);
+
     if (idx < mar->count) {
         const uint32_t remaining = mar->count - idx - 1;
         memmove(mar->data + _mo(idx), mar->data + _mo(idx + 1), _mo(remaining));

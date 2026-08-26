@@ -427,6 +427,8 @@ add_library(${PROJECT_NAME} OBJECT
     multiTimer.c
     timerWheel.c
     timerWheelTest.c
+    ptrlibTest.c
+    bigmathTest.c
     timeUtil.c
 
     fastmutex.c

@@ -70,7 +70,7 @@ static inline databox memberToPoolId(multiOrderedSetFull *m,
                                      const databox *member) {
     if (m->pool) {
         uint64_t id = atomPoolIntern(m->pool, member);
-        return (databox){.type = DATABOX_UNSIGNED_64, .data.u64 = id};
+        return databoxNewUnsigned(id);
     }
     /* No pool - return member as-is */
     return *member;
@@ -421,7 +421,7 @@ static flexEntry *findEntryByMember(const multiOrderedSetFull *m,
         if (id == 0) {
             return NULL; /* Member not in pool */
         }
-        memberToMatch = (databox){.type = DATABOX_UNSIGNED_64, .data.u64 = id};
+        memberToMatch = databoxNewUnsigned(id);
     } else {
         memberToMatch = *member;
     }
@@ -472,7 +472,7 @@ multiOrderedSetFull *multiOrderedSetFullNew(void) {
 
     flex *initialMap = flexNew();
     uint32_t initialMiddle = FLEX_EMPTY_SIZE;
-    databox initialRange = {.type = DATABOX_SIGNED_64, .data.i = INT64_MAX};
+    databox initialRange = databoxNewSigned(INT64_MAX);
 
     /* Use multiarrayNativeInsert instead of non-existent Append */
     uint32_t mapCount = 0;
@@ -613,8 +613,7 @@ multiOrderedSetFull *multiOrderedSetFullCopy(const multiOrderedSetFull *m) {
                     if (atomPoolLookup(m->pool, oldId.data.u64, &member)) {
                         /* Intern in new pool and update entry */
                         uint64_t newId = atomPoolIntern(copy->pool, &member);
-                        databox newIdBox = {.type = DATABOX_UNSIGNED_64,
-                                            .data.u64 = newId};
+                        databox newIdBox = databoxNewUnsigned(newId);
                         flexReplaceByType(&map, memberEntry, &newIdBox);
                         setSubMap(copy, i, map);
                     }
@@ -755,7 +754,7 @@ void multiOrderedSetFullReset(multiOrderedSetFull *m) {
 
     flex *initialMap = flexNew();
     uint32_t initialMiddle = FLEX_EMPTY_SIZE;
-    databox initialRange = {.type = DATABOX_SIGNED_64, .data.i = INT64_MAX};
+    databox initialRange = databoxNewSigned(INT64_MAX);
 
     uint32_t resetCount = 0;
     multiarrayNativeInsert(m->scoreMap, flex *, 64, resetCount, 0, &initialMap);
@@ -1191,7 +1190,7 @@ int64_t multiOrderedSetFullGetRank(const multiOrderedSetFull *m,
         if (id == 0) {
             return -1; /* Member not in pool */
         }
-        memberToMatch = (databox){.type = DATABOX_UNSIGNED_64, .data.u64 = id};
+        memberToMatch = databoxNewUnsigned(id);
     } else {
         memberToMatch = *member;
     }
@@ -1703,7 +1702,7 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
         multiOrderedSetFull *mos = multiOrderedSetFullNew();
 
         for (int i = 0; i < 100; i++) {
-            databox score = {.type = DATABOX_SIGNED_64, .data.i = i * 10};
+            databox score = databoxNewSigned(i * 10);
             char buf[16];
             snprintf(buf, sizeof(buf), "member%03d", i);
             databox member = databoxNewBytesAllowEmbed(buf, strlen(buf));
@@ -1762,7 +1761,7 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
 
             /* Add entries */
             for (int i = 0; i < 100; i++) {
-                databox score = {.type = DATABOX_SIGNED_64, .data.i = i * 10};
+                databox score = databoxNewSigned(i * 10);
                 char buf[32];
                 snprintf(buf, sizeof(buf), "poolmember%03d", i);
                 databox member = databoxNewBytesAllowEmbed(buf, strlen(buf));
@@ -1865,7 +1864,7 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
             /* Insert - Inline */
             uint64_t inlineInsertStart = _perfTSC();
             for (size_t i = 0; i < N; i++) {
-                databox score = {.type = DATABOX_UNSIGNED_64, .data.u64 = i};
+                databox score = databoxNewUnsigned(i);
                 /* Generate string of exact length */
                 memset(buf, 'A' + (i % 26), strLen);
                 snprintf(buf, strLen + 1, "m%0*zu", (int)(strLen - 2), i);
@@ -1878,7 +1877,7 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
             /* Insert - Pool HASH */
             uint64_t hashInsertStart = _perfTSC();
             for (size_t i = 0; i < N; i++) {
-                databox score = {.type = DATABOX_UNSIGNED_64, .data.u64 = i};
+                databox score = databoxNewUnsigned(i);
                 memset(buf, 'A' + (i % 26), strLen);
                 snprintf(buf, strLen + 1, "m%0*zu", (int)(strLen - 2), i);
                 buf[strLen] = '\0';
@@ -1890,7 +1889,7 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
             /* Insert - Pool TREE */
             uint64_t treeInsertStart = _perfTSC();
             for (size_t i = 0; i < N; i++) {
-                databox score = {.type = DATABOX_UNSIGNED_64, .data.u64 = i};
+                databox score = databoxNewUnsigned(i);
                 memset(buf, 'A' + (i % 26), strLen);
                 snprintf(buf, strLen + 1, "m%0*zu", (int)(strLen - 2), i);
                 buf[strLen] = '\0';
@@ -2020,7 +2019,7 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
             /* Insert with heavy reuse (10 score updates per member on avg) */
             for (size_t i = 0; i < totalOps; i++) {
                 size_t memberIdx = i % uniqueMembers;
-                databox score = {.type = DATABOX_UNSIGNED_64, .data.u64 = i};
+                databox score = databoxNewUnsigned(i);
                 memset(buf, 'A' + (memberIdx % 26), strLen);
                 snprintf(buf, strLen + 1, "m%0*zu", (int)(strLen - 2),
                          memberIdx);
@@ -2091,7 +2090,7 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
     TEST("MOS-Full: invariant oracle holds (ascending insert)") {
         multiOrderedSetFull *m = multiOrderedSetFullNew();
         for (int i = 0; i < 1000; i++) {
-            databox score = {.type = DATABOX_SIGNED_64, .data.i = i};
+            databox score = databoxNewSigned(i);
             char buf[24];
             int n = snprintf(buf, sizeof(buf), "m%06d", i);
             databox member = databoxNewBytesAllowEmbed(buf, (size_t)n);
@@ -2115,7 +2114,7 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
         for (int i = 0; i < 1000; i++) {
             s = s * 6364136223846793005ULL + 1442695040888963407ULL;
             int key = (int)(s >> 40) % 4096;
-            databox score = {.type = DATABOX_SIGNED_64, .data.i = key % 50};
+            databox score = databoxNewSigned(key % 50);
             char buf[24];
             int n = snprintf(buf, sizeof(buf), "k%08d", key);
             databox member = databoxNewBytesAllowEmbed(buf, (size_t)n);
@@ -2136,7 +2135,7 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
         const int N = 600;
         for (int i = 0; i < N; i++) {
             int sc = (i >= 300 && i < 320) ? 250 : i;
-            databox score = {.type = DATABOX_SIGNED_64, .data.i = sc};
+            databox score = databoxNewSigned(sc);
             char buf[24];
             int n = snprintf(buf, sizeof(buf), "m%06d", i);
             databox member = databoxNewBytesAllowEmbed(buf, (size_t)n);
@@ -2186,7 +2185,7 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
         const int N = 1000;
 
         for (int i = 0; i < N; i++) {
-            databox score = {.type = DATABOX_SIGNED_64, .data.i = i};
+            databox score = databoxNewSigned(i);
             char buf[24];
             int n = snprintf(buf, sizeof(buf), "m%06d", i);
             databox member = databoxNewBytesAllowEmbed(buf, (size_t)n);
@@ -2198,8 +2197,8 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
          * exposed the rangeBox-sentinel bug. */
         for (int round = 1; round <= 10; round++) {
             for (int i = 0; i < N; i++) {
-                databox score = {.type = DATABOX_SIGNED_64,
-                                 .data.i = (int64_t)i + (int64_t)round * 1000};
+                databox score =
+                    databoxNewSigned((int64_t)i + (int64_t)round * 1000);
                 char buf[24];
                 int n = snprintf(buf, sizeof(buf), "m%06d", i);
                 databox member = databoxNewBytesAllowEmbed(buf, (size_t)n);
@@ -2231,7 +2230,7 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
         char buf[24];
 
         for (int i = 0; i < N; i++) {
-            databox score = {.type = DATABOX_SIGNED_64, .data.i = i};
+            databox score = databoxNewSigned(i);
             int n = snprintf(buf, sizeof(buf), "d%06d", i);
             databox member = databoxNewBytesAllowEmbed(buf, (size_t)n);
             multiOrderedSetFullAdd(m, &score, &member);
@@ -2254,7 +2253,7 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
             ERR("after full delete mapCount expected 1, got %u", m->mapCount);
         }
         for (int i = 0; i < 100; i++) {
-            databox score = {.type = DATABOX_SIGNED_64, .data.i = i};
+            databox score = databoxNewSigned(i);
             int n = snprintf(buf, sizeof(buf), "r%06d", i);
             databox member = databoxNewBytesAllowEmbed(buf, (size_t)n);
             multiOrderedSetFullAdd(m, &score, &member);

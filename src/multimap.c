@@ -303,7 +303,7 @@ void multimapInsertWithSurrogateKey(multimap **m, const databox *elements[],
 }
 
 void multimapAppend(multimap **m, const databox *elements[]) {
-    MULTIMAP_NORETURN(m, Append, elements);
+    MULTIMAP_NORETURN(*m, Append, elements);
 
     const uint32_t depth = COMPRESS_DEPTH(*m);
     const flexCapSizeLimit limit = COMPRESS_LIMIT(*m);
@@ -438,7 +438,12 @@ int64_t multimapFieldIncr(multimap **m, const databox *key,
                           uint32_t fieldOffset, int64_t incrBy) {
     /* Step 1: fetch entry for key */
     multimapEntry me;
-    multimapGetUnderlyingEntry(*m, key, &me);
+    if (!multimapGetUnderlyingEntry(*m, key, &me)) {
+        /* No such key: a miss leaves me.fe NULL, so return 0 rather
+         * than dereferencing it. Reachable via a stale or forged atom
+         * reference handed to Retain/Release. */
+        return 0;
+    }
 
     /* Step 2: iterate to offset field */
     while (fieldOffset--) {
@@ -852,6 +857,15 @@ void multimapCopyKeys(multimap **restrict dst, const multimap *restrict src) {
  * ==================================================================== */
 #ifdef DATAKIT_TEST
 
+/* Assert internal invariants of any tier: every cached middle byte
+ * offset equals a fresh flexMiddle() rescan, and (Full tier) every
+ * rangeBox matches its map's live head key without dangling into a
+ * stale allocation.  These caches are trusted blindly by sorted finds
+ * and range routing, so tests call this after every mutation. */
+void multimapVerify(const multimap *m) {
+    MULTIMAP_SINGLE_NORETURN(m, Verify);
+}
+
 #define CTEST_INCLUDE_KVGEN
 #include "ctest.h"
 
@@ -1086,6 +1100,255 @@ int multimapTest(int argc, char *argv[]) {
         }
 
         multimapFree(m);
+    }
+
+    TEST("integrity: FieldIncr width sweep re-verifies middles + rangeBoxes") {
+        /* String keys force byte-typed rangeBoxes (the kind a realloc
+         * strands); signed values sweep every integer encoding width in
+         * both directions so single-entry mutations re-encode entries
+         * and drag map totals across varint header width boundaries.
+         * After EVERY operation the cached middles (all tiers) and
+         * rangeBoxes (Full) are checked against fresh rescans, and at
+         * the end every key must round-trip its exact shadow value. */
+        const int64_t deltas[] = {
+            1, 100, 30000, 8000000, INT64_C(3000000000), INT64_MAX / 4};
+        const size_t nDeltas = sizeof(deltas) / sizeof(*deltas);
+
+        for (int count = 4; count <= 1024; count *= 4) {
+            multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_64);
+            int64_t *shadow = zcalloc(count, sizeof(*shadow));
+
+            for (int i = 0; i < count; i++) {
+                char keyBuf[32];
+                snprintf(keyBuf, sizeof(keyBuf), "key%05d", i);
+                databox key = databoxNewBytesString(keyBuf);
+                databox val = databoxNewSigned(0);
+                const databox *elements[2] = {&key, &val};
+                multimapInsert(&m, elements);
+                multimapVerify(m);
+            }
+
+            /* Sweep encoding widths UP... */
+            for (size_t d = 0; d < nDeltas; d++) {
+                for (int i = 0; i < count; i++) {
+                    char keyBuf[32];
+                    snprintf(keyBuf, sizeof(keyBuf), "key%05d", i);
+                    databox key = databoxNewBytesString(keyBuf);
+                    shadow[i] += deltas[d];
+                    const int64_t got =
+                        multimapFieldIncr(&m, &key, 1, deltas[d]);
+                    if (got != shadow[i]) {
+                        ERR("FieldIncr(+%" PRId64 ") on %s returned %" PRId64
+                            " expected %" PRId64 "!",
+                            deltas[d], keyBuf, got, shadow[i]);
+                        assert(got == shadow[i]);
+                    }
+
+                    multimapVerify(m);
+                }
+            }
+
+            /* ...then back DOWN (shrinking re-encodes + header shrink) */
+            for (size_t d = nDeltas; d-- > 0;) {
+                for (int i = 0; i < count; i++) {
+                    char keyBuf[32];
+                    snprintf(keyBuf, sizeof(keyBuf), "key%05d", i);
+                    databox key = databoxNewBytesString(keyBuf);
+                    shadow[i] -= deltas[d];
+                    const int64_t got =
+                        multimapFieldIncr(&m, &key, 1, -deltas[d]);
+                    if (got != shadow[i]) {
+                        ERR("FieldIncr(-%" PRId64 ") on %s returned %" PRId64
+                            " expected %" PRId64 "!",
+                            deltas[d], keyBuf, got, shadow[i]);
+                        assert(got == shadow[i]);
+                    }
+
+                    multimapVerify(m);
+                }
+            }
+
+            /* Full round-trip: every key still findable, exact value. */
+            for (int i = 0; i < count; i++) {
+                char keyBuf[32];
+                snprintf(keyBuf, sizeof(keyBuf), "key%05d", i);
+                databox key = databoxNewBytesString(keyBuf);
+                databox result = {{0}};
+                databox *results[1] = {&result};
+                const bool found = multimapLookup(m, &key, results);
+                assert(found);
+                (void)found;
+                databox expected = databoxNewSigned(shadow[i]);
+                assert(databoxEqual(&expected, &result));
+            }
+
+            /* The largest sweep must have exercised the Full tier or
+             * this test silently stopped covering rangeBoxes. */
+            if (count == 1024) {
+                assert(multimapType_(m) == MULTIMAP_TYPE_FULL);
+            }
+
+            zfree(shadow);
+            multimapFree(m);
+        }
+    }
+
+    TEST("integrity: Replace/ResizeEntry byte sweep re-verifies "
+         "middles + rangeBoxes") {
+        /* Byte values grown and shrunk across two orders of magnitude
+         * realloc the flexes constantly and cross varint header widths;
+         * every mutation must leave middles and rangeBoxes coherent. */
+        static const size_t lens[] = {1, 8, 63, 64, 65, 250, 1024, 5, 4096, 2};
+        const size_t nLens = sizeof(lens) / sizeof(*lens);
+        const int count = 256;
+
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_64);
+        for (int i = 0; i < count; i++) {
+            char keyBuf[32];
+            snprintf(keyBuf, sizeof(keyBuf), "key%05d", i);
+            databox key = databoxNewBytesString(keyBuf);
+            databox val = databoxNewBytesString("v");
+            const databox *elements[2] = {&key, &val};
+            multimapInsert(&m, elements);
+        }
+
+        assert(multimapType_(m) == MULTIMAP_TYPE_FULL);
+
+        uint8_t *buf = zmalloc(4096);
+        for (size_t L = 0; L < nLens; L++) {
+            const size_t len = lens[L];
+            memset(buf, (int)('a' + (len % 26)), len);
+
+            for (int i = 0; i < count; i++) {
+                char keyBuf[32];
+                snprintf(keyBuf, sizeof(keyBuf), "key%05d", i);
+                databox key = databoxNewBytesString(keyBuf);
+
+                multimapEntry me = {0};
+                const bool found = multimapGetUnderlyingEntry(m, &key, &me);
+                assert(found);
+                (void)found;
+
+                /* advance from the key entry to its value entry */
+                me.fe = flexNext(*me.map, me.fe);
+                databox val = databoxNewBytes(buf, len);
+                multimapReplaceEntry(&m, &me, &val);
+                multimapVerify(m);
+            }
+
+            /* Spot round-trip: content AND length must match. */
+            for (int i = 0; i < count; i += 51) {
+                char keyBuf[32];
+                snprintf(keyBuf, sizeof(keyBuf), "key%05d", i);
+                databox key = databoxNewBytesString(keyBuf);
+                databox result = {{0}};
+                databox *results[1] = {&result};
+                const bool found = multimapLookup(m, &key, results);
+                assert(found);
+                (void)found;
+                assert(result.len == len);
+                assert(memcmp(result.data.bytes.start, buf, len) == 0);
+            }
+        }
+
+        /* ResizeEntry pass: length-only contract (content past the old
+         * prefix is unspecified), exercising grow, shrink, and the
+         * regularize/split path for oversized maps. */
+        static const size_t resizeTo[] = {9, 2048, 3};
+        for (size_t L = 0; L < sizeof(resizeTo) / sizeof(*resizeTo); L++) {
+            for (int i = 0; i < count; i++) {
+                char keyBuf[32];
+                snprintf(keyBuf, sizeof(keyBuf), "key%05d", i);
+                databox key = databoxNewBytesString(keyBuf);
+
+                multimapEntry me = {0};
+                const bool found = multimapGetUnderlyingEntry(m, &key, &me);
+                assert(found);
+                (void)found;
+
+                me.fe = flexNext(*me.map, me.fe);
+                multimapResizeEntry(&m, &me, resizeTo[L]);
+                multimapVerify(m);
+
+                databox result = {{0}};
+                databox *results[1] = {&result};
+                const bool stillThere = multimapLookup(m, &key, results);
+                assert(stillThere);
+                (void)stillThere;
+                assert(result.len == resizeTo[L]);
+            }
+        }
+
+        zfree(buf);
+        multimapFree(m);
+    }
+
+    TEST("FieldIncr: tier-direct calls hit + miss (no crash, miss == 0)") {
+        databox missing = databoxNewBytesString("zzz-no-such-key");
+
+        /* Small tier: direct call */
+        {
+            multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_64);
+            for (int i = 0; i < 4; i++) {
+                char keyBuf[32];
+                snprintf(keyBuf, sizeof(keyBuf), "key%05d", i);
+                databox key = databoxNewBytesString(keyBuf);
+                databox val = databoxNewSigned(10);
+                const databox *elements[2] = {&key, &val};
+                multimapInsert(&m, elements);
+            }
+
+            assert(multimapType_(m) == MULTIMAP_TYPE_SMALL);
+
+            databox key = databoxNewBytesString("key00000");
+            assert(multimapSmallFieldIncr(mms(m), &key, 1, 5) == 15);
+            multimapVerify(m);
+            assert(multimapSmallFieldIncr(mms(m), &missing, 1, 5) == 0);
+            assert(multimapFieldIncr(&m, &missing, 1, 5) == 0);
+            multimapVerify(m);
+            multimapFree(m);
+        }
+
+        /* Medium then Full tiers: force upgrades, direct call each */
+        {
+            multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_64);
+            int i = 0;
+            while (multimapType_(m) == MULTIMAP_TYPE_SMALL && i < 5000) {
+                char keyBuf[32];
+                snprintf(keyBuf, sizeof(keyBuf), "key%05d", i++);
+                databox key = databoxNewBytesString(keyBuf);
+                databox val = databoxNewSigned(10);
+                const databox *elements[2] = {&key, &val};
+                multimapInsert(&m, elements);
+            }
+
+            assert(multimapType_(m) == MULTIMAP_TYPE_MEDIUM);
+
+            databox key = databoxNewBytesString("key00000");
+            assert(multimapMediumFieldIncr(mmm(m), &key, 1, 5) == 15);
+            multimapVerify(m);
+            assert(multimapMediumFieldIncr(mmm(m), &missing, 1, 5) == 0);
+            multimapVerify(m);
+
+            while (multimapType_(m) == MULTIMAP_TYPE_MEDIUM && i < 50000) {
+                char keyBuf[32];
+                snprintf(keyBuf, sizeof(keyBuf), "key%05d", i++);
+                databox key2 = databoxNewBytesString(keyBuf);
+                databox val = databoxNewSigned(10);
+                const databox *elements[2] = {&key2, &val};
+                multimapInsert(&m, elements);
+            }
+
+            assert(multimapType_(m) == MULTIMAP_TYPE_FULL);
+
+            /* This path previously terminated in
+             * assert(NULL && "Not correctly implemented yet!") */
+            assert(multimapFullFieldIncr(mmf(m), &key, 1, 5) == 20);
+            multimapVerify(m);
+            assert(multimapFullFieldIncr(mmf(m), &missing, 1, 5) == 0);
+            multimapVerify(m);
+            multimapFree(m);
+        }
     }
 
 #if 1
@@ -3137,31 +3400,6 @@ int multimapTest(int argc, char *argv[]) {
      * ==================================================================== */
     printf("\n=== Testing Cross-Tier Set Operations ===\n");
 
-    /* Helper to create a map at specific tier with given values */
-#define CREATE_MAP_AT_TIER(name, tier, count, startVal)                        \
-    multimap *name = multimapNewLimit(1, FLEX_CAP_LEVEL_64);                   \
-    for (int64_t i = startVal; i < startVal + (count); i++) {                  \
-        databox v = databoxNewSigned(i);                                       \
-        const databox *elems[1] = {&v};                                        \
-        multimapInsert(&name, elems);                                          \
-    }                                                                          \
-    if (tier == MULTIMAP_TYPE_MEDIUM || tier == MULTIMAP_TYPE_FULL) {          \
-        /* Force to Medium by adding more elements */                          \
-        for (int64_t i = startVal + 1000; i < startVal + 1100; i++) {          \
-            databox v = databoxNewSigned(i);                                   \
-            const databox *elems[1] = {&v};                                    \
-            multimapInsert(&name, elems);                                      \
-        }                                                                      \
-    }                                                                          \
-    if (tier == MULTIMAP_TYPE_FULL) {                                          \
-        /* Force to Full by adding even more elements */                       \
-        for (int64_t i = startVal + 2000; i < startVal + 2500; i++) {          \
-            databox v = databoxNewSigned(i);                                   \
-            const databox *elems[1] = {&v};                                    \
-            multimapInsert(&name, elems);                                      \
-        }                                                                      \
-    }
-
     /* Helper to verify a map contains expected value */
 #define VERIFY_MAP_CONTAINS(m, val)                                            \
     do {                                                                       \
@@ -3621,9 +3859,259 @@ int multimapTest(int argc, char *argv[]) {
 
     printf("\n=== Cross-Tier Set Operations Tests Passed! ===\n");
 
-#undef CREATE_MAP_AT_TIER
 #undef VERIFY_MAP_CONTAINS
 #undef VERIFY_MAP_NOT_CONTAINS
+
+    TEST("reset then reuse: small tier stays coherent across cycles") {
+        /* Dispatcher-level pin for the Small tier (Full and Medium have
+         * their own reset-reuse tests in their suites) */
+        multimap *m = multimapNew(2);
+
+        for (int cycle = 0; cycle < 3; cycle++) {
+            for (uint64_t i = 0; i < 40; i++) {
+                const databox keybox = databoxNewUnsigned(i);
+                const databox valbox = databoxNewUnsigned(i * 7);
+                const databox *insert[2] = {&keybox, &valbox};
+                multimapInsert(&m, insert);
+            }
+            if (multimapCount(m) != 40) {
+                ERR("cycle %d: expected 40, got %zu", cycle, multimapCount(m));
+            }
+
+            multimapReset(m);
+            if (multimapCount(m) != 0) {
+                ERR("cycle %d: expected 0 after reset, got %zu", cycle,
+                    multimapCount(m));
+            }
+        }
+
+        for (uint64_t i = 0; i < 40; i++) {
+            const databox keybox = databoxNewUnsigned(i);
+            const databox valbox = databoxNewUnsigned(i + 1);
+            const databox *insert[2] = {&keybox, &valbox};
+            multimapInsert(&m, insert);
+        }
+        size_t missing = 0;
+        for (uint64_t i = 0; i < 40; i++) {
+            const databox probe = databoxNewUnsigned(i);
+            if (!multimapExists(m, &probe)) {
+                missing++;
+            }
+        }
+        if (missing > 0) {
+            ERR("%zu of 40 keys missing after reset-reuse", missing);
+        }
+
+        multimapFree(m);
+    }
+
+    TEST("FUZZ/SOAK: differential ops vs sorted shadow across tiers") {
+        /* Deterministic op soak against a sorted unique-key shadow.
+         * All checks are behavioral (count, full-iteration order,
+         * exists, first/last, predicate-delete correctness,
+         * RandomValue liveness) so they catch tier bugs - Medium map0
+         * stranding, iterator-at-key gaps, predicate no-ops, Full
+         * count desync - without reaching into any tier's internals.
+         * A small submap cap makes the map climb Small->Medium->Full
+         * quickly; tier coverage is asserted so this can't silently
+         * regress into single-tier testing. */
+        uint64_t rng = 0x243F6A8885A308D3ULL;
+#define SOAK_NEXT() (rng ^= rng << 13, rng ^= rng >> 7, rng ^= rng << 17, rng)
+        enum { SHADOW_MAX = 4200, KEY_RANGE = 4000, FILL = 3000 };
+        static int64_t shKey[SHADOW_MAX];
+        static int64_t shVal[SHADOW_MAX];
+        int32_t shCount = 0;
+        int64_t valSeq = 1;
+        bool tierSeen[4] = {false, false, false, false};
+        int32_t soakFail = 0;
+
+        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_64);
+
+        /* Deterministic ascending fill to force promotion through
+         * Small -> Medium -> Full before the random churn (churn alone
+         * balances population too low to reach Full). */
+        for (int32_t i = 0; i < FILL; i++) {
+            const databox kb = databoxNewSigned(i);
+            const databox vb = databoxNewSigned(valSeq);
+            const databox *ins[2] = {&kb, &vb};
+            multimapInsert(&m, ins);
+            shKey[i] = i;
+            shVal[i] = valSeq++;
+            tierSeen[multimapType_(m)] = true;
+        }
+        shCount = FILL;
+
+        for (int32_t op = 0; op < 20000 && soakFail == 0; op++) {
+            const uint64_t roll = SOAK_NEXT() % 100;
+            const int64_t k = (int64_t)(SOAK_NEXT() % KEY_RANGE);
+
+            /* binary search the shadow for key k */
+            int32_t lo = 0;
+            int32_t hi = shCount;
+            while (lo < hi) {
+                const int32_t mid = (lo + hi) / 2;
+                if (shKey[mid] < k) {
+                    lo = mid + 1;
+                } else {
+                    hi = mid;
+                }
+            }
+            const bool present = lo < shCount && shKey[lo] == k;
+
+            if (roll < 60 && (present || shCount < SHADOW_MAX)) {
+                /* insert or replace */
+                const int64_t v = valSeq++;
+                const databox kb = databoxNewSigned(k);
+                const databox vb = databoxNewSigned(v);
+                const databox *ins[2] = {&kb, &vb};
+                multimapInsert(&m, ins);
+                if (present) {
+                    shVal[lo] = v;
+                } else {
+                    memmove(&shKey[lo + 1], &shKey[lo],
+                            (size_t)(shCount - lo) * sizeof(shKey[0]));
+                    memmove(&shVal[lo + 1], &shVal[lo],
+                            (size_t)(shCount - lo) * sizeof(shVal[0]));
+                    shKey[lo] = k;
+                    shVal[lo] = v;
+                    shCount++;
+                }
+            } else if (roll < 70 && present) {
+                /* delete by key */
+                const databox kb = databoxNewSigned(k);
+                multimapDelete(&m, &kb);
+                memmove(&shKey[lo], &shKey[lo + 1],
+                        (size_t)(shCount - lo - 1) * sizeof(shKey[0]));
+                memmove(&shVal[lo], &shVal[lo + 1],
+                        (size_t)(shCount - lo - 1) * sizeof(shVal[0]));
+                shCount--;
+            } else if (roll < 76 && shCount > 0) {
+                /* delete-by-predicate LESS_THAN_EQUAL; boundary sits in
+                 * the low prefix (so population still climbs to Full)
+                 * and is either an existing key (exact) or a value
+                 * strictly between keys (non-exact - the case the
+                 * Medium/Full predicate bug missed) */
+                const int32_t j =
+                    (int32_t)(SOAK_NEXT() %
+                              (uint64_t)(shCount < 6 ? shCount : 6));
+                const int64_t bound = shKey[j] - (int64_t)(SOAK_NEXT() & 1);
+                const multimapPredicate pred = {
+                    .condition = MULTIMAP_CONDITION_LESS_THAN_EQUAL,
+                    .compareAgainst = databoxNewSigned(bound)};
+                multimapDeleteByPredicate(&m, &pred);
+                int32_t keep = 0;
+                for (int32_t i = 0; i < shCount; i++) {
+                    if (shKey[i] > bound) {
+                        shKey[keep] = shKey[i];
+                        shVal[keep] = shVal[i];
+                        keep++;
+                    }
+                }
+                shCount = keep;
+            } else if (roll < 86 && shCount > 0) {
+                /* RandomValue must not crash on a single-sided-empty
+                 * Medium and must return a live key */
+                databox got[2];
+                databox *gp[2] = {&got[0], &got[1]};
+                multimapEntry rme;
+                if (multimapRandomValue(m, (SOAK_NEXT() & 1) != 0, gp, &rme)) {
+                    const int64_t rk = got[0].data.i;
+                    int32_t a = 0;
+                    int32_t b = shCount;
+                    while (a < b) {
+                        const int32_t mid = (a + b) / 2;
+                        if (shKey[mid] < rk) {
+                            a = mid + 1;
+                        } else {
+                            b = mid;
+                        }
+                    }
+                    if (!(a < shCount && shKey[a] == rk)) {
+                        ERR("op %d: RandomValue returned absent key %lld", op,
+                            (long long)rk);
+                        soakFail++;
+                    }
+                }
+            } else {
+                /* exists probe (present and absent) */
+                const databox kb = databoxNewSigned(k);
+                if (multimapExists(m, &kb) != present) {
+                    ERR("op %d: exists(%lld)=%d != shadow %d", op, (long long)k,
+                        !present, present);
+                    soakFail++;
+                }
+            }
+
+            tierSeen[multimapType_(m)] = true;
+
+            /* per-op: count matches shadow */
+            if ((int32_t)multimapCount(m) != shCount) {
+                ERR("op %d roll %d: count %zu != shadow %d", op, (int)roll,
+                    multimapCount(m), shCount);
+                soakFail++;
+            }
+
+            /* per-op: first/last match shadow ends (catches Medium
+             * map0-stranding, which makes First report empty) */
+            if (shCount > 0 && !soakFail) {
+                databox fe[2];
+                databox le[2];
+                if (!multimapFirstInto(m, fe, 2) || fe[0].data.i != shKey[0]) {
+                    ERR("op %d: first key %lld != shadow %lld", op,
+                        (long long)fe[0].data.i, (long long)shKey[0]);
+                    soakFail++;
+                }
+                if (!multimapLastInto(m, le, 2) ||
+                    le[0].data.i != shKey[shCount - 1]) {
+                    ERR("op %d: last key %lld != shadow %lld", op,
+                        (long long)le[0].data.i, (long long)shKey[shCount - 1]);
+                    soakFail++;
+                }
+            }
+
+            /* full forward-iteration order + value check every 200 ops
+             * (also catches stranded/unreachable data) */
+            if ((op % 200 == 0 || soakFail) && !soakFail) {
+                multimapIterator iter;
+                multimapIteratorInit(m, &iter, true);
+                databox row[2];
+                int32_t seen = 0;
+                while (multimapIteratorNextInto(&iter, row, 2)) {
+                    if (seen >= shCount) {
+                        ERR("op %d: iterator yielded > %d rows", op, shCount);
+                        soakFail++;
+                        break;
+                    }
+                    if (row[0].data.i != shKey[seen] ||
+                        row[1].data.i != shVal[seen]) {
+                        ERR("op %d: row %d (%lld,%lld) != shadow (%lld,%lld)",
+                            op, seen, (long long)row[0].data.i,
+                            (long long)row[1].data.i, (long long)shKey[seen],
+                            (long long)shVal[seen]);
+                        soakFail++;
+                        break;
+                    }
+                    seen++;
+                }
+                if (!soakFail && seen != shCount) {
+                    ERR("op %d: iterator yielded %d rows, shadow %d", op, seen,
+                        shCount);
+                    soakFail++;
+                }
+            }
+        }
+
+        printf("    soak: finalCount=%d finalTier=%d\n", shCount,
+               (int)multimapType_(m));
+
+        if (!tierSeen[MULTIMAP_TYPE_MEDIUM] || !tierSeen[MULTIMAP_TYPE_FULL]) {
+            ERR("Soak tier coverage incomplete: medium=%d full=%d",
+                tierSeen[MULTIMAP_TYPE_MEDIUM], tierSeen[MULTIMAP_TYPE_FULL]);
+        }
+
+        multimapFree(m);
+#undef SOAK_NEXT
+    }
 
     TEST_FINAL_RESULT;
 }

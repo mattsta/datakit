@@ -67,11 +67,12 @@ bool multimapSmallInsert(multimapSmall *m, const databox *elements[]) {
      * call with compareUsingKeyElementOnly=false is the
      * duplicates-ALLOWED sorted bag (InsertFullWidth), which silently
      * duplicated every re-inserted set member here for years. */
-    const bool replaced = m->mapIsSet
-        ? flexInsertReplaceByTypeSortedWithMiddleMultiDirectSet(
-              &m->map, m->elementsPerEntry, elements, &middle)
-        : flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
-              &m->map, m->elementsPerEntry, elements, &middle, true);
+    const bool replaced =
+        m->mapIsSet
+            ? flexInsertReplaceByTypeSortedWithMiddleMultiDirectSet(
+                  &m->map, m->elementsPerEntry, elements, &middle)
+            : flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
+                  &m->map, m->elementsPerEntry, elements, &middle, true);
     SET_MIDDLE(m, middle);
     return replaced;
 }
@@ -107,9 +108,17 @@ bool multimapSmallGetUnderlyingEntryWithReference(
     return !!me->fe;
 }
 
+/* Resizing/replacing one entry keeps the entry COUNT, so the middle ROW
+ * is unchanged — but its BYTE offset is not recoverable from the entry's
+ * own size delta alone: when the map's total size crosses a varint width
+ * boundary, the flex container header itself grows or shrinks and every
+ * entry shifts, so any O(1) adjustment computed from a pre-mutation
+ * entry offset reads a misaligned position and poisons the cached
+ * middle for the map's remaining lifetime (sorted finds trust it
+ * blindly and insert/delete only ever maintain it incrementally).
+ * The full rescan is the only computation correct in all cases. */
 void multimapSmallResizeEntry(multimapSmall *m, multimapEntry *me,
                               size_t newLen) {
-    assert(m->map == *me->map);
     flexResizeEntry(me->map, me->fe, newLen);
     SET_MIDDLE_FORCE(m);
 }
@@ -337,6 +346,11 @@ int64_t multimapSmallFieldIncr(multimapSmall *m, const databox *key,
                                uint32_t fieldOffset, int64_t incrBy) {
     flexEntry *current = flexFindByTypeSortedWithMiddle(
         m->map, m->elementsPerEntry, key, GET_MIDDLE(m));
+    if (!current) {
+        /* No such key: return 0 rather than walking flexNext from NULL.
+         * Matches the multimap-level FieldIncr miss contract. */
+        return 0;
+    }
 
     assert(fieldOffset);
     while (fieldOffset--) {
@@ -345,6 +359,12 @@ int64_t multimapSmallFieldIncr(multimapSmall *m, const databox *key,
 
     int64_t newVal = 0;
     if (flexIncrbySigned(&m->map, current, incrBy, &newVal)) {
+        /* flexIncrbySigned may re-encode the entry at a different width
+         * (its own contract: "the caller must ALSO update their middle
+         * or future searching will break"), and a total-size varint
+         * boundary crossing shifts every entry — rescan, same argument
+         * as ResizeEntry/ReplaceEntry above. */
+        SET_MIDDLE_FORCE(m);
         /* if incremented, return new value */
         return newVal;
     }
@@ -520,5 +540,11 @@ bool multimapSmallDeleteByPredicate(multimapSmall *m,
 #ifdef DATAKIT_TEST
 void multimapSmallRepr(const multimapSmall *m) {
     flexRepr(m->map);
+}
+
+void multimapSmallVerify(const multimapSmall *m) {
+    /* middle oracle: the cached byte offset must equal a fresh rescan;
+     * sorted finds trust it blindly, so any divergence is corruption. */
+    assert(GET_MIDDLE(m) == flexMiddle(m->map, m->elementsPerEntry));
 }
 #endif

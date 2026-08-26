@@ -113,5 +113,4 @@ bool multilistMediumPop(multilistMedium *ml, databox *box, bool fromTail);
 
 #ifdef DATAKIT_TEST
 void multilistMediumRepr(multilistMedium *ml);
-int multilistMediumTest(int argc, char *argv[]);
 #endif

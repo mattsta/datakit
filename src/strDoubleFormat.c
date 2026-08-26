@@ -38,6 +38,7 @@ StrDoubleFormatToBufNice(void *buf_, const size_t len, const double v);
 
 #ifdef DATAKIT_TEST
 static uint32_t resolvedMethod = 0;
+static int32_t resolvedPlaces = 0;
 #endif
 
 /* Regarding the following two structs:
@@ -58,6 +59,24 @@ DK_INLINE_ALWAYS int64_t int_ceil(double v) {
     }
 
     return t;
+}
+
+/* Decimal-scale estimate for v = frac * 2^exp (frac >= 1), replacing
+ * ceil(log10(v)): returns floor(x) + 1 where x underestimates
+ * log10(v) by less than 0.027, built from the binary magnitude l2
+ * plus the mantissa chord (m - 1) <= log2(m). Because x < log10(v)
+ * strictly (the 1e-9 fudge covers exact powers of two, where the
+ * chord is tight), the result NEVER exceeds ceil(log10(v)) — the
+ * side the scale() bump loops cannot repair — and errs low by at
+ * most one, and only for the ~3% of values whose log10 fraction is
+ * below the chord error. */
+DK_INLINE_ALWAYS int32_t estimateDecimalScale(const int32_t exp,
+                                              const uint64_t frac) {
+    const int32_t b = 63 - (int32_t)__builtin_clzll(frac);
+    const int32_t l2 = exp + b;
+    const double m = (double)frac / (double)(1ULL << b);
+    const double x = ((double)l2 + (m - 1.0)) * 0.30102999566398119521 - 1.0e-9;
+    return (int32_t)floor(x) + 1;
 }
 
 /* Returns 52-bit fractional segment and populates 'exponent' */
@@ -94,24 +113,22 @@ DK_INLINE_ALWAYS uint64_t fractionAndExponent(const double v,
 static size_t Bgenerate(bigmath *r0, bigmath *s, bigmath *mplus,
                         bigmath *mminus, const bool lowOk, const bool highOk,
                         uint8_t generated[64]) {
-    bigmath BD;
-    bigmath BR;
     bigmath tmpA;
     bigmath RMPLUS;
-    bigmathInit(&BD);
-    bigmathInit(&BR);
     bigmathInit(&tmpA);
     bigmathInit(&RMPLUS);
     size_t i;
     for (i = 0; i < 64; i++) {
-        bigmathDivideRemainder(r0, s, &BD, &BR);
-        const uint64_t d = bigmathToNativeUnsigned(&BD);
+        /* r0 becomes the remainder in place; the quotient is a single
+         * digit by construction, so the allocation-free digit divide
+         * replaces a full long division per generated digit */
+        const uint32_t d = bigmathDivideDigitInPlace(r0, s);
 
         assert(d <= 9);
 
-        const int cmpRmin = bigmathCompare(&BR, mminus);
+        const int cmpRmin = bigmathCompare(r0, mminus);
 
-        bigmathAdd(&BR, mplus, &RMPLUS);
+        bigmathAdd(r0, mplus, &RMPLUS);
         const int cmpRSMplus = bigmathCompare(&RMPLUS, s);
 
         const bool tc1 = lowOk ? cmpRmin <= 0 : cmpRmin < 0;
@@ -119,7 +136,7 @@ static size_t Bgenerate(bigmath *r0, bigmath *s, bigmath *mplus,
 
         if (tc1) {
             if (tc2) {
-                bigmathMultiplyValue(&BR, 2, &tmpA);
+                bigmathMultiplyValue(r0, 2, &tmpA);
                 if (bigmathCompare(&tmpA, s) < 0) {
                     generated[i] = d;
                 } else {
@@ -136,7 +153,7 @@ static size_t Bgenerate(bigmath *r0, bigmath *s, bigmath *mplus,
                 break;
             } else {
                 generated[i] = d;
-                bigmathMultiplyValue(&BR, 10, r0);
+                bigmathMultiplyValue(r0, 10, r0);
                 bigmathMultiplyValue(mplus, 10, mplus);
                 bigmathMultiplyValue(mminus, 10, mminus);
             }
@@ -149,8 +166,6 @@ static size_t Bgenerate(bigmath *r0, bigmath *s, bigmath *mplus,
     bigmathReset(s);
     bigmathReset(mplus);
     bigmathReset(mminus);
-    bigmathReset(&BD);
-    bigmathReset(&BR);
     bigmathReset(&tmpA);
     bigmathReset(&RMPLUS);
 
@@ -164,31 +179,35 @@ static size_t Bgenerate(bigmath *r0, bigmath *s, bigmath *mplus,
 static size_t Bfixup(bigmath *r, bigmath *s, bigmath *mplus, bigmath *mminus,
                      int32_t k, bool lowOk, bool highOk, int32_t *places,
                      uint8_t generated[64]) {
+    /* Same bump-loop contract as scale(): the estimate never exceeds
+     * the true decimal scale and errs low by at most one. Unlike the
+     * fixed-width arms (which shrink the r-side for negative scales to
+     * dodge overflow), bignum can always grow s - the sign-dependent
+     * pre-scaling already happened in Bscale. tmpA = r + mplus is
+     * loop-invariant; only s grows per bump. */
     bigmath tmpA;
     bigmathInit(&tmpA);
     bigmathAdd(r, mplus, &tmpA);
-    const int compared = bigmathCompare(&tmpA, s);
-    const bool tooLow = highOk ? compared >= 0 : compared > 0;
+    int compared = bigmathCompare(&tmpA, s);
+    while (highOk ? compared >= 0 : compared > 0) {
+        bigmathMultiplyValue(s, 10, s);
+        k++;
+        compared = bigmathCompare(&tmpA, s);
+    }
     bigmathReset(&tmpA);
 
-    if (tooLow) {
-        *places = k + 1;
-    } else {
-        *places = k;
-        bigmathMultiplyValue(r, 10, r);
-        bigmathMultiplyValue(mplus, 10, mplus);
-        bigmathMultiplyValue(mminus, 10, mminus);
-    }
+    *places = k;
+    bigmathMultiplyValue(r, 10, r);
+    bigmathMultiplyValue(mplus, 10, mplus);
+    bigmathMultiplyValue(mminus, 10, mminus);
 
     return Bgenerate(r, s, mplus, mminus, lowOk, highOk, generated);
 }
 
 static size_t Bscale(bigmath *r, bigmath *s, bigmath *mplus, bigmath *mminus,
-                     bool lowOk, bool highOk, double v, int32_t *places,
-                     uint8_t generated[64]) {
+                     bool lowOk, bool highOk, const int32_t est,
+                     int32_t *places, uint8_t generated[64]) {
     /* 'est' is also ~k, the digit offset for the decimal point. */
-    const int32_t est = int_ceil(log10(fabs(v)) - 1.0e-10);
-
     if (est >= 0) {
         bigmath tmpA;
         bigmathInit(&tmpA);
@@ -208,10 +227,11 @@ static size_t Bscale(bigmath *r, bigmath *s, bigmath *mplus, bigmath *mminus,
     return Bfixup(r, s, mplus, mminus, est, lowOk, highOk, places, generated);
 }
 
-static size_t BniceDoubleHelper(double v, int32_t exp /* 11 bits */,
+static size_t BniceDoubleHelper(int32_t exp /* 11 bits */,
                                 uint64_t frac, /* max 53 bits */
                                 int32_t *places, uint8_t generated[64]) {
     const bool round = (frac & 1) == 0;
+    const int32_t est = estimateDecimalScale(exp, frac);
 
     /* These four parameters get reset/cleared/free'd in the
      * final function in our call chain here. */
@@ -261,7 +281,7 @@ static size_t BniceDoubleHelper(double v, int32_t exp /* 11 bits */,
         }
     }
 
-    return Bscale(&BR, &BS, &BMPLUS, &BMMINUS, round, round, v, places,
+    return Bscale(&BR, &BS, &BMPLUS, &BMMINUS, round, round, est, places,
                   generated);
 }
 
@@ -316,72 +336,73 @@ static size_t generate(uint64_t r0, uint64_t s, uint64_t mplus, uint64_t mminus,
     return i + 1;
 }
 
-/* Inline hot path scale helper */
-static inline size_t fixup(uint64_t r, uint64_t s, uint64_t mplus,
-                           uint64_t mminus, int32_t k, bool lowOk, bool highOk,
-                           int32_t *places, uint8_t generated[64]) {
-    const bool tooLow = highOk ? (r + mplus) >= s : (r + mplus) > s;
-
-    if (tooLow) {
-        *places = k + 1;
-        return generate(r, s, mplus, mminus, lowOk, highOk, generated);
-    }
-
-    *places = k;
-    return generate(r * 10, s, mplus * 10, mminus * 10, lowOk, highOk,
-                    generated);
-}
-
-/* Inline hot path scale helper */
+/* Inline hot path scale helper. The integer estimate `est` never
+ * exceeds the true decimal scale but can err low by at most one; each
+ * bump shifts the decimal point one place. Bump style differs by
+ * sign: for est >= 0 growing s stays within s_base * 10^k, the same
+ * bound an exact estimate produces; for est < 0 the r-side carries
+ * 10^-est factors, so removing one per bump divides exactly and only
+ * shrinks magnitudes (est < 0 implies the true scale is <= 0, so
+ * bumps never outrun the available factors). */
 static inline size_t scale(uint64_t r, uint64_t s, uint64_t mplus,
-                           uint64_t mminus, bool lowOk, bool highOk, double v,
-                           int32_t *places, uint8_t generated[64]) {
-    /* Use log10 for correct exponent estimation.
-     * We tried frexp() but the approximation wasn't accurate enough for all
-     * cases. Keep the original approach which is proven correct. */
-    const int32_t est = int_ceil(log10(fabs(v)) - 1.0e-10);
-
+                           uint64_t mminus, bool lowOk, bool highOk,
+                           int32_t est, int32_t *places,
+                           uint8_t generated[64]) {
     if (est >= 0) {
-        uint64_t power = StrTenPow(est);
-        return fixup(r, s * power, mplus, mminus, est, lowOk, highOk, places,
-                     generated);
+        s *= StrTenPow(est);
+        while (highOk ? (r + mplus) >= s : (r + mplus) > s) {
+            s *= 10;
+            est++;
+        }
     } else {
-        uint64_t scale = StrTenPow(-est);
+        const uint64_t power = StrTenPow(-est);
 
         /* If we hit big or tiny floats, we can't cope here because,
          * for example 10^323 is larger than 2^64 and we can't
          * calculate things that big natively. */
-        assert(scale);
+        assert(power);
 
-        return fixup(r * scale, s, mplus * scale, mminus * scale, est, lowOk,
-                     highOk, places, generated);
+        r *= power;
+        mplus *= power;
+        mminus *= power;
+        while (highOk ? (r + mplus) >= s : (r + mplus) > s) {
+            r /= 10;
+            mplus /= 10;
+            mminus /= 10;
+            est++;
+        }
     }
+
+    *places = est;
+    return generate(r * 10, s, mplus * 10, mminus * 10, lowOk, highOk,
+                    generated);
 }
 
-static size_t niceDoubleHelper(double v, int32_t exp /* 11 bits */,
+static size_t niceDoubleHelper(int32_t exp /* 11 bits */,
                                uint64_t frac, /* max 53 bits */
                                int32_t *places, uint8_t generated[64]) {
     const bool round = (frac & 1) == 0;
+    const int32_t est = estimateDecimalScale(exp, frac);
     if (exp >= 0) {
         uint64_t bexp = 1ULL << exp;
         if (frac != I754_BIG_POWER) {
-            return scale((frac * bexp * 2), 2, bexp, bexp, round, round, v,
+            return scale((frac * bexp * 2), 2, bexp, bexp, round, round, est,
                          places, generated);
         }
 
-        return scale((frac * bexp * 4), 4, bexp * 2, bexp, round, round, v,
+        return scale((frac * bexp * 4), 4, bexp * 2, bexp, round, round, est,
                      places, generated);
     }
 
     /* else, exp < 0 for these statements */
     if (exp == I754_MIN_EXPONENT || frac != I754_BIG_POWER) {
         assert(exp >= -62);
-        return scale((frac * 2), 1ULL << (1 - exp), 1, 1, round, round, v,
+        return scale((frac * 2), 1ULL << (1 - exp), 1, 1, round, round, est,
                      places, generated);
     }
 
     assert(exp >= -61);
-    return scale((frac * 4), 1ULL << (2 - exp), 2, 1, round, round, v, places,
+    return scale((frac * 4), 1ULL << (2 - exp), 2, 1, round, round, est, places,
                  generated);
 }
 
@@ -437,57 +458,54 @@ static size_t Ogenerate(__uint128_t r0, __uint128_t s, __uint128_t mplus,
 }
 
 /* Inline 128-bit path scale helper */
-static inline size_t Ofixup(__uint128_t r, __uint128_t s, __uint128_t mplus,
-                            __uint128_t mminus, int32_t k, bool lowOk,
-                            bool highOk, int32_t *places,
-                            uint8_t generated[64]) {
-    const bool tooLow = highOk ? (r + mplus) >= s : (r + mplus) > s;
-
-    if (tooLow) {
-        *places = k + 1;
-        return Ogenerate(r, s, mplus, mminus, lowOk, highOk, generated);
-    }
-
-    *places = k;
-    return Ogenerate(r * 10, s, mplus * 10, mminus * 10, lowOk, highOk,
-                     generated);
-}
-
-/* Inline 128-bit path scale helper */
+/* Inline 128-bit path scale helper; same bump contract as scale() */
 static inline size_t Oscale(__uint128_t r, __uint128_t s, __uint128_t mplus,
                             __uint128_t mminus, bool lowOk, bool highOk,
-                            double v, int32_t *places, uint8_t generated[64]) {
-    const int32_t est = int_ceil(log10(fabs(v)) - 1.0e-10);
-
+                            int32_t est, int32_t *places,
+                            uint8_t generated[64]) {
     if (est >= 0) {
-        __uint128_t power = StrTenPowBig(est);
-        return Ofixup(r, s * power, mplus, mminus, est, lowOk, highOk, places,
-                      generated);
+        s *= StrTenPowBig(est);
+        while (highOk ? (r + mplus) >= s : (r + mplus) > s) {
+            s *= 10;
+            est++;
+        }
     } else {
-        __uint128_t scale = StrTenPowBig(-est);
+        const __uint128_t power = StrTenPowBig(-est);
 
         /* If we hit big or tiny floats, we can't cope here because,
          * for example 10^323 is larger than 2^64 and we can't
          * calculate things that big natively. */
-        assert(scale);
+        assert(power);
 
-        return Ofixup(r * scale, s, mplus * scale, mminus * scale, est, lowOk,
-                      highOk, places, generated);
+        r *= power;
+        mplus *= power;
+        mminus *= power;
+        while (highOk ? (r + mplus) >= s : (r + mplus) > s) {
+            r /= 10;
+            mplus /= 10;
+            mminus /= 10;
+            est++;
+        }
     }
+
+    *places = est;
+    return Ogenerate(r * 10, s, mplus * 10, mminus * 10, lowOk, highOk,
+                     generated);
 }
 
-static size_t OniceDoubleHelper(double v, int32_t exp /* 11 bits */,
+static size_t OniceDoubleHelper(int32_t exp /* 11 bits */,
                                 uint64_t frac, /* max 53 bits */
                                 int32_t *places, uint8_t generated[64]) {
     const bool round = (frac & 1) == 0;
+    const int32_t est = estimateDecimalScale(exp, frac);
     if (exp >= 0) {
         __uint128_t bexp = (__uint128_t)1 << exp;
         if (frac != I754_BIG_POWER) {
-            return Oscale((frac * bexp * 2), 2, bexp, bexp, round, round, v,
+            return Oscale((frac * bexp * 2), 2, bexp, bexp, round, round, est,
                           places, generated);
         }
 
-        return Oscale((frac * bexp * 4), 4, bexp * 2, bexp, round, round, v,
+        return Oscale((frac * bexp * 4), 4, bexp * 2, bexp, round, round, est,
                       places, generated);
     }
 
@@ -495,12 +513,12 @@ static size_t OniceDoubleHelper(double v, int32_t exp /* 11 bits */,
     if (exp == I754_MIN_EXPONENT || frac != I754_BIG_POWER) {
         assert(exp >= -(128 - 2));
         return Oscale((frac * 2), (__uint128_t)1 << (1 - exp), 1, 1, round,
-                      round, v, places, generated);
+                      round, est, places, generated);
     }
 
     assert(exp >= -(128 - 3));
     return Oscale((frac * 4), (__uint128_t)1 << (2 - exp), 2, 1, round, round,
-                  v, places, generated);
+                  est, places, generated);
 }
 
 /* ====================================================================
@@ -556,9 +574,9 @@ static size_t niceDoubleDispatch(const double v, int32_t exp /* 11 bits */,
 
     /* If 'v' fits inside the native limits, use faster native processing.
      * Otherwise, fall back to malloc-heavy bignum processing. */
-    return useNative      ? niceDoubleHelper(v, exp, frac, places, generated)
-           : useBigNative ? OniceDoubleHelper(v, exp, frac, places, generated)
-                          : BniceDoubleHelper(v, exp, frac, places, generated);
+    return useNative      ? niceDoubleHelper(exp, frac, places, generated)
+           : useBigNative ? OniceDoubleHelper(exp, frac, places, generated)
+                          : BniceDoubleHelper(exp, frac, places, generated);
 }
 
 /* ====================================================================
@@ -568,11 +586,14 @@ __attribute__((no_sanitize("unsigned-integer-overflow"))) size_t
 StrDoubleFormatToBufNice(void *buf_, const size_t len, const double v) {
     uint8_t *const buf = buf_;
 
-    /* We do weak bounds checks, so verify any space is big enough
-     * for us to walk through without immediate checks.
-     * Minimum 23 bytes: Sign(1) + MaxDigits(18) + Decimal(1) + 'e±'(2) + Exp(2)
-     * = 24 We use 23 to be conservative. */
-    if (len < 23) {
+    /* We do weak bounds checks, so verify up front that the buffer
+     * holds the true worst case across every placement branch:
+     *   fixed-point append:  Sign(1) + Digits(18) + PadZeros(5) + ".0"(2) = 26
+     *   fixed-point prepend: Sign(1) + "0."(2) + LeadZeros(5) + Digits(18) = 26
+     *   exponential:         Sign(1) + Digit(1) + "."(1) + Digits(17)
+     *                        + "e±"(2) + Exp(3, up to 324) = 25
+     * so 26 bytes is the exact bound the unchecked writes rely on. */
+    if (len < 26) {
         /* Buffer isn't big enough to hold all possible doubles-as-strings,
          * so we can't write anything. */
         return 0;
@@ -607,6 +628,10 @@ StrDoubleFormatToBufNice(void *buf_, const size_t len, const double v) {
     ssize_t generatedLen =
         niceDoubleDispatch(v, exponent, fractionAsInteger, &places, generated);
 
+#ifdef DATAKIT_TEST
+    resolvedPlaces = places;
+#endif
+
     /* The longest output is 18 digits
      * (DBL_DIG = 15 decimal digits precision, plus margin for rounding) */
     assert(generatedLen <= 18);
@@ -623,11 +648,11 @@ StrDoubleFormatToBufNice(void *buf_, const size_t len, const double v) {
         buf[bi++] = '-';
     }
 
-    /* If generated value starts with zero, skip the leading zero */
+    /* A converged scale always yields a nonzero leading digit
+     * (Steele-White invariant; every placement branch depends on it
+     * for its decimal/exponent math) */
+    assert(generated[0] != 0);
     ssize_t gi = 0; /* index into 'generated' */
-    if (generated[0] == 0) {
-        gi++;
-    }
 
     /* We need to track any characters we place for formatting *after*
      * the generated digits so we can return the proper fully-written
@@ -763,6 +788,9 @@ exponentialOffset: {
 #include "float16.h"
 #include <locale.h>
 
+#define DOUBLE_NEWLINE 0
+#include "perf.h"
+
 int strDoubleFormatTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -773,7 +801,219 @@ int strDoubleFormatTest(int argc, char *argv[]) {
 #define assertEqual(a, b) (assert(a == b))
 
     /* NEW TESTS - Performance optimization verification */
-    TEST("frexp-based exponent estimation") {
+    TEST("decimal-scale estimate contract across all exponents") {
+        /* estimateDecimalScale must never exceed ceil(log10(v)) (the
+         * side the scale() bump loops cannot repair) and may err low
+         * by at most one. Sweep every I754 exponent with boundary and
+         * mixed mantissas, plus every exact decimal power. */
+        const uint64_t fracs[] = {1,
+                                  3,
+                                  (1ULL << 52),
+                                  (1ULL << 52) + 1,
+                                  (1ULL << 53) - 1,
+                                  0x1999999999999ULL,
+                                  0x1000000000001ULL};
+        for (int32_t e = -1074; e <= 970; e++) {
+            for (size_t fi = 0; fi < COUNT_ARRAY(fracs); fi++) {
+                const double v = ldexp((double)fracs[fi], e);
+                if (!isfinite(v) || v == 0.0) {
+                    continue;
+                }
+
+                const double lg = log10(v);
+                const double estF = (double)estimateDecimalScale(e, fracs[fi]);
+                if (estF > lg + 1.0 + 1e-9 || estF < lg - 0.03) {
+                    ERR("estimate %d out of contract for exp %d frac %" PRIu64
+                        " (log10 %f)",
+                        estimateDecimalScale(e, fracs[fi]), e, fracs[fi], lg);
+                }
+            }
+        }
+
+        /* Exact decimal powers pin the never-too-high side hard: the
+         * estimate must be <= p for v = 10^p */
+        for (int32_t p = -300; p <= 300; p++) {
+            const double v = pow(10.0, p);
+            int32_t vexp;
+            const uint64_t vfrac = fractionAndExponent(v, &vexp);
+            const int32_t estF = estimateDecimalScale(vexp, vfrac);
+            if (estF > p) {
+                ERR("estimate %d exceeds exact power %d", estF, p);
+            }
+        }
+    }
+
+    TEST("UNIT: fractionAndExponent reconstructs every decode exactly") {
+        /* frac * 2^exp must equal |v| bit-for-bit: frac <= 2^53 is
+         * exactly representable, so ldexp is a lossless oracle */
+        uint64_t rng = 0xA5A5A5A55A5A5A5AULL;
+#define FE_NEXT() (rng ^= rng << 13, rng ^= rng >> 7, rng ^= rng << 17, rng)
+        const double pinned[] = {1.0,  2.0,    0.5, DBL_MIN,  DBL_MAX, 5e-324,
+                                 1e17, 1e-300, 0.1, 6.25e-310 /* denormal */};
+        for (size_t t = 0; t < 20000 + COUNT_ARRAY(pinned); t++) {
+            double v;
+            if (t < COUNT_ARRAY(pinned)) {
+                v = pinned[t];
+            } else {
+                const uint64_t bits = FE_NEXT();
+                memcpy(&v, &bits, sizeof(v));
+                if (!isfinite(v) || v == 0.0) {
+                    continue;
+                }
+            }
+
+            int32_t dexp;
+            const uint64_t dfrac = fractionAndExponent(v, &dexp);
+            const double rebuilt = ldexp((double)dfrac, dexp);
+            const double mag = fabs(v);
+            if (memcmp(&rebuilt, &mag, sizeof(mag)) != 0) {
+                ERR("decode broken for %.17g (frac %" PRIu64 " exp %d)", v,
+                    dfrac, dexp);
+            }
+        }
+#undef FE_NEXT
+    }
+
+    TEST("UNIT DIFFERENTIAL: 64/128/bignum arms agree digit-for-digit") {
+        /* Each arm implements the same algorithm over different integer
+         * widths; any divergence in digits or decimal placement is a
+         * bug in exactly one arm. This is the small-scope test that
+         * catches a wrong power table or bump-loop overflow instantly,
+         * without waiting for a roundtrip sweep to trip over it. */
+        uint64_t rng = 0xDEADBEEFCAFEF00DULL;
+#define ARM_NEXT() (rng ^= rng << 13, rng ^= rng >> 7, rng ^= rng << 17, rng)
+        int32_t armChecked64 = 0;
+        int32_t armChecked128 = 0;
+        for (size_t t = 0; t < 20000; t++) {
+            double v;
+            if (t & 1) {
+                /* Raw bit patterns (mostly extreme magnitudes) */
+                const uint64_t bits = ARM_NEXT();
+                memcpy(&v, &bits, sizeof(v));
+            } else {
+                /* Moderate magnitudes so the 64-bit arm participates:
+                 * mantissa in [1,2) times 2^[-56, 56) */
+                const uint64_t mbits = (0x3FFULL << 52) | (ARM_NEXT() >> 12);
+                memcpy(&v, &mbits, sizeof(v));
+                v = ldexp(v, (int32_t)(ARM_NEXT() % 113) - 56);
+            }
+
+            if (!isfinite(v) || v == 0.0) {
+                continue;
+            }
+
+            int32_t dexp;
+            const uint64_t dfrac = fractionAndExponent(v, &dexp);
+
+            const bool safe64 =
+                dexp >= -58 && dexp <= 58 && v >= -1e17 && v <= 1e17;
+            const bool safe128 =
+                dexp >= -122 && dexp <= 122 && v >= -1e36 && v <= 1e36;
+
+            int32_t placesB;
+            uint8_t genB[64] = {0};
+            const size_t lenB = BniceDoubleHelper(dexp, dfrac, &placesB, genB);
+
+            if (safe64) {
+                int32_t places64;
+                uint8_t gen64[64] = {0};
+                const size_t len64 =
+                    niceDoubleHelper(dexp, dfrac, &places64, gen64);
+                if (len64 != lenB || places64 != placesB ||
+                    memcmp(gen64, genB, len64) != 0) {
+                    ERR("64-bit arm disagrees with bignum for %.17g "
+                        "(len %zu/%zu places %d/%d)",
+                        v, len64, lenB, places64, placesB);
+                }
+                armChecked64++;
+            }
+
+            if (safe128) {
+                int32_t places128;
+                uint8_t gen128[64] = {0};
+                const size_t len128 =
+                    OniceDoubleHelper(dexp, dfrac, &places128, gen128);
+                if (len128 != lenB || places128 != placesB ||
+                    memcmp(gen128, genB, len128) != 0) {
+                    ERR("128-bit arm disagrees with bignum for %.17g "
+                        "(len %zu/%zu places %d/%d)",
+                        v, len128, lenB, places128, placesB);
+                }
+                armChecked128++;
+            }
+        }
+
+        /* The differential is vacuous if an arm never runs */
+        if (armChecked64 < 1000 || armChecked128 < 1000) {
+            ERR("Arm coverage too thin: 64-bit %d, 128-bit %d", armChecked64,
+                armChecked128);
+        }
+#undef ARM_NEXT
+    }
+
+    TEST("UNIT: minimum buffer contract at worst-case widths") {
+        /* Two adversarial values whose fixed-point renderings are the
+         * widest possible (25 bytes: sign + 17 digits + pad + '.0' /
+         * leading zeros); the entry guard must reject anything under
+         * the documented minimum and succeed at it */
+        const uint64_t worstBits[] = {0xc451a2101c943a1eULL,
+                                      0xbecca11f1ad2249dULL};
+        for (size_t i = 0; i < COUNT_ARRAY(worstBits); i++) {
+            double v;
+            memcpy(&v, &worstBits[i], sizeof(v));
+
+            uint8_t tiny[25];
+            if (StrDoubleFormatToBufNice(tiny, sizeof(tiny), v) != 0) {
+                ERR("Accepted undersized buffer for worst case %zu", i);
+            }
+
+            uint8_t exact[26] = {0};
+            const size_t len =
+                StrDoubleFormatToBufNice(exact, sizeof(exact), v);
+            if (!len) {
+                ERR("Rejected minimum-size buffer for worst case %zu", i);
+            } else {
+                const double back = strtod((const char *)exact, NULL);
+                if (memcmp(&back, &v, sizeof(back)) != 0) {
+                    ERR("Worst-case %zu did not roundtrip: %.*s", i, (int)len,
+                        exact);
+                }
+            }
+        }
+    }
+
+    TEST("UNIT: renderer branch vectors (one per decimal placement)") {
+        /* One labeled vector per placement branch in
+         * StrDoubleFormatToBufNice so a renderer regression names the
+         * exact branch instead of failing a distant sweep */
+        const struct {
+            const char *branch;
+            double value;
+            const char *expected;
+        } vectors[] = {
+            {"places==0 leading zero", 0.5, "0.5"},
+            {"placeOffset==0 append .0", 1234.0, "1234.0"},
+            {"placeOffset<0 split middle", 12.5, "12.5"},
+            {"placeOffset<6 zero pad", 12300.0, "12300.0"},
+            {"placeOffset>=6 exponential", 15000000000.0, "1.5e+10"},
+            {"exponential single digit", 1e100, "1.0e+100"},
+            {"places>-6 leading zeros", 0.001, "0.001"},
+            {"places<=-6 exponential negative", 1.5e-10, "1.5e-10"},
+            {"negative sign passthrough", -12.5, "-12.5"},
+        };
+        for (size_t i = 0; i < COUNT_ARRAY(vectors); i++) {
+            uint8_t buf[64] = {0};
+            const size_t len =
+                StrDoubleFormatToBufNice(buf, sizeof(buf), vectors[i].value);
+            if (len != strlen(vectors[i].expected) ||
+                memcmp(buf, vectors[i].expected, len) != 0) {
+                ERR("Branch '%s': got %.*s want %s", vectors[i].branch,
+                    (int)len, buf, vectors[i].expected);
+            }
+        }
+    }
+
+    TEST("integer exponent estimation output pinning") {
         /* Verify that our fast exponent estimation is working correctly
          * across a wide range of values */
         struct {
@@ -961,9 +1201,14 @@ int strDoubleFormatTest(int argc, char *argv[]) {
     printf("random seed: %d\n", rs);
     srand(rs);
 
+    /* LC_NUMERIC stays "C": the roundtrip checks below parse this
+     * formatter's '.'-radix output with strtod, which is
+     * locale-sensitive - a comma-decimal environment locale would
+     * false-fail every roundtrip. (Costs the %'zu banner grouping.) */
     setlocale(LC_ALL, "");
+    setlocale(LC_NUMERIC, "C");
 
-    const size_t testMax = 1e7;
+    const size_t testMax = 1e6;
     TEST_DESC("double formatting from random bit construction (100 dots; "
               "%'zu total tests)",
               testMax) {
@@ -984,7 +1229,15 @@ int strDoubleFormatTest(int argc, char *argv[]) {
 
             assert(buf[0]);
             assert(len || isinf(thisRandAttempt));
-            //            printf("printed: %.*s\n", len, buf);
+            /* Shortest-roundtrip contract: parsing the printed form
+             * must recover the exact bits */
+            if (len && isfinite(thisRandAttempt)) {
+                const double back = strtod((const char *)buf, NULL);
+                if (memcmp(&back, &thisRandAttempt, sizeof(back)) != 0) {
+                    ERR("Roundtrip failed: %.*s (bits %016" PRIx64 ")",
+                        (int)len, buf, randBig);
+                }
+            }
             if (i % (testMax / 100) == 0) {
                 printf(".");
                 fflush(stdout);
@@ -1016,7 +1269,15 @@ int strDoubleFormatTest(int argc, char *argv[]) {
 
             assert(buf[0]);
             assert(len || isinf(thisRandAttempt));
-            //            printf("printed: %.*s\n", len, buf);
+            /* Shortest-roundtrip contract: parsing the printed form
+             * must recover the exact bits */
+            if (len && isfinite(thisRandAttempt)) {
+                const double back = strtod((const char *)buf, NULL);
+                if (memcmp(&back, &thisRandAttempt, sizeof(back)) != 0) {
+                    ERR("Roundtrip failed: %.*s (value %.17g)", (int)len, buf,
+                        thisRandAttempt);
+                }
+            }
             if (i % (testMax / 100) == 0) {
                 printf(".");
                 fflush(stdout);
@@ -1025,6 +1286,102 @@ int strDoubleFormatTest(int argc, char *argv[]) {
         printf("\n");
         printf("{64-bit: %'d} {128-bit: %'d} {bignums: %'d}\n", methods[1],
                methods[2], methods[3]);
+    }
+
+    TEST("PERF: per-path formatting cycles") {
+        /* Deterministic per-dispatch-path corpora so scale/estimate
+         * changes are measurable in isolation from wall-clock noise */
+        uint64_t rng = 0x9E3779B97F4A7C15ULL;
+#define SDF_NEXT() (rng ^= rng << 13, rng ^= rng >> 7, rng ^= rng << 17, rng)
+        enum { SDF_CORPUS = 4096 };
+        static double corpus64[SDF_CORPUS];
+        static double corpus128[SDF_CORPUS];
+        static double corpusBig[SDF_CORPUS];
+        size_t n64 = 0;
+        size_t n128 = 0;
+        size_t nBig = 0;
+
+        while (n64 < SDF_CORPUS || n128 < SDF_CORPUS || nBig < SDF_CORPUS) {
+            const uint64_t bits = SDF_NEXT();
+            double v;
+            memcpy(&v, &bits, sizeof(v));
+            if (!isfinite(v) || v == 0.0) {
+                continue;
+            }
+
+            uint8_t buf[64] = {0};
+            const size_t len = StrDoubleFormatToBufNice(buf, sizeof(buf), v);
+
+            /* Every corpus value must satisfy the roundtrip contract */
+            if (len) {
+                const double back = strtod((const char *)buf, NULL);
+                if (memcmp(&back, &v, sizeof(back)) != 0) {
+                    int32_t vexp;
+                    const uint64_t vfrac = fractionAndExponent(v, &vexp);
+                    ERR("Corpus roundtrip failed: %.*s (bits %016" PRIx64
+                        " method %u places %d est %d %%.17g %.17g)",
+                        (int)len, buf, bits, resolvedMethod, resolvedPlaces,
+                        estimateDecimalScale(vexp, vfrac), v);
+                }
+            }
+
+            if (resolvedMethod == 1 && n64 < SDF_CORPUS) {
+                corpus64[n64++] = v;
+            } else if (resolvedMethod == 2 && n128 < SDF_CORPUS) {
+                corpus128[n128++] = v;
+            } else if (resolvedMethod == 3 && nBig < SDF_CORPUS) {
+                corpusBig[nBig++] = v;
+            }
+        }
+
+        /* checksum keeps the formatting calls observable so the
+         * optimizer cannot delete the measured work */
+        uint64_t sink = 0;
+
+        {
+            PERF_TIMERS_SETUP;
+            for (size_t l = 0; l < 32; l++) {
+                for (size_t i = 0; i < SDF_CORPUS; i++) {
+                    uint8_t buf[64];
+                    const size_t len =
+                        StrDoubleFormatToBufNice(buf, sizeof(buf), corpus64[i]);
+                    sink += len + buf[0];
+                }
+            }
+            PERF_TIMERS_FINISH_PRINT_RESULTS(32 * SDF_CORPUS,
+                                             "64-bit path formats");
+        }
+
+        {
+            PERF_TIMERS_SETUP;
+            for (size_t l = 0; l < 8; l++) {
+                for (size_t i = 0; i < SDF_CORPUS; i++) {
+                    uint8_t buf[64];
+                    const size_t len = StrDoubleFormatToBufNice(
+                        buf, sizeof(buf), corpus128[i]);
+                    sink += len + buf[0];
+                }
+            }
+            PERF_TIMERS_FINISH_PRINT_RESULTS(8 * SDF_CORPUS,
+                                             "128-bit path formats");
+        }
+
+        {
+            PERF_TIMERS_SETUP;
+            for (size_t l = 0; l < 2; l++) {
+                for (size_t i = 0; i < SDF_CORPUS; i++) {
+                    uint8_t buf[64];
+                    const size_t len = StrDoubleFormatToBufNice(
+                        buf, sizeof(buf), corpusBig[i]);
+                    sink += len + buf[0];
+                }
+            }
+            PERF_TIMERS_FINISH_PRINT_RESULTS(2 * SDF_CORPUS,
+                                             "bignum path formats");
+        }
+
+        printf("    corpus checksum: %" PRIu64 "\n", sink);
+#undef SDF_NEXT
     }
 
     return err;

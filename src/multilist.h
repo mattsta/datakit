@@ -69,11 +69,11 @@ bool multilistIteratorInitAtIdx(const multilist *ml, mflexState *state[2],
                                 multilistIterator *iter, mlOffsetId idx,
                                 bool forward, bool readOnly);
 #define multilistIteratorInitAtIdxForward(ml, s, iter, idx)                    \
-    multilistIteratorInitAtIdx(ml, s, iter, idx, true)
+    multilistIteratorInitAtIdx(ml, s, iter, idx, true, false)
 #define multilistIteratorInitAtIdxForwardReadOnly(ml, s, iter, idx)            \
     multilistIteratorInitAtIdx(ml, s, iter, idx, true, true)
 #define multilistIteratorInitAtIdxReverse(ml, s, iter, idx)                    \
-    multilistIteratorInitAtIdx(ml, s, iter, idx, false)
+    multilistIteratorInitAtIdx(ml, s, iter, idx, false, false)
 #define multilistIteratorInitAtIdxReverseReadOnly(ml, s, iter, idx)            \
     multilistIteratorInitAtIdx(ml, s, iter, idx, false, true)
 
@@ -98,8 +98,6 @@ bool multilistPop(multilist **m, mflexState *state, databox *got,
 void multilistFree(multilist *m);
 
 /* Bulk appending — use for growing
-void multilistAppendFlex(multilist *ml, flex *fl);
-multilist *multilistAppendValuesFromFlex(multilist *ml, flex *fl);
 multilist *multilistlNewFromFlex(int fill, int compress, flex *fl);
 */
 

@@ -274,6 +274,96 @@ size_t intsetCount(const intset *is) {
     return 0;
 }
 
+/* O(1) min/max: every per-width array is sorted, so the global
+ * extremes are the min of the array heads and the max of the tails. */
+bool intsetMin(const intset *is, int64_t *value) {
+    if (!is || intsetCount(is) == 0) {
+        return false;
+    }
+
+    const intsetType type = INTSET_TYPE(is);
+    void *ptr = INTSET_UNTAG(is);
+    int64_t best = INT64_MAX;
+
+    switch (type) {
+    case INTSET_TYPE_SMALL: {
+        const intsetSmall *small = (const intsetSmall *)ptr;
+        best = small->values16[0];
+        break;
+    }
+    case INTSET_TYPE_MEDIUM: {
+        const intsetMedium *medium = (const intsetMedium *)ptr;
+        if (medium->count16 && medium->values16[0] < best) {
+            best = medium->values16[0];
+        }
+        if (medium->count32 && medium->values32[0] < best) {
+            best = medium->values32[0];
+        }
+        break;
+    }
+    case INTSET_TYPE_FULL: {
+        const intsetFull *full = (const intsetFull *)ptr;
+        if (full->count16 && full->values16[0] < best) {
+            best = full->values16[0];
+        }
+        if (full->count32 && full->values32[0] < best) {
+            best = full->values32[0];
+        }
+        if (full->count64 && full->values64[0] < best) {
+            best = full->values64[0];
+        }
+        break;
+    }
+    }
+
+    *value = best;
+    return true;
+}
+
+bool intsetMax(const intset *is, int64_t *value) {
+    if (!is || intsetCount(is) == 0) {
+        return false;
+    }
+
+    const intsetType type = INTSET_TYPE(is);
+    void *ptr = INTSET_UNTAG(is);
+    int64_t best = INT64_MIN;
+
+    switch (type) {
+    case INTSET_TYPE_SMALL: {
+        const intsetSmall *small = (const intsetSmall *)ptr;
+        best = small->values16[small->count16 - 1];
+        break;
+    }
+    case INTSET_TYPE_MEDIUM: {
+        const intsetMedium *medium = (const intsetMedium *)ptr;
+        if (medium->count16 && medium->values16[medium->count16 - 1] > best) {
+            best = medium->values16[medium->count16 - 1];
+        }
+        if (medium->count32 && medium->values32[medium->count32 - 1] > best) {
+            best = medium->values32[medium->count32 - 1];
+        }
+        break;
+    }
+    case INTSET_TYPE_FULL: {
+        const intsetFull *full = (const intsetFull *)ptr;
+        if (full->count16 && full->values16[full->count16 - 1] > best) {
+            best = full->values16[full->count16 - 1];
+        }
+        if (full->count32 && full->values32[full->count32 - 1] > best) {
+            best = full->values32[full->count32 - 1];
+        }
+        if (full->count64 && full->values64[full->count64 - 1] > best) {
+            best = full->values64[full->count64 - 1];
+        }
+        break;
+    }
+    }
+
+    *value = best;
+    return true;
+}
+
 /* Get total bytes */
 size_t intsetBytes(intset *is) {
     if (!is) {

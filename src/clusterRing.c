@@ -9,6 +9,7 @@
 #include "clusterRingInternal.h"
 
 #include "../deps/xxHash/xxhash.h"
+#include "cleaner.h"
 #include "datakit.h"
 #include "flex.h"
 #include "persist.h"
@@ -17,6 +18,10 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleaner(clusterRing *, clusterRingFree);
+defcleaner(void *, zfree);
 
 /* ====================================================================
  * Platform-Specific Optimization Hints
@@ -215,7 +220,7 @@ static inline void seenTrackerSet(seenTracker *st, uint32_t idx) {
  * slot/vnode/replica in the routing hot paths, so the old O(nodeCount) scan
  * was effectively quadratic in node count. */
 static inline int32_t nodeIdToIndex(const clusterRing *ring, uint64_t nodeId) {
-    databox keybox = {.type = DATABOX_UNSIGNED_64, .data.u64 = nodeId};
+    databox keybox = databoxNewUnsigned(nodeId);
     databox valbox;
     if (!multidictFind(ring->nodeById, &keybox, &valbox)) {
         return -1;
@@ -372,7 +377,7 @@ static void clusterPlacementAddReplica(clusterPlacement *p,
     if (!p || !p->replicas || !node) {
         return;
     }
-    databox box = {.type = DATABOX_PTR, .data.ptr = (void *)node};
+    databox box = databoxNewPtr((void *)node);
     multilistPushByTypeTail(&p->replicas, clusterMflexState(), &box);
 }
 
@@ -413,7 +418,7 @@ static void clusterWriteSetAddTarget(clusterWriteSet *ws,
     if (!ws || !ws->targets || !node) {
         return;
     }
-    databox box = {.type = DATABOX_PTR, .data.ptr = (void *)node};
+    databox box = databoxNewPtr((void *)node);
     multilistPushByTypeTail(&ws->targets, clusterMflexState(), &box);
 }
 
@@ -455,7 +460,7 @@ static void clusterReadSetAddCandidate(clusterReadSet *rs,
     if (!rs || !rs->candidates || !node) {
         return;
     }
-    databox box = {.type = DATABOX_PTR, .data.ptr = (void *)node};
+    databox box = databoxNewPtr((void *)node);
     multilistPushByTypeTail(&rs->candidates, clusterMflexState(), &box);
 }
 
@@ -866,7 +871,6 @@ clusterResult clusterRingAddVnodes(clusterRing *ring, clusterNode *node) {
     for (uint32_t i = 0; i < vnodeCount; i++) {
         clusterVnode *vn = &data->vnodes[data->vnodeCount++];
         vn->hashPoint = clusterHashVnodePoint(node->id, i, ring->hashSeed);
-        vn->nodeId = node->id;
         vn->nodePtr = node; /* Direct pointer for fast lookup */
         vn->vnodeIndex = (uint16_t)i;
     }
@@ -886,7 +890,7 @@ clusterResult clusterRingRemoveVnodes(clusterRing *ring, uint64_t nodeId) {
     /* Remove all vnodes belonging to this node */
     uint32_t writeIdx = 0;
     for (uint32_t readIdx = 0; readIdx < data->vnodeCount; readIdx++) {
-        if (data->vnodes[readIdx].nodeId != nodeId) {
+        if (data->vnodes[readIdx].nodePtr->id != nodeId) {
             if (writeIdx != readIdx) {
                 data->vnodes[writeIdx] = data->vnodes[readIdx];
             }
@@ -1079,7 +1083,7 @@ clusterResult clusterRingAddNode(clusterRing *ring,
     }
 
     /* Check if node already exists */
-    databox keybox = {.type = DATABOX_UNSIGNED_64, .data.u64 = config->id};
+    databox keybox = databoxNewUnsigned(config->id);
     databox valbox;
     if (multidictFind(ring->nodeById, &keybox, &valbox)) {
         return CLUSTER_ERR_EXISTS;
@@ -1158,7 +1162,7 @@ clusterResult clusterRingRemoveNode(clusterRing *ring, uint64_t nodeId) {
     }
 
     /* Find node */
-    databox keybox = {.type = DATABOX_UNSIGNED_64, .data.u64 = nodeId};
+    databox keybox = databoxNewUnsigned(nodeId);
     databox valbox;
     if (!multidictFind(ring->nodeById, &keybox, &valbox)) {
         return CLUSTER_ERR_NOT_FOUND;
@@ -1234,7 +1238,7 @@ clusterResult clusterRingSetNodeState(clusterRing *ring, uint64_t nodeId,
         return CLUSTER_ERR;
     }
 
-    databox keybox = {.type = DATABOX_UNSIGNED_64, .data.u64 = nodeId};
+    databox keybox = databoxNewUnsigned(nodeId);
     databox valbox;
     if (!multidictFind(ring->nodeById, &keybox, &valbox)) {
         return CLUSTER_ERR_NOT_FOUND;
@@ -1282,7 +1286,7 @@ clusterResult clusterRingSetNodeWeight(clusterRing *ring, uint64_t nodeId,
         return CLUSTER_ERR;
     }
 
-    databox keybox = {.type = DATABOX_UNSIGNED_64, .data.u64 = nodeId};
+    databox keybox = databoxNewUnsigned(nodeId);
     databox valbox;
     if (!multidictFind(ring->nodeById, &keybox, &valbox)) {
         return CLUSTER_ERR_NOT_FOUND;
@@ -1317,7 +1321,7 @@ const clusterNode *clusterRingGetNode(const clusterRing *ring,
         return NULL;
     }
 
-    databox keybox = {.type = DATABOX_UNSIGNED_64, .data.u64 = nodeId};
+    databox keybox = databoxNewUnsigned(nodeId);
     databox valbox;
     if (multidictFind(ring->nodeById, &keybox, &valbox)) {
         return (const clusterNode *)valbox.data.ptr;
@@ -1452,7 +1456,7 @@ uint32_t clusterLocateKetama(const clusterRing *ring, const void *key,
 
         if (CLUSTER_LIKELY(node != NULL)) {
             /* Get node's index in nodeArray for bitmap tracking */
-            int32_t nodeIdx = nodeIdToIndex(ring, vn->nodeId);
+            int32_t nodeIdx = nodeIdToIndex(ring, node->id);
 
             if (nodeIdx >= 0 && !seenTrackerTest(&seen, (uint32_t)nodeIdx)) {
                 seenTrackerSet(&seen, (uint32_t)nodeIdx);
@@ -2324,7 +2328,7 @@ clusterResult clusterRingUpdateNodeHealth(clusterRing *ring, uint64_t nodeId,
         return CLUSTER_ERR;
     }
 
-    databox keybox = {.type = DATABOX_UNSIGNED_64, .data.u64 = nodeId};
+    databox keybox = databoxNewUnsigned(nodeId);
     databox valbox;
     if (!multidictFind(ring->nodeById, &keybox, &valbox)) {
         return CLUSTER_ERR_NOT_FOUND;
@@ -2354,7 +2358,7 @@ clusterResult clusterRingUpdateNodeLoad(clusterRing *ring, uint64_t nodeId,
         return CLUSTER_ERR;
     }
 
-    databox keybox = {.type = DATABOX_UNSIGNED_64, .data.u64 = nodeId};
+    databox keybox = databoxNewUnsigned(nodeId);
     databox valbox;
     if (!multidictFind(ring->nodeById, &keybox, &valbox)) {
         return CLUSTER_ERR_NOT_FOUND;
@@ -2993,7 +2997,7 @@ clusterRing *clusterRingDeserialize(const void *buf, size_t bufLen) {
     }
 
     /* Create ring. */
-    clusterRing *ring = clusterRingNew(&config);
+    cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&config);
     if (!ring) {
         return NULL;
     }
@@ -3098,7 +3102,7 @@ clusterRing *clusterRingDeserialize(const void *buf, size_t bufLen) {
             goto fail;
         }
 
-        databox keybox = {.type = DATABOX_UNSIGNED_64, .data.u64 = nodeCfg.id};
+        databox keybox = databoxNewUnsigned(nodeCfg.id);
         databox valbox;
         if (multidictFind(ring->nodeById, &keybox, &valbox)) {
             clusterNode *node = (clusterNode *)valbox.data.ptr;
@@ -3198,10 +3202,15 @@ clusterRing *clusterRingDeserialize(const void *buf, size_t bufLen) {
         goto fail;
     }
 
-    return ring;
+    {
+        /* Success: disarm the cleaner - caller owns the ring now */
+        clusterRing *result = ring;
+        ring = NULL;
+        return result;
+    }
 
-fail:
-    clusterRingFree(ring);
+fail:;
+    /* ring frees itself at scope exit */
     return NULL;
 }
 
@@ -3220,13 +3229,14 @@ static uint8_t *clusterRingPersistSnapshot(const void *structure, size_t *len) {
         *len = 0;
         return NULL;
     }
-    uint8_t *out = zmalloc(need);
+    cleaner(zfree) void *outAlloc = zmalloc(need);
+    uint8_t *out = outAlloc;
     const size_t wrote = clusterRingSerialize(ring, out, need);
     if (wrote == 0) {
-        zfree(out);
-        return NULL;
+        return NULL; /* outAlloc frees itself */
     }
     *len = wrote;
+    outAlloc = NULL; /* disarm: caller owns the buffer */
     return out;
 }
 

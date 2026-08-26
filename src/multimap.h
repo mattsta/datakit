@@ -3,6 +3,8 @@
 #include "flexCapacityManagement.h"
 #include "multimapCommon.h"
 
+#include <assert.h>
+
 /* opaque multimap type; there's no user accessible data here. */
 typedef struct multimap multimap;
 
@@ -42,6 +44,11 @@ bool multimapExistsWithReference(const multimap *m, const databox *key,
                                  const struct multimapAtom *referenceContainer);
 
 bool multimapLookup(const multimap *m, const databox *key, databox *elements[]);
+
+/* NOTE: despite the scalar-looking `databox **found`, this fills a
+ * FULL-WIDTH pointer array (elementsPerEntry boxes) when non-NULL -
+ * pass NULL or an array sized to the map's width, never a single
+ * box's address. */
 bool multimapRandomValue(multimap *m, bool fromTail, databox **found,
                          multimapEntry *me);
 
@@ -67,6 +74,56 @@ void multimapEntryReplace(multimap **m, const databox *key,
 bool multimapFirst(multimap *m, databox *elements[]);
 bool multimapLast(multimap *m, databox *elements[]);
 
+/* ====================================================================
+ * Reads into a contiguous out-array
+ *
+ * These build the pointer array the raw API needs so call sites don't
+ * hand-roll `databox *ptrs[N] = {&a, &b, ...}` wiring. `n` is the
+ * number of boxes THE READ FILLS and each API fills a different count:
+ *
+ *   - First/Last/IteratorNext fill elementsPerEntry boxes (full width)
+ *   - Lookup fills elementsPerEntry - 1 boxes (values only; the key is
+ *     yours already)
+ *
+ * An undersized array gets written past its end (these are not partial
+ * reads), so `n` is a contract, not a request. Bounded at
+ * MULTIMAP_INTO_MAX; wider maps use the raw API. Zero-cost: with a
+ * literal `n` the wiring loop unrolls to the same address-of stores
+ * the hand-rolled initializer produced.
+ * ==================================================================== */
+enum { MULTIMAP_INTO_MAX = 16 };
+
+/* n == elementsPerEntry - 1 (value elements only) */
+static inline bool multimapLookupInto(const multimap *m, const databox *key,
+                                      databox out[], uint32_t n) {
+    assert(n <= MULTIMAP_INTO_MAX);
+    databox *ptrs[MULTIMAP_INTO_MAX];
+    for (uint32_t i = 0; i < n; i++) {
+        ptrs[i] = &out[i];
+    }
+    return multimapLookup(m, key, ptrs);
+}
+
+/* n == elementsPerEntry (full width) */
+static inline bool multimapFirstInto(multimap *m, databox out[], uint32_t n) {
+    assert(n <= MULTIMAP_INTO_MAX);
+    databox *ptrs[MULTIMAP_INTO_MAX];
+    for (uint32_t i = 0; i < n; i++) {
+        ptrs[i] = &out[i];
+    }
+    return multimapFirst(m, ptrs);
+}
+
+/* n == elementsPerEntry (full width) */
+static inline bool multimapLastInto(multimap *m, databox out[], uint32_t n) {
+    assert(n <= MULTIMAP_INTO_MAX);
+    databox *ptrs[MULTIMAP_INTO_MAX];
+    for (uint32_t i = 0; i < n; i++) {
+        ptrs[i] = &out[i];
+    }
+    return multimapLast(m, ptrs);
+}
+
 /* ADD THESE */
 bool multimapDeleteByPosition(multimap *m, int64_t keyIndex);
 bool multimapLookupByPosition(multimap *m, int64_t keyIndex,
@@ -85,6 +142,18 @@ void multimapIteratorInit(const multimap *m, multimapIterator *iter,
                           bool forward);
 bool multimapIteratorNext(multimapIterator *iter, databox **elements);
 
+/* Iterator companion to the *Into readers above: same contract, same
+ * width rule (`n` == elementsPerEntry). */
+static inline bool multimapIteratorNextInto(multimapIterator *iter,
+                                            databox out[], uint32_t n) {
+    assert(n <= MULTIMAP_INTO_MAX);
+    databox *ptrs[MULTIMAP_INTO_MAX];
+    for (uint32_t i = 0; i < n; i++) {
+        ptrs[i] = &out[i];
+    }
+    return multimapIteratorNext(iter, ptrs);
+}
+
 void multimapIntersectKeys(multimap **restrict dst,
                            multimapIterator *restrict const a,
                            multimapIterator *restrict const b);
@@ -98,5 +167,6 @@ void multimapCopyKeys(multimap **restrict dst, const multimap *restrict src);
 
 #ifdef DATAKIT_TEST
 void multimapRepr(const multimap *m);
+void multimapVerify(const multimap *m);
 int multimapTest(int argc, char *argv[]);
 #endif

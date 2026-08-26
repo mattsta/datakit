@@ -48,15 +48,17 @@ int main(int argc, char *argv[]) {
     out_rdx = atoi(argv[2]);
 
     if (in_rdx < MP_MIN_RADIX || in_rdx > MP_MAX_RADIX) {
-        fprintf(stderr, "basecvt: input radix %u not allowed (minimum %u, "
-                        "maximum %u)\n",
+        fprintf(stderr,
+                "basecvt: input radix %u not allowed (minimum %u, "
+                "maximum %u)\n",
                 in_rdx, MP_MIN_RADIX, MP_MAX_RADIX);
         return 3;
     }
 
     if (out_rdx < MP_MIN_RADIX || out_rdx > MP_MAX_RADIX) {
-        fprintf(stderr, "basecvt: output radix %u not allowed (minimum %u, "
-                        "maximum %u)\n",
+        fprintf(stderr,
+                "basecvt: output radix %u not allowed (minimum %u, "
+                "maximum %u)\n",
                 out_rdx, MP_MIN_RADIX, MP_MAX_RADIX);
         return 3;
     }

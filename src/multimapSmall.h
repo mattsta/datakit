@@ -71,5 +71,6 @@ bool multimapSmallDeleteByPredicate(multimapSmall *m,
 
 #ifdef DATAKIT_TEST
 void multimapSmallRepr(const multimapSmall *m);
+void multimapSmallVerify(const multimapSmall *m);
 int multimapSmallTest(int argc, char *argv[]);
 #endif

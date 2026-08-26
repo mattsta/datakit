@@ -379,7 +379,7 @@ int databoxLinearTest(int argc, char *argv[]) {
     TEST("unsigned integers - small values") {
         uint64_t values[] = {0, 1, 2, 127, 128, 255};
         for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); i++) {
-            databox a = {.data.u = values[i], .type = DATABOX_UNSIGNED_64};
+            databox a = databoxNewUnsigned(values[i]);
             databoxLinear dl = {0};
             ssize_t len = databoxLinearEncode(&a, &dl);
 
@@ -409,7 +409,7 @@ int databoxLinearTest(int argc, char *argv[]) {
         /* Test at byte boundaries: 2^8, 2^16, 2^24, etc. */
         for (int bits = 8; bits <= 64; bits += 8) {
             uint64_t val = (bits == 64) ? UINT64_MAX : ((1ULL << bits) - 1);
-            databox a = {.data.u = val, .type = DATABOX_UNSIGNED_64};
+            databox a = databoxNewUnsigned(val);
             databoxLinear dl = {0};
             ssize_t len = databoxLinearEncode(&a, &dl);
 
@@ -428,7 +428,7 @@ int databoxLinearTest(int argc, char *argv[]) {
     }
 
     TEST("unsigned integers - UINT64_MAX") {
-        databox a = {.data.u = UINT64_MAX, .type = DATABOX_UNSIGNED_64};
+        databox a = databoxNewUnsigned(UINT64_MAX);
         databoxLinear dl = {0};
         ssize_t len = databoxLinearEncode(&a, &dl);
 
@@ -450,7 +450,7 @@ int databoxLinearTest(int argc, char *argv[]) {
     TEST("signed integers - small values") {
         int64_t values[] = {0, 1, -1, 127, -128, 128, -129};
         for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); i++) {
-            databox a = {.data.i = values[i], .type = DATABOX_SIGNED_64};
+            databox a = databoxNewSigned(values[i]);
             databoxLinear dl = {0};
             databoxLinearEncode(&a, &dl);
 
@@ -476,7 +476,7 @@ int databoxLinearTest(int argc, char *argv[]) {
     }
 
     TEST("signed integers - INT64_MIN") {
-        databox a = {.data.i = INT64_MIN, .type = DATABOX_SIGNED_64};
+        databox a = databoxNewSigned(INT64_MIN);
         databoxLinear dl = {0};
         ssize_t len = databoxLinearEncode(&a, &dl);
 
@@ -495,7 +495,7 @@ int databoxLinearTest(int argc, char *argv[]) {
     }
 
     TEST("signed integers - INT64_MAX") {
-        databox a = {.data.i = INT64_MAX, .type = DATABOX_SIGNED_64};
+        databox a = databoxNewSigned(INT64_MAX);
         databoxLinear dl = {0};
         ssize_t len = databoxLinearEncode(&a, &dl);
 
@@ -639,7 +639,7 @@ int databoxLinearTest(int argc, char *argv[]) {
 
     TEST("DecodeParts function") {
         /* Encode a value, then decode using DecodeParts */
-        databox a = {.data.u = 12345, .type = DATABOX_UNSIGNED_64};
+        databox a = databoxNewUnsigned(12345);
         databoxLinear dl = {0};
         databoxLinearEncode(&a, &dl);
 
@@ -659,7 +659,7 @@ int databoxLinearTest(int argc, char *argv[]) {
      * ---------------------------------------------------------------- */
 
     TEST("DATABOX_LINEAR_DECODE macro") {
-        databox a = {.data.i = -999, .type = DATABOX_SIGNED_64};
+        databox a = databoxNewSigned(-999);
         databoxLinear dl = {0};
         ssize_t len = databoxLinearEncode(&a, &dl);
 
@@ -699,7 +699,7 @@ int databoxLinearTest(int argc, char *argv[]) {
         };
 
         for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
-            databox a = {.data.u = cases[i].val, .type = DATABOX_UNSIGNED_64};
+            databox a = databoxNewUnsigned(cases[i].val);
             databoxLinear dl = {0};
             ssize_t len = databoxLinearEncode(&a, &dl);
 
@@ -723,7 +723,7 @@ int databoxLinearTest(int argc, char *argv[]) {
             int count = (bits == 64) ? 1 : 3; /* Can't go above UINT64_MAX */
 
             for (int i = 0; i < count; i++) {
-                databox a = {.data.u = vals[i], .type = DATABOX_UNSIGNED_64};
+                databox a = databoxNewUnsigned(vals[i]);
                 databoxLinear dl = {0};
                 databoxLinearEncode(&a, &dl);
 
@@ -752,7 +752,7 @@ int databoxLinearTest(int argc, char *argv[]) {
 
         for (size_t i = 0; i < sizeof(boundaries) / sizeof(boundaries[0]);
              i++) {
-            databox a = {.data.i = boundaries[i], .type = DATABOX_SIGNED_64};
+            databox a = databoxNewSigned(boundaries[i]);
             databoxLinear dl = {0};
             databoxLinearEncode(&a, &dl);
 
@@ -770,7 +770,7 @@ int databoxLinearTest(int argc, char *argv[]) {
 
     TEST("signed - negative one encoding") {
         /* -1 is special: stored as 0 due to SIGNED_PREPARE optimization */
-        databox a = {.data.i = -1, .type = DATABOX_SIGNED_64};
+        databox a = databoxNewSigned(-1);
         databoxLinear dl = {0};
         ssize_t len = databoxLinearEncode(&a, &dl);
 
@@ -788,7 +788,7 @@ int databoxLinearTest(int argc, char *argv[]) {
     TEST("unsigned - powers of two") {
         for (int i = 0; i < 64; i++) {
             uint64_t val = 1ULL << i;
-            databox a = {.data.u = val, .type = DATABOX_UNSIGNED_64};
+            databox a = databoxNewUnsigned(val);
             databoxLinear dl = {0};
             databoxLinearEncode(&a, &dl);
 
@@ -804,7 +804,7 @@ int databoxLinearTest(int argc, char *argv[]) {
     TEST("signed - negative powers of two") {
         for (int i = 0; i < 63; i++) {
             int64_t val = -(1LL << i);
-            databox a = {.data.i = val, .type = DATABOX_SIGNED_64};
+            databox a = databoxNewSigned(val);
             databoxLinear dl = {0};
             databoxLinearEncode(&a, &dl);
 
@@ -889,7 +889,7 @@ int databoxLinearTest(int argc, char *argv[]) {
 
         for (int i = 0; i < 10000; i++) {
             uint64_t val = fuzzNext();
-            databox a = {.data.u = val, .type = DATABOX_UNSIGNED_64};
+            databox a = databoxNewUnsigned(val);
             databoxLinear dl = {0};
             databoxLinearEncode(&a, &dl);
 
@@ -912,7 +912,7 @@ int databoxLinearTest(int argc, char *argv[]) {
 
         for (int i = 0; i < 10000; i++) {
             int64_t val = fuzzSigned();
-            databox a = {.data.i = val, .type = DATABOX_SIGNED_64};
+            databox a = databoxNewSigned(val);
             databoxLinear dl = {0};
             databoxLinearEncode(&a, &dl);
 
@@ -985,7 +985,7 @@ int databoxLinearTest(int argc, char *argv[]) {
         for (int i = 0; i < 10000; i++) {
             /* Values 0 to 2^24-1 (1-3 bytes) */
             uint64_t val = fuzzRange((1ULL << 24) - 1);
-            databox a = {.data.u = val, .type = DATABOX_UNSIGNED_64};
+            databox a = databoxNewUnsigned(val);
             databoxLinear dl = {0};
             ssize_t len = databoxLinearEncode(&a, &dl);
 
@@ -1010,7 +1010,7 @@ int databoxLinearTest(int argc, char *argv[]) {
 
         for (int i = 0; i < 10000; i++) {
             int64_t val = -1 - (int64_t)fuzzRange((1ULL << 23) - 1);
-            databox a = {.data.i = val, .type = DATABOX_SIGNED_64};
+            databox a = databoxNewSigned(val);
             databoxLinear dl = {0};
             databoxLinearEncode(&a, &dl);
 
@@ -1032,7 +1032,7 @@ int databoxLinearTest(int argc, char *argv[]) {
         uint64_t vals[] = {0, 1, 255, 256, 65535, UINT32_MAX, UINT64_MAX};
 
         for (size_t i = 0; i < sizeof(vals) / sizeof(vals[0]); i++) {
-            databox a = {.data.u = vals[i], .type = DATABOX_UNSIGNED_64};
+            databox a = databoxNewUnsigned(vals[i]);
 
             databoxLinear dl1 = {0}, dl2 = {0};
             ssize_t len1 = databoxLinearEncode(&a, &dl1);
@@ -1054,7 +1054,7 @@ int databoxLinearTest(int argc, char *argv[]) {
     }
 
     TEST("roundtrip - decode twice gives same result") {
-        databox a = {.data.u = 123456789, .type = DATABOX_UNSIGNED_64};
+        databox a = databoxNewUnsigned(123456789);
         databoxLinear dl = {0};
         databoxLinearEncode(&a, &dl);
 
@@ -1072,7 +1072,7 @@ int databoxLinearTest(int argc, char *argv[]) {
 
         for (int i = 0; i < 1000; i++) {
             uint64_t val = fuzzNext();
-            databox a = {.data.u = val, .type = DATABOX_UNSIGNED_64};
+            databox a = databoxNewUnsigned(val);
 
             /* Encode */
             databoxLinear dl1 = {0};
@@ -1103,8 +1103,8 @@ int databoxLinearTest(int argc, char *argv[]) {
     TEST("DecodeParts - all types") {
         /* Test DecodeParts with various types */
         databox inputs[] = {
-            {.data.u = 42, .type = DATABOX_UNSIGNED_64},
-            {.data.i = -42, .type = DATABOX_SIGNED_64},
+            databoxNewUnsigned(42),
+            databoxNewSigned(-42),
             {.data.f32 = 3.14f, .type = DATABOX_FLOAT_32},
             {.data.d64 = 2.718281828, .type = DATABOX_DOUBLE_64},
             {.type = DATABOX_TRUE},
@@ -1135,7 +1135,7 @@ int databoxLinearTest(int argc, char *argv[]) {
     }
 
     TEST("PARTS_DECODE macro - fixed types") {
-        databox a = {.data.u = 999, .type = DATABOX_UNSIGNED_64};
+        databox a = databoxNewUnsigned(999);
         databoxLinear dl = {0};
         ssize_t len = databoxLinearEncode(&a, &dl);
 
@@ -1171,8 +1171,7 @@ int databoxLinearTest(int argc, char *argv[]) {
 
         for (size_t i = 0; i < sizeof(ranges) / sizeof(ranges[0]); i++) {
             /* Test max value for this width */
-            databox a = {.data.u = ranges[i].maxVal,
-                         .type = DATABOX_UNSIGNED_64};
+            databox a = databoxNewUnsigned(ranges[i].maxVal);
             databoxLinear dl = {0};
             ssize_t len = databoxLinearEncode(&a, &dl);
 
@@ -1206,7 +1205,7 @@ int databoxLinearTest(int argc, char *argv[]) {
         };
 
         for (size_t i = 0; i < sizeof(ranges) / sizeof(ranges[0]); i++) {
-            databox a = {.data.i = ranges[i].minVal, .type = DATABOX_SIGNED_64};
+            databox a = databoxNewSigned(ranges[i].minVal);
             databoxLinear dl = {0};
             ssize_t len = databoxLinearEncode(&a, &dl);
 
@@ -1223,7 +1222,7 @@ int databoxLinearTest(int argc, char *argv[]) {
 
     TEST("sequential unsigned 0-1000") {
         for (uint64_t val = 0; val <= 1000; val++) {
-            databox a = {.data.u = val, .type = DATABOX_UNSIGNED_64};
+            databox a = databoxNewUnsigned(val);
             databoxLinear dl = {0};
             databoxLinearEncode(&a, &dl);
 
@@ -1238,7 +1237,7 @@ int databoxLinearTest(int argc, char *argv[]) {
 
     TEST("sequential signed -500 to +500") {
         for (int64_t val = -500; val <= 500; val++) {
-            databox a = {.data.i = val, .type = DATABOX_SIGNED_64};
+            databox a = databoxNewSigned(val);
             databoxLinear dl = {0};
             databoxLinearEncode(&a, &dl);
 

@@ -1018,7 +1018,7 @@ int multiOrderedSetMediumTest(int argc, char *argv[]) {
 
         /* Add several entries */
         for (int i = 0; i < 10; i++) {
-            databox score = {.type = DATABOX_SIGNED_64, .data.i = i * 10};
+            databox score = databoxNewSigned(i * 10);
             char buf[16];
             snprintf(buf, sizeof(buf), "m%d", i);
             databox member = databoxNewBytesAllowEmbed(buf, strlen(buf));

@@ -91,6 +91,11 @@
 #include "persist/multiroarP.h"
 #include "persist/persistCtx.h"
 #include "ptrPrevNext.h"
+
+/* ptrlib is a guard-less config-macro header; its test entry point is
+ * declared here rather than in the header */
+extern int ptrlibTest(int argc, char *argv[]);
+extern int bigmathTest(int argc, char *argv[]);
 #include "rapidhash.h"
 #include "segment/segmentI64.h" /* New 2-tier template system */
 #include "sha256.h"
@@ -8994,7 +8999,7 @@ static const TestEntry testRegistry[] = {
     T_A_ADJ(timerWheel, "tw"),
 
     /* Buffers */
-    T_ADJ(fibbuf), T_ADJ(jebuf),
+    T_ADJ(fibbuf), T_ADJ(jebuf), T_ADJ(ptrlib), T_ADJ(bigmath),
 
     /* Utilities */
     T(util), T_ADJ(databox), T_ADJ(databoxLinear), T(offsetArray),

@@ -41,6 +41,9 @@ multilistMedium *multilistMediumCreate(void) {
  * ==================================================================== */
 multilistMedium *multilistMediumDuplicate(multilistMedium *orig) {
     multilistMedium *ml = multilistMediumCreate();
+    /* Create() pre-allocated two empty flexes; release before overwrite */
+    flexFree(F0);
+    flexFree(F1);
     F0 = flexDuplicate(MF0(orig));
     F1 = flexDuplicate(MF1(orig));
     return ml;
@@ -221,44 +224,54 @@ bool multilistMediumDelRange(multilistMedium *ml, const mlOffsetId start,
      *      - delete part of F0, part of F1 [start in F0, end in F1] */
 
     /* Note: we *already* verified 'extent' is <= currentValues above,
-     * so if extent == currentValues, then we're deleting everything. */
+     * so if extent == currentValues, then we're deleting everything.
+     *
+     * The general shape: the range starts at entry.offset inside
+     * entry.nodeIdx's flex; whatever portion falls inside F0 is
+     * F0-relative, the remainder always starts at F1's HEAD. The
+     * whole-flex fast paths only apply when the range actually covers
+     * a flex from its own start. */
     if (extent == currentValues) {
         /* If deleting from start to end including all values,
          * just clear both */
         flexReset(&F0);
         flexReset(&F1);
-    } else if (entry.nodeIdx == 0 && extent == countF0) {
-        /* If deleting all of F0, clear F0.
-         * (which is the same as swapping F1 with an empty F0) */
-        flexReset(&F0);
-        swapF();
-    } else if (entry.nodeIdx == 1 && extent == countF1) {
-        /* If deleting all of F1, just clear F1. */
-        flexReset(&F1);
-    } else if (extent > countF0) {
-        /* deleting more than F0, so clear F0, delete part of F1, then
-         * swap F1 with F0 */
-        flexReset(&F0);
-        extent -= countF0;
-
-        flexEntry *deleteStartF1 = flexIndex(F1, entry.offset);
-        flexDeleteCount(&F1, &deleteStartF1, extent);
-    } else if (entry.nodeIdx == 0) {
-        /* deleting part of F0 and part of F1 */
-        flexEntry *deleteStartF0 = flexIndex(F0, entry.offset);
-        flexDeleteCount(&F0, &deleteStartF0, extent - countF1);
-
-        extent -= (extent - countF1);
-        assert(extent > 0);
-
-        flexEntry *deleteStartF1 = flexHead(F1);
-        flexDeleteCount(&F1, &deleteStartF1, extent);
     } else if (entry.nodeIdx == 1) {
-        /* deleting none of F0 and part of F1 */
-        flexEntry *deleteStartF1 = flexIndex(F1, entry.offset);
-        flexDeleteCount(&F1, &deleteStartF1, extent);
+        /* Range lives entirely in F1 */
+        if (entry.offset == 0 && extent == countF1) {
+            flexReset(&F1);
+        } else {
+            flexEntry *deleteStartF1 = flexIndex(F1, entry.offset);
+            flexDeleteCount(&F1, &deleteStartF1, extent);
+        }
     } else {
-        assert(NULL && "unexpected combination of conditions!");
+        /* Range starts in F0 at entry.offset; split per flex */
+        const mlOffsetId remainF0 = countF0 - entry.offset;
+        const mlOffsetId delF0 = extent < remainF0 ? extent : remainF0;
+        const mlOffsetId delF1 = extent - delF0;
+
+        if (entry.offset == 0 && delF0 == countF0) {
+            flexReset(&F0);
+        } else if (delF0 > 0) {
+            flexEntry *deleteStartF0 = flexIndex(F0, entry.offset);
+            flexDeleteCount(&F0, &deleteStartF0, delF0);
+        }
+
+        if (delF1 > 0) {
+            if (delF1 == countF1) {
+                flexReset(&F1);
+            } else {
+                flexEntry *deleteStartF1 = flexHead(F1);
+                flexDeleteCount(&F1, &deleteStartF1, delF1);
+            }
+        }
+
+        /* Preserve the F0-nonempty invariant (see the countF0 == 0
+         * early return above): if F0 drained but F1 still has data,
+         * F1 becomes the new F0 */
+        if (flexCount(F0) == 0 && flexCount(F1) > 0) {
+            swapF();
+        }
     }
 
     return true;
@@ -293,7 +306,9 @@ void multilistMediumIteratorInit(multilistMedium *ml, multilistIterator *iter,
     iter->nodeIdx = forward ? 0 : 1;
     iter->forward = forward;
     iter->ml = ml;
-    iter->fe = flexIndexDirect(ml->fl[iter->nodeIdx], iter->offset);
+    /* iter->f must track nodeIdx: Next() advances through it */
+    iter->f = ml->fl[iter->nodeIdx];
+    iter->fe = flexIndexDirect(iter->f, iter->offset);
 }
 
 bool multilistMediumIteratorInitAtIdx(multilistMedium *ml,
@@ -302,9 +317,14 @@ bool multilistMediumIteratorInitAtIdx(multilistMedium *ml,
     multilistEntry entry = {0};
 
     if (multilistMediumIndex(ml, idx, &entry)) {
-        multilistMediumIteratorInit(ml, iter, forward);
-        iter->fe = flexIndexDirect(ml->fl[iter->nodeIdx], iter->offset);
+        /* Start exactly at the indexed element: Index() already
+         * resolved node, offset, and entry position */
+        iter->forward = forward;
+        iter->ml = ml;
+        iter->nodeIdx = entry.nodeIdx;
         iter->offset = entry.offset;
+        iter->f = ml->fl[entry.nodeIdx];
+        iter->fe = entry.fe;
         return true;
     }
 
@@ -367,15 +387,17 @@ bool multilistMediumIndex(multilistMedium *ml, mlOffsetId index,
     entry->ml = ml;
     entry->offset = index;
 
-    /* convert negative offset to positve offset */
-    const bool reverse = index < 0 ? true : false; /* negative == reverse */
-    if (reverse) {
-        index = (-index) - 1;
+    /* Negative index counts from the tail: -1 is the last element */
+    const mlOffsetId values = multilistMediumCount(ml);
+    if (index < 0) {
+        index = values + index;
+        if (index < 0) {
+            return false;
+        }
     }
 
     /* if out of range of all elements, nothing to index */
-    const mlOffsetId values = multilistMediumCount(ml);
-    if (values > 0 && index >= values) {
+    if (index >= values) {
         return false;
     }
 
@@ -466,6 +488,12 @@ bool multilistMediumPop(multilistMedium *ml, databox *box, bool fromTail) {
         *box = found;
         databoxCopyBytesFromBox(box, &found);
         flexDeleteRange(ffl, flIdx, 1);
+
+        /* F0 must hold elements whenever the list is nonempty */
+        if (flexCount(F0) == 0 && flexCount(F1) > 0) {
+            swapF();
+        }
+
         return true;
     }
 
@@ -481,7 +509,13 @@ void multilistMediumPushByTypeHead(multilistMedium *ml, const databox *box) {
 }
 
 void multilistMediumPushByTypeTail(multilistMedium *ml, const databox *box) {
-    flexPushByType(&F1, box, FLEX_ENDPOINT_TAIL);
+    /* F0 must hold elements whenever the list is nonempty, so the
+     * first element of an empty list goes to F0, not F1 */
+    if (flexCount(F0) == 0 && flexCount(F1) == 0) {
+        flexPushByType(&F0, box, FLEX_ENDPOINT_TAIL);
+    } else {
+        flexPushByType(&F1, box, FLEX_ENDPOINT_TAIL);
+    }
     /* todo: rebalance */
 }
 

@@ -189,11 +189,13 @@ bool multimapMediumInsert(multimapMedium *m, const databox *elements[]) {
     flexEntry *middle = GET_MIDDLE(m, mapIdx);
     /* Maps: key-only compare, found => replace values.  Sets: the
      * dedupe variant — see multimapSmallInsert. */
-    const bool replaced = m->mapIsSet
-        ? flexInsertReplaceByTypeSortedWithMiddleMultiDirectSet(
-              &m->map[mapIdx], m->elementsPerEntry, elements, &middle)
-        : flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
-              &m->map[mapIdx], m->elementsPerEntry, elements, &middle, true);
+    const bool replaced =
+        m->mapIsSet
+            ? flexInsertReplaceByTypeSortedWithMiddleMultiDirectSet(
+                  &m->map[mapIdx], m->elementsPerEntry, elements, &middle)
+            : flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
+                  &m->map[mapIdx], m->elementsPerEntry, elements, &middle,
+                  true);
     SET_MIDDLE(m, mapIdx, middle);
     return replaced;
 }
@@ -210,6 +212,8 @@ void multimapMediumInsertFullWidth(multimapMedium *m,
     SET_MIDDLE(m, mapIdx, middle);
 }
 
+DK_INLINE_ALWAYS void multimapMediumConform_(multimapMedium *m, size_t mapIdx);
+
 void multimapMediumAppend(multimapMedium *m, const databox *elements[]) {
     static const size_t mapIdx = 1; /* always insert into highest map! */
 
@@ -224,6 +228,11 @@ void multimapMediumAppend(multimapMedium *m, const databox *elements[]) {
             &m->map[mapIdx], m->elementsPerEntry, elements, &middle, true);
     }
     SET_MIDDLE(m, mapIdx, middle);
+
+    /* Appending into map 1 while map 0 is empty (e.g. the first insert
+     * after a full drain) would strand the data where searches, which
+     * stop on an empty map 0, can't reach it. Rebalance into map 0. */
+    multimapMediumConform_(m, 0);
 }
 
 DK_INLINE_ALWAYS bool
@@ -255,11 +264,13 @@ bool multimapMediumGetUnderlyingEntry(multimapMedium *m, const databox *key,
 bool multimapMediumGetUnderlyingEntryGetEntry(multimapMedium *m,
                                               const databox *key,
                                               multimapEntry *me) {
-    /* copy/paste of the common case from abstractGetUnderlyingEntry() */
+    /* Position variant: unlike the exact-match search used for direct
+     * entry lookup, this returns the insertion point for any key, so
+     * "start at or after K" works for keys that don't exist. */
     me->mapIdx = multimapMediumBinarySearch_(m, key, false, NULL);
-    me->fe =
-        flexFindByTypeSortedWithMiddle(m->map[me->mapIdx], m->elementsPerEntry,
-                                       key, GET_MIDDLE(m, me->mapIdx));
+    me->fe = flexFindByTypeSortedWithMiddleGetEntry(m->map[me->mapIdx],
+                                                    m->elementsPerEntry, key,
+                                                    GET_MIDDLE(m, me->mapIdx));
     me->map = &m->map[me->mapIdx];
 
     return !!me->fe;
@@ -364,8 +375,17 @@ bool multimapMediumRandomValue(multimapMedium *m, const bool fromTail,
         return false;
     }
 
-    /* Step 1: pick victim map */
-    const size_t mapIdx = random() % 2;
+    /* Step 1: pick victim map. Only a populated map is eligible - map
+     * 1 is legitimately empty for any Medium that hasn't split yet,
+     * and an empty pick would divide by zero below (or walk backward
+     * off an empty flex on the tail path). The total count above is
+     * nonzero, so at least one side always qualifies. */
+    size_t mapIdx = random() % 2;
+    if (flexCount(m->map[mapIdx]) == 0) {
+        mapIdx ^= 1;
+    }
+
+    assert(flexCount(m->map[mapIdx]) > 0);
     flex **map = &m->map[mapIdx];
 
     /* Step 2: pick victim element */
@@ -552,6 +572,12 @@ int64_t multimapMediumFieldIncr(multimapMedium *m, const databox *key,
 
     flexEntry *current = flexFindByTypeSortedWithMiddle(
         m->map[mapIdx], m->elementsPerEntry, key, GET_MIDDLE(m, mapIdx));
+    if (!current) {
+        /* No such key: return 0 rather than walking flexNext from NULL.
+         * Matches the multimap-level FieldIncr miss contract. */
+        return 0;
+    }
+
     while (fieldOffset--) {
         current = flexNext(m->map[mapIdx], current);
     }
@@ -644,7 +670,15 @@ bool multimapMediumIteratorInitAt(multimapMedium *m, multimapIterator *iter,
 
     /* If we iterated past all elements, we can't iterate any more... */
     if (me.fe == *me.map + flexBytes(*me.map)) {
-        me.fe = NULL;
+        /* ...unless the position merely ran off the end of map 0 while
+         * map 1 still holds the keys at or above the search point. */
+        if (forward && me.mapIdx == 0 && flexCount(m->map[1]) > 0) {
+            me.mapIdx = 1;
+            me.map = &m->map[1];
+            me.fe = flexHead(m->map[1]);
+        } else {
+            me.fe = NULL;
+        }
     }
 
     multimapMediumIteratorInitAt_(m, iter, forward, &me);
@@ -727,42 +761,53 @@ bool multimapMediumIteratorNext(multimapIterator *iter, databox *elements[]) {
 
 bool multimapMediumDeleteByPredicate(multimapMedium *m,
                                      const multimapPredicate *p) {
-    multimapEntry me = {0};
-    multimapMediumGetUnderlyingEntry(m, &p->compareAgainst, &me);
+    const size_t mapIdx =
+        multimapMediumBinarySearch_(m, &p->compareAgainst, false, NULL);
 
-    if (!me.fe) {
+    /* Boundary search, NOT an exact-match search: deleting everything
+     * at or below a limit must work for any limit, not only for one
+     * that happens to exist as a key. */
+    flexEntry *startP = flexGetByTypeSortedWithMiddle(
+        m->map[mapIdx], m->elementsPerEntry, &p->compareAgainst,
+        GET_MIDDLE(m, mapIdx));
+
+    /* If the found value is the END OF THE MAP, don't continue! */
+    if (!startP) {
         return false;
     }
 
+    /* By default, assume the value we found is at the end of the list. */
     int compared = 1;
-    if (!flexEntryIsValid(*me.map, me.fe)) {
+    if (flexEntryIsValid(m->map[mapIdx], startP)) {
         databox value;
-        flexGetByType(me.fe, &value);
+        flexGetByType(startP, &value);
 
         compared = databoxCompare(&value, &p->compareAgainst);
     }
 
     switch (p->condition) {
     case MULTIMAP_CONDITION_LESS_THAN_EQUAL:
-        if (me.mapIdx == 1) {
-            /* If we found our entry in map 1, then all of
-             * map 0 can be deleted with no traversal. */
+        if (mapIdx == 1) {
+            /* The boundary lives in map 1, so all of map 0 sorts below
+             * it and can be dropped with no traversal. */
             flexReset(&m->map[0]);
             SET_MIDDLE_FORCE(m, 0);
         }
 
-        if (!me.fe) {
-            return false;
-        }
-
         /* see multimapSmall for comments */
         if (compared == 0) {
-            flexDeleteUpToInclusivePlusN(me.map, me.fe,
+            flexDeleteUpToInclusivePlusN(&m->map[mapIdx], startP,
                                          m->elementsPerEntry - 1);
         } else {
-            flexDeleteUpToInclusive(me.map, flexPrev(*me.map, me.fe));
+            flexDeleteUpToInclusive(&m->map[mapIdx],
+                                    flexPrev(m->map[mapIdx], startP));
         }
-        SET_MIDDLE_FORCE(m, me.mapIdx);
+
+        SET_MIDDLE_FORCE(m, mapIdx);
+
+        /* Draining map 0 must never strand data in map 1, where
+         * searches (which cut off on an empty map 0) can't reach it. */
+        multimapMediumConform_(m, 0);
         return true;
     default:
         /* We don't support the other predicate types yet */
@@ -793,6 +838,16 @@ void multimapMediumRepr(const multimapMedium *m) {
     flexRepr(m->map[1]);
 }
 
+void multimapMediumVerify(const multimapMedium *m) {
+    /* middle oracle: both cached byte offsets must equal fresh rescans;
+     * sorted finds trust them blindly, so any divergence is corruption.
+     * (Medium routes between maps by reading map[1]'s head LIVE on every
+     * search, so there is no cached rangeBox to verify here.) */
+    for (size_t i = 0; i < 2; i++) {
+        assert(GET_MIDDLE(m, i) == flexMiddle(m->map[i], m->elementsPerEntry));
+    }
+}
+
 /* Build a multimapMedium populated with `count` key/value pairs split
  * across the two maps at `splitAt` (logical entry index within the
  * combined sorted run).  Keys are integers k = 0..count-1.  Values
@@ -802,7 +857,7 @@ static multimapMedium *buildSplitMedium(size_t count, size_t splitAt) {
     assert(splitAt < count);
     flex *f = flexNew();
     for (size_t i = 0; i < count; i++) {
-        const databox keybox = {.data.u = i, .type = DATABOX_UNSIGNED_64};
+        const databox keybox = databoxNewUnsigned(i);
         const databox valbox = databoxNewBytesString("v");
         flexPushByType(&f, &keybox, FLEX_ENDPOINT_TAIL);
         flexPushByType(&f, &valbox, FLEX_ENDPOINT_TAIL);
@@ -822,7 +877,7 @@ static void countByMap(multimapMedium *m, size_t expectedKeys, size_t *outMap0,
     *outMap0 = 0;
     *outMap1 = 0;
     for (size_t i = 0; i < expectedKeys; i++) {
-        const databox keybox = {.data.u = i, .type = DATABOX_UNSIGNED_64};
+        const databox keybox = databoxNewUnsigned(i);
         multimapEntry me = {0};
         if (multimapMediumGetUnderlyingEntry(m, &keybox, &me)) {
             if (me.mapIdx == 0) {
@@ -863,7 +918,7 @@ int multimapMediumTest(int argc, char *argv[]) {
         memset(bigVal, 'X', sizeof(bigVal) - 1);
         bigVal[sizeof(bigVal) - 1] = '\0';
 
-        const databox keybox = {.data.u = 2, .type = DATABOX_UNSIGNED_64};
+        const databox keybox = databoxNewUnsigned(2);
         const databox valbox = databoxNewBytesString(bigVal);
         const databox *insert[2] = {&keybox, &valbox};
         const bool replaced = multimapMediumInsert(m, insert);
@@ -895,7 +950,7 @@ int multimapMediumTest(int argc, char *argv[]) {
         memset(bigVal, 'Y', sizeof(bigVal) - 1);
         bigVal[sizeof(bigVal) - 1] = '\0';
 
-        const databox keybox = {.data.u = 7, .type = DATABOX_UNSIGNED_64};
+        const databox keybox = databoxNewUnsigned(7);
         const databox valbox = databoxNewBytesString(bigVal);
         const databox *insert[2] = {&keybox, &valbox};
         const bool replaced = multimapMediumInsert(m, insert);
@@ -928,7 +983,7 @@ int multimapMediumTest(int argc, char *argv[]) {
         bigVal[sizeof(bigVal) - 1] = '\0';
 
         /* key=5 is the head of map[1]. */
-        const databox keybox = {.data.u = 5, .type = DATABOX_UNSIGNED_64};
+        const databox keybox = databoxNewUnsigned(5);
         const databox valbox = databoxNewBytesString(bigVal);
         const databox *insert[2] = {&keybox, &valbox};
         const bool replaced = multimapMediumInsert(m, insert);
@@ -970,8 +1025,7 @@ int multimapMediumTest(int argc, char *argv[]) {
                 const int sz = 8 + (int)((round + k) % 48);
                 memset(buf, 'a' + (int)(k % 26), (size_t)sz);
                 buf[sz] = '\0';
-                const databox keybox = {.data.u = k,
-                                        .type = DATABOX_UNSIGNED_64};
+                const databox keybox = databoxNewUnsigned(k);
                 const databox valbox = databoxNewBytesString(buf);
                 const databox *insert[2] = {&keybox, &valbox};
                 multimapMediumInsert(m, insert);
@@ -994,7 +1048,7 @@ int multimapMediumTest(int argc, char *argv[]) {
          * as the boundary-REPLACE test above, expressed from the
          * INSERT direction. */
         multimapMedium *m = buildSplitMedium(10, 5);
-        const databox keybox = {.data.u = 5, .type = DATABOX_UNSIGNED_64};
+        const databox keybox = databoxNewUnsigned(5);
         const databox valbox = databoxNewBytesString("brand-new");
         const databox *insert[2] = {&keybox, &valbox};
         const bool replaced = multimapMediumInsert(m, insert);
@@ -1010,7 +1064,7 @@ int multimapMediumTest(int argc, char *argv[]) {
          * an empty map[1]. */
         multimapMedium *m = multimapMediumNew(2);
         for (size_t i = 0; i < 5; i++) {
-            const databox keybox = {.data.u = i, .type = DATABOX_UNSIGNED_64};
+            const databox keybox = databoxNewUnsigned(i);
             const databox valbox = databoxNewBytesString("v");
             const databox *insert[2] = {&keybox, &valbox};
             multimapMediumInsert(m, insert);
@@ -1019,12 +1073,60 @@ int multimapMediumTest(int argc, char *argv[]) {
         assert(flexCount(m->map[1]) == 0);
 
         /* REPLACE one of them. */
-        const databox keybox = {.data.u = 2, .type = DATABOX_UNSIGNED_64};
+        const databox keybox = databoxNewUnsigned(2);
         const databox valbox = databoxNewBytesString("v2");
         const databox *insert[2] = {&keybox, &valbox};
         const bool replaced = multimapMediumInsert(m, insert);
         assert(replaced);
         assert(multimapMediumCount(m) == 5);
+        multimapMediumFree(m);
+    }
+
+    TEST("reset then reuse: both maps populated, two cycles") {
+        /* Fill past the split boundary so BOTH internal maps hold
+         * entries, then verify reset leaves a fully reusable map
+         * (the Full-tier reset kept stale metadata; pin Medium too) */
+        multimapMedium *m = multimapMediumNew(2);
+
+        for (int cycle = 0; cycle < 2; cycle++) {
+            for (uint64_t i = 0; i < 600; i++) {
+                const databox keybox = databoxNewUnsigned(i);
+                const databox valbox = databoxNewBytesString("reset-cycle-v");
+                const databox *insert[2] = {&keybox, &valbox};
+                multimapMediumInsert(m, insert);
+            }
+
+            if (multimapMediumCount(m) != 600) {
+                ERR("cycle %d: expected 600, got %zu", cycle,
+                    multimapMediumCount(m));
+            }
+
+            multimapMediumReset(m);
+
+            if (multimapMediumCount(m) != 0) {
+                ERR("cycle %d: expected 0 after reset, got %zu", cycle,
+                    multimapMediumCount(m));
+            }
+        }
+
+        /* Final refill: every key must be findable */
+        size_t missing = 0;
+        for (uint64_t i = 0; i < 600; i++) {
+            const databox keybox = databoxNewUnsigned(i);
+            const databox valbox = databoxNewBytesString("post-reset-v");
+            const databox *insert[2] = {&keybox, &valbox};
+            multimapMediumInsert(m, insert);
+        }
+        for (uint64_t i = 0; i < 600; i++) {
+            const databox probe = databoxNewUnsigned(i);
+            if (!multimapMediumExists(m, &probe)) {
+                missing++;
+            }
+        }
+        if (missing > 0) {
+            ERR("%zu of 600 keys missing after reset-reuse", missing);
+        }
+
         multimapMediumFree(m);
     }
 

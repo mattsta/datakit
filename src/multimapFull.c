@@ -179,6 +179,41 @@ static inline void setMiddle(multimapFull *m, multimapFullIdx idx,
         }                                                                      \
     } while (0)
 
+/* Refresh a rangeBox after an in-map entry mutation (resize / replace /
+ * incr of a VALUE field) that may have realloc'd the flex or shifted its
+ * bytes (total-size varint header growth moves every entry).  The head
+ * KEY entry is unchanged by a value mutation, but a non-surrogate
+ * rangeBox holds a databox REFERENCING the head key's bytes inside the
+ * flex allocation, so any realloc/shift strands it — re-read it from the
+ * (possibly moved) head.
+ *
+ * Surrogate-keyed maps are the opposite case and are detected from the
+ * data itself: their head entry decodes as a reference box, while their
+ * rangeBox holds the RESOLVED key as an allocation-independent copy
+ * (updateRangeBoxForIdxWithReference + databoxAllocateIfNeeded).  That
+ * copy survives any flex realloc and CANNOT be re-derived without the
+ * reference container, so it must be left alone — overwriting it with
+ * the raw reference box would corrupt range binary search and leak the
+ * copy's allocation.  databoxFreeData before assignment keeps the
+ * refresh leak-free even for a map whose rangeBox was once a copy. */
+#define updateRangeBoxForIdxAfterInMapMutation(m, idx, map_)                   \
+    do {                                                                       \
+        if ((idx) > 0 && flexCount(map_) > 0) {                                \
+            /* zero-init: flexGetByType sets type/len/data but leaves          \
+             * flag bits (e.g. .allocated) untouched, and a garbage            \
+             * .allocated stored into the rangeBox becomes a bad free          \
+             * on the next refresh */                                          \
+            databox mutatedHead_ = {{0}};                                      \
+            flexGetByType(flexHead(map_), &mutatedHead_);                      \
+            if (mutatedHead_.type != DATABOX_CONTAINER_REFERENCE_EXTERNAL) {   \
+                /* Minus one because rangeBox[0] is for map[1], etc */         \
+                databox *rangeBox_ = getRangeBox(m, (idx) - 1);                \
+                databoxFreeData(rangeBox_);                                    \
+                *rangeBox_ = mutatedHead_;                                     \
+            }                                                                  \
+        }                                                                      \
+    } while (0)
+
 #define nextMapIdxExists(m, mapIdx) ((mapIdx) < ((m)->count - 1))
 
 /* ====================================================================
@@ -975,18 +1010,24 @@ int64_t multimapFullFieldIncr(multimapFull *m, const databox *key,
 
     flexEntry *current =
         flexFindByTypeSortedWithMiddle(*map, m->elementsPerEntry, key, middle);
+    if (!current) {
+        /* No such key: return 0 rather than walking flexNext from NULL.
+         * Matches the multimap-level FieldIncr miss contract. */
+        return 0;
+    }
+
     while (fieldOffset--) {
         current = flexNext(*map, current);
     }
 
     int64_t newVal = 0;
     if (flexIncrbySigned(map, current, incrBy, &newVal)) {
-        /* if incremented, return new value */
-        /* TODO: update flexIncrbySigned() to report if allocation changed
-         *       so we only conditionally update the mapIdx */
-        /* TODO: BEFORE SHIPPING: ALSO NEED TO UPDATE updateRangeBoxForIdx */
-        assert(NULL && "Not correctly implemented yet!");
+        /* The incr may have re-encoded the entry at a different width
+         * (and possibly realloc'd the flex), so the cached middle byte
+         * offset is stale — rescan, same as ResizeEntry/ReplaceEntry —
+         * and the rangeBox may be stranded by the realloc — refresh. */
         SET_MIDDLE_FORCE(m, mapIdx, *map);
+        updateRangeBoxForIdxAfterInMapMutation(m, mapIdx, *map);
         return newVal;
     }
 
@@ -1453,21 +1494,37 @@ bool multimapFullGetUnderlyingEntryWithReference(
     return !!me->fe;
 }
 
+/* Entry mutations keep the entry COUNT, so the middle ROW is unchanged —
+ * but the middle BYTE offset must be rescanned (a total-size varint
+ * header boundary crossing shifts every entry, so no O(1) adjustment
+ * from a pre-mutation offset is sound), and the rangeBox must be
+ * refreshed (the mutation may realloc the flex, stranding a rangeBox
+ * that references head-key bytes inside the old allocation). */
 void multimapFullResizeEntry(multimapFull *m, multimapEntry *me,
                              size_t newLen) {
     flexResizeEntry(me->map, me->fe, newLen);
     SET_MIDDLE_FORCE(m, me->mapIdx, *me->map);
+    updateRangeBoxForIdxAfterInMapMutation(m, me->mapIdx, *me->map);
 }
 
 void multimapFullReplaceEntry(multimapFull *m, multimapEntry *me,
                               const databox *box) {
     flexReplaceByType(me->map, me->fe, box);
     SET_MIDDLE_FORCE(m, me->mapIdx, *me->map);
+    updateRangeBoxForIdxAfterInMapMutation(m, me->mapIdx, *me->map);
 }
 
+/* Split only when the map holds MORE THAN ONE ROW (flexCount counts
+ * elements, so one k/v row == elementsPerEntry elements).  A single
+ * oversized row can never be made smaller by splitting — flexMiddle of
+ * a one-row map is its head, so "splitting" moves the whole row to the
+ * high half and leaves an EMPTY low half whose skipped rangeBox refresh
+ * keeps referencing the realloc-freed pre-split allocation (a
+ * use-after-free on the next range search).  conformMapsSplit and the
+ * insert path both already refuse one-row splits for the same reason. */
 bool multimapFullRegularizeMap(multimapFull *m, multimapFullIdx mapIdx,
                                flex **map) {
-    if (flexCount(*map) > 1 && flexBytes(*map) > m->maxSize) {
+    if (flexCount(*map) > m->elementsPerEntry && flexBytes(*map) > m->maxSize) {
         splitMapLowHigh_(m, mapIdx, map, false, NULL);
         return true;
     }
@@ -1478,7 +1535,7 @@ bool multimapFullRegularizeMap(multimapFull *m, multimapFullIdx mapIdx,
 bool multimapFullRegularizeMapWithReference(
     multimapFull *m, multimapFullIdx mapIdx, flex **map,
     const multimapAtom *referenceContainer) {
-    if (flexCount(*map) > 1 && flexBytes(*map) > m->maxSize) {
+    if (flexCount(*map) > m->elementsPerEntry && flexBytes(*map) > m->maxSize) {
         splitMapLowHigh_(m, mapIdx, map, true, referenceContainer);
         return true;
     }
@@ -1717,13 +1774,21 @@ DK_INLINE_ALWAYS bool abstractDelete(multimapFull *m, const databox **elements,
 #endif
 
             reallocDecrCount(m, mapIdx);
-        } else if (nextMapIdxExists(m, mapIdx)) {
-            /* Step 2b2: else, map still has contents, so attempt to
-             *           merge mapIdx with (mapIdx + 1).
-             *
-             * Future optimization: could also try to merge
-             *                      prev->current, current->next, next->next */
-            mergeSimple(m, mapIdx, useReference, referenceContainer);
+        } else {
+            /* Step 2b2: map still has contents, so attempt to compact
+             *           it into a neighbor. Prefer merging with the
+             *           next map; if that can't happen (this is the
+             *           last map, or the pair doesn't fit), fall back
+             *           to merging with the previous map so a shrunken
+             *           tail sub-map still gets reclaimed. */
+            bool merged = false;
+            if (nextMapIdxExists(m, mapIdx)) {
+                merged =
+                    mergeSimple(m, mapIdx, useReference, referenceContainer);
+            }
+            if (!merged && mapIdx > 0) {
+                mergeSimple(m, mapIdx - 1, useReference, referenceContainer);
+            }
         }
     }
 
@@ -1760,8 +1825,16 @@ void multimapFullDeleteEntry(multimapFull *m, multimapEntry *me) {
         if (flexCount(*map) == 0) {
             flexFree(*map);
             reallocDecrCount(m, mapIdx);
-        } else if (nextMapIdxExists(m, mapIdx)) {
-            mergeSimple(m, mapIdx, false, NULL);
+        } else {
+            /* Compact into a neighbor: next preferred, previous as a
+             * fallback so a shrunken tail sub-map is still reclaimed. */
+            bool merged = false;
+            if (nextMapIdxExists(m, mapIdx)) {
+                merged = mergeSimple(m, mapIdx, false, NULL);
+            }
+            if (!merged && mapIdx > 0) {
+                mergeSimple(m, mapIdx - 1, false, NULL);
+            }
         }
     }
 }
@@ -1913,12 +1986,19 @@ bool multimapFullDeleteRandomValue(multimapFull *m, const bool deleteFromTail,
  * ==================================================================== */
 /* TODO: reset-with-reference to release all retained atoms */
 void multimapFullReset(multimapFull *m) {
-    for (multimapFullIdx idx = 0; idx < m->count; idx++) {
-        flex **map = getMapPtr(m, idx);
-        flexReset(map);
-        SET_MIDDLE_FORCE(m, idx, *map);
-        updateRangeBoxForIdx(m, idx, *map);
+    /* Collapse back to a single empty map. Emptied maps cannot keep
+     * their search metadata: range boxes reference bytes inside the
+     * (now discarded) flex contents, so retaining multiple empty maps
+     * would leave later lookups and inserts walking dangling pointers. */
+    while (m->count > 1) {
+        const multimapFullIdx idx = m->count - 1;
+        flexFree(getMap(m, idx));
+        reallocDecrCount(m, idx);
     }
+
+    flex **map = getMapPtr(m, 0);
+    flexReset(map);
+    SET_MIDDLE_FORCE(m, 0, *map);
 
     /* We deleted all elements, so reset the cached
      * entry count back to zero. */
@@ -2110,64 +2190,81 @@ bool multimapFullIteratorNext(multimapIterator *iter, databox *elements[]) {
 
 bool multimapFullDeleteByPredicate(multimapFull *m,
                                    const multimapPredicate *p) {
-    multimapEntry me = {0};
-    multimapFullGetUnderlyingEntry(m, &p->compareAgainst, &me);
-
-    if (!me.fe) {
-        return false;
-    }
-
-    int compared = 1;
-    if (!flexEntryIsValid(*me.map, me.fe)) {
-        databox value = {{0}};
-        flexGetByType(me.fe, &value);
-
-        compared = databoxCompare(&value, &p->compareAgainst);
-    }
-
-    switch (p->condition) {
-    case MULTIMAP_CONDITION_LESS_THAN_EQUAL:
-        for (multimapFullIdx i = 0; i < me.mapIdx; i++) {
-            /* If we found our entry in a map greater than zero,
-             * we can delete all lower maps with no element traversal.
-             *
-             * We always delete '0' here because everytime we delete '0',
-             * the next highest map becomes the new '0' */
-            flex *map = getMap(m, 0);
-            flexFree(map);
-            reallocDecrCount(m, 0);
-        }
-
-        /* We need to get the entry again because the previous
-         * deletes could have moved our index value */
-        multimapFullGetUnderlyingEntry(m, &p->compareAgainst, &me);
-
-        /* Since this is a "delete all <=," at this point we should
-         * **only** ever be deleting from map 0 (because we deleted
-         * all lower maps in the 'for' loop immediately above */
-        assert(me.mapIdx == 0);
-
-        if (!me.fe) {
-            return false;
-        }
-
-        /* see multimapSmall for comments */
-        if (compared == 0) {
-            flexDeleteUpToInclusivePlusN(me.map, me.fe,
-                                         m->elementsPerEntry - 1);
-        } else {
-            flexDeleteUpToInclusive(me.map, flexPrev(*me.map, me.fe));
-        }
-
-        SET_MIDDLE_FORCE(m, me.mapIdx, *me.map);
-        return true;
-    default:
+    if (p->condition != MULTIMAP_CONDITION_LESS_THAN_EQUAL) {
         /* We don't support the other predicate types yet */
         assert(NULL && "Not Implemented!");
         return false;
     }
 
-    return false;
+    multimapEntry me = {0};
+    /* Boundary (position) search, NOT exact-match: "delete all <= X"
+     * must work for any X, not only when X is an existing key. */
+    multimapFullGetUnderlyingEntryGetEntry(m, &p->compareAgainst, &me);
+    if (!me.fe) {
+        return false;
+    }
+
+    /* Freeing whole sub-maps only decrements the sub-map count, so
+     * every removed row must be subtracted from m->values (the element
+     * count multimapFullCount returns) explicitly. Every sub-map below
+     * the boundary sub-map is entirely <= boundary; free them
+     * wholesale ('0' each time, since deleting '0' promotes the next
+     * map to '0'). */
+    size_t removed = 0;
+    for (multimapFullIdx i = 0; i < me.mapIdx; i++) {
+        flex *map = getMap(m, 0);
+        removed += flexCount(map) / m->elementsPerEntry;
+        flexFree(map);
+        reallocDecrCount(m, 0);
+    }
+
+    /* Re-find in the now-lowest sub-map (the wholesale deletes above
+     * moved indices). Everything left to delete lives in sub-map 0. */
+    multimapFullGetUnderlyingEntryGetEntry(m, &p->compareAgainst, &me);
+    assert(me.mapIdx == 0);
+    if (!me.fe) {
+        m->values -= removed;
+        return removed > 0;
+    }
+
+    /* Compare NOW, against the entry actually found post-coarse: an
+     * exact match deletes up to AND including it; anything else (the
+     * next-higher key, or the end-of-map sentinel when the boundary is
+     * >= every remaining key) deletes strictly below it. Computing this
+     * against a stale pre-coarse entry could pair 'exact' with an
+     * end-sentinel position and walk past the buffer. */
+    const size_t before = flexCount(*me.map) / m->elementsPerEntry;
+    int compared = 1;
+    if (flexEntryIsValid(*me.map, me.fe)) {
+        databox value = {{0}};
+        flexGetByType(me.fe, &value);
+        compared = databoxCompare(&value, &p->compareAgainst);
+    }
+
+    /* see multimapSmall for comments */
+    if (compared == 0) {
+        flexDeleteUpToInclusivePlusN(me.map, me.fe, m->elementsPerEntry - 1);
+    } else {
+        flexDeleteUpToInclusive(me.map, flexPrev(*me.map, me.fe));
+    }
+
+    removed += before - flexCount(*me.map) / m->elementsPerEntry;
+    m->values -= removed;
+
+    /* Trimming can empty the lowest sub-map entirely (boundary >= all
+     * its keys). An empty LEADING sub-map is an invalid Full state -
+     * First and the binary search assume sub-map 0 is populated - so
+     * reclaim it and promote the next sub-map into its place. When it
+     * is the only sub-map, an empty map is the legitimate empty-map
+     * state and is kept. */
+    if (flexCount(*me.map) == 0 && m->count > 1) {
+        flexFree(*me.map);
+        reallocDecrCount(m, 0);
+    } else {
+        SET_MIDDLE_FORCE(m, me.mapIdx, *me.map);
+    }
+
+    return true;
 }
 
 #ifdef DATAKIT_TEST
@@ -2287,6 +2384,26 @@ void multimapFullVerify(const multimapFull *m) {
 
         assert(middle == flexMiddle(zl, m->elementsPerEntry));
 
+        /* rangeBox oracle: rangeBox[i - 1] routes searches into map[i],
+         * so it must equal map[i]'s live head key, and when it holds a
+         * borrowed bytes pointer, that pointer must live INSIDE the
+         * current flex allocation (a stale pointer into a freed/moved
+         * allocation is a use-after-free waiting for the next search). */
+        if (i > 0 && flexCount(zl) > 0) {
+            databox head = {{0}};
+            flexGetByType(flexHead(zl), &head);
+
+            const databox *rangeBox = getRangeBox(m, i - 1);
+            if (head.type != DATABOX_CONTAINER_REFERENCE_EXTERNAL) {
+                assert(databoxCompare(&head, rangeBox) == 0);
+                if (rangeBox->type == DATABOX_BYTES && !rangeBox->allocated &&
+                    !DATABOX_IS_BYTES_EMBED(rangeBox)) {
+                    const uint8_t *start = rangeBox->data.bytes.start;
+                    assert(start >= zl && start < zl + flexBytes(zl));
+                }
+            }
+        }
+
         for (multimapFullIdx j = 0; j < flexCount(zl);
              j += m->elementsPerEntry) {
             databox next = {{0}};
@@ -2348,9 +2465,8 @@ int multimapFullTest(int argc, char *argv[]) {
                     databoxNewBytesAllowEmbed(buf[n], strlen(buf[n]));
                 const databox val =
                     databoxNewBytesAllowEmbed(buf[n], strlen(buf[n]));
-                const databox expire = {.data.u = 0,
-                                        .type = DATABOX_UNSIGNED_64};
-                const databox type = {.data.u = 0, .type = DATABOX_UNSIGNED_64};
+                const databox expire = databoxNewUnsigned(0);
+                const databox type = databoxNewUnsigned(0);
                 const databox *elements[4] = {&key, &expire, &type, &val};
                 multimapFullInsert(m, elements);
                 n++;
@@ -2436,8 +2552,7 @@ int multimapFullTest(int argc, char *argv[]) {
         /* Insert (with gaps) */
         for (size_t gap = 20; gap > 0; gap--) {
             for (size_t i = 0; i < howMany; i += gap) {
-                const databox keybox = {.data.u = i,
-                                        .type = DATABOX_UNSIGNED_64};
+                const databox keybox = databoxNewUnsigned(i);
                 const databox valbox = DATABOX_BOX_FALSE;
                 const databox *elements[2] = {&keybox, &valbox};
                 multimapFullInsert(m, elements);
@@ -3073,6 +3188,155 @@ int multimapFullTest(int argc, char *argv[]) {
             ERR("%zu/%zu stress rounds failed exists-after-insert",
                 round_failures, rounds);
         }
+    }
+
+    TEST("reset then reuse: inserts and lookups work after Reset") {
+        /* Reset used to keep every (now empty) internal map along with
+         * its stale middle offsets and range boxes referencing the
+         * discarded flex bytes; the next insert then binary-searched
+         * through dangling pointers and crashed. Reset must collapse
+         * back to a single empty map. */
+        multimapFull *m = multimapFullNew(2);
+        const uint64_t n = 5000;
+
+        for (int cycle = 0; cycle < 2; cycle++) {
+            /* Enough entries to split into many internal maps */
+            for (uint64_t i = 0; i < n; i++) {
+                const databox key = databoxNewUnsigned(i);
+                const databox val = databoxNewUnsigned(i * 3);
+                const databox *elements[2] = {&key, &val};
+                multimapFullInsert(m, elements);
+            }
+
+            if (multimapFullCount(m) != n) {
+                ERR("cycle %d: expected %" PRIu64 " entries, got %zu", cycle, n,
+                    multimapFullCount(m));
+            }
+
+            multimapFullReset(m);
+
+            if (multimapFullCount(m) != 0) {
+                ERR("cycle %d: expected empty map after reset, got %zu", cycle,
+                    multimapFullCount(m));
+            }
+        }
+
+        /* Final round: verify lookups after reset-reuse are coherent */
+        for (uint64_t i = 0; i < n; i++) {
+            const databox key = databoxNewUnsigned(i);
+            const databox val = databoxNewUnsigned(i + 7);
+            const databox *elements[2] = {&key, &val};
+            multimapFullInsert(m, elements);
+        }
+
+        size_t missing = 0;
+        for (uint64_t i = 0; i < n; i++) {
+            const databox probe = databoxNewUnsigned(i);
+            if (!multimapFullExists(m, &probe)) {
+                missing++;
+            }
+        }
+
+        if (missing > 0) {
+            ERR("%zu of %" PRIu64 " keys missing after reset-reuse", missing,
+                n);
+        }
+
+        multimapFullFree(m);
+    }
+
+    TEST("wide entries: arity above the insert stack-array headroom") {
+        /* The flex insert path keeps fixed stack scratch for entries up
+         * to 8 elements and spills wider entries to the heap; arity-12
+         * inserts used to assert out. */
+        const uint32_t arity = 12;
+        multimapFull *m = multimapFullNew(arity);
+
+        for (uint64_t i = 0; i < 200; i++) {
+            databox boxes[12];
+            const databox *elements[12];
+            for (uint32_t j = 0; j < arity; j++) {
+                boxes[j] = databoxNewUnsigned(i * 100 + j);
+                elements[j] = &boxes[j];
+            }
+            multimapFullInsert(m, elements);
+        }
+
+        if (multimapFullCount(m) != 200) {
+            ERR("Expected 200 wide entries, got %zu", multimapFullCount(m));
+        }
+
+        size_t missing = 0;
+        for (uint64_t i = 0; i < 200; i++) {
+            const databox probe = databoxNewUnsigned(i * 100);
+            if (!multimapFullExists(m, &probe)) {
+                missing++;
+            }
+        }
+
+        if (missing > 0) {
+            ERR("%zu of 200 wide-entry keys missing", missing);
+        }
+
+        multimapFullFree(m);
+    }
+
+    TEST("wide entries: 128-bit element through heap-carved scratch") {
+        /* Arity above the stack threshold forces the sorted-insert
+         * heap scratch carve; a SIGNED_128 element routes its payload
+         * through the carved bigBuffer. A previous carve overlapped
+         * bigBuffer with content[], so tail descriptor builds stomped
+         * the 128-bit payload before it was written into the flex.
+         * The overlap is intra-allocation (ASan blind) - only value
+         * verification catches it. */
+        const uint32_t arity = 12;
+        multimapFull *m = multimapFullNew(arity);
+
+        __int128_t bigVal = (((__int128_t)0x0123456789ABCDEFLL) << 64) |
+                            (__int128_t)0x1122334455667788ULL;
+
+        for (uint64_t i = 0; i < 50; i++) {
+            databox boxes[12];
+            const databox *elements[12];
+            boxes[0] = databoxNewUnsigned(i);
+            boxes[1] = (databox){
+                .type = DATABOX_SIGNED_128, .big = true, .data.i128 = &bigVal};
+            for (uint32_t j = 2; j < arity; j++) {
+                boxes[j] = databoxNewUnsigned(0xAA00 + j);
+            }
+            for (uint32_t j = 0; j < arity; j++) {
+                elements[j] = &boxes[j];
+            }
+            multimapFullInsert(m, elements);
+        }
+
+        /* Read the first entry back full width; the 128-bit slot needs
+         * big-box storage */
+        databox out[12];
+        databoxBig out128;
+        DATABOX_BIG_INIT(&out128);
+        databox *ptrs[12];
+        for (uint32_t j = 0; j < arity; j++) {
+            ptrs[j] = &out[j];
+        }
+        ptrs[1] = (databox *)&out128;
+
+        if (!multimapFullFirst(m, ptrs)) {
+            ERRR("multimapFullFirst failed on wide 128-bit map");
+        }
+        if (out[0].data.u64 != 0) {
+            ERR("Wrong first key: %" PRIu64, out[0].data.u64);
+        }
+        if (*out128.data.i128 != bigVal) {
+            ERRR("128-bit payload corrupted (scratch carve overlap)");
+        }
+        for (uint32_t j = 2; j < arity; j++) {
+            if (out[j].data.u64 != 0xAA00 + j) {
+                ERR("Sentinel %u corrupted: %" PRIu64, j, out[j].data.u64);
+            }
+        }
+
+        multimapFullFree(m);
     }
 
     TEST_FINAL_RESULT;

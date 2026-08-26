@@ -39,6 +39,11 @@
 #include "persist.h"
 
 #include <stdatomic.h>
+
+#include "cleaner.h"
+
+/* Scope-exit free for snapshot scratch (see cleaner.h idioms) */
+defcleaner(void *, zfree);
 #include <stddef.h> /* offsetof — cache-line padding asserts */
 #include <string.h>
 
@@ -1400,19 +1405,17 @@ bool clusterMailboxSnapshotWrapped(const clusterMailbox *mb,
         return false;
     }
     const size_t inner_size = clusterMailboxSnapshotSize(mb);
-    uint8_t *inner = inner_size > 0 ? zmalloc(inner_size) : NULL;
+    cleaner(zfree) void *inner = inner_size > 0 ? zmalloc(inner_size) : NULL;
     /* Empty mailbox (origin_count == 0) has an 8-byte header-only
-     * snapshot. Always sized > 0. */
+     * snapshot. Always sized > 0. inner frees itself at scope exit. */
     size_t inner_written = 0;
     if (!clusterMailboxSnapshot(mb, inner, inner_size, &inner_written) ||
         inner_written != inner_size) {
-        zfree(inner);
         return false;
     }
     size_t written = 0;
     const bool ok = flexEnvelopeWrap(out, out_cap, inner, (uint64_t)inner_size,
                                      params, &written);
-    zfree(inner);
     if (!ok) {
         return false;
     }

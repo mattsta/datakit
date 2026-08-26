@@ -92,6 +92,34 @@ flex *flexMerge(flex **first, flex **second);
 void flexBulkAppendFlex(flex **ff, const flex *zzb);
 flex *flexBulkMergeFlex(const flex *const *const fs, const size_t count);
 
+/* BULK BYTE-MEMBER APPEND — the O(total bytes) form of "append these N
+ * byte members at the tail".
+ *
+ * flex has NO capacity concept: every append reallocs to the EXACT new
+ * size (flexResize_ -> zrealloc(newTotalBytes)), so appending N members
+ * into one flex a member at a time moves O(total bytes^2).  Once a
+ * batch reaches megabytes that is the difference between a millisecond
+ * and tens of seconds, on whatever thread does it.
+ *
+ * This builds bounded chunk flexes with the SAME flexPushBytes call
+ * (numeral canonicalisation included) and folds them with ONE
+ * exact-sized flexBulkMergeFlex.  The bytes are IDENTICAL to the direct
+ * loop: a flex payload is the concatenation of self-describing entry
+ * encodings that carry their own forward and backward length prefixes
+ * and hold no cross-entry back-references, so no entry's encoding
+ * depends on its position; only the header's totalBytes/count varints
+ * are recomputed, to exactly the values the direct loop would leave.
+ *
+ * `*ff` is replaced by the grown flex (the previous one is freed).  Any
+ * content it already held keeps its position ahead of the new members. */
+typedef struct flexBytesMember {
+    const void *data;
+    size_t len;
+} flexBytesMember;
+
+void flexBulkPushBytesMembers(flex **ff, const flexBytesMember *members,
+                              size_t count);
+
 /* Insert to head or tail of flex */
 void flexPushBytes(flex **ff, const void *data, size_t len, flexEndpoint where);
 void flexPushSigned(flex **ff, int64_t i, flexEndpoint where);
@@ -155,13 +183,14 @@ flex *flexNewFromDataboxPtrs(const databox *const *boxes, size_t n);
  * flexPushDataboxBig: append one numeric databoxBig (64- or 128-bit) to `*ff`.
  *   128-bit values are normalised through DATABOX_BIG_*_128 so the push never
  *   depends on the caller having set ->big.
- * flexNewFromDataboxBig: a fresh 1-element flex holding `b` (free with flexFree).
- * flexGetSingleDataboxBig: defensive inverse — validate + require exactly one
- *   element + decode into `*out` (DATABOX_BIG_INIT'd internally so 128-bit has
- *   storage).  Returns false on malformation. */
+ * flexNewFromDataboxBig: a fresh 1-element flex holding `b` (free with
+ * flexFree). flexGetSingleDataboxBig: defensive inverse — validate + require
+ * exactly one element + decode into `*out` (DATABOX_BIG_INIT'd internally so
+ * 128-bit has storage).  Returns false on malformation. */
 void flexPushDataboxBig(flex **ff, const databoxBig *b, flexEndpoint where);
 flex *flexNewFromDataboxBig(const databoxBig *b);
-bool flexGetSingleDataboxBig(const uint8_t *buf, size_t buflen, databoxBig *out);
+bool flexGetSingleDataboxBig(const uint8_t *buf, size_t buflen,
+                             databoxBig *out);
 
 /* Self-test for the flex<->databox factory (round-trip + defensive unwrap).
  * Returns the number of failed checks (0 == all passed). */

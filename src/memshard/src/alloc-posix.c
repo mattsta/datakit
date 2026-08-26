@@ -151,4 +151,3 @@ mi_decl_nodiscard int mi_reallocarr(void *ptrp, size_t count, size_t size)
         return 0;
     }
 }
-

@@ -346,16 +346,6 @@ databox databoxNewBytesString(const char *str) {
     return databoxNewBytes(str, strlen(str));
 }
 
-databox databoxNewUnsigned(uint64_t val) {
-    databox box = {.type = DATABOX_UNSIGNED_64, .data.u = val};
-    return box;
-}
-
-databox databoxNewSigned(int64_t val) {
-    databox box = {.type = DATABOX_SIGNED_64, .data.i = val};
-    return box;
-}
-
 databox databoxNewReal(double value) {
     databox box = {{0}};
 
@@ -368,11 +358,6 @@ databox databoxNewReal(double value) {
         box.data.d64 = value;
     }
 
-    return box;
-}
-
-databox databoxNewPtr(void *ptr) {
-    databox box = {.type = DATABOX_PTR, .data.ptr = ptr};
     return box;
 }
 
@@ -842,8 +827,33 @@ int databoxCompare(const databox *restrict a, const databox *restrict b) {
          * 2^3 integer cases per function when 2^2 signed/unsigned combinations
          * are more likely.
          * So, if we fell through to here, check one more time: */
-        if (IS_INTEGER(a) && IS_INTEGER(b)) {
-            return databoxCompareInteger(a, b);
+        /* Type-order architecture: the NUMERIC class cross-compares by
+         * value (the jump table above); everything else compares equal
+         * only to its own type and mismatches sort by the global type
+         * order (below). DATABOX_PTR is a deliberate exception that
+         * JOINS the numeric class as DATABOX_UNSIGNED_64 (raw pointer
+         * bits): flex storage already coerces PTR to unsigned, so a
+         * stored-then-decoded pointer comes back UNSIGNED_64 and must
+         * order identically against its own live PTR box or a
+         * container disagrees with itself. Joining the existing
+         * integer total order (rather than PTR-only special cases)
+         * keeps mixed comparisons transitive. */
+        const bool aPtr = DATABOX_IS_PTR(a);
+        const bool bPtr = DATABOX_IS_PTR(b);
+        if ((aPtr || IS_INTEGER(a)) && (bPtr || IS_INTEGER(b))) {
+            if (!aPtr && !bPtr) {
+                return databoxCompareInteger(a, b);
+            }
+
+            databox aa = *a;
+            databox bb = *b;
+            if (aPtr) {
+                aa.type = DATABOX_UNSIGNED_64;
+            }
+            if (bPtr) {
+                bb.type = DATABOX_UNSIGNED_64;
+            }
+            return databoxCompareInteger(&aa, &bb);
         }
 
         /* If types are the same by this point, we
@@ -2235,6 +2245,32 @@ int databoxTest(int argc, char *argv[]) {
         printf("  100K random comparisons, %d errors\n", errors);
         if (errors > 0) {
             ERR("Stress test had %d errors", errors);
+        }
+    }
+
+    TEST("compare: DATABOX_PTR orders by value in the integer order") {
+        int arena[2] = {0, 0};
+        void *lo = &arena[0];
+        void *hi = &arena[1];
+
+        const databox pLo = databoxNewPtr(lo);
+        const databox pHi = databoxNewPtr(hi);
+        const databox uSame = databoxNewUnsigned((uintptr_t)lo);
+        const databox sNeg = databoxNewSigned(-1);
+
+        if (databoxCompare(&pLo, &pHi) >= 0 ||
+            databoxCompare(&pHi, &pLo) <= 0) {
+            ERRR("PTR vs PTR must order by pointer value");
+        }
+        if (databoxCompare(&pLo, &pLo) != 0) {
+            ERRR("PTR must compare equal to itself");
+        }
+        if (databoxCompare(&pLo, &uSame) != 0 ||
+            databoxCompare(&uSame, &pLo) != 0) {
+            ERRR("PTR must equal the UNSIGNED box flex decode returns");
+        }
+        if (databoxCompare(&pLo, &sNeg) <= 0) {
+            ERRR("PTR (as unsigned) must order above negative signed");
         }
     }
 

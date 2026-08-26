@@ -32,6 +32,20 @@ typedef struct multilruP {
     multilru *mlru;     /* Underlying multilru */
     persistCtx *ctx;    /* Persistence context */
     bool enableWeights; /* Track if weights are enabled (for snapshot) */
+
+    /* Handles auto-evicted during an in-progress insert. The eviction
+     * callback fires mid-insert (before the insert's own handle is
+     * even known), so victims are buffered here and logged as DELETEs
+     * only AFTER the insert's INSERT is logged - preserving the
+     * original allocate-then-evict order that deterministic replay
+     * (which reuses freed slots LIFO) depends on. */
+    multilruPtr *pendingEvict;
+    size_t pendingEvictCount;
+    size_t pendingEvictCap;
+    /* True only while an insert is running, so the eviction callback
+     * captures auto-evictions but ignores explicit removals (which log
+     * their own DELETE). */
+    bool captureEvictions;
 } multilruP;
 
 /* ============================================================================

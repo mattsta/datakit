@@ -32,7 +32,8 @@
 #define SANITIZER_BUILD 1
 #endif
 #endif
-#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+#if !defined(SANITIZER_BUILD) &&                                               \
+    (defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__))
 #define SANITIZER_BUILD 1
 #endif
 
@@ -98,6 +99,46 @@ static bool testSelfUnregisterCallback(timerWheel *tw, timerWheelId id,
     state->callCount++;
     timerWheelUnregister(tw, id);
     return true;
+}
+
+static bool testSelfUnregisterNoRepeatCallback(timerWheel *tw, timerWheelId id,
+                                               void *clientData) {
+    testCallbackState *state = clientData;
+    state->callCount++;
+    timerWheelUnregister(tw, id);
+    return false;
+}
+
+static bool testStopAllCallback(timerWheel *tw, timerWheelId id,
+                                void *clientData) {
+    (void)id;
+    testCallbackState *state = clientData;
+    state->callCount++;
+    timerWheelStopAll(tw);
+    return true; /* reschedule request must be ignored after StopAll */
+}
+
+typedef struct testFarNearState {
+    testCallbackState self;
+    testCallbackState farTimer;
+    testCallbackState nearTimer;
+} testFarNearState;
+
+static bool testRegisterFarThenNearCallback(timerWheel *tw, timerWheelId id,
+                                            void *clientData) {
+    (void)id;
+    testFarNearState *s = clientData;
+    s->self.callCount++;
+    timerWheelRegister(tw, 10000000, 0, testCountingCallback, &s->farTimer);
+    timerWheelRegister(tw, 2000, 0, testCountingCallback, &s->nearTimer);
+    return false;
+}
+
+static bool testRegisterFarCallback(timerWheel *tw, timerWheelId id,
+                                    void *clientData) {
+    (void)id;
+    timerWheelRegister(tw, 10000000, 0, testCountingCallback, clientData);
+    return false;
 }
 
 /* Equivalent callbacks for multiTimer comparison */
@@ -868,6 +909,401 @@ int timerWheelTest(int argc, char *argv[]) {
         if (state.callCount > countBefore) {
             ERR("Timer fired after unregister, before=%d after=%d", countBefore,
                 state.callCount);
+        }
+
+        timerWheelFree(tw);
+    }
+
+    /* ================================================================
+     * Regression Tests
+     * ================================================================ */
+
+    TEST("timerWheel: repeat period of one full wheel0 revolution") {
+        /* A 255ms repeat reschedules into the exact slot index being
+         * processed (offset 256 == one full wheel0 revolution). The
+         * timer must survive the slot being cleared and keep firing. */
+        timerWheel *tw = timerWheelNew();
+        testCallbackState state = {.callCount = 0, .shouldReschedule = true};
+
+        timerWheelRegister(tw, 5000, 255000, testCountingCallback, &state);
+
+        timerWheelAdvanceTime(tw, 6000);
+        if (state.callCount != 1) {
+            ERR("Timer did not fire initially, callCount=%d", state.callCount);
+        }
+
+        for (int i = 0; i < 4; i++) {
+            timerWheelAdvanceTime(tw, 256000);
+        }
+
+        if (state.callCount < 4) {
+            ERR("Timer lost after same-slot reschedule, callCount=%d",
+                state.callCount);
+        }
+
+        if (timerWheelCount(tw) == 0) {
+            ERRR("Repeating timer was dropped from the wheel");
+        }
+
+        timerWheelFree(tw);
+    }
+
+    TEST("timerWheel: stopAll from within callback") {
+        timerWheel *tw = timerWheelNew();
+        testCallbackState stopper = {.callCount = 0};
+        testCallbackState other = {.callCount = 0, .shouldReschedule = true};
+        testCallbackState fresh = {.callCount = 0};
+
+        timerWheelRegister(tw, 5000, 5000, testStopAllCallback, &stopper);
+        timerWheelRegister(tw, 10000, 5000, testCountingCallback, &other);
+
+        timerWheelAdvanceTime(tw, 6000);
+        if (stopper.callCount != 1) {
+            ERR("Stopper did not fire, callCount=%d", stopper.callCount);
+        }
+
+        timerWheelAdvanceTime(tw, 30000);
+        if (stopper.callCount != 1) {
+            ERR("Stopper rescheduled despite StopAll, callCount=%d",
+                stopper.callCount);
+        }
+        if (other.callCount != 0) {
+            ERR("Other timer fired despite StopAll, callCount=%d",
+                other.callCount);
+        }
+        if (timerWheelCount(tw) != 0) {
+            ERR("Expected 0 timers after StopAll, got %zu",
+                timerWheelCount(tw));
+        }
+
+        /* Timers registered after StopAll must be unaffected */
+        timerWheelRegister(tw, 1000, 0, testCountingCallback, &fresh);
+        timerWheelAdvanceTime(tw, 3000);
+        if (fresh.callCount != 1) {
+            ERR("Post-StopAll timer did not fire, callCount=%d",
+                fresh.callCount);
+        }
+
+        timerWheelFree(tw);
+    }
+
+    TEST("timerWheel: stopAll then register new timers") {
+        timerWheel *tw = timerWheelNew();
+        testCallbackState old = {.callCount = 0};
+        testCallbackState fresh = {.callCount = 0};
+
+        for (int32_t i = 0; i < 5; i++) {
+            timerWheelRegister(tw, 50000, 0, testCountingCallback, &old);
+        }
+
+        timerWheelStopAll(tw);
+        if (timerWheelCount(tw) != 0) {
+            ERR("Expected 0 timers after StopAll, got %zu",
+                timerWheelCount(tw));
+        }
+
+        timerWheelRegister(tw, 5000, 0, testCountingCallback, &fresh);
+        if (timerWheelCount(tw) != 1) {
+            ERR("Expected 1 timer after re-register, got %zu",
+                timerWheelCount(tw));
+        }
+
+        timerWheelAdvanceTime(tw, 60000);
+        if (old.callCount != 0) {
+            ERR("Stopped timers fired, callCount=%d", old.callCount);
+        }
+        if (fresh.callCount != 1) {
+            ERR("New timer did not fire, callCount=%d", fresh.callCount);
+        }
+
+        timerWheelFree(tw);
+    }
+
+    TEST("timerWheel: nextTimerEvent scans all pending entries") {
+        /* A callback fired from the pending queue registers a far
+         * timer, then a near timer; both sit unsorted in pending until
+         * the next process pass. The next-event query must report the
+         * near one, not whichever entry happens to be first. */
+        timerWheel *tw = timerWheelNew();
+        testFarNearState s;
+        memset(&s, 0, sizeof(s));
+
+        timerWheelRegister(tw, 0, 0, testRegisterFarThenNearCallback, &s);
+        timerWheelProcessTimerEvents(tw);
+
+        if (s.self.callCount != 1) {
+            ERR("Registrar callback did not fire, callCount=%d",
+                s.self.callCount);
+        }
+
+        timerWheelUs offset = timerWheelNextTimerEventOffsetFromNowUs(tw);
+        if (offset > 1000000) {
+            ERR("Query returned far timer (%" PRId64
+                "us) instead of near (~2000us)",
+                offset);
+        }
+
+        timerWheelFree(tw);
+    }
+
+    TEST("timerWheel: sub-resolution initial delay fires promptly") {
+        timerWheel *tw = timerWheelNew();
+        testCallbackState state = {.callCount = 0, .shouldReschedule = false};
+
+        /* Catch the wheel up first so its internal time is rounded up
+         * past "now", then register a 500us timer into that gap */
+        timerWheelProcessTimerEvents(tw);
+        timerWheelRegister(tw, 500, 0, testCountingCallback, &state);
+
+        timerWheelAdvanceTime(tw, 2000);
+        if (state.callCount != 1) {
+            ERR("Sub-resolution delay timer late or lost, callCount=%d",
+                state.callCount);
+        }
+
+        timerWheelFree(tw);
+    }
+
+    TEST("timerWheel: unregister after fire keeps count sane") {
+        timerWheel *tw = timerWheelNew();
+        testCallbackState state = {.callCount = 0, .shouldReschedule = false};
+
+        timerWheelId id =
+            timerWheelRegister(tw, 1000, 0, testCountingCallback, &state);
+        timerWheelAdvanceTime(tw, 3000);
+        if (state.callCount != 1) {
+            ERR("Timer did not fire, callCount=%d", state.callCount);
+        }
+
+        /* Cancelling an id that already fired is a harmless no-op */
+        if (!timerWheelUnregister(tw, id)) {
+            ERRR("Unregister of fired id should return true");
+        }
+        if (timerWheelCount(tw) != 0) {
+            ERR("Expected 0 timers, got %zu", timerWheelCount(tw));
+        }
+
+        /* A process pass on the drained wheel purges the stale
+         * tombstone so it cannot skew later counts */
+        timerWheelProcessTimerEvents(tw);
+
+        /* The stale tombstone must not affect later timers */
+        timerWheelRegister(tw, 1000, 0, testCountingCallback, &state);
+        if (timerWheelCount(tw) != 1) {
+            ERR("Expected 1 timer, got %zu", timerWheelCount(tw));
+        }
+
+        timerWheelAdvanceTime(tw, 3000);
+        if (state.callCount != 2) {
+            ERR("Second timer did not fire, callCount=%d", state.callCount);
+        }
+        if (timerWheelCount(tw) != 0) {
+            ERR("Expected 0 timers after fire, got %zu", timerWheelCount(tw));
+        }
+
+        timerWheelFree(tw);
+    }
+
+    TEST("timerWheel: reconcile repairs count after unregistering fired id") {
+        timerWheel *tw = timerWheelNew();
+        testCallbackState state = {.callCount = 0, .shouldReschedule = false};
+
+        timerWheelId a =
+            timerWheelRegister(tw, 1000, 0, testCountingCallback, &state);
+        timerWheelId far =
+            timerWheelRegister(tw, 60000000, 0, testCountingCallback, &state);
+        timerWheelAdvanceTime(tw, 3000);
+        if (state.callCount != 1) {
+            ERR("Near timer did not fire, callCount=%d", state.callCount);
+        }
+
+        /* Unregistering the fired id leaves a stale tombstone the
+         * wheel cannot detect inline (no id index); stats must still
+         * report the exact value and reconcile must repair count */
+        if (!timerWheelUnregister(tw, a)) {
+            ERRR("Unregister of fired id should return true");
+        }
+
+        timerWheelStats stats;
+        timerWheelGetStats(tw, &stats);
+        if (stats.cancelledPending != 0) {
+            ERR("Stats must report exact cancelledPending, got %zu",
+                stats.cancelledPending);
+        }
+
+        if (!timerWheelReconcileCancellations(tw)) {
+            ERRR("Reconcile should succeed outside callbacks");
+        }
+        if (timerWheelCount(tw) != 1) {
+            ERR("Count wrong after reconcile, got %zu", timerWheelCount(tw));
+        }
+
+        /* A tombstone matching a live timer must survive reconcile */
+        timerWheelUnregister(tw, far);
+        if (!timerWheelReconcileCancellations(tw)) {
+            ERRR("Reconcile should succeed outside callbacks");
+        }
+        if (timerWheelCount(tw) != 0) {
+            ERR("Live cancellation lost by reconcile, count=%zu",
+                timerWheelCount(tw));
+        }
+        timerWheelGetStats(tw, &stats);
+        if (stats.cancelledPending != 1) {
+            ERR("Expected 1 live cancellation, got %zu",
+                stats.cancelledPending);
+        }
+
+        /* The cancelled far timer must be discarded, not fired */
+        timerWheelAdvanceTime(tw, 70000000);
+        if (state.callCount != 1) {
+            ERR("Cancelled timer fired anyway, callCount=%d", state.callCount);
+        }
+        if (timerWheelCount(tw) != 0) {
+            ERR("Expected empty wheel, got %zu", timerWheelCount(tw));
+        }
+
+        timerWheelFree(tw);
+    }
+
+    TEST("timerWheel: single large advance with live distant timer") {
+        /* Exercises empty-span hopping: the catch-up loop must cross
+         * many wheel0 revolutions (with cascades) in one call and
+         * still fire the timer exactly once */
+        timerWheel *tw = timerWheelNew();
+        testCallbackState state = {.callCount = 0, .shouldReschedule = false};
+
+        timerWheelRegister(tw, 5000000, 0, testCountingCallback, &state);
+
+        timerWheelAdvanceTime(tw, 5200000);
+        if (state.callCount != 1) {
+            ERR("Timer across idle gap fired %d times, expected 1",
+                state.callCount);
+        }
+        if (timerWheelCount(tw) != 0) {
+            ERR("Expected empty wheel, got %zu", timerWheelCount(tw));
+        }
+
+        /* Wheel positions must still be consistent for later timers */
+        timerWheelRegister(tw, 3000, 0, testCountingCallback, &state);
+        timerWheelAdvanceTime(tw, 5000);
+        if (state.callCount != 2) {
+            ERR("Post-hop timer fired %d times total, expected 2",
+                state.callCount);
+        }
+
+        timerWheelFree(tw);
+    }
+
+    TEST("timerWheel: nextTimerEvent sees higher-wheel timer past pending") {
+        /* A far-future pending entry must not mask a nearer timer
+         * sitting in wheel 1 */
+        timerWheel *tw = timerWheelNew();
+        testCallbackState farState = {.callCount = 0};
+        testCallbackState nearState = {.callCount = 0};
+
+        /* Near timer: 1s -> wheel 1 */
+        timerWheelRegister(tw, 1000000, 0, testCountingCallback, &nearState);
+
+        /* Far timer: registered from a callback, so it parks in the
+         * pending queue (10s) until the next process pass */
+        timerWheelRegister(tw, 0, 0, testRegisterFarCallback, &farState);
+        timerWheelProcessTimerEvents(tw);
+
+        timerWheelUs offset = timerWheelNextTimerEventOffsetFromNowUs(tw);
+        if (offset > 2000000) {
+            ERR("Query returned %" PRId64
+                "us; pending far timer masked the ~1s wheel timer",
+                offset);
+        }
+
+        timerWheelFree(tw);
+    }
+
+    TEST("timerWheel: self-unregister without repeat leaves no tombstone") {
+        timerWheel *tw = timerWheelNew();
+        testCallbackState state = {.callCount = 0};
+
+        /* One-shot timer that unregisters itself in its own callback:
+         * the tombstone must be retired immediately, not linger */
+        timerWheelRegister(tw, 1000, 0, testSelfUnregisterNoRepeatCallback,
+                           &state);
+        timerWheelAdvanceTime(tw, 3000);
+        if (state.callCount != 1) {
+            ERR("Timer did not fire, callCount=%d", state.callCount);
+        }
+
+        timerWheelStats stats;
+        timerWheelGetStats(tw, &stats);
+        if (stats.cancelledPending != 0) {
+            ERR("Tombstone lingered after self-cancel, cancelledPending=%zu",
+                stats.cancelledPending);
+        }
+
+        /* Count must be exact for a subsequent timer, with no drain
+         * pass needed in between */
+        timerWheelRegister(tw, 1000, 0, testCountingCallback, &state);
+        if (timerWheelCount(tw) != 1) {
+            ERR("Expected 1 timer, got %zu", timerWheelCount(tw));
+        }
+
+        timerWheelFree(tw);
+    }
+
+    TEST("timerWheel: nextTimerEvent query with populated overflow") {
+        /* The overflow map is 5 elements wide; the query must hand
+         * multimapFirst a full-width out array (an undersized one gets
+         * written past its end - this was a live stack corruption) */
+        timerWheel *tw = timerWheelNew();
+        testCallbackState state = {.callCount = 0};
+
+        const uint64_t dayUs = 24ULL * 60 * 60 * 1000000;
+        const uint64_t before = timeUtilMonotonicUs();
+        timerWheelRegister(tw, dayUs, 0, testCountingCallback, &state);
+
+        timerWheelSystemMonotonicUs next = timerWheelNextTimerEventStartUs(tw);
+        const int64_t diff = next - (int64_t)(before + dayUs);
+        if (diff < -5000 || diff > 5000) {
+            ERR("Overflow-timer query off by %" PRId64 "us", diff);
+        }
+
+        /* Overflow plus a nearer wheel timer: min must win */
+        timerWheelRegister(tw, 5000, 0, testCountingCallback, &state);
+        timerWheelUs offset = timerWheelNextTimerEventOffsetFromNowUs(tw);
+        if (offset > 1000000) {
+            ERR("Nearer wheel timer masked by overflow entry: %" PRId64 "us",
+                offset);
+        }
+
+        timerWheelFree(tw);
+    }
+
+    TEST("timerWheel: overflow repeating timer round-trips") {
+        timerWheel *tw = timerWheelNew();
+        testCallbackState state = {.callCount = 0, .shouldReschedule = true};
+
+        /* 24h initial delay and repeat: lives in overflow (>18.6h),
+         * fires, and must reschedule back into overflow */
+        const uint64_t dayUs = 24ULL * 60 * 60 * 1000000;
+        timerWheelRegister(tw, dayUs, dayUs, testCountingCallback, &state);
+
+        timerWheelStats stats;
+        timerWheelGetStats(tw, &stats);
+        if (stats.overflowCount != 1) {
+            ERR("Expected 1 overflow timer, got %zu", stats.overflowCount);
+        }
+
+        timerWheelAdvanceTime(tw, dayUs + 1000000);
+        if (state.callCount != 1) {
+            ERR("Overflow timer did not fire, callCount=%d", state.callCount);
+        }
+
+        timerWheelGetStats(tw, &stats);
+        if (stats.overflowCount != 1) {
+            ERR("Rescheduled timer should be back in overflow, got %zu",
+                stats.overflowCount);
+        }
+        if (timerWheelCount(tw) != 1) {
+            ERR("Expected 1 live timer, got %zu", timerWheelCount(tw));
         }
 
         timerWheelFree(tw);
@@ -1697,11 +2133,11 @@ int timerWheelTest(int argc, char *argv[]) {
      *
      * Key insight: slot = (currentIndex + delay/resolution)
      * A 300ms timer goes to wheel 1 slot 1 (since 300/256 = 1).
-     * Wheel 1 slot 0 cascades at 256ms, slot 1 at 512ms, slot 2 at 768ms.
+     * Each higher-wheel slot cascades downward when the wheel ENTERS
+     * it (slot 1 at 256ms, slot 2 at 512ms, ...), so its timers land
+     * in lower wheels before they are due and fire within one wheel0
+     * slot (1ms) of their scheduled time.
      * Cascade counter only increments when there ARE timers in the slot.
-     *
-     * Timer wheel trades timing precision for O(1) operations. Timers in
-     * higher wheels fire at cascade boundaries, not exact scheduled times.
      * ================================================================ */
 
     printf("\n=== Multi-Level Cascade Tests ===\n\n");
@@ -1727,25 +2163,27 @@ int timerWheelTest(int argc, char *argv[]) {
         timerWheelFree(tw);
     }
 
-    TEST("CASCADE: wheel 1 timer fires at cascade boundary") {
-        /* A 300ms timer goes to wheel 1 slot 1, cascades at 512ms */
+    TEST("CASCADE: wheel 1 timer fires on time after entry cascade") {
+        /* A 300ms timer goes to wheel 1 slot 1; the slot cascades when
+         * entered at 256ms, dropping the timer into wheel 0 where it
+         * fires on schedule at ~300ms */
         timerWheel *tw = timerWheelNew();
         testCallbackState state = {0};
 
         /* Register 300ms timer - goes to wheel 1 slot 1 (300/256 = 1) */
         timerWheelRegister(tw, 300000, 0, testCountingCallback, &state);
 
-        /* Advance to 300ms - timer should NOT fire yet (still in wheel 1) */
-        timerWheelAdvanceTime(tw, 300000);
+        /* Advance to 250ms - before the cascade, still in wheel 1 */
+        timerWheelAdvanceTime(tw, 250000);
         if (state.callCount != 0) {
-            ERR("Timer shouldn't fire at 300ms (still in wheel 1), count=%d",
-                state.callCount);
+            ERR("Timer shouldn't fire at 250ms, count=%d", state.callCount);
         }
 
-        /* Advance to 512ms - wheel 1 slot 1 cascades, timer fires (overdue) */
-        timerWheelAdvanceTime(tw, 212000); /* Now at 512ms */
+        /* Advance to 310ms - slot 1 cascaded at 256ms, timer fired at
+         * its scheduled 300ms */
+        timerWheelAdvanceTime(tw, 60000);
         if (state.callCount != 1) {
-            ERR("Timer should fire at 512ms cascade, count=%d",
+            ERR("Timer should fire on time at ~300ms, count=%d",
                 state.callCount);
         }
 
@@ -1761,39 +2199,37 @@ int timerWheelTest(int argc, char *argv[]) {
 
         timerWheelStats stats;
 
-        /* Advance to 256ms - slot 0 cascades (empty), counter should be 0 */
+        /* Advance to 256ms - slot 1 entered (empty), counter stays 0 */
         timerWheelAdvanceTime(tw, 256000);
         timerWheelGetStats(tw, &stats);
         if (stats.totalCascades != 0) {
-            ERR("Expected 0 cascades at 256ms (slot 0 empty), got %zu",
-                stats.totalCascades);
-        }
-
-        /* Advance to 512ms - slot 1 cascades (empty), counter should be 0 */
-        timerWheelAdvanceTime(tw, 256000);
-        timerWheelGetStats(tw, &stats);
-        if (stats.totalCascades != 0) {
-            ERR("Expected 0 cascades at 512ms (slot 1 empty), got %zu",
+            ERR("Expected 0 cascades at 256ms (slot 1 empty), got %zu",
                 stats.totalCascades);
         }
 
         /* Timer should not have fired yet */
         if (state.callCount != 0) {
-            ERR("Timer shouldn't fire before cascade, count=%d",
+            ERR("Timer shouldn't fire before its slot cascades, count=%d",
                 state.callCount);
         }
 
-        /* Advance to 768ms - slot 2 cascades (has timer!), counter = 1 */
+        /* Advance to 512ms - slot 2 entered (has timer!), counter = 1;
+         * the timer drops to wheel 0 but is not due until 520ms */
         timerWheelAdvanceTime(tw, 256000);
         timerWheelGetStats(tw, &stats);
         if (stats.totalCascades != 1) {
-            ERR("Expected 1 cascade at 768ms (slot 2 has timer), got %zu",
+            ERR("Expected 1 cascade at 512ms (slot 2 has timer), got %zu",
                 stats.totalCascades);
         }
+        if (state.callCount != 0) {
+            ERR("Timer shouldn't fire before 520ms, count=%d", state.callCount);
+        }
 
-        /* Timer should have fired (overdue by 248ms) */
+        /* Advance to 530ms - timer fires at its scheduled 520ms */
+        timerWheelAdvanceTime(tw, 18000);
         if (state.callCount != 1) {
-            ERR("Timer should fire when cascaded, count=%d", state.callCount);
+            ERR("Timer should fire on time at ~520ms, count=%d",
+                state.callCount);
         }
 
         timerWheelFree(tw);
@@ -1808,20 +2244,31 @@ int timerWheelTest(int argc, char *argv[]) {
         timerWheelRegister(tw, 350000, 0, testCountingCallback, &states[1]);
         timerWheelRegister(tw, 400000, 0, testCountingCallback, &states[2]);
 
-        /* Advance to 500ms - no cascade yet (slot 1 cascades at 512ms) */
-        timerWheelAdvanceTime(tw, 500000);
+        /* Advance to 250ms - slot 1 not yet entered, nothing fires */
+        timerWheelAdvanceTime(tw, 250000);
         int firedBefore =
             states[0].callCount + states[1].callCount + states[2].callCount;
         if (firedBefore != 0) {
             ERR("Timers shouldn't fire before cascade, count=%d", firedBefore);
         }
 
-        /* Advance to 520ms - slot 1 cascades, all 3 timers fire together */
-        timerWheelAdvanceTime(tw, 20000);
+        /* Advance to 310ms - slot 1 cascaded at 256ms as one event, and
+         * each timer then fires at its OWN scheduled time: only the
+         * 260ms timer is due so far */
+        timerWheelAdvanceTime(tw, 60000);
+        if (states[0].callCount != 1 || states[1].callCount != 0 ||
+            states[2].callCount != 0) {
+            ERR("Only the 260ms timer should have fired: %d, %d, %d",
+                states[0].callCount, states[1].callCount, states[2].callCount);
+        }
+
+        /* Advance to 410ms - the 350ms and 400ms timers fire on time */
+        timerWheelAdvanceTime(tw, 100000);
         int firedAfter =
             states[0].callCount + states[1].callCount + states[2].callCount;
         if (firedAfter != 3) {
-            ERR("All 3 timers should fire at cascade, count=%d", firedAfter);
+            ERR("All 3 timers should have fired by 410ms, count=%d",
+                firedAfter);
         }
 
         timerWheelStats stats;
@@ -1836,20 +2283,24 @@ int timerWheelTest(int argc, char *argv[]) {
 
     TEST(
         "CASCADE: timers inserted into wheel 0 after cascade fire accurately") {
-        /* When a timer cascades to wheel 0, it should fire at its slot */
+        /* When a timer cascades to wheel 0, it fires at its own slot */
         timerWheel *tw = timerWheelNew();
         testCallbackState state = {0};
 
-        /* 700ms timer goes to wheel 1 slot 2 (700/256 = 2), cascades at 768ms
-         */
+        /* 700ms timer goes to wheel 1 slot 2 (700/256 = 2); slot 2 is
+         * entered (cascaded) at 512ms, leaving 188ms in wheel 0 */
         timerWheelRegister(tw, 700000, 0, testCountingCallback, &state);
 
-        /* Advance to 768ms - timer cascades to wheel 0 but not yet due */
-        /* Wait, at 768ms the timer is overdue (700 < 768), so fires immediately
-         */
-        timerWheelAdvanceTime(tw, 768000);
+        /* Advance to 690ms - cascaded but not yet due */
+        timerWheelAdvanceTime(tw, 690000);
+        if (state.callCount != 0) {
+            ERR("Timer shouldn't fire before 700ms, count=%d", state.callCount);
+        }
+
+        /* Advance to 720ms - fires at its scheduled 700ms */
+        timerWheelAdvanceTime(tw, 30000);
         if (state.callCount != 1) {
-            ERR("Timer should fire when cascaded (overdue), count=%d",
+            ERR("Timer should fire on time at ~700ms, count=%d",
                 state.callCount);
         }
 
@@ -1857,27 +2308,24 @@ int timerWheelTest(int argc, char *argv[]) {
     }
 
     TEST("CASCADE: timer cascades to wheel 0 and fires at correct slot") {
-        /* Test a timer that cascades to wheel 0 but isn't overdue yet */
         timerWheel *tw = timerWheelNew();
         testCallbackState state = {0};
 
-        /* 520ms timer goes to wheel 1 slot 2 (520/256 = 2), cascades at 768ms
-           But at 768ms, timer is overdue. Let's try a longer timer. */
-
-        /* 780ms timer: slot = 780/256 = 3, cascades at 1024ms */
+        /* 780ms timer: wheel 1 slot 3 (780/256 = 3), entered at 768ms
+         * with 12ms remaining in wheel 0 */
         timerWheelRegister(tw, 780000, 0, testCountingCallback, &state);
 
-        /* Advance to 780ms - timer still in wheel 1 */
-        timerWheelAdvanceTime(tw, 780000);
+        /* Advance to 770ms - cascaded at 768ms, not yet due */
+        timerWheelAdvanceTime(tw, 770000);
         if (state.callCount != 0) {
-            ERR("Timer shouldn't fire before cascade at 1024ms, count=%d",
-                state.callCount);
+            ERR("Timer shouldn't fire before 780ms, count=%d", state.callCount);
         }
 
-        /* Advance to 1024ms - slot 3 cascades, timer is overdue, fires */
-        timerWheelAdvanceTime(tw, 244000);
+        /* Advance to 790ms - fires at its scheduled 780ms */
+        timerWheelAdvanceTime(tw, 20000);
         if (state.callCount != 1) {
-            ERR("Timer should fire at cascade, count=%d", state.callCount);
+            ERR("Timer should fire on time at ~780ms, count=%d",
+                state.callCount);
         }
 
         timerWheelFree(tw);

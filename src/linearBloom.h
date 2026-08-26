@@ -30,8 +30,11 @@ typedef uint_fast32_t linearBloom;
     (divCeil(divCeil(LINEARBLOOM_EXTENT_BITS, 8), sizeof(linearBloom)) *       \
      sizeof(linearBloom))
 
+/* hash2 is forced odd: a zero (or even, given the power-of-two-ish
+ * modulo) second hash collapses all probe positions toward one bit,
+ * destroying the filter's false-positive bound */
 #define LINEARBLOOM_KIRSCHMITZENMACHER(iteration, hash1, hash2)                \
-    ((hash1) + (iteration) * (hash2))
+    ((hash1) + (iteration) * ((hash2) | 1))
 
 DK_INLINE_ALWAYS linearBloom *linearBloomNew(void) {
     /* We need to use 'divCeil' here because regular division would give us
@@ -107,6 +110,15 @@ linearBloomHashCheckEarlyExit(const linearBloom *restrict const bloom,
     }
 
     return true;
+}
+
+/* Fraction of bits set, 0.0 to 1.0: the operator signal for
+ * false-positive drift (FP rate ≈ utilization^LINEARBLOOM_HASHES).
+ * Past ~0.5 the filter is due for replacement. */
+uint64_t StrPopCntExact(const void *_data, size_t len);
+DK_INLINE_ALWAYS double linearBloomUtilization(const linearBloom *bloom) {
+    const uint64_t set = StrPopCntExact(bloom, LINEARBLOOM_EXTENT_BYTES);
+    return (double)set / (double)LINEARBLOOM_EXTENT_BITS;
 }
 
 #ifdef DATAKIT_TEST

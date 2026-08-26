@@ -79,5 +79,6 @@ bool multimapMediumDeleteByPredicate(multimapMedium *m,
 
 #ifdef DATAKIT_TEST
 void multimapMediumRepr(const multimapMedium *m);
+void multimapMediumVerify(const multimapMedium *m);
 int multimapMediumTest(int argc, char *argv[]);
 #endif

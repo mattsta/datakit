@@ -56,6 +56,10 @@ int64_t intsetRandom(intset *is);
 /* Get total count of elements */
 size_t intsetCount(const intset *is);
 
+/* O(1) smallest/largest member; false when empty */
+bool intsetMin(const intset *is, int64_t *value);
+bool intsetMax(const intset *is, int64_t *value);
+
 /* Get total bytes used */
 size_t intsetBytes(intset *is);
 

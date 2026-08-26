@@ -112,5 +112,4 @@ bool multilistSmallPop(multilistSmall *ml, databox *box, bool fromTail);
 
 #ifdef DATAKIT_TEST
 void multilistSmallRepr(multilistSmall *ml);
-int multilistSmallTest(int argc, char *argv[]);
 #endif

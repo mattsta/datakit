@@ -99,9 +99,10 @@ int main(int argc, char *argv[]) {
     /* Check if output file is specified */
     if (optind < argc) {
         if ((ofp = fopen(argv[optind], "wt")) == NULL) {
-            fprintf(stderr, "Error:  Unable to open output file for writing.\n"
-                            " - Filename: %s\n"
-                            " - Error:    %s\n",
+            fprintf(stderr,
+                    "Error:  Unable to open output file for writing.\n"
+                    " - Filename: %s\n"
+                    " - Error:    %s\n",
                     argv[optind], strerror(errno));
             return 1;
         }
@@ -109,8 +110,9 @@ int main(int argc, char *argv[]) {
 
     mp_int_init(&value);
     if ((res = mp_int_randomize(&value, modbits - 1)) != MP_OK) {
-        fprintf(stderr, "Error:  Unable to generate random start value.\n"
-                        " - %s (%d)\n",
+        fprintf(stderr,
+                "Error:  Unable to generate random start value.\n"
+                " - %s (%d)\n",
                 mp_error_string(res), res);
         goto EXIT;
     }

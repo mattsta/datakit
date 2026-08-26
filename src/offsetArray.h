@@ -128,24 +128,29 @@
         /* else: idx already in range, no-op */                                \
     } while (0)
 
-/* Grow and zero-initialize new element at idx */
+/* Grow and zero-initialize new element at idx.
+ * Bounds are kept in the scale's own (possibly signed) arithmetic:
+ * casting to size_t would scramble comparisons and memset spans for
+ * negative-capable scale types. */
 #define offsetArrayGrowZero(arr, idx)                                          \
     do {                                                                       \
         const bool wasEmpty_ = offsetArrayEmpty(arr);                          \
-        const size_t oldLow_ = wasEmpty_ ? 0 : (arr)->offset;                  \
-        const size_t oldHigh_ = wasEmpty_ ? 0 : (arr)->highest;                \
+        const __typeof__((arr)->offset) oldLow_ =                              \
+            wasEmpty_ ? 0 : (arr)->offset;                                     \
+        const __typeof__((arr)->highest) oldHigh_ =                            \
+            wasEmpty_ ? 0 : (arr)->highest;                                    \
         offsetArrayGrow(arr, idx);                                             \
         if (wasEmpty_) {                                                       \
             memset(&(arr)->obj[0], 0, sizeof(*(arr)->obj));                    \
-        } else if ((size_t)(idx) < oldLow_) {                                  \
+        } else if ((idx) < oldLow_) {                                          \
             /* Grew downward - zero new low elements */                        \
             memset(&(arr)->obj[0], 0,                                          \
-                   (oldLow_ - (idx)) * sizeof(*(arr)->obj));                   \
-        } else if ((size_t)(idx) > oldHigh_) {                                 \
+                   (size_t)(oldLow_ - (idx)) * sizeof(*(arr)->obj));           \
+        } else if ((idx) > oldHigh_) {                                         \
             /* Grew upward - zero new high elements */                         \
-            const size_t firstNew = oldHigh_ - (arr)->offset + 1;              \
+            const size_t firstNew = (size_t)(oldHigh_ - (arr)->offset) + 1;    \
             memset(&(arr)->obj[firstNew], 0,                                   \
-                   ((idx) - oldHigh_) * sizeof(*(arr)->obj));                  \
+                   (size_t)((idx) - oldHigh_) * sizeof(*(arr)->obj));          \
         }                                                                      \
     } while (0)
 

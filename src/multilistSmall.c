@@ -20,6 +20,8 @@ multilistSmall *multilistSmallCreate(void) {
  * ==================================================================== */
 multilistSmall *multilistSmallDuplicate(multilistSmall *orig) {
     multilistSmall *ml = multilistSmallCreate();
+    /* Create() pre-allocated an empty flex; release before overwrite */
+    flexFree(ml->fl);
     ml->fl = flexDuplicate(orig->fl);
     return ml;
 }

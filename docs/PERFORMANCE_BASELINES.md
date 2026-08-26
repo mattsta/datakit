@@ -21,6 +21,69 @@ numbers and decisions; the TSV keeps every row.
 
 ---
 
+## 2026-08-25 — timer subsystem overhaul (timerWheel + multiTimer)
+
+| Field    | Value                                   |
+| -------- | --------------------------------------- |
+| CPU      | Apple M1 Max (arm64, ARMv8 Crypto/NEON) |
+| Preset   | `perf`                                  |
+| Compiler | Apple clang (system `cc`)               |
+
+### timerWheel — hierarchical wheel after entry-cascade + occupancy-bitmap work
+
+`./build-perf/src/datakit-test test timerWheel` (cycles per op, TSC):
+
+| operation                 | cost        | note                                                                                                                                                        |
+| ------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| register                  | 5.4–5.8 cy  | 3–3.6× faster than multiTimer                                                                                                                               |
+| expiration (batch fire)   | ~1 cy       |                                                                                                                                                             |
+| next-event query (cached) | 0.1 cy      | min-fold cache survives register                                                                                                                            |
+| steady-state churn        | ~8 cy/iter  | reg+cancel+query mix (was 64 before the intset realloc fix below)                                                                                           |
+| register-then-cancel 100k | 8.5 cy      | was 173 cy: tombstone intset Add/Remove now realloc+memmove in place (Medium/Full tiers previously alloc+double-copy+free per op); scaling is flat 10k→100k |
+| 12h idle-gap catch-up     | ~1.5 ms     | was ~150 ms+ before slot hopping                                                                                                                            |
+| memory                    | ~27 B/timer |                                                                                                                                                             |
+
+### multiTimer — compact sorted-map scheduler after watermark-StopAll work
+
+| operation  | cost    | note                            |
+| ---------- | ------- | ------------------------------- |
+| register   | ~22 cy  | O(log n) sorted insert          |
+| expiration | ~1.2 cy |                                 |
+| StopAll    | 417 ns  | at 50k lifetime ids (was O(n²)) |
+
+### multiroar — bulk bit-set batching (same capture date)
+
+`./build-perf/src/datakit-test test multiroar`, PERF section, 100k
+sorted positions:
+
+| operation           | cost        | note                          |
+| ------------------- | ----------- | ----------------------------- |
+| BitSet per-bit loop | 93.3 ns/bit | one map op per bit (old path) |
+| BitSetMany batched  | 2.8 ns/bit  | one map op per chunk run, 33× |
+
+BitGetMany also caches chunk-run lookups (no separate bench row; same
+mechanism, read-only).
+
+**Decisions this capture supports:**
+
+1. Entry-cascade fires higher-wheel timers within 1 ms of schedule
+   (previously up to a full higher-wheel slot late) at no measured
+   register/fire cost.
+2. timerWheel for latency-critical/churn-heavy timers; multiTimer for
+   compact populations — both now share cancellation semantics.
+3. Bulk multiroar loads (multiroarFromArray, BitSetMany) should pass
+   sorted/clustered positions to hit the run-batched path.
+
+### Reproduce
+
+```
+./build-perf/src/datakit-test test timerWheel
+./build-perf/src/datakit-test test multiTimer
+./build-perf/src/datakit-test test multiroar
+```
+
+---
+
 ## 2026-08-15 — allocators, intset search, crypto regression rows
 
 | Field    | Value                                   |

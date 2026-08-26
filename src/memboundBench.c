@@ -15,6 +15,10 @@
 #include <malloc.h> /* malloc_usable_size */
 #endif
 
+/* This benchmark's baseline arm calls system malloc/free/calloc
+ * directly (that IS the thing being measured), so opt out of datakit.h's
+ * deprecation poison on the raw allocator symbols. */
+#define IKNOWWHATIMDOING
 #include "datakit.h" /* zmalloc/zfree (global allocator config) */
 #include "membound.h"
 #include "memshardConfig.h" /* datakitUseMemshard() */

@@ -557,12 +557,79 @@ static int test_multiOrderedSetP_compaction(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
+static int test_multiOrderedSetP_resetReuse(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+
+    int err = 0;
+    const char *basePath = "/tmp/multiOrderedSetPTest_resetReuse";
+
+    TEST("multiOrderedSetP reset then reuse survives recovery") {
+        ptestCleanupFiles(basePath);
+        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        multiOrderedSetP *mos = multiOrderedSetNewP(ctx);
+
+        char buf[32];
+        for (int i = 0; i < 30; i++) {
+            snprintf(buf, sizeof(buf), "pre-%d", i);
+            const databox score = databoxNewUnsigned((uint64_t)i);
+            const databox member = databoxNewBytesString(buf);
+            multiOrderedSetAddP(mos, &score, &member);
+        }
+
+        multiOrderedSetResetP(mos);
+        if (multiOrderedSetCountP(mos) != 0) {
+            ERRR("Expected empty after reset");
+        }
+
+        /* Refill with DIFFERENT members so pre-reset ghosts are
+         * detectable after recovery */
+        for (int i = 0; i < 20; i++) {
+            snprintf(buf, sizeof(buf), "post-%d", i);
+            const databox score = databoxNewUnsigned((uint64_t)(i + 100));
+            const databox member = databoxNewBytesString(buf);
+            multiOrderedSetAddP(mos, &score, &member);
+        }
+
+        multiOrderedSetCloseP(mos);
+        persistCtxFree(ctx);
+
+        ctx = persistCtxNew(basePath, NULL);
+        mos = multiOrderedSetOpenP(ctx);
+        if (!mos) {
+            ERRR("Recovery after reset failed");
+        } else {
+            if (multiOrderedSetCountP(mos) != 20) {
+                ERR("Expected 20 post-recovery, got %zu",
+                    multiOrderedSetCountP(mos));
+            }
+
+            const databox ghost = databoxNewBytesString("pre-3");
+            if (multiOrderedSetExistsP(mos, &ghost)) {
+                ERRR("Pre-reset ghost member survived recovery");
+            }
+
+            const databox kept = databoxNewBytesString("post-7");
+            if (!multiOrderedSetExistsP(mos, &kept)) {
+                ERRR("Post-reset member lost in recovery");
+            }
+
+            multiOrderedSetCloseP(mos);
+        }
+        persistCtxFree(ctx);
+        ptestCleanupFiles(basePath);
+    }
+
+    TEST_FINAL_RESULT;
+}
+
 int multiOrderedSetPTest(int argc, char *argv[]) {
     int err = 0;
 
     err += test_multiOrderedSetP_basic(argc, argv);
     err += test_multiOrderedSetP_iteration(argc, argv);
     err += test_multiOrderedSetP_compaction(argc, argv);
+    err += test_multiOrderedSetP_resetReuse(argc, argv);
 
     return err;
 }

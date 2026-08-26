@@ -40,10 +40,13 @@
 #include "hmacKeyring.h"
 #include "mflex.h"
 
+#ifndef XXH_STATIC_LINKING_ONLY
 #define XXH_STATIC_LINKING_ONLY
+#endif
 #include "../deps/xxHash/xxhash.h"
 
 #include <fcntl.h>
+#include <stdatomic.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -71,9 +74,9 @@ _Static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__,
 /* Version 2 adds a `keyId` field to both snap+WAL headers.
  * No backward compat with v1: pre-release software, readers reject the
  * old size+digest layout outright via the version check. */
-#define PERSIST_VERSION ((uint16_t)2)
+#define PERSIST_VERSION ((uint16_t)3)
 
-#define PERSIST_SNAP_HEADER_SIZE ((size_t)40)
+#define PERSIST_SNAP_HEADER_SIZE ((size_t)48)
 #define PERSIST_WAL_HEADER_SIZE ((size_t)28)
 
 /* Header self-check digest sizes (raw XXH32/XXH64 on the persist header
@@ -151,7 +154,12 @@ struct persist {
     uint32_t lastExpectedKeyId;
 
     /* WAL state */
-    uint64_t walSequence;  /* Next sequence number */
+    uint64_t walSequence; /* Next sequence number */
+    /* WAL sequence the restored snapshot already includes; replay
+     * skips entries below it so a stale post-crash WAL can't
+     * double-apply ops already folded into the snapshot. 0 when no
+     * snapshot was restored (a WAL-only replay applies everything). */
+    uint64_t snapshotWalSequence;
     uint8_t *walBuffer;    /* Write buffer */
     size_t walBufferUsed;  /* Bytes used in buffer */
     uint64_t lastSyncTime; /* Last sync timestamp (microseconds) */
@@ -349,6 +357,7 @@ persist *persistCreate(const persistOps *ops, const persistConfig *config) {
     p->lastExpectedKeyId = 0u;
 
     p->walSequence = 1;
+    p->snapshotWalSequence = 0;
     p->walBuffer = NULL;
     p->walBufferUsed = 0;
     p->lastSyncTime = persistGetMicroseconds();
@@ -586,16 +595,18 @@ void persistClose(persist *p) {
  * ============================================================================
  */
 
-/* Snapshot header layout (40 bytes, packed; see persist.h for prose).
+/* Snapshot header layout (48 bytes, packed; see persist.h for prose).
  *
  * 0-3: magic (PERSIST_SNAP_MAGIC, "DKSP")
- * 4-5: version (PERSIST_VERSION = 2)
+ * 4-5: version (PERSIST_VERSION)
  * 6-7: flags (reserved, must be 0 — readers reject unknown bits)
  * 8-11: structType (must match p->ops->type at restore)
  * 12-19: count (element count reported by p->ops->count)
  * 20-27: envelopeLen (byte length of the body envelope that follows)
  * 28-31: keyId (attached keyring key_id; 0 = none)
- * 32-39: headerXxh64 (XXH64 over bytes 0..31 — see persistSnapHeaderDigest) */
+ * 32-39: walSequence (WAL sequence this snapshot reflects; replay skips
+ *        lower-sequenced ops — see the struct field)
+ * 40-47: headerXxh64 (XXH64 over bytes 0..39 — see persistSnapHeaderDigest) */
 typedef struct __attribute__((packed)) persistSnapHeader {
     uint32_t magic;
     uint16_t version;
@@ -604,6 +615,13 @@ typedef struct __attribute__((packed)) persistSnapHeader {
     uint64_t count;
     uint64_t envelopeLen;
     uint32_t keyId;
+    /* WAL sequence this snapshot already reflects: every WAL op with a
+     * lower sequence is folded in, so replay skips them. This is what
+     * makes a snapshot-then-truncate compaction crash-consistent - a
+     * crash between the atomic snapshot publish and the WAL truncate
+     * leaves stale WAL entries that all sort below this and are
+     * skipped rather than double-applied. */
+    uint64_t walSequence;
     uint64_t headerXxh64;
 } persistSnapHeader;
 
@@ -654,6 +672,10 @@ bool persistSnapshot(persist *p, const void *structure) {
         .count =
             p->ops->count ? (uint64_t)p->ops->count(structure) : (uint64_t)0,
         .envelopeLen = (uint64_t)envelopeLen,
+        /* Snapshot reflects every op logged so far, i.e. all sequences
+         * below the next-to-assign one. Recorded so replay can skip
+         * WAL entries already folded in. */
+        .walSequence = p->walSequence,
         /* If a keyring is attached we stamp its key_id; otherwise 0. A
          * verifier with a keyring attached compares this to the keyring's
          * key_id and rejects with PERSIST_ERR_KEY_ID_MISMATCH on a
@@ -665,29 +687,61 @@ bool persistSnapshot(persist *p, const void *structure) {
     header.headerXxh64 = persistSnapHeaderDigest(&header);
 
     persistStore *store = p->snapshotStore;
+
+    /* A snapshot fully replaces the file, so publish it atomically when
+     * the backend supports it: writes land in a private temp that is
+     * durably renamed over the live file only once complete. A crash
+     * therefore leaves either the prior snapshot or the new one, never
+     * a torn mix - and combined with the walSequence watermark, a crash
+     * anywhere in compaction stays crash-consistent. */
+    const bool atomic =
+        store->rewriteBegin && store->rewriteCommit && store->rewriteAbort;
+    if (atomic && !store->rewriteBegin(store->ctx)) {
+        zfree(envelope);
+        return false;
+    }
+
     if (store->seek(store->ctx, 0, SEEK_SET) < 0) {
         zfree(envelope);
+        if (atomic) {
+            store->rewriteAbort(store->ctx);
+        }
         return false;
     }
 
     if (store->write(store->ctx, &header, sizeof(header)) !=
         (ssize_t)sizeof(header)) {
         zfree(envelope);
+        if (atomic) {
+            store->rewriteAbort(store->ctx);
+        }
         return false;
     }
 
     if (store->write(store->ctx, envelope, envelopeLen) !=
         (ssize_t)envelopeLen) {
         zfree(envelope);
+        if (atomic) {
+            store->rewriteAbort(store->ctx);
+        }
         return false;
     }
     zfree(envelope);
 
-    if (store->truncate) {
-        store->truncate(store->ctx);
-    }
-    if (store->sync) {
-        store->sync(store->ctx);
+    if (atomic) {
+        /* Commit fsyncs the temp, renames it over the live file, and
+         * fsyncs the directory - the whole durability barrier. */
+        if (!store->rewriteCommit(store->ctx)) {
+            store->rewriteAbort(store->ctx);
+            return false;
+        }
+    } else {
+        if (store->truncate) {
+            store->truncate(store->ctx);
+        }
+        if (store->sync) {
+            store->sync(store->ctx);
+        }
     }
 
     p->stats.snapshotCount++;
@@ -749,6 +803,10 @@ void *persistRestore(persist *p) {
     if (!persistCheckHeaderKeyId(p, header.keyId)) {
         return NULL;
     }
+
+    /* Remember what this snapshot already includes so a subsequent WAL
+     * replay skips ops folded into it (crash-consistent compaction). */
+    p->snapshotWalSequence = header.walSequence;
     if (header.envelopeLen == 0 ||
         header.envelopeLen >
             FLEX_ENVELOPE_DEFAULT_MAX_PAYLOAD + (uint64_t)(64 * 1024)) {
@@ -1176,6 +1234,18 @@ bool persistReplayWAL(persist *p, void *structure) {
         if (rc < 0) {
             p->stats.entriesSkipped++;
             return p->config.strictRecovery ? false : true;
+        }
+
+        /* Already folded into the restored snapshot (a stale WAL left by
+         * a crash between snapshot publish and WAL truncate): applying
+         * it again would double-count. Advance the sequence and move on. */
+        if (seq < p->snapshotWalSequence) {
+            if (seq >= p->walSequence) {
+                p->walSequence = seq + 1;
+            }
+            p->stats.entriesSkipped++;
+            zfree(envelope);
+            continue;
         }
 
         if (!p->ops->applyOp(structure, op, opData, opDataLen)) {
@@ -1690,6 +1760,10 @@ persistStore *persistStoreMemory(size_t initialCapacity) {
     store->truncate = persistMemTruncate;
     store->size = persistMemSize;
     store->close = persistMemClose;
+    /* Memory has no crash exposure: in-place overwrite is fine. */
+    store->rewriteBegin = NULL;
+    store->rewriteCommit = NULL;
+    store->rewriteAbort = NULL;
 
     return store;
 }
@@ -1714,13 +1788,21 @@ const uint8_t *persistStoreMemoryBuffer(persistStore *store, size_t *len) {
  * ============================================================================
  */
 typedef struct persistFileStore {
-    int fd;
+    int fd; /* live/committed file */
     char *path;
+    int tmpFd;     /* temp file during an atomic rewrite, else -1 */
+    char *tmpPath; /* its path during a rewrite, else NULL */
 } persistFileStore;
+
+/* Writes/seeks/truncates target the temp file mid-rewrite, the live
+ * file otherwise. Reads always come from the live file. */
+static int persistFileActiveFd(const persistFileStore *f) {
+    return f->tmpFd >= 0 ? f->tmpFd : f->fd;
+}
 
 static ssize_t persistFileWrite(void *ctx, const void *data, size_t len) {
     persistFileStore *f = ctx;
-    return write(f->fd, data, len);
+    return write(persistFileActiveFd(f), data, len);
 }
 
 static ssize_t persistFileRead(void *ctx, void *buf, size_t len) {
@@ -1730,39 +1812,140 @@ static ssize_t persistFileRead(void *ctx, void *buf, size_t len) {
 
 static int64_t persistFileSeek(void *ctx, int64_t offset, int whence) {
     persistFileStore *f = ctx;
-    return lseek(f->fd, offset, whence);
+    return lseek(persistFileActiveFd(f), offset, whence);
 }
 
 static int64_t persistFileTell(void *ctx) {
     persistFileStore *f = ctx;
-    return lseek(f->fd, 0, SEEK_CUR);
+    return lseek(persistFileActiveFd(f), 0, SEEK_CUR);
 }
 
 static bool persistFileSync(void *ctx) {
     persistFileStore *f = ctx;
-    return dk_fsync(f->fd) == 0;
+    return dk_fsync(persistFileActiveFd(f)) == 0;
 }
 
 static bool persistFileTruncate(void *ctx) {
     persistFileStore *f = ctx;
-    off_t pos = lseek(f->fd, 0, SEEK_CUR);
+    const int fd = persistFileActiveFd(f);
+    off_t pos = lseek(fd, 0, SEEK_CUR);
     if (pos < 0) {
         return false;
     }
-    return ftruncate(f->fd, pos) == 0;
+    return ftruncate(fd, pos) == 0;
 }
 
 static int64_t persistFileSize(void *ctx) {
     persistFileStore *f = ctx;
     struct stat st;
-    if (fstat(f->fd, &st) < 0) {
+    if (fstat(persistFileActiveFd(f), &st) < 0) {
         return -1;
     }
     return st.st_size;
 }
 
+/* fsync the directory holding `path` so a rename into it is itself
+ * durable (the rename's metadata otherwise lives only in the dir
+ * inode's dirty page). */
+static bool persistFsyncDir(const char *path) {
+    const char *slash = strrchr(path, '/');
+    char dirbuf[2] = ".";
+    const char *dir;
+    char *owned = NULL;
+    if (!slash) {
+        dir = dirbuf;
+    } else if (slash == path) {
+        dirbuf[0] = '/';
+        dir = dirbuf;
+    } else {
+        const size_t n = (size_t)(slash - path);
+        owned = zmalloc(n + 1);
+        memcpy(owned, path, n);
+        owned[n] = '\0';
+        dir = owned;
+    }
+
+    const int dfd = open(dir, O_RDONLY);
+    zfree(owned);
+    if (dfd < 0) {
+        return false;
+    }
+
+    const bool ok = dk_fsync(dfd) == 0;
+    close(dfd);
+    return ok;
+}
+
+static bool persistFileRewriteBegin(void *ctx) {
+    persistFileStore *f = ctx;
+    if (f->tmpFd >= 0) {
+        return false; /* a rewrite is already in progress */
+    }
+
+    const size_t pathLen = strlen(f->path);
+    char *tmpPath = zmalloc(pathLen + sizeof(".tmp"));
+    memcpy(tmpPath, f->path, pathLen);
+    memcpy(tmpPath + pathLen, ".tmp", sizeof(".tmp"));
+
+    const int tmpFd = open(tmpPath, O_RDWR | O_CREAT | O_TRUNC, 0644);
+    if (tmpFd < 0) {
+        zfree(tmpPath);
+        return false;
+    }
+
+    f->tmpFd = tmpFd;
+    f->tmpPath = tmpPath;
+    return true;
+}
+
+static bool persistFileRewriteCommit(void *ctx) {
+    persistFileStore *f = ctx;
+    if (f->tmpFd < 0) {
+        return false;
+    }
+
+    /* Durably publish: the temp's bytes must hit disk before the
+     * rename, and the rename before we report success. */
+    if (dk_fsync(f->tmpFd) != 0) {
+        return false;
+    }
+    if (rename(f->tmpPath, f->path) != 0) {
+        return false;
+    }
+    if (!persistFsyncDir(f->path)) {
+        return false;
+    }
+
+    /* The temp fd now refers to the live path; retire the old fd. */
+    close(f->fd);
+    f->fd = f->tmpFd;
+    f->tmpFd = -1;
+    zfree(f->tmpPath);
+    f->tmpPath = NULL;
+    return true;
+}
+
+static void persistFileRewriteAbort(void *ctx) {
+    persistFileStore *f = ctx;
+    if (f->tmpFd < 0) {
+        return;
+    }
+
+    close(f->tmpFd);
+    unlink(f->tmpPath);
+    f->tmpFd = -1;
+    zfree(f->tmpPath);
+    f->tmpPath = NULL;
+}
+
 static void persistFileClose(void *ctx) {
     persistFileStore *f = ctx;
+    if (f->tmpFd >= 0) {
+        /* An unfinished rewrite: discard the temp, keep the live file. */
+        close(f->tmpFd);
+        unlink(f->tmpPath);
+        zfree(f->tmpPath);
+    }
     close(f->fd);
     zfree(f->path);
     zfree(f);
@@ -1787,6 +1970,8 @@ persistStore *persistStoreFile(const char *path, bool create) {
     f->fd = fd;
     f->path = zmalloc(strlen(path) + 1);
     strcpy(f->path, path);
+    f->tmpFd = -1;
+    f->tmpPath = NULL;
 
     persistStore *store = zmalloc(sizeof(*store));
     store->ctx = f;
@@ -1798,6 +1983,9 @@ persistStore *persistStoreFile(const char *path, bool create) {
     store->truncate = persistFileTruncate;
     store->size = persistFileSize;
     store->close = persistFileClose;
+    store->rewriteBegin = persistFileRewriteBegin;
+    store->rewriteCommit = persistFileRewriteCommit;
+    store->rewriteAbort = persistFileRewriteAbort;
 
     return store;
 }
@@ -2144,7 +2332,7 @@ static void *intsetBigPersistRestore(const uint8_t *data, size_t len) {
      * the end.  Bound the walk by flexCount exactly like the multimap / qset
      * restores do (an empty set restores to an empty intsetBig). */
     const size_t count = flexCount(f);
-    flexEntry   *fe    = flexHead(f);
+    flexEntry *fe = flexHead(f);
     for (size_t i = 0; i < count && fe; i++) {
         databoxBig dbig;
         DATABOX_BIG_INIT(&dbig);
@@ -2177,7 +2365,7 @@ static size_t intsetBigPersistEstimateSize(const void *structure) {
 static bool intsetBigPersistApplyOp(void *structure, persistOp op,
                                     const uint8_t *data, size_t len) {
     intsetBig **isb_p = structure;
-    intsetBig  *isb   = *isb_p;
+    intsetBig *isb = *isb_p;
     /* Unwrap the 1-element flex back to the numeric member (128-bit-capable;
      * defensive against malformed replicated bytes). */
     databoxBig dbig;
@@ -2471,8 +2659,12 @@ static uint8_t *hyperloglogPersistEncodeOp(persistOp op, const void *args,
      * IMPORTANT: this MUST stay raw bytes — do NOT migrate to a flex element.
      * flex canonicalises numeric strings (e.g. "1.50" -> 1.5), which would
      * change the bytes fed to the hash and desync the cardinality estimate
-     * between leader and follower.  The exact member bytes are load-bearing. */
-    if (op == PERSIST_OP_INSERT) {
+     * between leader and follower.  The exact member bytes are load-bearing.
+     *
+     * For PERSIST_OP_MERGE: args is the byte image of a source-union HLL
+     * (an mdsc-prefixed hyperloglog, the snapshot shape); the fold
+     * max-merges it into the destination.  Same verbatim-bytes contract. */
+    if (op == PERSIST_OP_INSERT || op == PERSIST_OP_MERGE) {
         uint8_t *buf = NULL;
         if (argc > 0) {
             buf = zmalloc(argc);
@@ -2492,13 +2684,49 @@ static bool hyperloglogPersistApplyOp(void *structure, persistOp op,
     hyperloglog **r = structure;
     if (op == PERSIST_OP_INSERT) {
         hyperloglogAdd(r, data, len);
+        /* hyperloglogAdd's DENSE arm sets registers without touching
+         * the cached cardinality (only the sparse arm invalidates
+         * internally) — without this, a dense HLL that absorbed folds
+         * keeps serving its stale cached count. */
+        hyperloglogInvalidateCache(*r);
         return true;
+    }
+    if (op == PERSIST_OP_MERGE) {
+        /* Empty union is the merge identity (all sources absent):
+         * nothing to fold, but the op still creates the destination
+         * via the caller's newEmpty path, matching the executor. */
+        if (!data || len == 0) {
+            return true;
+        }
+        hyperloglog *src = hyperloglogPersistRestore(data, len);
+        if (!src) {
+            return false;
+        }
+
+        /* WAL bytes are attacker-reachable: the merge walks a fixed
+         * dense-register span, so the structure must be proven
+         * well-formed before any register read touches it. */
+        if (!hyperloglogDetect(src)) {
+            hyperloglogFree(src);
+            return false;
+        }
+
+        const bool ok = hyperloglogMergeInto(r, src);
+        hyperloglogFree(src);
+        return ok;
     }
     return false;
 }
 
 static void hyperloglogPersistFree(void *structure) {
     hyperloglogFree(structure);
+}
+
+/* Restored bytes carry an attacker-controlled header; reject anything
+ * whose declared encoding and length don't describe a walkable
+ * register set before the structure reaches any reader. */
+static bool hyperloglogPersistValidate(const void *structure) {
+    return hyperloglogDetect((hyperloglog *)structure);
 }
 
 const persistOps persistOpsHyperloglog = {
@@ -2513,7 +2741,7 @@ const persistOps persistOpsHyperloglog = {
     .applyOp = hyperloglogPersistApplyOp,
     .streamSnapshot = NULL,
     .streamRestore = NULL,
-    .validate = NULL,
+    .validate = hyperloglogPersistValidate,
     .free = hyperloglogPersistFree,
 };
 
@@ -2709,14 +2937,14 @@ static bool multimapPersistApplyOp(void *structure, persistOp op,
         if (!flexValidateBufferDeep(data, len)) {
             return false;
         }
-        const flex  *f    = (const flex *)data;
+        const flex *f = (const flex *)data;
         const size_t argc = flexCount(f);
         if (argc == 0 || argc > 32) {
             return false;
         }
-        databox        boxes[32];
+        databox boxes[32];
         const databox *boxPtrs[32];
-        flexEntry     *fe = flexHead(f);
+        flexEntry *fe = flexHead(f);
         for (size_t i = 0; i < argc; i++) {
             flexGetByType(fe, &boxes[i]);
             boxPtrs[i] = &boxes[i];
@@ -2908,6 +3136,95 @@ static uint8_t *multilistPersistEncodeOp(persistOp op, const void *args,
     }
 }
 
+/* Identity-verified POP apply.
+ *
+ * A pop's operand MAY carry the exact element the executor removed
+ * (a 1-element flex in the PUSH-operand shape — the same encoding
+ * the pop's inverse uses to push it back).  A blind end-pop is
+ * count-exact but element-identity-INEXACT: a replayed or
+ * double-executed pop removes whichever element sits at the end NOW,
+ * silently converting a duplicated delivery into a lost element
+ * elsewhere in the list.  With the operand present the fold becomes
+ * element-exact:
+ *   (1) the popping end matches → pop it — the fast path, and the
+ *       only path a single-executor schedule ever takes;
+ *   (2) present elsewhere → remove exactly that element
+ *       (out-of-order interleave of independent pops);
+ *   (3) absent → this pop's effect is already applied — a COUNTED
+ *       idempotent no-op, the identity dedupe that an executor
+ *       stamp alone cannot provide.
+ * Operand-less pops (datakit-native rows, manufactured cross-shard
+ * removals) keep the positional behavior unchanged. */
+static _Atomic uint64_t mlPopIdentityDeepRemoveTotal = 0; /* arm 2 */
+static _Atomic uint64_t mlPopIdentityAbsentNoopTotal = 0; /* arm 3 */
+
+uint64_t persistMultilistPopIdentityDeepRemoveTotal(void) {
+    return atomic_load_explicit(&mlPopIdentityDeepRemoveTotal,
+                                memory_order_relaxed);
+}
+
+uint64_t persistMultilistPopIdentityAbsentNoopTotal(void) {
+    return atomic_load_explicit(&mlPopIdentityAbsentNoopTotal,
+                                memory_order_relaxed);
+}
+
+static bool multilistApplyPopIdentity(multilist **ml, mflexState *state,
+                                      const databox *want, bool fromTail) {
+    /* The key may not exist yet (an external coordinator can drive
+     * this apply path against a not-yet-created structure) */
+    const size_t cnt = *ml ? multilistCount(*ml) : 0;
+    if (cnt == 0) {
+        atomic_fetch_add_explicit(&mlPopIdentityAbsentNoopTotal, 1,
+                                  memory_order_relaxed);
+        return true;
+    }
+    multilistEntry end = {0};
+    if (multilistIndexGet(*ml, state, fromTail ? (mlOffsetId)(cnt - 1) : 0,
+                          &end) &&
+        databoxEqual(&end.box, want)) {
+        databox got;
+        return multilistPop(ml, state, &got, fromTail);
+    }
+    /* Not at the popping end — search FROM that end and remove by
+     * identity.  The iterator wants two scratch states; the replay
+     * thread-local provides one, borrow a temporary for the second
+     * (the ROTATE arm's idiom). */
+    mflexState *tmp = mflexStateCreate();
+    if (!tmp) {
+        return false;
+    }
+    mflexState *pair[2] = {state, tmp};
+    multilistIterator iter = {0};
+    bool removed = false;
+    if (fromTail) {
+        multilistIteratorInitReverse(*ml, pair, &iter);
+    } else {
+        multilistIteratorInitForward(*ml, pair, &iter);
+    }
+    multilistEntry entry = {0};
+    while (multilistNext(&iter, &entry)) {
+        if (databoxEqual(&entry.box, want)) {
+            multilistDelEntry(&iter, &entry);
+            removed = true;
+            break;
+        }
+    }
+
+    /* Deletions on a compressed node land in the shared scratch buffer
+     * and only reach the node itself when the iterator is released;
+     * skipping this drops the removal and leaves the node pointer
+     * stale after a reallocating delete. */
+    multilistIteratorRelease(&iter);
+    mflexStateFree(tmp);
+    atomic_fetch_add_explicit(removed ? &mlPopIdentityDeepRemoveTotal
+                                      : &mlPopIdentityAbsentNoopTotal,
+                              1, memory_order_relaxed);
+    /* Absent = already applied: an idempotent no-op, never an
+     * error — failing the apply here would wedge replay on exactly
+     * the duplicate this arm exists to absorb. */
+    return true;
+}
+
 static bool multilistPersistApplyOp(void *structure, persistOp op,
                                     const uint8_t *data, size_t len) {
     multilist **ml = structure;
@@ -2929,14 +3246,31 @@ static bool multilistPersistApplyOp(void *structure, persistOp op,
         return true;
     }
 
-    case PERSIST_OP_POP_HEAD: {
-        databox got;
-        return multilistPop(ml, state, &got, false);
-    }
-
+    case PERSIST_OP_POP_HEAD:
     case PERSIST_OP_POP_TAIL: {
+        const bool fromTail = (op == PERSIST_OP_POP_TAIL);
+        databox want;
+        if (data && len && flexGetSingleDatabox(data, len, &want)) {
+            return multilistApplyPopIdentity(ml, state, &want, fromTail);
+        }
+        /* Operand-less pop folding onto an EMPTY list is a counted
+         * no-op, never a rejection — mirroring the identity arm's
+         * absent-is-no-op rule above and the live drain's own
+         * tolerance.  The cross-shard move coordinator submits its
+         * COMMIT-remove pop BEFORE the drain learns whether the src
+         * has an element (durability-first ordering), so a
+         * nil-returning racing pop legitimately deposits a durable
+         * pop row that found nothing; the executor already concluded
+         * "nothing popped" when it wrote the verdict.  Rejecting the
+         * row here made the canonical fold DISAGREE with live
+         * semantics and permanently wedged the key: watermark held,
+         * every subsequent WAL-merged read of the key failing
+         * forever. */
+        if (!*ml || multilistCount(*ml) == 0) {
+            return true;
+        }
         databox got;
-        return multilistPop(ml, state, &got, true);
+        return multilistPop(ml, state, &got, fromTail);
     }
 
     case PERSIST_OP_DELETE_AT: {
@@ -2955,8 +3289,8 @@ static bool multilistPersistApplyOp(void *structure, persistOp op,
         if (!flexGetTwoDataboxes(data, len, &headBox, &tailBox)) {
             return false;
         }
-        const int64_t headCut = (int64_t) headBox.data.u;
-        const int64_t tailCut = (int64_t) tailBox.data.u;
+        const int64_t headCut = (int64_t)headBox.data.u;
+        const int64_t tailCut = (int64_t)tailBox.data.u;
         if (headCut > 0) {
             multilistDelRange(ml, state, 0, headCut);
         }
@@ -2979,7 +3313,7 @@ static bool multilistPersistApplyOp(void *structure, persistOp op,
             if (!tmp) {
                 return false;
             }
-            mflexState *pair[2] = { state, tmp };
+            mflexState *pair[2] = {state, tmp};
             multilistRotate(*ml, pair);
             mflexStateFree(tmp);
         }
@@ -6495,6 +6829,12 @@ int persistTest(int argc, char *argv[]) {
     }
 
     TEST("FUZZ: concurrent-like WAL and snapshot operations") {
+        /* Coherent apply+log semantics: every op both mutates the
+         * structure and is logged, so a snapshot always reflects
+         * exactly the ops logged before it. This is the invariant the
+         * snapshot walSequence watermark relies on - ops already folded
+         * into a snapshot (all below its watermark) must NOT be
+         * replayed again, and ops logged after it must be. */
         multilist *ml = multilistNew(FLEX_CAP_LEVEL_512, 0);
         mflexState *state = mflexStateCreate();
 
@@ -6504,43 +6844,109 @@ int persistTest(int argc, char *argv[]) {
         persistAttachSnapshot(p, snapStore);
         persistAttachWAL(p, walStore);
 
-        /* Simulate interleaved operations */
-        uint32_t seed = 44444;
-
+        int64_t nextVal = 0;
         for (int phase = 0; phase < 5; phase++) {
-            /* Add to structure and snapshot */
             for (int i = 0; i < 20; i++) {
-                databox box = DATABOX_SIGNED(phase * 100 + i);
+                databox box = DATABOX_SIGNED(nextVal++);
                 multilistPushByTypeTail(&ml, state, &box);
-            }
-            persistSnapshot(p, ml);
-
-            /* Log more operations to WAL */
-            for (int i = 0; i < 10; i++) {
-                seed = seed * 1103515245 + 12345;
-                databox box = DATABOX_SIGNED((int64_t)seed);
                 persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box, 1);
             }
+            /* Snapshot the up-to-date structure: it includes every op
+             * logged so far, and the WAL (never truncated here) still
+             * holds them all. */
+            persistSnapshot(p, ml);
             persistSync(p);
         }
 
-        /* Final recovery should have all data */
+        /* 100 ops folded into the final snapshot, all still present in
+         * the WAL below the snapshot watermark - replay must skip every
+         * one (no double-apply) and recover exactly 100. */
         multilist *recovered = persistRecover(p);
         if (!recovered) {
             ERRR("Interleaved ops recovery failed");
         }
-
-        /* Note: Each snapshot replaces previous, but WAL accumulates.
-         * We have: last snapshot (100 elements) + all WAL ops (5*10=50) */
-        if (multilistCount(recovered) != 150) {
-            ERR("Interleaved: expected 150, got %zu",
+        if (multilistCount(recovered) != 100) {
+            ERR("Snapshot-included ops double-applied: expected 100, got %zu",
                 multilistCount(recovered));
+        }
+        multilistFree(recovered);
+
+        /* Log 10 more ops AFTER the last snapshot; these sit above the
+         * watermark and must be replayed on top of it. */
+        for (int i = 0; i < 10; i++) {
+            databox box = DATABOX_SIGNED(nextVal++);
+            multilistPushByTypeTail(&ml, state, &box);
+            persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box, 1);
+        }
+        persistSync(p);
+
+        multilist *recovered2 = persistRecover(p);
+        if (!recovered2) {
+            ERRR("Post-snapshot WAL recovery failed");
+        }
+        if (multilistCount(recovered2) != 110) {
+            ERR("Post-snapshot ops not replayed: expected 110, got %zu",
+                multilistCount(recovered2));
         }
 
         mflexStateFree(state);
         multilistFree(ml);
-        multilistFree(recovered);
+        multilistFree(recovered2);
         persistClose(p);
+    }
+
+    TEST("durability: atomic snapshot publish leaves no torn temp file") {
+        const char *snapPath = "/tmp/dk_persist_atomic_test.snap";
+        const char *walPath = "/tmp/dk_persist_atomic_test.wal";
+        char tmpPath[256];
+        snprintf(tmpPath, sizeof(tmpPath), "%s.tmp", snapPath);
+        unlink(snapPath);
+        unlink(walPath);
+        unlink(tmpPath);
+
+        multilist *ml = multilistNew(FLEX_CAP_LEVEL_512, 0);
+        mflexState *state = mflexStateCreate();
+
+        persist *p = persistCreate(&persistOpsMultilist, NULL);
+        persistAttachSnapshot(p, persistStoreFile(snapPath, true));
+        persistAttachWAL(p, persistStoreFile(walPath, true));
+
+        for (int i = 0; i < 50; i++) {
+            databox box = DATABOX_SIGNED(i);
+            multilistPushByTypeTail(&ml, state, &box);
+            persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box, 1);
+        }
+        if (!persistSnapshot(p, ml)) {
+            ERRR("File-backed snapshot failed");
+        }
+
+        /* The atomic publish must have renamed its temp over the live
+         * file and left nothing torn behind. */
+        if (access(tmpPath, F_OK) == 0) {
+            ERRR("Atomic publish left a temp snapshot file behind");
+        }
+        if (access(snapPath, F_OK) != 0) {
+            ERRR("Published snapshot file is missing");
+        }
+
+        /* Recover: the snapshot holds all 50 ops and the un-truncated
+         * WAL holds them below the watermark, so replay must skip them
+         * and recover exactly 50 (crash-consistent, no double-apply). */
+        multilist *recovered = persistRecover(p);
+        if (!recovered || multilistCount(recovered) != 50) {
+            ERR("File-backed recovery wrong: got %zu",
+                recovered ? multilistCount(recovered) : 0);
+        }
+
+        mflexStateFree(state);
+        multilistFree(ml);
+        if (recovered) {
+            multilistFree(recovered);
+        }
+        persistClose(p);
+        unlink(snapPath);
+        unlink(walPath);
+        unlink(tmpPath);
     }
 
     /* ============================================================

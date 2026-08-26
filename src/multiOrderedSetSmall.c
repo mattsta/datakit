@@ -790,13 +790,13 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
     TEST("multiOrderedSetSmall — add and lookup") {
         multiOrderedSetSmall *mos = multiOrderedSetSmallNew();
 
-        databox score1 = {.type = DATABOX_SIGNED_64, .data.i = 100};
+        databox score1 = databoxNewSigned(100);
         databox member1 = databoxNewBytesAllowEmbed("member1", 7);
 
-        databox score2 = {.type = DATABOX_SIGNED_64, .data.i = 50};
+        databox score2 = databoxNewSigned(50);
         databox member2 = databoxNewBytesAllowEmbed("member2", 7);
 
-        databox score3 = {.type = DATABOX_SIGNED_64, .data.i = 75};
+        databox score3 = databoxNewSigned(75);
         databox member3 = databoxNewBytesAllowEmbed("member3", 7);
 
         /* Add entries */
@@ -863,13 +863,13 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
     TEST("multiOrderedSetSmall — update score") {
         multiOrderedSetSmall *mos = multiOrderedSetSmallNew();
 
-        databox score1 = {.type = DATABOX_SIGNED_64, .data.i = 100};
+        databox score1 = databoxNewSigned(100);
         databox member1 = databoxNewBytesAllowEmbed("member1", 7);
 
         multiOrderedSetSmallAdd(mos, &score1, &member1);
 
         /* Update to new score */
-        databox newScore = {.type = DATABOX_SIGNED_64, .data.i = 200};
+        databox newScore = databoxNewSigned(200);
         if (!multiOrderedSetSmallAdd(mos, &newScore, &member1)) {
             ERRR("Update should return true (existed)");
         }
@@ -890,10 +890,10 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
     TEST("multiOrderedSetSmall — remove") {
         multiOrderedSetSmall *mos = multiOrderedSetSmallNew();
 
-        databox score1 = {.type = DATABOX_SIGNED_64, .data.i = 100};
+        databox score1 = databoxNewSigned(100);
         databox member1 = databoxNewBytesAllowEmbed("member1", 7);
 
-        databox score2 = {.type = DATABOX_SIGNED_64, .data.i = 200};
+        databox score2 = databoxNewSigned(200);
         databox member2 = databoxNewBytesAllowEmbed("member2", 7);
 
         multiOrderedSetSmallAdd(mos, &score1, &member1);
@@ -922,7 +922,7 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
         multiOrderedSetSmall *mos = multiOrderedSetSmallNew();
 
         for (int i = 0; i < 5; i++) {
-            databox score = {.type = DATABOX_SIGNED_64, .data.i = i * 10};
+            databox score = databoxNewSigned(i * 10);
             char buf[16];
             snprintf(buf, sizeof(buf), "m%d", i);
             databox member = databoxNewBytesAllowEmbed(buf, strlen(buf));
@@ -970,7 +970,7 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
         multiOrderedSetSmall *mos = multiOrderedSetSmallNew();
 
         for (int i = 0; i < 5; i++) {
-            databox score = {.type = DATABOX_SIGNED_64, .data.i = i * 10};
+            databox score = databoxNewSigned(i * 10);
             char buf[16];
             snprintf(buf, sizeof(buf), "m%d", i);
             databox member = databoxNewBytesAllowEmbed(buf, strlen(buf));
@@ -1001,7 +1001,7 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
     TEST("multiOrderedSetSmall — copy") {
         multiOrderedSetSmall *mos = multiOrderedSetSmallNew();
 
-        databox score = {.type = DATABOX_SIGNED_64, .data.i = 42};
+        databox score = databoxNewSigned(42);
         databox member = databoxNewBytesAllowEmbed("test", 4);
         multiOrderedSetSmallAdd(mos, &score, &member);
 
@@ -1016,7 +1016,7 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
         }
 
         /* Modify original */
-        databox newScore = {.type = DATABOX_SIGNED_64, .data.i = 100};
+        databox newScore = databoxNewSigned(100);
         multiOrderedSetSmallAdd(mos, &newScore, &member);
 
         /* Copy should be unchanged */

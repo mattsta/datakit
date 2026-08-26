@@ -152,8 +152,11 @@ static void multilistUpgradeIfNecessary(multilist **m, mflexState *state,
         if (multilistSmallBytes(small) > flexOptimizationSizeLimit[limit]) {
             multilistMedium *medium =
                 multilistMediumNewFromFlexConsumeGrow(small, small->fl);
+            /* Tag the metadata-carrying pointer (*m holds the
+             * depth/limit top bits; tagging the raw pointer would
+             * discard them and break the Medium->Full threshold) */
             *m = SET_COMPRESS_DEPTH_LIMIT(medium, depth, limit);
-            *m = _MULTILIST_TAG(medium, MULTILIST_TYPE_MEDIUM);
+            *m = _MULTILIST_TAG(*m, MULTILIST_TYPE_MEDIUM);
         }
     } else if (type == MULTILIST_TYPE_MEDIUM) {
         multilistMedium *medium = mlm(*m);
@@ -162,7 +165,8 @@ static void multilistUpgradeIfNecessary(multilist **m, mflexState *state,
             flex *f[2] = {medium->fl[0], medium->fl[1]};
             multilistFull *full = multilistFullNewFromFlexConsumeGrow(
                 medium, state, f, 2, depth, limit);
-            *m = _MULTILIST_TAG(full, MULTILIST_TYPE_FULL);
+            *m = SET_COMPRESS_DEPTH_LIMIT(full, depth, limit);
+            *m = _MULTILIST_TAG(*m, MULTILIST_TYPE_FULL);
         }
     } /* else, is FULL and no grow necessary. */
 }
@@ -295,6 +299,7 @@ void multilistRotate(multilist *m, mflexState *state[2]) {
 
 #include "str.h" /* for StrInt64ToBuf */
 #include "timeUtil.h"
+#include <inttypes.h>
 
 #include "ctest.h"
 
@@ -1107,8 +1112,7 @@ int multilistTest(int argc, char *argv[]) {
             int64_t nums[5000];
             for (int i = 0; i < 5000; i++) {
                 nums[i] = -5157318210846258176 + i;
-                const databox pushBox = {.data.i64 = nums[i],
-                                         .type = DATABOX_SIGNED_64};
+                const databox pushBox = databoxNewSigned(nums[i]);
                 multilistPushByTypeTail(&ml, s0, &pushBox);
             }
 
@@ -1306,8 +1310,7 @@ int multilistTest(int argc, char *argv[]) {
                 int64_t nums[5000];
                 for (int i = 0; i < 760; i++) {
                     nums[i] = -5157318210846258176 + i;
-                    const databox pushBox = {.data.i64 = nums[i],
-                                             .type = DATABOX_SIGNED_64};
+                    const databox pushBox = databoxNewSigned(nums[i]);
                     multilistPushByTypeTail(&ml, s0, &pushBox);
                 }
 
@@ -2178,6 +2181,270 @@ int multilistTest(int argc, char *argv[]) {
     }
 
     printf("\n=== All multilist fuzz tests completed! ===\n\n");
+
+    TEST("DelRange span sweep vs shadow array (all tiers)") {
+        /* Shadow-verified DelRange over every (start,count) combo on a
+         * list sized with ~100-byte payloads so growth crosses the
+         * Small->Medium->Full tiers; catches per-flex split math bugs
+         * (Medium's mid-F0 spans silently deleted the wrong elements) */
+        char payload[128];
+        int32_t sweepFailures = 0;
+        bool sawMedium = false;
+
+        for (int32_t n = 20; n <= 60 && sweepFailures == 0; n += 20) {
+            for (int32_t delStart = 0; delStart < n && sweepFailures == 0;
+                 delStart += 3) {
+                for (int32_t del = 1; del <= n - delStart && sweepFailures == 0;
+                     del += 5) {
+                    /* 2048-byte cap: ~110B payloads put n=20..60 right
+                     * across the Small->Medium->Full transitions */
+                    multilist *ml = multilistNew(FLEX_CAP_LEVEL_2048, 2);
+
+                    for (int32_t i = 0; i < n; i++) {
+                        snprintf(payload, sizeof(payload),
+                                 "element-%04d-"
+                                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                                 "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                                 i);
+                        const databox box = databoxNewBytesString(payload);
+                        multilistPushByTypeTail(&ml, s0, &box);
+                    }
+
+                    if (_multilistType(ml) == MULTILIST_TYPE_MEDIUM) {
+                        sawMedium = true;
+                    }
+
+                    multilistDelRange(&ml, s0, delStart, del);
+
+                    /* Survivors: [0,delStart) then [delStart+del, n) */
+                    const int32_t expected = n - del;
+                    bool bad = false;
+                    if ((int32_t)multilistCount(ml) != expected) {
+                        bad = true;
+                    }
+
+                    for (int32_t i = 0; !bad && i < expected; i++) {
+                        const int32_t orig = i < delStart ? i : i + del;
+                        snprintf(payload, sizeof(payload),
+                                 "element-%04d-"
+                                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                                 "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                                 orig);
+                        multilistEntry entry = {0};
+                        if (!multilistIndexGet(ml, s0, i, &entry) ||
+                            entry.box.len != strlen(payload) ||
+                            memcmp(entry.box.data.bytes.start, payload,
+                                   entry.box.len) != 0) {
+                            bad = true;
+                        }
+                    }
+
+                    if (bad) {
+                        ERR("DelRange(n=%d, start=%d, del=%d) corrupted "
+                            "survivors",
+                            n, delStart, del);
+                        sweepFailures++;
+                    }
+
+                    multilistFree(ml);
+                }
+            }
+        }
+
+        if (!sawMedium) {
+            ERRR("Sweep never reached Medium tier - sizing is wrong");
+        }
+    }
+
+    TEST("FUZZ/SOAK: differential ops vs shadow model across tiers") {
+        /* Deterministic random op soak: push head/tail, DelRange, and
+         * Duplicate against a flat shadow array, verifying full list
+         * contents periodically. Payload sizes chosen so lists wander
+         * across Small/Medium/Full; tier coverage is asserted so the
+         * harness can never silently regress into single-tier testing. */
+        uint64_t rng = 0x9E3779B97F4A7C15ULL;
+#define FUZZ_NEXT() (rng ^= rng << 13, rng ^= rng >> 7, rng ^= rng << 17, rng)
+        enum { SHADOW_MAX = 512 };
+        static int64_t shadow[SHADOW_MAX];
+        int32_t shadowCount = 0;
+        int64_t nextId = 0;
+        char payload[96];
+        bool tierSeen[4] = {false, false, false, false};
+        int32_t soakFailures = 0;
+        int32_t soakMaxCount = 0;
+
+#define FUZZ_PAYLOAD(id)                                                       \
+    snprintf(payload, sizeof(payload),                                         \
+             "id-%08" PRId64                                                   \
+             "-pppppppppppppppppppppppppppppppppppppppppppppppp",              \
+             (int64_t)(id))
+
+        const uint32_t wantLimit = FLEX_CAP_LEVEL_2048;
+        const uint32_t wantDepth = 2;
+        multilist *ml = multilistNew(wantLimit, wantDepth);
+
+        for (int32_t op = 0; op < 20000 && soakFailures == 0; op++) {
+            const uint64_t roll = FUZZ_NEXT() % 100;
+
+            if (roll < 45 && shadowCount < SHADOW_MAX) {
+                /* push tail */
+                FUZZ_PAYLOAD(nextId);
+                const databox box = databoxNewBytesString(payload);
+                multilistPushByTypeTail(&ml, s0, &box);
+                shadow[shadowCount++] = nextId++;
+            } else if (roll < 70 && shadowCount < SHADOW_MAX) {
+                /* push head */
+                FUZZ_PAYLOAD(nextId);
+                const databox box = databoxNewBytesString(payload);
+                multilistPushByTypeHead(&ml, s0, &box);
+                memmove(shadow + 1, shadow,
+                        (size_t)shadowCount * sizeof(*shadow));
+                shadow[0] = nextId++;
+                shadowCount++;
+            } else if (roll < 90 && shadowCount > 0) {
+                /* DelRange at random start/len */
+                const int32_t dStart = (int32_t)(FUZZ_NEXT() % shadowCount);
+                int32_t maxDel = shadowCount - dStart;
+                /* Cap spans so pushes outpace deletes on average and
+                 * the population climbs through Medium into Full
+                 * (uncapped spans held equilibrium below the Full
+                 * threshold and the tier assert caught it) */
+                if (maxDel > 3) {
+                    maxDel = 3;
+                }
+                const int32_t del = 1 + (int32_t)(FUZZ_NEXT() % maxDel);
+                multilistDelRange(&ml, s0, dStart, del);
+                memmove(shadow + dStart, shadow + dStart + del,
+                        (size_t)(shadowCount - dStart - del) * sizeof(*shadow));
+                shadowCount -= del;
+            } else if (roll < 96 && shadowCount > 0) {
+                /* pop head or tail */
+                const bool fromTail = (FUZZ_NEXT() & 1) != 0;
+                databox popped = {{0}};
+                if (!multilistPop(&ml, s0, &popped, fromTail)) {
+                    ERR("op %d: pop(%d) failed with %d elements", op,
+                        (int)fromTail, shadowCount);
+                    soakFailures++;
+                } else {
+                    const int64_t wantId =
+                        fromTail ? shadow[shadowCount - 1] : shadow[0];
+                    FUZZ_PAYLOAD(wantId);
+                    if (popped.len != strlen(payload) ||
+                        memcmp(popped.data.bytes.start, payload, popped.len) !=
+                            0) {
+                        ERR("op %d: pop(%d) wrong element (want id %" PRId64
+                            ")",
+                            op, (int)fromTail, wantId);
+                        soakFailures++;
+                    }
+                    databoxFreeData(&popped);
+                    if (!fromTail) {
+                        memmove(shadow, shadow + 1,
+                                (size_t)(shadowCount - 1) * sizeof(*shadow));
+                    }
+                    shadowCount--;
+                }
+            } else {
+                /* duplicate + free (leak/aliasing exercise); contents
+                 * must match the shadow element-for-element, not just
+                 * by count */
+                multilist *dup = multilistDuplicate(ml);
+                if ((int32_t)multilistCount(dup) != shadowCount) {
+                    ERR("op %d: duplicate count %zu != shadow %d", op,
+                        multilistCount(dup), shadowCount);
+                    soakFailures++;
+                }
+                for (int32_t i = 0; i < shadowCount && soakFailures == 0; i++) {
+                    FUZZ_PAYLOAD(shadow[i]);
+                    multilistEntry entry = {0};
+                    if (!multilistIndexGet(dup, s0, i, &entry) ||
+                        entry.box.len != strlen(payload) ||
+                        memcmp(entry.box.data.bytes.start, payload,
+                               entry.box.len) != 0) {
+                        ERR("op %d: duplicate element %d mismatch "
+                            "(want id %" PRId64 ")",
+                            op, i, shadow[i]);
+                        soakFailures++;
+                    }
+                }
+                multilistFree(dup);
+            }
+
+            tierSeen[_multilistType(ml)] = true;
+            if (shadowCount > soakMaxCount) {
+                soakMaxCount = shadowCount;
+            }
+
+            /* Compression metadata rides the tagged pointer's top bits
+             * and must survive every tier promotion */
+            if (COMPRESS_DEPTH(ml) != wantDepth ||
+                COMPRESS_LIMIT(ml) != wantLimit) {
+                ERR("op %d: compress metadata lost (depth %u limit %u, "
+                    "want %u/%u, tier %d)",
+                    op, (unsigned)COMPRESS_DEPTH(ml),
+                    (unsigned)COMPRESS_LIMIT(ml), (unsigned)wantDepth,
+                    (unsigned)wantLimit, (int)_multilistType(ml));
+                soakFailures++;
+            }
+
+            /* Per-op count check plus the Medium structural invariant
+             * (F0 nonempty whenever the list is nonempty) so the op
+             * that breaks state is named, not a later victim op */
+            if ((int32_t)multilistCount(ml) != shadowCount) {
+                ERR("op %d roll %d: count %zu != shadow %d", op, (int)roll,
+                    multilistCount(ml), shadowCount);
+                soakFailures++;
+            }
+            if (_multilistType(ml) == MULTILIST_TYPE_MEDIUM) {
+                multilistMedium *mm = mlm(ml);
+                if (flexCount(mm->fl[0]) == 0 && flexCount(mm->fl[1]) > 0) {
+                    ERR("op %d roll %d: Medium invariant broken "
+                        "(F0 empty, F1 has %zu)",
+                        op, (int)roll, flexCount(mm->fl[1]));
+                    soakFailures++;
+                }
+            }
+
+            /* Full-content verification every 250 ops and near tier
+             * boundaries (cheap enough at this scale) */
+            if (op % 250 == 0 || soakFailures) {
+                if ((int32_t)multilistCount(ml) != shadowCount) {
+                    ERR("op %d: count %zu != shadow %d", op, multilistCount(ml),
+                        shadowCount);
+                    soakFailures++;
+                }
+                for (int32_t i = 0; i < shadowCount && soakFailures == 0; i++) {
+                    FUZZ_PAYLOAD(shadow[i]);
+                    multilistEntry entry = {0};
+                    if (!multilistIndexGet(ml, s0, i, &entry) ||
+                        entry.box.len != strlen(payload) ||
+                        memcmp(entry.box.data.bytes.start, payload,
+                               entry.box.len) != 0) {
+                        ERR("op %d: element %d mismatch (want id %" PRId64 ")",
+                            op, i, shadow[i]);
+                        soakFailures++;
+                    }
+                }
+            }
+        }
+
+        printf("    soak: maxCount=%d finalCount=%d finalTier=%d "
+               "finalBytes=%zu limit=%u\n",
+               soakMaxCount, shadowCount, (int)_multilistType(ml),
+               multilistBytes(ml), (unsigned)COMPRESS_LIMIT(ml));
+
+        if (!tierSeen[MULTILIST_TYPE_SMALL] ||
+            !tierSeen[MULTILIST_TYPE_MEDIUM] ||
+            !tierSeen[MULTILIST_TYPE_FULL]) {
+            ERR("Soak tier coverage incomplete: small=%d medium=%d full=%d",
+                tierSeen[MULTILIST_TYPE_SMALL], tierSeen[MULTILIST_TYPE_MEDIUM],
+                tierSeen[MULTILIST_TYPE_FULL]);
+        }
+
+        multilistFree(ml);
+#undef FUZZ_PAYLOAD
+#undef FUZZ_NEXT
+    }
 
     mflexStateFree(s0);
     mflexStateFree(s1);

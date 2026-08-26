@@ -108,17 +108,19 @@ int main(int argc, char *argv[]) {
     /* Check if output file is specified */
     if (optind < argc) {
         if ((ofp = fopen(argv[optind], "wt")) == NULL) {
-            fprintf(stderr, "Error:  Unable to open output file for writing.\n"
-                            " - Filename: %s\n"
-                            " - Error:    %s\n",
+            fprintf(stderr,
+                    "Error:  Unable to open output file for writing.\n"
+                    " - Filename: %s\n"
+                    " - Error:    %s\n",
                     argv[optind], strerror(errno));
             return 1;
         }
     }
 
     if ((res = rsa_key_init(&the_key)) != MP_OK) {
-        fprintf(stderr, "Error initializing RSA key structure:\n"
-                        " - %s (%d)\n",
+        fprintf(stderr,
+                "Error initializing RSA key structure:\n"
+                " - %s (%d)\n",
                 mp_error_string(res), res);
         return 1;
     }
@@ -126,16 +128,18 @@ int main(int argc, char *argv[]) {
     /* If specified, try to load the key exponent */
     if (expt != NULL) {
         if ((res = mp_int_read_string(&(the_key.e), 10, expt)) != MP_OK) {
-            fprintf(stderr, "Error:  Invalid value for encryption exponent.\n"
-                            " - %s (%d)\n",
+            fprintf(stderr,
+                    "Error:  Invalid value for encryption exponent.\n"
+                    " - %s (%d)\n",
                     mp_error_string(res), res);
             goto EXIT;
         }
     }
 
     if ((res = mp_int_randomize(&(the_key.p), (modbits / 2))) != MP_OK) {
-        fprintf(stderr, "Error:  Unable to randomize first prime.\n"
-                        " - %s (%d)\n",
+        fprintf(stderr,
+                "Error:  Unable to randomize first prime.\n"
+                " - %s (%d)\n",
                 mp_error_string(res), res);
         goto EXIT;
     }
@@ -144,8 +148,9 @@ int main(int argc, char *argv[]) {
     find_prime(&(the_key.p), stderr);
 
     if ((res = mp_int_randomize(&(the_key.q), (modbits / 2))) != MP_OK) {
-        fprintf(stderr, "Error:  Unable to randomize second prime.\n"
-                        " - %s (%d)\n",
+        fprintf(stderr,
+                "Error:  Unable to randomize second prime.\n"
+                " - %s (%d)\n",
                 mp_error_string(res), res);
         goto EXIT;
     }
@@ -164,8 +169,9 @@ int main(int argc, char *argv[]) {
 
     if (expt == NULL &&
         (res = mp_int_randomize(&(the_key.e), (modbits / 2))) != MP_OK) {
-        fprintf(stderr, "Error:  Unable to randomize encryption exponent.\n"
-                        " - %s (%d)\n",
+        fprintf(stderr,
+                "Error:  Unable to randomize encryption exponent.\n"
+                " - %s (%d)\n",
                 mp_error_string(res), res);
         goto EXIT;
     }
@@ -173,8 +179,9 @@ int main(int argc, char *argv[]) {
     while ((res = mp_int_invmod(&(the_key.e), &(the_key.n), &(the_key.d))) !=
            MP_OK) {
         if (expt != NULL) {
-            fprintf(stderr, "Error:  Unable to compute decryption exponent.\n"
-                            " - %s (%d)\n",
+            fprintf(stderr,
+                    "Error:  Unable to compute decryption exponent.\n"
+                    " - %s (%d)\n",
                     mp_error_string(res), res);
             goto EXIT;
         }

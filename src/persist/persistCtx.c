@@ -202,14 +202,21 @@ bool persistCtxLogOp(persistCtx *ctx, persistOp op, const void *args,
     ctx->opsSinceCompact++;
     ctx->totalOps++;
 
-    /* Handle sync policy */
+    /* Handle sync policy. These modes exist to promise durability, so a
+     * failed fsync must surface as a failed op rather than a silent
+     * durability lie - the entry is in the WAL but not yet on stable
+     * storage, and the caller needs to know that. */
     if (ctx->config.syncMode == PERSIST_CTX_SYNC_ALWAYS) {
-        persistSync(ctx->p);
+        if (!persistSync(ctx->p)) {
+            return false;
+        }
         ctx->totalSyncs++;
     } else if (ctx->config.syncMode == PERSIST_CTX_SYNC_EVERYSEC) {
         uint64_t now = getTimeMicroseconds();
         if (now - ctx->lastSyncTime >= 1000000) { /* 1 second */
-            persistSync(ctx->p);
+            if (!persistSync(ctx->p)) {
+                return false;
+            }
             ctx->lastSyncTime = now;
             ctx->totalSyncs++;
         }
@@ -248,6 +255,27 @@ bool persistCtxMaybeCompact(persistCtx *ctx, void *structure,
     return true;
 }
 
+bool persistCtxSyncIfDue(persistCtx *ctx) {
+    if (!ctx || !ctx->p) {
+        return false;
+    }
+
+    if (ctx->config.syncMode != PERSIST_CTX_SYNC_EVERYSEC) {
+        return true;
+    }
+
+    const uint64_t now = getTimeMicroseconds();
+    if (now - ctx->lastSyncTime >= 1000000) {
+        if (!persistSync(ctx->p)) {
+            return false;
+        }
+        ctx->lastSyncTime = now;
+        ctx->totalSyncs++;
+    }
+
+    return true;
+}
+
 bool persistCtxSync(persistCtx *ctx) {
     if (!ctx || !ctx->p) {
         return false;
@@ -271,7 +299,6 @@ bool persistCtxCompact(persistCtx *ctx, void *structure,
 
     if (persistCompact(ctx->p, structure)) {
         ctx->opsSinceCompact = 0;
-        ctx->bytesSinceCompact = 0;
         ctx->totalCompactions++;
         return true;
     }
@@ -306,6 +333,20 @@ bool persistCtxExists(const char *basePath) {
     char *snapPath = makeSnapshotPath(basePath);
     bool exists = (access(snapPath, F_OK) == 0);
     zfree(snapPath);
+
+    if (!exists) {
+        /* An orphaned WAL (log present, snapshot missing) means data
+         * exists but the Open paths will treat it as absent - surface
+         * the condition instead of silently losing the log */
+        char *walPath = makeWalPath(basePath);
+        if (access(walPath, F_OK) == 0) {
+            fprintf(stderr,
+                    "persistCtx: WAL exists without snapshot at %s.wal - "
+                    "recovery will ignore it\n",
+                    basePath);
+        }
+        zfree(walPath);
+    }
 
     return exists;
 }
@@ -345,13 +386,16 @@ void persistCtxGetStats(const persistCtx *ctx, persistCtxStats *stats) {
     stats->totalSyncs = ctx->totalSyncs;
     stats->totalCompactions = ctx->totalCompactions;
     stats->opsSinceCompact = ctx->opsSinceCompact;
-    stats->bytesSinceCompact = ctx->bytesSinceCompact;
 
     if (ctx->p) {
         persistStats pstats;
         persistGetStats(ctx->p, &pstats);
         stats->snapshotBytes = pstats.snapshotBytes;
         stats->walBytes = pstats.walBytes;
+        /* Compaction starts a fresh WAL, so the live WAL size IS the
+         * bytes accumulated since the last compaction (the byte-based
+         * compaction trigger uses the same measure) */
+        stats->bytesSinceCompact = pstats.walBytes;
     }
 }
 

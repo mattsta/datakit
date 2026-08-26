@@ -22,14 +22,11 @@ size_t fibbufNextSizeBuffer(const size_t currentBufSize) {
     }
 
     /* On 32 bit systems we can't use fibbufNextBuffer64.
-     * Also use 32-bit path for values below the first 64-bit fib,
-     * allowing 20% growth fallback for values between last 32-bit fib
-     * (2971215073) and first 64-bit fib (4807526976).
-     * IMPORTANT: Don't use 32-bit path for values > UINT32_MAX to avoid
-     * truncation when casting to uint32_t parameter. */
-    if ((currentBufSize < 4807526976 && currentBufSize <= UINT32_MAX) ||
-        sizeof(void *) == 4) {
-        return fibbufNextBuffer32(currentBufSize);
+     * 3579139413 is the largest size whose 20% growth still fits in
+     * uint32_t; anything bigger must take the 64-bit tier so growth is
+     * real rather than clamped. */
+    if ((currentBufSize <= 3579139413ULL) || sizeof(void *) == 4) {
+        return fibbufNextBuffer32((uint32_t)currentBufSize);
     }
 
     return fibbufNextBuffer64(currentBufSize);
@@ -72,9 +69,16 @@ size_t fibbufNextSizeBuffer(const size_t currentBufSize) {
         }                                                                      \
                                                                                \
         /* The requested buffer size is beyond the extent of our               \
-         * fib array, so just increase requested buffer by 20%. */             \
-        /* Note: no check for overflow here, hence MOSTLY_SAFE. */             \
-        return currentBufSize * 1.2;                                           \
+         * fib array, so increase by 20%, computed wide and clamped to         \
+         * the tier range: a growth API must never return less than its        \
+         * input (truncated double math did exactly that). */                  \
+        const uint64_t grown_ =                                                \
+            (uint64_t)currentBufSize + ((uint64_t)currentBufSize / 5);         \
+        const __typeof__(currentBufSize) tierMax_ =                            \
+            (__typeof__(currentBufSize))~(__typeof__(currentBufSize))0;        \
+        return grown_ >= (uint64_t)tierMax_                                    \
+                   ? tierMax_                                                  \
+                   : (__typeof__(currentBufSize))grown_;                       \
     } while (0)
 
 static uint16_t fibbufNextBuffer16(const uint16_t currentBufSize) {
@@ -427,6 +431,30 @@ int fibbufTest(int argc, char *argv[]) {
                 (void)next;
             }
             TIME_FINISH(loopers, "perf 64 — 139583862445");
+        }
+    }
+
+    TEST("growth is monotone at every tier boundary and beyond") {
+        /* A growth API must return > input everywhere below the
+         * saturation clamp; the 32-bit tier's truncating fallback
+         * returned ~505MB for a 4.0GB input */
+        const size_t probes[] = {
+            46367,         46368,         46369,
+            2971215072ULL, 2971215073ULL, 3579139413ULL,
+            4000000000ULL, 4807526976ULL, 1548008755920ULL,
+        };
+
+        for (size_t i = 0; i < sizeof(probes) / sizeof(probes[0]); i++) {
+            const size_t next = fibbufNextSizeBuffer(probes[i]);
+            if (next <= probes[i]) {
+                ERR("growth(%zu) = %zu is not larger", probes[i], next);
+            }
+        }
+
+        /* Specific regression: 4.0GB routes to the 64-bit tier */
+        if (fibbufNextSizeBuffer(4000000000ULL) != 4807526976ULL) {
+            ERR("4.0GB should grow to first 64-bit fib, got %zu",
+                fibbufNextSizeBuffer(4000000000ULL));
         }
     }
 

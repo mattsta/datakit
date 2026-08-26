@@ -234,8 +234,7 @@ DK_STATIC uint16_t insertPositionalNumber(multiroar *r, const databox *key,
         multimapResizeEntry(&r->map, me, value->len + grow);
 
         /* Step 2a: Re-get value because the Resize could have moved it. */
-        databox *values[] = {value};
-        multimapLookup(r->map, key, values);
+        multimapLookupInto(r->map, key, value, 1);
 
         /* Bigger varint means the start of our packed array needs
          * to move down by exactly one byte. */
@@ -327,22 +326,26 @@ convertNegativePositionPackedArrayToBitmap(multiroar *r, const databox *key,
  * must be exactly BITMAP_SIZE_IN_BYTES long. */
 DK_STATIC uint16_t _bitmapToPositions(const void *bitmap, uint8_t positions[],
                                       const bool trackSetPositions) {
-    const unsigned long *data = bitmap;
-    const uint64_t lenAsLong = BITMAP_SIZE_IN_BYTES / (sizeof(unsigned long));
+    const uint8_t *data = bitmap;
+    const uint64_t lenAsWords = BITMAP_SIZE_IN_BYTES / sizeof(uint64_t);
     uint64_t idx = 0;
 
-    for (uint64_t i = 0; i < lenAsLong; i++) {
-        unsigned long myword = data[i];
+    for (uint64_t i = 0; i < lenAsWords; i++) {
+        /* memcpy load: 'bitmap' is a flex payload pointer with no
+         * alignment guarantee; a direct word deref is UB (and traps on
+         * strict-alignment targets).  Compiles to one load regardless. */
+        uint64_t myword;
+        memcpy(&myword, data + (i * sizeof(uint64_t)), sizeof(myword));
 
         if (!trackSetPositions) {
             myword = ~myword;
         }
 
         while (myword != 0) {
-            /* Work on this 4 or 8 byte quantity until we've
+            /* Work on this 8 byte quantity until we've
              * eaten all the set bits. */
-            const unsigned long unsetAfterCheck = myword & -myword;
-            const int r = __builtin_ctzl(myword);
+            const uint64_t unsetAfterCheck = myword & -myword;
+            const int r = __builtin_ctzll(myword);
             /* Note: we use 'Set' instead of 'InsertSorted' because
              *       the set positions are emitted in already sorted
              *       order (from low to high). */
@@ -453,8 +456,7 @@ bool multiroarBitSet(multiroar *r, uint64_t position) {
      *       If sparse inverse immediate value, if position exists, delete.
      *         If no remaining values, convert to ALL_SET type. */
 
-    const databox key = {.data.u = CHUNK(position),
-                         .type = DATABOX_UNSIGNED_64};
+    const databox key = databoxNewUnsigned(CHUNK(position));
     multimapEntry me;
     if (multimapGetUnderlyingEntry(r->map, &key, &me)) {
         databox value = {{0}};
@@ -576,61 +578,55 @@ bool multiroarBitSet(multiroar *r, uint64_t position) {
 /* ====================================================================
  * Get
  * ==================================================================== */
-bool multiroarBitGet(const multiroar *r, uint64_t position) {
-    /* Steps:
-     *   For position, lookup corresponding chunk.
-     *     If chunk doesn't exist, value is 0.
-     *     If exists, check encoding.
-     *       If sparse immediate value && values < cutoff, add new value.
-     *         If values == cutoff, convert to bitmap.
-     *       If bitmap, set bit.
-     *       If sparse inverse immediate value, if position exists, delete.
-     *         If no remaining values, convert to ALL_SET type. */
+/* Test one position against an already-looked-up chunk value */
+static bool chunkTestsBit(const databox *value, uint64_t position) {
+    switch (GET_CHUNK_TYPE(value)) {
+    case CHUNK_TYPE_ALL_1:
+        return true;
+    case CHUNK_TYPE_UNDER_FULL_DIRECT_POSITION_NUMBERS: {
+        D("Looking up direct (%" PRIu64 ", %" PRIu64 ")...\n",
+          (uint64_t)PACKED_COUNT_FROM_VALUE(value),
+          (uint64_t)DIRECT_BIT_POSITION(position));
+        if (varintPacked13Member(GET_CHUNK_PACKED_START(value),
+                                 PACKED_COUNT_FROM_VALUE(value),
+                                 DIRECT_BIT_POSITION(position)) >= 0) {
+            return true;
+        }
+        break;
+    }
+    case CHUNK_TYPE_FULL_BITMAP: {
+        D("Looking up bitmap...\n");
+        const uint64_t byteOffset =
+            BYTE_OFFSET(GLOBAL_POSITION_TO_CHUNK_POSITION(position));
+        const uint32_t bitOffset = BIT_OFFSET(position);
+        const uint8_t *bitmapStart = GET_CHUNK_BITMAP_START(value);
 
-    const databox key = {.data.u = CHUNK(position),
-                         .type = DATABOX_UNSIGNED_64};
+        return (bitmapStart[byteOffset] >> bitOffset) & 0x01;
+    }
+    case CHUNK_TYPE_OVER_FULL_DIRECT_NOT_SET_POSITION_NUMBERS: {
+        if (varintPacked13Member(GET_CHUNK_PACKED_START(value),
+                                 PACKED_COUNT_FROM_VALUE(value),
+                                 DIRECT_BIT_POSITION(position)) == -1) {
+            return true;
+        }
+        break;
+    }
+    default:
+        D("Type byte is: %d (WHY?)\n", GET_CHUNK_TYPE(value));
+        assert(NULL && "Invalid type byte in bitmap!");
+    }
+
+    return false;
+}
+
+bool multiroarBitGet(const multiroar *r, uint64_t position) {
+    /* For position, lookup corresponding chunk; missing chunk = 0. */
+    const databox key = databoxNewUnsigned(CHUNK(position));
     databox value;
-    databox *values[] = {&value};
     D("At CHUNK: %" PRIu64 " (%" PRIu64 " bytes)\n", CHUNK(position),
       multimapBytes(r->map));
-    if (multimapLookup(r->map, &key, values)) {
-        switch (GET_CHUNK_TYPE(&value)) {
-        case CHUNK_TYPE_ALL_1:
-            return true;
-            break;
-        case CHUNK_TYPE_UNDER_FULL_DIRECT_POSITION_NUMBERS: {
-            D("Looking up direct (%" PRIu64 ", %" PRIu64 ")...\n",
-              (uint64_t)PACKED_COUNT_FROM_VALUE(&value),
-              (uint64_t)DIRECT_BIT_POSITION(position));
-            if (varintPacked13Member(GET_CHUNK_PACKED_START(&value),
-                                     PACKED_COUNT_FROM_VALUE(&value),
-                                     DIRECT_BIT_POSITION(position)) >= 0) {
-                return true;
-            }
-            break;
-        }
-        case CHUNK_TYPE_FULL_BITMAP: {
-            D("Looking up bitmap...\n");
-            const uint64_t byteOffset =
-                BYTE_OFFSET(GLOBAL_POSITION_TO_CHUNK_POSITION(position));
-            const uint32_t bitOffset = BIT_OFFSET(position);
-            const uint8_t *bitmapStart = GET_CHUNK_BITMAP_START(&value);
-
-            return (bitmapStart[byteOffset] >> bitOffset) & 0x01;
-            break;
-        }
-        case CHUNK_TYPE_OVER_FULL_DIRECT_NOT_SET_POSITION_NUMBERS: {
-            if (varintPacked13Member(GET_CHUNK_PACKED_START(&value),
-                                     PACKED_COUNT_FROM_VALUE(&value),
-                                     DIRECT_BIT_POSITION(position)) == -1) {
-                return true;
-            }
-            break;
-        }
-        default:
-            D("Type byte is: %d (WHY?)\n", GET_CHUNK_TYPE(&value));
-            assert(NULL && "Invalid type byte in bitmap!");
-        }
+    if (multimapLookupInto(r->map, &key, &value, 1)) {
+        return chunkTestsBit(&value, position);
     }
 
     /* else, not found / not set */
@@ -642,8 +638,7 @@ bool multiroarBitGet(const multiroar *r, uint64_t position) {
  * ==================================================================== */
 bool multiroarRemove(multiroar *r, uint64_t position) {
     /* Clear a bit. Returns true if bit was previously set. */
-    const databox key = {.data.u = CHUNK(position),
-                         .type = DATABOX_UNSIGNED_64};
+    const databox key = databoxNewUnsigned(CHUNK(position));
     multimapEntry me;
 
     if (!multimapGetUnderlyingEntry(r->map, &key, &me)) {
@@ -790,9 +785,8 @@ uint64_t multiroarBitCount(const multiroar *r) {
     multimapIteratorInit(r->map, &iter, true);
 
     databox keyValue[2];
-    databox *kvPtr[2] = {&keyValue[0], &keyValue[1]};
 
-    while (multimapIteratorNext(&iter, kvPtr)) {
+    while (multimapIteratorNextInto(&iter, keyValue, 2)) {
         const databox *value = &keyValue[1];
 
         switch (GET_CHUNK_TYPE(value)) {
@@ -854,10 +848,13 @@ DK_STATIC void compressBitmapToChunk(multiroar *r, const databox *key,
 DK_STATIC uint64_t findFirstSetBitInBitmap(const uint8_t *bitmap,
                                            uint64_t bytes) {
     const uint64_t words = bytes / 8;
-    const uint64_t *w = (const uint64_t *)bitmap;
     for (uint64_t i = 0; i < words; i++) {
-        if (w[i] != 0) {
-            return i * 64 + (uint64_t)__builtin_ctzll(w[i]);
+        /* memcpy load: 'bitmap' may point into a flex payload with no
+         * alignment guarantee; a direct word deref is UB. */
+        uint64_t word;
+        memcpy(&word, bitmap + (i * 8), sizeof(word));
+        if (word != 0) {
+            return i * 64 + (uint64_t)__builtin_ctzll(word);
         }
     }
     for (uint64_t i = words * 8; i < bytes; i++) { /* tail bytes (if any) */
@@ -873,7 +870,6 @@ DK_STATIC uint64_t findFirstSetBitInBitmap(const uint8_t *bitmap,
 DK_STATIC uint64_t findLastSetBitInBitmap(const uint8_t *bitmap,
                                           uint64_t bytes) {
     const uint64_t words = bytes / 8;
-    const uint64_t *w = (const uint64_t *)bitmap;
     for (uint64_t i = bytes; i > words * 8; i--) {
         if (bitmap[i - 1] != 0) {
             return (i - 1) * 8 +
@@ -881,8 +877,12 @@ DK_STATIC uint64_t findLastSetBitInBitmap(const uint8_t *bitmap,
         }
     }
     for (uint64_t i = words; i > 0; i--) {
-        if (w[i - 1] != 0) {
-            return (i - 1) * 64 + (uint64_t)(63 - __builtin_clzll(w[i - 1]));
+        /* memcpy load: 'bitmap' may point into a flex payload with no
+         * alignment guarantee; a direct word deref is UB. */
+        uint64_t word;
+        memcpy(&word, bitmap + ((i - 1) * 8), sizeof(word));
+        if (word != 0) {
+            return (i - 1) * 64 + (uint64_t)(63 - __builtin_clzll(word));
         }
     }
     return UINT64_MAX;
@@ -899,9 +899,8 @@ bool multiroarMin(const multiroar *r, uint64_t *position) {
     multimapIteratorInit(r->map, &iter, true);
 
     databox keyValue[2];
-    databox *kvPtr[2] = {&keyValue[0], &keyValue[1]};
 
-    if (!multimapIteratorNext(&iter, kvPtr)) {
+    if (!multimapIteratorNextInto(&iter, keyValue, 2)) {
         return false; /* Empty */
     }
 
@@ -976,9 +975,8 @@ bool multiroarMax(const multiroar *r, uint64_t *position) {
                          false); /* false = reverse iteration, start from end */
 
     databox keyValue[2];
-    databox *kvPtr[2] = {&keyValue[0], &keyValue[1]};
 
-    if (!multimapIteratorNext(&iter, kvPtr)) {
+    if (!multimapIteratorNextInto(&iter, keyValue, 2)) {
         return false; /* Empty */
     }
 
@@ -1065,18 +1063,16 @@ bool multiroarIntersects(const multiroar *a, const multiroar *b) {
     multimapIteratorInit(a->map, &iter, true);
 
     databox keyValue[2];
-    databox *kvPtr[2] = {&keyValue[0], &keyValue[1]};
 
-    uint8_t bitmapA[BITMAP_SIZE_IN_BYTES];
-    uint8_t bitmapB[BITMAP_SIZE_IN_BYTES];
+    _Alignas(uint64_t) uint8_t bitmapA[BITMAP_SIZE_IN_BYTES];
+    _Alignas(uint64_t) uint8_t bitmapB[BITMAP_SIZE_IN_BYTES];
 
-    while (multimapIteratorNext(&iter, kvPtr)) {
+    while (multimapIteratorNextInto(&iter, keyValue, 2)) {
         const databox *key = &keyValue[0];
 
         /* Check if b has this chunk */
         databox valueB;
-        databox *valuesB[] = {&valueB};
-        if (!multimapLookup(b->map, key, valuesB)) {
+        if (!multimapLookupInto(b->map, key, &valueB, 1)) {
             continue; /* No overlap in this chunk */
         }
 
@@ -1111,18 +1107,16 @@ bool multiroarIsSubset(const multiroar *a, const multiroar *b) {
     multimapIteratorInit(a->map, &iter, true);
 
     databox keyValue[2];
-    databox *kvPtr[2] = {&keyValue[0], &keyValue[1]};
 
-    uint8_t bitmapA[BITMAP_SIZE_IN_BYTES];
-    uint8_t bitmapB[BITMAP_SIZE_IN_BYTES];
+    _Alignas(uint64_t) uint8_t bitmapA[BITMAP_SIZE_IN_BYTES];
+    _Alignas(uint64_t) uint8_t bitmapB[BITMAP_SIZE_IN_BYTES];
 
-    while (multimapIteratorNext(&iter, kvPtr)) {
+    while (multimapIteratorNextInto(&iter, keyValue, 2)) {
         const databox *key = &keyValue[0];
 
         /* Check if b has this chunk */
         databox valueB;
-        databox *valuesB[] = {&valueB};
-        if (!multimapLookup(b->map, key, valuesB)) {
+        if (!multimapLookupInto(b->map, key, &valueB, 1)) {
             /* a has bits in this chunk but b doesn't - not a subset */
             return false;
         }
@@ -1164,18 +1158,16 @@ bool multiroarEquals(const multiroar *a, const multiroar *b) {
     multimapIteratorInit(a->map, &iter, true);
 
     databox keyValue[2];
-    databox *kvPtr[2] = {&keyValue[0], &keyValue[1]};
 
-    uint8_t bitmapA[BITMAP_SIZE_IN_BYTES];
-    uint8_t bitmapB[BITMAP_SIZE_IN_BYTES];
+    _Alignas(uint64_t) uint8_t bitmapA[BITMAP_SIZE_IN_BYTES];
+    _Alignas(uint64_t) uint8_t bitmapB[BITMAP_SIZE_IN_BYTES];
 
-    while (multimapIteratorNext(&iter, kvPtr)) {
+    while (multimapIteratorNextInto(&iter, keyValue, 2)) {
         const databox *key = &keyValue[0];
 
         /* Check if b has this chunk */
         databox valueB;
-        databox *valuesB[] = {&valueB};
-        if (!multimapLookup(b->map, key, valuesB)) {
+        if (!multimapLookupInto(b->map, key, &valueB, 1)) {
             return false; /* Chunk in a but not in b */
         }
 
@@ -1224,9 +1216,12 @@ DK_STATIC uint64_t countBitsInBitmapRange(const uint8_t *bitmap,
      * trailing full bytes that don't fill a word. */
     uint64_t fullBytes = endPos / 8;
     uint64_t fullWords = fullBytes / 8;
-    const uint64_t *w = (const uint64_t *)bitmap;
     for (uint64_t i = 0; i < fullWords; i++) {
-        count += (uint64_t)__builtin_popcountll(w[i]);
+        /* memcpy load: 'bitmap' may point into a flex payload with no
+         * alignment guarantee; a direct word deref is UB. */
+        uint64_t word;
+        memcpy(&word, bitmap + (i * 8), sizeof(word));
+        count += (uint64_t)__builtin_popcountll(word);
     }
     for (uint64_t i = fullWords * 8; i < fullBytes; i++) {
         count += (uint64_t)__builtin_popcount(bitmap[i]);
@@ -1257,9 +1252,8 @@ uint64_t multiroarRank(const multiroar *r, uint64_t position) {
     multimapIteratorInit(r->map, &iter, true);
 
     databox keyValue[2];
-    databox *kvPtr[2] = {&keyValue[0], &keyValue[1]};
 
-    while (multimapIteratorNext(&iter, kvPtr)) {
+    while (multimapIteratorNextInto(&iter, keyValue, 2)) {
         const databox *key = &keyValue[0];
         const databox *value = &keyValue[1];
         uint64_t chunkId = key->data.u;
@@ -1337,9 +1331,8 @@ bool multiroarSelect(const multiroar *r, uint64_t k, uint64_t *position) {
     multimapIteratorInit(r->map, &iter, true);
 
     databox keyValue[2];
-    databox *kvPtr[2] = {&keyValue[0], &keyValue[1]};
 
-    while (multimapIteratorNext(&iter, kvPtr)) {
+    while (multimapIteratorNextInto(&iter, keyValue, 2)) {
         const databox *key = &keyValue[0];
         const databox *value = &keyValue[1];
         uint64_t chunkId = key->data.u;
@@ -1517,25 +1510,24 @@ multiroar *multiroarNewAndNot(const multiroar *a, const multiroar *b) {
     multimapIteratorInit(a->map, &iter, true);
 
     databox keyValue[2];
-    databox *kvPtr[2] = {&keyValue[0], &keyValue[1]};
 
-    while (multimapIteratorNext(&iter, kvPtr)) {
+    while (multimapIteratorNextInto(&iter, keyValue, 2)) {
         const databox *key = &keyValue[0];
         const databox *aValue = &keyValue[1];
         uint64_t chunkId = key->data.u;
 
         /* Check if b has this chunk */
-        databox bKey = {.data.u = chunkId, .type = DATABOX_UNSIGNED_64};
+        databox bKey = databoxNewUnsigned(chunkId);
         databox bValue;
         databox *bValues[] = {&bValue};
 
         /* Expand a's chunk to bitmap */
-        uint8_t bitmapA[BITMAP_SIZE_IN_BYTES];
+        _Alignas(uint64_t) uint8_t bitmapA[BITMAP_SIZE_IN_BYTES];
         expandChunkToBitmap(aValue, bitmapA);
 
         if (multimapLookup(b->map, &bKey, bValues)) {
             /* Both have this chunk - perform AND NOT (64 bits at a time) */
-            uint8_t bitmapB[BITMAP_SIZE_IN_BYTES];
+            _Alignas(uint64_t) uint8_t bitmapB[BITMAP_SIZE_IN_BYTES];
             expandChunkToBitmap(&bValue, bitmapB);
 
             /* A &= ~B */
@@ -1713,9 +1705,8 @@ bool multiroarIteratorNext(multiroarIterator *iter, uint64_t *position) {
 
         /* Move to next chunk */
         databox keyValue[2];
-        databox *kvPtr[2] = {&keyValue[0], &keyValue[1]};
 
-        if (!multimapIteratorNext(&iter->mapIter, kvPtr)) {
+        if (!multimapIteratorNextInto(&iter->mapIter, keyValue, 2)) {
             /* No more chunks */
             iter->valid = false;
             return false;
@@ -1776,9 +1767,53 @@ void multiroarBitSetMany(multiroar *r, const uint64_t *positions,
         return;
     }
 
-    /* Simply set each position - could be optimized by batching by chunk */
-    for (uint64_t i = 0; i < count; i++) {
-        multiroarBitSet(r, positions[i]);
+    /* Batch consecutive same-chunk runs: one map lookup plus one
+     * rebuilt chunk per run instead of one full map operation per bit.
+     * Sorted or clustered inputs (bulk loads, multiroarFromArray)
+     * collapse to one map op per chunk; runs too short to amortize the
+     * expand/compress cost keep the exact per-bit path, so random
+     * order never regresses. */
+    enum { SET_MANY_RUN_MIN = 4 };
+
+    uint64_t i = 0;
+    while (i < count) {
+        const uint64_t chunk = CHUNK(positions[i]);
+        uint64_t runEnd = i + 1;
+        while (runEnd < count && CHUNK(positions[runEnd]) == chunk) {
+            runEnd++;
+        }
+
+        if (runEnd - i < SET_MANY_RUN_MIN) {
+            for (; i < runEnd; i++) {
+                multiroarBitSet(r, positions[i]);
+            }
+            continue;
+        }
+
+        const databox key = databoxNewUnsigned(chunk);
+        databox value;
+        const bool exists = multimapLookupInto(r->map, &key, &value, 1);
+
+        if (exists && GET_CHUNK_TYPE(&value) == CHUNK_TYPE_ALL_1) {
+            /* Every bit already set - nothing to do for this run */
+            i = runEnd;
+            continue;
+        }
+
+        _Alignas(uint64_t) uint8_t bitmap[BITMAP_SIZE_IN_BYTES];
+        if (exists) {
+            expandChunkToBitmap(&value, bitmap);
+        } else {
+            memset(bitmap, 0, sizeof(bitmap));
+        }
+
+        for (; i < runEnd; i++) {
+            const uint64_t byteOffset =
+                BYTE_OFFSET(GLOBAL_POSITION_TO_CHUNK_POSITION(positions[i]));
+            bitmap[byteOffset] |= (1 << BIT_OFFSET(positions[i]));
+        }
+
+        compressBitmapToChunk(r, &key, bitmap, NULL, exists);
     }
 }
 
@@ -1789,9 +1824,26 @@ void multiroarBitGetMany(const multiroar *r, const uint64_t *positions,
         return;
     }
 
-    /* Get each position - could be optimized by batching by chunk */
+    /* One map lookup per RUN of same-chunk positions: sorted or
+     * clustered inputs collapse to a single lookup per chunk, random
+     * order degrades to exactly the old per-position cost. The cached
+     * value box references bytes inside the map, which is safe here
+     * because nothing mutates the map between lookups. */
+    uint64_t cachedChunk = 0;
+    bool cachedFound = false;
+    bool haveCache = false;
+    databox value = {{0}};
+
     for (uint64_t i = 0; i < count; i++) {
-        results[i] = multiroarBitGet(r, positions[i]);
+        const uint64_t chunk = CHUNK(positions[i]);
+        if (!haveCache || chunk != cachedChunk) {
+            const databox key = databoxNewUnsigned(chunk);
+            cachedFound = multimapLookupInto(r->map, &key, &value, 1);
+            cachedChunk = chunk;
+            haveCache = true;
+        }
+
+        results[i] = cachedFound && chunkTestsBit(&value, positions[i]);
     }
 }
 
@@ -2028,11 +2080,10 @@ uint64_t multiroarSerializedSize(const multiroar *r) {
     multimapIteratorInit(r->map, &iter, true);
 
     databox keyValue[2];
-    databox *kvPtr[2] = {&keyValue[0], &keyValue[1]};
 
-    while (multimapIteratorNext(&iter, kvPtr)) {
-        const databox *key = kvPtr[0];
-        const databox *value = kvPtr[1];
+    while (multimapIteratorNextInto(&iter, keyValue, 2)) {
+        const databox *key = &keyValue[0];
+        const databox *value = &keyValue[1];
 
         uint64_t chunkId = key->data.u;
 
@@ -2125,11 +2176,10 @@ uint64_t multiroarSerialize(const multiroar *r, void *buf, uint64_t bufSize) {
     multimapIteratorInit(r->map, &iter, true);
 
     databox keyValue[2];
-    databox *kvPtr[2] = {&keyValue[0], &keyValue[1]};
 
-    while (multimapIteratorNext(&iter, kvPtr)) {
-        const databox *key = kvPtr[0];
-        const databox *value = kvPtr[1];
+    while (multimapIteratorNextInto(&iter, keyValue, 2)) {
+        const databox *key = &keyValue[0];
+        const databox *value = &keyValue[1];
 
         uint64_t chunkId = key->data.u;
 
@@ -2277,9 +2327,7 @@ multiroar *multiroarDeserialize(const void *buf, uint64_t bufSize) {
             }
             chunk[0] = CHUNK_TYPE_ALL_1;
 
-            databox key = {{0}};
-            key.data.u = chunkId;
-            key.type = DATABOX_UNSIGNED_64;
+            databox key = databoxNewUnsigned(chunkId);
 
             databox value = {{0}};
             value.data.bytes.start = chunk;
@@ -2337,9 +2385,7 @@ multiroar *multiroarDeserialize(const void *buf, uint64_t bufSize) {
                 varintPacked13Set(chunk + 1 + countBytes, j, pos);
             }
 
-            databox key = {{0}};
-            key.data.u = chunkId;
-            key.type = DATABOX_UNSIGNED_64;
+            databox key = databoxNewUnsigned(chunkId);
 
             databox value = {{0}};
             value.data.bytes.start = chunk;
@@ -2369,9 +2415,7 @@ multiroar *multiroarDeserialize(const void *buf, uint64_t bufSize) {
             memcpy(chunk + 1, p, 1024);
             p += 1024;
 
-            databox key = {{0}};
-            key.data.u = chunkId;
-            key.type = DATABOX_UNSIGNED_64;
+            databox key = databoxNewUnsigned(chunkId);
 
             databox value = {{0}};
             value.data.bytes.start = chunk;
@@ -2509,13 +2553,21 @@ DK_STATIC void bitmap_not_simd(uint8_t *data, uint64_t bytes) {
 #else
 /* Scalar fallback - use 64-bit operations for efficiency */
 
+/* memcpy word round-trips: callers may hand these bitmap pointers with
+ * no alignment guarantee (type-tagged buffers offset by one byte, flex
+ * payloads), and the scalar fallback is exactly what strict-alignment
+ * platforms run — a direct word deref is UB and traps there.  memcpy
+ * compiles to the same single load/store on every supported target. */
 DK_STATIC void bitmap_and_simd(uint8_t *dst, const uint8_t *src,
                                uint64_t bytes) {
-    uint64_t *d64 = (uint64_t *)dst;
-    const uint64_t *s64 = (const uint64_t *)src;
     uint64_t words = bytes / 8;
     for (uint64_t i = 0; i < words; i++) {
-        d64[i] &= s64[i];
+        uint64_t d;
+        uint64_t s;
+        memcpy(&d, dst + (i * 8), sizeof(d));
+        memcpy(&s, src + (i * 8), sizeof(s));
+        d &= s;
+        memcpy(dst + (i * 8), &d, sizeof(d));
     }
     for (uint64_t i = words * 8; i < bytes; i++) {
         dst[i] &= src[i];
@@ -2524,11 +2576,14 @@ DK_STATIC void bitmap_and_simd(uint8_t *dst, const uint8_t *src,
 
 DK_STATIC void bitmap_or_simd(uint8_t *dst, const uint8_t *src,
                               uint64_t bytes) {
-    uint64_t *d64 = (uint64_t *)dst;
-    const uint64_t *s64 = (const uint64_t *)src;
     uint64_t words = bytes / 8;
     for (uint64_t i = 0; i < words; i++) {
-        d64[i] |= s64[i];
+        uint64_t d;
+        uint64_t s;
+        memcpy(&d, dst + (i * 8), sizeof(d));
+        memcpy(&s, src + (i * 8), sizeof(s));
+        d |= s;
+        memcpy(dst + (i * 8), &d, sizeof(d));
     }
     for (uint64_t i = words * 8; i < bytes; i++) {
         dst[i] |= src[i];
@@ -2537,11 +2592,14 @@ DK_STATIC void bitmap_or_simd(uint8_t *dst, const uint8_t *src,
 
 DK_STATIC void bitmap_xor_simd(uint8_t *dst, const uint8_t *src,
                                uint64_t bytes) {
-    uint64_t *d64 = (uint64_t *)dst;
-    const uint64_t *s64 = (const uint64_t *)src;
     uint64_t words = bytes / 8;
     for (uint64_t i = 0; i < words; i++) {
-        d64[i] ^= s64[i];
+        uint64_t d;
+        uint64_t s;
+        memcpy(&d, dst + (i * 8), sizeof(d));
+        memcpy(&s, src + (i * 8), sizeof(s));
+        d ^= s;
+        memcpy(dst + (i * 8), &d, sizeof(d));
     }
     for (uint64_t i = words * 8; i < bytes; i++) {
         dst[i] ^= src[i];
@@ -2549,10 +2607,12 @@ DK_STATIC void bitmap_xor_simd(uint8_t *dst, const uint8_t *src,
 }
 
 DK_STATIC void bitmap_not_simd(uint8_t *data, uint64_t bytes) {
-    uint64_t *d64 = (uint64_t *)data;
     uint64_t words = bytes / 8;
     for (uint64_t i = 0; i < words; i++) {
-        d64[i] = ~d64[i];
+        uint64_t d;
+        memcpy(&d, data + (i * 8), sizeof(d));
+        d = ~d;
+        memcpy(data + (i * 8), &d, sizeof(d));
     }
     for (uint64_t i = words * 8; i < bytes; i++) {
         data[i] = ~data[i];
@@ -2689,8 +2749,8 @@ void multiroarOr(multiroar *r, multiroar *b) {
         return;
     }
 
-    uint8_t bitmapR[BITMAP_SIZE_IN_BYTES];
-    uint8_t bitmapB[BITMAP_SIZE_IN_BYTES];
+    _Alignas(uint64_t) uint8_t bitmapR[BITMAP_SIZE_IN_BYTES];
+    _Alignas(uint64_t) uint8_t bitmapB[BITMAP_SIZE_IN_BYTES];
 
     /* First, collect all keys from b */
     uint64_t numChunks = multimapCount(b->map);
@@ -2713,7 +2773,7 @@ void multiroarOr(multiroar *r, multiroar *b) {
 
     /* Process each chunk from b - use multimapLookup to get values */
     for (uint64_t i = 0; i < keyCount; i++) {
-        databox key = {.data.u = chunkKeys[i], .type = DATABOX_UNSIGNED_64};
+        databox key = databoxNewUnsigned(chunkKeys[i]);
 
         /* Get value from b using multimapLookup */
         databox bValue;
@@ -2751,8 +2811,8 @@ void multiroarAnd(multiroar *r, multiroar *b) {
 
     /* For AND, chunks only in r (not in b) become zeros.
      * We need to collect keys to delete after iteration. */
-    uint8_t bitmapR[BITMAP_SIZE_IN_BYTES];
-    uint8_t bitmapB[BITMAP_SIZE_IN_BYTES];
+    _Alignas(uint64_t) uint8_t bitmapR[BITMAP_SIZE_IN_BYTES];
+    _Alignas(uint64_t) uint8_t bitmapB[BITMAP_SIZE_IN_BYTES];
 
     /* Collect chunk keys from r that need processing */
     uint64_t numChunks = multimapCount(r->map);
@@ -2774,7 +2834,7 @@ void multiroarAnd(multiroar *r, multiroar *b) {
 
     /* Process each chunk */
     for (uint64_t i = 0; i < keyCount; i++) {
-        databox key = {.data.u = chunkKeys[i], .type = DATABOX_UNSIGNED_64};
+        databox key = databoxNewUnsigned(chunkKeys[i]);
         multimapEntry me;
 
         if (!multimapGetUnderlyingEntry(r->map, &key, &me)) {
@@ -2813,8 +2873,8 @@ void multiroarXor(multiroar *r, multiroar *b) {
         return;
     }
 
-    uint8_t bitmapR[BITMAP_SIZE_IN_BYTES];
-    uint8_t bitmapB[BITMAP_SIZE_IN_BYTES];
+    _Alignas(uint64_t) uint8_t bitmapR[BITMAP_SIZE_IN_BYTES];
+    _Alignas(uint64_t) uint8_t bitmapB[BITMAP_SIZE_IN_BYTES];
 
     /* First, collect all keys from b */
     uint64_t numChunks = multimapCount(b->map);
@@ -2825,7 +2885,7 @@ void multiroarXor(multiroar *r, multiroar *b) {
     /* Store both keys and bitmaps from b */
     typedef struct {
         uint64_t key;
-        uint8_t bitmap[BITMAP_SIZE_IN_BYTES];
+        _Alignas(uint64_t) uint8_t bitmap[BITMAP_SIZE_IN_BYTES];
     } ChunkBitmap;
     ChunkBitmap *chunks = zmalloc(numChunks * sizeof(ChunkBitmap));
     uint64_t chunkCount = 0;
@@ -2843,7 +2903,7 @@ void multiroarXor(multiroar *r, multiroar *b) {
 
     /* Process each chunk from b */
     for (uint64_t i = 0; i < chunkCount; i++) {
-        databox key = {.data.u = chunks[i].key, .type = DATABOX_UNSIGNED_64};
+        databox key = databoxNewUnsigned(chunks[i].key);
         memcpy(bitmapB, chunks[i].bitmap, BITMAP_SIZE_IN_BYTES);
 
         /* Look up corresponding chunk in r */
@@ -2871,7 +2931,7 @@ void multiroarNot(multiroar *r) {
         return;
     }
 
-    uint8_t bitmap[BITMAP_SIZE_IN_BYTES];
+    _Alignas(uint64_t) uint8_t bitmap[BITMAP_SIZE_IN_BYTES];
 
     /* Collect chunk keys first to avoid iterator invalidation */
     uint64_t numChunks = multimapCount(r->map);
@@ -2893,7 +2953,7 @@ void multiroarNot(multiroar *r) {
 
     /* Process each chunk */
     for (uint64_t i = 0; i < keyCount; i++) {
-        databox key = {.data.u = chunkKeys[i], .type = DATABOX_UNSIGNED_64};
+        databox key = databoxNewUnsigned(chunkKeys[i]);
 
         /* Look up the value in r */
         databox rValue;
@@ -2988,9 +3048,8 @@ DK_STATIC uint64_t *collectAllChunkKeys(uint64_t n, multiroar **roars,
         multimapIteratorInit(roars[i]->map, &iter, true);
 
         databox keyValue[2];
-        databox *kvPtr[2] = {&keyValue[0], &keyValue[1]};
 
-        while (multimapIteratorNext(&iter, kvPtr)) {
+        while (multimapIteratorNextInto(&iter, keyValue, 2)) {
             allKeys[keyCount++] = keyValue[0].data.u;
         }
     }
@@ -3027,11 +3086,11 @@ void multiroarAndN(uint64_t n, multiroar **roars) {
     }
 
     uint8_t *bitmaps = zmalloc(n * BITMAP_SIZE_IN_BYTES);
-    uint8_t resultBitmap[BITMAP_SIZE_IN_BYTES];
+    _Alignas(uint64_t) uint8_t resultBitmap[BITMAP_SIZE_IN_BYTES];
 
     /* Process each unique chunk */
     for (uint64_t i = 0; i < allKeyCount; i++) {
-        databox key = {.data.u = allKeys[i], .type = DATABOX_UNSIGNED_64};
+        databox key = databoxNewUnsigned(allKeys[i]);
 
         /* Check if ALL roars have this chunk */
         bool allHaveChunk = true;
@@ -3042,8 +3101,7 @@ void multiroarAndN(uint64_t n, multiroar **roars) {
             }
 
             databox value;
-            databox *values[] = {&value};
-            if (!multimapLookup(roars[j]->map, &key, values)) {
+            if (!multimapLookupInto(roars[j]->map, &key, &value, 1)) {
                 allHaveChunk = false;
                 break;
             }
@@ -3059,8 +3117,7 @@ void multiroarAndN(uint64_t n, multiroar **roars) {
         /* Expand all chunks to bitmaps */
         for (uint64_t j = 0; j < n; j++) {
             databox value;
-            databox *values[] = {&value};
-            multimapLookup(roars[j]->map, &key, values);
+            multimapLookupInto(roars[j]->map, &key, &value, 1);
             expandChunkToBitmap(&value, bitmaps + j * BITMAP_SIZE_IN_BYTES);
         }
 
@@ -3101,20 +3158,19 @@ void multiroarOrN(uint64_t n, multiroar **roars) {
     }
 
     uint8_t *bitmaps = zmalloc(n * BITMAP_SIZE_IN_BYTES);
-    uint8_t resultBitmap[BITMAP_SIZE_IN_BYTES];
+    _Alignas(uint64_t) uint8_t resultBitmap[BITMAP_SIZE_IN_BYTES];
 
     /* Process each unique chunk */
     for (uint64_t i = 0; i < allKeyCount; i++) {
-        databox key = {.data.u = allKeys[i], .type = DATABOX_UNSIGNED_64};
+        databox key = databoxNewUnsigned(allKeys[i]);
 
         /* Expand all chunks to bitmaps (use zeros for missing chunks) */
         bool anyHasChunk = false;
         for (uint64_t j = 0; j < n; j++) {
             databox value;
-            databox *values[] = {&value};
 
             if (roars[j] && roars[j]->map &&
-                multimapLookup(roars[j]->map, &key, values)) {
+                multimapLookupInto(roars[j]->map, &key, &value, 1)) {
                 expandChunkToBitmap(&value, bitmaps + j * BITMAP_SIZE_IN_BYTES);
                 anyHasChunk = true;
             } else {
@@ -3166,19 +3222,18 @@ void multiroarXorN(uint64_t n, multiroar **roars) {
     }
 
     uint8_t *bitmaps = zmalloc(n * BITMAP_SIZE_IN_BYTES);
-    uint8_t resultBitmap[BITMAP_SIZE_IN_BYTES];
+    _Alignas(uint64_t) uint8_t resultBitmap[BITMAP_SIZE_IN_BYTES];
 
     /* Process each unique chunk */
     for (uint64_t i = 0; i < allKeyCount; i++) {
-        databox key = {.data.u = allKeys[i], .type = DATABOX_UNSIGNED_64};
+        databox key = databoxNewUnsigned(allKeys[i]);
 
         /* Expand all chunks to bitmaps (use zeros for missing chunks) */
         for (uint64_t j = 0; j < n; j++) {
             databox value;
-            databox *values[] = {&value};
 
             if (roars[j] && roars[j]->map &&
-                multimapLookup(roars[j]->map, &key, values)) {
+                multimapLookupInto(roars[j]->map, &key, &value, 1)) {
                 expandChunkToBitmap(&value, bitmaps + j * BITMAP_SIZE_IN_BYTES);
             } else {
                 /* Missing chunk = all zeros */
@@ -3286,10 +3341,8 @@ multiroar *multiroarNewXorN(uint64_t n, multiroar **roars) {
 void multiroarRepr(multiroar *r, uint64_t highest) {
     for (uint64_t i = 0; i < divCeil(highest, BITMAP_SIZE_IN_BITS); i++) {
         databox value;
-        databox *values[1] = {&value};
-        if (multimapLookup(r->map,
-                           &(databox){.data.u = i, .type = DATABOX_UNSIGNED_64},
-                           values)) {
+        const databox chunkKey = databoxNewUnsigned(i);
+        if (multimapLookupInto(r->map, &chunkKey, &value, 1)) {
             printf("[%" PRIu64 "] = %d (%" PRIu64 " byte%s)\n", i,
                    GET_CHUNK_TYPE(&value), value.len,
                    value.len == 1 ? "" : "s");
@@ -9633,6 +9686,109 @@ int multiroarTest(int argc, char *argv[]) {
 #undef FILL_ALL_ONES
 
     printf("=== Cross-Container-Type Tests Passed! ===\n\n");
+
+    TEST("BitSetMany/BitGetMany: batched equals per-bit across patterns") {
+        /* The batched run path must produce byte-identical membership
+         * to the per-bit path across every chunk representation it can
+         * create or update (missing, packed, bitmap, negative, ALL_1)
+         * and every input shape (sorted dense, sorted sparse, random,
+         * short runs below the batch threshold). */
+        struct {
+            const char *name;
+            uint64_t count;
+            uint64_t (*gen)(uint64_t i);
+        } patterns[] = {
+            {"sorted dense", 20000, NULL},
+            {"sorted sparse", 5000, NULL},
+            {"random order", 8000, NULL},
+            {"short runs", 300, NULL},
+        };
+
+        for (size_t p = 0; p < sizeof(patterns) / sizeof(patterns[0]); p++) {
+            const uint64_t n = patterns[p].count;
+            uint64_t *positions = zmalloc(n * sizeof(uint64_t));
+
+            for (uint64_t i = 0; i < n; i++) {
+                switch (p) {
+                case 0: /* dense: fills chunks fully -> bitmap/ALL_1 */
+                    positions[i] = i;
+                    break;
+                case 1: /* sparse: a few bits per chunk -> packed */
+                    positions[i] = i * 977;
+                    break;
+                case 2: /* deterministic pseudo-random order */
+                    positions[i] = (i * 2654435761ULL) % 200000;
+                    break;
+                default: /* runs of 2 (below threshold) far apart */
+                    positions[i] = (i / 2) * 50000 + (i % 2);
+                    break;
+                }
+            }
+
+            multiroar *batched = multiroarBitNew();
+            multiroar *single = multiroarBitNew();
+
+            multiroarBitSetMany(batched, positions, n);
+            for (uint64_t i = 0; i < n; i++) {
+                multiroarBitSet(single, positions[i]);
+            }
+
+            /* Membership must match everywhere set... */
+            uint64_t mismatches = 0;
+            bool *results = zmalloc(n * sizeof(bool));
+            multiroarBitGetMany(batched, positions, n, results);
+            for (uint64_t i = 0; i < n; i++) {
+                if (!results[i] || !multiroarBitGet(single, positions[i])) {
+                    mismatches++;
+                }
+            }
+            /* ...and at probe points that were never set */
+            for (uint64_t probe = 1; probe < 200000; probe += 7919) {
+                if (multiroarBitGet(batched, probe) !=
+                    multiroarBitGet(single, probe)) {
+                    mismatches++;
+                }
+            }
+
+            if (mismatches > 0) {
+                ERR("pattern '%s': %" PRIu64 " membership mismatches",
+                    patterns[p].name, mismatches);
+            }
+
+            zfree(results);
+            zfree(positions);
+            multiroarFree(batched);
+            multiroarFree(single);
+        }
+    }
+
+    TEST("PERF: BitSetMany batched vs per-bit loop") {
+        const uint64_t n = 100000;
+        uint64_t *positions = zmalloc(n * sizeof(uint64_t));
+        for (uint64_t i = 0; i < n; i++) {
+            positions[i] = i * 3; /* sorted, ~3 bits per byte density */
+        }
+
+        multiroar *a = multiroarBitNew();
+        uint64_t start = timeUtilMonotonicNs();
+        for (uint64_t i = 0; i < n; i++) {
+            multiroarBitSet(a, positions[i]);
+        }
+        const uint64_t perBitNs = timeUtilMonotonicNs() - start;
+        multiroarFree(a);
+
+        multiroar *b = multiroarBitNew();
+        start = timeUtilMonotonicNs();
+        multiroarBitSetMany(b, positions, n);
+        const uint64_t batchedNs = timeUtilMonotonicNs() - start;
+        multiroarFree(b);
+
+        printf("    per-bit: %.1f ns/bit, batched: %.1f ns/bit (%.1fx)\n",
+               (double)perBitNs / n, (double)batchedNs / n,
+               (double)perBitNs / (double)batchedNs);
+
+        zfree(positions);
+    }
 
     TEST_FINAL_RESULT;
 }

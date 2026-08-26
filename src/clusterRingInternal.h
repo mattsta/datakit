@@ -54,12 +54,15 @@ struct clusterNode {
  * Virtual Node (for ring-based algorithms)
  * ==================================================================== */
 
+/* 24 bytes: the owning node id is read through nodePtr->id (vnodes are
+ * always rebuilt from live nodes, and RemoveVnodes runs before its
+ * node is freed), so the ring's vnode array stays 25% smaller and the
+ * hashPoint binary search touches fewer cache lines. */
 typedef struct clusterVnode {
     uint64_t hashPoint;   /* Position on hash ring */
-    uint64_t nodeId;      /* Owning node ID (for serialization) */
     clusterNode *nodePtr; /* Direct pointer to node (avoids hash lookup) */
     uint16_t vnodeIndex;  /* Index within node's vnodes */
-    uint16_t _pad;
+    uint16_t _pad[3];
 } clusterVnode;
 
 /* ====================================================================

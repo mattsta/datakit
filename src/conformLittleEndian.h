@@ -17,7 +17,10 @@
         if (!endianIsLittle()) {                                               \
             uint##size##_t holder = 0;                                         \
             memcpy(&holder, &(what), sizeof(holder));                          \
-            holder = __builtin_bswap##size(what);                              \
+            /* swap the reinterpreted BITS in holder, not `what` itself:       \
+             * `what` may be a float/double the bswap intrinsic would          \
+             * truncate to an integer value rather than byte-reverse. */       \
+            holder = __builtin_bswap##size(holder);                            \
             memcpy(&(what), &holder, sizeof(holder));                          \
         }                                                                      \
     } while (0)

@@ -16,7 +16,7 @@
  *
  *   // 2. Define a callback
  *   bool myCallback(timerWheel *tw, timerWheelId id, void *data) {
- *       printf("Timer %llu fired!\n", id);
+ *       printf("Timer %" PRIu64 " fired!\n", id);
  *       return false;  // false = don't repeat, true = reschedule
  *   }
  *
@@ -86,8 +86,8 @@
  *
  *   timerWheelId timerWheelRegister(
  *       timerWheel *tw,
- *       uint64_t startAfterMicroseconds,   // Delay before first fire
- *       uint64_t repeatEveryMicroseconds,  // 0 = one-shot, >0 = repeating
+ *       timerWheelDurationUs startAfterMicroseconds,  // Delay before first
+ *       timerWheelDurationUs repeatEveryMicroseconds, // 0 = one-shot
  *       timerWheelCallback *cb,            // Your callback function
  *       void *clientData                   // Passed to callback
  *   );
@@ -125,7 +125,14 @@
  *   - Register new timers (deferred until callback completes)
  *   - Unregister other timers
  *   - Unregister self (timerWheelUnregister(tw, id))
+ *   - Stop all timers (timerWheelStopAll; later registrations survive)
  *   - Query timer count and statistics
+ *
+ * Calling timerWheelProcessTimerEvents() or timerWheelAdvanceTime()
+ * from inside a callback is a safe no-op for processing: the
+ * in-progress outer call picks up any deferred work (AdvanceTime still
+ * shifts the simulated clock; the shift takes effect on the next
+ * processing pass).
  *
  * ============================================================================
  * CANCELING/UPDATING TIMERS
@@ -141,8 +148,14 @@
  *   timerWheelUnregister(tw, oldId);
  *   timerWheelId newId = timerWheelRegister(tw, newDelay, newRepeat, cb, data);
  *
- * Note: Unregistration is O(1) - cancelled timers are tracked in a set and
- * skipped during processing, not immediately removed from wheel slots.
+ * Note: Unregistration is a tombstone - the id is recorded and the
+ * timer's storage is skipped/reclaimed when processing next encounters
+ * it (or when the wheel drains empty). Cancelling an id that already
+ * fired never affects other timers, but the wheel has no id index, so
+ * the stale tombstone makes timerWheelCount() under-report until the
+ * wheel drains empty, timerWheelReconcileCancellations() runs, or
+ * timerWheelGetStats() runs (it reconciles automatically, at most one
+ * O(n) walk per cancellation batch, outside callbacks).
  *
  * ============================================================================
  * ARCHITECTURE
@@ -160,9 +173,17 @@
  *
  * Performance characteristics:
  *   - Insert: O(1) amortized
- *   - Cancel: O(1)
- *   - Tick:   O(1) amortized (with occasional cascading)
+ *   - Cancel: O(log c) lookup in the tombstone set (c = outstanding
+ *     cancellations; O(1) when none are outstanding)
+ *   - Tick:   O(1) amortized (with occasional cascading); empty spans
+ *     and idle gaps are skipped, not ticked through
  *   - Memory: O(n) where n = number of active timers
+ *
+ * Timing precision: higher-wheel slots cascade downward when the wheel
+ * enters them, so timers at every level fire within one wheel-0 slot
+ * (1ms) of their scheduled time - assuming processing is called at
+ * least that often. Less frequent processing degrades precision to the
+ * processing interval, never loses timers.
  *
  * ============================================================================
  * THREAD SAFETY
@@ -184,13 +205,12 @@
  */
 
 #include "datakit.h"
-#include "flex.h"
-#include "multimap.h"
 #include <stdint.h>
 
 typedef struct timerWheel timerWheel;
 
 typedef uint64_t timerWheelId;
+typedef uint64_t timerWheelDurationUs;
 typedef int64_t timerWheelUs;
 typedef int64_t timerWheelSystemMonotonicUs;
 
@@ -253,8 +273,9 @@ void timerWheelDeinit(timerWheel *tw);
  * @param clientData            User data passed to callback
  * @return Timer ID (never 0 on success)
  */
-timerWheelId timerWheelRegister(timerWheel *tw, uint64_t startAfterMicroseconds,
-                                uint64_t repeatEveryMicroseconds,
+timerWheelId timerWheelRegister(timerWheel *tw,
+                                timerWheelDurationUs startAfterMicroseconds,
+                                timerWheelDurationUs repeatEveryMicroseconds,
                                 timerWheelCallback *cb, void *clientData);
 
 /**
@@ -262,19 +283,40 @@ timerWheelId timerWheelRegister(timerWheel *tw, uint64_t startAfterMicroseconds,
  * Timer will not fire after this call.
  * Safe to call from within a timer callback.
  *
- * @return true on success
+ * Cancellation is a tombstone: the timer's storage is reclaimed lazily
+ * the next time processing encounters it (or when the wheel drains
+ * empty). Unregistering an id that already fired never affects other
+ * timers, but leaves a stale tombstone that makes timerWheelCount()
+ * under-report until the wheel drains empty or
+ * timerWheelReconcileCancellations() runs.
+ *
+ * @return true if the id was ever issued by this wheel, false otherwise
  */
 bool timerWheelUnregister(timerWheel *tw, timerWheelId id);
 
 /**
- * Stop all timers.
+ * Stop all currently registered timers.
+ * Safe to call from within a timer callback; timers registered after
+ * this call (including later in the same callback) are unaffected.
  */
 bool timerWheelStopAll(timerWheel *tw);
 
 /**
- * Get the count of scheduled timers (approximate, excludes cancelled).
+ * Get the count of scheduled timers, excluding cancelled ones. O(1).
+ * Exact unless ids that already fired were unregistered; call
+ * timerWheelReconcileCancellations() to restore exactness after that.
  */
 size_t timerWheelCount(const timerWheel *tw);
+
+/**
+ * Restore exact cancellation accounting: drops tombstones whose ids no
+ * longer have stored timers (from unregistering already-fired ids), so
+ * timerWheelCount() is exact again. O(n) over all stored timers.
+ *
+ * @return true on success; false when called from within a timer
+ *         callback (storage cannot be walked safely mid-processing)
+ */
+bool timerWheelReconcileCancellations(timerWheel *tw);
 
 /* ====================================================================
  * Timer Processing
@@ -316,7 +358,7 @@ void timerWheelProcessTimerEvents(timerWheel *tw);
  * @param tw           Timer wheel instance
  * @param microseconds Time to advance (in microseconds)
  */
-void timerWheelAdvanceTime(timerWheel *tw, uint64_t microseconds);
+void timerWheelAdvanceTime(timerWheel *tw, timerWheelDurationUs microseconds);
 
 /* ====================================================================
  * Timer Queries
@@ -363,6 +405,10 @@ typedef struct timerWheelStats {
     size_t totalExpirations;   /* Total timer callbacks executed */
     size_t totalCascades;      /* Timer migrations between wheel levels */
     size_t overflowCount;      /* Current timers in overflow (>18.6h) */
+    size_t pendingCount;       /* Current timers in the pending queue (deferred
+                                * from callbacks or sub-resolution delays) */
+    size_t cancelledPending;   /* Current cancelled timers awaiting lazy
+                                * discard (tombstone backlog) */
     size_t memoryBytes;        /* Current memory usage in bytes */
 } timerWheelStats;
 
@@ -371,11 +417,17 @@ typedef struct timerWheelStats {
  *
  * Populates stats structure with current counters and memory usage.
  * Memory calculation includes all wheel slots, overflow, and metadata.
+ * When cancellations since the last reconcile might be stale (an
+ * already-fired id was unregistered), this first runs the O(n)
+ * timerWheelReconcileCancellations walk - at most once per
+ * cancellation batch - so cancelledPending and timerWheelCount() are
+ * exact afterward. Mid-callback the reconcile is skipped and raw
+ * counters are reported.
  *
  * @param tw    Timer wheel instance
  * @param stats Output structure to populate
  */
-void timerWheelGetStats(const timerWheel *tw, timerWheelStats *stats);
+void timerWheelGetStats(timerWheel *tw, timerWheelStats *stats);
 
 /**
  * Reset statistics counters to zero.

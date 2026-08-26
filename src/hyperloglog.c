@@ -1435,11 +1435,11 @@ void hyperloglogInvalidateCache(hyperloglog *h) {
  * Return true if this is true, otherwise reply to the client
  * with an error and return false. */
 bool hyperloglogDetect(hyperloglog *h) {
-    size_t len = mdsclen(toMDSC(h));
-
     if (!h) {
         return false;
     }
+
+    const size_t len = mdsclen(toMDSC(h));
 
     if (len < sizeof(*h)) {
         return false;
@@ -1550,13 +1550,6 @@ uint64_t pfcountSingle(hyperloglog *h) {
 }
 
 DK_INLINE_ALWAYS uint64_t pfvcount(hyperloglog *first, va_list ap) {
-#if 0
-    hyperloglog *second = va_arg(ap, hyperloglog *);
-    if (!second) {
-        return pfcountSingle(first);
-    }
-#endif
-
     /* multi-key keys, cardinality of the union.
      *
      * When multiple keys are specified, PFCOUNT actually computes
@@ -1568,9 +1561,6 @@ DK_INLINE_ALWAYS uint64_t pfvcount(hyperloglog *first, va_list ap) {
     hdr->encoding = HLL_RAW; /* Special internal-only encoding. */
 
     HLL_MERGE(hdr, first, -1);
-#if 0
-    HLL_MERGE(hdr, second, -1);
-#endif
 
     hyperloglog *current;
     while ((current = va_arg(ap, hyperloglog *))) {
@@ -1579,6 +1569,72 @@ DK_INLINE_ALWAYS uint64_t pfvcount(hyperloglog *first, va_list ap) {
 
     /* Compute cardinality of the resulting set. */
     return hyperloglogCount_(hdr, NULL);
+}
+
+hyperloglog *hyperloglogNewFromRaw(const hyperloglog *raw, bool dense) {
+    hyperloglog *result =
+        dense ? hyperloglogNewDense() : hyperloglogNewSparse();
+    /* Read through raw->registers — the RAW register array starts AFTER
+     * the header at the front of the scratch buffer; indexing the buffer
+     * directly would read header bytes as registers 0..7. */
+    const uint8_t *const rawRegs = raw->registers;
+    for (size_t i = 0; i < HLL_REGISTERS; i++) {
+        if (rawRegs[i] == 0) {
+            continue;
+        }
+
+        /* Re-check encoding every iteration: a sparse set can promote
+         * to dense mid-loop when the sparse form outgrows its bound. */
+        if (result->encoding == HLL_DENSE) {
+            hyperloglogDenseSet(result->registers, i, rawRegs[i]);
+        } else {
+            hyperloglogSparseSet(&result, i, rawRegs[i]);
+        }
+    }
+
+    HLL_INVALIDATE_CACHE(result);
+    return result;
+}
+
+bool hyperloglogMergeInto(hyperloglog **dst, const hyperloglog *src) {
+    assert(src->encoding != HLL_RAW);
+
+    /* Accumulate max(dst, src) into a RAW scratch, then write the
+     * non-zero registers back through the max-semantics setters (they
+     * only raise, never lower, so the write-back composes with any
+     * registers dst gained in between — the fold is a true max). */
+    hllStatic scratchBuf = {0};
+    hyperloglog *scratch = toHLL(scratchBuf);
+    scratch->encoding = HLL_RAW;
+
+    if (!hyperloglogMerge(scratch, *dst)) {
+        return false;
+    }
+
+    if (!hyperloglogMerge(scratch, src)) {
+        return false;
+    }
+
+    if (src->encoding == HLL_DENSE && (*dst)->encoding == HLL_SPARSE &&
+        !hyperloglogSparseToDense(dst)) {
+        return false;
+    }
+
+    const uint8_t *const rawRegs = scratch->registers;
+    for (size_t i = 0; i < HLL_REGISTERS; i++) {
+        if (rawRegs[i] == 0) {
+            continue;
+        }
+
+        if ((*dst)->encoding == HLL_DENSE) {
+            hyperloglogDenseSet((*dst)->registers, i, rawRegs[i]);
+        } else {
+            hyperloglogSparseSet(dst, i, rawRegs[i]);
+        }
+    }
+
+    HLL_INVALIDATE_CACHE(*dst);
+    return true;
 }
 
 /* Returns merged count of all input parameters. */
@@ -1594,6 +1650,7 @@ uint64_t pfcount(hyperloglog *h, ...) {
 DK_INLINE_ALWAYS hyperloglog *pfvmerge(hyperloglog *first, va_list ap) {
     hllStatic max = {0};
     hyperloglog *restrict total = toHLL(max);
+    total->encoding = HLL_RAW; /* Special internal-only encoding. */
     bool useDense = false;
 
     HLL_MERGE(total, first, NULL);
@@ -1608,33 +1665,12 @@ DK_INLINE_ALWAYS hyperloglog *pfvmerge(hyperloglog *first, va_list ap) {
         }
     }
 
-    /* Create / unshare the destination key's value if needed. */
-    hyperloglog *result = hyperloglogNew();
-
-    /* Convert the destination object to dense representation if at least
-     * one of the inputs was dense. */
-    if (useDense && !hyperloglogSparseToDense(&result)) {
-        return NULL;
-    }
-
-    /* Write the resulting HLL to the destination HLL registers and
-     * invalidate the cached value. */
-    for (int j = 0; j < HLL_REGISTERS; j++) {
-        if (max[j] == 0) {
-            continue;
-        }
-
-        if (result->encoding == HLL_DENSE) {
-            hyperloglogDenseSet(result->registers, j, max[j]);
-        } else {
-            /* else, HLL_SPARSE */
-            hyperloglogSparseSet(&result, j, max[j]);
-        }
-    }
-
-    HLL_INVALIDATE_CACHE(result);
-
-    return result;
+    /* Materialize through the shared RAW-to-live constructor: it reads
+     * through total->registers (the register array starts AFTER the
+     * header in the scratch buffer — indexing `max` directly read
+     * header bytes as registers 0..7), handles mid-loop sparse-to-dense
+     * promotion, and invalidates the cache. */
+    return hyperloglogNewFromRaw(total, useDense);
 }
 
 /* Returns newly allocated hyperloglog having cardinality of all inputs. */

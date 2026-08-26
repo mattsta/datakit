@@ -54,9 +54,13 @@ bool jebufUseNewAllocation(const size_t originalSize, const size_t newSize) {
             /* found lower bound of memory, but need upper bound. */           \
             if (result == JEEND) {                                             \
                 /* the requested buffer size is beyond the extent of our       \
-                 * allocation array */                                         \
+                 * allocation array; grow 20% in integer math (double          \
+                 * round-trips lose precision at these magnitudes),            \
+                 * saturating so the result never shrinks below the            \
+                 * request on overflow */                                      \
                 assert(NULL && "who needs this much memory?");                 \
-                return currentBufSize * 1.2;                                   \
+                const size_t grown_ = currentBufSize + (currentBufSize / 5);   \
+                return grown_ >= currentBufSize ? grown_ : SIZE_MAX;           \
             }                                                                  \
             return *++result;                                                  \
         }                                                                      \

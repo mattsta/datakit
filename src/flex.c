@@ -85,6 +85,7 @@
 #include "datakit.h"
 #include "flex.h"
 
+#include "cleaner.h"
 #include "str.h"
 
 #include "multimapAtom.h"
@@ -94,6 +95,9 @@
 #include <assert.h>
 
 #include "float16.h"
+
+/* Scope-exit free for heap spills (wide-entry insert scratch) */
+defcleaner(void *, zfree);
 
 /* This configuration define allows building flex without 'mdsc', but disabling
  * MDSC support does NOT remove the MDSC types. It only removes the ability for
@@ -175,47 +179,49 @@ typedef enum flexType {
     FLEX_REAL_64D, /* IEEE 64 bit float decimal */
 
     /************ BEGIN EXTERNAL PHYSICAL REFERENCE TYPES ************/
-    /* To avoid duplicating key bytes when using indexes, we allow values to be
-     * mdsc entries.
+    /* To avoid duplicating key bytes when using indexes, we allow values to
+     * be mdsc entries.
      *
      * We define two storage types.
-     * If we can remove the top 16 bits of a pointer, we save 2 bytes and store
-     * as FLEX_EXTERNAL_MDSC_48B. If we can't remove the top 2 bytes, we store
-     * FLEX_EXTERNAL_MDSC_64B.
+     * If we can remove the top 16 bits of a pointer, we save 2 bytes and
+     * store as FLEX_EXTERNAL_MDSC_48B. If we can't remove the top 2 bytes,
+     * we store FLEX_EXTERNAL_MDSC_64B.
      *
      * The benefit of this type is:
-     *  - maps are still sorted by the value of what's pointed to, not the value
-     *    of the pointer itself.
+     *  - maps are still sorted by the value of what's pointed to, not the
+     * value of the pointer itself.
      *      - BUT NOTE: values must NOT BE CHANGED externally.
-     *      - if changing value is required, it must be deleted from map BEFORE
-     *        the change
+     *      - if changing value is required, it must be deleted from map
+     * BEFORE the change
      *      - then re-inserted AFTER the change
-     *      - if values are changed by pointer access after insert, subsequent
-     *        find behavior won't be able to locate the key (assuming it is a
-     *        key (if your entry is a non-key entry, you can change it whenever
-     *        and however you like externally). */
+     *      - if values are changed by pointer access after insert,
+     * subsequent find behavior won't be able to locate the key (assuming it
+     * is a key (if your entry is a non-key entry, you can change it
+     * whenever and however you like externally). */
     FLEX_EXTERNAL_MDSC_48B,
     FLEX_EXTERNAL_MDSC_64B,
 
     /************ BEGIN LOGICAL REFERENCE TYPES ************/
     /* 8 reference types.
-     *   value following external reference is a logical pointer to some other
-     *      data maintained by the user.
-     *   We also use these to represent stored pointers, but it's
-     *   up to the user to know when a restored databox reference is
-     *   a pointer versus an actual user-level reference. */
+     *   value following external reference is a logical pointer to some
+     * other data maintained by the user. We also use these to represent
+     * stored pointers, but it's up to the user to know when a restored
+     * databox reference is a pointer versus an actual user-level reference.
+     */
     FLEX_CONTAINER_REFERENCE_EXTERNAL_8,  /* up to 255 */
     FLEX_CONTAINER_REFERENCE_EXTERNAL_16, /* up to 64k + 255 */
     FLEX_CONTAINER_REFERENCE_EXTERNAL_24, /* up to 16 million + 64k + 255 */
     FLEX_CONTAINER_REFERENCE_EXTERNAL_32, /* up to 4B + 16M + 64k + 255 */
     FLEX_CONTAINER_REFERENCE_EXTERNAL_40, /* to 1T + 4B + 16M + 64k + 255 */
-    FLEX_CONTAINER_REFERENCE_EXTERNAL_48, /* to 281T + 1T + 4B + 16M + ... */
+    FLEX_CONTAINER_REFERENCE_EXTERNAL_48, /* to 281T + 1T + 4B + 16M + ...
+                                           */
     FLEX_CONTAINER_REFERENCE_EXTERNAL_56, /* to 72PB + 281T + ... */
     FLEX_CONTAINER_REFERENCE_EXTERNAL_64, /* to 18EB + ... */
 
     /************ BEGIN BOX MARKER TYPES ************/
     /* Note: the order of the next 8 types matter.
-     *       The order here must match the order in the databox type enum. */
+     *       The order here must match the order in the databox type enum.
+     */
     /* 4 container holder types.
      *   value is a flex with conforming layout for type specified. */
     FLEX_CONTAINER_MAP, /* map is our embedded K/V pair type */
@@ -290,7 +296,8 @@ typedef enum flexType {
 #define EXTERNAL_VARINT_WIDTH_FROM_ENCODING_(encoding)                         \
     ((encoding) <= FLEX_UINT_64B                                               \
          ? ((((encoding) - FLEX_NEG_8B) / FLEX_INTEGER_ENCODING_STEP) + 1)     \
-         : ((encoding) <= FLEX_UINT_96B ? VARINT_WIDTH_96B : VARINT_WIDTH_128B))
+         : ((encoding) <= FLEX_UINT_96B ? VARINT_WIDTH_96B                     \
+                                        : VARINT_WIDTH_128B))
 
 /* + 1 because our minimum reference is a 1 byte integer */
 #define EXTERNAL_VARINT_WIDTH_FROM_REFERENCE_(encoding)                        \
@@ -946,7 +953,9 @@ DK_FN_CONST uint64_t flexEncodingReferenceUnsignedEncode(uint64_t value) {
     }
 
     if (value <= REFERENCE_MAX_64) {
-        return value - REFERENCE_MAX_48;
+        /* subtract the previous tier's max (56), matching the decode
+         * side which adds REFERENCE_MAX_56 for the 64-bit encoding */
+        return value - REFERENCE_MAX_56;
     }
 
     assert(NULL);
@@ -1435,7 +1444,10 @@ DK_STATIC int64_t flexLoadSigned(const flexEntryData *entry) {
 }
 
 DK_STATIC __int128_t flexLoadSignedBig(const flexEntryData *entry) {
-    databoxBig box = {.big = true};
+    /* 128-bit decode writes THROUGH data.i128, so it must point at the
+     * box's own wide storage before the load */
+    databoxBig box;
+    DATABOX_BIG_INIT(&box);
     flexLoadFixedLength_(entry, (databox *)&box);
     return *box.data.i128;
 }
@@ -1447,7 +1459,10 @@ DK_STATIC uint64_t flexLoadUnsigned(const flexEntryData *entry) {
 }
 
 DK_STATIC __uint128_t flexLoadUnsignedBig(const flexEntryData *entry) {
-    databoxBig box = {.big = true};
+    /* 128-bit decode writes THROUGH data.u128, so it must point at the
+     * box's own wide storage before the load */
+    databoxBig box;
+    DATABOX_BIG_INIT(&box);
     flexLoadFixedLength_(entry, (databox *)&box);
     return *box.data.u128;
 }
@@ -1507,8 +1522,7 @@ DK_INLINE_ALWAYS int_fast8_t flexResize(flex **const _f, const size_t newLength,
 }
 
 DK_INLINE_ALWAYS void flexBulkAppend(flex **const ff, const void *const data,
-                                     const uint32_t len,
-                                     const uint32_t addCount) {
+                                     const size_t len, const size_t addCount) {
     const size_t fLen = flexTotalBytes_(*ff);
     *ff = zrealloc(*ff, fLen + len);
 
@@ -1522,18 +1536,43 @@ void flexBulkAppendFlex(flex **const ff, const flex *const zzb) {
                    flexCount(zzb));
 }
 
+/* Concatenate the CONTENTS of `count` flexes into one fresh flex.
+ *
+ * SIZE IS THE SUM OF PAYLOADS PLUS EXACTLY ONE HEADER.
+ *
+ * `flexTotalBytes_` INCLUDES an input's own header, so summing whole
+ * totalBytes counted every input's header into the destination's
+ * declared length while only ONE header is ever written.  The merged
+ * flex then declared (sum of input headers - its own header) bytes it
+ * never wrote: FLEX_ENTRY_END pointed past the last real entry into
+ * uninitialised heap, flexBytes() over-reported, and any consumer that
+ * walks to the end rather than counting entries read garbage.  Two
+ * inputs was enough to trip it (>= 2 bytes of slack), and every extra
+ * input added more.  Sum payloads instead, so the result is exactly
+ * what the same entries appended one at a time would have produced.
+ *
+ * A zero-payload merge (count == 0, or every input empty) returns the
+ * empty flex directly: resizing to a length below the header size is
+ * not representable. */
 flex *flexBulkMergeFlex(const flex *const *const fs, const size_t count) {
-    size_t totalSize = 0;
+    size_t payloadBytes = 0;
     size_t totalCount = 0;
     size_t offset = 0;
 
     for (size_t i = 0; i < count; i++) {
-        totalSize += flexTotalBytes_(fs[i]);
+        payloadBytes += flexTotalBytes_(fs[i]) - FLEX_HEADER_SIZE(fs[i]);
         totalCount += flexCount_(fs[i]);
     }
 
     flex *f = flexNew();
-    flexResize(&f, totalSize, totalCount);
+    if (!f || payloadBytes == 0) {
+        return f;
+    }
+
+    /* flexResize takes the FULL new length including the header it is
+     * about to (re)size; the empty flex's header is the current one, so
+     * the widening of both varints is computed from there. */
+    flexResize(&f, FLEX_EMPTY_HEADER_SIZE + payloadBytes, totalCount);
 
     offset = FLEX_HEADER_SIZE(f);
     for (size_t i = 0; i < count; i++) {
@@ -1545,6 +1584,110 @@ flex *flexBulkMergeFlex(const flex *const *const fs, const size_t count) {
     }
 
     return f;
+}
+
+/* Members per chunk for the bulk byte-member append below.
+ *
+ * Inside one chunk the appends are still exact-resize, so a chunk costs
+ * O(membersPerChunk * chunkBytes); across count/membersPerChunk chunks
+ * the total is O(membersPerChunk * totalBytes) — LINEAR in the payload
+ * with a small constant, against O(totalBytes^2) for a single growing
+ * flex.  Small keeps the constant low; above one keeps tiny members from
+ * paying an allocation each. */
+#define FLEX_BULK_PUSH_MEMBERS_PER_CHUNK 16
+
+/* Chunk pointers held on the stack before spilling to one heap block. */
+#define FLEX_BULK_PUSH_CHUNK_STACK_SLOTS 32
+
+void flexBulkPushBytesMembers(flex **const ff,
+                              const flexBytesMember *const members,
+                              const size_t count) {
+    if (!ff || !*ff || !members || count == 0) {
+        return;
+    }
+
+    /* Small batches: the chunk+merge machinery costs more than the
+     * quadratic term it removes, and the direct loop IS the definition
+     * this function reproduces. */
+    if (count <= FLEX_BULK_PUSH_MEMBERS_PER_CHUNK) {
+        for (size_t i = 0; i < count; i++) {
+            flexPushBytes(ff, members[i].data, members[i].len,
+                          FLEX_ENDPOINT_TAIL);
+        }
+        return;
+    }
+
+    const size_t chunkCount = (count + FLEX_BULK_PUSH_MEMBERS_PER_CHUNK - 1) /
+                              FLEX_BULK_PUSH_MEMBERS_PER_CHUNK;
+    /* +1 slot: the caller's existing flex leads the merge, so whatever
+     * it already holds keeps its position ahead of the new members. */
+    const size_t mergeCap = chunkCount + 1;
+
+    flex *chunkStack[FLEX_BULK_PUSH_CHUNK_STACK_SLOTS];
+    flex **merge = chunkStack;
+    bool mergeHeap = false;
+    if (mergeCap > (sizeof(chunkStack) / sizeof(chunkStack[0]))) {
+        merge = zcalloc(mergeCap, sizeof(*merge));
+        if (!merge) {
+            for (size_t i = 0; i < count; i++) {
+                flexPushBytes(ff, members[i].data, members[i].len,
+                              FLEX_ENDPOINT_TAIL);
+            }
+            return;
+        }
+
+        mergeHeap = true;
+    }
+
+    size_t mergeCount = 0;
+    merge[mergeCount++] = *ff;
+
+    bool chunkFail = false;
+    for (size_t i = 0; i < count; i += FLEX_BULK_PUSH_MEMBERS_PER_CHUNK) {
+        const size_t thisChunk = (count - i) < FLEX_BULK_PUSH_MEMBERS_PER_CHUNK
+                                     ? (count - i)
+                                     : FLEX_BULK_PUSH_MEMBERS_PER_CHUNK;
+        flex *chunk = flexNew();
+        if (!chunk) {
+            chunkFail = true;
+            break;
+        }
+
+        for (size_t j = 0; j < thisChunk; j++) {
+            flexPushBytes(&chunk, members[i + j].data, members[i + j].len,
+                          FLEX_ENDPOINT_TAIL);
+        }
+
+        merge[mergeCount++] = chunk;
+    }
+
+    flex *merged =
+        chunkFail
+            ? NULL
+            : flexBulkMergeFlex((const flex *const *const)merge, mergeCount);
+
+    /* Free the chunks only — slot 0 is the caller's flex, which stays
+     * theirs until the merge has actually succeeded. */
+    for (size_t i = 1; i < mergeCount; i++) {
+        flexFree(merge[i]);
+    }
+
+    if (mergeHeap) {
+        zfree(merge);
+    }
+
+    if (!merged) {
+        /* Assembly failed with `*ff` untouched, so the slow path still
+         * produces the correct result rather than a partial one. */
+        for (size_t i = 0; i < count; i++) {
+            flexPushBytes(ff, members[i].data, members[i].len,
+                          FLEX_ENDPOINT_TAIL);
+        }
+        return;
+    }
+
+    flexFree(*ff);
+    *ff = merged;
 }
 
 /* ====================================================================
@@ -1710,27 +1853,40 @@ abstractWriteFullEntry(flexEntry *restrict *restrict fe,
      * a prior in-place read on the same key, e.g. SET-after-GET round         \
      * trip, set-algebra results that thread source bytes through into         \
      * the destination flex).  Without per-i rebase, flexResize realloc        \
-     * freed the buffer and abstractWriteFullEntry → flexWritePayload          \
+     * freed the buffer and abstractWriteFullEntry → flexWritePayload        \
      * memmove'd from the dangling pointer.  Restricted to FLEX_IS_STR         \
-     * because non-string encodings store inline values (no flex pointer).    \
+     * because non-string encodings store inline values (no flex pointer).     \
      * Bounded stack arrays: COMMON_INSERT_MAX_CONTENTS_ = 8 covers            \
-     * multimap arity up to 5 with headroom (assert guards). */                \
+     * multimap arity up to 5 with headroom on the hot path; wider             \
+     * entries (large multimap arity, wide flexAppendMultiple) spill to        \
+     * a single heap allocation that frees itself at scope exit. */            \
     enum { COMMON_INSERT_MAX_CONTENTS_ = 8 };                                  \
-    assert(contentsCount <= COMMON_INSERT_MAX_CONTENTS_);                      \
-    int64_t commonFlexSelfOffset_[COMMON_INSERT_MAX_CONTENTS_] = {0};          \
-    bool    commonFlexSelfAfterFe_[COMMON_INSERT_MAX_CONTENTS_] = {0};         \
-    bool    commonFlexSelfAlias_[COMMON_INSERT_MAX_CONTENTS_] = {0};           \
+    int64_t commonFlexSelfOffsetStack_[COMMON_INSERT_MAX_CONTENTS_] = {0};     \
+    bool commonFlexSelfBoolStack_[2 * COMMON_INSERT_MAX_CONTENTS_] = {0};      \
+    int64_t *commonFlexSelfOffset_ = commonFlexSelfOffsetStack_;               \
+    bool *commonFlexSelfAfterFe_ = commonFlexSelfBoolStack_;                   \
+    bool *commonFlexSelfAlias_ =                                               \
+        commonFlexSelfBoolStack_ + COMMON_INSERT_MAX_CONTENTS_;                \
+    cleaner(zfree) void *commonFlexSelfHeap_ = NULL;                           \
+    if (contentsCount > COMMON_INSERT_MAX_CONTENTS_) {                         \
+        commonFlexSelfHeap_ =                                                  \
+            zcalloc(contentsCount, sizeof(int64_t) + 2 * sizeof(bool));        \
+        commonFlexSelfOffset_ = (int64_t *)commonFlexSelfHeap_;                \
+        commonFlexSelfAfterFe_ =                                               \
+            (bool *)(commonFlexSelfOffset_ + contentsCount);                   \
+        commonFlexSelfAlias_ = commonFlexSelfAfterFe_ + contentsCount;         \
+    }                                                                          \
     for (uint_fast32_t commonFlex_i_ = (contentsStartOffset);                  \
          commonFlex_i_ < contentsCount; commonFlex_i_++) {                     \
         const uint8_t *commonFlex_d_ = contents[commonFlex_i_]->data;          \
-        if (FLEX_IS_STR(contents[commonFlex_i_]->encoding)                     \
-            && commonFlex_d_ > (const uint8_t *) f                             \
-            && commonFlex_d_ < ((const uint8_t *) f + flexSize)) {             \
+        if (FLEX_IS_STR(contents[commonFlex_i_]->encoding) &&                  \
+            commonFlex_d_ > (const uint8_t *)f &&                              \
+            commonFlex_d_ < ((const uint8_t *)f + flexSize)) {                 \
             commonFlexSelfAlias_[commonFlex_i_] = true;                        \
             commonFlexSelfOffset_[commonFlex_i_] =                             \
-                commonFlex_d_ - (const uint8_t *) f;                           \
+                commonFlex_d_ - (const uint8_t *)f;                            \
             commonFlexSelfAfterFe_[commonFlex_i_] =                            \
-                commonFlex_d_ > (const uint8_t *) fe;                          \
+                commonFlex_d_ > (const uint8_t *)fe;                           \
         }                                                                      \
     }                                                                          \
                                                                                \
@@ -1806,13 +1962,16 @@ abstractWriteFullEntry(flexEntry *restrict *restrict fe,
          * The reallocSize bump for "after-fe" sources matches the existing    \
          * contents[0] rebase at line ~1737 because the same memmove that      \
          * shifted fe also shifted post-fe bytes. */                           \
-        if (commonFlexSelfAlias_[i] && !(i == 0 && (contentsStartOffset) == 0)) {\
-            contents[i]->data = (const uint8_t *) f                            \
-                + commonFlexSelfOffset_[i]                                     \
-                + (commonFlexSelfAfterFe_[i] ? (int64_t) reallocSize : 0);     \
+        if (commonFlexSelfAlias_[i] &&                                         \
+            !(i == 0 && (contentsStartOffset) == 0)) {                         \
+            contents[i]->data =                                                \
+                (const uint8_t *)f + commonFlexSelfOffset_[i] +                \
+                (commonFlexSelfAfterFe_[i] ? (int64_t)reallocSize : 0);        \
         }                                                                      \
         abstractWriteFullEntry(&fe, contents[i]);                              \
     }                                                                          \
+                                                                               \
+    /* commonFlexSelfHeap_ frees itself at scope exit (cleaner) */             \
                                                                                \
     /* dumb while(0) so we can put a semicolon after macro */                  \
     do {                                                                       \
@@ -1913,7 +2072,7 @@ DK_STATIC void flexInsertReplace_____(flex **const ff, flexEntry *fe,
     flexEntry *walkerP = fe;
     size_t pEntryTotalSize = 0;
     while (replacingElements--) {
-        const uint_fast32_t entrySize = flexRawEntryLength(walkerP);
+        const size_t entrySize = flexRawEntryLength(walkerP);
         reallocSize -= entrySize;
         pEntryTotalSize += entrySize;
         walkerP += entrySize;
@@ -2573,17 +2732,13 @@ bool flexReplaceInteger__(flex **const ff, flexEntry *const fe,
 
 bool flexReplaceSigned(flex **const ff, flexEntry *const fe,
                        const int64_t value) {
-    databox box;
-    box.type = DATABOX_SIGNED_64;
-    box.data.i64 = value;
+    databox box = databoxNewSigned(value);
     return flexReplaceInteger__(ff, fe, &box);
 }
 
 bool flexReplaceUnsigned(flex **const ff, flexEntry *const fe,
                          const uint64_t value) {
-    databox box;
-    box.type = DATABOX_UNSIGNED_64;
-    box.data.u64 = value;
+    databox box = databoxNewUnsigned(value);
     return flexReplaceInteger__(ff, fe, &box);
 }
 
@@ -2603,6 +2758,18 @@ bool flexIncrbySigned(flex **const ff, flexEntry *const fe,
     /* Encoding of '0' here probably means you requested to incr
      * on a string with length 1, which is bad... */
     assert(entry.encoding);
+
+    /* This entry point takes a 64-bit delta and reports a 64-bit
+     * result, so it operates on values that fit 64 bits (native
+     * integers, and booleans promoted to 0/1); a 96/128-bit-stored
+     * value can't round-trip through the int64 result and needs a
+     * wide increment variant. The gate must precede the load:
+     * flexLoadSigned decodes a 96/128-bit entry THROUGH a wide pointer
+     * the narrow databox here does not provide, so the encoding must
+     * be rejected before it is ever loaded. */
+    if (!FLEX_IS_INTEGER(entry.encoding) && !FLEX_IS_BOOL(entry.encoding)) {
+        return false;
+    }
 
     /* Get current value */
     const int64_t value = flexLoadSigned(&entry);
@@ -2662,9 +2829,23 @@ bool flexIncrbyUnsigned(flex **const ff, flexEntry *const fe,
     /* Get current value */
     uint64_t value = flexLoadUnsigned(&entry);
 
-    uint64_t incremented = value + incrby;
+    /* Reject wrap: incrby is signed while value and the result are
+     * unsigned, so a negative delta larger than value would wrap to a
+     * huge number and a positive delta past UINT64_MAX to a tiny one. */
+    if (incrby > 0) {
+        if ((uint64_t)incrby > UINT64_MAX - value) {
+            return false;
+        }
+    } else {
+        const uint64_t magnitude = (incrby == INT64_MIN)
+                                       ? ((uint64_t)INT64_MAX + 1)
+                                       : (uint64_t)(-incrby);
+        if (magnitude > value) {
+            return false;
+        }
+    }
 
-    /* check overflow */
+    const uint64_t incremented = value + (uint64_t)incrby;
 
     if (newval) {
         *newval = incremented;
@@ -2987,7 +3168,7 @@ bool flexGetSingleDatabox(const uint8_t *buf, size_t buflen, databox *out) {
     if (!flexValidateBufferDeep(buf, buflen)) {
         return false;
     }
-    const flex *f = (const flex *) buf;
+    const flex *f = (const flex *)buf;
     if (flexCount(f) != 1) {
         return false;
     }
@@ -3099,7 +3280,7 @@ int flexFactorySelfTest(void) {
     /* single non-numeric bytes round-trip — stays bytes. */
     {
         databox in = databoxNewBytes("hello", 5);
-        flex   *f  = flexNewFromDatabox(&in);
+        flex *f = flexNewFromDatabox(&in);
         FFT(f != NULL);
         databox out = {0};
         FFT(flexGetSingleDatabox((const uint8_t *)f, flexBytes(f), &out));
@@ -3111,7 +3292,7 @@ int flexFactorySelfTest(void) {
     /* numeric byte-string canonicalises to an integer (push semantics). */
     {
         databox in = databoxNewBytes("22", 2);
-        flex   *f  = flexNewFromDatabox(&in);
+        flex *f = flexNewFromDatabox(&in);
         databox out = {0};
         FFT(flexGetSingleDatabox((const uint8_t *)f, flexBytes(f), &out));
         FFT((out.type == DATABOX_UNSIGNED_64 && out.data.u == 22) ||
@@ -3121,8 +3302,8 @@ int flexFactorySelfTest(void) {
 
     /* signed integer round-trip. */
     {
-        databox in = {.type = DATABOX_SIGNED_64, .data.i64 = -7};
-        flex   *f  = flexNewFromDatabox(&in);
+        databox in = databoxNewSigned(-7);
+        flex *f = flexNewFromDatabox(&in);
         databox out = {0};
         FFT(flexGetSingleDatabox((const uint8_t *)f, flexBytes(f), &out));
         FFT(out.data.i == -7);
@@ -3134,10 +3315,10 @@ int flexFactorySelfTest(void) {
         databox boxes[3];
         boxes[0] = databoxNewBytes("alpha", 5);
         boxes[1] = databoxNewBytes("zz", 2);
-        boxes[2] = (databox){.type = DATABOX_UNSIGNED_64, .data.u64 = 99};
-        flex *f  = flexNewFromDataboxes(boxes, 3);
+        boxes[2] = databoxNewUnsigned(99);
+        flex *f = flexNewFromDataboxes(boxes, 3);
         FFT(f && flexCount(f) == 3);
-        size_t     i  = 0;
+        size_t i = 0;
         flexEntry *fe = flexHead(f);
         while (fe) {
             i++;
@@ -3158,25 +3339,26 @@ int flexFactorySelfTest(void) {
      * BYTES value — the case the old hand-rolled multimap delta couldn't
      * encode.  Verify count + that the leading BYTES element round-trips. */
     {
-        databox        b0 = databoxNewBytes("member-key", 10);
-        databox        b1 = {.type = DATABOX_UNSIGNED_64, .data.u64 = 7};
-        databox        b2 = databoxNewBytes("tail", 4);
+        databox b0 = databoxNewBytes("member-key", 10);
+        databox b1 = databoxNewUnsigned(7);
+        databox b2 = databoxNewBytes("tail", 4);
         const databox *ptrs[3] = {&b0, &b1, &b2};
-        flex          *f = flexNewFromDataboxPtrs(ptrs, 3);
+        flex *f = flexNewFromDataboxPtrs(ptrs, 3);
         FFT(f && flexCount(f) == 3);
-        databox    out0 = {0};
-        flexEntry *fe   = flexHead(f);
+        databox out0 = {0};
+        flexEntry *fe = flexHead(f);
         flexGetByType(fe, &out0);
         FFT(DATABOX_IS_BYTES(&out0) && databoxLen(&out0) == 10 &&
             memcmp(databoxBytes(&out0), "member-key", 10) == 0);
         flexFree(f);
     }
 
-    /* defensive unwrap: a multi-element flex is rejected by the single-getter. */
+    /* defensive unwrap: a multi-element flex is rejected by the single-getter.
+     */
     {
         databox boxes[2] = {databoxNewBytes("x", 1), databoxNewBytes("y", 1)};
-        flex   *f        = flexNewFromDataboxes(boxes, 2);
-        databox out      = {0};
+        flex *f = flexNewFromDataboxes(boxes, 2);
+        databox out = {0};
         FFT(!flexGetSingleDatabox((const uint8_t *)f, flexBytes(f), &out));
         flexFree(f);
     }
@@ -3184,17 +3366,17 @@ int flexFactorySelfTest(void) {
     /* defensive unwrap: a garbage buffer is rejected, not walked. */
     {
         uint8_t garbage[4] = {0xFF, 0xFF, 0xFF, 0xFF};
-        databox out        = {0};
+        databox out = {0};
         FFT(!flexGetSingleDatabox(garbage, sizeof(garbage), &out));
     }
 
     /* two-element unwrap ([index,value] shape) + arity rejection. */
     {
-        databox        idx = {.type = DATABOX_UNSIGNED_64, .data.u64 = 3};
-        databox        val = databoxNewBytes("payload", 7);
+        databox idx = databoxNewUnsigned(3);
+        databox val = databoxNewBytes("payload", 7);
         const databox *ptrs[2] = {&idx, &val};
-        flex          *f = flexNewFromDataboxPtrs(ptrs, 2);
-        databox        a = {0}, b = {0};
+        flex *f = flexNewFromDataboxPtrs(ptrs, 2);
+        databox a = {0}, b = {0};
         FFT(flexGetTwoDataboxes((const uint8_t *)f, flexBytes(f), &a, &b));
         FFT(a.data.u == 3 && DATABOX_IS_BYTES(&b) && databoxLen(&b) == 7 &&
             memcmp(databoxBytes(&b), "payload", 7) == 0);
@@ -3209,9 +3391,9 @@ int flexFactorySelfTest(void) {
     {
         databoxBig in;
         DATABOX_BIG_INIT(&in);
-        in.type     = DATABOX_UNSIGNED_64;
+        in.type = DATABOX_UNSIGNED_64;
         in.data.u64 = 1234567890123ULL;
-        flex      *f = flexNewFromDataboxBig(&in);
+        flex *f = flexNewFromDataboxBig(&in);
         databoxBig out;
         FFT(flexGetSingleDataboxBig((const uint8_t *)f, flexBytes(f), &out));
         FFT(out.data.u == 1234567890123ULL);
@@ -3223,9 +3405,9 @@ int flexFactorySelfTest(void) {
      * there silently truncated the high 64 bits. */
     {
         const __int128_t big = -(((__int128_t)1 << 100) + 7);
-        databoxBig       in;
+        databoxBig in;
         DATABOX_BIG_SIGNED_128(&in, big);
-        flex      *f = flexNewFromDataboxBig(&in);
+        flex *f = flexNewFromDataboxBig(&in);
         databoxBig out;
         FFT(flexGetSingleDataboxBig((const uint8_t *)f, flexBytes(f), &out));
         FFT(out.type == DATABOX_SIGNED_128 && *out.data.i128 == big);
@@ -3237,9 +3419,9 @@ int flexFactorySelfTest(void) {
      * is all that matters for a numeric set. */
     {
         const __int128_t big = ((__int128_t)1 << 100) + 7;
-        databoxBig       in;
+        databoxBig in;
         DATABOX_BIG_SIGNED_128(&in, big);
-        flex      *f = flexNewFromDataboxBig(&in);
+        flex *f = flexNewFromDataboxBig(&in);
         databoxBig out;
         FFT(flexGetSingleDataboxBig((const uint8_t *)f, flexBytes(f), &out));
         FFT(out.type == DATABOX_UNSIGNED_128 &&
@@ -3250,9 +3432,9 @@ int flexFactorySelfTest(void) {
     /* databoxBig arm — unsigned 128-bit round-trip. */
     {
         const __uint128_t big = ((__uint128_t)1 << 120) + 99;
-        databoxBig        in;
+        databoxBig in;
         DATABOX_BIG_UNSIGNED_128(&in, big);
-        flex      *f = flexNewFromDataboxBig(&in);
+        flex *f = flexNewFromDataboxBig(&in);
         databoxBig out;
         FFT(flexGetSingleDataboxBig((const uint8_t *)f, flexBytes(f), &out));
         FFT(out.type == DATABOX_UNSIGNED_128 && *out.data.u128 == big);
@@ -3772,15 +3954,25 @@ bool flexCompareSigned(flexEntry *fe, int64_t val) {
 /* ====================================================================
  * flex homogeneous container math
  * ==================================================================== */
+/* 96/128-bit entries decode THROUGH data.u128, so those (and only
+ * those) need the box pointed at wide storage first. Narrow entries -
+ * the overwhelmingly common case - skip the setup entirely and write
+ * straight into the union as before. The re-init must stay inside the
+ * loop: a narrow decode writes data.u64, which shares storage with
+ * the data.u128 pointer and destroys it. */
 #define flexLoopyProcess_(f, doer)                                             \
     do {                                                                       \
         uint_fast32_t _count = flexCount_(f);                                  \
         flexEntry *_fe = FLEX_ENTRY_HEAD(f);                                   \
+        databoxBig _big;                                                       \
+        databox *const _box = (databox *)&_big;                                \
         while (_count--) {                                                     \
-            databox _box;                                                      \
             flexEntryData _entry = {0};                                        \
             flexEntryDataPopulate(_fe, &_entry);                               \
-            flexLoadFixedLength_(&_entry, &_box);                              \
+            if (FLEX_IS_INTEGER_BIG(_entry.encoding)) {                        \
+                DATABOX_BIG_INIT(&_big);                                       \
+            }                                                                  \
+            flexLoadFixedLength_(&_entry, _box);                               \
             (doer);                                                            \
             _fe = flexNext(f, _fe);                                            \
         }                                                                      \
@@ -3789,62 +3981,62 @@ bool flexCompareSigned(flexEntry *fe, int64_t val) {
 
 int64_t flexAddSigned(const flex *f) {
     int64_t result = 0;
-    flexLoopyProcess_(f, result += _box.data.i);
+    flexLoopyProcess_(f, result += _box->data.i);
 }
 
 uint64_t flexAddUnsigned(const flex *f) {
     uint64_t result = 0;
-    flexLoopyProcess_(f, result += _box.data.u);
+    flexLoopyProcess_(f, result += _box->data.u);
 }
 
 int64_t flexSubtractSigned(const flex *f) {
     int64_t result = 0;
-    flexLoopyProcess_(f, result -= _box.data.i);
+    flexLoopyProcess_(f, result -= _box->data.i);
 }
 
 uint64_t flexSubtractUnsigned(const flex *f) {
     uint64_t result = 0;
-    flexLoopyProcess_(f, result -= _box.data.u);
+    flexLoopyProcess_(f, result -= _box->data.u);
 }
 
 int64_t flexMultiplySigned(const flex *f) {
     int64_t result = 1;
-    flexLoopyProcess_(f, result *= _box.data.i);
+    flexLoopyProcess_(f, result *= _box->data.i);
 }
 
 uint64_t flexMultiplyUnsigned(const flex *f) {
     uint64_t result = 1;
-    flexLoopyProcess_(f, result *= _box.data.u);
+    flexLoopyProcess_(f, result *= _box->data.u);
 }
 
 double flexAddFloat(const flex *f) {
     double result = 1;
-    flexLoopyProcess_(f, result += _box.data.f32);
+    flexLoopyProcess_(f, result += _box->data.f32);
 }
 
 double flexSubtractFloat(const flex *f) {
     double result = 0;
-    flexLoopyProcess_(f, result -= _box.data.f32);
+    flexLoopyProcess_(f, result -= _box->data.f32);
 }
 
 double flexMultiplyFloat(const flex *f) {
     double result = 1;
-    flexLoopyProcess_(f, result *= _box.data.f32);
+    flexLoopyProcess_(f, result *= _box->data.f32);
 }
 
 double flexAddDouble(const flex *f) {
     double result = 1;
-    flexLoopyProcess_(f, result += _box.data.d64);
+    flexLoopyProcess_(f, result += _box->data.d64);
 }
 
 double flexSubtractDouble(const flex *f) {
     double result = 0;
-    flexLoopyProcess_(f, result -= _box.data.d64);
+    flexLoopyProcess_(f, result -= _box->data.d64);
 }
 
 double flexMultiplyDouble(const flex *f) {
     double result = 1;
-    flexLoopyProcess_(f, result *= _box.data.d64);
+    flexLoopyProcess_(f, result *= _box->data.d64);
 }
 
 /* ====================================================================
@@ -3859,13 +4051,20 @@ flexFind_(const flex *f, flexEntry *fe, const uint32_t skip, const bool forward,
         return NULL;
     }
 
+    const flexEntry *end = GET_END(f);
+
+    /* Empty flex (or a tail/end sentinel handed in): nothing to walk,
+     * and decoding the phantom entry at `end` would over-read. */
+    if (fe == end) {
+        return NULL;
+    }
+
     int32_t skipCount = 0;
     flexEntry *head = NULL;
     if (!forward) {
         head = FLEX_ENTRY_HEAD(f);
     }
 
-    const flexEntry *end = GET_END(f);
     while (true) {
         flexEntryData entry = {0};
         flexEntryDataPopulate(fe, &entry);
@@ -3890,10 +4089,14 @@ flexFind_(const flex *f, flexEntry *fe, const uint32_t skip, const bool forward,
                 break;
             }
         } else {
-            fe = flexGetPreviousEntry(fe);
+            /* Terminate AFTER comparing the head entry (above), and
+             * never step before it — head is the first real entry, so
+             * flexGetPreviousEntry(head) would read into the header. */
             if (fe == head) {
                 break;
             }
+
+            fe = flexGetPreviousEntry(fe);
         }
     }
 
@@ -4300,37 +4503,42 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMulti(
     const bool actuallyReplace = compareUsingKeyElementOnly && found;
     const bool isFullWidthReplace = !compareUsingKeyElementOnly;
 
-    /* Most use cases don't have many entries... */
-    databox copyBox_[4];
-    flexInsertContents content_[4];
-    flexInsertContents *contents_[4];
-    __int128_t bigBuffer_[4];
+    /* Most use cases don't have many entries: stack scratch covers
+     * multimap arity up to 8 (matching COMMON_INSERT_MAX_CONTENTS_),
+     * so common sorted inserts never allocate. */
+    enum { SORTED_INSERT_STACK_ELEMENTS_ = 8 };
+    databox copyBox_[SORTED_INSERT_STACK_ELEMENTS_];
+    flexInsertContents content_[SORTED_INSERT_STACK_ELEMENTS_];
+    flexInsertContents *contents_[SORTED_INSERT_STACK_ELEMENTS_];
+    __int128_t bigBuffer_[SORTED_INSERT_STACK_ELEMENTS_];
 
     databox *copyBox = copyBox_;
     flexInsertContents *content = content_;
     flexInsertContents **contents = contents_;
     __int128_t *bigBuffer = bigBuffer_;
 
-    if (elementsPerEntry > 4) {
-#if 0
-        copyBox = zmalloc(elementsPerEntry * sizeof(*copyBox));
-        contents = zmalloc(elementsPerEntry * sizeof(*contents));
-        content = zmalloc(elementsPerEntry * sizeof(*content));
-#else
-        /* Optimize this a bit by running one malloc and chopping up the
-         * resulting block of memory into what we need... */
-        const size_t copyLen = elementsPerEntry * sizeof(*copyBox);
-        const size_t contentsLen = elementsPerEntry * sizeof(*contents);
-        const size_t contentLen = elementsPerEntry * sizeof(*content);
+    /* Wider entries spill to one heap block carved in descending
+     * alignment order: bigBuffer (16-byte alignment) first, then the
+     * 16-byte copyBox structs, then content, then the pointer array.
+     * Every region must be disjoint - a previous carve based bigBuffer
+     * at the wrong offset, overlapping the tail of content[], which
+     * silently corrupted insert descriptors whenever a wide entry
+     * carried 128-bit elements. Block frees itself at scope exit. */
+    cleaner(zfree) void *sortedInsertScratch_ = NULL;
+    if (elementsPerEntry > SORTED_INSERT_STACK_ELEMENTS_) {
         const size_t bigBufferLen = elementsPerEntry * sizeof(*bigBuffer);
-        void *block =
-            zmalloc(copyLen + contentsLen + contentLen + bigBufferLen);
-        uint8_t *blockBytes = (uint8_t *)block;
-        copyBox = (databox *)blockBytes;
-        contents = (flexInsertContents **)(blockBytes + copyLen);
-        content = (flexInsertContents *)(blockBytes + copyLen + contentsLen);
-        bigBuffer = (__int128_t *)(blockBytes + copyLen + contentLen);
-#endif
+        const size_t copyLen = elementsPerEntry * sizeof(*copyBox);
+        const size_t contentLen = elementsPerEntry * sizeof(*content);
+        const size_t contentsLen = elementsPerEntry * sizeof(*contents);
+
+        sortedInsertScratch_ =
+            zmalloc(bigBufferLen + copyLen + contentLen + contentsLen);
+        uint8_t *blockBytes = (uint8_t *)sortedInsertScratch_;
+        bigBuffer = (__int128_t *)blockBytes;
+        copyBox = (databox *)(blockBytes + bigBufferLen);
+        content = (flexInsertContents *)(blockBytes + bigBufferLen + copyLen);
+        contents = (flexInsertContents **)(blockBytes + bigBufferLen + copyLen +
+                                           contentLen);
     }
 
     if (!found || isFullWidthReplace) {
@@ -4414,10 +4622,7 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMulti(
         flexInsert_____(ff, fe, contents, elementsPerEntry, &headerDiff);
     }
 
-    /* If running allocated struct buffer, free it. */
-    if (copyBox != copyBox_) {
-        zfree(copyBox);
-    }
+    /* (heap scratch, if any, frees itself at scope exit) */
 
     /* Preliminarily update midpoint given new header offset details */
     mid = *ff + offset + headerDiff.headerDiff;
@@ -4495,8 +4700,8 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectSet(
     flex **const ff, const uint_fast32_t elementsPerEntry,
     const databox **const box, flexEntry **const middleEntry) {
     return abstractInsertReplaceByTypeSortedWithMiddleMulti(
-        ff, elementsPerEntry, box, middleEntry, false,
-        false, NULL, false, NULL, false, false, NULL, true);
+        ff, elementsPerEntry, box, middleEntry, false, false, NULL, false, NULL,
+        false, false, NULL, true);
 }
 
 bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectLongKeysBecomePointers(
@@ -4525,8 +4730,8 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceSet(
     const databox **const box, flexEntry **const middleEntry,
     const struct multimapAtom *const referenceContainer) {
     return abstractInsertReplaceByTypeSortedWithMiddleMulti(
-        ff, elementsPerEntry, box, middleEntry, false,
-        true, referenceContainer, false, NULL, false, false, NULL, true);
+        ff, elementsPerEntry, box, middleEntry, false, true, referenceContainer,
+        false, NULL, false, false, NULL, true);
 }
 
 bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKey(
@@ -4546,11 +4751,36 @@ void flexAppendMultiple(flex **ff, const uint_fast32_t elementsPerEntry,
         return;
     }
 
-    /* TODO: verify non-auto-array these */
-    databox copyBox[elementsPerEntry];
-    flexInsertContents *contents[elementsPerEntry];
-    flexInsertContents content[elementsPerEntry];
-    __int128_t bigBuffer[elementsPerEntry];
+    /* Fixed stack scratch for common widths; wider appends spill to
+     * one heap block (alignment-descending carve, scope-exit freed) so
+     * arbitrary widths can't blow the stack via VLAs. */
+    enum { APPEND_STACK_ELEMENTS_ = 8 };
+    databox copyBoxStack[APPEND_STACK_ELEMENTS_];
+    flexInsertContents contentStack[APPEND_STACK_ELEMENTS_];
+    flexInsertContents *contentsStack[APPEND_STACK_ELEMENTS_];
+    __int128_t bigBufferStack[APPEND_STACK_ELEMENTS_];
+
+    databox *copyBox = copyBoxStack;
+    flexInsertContents *content = contentStack;
+    flexInsertContents **contents = contentsStack;
+    __int128_t *bigBuffer = bigBufferStack;
+
+    cleaner(zfree) void *appendScratch_ = NULL;
+    if (elementsPerEntry > APPEND_STACK_ELEMENTS_) {
+        const size_t bigBufferLen = elementsPerEntry * sizeof(*bigBuffer);
+        const size_t copyLen = elementsPerEntry * sizeof(*copyBox);
+        const size_t contentLen = elementsPerEntry * sizeof(*content);
+        const size_t contentsLen = elementsPerEntry * sizeof(*contents);
+
+        appendScratch_ =
+            zmalloc(bigBufferLen + copyLen + contentLen + contentsLen);
+        uint8_t *blockBytes = (uint8_t *)appendScratch_;
+        bigBuffer = (__int128_t *)blockBytes;
+        copyBox = (databox *)(blockBytes + bigBufferLen);
+        content = (flexInsertContents *)(blockBytes + bigBufferLen + copyLen);
+        contents = (flexInsertContents **)(blockBytes + bigBufferLen + copyLen +
+                                           contentLen);
+    }
 
     for (uint_fast32_t i = 0; i < elementsPerEntry; i++) {
         copyBox[i] = *box[i];
@@ -4984,6 +5214,14 @@ DK_INLINE_ALWAYS bool flexRawEntryLengthSafe(const flexEntry *const fe,
     }
     const flexEncoding encoding = fe[0];
 
+    /* FLEX_SAME is an unused reserved encoding no writer ever emits;
+     * it sits in the immediate range but the decode-size switch has no
+     * case for it and hits __builtin_unreachable().  Reject it here so
+     * a mutated byte can't pass validation then trap on real decode. */
+    if (encoding == FLEX_SAME) {
+        return false;
+    }
+
     /* Immediate encodings are single-byte entries; no length varint, no
      * trailer.  Total entry size = 1. */
     if (FLEX_IS_IMMEDIATE(encoding)) {
@@ -5288,6 +5526,15 @@ bool flexConvertToCFlex(const flex *f, cflex *cBuffer, size_t cBufferLen) {
         if (encodedLen > EXPECT_LENGTH_BYTES) {
             /* encoded length needs more room than we left in our writeable
              * gap, so open up more room to write full compressed length. */
+            /* LZ4 only bounded the payload against the 2-byte-gap
+             * budget; shifting it forward by the extra length bytes
+             * needs strictly more room, so refuse rather than write
+             * past cBuffer. */
+            if (headerWidth + (size_t)encodedLen + (size_t)compressedLen >
+                cBufferLen) {
+                return false;
+            }
+
             memmove(cflexStartCompressPosition - EXPECT_LENGTH_BYTES +
                         encodedLen,
                     cflexStartCompressPosition, compressedLen);
@@ -5819,6 +6066,45 @@ int32_t flexTest(int32_t argc, char **argv) {
     flexEntry *fe = NULL;
     (void)f;
     (void)fe;
+
+    printf("Verify external-reference encoding round-trips every tier:\n");
+    {
+        /* Boundary values across all eight width tiers; the 56/64 pair
+         * pins a former off-by-one where encode subtracted the wrong
+         * tier max and the value came back 2^56-1 too large. */
+        const uint64_t refVals[] = {
+            0,
+            REFERENCE_MAX_8,
+            REFERENCE_MAX_8 + 1,
+            REFERENCE_MAX_16,
+            REFERENCE_MAX_16 + 1,
+            REFERENCE_MAX_24 + 1,
+            REFERENCE_MAX_32 + 1,
+            REFERENCE_MAX_40 + 1,
+            REFERENCE_MAX_48,
+            REFERENCE_MAX_48 + 1,
+            REFERENCE_MAX_56,
+            REFERENCE_MAX_56 + 1,
+            REFERENCE_MAX_56 + 1000000000ULL,
+            REFERENCE_MAX_64 - 1,
+            REFERENCE_MAX_64,
+        };
+        for (size_t i = 0; i < COUNT_ARRAY(refVals); i++) {
+            const uint64_t v = refVals[i];
+            const flexEncoding enc = flexEncodingReferenceUnsigned(v);
+            const uint64_t encoded = flexEncodingReferenceUnsignedEncode(v);
+            const uint64_t decoded =
+                flexEncodingReferenceUnsignedDecode(enc, encoded);
+            if (decoded != v) {
+                printf("  ref round-trip FAILED for %" PRIu64
+                       " (encoding %d, encoded %" PRIu64 ", decoded %" PRIu64
+                       ")\n",
+                       v, (int)enc, encoded, decoded);
+                assert(NULL && "external reference encode/decode mismatch");
+            }
+        }
+        printf("  SUCCESS\n\n");
+    }
 
     printf("Verify embedded types:\n");
     {
@@ -7040,7 +7326,7 @@ int32_t flexTest(int32_t argc, char **argv) {
     printf("Compare multi-insert ending in NULL:\n");
     {
         f = flexNew();
-#define mku(u_) {.data.u = (u_), .type = DATABOX_UNSIGNED_64}
+#define mku(u_) databoxNewUnsigned(u_)
         databox clusterId = mku(100);
         databox nodeId = mku(200);
         databox runId = mku(300);
@@ -7503,6 +7789,59 @@ int32_t flexTest(int32_t argc, char **argv) {
 
         zfree(restored);
         zfree(compressRestoreBuffer);
+    }
+
+    printf("Test cflexConvertToFlex buffer-length contract:\n");
+    {
+        /* Decompression trusts the caller's buffer length to skip its
+         * own realloc, so pin both sides of that contract: a too-small
+         * declared buffer must grow (with the length updated to the
+         * real allocation), and an exactly-sized buffer must be used
+         * as-is without writing past its end. */
+        uint8_t randBytesBuf[8192] = {0};
+        f = flexNew();
+        for (int i = 0; i < 48; i++) {
+            flexPushByType(&f,
+                           &DATABOX_WITH_BYTES(
+                               randBytesBuf, randbytes(randBytesBuf, 64, 512)),
+                           FLEX_ENDPOINT_TAIL);
+        }
+
+        const size_t totalSize = flexBytes(f);
+        assert(totalSize >= CFLEX_MINIMUM_COMPRESS_BYTES);
+
+        size_t cSize = jebufSizeAllocation(totalSize);
+        void *cBuf = zcalloc(1, cSize);
+        cflex *c = (cflex *)cBuf;
+        if (!flexConvertToCFlex(f, cBuf, cSize)) {
+            assert(NULL && "failed to compress contract-test flex!");
+        }
+
+        /* (a) undersized declared buffer: must realloc and report the
+         * new real allocation back through the length */
+        size_t smallLen = 16;
+        flex *small = zcalloc(1, smallLen);
+        if (!cflexConvertToFlex(c, &small, &smallLen)) {
+            assert(NULL && "undersized restore failed!");
+        }
+        assert(smallLen >= totalSize);
+        assert(memcmp(f, small, totalSize) == 0);
+        zfree(small);
+
+        /* (b) exactly-sized buffer: no growth needed; any write past
+         * the end is caught by the sanitizer allocator */
+        size_t exactLen = totalSize;
+        flex *exact = zcalloc(1, exactLen);
+        if (!cflexConvertToFlex(c, &exact, &exactLen)) {
+            assert(NULL && "exact-size restore failed!");
+        }
+        assert(exactLen == totalSize);
+        assert(memcmp(f, exact, totalSize) == 0);
+        zfree(exact);
+
+        zfree(cBuf);
+        flexFree(f);
+        printf("SUCCESS\n\n");
     }
 
 #if defined(TEST_MEMORY_BIG) || !__has_feature(address_sanitizer)
@@ -9075,7 +9414,7 @@ int32_t flexTest(int32_t argc, char **argv) {
     {
         flex *small = flexNew();
         for (int i = 0; i < 32; i++) {
-            const databox b = {.data.i = i, .type = DATABOX_SIGNED_64};
+            const databox b = databoxNewSigned(i);
             flexPushSigned(&small, b.data.i, FLEX_ENDPOINT_TAIL);
         }
         const size_t bytes = flexBytes(small);
@@ -9091,7 +9430,7 @@ int32_t flexTest(int32_t argc, char **argv) {
          * must fail. */
         flex *built = flexNew();
         for (int i = 0; i < 16; i++) {
-            const databox b = {.data.i = i, .type = DATABOX_SIGNED_64};
+            const databox b = databoxNewSigned(i);
             flexPushSigned(&built, b.data.i, FLEX_ENDPOINT_TAIL);
         }
         const size_t bytes = flexBytes(built);
@@ -9120,7 +9459,7 @@ int32_t flexTest(int32_t argc, char **argv) {
          * is exercised. */
         flex *grow = flexNew();
         for (int i = 0; i < 256; i++) {
-            const databox b = {.data.i = i, .type = DATABOX_SIGNED_64};
+            const databox b = databoxNewSigned(i);
             flexPushSigned(&grow, b.data.i, FLEX_ENDPOINT_TAIL);
         }
         const size_t bytes = flexBytes(grow);

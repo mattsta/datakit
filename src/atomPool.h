@@ -65,7 +65,7 @@
  *
  * LIMITATIONS
  * -----------
- *   - atomPoolReset() only works with HASH backend; TREE backend no-op
+ *   - atomPoolReset() empties either backend (TREE recreates its store)
  *   - IDs are 1-based (0 means error/invalid) for both backends
  *   - Refcounts via API are 1-based (refcount = actual reservations)
  *   - TREE backend has higher per-operation overhead but lower memory

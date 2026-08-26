@@ -256,7 +256,7 @@ uint64_t stringPoolIntern(stringPool *pool, const databox *str) {
     /* Point to our owned copy */
     keyBox.data.bytes.start = data;
 
-    databox valBox = {.type = DATABOX_UNSIGNED_64, .data.u = id};
+    databox valBox = databoxNewUnsigned(id);
     multidictAdd(pool->strToId, &keyBox, &valBox);
 
     pool->count++;
@@ -1001,6 +1001,42 @@ int stringPoolTest(int argc, char *argv[]) {
         printf("   - Break-even string length: ~18-20 bytes\n");
         printf(
             "   - Sharing multiplier: N sets sharing = N-1 copies saved\n\n");
+    }
+
+    TEST("reset then reuse: ids restart and lookups stay coherent") {
+        stringPool *pool = stringPoolNew();
+
+        for (int cycle = 0; cycle < 2; cycle++) {
+            char buf[32];
+            for (uint64_t i = 0; i < 200; i++) {
+                snprintf(buf, sizeof(buf), "reset-member-%" PRIu64, i);
+                const databox s = databoxNewBytesString(buf);
+                stringPoolIntern(pool, &s);
+            }
+            if (stringPoolCount(pool) != 200) {
+                ERR("cycle %d: expected 200, got %zu", cycle,
+                    stringPoolCount(pool));
+            }
+
+            stringPoolReset(pool);
+            if (stringPoolCount(pool) != 0) {
+                ERR("cycle %d: expected 0 after reset, got %zu", cycle,
+                    stringPoolCount(pool));
+            }
+        }
+
+        /* Ids restart at 1 and round-trip after reset */
+        const databox fresh = databoxNewBytesString("post-reset");
+        const uint64_t id = stringPoolIntern(pool, &fresh);
+        if (id != 1) {
+            ERR("Expected id restart at 1, got %" PRIu64, id);
+        }
+        databox resolved;
+        if (!stringPoolLookup(pool, id, &resolved)) {
+            ERRR("Lookup after reset failed");
+        }
+
+        stringPoolFree(pool);
     }
 
     TEST_FINAL_RESULT;

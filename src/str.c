@@ -556,6 +556,25 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
 
     int err = 0;
 
+    TEST("StrTenPow / StrTenPowBig exact powers") {
+        /* Every entry verified against iterated multiplication; the
+         * doubleFormat 128-bit path scales by these, so one wrong or
+         * missing entry silently corrupts formatted output */
+        __uint128_t want = 1;
+        for (size_t p = 0; p <= 38; p++) {
+            if (p <= 18 && StrTenPow(p) != (uint64_t)want) {
+                ERR("StrTenPow(%zu) wrong", p);
+            }
+            if (StrTenPowBig(p) != want) {
+                ERR("StrTenPowBig(%zu) wrong (high %" PRIu64 " low %" PRIu64
+                    ")",
+                    p, (uint64_t)(StrTenPowBig(p) >> 64),
+                    (uint64_t)StrTenPowBig(p));
+            }
+            want *= 10;
+        }
+    }
+
     /* ====================================================================
      * Stress tests for SIMD vs baseline implementations - run first!
      * ==================================================================== */
@@ -4064,6 +4083,50 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
         assert((uint8_t)buf2[2] == 0xCC);
         assert((uint8_t)buf2[3] == 0x81);
         assert(buf2[4] == 'a');
+    }
+
+    TEST("StrBufToInt128: exact signed range boundaries") {
+        /* Magnitudes past the signed range must REJECT, not wrap into
+         * silently wrong values */
+        const char *maxStr = "170141183460469231731687303715884105727";
+        const char *maxPlus1 = "170141183460469231731687303715884105728";
+        const char *minStr = "-170141183460469231731687303715884105728";
+        const char *minMinus1 = "-170141183460469231731687303715884105729";
+
+        __int128_t v = 0;
+
+        if (!StrBufToInt128(maxStr, strlen(maxStr), &v)) {
+            ERRR("INT128_MAX string must parse");
+        } else {
+            const __int128_t expectMax =
+                (__int128_t)((((__uint128_t)1 << 127) - 1));
+            if (v != expectMax) {
+                ERRR("INT128_MAX parsed to wrong value");
+            }
+        }
+
+        if (!StrBufToInt128(minStr, strlen(minStr), &v)) {
+            ERRR("INT128_MIN string must parse");
+        } else {
+            const __int128_t expectMin =
+                -(__int128_t)((((__uint128_t)1 << 127) - 1)) - 1;
+            if (v != expectMin) {
+                ERRR("INT128_MIN parsed to wrong value");
+            }
+        }
+
+        if (StrBufToInt128(maxPlus1, strlen(maxPlus1), &v)) {
+            ERRR("INT128_MAX+1 must be rejected");
+        }
+        if (StrBufToInt128(minMinus1, strlen(minMinus1), &v)) {
+            ERRR("INT128_MIN-1 must be rejected");
+        }
+
+        /* The originally observed silent corruption: -1.8e38 */
+        const char *badNeg = "-180000000000000000000000000000000000000";
+        if (StrBufToInt128(badNeg, strlen(badNeg), &v)) {
+            ERRR("-1.8e38 must be rejected (was silently wrapping)");
+        }
     }
 
     TEST_FINAL_RESULT;

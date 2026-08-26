@@ -1,22 +1,11 @@
 #include "timeUtil.h"
 
 uint64_t timeUtilNs(void) {
+    /* clock_gettime is POSIX on Linux/BSD and native on macOS >=10.12;
+     * a Mach host_get_clock_service round-trip per call costs
+     * microseconds and is never needed on supported targets. */
     struct timespec ts;
-
-#if DK_OS_APPLE
-    /* macOS: Use Mach kernel clock_get_time with CALENDAR_CLOCK */
-    clock_serv_t cclock;
-    mach_timespec_t mts;
-    host_get_clock_service(mach_host_self(), CALENDAR_CLOCK, &cclock);
-    clock_get_time(cclock, &mts);
-    mach_port_deallocate(mach_task_self(), cclock);
-    ts.tv_sec = mts.tv_sec;
-    ts.tv_nsec = mts.tv_nsec;
-#else
-    /* Linux/BSD: Use clock_gettime with CLOCK_REALTIME */
     clock_gettime(CLOCK_REALTIME, &ts);
-#endif
-
     return ((uint64_t)ts.tv_sec * 1000000000ULL) + (uint64_t)ts.tv_nsec;
 }
 

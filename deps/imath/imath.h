@@ -79,7 +79,7 @@ typedef struct mpz {
 #define MP_SIGN_SET(z, sign)                                                   \
     do {                                                                       \
         (z)->currentDigits =                                                   \
-            (void *)(((uintptr_t)MP_DIGITS(z)) | ((sign)&0x01));               \
+            (void *)(((uintptr_t)MP_DIGITS(z)) | ((sign) & 0x01));             \
     } while (0)
 
 #define MP_SIGN(z) ((uintptr_t)(z)->currentDigits & 0x01)

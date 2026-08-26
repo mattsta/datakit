@@ -264,8 +264,8 @@ typedef enum persistOp {
  * on exactly one node.  They agree only about operand SHAPE, which is
  * precisely and only what this predicate asks about. */
 static inline bool persistOpCarriesFullValue(uint16_t op) {
-    return op == (uint16_t) PERSIST_OP_REPLACE
-        || op == (uint16_t) PERSIST_OP_OPAQUE_SET;
+    return op == (uint16_t)PERSIST_OP_REPLACE ||
+           op == (uint16_t)PERSIST_OP_OPAQUE_SET;
 }
 
 /* ============================================================================
@@ -458,6 +458,19 @@ struct persistStore {
 
     /* Close and free resources */
     void (*close)(void *ctx);
+
+    /* Optional atomic full-rewrite protocol for whole-file publishers
+     * (the snapshot store). When all three are present, a writer that
+     * replaces the entire file brackets its writes with begin/commit so
+     * a crash can never expose a torn file: begin redirects subsequent
+     * write/seek/truncate to a private temp, commit durably swaps the
+     * temp over the live file (fsync temp, atomic rename, fsync dir),
+     * and abort discards the temp leaving the live file untouched.
+     * NULL for backends without crash exposure (e.g. memory), which
+     * fall back to in-place overwrite. */
+    bool (*rewriteBegin)(void *ctx);
+    bool (*rewriteCommit)(void *ctx);
+    void (*rewriteAbort)(void *ctx);
 };
 
 /* ============================================================================
@@ -756,6 +769,16 @@ extern const persistOps persistOpsMultidict;
 extern const persistOps persistOpsMultiarray;
 extern const persistOps persistOpsMultiOrderedSet;
 extern const persistOps persistOpsMultiLRU;
+
+/* Identity-verified POP fold observability (see the apply-arm
+ * comment in persist.c): deep-remove = the stamped element was
+ * removed from other than the popping end (out-of-order
+ * interleave); absent-noop = the stamped element was not in the
+ * list at all — the pop's effect had already applied, and the fold
+ * deduped instead of blind-popping a different element.  Both are
+ * lifetime process totals. */
+uint64_t persistMultilistPopIdentityDeepRemoveTotal(void);
+uint64_t persistMultilistPopIdentityAbsentNoopTotal(void);
 
 /* ============================================================================
  * Utility Functions

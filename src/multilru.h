@@ -305,7 +305,10 @@ void multilruUpdateWeight(multilru *mlru, multilruPtr ptr, uint64_t newWeight);
  * If entry is at level > 0: demotes to level-1 (second chance)
  * If entry is at level 0: true eviction, handle becomes invalid
  * Returns: true if entry was found and processed, false if cache empty.
- * The 'out' pointer receives the entry handle (useful for cleanup). */
+ * The 'out' pointer receives the entry handle (useful for cleanup).
+ * Distinguish demotion from eviction with multilruIsPopulated(out):
+ * still populated = demoted (do NOT free the caller's resource);
+ * unpopulated = truly evicted. */
 bool multilruRemoveMinimum(multilru *mlru, multilruPtr *out);
 
 /* Delete specific entry immediately (bypasses demotion).

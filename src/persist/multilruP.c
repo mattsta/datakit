@@ -11,6 +11,56 @@
 #include <unistd.h>
 
 /* ============================================================================
+ * Auto-eviction durability
+ * ============================================================================
+ * An insert can auto-evict other entries as a side effect. Those
+ * victims are gone from memory but, without a WAL record, replay would
+ * re-apply their original INSERT and resurrect them. This callback logs
+ * a DELETE for each evicted handle. It fires DURING the in-memory
+ * insert, before that insert's own INSERT is logged, so the WAL order
+ * is DELETE(victim...) then INSERT(new) - exactly what deterministic
+ * replay needs. (Replay itself disables auto-eviction and reproduces
+ * evictions purely from these logged DELETEs.)
+ */
+static void multilruPEvictLogCallback(size_t evictedPtr, void *userData) {
+    multilruP *mlru = userData;
+    /* Only auto-evictions during an insert are captured here; explicit
+     * removals log their own DELETE. */
+    if (!mlru || !mlru->captureEvictions) {
+        return;
+    }
+
+    if (mlru->pendingEvictCount == mlru->pendingEvictCap) {
+        const size_t next =
+            mlru->pendingEvictCap ? mlru->pendingEvictCap * 2 : 8;
+        mlru->pendingEvict =
+            zrealloc(mlru->pendingEvict, next * sizeof(*mlru->pendingEvict));
+        mlru->pendingEvictCap = next;
+    }
+
+    mlru->pendingEvict[mlru->pendingEvictCount++] = (multilruPtr)evictedPtr;
+}
+
+/* Log a DELETE for each victim buffered during the just-completed
+ * insert, then clear the buffer. Called AFTER the insert's own INSERT
+ * is logged so the WAL carries INSERT(new) then DELETE(victim...). */
+static void multilruPFlushPendingEvictions(multilruP *mlru) {
+    for (size_t i = 0; i < mlru->pendingEvictCount; i++) {
+        const multilruPtr handle = mlru->pendingEvict[i];
+        const void *args[1] = {&handle};
+        persistCtxLogOp(mlru->ctx, PERSIST_OP_DELETE, args, 1);
+    }
+
+    mlru->pendingEvictCount = 0;
+}
+
+/* Wire the durability callback onto the wrapper's multilru. Call once
+ * per wrapper, after mlru->mlru is established. */
+static void multilruPArmEvictLog(multilruP *mlru) {
+    multilruSetEvictCallback(mlru->mlru, multilruPEvictLogCallback, mlru);
+}
+
+/* ============================================================================
  * Lifecycle
  * ============================================================================
  */
@@ -43,6 +93,7 @@ multilruP *multilruNewP(persistCtx *ctx) {
      * mutation will trigger compaction which will save the snapshot with
      * correct config. */
 
+    multilruPArmEvictLog(mlru);
     return mlru;
 }
 
@@ -87,6 +138,7 @@ multilruP *multilruNewWithLevelsP(persistCtx *ctx, size_t maxLevels,
         return NULL;
     }
 
+    multilruPArmEvictLog(mlru);
     return mlru;
 }
 
@@ -122,6 +174,7 @@ multilruP *multilruNewWithConfigP(persistCtx *ctx,
         return NULL;
     }
 
+    multilruPArmEvictLog(mlru);
     return mlru;
 }
 
@@ -161,6 +214,10 @@ multilruP *multilruOpenP(persistCtx *ctx) {
         }
     }
 
+    /* Armed only now, after replay finished: replay ran on a bare
+     * multilru with no callback, so no eviction was mis-logged during
+     * recovery. */
+    multilruPArmEvictLog(mlru);
     return mlru;
 }
 
@@ -179,6 +236,7 @@ void multilruCloseP(multilruP *mlru) {
         multilruFree(mlru->mlru);
     }
 
+    zfree(mlru->pendingEvict);
     zfree(mlru);
 }
 
@@ -233,9 +291,16 @@ multilruPtr multilruInsertP(multilruP *mlru) {
         return 0;
     }
 
-    /* Insert in-memory first to get handle */
+    /* Insert in-memory first to get handle. This may auto-evict other
+     * entries, buffering their handles for the flush below. */
+    mlru->captureEvictions = true;
     multilruPtr handle = multilruInsert(mlru->mlru);
+    mlru->captureEvictions = false;
     if (handle == 0) {
+        /* The fresh entry itself may have been the eviction victim;
+         * any OTHER victims are gone from memory and must still be
+         * recorded so replay doesn't resurrect them. */
+        multilruPFlushPendingEvictions(mlru);
         return 0;
     }
 
@@ -245,8 +310,12 @@ multilruPtr multilruInsertP(multilruP *mlru) {
     if (!persistCtxLogOp(mlru->ctx, PERSIST_OP_INSERT, args, 2)) {
         /* WAL failed - remove the entry */
         multilruDelete(mlru->mlru, handle);
+        multilruPFlushPendingEvictions(mlru);
         return 0;
     }
+
+    /* Order matters: INSERT is logged, now the eviction DELETEs. */
+    multilruPFlushPendingEvictions(mlru);
 
     /* Check compaction threshold */
     persistCtxMaybeCompact(mlru->ctx, mlru->mlru, &persistOpsMultiLRU);
@@ -259,9 +328,13 @@ multilruPtr multilruInsertWeightedP(multilruP *mlru, uint64_t weight) {
         return 0;
     }
 
-    /* Insert in-memory first to get handle */
+    /* Insert in-memory first to get handle. This may auto-evict other
+     * entries, buffering their handles for the flush below. */
+    mlru->captureEvictions = true;
     multilruPtr handle = multilruInsertWeighted(mlru->mlru, weight);
+    mlru->captureEvictions = false;
     if (handle == 0) {
+        multilruPFlushPendingEvictions(mlru);
         return 0;
     }
 
@@ -270,8 +343,12 @@ multilruPtr multilruInsertWeightedP(multilruP *mlru, uint64_t weight) {
     if (!persistCtxLogOp(mlru->ctx, PERSIST_OP_INSERT, args, 2)) {
         /* WAL failed - remove the entry */
         multilruDelete(mlru->mlru, handle);
+        multilruPFlushPendingEvictions(mlru);
         return 0;
     }
+
+    /* Order matters: INSERT is logged, now the eviction DELETEs. */
+    multilruPFlushPendingEvictions(mlru);
 
     /* Check compaction threshold */
     persistCtxMaybeCompact(mlru->ctx, mlru->mlru, &persistOpsMultiLRU);
@@ -1144,6 +1221,73 @@ static int test_multilruP_auto_evict(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
+static int test_multilruP_auto_evict_crash_before_compact(int argc,
+                                                          char *argv[]) {
+    (void)argc;
+    (void)argv;
+
+    int err = 0;
+    const char *basePath = "/tmp/multilruPTest_evict_crash";
+
+    TEST("multilruP auto-eviction survives reopen without compaction")
+
+    ptestCleanupFiles(basePath);
+
+    persistCtx *ctx = persistCtxNew(basePath, NULL);
+    multilruP *mlru = multilruNewWithLevelsP(ctx, 5, 10);
+    if (!mlru) {
+        ERRR("Failed to create multilruP");
+    }
+
+    /* Overfill so inserts auto-evict; each eviction must be WAL-logged
+     * as a DELETE or replay would resurrect it. */
+    enum { INSERTED = 30 };
+    multilruPtr handles[INSERTED];
+    for (int i = 0; i < INSERTED; i++) {
+        handles[i] = multilruInsertP(mlru);
+        if (handles[i] == 0) {
+            ERR("Failed to insert entry %d", i);
+        }
+    }
+
+    bool evictedBefore[INSERTED];
+    for (int i = 0; i < INSERTED; i++) {
+        evictedBefore[i] = !multilruIsPopulatedP(mlru, handles[i]);
+    }
+    const size_t countBefore = multilruCountP(mlru);
+    if (countBefore > 10) {
+        ERR("Count should be <= 10, got %zu", countBefore);
+    }
+
+    /* Reopen WITHOUT compaction: recovery must replay the WAL,
+     * including the auto-eviction DELETEs (models a crash before the
+     * next compaction). */
+    multilruCloseP(mlru);
+    persistCtxFree(ctx);
+
+    ctx = persistCtxNew(basePath, NULL);
+    mlru = multilruOpenP(ctx);
+    if (!mlru) {
+        ERRR("Failed to reopen multilruP");
+    }
+
+    if (multilruCountP(mlru) != countBefore) {
+        ERR("Count changed across WAL-only reopen: before %zu after %zu",
+            countBefore, multilruCountP(mlru));
+    }
+    for (int i = 0; i < INSERTED; i++) {
+        if (evictedBefore[i] && multilruIsPopulatedP(mlru, handles[i])) {
+            ERR("Evicted entry %d resurrected after WAL replay", i);
+        }
+    }
+
+    multilruCloseP(mlru);
+    persistCtxFree(ctx);
+    ptestCleanupFiles(basePath);
+
+    TEST_FINAL_RESULT;
+}
+
 static int test_multilruP_level_promotion(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -1223,6 +1367,7 @@ int multilruPTest(int argc, char *argv[]) {
     err += test_multilruP_handle_gaps(argc, argv);
     err += test_multilruP_weight_extremes(argc, argv);
     err += test_multilruP_auto_evict(argc, argv);
+    err += test_multilruP_auto_evict_crash_before_compact(argc, argv);
     err += test_multilruP_level_promotion(argc, argv);
 
     /* Stress tests */

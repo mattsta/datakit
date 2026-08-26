@@ -20,7 +20,11 @@
  * Features:
  * - Multiple encoding implementations: scalar, SWAR, SSE2, AVX2, NEON
  * - Runtime SIMD capability detection
- * - Thread-safe generation with monotonic counter
+ * - Explicit caller-owned generator state (no hidden globals): each
+ *   ulidGen carries its own RNG, monotonic-emission watermark, and
+ *   clock choice. Independent generators are independent; one
+ *   generator is single-threaded like the rest of the framework.
+ * - Timestamps are Unix-epoch nanoseconds under either clock source
  * - Full encode/decode roundtrip support
  */
 
@@ -51,6 +55,48 @@ typedef struct ulid32 {
     uint32_t data;
 } ulid32_t;
 
+/* ====================================================================
+ * Generator State
+ * ==================================================================== */
+
+/* Where generation timestamps come from. Both sources yield Unix-epoch
+ * nanoseconds; the choice is a latency/robustness trade:
+ * - REALTIME reads the wall clock each id: always current, but a
+ *   stepped clock (NTP, manual set) shows up in ids (emission stays
+ *   monotonic via the watermark; the visible timestamp can pin at
+ *   watermark+1ns until real time catches back up).
+ * - MONOTONIC_OFFSET reads the monotonic clock and adds a wall-clock
+ *   offset captured at init: immune to wall-clock steps and cheaper on
+ *   platforms where the monotonic read is faster, but drifts with the
+ *   monotonic clock's rate error over long uptimes. */
+typedef enum ulidClockSource {
+    ULID_CLOCK_REALTIME = 0,
+    ULID_CLOCK_MONOTONIC_OFFSET = 1,
+} ulidClockSource;
+
+/* All generation state, caller-owned; stack or heap both fine.
+ * Zero-initialized state ({0}) is valid: the RNG self-seeds on first
+ * use and the clock defaults to REALTIME. Use ulidGenInit to pick the
+ * clock source (required for MONOTONIC_OFFSET, which must capture its
+ * offset at init). */
+typedef struct ulidGen {
+    uint64_t rng[2];          /* xoroshiro128+ state; {0,0} = unseeded */
+    uint64_t lastEmittedNs;   /* emission watermark: next id > this */
+    uint64_t clockOffsetNs;   /* realtime - monotonic, captured at init */
+    uint32_t collisionCount;  /* same-instant burst length (NSCOUNT) */
+    uint32_t clockSource;     /* ulidClockSource */
+    uint64_t snowflakeLastMs; /* SNOWFLAKE per-ms sequence state */
+    uint16_t snowflakeSeq;
+} ulidGen;
+
+/* Seed the RNG and configure the clock source. Returns false only on
+ * NULL input. */
+bool ulidGenInit(ulidGen *g, ulidClockSource clock);
+
+/* Heap conveniences around ulidGenInit */
+ulidGen *ulidGenNew(ulidClockSource clock);
+void ulidGenFree(ulidGen *g);
+
 /* Encoding implementation types for benchmarking */
 typedef enum ulidEncodeImpl {
     ULID_ENCODE_SCALAR = 0, /* Pure scalar implementation */
@@ -66,8 +112,12 @@ typedef enum ulidEncodeImpl {
  * Core API
  * ==================================================================== */
 
-/* Generate a new ULID with nanosecond timestamp + randomness */
-void ulidGenerate(ulid_t *out);
+/* Generate a new ULID: Unix-epoch nanosecond timestamp + randomness.
+ * Emission is strictly monotonic per generator (same-instant calls
+ * bump the timestamp by 1ns past the watermark), so ids from one
+ * generator always sort in generation order — across clock steps
+ * too. */
+void ulidGenerate(ulidGen *g, ulid_t *out);
 
 /* Encode ULID to Base36 string (25 chars + null terminator)
  * Returns length written (25) on success, 0 on error */
@@ -84,7 +134,7 @@ uint64_t ulidGetTimestampNs(const ulid_t *ulid);
 uint64_t ulidGetRandom(const ulid_t *ulid);
 
 /* Convenience: generate and encode in one call */
-size_t ulidGenerateAndEncode(char *out, size_t outLen);
+size_t ulidGenerateAndEncode(ulidGen *g, char *out, size_t outLen);
 
 /* ====================================================================
  * Implementation Selection API
@@ -193,7 +243,10 @@ typedef enum ulidVariantType {
 typedef struct ulidVariantConfig {
     ulidVariantType type;
     uint64_t customEpochNs; /* For EPOCHCUSTOM variant */
-    uint16_t machineId;     /* For SNOWFLAKE variant (0-1023) */
+    uint16_t machineId;     /* For SNOWFLAKE variant (0-1023). Sequence
+                             * state is per-generator, so ids collide
+                             * unless every generator sharing a clock
+                             * has a distinct machineId. */
 } ulidVariantConfig;
 
 /* Epoch offsets in nanoseconds since Unix epoch */
@@ -209,10 +262,11 @@ typedef struct ulidVariantConfig {
  * ==================================================================== */
 
 /* Generate ULID64 with specific variant type (uses defaults) */
-void ulid64Generate(ulid64_t *out, ulidVariantType type);
+void ulid64Generate(ulidGen *g, ulid64_t *out, ulidVariantType type);
 
 /* Generate ULID64 with custom configuration */
-void ulid64GenerateWithConfig(ulid64_t *out, const ulidVariantConfig *config);
+void ulid64GenerateWithConfig(ulidGen *g, ulid64_t *out,
+                              const ulidVariantConfig *config);
 
 /* Encode ULID64 to Base36 string (13 chars + null terminator) */
 size_t ulid64Encode(const ulid64_t *id, char *out, size_t outLen);
@@ -227,17 +281,19 @@ uint64_t ulid64GetTimestampNs(const ulid64_t *id, ulidVariantType type);
 uint64_t ulid64GetRandom(const ulid64_t *id, ulidVariantType type);
 
 /* Convenience: generate and encode in one call */
-size_t ulid64GenerateAndEncode(char *out, size_t outLen, ulidVariantType type);
+size_t ulid64GenerateAndEncode(ulidGen *g, char *out, size_t outLen,
+                               ulidVariantType type);
 
 /* ====================================================================
  * 128-bit DUALNS Variant API
  * ==================================================================== */
 
-/* Generate DUALNS (128-bit: two sequential 64-bit nanosecond timestamps) */
-void ulidGenerateDualNs(ulid_t *out);
+/* Generate DUALNS (128-bit: two sequential 64-bit nanosecond
+ * timestamps; per-generator watermark guarantees ts2 > ts1) */
+void ulidGenerateDualNs(ulidGen *g, ulid_t *out);
 
 /* Generate DUALNS and return as __uint128_t (high 64 = ts1, low 64 = ts2) */
-__uint128_t ulidGenerateDualNsU128(void);
+__uint128_t ulidGenerateDualNsU128(ulidGen *g);
 
 /* Create DUALNS from __uint128_t value */
 void ulidFromDualNsU128(ulid_t *out, __uint128_t value);
@@ -256,10 +312,10 @@ uint64_t ulidGetSecondTimestampNs(const ulid_t *id);
  * ==================================================================== */
 
 /* Generate DUALNS_INTERLEAVED (128-bit: bit-interleaved dual timestamps) */
-void ulidGenerateDualNsInterleaved(ulid_t *out);
+void ulidGenerateDualNsInterleaved(ulidGen *g, ulid_t *out);
 
 /* Generate DUALNS_INTERLEAVED and return as __uint128_t */
-__uint128_t ulidGenerateDualNsInterleavedU128(void);
+__uint128_t ulidGenerateDualNsInterleavedU128(ulidGen *g);
 
 /* Create DUALNS_INTERLEAVED from two timestamps */
 void ulidFromDualNsInterleaved(ulid_t *out, uint64_t ts1, uint64_t ts2);
@@ -342,7 +398,7 @@ const char *ulid64GetVariantPrecision(ulidVariantType type);
  * ==================================================================== */
 
 /* Generate ULID32 with specific variant type */
-void ulid32Generate(ulid32_t *out, ulidVariantType type);
+void ulid32Generate(ulidGen *g, ulid32_t *out, ulidVariantType type);
 
 /* Encode ULID32 to Base36 string (7 chars + null terminator) */
 size_t ulid32Encode(const ulid32_t *id, char *out, size_t outLen);

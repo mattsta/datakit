@@ -26,6 +26,21 @@
 
 #include "imath.h"
 
+/* Allocator seams: the datakit build (which compiles this file by
+ * textual inclusion from src/bigmath-imath.c) points these at the
+ * zmalloc family for accounting and fail-fast OOM. The standalone
+ * imath library target links without datakit and falls back to the
+ * system allocator. */
+#ifndef IMATH_CALLOC
+#define IMATH_CALLOC(count, size) calloc(count, size)
+#endif
+#ifndef IMATH_REALLOC
+#define IMATH_REALLOC(ptr, size) realloc(ptr, size)
+#endif
+#ifndef IMATH_FREE
+#define IMATH_FREE(ptr) free(ptr)
+#endif
+
 #if DEBUG
 #include <stdio.h>
 #endif
@@ -47,11 +62,12 @@
 #define NEGATE_I64(v)                                                          \
     (((v) == INT64_MIN ? (uint64_t)INT64_MAX + 1 : (uint64_t)(-(v))))
 
-STATIC const char *s_unknown_err = "unknown result code";
-STATIC const char *s_error_msg[] = {"error code 0",     "boolean true",
-                                    "out of memory",    "argument out of range",
-                                    "result undefined", "output truncated",
-                                    "invalid argument", NULL};
+STATIC const char *const s_unknown_err = "unknown result code";
+STATIC const char *const s_error_msg[] = {
+    "error code 0",     "boolean true",
+    "out of memory",    "argument out of range",
+    "result undefined", "output truncated",
+    "invalid argument", NULL};
 
 /* Argument checking macros
    Use CHECK() where a return value is required; NRCHECK() elsewhere */
@@ -108,7 +124,7 @@ STATIC const double s_log2[] = {
 /* Reverse N elements of type T in array A */
 #define REV(T, A, N)                                                           \
     do {                                                                       \
-        T *u_ = (A), *v_ = u_ + (N)-1;                                         \
+        T *u_ = (A), *v_ = u_ + (N) - 1;                                       \
         while (u_ < v_) {                                                      \
             T xch = *u_;                                                       \
             *u_++ = *v_;                                                       \
@@ -164,9 +180,9 @@ STATIC const double s_log2[] = {
 
 /* Compare value to zero. */
 #define CMPZ(Z)                                                                \
-    (((Z)->used == 1 && MP_DIGITS(Z)[0] == 0)                                  \
-         ? 0                                                                   \
-         : (MP_SIGN(Z) == MP_NEG) ? -1 : 1)
+    (((Z)->used == 1 && MP_DIGITS(Z)[0] == 0) ? 0                              \
+     : (MP_SIGN(Z) == MP_NEG)                 ? -1                             \
+                                              : 1)
 
 /* Multiply X by Y into Z, ignoring signs.  Requires that Z have
    enough storage preallocated to hold the result. */
@@ -349,9 +365,11 @@ mp_result mp_int_init(mp_int z) {
         return MP_BADARG;
     }
 
-    memset(z->single, 0, MP_COUNT(z->single));
-    MP_DIGITS_MAKE_SINGLE(z);
-    MP_SIGN_SET(z, MP_ZPOS);
+    memset(z->single, 0, sizeof(z->single));
+    /* Direct assignment: the tag macros read the current pointer to
+     * preserve the sign bit, which on a fresh struct is an
+     * uninitialized read. A cleared tag bit is MP_ZPOS. */
+    z->currentDigits = z->single;
 
     z->alloc = MP_COUNT(z->single);
     z->used = 1;
@@ -360,7 +378,7 @@ mp_result mp_int_init(mp_int z) {
 }
 
 mp_int mp_int_alloc(void) {
-    mp_int out = calloc(1, sizeof(mpz_t));
+    mp_int out = IMATH_CALLOC(1, sizeof(mpz_t));
 
     if (out != NULL) {
         mp_int_init(out);
@@ -385,12 +403,12 @@ mp_result mp_int_init_size(mp_int z, mp_size prec) {
         return MP_MEMORY;
     }
 
-    MP_DIGITS_SET(z, d);
+    /* Direct assignment on the fresh struct (see mp_int_init) */
+    z->currentDigits = d;
 
     MP_DIGITS(z)[0] = 0;
     z->used = 1;
     z->alloc = prec;
-    MP_SIGN_SET(z, MP_ZPOS);
 
     return MP_OK;
 }
@@ -462,9 +480,12 @@ void mp_int_clear(mp_int z) {
 }
 
 void mp_int_free(mp_int z) {
+    /* Pairs ONLY with mp_int_alloc-created containers; datakit's
+     * bigmath wrapper owns its structs (stack/embedded) and must use
+     * bigmathFree/mp_int_clear instead. */
     if (z) {
         mp_int_clear(z);
-        free(z); /* note: NOT s_free() */
+        IMATH_FREE(z); /* note: NOT s_free() */
     }
 }
 
@@ -757,6 +778,19 @@ mp_result mp_int_mul(mp_int a, mp_int b, mp_int c) {
 }
 
 mp_result mp_int_mul_value(mp_int a, mp_small value, mp_int c) {
+    /* In-place single-digit multiply runs allocation-free via s_dmul;
+     * the general path below allocates a fresh output buffer for
+     * every aliased call, which dominates tight ×10 scaling loops
+     * (one bounded s_pad covers the possible one-digit growth) */
+    if (a == c && value > 0 && (mp_usmall)value <= MP_DIGIT_MAX) {
+        if (!s_pad(a, a->used + 1)) {
+            return MP_MEMORY;
+        }
+
+        s_dmul(a, (mp_digit)value);
+        return MP_OK;
+    }
+
     mpz_t vtmp;
     mp_digit vbuf[MP_VALUE_DIGITS(value)];
 
@@ -954,6 +988,12 @@ mp_result mp_int_mod(mp_int a, mp_int m, mp_int c) {
     mpz_t tmp;
     mp_int out;
 
+    /* The nonnegative-remainder fixup below assumes m > 0; a negative
+     * modulus must error rather than silently produce a wrong result */
+    if (CMPZ(m) < 0) {
+        return MP_RANGE;
+    }
+
     if (m == c) {
         mp_int_init(&tmp);
         out = &tmp;
@@ -1019,12 +1059,14 @@ mp_result mp_int_div_pow2(mp_int a, mp_small p2, mp_int q, mp_int r) {
 mp_result mp_int_expt(mp_int a, mp_small b, mp_int c) {
     mpz_t t;
     mp_result res;
-    uint32_t v = labs(b);
 
     CHECK(c != NULL);
     if (b < 0) {
         return MP_RANGE;
     }
+
+    /* b is nonnegative here, so no labs() (UB at INT64_MIN) needed */
+    uint32_t v = (uint32_t)b;
 
     if ((res = mp_int_init_copy(&t, a)) != MP_OK) {
         return res;
@@ -1056,12 +1098,14 @@ CLEANUP:
 mp_result mp_int_expt_value(mp_small a, mp_small b, mp_int c) {
     mpz_t t;
     mp_result res;
-    uint32_t v = labs(b);
 
     CHECK(c != NULL);
     if (b < 0) {
         return MP_RANGE;
     }
+
+    /* b is nonnegative here, so no labs() (UB at INT64_MIN) needed */
+    uint32_t v = (uint32_t)b;
 
     if ((res = mp_int_init_value(&t, a)) != MP_OK) {
         return res;
@@ -2106,8 +2150,12 @@ const char *mp_error_string(mp_result res) {
 /*------------------------------------------------------------------------*/
 /* Private functions for internal use.  These make assumptions.           */
 
+/* Digit storage routes through the IMATH_* allocator seams: inside
+ * datakit that is the zmalloc family (fail-fast on OOM per platform
+ * policy, so MP_MEMORY paths are unreachable there); standalone
+ * builds use the system allocator. */
 STATIC mp_digit *s_alloc(mp_size num) {
-    mp_digit *out = calloc(num, sizeof(mp_digit));
+    mp_digit *out = IMATH_CALLOC(num, sizeof(mp_digit));
 
     assert(out != NULL); /* for debugging */
 #if DEBUG > 1
@@ -2115,8 +2163,9 @@ STATIC mp_digit *s_alloc(mp_size num) {
         mp_digit v = (mp_digit)0xdeadbeef;
         int32_t ix;
 
-        for (ix = 0; ix < num; ++ix)
+        for (ix = 0; ix < num; ++ix) {
             out[ix] = v;
+        }
     }
 
 #endif
@@ -2129,13 +2178,15 @@ STATIC mp_digit *s_realloc(mp_digit *old, mp_size osize, mp_size nsize) {
     mp_digit *new = s_alloc(nsize);
     int32_t ix;
 
-    for (ix = 0; ix < nsize; ++ix)
+    for (ix = 0; ix < nsize; ++ix) {
         new[ix] = (mp_digit)0xdeadbeef;
+    }
 
     memcpy(new, old, osize * sizeof(mp_digit));
+    s_free(old); /* the poison-fill path replaces rather than resizes */
 #else
     (void)osize;
-    mp_digit *new = realloc(old, nsize * sizeof(mp_digit));
+    mp_digit *new = IMATH_REALLOC(old, nsize * sizeof(mp_digit));
 
     assert(new != NULL); /* for debugging */
 #endif
@@ -2143,7 +2194,7 @@ STATIC mp_digit *s_realloc(mp_digit *old, mp_size osize, mp_size nsize) {
 }
 
 STATIC void s_free(void *ptr) {
-    free(ptr);
+    IMATH_FREE(ptr);
 }
 
 STATIC bool s_pad(mp_int z, mp_size min) {
@@ -2183,8 +2234,9 @@ STATIC void s_ufake(mp_int z, mp_usmall value, mp_digit vbuf[]) {
 
     z->used = ndig;
     z->alloc = MP_VALUE_DIGITS(value);
-    MP_SIGN_SET(z, MP_ZPOS);
-    MP_DIGITS_SET(z, vbuf);
+    /* Direct assignment on the fresh struct (see mp_int_init): a
+     * cleared tag bit is MP_ZPOS; s_fake retags negatives after */
+    z->currentDigits = vbuf;
 }
 
 STATIC int32_t s_cdig(mp_digit *da, mp_digit *db, mp_size len) {
@@ -2383,6 +2435,7 @@ STATIC int32_t s_kmul(mp_digit *da, mp_digit *db, mp_digit *dc, mp_size size_a,
         carry = s_uadd(t2, dc + 2 * bot_size, dc + 2 * bot_size, buf_size,
                        buf_size);
         assert(carry == 0);
+        (void)carry; /* checked only by the asserts above */
 
         s_free(t1); /* note t2 and t3 are just internal pointers to t1 */
     } else {
@@ -2462,6 +2515,7 @@ STATIC int32_t s_ksqr(mp_digit *da, mp_digit *dc, mp_size size_a) {
         carry = s_uadd(t2, dc + 2 * bot_size, dc + 2 * bot_size, buf_size,
                        buf_size);
         assert(carry == 0);
+        (void)carry; /* checked only by the asserts above */
 
         s_free(t1); /* note that t2 and t2 are internal pointers only */
 
@@ -2473,7 +2527,8 @@ STATIC int32_t s_ksqr(mp_digit *da, mp_digit *dc, mp_size size_a) {
 }
 
 __attribute__((no_sanitize("unsigned-integer-overflow"))) /* t + t */
-STATIC void s_usqr(mp_digit *da, mp_digit *dc, mp_size size_a) {
+STATIC void
+s_usqr(mp_digit *da, mp_digit *dc, mp_size size_a) {
     mp_size i, j;
     mp_word w;
 
@@ -2787,6 +2842,12 @@ STATIC int32_t s_isp2(mp_int z) {
     mp_size uz = z->used, k = 0;
     mp_digit *dz = MP_DIGITS(z), d;
 
+    /* Zero is no power of two; without this the loops fall through
+     * and claim z == 2^0 */
+    if (uz == 1 && *dz == 0) {
+        return -1;
+    }
+
     while (uz > 1) {
         if (*dz++ != 0) {
             return -1;
@@ -2907,7 +2968,9 @@ STATIC int32_t s_reduce(mp_int x, mp_int m, mp_int mu, mp_int q1, mp_int q2) {
    reduction constant for m.  Assumes a < m, b > 0. */
 STATIC mp_result s_embar(mp_int a, mp_int b, mp_int m, mp_int mu, mp_int c) {
     mp_digit *db, *dbt, umu, d;
-    mp_result res;
+    /* Assigned only on failure paths below; the success path must
+     * return MP_OK, not an indeterminate stack value */
+    mp_result res = MP_OK;
     DECLARE_TEMP(3);
 
     umu = (mu)->used;
@@ -3195,9 +3258,12 @@ STATIC mp_result s_udiv_knuth(mp_int u, mp_int v) {
     /************************************************************/
     /* D2: Initialize j */
     j = m;
-    MP_DIGITS_SET(&r, MP_DIGITS(u) + j); /* contents of r shared with u */
+    /* Direct assignment: `r` is a fresh stack struct, so the tag
+     * macros would read an uninitialized pointer to preserve the sign
+     * bit. Digit pointers are 4-byte aligned, so a cleared tag bit
+     * (MP_ZPOS) comes for free. Contents of r shared with u. */
+    r.currentDigits = MP_DIGITS(u) + j;
     r.used = n + 1;
-    MP_SIGN_SET(&r, MP_ZPOS);
     r.alloc = u->alloc;
     ZERO(MP_DIGITS(&t), t.alloc);
 
@@ -3406,7 +3472,9 @@ STATIC mp_result s_tobin(mp_int z, void *buf_, size_t *limpos, int32_t pad) {
         uz--;
     }
 
-    if (pad != 0 && (buf[pos - 1] >> (CHAR_BIT - 1))) {
+    /* pos == 0 (a zero-length buffer skipped the loop entirely) must
+     * not index buf[-1] */
+    if (pad != 0 && pos > 0 && (buf[pos - 1] >> (CHAR_BIT - 1))) {
         if (pos < limit) {
             buf[pos++] = 0;
         } else {

@@ -204,28 +204,13 @@ intsetMedium *intsetMediumAdd(intsetMedium *m, int64_t value, bool *added) {
         }
 
         /* Insert at pos16 */
-        uint32_t newCount = m->count16 + 1;
-        int16_t *newValues = zcalloc(newCount, sizeof(int16_t));
-
-        /* Copy before insert point */
-        if (pos16 > 0) {
-            memcpy(newValues, m->values16, pos16 * sizeof(int16_t));
-        }
-
-        /* Insert new value */
-        newValues[pos16] = (int16_t)value;
-
-        /* Copy after insert point */
-        if (pos16 < m->count16) {
-            memcpy(&newValues[pos16 + 1], &m->values16[pos16],
-                   (m->count16 - pos16) * sizeof(int16_t));
-        }
-
-        if (m->values16) {
-            zfree(m->values16);
-        }
-        m->values16 = newValues;
-        m->count16 = newCount;
+        /* Grow in place and shift the tail: one realloc (amortized by
+         * allocator size classes) instead of alloc+double-copy+free */
+        m->values16 = zrealloc(m->values16, (m->count16 + 1) * sizeof(int16_t));
+        memmove(&m->values16[pos16 + 1], &m->values16[pos16],
+                (m->count16 - pos16) * sizeof(int16_t));
+        m->values16[pos16] = (int16_t)value;
+        m->count16++;
 
     } else {
         /* Add to int32 array */
@@ -241,28 +226,13 @@ intsetMedium *intsetMediumAdd(intsetMedium *m, int64_t value, bool *added) {
         }
 
         /* Insert at pos32 */
-        uint32_t newCount = m->count32 + 1;
-        int32_t *newValues = zcalloc(newCount, sizeof(int32_t));
-
-        /* Copy before insert point */
-        if (pos32 > 0) {
-            memcpy(newValues, m->values32, pos32 * sizeof(int32_t));
-        }
-
-        /* Insert new value */
-        newValues[pos32] = (int32_t)value;
-
-        /* Copy after insert point */
-        if (pos32 < m->count32) {
-            memcpy(&newValues[pos32 + 1], &m->values32[pos32],
-                   (m->count32 - pos32) * sizeof(int32_t));
-        }
-
-        if (m->values32) {
-            zfree(m->values32);
-        }
-        m->values32 = newValues;
-        m->count32 = newCount;
+        /* Grow in place and shift the tail: one realloc (amortized by
+         * allocator size classes) instead of alloc+double-copy+free */
+        m->values32 = zrealloc(m->values32, (m->count32 + 1) * sizeof(int32_t));
+        memmove(&m->values32[pos32 + 1], &m->values32[pos32],
+                (m->count32 - pos32) * sizeof(int32_t));
+        m->values32[pos32] = (int32_t)value;
+        m->count32++;
     }
 
     if (added) {
@@ -301,23 +271,11 @@ intsetMedium *intsetMediumRemove(intsetMedium *m, int64_t value,
             m->values16 = NULL;
             m->count16 = 0;
         } else {
-            uint32_t newCount = m->count16 - 1;
-            int16_t *newValues = zcalloc(newCount, sizeof(int16_t));
-
-            /* Copy before removed element */
-            if (pos16 > 0) {
-                memcpy(newValues, m->values16, pos16 * sizeof(int16_t));
-            }
-
-            /* Copy after removed element */
-            if (pos16 < m->count16 - 1) {
-                memcpy(&newValues[pos16], &m->values16[pos16 + 1],
-                       (m->count16 - pos16 - 1) * sizeof(int16_t));
-            }
-
-            zfree(m->values16);
-            m->values16 = newValues;
-            m->count16 = newCount;
+            /* Shift the tail down in place; capacity is retained so
+             * churny remove/add cycles stop thrashing the allocator */
+            memmove(&m->values16[pos16], &m->values16[pos16 + 1],
+                    (m->count16 - pos16 - 1) * sizeof(int16_t));
+            m->count16--;
         }
 
     } else if (intsetValueFitsInt32(value)) {
@@ -340,23 +298,11 @@ intsetMedium *intsetMediumRemove(intsetMedium *m, int64_t value,
             m->values32 = NULL;
             m->count32 = 0;
         } else {
-            uint32_t newCount = m->count32 - 1;
-            int32_t *newValues = zcalloc(newCount, sizeof(int32_t));
-
-            /* Copy before removed element */
-            if (pos32 > 0) {
-                memcpy(newValues, m->values32, pos32 * sizeof(int32_t));
-            }
-
-            /* Copy after removed element */
-            if (pos32 < m->count32 - 1) {
-                memcpy(&newValues[pos32], &m->values32[pos32 + 1],
-                       (m->count32 - pos32 - 1) * sizeof(int32_t));
-            }
-
-            zfree(m->values32);
-            m->values32 = newValues;
-            m->count32 = newCount;
+            /* Shift the tail down in place; capacity is retained so
+             * churny remove/add cycles stop thrashing the allocator */
+            memmove(&m->values32[pos32], &m->values32[pos32 + 1],
+                    (m->count32 - pos32 - 1) * sizeof(int32_t));
+            m->count32--;
         }
 
     } else {

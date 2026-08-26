@@ -900,6 +900,63 @@ int multimapPTest(int argc, char *argv[]) {
         ptestCleanupFiles(basePath);
     }
 
+    TEST("multimapP reset then reuse survives recovery") {
+        /* Reset logs a CLEAR op; a post-reset refill must survive
+         * close + WAL/snapshot recovery with no pre-reset ghosts */
+        ptestCleanupFiles(basePath);
+        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        multimapP *m = multimapNewP(ctx, 2);
+
+        for (int i = 0; i < 30; i++) {
+            databox key = DATABOX_SIGNED(i);
+            databox val = DATABOX_SIGNED(i * 10);
+            const databox *entry[] = {&key, &val};
+            multimapInsertP(m, entry);
+        }
+
+        multimapResetP(m);
+        if (multimapCountP(m) != 0) {
+            ERRR("Expected empty after reset");
+        }
+
+        /* Refill with DIFFERENT keys so any ghost from before the
+         * reset is detectable after recovery */
+        for (int i = 100; i < 120; i++) {
+            databox key = DATABOX_SIGNED(i);
+            databox val = DATABOX_SIGNED(i * 7);
+            const databox *entry[] = {&key, &val};
+            multimapInsertP(m, entry);
+        }
+
+        multimapCloseP(m);
+        persistCtxFree(ctx);
+
+        /* Recover and verify: exactly the post-reset contents */
+        ctx = persistCtxNew(basePath, NULL);
+        m = multimapOpenP(ctx);
+        if (!m) {
+            ERRR("Recovery after reset failed");
+        } else {
+            if (multimapCountP(m) != 20) {
+                ERR("Expected 20 post-recovery, got %zu", multimapCountP(m));
+            }
+
+            databox probeOld = DATABOX_SIGNED(3);
+            if (multimapExistsP(m, &probeOld)) {
+                ERRR("Pre-reset ghost key survived recovery");
+            }
+
+            databox probeNew = DATABOX_SIGNED(110);
+            if (!multimapExistsP(m, &probeNew)) {
+                ERRR("Post-reset key lost in recovery");
+            }
+
+            multimapCloseP(m);
+        }
+        persistCtxFree(ctx);
+        ptestCleanupFiles(basePath);
+    }
+
     TEST_FINAL_RESULT;
 }
 #endif /* DATAKIT_TEST */

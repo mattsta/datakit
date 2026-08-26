@@ -16,6 +16,14 @@ bool hyperloglogDetect(hyperloglog *h);
 uint64_t hyperloglogCount(hyperloglog *hdr, bool *invalid);
 int hyperloglogAdd(hyperloglog **inHll, const void *data, size_t size);
 bool hyperloglogMerge(hyperloglog *target, const hyperloglog *hdr);
+/* Materialize a RAW-encoded scratch (register-per-byte, as built by
+ * hyperloglogMerge accumulation) into a freshly allocated storable HLL
+ * (sparse, or dense when 'dense' is set). */
+hyperloglog *hyperloglogNewFromRaw(const hyperloglog *raw, bool dense);
+/* Register-wise max-fold of 'src' (SPARSE or DENSE, never RAW) into
+ * '*dst', reallocating *dst as needed (sparse growth / promotion).
+ * Idempotent and commutative; invalidates *dst's cached cardinality. */
+bool hyperloglogMergeInto(hyperloglog **dst, const hyperloglog *src);
 void hyperloglogInvalidateCache(hyperloglog *h);
 
 /* User-friendly API */

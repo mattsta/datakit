@@ -1,4 +1,9 @@
 #include "atomPool.h"
+#include "cleaner.h"
+
+defcleaner(atomPool *, atomPoolFree);
+defcleaner(void *, zfree);
+
 #include "datakit.h"
 #include "multimapAtom.h"
 #include "stringPool.h"
@@ -181,17 +186,12 @@ static size_t treeBytes(const void *impl) {
     return multimapAtomBytes((const multimapAtom *)impl);
 }
 
-static void treeReset(void *impl) {
-    (void)impl;
-    /* TREE backend reset is not implemented - multimapAtom doesn't support it.
-     * Callers should free and create a new pool instead.
-     * For now, this is a no-op that leaves the pool unchanged. */
-}
-
 static void treeFree(void *impl) {
     multimapAtomFree((multimapAtom *)impl);
 }
 
+/* .reset is NULL: multimapAtom has no in-place clear, so atomPoolReset
+ * recreates the backend instead (a NULL reset means "recreate"). */
 static const atomPoolVTable treeVTable = {
     .intern = treeIntern,
     .getId = treeGetId,
@@ -202,13 +202,24 @@ static const atomPoolVTable treeVTable = {
     .refcount = treeRefcount,
     .count = treeCount,
     .bytes = treeBytes,
-    .reset = treeReset,
+    .reset = NULL,
     .free = treeFree,
 };
 
 /* ====================================================================
  * Public API Implementation
  * ==================================================================== */
+
+static void *atomPoolImplNew(atomPoolType type) {
+    switch (type) {
+    case ATOM_POOL_HASH:
+        return stringPoolNew();
+    case ATOM_POOL_TREE:
+        return multimapAtomNew();
+    default:
+        return NULL;
+    }
+}
 
 atomPool *atomPoolNew(atomPoolType type) {
     atomPool *pool = zcalloc(1, sizeof(*pool));
@@ -217,22 +228,20 @@ atomPool *atomPoolNew(atomPoolType type) {
     }
 
     pool->type = type;
+    pool->impl = atomPoolImplNew(type);
 
     switch (type) {
     case ATOM_POOL_HASH:
-        pool->impl = stringPoolNew();
         pool->vtable = &hashVTable;
         break;
     case ATOM_POOL_TREE:
-        pool->impl = multimapAtomNew();
         pool->vtable = &treeVTable;
         break;
     default:
-        zfree(pool);
-        return NULL;
+        break;
     }
 
-    if (!pool->impl) {
+    if (!pool->impl || !pool->vtable) {
         zfree(pool);
         return NULL;
     }
@@ -258,7 +267,14 @@ void atomPoolFree(atomPool *pool) {
 
 void atomPoolReset(atomPool *pool) {
     if (pool && pool->impl && pool->vtable) {
-        pool->vtable->reset(pool->impl);
+        if (pool->vtable->reset) {
+            pool->vtable->reset(pool->impl);
+        } else {
+            /* Backend has no in-place clear: recreate it empty (was a
+             * silent no-op for TREE, leaving atoms interned forever) */
+            pool->vtable->free(pool->impl);
+            pool->impl = atomPoolImplNew(pool->type);
+        }
     }
 }
 
@@ -378,7 +394,7 @@ int atomPoolTest(int argc, char *argv[]) {
         printf("\n=== Testing %s backend ===\n", typeNames[t]);
 
         TEST("atomPool basic operations") {
-            atomPool *pool = atomPoolNew(type);
+            cleaner(atomPoolFree) atomPool *pool = atomPoolNew(type);
             if (!pool) {
                 ERRR("Failed to create atomPool");
             }
@@ -457,8 +473,7 @@ int atomPoolTest(int argc, char *argv[]) {
                 ERR("Refcount after retain should be 2, got %" PRIu64, rc);
             }
 
-        cleanup_basic:
-            atomPoolFree(pool);
+        cleanup_basic:; /* pool frees itself at scope exit */
         }
 
         TEST("atomPool reset") {
@@ -712,13 +727,14 @@ int atomPoolTest(int argc, char *argv[]) {
         }
 
         TEST("atomPool many entries with refcounts") {
-            atomPool *pool = atomPoolNew(type);
+            cleaner(atomPoolFree) atomPool *pool = atomPoolNew(type);
             if (!pool) {
                 ERRR("Failed to create atomPool");
             }
 
             const size_t N = 1000;
-            uint64_t *ids = zmalloc(N * sizeof(uint64_t));
+            cleaner(zfree) void *idsAlloc = zmalloc(N * sizeof(uint64_t));
+            uint64_t *ids = idsAlloc;
             char buf[32];
 
             /* Intern N unique strings */
@@ -788,8 +804,43 @@ int atomPoolTest(int argc, char *argv[]) {
                 }
             }
 
-        cleanup_many:
-            zfree(ids);
+        cleanup_many:; /* ids + pool free themselves at scope exit */
+        }
+    }
+
+    TEST("atomPool reset empties both backends") {
+        /* TREE reset used to be a silent no-op: atoms stayed interned
+         * and counts went stale, silently diverging from HASH */
+        const atomPoolType resetBackends[2] = {ATOM_POOL_HASH, ATOM_POOL_TREE};
+        for (int t = 0; t < 2; t++) {
+            atomPool *pool = atomPoolNew(resetBackends[t]);
+            databox s1 = databoxNewBytesString("reset_a");
+            databox s2 = databoxNewBytesString("reset_b");
+
+            atomPoolIntern(pool, &s1);
+            atomPoolIntern(pool, &s2);
+            if (atomPoolCount(pool) != 2) {
+                ERR("backend %d: expected 2 pre-reset, got %zu", t,
+                    atomPoolCount(pool));
+            }
+
+            atomPoolReset(pool);
+
+            if (atomPoolCount(pool) != 0) {
+                ERR("backend %d: expected 0 after reset, got %zu", t,
+                    atomPoolCount(pool));
+            }
+            if (atomPoolExists(pool, &s1)) {
+                ERR("backend %d: atom survived reset", t);
+            }
+
+            /* Pool must be fully usable after reset */
+            const uint64_t reinternedId = atomPoolIntern(pool, &s1);
+            if (reinternedId == 0 || atomPoolCount(pool) != 1) {
+                ERR("backend %d: re-intern after reset failed (count %zu)", t,
+                    atomPoolCount(pool));
+            }
+
             atomPoolFree(pool);
         }
     }

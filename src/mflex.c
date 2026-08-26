@@ -265,6 +265,11 @@ void mflexDeleteOffsetCount(mflex **mm, mflexState *state, int32_t offset,
 
 /* ====================================================================
  * Open / Close for using flex* functions directly
+ *
+ * One mflexState supports ONE live open at a time: opening a second
+ * compressed mflex through the same state decompresses over the shared
+ * scratch buffer and silently invalidates the previously returned
+ * flex. Use separate states for concurrent opens.
  * ==================================================================== */
 flex *mflexOpen(const mflex *m, mflexState *state) {
     flex *f;
@@ -329,6 +334,11 @@ void mflexCloseGrow(mflex **mm, mflexState *const state, flex *f) {
              * and we can't track that in STATE_UNCOMPRESSED_FLEX without
              * this manual pointer and size update here). */
             STATE_UNCOMPRESSED_FLEX = f;
+            /* logical bytes UNDERSTATE the real allocation (safe: worst
+             * case is a redundant realloc on a future open). Recording
+             * a jebuf-class size here instead would OVERSTATE it and
+             * let decompression overflow the buffer - the true
+             * allocation size is not observable from a flex. */
             STATE_UNCOMPRESSED_SIZE = flexBytes(f);
             STATE_UNCOMPRESSED_RELEASE;
 
@@ -706,6 +716,36 @@ int mflexTest(int argc, char *argv[]) {
 
     mflexStateReset(state);
     mflexStateFree(state);
+
+    TEST("reset then reuse: push after reset round-trips") {
+        mflexState *resetState = mflexStateCreate();
+        mflex *m = mflexNew();
+
+        for (int cycle = 0; cycle < 2; cycle++) {
+            for (uint64_t i = 0; i < 300; i++) {
+                const databox box = databoxNewUnsigned(i);
+                mflexPushByType(&m, resetState, &box, FLEX_ENDPOINT_TAIL);
+            }
+            if (mflexCount(m) != 300) {
+                ERR("cycle %d: expected 300, got %zu", cycle, mflexCount(m));
+            }
+
+            mflexReset(&m);
+            if (mflexCount(m) != 0) {
+                ERR("cycle %d: expected 0 after reset, got %zu", cycle,
+                    mflexCount(m));
+            }
+        }
+
+        const databox box = databoxNewUnsigned(777);
+        mflexPushByType(&m, resetState, &box, FLEX_ENDPOINT_TAIL);
+        if (mflexCount(m) != 1) {
+            ERR("Expected 1 after post-reset push, got %zu", mflexCount(m));
+        }
+
+        mflexFree(m);
+        mflexStateFree(resetState);
+    }
 
     TEST_FINAL_RESULT;
 }

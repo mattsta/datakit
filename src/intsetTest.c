@@ -1360,5 +1360,71 @@ int intsetTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("Full iterator: real INT64_MAX must not collide with sentinel") {
+        /* Exhausted arrays use an INT64_MAX sentinel in the 3-way
+         * merge; a set actually containing INT64_MAX must still
+         * terminate and yield each member exactly once */
+        intsetFull *f = intsetFullNew();
+        bool added;
+        f = intsetFullAdd(f, 5, &added);
+        f = intsetFullAdd(f, INT64_MAX, &added);
+        f = intsetFullAdd(f, -9000000000LL, &added);
+
+        intsetFullIterator it;
+        intsetFullIteratorInit(&it, f);
+
+        int64_t got[8];
+        int yields = 0;
+        int64_t v;
+        while (yields < 8 && intsetFullIteratorNext(&it, &v)) {
+            got[yields++] = v;
+        }
+
+        if (yields != 3) {
+            ERR("Expected exactly 3 yields, got %d (infinite-loop guard)",
+                yields);
+        } else if (got[0] != -9000000000LL || got[1] != 5 ||
+                   got[2] != INT64_MAX) {
+            ERRR("Merge order wrong with INT64_MAX present");
+        }
+
+        intsetFullFree(f);
+    }
+
+    TEST("Min/Max: O(1) accessors across tiers and sign boundaries") {
+        intset *is = intsetNew();
+        int64_t v;
+        bool ok;
+
+        if (intsetMin(is, &v) || intsetMax(is, &v)) {
+            ERRR("Min/Max must report false on empty set");
+        }
+
+        /* Small tier */
+        intsetAdd(&is, 100, &ok);
+        intsetAdd(&is, -50, &ok);
+        if (!intsetMin(is, &v) || v != -50 || !intsetMax(is, &v) || v != 100) {
+            ERRR("Small-tier Min/Max wrong");
+        }
+
+        /* Force Medium (int32 range), negative wide value is the min */
+        intsetAdd(&is, -100000, &ok);
+        intsetAdd(&is, 70000, &ok);
+        if (!intsetMin(is, &v) || v != -100000 || !intsetMax(is, &v) ||
+            v != 70000) {
+            ERRR("Medium-tier Min/Max wrong (negative wide value)");
+        }
+
+        /* Force Full with the extreme boundaries */
+        intsetAdd(&is, INT64_MIN, &ok);
+        intsetAdd(&is, INT64_MAX, &ok);
+        if (!intsetMin(is, &v) || v != INT64_MIN || !intsetMax(is, &v) ||
+            v != INT64_MAX) {
+            ERRR("Full-tier Min/Max wrong at INT64 boundaries");
+        }
+
+        intsetFree(is);
+    }
+
     TEST_FINAL_RESULT;
 }

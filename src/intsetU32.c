@@ -208,8 +208,9 @@ bool intsetU32Equal(const intsetU32 *const a, const intsetU32 *const b) {
     return false;
 }
 
-/* Check if 'b' is a subset of 'a' */
-/* Check if 'b' is contained within 'a' */
+/* Check if 'a' is a subset of 'b': every member of a exists in b.
+ * Argument order matters: every caller passes (source, target) asking
+ * "does source fit inside target". */
 bool intsetU32Subset(const intsetU32 *const a, const intsetU32 *const b) {
     if (a == b) {
         return true;
@@ -233,12 +234,21 @@ uint32_t intsetU32Merge(intsetU32 *dst, const intsetU32 *b) {
     return merged;
 }
 
-/* Return random member */
+/* Return random member (0 for an empty set - check count first when 0
+ * is a legitimate member) */
 uint32_t intsetU32Random(intsetU32 *is) {
+    if (is->count == 0) {
+        return 0;
+    }
+
     return intsetU32Get_(is, random() % is->count);
 }
 
 bool intsetU32RandomDelete(intsetU32 *is, uint32_t *deleted) {
+    if (is->count == 0) {
+        return false;
+    }
+
     *deleted = intsetU32Random(is);
     return intsetU32Remove(is, *deleted);
 }
@@ -334,6 +344,49 @@ int intsetU32Test(int argc, char **argv) {
         const bool s4 = intsetU32Add(is, 4);
         intsetU32Assert(is);
         intsetU32Assert(!s4);
+        ok();
+    }
+
+    printf("Subset semantics (a subset of b, matching intsetBigSubset): ");
+    {
+        intsetU32 *small = intsetU32New();
+        intsetU32 *big = intsetU32New();
+        for (uint32_t v = 10; v <= 30; v += 10) {
+            intsetU32Add(small, v); /* {10, 20, 30} */
+        }
+
+        for (uint32_t v = 10; v <= 50; v += 10) {
+            intsetU32Add(big, v); /* {10, 20, 30, 40, 50} */
+        }
+
+        /* Subset(a, b) asks "is a contained in b" — argument order is
+         * the contract shared with intsetBigSubset. */
+        intsetU32Assert(intsetU32Subset(small, big));
+        intsetU32Assert(!intsetU32Subset(big, small));
+
+        /* Equal sets are subsets of each other; self is a subset. */
+        intsetU32 *dup = intsetU32Copy(small);
+        intsetU32Assert(intsetU32Subset(small, dup));
+        intsetU32Assert(intsetU32Subset(dup, small));
+        intsetU32Assert(intsetU32Subset(small, small));
+
+        /* The empty set is a subset of everything; nothing non-empty
+         * is a subset of the empty set. */
+        intsetU32 *empty = intsetU32New();
+        intsetU32Assert(intsetU32Subset(empty, small));
+        intsetU32Assert(!intsetU32Subset(small, empty));
+
+        /* Disjoint overlap: sharing SOME members is not enough. */
+        intsetU32 *shifted = intsetU32New();
+        intsetU32Add(shifted, 20);
+        intsetU32Add(shifted, 999);
+        intsetU32Assert(!intsetU32Subset(shifted, big));
+
+        intsetU32Free(small);
+        intsetU32Free(big);
+        intsetU32Free(dup);
+        intsetU32Free(empty);
+        intsetU32Free(shifted);
         ok();
     }
 

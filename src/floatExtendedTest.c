@@ -416,7 +416,7 @@ static int testDataboxIntegration(void) {
     int err = 0;
 
     TEST("Databox: int64 vs double comparison using floatExtended") {
-        databox intBox = {.type = DATABOX_SIGNED_64, .data.i = 12345};
+        databox intBox = databoxNewSigned(12345);
         databox floatBox = {.type = DATABOX_DOUBLE_64, .data.d64 = 12345.0};
 
         int cmp = databoxCompare(&intBox, &floatBox);
@@ -438,7 +438,7 @@ static int testDataboxIntegration(void) {
     }
 
     TEST("Databox: uint64 vs double comparison") {
-        databox uintBox = {.type = DATABOX_UNSIGNED_64, .data.u = 12345};
+        databox uintBox = databoxNewUnsigned(12345);
         databox floatBox = {.type = DATABOX_DOUBLE_64, .data.d64 = 12345.0};
 
         int cmp = databoxCompare(&uintBox, &floatBox);
@@ -455,7 +455,7 @@ static int testDataboxIntegration(void) {
     }
 
     TEST("Databox: large integer vs double edge cases") {
-        databox intBox = {.type = DATABOX_SIGNED_64, .data.i = INT64_MAX};
+        databox intBox = databoxNewSigned(INT64_MAX);
         databox floatBox = {.type = DATABOX_DOUBLE_64,
                             .data.d64 = (double)INT64_MAX};
 

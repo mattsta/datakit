@@ -155,7 +155,6 @@ valueFromBucketOffset(const databoxBig *restrict const bucket,
 }
 
 #define boxPtrToU32(box) (intsetU32 *)(box.data.ptr)
-#define boxPPtrToU32(box) (intsetU32 **)(&box.data.ptr)
 
 intsetBig *intsetBigNew(void) {
     /* Create map of bucketIndex -> intsetU32 */
@@ -578,7 +577,7 @@ bool intsetBigAddByBucketDirectOverwriteBulk(intsetBig *isb, databoxBig *bucket,
     /* NOTE: These MODIFY isb->i and requires INVALIDATING any iterator you
      *       currently have open! */
     if (intsetU32Count(iu32) > 0) {
-        databox vptr = {.type = DATABOX_PTR, .data.ptr = iu32};
+        databox vptr = databoxNewPtr(iu32);
         const databox *insert[2] = {(databox *)bucket, &vptr};
         multimapInsert(&isb->i, insert);
 
@@ -718,8 +717,7 @@ void intsetBigMergeInto(intsetBig *a, const intsetBig *b) {
         } else if (compared > 0) {
             /* B < A: B's bucket not in result yet, add it using B's key */
             intsetBigAddByBucketDirectOverwriteBulkUpdateIterator(
-                a, &key[1], intsetU32Copy(ebbi),
-                &ia); // FIX: Use key[1] (B's key), not key[0]
+                a, &key[1], intsetU32Copy(ebbi), &ia);
             a->count += intsetU32Count(ebbi);
             foundB = multimapIteratorNext(&ib, eb);
         } else {
@@ -744,7 +742,6 @@ void intsetBigMergeInto(intsetBig *a, const intsetBig *b) {
     }
 
     /* After main zipper loop, add any remaining elements from B */
-    /* FIX: Original code was missing this remainder loop! */
     while (foundB) {
         intsetU32 *ebbi = val[1].data.ptr;
         intsetBigAddByBucketDirectOverwriteBulkUpdateIterator(

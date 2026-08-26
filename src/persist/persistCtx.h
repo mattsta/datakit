@@ -28,7 +28,13 @@
 
 typedef enum persistCtxSyncMode {
     PERSIST_CTX_SYNC_NONE = 0, /* No auto-sync, manual only */
-    PERSIST_CTX_SYNC_EVERYSEC, /* Sync at most once per second */
+    PERSIST_CTX_SYNC_EVERYSEC, /* Sync at most once per second WHILE OPS
+                                * ARRIVE: syncing is op-driven, so an op
+                                * followed by idle silence stays unsynced
+                                * until the next op, an explicit
+                                * persistCtxSync/SyncIfDue, or close. Call
+                                * persistCtxSyncIfDue from an event loop to
+                                * bound the idle-tail loss window. */
     PERSIST_CTX_SYNC_ALWAYS,   /* Sync after every operation */
 } persistCtxSyncMode;
 
@@ -68,9 +74,8 @@ typedef struct persistCtx {
     persistCtxConfig config;
 
     /* State tracking */
-    size_t opsSinceCompact;   /* Operations since last compaction */
-    size_t bytesSinceCompact; /* WAL bytes since last compaction */
-    uint64_t lastSyncTime;    /* Microseconds since epoch */
+    size_t opsSinceCompact; /* Operations since last compaction */
+    uint64_t lastSyncTime;  /* Microseconds since epoch */
 
     /* Statistics */
     uint64_t totalOps;
@@ -110,6 +115,11 @@ bool persistCtxMaybeCompact(persistCtx *ctx, void *structure,
 
 /* Force sync WAL to disk */
 bool persistCtxSync(persistCtx *ctx);
+
+/* EVERYSEC helper for event loops: syncs only when a full interval has
+ * passed since the last sync (no-op under other sync modes). Bounds
+ * the idle-tail loss window that op-driven syncing leaves open. */
+bool persistCtxSyncIfDue(persistCtx *ctx);
 
 /* Force compaction now */
 bool persistCtxCompact(persistCtx *ctx, void *structure, const persistOps *ops);

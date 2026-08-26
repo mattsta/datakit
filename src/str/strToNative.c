@@ -347,15 +347,36 @@ bool StrBufToInt128(const void *buf, const size_t bufLen, __int128_t *value) {
     }
 
     __uint128_t got;
-    const bool success = StrBufToUInt128(&s[position], digits, &got);
-
-    *value = got;
-
-    if (sign < 0 && *value > 0) {
-        *value *= -1;
+    if (!StrBufToUInt128(&s[position], digits, &got)) {
+        return false;
     }
 
-    return success;
+    /* Range-check the unsigned magnitude BEFORE the signed assignment:
+     * out-of-range magnitudes otherwise wrap in the conversion and
+     * parse "successfully" into a silently wrong number. */
+    const __uint128_t signedMaxMagnitude = ((__uint128_t)1 << 127);
+    if (sign < 0) {
+        /* Negative range extends one further than positive */
+        if (got > signedMaxMagnitude) {
+            return false;
+        }
+
+        if (got == signedMaxMagnitude) {
+            /* INT128_MIN: negating the converted value is UB, build
+             * it directly */
+            *value = -(__int128_t)(signedMaxMagnitude - 1) - 1;
+        } else {
+            *value = -(__int128_t)got;
+        }
+    } else {
+        if (got >= signedMaxMagnitude) {
+            return false;
+        }
+
+        *value = (__int128_t)got;
+    }
+
+    return true;
 }
 
 /* Obsolete poorly written legacy functions */

@@ -2377,8 +2377,7 @@ int multilistFullTest(int argc, char *argv[]) {
             int64_t nums[5000];
             for (int i = 0; i < 5000; i++) {
                 nums[i] = -5157318210846258176 + i;
-                const databox pushBox = {.data.i64 = nums[i],
-                                         .type = DATABOX_SIGNED_64};
+                const databox pushBox = databoxNewSigned(nums[i]);
                 multilistFullPushByTypeTail(ml, s0, &pushBox);
             }
 
@@ -2572,8 +2571,7 @@ int multilistFullTest(int argc, char *argv[]) {
                 int64_t nums[5000];
                 for (int i = 0; i < 760; i++) {
                     nums[i] = -5157318210846258176 + i;
-                    const databox pushBox = {.data.i64 = nums[i],
-                                             .type = DATABOX_SIGNED_64};
+                    const databox pushBox = databoxNewSigned(nums[i]);
                     multilistFullPushByTypeTail(ml, s0, &pushBox);
                 }
 

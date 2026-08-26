@@ -1099,7 +1099,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         /* Small tier stats */
         multiOrderedSet *mos = multiOrderedSetNewLimit(FLEX_CAP_LEVEL_2048);
         for (int i = 0; i < 10; i++) {
-            databox score = {.type = DATABOX_SIGNED_64, .data.i = i};
+            databox score = databoxNewSigned(i);
             char buf[16];
             snprintf(buf, sizeof(buf), "s%d", i);
             databox member = databoxNewBytesAllowEmbed(buf, strlen(buf));
@@ -1113,7 +1113,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         /* Medium tier stats */
         mos = multiOrderedSetNewLimit(FLEX_CAP_LEVEL_64);
         for (int i = 0; i < 50; i++) {
-            databox score = {.type = DATABOX_SIGNED_64, .data.i = i};
+            databox score = databoxNewSigned(i);
             char buf[16];
             snprintf(buf, sizeof(buf), "m%d", i);
             databox member = databoxNewBytesAllowEmbed(buf, strlen(buf));
@@ -1127,7 +1127,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         /* Full tier stats */
         mos = multiOrderedSetNewLimit(FLEX_CAP_LEVEL_64);
         for (int i = 0; i < 500; i++) {
-            databox score = {.type = DATABOX_SIGNED_64, .data.i = i};
+            databox score = databoxNewSigned(i);
             char buf[16];
             snprintf(buf, sizeof(buf), "f%d", i);
             databox member = databoxNewBytesAllowEmbed(buf, strlen(buf));
@@ -1151,7 +1151,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         for (int i = 0; i < 30; i++) {
             int64_t scoreVal =
                 (i * 997) % 10000; /* Pseudo-random distribution */
-            databox score = {.type = DATABOX_SIGNED_64, .data.i = scoreVal};
+            databox score = databoxNewSigned(scoreVal);
             char buf[32];
             snprintf(buf, sizeof(buf), "m%d", i);
             databox member = databoxNewBytesAllowEmbed(buf, strlen(buf));
@@ -1202,7 +1202,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
             oracleScores[oracleCount] = score;
             snprintf(oracleMembers[oracleCount], 32, "member_%d", i);
 
-            databox scoreBox = {.type = DATABOX_SIGNED_64, .data.i = score};
+            databox scoreBox = databoxNewSigned(score);
             databox memberBox = databoxNewBytesAllowEmbed(
                 oracleMembers[oracleCount], strlen(oracleMembers[oracleCount]));
             multiOrderedSetAdd(&mos, &scoreBox, &memberBox);
@@ -1262,7 +1262,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
 
         /* Insert 5000 entries to ensure Full tier */
         for (int32_t i = 0; i < 5000; i++) {
-            databox score = {.type = DATABOX_SIGNED_64, .data.i = i * 10};
+            databox score = databoxNewSigned(i * 10);
             char buf[32];
             snprintf(buf, sizeof(buf), "key%d", i);
             databox member = databoxNewBytesAllowEmbed(buf, strlen(buf));
@@ -1304,7 +1304,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
 
         /* Build up to near-transition */
         for (int i = 0; i < 200; i++) {
-            databox score = {.type = DATABOX_SIGNED_64, .data.i = i};
+            databox score = databoxNewSigned(i);
             char buf[32];
             snprintf(buf, sizeof(buf), "entry%d", i);
             databox member = databoxNewBytesAllowEmbed(buf, strlen(buf));
@@ -1326,7 +1326,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
 
         /* Re-insert with different scores */
         for (int i = 0; i < 100; i++) {
-            databox score = {.type = DATABOX_SIGNED_64, .data.i = i * 2 + 1000};
+            databox score = databoxNewSigned(i * 2 + 1000);
             char buf[32];
             snprintf(buf, sizeof(buf), "entry%d", i * 2);
             databox member = databoxNewBytesAllowEmbed(buf, strlen(buf));
@@ -1338,7 +1338,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         /* Verify sorted order */
         mosIterator iter;
         multiOrderedSetIteratorInit(mos, &iter, true);
-        databox prevScore = {.type = DATABOX_SIGNED_64, .data.i = INT64_MIN};
+        databox prevScore = databoxNewSigned(INT64_MIN);
         databox gotMember, gotScore;
         int count = 0;
         while (multiOrderedSetIteratorNext(&iter, &gotMember, &gotScore)) {
@@ -1385,8 +1385,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         size_t numValues = sizeof(testValues) / sizeof(testValues[0]);
 
         for (size_t i = 0; i < numValues; i++) {
-            databox score = {.type = DATABOX_UNSIGNED_64,
-                             .data.u = testValues[i]};
+            databox score = databoxNewUnsigned(testValues[i]);
             char buf[32];
             snprintf(buf, sizeof(buf), "u%" PRIu64, testValues[i]);
             databox member = databoxNewBytesAllowEmbed(buf, strlen(buf));
@@ -1470,8 +1469,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         size_t numValues = sizeof(testValues) / sizeof(testValues[0]);
 
         for (size_t i = 0; i < numValues; i++) {
-            databox score = {.type = DATABOX_SIGNED_64,
-                             .data.i = testValues[i]};
+            databox score = databoxNewSigned(testValues[i]);
             char buf[32];
             snprintf(buf, sizeof(buf), "i%zu", i);
             databox member = databoxNewBytesAllowEmbed(buf, strlen(buf));
@@ -1591,8 +1589,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
             multiOrderedSet *mos = multiOrderedSetNewLimit(FLEX_CAP_LEVEL_2048);
             TIME_INIT;
             for (size_t i = 0; i < SMALL_COUNT; i++) {
-                databox score = {.type = DATABOX_SIGNED_64,
-                                 .data.i = (int64_t)i};
+                databox score = databoxNewSigned((int64_t)i);
                 char buf[32];
                 snprintf(buf, sizeof(buf), "s%zu", i);
                 databox member = databoxNewBytesAllowEmbed(buf, strlen(buf));
@@ -1607,8 +1604,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
             multiOrderedSet *mos = multiOrderedSetNewLimit(FLEX_CAP_LEVEL_64);
             TIME_INIT;
             for (size_t i = 0; i < MEDIUM_COUNT; i++) {
-                databox score = {.type = DATABOX_SIGNED_64,
-                                 .data.i = (int64_t)i};
+                databox score = databoxNewSigned((int64_t)i);
                 char buf[32];
                 snprintf(buf, sizeof(buf), "m%zu", i);
                 databox member = databoxNewBytesAllowEmbed(buf, strlen(buf));
@@ -1625,8 +1621,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
             multiOrderedSet *mos = multiOrderedSetNewLimit(FLEX_CAP_LEVEL_64);
             TIME_INIT;
             for (size_t i = 0; i < FULL_COUNT; i++) {
-                databox score = {.type = DATABOX_SIGNED_64,
-                                 .data.i = (int64_t)i};
+                databox score = databoxNewSigned((int64_t)i);
                 char buf[32];
                 snprintf(buf, sizeof(buf), "f%zu", i);
                 databox member = databoxNewBytesAllowEmbed(buf, strlen(buf));
@@ -1644,7 +1639,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         /* Build Full tier set */
         multiOrderedSet *mos = multiOrderedSetNewLimit(FLEX_CAP_LEVEL_64);
         for (size_t i = 0; i < 5000; i++) {
-            databox score = {.type = DATABOX_SIGNED_64, .data.i = (int64_t)i};
+            databox score = databoxNewSigned((int64_t)i);
             char buf[32];
             snprintf(buf, sizeof(buf), "key%zu", i);
             databox member = databoxNewBytesAllowEmbed(buf, strlen(buf));
@@ -1702,7 +1697,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
 
         /* Build set with 5000 entries */
         for (size_t i = 0; i < 5000; i++) {
-            databox score = {.type = DATABOX_SIGNED_64, .data.i = (int64_t)i};
+            databox score = databoxNewSigned((int64_t)i);
             char buf[32];
             snprintf(buf, sizeof(buf), "iter%zu", i);
             databox member = databoxNewBytesAllowEmbed(buf, strlen(buf));
@@ -1738,7 +1733,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         TIME_INIT;
         for (size_t i = 0; i < 10000; i++) {
             int64_t score = (int64_t)(xoroshiro128plus(seed) % 1000000);
-            databox scoreBox = {.type = DATABOX_SIGNED_64, .data.i = score};
+            databox scoreBox = databoxNewSigned(score);
             char buf[32];
             snprintf(buf, sizeof(buf), "stress%zu", i);
             databox member = databoxNewBytesAllowEmbed(buf, strlen(buf));
@@ -1767,7 +1762,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         /* Many entries with same score, different members */
         multiOrderedSet *mos = multiOrderedSetNew();
 
-        databox score = {.type = DATABOX_SIGNED_64, .data.i = 42};
+        databox score = databoxNewSigned(42);
         for (int i = 0; i < 100; i++) {
             char buf[32];
             snprintf(buf, sizeof(buf), "same_score_%d", i);
@@ -1797,7 +1792,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
 
         /* Initial insert */
         for (int i = 0; i < 1000; i++) {
-            databox score = {.type = DATABOX_SIGNED_64, .data.i = i};
+            databox score = databoxNewSigned(i);
             char buf[32];
             snprintf(buf, sizeof(buf), "upd%d", i);
             databox member = databoxNewBytesAllowEmbed(buf, strlen(buf));
@@ -1808,8 +1803,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         TIME_INIT;
         for (int round = 0; round < 10; round++) {
             for (int i = 0; i < 1000; i++) {
-                databox score = {.type = DATABOX_SIGNED_64,
-                                 .data.i = i + round * 1000};
+                databox score = databoxNewSigned(i + round * 1000);
                 char buf[32];
                 snprintf(buf, sizeof(buf), "upd%d", i);
                 databox member = databoxNewBytesAllowEmbed(buf, strlen(buf));
@@ -1833,7 +1827,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
 
         /* Insert 20 entries */
         for (int i = 0; i < 20; i++) {
-            databox score = {.type = DATABOX_SIGNED_64, .data.i = i * 5};
+            databox score = databoxNewSigned(i * 5);
             char buf[16];
             snprintf(buf, sizeof(buf), "small%d", i);
             databox member = databoxNewBytesAllowEmbed(buf, strlen(buf));
@@ -1873,7 +1867,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
 
         /* Insert 50 entries */
         for (int i = 0; i < 50; i++) {
-            databox score = {.type = DATABOX_SIGNED_64, .data.i = i * 3};
+            databox score = databoxNewSigned(i * 3);
             char buf[16];
             snprintf(buf, sizeof(buf), "med%d", i);
             databox member = databoxNewBytesAllowEmbed(buf, strlen(buf));
@@ -1901,7 +1895,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
 
         /* Insert 200 entries */
         for (int i = 0; i < 200; i++) {
-            databox score = {.type = DATABOX_SIGNED_64, .data.i = i * 7};
+            databox score = databoxNewSigned(i * 7);
             char buf[16];
             snprintf(buf, sizeof(buf), "full%d", i);
             databox member = databoxNewBytesAllowEmbed(buf, strlen(buf));
@@ -1972,8 +1966,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
             {
                 TIME_INIT;
                 for (size_t i = 0; i < count; i++) {
-                    databox score = {.type = DATABOX_SIGNED_64,
-                                     .data.i = (int64_t)i};
+                    databox score = databoxNewSigned((int64_t)i);
                     databox member =
                         databoxNewBytesAllowEmbed(keys[i], strlen(keys[i]));
                     multiOrderedSetAdd(&mos, &score, &member);
@@ -2070,8 +2063,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
             {
                 TIME_INIT;
                 for (size_t i = 0; i < count; i++) {
-                    databox score = {.type = DATABOX_SIGNED_64,
-                                     .data.i = (int64_t)(count - i)};
+                    databox score = databoxNewSigned((int64_t)(count - i));
                     databox member =
                         databoxNewBytesAllowEmbed(keys[i], strlen(keys[i]));
                     multiOrderedSetAdd(&mos, &score, &member);
@@ -2122,8 +2114,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
             {
                 TIME_INIT;
                 for (size_t i = 0; i < count; i++) {
-                    databox score = {.type = DATABOX_SIGNED_64,
-                                     .data.i = (int64_t)i};
+                    databox score = databoxNewSigned((int64_t)i);
                     databox member =
                         databoxNewBytesAllowEmbed(keys[i], strlen(keys[i]));
                     multiOrderedSetAdd(&mos, &score, &member);
@@ -2161,8 +2152,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
             {
                 TIME_INIT;
                 for (size_t i = 0; i < count; i++) {
-                    databox score = {.type = DATABOX_SIGNED_64,
-                                     .data.i = (int64_t)i};
+                    databox score = databoxNewSigned((int64_t)i);
                     databox member =
                         databoxNewBytesAllowEmbed(keys[i], strlen(keys[i]));
                     const databox *elements[2] = {&score, &member};
@@ -2174,8 +2164,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
                 /* multimap lookup is by score (first element), not by member */
                 TIME_INIT;
                 for (size_t i = 0; i < count; i++) {
-                    databox score = {.type = DATABOX_SIGNED_64,
-                                     .data.i = (int64_t)i};
+                    databox score = databoxNewSigned((int64_t)i);
                     multimapExists(mm, &score);
                 }
                 TIME_FINISH(count, "MM exists (by score/key)");
@@ -2183,8 +2172,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
             {
                 TIME_INIT;
                 for (size_t i = 0; i < count; i++) {
-                    databox score = {.type = DATABOX_SIGNED_64,
-                                     .data.i = (int64_t)i};
+                    databox score = databoxNewSigned((int64_t)i);
                     databox foundElements[2];
                     databox *elemPtrs[2] = {&foundElements[0],
                                             &foundElements[1]};
@@ -2219,7 +2207,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         multimap *mm = multimapNew(2);
 
         for (size_t i = 0; i < count; i++) {
-            databox score = {.type = DATABOX_SIGNED_64, .data.i = scores[i]};
+            databox score = databoxNewSigned(scores[i]);
             databox member =
                 databoxNewBytesAllowEmbed(keys[i], strlen(keys[i]));
             multiOrderedSetAdd(&mos, &score, &member);
@@ -2251,8 +2239,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
             TIME_INIT;
             for (size_t i = 0; i < accessCount; i++) {
                 size_t idx = xoroshiro128plus(seed) % count;
-                databox score = {.type = DATABOX_SIGNED_64,
-                                 .data.i = scores[idx]};
+                databox score = databoxNewSigned(scores[idx]);
                 databox foundElements[2];
                 databox *elemPtrs[2] = {&foundElements[0], &foundElements[1]};
                 multimapLookup(mm, &score, elemPtrs);
@@ -2285,7 +2272,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         multimap *mm = multimapNew(2);
 
         for (size_t i = 0; i < count; i++) {
-            databox score = {.type = DATABOX_SIGNED_64, .data.i = (int64_t)i};
+            databox score = databoxNewSigned((int64_t)i);
             databox member =
                 databoxNewBytesAllowEmbed(keys[i], strlen(keys[i]));
             multiOrderedSetAdd(&mos, &score, &member);
@@ -2335,6 +2322,91 @@ int multiOrderedSetTest(int argc, char *argv[]) {
     }
 
     printf("\n=== All Extended multiOrderedSet Tests Completed ===\n\n");
+
+    TEST("reset then reuse: dispatcher across growth, two cycles") {
+        multiOrderedSet *mos = multiOrderedSetNew();
+        char member[32];
+
+        for (int cycle = 0; cycle < 2; cycle++) {
+            for (uint64_t i = 0; i < 400; i++) {
+                snprintf(member, sizeof(member), "rr-member-%" PRIu64, i);
+                const databox score = databoxNewUnsigned(i);
+                const databox mem = databoxNewBytesString(member);
+                multiOrderedSetAdd(&mos, &score, &mem);
+            }
+            if (multiOrderedSetCount(mos) != 400) {
+                ERR("cycle %d: expected 400, got %zu", cycle,
+                    multiOrderedSetCount(mos));
+            }
+
+            multiOrderedSetReset(mos);
+            if (multiOrderedSetCount(mos) != 0) {
+                ERR("cycle %d: expected 0 after reset, got %zu", cycle,
+                    multiOrderedSetCount(mos));
+            }
+        }
+
+        size_t missing = 0;
+        for (uint64_t i = 0; i < 400; i++) {
+            snprintf(member, sizeof(member), "rr-member-%" PRIu64, i);
+            const databox score = databoxNewUnsigned(i + 5);
+            const databox mem = databoxNewBytesString(member);
+            multiOrderedSetAdd(&mos, &score, &mem);
+        }
+        for (uint64_t i = 0; i < 400; i++) {
+            snprintf(member, sizeof(member), "rr-member-%" PRIu64, i);
+            const databox mem = databoxNewBytesString(member);
+            if (!multiOrderedSetExists(mos, &mem)) {
+                missing++;
+            }
+        }
+        if (missing > 0) {
+            ERR("%zu of 400 members missing after reset-reuse", missing);
+        }
+
+        multiOrderedSetFree(mos);
+    }
+
+    TEST("reset then reuse: Full tier with TREE atom pool") {
+        /* End-to-end pin for the atomPool treeReset fix: the TREE
+         * backend used to no-op on reset, leaving atoms interned */
+        multiOrderedSetFull *m =
+            multiOrderedSetFullNewWithPoolType(ATOM_POOL_TREE);
+        char member[32];
+
+        for (int cycle = 0; cycle < 2; cycle++) {
+            for (uint64_t i = 0; i < 100; i++) {
+                snprintf(member, sizeof(member), "tree-rr-%" PRIu64, i);
+                const databox score = databoxNewUnsigned(i);
+                const databox mem = databoxNewBytesString(member);
+                multiOrderedSetFullAdd(m, &score, &mem);
+            }
+            if (multiOrderedSetFullCount(m) != 100) {
+                ERR("cycle %d: expected 100, got %zu", cycle,
+                    multiOrderedSetFullCount(m));
+            }
+
+            multiOrderedSetFullReset(m);
+            if (multiOrderedSetFullCount(m) != 0) {
+                ERR("cycle %d: expected 0 after reset, got %zu", cycle,
+                    multiOrderedSetFullCount(m));
+            }
+        }
+
+        const databox score = databoxNewUnsigned(1);
+        const databox mem = databoxNewBytesString("tree-post-reset");
+        multiOrderedSetFullAdd(m, &score, &mem);
+        if (multiOrderedSetFullCount(m) != 1 ||
+            !multiOrderedSetFullExists(m, &mem)) {
+            ERRR("TREE-pool set unusable after reset");
+        }
+
+        multiOrderedSetFullFree(m);
+    }
+
+    /* Run per-tier test suites */
+    err += multiOrderedSetSmallTest(argc, argv);
+    err += multiOrderedSetMediumTest(argc, argv);
 
     /* Run multiOrderedSetFull-specific tests (including stringPool mode) */
     err += multiOrderedSetFullTest(argc, argv);

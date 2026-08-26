@@ -1453,6 +1453,15 @@ multilruPtr multilruInsertWeighted(multilru *mlru, uint64_t weight) {
     /* Auto-evict if over policy limits */
     enforcePolicy(mlru);
 
+    /* The policy pass holds no pin on the fresh entry: an insert
+     * heavier than the remaining budget can cascade demotions until
+     * the fresh entry itself is the eviction victim. Returning its idx
+     * then would hand the caller a freed handle (and the next insert
+     * could recycle it to a second owner). Report "didn't fit". */
+    if (!E_POPULATED(mlru, idx)) {
+        return 0;
+    }
+
     return idx;
 }
 
@@ -4932,6 +4941,35 @@ int multilruTest(int argc, char *argv[]) {
 
         multilruFree(mlru);
         printf("stats - weighted operations: PASSED\n");
+    }
+
+    TEST("insert heavier than budget never returns a freed handle") {
+        /* An insert that exceeds the remaining weight budget can make
+         * the fresh entry itself the eviction victim during the
+         * post-insert policy pass; Insert must then report 0, not the
+         * already-recycled handle */
+        multilruConfig config = {
+            .maxLevels = 4,
+            .maxWeight = 10,
+            .policy = MLRU_POLICY_SIZE,
+            .enableWeights = true,
+        };
+        multilru *mlru = multilruNewWithConfig(&config);
+
+        multilruPtr held[2];
+        held[0] = multilruInsertWeighted(mlru, 5);
+        held[1] = multilruInsertWeighted(mlru, 5);
+        /* Promote existing entries off level 0 so the fresh insert is
+         * the first true-eviction candidate */
+        multilruIncrease(mlru, held[0]);
+        multilruIncrease(mlru, held[1]);
+
+        const multilruPtr fresh = multilruInsertWeighted(mlru, 100);
+        if (fresh != 0 && !multilruIsPopulated(mlru, fresh)) {
+            ERR("Insert returned freed handle %" PRIu64, (uint64_t)fresh);
+        }
+
+        multilruFree(mlru);
     }
 
     TEST_FINAL_RESULT;

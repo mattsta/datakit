@@ -58,7 +58,7 @@
 #define _PTRLIB_TOP_16(ptr) ((uintptr_t)(ptr) >> (64 - 16))
 
 #define _PTRLIB_TOP_SET_BOOL_N(ptr, n, val)                                    \
-    (void *)((uintptr_t)(ptr) & | ((uintptr_t)(val)) << (64 - (n)))
+    (void *)((uintptr_t)(ptr) | ((uintptr_t)(val)) << (64 - (n)))
 #define _PTRLIB_TOP_SET_8_1(ptr, val)                                          \
     (void *)((uintptr_t)(ptr) | ((uintptr_t)(val)) << (64 - 16))
 #define _PTRLIB_TOP_SET_8_2(ptr, val)                                          \

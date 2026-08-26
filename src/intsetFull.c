@@ -236,28 +236,13 @@ intsetFull *intsetFullAdd(intsetFull *f, int64_t value, bool *added) {
         }
 
         /* Insert at pos16 */
-        uint64_t newCount = f->count16 + 1;
-        int16_t *newValues = zcalloc(newCount, sizeof(int16_t));
-
-        /* Copy before insert point */
-        if (pos16 > 0) {
-            memcpy(newValues, f->values16, pos16 * sizeof(int16_t));
-        }
-
-        /* Insert new value */
-        newValues[pos16] = (int16_t)value;
-
-        /* Copy after insert point */
-        if (pos16 < f->count16) {
-            memcpy(&newValues[pos16 + 1], &f->values16[pos16],
-                   (f->count16 - pos16) * sizeof(int16_t));
-        }
-
-        if (f->values16) {
-            zfree(f->values16);
-        }
-        f->values16 = newValues;
-        f->count16 = newCount;
+        /* Grow in place and shift the tail: one realloc (amortized by
+         * allocator size classes) instead of alloc+double-copy+free */
+        f->values16 = zrealloc(f->values16, (f->count16 + 1) * sizeof(int16_t));
+        memmove(&f->values16[pos16 + 1], &f->values16[pos16],
+                (f->count16 - pos16) * sizeof(int16_t));
+        f->values16[pos16] = (int16_t)value;
+        f->count16++;
 
     } else if (intsetValueFitsInt32(value)) {
         /* Add to int32 array */
@@ -272,28 +257,13 @@ intsetFull *intsetFullAdd(intsetFull *f, int64_t value, bool *added) {
         }
 
         /* Insert at pos32 */
-        uint64_t newCount = f->count32 + 1;
-        int32_t *newValues = zcalloc(newCount, sizeof(int32_t));
-
-        /* Copy before insert point */
-        if (pos32 > 0) {
-            memcpy(newValues, f->values32, pos32 * sizeof(int32_t));
-        }
-
-        /* Insert new value */
-        newValues[pos32] = (int32_t)value;
-
-        /* Copy after insert point */
-        if (pos32 < f->count32) {
-            memcpy(&newValues[pos32 + 1], &f->values32[pos32],
-                   (f->count32 - pos32) * sizeof(int32_t));
-        }
-
-        if (f->values32) {
-            zfree(f->values32);
-        }
-        f->values32 = newValues;
-        f->count32 = newCount;
+        /* Grow in place and shift the tail: one realloc (amortized by
+         * allocator size classes) instead of alloc+double-copy+free */
+        f->values32 = zrealloc(f->values32, (f->count32 + 1) * sizeof(int32_t));
+        memmove(&f->values32[pos32 + 1], &f->values32[pos32],
+                (f->count32 - pos32) * sizeof(int32_t));
+        f->values32[pos32] = (int32_t)value;
+        f->count32++;
 
     } else {
         /* Add to int64 array */
@@ -308,28 +278,13 @@ intsetFull *intsetFullAdd(intsetFull *f, int64_t value, bool *added) {
         }
 
         /* Insert at pos64 */
-        uint64_t newCount = f->count64 + 1;
-        int64_t *newValues = zcalloc(newCount, sizeof(int64_t));
-
-        /* Copy before insert point */
-        if (pos64 > 0) {
-            memcpy(newValues, f->values64, pos64 * sizeof(int64_t));
-        }
-
-        /* Insert new value */
-        newValues[pos64] = value;
-
-        /* Copy after insert point */
-        if (pos64 < f->count64) {
-            memcpy(&newValues[pos64 + 1], &f->values64[pos64],
-                   (f->count64 - pos64) * sizeof(int64_t));
-        }
-
-        if (f->values64) {
-            zfree(f->values64);
-        }
-        f->values64 = newValues;
-        f->count64 = newCount;
+        /* Grow in place and shift the tail: one realloc (amortized by
+         * allocator size classes) instead of alloc+double-copy+free */
+        f->values64 = zrealloc(f->values64, (f->count64 + 1) * sizeof(int64_t));
+        memmove(&f->values64[pos64 + 1], &f->values64[pos64],
+                (f->count64 - pos64) * sizeof(int64_t));
+        f->values64[pos64] = value;
+        f->count64++;
     }
 
     if (added) {
@@ -366,23 +321,11 @@ intsetFull *intsetFullRemove(intsetFull *f, int64_t value, bool *removed) {
             f->values16 = NULL;
             f->count16 = 0;
         } else {
-            uint64_t newCount = f->count16 - 1;
-            int16_t *newValues = zcalloc(newCount, sizeof(int16_t));
-
-            /* Copy before removed element */
-            if (pos16 > 0) {
-                memcpy(newValues, f->values16, pos16 * sizeof(int16_t));
-            }
-
-            /* Copy after removed element */
-            if (pos16 < f->count16 - 1) {
-                memcpy(&newValues[pos16], &f->values16[pos16 + 1],
-                       (f->count16 - pos16 - 1) * sizeof(int16_t));
-            }
-
-            zfree(f->values16);
-            f->values16 = newValues;
-            f->count16 = newCount;
+            /* Shift the tail down in place; capacity is retained so
+             * churny remove/add cycles stop thrashing the allocator */
+            memmove(&f->values16[pos16], &f->values16[pos16 + 1],
+                    (f->count16 - pos16 - 1) * sizeof(int16_t));
+            f->count16--;
         }
 
     } else if (intsetValueFitsInt32(value)) {
@@ -404,23 +347,11 @@ intsetFull *intsetFullRemove(intsetFull *f, int64_t value, bool *removed) {
             f->values32 = NULL;
             f->count32 = 0;
         } else {
-            uint64_t newCount = f->count32 - 1;
-            int32_t *newValues = zcalloc(newCount, sizeof(int32_t));
-
-            /* Copy before removed element */
-            if (pos32 > 0) {
-                memcpy(newValues, f->values32, pos32 * sizeof(int32_t));
-            }
-
-            /* Copy after removed element */
-            if (pos32 < f->count32 - 1) {
-                memcpy(&newValues[pos32], &f->values32[pos32 + 1],
-                       (f->count32 - pos32 - 1) * sizeof(int32_t));
-            }
-
-            zfree(f->values32);
-            f->values32 = newValues;
-            f->count32 = newCount;
+            /* Shift the tail down in place; capacity is retained so
+             * churny remove/add cycles stop thrashing the allocator */
+            memmove(&f->values32[pos32], &f->values32[pos32 + 1],
+                    (f->count32 - pos32 - 1) * sizeof(int32_t));
+            f->count32--;
         }
 
     } else {
@@ -442,23 +373,11 @@ intsetFull *intsetFullRemove(intsetFull *f, int64_t value, bool *removed) {
             f->values64 = NULL;
             f->count64 = 0;
         } else {
-            uint64_t newCount = f->count64 - 1;
-            int64_t *newValues = zcalloc(newCount, sizeof(int64_t));
-
-            /* Copy before removed element */
-            if (pos64 > 0) {
-                memcpy(newValues, f->values64, pos64 * sizeof(int64_t));
-            }
-
-            /* Copy after removed element */
-            if (pos64 < f->count64 - 1) {
-                memcpy(&newValues[pos64], &f->values64[pos64 + 1],
-                       (f->count64 - pos64 - 1) * sizeof(int64_t));
-            }
-
-            zfree(f->values64);
-            f->values64 = newValues;
-            f->count64 = newCount;
+            /* Shift the tail down in place; capacity is retained so
+             * churny remove/add cycles stop thrashing the allocator */
+            memmove(&f->values64[pos64], &f->values64[pos64 + 1],
+                    (f->count64 - pos64 - 1) * sizeof(int64_t));
+            f->count64--;
         }
     }
 
@@ -491,25 +410,28 @@ bool intsetFullIteratorNext(intsetFullIterator *it, int64_t *value) {
         return false;
     }
 
-    /* Find minimum among available values */
-    int64_t val16 = has16 ? it->f->values16[it->pos16] : INT64_MAX;
-    int64_t val32 = has32 ? it->f->values32[it->pos32] : INT64_MAX;
-    int64_t val64 = has64 ? it->f->values64[it->pos64] : INT64_MAX;
+    /* Find minimum among available values. The has-guards must gate
+     * each branch: the INT64_MAX sentinel of an exhausted array
+     * collides with a REAL INT64_MAX in the set, so exhausted arrays
+     * must never win the comparison. */
+    const int64_t val16 = has16 ? it->f->values16[it->pos16] : INT64_MAX;
+    const int64_t val32 = has32 ? it->f->values32[it->pos32] : INT64_MAX;
+    const int64_t val64 = has64 ? it->f->values64[it->pos64] : INT64_MAX;
 
-    if (val16 <= val32 && val16 <= val64) {
+    if (has16 && (!has32 || val16 <= val32) && (!has64 || val16 <= val64)) {
         /* Take from int16 array */
         if (value) {
             *value = val16;
         }
         it->pos16++;
-    } else if (val32 <= val64) {
+    } else if (has32 && (!has64 || val32 <= val64)) {
         /* Take from int32 array */
         if (value) {
             *value = val32;
         }
         it->pos32++;
     } else {
-        /* Take from int64 array */
+        /* Take from int64 array (nonempty by the early return above) */
         if (value) {
             *value = val64;
         }

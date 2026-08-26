@@ -71,60 +71,97 @@ static void detectBestImplementation(void) {
 }
 
 /* ====================================================================
- * Random State
+ * Generator State
  * ==================================================================== */
-static uint64_t ulidRandomState[2] = {0, 0};
 
-static void ulidInitRandomState(void) {
-    if (ulidRandomState[0] == 0 && ulidRandomState[1] == 0) {
-        uint8_t seed[16];
-        getRandomHexChars(seed, sizeof(seed));
+static void ulidGenSeedRng(ulidGen *g) {
+    uint8_t seed[16];
+    getRandomHexChars(seed, sizeof(seed));
 
-        uint64_t tempState[2] = {0, 0};
-        for (int32_t i = 0; i < 8; i++) {
-            tempState[0] = (tempState[0] << 8) | seed[i];
-        }
-        for (int32_t i = 0; i < 8; i++) {
-            tempState[1] = (tempState[1] << 8) | seed[i + 8];
-        }
+    uint64_t tempState[2] = {0, 0};
+    for (int32_t i = 0; i < 8; i++) {
+        tempState[0] = (tempState[0] << 8) | seed[i];
+    }
+    for (int32_t i = 0; i < 8; i++) {
+        tempState[1] = (tempState[1] << 8) | seed[i + 8];
+    }
 
-        /* Ensure non-zero state */
-        if (tempState[0] == 0) {
-            tempState[0] = 1;
-        }
-        if (tempState[1] == 0) {
-            tempState[1] = 1;
-        }
+    /* xoroshiro128+ requires nonzero state */
+    if (tempState[0] == 0) {
+        tempState[0] = 1;
+    }
+    if (tempState[1] == 0) {
+        tempState[1] = 1;
+    }
 
-        ulidRandomState[0] = tempState[0];
-        ulidRandomState[1] = tempState[1];
+    g->rng[0] = tempState[0];
+    g->rng[1] = tempState[1];
+}
+
+bool ulidGenInit(ulidGen *g, ulidClockSource clock) {
+    if (!g) {
+        return false;
+    }
+
+    *g = (ulidGen){0};
+    g->clockSource = (uint32_t)clock;
+    if (clock == ULID_CLOCK_MONOTONIC_OFFSET) {
+        g->clockOffsetNs = timeUtilNs() - timeUtilMonotonicNs();
+    }
+
+    ulidGenSeedRng(g);
+    return true;
+}
+
+ulidGen *ulidGenNew(ulidClockSource clock) {
+    ulidGen *g = zmalloc(sizeof(*g));
+    ulidGenInit(g, clock);
+    return g;
+}
+
+void ulidGenFree(ulidGen *g) {
+    if (g) {
+        zfree(g);
     }
 }
 
-static uint64_t ulidRandom(void) {
-    ulidInitRandomState();
-    return xoroshiro128plus(ulidRandomState);
+static uint64_t ulidGenRandom(ulidGen *g) {
+    /* {0} generators self-seed on first use */
+    if (g->rng[0] == 0 && g->rng[1] == 0) {
+        ulidGenSeedRng(g);
+    }
+
+    return xoroshiro128plus(g->rng);
 }
 
-/* ====================================================================
- * Timestamp with Monotonic Counter
- * ==================================================================== */
-static uint64_t ulidGetTimestampNsInternal(void) {
-    static uint64_t lastTimestamp = 0;
-    static uint64_t counter = 0;
+/* Current Unix-epoch nanoseconds under the generator's clock source */
+static uint64_t ulidGenNowNs(const ulidGen *g) {
+    return g->clockSource == ULID_CLOCK_MONOTONIC_OFFSET
+               ? timeUtilMonotonicNs() + g->clockOffsetNs
+               : timeUtilNs();
+}
 
-    uint64_t currentTime = timeUtilMonotonicNs();
+/* Next emission timestamp: strictly greater than every previous one
+ * from this generator, so ids sort in generation order even when the
+ * clock reads the same instant twice or steps backwards. */
+static uint64_t ulidGenNextNs(ulidGen *g) {
+    uint64_t now = ulidGenNowNs(g);
 
-    /* If we get the same or earlier timestamp, increment counter */
-    if (currentTime <= lastTimestamp) {
-        counter++;
-        currentTime = lastTimestamp + counter;
+    if (now <= g->lastEmittedNs) {
+        g->collisionCount++;
+        now = g->lastEmittedNs + 1;
+        /* Saturate instead of wrapping: epoch-ns reaches UINT64_MAX in
+         * the year 2554, and a wrapped watermark would silently break
+         * the sort-order guarantee */
+        if (now == 0) {
+            now = UINT64_MAX;
+        }
     } else {
-        lastTimestamp = currentTime;
-        counter = 0;
+        g->collisionCount = 0;
     }
 
-    return currentTime;
+    g->lastEmittedNs = now;
+    return now;
 }
 
 /* ====================================================================
@@ -752,13 +789,13 @@ bool ulidDecodeNEON(const char *str, ulid_t *out) {
  * Core API Implementation
  * ==================================================================== */
 
-void ulidGenerate(ulid_t *out) {
-    if (!out) {
+void ulidGenerate(ulidGen *g, ulid_t *out) {
+    if (!g || !out) {
         return;
     }
 
-    uint64_t timestamp = ulidGetTimestampNsInternal();
-    uint64_t randomness = ulidRandom();
+    uint64_t timestamp = ulidGenNextNs(g);
+    uint64_t randomness = ulidGenRandom(g);
 
     /* Store in big-endian format: timestamp first, then randomness */
     for (int32_t i = 0; i < 8; i++) {
@@ -846,9 +883,9 @@ uint64_t ulidGetRandom(const ulid_t *ulid) {
     return random;
 }
 
-size_t ulidGenerateAndEncode(char *out, size_t outLen) {
+size_t ulidGenerateAndEncode(ulidGen *g, char *out, size_t outLen) {
     ulid_t id;
-    ulidGenerate(&id);
+    ulidGenerate(g, &id);
     return ulidEncode(&id, out, outLen);
 }
 
@@ -943,73 +980,6 @@ void ulidCopy(ulid_t *dst, const ulid_t *src) {
 /* ====================================================================
  * ULID Variants Implementation
  * ==================================================================== */
-
-/* Random state for variant generation */
-static uint64_t ulidVariantRandomState[2] = {0, 0};
-
-/* Monotonic state for variants that need it */
-static struct {
-    uint64_t lastTimestamp;
-    uint64_t counter;
-} monotonicState = {0, 0};
-
-/* Snowflake sequence state */
-static struct {
-    uint64_t lastTimestampMs;
-    uint16_t sequence;
-} snowflakeState = {0, 0};
-
-/* ====================================================================
- * Random Number Generation (Variant-Specific)
- * ==================================================================== */
-static void ulidVariantInitRandomState(void) {
-    if (ulidVariantRandomState[0] == 0 && ulidVariantRandomState[1] == 0) {
-        uint8_t seed[16];
-        getRandomHexChars(seed, sizeof(seed));
-
-        uint64_t tempState[2] = {0, 0};
-        for (int32_t i = 0; i < 8; i++) {
-            tempState[0] = (tempState[0] << 8) | seed[i];
-        }
-        for (int32_t i = 0; i < 8; i++) {
-            tempState[1] = (tempState[1] << 8) | seed[i + 8];
-        }
-
-        /* Ensure non-zero state */
-        if (tempState[0] == 0) {
-            tempState[0] = 1;
-        }
-        if (tempState[1] == 0) {
-            tempState[1] = 1;
-        }
-
-        ulidVariantRandomState[0] = tempState[0];
-        ulidVariantRandomState[1] = tempState[1];
-    }
-}
-
-static uint64_t ulidVariantRandom(void) {
-    ulidVariantInitRandomState();
-    return xoroshiro128plus(ulidVariantRandomState);
-}
-
-/* ====================================================================
- * Timestamp Helpers
- * ==================================================================== */
-static uint64_t getMonotonicTimestampNs(void) {
-    uint64_t currentTime = timeUtilNs();
-
-    /* If we get the same or earlier timestamp, increment counter */
-    if (currentTime <= monotonicState.lastTimestamp) {
-        monotonicState.counter++;
-        currentTime = monotonicState.lastTimestamp + monotonicState.counter;
-    } else {
-        monotonicState.lastTimestamp = currentTime;
-        monotonicState.counter = 0;
-    }
-
-    return currentTime;
-}
 
 /* ====================================================================
  * 64-bit Base36 Encoding/Decoding
@@ -1154,19 +1124,20 @@ bool ulidVariantConfigValidate(const ulidVariantConfig *config) {
  * Variant Generation
  * ==================================================================== */
 
-void ulid64Generate(ulid64_t *out, ulidVariantType type) {
+void ulid64Generate(ulidGen *g, ulid64_t *out, ulidVariantType type) {
     ulidVariantConfig config;
     ulidVariantConfigInit(&config, type);
-    ulid64GenerateWithConfig(out, &config);
+    ulid64GenerateWithConfig(g, out, &config);
 }
 
-void ulid64GenerateWithConfig(ulid64_t *out, const ulidVariantConfig *config) {
-    if (!out || !config) {
+void ulid64GenerateWithConfig(ulidGen *g, ulid64_t *out,
+                              const ulidVariantConfig *config) {
+    if (!g || !out || !config) {
         return;
     }
 
-    uint64_t timestampNs = getMonotonicTimestampNs();
-    uint64_t random = ulidVariantRandom();
+    uint64_t timestampNs = ulidGenNextNs(g);
+    uint64_t random = ulidGenRandom(g);
 
     switch (config->type) {
     case ULID_VARIANT_EPOCH2020: {
@@ -1230,8 +1201,8 @@ void ulid64GenerateWithConfig(ulid64_t *out, const ulidVariantConfig *config) {
     case ULID_VARIANT_NSCOUNT: {
         /* 40-bit ns + 24-bit counter */
         uint64_t ts = timestampNs & 0xFFFFFFFFFFULL; /* 40 bits */
-        /* Use monotonic counter value */
-        uint64_t counter = monotonicState.counter & 0xFFFFFF; /* 24 bits */
+        /* Same-instant burst position from the generator */
+        uint64_t counter = g->collisionCount & 0xFFFFFF; /* 24 bits */
         out->data = (ts << 24) | counter;
         break;
     }
@@ -1251,20 +1222,20 @@ void ulid64GenerateWithConfig(ulid64_t *out, const ulidVariantConfig *config) {
         uint64_t ts = timestampMs & 0x1FFFFFFFFFFULL; /* 41 bits */
 
         /* Handle sequence counter */
-        if (timestampMs == snowflakeState.lastTimestampMs) {
-            snowflakeState.sequence++;
-            if (snowflakeState.sequence >= 8192) {
+        if (timestampMs == g->snowflakeLastMs) {
+            g->snowflakeSeq++;
+            if (g->snowflakeSeq >= 8192) {
                 /* Sequence overflow, wait for next millisecond */
-                snowflakeState.sequence = 0;
+                g->snowflakeSeq = 0;
                 /* This is a simplified version; production would wait */
             }
         } else {
-            snowflakeState.lastTimestampMs = timestampMs;
-            snowflakeState.sequence = 0;
+            g->snowflakeLastMs = timestampMs;
+            g->snowflakeSeq = 0;
         }
 
-        uint64_t machineId = config->machineId & 0x3FF;       /* 10 bits */
-        uint64_t sequence = snowflakeState.sequence & 0x1FFF; /* 13 bits */
+        uint64_t machineId = config->machineId & 0x3FF; /* 10 bits */
+        uint64_t sequence = g->snowflakeSeq & 0x1FFF;   /* 13 bits */
 
         out->data = (ts << 23) | (machineId << 13) | sequence;
         break;
@@ -1286,13 +1257,13 @@ void ulid64GenerateWithConfig(ulid64_t *out, const ulidVariantConfig *config) {
  * 32-bit Variant Generation
  * ==================================================================== */
 
-void ulid32Generate(ulid32_t *out, ulidVariantType type) {
-    if (!out) {
+void ulid32Generate(ulidGen *g, ulid32_t *out, ulidVariantType type) {
+    if (!g || !out) {
         return;
     }
 
-    uint64_t timestampNs = getMonotonicTimestampNs();
-    uint64_t random = ulidVariantRandom();
+    uint64_t timestampNs = ulidGenNextNs(g);
+    uint64_t random = ulidGenRandom(g);
 
     switch (type) {
     case ULID_VARIANT_32MS: {
@@ -1323,14 +1294,14 @@ void ulid32Generate(ulid32_t *out, ulidVariantType type) {
  * 128-bit DUALNS Variant Generation
  * ==================================================================== */
 
-void ulidGenerateDualNs(ulid_t *out) {
-    if (!out) {
+void ulidGenerateDualNs(ulidGen *g, ulid_t *out) {
+    if (!g || !out) {
         return;
     }
 
-    /* Get two sequential 64-bit nanosecond timestamps */
-    uint64_t ts1 = timeUtilNs();
-    uint64_t ts2 = timeUtilNs();
+    /* Two sequential emission timestamps; watermark makes ts2 > ts1 */
+    uint64_t ts1 = ulidGenNextNs(g);
+    uint64_t ts2 = ulidGenNextNs(g);
 
     /* Store first timestamp in high 64 bits (bytes 0-7) */
     out->data[0] = (ts1 >> 56) & 0xFF;
@@ -1381,10 +1352,14 @@ uint64_t ulidGetSecondTimestampNs(const ulid_t *id) {
  * 128-bit DUALNS __uint128_t Interface
  * ==================================================================== */
 
-__uint128_t ulidGenerateDualNsU128(void) {
-    /* Get two sequential 64-bit nanosecond timestamps */
-    uint64_t ts1 = timeUtilNs();
-    uint64_t ts2 = timeUtilNs();
+__uint128_t ulidGenerateDualNsU128(ulidGen *g) {
+    if (!g) {
+        return 0;
+    }
+
+    /* Two sequential emission timestamps; watermark makes ts2 > ts1 */
+    uint64_t ts1 = ulidGenNextNs(g);
+    uint64_t ts2 = ulidGenNextNs(g);
 
     /* Return as __uint128_t with ts1 in high 64 bits, ts2 in low 64 bits */
     return ((__uint128_t)ts1 << 64) | ts2;
@@ -1852,14 +1827,14 @@ static inline void deinterleaveBits64Dispatch(__uint128_t interleaved,
     }
 }
 
-void ulidGenerateDualNsInterleaved(ulid_t *out) {
-    if (!out) {
+void ulidGenerateDualNsInterleaved(ulidGen *g, ulid_t *out) {
+    if (!g || !out) {
         return;
     }
 
-    /* Get two sequential 64-bit nanosecond timestamps */
-    uint64_t ts1 = timeUtilNs();
-    uint64_t ts2 = timeUtilNs();
+    /* Two sequential emission timestamps; watermark makes ts2 > ts1 */
+    uint64_t ts1 = ulidGenNextNs(g);
+    uint64_t ts2 = ulidGenNextNs(g);
 
     /* Interleave the bits using best available implementation */
     __uint128_t interleaved = interleaveBits64Dispatch(ts1, ts2);
@@ -1870,9 +1845,13 @@ void ulidGenerateDualNsInterleaved(ulid_t *out) {
     }
 }
 
-__uint128_t ulidGenerateDualNsInterleavedU128(void) {
-    uint64_t ts1 = timeUtilNs();
-    uint64_t ts2 = timeUtilNs();
+__uint128_t ulidGenerateDualNsInterleavedU128(ulidGen *g) {
+    if (!g) {
+        return 0;
+    }
+
+    uint64_t ts1 = ulidGenNextNs(g);
+    uint64_t ts2 = ulidGenNextNs(g);
     return interleaveBits64Dispatch(ts1, ts2);
 }
 
@@ -2114,9 +2093,10 @@ uint32_t ulid32GetRandom(const ulid32_t *id, ulidVariantType type) {
  * Utility Functions
  * ==================================================================== */
 
-size_t ulid64GenerateAndEncode(char *out, size_t outLen, ulidVariantType type) {
+size_t ulid64GenerateAndEncode(ulidGen *g, char *out, size_t outLen,
+                               ulidVariantType type) {
     ulid64_t id;
-    ulid64Generate(&id, type);
+    ulid64Generate(g, &id, type);
     return ulid64Encode(&id, out, outLen);
 }
 
@@ -2399,6 +2379,10 @@ int ulidTest(int argc, char *argv[]) {
 
     int32_t err = 0;
 
+    /* Shared generator for tests that don't exercise state itself */
+    ulidGen g;
+    ulidGenInit(&g, ULID_CLOCK_REALTIME);
+
     printf("Testing ULID (Base36) generation and encoding...\n");
     printf("Available implementations:\n");
     for (int32_t i = 0; i < ULID_ENCODE_COUNT; i++) {
@@ -2408,6 +2392,137 @@ int ulidTest(int argc, char *argv[]) {
     printf("\n");
 
     /* ================================================================
+     * Generator State Contract Tests
+     * ================================================================ */
+    TEST("generator: stack zero-init self-seeds and generates") {
+        ulidGen z = {0};
+        ulid_t id;
+        ulidGenerate(&z, &id);
+
+        if (ulidIsZero(&id)) {
+            ERRR("Zero-init generator produced zero ULID");
+        }
+        if (z.rng[0] == 0 && z.rng[1] == 0) {
+            ERRR("Zero-init generator did not self-seed");
+        }
+        if (z.lastEmittedNs == 0) {
+            ERRR("Zero-init generator did not advance its watermark");
+        }
+    }
+
+    TEST("generator: heap New/Free round trip") {
+        ulidGen *h = ulidGenNew(ULID_CLOCK_REALTIME);
+        ulid_t id;
+        ulidGenerate(h, &id);
+        if (ulidIsZero(&id)) {
+            ERRR("Heap generator produced zero ULID");
+        }
+        ulidGenFree(h);
+    }
+
+    TEST("generator: independent generators, independent streams") {
+        ulidGen a;
+        ulidGen b;
+        ulidGenInit(&a, ULID_CLOCK_REALTIME);
+        ulidGenInit(&b, ULID_CLOCK_REALTIME);
+
+        enum { STREAM_N = 8 };
+        for (int32_t i = 0; i < STREAM_N; i++) {
+            ulid_t ida;
+            ulid_t idb;
+            ulidGenerate(&a, &ida);
+            ulidGenerate(&b, &idb);
+            if (ulidGetRandom(&ida) == ulidGetRandom(&idb)) {
+                ERR("Generators share a random stream at step %d", i);
+            }
+        }
+    }
+
+    TEST("generator: strict monotonic emission under bursts") {
+        ulidGen m;
+        ulidGenInit(&m, ULID_CLOCK_REALTIME);
+
+        ulid_t prev;
+        ulidGenerate(&m, &prev);
+        for (int32_t i = 0; i < 10000; i++) {
+            ulid_t cur;
+            ulidGenerate(&m, &cur);
+            if (ulidGetTimestampNs(&cur) <= ulidGetTimestampNs(&prev)) {
+                ERR("Emission not strictly monotonic at %d "
+                    "(%" PRIu64 " <= %" PRIu64 ")",
+                    i, ulidGetTimestampNs(&cur), ulidGetTimestampNs(&prev));
+                break;
+            }
+            prev = cur;
+        }
+    }
+
+    TEST("generator: clock regression cannot regress emission") {
+        /* A wall-clock step (or same-instant burst) must never emit a
+         * timestamp at or below one already issued: force the
+         * watermark far ahead of the real clock and keep generating */
+        ulidGen m;
+        ulidGenInit(&m, ULID_CLOCK_REALTIME);
+
+        ulid_t first;
+        ulidGenerate(&m, &first);
+        const uint64_t forced = ulidGetTimestampNs(&first) + 1000000000ULL;
+        m.lastEmittedNs = forced;
+
+        ulid_t second;
+        ulidGenerate(&m, &second);
+        if (ulidGetTimestampNs(&second) != forced + 1) {
+            ERR("Watermark bump wrong: got %" PRIu64 " want %" PRIu64,
+                ulidGetTimestampNs(&second), forced + 1);
+        }
+
+        ulid_t third;
+        ulidGenerate(&m, &third);
+        if (ulidGetTimestampNs(&third) <= ulidGetTimestampNs(&second)) {
+            ERRR("Emission regressed after forced watermark");
+        }
+    }
+
+    TEST("generator: both clock sources yield epoch timestamps") {
+        ulidGen rt;
+        ulidGen mo;
+        ulidGenInit(&rt, ULID_CLOCK_REALTIME);
+        ulidGenInit(&mo, ULID_CLOCK_MONOTONIC_OFFSET);
+
+        ulid_t idRt;
+        ulid_t idMo;
+        ulidGenerate(&rt, &idRt);
+        ulidGenerate(&mo, &idMo);
+
+        const uint64_t nowNs = timeUtilNs();
+        const uint64_t tolNs = 5000000000ULL; /* 5s */
+        const uint64_t tsRt = ulidGetTimestampNs(&idRt);
+        const uint64_t tsMo = ulidGetTimestampNs(&idMo);
+
+        if (tsRt + tolNs < nowNs || tsRt > nowNs + tolNs) {
+            ERR("REALTIME timestamp not near wall clock: %" PRIu64, tsRt);
+        }
+        if (tsMo + tolNs < nowNs || tsMo > nowNs + tolNs) {
+            ERR("MONOTONIC_OFFSET timestamp not near wall clock: %" PRIu64,
+                tsMo);
+        }
+    }
+
+    TEST("generator: dual timestamps strictly ordered") {
+        ulidGen m;
+        ulidGenInit(&m, ULID_CLOCK_REALTIME);
+
+        for (int32_t i = 0; i < 1000; i++) {
+            ulid_t id;
+            ulidGenerateDualNs(&m, &id);
+            if (ulidGetSecondTimestampNs(&id) <= ulidGetFirstTimestampNs(&id)) {
+                ERR("DualNs ts2 <= ts1 at %d", i);
+                break;
+            }
+        }
+    }
+
+    /* ================================================================
      * Basic Functionality Tests
      * ================================================================ */
     TEST("ulid generation") {
@@ -2415,8 +2530,8 @@ int ulidTest(int argc, char *argv[]) {
         char enc1[ULID_ENCODED_LENGTH + 1];
         char enc2[ULID_ENCODED_LENGTH + 1];
 
-        ulidGenerate(&id1);
-        ulidGenerate(&id2);
+        ulidGenerate(&g, &id1);
+        ulidGenerate(&g, &id2);
 
         ulidEncode(&id1, enc1, sizeof(enc1));
         ulidEncode(&id2, enc2, sizeof(enc2));
@@ -2456,7 +2571,7 @@ int ulidTest(int argc, char *argv[]) {
         ulid_t id;
         char encoded[ULID_ENCODED_LENGTH + 1];
 
-        ulidGenerate(&id);
+        ulidGenerate(&g, &id);
         size_t len = ulidEncode(&id, encoded, sizeof(encoded));
 
         if (len != ULID_ENCODED_LENGTH) {
@@ -2478,7 +2593,7 @@ int ulidTest(int argc, char *argv[]) {
 
         /* Generate multiple ULIDs and check all characters are valid Base36 */
         for (int32_t test = 0; test < 100; test++) {
-            ulidGenerate(&id);
+            ulidGenerate(&g, &id);
             ulidEncode(&id, encoded, sizeof(encoded));
 
             for (int32_t i = 0; i < ULID_ENCODED_LENGTH; i++) {
@@ -2500,7 +2615,7 @@ int ulidTest(int argc, char *argv[]) {
 
         printf("    Sample scalar encode/decode:\n");
         for (int32_t test = 0; test < 1000; test++) {
-            ulidGenerate(&orig);
+            ulidGenerate(&g, &orig);
             ulidEncodeScalar(&orig, encoded, sizeof(encoded));
 
             /* Show first 3 samples */
@@ -2542,7 +2657,7 @@ int ulidTest(int argc, char *argv[]) {
 
         printf("    Sample SWAR encode/decode:\n");
         for (int32_t test = 0; test < 1000; test++) {
-            ulidGenerate(&orig);
+            ulidGenerate(&g, &orig);
             ulidEncodeSWAR(&orig, encoded, sizeof(encoded));
 
             if (test < 3) {
@@ -2573,7 +2688,7 @@ int ulidTest(int argc, char *argv[]) {
         char encoded[ULID_ENCODED_LENGTH + 1];
 
         for (int32_t test = 0; test < 1000; test++) {
-            ulidGenerate(&orig);
+            ulidGenerate(&g, &orig);
             ulidEncodeSSE2(&orig, encoded, sizeof(encoded));
 
             if (!ulidDecodeSSE2(encoded, &decoded)) {
@@ -2593,7 +2708,7 @@ int ulidTest(int argc, char *argv[]) {
         char encoded[ULID_ENCODED_LENGTH + 1];
 
         for (int32_t test = 0; test < 1000; test++) {
-            ulidGenerate(&orig);
+            ulidGenerate(&g, &orig);
             ulidEncodeAVX2(&orig, encoded, sizeof(encoded));
 
             if (!ulidDecodeAVX2(encoded, &decoded)) {
@@ -2614,7 +2729,7 @@ int ulidTest(int argc, char *argv[]) {
 
         printf("    Sample NEON encode/decode:\n");
         for (int32_t test = 0; test < 1000; test++) {
-            ulidGenerate(&orig);
+            ulidGenerate(&g, &orig);
             ulidEncodeNEON(&orig, encoded, sizeof(encoded));
 
             if (test < 3) {
@@ -2646,7 +2761,7 @@ int ulidTest(int argc, char *argv[]) {
 
         printf("    Sample cross-impl verification:\n");
         for (int32_t test = 0; test < 100; test++) {
-            ulidGenerate(&orig);
+            ulidGenerate(&g, &orig);
 
             /* Encode with scalar */
             ulidEncodeScalar(&orig, encoded, sizeof(encoded));
@@ -2728,7 +2843,7 @@ int ulidTest(int argc, char *argv[]) {
         char encoded[ULID_ENCODED_LENGTH + 1];
         char lowercase[ULID_ENCODED_LENGTH + 1];
 
-        ulidGenerate(&id);
+        ulidGenerate(&g, &id);
         ulidEncode(&id, encoded, sizeof(encoded));
 
         /* Convert to lowercase */
@@ -2759,9 +2874,9 @@ int ulidTest(int argc, char *argv[]) {
         char enc1[ULID_ENCODED_LENGTH + 1];
         char enc2[ULID_ENCODED_LENGTH + 1];
 
-        ulidGenerate(&id1);
+        ulidGenerate(&g, &id1);
         usleep(1000); /* 1ms delay */
-        ulidGenerate(&id2);
+        ulidGenerate(&g, &id2);
 
         ulidEncode(&id1, enc1, sizeof(enc1));
         ulidEncode(&id2, enc2, sizeof(enc2));
@@ -2786,7 +2901,7 @@ int ulidTest(int argc, char *argv[]) {
         ulid_t *ids = zcalloc(numIds, sizeof(ulid_t));
 
         for (int32_t i = 0; i < numIds; i++) {
-            ulidGenerate(&ids[i]);
+            ulidGenerate(&g, &ids[i]);
         }
 
         /* Check for collisions */
@@ -2840,7 +2955,7 @@ int ulidTest(int argc, char *argv[]) {
     TEST("ulid utility functions") {
         ulid_t id1, id2, copy;
 
-        ulidGenerate(&id1);
+        ulidGenerate(&g, &id1);
 
         /* Test copy */
         ulidCopy(&copy, &id1);
@@ -2862,7 +2977,7 @@ int ulidTest(int argc, char *argv[]) {
 
     TEST("ulid convenience function") {
         char encoded[ULID_ENCODED_LENGTH + 1];
-        size_t len = ulidGenerateAndEncode(encoded, sizeof(encoded));
+        size_t len = ulidGenerateAndEncode(&g, encoded, sizeof(encoded));
 
         if (len != ULID_ENCODED_LENGTH) {
             ERR("GenerateAndEncode returned wrong length: %zu", len);
@@ -2890,7 +3005,7 @@ int ulidTest(int argc, char *argv[]) {
 
         PERF_TIMERS_SETUP;
         for (size_t i = 0; i < iterations; i++) {
-            ulidGenerate(&id);
+            ulidGenerate(&g, &id);
         }
         PERF_TIMERS_FINISH_PRINT_RESULTS(iterations, "ulid generations");
     }
@@ -2900,7 +3015,7 @@ int ulidTest(int argc, char *argv[]) {
         ulid_t id;
         char encoded[ULID_ENCODED_LENGTH + 1];
 
-        ulidGenerate(&id);
+        ulidGenerate(&g, &id);
 
         PERF_TIMERS_SETUP;
         for (size_t i = 0; i < iterations; i++) {
@@ -2914,7 +3029,7 @@ int ulidTest(int argc, char *argv[]) {
         char encoded[ULID_ENCODED_LENGTH + 1];
         ulid_t decoded;
 
-        ulidGenerateAndEncode(encoded, sizeof(encoded));
+        ulidGenerateAndEncode(&g, encoded, sizeof(encoded));
 
         PERF_TIMERS_SETUP;
         for (size_t i = 0; i < iterations; i++) {
@@ -2928,7 +3043,7 @@ int ulidTest(int argc, char *argv[]) {
         ulid_t id;
         char encoded[ULID_ENCODED_LENGTH + 1];
 
-        ulidGenerate(&id);
+        ulidGenerate(&g, &id);
 
         PERF_TIMERS_SETUP;
         for (size_t i = 0; i < iterations; i++) {
@@ -2942,7 +3057,7 @@ int ulidTest(int argc, char *argv[]) {
         char encoded[ULID_ENCODED_LENGTH + 1];
         ulid_t decoded;
 
-        ulidGenerateAndEncode(encoded, sizeof(encoded));
+        ulidGenerateAndEncode(&g, encoded, sizeof(encoded));
 
         PERF_TIMERS_SETUP;
         for (size_t i = 0; i < iterations; i++) {
@@ -2957,7 +3072,7 @@ int ulidTest(int argc, char *argv[]) {
         ulid_t id;
         char encoded[ULID_ENCODED_LENGTH + 1];
 
-        ulidGenerate(&id);
+        ulidGenerate(&g, &id);
 
         PERF_TIMERS_SETUP;
         for (size_t i = 0; i < iterations; i++) {
@@ -2971,7 +3086,7 @@ int ulidTest(int argc, char *argv[]) {
         char encoded[ULID_ENCODED_LENGTH + 1];
         ulid_t decoded;
 
-        ulidGenerateAndEncode(encoded, sizeof(encoded));
+        ulidGenerateAndEncode(&g, encoded, sizeof(encoded));
 
         PERF_TIMERS_SETUP;
         for (size_t i = 0; i < iterations; i++) {
@@ -2987,7 +3102,7 @@ int ulidTest(int argc, char *argv[]) {
         ulid_t id;
         char encoded[ULID_ENCODED_LENGTH + 1];
 
-        ulidGenerate(&id);
+        ulidGenerate(&g, &id);
 
         PERF_TIMERS_SETUP;
         for (size_t i = 0; i < iterations; i++) {
@@ -3001,7 +3116,7 @@ int ulidTest(int argc, char *argv[]) {
         char encoded[ULID_ENCODED_LENGTH + 1];
         ulid_t decoded;
 
-        ulidGenerateAndEncode(encoded, sizeof(encoded));
+        ulidGenerateAndEncode(&g, encoded, sizeof(encoded));
 
         PERF_TIMERS_SETUP;
         for (size_t i = 0; i < iterations; i++) {
@@ -3017,7 +3132,7 @@ int ulidTest(int argc, char *argv[]) {
         ulid_t id;
         char encoded[ULID_ENCODED_LENGTH + 1];
 
-        ulidGenerate(&id);
+        ulidGenerate(&g, &id);
 
         PERF_TIMERS_SETUP;
         for (size_t i = 0; i < iterations; i++) {
@@ -3031,7 +3146,7 @@ int ulidTest(int argc, char *argv[]) {
         char encoded[ULID_ENCODED_LENGTH + 1];
         ulid_t decoded;
 
-        ulidGenerateAndEncode(encoded, sizeof(encoded));
+        ulidGenerateAndEncode(&g, encoded, sizeof(encoded));
 
         PERF_TIMERS_SETUP;
         for (size_t i = 0; i < iterations; i++) {
@@ -3048,7 +3163,7 @@ int ulidTest(int argc, char *argv[]) {
 
         PERF_TIMERS_SETUP;
         for (size_t i = 0; i < iterations; i++) {
-            ulidGenerate(&id);
+            ulidGenerate(&g, &id);
             ulidEncode(&id, encoded, sizeof(encoded));
             ulidDecode(encoded, &decoded);
         }
@@ -3081,14 +3196,15 @@ int ulidTest(int argc, char *argv[]) {
 
         printf("    Sample EPOCH2020 IDs:\n");
         for (int32_t test = 0; test < 1000; test++) {
-            ulid64Generate(&orig, ULID_VARIANT_EPOCH2020);
+            ulid64Generate(&g, &orig, ULID_VARIANT_EPOCH2020);
             ulid64Encode(&orig, encoded, sizeof(encoded));
 
             if (test < 3) {
                 uint64_t ts =
                     ulid64GetTimestampNs(&orig, ULID_VARIANT_EPOCH2020);
-                printf("      [%d] %s (ts=%" PRIu64 " ns, data=0x%016llx)\n",
-                       test + 1, encoded, ts, (unsigned long long)orig.data);
+                printf("      [%d] %s (ts=%" PRIu64 " ns, data=0x%016" PRIx64
+                       ")\n",
+                       test + 1, encoded, ts, orig.data);
             }
 
             if (!ulid64Decode(encoded, &decoded)) {
@@ -3097,10 +3213,9 @@ int ulidTest(int argc, char *argv[]) {
 
             if (ulid64Compare(&orig, &decoded) != 0) {
                 if (test < 5) {
-                    printf("      DEBUG: orig=0x%016llx decoded=0x%016llx "
-                           "encoded=%s\n",
-                           (unsigned long long)orig.data,
-                           (unsigned long long)decoded.data, encoded);
+                    printf("      DEBUG: orig=0x%016" PRIx64
+                           " decoded=0x%016" PRIx64 " encoded=%s\n",
+                           orig.data, decoded.data, encoded);
                 }
                 ERR("Roundtrip failed for: %s", encoded);
             }
@@ -3113,9 +3228,9 @@ int ulidTest(int argc, char *argv[]) {
         char enc2[ULID64_ENCODED_LENGTH + 1];
         char enc3[ULID64_ENCODED_LENGTH + 1];
 
-        ulid64Generate(&id1, ULID_VARIANT_NS);
-        ulid64Generate(&id2, ULID_VARIANT_NS);
-        ulid64Generate(&id3, ULID_VARIANT_NS);
+        ulid64Generate(&g, &id1, ULID_VARIANT_NS);
+        ulid64Generate(&g, &id2, ULID_VARIANT_NS);
+        ulid64Generate(&g, &id3, ULID_VARIANT_NS);
 
         ulid64Encode(&id1, enc1, sizeof(enc1));
         ulid64Encode(&id2, enc2, sizeof(enc2));
@@ -3148,7 +3263,7 @@ int ulidTest(int argc, char *argv[]) {
         ulid64_t *ids = zcalloc(numIds, sizeof(ulid64_t));
 
         for (int32_t i = 0; i < numIds; i++) {
-            ulid64Generate(&ids[i], ULID_VARIANT_NSCOUNT);
+            ulid64Generate(&g, &ids[i], ULID_VARIANT_NSCOUNT);
         }
 
         int32_t collisions = 0;
@@ -3175,16 +3290,16 @@ int ulidTest(int argc, char *argv[]) {
 
         printf("    Sample DUALNS IDs (128-bit: two 64-bit ns timestamps):\n");
         for (int32_t i = 0; i < 5; i++) {
-            ulidGenerateDualNs(&id);
+            ulidGenerateDualNs(&g, &id);
             ulidEncode(&id, encoded, sizeof(encoded));
 
             uint64_t ts1 = ulidGetFirstTimestampNs(&id);
             uint64_t ts2 = ulidGetSecondTimestampNs(&id);
 
             printf("      [%d] %s\n", i + 1, encoded);
-            printf("          ts1=%" PRIu64 ", ts2=%" PRIu64
-                   ", delta=%lld ns\n",
-                   ts1, ts2, (long long)((int64_t)ts2 - (int64_t)ts1));
+            printf("          ts1=%" PRIu64 ", ts2=%" PRIu64 ", delta=%" PRId64
+                   " ns\n",
+                   ts1, ts2, (int64_t)ts2 - (int64_t)ts1);
 
             /* Second timestamp should be >= first */
             if (ts2 < ts1) {
@@ -3209,15 +3324,15 @@ int ulidTest(int argc, char *argv[]) {
         printf("    Testing __uint128_t interface:\n");
 
         /* Test 1: Direct generation as __uint128_t */
-        __uint128_t val128 = ulidGenerateDualNsU128();
+        __uint128_t val128 = ulidGenerateDualNsU128(&g);
         uint64_t ts1_direct = (uint64_t)(val128 >> 64);
         uint64_t ts2_direct = (uint64_t)val128;
 
         printf("      Direct generation:\n");
         printf("        __uint128_t value: ts1=%" PRIu64 ", ts2=%" PRIu64 "\n",
                ts1_direct, ts2_direct);
-        printf("        delta=%lld ns\n",
-               (long long)((int64_t)ts2_direct - (int64_t)ts1_direct));
+        printf("        delta=%" PRId64 " ns\n",
+               (int64_t)ts2_direct - (int64_t)ts1_direct);
 
         if (ts2_direct < ts1_direct) {
             ERR("Direct: second timestamp (%" PRIu64 ") < first (%" PRIu64 ")",
@@ -3272,14 +3387,13 @@ int ulidTest(int argc, char *argv[]) {
         /* Test 5: Multiple rapid generations */
         printf("      Rapid generation test:\n");
         for (int32_t i = 0; i < 3; i++) {
-            __uint128_t rapid = ulidGenerateDualNsU128();
+            __uint128_t rapid = ulidGenerateDualNsU128(&g);
             uint64_t r_ts1 = (uint64_t)(rapid >> 64);
             uint64_t r_ts2 = (uint64_t)rapid;
 
             printf("        [%d] ts1=%" PRIu64 ", ts2=%" PRIu64
-                   ", delta=%lld ns\n",
-                   i + 1, r_ts1, r_ts2,
-                   (long long)((int64_t)r_ts2 - (int64_t)r_ts1));
+                   ", delta=%" PRId64 " ns\n",
+                   i + 1, r_ts1, r_ts2, (int64_t)r_ts2 - (int64_t)r_ts1);
 
             if (r_ts2 < r_ts1) {
                 ERR("Rapid gen %d: ts2 < ts1", i);
@@ -3292,15 +3406,15 @@ int ulidTest(int argc, char *argv[]) {
 
         for (uint32_t z = 0; z < 3; z++) {
             /* Test 1: Basic generation and extraction */
-            __uint128_t interleaved = ulidGenerateDualNsInterleavedU128();
+            __uint128_t interleaved = ulidGenerateDualNsInterleavedU128(&g);
             uint64_t ts1_orig, ts2_orig;
             deinterleaveBits64Dispatch(interleaved, &ts1_orig, &ts2_orig);
 
             printf("      Generated interleaved value:\n");
             printf("        ts1=%" PRIu64 ", ts2=%" PRIu64 "\n", ts1_orig,
                    ts2_orig);
-            printf("        delta=%lld ns\n",
-                   (long long)((int64_t)ts2_orig - (int64_t)ts1_orig));
+            printf("        delta=%" PRId64 " ns\n",
+                   (int64_t)ts2_orig - (int64_t)ts1_orig);
 
             /* Test 2: Verify bit interleaving correctness */
             __uint128_t reinterleaved =
@@ -3313,7 +3427,7 @@ int ulidTest(int argc, char *argv[]) {
 
             /* Test 3: Create ulid_t and verify extraction */
             ulid_t id_interleaved;
-            ulidGenerateDualNsInterleaved(&id_interleaved);
+            ulidGenerateDualNsInterleaved(&g, &id_interleaved);
 
             uint64_t ts1_extracted =
                 ulidGetFirstTimestampNsInterleaved(&id_interleaved);
@@ -3418,11 +3532,11 @@ int ulidTest(int argc, char *argv[]) {
             /* Test 9: Multiple rapid generations */
             printf("      Rapid generation test:\n");
             ulid_t prev_id;
-            ulidGenerateDualNsInterleaved(&prev_id);
+            ulidGenerateDualNsInterleaved(&g, &prev_id);
 
             for (int32_t i = 0; i < 3; i++) {
                 ulid_t curr_id;
-                ulidGenerateDualNsInterleaved(&curr_id);
+                ulidGenerateDualNsInterleaved(&g, &curr_id);
 
                 uint64_t curr_ts1 =
                     ulidGetFirstTimestampNsInterleaved(&curr_id);
@@ -3430,9 +3544,9 @@ int ulidTest(int argc, char *argv[]) {
                     ulidGetSecondTimestampNsInterleaved(&curr_id);
 
                 printf("        [%d] ts1=%" PRIu64 ", ts2=%" PRIu64
-                       ", delta=%lld ns\n",
+                       ", delta=%" PRId64 " ns\n",
                        i + 1, curr_ts1, curr_ts2,
-                       (long long)((int64_t)curr_ts2 - (int64_t)curr_ts1));
+                       (int64_t)curr_ts2 - (int64_t)curr_ts1);
 
                 /* Verify monotonic increase (current >= previous) */
                 __uint128_t prev_val = ulidToDualNsInterleavedU128(&prev_id);
@@ -3487,7 +3601,7 @@ int ulidTest(int argc, char *argv[]) {
 
         printf("    Sample SNOWFLAKE IDs (machine 42):\n");
         for (int32_t i = 0; i < 5; i++) {
-            ulid64GenerateWithConfig(&id, &config);
+            ulid64GenerateWithConfig(&g, &id, &config);
             ulid64Encode(&id, encoded, sizeof(encoded));
 
             uint16_t machineId = ulid64GetSnowflakeMachineId(&id);
@@ -3517,7 +3631,7 @@ int ulidTest(int argc, char *argv[]) {
             ulidVariantType type = variants[v];
 
             for (int32_t test = 0; test < 100; test++) {
-                ulid64Generate(&orig, type);
+                ulid64Generate(&g, &orig, type);
                 ulid64Encode(&orig, encoded, sizeof(encoded));
 
                 if (!ulid64Decode(encoded, &decoded)) {
@@ -3541,7 +3655,7 @@ int ulidTest(int argc, char *argv[]) {
         char encoded[ULID32_ENCODED_LENGTH + 1];
 
         printf("    Sample 32-bit IDs:\n");
-        ulid32Generate(&orig, ULID_VARIANT_32MS);
+        ulid32Generate(&g, &orig, ULID_VARIANT_32MS);
         ulid32Encode(&orig, encoded, sizeof(encoded));
         printf("      32MS: %s\n", encoded);
 
@@ -3567,7 +3681,7 @@ int ulidTest(int argc, char *argv[]) {
         }
 
         ulid64_t id;
-        ulid64GenerateWithConfig(&id, &config);
+        ulid64GenerateWithConfig(&g, &id, &config);
 
         uint64_t extractedOffset =
             ulid64GetTimestampNs(&id, ULID_VARIANT_EPOCHCUSTOM);
@@ -3588,7 +3702,7 @@ int ulidTest(int argc, char *argv[]) {
 
         PERF_TIMERS_SETUP;
         for (size_t i = 0; i < iterations; i++) {
-            ulid64Generate(&id, ULID_VARIANT_NS);
+            ulid64Generate(&g, &id, ULID_VARIANT_NS);
         }
         PERF_TIMERS_FINISH_PRINT_RESULTS(iterations, "NS generations");
     }
@@ -3599,7 +3713,7 @@ int ulidTest(int argc, char *argv[]) {
         char encoded[ULID64_ENCODED_LENGTH + 1];
         volatile size_t totalLen = 0;
 
-        ulid64Generate(&id, ULID_VARIANT_MS);
+        ulid64Generate(&g, &id, ULID_VARIANT_MS);
 
         PERF_TIMERS_SETUP;
         for (size_t i = 0; i < iterations; i++) {
@@ -3620,7 +3734,7 @@ int ulidTest(int argc, char *argv[]) {
         char encoded[ULID64_ENCODED_LENGTH + 1];
         ulid64_t decoded;
 
-        ulid64GenerateAndEncode(encoded, sizeof(encoded), ULID_VARIANT_MS);
+        ulid64GenerateAndEncode(&g, encoded, sizeof(encoded), ULID_VARIANT_MS);
 
         PERF_TIMERS_SETUP;
         for (size_t i = 0; i < iterations; i++) {
@@ -3881,13 +3995,13 @@ int ulidTest(int argc, char *argv[]) {
         setInterleaveImpl(INTERLEAVE_SCALAR);
         PERF_TIMERS_SETUP;
         for (size_t i = 0; i < iterations; i++) {
-            ulidGenerateDualNsInterleaved(&id);
+            ulidGenerateDualNsInterleaved(&g, &id);
         }
         PERF_TIMERS_FINISH_PRINT_RESULTS(iterations, "SCALAR generations");
 
         /* Test extraction with SCALAR */
         printf("      SCALAR extraction:\n");
-        ulidGenerateDualNsInterleaved(&id);
+        ulidGenerateDualNsInterleaved(&g, &id);
         uint64_t ts1, ts2;
         PERF_TIMERS_SETUP;
         for (size_t i = 0; i < iterations; i++) {
@@ -3901,13 +4015,13 @@ int ulidTest(int argc, char *argv[]) {
         setInterleaveImpl(INTERLEAVE_AUTO);
         PERF_TIMERS_SETUP;
         for (size_t i = 0; i < iterations; i++) {
-            ulidGenerateDualNsInterleaved(&id);
+            ulidGenerateDualNsInterleaved(&g, &id);
         }
         PERF_TIMERS_FINISH_PRINT_RESULTS(iterations, "AUTO generations");
 
         /* Test extraction with AUTO */
         printf("      AUTO extraction:\n");
-        ulidGenerateDualNsInterleaved(&id);
+        ulidGenerateDualNsInterleaved(&g, &id);
         PERF_TIMERS_SETUP;
         for (size_t i = 0; i < iterations; i++) {
             ts1 = ulidGetFirstTimestampNsInterleaved(&id);

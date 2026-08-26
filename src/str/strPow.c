@@ -36,9 +36,10 @@ __uint128_t StrTenPowBig(const size_t exp) {
 
     /* Compiler doesn't allow 128 bit integer constants, so we have to
      * re-build the 128 bit integers from two 64 bit parts */
-    /* All this continues where 'tenPow64' leaves off, with the
-     * final value being 10^38 (using 127 bits) */
+    /* All this continues where 'tenPow64' leaves off at 10^19, with
+     * the final value being 10^38 (using 127 bits) */
     static const __uint128_t table[] = {
+        10000000000000000000ULL,
         (((__uint128_t)5ULL) << 64) | 7766279631452241920ULL,
         (((__uint128_t)54ULL) << 64) | 3875820019684212736ULL,
         (((__uint128_t)542ULL) << 64) | 1864712049423024128ULL,
@@ -59,6 +60,6 @@ __uint128_t StrTenPowBig(const size_t exp) {
         (((__uint128_t)542101086242752217ULL) << 64) | 68739955140067328ULL,
         (((__uint128_t)5421010862427522170ULL) << 64) | 687399551400673280ULL};
 
-    assert(exp <= (tenPow64Count + COUNT_ARRAY(table)));
+    assert(exp < (tenPow64Count + COUNT_ARRAY(table)));
     return table[exp - tenPow64Count];
 }
