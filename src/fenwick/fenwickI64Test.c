@@ -4,6 +4,7 @@
  */
 
 #include "fenwickI64.h"
+#include "../cleaner.h"
 #include "../ctest.h"
 #include "../datakit.h"
 #include <assert.h>
@@ -17,6 +18,9 @@
 #define DOUBLE_NEWLINE 1
 #include "../perf.h"
 
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleanerName(int64_t *, zfree, I64Array);
+
 /* Naive implementation for benchmark comparison */
 typedef struct {
     int64_t *values;
@@ -24,8 +28,10 @@ typedef struct {
 } naiveArray;
 
 static naiveArray *naiveNew(size_t n) {
+    /* @own: caller; free=naiveFree */
     naiveArray *arr = zmalloc(sizeof(*arr));
     arr->count = n;
+    /* @own: container; free=naiveFree */
     arr->values = zcalloc(n, sizeof(int64_t));
     return arr;
 }
@@ -746,7 +752,8 @@ int fenwickI64Test(int argc, char *argv[]) {
         const size_t NUM_OPS = 50000000; /* 50M for ~1 second */
         uint64_t seed = 12345;
 
-        int64_t *init = zcalloc(N, sizeof(int64_t));
+        cleanerName(zfree, I64Array) int64_t *init =
+            zcalloc(N, sizeof(int64_t));
         for (size_t i = 0; i < N; i++) {
             init[i] = (randSeed(&seed) % 1000) - 500;
         }
@@ -786,7 +793,6 @@ int fenwickI64Test(int argc, char *argv[]) {
 
         fenwickI64Free(fw);
         naiveFree(naive);
-        zfree(init);
     }
 
     TEST("BENCH: Medium dataset (20K) - Full Tier Performance") {
@@ -794,7 +800,8 @@ int fenwickI64Test(int argc, char *argv[]) {
         const size_t NUM_OPS = 25000000; /* 25M */
         uint64_t seed = 12345;
 
-        int64_t *init = zcalloc(N, sizeof(int64_t));
+        cleanerName(zfree, I64Array) int64_t *init =
+            zcalloc(N, sizeof(int64_t));
         for (size_t i = 0; i < N; i++) {
             init[i] = (randSeed(&seed) % 1000) - 500;
         }
@@ -839,7 +846,6 @@ int fenwickI64Test(int argc, char *argv[]) {
 
         fenwickI64Free(fw);
         naiveFree(naive);
-        zfree(init);
     }
 
     TEST("BENCH: Update Performance") {
@@ -876,7 +882,8 @@ int fenwickI64Test(int argc, char *argv[]) {
         const size_t NUM_OPS = 25000000;
         uint64_t seed = 12345;
 
-        int64_t *init = zcalloc(N, sizeof(int64_t));
+        cleanerName(zfree, I64Array) int64_t *init =
+            zcalloc(N, sizeof(int64_t));
         for (size_t i = 0; i < N; i++) {
             init[i] = (randSeed(&seed) % 1000) - 500;
         }
@@ -925,7 +932,6 @@ int fenwickI64Test(int argc, char *argv[]) {
 
         fenwickI64Free(fw);
         naiveFree(naive);
-        zfree(init);
     }
 
     TEST_FINAL_RESULT;

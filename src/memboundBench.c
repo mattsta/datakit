@@ -85,6 +85,7 @@ static void mbF(void *c, void *p) {
  * included. */
 static void *zmA(void *c, size_t n) {
     (void)c;
+    /* @own: caller; free=zfree */
     return zmalloc(n);
 }
 static void zmF(void *c, void *p) {

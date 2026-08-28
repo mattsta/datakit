@@ -60,6 +60,7 @@ void intsetAdd(intset **is, int64_t value, bool *success) {
     }
 
     if (!*is) {
+        /* @own: caller; free=intsetFree */
         *is = intsetNew();
     }
 

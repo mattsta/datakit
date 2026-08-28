@@ -4,11 +4,14 @@
  */
 
 #include "multiroarP.h"
+#include "../cleaner.h"
 #include "../datakit.h"
 #include "../persist.h"
 
 #include <string.h>
 #include <unistd.h>
+
+defcleanerName(multiroarP *, zfree, MultiroarP);
 
 /* ============================================================================
  * Lifecycle
@@ -20,31 +23,31 @@ multiroarP *multiroarNewP(persistCtx *ctx) {
         return NULL;
     }
 
-    multiroarP *r = zcalloc(1, sizeof(*r));
+    cleanerName(zfree, MultiroarP) multiroarP *r = zcalloc(1, sizeof(*r));
     r->ctx = ctx;
 
     /* Create underlying multiroar */
+    /* @own: container; free=multiroarFree */
     r->r = multiroarBitNew();
     if (!r->r) {
-        zfree(r);
         return NULL;
     }
 
     /* Initialize persistence context for multiroar type */
     if (!persistCtxInitForType(ctx, &persistOpsMultiroar)) {
         multiroarFree(r->r);
-        zfree(r);
         return NULL;
     }
 
     /* Save initial snapshot */
     if (!persistCtxSaveSnapshot(ctx, r->r, &persistOpsMultiroar)) {
         multiroarFree(r->r);
-        zfree(r);
         return NULL;
     }
 
-    return r;
+    multiroarP *out = r;
+    r = NULL;
+    return out;
 }
 
 multiroarP *multiroarOpenP(persistCtx *ctx) {
@@ -63,6 +66,7 @@ multiroarP *multiroarOpenP(persistCtx *ctx) {
         return NULL;
     }
 
+    /* @own: caller; free=multiroarCloseP */
     multiroarP *r = zcalloc(1, sizeof(*r));
     r->ctx = ctx;
     r->r = recovered;

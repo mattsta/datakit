@@ -684,12 +684,16 @@ void sha256ArmCryptoCompressBlocksMulti4(uint32_t states[4][8],
 
 #ifdef DATAKIT_TEST
 
+#include "cleaner.h"
 #include "ctest.h"
 #include "datakit.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleanerName(uint8_t *, zfree, U8);
 
 /* Wrapper that mirrors sha256Hash but routes the bulk-compress through
  * our accelerated path.  Padding logic is inlined directly from
@@ -825,7 +829,7 @@ int sha256ArmCryptoTest(int argc, char *argv[]) {
          * independent of rand() implementation churn. */
         uint64_t rng = 0xDEADBEEFCAFEBABEULL;
         uint32_t mismatches = 0;
-        uint8_t *buf = zmalloc(4096);
+        cleanerName(zfree, U8) uint8_t *buf = zmalloc(4096);
 
         for (uint32_t t = 0; t < iters; t++) {
             rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
@@ -850,7 +854,6 @@ int sha256ArmCryptoTest(int argc, char *argv[]) {
                 }
             }
         }
-        zfree(buf);
 
         if (mismatches == 0) {
             printf("    %u random inputs: all match\n", iters);
@@ -862,7 +865,7 @@ int sha256ArmCryptoTest(int argc, char *argv[]) {
     TEST("sha256 arm crypto performance bench") {
         const size_t bufSize = 1 << 20; /* 1 MiB */
         const uint32_t iters = 64;      /* total 64 MiB */
-        uint8_t *buf = zmalloc(bufSize);
+        cleanerName(zfree, U8) uint8_t *buf = zmalloc(bufSize);
         memset(buf, 0xa5, bufSize);
 
         uint8_t out[SHA256_DIGEST_LEN];
@@ -909,8 +912,6 @@ int sha256ArmCryptoTest(int argc, char *argv[]) {
         if ((state[0] | state[7]) == 0xFFFFFFFF) {
             printf("    (anti-DCE: %08x)\n", state[0]);
         }
-
-        zfree(buf);
     }
 
     TEST("multi-buffer 4-lane matches portable on random inputs") {
@@ -922,6 +923,7 @@ int sha256ArmCryptoTest(int argc, char *argv[]) {
         const size_t max_bytes = max_blocks * SHA256_BLOCK_LEN;
         uint8_t *bufs[4];
         for (uint32_t lane = 0; lane < 4; lane++) {
+            /* @own: container; free=zfree */
             bufs[lane] = zmalloc(max_bytes);
         }
 
@@ -1017,6 +1019,7 @@ int sha256ArmCryptoTest(int argc, char *argv[]) {
 
         uint8_t *bufs[4];
         for (uint32_t lane = 0; lane < 4; lane++) {
+            /* @own: container; free=zfree */
             bufs[lane] = zmalloc(bufSize);
             memset(bufs[lane], (int)(0x10u + lane), bufSize);
         }

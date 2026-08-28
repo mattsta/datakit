@@ -322,10 +322,15 @@ bool StrScanToDouble(const void *str, databox *box, bool allowFloatWords,
  * Tests
  * ==================================================================== */
 #ifdef DATAKIT_TEST
+#include "cleaner.h"
 #include "ctest.h"
 
 #define DOUBLE_NEWLINE 0
 #include "perf.h"
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleanerName(char *, zfree, Chars);
+defcleanerName(uint8_t *, zfree, U8);
 
 #define REPORT_TIME 1
 #if REPORT_TIME
@@ -614,7 +619,7 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
 
         /* Test all-digits strings of various sizes */
         for (size_t size = 0; size <= 256; size++) {
-            char *buf = zmalloc(size + 1);
+            cleanerName(zfree, Chars) char *buf = zmalloc(size + 1);
             for (size_t i = 0; i < size; i++) {
                 buf[i] = '0' + (i % 10);
             }
@@ -627,13 +632,12 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
                     "fast=%d base=%d",
                     size, fastResult, baseResult);
             }
-            zfree(buf);
         }
 
         /* Test strings with non-digit at various positions */
         for (size_t size = 1; size <= 128; size++) {
             for (size_t badPos = 0; badPos < size; badPos++) {
-                char *buf = zmalloc(size + 1);
+                cleanerName(zfree, Chars) char *buf = zmalloc(size + 1);
                 for (size_t i = 0; i < size; i++) {
                     buf[i] = '0' + (i % 10);
                 }
@@ -647,7 +651,6 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
                         "fast=%d base=%d",
                         size, badPos, fastResult, baseResult);
                 }
-                zfree(buf);
             }
         }
 
@@ -656,7 +659,7 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
                                       'A',  ' ', 0x7F, (char)0xFF};
         for (size_t ci = 0; ci < sizeof(boundaryChars); ci++) {
             for (size_t size = 1; size <= 64; size++) {
-                char *buf = zmalloc(size + 1);
+                cleanerName(zfree, Chars) char *buf = zmalloc(size + 1);
                 for (size_t i = 0; i < size; i++) {
                     buf[i] = '5';
                 }
@@ -671,7 +674,6 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
                         size, (uint8_t)boundaryChars[ci], fastResult,
                         baseResult);
                 }
-                zfree(buf);
             }
         }
 
@@ -1866,7 +1868,8 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
         const size_t len = strlen(foo);
         const int booster = 1000000;
 
-        char *tester = zmalloc(len * booster); /* 37 MB */
+        cleanerName(zfree, Chars) char *tester =
+            zmalloc(len * booster); /* 37 MB */
         for (size_t i = 0; i < len * booster; i += len) {
             memcpy(tester + i, foo, len);
         }
@@ -1889,7 +1892,6 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
             ERR("Expected len %zu but got %zu instead!", len * booster,
                 utf8len);
         }
-        zfree(tester);
     }
 
     TEST("lenutf8countbytes ascii large") {
@@ -1897,7 +1899,8 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
         const size_t len = strlen(foo);
         const int booster = 1000000;
 
-        char *tester = zmalloc(len * booster); /* 37 MB */
+        cleanerName(zfree, Chars) char *tester =
+            zmalloc(len * booster); /* 37 MB */
         for (size_t i = 0; i < len * booster; i += len) {
             memcpy(tester + i, foo, len);
         }
@@ -1924,7 +1927,6 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
             ERR("Expected len %zu but got %zu instead!", (len * booster) / 2,
                 utf8len);
         }
-        zfree(tester);
     }
 
     TEST("lenutf8 utf8 small") {
@@ -2037,7 +2039,7 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
 
     for (int i = 0; i < (int)sizeof(STRLEN_UTF8_STEP); i++) {
         TEST_DESC("lenutf8countbytes utf8 bigger (alignment offset %d)", i) {
-            char *alignmentHelper = zcalloc(1, 640);
+            cleanerName(zfree, Chars) char *alignmentHelper = zcalloc(1, 640);
             const char foo[] = u8"💛💙💜💔";
             const size_t things = 4;
             const size_t len = strlen((const char *)foo);
@@ -2051,14 +2053,13 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
             if (len != utf8len) {
                 ERR("Expected len %zu but got %zu instead!", len, utf8len);
             }
-            zfree(alignmentHelper);
         }
     }
 
     for (int i = 0; i < (int)sizeof(STRLEN_UTF8_STEP); i++) {
         TEST_DESC("lenutf8countbytes utf8 multi-boundary (alignment offset %d)",
                   i) {
-            char *alignmentHelper = zcalloc(1, 640);
+            cleanerName(zfree, Chars) char *alignmentHelper = zcalloc(1, 640);
             /* pattern:
              *   emoji, ascii, emoji , ascii, emoji, ascii, emoji, ascii */
             const char foo[] = u8"💛q💙m💜z💔p";
@@ -2074,7 +2075,6 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
             if (len != utf8len) {
                 ERR("Expected len %zu but got %zu instead!", len, utf8len);
             }
-            zfree(alignmentHelper);
         }
     }
 
@@ -2103,7 +2103,8 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
         const size_t len = strlen(foo); /* len == 128 */
         const int booster = 300000;     /* total of 32,000 final things */
 
-        char *tester = zcalloc(1, len * booster + 1); /* 38.4 MB */
+        cleanerName(zfree, Chars) char *tester =
+            zcalloc(1, len * booster + 1); /* 38.4 MB */
         for (size_t i = 0; i < len * booster; i += len) {
             memcpy(tester + i, foo, len);
         }
@@ -2126,8 +2127,6 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
             ERR("Expected len %zu but got %zu instead!", things * booster,
                 utf8len);
         }
-
-        zfree(tester);
     }
 #endif
 
@@ -2144,7 +2143,8 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
             /* each emoji is a 4 byte UTF-8 character */
             const size_t countedBytes = 4 * countCharacters;
 
-            char *tester = zcalloc(1, len * booster + 1 + 8); /* 38.4 MB */
+            cleanerName(zfree, Chars) char *tester =
+                zcalloc(1, len * booster + 1 + 8); /* 38.4 MB */
             char *startTester = tester + alignmentOffset;
 
             for (size_t i = 0; i < len * booster; i += len) {
@@ -2170,8 +2170,6 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
                 ERR("Expected len %zu but got %zu instead!", countedBytes,
                     utf8len);
             }
-
-            zfree(tester);
         }
     }
 
@@ -2266,7 +2264,7 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
     TEST("Benchmark: StrPopCnt NEON/SIMD vs Scalar") {
         printf("  Comparing popcount: Optimized vs Scalar (lookup table)...\n");
         const size_t bufSize = 4096;
-        uint8_t *buf = zmalloc(bufSize);
+        cleanerName(zfree, U8) uint8_t *buf = zmalloc(bufSize);
         for (size_t i = 0; i < bufSize; i++) {
             buf[i] = (uint8_t)(i * 31 + 17);
         }
@@ -2297,13 +2295,12 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
         }
         printf("    4KB popcount: %lu bits (verified)\n",
                (unsigned long)resultOpt);
-        zfree(buf);
     }
 
     TEST("Benchmark: StrLenUtf8 SIMD vs Scalar") {
         printf("  Comparing UTF-8 strlen: SIMD vs Scalar...\n");
         const size_t bufSize = 4096;
-        char *buf = zmalloc(bufSize);
+        cleanerName(zfree, Chars) char *buf = zmalloc(bufSize);
         memset(buf, 'a', bufSize - 1);
         buf[bufSize - 1] = '\0';
 
@@ -2331,7 +2328,6 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
             ERR("Mismatch! SIMD=%zu Scalar=%zu", resultOpt, resultScalar);
         }
         printf("    4KB ASCII: %zu chars (verified)\n", resultOpt);
-        zfree(buf);
     }
 
     TEST("Benchmark: StrLenUtf8 on mixed UTF-8") {
@@ -2401,14 +2397,13 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
         assert(StrUtf8ValidScalar(allAscii, 95) == true);
 
         /* Long ASCII string (tests SIMD paths) */
-        char *longAscii = zmalloc(1024);
+        cleanerName(zfree, Chars) char *longAscii = zmalloc(1024);
         for (int i = 0; i < 1023; i++) {
             longAscii[i] = 'A' + (i % 26);
         }
         longAscii[1023] = '\0';
         assert(StrUtf8Valid(longAscii, 1023) == true);
         assert(StrUtf8ValidScalar(longAscii, 1023) == true);
-        zfree(longAscii);
     }
 
     TEST("StrUtf8Valid: Valid 2-byte sequences") {
@@ -2797,7 +2792,7 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
 
         /* Test valid strings of various sizes */
         for (size_t size = 0; size <= 256; size++) {
-            char *buf = zmalloc(size + 1);
+            cleanerName(zfree, Chars) char *buf = zmalloc(size + 1);
             for (size_t i = 0; i < size; i++) {
                 buf[i] = 'A' + (i % 26);
             }
@@ -2810,14 +2805,13 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
                     "base=%d",
                     size, fastResult, baseResult);
             }
-            zfree(buf);
         }
 
         /* Test with mixed valid UTF-8 at various sizes */
         /* "日" = E6 97 A5 (3 bytes) */
         for (size_t numChars = 0; numChars <= 64; numChars++) {
             size_t size = numChars * 3;
-            uint8_t *buf = zmalloc(size + 1);
+            cleanerName(zfree, U8) uint8_t *buf = zmalloc(size + 1);
             for (size_t i = 0; i < numChars; i++) {
                 buf[i * 3 + 0] = 0xE6;
                 buf[i * 3 + 1] = 0x97;
@@ -2833,13 +2827,12 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
                     size, fastResult, baseResult);
             }
             assert(fastResult == true);
-            zfree(buf);
         }
 
         /* Test with single invalid byte at various positions */
         for (size_t size = 1; size <= 128; size++) {
             for (size_t badPos = 0; badPos < size; badPos++) {
-                uint8_t *buf = zmalloc(size + 1);
+                cleanerName(zfree, U8) uint8_t *buf = zmalloc(size + 1);
                 for (size_t i = 0; i < size; i++) {
                     buf[i] = 'a';
                 }
@@ -2854,7 +2847,6 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
                         size, badPos, fastResult, baseResult);
                 }
                 assert(fastResult == false);
-                zfree(buf);
             }
         }
     }

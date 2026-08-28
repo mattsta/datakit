@@ -928,10 +928,15 @@ size_t dodReaderRemaining(const dodReader *r, size_t totalCount) {
  * Tests
  * ==================================================================== */
 #ifdef DATAKIT_TEST
+#include "cleaner.h"
 #include "ctest.h"
 
 #define DOUBLE_NEWLINE 1
 #include "perf.h"
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleanerName(dod *, zfree, Dods);
+defcleanerName(int64_t *, zfree, I64);
 
 /* multi-type, multi-data testing and validation */
 static int testBits(const uint8_t typeBits, const uint8_t dataBits,
@@ -941,7 +946,7 @@ static int testBits(const uint8_t typeBits, const uint8_t dataBits,
     const uint8_t bitStorage = typeBits + dataBits;
 
     /* +1 below because it's a cheap "ceiling" operation to fix int division */
-    dod *const bits =
+    cleanerName(zfree, Dods) dod *bits =
         zcalloc(((loopers * (typeBits + dataBits)) / 8) + 1, sizeof(*bits));
 
     TEST_DESC(
@@ -1082,8 +1087,6 @@ static int testBits(const uint8_t typeBits, const uint8_t dataBits,
         }
     }
 
-    zfree(bits);
-
     return err;
 }
 
@@ -1150,8 +1153,9 @@ int dodTest(int argc, char *argv[]) {
     //    for (int boosterI = -1; boosterI < 2; boosterI++) {
     TEST_DESC("verify integer encoding works at powers of two (%d)",
               1) { // boosterI) {
-        dod *bits = zcalloc(loopers, sizeof(*bits));
-        int64_t *values = zcalloc(loopers * 2, sizeof(*values));
+        cleanerName(zfree, Dods) dod *bits = zcalloc(loopers, sizeof(*bits));
+        cleanerName(zfree, I64) int64_t *values =
+            zcalloc(loopers * 2, sizeof(*values));
 
         size_t currentBits = 0;
         for (uint64_t powers = 1, i = 0; i < loopers && powers < (1ULL << 63);
@@ -1182,9 +1186,6 @@ int dodTest(int argc, char *argv[]) {
                     values[i], got);
             }
         }
-
-        zfree(values);
-        zfree(bits);
     }
     //    }
 
@@ -1194,7 +1195,8 @@ int dodTest(int argc, char *argv[]) {
             int32_t modifier = j == 0 ? 1 : -1;
             const int64_t localMax = 1 << 10;
             const size_t localLoopers = 10000;
-            dod *bits = zcalloc(localLoopers * 2, sizeof(*bits));
+            cleanerName(zfree, Dods) dod *bits =
+                zcalloc(localLoopers * 2, sizeof(*bits));
 
             size_t currentBits = 0;
             for (int64_t tracker = 0, i = 0; tracker <= localMax;
@@ -1226,7 +1228,6 @@ int dodTest(int argc, char *argv[]) {
                 }
             }
             printf("\n");
-            zfree(bits);
         }
     }
 #endif
@@ -1253,8 +1254,10 @@ int dodTest(int argc, char *argv[]) {
     for (size_t loop = 1; loop <= 2; loop++) {
         TEST_DESC("randomized testing (%s offsets)",
                   loop == 1 ? "random" : "powers of two") {
-            dodVal *values = zcalloc(loopers, sizeof(*values));
-            dod *bits = zcalloc(loopers * 2, sizeof(*bits));
+            cleanerName(zfree, I64) dodVal *values =
+                zcalloc(loopers, sizeof(*values));
+            cleanerName(zfree, Dods) dod *bits =
+                zcalloc(loopers * 2, sizeof(*bits));
 
             dodVal previousVal = 0;
             if (loop == 1) {
@@ -1311,15 +1314,14 @@ int dodTest(int argc, char *argv[]) {
                         i, values[i], retrieved);
                 }
             }
-
-            zfree(bits);
-            zfree(values);
         }
     }
 
     TEST("dodReader - O(1) sequential access") {
-        dodVal *values = zcalloc(loopers, sizeof(*values));
-        dod *bits = zcalloc(loopers * 2, sizeof(*bits));
+        cleanerName(zfree, I64) dodVal *values =
+            zcalloc(loopers, sizeof(*values));
+        cleanerName(zfree, Dods) dod *bits =
+            zcalloc(loopers * 2, sizeof(*bits));
 
         /* Generate monotonic timestamps */
         for (size_t i = 0; i < loopers; i++) {
@@ -1362,7 +1364,8 @@ int dodTest(int argc, char *argv[]) {
 
         /* Test dodReaderNextN - encode and read again */
         dodReaderInit(&r, values[0], values[1]);
-        dodVal *batch = zcalloc(loopers, sizeof(*batch));
+        cleanerName(zfree, I64) dodVal *batch =
+            zcalloc(loopers, sizeof(*batch));
         size_t read = dodReaderNextN(&r, bits, batch, loopers - 2);
         if (read != loopers - 2) {
             ERR("dodReaderNextN returned wrong count: %zu vs %zu", read,
@@ -1377,10 +1380,6 @@ int dodTest(int argc, char *argv[]) {
         }
 
         printf("dodReader passed with %zu values!\n", loopers);
-
-        zfree(batch);
-        zfree(bits);
-        zfree(values);
     }
 
     TEST_FINAL_RESULT;

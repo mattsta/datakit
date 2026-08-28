@@ -16,9 +16,14 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "cleaner.h"
 #include "dj.h"
 #include "perf.h"
 #include "strDoubleFormat.h"
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleanerName(size_t *, zfree, Sizes);
+defcleanerName(char *, zfree, Chars);
 
 /* SIMD support */
 #if defined(__AVX512F__)
@@ -440,9 +445,12 @@ static void benchmark_bandwidth(const char *name, size_t size_bytes,
                                 dataspeedBandwidthResult *result,
                                 bool verbose) {
     const size_t count = size_bytes / sizeof(uint64_t);
-    uint64_t *data = aligned_alloc(64, size_bytes);
-    uint64_t *data2 = aligned_alloc(64, size_bytes); /* For copy */
-    assert(data && data2);
+    uint64_t *data = NULL;
+    uint64_t *data2 = NULL; /* For copy */
+    int alignRc = zmemalign((void **)&data, 64, size_bytes);
+    alignRc |= zmemalign((void **)&data2, 64, size_bytes);
+    assert(alignRc == 0 && data && data2);
+    (void)alignRc;
 
     /* Initialize to avoid lazy allocation */
     memset(data, 0xAB, size_bytes);
@@ -537,14 +545,16 @@ void dataspeedBenchmarkMemory(dataspeedMemoryResults *results, size_t size_mb) {
 /* Create a shuffled pointer chain for true latency measurement */
 static void **create_pointer_chain(size_t size_bytes) {
     size_t count = size_bytes / sizeof(void *);
-    void **chain = aligned_alloc(64, size_bytes);
-    assert(chain);
+    void **chain = NULL;
+    int alignRc = zmemalign((void **)&chain, 64, size_bytes);
+    assert(alignRc == 0 && chain);
+    (void)alignRc;
 
     /* Create indices and shuffle (Fisher-Yates) */
-    size_t *indices = zmalloc(count * sizeof(size_t));
+    cleanerName(zfree, Sizes) size_t *indices = zmalloc(count * sizeof(size_t));
     if (!indices) {
-        zfree(chain); /* Free previously allocated chain */
-        return NULL;  /* Memory allocation failed */
+        zfree(chain);
+        return NULL; /* Memory allocation failed */
     }
     for (size_t i = 0; i < count; i++) {
         indices[i] = i;
@@ -562,7 +572,6 @@ static void **create_pointer_chain(size_t size_bytes) {
     }
     chain[indices[count - 1]] = &chain[indices[0]]; /* Circular */
 
-    zfree(indices);
     return chain;
 }
 
@@ -1223,7 +1232,7 @@ DATASPEED_NO_OPTIMIZE size_t dataspeed(double MB, size_t iterations) {
                iterations);
 
         size_t sizeBytes = (size_t)(MB * (1 << 20));
-        char *mem = zmalloc(sizeBytes);
+        cleanerName(zfree, Chars) char *mem = zmalloc(sizeBytes);
         assert(mem);
 
         uint64_t totalStart = dataspeed_time_ns();
@@ -1242,8 +1251,6 @@ DATASPEED_NO_OPTIMIZE size_t dataspeed(double MB, size_t iterations) {
         double seconds = totalElapsed / 1e9;
         printf("  Total: %.2f GB in %.2f seconds = %.2f GB/s\n", totalGB,
                seconds, totalGB / seconds);
-
-        zfree(mem);
     }
 
     /* Print summary report */

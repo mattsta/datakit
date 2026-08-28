@@ -959,6 +959,7 @@ void blake3DeriveKey(const void *context, size_t context_len, const void *ikm,
 
 #ifdef DATAKIT_TEST
 
+#include "cleaner.h"
 #include "ctest.h"
 #include "hash/blake3AVX2.h"
 #include "hash/blake3Neon.h"
@@ -968,6 +969,10 @@ void blake3DeriveKey(const void *context, size_t context_len, const void *ikm,
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+/* Scope-exit cleaners for test scratch buffers (see cleaner.h idioms). */
+defcleanerName(uint8_t *, zfree, Bytes);
+defcleanerName(blake3Hasher *, zfree, Hasher);
 
 /* Per-thread context for the multi-threaded correctness test.  Each
  * thread runs `iters` hash rounds against `payload_len` deterministic
@@ -988,7 +993,7 @@ typedef struct {
 
 static void *blake3MtWorker(void *arg) {
     blake3MtThreadCtx *ctx = (blake3MtThreadCtx *)arg;
-    uint8_t *buf = zmalloc(ctx->payload_len);
+    cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(ctx->payload_len);
     for (size_t i = 0; i < ctx->payload_len; i++) {
         buf[i] = (uint8_t)((i * 1103515245u + ctx->seed) >> 8);
     }
@@ -1013,7 +1018,6 @@ static void *blake3MtWorker(void *arg) {
             ctx->mismatches++;
         }
     }
-    zfree(buf);
     return NULL;
 }
 
@@ -1076,7 +1080,8 @@ int blake3Test(int argc, char *argv[]) {
             max_input = blake3TestVectors[i].input_len;
         }
     }
-    uint8_t *input = (uint8_t *)zmalloc(max_input ? max_input : 1);
+    cleanerName(zfree, Bytes) uint8_t *input =
+        (uint8_t *)zmalloc(max_input ? max_input : 1);
     fill_test_input(input, max_input);
 
     /* Key is exactly 32 bytes, no terminator — copy from a literal. */
@@ -1167,7 +1172,7 @@ int blake3Test(int argc, char *argv[]) {
                                2049, 4095, 4096, 4097, 8191, 8192, 8193};
         size_t n_sizes = sizeof(test_sizes) / sizeof(test_sizes[0]);
 
-        uint8_t *buf = (uint8_t *)zmalloc(8193);
+        cleanerName(zfree, Bytes) uint8_t *buf = (uint8_t *)zmalloc(8193);
         fill_test_input(buf, 8193);
 
         for (size_t s = 0; s < n_sizes; s++) {
@@ -1196,14 +1201,13 @@ int blake3Test(int argc, char *argv[]) {
                 }
             }
         }
-        zfree(buf);
     }
 
     TEST("blake3 chunk-boundary inputs are stable") {
         size_t boundaries[] = {1023, 1024, 1025, 2047, 2048, 2049,
                                3071, 3072, 3073, 4095, 4096, 4097};
         size_t n = sizeof(boundaries) / sizeof(boundaries[0]);
-        uint8_t *buf = (uint8_t *)zmalloc(4097);
+        cleanerName(zfree, Bytes) uint8_t *buf = (uint8_t *)zmalloc(4097);
         fill_test_input(buf, 4097);
         for (size_t i = 0; i < n; i++) {
             uint8_t a[BLAKE3_OUT_LEN], b[BLAKE3_OUT_LEN];
@@ -1219,7 +1223,6 @@ int blake3Test(int argc, char *argv[]) {
                 ERR("boundary size %zu: streaming != one-shot", boundaries[i]);
             }
         }
-        zfree(buf);
     }
 
     TEST("blake3 key sensitivity") {
@@ -1262,7 +1265,8 @@ int blake3Test(int argc, char *argv[]) {
          *       retains a non-zero byte — proving the wipe is scoped
          *       and the perf-regression-causing full wipe has not been
          *       reintroduced. */
-        blake3Hasher *h = (blake3Hasher *)zmalloc(sizeof(*h));
+        cleanerName(zfree, Hasher) blake3Hasher *h =
+            (blake3Hasher *)zmalloc(sizeof(*h));
         uint8_t pattern_key[BLAKE3_KEY_LEN];
         for (uint32_t i = 0; i < BLAKE3_KEY_LEN; i++) {
             pattern_key[i] = 0xA5;
@@ -1271,7 +1275,7 @@ int blake3Test(int argc, char *argv[]) {
          * onto cv_stack, and so buf ends holding a (public) partial
          * trailing block of the final chunk. */
         const size_t msg_len = BLAKE3_CHUNK_LEN * 2 + 17;
-        uint8_t *msg = (uint8_t *)zmalloc(msg_len);
+        cleanerName(zfree, Bytes) uint8_t *msg = (uint8_t *)zmalloc(msg_len);
         for (size_t i = 0; i < msg_len; i++) {
             msg[i] = (uint8_t)(i & 0xFFu);
         }
@@ -1323,9 +1327,6 @@ int blake3Test(int argc, char *argv[]) {
             ERRR("cv_stack was wiped — scope reduction regression "
                  "(perf-critical: full-struct wipe was ~670 ns/call)");
         }
-
-        zfree(h);
-        zfree(msg);
     }
 
     TEST("blake3 derive-key wipe scrubs secret fields only") {
@@ -1334,10 +1335,11 @@ int blake3Test(int argc, char *argv[]) {
          * context-derived key (the input to DERIVE_KEY_MATERIAL); h->cv
          * holds a copy of that key or a key-keyed compression
          * intermediate.  Both must be wiped; scratch must not be. */
-        blake3Hasher *h = (blake3Hasher *)zmalloc(sizeof(*h));
+        cleanerName(zfree, Hasher) blake3Hasher *h =
+            (blake3Hasher *)zmalloc(sizeof(*h));
         const char ctx[] = "datakit derive-key wipe scope test 2026";
         const size_t ikm_len = BLAKE3_CHUNK_LEN * 2 + 9;
-        uint8_t *ikm = (uint8_t *)zmalloc(ikm_len);
+        cleanerName(zfree, Bytes) uint8_t *ikm = (uint8_t *)zmalloc(ikm_len);
         for (size_t i = 0; i < ikm_len; i++) {
             ikm[i] = (uint8_t)(0x5A ^ (i & 0xFFu));
         }
@@ -1381,9 +1383,6 @@ int blake3Test(int argc, char *argv[]) {
         if (!scratch_intact) {
             ERRR("cv_stack was wiped — scope reduction regression");
         }
-
-        zfree(h);
-        zfree(ikm);
     }
 
     TEST("blake3 init helpers wipe stack-local key material") {
@@ -1459,7 +1458,7 @@ int blake3Test(int argc, char *argv[]) {
         /* The first 32 bytes of a long output must match a 32-byte
          * finalize. Spot-check on a few input sizes. */
         size_t sizes[] = {0, 1, 64, 1024, 1025, 4096};
-        uint8_t *buf = (uint8_t *)zmalloc(4096);
+        cleanerName(zfree, Bytes) uint8_t *buf = (uint8_t *)zmalloc(4096);
         fill_test_input(buf, 4096);
         for (size_t s = 0; s < sizeof(sizes) / sizeof(sizes[0]); s++) {
             blake3Hasher h;
@@ -1480,7 +1479,6 @@ int blake3Test(int argc, char *argv[]) {
                 ERR("XOF seek mismatch at size=%zu", sizes[s]);
             }
         }
-        zfree(buf);
     }
 
     /* ============================================================
@@ -1517,7 +1515,7 @@ int blake3Test(int argc, char *argv[]) {
         const size_t n_sizes = sizeof(chunks) / sizeof(chunks[0]);
         const size_t maxBlocks = chunks[n_sizes - 1] * 16;
         const size_t maxBytes = maxBlocks * BLAKE3_BLOCK_LEN;
-        uint8_t *buf = zmalloc(maxBytes);
+        cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(maxBytes);
         for (size_t i = 0; i < maxBytes; i++) {
             buf[i] = (uint8_t)(i * 13 + 7);
         }
@@ -1668,7 +1666,6 @@ int blake3Test(int argc, char *argv[]) {
                        neon1_ns, "n/a");
             }
         }
-        zfree(buf);
     }
 
     TEST("blake3 dispatch head-to-head audit (force scalar vs SIMD)") {
@@ -1693,7 +1690,7 @@ int blake3Test(int argc, char *argv[]) {
         const size_t n_sizes = sizeof(chunks) / sizeof(chunks[0]);
 
         const size_t maxBytes = chunks[n_sizes - 1] * BLAKE3_CHUNK_LEN;
-        uint8_t *buf = zmalloc(maxBytes);
+        cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(maxBytes);
         for (size_t i = 0; i < maxBytes; i++) {
             buf[i] = (uint8_t)(i * 13 + 7);
         }
@@ -1766,7 +1763,6 @@ int blake3Test(int argc, char *argv[]) {
 
         /* Restore default before returning. */
         blake3SetForceImpl(BLAKE3_IMPL_AUTO);
-        zfree(buf);
     }
 
     TEST("blake3 small-input latency (finalize-dominated)") {
@@ -1801,7 +1797,7 @@ int blake3Test(int argc, char *argv[]) {
          * portable compress, 1 block at a time, in a tight loop. */
         const size_t MB = 1024 * 1024;
         const uint32_t iters = 64;
-        uint8_t *buf = zmalloc(MB);
+        cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(MB);
         for (size_t i = 0; i < MB; i++) {
             buf[i] = (uint8_t)(i * 13 + 7);
         }
@@ -1834,7 +1830,6 @@ int blake3Test(int argc, char *argv[]) {
         printf("    portable CompressInPlace: %.1f MiB in %.3fs "
                "= %.1f MiB/s\n",
                total_mib, secs, total_mib / secs);
-        zfree(buf);
     }
 
     TEST("blake3 cross-impl differential fuzz (CompressInPlace)") {
@@ -1908,8 +1903,6 @@ int blake3Test(int argc, char *argv[]) {
         printf("  %d random inputs: all available variants agree\n", N);
     }
 
-    zfree(input);
-
     /* ============================================================
      * Multi-threaded correctness — prove dispatch + state are race-free.
      *
@@ -1932,12 +1925,12 @@ int blake3Test(int argc, char *argv[]) {
             ctxs[i].mismatches = 0;
             ctxs[i].iters = 256u;
             ctxs[i].payload_len = 4096u; /* spans 4-chunk SIMD batch */
-            uint8_t *seed_buf = zmalloc(ctxs[i].payload_len);
+            cleanerName(zfree, Bytes) uint8_t *seed_buf =
+                zmalloc(ctxs[i].payload_len);
             for (size_t b = 0; b < ctxs[i].payload_len; b++) {
                 seed_buf[b] = (uint8_t)((b * 1103515245u + ctxs[i].seed) >> 8);
             }
             blake3Hash(seed_buf, ctxs[i].payload_len, ctxs[i].expected);
-            zfree(seed_buf);
         }
         for (uint32_t i = 0; i < kThreads; i++) {
             if (pthread_create(&tids[i], NULL, blake3MtWorker, &ctxs[i]) != 0) {

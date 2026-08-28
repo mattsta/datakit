@@ -677,6 +677,23 @@ if(BuildTestBinary)
         add_test(NAME ${test} COMMAND ${PROJECT_NAME}-test test ${test})
     endforeach()
 
+    # Allocation-ownership gate: every allocation and container-constructor
+    # site in src/ must be SCOPED (cleaner attribute) or @own-ANNOTATED.
+    # Runs the dktools audit (tools/ uv project) when uv is available;
+    # exits nonzero on any violation ("100% clean pattern" required).
+    find_program(UV_EXECUTABLE uv)
+    if(UV_EXECUTABLE AND EXISTS "${CMAKE_SOURCE_DIR}/tools/pyproject.toml")
+        add_test(NAME allocOwnership
+            COMMAND ${UV_EXECUTABLE} run dktools allocaudit check --constructors
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/tools)
+        set_tests_properties(allocOwnership PROPERTIES
+            TIMEOUT 300
+            LABELS "gate")
+        message(STATUS "Registered allocOwnership gate (dktools allocaudit)")
+    else()
+        message(STATUS "allocOwnership gate skipped (uv or tools/ missing)")
+    endif()
+
     # check target - runs all tests with verbose output
     add_custom_target(datakit-check
         COMMAND ${CMAKE_CTEST_COMMAND} -VV

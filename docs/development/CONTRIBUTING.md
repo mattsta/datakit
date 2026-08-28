@@ -101,6 +101,7 @@ Before committing:
 - [ ] Code compiles without warnings
 - [ ] Tests for everything you changed pass, by name
 - [ ] New tests added for new functionality
+- [ ] `ctest -R allocOwnership` prints `100% clean pattern`
 - [ ] Valgrind reports no memory leaks
 - [ ] Code follows style guidelines
 - [ ] Comments explain non-obvious logic
@@ -177,6 +178,7 @@ __END_DECLS
 #include "newmodule.h"
 
 newModule *newModuleNew(void) {
+    /* @own: caller; free=newModuleFree */
     newModule *nm = zmalloc(sizeof(*nm));
     // Initialize
     return nm;
@@ -350,50 +352,88 @@ flex * f;          // Avoid
 
 ### Memory Management
 
-**Always:**
+**Allocators.** Only the datakit allocators (`zmalloc`/`zcalloc`/
+`zrealloc`/`zfree`, `zmemalign` for aligned storage). Never libc
+`malloc`/`free` — they are deprecation-poisoned in `datakit.h`.
+
+**Ownership discipline (mechanically enforced).** Every allocation
+site AND every container-constructor call (`flexNew`, `multimapNew`,
+…) must be exactly one of:
+
+1. **SCOPED** — declared with the `cleaner.h` scope-exit attribute so
+   it is freed on every exit path, including early error returns:
 
 ```c
-// Use datakit allocators
-void *ptr = zmalloc(size);
-void *ptr = zcalloc(count, size);
-void *ptr = zrealloc(old, newsize);
-zfree(ptr);
+#include "cleaner.h"
+defcleaner(flex *, flexFree);            // once per file; the trailing
+defcleanerName(uint8_t *, zfree, Bytes); // ';' is REQUIRED
 
-// Check allocations
-if (!ptr) {
-    return NULL;  // or handle error
-}
-
-// Free in reverse order of allocation
-flexFree(f);      // Free contained structures first
-zfree(container); // Then container
+cleaner(flexFree) flex *f = flexNew();
+cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(n);
+// no explicit frees — every return path releases both
 ```
 
-**Never:**
+   Ownership handoff on a success path uses the disarm idiom (the
+   cleanup skips NULL):
 
 ```c
-// Don't use standard allocators directly
-malloc(size);     // Use zmalloc
-free(ptr);        // Use zfree
+cleaner(multimapFree) multimap *m = multimapNew(2);
+// ... construction steps that may bail with a bare `return NULL` ...
+multimap *out = m;
+m = NULL; // disarmed: caller owns it now
+return out;
 ```
 
-**Pointer Safety:**
+2. **ANNOTATED** — the allocation intentionally outlives the
+   function, marked with a structured comment trailing on the
+   allocation line or alone on the line directly above:
 
 ```c
-// Always check before dereferencing
-if (!ptr) return;
-if (ptr) {
-    ptr->field = value;
-}
+/* @own: caller; free=multimapFree */
+/* @own: container; free=flexFree */
+/* @own: static */
+```
 
-// Nullify after freeing
-zfree(ptr);
-ptr = NULL;
+   Grammar: `@own: (caller|container|static|cache)(; free=IDENT)?`.
+   `caller` = returned or written through an out-param, the caller
+   releases it; `container` = adopted into a struct, that struct's
+   Free releases it; `static` = deliberate process-lifetime;
+   `cache` = owned by a pool that manages reuse and release.
 
-// Defensive freeing
+**The gate.** `ctest -R allocOwnership` (or
+`cd tools && uv run dktools allocaudit check --constructors`) must
+print `100% clean pattern`; it runs automatically with plain `ctest`.
+New containers are registered in the `CONSTRUCTORS` table in
+`tools/src/dktools/allocaudit.py` — one line mapping the constructor
+to its releasing function.
+
+**Idioms for the hard cases:**
+
+- A `goto` must never jump over a cleaner declaration (clang rejects
+  the jump). Hoist the declaration NULL-initialized above the first
+  `goto` and assign at the original site.
+- Arrays of owned objects: elements cannot carry the attribute, so
+  use a holder struct whose cleanup frees each element and then the
+  array (see `roarArray` in `multiroar.c`).
+- Secret-holding buffers that must be wiped before free: a holder
+  carrying `{ptr, len}` whose cleanup runs the secure wipe then
+  `zfree` (see `hkrSecretBuf` in `hmacKeyring.c`).
+- Paired teardown with ordering (a multidict and its class): the
+  class must outlive `multidictFree` because teardown runs class
+  callbacks — `cls = multidictGetClass(d); multidictFree(d);
+  multidictDefaultClassFree(cls);`.
+- Loop-body braces are the per-iteration scope; a cleaner declared
+  inside the loop body fires every iteration.
+- Never extend a large buffer's lifetime past its original free
+  point — wrap it in a nested braced scope to keep the early
+  release.
+
+**Defensive freeing** stays the rule for every `XFree`:
+
+```c
 void moduleFree(module *m) {
     if (!m) return;  // Safe to call with NULL
-    // cleanup
+    // free members, then the container
     zfree(m);
 }
 ```

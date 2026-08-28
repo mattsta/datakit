@@ -1,5 +1,13 @@
 #include "multimapFull.h"
+#include "cleaner.h"
 #include "multimapFullInternal.h"
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleanerName(const flex **, zfree, MapPtrs);
+defcleanerName(flex **, zfree, Maps);
+defcleanerName(multimapFullMiddle *, zfree, Middles);
+defcleaner(multimapFull *, multimapFullFree);
+defcleaner(flex *, flexFree);
 
 /* ====================================================================
  * Management Macros
@@ -223,6 +231,7 @@ static const multimapFull multimapFullNull = {0};
 static const databox rangeBoxNull = {{0}};
 
 multimapFull *multimapFullNew(multimapElements elementsPerEntry) {
+    /* @own: caller; free=multimapFullFree */
     multimapFull *m = zcalloc(1, sizeof(*m));
 
     m->elementsPerEntry = elementsPerEntry; /* default: key->value map */
@@ -230,6 +239,7 @@ multimapFull *multimapFullNew(multimapElements elementsPerEntry) {
 
     /* Create initial map as empty so we're ready to go
      * for new inserts. */
+    /* @own: container; free=multimapFullFree */
     flex *newMap = flexNew();
 
     /* For an empty map, the "middle" is equivalent
@@ -248,6 +258,7 @@ multimapFull *multimapFullNew(multimapElements elementsPerEntry) {
 
 multimapFull *multimapFullSetNew(multimapElements elementsPerEntry,
                                  uint16_t maxSize) {
+    /* @own: caller; free=multimapFullFree */
     multimapFull *m = multimapFullNew(elementsPerEntry);
     m->mapIsSet = true;
     m->maxSize = maxSize;
@@ -322,6 +333,7 @@ DK_INLINE_ALWAYS size_t mapNewBeforeExisting_(
     size_t mapIdxLower = (mapIdxHigher ?: 1) - 1;
 
     /* Place new map 'lower' before existing map 'higher' */
+    /* @own: container; free=multimapFullFree */
     flex *lower = flexNew();
 
     accountForNewMapAfterExistingMap_(m, mapIdxLower, useReference,
@@ -335,6 +347,7 @@ mapNewAfterExisting_(multimapFull *m, multimapFullIdx mapIdxLower, flex *lower,
                      const bool useReference,
                      const multimapAtom *referenceContainer) {
     /* Place new map 'higher' AFTER existing map 'lower' */
+    /* @own: container; free=multimapFullFree */
     flex *higher = flexNew();
 
     accountForNewMapAfterExistingMap_(m, mapIdxLower, useReference,
@@ -440,6 +453,7 @@ multimapFull *multimapFullNewFromManyGrow_(
     const size_t count, const multimapElements elementsPerEntry,
     const bool mapIsSet, const bool useReference,
     const multimapAtom *referenceContainer) {
+    /* @own: caller; free=multimapFullFree */
     multimapFull *m = zrealloc(m_, sizeof(*m));
 
     /* We expect calloc'd structs for initialization, so let's pretend... */
@@ -607,6 +621,7 @@ size_t multimapFullBytesFull(const multimapFull *m) {
 flex *multimapFullDump(const multimapFull *m) {
     const flex *localMaps[64] = {0};
     const flex **useMaps;
+    cleanerName(zfree, MapPtrs) const flex **heapMaps = NULL;
 
     /* TODO:
      *   could do abstraction breakage here and check if
@@ -621,23 +636,15 @@ flex *multimapFullDump(const multimapFull *m) {
          * under-allocated 8x and the pointer-fill loop below wrote
          * past the block for any multimapFull spanning more than
          * COUNT_ARRAY(localMaps) sub-maps. */
-        useMaps = zcalloc(m->count, sizeof(*useMaps));
+        heapMaps = zcalloc(m->count, sizeof(*useMaps));
+        useMaps = heapMaps;
     }
 
     for (multimapFullIdx i = 0; i < m->count; i++) {
         useMaps[i] = getMap(m, i);
     }
 
-    flex *combined = flexBulkMergeFlex(useMaps, m->count);
-
-    if (m->count <= COUNT_ARRAY(localMaps)) {
-        /* ok, we used a local array above */
-    } else {
-        /* else, free allocated array */
-        zfree(useMaps);
-    }
-
-    return combined;
+    return flexBulkMergeFlex(useMaps, m->count);
 }
 
 multimapFull *multimapFullCopy(const multimapFull *restrict const m) {
@@ -668,34 +675,29 @@ multimapFull *multimapFullCopy(const multimapFull *restrict const m) {
     static const size_t stackAllocationDepth = 64;
     flex *maps_[stackAllocationDepth];
     flex **maps = maps_;
+    cleanerName(zfree, Maps) flex **heapMapsSpill = NULL;
 
     multimapFullMiddle middles_[stackAllocationDepth];
     multimapFullMiddle *middles = middles_;
+    cleanerName(zfree, Middles) multimapFullMiddle *heapMiddlesSpill = NULL;
 
     if (howMany > COUNT_ARRAY(maps_)) {
-        maps = zcalloc(howMany, sizeof(*maps));
-        middles = zcalloc(howMany, sizeof(*middles));
+        heapMapsSpill = zcalloc(howMany, sizeof(*maps));
+        maps = heapMapsSpill;
+        heapMiddlesSpill = zcalloc(howMany, sizeof(*middles));
+        middles = heapMiddlesSpill;
     }
 
     for (size_t i = 0; i < howMany; i++) {
+        /* @own: container; free=multimapFullFree */
         maps[i] = flexDuplicate(getMap(m, i));
         middles[i] = getMiddle(m, i);
     }
 
     /* First arg of NULL will allocate a new multimap instead of re-using an
      * existing one. */
-    multimapFull *const copied = multimapFullNewFromManyGrow(
-        NULL, maps, middles, howMany, m->elementsPerEntry, m->mapIsSet);
-
-    if (maps != maps_) {
-        /* We only need one check because they are both sized the same, so if
-         * one failed to catch the small size, the other obviously would too. */
-        assert(middles != middles_);
-        zfree(maps);
-        zfree(middles);
-    }
-
-    return copied;
+    return multimapFullNewFromManyGrow(NULL, maps, middles, howMany,
+                                       m->elementsPerEntry, m->mapIsSet);
 }
 
 /* ====================================================================
@@ -2517,8 +2519,8 @@ int multimapFullTest(int argc, char *argv[]) {
 
 #if 1
     TEST("create") {
-        multimapFull *m = multimapFullNew(2);
-        multimapFullFree(m);
+        cleaner(multimapFullFree) multimapFull *m = multimapFullNew(2);
+        (void)m;
     }
 
     TEST("binary-search-vs-iteration agreement on mixed-length numeric keys") {
@@ -2538,7 +2540,7 @@ int multimapFullTest(int argc, char *argv[]) {
          * multimapFullExists must find it AND
          * multimapFullIteratorNext walking the whole map must also
          * visit it. */
-        multimapFull *m = multimapFullNew(4);
+        cleaner(multimapFullFree) multimapFull *m = multimapFullNew(4);
         char buf[600][16];
         size_t n = 0;
         for (int it = 0; it < 12; it++) {
@@ -2587,7 +2589,6 @@ int multimapFullTest(int argc, char *argv[]) {
             printf("iteration walked %zu but inserted %zu\n", walked, n);
             ERRR("iteration entry count != insertion count");
         }
-        multimapFullFree(m);
     }
 
     TEST("dump with more than 64 sub-maps (heap-overflow regression)") {
@@ -2598,7 +2599,7 @@ int multimapFullTest(int argc, char *argv[]) {
          * more than 64 sub-maps with a small maxSize and dump: under
          * sanitizers the pre-fix code faults inside the fill loop,
          * and the merged flex must carry every inserted entry. */
-        multimapFull *m = multimapFullNew(2);
+        cleaner(multimapFullFree) multimapFull *m = multimapFullNew(2);
         m->maxSize = 512;
         char kb[32];
         size_t inserted = 0;
@@ -2616,7 +2617,7 @@ int multimapFullTest(int argc, char *argv[]) {
             ERRR("failed to construct >64 sub-maps — the heap-spill "
                  "dump arm was never exercised");
         }
-        flex *combined = multimapFullDump(m);
+        cleaner(flexFree) flex *combined = multimapFullDump(m);
         if (!combined) {
             ERRR("multimapFullDump returned NULL for a populated map");
         }
@@ -2626,12 +2627,10 @@ int multimapFullTest(int argc, char *argv[]) {
                    inserted);
             ERRR("dump lost entries across the >64-submap merge");
         }
-        flexFree(combined);
-        multimapFullFree(m);
     }
 
     TEST("test gaps") {
-        multimapFull *m = multimapFullNew(2);
+        cleaner(multimapFullFree) multimapFull *m = multimapFullNew(2);
         m->maxSize = 1024;
 
         const size_t howMany = 1024;
@@ -2649,7 +2648,6 @@ int multimapFullTest(int argc, char *argv[]) {
         multimapFullRepr(m);
 #endif
         strictConsistencyCheck(m);
-        multimapFullFree(m);
     }
 
     TEST("speeds at different sizes") {
@@ -2658,7 +2656,7 @@ int multimapFullTest(int argc, char *argv[]) {
         size_t size[20] = {0};
         int i = 0;
         for (int32_t maxSize = 1; maxSize < maxMax; maxSize *= 2) {
-            multimapFull *m = multimapFullNew(2);
+            cleaner(multimapFullFree) multimapFull *m = multimapFullNew(2);
             m->maxSize = maxSize;
             int32_t pairs = 1 << 17;
             TEST_DESC("%d bytes max with %d k/v pairs...", maxSize, pairs) {
@@ -2684,7 +2682,6 @@ int multimapFullTest(int argc, char *argv[]) {
             multimapFullConforms(m);
             multimapFullReport(m);
             multimapFullVerify(m);
-            multimapFullFree(m);
         }
     }
 
@@ -2693,7 +2690,7 @@ int multimapFullTest(int argc, char *argv[]) {
 
 #if 1
     TEST_DESC("%d k/v pairs - inserting...", 300) {
-        multimapFull *m = multimapFullNew(2);
+        cleaner(multimapFullFree) multimapFull *m = multimapFullNew(2);
         TIME_INIT;
         for (int32_t j = 0; j < 300; j++) {
             char *key = genkey("1key", j);
@@ -2709,13 +2706,12 @@ int multimapFullTest(int argc, char *argv[]) {
         multimapFullConforms(m);
         multimapFullReport(m);
         multimapFullVerify(m);
-        multimapFullFree(m);
     }
 
     printf("\n\n");
 
     for (int32_t i = 0; i < 4096; i++) {
-        multimapFull *m = multimapFullNew(2);
+        cleaner(multimapFullFree) multimapFull *m = multimapFullNew(2);
         TEST_DESC("%d k/v pairs - inserting...", i) {
             TIME_INIT;
             for (int32_t j = 0; j < i; j++) {
@@ -2812,14 +2808,13 @@ int multimapFullTest(int argc, char *argv[]) {
         multimapFullReport(m);
         multimapFullVerify(m);
 
-        multimapFullFree(m);
         printf("\n");
     }
 
 #endif
 
     for (int32_t i = 0; i < 4096; i++) {
-        multimapFull *m = multimapFullNew(2);
+        cleaner(multimapFullFree) multimapFull *m = multimapFullNew(2);
         TEST_DESC("%d k/v pairs - inserting in reverse order...", i) {
             TIME_INIT;
             for (int32_t j = i; j > 0; j--) {
@@ -2855,7 +2850,6 @@ int multimapFullTest(int argc, char *argv[]) {
             assert(multimapFullCount(m) == (uint32_t)i);
         }
 
-        multimapFullFree(m);
         printf("\n");
     }
 
@@ -2875,7 +2869,7 @@ int multimapFullTest(int argc, char *argv[]) {
      *   3. Count must stay at 1; lookup must return the NEW value;
      *      multimapFullVerify must accept the resulting structure. */
     TEST("regression: REPLACE on existing key with map exceeding maxSize") {
-        multimapFull *m = multimapFullNew(2);
+        cleaner(multimapFullFree) multimapFull *m = multimapFullNew(2);
         m->maxSize = 256;
 
         /* Build a value larger than maxSize so a single insert is
@@ -2927,7 +2921,6 @@ int multimapFullTest(int argc, char *argv[]) {
         /* Structural invariants — verify no duplicate keys leaked
          * into a second map. */
         multimapFullVerify(m);
-        multimapFullFree(m);
     }
 
     TEST("exists after insert: small bytes-embed keys in 4-element map") {
@@ -2944,7 +2937,7 @@ int multimapFullTest(int argc, char *argv[]) {
          * involved.  If exists returns false here, the find-in-flex
          * path itself is dropping inserted keys, independent of any
          * range-box / split logic. */
-        multimapFull *m = multimapFullNew(4);
+        cleaner(multimapFullFree) multimapFull *m = multimapFullNew(4);
 
         const size_t howMany = 60;
         char keybuf[16];
@@ -2982,8 +2975,6 @@ int multimapFullTest(int argc, char *argv[]) {
                     (unsigned)m->count);
             }
         }
-
-        multimapFullFree(m);
     }
 
     TEST("exists after insert: shuffled small bytes-embed keys") {
@@ -2995,7 +2986,7 @@ int multimapFullTest(int argc, char *argv[]) {
          * shuffled order so the binary search hits every code path
          * (insert at head, insert in middle, growing prefix shifts
          * the underlying flex bytes around). */
-        multimapFull *m = multimapFullNew(4);
+        cleaner(multimapFullFree) multimapFull *m = multimapFullNew(4);
 
         const size_t howMany = 60;
         char keybuf[16];
@@ -3058,7 +3049,6 @@ int multimapFullTest(int argc, char *argv[]) {
         }
 
         multimapFullVerify(m);
-        multimapFullFree(m);
     }
 
     TEST("exists after insert: 200 small bytes-embed keys + split") {
@@ -3066,7 +3056,7 @@ int multimapFullTest(int argc, char *argv[]) {
          * Default maxSize=2048; 200 entries × ~20 B/entry ≈ 4 KB,
          * so we should see at least 2 submaps form.  Same invariant:
          * every key must be findable immediately after insert. */
-        multimapFull *m = multimapFullNew(4);
+        cleaner(multimapFullFree) multimapFull *m = multimapFullNew(4);
 
         const size_t howMany = 200;
         char keybuf[16];
@@ -3111,7 +3101,6 @@ int multimapFullTest(int argc, char *argv[]) {
         }
 
         multimapFullVerify(m);
-        multimapFullFree(m);
     }
 
     TEST("exists-after-insert: 80 keys with DATABOX_BYTES (aliased) value") {
@@ -3122,7 +3111,7 @@ int multimapFullTest(int argc, char *argv[]) {
          * for storage, but the test below exercises that input shape
          * to make sure no path in the multimap depends on the value
          * box being BYTES_EMBED specifically. */
-        multimapFull *m = multimapFullNew(4);
+        cleaner(multimapFullFree) multimapFull *m = multimapFullNew(4);
 
         const size_t howMany = 80;
         char keybuf[16];
@@ -3184,7 +3173,6 @@ int multimapFullTest(int argc, char *argv[]) {
         }
 
         multimapFullVerify(m);
-        multimapFullFree(m);
     }
 
     TEST("exists-after-insert stress: 500 rounds × ~80 random keys") {
@@ -3203,7 +3191,7 @@ int multimapFullTest(int argc, char *argv[]) {
         char valbuf[16];
 
         for (size_t r = 0; r < rounds; r++) {
-            multimapFull *m = multimapFullNew(4);
+            cleaner(multimapFullFree) multimapFull *m = multimapFullNew(4);
 
             /* Deterministic shuffle seeded by round number. */
             size_t order[80];
@@ -3267,7 +3255,6 @@ int multimapFullTest(int argc, char *argv[]) {
             if (!round_ok) {
                 round_failures++;
             }
-            multimapFullFree(m);
         }
 
         if (round_failures > 0) {
@@ -3280,7 +3267,7 @@ int multimapFullTest(int argc, char *argv[]) {
         /* Reset must collapse back to a single empty map — no leftover
          * empty maps, stale middle offsets, or range boxes referencing
          * discarded flex bytes. */
-        multimapFull *m = multimapFullNew(2);
+        cleaner(multimapFullFree) multimapFull *m = multimapFullNew(2);
         const uint64_t n = 5000;
 
         for (int cycle = 0; cycle < 2; cycle++) {
@@ -3325,8 +3312,6 @@ int multimapFullTest(int argc, char *argv[]) {
             ERR("%zu of %" PRIu64 " keys missing after reset-reuse", missing,
                 n);
         }
-
-        multimapFullFree(m);
     }
 
     TEST("wide entries: arity above the insert stack-array headroom") {
@@ -3334,7 +3319,7 @@ int multimapFullTest(int argc, char *argv[]) {
          * to 8 elements and must spill wider entries to the heap;
          * arity-12 rows exercise the spill path. */
         const uint32_t arity = 12;
-        multimapFull *m = multimapFullNew(arity);
+        cleaner(multimapFullFree) multimapFull *m = multimapFullNew(arity);
 
         for (uint64_t i = 0; i < 200; i++) {
             databox boxes[12];
@@ -3361,8 +3346,6 @@ int multimapFullTest(int argc, char *argv[]) {
         if (missing > 0) {
             ERR("%zu of 200 wide-entry keys missing", missing);
         }
-
-        multimapFullFree(m);
     }
 
     TEST("wide entries: 128-bit element through heap-carved scratch") {
@@ -3374,7 +3357,7 @@ int multimapFullTest(int argc, char *argv[]) {
          * The overlap is intra-allocation (ASan blind) - only value
          * verification catches it. */
         const uint32_t arity = 12;
-        multimapFull *m = multimapFullNew(arity);
+        cleaner(multimapFullFree) multimapFull *m = multimapFullNew(arity);
 
         __int128_t bigVal = (((__int128_t)0x0123456789ABCDEFLL) << 64) |
                             (__int128_t)0x1122334455667788ULL;
@@ -3419,8 +3402,6 @@ int multimapFullTest(int argc, char *argv[]) {
                 ERR("Sentinel %u corrupted: %" PRIu64, j, out[j].data.u64);
             }
         }
-
-        multimapFullFree(m);
     }
 
     TEST_FINAL_RESULT;

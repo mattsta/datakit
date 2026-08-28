@@ -164,8 +164,11 @@ static void removeFromMap(multiOrderedSetMedium *m, int mapIdx,
  * ==================================================================== */
 
 multiOrderedSetMedium *multiOrderedSetMediumNew(void) {
+    /* @own: caller; free=multiOrderedSetMediumFree */
     multiOrderedSetMedium *m = zcalloc(1, sizeof(*m));
+    /* @own: container; free=multiOrderedSetMediumFree */
     m->map[0] = flexNew();
+    /* @own: container; free=multiOrderedSetMediumFree */
     m->map[1] = flexNew();
     m->middle[0] = FLEX_EMPTY_SIZE;
     m->middle[1] = FLEX_EMPTY_SIZE;
@@ -176,6 +179,7 @@ multiOrderedSetMedium *multiOrderedSetMediumNew(void) {
 multiOrderedSetMedium *
 multiOrderedSetMediumNewFromSmall(struct multiOrderedSetSmall *small, flex *map,
                                   uint32_t middle) {
+    /* @own: caller; free=multiOrderedSetMediumFree */
     multiOrderedSetMedium *m = zcalloc(1, sizeof(*m));
 
     /* Split the small map into two halves */
@@ -186,11 +190,14 @@ multiOrderedSetMediumNewFromSmall(struct multiOrderedSetSmall *small, flex *map,
         /* Too few entries to split meaningfully */
         m->map[0] = map;
         m->middle[0] = middle;
+        /* @own: container; free=multiOrderedSetMediumFree */
         m->map[1] = flexNew();
         m->middle[1] = FLEX_EMPTY_SIZE;
     } else {
         /* Create two new maps */
+        /* @own: container; free=multiOrderedSetMediumFree */
         m->map[0] = flexNew();
+        /* @own: container; free=multiOrderedSetMediumFree */
         m->map[1] = flexNew();
 
         /* Initialize middles to proper head position before first insert */
@@ -229,8 +236,11 @@ multiOrderedSetMediumNewFromSmall(struct multiOrderedSetSmall *small, flex *map,
 
 multiOrderedSetMedium *
 multiOrderedSetMediumCopy(const multiOrderedSetMedium *m) {
+    /* @own: caller; free=multiOrderedSetMediumFree */
     multiOrderedSetMedium *copy = zcalloc(1, sizeof(*copy));
+    /* @own: container; free=multiOrderedSetMediumFree */
     copy->map[0] = flexDuplicate(m->map[0]);
+    /* @own: container; free=multiOrderedSetMediumFree */
     copy->map[1] = flexDuplicate(m->map[1]);
     copy->middle[0] = m->middle[0];
     copy->middle[1] = m->middle[1];
@@ -249,7 +259,9 @@ void multiOrderedSetMediumFree(multiOrderedSetMedium *m) {
 void multiOrderedSetMediumReset(multiOrderedSetMedium *m) {
     flexFree(m->map[0]);
     flexFree(m->map[1]);
+    /* @own: container; free=multiOrderedSetMediumFree */
     m->map[0] = flexNew();
+    /* @own: container; free=multiOrderedSetMediumFree */
     m->map[1] = flexNew();
     m->middle[0] = FLEX_EMPTY_SIZE;
     m->middle[1] = FLEX_EMPTY_SIZE;

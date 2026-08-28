@@ -28,8 +28,10 @@ size_t ptrPrevNextReprSingle(ptrPrevNext *ppn, size_t restoredOffset);
      (*((uint8_t *)((ms).mem) + (off + 1)) == 0))
 
 ptrPrevNext *ptrPrevNextNew(void) {
+    /* @own: caller; free=ptrPrevNextFree */
     ptrPrevNext *ppn = zcalloc(1, sizeof(*ppn));
     ppn->ms.len = 4096;
+    /* @own: container; free=zfree */
     ppn->ms.mem = zcalloc(1, ppn->ms.len);
 
     ppn->ms.bestFree = 0;
@@ -126,6 +128,7 @@ ptrPrevNextPtr ptrPrevNextAdd(ptrPrevNext *ppn, const size_t atomIndex,
         while (!MEMSPACE_FITS(ppn->ms, 9 * 3)) {
             /* grow! */
             ppn->ms.len = jebufSizeAllocation(ppn->ms.len * 1.5);
+            /* @own: container; free=zfree */
             ppn->ms.mem = zrealloc(ppn->ms.mem, ppn->ms.len);
         }
 

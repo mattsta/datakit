@@ -5,6 +5,7 @@
 
 /* Create new empty small intset */
 intsetSmall *intsetSmallNew(void) {
+    /* @own: caller; free=intsetSmallFree */
     intsetSmall *is = zcalloc(1, sizeof(intsetSmall));
     is->count16 = 0;
     return is;
@@ -16,6 +17,7 @@ intsetSmall *intsetSmallFromArray(const int16_t *values, uint32_t count) {
         return intsetSmallNew();
     }
 
+    /* @own: caller; free=intsetSmallFree */
     intsetSmall *is = zcalloc(1, sizeof(intsetSmall) + count * sizeof(int16_t));
     is->count16 = count;
     memcpy(is->values16, values, count * sizeof(int16_t));
@@ -122,6 +124,7 @@ intsetSmall *intsetSmallAdd(intsetSmall *is, int64_t value, bool *added) {
     /* Need to insert at pos */
     uint32_t newCount = is->count16 + 1;
     size_t newSize = sizeof(intsetSmall) + newCount * sizeof(int16_t);
+    /* @own: caller; free=intsetSmallFree */
     intsetSmall *newIs = zrealloc(is, newSize);
 
     /* Shift elements to make room */

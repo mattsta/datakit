@@ -21,9 +21,14 @@
 
 #include "datakit.h"
 
+#include "cleaner.h"
 #include "flexCapacityManagement.h"
 #include "mflex.h"
 #include "multilistFull.h"
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleaner(mflexState *, mflexStateFree);
+defcleaner(flex *, flexFree);
 
 /* ====================================================================
  * Management Defines, Types, and Macros
@@ -109,6 +114,7 @@ static inline mflex **getNodeMlPtr(const multilistFull *ml,
 /* Create a new multilistFull.
  * Free with multilistFullFree(). */
 multilistFull *multilistFullCreate(void) {
+    /* @own: caller; free=multilistFullFree */
     multilistFull *ml = zcalloc(1, sizeof(*ml));
     ml->fill = -2;
 
@@ -386,6 +392,7 @@ multilistFull *multilistFullNewFromFlexConsumeGrow(void *_ml, mflexState *state,
                                                    flex *fl[], size_t flCount,
                                                    const uint32_t depth,
                                                    const uint32_t fillLimit) {
+    /* @own: caller; free=multilistFullFree */
     multilistFull *ml = zrealloc(_ml, sizeof(*ml));
 
     /* Clean our fields... */
@@ -1073,6 +1080,7 @@ multilistFull *multilistFullDuplicate(multilistFull *orig) {
         const mflex *origNode = getNodeMl(orig, nodeIdx);
         mflex **copyNode = getNodeMlPtr(copy, nodeIdx);
 
+        /* @own: container; free=mflexFree */
         *copyNode = mflexDuplicate(origNode);
         copy->values += mflexCount(*copyNode);
 
@@ -1429,15 +1437,13 @@ bool multilistFullPop(multilistFull *ml, mflexState *state, databox *box,
  * Debuggles
  * ==================================================================== */
 void multilistFullRepr(multilistFull *ml) {
-    mflexState *state = mflexStateCreate();
+    cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
 
     for (mlNodeId nodeIdx = 0; nodeIdx < ml->count; nodeIdx++) {
         const mflex *node = getNodeMl(ml, nodeIdx);
         flex *f = mflexOpen(node, state);
         flexRepr(f);
     }
-
-    mflexStateFree(state);
 }
 
 #define multilistFullPush_(WHAT, a, b, c, d)                                   \
@@ -1680,8 +1686,8 @@ int multilistFullTest(int argc, char *argv[]) {
     int64_t runtime[depthCount];
     const int defaultCompressSizeLimit = 1;
 
-    mflexState *s0 = mflexStateCreate();
-    mflexState *s1 = mflexStateCreate();
+    cleaner(mflexStateFree) mflexState *s0 = mflexStateCreate();
+    cleaner(mflexStateFree) mflexState *s1 = mflexStateCreate();
     mflexState *s[2] = {s0, s1};
 
     for (size_t _i = 0; _i < depthCount; _i++) {
@@ -2879,7 +2885,7 @@ int multilistFullTest(int argc, char *argv[]) {
             TEST_DESC(
                 "create multilistFull from flex at fill %zu at compress %d", f,
                 depth[_i]) {
-                flex *fl = flexNew();
+                cleaner(flexFree) flex *fl = flexNew();
                 int64_t nums[64];
                 char num[64];
                 for (int i = 0; i < 33; i++) {
@@ -2895,7 +2901,6 @@ int multilistFullTest(int argc, char *argv[]) {
 
                 multilistFull *ml =
                     multilistFullNewFromFlex(f, depth[_i], s0, fl);
-                flexFree(fl);
 
                 if (f == 1) {
                     mlVerify(ml, 66, 66, 1, 1);
@@ -2994,9 +2999,6 @@ int multilistFullTest(int argc, char *argv[]) {
     }
     fflush(stdout);
     fflush(stderr);
-
-    mflexStateFree(s0);
-    mflexStateFree(s1);
 
     return err;
 }

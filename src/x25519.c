@@ -510,8 +510,12 @@ bool x25519(uint8_t out_shared[32], const uint8_t priv[32],
 
 #ifdef DATAKIT_TEST
 
+#include "cleaner.h"
 #include "ctest.h"
 #include "datakit.h" /* zmalloc / zfree */
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleanerName(uint8_t *, zfree, U8);
 
 static void hexDecode(const char *hex, uint8_t out[32]) {
     for (uint32_t i = 0; i < 32; i++) {
@@ -783,7 +787,7 @@ int x25519Test(int argc, char *argv[]) {
          * The production wipe scope (per x25519.c:292-311) is: scalar
          * k[32], plus ladder intermediates as fe25519 (each = 5 limbs
          * of uint64_t).  We exercise dkSecureZero over both shapes. */
-        uint8_t *scalar = (uint8_t *)zmalloc(32);
+        cleanerName(zfree, U8) uint8_t *scalar = (uint8_t *)zmalloc(32);
         memset(scalar, 0xA5, 32);
         dkSecureZero(scalar, 32);
         for (size_t i = 0; i < 32; i++) {
@@ -794,14 +798,13 @@ int x25519Test(int argc, char *argv[]) {
                 break;
             }
         }
-        zfree(scalar);
 
         /* Mirror an fe25519 limb array (5 uint64_t).  The actual fe25519
          * is a stack-local struct in the ladder; the test buffer below
          * matches its byte size and exercises the same dkSecureZero
          * call shape used in the epilogue. */
         const size_t fe_bytes = 5u * sizeof(uint64_t);
-        uint8_t *fe = (uint8_t *)zmalloc(fe_bytes);
+        cleanerName(zfree, U8) uint8_t *fe = (uint8_t *)zmalloc(fe_bytes);
         memset(fe, 0xA5, fe_bytes);
         dkSecureZero(fe, fe_bytes);
         for (size_t i = 0; i < fe_bytes; i++) {
@@ -812,7 +815,6 @@ int x25519Test(int argc, char *argv[]) {
                 break;
             }
         }
-        zfree(fe);
     }
 
     TEST_FINAL_RESULT;

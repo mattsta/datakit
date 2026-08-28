@@ -17,12 +17,15 @@ typedef struct multiarrayMediumResult {
 
 multiarrayMedium *multiarrayMediumNewWithData(int16_t len, int16_t rowMax,
                                               uint16_t count, void *data) {
+    /* @own: caller; free=multiarrayMediumFree */
     multiarrayMedium *mar = zcalloc(1, sizeof(*mar));
+    /* @own: container; free=multiarrayMediumFree */
     mar->node = zcalloc(2, sizeof(*mar->node));
     mar->node[0].data = data;
     mar->node[0].count = count;
 
 #if 0
+    /* @own: container; free=multiarrayMediumFree */
     mar->node[1].data = zcalloc(1, len);
     mar->node[1].count = 0;
 #endif
@@ -50,12 +53,16 @@ DK_STATIC multiarrayMedium *multiarrayMediumNew_(int16_t len, int16_t rowMax,
          * inner node whlie also allocating an extra
          * unused node. */
         multiarrayMediumNode tmp = *node;
+        /* @own: caller; free=multiarrayMediumFree */
         mar = zrealloc(node, sizeof(*mar));
+        /* @own: container; free=multiarrayMediumFree */
         mar->node = zcalloc(2, sizeof(*mar->node));
         mar->node[0] = tmp;
         mar->count = 2;
     } else {
+        /* @own: caller; free=multiarrayMediumFree */
         mar = zcalloc(1, sizeof(*mar));
+        /* @own: container; free=multiarrayMediumFree */
         mar->node = zcalloc(1, sizeof(*mar->node));
         mar->count = 1;
     }

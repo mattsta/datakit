@@ -87,6 +87,7 @@
 /* Create new small Fenwick tree */
 FENWICK_IMPL_SCOPE FENWICK_SMALL_TYPENAME(FENWICK_SUFFIX) *
     FENWICK_NAME(FENWICK_SUFFIX, SmallNew)(void) {
+    /* @own: caller */
     FENWICK_SMALL_TYPENAME(FENWICK_SUFFIX) *fw =
         zcalloc(1, sizeof(FENWICK_SMALL_TYPENAME(FENWICK_SUFFIX)));
     fw->count = 0;
@@ -111,6 +112,7 @@ FENWICK_IMPL_SCOPE FENWICK_SMALL_TYPENAME(FENWICK_SUFFIX) *
 
     size_t size = sizeof(FENWICK_SMALL_TYPENAME(FENWICK_SUFFIX)) +
                   capacity * sizeof(FENWICK_VALUE_TYPE);
+    /* @own: caller */
     FENWICK_SMALL_TYPENAME(FENWICK_SUFFIX) *fw = zcalloc(1, size);
     fw->count = count;
     fw->capacity = capacity;
@@ -174,6 +176,7 @@ FENWICK_IMPL_SCOPE FENWICK_SMALL_TYPENAME(FENWICK_SUFFIX) *
         size_t newSize = sizeof(FENWICK_SMALL_TYPENAME(FENWICK_SUFFIX)) +
                          newCapacity * sizeof(FENWICK_VALUE_TYPE);
 
+        /* @own: caller */
         FENWICK_SMALL_TYPENAME(FENWICK_SUFFIX) *newFw = zrealloc(fw, newSize);
         if (!newFw) {
             if (success) {

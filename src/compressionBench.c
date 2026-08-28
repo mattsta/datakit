@@ -20,6 +20,7 @@
  * Dataset sizes: 100 (small), 10000 (medium), 1000000 (large)
  */
 
+#include "cleaner.h"
 #include "datakit.h"
 #include "dod.h"
 #include "timeUtil.h"
@@ -36,6 +37,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleanerName(dod *, zfree, DodBuf);
+defcleanerName(xof *, zfree, XofBuf);
+defcleanerName(int64_t *, zfree, I64Buf);
+defcleanerName(uint8_t *, zfree, U8Buf);
+defcleanerName(uint32_t *, zfree, U32Buf);
+defcleanerName(double *, zfree, DoubleBuf);
 
 /* ============================================================================
  * Benchmark Result Reporting System
@@ -220,7 +229,7 @@ static void benchDod(BenchReport *r, const int64_t *values, size_t count) {
     /* Conservative allocation: worst case is 72 bits per value (8 type + 64
      * data) */
     size_t maxBytes = ((count * 72) / 8) + 16;
-    dod *encoded = zcalloc(1, maxBytes);
+    cleanerName(zfree, DodBuf) dod *encoded = zcalloc(1, maxBytes);
     size_t usedBits = 0;
 
     /* First two values are stored as-is for the delta-of-delta base */
@@ -240,7 +249,8 @@ static void benchDod(BenchReport *r, const int64_t *values, size_t count) {
     /* Add 16 bytes for storing t0 and t1 base values */
     size_t encodedBytes = (usedBits + 7) / 8 + 16;
 
-    int64_t *decoded = zmalloc(count * sizeof(int64_t));
+    cleanerName(zfree, I64Buf) int64_t *decoded =
+        zmalloc(count * sizeof(int64_t));
 
     /* Decode method 1: ReaderNextN (batch via reader API) */
     uint64_t startDecode1 = timeUtilMonotonicUs();
@@ -296,9 +306,6 @@ static void benchDod(BenchReport *r, const int64_t *values, size_t count) {
 
     benchReportAdd(r, "dod manual state (legacy)", encodedBytes, encodeTimeUs,
                    (double)(endDecode3 - startDecode3));
-
-    zfree(encoded);
-    zfree(decoded);
 }
 
 /* varint delta benchmark (ZigZag + varintExternal) */
@@ -308,7 +315,7 @@ static void benchVarintDelta(BenchReport *r, const int64_t *values,
     uint64_t startEncode = timeUtilMonotonicUs();
 
     size_t maxSize = varintDeltaMaxEncodedSize(count);
-    uint8_t *encoded = zmalloc(maxSize);
+    cleanerName(zfree, U8Buf) uint8_t *encoded = zmalloc(maxSize);
     size_t encodedSize = varintDeltaEncode(encoded, values, count);
 
     uint64_t endEncode = timeUtilMonotonicUs();
@@ -316,7 +323,8 @@ static void benchVarintDelta(BenchReport *r, const int64_t *values,
     /* Decode */
     uint64_t startDecode = timeUtilMonotonicUs();
 
-    int64_t *decoded = zmalloc(count * sizeof(int64_t));
+    cleanerName(zfree, I64Buf) int64_t *decoded =
+        zmalloc(count * sizeof(int64_t));
     varintDeltaDecode(encoded, count, decoded);
 
     uint64_t endDecode = timeUtilMonotonicUs();
@@ -329,16 +337,14 @@ static void benchVarintDelta(BenchReport *r, const int64_t *values,
     benchReportAdd(r, "varintDelta (ZigZag)", encodedSize,
                    (double)(endEncode - startEncode),
                    (double)(endDecode - startDecode));
-
-    zfree(encoded);
-    zfree(decoded);
 }
 
 /* varintBP128 delta benchmark (SIMD-optimized) */
 static void benchVarintBP128(BenchReport *r, const int64_t *values,
                              size_t count) {
     /* Convert to uint32_t for BP128 (typical deltas fit in 32 bits) */
-    uint32_t *values32 = zmalloc(count * sizeof(uint32_t));
+    cleanerName(zfree, U32Buf) uint32_t *values32 =
+        zmalloc(count * sizeof(uint32_t));
     for (size_t i = 0; i < count; i++) {
         /* Convert signed to unsigned via offset (add base to make positive) */
         values32[i] = (uint32_t)(values[i] - values[0]);
@@ -348,7 +354,7 @@ static void benchVarintBP128(BenchReport *r, const int64_t *values,
     uint64_t startEncode = timeUtilMonotonicUs();
 
     size_t maxSize = varintBP128MaxBytes(count);
-    uint8_t *encoded = zmalloc(maxSize);
+    cleanerName(zfree, U8Buf) uint8_t *encoded = zmalloc(maxSize);
     varintBP128Meta meta;
     size_t encodedSize =
         varintBP128DeltaEncode32(encoded, values32, count, &meta);
@@ -358,7 +364,8 @@ static void benchVarintBP128(BenchReport *r, const int64_t *values,
     /* Decode */
     uint64_t startDecode = timeUtilMonotonicUs();
 
-    uint32_t *decoded32 = zmalloc(count * sizeof(uint32_t));
+    cleanerName(zfree, U32Buf) uint32_t *decoded32 =
+        zmalloc(count * sizeof(uint32_t));
     varintBP128DeltaDecode32(encoded, decoded32, count);
 
     uint64_t endDecode = timeUtilMonotonicUs();
@@ -372,10 +379,6 @@ static void benchVarintBP128(BenchReport *r, const int64_t *values,
     benchReportAdd(r, "varintBP128 (SIMD)", encodedSize + 8,
                    (double)(endEncode - startEncode),
                    (double)(endDecode - startDecode));
-
-    zfree(values32);
-    zfree(encoded);
-    zfree(decoded32);
 }
 
 /* ============================================================================
@@ -388,8 +391,13 @@ static void benchXof(BenchReport *r, const double *values, size_t count) {
     /* Encode */
     uint64_t startEncode = timeUtilMonotonicUs();
 
+    /* Held by 'w' below for the rest of this function's lifetime; freed via
+     * this scope-exit cleaner since 'w' never escapes benchXof. */
+    cleanerName(zfree, XofBuf) xof *xofBuf =
+        zcalloc(1, count * 16); /* Conservative allocation */
+
     xofWriter w = {0};
-    w.d = zcalloc(1, count * 16); /* Conservative allocation */
+    w.d = xofBuf;
     w.totalBytes = count * 16;
 
     for (size_t i = 0; i < count; i++) {
@@ -401,7 +409,8 @@ static void benchXof(BenchReport *r, const double *values, size_t count) {
 
     size_t encodedBytes = (w.usedBits + 7) / 8;
 
-    double *decoded = zmalloc(count * sizeof(double));
+    cleanerName(zfree, DoubleBuf) double *decoded =
+        zmalloc(count * sizeof(double));
 
     /* Decode method 1: xofReadAll (bulk) */
     uint64_t startDecode1 = timeUtilMonotonicUs();
@@ -445,9 +454,6 @@ static void benchXof(BenchReport *r, const double *values, size_t count) {
 
     benchReportAdd(r, "xof ReaderNext (one-by-one)", encodedBytes, encodeTimeUs,
                    (double)(endDecode3 - startDecode3));
-
-    zfree(w.d);
-    zfree(decoded);
 }
 
 /* varintFloat benchmark */
@@ -457,7 +463,7 @@ static void benchVarintFloat(BenchReport *r, const double *values, size_t count,
     uint64_t startEncode = timeUtilMonotonicUs();
 
     size_t maxSize = varintFloatMaxEncodedSize(count, precision);
-    uint8_t *encoded = zmalloc(maxSize);
+    cleanerName(zfree, U8Buf) uint8_t *encoded = zmalloc(maxSize);
     size_t encodedSize = varintFloatEncode(encoded, values, count, precision,
                                            VARINT_FLOAT_MODE_INDEPENDENT);
 
@@ -466,7 +472,8 @@ static void benchVarintFloat(BenchReport *r, const double *values, size_t count,
     /* Decode */
     uint64_t startDecode = timeUtilMonotonicUs();
 
-    double *decoded = zmalloc(count * sizeof(double));
+    cleanerName(zfree, DoubleBuf) double *decoded =
+        zmalloc(count * sizeof(double));
     varintFloatDecode(encoded, count, decoded);
 
     uint64_t endDecode = timeUtilMonotonicUs();
@@ -480,9 +487,6 @@ static void benchVarintFloat(BenchReport *r, const double *values, size_t count,
 
     benchReportAdd(r, name, encodedSize, (double)(endEncode - startEncode),
                    (double)(endDecode - startDecode));
-
-    zfree(encoded);
-    zfree(decoded);
 }
 
 /* ============================================================================
@@ -495,7 +499,7 @@ static void runIntegerBenchmarks(size_t count, const char *sizeLabel) {
     char dataDesc[128];
 
     /* Test 1: Monotonic timestamps with jitter */
-    int64_t *data = zmalloc(count * sizeof(int64_t));
+    cleanerName(zfree, I64Buf) int64_t *data = zmalloc(count * sizeof(int64_t));
     generateMonotonic(data, count, 1700000000000LL, 1000, 5);
 
     snprintf(category, sizeof(category),
@@ -527,15 +531,14 @@ static void runIntegerBenchmarks(size_t count, const char *sizeLabel) {
 
     benchReportPrint(&r);
     benchReportSummary(&r);
-
-    zfree(data);
 }
 
 static void runFloatBenchmarks(size_t count, const char *sizeLabel) {
     char category[128];
     char dataDesc[128];
 
-    double *data = zmalloc(count * sizeof(double));
+    cleanerName(zfree, DoubleBuf) double *data =
+        zmalloc(count * sizeof(double));
 
     /* Test 1: Smooth sensor data */
     generateSensorDoubles(data, count, 25.0, 5.0);
@@ -571,8 +574,6 @@ static void runFloatBenchmarks(size_t count, const char *sizeLabel) {
 
     benchReportPrint(&r);
     benchReportSummary(&r);
-
-    zfree(data);
 }
 
 #ifdef DATAKIT_TEST

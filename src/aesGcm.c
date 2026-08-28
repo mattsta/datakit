@@ -496,8 +496,13 @@ bool aesGcmOpen(const aesGcmKey *k, const uint8_t nonce[12], const uint8_t *aad,
 
 #ifdef DATAKIT_TEST
 
+#include "cleaner.h"
 #include "ctest.h"
 #include "datakit.h"
+
+/* Scope-exit cleaners for test scratch buffers (see cleaner.h idioms). */
+defcleanerName(uint8_t *, zfree, Bytes);
+defcleanerName(aesGcmKey *, zfree, Key);
 
 static void hexDec(const char *hex, uint8_t *out, size_t out_len) {
     for (size_t i = 0; i < out_len; i++) {
@@ -652,9 +657,10 @@ int aesGcmTest(int argc, char *argv[]) {
         const size_t sizes[] = {0, 1, 15, 16, 17, 63, 64, 65, 4096};
         for (size_t s = 0; s < sizeof(sizes) / sizeof(sizes[0]); s++) {
             const size_t n = sizes[s];
-            uint8_t *pt = (n > 0) ? zmalloc(n) : NULL;
-            uint8_t *ct = (n > 0) ? zmalloc(n) : NULL;
-            uint8_t *rec = (n > 0) ? zmalloc(n) : NULL;
+            cleanerName(zfree, Bytes) uint8_t *pt = (n > 0) ? zmalloc(n) : NULL;
+            cleanerName(zfree, Bytes) uint8_t *ct = (n > 0) ? zmalloc(n) : NULL;
+            cleanerName(zfree, Bytes) uint8_t *rec =
+                (n > 0) ? zmalloc(n) : NULL;
             for (size_t i = 0; i < n; i++) {
                 pt[i] = (uint8_t)(i * 13u);
             }
@@ -678,15 +684,6 @@ int aesGcmTest(int argc, char *argv[]) {
             tag[0] ^= 1;
             if (aesGcmOpen(&k, nonce, aad, 24, ct, n, tag, rec)) {
                 ERR("Tampered tag accepted n=%zu", n);
-            }
-            if (pt) {
-                zfree(pt);
-            }
-            if (ct) {
-                zfree(ct);
-            }
-            if (rec) {
-                zfree(rec);
             }
         }
     }
@@ -717,7 +714,7 @@ int aesGcmTest(int argc, char *argv[]) {
          * verify the entire struct is bytewise zero.  This pins the
          * abstraction; a future change to `dkSecureZero(&k, sizeof(k))`
          * → plain memset that gets DCE-elided would fail here. */
-        aesGcmKey *k = (aesGcmKey *)zmalloc(sizeof(*k));
+        cleanerName(zfree, Key) aesGcmKey *k = (aesGcmKey *)zmalloc(sizeof(*k));
         uint8_t key128[16];
         memset(key128, 0x7B, sizeof(key128));
         if (!aesGcmInit(k, key128, sizeof(key128))) {
@@ -764,7 +761,6 @@ int aesGcmTest(int argc, char *argv[]) {
                 break;
             }
         }
-        zfree(k);
     }
 
     TEST_FINAL_RESULT;

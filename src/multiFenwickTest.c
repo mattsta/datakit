@@ -1,4 +1,5 @@
 #include "multiFenwick.h"
+#include "cleaner.h"
 #include "ctest.h"
 #include "datakit.h"
 #include "fenwick/fenwickI64.h" /* Updated for new 2-tier system */
@@ -13,6 +14,11 @@
 #define DOUBLE_NEWLINE 1
 #include "perf.h"
 
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleanerName(databox *, zfree, DataboxArray);
+defcleaner(multiFenwick *, multiFenwickFree);
+defcleanerName(int64_t *, zfree, I64Array);
+
 /* Naive implementation for benchmark comparison */
 typedef struct {
     databox *values;
@@ -20,8 +26,10 @@ typedef struct {
 } naiveDataboxArray;
 
 static naiveDataboxArray *naiveNewDatabox(size_t n, databox zero) {
+    /* @own: caller; free=naiveFreeDatabox */
     naiveDataboxArray *arr = zmalloc(sizeof(*arr));
     arr->count = n;
+    /* @own: container; free=naiveFreeDatabox */
     arr->values = zcalloc(n, sizeof(databox));
     for (size_t i = 0; i < n; i++) {
         arr->values[i] = zero;
@@ -73,7 +81,7 @@ int multiFenwickTest(int argc, char *argv[]) {
      * ================================================================= */
 
     TEST("basic int64: empty tree operations") {
-        multiFenwick *mfw = multiFenwickNew();
+        cleaner(multiFenwickFree) multiFenwick *mfw = multiFenwickNew();
 
         if (multiFenwickCount(mfw) != 0) {
             ERR("Empty tree should have count 0, got %zu",
@@ -85,12 +93,10 @@ int multiFenwickTest(int argc, char *argv[]) {
         if (multiFenwickQuery(mfw, 0, &result)) {
             ERRR("Query on empty tree should fail");
         }
-
-        multiFenwickFree(mfw);
     }
 
     TEST("basic int64: single element operations") {
-        multiFenwick *mfw = multiFenwickNew();
+        cleaner(multiFenwickFree) multiFenwick *mfw = multiFenwickNew();
         bool success;
 
         /* Add single element */
@@ -127,12 +133,10 @@ int multiFenwickTest(int argc, char *argv[]) {
             ERR("After adding 8, Get(0) should be 50, got %" PRId64,
                 get.data.i64);
         }
-
-        multiFenwickFree(mfw);
     }
 
     TEST("basic int64: sequential updates") {
-        multiFenwick *mfw = multiFenwickNew();
+        cleaner(multiFenwickFree) multiFenwick *mfw = multiFenwickNew();
 
         /* Build array [1, 2, 3, 4, 5] */
         for (size_t i = 0; i < 5; i++) {
@@ -164,8 +168,6 @@ int multiFenwickTest(int argc, char *argv[]) {
                     (int64_t)(i + 1), val.data.i64);
             }
         }
-
-        multiFenwickFree(mfw);
     }
 
     TEST("basic int64: prefix sum correctness") {
@@ -175,7 +177,8 @@ int multiFenwickTest(int argc, char *argv[]) {
             values[i] = DATABOX_SIGNED(vals[i]);
         }
 
-        multiFenwick *mfw = multiFenwickNewFromArray(values, 8);
+        cleaner(multiFenwickFree) multiFenwick *mfw =
+            multiFenwickNewFromArray(values, 8);
 
         /* Prefix sums: [3, 4, 8, 9, 14, 23, 25, 31] */
         int64_t expected[] = {3, 4, 8, 9, 14, 23, 25, 31};
@@ -187,8 +190,6 @@ int multiFenwickTest(int argc, char *argv[]) {
                     expected[i], sum.data.i64);
             }
         }
-
-        multiFenwickFree(mfw);
     }
 
     TEST("basic int64: range query correctness") {
@@ -197,7 +198,8 @@ int multiFenwickTest(int argc, char *argv[]) {
             values[i] = DATABOX_SIGNED((int64_t)(i + 1));
         }
 
-        multiFenwick *mfw = multiFenwickNewFromArray(values, 8);
+        cleaner(multiFenwickFree) multiFenwick *mfw =
+            multiFenwickNewFromArray(values, 8);
 
         /* Range [1, 3] = 2+3+4 = 9 */
         databox range;
@@ -215,12 +217,10 @@ int multiFenwickTest(int argc, char *argv[]) {
         if (!multiFenwickRangeQuery(mfw, 5, 5, &range) || range.data.i64 != 6) {
             ERR("Range [5,5] should be 6, got %" PRId64, range.data.i64);
         }
-
-        multiFenwickFree(mfw);
     }
 
     TEST("basic int64: set operation") {
-        multiFenwick *mfw = multiFenwickNew();
+        cleaner(multiFenwickFree) multiFenwick *mfw = multiFenwickNew();
 
         /* Set elements directly */
         databox v1 = DATABOX_SIGNED(10);
@@ -256,8 +256,6 @@ int multiFenwickTest(int argc, char *argv[]) {
             ERR("After changing index 1, Query(1) should be 35, got %" PRId64,
                 query.data.i64);
         }
-
-        multiFenwickFree(mfw);
     }
 
     /* =================================================================
@@ -265,7 +263,7 @@ int multiFenwickTest(int argc, char *argv[]) {
      * ================================================================= */
 
     TEST("float64: basic operations with doubles") {
-        multiFenwick *mfw = multiFenwickNew();
+        cleaner(multiFenwickFree) multiFenwick *mfw = multiFenwickNew();
 
         /* Build array [1.5, 2.5, 3.5, 4.5] */
         for (size_t i = 0; i < 4; i++) {
@@ -287,8 +285,6 @@ int multiFenwickTest(int argc, char *argv[]) {
                 ERR("Query(%zu) should be %.2f, got %.2f", i, expected[i], val);
             }
         }
-
-        multiFenwickFree(mfw);
     }
 
     TEST("float64: range query with doubles") {
@@ -297,7 +293,8 @@ int multiFenwickTest(int argc, char *argv[]) {
             values[i] = DATABOX_DOUBLE((double)(i + 1) * 1.1);
         }
 
-        multiFenwick *mfw = multiFenwickNewFromArray(values, 4);
+        cleaner(multiFenwickFree) multiFenwick *mfw =
+            multiFenwickNewFromArray(values, 4);
 
         /* Range [1, 2] = 2.2 + 3.3 = 5.5 */
         databox range;
@@ -311,12 +308,10 @@ int multiFenwickTest(int argc, char *argv[]) {
         if (fabs(val - expected) > 0.001) {
             ERR("Range [1,2] should be %.2f, got %.2f", expected, val);
         }
-
-        multiFenwickFree(mfw);
     }
 
     TEST("float32: operations with floats") {
-        multiFenwick *mfw = multiFenwickNew();
+        cleaner(multiFenwickFree) multiFenwick *mfw = multiFenwickNew();
 
         /* Build array with float values */
         for (size_t i = 0; i < 5; i++) {
@@ -337,12 +332,10 @@ int multiFenwickTest(int argc, char *argv[]) {
         if (fabsf((float)val - expected) > 0.001f) {
             ERR("Get(2) should be %.2f, got %.2f", (double)expected, val);
         }
-
-        multiFenwickFree(mfw);
     }
 
     TEST("float64: precision with large sums") {
-        multiFenwick *mfw = multiFenwickNew();
+        cleaner(multiFenwickFree) multiFenwick *mfw = multiFenwickNew();
 
         /* Add many small values */
         databox small = DATABOX_DOUBLE(0.1);
@@ -361,8 +354,6 @@ int multiFenwickTest(int argc, char *argv[]) {
         if (fabs(val - 100.0) > 0.01) {
             ERR("Sum should be 100.0, got %.2f", val);
         }
-
-        multiFenwickFree(mfw);
     }
 
     /* =================================================================
@@ -370,7 +361,7 @@ int multiFenwickTest(int argc, char *argv[]) {
      * ================================================================= */
 
     TEST("uint64: basic unsigned operations") {
-        multiFenwick *mfw = multiFenwickNew();
+        cleaner(multiFenwickFree) multiFenwick *mfw = multiFenwickNew();
 
         /* Build array of unsigned values */
         for (uint64_t i = 0; i < 5; i++) {
@@ -383,12 +374,10 @@ int multiFenwickTest(int argc, char *argv[]) {
         if (!multiFenwickQuery(mfw, 4, &sum) || sum.data.u64 != 1000) {
             ERR("Sum should be 1000, got %" PRIu64, sum.data.u64);
         }
-
-        multiFenwickFree(mfw);
     }
 
     TEST("uint64: large unsigned values") {
-        multiFenwick *mfw = multiFenwickNew();
+        cleaner(multiFenwickFree) multiFenwick *mfw = multiFenwickNew();
 
         /* Use large unsigned values */
         databox v1 = DATABOX_UNSIGNED(UINT64_MAX / 4);
@@ -409,8 +398,6 @@ int multiFenwickTest(int argc, char *argv[]) {
             ERR("Sum should be %" PRIu64 ", got %" PRIu64, expected,
                 sum.data.u64);
         }
-
-        multiFenwickFree(mfw);
     }
 
     /* =================================================================
@@ -423,7 +410,8 @@ int multiFenwickTest(int argc, char *argv[]) {
             values[i] = DATABOX_SIGNED(0);
         }
 
-        multiFenwick *mfw = multiFenwickNewFromArray(values, 5);
+        cleaner(multiFenwickFree) multiFenwick *mfw =
+            multiFenwickNewFromArray(values, 5);
 
         /* All prefix sums should be 0 */
         for (size_t i = 0; i < 5; i++) {
@@ -442,12 +430,10 @@ int multiFenwickTest(int argc, char *argv[]) {
         if (!multiFenwickGet(mfw, 2, &get) || get.data.i64 != 10) {
             ERRR("Get(2) should be 10 after update");
         }
-
-        multiFenwickFree(mfw);
     }
 
     TEST("edge case: negative deltas") {
-        multiFenwick *mfw = multiFenwickNew();
+        cleaner(multiFenwickFree) multiFenwick *mfw = multiFenwickNew();
 
         /* Build array [10, 20, 30] */
         databox v1 = DATABOX_SIGNED(10);
@@ -473,12 +459,10 @@ int multiFenwickTest(int argc, char *argv[]) {
         if (!multiFenwickQuery(mfw, 2, &sum) || sum.data.i64 != 55) {
             ERR("Query(2) should be 55, got %" PRId64, sum.data.i64);
         }
-
-        multiFenwickFree(mfw);
     }
 
     TEST("edge case: sparse array (large index gaps)") {
-        multiFenwick *mfw = multiFenwickNew();
+        cleaner(multiFenwickFree) multiFenwick *mfw = multiFenwickNew();
 
         /* Add elements at sparse indices */
         databox v1 = DATABOX_SIGNED(1);
@@ -505,12 +489,10 @@ int multiFenwickTest(int argc, char *argv[]) {
             range.data.i64 != 3) {
             ERR("Range [0,100] should be 1+2=3, got %" PRId64, range.data.i64);
         }
-
-        multiFenwickFree(mfw);
     }
 
     TEST("edge case: boundary indices") {
-        multiFenwick *mfw = multiFenwickNew();
+        cleaner(multiFenwickFree) multiFenwick *mfw = multiFenwickNew();
 
         /* Test index 0 */
         databox v1 = DATABOX_SIGNED(42);
@@ -532,8 +514,6 @@ int multiFenwickTest(int argc, char *argv[]) {
         if (multiFenwickCount(mfw) != 10000) {
             ERR("Count should be 10000, got %zu", multiFenwickCount(mfw));
         }
-
-        multiFenwickFree(mfw);
     }
 
     TEST("edge case: NULL parameter handling") {
@@ -548,14 +528,12 @@ int multiFenwickTest(int argc, char *argv[]) {
             ERRR("Count on NULL should return 0");
         }
 
-        multiFenwick *mfw = NULL;
+        cleaner(multiFenwickFree) multiFenwick *mfw = NULL;
         databox one = DATABOX_SIGNED(10);
         bool success = multiFenwickUpdate(&mfw, 0, &one);
         if (!success || mfw == NULL) {
             ERRR("Update should create tree if NULL");
         }
-
-        multiFenwickFree(mfw);
     }
 
     /* =================================================================
@@ -569,7 +547,8 @@ int multiFenwickTest(int argc, char *argv[]) {
             values[i] = DATABOX_SIGNED(vals[i]);
         }
 
-        multiFenwick *mfw = multiFenwickNewFromArray(values, 5);
+        cleaner(multiFenwickFree) multiFenwick *mfw =
+            multiFenwickNewFromArray(values, 5);
 
         /* Find smallest index with sum >= target */
         databox target;
@@ -596,8 +575,6 @@ int multiFenwickTest(int argc, char *argv[]) {
         if (multiFenwickLowerBound(mfw, &target) != SIZE_MAX) {
             ERRR("LowerBound(100) should be SIZE_MAX (not found)");
         }
-
-        multiFenwickFree(mfw);
     }
 
     TEST("advanced: clear operation") {
@@ -606,7 +583,8 @@ int multiFenwickTest(int argc, char *argv[]) {
             values[i] = DATABOX_SIGNED((int64_t)(i + 1));
         }
 
-        multiFenwick *mfw = multiFenwickNewFromArray(values, 5);
+        cleaner(multiFenwickFree) multiFenwick *mfw =
+            multiFenwickNewFromArray(values, 5);
 
         /* Clear all values */
         multiFenwickClear(mfw);
@@ -628,8 +606,6 @@ int multiFenwickTest(int argc, char *argv[]) {
         if (!multiFenwickGet(mfw, 2, &get) || get.data.i64 != 10) {
             ERRR("Should be able to update after clear");
         }
-
-        multiFenwickFree(mfw);
     }
 
     TEST("advanced: newFromArray construction") {
@@ -639,7 +615,8 @@ int multiFenwickTest(int argc, char *argv[]) {
             values[i] = DATABOX_SIGNED(vals[i]);
         }
 
-        multiFenwick *mfw = multiFenwickNewFromArray(values, 8);
+        cleaner(multiFenwickFree) multiFenwick *mfw =
+            multiFenwickNewFromArray(values, 8);
 
         /* Verify all elements */
         for (size_t i = 0; i < 8; i++) {
@@ -660,8 +637,6 @@ int multiFenwickTest(int argc, char *argv[]) {
                     sum, query.data.i64);
             }
         }
-
-        multiFenwickFree(mfw);
     }
 
     /* =================================================================
@@ -669,7 +644,7 @@ int multiFenwickTest(int argc, char *argv[]) {
      * ================================================================= */
 
     TEST("stress: 10K element updates") {
-        multiFenwick *mfw = multiFenwickNew();
+        cleaner(multiFenwickFree) multiFenwick *mfw = multiFenwickNew();
 
         /* Add 10K elements */
         for (uint32_t i = 0; i < 10000; i++) {
@@ -688,12 +663,10 @@ int multiFenwickTest(int argc, char *argv[]) {
             ERR("Sum of 1..10000 should be %" PRId64 ", got %" PRId64, expected,
                 sum.data.i64);
         }
-
-        multiFenwickFree(mfw);
     }
 
     TEST("stress: alternating update/query pattern") {
-        multiFenwick *mfw = multiFenwickNew();
+        cleaner(multiFenwickFree) multiFenwick *mfw = multiFenwickNew();
 
         for (int i = 0; i < 1000; i++) {
             databox val = DATABOX_SIGNED((int64_t)i);
@@ -711,12 +684,10 @@ int multiFenwickTest(int argc, char *argv[]) {
                     i, expected, sum.data.i64);
             }
         }
-
-        multiFenwickFree(mfw);
     }
 
     TEST("stress: random sparse updates") {
-        multiFenwick *mfw = multiFenwickNew();
+        cleaner(multiFenwickFree) multiFenwick *mfw = multiFenwickNew();
         uint64_t seed = 12345;
 
         /* Random indices with gaps */
@@ -734,8 +705,6 @@ int multiFenwickTest(int argc, char *argv[]) {
             multiFenwickQuery(mfw, i, &sum);
             /* Just make sure it doesn't crash */
         }
-
-        multiFenwickFree(mfw);
     }
 
     /* =================================================================
@@ -754,15 +723,18 @@ int multiFenwickTest(int argc, char *argv[]) {
             size_t N = sizes[s];
 
             /* Build multiFenwick */
-            databox *mfwData = zcalloc(N, sizeof(databox));
+            cleanerName(zfree, DataboxArray) databox *mfwData =
+                zcalloc(N, sizeof(databox));
             for (size_t i = 0; i < N; i++) {
                 mfwData[i] = DATABOX_SIGNED((int64_t)i);
             }
-            multiFenwick *mfw = multiFenwickNewFromArray(mfwData, N);
+            cleaner(multiFenwickFree) multiFenwick *mfw =
+                multiFenwickNewFromArray(mfwData, N);
             size_t mfwBytes = multiFenwickBytes(mfw);
 
             /* Build fenwick */
-            int64_t *fwData = zcalloc(N, sizeof(int64_t));
+            cleanerName(zfree, I64Array) int64_t *fwData =
+                zcalloc(N, sizeof(int64_t));
             for (size_t i = 0; i < N; i++) {
                 fwData[i] = (int64_t)i;
             }
@@ -779,10 +751,7 @@ int multiFenwickTest(int argc, char *argv[]) {
             printf("%-8zu | %12zu | %8zu | %11zu | %.2fx\n", N, mfwBytes,
                    fwBytes, naiveBytes, ratio);
 
-            multiFenwickFree(mfw);
             fenwickI64Free(fw);
-            zfree(mfwData);
-            zfree(fwData);
         }
         printf("\n");
     }
@@ -802,15 +771,18 @@ int multiFenwickTest(int argc, char *argv[]) {
             uint64_t seed = 12345;
 
             /* Build test data */
-            databox *mfwData = zcalloc(N, sizeof(databox));
-            int64_t *fwData = zcalloc(N, sizeof(int64_t));
+            cleanerName(zfree, DataboxArray) databox *mfwData =
+                zcalloc(N, sizeof(databox));
+            cleanerName(zfree, I64Array) int64_t *fwData =
+                zcalloc(N, sizeof(int64_t));
             for (size_t i = 0; i < N; i++) {
                 int64_t val = (int64_t)((randSeed(&seed) % 1000) - 500);
                 mfwData[i] = DATABOX_SIGNED(val);
                 fwData[i] = val;
             }
 
-            multiFenwick *mfw = multiFenwickNewFromArray(mfwData, N);
+            cleaner(multiFenwickFree) multiFenwick *mfw =
+                multiFenwickNewFromArray(mfwData, N);
             void *fw = fenwickI64New();
             for (size_t i = 0; i < N; i++) {
                 fenwickI64Update(&fw, i, fwData[i]);
@@ -866,11 +838,8 @@ int multiFenwickTest(int argc, char *argv[]) {
                    naiveTime * 1e9 / NUM_OPS, mfwTime / fwTime,
                    naiveTime / fwTime);
 
-            multiFenwickFree(mfw);
             fenwickI64Free(fw);
             naiveFreeDatabox(naive);
-            zfree(mfwData);
-            zfree(fwData);
         }
         printf("\n");
     }
@@ -887,7 +856,7 @@ int multiFenwickTest(int argc, char *argv[]) {
             size_t N = sizes[s];
             uint64_t seed = 99999;
 
-            multiFenwick *mfw = multiFenwickNew();
+            cleaner(multiFenwickFree) multiFenwick *mfw = multiFenwickNew();
             void *fw = fenwickI64New();
             naiveDataboxArray *naive = naiveNewDatabox(N, DATABOX_SIGNED(0));
 
@@ -931,7 +900,6 @@ int multiFenwickTest(int argc, char *argv[]) {
                    mfwTime * 1e9 / NUM_OPS, fwTime * 1e9 / NUM_OPS,
                    naiveTime * 1e9 / NUM_OPS, mfwTime / fwTime);
 
-            multiFenwickFree(mfw);
             fenwickI64Free(fw);
             naiveFreeDatabox(naive);
         }
@@ -943,7 +911,7 @@ int multiFenwickTest(int argc, char *argv[]) {
      * ================================================================= */
 
     TEST("FUZZ: Pure SIGNED_64 operations (1000 random ops)") {
-        multiFenwick *mfw = multiFenwickNew();
+        cleaner(multiFenwickFree) multiFenwick *mfw = multiFenwickNew();
         uint64_t seed = 777;
 
         printf("Fuzzing SIGNED_64...\n");
@@ -970,11 +938,10 @@ int multiFenwickTest(int argc, char *argv[]) {
 
         printf("  Completed 1000 ops, final count=%zu, bytes=%zu\n",
                multiFenwickCount(mfw), multiFenwickBytes(mfw));
-        multiFenwickFree(mfw);
     }
 
     TEST("FUZZ: Pure UNSIGNED_64 operations (1000 random ops)") {
-        multiFenwick *mfw = multiFenwickNew();
+        cleaner(multiFenwickFree) multiFenwick *mfw = multiFenwickNew();
         uint64_t seed = 888;
 
         printf("Fuzzing UNSIGNED_64...\n");
@@ -998,11 +965,10 @@ int multiFenwickTest(int argc, char *argv[]) {
 
         printf("  Completed 1000 ops, final count=%zu, bytes=%zu\n",
                multiFenwickCount(mfw), multiFenwickBytes(mfw));
-        multiFenwickFree(mfw);
     }
 
     TEST("FUZZ: Pure DOUBLE_64 operations (1000 random ops)") {
-        multiFenwick *mfw = multiFenwickNew();
+        cleaner(multiFenwickFree) multiFenwick *mfw = multiFenwickNew();
         uint64_t seed = 999;
 
         printf("Fuzzing DOUBLE_64...\n");
@@ -1026,17 +992,17 @@ int multiFenwickTest(int argc, char *argv[]) {
 
         printf("  Completed 1000 ops, final count=%zu, bytes=%zu\n",
                multiFenwickCount(mfw), multiFenwickBytes(mfw));
-        multiFenwickFree(mfw);
     }
 
     TEST("FUZZ: MIXED TYPES - all combinations (2000 random ops)") {
-        multiFenwick *mfw = multiFenwickNew();
+        cleaner(multiFenwickFree) multiFenwick *mfw = multiFenwickNew();
         uint64_t seed = 111;
 
         printf("Fuzzing MIXED TYPES (SIGNED, UNSIGNED, FLOAT, DOUBLE)...\n");
 
         /* Track what we've stored for verification */
-        databox *expectedValues = zcalloc(1000, sizeof(databox));
+        cleanerName(zfree, DataboxArray) databox *expectedValues =
+            zcalloc(1000, sizeof(databox));
         for (size_t i = 0; i < 1000; i++) {
             expectedValues[i] = DATABOX_SIGNED(0);
         }
@@ -1112,9 +1078,6 @@ int multiFenwickTest(int argc, char *argv[]) {
         printf("  MIXED TYPE FUZZING COMPLETE!\n");
         printf("  Final count=%zu, bytes=%zu\n", multiFenwickCount(mfw),
                multiFenwickBytes(mfw));
-
-        multiFenwickFree(mfw);
-        zfree(expectedValues);
     }
 
     /* =================================================================
@@ -1127,12 +1090,14 @@ int multiFenwickTest(int argc, char *argv[]) {
         uint64_t seed = 12345;
 
         /* Build test data */
-        databox *init = zcalloc(N, sizeof(databox));
+        cleanerName(zfree, DataboxArray) databox *init =
+            zcalloc(N, sizeof(databox));
         for (size_t i = 0; i < N; i++) {
             init[i] = DATABOX_SIGNED((int64_t)((randSeed(&seed) % 1000) - 500));
         }
 
-        multiFenwick *mfw = multiFenwickNewFromArray(init, N);
+        cleaner(multiFenwickFree) multiFenwick *mfw =
+            multiFenwickNewFromArray(init, N);
         naiveDataboxArray *naive = naiveNewDatabox(N, DATABOX_SIGNED(0));
         for (size_t i = 0; i < N; i++) {
             naive->values[i] = init[i];
@@ -1167,9 +1132,7 @@ int multiFenwickTest(int argc, char *argv[]) {
         }
         printf("    Checksum verified: %" PRId64 "\n", (int64_t)mfwSum);
 
-        multiFenwickFree(mfw);
         naiveFreeDatabox(naive);
-        zfree(init);
     }
 
     TEST("BENCH: Update performance - double (500 elements)") {
@@ -1177,7 +1140,7 @@ int multiFenwickTest(int argc, char *argv[]) {
         const size_t NUM_OPS = 1000000; /* 1M updates */
         uint64_t seed = 99999;
 
-        multiFenwick *mfw = multiFenwickNew();
+        cleaner(multiFenwickFree) multiFenwick *mfw = multiFenwickNew();
 
         /* Benchmark multiFenwick updates */
         seed = 99999;
@@ -1192,8 +1155,6 @@ int multiFenwickTest(int argc, char *argv[]) {
                                          "multiFenwick updates (500 doubles)");
 
         printf("    Final tree size: %zu bytes\n", multiFenwickBytes(mfw));
-
-        multiFenwickFree(mfw);
     }
 
     TEST("BENCH: Mixed workload - uint64 (1K elements)") {
@@ -1201,12 +1162,14 @@ int multiFenwickTest(int argc, char *argv[]) {
         const size_t NUM_OPS = 1000000; /* 1M mixed ops */
         uint64_t seed = 11111;
 
-        databox *init = zcalloc(N, sizeof(databox));
+        cleanerName(zfree, DataboxArray) databox *init =
+            zcalloc(N, sizeof(databox));
         for (size_t i = 0; i < N; i++) {
             init[i] = DATABOX_UNSIGNED((uint64_t)(randSeed(&seed) % 1000));
         }
 
-        multiFenwick *mfw = multiFenwickNewFromArray(init, N);
+        cleaner(multiFenwickFree) multiFenwick *mfw =
+            multiFenwickNewFromArray(init, N);
 
         /* Mixed: 50% query, 50% update */
         volatile uint64_t checksum = 0;
@@ -1228,9 +1191,6 @@ int multiFenwickTest(int argc, char *argv[]) {
                                          "multiFenwick mixed (1K uint64)");
 
         printf("    Checksum: %" PRIu64 "\n", (uint64_t)checksum);
-
-        multiFenwickFree(mfw);
-        zfree(init);
     }
 
     TEST_FINAL_RESULT;

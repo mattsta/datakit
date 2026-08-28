@@ -5,12 +5,14 @@
  * Create
  * ==================================================================== */
 static multilistSmall *multilistSmallCreateContainer(void) {
+    /* @own: caller; free=multilistSmallFree */
     multilistSmall *ml = zcalloc(1, sizeof(*ml));
     return ml;
 }
 
 multilistSmall *multilistSmallCreate(void) {
     multilistSmall *ml = multilistSmallCreateContainer();
+    /* @own: container; free=flexFree */
     ml->fl = flexNew();
     return ml;
 }
@@ -22,6 +24,7 @@ multilistSmall *multilistSmallDuplicate(multilistSmall *orig) {
     multilistSmall *ml = multilistSmallCreate();
     /* Create() pre-allocated an empty flex; release before overwrite */
     flexFree(ml->fl);
+    /* @own: container; free=flexFree */
     ml->fl = flexDuplicate(orig->fl);
     return ml;
 }
@@ -66,6 +69,7 @@ multilistSmall *multilistSmallNewFromFlexConsume(flex *fl) {
 
 multilistSmall *multilistSmallNewFromFlex(const flex *fl) {
     multilistSmall *ml = multilistSmallCreateContainer();
+    /* @own: container; free=flexFree */
     ml->fl = flexDuplicate(fl);
     return ml;
 }

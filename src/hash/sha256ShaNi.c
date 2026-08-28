@@ -333,12 +333,16 @@ void sha256ShaNiCompressBlocksMulti4(uint32_t states[4][8],
 
 #ifdef DATAKIT_TEST
 
+#include "cleaner.h"
 #include "ctest.h"
 #include "datakit.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleanerName(uint8_t *, zfree, U8);
 
 /* Local big-endian store, used only by the test wrapper that finalizes a
  * hash via the SHA-NI compressor. We replicate FIPS 180-4 padding inline so
@@ -464,7 +468,7 @@ int sha256ShaNiTest(int argc, char *argv[]) {
          * input pool is reused; only the size and a rolling perturbation
          * change between iterations. */
         const size_t maxSize = 4096;
-        uint8_t *buf = zmalloc(maxSize);
+        cleanerName(zfree, U8) uint8_t *buf = zmalloc(maxSize);
         srand(0xDEADBEEF);
         for (size_t i = 0; i < maxSize; i++) {
             buf[i] = (uint8_t)rand();
@@ -491,7 +495,6 @@ int sha256ShaNiTest(int argc, char *argv[]) {
                 }
             }
         }
-        zfree(buf);
         if (mismatches) {
             ERR("%u total mismatches across %u trials", mismatches, iters);
         }
@@ -506,6 +509,7 @@ int sha256ShaNiTest(int argc, char *argv[]) {
         const size_t max_bytes = max_blocks * 64u;
         uint8_t *bufs[4];
         for (uint32_t lane = 0; lane < 4; lane++) {
+            /* @own: container; free=zfree */
             bufs[lane] = zmalloc(max_bytes);
         }
 
@@ -560,7 +564,7 @@ int sha256ShaNiTest(int argc, char *argv[]) {
 
     TEST("performance bench") {
         const size_t bufSize = 64 * 1024 * 1024; /* 64 MiB */
-        uint8_t *buf = zmalloc(bufSize);
+        cleanerName(zfree, U8) uint8_t *buf = zmalloc(bufSize);
         memset(buf, 0x5a, bufSize);
 
         struct timespec t0, t1;
@@ -587,8 +591,6 @@ int sha256ShaNiTest(int argc, char *argv[]) {
         printf("    portable: %.2f MiB/s (%.3fs)\n", mibsRef, secsRef);
         printf("    SHA-NI  : %.2f MiB/s (%.3fs)\n", mibsAcc, secsAcc);
         printf("    speedup : %.2fx\n", mibsRef > 0 ? mibsAcc / mibsRef : 0);
-
-        zfree(buf);
     }
 
     TEST_FINAL_RESULT;

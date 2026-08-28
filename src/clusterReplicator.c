@@ -16,10 +16,14 @@
 
 #include "clusterReplicator.h"
 
+#include "cleaner.h"
 #include "datakit.h" /* zmalloc / zfree */
 
 #include <stdatomic.h>
 #include <string.h>
+
+defcleanerName(clusterReplicator *, zfree, Replicator);
+defcleanerName(uint8_t *, zfree, Wire);
 
 /* Track the last frame on which we observed APPLY_REJECTED so the
  * trampoline can count consecutive rejections on the SAME (origin,
@@ -152,7 +156,8 @@ clusterReplicator *clusterReplicatorCreateEx(
         type_table_len) {
         return NULL;
     }
-    clusterReplicator *rep = zmalloc(sizeof(*rep));
+    cleanerName(zfree, Replicator) clusterReplicator *rep =
+        zmalloc(sizeof(*rep));
     rep->type_table = type_table;
     rep->type_table_len = type_table_len;
     rep->on_restored = on_restored;
@@ -185,10 +190,12 @@ clusterReplicator *clusterReplicatorCreateEx(
     };
     rep->mb = clusterMailboxCreateOpts(&mb_opts);
     if (rep->mb == NULL) {
-        zfree(rep);
         return NULL;
     }
-    return rep;
+
+    clusterReplicator *out = rep;
+    rep = NULL;
+    return out;
 }
 
 clusterReplicator *clusterReplicatorCreate(
@@ -281,6 +288,8 @@ clusterMailboxIngestResult clusterReplicatorIngest(clusterReplicator *rep,
 #include <stdio.h>
 #include <stdlib.h>
 
+defcleaner(flex *, flexFree);
+
 typedef struct {
     flex *restored[4];
     uint32_t origins[4];
@@ -331,7 +340,7 @@ int clusterReplicatorTest(int argc, char *argv[]) {
         }
 
         /* Build a real flex with multiple typed entries. */
-        flex *src = flexNew();
+        cleaner(flexFree) flex *src = flexNew();
         flexPushUnsigned(&src, 100u, FLEX_ENDPOINT_TAIL);
         flexPushBytes(&src, "hello", 5, FLEX_ENDPOINT_TAIL);
         flexPushUnsigned(&src, 200u, FLEX_ENDPOINT_TAIL);
@@ -339,7 +348,7 @@ int clusterReplicatorTest(int argc, char *argv[]) {
 
         const size_t cap =
             clusterReplicatorSnapshotSize(rep, &persistOpsFlex, src);
-        uint8_t *wire = zmalloc(cap);
+        cleanerName(zfree, Wire) uint8_t *wire = zmalloc(cap);
         size_t written = 0;
         if (!clusterReplicatorSeal(rep, &persistOpsFlex, src, 7u, 1u, KID, wire,
                                    cap, &written)) {
@@ -406,8 +415,6 @@ int clusterReplicatorTest(int argc, char *argv[]) {
         }
         flexFree(app_ctx.restored[0]);
 
-        zfree(wire);
-        flexFree(src);
         clusterReplicatorFree(rep);
         hmacKeyringFree(ring);
     }
@@ -429,7 +436,7 @@ int clusterReplicatorTest(int argc, char *argv[]) {
         const uint8_t payload[4] = {0};
         clusterMailbox *mb = clusterReplicatorMailbox(rep);
         const size_t cap = clusterMailboxSealedSize(mb, sizeof(payload));
-        uint8_t *wire = zmalloc(cap);
+        cleanerName(zfree, Wire) uint8_t *wire = zmalloc(cap);
         size_t written = 0;
         clusterMailboxSeal(mb, 7u, 1u, (uint8_t)PERSIST_TYPE_MAX, payload,
                            sizeof(payload), KID, wire, cap, &written);
@@ -440,7 +447,6 @@ int clusterReplicatorTest(int argc, char *argv[]) {
         if (app_ctx.count != 0) {
             ERRR("no apply must fire on unknown type");
         }
-        zfree(wire);
         clusterReplicatorFree(rep);
         hmacKeyringFree(ring);
     }

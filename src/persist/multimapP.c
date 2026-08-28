@@ -4,10 +4,13 @@
  */
 
 #include "multimapP.h"
+#include "../cleaner.h"
 #include "../datakit.h"
 
 #include <string.h>
 #include <unistd.h>
+
+defcleanerName(multimapP *, zfree, MultimapP);
 
 /* Forward declaration for internal use */
 extern bool persistCtxInitForType(persistCtx *ctx, const persistOps *ops);
@@ -31,32 +34,31 @@ multimapP *multimapNewConfigureP(persistCtx *ctx, uint32_t elementsPerEntry,
         return NULL;
     }
 
-    multimapP *mp = zcalloc(1, sizeof(*mp));
+    cleanerName(zfree, MultimapP) multimapP *mp = zcalloc(1, sizeof(*mp));
     mp->ctx = ctx;
     mp->elementsPerEntry = elementsPerEntry;
 
     /* Create underlying multimap */
     mp->m = multimapNewConfigure(elementsPerEntry, isSet, compress, limit);
     if (!mp->m) {
-        zfree(mp);
         return NULL;
     }
 
     /* Initialize persistence for multimap type */
     if (!persistCtxInitForType(ctx, &persistOpsMultimap)) {
         multimapFree(mp->m);
-        zfree(mp);
         return NULL;
     }
 
     /* Take initial snapshot */
     if (!persistCtxSaveSnapshot(ctx, mp->m, &persistOpsMultimap)) {
         multimapFree(mp->m);
-        zfree(mp);
         return NULL;
     }
 
-    return mp;
+    multimapP *out = mp;
+    mp = NULL;
+    return out;
 }
 
 multimapP *multimapOpenP(persistCtx *ctx) {
@@ -69,13 +71,12 @@ multimapP *multimapOpenP(persistCtx *ctx) {
         return NULL;
     }
 
-    multimapP *mp = zcalloc(1, sizeof(*mp));
+    cleanerName(zfree, MultimapP) multimapP *mp = zcalloc(1, sizeof(*mp));
     mp->ctx = ctx;
 
     /* Recover from snapshot + WAL */
     mp->m = persistCtxRecover(ctx, &persistOpsMultimap);
     if (!mp->m) {
-        zfree(mp);
         return NULL;
     }
 
@@ -84,7 +85,9 @@ multimapP *multimapOpenP(persistCtx *ctx) {
     multimapIteratorInit(mp->m, &iter, true);
     mp->elementsPerEntry = iter.elementsPerEntry;
 
-    return mp;
+    multimapP *out = mp;
+    mp = NULL;
+    return out;
 }
 
 void multimapCloseP(multimapP *m) {

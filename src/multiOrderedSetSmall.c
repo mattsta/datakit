@@ -1,7 +1,11 @@
 #include "multiOrderedSetSmall.h"
 #include "multiOrderedSetSmallInternal.h"
 
+#include "cleaner.h"
 #include "str.h" /* for random functions */
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleanerName(uint8_t *, zfree, U8);
 
 /* ====================================================================
  * Random Number Generator
@@ -117,7 +121,9 @@ static void mosRemoveEntry(multiOrderedSetSmall *m, flexEntry *entry) {
  * ==================================================================== */
 
 multiOrderedSetSmall *multiOrderedSetSmallNew(void) {
+    /* @own: caller; free=multiOrderedSetSmallFree */
     multiOrderedSetSmall *m = zcalloc(1, sizeof(*m));
+    /* @own: container; free=multiOrderedSetSmallFree */
     m->map = flexNew();
     m->middle = FLEX_EMPTY_SIZE;
     m->flags = 0;
@@ -125,7 +131,9 @@ multiOrderedSetSmall *multiOrderedSetSmallNew(void) {
 }
 
 multiOrderedSetSmall *multiOrderedSetSmallCopy(const multiOrderedSetSmall *m) {
+    /* @own: caller; free=multiOrderedSetSmallFree */
     multiOrderedSetSmall *copy = zcalloc(1, sizeof(*copy));
+    /* @own: container; free=multiOrderedSetSmallFree */
     copy->map = flexDuplicate(m->map);
     copy->middle = m->middle;
     copy->flags = m->flags;
@@ -141,6 +149,7 @@ void multiOrderedSetSmallFree(multiOrderedSetSmall *m) {
 
 void multiOrderedSetSmallReset(multiOrderedSetSmall *m) {
     flexFree(m->map);
+    /* @own: container; free=multiOrderedSetSmallFree */
     m->map = flexNew();
     m->middle = FLEX_EMPTY_SIZE;
 }
@@ -700,7 +709,8 @@ size_t multiOrderedSetSmallRandomMembers(const multiOrderedSetSmall *m,
         /* For small counts, use simple rejection sampling */
         if (absCount <= total / 4) {
             /* Use a simple set to track selected indices */
-            uint8_t *selected = zcalloc(1, (total + 7) / 8);
+            cleanerName(zfree, U8) uint8_t *selected =
+                zcalloc(1, (total + 7) / 8);
             while (retrieved < absCount) {
                 size_t idx = mosRandom() % total;
                 size_t byte = idx / 8;
@@ -714,7 +724,6 @@ size_t multiOrderedSetSmallRandomMembers(const multiOrderedSetSmall *m,
                     }
                 }
             }
-            zfree(selected);
         } else {
             /* For larger counts, iterate and select */
             for (size_t i = 0; i < total && retrieved < absCount; i++) {

@@ -11,6 +11,10 @@ defcleaner(void *, zfree);
 
 #include <assert.h>
 
+defcleanerName(databox *, zfree, Databoxes);
+defcleanerName(char *, zfree, Chars);
+defcleanerName(uint64_t *, zfree, U64);
+
 /* ====================================================================
  * VTable - Function Pointer Interface for Backend Polymorphism
  * ==================================================================== */
@@ -213,6 +217,7 @@ static const atomPoolVTable treeVTable = {
 static void *atomPoolImplNew(atomPoolType type) {
     switch (type) {
     case ATOM_POOL_HASH:
+        /* @own: caller; free=stringPoolFree */
         return stringPoolNew();
     case ATOM_POOL_TREE:
         return multimapAtomNew();
@@ -222,7 +227,9 @@ static void *atomPoolImplNew(atomPoolType type) {
 }
 
 atomPool *atomPoolNew(atomPoolType type) {
-    atomPool *pool = zcalloc(1, sizeof(*pool));
+    /* atomPoolFree is safe on a partially-constructed pool (it only
+     * tears down impl when both impl and vtable are set). */
+    cleaner(atomPoolFree) atomPool *pool = zcalloc(1, sizeof(*pool));
     if (!pool) {
         return NULL;
     }
@@ -242,14 +249,16 @@ atomPool *atomPoolNew(atomPoolType type) {
     }
 
     if (!pool->impl || !pool->vtable) {
-        zfree(pool);
         return NULL;
     }
 
-    return pool;
+    atomPool *out = pool;
+    pool = NULL;
+    return out;
 }
 
 atomPool *atomPoolNewDefault(void) {
+    /* @own: caller; free=atomPoolFree */
     return atomPoolNew(ATOM_POOL_HASH);
 }
 
@@ -852,17 +861,18 @@ int atomPoolTest(int argc, char *argv[]) {
         const size_t N = 50000;
 
         /* Prepare test data */
-        databox *keys = zmalloc(N * sizeof(databox));
-        char *keyData = zmalloc(N * 20);
+        cleanerName(zfree, Databoxes) databox *keys =
+            zmalloc(N * sizeof(databox));
+        cleanerName(zfree, Chars) char *keyData = zmalloc(N * 20);
         for (size_t i = 0; i < N; i++) {
             int len = snprintf(keyData + i * 20, 20, "testkey%08zu", i);
             keys[i] = databoxNewBytesAllowEmbed(keyData + i * 20, len);
         }
 
-        atomPool *hashPool = atomPoolNew(ATOM_POOL_HASH);
-        atomPool *treePool = atomPoolNew(ATOM_POOL_TREE);
+        cleaner(atomPoolFree) atomPool *hashPool = atomPoolNew(ATOM_POOL_HASH);
+        cleaner(atomPoolFree) atomPool *treePool = atomPoolNew(ATOM_POOL_TREE);
 
-        uint64_t *ids = zmalloc(N * sizeof(uint64_t));
+        cleanerName(zfree, U64) uint64_t *ids = zmalloc(N * sizeof(uint64_t));
 
         /* Benchmark insert */
         uint64_t hashInsertStart = timeUtilUs();
@@ -919,12 +929,6 @@ int atomPoolTest(int argc, char *argv[]) {
         printf("Recommendation:\n");
         printf("  - Use ATOM_POOL_HASH when lookup speed is critical\n");
         printf("  - Use ATOM_POOL_TREE when memory efficiency is critical\n");
-
-        atomPoolFree(hashPool);
-        atomPoolFree(treePool);
-        zfree(ids);
-        zfree(keys);
-        zfree(keyData);
     }
 
     TEST_FINAL_RESULT;

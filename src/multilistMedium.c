@@ -25,13 +25,16 @@
  * Create
  * ==================================================================== */
 static multilistMedium *multilistMediumCreateContainer(void) {
+    /* @own: caller; free=multilistMediumFree */
     multilistMedium *ml = zcalloc(1, sizeof(*ml));
     return ml;
 }
 
 multilistMedium *multilistMediumCreate(void) {
     multilistMedium *ml = multilistMediumCreateContainer();
+    /* @own: container; free=flexFree */
     F0 = flexNew();
+    /* @own: container; free=flexFree */
     F1 = flexNew();
     return ml;
 }
@@ -44,7 +47,9 @@ multilistMedium *multilistMediumDuplicate(multilistMedium *orig) {
     /* Create() pre-allocated two empty flexes; release before overwrite */
     flexFree(F0);
     flexFree(F1);
+    /* @own: container; free=flexFree */
     F0 = flexDuplicate(MF0(orig));
+    /* @own: container; free=flexFree */
     F1 = flexDuplicate(MF1(orig));
     return ml;
 }
@@ -84,6 +89,7 @@ void multilistMediumAppendFlex(multilistMedium *ml, const flex *fl) {
         /* Replace f0, f1 with 'fl' split in half */
         flexFree(F0);
         flexFree(F1);
+        /* @own: container; free=flexFree */
         F0 = flexDuplicate(fl);
         F1 = flexSplit(&F0, 1);
     } else {
@@ -110,6 +116,7 @@ static inline void multilistMediumInitFromFlexConsume_(multilistMedium *ml,
          * and F0 must always be populated, so just make 'fl' F0
          * and add an empty flex as F1. */
         F0 = fl;
+        /* @own: container; free=flexFree */
         F1 = flexNew();
     }
 }
@@ -124,6 +131,7 @@ multilistMedium *multilistMediumNewFromFlexConsume(flex *fl) {
 }
 
 multilistMedium *multilistMediumNewFromFlexConsumeGrow(void *_ml, flex *fl) {
+    /* @own: caller; free=multilistMediumFree */
     multilistMedium *ml = zrealloc(_ml, sizeof(*ml));
 
     multilistMediumInitFromFlexConsume_(ml, fl);
@@ -133,6 +141,7 @@ multilistMedium *multilistMediumNewFromFlexConsumeGrow(void *_ml, flex *fl) {
 /* Create new flex by splitting 'fl' in half.
  * Duplicates 'fl' so original remains untouched. */
 multilistMedium *multilistMediumNewFromFlex(const flex *fl) {
+    /* @own: container; free=flexFree */
     return multilistMediumNewFromFlexConsume(flexDuplicate(fl));
 }
 

@@ -40,6 +40,7 @@ DK_INLINE_ALWAYS linearBloom *linearBloomNew(void) {
     /* We need to use 'divCeil' here because regular division would give us
      * a floor and that could break some very end-of-array math if our
      * bit length isn't evenly divisible by 8 */
+    /* @own: caller; free=linearBloomFree */
     linearBloom *const created = zcalloc(1, LINEARBLOOM_EXTENT_BYTES);
     return created;
 }

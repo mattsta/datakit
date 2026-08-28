@@ -22,6 +22,11 @@
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleaner(clusterRing *, clusterRingFree);
 defcleaner(void *, zfree);
+defcleanerName(uint64_t *, zfree, U64);
+defcleanerName(uint32_t *, zfree, U32);
+defcleanerName(const clusterNode **, zfree, NodePtrs);
+defcleanerName(clusterAffinityRule *, zfree, Rules);
+defcleanerName(char *, zfree, Chars);
 
 /* ====================================================================
  * Platform-Specific Optimization Hints
@@ -134,6 +139,7 @@ const clusterAffinityRule CLUSTER_AFFINITY_REGION_SPREAD = {
 static mflexState *clusterMflexState(void) {
     static mflexState *state = NULL;
     if (!state) {
+        /* @own: static */
         state = mflexStateCreate();
     }
     return state;
@@ -171,6 +177,7 @@ static inline void seenTrackerInit(seenTracker *st, uint32_t maxNodes) {
     } else {
         /* Round up to multiple of 64 */
         uint32_t words = (maxNodes + 63) / 64;
+        /* @own: container; free=seenTrackerFree */
         st->bits.large = zcalloc(words, sizeof(uint64_t));
         st->capacity = words * 64;
         st->usesHeap = true;
@@ -238,6 +245,8 @@ typedef struct heapNode {
     const clusterNode *node;
     uint64_t weight;
 } heapNode;
+
+defcleanerName(heapNode *, zfree, HeapNodes);
 
 static inline void heapSiftDown(heapNode *heap, uint32_t size, uint32_t idx) {
     while (true) {
@@ -343,6 +352,7 @@ static uint64_t clusterGetTimeMs(void) {
 void clusterPlacementInit(clusterPlacement *p) {
     if (p) {
         memset(p, 0, sizeof(*p));
+        /* @own: container; free=multilistFree */
         p->replicas = multilistNew(PLACEMENT_LIST_LIMIT, PLACEMENT_LIST_DEPTH);
     }
 }
@@ -384,6 +394,7 @@ static void clusterPlacementAddReplica(clusterPlacement *p,
 void clusterWriteSetInit(clusterWriteSet *ws) {
     if (ws) {
         memset(ws, 0, sizeof(*ws));
+        /* @own: container; free=multilistFree */
         ws->targets = multilistNew(PLACEMENT_LIST_LIMIT, PLACEMENT_LIST_DEPTH);
     }
 }
@@ -425,6 +436,7 @@ static void clusterWriteSetAddTarget(clusterWriteSet *ws,
 void clusterReadSetInit(clusterReadSet *rs) {
     if (rs) {
         memset(rs, 0, sizeof(*rs));
+        /* @own: container; free=multilistFree */
         rs->candidates =
             multilistNew(PLACEMENT_LIST_LIMIT, PLACEMENT_LIST_DEPTH);
     }
@@ -469,6 +481,7 @@ static void clusterReadSetAddCandidate(clusterReadSet *rs,
  * ==================================================================== */
 
 static clusterNode *clusterNodeAlloc(void) {
+    /* @own: caller; free=clusterNodeFreeInternal */
     clusterNode *node = zcalloc(1, sizeof(*node));
     return node;
 }
@@ -489,7 +502,9 @@ static void clusterNodeInit(clusterNode *node,
                             const clusterNodeConfig *config) {
     node->id = config->id;
     /* Convert const char * to mdsc internally */
+    /* @own: container; free=mdscfree */
     node->name = config->name ? mdscnew(config->name) : mdscempty();
+    /* @own: container; free=mdscfree */
     node->address = config->address ? mdscnew(config->address) : mdscempty();
     node->location = config->location;
     node->weight = config->weight ? config->weight : 100; /* Default weight */
@@ -511,32 +526,37 @@ clusterRing *clusterRingNew(const clusterRingConfig *config) {
         return NULL;
     }
 
-    clusterRing *ring = zcalloc(1, sizeof(*ring));
+    /* A zeroed ring is safe to hand to clusterRingFree at ANY point
+     * during construction (every teardown arm NULL-checks), so the
+     * cleaner covers all partial-construction exits below. */
+    cleaner(clusterRingFree) clusterRing *ring = zcalloc(1, sizeof(*ring));
     if (!ring) {
         return NULL;
     }
 
     /* Convert const char * to mdsc internally */
+    /* @own: container; free=mdscfree */
     ring->name = config->name ? mdscnew(config->name) : mdscempty();
 
     /* Initialize node storage */
     ring->nodeCapacity = config->expectedNodeCount > 0
                              ? config->expectedNodeCount
                              : INITIAL_NODE_CAPACITY;
+    /* @own: container; free=clusterRingFree */
     ring->nodeArray = zcalloc(ring->nodeCapacity, sizeof(clusterNode *));
     if (!ring->nodeArray) {
-        zfree(ring);
         return NULL;
     }
     ring->nodeCount = 0;
     ring->healthyNodeCount = 0;
 
-    /* Create node lookup dict */
-    ring->nodeById =
-        multidictNew(&multidictTypeExactKey, multidictDefaultClassNew(), 0);
+    /* Create node lookup dict. The dict privately owns the default class
+     * it is built with; clusterRingFree releases both in order. */
+    /* @own: container; free=multidictDefaultClassFree */
+    multidictClass *nodeClass = multidictDefaultClassNew();
+    /* @own: container; free=multidictFree */
+    ring->nodeById = multidictNew(&multidictTypeExactKey, nodeClass, 0);
     if (!ring->nodeById) {
-        zfree(ring->nodeArray);
-        zfree(ring);
         return NULL;
     }
 
@@ -565,6 +585,7 @@ clusterRing *clusterRingNew(const clusterRingConfig *config) {
 
     /* Copy affinity rules */
     if (config->affinityRules && config->affinityRuleCount > 0) {
+        /* @own: container; free=clusterRingFree */
         ring->affinityRules =
             zcalloc(config->affinityRuleCount, sizeof(clusterAffinityRule));
         if (ring->affinityRules) {
@@ -576,10 +597,14 @@ clusterRing *clusterRingNew(const clusterRingConfig *config) {
 
     /* Initialize keyspace storage */
     ring->keySpaceCapacity = INITIAL_KEYSPACE_CAPACITY;
+    /* @own: container; free=clusterRingFree */
     ring->keySpaces =
         zcalloc(ring->keySpaceCapacity, sizeof(clusterKeySpace *));
+    /* @own: container; free=multidictDefaultClassFree */
+    multidictClass *keySpaceClass = multidictDefaultClassNew();
+    /* @own: container; free=multidictFree */
     ring->keySpaceByName =
-        multidictNew(&multidictTypeExactKey, multidictDefaultClassNew(), 0);
+        multidictNew(&multidictTypeExactKey, keySpaceClass, 0);
 
     /* Initialize strategy-specific data */
     clusterResult strategyResult = CLUSTER_OK;
@@ -605,7 +630,6 @@ clusterRing *clusterRingNew(const clusterRingConfig *config) {
     }
 
     if (strategyResult != CLUSTER_OK) {
-        clusterRingFree(ring);
         return NULL;
     }
 
@@ -616,7 +640,9 @@ clusterRing *clusterRingNew(const clusterRingConfig *config) {
     /* Initialize stats */
     memset(&ring->stats, 0, sizeof(ring->stats));
 
-    return ring;
+    clusterRing *out = ring;
+    ring = NULL;
+    return out;
 }
 
 clusterRing *clusterRingNewDefault(void) {
@@ -625,6 +651,7 @@ clusterRing *clusterRingNewDefault(void) {
         .strategyType = CLUSTER_STRATEGY_KETAMA,
         .defaultQuorum = CLUSTER_QUORUM_BALANCED,
     };
+    /* @own: caller; free=clusterRingFree */
     return clusterRingNew(&config);
 }
 
@@ -666,9 +693,13 @@ void clusterRingFree(clusterRing *ring) {
     }
     zfree(ring->nodeArray);
 
-    /* Free node lookup */
+    /* Free node lookup. The ring privately owns each dict's default
+     * class; the class must outlive the dict (teardown runs class
+     * callbacks), so free it after. */
     if (ring->nodeById) {
+        multidictClass *cls = multidictGetClass(ring->nodeById);
         multidictFree(ring->nodeById);
+        multidictDefaultClassFree(cls);
     }
 
     /* Free keyspaces */
@@ -685,7 +716,9 @@ void clusterRingFree(clusterRing *ring) {
     }
     zfree(ring->keySpaces);
     if (ring->keySpaceByName) {
+        multidictClass *cls = multidictGetClass(ring->keySpaceByName);
         multidictFree(ring->keySpaceByName);
+        multidictDefaultClassFree(cls);
     }
 
     /* Free affinity rules */
@@ -721,6 +754,7 @@ void clusterRingFree(clusterRing *ring) {
 clusterResult clusterRingInitKetama(clusterRing *ring) {
     clusterKetamaData *data = &ring->strategyData.ketama;
     data->vnodeCapacity = INITIAL_VNODE_CAPACITY;
+    /* @own: container; free=clusterRingFree */
     data->vnodes = zcalloc(data->vnodeCapacity, sizeof(clusterVnode));
     if (!data->vnodes) {
         return CLUSTER_ERR_ALLOC_FAILED;
@@ -746,6 +780,7 @@ clusterResult clusterRingInitRendezvous(clusterRing *ring) {
 clusterResult clusterRingInitMaglev(clusterRing *ring) {
     clusterMaglevData *data = &ring->strategyData.maglev;
     data->tableSize = MAGLEV_TABLE_SIZE;
+    /* @own: container; free=clusterRingFree */
     data->lookup = zcalloc(data->tableSize, sizeof(uint64_t));
     if (!data->lookup) {
         return CLUSTER_ERR_ALLOC_FAILED;
@@ -854,6 +889,7 @@ clusterResult clusterRingAddVnodes(clusterRing *ring, clusterNode *node) {
         while (newCapacity < data->vnodeCount + vnodeCount) {
             newCapacity *= 2;
         }
+        /* @own: container; free=clusterRingFree */
         clusterVnode *newVnodes =
             zrealloc(data->vnodes, newCapacity * sizeof(clusterVnode));
         if (!newVnodes) {
@@ -922,6 +958,7 @@ static void clusterRingRebuildJump(clusterRing *ring) {
         return;
     }
 
+    /* @own: container; free=clusterRingFree */
     data->nodeIds = zcalloc(data->bucketCount, sizeof(uint64_t));
     if (!data->nodeIds) {
         data->bucketCount = 0;
@@ -963,7 +1000,8 @@ static void clusterRingRebuildMaglev(clusterRing *ring) {
     }
 
     /* Collect healthy nodes */
-    uint64_t *healthyNodes = zcalloc(ring->healthyNodeCount, sizeof(uint64_t));
+    cleanerName(zfree, U64) uint64_t *healthyNodes =
+        zcalloc(ring->healthyNodeCount, sizeof(uint64_t));
     if (!healthyNodes) {
         return;
     }
@@ -981,21 +1019,11 @@ static void clusterRingRebuildMaglev(clusterRing *ring) {
     uint32_t M = ring->healthyNodeCount;
 
     /* Allocate per-node offset and skip */
-    uint32_t *offset = zcalloc(M, sizeof(uint32_t));
-    uint32_t *skip = zcalloc(M, sizeof(uint32_t));
-    uint32_t *next = zcalloc(M, sizeof(uint32_t));
+    cleanerName(zfree, U32) uint32_t *offset = zcalloc(M, sizeof(uint32_t));
+    cleanerName(zfree, U32) uint32_t *skip = zcalloc(M, sizeof(uint32_t));
+    cleanerName(zfree, U32) uint32_t *next = zcalloc(M, sizeof(uint32_t));
 
     if (!offset || !skip || !next) {
-        zfree(healthyNodes);
-        if (offset) {
-            zfree(offset);
-        }
-        if (skip) {
-            zfree(skip);
-        }
-        if (next) {
-            zfree(next);
-        }
         return;
     }
 
@@ -1027,11 +1055,6 @@ static void clusterRingRebuildMaglev(clusterRing *ring) {
         }
     }
 
-    zfree(healthyNodes);
-    zfree(offset);
-    zfree(skip);
-    zfree(next);
-
     data->needsRebuild = false;
 }
 
@@ -1041,6 +1064,7 @@ static void clusterRingRebuildMaglev(clusterRing *ring) {
 
 clusterResult clusterRingGrowNodeArray(clusterRing *ring) {
     uint32_t newCapacity = ring->nodeCapacity * 2;
+    /* @own: container; free=clusterRingFree */
     clusterNode **newArray =
         zrealloc(ring->nodeArray, newCapacity * sizeof(clusterNode *));
     if (!newArray) {
@@ -1543,7 +1567,7 @@ uint32_t clusterLocateRendezvous(const clusterRing *ring, const void *key,
         maxNodes < ring->healthyNodeCount ? maxNodes : ring->healthyNodeCount;
 
     /* Use heap-based top-k selection: O(n log k) instead of O(n^2) sorting */
-    heapNode *heap = zcalloc(k, sizeof(heapNode));
+    cleanerName(zfree, HeapNodes) heapNode *heap = zcalloc(k, sizeof(heapNode));
     if (CLUSTER_UNLIKELY(!heap)) {
         return 0;
     }
@@ -1578,7 +1602,6 @@ uint32_t clusterLocateRendezvous(const clusterRing *ring, const void *key,
     /* Extract results in descending weight order */
     heapExtractAll(heap, heapSize, out);
 
-    zfree(heap);
     return heapSize;
 }
 
@@ -1683,7 +1706,7 @@ clusterResult clusterRingLocate(const clusterRing *ring, const void *key,
     /* Temporary stack buffer for strategy results */
     const clusterNode *stackReplicas[64];
     const clusterNode **replicas = stackReplicas;
-    const clusterNode **heapReplicas = NULL;
+    cleanerName(zfree, NodePtrs) const clusterNode **heapReplicas = NULL;
 
     if (maxReplicas > 64) {
         heapReplicas = zcalloc(maxReplicas, sizeof(const clusterNode *));
@@ -1722,9 +1745,6 @@ clusterResult clusterRingLocate(const clusterRing *ring, const void *key,
     }
 
     if (found == 0) {
-        if (heapReplicas) {
-            zfree(heapReplicas);
-        }
         clusterPlacementFree(out);
         return CLUSTER_ERR_NO_NODES;
     }
@@ -1737,10 +1757,6 @@ clusterResult clusterRingLocate(const clusterRing *ring, const void *key,
         if (replicas[i]->state == CLUSTER_NODE_UP) {
             out->healthyCount++;
         }
-    }
-
-    if (heapReplicas) {
-        zfree(heapReplicas);
     }
 
     return CLUSTER_OK;
@@ -1817,7 +1833,8 @@ clusterResult clusterRingLocateBulk(const clusterRing *ring,
 
     /* For larger batches, batch-compute hashes first for better cache
      * efficiency */
-    uint64_t *hashes = zcalloc(keyCount, sizeof(uint64_t));
+    cleanerName(zfree, U64) uint64_t *hashes =
+        zcalloc(keyCount, sizeof(uint64_t));
     if (CLUSTER_UNLIKELY(!hashes)) {
         /* Fallback to simple loop on allocation failure */
         for (uint32_t i = 0; i < keyCount; i++) {
@@ -1886,7 +1903,6 @@ clusterResult clusterRingLocateBulk(const clusterRing *ring,
         }
     }
 
-    zfree(hashes);
     return finalResult;
 }
 
@@ -2075,7 +2091,7 @@ bool clusterCheckAffinity(const clusterRing *ring, const clusterNode **nodes,
     }
 
     /* Dynamically allocate tracking array based on count */
-    uint32_t *values = zcalloc(count, sizeof(uint32_t));
+    cleanerName(zfree, U32) uint32_t *values = zcalloc(count, sizeof(uint32_t));
     if (!values) {
         return false; /* Allocation failure - fail constraint check */
     }
@@ -2112,7 +2128,6 @@ bool clusterCheckAffinity(const clusterRing *ring, const clusterNode **nodes,
         }
     }
 
-    zfree(values);
     return result;
 }
 
@@ -2139,6 +2154,7 @@ clusterResult clusterRingAddKeySpace(clusterRing *ring,
     /* Grow array if needed */
     if (ring->keySpaceCount >= ring->keySpaceCapacity) {
         uint32_t newCap = ring->keySpaceCapacity * 2;
+        /* @own: container; free=clusterRingFree */
         clusterKeySpace **newArr =
             zrealloc(ring->keySpaces, newCap * sizeof(clusterKeySpace *));
         if (!newArr) {
@@ -2149,12 +2165,14 @@ clusterResult clusterRingAddKeySpace(clusterRing *ring,
     }
 
     /* Create keyspace */
+    /* @own: container; free=clusterRingFree */
     clusterKeySpace *ks = zcalloc(1, sizeof(*ks));
     if (!ks) {
         return CLUSTER_ERR_ALLOC_FAILED;
     }
 
     /* Convert const char * to mdsc internally */
+    /* @own: container; free=mdscfree */
     ks->name = mdscnew(config->name);
     ks->id = ring->keySpaceCount;
     ks->quorum = config->quorum;
@@ -2162,6 +2180,7 @@ clusterResult clusterRingAddKeySpace(clusterRing *ring,
 
     /* Copy rules */
     if (config->rules && config->ruleCount > 0) {
+        /* @own: container; free=clusterRingFree */
         ks->rules = zcalloc(config->ruleCount, sizeof(clusterAffinityRule));
         if (ks->rules) {
             memcpy(ks->rules, config->rules,
@@ -2669,6 +2688,7 @@ static flex *clusterRingBuildSnapshotFlex(const clusterRing *ring) {
     if (ring == NULL) {
         return NULL;
     }
+    /* @own: caller; free=flexFree */
     flex *f = flexNew();
     if (f == NULL) {
         return NULL;
@@ -3154,7 +3174,7 @@ clusterRing *clusterRingDeserialize(const void *buf, size_t bufLen) {
 
         /* Rules — read into a heap-allocated array (clusterRingAddKeySpace
          * deep-copies). */
-        clusterAffinityRule *rules = NULL;
+        cleanerName(zfree, Rules) clusterAffinityRule *rules = NULL;
         if (ruleCount > 0) {
             rules = (clusterAffinityRule *)zcalloc((size_t)ruleCount,
                                                    sizeof(*rules));
@@ -3163,21 +3183,17 @@ clusterRing *clusterRingDeserialize(const void *buf, size_t bufLen) {
             }
             for (uint64_t r = 0; r < ruleCount; r++) {
                 if (!crReadUnsignedRange(f, &fe, 0, UINT64_MAX, &v)) {
-                    zfree(rules);
                     goto fail;
                 }
                 if (!clusterRingValidTopologyLevel(v)) {
-                    zfree(rules);
                     goto fail;
                 }
                 rules[r].spreadLevel = (clusterTopologyLevel)v;
                 if (!crReadUnsignedRange(f, &fe, 0, UINT8_MAX, &v)) {
-                    zfree(rules);
                     goto fail;
                 }
                 rules[r].minSpread = (uint8_t)v;
                 if (!crReadUnsignedRange(f, &fe, 0, 1, &v)) {
-                    zfree(rules);
                     goto fail;
                 }
                 rules[r].required = (v != 0);
@@ -3186,9 +3202,6 @@ clusterRing *clusterRingDeserialize(const void *buf, size_t bufLen) {
         ksCfg.rules = rules;
 
         const clusterResult ksr = clusterRingAddKeySpace(ring, &ksCfg, NULL);
-        if (rules) {
-            zfree(rules);
-        }
         if (ksr != CLUSTER_OK) {
             goto fail;
         }
@@ -3249,6 +3262,7 @@ static void *clusterRingPersistRestore(const uint8_t *data, size_t len) {
  * no leading snapshot). Returns a default-configured ring with no
  * nodes; caller frees via .free (clusterRingFree). */
 static void *crPersistNewEmpty(void) {
+    /* @own: caller; free=clusterRingFree */
     return clusterRingNewDefault();
 }
 
@@ -3444,14 +3458,13 @@ static int testRingLifecycle(void) {
     int err = 0;
 
     TEST("Ring creation with default config") {
-        clusterRing *ring = clusterRingNewDefault();
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
         if (!ring) {
             ERRR("Failed to create ring");
         } else {
             if (clusterRingNodeCount(ring) != 0) {
                 ERRR("Expected 0 nodes");
             }
-            clusterRingFree(ring);
         }
     }
 
@@ -3462,11 +3475,9 @@ static int testRingLifecycle(void) {
             .defaultQuorum = CLUSTER_QUORUM_BALANCED,
             .hashSeed = 12345,
         };
-        clusterRing *ring = clusterRingNew(&config);
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&config);
         if (!ring) {
             ERRR("Failed to create ring with custom config");
-        } else {
-            clusterRingFree(ring);
         }
     }
 
@@ -3483,12 +3494,11 @@ static int testRingLifecycle(void) {
                 .name = "strategy-test",
                 .strategyType = strategies[i],
             };
-            clusterRing *ring = clusterRingNew(&config);
+            cleaner(clusterRingFree) clusterRing *ring =
+                clusterRingNew(&config);
             if (!ring) {
                 ERR("Failed to create ring with strategy %zu", i);
                 err++;
-            } else {
-                clusterRingFree(ring);
             }
         }
     }
@@ -3499,7 +3509,7 @@ static int testRingLifecycle(void) {
 static int testNodeManagement(void) {
     int err = 0;
 
-    clusterRing *ring = clusterRingNewDefault();
+    cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
     if (!ring) {
         ERRR("Failed to create ring");
         return 1;
@@ -3656,14 +3666,13 @@ static int testNodeManagement(void) {
         }
     }
 
-    clusterRingFree(ring);
     return err;
 }
 
 static int testPlacement(void) {
     int err = 0;
 
-    clusterRing *ring = clusterRingNewDefault();
+    cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
 
     /* Add 5 nodes */
     const char *nodeNames[] = {"node-1", "node-2", "node-3", "node-4",
@@ -3798,7 +3807,6 @@ static int testPlacement(void) {
         clusterPlacementFree(&p);
     }
 
-    clusterRingFree(ring);
     return err;
 }
 
@@ -3820,7 +3828,8 @@ static int testStrategies(void) {
                 .name = "strategy-test",
                 .strategyType = strategies[s],
             };
-            clusterRing *ring = clusterRingNew(&config);
+            cleaner(clusterRingFree) clusterRing *ring =
+                clusterRingNew(&config);
 
             /* Add nodes */
             const char *nodeNames[] = {"node-1", "node-2", "node-3", "node-4",
@@ -3858,7 +3867,6 @@ static int testStrategies(void) {
 
             clusterPlacementFree(&p);
             clusterPlacementFree(&p2);
-            clusterRingFree(ring);
         }
     }
 
@@ -3868,7 +3876,7 @@ static int testStrategies(void) {
 static int testKeyspaces(void) {
     int err = 0;
 
-    clusterRing *ring = clusterRingNewDefault();
+    cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
 
     /* Add some nodes first */
     for (uint64_t i = 1; i <= 3; i++) {
@@ -3939,14 +3947,13 @@ static int testKeyspaces(void) {
         }
     }
 
-    clusterRingFree(ring);
     return err;
 }
 
 static int testSerialization(void) {
     int err = 0;
 
-    clusterRing *ring = clusterRingNewDefault();
+    cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
 
     /* Add nodes */
     const char *nodeNames[] = {"node-1", "node-2", "node-3", "node-4",
@@ -3980,7 +3987,7 @@ static int testSerialization(void) {
             err++;
         }
 
-        void *buf = zmalloc(size);
+        cleaner(zfree) void *buf = zmalloc(size);
         if (!buf) {
             ERRR("Failed to allocate buffer");
             err++;
@@ -4016,19 +4023,16 @@ static int testSerialization(void) {
                 clusterPlacementFree(&p2);
                 clusterRingFree(restored);
             }
-
-            zfree(buf);
         }
     }
 
-    clusterRingFree(ring);
     return err;
 }
 
 static int testDistribution(void) {
     int err = 0;
 
-    clusterRing *ring = clusterRingNewDefault();
+    cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
 
     /* Add 10 nodes with equal weight */
     for (uint64_t i = 1; i <= 10; i++) {
@@ -4120,14 +4124,13 @@ static int testDistribution(void) {
         }
     }
 
-    clusterRingFree(ring);
     return err;
 }
 
 static int testNodeFailure(void) {
     int err = 0;
 
-    clusterRing *ring = clusterRingNewDefault();
+    cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
 
     /* Add 5 nodes */
     for (uint64_t i = 1; i <= 5; i++) {
@@ -4189,14 +4192,13 @@ static int testNodeFailure(void) {
         clusterPlacementFree(&pRecovered);
     }
 
-    clusterRingFree(ring);
     return err;
 }
 
 static int testStats(void) {
     int err = 0;
 
-    clusterRing *ring = clusterRingNewDefault();
+    cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
 
     /* Add nodes */
     for (uint64_t i = 1; i <= 5; i++) {
@@ -4258,7 +4260,6 @@ static int testStats(void) {
         }
     }
 
-    clusterRingFree(ring);
     return err;
 }
 
@@ -4284,7 +4285,7 @@ static void testStateCallback(clusterRing *ring, uint64_t nodeId,
 static int testCallbacks(void) {
     int err = 0;
 
-    clusterRing *ring = clusterRingNewDefault();
+    cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
     testCallbackData cbData = {0};
     clusterRingSetNodeStateCallback(ring, testStateCallback, &cbData);
 
@@ -4323,7 +4324,6 @@ static int testCallbacks(void) {
         }
     }
 
-    clusterRingFree(ring);
     return err;
 }
 
@@ -4349,7 +4349,7 @@ static bool testStopAfter2(const clusterNode *node, void *userData) {
 static int testIteration(void) {
     int err = 0;
 
-    clusterRing *ring = clusterRingNewDefault();
+    cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
 
     /* Add nodes in different states */
     for (uint64_t i = 1; i <= 5; i++) {
@@ -4410,7 +4410,6 @@ static int testIteration(void) {
         }
     }
 
-    clusterRingFree(ring);
     return err;
 }
 
@@ -4422,9 +4421,10 @@ static int testFuzzNodeChurn(void) {
     int err = 0;
 
     TEST("FUZZ: Random node add/remove churn") {
-        clusterRing *ring = clusterRingNewDefault();
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
         uint64_t nextNodeId = 1;
-        uint64_t *activeNodes = zcalloc(1000, sizeof(uint64_t));
+        cleanerName(zfree, U64) uint64_t *activeNodes =
+            zcalloc(1000, sizeof(uint64_t));
         uint32_t activeCount = 0;
 
         /* Run 1000 random operations */
@@ -4475,9 +4475,6 @@ static int testFuzzNodeChurn(void) {
                 clusterPlacementFree(&p);
             }
         }
-
-        zfree(activeNodes);
-        clusterRingFree(ring);
     }
 
     return err;
@@ -4487,7 +4484,7 @@ static int testFuzzPlacementConsistency(void) {
     int err = 0;
 
     TEST("FUZZ: Placement consistency across operations") {
-        clusterRing *ring = clusterRingNewDefault();
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
 
         /* Add initial nodes */
         for (uint64_t i = 1; i <= 20; i++) {
@@ -4501,7 +4498,8 @@ static int testFuzzPlacementConsistency(void) {
 
         /* Record placements for 100 keys */
         const int numKeys = 100;
-        uint64_t *primaryIds = zcalloc(numKeys, sizeof(uint64_t));
+        cleanerName(zfree, U64) uint64_t *primaryIds =
+            zcalloc(numKeys, sizeof(uint64_t));
 
         for (int i = 0; i < numKeys; i++) {
             char key[32];
@@ -4528,13 +4526,10 @@ static int testFuzzPlacementConsistency(void) {
                 clusterPlacementFree(&p);
             }
         }
-
-        zfree(primaryIds);
-        clusterRingFree(ring);
     }
 
     TEST("FUZZ: Minimal movement on node removal") {
-        clusterRing *ring = clusterRingNewDefault();
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
 
         /* Add 10 nodes */
         for (uint64_t i = 1; i <= 10; i++) {
@@ -4548,7 +4543,8 @@ static int testFuzzPlacementConsistency(void) {
 
         /* Record placements for 1000 keys */
         const int numKeys = 1000;
-        uint64_t *beforePrimary = zcalloc(numKeys, sizeof(uint64_t));
+        cleanerName(zfree, U64) uint64_t *beforePrimary =
+            zcalloc(numKeys, sizeof(uint64_t));
 
         for (int i = 0; i < numKeys; i++) {
             char key[32];
@@ -4586,9 +4582,6 @@ static int testFuzzPlacementConsistency(void) {
             ERR("Too many keys moved unnecessarily: %d", movedCount);
             err++;
         }
-
-        zfree(beforePrimary);
-        clusterRingFree(ring);
     }
 
     return err;
@@ -4611,7 +4604,8 @@ static int testFuzzAllStrategies(void) {
                 .name = "fuzz-test",
                 .strategyType = strategies[s],
             };
-            clusterRing *ring = clusterRingNew(&config);
+            cleaner(clusterRingFree) clusterRing *ring =
+                clusterRingNew(&config);
 
             /* Add many nodes */
             for (uint64_t i = 1; i <= 50; i++) {
@@ -4654,8 +4648,6 @@ static int testFuzzAllStrategies(void) {
 
                 clusterPlacementFree(&p);
             }
-
-            clusterRingFree(ring);
         }
     }
 
@@ -4666,7 +4658,7 @@ static int testFuzzStateTransitions(void) {
     int err = 0;
 
     TEST("FUZZ: Random state transitions") {
-        clusterRing *ring = clusterRingNewDefault();
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
 
         /* Add 20 nodes */
         for (uint64_t i = 1; i <= 20; i++) {
@@ -4705,8 +4697,6 @@ static int testFuzzStateTransitions(void) {
             }
             /* CLUSTER_ERR_NO_NODES is acceptable if all nodes are down */
         }
-
-        clusterRingFree(ring);
     }
 
     return err;
@@ -4721,7 +4711,8 @@ static int testFuzzSerializationRoundtrip(void) {
                 .name = "serialize-fuzz",
                 .strategyType = CLUSTER_STRATEGY_KETAMA,
             };
-            clusterRing *ring = clusterRingNew(&config);
+            cleaner(clusterRingFree) clusterRing *ring =
+                clusterRingNew(&config);
 
             /* Add random nodes */
             int nodeCount = rand() % 50 + 5;
@@ -4758,17 +4749,14 @@ static int testFuzzSerializationRoundtrip(void) {
             if (size == 0) {
                 ERR("Trial %d: SerializeSize returned 0", trial);
                 err++;
-                clusterRingFree(ring);
                 continue;
             }
 
-            void *buf = zmalloc(size);
+            cleaner(zfree) void *buf = zmalloc(size);
             size_t written = clusterRingSerialize(ring, buf, size);
             if (written == 0) {
                 ERR("Trial %d: Serialize returned 0", trial);
                 err++;
-                zfree(buf);
-                clusterRingFree(ring);
                 continue;
             }
 
@@ -4777,8 +4765,6 @@ static int testFuzzSerializationRoundtrip(void) {
             if (!restored) {
                 ERR("Trial %d: Deserialize returned NULL", trial);
                 err++;
-                zfree(buf);
-                clusterRingFree(ring);
                 continue;
             }
 
@@ -4814,9 +4800,7 @@ static int testFuzzSerializationRoundtrip(void) {
                 clusterPlacementFree(&p2);
             }
 
-            zfree(buf);
             clusterRingFree(restored);
-            clusterRingFree(ring);
         }
     }
 
@@ -4827,7 +4811,7 @@ static int testFuzzConcurrentModification(void) {
     int err = 0;
 
     TEST("FUZZ: Interleaved modifications and lookups") {
-        clusterRing *ring = clusterRingNewDefault();
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
         uint64_t nextId = 1;
 
         /* Interleave adds, removes, state changes, and lookups */
@@ -4864,8 +4848,6 @@ static int testFuzzConcurrentModification(void) {
                 }
             }
         }
-
-        clusterRingFree(ring);
     }
 
     return err;
@@ -4875,7 +4857,7 @@ static int testFuzzLargeScale(void) {
     int err = 0;
 
     TEST("FUZZ: Large scale - 500 nodes") {
-        clusterRing *ring = clusterRingNewDefault();
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
 
         /* Add 500 nodes across multiple DCs and racks */
         for (uint64_t i = 1; i <= 500; i++) {
@@ -4901,7 +4883,8 @@ static int testFuzzLargeScale(void) {
         }
 
         /* Test placement with many keys */
-        uint32_t *distribution = zcalloc(501, sizeof(uint32_t));
+        cleanerName(zfree, U32) uint32_t *distribution =
+            zcalloc(501, sizeof(uint32_t));
         const int numKeys = 50000;
 
         for (int i = 0; i < numKeys; i++) {
@@ -4940,9 +4923,6 @@ static int testFuzzLargeScale(void) {
             ERR("Max count too high: %u (expected ~100)", maxCount);
             err++;
         }
-
-        zfree(distribution);
-        clusterRingFree(ring);
     }
 
     TEST("FUZZ: Large scale - many replicas request") {
@@ -4951,7 +4931,7 @@ static int testFuzzLargeScale(void) {
             .strategyType = CLUSTER_STRATEGY_KETAMA,
             .defaultQuorum = {.replicaCount = 50},
         };
-        clusterRing *ring = clusterRingNew(&config);
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&config);
 
         /* Add 100 nodes */
         for (uint64_t i = 1; i <= 100; i++) {
@@ -4978,7 +4958,8 @@ static int testFuzzLargeScale(void) {
             }
 
             /* Verify all replicas are unique */
-            uint64_t *seen = zcalloc(replicaCount, sizeof(uint64_t));
+            cleanerName(zfree, U64) uint64_t *seen =
+                zcalloc(replicaCount, sizeof(uint64_t));
             for (size_t i = 0; i < replicaCount; i++) {
                 const clusterNode *node = clusterPlacementGetReplica(&p, i);
                 if (node) {
@@ -4994,12 +4975,9 @@ static int testFuzzLargeScale(void) {
                     seen[i] = node->id;
                 }
             }
-            zfree(seen);
 
             clusterPlacementFree(&p);
         }
-
-        clusterRingFree(ring);
     }
 
     return err;
@@ -5009,7 +4987,7 @@ static int testFuzzEdgeCases(void) {
     int err = 0;
 
     TEST("FUZZ: Single node cluster") {
-        clusterRing *ring = clusterRingNewDefault();
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
 
         clusterNodeConfig config = {
             .id = 1,
@@ -5035,12 +5013,10 @@ static int testFuzzEdgeCases(void) {
             }
             clusterPlacementFree(&p);
         }
-
-        clusterRingFree(ring);
     }
 
     TEST("FUZZ: Empty key") {
-        clusterRing *ring = clusterRingNewDefault();
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
 
         for (uint64_t i = 1; i <= 5; i++) {
             clusterNodeConfig config = {
@@ -5054,12 +5030,10 @@ static int testFuzzEdgeCases(void) {
         if (result == CLUSTER_OK) {
             clusterPlacementFree(&p);
         }
-
-        clusterRingFree(ring);
     }
 
     TEST("FUZZ: Very long key") {
-        clusterRing *ring = clusterRingNewDefault();
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
 
         for (uint64_t i = 1; i <= 5; i++) {
             clusterNodeConfig config = {
@@ -5067,7 +5041,7 @@ static int testFuzzEdgeCases(void) {
             clusterRingAddNode(ring, &config);
         }
 
-        char *longKey = zmalloc(10000);
+        cleanerName(zfree, Chars) char *longKey = zmalloc(10000);
         memset(longKey, 'x', 9999);
         longKey[9999] = '\0';
 
@@ -5079,13 +5053,10 @@ static int testFuzzEdgeCases(void) {
         } else {
             clusterPlacementFree(&p);
         }
-
-        zfree(longKey);
-        clusterRingFree(ring);
     }
 
     TEST("FUZZ: Binary key data") {
-        clusterRing *ring = clusterRingNewDefault();
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
 
         for (uint64_t i = 1; i <= 5; i++) {
             clusterNodeConfig config = {
@@ -5107,12 +5078,10 @@ static int testFuzzEdgeCases(void) {
         } else {
             clusterPlacementFree(&p);
         }
-
-        clusterRingFree(ring);
     }
 
     TEST("FUZZ: Extreme weights") {
-        clusterRing *ring = clusterRingNewDefault();
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
 
         /* Node with weight 1 */
         clusterNodeConfig config1 = {
@@ -5144,8 +5113,6 @@ static int testFuzzEdgeCases(void) {
                 counts[2]);
             err++;
         }
-
-        clusterRingFree(ring);
     }
 
     return err;
@@ -5163,7 +5130,7 @@ static int testBenchmarkLocate(void) {
             .strategyType = CLUSTER_STRATEGY_KETAMA,
             .hashSeed = 12345,
         };
-        clusterRing *ring = clusterRingNew(&config);
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&config);
 
         /* Add 100 nodes */
         const char *nodeNames[100];
@@ -5202,8 +5169,6 @@ static int testBenchmarkLocate(void) {
         printf("    Ketama: %d ops in %.2fms (%.1f ns/op, %.1fM ops/sec)\n",
                iterations, durationNs / 1000000.0, nsPerOp,
                1000000000.0 / nsPerOp / 1000000.0);
-
-        clusterRingFree(ring);
     }
 
     TEST("BENCH: Rendezvous locate throughput") {
@@ -5211,7 +5176,7 @@ static int testBenchmarkLocate(void) {
             .strategyType = CLUSTER_STRATEGY_RENDEZVOUS,
             .hashSeed = 12345,
         };
-        clusterRing *ring = clusterRingNew(&config);
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&config);
 
         /* Add 100 nodes */
         for (int i = 0; i < 100; i++) {
@@ -5242,8 +5207,6 @@ static int testBenchmarkLocate(void) {
         printf("    Rendezvous: %d ops in %.2fms (%.1f ns/op, %.1fK ops/sec)\n",
                iterations, durationNs / 1000000.0, nsPerOp,
                1000000000.0 / nsPerOp / 1000.0);
-
-        clusterRingFree(ring);
     }
 
     TEST("BENCH: Jump hash locate throughput") {
@@ -5251,7 +5214,7 @@ static int testBenchmarkLocate(void) {
             .strategyType = CLUSTER_STRATEGY_JUMP,
             .hashSeed = 12345,
         };
-        clusterRing *ring = clusterRingNew(&config);
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&config);
 
         /* Add 100 nodes */
         for (int i = 0; i < 100; i++) {
@@ -5282,8 +5245,6 @@ static int testBenchmarkLocate(void) {
         printf("    Jump: %d ops in %.2fms (%.1f ns/op, %.1fM ops/sec)\n",
                iterations, durationNs / 1000000.0, nsPerOp,
                1000000000.0 / nsPerOp / 1000000.0);
-
-        clusterRingFree(ring);
     }
 
     TEST("BENCH: Maglev locate throughput") {
@@ -5291,7 +5252,7 @@ static int testBenchmarkLocate(void) {
             .strategyType = CLUSTER_STRATEGY_MAGLEV,
             .hashSeed = 12345,
         };
-        clusterRing *ring = clusterRingNew(&config);
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&config);
 
         /* Add 100 nodes */
         for (int i = 0; i < 100; i++) {
@@ -5322,8 +5283,6 @@ static int testBenchmarkLocate(void) {
         printf("    Maglev: %d ops in %.2fms (%.1f ns/op, %.1fM ops/sec)\n",
                iterations, durationNs / 1000000.0, nsPerOp,
                1000000000.0 / nsPerOp / 1000000.0);
-
-        clusterRingFree(ring);
     }
 
     TEST("BENCH: Bulk locate vs single locate") {
@@ -5331,7 +5290,7 @@ static int testBenchmarkLocate(void) {
             .strategyType = CLUSTER_STRATEGY_KETAMA,
             .hashSeed = 12345,
         };
-        clusterRing *ring = clusterRingNew(&config);
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&config);
 
         /* Add 50 nodes */
         for (int i = 0; i < 50; i++) {
@@ -5385,8 +5344,6 @@ static int testBenchmarkLocate(void) {
         printf("    Single: %.2fms, Bulk: %.2fms (%.1fx speedup)\n",
                singleTimeMs, bulkTimeMs,
                bulkTimeMs > 0 ? singleTimeMs / bulkTimeMs : 0);
-
-        clusterRingFree(ring);
     }
 
     return err;
@@ -5401,7 +5358,7 @@ static int testOptimizationEdgeCases(void) {
 
     TEST("EDGE: Bitmap tracker with exactly 64 nodes") {
         /* Test boundary case for small bitmap (64 nodes) */
-        clusterRing *ring = clusterRingNewDefault();
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
 
         for (uint64_t i = 1; i <= 64; i++) {
             clusterNodeConfig config = {
@@ -5418,13 +5375,11 @@ static int testOptimizationEdgeCases(void) {
         } else {
             clusterPlacementFree(&p);
         }
-
-        clusterRingFree(ring);
     }
 
     TEST("EDGE: Bitmap tracker with 65 nodes (switch to medium)") {
         /* Test boundary case: transition from small to medium bitmap */
-        clusterRing *ring = clusterRingNewDefault();
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
 
         for (uint64_t i = 1; i <= 65; i++) {
             clusterNodeConfig config = {
@@ -5441,13 +5396,11 @@ static int testOptimizationEdgeCases(void) {
         } else {
             clusterPlacementFree(&p);
         }
-
-        clusterRingFree(ring);
     }
 
     TEST("EDGE: Bitmap tracker with 512 nodes") {
         /* Test boundary case for medium bitmap (512 nodes) */
-        clusterRing *ring = clusterRingNewDefault();
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
 
         for (uint64_t i = 1; i <= 512; i++) {
             clusterNodeConfig config = {
@@ -5463,13 +5416,11 @@ static int testOptimizationEdgeCases(void) {
         } else {
             clusterPlacementFree(&p);
         }
-
-        clusterRingFree(ring);
     }
 
     TEST("EDGE: Bitmap tracker with 513 nodes (large allocation)") {
         /* Test boundary case: transition to heap-allocated bitmap */
-        clusterRing *ring = clusterRingNewDefault();
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
 
         for (uint64_t i = 1; i <= 513; i++) {
             clusterNodeConfig config = {
@@ -5485,8 +5436,6 @@ static int testOptimizationEdgeCases(void) {
         } else {
             clusterPlacementFree(&p);
         }
-
-        clusterRingFree(ring);
     }
 
     TEST("EDGE: Heap top-k with k > n (Rendezvous)") {
@@ -5495,7 +5444,7 @@ static int testOptimizationEdgeCases(void) {
             .strategyType = CLUSTER_STRATEGY_RENDEZVOUS,
             .hashSeed = 12345,
         };
-        clusterRing *ring = clusterRingNew(&config);
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&config);
 
         /* Add only 3 nodes */
         for (uint64_t i = 1; i <= 3; i++) {
@@ -5511,14 +5460,12 @@ static int testOptimizationEdgeCases(void) {
             ERR("Expected 3 nodes but got %u", count);
             err++;
         }
-
-        clusterRingFree(ring);
     }
 
     TEST("EDGE: Direct node pointer after vnode add") {
         /* Verify nodePtr is correctly set in vnodes */
         clusterRingConfig config = {.strategyType = CLUSTER_STRATEGY_KETAMA};
-        clusterRing *ring = clusterRingNew(&config);
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&config);
 
         clusterNodeConfig nodeConfig = {
             .id = 42, .weight = 100, .initialState = CLUSTER_NODE_UP};
@@ -5541,13 +5488,11 @@ static int testOptimizationEdgeCases(void) {
             ERRR("Vnode nodePtr not correctly set");
             err++;
         }
-
-        clusterRingFree(ring);
     }
 
     TEST("EDGE: Prefetch with single node ring") {
         /* Edge case: prefetch shouldn't crash with minimal data */
-        clusterRing *ring = clusterRingNewDefault();
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
 
         clusterNodeConfig config = {
             .id = 1, .weight = 100, .initialState = CLUSTER_NODE_UP};
@@ -5561,8 +5506,6 @@ static int testOptimizationEdgeCases(void) {
             clusterRingLocate(ring, key, strlen(key), &p);
             clusterPlacementFree(&p);
         }
-
-        clusterRingFree(ring);
     }
 
     TEST("EDGE: Maglev prefetch at table boundary") {
@@ -5571,7 +5514,7 @@ static int testOptimizationEdgeCases(void) {
             .strategyType = CLUSTER_STRATEGY_MAGLEV,
             .hashSeed = 99999, /* Seed to likely hit near-end indices */
         };
-        clusterRing *ring = clusterRingNew(&config);
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&config);
 
         for (uint64_t i = 1; i <= 10; i++) {
             clusterNodeConfig nodeConfig = {
@@ -5587,12 +5530,10 @@ static int testOptimizationEdgeCases(void) {
             ERRR("Maglev boundary test returned no nodes");
             err++;
         }
-
-        clusterRingFree(ring);
     }
 
     TEST("EDGE: Bulk locate with mixed key types") {
-        clusterRing *ring = clusterRingNewDefault();
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
 
         for (uint64_t i = 1; i <= 10; i++) {
             clusterNodeConfig config = {
@@ -5631,8 +5572,6 @@ static int testOptimizationEdgeCases(void) {
         for (int i = 0; i < 4; i++) {
             clusterPlacementFree(&placements[i]);
         }
-
-        clusterRingFree(ring);
     }
 
     TEST("EDGE: Very long key (>248 bytes)") {
@@ -5640,7 +5579,7 @@ static int testOptimizationEdgeCases(void) {
         clusterRingConfig config = {
             .strategyType = CLUSTER_STRATEGY_RENDEZVOUS,
         };
-        clusterRing *ring = clusterRingNew(&config);
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&config);
 
         for (uint64_t i = 1; i <= 5; i++) {
             clusterNodeConfig nodeConfig = {
@@ -5661,8 +5600,6 @@ static int testOptimizationEdgeCases(void) {
         } else {
             clusterPlacementFree(&p);
         }
-
-        clusterRingFree(ring);
     }
 
     return err;
@@ -5703,7 +5640,7 @@ int clusterRingTest(int argc, char *argv[]) {
             .name = "persistops-roundtrip",
             .strategyType = CLUSTER_STRATEGY_KETAMA,
         };
-        clusterRing *ring = clusterRingNew(&config);
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&config);
         for (uint32_t i = 1u; i <= 5u; i++) {
             clusterNodeConfig nc = {
                 .id = (uint64_t)i,
@@ -5735,7 +5672,6 @@ int clusterRingTest(int argc, char *argv[]) {
         }
         persistOpsClusterRing.free(restored);
         zfree(snap);
-        clusterRingFree(ring);
     }
 
     /* persistOps newEmpty must produce a fresh, empty ring suitable for

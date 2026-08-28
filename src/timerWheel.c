@@ -8,6 +8,7 @@
 #include "timerWheel.h"
 #include "timerWheelInternal.h"
 
+#include "cleaner.h"
 #include "databox.h"
 #include "flex.h"
 #include "intset.h"
@@ -15,6 +16,9 @@
 #include "timeUtil.h"
 
 #include <string.h>
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleaner(timerWheel *, timerWheelFree);
 
 /* ====================================================================
  * Wheel Configuration
@@ -273,6 +277,7 @@ static flexEntry *readTimerEntry(const flex *f, flexEntry *fe,
 /* Insert a timer entry into a slot's flex */
 static void insertTimerIntoSlot(flex **slot, const timerWheelEntry *e) {
     if (*slot == NULL) {
+        /* @own: caller; free=flexFree */
         *slot = flexNew();
     }
 
@@ -393,23 +398,29 @@ bool timerWheelInit(timerWheel *tw) {
     memset(tw->wheel3, 0, sizeof(tw->wheel3));
 
     /* Initialize overflow multimap for very long timers */
+    /* @own: container; free=multimapFree */
     tw->overflow = multimapNew(ELEMENTS_PER_TIMER);
     if (!tw->overflow) {
         return false;
     }
 
     /* Initialize cancelled timer set */
+    /* @own: container; free=intsetFree */
     tw->cancelledTimers = intsetNew();
     if (!tw->cancelledTimers) {
         multimapFree(tw->overflow);
+        tw->overflow = NULL;
         return false;
     }
 
     /* Initialize pending timers flex */
+    /* @own: container; free=flexFree */
     tw->pendingTimers = flexNew();
     if (!tw->pendingTimers) {
         multimapFree(tw->overflow);
+        tw->overflow = NULL;
         intsetFree(tw->cancelledTimers);
+        tw->cancelledTimers = NULL;
         return false;
     }
 
@@ -459,17 +470,21 @@ void timerWheelDeinit(timerWheel *tw) {
 }
 
 timerWheel *timerWheelNew(void) {
-    timerWheel *tw = zcalloc(1, sizeof(*tw));
+    /* timerWheelInit resets its own partial state on failure (freed
+     * members are re-NULLed), so timerWheelFree via the cleaner is
+     * safe on every exit below. */
+    cleaner(timerWheelFree) timerWheel *tw = zcalloc(1, sizeof(*tw));
     if (!tw) {
         return NULL;
     }
 
     if (!timerWheelInit(tw)) {
-        zfree(tw);
         return NULL;
     }
 
-    return tw;
+    timerWheel *out = tw;
+    tw = NULL;
+    return out;
 }
 
 void timerWheelFree(timerWheel *tw) {
@@ -574,6 +589,7 @@ bool timerWheelStopAll(timerWheel *tw) {
     tw->cancelledUpTo = tw->nextTimerId;
     if (intsetCount(tw->cancelledTimers) > 0) {
         intsetFree(tw->cancelledTimers);
+        /* @own: container; free=intsetFree */
         tw->cancelledTimers = intsetNew();
     }
     tw->cancelLowest = 0;
@@ -682,6 +698,7 @@ bool timerWheelReconcileCancellations(timerWheel *tw) {
         return true;
     }
 
+    /* @own: container; free=intsetFree */
     intset *liveSet = intsetNew();
     const size_t live = countLiveCancellations(tw, &liveSet);
 
@@ -946,6 +963,7 @@ static void processPending(timerWheel *tw) {
     }
 
     flex *pending = tw->pendingTimers;
+    /* @own: container; free=flexFree */
     tw->pendingTimers = flexNew();
 
     const timerWheelAdjustedUs now = adjustedNowUs(tw);
@@ -1039,6 +1057,7 @@ void timerWheelProcessTimerEvents(timerWheel *tw) {
          * (a cancel of an already-fired id) - purge them */
         if (intsetCount(tw->cancelledTimers) > 0) {
             intsetFree(tw->cancelledTimers);
+            /* @own: container; free=intsetFree */
             tw->cancelledTimers = intsetNew();
             tw->cancelLowest = 0;
             tw->cancelHighest = 0;

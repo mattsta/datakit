@@ -20,6 +20,7 @@
 
 #include "hyperloglog.h"
 
+#include "cleaner.h"
 #include "datakit.h"
 #include "mdsc.h"
 
@@ -52,6 +53,9 @@
 #define HLL_USE_NEON 1
 #include <arm_neon.h>
 #endif
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleaner(mdsc *, mdscfree);
 
 /* 'hyperloglog' is actually an mdsc, but we cast the
  * start of data in the mdsc to 'hyperloglogHeader'
@@ -600,7 +604,7 @@ DK_STATIC void hyperloglogDenseRegisterHistogram(uint8_t *registers,
 DK_STATIC bool hyperloglogSparseToDense(hyperloglog **inHll) {
     hyperloglog *h = *inHll;
     mdsc *sparse = toMDSC(h);
-    mdsc *dense;
+    cleaner(mdscfree) mdsc *dense = NULL;
     hyperloglogHeader *hdr;
     hyperloglogHeader *oldhdr = h;
     int32_t idx = 0;
@@ -656,7 +660,6 @@ DK_STATIC bool hyperloglogSparseToDense(hyperloglog **inHll) {
     /* If the sparse representation was valid, we expect to find idx
      * set to HLL_REGISTERS. */
     if (idx != HLL_REGISTERS) {
-        mdscfree(dense);
         assert(NULL && "Conversion error?");
         return false;
     }
@@ -664,6 +667,7 @@ DK_STATIC bool hyperloglogSparseToDense(hyperloglog **inHll) {
     /* Free original representation and set the new one. */
     hyperloglogFree(*inHll);
     *inHll = toHLL(dense);
+    dense = NULL;
 
     return true;
 }
@@ -1381,6 +1385,7 @@ hyperloglog *hyperloglogNew(void) {
      * needed to represent all the registers. */
     int_fast32_t aux = HLL_REGISTERS;
 
+    /* @own: caller; free=hyperloglogFree */
     const mdsc *s = mdscnewlen(NULL, sparselen);
     hyperloglog *restrict h = toHLL(s);
 
@@ -1405,10 +1410,12 @@ hyperloglog *hyperloglogNew(void) {
 }
 
 hyperloglog *hyperloglogNewSparse(void) {
+    /* @own: caller; free=hyperloglogFree */
     return hyperloglogNew();
 }
 
 hyperloglog *hyperloglogNewDense(void) {
+    /* @own: caller; free=hyperloglogFree */
     hyperloglog *dense = toHLL(mdscnewlen(NULL, HLL_DENSE_SIZE));
     dense->encoding = HLL_DENSE;
     return dense;
@@ -1424,6 +1431,7 @@ hyperloglog *hyperloglogCopy(const hyperloglog *src) {
     /* "raw" HLLs are static allocations, not MDSC strings! */
     assert(src->encoding != HLL_RAW);
 
+    /* @own: caller; free=hyperloglogFree */
     return toHLL(mdscnewlen(toMDSC(src), mdsclen(toMDSC(src))));
 }
 
@@ -1468,6 +1476,7 @@ int pfadd(hyperloglog **hh, ...) {
     uint_fast32_t updated = 0;
 
     if (!h) {
+        /* @own: caller; free=hyperloglogFree */
         h = hyperloglogNew();
     }
 
@@ -1687,8 +1696,13 @@ hyperloglog *pfmerge(hyperloglog *h, ...) {
 /* ========================== Testing / Debugging  ========================== */
 
 #ifdef DATAKIT_TEST
+#include "cleaner.h"
 #include "datakit.h"
 #include "timeUtil.h"
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleanerName(uint8_t *, zfree, U8);
+defcleaner(hyperloglog *, hyperloglogFree);
 
 /* PFSELFTEST
  * This command performs a self-test of the HLL registers implementation.
@@ -1705,11 +1719,11 @@ int hyperloglogTest(int argc, char *argv[]) {
     printf("Testing (using seed: %" PRIu32 ") for %" PRId32 " cycles\n",
            (uint32_t)shash, (int32_t)HLL_TEST_CYCLES);
 
-    mdsc *bitcounters = mdscnewlen(NULL, HLL_DENSE_SIZE);
+    cleaner(mdscfree) mdsc *bitcounters = mdscnewlen(NULL, HLL_DENSE_SIZE);
     hyperloglogHeader *hdr = (hyperloglogHeader *)bitcounters, *hdr2;
     uint8_t bytecounters[HLL_REGISTERS] = {0};
     int32_t errors = 0;
-    hyperloglog *h = NULL;
+    cleaner(hyperloglogFree) hyperloglog *h = NULL;
 
     /* Test 1: access registers.
      * The test is conceived to test that the different counters of our data
@@ -1822,10 +1836,6 @@ int hyperloglogTest(int argc, char *argv[]) {
     printf("ALL TESTS PASSED!\n");
 
 cleanup:
-    mdscfree(bitcounters);
-    if (h) {
-        hyperloglogFree(h);
-    }
     if (errors) {
         printf("TESTS FAILED!  Error count: %d\n", errors);
     }
@@ -1928,7 +1938,8 @@ cleanup:
         const int histoIterations = 10000;
 
         /* Create test registers: mix of zeros and values */
-        uint8_t *testRegisters = zcalloc(HLL_REGISTERS, sizeof(uint8_t));
+        cleanerName(zfree, U8) uint8_t *testRegisters =
+            zcalloc(HLL_REGISTERS, sizeof(uint8_t));
 
         /* Seed with some non-zero values (simulating a partially filled HLL)
          * Use values 1 to HLL_Q (50) which are valid for the histogram array */
@@ -1988,8 +1999,6 @@ cleanup:
         printf("  SIMD: %.1f ns/histogram, Scalar: %.1f ns/histogram\n",
                nsPerHistoSIMD, nsPerHistoScalar);
         printf("  Speedup: %.2fx\n", speedup);
-
-        zfree(testRegisters);
     }
 
     /* pfadd contract: every vararg element is added, duplicates are
@@ -2054,6 +2063,7 @@ void pfdebugCommand(char *cmd, hyperloglogHeader *hdr) {
 
         if (isSparse(hdr)) {
             if (hyperloglogSparseToDense(o) == false) {
+                /* @own: container; free=mdscfree */
                 addReplymdsc(c, mdscnew(invalidHllErr));
                 return;
             }
@@ -2076,7 +2086,7 @@ void pfdebugCommand(char *cmd, hyperloglogHeader *hdr) {
         }
 
         uint8_t *p = o->ptr, *end = p + mdsclen(o->ptr);
-        mdsc *decoded = mdscempty();
+        cleaner(mdscfree) mdsc *decoded = mdscempty();
 
         if (hdr->encoding != HLL_SPARSE) {
             addReplyError(c, "HLL encoding is not sparse");
@@ -2104,7 +2114,6 @@ void pfdebugCommand(char *cmd, hyperloglogHeader *hdr) {
         }
         decoded = mdsctrim(decoded, " ");
         addReplyBulkCBuffer(c, decoded, mdsclen(decoded));
-        mdscfree(decoded);
     }
     /* PFDEBUG ENCODING <key> */
     else if (!strcasecmp(cmd, "encoding")) {
@@ -2124,6 +2133,7 @@ void pfdebugCommand(char *cmd, hyperloglogHeader *hdr) {
 
         if (isSparse(hdr)) {
             if (hyperloglogSparseToDense(o) == false) {
+                /* @own: container; free=mdscfree */
                 addReplymdsc(c, mdscnew(invalidHllErr));
                 return;
             }

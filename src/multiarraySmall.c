@@ -2,9 +2,11 @@
 #include "multiarraySmallInternal.h"
 
 multiarraySmall *multiarraySmallNew(uint16_t len, uint16_t rowMax) {
+    /* @own: caller; free=multiarraySmallFree */
     multiarraySmall *mar = zcalloc(1, sizeof(*mar));
     mar->len = len;
     mar->rowMax = rowMax;
+    /* @own: container; free=multiarraySmallFree */
     mar->data = zcalloc(1, len);
     return mar;
 }
@@ -24,6 +26,7 @@ void multiarraySmallInsert(multiarraySmall *mar, uint16_t idx, void *s) {
      * one past the end (append position) */
     assert(idx <= mar->count);
 
+    /* @own: container; free=multiarraySmallFree */
     mar->data = zrealloc(mar->data, _mo(mar->count + 1));
 
     if (idx < mar->count) {
@@ -56,6 +59,7 @@ void multiarraySmallDelete(multiarraySmall *mar, uint16_t idx) {
         memmove(mar->data + _mo(idx), mar->data + _mo(idx + 1), _mo(remaining));
     }
 
+    /* @own: container; free=multiarraySmallFree */
     mar->data = zrealloc(mar->data, _mo(mar->count - 1));
     mar->count--;
 }

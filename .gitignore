@@ -11,7 +11,9 @@ notes/
 # Per-developer prettier config (references local-only directories).
 .prettierignore
 
-src/old
+/src/old
+/src/Testing
+/Testing
 CMakeFiles
 
 

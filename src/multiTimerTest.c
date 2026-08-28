@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #ifdef DATAKIT_TEST
+#include "cleaner.h"
 #include "ctest.h"
 
 #define DOUBLE_NEWLINE 1
@@ -23,6 +24,10 @@ typedef struct testCallbackState {
     multiTimerId lastId;
     bool shouldReschedule;
 } testCallbackState;
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleanerName(testCallbackState *, zfree, States);
+defcleaner(multiTimer *, multiTimerFree);
 
 /* Simple callback that counts invocations */
 static bool testCountingCallback(multiTimer *t, multiTimerId id,
@@ -118,11 +123,9 @@ int multiTimerTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("multiTimer: create and free") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         if (!t) {
             ERRR("Failed to create multiTimer");
-        } else {
-            multiTimerFree(t);
         }
     }
 
@@ -147,7 +150,7 @@ int multiTimerTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("multiTimer: register single timer") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState state = {0};
 
         multiTimerId id =
@@ -159,12 +162,10 @@ int multiTimerTest(int argc, char *argv[]) {
         if (multiTimerCount(t) != 1) {
             ERR("Expected 1 timer, got %zu", multiTimerCount(t));
         }
-
-        multiTimerFree(t);
     }
 
     TEST("multiTimer: register multiple timers") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState state = {0};
 
         multiTimerId ids[5];
@@ -183,8 +184,6 @@ int multiTimerTest(int argc, char *argv[]) {
         if (multiTimerCount(t) != 5) {
             ERR("Expected 5 timers, got %zu", multiTimerCount(t));
         }
-
-        multiTimerFree(t);
     }
 
     /* ================================================================
@@ -192,7 +191,7 @@ int multiTimerTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("multiTimer: timer fires after delay") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = false};
 
         /* Register timer to fire in 5ms */
@@ -217,12 +216,10 @@ int multiTimerTest(int argc, char *argv[]) {
         if (multiTimerCount(t) != 0) {
             ERR("Timer should be removed, count=%zu", multiTimerCount(t));
         }
-
-        multiTimerFree(t);
     }
 
     TEST("multiTimer: repeating timer") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = true};
 
         /* Register timer to fire every 5ms, starting in 5ms */
@@ -243,12 +240,10 @@ int multiTimerTest(int argc, char *argv[]) {
         if (multiTimerCount(t) == 0) {
             ERRR("Repeating timer was incorrectly removed");
         }
-
-        multiTimerFree(t);
     }
 
     TEST("multiTimer: timer ordering (multiple timers fire in order)") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState states[3] = {{0}, {0}, {0}};
 
         /* Register timers in reverse order of when they should fire */
@@ -277,8 +272,6 @@ int multiTimerTest(int argc, char *argv[]) {
                 " (expected 2, 3, 1)",
                 states[0].lastId, states[1].lastId, states[2].lastId);
         }
-
-        multiTimerFree(t);
     }
 
     /* ================================================================
@@ -286,7 +279,7 @@ int multiTimerTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("multiTimer: unregister timer before it fires") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = false};
 
         multiTimerId id =
@@ -303,12 +296,10 @@ int multiTimerTest(int argc, char *argv[]) {
         if (state.callCount != 0) {
             ERR("Unregistered timer fired, callCount=%d", state.callCount);
         }
-
-        multiTimerFree(t);
     }
 
     TEST("multiTimer: unregister multiple timers") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState states[5] = {{0}, {0}, {0}, {0}, {0}};
 
         multiTimerId ids[5];
@@ -338,12 +329,10 @@ int multiTimerTest(int argc, char *argv[]) {
             ERR("Registered timers did not fire: %d, %d", states[1].callCount,
                 states[3].callCount);
         }
-
-        multiTimerFree(t);
     }
 
     TEST("multiTimer: stopAll") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState states[10];
         memset(states, 0, sizeof(states));
 
@@ -368,8 +357,6 @@ int multiTimerTest(int argc, char *argv[]) {
         if (totalFired != 0) {
             ERR("stopAll failed, %d timers fired", totalFired);
         }
-
-        multiTimerFree(t);
     }
 
     /* ================================================================
@@ -377,7 +364,7 @@ int multiTimerTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("multiTimer: register timer from within callback") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = false};
 
         /* Register timer that creates another timer */
@@ -403,12 +390,10 @@ int multiTimerTest(int argc, char *argv[]) {
         if (state.callCount != 2) {
             ERR("Nested timer did not fire, callCount=%d", state.callCount);
         }
-
-        multiTimerFree(t);
     }
 
     TEST("multiTimer: self-unregister from callback") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = true};
 
         /* Register repeating timer that unregisters itself */
@@ -429,8 +414,6 @@ int multiTimerTest(int argc, char *argv[]) {
             ERR("Self-unregistered timer fired again, callCount=%d",
                 state.callCount);
         }
-
-        multiTimerFree(t);
     }
 
     /* ================================================================
@@ -438,18 +421,16 @@ int multiTimerTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("multiTimer: nextTimerEventStartUs with no timers") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
 
         multiTimerSystemMonotonicUs next = multiTimerNextTimerEventStartUs(t);
         if (next != 0) {
             ERR("Expected 0 for empty timer, got %" PRId64, next);
         }
-
-        multiTimerFree(t);
     }
 
     TEST("multiTimer: nextTimerEventStartUs returns correct time") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState state = {0};
 
         uint64_t delayUs = 100000; /* 100ms */
@@ -467,12 +448,10 @@ int multiTimerTest(int argc, char *argv[]) {
         if (diff < -5000 || diff > 5000) {
             ERR("nextTimerEventStartUs off by %" PRId64 "us", diff);
         }
-
-        multiTimerFree(t);
     }
 
     TEST("multiTimer: nextTimerEventOffsetFromNowUs") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState state = {0};
 
         uint64_t delayUs = 50000; /* 50ms */
@@ -487,8 +466,6 @@ int multiTimerTest(int argc, char *argv[]) {
                 ", expected ~%" PRIu64,
                 offset, delayUs);
         }
-
-        multiTimerFree(t);
     }
 
     /* ================================================================
@@ -532,12 +509,12 @@ int multiTimerTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("multiTimer: many timers") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         const int32_t numTimers = 1000;
         int32_t totalCallCount = 0;
 
         /* Use array of state to count total firings */
-        testCallbackState *states =
+        cleanerName(zfree, States) testCallbackState *states =
             zcalloc(numTimers, sizeof(testCallbackState));
 
         for (int32_t i = 0; i < numTimers; i++) {
@@ -562,13 +539,10 @@ int multiTimerTest(int argc, char *argv[]) {
         if (totalCallCount != numTimers) {
             ERR("Expected %d firings, got %d", numTimers, totalCallCount);
         }
-
-        zfree(states);
-        multiTimerFree(t);
     }
 
     TEST("multiTimer: timer with zero delay fires immediately") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = false};
 
         /* Register with 0 delay */
@@ -580,24 +554,20 @@ int multiTimerTest(int argc, char *argv[]) {
         if (state.callCount != 1) {
             ERR("Zero-delay timer did not fire, callCount=%d", state.callCount);
         }
-
-        multiTimerFree(t);
     }
 
     TEST("multiTimer: unregister non-existent timer (no crash)") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
 
         /* Unregister timer ID that doesn't exist */
         multiTimerUnregister(t, 9999);
 
         /* Should not crash, process should work */
         multiTimerProcessTimerEvents(t);
-
-        multiTimerFree(t);
     }
 
     TEST("multiTimer: callback returns false stops repeating") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = false};
 
         /* Register repeating timer, but callback returns false */
@@ -618,8 +588,6 @@ int multiTimerTest(int argc, char *argv[]) {
             ERR("Timer repeated despite returning false, callCount=%d",
                 state.callCount);
         }
-
-        multiTimerFree(t);
     }
 
     /* ================================================================
@@ -648,7 +616,7 @@ int multiTimerTest(int argc, char *argv[]) {
     }
 
     TEST("multiTimer: offset with no timers returns 0") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
 
         multiTimerUs offset = multiTimerNextTimerEventOffsetFromNowUs(t);
         if (offset != 0) {
@@ -656,12 +624,10 @@ int multiTimerTest(int argc, char *argv[]) {
                 " (event loops would spin on a huge negative)",
                 offset);
         }
-
-        multiTimerFree(t);
     }
 
     TEST("multiTimer: unregister validates ids") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState state = {0};
 
         if (multiTimerUnregister(t, 0)) {
@@ -694,12 +660,10 @@ int multiTimerTest(int argc, char *argv[]) {
             ERR("Double unregister duplicated stop entry, stopPending=%zu",
                 stats.stopPending);
         }
-
-        multiTimerFree(t);
     }
 
     TEST("multiTimer: unregister after fire keeps count sane") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = false};
 
         multiTimerId id =
@@ -726,12 +690,10 @@ int multiTimerTest(int argc, char *argv[]) {
         if (multiTimerCount(t) != 1) {
             ERR("Expected 1 timer, got %zu", multiTimerCount(t));
         }
-
-        multiTimerFree(t);
     }
 
     TEST("multiTimer: unregister of fired id is exact with live timers") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = false};
 
         multiTimerId a =
@@ -760,12 +722,10 @@ int multiTimerTest(int argc, char *argv[]) {
             ERR("Fired-id unregister planted a stop entry, stopPending=%zu",
                 stats.stopPending);
         }
-
-        multiTimerFree(t);
     }
 
     TEST("multiTimer: mid-callback unregister of fired id reconciles") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = false};
 
         multiTimerId a =
@@ -800,12 +760,10 @@ int multiTimerTest(int argc, char *argv[]) {
             ERR("Stale mid-callback stop entry lingered, stopPending=%zu",
                 stats.stopPending);
         }
-
-        multiTimerFree(t);
     }
 
     TEST("multiTimer: mid-callback unregister of live timer still stops it") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState victim = {.callCount = 0, .shouldReschedule = false};
 
         /* Victim fires later than the unregistering callback */
@@ -838,12 +796,10 @@ int multiTimerTest(int argc, char *argv[]) {
         if (multiTimerCount(t) != 0) {
             ERR("Expected empty timer set, got %zu", multiTimerCount(t));
         }
-
-        multiTimerFree(t);
     }
 
     TEST("multiTimer: self-unregister without repeat leaves no stop entry") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState state = {.callCount = 0};
 
         multiTimerRegister(t, 1000, 0, testSelfUnregisterNoRepeatCallback,
@@ -860,12 +816,10 @@ int multiTimerTest(int argc, char *argv[]) {
             ERR("Self-unregister leaked a stop entry, stopPending=%zu",
                 stats.stopPending);
         }
-
-        multiTimerFree(t);
     }
 
     TEST("multiTimer: stopAll then register new timers") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState old = {.callCount = 0};
         testCallbackState fresh = {.callCount = 0};
 
@@ -892,12 +846,10 @@ int multiTimerTest(int argc, char *argv[]) {
         if (fresh.callCount != 1) {
             ERR("New timer did not fire, callCount=%d", fresh.callCount);
         }
-
-        multiTimerFree(t);
     }
 
     TEST("multiTimer: stopAll from within callback") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState stopper = {.callCount = 0};
         testCallbackState other = {.callCount = 0, .shouldReschedule = true};
         testCallbackState fresh = {.callCount = 0};
@@ -932,12 +884,10 @@ int multiTimerTest(int argc, char *argv[]) {
             ERR("Post-StopAll timer did not fire, callCount=%d",
                 fresh.callCount);
         }
-
-        multiTimerFree(t);
     }
 
     TEST("multiTimer: process from within callback is a safe no-op") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState reentrant = {.callCount = 0};
         testCallbackState later = {.callCount = 0};
 
@@ -955,12 +905,10 @@ int multiTimerTest(int argc, char *argv[]) {
         if (later.callCount != 1) {
             ERR("Second timer fired %d times, expected 1", later.callCount);
         }
-
-        multiTimerFree(t);
     }
 
     TEST("multiTimer: count includes callback-registered timers") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = false};
 
         multiTimerRegister(t, 1000, 0, testNestedTimerCallback, &state);
@@ -972,12 +920,10 @@ int multiTimerTest(int argc, char *argv[]) {
         if (multiTimerCount(t) != 1) {
             ERR("Expected 1 timer (nested), got %zu", multiTimerCount(t));
         }
-
-        multiTimerFree(t);
     }
 
     TEST("multiTimer: PERF stopAll at scale is O(1)") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = false};
         const size_t numTimers = 50000;
 
@@ -1011,8 +957,6 @@ int multiTimerTest(int argc, char *argv[]) {
             ERR("StopAll materialized stop entries, stopPending=%zu",
                 stats.stopPending);
         }
-
-        multiTimerFree(t);
     }
 
     /* ================================================================
@@ -1020,7 +964,7 @@ int multiTimerTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("multiTimer: registration performance") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState state = {0};
         const size_t numOps = 100000;
 
@@ -1033,12 +977,10 @@ int multiTimerTest(int argc, char *argv[]) {
         PERF_TIMERS_FINISH_PRINT_RESULTS(numOps, "timer registrations");
 
         printf("    Registered %zu timers\n", multiTimerCount(t));
-
-        multiTimerFree(t);
     }
 
     TEST("multiTimer: unregistration performance") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState state = {0};
         const size_t numOps = 10000;
 
@@ -1055,12 +997,10 @@ int multiTimerTest(int argc, char *argv[]) {
         }
 
         PERF_TIMERS_FINISH_PRINT_RESULTS(numOps, "timer unregistrations");
-
-        multiTimerFree(t);
     }
 
     TEST("multiTimer: nextTimerEvent lookup performance") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState state = {0};
         const size_t numTimers = 10000;
         const size_t numLookups = 100000;
@@ -1080,16 +1020,14 @@ int multiTimerTest(int argc, char *argv[]) {
         (void)next;
 
         PERF_TIMERS_FINISH_PRINT_RESULTS(numLookups, "nextTimerEvent lookups");
-
-        multiTimerFree(t);
     }
 
     TEST("multiTimer: process performance with many expired timers") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         const size_t numTimers = 10000;
         int32_t totalFired = 0;
 
-        testCallbackState *states =
+        cleanerName(zfree, States) testCallbackState *states =
             zcalloc(numTimers, sizeof(testCallbackState));
 
         /* Register many timers that expire immediately */
@@ -1111,9 +1049,6 @@ int multiTimerTest(int argc, char *argv[]) {
         if ((size_t)totalFired != numTimers) {
             ERR("Expected %zu firings, got %d", numTimers, totalFired);
         }
-
-        zfree(states);
-        multiTimerFree(t);
     }
 
     /* ================================================================
@@ -1121,7 +1056,7 @@ int multiTimerTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("multiTimer: timersInclusiveOfTimerRuntime mode") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         t->timersInclusiveOfTimerRuntime = true;
 
         testCallbackState state = {.callCount = 0, .shouldReschedule = true};
@@ -1143,8 +1078,6 @@ int multiTimerTest(int argc, char *argv[]) {
             ERR("Expected at least 2 firings in inclusive mode, got %d",
                 state.callCount);
         }
-
-        multiTimerFree(t);
     }
 
     /* ================================================================
@@ -1152,7 +1085,7 @@ int multiTimerTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("multiTimer: stopLowest/stopHighest tracking") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = false};
 
         /* Register 10 timers */
@@ -1181,12 +1114,10 @@ int multiTimerTest(int argc, char *argv[]) {
         if (state.callCount != 7) {
             ERR("Expected 7 firings, got %d", state.callCount);
         }
-
-        multiTimerFree(t);
     }
 
     TEST("multiTimer: stopEvents bounds reset after all processed") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = false};
 
         /* Register 3 timers */
@@ -1217,8 +1148,6 @@ int multiTimerTest(int argc, char *argv[]) {
             ERR("Timers fired despite being unregistered, count=%d",
                 state.callCount);
         }
-
-        multiTimerFree(t);
     }
 
     /* ================================================================
@@ -1226,7 +1155,7 @@ int multiTimerTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("multiTimer: high-scale million timer registration") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState state = {0};
         const size_t numTimers = 1000000;
 
@@ -1260,16 +1189,14 @@ int multiTimerTest(int argc, char *argv[]) {
         (void)next;
 
         PERF_TIMERS_FINISH_PRINT_RESULTS(100000, "lookups with 1M timers");
-
-        multiTimerFree(t);
     }
 
     TEST("multiTimer: high-scale batch expiration") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         const size_t numTimers = 100000;
         int32_t totalFired = 0;
 
-        testCallbackState *states =
+        cleanerName(zfree, States) testCallbackState *states =
             zcalloc(numTimers, sizeof(testCallbackState));
 
         /* All timers expire immediately */
@@ -1295,13 +1222,10 @@ int multiTimerTest(int argc, char *argv[]) {
         if ((size_t)totalFired != numTimers) {
             ERR("Expected %zu firings, got %d", numTimers, totalFired);
         }
-
-        zfree(states);
-        multiTimerFree(t);
     }
 
     TEST("multiTimer: high-scale mixed operations simulation") {
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = true};
         const size_t warmupTimers = 100000;
         const size_t ops = 50000;
@@ -1340,15 +1264,13 @@ int multiTimerTest(int argc, char *argv[]) {
         PERF_TIMERS_FINISH_PRINT_RESULTS(ops, "mixed operations");
 
         printf("    Final timer count: %zu\n", multiTimerCount(t));
-
-        multiTimerFree(t);
     }
 
     TEST("multiTimer: memory efficiency analysis") {
         const size_t numTimers = 100000;
         testCallbackState state = {0};
 
-        multiTimer *t = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
 
         /* Measure memory before */
         size_t memBefore = multimapBytes(t->scheduled);
@@ -1373,8 +1295,6 @@ int multiTimerTest(int argc, char *argv[]) {
             ERR("Memory usage too high: %.2f bytes/timer (expected < 150)",
                 bytesPerTimer);
         }
-
-        multiTimerFree(t);
     }
 
     TEST_FINAL_RESULT;

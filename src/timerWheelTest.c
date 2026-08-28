@@ -14,6 +14,7 @@
 #include <time.h>
 
 #ifdef DATAKIT_TEST
+#include "cleaner.h"
 #include "ctest.h"
 
 #define DOUBLE_NEWLINE 1
@@ -70,6 +71,11 @@ typedef struct testCallbackState {
     timerWheelId lastId;
     bool shouldReschedule;
 } testCallbackState;
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleanerName(testCallbackState *, zfree, States);
+defcleaner(timerWheel *, timerWheelFree);
+defcleaner(multiTimer *, multiTimerFree);
 
 static bool testCountingCallback(timerWheel *tw, timerWheelId id,
                                  void *clientData) {
@@ -162,11 +168,9 @@ int timerWheelTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("timerWheel: create and free") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         if (!tw) {
             ERRR("Failed to create timerWheel");
-        } else {
-            timerWheelFree(tw);
         }
     }
 
@@ -179,7 +183,7 @@ int timerWheelTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("timerWheel: register single timer") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {0};
 
         timerWheelId id =
@@ -191,12 +195,10 @@ int timerWheelTest(int argc, char *argv[]) {
         if (timerWheelCount(tw) != 1) {
             ERR("Expected 1 timer, got %zu", timerWheelCount(tw));
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("timerWheel: register multiple timers") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {0};
 
         timerWheelId ids[5];
@@ -214,8 +216,6 @@ int timerWheelTest(int argc, char *argv[]) {
         if (timerWheelCount(tw) != 5) {
             ERR("Expected 5 timers, got %zu", timerWheelCount(tw));
         }
-
-        timerWheelFree(tw);
     }
 
     /* ================================================================
@@ -223,7 +223,7 @@ int timerWheelTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("timerWheel: timer fires after delay") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = false};
 
         timerWheelRegister(tw, 5000, 0, testCountingCallback, &state);
@@ -243,12 +243,10 @@ int timerWheelTest(int argc, char *argv[]) {
         if (timerWheelCount(tw) != 0) {
             ERR("Timer should be removed, count=%zu", timerWheelCount(tw));
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("timerWheel: repeating timer") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = true};
 
         timerWheelRegister(tw, 5000, 5000, testCountingCallback, &state);
@@ -265,12 +263,10 @@ int timerWheelTest(int argc, char *argv[]) {
         if (timerWheelCount(tw) == 0) {
             ERRR("Repeating timer was incorrectly removed");
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("timerWheel: timer ordering") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState states[3] = {{0}, {0}, {0}};
 
         timerWheelRegister(tw, 15000, 0, testCountingCallback, &states[2]);
@@ -284,8 +280,6 @@ int timerWheelTest(int argc, char *argv[]) {
             ERR("Not all timers fired: %d, %d, %d", states[0].callCount,
                 states[1].callCount, states[2].callCount);
         }
-
-        timerWheelFree(tw);
     }
 
     /* ================================================================
@@ -293,7 +287,7 @@ int timerWheelTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("timerWheel: unregister timer before fire") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = false};
 
         timerWheelId id =
@@ -305,12 +299,10 @@ int timerWheelTest(int argc, char *argv[]) {
         if (state.callCount != 0) {
             ERR("Unregistered timer fired, callCount=%d", state.callCount);
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("timerWheel: unregister multiple timers") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState states[5] = {{0}, {0}, {0}, {0}, {0}};
 
         timerWheelId ids[5];
@@ -336,12 +328,10 @@ int timerWheelTest(int argc, char *argv[]) {
             ERR("Registered timers did not fire: %d, %d", states[1].callCount,
                 states[3].callCount);
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("timerWheel: stopAll") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState states[10];
         memset(states, 0, sizeof(states));
 
@@ -362,8 +352,6 @@ int timerWheelTest(int argc, char *argv[]) {
         if (totalFired != 0) {
             ERR("stopAll failed, %d timers fired", totalFired);
         }
-
-        timerWheelFree(tw);
     }
 
     /* ================================================================
@@ -371,7 +359,7 @@ int timerWheelTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("timerWheel: register timer from within callback") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = false};
 
         timerWheelRegister(tw, 5000, 0, testNestedTimerCallback, &state);
@@ -391,12 +379,10 @@ int timerWheelTest(int argc, char *argv[]) {
         if (state.callCount != 2) {
             ERR("Nested timer did not fire, callCount=%d", state.callCount);
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("timerWheel: self-unregister from callback") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = true};
 
         timerWheelRegister(tw, 5000, 5000, testSelfUnregisterCallback, &state);
@@ -413,8 +399,6 @@ int timerWheelTest(int argc, char *argv[]) {
             ERR("Self-unregistered timer fired again, callCount=%d",
                 state.callCount);
         }
-
-        timerWheelFree(tw);
     }
 
     /* ================================================================
@@ -422,18 +406,16 @@ int timerWheelTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("timerWheel: nextTimerEventStartUs with no timers") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
 
         timerWheelSystemMonotonicUs next = timerWheelNextTimerEventStartUs(tw);
         if (next != 0) {
             ERR("Expected 0 for empty timer, got %" PRId64, next);
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("timerWheel: nextTimerEventStartUs returns correct time") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {0};
 
         uint64_t delayUs = 100000;
@@ -449,8 +431,6 @@ int timerWheelTest(int argc, char *argv[]) {
         if (diff < -5000 || diff > 5000) {
             ERR("nextTimerEventStartUs off by %" PRId64 "us", diff);
         }
-
-        timerWheelFree(tw);
     }
 
     /* ================================================================
@@ -458,11 +438,11 @@ int timerWheelTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("timerWheel: many timers") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         const int32_t numTimers = 1000;
         int32_t totalCallCount = 0;
 
-        testCallbackState *states =
+        cleanerName(zfree, States) testCallbackState *states =
             zcalloc(numTimers, sizeof(testCallbackState));
 
         for (int32_t i = 0; i < numTimers; i++) {
@@ -484,13 +464,10 @@ int timerWheelTest(int argc, char *argv[]) {
         if (totalCallCount != numTimers) {
             ERR("Expected %d firings, got %d", numTimers, totalCallCount);
         }
-
-        zfree(states);
-        timerWheelFree(tw);
     }
 
     TEST("timerWheel: zero delay fires immediately") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = false};
 
         timerWheelRegister(tw, 0, 0, testCountingCallback, &state);
@@ -499,12 +476,10 @@ int timerWheelTest(int argc, char *argv[]) {
         if (state.callCount != 1) {
             ERR("Zero-delay timer did not fire, callCount=%d", state.callCount);
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("timerWheel: callback returns false stops repeating") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = false};
 
         timerWheelRegister(tw, 5000, 5000, testCountingCallback, &state);
@@ -521,8 +496,6 @@ int timerWheelTest(int argc, char *argv[]) {
             ERR("Timer repeated despite returning false, callCount=%d",
                 state.callCount);
         }
-
-        timerWheelFree(tw);
     }
 
     /* ================================================================
@@ -530,7 +503,7 @@ int timerWheelTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("timerWheel: zero delay timer goes to pending queue") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = false};
 
         timerWheelId id =
@@ -558,12 +531,10 @@ int timerWheelTest(int argc, char *argv[]) {
             ERR("Zero-delay timer did not fire after process, callCount=%d",
                 state.callCount);
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("timerWheel: sub-resolution repeating timer fires rapidly") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = true};
 
         /* 100μs repeat interval (< 1000μs wheel resolution) */
@@ -590,12 +561,10 @@ int timerWheelTest(int argc, char *argv[]) {
                 "callCount=%d (expected >= 10)",
                 state.callCount);
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("timerWheel: 1μs repeating timer stays in pending queue") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = true};
 
         /* 1μs repeat interval (minimum sub-resolution) */
@@ -632,12 +601,10 @@ int timerWheelTest(int argc, char *argv[]) {
             ERR("1μs repeating timer should fire 5 times, callCount=%d",
                 state.callCount);
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("timerWheel: nextTimerEventStartUs with only pending timers") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = false};
 
         /* Register only zero-delay timers */
@@ -662,12 +629,10 @@ int timerWheelTest(int argc, char *argv[]) {
         if (state.callCount != 3) {
             ERR("Expected 3 timers to fire, callCount=%d", state.callCount);
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("timerWheel: mixed pending and wheel timers") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState pendingState = {.callCount = 0,
                                           .shouldReschedule = false};
         testCallbackState wheelState = {.callCount = 0,
@@ -703,12 +668,10 @@ int timerWheelTest(int argc, char *argv[]) {
             ERR("Wheel timer should fire after advance, callCount=%d",
                 wheelState.callCount);
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("timerWheel: sub-resolution timer after wheel timer") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = true};
 
         /* First a normal delay, then sub-resolution repeat */
@@ -748,12 +711,10 @@ int timerWheelTest(int argc, char *argv[]) {
             ERR("Timer should fire after third sub-res advance, callCount=%d",
                 state.callCount);
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("timerWheel: multiple sub-resolution timers") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState states[3];
         memset(states, 0, sizeof(states));
         for (int i = 0; i < 3; i++) {
@@ -800,12 +761,10 @@ int timerWheelTest(int argc, char *argv[]) {
             ERR("500μs timer should fire ~3 times in 1000μs, callCount=%d",
                 states[2].callCount);
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("timerWheel: zero delay with repeat goes to pending then wheel") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = true};
 
         /* Zero initial delay, normal repeat interval (>= resolution) */
@@ -831,12 +790,10 @@ int timerWheelTest(int argc, char *argv[]) {
             ERR("Second fire after advance failed, callCount=%d",
                 state.callCount);
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("timerWheel: offset returns negative for overdue timer") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = false};
 
         /* Register a zero-delay timer */
@@ -852,12 +809,10 @@ int timerWheelTest(int argc, char *argv[]) {
             ERR("Offset should be <= 0 for overdue timer, got %" PRId64,
                 offset);
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("timerWheel: stress sub-resolution timers") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = true};
 
         /* Single 1μs repeating timer */
@@ -883,12 +838,10 @@ int timerWheelTest(int argc, char *argv[]) {
         if (next == 0) {
             ERRR("nextTimerEventStartUs returned 0 after stress test");
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("timerWheel: sub-resolution timer stops correctly") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = true};
 
         timerWheelId id =
@@ -910,8 +863,6 @@ int timerWheelTest(int argc, char *argv[]) {
             ERR("Timer fired after unregister, before=%d after=%d", countBefore,
                 state.callCount);
         }
-
-        timerWheelFree(tw);
     }
 
     /* ================================================================
@@ -922,7 +873,7 @@ int timerWheelTest(int argc, char *argv[]) {
         /* A 255ms repeat reschedules into the exact slot index being
          * processed (offset 256 == one full wheel0 revolution). The
          * timer must survive the slot being cleared and keep firing. */
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = true};
 
         timerWheelRegister(tw, 5000, 255000, testCountingCallback, &state);
@@ -944,12 +895,10 @@ int timerWheelTest(int argc, char *argv[]) {
         if (timerWheelCount(tw) == 0) {
             ERRR("Repeating timer was dropped from the wheel");
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("timerWheel: stopAll from within callback") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState stopper = {.callCount = 0};
         testCallbackState other = {.callCount = 0, .shouldReschedule = true};
         testCallbackState fresh = {.callCount = 0};
@@ -983,12 +932,10 @@ int timerWheelTest(int argc, char *argv[]) {
             ERR("Post-StopAll timer did not fire, callCount=%d",
                 fresh.callCount);
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("timerWheel: stopAll then register new timers") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState old = {.callCount = 0};
         testCallbackState fresh = {.callCount = 0};
 
@@ -1015,8 +962,6 @@ int timerWheelTest(int argc, char *argv[]) {
         if (fresh.callCount != 1) {
             ERR("New timer did not fire, callCount=%d", fresh.callCount);
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("timerWheel: nextTimerEvent scans all pending entries") {
@@ -1024,7 +969,7 @@ int timerWheelTest(int argc, char *argv[]) {
          * timer, then a near timer; both sit unsorted in pending until
          * the next process pass. The next-event query must report the
          * near one, not whichever entry happens to be first. */
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testFarNearState s;
         memset(&s, 0, sizeof(s));
 
@@ -1042,12 +987,10 @@ int timerWheelTest(int argc, char *argv[]) {
                 "us) instead of near (~2000us)",
                 offset);
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("timerWheel: sub-resolution initial delay fires promptly") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = false};
 
         /* Catch the wheel up first so its internal time is rounded up
@@ -1060,12 +1003,10 @@ int timerWheelTest(int argc, char *argv[]) {
             ERR("Sub-resolution delay timer late or lost, callCount=%d",
                 state.callCount);
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("timerWheel: unregister after fire keeps count sane") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = false};
 
         timerWheelId id =
@@ -1100,12 +1041,10 @@ int timerWheelTest(int argc, char *argv[]) {
         if (timerWheelCount(tw) != 0) {
             ERR("Expected 0 timers after fire, got %zu", timerWheelCount(tw));
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("timerWheel: reconcile repairs count after unregistering fired id") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = false};
 
         timerWheelId a =
@@ -1161,15 +1100,13 @@ int timerWheelTest(int argc, char *argv[]) {
         if (timerWheelCount(tw) != 0) {
             ERR("Expected empty wheel, got %zu", timerWheelCount(tw));
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("timerWheel: single large advance with live distant timer") {
         /* Exercises empty-span hopping: the catch-up loop must cross
          * many wheel0 revolutions (with cascades) in one call and
          * still fire the timer exactly once */
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = false};
 
         timerWheelRegister(tw, 5000000, 0, testCountingCallback, &state);
@@ -1190,14 +1127,12 @@ int timerWheelTest(int argc, char *argv[]) {
             ERR("Post-hop timer fired %d times total, expected 2",
                 state.callCount);
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("timerWheel: nextTimerEvent sees higher-wheel timer past pending") {
         /* A far-future pending entry must not mask a nearer timer
          * sitting in wheel 1 */
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState farState = {.callCount = 0};
         testCallbackState nearState = {.callCount = 0};
 
@@ -1215,12 +1150,10 @@ int timerWheelTest(int argc, char *argv[]) {
                 "us; pending far timer masked the ~1s wheel timer",
                 offset);
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("timerWheel: self-unregister without repeat leaves no tombstone") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {.callCount = 0};
 
         /* One-shot timer that unregisters itself in its own callback:
@@ -1245,15 +1178,13 @@ int timerWheelTest(int argc, char *argv[]) {
         if (timerWheelCount(tw) != 1) {
             ERR("Expected 1 timer, got %zu", timerWheelCount(tw));
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("timerWheel: nextTimerEvent query with populated overflow") {
         /* The overflow map is 5 elements wide; the query must hand
          * multimapFirst a full-width out array (an undersized one gets
          * written past its end - this was a live stack corruption) */
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {.callCount = 0};
 
         const uint64_t dayUs = 24ULL * 60 * 60 * 1000000;
@@ -1273,12 +1204,10 @@ int timerWheelTest(int argc, char *argv[]) {
             ERR("Nearer wheel timer masked by overflow entry: %" PRId64 "us",
                 offset);
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("timerWheel: overflow repeating timer round-trips") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = true};
 
         /* 24h initial delay and repeat: lives in overflow (>18.6h),
@@ -1305,8 +1234,6 @@ int timerWheelTest(int argc, char *argv[]) {
         if (timerWheelCount(tw) != 1) {
             ERR("Expected 1 live timer, got %zu", timerWheelCount(tw));
         }
-
-        timerWheelFree(tw);
     }
 
     /* ================================================================
@@ -1314,7 +1241,7 @@ int timerWheelTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("timerWheel: statistics tracking") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = false};
 
         for (int32_t i = 0; i < 100; i++) {
@@ -1334,8 +1261,6 @@ int timerWheelTest(int argc, char *argv[]) {
         if (stats.totalExpirations != 100) {
             ERR("Expected 100 expirations, got %zu", stats.totalExpirations);
         }
-
-        timerWheelFree(tw);
     }
 
     /* ================================================================
@@ -1343,7 +1268,7 @@ int timerWheelTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("timerWheel: PERF registration performance") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {0};
         const size_t numOps = BENCH_SCALE_100K;
 
@@ -1357,12 +1282,10 @@ int timerWheelTest(int argc, char *argv[]) {
         PERF_TIMERS_FINISH_PRINT_RESULTS(numOps, "timerWheel registrations");
 
         printf("    Registered %zu timers\n", timerWheelCount(tw));
-
-        timerWheelFree(tw);
     }
 
     TEST("timerWheel: PERF unregistration performance") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {0};
         const size_t numOps = 10000;
 
@@ -1378,16 +1301,14 @@ int timerWheelTest(int argc, char *argv[]) {
         }
 
         PERF_TIMERS_FINISH_PRINT_RESULTS(numOps, "timerWheel unregistrations");
-
-        timerWheelFree(tw);
     }
 
     TEST("timerWheel: PERF batch expiration") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         const size_t numTimers = 10000;
         int32_t totalFired = 0;
 
-        testCallbackState *states =
+        cleanerName(zfree, States) testCallbackState *states =
             zcalloc(numTimers, sizeof(testCallbackState));
 
         for (size_t i = 0; i < numTimers; i++) {
@@ -1408,9 +1329,6 @@ int timerWheelTest(int argc, char *argv[]) {
         if ((size_t)totalFired != numTimers) {
             ERR("Expected %zu firings, got %d", numTimers, totalFired);
         }
-
-        zfree(states);
-        timerWheelFree(tw);
     }
 
     /* ================================================================
@@ -1422,7 +1340,7 @@ int timerWheelTest(int argc, char *argv[]) {
         testCallbackState state = {0};
 
         /* timerWheel */
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         uint64_t twStart = timeUtilMonotonicNs();
 
         for (size_t i = 0; i < numOps; i++) {
@@ -1433,10 +1351,13 @@ int timerWheelTest(int argc, char *argv[]) {
         uint64_t twEnd = timeUtilMonotonicNs();
         double twNsPerOp = (double)(twEnd - twStart) / numOps;
 
+        /* Freed before the multiTimer half so the two halves never
+         * hold their timers at the same time; the cleaner skips NULL. */
         timerWheelFree(tw);
+        tw = NULL;
 
         /* multiTimer */
-        multiTimer *mt = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *mt = multiTimerNew();
         uint64_t mtStart = timeUtilMonotonicNs();
 
         for (size_t i = 0; i < numOps; i++) {
@@ -1447,8 +1368,6 @@ int timerWheelTest(int argc, char *argv[]) {
         uint64_t mtEnd = timeUtilMonotonicNs();
         double mtNsPerOp = (double)(mtEnd - mtStart) / numOps;
 
-        multiTimerFree(mt);
-
         printf("    timerWheel:  %.1f ns/registration\n", twNsPerOp);
         printf("    multiTimer:  %.1f ns/registration\n", mtNsPerOp);
         printf("    Speedup:     %.2fx\n", mtNsPerOp / twNsPerOp);
@@ -1456,11 +1375,11 @@ int timerWheelTest(int argc, char *argv[]) {
 
     TEST("COMPARISON: batch expiration (timerWheel vs multiTimer)") {
         const size_t numTimers = 50000;
-        testCallbackState *states =
+        cleanerName(zfree, States) testCallbackState *states =
             zcalloc(numTimers, sizeof(testCallbackState));
 
         /* timerWheel */
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         for (size_t i = 0; i < numTimers; i++) {
             states[i].shouldReschedule = false;
             timerWheelRegister(tw, 0, 0, testCountingCallback, &states[i]);
@@ -1471,13 +1390,16 @@ int timerWheelTest(int argc, char *argv[]) {
         uint64_t twEnd = timeUtilMonotonicNs();
 
         double twNsPerOp = (double)(twEnd - twStart) / numTimers;
+        /* Freed before the multiTimer half so the two halves never
+         * hold their timers at the same time; the cleaner skips NULL. */
         timerWheelFree(tw);
+        tw = NULL;
 
         /* Reset states */
         memset(states, 0, numTimers * sizeof(testCallbackState));
 
         /* multiTimer */
-        multiTimer *mt = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *mt = multiTimerNew();
         for (size_t i = 0; i < numTimers; i++) {
             states[i].shouldReschedule = false;
             multiTimerRegister(mt, 0, 0, mtCountingCallback, &states[i]);
@@ -1488,9 +1410,6 @@ int timerWheelTest(int argc, char *argv[]) {
         uint64_t mtEnd = timeUtilMonotonicNs();
 
         double mtNsPerOp = (double)(mtEnd - mtStart) / numTimers;
-        multiTimerFree(mt);
-
-        zfree(states);
 
         printf("    timerWheel:  %.1f ns/expiration\n", twNsPerOp);
         printf("    multiTimer:  %.1f ns/expiration\n", mtNsPerOp);
@@ -1504,7 +1423,7 @@ int timerWheelTest(int argc, char *argv[]) {
         printf("    Registering %zu timers...\n", numTimers);
 
         /* timerWheel */
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         uint64_t twStart = timeUtilMonotonicNs();
 
         for (size_t i = 0; i < numTimers; i++) {
@@ -1518,10 +1437,13 @@ int timerWheelTest(int argc, char *argv[]) {
         timerWheelStats twStats;
         timerWheelGetStats(tw, &twStats);
 
+        /* Freed before the multiTimer half so the two halves never
+         * hold their timers at the same time; the cleaner skips NULL. */
         timerWheelFree(tw);
+        tw = NULL;
 
         /* multiTimer */
-        multiTimer *mt = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *mt = multiTimerNew();
         uint64_t mtStart = timeUtilMonotonicNs();
 
         for (size_t i = 0; i < numTimers; i++) {
@@ -1531,7 +1453,6 @@ int timerWheelTest(int argc, char *argv[]) {
 
         uint64_t mtEnd = timeUtilMonotonicNs();
         double mtMs = (double)(mtEnd - mtStart) / 1000000.0;
-        multiTimerFree(mt);
 
         printf("    timerWheel:  %.1f ms, %zu bytes\n", twMs,
                twStats.memoryBytes);
@@ -1548,7 +1469,7 @@ int timerWheelTest(int argc, char *argv[]) {
                ops, warmupTimers);
 
         /* timerWheel */
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         for (size_t i = 0; i < warmupTimers; i++) {
             timerWheelRegister(tw, (i % 1000) * 1000 + 1000000, 0,
                                testCountingCallback, &state);
@@ -1569,10 +1490,13 @@ int timerWheelTest(int argc, char *argv[]) {
         }
 
         uint64_t twEnd = timeUtilMonotonicNs();
+        /* Freed before the multiTimer half so the two halves never
+         * hold their timers at the same time; the cleaner skips NULL. */
         timerWheelFree(tw);
+        tw = NULL;
 
         /* multiTimer */
-        multiTimer *mt = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *mt = multiTimerNew();
         for (size_t i = 0; i < warmupTimers; i++) {
             multiTimerRegister(mt, (i % 1000) * 1000 + 1000000, 0,
                                mtCountingCallback, &state);
@@ -1593,7 +1517,6 @@ int timerWheelTest(int argc, char *argv[]) {
         }
 
         uint64_t mtEnd = timeUtilMonotonicNs();
-        multiTimerFree(mt);
 
         double twNsPerOp = (double)(twEnd - twStart) / ops;
         double mtNsPerOp = (double)(mtEnd - mtStart) / ops;
@@ -1607,7 +1530,7 @@ int timerWheelTest(int argc, char *argv[]) {
         const size_t numTimers = BENCH_SCALE_100K;
         testCallbackState state = {0};
 
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
 
         for (size_t i = 0; i < numTimers; i++) {
             timerWheelRegister(tw, i * 1000, 0, testCountingCallback, &state);
@@ -1626,8 +1549,6 @@ int timerWheelTest(int argc, char *argv[]) {
         if (bytesPerTimer > 100) {
             ERR("Memory usage too high: %.2f bytes/timer", bytesPerTimer);
         }
-
-        timerWheelFree(tw);
     }
 
     /* ================================================================
@@ -1635,7 +1556,7 @@ int timerWheelTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("timerWheel: timers across wheel levels") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState states[4] = {{0}, {0}, {0}, {0}};
 
         /* Wheel 0: < 256ms */
@@ -1661,12 +1582,10 @@ int timerWheelTest(int argc, char *argv[]) {
 
         printf("    Timers spread across 4 wheel levels\n");
         printf("    Overflow count: %zu\n", stats.overflowCount);
-
-        timerWheelFree(tw);
     }
 
     TEST("timerWheel: overflow bucket for very long timers") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {0};
 
         /* Register timer for > 18.6 hours (should go to overflow) */
@@ -1679,8 +1598,6 @@ int timerWheelTest(int argc, char *argv[]) {
         if (stats.overflowCount != 1) {
             ERR("Expected 1 overflow timer, got %zu", stats.overflowCount);
         }
-
-        timerWheelFree(tw);
     }
 
     /* ================================================================
@@ -1707,7 +1624,7 @@ int timerWheelTest(int argc, char *argv[]) {
             const size_t count = scales[s];
 
             /* timerWheel */
-            timerWheel *tw = timerWheelNew();
+            cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
             PERF_TIMERS_SETUP;
             for (size_t i = 0; i < count; i++) {
                 timerWheelRegister(tw, 1000000 + (i % 100000), 0,
@@ -1716,10 +1633,14 @@ int timerWheelTest(int argc, char *argv[]) {
             PERF_TIMERS_FINISH;
             double twCycles =
                 (double)(lps.global.tsc.stop - lps.global.tsc.start) / count;
+            /* Freed before the multiTimer half so the two halves never
+             * hold their timers at the same time; the cleaner skips
+             * NULL. */
             timerWheelFree(tw);
+            tw = NULL;
 
             /* multiTimer */
-            multiTimer *mt = multiTimerNew();
+            cleaner(multiTimerFree) multiTimer *mt = multiTimerNew();
             PERF_TIMERS_SETUP;
             for (size_t i = 0; i < count; i++) {
                 multiTimerRegister(mt, 1000000 + (i % 100000), 0,
@@ -1728,7 +1649,6 @@ int timerWheelTest(int argc, char *argv[]) {
             PERF_TIMERS_FINISH;
             double mtCycles =
                 (double)(lps.global.tsc.stop - lps.global.tsc.start) / count;
-            multiTimerFree(mt);
 
             printf("    %-12zu  %9.1f cy  %9.1f cy  %7.2fx\n", count, twCycles,
                    mtCycles, mtCycles / twCycles);
@@ -1752,7 +1672,7 @@ int timerWheelTest(int argc, char *argv[]) {
             const size_t count = scales[s];
 
             /* timerWheel - register then unregister */
-            timerWheel *tw = timerWheelNew();
+            cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
             for (size_t i = 0; i < count; i++) {
                 timerWheelRegister(tw, 1000000 + i, 0, testCountingCallback,
                                    &state);
@@ -1765,10 +1685,14 @@ int timerWheelTest(int argc, char *argv[]) {
             PERF_TIMERS_FINISH;
             double twCycles =
                 (double)(lps.global.tsc.stop - lps.global.tsc.start) / count;
+            /* Freed before the multiTimer half so the two halves never
+             * hold their timers at the same time; the cleaner skips
+             * NULL. */
             timerWheelFree(tw);
+            tw = NULL;
 
             /* multiTimer - register then unregister */
-            multiTimer *mt = multiTimerNew();
+            cleaner(multiTimerFree) multiTimer *mt = multiTimerNew();
             for (size_t i = 0; i < count; i++) {
                 multiTimerRegister(mt, 1000000 + i, 0, mtCountingCallback,
                                    &state);
@@ -1781,7 +1705,6 @@ int timerWheelTest(int argc, char *argv[]) {
             PERF_TIMERS_FINISH;
             double mtCycles =
                 (double)(lps.global.tsc.stop - lps.global.tsc.start) / count;
-            multiTimerFree(mt);
 
             printf("    %-12zu  %9.1f cy  %9.1f cy  %7.2fx\n", count, twCycles,
                    mtCycles, mtCycles / twCycles);
@@ -1802,11 +1725,11 @@ int timerWheelTest(int argc, char *argv[]) {
 
         for (size_t s = 0; s < numScales; s++) {
             const size_t count = scales[s];
-            testCallbackState *states =
+            cleanerName(zfree, States) testCallbackState *states =
                 zcalloc(count, sizeof(testCallbackState));
 
             /* timerWheel */
-            timerWheel *tw = timerWheelNew();
+            cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
             for (size_t i = 0; i < count; i++) {
                 states[i].shouldReschedule = false;
                 timerWheelRegister(tw, 0, 0, testCountingCallback, &states[i]);
@@ -1817,13 +1740,17 @@ int timerWheelTest(int argc, char *argv[]) {
             PERF_TIMERS_FINISH;
             double twCycles =
                 (double)(lps.global.tsc.stop - lps.global.tsc.start) / count;
+            /* Freed before the multiTimer half so the two halves never
+             * hold their timers at the same time; the cleaner skips
+             * NULL. */
             timerWheelFree(tw);
+            tw = NULL;
 
             /* Reset states */
             memset(states, 0, count * sizeof(testCallbackState));
 
             /* multiTimer */
-            multiTimer *mt = multiTimerNew();
+            cleaner(multiTimerFree) multiTimer *mt = multiTimerNew();
             for (size_t i = 0; i < count; i++) {
                 states[i].shouldReschedule = false;
                 multiTimerRegister(mt, 0, 0, mtCountingCallback, &states[i]);
@@ -1834,9 +1761,6 @@ int timerWheelTest(int argc, char *argv[]) {
             PERF_TIMERS_FINISH;
             double mtCycles =
                 (double)(lps.global.tsc.stop - lps.global.tsc.start) / count;
-            multiTimerFree(mt);
-
-            zfree(states);
 
             printf("    %-12zu  %9.1f cy  %9.1f cy  %7.2fx\n", count, twCycles,
                    mtCycles, mtCycles / twCycles);
@@ -1861,7 +1785,7 @@ int timerWheelTest(int argc, char *argv[]) {
             const size_t count = timerCounts[c];
 
             /* timerWheel */
-            timerWheel *tw = timerWheelNew();
+            cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
             for (size_t i = 0; i < count; i++) {
                 timerWheelRegister(tw, 1000000 + (i * 100), 0,
                                    testCountingCallback, &state);
@@ -1875,11 +1799,15 @@ int timerWheelTest(int argc, char *argv[]) {
             PERF_TIMERS_FINISH;
             double twCycles =
                 (double)(lps.global.tsc.stop - lps.global.tsc.start) / queries;
+            /* Freed before the multiTimer half so the two halves never
+             * hold their timers at the same time; the cleaner skips
+             * NULL. */
             timerWheelFree(tw);
+            tw = NULL;
             (void)sink;
 
             /* multiTimer */
-            multiTimer *mt = multiTimerNew();
+            cleaner(multiTimerFree) multiTimer *mt = multiTimerNew();
             for (size_t i = 0; i < count; i++) {
                 multiTimerRegister(mt, 1000000 + (i * 100), 0,
                                    mtCountingCallback, &state);
@@ -1893,7 +1821,6 @@ int timerWheelTest(int argc, char *argv[]) {
             PERF_TIMERS_FINISH;
             double mtCycles =
                 (double)(lps.global.tsc.stop - lps.global.tsc.start) / queries;
-            multiTimerFree(mt);
             (void)sink;
 
             printf("    %-12zu  %9.1f cy  %9.1f cy  %7.2fx\n", count, twCycles,
@@ -1931,7 +1858,7 @@ int timerWheelTest(int argc, char *argv[]) {
             uint64_t range = distributions[d].maxUs - minUs;
 
             /* timerWheel */
-            timerWheel *tw = timerWheelNew();
+            cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
             PERF_TIMERS_SETUP;
             for (size_t i = 0; i < count; i++) {
                 uint64_t delay = minUs + (i * 7919) % (range + 1);
@@ -1940,10 +1867,14 @@ int timerWheelTest(int argc, char *argv[]) {
             PERF_TIMERS_FINISH;
             double twCycles =
                 (double)(lps.global.tsc.stop - lps.global.tsc.start) / count;
+            /* Freed before the multiTimer half so the two halves never
+             * hold their timers at the same time; the cleaner skips
+             * NULL. */
             timerWheelFree(tw);
+            tw = NULL;
 
             /* multiTimer */
-            multiTimer *mt = multiTimerNew();
+            cleaner(multiTimerFree) multiTimer *mt = multiTimerNew();
             PERF_TIMERS_SETUP;
             for (size_t i = 0; i < count; i++) {
                 uint64_t delay = minUs + (i * 7919) % (range + 1);
@@ -1952,7 +1883,6 @@ int timerWheelTest(int argc, char *argv[]) {
             PERF_TIMERS_FINISH;
             double mtCycles =
                 (double)(lps.global.tsc.stop - lps.global.tsc.start) / count;
-            multiTimerFree(mt);
 
             printf("    %-16s  %9.1f cy  %9.1f cy  %7.2fx\n",
                    distributions[d].name, twCycles, mtCycles,
@@ -1977,7 +1907,7 @@ int timerWheelTest(int argc, char *argv[]) {
             const size_t count = scales[s];
 
             /* timerWheel - register then immediately cancel */
-            timerWheel *tw = timerWheelNew();
+            cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
             PERF_TIMERS_SETUP;
             for (size_t i = 0; i < count; i++) {
                 timerWheelId id = timerWheelRegister(
@@ -1987,10 +1917,14 @@ int timerWheelTest(int argc, char *argv[]) {
             PERF_TIMERS_FINISH;
             double twCycles =
                 (double)(lps.global.tsc.stop - lps.global.tsc.start) / count;
+            /* Freed before the multiTimer half so the two halves never
+             * hold their timers at the same time; the cleaner skips
+             * NULL. */
             timerWheelFree(tw);
+            tw = NULL;
 
             /* multiTimer - register then immediately cancel */
-            multiTimer *mt = multiTimerNew();
+            cleaner(multiTimerFree) multiTimer *mt = multiTimerNew();
             PERF_TIMERS_SETUP;
             for (size_t i = 0; i < count; i++) {
                 multiTimerId id = multiTimerRegister(
@@ -2000,7 +1934,6 @@ int timerWheelTest(int argc, char *argv[]) {
             PERF_TIMERS_FINISH;
             double mtCycles =
                 (double)(lps.global.tsc.stop - lps.global.tsc.start) / count;
-            multiTimerFree(mt);
 
             printf("    %-12zu  %9.1f cy  %9.1f cy  %7.2fx\n", count, twCycles,
                    mtCycles, mtCycles / twCycles);
@@ -2018,7 +1951,7 @@ int timerWheelTest(int argc, char *argv[]) {
                iterations);
 
         /* timerWheel steady-state */
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         for (size_t i = 0; i < baseTimers; i++) {
             timerWheelRegister(tw, 1000000 + (i * 100), 0, testCountingCallback,
                                &state);
@@ -2043,10 +1976,13 @@ int timerWheelTest(int argc, char *argv[]) {
             (double)(lps.global.tsc.stop - lps.global.tsc.start) / iterations;
         double twUsPerIter =
             (double)(lps.global.us.stop - lps.global.us.start) / iterations;
+        /* Freed before the multiTimer half so the two halves never
+         * hold their timers at the same time; the cleaner skips NULL. */
         timerWheelFree(tw);
+        tw = NULL;
 
         /* multiTimer steady-state */
-        multiTimer *mt = multiTimerNew();
+        cleaner(multiTimerFree) multiTimer *mt = multiTimerNew();
         for (size_t i = 0; i < baseTimers; i++) {
             multiTimerRegister(mt, 1000000 + (i * 100), 0, mtCountingCallback,
                                &state);
@@ -2071,7 +2007,6 @@ int timerWheelTest(int argc, char *argv[]) {
             (double)(lps.global.tsc.stop - lps.global.tsc.start) / iterations;
         double mtUsPerIter =
             (double)(lps.global.us.stop - lps.global.us.start) / iterations;
-        multiTimerFree(mt);
 
         printf("    timerWheel:  %.1f cycles/iter (%.3f us/iter)\n", twCycles,
                twUsPerIter);
@@ -2093,14 +2028,13 @@ int timerWheelTest(int argc, char *argv[]) {
         for (size_t s = 0; s < numScales; s++) {
             const size_t count = scales[s];
 
-            timerWheel *tw = timerWheelNew();
+            cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
             for (size_t i = 0; i < count; i++) {
                 timerWheelRegister(tw, i * 1000, 0, testCountingCallback,
                                    &state);
             }
             timerWheelStats twStats;
             timerWheelGetStats(tw, &twStats);
-            timerWheelFree(tw);
 
             printf("    %-12zu  %10zu B    %10.1f\n", count,
                    twStats.memoryBytes, (double)twStats.memoryBytes / count);
@@ -2144,7 +2078,7 @@ int timerWheelTest(int argc, char *argv[]) {
 
     TEST("CASCADE: wheel 0 timers fire accurately") {
         /* Wheel 0 timers should fire at their scheduled time */
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {0};
 
         /* Register timer for 100ms - stays in wheel 0 */
@@ -2159,15 +2093,13 @@ int timerWheelTest(int argc, char *argv[]) {
         if (state.callCount != 1) {
             ERR("Timer should fire at 100ms, count=%d", state.callCount);
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("CASCADE: wheel 1 timer fires on time after entry cascade") {
         /* A 300ms timer goes to wheel 1 slot 1; the slot cascades when
          * entered at 256ms, dropping the timer into wheel 0 where it
          * fires on schedule at ~300ms */
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {0};
 
         /* Register 300ms timer - goes to wheel 1 slot 1 (300/256 = 1) */
@@ -2186,12 +2118,10 @@ int timerWheelTest(int argc, char *argv[]) {
             ERR("Timer should fire on time at ~300ms, count=%d",
                 state.callCount);
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("CASCADE: cascade counter only increments for non-empty slots") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {0};
 
         /* Register 520ms timer - goes to wheel 1 slot 2 (520/256 = 2) */
@@ -2231,12 +2161,10 @@ int timerWheelTest(int argc, char *argv[]) {
             ERR("Timer should fire on time at ~520ms, count=%d",
                 state.callCount);
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("CASCADE: multiple timers in same slot cascade together") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState states[3] = {0};
 
         /* All these go to wheel 1 slot 1 (since 260-400/256 = 1) */
@@ -2277,14 +2205,12 @@ int timerWheelTest(int argc, char *argv[]) {
             ERR("Expected exactly 1 cascade event, got %zu",
                 stats.totalCascades);
         }
-
-        timerWheelFree(tw);
     }
 
     TEST(
         "CASCADE: timers inserted into wheel 0 after cascade fire accurately") {
         /* When a timer cascades to wheel 0, it fires at its own slot */
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {0};
 
         /* 700ms timer goes to wheel 1 slot 2 (700/256 = 2); slot 2 is
@@ -2303,12 +2229,10 @@ int timerWheelTest(int argc, char *argv[]) {
             ERR("Timer should fire on time at ~700ms, count=%d",
                 state.callCount);
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("CASCADE: timer cascades to wheel 0 and fires at correct slot") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {0};
 
         /* 780ms timer: wheel 1 slot 3 (780/256 = 3), entered at 768ms
@@ -2327,13 +2251,11 @@ int timerWheelTest(int argc, char *argv[]) {
             ERR("Timer should fire on time at ~780ms, count=%d",
                 state.callCount);
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("CASCADE: nested wheel 2 to wheel 1 to wheel 0") {
         /* Timer far enough to start in wheel 2, then cascade down */
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {0};
 
         /* 20s timer: wheel 1 span = 16.4s, so this goes to wheel 2 */
@@ -2375,12 +2297,10 @@ int timerWheelTest(int argc, char *argv[]) {
         }
 
         printf("    20s timer fired after %zu cascades\n", stats.totalCascades);
-
-        timerWheelFree(tw);
     }
 
     TEST("CASCADE: cancellation removes timer before cascade") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState states[3] = {0};
 
         /* All go to wheel 1 slot 1 */
@@ -2411,12 +2331,10 @@ int timerWheelTest(int argc, char *argv[]) {
         if (states[2].callCount != 1) {
             ERR("Third timer should fire, count=%d", states[2].callCount);
         }
-
-        timerWheelFree(tw);
     }
 
     TEST("CASCADE: repeated timer reschedules after cascade fire") {
-        timerWheel *tw = timerWheelNew();
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = true};
 
         /* 300ms initial delay, 100ms repeat - starts in wheel 1
@@ -2443,8 +2361,6 @@ int timerWheelTest(int argc, char *argv[]) {
 
         printf("    Timer fired %d times total (%d after cascade)\n",
                state.callCount, additionalFires);
-
-        timerWheelFree(tw);
     }
 
     printf("=== Multi-Level Cascade Tests Complete ===\n\n");

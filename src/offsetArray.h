@@ -76,6 +76,7 @@
 /* Resize array to hold 'newCount' elements */
 #define offsetArrayResize_(arr, newCount)                                      \
     do {                                                                       \
+        /* @own: container; free=zfree */                                      \
         (arr)->obj = zrealloc((arr)->obj, (newCount) * sizeof(*(arr)->obj));   \
     } while (0)
 

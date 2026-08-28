@@ -5,6 +5,7 @@
 
 /* Create new empty full intset */
 intsetFull *intsetFullNew(void) {
+    /* @own: caller; free=intsetFullFree */
     intsetFull *f = zcalloc(1, sizeof(intsetFull));
     f->count16 = 0;
     f->count32 = 0;
@@ -26,6 +27,7 @@ intsetFull *intsetFullFromMedium(const intsetMedium *medium) {
     /* Copy all int16 values */
     if (medium->count16 > 0) {
         f->count16 = medium->count16;
+        /* @own: container; free=zfree */
         f->values16 = zcalloc(f->count16, sizeof(int16_t));
         memcpy(f->values16, medium->values16, f->count16 * sizeof(int16_t));
     }
@@ -33,6 +35,7 @@ intsetFull *intsetFullFromMedium(const intsetMedium *medium) {
     /* Copy all int32 values */
     if (medium->count32 > 0) {
         f->count32 = medium->count32;
+        /* @own: container; free=zfree */
         f->values32 = zcalloc(f->count32, sizeof(int32_t));
         memcpy(f->values32, medium->values32, f->count32 * sizeof(int32_t));
     }
@@ -238,6 +241,7 @@ intsetFull *intsetFullAdd(intsetFull *f, int64_t value, bool *added) {
         /* Insert at pos16 */
         /* Grow in place and shift the tail: one realloc (amortized by
          * allocator size classes) instead of alloc+double-copy+free */
+        /* @own: container; free=zfree */
         f->values16 = zrealloc(f->values16, (f->count16 + 1) * sizeof(int16_t));
         memmove(&f->values16[pos16 + 1], &f->values16[pos16],
                 (f->count16 - pos16) * sizeof(int16_t));
@@ -259,6 +263,7 @@ intsetFull *intsetFullAdd(intsetFull *f, int64_t value, bool *added) {
         /* Insert at pos32 */
         /* Grow in place and shift the tail: one realloc (amortized by
          * allocator size classes) instead of alloc+double-copy+free */
+        /* @own: container; free=zfree */
         f->values32 = zrealloc(f->values32, (f->count32 + 1) * sizeof(int32_t));
         memmove(&f->values32[pos32 + 1], &f->values32[pos32],
                 (f->count32 - pos32) * sizeof(int32_t));
@@ -280,6 +285,7 @@ intsetFull *intsetFullAdd(intsetFull *f, int64_t value, bool *added) {
         /* Insert at pos64 */
         /* Grow in place and shift the tail: one realloc (amortized by
          * allocator size classes) instead of alloc+double-copy+free */
+        /* @own: container; free=zfree */
         f->values64 = zrealloc(f->values64, (f->count64 + 1) * sizeof(int64_t));
         memmove(&f->values64[pos64 + 1], &f->values64[pos64],
                 (f->count64 - pos64) * sizeof(int64_t));

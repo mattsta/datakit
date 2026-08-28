@@ -2,6 +2,7 @@
 
 #include "../deps/xxHash/xxhash.h"
 #include "asmUtils.h"
+#include "cleaner.h"
 #include "datakit.h"
 #include "fibbuf.h"
 #include "flex.h"
@@ -13,6 +14,13 @@
 #include <limits.h>
 #include <stdio.h>
 #include <sys/time.h>
+
+#ifdef DATAKIT_TEST
+/* Fixed-width string buffer used by test bulk-insert scratch allocations. */
+typedef char multidictTestBuf32[32];
+defcleanerName(databox *, zfree, Databoxes);
+defcleanerName(multidictTestBuf32 *, zfree, Buf32);
+#endif
 
 /* ====================================================================
  * DEBUG TRACING FOR AUTO-RESIZE
@@ -587,6 +595,7 @@ multidict *multidictNew(multidictType *type, multidictClass *qdc,
         return NULL;
     }
 
+    /* @own: caller; free=multidictFree */
     multidict *d = zcalloc(1, sizeof(*d));
 
     multidictResetHT(HT(d, 0));
@@ -696,6 +705,7 @@ bool multidictExpand(multidict *d, uint64_t newSlots) {
         return false;
     }
 
+    /* @own: container; free=multidictFree */
     n.table = zcalloc(1, n.size * sizeof(*n.table));
     if (!n.table) {
         /* OOM: fail the expand cleanly rather than install a NULL table and set
@@ -1829,6 +1839,7 @@ static bool lruPtrToKeyGrow(multidict *d, size_t minSize) {
         newSize = fibbufNextSizeBuffer(newSize);
     }
 
+    /* @own: container; free=multidictDisableLRU */
     lruKeyRef *newArray = zrealloc(d->lruPtrToKey, newSize * sizeof(lruKeyRef));
     if (!newArray) {
         return false;
@@ -1868,6 +1879,7 @@ bool multidictEnableLRU(multidict *d, size_t levels) {
     }
 
     /* Create auxiliary keyToPtr dict (using same type as main dict) */
+    /* @own: container; free=multidictDisableLRU */
     d->lruKeyToPtr = multidictNew(d->type, d->shared, d->seed);
     if (!d->lruKeyToPtr) {
         multilruFree(d->lru);
@@ -2117,6 +2129,7 @@ multidict *multidictCopy(const multidict *src) {
     }
 
     /* Create new dict with same type and class */
+    /* @own: caller; free=multidictFree */
     multidict *dst = multidictNew(src->type, src->shared, src->seed);
     if (!dst) {
         return NULL;
@@ -2704,7 +2717,9 @@ DK_STATIC void *mmSlotGetOrCreate(multidictClass *qdc, multidictSlot **slot,
     (void)qdc;
     (void)keybox;
     if (*slot == NULL) {
+        /* @own: container; free=mmSlotFree */
         mmSlotWrapper *wrapper = zcalloc(1, sizeof(*wrapper));
+        /* @own: container; free=mmSlotFree */
         wrapper->m = multimapNew(2); /* key + value */
         *slot = wrapper;
     }
@@ -2740,7 +2755,9 @@ DK_STATIC bool mmSlotFindValue(multidictClass *qdc, multidictSlot *slot,
 }
 
 DK_STATIC void *mmSlotCreate(void) {
+    /* @own: container; free=mmSlotFree */
     mmSlotWrapper *wrapper = zcalloc(1, sizeof(*wrapper));
+    /* @own: container; free=mmSlotFree */
     wrapper->m = multimapNew(2); /* key + value */
     return wrapper;
 }
@@ -2906,6 +2923,7 @@ DK_STATIC uint32_t mmSlotFreeClass(multidictClass *qdc) {
 /* Create a multimap-based multidictClass for using multimap as chained backing
  * stores for dict inserts */
 DK_STATIC multidictClass *multidictMmClassNew(void) {
+    /* @own: caller; free=multidictMmClassFree */
     multidictClass *qdc = zcalloc(1, sizeof(*qdc));
     qdc->privdata = NULL;
     qdc->insertByType = mmSlotInsert;
@@ -2945,6 +2963,12 @@ void multidictDefaultClassFree(multidictClass *qdc) {
  * Comprehensive Test Function
  * ==================================================================== */
 #ifdef DATAKIT_TEST
+
+/* Scope-exit cleaners (see cleaner.h idioms).  A dict must be destroyed
+ * before the class it borrows, so a class cleaner is always declared
+ * BEFORE the dict cleaner that uses it. */
+defcleaner(multidict *, multidictFree);
+defcleaner(multidictClass *, multidictMmClassFree);
 
 /* Simple PRNG for reproducible tests */
 static uint32_t testRandState = 12345;
@@ -2998,7 +3022,7 @@ int multidictTest(int argc, char *argv[]) {
     printf("=== MULTIDICT COMPREHENSIVE TEST SUITE ===\n\n");
 
     printf("Creating multimap-based multidictClass...\n");
-    multidictClass *qdc = multidictMmClassNew();
+    cleaner(multidictMmClassFree) multidictClass *qdc = multidictMmClassNew();
 
     printf("Creating multidict with multimap slots...\n");
 
@@ -3008,7 +3032,8 @@ int multidictTest(int argc, char *argv[]) {
     printf("--- Section 1: Basic API Tests ---\n");
 
     printf("Test 1.1: Create with exact key type...\n");
-    multidict *d = multidictNew(&multidictTypeExactKey, qdc, 12345);
+    cleaner(multidictFree) multidict *d =
+        multidictNew(&multidictTypeExactKey, qdc, 12345);
     assert(d != NULL);
     assert(multidictSize(d) == 0);
 
@@ -4088,7 +4113,8 @@ int multidictTest(int argc, char *argv[]) {
         for (size_t sizeIdx = 0;
              sizeIdx < sizeof(testSizes) / sizeof(testSizes[0]); sizeIdx++) {
             int targetSize = testSizes[sizeIdx];
-            multidict *dScan = multidictNew(&multidictTypeExactKey, qdc, 0);
+            cleaner(multidictFree) multidict *dScan =
+                multidictNew(&multidictTypeExactKey, qdc, 0);
 
             /* Insert entries */
             for (int i = 0; i < targetSize; i++) {
@@ -4108,7 +4134,6 @@ int multidictTest(int argc, char *argv[]) {
             } while (cursor != 0);
 
             assert(scanCount >= targetSize);
-            multidictFree(dScan);
         }
         printf("  Tested %zu different dict sizes\n",
                sizeof(testSizes) / sizeof(testSizes[0]));
@@ -4118,7 +4143,8 @@ int multidictTest(int argc, char *argv[]) {
            "stages...\n");
     {
         for (int testRun = 0; testRun < 5; testRun++) {
-            multidict *dScan = multidictNew(&multidictTypeExactKey, qdc, 0);
+            cleaner(multidictFree) multidict *dScan =
+                multidictNew(&multidictTypeExactKey, qdc, 0);
             const int entryCount = 5000;
 
             /* Insert entries */
@@ -4158,8 +4184,6 @@ int multidictTest(int argc, char *argv[]) {
 
             /* We should see all entries (possibly with duplicates) */
             assert(scanCount >= entryCount);
-
-            multidictFree(dScan);
         }
         printf("  Completed 5 large dict scans with varying rehash states\n");
     }
@@ -4167,7 +4191,8 @@ int multidictTest(int argc, char *argv[]) {
     printf(
         "Test 5.6: Scan with concurrent modifications during rehashing...\n");
     {
-        multidict *dScan = multidictNew(&multidictTypeExactKey, qdc, 0);
+        cleaner(multidictFree) multidict *dScan =
+            multidictNew(&multidictTypeExactKey, qdc, 0);
 
         /* Insert initial entries */
         for (int i = 0; i < 2000; i++) {
@@ -4214,13 +4239,12 @@ int multidictTest(int argc, char *argv[]) {
         printf("  Scanned %d entries with %d concurrent modifications\n",
                scanCount, modifications);
         assert(scanCount >= 2000); /* At minimum, original entries */
-
-        multidictFree(dScan);
     }
 
     printf("Test 5.7: Scan correctness - verify exact key coverage...\n");
     {
-        multidict *dScan = multidictNew(&multidictTypeExactKey, qdc, 0);
+        cleaner(multidictFree) multidict *dScan =
+            multidictNew(&multidictTypeExactKey, qdc, 0);
         const int exactCount = 1000;
 
         /* Insert exactly 1000 unique entries with predictable keys */
@@ -4269,13 +4293,12 @@ int multidictTest(int argc, char *argv[]) {
                scanCount, exactCount);
         assert(scanCount ==
                exactCount); /* No duplicates after rehash complete */
-
-        multidictFree(dScan);
     }
 
     printf("Test 5.8: Extreme fuzz - rapid dict size changes during scan...\n");
     {
-        multidict *dScan = multidictNew(&multidictTypeExactKey, qdc, 0);
+        cleaner(multidictFree) multidict *dScan =
+            multidictNew(&multidictTypeExactKey, qdc, 0);
 
         /* Insert initial batch */
         for (int i = 0; i < 500; i++) {
@@ -4312,8 +4335,6 @@ int multidictTest(int argc, char *argv[]) {
         printf("  Extreme fuzz: scanned=%d in %d iterations\n", scanCount,
                iterations);
         assert(scanCount >= 500);
-
-        multidictFree(dScan);
     }
 
     /* ================================================================
@@ -4625,8 +4646,10 @@ int multidictTest(int argc, char *argv[]) {
 
     printf("Test 9.1: Create with case-insensitive type...\n");
     {
-        multidictClass *qdcCase = multidictMmClassNew();
-        multidict *dCase = multidictNew(&multidictTypeCaseKey, qdcCase, 54321);
+        cleaner(multidictMmClassFree) multidictClass *qdcCase =
+            multidictMmClassNew();
+        cleaner(multidictFree) multidict *dCase =
+            multidictNew(&multidictTypeCaseKey, qdcCase, 54321);
         assert(dCase != NULL);
 
         /* Insert with lowercase */
@@ -4650,9 +4673,6 @@ int multidictTest(int argc, char *argv[]) {
         databox key3 = databoxNewBytesString("hello");
         result = multidictFind(dCase, &key3, &found);
         assert(result == true); /* Same case must work */
-
-        multidictFree(dCase);
-        multidictMmClassFree(qdcCase);
     }
 
     /* ================================================================
@@ -4679,23 +4699,22 @@ int multidictTest(int argc, char *argv[]) {
 
     printf("Test 11.1: Fresh dict has zero bytes...\n");
     {
-        multidictClass *qdcBytes = multidictMmClassNew();
-        multidict *dBytes =
+        cleaner(multidictMmClassFree) multidictClass *qdcBytes =
+            multidictMmClassNew();
+        cleaner(multidictFree) multidict *dBytes =
             multidictNew(&multidictTypeExactKey, qdcBytes, 99999);
 
         /* Fresh dict should have zero tracked bytes */
         assert(dBytes->ht[0].keyBytes == 0);
         assert(dBytes->ht[0].valBytes == 0);
         assert(dBytes->ht[0].totalBytes == 0);
-
-        multidictFree(dBytes);
-        multidictMmClassFree(qdcBytes);
     }
 
     printf("Test 11.2: Bytes increase on insert...\n");
     {
-        multidictClass *qdcBytes = multidictMmClassNew();
-        multidict *dBytes =
+        cleaner(multidictMmClassFree) multidictClass *qdcBytes =
+            multidictMmClassNew();
+        cleaner(multidictFree) multidict *dBytes =
             multidictNew(&multidictTypeExactKey, qdcBytes, 99999);
 
         /* Insert entries and track byte growth */
@@ -4721,15 +4740,13 @@ int multidictTest(int argc, char *argv[]) {
         assert(dBytes->ht[0].keyBytes == expectedKeyBytes);
         assert(dBytes->ht[0].valBytes == expectedValBytes);
         assert(dBytes->ht[0].count == 100);
-
-        multidictFree(dBytes);
-        multidictMmClassFree(qdcBytes);
     }
 
     printf("Test 11.3: Bytes decrease on delete...\n");
     {
-        multidictClass *qdcBytes = multidictMmClassNew();
-        multidict *dBytes =
+        cleaner(multidictMmClassFree) multidictClass *qdcBytes =
+            multidictMmClassNew();
+        cleaner(multidictFree) multidict *dBytes =
             multidictNew(&multidictTypeExactKey, qdcBytes, 99999);
 
         /* Insert 50 entries */
@@ -4764,15 +4781,13 @@ int multidictTest(int argc, char *argv[]) {
         assert(bytesAfterDelete < bytesBeforeDelete);
         /* Should be roughly half (not exact due to variable key/val sizes) */
         assert(bytesAfterDelete > 0);
-
-        multidictFree(dBytes);
-        multidictMmClassFree(qdcBytes);
     }
 
     printf("Test 11.4: Value replacement updates valBytes...\n");
     {
-        multidictClass *qdcBytes = multidictMmClassNew();
-        multidict *dBytes =
+        cleaner(multidictMmClassFree) multidictClass *qdcBytes =
+            multidictMmClassNew();
+        cleaner(multidictFree) multidict *dBytes =
             multidictNew(&multidictTypeExactKey, qdcBytes, 99999);
 
         /* Insert with short value */
@@ -4795,15 +4810,13 @@ int multidictTest(int argc, char *argv[]) {
 
         assert(bytesWithLong > bytesWithShort);
         assert(dBytes->ht[0].count == 1); /* Still just one entry */
-
-        multidictFree(dBytes);
-        multidictMmClassFree(qdcBytes);
     }
 
     printf("Test 11.5: Bytes preserved through rehash...\n");
     {
-        multidictClass *qdcBytes = multidictMmClassNew();
-        multidict *dBytes =
+        cleaner(multidictMmClassFree) multidictClass *qdcBytes =
+            multidictMmClassNew();
+        cleaner(multidictFree) multidict *dBytes =
             multidictNew(&multidictTypeExactKey, qdcBytes, 99999);
 
         /* Insert entries */
@@ -4837,9 +4850,6 @@ int multidictTest(int argc, char *argv[]) {
         assert(valBytesAfter == valBytesBefore);
         assert(dBytes->ht[0].count == 100);
         assert(dBytes->ht[1].count == 0);
-
-        multidictFree(dBytes);
-        multidictMmClassFree(qdcBytes);
     }
 
     printf("=== Bytes tracking tests passed! ===\n");
@@ -5068,11 +5078,15 @@ int multidictTest(int argc, char *argv[]) {
     {
         multidictEmpty(d);
         const int BULK_COUNT = 500;
-        databox *keys = zmalloc(BULK_COUNT * sizeof(databox));
-        databox *vals = zmalloc(BULK_COUNT * sizeof(databox));
-        char (*keyBufs)[32] =
-            zmalloc(BULK_COUNT * 32); /* Persist string storage */
-        char (*valBufs)[32] = zmalloc(BULK_COUNT * 32);
+        cleanerName(zfree, Databoxes) databox *keys =
+            zmalloc(BULK_COUNT * sizeof(databox));
+        cleanerName(zfree, Databoxes) databox *vals =
+            zmalloc(BULK_COUNT * sizeof(databox));
+        /* Persist string storage */
+        cleanerName(zfree, Buf32) multidictTestBuf32 *keyBufs =
+            zmalloc(BULK_COUNT * 32);
+        cleanerName(zfree, Buf32) multidictTestBuf32 *valBufs =
+            zmalloc(BULK_COUNT * 32);
 
         for (int j = 0; j < BULK_COUNT; j++) {
             snprintf(keyBufs[j], 32, "largekey%d", j);
@@ -5091,11 +5105,6 @@ int multidictTest(int argc, char *argv[]) {
         printf("  Bulk deleted %u entries\n", deleted);
         assert(deleted == BULK_COUNT / 2);
         assert(multidictSize(d) == (uint64_t)(BULK_COUNT / 2));
-
-        zfree(keyBufs);
-        zfree(valBufs);
-        zfree(keys);
-        zfree(vals);
     }
 
     printf("=== Bulk operations tests passed! ===\n");
@@ -5676,7 +5685,7 @@ int multidictTest(int argc, char *argv[]) {
             multidictAdd(d, &key, &val);
         }
 
-        multidict *copy = multidictCopy(d);
+        cleaner(multidictFree) multidict *copy = multidictCopy(d);
         if (!copy) {
             printf("ERROR: Copy should return non-NULL\n");
             err++;
@@ -5698,8 +5707,6 @@ int multidictTest(int argc, char *argv[]) {
                     err++;
                 }
             }
-
-            multidictFree(copy);
         }
     }
 
@@ -5708,8 +5715,10 @@ int multidictTest(int argc, char *argv[]) {
         multidictEmpty(d);
 
         /* Create source dict */
-        multidictClass *srcQdc = multidictMmClassNew();
-        multidict *src = multidictNew(&multidictTypeExactKey, srcQdc, 42);
+        cleaner(multidictMmClassFree) multidictClass *srcQdc =
+            multidictMmClassNew();
+        cleaner(multidictFree) multidict *src =
+            multidictNew(&multidictTypeExactKey, srcQdc, 42);
 
         /* Add entries to dst */
         for (int i = 0; i < 50; i++) {
@@ -5744,17 +5753,16 @@ int multidictTest(int argc, char *argv[]) {
                    multidictCount(d));
             err++;
         }
-
-        multidictFree(src);
-        multidictMmClassFree(srcQdc);
     }
 
     /* Test Merge with KEEP mode */
     {
         multidictEmpty(d);
 
-        multidictClass *srcQdc = multidictMmClassNew();
-        multidict *src = multidictNew(&multidictTypeExactKey, srcQdc, 42);
+        cleaner(multidictMmClassFree) multidictClass *srcQdc =
+            multidictMmClassNew();
+        cleaner(multidictFree) multidict *src =
+            multidictNew(&multidictTypeExactKey, srcQdc, 42);
 
         /* Add entries to dst */
         for (int i = 0; i < 10; i++) {
@@ -5789,9 +5797,6 @@ int multidictTest(int argc, char *argv[]) {
                    multidictCount(d));
             err++;
         }
-
-        multidictFree(src);
-        multidictMmClassFree(srcQdc);
     }
 
     printf("=== Dict operations tests passed! ===\n");
@@ -6052,8 +6057,10 @@ int multidictTest(int argc, char *argv[]) {
     printf("Test 20.8: Zero-overhead verification (no LRU)...\n");
     {
         /* Create new dict without LRU */
-        multidictClass *qdcNoLru = multidictMmClassNew();
-        multidict *dNoLru = multidictNew(&multidictTypeExactKey, qdcNoLru, 99);
+        cleaner(multidictMmClassFree) multidictClass *qdcNoLru =
+            multidictMmClassNew();
+        cleaner(multidictFree) multidict *dNoLru =
+            multidictNew(&multidictTypeExactKey, qdcNoLru, 99);
 
         assert(!multidictHasLRU(dNoLru));
 
@@ -6068,9 +6075,6 @@ int multidictTest(int argc, char *argv[]) {
 
         printf(
             "    No-LRU operations: no crash, operations silently ignored\n");
-
-        multidictFree(dNoLru);
-        multidictMmClassFree(qdcNoLru);
     }
 
     printf("=== LRU eviction tests passed! ===\n");
@@ -6130,8 +6134,10 @@ int multidictTest(int argc, char *argv[]) {
     printf("Test 21.3: Byte-based expansion trigger - small values...\n");
     {
         /* Create fresh dict with byte-based expansion */
-        multidictClass *qdcByte = multidictMmClassNew();
-        multidict *dByte = multidictNew(&multidictTypeExactKey, qdcByte, 88);
+        cleaner(multidictMmClassFree) multidictClass *qdcByte =
+            multidictMmClassNew();
+        cleaner(multidictFree) multidict *dByte =
+            multidictNew(&multidictTypeExactKey, qdcByte, 88);
         multidictEnableByteBasedExpansion(dByte, 1024,
                                           4096); /* 1KB target, 4KB max */
 
@@ -6150,16 +6156,15 @@ int multidictTest(int argc, char *argv[]) {
         printf("    After 200 small entries: slots=%" PRIu64
                ", avgSlotBytes=%" PRIu64 " (target=1024)\n",
                multidictSlotCount(dByte), metrics.avgSlotBytes);
-
-        multidictFree(dByte);
-        multidictMmClassFree(qdcByte);
     }
 
     printf("Test 21.4: Byte-based expansion trigger - large values...\n");
     {
         /* Create fresh dict with byte-based expansion */
-        multidictClass *qdcByte = multidictMmClassNew();
-        multidict *dByte = multidictNew(&multidictTypeExactKey, qdcByte, 88);
+        cleaner(multidictMmClassFree) multidictClass *qdcByte =
+            multidictMmClassNew();
+        cleaner(multidictFree) multidict *dByte =
+            multidictNew(&multidictTypeExactKey, qdcByte, 88);
         multidictEnableByteBasedExpansion(dByte, 512,
                                           2048); /* 512B target, 2KB max */
 
@@ -6185,16 +6190,15 @@ int multidictTest(int argc, char *argv[]) {
                ", avgSlotBytes=%" PRIu64 "\n",
                initialSlots, finalSlots, metrics.avgSlotBytes);
         assert(finalSlots > initialSlots); /* Should expand due to byte load */
-
-        multidictFree(dByte);
-        multidictMmClassFree(qdcByte);
     }
 
     printf("Test 21.5: Safeguard - maximum slot size trigger...\n");
     {
         /* Create dict with very low max slot size */
-        multidictClass *qdcByte = multidictMmClassNew();
-        multidict *dByte = multidictNew(&multidictTypeExactKey, qdcByte, 88);
+        cleaner(multidictMmClassFree) multidictClass *qdcByte =
+            multidictMmClassNew();
+        cleaner(multidictFree) multidict *dByte =
+            multidictNew(&multidictTypeExactKey, qdcByte, 88);
         multidictEnableByteBasedExpansion(dByte, 10000,
                                           500); /* maxSlotBytes=500 */
 
@@ -6219,16 +6223,15 @@ int multidictTest(int argc, char *argv[]) {
         printf("    Slots: initial=%" PRIu32 ", final=%" PRIu32
                ", maxSlotBytes=%" PRIu64 " (limit=500)\n",
                initialSlots, finalSlots, metrics.maxSlotBytes);
-
-        multidictFree(dByte);
-        multidictMmClassFree(qdcByte);
     }
 
     printf("Test 21.6: Safeguard - count-based backstop...\n");
     {
         /* Create dict with very high byte targets but low count threshold */
-        multidictClass *qdcByte = multidictMmClassNew();
-        multidict *dByte = multidictNew(&multidictTypeExactKey, qdcByte, 88);
+        cleaner(multidictMmClassFree) multidictClass *qdcByte =
+            multidictMmClassNew();
+        cleaner(multidictFree) multidict *dByte =
+            multidictNew(&multidictTypeExactKey, qdcByte, 88);
         multidictEnableByteBasedExpansion(
             dByte, 1024 * 1024, 8 * 1024 * 1024); /* 1MB target - very high */
 
@@ -6254,17 +6257,16 @@ int multidictTest(int argc, char *argv[]) {
                metrics.byteLoadFactor);
         assert(finalSlots >
                initialSlots); /* Should expand via count backstop */
-
-        multidictFree(dByte);
-        multidictMmClassFree(qdcByte);
     }
 
     printf("Test 21.7: Safeguard - expansion effectiveness check...\n");
     {
         /* This test verifies that expansion won't happen if it won't help
          * (skewed distribution where all keys hash to few slots) */
-        multidictClass *qdcByte = multidictMmClassNew();
-        multidict *dByte = multidictNew(&multidictTypeExactKey, qdcByte, 88);
+        cleaner(multidictMmClassFree) multidictClass *qdcByte =
+            multidictMmClassNew();
+        cleaner(multidictFree) multidict *dByte =
+            multidictNew(&multidictTypeExactKey, qdcByte, 88);
         multidictEnableByteBasedExpansion(dByte, 256, 1024);
 
         /* Insert entries - the effectiveness check will prevent
@@ -6284,18 +6286,19 @@ int multidictTest(int argc, char *argv[]) {
         printf("    Expansion with effectiveness check: avgSlotBytes=%" PRIu64
                ", slots=%" PRIu64 "\n",
                metrics.avgSlotBytes, multidictSlotCount(dByte));
-
-        multidictFree(dByte);
-        multidictMmClassFree(qdcByte);
     }
 
     printf("Test 21.8: Byte-based vs count-based expansion comparison...\n");
     {
         /* Create two dicts: one byte-based, one count-based */
-        multidictClass *qdcByte = multidictMmClassNew();
-        multidictClass *qdcCount = multidictMmClassNew();
-        multidict *dByte = multidictNew(&multidictTypeExactKey, qdcByte, 88);
-        multidict *dCount = multidictNew(&multidictTypeExactKey, qdcCount, 88);
+        cleaner(multidictMmClassFree) multidictClass *qdcByte =
+            multidictMmClassNew();
+        cleaner(multidictMmClassFree) multidictClass *qdcCount =
+            multidictMmClassNew();
+        cleaner(multidictFree) multidict *dByte =
+            multidictNew(&multidictTypeExactKey, qdcByte, 88);
+        cleaner(multidictFree) multidict *dCount =
+            multidictNew(&multidictTypeExactKey, qdcCount, 88);
 
         multidictEnableByteBasedExpansion(dByte, 512, 2048);
         /* dCount uses default count-based */
@@ -6322,18 +6325,15 @@ int multidictTest(int argc, char *argv[]) {
                ", count-based slots=%" PRIu32 "\n",
                byteSlots, countSlots);
         /* Byte-based may expand more aggressively for large values */
-
-        multidictFree(dByte);
-        multidictFree(dCount);
-        multidictMmClassFree(qdcByte);
-        multidictMmClassFree(qdcCount);
     }
 
     printf("Test 21.9: Byte-based expansion during rehashing operations...\n");
     {
         /* Verify byte-based expansion works correctly with rehashing */
-        multidictClass *qdcByte = multidictMmClassNew();
-        multidict *dByte = multidictNew(&multidictTypeExactKey, qdcByte, 88);
+        cleaner(multidictMmClassFree) multidictClass *qdcByte =
+            multidictMmClassNew();
+        cleaner(multidictFree) multidict *dByte =
+            multidictNew(&multidictTypeExactKey, qdcByte, 88);
         multidictEnableByteBasedExpansion(dByte, 1024, 4096);
 
         /* Insert to trigger expansion */
@@ -6368,16 +6368,15 @@ int multidictTest(int argc, char *argv[]) {
                "/200\n",
                foundCount);
         assert(foundCount == 200);
-
-        multidictFree(dByte);
-        multidictMmClassFree(qdcByte);
     }
 
     printf("Test 21.10: Fuzz test - byte-based expansion with mixed "
            "operations...\n");
     {
-        multidictClass *qdcByte = multidictMmClassNew();
-        multidict *dByte = multidictNew(&multidictTypeExactKey, qdcByte, 88);
+        cleaner(multidictMmClassFree) multidictClass *qdcByte =
+            multidictMmClassNew();
+        cleaner(multidictFree) multidict *dByte =
+            multidictNew(&multidictTypeExactKey, qdcByte, 88);
         multidictEnableByteBasedExpansion(dByte, 2048, 8192);
 
         int adds = 0, dels = 0, finds = 0;
@@ -6420,9 +6419,6 @@ int multidictTest(int argc, char *argv[]) {
         printf("    Fuzz: adds=%d, dels=%d, finds=%d, final count=%" PRIu64
                ", avgSlotBytes=%" PRIu64 "\n",
                adds, dels, finds, multidictCount(dByte), metrics.avgSlotBytes);
-
-        multidictFree(dByte);
-        multidictMmClassFree(qdcByte);
     }
 
     printf("=== Byte-based expansion tests passed! ===\n");
@@ -6439,7 +6435,8 @@ int multidictTest(int argc, char *argv[]) {
     printf("--- Section: single-step rehash sparse-table regression ---\n");
     {
         enum { N = 4000 };
-        multidict *r = multidictNew(&multidictTypeExactKey, qdc, 0xABCDEF);
+        cleaner(multidictFree) multidict *r =
+            multidictNew(&multidictTypeExactKey, qdc, 0xABCDEF);
         assert(r != NULL);
 
         char kb[32];
@@ -6484,7 +6481,6 @@ int multidictTest(int argc, char *argv[]) {
             }
         }
         assert(multidictSize(r) == N / 2);
-        multidictFree(r);
         printf("=== single-step rehash regression passed! ===\n");
     }
 
@@ -6542,8 +6538,6 @@ int multidictTest(int argc, char *argv[]) {
      * Cleanup
      * ================================================================ */
     printf("\n--- Cleanup ---\n");
-    multidictFree(d);
-    multidictMmClassFree(qdc);
 
     printf("\n=== ALL MULTIDICT TESTS PASSED! ===\n");
     return err;

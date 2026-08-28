@@ -1,8 +1,12 @@
 #include "intsetU32.h"
+#include "cleaner.h"
 #include "datakit.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleaner(intsetU32 *, intsetU32Free);
 
 /* Return the value at pos, using the configured encoding. */
 DK_INLINE_ALWAYS uint32_t intsetU32Get_(const intsetU32 *const is, size_t pos) {
@@ -25,13 +29,16 @@ DK_INLINE_ALWAYS void intsetU32Set_(intsetU32 *is, size_t pos,
 
 /* Create an empty intsetU32. */
 intsetU32 *intsetU32New(void) {
+    /* @own: caller; free=intsetU32Free */
     intsetU32 *is = zcalloc(1, sizeof(*is));
     return is;
 }
 
 intsetU32 *intsetU32NewLen(const uint32_t len) {
+    /* @own: caller; free=intsetU32Free */
     intsetU32 *is = zcalloc(1, sizeof(*is));
     if (len) {
+        /* @own: container; free=zfree */
         is->contents = zcalloc(len, sizeof(uint32_t));
     }
     return is;
@@ -45,10 +52,12 @@ void intsetU32Free(intsetU32 *is) {
 }
 
 intsetU32 *intsetU32Copy(const intsetU32 *is) {
+    /* @own: caller; free=intsetU32Free */
     intsetU32 *result = zcalloc(1, sizeof(*result));
     result->count = is->count;
     if (is->count) {
         const size_t bufBytes = sizeof(uint32_t) * is->count;
+        /* @own: container; free=zfree */
         result->contents = zmalloc(bufBytes);
         memcpy(result->contents, is->contents, bufBytes);
     }
@@ -64,6 +73,7 @@ void intsetU32Resize(intsetU32 *is, const uint32_t len) {
         is->contents = NULL;
         return;
     }
+    /* @own: container; free=zfree */
     is->contents = zrealloc(is->contents, sizeof(uint32_t) * len);
 }
 
@@ -306,6 +316,7 @@ static void _intsetU32Assert(char *estr, char *file, int line) {
 static intsetU32 *createSet(int bits, int size) {
     uint64_t mask = (1 << bits) - 1;
     uint64_t value;
+    /* @own: caller; free=intsetU32Free */
     intsetU32 *is = intsetU32New();
 
     for (int i = 0; i < size; i++) {
@@ -322,7 +333,6 @@ static intsetU32 *createSet(int bits, int size) {
 }
 
 int intsetU32Test(int argc, char **argv) {
-    intsetU32 *is;
     srandom(time(NULL));
 
     (void)argc;
@@ -330,7 +340,7 @@ int intsetU32Test(int argc, char **argv) {
 
     printf("Basic adding: ");
     {
-        is = intsetU32New();
+        cleaner(intsetU32Free) intsetU32 *is = intsetU32New();
         intsetU32Assert(is);
         const bool s1 = intsetU32Add(is, 5);
         intsetU32Assert(is);
@@ -349,8 +359,8 @@ int intsetU32Test(int argc, char **argv) {
 
     printf("Subset semantics (a subset of b, matching intsetBigSubset): ");
     {
-        intsetU32 *small = intsetU32New();
-        intsetU32 *big = intsetU32New();
+        cleaner(intsetU32Free) intsetU32 *small = intsetU32New();
+        cleaner(intsetU32Free) intsetU32 *big = intsetU32New();
         for (uint32_t v = 10; v <= 30; v += 10) {
             intsetU32Add(small, v); /* {10, 20, 30} */
         }
@@ -365,35 +375,30 @@ int intsetU32Test(int argc, char **argv) {
         intsetU32Assert(!intsetU32Subset(big, small));
 
         /* Equal sets are subsets of each other; self is a subset. */
-        intsetU32 *dup = intsetU32Copy(small);
+        cleaner(intsetU32Free) intsetU32 *dup = intsetU32Copy(small);
         intsetU32Assert(intsetU32Subset(small, dup));
         intsetU32Assert(intsetU32Subset(dup, small));
         intsetU32Assert(intsetU32Subset(small, small));
 
         /* The empty set is a subset of everything; nothing non-empty
          * is a subset of the empty set. */
-        intsetU32 *empty = intsetU32New();
+        cleaner(intsetU32Free) intsetU32 *empty = intsetU32New();
         intsetU32Assert(intsetU32Subset(empty, small));
         intsetU32Assert(!intsetU32Subset(small, empty));
 
         /* Disjoint overlap: sharing SOME members is not enough. */
-        intsetU32 *shifted = intsetU32New();
+        cleaner(intsetU32Free) intsetU32 *shifted = intsetU32New();
         intsetU32Add(shifted, 20);
         intsetU32Add(shifted, 999);
         intsetU32Assert(!intsetU32Subset(shifted, big));
 
-        intsetU32Free(small);
-        intsetU32Free(big);
-        intsetU32Free(dup);
-        intsetU32Free(empty);
-        intsetU32Free(shifted);
         ok();
     }
 
     printf("Large number of random adds: ");
     {
         uint32_t inserts = 0;
-        is = intsetU32New();
+        cleaner(intsetU32Free) intsetU32 *is = intsetU32New();
         for (int i = 0; i < 1024; i++) {
             if (intsetU32Add(is, random() % 0x800)) {
                 inserts++;
@@ -406,17 +411,22 @@ int intsetU32Test(int argc, char **argv) {
 
     printf("Upgrade from int16 to int32: ");
     {
-        is = intsetU32New();
-        intsetU32Add(is, 32);
-        intsetU32Add(is, 65535);
-        intsetU32Assert(intsetU32Exists(is, 32));
-        intsetU32Assert(intsetU32Exists(is, 65535));
+        {
+            cleaner(intsetU32Free) intsetU32 *is = intsetU32New();
+            intsetU32Add(is, 32);
+            intsetU32Add(is, 65535);
+            intsetU32Assert(intsetU32Exists(is, 32));
+            intsetU32Assert(intsetU32Exists(is, 65535));
+        }
 
-        is = intsetU32New();
-        intsetU32Add(is, 32);
-        intsetU32Add(is, -65535);
-        intsetU32Assert(intsetU32Exists(is, 32));
-        intsetU32Assert(intsetU32Exists(is, -65535));
+        {
+            cleaner(intsetU32Free) intsetU32 *is = intsetU32New();
+            intsetU32Add(is, 32);
+            intsetU32Add(is, -65535);
+            intsetU32Assert(intsetU32Exists(is, 32));
+            intsetU32Assert(intsetU32Exists(is, -65535));
+        }
+
         ok();
     }
 
@@ -425,7 +435,7 @@ int intsetU32Test(int argc, char **argv) {
         long num = 100000, size = 10000;
         int i, bits = 20;
         long long start;
-        is = createSet(bits, size);
+        cleaner(intsetU32Free) intsetU32 *is = createSet(bits, size);
 
         start = usec();
         for (i = 0; i < num; i++) {
@@ -438,7 +448,7 @@ int intsetU32Test(int argc, char **argv) {
     printf("Stress add+delete: ");
     {
         int i, v1, v2;
-        is = intsetU32New();
+        cleaner(intsetU32Free) intsetU32 *is = intsetU32New();
         for (i = 0; i < 0xffff; i++) {
             v1 = random() % 0xfff;
             intsetU32Add(is, v1);

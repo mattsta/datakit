@@ -1,15 +1,23 @@
 #pragma once
 
+/* node->data is the per-node payload buffer, freed by the owning
+ * multiarraySmall/Medium/Large container's Free (or transferred onward
+ * by a tier-promotion path) alongside the node struct itself.
+ * @own: container */
 #define multiarrayMediumLargeSplitNew(node, s, len)                            \
     do {                                                                       \
+        /* @own: container */                                                  \
         (node)->data = zcalloc(1, len);                                        \
         (node)->count = 1;                                                     \
         memcpy((node)->data, s, len);                                          \
     } while (0)
 
+/* node->data reallocated in place.
+ * @own: container */
 #define multiarrayMediumLargeInsertAtIdx(node, remaining, remainingLen,        \
                                          offsetLen, count, s, len)             \
     do {                                                                       \
+        /* @own: container */                                                  \
         (node)->data = zrealloc((node)->data, (len) * ((count) + 1));          \
         if (remaining) {                                                       \
             memmove((node)->data + (offsetLen) + (len),                        \
@@ -18,6 +26,8 @@
         memcpy((node)->data + (offsetLen), s, len);                            \
     } while (0)
 
+/* node->data reallocated in place.
+ * @own: container */
 #define multiarrayMediumLargeDeleteAtIdx(node, remaining, remainingLen,        \
                                          offsetLen, count, len)                \
     do {                                                                       \
@@ -26,9 +36,13 @@
             memmove((node)->data + (offsetLen),                                \
                     (node)->data + (offsetLen) + (len), remainingLen);         \
         }                                                                      \
+        /* @own: container */                                                  \
         (node)->data = zrealloc((node)->data, (len) * ((count) - 1));          \
     } while (0)
 
+/* nodeNew->data and nodeOld->data are both container-owned payload
+ * buffers.
+ * @own: container */
 #define multiarrayMediumLargeNodeNewAfter(nodeNew, nodeOld, remaining,         \
                                           remainingLen, offsetLen, s, len)     \
     do {                                                                       \
@@ -36,6 +50,7 @@
          * than idx.                                                           \
          * Put new value at head then move remaining entries. */               \
         /* 'nodeNew' gets put AFTER 'nodeOld' */                               \
+        /* @own: container */                                                  \
         (nodeNew)->data = zcalloc((len), ((remaining) + 1));                   \
         (nodeNew)->count = (remaining) + 1;                                    \
                                                                                \
@@ -51,9 +66,13 @@
                                                                                \
         /* Don't have to move remaining entries since we copied from end. */   \
         /* We can just realloc the size down to fit. */                        \
+        /* @own: container */                                                  \
         (nodeOld)->data = zrealloc((nodeOld)->data, offsetLen);                \
     } while (0)
 
+/* split->data and found->data are both container-owned payload
+ * buffers.
+ * @own: container */
 #define multiarrayMediumLargeNodeNew(nodeNew, nodeOld, offset, remainingLen,   \
                                      offsetLen, s, len)                        \
     do {                                                                       \
@@ -61,6 +80,7 @@
          * *bigger* than idx.                                                  \
          * Move 'idx' entires then place new value at TAIL. */                 \
         /* split gets put BEFORE found */                                      \
+        /* @own: container */                                                  \
         split->data = zcalloc((len), ((offset) + 1));                          \
         split->count = (offset) + 1;                                           \
                                                                                \
@@ -77,5 +97,6 @@
         memmove(found->data, found->data + (offsetLen), remainingLen);         \
                                                                                \
         /* Shrink allocation since we removed entries */                       \
+        /* @own: container */                                                  \
         found->data = zrealloc(found->data, remainingLen);                     \
     } while (0)

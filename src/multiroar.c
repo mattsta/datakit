@@ -4,9 +4,37 @@
 #include "../deps/varint/src/varintSplitFull.h"
 #include "../deps/varint/src/varintTagged.h"
 
+#include "cleaner.h"
 #include "str.h" /* optimized popcnt helpers */
 #include <inttypes.h>
 #include <stdlib.h> /* qsort */
+
+defcleanerName(uint8_t *, zfree, Bytes);
+defcleanerName(uint64_t *, zfree, UInt64);
+defcleanerName(multiroar **, zfree, RoarPtrs);
+defcleaner(multiroar *, multiroarFree);
+
+#ifdef DATAKIT_TEST
+defcleanerName(bool *, zfree, Bools);
+defcleanerName(void *, zfree, Void);
+
+/* Runtime-sized array of OWNED multiroars: the scope-exit cleanup
+ * frees every element and then the pointer array itself, so fuzz
+ * failure paths (ERR + break) release the inputs too. */
+typedef struct roarArray {
+    multiroar **items;
+    uint64_t count;
+} roarArray;
+
+static DK_FN_UNUSED void roarArrayFree_cleanup(roarArray *a) {
+    if (a->items) {
+        for (uint64_t i = 0; i < a->count; i++) {
+            multiroarFree(a->items[i]);
+        }
+        zfree(a->items);
+    }
+}
+#endif
 
 struct multiroar {
     multimap *map;
@@ -138,7 +166,9 @@ typedef enum chunkType {
 multiroar *multiroarBitNew(void) {
     /* +1: meta[0] == 0 marks BIT mode so value/bit mode is always
      * introspectable (value mode stores its nonzero bitWidth there). */
+    /* @own: caller; free=multiroarFree */
     multiroar *r = zcalloc(1, sizeof(*r) + 1);
+    /* @own: container; free=multimapFree */
     r->map = multimapNew(ELEMENTS_PER_ENTRY);
     return r;
 }
@@ -163,7 +193,9 @@ multiroar *multiroarValueNew(const uint8_t bitWidth, const uint64_t rows,
      *   - 1 byte for bit width (uint8_t)
      *   - 1 to 9 bytes for col count (SplitFull Varint)
      *   - 1 to 9 bytes for row count (SplitFull Varint) */
+    /* @own: caller; free=multiroarFree */
     multiroar *r = zcalloc(1, sizeof(*r) + 1 + colWidth + rowWidth);
+    /* @own: container; free=multimapFree */
     r->map = multimapNew(ELEMENTS_PER_ENTRY);
 
     /* bitWidth must be written BEFORE the row offset is computed:
@@ -781,8 +813,10 @@ multiroar *multiroarDuplicate(const multiroar *r) {
         metaLen += varintSplitFullGetLenQuick_(r->meta + 1 + colLen);
     }
 
+    /* @own: caller; free=multiroarFree */
     multiroar *dup = zcalloc(1, sizeof(*dup) + metaLen);
     memcpy(dup->meta, r->meta, metaLen);
+    /* @own: container; free=multimapFree */
     dup->map = multimapCopy(r->map);
     return dup;
 }
@@ -1597,7 +1631,7 @@ void multiroarBitClearRange(multiroar *r, uint64_t start, uint64_t extent) {
     }
 
     /* Use AND-NOT with a temporary roar containing the range */
-    multiroar *rangeRoar = multiroarBitNew();
+    cleaner(multiroarFree) multiroar *rangeRoar = multiroarBitNew();
     if (!rangeRoar) {
         return;
     }
@@ -1609,7 +1643,6 @@ void multiroarBitClearRange(multiroar *r, uint64_t start, uint64_t extent) {
 
     /* r = r AND NOT rangeRoar */
     multiroarAndNot(r, rangeRoar);
-    multiroarFree(rangeRoar);
 }
 
 /* Flip range [start, start+extent) */
@@ -1626,7 +1659,7 @@ void multiroarBitFlipRange(multiroar *r, uint64_t start, uint64_t extent) {
     }
 
     /* Use XOR with a temporary roar containing the range */
-    multiroar *rangeRoar = multiroarBitNew();
+    cleaner(multiroarFree) multiroar *rangeRoar = multiroarBitNew();
     if (!rangeRoar) {
         return;
     }
@@ -1638,7 +1671,6 @@ void multiroarBitFlipRange(multiroar *r, uint64_t start, uint64_t extent) {
 
     /* r = r XOR rangeRoar (flips all bits in range) */
     multiroarXor(r, rangeRoar);
-    multiroarFree(rangeRoar);
 }
 
 /* Set difference: A AND NOT B (bits in A but not in B) - returns new */
@@ -1648,9 +1680,11 @@ multiroar *multiroarNewAndNot(const multiroar *a, const multiroar *b) {
     }
 
     if (!b || !b->map) {
+        /* @own: caller; free=multiroarFree */
         return multiroarDuplicate(a);
     }
 
+    /* @own: caller; free=multiroarFree */
     multiroar *result = multiroarBitNew();
     if (!result) {
         return NULL;
@@ -1707,8 +1741,9 @@ void multiroarAndNot(multiroar *r, multiroar *b) {
         return;
     }
 
-    /* Create result using newAndNot, then swap */
-    multiroar *result = multiroarNewAndNot(r, b);
+    /* Create result using newAndNot, then swap; the scope-exit free
+     * releases the swapped-out old map inside `result`. */
+    cleaner(multiroarFree) multiroar *result = multiroarNewAndNot(r, b);
     if (!result) {
         return;
     }
@@ -1717,9 +1752,6 @@ void multiroarAndNot(multiroar *r, multiroar *b) {
     multimap *temp = r->map;
     r->map = result->map;
     result->map = temp;
-
-    /* Free the old data */
-    multiroarFree(result);
 }
 
 /* ====================================================================
@@ -2024,6 +2056,7 @@ multiroar *multiroarFromArray(const uint64_t *positions, uint64_t count) {
         return NULL;
     }
 
+    /* @own: caller; free=multiroarFree */
     multiroar *r = multiroarBitNew();
     if (!r) {
         return NULL;
@@ -2056,14 +2089,11 @@ double multiroarJaccard(const multiroar *a, const multiroar *b) {
     }
 
     /* Calculate intersection and union */
-    multiroar *intersection = multiroarNewAnd(a, b);
-    multiroar *unionSet = multiroarNewOr(a, b);
+    cleaner(multiroarFree) multiroar *intersection = multiroarNewAnd(a, b);
+    cleaner(multiroarFree) multiroar *unionSet = multiroarNewOr(a, b);
 
     uint64_t intersectionCount = multiroarBitCount(intersection);
     uint64_t unionCount = multiroarBitCount(unionSet);
-
-    multiroarFree(intersection);
-    multiroarFree(unionSet);
 
     if (unionCount == 0) {
         return 1.0;
@@ -2079,11 +2109,8 @@ uint64_t multiroarHammingDistance(const multiroar *a, const multiroar *b) {
     }
 
     /* Hamming distance is count of XOR */
-    multiroar *xorResult = multiroarNewXor(a, b);
-    uint64_t distance = multiroarBitCount(xorResult);
-    multiroarFree(xorResult);
-
-    return distance;
+    cleaner(multiroarFree) multiroar *xorResult = multiroarNewXor(a, b);
+    return multiroarBitCount(xorResult);
 }
 
 /* Overlap coefficient: |A ∩ B| / min(|A|, |B|) ∈ [0, 1] */
@@ -2099,9 +2126,8 @@ double multiroarOverlap(const multiroar *a, const multiroar *b) {
         return 0.0;
     }
 
-    multiroar *intersection = multiroarNewAnd(a, b);
+    cleaner(multiroarFree) multiroar *intersection = multiroarNewAnd(a, b);
     uint64_t intersectionCount = multiroarBitCount(intersection);
-    multiroarFree(intersection);
 
     uint64_t minCount = countA < countB ? countA : countB;
     return (double)intersectionCount / (double)minCount;
@@ -2124,9 +2150,8 @@ double multiroarDice(const multiroar *a, const multiroar *b) {
         return 0.0;
     }
 
-    multiroar *intersection = multiroarNewAnd(a, b);
+    cleaner(multiroarFree) multiroar *intersection = multiroarNewAnd(a, b);
     uint64_t intersectionCount = multiroarBitCount(intersection);
-    multiroarFree(intersection);
 
     return (2.0 * intersectionCount) / (double)(countA + countB);
 }
@@ -2439,26 +2464,28 @@ multiroar *multiroarDeserialize(const void *buf, uint64_t bufSize) {
     }
     p += bytesRead;
 
-    /* Create new roar */
-    multiroar *r = multiroarBitNew();
+    /* Create new roar; scope-managed so every parse-error return below
+     * releases it without per-site cleanup calls. */
+    cleaner(multiroarFree) multiroar *r = multiroarBitNew();
     if (!r) {
         return NULL;
     }
 
-    /* Deserialize each chunk */
+    /* Deserialize each chunk.  multimapInsert COPIES the chunk bytes
+     * into the map, so each temporary chunk buffer is scope-managed
+     * per case block: freed after the insert on success and on every
+     * early-error return alike. */
     for (uint64_t i = 0; i < chunkCount; i++) {
         /* Read chunk ID */
         uint64_t chunkId;
         bytesRead = readVarint(p, (uint64_t)(end - p), &chunkId);
         if (bytesRead == 0) {
-            multiroarFree(r);
             return NULL;
         }
         p += bytesRead;
 
         /* Read chunk type */
         if (p >= end) {
-            multiroarFree(r);
             return NULL;
         }
         uint8_t chunkType = *p++;
@@ -2471,9 +2498,8 @@ multiroar *multiroarDeserialize(const void *buf, uint64_t bufSize) {
 
         case CHUNK_TYPE_ALL_1: {
             /* Create single-byte ALL_1 chunk */
-            uint8_t *chunk = zcalloc(1, 1);
+            cleanerName(zfree, Bytes) uint8_t *chunk = zcalloc(1, 1);
             if (!chunk) {
-                multiroarFree(r);
                 return NULL;
             }
             chunk[0] = CHUNK_TYPE_ALL_1;
@@ -2496,7 +2522,6 @@ multiroar *multiroarDeserialize(const void *buf, uint64_t bufSize) {
             uint64_t count;
             bytesRead = readVarint(p, (uint64_t)(end - p), &count);
             if (bytesRead == 0) {
-                multiroarFree(r);
                 return NULL;
             }
             p += bytesRead;
@@ -2513,12 +2538,10 @@ multiroar *multiroarDeserialize(const void *buf, uint64_t bufSize) {
 
             uint64_t chunkSize = 1 + countBytes + packedBytes;
 
-            uint8_t *chunk = zcalloc(chunkSize, 1);
+            cleanerName(zfree, Bytes) uint8_t *chunk = zcalloc(chunkSize, 1);
             if (!chunk) {
-                multiroarFree(r);
                 return NULL;
             }
-
             chunk[0] = chunkType;
             memcpy(chunk + 1, tempCount, countBytes); /* TaggedVarint count */
 
@@ -2527,8 +2550,6 @@ multiroar *multiroarDeserialize(const void *buf, uint64_t bufSize) {
                 uint64_t pos;
                 bytesRead = readVarint(p, (uint64_t)(end - p), &pos);
                 if (bytesRead == 0) {
-                    zfree(chunk);
-                    multiroarFree(r);
                     return NULL;
                 }
                 p += bytesRead;
@@ -2551,17 +2572,14 @@ multiroar *multiroarDeserialize(const void *buf, uint64_t bufSize) {
         case CHUNK_TYPE_FULL_BITMAP: {
             /* Read bitmap data */
             if (p + 1024 > end) {
-                multiroarFree(r);
                 return NULL;
             }
 
             /* Create chunk: 1 type + 1024 bitmap */
-            uint8_t *chunk = zcalloc(1025, 1);
+            cleanerName(zfree, Bytes) uint8_t *chunk = zcalloc(1025, 1);
             if (!chunk) {
-                multiroarFree(r);
                 return NULL;
             }
-
             chunk[0] = CHUNK_TYPE_FULL_BITMAP;
             memcpy(chunk + 1, p, 1024);
             p += 1024;
@@ -2580,12 +2598,14 @@ multiroar *multiroarDeserialize(const void *buf, uint64_t bufSize) {
 
         default:
             /* Unknown chunk type */
-            multiroarFree(r);
             return NULL;
         }
     }
 
-    return r;
+    /* Success: hand ownership to the caller (disarm the cleaner) */
+    multiroar *out = r;
+    r = NULL;
+    return out;
 }
 
 /* ====================================================================
@@ -2910,7 +2930,8 @@ void multiroarOr(multiroar *r, multiroar *b) {
     }
 
     /* Collect just keys from b via iteration */
-    uint64_t *chunkKeys = zmalloc(numChunks * sizeof(uint64_t));
+    cleanerName(zfree, UInt64) uint64_t *chunkKeys =
+        zmalloc(numChunks * sizeof(uint64_t));
     uint64_t keyCount = 0;
 
     multimapIterator iter;
@@ -2950,8 +2971,6 @@ void multiroarOr(multiroar *r, multiroar *b) {
         multimapEntry me;
         compressBitmapToChunk(r, &key, bitmapR, &me, rHasChunk);
     }
-
-    zfree(chunkKeys);
 }
 
 /* AND: r = r AND b */
@@ -2971,7 +2990,8 @@ void multiroarAnd(multiroar *r, multiroar *b) {
         return;
     }
 
-    uint64_t *chunkKeys = zmalloc(numChunks * sizeof(uint64_t));
+    cleanerName(zfree, UInt64) uint64_t *chunkKeys =
+        zmalloc(numChunks * sizeof(uint64_t));
     uint64_t keyCount = 0;
 
     multimapIterator iter;
@@ -3014,11 +3034,15 @@ void multiroarAnd(multiroar *r, multiroar *b) {
             compressBitmapToChunk(r, &key, bitmapR, &me, true);
         }
     }
-
-    zfree(chunkKeys);
 }
 
 /* XOR: r = r XOR b */
+typedef struct multiroarChunkBitmap {
+    uint64_t key;
+    _Alignas(uint64_t) uint8_t bitmap[BITMAP_SIZE_IN_BYTES];
+} ChunkBitmap;
+defcleanerName(ChunkBitmap *, zfree, ChunkBitmap);
+
 void multiroarXor(multiroar *r, multiroar *b) {
     if (!r || !b) {
         return;
@@ -3034,11 +3058,8 @@ void multiroarXor(multiroar *r, multiroar *b) {
     }
 
     /* Store both keys and bitmaps from b */
-    typedef struct {
-        uint64_t key;
-        _Alignas(uint64_t) uint8_t bitmap[BITMAP_SIZE_IN_BYTES];
-    } ChunkBitmap;
-    ChunkBitmap *chunks = zmalloc(numChunks * sizeof(ChunkBitmap));
+    cleanerName(zfree, ChunkBitmap) ChunkBitmap *chunks =
+        zmalloc(numChunks * sizeof(ChunkBitmap));
     uint64_t chunkCount = 0;
 
     multimapIterator iter;
@@ -3072,8 +3093,6 @@ void multiroarXor(multiroar *r, multiroar *b) {
             compressBitmapToChunk(r, &key, bitmapB, &me, false);
         }
     }
-
-    zfree(chunks);
 }
 
 /* NOT: r = NOT r (within existing chunks only) */
@@ -3090,7 +3109,8 @@ void multiroarNot(multiroar *r) {
         return;
     }
 
-    uint64_t *chunkKeys = zmalloc(numChunks * sizeof(uint64_t));
+    cleanerName(zfree, UInt64) uint64_t *chunkKeys =
+        zmalloc(numChunks * sizeof(uint64_t));
     uint64_t keyCount = 0;
 
     multimapIterator iter;
@@ -3122,30 +3142,32 @@ void multiroarNot(multiroar *r) {
             compressBitmapToChunk(r, &key, bitmap, &me, true);
         }
     }
-
-    zfree(chunkKeys);
 }
 
 /* Create new roars from operations */
 multiroar *multiroarNewAnd(const multiroar *a, const multiroar *b) {
+    /* @own: caller; free=multiroarFree */
     multiroar *result = multiroarDuplicate(a);
     multiroarAnd(result, (multiroar *)b);
     return result;
 }
 
 multiroar *multiroarNewOr(const multiroar *a, const multiroar *b) {
+    /* @own: caller; free=multiroarFree */
     multiroar *result = multiroarDuplicate(a);
     multiroarOr(result, (multiroar *)b);
     return result;
 }
 
 multiroar *multiroarNewXor(const multiroar *a, const multiroar *b) {
+    /* @own: caller; free=multiroarFree */
     multiroar *result = multiroarDuplicate(a);
     multiroarXor(result, (multiroar *)b);
     return result;
 }
 
 multiroar *multiroarNewNot(const multiroar *r) {
+    /* @own: caller; free=multiroarFree */
     multiroar *result = multiroarDuplicate(r);
     multiroarNot(result);
     return result;
@@ -3187,6 +3209,7 @@ DK_STATIC uint64_t *collectAllChunkKeys(uint64_t n, multiroar **roars,
      * duplicates. This is O(K log K) vs the previous O(K^2) dedup-by-rescan.
      * The resulting ascending order is fine for the N-way callers (per-chunk
      * set ops are order-independent) and matches the multimap's own order. */
+    /* @own: caller; free=zfree */
     uint64_t *allKeys = zmalloc(totalChunks * sizeof(uint64_t));
     uint64_t keyCount = 0;
 
@@ -3230,13 +3253,15 @@ void multiroarAndN(uint64_t n, multiroar **roars) {
 
     /* Collect all chunk IDs that exist in ALL inputs */
     uint64_t allKeyCount;
-    uint64_t *allKeys = collectAllChunkKeys(n, roars, &allKeyCount);
+    cleanerName(zfree, UInt64) uint64_t *allKeys =
+        collectAllChunkKeys(n, roars, &allKeyCount);
 
     if (!allKeys) {
         return;
     }
 
-    uint8_t *bitmaps = zmalloc(n * BITMAP_SIZE_IN_BYTES);
+    cleanerName(zfree, Bytes) uint8_t *bitmaps =
+        zmalloc(n * BITMAP_SIZE_IN_BYTES);
     _Alignas(uint64_t) uint8_t resultBitmap[BITMAP_SIZE_IN_BYTES];
 
     /* Process each unique chunk */
@@ -3287,9 +3312,6 @@ void multiroarAndN(uint64_t n, multiroar **roars) {
             multimapGetUnderlyingEntry(result->map, &key, &me);
         compressBitmapToChunk(result, &key, resultBitmap, &me, resultHasChunk);
     }
-
-    zfree(bitmaps);
-    zfree(allKeys);
 }
 
 /* N-way OR: Modifies first roar in array */
@@ -3302,13 +3324,15 @@ void multiroarOrN(uint64_t n, multiroar **roars) {
 
     /* Collect all chunk IDs across all inputs */
     uint64_t allKeyCount;
-    uint64_t *allKeys = collectAllChunkKeys(n, roars, &allKeyCount);
+    cleanerName(zfree, UInt64) uint64_t *allKeys =
+        collectAllChunkKeys(n, roars, &allKeyCount);
 
     if (!allKeys) {
         return;
     }
 
-    uint8_t *bitmaps = zmalloc(n * BITMAP_SIZE_IN_BYTES);
+    cleanerName(zfree, Bytes) uint8_t *bitmaps =
+        zmalloc(n * BITMAP_SIZE_IN_BYTES);
     _Alignas(uint64_t) uint8_t resultBitmap[BITMAP_SIZE_IN_BYTES];
 
     /* Process each unique chunk */
@@ -3351,9 +3375,6 @@ void multiroarOrN(uint64_t n, multiroar **roars) {
             multimapGetUnderlyingEntry(result->map, &key, &me);
         compressBitmapToChunk(result, &key, resultBitmap, &me, resultHasChunk);
     }
-
-    zfree(bitmaps);
-    zfree(allKeys);
 }
 
 /* N-way XOR: Modifies first roar in array */
@@ -3366,13 +3387,15 @@ void multiroarXorN(uint64_t n, multiroar **roars) {
 
     /* Collect all chunk IDs across all inputs */
     uint64_t allKeyCount;
-    uint64_t *allKeys = collectAllChunkKeys(n, roars, &allKeyCount);
+    cleanerName(zfree, UInt64) uint64_t *allKeys =
+        collectAllChunkKeys(n, roars, &allKeyCount);
 
     if (!allKeys) {
         return;
     }
 
-    uint8_t *bitmaps = zmalloc(n * BITMAP_SIZE_IN_BYTES);
+    cleanerName(zfree, Bytes) uint8_t *bitmaps =
+        zmalloc(n * BITMAP_SIZE_IN_BYTES);
     _Alignas(uint64_t) uint8_t resultBitmap[BITMAP_SIZE_IN_BYTES];
 
     /* Process each unique chunk */
@@ -3408,29 +3431,28 @@ void multiroarXorN(uint64_t n, multiroar **roars) {
             multimapGetUnderlyingEntry(result->map, &key, &me);
         compressBitmapToChunk(result, &key, resultBitmap, &me, resultHasChunk);
     }
-
-    zfree(bitmaps);
-    zfree(allKeys);
 }
 
 /* N-way operations returning new multiroar */
 multiroar *multiroarNewAndN(uint64_t n, multiroar **roars) {
     if (n == 0 || !roars || !roars[0]) {
+        /* @own: caller; free=multiroarFree */
         return multiroarBitNew();
     }
 
+    /* @own: caller; free=multiroarFree */
     multiroar *result = multiroarDuplicate(roars[0]);
 
     if (n > 1) {
         /* Create temp array starting from result */
-        multiroar **tempRoars = zmalloc(n * sizeof(multiroar *));
+        cleanerName(zfree, RoarPtrs) multiroar **tempRoars =
+            zmalloc(n * sizeof(multiroar *));
         tempRoars[0] = result;
         for (uint64_t i = 1; i < n; i++) {
             tempRoars[i] = roars[i];
         }
 
         multiroarAndN(n, tempRoars);
-        zfree(tempRoars);
     }
 
     return result;
@@ -3438,21 +3460,23 @@ multiroar *multiroarNewAndN(uint64_t n, multiroar **roars) {
 
 multiroar *multiroarNewOrN(uint64_t n, multiroar **roars) {
     if (n == 0 || !roars || !roars[0]) {
+        /* @own: caller; free=multiroarFree */
         return multiroarBitNew();
     }
 
+    /* @own: caller; free=multiroarFree */
     multiroar *result = multiroarDuplicate(roars[0]);
 
     if (n > 1) {
         /* Create temp array starting from result */
-        multiroar **tempRoars = zmalloc(n * sizeof(multiroar *));
+        cleanerName(zfree, RoarPtrs) multiroar **tempRoars =
+            zmalloc(n * sizeof(multiroar *));
         tempRoars[0] = result;
         for (uint64_t i = 1; i < n; i++) {
             tempRoars[i] = roars[i];
         }
 
         multiroarOrN(n, tempRoars);
-        zfree(tempRoars);
     }
 
     return result;
@@ -3460,21 +3484,23 @@ multiroar *multiroarNewOrN(uint64_t n, multiroar **roars) {
 
 multiroar *multiroarNewXorN(uint64_t n, multiroar **roars) {
     if (n == 0 || !roars || !roars[0]) {
+        /* @own: caller; free=multiroarFree */
         return multiroarBitNew();
     }
 
+    /* @own: caller; free=multiroarFree */
     multiroar *result = multiroarDuplicate(roars[0]);
 
     if (n > 1) {
         /* Create temp array starting from result */
-        multiroar **tempRoars = zmalloc(n * sizeof(multiroar *));
+        cleanerName(zfree, RoarPtrs) multiroar **tempRoars =
+            zmalloc(n * sizeof(multiroar *));
         tempRoars[0] = result;
         for (uint64_t i = 1; i < n; i++) {
             tempRoars[i] = roars[i];
         }
 
         multiroarXorN(n, tempRoars);
-        zfree(tempRoars);
     }
 
     return result;
@@ -3538,12 +3564,12 @@ int multiroarTest(int argc, char *argv[]) {
     int err = 0;
 
     TEST("create") {
-        multiroar *r = multiroarBitNew();
-        multiroarFree(r);
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
+        (void)r;
     }
 
     TEST("set and get") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         bool previouslySet = multiroarBitSet(r, 1700);
 
         if (previouslySet) {
@@ -3555,16 +3581,17 @@ int multiroarTest(int argc, char *argv[]) {
         if (!currentlySet) {
             ERRR("Didn't find set bit after setting the bit!");
         }
-
-        multiroarFree(r);
     }
 
     TEST("value mode: constructor bounds + set/get/previous/remove") {
-        /* Invalid widths refuse construction */
+        /* Invalid widths refuse construction (rejection returns NULL, so
+         * nothing is ever owned here). */
+        /* @own: caller; free=multiroarFree */
         assert(multiroarValueNew(0, 4, 4) == NULL);
+        /* @own: caller; free=multiroarFree */
         assert(multiroarValueNew(65, 4, 4) == NULL);
 
-        multiroar *v = multiroarValueNew(16, 100, 100);
+        cleaner(multiroarFree) multiroar *v = multiroarValueNew(16, 100, 100);
         assert(v);
 
         /* Fresh position: Set reports no prior value */
@@ -3603,7 +3630,7 @@ int multiroarTest(int argc, char *argv[]) {
 
         /* Duplicate preserves value-mode meta (bitWidth + bounds): value
          * ops on the duplicate must keep working, with content copied. */
-        multiroar *dupe = multiroarDuplicate(v);
+        cleaner(multiroarFree) multiroar *dupe = multiroarDuplicate(v);
         assert(dupe);
         assert(multiroarValueGet(dupe, 0, &got) && got.data.u == 12);
         databox val3 = databoxNewUnsigned(77);
@@ -3612,17 +3639,13 @@ int multiroarTest(int argc, char *argv[]) {
         /* ...and the original is unaffected by writes to the copy */
         assert(!multiroarValueGet(v, 55, NULL));
 
-        multiroarFree(dupe);
-        multiroarFree(v);
-
         /* Unbounded (rows/cols 0) accepts any position */
-        multiroar *u = multiroarValueNew(64, 0, 0);
+        cleaner(multiroarFree) multiroar *u = multiroarValueNew(64, 0, 0);
         assert(u);
         databox big = databoxNewUnsigned(UINT64_MAX);
         assert(!multiroarValueSet(u, UINT64_MAX - 1, &big));
         assert(multiroarValueGet(u, UINT64_MAX - 1, &got) &&
                got.data.u == UINT64_MAX);
-        multiroarFree(u);
     }
 
     const int32_t lots = 72000;
@@ -3632,7 +3655,7 @@ int multiroarTest(int argc, char *argv[]) {
         for (int32_t i = 0; i < lots; i++) {
             const uint64_t position = (uint64_t)rand() % SIZE_MAX;
 
-            multiroar *r = multiroarBitNew();
+            cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
             const bool previouslySet = multiroarBitSet(r, position);
 
@@ -3649,14 +3672,12 @@ int multiroarTest(int argc, char *argv[]) {
                     "%" PRIu64 "!",
                     position);
             }
-
-            multiroarFree(r);
         }
     }
 
     TEST_DESC("set and get (%d of (SMALL) random positions; common roar)",
               lots) {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         uint64_t highest = 0;
         for (int32_t i = 0; i < lots; i++) {
             const uint64_t position = ((uint64_t)rand() % UINT16_MAX);
@@ -3676,12 +3697,11 @@ int multiroarTest(int argc, char *argv[]) {
         }
         multiroarRepr(r, highest);
         multiroarTestCompare(r, highest);
-        multiroarFree(r);
     }
 
     TEST_DESC("set and get (%d of (MEDIUM) random positions; common roar)",
               lots) {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         uint64_t highest = 0;
         for (int32_t i = 0; i < lots; i++) {
             const uint64_t position = ((uint64_t)rand());
@@ -3700,11 +3720,10 @@ int multiroarTest(int argc, char *argv[]) {
             }
         }
         multiroarTestCompare(r, highest);
-        multiroarFree(r);
     }
 
     TEST_DESC("set and get (%d of (BIG) random positions; common roar)", lots) {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         uint64_t highest = 0;
         for (int32_t i = 0; i < lots; i++) {
             const uint64_t position = ((uint64_t)rand() * rand()) % SIZE_MAX;
@@ -3723,12 +3742,11 @@ int multiroarTest(int argc, char *argv[]) {
             }
         }
         multiroarTestCompare(r, highest);
-        multiroarFree(r);
     }
 #endif
 
     TEST_DESC("set and get (%d of sequential positions; common roar)", lots) {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         for (int32_t i = 0; i < lots; i++) {
             const bool previouslySet = multiroarBitSet(r, i);
             if (previouslySet) {
@@ -3745,12 +3763,11 @@ int multiroarTest(int argc, char *argv[]) {
         }
         multiroarRepr(r, lots - 1);
         multiroarTestCompare(r, lots - 1);
-        multiroarFree(r);
     }
 
     TEST("chunk boundary correctness") {
         /* Test bits at and around chunk boundaries (8192 bits per chunk) */
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         const uint64_t boundaries[] = {0,     8191,  8192,  8193,  16383,
                                        16384, 16385, 24575, 24576, 24577};
         const uint64_t numBoundaries =
@@ -3778,14 +3795,12 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarBitGet(r, 16000)) {
             ERRR("Bit 16000 should not be set!");
         }
-
-        multiroarFree(r);
     }
 
     TEST("sequential set up to bitmap conversion threshold") {
         /* Test setting many bits sequentially triggers bitmap conversion
          * and continues to work correctly */
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         const uint64_t testCount =
             1000; /* Well above 629 conversion threshold */
 
@@ -3802,17 +3817,16 @@ int multiroarTest(int argc, char *argv[]) {
                 ERR("Bit %" PRIu64 " lost after all sets!", i);
             }
         }
-
-        multiroarFree(r);
     }
 
     TEST("conversion from UNDER_FULL to FULL_BITMAP") {
         /* Test that conversion to full bitmap preserves all bits */
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         const uint64_t maxDirect = 629; /* MAX_ENTRIES_PER_DIRECT_LISTING */
 
         /* Set exactly maxDirect positions to trigger conversion to bitmap */
-        uint64_t *positions = zcalloc(maxDirect, sizeof(uint64_t));
+        cleanerName(zfree, UInt64) uint64_t *positions =
+            zcalloc(maxDirect, sizeof(uint64_t));
         for (uint64_t i = 0; i < maxDirect; i++) {
             positions[i] = i * 10; /* Spread positions to stay in one chunk */
             multiroarBitSet(r, positions[i]);
@@ -3834,14 +3848,11 @@ int multiroarTest(int argc, char *argv[]) {
                 }
             }
         }
-
-        zfree(positions);
-        multiroarFree(r);
     }
 
     TEST("bitmap mode with various positions") {
         /* Test that bitmap mode (> 629 positions) works correctly */
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Set positions to trigger bitmap mode, then verify */
         const uint64_t positions[] = {0,    100,  200,  300,  400,  500,
@@ -3871,13 +3882,11 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarBitGet(r, 7500)) {
             ERRR("Position 7500 should not be set!");
         }
-
-        multiroarFree(r);
     }
 
     TEST("multi-chunk correctness") {
         /* Create roar with multiple chunks */
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         const uint64_t chunkBits = 8192;
 
         /* Chunk 0: sparse (few bits) */
@@ -3920,15 +3929,14 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarBitGet(r, chunkBits * 2 + 1500)) {
             ERRR("Unset bit in chunk 2 incorrectly set!");
         }
-
-        multiroarFree(r);
     }
 
     TEST("high-scale stress test (100K random bits)") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         const uint64_t scale = 100000;
         const uint64_t sampleSize = 10000; /* Track a sample for verification */
-        uint64_t *sampleBits = zcalloc(sampleSize, sizeof(uint64_t));
+        cleanerName(zfree, UInt64) uint64_t *sampleBits =
+            zcalloc(sampleSize, sizeof(uint64_t));
 
         /* Set random bits, tracking a sample for verification */
         for (uint64_t i = 0; i < scale; i++) {
@@ -3966,13 +3974,10 @@ int multiroarTest(int argc, char *argv[]) {
                 " sample bits verified!",
                 verified, sampleSize);
         }
-
-        zfree(sampleBits);
-        multiroarFree(r);
     }
 
     TEST("set same bit twice returns correct previouslySet") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         bool first = multiroarBitSet(r, 12345);
         if (first) {
@@ -3988,13 +3993,11 @@ int multiroarTest(int argc, char *argv[]) {
         if (!multiroarBitGet(r, 12345)) {
             ERRR("Bit should remain set after double set!");
         }
-
-        multiroarFree(r);
     }
 
     TEST("PERF: sequential insert performance") {
         const uint64_t scale = 100000;
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         int64_t startNs = timeUtilMonotonicNs();
         for (uint64_t i = 0; i < scale; i++) {
@@ -4003,13 +4006,11 @@ int multiroarTest(int argc, char *argv[]) {
         int64_t elapsed = timeUtilMonotonicNs() - startNs;
         printf("Sequential insert: %.1f ns/op, %.0f ops/sec\n",
                (double)elapsed / scale, scale / (elapsed / 1e9));
-
-        multiroarFree(r);
     }
 
     TEST("PERF: random insert performance") {
         const uint64_t scale = 100000;
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         int64_t startNs = timeUtilMonotonicNs();
         for (uint64_t i = 0; i < scale; i++) {
@@ -4018,13 +4019,11 @@ int multiroarTest(int argc, char *argv[]) {
         int64_t elapsed = timeUtilMonotonicNs() - startNs;
         printf("Random insert: %.1f ns/op, %.0f ops/sec\n",
                (double)elapsed / scale, scale / (elapsed / 1e9));
-
-        multiroarFree(r);
     }
 
     TEST("PERF: lookup performance (dense)") {
         const uint64_t scale = 100000;
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Create dense bitmap */
         for (uint64_t i = 0; i < scale; i++) {
@@ -4038,8 +4037,6 @@ int multiroarTest(int argc, char *argv[]) {
         int64_t elapsed = timeUtilMonotonicNs() - startNs;
         printf("Dense lookup: %.1f ns/op, %.0f ops/sec\n",
                (double)elapsed / scale, scale / (elapsed / 1e9));
-
-        multiroarFree(r);
     }
 
     /* ================================================================
@@ -4048,7 +4045,7 @@ int multiroarTest(int argc, char *argv[]) {
 
     TEST("UNDER_FULL growth to exactly MAX_ENTRIES") {
         /* Test growth from 1 to exactly 629 entries (conversion threshold) */
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         const uint64_t maxDirect = 629; /* MAX_ENTRIES_PER_DIRECT_LISTING */
 
         /* Insert exactly 628 entries (one below threshold) */
@@ -4072,13 +4069,11 @@ int multiroarTest(int argc, char *argv[]) {
                 ERR("Position %" PRIu64 " not set after conversion!", i * 13);
             }
         }
-
-        multiroarFree(r);
     }
 
     TEST("FULL_BITMAP exact boundary positions") {
         /* Test bits at exact byte and word boundaries within bitmap */
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Fill to get into bitmap mode */
         for (uint64_t i = 0; i < 700; i++) {
@@ -4114,13 +4109,11 @@ int multiroarTest(int argc, char *argv[]) {
                 }
             }
         }
-
-        multiroarFree(r);
     }
 
     TEST("sparse positions across chunk boundary") {
         /* Test sparse positions that span multiple chunks */
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         const uint64_t chunkBits = 8192;
 
         /* Set sparse positions across 4 chunks */
@@ -4155,13 +4148,11 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarBitGet(r, chunkBits + 100)) {
             ERRR("Position in chunk 1 should not be set!");
         }
-
-        multiroarFree(r);
     }
 
     TEST("set and immediate re-read in UNDER_FULL mode") {
         /* Test that set followed by immediate get works in UNDER_FULL */
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Set and verify in sequence, staying in UNDER_FULL mode */
         for (uint64_t i = 0; i < 100; i++) {
@@ -4182,13 +4173,11 @@ int multiroarTest(int argc, char *argv[]) {
                 }
             }
         }
-
-        multiroarFree(r);
     }
 
     TEST("set and immediate re-read in FULL_BITMAP mode") {
         /* Test that set followed by immediate get works in FULL_BITMAP */
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* First, fill to trigger bitmap mode */
         for (uint64_t i = 0; i < 700; i++) {
@@ -4211,12 +4200,10 @@ int multiroarTest(int argc, char *argv[]) {
                 ERR("FULL_BITMAP: position %" PRIu64 " lost!", i);
             }
         }
-
-        multiroarFree(r);
     }
 
     TEST("previouslySet behavior across all chunk types") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Test in UNDER_FULL mode */
         bool prev = multiroarBitSet(r, 100);
@@ -4248,12 +4235,10 @@ int multiroarTest(int argc, char *argv[]) {
         if (!prev) {
             ERRR("FULL_BITMAP: set of existing pos should return true!");
         }
-
-        multiroarFree(r);
     }
 
     TEST("large position values near SIZE_MAX") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Test very large positions */
         const uint64_t largePositions[] = {SIZE_MAX - 1, SIZE_MAX - 8192,
@@ -4276,13 +4261,11 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarBitGet(r, SIZE_MAX - 2)) {
             ERRR("Position SIZE_MAX-2 should not be set!");
         }
-
-        multiroarFree(r);
     }
 
     TEST("interleaved set pattern") {
         /* Set every other bit, then fill in the gaps */
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         const uint64_t testRange = 2000;
 
         /* Set even positions first */
@@ -4312,13 +4295,11 @@ int multiroarTest(int argc, char *argv[]) {
                 ERR("After fill: position %" PRIu64 " should be set!", i);
             }
         }
-
-        multiroarFree(r);
     }
 
     TEST("reverse order insertion") {
         /* Insert bits in reverse order */
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         const uint64_t testCount = 1000;
 
         for (uint64_t i = testCount; i > 0; i--) {
@@ -4336,15 +4317,14 @@ int multiroarTest(int argc, char *argv[]) {
                 ERR("Reverse insert: position %" PRIu64 " lost!", i);
             }
         }
-
-        multiroarFree(r);
     }
 
     TEST("random order insertion with verification") {
         /* Insert bits in pseudo-random order using LCG */
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         const uint64_t testCount = 500;
-        uint64_t *positions = zcalloc(testCount, sizeof(uint64_t));
+        cleanerName(zfree, UInt64) uint64_t *positions =
+            zcalloc(testCount, sizeof(uint64_t));
 
         /* Generate pseudo-random positions */
         uint32_t seed = 12345;
@@ -4365,14 +4345,11 @@ int multiroarTest(int argc, char *argv[]) {
                     positions[i]);
             }
         }
-
-        zfree(positions);
-        multiroarFree(r);
     }
 
     TEST("chunk type transitions (UNDER_FULL -> FULL_BITMAP)") {
         /* Carefully test the transition from UNDER_FULL to FULL_BITMAP */
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Insert 628 positions (just under threshold) */
         for (uint64_t i = 0; i < 628; i++) {
@@ -4402,13 +4379,11 @@ int multiroarTest(int argc, char *argv[]) {
                 ERR("Bitmap mode: position %" PRIu64 " not set!", i);
             }
         }
-
-        multiroarFree(r);
     }
 
     TEST("OVER_FULL transition (FULL_BITMAP -> negative list)") {
         /* Test transition to OVER_FULL when most bits are set */
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         const uint64_t chunkBits = 8192;
         const uint64_t threshold = 7564; /* Just past OVER_FULL threshold */
 
@@ -4444,13 +4419,11 @@ int multiroarTest(int argc, char *argv[]) {
                 ERR("OVER_FULL: position %" PRIu64 " incorrectly set!", i);
             }
         }
-
-        multiroarFree(r);
     }
 
     TEST("ALL_1 transition (fill entire chunk)") {
         /* Fill an entire chunk to trigger ALL_1 type */
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         const uint64_t chunkBits = 8192;
 
         printf("    Filling entire chunk (%" PRIu64 " bits)...\n", chunkBits);
@@ -4496,13 +4469,11 @@ int multiroarTest(int argc, char *argv[]) {
         if (!prev) {
             ERRR("ALL_1: setting existing bit should return true!");
         }
-
-        multiroarFree(r);
     }
 
     TEST("mixed chunk types in single roar") {
         /* Create a roar with all different chunk types */
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         const uint64_t chunkBits = 8192;
 
         /* Chunk 0: UNDER_FULL (sparse, few bits) */
@@ -4542,13 +4513,11 @@ int multiroarTest(int argc, char *argv[]) {
                 ERR("Chunk 2 position %" PRIu64 " not set!", i);
             }
         }
-
-        multiroarFree(r);
     }
 
     TEST("packed array sorted insertion stress") {
         /* Stress test the sorted insertion in UNDER_FULL mode */
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Insert positions that stress the sorted insert algorithm */
         const uint64_t positions[] = {
@@ -4568,13 +4537,11 @@ int multiroarTest(int argc, char *argv[]) {
                     positions[i]);
             }
         }
-
-        multiroarFree(r);
     }
 
     TEST("empty chunk queries") {
         /* Test queries on chunks that don't exist (empty) */
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Query various positions without setting anything */
         if (multiroarBitGet(r, 0)) {
@@ -4598,14 +4565,12 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarBitGet(r, 4999) || multiroarBitGet(r, 5001)) {
             ERRR("Adjacent positions should not be set!");
         }
-
-        multiroarFree(r);
     }
 
     TEST("PERF: sparse lookup performance") {
         const uint64_t numPositions = 1000;
         const uint64_t positionSpread = 1000000;
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Create sparse bitmap across many chunks */
         for (uint64_t i = 0; i < numPositions; i++) {
@@ -4622,8 +4587,6 @@ int multiroarTest(int argc, char *argv[]) {
         printf("Sparse lookup: %.1f ns/op, %.0f ops/sec\n",
                (double)elapsed / (numPositions * 100),
                (numPositions * 100) / (elapsed / 1e9));
-
-        multiroarFree(r);
     }
 
     /* ========================================
@@ -4642,7 +4605,7 @@ int multiroarTest(int argc, char *argv[]) {
     (((oracle)[(pos) / 64] >> ((pos) % 64)) & 1)
 
     TEST("FUZZ: random bit operations with oracle") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         uint64_t oracle[FUZZ_ORACLE_WORDS] = {0};
 
         srand(12345);
@@ -4699,11 +4662,10 @@ int multiroarTest(int argc, char *argv[]) {
 
         printf("  set=%" PRIu64 " get=%" PRIu64 " verified=%d\n", setOps,
                getOps, FUZZ_ORACLE_MAX_BIT);
-        multiroarFree(r);
     }
 
     TEST("FUZZ: sequential then random access") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         uint64_t oracle[FUZZ_ORACLE_WORDS] = {0};
 
         /* Sequential fill */
@@ -4726,15 +4688,15 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         printf("  sequential fill 5000, random verify 10000\n");
-        multiroarFree(r);
     }
 
     TEST("FUZZ: sparse bits across many chunks") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         srand(99999);
         const uint64_t numSparse = 1000;
-        uint64_t *positions = zmalloc(numSparse * sizeof(uint64_t));
+        cleanerName(zfree, UInt64) uint64_t *positions =
+            zmalloc(numSparse * sizeof(uint64_t));
 
         /* Generate sparse positions across many chunks (8192 bits per chunk) */
         for (uint64_t i = 0; i < numSparse; i++) {
@@ -4777,12 +4739,10 @@ int multiroarTest(int argc, char *argv[]) {
 
         printf("  sparse bits=%" PRIu64 ", verified unset=%" PRIu64 "\n",
                numSparse, verified);
-        zfree(positions);
-        multiroarFree(r);
     }
 
     TEST("FUZZ: chunk boundary stress") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         uint64_t oracle[FUZZ_ORACLE_WORDS] = {0};
         const uint64_t chunkBits = 8192;
 
@@ -4843,15 +4803,15 @@ int multiroarTest(int argc, char *argv[]) {
 
         printf("  tested 10 chunk boundaries, mismatches=%" PRIu64 "\n",
                mismatches);
-        multiroarFree(r);
     }
 
     TEST("FUZZ: duplicate set operations") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         srand(11111);
         const uint64_t numUnique = 500;
-        uint64_t *positions = zmalloc(numUnique * sizeof(uint64_t));
+        cleanerName(zfree, UInt64) uint64_t *positions =
+            zmalloc(numUnique * sizeof(uint64_t));
 
         /* Generate unique positions */
         for (uint64_t i = 0; i < numUnique; i++) {
@@ -4895,12 +4855,10 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         printf("  double-set %" PRIu64 " positions\n", numUnique);
-        zfree(positions);
-        multiroarFree(r);
     }
 
     TEST("FUZZ: adversarial patterns - reverse order") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         const uint64_t count = 2000;
 
         /* Insert in reverse order - stresses sorted insertion */
@@ -4916,11 +4874,10 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         printf("  reverse order insert %" PRIu64 " positions\n", count);
-        multiroarFree(r);
     }
 
     TEST("FUZZ: adversarial patterns - alternating") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         const uint64_t count = 5000;
 
         /* Set every other bit */
@@ -4939,11 +4896,10 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         printf("  alternating pattern %" PRIu64 " positions\n", count);
-        multiroarFree(r);
     }
 
     TEST("FUZZ: large position values") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Test very large position values - avoid adjacent positions */
         const uint64_t largePositions[] = {
@@ -4985,11 +4941,10 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         printf("  verified %" PRIu64 " large positions\n", numLarge);
-        multiroarFree(r);
     }
 
     TEST("FUZZ: stress 100K random operations") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         uint64_t oracle[FUZZ_ORACLE_WORDS] = {0};
 
         srand(88888);
@@ -5041,13 +4996,12 @@ int multiroarTest(int argc, char *argv[]) {
         printf("  100K ops, %" PRIu64 " unique bits set, %" PRIu64
                " mismatches\n",
                bitsSet, mismatches);
-        multiroarFree(r);
     }
 
     printf("\n=== NEW FUNCTIONALITY TESTS ===\n\n");
 
     TEST("multiroarRemove - basic remove from UNDER_FULL") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         multiroarBitSet(r, 100);
         multiroarBitSet(r, 200);
         multiroarBitSet(r, 300);
@@ -5082,12 +5036,10 @@ int multiroarTest(int argc, char *argv[]) {
         if (wasSet) {
             ERRR("wasSet should be false for already-cleared bit");
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarRemove - remove from FULL_BITMAP") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         /* Fill enough bits to trigger FULL_BITMAP mode (>629) */
         for (uint64_t i = 0; i < 1000; i++) {
             multiroarBitSet(r, i);
@@ -5111,12 +5063,10 @@ int multiroarTest(int argc, char *argv[]) {
         if (!multiroarBitGet(r, 501)) {
             ERRR("bit 501 should still be set");
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarRemove - remove all bits from chunk") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         multiroarBitSet(r, 100);
 
         bool wasSet = multiroarRemove(r, 100);
@@ -5132,17 +5082,15 @@ int multiroarTest(int argc, char *argv[]) {
         if (!multiroarBitGet(r, 100)) {
             ERRR("bit 100 should be set again");
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarDuplicate - basic clone") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         multiroarBitSet(r, 100);
         multiroarBitSet(r, 200);
         multiroarBitSet(r, 10000);
 
-        multiroar *dup = multiroarDuplicate(r);
+        cleaner(multiroarFree) multiroar *dup = multiroarDuplicate(r);
         if (dup == NULL) {
             ERRR("dup should not be NULL");
         }
@@ -5172,14 +5120,11 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarBitGet(dup, 999)) {
             ERRR("dup bit 999 should be clear");
         }
-
-        multiroarFree(r);
-        multiroarFree(dup);
     }
 
     TEST("multiroarOr - basic OR operation") {
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
         multiroarBitSet(a, 100);
         multiroarBitSet(a, 200);
@@ -5201,14 +5146,11 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarBitGet(a, 150)) {
             ERRR("OR: bit 150 should be clear");
         }
-
-        multiroarFree(a);
-        multiroarFree(b);
     }
 
     TEST("multiroarAnd - basic AND operation") {
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
         multiroarBitSet(a, 100);
         multiroarBitSet(a, 200);
@@ -5232,14 +5174,11 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarBitGet(a, 400)) {
             ERRR("AND: bit 400 should be clear");
         }
-
-        multiroarFree(a);
-        multiroarFree(b);
     }
 
     TEST("multiroarXor - basic XOR operation") {
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
         multiroarBitSet(a, 100);
         multiroarBitSet(a, 200);
@@ -5258,13 +5197,10 @@ int multiroarTest(int argc, char *argv[]) {
         if (!multiroarBitGet(a, 300)) {
             ERRR("XOR: bit 300 should be set");
         }
-
-        multiroarFree(a);
-        multiroarFree(b);
     }
 
     TEST("multiroarNot - basic NOT operation") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         /* Set specific bits in a chunk */
         multiroarBitSet(r, 0);
         multiroarBitSet(r, 1);
@@ -5296,18 +5232,16 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarBitGet(r, 8192)) {
             ERRR("NOT: bit 8192 should be clear");
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarNewOr - creates new roar") {
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
         multiroarBitSet(a, 100);
         multiroarBitSet(b, 200);
 
-        multiroar *result = multiroarNewOr(a, b);
+        cleaner(multiroarFree) multiroar *result = multiroarNewOr(a, b);
         if (result == NULL) {
             ERRR("NewOr result should not be NULL");
         }
@@ -5332,10 +5266,6 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarBitGet(b, 100)) {
             ERRR("NewOr: b bit 100 should be clear");
         }
-
-        multiroarFree(a);
-        multiroarFree(b);
-        multiroarFree(result);
     }
 
     TEST("FUZZ: set operations with oracle verification") {
@@ -5345,8 +5275,8 @@ int multiroarTest(int argc, char *argv[]) {
         uint64_t oracleA[divCeil(FUZZ_OP_SIZE, 64)] = {0};
         uint64_t oracleB[divCeil(FUZZ_OP_SIZE, 64)] = {0};
 
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
         /* Populate both with random bits */
         for (uint64_t i = 0; i < 200; i++) {
@@ -5359,7 +5289,7 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         /* Test OR */
-        multiroar *orResult = multiroarNewOr(a, b);
+        cleaner(multiroarFree) multiroar *orResult = multiroarNewOr(a, b);
         uint64_t orMismatches = 0;
         for (uint64_t i = 0; i < FUZZ_OP_SIZE; i++) {
             bool expected =
@@ -5372,10 +5302,8 @@ int multiroarTest(int argc, char *argv[]) {
         if (orMismatches > 0) {
             ERR("OR operation: %" PRIu64 " mismatches", orMismatches);
         }
-        multiroarFree(orResult);
-
         /* Test AND */
-        multiroar *andResult = multiroarNewAnd(a, b);
+        cleaner(multiroarFree) multiroar *andResult = multiroarNewAnd(a, b);
         uint64_t andMismatches = 0;
         for (uint64_t i = 0; i < FUZZ_OP_SIZE; i++) {
             bool expected =
@@ -5388,10 +5316,8 @@ int multiroarTest(int argc, char *argv[]) {
         if (andMismatches > 0) {
             ERR("AND operation: %" PRIu64 " mismatches", andMismatches);
         }
-        multiroarFree(andResult);
-
         /* Test XOR */
-        multiroar *xorResult = multiroarNewXor(a, b);
+        cleaner(multiroarFree) multiroar *xorResult = multiroarNewXor(a, b);
         uint64_t xorMismatches = 0;
         for (uint64_t i = 0; i < FUZZ_OP_SIZE; i++) {
             bool expected =
@@ -5404,10 +5330,9 @@ int multiroarTest(int argc, char *argv[]) {
         if (xorMismatches > 0) {
             ERR("XOR operation: %" PRIu64 " mismatches", xorMismatches);
         }
-        multiroarFree(xorResult);
 
         /* Test NOT */
-        multiroar *notResult = multiroarDuplicate(a);
+        cleaner(multiroarFree) multiroar *notResult = multiroarDuplicate(a);
         multiroarNot(notResult);
         uint64_t notMismatches = 0;
         for (uint64_t i = 0; i < FUZZ_OP_SIZE; i++) {
@@ -5421,14 +5346,10 @@ int multiroarTest(int argc, char *argv[]) {
             ERR("NOT operation: %" PRIu64 " mismatches (within existing chunk)",
                 notMismatches);
         }
-        multiroarFree(notResult);
 
         printf("  OR=%" PRIu64 " AND=%" PRIu64 " XOR=%" PRIu64 " NOT=%" PRIu64
                " mismatches\n",
                orMismatches, andMismatches, xorMismatches, notMismatches);
-
-        multiroarFree(a);
-        multiroarFree(b);
 #undef FUZZ_OP_SIZE
     }
 
@@ -5437,7 +5358,7 @@ int multiroarTest(int argc, char *argv[]) {
 
 #define FUZZ_REMOVE_SIZE 2000
         uint64_t oracle[divCeil(FUZZ_REMOVE_SIZE, 64)] = {0};
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* First add some bits */
         for (uint64_t i = 0; i < 500; i++) {
@@ -5471,15 +5392,14 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         printf("  add=500 remove=200 mismatches=%" PRIu64 "\n", mismatches);
-        multiroarFree(r);
 #undef FUZZ_REMOVE_SIZE
     }
 
     TEST("FUZZ: Set operations across multiple chunks") {
         printf("  Testing multi-chunk set operations...\n");
 
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
         /* Set bits across multiple chunks */
         for (uint64_t chunk = 0; chunk < 5; chunk++) {
@@ -5491,7 +5411,7 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         /* OR should combine both */
-        multiroar *orResult = multiroarNewOr(a, b);
+        cleaner(multiroarFree) multiroar *orResult = multiroarNewOr(a, b);
         uint64_t orCount = 0;
         for (uint64_t chunk = 0; chunk < 5; chunk++) {
             uint64_t base = chunk * 8192;
@@ -5509,7 +5429,7 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         /* AND should be empty (no overlap) */
-        multiroar *andResult = multiroarNewAnd(a, b);
+        cleaner(multiroarFree) multiroar *andResult = multiroarNewAnd(a, b);
         uint64_t andCount = 0;
         for (uint64_t chunk = 0; chunk < 5; chunk++) {
             uint64_t base = chunk * 8192;
@@ -5525,16 +5445,11 @@ int multiroarTest(int argc, char *argv[]) {
 
         printf("  multi-chunk: OR count=%" PRIu64 ", AND count=%" PRIu64 "\n",
                orCount, andCount);
-
-        multiroarFree(a);
-        multiroarFree(b);
-        multiroarFree(orResult);
-        multiroarFree(andResult);
     }
 
     TEST("set operations with dense bitmaps") {
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
         /* Fill to trigger FULL_BITMAP mode */
         for (uint64_t i = 0; i < 2000; i++) {
@@ -5545,7 +5460,7 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         /* AND should give intersection: 1000-1999 */
-        multiroar *andResult = multiroarNewAnd(a, b);
+        cleaner(multiroarFree) multiroar *andResult = multiroarNewAnd(a, b);
         uint64_t errors = 0;
         for (uint64_t i = 0; i < 1000; i++) {
             if (multiroarBitGet(andResult, i)) {
@@ -5565,10 +5480,6 @@ int multiroarTest(int argc, char *argv[]) {
         if (errors > 0) {
             ERR("dense AND: %" PRIu64 " bit errors", errors);
         }
-
-        multiroarFree(a);
-        multiroarFree(b);
-        multiroarFree(andResult);
     }
 
     printf("\n=== All multiroar fuzz tests completed! ===\n\n");
@@ -5579,26 +5490,24 @@ int multiroarTest(int argc, char *argv[]) {
     printf("\n=== BITCOUNT TESTS ===\n\n");
 
     TEST("multiroarBitCount - empty roar") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         uint64_t count = multiroarBitCount(r);
         if (count != 0) {
             ERR("Empty roar should have count=0, got %" PRIu64 "", count);
         }
-        multiroarFree(r);
     }
 
     TEST("multiroarBitCount - single bit") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         multiroarBitSet(r, 100);
         uint64_t count = multiroarBitCount(r);
         if (count != 1) {
             ERR("Single bit should have count=1, got %" PRIu64 "", count);
         }
-        multiroarFree(r);
     }
 
     TEST("multiroarBitCount - sparse chunk") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         for (uint64_t i = 0; i < 100; i++) {
             multiroarBitSet(r, i * 10);
         }
@@ -5606,11 +5515,10 @@ int multiroarTest(int argc, char *argv[]) {
         if (count != 100) {
             ERR("Sparse chunk should have count=100, got %" PRIu64 "", count);
         }
-        multiroarFree(r);
     }
 
     TEST("multiroarBitCount - dense chunk") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         /* Set 1000 bits to trigger FULL_BITMAP */
         for (uint64_t i = 0; i < 1000; i++) {
             multiroarBitSet(r, i);
@@ -5619,11 +5527,10 @@ int multiroarTest(int argc, char *argv[]) {
         if (count != 1000) {
             ERR("Dense chunk should have count=1000, got %" PRIu64 "", count);
         }
-        multiroarFree(r);
     }
 
     TEST("multiroarBitCount - full chunk (ALL_1)") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         /* Set all 8192 bits in chunk */
         for (uint64_t i = 0; i < 8192; i++) {
             multiroarBitSet(r, i);
@@ -5632,11 +5539,10 @@ int multiroarTest(int argc, char *argv[]) {
         if (count != 8192) {
             ERR("Full chunk should have count=8192, got %" PRIu64 "", count);
         }
-        multiroarFree(r);
     }
 
     TEST("multiroarBitCount - multiple chunks") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         /* Chunk 0: 100 bits */
         for (uint64_t i = 0; i < 100; i++) {
             multiroarBitSet(r, i);
@@ -5653,12 +5559,11 @@ int multiroarTest(int argc, char *argv[]) {
         if (count != 350) {
             ERR("Multi-chunk should have count=350, got %" PRIu64 "", count);
         }
-        multiroarFree(r);
     }
 
     TEST("FUZZ: bitcount correctness oracle") {
         printf("  Testing bitcount with oracle...\n");
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         uint64_t expectedCount = 0;
 
         srand(33333);
@@ -5677,7 +5582,6 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         printf("  verified %" PRIu64 " set bits\n", actualCount);
-        multiroarFree(r);
     }
 
     /* ========================================
@@ -5686,9 +5590,9 @@ int multiroarTest(int argc, char *argv[]) {
     printf("\n=== N-WAY OPERATIONS TESTS ===\n\n");
 
     TEST("multiroarAndN - 3 roars basic") {
-        multiroar *r1 = multiroarBitNew();
-        multiroar *r2 = multiroarBitNew();
-        multiroar *r3 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r1 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r2 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r3 = multiroarBitNew();
 
         /* r1: 0-99 */
         for (uint64_t i = 0; i < 100; i++) {
@@ -5704,7 +5608,7 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         multiroar *roars[] = {r1, r2, r3};
-        multiroar *result = multiroarNewAndN(3, roars);
+        cleaner(multiroarFree) multiroar *result = multiroarNewAndN(3, roars);
 
         /* Intersection: 75-99 = 25 bits */
         uint64_t count = 0;
@@ -5720,24 +5624,19 @@ int multiroarTest(int argc, char *argv[]) {
         if (count != 25) {
             ERR("AndN: expected 25 bits, got %" PRIu64 "", count);
         }
-
-        multiroarFree(r1);
-        multiroarFree(r2);
-        multiroarFree(r3);
-        multiroarFree(result);
     }
 
     TEST("multiroarOrN - 3 roars basic") {
-        multiroar *r1 = multiroarBitNew();
-        multiroar *r2 = multiroarBitNew();
-        multiroar *r3 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r1 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r2 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r3 = multiroarBitNew();
 
         multiroarBitSet(r1, 100);
         multiroarBitSet(r2, 200);
         multiroarBitSet(r3, 300);
 
         multiroar *roars[] = {r1, r2, r3};
-        multiroar *result = multiroarNewOrN(3, roars);
+        cleaner(multiroarFree) multiroar *result = multiroarNewOrN(3, roars);
 
         /* Union: all 3 bits */
         if (!multiroarBitGet(result, 100)) {
@@ -5754,17 +5653,12 @@ int multiroarTest(int argc, char *argv[]) {
         if (count != 3) {
             ERR("OrN: expected 3 bits, got %" PRIu64 "", count);
         }
-
-        multiroarFree(r1);
-        multiroarFree(r2);
-        multiroarFree(r3);
-        multiroarFree(result);
     }
 
     TEST("multiroarXorN - 3 roars basic") {
-        multiroar *r1 = multiroarBitNew();
-        multiroar *r2 = multiroarBitNew();
-        multiroar *r3 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r1 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r2 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r3 = multiroarBitNew();
 
         multiroarBitSet(r1, 100);
         multiroarBitSet(r2, 100); /* Cancels out */
@@ -5776,7 +5670,7 @@ int multiroarTest(int argc, char *argv[]) {
         multiroarBitSet(r3, 300);
 
         multiroar *roars[] = {r1, r2, r3};
-        multiroar *result = multiroarNewXorN(3, roars);
+        cleaner(multiroarFree) multiroar *result = multiroarNewXorN(3, roars);
 
         /* 100: 1^1^1 = 1 */
         /* 200: 1^1^0 = 0 */
@@ -5790,11 +5684,6 @@ int multiroarTest(int argc, char *argv[]) {
         if (!multiroarBitGet(result, 300)) {
             ERRR("XorN: bit 300 should be set");
         }
-
-        multiroarFree(r1);
-        multiroarFree(r2);
-        multiroarFree(r3);
-        multiroarFree(result);
     }
 
     TEST("N-way: heavy duplicate chunk keys (collectAllChunkKeys dedup)") {
@@ -5804,6 +5693,7 @@ int multiroarTest(int argc, char *argv[]) {
         enum { NR = 6, NCHUNK = 5 };
         multiroar *roars[NR];
         for (int r = 0; r < NR; r++) {
+            /* @own: container; free=multiroarFree */
             roars[r] = multiroarBitNew();
             /* Every roar sets one bit in each of the NCHUNK chunks (same
              * chunk ids across all roars -> NR*NCHUNK raw keys -> NCHUNK
@@ -5817,7 +5707,7 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         /* OR: union = the NCHUNK shared bits + NR private bits. */
-        multiroar *orRes = multiroarNewOrN(NR, roars);
+        cleaner(multiroarFree) multiroar *orRes = multiroarNewOrN(NR, roars);
         for (int c = 0; c < NCHUNK; c++) {
             if (!multiroarBitGet(orRes,
                                  (uint64_t)c * BITMAP_SIZE_IN_BITS + 7)) {
@@ -5836,7 +5726,7 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         /* AND: only the NCHUNK bits common to ALL roars survive. */
-        multiroar *andRes = multiroarNewAndN(NR, roars);
+        cleaner(multiroarFree) multiroar *andRes = multiroarNewAndN(NR, roars);
         if (multiroarBitCount(andRes) != (uint64_t)NCHUNK) {
             ERR("AndN dedup: expected %d common bits, got %" PRIu64, NCHUNK,
                 multiroarBitCount(andRes));
@@ -5847,19 +5737,16 @@ int multiroarTest(int argc, char *argv[]) {
                 ERR("AndN dedup: common bit in chunk %d missing", c);
             }
         }
-
-        multiroarFree(orRes);
-        multiroarFree(andRes);
         for (int r = 0; r < NR; r++) {
             multiroarFree(roars[r]);
         }
     }
 
     TEST("N-way operations equivalence to chained binary") {
-        multiroar *r1 = multiroarBitNew();
-        multiroar *r2 = multiroarBitNew();
-        multiroar *r3 = multiroarBitNew();
-        multiroar *r4 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r1 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r2 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r3 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r4 = multiroarBitNew();
 
         srand(44444);
         for (uint64_t i = 0; i < 100; i++) {
@@ -5872,8 +5759,8 @@ int multiroarTest(int argc, char *argv[]) {
         multiroar *roars[] = {r1, r2, r3, r4};
 
         /* Test N-way AND vs chained binary */
-        multiroar *nwayAnd = multiroarNewAndN(4, roars);
-        multiroar *chainedAnd = multiroarDuplicate(r1);
+        cleaner(multiroarFree) multiroar *nwayAnd = multiroarNewAndN(4, roars);
+        cleaner(multiroarFree) multiroar *chainedAnd = multiroarDuplicate(r1);
         multiroarAnd(chainedAnd, r2);
         multiroarAnd(chainedAnd, r3);
         multiroarAnd(chainedAnd, r4);
@@ -5896,8 +5783,8 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         /* Test N-way OR vs chained binary */
-        multiroar *nwayOr = multiroarNewOrN(4, roars);
-        multiroar *chainedOr = multiroarDuplicate(r1);
+        cleaner(multiroarFree) multiroar *nwayOr = multiroarNewOrN(4, roars);
+        cleaner(multiroarFree) multiroar *chainedOr = multiroarDuplicate(r1);
         multiroarOr(chainedOr, r2);
         multiroarOr(chainedOr, r3);
         multiroarOr(chainedOr, r4);
@@ -5917,23 +5804,17 @@ int multiroarTest(int argc, char *argv[]) {
                 ERR("OR equivalence: bit %" PRIu64 " mismatch", i);
             }
         }
-
-        multiroarFree(r1);
-        multiroarFree(r2);
-        multiroarFree(r3);
-        multiroarFree(r4);
-        multiroarFree(nwayAnd);
-        multiroarFree(chainedAnd);
-        multiroarFree(nwayOr);
-        multiroarFree(chainedOr);
     }
 
     TEST("N-way operations with many inputs (N=10)") {
         const uint64_t n = 10;
-        multiroar **roars = zmalloc(n * sizeof(multiroar *));
+        __attribute__((cleanup(roarArrayFree_cleanup))) roarArray roarsArr = {
+            .items = zcalloc(n, sizeof(multiroar *)), .count = (uint64_t)n};
+        multiroar **roars = roarsArr.items;
 
         srand(55555);
         for (uint64_t i = 0; i < n; i++) {
+            /* @own: container; free=multiroarFree */
             roars[i] = multiroarBitNew();
             /* Each roar sets random bits */
             for (uint64_t j = 0; j < 50; j++) {
@@ -5942,7 +5823,7 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         /* Test N-way OR - should combine all */
-        multiroar *orResult = multiroarNewOrN(n, roars);
+        cleaner(multiroarFree) multiroar *orResult = multiroarNewOrN(n, roars);
         uint64_t orCount = multiroarBitCount(orResult);
 
         /* OR count should be > 0 */
@@ -5951,7 +5832,8 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         /* Test N-way AND - should be subset of any individual */
-        multiroar *andResult = multiroarNewAndN(n, roars);
+        cleaner(multiroarFree) multiroar *andResult =
+            multiroarNewAndN(n, roars);
         uint64_t andCount = multiroarBitCount(andResult);
 
         for (uint64_t i = 0; i < n; i++) {
@@ -5965,13 +5847,6 @@ int multiroarTest(int argc, char *argv[]) {
 
         printf("  N=10: OR count=%" PRIu64 ", AND count=%" PRIu64 "\n", orCount,
                andCount);
-
-        for (uint64_t i = 0; i < n; i++) {
-            multiroarFree(roars[i]);
-        }
-        zfree(roars);
-        multiroarFree(orResult);
-        multiroarFree(andResult);
     }
 
     TEST("FUZZ: N-way operations with random data") {
@@ -5983,10 +5858,14 @@ int multiroarTest(int argc, char *argv[]) {
 
         for (uint64_t trial = 0; trial < trials; trial++) {
             uint64_t n = 2 + (rand() % (maxN - 1)); /* 2 to 7 inputs */
-            multiroar **roars = zmalloc(n * sizeof(multiroar *));
+            __attribute__((
+                cleanup(roarArrayFree_cleanup))) roarArray roarsArr = {
+                .items = zcalloc(n, sizeof(multiroar *)), .count = (uint64_t)n};
+            multiroar **roars = roarsArr.items;
 
             /* Create random roars */
             for (uint64_t i = 0; i < n; i++) {
+                /* @own: container; free=multiroarFree */
                 roars[i] = multiroarBitNew();
                 uint64_t numBits = rand() % 200;
                 for (uint64_t j = 0; j < numBits; j++) {
@@ -5995,9 +5874,13 @@ int multiroarTest(int argc, char *argv[]) {
             }
 
             /* Test N-way operations don't crash */
-            multiroar *andResult = multiroarNewAndN(n, roars);
-            multiroar *orResult = multiroarNewOrN(n, roars);
-            multiroar *xorResult = multiroarNewXorN(n, roars);
+            cleaner(multiroarFree) multiroar *andResult =
+                multiroarNewAndN(n, roars);
+            cleaner(multiroarFree) multiroar *orResult =
+                multiroarNewOrN(n, roars);
+            cleaner(multiroarFree) multiroar *xorResult =
+                multiroarNewXorN(n, roars);
+            (void)xorResult;
 
             /* Basic sanity: AND count <= OR count */
             uint64_t andCount = multiroarBitCount(andResult);
@@ -6008,54 +5891,40 @@ int multiroarTest(int argc, char *argv[]) {
                     " > OR count %" PRIu64 "",
                     trial, andCount, orCount);
             }
-
-            /* Cleanup */
-            for (uint64_t i = 0; i < n; i++) {
-                multiroarFree(roars[i]);
-            }
-            zfree(roars);
-            multiroarFree(andResult);
-            multiroarFree(orResult);
-            multiroarFree(xorResult);
         }
 
         printf("  completed %" PRIu64 " fuzz trials\n", trials);
     }
 
     TEST("N-way operations with empty roars") {
-        multiroar *r1 = multiroarBitNew();
-        multiroar *r2 = multiroarBitNew();
-        multiroar *r3 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r1 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r2 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r3 = multiroarBitNew();
 
         multiroarBitSet(r2, 100); /* Only r2 has a bit */
 
         multiroar *roars[] = {r1, r2, r3};
 
         /* AND with empty = empty */
-        multiroar *andResult = multiroarNewAndN(3, roars);
+        cleaner(multiroarFree) multiroar *andResult =
+            multiroarNewAndN(3, roars);
         uint64_t andCount = multiroarBitCount(andResult);
         if (andCount != 0) {
             ERR("AND with empty should be 0, got %" PRIu64 "", andCount);
         }
 
         /* OR with empty = union of non-empty */
-        multiroar *orResult = multiroarNewOrN(3, roars);
+        cleaner(multiroarFree) multiroar *orResult = multiroarNewOrN(3, roars);
         uint64_t orCount = multiroarBitCount(orResult);
         if (orCount != 1) {
             ERR("OR with empty should be 1, got %" PRIu64 "", orCount);
         }
-
-        multiroarFree(r1);
-        multiroarFree(r2);
-        multiroarFree(r3);
-        multiroarFree(andResult);
-        multiroarFree(orResult);
     }
 
     TEST("bitcount + N-way integration") {
-        multiroar *r1 = multiroarBitNew();
-        multiroar *r2 = multiroarBitNew();
-        multiroar *r3 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r1 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r2 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r3 = multiroarBitNew();
 
         /* Set known counts with proper overlaps for AND operation */
         for (uint64_t i = 0; i < 150; i++) {
@@ -6085,14 +5954,15 @@ int multiroarTest(int argc, char *argv[]) {
         multiroar *roars[] = {r1, r2, r3};
 
         /* AND: intersection [100..149] = 50 bits */
-        multiroar *andResult = multiroarNewAndN(3, roars);
+        cleaner(multiroarFree) multiroar *andResult =
+            multiroarNewAndN(3, roars);
         uint64_t andCount = multiroarBitCount(andResult);
         if (andCount != 50) {
             ERR("AND count should be 50, got %" PRIu64 "", andCount);
         }
 
         /* OR: union [0..249] = 250 bits */
-        multiroar *orResult = multiroarNewOrN(3, roars);
+        cleaner(multiroarFree) multiroar *orResult = multiroarNewOrN(3, roars);
         uint64_t orCount = multiroarBitCount(orResult);
         if (orCount != 250) {
             ERR("OR count should be 250, got %" PRIu64 "", orCount);
@@ -6100,12 +5970,6 @@ int multiroarTest(int argc, char *argv[]) {
 
         printf("  Integration: AND=%" PRIu64 " OR=%" PRIu64 "\n", andCount,
                orCount);
-
-        multiroarFree(r1);
-        multiroarFree(r2);
-        multiroarFree(r3);
-        multiroarFree(andResult);
-        multiroarFree(orResult);
     }
 
     printf("\n=== All new functionality tests completed! ===\n\n");
@@ -6119,7 +5983,7 @@ int multiroarTest(int argc, char *argv[]) {
     TEST("FUZZ: bitcount with all chunk types (1K iterations)") {
         srand(99999);
         for (int trial = 0; trial < 1000; trial++) {
-            multiroar *r = multiroarBitNew();
+            cleaner(multiroarFree) multiroar *r = multiroarBitNew();
             uint64_t expectedCount = 0;
 
             /* Set random number of bits to trigger different chunk types */
@@ -6139,8 +6003,6 @@ int multiroarTest(int argc, char *argv[]) {
                     expectedCount, actualCount, trial);
                 break;
             }
-
-            multiroarFree(r);
         }
         printf("  Completed 1K bitcount fuzz iterations\n");
     }
@@ -6149,9 +6011,13 @@ int multiroarTest(int argc, char *argv[]) {
         srand(111111);
         for (int trial = 0; trial < 1000; trial++) {
             int n = 2 + (rand() % 8); /* 2-9 inputs */
-            multiroar **roars = zmalloc(n * sizeof(multiroar *));
+            __attribute__((
+                cleanup(roarArrayFree_cleanup))) roarArray roarsArr = {
+                .items = zcalloc(n, sizeof(multiroar *)), .count = (uint64_t)n};
+            multiroar **roars = roarsArr.items;
 
             for (int i = 0; i < n; i++) {
+                /* @own: container; free=multiroarFree */
                 roars[i] = multiroarBitNew();
                 /* Set overlapping ranges */
                 uint64_t start = (rand() % 500);
@@ -6162,8 +6028,10 @@ int multiroarTest(int argc, char *argv[]) {
             }
 
             /* Test N-way vs chained binary */
-            multiroar *nwayResult = multiroarNewAndN(n, roars);
-            multiroar *chainedResult = multiroarDuplicate(roars[0]);
+            cleaner(multiroarFree) multiroar *nwayResult =
+                multiroarNewAndN(n, roars);
+            cleaner(multiroarFree) multiroar *chainedResult =
+                multiroarDuplicate(roars[0]);
             for (int i = 1; i < n; i++) {
                 multiroarAnd(chainedResult, roars[i]);
             }
@@ -6189,13 +6057,6 @@ int multiroarTest(int argc, char *argv[]) {
                     break;
                 }
             }
-
-            for (int i = 0; i < n; i++) {
-                multiroarFree(roars[i]);
-            }
-            zfree(roars);
-            multiroarFree(nwayResult);
-            multiroarFree(chainedResult);
         }
         printf("  Completed 1K N-way AND fuzz iterations\n");
     }
@@ -6204,9 +6065,13 @@ int multiroarTest(int argc, char *argv[]) {
         srand(222222);
         for (int trial = 0; trial < 1000; trial++) {
             int n = 2 + (rand() % 8);
-            multiroar **roars = zmalloc(n * sizeof(multiroar *));
+            __attribute__((
+                cleanup(roarArrayFree_cleanup))) roarArray roarsArr = {
+                .items = zcalloc(n, sizeof(multiroar *)), .count = (uint64_t)n};
+            multiroar **roars = roarsArr.items;
 
             for (int i = 0; i < n; i++) {
+                /* @own: container; free=multiroarFree */
                 roars[i] = multiroarBitNew();
                 uint64_t start = (rand() % 500);
                 uint64_t count = 50 + (rand() % 200);
@@ -6215,8 +6080,10 @@ int multiroarTest(int argc, char *argv[]) {
                 }
             }
 
-            multiroar *nwayResult = multiroarNewOrN(n, roars);
-            multiroar *chainedResult = multiroarDuplicate(roars[0]);
+            cleaner(multiroarFree) multiroar *nwayResult =
+                multiroarNewOrN(n, roars);
+            cleaner(multiroarFree) multiroar *chainedResult =
+                multiroarDuplicate(roars[0]);
             for (int i = 1; i < n; i++) {
                 multiroarOr(chainedResult, roars[i]);
             }
@@ -6230,13 +6097,6 @@ int multiroarTest(int argc, char *argv[]) {
                     nwayCount, chainedCount, trial);
                 break;
             }
-
-            for (int i = 0; i < n; i++) {
-                multiroarFree(roars[i]);
-            }
-            zfree(roars);
-            multiroarFree(nwayResult);
-            multiroarFree(chainedResult);
         }
         printf("  Completed 1K N-way OR fuzz iterations\n");
     }
@@ -6245,9 +6105,13 @@ int multiroarTest(int argc, char *argv[]) {
         srand(333333);
         for (int trial = 0; trial < 1000; trial++) {
             int n = 2 + (rand() % 8);
-            multiroar **roars = zmalloc(n * sizeof(multiroar *));
+            __attribute__((
+                cleanup(roarArrayFree_cleanup))) roarArray roarsArr = {
+                .items = zcalloc(n, sizeof(multiroar *)), .count = (uint64_t)n};
+            multiroar **roars = roarsArr.items;
 
             for (int i = 0; i < n; i++) {
+                /* @own: container; free=multiroarFree */
                 roars[i] = multiroarBitNew();
                 uint64_t start = (rand() % 500);
                 uint64_t count = 50 + (rand() % 200);
@@ -6256,8 +6120,10 @@ int multiroarTest(int argc, char *argv[]) {
                 }
             }
 
-            multiroar *nwayResult = multiroarNewXorN(n, roars);
-            multiroar *chainedResult = multiroarDuplicate(roars[0]);
+            cleaner(multiroarFree) multiroar *nwayResult =
+                multiroarNewXorN(n, roars);
+            cleaner(multiroarFree) multiroar *chainedResult =
+                multiroarDuplicate(roars[0]);
             for (int i = 1; i < n; i++) {
                 multiroarXor(chainedResult, roars[i]);
             }
@@ -6271,19 +6137,12 @@ int multiroarTest(int argc, char *argv[]) {
                     nwayCount, chainedCount, trial);
                 break;
             }
-
-            for (int i = 0; i < n; i++) {
-                multiroarFree(roars[i]);
-            }
-            zfree(roars);
-            multiroarFree(nwayResult);
-            multiroarFree(chainedResult);
         }
         printf("  Completed 1K N-way XOR fuzz iterations\n");
     }
 
     TEST("EDGE: bitcount with chunk type transitions") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         uint64_t count = 0;
 
         /* Start with UNDER_FULL (sparse) */
@@ -6333,16 +6192,17 @@ int multiroarTest(int argc, char *argv[]) {
                 "",
                 count, multiroarBitCount(r));
         }
-
-        multiroarFree(r);
     }
 
     TEST("EDGE: N-way operations with very large N (N=100)") {
         const int n = 100;
-        multiroar **roars = zmalloc(n * sizeof(multiroar *));
+        __attribute__((cleanup(roarArrayFree_cleanup))) roarArray roarsArr = {
+            .items = zcalloc(n, sizeof(multiroar *)), .count = (uint64_t)n};
+        multiroar **roars = roarsArr.items;
 
         srand(444444);
         for (int i = 0; i < n; i++) {
+            /* @own: container; free=multiroarFree */
             roars[i] = multiroarBitNew();
             /* Each sets bit at position i to guarantee some overlap */
             multiroarBitSet(roars[i], i);
@@ -6352,7 +6212,7 @@ int multiroarTest(int argc, char *argv[]) {
             }
         }
 
-        multiroar *orResult = multiroarNewOrN(n, roars);
+        cleaner(multiroarFree) multiroar *orResult = multiroarNewOrN(n, roars);
         uint64_t orCount = multiroarBitCount(orResult);
 
         /* OR should have at least N bits (positions 0..N-1) */
@@ -6360,7 +6220,8 @@ int multiroarTest(int argc, char *argv[]) {
             ERR("N=100 OR: count %" PRIu64 " should be >= %d", orCount, n);
         }
 
-        multiroar *andResult = multiroarNewAndN(n, roars);
+        cleaner(multiroarFree) multiroar *andResult =
+            multiroarNewAndN(n, roars);
         uint64_t andCount = multiroarBitCount(andResult);
 
         /* AND should be small (likely 0) since each roar has unique bits */
@@ -6369,19 +6230,12 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         printf("  N=100: OR=%" PRIu64 " AND=%" PRIu64 "\n", orCount, andCount);
-
-        for (int i = 0; i < n; i++) {
-            multiroarFree(roars[i]);
-        }
-        zfree(roars);
-        multiroarFree(orResult);
-        multiroarFree(andResult);
     }
 
     TEST("EDGE: Multi-chunk operations across boundaries") {
-        multiroar *r1 = multiroarBitNew();
-        multiroar *r2 = multiroarBitNew();
-        multiroar *r3 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r1 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r2 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r3 = multiroarBitNew();
 
         /* Set bits in different chunks (chunks are 8192 bits each) */
         /* Chunk 0: bits 0-8191 - with proper overlaps */
@@ -6420,7 +6274,8 @@ int multiroarTest(int argc, char *argv[]) {
         multiroar *roars[] = {r1, r2, r3};
 
         /* Test AND across chunks - should have overlaps */
-        multiroar *andResult = multiroarNewAndN(3, roars);
+        cleaner(multiroarFree) multiroar *andResult =
+            multiroarNewAndN(3, roars);
         uint64_t andCount = multiroarBitCount(andResult);
 
         /* Should have overlaps: chunk0=[1000..1999], chunk1=[9192..10191],
@@ -6432,7 +6287,7 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         /* Test OR across chunks */
-        multiroar *orResult = multiroarNewOrN(3, roars);
+        cleaner(multiroarFree) multiroar *orResult = multiroarNewOrN(3, roars);
         uint64_t orCount = multiroarBitCount(orResult);
 
         /* OR should be union of all ranges */
@@ -6445,19 +6300,13 @@ int multiroarTest(int argc, char *argv[]) {
 
         printf("  Multi-chunk: AND=%" PRIu64 " OR=%" PRIu64 "\n", andCount,
                orCount);
-
-        multiroarFree(r1);
-        multiroarFree(r2);
-        multiroarFree(r3);
-        multiroarFree(andResult);
-        multiroarFree(orResult);
     }
 
     TEST("EDGE: Operations with all chunk types mixed") {
-        multiroar *sparse = multiroarBitNew();
-        multiroar *dense = multiroarBitNew();
-        multiroar *inverted = multiroarBitNew();
-        multiroar *full = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *sparse = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *dense = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *inverted = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *full = multiroarBitNew();
 
         /* Sparse chunk (< 631 bits) */
         for (uint64_t i = 0; i < 300; i++) {
@@ -6500,7 +6349,8 @@ int multiroarTest(int argc, char *argv[]) {
         multiroar *roars[] = {sparse, dense, inverted, full};
 
         /* AND of all types - should be sparse positions only */
-        multiroar *andResult = multiroarNewAndN(4, roars);
+        cleaner(multiroarFree) multiroar *andResult =
+            multiroarNewAndN(4, roars);
         uint64_t andCount = multiroarBitCount(andResult);
         /* All have bits [0, 10, 20, ... 290] in common = ~30 bits */
         if (andCount == 0 || andCount > 300) {
@@ -6508,7 +6358,7 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         /* OR of all types - should be full chunk */
-        multiroar *orResult = multiroarNewOrN(4, roars);
+        cleaner(multiroarFree) multiroar *orResult = multiroarNewOrN(4, roars);
         uint64_t orCount = multiroarBitCount(orResult);
         if (orCount != 8192) {
             ERR("Mixed types OR: expected 8192, got %" PRIu64 "", orCount);
@@ -6516,17 +6366,10 @@ int multiroarTest(int argc, char *argv[]) {
 
         printf("  Mixed chunk types: AND=%" PRIu64 " OR=%" PRIu64 "\n",
                andCount, orCount);
-
-        multiroarFree(sparse);
-        multiroarFree(dense);
-        multiroarFree(inverted);
-        multiroarFree(full);
-        multiroarFree(andResult);
-        multiroarFree(orResult);
     }
 
     TEST("EDGE: Bitcount with very large positions") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Set bits at very large positions */
         uint64_t positions[] = {
@@ -6543,13 +6386,11 @@ int multiroarTest(int argc, char *argv[]) {
             ERR("Large positions bitcount: expected %zu, got %" PRIu64,
                 sizeof(positions) / sizeof(positions[0]), count);
         }
-
-        multiroarFree(r);
     }
 
     TEST("EDGE: N=2 equivalence to binary operations") {
-        multiroar *r1 = multiroarBitNew();
-        multiroar *r2 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r1 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r2 = multiroarBitNew();
 
         srand(555555);
         for (int i = 0; i < 1000; i++) {
@@ -6560,8 +6401,8 @@ int multiroarTest(int argc, char *argv[]) {
         multiroar *roars[] = {r1, r2};
 
         /* Test N=2 AND vs binary AND */
-        multiroar *nwayAnd = multiroarNewAndN(2, roars);
-        multiroar *binaryAnd = multiroarNewAnd(r1, r2);
+        cleaner(multiroarFree) multiroar *nwayAnd = multiroarNewAndN(2, roars);
+        cleaner(multiroarFree) multiroar *binaryAnd = multiroarNewAnd(r1, r2);
 
         uint64_t nwayCount = multiroarBitCount(nwayAnd);
         uint64_t binaryCount = multiroarBitCount(binaryAnd);
@@ -6580,8 +6421,8 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         /* Test N=2 OR vs binary OR */
-        multiroar *nwayOr = multiroarNewOrN(2, roars);
-        multiroar *binaryOr = multiroarNewOr(r1, r2);
+        cleaner(multiroarFree) multiroar *nwayOr = multiroarNewOrN(2, roars);
+        cleaner(multiroarFree) multiroar *binaryOr = multiroarNewOr(r1, r2);
 
         nwayCount = multiroarBitCount(nwayOr);
         binaryCount = multiroarBitCount(binaryOr);
@@ -6592,8 +6433,8 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         /* Test N=2 XOR vs binary XOR */
-        multiroar *nwayXor = multiroarNewXorN(2, roars);
-        multiroar *binaryXor = multiroarNewXor(r1, r2);
+        cleaner(multiroarFree) multiroar *nwayXor = multiroarNewXorN(2, roars);
+        cleaner(multiroarFree) multiroar *binaryXor = multiroarNewXor(r1, r2);
 
         nwayCount = multiroarBitCount(nwayXor);
         binaryCount = multiroarBitCount(binaryXor);
@@ -6602,22 +6443,13 @@ int multiroarTest(int argc, char *argv[]) {
             ERR("N=2 XOR: nway=%" PRIu64 " binary=%" PRIu64 "", nwayCount,
                 binaryCount);
         }
-
-        multiroarFree(r1);
-        multiroarFree(r2);
-        multiroarFree(nwayAnd);
-        multiroarFree(binaryAnd);
-        multiroarFree(nwayOr);
-        multiroarFree(binaryOr);
-        multiroarFree(nwayXor);
-        multiroarFree(binaryXor);
     }
 
     TEST("PERF: Bitcount performance across different densities") {
         const int iterations = 10000;
 
         /* Sparse */
-        multiroar *sparse = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *sparse = multiroarBitNew();
         for (int i = 0; i < 100; i++) {
             multiroarBitSet(sparse, i * 100);
         }
@@ -6634,7 +6466,7 @@ int multiroarTest(int argc, char *argv[]) {
         sparseNs /= iterations;
 
         /* Dense */
-        multiroar *dense = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *dense = multiroarBitNew();
         for (int i = 0; i < 5000; i++) {
             multiroarBitSet(dense, i);
         }
@@ -6650,17 +6482,17 @@ int multiroarTest(int argc, char *argv[]) {
         denseNs /= iterations;
 
         printf("  Sparse: %.1f ns/op, Dense: %.1f ns/op\n", sparseNs, denseNs);
-
-        multiroarFree(sparse);
-        multiroarFree(dense);
     }
 
     TEST("PERF: N-way operations vs chained binary (N=10)") {
         const int n = 10;
-        multiroar **roars = zmalloc(n * sizeof(multiroar *));
+        __attribute__((cleanup(roarArrayFree_cleanup))) roarArray roarsArr = {
+            .items = zcalloc(n, sizeof(multiroar *)), .count = (uint64_t)n};
+        multiroar **roars = roarsArr.items;
 
         srand(666666);
         for (int i = 0; i < n; i++) {
+            /* @own: container; free=multiroarFree */
             roars[i] = multiroarBitNew();
             for (int j = 0; j < 500; j++) {
                 multiroarBitSet(roars[i], rand() % 5000);
@@ -6673,8 +6505,9 @@ int multiroarTest(int argc, char *argv[]) {
 
         clock_gettime(CLOCK_MONOTONIC, &start);
         for (int i = 0; i < iterations; i++) {
-            multiroar *result = multiroarNewAndN(n, roars);
-            multiroarFree(result);
+            cleaner(multiroarFree) multiroar *result =
+                multiroarNewAndN(n, roars);
+            (void)result;
         }
         clock_gettime(CLOCK_MONOTONIC, &end);
         double nwayNs =
@@ -6684,11 +6517,11 @@ int multiroarTest(int argc, char *argv[]) {
         /* Chained binary AND performance */
         clock_gettime(CLOCK_MONOTONIC, &start);
         for (int i = 0; i < iterations; i++) {
-            multiroar *result = multiroarDuplicate(roars[0]);
+            cleaner(multiroarFree) multiroar *result =
+                multiroarDuplicate(roars[0]);
             for (int j = 1; j < n; j++) {
                 multiroarAnd(result, roars[j]);
             }
-            multiroarFree(result);
         }
         clock_gettime(CLOCK_MONOTONIC, &end);
         double chainedNs =
@@ -6697,11 +6530,6 @@ int multiroarTest(int argc, char *argv[]) {
 
         printf("  N=10 AND: N-way=%.0f ns, Chained=%.0f ns, Ratio=%.2fx\n",
                nwayNs, chainedNs, chainedNs / nwayNs);
-
-        for (int i = 0; i < n; i++) {
-            multiroarFree(roars[i]);
-        }
-        zfree(roars);
     }
 
     printf("\n=== All advanced fuzzing tests completed! ===\n\n");
@@ -6711,7 +6539,7 @@ int multiroarTest(int argc, char *argv[]) {
      * ==================================================================== */
 
     TEST("multiroarMin/Max - empty bitmap") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         uint64_t position;
 
         if (multiroarMin(r, &position)) {
@@ -6720,12 +6548,10 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarMax(r, &position)) {
             ERRR("Max should return false for empty bitmap");
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarIsEmpty - empty and non-empty") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         if (!multiroarIsEmpty(r)) {
             ERRR("Newly created bitmap should be empty");
@@ -6740,8 +6566,6 @@ int multiroarTest(int argc, char *argv[]) {
         if (!multiroarIsEmpty(r)) {
             ERRR("Bitmap after removing all bits should be empty");
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarMin/Max - single bit at various positions") {
@@ -6750,7 +6574,7 @@ int multiroarTest(int argc, char *argv[]) {
 
         for (uint64_t i = 0;
              i < sizeof(testPositions) / sizeof(testPositions[0]); i++) {
-            multiroar *r = multiroarBitNew();
+            cleaner(multiroarFree) multiroar *r = multiroarBitNew();
             uint64_t pos = testPositions[i];
 
             multiroarBitSet(r, pos);
@@ -6766,13 +6590,11 @@ int multiroarTest(int argc, char *argv[]) {
                     "",
                     pos, maxPos);
             }
-
-            multiroarFree(r);
         }
     }
 
     TEST("multiroarMin/Max - sparse chunk (UNDER_FULL)") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Set bits at positions that will stay sparse (<631 bits per chunk) */
         multiroarBitSet(r, 100);
@@ -6786,12 +6608,10 @@ int multiroarTest(int argc, char *argv[]) {
         if (!multiroarMax(r, &maxPos) || maxPos != 1000) {
             ERR("Max for sparse chunk: expected 1000, got %" PRIu64 "", maxPos);
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarMin/Max - dense chunk (FULL_BITMAP)") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Set many bits to trigger dense encoding (631-7561 bits) */
         for (uint64_t i = 100; i < 1100; i++) {
@@ -6805,12 +6625,10 @@ int multiroarTest(int argc, char *argv[]) {
         if (!multiroarMax(r, &maxPos) || maxPos != 1099) {
             ERR("Max for dense chunk: expected 1099, got %" PRIu64 "", maxPos);
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarMin/Max - inverted chunk (OVER_FULL)") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Set most bits in a chunk to trigger inverted encoding (>7561 bits) */
         for (uint64_t i = 10; i < 8190; i++) {
@@ -6825,12 +6643,10 @@ int multiroarTest(int argc, char *argv[]) {
             ERR("Max for inverted chunk: expected 8189, got %" PRIu64 "",
                 maxPos);
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarMin/Max - full chunk (ALL_1)") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Set all bits in a chunk */
         for (uint64_t i = 0; i < 8192; i++) {
@@ -6844,12 +6660,10 @@ int multiroarTest(int argc, char *argv[]) {
         if (!multiroarMax(r, &maxPos) || maxPos != 8191) {
             ERR("Max for full chunk: expected 8191, got %" PRIu64 "", maxPos);
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarMin/Max - multiple chunks") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Set bits across multiple chunks */
         multiroarBitSet(r, 100);     /* Chunk 0 */
@@ -6865,12 +6679,10 @@ int multiroarTest(int argc, char *argv[]) {
             ERR("Max for multi-chunk: expected 1000000, got %" PRIu64 "",
                 maxPos);
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarMin/Max - chunk boundaries") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Test at chunk boundaries (8192 bits per chunk) */
         multiroarBitSet(r, 0);     /* First bit of chunk 0 */
@@ -6886,13 +6698,11 @@ int multiroarTest(int argc, char *argv[]) {
             ERR("Max at chunk boundary: expected 16383, got %" PRIu64 "",
                 maxPos);
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarIntersects - empty and disjoint") {
-        multiroar *r1 = multiroarBitNew();
-        multiroar *r2 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r1 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r2 = multiroarBitNew();
 
         /* Both empty */
         if (multiroarIntersects(r1, r2)) {
@@ -6910,14 +6720,11 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarIntersects(r1, r2)) {
             ERRR("Disjoint bitmaps should not intersect");
         }
-
-        multiroarFree(r1);
-        multiroarFree(r2);
     }
 
     TEST("multiroarIntersects - overlapping") {
-        multiroar *r1 = multiroarBitNew();
-        multiroar *r2 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r1 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r2 = multiroarBitNew();
 
         /* Same chunk, overlapping bits */
         multiroarBitSet(r1, 100);
@@ -6928,14 +6735,11 @@ int multiroarTest(int argc, char *argv[]) {
         if (!multiroarIntersects(r1, r2)) {
             ERRR("Overlapping bitmaps should intersect");
         }
-
-        multiroarFree(r1);
-        multiroarFree(r2);
     }
 
     TEST("multiroarIntersects - different chunks") {
-        multiroar *r1 = multiroarBitNew();
-        multiroar *r2 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r1 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r2 = multiroarBitNew();
 
         /* Different chunks, no overlap */
         multiroarBitSet(r1, 100);
@@ -6951,14 +6755,11 @@ int multiroarTest(int argc, char *argv[]) {
         if (!multiroarIntersects(r1, r2)) {
             ERRR("Same bit in same chunk should intersect");
         }
-
-        multiroarFree(r1);
-        multiroarFree(r2);
     }
 
     TEST("multiroarIsSubset - empty sets") {
-        multiroar *r1 = multiroarBitNew();
-        multiroar *r2 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r1 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r2 = multiroarBitNew();
 
         /* Empty set is subset of empty set */
         if (!multiroarIsSubset(r1, r2)) {
@@ -6975,14 +6776,11 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarIsSubset(r2, r1)) {
             ERRR("Non-empty set should not be subset of empty set");
         }
-
-        multiroarFree(r1);
-        multiroarFree(r2);
     }
 
     TEST("multiroarIsSubset - equal sets") {
-        multiroar *r1 = multiroarBitNew();
-        multiroar *r2 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r1 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r2 = multiroarBitNew();
 
         multiroarBitSet(r1, 100);
         multiroarBitSet(r1, 200);
@@ -6996,14 +6794,11 @@ int multiroarTest(int argc, char *argv[]) {
         if (!multiroarIsSubset(r2, r1)) {
             ERRR("Equal sets should be subsets of each other (r2 ⊆ r1)");
         }
-
-        multiroarFree(r1);
-        multiroarFree(r2);
     }
 
     TEST("multiroarIsSubset - proper subset") {
-        multiroar *r1 = multiroarBitNew();
-        multiroar *r2 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r1 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r2 = multiroarBitNew();
 
         multiroarBitSet(r1, 100);
         multiroarBitSet(r2, 100);
@@ -7018,14 +6813,11 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarIsSubset(r2, r1)) {
             ERRR("r2 should not be subset of r1");
         }
-
-        multiroarFree(r1);
-        multiroarFree(r2);
     }
 
     TEST("multiroarIsSubset - non-subset") {
-        multiroar *r1 = multiroarBitNew();
-        multiroar *r2 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r1 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r2 = multiroarBitNew();
 
         multiroarBitSet(r1, 100);
         multiroarBitSet(r1, 300);
@@ -7039,26 +6831,20 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarIsSubset(r2, r1)) {
             ERRR("Disjoint r2 should not be subset of r1");
         }
-
-        multiroarFree(r1);
-        multiroarFree(r2);
     }
 
     TEST("multiroarEquals - empty bitmaps") {
-        multiroar *r1 = multiroarBitNew();
-        multiroar *r2 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r1 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r2 = multiroarBitNew();
 
         if (!multiroarEquals(r1, r2)) {
             ERRR("Empty bitmaps should be equal");
         }
-
-        multiroarFree(r1);
-        multiroarFree(r2);
     }
 
     TEST("multiroarEquals - identical bitmaps") {
-        multiroar *r1 = multiroarBitNew();
-        multiroar *r2 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r1 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r2 = multiroarBitNew();
 
         multiroarBitSet(r1, 100);
         multiroarBitSet(r1, 200);
@@ -7071,14 +6857,11 @@ int multiroarTest(int argc, char *argv[]) {
         if (!multiroarEquals(r1, r2)) {
             ERRR("Identical bitmaps should be equal");
         }
-
-        multiroarFree(r1);
-        multiroarFree(r2);
     }
 
     TEST("multiroarEquals - different sizes") {
-        multiroar *r1 = multiroarBitNew();
-        multiroar *r2 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r1 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r2 = multiroarBitNew();
 
         multiroarBitSet(r1, 100);
         multiroarBitSet(r2, 100);
@@ -7087,14 +6870,11 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarEquals(r1, r2)) {
             ERRR("Bitmaps with different sizes should not be equal");
         }
-
-        multiroarFree(r1);
-        multiroarFree(r2);
     }
 
     TEST("multiroarEquals - different positions") {
-        multiroar *r1 = multiroarBitNew();
-        multiroar *r2 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r1 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r2 = multiroarBitNew();
 
         multiroarBitSet(r1, 100);
         multiroarBitSet(r2, 200);
@@ -7102,14 +6882,11 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarEquals(r1, r2)) {
             ERRR("Bitmaps with different positions should not be equal");
         }
-
-        multiroarFree(r1);
-        multiroarFree(r2);
     }
 
     TEST("multiroarEquals - different chunks") {
-        multiroar *r1 = multiroarBitNew();
-        multiroar *r2 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r1 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r2 = multiroarBitNew();
 
         multiroarBitSet(r1, 100);
         multiroarBitSet(r2, 10000);
@@ -7117,15 +6894,12 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarEquals(r1, r2)) {
             ERRR("Bitmaps with bits in different chunks should not be equal");
         }
-
-        multiroarFree(r1);
-        multiroarFree(r2);
     }
 
     TEST_DESC("min/max/comparison fuzzing - %d random operations", 1000) {
         for (int trial = 0; trial < 1000; trial++) {
-            multiroar *r1 = multiroarBitNew();
-            multiroar *r2 = multiroarBitNew();
+            cleaner(multiroarFree) multiroar *r1 = multiroarBitNew();
+            cleaner(multiroarFree) multiroar *r2 = multiroarBitNew();
 
             /* Create random bitmaps */
             int numBits1 = rand() % 500;
@@ -7216,9 +6990,6 @@ int multiroarTest(int argc, char *argv[]) {
             if (multiroarEquals(r1, r2) != shouldBeEqual) {
                 ERR("Equals mismatch: expected %d", shouldBeEqual);
             }
-
-            multiroarFree(r1);
-            multiroarFree(r2);
         }
     }
 
@@ -7229,7 +7000,7 @@ int multiroarTest(int argc, char *argv[]) {
      * ==================================================================== */
 
     TEST("multiroarRank - empty bitmap") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         if (multiroarRank(r, 0) != 0) {
             ERRR("Rank at 0 for empty bitmap should be 0");
@@ -7237,12 +7008,10 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarRank(r, 100) != 0) {
             ERRR("Rank at 100 for empty bitmap should be 0");
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarRank - single bit") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         multiroarBitSet(r, 100);
 
         if (multiroarRank(r, 0) != 0) {
@@ -7257,12 +7026,10 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarRank(r, 1000) != 1) {
             ERRR("Rank far after bit should be 1");
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarRank - sparse chunk") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         /* Set bits at positions 10, 20, 30 */
         multiroarBitSet(r, 10);
         multiroarBitSet(r, 20);
@@ -7291,12 +7058,10 @@ int multiroarTest(int argc, char *argv[]) {
             ERR("Rank at 31: expected 3, got %" PRIu64 "",
                 multiroarRank(r, 31));
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarRank - dense chunk") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         /* Set bits 0..999 (1000 bits, triggers dense mode) */
         for (uint64_t i = 0; i < 1000; i++) {
             multiroarBitSet(r, i);
@@ -7317,12 +7082,10 @@ int multiroarTest(int argc, char *argv[]) {
             ERR("Rank at 1001: expected 1000, got %" PRIu64 "",
                 multiroarRank(r, 1001));
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarRank - multi-chunk") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         /* Set bits in multiple chunks */
         multiroarBitSet(r, 100);    /* Chunk 0 */
         multiroarBitSet(r, 200);    /* Chunk 0 */
@@ -7350,12 +7113,10 @@ int multiroarTest(int argc, char *argv[]) {
             ERR("Rank at 100001: expected 5, got %" PRIu64 "",
                 multiroarRank(r, 100001));
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarSelect - empty bitmap") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         uint64_t pos;
 
         if (multiroarSelect(r, 0, &pos)) {
@@ -7364,12 +7125,10 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarSelect(r, 1, &pos)) {
             ERRR("Select on empty bitmap should fail");
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarSelect - single bit") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         multiroarBitSet(r, 100);
 
         uint64_t pos;
@@ -7379,12 +7138,10 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarSelect(r, 2, &pos)) {
             ERRR("Select 2nd bit should fail (only 1 bit set)");
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarSelect - sparse chunk") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         /* Set bits at positions 10, 20, 30 */
         multiroarBitSet(r, 10);
         multiroarBitSet(r, 20);
@@ -7403,12 +7160,10 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarSelect(r, 4, &pos)) {
             ERRR("Select 4th should fail");
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarSelect - dense chunk") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         /* Set bits 0..999 */
         for (uint64_t i = 0; i < 1000; i++) {
             multiroarBitSet(r, i);
@@ -7427,12 +7182,10 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarSelect(r, 1001, &pos)) {
             ERRR("Select 1001st should fail");
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarSelect - multi-chunk") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         multiroarBitSet(r, 100);    /* 1st bit */
         multiroarBitSet(r, 200);    /* 2nd bit */
         multiroarBitSet(r, 10000);  /* 3rd bit (chunk 1) */
@@ -7458,12 +7211,10 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarSelect(r, 6, &pos)) {
             ERRR("Select 6th should fail");
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarRank/Select - invariant: rank(select(k)) == k") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Set various bits */
         multiroarBitSet(r, 5);
@@ -7487,13 +7238,11 @@ int multiroarTest(int argc, char *argv[]) {
                     k, rank, k);
             }
         }
-
-        multiroarFree(r);
     }
 
     TEST_DESC("rank/select fuzzing - %d random operations", 1000) {
         for (int trial = 0; trial < 1000; trial++) {
-            multiroar *r = multiroarBitNew();
+            cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
             /* Create random bitmap */
             int numBits = 10 + (rand() % 491); /* Max 500 to fit in array */
@@ -7575,13 +7324,11 @@ int multiroarTest(int argc, char *argv[]) {
                     }
                 }
             }
-
-            multiroarFree(r);
         }
     }
 
     TEST("rank/select - edge case: max uint64_t positions") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Test near max uint64_t boundaries */
         uint64_t largePos = UINT64_MAX - 1000;
@@ -7616,12 +7363,10 @@ int multiroarTest(int argc, char *argv[]) {
             ERR("Select(2) should return %" PRIu64 ", got %" PRIu64,
                 largePos + 500, pos);
         }
-
-        multiroarFree(r);
     }
 
     TEST("rank/select - edge case: sparse bitmaps") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Very sparse bitmap with widely separated bits */
         uint64_t positions[] = {0, 1ULL << 20, 1ULL << 30, 1ULL << 40};
@@ -7646,12 +7391,10 @@ int multiroarTest(int argc, char *argv[]) {
                     positions[i], pos);
             }
         }
-
-        multiroarFree(r);
     }
 
     TEST("rank/select - edge case: dense consecutive bits") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Set 10000 consecutive bits starting at position 1000000 */
         uint64_t start = 1000000;
@@ -7684,12 +7427,10 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarSelect(r, count + 1, &pos)) {
             ERRR("Select beyond count should fail");
         }
-
-        multiroarFree(r);
     }
 
     TEST("rank/select - edge case: alternating bits") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Set alternating bits in a range */
         uint64_t start = 50000;
@@ -7715,12 +7456,10 @@ int multiroarTest(int argc, char *argv[]) {
                     k, expected, pos);
             }
         }
-
-        multiroarFree(r);
     }
 
     TEST("rank/select - edge case: single bit") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         multiroarBitSet(r, 42);
 
@@ -7749,12 +7488,10 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarSelect(r, 0, &pos)) {
             ERRR("Select(0) should fail");
         }
-
-        multiroarFree(r);
     }
 
     TEST("rank/select - edge case: duplicate positions in fuzzing") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Set same position multiple times */
         for (int i = 0; i < 100; i++) {
@@ -7774,8 +7511,6 @@ int multiroarTest(int argc, char *argv[]) {
         if (!multiroarSelect(r, 1, &pos) || pos != 1000) {
             ERR("Select(1) should return 1000, got %" PRIu64, pos);
         }
-
-        multiroarFree(r);
     }
 
     printf("\n=== Rank/Select tests completed! ===\n\n");
@@ -7785,17 +7520,15 @@ int multiroarTest(int argc, char *argv[]) {
      * ==================================================================== */
 
     TEST("multiroarRangeCount - empty bitmap") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         if (multiroarRangeCount(r, 0, 100) != 0) {
             ERRR("RangeCount on empty bitmap should be 0");
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarRangeCount - basic range") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         /* Set bits 10, 20, 30, 40, 50 */
         for (uint64_t i = 10; i <= 50; i += 10) {
             multiroarBitSet(r, i);
@@ -7813,12 +7546,10 @@ int multiroarTest(int argc, char *argv[]) {
             ERR("RangeCount [10,51): expected 5, got %" PRIu64 "",
                 multiroarRangeCount(r, 10, 51));
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarBitClearRange - basic clear") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         /* Set bits 0..99 */
         for (uint64_t i = 0; i < 100; i++) {
             multiroarBitSet(r, i);
@@ -7837,12 +7568,10 @@ int multiroarTest(int argc, char *argv[]) {
                 ERR("Bit %" PRIu64 " should be cleared", i);
             }
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarBitClearRange - multi-chunk") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         /* Set bits across chunks */
         for (uint64_t i = 8000; i < 10000; i++) {
             multiroarBitSet(r, i);
@@ -7862,12 +7591,10 @@ int multiroarTest(int argc, char *argv[]) {
                 " (range had %" PRIu64 " bits)",
                 beforeCount - bitsInRange, afterCount, bitsInRange);
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarBitFlipRange - basic flip") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         /* Set alternating bits 0, 2, 4, 6, 8 */
         for (uint64_t i = 0; i < 10; i += 2) {
             multiroarBitSet(r, i);
@@ -7883,12 +7610,10 @@ int multiroarTest(int argc, char *argv[]) {
                 ERR("After flip: bit %" PRIu64 " should be %d", i, shouldBeSet);
             }
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarBitFlipRange - double flip") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         multiroarBitSet(r, 50);
 
         /* Flip twice should restore */
@@ -7898,13 +7623,11 @@ int multiroarTest(int argc, char *argv[]) {
         if (!multiroarBitGet(r, 50)) {
             ERRR("Double flip should restore original state");
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarAndNot - basic difference") {
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
         /* A = {10, 20, 30, 40, 50} */
         for (uint64_t i = 10; i <= 50; i += 10) {
@@ -7929,14 +7652,11 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarBitGet(a, 20) || multiroarBitGet(a, 40)) {
             ERRR("A - B should not contain {20, 40}");
         }
-
-        multiroarFree(a);
-        multiroarFree(b);
     }
 
     TEST("multiroarNewAndNot - creates new result") {
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
         for (uint64_t i = 0; i < 100; i++) {
             multiroarBitSet(a, i);
@@ -7946,7 +7666,7 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         /* A - B = [0, 50) */
-        multiroar *result = multiroarNewAndNot(a, b);
+        cleaner(multiroarFree) multiroar *result = multiroarNewAndNot(a, b);
 
         if (multiroarBitCount(result) != 50) {
             ERR("NewAndNot count: expected 50, got %" PRIu64 "",
@@ -7957,15 +7677,11 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarBitCount(a) != 100) {
             ERRR("Original A should be unchanged");
         }
-
-        multiroarFree(a);
-        multiroarFree(b);
-        multiroarFree(result);
     }
 
     TEST("multiroarAndNot - disjoint sets") {
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
         for (uint64_t i = 0; i < 50; i++) {
             multiroarBitSet(a, i);
@@ -7980,14 +7696,11 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarBitCount(a) != beforeCount) {
             ERRR("Disjoint A - B should equal A");
         }
-
-        multiroarFree(a);
-        multiroarFree(b);
     }
 
     TEST("multiroarAndNot - complete overlap") {
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
         for (uint64_t i = 0; i < 50; i++) {
             multiroarBitSet(a, i);
@@ -7999,14 +7712,11 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarBitCount(a) != 0) {
             ERRR("Complete overlap: A - A should be empty");
         }
-
-        multiroarFree(a);
-        multiroarFree(b);
     }
 
     TEST("multiroarBitFlipRange - minimal debug test") {
         /* Minimal test to debug the assertion failure */
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Set some bits */
         for (uint64_t i = 0; i < 20; i++) {
@@ -8028,13 +7738,11 @@ int multiroarTest(int argc, char *argv[]) {
                 "",
                 countBefore, countAfter);
         }
-
-        multiroarFree(r);
     }
 
     TEST_DESC("range operations fuzzing - %d random operations", 500) {
         for (int trial = 0; trial < 500; trial++) {
-            multiroar *r = multiroarBitNew();
+            cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
             /* Set random bits */
             int numBits = 50 + (rand() % 200);
@@ -8064,7 +7772,7 @@ int multiroarTest(int argc, char *argv[]) {
             }
 
             /* Test ClearRange */
-            multiroar *r2 = multiroarDuplicate(r);
+            cleaner(multiroarFree) multiroar *r2 = multiroarDuplicate(r);
             uint64_t clearStart = rand() % 1000;
             uint64_t clearExtent = rand() % 500;
 
@@ -8078,10 +7786,8 @@ int multiroarTest(int argc, char *argv[]) {
                     initialCount - bitsInRange, afterClear);
             }
 
-            multiroarFree(r2);
-
             /* Test FlipRange */
-            multiroar *r3 = multiroarDuplicate(r);
+            cleaner(multiroarFree) multiroar *r3 = multiroarDuplicate(r);
             uint64_t flipStart = rand() % 1000;
             uint64_t flipExtent = rand() % 500;
 
@@ -8092,9 +7798,6 @@ int multiroarTest(int argc, char *argv[]) {
             if (!multiroarEquals(r, r3)) {
                 ERRR("Double flip should restore original");
             }
-
-            multiroarFree(r3);
-            multiroarFree(r);
         }
     }
 
@@ -8105,7 +7808,7 @@ int multiroarTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("multiroarIterator - empty bitmap") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         multiroarIterator iter;
         multiroarIteratorInit(r, &iter);
 
@@ -8113,12 +7816,10 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarIteratorNext(&iter, &pos)) {
             ERRR("Empty bitmap should have no positions");
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarIterator - single bit") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         multiroarBitSet(r, 42);
 
         multiroarIterator iter;
@@ -8132,12 +7833,10 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarIteratorNext(&iter, &pos)) {
             ERRR("Should only have one position");
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarIterator - sparse chunk") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         /* Set bits 10, 20, 30, 40, 50 */
         for (uint64_t i = 10; i <= 50; i += 10) {
             multiroarBitSet(r, i);
@@ -8158,12 +7857,10 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarIteratorNext(&iter, &pos)) {
             ERRR("Should have exactly 5 positions");
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarIterator - dense chunk") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         /* Set 1000 consecutive bits */
         for (uint64_t i = 0; i < 1000; i++) {
             multiroarBitSet(r, i);
@@ -8187,12 +7884,10 @@ int multiroarTest(int argc, char *argv[]) {
         if (count != 1000) {
             ERR("Expected 1000 positions, got %" PRIu64, count);
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarIterator - multiple chunks") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         /* Set bits in different chunks */
         multiroarBitSet(r, 100);   /* Chunk 0 */
         multiroarBitSet(r, 8200);  /* Chunk 1 */
@@ -8208,12 +7903,10 @@ int multiroarTest(int argc, char *argv[]) {
                 ERR("Expected %" PRIu64 ", got %" PRIu64, expected[i], pos);
             }
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarIterator - verify count matches bitcount") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         /* Set random bits */
         for (int i = 0; i < 500; i++) {
             uint64_t pos = ((uint64_t)rand() * rand()) % 50000;
@@ -8235,12 +7928,10 @@ int multiroarTest(int argc, char *argv[]) {
             ERR("Iterator count %" PRIu64 " != bitcount %" PRIu64 "", iterCount,
                 expectedCount);
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarIterator - ascending order") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         /* Set bits in random order */
         uint64_t positions[] = {500, 100, 300, 200, 400};
         for (int i = 0; i < 5; i++) {
@@ -8261,12 +7952,10 @@ int multiroarTest(int argc, char *argv[]) {
             lastPos = pos;
             first = false;
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarIteratorReset - reset and re-iterate") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         for (uint64_t i = 0; i < 10; i++) {
             multiroarBitSet(r, i * 10);
         }
@@ -8292,13 +7981,11 @@ int multiroarTest(int argc, char *argv[]) {
             ERR("Reset failed: first=%" PRIu64 " second=%" PRIu64, count1,
                 count2);
         }
-
-        multiroarFree(r);
     }
 
     TEST_DESC("iterator fuzzing - %d random bitmaps", 500) {
         for (int trial = 0; trial < 500; trial++) {
-            multiroar *r = multiroarBitNew();
+            cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
             /* Create random bitmap */
             int numBits = 50 + (rand() % 200);
@@ -8342,8 +8029,6 @@ int multiroarTest(int argc, char *argv[]) {
                     "",
                     trial, iterCount, expectedCount);
             }
-
-            multiroarFree(r);
         }
     }
 
@@ -8354,7 +8039,7 @@ int multiroarTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("multiroarBitSetMany - basic") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         uint64_t positions[] = {10, 20, 30, 40, 50};
         multiroarBitSetMany(r, positions, 5);
 
@@ -8367,12 +8052,10 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarBitCount(r) != 5) {
             ERR("Expected 5 bits, got %" PRIu64 "", multiroarBitCount(r));
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarBitGetMany - basic") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         multiroarBitSet(r, 10);
         multiroarBitSet(r, 30);
         multiroarBitSet(r, 50);
@@ -8388,12 +8071,10 @@ int multiroarTest(int argc, char *argv[]) {
                     expected[i], results[i]);
             }
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarToArray - basic") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         uint64_t setPositions[] = {100, 200, 300, 400, 500};
         for (int i = 0; i < 5; i++) {
             multiroarBitSet(r, setPositions[i]);
@@ -8412,12 +8093,10 @@ int multiroarTest(int argc, char *argv[]) {
                     i, setPositions[i], array[i]);
             }
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarToArray - limited capacity") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         for (uint64_t i = 0; i < 100; i++) {
             multiroarBitSet(r, i);
         }
@@ -8436,13 +8115,11 @@ int multiroarTest(int argc, char *argv[]) {
                 ERR("Positions not ascending at index %" PRIu64 "", i);
             }
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarFromArray - basic") {
         uint64_t positions[] = {10, 20, 30, 40, 50};
-        multiroar *r = multiroarFromArray(positions, 5);
+        cleaner(multiroarFree) multiroar *r = multiroarFromArray(positions, 5);
 
         if (multiroarBitCount(r) != 5) {
             ERR("Expected 5 bits, got %" PRIu64 "", multiroarBitCount(r));
@@ -8453,25 +8130,21 @@ int multiroarTest(int argc, char *argv[]) {
                 ERR("Position %" PRIu64 " should be set", positions[i]);
             }
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarFromArray - with duplicates") {
         uint64_t positions[] = {10, 20, 10, 30, 20, 40};
-        multiroar *r = multiroarFromArray(positions, 6);
+        cleaner(multiroarFree) multiroar *r = multiroarFromArray(positions, 6);
 
         /* Should have 4 unique positions */
         if (multiroarBitCount(r) != 4) {
             ERR("Expected 4 unique bits, got %" PRIu64 "",
                 multiroarBitCount(r));
         }
-
-        multiroarFree(r);
     }
 
     TEST("ToArray/FromArray round-trip") {
-        multiroar *r1 = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r1 = multiroarBitNew();
         /* Set random bits */
         for (int i = 0; i < 100; i++) {
             uint64_t pos = ((uint64_t)rand() * rand()) % 10000;
@@ -8481,7 +8154,8 @@ int multiroarTest(int argc, char *argv[]) {
         uint64_t count1 = multiroarBitCount(r1);
 
         /* Convert to array */
-        uint64_t *array = zcalloc(count1, sizeof(uint64_t));
+        cleanerName(zfree, UInt64) uint64_t *array =
+            zcalloc(count1, sizeof(uint64_t));
         uint64_t arrayCount = multiroarToArray(r1, array, count1);
 
         if (arrayCount != count1) {
@@ -8490,7 +8164,8 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         /* Convert back from array */
-        multiroar *r2 = multiroarFromArray(array, arrayCount);
+        cleaner(multiroarFree) multiroar *r2 =
+            multiroarFromArray(array, arrayCount);
 
         uint64_t count2 = multiroarBitCount(r2);
         if (count2 != count1) {
@@ -8502,19 +8177,16 @@ int multiroarTest(int argc, char *argv[]) {
         if (!multiroarEquals(r1, r2)) {
             ERRR("Round-trip bitmaps not equal");
         }
-
-        zfree(array);
-        multiroarFree(r1);
-        multiroarFree(r2);
     }
 
     TEST_DESC("bulk operations fuzzing - %d trials", 500) {
         for (int trial = 0; trial < 500; trial++) {
-            multiroar *r = multiroarBitNew();
+            cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
             /* Generate random positions */
             int numPositions = 50 + (rand() % 200);
-            uint64_t *positions = zcalloc(numPositions, sizeof(uint64_t));
+            cleanerName(zfree, UInt64) uint64_t *positions =
+                zcalloc(numPositions, sizeof(uint64_t));
 
             for (int i = 0; i < numPositions; i++) {
                 positions[i] = ((uint64_t)rand() * rand()) % 100000;
@@ -8524,7 +8196,8 @@ int multiroarTest(int argc, char *argv[]) {
             multiroarBitSetMany(r, positions, numPositions);
 
             /* Test GetMany */
-            bool *results = zcalloc(numPositions, sizeof(bool));
+            cleanerName(zfree, Bools) bool *results =
+                zcalloc(numPositions, sizeof(bool));
             multiroarBitGetMany(r, positions, numPositions, results);
 
             for (int i = 0; i < numPositions; i++) {
@@ -8536,7 +8209,8 @@ int multiroarTest(int argc, char *argv[]) {
 
             /* Test ToArray */
             uint64_t bitCount = multiroarBitCount(r);
-            uint64_t *array = zcalloc(bitCount, sizeof(uint64_t));
+            cleanerName(zfree, UInt64) uint64_t *array =
+                zcalloc(bitCount, sizeof(uint64_t));
             uint64_t arrayCount = multiroarToArray(r, array, bitCount);
 
             if (arrayCount != bitCount) {
@@ -8552,11 +8226,6 @@ int multiroarTest(int argc, char *argv[]) {
                         trial, i);
                 }
             }
-
-            zfree(positions);
-            zfree(results);
-            zfree(array);
-            multiroarFree(r);
         }
     }
 
@@ -8567,8 +8236,8 @@ int multiroarTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("multiroarJaccard - identical sets") {
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
         for (uint64_t i = 0; i < 100; i++) {
             multiroarBitSet(a, i);
@@ -8579,14 +8248,11 @@ int multiroarTest(int argc, char *argv[]) {
         if (jaccard < 0.999 || jaccard > 1.001) {
             ERR("Identical sets should have Jaccard = 1.0, got %f", jaccard);
         }
-
-        multiroarFree(a);
-        multiroarFree(b);
     }
 
     TEST("multiroarJaccard - disjoint sets") {
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
         for (uint64_t i = 0; i < 100; i++) {
             multiroarBitSet(a, i);
@@ -8599,14 +8265,11 @@ int multiroarTest(int argc, char *argv[]) {
         if (jaccard > 0.001) {
             ERR("Disjoint sets should have Jaccard = 0.0, got %f", jaccard);
         }
-
-        multiroarFree(a);
-        multiroarFree(b);
     }
 
     TEST("multiroarJaccard - partial overlap") {
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
         /* A = [0..99], B = [50..149] */
         /* Intersection = [50..99] = 50 bits */
@@ -8624,27 +8287,21 @@ int multiroarTest(int argc, char *argv[]) {
         if (jaccard < expected - 0.01 || jaccard > expected + 0.01) {
             ERR("Expected Jaccard ~= %f, got %f", expected, jaccard);
         }
-
-        multiroarFree(a);
-        multiroarFree(b);
     }
 
     TEST("multiroarJaccard - empty sets") {
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
         double jaccard = multiroarJaccard(a, b);
         if (jaccard < 0.999 || jaccard > 1.001) {
             ERR("Empty sets should have Jaccard = 1.0, got %f", jaccard);
         }
-
-        multiroarFree(a);
-        multiroarFree(b);
     }
 
     TEST("multiroarHammingDistance - identical sets") {
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
         for (uint64_t i = 0; i < 100; i++) {
             multiroarBitSet(a, i);
@@ -8657,14 +8314,11 @@ int multiroarTest(int argc, char *argv[]) {
                 "",
                 distance);
         }
-
-        multiroarFree(a);
-        multiroarFree(b);
     }
 
     TEST("multiroarHammingDistance - disjoint sets") {
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
         for (uint64_t i = 0; i < 100; i++) {
             multiroarBitSet(a, i);
@@ -8679,14 +8333,11 @@ int multiroarTest(int argc, char *argv[]) {
                 "got %" PRIu64 "",
                 distance);
         }
-
-        multiroarFree(a);
-        multiroarFree(b);
     }
 
     TEST("multiroarOverlap - perfect overlap") {
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
         for (uint64_t i = 0; i < 50; i++) {
             multiroarBitSet(a, i);
@@ -8700,14 +8351,11 @@ int multiroarTest(int argc, char *argv[]) {
         if (overlap < 0.999 || overlap > 1.001) {
             ERR("Perfect overlap should be 1.0, got %f", overlap);
         }
-
-        multiroarFree(a);
-        multiroarFree(b);
     }
 
     TEST("multiroarDice - identical sets") {
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
         for (uint64_t i = 0; i < 100; i++) {
             multiroarBitSet(a, i);
@@ -8718,14 +8366,11 @@ int multiroarTest(int argc, char *argv[]) {
         if (dice < 0.999 || dice > 1.001) {
             ERR("Identical sets should have Dice = 1.0, got %f", dice);
         }
-
-        multiroarFree(a);
-        multiroarFree(b);
     }
 
     TEST("multiroarDice - partial overlap") {
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
         /* A = [0..99] (100 bits), B = [50..149] (100 bits) */
         /* Intersection = [50..99] = 50 bits */
@@ -8742,15 +8387,12 @@ int multiroarTest(int argc, char *argv[]) {
         if (dice < expected - 0.01 || dice > expected + 0.01) {
             ERR("Expected Dice = %f, got %f", expected, dice);
         }
-
-        multiroarFree(a);
-        multiroarFree(b);
     }
 
     TEST_DESC("similarity metrics fuzzing - %d trials", 500) {
         for (int trial = 0; trial < 500; trial++) {
-            multiroar *a = multiroarBitNew();
-            multiroar *b = multiroarBitNew();
+            cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+            cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
             /* Create random bitmaps */
             int numBitsA = 50 + (rand() % 200);
@@ -8788,9 +8430,6 @@ int multiroarTest(int argc, char *argv[]) {
             if (dice < 0.0 || dice > 1.0) {
                 ERR("Trial %d: Dice out of range [0,1]: %f", trial, dice);
             }
-
-            multiroarFree(a);
-            multiroarFree(b);
         }
     }
 
@@ -8801,19 +8440,17 @@ int multiroarTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("multiroarMemoryUsage - empty") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         uint64_t usage = multiroarMemoryUsage(r);
 
         if (usage < sizeof(multiroar)) {
             ERR("Memory usage should be at least %zu, got %" PRIu64 "",
                 sizeof(multiroar), usage);
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarMemoryUsage - non-empty") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         for (uint64_t i = 0; i < 1000; i++) {
             multiroarBitSet(r, i);
@@ -8824,8 +8461,6 @@ int multiroarTest(int argc, char *argv[]) {
             ERR("Memory usage should be at least %zu, got %" PRIu64 "",
                 sizeof(multiroar), usage);
         }
-
-        multiroarFree(r);
     }
 
     printf("\n=== Statistics and memory tests completed! ===\n\n");
@@ -8835,17 +8470,18 @@ int multiroarTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("multiroarSerialize/Deserialize - empty roar") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         uint64_t size = multiroarSerializedSize(r);
-        void *buf = zcalloc(size, 1);
+        cleanerName(zfree, Void) void *buf = zcalloc(size, 1);
 
         uint64_t written = multiroarSerialize(r, buf, size);
         if (written == 0) {
             ERRR("Failed to serialize empty roar");
         }
 
-        multiroar *r2 = multiroarDeserialize(buf, written);
+        cleaner(multiroarFree) multiroar *r2 =
+            multiroarDeserialize(buf, written);
         if (!r2) {
             ERRR("Failed to deserialize empty roar");
         }
@@ -8853,25 +8489,22 @@ int multiroarTest(int argc, char *argv[]) {
         if (!multiroarEquals(r, r2)) {
             ERRR("Deserialized roar doesn't match original");
         }
-
-        zfree(buf);
-        multiroarFree(r);
-        multiroarFree(r2);
     }
 
     TEST("multiroarSerialize/Deserialize - single bit") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         multiroarBitSet(r, 42);
 
         uint64_t size = multiroarSerializedSize(r);
-        void *buf = zcalloc(size, 1);
+        cleanerName(zfree, Void) void *buf = zcalloc(size, 1);
 
         uint64_t written = multiroarSerialize(r, buf, size);
         if (written == 0) {
             ERRR("Failed to serialize single bit");
         }
 
-        multiroar *r2 = multiroarDeserialize(buf, written);
+        cleaner(multiroarFree) multiroar *r2 =
+            multiroarDeserialize(buf, written);
         if (!r2) {
             ERRR("Failed to deserialize single bit");
         }
@@ -8883,14 +8516,10 @@ int multiroarTest(int argc, char *argv[]) {
         if (!multiroarEquals(r, r2)) {
             ERRR("Deserialized roar doesn't match original");
         }
-
-        zfree(buf);
-        multiroarFree(r);
-        multiroarFree(r2);
     }
 
     TEST("multiroarSerialize/Deserialize - sparse chunk (UNDER_FULL)") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Set 50 bits in one chunk */
         for (uint64_t i = 0; i < 100; i += 2) {
@@ -8898,14 +8527,15 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         uint64_t size = multiroarSerializedSize(r);
-        void *buf = zcalloc(size, 1);
+        cleanerName(zfree, Void) void *buf = zcalloc(size, 1);
 
         uint64_t written = multiroarSerialize(r, buf, size);
         if (written == 0) {
             ERRR("Failed to serialize sparse chunk");
         }
 
-        multiroar *r2 = multiroarDeserialize(buf, written);
+        cleaner(multiroarFree) multiroar *r2 =
+            multiroarDeserialize(buf, written);
         if (!r2) {
             ERRR("Failed to deserialize sparse chunk");
         }
@@ -8919,14 +8549,10 @@ int multiroarTest(int argc, char *argv[]) {
             ERR("Bitcount mismatch: %" PRIu64 " vs %" PRIu64 "",
                 multiroarBitCount(r), multiroarBitCount(r2));
         }
-
-        zfree(buf);
-        multiroarFree(r);
-        multiroarFree(r2);
     }
 
     TEST("multiroarSerialize/Deserialize - dense chunk (FULL_BITMAP)") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Set 4000 bits to force FULL_BITMAP */
         for (uint64_t i = 0; i < 4000; i++) {
@@ -8934,14 +8560,15 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         uint64_t size = multiroarSerializedSize(r);
-        void *buf = zcalloc(size, 1);
+        cleanerName(zfree, Void) void *buf = zcalloc(size, 1);
 
         uint64_t written = multiroarSerialize(r, buf, size);
         if (written == 0) {
             ERRR("Failed to serialize dense chunk");
         }
 
-        multiroar *r2 = multiroarDeserialize(buf, written);
+        cleaner(multiroarFree) multiroar *r2 =
+            multiroarDeserialize(buf, written);
         if (!r2) {
             ERRR("Failed to deserialize dense chunk");
         }
@@ -8954,14 +8581,10 @@ int multiroarTest(int argc, char *argv[]) {
             ERR("Bitcount mismatch: %" PRIu64 " vs %" PRIu64 "",
                 multiroarBitCount(r), multiroarBitCount(r2));
         }
-
-        zfree(buf);
-        multiroarFree(r);
-        multiroarFree(r2);
     }
 
     TEST("multiroarSerialize/Deserialize - inverted chunk (OVER_FULL)") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Fill entire chunk except 100 bits to force OVER_FULL */
         for (uint64_t i = 0; i < 8192; i++) {
@@ -8972,14 +8595,15 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         uint64_t size = multiroarSerializedSize(r);
-        void *buf = zcalloc(size, 1);
+        cleanerName(zfree, Void) void *buf = zcalloc(size, 1);
 
         uint64_t written = multiroarSerialize(r, buf, size);
         if (written == 0) {
             ERRR("Failed to serialize inverted chunk");
         }
 
-        multiroar *r2 = multiroarDeserialize(buf, written);
+        cleaner(multiroarFree) multiroar *r2 =
+            multiroarDeserialize(buf, written);
         if (!r2) {
             ERRR("Failed to deserialize inverted chunk");
         }
@@ -8992,14 +8616,10 @@ int multiroarTest(int argc, char *argv[]) {
             ERR("Bitcount mismatch: %" PRIu64 " vs %" PRIu64 "",
                 multiroarBitCount(r), multiroarBitCount(r2));
         }
-
-        zfree(buf);
-        multiroarFree(r);
-        multiroarFree(r2);
     }
 
     TEST("multiroarSerialize/Deserialize - full chunk (ALL_1)") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Fill entire chunk */
         for (uint64_t i = 0; i < 8192; i++) {
@@ -9007,14 +8627,15 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         uint64_t size = multiroarSerializedSize(r);
-        void *buf = zcalloc(size, 1);
+        cleanerName(zfree, Void) void *buf = zcalloc(size, 1);
 
         uint64_t written = multiroarSerialize(r, buf, size);
         if (written == 0) {
             ERRR("Failed to serialize full chunk");
         }
 
-        multiroar *r2 = multiroarDeserialize(buf, written);
+        cleaner(multiroarFree) multiroar *r2 =
+            multiroarDeserialize(buf, written);
         if (!r2) {
             ERRR("Failed to deserialize full chunk");
         }
@@ -9027,14 +8648,10 @@ int multiroarTest(int argc, char *argv[]) {
             ERR("Bitcount mismatch: %" PRIu64 " vs %" PRIu64 "",
                 multiroarBitCount(r), multiroarBitCount(r2));
         }
-
-        zfree(buf);
-        multiroarFree(r);
-        multiroarFree(r2);
     }
 
     TEST("multiroarSerialize/Deserialize - multiple chunks") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Create multiple chunks with different types */
         /* Chunk 0: sparse */
@@ -9053,14 +8670,15 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         uint64_t size = multiroarSerializedSize(r);
-        void *buf = zcalloc(size, 1);
+        cleanerName(zfree, Void) void *buf = zcalloc(size, 1);
 
         uint64_t written = multiroarSerialize(r, buf, size);
         if (written == 0) {
             ERRR("Failed to serialize multiple chunks");
         }
 
-        multiroar *r2 = multiroarDeserialize(buf, written);
+        cleaner(multiroarFree) multiroar *r2 =
+            multiroarDeserialize(buf, written);
         if (!r2) {
             ERRR("Failed to deserialize multiple chunks");
         }
@@ -9073,14 +8691,10 @@ int multiroarTest(int argc, char *argv[]) {
             ERR("Bitcount mismatch: %" PRIu64 " vs %" PRIu64 "",
                 multiroarBitCount(r), multiroarBitCount(r2));
         }
-
-        zfree(buf);
-        multiroarFree(r);
-        multiroarFree(r2);
     }
 
     TEST("multiroarSerialize - buffer too small") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         multiroarBitSet(r, 42);
 
         /* Try to serialize with insufficient buffer */
@@ -9092,32 +8706,30 @@ int multiroarTest(int argc, char *argv[]) {
                 " bytes",
                 written);
         }
-
-        multiroarFree(r);
     }
 
     TEST("multiroarDeserialize - invalid magic") {
         uint8_t buf[10] = {'X', 'X', 'X', 'X', 1, 0, 0};
 
-        multiroar *r = multiroarDeserialize(buf, sizeof(buf));
+        cleaner(multiroarFree) multiroar *r =
+            multiroarDeserialize(buf, sizeof(buf));
         if (r != NULL) {
             ERRR("Should fail with invalid magic");
-            multiroarFree(r);
         }
     }
 
     TEST("multiroarDeserialize - invalid version") {
         uint8_t buf[10] = {'R', 'O', 'A', 'R', 99, 0, 0}; /* Version 99 */
 
-        multiroar *r = multiroarDeserialize(buf, sizeof(buf));
+        cleaner(multiroarFree) multiroar *r =
+            multiroarDeserialize(buf, sizeof(buf));
         if (r != NULL) {
             ERRR("Should fail with invalid version");
-            multiroarFree(r);
         }
     }
 
     TEST("multiroarSerialize/Deserialize - round-trip iterator verification") {
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
         /* Create diverse bitmap */
         for (uint64_t i = 0; i < 10000; i += 7) {
@@ -9125,14 +8737,15 @@ int multiroarTest(int argc, char *argv[]) {
         }
 
         uint64_t size = multiroarSerializedSize(r);
-        void *buf = zcalloc(size, 1);
+        cleanerName(zfree, Void) void *buf = zcalloc(size, 1);
 
         uint64_t written = multiroarSerialize(r, buf, size);
         if (written == 0) {
             ERRR("Serialization failed");
         }
 
-        multiroar *r2 = multiroarDeserialize(buf, written);
+        cleaner(multiroarFree) multiroar *r2 =
+            multiroarDeserialize(buf, written);
         if (!r2) {
             ERRR("Deserialization failed");
         }
@@ -9162,15 +8775,11 @@ int multiroarTest(int argc, char *argv[]) {
 
             count++;
         }
-
-        zfree(buf);
-        multiroarFree(r);
-        multiroarFree(r2);
     }
 
     TEST_DESC("serialization fuzzing - %d trials", 200) {
         for (int trial = 0; trial < 200; trial++) {
-            multiroar *r = multiroarBitNew();
+            cleaner(multiroarFree) multiroar *r = multiroarBitNew();
 
             /* Create random bitmap */
             int numBits = 10 + (rand() % 5000);
@@ -9180,14 +8789,15 @@ int multiroarTest(int argc, char *argv[]) {
             }
 
             uint64_t size = multiroarSerializedSize(r);
-            void *buf = zcalloc(size, 1);
+            cleanerName(zfree, Void) void *buf = zcalloc(size, 1);
 
             uint64_t written = multiroarSerialize(r, buf, size);
             if (written == 0) {
                 ERR("Trial %d: Serialization failed", trial);
             }
 
-            multiroar *r2 = multiroarDeserialize(buf, written);
+            cleaner(multiroarFree) multiroar *r2 =
+                multiroarDeserialize(buf, written);
             if (!r2) {
                 ERR("Trial %d: Deserialization failed", trial);
             }
@@ -9199,10 +8809,6 @@ int multiroarTest(int argc, char *argv[]) {
             if (multiroarBitCount(r) != multiroarBitCount(r2)) {
                 ERR("Trial %d: Bitcount mismatch", trial);
             }
-
-            zfree(buf);
-            multiroarFree(r);
-            multiroarFree(r2);
         }
     }
 
@@ -9249,14 +8855,14 @@ int multiroarTest(int argc, char *argv[]) {
     } while (0)
 
     TEST("AND: UNDER_FULL x UNDER_FULL (same chunk)") {
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
         /* Create sparse chunks (< 629 positions) */
         FILL_SPARSE(a, 0, 100); /* Positions 0, 12, 24, ... */
         FILL_SPARSE(b, 0, 50);  /* Overlaps first 50 positions of a */
 
-        multiroar *result = multiroarNewAnd(a, b);
+        cleaner(multiroarFree) multiroar *result = multiroarNewAnd(a, b);
 
         /* Result should have 50 bits (the overlap) */
         uint64_t countResult = multiroarBitCount(result);
@@ -9276,21 +8882,17 @@ int multiroarTest(int argc, char *argv[]) {
                 ERR("Unexpected bit at position %d", i * 12);
             }
         }
-
-        multiroarFree(a);
-        multiroarFree(b);
-        multiroarFree(result);
     }
 
     TEST("AND: FULL_BITMAP x FULL_BITMAP") {
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
         /* Create bitmap chunks (> 629 positions, contiguous) */
         FILL_DENSE(a, 0, 0, 4096);    /* First half of chunk */
         FILL_DENSE(b, 0, 2048, 6144); /* Middle portion, overlaps [2048,4096) */
 
-        multiroar *result = multiroarNewAnd(a, b);
+        cleaner(multiroarFree) multiroar *result = multiroarNewAnd(a, b);
 
         /* Result should have 2048 bits (the overlap [2048, 4096)) */
         uint64_t countResult = multiroarBitCount(result);
@@ -9312,22 +8914,18 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarBitGet(result, 4096)) {
             ERRR("Bit 4096 should NOT be set");
         }
-
-        multiroarFree(a);
-        multiroarFree(b);
-        multiroarFree(result);
     }
 
     TEST("AND: UNDER_FULL x FULL_BITMAP") {
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
         /* a: sparse (100 positions spread out) */
         FILL_SPARSE(a, 0, 100);
         /* b: dense bitmap covering first 2000 positions */
         FILL_DENSE(b, 0, 0, 2000);
 
-        multiroar *result = multiroarNewAnd(a, b);
+        cleaner(multiroarFree) multiroar *result = multiroarNewAnd(a, b);
 
         /* Positions 0,12,24,...,1188 (i*12 where i*12 < 2000) are in both
          * 1188 / 12 = 99 positions, but we need i*12 < 2000
@@ -9338,15 +8936,11 @@ int multiroarTest(int argc, char *argv[]) {
             ERR("UNDER_FULL x FULL_BITMAP: expected 100, got %" PRIu64,
                 countResult);
         }
-
-        multiroarFree(a);
-        multiroarFree(b);
-        multiroarFree(result);
     }
 
     TEST("AND: FULL_BITMAP x OVER_FULL (negative listing)") {
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
         /* a: bitmap covering [0, 4096) */
         FILL_DENSE(a, 0, 0, 4096);
@@ -9358,7 +8952,7 @@ int multiroarTest(int argc, char *argv[]) {
         multiroarRemove(b, 200);
         multiroarRemove(b, 300);
 
-        multiroar *result = multiroarNewAnd(a, b);
+        cleaner(multiroarFree) multiroar *result = multiroarNewAnd(a, b);
 
         /* Should have 4096 - 3 bits (the ones we cleared in b) */
         uint64_t countResult = multiroarBitCount(result);
@@ -9377,22 +8971,18 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarBitGet(result, 300)) {
             ERRR("Bit 300 should NOT be set");
         }
-
-        multiroarFree(a);
-        multiroarFree(b);
-        multiroarFree(result);
     }
 
     TEST("AND: ALL_1 x UNDER_FULL") {
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
         /* a: all ones */
         FILL_ALL_ONES(a, 0);
         /* b: sparse */
         FILL_SPARSE(b, 0, 200);
 
-        multiroar *result = multiroarNewAnd(a, b);
+        cleaner(multiroarFree) multiroar *result = multiroarNewAnd(a, b);
 
         /* Result should equal b */
         uint64_t countResult = multiroarBitCount(result);
@@ -9403,22 +8993,18 @@ int multiroarTest(int argc, char *argv[]) {
         if (!multiroarEquals(result, b)) {
             ERRR("ALL_1 AND sparse should equal sparse");
         }
-
-        multiroarFree(a);
-        multiroarFree(b);
-        multiroarFree(result);
     }
 
     TEST("OR: UNDER_FULL x FULL_BITMAP") {
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
         /* a: sparse in chunk 0, positions 0,12,24,...,1188 */
         FILL_SPARSE(a, 0, 100);
         /* b: dense in chunk 0, positions [2000, 4000) */
         FILL_DENSE(b, 0, 2000, 4000);
 
-        multiroar *result = multiroarNewOr(a, b);
+        cleaner(multiroarFree) multiroar *result = multiroarNewOr(a, b);
 
         /* Result should have 100 + 2000 = 2100 bits (no overlap) */
         uint64_t countResult = multiroarBitCount(result);
@@ -9426,15 +9012,11 @@ int multiroarTest(int argc, char *argv[]) {
             ERR("OR UNDER_FULL x FULL_BITMAP: expected 2100, got %" PRIu64,
                 countResult);
         }
-
-        multiroarFree(a);
-        multiroarFree(b);
-        multiroarFree(result);
     }
 
     TEST("OR: UNDER_FULL x OVER_FULL across different chunks") {
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
         /* a: sparse in chunk 0 */
         FILL_SPARSE(a, 0, 100);
@@ -9442,7 +9024,7 @@ int multiroarTest(int argc, char *argv[]) {
         FILL_ALL_ONES(b, 1);
         multiroarRemove(b, 8192 + 50);
 
-        multiroar *result = multiroarNewOr(a, b);
+        cleaner(multiroarFree) multiroar *result = multiroarNewOr(a, b);
 
         /* Result: 100 bits in chunk 0, 8191 bits in chunk 1 */
         uint64_t countResult = multiroarBitCount(result);
@@ -9450,22 +9032,18 @@ int multiroarTest(int argc, char *argv[]) {
             ERR("OR across chunks: expected %d, got %" PRIu64, 100 + 8191,
                 countResult);
         }
-
-        multiroarFree(a);
-        multiroarFree(b);
-        multiroarFree(result);
     }
 
     TEST("XOR: FULL_BITMAP x FULL_BITMAP (partial overlap)") {
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
         /* a: [0, 3000) */
         FILL_DENSE(a, 0, 0, 3000);
         /* b: [2000, 5000) */
         FILL_DENSE(b, 0, 2000, 5000);
 
-        multiroar *result = multiroarNewXor(a, b);
+        cleaner(multiroarFree) multiroar *result = multiroarNewXor(a, b);
 
         /* XOR: [0,2000) + [3000,5000) = 2000 + 2000 = 4000 */
         uint64_t countResult = multiroarBitCount(result);
@@ -9487,22 +9065,18 @@ int multiroarTest(int argc, char *argv[]) {
         if (!multiroarBitGet(result, 3000)) {
             ERRR("Bit 3000 should be set (in b only)");
         }
-
-        multiroarFree(a);
-        multiroarFree(b);
-        multiroarFree(result);
     }
 
     TEST("XOR: ALL_1 x FULL_BITMAP") {
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
         /* a: all ones in chunk 0 */
         FILL_ALL_ONES(a, 0);
         /* b: [0, 4096) in chunk 0 */
         FILL_DENSE(b, 0, 0, 4096);
 
-        multiroar *result = multiroarNewXor(a, b);
+        cleaner(multiroarFree) multiroar *result = multiroarNewXor(a, b);
 
         /* XOR: bits [4096, 8192) should be set (8192 - 4096 = 4096 bits) */
         uint64_t countResult = multiroarBitCount(result);
@@ -9517,22 +9091,18 @@ int multiroarTest(int argc, char *argv[]) {
         if (!multiroarBitGet(result, 4096)) {
             ERRR("Bit 4096 should be set");
         }
-
-        multiroarFree(a);
-        multiroarFree(b);
-        multiroarFree(result);
     }
 
     TEST("ANDNOT: FULL_BITMAP - UNDER_FULL") {
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
         /* a: dense [0, 2000) */
         FILL_DENSE(a, 0, 0, 2000);
         /* b: sparse at 0,12,24,...,588 (50 positions) */
         FILL_SPARSE(b, 0, 50);
 
-        multiroar *result = multiroarNewAndNot(a, b);
+        cleaner(multiroarFree) multiroar *result = multiroarNewAndNot(a, b);
 
         /* Result: 2000 - 50 = 1950 bits */
         uint64_t countResult = multiroarBitCount(result);
@@ -9547,15 +9117,11 @@ int multiroarTest(int argc, char *argv[]) {
                 ERR("Bit %d should be removed", i * 12);
             }
         }
-
-        multiroarFree(a);
-        multiroarFree(b);
-        multiroarFree(result);
     }
 
     TEST("ANDNOT: OVER_FULL - FULL_BITMAP") {
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
         /* a: almost all ones (negative listing) */
         FILL_ALL_ONES(a, 0);
@@ -9564,7 +9130,7 @@ int multiroarTest(int argc, char *argv[]) {
         /* b: dense [0, 4096) */
         FILL_DENSE(b, 0, 0, 4096);
 
-        multiroar *result = multiroarNewAndNot(a, b);
+        cleaner(multiroarFree) multiroar *result = multiroarNewAndNot(a, b);
 
         /* Result: bits in a not in b = [4096, 8192) minus bit 100 wasn't in a
          * But bit 100 is in [0,4096) so it's removed by ANDNOT anyway
@@ -9575,15 +9141,11 @@ int multiroarTest(int argc, char *argv[]) {
             ERR("ANDNOT OVER_FULL - FULL_BITMAP: expected 4096, got %" PRIu64,
                 countResult);
         }
-
-        multiroarFree(a);
-        multiroarFree(b);
-        multiroarFree(result);
     }
 
     TEST("Complex: mixed container types across multiple chunks") {
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
         /* Chunk 0: a=sparse, b=bitmap */
         FILL_SPARSE(a, 0, 100);
@@ -9606,7 +9168,7 @@ int multiroarTest(int argc, char *argv[]) {
         multiroarRemove(a, 4 * 8192 + 100);
 
         /* Test AND */
-        multiroar *andResult = multiroarNewAnd(a, b);
+        cleaner(multiroarFree) multiroar *andResult = multiroarNewAnd(a, b);
         /* Chunk 0: sparse 100 positions at i*12, dense [0,1000)
          *          i*12 < 1000 for i < 83.33, so 84 positions match (i=0..83)
          */
@@ -9621,10 +9183,8 @@ int multiroarTest(int argc, char *argv[]) {
             ERR("Complex AND: expected %" PRIu64 ", got %" PRIu64, expectedAnd,
                 multiroarBitCount(andResult));
         }
-        multiroarFree(andResult);
-
         /* Test OR */
-        multiroar *orResult = multiroarNewOr(a, b);
+        cleaner(multiroarFree) multiroar *orResult = multiroarNewOr(a, b);
         /* Chunk 0: 100 sparse + 1000 dense with overlap */
         /* Chunk 1: 2000 dense + 150 sparse with overlap */
         /* Chunk 2: all_ones OR (all-1) = all_ones = 8192 */
@@ -9650,18 +9210,14 @@ int multiroarTest(int argc, char *argv[]) {
             ERR("Complex OR: expected %" PRIu64 ", got %" PRIu64, expectedOr,
                 multiroarBitCount(orResult));
         }
-        multiroarFree(orResult);
-
-        multiroarFree(a);
-        multiroarFree(b);
     }
 
     TEST("FUZZ: random cross-container operations") {
         uint64_t seed[2] = {0xDEADBEEF12345678ULL, 0x8765432100000001ULL};
 
         for (int trial = 0; trial < 20; trial++) {
-            multiroar *a = multiroarBitNew();
-            multiroar *b = multiroarBitNew();
+            cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+            cleaner(multiroarFree) multiroar *b = multiroarBitNew();
 
             /* Randomly fill chunks with different densities */
             for (int chunk = 0; chunk < 4; chunk++) {
@@ -9695,7 +9251,7 @@ int multiroarTest(int argc, char *argv[]) {
             uint64_t countB = multiroarBitCount(b);
 
             /* Test AND: result count <= min(countA, countB) */
-            multiroar *andResult = multiroarNewAnd(a, b);
+            cleaner(multiroarFree) multiroar *andResult = multiroarNewAnd(a, b);
             uint64_t andCount = multiroarBitCount(andResult);
             uint64_t minAB = (countA < countB) ? countA : countB;
             if (andCount > minAB) {
@@ -9705,7 +9261,7 @@ int multiroarTest(int argc, char *argv[]) {
             }
 
             /* Test OR: result count >= max(countA, countB) */
-            multiroar *orResult = multiroarNewOr(a, b);
+            cleaner(multiroarFree) multiroar *orResult = multiroarNewOr(a, b);
             uint64_t orCount = multiroarBitCount(orResult);
             uint64_t maxAB = (countA > countB) ? countA : countB;
             if (orCount < maxAB) {
@@ -9716,7 +9272,7 @@ int multiroarTest(int argc, char *argv[]) {
 
             /* Test XOR: result count should satisfy |countA - countB| <=
              * xorCount <= countA + countB */
-            multiroar *xorResult = multiroarNewXor(a, b);
+            cleaner(multiroarFree) multiroar *xorResult = multiroarNewXor(a, b);
             uint64_t xorCount = multiroarBitCount(xorResult);
             uint64_t diffAB =
                 (countA > countB) ? (countA - countB) : (countB - countA);
@@ -9737,12 +9293,6 @@ int multiroarTest(int argc, char *argv[]) {
                     " != OR=%" PRIu64 " - AND=%" PRIu64,
                     trial, xorCount, orCount, andCount);
             }
-
-            multiroarFree(andResult);
-            multiroarFree(orResult);
-            multiroarFree(xorResult);
-            multiroarFree(a);
-            multiroarFree(b);
         }
     }
 
@@ -9754,7 +9304,7 @@ int multiroarTest(int argc, char *argv[]) {
      * last bit (8191, the clz boundary) and word-boundary positions.
      * ================================================================ */
     TEST("Min/Max/Rank: word-scan boundaries (FULL_BITMAP)") {
-        multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
         FILL_DENSE(a, 0, 100, 2100); /* bits [100,2100): first set bit not 0 */
         multiroarBitSet(a, 8191);    /* last bit in the chunk (clz boundary) */
 
@@ -9778,12 +9328,11 @@ int multiroarTest(int argc, char *argv[]) {
                     cases[i].at, cases[i].want, got);
             }
         }
-        multiroarFree(a);
     }
 
     TEST("IsSubset: word-wise compare (FULL_BITMAP)") {
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
         FILL_DENSE(b, 0, 0, 4000);    /* [0,4000) */
         FILL_DENSE(a, 0, 1000, 3000); /* [1000,3000) ⊆ b */
         if (!multiroarIsSubset(a, b)) {
@@ -9793,21 +9342,18 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarIsSubset(a, b)) {
             ERRR("IsSubset: should be false after adding bit 5000 not in b");
         }
-        multiroar *empty = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *empty = multiroarBitNew();
         if (!multiroarIsSubset(empty, b)) {
             ERRR("IsSubset: empty set must be a subset");
         }
-        multiroarFree(a);
-        multiroarFree(b);
-        multiroarFree(empty);
     }
 
     TEST("ANDNOT: identical chunks compress to empty (popcount==0 path)") {
-        multiroar *a = multiroarBitNew();
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
         FILL_DENSE(a, 0, 0, 3000);
         FILL_DENSE(b, 0, 0, 3000); /* a & ~b == 0 for the whole chunk */
-        multiroar *result = multiroarNewAndNot(a, b);
+        cleaner(multiroarFree) multiroar *result = multiroarNewAndNot(a, b);
         if (multiroarBitCount(result) != 0) {
             ERR("ANDNOT identical: expected empty, got %" PRIu64,
                 multiroarBitCount(result));
@@ -9816,9 +9362,6 @@ int multiroarTest(int argc, char *argv[]) {
         if (multiroarMin(result, &pos)) {
             ERRR("ANDNOT identical: empty result must have no min");
         }
-        multiroarFree(a);
-        multiroarFree(b);
-        multiroarFree(result);
     }
 
     TEST("Iterator: FULL_BITMAP exact ordered sequence (word-skip resume)") {
@@ -9826,7 +9369,7 @@ int multiroarTest(int argc, char *argv[]) {
          * zero words. Exercises the word-skip scan resuming mid-word across
          * every Next() call, word-boundary crossings, the zero-word skip, and
          * the final bit. Asserts completeness + strict ascending order. */
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         FILL_DENSE(r, 0, 100, 2100); /* bits [100,2100) */
         multiroarBitSet(r, 8191);    /* last bit in the chunk */
 
@@ -9855,7 +9398,6 @@ int multiroarTest(int argc, char *argv[]) {
         if (prev != 8191) {
             ERR("iter: last pos expected 8191, got %" PRIu64, prev);
         }
-        multiroarFree(r);
     }
 
     TEST("Iterator: OVER_FULL exact ordered sequence (cursor skip)") {
@@ -9864,7 +9406,7 @@ int multiroarTest(int argc, char *argv[]) {
          * must emit every set position ascending, skipping the unset ones via
          * the monotonic cursor — incl. unset bits at word boundaries (63/64)
          * and the last bit (8191). */
-        multiroar *r = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         FILL_ALL_ONES(r, 0);
         const uint64_t unset[] = {0, 63, 64, 100, 4000, 8191};
         const int U = (int)(sizeof(unset) / sizeof(unset[0]));
@@ -9895,7 +9437,6 @@ int multiroarTest(int argc, char *argv[]) {
             ERR("OVER_FULL iter: expected %d positions, got %" PRIu64,
                 BITMAP_SIZE_IN_BITS - U, n);
         }
-        multiroarFree(r);
     }
 
 #undef FILL_SPARSE
@@ -9923,7 +9464,8 @@ int multiroarTest(int argc, char *argv[]) {
 
         for (size_t p = 0; p < sizeof(patterns) / sizeof(patterns[0]); p++) {
             const uint64_t n = patterns[p].count;
-            uint64_t *positions = zmalloc(n * sizeof(uint64_t));
+            cleanerName(zfree, UInt64) uint64_t *positions =
+                zmalloc(n * sizeof(uint64_t));
 
             for (uint64_t i = 0; i < n; i++) {
                 switch (p) {
@@ -9942,8 +9484,8 @@ int multiroarTest(int argc, char *argv[]) {
                 }
             }
 
-            multiroar *batched = multiroarBitNew();
-            multiroar *single = multiroarBitNew();
+            cleaner(multiroarFree) multiroar *batched = multiroarBitNew();
+            cleaner(multiroarFree) multiroar *single = multiroarBitNew();
 
             multiroarBitSetMany(batched, positions, n);
             for (uint64_t i = 0; i < n; i++) {
@@ -9952,7 +9494,7 @@ int multiroarTest(int argc, char *argv[]) {
 
             /* Membership must match everywhere set... */
             uint64_t mismatches = 0;
-            bool *results = zmalloc(n * sizeof(bool));
+            cleanerName(zfree, Bools) bool *results = zmalloc(n * sizeof(bool));
             multiroarBitGetMany(batched, positions, n, results);
             for (uint64_t i = 0; i < n; i++) {
                 if (!results[i] || !multiroarBitGet(single, positions[i])) {
@@ -9971,40 +9513,31 @@ int multiroarTest(int argc, char *argv[]) {
                 ERR("pattern '%s': %" PRIu64 " membership mismatches",
                     patterns[p].name, mismatches);
             }
-
-            zfree(results);
-            zfree(positions);
-            multiroarFree(batched);
-            multiroarFree(single);
         }
     }
 
     TEST("PERF: BitSetMany batched vs per-bit loop") {
         const uint64_t n = 100000;
-        uint64_t *positions = zmalloc(n * sizeof(uint64_t));
+        cleanerName(zfree, UInt64) uint64_t *positions =
+            zmalloc(n * sizeof(uint64_t));
         for (uint64_t i = 0; i < n; i++) {
             positions[i] = i * 3; /* sorted, ~3 bits per byte density */
         }
 
-        multiroar *a = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *a = multiroarBitNew();
         uint64_t start = timeUtilMonotonicNs();
         for (uint64_t i = 0; i < n; i++) {
             multiroarBitSet(a, positions[i]);
         }
         const uint64_t perBitNs = timeUtilMonotonicNs() - start;
-        multiroarFree(a);
 
-        multiroar *b = multiroarBitNew();
+        cleaner(multiroarFree) multiroar *b = multiroarBitNew();
         start = timeUtilMonotonicNs();
         multiroarBitSetMany(b, positions, n);
         const uint64_t batchedNs = timeUtilMonotonicNs() - start;
-        multiroarFree(b);
-
         printf("    per-bit: %.1f ns/bit, batched: %.1f ns/bit (%.1fx)\n",
                (double)perBitNs / n, (double)batchedNs / n,
                (double)perBitNs / (double)batchedNs);
-
-        zfree(positions);
     }
 
     TEST_FINAL_RESULT;

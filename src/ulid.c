@@ -114,6 +114,7 @@ bool ulidGenInit(ulidGen *g, ulidClockSource clock) {
 }
 
 ulidGen *ulidGenNew(ulidClockSource clock) {
+    /* @own: caller; free=ulidGenFree */
     ulidGen *g = zmalloc(sizeof(*g));
     ulidGenInit(g, clock);
     return g;
@@ -2368,10 +2369,15 @@ uint64_t ulid64GetMaxTimestamp(ulidVariantType type) {
  * Tests
  * ==================================================================== */
 #ifdef DATAKIT_TEST
+#include "cleaner.h"
 #include "ctest.h"
 #include "perf.h"
 #include <stdio.h>
 #include <unistd.h>
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleanerName(ulid_t *, zfree, Ulids);
+defcleanerName(ulid64_t *, zfree, Ulid64s);
 
 int ulidTest(int argc, char *argv[]) {
     (void)argc;
@@ -2898,7 +2904,7 @@ int ulidTest(int argc, char *argv[]) {
 
     TEST("ulid collision resistance") {
         const int32_t numIds = 10000;
-        ulid_t *ids = zcalloc(numIds, sizeof(ulid_t));
+        cleanerName(zfree, Ulids) ulid_t *ids = zcalloc(numIds, sizeof(ulid_t));
 
         for (int32_t i = 0; i < numIds; i++) {
             ulidGenerate(&g, &ids[i]);
@@ -2914,8 +2920,6 @@ int ulidTest(int argc, char *argv[]) {
                 }
             }
         }
-
-        zfree(ids);
 
         if (collisions > 0) {
             ERR("Found %d collisions in %d ULIDs", collisions, numIds);
@@ -3260,7 +3264,8 @@ int ulidTest(int argc, char *argv[]) {
     TEST("ulid64 collision resistance") {
         /* Test NSCOUNT variant which has monotonic counter guarantees */
         const int32_t numIds = 10000;
-        ulid64_t *ids = zcalloc(numIds, sizeof(ulid64_t));
+        cleanerName(zfree, Ulid64s) ulid64_t *ids =
+            zcalloc(numIds, sizeof(ulid64_t));
 
         for (int32_t i = 0; i < numIds; i++) {
             ulid64Generate(&g, &ids[i], ULID_VARIANT_NSCOUNT);
@@ -3275,8 +3280,6 @@ int ulidTest(int argc, char *argv[]) {
                 }
             }
         }
-
-        zfree(ids);
 
         if (collisions > 0) {
             ERR("Found %d collisions in %d IDs (NSCOUNT should have zero)",

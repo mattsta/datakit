@@ -5,6 +5,7 @@
 
 /* Create new empty medium intset */
 intsetMedium *intsetMediumNew(void) {
+    /* @own: caller; free=intsetMediumFree */
     intsetMedium *m = zcalloc(1, sizeof(intsetMedium));
     m->count16 = 0;
     m->count32 = 0;
@@ -23,6 +24,7 @@ intsetMedium *intsetMediumFromSmall(const intsetSmall *small) {
 
     /* Copy all int16 values */
     m->count16 = small->count16;
+    /* @own: container; free=zfree */
     m->values16 = zcalloc(m->count16, sizeof(int16_t));
     memcpy(m->values16, small->values16, m->count16 * sizeof(int16_t));
 
@@ -206,6 +208,7 @@ intsetMedium *intsetMediumAdd(intsetMedium *m, int64_t value, bool *added) {
         /* Insert at pos16 */
         /* Grow in place and shift the tail: one realloc (amortized by
          * allocator size classes) instead of alloc+double-copy+free */
+        /* @own: container; free=zfree */
         m->values16 = zrealloc(m->values16, (m->count16 + 1) * sizeof(int16_t));
         memmove(&m->values16[pos16 + 1], &m->values16[pos16],
                 (m->count16 - pos16) * sizeof(int16_t));
@@ -228,6 +231,7 @@ intsetMedium *intsetMediumAdd(intsetMedium *m, int64_t value, bool *added) {
         /* Insert at pos32 */
         /* Grow in place and shift the tail: one realloc (amortized by
          * allocator size classes) instead of alloc+double-copy+free */
+        /* @own: container; free=zfree */
         m->values32 = zrealloc(m->values32, (m->count32 + 1) * sizeof(int32_t));
         memmove(&m->values32[pos32 + 1], &m->values32[pos32],
                 (m->count32 - pos32) * sizeof(int32_t));

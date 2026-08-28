@@ -22,6 +22,7 @@
 #endif
 #include "../deps/xxHash/xxhash.h"
 
+#include "cleaner.h"
 #include "dks.h"
 #include "fibbuf.h"
 
@@ -29,6 +30,11 @@
 #include "str.h"
 #include "strDoubleFormat.h"
 #include <inttypes.h>
+
+/* Scope-exit cleaners (see cleaner.h idioms). dks.c is a template
+ * included once per string variant TU, so these statics are per-TU. */
+defcleanerName(char *, zfree, Chars);
+defcleanerName(uint8_t *, zfree, U8);
 
 /* SIMD intrinsics for case conversion */
 #if defined(__SSE2__)
@@ -515,6 +521,7 @@ DK_STATIC void DKS_UPGRADEFREEALLOCATION(dksInfo *current,
         break;
     }
 
+    /* @own: caller; free=zfree */
     current->start = zrealloc(current->start, newTotalSize);
     current->buf = (DKS_TYPE *)(current->start + newHeaderSize);
 
@@ -602,6 +609,7 @@ DKS_TYPE *DKS_REMOVEFREESPACE(DKS_TYPE *s) {
     uint8_t headerSize = _dksHeaderSize(info.type);
     size_t reallocLen = headerSize + info.len + 1;
 
+    /* @own: caller; free=zfree */
     info.start = zrealloc(info.start, reallocLen);
     info.buf = (DKS_TYPE *)(info.start + headerSize);
 
@@ -876,6 +884,9 @@ DKS_TYPE *DKS_FROMINT64(int64_t value) {
 DKS_TYPE *DKS_CATVPRINTF(DKS_TYPE *s, const char *fmt, va_list ap) {
     va_list cpy;
     char staticbuf[2048];
+    /* 'heapbuf' owns every heap buffer 'buf' ever points at; 'buf' itself
+     * is a borrowed view of either the stack buffer or 'heapbuf'. */
+    cleanerName(zfree, Chars) char *heapbuf = NULL;
     char *buf = staticbuf;
     char *t;
     size_t buflen = strlen(fmt) * 2;
@@ -883,7 +894,8 @@ DKS_TYPE *DKS_CATVPRINTF(DKS_TYPE *s, const char *fmt, va_list ap) {
     /* We try to start using a static buffer for speed.
      * If not possible we revert to heap allocation. */
     if (buflen > sizeof(staticbuf)) {
-        buf = zmalloc(buflen);
+        heapbuf = zmalloc(buflen);
+        buf = heapbuf;
     } else {
         buflen = sizeof(staticbuf);
     }
@@ -895,12 +907,11 @@ DKS_TYPE *DKS_CATVPRINTF(DKS_TYPE *s, const char *fmt, va_list ap) {
         vsnprintf(buf, buflen, fmt, cpy);
         va_end(cpy);
         if (buf[buflen - 2] != '\0') {
-            if (buf != staticbuf) {
-                zfree(buf);
-            }
+            zfree(heapbuf);
 
             buflen *= 2;
-            buf = zmalloc(buflen);
+            heapbuf = zmalloc(buflen);
+            buf = heapbuf;
             continue;
         }
 
@@ -909,9 +920,6 @@ DKS_TYPE *DKS_CATVPRINTF(DKS_TYPE *s, const char *fmt, va_list ap) {
 
     /* Finally concat the obtained string to the dks string and return it. */
     t = DKS_CAT(s, buf);
-    if (buf != staticbuf) {
-        zfree(buf);
-    }
 
     return t;
 }
@@ -1406,6 +1414,7 @@ DKS_TYPE **DKS_SPLITLEN_MAX(const void *const s_, const size_t len,
         return NULL;
     }
 
+    /* @own: caller; free=DKS_SPLITLENFREE */
     DKS_TYPE **tokens = zcalloc(slots, sizeof(*tokens));
 
     for (size_t j = 0; j < (len - (sepLen - 1)); j++) {
@@ -1419,6 +1428,7 @@ DKS_TYPE **DKS_SPLITLEN_MAX(const void *const s_, const size_t len,
         if (slots < maximumSlotsNeeded) {
             /* Summon the power of EXPONENTIAL GROWTH! */
             slots *= 2;
+            /* @own: caller; free=DKS_SPLITLENFREE */
             tokens = zrealloc(tokens, sizeof(*tokens) * slots);
         }
 
@@ -1711,6 +1721,7 @@ DKS_TYPE **DKS_SPLITARGS(const char *line, int *argc) {
                 }
             }
             /* add the token to the vector */
+            /* @own: caller; free=DKS_SPLITLENFREE */
             vector = zrealloc(vector, ((*argc) + 1) * sizeof(char *));
             vector[*argc] = current;
             (*argc)++;
@@ -1718,6 +1729,7 @@ DKS_TYPE **DKS_SPLITARGS(const char *line, int *argc) {
         } else {
             /* Even on empty input string return something not NULL. */
             if (vector == NULL) {
+                /* @own: caller; free=DKS_SPLITLENFREE */
                 vector = zmalloc(sizeof(void *));
             }
 
@@ -2944,10 +2956,14 @@ int DKS_TEST(int argc, char *argv[]) {
         printf("NOTE: The remaining tests allocate 4 GB to 10 GB RAM.\n");
         printf("Testing > 4 GB dks...\n");
         size_t len = ((size_t)1 << 32) + 1024;
-        char *poo = zmalloc(len);
-        memset(poo, 7, len);
-        DKS_TYPE *x = DKS_NEWLEN(poo, len);
-        zfree(poo);
+        DKS_TYPE *x = NULL;
+        {
+            /* Scope bounds the 4 GB source buffer: it's released before
+             * the grow below so peak RSS stays at one extra copy. */
+            cleanerName(zfree, Chars) char *poo = zmalloc(len);
+            memset(poo, 7, len);
+            x = DKS_NEWLEN(poo, len);
+        }
         testCond("Verify create > 4 GB dks", DKS_LEN(x), len, "%zu");
         x = DKS_EXPANDBY(x, 1024);
         /* Note: this is the same size check as above because
@@ -2991,7 +3007,8 @@ int DKS_TEST(int argc, char *argv[]) {
 
         size_t startSize = limit.maxContentSize; /* a size in this type */
 
-        uint8_t *buf = zmalloc(startSize); /* WARNING: can be big (> 4 GB) */
+        cleanerName(zfree, U8) uint8_t *buf =
+            zmalloc(startSize); /* WARNING: can be big (> 4 GB) */
         if (!buf) {
             printf("SKIPPED: Unable to allocate %zu bytes for %s test\n",
                    startSize, DKS_TYPENAME(limit.startType));
@@ -3039,7 +3056,6 @@ int DKS_TEST(int argc, char *argv[]) {
                  (size_t)limit.startType, "%zu");
 
         DKS_FREE(testing);
-        zfree(buf);
     }
 
 #if !defined(DATAKIT_DKS_COMPACT)
@@ -3091,7 +3107,7 @@ int DKS_TEST(int argc, char *argv[]) {
             exactSize + limit.incrby; /* e.g. MAX - 20 + 20 + 20 == above max */
         (void)aboveSize;              /* not used for COMPACT testing */
 
-        uint8_t *belowlimitbuf =
+        cleanerName(zfree, U8) uint8_t *belowlimitbuf =
             zmalloc(belowSize); /* WARNING: can be big (> 4 GB) */
         if (!belowlimitbuf) {
             printf("SKIPPED: Unable to allocate %zu bytes for %s test\n",
@@ -3108,7 +3124,7 @@ int DKS_TEST(int argc, char *argv[]) {
         testCond("dks content matches source buffer",
                  memcmp(testing, belowlimitbuf, belowSize), 0, "%d");
 
-        uint8_t *exactaddbuf = zmalloc(limit.incrby);
+        cleanerName(zfree, U8) uint8_t *exactaddbuf = zmalloc(limit.incrby);
         DKS_RANDBYTES(exactaddbuf, limit.incrby);
         testing = DKS_EXPANDBYEXACT(testing, limit.incrby);
         testing = DKS_CATLEN(testing, exactaddbuf, limit.incrby);
@@ -3137,7 +3153,7 @@ int DKS_TEST(int argc, char *argv[]) {
                  memcmp(testing + belowSize, exactaddbuf, limit.incrby), 0,
                  "%d");
 
-        uint8_t *abovelimitbuf = zmalloc(limit.incrby);
+        cleanerName(zfree, U8) uint8_t *abovelimitbuf = zmalloc(limit.incrby);
         DKS_RANDBYTES(abovelimitbuf, limit.incrby);
         testing = DKS_EXPANDBYEXACT(testing, limit.incrby);
         testing = DKS_CATLEN(testing, abovelimitbuf, limit.incrby);
@@ -3179,10 +3195,7 @@ int DKS_TEST(int argc, char *argv[]) {
         testCond("dks growzero sets correct length", DKS_LEN(testing),
                  (size_t)limit.startType, "%zu");
 
-        zfree(abovelimitbuf);
-        zfree(exactaddbuf);
         DKS_FREE(testing);
-        zfree(belowlimitbuf);
     }
 #endif
 
@@ -3215,7 +3228,7 @@ int DKS_TEST(int argc, char *argv[]) {
         size_t shrinkSize =
             startSize + limit.incrby; /* smaller type max + -(N+K) */
 
-        uint8_t *startbuf =
+        cleanerName(zfree, U8) uint8_t *startbuf =
             zmalloc(startSize); /* WARNING: can be big (> 4 GB) */
         DKS_RANDBYTES(startbuf, startSize);
 
@@ -3260,7 +3273,6 @@ int DKS_TEST(int argc, char *argv[]) {
                  (size_t)limit.startType, "%zu");
 
         DKS_FREE(testing);
-        zfree(startbuf);
     }
 
     struct testLimit growbyLimits[] = {
@@ -3293,7 +3305,7 @@ int DKS_TEST(int argc, char *argv[]) {
         size_t growby =
             limit.incrby; /* amount will grow us larger than free limit. */
 
-        uint8_t *startbuf =
+        cleanerName(zfree, U8) uint8_t *startbuf =
             zmalloc(startSize); /* WARNING: can be big (~1 GB) */
         DKS_RANDBYTES(startbuf, startSize);
 
@@ -3338,7 +3350,6 @@ int DKS_TEST(int argc, char *argv[]) {
 
         /* implicit test for DKS_NATIVE() */
         zfree(DKS_NATIVE(testing, NULL));
-        zfree(startbuf);
     }
 
     /* ====================================================================

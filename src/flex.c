@@ -98,6 +98,12 @@
 
 /* Scope-exit free for heap spills (wide-entry insert scratch) */
 defcleaner(void *, zfree);
+defcleanerName(flex **, zfree, FlexPtrs);
+defcleanerName(uint8_t *, zfree, Bytes);
+defcleanerName(int *, zfree, Ints);
+defcleanerName(int64_t *, zfree, I64);
+defcleanerName(char *, zfree, Chars);
+defcleaner(flex *, flexFree);
 
 /* This configuration define allows building flex without 'mdsc', but disabling
  * MDSC support does NOT remove the MDSC types. It only removes the ability for
@@ -662,6 +668,7 @@ DK_STATIC int_fast8_t flexSetTotalBytesCount_(flex **const _f,
 
         /* If we are growing, realloc *then* memmove data up. */
         if (growBy > 0) {
+            /* @own: caller; free=flexFree */
             *_f = zrealloc(*_f, newTotalBytes);
             f = *_f;
             memmove(f + newDataStartOffset, f + currentDataStartOffset,
@@ -673,6 +680,7 @@ DK_STATIC int_fast8_t flexSetTotalBytesCount_(flex **const _f,
             memmove(f + newDataStartOffset, f + currentDataStartOffset,
                     moveBytes);
             if (!drain) {
+                /* @own: caller; free=flexFree */
                 *_f = zrealloc(*_f, newTotalBytes);
                 f = *_f;
             }
@@ -680,6 +688,7 @@ DK_STATIC int_fast8_t flexSetTotalBytesCount_(flex **const _f,
     } else {
         /* else, this is a regular resize with no varint grow/shrink */
         if (!drain) {
+            /* @own: caller; free=flexFree */
             *_f = zrealloc(*_f, newBytes);
             f = *_f;
         }
@@ -1481,6 +1490,7 @@ DK_STATIC double flexLoadDouble(const flexEntryData *entry) {
 
 /* Create a new empty flex. */
 flex *flexNew(void) {
+    /* @own: caller; free=flexFree */
     flex *f = zcalloc(1, FLEX_EMPTY_HEADER_SIZE);
     (void)flexSetTotalBytesCount(&f, FLEX_EMPTY_HEADER_SIZE, 0);
 
@@ -1524,6 +1534,7 @@ DK_INLINE_ALWAYS int_fast8_t flexResize(flex **const _f, const size_t newLength,
 DK_INLINE_ALWAYS void flexBulkAppend(flex **const ff, const void *const data,
                                      const size_t len, const size_t addCount) {
     const size_t fLen = flexTotalBytes_(*ff);
+    /* @own: caller; free=flexFree */
     *ff = zrealloc(*ff, fLen + len);
 
     memcpy(*ff + fLen, data, len);
@@ -1564,6 +1575,7 @@ flex *flexBulkMergeFlex(const flex *const *const fs, const size_t count) {
         totalCount += flexCount_(fs[i]);
     }
 
+    /* @own: caller; free=flexFree */
     flex *f = flexNew();
     if (!f || payloadBytes == 0) {
         return f;
@@ -1625,10 +1637,10 @@ void flexBulkPushBytesMembers(flex **const ff,
 
     flex *chunkStack[FLEX_BULK_PUSH_CHUNK_STACK_SLOTS];
     flex **merge = chunkStack;
-    bool mergeHeap = false;
+    cleanerName(zfree, FlexPtrs) flex **mergeHeap = NULL;
     if (mergeCap > (sizeof(chunkStack) / sizeof(chunkStack[0]))) {
-        merge = zcalloc(mergeCap, sizeof(*merge));
-        if (!merge) {
+        mergeHeap = zcalloc(mergeCap, sizeof(*merge));
+        if (!mergeHeap) {
             for (size_t i = 0; i < count; i++) {
                 flexPushBytes(ff, members[i].data, members[i].len,
                               FLEX_ENDPOINT_TAIL);
@@ -1636,7 +1648,7 @@ void flexBulkPushBytesMembers(flex **const ff,
             return;
         }
 
-        mergeHeap = true;
+        merge = mergeHeap;
     }
 
     size_t mergeCount = 0;
@@ -1647,6 +1659,7 @@ void flexBulkPushBytesMembers(flex **const ff,
         const size_t thisChunk = (count - i) < FLEX_BULK_PUSH_MEMBERS_PER_CHUNK
                                      ? (count - i)
                                      : FLEX_BULK_PUSH_MEMBERS_PER_CHUNK;
+        /* @own: container; free=flexFree */
         flex *chunk = flexNew();
         if (!chunk) {
             chunkFail = true;
@@ -1670,10 +1683,6 @@ void flexBulkPushBytesMembers(flex **const ff,
      * theirs until the merge has actually succeeded. */
     for (size_t i = 1; i < mergeCount; i++) {
         flexFree(merge[i]);
-    }
-
-    if (mergeHeap) {
-        zfree(merge);
     }
 
     if (!merged) {
@@ -2433,6 +2442,7 @@ insertContentsFromBox(databox *box, flexInsertContents *c,
 #if FLEX_ENABLE_PTR_MDSC
         if (override && box->len > override) {
             assert(!box->allocated);
+            /* @own: container; free=mdscfree */
             mdsc *const converted = mdscnewlen(box->data.bytes.start, box->len);
             box->data.ptr = converted;
             box->type = DATABOX_PTR_MDSC;
@@ -2856,6 +2866,7 @@ bool flexIncrbyUnsigned(flex **const ff, flexEntry *const fe,
 
 flex *flexDuplicate(const flex *f) {
     const size_t len = flexTotalBytes_(f);
+    /* @own: caller; free=flexFree */
     flex *ret = zcalloc(1, len);
     memcpy(ret, f, len);
     return ret;
@@ -2883,6 +2894,7 @@ flex *flexSplitMiddle(flex **const ff, uint_fast32_t elementsPerEntry,
     assert(middleEntry == flexMiddle(f, elementsPerEntry));
 #endif
 
+    /* @own: caller; free=flexFree */
     flex *secondHalf = flexNew();
     const size_t offset = middleEntry - f;
     const size_t firstHalfSize = offset; /* includes first half header */
@@ -2992,6 +3004,7 @@ flex *flexMerge(flex **first, flex **second) {
     const size_t fcount = firstCount + secondCount;
 
     /* Extend target to new fbytes then append or prepend source. */
+    /* @own: caller; free=flexFree */
     target = zrealloc(target, fbytes);
     if (appendToTarget) {
         /* Copy source after target
@@ -3128,6 +3141,7 @@ void flexPushByType(flex **const ff, const databox *box, flexEndpoint where) {
 
 /* flex <-> databox single-element isomorphism (see flex.h). */
 flex *flexNewFromDatabox(const databox *box) {
+    /* @own: caller; free=flexFree */
     flex *f = flexNew();
     if (!f) {
         return NULL;
@@ -3137,6 +3151,7 @@ flex *flexNewFromDatabox(const databox *box) {
 }
 
 flex *flexNewFromDataboxes(const databox *boxes, size_t n) {
+    /* @own: caller; free=flexFree */
     flex *f = flexNew();
     if (!f) {
         return NULL;
@@ -3148,6 +3163,7 @@ flex *flexNewFromDataboxes(const databox *boxes, size_t n) {
 }
 
 flex *flexNewFromDataboxPtrs(const databox *const *boxes, size_t n) {
+    /* @own: caller; free=flexFree */
     flex *f = flexNew();
     if (!f) {
         return NULL;
@@ -3209,6 +3225,7 @@ void flexPushDataboxBig(flex **const ff, const databoxBig *b,
 }
 
 flex *flexNewFromDataboxBig(const databoxBig *b) {
+    /* @own: caller; free=flexFree */
     flex *f = flexNew();
     if (!f) {
         return NULL;
@@ -3670,6 +3687,7 @@ void flexGetByTypeCopy(const flexEntry *const fe, databox *box) {
     flexEntryData entry = {0};
     flexEntryDataPopulate(fe, &entry);
     if (FLEX_IS_STR(entry.encoding)) {
+        /* @own: caller; free=databoxFreeData */
         box->data.bytes.start = zcalloc(1, entry.len);
         memcpy(box->data.bytes.start, FLEX_ENTRY_DATA(&entry), entry.len);
         box->len = entry.len;
@@ -3680,6 +3698,7 @@ void flexGetByTypeCopy(const flexEntry *const fe, databox *box) {
         if (FLEX_IS_FORWARD_DECLARE_SUBCONTAINER(entry.encoding)) {
             /* copy the flex or cflex at 'box->data' to
              * newly allocated memory then attach it to the box. */
+            /* @own: caller; free=databoxFreeData */
             void *tmp = zcalloc(1, box->len);
             memcpy(tmp, databoxBytes(box), databoxLen(box));
             box->data.bytes.start = tmp;
@@ -3900,6 +3919,7 @@ flex *flexSplitRange(flex **const ff, const int32_t index, const uint32_t num) {
     flexEntry *fe;
     FLEX_INDEX(*ff, index, fe);
 
+    /* @own: caller; free=flexFree */
     flex *removed = flexNew();
     if (fe) {
         flexDelete__GetDeleted(ff, fe, num, false, &removed);
@@ -5502,6 +5522,7 @@ size_t cflexBytes(const cflex *const c) {
 
 cflex *cflexDuplicate(const cflex *const c) {
     const size_t copyBytes = cflexBytes(c);
+    /* @own: caller; free=zfree */
     cflex *const storage = zmalloc(copyBytes);
     memcpy(storage, c, copyBytes);
     return storage;
@@ -5897,7 +5918,17 @@ void flexRepr(const flex *f) {
     printf("\n");
 }
 
+/* Allocate a fresh flex with `bytes` of over-allocated growth room so
+ * timing loops measure inserts, not allocator growth. */
+static flex *createFlexWithGrowthHint(size_t bytes) {
+    /* @own: caller; free=flexFree */
+    flex *f = flexNew();
+    /* @own: caller; free=flexFree */
+    return zrealloc(f, bytes);
+}
+
 static flex *createList() {
+    /* @own: caller; free=flexFree */
     flex *f = flexNew();
     flexPushBytes(&f, "foo", 3, FLEX_ENDPOINT_TAIL);
     flexPushBytes(&f, "quux", 4, FLEX_ENDPOINT_TAIL);
@@ -5907,6 +5938,7 @@ static flex *createList() {
 }
 
 static flex *createIntList() {
+    /* @own: caller; free=flexFree */
     flex *f = flexNew();
     char buf[32] = {0};
 
@@ -5930,7 +5962,7 @@ static uint64_t stress(flexEndpoint pos, int32_t num, int32_t maxsize,
     static const char location[2][5] = {"TAIL", "HEAD"};
     uint64_t total = 0;
     for (int32_t i = 0; i < maxsize; i += dnum) {
-        flex *f = flexNew();
+        cleaner(flexFree) flex *f = flexNew();
         for (int32_t j = 0; j < i; j++) {
             flexPushBytes(&f, "quux", 4, FLEX_ENDPOINT_TAIL);
         }
@@ -5948,7 +5980,6 @@ static uint64_t stress(flexEndpoint pos, int32_t num, int32_t maxsize,
         printf("Entry count: %8d, bytes: %8zu, %dx push+pop (%s): %6" PRId64
                " usec\n",
                i, flexTotalBytes_(f), num, location[pos + 1], end - start);
-        zfree(f);
         total += end - start;
     }
 
@@ -5960,7 +5991,7 @@ static uint64_t stressReplaceInline(flexEndpoint pos, int32_t num,
     static const char location[2][5] = {"TAIL", "HEAD"};
     uint64_t total = 0;
     for (int32_t i = 0; i < maxsize; i += dnum) {
-        flex *f = flexNew();
+        cleaner(flexFree) flex *f = flexNew();
         for (int32_t j = 0; j < i; j++) {
             flexPushBytes(&f, "quux", 4, FLEX_ENDPOINT_TAIL);
         }
@@ -5976,7 +6007,6 @@ static uint64_t stressReplaceInline(flexEndpoint pos, int32_t num,
         printf("Entry count: %8d, bytes: %8zu, %dx push+pop (%s): %6" PRId64
                " usec\n",
                i, flexTotalBytes_(f), num, location[pos + 1], end - start);
-        zfree(f);
         total += end - start;
     }
 
@@ -6117,7 +6147,10 @@ int32_t flexTest(int32_t argc, char **argv) {
         srand(s);
     }
 
-    flex *f = NULL;
+    /* One scratch flex reused across every section below: the cleaner
+     * covers whatever the last section left live, so each section ends
+     * by either freeing it and NULLing it or leaving a live flex here. */
+    cleaner(flexFree) flex *f = NULL;
     flexEntry *fe = NULL;
     (void)f;
     (void)fe;
@@ -6169,7 +6202,7 @@ int32_t flexTest(int32_t argc, char **argv) {
          * that all four anchor quadrants are exercised. */
         const int rowCounts[] = {0, 1, 2, 3, 8, 63, 200};
         for (size_t rc = 0; rc < COUNT_ARRAY(rowCounts); rc++) {
-            flex *sf = flexNew();
+            cleaner(flexFree) flex *sf = flexNew();
             for (int r = 0; r < rowCounts[rc]; r++) {
                 const databox kbox = databoxNewSigned(r);
                 const databox vbox = databoxNewSigned(r * 7);
@@ -6191,8 +6224,6 @@ int32_t flexTest(int32_t argc, char **argv) {
                     assert(NULL && "flexIndexWithMiddle diverged!");
                 }
             }
-
-            flexFree(sf);
         }
         printf("  SUCCESS\n\n");
     }
@@ -6947,11 +6978,10 @@ int32_t flexTest(int32_t argc, char **argv) {
             assert(databoxEqual(&valbox, &got2));
         }
 
-        flex *split = flexDuplicate(f);
+        cleaner(flexFree) flex *split = flexDuplicate(f);
         flex *secondHalf = flexSplit(&split, 2);
 
         flexFree(secondHalf);
-        flexFree(split);
 
         for (int i = -200; i < 64; i++) {
             const databox keybox = databoxNewSigned(i);
@@ -7032,11 +7062,10 @@ int32_t flexTest(int32_t argc, char **argv) {
                 assert(databoxEqual(&keybox, &got));
             }
 
-            flex *split = flexDuplicate(f);
+            cleaner(flexFree) flex *split = flexDuplicate(f);
             flex *secondHalf = flexSplit(&split, 2);
 
             flexFree(secondHalf);
-            flexFree(split);
 
             for (int i = forward ? -200 : 699; forward ? i < 700 : i >= -200;
                  forward ? i++ : i--) {
@@ -7208,7 +7237,7 @@ int32_t flexTest(int32_t argc, char **argv) {
 
         /* GENERATE COMMON DATA */
         const size_t totalVals = grow;
-        int *vals = zcalloc(totalVals, sizeof(*vals));
+        cleanerName(zfree, Ints) int *vals = zcalloc(totalVals, sizeof(*vals));
         for (size_t i = 0; i < totalVals; i++) {
             vals[i] = rand();
         }
@@ -7221,10 +7250,8 @@ int32_t flexTest(int32_t argc, char **argv) {
                 if (sorted) {
                     /* ALLOCATE COMPARISON FLEXS WITH GROWTH HINT */
                     flex *fs[2];
-                    fs[0] = flexNew();
-                    fs[0] = zrealloc(fs[0], grow * sizeof(int) * 2);
-                    fs[1] = flexNew();
-                    fs[1] = zrealloc(fs[1], grow * sizeof(int) * 2);
+                    fs[0] = createFlexWithGrowthHint(grow * sizeof(int) * 2);
+                    fs[1] = createFlexWithGrowthHint(grow * sizeof(int) * 2);
                     for (int withMiddle = 0; withMiddle < 2; withMiddle++) {
                         flexEntry *insertMiddle = NULL;
                         tstart = timeUtilUs();
@@ -7256,8 +7283,7 @@ int32_t flexTest(int32_t argc, char **argv) {
                     zfree(fs[1]);
                 } else {
                     /* ALLOCATE FLEX WITH GROWTH HINT */
-                    f = flexNew();
-                    f = zrealloc(f, grow * 4);
+                    f = createFlexWithGrowthHint(grow * 4);
 
                     tstart = timeUtilUs();
                     for (size_t i = 0; i < totalVals; i++) {
@@ -7319,11 +7345,10 @@ int32_t flexTest(int32_t argc, char **argv) {
                     }
 
                     /* Quick in-line test for splitting... */
-                    flex *split = flexDuplicate(f);
+                    cleaner(flexFree) flex *split = flexDuplicate(f);
                     flex *secondHalf = flexSplit(&split, 1);
 
                     flexFree(secondHalf);
-                    flexFree(split);
 
                     /* DELETE SORTED ENTRIES; VERIFY DELETE WORKS */
                     for (size_t i = 0; i < totalVals; i++) {
@@ -7368,7 +7393,6 @@ int32_t flexTest(int32_t argc, char **argv) {
                 flexFree(f);
             }
         }
-        zfree(vals);
         printf("\n");
     }
 
@@ -7467,9 +7491,9 @@ int32_t flexTest(int32_t argc, char **argv) {
 
         /* Random cleanups */
         for (int i = 0; i < 300; i++) {
-            flex *f2 = flexDuplicate(f);
-            flex *f3 = flexDuplicate(f);
-            flex *f4 = flexDuplicate(f);
+            cleaner(flexFree) flex *f2 = flexDuplicate(f);
+            cleaner(flexFree) flex *f3 = flexDuplicate(f);
+            cleaner(flexFree) flex *f4 = flexDuplicate(f);
 
             while (flexCount(f2)) {
                 int32_t idx = rand() % flexCount(f2);
@@ -7485,10 +7509,6 @@ int32_t flexTest(int32_t argc, char **argv) {
                 int32_t idx = rand() % flexCount(f4);
                 flexDeleteOffsetCountDrain(&f4, idx, 1);
             }
-
-            flexFree(f4);
-            flexFree(f3);
-            flexFree(f2);
         }
 
         while (flexCount(f)) {
@@ -7535,8 +7555,11 @@ int32_t flexTest(int32_t argc, char **argv) {
         f = createList();
         flex *f2 = createList();
 
+        /* flexMerge absorbs one input into the survivor it returns, so
+         * f3's bytes end up owned by the merged flex below. */
+        /* @own: container; free=flexFree */
         flex *f3 = flexNew();
-        flex *f4 = flexNew();
+        cleaner(flexFree) flex *f4 = flexNew();
 
         if (flexMerge(&f4, &f4)) {
             printf("ERROR: Allowed merging of one flex into itself.\n");
@@ -7550,8 +7573,6 @@ int32_t flexTest(int32_t argc, char **argv) {
             printf("ERROR: Merging two empty flexes created entries.\n");
             assert(NULL);
         }
-
-        flexFree(f4);
 
         f2 = flexMerge(&f, &f2);
         /* merge gives us: [hello, foo, quux, 1024, hello, foo, quux, 1024] */
@@ -7607,10 +7628,9 @@ int32_t flexTest(int32_t argc, char **argv) {
         }
 
         /* Merge a merged flex into itself... */
-        flex *f22 = flexDuplicate(f2);
+        cleaner(flexFree) flex *f22 = flexDuplicate(f2);
         f22 = flexMerge(&f22, &f2);
         flexRepr(f22);
-        flexFree(f22);
 
         printf("SUCCESS\n\n");
     }
@@ -7621,10 +7641,10 @@ int32_t flexTest(int32_t argc, char **argv) {
         flex *f2 = createList();
 
         f = flexMerge(&f, &f2);
-        flex *orig = flexDuplicate(f);
+        cleaner(flexFree) flex *orig = flexDuplicate(f);
 
         size_t biglen = 64 * 1024 * 1024; /* 64 MB */
-        uint8_t *big = zmalloc(biglen);
+        cleanerName(zfree, Bytes) uint8_t *big = zmalloc(biglen);
         randbytes(big, biglen, biglen);
         databox box = databoxNewBytes(big, biglen);
 
@@ -7674,7 +7694,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         assert(!memcmp(orig, f, flexTotalBytes_(f)));
 
         flexFree(f);
-        flexFree(orig);
+        f = NULL;
         printf("SUCCESS\n\n");
     }
 
@@ -7814,9 +7834,11 @@ int32_t flexTest(int32_t argc, char **argv) {
     {
         uint8_t randBytesBuf[8192] = {0};
         size_t compressRestoreSize = 1024 * 1024;
-        void *compressRestoreBuffer = zcalloc(1, compressRestoreSize);
+        cleaner(zfree) void *compressRestoreBuffer =
+            zcalloc(1, compressRestoreSize);
         cflex *c = (cflex *)compressRestoreBuffer;
-        flex *restored = zcalloc(1, compressRestoreSize);
+        cleanerName(zfree, Bytes) flex *restored =
+            zcalloc(1, compressRestoreSize);
 
         for (int iterations = 0; iterations < 64; iterations++) {
             f = flexNew();
@@ -7877,9 +7899,6 @@ int32_t flexTest(int32_t argc, char **argv) {
 
             flexFree(f);
         }
-
-        zfree(restored);
-        zfree(compressRestoreBuffer);
     }
 
     printf("Test cflexConvertToFlex buffer-length contract:\n");
@@ -7902,7 +7921,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         assert(totalSize >= CFLEX_MINIMUM_COMPRESS_BYTES);
 
         size_t cSize = jebufSizeAllocation(totalSize);
-        void *cBuf = zcalloc(1, cSize);
+        cleaner(zfree) void *cBuf = zcalloc(1, cSize);
         cflex *c = (cflex *)cBuf;
         if (!flexConvertToCFlex(f, cBuf, cSize)) {
             assert(NULL && "failed to compress contract-test flex!");
@@ -7911,26 +7930,23 @@ int32_t flexTest(int32_t argc, char **argv) {
         /* (a) undersized declared buffer: must realloc and report the
          * new real allocation back through the length */
         size_t smallLen = 16;
-        flex *small = zcalloc(1, smallLen);
+        cleanerName(zfree, Bytes) flex *small = zcalloc(1, smallLen);
         if (!cflexConvertToFlex(c, &small, &smallLen)) {
             assert(NULL && "undersized restore failed!");
         }
         assert(smallLen >= totalSize);
         assert(memcmp(f, small, totalSize) == 0);
-        zfree(small);
 
         /* (b) exactly-sized buffer: no growth needed; any write past
          * the end is caught by the sanitizer allocator */
         size_t exactLen = totalSize;
-        flex *exact = zcalloc(1, exactLen);
+        cleanerName(zfree, Bytes) flex *exact = zcalloc(1, exactLen);
         if (!cflexConvertToFlex(c, &exact, &exactLen)) {
             assert(NULL && "exact-size restore failed!");
         }
         assert(exactLen == totalSize);
         assert(memcmp(f, exact, totalSize) == 0);
-        zfree(exact);
 
-        zfree(cBuf);
         flexFree(f);
         printf("SUCCESS\n\n");
     }
@@ -8111,7 +8127,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         {
             size_t totalAllAllocated = 0;
             size_t bufbuflen = 1 << 15;
-            char *buf = zcalloc(1, bufbuflen);
+            cleanerName(zfree, Chars) char *buf = zcalloc(1, bufbuflen);
 /* If using a big memory test
  *   - or -
  * If not running under ASan */
@@ -8134,13 +8150,10 @@ int32_t flexTest(int32_t argc, char **argv) {
                     fflush(stdout);
                 }
 
-                f = flexNew();
-                if (preallocate) {
-                    /* preallocate 16 MB of memory */
-                    f = zrealloc(f, 1 << 24);
-                }
+                /* preallocate 16 MB of memory when requested */
+                f = preallocate ? createFlexWithGrowthHint(1 << 24) : flexNew();
 
-                list *ref = listCreate();
+                cleaner(listRelease) list *ref = listCreate();
                 listSetFreeMethod(ref, (void (*)(void *))mdscfree);
                 int32_t elements = rand() % maxTestElementCount;
 
@@ -8225,8 +8238,10 @@ int32_t flexTest(int32_t argc, char **argv) {
 
                     /* Add to reference list */
                     if (where == FLEX_ENDPOINT_HEAD) {
+                        /* @own: container; free=mdscfree */
                         listAddNodeHead(ref, mdscnewlen(buf, buflen));
                     } else if (where == FLEX_ENDPOINT_TAIL) {
+                        /* @own: container; free=mdscfree */
                         listAddNodeTail(ref, mdscnewlen(buf, buflen));
                     } else {
                         assert(NULL);
@@ -8325,11 +8340,10 @@ int32_t flexTest(int32_t argc, char **argv) {
                 assert(flexCount(f) == 0);
 
                 flexFree(f);
-                listRelease(ref);
+                f = NULL;
             }
 
             uint64_t tend = timeUtilUs();
-            zfree(buf);
 
             printf("SUCCESS (%f sec total; %f sec deletion; %'zu total "
                    "bytes)\n\n",
@@ -8609,7 +8623,8 @@ int32_t flexTest(int32_t argc, char **argv) {
         const size_t count = 1000;
 
         /* Insert unique sequential values, track in oracle */
-        int64_t *oracle = zcalloc(count, sizeof(int64_t));
+        cleanerName(zfree, I64) int64_t *oracle =
+            zcalloc(count, sizeof(int64_t));
 
         srand(11111);
         for (size_t i = 0; i < count; i++) {
@@ -8657,7 +8672,6 @@ int32_t flexTest(int32_t argc, char **argv) {
             fe = flexNext(f, fe);
         }
 
-        zfree(oracle);
         flexFree(f);
         printf("OK\n");
     }
@@ -8721,7 +8735,8 @@ int32_t flexTest(int32_t argc, char **argv) {
     {
         f = flexNew();
         const size_t maxSize = 1000;
-        int64_t *oracle = zcalloc(maxSize, sizeof(int64_t));
+        cleanerName(zfree, I64) int64_t *oracle =
+            zcalloc(maxSize, sizeof(int64_t));
         size_t oracleCount = 0;
 
         srand(33333);
@@ -8817,7 +8832,6 @@ int32_t flexTest(int32_t argc, char **argv) {
             fe = flexNext(f, fe);
         }
 
-        zfree(oracle);
         flexFree(f);
         printf("push=%zu pop=%zu final=%zu... OK\n", pushOps, popOps,
                oracleCount);
@@ -9044,7 +9058,8 @@ int32_t flexTest(int32_t argc, char **argv) {
          * For set-like behavior, we must check before inserting.
          */
         const size_t keySpace = 10000;
-        uint8_t *exists = zcalloc((keySpace + 7) / 8, 1);
+        cleanerName(zfree, Bytes) uint8_t *exists =
+            zcalloc((keySpace + 7) / 8, 1);
         size_t existCount = 0;
 
 #define FUZZ_BIT_SET(arr, idx) ((arr)[(idx) / 8] |= (1 << ((idx) % 8)))
@@ -9115,7 +9130,6 @@ int32_t flexTest(int32_t argc, char **argv) {
 #undef FUZZ_BIT_CLR
 #undef FUZZ_BIT_GET
 
-        zfree(exists);
         flexFree(f);
         printf("I=%zu D=%zu F=%zu final=%zu... OK\n", insertOps, deleteOps,
                findOps, existCount);
@@ -9218,9 +9232,9 @@ int32_t flexTest(int32_t argc, char **argv) {
         f = flexNew();
 
         /* Create large test strings at boundary lengths */
-        char *str16446 = zmalloc(16447);
-        char *str16447 = zmalloc(16448);
-        char *str16448 = zmalloc(16449);
+        cleanerName(zfree, Chars) char *str16446 = zmalloc(16447);
+        cleanerName(zfree, Chars) char *str16447 = zmalloc(16448);
+        cleanerName(zfree, Chars) char *str16448 = zmalloc(16449);
 
         memset(str16446, 'X', 16446);
         str16446[16446] = '\0';
@@ -9320,9 +9334,6 @@ int32_t flexTest(int32_t argc, char **argv) {
         assert(b1.len == 16446);
         assert(b2.len == 16448);
 
-        zfree(str16446);
-        zfree(str16447);
-        zfree(str16448);
         flexFree(f);
         printf("  OK\n");
     }
@@ -9461,6 +9472,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         assert(found65 != NULL);
 
         flexFree(f);
+        f = NULL;
         printf("  OK\n");
     }
 
@@ -9494,23 +9506,21 @@ int32_t flexTest(int32_t argc, char **argv) {
 
     printf("Test flexValidateBuffer accepts a fresh empty flex:\n");
     {
-        flex *fresh = flexNew();
+        cleaner(flexFree) flex *fresh = flexNew();
         const size_t bytes = flexBytes(fresh);
         assert(flexValidateBuffer((const uint8_t *)fresh, bytes) == true);
-        flexFree(fresh);
         printf("  OK\n");
     }
 
     printf("Test flexValidateBuffer accepts a populated small flex:\n");
     {
-        flex *small = flexNew();
+        cleaner(flexFree) flex *small = flexNew();
         for (int i = 0; i < 32; i++) {
             const databox b = databoxNewSigned(i);
             flexPushSigned(&small, b.data.i, FLEX_ENDPOINT_TAIL);
         }
         const size_t bytes = flexBytes(small);
         assert(flexValidateBuffer((const uint8_t *)small, bytes) == true);
-        flexFree(small);
         printf("  OK\n");
     }
 
@@ -9519,7 +9529,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         /* Buffer claims one length in its header but caller passes a
          * different buflen.  Both directions (too short and too long)
          * must fail. */
-        flex *built = flexNew();
+        cleaner(flexFree) flex *built = flexNew();
         for (int i = 0; i < 16; i++) {
             const databox b = databoxNewSigned(i);
             flexPushSigned(&built, b.data.i, FLEX_ENDPOINT_TAIL);
@@ -9527,7 +9537,6 @@ int32_t flexTest(int32_t argc, char **argv) {
         const size_t bytes = flexBytes(built);
         assert(flexValidateBuffer((const uint8_t *)built, bytes - 1) == false);
         assert(flexValidateBuffer((const uint8_t *)built, bytes + 1) == false);
-        flexFree(built);
         printf("  OK\n");
     }
 
@@ -9548,7 +9557,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         /* Push enough payload that the total_bytes varint promotes
          * past its 1-byte form, ensuring the multi-byte header path
          * is exercised. */
-        flex *grow = flexNew();
+        cleaner(flexFree) flex *grow = flexNew();
         for (int i = 0; i < 256; i++) {
             const databox b = databoxNewSigned(i);
             flexPushSigned(&grow, b.data.i, FLEX_ENDPOINT_TAIL);
@@ -9556,7 +9565,6 @@ int32_t flexTest(int32_t argc, char **argv) {
         const size_t bytes = flexBytes(grow);
         assert(bytes > 64); /* past 1-byte varint range */
         assert(flexValidateBuffer((const uint8_t *)grow, bytes) == true);
-        flexFree(grow);
         printf("  OK\n");
     }
 
@@ -9592,7 +9600,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         const uint8_t empty[1] = {0};
         assert(flexValidateBufferDeep(empty, 1) == false);
         /* total-bytes-claim != buflen */
-        flex *built = flexNew();
+        cleaner(flexFree) flex *built = flexNew();
         for (int i = 0; i < 16; i++) {
             flexPushSigned(&built, i, FLEX_ENDPOINT_TAIL);
         }
@@ -9601,7 +9609,6 @@ int32_t flexTest(int32_t argc, char **argv) {
                false);
         assert(flexValidateBufferDeep((const uint8_t *)built, bytes + 1) ==
                false);
-        flexFree(built);
         printf("  OK\n");
     }
 
@@ -9611,7 +9618,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         /* Build a real flex with a mix of unsigned ints and byte
          * strings — both exercise the string-varint and fixed-width
          * paths in the safe-walker. */
-        flex *good = flexNew();
+        cleaner(flexFree) flex *good = flexNew();
         flexPushUnsigned(&good, 1u, FLEX_ENDPOINT_TAIL);
         flexPushBytes(&good, "alpha", 5u, FLEX_ENDPOINT_TAIL);
         flexPushUnsigned(&good, 0xABCDEFu, FLEX_ENDPOINT_TAIL);
@@ -9621,7 +9628,6 @@ int32_t flexTest(int32_t argc, char **argv) {
         const size_t bytes = flexBytes(good);
         assert(flexCount(good) == 5u);
         assert(flexValidateBufferDeep((const uint8_t *)good, bytes) == true);
-        flexFree(good);
         printf("  OK\n");
     }
 
@@ -9633,13 +9639,12 @@ int32_t flexTest(int32_t argc, char **argv) {
          * a string length far larger than the buffer can hold.  The O(1)
          * envelope check would still pass (header total-bytes and count
          * are intact), but the deep walk must reject. */
-        flex *fb = flexNew();
+        cleaner(flexFree) flex *fb = flexNew();
         flexPushBytes(&fb, "abc", 3u, FLEX_ENDPOINT_TAIL);
         flexPushBytes(&fb, "def", 3u, FLEX_ENDPOINT_TAIL);
         const size_t bytes = flexBytes(fb);
-        uint8_t *tampered = zmalloc(bytes);
+        cleanerName(zfree, Bytes) uint8_t *tampered = zmalloc(bytes);
         memcpy(tampered, fb, bytes);
-        flexFree(fb);
         /* Header is [total_bytes_varint][count_varint] then entries.
          * Walk past the header to the first entry's encoding byte. */
         const size_t total_bytes_width =
@@ -9658,7 +9663,6 @@ int32_t flexTest(int32_t argc, char **argv) {
         assert(flexValidateBuffer(tampered, bytes) == true);
         /* Deep validator catches it. */
         assert(flexValidateBufferDeep(tampered, bytes) == false);
-        zfree(tampered);
         printf("  OK\n");
     }
 
@@ -9670,14 +9674,13 @@ int32_t flexTest(int32_t argc, char **argv) {
          * The deep walk's per-entry budget check will run out of bytes
          * trying to read entry 5 (since the buffer ends exactly after
          * the four real entries) — must reject. */
-        flex *fc = flexNew();
+        cleaner(flexFree) flex *fc = flexNew();
         for (int i = 1; i <= 4; i++) {
             flexPushUnsigned(&fc, (uint64_t)i, FLEX_ENDPOINT_TAIL);
         }
         const size_t bytes = flexBytes(fc);
-        uint8_t *tampered = zmalloc(bytes);
+        cleanerName(zfree, Bytes) uint8_t *tampered = zmalloc(bytes);
         memcpy(tampered, fc, bytes);
-        flexFree(fc);
         const size_t total_bytes_width =
             varintSplitFullNoZeroGetLenQuick_(tampered);
         /* For counts in the tagged-varint 1-byte range (≤240), the
@@ -9690,7 +9693,6 @@ int32_t flexTest(int32_t argc, char **argv) {
         assert(flexValidateBuffer(tampered, bytes) == true);
         /* Deep walk runs out of bytes when looking for entry 5. */
         assert(flexValidateBufferDeep(tampered, bytes) == false);
-        zfree(tampered);
         printf("  OK\n");
     }
 
@@ -9704,7 +9706,7 @@ int32_t flexTest(int32_t argc, char **argv) {
          * envelope check rejects this on the buflen mismatch path,
          * which is exactly what we want — the deep validator inherits
          * that rejection. */
-        flex *fd = flexNew();
+        cleaner(flexFree) flex *fd = flexNew();
         flexPushBytes(&fd, "hello-world", 11u, FLEX_ENDPOINT_TAIL);
         flexPushBytes(&fd, "tail-string", 11u, FLEX_ENDPOINT_TAIL);
         const size_t bytes = flexBytes(fd);
@@ -9713,7 +9715,6 @@ int32_t flexTest(int32_t argc, char **argv) {
          * bytes in the header but garbage extending past the end.  Pass
          * the deep validator a buflen that mismatches the claim. */
         assert(flexValidateBufferDeep((const uint8_t *)fd, bytes + 1) == false);
-        flexFree(fd);
         printf("  OK\n");
     }
 

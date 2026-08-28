@@ -10,10 +10,15 @@
 #include "../deps/xxHash/xxhash.h"
 
 #ifdef DATAKIT_TEST
+#include "cleaner.h"
 #include "ctest.h"
 
 #define DOUBLE_NEWLINE 1
 #include "perf.h"
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleanerName(uint64_t *, zfree, U64);
+defcleanerName(uint8_t *, zfree, U8);
 
 /* Helper to generate hash from integer */
 static void hashFromInt(uint64_t val, uint64_t hash[2]) {
@@ -571,7 +576,8 @@ int linearBloomTest(int argc, char *argv[]) {
     TEST("linearBloom FUZZ: random insertions and checks") {
         linearBloom *bloom = linearBloomNew();
         const size_t numItems = 50000;
-        uint64_t *inserted = zcalloc(numItems, sizeof(uint64_t));
+        cleanerName(zfree, U64) uint64_t *inserted =
+            zcalloc(numItems, sizeof(uint64_t));
         uint64_t hash[2];
 
         srand(12345);
@@ -611,7 +617,6 @@ int linearBloomTest(int argc, char *argv[]) {
         printf("    FUZZ FP rate: %.4f%% (%zu/%zu)\n", fpRate * 100,
                falsePositives, numItems);
 
-        zfree(inserted);
         linearBloomFree(bloom);
     }
 
@@ -652,7 +657,8 @@ int linearBloomTest(int argc, char *argv[]) {
         srand(54321);
 
         /* Track counts in simple oracle (limited to first numItems integers) */
-        uint8_t *oracle = zcalloc(numItems, sizeof(uint8_t));
+        cleanerName(zfree, U8) uint8_t *oracle =
+            zcalloc(numItems, sizeof(uint8_t));
 
         /* Add items with varying counts */
         for (size_t round = 0; round < 3; round++) {
@@ -682,7 +688,6 @@ int linearBloomTest(int argc, char *argv[]) {
             ERR("FUZZ: %zu items had count lower than expected!", underCount);
         }
 
-        zfree(oracle);
         linearBloomCountFree(bloom);
     }
 
@@ -1149,7 +1154,8 @@ int linearBloomTest(int argc, char *argv[]) {
 
         /* Insert 1M random items */
         srand(11111);
-        uint64_t *items = zcalloc(numItems, sizeof(uint64_t));
+        cleanerName(zfree, U64) uint64_t *items =
+            zcalloc(numItems, sizeof(uint64_t));
         for (size_t i = 0; i < numItems; i++) {
             items[i] = ((uint64_t)rand() << 32) | rand();
             hashFromInt(items[i], hash);
@@ -1198,7 +1204,6 @@ int linearBloomTest(int argc, char *argv[]) {
         printf("    1M items: FP rate %.4f%% (%zu/%zu)\n", fpRate,
                falsePositives, numItems);
 
-        zfree(items);
         linearBloomFree(bloom);
     }
 
@@ -1208,7 +1213,8 @@ int linearBloomTest(int argc, char *argv[]) {
         uint64_t hash[2];
 
         /* Track expected minimum counts */
-        uint8_t *expectedMin = zcalloc(numItems, sizeof(uint8_t));
+        cleanerName(zfree, U8) uint8_t *expectedMin =
+            zcalloc(numItems, sizeof(uint8_t));
 
         /* Add items multiple times with varying counts */
         srand(22222);
@@ -1259,7 +1265,6 @@ int linearBloomTest(int argc, char *argv[]) {
                 underCountAfterHalf);
         }
 
-        zfree(expectedMin);
         linearBloomCountFree(bloom);
     }
 

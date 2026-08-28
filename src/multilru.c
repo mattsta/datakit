@@ -1,5 +1,6 @@
 #include "datakit.h"
 
+#include "cleaner.h"
 #include "fibbuf.h"
 #include "jebuf.h"
 #include "multilru.h"
@@ -9,6 +10,12 @@
 #include <inttypes.h>
 #include <math.h>
 #include <string.h>
+
+#ifdef DATAKIT_TEST
+defcleanerName(uint8_t *, zfree, Bytes);
+defcleanerName(multilruPtr *, zfree, Ptrs);
+defcleaner(multilru *, multilruFree);
+#endif
 
 /* ====================================================================
  * Finer-Grained Adaptive Entry Structures (5-16 bytes)
@@ -1032,6 +1039,7 @@ DK_STATIC bool upgradeWidth(multilru *mlru, uint8_t newWidth) {
     uint64_t oldCapacity = mlru->capacity;
 
     /* Allocate new entries array with new width */
+    /* @own: container; free=multilruFree */
     void *newEntries = zcalloc(oldCapacity, newWidth);
     if (!newEntries) {
         return false;
@@ -1121,6 +1129,7 @@ do_grow:;
             /* upgradeWidth allocated a zero-capacity entries array */
             zfree(mlru->entries);
         }
+        /* @own: container; free=multilruFree */
         mlru->entries = zcalloc(actualNewCapacity, mlru->entryWidth);
         if (mlru->weights) {
             /* weights might be the marker value (1) - allocate fresh */
@@ -1130,9 +1139,11 @@ do_grow:;
                 mlru->weights = NULL;
             }
             zfree(mlru->weights);
+            /* @own: container; free=multilruFree */
             mlru->weights = zcalloc(actualNewCapacity, sizeof(uint64_t));
         }
     } else {
+        /* @own: container; free=multilruFree */
         mlru->entries = zrealloc(mlru->entries,
                                  (size_t)actualNewCapacity * mlru->entryWidth);
         /* Zero new entries */
@@ -1140,6 +1151,7 @@ do_grow:;
                (size_t)(actualNewCapacity - oldCapacity) * mlru->entryWidth);
 
         if (mlru->weights) {
+            /* @own: container; free=multilruFree */
             mlru->weights =
                 zrealloc(mlru->weights, actualNewCapacity * sizeof(uint64_t));
             memset(mlru->weights + oldCapacity, 0,
@@ -1270,6 +1282,7 @@ DK_STATIC void updateLowest(multilru *mlru) {
 
 DK_STATIC void initLevels(multilru *mlru) {
     /* Allocate level metadata */
+    /* @own: container; free=multilruFree */
     mlru->levels = zcalloc(mlru->maxLevels, sizeof(multilruLevel));
 
     /* Reserve slots 1 through maxLevels for level head markers */
@@ -1320,10 +1333,12 @@ multilru *multilruNewWithLevelsCapacity(size_t maxLevels,
         .maxWeight = 0,
         .enableWeights = false,
     };
+    /* @own: caller; free=multilruFree */
     return multilruNewWithConfig(&config);
 }
 
 multilru *multilruNewWithConfig(const multilruConfig *config) {
+    /* @own: caller; free=multilruFree */
     multilru *mlru = zcalloc(1, sizeof(*mlru));
 
     mlru->maxLevels = config->maxLevels > 0 ? config->maxLevels : 7;
@@ -1363,6 +1378,7 @@ multilru *multilruNewWithConfig(const multilruConfig *config) {
     // cppcheck-suppress intToPointerCast - checking for deferred allocation
     // sentinel
     if (mlru->weights == (uint64_t *)1) {
+        /* @own: container; free=multilruFree */
         mlru->weights = zcalloc(mlru->capacity, sizeof(uint64_t));
     }
 
@@ -2128,16 +2144,15 @@ int multilruTest(int argc, char *argv[]) {
     }
 
     TEST("create empty") {
-        multilru *mlru = multilruNew();
+        cleaner(multilruFree) multilru *mlru = multilruNew();
         assert(mlru != NULL);
         assert(multilruCount(mlru) == 0);
         assert(mlru->entryWidth == MLRU_WIDTH_5);
         multilruRepr(mlru);
-        multilruFree(mlru);
     }
 
     TEST("basic insert and remove") {
-        multilru *mlru = multilruNew();
+        cleaner(multilruFree) multilru *mlru = multilruNew();
 
         multilruPtr p1 = multilruInsert(mlru);
         assert(p1 != 0);
@@ -2155,12 +2170,11 @@ int multilruTest(int argc, char *argv[]) {
         (void)ok;
         assert(multilruCount(mlru) == 1);
 
-        multilruFree(mlru);
         printf("basic insert and remove: PASSED\n");
     }
 
     TEST("level promotion") {
-        multilru *mlru = multilruNew();
+        cleaner(multilruFree) multilru *mlru = multilruNew();
 
         multilruPtr p = multilruInsert(mlru);
         assert(multilruGetLevel(mlru, p) == 0);
@@ -2177,12 +2191,11 @@ int multilruTest(int argc, char *argv[]) {
         }
         assert(multilruGetLevel(mlru, p) == mlru->maxLevels - 1);
 
-        multilruFree(mlru);
         printf("level promotion: PASSED\n");
     }
 
     TEST("S4LRU demotion") {
-        multilru *mlru = multilruNew();
+        cleaner(multilruFree) multilru *mlru = multilruNew();
 
         /* Insert and promote entry to level 3 */
         multilruPtr p = multilruInsert(mlru);
@@ -2216,12 +2229,11 @@ int multilruTest(int argc, char *argv[]) {
         assert(!multilruIsPopulated(mlru, p)); /* Now freed */
         assert(multilruCount(mlru) == 0);
 
-        multilruFree(mlru);
         printf("S4LRU demotion: PASSED\n");
     }
 
     TEST("per-level counts") {
-        multilru *mlru = multilruNew();
+        cleaner(multilruFree) multilru *mlru = multilruNew();
 
         /* Insert 10 entries */
         multilruPtr ptrs[10];
@@ -2250,7 +2262,6 @@ int multilruTest(int argc, char *argv[]) {
         }
         assert(total == 10);
 
-        multilruFree(mlru);
         printf("per-level counts: PASSED\n");
     }
 
@@ -2259,7 +2270,7 @@ int multilruTest(int argc, char *argv[]) {
             .maxLevels = 7,
             .enableWeights = true,
         };
-        multilru *mlru = multilruNewWithConfig(&config);
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
 
         multilruPtr p1 = multilruInsertWeighted(mlru, 1000);
         multilruPtr p2 = multilruInsertWeighted(mlru, 2000);
@@ -2279,12 +2290,11 @@ int multilruTest(int argc, char *argv[]) {
         multilruDelete(mlru, p1);
         assert(multilruTotalWeight(mlru) == 3500);
 
-        multilruFree(mlru);
         printf("weight tracking: PASSED\n");
     }
 
     TEST("free list reuse") {
-        multilru *mlru = multilruNew();
+        cleaner(multilruFree) multilru *mlru = multilruNew();
 
         /* Insert many entries */
         multilruPtr ptrs[100];
@@ -2305,12 +2315,11 @@ int multilruTest(int argc, char *argv[]) {
         }
         assert(multilruCount(mlru) == 100);
 
-        multilruFree(mlru);
         printf("free list reuse: PASSED\n");
     }
 
     TEST("GetNLowest and GetNHighest") {
-        multilru *mlru = multilruNew();
+        cleaner(multilruFree) multilru *mlru = multilruNew();
 
         multilruPtr ptrs[20];
         for (int i = 0; i < 20; i++) {
@@ -2340,12 +2349,12 @@ int multilruTest(int argc, char *argv[]) {
             /* Should be from higher levels */
         }
 
-        multilruFree(mlru);
         printf("GetNLowest and GetNHighest: PASSED\n");
     }
 
     TEST("stress test") {
-        multilru *mlru = multilruNewWithLevelsCapacity(7, 10000);
+        cleaner(multilruFree) multilru *mlru =
+            multilruNewWithLevelsCapacity(7, 10000);
 
         /* Insert 10000 entries */
         for (int i = 0; i < 10000; i++) {
@@ -2381,7 +2390,6 @@ int multilruTest(int argc, char *argv[]) {
         }
         assert(total == multilruCount(mlru));
 
-        multilruFree(mlru);
         printf("stress test: PASSED\n");
     }
 
@@ -2393,7 +2401,7 @@ int multilruTest(int argc, char *argv[]) {
             .maxCount = 50,
             .enableWeights = false,
         };
-        multilru *mlru = multilruNewWithConfig(&config);
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
 
         /* Insert 100 entries - should auto-evict to stay at 50 */
         for (int i = 0; i < 100; i++) {
@@ -2402,7 +2410,6 @@ int multilruTest(int argc, char *argv[]) {
         }
         assert(multilruCount(mlru) <= 50);
 
-        multilruFree(mlru);
         printf("policy enforcement - count: PASSED\n");
     }
 
@@ -2414,7 +2421,7 @@ int multilruTest(int argc, char *argv[]) {
             .maxWeight = 500,
             .enableWeights = true,
         };
-        multilru *mlru = multilruNewWithConfig(&config);
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
 
         /* Insert entries with weight 10 each - should evict to stay under 500
          */
@@ -2425,7 +2432,6 @@ int multilruTest(int argc, char *argv[]) {
         assert(multilruTotalWeight(mlru) <= 500);
         assert(multilruCount(mlru) <= 50);
 
-        multilruFree(mlru);
         printf("policy enforcement - weight: PASSED\n");
     }
 
@@ -2440,7 +2446,7 @@ int multilruTest(int argc, char *argv[]) {
             .maxWeight = 15ULL * 1024 * 1024 * 1024, /* 15GB */
             .enableWeights = true,
         };
-        multilru *mlru = multilruNewWithConfig(&config);
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
 
         /* Add one 12GB video */
         multilruPtr bigVideo =
@@ -2456,13 +2462,13 @@ int multilruTest(int argc, char *argv[]) {
         /* Verify total weight is under limit */
         assert(multilruTotalWeight(mlru) <= 15ULL * 1024 * 1024 * 1024);
 
-        multilruFree(mlru);
         printf("video cache scenario: PASSED\n");
     }
 
     TEST("width upgrade 5 to 6") {
         /* Start with small capacity (5-byte width, max 64K entries) */
-        multilru *mlru = multilruNewWithLevelsCapacity(4, 100);
+        cleaner(multilruFree) multilru *mlru =
+            multilruNewWithLevelsCapacity(4, 100);
         assert(multilruGetEntryWidth(mlru) == MLRU_WIDTH_5);
 
         /* Insert 70000 entries (past 64K threshold) */
@@ -2495,7 +2501,6 @@ int multilruTest(int argc, char *argv[]) {
             assert(ok);
         }
 
-        multilruFree(mlru);
         printf("width upgrade 5 to 6: PASSED\n");
     }
 
@@ -2583,7 +2588,7 @@ int multilruTest(int argc, char *argv[]) {
             .maxCount = 0,
             .enableWeights = true,
         };
-        multilru *mlru = multilruNewWithConfig(&config);
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
 
         /* Insert some entries */
         for (int i = 0; i < 100; i++) {
@@ -2608,7 +2613,6 @@ int multilruTest(int argc, char *argv[]) {
         }
         assert(multilruTotalWeight(mlru) <= 200);
 
-        multilruFree(mlru);
         printf("runtime configuration: PASSED\n");
     }
 
@@ -2620,7 +2624,7 @@ int multilruTest(int argc, char *argv[]) {
             .maxWeight = 1000,
             .enableWeights = true,
         };
-        multilru *mlru = multilruNewWithConfig(&config);
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
 
         /* Insert entry with weight 100 */
         multilruPtr p = multilruInsertWeighted(mlru, 100);
@@ -2636,7 +2640,6 @@ int multilruTest(int argc, char *argv[]) {
         multilruInsertWeighted(mlru, 200);
         assert(multilruTotalWeight(mlru) == 700);
 
-        multilruFree(mlru);
         printf("weight update: PASSED\n");
     }
 
@@ -2648,7 +2651,7 @@ int multilruTest(int argc, char *argv[]) {
             .maxCount = 0, /* No auto-eviction */
             .enableWeights = true,
         };
-        multilru *mlru = multilruNewWithConfig(&config);
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
 
         /* Insert 50 entries with weight 10 each */
         for (int i = 0; i < 50; i++) {
@@ -2667,12 +2670,11 @@ int multilruTest(int argc, char *argv[]) {
         n = multilruEvictToSize(mlru, 200, evicted, 20);
         assert(multilruTotalWeight(mlru) <= 200);
 
-        multilruFree(mlru);
         printf("evictN and evictToSize: PASSED\n");
     }
 
     TEST("edge cases") {
-        multilru *mlru = multilruNew();
+        cleaner(multilruFree) multilru *mlru = multilruNew();
 
         /* Remove from empty */
         multilruPtr ptr;
@@ -2705,12 +2707,12 @@ int multilruTest(int argc, char *argv[]) {
         multilruDelete(mlru, 999);
         assert(multilruCount(mlru) == 0);
 
-        multilruFree(mlru);
         printf("edge cases: PASSED\n");
     }
 
     TEST("fuzz test - random operations") {
-        multilru *mlru = multilruNewWithLevelsCapacity(7, 1000);
+        cleaner(multilruFree) multilru *mlru =
+            multilruNewWithLevelsCapacity(7, 1000);
 
         /* Track inserted entries for validation */
         multilruPtr entries[1000] = {0};
@@ -2771,14 +2773,14 @@ int multilruTest(int argc, char *argv[]) {
             assert(levelTotal == multilruCount(mlru));
         }
 
-        multilruFree(mlru);
         printf("fuzz test - random operations: PASSED\n");
     }
 
     TEST("performance benchmark") {
         printf("\n=== MULTILRU PERFORMANCE SUMMARY ===\n");
 
-        multilru *mlru = multilruNewWithLevelsCapacity(7, 131072);
+        cleaner(multilruFree) multilru *mlru =
+            multilruNewWithLevelsCapacity(7, 131072);
         const size_t benchCount = 500000;
 
         /* Benchmark insert */
@@ -2817,8 +2819,6 @@ int multilruTest(int argc, char *argv[]) {
                    : 0);
         printf("Entry width:   %u bytes\n", mlru->entryWidth);
         printf("=====================================\n\n");
-
-        multilruFree(mlru);
     }
 
     /* ================================================================
@@ -2827,39 +2827,44 @@ int multilruTest(int argc, char *argv[]) {
 
     TEST("API completeness - all creation functions") {
         /* Test multilruNew */
-        multilru *m1 = multilruNew();
-        assert(m1 != NULL);
-        assert(multilruMaxLevels(m1) == 7);
-        assert(multilruCount(m1) == 0);
-        multilruFree(m1);
+        {
+            cleaner(multilruFree) multilru *m1 = multilruNew();
+            assert(m1 != NULL);
+            assert(multilruMaxLevels(m1) == 7);
+            assert(multilruCount(m1) == 0);
+        }
 
         /* Test multilruNewWithLevels */
-        multilru *m2 = multilruNewWithLevels(4);
-        assert(m2 != NULL);
-        assert(multilruMaxLevels(m2) == 4);
-        multilruFree(m2);
+        {
+            cleaner(multilruFree) multilru *m2 = multilruNewWithLevels(4);
+            assert(m2 != NULL);
+            assert(multilruMaxLevels(m2) == 4);
+        }
 
         /* Test multilruNewWithLevelsCapacity */
-        multilru *m3 = multilruNewWithLevelsCapacity(10, 5000);
-        assert(m3 != NULL);
-        assert(multilruMaxLevels(m3) == 10);
-        assert(multilruCapacity(m3) >= 5000);
-        multilruFree(m3);
+        {
+            cleaner(multilruFree) multilru *m3 =
+                multilruNewWithLevelsCapacity(10, 5000);
+            assert(m3 != NULL);
+            assert(multilruMaxLevels(m3) == 10);
+            assert(multilruCapacity(m3) >= 5000);
+        }
 
         /* Test multilruNewWithConfig - all options */
-        multilruConfig config = {
-            .maxLevels = 8,
-            .startCapacity = 1000,
-            .policy = MLRU_POLICY_HYBRID,
-            .evictStrategy = MLRU_EVICT_SIZE_WEIGHTED,
-            .maxCount = 500,
-            .maxWeight = 10000,
-            .enableWeights = true,
-        };
-        multilru *m4 = multilruNewWithConfig(&config);
-        assert(m4 != NULL);
-        assert(multilruMaxLevels(m4) == 8);
-        multilruFree(m4);
+        {
+            multilruConfig config = {
+                .maxLevels = 8,
+                .startCapacity = 1000,
+                .policy = MLRU_POLICY_HYBRID,
+                .evictStrategy = MLRU_EVICT_SIZE_WEIGHTED,
+                .maxCount = 500,
+                .maxWeight = 10000,
+                .enableWeights = true,
+            };
+            cleaner(multilruFree) multilru *m4 = multilruNewWithConfig(&config);
+            assert(m4 != NULL);
+            assert(multilruMaxLevels(m4) == 8);
+        }
 
         printf("API completeness - all creation functions: PASSED\n");
     }
@@ -2870,7 +2875,7 @@ int multilruTest(int argc, char *argv[]) {
             .startCapacity = 100,
             .enableWeights = true,
         };
-        multilru *mlru = multilruNewWithConfig(&config);
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
 
         /* Insert entries at various levels with weights */
         multilruPtr ptrs[50];
@@ -2907,7 +2912,6 @@ int multilruTest(int argc, char *argv[]) {
             assert(multilruGetLevel(mlru, ptrs[i]) == (size_t)(i % 5));
         }
 
-        multilruFree(mlru);
         printf("API completeness - all query functions: PASSED\n");
     }
 
@@ -2917,7 +2921,7 @@ int multilruTest(int argc, char *argv[]) {
             .startCapacity = 100,
             .enableWeights = true,
         };
-        multilru *mlru = multilruNewWithConfig(&config);
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
 
         /* Test Insert */
         multilruPtr p1 = multilruInsert(mlru);
@@ -2953,7 +2957,6 @@ int multilruTest(int argc, char *argv[]) {
         assert(removed == p2);
         assert(multilruCount(mlru) == 0);
 
-        multilruFree(mlru);
         printf("API completeness - all modification functions: PASSED\n");
     }
 
@@ -2963,7 +2966,7 @@ int multilruTest(int argc, char *argv[]) {
             .startCapacity = 200,
             .enableWeights = true,
         };
-        multilru *mlru = multilruNewWithConfig(&config);
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
 
         /* Insert 100 entries with weight 10 each */
         for (int i = 0; i < 100; i++) {
@@ -3005,12 +3008,11 @@ int multilruTest(int argc, char *argv[]) {
             assert(multilruGetLevel(mlru, highest[i]) >= 1);
         }
 
-        multilruFree(mlru);
         printf("API completeness - all eviction functions: PASSED\n");
     }
 
     TEST("API completeness - all configuration functions") {
-        multilru *mlru = multilruNew();
+        cleaner(multilruFree) multilru *mlru = multilruNew();
 
         /* Test SetPolicy */
         multilruSetPolicy(mlru, MLRU_POLICY_COUNT);
@@ -3030,12 +3032,11 @@ int multilruTest(int argc, char *argv[]) {
         multilruSetMaxWeight(mlru, 10000);
         multilruSetMaxWeight(mlru, 0);
 
-        multilruFree(mlru);
         printf("API completeness - all configuration functions: PASSED\n");
     }
 
     TEST("boundary conditions - empty cache") {
-        multilru *mlru = multilruNew();
+        cleaner(multilruFree) multilru *mlru = multilruNew();
 
         /* Operations on empty cache */
         assert(multilruCount(mlru) == 0);
@@ -3063,12 +3064,11 @@ int multilruTest(int argc, char *argv[]) {
         multilruDelete(mlru, 999);
         assert(multilruCount(mlru) == 0);
 
-        multilruFree(mlru);
         printf("boundary conditions - empty cache: PASSED\n");
     }
 
     TEST("boundary conditions - single entry") {
-        multilru *mlru = multilruNew();
+        cleaner(multilruFree) multilru *mlru = multilruNew();
 
         multilruPtr p = multilruInsert(mlru);
         assert(p != 0);
@@ -3099,13 +3099,12 @@ int multilruTest(int argc, char *argv[]) {
         }
         assert(multilruCount(mlru) == 0);
 
-        multilruFree(mlru);
         printf("boundary conditions - single entry: PASSED\n");
     }
 
     TEST("boundary conditions - max levels") {
         /* Test with maximum supported levels (64) */
-        multilru *mlru = multilruNewWithLevels(64);
+        cleaner(multilruFree) multilru *mlru = multilruNewWithLevels(64);
         assert(multilruMaxLevels(mlru) == 64);
 
         multilruPtr p = multilruInsert(mlru);
@@ -3116,13 +3115,13 @@ int multilruTest(int argc, char *argv[]) {
         }
         assert(multilruGetLevel(mlru, p) == 63);
 
-        multilruFree(mlru);
         printf("boundary conditions - max levels: PASSED\n");
     }
 
     TEST("boundary conditions - capacity limits") {
         /* Start with minimal capacity */
-        multilru *mlru = multilruNewWithLevelsCapacity(4, 10);
+        cleaner(multilruFree) multilru *mlru =
+            multilruNewWithLevelsCapacity(4, 10);
 
         /* Insert more than initial capacity to trigger growth */
         for (int i = 0; i < 1000; i++) {
@@ -3132,7 +3131,6 @@ int multilruTest(int argc, char *argv[]) {
         assert(multilruCount(mlru) == 1000);
         assert(multilruCapacity(mlru) >= 1000);
 
-        multilruFree(mlru);
         printf("boundary conditions - capacity limits: PASSED\n");
     }
 
@@ -3146,7 +3144,7 @@ int multilruTest(int argc, char *argv[]) {
             .startCapacity = 100,
             .enableWeights = true,
         };
-        multilru *mlru = multilruNewWithConfig(&config);
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
 
         assert(verifyInvariants(mlru, "after creation"));
 
@@ -3173,7 +3171,6 @@ int multilruTest(int argc, char *argv[]) {
             assert(verifyInvariants(mlru, "after remove"));
         }
 
-        multilruFree(mlru);
         printf("invariant verification - basic operations: PASSED\n");
     }
 
@@ -3190,7 +3187,7 @@ int multilruTest(int argc, char *argv[]) {
             .maxWeight = 50000,
             .enableWeights = true,
         };
-        multilru *mlru = multilruNewWithConfig(&config);
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
 
         /* Track live entries */
         multilruPtr entries[2000] = {0};
@@ -3319,7 +3316,6 @@ int multilruTest(int argc, char *argv[]) {
         }
 
         assert(verifyInvariants(mlru, "fuzz final"));
-        multilruFree(mlru);
         printf("comprehensive fuzz - all operations: PASSED\n");
     }
 
@@ -3341,7 +3337,8 @@ int multilruTest(int argc, char *argv[]) {
                     .maxWeight = 5000,
                     .enableWeights = true,
                 };
-                multilru *mlru = multilruNewWithConfig(&config);
+                cleaner(multilruFree) multilru *mlru =
+                    multilruNewWithConfig(&config);
 
                 uint64_t seed[2] = {p * 1000 + s, 12345};
 
@@ -3363,7 +3360,6 @@ int multilruTest(int argc, char *argv[]) {
                 }
 
                 assert(verifyInvariants(mlru, "policy combo"));
-                multilruFree(mlru);
             }
         }
         printf("fuzz - policy combinations: PASSED\n");
@@ -3372,7 +3368,8 @@ int multilruTest(int argc, char *argv[]) {
     TEST("fuzz - width transitions") {
         /* Test that invariants hold across width upgrades (5->6 at 64K
          * boundary) */
-        multilru *mlru = multilruNewWithLevelsCapacity(4, 100);
+        cleaner(multilruFree) multilru *mlru =
+            multilruNewWithLevelsCapacity(4, 100);
         assert(multilruGetEntryWidth(mlru) == MLRU_WIDTH_5);
 
         multilruPtr entries[80000];
@@ -3406,7 +3403,6 @@ int multilruTest(int argc, char *argv[]) {
         }
         assert(verifyInvariants(mlru, "after mass removal"));
 
-        multilruFree(mlru);
         printf("fuzz - width transitions: PASSED\n");
     }
 
@@ -3421,15 +3417,18 @@ int multilruTest(int argc, char *argv[]) {
         const size_t MAX_ENTRIES = 10000;
         const int NUM_OPS = 100000;
 
-        multilru *mlru = multilruNewWithLevelsCapacity(4, 256);
+        cleaner(multilruFree) multilru *mlru =
+            multilruNewWithLevelsCapacity(4, 256);
 
         /* Bitmap to track which IDs are currently live (in the cache).
          * Size dynamically based on IDs we see (IDs can exceed MAX_ENTRIES). */
         size_t bitmapCapacity = MAX_ENTRIES * 2; /* Start with 2x headroom */
-        uint8_t *liveIds = zcalloc(1, (bitmapCapacity + 7) / 8);
+        cleanerName(zfree, Bytes) uint8_t *liveIds =
+            zcalloc(1, (bitmapCapacity + 7) / 8);
 
         /* Track all IDs ever seen for duplicate detection */
-        multilruPtr *liveList = zcalloc(MAX_ENTRIES, sizeof(multilruPtr));
+        cleanerName(zfree, Ptrs) multilruPtr *liveList =
+            zcalloc(MAX_ENTRIES, sizeof(multilruPtr));
         size_t liveCount = 0;
 
         /* Track the highest ID we've ever seen (should match nextFresh - 1) */
@@ -3686,9 +3685,6 @@ int multilruTest(int argc, char *argv[]) {
 #undef ID_SET_LIVE
 #undef ID_CLEAR_LIVE
 
-        zfree(liveIds);
-        zfree(liveList);
-        multilruFree(mlru);
         printf("fuzz - ID allocation correctness: PASSED\n");
     }
 
@@ -3697,7 +3693,8 @@ int multilruTest(int argc, char *argv[]) {
 
         /* Test 1: Single entry insert/delete cycles */
         {
-            multilru *mlru = multilruNewWithLevelsCapacity(4, 16);
+            cleaner(multilruFree) multilru *mlru =
+                multilruNewWithLevelsCapacity(4, 16);
             multilruPtr lastId = 0;
 
             for (int i = 0; i < 1000; i++) {
@@ -3716,13 +3713,13 @@ int multilruTest(int argc, char *argv[]) {
 
             assert(multilruCount(mlru) == 0);
             assert(mlru->freeCount == 1); /* One recycled slot */
-            multilruFree(mlru);
             printf("  Edge case 1 (single entry cycles): OK\n");
         }
 
         /* Test 2: Fill to capacity, delete all, refill */
         {
-            multilru *mlru = multilruNewWithLevelsCapacity(4, 100);
+            cleaner(multilruFree) multilru *mlru =
+                multilruNewWithLevelsCapacity(4, 100);
             multilruPtr ids[95]; /* Leave room for 5 level heads */
 
             /* Fill completely (100 capacity - 5 level heads = 95 entries) */
@@ -3747,13 +3744,13 @@ int multilruTest(int argc, char *argv[]) {
 
             assert(mlru->nextFresh == nextFreshBefore);
             assert(mlru->freeCount == 0);
-            multilruFree(mlru);
             printf("  Edge case 2 (fill/empty/refill): OK\n");
         }
 
         /* Test 3: Alternating insert/delete never exceeds initial capacity */
         {
-            multilru *mlru = multilruNewWithLevelsCapacity(4, 100);
+            cleaner(multilruFree) multilru *mlru =
+                multilruNewWithLevelsCapacity(4, 100);
             uint64_t initialCapacity = mlru->capacity;
 
             for (int i = 0; i < 10000; i++) {
@@ -3766,13 +3763,13 @@ int multilruTest(int argc, char *argv[]) {
             assert(mlru->capacity == initialCapacity);
             assert(mlru->nextFresh ==
                    mlru->maxLevels + 2); /* Only used 1 slot */
-            multilruFree(mlru);
             printf("  Edge case 3 (alternating never grows): OK\n");
         }
 
         /* Test 4: Delete in middle creates holes, properly recycled */
         {
-            multilru *mlru = multilruNewWithLevelsCapacity(4, 100);
+            cleaner(multilruFree) multilru *mlru =
+                multilruNewWithLevelsCapacity(4, 100);
             multilruPtr ids[50];
 
             /* Insert 50 */
@@ -3796,13 +3793,13 @@ int multilruTest(int argc, char *argv[]) {
 
             assert(mlru->nextFresh == nextFreshBefore); /* No fresh allocs */
             assert(mlru->freeCount == 0);
-            multilruFree(mlru);
             printf("  Edge case 4 (holes properly recycled): OK\n");
         }
 
         /* Test 5: Growth doesn't push to free list */
         {
-            multilru *mlru = multilruNewWithLevelsCapacity(4, 16);
+            cleaner(multilruFree) multilru *mlru =
+                multilruNewWithLevelsCapacity(4, 16);
 
             /* Fill initial capacity */
             for (int i = 0; i < 11; i++) { /* 16 - 5 heads = 11 */
@@ -3823,7 +3820,6 @@ int multilruTest(int argc, char *argv[]) {
 
             /* nextFresh should be exactly at next unused slot */
             assert(mlru->nextFresh == (uint64_t)(mlru->maxLevels + 1 + 12));
-            multilruFree(mlru);
             printf("  Edge case 5 (growth O(1) no free list push): OK\n");
         }
 
@@ -3836,7 +3832,8 @@ int multilruTest(int argc, char *argv[]) {
 
     TEST("access patterns - sequential") {
         printf("\n--- Sequential Access Pattern ---\n");
-        multilru *mlru = multilruNewWithLevelsCapacity(7, 10000);
+        cleaner(multilruFree) multilru *mlru =
+            multilruNewWithLevelsCapacity(7, 10000);
 
         /* Insert 10000 entries */
         multilruPtr ptrs[10000];
@@ -3863,13 +3860,13 @@ int multilruTest(int argc, char *argv[]) {
         }
         printf("\n");
 
-        multilruFree(mlru);
         printf("access patterns - sequential: PASSED\n");
     }
 
     TEST("access patterns - random uniform") {
         printf("\n--- Random Uniform Access Pattern ---\n");
-        multilru *mlru = multilruNewWithLevelsCapacity(7, 10000);
+        cleaner(multilruFree) multilru *mlru =
+            multilruNewWithLevelsCapacity(7, 10000);
 
         multilruPtr ptrs[10000];
         for (int i = 0; i < 10000; i++) {
@@ -3895,13 +3892,13 @@ int multilruTest(int argc, char *argv[]) {
         }
         printf("\n");
 
-        multilruFree(mlru);
         printf("access patterns - random uniform: PASSED\n");
     }
 
     TEST("access patterns - zipfian (hot/cold)") {
         printf("\n--- Zipfian (Hot/Cold) Access Pattern ---\n");
-        multilru *mlru = multilruNewWithLevelsCapacity(7, 10000);
+        cleaner(multilruFree) multilru *mlru =
+            multilruNewWithLevelsCapacity(7, 10000);
 
         multilruPtr ptrs[10000];
         for (int i = 0; i < 10000; i++) {
@@ -3930,13 +3927,13 @@ int multilruTest(int argc, char *argv[]) {
         /* Hot entries should be at higher levels */
         assert(multilruGetLevel(mlru, ptrs[0]) >= 4); /* Most accessed */
 
-        multilruFree(mlru);
         printf("access patterns - zipfian (hot/cold): PASSED\n");
     }
 
     TEST("access patterns - working set") {
         printf("\n--- Working Set Access Pattern ---\n");
-        multilru *mlru = multilruNewWithLevelsCapacity(7, 10000);
+        cleaner(multilruFree) multilru *mlru =
+            multilruNewWithLevelsCapacity(7, 10000);
 
         multilruPtr ptrs[10000];
         for (int i = 0; i < 10000; i++) {
@@ -3970,7 +3967,6 @@ int multilruTest(int argc, char *argv[]) {
         }
         printf("\n");
 
-        multilruFree(mlru);
         printf("access patterns - working set: PASSED\n");
     }
 
@@ -3982,7 +3978,7 @@ int multilruTest(int argc, char *argv[]) {
             .policy = MLRU_POLICY_COUNT,
             .maxCount = 500,
         };
-        multilru *mlru = multilruNewWithConfig(&config);
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
 
         /* Insert initial working set and promote heavily */
         multilruPtr hotSet[100];
@@ -4023,7 +4019,6 @@ int multilruTest(int argc, char *argv[]) {
         /* S4LRU should protect hot entries - expect most to survive */
         assert(survived >= 50); /* At least 50% should survive */
 
-        multilruFree(mlru);
         printf("access patterns - scan resistance: PASSED\n");
     }
 
@@ -4042,7 +4037,8 @@ int multilruTest(int argc, char *argv[]) {
         size_t scales[] = {100, 1000, 10000, 100000, 500000};
         for (int s = 0; s < 5; s++) {
             size_t scale = scales[s];
-            multilru *mlru = multilruNewWithLevelsCapacity(7, scale);
+            cleaner(multilruFree) multilru *mlru =
+                multilruNewWithLevelsCapacity(7, scale);
 
             /* Benchmark insert */
             int64_t startNs = timeUtilMonotonicNs();
@@ -4076,8 +4072,6 @@ int multilruTest(int argc, char *argv[]) {
                    mlru->entryWidth, bytesPerEntry, scale / (insertNs / 1e9),
                    promoteCount / (promoteNs / 1e9),
                    removeCount / (removeNs / 1e9));
-
-            multilruFree(mlru);
         }
         printf("\n");
     }
@@ -4092,14 +4086,14 @@ int multilruTest(int argc, char *argv[]) {
 
         size_t testSizes[] = {100, 1000, 10000, 65000, 70000, 100000};
         for (int i = 0; i < 6; i++) {
-            multilru *mlru = multilruNewWithLevelsCapacity(7, testSizes[i]);
+            cleaner(multilruFree) multilru *mlru =
+                multilruNewWithLevelsCapacity(7, testSizes[i]);
             for (size_t j = 0; j < testSizes[i]; j++) {
                 multilruInsert(mlru);
             }
             printf("%-12zu %-12u %-12zu %-12.2f\n", testSizes[i],
                    mlru->entryWidth, multilruBytes(mlru),
                    (double)multilruBytes(mlru) / testSizes[i]);
-            multilruFree(mlru);
         }
 
         printf("\n--- With Weights ---\n");
@@ -4112,7 +4106,8 @@ int multilruTest(int argc, char *argv[]) {
                 .startCapacity = testSizes[i],
                 .enableWeights = true,
             };
-            multilru *mlru = multilruNewWithConfig(&config);
+            cleaner(multilruFree) multilru *mlru =
+                multilruNewWithConfig(&config);
             for (size_t j = 0; j < testSizes[i]; j++) {
                 multilruInsertWeighted(mlru, j * 10);
             }
@@ -4120,7 +4115,6 @@ int multilruTest(int argc, char *argv[]) {
                    mlru->entryWidth, multilruBytes(mlru),
                    (double)multilruBytes(mlru) / testSizes[i]);
             fflush(stdout);
-            multilruFree(mlru);
         }
         printf("memory efficiency analysis: PASSED\n");
     }
@@ -4145,7 +4139,7 @@ int multilruTest(int argc, char *argv[]) {
             .policy = MLRU_POLICY_COUNT,
             .maxCount = 1000,
         };
-        multilru *mlru = multilruNewWithConfig(&config);
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
 
         /* Simulate cache accesses */
         size_t hits = 0;
@@ -4184,7 +4178,6 @@ int multilruTest(int argc, char *argv[]) {
                    multilruLevelCount(mlru, i));
         }
 
-        multilruFree(mlru);
         printf("\nS4LRU effectiveness analysis: PASSED\n");
     }
 
@@ -4199,7 +4192,7 @@ int multilruTest(int argc, char *argv[]) {
             .maxWeight = 10000, /* 10GB cache */
             .enableWeights = true,
         };
-        multilru *mlru = multilruNewWithConfig(&config);
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
 
         /* Insert mix of large and small items */
         multilruPtr largeItems[20];
@@ -4250,7 +4243,6 @@ int multilruTest(int argc, char *argv[]) {
          * items should survive while cold large items get evicted */
         assert(smallSurvived > largeSurvived);
 
-        multilruFree(mlru);
         printf("\nweighted eviction effectiveness: PASSED\n");
     }
 
@@ -4259,7 +4251,8 @@ int multilruTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("stress - rapid insert/delete") {
-        multilru *mlru = multilruNewWithLevelsCapacity(7, 1000);
+        cleaner(multilruFree) multilru *mlru =
+            multilruNewWithLevelsCapacity(7, 1000);
 
         /* Rapid alternating insert/delete */
         int64_t startNs = timeUtilMonotonicNs();
@@ -4275,12 +4268,12 @@ int multilruTest(int argc, char *argv[]) {
         assert(multilruCount(mlru) == 0);
         assert(verifyInvariants(mlru, "rapid insert/delete"));
 
-        multilruFree(mlru);
         printf("stress - rapid insert/delete: PASSED\n");
     }
 
     TEST("stress - promote storm") {
-        multilru *mlru = multilruNewWithLevelsCapacity(7, 1000);
+        cleaner(multilruFree) multilru *mlru =
+            multilruNewWithLevelsCapacity(7, 1000);
 
         /* Insert entries */
         multilruPtr ptrs[1000];
@@ -4302,7 +4295,6 @@ int multilruTest(int argc, char *argv[]) {
 
         assert(verifyInvariants(mlru, "promote storm"));
 
-        multilruFree(mlru);
         printf("stress - promote storm: PASSED\n");
     }
 
@@ -4314,7 +4306,7 @@ int multilruTest(int argc, char *argv[]) {
             .maxCount = 100, /* Tiny cache */
             .enableWeights = true,
         };
-        multilru *mlru = multilruNewWithConfig(&config);
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
 
         /* Insert way more than capacity */
         int64_t startNs = timeUtilMonotonicNs();
@@ -4329,7 +4321,6 @@ int multilruTest(int argc, char *argv[]) {
         assert(multilruCount(mlru) <= 100);
         assert(verifyInvariants(mlru, "eviction pressure"));
 
-        multilruFree(mlru);
         printf("stress - eviction pressure: PASSED\n");
     }
 
@@ -4346,7 +4337,7 @@ int multilruTest(int argc, char *argv[]) {
             .policy = MLRU_POLICY_COUNT,
             .maxCount = 10, /* Small cache to force eviction */
         };
-        multilru *mlru = multilruNewWithConfig(&config);
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
 
         /* Reset static eviction tracker */
         testEvictCount = 0;
@@ -4384,7 +4375,6 @@ int multilruTest(int argc, char *argv[]) {
         }
         assert(testEvictCount == prevCount); /* No new callbacks */
 
-        multilruFree(mlru);
         printf("eviction workflow - callback notification: PASSED\n");
     }
 
@@ -4397,7 +4387,7 @@ int multilruTest(int argc, char *argv[]) {
             .policy = MLRU_POLICY_COUNT,
             .maxCount = 10,
         };
-        multilru *mlru = multilruNewWithConfig(&config);
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
 
         /* Disable auto-eviction */
         multilruSetAutoEvict(mlru, false);
@@ -4440,7 +4430,6 @@ int multilruTest(int argc, char *argv[]) {
         }
         assert(multilruCount(mlru) <= 10);
 
-        multilruFree(mlru);
         printf("eviction workflow - manual polling: PASSED\n");
     }
 
@@ -4453,7 +4442,7 @@ int multilruTest(int argc, char *argv[]) {
             .maxWeight = 1000, /* Max 1000 bytes */
             .enableWeights = true,
         };
-        multilru *mlru = multilruNewWithConfig(&config);
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
 
         /* Disable auto-eviction */
         multilruSetAutoEvict(mlru, false);
@@ -4478,7 +4467,6 @@ int multilruTest(int argc, char *argv[]) {
         assert(multilruTotalWeight(mlru) <= 1000);
         assert(multilruNeedsEviction(mlru) == false);
 
-        multilruFree(mlru);
         printf("eviction workflow - weight-based manual: PASSED\n");
     }
 
@@ -4492,7 +4480,7 @@ int multilruTest(int argc, char *argv[]) {
             .maxWeight = 500,
             .enableWeights = true,
         };
-        multilru *mlru = multilruNewWithConfig(&config);
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
         multilruSetAutoEvict(mlru, false);
 
         /* Insert 15 entries at 50 bytes each = 750 bytes total
@@ -4515,7 +4503,6 @@ int multilruTest(int argc, char *argv[]) {
         assert(multilruTotalWeight(mlru) <= 500);
         assert(multilruCount(mlru) <= 20);
 
-        multilruFree(mlru);
         printf("eviction workflow - hybrid policy: PASSED\n");
     }
 
@@ -4530,7 +4517,7 @@ int multilruTest(int argc, char *argv[]) {
             .policy = MLRU_POLICY_COUNT,
             .maxCount = 10,
         };
-        multilru *mlru = multilruNewWithConfig(&config);
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
 
         /* Fill to capacity */
         for (int i = 0; i < 10; i++) {
@@ -4551,7 +4538,6 @@ int multilruTest(int argc, char *argv[]) {
         assert(multilruCount(mlru) == 20);
         assert(multilruNeedsEviction(mlru) == false);
 
-        multilruFree(mlru);
         printf("resize - expand count limit: PASSED\n");
     }
 
@@ -4562,7 +4548,7 @@ int multilruTest(int argc, char *argv[]) {
             .policy = MLRU_POLICY_COUNT,
             .maxCount = 100,
         };
-        multilru *mlru = multilruNewWithConfig(&config);
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
         multilruSetAutoEvict(mlru, false); /* Manual mode for precise control */
 
         /* Fill to capacity */
@@ -4590,7 +4576,6 @@ int multilruTest(int argc, char *argv[]) {
         assert(multilruNeedsEviction(mlru) == false);
         assert(batches > 1); /* Verified batched eviction */
 
-        multilruFree(mlru);
         printf("resize - shrink count limit (gradual eviction): PASSED\n");
     }
 
@@ -4602,7 +4587,7 @@ int multilruTest(int argc, char *argv[]) {
             .maxWeight = 1000,
             .enableWeights = true,
         };
-        multilru *mlru = multilruNewWithConfig(&config);
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
 
         /* Fill to weight capacity */
         for (int i = 0; i < 10; i++) {
@@ -4622,7 +4607,6 @@ int multilruTest(int argc, char *argv[]) {
         assert(multilruTotalWeight(mlru) == 2000);
         assert(multilruNeedsEviction(mlru) == false);
 
-        multilruFree(mlru);
         printf("resize - expand weight limit: PASSED\n");
     }
 
@@ -4634,7 +4618,7 @@ int multilruTest(int argc, char *argv[]) {
             .maxWeight = 10000,
             .enableWeights = true,
         };
-        multilru *mlru = multilruNewWithConfig(&config);
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
         multilruSetAutoEvict(mlru, false);
 
         /* Fill to weight capacity */
@@ -4661,7 +4645,6 @@ int multilruTest(int argc, char *argv[]) {
         assert(multilruTotalWeight(mlru) <= 5000);
         assert(multilruNeedsEviction(mlru) == false);
 
-        multilruFree(mlru);
         printf("resize - shrink weight limit (gradual eviction): PASSED\n");
     }
 
@@ -4672,7 +4655,7 @@ int multilruTest(int argc, char *argv[]) {
             .policy = MLRU_POLICY_COUNT,
             .maxCount = 50,
         };
-        multilru *mlru = multilruNewWithConfig(&config);
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
         multilruSetAutoEvict(mlru, false);
 
         /* Initial fill */
@@ -4707,7 +4690,6 @@ int multilruTest(int argc, char *argv[]) {
         }
         assert(multilruCount(mlru) <= 40);
 
-        multilruFree(mlru);
         printf("resize - multiple resize operations: PASSED\n");
     }
 
@@ -4718,7 +4700,7 @@ int multilruTest(int argc, char *argv[]) {
             .policy = MLRU_POLICY_COUNT,
             .maxCount = 100,
         };
-        multilru *mlru = multilruNewWithConfig(&config);
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
         multilruSetAutoEvict(mlru, false);
 
         /* Fill */
@@ -4751,7 +4733,6 @@ int multilruTest(int argc, char *argv[]) {
 
         assert(multilruCount(mlru) <= 50);
 
-        multilruFree(mlru);
         printf("resize - progress tracking: PASSED\n");
     }
 
@@ -4766,7 +4747,7 @@ int multilruTest(int argc, char *argv[]) {
             .policy = MLRU_POLICY_COUNT,
             .maxCount = 50,
         };
-        multilru *mlru = multilruNewWithConfig(&config);
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
         multilruSetAutoEvict(mlru, false);
 
         multilruStats stats;
@@ -4831,7 +4812,6 @@ int multilruTest(int argc, char *argv[]) {
         assert(stats.nextFresh == 8 + 20);
         assert(stats.freeCount == 2); /* 5 - 3 = 2 left */
 
-        multilruFree(mlru);
         printf("stats - basic counters: PASSED\n");
     }
 
@@ -4842,7 +4822,7 @@ int multilruTest(int argc, char *argv[]) {
             .policy = MLRU_POLICY_COUNT,
             .maxCount = 10,
         };
-        multilru *mlru = multilruNewWithConfig(&config);
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
         multilruSetAutoEvict(mlru, false);
 
         /* Insert 10 entries */
@@ -4882,7 +4862,6 @@ int multilruTest(int argc, char *argv[]) {
         /* Should have at least one eviction */
         assert(stats.evictions > evictionsBefore);
 
-        multilruFree(mlru);
         printf("stats - eviction and demotion tracking: PASSED\n");
     }
 
@@ -4894,7 +4873,7 @@ int multilruTest(int argc, char *argv[]) {
             .maxWeight = 50000,
             .enableWeights = true,
         };
-        multilru *mlru = multilruNewWithConfig(&config);
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
 
         multilruStats stats;
         multilruGetStats(mlru, &stats);
@@ -4913,7 +4892,6 @@ int multilruTest(int argc, char *argv[]) {
         assert(stats.maxWeight == 100000);
         assert(stats.autoEvict == false);
 
-        multilruFree(mlru);
         printf("stats - configuration snapshot: PASSED\n");
     }
 
@@ -4925,7 +4903,7 @@ int multilruTest(int argc, char *argv[]) {
             .maxWeight = 1000,
             .enableWeights = true,
         };
-        multilru *mlru = multilruNewWithConfig(&config);
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
         multilruSetAutoEvict(mlru, false);
 
         /* Insert weighted entries */
@@ -4939,7 +4917,6 @@ int multilruTest(int argc, char *argv[]) {
         assert(stats.totalWeight == 1000);
         assert(stats.inserts == 10);
 
-        multilruFree(mlru);
         printf("stats - weighted operations: PASSED\n");
     }
 
@@ -4954,7 +4931,7 @@ int multilruTest(int argc, char *argv[]) {
             .policy = MLRU_POLICY_SIZE,
             .enableWeights = true,
         };
-        multilru *mlru = multilruNewWithConfig(&config);
+        cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
 
         multilruPtr held[2];
         held[0] = multilruInsertWeighted(mlru, 5);
@@ -4968,8 +4945,6 @@ int multilruTest(int argc, char *argv[]) {
         if (fresh != 0 && !multilruIsPopulated(mlru, fresh)) {
             ERR("Insert returned freed handle %" PRIu64, (uint64_t)fresh);
         }
-
-        multilruFree(mlru);
     }
 
     TEST_FINAL_RESULT;

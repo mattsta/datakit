@@ -14,15 +14,18 @@ struct multimapAtom {
  * ==================================================================== */
 void multimapAtomInit(multimapAtom *ma) {
     /* 3-map of: {ID, Key, Refcount} */
+    /* @own: container; free=multimapAtomFree */
     ma->mapAtomForward = multimapNewLimit(3, FLEX_CAP_LEVEL_512);
 
     /* 1-map of ID, but SORTED BY 'KEY'.  Basically, a self-sorting list. */
+    /* @own: container; free=multimapAtomFree */
     ma->mapAtomReverse = multimapNewLimit(1, FLEX_CAP_LEVEL_512);
 
     ma->highest = 0;
 }
 
 multimapAtom *multimapAtomNew(void) {
+    /* @own: caller; free=multimapAtomFree */
     multimapAtom *ma = zcalloc(1, sizeof(*ma));
     multimapAtomInit(ma);
     return ma;
@@ -30,6 +33,7 @@ multimapAtom *multimapAtomNew(void) {
 
 #if 0
 multimapAtom *multimapAtomNewCompress(mflexState *state) {
+    /* @own: caller; free=multimapAtomFree */
     multimapAtom *ma = zcalloc(1, sizeof(*ma));
     ma->mapAtomForward = multimapNewCompress(3, 4);
     ma->mapAtomReverse = multimapNewCompress(1, 4);

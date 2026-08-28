@@ -4,11 +4,14 @@
  */
 
 #include "intsetP.h"
+#include "../cleaner.h"
 #include "../datakit.h"
 #include "../persist.h"
 
 #include <string.h>
 #include <unistd.h>
+
+defcleanerName(intsetP *, zfree, IntsetP);
 
 /* ============================================================================
  * Lifecycle
@@ -20,31 +23,31 @@ intsetP *intsetNewP(persistCtx *ctx) {
         return NULL;
     }
 
-    intsetP *is = zcalloc(1, sizeof(*is));
+    cleanerName(zfree, IntsetP) intsetP *is = zcalloc(1, sizeof(*is));
     is->ctx = ctx;
 
     /* Create underlying intset */
+    /* @own: container; free=intsetFree */
     is->is = intsetNew();
     if (!is->is) {
-        zfree(is);
         return NULL;
     }
 
     /* Initialize persistence context for intset type */
     if (!persistCtxInitForType(ctx, &persistOpsIntset)) {
         intsetFree(is->is);
-        zfree(is);
         return NULL;
     }
 
     /* Save initial snapshot */
     if (!persistCtxSaveSnapshot(ctx, is->is, &persistOpsIntset)) {
         intsetFree(is->is);
-        zfree(is);
         return NULL;
     }
 
-    return is;
+    intsetP *out = is;
+    is = NULL;
+    return out;
 }
 
 intsetP *intsetOpenP(persistCtx *ctx) {
@@ -63,6 +66,7 @@ intsetP *intsetOpenP(persistCtx *ctx) {
         return NULL;
     }
 
+    /* @own: caller; free=intsetCloseP */
     intsetP *is = zcalloc(1, sizeof(*is));
     is->ctx = ctx;
     is->is = recovered;

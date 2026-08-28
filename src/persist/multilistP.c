@@ -4,12 +4,25 @@
  */
 
 #include "multilistP.h"
+#include "../cleaner.h"
 #include "../datakit.h"
 #include "../persist.h"
 
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+
+defcleanerName(multilistP *, zfree, MultilistP);
+
+/* Scope-exit cleaner for the fixed 2-slot mflex state array the read-only
+ * iterator requires: frees whichever slots were created. */
+static DK_FN_UNUSED void freeMflexStates2_cleanup(mflexState *(*arr)[2]) {
+    for (size_t i = 0; i < 2; i++) {
+        if ((*arr)[i]) {
+            mflexStateFree((*arr)[i]);
+        }
+    }
+}
 
 /* ============================================================================
  * Lifecycle
@@ -22,23 +35,23 @@ multilistP *multilistNewP(persistCtx *ctx, flexCapSizeLimit limit,
         return NULL;
     }
 
-    multilistP *ml = zcalloc(1, sizeof(*ml));
+    cleanerName(zfree, MultilistP) multilistP *ml = zcalloc(1, sizeof(*ml));
     ml->ctx = ctx;
     ml->limit = limit;
     ml->depth = depth;
 
     /* Create mflex state for compressed node operations */
+    /* @own: container; free=mflexStateFree */
     ml->state = mflexStateCreate();
     if (!ml->state) {
-        zfree(ml);
         return NULL;
     }
 
     /* Create underlying multilist */
+    /* @own: container; free=multilistFree */
     ml->ml = multilistNew(limit, depth);
     if (!ml->ml) {
         mflexStateFree(ml->state);
-        zfree(ml);
         return NULL;
     }
 
@@ -46,7 +59,6 @@ multilistP *multilistNewP(persistCtx *ctx, flexCapSizeLimit limit,
     if (!persistCtxInitForType(ctx, &persistOpsMultilist)) {
         multilistFree(ml->ml);
         mflexStateFree(ml->state);
-        zfree(ml);
         return NULL;
     }
 
@@ -54,11 +66,12 @@ multilistP *multilistNewP(persistCtx *ctx, flexCapSizeLimit limit,
     if (!persistCtxSaveSnapshot(ctx, ml->ml, &persistOpsMultilist)) {
         multilistFree(ml->ml);
         mflexStateFree(ml->state);
-        zfree(ml);
         return NULL;
     }
 
-    return ml;
+    multilistP *out = ml;
+    ml = NULL;
+    return out;
 }
 
 multilistP *multilistOpenP(persistCtx *ctx) {
@@ -77,7 +90,7 @@ multilistP *multilistOpenP(persistCtx *ctx) {
         return NULL;
     }
 
-    multilistP *ml = zcalloc(1, sizeof(*ml));
+    cleanerName(zfree, MultilistP) multilistP *ml = zcalloc(1, sizeof(*ml));
     ml->ctx = ctx;
     ml->ml = recovered;
     /* Note: limit and depth not recoverable from snapshot, use defaults */
@@ -85,14 +98,16 @@ multilistP *multilistOpenP(persistCtx *ctx) {
     ml->depth = 0;
 
     /* Create mflex state for compressed node operations */
+    /* @own: container; free=mflexStateFree */
     ml->state = mflexStateCreate();
     if (!ml->state) {
         multilistFree(ml->ml);
-        zfree(ml);
         return NULL;
     }
 
-    return ml;
+    multilistP *out = ml;
+    ml = NULL;
+    return out;
 }
 
 void multilistCloseP(multilistP *ml) {
@@ -282,6 +297,7 @@ void multilistResetP(multilistP *ml) {
 
     /* Update in-memory - free and recreate */
     multilistFree(ml->ml);
+    /* @own: container; free=multilistFree */
     ml->ml = multilistNew(ml->limit, ml->depth);
 
     /* Check compaction threshold */
@@ -468,6 +484,7 @@ int multilistPTest(int argc, char *argv[]) {
         }
 
         /* Verify all elements have correct sequential values */
+        __attribute__((cleanup(freeMflexStates2_cleanup)))
         mflexState *states[2] = {mflexStateCreate(), mflexStateCreate()};
         multilistIterator iter;
         multilistIteratorInitForwardReadOnlyP(ml, states, &iter);
@@ -492,8 +509,6 @@ int multilistPTest(int argc, char *argv[]) {
             count++;
         }
         multilistIteratorRelease(&iter);
-        mflexStateFree(states[0]);
-        mflexStateFree(states[1]);
 
         if (count != 150) {
             ERR("Iterator returned %d elements, expected 150", count);

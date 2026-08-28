@@ -134,12 +134,16 @@ void multiarrayFree(multiarray *m) {
 
 #ifdef DATAKIT_TEST
 
+#include "cleaner.h"
 #include "ctest.h"
 
 typedef struct s16 {
     int64_t a;
     int64_t b;
 } s16;
+
+defcleanerName(s16 *, zfree, S16);
+defcleaner(multiarray *, multiarrayFree);
 
 int multiarrayTest(int argc, char *argv[]) {
     (void)argc;
@@ -264,18 +268,18 @@ int multiarrayTest(int argc, char *argv[]) {
 
     printf("Testing container...\n");
     TEST("create") {
-        multiarray *s = multiarrayNew(sizeof(s16), rowMax);
+        cleaner(multiarrayFree) multiarray *s =
+            multiarrayNew(sizeof(s16), rowMax);
         assert(s);
 
         int idx = 0;
         s16 _s = {0};
         multiarrayInsert(&s, idx, &_s);
-
-        multiarrayFree(s);
     }
 
     TEST("insert before") {
-        multiarray *s = multiarrayNew(sizeof(s16), rowMax);
+        cleaner(multiarrayFree) multiarray *s =
+            multiarrayNew(sizeof(s16), rowMax);
         assert(s);
 
         s16 _s = {0};
@@ -289,12 +293,11 @@ int multiarrayTest(int argc, char *argv[]) {
             assert(((s16 *)multiarrayGet(s, idx))->a == idx);
             assert(((s16 *)multiarrayGet(s, idx))->b == idx);
         }
-
-        multiarrayFree(s);
     }
 
     TEST("insert before constant zero") {
-        multiarray *s = multiarrayNew(sizeof(s16), rowMax);
+        cleaner(multiarrayFree) multiarray *s =
+            multiarrayNew(sizeof(s16), rowMax);
         assert(s);
 
         s16 _s = {0};
@@ -308,24 +311,22 @@ int multiarrayTest(int argc, char *argv[]) {
             assert(((s16 *)multiarrayGet(s, idx))->a == globalMax - 1 - idx);
             assert(((s16 *)multiarrayGet(s, idx))->b == globalMax - 1 - idx);
         }
-
-        multiarrayFree(s);
     }
 
     TEST("insert before randoms") {
-        multiarray *s = multiarrayNew(sizeof(s16), rowMax);
+        cleaner(multiarrayFree) multiarray *s =
+            multiarrayNew(sizeof(s16), rowMax);
         assert(s);
 
         for (int idx = 0; idx < globalMax; idx++) {
             s16 _s = {.a = idx, .b = idx};
             multiarrayInsert(&s, rand() % (idx + 1), &_s);
         }
-
-        multiarrayNativeFree(s);
     }
 
     TEST("insert after") {
-        multiarray *s = multiarrayNew(sizeof(s16), rowMax);
+        cleaner(multiarrayFree) multiarray *s =
+            multiarrayNew(sizeof(s16), rowMax);
         assert(s);
 
         s16 _s = {0};
@@ -340,8 +341,6 @@ int multiarrayTest(int argc, char *argv[]) {
             assert(((s16 *)multiarrayGet(s, idx + 1))->a == idx);
             assert(((s16 *)multiarrayGet(s, idx + 1))->b == idx);
         }
-
-        multiarrayFree(s);
     }
 
     /* ========================================
@@ -350,13 +349,14 @@ int multiarrayTest(int argc, char *argv[]) {
     printf("\n=== MULTIARRAY FUZZ TESTING ===\n\n");
 
     TEST("FUZZ: random insertions with oracle verification") {
-        multiarray *mar = multiarrayNew(sizeof(s16), rowMax);
+        cleaner(multiarrayFree) multiarray *mar =
+            multiarrayNew(sizeof(s16), rowMax);
 
         srand(12345);
         const int numOps = 10000;
 
         /* Oracle is a simple array */
-        s16 *oracle = zmalloc(numOps * sizeof(s16));
+        cleanerName(zfree, S16) s16 *oracle = zmalloc(numOps * sizeof(s16));
         int oracleCount = 0;
 
         for (int i = 0; i < numOps; i++) {
@@ -402,12 +402,11 @@ int multiarrayTest(int argc, char *argv[]) {
         }
 
         printf("  %d random insertions, %d mismatches\n", numOps, mismatches);
-        zfree(oracle);
-        multiarrayFree(mar);
     }
 
     TEST("FUZZ: tier transitions - small to medium to large") {
-        multiarray *mar = multiarrayNew(sizeof(s16), rowMax);
+        cleaner(multiarrayFree) multiarray *mar =
+            multiarrayNew(sizeof(s16), rowMax);
 
         const int targetCount =
             rowMax * 4; /* Force multiple tier transitions */
@@ -444,7 +443,6 @@ int multiarrayTest(int argc, char *argv[]) {
 
         printf("  inserted %d elements through tier transitions\n",
                targetCount);
-        multiarrayFree(mar);
     }
 
     TEST("Count/Bytes: exact across all tiers, inserts and deletes") {
@@ -452,7 +450,8 @@ int multiarrayTest(int argc, char *argv[]) {
          * at rowMax ELEMENTS, but Medium upgrades to Large only at
          * rowMax NODES (rowMax^2 elements) — with 8 that's 8 and 64. */
         const int tinyRowMax = 8;
-        multiarray *mar = multiarrayNew(sizeof(s16), tinyRowMax);
+        cleaner(multiarrayFree) multiarray *mar =
+            multiarrayNew(sizeof(s16), tinyRowMax);
         const int targetCount = tinyRowMax * tinyRowMax * 2;
 
         /* Empty container reports zero */
@@ -504,11 +503,11 @@ int multiarrayTest(int argc, char *argv[]) {
 
         printf("  Count/Bytes verified across %d inserts + deletes\n",
                targetCount);
-        multiarrayFree(mar);
     }
 
     TEST("FUZZ: insert at head repeatedly") {
-        multiarray *mar = multiarrayNew(sizeof(s16), rowMax);
+        cleaner(multiarrayFree) multiarray *mar =
+            multiarrayNew(sizeof(s16), rowMax);
 
         const int count = 5000;
 
@@ -529,11 +528,11 @@ int multiarrayTest(int argc, char *argv[]) {
         }
 
         printf("  %d head insertions verified\n", count);
-        multiarrayFree(mar);
     }
 
     TEST("FUZZ: insert at tail repeatedly") {
-        multiarray *mar = multiarrayNew(sizeof(s16), rowMax);
+        cleaner(multiarrayFree) multiarray *mar =
+            multiarrayNew(sizeof(s16), rowMax);
 
         const int count = 5000;
 
@@ -553,11 +552,11 @@ int multiarrayTest(int argc, char *argv[]) {
         }
 
         printf("  %d tail insertions verified\n", count);
-        multiarrayFree(mar);
     }
 
     TEST("FUZZ: alternating head/tail insertions") {
-        multiarray *mar = multiarrayNew(sizeof(s16), rowMax);
+        cleaner(multiarrayFree) multiarray *mar =
+            multiarrayNew(sizeof(s16), rowMax);
 
         const int count = 4000;
         int currentCount = 0;
@@ -581,7 +580,6 @@ int multiarrayTest(int argc, char *argv[]) {
         }
 
         printf("  %d alternating insertions verified\n", count);
-        multiarrayFree(mar);
     }
 
     TEST("FUZZ: native API with oracle") {
@@ -592,7 +590,7 @@ int multiarrayTest(int argc, char *argv[]) {
         const int numOps = 5000;
 
         /* Oracle */
-        s16 *oracle = zmalloc(numOps * sizeof(s16));
+        cleanerName(zfree, S16) s16 *oracle = zmalloc(numOps * sizeof(s16));
         int oracleCount = 0;
 
         for (int i = 0; i < numOps; i++) {
@@ -627,12 +625,12 @@ int multiarrayTest(int argc, char *argv[]) {
 
         printf("  %d native API insertions, %d mismatches\n", numOps,
                mismatches);
-        zfree(oracle);
         multiarrayNativeFree(s);
     }
 
     TEST("FUZZ: stress test - 100K insertions") {
-        multiarray *mar = multiarrayNew(sizeof(s16), rowMax);
+        cleaner(multiarrayFree) multiarray *mar =
+            multiarrayNew(sizeof(s16), rowMax);
 
         srand(88888);
         const int numOps = 100000;
@@ -667,7 +665,6 @@ int multiarrayTest(int argc, char *argv[]) {
         }
 
         printf("  100K insertions completed, sampled %d indices\n", verified);
-        multiarrayFree(mar);
     }
 
     printf("\n=== All multiarray fuzz tests completed! ===\n\n");

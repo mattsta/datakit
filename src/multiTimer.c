@@ -1,7 +1,13 @@
 #include "multiTimer.h"
 #include "multiTimerInternal.h"
 
+#include "cleaner.h"
 #include "timeUtil.h"
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleaner(multiTimer *, multiTimerFree);
+defcleanerName(uint64_t *, zfree, U64);
+defcleanerName(bool *, zfree, Bools);
 
 typedef uint64_t multiTimerAdjustedUs;
 
@@ -26,8 +32,11 @@ bool multiTimerInit(multiTimer *t) {
     t->context = MULTI_TIMER_CONTEXT_USER;
     t->timersInclusiveOfTimerRuntime = false;
 
+    /* @own: container; free=multimapFree */
     t->scheduled = multimapNew(ELEMENTS_PER_EVENT);
+    /* @own: container; free=multimapFree */
     t->pendingScheduling = multimapNew(ELEMENTS_PER_EVENT);
+    /* @own: container; free=multimapFree */
     t->stopEvents = multimapNew(1);
 
     if (!t->scheduled || !t->pendingScheduling || !t->stopEvents) {
@@ -74,14 +83,15 @@ void multiTimerFree(multiTimer *t) {
 }
 
 multiTimer *multiTimerNew(void) {
-    multiTimer *t = zcalloc(1, sizeof(*t));
+    cleaner(multiTimerFree) multiTimer *t = zcalloc(1, sizeof(*t));
 
     if (!multiTimerInit(t)) {
-        multiTimerFree(t);
         return NULL;
     }
 
-    return t;
+    multiTimer *out = t;
+    t = NULL;
+    return out;
 }
 
 static multiTimerSystemMonotonicUs
@@ -401,8 +411,8 @@ static void reconcileStops(multiTimer *t) {
 
     const size_t stopCount = multimapCount(t->stopEvents);
 
-    uint64_t *stopIds = NULL;
-    bool *stopSeen = NULL;
+    cleanerName(zfree, U64) uint64_t *stopIds = NULL;
+    cleanerName(zfree, Bools) bool *stopSeen = NULL;
     if (stopCount) {
         stopIds = zmalloc(stopCount * sizeof(*stopIds));
         stopSeen = zcalloc(stopCount, sizeof(*stopSeen));
@@ -465,8 +475,6 @@ static void reconcileStops(multiTimer *t) {
 
     if (stopCount) {
         stopBoundsAfterRemoval(t);
-        zfree(stopIds);
-        zfree(stopSeen);
     }
 
     t->stopPending = liveStops;

@@ -14,6 +14,13 @@
 
 defcleanerName(databox *, zfree, Databoxes);
 defcleanerName(databox **, zfree, DataboxPtrs);
+defcleanerName(int64_t *, zfree, Int64);
+defcleanerName(int32_t *, zfree, Int32);
+defcleanerName(uint8_t *, zfree, Bytes);
+defcleanerName(char *, zfree, Chars);
+defcleanerName(char **, zfree, CharPtrs);
+defcleaner(multimap *, multimapFree);
+defcleaner(multimapSmall *, multimapSmallFree);
 
 #if MULTIMAP_INLINE
 #include "multimapFull.c"
@@ -134,6 +141,7 @@ defcleanerName(databox **, zfree, DataboxPtrs);
 multimap *multimapNew(multimapElements elementsPerEntry) {
     /* Note: You can only have up to 64k 'elementsPerEntry'
      *       (which is overkill anyway) */
+    /* @own: caller; free=multimapFree */
     multimapSmall *created = multimapSmallNew(elementsPerEntry, false);
     created = SET_COMPRESS_DEPTH_LIMIT(created, false, FLEX_CAP_LEVEL_2048);
     return MULTIMAP_TAG_(created, MULTIMAP_TYPE_SMALL);
@@ -141,6 +149,7 @@ multimap *multimapNew(multimapElements elementsPerEntry) {
 
 multimap *multimapNewLimit(multimapElements elementsPerEntry,
                            const flexCapSizeLimit limit) {
+    /* @own: caller; free=multimapFree */
     multimapSmall *created = multimapSmallNew(elementsPerEntry, false);
     created = SET_COMPRESS_DEPTH_LIMIT(created, false, limit);
     return MULTIMAP_TAG_(created, MULTIMAP_TYPE_SMALL);
@@ -148,12 +157,14 @@ multimap *multimapNewLimit(multimapElements elementsPerEntry,
 
 multimap *multimapNewCompress(multimapElements elementsPerEntry,
                               const flexCapSizeLimit limit) {
+    /* @own: caller; free=multimapFree */
     multimap *created = (multimap *)multimapSmallNew(elementsPerEntry, false);
     created = SET_COMPRESS_DEPTH_LIMIT(created, true, limit);
     return MULTIMAP_TAG_(created, MULTIMAP_TYPE_SMALL);
 }
 
 multimap *multimapSetNew(multimapElements elementsPerEntry) {
+    /* @own: caller; free=multimapFree */
     multimap *created = (multimap *)multimapSmallNew(elementsPerEntry, true);
     created = SET_COMPRESS_DEPTH_LIMIT(created, false, FLEX_CAP_LEVEL_2048);
     return MULTIMAP_TAG_(created, MULTIMAP_TYPE_SMALL);
@@ -162,6 +173,7 @@ multimap *multimapSetNew(multimapElements elementsPerEntry) {
 multimap *multimapNewConfigure(multimapElements elementsPerEntry,
                                const bool isSet, const bool compress,
                                const flexCapSizeLimit sizeLimit) {
+    /* @own: caller; free=multimapFree */
     multimap *created = (multimap *)multimapSmallNew(elementsPerEntry, isSet);
     created = SET_COMPRESS_DEPTH_LIMIT(created, compress, sizeLimit);
     return MULTIMAP_TAG_(created, MULTIMAP_TYPE_SMALL);
@@ -255,10 +267,13 @@ multimap *multimapCopy(const multimap *m) {
 
     const multimapType type = multimapType_(m);
     if (type == MULTIMAP_TYPE_SMALL) {
+        /* @own: caller; free=multimapFree */
         copy = (multimap *)multimapSmallCopy(mms(m));
     } else if (type == MULTIMAP_TYPE_MEDIUM) {
+        /* @own: caller; free=multimapFree */
         copy = (multimap *)multimapMediumCopy(mmm(m));
     } else {
+        /* @own: caller; free=multimapFree */
         copy = (multimap *)multimapFullCopy(mmf(m));
     }
 
@@ -761,8 +776,10 @@ void multimapIntersectKeys(multimap **restrict dst,
     databox *eaStack[MULTIMAP_STACK_THRESHOLD];
     databox *ebStack[MULTIMAP_STACK_THRESHOLD];
 
-    databox *eaHeap_ = NULL, *ebHeap_ = NULL;
-    databox **eaHeap = NULL, **ebHeap = NULL;
+    cleanerName(zfree, Databoxes) databox *eaHeap_ = NULL;
+    cleanerName(zfree, Databoxes) databox *ebHeap_ = NULL;
+    cleanerName(zfree, DataboxPtrs) databox **eaHeap = NULL;
+    cleanerName(zfree, DataboxPtrs) databox **ebHeap = NULL;
 
     databox *ea_, *eb_;
     databox **ea, **eb;
@@ -820,15 +837,6 @@ void multimapIntersectKeys(multimap **restrict dst,
             foundA = multimapIteratorNext(a, ea);
             foundB = multimapIteratorNext(b, eb);
         }
-    }
-
-    if (eaHeap_) {
-        zfree(eaHeap_);
-        zfree(eaHeap);
-    }
-    if (ebHeap_) {
-        zfree(ebHeap_);
-        zfree(ebHeap);
     }
 }
 
@@ -902,8 +910,8 @@ void multimapCopyKeys(multimap **restrict dst, const multimap *restrict src) {
     /* Use stack for small element counts, heap for larger to avoid overflow */
     databox bsrcStack_[MULTIMAP_STACK_THRESHOLD];
     databox *bsrcStack[MULTIMAP_STACK_THRESHOLD];
-    databox *bsrcHeap_ = NULL;
-    databox **bsrcHeap = NULL;
+    cleanerName(zfree, Databoxes) databox *bsrcHeap_ = NULL;
+    cleanerName(zfree, DataboxPtrs) databox **bsrcHeap = NULL;
 
     databox *bsrc_;
     databox **bsrc;
@@ -924,11 +932,6 @@ void multimapCopyKeys(multimap **restrict dst, const multimap *restrict src) {
 
     while (multimapIteratorNext(&msrc, bsrc)) {
         multimapInsert(dst, (const databox **)&bsrc[0]);
-    }
-
-    if (bsrcHeap_) {
-        zfree(bsrcHeap_);
-        zfree(bsrcHeap);
     }
 }
 
@@ -1063,13 +1066,14 @@ int multimapTest(int argc, char *argv[]) {
     int err = 0;
 
     TEST("small: create...") {
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_2048);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_2048);
         multimapReport(m);
-        multimapFree(m);
     }
 
     TEST("small: insert / lookup / exists / delete / type check...") {
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_2048);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_2048);
         assert(multimapType_(m) == MULTIMAP_TYPE_SMALL);
 
         databox key = databoxNewSigned(3);
@@ -1097,13 +1101,13 @@ int multimapTest(int argc, char *argv[]) {
 
         assert(multimapType_(m) == MULTIMAP_TYPE_SMALL);
         multimapReport(m);
-        multimapFree(m);
     }
 
     /* Regression test for mapIsSet inversion bug: inserting same key with
      * different value should replace, not create a duplicate entry. */
     TEST("key replacement regression (mapIsSet fix)...") {
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_2048);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_2048);
 
         /* Insert key=100, val=200 */
         databox key1 = databoxNewSigned(100);
@@ -1142,14 +1146,13 @@ int multimapTest(int argc, char *argv[]) {
         assert(!replaced);
         (void)replaced;
         assert(multimapCount(m) == 2); /* Now we have 2 entries */
-
-        multimapFree(m);
     }
 
     /* Test key replacement works across all multimap representations */
     TEST("key replacement across Small/Medium/Full representations...") {
         /* Use a small max size to force transitions between representations */
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_64);
 
         /* Insert many keys to transition through Small->Medium->Full */
         for (int i = 0; i < 1000; i++) {
@@ -1197,8 +1200,6 @@ int multimapTest(int argc, char *argv[]) {
                 assert(databoxEqual(&expected, &result));
             }
         }
-
-        multimapFree(m);
     }
 
     TEST("integrity: FieldIncr width sweep re-verifies middles + rangeBoxes") {
@@ -1214,8 +1215,10 @@ int multimapTest(int argc, char *argv[]) {
         const size_t nDeltas = sizeof(deltas) / sizeof(*deltas);
 
         for (int count = 4; count <= 1024; count *= 4) {
-            multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_64);
-            int64_t *shadow = zcalloc(count, sizeof(*shadow));
+            cleaner(multimapFree) multimap *m =
+                multimapNewLimit(2, FLEX_CAP_LEVEL_64);
+            cleanerName(zfree, Int64) int64_t *shadow =
+                zcalloc(count, sizeof(*shadow));
 
             for (int i = 0; i < count; i++) {
                 char keyBuf[32];
@@ -1286,9 +1289,6 @@ int multimapTest(int argc, char *argv[]) {
             if (count == 1024) {
                 assert(multimapType_(m) == MULTIMAP_TYPE_FULL);
             }
-
-            zfree(shadow);
-            multimapFree(m);
         }
     }
 
@@ -1301,7 +1301,8 @@ int multimapTest(int argc, char *argv[]) {
         const size_t nLens = sizeof(lens) / sizeof(*lens);
         const int count = 256;
 
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_64);
         for (int i = 0; i < count; i++) {
             char keyBuf[32];
             snprintf(keyBuf, sizeof(keyBuf), "key%05d", i);
@@ -1313,7 +1314,7 @@ int multimapTest(int argc, char *argv[]) {
 
         assert(multimapType_(m) == MULTIMAP_TYPE_FULL);
 
-        uint8_t *buf = zmalloc(4096);
+        cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(4096);
         for (size_t L = 0; L < nLens; L++) {
             const size_t len = lens[L];
             memset(buf, (int)('a' + (len % 26)), len);
@@ -1377,9 +1378,6 @@ int multimapTest(int argc, char *argv[]) {
                 assert(result.len == resizeTo[L]);
             }
         }
-
-        zfree(buf);
-        multimapFree(m);
     }
 
     TEST("ProcessUntil: wide rows (> 16 elements) use a real heap "
@@ -1387,7 +1385,7 @@ int multimapTest(int argc, char *argv[]) {
         /* elementsPerEntry > 16 forces the heap-elements path; every
          * element pointer must be populated and readable. */
         const multimapElements epe = 20;
-        multimap *m = multimapNew(epe);
+        cleaner(multimapFree) multimap *m = multimapNew(epe);
 
         int64_t expectSum = 0;
         for (int row = 0; row < 3; row++) {
@@ -1415,13 +1413,12 @@ int multimapTest(int argc, char *argv[]) {
                 check.sum, expectSum);
             assert(check.sum == expectSum);
         }
-
-        multimapFree(m);
     }
 
     TEST("EntryResize/EntryReplace + ByPosition: key-level and "
          "positional row access") {
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_64);
         for (int i = 0; i < 300; i++) {
             char keyBuf[32];
             snprintf(keyBuf, sizeof(keyBuf), "key%05d", i);
@@ -1491,8 +1488,6 @@ int multimapTest(int argc, char *argv[]) {
         assert(multimapLookupByPosition(m, 150, row));
         assert(rv.data.i != midVal);
         assert(multimapCount(m) == 297);
-
-        multimapFree(m);
     }
 
     TEST("ByPosition: every position addressable across all tiers") {
@@ -1500,7 +1495,8 @@ int multimapTest(int argc, char *argv[]) {
          * assert every position (both sign conventions) returns the
          * exact expected row.  Values are keyed to insertion order so a
          * positional miss or misroute is a value mismatch. */
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_64);
         int inserted = 0;
         multimapType lastType = MULTIMAP_TYPE_SMALL;
         bool sawSmall = false;
@@ -1572,7 +1568,6 @@ int multimapTest(int argc, char *argv[]) {
         }
 
         assert(!multimapDeleteByPosition(&m, 0));
-        multimapFree(m);
     }
 
     TEST("FieldIncr: tier-direct calls hit + miss (no crash, miss == 0)") {
@@ -1580,7 +1575,8 @@ int multimapTest(int argc, char *argv[]) {
 
         /* Small tier: direct call */
         {
-            multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_64);
+            cleaner(multimapFree) multimap *m =
+                multimapNewLimit(2, FLEX_CAP_LEVEL_64);
             for (int i = 0; i < 4; i++) {
                 char keyBuf[32];
                 snprintf(keyBuf, sizeof(keyBuf), "key%05d", i);
@@ -1598,12 +1594,12 @@ int multimapTest(int argc, char *argv[]) {
             assert(multimapSmallFieldIncr(mms(m), &missing, 1, 5) == 0);
             assert(multimapFieldIncr(&m, &missing, 1, 5) == 0);
             multimapVerify(m);
-            multimapFree(m);
         }
 
         /* Medium then Full tiers: force upgrades, direct call each */
         {
-            multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_64);
+            cleaner(multimapFree) multimap *m =
+                multimapNewLimit(2, FLEX_CAP_LEVEL_64);
             int i = 0;
             while (multimapType_(m) == MULTIMAP_TYPE_SMALL && i < 5000) {
                 char keyBuf[32];
@@ -1639,7 +1635,6 @@ int multimapTest(int argc, char *argv[]) {
             multimapVerify(m);
             assert(multimapFullFieldIncr(mmf(m), &missing, 1, 5) == 0);
             multimapVerify(m);
-            multimapFree(m);
         }
     }
 
@@ -1650,7 +1645,7 @@ int multimapTest(int argc, char *argv[]) {
         int i = 0;
         for (size_t maxIdx = 0; maxIdx < flexOptimizationSizeLimits; maxIdx++) {
             flexCapSizeLimit maxSize = flexOptimizationSizeLimit[maxIdx];
-            multimap *m = multimapNewLimit(2, maxIdx);
+            cleaner(multimapFree) multimap *m = multimapNewLimit(2, maxIdx);
             int32_t pairs = 1 << 17;
             TEST_DESC("%d bytes max with %d k/v pairs...", maxSize, pairs) {
                 TIME_INIT;
@@ -1673,7 +1668,6 @@ int multimapTest(int argc, char *argv[]) {
 
             multimapReport(m);
             multimapVerify(m);
-            multimapFree(m);
         }
     }
 
@@ -1684,7 +1678,8 @@ int multimapTest(int argc, char *argv[]) {
          "/ type "
          "check...") {
         for (int32_t i = 0; i < 4096; i++) {
-            multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_2048);
+            cleaner(multimapFree) multimap *m =
+                multimapNewLimit(2, FLEX_CAP_LEVEL_2048);
             TEST_DESC("%d k/v pairs - inserting...", i) {
                 TIME_INIT;
                 for (int32_t j = 0; j < i; j++) {
@@ -1768,7 +1763,6 @@ int multimapTest(int argc, char *argv[]) {
             multimapReport(m);
             multimapVerify(m);
 
-            multimapFree(m);
             printf("\n");
         }
     }
@@ -1777,7 +1771,8 @@ int multimapTest(int argc, char *argv[]) {
          "type "
          "check...") {
         for (int32_t i = 0; i < 4096; i++) {
-            multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_2048);
+            cleaner(multimapFree) multimap *m =
+                multimapNewLimit(2, FLEX_CAP_LEVEL_2048);
             TEST_DESC("%d k/v pairs - inserting...", i) {
                 TIME_INIT;
                 for (int32_t j = 0; j < i; j++) {
@@ -1923,7 +1918,6 @@ int multimapTest(int argc, char *argv[]) {
             multimapReport(m);
             multimapVerify(m);
 
-            multimapFree(m);
             printf("\n");
         }
     }
@@ -1934,7 +1928,8 @@ int multimapTest(int argc, char *argv[]) {
 
     TEST("duplicate key insertion behavior") {
         /* Test that duplicate keys work correctly across all map types */
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_512);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_512);
 
         /* Insert same key multiple times with different values */
         for (int32_t i = 0; i < 100; i++) {
@@ -1969,11 +1964,11 @@ int multimapTest(int argc, char *argv[]) {
         }
 
         assert(multimapCount(m) == 0);
-        multimapFree(m);
     }
 
     TEST("boundary values (INT64_MIN, INT64_MAX, 0)") {
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_512);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_512);
 
         /* Test extreme integer values */
         int64_t extremeKeys[] = {INT64_MIN, INT64_MIN + 1, -1,       0,
@@ -2021,12 +2016,12 @@ int multimapTest(int argc, char *argv[]) {
         }
 
         assert(multimapCount(m) == 0);
-        multimapFree(m);
     }
 
     TEST("map split boundary correctness") {
         /* Force map splits and verify boundary lookups */
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_256);
 
         /* Insert enough to trigger multiple splits */
         const int32_t numEntries = 500;
@@ -2056,11 +2051,11 @@ int multimapTest(int argc, char *argv[]) {
         }
 
         multimapVerify(m);
-        multimapFree(m);
     }
 
     TEST("interleaved insert/delete across boundaries") {
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_256);
 
         /* Insert many entries */
         for (int32_t i = 0; i < 300; i++) {
@@ -2110,11 +2105,11 @@ int multimapTest(int argc, char *argv[]) {
         }
 
         multimapVerify(m);
-        multimapFree(m);
     }
 
     TEST("reverse order insertion") {
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_256);
 
         /* Insert in reverse order to stress binary search */
         for (int32_t i = 500; i >= 0; i--) {
@@ -2141,15 +2136,16 @@ int multimapTest(int argc, char *argv[]) {
         }
 
         multimapVerify(m);
-        multimapFree(m);
     }
 
     TEST("random order insertion with verification") {
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_256);
 
         /* Generate pseudo-random keys using LCG */
         const int32_t numEntries = 1000;
-        int32_t *keys = zcalloc(numEntries, sizeof(int32_t));
+        cleanerName(zfree, Int32) int32_t *keys =
+            zcalloc(numEntries, sizeof(int32_t));
         uint32_t seed = 54321;
 
         for (int32_t i = 0; i < numEntries; i++) {
@@ -2176,13 +2172,12 @@ int multimapTest(int argc, char *argv[]) {
             }
         }
 
-        zfree(keys);
         multimapVerify(m);
-        multimapFree(m);
     }
 
     TEST("string key boundary handling") {
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_256);
 
         /* Insert string keys that stress binary search */
         const char *stringKeys[] = {
@@ -2217,12 +2212,12 @@ int multimapTest(int argc, char *argv[]) {
         }
 
         multimapVerify(m);
-        multimapFree(m);
     }
 
     TEST("upgrade path Small -> Medium -> Full") {
         /* Use very small limits to force upgrades */
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_64);
 
         multimapType prevType = multimapType_(m);
         int32_t smallToMediumTransition = -1;
@@ -2262,11 +2257,11 @@ int multimapTest(int argc, char *argv[]) {
         }
 
         multimapVerify(m);
-        multimapFree(m);
     }
 
     TEST("first/last element retrieval across boundaries") {
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_256);
 
         /* Insert entries spanning multiple internal maps */
         for (int32_t i = 1000; i >= 0; i--) {
@@ -2297,11 +2292,11 @@ int multimapTest(int argc, char *argv[]) {
         }
 
         multimapVerify(m);
-        multimapFree(m);
     }
 
     TEST("iterator across all map boundaries") {
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_256);
 
         /* Insert entries */
         for (int32_t i = 0; i < 500; i++) {
@@ -2351,11 +2346,11 @@ int multimapTest(int argc, char *argv[]) {
         }
 
         multimapVerify(m);
-        multimapFree(m);
     }
 
     TEST("delete causing map merge") {
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_256);
 
         /* Insert to create multiple maps */
         for (int32_t i = 0; i < 500; i++) {
@@ -2386,11 +2381,11 @@ int multimapTest(int argc, char *argv[]) {
         }
 
         multimapVerify(m);
-        multimapFree(m);
     }
 
     TEST("mixed type keys (integers and strings)") {
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_256);
 
         /* Insert integer keys */
         for (int32_t i = 0; i < 100; i++) {
@@ -2433,11 +2428,11 @@ int multimapTest(int argc, char *argv[]) {
         }
 
         multimapVerify(m);
-        multimapFree(m);
     }
 
     TEST("PERF: lookup performance across many maps") {
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_256);
 
         /* Insert enough to create many internal maps */
         const int32_t numEntries = 10000;
@@ -2462,14 +2457,14 @@ int multimapTest(int argc, char *argv[]) {
         int64_t totalOps = numEntries * 10;
         printf("    Lookup: %.1f ns/op, %.0f ops/sec\n",
                (double)elapsed / totalOps, totalOps / (elapsed / 1e9));
-
-        multimapFree(m);
     }
 
     TEST("stress test: insert/delete/lookup random mix") {
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_256);
         uint32_t seed = 98765;
-        int32_t *inserted = zcalloc(10000, sizeof(int32_t));
+        cleanerName(zfree, Int32) int32_t *inserted =
+            zcalloc(10000, sizeof(int32_t));
         size_t insertedCount = 0;
 
         /* Random mix of operations */
@@ -2504,9 +2499,7 @@ int multimapTest(int argc, char *argv[]) {
             }
         }
 
-        zfree(inserted);
         multimapVerify(m);
-        multimapFree(m);
     }
 
     /* ================================================================
@@ -2524,7 +2517,7 @@ int multimapTest(int argc, char *argv[]) {
                 FLEX_CAP_LEVEL_64, FLEX_CAP_LEVEL_256, FLEX_CAP_LEVEL_512,
                 FLEX_CAP_LEVEL_2048}[limit];
 
-            multimap *m = multimapNewLimit(2, capLimit);
+            cleaner(multimapFree) multimap *m = multimapNewLimit(2, capLimit);
             const int32_t numKeys = 2000;
 
             /* Insert sequential keys */
@@ -2560,13 +2553,13 @@ int multimapTest(int argc, char *argv[]) {
 
             printf("    limit=%d type=%d count=%zu: OK\n", capLimit,
                    multimapType_(m), multimapCount(m));
-            multimapFree(m);
         }
     }
 
     TEST("FUZZ: binary search correctness - reverse sequential keys") {
         /* Reverse insertion stresses insertions at the beginning */
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_256);
         const int32_t numKeys = 1500;
 
         /* Insert in reverse order */
@@ -2604,16 +2597,17 @@ int multimapTest(int argc, char *argv[]) {
 
         printf("    type=%d count=%zu: OK\n", multimapType_(m),
                multimapCount(m));
-        multimapFree(m);
     }
 
     TEST("FUZZ: binary search correctness - random keys with oracle") {
         /* Use oracle (sorted array) to track what should exist */
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_256);
         const int32_t numKeys = 3000;
 
         /* Oracle: simple sorted array of inserted keys */
-        int64_t *oracle = zcalloc(numKeys, sizeof(int64_t));
+        cleanerName(zfree, Int64) int64_t *oracle =
+            zcalloc(numKeys, sizeof(int64_t));
         size_t oracleCount = 0;
 
         uint64_t seed[2] = {0xDEADBEEF12345678ULL, 0xCAFEBABE87654321ULL};
@@ -2665,18 +2659,16 @@ int multimapTest(int argc, char *argv[]) {
 
         printf("    type=%d count=%zu oracle=%zu: OK\n", multimapType_(m),
                multimapCount(m), oracleCount);
-
-        zfree(oracle);
-        multimapFree(m);
     }
 
     TEST("FUZZ: binary search correctness - clustered keys") {
         /* Keys clustered in narrow ranges stress map splitting */
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_256);
         const int32_t numClusters = 10;
         const int32_t keysPerCluster = 200;
 
-        int64_t *allKeys =
+        cleanerName(zfree, Int64) int64_t *allKeys =
             zcalloc(numClusters * keysPerCluster, sizeof(int64_t));
         size_t keyCount = 0;
 
@@ -2716,17 +2708,16 @@ int multimapTest(int argc, char *argv[]) {
 
         printf("    type=%d count=%zu clusters=%d: OK\n", multimapType_(m),
                multimapCount(m), numClusters);
-
-        zfree(allKeys);
-        multimapFree(m);
     }
 
     TEST("FUZZ: binary search correctness - interleaved insert/delete") {
         /* Interleaved operations stress binary search with changing data */
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_256);
 
         /* Oracle tracks current state */
-        int64_t *oracle = zcalloc(10000, sizeof(int64_t));
+        cleanerName(zfree, Int64) int64_t *oracle =
+            zcalloc(10000, sizeof(int64_t));
         size_t oracleCount = 0;
 
         uint64_t seed[2] = {99999, 11111};
@@ -2793,14 +2784,12 @@ int multimapTest(int argc, char *argv[]) {
 
         printf("    type=%d final_count=%zu: OK\n", multimapType_(m),
                oracleCount);
-
-        zfree(oracle);
-        multimapFree(m);
     }
 
     TEST("FUZZ: binary search correctness - boundary values") {
         /* Test extreme and boundary integer values */
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_256);
 
         int64_t boundaryKeys[] = {
             INT64_MIN,
@@ -2877,12 +2866,12 @@ int multimapTest(int argc, char *argv[]) {
 
         printf("    type=%d count=%zu boundaries=%zu: OK\n", multimapType_(m),
                multimapCount(m), numBoundary);
-        multimapFree(m);
     }
 
     TEST("FUZZ: binary search correctness - mixed types (int/string)") {
         /* Mix integer and string keys - tests databoxCompare across types */
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_256);
 
         const int32_t numInts = 500;
         const int32_t numStrings = 500;
@@ -2936,14 +2925,15 @@ int multimapTest(int argc, char *argv[]) {
 
         printf("    type=%d count=%zu ints=%d strings=%d: OK\n",
                multimapType_(m), multimapCount(m), numInts, numStrings);
-        multimapFree(m);
     }
 
     TEST("FUZZ: binary search correctness - type transitions") {
         /* Verify binary search works correctly during Small→Medium→Full */
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_64);
 
-        int64_t *oracle = zcalloc(5000, sizeof(int64_t));
+        cleanerName(zfree, Int64) int64_t *oracle =
+            zcalloc(5000, sizeof(int64_t));
         size_t oracleCount = 0;
         uint64_t seed[2] = {777, 888};
 
@@ -2991,14 +2981,12 @@ int multimapTest(int argc, char *argv[]) {
 
         printf("    final_type=%d count=%zu: OK\n", multimapType_(m),
                oracleCount);
-
-        zfree(oracle);
-        multimapFree(m);
     }
 
     TEST("FUZZ: binary search correctness - duplicate keys (full width)") {
         /* Same key with different values - stresses full-width search */
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_256);
 
         const int32_t numUniqueKeys = 50;
         const int32_t valsPerKey = 100;
@@ -3035,15 +3023,16 @@ int multimapTest(int argc, char *argv[]) {
 
         printf("    type=%d count=%zu keys=%d vals_per=%d: OK\n",
                multimapType_(m), multimapCount(m), numUniqueKeys, valsPerKey);
-        multimapFree(m);
     }
 
     TEST("FUZZ: binary search correctness - string keys comprehensive") {
         /* String keys with various lengths and content */
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_256);
 
         /* Store all inserted strings for verification */
-        char **oracle = zcalloc(2000, sizeof(char *));
+        cleanerName(zfree, CharPtrs) char **oracle =
+            zcalloc(2000, sizeof(char *));
         size_t oracleCount = 0;
 
         uint64_t seed[2] = {12345, 67890};
@@ -3065,6 +3054,7 @@ int multimapTest(int argc, char *argv[]) {
             if (!multimapExists(m, &key)) {
                 multimapInsert(&m, elements);
                 size_t len = strlen(buf) + 1;
+                /* @own: container; free=zfree */
                 oracle[oracleCount] = zmalloc(len);
                 memcpy(oracle[oracleCount], buf, len);
                 oracleCount++;
@@ -3080,19 +3070,18 @@ int multimapTest(int argc, char *argv[]) {
             }
         }
 
-        /* Cleanup */
+        /* Free the element strings; the array itself is scope-cleaned. */
         for (size_t j = 0; j < oracleCount; j++) {
             zfree(oracle[j]);
         }
-        zfree(oracle);
 
         printf("    type=%d count=%zu: OK\n", multimapType_(m), oracleCount);
-        multimapFree(m);
     }
 
     TEST("FUZZ: rangeBox consistency in Full maps") {
         /* Verify rangeBox correctly reflects first key of each map */
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_64);
 
         /* Insert enough to create Full map with multiple internal maps */
         for (int32_t i = 0; i < 3000; i++) {
@@ -3104,7 +3093,6 @@ int multimapTest(int argc, char *argv[]) {
 
         if (multimapType_(m) != MULTIMAP_TYPE_FULL) {
             printf("    Skipped (didn't reach Full type)\n");
-            multimapFree(m);
         } else {
             /* Verify all entries can be found via iteration AND lookup */
             multimapIterator iter;
@@ -3141,17 +3129,18 @@ int multimapTest(int argc, char *argv[]) {
             }
 
             printf("    type=FULL count=%d verified_order=OK: OK\n", count);
-            multimapFree(m);
         }
     }
 
     TEST("FUZZ: stress test - massive random operations") {
         /* High-volume random insert/delete/lookup */
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_256);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_256);
 
         /* Use bitmap as lightweight oracle for existence */
         const size_t keySpace = 100000;
-        uint8_t *exists = zcalloc((keySpace + 7) / 8, 1);
+        cleanerName(zfree, Bytes) uint8_t *exists =
+            zcalloc((keySpace + 7) / 8, 1);
         size_t existCount = 0;
 
 #define BIT_SET(arr, idx) ((arr)[(idx) / 8] |= (1 << ((idx) % 8)))
@@ -3218,14 +3207,12 @@ int multimapTest(int argc, char *argv[]) {
 
         printf("    type=%d count=%zu ops(I/D/L)=%d/%d/%d: OK\n",
                multimapType_(m), existCount, insertOps, deleteOps, lookupOps);
-
-        zfree(exists);
-        multimapFree(m);
     }
 
     TEST("FUZZ: explicit Small map verification") {
         /* Stay in Small map and verify binary search works correctly */
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_2048);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_2048);
         assert(multimapType_(m) == MULTIMAP_TYPE_SMALL);
 
         /* Insert few enough entries to stay in Small */
@@ -3260,14 +3247,15 @@ int multimapTest(int argc, char *argv[]) {
         }
 
         printf("    type=SMALL count=%zu: OK\n", multimapCount(m));
-        multimapFree(m);
     }
 
     TEST("FUZZ: explicit Medium map verification") {
         /* Stay in Medium map and verify binary search works correctly */
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_64);
 
-        int64_t *oracle = zcalloc(100, sizeof(int64_t));
+        cleanerName(zfree, Int64) int64_t *oracle =
+            zcalloc(100, sizeof(int64_t));
         size_t oracleCount = 0;
 
         /* Insert enough to transition Small->Medium but not to Full */
@@ -3313,15 +3301,15 @@ int multimapTest(int argc, char *argv[]) {
         }
 
         printf("    type=%d count=%zu: OK\n", multimapType_(m), oracleCount);
-        zfree(oracle);
-        multimapFree(m);
     }
 
     TEST("FUZZ: explicit Full map with many submaps") {
         /* Create Full map with many internal submaps */
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_64);
 
-        int64_t *oracle = zcalloc(5000, sizeof(int64_t));
+        cleanerName(zfree, Int64) int64_t *oracle =
+            zcalloc(5000, sizeof(int64_t));
         size_t oracleCount = 0;
 
         /* Insert to create Full map with splits */
@@ -3350,15 +3338,15 @@ int multimapTest(int argc, char *argv[]) {
 
         printf("    type=FULL count=%zu random_accesses=10000: OK\n",
                oracleCount);
-        zfree(oracle);
-        multimapFree(m);
     }
 
     TEST("FUZZ: binary search at exact transition boundaries") {
         /* Test binary search works correctly AT the exact transition points */
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_64);
 
-        int64_t *oracle = zcalloc(200, sizeof(int64_t));
+        cleanerName(zfree, Int64) int64_t *oracle =
+            zcalloc(200, sizeof(int64_t));
         size_t oracleCount = 0;
         int transitions = 0;
         multimapType prevType = MULTIMAP_TYPE_SMALL;
@@ -3408,9 +3396,6 @@ int multimapTest(int argc, char *argv[]) {
                2); /* Should see Small->Medium and Medium->Full */
         printf("    transitions=%d final_type=%d count=%zu: OK\n", transitions,
                multimapType_(m), oracleCount);
-
-        zfree(oracle);
-        multimapFree(m);
     }
 
     TEST("FUZZ: lookup nonexistent keys at all sizes") {
@@ -3422,7 +3407,7 @@ int multimapTest(int argc, char *argv[]) {
                 FLEX_CAP_LEVEL_64    /* Quick Full transition */
             }[limit];
 
-            multimap *m = multimapNewLimit(2, capLimit);
+            cleaner(multimapFree) multimap *m = multimapNewLimit(2, capLimit);
 
             /* Insert even keys only */
             for (int32_t i = 0; i < 500; i += 2) {
@@ -3453,7 +3438,6 @@ int multimapTest(int argc, char *argv[]) {
             }
 
             printf("    capLimit=%d type=%d: OK\n", capLimit, multimapType_(m));
-            multimapFree(m);
         }
     }
 
@@ -3466,7 +3450,7 @@ int multimapTest(int argc, char *argv[]) {
 
     TEST("DIRECT: multimapSmall key replacement") {
         /* Test Small implementation directly */
-        multimapSmall *s =
+        cleaner(multimapSmallFree) multimapSmall *s =
             multimapSmallNew(2, false); /* mapIsSet=false = MAP */
 
         /* Insert 10 key/value pairs */
@@ -3506,12 +3490,12 @@ int multimapTest(int argc, char *argv[]) {
             assert(databoxEqual(&expected, &result));
             (void)expected;
         }
-
-        multimapSmallFree(s);
     }
 
     TEST("DIRECT: multimapMedium key replacement") {
         /* Create Medium by splitting Small */
+        /* multimapMediumNewFromOneGrow below consumes this small */
+        /* @own: container; free=multimapMediumFree */
         multimapSmall *small = multimapSmallNew(2, false);
 
         /* Insert enough to make meaningful split */
@@ -3558,6 +3542,8 @@ int multimapTest(int argc, char *argv[]) {
 
     TEST("DIRECT: multimapFull key replacement") {
         /* Create Full by creating a Small and growing it */
+        /* the Medium then Full conversions below consume this small */
+        /* @own: container; free=multimapFullFree */
         multimapSmall *small = multimapSmallNew(2, false);
 
         /* Insert enough to grow to Full */
@@ -3611,7 +3597,8 @@ int multimapTest(int argc, char *argv[]) {
 
     TEST("DIRECT: multimapFull key replacement with many splits") {
         /* Use multimap wrapper to create Full with many splits */
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_64);
 
         /* Insert 500 keys - will force Full representation with many splits */
         for (int i = 0; i < 500; i++) {
@@ -3639,13 +3626,12 @@ int multimapTest(int argc, char *argv[]) {
             }
         }
         assert(multimapCount(m) == 500);
-
-        multimapFree(m);
     }
 
     TEST("DIRECT: multimapFull key replacement - string keys") {
         /* Use multimap wrapper to create Full with string keys */
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_128);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_128);
 
         /* Insert with string keys - will grow to Full */
         for (int i = 0; i < 200; i++) {
@@ -3677,8 +3663,6 @@ int multimapTest(int argc, char *argv[]) {
             }
         }
         assert(multimapCount(m) == 200);
-
-        multimapFree(m);
     }
 
     printf(
@@ -3713,8 +3697,10 @@ int multimapTest(int argc, char *argv[]) {
     } while (0)
 
     TEST("multimapIntersectKeys - Small ∩ Small") {
-        multimap *a = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
-        multimap *b = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *a =
+            multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *b =
+            multimapNewLimit(1, FLEX_CAP_LEVEL_64);
 
         /* A = {1, 2, 3, 4, 5} */
         for (int64_t i = 1; i <= 5; i++) {
@@ -3734,7 +3720,8 @@ int multimapTest(int argc, char *argv[]) {
         assert(multimapType_(b) == MULTIMAP_TYPE_SMALL);
 
         /* Intersect: A ∩ B should be {3, 4, 5} */
-        multimap *result = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *result =
+            multimapNewLimit(1, FLEX_CAP_LEVEL_64);
         multimapIterator ia, ib;
         multimapIteratorInit(a, &ia, true);
         multimapIteratorInit(b, &ib, true);
@@ -3748,15 +3735,13 @@ int multimapTest(int argc, char *argv[]) {
         VERIFY_MAP_NOT_CONTAINS(result, 2);
         VERIFY_MAP_NOT_CONTAINS(result, 6);
         VERIFY_MAP_NOT_CONTAINS(result, 7);
-
-        multimapFree(a);
-        multimapFree(b);
-        multimapFree(result);
     }
 
     TEST("multimapIntersectKeys - Small ∩ Full (cross-tier)") {
-        multimap *a = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
-        multimap *b = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *a =
+            multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *b =
+            multimapNewLimit(1, FLEX_CAP_LEVEL_64);
 
         /* A = {10, 20, 30, 40, 50} - stays Small */
         int64_t aVals[] = {10, 20, 30, 40, 50};
@@ -3777,7 +3762,8 @@ int multimapTest(int argc, char *argv[]) {
         assert(multimapType_(b) == MULTIMAP_TYPE_FULL);
 
         /* Intersect: Should find {10, 20, 30, 40, 50} since all are in B */
-        multimap *result = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *result =
+            multimapNewLimit(1, FLEX_CAP_LEVEL_64);
         multimapIterator ia, ib;
         multimapIteratorInit(a, &ia, true);
         multimapIteratorInit(b, &ib, true);
@@ -3787,15 +3773,13 @@ int multimapTest(int argc, char *argv[]) {
         for (int i = 0; i < 5; i++) {
             VERIFY_MAP_CONTAINS(result, aVals[i]);
         }
-
-        multimapFree(a);
-        multimapFree(b);
-        multimapFree(result);
     }
 
     TEST("multimapIntersectKeys - Full ∩ Full (both large, partial overlap)") {
-        multimap *a = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
-        multimap *b = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *a =
+            multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *b =
+            multimapNewLimit(1, FLEX_CAP_LEVEL_64);
 
         /* A = {0..599} */
         for (int64_t i = 0; i < 600; i++) {
@@ -3815,7 +3799,8 @@ int multimapTest(int argc, char *argv[]) {
         assert(multimapType_(b) == MULTIMAP_TYPE_FULL);
 
         /* Intersect: Should be {300..599} = 300 elements */
-        multimap *result = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *result =
+            multimapNewLimit(1, FLEX_CAP_LEVEL_64);
         multimapIterator ia, ib;
         multimapIteratorInit(a, &ia, true);
         multimapIteratorInit(b, &ib, true);
@@ -3827,15 +3812,13 @@ int multimapTest(int argc, char *argv[]) {
         VERIFY_MAP_CONTAINS(result, 599);
         VERIFY_MAP_NOT_CONTAINS(result, 299);
         VERIFY_MAP_NOT_CONTAINS(result, 600);
-
-        multimapFree(a);
-        multimapFree(b);
-        multimapFree(result);
     }
 
     TEST("multimapIntersectKeys - disjoint sets (no overlap)") {
-        multimap *a = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
-        multimap *b = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *a =
+            multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *b =
+            multimapNewLimit(1, FLEX_CAP_LEVEL_64);
 
         /* A = {0..99} */
         for (int64_t i = 0; i < 100; i++) {
@@ -3852,22 +3835,21 @@ int multimapTest(int argc, char *argv[]) {
         }
 
         /* Intersect: Should be empty */
-        multimap *result = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *result =
+            multimapNewLimit(1, FLEX_CAP_LEVEL_64);
         multimapIterator ia, ib;
         multimapIteratorInit(a, &ia, true);
         multimapIteratorInit(b, &ib, true);
         multimapIntersectKeys(&result, &ia, &ib);
 
         assert(multimapCount(result) == 0);
-
-        multimapFree(a);
-        multimapFree(b);
-        multimapFree(result);
     }
 
     TEST("multimapDifferenceKeys - Small \\ Small (basic difference)") {
-        multimap *a = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
-        multimap *b = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *a =
+            multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *b =
+            multimapNewLimit(1, FLEX_CAP_LEVEL_64);
 
         /* A = {1, 2, 3, 4, 5} */
         for (int64_t i = 1; i <= 5; i++) {
@@ -3884,7 +3866,8 @@ int multimapTest(int argc, char *argv[]) {
         }
 
         /* Difference A \ B should be {1, 2} (in A but not B) */
-        multimap *result = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *result =
+            multimapNewLimit(1, FLEX_CAP_LEVEL_64);
         multimapIterator ia, ib;
         multimapIteratorInit(a, &ia, true);
         multimapIteratorInit(b, &ib, true);
@@ -3895,15 +3878,13 @@ int multimapTest(int argc, char *argv[]) {
         VERIFY_MAP_CONTAINS(result, 2);
         VERIFY_MAP_NOT_CONTAINS(result, 3);
         VERIFY_MAP_NOT_CONTAINS(result, 6);
-
-        multimapFree(a);
-        multimapFree(b);
-        multimapFree(result);
     }
 
     TEST("multimapDifferenceKeys - Full \\ Small (cross-tier, A longer)") {
-        multimap *a = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
-        multimap *b = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *a =
+            multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *b =
+            multimapNewLimit(1, FLEX_CAP_LEVEL_64);
 
         /* A = {0..599} (Full tier) */
         for (int64_t i = 0; i < 600; i++) {
@@ -3924,7 +3905,8 @@ int multimapTest(int argc, char *argv[]) {
         assert(multimapType_(b) == MULTIMAP_TYPE_SMALL);
 
         /* Difference A \ B should be 597 elements (600 - 3 shared) */
-        multimap *result = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *result =
+            multimapNewLimit(1, FLEX_CAP_LEVEL_64);
         multimapIterator ia, ib;
         multimapIteratorInit(a, &ia, true);
         multimapIteratorInit(b, &ib, true);
@@ -3938,15 +3920,13 @@ int multimapTest(int argc, char *argv[]) {
         VERIFY_MAP_NOT_CONTAINS(result, 100);
         VERIFY_MAP_NOT_CONTAINS(result, 200);
         VERIFY_MAP_NOT_CONTAINS(result, 300);
-
-        multimapFree(a);
-        multimapFree(b);
-        multimapFree(result);
     }
 
     TEST("multimapDifferenceKeys - A exhausts before B (remainder handling)") {
-        multimap *a = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
-        multimap *b = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *a =
+            multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *b =
+            multimapNewLimit(1, FLEX_CAP_LEVEL_64);
 
         /* A = {1, 2, 3} */
         for (int64_t i = 1; i <= 3; i++) {
@@ -3964,22 +3944,21 @@ int multimapTest(int argc, char *argv[]) {
         }
 
         /* A \ B = {} since all of A is in B */
-        multimap *result = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *result =
+            multimapNewLimit(1, FLEX_CAP_LEVEL_64);
         multimapIterator ia, ib;
         multimapIteratorInit(a, &ia, true);
         multimapIteratorInit(b, &ib, true);
         multimapDifferenceKeys(&result, &ia, &ib, false);
 
         assert(multimapCount(result) == 0);
-
-        multimapFree(a);
-        multimapFree(b);
-        multimapFree(result);
     }
 
     TEST("multimapCopyKeys - Small into Full (union across tiers)") {
-        multimap *dst = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
-        multimap *src = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *dst =
+            multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *src =
+            multimapNewLimit(1, FLEX_CAP_LEVEL_64);
 
         /* dst = {0..599} (Full tier) */
         for (int64_t i = 0; i < 600; i++) {
@@ -4010,14 +3989,13 @@ int multimapTest(int argc, char *argv[]) {
         VERIFY_MAP_CONTAINS(dst, 600);
         VERIFY_MAP_CONTAINS(dst, 700);
         VERIFY_MAP_CONTAINS(dst, 800);
-
-        multimapFree(dst);
-        multimapFree(src);
     }
 
     TEST("multimapCopyKeys - Full into empty (full copy)") {
-        multimap *dst = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
-        multimap *src = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *dst =
+            multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *src =
+            multimapNewLimit(1, FLEX_CAP_LEVEL_64);
 
         /* src = {0..599} */
         for (int64_t i = 0; i < 600; i++) {
@@ -4035,17 +4013,16 @@ int multimapTest(int argc, char *argv[]) {
         VERIFY_MAP_CONTAINS(dst, 0);
         VERIFY_MAP_CONTAINS(dst, 299);
         VERIFY_MAP_CONTAINS(dst, 599);
-
-        multimapFree(dst);
-        multimapFree(src);
     }
 
     TEST("FUZZ: multimapIntersectKeys across random tier combinations") {
         uint64_t seed[2] = {0x1234567890ABCDEFULL, 0xFEDCBA0987654321ULL};
 
         for (int trial = 0; trial < 20; trial++) {
-            multimap *a = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
-            multimap *b = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+            cleaner(multimapFree) multimap *a =
+                multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+            cleaner(multimapFree) multimap *b =
+                multimapNewLimit(1, FLEX_CAP_LEVEL_64);
 
             /* Random size for A: 5-700 elements */
             int64_t sizeA = 5 + (int64_t)(xoroshiro128plus(seed) % 696);
@@ -4074,7 +4051,8 @@ int multimapTest(int argc, char *argv[]) {
                                        ? (size_t)(overlapEnd - overlapStart)
                                        : 0;
 
-            multimap *result = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+            cleaner(multimapFree) multimap *result =
+                multimapNewLimit(1, FLEX_CAP_LEVEL_64);
             multimapIterator ia, ib;
             multimapIteratorInit(a, &ia, true);
             multimapIteratorInit(b, &ib, true);
@@ -4089,10 +4067,6 @@ int multimapTest(int argc, char *argv[]) {
                     (long long)overlapStart, (long long)(overlapEnd - 1));
                 assert(false);
             }
-
-            multimapFree(a);
-            multimapFree(b);
-            multimapFree(result);
         }
     }
 
@@ -4100,8 +4074,10 @@ int multimapTest(int argc, char *argv[]) {
         uint64_t seed[2] = {0xFEDCBA0987654321ULL, 0x1234567890ABCDEFULL};
 
         for (int trial = 0; trial < 20; trial++) {
-            multimap *a = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
-            multimap *b = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+            cleaner(multimapFree) multimap *a =
+                multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+            cleaner(multimapFree) multimap *b =
+                multimapNewLimit(1, FLEX_CAP_LEVEL_64);
 
             /* Random size for A: 5-700 elements */
             int64_t sizeA = 5 + (int64_t)(xoroshiro128plus(seed) % 696);
@@ -4131,7 +4107,8 @@ int multimapTest(int argc, char *argv[]) {
                                       : 0;
             size_t expectedCount = (size_t)sizeA - overlapCount;
 
-            multimap *result = multimapNewLimit(1, FLEX_CAP_LEVEL_64);
+            cleaner(multimapFree) multimap *result =
+                multimapNewLimit(1, FLEX_CAP_LEVEL_64);
             multimapIterator ia, ib;
             multimapIteratorInit(a, &ia, true);
             multimapIteratorInit(b, &ib, true);
@@ -4142,10 +4119,6 @@ int multimapTest(int argc, char *argv[]) {
                     expectedCount, multimapCount(result));
                 assert(false);
             }
-
-            multimapFree(a);
-            multimapFree(b);
-            multimapFree(result);
         }
     }
 
@@ -4157,7 +4130,7 @@ int multimapTest(int argc, char *argv[]) {
     TEST("reset then reuse: small tier stays coherent across cycles") {
         /* Dispatcher-level pin for the Small tier (Full and Medium have
          * their own reset-reuse tests in their suites) */
-        multimap *m = multimapNew(2);
+        cleaner(multimapFree) multimap *m = multimapNew(2);
 
         for (int cycle = 0; cycle < 3; cycle++) {
             for (uint64_t i = 0; i < 40; i++) {
@@ -4193,8 +4166,6 @@ int multimapTest(int argc, char *argv[]) {
         if (missing > 0) {
             ERR("%zu of 40 keys missing after reset-reuse", missing);
         }
-
-        multimapFree(m);
     }
 
     TEST("FUZZ/SOAK: differential ops vs sorted shadow across tiers") {
@@ -4217,7 +4188,8 @@ int multimapTest(int argc, char *argv[]) {
         bool tierSeen[4] = {false, false, false, false};
         int32_t soakFail = 0;
 
-        multimap *m = multimapNewLimit(2, FLEX_CAP_LEVEL_64);
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_64);
 
         /* Deterministic ascending fill to force promotion through
          * Small -> Medium -> Full before the random churn (churn alone
@@ -4401,7 +4373,6 @@ int multimapTest(int argc, char *argv[]) {
                 tierSeen[MULTIMAP_TYPE_MEDIUM], tierSeen[MULTIMAP_TYPE_FULL]);
         }
 
-        multimapFree(m);
 #undef SOAK_NEXT
     }
 

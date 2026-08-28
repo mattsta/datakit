@@ -3,11 +3,13 @@
 
 multimapSmall *multimapSmallNew(multimapElements elementsPerEntry,
                                 bool mapIsSet) {
+    /* @own: caller; free=multimapSmallFree */
     multimapSmall *m = zcalloc(1, sizeof(*m));
 
     m->elementsPerEntry = elementsPerEntry;
     m->mapIsSet = mapIsSet;
 
+    /* @own: container; free=multimapSmallFree */
     m->map = flexNew();
     m->middle = FLEX_EMPTY_SIZE;
 
@@ -15,9 +17,11 @@ multimapSmall *multimapSmallNew(multimapElements elementsPerEntry,
 }
 
 multimapSmall *multimapSmallCopy(const multimapSmall *const m) {
+    /* @own: caller; free=multimapSmallFree */
     multimapSmall *copy = zcalloc(1, sizeof(*copy));
     *copy = *m;
 
+    /* @own: container; free=multimapSmallFree */
     copy->map = flexDuplicate(m->map);
 
     return copy;
@@ -32,6 +36,7 @@ size_t multimapSmallBytes(const multimapSmall *m) {
 }
 
 flex *multimapSmallDump(const multimapSmall *m) {
+    /* @own: caller; free=flexFree */
     return flexDuplicate(m->map);
 }
 

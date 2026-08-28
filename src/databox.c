@@ -141,6 +141,7 @@ void databoxCopyBytes(databox *box, const void *ptr, size_t len) {
     box->type = DATABOX_BYTES;
     box->allocated = true;
     box->len = len;
+    /* @own: container; free=databoxFreeData */
     box->data.bytes.start = zmalloc(len);
     memcpy(box->data.bytes.start, ptr, len);
 }
@@ -219,6 +220,7 @@ ssize_t databoxRetainBytesSelf(databox *restrict dst,
         /* No usable cache slot (unpopulated, or larger than the largest
          * size class): retain through a private allocation the box
          * owns; the bytes are ALWAYS retained on this path. */
+        /* @own: container; free=databoxFreeData */
         dst->data.bytes.start = zmalloc(dst->len);
         dst->allocated = true;
         memcpy(dst->data.bytes.start, src, dst->len);
@@ -245,6 +247,7 @@ void databoxCopyBytesFromBox(databox *dst, const databox *src) {
         } else {
             const void *srcBytes = src->data.bytes.start;
             dst->allocated = true;
+            /* @own: container; free=databoxFreeData */
             dst->data.bytes.start = zcalloc(1, src->len);
             memcpy(dst->data.bytes.start, srcBytes, src->len);
         }
@@ -260,6 +263,7 @@ bool databoxAllocateIfNeeded(databox *restrict box) {
     if (box->type >= DATABOX_BYTES && box->type < DATABOX_MAX_EMBED) {
         const void *restrict srcBytes = box->data.bytes.start;
         box->allocated = true;
+        /* @own: container; free=databoxFreeData */
         box->data.bytes.start = zmalloc(box->len);
         memcpy(box->data.bytes.start, srcBytes, box->len);
         return true;
@@ -280,6 +284,7 @@ databox databoxCopy(const databox *restrict src) {
     if (src->type >= DATABOX_BYTES) {
         const void *restrict srcBytes = src->data.bytes.start;
         dst->allocated = true;
+        /* @own: container; free=databoxFreeData */
         dst->data.bytes.start = zcalloc(1, src->len);
         memcpy(dst->data.bytes.start, srcBytes, src->len);
     }
@@ -931,7 +936,12 @@ int databoxCompare(const databox *restrict a, const databox *restrict b) {
 }
 
 #ifdef DATAKIT_TEST
+#include "cleaner.h"
 #include <stdio.h> /* printf */
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleanerName(uint8_t *, zfree, U8);
+
 const char *databoxReprStr(const databox *const box) {
     _Thread_local static char buf[256];
     _Thread_local static char bufBig[COUNT_ARRAY(buf)];
@@ -1066,6 +1076,7 @@ int databoxTest(int argc, char *argv[]) {
         /* Slot path: box BORROWS cache memory (allocated stays false),
          * so FreeData must not free the cache's buffer. */
         databoxRetainCache cache = {{0}};
+        /* @own: cache */
         cache.bytes[0] = zmalloc(128);
         uint8_t *const slot0 = cache.bytes[0];
 
@@ -1089,7 +1100,7 @@ int databoxTest(int argc, char *argv[]) {
 
         /* Oversized path (> largest 4 MiB size class): still retained. */
         const size_t bigLen = (4 * 1024 * 1024) + 64;
-        uint8_t *big = zmalloc(bigLen);
+        cleanerName(zfree, U8) uint8_t *big = zmalloc(bigLen);
         memset(big, 0x5A, bigLen);
         databox huge = databoxNewBytes(big, bigLen);
         assert(databoxRetainBytesSelf(&huge, &cache) == -1);
@@ -1097,7 +1108,6 @@ int databoxTest(int argc, char *argv[]) {
         assert(huge.data.bytes.start != big);
         assert(((const uint8_t *)huge.data.bytes.start)[bigLen - 1] == 0x5A);
         databoxFreeData(&huge);
-        zfree(big);
 
         /* Embed path: tiny bytes embed, no cache use, nothing to free. */
         databox tiny = databoxNewBytes("hi", 2);

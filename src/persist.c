@@ -34,11 +34,29 @@
  */
 
 #include "persist.h"
+#include "cleaner.h"
 #include "databoxLinear.h"
 #include "datakit.h"
 #include "flexEnvelope.h"
 #include "hmacKeyring.h"
 #include "mflex.h"
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleaner(flex *, flexFree);
+defcleanerName(uint8_t *, zfree, Bytes);
+defcleanerName(char *, zfree, Chars);
+defcleanerName(bool *, zfree, Bools);
+defcleaner(mflexState *, mflexStateFree);
+
+/* Scope-exit cleaner for the fixed 2-slot mflex state array the read-only
+ * multilist iterator requires: frees whichever slots were created. */
+static DK_FN_UNUSED void freeMflexStates2_cleanup(mflexState *(*arr)[2]) {
+    for (size_t i = 0; i < 2; i++) {
+        if ((*arr)[i]) {
+            mflexStateFree((*arr)[i]);
+        }
+    }
+}
 
 #ifndef XXH_STATIC_LINKING_ONLY
 #define XXH_STATIC_LINKING_ONLY
@@ -339,6 +357,7 @@ persist *persistCreate(const persistOps *ops, const persistConfig *config) {
         return NULL;
     }
 
+    /* @own: caller; free=persistClose */
     persist *p = zmalloc(sizeof(*p));
     p->ops = ops;
     p->config = config ? *config : persistDefaultConfig();
@@ -365,6 +384,7 @@ persist *persistCreate(const persistOps *ops, const persistConfig *config) {
 
     /* Allocate WAL buffer if needed */
     if (p->config.walBufferSize > 0) {
+        /* @own: container; free=persistClose */
         p->walBuffer = zmalloc(p->config.walBufferSize);
     }
 
@@ -541,6 +561,7 @@ void persistSetConfig(persist *p, const persistConfig *config) {
         /* Reallocate WAL buffer if size changed */
         if (oldBufferSize != config->walBufferSize) {
             zfree(p->walBuffer);
+            /* @own: container; free=persistClose */
             p->walBuffer = config->walBufferSize > 0
                                ? zmalloc(config->walBufferSize)
                                : NULL;
@@ -653,16 +674,16 @@ bool persistSnapshot(persist *p, const void *structure) {
         return false;
     }
 
-    uint8_t *envelope = zmalloc(envelopeLen);
-    size_t envelopeWritten = 0;
-    if (!flexEnvelopeWrap(envelope, envelopeLen, payload, (uint64_t)payloadLen,
-                          &wrap, &envelopeWritten) ||
-        envelopeWritten != envelopeLen) {
-        zfree(envelope);
-        zfree(payload);
-        return false;
-    }
-    zfree(payload);
+    persistStore *store = p->snapshotStore;
+
+    /* A snapshot fully replaces the file, so publish it atomically when
+     * the backend supports it: writes land in a private temp that is
+     * durably renamed over the live file only once complete. A crash
+     * therefore leaves either the prior snapshot or the new one, never
+     * a torn mix - and combined with the walSequence watermark, a crash
+     * anywhere in compaction stays crash-consistent. */
+    const bool atomic =
+        store->rewriteBegin && store->rewriteCommit && store->rewriteAbort;
 
     persistSnapHeader header = {
         .magic = PERSIST_SNAP_MAGIC,
@@ -686,47 +707,46 @@ bool persistSnapshot(persist *p, const void *structure) {
     };
     header.headerXxh64 = persistSnapHeaderDigest(&header);
 
-    persistStore *store = p->snapshotStore;
-
-    /* A snapshot fully replaces the file, so publish it atomically when
-     * the backend supports it: writes land in a private temp that is
-     * durably renamed over the live file only once complete. A crash
-     * therefore leaves either the prior snapshot or the new one, never
-     * a torn mix - and combined with the walSequence watermark, a crash
-     * anywhere in compaction stays crash-consistent. */
-    const bool atomic =
-        store->rewriteBegin && store->rewriteCommit && store->rewriteAbort;
-    if (atomic && !store->rewriteBegin(store->ctx)) {
-        zfree(envelope);
-        return false;
-    }
-
-    if (store->seek(store->ctx, 0, SEEK_SET) < 0) {
-        zfree(envelope);
-        if (atomic) {
-            store->rewriteAbort(store->ctx);
+    /* Braced so the envelope buffer - which is the whole serialized
+     * structure - is released before the durability barrier below. */
+    {
+        cleanerName(zfree, Bytes) uint8_t *envelope = zmalloc(envelopeLen);
+        size_t envelopeWritten = 0;
+        if (!flexEnvelopeWrap(envelope, envelopeLen, payload,
+                              (uint64_t)payloadLen, &wrap, &envelopeWritten) ||
+            envelopeWritten != envelopeLen) {
+            zfree(payload);
+            return false;
         }
-        return false;
-    }
+        zfree(payload);
 
-    if (store->write(store->ctx, &header, sizeof(header)) !=
-        (ssize_t)sizeof(header)) {
-        zfree(envelope);
-        if (atomic) {
-            store->rewriteAbort(store->ctx);
+        if (atomic && !store->rewriteBegin(store->ctx)) {
+            return false;
         }
-        return false;
-    }
 
-    if (store->write(store->ctx, envelope, envelopeLen) !=
-        (ssize_t)envelopeLen) {
-        zfree(envelope);
-        if (atomic) {
-            store->rewriteAbort(store->ctx);
+        if (store->seek(store->ctx, 0, SEEK_SET) < 0) {
+            if (atomic) {
+                store->rewriteAbort(store->ctx);
+            }
+            return false;
         }
-        return false;
+
+        if (store->write(store->ctx, &header, sizeof(header)) !=
+            (ssize_t)sizeof(header)) {
+            if (atomic) {
+                store->rewriteAbort(store->ctx);
+            }
+            return false;
+        }
+
+        if (store->write(store->ctx, envelope, envelopeLen) !=
+            (ssize_t)envelopeLen) {
+            if (atomic) {
+                store->rewriteAbort(store->ctx);
+            }
+            return false;
+        }
     }
-    zfree(envelope);
 
     if (atomic) {
         /* Commit fsyncs the temp, renames it over the live file, and
@@ -813,33 +833,35 @@ void *persistRestore(persist *p) {
         return NULL;
     }
 
-    uint8_t *envelope = zmalloc((size_t)header.envelopeLen);
-    if (store->read(store->ctx, envelope, (size_t)header.envelopeLen) !=
-        (ssize_t)header.envelopeLen) {
-        zfree(envelope);
-        return NULL;
-    }
+    /* Braced so the envelope buffer is released as soon as the structure
+     * is materialized from it. */
+    void *structure = NULL;
+    {
+        cleanerName(zfree, Bytes) uint8_t *envelope =
+            zmalloc((size_t)header.envelopeLen);
+        if (store->read(store->ctx, envelope, (size_t)header.envelopeLen) !=
+            (ssize_t)header.envelopeLen) {
+            return NULL;
+        }
 
-    flexEnvelopeVerifyParams verify;
-    if (!persistBuildVerifyParams(p, &verify)) {
-        zfree(envelope);
-        return NULL;
-    }
+        flexEnvelopeVerifyParams verify;
+        if (!persistBuildVerifyParams(p, &verify)) {
+            return NULL;
+        }
 
-    const uint8_t *payload = NULL;
-    uint64_t payloadLen = 0;
-    if (!flexEnvelopeVerify(envelope, (size_t)header.envelopeLen, &verify,
-                            &payload, &payloadLen)) {
-        zfree(envelope);
-        return NULL;
-    }
+        const uint8_t *payload = NULL;
+        uint64_t payloadLen = 0;
+        if (!flexEnvelopeVerify(envelope, (size_t)header.envelopeLen, &verify,
+                                &payload, &payloadLen)) {
+            return NULL;
+        }
 
-    /* The envelope's payload sits at an arbitrary offset inside the malloc'd
-     * envelope buffer (after the varint framing). ops->restore
-     * implementations must read multi-byte fields with memcpy rather than
-     * casting the pointer — they do not get an aligned buffer. */
-    void *structure = p->ops->restore(payload, (size_t)payloadLen);
-    zfree(envelope);
+        /* The envelope's payload sits at an arbitrary offset inside the
+         * malloc'd envelope buffer (after the varint framing). ops->restore
+         * implementations must read multi-byte fields with memcpy rather than
+         * casting the pointer — they do not get an aligned buffer. */
+        structure = p->ops->restore(payload, (size_t)payloadLen);
+    }
 
     if (structure && p->ops->validate && !p->ops->validate(structure)) {
         if (p->ops->free) {
@@ -1053,42 +1075,46 @@ bool persistLogOp(persist *p, persistOp op, const void *args, size_t argc) {
     }
 
     const size_t payloadLen = PERSIST_WAL_ENTRY_PREAMBLE_LEN + opDataLen;
-    uint8_t *payload = zmalloc(payloadLen);
-    memcpy(payload, &p->walSequence, sizeof(uint64_t));
-    payload[sizeof(uint64_t)] = (uint8_t)op;
-    if (opData && opDataLen > 0) {
-        memcpy(payload + PERSIST_WAL_ENTRY_PREAMBLE_LEN, opData, opDataLen);
-    }
-    zfree(opData);
-
     const size_t envelopeLen =
         flexEnvelopeWrappedSize((uint64_t)payloadLen, algo, wrap.on_wire_flags);
     if (envelopeLen == 0 || envelopeLen > (size_t)PERSIST_WAL_ENTRY_MAX_BYTES) {
-        zfree(payload);
+        zfree(opData);
         return false;
     }
 
-    uint8_t *envelope = zmalloc(envelopeLen);
-    size_t envelopeWritten = 0;
-    if (!flexEnvelopeWrap(envelope, envelopeLen, payload, (uint64_t)payloadLen,
-                          &wrap, &envelopeWritten) ||
-        envelopeWritten != envelopeLen) {
-        zfree(envelope);
-        zfree(payload);
-        return false;
-    }
-    zfree(payload);
+    /* Braced so both scratch buffers - each up to a full WAL entry -
+     * are released before the sync barrier below, and the payload copy
+     * goes as soon as it is wrapped into the envelope. */
+    {
+        cleanerName(zfree, Bytes) uint8_t *envelope = zmalloc(envelopeLen);
 
-    const uint32_t envelopeLen32 = (uint32_t)envelopeLen;
-    if (!persistWALWrite(p, &envelopeLen32, sizeof(envelopeLen32))) {
-        zfree(envelope);
-        return false;
+        {
+            cleanerName(zfree, Bytes) uint8_t *payload = zmalloc(payloadLen);
+            memcpy(payload, &p->walSequence, sizeof(uint64_t));
+            payload[sizeof(uint64_t)] = (uint8_t)op;
+            if (opData && opDataLen > 0) {
+                memcpy(payload + PERSIST_WAL_ENTRY_PREAMBLE_LEN, opData,
+                       opDataLen);
+            }
+            zfree(opData);
+
+            size_t envelopeWritten = 0;
+            if (!flexEnvelopeWrap(envelope, envelopeLen, payload,
+                                  (uint64_t)payloadLen, &wrap,
+                                  &envelopeWritten) ||
+                envelopeWritten != envelopeLen) {
+                return false;
+            }
+        }
+
+        const uint32_t envelopeLen32 = (uint32_t)envelopeLen;
+        if (!persistWALWrite(p, &envelopeLen32, sizeof(envelopeLen32))) {
+            return false;
+        }
+        if (!persistWALWrite(p, envelope, envelopeLen)) {
+            return false;
+        }
     }
-    if (!persistWALWrite(p, envelope, envelopeLen)) {
-        zfree(envelope);
-        return false;
-    }
-    zfree(envelope);
 
     p->walSequence++;
     p->stats.walEntries++;
@@ -1164,16 +1190,14 @@ static int persistWALReadOneEntry(persist *p, uint8_t **envelopeOut,
     }
 
     const size_t envelopeLen = (size_t)envelopeLen32;
-    uint8_t *envelope = zmalloc(envelopeLen);
+    cleanerName(zfree, Bytes) uint8_t *envelope = zmalloc(envelopeLen);
     if (store->read(store->ctx, envelope, envelopeLen) !=
         (ssize_t)envelopeLen) {
-        zfree(envelope);
         return -1;
     }
 
     flexEnvelopeVerifyParams verify;
     if (!persistBuildVerifyParams(p, &verify)) {
-        zfree(envelope);
         return -1;
     }
 
@@ -1181,11 +1205,9 @@ static int persistWALReadOneEntry(persist *p, uint8_t **envelopeOut,
     uint64_t payloadLen = 0;
     if (!flexEnvelopeVerify(envelope, envelopeLen, &verify, &payload,
                             &payloadLen)) {
-        zfree(envelope);
         return -1;
     }
     if (payloadLen < (uint64_t)PERSIST_WAL_ENTRY_PREAMBLE_LEN) {
-        zfree(envelope);
         return -1;
     }
 
@@ -1194,7 +1216,9 @@ static int persistWALReadOneEntry(persist *p, uint8_t **envelopeOut,
     *opDataOut = payload + PERSIST_WAL_ENTRY_PREAMBLE_LEN;
     *opDataLenOut = (size_t)payloadLen - PERSIST_WAL_ENTRY_PREAMBLE_LEN;
 
+    /* Caller owns the envelope now (opData points into it). */
     *envelopeOut = envelope;
+    envelope = NULL;
     *envelopeLenOut = envelopeLen;
     return 1;
 }
@@ -1381,6 +1405,7 @@ void *persistRecover(persist *p) {
         p->ops->type == PERSIST_TYPE_MULTILIST_SMALL ||
         p->ops->type == PERSIST_TYPE_MULTILIST_MEDIUM ||
         p->ops->type == PERSIST_TYPE_MULTILIST_FULL) {
+        /* @own: static */
         replayMflexState = mflexStateCreate();
         if (!replayMflexState) {
             return NULL;
@@ -1485,25 +1510,22 @@ bool persistVerifySnapshot(persist *p) {
         return false;
     }
 
-    uint8_t *envelope = zmalloc((size_t)header.envelopeLen);
+    cleanerName(zfree, Bytes) uint8_t *envelope =
+        zmalloc((size_t)header.envelopeLen);
     if (store->read(store->ctx, envelope, (size_t)header.envelopeLen) !=
         (ssize_t)header.envelopeLen) {
-        zfree(envelope);
         return false;
     }
 
     flexEnvelopeVerifyParams verify;
     if (!persistBuildVerifyParams(p, &verify)) {
-        zfree(envelope);
         return false;
     }
 
     const uint8_t *payload = NULL;
     uint64_t payloadLen = 0;
-    const bool ok = flexEnvelopeVerify(envelope, (size_t)header.envelopeLen,
-                                       &verify, &payload, &payloadLen);
-    zfree(envelope);
-    return ok;
+    return flexEnvelopeVerify(envelope, (size_t)header.envelopeLen, &verify,
+                              &payload, &payloadLen);
 }
 
 bool persistVerifyWAL(persist *p) {
@@ -1663,6 +1685,7 @@ static ssize_t persistMemWrite(void *ctx, const void *data, size_t len) {
         while (newCap < needed) {
             newCap *= 2;
         }
+        /* @own: container; free=persistMemClose */
         m->data = zrealloc(m->data, newCap);
         m->capacity = newCap;
     }
@@ -1744,12 +1767,15 @@ static void persistMemClose(void *ctx) {
 }
 
 persistStore *persistStoreMemory(size_t initialCapacity) {
+    /* @own: container; free=persistMemClose */
     persistMemStore *m = zmalloc(sizeof(*m));
+    /* @own: container; free=persistMemClose */
     m->data = initialCapacity > 0 ? zmalloc(initialCapacity) : NULL;
     m->size = 0;
     m->capacity = initialCapacity;
     m->position = 0;
 
+    /* @own: caller; free=zfree */
     persistStore *store = zmalloc(sizeof(*store));
     store->ctx = m;
     store->write = persistMemWrite;
@@ -1851,7 +1877,7 @@ static bool persistFsyncDir(const char *path) {
     const char *slash = strrchr(path, '/');
     char dirbuf[2] = ".";
     const char *dir;
-    char *owned = NULL;
+    cleanerName(zfree, Chars) char *owned = NULL;
     if (!slash) {
         dir = dirbuf;
     } else if (slash == path) {
@@ -1866,7 +1892,6 @@ static bool persistFsyncDir(const char *path) {
     }
 
     const int dfd = open(dir, O_RDONLY);
-    zfree(owned);
     if (dfd < 0) {
         return false;
     }
@@ -1883,18 +1908,19 @@ static bool persistFileRewriteBegin(void *ctx) {
     }
 
     const size_t pathLen = strlen(f->path);
-    char *tmpPath = zmalloc(pathLen + sizeof(".tmp"));
+    cleanerName(zfree, Chars) char *tmpPath = zmalloc(pathLen + sizeof(".tmp"));
     memcpy(tmpPath, f->path, pathLen);
     memcpy(tmpPath + pathLen, ".tmp", sizeof(".tmp"));
 
     const int tmpFd = open(tmpPath, O_RDWR | O_CREAT | O_TRUNC, 0644);
     if (tmpFd < 0) {
-        zfree(tmpPath);
         return false;
     }
 
     f->tmpFd = tmpFd;
+    /* The store owns the temp path until the rewrite ends. */
     f->tmpPath = tmpPath;
+    tmpPath = NULL;
     return true;
 }
 
@@ -1966,13 +1992,16 @@ persistStore *persistStoreFile(const char *path, bool create) {
         return NULL;
     }
 
+    /* @own: container; free=persistFileClose */
     persistFileStore *f = zmalloc(sizeof(*f));
     f->fd = fd;
+    /* @own: container; free=persistFileClose */
     f->path = zmalloc(strlen(path) + 1);
     strcpy(f->path, path);
     f->tmpFd = -1;
     f->tmpPath = NULL;
 
+    /* @own: caller; free=zfree */
     persistStore *store = zmalloc(sizeof(*store));
     store->ctx = f;
     store->write = persistFileWrite;
@@ -1999,6 +2028,7 @@ persistStore *persistStoreFile(const char *path, bool create) {
 static uint8_t *flexPersistSnapshot(const void *structure, size_t *len) {
     const flex *f = structure;
     *len = flexBytes(f);
+    /* @own: caller; free=zfree */
     uint8_t *buf = zmalloc(*len);
     memcpy(buf, f, *len);
     return buf;
@@ -2008,6 +2038,7 @@ static void *flexPersistRestore(const uint8_t *data, size_t len) {
     if (!flexValidateBuffer(data, len)) {
         return NULL;
     }
+    /* @own: caller; free=flexFree */
     flex *f = zmalloc(len);
     memcpy(f, data, len);
     return f;
@@ -2045,6 +2076,7 @@ static uint8_t *flexPersistEncodeOp(persistOp op, const void *args, size_t argc,
                                     encodedType, &dl);
 
         *len = 1 + encodedLength; /* type + value */
+        /* @own: caller; free=zfree */
         uint8_t *buf = zmalloc(*len);
         buf[0] = encodedType;
         memcpy(buf + 1, encodedValue, encodedLength);
@@ -2115,6 +2147,8 @@ const persistOps persistOpsFlex = {
  */
 #include "intset.h"
 
+defcleaner(intset *, intsetFree);
+
 static uint8_t *intsetPersistSnapshot(const void *structure, size_t *len) {
     intset *is = (intset *)structure;
     size_t count = intsetCount(is);
@@ -2122,6 +2156,7 @@ static uint8_t *intsetPersistSnapshot(const void *structure, size_t *len) {
     /* Snapshot format: [count: 8 bytes][values: count * 8 bytes]
      * We serialize all values as int64_t for universality */
     *len = sizeof(uint64_t) + (count * sizeof(int64_t));
+    /* @own: caller; free=zfree */
     uint8_t *buf = zmalloc(*len);
 
     /* Write count */
@@ -2171,6 +2206,7 @@ static void *intsetPersistRestore(const uint8_t *data, size_t len) {
      * inside the envelope wrapper, so an int64_t-aligned address is not
      * guaranteed. On aarch64 / x86_64 the compiler folds this into a
      * single load instruction; there is no runtime overhead. */
+    /* @own: caller; free=intsetFree */
     intset *is = intsetNew();
     const uint8_t *valueBytes = data + sizeof(uint64_t);
     for (uint64_t i = 0; i < count; i++) {
@@ -2201,6 +2237,7 @@ static uint8_t *intsetPersistEncodeOp(persistOp op, const void *args,
         /* args is int64_t* */
         const int64_t *value = args;
         *len = sizeof(int64_t);
+        /* @own: caller; free=zfree */
         uint8_t *buf = zmalloc(*len);
         memcpy(buf, value, sizeof(int64_t));
         return buf;
@@ -2245,6 +2282,7 @@ static bool intsetPersistApplyOp(void *structure, persistOp op,
 
     case PERSIST_OP_CLEAR: {
         intsetFree(*is);
+        /* @own: caller; free=intsetFree */
         *is = intsetNew();
         return true;
     }
@@ -2293,11 +2331,16 @@ const persistOps persistOpsIntset = {
  */
 #include "intsetBig.h"
 
+defcleaner(intsetBig *, intsetBigFree);
+
 static uint8_t *intsetBigPersistSnapshot(const void *structure, size_t *len) {
     const intsetBig *isb = structure;
     /* A flex whose elements are the numeric members (one per member), built
      * incrementally via the databoxBig factory push — no count header, no
      * hand-rolled [tag][value] framing. */
+    /* The flex buffer itself is the snapshot payload; the framework
+     * releases snapshot buffers with zfree, which is what flexFree does. */
+    /* @own: caller; free=zfree */
     flex *f = flexNew();
     if (!f) {
         *len = 0;
@@ -2321,6 +2364,7 @@ static void *intsetBigPersistRestore(const uint8_t *data, size_t len) {
     if (!flexValidateBufferDeep(data, len)) {
         return NULL;
     }
+    /* @own: caller; free=intsetBigFree */
     intsetBig *isb = intsetBigNew();
     if (!isb) {
         return NULL;
@@ -2423,6 +2467,7 @@ static uint8_t *intsetBigPersistEncodeOp(persistOp op, const void *args,
 }
 
 static void *intsetBigPersistNewEmpty(void) {
+    /* @own: caller; free=intsetBigFree */
     return intsetBigNew();
 }
 
@@ -2457,18 +2502,21 @@ static uint8_t *multiroarPersistSnapshot(const void *structure, size_t *len) {
 
     /* Get serialized size first */
     size_t size = multiroarSerializedSize(r);
-    uint8_t *buf = zmalloc(size);
+    cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(size);
 
     /* Serialize into buffer */
     size_t written = multiroarSerialize(r, buf, size);
     if (written == 0 || written != size) {
-        zfree(buf);
         *len = 0;
         return NULL;
     }
 
     *len = written;
-    return buf;
+
+    /* Caller owns the serialized buffer. */
+    uint8_t *out = buf;
+    buf = NULL;
+    return out;
 }
 
 static void *multiroarPersistRestore(const uint8_t *data, size_t len) {
@@ -2476,6 +2524,7 @@ static void *multiroarPersistRestore(const uint8_t *data, size_t len) {
         return NULL;
     }
     /* Deserialize multiroar from snapshot */
+    /* @own: caller; free=multiroarFree */
     return multiroarDeserialize(data, len);
 }
 
@@ -2501,6 +2550,7 @@ static uint8_t *multiroarPersistEncodeOp(persistOp op, const void *args,
         /* args is uint64_t* (position) */
         const uint64_t *position = args;
         *len = sizeof(uint64_t);
+        /* @own: caller; free=zfree */
         uint8_t *buf = zmalloc(*len);
         memcpy(buf, position, sizeof(uint64_t));
         return buf;
@@ -2512,6 +2562,7 @@ static uint8_t *multiroarPersistEncodeOp(persistOp op, const void *args,
          * raw framing as the single-position ops. */
         const uint64_t *range = args;
         *len = 2 * sizeof(uint64_t);
+        /* @own: caller; free=zfree */
         uint8_t *buf = zmalloc(*len);
         memcpy(buf, range, 2 * sizeof(uint64_t));
         return buf;
@@ -2569,6 +2620,7 @@ static bool multiroarPersistApplyOp(void *structure, persistOp op,
 
     case PERSIST_OP_CLEAR: {
         multiroarFree(*r);
+        /* @own: caller; free=multiroarFree */
         *r = multiroarBitNew();
         return true;
     }
@@ -2583,6 +2635,7 @@ static void multiroarPersistFree(void *structure) {
 }
 
 static void *multiroarPersistNewEmpty(void) {
+    /* @own: caller; free=multiroarFree */
     return multiroarBitNew();
 }
 
@@ -2615,9 +2668,12 @@ const persistOps persistOpsMultiroar = {
 #include "hyperloglog.h"
 #include "mdsc.h"
 
+defcleaner(hyperloglog *, hyperloglogFree);
+
 static uint8_t *hyperloglogPersistSnapshot(const void *structure, size_t *len) {
     const mdsc *m = (const mdsc *)structure;
     size_t l = mdsclen(m);
+    /* @own: caller; free=zfree */
     uint8_t *buf = zmalloc(l);
     if (l > 0) {
         memcpy(buf, structure, l);
@@ -2631,10 +2687,12 @@ static void *hyperloglogPersistRestore(const uint8_t *data, size_t len) {
         return NULL;
     }
 
+    /* @own: caller; free=mdscfree */
     return (void *)mdscnewlen(data, len);
 }
 
 static void *hyperloglogPersistNewEmpty(void) {
+    /* @own: caller; free=hyperloglogFree */
     return hyperloglogNew();
 }
 
@@ -2667,6 +2725,7 @@ static uint8_t *hyperloglogPersistEncodeOp(persistOp op, const void *args,
     if (op == PERSIST_OP_INSERT || op == PERSIST_OP_MERGE) {
         uint8_t *buf = NULL;
         if (argc > 0) {
+            /* @own: caller; free=zfree */
             buf = zmalloc(argc);
             memcpy(buf, args, argc);
         }
@@ -2751,6 +2810,8 @@ const persistOps persistOpsHyperloglog = {
  */
 #include "multimap.h"
 
+defcleaner(multimap *, multimapFree);
+
 /* Get elementsPerEntry using the iterator interface (avoids internal headers)
  */
 static uint32_t multimapPersistGetElementsPerEntry(const multimap *m) {
@@ -2782,6 +2843,7 @@ static uint8_t *multimapPersistSnapshot(const void *structure, size_t *len) {
     /* Snapshot format: [elementsPerEntry: 4 bytes][flex data: N bytes] */
     size_t flexLen = flexBytes(f);
     *len = sizeof(uint32_t) + flexLen;
+    /* @own: caller; free=zfree */
     uint8_t *buf = zmalloc(*len);
 
     memcpy(buf, &elementsPerEntry, sizeof(uint32_t));
@@ -2810,10 +2872,11 @@ static void *multimapPersistRestore(const uint8_t *data, size_t len) {
     }
 
     /* Restore the flex from remaining data */
-    flex *f = zmalloc(flexLen);
+    cleaner(flexFree) flex *f = zmalloc(flexLen);
     memcpy(f, data + sizeof(uint32_t), flexLen);
 
     /* Create multimap */
+    /* @own: caller; free=multimapFree */
     multimap *m = multimapNew(elementsPerEntry);
 
     /* Iterate through entries in the flex
@@ -2838,7 +2901,6 @@ static void *multimapPersistRestore(const uint8_t *data, size_t len) {
         multimapInsertFullWidth(&m, (const databox **)elements);
     }
 
-    flexFree(f);
     return m;
 }
 
@@ -3003,13 +3065,16 @@ const persistOps persistOpsMultimap = {
  */
 #include "multilist.h"
 
+defcleaner(multilist *, multilistFree);
+
 static uint8_t *multilistPersistSnapshot(const void *structure, size_t *len) {
     const multilist *ml = structure;
 
     /* Create a flex to hold all elements */
-    flex *f = flexNew();
+    cleaner(flexFree) flex *f = flexNew();
 
     /* Iterate through all elements and add to flex */
+    __attribute__((cleanup(freeMflexStates2_cleanup)))
     mflexState *state[2] = {mflexStateCreate(), mflexStateCreate()};
     multilistIterator iter;
     multilistIteratorInit((multilist *)ml, state, &iter, true,
@@ -3021,13 +3086,11 @@ static uint8_t *multilistPersistSnapshot(const void *structure, size_t *len) {
     }
 
     multilistIteratorRelease(&iter);
-    mflexStateFree(state[0]);
-    mflexStateFree(state[1]);
 
     *len = flexBytes(f);
+    /* @own: caller; free=zfree */
     uint8_t *buf = zmalloc(*len);
     memcpy(buf, f, *len);
-    flexFree(f);
     return buf;
 }
 
@@ -3037,21 +3100,23 @@ static void *multilistPersistRestore(const uint8_t *data, size_t len) {
     }
 
     /* Restore the flex */
-    flex *f = zmalloc(len);
+    cleaner(flexFree) flex *f = zmalloc(len);
     memcpy(f, data, len);
 
     /* Create multilist and populate from flex */
-    multilist *ml = multilistNew(FLEX_CAP_LEVEL_2048, 0); /* default config */
-    /* Use thread-local replay state set by persistRecover */
+    cleaner(multilistFree) multilist *ml =
+        multilistNew(FLEX_CAP_LEVEL_2048, 0); /* default config */
+    /* Use thread-local replay state set by persistRecover. That state is
+     * borrowed; only a locally created fallback is owned here. */
+    cleaner(mflexStateFree) mflexState *ownedState = NULL;
     mflexState *state = persistGetReplayState();
     if (!state) {
         /* If not in replay context, create temporary state */
-        state = mflexStateCreate();
-        if (!state) {
-            multilistFree(ml);
-            flexFree(f);
+        ownedState = mflexStateCreate();
+        if (!ownedState) {
             return NULL;
         }
+        state = ownedState;
     }
 
     /* Iterate through flex and push each element to multilist
@@ -3066,13 +3131,10 @@ static void *multilistPersistRestore(const uint8_t *data, size_t len) {
         fe = flexNext(f, fe);
     }
 
-    /* Free temporary state if we created one */
-    if (state != persistGetReplayState()) {
-        mflexStateFree(state);
-    }
-
-    flexFree(f);
-    return ml;
+    /* @own: caller; free=multilistFree */
+    multilist *out = ml;
+    ml = NULL;
+    return out;
 }
 
 static size_t multilistPersistCount(const void *structure) {
@@ -3189,7 +3251,7 @@ static bool multilistApplyPopIdentity(multilist **ml, mflexState *state,
      * identity.  The iterator wants two scratch states; the replay
      * thread-local provides one, borrow a temporary for the second
      * (the ROTATE arm's idiom). */
-    mflexState *tmp = mflexStateCreate();
+    cleaner(mflexStateFree) mflexState *tmp = mflexStateCreate();
     if (!tmp) {
         return false;
     }
@@ -3215,7 +3277,6 @@ static bool multilistApplyPopIdentity(multilist **ml, mflexState *state,
      * skipping this drops the removal and leaves the node pointer
      * stale after a reallocating delete. */
     multilistIteratorRelease(&iter);
-    mflexStateFree(tmp);
     atomic_fetch_add_explicit(removed ? &mlPopIdentityDeepRemoveTotal
                                       : &mlPopIdentityAbsentNoopTotal,
                               1, memory_order_relaxed);
@@ -3309,13 +3370,12 @@ static bool multilistPersistApplyOp(void *structure, persistOp op,
             if (!state) {
                 return false;
             }
-            mflexState *tmp = mflexStateCreate();
+            cleaner(mflexStateFree) mflexState *tmp = mflexStateCreate();
             if (!tmp) {
                 return false;
             }
             mflexState *pair[2] = {state, tmp};
             multilistRotate(*ml, pair);
-            mflexStateFree(tmp);
         }
         return true;
     }
@@ -3332,6 +3392,7 @@ static bool multilistPersistApplyOp(void *structure, persistOp op,
 
     case PERSIST_OP_CLEAR:
         multilistFree(*ml);
+        /* @own: caller; free=multilistFree */
         *ml = multilistNew(FLEX_CAP_LEVEL_2048, 0);
         return true;
 
@@ -3345,6 +3406,7 @@ static void multilistPersistFree(void *structure) {
 }
 
 static void *multilistPersistNewEmpty(void) {
+    /* @own: caller; free=multilistFree */
     return multilistNew(FLEX_CAP_LEVEL_16384, 2);
 }
 
@@ -3374,7 +3436,7 @@ static uint8_t *multidictPersistSnapshot(const void *structure, size_t *len) {
     const multidict *d = structure;
 
     /* Create a flex to hold all key-value pairs */
-    flex *f = flexNew();
+    cleaner(flexFree) flex *f = flexNew();
 
     /* Iterate through all entries and add to flex as [key, val, key, val, ...]
      */
@@ -3389,9 +3451,9 @@ static uint8_t *multidictPersistSnapshot(const void *structure, size_t *len) {
     }
 
     *len = flexBytes(f);
+    /* @own: caller; free=zfree */
     uint8_t *buf = zmalloc(*len);
     memcpy(buf, f, *len);
-    flexFree(f);
     return buf;
 }
 
@@ -3400,11 +3462,15 @@ static void *multidictPersistRestore(const uint8_t *data, size_t len) {
         return NULL;
     }
     /* Restore the flex */
-    flex *f = zmalloc(len);
+    cleaner(flexFree) flex *f = zmalloc(len);
     memcpy(f, data, len);
 
-    /* Create multidict with default type and class */
+    /* Create multidict with default type and class. The dict privately
+     * owns the class; the restore contract hands both to the caller, who
+     * releases the class after the dict (see multidictPersistFree). */
+    /* @own: container; free=multidictDefaultClassFree */
     multidictClass *qdc = multidictDefaultClassNew();
+    /* @own: caller; free=multidictFree */
     multidict *d = multidictNew(&multidictTypeExactKey, qdc, 0);
 
     /* Iterate through flex and add each key-value pair
@@ -3427,7 +3493,6 @@ static void *multidictPersistRestore(const uint8_t *data, size_t len) {
         multidictAdd(d, &key, &val);
     }
 
-    flexFree(f);
     return d;
 }
 
@@ -3461,6 +3526,7 @@ static uint8_t *multidictPersistEncodeOp(persistOp op, const void *args,
         DATABOX_LINEAR_PARTS_ENCODE(boxes[1], valLen, valVal, valType, &dlVal);
 
         *len = 2 + keyLen + valLen; /* 2 type bytes + data */
+        /* @own: caller; free=zfree */
         uint8_t *buf = zmalloc(*len);
         size_t offset = 0;
         buf[offset++] = keyType;
@@ -3482,6 +3548,7 @@ static uint8_t *multidictPersistEncodeOp(persistOp op, const void *args,
                                     &dl);
 
         *len = 1 + encodedLen;
+        /* @own: caller; free=zfree */
         uint8_t *buf = zmalloc(*len);
         buf[0] = encodedType;
         memcpy(buf + 1, encodedVal, encodedLen);
@@ -3560,7 +3627,12 @@ static bool multidictPersistApplyOp(void *structure, persistOp op,
 }
 
 static void multidictPersistFree(void *structure) {
+    /* Restore created this dict with its own default class; the class
+     * must outlive the dict (teardown runs class callbacks), so free
+     * it after the dict. */
+    multidictClass *cls = multidictGetClass(structure);
     multidictFree(structure);
+    multidictDefaultClassFree(cls);
 }
 
 const persistOps persistOpsMultidict = {
@@ -3600,6 +3672,8 @@ const persistOps persistOpsMultiarray = {
 #include "../deps/varint/src/varintTagged.h"
 #include "multilru.h"
 
+defcleaner(multilru *, multilruFree);
+
 /* Snapshot format (using flex):
  * - Config:
  * [maxLevels][enableWeights][policy][evictStrategy][maxCount][maxWeight]
@@ -3610,7 +3684,7 @@ const persistOps persistOpsMultiarray = {
 static uint8_t *multilruPersistSnapshot(const void *structure, size_t *len) {
     const multilru *mlru = structure;
 
-    flex *f = flexNew();
+    cleaner(flexFree) flex *f = flexNew();
 
     /* Handle NULL (empty LRU) */
     if (mlru) {
@@ -3663,9 +3737,9 @@ static uint8_t *multilruPersistSnapshot(const void *structure, size_t *len) {
     }
 
     *len = flexBytes(f);
+    /* @own: caller; free=zfree */
     uint8_t *buf = zmalloc(*len);
     memcpy(buf, f, *len);
-    flexFree(f);
     return buf;
 }
 
@@ -3674,13 +3748,12 @@ static void *multilruPersistRestore(const uint8_t *data, size_t len) {
         return NULL;
     }
     /* Restore flex from data */
-    flex *f = zmalloc(len);
+    cleaner(flexFree) flex *f = zmalloc(len);
     memcpy(f, data, len);
 
     size_t count = flexCount(f);
     if (count < 6) {
         /* Invalid: need at least config fields */
-        flexFree(f);
         return NULL;
     }
 
@@ -3734,9 +3807,9 @@ static void *multilruPersistRestore(const uint8_t *data, size_t len) {
         .evictStrategy = MLRU_EVICT_LRU, /* Default */
         .enableWeights = enableWeights,
     };
+    /* @own: caller; free=multilruFree */
     multilru *mlru = multilruNewWithConfig(&config);
     if (!mlru) {
-        flexFree(f);
         return NULL;
     }
 
@@ -3748,9 +3821,10 @@ static void *multilruPersistRestore(const uint8_t *data, size_t len) {
     size_t numEntries = (count - configFields) / fieldsPerEntry;
 
     /* Track which handles are real (from snapshot) vs dummy (gap fillers) */
-    bool *isRealEntry = hasNextFresh && targetNextFresh > 0
-                            ? zcalloc(targetNextFresh + 1, sizeof(bool))
-                            : NULL;
+    cleanerName(zfree, Bools) bool *isRealEntry =
+        hasNextFresh && targetNextFresh > 0
+            ? zcalloc(targetNextFresh + 1, sizeof(bool))
+            : NULL;
 
     for (size_t i = 0; i < numEntries && fe; i++) {
         /* Read handle */
@@ -3833,15 +3907,9 @@ static void *multilruPersistRestore(const uint8_t *data, size_t len) {
         }
     }
 
-    /* Free tracking array */
-    if (isRealEntry) {
-        zfree(isRealEntry);
-    }
-
     /* Re-enable auto-eviction */
     multilruSetAutoEvict(mlru, true);
 
-    flexFree(f);
     return mlru;
 }
 
@@ -3893,6 +3961,7 @@ static uint8_t *multilruPersistEncodeOp(persistOp op, const void *args,
         }
 
         /* Encode handle and weight as self-describing varints */
+        /* @own: caller; free=zfree */
         uint8_t *buf = zmalloc(18); /* Max 9 bytes per tagged varint */
         varintWidth handleWidth = varintTaggedPut64(buf, handle);
         varintWidth weightWidth = varintTaggedPut64(buf + handleWidth, weight);
@@ -3904,6 +3973,7 @@ static uint8_t *multilruPersistEncodeOp(persistOp op, const void *args,
     case PERSIST_OP_CUSTOM: /* PROMOTE */
     {
         /* DELETE/PROMOTE: [handle (self-describing varint)] */
+        /* @own: caller; free=zfree */
         uint8_t *buf = zmalloc(9);
         varintWidth handleWidth = varintTaggedPut64(buf, handle);
         *len = handleWidth;
@@ -3919,6 +3989,7 @@ static uint8_t *multilruPersistEncodeOp(persistOp op, const void *args,
         const uint64_t *weightPtr = (const uint64_t *)argsArray[1];
         uint64_t newWeight = *weightPtr;
 
+        /* @own: caller; free=zfree */
         uint8_t *buf = zmalloc(18); /* Max 9 bytes per tagged varint */
         varintWidth handleWidth = varintTaggedPut64(buf, handle);
         varintWidth weightWidth =
@@ -3939,6 +4010,7 @@ static bool multilruPersistApplyOp(void *structure, persistOp op,
 
     /* Ensure mlru is initialized */
     if (!*mlru) {
+        /* @own: caller; free=multilruFree */
         *mlru = multilruNew();
     }
 
@@ -4080,12 +4152,14 @@ static bool multilruPersistApplyOp(void *structure, persistOp op,
  */
 #include "multiOrderedSet.h"
 
+defcleaner(multiOrderedSet *, multiOrderedSetFree);
+
 static uint8_t *multiOrderedSetPersistSnapshot(const void *structure,
                                                size_t *len) {
     const multiOrderedSet *mos = structure;
 
     /* Create a flex to hold all (score, member) pairs */
-    flex *f = flexNew();
+    cleaner(flexFree) flex *f = flexNew();
 
     /* Handle NULL (empty set) */
     if (mos) {
@@ -4104,9 +4178,9 @@ static uint8_t *multiOrderedSetPersistSnapshot(const void *structure,
     }
 
     *len = flexBytes(f);
+    /* @own: caller; free=zfree */
     uint8_t *buf = zmalloc(*len);
     memcpy(buf, f, *len);
-    flexFree(f);
     return buf;
 }
 
@@ -4115,19 +4189,19 @@ static void *multiOrderedSetPersistRestore(const uint8_t *data, size_t len) {
         return NULL;
     }
     /* Restore flex from data */
-    flex *f = zmalloc(len);
+    cleaner(flexFree) flex *f = zmalloc(len);
     memcpy(f, data, len);
-
-    /* Create multiOrderedSet (starts as Small tier even if empty) */
-    multiOrderedSet *mos = multiOrderedSetNew();
 
     /* Iterate through (score, member) pairs in the flex */
     size_t count = flexCount(f);
     if (count % 2 != 0) {
         /* Invalid: should have even number of elements (score, member pairs) */
-        flexFree(f);
         return NULL;
     }
+
+    /* Create multiOrderedSet (starts as Small tier even if empty) */
+    /* @own: caller; free=multiOrderedSetFree */
+    multiOrderedSet *mos = multiOrderedSetNew();
 
     flexEntry *fe = flexHead(f);
     for (size_t i = 0; i < count / 2 && fe; i++) {
@@ -4147,8 +4221,6 @@ static void *multiOrderedSetPersistRestore(const uint8_t *data, size_t len) {
         /* Add to multiOrderedSet */
         multiOrderedSetAdd(&mos, &score, &member);
     }
-
-    flexFree(f);
 
     /* Return the multiOrderedSet directly (not wrapped in pointer-to-pointer).
      * The persist system expects restore to return the structure itself, and
@@ -4195,6 +4267,7 @@ static uint8_t *multiOrderedSetPersistEncodeOp(persistOp op, const void *args,
         }
 
         *len = totalLen;
+        /* @own: caller; free=zfree */
         uint8_t *buf = zmalloc(totalLen);
         size_t offset = 0;
 
@@ -4226,6 +4299,7 @@ static uint8_t *multiOrderedSetPersistEncodeOp(persistOp op, const void *args,
                                     encodedType, &dl);
 
         *len = 1 + encodedLen;
+        /* @own: caller; free=zfree */
         uint8_t *buf = zmalloc(*len);
         buf[0] = encodedType;
         memcpy(buf + 1, encodedVal, encodedLen);
@@ -4248,6 +4322,7 @@ static bool multiOrderedSetPersistApplyOp(void *structure, persistOp op,
 
     /* Ensure mos is initialized (create Small tier if NULL) */
     if (!*mos) {
+        /* @own: caller; free=multiOrderedSetFree */
         *mos = multiOrderedSetNew();
     }
 
@@ -4404,6 +4479,16 @@ const persistOps persistOpsMultiLRU = {
 #ifdef DATAKIT_TEST
 #include "ctest.h"
 
+/* Free a test multidict together with the default class it holds; the
+ * class must outlive the dict because teardown runs class callbacks. */
+static void testMultidictFreeWithClass(multidict *d) {
+    multidictClass *cls = multidictGetClass(d);
+    multidictFree(d);
+    multidictDefaultClassFree(cls);
+}
+
+defcleanerName(multidict *, testMultidictFreeWithClass, Dict);
+
 int persistTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -4461,7 +4546,7 @@ int persistTest(int argc, char *argv[]) {
 
         TEST("envelope snapshot round-trip across all algorithms") {
             for (size_t i = 0; i < algoCount; i++) {
-                flex *f = flexNew();
+                cleaner(flexFree) flex *f = flexNew();
                 flexPushSigned(&f, 42, FLEX_ENDPOINT_TAIL);
                 flexPushBytes(&f, "hello", 5, FLEX_ENDPOINT_TAIL);
 
@@ -4492,7 +4577,6 @@ int persistTest(int argc, char *argv[]) {
                         (int32_t)algos[i]);
                 }
 
-                flexFree(f);
                 flexFree(restored);
                 persistClose(p);
             }
@@ -4505,12 +4589,11 @@ int persistTest(int argc, char *argv[]) {
             persistStore *snapStore = persistStoreMemory(0);
             persistAttachSnapshot(p, snapStore);
 
-            flex *f = flexNew();
+            cleaner(flexFree) flex *f = flexNew();
             flexPushSigned(&f, 1, FLEX_ENDPOINT_TAIL);
             if (persistSnapshot(p, f)) {
                 ERRR("Keyed snapshot without key must be refused");
             }
-            flexFree(f);
             persistClose(p);
         }
 
@@ -4521,7 +4604,7 @@ int persistTest(int argc, char *argv[]) {
             persistStore *snapStore = persistStoreMemory(0);
             persistAttachSnapshot(p, snapStore);
 
-            flex *f = flexNew();
+            cleaner(flexFree) flex *f = flexNew();
             flexPushBytes(&f, "corrupt-header-test", 19, FLEX_ENDPOINT_TAIL);
             if (!persistSnapshot(p, f)) {
                 ERRR("Snapshot setup failed");
@@ -4547,7 +4630,6 @@ int persistTest(int argc, char *argv[]) {
                 ERRR("Restoring the byte should re-pass verify");
             }
 
-            flexFree(f);
             persistClose(p);
         }
 
@@ -4559,7 +4641,7 @@ int persistTest(int argc, char *argv[]) {
             persistAttachSnapshot(p, snapStore);
             persistSetIntegrityKey(p, persistTestKey, sizeof(persistTestKey));
 
-            flex *f = flexNew();
+            cleaner(flexFree) flex *f = flexNew();
             for (uint32_t i = 0; i < 32u; i++) {
                 flexPushSigned(&f, (int64_t)i, FLEX_ENDPOINT_TAIL);
             }
@@ -4582,7 +4664,6 @@ int persistTest(int argc, char *argv[]) {
                 ERRR("Restoring the byte should re-pass verify");
             }
 
-            flexFree(f);
             persistClose(p);
         }
 
@@ -4593,7 +4674,7 @@ int persistTest(int argc, char *argv[]) {
             persistStore *snapStore = persistStoreMemory(0);
             persistAttachSnapshot(p, snapStore);
 
-            flex *f = flexNew();
+            cleaner(flexFree) flex *f = flexNew();
             flexPushBytes(&f, "digest-bit-flip", 15, FLEX_ENDPOINT_TAIL);
             if (!persistSnapshot(p, f)) {
                 ERRR("Snapshot setup failed");
@@ -4613,7 +4694,6 @@ int persistTest(int argc, char *argv[]) {
                 ERRR("Restoring the byte should re-pass verify");
             }
 
-            flexFree(f);
             persistClose(p);
         }
 
@@ -4631,7 +4711,7 @@ int persistTest(int argc, char *argv[]) {
             persistAttachSnapshot(p, snapStore);
             persistSetIntegrityKey(p, persistTestKey, sizeof(persistTestKey));
 
-            flex *f = flexNew();
+            cleaner(flexFree) flex *f = flexNew();
             for (uint32_t i = 0; i < 8u; i++) {
                 flexPushSigned(&f, (int64_t)(i * 100u + 1u),
                                FLEX_ENDPOINT_TAIL);
@@ -4669,7 +4749,6 @@ int persistTest(int argc, char *argv[]) {
                 ERRR("Post-sweep verify must still pass");
             }
 
-            flexFree(f);
             persistClose(p);
         }
 
@@ -4686,7 +4765,7 @@ int persistTest(int argc, char *argv[]) {
             persistAttachWAL(p, walStore);
             persistSetIntegrityKey(p, persistTestKey, sizeof(persistTestKey));
 
-            flex *f = flexNew();
+            cleaner(flexFree) flex *f = flexNew();
             if (!persistSnapshot(p, f)) {
                 ERRR("Initial snapshot failed");
             }
@@ -4723,7 +4802,6 @@ int persistTest(int argc, char *argv[]) {
                 ERRR("Post-sweep WAL verify must still pass");
             }
 
-            flexFree(f);
             persistClose(p);
         }
 
@@ -4737,7 +4815,7 @@ int persistTest(int argc, char *argv[]) {
             persistAttachWAL(p, walStore);
             persistSetIntegrityKey(p, persistTestKey, sizeof(persistTestKey));
 
-            flex *f = flexNew();
+            cleaner(flexFree) flex *f = flexNew();
             if (!persistSnapshot(p, f)) {
                 ERRR("Initial snapshot failed");
             }
@@ -4767,7 +4845,6 @@ int persistTest(int argc, char *argv[]) {
                     (size_t)flexCount(recovered));
             }
 
-            flexFree(f);
             flexFree(recovered);
             persistClose(p);
         }
@@ -4805,7 +4882,7 @@ int persistTest(int argc, char *argv[]) {
             persistAttachSnapshot(p, snapStore);
             persistSetIntegrityKey(p, resolvedKey, resolvedLen);
 
-            flex *f = flexNew();
+            cleaner(flexFree) flex *f = flexNew();
             flexPushBytes(&f, "keyring-end-to-end", 18, FLEX_ENDPOINT_TAIL);
             if (!persistSnapshot(p, f)) {
                 ERRR("Snapshot under keyring-supplied key failed");
@@ -4863,7 +4940,6 @@ int persistTest(int argc, char *argv[]) {
             }
 
             flexFree(restored);
-            flexFree(f);
             persistClose(p);
             hmacKeyringFree(ring);
         }
@@ -4897,7 +4973,7 @@ int persistTest(int argc, char *argv[]) {
                 ERRR("persistAttachKeyring failed");
             }
 
-            flex *f = flexNew();
+            cleaner(flexFree) flex *f = flexNew();
             if (!persistSnapshot(p, f)) {
                 ERRR("Snapshot under keyring binding failed");
             }
@@ -4933,7 +5009,6 @@ int persistTest(int argc, char *argv[]) {
                 ERRR("Failed re-bind must not clear the existing binding");
             }
 
-            flexFree(f);
             flexFree(recovered);
             persistClose(p);
             hmacKeyringFree(ring);
@@ -5033,7 +5108,7 @@ int persistTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("flex snapshot and restore") {
-        flex *f = flexNew();
+        cleaner(flexFree) flex *f = flexNew();
         flexPushSigned(&f, 42, FLEX_ENDPOINT_TAIL);
         flexPushSigned(&f, -100, FLEX_ENDPOINT_TAIL);
         flexPushBytes(&f, "hello", 5, FLEX_ENDPOINT_TAIL);
@@ -5082,13 +5157,12 @@ int persistTest(int argc, char *argv[]) {
                 (long long)box2.data.i);
         }
 
-        flexFree(f);
         flexFree(restored);
         persistClose(p);
     }
 
     TEST("flex WAL operations") {
-        flex *f = flexNew();
+        cleaner(flexFree) flex *f = flexNew();
 
         persist *p = persistCreate(&persistOpsFlex, NULL);
         persistStore *snapStore = persistStoreMemory(0);
@@ -5155,13 +5229,12 @@ int persistTest(int argc, char *argv[]) {
             ERR("Third should be 200, got %lld", (long long)box.data.i);
         }
 
-        flexFree(f);
         flexFree(recovered);
         persistClose(p);
     }
 
     TEST("flex compaction") {
-        flex *f = flexNew();
+        cleaner(flexFree) flex *f = flexNew();
         flexPushSigned(&f, 1, FLEX_ENDPOINT_TAIL);
         flexPushSigned(&f, 2, FLEX_ENDPOINT_TAIL);
 
@@ -5207,7 +5280,6 @@ int persistTest(int argc, char *argv[]) {
             ERR("Expected 4 elements, got %zu", flexCount(recovered));
         }
 
-        flexFree(f);
         flexFree(recovered);
         persistClose(p);
     }
@@ -5217,7 +5289,7 @@ int persistTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("intset snapshot and restore") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
         bool success;
         intsetAdd(&is, 42, &success);
         intsetAdd(&is, -100, &success);
@@ -5251,13 +5323,12 @@ int persistTest(int argc, char *argv[]) {
             ERRR("999999 not found");
         }
 
-        intsetFree(is);
         intsetFree(restored);
         persistClose(p);
     }
 
     TEST("intset WAL operations") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
 
         persist *p = persistCreate(&persistOpsIntset, NULL);
         persistStore *snapStore = persistStoreMemory(0);
@@ -5292,7 +5363,6 @@ int persistTest(int argc, char *argv[]) {
             ERRR("Missing values after recovery");
         }
 
-        intsetFree(is);
         intsetFree(recovered);
         persistClose(p);
     }
@@ -5302,7 +5372,7 @@ int persistTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("multimap snapshot and restore") {
-        multimap *m = multimapNew(2); /* key + value */
+        cleaner(multimapFree) multimap *m = multimapNew(2); /* key + value */
 
         databox key1 = DATABOX_WITH_BYTES((uint8_t *)"key1", 4);
         databox val1 = DATABOX_SIGNED(100);
@@ -5351,7 +5421,6 @@ int persistTest(int argc, char *argv[]) {
                 (long long)foundVal.data.i);
         }
 
-        multimapFree(m);
         multimapFree(restored);
         persistClose(p);
     }
@@ -5361,7 +5430,7 @@ int persistTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("verify snapshot integrity") {
-        flex *f = flexNew();
+        cleaner(flexFree) flex *f = flexNew();
         flexPushSigned(&f, 42, FLEX_ENDPOINT_TAIL);
 
         persist *p = persistCreate(&persistOpsFlex, NULL);
@@ -5385,7 +5454,6 @@ int persistTest(int argc, char *argv[]) {
             ERRR("Corrupted snapshot should fail verification");
         }
 
-        flexFree(f);
         persistClose(p);
     }
 
@@ -5409,7 +5477,7 @@ int persistTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("flex round-trip with many elements") {
-        flex *f = flexNew();
+        cleaner(flexFree) flex *f = flexNew();
 
         /* Add various types */
         for (int i = 0; i < 100; i++) {
@@ -5436,13 +5504,12 @@ int persistTest(int argc, char *argv[]) {
             ERRR("Content mismatch");
         }
 
-        flexFree(f);
         flexFree(restored);
         persistClose(p);
     }
 
     TEST("intset round-trip with edge cases") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
         bool success;
 
         /* Add edge case values */
@@ -5475,7 +5542,6 @@ int persistTest(int argc, char *argv[]) {
             }
         }
 
-        intsetFree(is);
         intsetFree(restored);
         persistClose(p);
     }
@@ -5485,7 +5551,8 @@ int persistTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("multilist snapshot and restore") {
-        multilist *ml = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+        cleaner(multilistFree) multilist *ml =
+            multilistNew(FLEX_CAP_LEVEL_2048, 0);
         mflexState *state = NULL;
 
         /* Add various elements */
@@ -5533,13 +5600,13 @@ int persistTest(int argc, char *argv[]) {
             ERRR("Could not get last element");
         }
 
-        multilistFree(ml);
         multilistFree(restored);
         persistClose(p);
     }
 
     TEST("multilist WAL operations") {
-        multilist *ml = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+        cleaner(multilistFree) multilist *ml =
+            multilistNew(FLEX_CAP_LEVEL_2048, 0);
         mflexState *state = NULL;
 
         persist *p = persistCreate(&persistOpsMultilist, NULL);
@@ -5569,7 +5636,6 @@ int persistTest(int argc, char *argv[]) {
             ERR("Expected 5 elements, got %zu", multilistCount(recovered));
         }
 
-        multilistFree(ml);
         multilistFree(recovered);
         persistClose(p);
     }
@@ -5579,8 +5645,10 @@ int persistTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("multidict snapshot and restore") {
+        /* @own: container; free=multidictDefaultClassFree */
         multidictClass *qdc = multidictDefaultClassNew();
-        multidict *d = multidictNew(&multidictTypeExactKey, qdc, 0);
+        cleanerName(testMultidictFreeWithClass, Dict) multidict *d =
+            multidictNew(&multidictTypeExactKey, qdc, 0);
 
         /* Add key-value pairs */
         for (int i = 0; i < 20; i++) {
@@ -5620,15 +5688,15 @@ int persistTest(int argc, char *argv[]) {
             }
         }
 
-        multidictFree(d);
-        multidictFree(restored);
+        testMultidictFreeWithClass(restored);
         persistClose(p);
     }
 
     TEST("WAL replay idempotence") {
         /* Replaying the same WAL twice should give same result */
-        flex *f1 = flexNew();
-        flex *f2 = flexNew();
+        cleaner(flexFree) flex *f1 = flexNew();
+        /* The second replay target comes straight from persistRestore
+         * below, so only the snapshot source is built here. */
 
         persist *p = persistCreate(&persistOpsFlex, NULL);
         persistStore *snapStore = persistStoreMemory(0);
@@ -5663,8 +5731,6 @@ int persistTest(int argc, char *argv[]) {
             ERRR("Idempotent replay content mismatch");
         }
 
-        flexFree(f1);
-        flexFree(f2);
         flexFree(r1);
         flexFree(r2);
         persistClose(p);
@@ -5675,7 +5741,7 @@ int persistTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("flex: empty structure round-trip") {
-        flex *f = flexNew();
+        cleaner(flexFree) flex *f = flexNew();
 
         persist *p = persistCreate(&persistOpsFlex, NULL);
         persistStore *store = persistStoreMemory(0);
@@ -5691,13 +5757,12 @@ int persistTest(int argc, char *argv[]) {
                 flexCount(restored));
         }
 
-        flexFree(f);
         flexFree(restored);
         persistClose(p);
     }
 
     TEST("flex: mixed types round-trip") {
-        flex *f = flexNew();
+        cleaner(flexFree) flex *f = flexNew();
 
         /* Add various types */
         flexPushSigned(&f, 0, FLEX_ENDPOINT_TAIL);
@@ -5751,13 +5816,12 @@ int persistTest(int argc, char *argv[]) {
             ERRR("Content mismatch");
         }
 
-        flexFree(f);
         flexFree(restored);
         persistClose(p);
     }
 
     TEST("flex: large structure round-trip") {
-        flex *f = flexNew();
+        cleaner(flexFree) flex *f = flexNew();
 
         /* Add many elements to stress test */
         for (int i = 0; i < 10000; i++) {
@@ -5783,13 +5847,12 @@ int persistTest(int argc, char *argv[]) {
             ERRR("Large flex content mismatch");
         }
 
-        flexFree(f);
         flexFree(restored);
         persistClose(p);
     }
 
     TEST("flex: WAL with mixed operations") {
-        flex *f = flexNew();
+        cleaner(flexFree) flex *f = flexNew();
 
         persist *p = persistCreate(&persistOpsFlex, NULL);
         persistStore *snapStore = persistStoreMemory(0);
@@ -5837,7 +5900,6 @@ int persistTest(int argc, char *argv[]) {
             fe = flexNext(recovered, fe);
         }
 
-        flexFree(f);
         flexFree(recovered);
         persistClose(p);
     }
@@ -5847,7 +5909,7 @@ int persistTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("intset: empty structure round-trip") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
 
         persist *p = persistCreate(&persistOpsIntset, NULL);
         persistStore *store = persistStoreMemory(0);
@@ -5863,13 +5925,12 @@ int persistTest(int argc, char *argv[]) {
                 intsetCount(restored));
         }
 
-        intsetFree(is);
         intsetFree(restored);
         persistClose(p);
     }
 
     TEST("intset: small tier values only (int16)") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
         bool success;
 
         /* Add values that fit in int16 */
@@ -5900,13 +5961,12 @@ int persistTest(int argc, char *argv[]) {
             }
         }
 
-        intsetFree(is);
         intsetFree(restored);
         persistClose(p);
     }
 
     TEST("intset: medium tier values (int16 + int32)") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
         bool success;
 
         /* Mix of int16 and int32 values */
@@ -5938,13 +5998,12 @@ int persistTest(int argc, char *argv[]) {
             }
         }
 
-        intsetFree(is);
         intsetFree(restored);
         persistClose(p);
     }
 
     TEST("intset: full tier values (int16 + int32 + int64)") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
         bool success;
 
         /* Mix requiring all tiers */
@@ -5986,13 +6045,12 @@ int persistTest(int argc, char *argv[]) {
             }
         }
 
-        intsetFree(is);
         intsetFree(restored);
         persistClose(p);
     }
 
     TEST("intset: large count round-trip") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
         bool success;
 
         /* Add many values */
@@ -6021,13 +6079,12 @@ int persistTest(int argc, char *argv[]) {
             }
         }
 
-        intsetFree(is);
         intsetFree(restored);
         persistClose(p);
     }
 
     TEST("intset: WAL insert and delete") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
 
         persist *p = persistCreate(&persistOpsIntset, NULL);
         persistStore *snapStore = persistStoreMemory(0);
@@ -6072,7 +6129,6 @@ int persistTest(int argc, char *argv[]) {
             ERRR("Deleted value 20 still present");
         }
 
-        intsetFree(is);
         intsetFree(recovered);
         persistClose(p);
     }
@@ -6082,7 +6138,7 @@ int persistTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("multimap: empty structure round-trip") {
-        multimap *m = multimapNew(2);
+        cleaner(multimapFree) multimap *m = multimapNew(2);
 
         persist *p = persistCreate(&persistOpsMultimap, NULL);
         persistStore *store = persistStoreMemory(0);
@@ -6098,7 +6154,6 @@ int persistTest(int argc, char *argv[]) {
                 multimapCount(restored));
         }
 
-        multimapFree(m);
         multimapFree(restored);
         persistClose(p);
     }
@@ -6106,7 +6161,7 @@ int persistTest(int argc, char *argv[]) {
     TEST("multimap: various element widths") {
         /* Test with 2, 3, 4, 5 element entries */
         for (uint32_t width = 2; width <= 5; width++) {
-            multimap *m = multimapNew(width);
+            cleaner(multimapFree) multimap *m = multimapNew(width);
 
             /* Add entries */
             for (int i = 0; i < 100; i++) {
@@ -6132,14 +6187,13 @@ int persistTest(int argc, char *argv[]) {
                     multimapCount(restored));
             }
 
-            multimapFree(m);
             multimapFree(restored);
             persistClose(p);
         }
     }
 
     TEST("multimap: mixed key types") {
-        multimap *m = multimapNew(2);
+        cleaner(multimapFree) multimap *m = multimapNew(2);
 
         /* Integer keys */
         for (int i = 0; i < 50; i++) {
@@ -6191,13 +6245,12 @@ int persistTest(int argc, char *argv[]) {
             }
         }
 
-        multimapFree(m);
         multimapFree(restored);
         persistClose(p);
     }
 
     TEST("multimap: large structure triggers tier transitions") {
-        multimap *m = multimapNew(2);
+        cleaner(multimapFree) multimap *m = multimapNew(2);
 
         /* Add enough entries to trigger Small -> Medium -> Full transitions */
         for (int i = 0; i < 5000; i++) {
@@ -6234,7 +6287,6 @@ int persistTest(int argc, char *argv[]) {
             }
         }
 
-        multimapFree(m);
         multimapFree(restored);
         persistClose(p);
     }
@@ -6244,7 +6296,8 @@ int persistTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("multilist: empty structure round-trip") {
-        multilist *ml = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+        cleaner(multilistFree) multilist *ml =
+            multilistNew(FLEX_CAP_LEVEL_2048, 0);
 
         persist *p = persistCreate(&persistOpsMultilist, NULL);
         persistStore *store = persistStoreMemory(0);
@@ -6260,14 +6313,14 @@ int persistTest(int argc, char *argv[]) {
                 multilistCount(restored));
         }
 
-        multilistFree(ml);
         multilistFree(restored);
         persistClose(p);
     }
 
     TEST("multilist: various element types") {
-        multilist *ml = multilistNew(FLEX_CAP_LEVEL_2048, 0);
-        mflexState *state = mflexStateCreate();
+        cleaner(multilistFree) multilist *ml =
+            multilistNew(FLEX_CAP_LEVEL_2048, 0);
+        cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
 
         /* Integers */
         for (int i = -100; i <= 100; i++) {
@@ -6308,15 +6361,14 @@ int persistTest(int argc, char *argv[]) {
                 multilistCount(restored));
         }
 
-        mflexStateFree(state);
-        multilistFree(ml);
         multilistFree(restored);
         persistClose(p);
     }
 
     TEST("multilist: large multi-node structure") {
-        multilist *ml = multilistNew(FLEX_CAP_LEVEL_512, 0);
-        mflexState *state = mflexStateCreate();
+        cleaner(multilistFree) multilist *ml =
+            multilistNew(FLEX_CAP_LEVEL_512, 0);
+        cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
 
         /* Add enough to create multiple nodes */
         for (int i = 0; i < 10000; i++) {
@@ -6339,7 +6391,7 @@ int persistTest(int argc, char *argv[]) {
         }
 
         /* Verify some values */
-        mflexState *s2 = mflexStateCreate();
+        cleaner(mflexStateFree) mflexState *s2 = mflexStateCreate();
         for (int i = 0; i < 10000; i += 1000) {
             multilistEntry entry;
             if (!multilistIndex(restored, s2, i, &entry, true)) {
@@ -6350,9 +6402,6 @@ int persistTest(int argc, char *argv[]) {
             }
         }
 
-        mflexStateFree(state);
-        mflexStateFree(s2);
-        multilistFree(ml);
         multilistFree(restored);
         persistClose(p);
     }
@@ -6362,8 +6411,10 @@ int persistTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("multidict: empty structure round-trip") {
+        /* @own: container; free=multidictDefaultClassFree */
         multidictClass *qdc = multidictDefaultClassNew();
-        multidict *d = multidictNew(&multidictTypeExactKey, qdc, 0);
+        cleanerName(testMultidictFreeWithClass, Dict) multidict *d =
+            multidictNew(&multidictTypeExactKey, qdc, 0);
 
         persist *p = persistCreate(&persistOpsMultidict, NULL);
         persistStore *store = persistStoreMemory(0);
@@ -6379,14 +6430,15 @@ int persistTest(int argc, char *argv[]) {
                 (unsigned long long)multidictCount(restored));
         }
 
-        multidictFree(d);
-        multidictFree(restored);
+        testMultidictFreeWithClass(restored);
         persistClose(p);
     }
 
     TEST("multidict: large hash table") {
+        /* @own: container; free=multidictDefaultClassFree */
         multidictClass *qdc = multidictDefaultClassNew();
-        multidict *d = multidictNew(&multidictTypeExactKey, qdc, 0);
+        cleanerName(testMultidictFreeWithClass, Dict) multidict *d =
+            multidictNew(&multidictTypeExactKey, qdc, 0);
 
         /* Add many entries to test bucket distribution */
         for (int i = 0; i < 1000; i++) {
@@ -6422,8 +6474,7 @@ int persistTest(int argc, char *argv[]) {
             }
         }
 
-        multidictFree(d);
-        multidictFree(restored);
+        testMultidictFreeWithClass(restored);
         persistClose(p);
     }
 
@@ -6433,7 +6484,7 @@ int persistTest(int argc, char *argv[]) {
 
     TEST("FUZZ: flex random operations") {
         uint32_t seed = 12345;
-        flex *f = flexNew();
+        cleaner(flexFree) flex *f = flexNew();
 
         /* Perform random operations */
         for (int iter = 0; iter < 500; iter++) {
@@ -6487,14 +6538,13 @@ int persistTest(int argc, char *argv[]) {
             ERRR("Fuzz flex content mismatch");
         }
 
-        flexFree(f);
         flexFree(restored);
         persistClose(p);
     }
 
     TEST("FUZZ: intset random values") {
         uint64_t seed = 67890;
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
         bool success;
 
         /* Add random values across different ranges */
@@ -6552,14 +6602,14 @@ int persistTest(int argc, char *argv[]) {
             }
         }
 
-        intsetFree(is);
         intsetFree(restored);
         persistClose(p);
     }
 
     TEST("FUZZ: multimap random entries") {
         uint32_t seed = 11111;
-        multimap *m = multimapNew(3); /* key, val1, val2 */
+        /* key, val1, val2 */
+        cleaner(multimapFree) multimap *m = multimapNew(3);
 
         for (int iter = 0; iter < 500; iter++) {
             seed = seed * 1103515245 + 12345;
@@ -6599,15 +6649,15 @@ int persistTest(int argc, char *argv[]) {
             ERR("Fuzz multimap count: %zu vs %zu", restoredCount, origCount);
         }
 
-        multimapFree(m);
         multimapFree(restored);
         persistClose(p);
     }
 
     TEST("FUZZ: multilist random push/pop") {
         uint32_t seed = 22222;
-        multilist *ml = multilistNew(FLEX_CAP_LEVEL_1024, 0);
-        mflexState *state = mflexStateCreate();
+        cleaner(multilistFree) multilist *ml =
+            multilistNew(FLEX_CAP_LEVEL_1024, 0);
+        cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
 
         for (int iter = 0; iter < 1000; iter++) {
             seed = seed * 1103515245 + 12345;
@@ -6658,14 +6708,12 @@ int persistTest(int argc, char *argv[]) {
                 multilistCount(ml));
         }
 
-        mflexStateFree(state);
-        multilistFree(ml);
         multilistFree(restored);
         persistClose(p);
     }
 
     TEST("FUZZ: WAL replay stress test") {
-        flex *f = flexNew();
+        cleaner(flexFree) flex *f = flexNew();
 
         persist *p = persistCreate(&persistOpsFlex, NULL);
         persistStore *snapStore = persistStoreMemory(0);
@@ -6715,13 +6763,12 @@ int persistTest(int argc, char *argv[]) {
                 flexCount(recovered));
         }
 
-        flexFree(f);
         flexFree(recovered);
         persistClose(p);
     }
 
     TEST("FUZZ: multiple snapshot-restore cycles") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
         bool success;
 
         /* Add initial values */
@@ -6762,12 +6809,10 @@ int persistTest(int argc, char *argv[]) {
         if (intsetCount(is) != 200) { /* 100 initial + 10*10 added */
             ERR("Final count: expected 200, got %zu", intsetCount(is));
         }
-
-        intsetFree(is);
     }
 
     TEST("FUZZ: compaction preserves data") {
-        flex *f = flexNew();
+        cleaner(flexFree) flex *f = flexNew();
 
         persist *p = persistCreate(&persistOpsFlex, NULL);
         persistStore *snapStore = persistStoreMemory(0);
@@ -6822,7 +6867,6 @@ int persistTest(int argc, char *argv[]) {
             fe = flexNext(afterCompact, fe);
         }
 
-        flexFree(f);
         flexFree(withWal);
         flexFree(afterCompact);
         persistClose(p);
@@ -6835,8 +6879,9 @@ int persistTest(int argc, char *argv[]) {
          * snapshot walSequence watermark relies on - ops already folded
          * into a snapshot (all below its watermark) must NOT be
          * replayed again, and ops logged after it must be. */
-        multilist *ml = multilistNew(FLEX_CAP_LEVEL_512, 0);
-        mflexState *state = mflexStateCreate();
+        cleaner(multilistFree) multilist *ml =
+            multilistNew(FLEX_CAP_LEVEL_512, 0);
+        cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
 
         persist *p = persistCreate(&persistOpsMultilist, NULL);
         persistStore *snapStore = persistStoreMemory(0);
@@ -6889,8 +6934,6 @@ int persistTest(int argc, char *argv[]) {
                 multilistCount(recovered2));
         }
 
-        mflexStateFree(state);
-        multilistFree(ml);
         multilistFree(recovered2);
         persistClose(p);
     }
@@ -6904,8 +6947,9 @@ int persistTest(int argc, char *argv[]) {
         unlink(walPath);
         unlink(tmpPath);
 
-        multilist *ml = multilistNew(FLEX_CAP_LEVEL_512, 0);
-        mflexState *state = mflexStateCreate();
+        cleaner(multilistFree) multilist *ml =
+            multilistNew(FLEX_CAP_LEVEL_512, 0);
+        cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
 
         persist *p = persistCreate(&persistOpsMultilist, NULL);
         persistAttachSnapshot(p, persistStoreFile(snapPath, true));
@@ -6938,8 +6982,6 @@ int persistTest(int argc, char *argv[]) {
                 recovered ? multilistCount(recovered) : 0);
         }
 
-        mflexStateFree(state);
-        multilistFree(ml);
         if (recovered) {
             multilistFree(recovered);
         }
@@ -7012,7 +7054,7 @@ int persistTest(int argc, char *argv[]) {
         /* Build a valid flex, then claim a wrong length to the
          * restore function. Both too-short and too-long must be
          * rejected because the header self-describes the length. */
-        flex *valid = flexNew();
+        cleaner(flexFree) flex *valid = flexNew();
         flexPushSigned(&valid, 1, FLEX_ENDPOINT_TAIL);
         flexPushSigned(&valid, 2, FLEX_ENDPOINT_TAIL);
         flexPushSigned(&valid, 3, FLEX_ENDPOINT_TAIL);
@@ -7033,7 +7075,6 @@ int persistTest(int argc, char *argv[]) {
         } else {
             flexFree(ok);
         }
-        flexFree(valid);
     }
 
     TEST("restore: intset count*sizeof overflow is rejected") {
@@ -7058,7 +7099,7 @@ int persistTest(int argc, char *argv[]) {
         }
 
         /* Round-trip: build a real HLL, snapshot it, restore. */
-        hyperloglog *h = hyperloglogNew();
+        cleaner(hyperloglogFree) hyperloglog *h = hyperloglogNew();
         hyperloglogAdd(&h, "abc", 3);
         hyperloglogAdd(&h, "def", 3);
         size_t snapLen = 0;
@@ -7071,7 +7112,6 @@ int persistTest(int argc, char *argv[]) {
             persistOpsHyperloglog.free(restored);
         }
         zfree(snap);
-        hyperloglogFree(h);
     }
 
     TEST("restore: intsetBig rejects malformed and round-trips valid") {
@@ -7086,7 +7126,7 @@ int persistTest(int argc, char *argv[]) {
 
         /* Round-trip: build a real intsetBig, snapshot, restore,
          * count must match. */
-        intsetBig *isb = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
         databoxBig dbig = {0};
         DATABOX_BIG_INIT(&dbig);
         dbig.type = DATABOX_SIGNED_64;
@@ -7114,7 +7154,6 @@ int persistTest(int argc, char *argv[]) {
             persistOpsIntsetBig.free(restored);
         }
         zfree(snap);
-        intsetBigFree(isb);
     }
 
     TEST("restore: newEmpty present where WAL-replay-from-bare needs it") {

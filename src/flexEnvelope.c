@@ -1138,6 +1138,7 @@ flex *flexEnvelopeUnwrapAsFlex(const uint8_t *buf, size_t buf_len,
         return NULL;
     }
 
+    /* @own: caller; free=flexFree */
     flex *f = zmalloc((size_t)payload_len);
     if (!f) {
         return NULL;
@@ -2339,6 +2340,7 @@ bool flexEnvelopeVerifyStreamFinal(flexEnvelopeVerifyStream *ctx) {
 #ifdef DATAKIT_TEST
 #define CTEST_INCLUDE_KEYGEN
 #define CTEST_INCLUDE_VALGEN
+#include "cleaner.h"
 #include "ctest.h"
 
 #include <pthread.h>
@@ -2346,6 +2348,10 @@ bool flexEnvelopeVerifyStreamFinal(flexEnvelopeVerifyStream *ctx) {
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+
+/* Scope-exit cleaners for test scratch buffers (see cleaner.h idioms). */
+defcleanerName(uint8_t *, zfree, Bytes);
+defcleaner(flex *, flexFree);
 
 static void fillPseudoRandom(uint8_t *dst, size_t len, uint64_t seed) {
     /* Simple xorshift; reproducible across runs. */
@@ -2360,7 +2366,7 @@ static void fillPseudoRandom(uint8_t *dst, size_t len, uint64_t seed) {
 
 static bool roundTripOne(flexEnvelopeAlgo algo, size_t payload_len,
                          const uint8_t *key, size_t key_len) {
-    uint8_t *payload = NULL;
+    cleanerName(zfree, Bytes) uint8_t *payload = NULL;
     if (payload_len > 0) {
         payload = zmalloc(payload_len);
         fillPseudoRandom(payload, payload_len, 0xC0FFEEUL ^ payload_len);
@@ -2369,10 +2375,9 @@ static bool roundTripOne(flexEnvelopeAlgo algo, size_t payload_len,
     const size_t wrapped_size =
         flexEnvelopeWrappedSize(payload_len, algo, FLEX_ENV_FLAG_NONE);
     if (wrapped_size == 0) {
-        zfree(payload);
         return false;
     }
-    uint8_t *buf = zmalloc(wrapped_size);
+    cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(wrapped_size);
 
     flexEnvelopeWrapParams wp = {
         .algo = algo,
@@ -2385,8 +2390,6 @@ static bool roundTripOne(flexEnvelopeAlgo algo, size_t payload_len,
     bool ok = flexEnvelopeWrap(buf, wrapped_size, payload, payload_len, &wp,
                                &written);
     if (!ok || written != wrapped_size) {
-        zfree(payload);
-        zfree(buf);
         return false;
     }
 
@@ -2400,18 +2403,12 @@ static bool roundTripOne(flexEnvelopeAlgo algo, size_t payload_len,
     ok = flexEnvelopeVerify(buf, wrapped_size, &vp, &out_payload,
                             &out_payload_len);
     if (!ok || out_payload_len != payload_len) {
-        zfree(payload);
-        zfree(buf);
         return false;
     }
     if (payload_len > 0 && memcmp(out_payload, payload, payload_len) != 0) {
-        zfree(payload);
-        zfree(buf);
         return false;
     }
 
-    zfree(payload);
-    zfree(buf);
     return true;
 }
 
@@ -2500,8 +2497,8 @@ int flexEnvelopeTest(int argc, char *argv[]) {
 
         const size_t total = flexEnvelopeWrappedSize(plen, FLEX_ENV_ALGO_XXH64,
                                                      FLEX_ENV_FLAG_NONE);
-        uint8_t *original = zmalloc(total);
-        uint8_t *mutated = zmalloc(total);
+        cleanerName(zfree, Bytes) uint8_t *original = zmalloc(total);
+        cleanerName(zfree, Bytes) uint8_t *mutated = zmalloc(total);
 
         flexEnvelopeWrapParams wp = {
             .algo = FLEX_ENV_ALGO_XXH64,
@@ -2526,8 +2523,6 @@ int flexEnvelopeTest(int argc, char *argv[]) {
             ERR("Tamper detection missed %d byte positions out of %zu",
                 undetected, total);
         }
-        zfree(original);
-        zfree(mutated);
     }
 
     /* ============================================================
@@ -2584,7 +2579,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         };
         const size_t sz =
             flexEnvelopeWrappedSize(plen, wp.algo, wp.on_wire_flags);
-        uint8_t *buf = zmalloc(sz);
+        cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(sz);
         size_t written = 0;
         if (!flexEnvelopeWrap(buf, sz, payload, plen, &wp, &written)) {
             ERRR("Wrap with key_id=42 failed");
@@ -2635,7 +2630,6 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         hmacKeyringInstallUnsalted(ring, 42u, &hmacAlgoSHA256, key_b,
                                    sizeof(key_b));
 
-        zfree(buf);
         hmacKeyringFree(ring);
     }
 
@@ -2685,7 +2679,8 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         fillPseudoRandom(payload, plen, 1);
         const size_t total =
             flexEnvelopeWrappedSize(plen, FLEX_ENV_ALGO_XXH64, 0);
-        uint8_t *buf = zmalloc(total + 8); /* extra trailing bytes */
+        /* extra trailing bytes */
+        cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(total + 8);
         flexEnvelopeWrapParams wp = {.algo = FLEX_ENV_ALGO_XXH64};
         size_t written = 0;
         flexEnvelopeWrap(buf, total + 8, payload, plen, &wp, &written);
@@ -2702,7 +2697,6 @@ int flexEnvelopeTest(int argc, char *argv[]) {
             ERRR("Verify rejected trailing bytes WITH ALLOW_TRAILING "
                  "flag");
         }
-        zfree(buf);
     }
 
     TEST("envelope: verify rejects oversized payload (DoS guard)") {
@@ -2739,14 +2733,14 @@ int flexEnvelopeTest(int argc, char *argv[]) {
      * Policy flags
      * ============================================================ */
     TEST("envelope: REQUIRE_FLEX accepts valid flex, rejects junk") {
-        flex *f = flexNew();
+        cleaner(flexFree) flex *f = flexNew();
         flexPushSigned(&f, 42, FLEX_ENDPOINT_TAIL);
         flexPushSigned(&f, 100, FLEX_ENDPOINT_TAIL);
         const size_t flex_bytes = flexBytes(f);
 
         const size_t total =
             flexEnvelopeWrappedSize(flex_bytes, FLEX_ENV_ALGO_XXH64, 0);
-        uint8_t *buf = zmalloc(total);
+        cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(total);
         flexEnvelopeWrapParams wp = {.algo = FLEX_ENV_ALGO_XXH64};
         size_t written = 0;
         flexEnvelopeWrap(buf, total, (const uint8_t *)f, flex_bytes, &wp,
@@ -2766,16 +2760,12 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         fillPseudoRandom(junk, sizeof(junk), 7);
         const size_t junkTotal =
             flexEnvelopeWrappedSize(sizeof(junk), FLEX_ENV_ALGO_XXH64, 0);
-        uint8_t *jbuf = zmalloc(junkTotal);
+        cleanerName(zfree, Bytes) uint8_t *jbuf = zmalloc(junkTotal);
         flexEnvelopeWrap(jbuf, junkTotal, junk, sizeof(junk), &wp, &written);
         if (flexEnvelopeVerify(jbuf, junkTotal, &vp, &p, &pl)) {
             ERRR("REQUIRE_FLEX accepted non-flex payload "
                  "(flexValidateBuffer not gating)");
         }
-
-        flexFree(f);
-        zfree(buf);
-        zfree(jbuf);
     }
 
     TEST("envelope: PEEK_ONLY skips digest, returns payload pointer") {
@@ -2784,7 +2774,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         fillPseudoRandom(payload, plen, 11);
         const size_t total =
             flexEnvelopeWrappedSize(plen, FLEX_ENV_ALGO_XXH64, 0);
-        uint8_t *buf = zmalloc(total);
+        cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(total);
         flexEnvelopeWrapParams wp = {.algo = FLEX_ENV_ALGO_XXH64};
         size_t written = 0;
         flexEnvelopeWrap(buf, total, payload, plen, &wp, &written);
@@ -2808,7 +2798,6 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         if (flexEnvelopeVerify(buf, total, &vp, &p, &pl)) {
             ERRR("Default verify did not catch corrupted digest");
         }
-        zfree(buf);
     }
 
     TEST("envelope: REQUIRE_HMAC rejects checksum-class algo") {
@@ -2817,7 +2806,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         fillPseudoRandom(payload, plen, 13);
         const size_t total =
             flexEnvelopeWrappedSize(plen, FLEX_ENV_ALGO_XXH64, 0);
-        uint8_t *buf = zmalloc(total);
+        cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(total);
         flexEnvelopeWrapParams wp = {.algo = FLEX_ENV_ALGO_XXH64};
         size_t written = 0;
         flexEnvelopeWrap(buf, total, payload, plen, &wp, &written);
@@ -2828,16 +2817,15 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         if (flexEnvelopeVerify(buf, total, &vp, NULL, NULL)) {
             ERRR("REQUIRE_HMAC accepted xxh64 (checksum class)");
         }
-        zfree(buf);
     }
 
     TEST("envelope: BOUND_PAYLOAD enforces caller's max") {
         const size_t plen = 1024;
-        uint8_t *payload = zmalloc(plen);
+        cleanerName(zfree, Bytes) uint8_t *payload = zmalloc(plen);
         fillPseudoRandom(payload, plen, 17);
         const size_t total =
             flexEnvelopeWrappedSize(plen, FLEX_ENV_ALGO_XXH64, 0);
-        uint8_t *buf = zmalloc(total);
+        cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(total);
         flexEnvelopeWrapParams wp = {.algo = FLEX_ENV_ALGO_XXH64};
         size_t written = 0;
         flexEnvelopeWrap(buf, total, payload, plen, &wp, &written);
@@ -2854,22 +2842,20 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         if (!flexEnvelopeVerify(buf, total, &vp, NULL, NULL)) {
             ERRR("BOUND_PAYLOAD rejected payload smaller than cap");
         }
-        zfree(payload);
-        zfree(buf);
     }
 
     /* ============================================================
      * UnwrapAsFlex convenience
      * ============================================================ */
     TEST("envelope: UnwrapAsFlex returns usable flex copy") {
-        flex *f = flexNew();
+        cleaner(flexFree) flex *f = flexNew();
         for (uint32_t i = 0; i < 10u; i++) {
             flexPushSigned(&f, i, FLEX_ENDPOINT_TAIL);
         }
         const size_t flex_bytes = flexBytes(f);
         const size_t total =
             flexEnvelopeWrappedSize(flex_bytes, FLEX_ENV_ALGO_XXH64, 0);
-        uint8_t *buf = zmalloc(total);
+        cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(total);
         flexEnvelopeWrapParams wp = {.algo = FLEX_ENV_ALGO_XXH64};
         size_t written = 0;
         flexEnvelopeWrap(buf, total, (const uint8_t *)f, flex_bytes, &wp,
@@ -2885,8 +2871,6 @@ int flexEnvelopeTest(int argc, char *argv[]) {
             }
             flexFree(restored);
         }
-        flexFree(f);
-        zfree(buf);
     }
 
     /* ============================================================
@@ -2938,7 +2922,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         };
         for (size_t i = 0; i < sizeof(algos) / sizeof(algos[0]); i++) {
             const size_t total = flexEnvelopeWrappedSize(plen, algos[i], 0);
-            uint8_t *buf = zmalloc(total);
+            cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(total);
             flexEnvelopeWrapParams wp = {
                 .algo = algos[i],
                 .key = key_right,
@@ -2977,7 +2961,6 @@ int flexEnvelopeTest(int argc, char *argv[]) {
                 ERR("Verify with NO key ACCEPTED for keyed algo %s",
                     flexEnvelopeAlgoName(algos[i]));
             }
-            zfree(buf);
         }
     }
 
@@ -2995,8 +2978,8 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         };
         for (size_t a = 0; a < sizeof(algos) / sizeof(algos[0]); a++) {
             const size_t total = flexEnvelopeWrappedSize(plen, algos[a], 0);
-            uint8_t *orig = zmalloc(total);
-            uint8_t *mutated = zmalloc(total);
+            cleanerName(zfree, Bytes) uint8_t *orig = zmalloc(total);
+            cleanerName(zfree, Bytes) uint8_t *mutated = zmalloc(total);
             flexEnvelopeWrapParams wp = {
                 .algo = algos[a],
                 .key = key,
@@ -3021,8 +3004,6 @@ int flexEnvelopeTest(int argc, char *argv[]) {
                 ERR("%s missed %d tampers out of %zu byte positions",
                     flexEnvelopeAlgoName(algos[a]), undetected, total);
             }
-            zfree(orig);
-            zfree(mutated);
         }
     }
 
@@ -3041,7 +3022,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
 
         const size_t total =
             flexEnvelopeWrappedSize(plen, FLEX_ENV_ALGO_HMAC_SHA256, 0);
-        uint8_t *buf = zmalloc(total);
+        cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(total);
         flexEnvelopeWrapParams wp = {
             .algo = FLEX_ENV_ALGO_HMAC_SHA256,
             .key = key,
@@ -3061,7 +3042,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
 
         /* Prepared-key path. */
         size_t prepSize = hmacPreparedSize(&hmacAlgoSHA256);
-        uint8_t *prepStorage = zmalloc(prepSize);
+        cleanerName(zfree, Bytes) uint8_t *prepStorage = zmalloc(prepSize);
         hmacKey prep;
         hmacPrepareKey(&prep, &hmacAlgoSHA256, prepStorage, prepSize, key,
                        sizeof(key));
@@ -3076,8 +3057,6 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         if (flexEnvelopeVerify(buf, total, &vp_prep, NULL, NULL)) {
             ERRR("Prepared-key path accepted forged envelope!");
         }
-        zfree(buf);
-        zfree(prepStorage);
     }
 
     /* ============================================================
@@ -3121,7 +3100,8 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         uint32_t accepted_buckets[16] = {0};
         for (uint32_t b = 0; b < numBuckets; b++) {
             const uint32_t bufLen = lenBuckets[b];
-            uint8_t *buf = bufLen > 0 ? zmalloc(bufLen) : NULL;
+            cleanerName(zfree, Bytes) uint8_t *buf =
+                bufLen > 0 ? zmalloc(bufLen) : NULL;
             for (uint32_t iter = 0; iter < iterationsPerBucket; iter++) {
                 fillPseudoRandom(buf, bufLen,
                                  (uint64_t)b * 1000003ull +
@@ -3161,7 +3141,6 @@ int flexEnvelopeTest(int argc, char *argv[]) {
                 flexEnvelopeHeader peekOut = {0};
                 (void)flexEnvelopePeek(buf, (size_t)bufLen, &peekOut);
             }
-            zfree(buf);
         }
         /* Surfaces a flake if a future change starts accepting random
          * inputs at a measurable rate. */
@@ -3231,7 +3210,8 @@ int flexEnvelopeTest(int argc, char *argv[]) {
 
             for (size_t pi = 0; pi < sizeof(plens) / sizeof(plens[0]); pi++) {
                 const size_t plen = plens[pi];
-                uint8_t *payload = plen > 0 ? zmalloc(plen) : NULL;
+                cleanerName(zfree, Bytes) uint8_t *payload =
+                    plen > 0 ? zmalloc(plen) : NULL;
                 if (payload) {
                     fillPseudoRandom(payload, plen,
                                      0xABCDEFUL ^ (uint64_t)plen ^
@@ -3240,7 +3220,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
 
                 /* One-shot wrap into oneshot_buf. */
                 const size_t total = flexEnvelopeWrappedSize(plen, algo, 0);
-                uint8_t *oneshot_buf = zmalloc(total);
+                cleanerName(zfree, Bytes) uint8_t *oneshot_buf = zmalloc(total);
                 flexEnvelopeWrapParams wp = {
                     .algo = algo,
                     .key = need_key ? key : NULL,
@@ -3259,7 +3239,8 @@ int flexEnvelopeTest(int argc, char *argv[]) {
                 for (size_t ci = 0; ci < 6; ci++) {
                     const size_t cs =
                         chunk_sizes[ci] == 0 ? 1 : chunk_sizes[ci];
-                    uint8_t *stream_buf = zmalloc(total);
+                    cleanerName(zfree, Bytes) uint8_t *stream_buf =
+                        zmalloc(total);
                     flexEnvelopeWrapStream ctx;
                     size_t header_written = 0;
                     if (!flexEnvelopeWrapStreamInit(&ctx, (uint64_t)plen, &wp,
@@ -3267,7 +3248,6 @@ int flexEnvelopeTest(int argc, char *argv[]) {
                                                     &header_written)) {
                         ERR("stream Init failed (algo=%s plen=%zu cs=%zu)",
                             flexEnvelopeAlgoName(algo), plen, cs);
-                        zfree(stream_buf);
                         continue;
                     }
                     /* Feed payload in chunks; mirror bytes into stream_buf
@@ -3306,7 +3286,6 @@ int flexEnvelopeTest(int argc, char *argv[]) {
                             "(algo=%s plen=%zu cs=%zu)",
                             flexEnvelopeAlgoName(algo), plen, cs);
                     }
-                    zfree(stream_buf);
                 }
 
                 /* Streaming verify equivalence. */
@@ -3357,7 +3336,8 @@ int flexEnvelopeTest(int argc, char *argv[]) {
 
                 /* Tamper: flip a payload byte (when plen>0). */
                 if (plen > 0) {
-                    uint8_t *tampered = zmalloc(total);
+                    cleanerName(zfree, Bytes) uint8_t *tampered =
+                        zmalloc(total);
                     memcpy(tampered, oneshot_buf, total);
                     /* Find offset of first payload byte (skip the
                      * framing header — easiest is to use peek). */
@@ -3404,12 +3384,6 @@ int flexEnvelopeTest(int argc, char *argv[]) {
                                 flexEnvelopeAlgoName(algo));
                         }
                     }
-                    zfree(tampered);
-                }
-
-                zfree(oneshot_buf);
-                if (payload) {
-                    zfree(payload);
                 }
             }
         }
@@ -3573,7 +3547,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
          * streaming property. */
         const size_t plen = (size_t)64 * 1024 * 1024;
         const size_t cs = (size_t)64 * 1024;
-        uint8_t *payload = zmalloc(plen);
+        cleanerName(zfree, Bytes) uint8_t *payload = zmalloc(plen);
         fillPseudoRandom(payload, plen, 0xB16DA7AUL);
 
         uint8_t key[32];
@@ -3581,7 +3555,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
 
         const flexEnvelopeAlgo algo = FLEX_ENV_ALGO_HMAC_SHA256;
         const size_t total = flexEnvelopeWrappedSize(plen, algo, 0);
-        uint8_t *out_buf = zmalloc(total);
+        cleanerName(zfree, Bytes) uint8_t *out_buf = zmalloc(total);
 
         flexEnvelopeWrapParams wp = {
             .algo = algo,
@@ -3646,8 +3620,6 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         if (sizeof(wctx) != ctx_size_before) {
             ERRR("ctx sizeof changed mid-test (impossible compiler bug)");
         }
-        zfree(payload);
-        zfree(out_buf);
     }
 
     TEST("envelope: stream verify rejects chunk > payload_remaining") {
@@ -3661,13 +3633,13 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         for (uint32_t i = 0; i < 32u; i++) {
             key[i] = (uint8_t)(0x40u + i);
         }
-        uint8_t *payload = zmalloc(plen);
+        cleanerName(zfree, Bytes) uint8_t *payload = zmalloc(plen);
         for (size_t i = 0; i < plen; i++) {
             payload[i] = (uint8_t)i;
         }
         const flexEnvelopeAlgo algo = FLEX_ENV_ALGO_HMAC_SHA256;
         const size_t total = flexEnvelopeWrappedSize(plen, algo, 0);
-        uint8_t *buf = zmalloc(total);
+        cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(total);
         const flexEnvelopeWrapParams wp = {
             .algo = algo,
             .key = key,
@@ -3704,9 +3676,6 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         if (flexEnvelopeVerifyStreamFinal(&ctx)) {
             ERRR("Final after poison must fail");
         }
-
-        zfree(payload);
-        zfree(buf);
     }
 
     TEST("envelope: stream verify accepts prepared-key fast path") {
@@ -3716,7 +3685,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
          * both accept, and a tampered envelope must be rejected by
          * both. */
         const size_t plen = 4096u;
-        uint8_t *payload = zmalloc(plen);
+        cleanerName(zfree, Bytes) uint8_t *payload = zmalloc(plen);
         fillPseudoRandom(payload, plen, 0xBADC0FFEEUL);
 
         uint8_t key[32];
@@ -3727,7 +3696,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         for (uint32_t i = 0; i < sizeof(algos) / sizeof(algos[0]); i++) {
             const flexEnvelopeAlgo algo = algos[i];
             const size_t total = flexEnvelopeWrappedSize(plen, algo, 0);
-            uint8_t *buf = zmalloc(total);
+            cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(total);
 
             flexEnvelopeWrapParams wp = {
                 .algo = algo,
@@ -3743,7 +3712,8 @@ int flexEnvelopeTest(int argc, char *argv[]) {
                                                 ? &hmacAlgoSHA256
                                                 : &hmacAlgoBLAKE3;
             const size_t prep_size = hmacPreparedSize(hash_algo);
-            uint8_t *prep_storage = zmalloc(prep_size);
+            cleanerName(zfree, Bytes) uint8_t *prep_storage =
+                zmalloc(prep_size);
             hmacKey prep;
             hmacPrepareKey(&prep, hash_algo, prep_storage, prep_size, key,
                            sizeof(key));
@@ -3807,11 +3777,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
                     "algo=%u",
                     (uint32_t)algo);
             }
-
-            zfree(prep_storage);
-            zfree(buf);
         }
-        zfree(payload);
     }
 
     /* ============================================================
@@ -3830,7 +3796,8 @@ int flexEnvelopeTest(int argc, char *argv[]) {
 
         for (uint32_t s = 0; s < sizeof(plens) / sizeof(plens[0]); s++) {
             const size_t plen = plens[s];
-            uint8_t *plain = plen > 0 ? zmalloc(plen) : NULL;
+            cleanerName(zfree, Bytes) uint8_t *plain =
+                plen > 0 ? zmalloc(plen) : NULL;
             for (size_t i = 0; i < plen; i++) {
                 plain[i] = (uint8_t)((i * 37u + 11u) & 0xFFu);
             }
@@ -3840,7 +3807,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
             if (total == 0) {
                 ERR("WrappedSize returned 0 for plen=%zu", plen);
             }
-            uint8_t *buf = zmalloc(total);
+            cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(total);
 
             flexEnvelopeSealParams sp = {
                 .algo = FLEX_ENV_ALGO_AEAD_CHACHA20_POLY1305,
@@ -3860,7 +3827,8 @@ int flexEnvelopeTest(int argc, char *argv[]) {
              * guard doesn't trip the empty-payload case. The function
              * writes exactly `plen` bytes; nothing for plen==0. */
             const size_t recovered_cap = plen > 0 ? plen : 1u;
-            uint8_t *recovered = zmalloc(recovered_cap);
+            cleanerName(zfree, Bytes) uint8_t *recovered =
+                zmalloc(recovered_cap);
             size_t recovered_len = 0;
             flexEnvelopeVerifyParams vp = {
                 .key = key,
@@ -3874,10 +3842,6 @@ int flexEnvelopeTest(int argc, char *argv[]) {
             if (plen > 0 && memcmp(recovered, plain, plen) != 0) {
                 ERR("Plaintext mismatch at plen=%zu", plen);
             }
-
-            zfree(plain);
-            zfree(recovered);
-            zfree(buf);
         }
     }
 
@@ -3891,14 +3855,14 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         for (uint32_t i = 0; i < 12u; i++) {
             nonce[i] = (uint8_t)(0x55u ^ i);
         }
-        uint8_t *plain = zmalloc(plen);
+        cleanerName(zfree, Bytes) uint8_t *plain = zmalloc(plen);
         for (size_t i = 0; i < plen; i++) {
             plain[i] = (uint8_t)(i & 0xFFu);
         }
 
         const size_t total = flexEnvelopeWrappedSize(
             (uint64_t)plen, FLEX_ENV_ALGO_AEAD_CHACHA20_POLY1305, 0);
-        uint8_t *buf = zmalloc(total);
+        cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(total);
         flexEnvelopeSealParams sp = {
             .algo = FLEX_ENV_ALGO_AEAD_CHACHA20_POLY1305,
             .key = key,
@@ -3916,7 +3880,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
             .key = key,
             .key_len = sizeof(key),
         };
-        uint8_t *recovered = zmalloc(plen);
+        cleanerName(zfree, Bytes) uint8_t *recovered = zmalloc(plen);
         size_t r_len = 0;
         if (!flexEnvelopeOpen(buf, total, &vp, recovered, plen, &r_len)) {
             ERRR("Baseline open failed");
@@ -3952,17 +3916,12 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         memcpy(nonce2, nonce, sizeof(nonce2));
         nonce2[0] ^= 0xAAu;
         sp.nonce = nonce2;
-        uint8_t *buf2 = zmalloc(total);
+        cleanerName(zfree, Bytes) uint8_t *buf2 = zmalloc(total);
         size_t written2 = 0;
         flexEnvelopeSeal(buf2, total, plain, (uint64_t)plen, &sp, &written2);
         if (memcmp(buf, buf2, total) == 0) {
             ERRR("Distinct nonces should produce distinct ciphertexts");
         }
-
-        zfree(plain);
-        zfree(recovered);
-        zfree(buf);
-        zfree(buf2);
     }
 
     TEST("envelope: AEAD refuses keyless or short-key seal/open") {
@@ -4040,10 +3999,10 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         for (size_t a = 0; a < sizeof(algos) / sizeof(algos[0]); a++) {
             for (size_t s = 0; s < sizeof(sizes) / sizeof(sizes[0]); s++) {
                 const size_t plen = sizes[s];
-                uint8_t *payload = zmalloc(plen);
+                cleanerName(zfree, Bytes) uint8_t *payload = zmalloc(plen);
                 fillPseudoRandom(payload, plen, 42);
                 const size_t total = flexEnvelopeWrappedSize(plen, algos[a], 0);
-                uint8_t *buf = zmalloc(total);
+                cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(total);
                 uint8_t bench_key[32];
                 fillPseudoRandom(bench_key, sizeof(bench_key), 0xBEEFUL);
                 const bool need_key = flexEnvelopeAlgoIsKeyed(algos[a]);
@@ -4092,9 +4051,6 @@ int flexEnvelopeTest(int argc, char *argv[]) {
                        flexEnvelopeAlgoName(algos[a]), plen,
                        wrap_sec / iters * 1e9, verify_sec / iters * 1e9,
                        (double)plen * iters / (verify_sec * 1024.0 * 1024.0));
-
-                zfree(payload);
-                zfree(buf);
             }
         }
         printf("\n");
@@ -4107,7 +4063,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         const size_t plen = sizeof(pt);
         const size_t cap = flexEnvelopeWrappedSize(
             (uint64_t)plen, FLEX_ENV_ALGO_AEAD_AES128_GCM, 0);
-        uint8_t *buf = zmalloc(cap);
+        cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(cap);
         flexEnvelopeSealParams sp = {
             .algo = FLEX_ENV_ALGO_AEAD_AES128_GCM,
             .key = key,
@@ -4137,7 +4093,6 @@ int flexEnvelopeTest(int argc, char *argv[]) {
             }
             buf[tamper_at[i]] ^= 0x01;
         }
-        zfree(buf);
     }
 
     TEST("envelope: AES-256-GCM Seal/Open round-trip + tamper") {
@@ -4150,7 +4105,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         const size_t plen = sizeof(pt);
         const size_t cap = flexEnvelopeWrappedSize(
             (uint64_t)plen, FLEX_ENV_ALGO_AEAD_AES256_GCM, 0);
-        uint8_t *buf = zmalloc(cap);
+        cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(cap);
         flexEnvelopeSealParams sp = {
             .algo = FLEX_ENV_ALGO_AEAD_AES256_GCM,
             .key = key,
@@ -4163,7 +4118,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
             ERRR("AES-256-GCM Seal failed");
         }
         flexEnvelopeVerifyParams vp = {.key = key, .key_len = sizeof(key)};
-        uint8_t *rec = zmalloc(plen);
+        cleanerName(zfree, Bytes) uint8_t *rec = zmalloc(plen);
         size_t r_len = 0;
         if (!flexEnvelopeOpen(buf, written, &vp, rec, plen, &r_len)) {
             ERRR("AES-256-GCM Open failed");
@@ -4176,8 +4131,6 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         if (flexEnvelopeOpen(buf, written, &vp_bad, rec, plen, &r_len)) {
             ERRR("AES-256-GCM accepted 16-byte key");
         }
-        zfree(buf);
-        zfree(rec);
     }
 
     TEST("revoked key floor rejects below-floor wire key_id with typed err") {
@@ -4215,7 +4168,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         };
         const size_t cap1 = flexEnvelopeWrappedSize(
             sizeof(payload), FLEX_ENV_ALGO_HMAC_SHA256, wp1.on_wire_flags);
-        uint8_t *env1 = zmalloc(cap1);
+        cleanerName(zfree, Bytes) uint8_t *env1 = zmalloc(cap1);
         size_t written1 = 0;
         if (!flexEnvelopeWrap(env1, cap1, payload, sizeof(payload), &wp1,
                               &written1)) {
@@ -4232,7 +4185,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         };
         const size_t cap2 = flexEnvelopeWrappedSize(
             sizeof(payload), FLEX_ENV_ALGO_HMAC_SHA256, wp2.on_wire_flags);
-        uint8_t *env2 = zmalloc(cap2);
+        cleanerName(zfree, Bytes) uint8_t *env2 = zmalloc(cap2);
         size_t written2 = 0;
         if (!flexEnvelopeWrap(env2, cap2, payload, sizeof(payload), &wp2,
                               &written2)) {
@@ -4272,7 +4225,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
 
         /* Snapshot + restore preserves the floor. */
         const size_t sz = hmacKeyringSnapshotSize(ring);
-        uint8_t *snap = zmalloc(sz);
+        cleanerName(zfree, Bytes) uint8_t *snap = zmalloc(sz);
         size_t snap_w = 0;
         if (!hmacKeyringSnapshot(ring, snap, sz, &snap_w)) {
             ERRR("snapshot after floor failed");
@@ -4295,9 +4248,6 @@ int flexEnvelopeTest(int argc, char *argv[]) {
                 (int)flexEnvelopeLastVerifyError());
         }
 
-        zfree(snap);
-        zfree(env1);
-        zfree(env2);
         hmacKeyringFree(ring);
         hmacKeyringFree(restored);
     }
@@ -4322,7 +4272,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
 
         const size_t wrapped =
             flexEnvelopeWrappedSize(plen, FLEX_ENV_ALGO_BLAKE3_KEYED, 0);
-        uint8_t *buf = zmalloc(wrapped);
+        cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(wrapped);
 
         /* One-shot wrap with 16-byte key MUST fail. */
         flexEnvelopeWrapParams wp_short = {
@@ -4418,8 +4368,6 @@ int flexEnvelopeTest(int argc, char *argv[]) {
             ERRR("Verify-stream Final rejected valid 32-byte BLAKE3_KEYED "
                  "envelope");
         }
-
-        zfree(buf);
     }
 
     TEST("envelope: verify-stream Final poisons ctx on byte / digest "
@@ -4436,7 +4384,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
 
         const flexEnvelopeAlgo algo = FLEX_ENV_ALGO_HMAC_SHA256;
         const size_t wrapped = flexEnvelopeWrappedSize(plen, algo, 0);
-        uint8_t *buf = zmalloc(wrapped);
+        cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(wrapped);
         flexEnvelopeWrapParams wp = {
             .algo = algo,
             .key = key,
@@ -4500,8 +4448,6 @@ int flexEnvelopeTest(int argc, char *argv[]) {
             ERRR("Final on poisoned (digest-mismatch) verify-stream ctx must "
                  "fail");
         }
-
-        zfree(buf);
     }
 
     TEST("envelope: wrap-stream Final wipes key-bearing ctx state") {
@@ -4538,7 +4484,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         for (uint32_t i = 0; i < sizeof(algos) / sizeof(algos[0]); i++) {
             const flexEnvelopeAlgo algo = algos[i];
             const size_t wrapped = flexEnvelopeWrappedSize(plen, algo, 0);
-            uint8_t *buf = zmalloc(wrapped);
+            cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(wrapped);
             flexEnvelopeWrapParams wp = {
                 .algo = algo,
                 .key = key,
@@ -4551,19 +4497,16 @@ int flexEnvelopeTest(int argc, char *argv[]) {
             if (!flexEnvelopeWrapStreamInit(&wctx, plen, &wp, buf, wrapped,
                                             &hw)) {
                 ERR("wrap-stream Init failed for algo=%u", (uint32_t)algo);
-                zfree(buf);
                 continue;
             }
             if (!flexEnvelopeWrapStreamUpdate(&wctx, payload, plen)) {
                 ERR("wrap-stream Update failed for algo=%u", (uint32_t)algo);
-                zfree(buf);
                 continue;
             }
             size_t dw = 0;
             if (!flexEnvelopeWrapStreamFinal(&wctx, buf + hw + plen,
                                              wrapped - hw - plen, &dw)) {
                 ERR("wrap-stream Final failed for algo=%u", (uint32_t)algo);
-                zfree(buf);
                 continue;
             }
             if (memcmp(wctx.hmac_storage, hmac_zero, sizeof(hmac_zero)) != 0) {
@@ -4576,7 +4519,6 @@ int flexEnvelopeTest(int argc, char *argv[]) {
                     "(pre-fill 0xA5 not scrubbed)",
                     (uint32_t)algo);
             }
-            zfree(buf);
         }
     }
 
@@ -4608,7 +4550,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         for (uint32_t i = 0; i < sizeof(algos) / sizeof(algos[0]); i++) {
             const flexEnvelopeAlgo algo = algos[i];
             const size_t wrapped = flexEnvelopeWrappedSize(plen, algo, 0);
-            uint8_t *buf = zmalloc(wrapped);
+            cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(wrapped);
             flexEnvelopeWrapParams wp = {
                 .algo = algo,
                 .key = key,
@@ -4617,7 +4559,6 @@ int flexEnvelopeTest(int argc, char *argv[]) {
             size_t written = 0;
             if (!flexEnvelopeWrap(buf, wrapped, payload, plen, &wp, &written)) {
                 ERR("setup wrap failed for algo=%u", (uint32_t)algo);
-                zfree(buf);
                 continue;
             }
 
@@ -4634,18 +4575,15 @@ int flexEnvelopeTest(int argc, char *argv[]) {
             if (!flexEnvelopeVerifyStreamInit(&vctx, &vp, buf, wrapped,
                                               &consumed, NULL, NULL)) {
                 ERR("verify-stream Init failed for algo=%u", (uint32_t)algo);
-                zfree(buf);
                 continue;
             }
             if (!flexEnvelopeVerifyStreamUpdate(&vctx, buf + consumed,
                                                 wrapped - consumed)) {
                 ERR("verify-stream Update failed for algo=%u", (uint32_t)algo);
-                zfree(buf);
                 continue;
             }
             if (!flexEnvelopeVerifyStreamFinal(&vctx)) {
                 ERR("verify-stream Final failed for algo=%u", (uint32_t)algo);
-                zfree(buf);
                 continue;
             }
             if (memcmp(vctx.hmac_storage, hmac_zero, sizeof(hmac_zero)) != 0) {
@@ -4667,7 +4605,6 @@ int flexEnvelopeTest(int argc, char *argv[]) {
                     "algo=%u",
                     (uint32_t)algo);
             }
-            zfree(buf);
         }
     }
 
@@ -4702,7 +4639,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         };
         const size_t sz =
             flexEnvelopeWrappedSize(plen, wp.algo, wp.on_wire_flags);
-        uint8_t *buf = zmalloc(sz);
+        cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(sz);
         size_t written = 0;
         if (!flexEnvelopeWrap(buf, sz, payload, plen, &wp, &written)) {
             ERRR("keyringRawCopyMigrate: wrap failed");
@@ -4728,7 +4665,6 @@ int flexEnvelopeTest(int argc, char *argv[]) {
             ERRR("keyringRawCopyMigrate: verify must fail after retire");
         }
 
-        zfree(buf);
         hmacKeyringFree(ring);
     }
 
@@ -4765,7 +4701,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         };
         const size_t sz =
             flexEnvelopeWrappedSize((uint64_t)plen, sp.algo, sp.on_wire_flags);
-        uint8_t *buf = zmalloc(sz);
+        cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(sz);
         size_t written = 0;
         if (!flexEnvelopeSeal(buf, sz, payload, plen, &sp, &written)) {
             ERRR("openMigrate: seal failed");
@@ -4792,7 +4728,6 @@ int flexEnvelopeTest(int argc, char *argv[]) {
             ERRR("openMigrate: Open must fail after retire");
         }
 
-        zfree(buf);
         hmacKeyringFree(ring);
     }
 
@@ -4924,7 +4859,7 @@ int dkTestFlexEnvelopeKeyringRetireRaceTest(int argc, char *argv[]) {
         };
         const size_t hmac_cap = flexEnvelopeWrappedSize(
             hmac_payload_len, wp.algo, wp.on_wire_flags);
-        uint8_t *hmac_frame = zmalloc(hmac_cap);
+        cleanerName(zfree, Bytes) uint8_t *hmac_frame = zmalloc(hmac_cap);
         size_t hmac_written = 0;
         if (!flexEnvelopeWrap(hmac_frame, hmac_cap, hmac_payload,
                               hmac_payload_len, &wp, &hmac_written)) {
@@ -4948,7 +4883,7 @@ int dkTestFlexEnvelopeKeyringRetireRaceTest(int argc, char *argv[]) {
         };
         const size_t aead_cap = flexEnvelopeWrappedSize(
             (uint64_t)aead_payload_len, sp.algo, sp.on_wire_flags);
-        uint8_t *aead_frame = zmalloc(aead_cap);
+        cleanerName(zfree, Bytes) uint8_t *aead_frame = zmalloc(aead_cap);
         size_t aead_written = 0;
         if (!flexEnvelopeSeal(aead_frame, aead_cap, aead_payload,
                               aead_payload_len, &sp, &aead_written)) {
@@ -5003,8 +4938,6 @@ int dkTestFlexEnvelopeKeyringRetireRaceTest(int argc, char *argv[]) {
                 (unsigned long long)rotator_iters);
         }
 
-        zfree(hmac_frame);
-        zfree(aead_frame);
         /* Ensure the slot is in a clean state regardless of which
          * thread last touched it. */
         (void)hmacKeyringRetire(ring, KID);

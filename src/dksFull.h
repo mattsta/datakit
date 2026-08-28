@@ -38,6 +38,7 @@ DKS_TYPE *DKS_NEWLEN(const void *init, const size_t initlen) {
     const uint_fast8_t metaSize = _dksHeaderSize(type);
 
     /* New dks allocation with guaranteed clean memory. */
+    /* @own: caller; free=DKS_FREE */
     char *dksStart =
         (char *)zcalloc(1, jebufSizeAllocation(metaSize + initlen + 1));
 

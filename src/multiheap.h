@@ -17,6 +17,7 @@
  * value; mutators (multiheapInsert/Realloc) take a `multiheap **`
  * because the underlying multimap may reallocate or change tiers. */
 typedef multimap multiheap;
+/* @own: caller; free=multiheapFree */
 #define multiheapNew() (multiheap *)multimapNew(2)
 #define multiheapFree(mh) multimapFree(mh)
 

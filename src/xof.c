@@ -312,10 +312,15 @@ size_t xofReaderRemaining(const xofReader *r, size_t totalCount) {
  * Tests
  * ==================================================================== */
 #ifdef DATAKIT_TEST
+#include "cleaner.h"
 #include "ctest.h"
 
 #define DOUBLE_NEWLINE 0
 #include "perf.h"
+
+/* Scope-exit cleaners for test scratch buffers (see cleaner.h idioms). */
+defcleanerName(xof *, zfree, Bits);
+defcleanerName(double *, zfree, Doubles);
 
 #define RD(max) (((double)rand() / (double)(RAND_MAX)) * (max))
 int xofTest(int argc, char *argv[]) {
@@ -329,7 +334,8 @@ int xofTest(int argc, char *argv[]) {
 
     for (int32_t val = -1; val < 2; val++) {
         TEST_DESC("all same (%d)", val) {
-            xof *bits = zcalloc(loopers, sizeof(*bits));
+            cleanerName(zfree, Bits) xof *bits =
+                zcalloc(loopers, sizeof(*bits));
             TEST("encode") {
                 PERF_TIMERS_SETUP;
                 size_t bitsUsed = 0;
@@ -375,14 +381,14 @@ int xofTest(int argc, char *argv[]) {
                 PERF_TIMERS_FINISH_PRINT_RESULTS(
                     loopers, "decode from beginning per lookup");
             }
-            zfree(bits);
             printf("\n");
         }
     }
 
     for (int32_t val = -7; val <= 7; val++) {
         TEST_DESC("alternating (%d, %d)", val, val + 1) {
-            xof *bits = zcalloc(loopers, sizeof(*bits));
+            cleanerName(zfree, Bits) xof *bits =
+                zcalloc(loopers, sizeof(*bits));
             double mmax = 0;
             TEST("encode") {
                 PERF_TIMERS_SETUP;
@@ -434,13 +440,12 @@ int xofTest(int argc, char *argv[]) {
                 PERF_TIMERS_FINISH_PRINT_RESULTS(
                     loopers, "decode from beginning per lookup");
             }
-            zfree(bits);
             printf("\n");
         }
     }
 
     TEST("simples") {
-        xof *bits = zcalloc(loopers, sizeof(*bits));
+        cleanerName(zfree, Bits) xof *bits = zcalloc(loopers, sizeof(*bits));
         TEST("encode") {
             PERF_TIMERS_SETUP;
             size_t bitsUsed = 0;
@@ -486,13 +491,14 @@ int xofTest(int argc, char *argv[]) {
             PERF_TIMERS_FINISH_PRINT_RESULTS(
                 loopers, "decode from beginning per lookup");
         }
-        zfree(bits);
         printf("\n");
     }
 
     TEST("random") {
-        xof *bits = zcalloc(loopers * 2, sizeof(*bits));
-        double *values = zcalloc(loopers, sizeof(*values));
+        cleanerName(zfree, Bits) xof *bits =
+            zcalloc(loopers * 2, sizeof(*bits));
+        cleanerName(zfree, Doubles) double *values =
+            zcalloc(loopers, sizeof(*values));
         TEST("encode") {
             for (size_t i = 0; i < loopers; i++) {
                 values[i] = RD(UINT16_MAX);
@@ -543,7 +549,6 @@ int xofTest(int argc, char *argv[]) {
             PERF_TIMERS_FINISH_PRINT_RESULTS(
                 loopers, "decode from beginning per lookup");
         }
-        zfree(bits);
         printf("\n");
     }
 
@@ -551,8 +556,10 @@ int xofTest(int argc, char *argv[]) {
                        0.0033, 0.00033, 1,      2,       0.0004};
     for (size_t q = 0; q < sizeof(deltas) / sizeof(*deltas); q++) {
         TEST_DESC("random (bounded random delta range; delta %f)", deltas[q]) {
-            xof *bits = zcalloc(loopers * 2, sizeof(*bits));
-            double *values = zcalloc(loopers, sizeof(*values));
+            cleanerName(zfree, Bits) xof *bits =
+                zcalloc(loopers * 2, sizeof(*bits));
+            cleanerName(zfree, Doubles) double *values =
+                zcalloc(loopers, sizeof(*values));
             TEST("encode") {
                 for (size_t i = 0; i < loopers; i++) {
                     values[i] = (double)1 + RD(deltas[q]);
@@ -602,15 +609,16 @@ int xofTest(int argc, char *argv[]) {
                 PERF_TIMERS_FINISH_PRINT_RESULTS(
                     loopers, "decode from beginning per lookup");
             }
-            zfree(bits);
             printf("\n");
         }
     }
 
     for (size_t q = 0; q < 30; q++) {
         TEST_DESC("random (unbounded random iteration %'zu)", q) {
-            xof *bits = zcalloc(loopers * 2, sizeof(*bits));
-            double *values = zcalloc(loopers, sizeof(*values));
+            cleanerName(zfree, Bits) xof *bits =
+                zcalloc(loopers * 2, sizeof(*bits));
+            cleanerName(zfree, Doubles) double *values =
+                zcalloc(loopers, sizeof(*values));
             TEST("encode") {
                 values[0] = RD(74);
                 for (size_t i = 1; i < loopers; i++) {
@@ -667,7 +675,6 @@ int xofTest(int argc, char *argv[]) {
                 PERF_TIMERS_FINISH_PRINT_RESULTS(
                     loopers, "decode from beginning per lookup");
             }
-            zfree(bits);
             printf("\n");
         }
     }
@@ -677,8 +684,9 @@ int xofTest(int argc, char *argv[]) {
      * ================================================================ */
     TEST("xofReader - sequential reading") {
         const size_t count = 10000;
-        xof *bits = zcalloc(count * 2, sizeof(*bits));
-        double *values = zcalloc(count, sizeof(*values));
+        cleanerName(zfree, Bits) xof *bits = zcalloc(count * 2, sizeof(*bits));
+        cleanerName(zfree, Doubles) double *values =
+            zcalloc(count, sizeof(*values));
 
         /* Generate test data */
         values[0] = 100.5;
@@ -719,16 +727,16 @@ int xofTest(int argc, char *argv[]) {
             ERR("Expected valuesRead=%zu but got %zu\n", count, r.valuesRead);
         }
 
-        zfree(bits);
-        zfree(values);
         printf("xofReader sequential reading: PASS\n");
     }
 
     TEST("xofReader - batch reading with NextN") {
         const size_t count = 10000;
-        xof *bits = zcalloc(count * 2, sizeof(*bits));
-        double *values = zcalloc(count, sizeof(*values));
-        double *readBuf = zcalloc(count, sizeof(*readBuf));
+        cleanerName(zfree, Bits) xof *bits = zcalloc(count * 2, sizeof(*bits));
+        cleanerName(zfree, Doubles) double *values =
+            zcalloc(count, sizeof(*values));
+        cleanerName(zfree, Doubles) double *readBuf =
+            zcalloc(count, sizeof(*readBuf));
 
         /* Generate test data */
         values[0] = 50.0;
@@ -766,16 +774,14 @@ int xofTest(int argc, char *argv[]) {
             }
         }
 
-        zfree(bits);
-        zfree(values);
-        zfree(readBuf);
         printf("xofReader batch reading: PASS\n");
     }
 
     TEST("xofReader - performance comparison O(N) vs O(N^2)") {
         const size_t count = 10000;
-        xof *bits = zcalloc(count * 2, sizeof(*bits));
-        double *values = zcalloc(count, sizeof(*values));
+        cleanerName(zfree, Bits) xof *bits = zcalloc(count * 2, sizeof(*bits));
+        cleanerName(zfree, Doubles) double *values =
+            zcalloc(count, sizeof(*values));
 
         /* Generate test data */
         values[0] = 1.0;
@@ -820,13 +826,12 @@ int xofTest(int argc, char *argv[]) {
         }
         PERF_TIMERS_FINISH_PRINT_RESULTS(count, "O(N^2) xofGet from beginning");
 
-        zfree(bits);
-        zfree(values);
         printf("xofReader performance comparison: PASS\n");
     }
 
     TEST("xofReader - xofReaderInitFromWriter") {
         xofWriter w = {0};
+        /* @own: container; free=zfree */
         w.d = zcalloc(1000, sizeof(*w.d));
         w.totalBytes = 1000 * sizeof(*w.d);
 
@@ -867,6 +872,7 @@ int xofTest(int argc, char *argv[]) {
 
     TEST("xofReader - xofReaderRemaining") {
         xofWriter w = {0};
+        /* @own: container; free=zfree */
         w.d = zcalloc(1000, sizeof(*w.d));
         w.totalBytes = 1000 * sizeof(*w.d);
 

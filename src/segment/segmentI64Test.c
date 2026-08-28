@@ -3,6 +3,7 @@
  */
 
 #include "segmentI64.h"
+#include "../cleaner.h"
 #include "../ctest.h"
 #include "../datakit.h"
 #include <inttypes.h>
@@ -15,6 +16,9 @@
 #define DOUBLE_NEWLINE 1
 #include "../perf.h"
 
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleanerName(int64_t *, zfree, I64Array);
+
 /* Naive implementations for benchmark comparison */
 typedef struct {
     int64_t *values;
@@ -22,8 +26,10 @@ typedef struct {
 } naiveArray;
 
 static naiveArray *naiveNew(size_t n) {
+    /* @own: caller; free=naiveFree */
     naiveArray *arr = zmalloc(sizeof(*arr));
     arr->count = n;
+    /* @own: container; free=naiveFree */
     arr->values = zcalloc(n, sizeof(int64_t));
     return arr;
 }
@@ -325,7 +331,8 @@ int segmentI64Test(int argc, char *argv[]) {
         const size_t NUM_OPS = 10000000;
         uint64_t seed = 12345;
 
-        int64_t *init = zcalloc(N, sizeof(int64_t));
+        cleanerName(zfree, I64Array) int64_t *init =
+            zcalloc(N, sizeof(int64_t));
         for (size_t i = 0; i < N; i++) {
             init[i] = (randSeed(&seed) % 1000) - 500;
         }
@@ -369,7 +376,6 @@ int segmentI64Test(int argc, char *argv[]) {
 
         segmentI64Free(seg);
         naiveFree(naive);
-        zfree(init);
     }
 
     TEST("BENCH: Segment vs Naive - MIN queries (1K)") {
@@ -377,7 +383,8 @@ int segmentI64Test(int argc, char *argv[]) {
         const size_t NUM_OPS = 10000000;
         uint64_t seed = 12345;
 
-        int64_t *init = zcalloc(N, sizeof(int64_t));
+        cleanerName(zfree, I64Array) int64_t *init =
+            zcalloc(N, sizeof(int64_t));
         for (size_t i = 0; i < N; i++) {
             init[i] = (randSeed(&seed) % 1000) - 500;
         }
@@ -421,7 +428,6 @@ int segmentI64Test(int argc, char *argv[]) {
 
         segmentI64Free(seg);
         naiveFree(naive);
-        zfree(init);
     }
 
     TEST("BENCH: Segment vs Naive - MAX queries (1K)") {
@@ -429,7 +435,8 @@ int segmentI64Test(int argc, char *argv[]) {
         const size_t NUM_OPS = 10000000;
         uint64_t seed = 12345;
 
-        int64_t *init = zcalloc(N, sizeof(int64_t));
+        cleanerName(zfree, I64Array) int64_t *init =
+            zcalloc(N, sizeof(int64_t));
         for (size_t i = 0; i < N; i++) {
             init[i] = (randSeed(&seed) % 1000) - 500;
         }
@@ -473,7 +480,6 @@ int segmentI64Test(int argc, char *argv[]) {
 
         segmentI64Free(seg);
         naiveFree(naive);
-        zfree(init);
     }
 
     TEST("BENCH: Update performance (1K)") {
@@ -527,7 +533,8 @@ int segmentI64Test(int argc, char *argv[]) {
             uint64_t seed = 12345;
 
             /* Build test data */
-            int64_t *init = zcalloc(N, sizeof(int64_t));
+            cleanerName(zfree, I64Array) int64_t *init =
+                zcalloc(N, sizeof(int64_t));
             for (size_t i = 0; i < N; i++) {
                 init[i] = (randSeed(&seed) % 1000) - 500;
             }
@@ -587,7 +594,6 @@ int segmentI64Test(int argc, char *argv[]) {
 
             segmentI64Free(seg);
             naiveFree(naive);
-            zfree(init);
         }
         printf("\n");
     }
@@ -606,7 +612,8 @@ int segmentI64Test(int argc, char *argv[]) {
             uint64_t seed = 99999;
 
             /* Build test data */
-            int64_t *init = zcalloc(N, sizeof(int64_t));
+            cleanerName(zfree, I64Array) int64_t *init =
+                zcalloc(N, sizeof(int64_t));
             for (size_t i = 0; i < N; i++) {
                 init[i] = (randSeed(&seed) % 1000) - 500;
             }
@@ -656,7 +663,6 @@ int segmentI64Test(int argc, char *argv[]) {
 
             segmentI64Free(seg);
             naiveFree(naive);
-            zfree(init);
         }
         printf("\n");
     }
@@ -675,7 +681,8 @@ int segmentI64Test(int argc, char *argv[]) {
             uint64_t seed = 11111;
 
             /* Build test data */
-            int64_t *init = zcalloc(N, sizeof(int64_t));
+            cleanerName(zfree, I64Array) int64_t *init =
+                zcalloc(N, sizeof(int64_t));
             for (size_t i = 0; i < N; i++) {
                 init[i] = (randSeed(&seed) % 1000) - 500;
             }
@@ -725,7 +732,6 @@ int segmentI64Test(int argc, char *argv[]) {
 
             segmentI64Free(seg);
             naiveFree(naive);
-            zfree(init);
         }
         printf("\n");
     }

@@ -12,6 +12,7 @@
  */
 
 #include "membound.h"
+#include "cleaner.h"
 #include "memboundInternal.h"
 
 #include "datakit.h"
@@ -426,6 +427,7 @@ bool memboundIndexAdd(memboundExtentIndex *index, memboundExtent *extent) {
     /* Transition to heap array if needed */
     if (index->count == MEMBOUND_EXTENT_INLINE_MAX && !index->ranges) {
         index->capacity = 16;
+        /* @own: container; free=zfree */
         index->ranges = zmalloc(index->capacity * sizeof(memboundExtentRange));
         if (!index->ranges) {
             return false;
@@ -437,6 +439,7 @@ bool memboundIndexAdd(memboundExtentIndex *index, memboundExtent *extent) {
     /* Grow heap array if needed */
     if (index->count >= index->capacity) {
         size_t newCap = index->capacity * 2;
+        /* @own: container; free=zfree */
         memboundExtentRange *newRanges =
             zrealloc(index->ranges, newCap * sizeof(memboundExtentRange));
         if (!newRanges) {
@@ -1923,6 +1926,7 @@ static void memboundTLSKeyInit(void) {
 static memboundTLSCache *memboundTLSGet(void) {
     if (!memboundTLSp) {
         pthread_once(&memboundTLSOnce, memboundTLSKeyInit);
+        /* @own: static */
         memboundTLSp = (memboundTLSCache *)zcalloc(1, sizeof(memboundTLSCache));
         if (memboundTLSp) {
             pthread_setspecific(memboundTLSKey, memboundTLSp);
@@ -2650,6 +2654,10 @@ typedef struct memboundRelocBlock {
     size_t size; /* full allocated block size (atom-aligned power of two) */
 } memboundRelocBlock;
 
+defcleanerName(memboundRelocBlock *, zfree, RelocBlocks);
+defcleanerName(void **, zfree, PtrArray);
+defcleaner(void *, zfree);
+
 /* Allocate a block of exactly `size` bytes in some extent other than `src`,
  * trying existing extents only (compaction never grows the pool). Returns the
  * new pointer, or NULL if no other extent can satisfy the request. Caller holds
@@ -2714,7 +2722,8 @@ static bool memboundDrainExtent(membound *m, memboundExtent *e,
      * log-size, and FREE distinguishes free vs. allocated heads. */
     size_t cap = 16;
     size_t n = 0;
-    memboundRelocBlock *blocks = zmalloc(cap * sizeof(*blocks));
+    cleanerName(zfree, RelocBlocks) memboundRelocBlock *blocks =
+        zmalloc(cap * sizeof(*blocks));
     if (!blocks) {
         return false;
     }
@@ -2729,7 +2738,6 @@ static bool memboundDrainExtent(membound *m, memboundExtent *e,
                 memboundRelocBlock *grown =
                     zrealloc(blocks, cap * sizeof(*blocks));
                 if (!grown) {
-                    zfree(blocks);
                     return false;
                 }
                 blocks = grown;
@@ -2756,7 +2764,6 @@ static bool memboundDrainExtent(membound *m, memboundExtent *e,
         memboundExtentFree(e, blocks[k].ptr);
     }
 
-    zfree(blocks);
     return drained;
 }
 
@@ -3758,7 +3765,7 @@ memboundCompactPool *memboundCompactPoolCreate(size_t size, bool threadSafe) {
     size_t totalSize = sizeof(memboundCompactPool) + poolDataSize + ctrlSize;
 
     /* Allocate all-in-one */
-    void *mem = zmalloc(totalSize);
+    cleaner(zfree) void *mem = zmalloc(totalSize);
     if (!mem) {
         return NULL;
     }
@@ -3782,7 +3789,6 @@ memboundCompactPool *memboundCompactPoolCreate(size_t size, bool threadSafe) {
     /* Initialize mutex if thread-safe */
     if (threadSafe) {
         if (pthread_mutex_init(&m->mutex, NULL) != 0) {
-            zfree(mem);
             return NULL;
         }
         m->mutexInitialized = true;
@@ -3804,6 +3810,7 @@ memboundCompactPool *memboundCompactPoolCreate(size_t size, bool threadSafe) {
         }
     }
 
+    mem = NULL; /* disarm: m aliases the allocation and the caller owns it */
     return m;
 }
 
@@ -5714,7 +5721,7 @@ int memboundTest(int argc, char *argv[]) {
         }
 
         /* Stack variable should not be owned */
-        int x;
+        int x = 0;
         assert(!memboundOwns(m, &x));
 
         for (int i = 0; i < count; i++) {
@@ -6978,7 +6985,8 @@ int memboundTest(int argc, char *argv[]) {
          * mid-stream under one lock each time; no explicit flush below. */
         const int batch = m->enterprise->threadCacheBatch;
         const int N = batch * 4 + 7;
-        void **ptrs = zmalloc((size_t)N * sizeof(void *));
+        cleanerName(zfree, PtrArray) void **ptrs =
+            zmalloc((size_t)N * sizeof(void *));
         for (int i = 0; i < N; i++) {
             ptrs[i] = memboundAlloc(m, 256);
             assert(ptrs[i]);
@@ -6991,7 +6999,6 @@ int memboundTest(int argc, char *argv[]) {
         assert(memboundCurrentAllocationCount(m) < (size_t)(2 * batch));
         memboundFlushThreadCache(m);
         assert(memboundCurrentAllocationCount(m) == 0);
-        zfree(ptrs);
         memboundShutdown(m);
     }
 

@@ -1,9 +1,13 @@
 #include "multiFenwick.h"
+#include "cleaner.h"
 #include "datakit.h"
 #include "flexCapacityManagement.h"
 #include "mflexInternal.h"
 #include "multiFenwickCommon.h"
 #include "multilist.h"
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleaner(multiFenwick *, multiFenwickFree);
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,7 +23,9 @@ struct multiFenwick {
 
 /* Create new multiFenwick tree */
 multiFenwick *multiFenwickNew(void) {
-    multiFenwick *mfw = zcalloc(1, sizeof(*mfw));
+    /* multiFenwickFree NULL-checks each member, so the cleaner is safe
+     * on every partial-construction exit below. */
+    cleaner(multiFenwickFree) multiFenwick *mfw = zcalloc(1, sizeof(*mfw));
     if (!mfw) {
         return NULL;
     }
@@ -28,9 +34,9 @@ multiFenwick *multiFenwickNew(void) {
     /* Tradeoff: the larger the multilist flex:
      *   - more memory saved for longer flex compaction
      *   - slower speed because it requires more linear updates */
+    /* @own: container; free=multilistFree */
     mfw->tree = multilistNew(FLEX_CAP_LEVEL_8192, 0);
     if (!mfw->tree) {
-        zfree(mfw);
         return NULL;
     }
 
@@ -38,23 +44,25 @@ multiFenwick *multiFenwickNew(void) {
     mfw->capacity = 0;
 
     /* Allocate state */
+    /* @own: container; free=zfree */
     mfw->state = zcalloc(1, sizeof(mflexState));
     if (!mfw->state) {
-        multilistFree(mfw->tree);
-        zfree(mfw);
         return NULL;
     }
 
-    return mfw;
+    multiFenwick *out = mfw;
+    mfw = NULL;
+    return out;
 }
 
 /* Create from array of databoxes */
 multiFenwick *multiFenwickNewFromArray(const databox *values, size_t count) {
     if (!values || count == 0) {
+        /* @own: caller; free=multiFenwickFree */
         return multiFenwickNew();
     }
 
-    multiFenwick *mfw = multiFenwickNew();
+    cleaner(multiFenwickFree) multiFenwick *mfw = multiFenwickNew();
     if (!mfw) {
         return NULL;
     }
@@ -98,14 +106,12 @@ multiFenwick *multiFenwickNewFromArray(const databox *values, size_t count) {
                 databox newVal;
                 if (!databoxAdd(&entry.box, &values[i], &newVal)) {
                     /* Type mismatch or error */
-                    multiFenwickFree(mfw);
                     return NULL;
                 }
 
                 /* Update the multilist entry */
                 if (!multilistReplaceByTypeAtIndex(&mfw->tree, mfw->state,
                                                    idx - 1, &newVal)) {
-                    multiFenwickFree(mfw);
                     return NULL;
                 }
             }
@@ -114,7 +120,9 @@ multiFenwick *multiFenwickNewFromArray(const databox *values, size_t count) {
         }
     }
 
-    return mfw;
+    multiFenwick *out = mfw;
+    mfw = NULL;
+    return out;
 }
 
 /* Free multiFenwick tree */
@@ -265,6 +273,7 @@ bool multiFenwickUpdate(multiFenwick **mfw, size_t idx, const databox *delta) {
     }
 
     if (!*mfw) {
+        /* @own: caller; free=multiFenwickFree */
         *mfw = multiFenwickNew();
         if (!*mfw) {
             return false;
@@ -425,6 +434,7 @@ bool multiFenwickSet(multiFenwick **mfw, size_t idx, const databox *value) {
     }
 
     if (!*mfw) {
+        /* @own: caller; free=multiFenwickFree */
         *mfw = multiFenwickNew();
         if (!*mfw) {
             return false;

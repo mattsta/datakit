@@ -1,5 +1,9 @@
 #include "multimapMedium.h"
+#include "cleaner.h"
 #include "multimapMediumInternal.h"
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleaner(multimapMedium *, multimapMediumFree);
 
 #define GET_MIDDLE(m, idx) (flexEntry *)((m)->map[idx] + (m)->middle[idx])
 #define SET_MIDDLE(m, idx, mid)                                                \
@@ -14,11 +18,14 @@
 
 /* Create empty multimapMedium */
 multimapMedium *multimapMediumNew(multimapElements elementsPerEntry) {
+    /* @own: caller; free=multimapMediumFree */
     multimapMedium *m = zcalloc(1, sizeof(*m));
 
     m->elementsPerEntry = elementsPerEntry;
 
+    /* @own: container; free=multimapMediumFree */
     m->map[0] = flexNew();
+    /* @own: container; free=multimapMediumFree */
     m->map[1] = flexNew();
 
     m->middle[0] = FLEX_EMPTY_SIZE;
@@ -32,6 +39,7 @@ multimapMedium *multimapMediumNewFromOneGrow(void *_m, flex *one,
                                              uint32_t middle,
                                              multimapElements elementsPerEntry,
                                              bool mapIsSet) {
+    /* @own: caller; free=multimapMediumFree */
     multimapMedium *m = zrealloc(_m, sizeof(*m));
 
     m->elementsPerEntry = elementsPerEntry;
@@ -56,10 +64,13 @@ multimapMedium *multimapMediumNewFromOneGrow(void *_m, flex *one,
 }
 
 multimapMedium *multimapMediumCopy(const multimapMedium *m) {
+    /* @own: caller; free=multimapMediumFree */
     multimapMedium *copy = zcalloc(1, sizeof(*copy));
     *copy = *m;
 
+    /* @own: container; free=multimapMediumFree */
     copy->map[0] = flexDuplicate(m->map[0]);
+    /* @own: container; free=multimapMediumFree */
     copy->map[1] = flexDuplicate(m->map[1]);
 
     /* middle entries are an array in the struct so they were duplicated at the
@@ -76,6 +87,7 @@ size_t multimapMediumBytes(const multimapMedium *m) {
 }
 
 flex *multimapMediumDump(const multimapMedium *m) {
+    /* @own: caller; free=flexFree */
     flex *all = flexDuplicate(m->map[0]);
     flexBulkAppendFlex(&all, m->map[1]);
     return all;
@@ -901,6 +913,8 @@ void multimapMediumVerify(const multimapMedium *m) {
  * a valid entry boundary. */
 static multimapMedium *buildSplitMedium(size_t count, size_t splitAt) {
     assert(splitAt < count);
+    /* multimapMediumNewFromOneGrow below consumes this flex */
+    /* @own: container; free=multimapMediumFree */
     flex *f = flexNew();
     for (size_t i = 0; i < count; i++) {
         const databox keybox = databoxNewUnsigned(i);
@@ -1108,7 +1122,7 @@ int multimapMediumTest(int argc, char *argv[]) {
          * can happen briefly during certain transitions).  Binary
          * search must short-circuit to map[0] without dereferencing
          * an empty map[1]. */
-        multimapMedium *m = multimapMediumNew(2);
+        cleaner(multimapMediumFree) multimapMedium *m = multimapMediumNew(2);
         for (size_t i = 0; i < 5; i++) {
             const databox keybox = databoxNewUnsigned(i);
             const databox valbox = databoxNewBytesString("v");
@@ -1125,14 +1139,13 @@ int multimapMediumTest(int argc, char *argv[]) {
         const bool replaced = multimapMediumInsert(m, insert);
         assert(replaced);
         assert(multimapMediumCount(m) == 5);
-        multimapMediumFree(m);
     }
 
     TEST("reset then reuse: both maps populated, two cycles") {
         /* Fill past the split boundary so BOTH internal maps hold
          * entries, then verify reset leaves a fully reusable map
          * (the Full-tier reset kept stale metadata; pin Medium too) */
-        multimapMedium *m = multimapMediumNew(2);
+        cleaner(multimapMediumFree) multimapMedium *m = multimapMediumNew(2);
 
         for (int cycle = 0; cycle < 2; cycle++) {
             for (uint64_t i = 0; i < 600; i++) {
@@ -1172,8 +1185,6 @@ int multimapMediumTest(int argc, char *argv[]) {
         if (missing > 0) {
             ERR("%zu of 600 keys missing after reset-reuse", missing);
         }
-
-        multimapMediumFree(m);
     }
 
     TEST_FINAL_RESULT;

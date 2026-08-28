@@ -34,6 +34,12 @@
 #define FENWICK_IMPL_SCOPE
 #endif
 
+#include "../cleaner.h"
+
+/* Scope-exit cleaner for value-array scratch. Each instantiation TU
+ * includes this template exactly once, so the static is unique. */
+defcleanerName(FENWICK_VALUE_TYPE *, zfree, FenwickVals);
+
 /* ====================================================================
  * FULL TIER IMPLEMENTATIONS
  * ==================================================================== */
@@ -41,6 +47,7 @@
 /* Create new full Fenwick tree */
 FENWICK_IMPL_SCOPE FENWICK_FULL_TYPENAME(FENWICK_SUFFIX) *
     FENWICK_NAME(FENWICK_SUFFIX, FullNew)(void) {
+    /* @own: caller */
     FENWICK_FULL_TYPENAME(FENWICK_SUFFIX) *fw =
         zcalloc(1, sizeof(FENWICK_FULL_TYPENAME(FENWICK_SUFFIX)));
     fw->count = 0;
@@ -64,11 +71,13 @@ FENWICK_IMPL_SCOPE FENWICK_FULL_TYPENAME(FENWICK_SUFFIX) *
         capacity <<= 1;
     }
 
+    /* @own: caller */
     FENWICK_FULL_TYPENAME(FENWICK_SUFFIX) *fw =
         zcalloc(1, sizeof(FENWICK_FULL_TYPENAME(FENWICK_SUFFIX)));
     fw->count = count;
     fw->capacity = capacity;
     fw->maxCapacity = (FENWICK_INDEX_TYPE_FULL)-1;
+    /* @own: container */
     fw->tree = zcalloc(capacity, sizeof(FENWICK_VALUE_TYPE));
 
     /* Build BIT */
@@ -105,18 +114,15 @@ FENWICK_IMPL_SCOPE FENWICK_FULL_TYPENAME(FENWICK_SUFFIX) *
 
     /* Extract all values from Small tier */
     FENWICK_INDEX_TYPE_SMALL count = small->count;
-    FENWICK_VALUE_TYPE *values = zmalloc(count * sizeof(FENWICK_VALUE_TYPE));
+    cleanerName(zfree, FenwickVals) FENWICK_VALUE_TYPE *values =
+        zmalloc(count * sizeof(FENWICK_VALUE_TYPE));
 
     for (FENWICK_INDEX_TYPE_SMALL i = 0; i < count; i++) {
         values[i] = FENWICK_NAME(FENWICK_SUFFIX, SmallGet)(small, i);
     }
 
     /* Create Full from values */
-    FENWICK_FULL_TYPENAME(FENWICK_SUFFIX) *full =
-        FENWICK_NAME(FENWICK_SUFFIX, FullNewFromArray)(values, count);
-
-    zfree(values);
-    return full;
+    return FENWICK_NAME(FENWICK_SUFFIX, FullNewFromArray)(values, count);
 }
 
 /* Free full Fenwick tree */
@@ -162,6 +168,7 @@ FENWICK_IMPL_SCOPE FENWICK_FULL_TYPENAME(FENWICK_SUFFIX) *
             newCapacity <<= 1;
         }
 
+        /* @own: container */
         FENWICK_VALUE_TYPE *newTree =
             zrealloc(fw->tree, newCapacity * sizeof(FENWICK_VALUE_TYPE));
         if (!newTree) {

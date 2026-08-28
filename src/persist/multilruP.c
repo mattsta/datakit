@@ -4,11 +4,15 @@
  */
 
 #include "multilruP.h"
+#include "../cleaner.h"
 #include "../datakit.h"
 #include "../persist.h"
 
 #include <string.h>
 #include <unistd.h>
+
+defcleanerName(multilruP *, zfree, MultilruP);
+defcleanerName(multilruPtr *, zfree, MultilruPtrs);
 
 /* ============================================================================
  * Auto-eviction durability
@@ -33,6 +37,7 @@ static void multilruPEvictLogCallback(size_t evictedPtr, void *userData) {
     if (mlru->pendingEvictCount == mlru->pendingEvictCap) {
         const size_t next =
             mlru->pendingEvictCap ? mlru->pendingEvictCap * 2 : 8;
+        /* @own: container; free=zfree */
         mlru->pendingEvict =
             zrealloc(mlru->pendingEvict, next * sizeof(*mlru->pendingEvict));
         mlru->pendingEvictCap = next;
@@ -70,21 +75,20 @@ multilruP *multilruNewP(persistCtx *ctx) {
         return NULL;
     }
 
-    multilruP *mlru = zcalloc(1, sizeof(*mlru));
+    cleanerName(zfree, MultilruP) multilruP *mlru = zcalloc(1, sizeof(*mlru));
     mlru->ctx = ctx;
     mlru->enableWeights = false; /* Default: no weights */
 
     /* Create underlying multilru */
+    /* @own: container; free=multilruFree */
     mlru->mlru = multilruNew();
     if (!mlru->mlru) {
-        zfree(mlru);
         return NULL;
     }
 
     /* Initialize persistence context for multilru type */
     if (!persistCtxInitForType(ctx, &persistOpsMultiLRU)) {
         multilruFree(mlru->mlru);
-        zfree(mlru);
         return NULL;
     }
 
@@ -94,7 +98,10 @@ multilruP *multilruNewP(persistCtx *ctx) {
      * correct config. */
 
     multilruPArmEvictLog(mlru);
-    return mlru;
+
+    multilruP *out = mlru;
+    mlru = NULL;
+    return out;
 }
 
 multilruP *multilruNewWithLevelsP(persistCtx *ctx, size_t maxLevels,
@@ -103,7 +110,7 @@ multilruP *multilruNewWithLevelsP(persistCtx *ctx, size_t maxLevels,
         return NULL;
     }
 
-    multilruP *mlru = zcalloc(1, sizeof(*mlru));
+    cleanerName(zfree, MultilruP) multilruP *mlru = zcalloc(1, sizeof(*mlru));
     mlru->ctx = ctx;
     mlru->enableWeights = false; /* No weights for this API */
 
@@ -117,16 +124,15 @@ multilruP *multilruNewWithLevelsP(persistCtx *ctx, size_t maxLevels,
         .evictStrategy = MLRU_EVICT_LRU,
         .enableWeights = false,
     };
+    /* @own: container; free=multilruFree */
     mlru->mlru = multilruNewWithConfig(&config);
     if (!mlru->mlru) {
-        zfree(mlru);
         return NULL;
     }
 
     /* Initialize persistence */
     if (!persistCtxInitForType(ctx, &persistOpsMultiLRU)) {
         multilruFree(mlru->mlru);
-        zfree(mlru);
         return NULL;
     }
 
@@ -134,12 +140,14 @@ multilruP *multilruNewWithLevelsP(persistCtx *ctx, size_t maxLevels,
      */
     if (!persistCtxSaveSnapshot(ctx, mlru->mlru, &persistOpsMultiLRU)) {
         multilruFree(mlru->mlru);
-        zfree(mlru);
         return NULL;
     }
 
     multilruPArmEvictLog(mlru);
-    return mlru;
+
+    multilruP *out = mlru;
+    mlru = NULL;
+    return out;
 }
 
 multilruP *multilruNewWithConfigP(persistCtx *ctx,
@@ -148,21 +156,20 @@ multilruP *multilruNewWithConfigP(persistCtx *ctx,
         return NULL;
     }
 
-    multilruP *mlru = zcalloc(1, sizeof(*mlru));
+    cleanerName(zfree, MultilruP) multilruP *mlru = zcalloc(1, sizeof(*mlru));
     mlru->ctx = ctx;
     mlru->enableWeights = config->enableWeights; /* Store for snapshot */
 
     /* Create multilru with config */
+    /* @own: container; free=multilruFree */
     mlru->mlru = multilruNewWithConfig(config);
     if (!mlru->mlru) {
-        zfree(mlru);
         return NULL;
     }
 
     /* Initialize persistence */
     if (!persistCtxInitForType(ctx, &persistOpsMultiLRU)) {
         multilruFree(mlru->mlru);
-        zfree(mlru);
         return NULL;
     }
 
@@ -170,12 +177,14 @@ multilruP *multilruNewWithConfigP(persistCtx *ctx,
      */
     if (!persistCtxSaveSnapshot(ctx, mlru->mlru, &persistOpsMultiLRU)) {
         multilruFree(mlru->mlru);
-        zfree(mlru);
         return NULL;
     }
 
     multilruPArmEvictLog(mlru);
-    return mlru;
+
+    multilruP *out = mlru;
+    mlru = NULL;
+    return out;
 }
 
 multilruP *multilruOpenP(persistCtx *ctx) {
@@ -191,9 +200,11 @@ multilruP *multilruOpenP(persistCtx *ctx) {
     /* Recover from snapshot + WAL */
     multilru *recovered = persistCtxRecover(ctx, &persistOpsMultiLRU);
     if (!recovered) {
+        /* @own: container; free=multilruFree */
         recovered = multilruNew();
     }
 
+    /* @own: caller; free=multilruCloseP */
     multilruP *mlru = zcalloc(1, sizeof(*mlru));
     mlru->ctx = ctx;
     mlru->mlru = recovered;
@@ -816,7 +827,8 @@ static int test_multilruP_large_dataset(int argc, char *argv[]) {
 
     /* Insert 2000 entries */
     const size_t numEntries = 2000;
-    multilruPtr *handles = zmalloc(numEntries * sizeof(multilruPtr));
+    cleanerName(zfree, MultilruPtrs) multilruPtr *handles =
+        zmalloc(numEntries * sizeof(multilruPtr));
     for (size_t i = 0; i < numEntries; i++) {
         handles[i] = multilruInsertP(mlru);
         if (handles[i] == 0) {
@@ -832,7 +844,8 @@ static int test_multilruP_large_dataset(int argc, char *argv[]) {
     }
 
     /* Delete some entries - save their handles for verification */
-    multilruPtr *deletedHandles = zmalloc(100 * sizeof(multilruPtr));
+    cleanerName(zfree, MultilruPtrs) multilruPtr *deletedHandles =
+        zmalloc(100 * sizeof(multilruPtr));
     for (size_t i = 100; i < 200; i++) {
         deletedHandles[i - 100] = handles[i];
         multilruDeleteP(mlru, handles[i]);
@@ -882,10 +895,7 @@ static int test_multilruP_large_dataset(int argc, char *argv[]) {
         }
     }
 
-    zfree(deletedHandles);
-
     /* Cleanup */
-    zfree(handles);
     multilruCloseP(mlru);
     persistCtxFree(ctx);
     ptestCleanupFiles(basePath);

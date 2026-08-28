@@ -346,6 +346,7 @@ char *strdup(const char *s) __attribute__((deprecated));
  *  to realloc back to your own pointer without checking for NULL. */
 #define zreallocSelf(ptr, sz)                                                  \
     do {                                                                       \
+        /* @own: caller; free=zfree */                                         \
         (ptr) = zrealloc(ptr, sz);                                             \
     } while (0)
 #define zreallocSelfAdjusted(ptr, sz)                                          \

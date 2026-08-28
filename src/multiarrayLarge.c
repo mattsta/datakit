@@ -17,10 +17,12 @@ typedef struct multiarrayLargeResult {
 typedef uintptr_t multiarrayLargeptrXorPtr;
 
 multiarrayLarge *multiarrayLargeNew(uint16_t len, uint16_t rowMax) {
+    /* @own: caller; free=multiarrayLargeFree */
     multiarrayLarge *e = zcalloc(1, sizeof(*e));
     e->len = len;
     e->rowMax = rowMax;
 
+    /* @own: container; free=multiarrayLargeFree */
     e->head = zcalloc(1, sizeof(*e->head));
     e->tail = e->head;
     return e;
@@ -38,6 +40,7 @@ multiarrayLarge *multiarrayLargeFromMedium(multiarrayMedium *medium) {
     multiarrayLargeNode *head = NULL;
     multiarrayLargeResult worker = {0};
     for (uint16_t i = 0; i < medium->count; i++) {
+        /* @own: container; free=multiarrayLargeFree */
         multiarrayLargeNode *node = zcalloc(1, sizeof(*node));
         node->data = medium->node[i].data;
         node->count = medium->node[i].count;
@@ -58,6 +61,7 @@ multiarrayLarge *multiarrayLargeFromMedium(multiarrayMedium *medium) {
     /* Now turn the medium container into a large container.
      * A single-node medium never ran the InsertAfter loop, so tmp.tail
      * stays NULL and the tail is the head itself. */
+    /* @own: caller; free=multiarrayLargeFree */
     multiarrayLarge *e = zrealloc(medium, sizeof(*e));
     e->head = head;
     e->tail = tmp.tail ? tmp.tail : head;
@@ -289,6 +293,7 @@ void multiarrayLargeInsert(multiarrayLarge *mar, const int32_t idx,
               * [CURRENT] -> [OLD CURRENT][SPLIT]
               *  - or -
               * [CURRENT] -> [CURRENT][SPLIT] */
+        /* @own: container; free=multiarrayLargeFree */
         multiarrayLargeNode *split = zcalloc(1, sizeof(*split));
         if (offset == 0 || offset == (int32_t)rowMax) {
             multiarrayMediumLargeSplitNew(split, s, len);

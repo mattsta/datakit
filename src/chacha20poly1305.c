@@ -1151,6 +1151,7 @@ bool chacha20poly1305OpenStreamFinal(chacha20poly1305StreamCtx *ctx,
 
 #ifdef DATAKIT_TEST
 
+#include "cleaner.h"
 #include "ctest.h"
 #include "datakit.h"
 
@@ -1158,6 +1159,10 @@ bool chacha20poly1305OpenStreamFinal(chacha20poly1305StreamCtx *ctx,
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+
+/* Scope-exit cleaners for test scratch buffers (see cleaner.h idioms). */
+defcleanerName(uint8_t *, zfree, Bytes);
+defcleanerName(uint32_t *, zfree, Words);
 
 static int bytesEqual(const uint8_t *a, const uint8_t *b, size_t n) {
     return memcmp(a, b, n) == 0;
@@ -1388,9 +1393,9 @@ static void runBench(size_t payload, uint32_t iters) {
     uint8_t key[32], nonce[12], tag[16];
     memset(key, 0xa5, sizeof(key));
     memset(nonce, 0x5a, sizeof(nonce));
-    uint8_t *pt = zmalloc(payload);
-    uint8_t *ct = zmalloc(payload);
-    uint8_t *out = zmalloc(payload);
+    cleanerName(zfree, Bytes) uint8_t *pt = zmalloc(payload);
+    cleanerName(zfree, Bytes) uint8_t *ct = zmalloc(payload);
+    cleanerName(zfree, Bytes) uint8_t *out = zmalloc(payload);
     memset(pt, 0x42, payload);
 
     struct timespec t0, t1;
@@ -1418,10 +1423,6 @@ static void runBench(size_t payload, uint32_t iters) {
     printf("    bench payload=%zuB iters=%u: seal %.1f ns/op (%.1f MB/s)   "
            "open %.1f ns/op (%.1f MB/s)\n",
            payload, iters, seal_ns_op, seal_mbs, open_ns_op, open_mbs);
-
-    zfree(pt);
-    zfree(ct);
-    zfree(out);
 }
 
 int chacha20poly1305Test(int argc, char *argv[]) {
@@ -1522,9 +1523,10 @@ int chacha20poly1305Test(int argc, char *argv[]) {
 
         for (size_t si = 0; si < sizeof(sizes) / sizeof(sizes[0]); si++) {
             size_t n = sizes[si];
-            uint8_t *pt = (n > 0) ? zmalloc(n) : NULL;
-            uint8_t *ct = (n > 0) ? zmalloc(n) : NULL;
-            uint8_t *out = (n > 0) ? zmalloc(n) : NULL;
+            cleanerName(zfree, Bytes) uint8_t *pt = (n > 0) ? zmalloc(n) : NULL;
+            cleanerName(zfree, Bytes) uint8_t *ct = (n > 0) ? zmalloc(n) : NULL;
+            cleanerName(zfree, Bytes) uint8_t *out =
+                (n > 0) ? zmalloc(n) : NULL;
             if (n > 0) {
                 fillPseudoRandom(pt, n, (uint32_t)(0x100 + n));
             }
@@ -1538,11 +1540,6 @@ int chacha20poly1305Test(int argc, char *argv[]) {
             if (n > 0 && memcmp(pt, out, n) != 0) {
                 printf("ERROR! round-trip mismatch size=%zu\n", n);
                 err++;
-            }
-            if (pt) {
-                zfree(pt);
-                zfree(ct);
-                zfree(out);
             }
         }
     }
@@ -1559,10 +1556,14 @@ int chacha20poly1305Test(int argc, char *argv[]) {
                  ai++) {
                 size_t n = sizes[si];
                 size_t alen = aad_sizes[ai];
-                uint8_t *pt = (n > 0) ? zmalloc(n) : NULL;
-                uint8_t *ct = (n > 0) ? zmalloc(n) : NULL;
-                uint8_t *out = (n > 0) ? zmalloc(n) : NULL;
-                uint8_t *aad = (alen > 0) ? zmalloc(alen) : NULL;
+                cleanerName(zfree, Bytes) uint8_t *pt =
+                    (n > 0) ? zmalloc(n) : NULL;
+                cleanerName(zfree, Bytes) uint8_t *ct =
+                    (n > 0) ? zmalloc(n) : NULL;
+                cleanerName(zfree, Bytes) uint8_t *out =
+                    (n > 0) ? zmalloc(n) : NULL;
+                cleanerName(zfree, Bytes) uint8_t *aad =
+                    (alen > 0) ? zmalloc(alen) : NULL;
                 if (n > 0) {
                     fillPseudoRandom(pt, n, (uint32_t)(0x200 + n + alen));
                 }
@@ -1583,14 +1584,6 @@ int chacha20poly1305Test(int argc, char *argv[]) {
                            alen);
                     err++;
                 }
-                if (pt) {
-                    zfree(pt);
-                    zfree(ct);
-                    zfree(out);
-                }
-                if (aad) {
-                    zfree(aad);
-                }
             }
         }
     }
@@ -1600,8 +1593,8 @@ int chacha20poly1305Test(int argc, char *argv[]) {
         fillPseudoRandom(key, sizeof(key), 0x11111111);
         fillPseudoRandom(nonce, sizeof(nonce), 0x22222222);
         const size_t n = 1500;
-        uint8_t *buf = zmalloc(n);
-        uint8_t *ref = zmalloc(n);
+        cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(n);
+        cleanerName(zfree, Bytes) uint8_t *ref = zmalloc(n);
         fillPseudoRandom(buf, n, 0x33333333);
         memcpy(ref, buf, n);
 
@@ -1616,8 +1609,6 @@ int chacha20poly1305Test(int argc, char *argv[]) {
             printf("ERROR! in-place mismatch after Seal/Open\n");
             err++;
         }
-        zfree(buf);
-        zfree(ref);
     }
 
     TEST("Tamper detection: flip each ciphertext byte") {
@@ -1765,7 +1756,7 @@ int chacha20poly1305Test(int argc, char *argv[]) {
                                       33u,  63u,  64u,   65u,     127u,
                                       128u, 256u, 1024u, SIZE_MAX};
         const size_t num_chunks = sizeof(chunk_sizes) / sizeof(chunk_sizes[0]);
-        uint8_t *plain = zmalloc(8192u);
+        cleanerName(zfree, Bytes) uint8_t *plain = zmalloc(8192u);
         for (size_t i = 0; i < 8192u; i++) {
             plain[i] = (uint8_t)(i * 17u + 3u);
         }
@@ -1837,7 +1828,6 @@ int chacha20poly1305Test(int argc, char *argv[]) {
                 }
             }
         }
-        zfree(plain);
     }
 
     TEST("Streaming Open: tampered tag is rejected, ctx poisoned") {
@@ -1979,9 +1969,11 @@ int chacha20poly1305Test(int argc, char *argv[]) {
         chacha20ForceBackend saved = chacha20GetForceBackend();
         for (size_t i = 0; i < n_sizes; i++) {
             const size_t n = sizes[i];
-            uint8_t *in = (n > 0) ? zmalloc(n) : NULL;
-            uint8_t *out_simd = (n > 0) ? zmalloc(n) : NULL;
-            uint8_t *out_scalar = (n > 0) ? zmalloc(n) : NULL;
+            cleanerName(zfree, Bytes) uint8_t *in = (n > 0) ? zmalloc(n) : NULL;
+            cleanerName(zfree, Bytes) uint8_t *out_simd =
+                (n > 0) ? zmalloc(n) : NULL;
+            cleanerName(zfree, Bytes) uint8_t *out_scalar =
+                (n > 0) ? zmalloc(n) : NULL;
             if (n > 0) {
                 fillPseudoRandom(in, n, (uint32_t)(0xABCD + n));
             }
@@ -1994,9 +1986,6 @@ int chacha20poly1305Test(int argc, char *argv[]) {
             if (n > 0 && memcmp(out_simd, out_scalar, n) != 0) {
                 ERR("simd vs scalar mismatch at len=%zu", n);
             }
-            zfree(in);
-            zfree(out_simd);
-            zfree(out_scalar);
         }
         chacha20SetForceBackend(saved);
     }
@@ -2018,7 +2007,8 @@ int chacha20poly1305Test(int argc, char *argv[]) {
          * property is enforced by code review of the bulk-path
          * epilogue.  Pairs with testChachaBulkWipesState which proves
          * the wipe did not perturb output. */
-        uint32_t *state = (uint32_t *)zmalloc(16u * sizeof(uint32_t));
+        cleanerName(zfree, Words) uint32_t *state =
+            (uint32_t *)zmalloc(16u * sizeof(uint32_t));
         memset(state, 0xA5, 16u * sizeof(uint32_t));
         dkSecureZero(state, 16u * sizeof(uint32_t));
         const uint8_t *p = (const uint8_t *)state;
@@ -2030,7 +2020,6 @@ int chacha20poly1305Test(int argc, char *argv[]) {
                 break;
             }
         }
-        zfree(state);
     }
 
     TEST("Open NULL guards parity (testChachaOpenNullParity)") {

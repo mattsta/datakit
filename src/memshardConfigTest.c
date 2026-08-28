@@ -6,6 +6,7 @@
  * mi_usable_size(p) >= requested confirms the routing. */
 #define IKNOWWHATIMDOING
 #include "memshardConfig.h"
+#include "cleaner.h"
 #include "datakit.h"
 #include "mimalloc.h"
 
@@ -13,17 +14,21 @@
 #include <stdint.h>
 #include <stdio.h>
 
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleaner(void *, zfree);
+defcleanerName(uint64_t *, zfree, U64);
+
 int main(void) {
     assert(datakitUseMemshard());
 
     /* zmalloc (zero-filled by datakit convention) routed via memshard */
-    void *p = zmalloc(123);
+    cleaner(zfree) void *p = zmalloc(123);
     assert(p);
     assert(mi_usable_size(p) >= 123); /* owned by memshard */
-    zfree(p);
 
     /* zcalloc -> mi_calloc, zeroed */
-    uint64_t *c = (uint64_t *)zcalloc(100, sizeof(uint64_t));
+    cleanerName(zfree, U64) uint64_t *c =
+        (uint64_t *)zcalloc(100, sizeof(uint64_t));
     assert(c);
     for (int i = 0; i < 100; i++) {
         assert(c[i] == 0);
@@ -34,7 +39,6 @@ int main(void) {
     c = (uint64_t *)zrealloc(c, 200 * sizeof(uint64_t));
     assert(c && c[0] == 0xDEADBEEF);
     assert(mi_usable_size(c) >= 200 * sizeof(uint64_t));
-    zfree(c);
 
     /* zmemalign -> mi_posix_memalign */
     void *a = NULL;

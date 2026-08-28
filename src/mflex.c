@@ -1,8 +1,14 @@
 #include "mflex.h"
 #include "mflexInternal.h"
 
+#include "cleaner.h"
+
 #define PTRLIB_BITS_LOW 2
 #include "ptrlib.h"
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleaner(mflexState *, mflexStateFree);
+defcleaner(mflex *, mflexFree);
 
 typedef enum mflexType {
     MFLEX_TYPE_FLEX = 1,        /* points to 'flex *' */
@@ -63,12 +69,15 @@ enum stateBufferIndex { UNCOMPRESSED = 0, COMPRESSED = 1 };
  * State Management
  * ==================================================================== */
 mflexState *mflexStateNew(size_t initialBufferSize) {
+    /* @own: caller; free=mflexStateFree */
     mflexState *state = zcalloc(1, sizeof(*state));
 
     size_t actualSize = jebufSizeAllocation(initialBufferSize);
+    /* @own: container; free=mflexStateFree */
     STATE_UNCOMPRESSED_FLEX = zcalloc(1, actualSize);
     STATE_UNCOMPRESSED_SIZE = actualSize;
 
+    /* @own: container; free=mflexStateFree */
     STATE_COMPRESSED_FLEX = zcalloc(1, actualSize);
     STATE_COMPRESSED_SIZE = actualSize;
 
@@ -78,6 +87,7 @@ mflexState *mflexStateNew(size_t initialBufferSize) {
 }
 
 mflexState *mflexStateCreate(void) {
+    /* @own: caller; free=mflexStateFree */
     return mflexStateNew(65536);
 }
 
@@ -124,11 +134,13 @@ void mflexStateFree(mflexState *state) {
  * mflex operations
  * ==================================================================== */
 mflex *mflexNew(void) {
+    /* @own: caller; free=mflexFree */
     flex *f = flexNew();
     return _MFLEX_TAG(f, MFLEX_TYPE_FLEX);
 }
 
 mflex *mflexNewNoCompress(void) {
+    /* @own: caller; free=mflexFree */
     flex *f = flexNew();
     return _MFLEX_TAG(f, MFLEX_TYPE_NO_COMPRESS);
 }
@@ -178,6 +190,7 @@ void mflexReset(mflex **mm) {
      * So, just free the orginal and create a new one. */
     mflexFree(*mm);
 
+    /* @own: caller; free=mflexFree */
     *mm = mflexNew();
 }
 
@@ -185,6 +198,7 @@ mflex *mflexDuplicate(const mflex *m) {
     const uint32_t originalType = _mflexType(m);
     size_t bytesActual = mflexBytesActual(m);
 
+    /* @own: caller; free=mflexFree */
     mflex *newMflex = zcalloc(1, bytesActual);
     memcpy(newMflex, mff(m), bytesActual);
 
@@ -539,18 +553,17 @@ int mflexTest(int argc, char *argv[]) {
 
     static const size_t MANYDO = 8192;
 
-    mflexState *state = mflexStateCreate();
+    cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
 
     TEST("create") {
-        mflex *m = mflexNew();
+        cleaner(mflexFree) mflex *m = mflexNew();
         assert(mflexBytesUncompressed(m) == FLEX_EMPTY_SIZE);
         assert(mflexBytesActual(m) == FLEX_EMPTY_SIZE);
         assert(mflexCount(m) == 0);
-        mflexFree(m);
     }
 
     TEST("reset") {
-        mflex *m = mflexNew();
+        cleaner(mflexFree) mflex *m = mflexNew();
         assert(mflexBytesUncompressed(m) == FLEX_EMPTY_SIZE);
         assert(mflexBytesActual(m) == FLEX_EMPTY_SIZE);
         assert(mflexCount(m) == 0);
@@ -559,23 +572,18 @@ int mflexTest(int argc, char *argv[]) {
         assert(mflexBytesUncompressed(m) == FLEX_EMPTY_SIZE);
         assert(mflexBytesActual(m) == FLEX_EMPTY_SIZE);
         assert(mflexCount(m) == 0);
-
-        mflexFree(m);
     }
 
     TEST("duplicate empty") {
-        mflex *m = mflexNew();
-        mflex *second = mflexDuplicate(m);
+        cleaner(mflexFree) mflex *m = mflexNew();
+        cleaner(mflexFree) mflex *second = mflexDuplicate(m);
         assert(mflexBytesUncompressed(second) == FLEX_EMPTY_SIZE);
         assert(mflexBytesActual(second) == FLEX_EMPTY_SIZE);
         assert(mflexCount(second) == 0);
-
-        mflexFree(second);
-        mflexFree(m);
     }
 
     TEST("populate entries") {
-        mflex *m = mflexNew();
+        cleaner(mflexFree) mflex *m = mflexNew();
 
         const size_t howMany = MANYDO;
         for (size_t i = 0; i < howMany; i++) {
@@ -593,14 +601,12 @@ int mflexTest(int argc, char *argv[]) {
 
         assert(mflexCount(m) == howMany);
         assert(mflexBytesActual(m) != mflexBytesUncompressed(m));
-
-        mflexFree(m);
     }
 
     mflexStateReset(state);
 
     TEST("remove entries") {
-        mflex *m = mflexNew();
+        cleaner(mflexFree) mflex *m = mflexNew();
 
         for (int j = 0; j < 5; j++) {
             const size_t howMany = MANYDO;
@@ -619,13 +625,12 @@ int mflexTest(int argc, char *argv[]) {
 
             DOT_CLEAR;
         }
-
-        mflexFree(m);
     }
 
     mflexStateReset(state);
 
     TEST("open existing, populate more, close, open, delete each, close") {
+        /* @own: container; free=mflexFree */
         flex *f = flexNew();
         for (size_t i = 0; i < MANYDO / 2; i++) {
             flexPushDouble(&f, (double)999999999.9999999, FLEX_ENDPOINT_TAIL);
@@ -634,7 +639,7 @@ int mflexTest(int argc, char *argv[]) {
 
         DOT_CLEAR;
 
-        mflex *m = mflexConvertFromFlex(f, state);
+        cleaner(mflexFree) mflex *m = mflexConvertFromFlex(f, state);
 
         /* verify is compressed */
         assert(mflexBytesActual(m) != mflexBytesUncompressed(m));
@@ -673,13 +678,12 @@ int mflexTest(int argc, char *argv[]) {
         /* verify none remain */
         assert(mflexBytesActual(m) == FLEX_EMPTY_SIZE);
         assert(mflexCount(m) == 0);
-
-        mflexFree(m);
     }
 
     mflexStateReset(state);
 
     TEST("open existing, remove half, close, open again") {
+        /* @own: container; free=mflexFree */
         flex *f = flexNew();
         for (size_t i = 0; i < MANYDO / 2; i++) {
             flexPushDouble(&f, (double)999999999.9999999, FLEX_ENDPOINT_TAIL);
@@ -688,7 +692,7 @@ int mflexTest(int argc, char *argv[]) {
 
         DOT_CLEAR;
 
-        mflex *m = mflexConvertFromFlex(f, state);
+        cleaner(mflexFree) mflex *m = mflexConvertFromFlex(f, state);
 
         /* verify is compressed */
         assert(mflexBytesActual(m) != mflexBytesUncompressed(m));
@@ -710,16 +714,13 @@ int mflexTest(int argc, char *argv[]) {
         /* verify none remain */
         assert(mflexBytesActual(m) > FLEX_EMPTY_SIZE);
         assert(mflexCount(m) == MANYDO / 4);
-
-        mflexFree(m);
     }
 
     mflexStateReset(state);
-    mflexStateFree(state);
 
     TEST("reset then reuse: push after reset round-trips") {
-        mflexState *resetState = mflexStateCreate();
-        mflex *m = mflexNew();
+        cleaner(mflexStateFree) mflexState *resetState = mflexStateCreate();
+        cleaner(mflexFree) mflex *m = mflexNew();
 
         for (int cycle = 0; cycle < 2; cycle++) {
             for (uint64_t i = 0; i < 300; i++) {
@@ -742,9 +743,6 @@ int mflexTest(int argc, char *argv[]) {
         if (mflexCount(m) != 1) {
             ERR("Expected 1 after post-reset push, got %zu", mflexCount(m));
         }
-
-        mflexFree(m);
-        mflexStateFree(resetState);
     }
 
     TEST_FINAL_RESULT;

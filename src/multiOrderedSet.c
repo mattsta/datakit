@@ -9,6 +9,14 @@
 #include "multiOrderedSetFull.h"
 #include "multiOrderedSetFullInternal.h"
 
+#include "cleaner.h"
+
+/* Fixed-width key/member buffer used by test scratch allocations below. */
+typedef char mosKeyBuf32[32];
+defcleanerName(mosKeyBuf32 *, zfree, KeyBuf32);
+defcleanerName(int64_t *, zfree, Int64);
+defcleaner(multiOrderedSet *, multiOrderedSetFree);
+
 /* ====================================================================
  * Databox Helpers
  * ==================================================================== */
@@ -472,9 +480,11 @@ multiOrderedSet *multiOrderedSetUnion(const multiOrderedSet *sets[],
                                       const double *weights, size_t numSets,
                                       mosAggregate aggregate) {
     if (numSets == 0) {
+        /* @own: caller; free=multiOrderedSetFree */
         return multiOrderedSetNew();
     }
 
+    /* @own: caller; free=multiOrderedSetFree */
     multiOrderedSet *result = multiOrderedSetNew();
 
     for (size_t i = 0; i < numSets; i++) {
@@ -514,6 +524,7 @@ multiOrderedSet *multiOrderedSetIntersect(const multiOrderedSet *sets[],
                                           const double *weights, size_t numSets,
                                           mosAggregate aggregate) {
     if (numSets < 2) {
+        /* @own: caller; free=multiOrderedSetFree */
         return multiOrderedSetNew();
     }
 
@@ -528,6 +539,7 @@ multiOrderedSet *multiOrderedSetIntersect(const multiOrderedSet *sets[],
         }
     }
 
+    /* @own: caller; free=multiOrderedSetFree */
     multiOrderedSet *result = multiOrderedSetNew();
 
     /* Iterate through smallest set */
@@ -571,9 +583,11 @@ multiOrderedSet *multiOrderedSetIntersect(const multiOrderedSet *sets[],
 multiOrderedSet *multiOrderedSetDifference(const multiOrderedSet *sets[],
                                            size_t numSets) {
     if (numSets == 0) {
+        /* @own: caller; free=multiOrderedSetFree */
         return multiOrderedSetNew();
     }
 
+    /* @own: caller; free=multiOrderedSetFree */
     multiOrderedSet *result = multiOrderedSetCopy(sets[0]);
 
     /* Remove members that exist in any other set */
@@ -607,6 +621,8 @@ multiOrderedSet *multiOrderedSetDifference(const multiOrderedSet *sets[],
 #include "multimap.h" /* For comparison benchmarks */
 
 #include "str.h" /* for xoroshiro128plus */
+
+defcleaner(multimap *, multimapFree);
 
 #define REPORT_TIME 1
 #if REPORT_TIME
@@ -644,14 +660,15 @@ int multiOrderedSetTest(int argc, char *argv[]) {
     int err = 0;
 
     TEST("multiOrderedSet: create and free") {
-        multiOrderedSet *mos = multiOrderedSetNew();
+        cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+            multiOrderedSetNew();
         assert(mos != NULL);
         assert(multiOrderedSetCount(mos) == 0);
-        multiOrderedSetFree(mos);
     }
 
     TEST("multiOrderedSet: add and count") {
-        multiOrderedSet *mos = multiOrderedSetNew();
+        cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+            multiOrderedSetNew();
 
         databox score, member;
         DATABOX_SET_DOUBLE(&score, 1.0);
@@ -666,12 +683,11 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         existed = multiOrderedSetAdd(&mos, &score, &member);
         assert(existed); /* Member existed, score updated */
         assert(multiOrderedSetCount(mos) == 1);
-
-        multiOrderedSetFree(mos);
     }
 
     TEST("multiOrderedSet: NX and XX semantics") {
-        multiOrderedSet *mos = multiOrderedSetNew();
+        cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+            multiOrderedSetNew();
 
         databox score, member;
         DATABOX_SET_DOUBLE(&score, 1.0);
@@ -705,12 +721,11 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         updated = multiOrderedSetAddXX(&mos, &score, &member2);
         assert(!updated);
         assert(multiOrderedSetCount(mos) == 1);
-
-        multiOrderedSetFree(mos);
     }
 
     TEST("multiOrderedSet: get score and rank") {
-        multiOrderedSet *mos = multiOrderedSetNew();
+        cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+            multiOrderedSetNew();
 
         /* Add members with different scores */
         databox scores[3], members[3];
@@ -744,12 +759,11 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         assert(rank == 2);
         rank = multiOrderedSetGetReverseRank(mos, &members[2]);
         assert(rank == 0);
-
-        multiOrderedSetFree(mos);
     }
 
     TEST("multiOrderedSet: remove") {
-        multiOrderedSet *mos = multiOrderedSetNew();
+        cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+            multiOrderedSetNew();
 
         databox score, member;
         DATABOX_SET_DOUBLE(&score, 5.0);
@@ -764,12 +778,11 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         /* Remove again: should fail */
         removed = multiOrderedSetRemove(&mos, &member);
         assert(!removed);
-
-        multiOrderedSetFree(mos);
     }
 
     TEST("multiOrderedSet: iteration") {
-        multiOrderedSet *mos = multiOrderedSetNew();
+        cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+            multiOrderedSetNew();
 
         /* Add members */
         databox score, member;
@@ -795,8 +808,6 @@ int multiOrderedSetTest(int argc, char *argv[]) {
             count++;
         }
         assert(count == 5);
-
-        multiOrderedSetFree(mos);
     }
 
     TEST("multiOrderedSet: tier promotion") {
@@ -835,7 +846,8 @@ int multiOrderedSetTest(int argc, char *argv[]) {
     }
 
     TEST("multiOrderedSet: first and last") {
-        multiOrderedSet *mos = multiOrderedSetNew();
+        cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+            multiOrderedSetNew();
 
         databox score, member;
         DATABOX_SET_DOUBLE(&score, 50.0);
@@ -858,12 +870,11 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         found = multiOrderedSetLast(mos, &gotMember, &gotScore);
         assert(found);
         assert(mosDataboxToDouble(&gotScore) == 90.0);
-
-        multiOrderedSetFree(mos);
     }
 
     TEST("multiOrderedSet: pop min/max") {
-        multiOrderedSet *mos = multiOrderedSetNew();
+        cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+            multiOrderedSetNew();
 
         databox score, member;
         for (int i = 0; i < 5; i++) {
@@ -888,12 +899,11 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         assert(popped == 1);
         assert(mosDataboxToDouble(&poppedScores[0]) == 50.0);
         assert(multiOrderedSetCount(mos) == 2);
-
-        multiOrderedSetFree(mos);
     }
 
     TEST("multiOrderedSet: count by score range") {
-        multiOrderedSet *mos = multiOrderedSetNew();
+        cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+            multiOrderedSetNew();
 
         databox score, member;
         for (int i = 0; i < 10; i++) {
@@ -919,13 +929,13 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         range.maxExclusive = true;
         count = multiOrderedSetCountByScore(mos, &range);
         assert(count == 2); /* 30, 40 */
-
-        multiOrderedSetFree(mos);
     }
 
     TEST("multiOrderedSet: union") {
-        multiOrderedSet *set1 = multiOrderedSetNew();
-        multiOrderedSet *set2 = multiOrderedSetNew();
+        cleaner(multiOrderedSetFree) multiOrderedSet *set1 =
+            multiOrderedSetNew();
+        cleaner(multiOrderedSetFree) multiOrderedSet *set2 =
+            multiOrderedSetNew();
 
         databox score, member;
 
@@ -946,7 +956,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         multiOrderedSetAdd(&set2, &score, &member);
 
         const multiOrderedSet *sets[] = {set1, set2};
-        multiOrderedSet *result =
+        cleaner(multiOrderedSetFree) multiOrderedSet *result =
             multiOrderedSetUnion(sets, NULL, 2, MOS_AGGREGATE_SUM);
 
         assert(multiOrderedSetCount(result) == 3); /* a, b, c */
@@ -955,15 +965,13 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         member = databoxNewBytes("b", 1);
         multiOrderedSetGetScore(result, &member, &gotScore);
         assert(mosDataboxToDouble(&gotScore) == 5.0); /* 2 + 3 */
-
-        multiOrderedSetFree(set1);
-        multiOrderedSetFree(set2);
-        multiOrderedSetFree(result);
     }
 
     TEST("multiOrderedSet: intersection") {
-        multiOrderedSet *set1 = multiOrderedSetNew();
-        multiOrderedSet *set2 = multiOrderedSetNew();
+        cleaner(multiOrderedSetFree) multiOrderedSet *set1 =
+            multiOrderedSetNew();
+        cleaner(multiOrderedSetFree) multiOrderedSet *set2 =
+            multiOrderedSetNew();
 
         databox score, member;
 
@@ -987,7 +995,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         multiOrderedSetAdd(&set2, &score, &member);
 
         const multiOrderedSet *sets[] = {set1, set2};
-        multiOrderedSet *result =
+        cleaner(multiOrderedSetFree) multiOrderedSet *result =
             multiOrderedSetIntersect(sets, NULL, 2, MOS_AGGREGATE_SUM);
 
         assert(multiOrderedSetCount(result) == 2); /* b, c */
@@ -996,14 +1004,11 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         member = databoxNewBytes("b", 1);
         multiOrderedSetGetScore(result, &member, &gotScore);
         assert(mosDataboxToDouble(&gotScore) == 12.0); /* 2 + 10 */
-
-        multiOrderedSetFree(set1);
-        multiOrderedSetFree(set2);
-        multiOrderedSetFree(result);
     }
 
     TEST("multiOrderedSet: copy") {
-        multiOrderedSet *mos = multiOrderedSetNew();
+        cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+            multiOrderedSetNew();
 
         databox score, member;
         for (int i = 0; i < 10; i++) {
@@ -1014,7 +1019,8 @@ int multiOrderedSetTest(int argc, char *argv[]) {
             multiOrderedSetAdd(&mos, &score, &member);
         }
 
-        multiOrderedSet *copy = multiOrderedSetCopy(mos);
+        cleaner(multiOrderedSetFree) multiOrderedSet *copy =
+            multiOrderedSetCopy(mos);
         assert(multiOrderedSetCount(copy) == multiOrderedSetCount(mos));
 
         /* Modify original, verify copy unaffected */
@@ -1022,13 +1028,11 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         multiOrderedSetRemove(&mos, &member);
         assert(multiOrderedSetCount(mos) == 9);
         assert(multiOrderedSetCount(copy) == 10);
-
-        multiOrderedSetFree(mos);
-        multiOrderedSetFree(copy);
     }
 
     TEST("multiOrderedSet: integer scores") {
-        multiOrderedSet *mos = multiOrderedSetNew();
+        cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+            multiOrderedSetNew();
 
         /* Test with various integer score types */
         databox score, member;
@@ -1052,12 +1056,11 @@ int multiOrderedSetTest(int argc, char *argv[]) {
 
         multiOrderedSetLast(mos, &gotMember, &gotScore);
         assert(gotScore.data.u64 == 1000);
-
-        multiOrderedSetFree(mos);
     }
 
     TEST("multiOrderedSet: getByRank") {
-        multiOrderedSet *mos = multiOrderedSetNew();
+        cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+            multiOrderedSetNew();
 
         databox score, member;
         for (int i = 0; i < 5; i++) {
@@ -1083,8 +1086,6 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         /* Out of bounds */
         found = multiOrderedSetGetByRank(mos, 10, &gotMember, &gotScore);
         assert(!found);
-
-        multiOrderedSetFree(mos);
     }
 
     /* ================================================================
@@ -1189,8 +1190,10 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         multiOrderedSet *mos = multiOrderedSetNewLimit(FLEX_CAP_LEVEL_64);
 
         /* Oracle arrays to track what we've inserted */
-        int64_t *oracleScores = zcalloc(1000, sizeof(int64_t));
-        char (*oracleMembers)[32] = zcalloc(1000, 32);
+        cleanerName(zfree, Int64) int64_t *oracleScores =
+            zcalloc(1000, sizeof(int64_t));
+        cleanerName(zfree, KeyBuf32) mosKeyBuf32 *oracleMembers =
+            zcalloc(1000, 32);
         size_t oracleCount = 0;
 
         multiOrderedSetType prevType = MOS_TYPE_SMALL;
@@ -1249,15 +1252,14 @@ int multiOrderedSetTest(int argc, char *argv[]) {
                multiOrderedSetCount(mos), transitions,
                mosType_(mos) == MOS_TYPE_FULL ? "Full" : "NOT_FULL");
 
-        zfree(oracleScores);
-        zfree(oracleMembers);
         multiOrderedSetFree(mos);
     }
 
     TEST("FUZZ: Random access after tier promotion") {
         multiOrderedSet *mos = multiOrderedSetNewLimit(FLEX_CAP_LEVEL_64);
 
-        int64_t *oracle = zcalloc(5000, sizeof(int64_t));
+        cleanerName(zfree, Int64) int64_t *oracle =
+            zcalloc(5000, sizeof(int64_t));
         size_t oracleCount = 0;
 
         /* Insert 5000 entries to ensure Full tier */
@@ -1295,7 +1297,6 @@ int multiOrderedSetTest(int argc, char *argv[]) {
             oracleCount, errors, errors == 0 ? "OK" : "FAIL");
         assert(errors == 0);
 
-        zfree(oracle);
         multiOrderedSetFree(mos);
     }
 
@@ -1369,7 +1370,8 @@ int multiOrderedSetTest(int argc, char *argv[]) {
     TEST("PRECISION: Large uint64_t scores (> 2^53)") {
         /* Test precision for values that can't be exactly represented in double
          */
-        multiOrderedSet *mos = multiOrderedSetNew();
+        cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+            multiOrderedSetNew();
 
         /* Values near 2^53 where double loses precision */
         uint64_t testValues[] = {
@@ -1446,12 +1448,11 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         printf("      Large uint64 precision_errors=%d sort_errors=%d: %s\n",
                precisionErrors, sortErrors,
                (precisionErrors == 0 && sortErrors == 0) ? "OK" : "ISSUES");
-
-        multiOrderedSetFree(mos);
     }
 
     TEST("PRECISION: Large negative int64_t scores") {
-        multiOrderedSet *mos = multiOrderedSetNew();
+        cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+            multiOrderedSetNew();
 
         int64_t testValues[] = {INT64_MIN,
                                 INT64_MIN + 1,
@@ -1500,12 +1501,11 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         printf("      Large int64 count=%zu sort_errors=%d: %s\n",
                multiOrderedSetCount(mos), sortErrors,
                sortErrors == 0 ? "OK" : "FAIL");
-
-        multiOrderedSetFree(mos);
     }
 
     TEST("PRECISION: Mixed score types (int64, uint64, double)") {
-        multiOrderedSet *mos = multiOrderedSetNew();
+        cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+            multiOrderedSetNew();
 
         /* Add with different numeric types */
         databox score, member;
@@ -1569,8 +1569,6 @@ int multiOrderedSetTest(int argc, char *argv[]) {
 
         printf("      Mixed types count=%d order_errors=%d: %s\n", idx,
                orderErrors, orderErrors == 0 ? "OK" : "FAIL");
-
-        multiOrderedSetFree(mos);
     }
 
     /* ================================================================
@@ -1760,7 +1758,8 @@ int multiOrderedSetTest(int argc, char *argv[]) {
 
     TEST("STRESS: Duplicate score handling") {
         /* Many entries with same score, different members */
-        multiOrderedSet *mos = multiOrderedSetNew();
+        cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+            multiOrderedSetNew();
 
         databox score = databoxNewSigned(42);
         for (int i = 0; i < 100; i++) {
@@ -1784,7 +1783,6 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         }
 
         printf("      100 same-score entries: OK\n");
-        multiOrderedSetFree(mos);
     }
 
     TEST("STRESS: Score update (replace) performance") {
@@ -1952,10 +1950,11 @@ int multiOrderedSetTest(int argc, char *argv[]) {
             size_t count = testCounts[tc];
 
             printf("test — %zu entries - inserting...\n", count);
-            multiOrderedSet *mos = multiOrderedSetNew();
+            cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+                multiOrderedSetNew();
 
             /* Pre-allocate key buffers to avoid timing snprintf */
-            char (*keys)[32] = NULL;
+            cleanerName(zfree, KeyBuf32) mosKeyBuf32 *keys = NULL;
             if (count > 0) {
                 keys = zcalloc(count, 32);
                 for (size_t i = 0; i < count; i++) {
@@ -2072,10 +2071,6 @@ int multiOrderedSetTest(int argc, char *argv[]) {
             }
             MOS_PRINT_STATS(mos);
 
-            if (keys) {
-                zfree(keys);
-            }
-            multiOrderedSetFree(mos);
             printf("\n");
         }
     }
@@ -2102,13 +2097,14 @@ int multiOrderedSetTest(int argc, char *argv[]) {
             printf("--- %zu entries ---\n", count);
 
             /* Pre-allocate keys */
-            char (*keys)[32] = zcalloc(count, 32);
+            cleanerName(zfree, KeyBuf32) mosKeyBuf32 *keys = zcalloc(count, 32);
             for (size_t i = 0; i < count; i++) {
                 snprintf(keys[i], 32, "cmp%zu", i);
             }
 
             /* ---- multiOrderedSet ---- */
-            multiOrderedSet *mos = multiOrderedSetNew();
+            cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+                multiOrderedSetNew();
 
             printf("  multiOrderedSet:\n");
             {
@@ -2146,7 +2142,7 @@ int multiOrderedSetTest(int argc, char *argv[]) {
                                                       : "Full");
 
             /* ---- multimap (2-element: score, member) sorted by score ---- */
-            multimap *mm = multimapNew(2);
+            cleaner(multimapFree) multimap *mm = multimapNew(2);
 
             printf("  multimap (2-element, key=score):\n");
             {
@@ -2183,10 +2179,6 @@ int multiOrderedSetTest(int argc, char *argv[]) {
             printf("    bytes=%zu count=%zu\n", multimapBytes(mm),
                    multimapCount(mm));
             printf("\n");
-
-            multiOrderedSetFree(mos);
-            multimapFree(mm);
-            zfree(keys);
         }
     }
 
@@ -2195,16 +2187,18 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         const size_t accessCount = 50000;
 
         /* Pre-allocate keys and scores for random access */
-        char (*keys)[32] = zcalloc(count, 32);
-        int64_t *scores = zcalloc(count, sizeof(int64_t));
+        cleanerName(zfree, KeyBuf32) mosKeyBuf32 *keys = zcalloc(count, 32);
+        cleanerName(zfree, Int64) int64_t *scores =
+            zcalloc(count, sizeof(int64_t));
         for (size_t i = 0; i < count; i++) {
             snprintf(keys[i], 32, "rnd%zu", i);
             scores[i] = (int64_t)(i * 17 % count); /* Pseudo-random scores */
         }
 
         /* Build both structures */
-        multiOrderedSet *mos = multiOrderedSetNew();
-        multimap *mm = multimapNew(2);
+        cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+            multiOrderedSetNew();
+        cleaner(multimapFree) multimap *mm = multimapNew(2);
 
         for (size_t i = 0; i < count; i++) {
             databox score = databoxNewSigned(scores[i]);
@@ -2251,25 +2245,21 @@ int multiOrderedSetTest(int argc, char *argv[]) {
                mosType_(mos) == MOS_TYPE_FULL ? "Full" : "Other");
         printf("  MM  bytes=%zu count=%zu\n\n", multimapBytes(mm),
                multimapCount(mm));
-
-        multiOrderedSetFree(mos);
-        multimapFree(mm);
-        zfree(keys);
-        zfree(scores);
     }
 
     TEST("COMPARE: Iteration throughput") {
         const size_t count = 10000;
 
         /* Pre-allocate keys */
-        char (*keys)[32] = zcalloc(count, 32);
+        cleanerName(zfree, KeyBuf32) mosKeyBuf32 *keys = zcalloc(count, 32);
         for (size_t i = 0; i < count; i++) {
             snprintf(keys[i], 32, "itr%zu", i);
         }
 
         /* Build both structures */
-        multiOrderedSet *mos = multiOrderedSetNew();
-        multimap *mm = multimapNew(2);
+        cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+            multiOrderedSetNew();
+        cleaner(multimapFree) multimap *mm = multimapNew(2);
 
         for (size_t i = 0; i < count; i++) {
             databox score = databoxNewSigned((int64_t)i);
@@ -2315,16 +2305,13 @@ int multiOrderedSetTest(int argc, char *argv[]) {
 
         printf("  MOS bytes=%zu\n", multiOrderedSetBytes(mos));
         printf("  MM  bytes=%zu\n\n", multimapBytes(mm));
-
-        multiOrderedSetFree(mos);
-        multimapFree(mm);
-        zfree(keys);
     }
 
     printf("\n=== All Extended multiOrderedSet Tests Completed ===\n\n");
 
     TEST("reset then reuse: dispatcher across growth, two cycles") {
-        multiOrderedSet *mos = multiOrderedSetNew();
+        cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+            multiOrderedSetNew();
         char member[32];
 
         for (int cycle = 0; cycle < 2; cycle++) {
@@ -2363,8 +2350,6 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         if (missing > 0) {
             ERR("%zu of 400 members missing after reset-reuse", missing);
         }
-
-        multiOrderedSetFree(mos);
     }
 
     TEST("reset then reuse: Full tier with TREE atom pool") {

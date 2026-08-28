@@ -929,6 +929,7 @@ int32_t StrAtoi(const char *z) {
 ** the calling routine.
 */
 void *StrHexToBlob(const char *z, int32_t n) {
+    /* @own: caller; free=zfree */
     char *zBlob = (char *)zmalloc(n / 2 + 1);
     n--;
     if (zBlob) {

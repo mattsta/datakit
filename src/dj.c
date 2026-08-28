@@ -67,6 +67,7 @@ static void boolIdxSet(djState *state, size_t offset, bool value) {
                 /* Allocate the new vBig externally because it is in union with
                  * 'v', so we can't assign to .vBig AND copy .v into .vBig at
                  * the same time. */
+                /* @own: container; free=zfree */
                 DJ_BITMAP *vBig =
                     zcalloc(state->boolIdx.vBigExtent, bytesPerEntry);
                 memcpy(vBig, state->boolIdx.v, totalBytesInDefaultV);
@@ -76,6 +77,7 @@ static void boolIdxSet(djState *state, size_t offset, bool value) {
             } else {
                 /* else, we already have vBig and need to grow it */
                 state->boolIdx.vBigExtent = vOffset * 2;
+                /* @own: container; free=zfree */
                 state->boolIdx.vBig =
                     zrealloc(state->boolIdx.vBig,
                              state->boolIdx.vBigExtent * bytesPerEntry);
@@ -232,12 +234,14 @@ void djAppend(djState *dst, djState *src) {
     /* If current capacity isn't big enough, grow it. */
     if (!dst->ss) {
         dst->ssCapacity = newTotalCount * 4;
+        /* @own: container; free=zfree */
         dst->ss = zcalloc(dst->ssCapacity, sizeof(*dst->ss));
         dst->ss[0] = dst->s;
         dst->ssCount = 1;
     } else {
         if (dst->ssCount + srcStrCount > dst->ssCapacity) {
             dst->ssCapacity = newTotalCount * 2;
+            /* @own: container; free=zfree */
             dst->ss = zrealloc(dst->ss, sizeof(*dst->ss) * dst->ssCapacity);
         }
     }
@@ -862,7 +866,12 @@ writeNumberBytesDirectly:
 }
 
 #ifdef DATAKIT_TEST
+#include "cleaner.h"
 #include "ctest.h"
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleanerName(uint8_t *, zfree, U8);
+defcleaner(mds *, mdsfree);
 
 /* Helper to run djString and get output for testing */
 static mds *djTestEscapeString(const void *data, size_t len) {
@@ -876,6 +885,7 @@ static mds *djTestEscapeString(const void *data, size_t len) {
 /* Helper to build expected escape output using reference scalar implementation
  */
 static mds *djBuildExpectedEscape(const uint8_t *data, size_t len) {
+    /* @own: caller; free=mdsfree */
     mds *expected = mdsnew("\""); /* Open quote */
     for (size_t i = 0; i < len; i++) {
         const uint8_t c = data[i];
@@ -982,7 +992,7 @@ int djTest(int argc, char *argv[]) {
         djInit(testA);
 
         djArrayOpen(testA);
-        mds *str = mdsnew("hello");
+        cleaner(mdsfree) mds *str = mdsnew("hello");
         for (size_t i = 0; i < 32; i++) {
             char *what = "\n";
             if (i % 2 == 0) {
@@ -997,8 +1007,6 @@ int djTest(int argc, char *argv[]) {
 
             djString(testA, str, mdslen(str), false);
         }
-
-        mdsfree(str);
 
         djArrayCloseFinal(testA);
         mds *out = djFinalize(testA);
@@ -1251,7 +1259,7 @@ int djTest(int argc, char *argv[]) {
 
         /* Test 1: Strings with NO escape characters at various lengths */
         for (size_t len = 1; len <= 100; len++) {
-            uint8_t *data = zmalloc(len);
+            cleanerName(zfree, U8) uint8_t *data = zmalloc(len);
             for (size_t i = 0; i < len; i++) {
                 /* Use printable ASCII chars that don't need escaping */
                 data[i] = 'A' + (i % 26);
@@ -1271,7 +1279,6 @@ int djTest(int argc, char *argv[]) {
 
             mdsfree(result);
             mdsfree(expected);
-            zfree(data);
         }
 
         /* Test 2: Single escape char at each position for various lengths */
@@ -1279,7 +1286,7 @@ int djTest(int argc, char *argv[]) {
         for (size_t ec = 0; ec < sizeof(escapeChars); ec++) {
             for (size_t len = 1; len <= 64; len++) {
                 for (size_t pos = 0; pos < len; pos++) {
-                    uint8_t *data = zmalloc(len);
+                    cleanerName(zfree, U8) uint8_t *data = zmalloc(len);
                     for (size_t i = 0; i < len; i++) {
                         data[i] = 'A' + (i % 26);
                     }
@@ -1300,14 +1307,13 @@ int djTest(int argc, char *argv[]) {
 
                     mdsfree(result);
                     mdsfree(expected);
-                    zfree(data);
                 }
             }
         }
 
         /* Test 3: Multiple escape chars in same string */
         for (size_t len = 16; len <= 64; len += 8) {
-            uint8_t *data = zmalloc(len);
+            cleanerName(zfree, U8) uint8_t *data = zmalloc(len);
             for (size_t i = 0; i < len; i++) {
                 data[i] = 'X';
             }
@@ -1342,7 +1348,6 @@ int djTest(int argc, char *argv[]) {
 
             mdsfree(result);
             mdsfree(expected);
-            zfree(data);
         }
 
         /* Test 4: Long strings with escape at specific SIMD boundary positions
@@ -1354,7 +1359,7 @@ int djTest(int argc, char *argv[]) {
             const size_t pos = boundaryPos[bp];
             const size_t len = 128;
 
-            uint8_t *data = zmalloc(len);
+            cleanerName(zfree, U8) uint8_t *data = zmalloc(len);
             for (size_t i = 0; i < len; i++) {
                 data[i] = 'Y';
             }
@@ -1374,13 +1379,12 @@ int djTest(int argc, char *argv[]) {
 
             mdsfree(result);
             mdsfree(expected);
-            zfree(data);
         }
 
         /* Test 5: All control characters (0x00-0x1F) */
         for (uint8_t ctrl = 0; ctrl < 0x20; ctrl++) {
             const size_t len = 32;
-            uint8_t *data = zmalloc(len);
+            cleanerName(zfree, U8) uint8_t *data = zmalloc(len);
             for (size_t i = 0; i < len; i++) {
                 data[i] = 'Z';
             }
@@ -1400,14 +1404,13 @@ int djTest(int argc, char *argv[]) {
 
             mdsfree(result);
             mdsfree(expected);
-            zfree(data);
         }
 
         /* Test 6: Random stress test */
         srandom(12345); /* Fixed seed for reproducibility */
         for (uint32_t trial = 0; trial < 1000; trial++) {
             const size_t len = 1 + (random() % 200);
-            uint8_t *data = zmalloc(len);
+            cleanerName(zfree, U8) uint8_t *data = zmalloc(len);
 
             for (size_t i = 0; i < len; i++) {
                 /* Mix of printable and escape chars */
@@ -1437,7 +1440,6 @@ int djTest(int argc, char *argv[]) {
 
             mdsfree(result);
             mdsfree(expected);
-            zfree(data);
         }
 
         printf("SIMD escape detection: %u/%u tests passed\n", passCount,

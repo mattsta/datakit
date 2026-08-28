@@ -44,6 +44,7 @@ DK_INLINE_ALWAYS linearBloomCount *linearBloomCountNew(void) {
     /* We need to use 'divCeil' here because regular division would give us
      * a floor and that could break some very end-of-array math if our
      * bit length isn't evenly divisible by 8 */
+    /* @own: caller; free=linearBloomCountFree */
     return zcalloc(1, LINEARBLOOMCOUNT_EXTENT_BYTES);
 }
 

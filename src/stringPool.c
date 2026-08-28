@@ -1,8 +1,12 @@
 #include "stringPool.h"
+#include "cleaner.h"
 #include "databox.h"
 #include "datakit.h"
 #include "fibbuf.h"
 #include "multidict.h"
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleaner(stringPool *, stringPoolFree);
 
 #include <assert.h>
 #include <inttypes.h>
@@ -53,40 +57,39 @@ struct stringPool {
  * ==================================================================== */
 
 stringPool *stringPoolNew(void) {
-    stringPool *pool = zcalloc(1, sizeof(*pool));
+    /* A zeroed pool is safe to hand to stringPoolFree at ANY point
+     * during construction (every teardown arm is NULL-safe), so the
+     * cleaner covers all partial-construction exits below. */
+    cleaner(stringPoolFree) stringPool *pool = zcalloc(1, sizeof(*pool));
     if (!pool) {
         return NULL;
     }
 
     /* Create hash table for string→ID lookup */
+    /* @own: container; free=multidictDefaultClassFree */
     pool->mdClass = multidictDefaultClassNew();
     if (!pool->mdClass) {
-        zfree(pool);
         return NULL;
     }
 
+    /* @own: container; free=multidictFree */
     pool->strToId = multidictNew(&multidictTypeExactKey, pool->mdClass, 0);
     if (!pool->strToId) {
-        multidictDefaultClassFree(pool->mdClass);
-        zfree(pool);
         return NULL;
     }
 
     /* Allocate initial entry array */
+    /* @own: container; free=zfree */
     pool->entries = zcalloc(INITIAL_CAPACITY, sizeof(poolEntry));
     if (!pool->entries) {
-        multidictFree(pool->strToId);
-        zfree(pool);
         return NULL;
     }
     pool->capacity = INITIAL_CAPACITY;
 
     /* Allocate initial free list */
+    /* @own: container; free=zfree */
     pool->freeList = zmalloc(INITIAL_FREE_CAPACITY * sizeof(uint64_t));
     if (!pool->freeList) {
-        zfree(pool->entries);
-        multidictFree(pool->strToId);
-        zfree(pool);
         return NULL;
     }
     pool->freeCapacity = INITIAL_FREE_CAPACITY;
@@ -96,7 +99,9 @@ stringPool *stringPoolNew(void) {
     pool->count = 0;
     pool->freeCount = 0;
 
-    return pool;
+    stringPool *out = pool;
+    pool = NULL;
+    return out;
 }
 
 void stringPoolFree(stringPool *pool) {
@@ -157,6 +162,7 @@ static bool ensureCapacity(stringPool *pool, uint64_t id) {
         newCap = fibbufNextSizeBuffer(newCap);
     }
 
+    /* @own: container; free=zfree */
     poolEntry *newEntries = zrealloc(pool->entries, newCap * sizeof(poolEntry));
     if (!newEntries) {
         return false;
@@ -175,6 +181,7 @@ static bool ensureCapacity(stringPool *pool, uint64_t id) {
 static bool pushFreeId(stringPool *pool, uint64_t id) {
     if (pool->freeCount >= pool->freeCapacity) {
         size_t newCap = fibbufNextSizeBuffer(pool->freeCapacity);
+        /* @own: container; free=zfree */
         uint64_t *newList = zrealloc(pool->freeList, newCap * sizeof(uint64_t));
         if (!newList) {
             return false;
@@ -239,6 +246,7 @@ uint64_t stringPoolIntern(stringPool *pool, const databox *str) {
     const uint8_t *srcBytes = databoxBytes(str);
     size_t len = str->len;
 
+    /* @own: container; free=stringPoolFree */
     uint8_t *data = zmalloc(len);
     if (!data) {
         pushFreeId(pool, id);
@@ -413,14 +421,13 @@ int stringPoolTest(int argc, char *argv[]) {
     int err = 0;
 
     TEST("create / free") {
-        stringPool *pool = stringPoolNew();
+        cleaner(stringPoolFree) stringPool *pool = stringPoolNew();
         assert(pool != NULL);
         assert(stringPoolCount(pool) == 0);
-        stringPoolFree(pool);
     }
 
     TEST("basic intern and lookup") {
-        stringPool *pool = stringPoolNew();
+        cleaner(stringPoolFree) stringPool *pool = stringPoolNew();
 
         databox str1 = databoxNewBytesString("hello");
         databox str2 = databoxNewBytesString("world");
@@ -448,12 +455,10 @@ int stringPoolTest(int argc, char *argv[]) {
         /* Lookup by string */
         assert(stringPoolGetId(pool, &str1) == id1);
         assert(stringPoolGetId(pool, &str2) == id2);
-
-        stringPoolFree(pool);
     }
 
     TEST("duplicate intern returns same ID and increments refcount") {
-        stringPool *pool = stringPoolNew();
+        cleaner(stringPoolFree) stringPool *pool = stringPoolNew();
 
         databox str = databoxNewBytesString("duplicate");
 
@@ -469,12 +474,10 @@ int stringPoolTest(int argc, char *argv[]) {
         assert(stringPoolRefcount(pool, id1) == 3);
 
         assert(stringPoolCount(pool) == 1);
-
-        stringPoolFree(pool);
     }
 
     TEST("retain and release") {
-        stringPool *pool = stringPoolNew();
+        cleaner(stringPoolFree) stringPool *pool = stringPoolNew();
 
         databox str = databoxNewBytesString("refcounted");
         uint64_t id = stringPoolIntern(pool, &str);
@@ -502,12 +505,10 @@ int stringPoolTest(int argc, char *argv[]) {
         databox result;
         assert(stringPoolLookup(pool, id, &result) == false);
         assert(stringPoolExists(pool, &str) == false);
-
-        stringPoolFree(pool);
     }
 
     TEST("ID recycling") {
-        stringPool *pool = stringPoolNew();
+        cleaner(stringPoolFree) stringPool *pool = stringPoolNew();
 
         databox str1 = databoxNewBytesString("first");
         databox str2 = databoxNewBytesString("second");
@@ -533,12 +534,10 @@ int stringPoolTest(int argc, char *argv[]) {
         assert(stringPoolLookup(pool, id3, &result) == true);
         assert(stringPoolLookup(pool, id4, &result) == true);
         assert(memcmp(result.data.bytes.start, "fourth", 6) == 0);
-
-        stringPoolFree(pool);
     }
 
     TEST("reset") {
-        stringPool *pool = stringPoolNew();
+        cleaner(stringPoolFree) stringPool *pool = stringPoolNew();
 
         for (int i = 0; i < 100; i++) {
             char buf[32];
@@ -556,12 +555,10 @@ int stringPoolTest(int argc, char *argv[]) {
         uint64_t id = stringPoolIntern(pool, &str);
         assert(id == 1); /* IDs reset too */
         assert(stringPoolCount(pool) == 1);
-
-        stringPoolFree(pool);
     }
 
     TEST("stress test - 10K unique strings") {
-        stringPool *pool = stringPoolNew();
+        cleaner(stringPoolFree) stringPool *pool = stringPoolNew();
         const size_t N = 10000;
 
         int64_t startNs = timeUtilMonotonicNs();
@@ -605,12 +602,10 @@ int stringPoolTest(int argc, char *argv[]) {
         printf("Memory: %zu bytes for %zu entries (%.2f bytes/entry)\n",
                stringPoolBytes(pool), stringPoolCount(pool),
                (double)stringPoolBytes(pool) / stringPoolCount(pool));
-
-        stringPoolFree(pool);
     }
 
     TEST("stress test - duplicates with refcounting") {
-        stringPool *pool = stringPoolNew();
+        cleaner(stringPoolFree) stringPool *pool = stringPoolNew();
         const size_t UNIQUE = 1000;
         const size_t REFS_PER = 10;
 
@@ -645,14 +640,12 @@ int stringPoolTest(int argc, char *argv[]) {
             assert(freed == true);
         }
         assert(stringPoolCount(pool) == 0);
-
-        stringPoolFree(pool);
     }
 
     TEST("performance benchmark summary") {
         printf("\n=== STRING POOL PERFORMANCE SUMMARY ===\n");
 
-        stringPool *pool = stringPoolNew();
+        cleaner(stringPoolFree) stringPool *pool = stringPoolNew();
         const size_t N = 50000;
 
         /* Insert unique strings */
@@ -702,8 +695,6 @@ int stringPoolTest(int argc, char *argv[]) {
                stringPoolBytes(pool),
                (double)stringPoolBytes(pool) / stringPoolCount(pool));
         printf("=========================================\n\n");
-
-        stringPoolFree(pool);
     }
 
     TEST("COMPARISON: stringPool vs multimapAtom") {
@@ -719,7 +710,7 @@ int stringPoolTest(int argc, char *argv[]) {
         char buf[32];
 
         /* ============ stringPool benchmarks ============ */
-        stringPool *sp = stringPoolNew();
+        cleaner(stringPoolFree) stringPool *sp = stringPoolNew();
 
         /* Insert */
         int64_t spInsertStart = timeUtilMonotonicNs();
@@ -764,7 +755,11 @@ int stringPoolTest(int argc, char *argv[]) {
         size_t spBytes = stringPoolBytes(sp);
         size_t spCount = stringPoolCount(sp);
 
+        /* Freed here rather than at scope exit so the multimapAtom
+         * benchmark below measures against an empty heap; the cleaner
+         * skips NULL. */
         stringPoolFree(sp);
+        sp = NULL;
 
         /* ============ multimapAtom benchmarks ============ */
         multimapAtom *ma = multimapAtomNew();
@@ -1004,7 +999,7 @@ int stringPoolTest(int argc, char *argv[]) {
     }
 
     TEST("reset then reuse: ids restart and lookups stay coherent") {
-        stringPool *pool = stringPoolNew();
+        cleaner(stringPoolFree) stringPool *pool = stringPoolNew();
 
         for (int cycle = 0; cycle < 2; cycle++) {
             char buf[32];
@@ -1035,8 +1030,6 @@ int stringPoolTest(int argc, char *argv[]) {
         if (!stringPoolLookup(pool, id, &resolved)) {
             ERRR("Lookup after reset failed");
         }
-
-        stringPoolFree(pool);
     }
 
     TEST_FINAL_RESULT;

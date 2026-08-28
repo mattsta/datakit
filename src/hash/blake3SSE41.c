@@ -418,6 +418,7 @@ void blake3SSE41Compress4(const uint32_t *const cv_inputs[4],
 
 #ifdef DATAKIT_TEST
 
+#include "cleaner.h"
 #include "ctest.h"
 #include "datakit.h" /* zmalloc/zfree */
 
@@ -425,6 +426,9 @@ void blake3SSE41Compress4(const uint32_t *const cv_inputs[4],
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleanerName(uint8_t *, zfree, U8);
 
 /* Cheap xorshift64* for reproducible random fill. */
 static uint64_t rng_state = 0xDEADBEEFCAFEBABEull;
@@ -616,7 +620,7 @@ int blake3SSE41Test(int argc, char *argv[]) {
      * by this file. */
     TEST("blake3SSE41 perf benchmark (1 MiB)") {
         const size_t N = 1024 * 1024;
-        uint8_t *data = (uint8_t *)zmalloc(N);
+        cleanerName(zfree, U8) uint8_t *data = (uint8_t *)zmalloc(N);
         rng_seed(0x9999AAAABBBBCCCCull);
         rng_fill(data, N);
 
@@ -659,8 +663,6 @@ int blake3SSE41Test(int argc, char *argv[]) {
             "blake3SSE41 compress: %.1f MiB/s  (portable: %.1f MiB/s, %.2fx)\n",
             mib_sse, mib_port, mib_sse / mib_port);
         fflush(stdout);
-
-        zfree(data);
     }
 
     TEST_FINAL_RESULT;

@@ -459,10 +459,13 @@ static flexEntry *findEntryByMember(const multiOrderedSetFull *m,
  * ==================================================================== */
 
 multiOrderedSetFull *multiOrderedSetFullNew(void) {
+    /* @own: caller; free=multiOrderedSetFullFree */
     multiOrderedSetFull *m = zcalloc(1, sizeof(*m));
 
     /* Create member index (member → score) */
+    /* @own: container; free=multiOrderedSetFullFree */
     m->mdClass = multidictDefaultClassNew();
+    /* @own: container; free=multiOrderedSetFullFree */
     m->memberIndex = multidictNew(&multidictTypeExactKey, m->mdClass, 0);
 
     /* Create initial sub-map */
@@ -470,6 +473,7 @@ multiOrderedSetFull *multiOrderedSetFullNew(void) {
     m->middle = multiarrayNativeNew(uint32_t);
     m->rangeBox = multiarrayNativeNew(databox);
 
+    /* @own: container; free=multiOrderedSetFullFree */
     flex *initialMap = flexNew();
     uint32_t initialMiddle = FLEX_EMPTY_SIZE;
     databox initialRange = databoxNewSigned(INT64_MAX);
@@ -499,6 +503,7 @@ multiOrderedSetFull *multiOrderedSetFullNewWithPool(atomPool *pool) {
 
 multiOrderedSetFull *multiOrderedSetFullNewWithOwnedPool(void) {
     multiOrderedSetFull *m = multiOrderedSetFullNew();
+    /* @own: container; free=multiOrderedSetFullFree */
     m->pool = atomPoolNewDefault(); /* Uses HASH backend for speed */
     m->flags |= MOS_FLAG_POOL_OWNED;
     return m;
@@ -506,6 +511,7 @@ multiOrderedSetFull *multiOrderedSetFullNewWithOwnedPool(void) {
 
 multiOrderedSetFull *multiOrderedSetFullNewWithPoolType(atomPoolType type) {
     multiOrderedSetFull *m = multiOrderedSetFullNew();
+    /* @own: container; free=multiOrderedSetFullFree */
     m->pool = atomPoolNew(type);
     m->flags |= MOS_FLAG_POOL_OWNED;
     return m;
@@ -548,11 +554,14 @@ multiOrderedSetFullNewFromMedium(struct multiOrderedSetMedium *medium,
 }
 
 multiOrderedSetFull *multiOrderedSetFullCopy(const multiOrderedSetFull *m) {
+    /* @own: caller; free=multiOrderedSetFullFree */
     multiOrderedSetFull *copy = zcalloc(1, sizeof(*copy));
 
     /* Create own class for the copy (classes shouldn't be shared for ownership)
      */
+    /* @own: container; free=multiOrderedSetFullFree */
     copy->mdClass = multidictDefaultClassNew();
+    /* @own: container; free=multiOrderedSetFullFree */
     copy->memberIndex = multidictNew(&multidictTypeExactKey, copy->mdClass, 0);
 
     /* Copy all entries from original memberIndex */
@@ -571,6 +580,7 @@ multiOrderedSetFull *multiOrderedSetFullCopy(const multiOrderedSetFull *m) {
     uint32_t copyCount = 0;
     for (uint32_t i = 0; i < m->mapCount; i++) {
         flex *origMap = getSubMap(m, i);
+        /* @own: container; free=multiOrderedSetFullFree */
         flex *mapCopy = origMap ? flexDuplicate(origMap) : flexNew();
         uint32_t mid = getMiddle(m, i);
         databox *range = getRangeBox(m, i);
@@ -591,6 +601,7 @@ multiOrderedSetFull *multiOrderedSetFullCopy(const multiOrderedSetFull *m) {
     if (m->pool) {
         if (m->flags & MOS_FLAG_POOL_OWNED) {
             /* Source owns pool - copy creates its own pool and re-interns */
+            /* @own: container; free=multiOrderedSetFullFree */
             copy->pool = atomPoolNewDefault();
             copy->flags = MOS_FLAG_POOL_OWNED;
 
@@ -752,6 +763,7 @@ void multiOrderedSetFullReset(multiOrderedSetFull *m) {
     m->middle = multiarrayNativeNew(uint32_t);
     m->rangeBox = multiarrayNativeNew(databox);
 
+    /* @own: container; free=multiOrderedSetFullFree */
     flex *initialMap = flexNew();
     uint32_t initialMiddle = FLEX_EMPTY_SIZE;
     databox initialRange = databoxNewSigned(INT64_MAX);

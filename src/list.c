@@ -33,6 +33,10 @@
 
 #include "list.h"
 
+#include "cleaner.h"
+
+defcleaner(list *, listRelease);
+
 /* Create a new list. The created list can be freed with
  * AlFreeList(), but private value of every node need to be freed
  * by the user before to call AlFreeList().
@@ -41,6 +45,7 @@
 list *listCreate(void) {
     struct list *l;
 
+    /* @own: caller; free=listRelease */
     if ((l = zmalloc(sizeof(*l))) == NULL) {
         return NULL;
     }
@@ -84,6 +89,7 @@ void listRelease(list *l) {
 list *listAddNodeHead(list *l, void *value) {
     listNode *node;
 
+    /* @own: container; free=zfree */
     if ((node = zmalloc(sizeof(*node))) == NULL) {
         return NULL;
     }
@@ -112,6 +118,7 @@ list *listAddNodeHead(list *l, void *value) {
 list *listAddNodeTail(list *l, void *value) {
     listNode *node;
 
+    /* @own: container; free=zfree */
     if ((node = zmalloc(sizeof(*node))) == NULL) {
         return NULL;
     }
@@ -134,6 +141,7 @@ list *listAddNodeTail(list *l, void *value) {
 list *lInsertNode(list *l, listNode *oldNode, void *value, int after) {
     listNode *node;
 
+    /* @own: container; free=zfree */
     if ((node = zmalloc(sizeof(*node))) == NULL) {
         return NULL;
     }
@@ -196,6 +204,7 @@ void listDelNode(list *l, listNode *node) {
 listIter *listGetIterator(list *l, bool headToTail) {
     listIter *iter;
 
+    /* @own: caller; free=listReleaseIterator */
     if ((iter = zmalloc(sizeof(*iter))) == NULL) {
         return NULL;
     }
@@ -263,11 +272,11 @@ listNode *listNext(listIter *iter) {
  *
  * The original list both on success or error is never modified. */
 list *listDup(list *orig) {
-    list *copy;
     listIter *iter;
     listNode *node;
 
-    if ((copy = listCreate()) == NULL) {
+    cleaner(listRelease) list *copy = listCreate();
+    if (copy == NULL) {
         return NULL;
     }
 
@@ -281,7 +290,6 @@ list *listDup(list *orig) {
         if (copy->dup) {
             value = copy->dup(node->value);
             if (value == NULL) {
-                listRelease(copy);
                 listReleaseIterator(iter);
                 return NULL;
             }
@@ -290,13 +298,15 @@ list *listDup(list *orig) {
         }
 
         if (listAddNodeTail(copy, value) == NULL) {
-            listRelease(copy);
             listReleaseIterator(iter);
             return NULL;
         }
     }
     listReleaseIterator(iter);
-    return copy;
+
+    list *out = copy;
+    copy = NULL;
+    return out;
 }
 
 /* Search the list for a node matching a given key.
@@ -384,7 +394,7 @@ int listTest(int argc, char *argv[]) {
     /* Test listCreate and listRelease */
     printf("Testing listCreate and listRelease...\n");
     {
-        list *l = listCreate();
+        cleaner(listRelease) list *l = listCreate();
         if (l == NULL) {
             ERR("listCreate returned NULL%s", "");
         }
@@ -400,14 +410,12 @@ int listTest(int argc, char *argv[]) {
         if (listLast(l) != NULL) {
             ERR("New list tail should be NULL%s", "");
         }
-
-        listRelease(l);
     }
 
     /* Test listAddNodeHead */
     printf("Testing listAddNodeHead...\n");
     {
-        list *l = listCreate();
+        cleaner(listRelease) list *l = listCreate();
         int32_t values[] = {1, 2, 3, 4, 5};
 
         for (int32_t i = 0; i < 5; i++) {
@@ -431,14 +439,12 @@ int listTest(int argc, char *argv[]) {
             ERR("Expected tail value 1, got %d",
                 *(int32_t *)listNodeValue(listLast(l)));
         }
-
-        listRelease(l);
     }
 
     /* Test listAddNodeTail */
     printf("Testing listAddNodeTail...\n");
     {
-        list *l = listCreate();
+        cleaner(listRelease) list *l = listCreate();
         int32_t values[] = {1, 2, 3, 4, 5};
 
         for (int32_t i = 0; i < 5; i++) {
@@ -462,14 +468,12 @@ int listTest(int argc, char *argv[]) {
             ERR("Expected tail value 5, got %d",
                 *(int32_t *)listNodeValue(listLast(l)));
         }
-
-        listRelease(l);
     }
 
     /* Test listDelNode */
     printf("Testing listDelNode...\n");
     {
-        list *l = listCreate();
+        cleaner(listRelease) list *l = listCreate();
         int32_t values[] = {1, 2, 3};
 
         for (int32_t i = 0; i < 3; i++) {
@@ -503,14 +507,12 @@ int listTest(int argc, char *argv[]) {
         if (listLast(l)->prev != listFirst(l)) {
             ERR("Tail->prev should point to head%s", "");
         }
-
-        listRelease(l);
     }
 
     /* Test listGetIterator and listNext (head to tail) */
     printf("Testing listGetIterator head to tail...\n");
     {
-        list *l = listCreate();
+        cleaner(listRelease) list *l = listCreate();
         int32_t values[] = {1, 2, 3, 4, 5};
 
         for (int32_t i = 0; i < 5; i++) {
@@ -538,13 +540,12 @@ int listTest(int argc, char *argv[]) {
         }
 
         listReleaseIterator(iter);
-        listRelease(l);
     }
 
     /* Test listGetIterator and listNext (tail to head) */
     printf("Testing listGetIterator tail to head...\n");
     {
-        list *l = listCreate();
+        cleaner(listRelease) list *l = listCreate();
         int32_t values[] = {1, 2, 3, 4, 5};
 
         for (int32_t i = 0; i < 5; i++) {
@@ -572,13 +573,12 @@ int listTest(int argc, char *argv[]) {
         }
 
         listReleaseIterator(iter);
-        listRelease(l);
     }
 
     /* Test listRewind and listRewindTail */
     printf("Testing listRewind and listRewindTail...\n");
     {
-        list *l = listCreate();
+        cleaner(listRelease) list *l = listCreate();
         int32_t values[] = {1, 2, 3};
 
         for (int32_t i = 0; i < 3; i++) {
@@ -600,14 +600,12 @@ int listTest(int argc, char *argv[]) {
             ERR("listRewindTail should start at tail (3), got %d",
                 *(int32_t *)listNodeValue(node));
         }
-
-        listRelease(l);
     }
 
     /* Test listDup */
     printf("Testing listDup...\n");
     {
-        list *orig = listCreate();
+        cleaner(listRelease) list *orig = listCreate();
         int32_t values[] = {10, 20, 30, 40, 50};
 
         for (int32_t i = 0; i < 5; i++) {
@@ -645,14 +643,13 @@ int listTest(int argc, char *argv[]) {
 
         listReleaseIterator(origIter);
         listReleaseIterator(copyIter);
-        listRelease(orig);
         listRelease(copy);
     }
 
     /* Test listSearchKey */
     printf("Testing listSearchKey...\n");
     {
-        list *l = listCreate();
+        cleaner(listRelease) list *l = listCreate();
         int32_t values[] = {100, 200, 300, 400, 500};
 
         for (int32_t i = 0; i < 5; i++) {
@@ -674,14 +671,12 @@ int listTest(int argc, char *argv[]) {
         if (found != NULL) {
             ERR("listSearchKey should not find different pointer%s", "");
         }
-
-        listRelease(l);
     }
 
     /* Test listIndex */
     printf("Testing listIndex...\n");
     {
-        list *l = listCreate();
+        cleaner(listRelease) list *l = listCreate();
         int32_t values[] = {10, 20, 30, 40, 50};
 
         for (int32_t i = 0; i < 5; i++) {
@@ -730,14 +725,12 @@ int listTest(int argc, char *argv[]) {
         if (node != NULL) {
             ERR("listIndex(-6) should return NULL for 5-element list%s", "");
         }
-
-        listRelease(l);
     }
 
     /* Test listRotate */
     printf("Testing listRotate...\n");
     {
-        list *l = listCreate();
+        cleaner(listRelease) list *l = listCreate();
         int32_t values[] = {1, 2, 3, 4, 5};
 
         for (int32_t i = 0; i < 5; i++) {
@@ -771,14 +764,12 @@ int listTest(int argc, char *argv[]) {
             idx++;
         }
         listReleaseIterator(iter);
-
-        listRelease(l);
     }
 
     /* Test empty list rotation */
     printf("Testing listRotate on empty/single-element list...\n");
     {
-        list *l = listCreate();
+        cleaner(listRelease) list *l = listCreate();
 
         /* Rotate empty list should not crash */
         listRotate(l);
@@ -798,14 +789,12 @@ int listTest(int argc, char *argv[]) {
         if (*(int32_t *)listNodeValue(listFirst(l)) != 42) {
             ERR("Single element rotation changed value%s", "");
         }
-
-        listRelease(l);
     }
 
     /* Test deletion during iteration */
     printf("Testing deletion during iteration...\n");
     {
-        list *l = listCreate();
+        cleaner(listRelease) list *l = listCreate();
         int32_t values[] = {1, 2, 3, 4, 5};
 
         for (int32_t i = 0; i < 5; i++) {
@@ -840,8 +829,6 @@ int listTest(int argc, char *argv[]) {
             idx++;
         }
         listReleaseIterator(iter);
-
-        listRelease(l);
     }
 
     TEST_FINAL_RESULT;

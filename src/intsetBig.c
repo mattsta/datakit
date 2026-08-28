@@ -1,8 +1,12 @@
 #include "intsetBig.h"
 
+#include "cleaner.h"
 #include "intersectInt.h"
 #include "intsetU32.h"
 #include "str.h"
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleaner(intsetBig *, intsetBigFree);
 
 struct intsetBigSet {
     multimap *i;
@@ -158,11 +162,13 @@ valueFromBucketOffset(const databoxBig *restrict const bucket,
 
 intsetBig *intsetBigNew(void) {
     /* Create map of bucketIndex -> intsetU32 */
+    /* @own: caller; free=intsetBigFree */
     intsetBig *isb = zmalloc(sizeof(*isb));
     /* Use multimapNew (not multimapSetNew) because we need key-only comparison
      * for insert/replace operations. multimapSetNew compares all elements
      * (key+value), so when the intsetU32 pointer changes after resize, the
      * replace operation fails to find the existing entry. */
+    /* @own: container; free=multimapFree */
     isb->i = multimapNew(2);
     return isb;
 }
@@ -193,8 +199,10 @@ intsetBig *intsetBigCopy(const intsetBig *const isb) {
      * intsetU32 is deep-copied straight into the result, so no
      * iterate-while-mutate aliasing and no transient state where the
      * copy shares live intsetU32 pointers with the source. */
+    /* @own: caller; free=intsetBigFree */
     intsetBig *result = zmalloc(sizeof(*result));
     result->count = isb->count;
+    /* @own: container; free=multimapFree */
     result->i = multimapNew(2);
 
     multimapIterator iter;
@@ -889,48 +897,40 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
 
     /* Create and free empty set */
     TEST("create and free") {
-        intsetBig *isb = intsetBigNew();
-        intsetBigFree(isb);
+        cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
+        (void)isb;
     }
 
     /* Add small (bucket 0) to new set */
     TEST("add to bucket 0") {
-        intsetBig *isb = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
         if (!intsetBigAdd(isb, &DATABOX_BIG_UNSIGNED(25))) {
             ERRR("Failed to add to bucket 0!");
         }
-
-        intsetBigFree(isb);
     }
 
     /* Add small (bucket -1) to new set */
     TEST("add to bucket -1") {
-        intsetBig *isb = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
         if (!intsetBigAdd(isb, &DATABOX_BIG_SIGNED(-25))) {
             ERRR("Failed to add to bucket -1!");
         }
-
-        intsetBigFree(isb);
     }
 
     /* Add bigger to new set (bucket 1) */
     TEST("add to bucket 1") {
-        intsetBig *isb = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
         if (!intsetBigAdd(isb, &DATABOX_BIG_UNSIGNED((1ULL << 35)))) {
             ERRR("Failed to add to bucket 1!");
         }
-
-        intsetBigFree(isb);
     }
 
     /* Add bigger to new set (bucket -2) */
     TEST("add to bucket -2") {
-        intsetBig *isb = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
         if (!intsetBigAdd(isb, &DATABOX_BIG_SIGNED(-(1LL << 35)))) {
             ERRR("Failed to add to bucket -2!");
         }
-
-        intsetBigFree(isb);
     }
 
     TEST("set and retrieve smallest") {
@@ -951,7 +951,7 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
         assert(final->type);
         assert(*final->data.i128 == INTSET_BIG_INT128_MIN);
 
-        intsetBig *isb = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
         if (!intsetBigAdd(isb, final)) {
             ERRR("Failed to add smallest?");
         }
@@ -968,8 +968,6 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
                 intsetBigRepr(isb);
             }
         }
-
-        intsetBigFree(isb);
     }
 
     TEST("set and retrieve biggest") {
@@ -990,7 +988,7 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
         assert(final->type);
         assert(*final->data.u128 == INTSET_BIG_UINT128_MAX);
 
-        intsetBig *isb = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
         if (!intsetBigAdd(isb, final)) {
             ERRR("Failed to add biggest?");
         }
@@ -1007,12 +1005,10 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
                 intsetBigRepr(isb);
             }
         }
-
-        intsetBigFree(isb);
     }
 
     TEST("add from bucket -62 to 63") {
-        intsetBig *isb = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
 
         /* + 1 + 1 is for the two ±2^74 strings */
         databoxBig testers[(62 + 64) + 1 + 1] = {{{0}}};
@@ -1166,12 +1162,10 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
         if (intsetBigCountElements(isb)) {
             ERRR("Has elements?");
         }
-
-        intsetBigFree(isb);
     }
 
     TEST("duplicate add returns false") {
-        intsetBig *isb = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
         databoxBig val = DATABOX_BIG_UNSIGNED(12345);
 
         if (!intsetBigAdd(isb, &val)) {
@@ -1185,12 +1179,10 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
         if (intsetBigCountElements(isb) != 1) {
             ERRR("Count should be 1 after duplicate add!");
         }
-
-        intsetBigFree(isb);
     }
 
     TEST("remove non-existent returns false") {
-        intsetBig *isb = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
         databoxBig val = DATABOX_BIG_UNSIGNED(12345);
 
         if (intsetBigRemove(isb, &val)) {
@@ -1207,23 +1199,19 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
         if (intsetBigCountElements(isb) != 1) {
             ERRR("Count should still be 1!");
         }
-
-        intsetBigFree(isb);
     }
 
     TEST("exists on empty set returns false") {
-        intsetBig *isb = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
         databoxBig val = DATABOX_BIG_UNSIGNED(12345);
 
         if (intsetBigExists(isb, &val)) {
             ERRR("Exists on empty set should return false!");
         }
-
-        intsetBigFree(isb);
     }
 
     TEST("iterator on empty set yields nothing") {
-        intsetBig *isb = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
         intsetBigIterator iter;
         databoxBig val;
 
@@ -1231,12 +1219,10 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
         if (intsetBigIteratorNextBox(&iter, &val)) {
             ERRR("Iterator on empty set should yield nothing!");
         }
-
-        intsetBigFree(isb);
     }
 
     TEST("intsetBigCopy creates independent copy") {
-        intsetBig *isb = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
         databoxBig vals[5] = {
             DATABOX_BIG_UNSIGNED(100), DATABOX_BIG_SIGNED(-200),
             DATABOX_BIG_UNSIGNED(1ULL << 30), DATABOX_BIG_SIGNED(-(1LL << 25)),
@@ -1246,7 +1232,7 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
             intsetBigAdd(isb, &vals[i]);
         }
 
-        intsetBig *copy = intsetBigCopy(isb);
+        cleaner(intsetBigFree) intsetBig *copy = intsetBigCopy(isb);
 
         /* Verify copy has same elements */
         if (intsetBigCountElements(copy) != intsetBigCountElements(isb)) {
@@ -1270,14 +1256,11 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
         if (intsetBigCountElements(copy) != 5) {
             ERRR("Copy count should still be 5!");
         }
-
-        intsetBigFree(isb);
-        intsetBigFree(copy);
     }
 
     TEST("intsetBigEqual") {
-        intsetBig *a = intsetBigNew();
-        intsetBig *b = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *a = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *b = intsetBigNew();
 
         /* Empty sets are equal */
         if (!intsetBigEqual(a, b)) {
@@ -1310,14 +1293,11 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
         if (intsetBigEqual(a, b)) {
             ERRR("Sets with different elements should not be equal!");
         }
-
-        intsetBigFree(a);
-        intsetBigFree(b);
     }
 
     TEST("intsetBigSubset") {
-        intsetBig *a = intsetBigNew();
-        intsetBig *b = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *a = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *b = intsetBigNew();
 
         /* Empty set is subset of any set */
         if (!intsetBigSubset(a, b)) {
@@ -1353,15 +1333,12 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
         if (intsetBigSubset(a, b)) {
             ERRR("a with extra element should not be subset of b!");
         }
-
-        intsetBigFree(a);
-        intsetBigFree(b);
     }
 
     TEST("intsetBigIntersect") {
-        intsetBig *a = intsetBigNew();
-        intsetBig *b = intsetBigNew();
-        intsetBig *result = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *a = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *b = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *result = intsetBigNew();
 
         /* Intersect empty sets */
         size_t count = intsetBigIntersect(a, b, result);
@@ -1403,15 +1380,11 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
         if (intsetBigExists(result, &one)) {
             ERRR("Intersection should not contain 1!");
         }
-
-        intsetBigFree(a);
-        intsetBigFree(b);
-        intsetBigFree(result);
     }
 
     TEST("intsetBigMergeInto") {
-        intsetBig *a = intsetBigNew();
-        intsetBig *b = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *a = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *b = intsetBigNew();
 
         /* Add elements: a = {1, 2, 3}, b = {3, 4, 5} */
         databoxBig aVals[3] = {DATABOX_BIG_UNSIGNED(1), DATABOX_BIG_UNSIGNED(2),
@@ -1441,13 +1414,10 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
                 ERR("Merged set missing merged element %zu!", i);
             }
         }
-
-        intsetBigFree(a);
-        intsetBigFree(b);
     }
 
     TEST("intsetBigRandom and intsetBigRandomDelete") {
-        intsetBig *isb = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
 
         /* Add some elements */
         for (uint64_t i = 0; i < 100; i++) {
@@ -1497,15 +1467,13 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
         if (intsetBigRandomDelete(isb, &none)) {
             ERRR("RandomDelete on an empty set must return false!");
         }
-
-        intsetBigFree(isb);
     }
 
     TEST("intsetBigRandom across multiple buckets") {
         /* Values spread across several 2^20-wide buckets: every global
          * index must map to a valid in-bucket offset, including the
          * bucket-boundary indices. */
-        intsetBig *isb = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
         const uint64_t bucketSpan = UINT64_C(1) << 20;
         for (uint64_t b = 0; b < 5; b++) {
             for (uint64_t i = 0; i < 7; i++) {
@@ -1526,12 +1494,10 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
                 ERRR("Random value should exist in multi-bucket set!");
             }
         }
-
-        intsetBigFree(isb);
     }
 
     TEST("intsetBigBytes") {
-        intsetBig *isb = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
         size_t emptyBytes = intsetBigBytes(isb);
 
         if (emptyBytes == 0) {
@@ -1548,12 +1514,10 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
         if (fullBytes <= emptyBytes) {
             ERRR("Bytes should increase with more elements!");
         }
-
-        intsetBigFree(isb);
     }
 
     TEST("bucket boundary values") {
-        intsetBig *isb = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
 
         /* Test values around bucket boundaries (divisor = 2^20 = 1048576) */
         uint64_t boundary = 1ULL << 20;
@@ -1597,12 +1561,10 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
         if (intsetBigCountElements(isb) != 0) {
             ERRR("Should be empty after removing all!");
         }
-
-        intsetBigFree(isb);
     }
 
     TEST("signed zero edge case") {
-        intsetBig *isb = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
 
         /* Test signed and unsigned zero */
         databoxBig uzero = DATABOX_BIG_UNSIGNED(0);
@@ -1623,12 +1585,10 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
         if (intsetBigCountElements(isb) != 1) {
             ERRR("Should only have 1 element (zero)!");
         }
-
-        intsetBigFree(isb);
     }
 
     TEST("large scale add/remove/iterate") {
-        intsetBig *isb = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
         const size_t N = 10000;
 
         /* Add N elements with various patterns */
@@ -1667,12 +1627,10 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
             prev = val;
             first = false;
         }
-
-        intsetBigFree(isb);
     }
 
     TEST("fuzzer - random operations") {
-        intsetBig *isb = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
         /* Simple reference set for validation (limited range) */
         bool refSet[10000] = {0};
         const size_t refMax = 10000;
@@ -1760,12 +1718,10 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
             ERR("Final count mismatch: ref=%zu, isb=%zu!", refCount,
                 intsetBigCountElements(isb));
         }
-
-        intsetBigFree(isb);
     }
 
     TEST("fuzzer - mixed positive and negative values") {
-        intsetBig *isb = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
         srandom(54321);
 
         const size_t numOps = 3000;
@@ -1810,12 +1766,10 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
             ERR("Iteration count %zu != element count %zu!", count,
                 intsetBigCountElements(isb));
         }
-
-        intsetBigFree(isb);
     }
 
     TEST("fuzzer - 128-bit values") {
-        intsetBig *isb = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
         srandom(99999);
 
         databoxBig stored[100];
@@ -1891,8 +1845,6 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
                 ERR("Unremoved 128-bit value %zu should exist!", i);
             }
         }
-
-        intsetBigFree(isb);
     }
 
     /* ====================================================================
@@ -1905,8 +1857,8 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
 #define BUCKET_SIZE (1ULL << 20) /* 1,048,576 - matches DIVISOR_WIDTH */
 
     TEST("intsetBigMergeInto - multiple buckets, B extends past A") {
-        intsetBig *a = intsetBigNew();
-        intsetBig *b = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *a = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *b = intsetBigNew();
 
         /* A has buckets 0 and 1 */
         databoxBig a0 = DATABOX_BIG_UNSIGNED(100);              /* bucket 0 */
@@ -1953,14 +1905,11 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
         if (intsetBigCountBuckets(a) != 4) {
             ERR("Expected 4 buckets, got %zu!", intsetBigCountBuckets(a));
         }
-
-        intsetBigFree(a);
-        intsetBigFree(b);
     }
 
     TEST("intsetBigMergeInto - completely disjoint buckets") {
-        intsetBig *a = intsetBigNew();
-        intsetBig *b = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *a = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *b = intsetBigNew();
 
         /* A has only even buckets: 0, 2, 4 */
         databoxBig a0 = DATABOX_BIG_UNSIGNED(100);
@@ -1997,14 +1946,11 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
             !intsetBigExists(a, &b5)) {
             ERRR("Missing B elements!");
         }
-
-        intsetBigFree(a);
-        intsetBigFree(b);
     }
 
     TEST("intsetBigMergeInto - interleaved buckets") {
-        intsetBig *a = intsetBigNew();
-        intsetBig *b = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *a = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *b = intsetBigNew();
 
         /* A = buckets {0, 2, 4} */
         /* B = buckets {1, 2, 3} (partially overlapping) */
@@ -2043,14 +1989,11 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
                 ERR("Missing element %zu!", i);
             }
         }
-
-        intsetBigFree(a);
-        intsetBigFree(b);
     }
 
     TEST("intsetBigMergeInto - A extends past B") {
-        intsetBig *a = intsetBigNew();
-        intsetBig *b = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *a = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *b = intsetBigNew();
 
         /* A has buckets 0, 1, 5, 6 */
         intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(100));
@@ -2070,14 +2013,11 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
         if (intsetBigCountBuckets(a) != 5) { /* 0, 1, 2, 5, 6 */
             ERR("Expected 5 buckets, got %zu!", intsetBigCountBuckets(a));
         }
-
-        intsetBigFree(a);
-        intsetBigFree(b);
     }
 
     TEST("intsetBigMergeInto - B is empty") {
-        intsetBig *a = intsetBigNew();
-        intsetBig *b = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *a = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *b = intsetBigNew();
 
         intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(100));
         intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(BUCKET_SIZE + 100));
@@ -2087,14 +2027,11 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
         if (intsetBigCountElements(a) != 2) {
             ERR("Expected 2 elements, got %zu!", intsetBigCountElements(a));
         }
-
-        intsetBigFree(a);
-        intsetBigFree(b);
     }
 
     TEST("intsetBigMergeInto - A is empty") {
-        intsetBig *a = intsetBigNew();
-        intsetBig *b = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *a = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *b = intsetBigNew();
 
         intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(100));
         intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(BUCKET_SIZE + 100));
@@ -2117,14 +2054,11 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
             !intsetBigExists(a, &v2)) {
             ERRR("Missing merged elements!");
         }
-
-        intsetBigFree(a);
-        intsetBigFree(b);
     }
 
     TEST("intsetBigMergeInto - negative buckets") {
-        intsetBig *a = intsetBigNew();
-        intsetBig *b = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *a = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *b = intsetBigNew();
 
         /* A has negative buckets -2 and -1 */
         intsetBigAdd(a, &DATABOX_BIG_SIGNED(-(int64_t)(2 * BUCKET_SIZE + 100)));
@@ -2150,14 +2084,11 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
             !intsetBigExists(a, &neg1) || !intsetBigExists(a, &pos0)) {
             ERRR("Missing elements after negative bucket merge!");
         }
-
-        intsetBigFree(a);
-        intsetBigFree(b);
     }
 
     TEST("intsetBigMergeInto - many elements per bucket") {
-        intsetBig *a = intsetBigNew();
-        intsetBig *b = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *a = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *b = intsetBigNew();
 
         /* A has 100 elements in bucket 0, 50 in bucket 2 */
         for (uint64_t i = 0; i < 100; i++) {
@@ -2184,14 +2115,11 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
         if (intsetBigCountBuckets(a) != 3) {
             ERR("Expected 3 buckets, got %zu!", intsetBigCountBuckets(a));
         }
-
-        intsetBigFree(a);
-        intsetBigFree(b);
     }
 
     TEST("intsetBigMergeInto - verify iteration order after merge") {
-        intsetBig *a = intsetBigNew();
-        intsetBig *b = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *a = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *b = intsetBigNew();
 
         /* Add in non-sorted order across buckets */
         intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(3 * BUCKET_SIZE + 500));
@@ -2222,9 +2150,6 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
         if (count != 4) {
             ERR("Expected 4 elements in iteration, got %zu!", count);
         }
-
-        intsetBigFree(a);
-        intsetBigFree(b);
     }
 
     /* ====================================================================
@@ -2232,9 +2157,9 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
      * ==================================================================== */
 
     TEST("intsetBigIntersect - multiple buckets, partial overlap") {
-        intsetBig *a = intsetBigNew();
-        intsetBig *b = intsetBigNew();
-        intsetBig *result = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *a = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *b = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *result = intsetBigNew();
 
         /* A has buckets 0, 1, 2 */
         intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(100));
@@ -2268,10 +2193,6 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
         if (!intsetBigExists(result, &v1) || !intsetBigExists(result, &v2)) {
             ERRR("Intersection missing expected values!");
         }
-
-        intsetBigFree(a);
-        intsetBigFree(b);
-        intsetBigFree(result);
     }
 
     TEST("intsetBigIntersect - in-place (a == result) matches fresh result") {
@@ -2279,8 +2200,8 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
          * bucket, an interleaved match, a bucket whose element
          * intersection is EMPTY (same bucket, different elements), a
          * second match, and trailing a-only buckets past b's last. */
-        intsetBig *a = intsetBigNew();
-        intsetBig *b = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *a = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *b = intsetBigNew();
 
         intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(50)); /* bucket 0: a-only */
         intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(BUCKET_SIZE + 10)); /* match */
@@ -2299,11 +2220,11 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
         intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(3 * BUCKET_SIZE + 7));
 
         /* Oracle: fresh-result intersect */
-        intsetBig *fresh = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *fresh = intsetBigNew();
         const size_t freshCount = intsetBigIntersect(a, b, fresh);
 
         /* In-place intersect on a copy of 'a' */
-        intsetBig *inplace = intsetBigCopy(a);
+        cleaner(intsetBigFree) intsetBig *inplace = intsetBigCopy(a);
         const size_t inplaceCount = intsetBigIntersect(inplace, b, inplace);
 
         if (inplaceCount != freshCount) {
@@ -2328,17 +2249,12 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
         databoxBig m2 = DATABOX_BIG_UNSIGNED(3 * BUCKET_SIZE + 7);
         assert(intsetBigExists(inplace, &m1));
         assert(intsetBigExists(inplace, &m2));
-
-        intsetBigFree(a);
-        intsetBigFree(b);
-        intsetBigFree(fresh);
-        intsetBigFree(inplace);
     }
 
     TEST("intsetBigIntersect - completely disjoint buckets") {
-        intsetBig *a = intsetBigNew();
-        intsetBig *b = intsetBigNew();
-        intsetBig *result = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *a = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *b = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *result = intsetBigNew();
 
         /* A has buckets 0, 2, 4 */
         intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(100));
@@ -2359,16 +2275,12 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
             ERR("Expected 0 elements in result, got %zu!",
                 intsetBigCountElements(result));
         }
-
-        intsetBigFree(a);
-        intsetBigFree(b);
-        intsetBigFree(result);
     }
 
     TEST("intsetBigIntersect - same bucket different values") {
-        intsetBig *a = intsetBigNew();
-        intsetBig *b = intsetBigNew();
-        intsetBig *result = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *a = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *b = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *result = intsetBigNew();
 
         /* A and B have same bucket but no overlapping values */
         intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(100));
@@ -2384,16 +2296,12 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
         if (count != 0) {
             ERR("Expected 0, got %zu!", count);
         }
-
-        intsetBigFree(a);
-        intsetBigFree(b);
-        intsetBigFree(result);
     }
 
     TEST("intsetBigIntersect - negative bucket overlap") {
-        intsetBig *a = intsetBigNew();
-        intsetBig *b = intsetBigNew();
-        intsetBig *result = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *a = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *b = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *result = intsetBigNew();
 
         /* A has negative and positive buckets */
         intsetBigAdd(a, &DATABOX_BIG_SIGNED(-100));
@@ -2415,10 +2323,6 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
         if (!intsetBigExists(result, &expected)) {
             ERRR("Missing expected intersection value!");
         }
-
-        intsetBigFree(a);
-        intsetBigFree(b);
-        intsetBigFree(result);
     }
 
     /* ====================================================================
@@ -2426,8 +2330,8 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
      * ==================================================================== */
 
     TEST("intsetBigEqual - multiple buckets") {
-        intsetBig *a = intsetBigNew();
-        intsetBig *b = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *a = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *b = intsetBigNew();
 
         /* Add same values across multiple buckets */
         uint64_t vals[] = {100, BUCKET_SIZE + 50, 2 * BUCKET_SIZE + 200,
@@ -2447,14 +2351,11 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
         if (intsetBigEqual(a, b)) {
             ERRR("Sets with different bucket counts should not be equal!");
         }
-
-        intsetBigFree(a);
-        intsetBigFree(b);
     }
 
     TEST("intsetBigSubset - across multiple buckets") {
-        intsetBig *a = intsetBigNew();
-        intsetBig *b = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *a = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *b = intsetBigNew();
 
         /* B has elements across buckets 0, 1, 2, 3 */
         intsetBigAdd(b, &DATABOX_BIG_UNSIGNED(100));
@@ -2476,9 +2377,6 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
         if (intsetBigSubset(a, b)) {
             ERRR("A with extra bucket should not be subset of B!");
         }
-
-        intsetBigFree(a);
-        intsetBigFree(b);
     }
 
     /* ====================================================================
@@ -2489,9 +2387,9 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
         srandom(11111);
 
         for (int trial = 0; trial < 20; trial++) {
-            intsetBig *a = intsetBigNew();
-            intsetBig *b = intsetBigNew();
-            intsetBig *reference = intsetBigNew();
+            cleaner(intsetBigFree) intsetBig *a = intsetBigNew();
+            cleaner(intsetBigFree) intsetBig *b = intsetBigNew();
+            cleaner(intsetBigFree) intsetBig *reference = intsetBigNew();
 
             /* Generate random elements across many buckets */
             size_t aCount = 10 + (random() % 50);
@@ -2534,10 +2432,6 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
                     ERR("Trial %d: Merged set missing element!", trial);
                 }
             }
-
-            intsetBigFree(a);
-            intsetBigFree(b);
-            intsetBigFree(reference);
         }
     }
 
@@ -2545,9 +2439,9 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
         srandom(22222);
 
         for (int trial = 0; trial < 20; trial++) {
-            intsetBig *a = intsetBigNew();
-            intsetBig *b = intsetBigNew();
-            intsetBig *result = intsetBigNew();
+            cleaner(intsetBigFree) intsetBig *a = intsetBigNew();
+            cleaner(intsetBigFree) intsetBig *b = intsetBigNew();
+            cleaner(intsetBigFree) intsetBig *result = intsetBigNew();
 
             /* Generate random elements */
             size_t aCount = 20 + (random() % 100);
@@ -2601,10 +2495,6 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
                     }
                 }
             }
-
-            intsetBigFree(a);
-            intsetBigFree(b);
-            intsetBigFree(result);
         }
     }
 
@@ -2612,9 +2502,9 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
         srandom(33333);
 
         for (int trial = 0; trial < 15; trial++) {
-            intsetBig *a = intsetBigNew();
-            intsetBig *b = intsetBigNew();
-            intsetBig *reference = intsetBigNew();
+            cleaner(intsetBigFree) intsetBig *a = intsetBigNew();
+            cleaner(intsetBigFree) intsetBig *b = intsetBigNew();
+            cleaner(intsetBigFree) intsetBig *reference = intsetBigNew();
 
             /* Generate random signed values across positive and negative
              * buckets */
@@ -2674,10 +2564,6 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
                 prev = val;
                 first = false;
             }
-
-            intsetBigFree(a);
-            intsetBigFree(b);
-            intsetBigFree(reference);
         }
     }
 
@@ -2686,6 +2572,7 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
         intsetBig *sets[5];
 
         for (int i = 0; i < 5; i++) {
+            /* @own: container; free=intsetBigFree */
             sets[i] = intsetBigNew();
         }
 
@@ -2705,9 +2592,9 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
             case 1: { /* Merge two sets */
                 int other = random() % 5;
                 if (other != setIdx) {
-                    intsetBig *copy = intsetBigCopy(sets[other]);
+                    cleaner(intsetBigFree) intsetBig *copy =
+                        intsetBigCopy(sets[other]);
                     intsetBigMergeInto(sets[setIdx], copy);
-                    intsetBigFree(copy);
                 }
                 break;
             }
@@ -2716,6 +2603,7 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
                 if (other != setIdx &&
                     intsetBigCountElements(sets[setIdx]) > 0 &&
                     intsetBigCountElements(sets[other]) > 0) {
+                    /* @own: container; free=intsetBigFree */
                     intsetBig *result = intsetBigNew();
                     intsetBigIntersect(sets[setIdx], sets[other], result);
                     intsetBigFree(sets[setIdx]);
@@ -2766,8 +2654,8 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
 
     TEST("fuzzer - 128-bit values in multi-bucket operations") {
         srandom(55555);
-        intsetBig *a = intsetBigNew();
-        intsetBig *b = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *a = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *b = intsetBigNew();
 
         /* Add 128-bit values that span multiple buckets */
         for (int i = 0; i < 50; i++) {
@@ -2792,7 +2680,7 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
         /* Test merge */
         size_t aOrigCount = intsetBigCountElements(a);
         size_t bOrigCount = intsetBigCountElements(b);
-        intsetBig *aCopy = intsetBigCopy(a);
+        cleaner(intsetBigFree) intsetBig *aCopy = intsetBigCopy(a);
 
         intsetBigMergeInto(aCopy, b);
 
@@ -2821,17 +2709,13 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
                 ERRR("128-bit merge missing element from B!");
             }
         }
-
-        intsetBigFree(a);
-        intsetBigFree(b);
-        intsetBigFree(aCopy);
     }
 
     TEST("regression - MergeInto uses correct bucket key") {
         /* This test specifically catches the bug where key[0] was used
          * instead of key[1] when inserting B's bucket into A */
-        intsetBig *a = intsetBigNew();
-        intsetBig *b = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *a = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *b = intsetBigNew();
 
         /* A has bucket 0 only */
         intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(100));
@@ -2851,15 +2735,12 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
         if (intsetBigCountElements(a) != 2) {
             ERR("Expected 2 elements, got %zu!", intsetBigCountElements(a));
         }
-
-        intsetBigFree(a);
-        intsetBigFree(b);
     }
 
     TEST("regression - MergeInto remainder loop") {
         /* This test specifically catches the missing remainder loop bug */
-        intsetBig *a = intsetBigNew();
-        intsetBig *b = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *a = intsetBigNew();
+        cleaner(intsetBigFree) intsetBig *b = intsetBigNew();
 
         /* A has bucket 0 */
         intsetBigAdd(a, &DATABOX_BIG_UNSIGNED(100));
@@ -2884,9 +2765,6 @@ __attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
             !intsetBigExists(a, &b12)) {
             ERRR("Missing B's high bucket elements (remainder loop bug)!");
         }
-
-        intsetBigFree(a);
-        intsetBigFree(b);
     }
 
 #undef BUCKET_SIZE

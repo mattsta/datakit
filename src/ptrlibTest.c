@@ -18,7 +18,11 @@
 #include "ptrlibCompress.h"
 
 #ifdef DATAKIT_TEST
+#include "cleaner.h"
 #include "ctest.h"
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleaner(void *, zfree);
 
 int ptrlibTest(int argc, char *argv[]) {
     (void)argc;
@@ -27,7 +31,7 @@ int ptrlibTest(int argc, char *argv[]) {
     int err = 0;
 
     /* A realistic 16-byte-aligned heap pointer for round-trips */
-    void *alloc = zcalloc(1, 64);
+    cleaner(zfree) void *alloc = zcalloc(1, 64);
     const uintptr_t base = (uintptr_t)alloc;
 
     TEST("GENMASK widths") {
@@ -213,8 +217,6 @@ int ptrlibTest(int argc, char *argv[]) {
             ERRR("untagged pointer does not address the allocation");
         }
     }
-
-    zfree(alloc);
 
     TEST_FINAL_RESULT;
 }

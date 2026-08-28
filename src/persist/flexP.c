@@ -4,11 +4,14 @@
  */
 
 #include "flexP.h"
+#include "../cleaner.h"
 #include "../datakit.h"
 #include "../persist.h"
 
 #include <string.h>
 #include <unistd.h>
+
+defcleanerName(flexP *, zfree, FlexP);
 
 /* ============================================================================
  * Lifecycle
@@ -20,31 +23,31 @@ flexP *flexNewP(persistCtx *ctx) {
         return NULL;
     }
 
-    flexP *f = zcalloc(1, sizeof(*f));
+    cleanerName(zfree, FlexP) flexP *f = zcalloc(1, sizeof(*f));
     f->ctx = ctx;
 
     /* Create underlying flex */
+    /* @own: container; free=flexFree */
     f->f = flexNew();
     if (!f->f) {
-        zfree(f);
         return NULL;
     }
 
     /* Initialize persistence context for flex type */
     if (!persistCtxInitForType(ctx, &persistOpsFlex)) {
         flexFree(f->f);
-        zfree(f);
         return NULL;
     }
 
     /* Save initial snapshot */
     if (!persistCtxSaveSnapshot(ctx, f->f, &persistOpsFlex)) {
         flexFree(f->f);
-        zfree(f);
         return NULL;
     }
 
-    return f;
+    flexP *out = f;
+    f = NULL;
+    return out;
 }
 
 flexP *flexOpenP(persistCtx *ctx) {
@@ -63,6 +66,7 @@ flexP *flexOpenP(persistCtx *ctx) {
         return NULL;
     }
 
+    /* @own: caller; free=flexCloseP */
     flexP *f = zcalloc(1, sizeof(*f));
     f->ctx = ctx;
     f->f = recovered;

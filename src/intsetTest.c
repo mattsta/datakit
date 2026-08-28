@@ -1,4 +1,5 @@
 #include "intset.h"
+#include "cleaner.h"
 #include "ctest.h"
 #include "datakit.h"
 #include "intsetCommon.h"
@@ -8,6 +9,10 @@
 #include <assert.h>
 #include <inttypes.h>
 #include <stdio.h>
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleanerName(int64_t *, zfree, I64);
+defcleaner(intset *, intsetFree);
 
 /* Differential oracle for INTSET_BRANCHLESS_LOWER_BOUND: a branchy
  * reference lower-bound search and the branchless macro MUST agree on both the
@@ -52,7 +57,7 @@ int intsetTest(int argc, char *argv[]) {
     (void)argv;
 
     TEST("basic small tier operations") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
         bool success;
 
         intsetAdd(&is, 10, &success);
@@ -100,11 +105,10 @@ int intsetTest(int argc, char *argv[]) {
         }
 
         intsetRepr(is);
-        intsetFree(is);
     }
 
     TEST("small to medium tier upgrade") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
         bool success;
 
         /* Add int16 values */
@@ -138,11 +142,10 @@ int intsetTest(int argc, char *argv[]) {
         }
 
         intsetRepr(is);
-        intsetFree(is);
     }
 
     TEST("medium to full tier upgrade") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
         bool success;
 
         /* Force to medium */
@@ -176,11 +179,10 @@ int intsetTest(int argc, char *argv[]) {
         }
 
         intsetRepr(is);
-        intsetFree(is);
     }
 
     TEST("memory efficiency - tiered vs monolithic") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
 
         /* Add 1000 int16 values */
         for (int64_t i = 0; i < 1000; i++) {
@@ -217,11 +219,10 @@ int intsetTest(int argc, char *argv[]) {
         }
 
         intsetRepr(is);
-        intsetFree(is);
     }
 
     TEST("remove operations") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
         bool success;
 
         for (int64_t i = 0; i < 10; i++) {
@@ -254,11 +255,10 @@ int intsetTest(int argc, char *argv[]) {
         }
 
         intsetRepr(is);
-        intsetFree(is);
     }
 
     TEST("large dataset stress test") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
 
         /* Add 10,000 values across all three width categories */
         for (int64_t i = 0; i < 3000; i++) {
@@ -292,14 +292,12 @@ int intsetTest(int argc, char *argv[]) {
         printf("  Tiered: %zu bytes, Monolithic: %zu bytes, Savings: %.1f%%\n",
                bytes, monolithicBytes,
                100.0 * (1.0 - (double)bytes / monolithicBytes));
-
-        intsetFree(is);
     }
 
     /* ===== EDGE CASES ===== */
 
     TEST("empty set operations") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
 
         if (intsetCount(is) != 0) {
             ERRR("Empty set should have count 0");
@@ -323,11 +321,10 @@ int intsetTest(int argc, char *argv[]) {
         }
 
         intsetRepr(is);
-        intsetFree(is);
     }
 
     TEST("single element operations") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
         bool success;
 
         /* Add single element */
@@ -358,12 +355,10 @@ int intsetTest(int argc, char *argv[]) {
         if (intsetFind(is, 42)) {
             ERRR("Should not find removed element");
         }
-
-        intsetFree(is);
     }
 
     TEST("boundary value tests") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
         bool success;
 
         /* Test int16 boundaries */
@@ -424,11 +419,10 @@ int intsetTest(int argc, char *argv[]) {
         }
 
         intsetRepr(is);
-        intsetFree(is);
     }
 
     TEST("negative values handling") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
 
         /* Add mix of negative and positive values */
         for (int64_t i = -100; i <= 100; i++) {
@@ -450,14 +444,12 @@ int intsetTest(int argc, char *argv[]) {
         if (!intsetGet(is, 200, &val) || val != 100) {
             ERRR("Last should be 100");
         }
-
-        intsetFree(is);
     }
 
     /* ===== SEQUENTIAL INSERTION TESTS ===== */
 
     TEST("ascending sequential insertion") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
 
         /* Add 1000 values in ascending order */
         for (int64_t i = 0; i < 1000; i++) {
@@ -487,12 +479,10 @@ int intsetTest(int argc, char *argv[]) {
         if (!intsetGet(is, 999, &val) || val != 999) {
             ERRR("Last should be 999");
         }
-
-        intsetFree(is);
     }
 
     TEST("descending sequential insertion") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
 
         /* Add 1000 values in descending order (worst case for insertion) */
         for (int64_t i = 999; i >= 0; i--) {
@@ -511,14 +501,12 @@ int intsetTest(int argc, char *argv[]) {
         if (!intsetGet(is, 999, &val) || val != 999) {
             ERRR("Last should be 999");
         }
-
-        intsetFree(is);
     }
 
     /* ===== ADVERSARIAL PATTERNS ===== */
 
     TEST("adversarial: alternating extremes") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
         bool success;
 
         /* Alternate between very small and very large values
@@ -542,12 +530,10 @@ int intsetTest(int argc, char *argv[]) {
             ERRR("Should have elements");
         }
         printf("  Added %zu values with alternating extremes\n", count);
-
-        intsetFree(is);
     }
 
     TEST("adversarial: worst-case tier transitions") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
 
         /* Fill small tier to near capacity */
         for (int64_t i = 0; i < 100; i++) {
@@ -579,11 +565,10 @@ int intsetTest(int argc, char *argv[]) {
         }
 
         intsetRepr(is);
-        intsetFree(is);
     }
 
     TEST("adversarial: insert at beginning pattern") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
 
         /* Always insert at beginning (forces maximum shifts) */
         for (int64_t i = 1000; i > 0; i--) {
@@ -599,12 +584,10 @@ int intsetTest(int argc, char *argv[]) {
         if (!intsetGet(is, 0, &val) || val != 1) {
             ERRR("First should be 1");
         }
-
-        intsetFree(is);
     }
 
     TEST("adversarial: duplicate spam") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
         bool success;
 
         /* Add value */
@@ -625,14 +608,12 @@ int intsetTest(int argc, char *argv[]) {
         if (intsetCount(is) != 1) {
             ERR("Should still have 1 value, got %zu", intsetCount(is));
         }
-
-        intsetFree(is);
     }
 
     /* ===== TIER BOUNDARY TESTS ===== */
 
     TEST("tier boundary: small to medium threshold") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
 
         /* Add values up to just before int16 can't represent */
         for (int64_t i = 0; i < 1000; i++) {
@@ -666,12 +647,10 @@ int intsetTest(int argc, char *argv[]) {
         if (!intsetFind(is, INT16_MAX + 1)) {
             ERRR("Should find new int32 value");
         }
-
-        intsetFree(is);
     }
 
     TEST("tier boundary: medium to full threshold") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
 
         /* Add mixed int16/int32 values */
         for (int64_t i = 0; i < 100; i++) {
@@ -705,15 +684,15 @@ int intsetTest(int argc, char *argv[]) {
         }
 
         intsetRepr(is);
-        intsetFree(is);
     }
 
     /* ===== RANDOM/FUZZING TESTS ===== */
 
     TEST("random insertions with verification") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
         const int NUM_VALUES = 5000;
-        int64_t *oracle = zcalloc(NUM_VALUES, sizeof(int64_t));
+        cleanerName(zfree, I64) int64_t *oracle =
+            zcalloc(NUM_VALUES, sizeof(int64_t));
 
         /* Generate random values across all width categories */
         for (int i = 0; i < NUM_VALUES; i++) {
@@ -753,13 +732,10 @@ int intsetTest(int argc, char *argv[]) {
         if (notFound > 0) {
             ERR("Failed to find %d values", notFound);
         }
-
-        zfree(oracle);
-        intsetFree(is);
     }
 
     TEST("fuzzing: random add/remove operations") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
         const int NUM_OPS = 10000;
         int addCount = 0;
         int removeCount = 0;
@@ -811,13 +787,12 @@ int intsetTest(int argc, char *argv[]) {
         }
 
         intsetRepr(is);
-        intsetFree(is);
     }
 
     /* ===== COMPREHENSIVE API TESTS ===== */
 
     TEST("intsetRandom coverage") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
 
         /* Empty set */
         int64_t r = intsetRandom(is);
@@ -853,12 +828,10 @@ int intsetTest(int argc, char *argv[]) {
             printf("  Warning: Got same random value 100 times (low "
                    "probability)\n");
         }
-
-        intsetFree(is);
     }
 
     TEST("intsetGet out of bounds") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
         int64_t val;
 
         /* Empty set */
@@ -889,12 +862,10 @@ int intsetTest(int argc, char *argv[]) {
         if (intsetGet(is, 1000, &val)) {
             ERRR("Should not get position 1000");
         }
-
-        intsetFree(is);
     }
 
     TEST("NULL parameter handling") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
         bool success;
 
         /* Add with NULL success pointer */
@@ -916,7 +887,7 @@ int intsetTest(int argc, char *argv[]) {
         }
 
         /* Operations on NULL intset */
-        intset *null_is = NULL;
+        cleaner(intsetFree) intset *null_is = NULL;
         if (intsetCount(null_is) != 0) {
             ERRR("NULL intset should have count 0");
         }
@@ -931,13 +902,10 @@ int intsetTest(int argc, char *argv[]) {
         if (intsetCount(null_is) != 1) {
             ERRR("Should have 1 element");
         }
-
-        intsetFree(null_is);
-        intsetFree(is);
     }
 
     TEST("stress: many removes from large set") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
 
         /* Add 1000 values */
         for (int64_t i = 0; i < 1000; i++) {
@@ -973,8 +941,6 @@ int intsetTest(int argc, char *argv[]) {
                 break;
             }
         }
-
-        intsetFree(is);
     }
 
     /* ===== CROSS-TIER VIRTUAL MERGE ITERATION TESTS ===== */
@@ -983,7 +949,7 @@ int intsetTest(int argc, char *argv[]) {
         /* Test that intsetGet returns values in sorted order when
          * int16 and int32 values are interleaved in the sorted sequence.
          * This exercises the virtual merge algorithm in intsetMediumGet. */
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
 
         /* Add int16 values: 10, 30, 50, 70, 90 */
         intsetAdd(&is, 10, NULL);
@@ -1029,15 +995,13 @@ int intsetTest(int argc, char *argv[]) {
             }
             prev = val;
         }
-
-        intsetFree(is);
     }
 
     TEST("MEDIUM: virtual merge with densely interleaved widths") {
         /* Test with values that truly interleave across width boundaries.
          * int16 max is 32767, so values like 32760, 32765, 32770, 32775
          * cross the int16/int32 boundary. */
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
 
         /* Add values that cross the int16/int32 boundary */
         int64_t values[] = {32760, 32765, 32770, 32775, 32780, 32785};
@@ -1075,15 +1039,13 @@ int intsetTest(int argc, char *argv[]) {
                     values[i]);
             }
         }
-
-        intsetFree(is);
     }
 
     TEST("FULL: virtual 3-way merge iteration") {
         /* Test that intsetGet returns values in sorted order when
          * int16, int32, and int64 values are all present.
          * This exercises the virtual 3-way merge algorithm in intsetFullGet. */
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
 
         /* Add values across all three width categories */
         /* int16 values */
@@ -1139,14 +1101,12 @@ int intsetTest(int argc, char *argv[]) {
             }
             prev = val;
         }
-
-        intsetFree(is);
     }
 
     TEST("FULL: 3-way merge with interleaved values across all widths") {
         /* Create a scenario where values from all three widths
          * interleave in the final sorted order. */
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
 
         /* Create interleaved pattern by using negative numbers too */
         /* int16: -1000, -100, 0, 100, 1000 */
@@ -1204,16 +1164,15 @@ int intsetTest(int argc, char *argv[]) {
         if (val != INT32_MAX + 1LL) {
             ERR("Position 8 should be INT32_MAX+1, got %" PRId64, val);
         }
-
-        intsetFree(is);
     }
 
     TEST("virtual merge: randomized cross-tier iteration") {
         /* Generate random values across all width categories and verify
          * that intsetGet always returns sorted order. */
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
         const int NUM_VALUES = 200;
-        int64_t *oracle = zcalloc(NUM_VALUES, sizeof(int64_t));
+        cleanerName(zfree, I64) int64_t *oracle =
+            zcalloc(NUM_VALUES, sizeof(int64_t));
 
         /* Generate values across all three width categories */
         for (int i = 0; i < NUM_VALUES; i++) {
@@ -1271,9 +1230,6 @@ int intsetTest(int argc, char *argv[]) {
             printf("  Verified sorted order across %zu values (tier=%d)\n",
                    count, INTSET_TYPE(is));
         }
-
-        zfree(oracle);
-        intsetFree(is);
     }
 
     TEST(
@@ -1392,7 +1348,7 @@ int intsetTest(int argc, char *argv[]) {
     }
 
     TEST("Min/Max: O(1) accessors across tiers and sign boundaries") {
-        intset *is = intsetNew();
+        cleaner(intsetFree) intset *is = intsetNew();
         int64_t v;
         bool ok;
 
@@ -1422,8 +1378,6 @@ int intsetTest(int argc, char *argv[]) {
             v != INT64_MAX) {
             ERRR("Full-tier Min/Max wrong at INT64 boundaries");
         }
-
-        intsetFree(is);
     }
 
     TEST_FINAL_RESULT;

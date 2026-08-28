@@ -970,12 +970,16 @@ void rapidhashMakeSecret(uint64_t seed, uint64_t secret[RAPIDHASH_SECRET_LEN]) {
 
 #ifdef DATAKIT_TEST
 
+#include "cleaner.h"
 #include "ctest.h"
 #include "datakit.h"
 #include "hash/rapidhashTestVectors.h"
 
 #include <inttypes.h>
 #include <stdlib.h>
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleanerName(uint8_t *, zfree, U8);
 
 /* Re-derive the deterministic input the upstream capture used: input
  * bytes are `(uint8_t)(i*131u + 17u)`, tagged "deterministic-fill-v1"
@@ -1030,7 +1034,7 @@ int rapidhashTest(int argc, char *argv[]) {
             maxLen = rapidhashTestVectorsTable[i].input_len;
         }
     }
-    uint8_t *buf = zmalloc(maxLen > 0 ? maxLen : 1);
+    cleanerName(zfree, U8) uint8_t *buf = zmalloc(maxLen > 0 ? maxLen : 1);
     rapidhashFillDeterministic(buf, maxLen);
 
     TEST("known vectors: FAST one-shot, all three variants") {
@@ -1254,7 +1258,6 @@ int rapidhashTest(int argc, char *argv[]) {
         rapidhashSetForceImpl(saved);
     }
 
-    zfree(buf);
     return err;
 }
 

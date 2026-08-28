@@ -24,6 +24,7 @@
 
 #include "aeadNonceLog.h"
 
+#include "cleaner.h"
 #include "ctmem.h" /* dkCtMemEq for nonce compare */
 #include "databox.h"
 #include "datakit.h"
@@ -64,6 +65,17 @@ struct aeadNonceLog {
     size_t fifo_head; /* oldest occupied slot; AEAD_NONCE_LOG_NIL if empty */
     size_t fifo_tail; /* newest occupied slot; AEAD_NONCE_LOG_NIL if empty */
 };
+
+/* Scope-exit cleaners (see cleaner.h idioms). zfree-based cleaners are
+ * for raw allocations before ownership transfers into a constructed
+ * log; aeadNonceLogFree is only safe on a FULLY constructed log (it
+ * wipes cap bytes and destroys the mutex), so partial-construction
+ * paths scope the pieces individually instead. */
+defcleanerName(aeadNonceLog *, zfree, Log);
+defcleanerName(aeadNonceLogSlot *, zfree, Slots);
+defcleanerName(aeadNonceLogLink *, zfree, Links);
+defcleanerName(uint8_t *, zfree, Bytes);
+defcleaner(aeadNonceLog *, aeadNonceLogFree);
 
 /* Round up to next power of two, with a floor at AEAD_NONCE_LOG_MIN_CAP. */
 static size_t aeadNonceLogRoundCap(size_t req) {
@@ -149,40 +161,39 @@ static void aeadNonceLogFifoUnlink(aeadNonceLog *log, size_t idx) {
 
 aeadNonceLog *aeadNonceLogCreate(size_t min_capacity) {
     const size_t cap = aeadNonceLogRoundCap(min_capacity);
-    aeadNonceLog *log = zmalloc(sizeof(*log));
-    if (!log) {
-        return NULL;
-    }
-    log->slots = zmalloc(cap * sizeof(aeadNonceLogSlot));
-    log->links = zmalloc(cap * sizeof(aeadNonceLogLink));
-    if (!log->slots || !log->links) {
+    cleanerName(zfree, Log) aeadNonceLog *log = zmalloc(sizeof(*log));
+    cleanerName(zfree, Slots) aeadNonceLogSlot *slots =
+        log ? zmalloc(cap * sizeof(*slots)) : NULL;
+    cleanerName(zfree, Links) aeadNonceLogLink *links =
+        log ? zmalloc(cap * sizeof(*links)) : NULL;
+    if (!log || !slots || !links) {
         /* OOM: fail closed (return NULL) instead of dereferencing NULL below,
          * so the caller's fail-closed path runs — e.g. clusterMailboxCreate
          * refuses to construct a mailbox without replay protection rather than
-         * crashing under memory pressure. zfree(NULL) is safe. */
-        zfree(log->links);
-        zfree(log->slots);
-        zfree(log);
+         * crashing under memory pressure. */
         return NULL;
     }
-    memset(log->slots, 0, cap * sizeof(aeadNonceLogSlot));
+    memset(slots, 0, cap * sizeof(*slots));
     for (size_t i = 0; i < cap; i++) {
-        log->links[i].prev = AEAD_NONCE_LOG_NIL;
-        log->links[i].next = AEAD_NONCE_LOG_NIL;
+        links[i].prev = AEAD_NONCE_LOG_NIL;
+        links[i].next = AEAD_NONCE_LOG_NIL;
     }
     if (pthread_mutex_init(&log->lock, NULL) != 0) {
-        zfree(log->links);
-        zfree(log->slots);
-        zfree(log);
         return NULL;
     }
+    log->slots = slots;
+    slots = NULL;
+    log->links = links;
+    links = NULL;
     log->next_gen = 1u; /* gen 0 reserved for empty */
     log->cap = cap;
     log->mask = cap - 1u;
     log->count = 0;
     log->fifo_head = AEAD_NONCE_LOG_NIL;
     log->fifo_tail = AEAD_NONCE_LOG_NIL;
-    return log;
+    aeadNonceLog *out = log;
+    log = NULL;
+    return out;
 }
 
 void aeadNonceLogFree(aeadNonceLog *log) {
@@ -361,6 +372,7 @@ static flex *anlBuildSnapshotFlex(const aeadNonceLog *log) {
     if (log == NULL) {
         return NULL;
     }
+    /* @own: caller; free=flexFree */
     flex *f = flexNew();
     if (f == NULL) {
         return NULL;
@@ -422,6 +434,8 @@ typedef struct anlRestoreRec {
     uint32_t key_id;
     uint8_t nonce[AEAD_NONCE_LOG_NONCE_LEN];
 } anlRestoreRec;
+
+defcleanerName(anlRestoreRec *, zfree, Recs);
 
 static int anlRestoreCmpGen(const void *a, const void *b) {
     const anlRestoreRec *ra = (const anlRestoreRec *)a;
@@ -500,101 +514,76 @@ aeadNonceLog *aeadNonceLogFromBytes(const uint8_t *buf, size_t len) {
     fe = flexNext(f, fe);
 
     /* Allocate a fresh log with the saved capacity. */
-    aeadNonceLog *log = aeadNonceLogCreate((size_t)saved_cap);
+    cleaner(aeadNonceLogFree) aeadNonceLog *log =
+        aeadNonceLogCreate((size_t)saved_cap);
     if (log == NULL) {
         return NULL;
     }
     /* Round-up should match the original cap; if not the snapshot is
      * malformed. */
     if (aeadNonceLogCapacity(log) != (size_t)saved_cap) {
-        aeadNonceLogFree(log);
         return NULL;
     }
 
     /* Collect every record from the flex into a scratch array so we
      * can sort by gen and rebuild the FIFO list in insertion order. */
-    anlRestoreRec *recs = NULL;
+    cleanerName(zfree, Recs) anlRestoreRec *recs = NULL;
     if (declared_records > 0u) {
         recs = zmalloc(declared_records * sizeof(*recs));
         if (recs == NULL) {
-            aeadNonceLogFree(log);
             return NULL;
         }
     }
     uint64_t max_gen = 0;
     for (size_t i = 0; i < declared_records; i++) {
         if (fe == NULL) {
-            if (recs) {
-                zfree(recs);
-            }
-            aeadNonceLogFree(log);
             return NULL;
         }
         /* a) key_id (unsigned, range-checked to uint32_t, non-zero). */
         flexGetByTypeCopy(fe, &box);
         if (box.type != DATABOX_UNSIGNED_64) {
-            zfree(recs);
-            aeadNonceLogFree(log);
             return NULL;
         }
         if (box.data.u64 == 0u || box.data.u64 > UINT32_MAX) {
-            zfree(recs);
-            aeadNonceLogFree(log);
             return NULL;
         }
         recs[i].key_id = (uint32_t)box.data.u64;
         fe = flexNext(f, fe);
         if (fe == NULL) {
-            zfree(recs);
-            aeadNonceLogFree(log);
             return NULL;
         }
 
         /* b) nonce_lo (unsigned 64-bit). */
         flexGetByTypeCopy(fe, &box);
         if (box.type != DATABOX_UNSIGNED_64) {
-            zfree(recs);
-            aeadNonceLogFree(log);
             return NULL;
         }
         const uint64_t nonce_lo = box.data.u64;
         fe = flexNext(f, fe);
         if (fe == NULL) {
-            zfree(recs);
-            aeadNonceLogFree(log);
             return NULL;
         }
 
         /* c) nonce_hi (unsigned, range-checked to uint32_t). */
         flexGetByTypeCopy(fe, &box);
         if (box.type != DATABOX_UNSIGNED_64) {
-            zfree(recs);
-            aeadNonceLogFree(log);
             return NULL;
         }
         if (box.data.u64 > UINT32_MAX) {
-            zfree(recs);
-            aeadNonceLogFree(log);
             return NULL;
         }
         const uint32_t nonce_hi = (uint32_t)box.data.u64;
         fe = flexNext(f, fe);
         if (fe == NULL) {
-            zfree(recs);
-            aeadNonceLogFree(log);
             return NULL;
         }
 
         /* d) gen (unsigned 64-bit, non-zero). */
         flexGetByTypeCopy(fe, &box);
         if (box.type != DATABOX_UNSIGNED_64) {
-            zfree(recs);
-            aeadNonceLogFree(log);
             return NULL;
         }
         if (box.data.u64 == 0u) {
-            zfree(recs);
-            aeadNonceLogFree(log);
             return NULL;
         }
         recs[i].gen = box.data.u64;
@@ -638,8 +627,6 @@ aeadNonceLog *aeadNonceLogFromBytes(const uint8_t *buf, size_t len) {
                 /* Duplicate (key_id, nonce) pair — refuse the snapshot.
                  * validate also enforces this on top, but rejecting
                  * here keeps the freshly-built log internally consistent. */
-                zfree(recs);
-                aeadNonceLogFree(log);
                 return NULL;
             }
             idx = (idx + 1u) & log->mask;
@@ -647,14 +634,8 @@ aeadNonceLog *aeadNonceLogFromBytes(const uint8_t *buf, size_t len) {
         if (!placed) {
             /* probe chain saturated — impossible if header
              * record_count <= capacity, but be defensive. */
-            zfree(recs);
-            aeadNonceLogFree(log);
             return NULL;
         }
-    }
-
-    if (recs) {
-        zfree(recs);
     }
 
     /* Advance next_gen past the highest restored gen so the first new
@@ -665,7 +646,9 @@ aeadNonceLog *aeadNonceLogFromBytes(const uint8_t *buf, size_t len) {
         log->next_gen = 1u;
     }
 
-    return log;
+    aeadNonceLog *out = log;
+    log = NULL;
+    return out;
 }
 
 /* ---- persistOps descriptor ----------------------------------------- */
@@ -679,7 +662,7 @@ static uint8_t *anlPersistSnapshot(const void *structure, size_t *len) {
         }
         return NULL;
     }
-    uint8_t *out = zmalloc(need);
+    cleanerName(zfree, Bytes) uint8_t *out = zmalloc(need);
     if (out == NULL) {
         if (len != NULL) {
             *len = 0;
@@ -688,7 +671,6 @@ static uint8_t *anlPersistSnapshot(const void *structure, size_t *len) {
     }
     const size_t written = aeadNonceLogToBytes(log, out, need);
     if (written != need) {
-        zfree(out);
         if (len != NULL) {
             *len = 0;
         }
@@ -697,7 +679,9 @@ static uint8_t *anlPersistSnapshot(const void *structure, size_t *len) {
     if (len != NULL) {
         *len = written;
     }
-    return out;
+    uint8_t *ret = out;
+    out = NULL;
+    return ret;
 }
 
 static void *anlPersistRestore(const uint8_t *data, size_t len) {
@@ -705,6 +689,7 @@ static void *anlPersistRestore(const uint8_t *data, size_t len) {
 }
 
 static void *anlPersistNewEmpty(void) {
+    /* @own: caller; free=aeadNonceLogFree */
     return aeadNonceLogCreate(0);
 }
 
@@ -888,18 +873,17 @@ int aeadNonceLogTest(int argc, char *argv[]) {
     int err = 0;
 
     TEST("create/free round-trip") {
-        aeadNonceLog *log = aeadNonceLogCreate(0);
+        cleaner(aeadNonceLogFree) aeadNonceLog *log = aeadNonceLogCreate(0);
         if (log == NULL) {
             ERRR("Create returned NULL");
         }
         if (aeadNonceLogCapacity(log) < 64u) {
             ERR("capacity below minimum: %zu", aeadNonceLogCapacity(log));
         }
-        aeadNonceLogFree(log);
     }
 
     TEST("first observation accepted; second rejected") {
-        aeadNonceLog *log = aeadNonceLogCreate(0);
+        cleaner(aeadNonceLogFree) aeadNonceLog *log = aeadNonceLogCreate(0);
         uint8_t nonce[12] = {0};
         nonceFromCounter(42u, nonce);
         if (!aeadNonceLogObserve(log, 1u, nonce)) {
@@ -911,11 +895,10 @@ int aeadNonceLogTest(int argc, char *argv[]) {
         if (aeadNonceLogSize(log) != 1u) {
             ERR("size expected 1, got %zu", aeadNonceLogSize(log));
         }
-        aeadNonceLogFree(log);
     }
 
     TEST("different key_id is a different tuple") {
-        aeadNonceLog *log = aeadNonceLogCreate(0);
+        cleaner(aeadNonceLogFree) aeadNonceLog *log = aeadNonceLogCreate(0);
         uint8_t nonce[12] = {0};
         nonceFromCounter(7u, nonce);
         if (!aeadNonceLogObserve(log, 1u, nonce)) {
@@ -930,11 +913,10 @@ int aeadNonceLogTest(int argc, char *argv[]) {
         if (aeadNonceLogObserve(log, 2u, nonce)) {
             ERRR("dup k=2 refused");
         }
-        aeadNonceLogFree(log);
     }
 
     TEST("clearKey forgets all entries for one key only") {
-        aeadNonceLog *log = aeadNonceLogCreate(0);
+        cleaner(aeadNonceLogFree) aeadNonceLog *log = aeadNonceLogCreate(0);
         uint8_t nonce[12] = {0};
         for (uint64_t i = 0; i < 16; i++) {
             nonceFromCounter(i, nonce);
@@ -957,12 +939,11 @@ int aeadNonceLogTest(int argc, char *argv[]) {
         if (aeadNonceLogObserve(log, 2u, nonce)) {
             ERRR("k=2 entries must survive clearKey(1)");
         }
-        aeadNonceLogFree(log);
     }
 
     TEST("FIFO eviction kicks in past load threshold") {
         const size_t cap = 128u;
-        aeadNonceLog *log = aeadNonceLogCreate(cap);
+        cleaner(aeadNonceLogFree) aeadNonceLog *log = aeadNonceLogCreate(cap);
         uint8_t nonce[12] = {0};
         /* Fill past capacity — every observation should succeed (eviction
          * makes room) and size never exceeds cap. */
@@ -976,11 +957,10 @@ int aeadNonceLogTest(int argc, char *argv[]) {
                 ERRR("size exceeded capacity");
             }
         }
-        aeadNonceLogFree(log);
     }
 
     TEST("invalid inputs rejected") {
-        aeadNonceLog *log = aeadNonceLogCreate(0);
+        cleaner(aeadNonceLogFree) aeadNonceLog *log = aeadNonceLogCreate(0);
         uint8_t nonce[12] = {0};
         if (aeadNonceLogObserve(NULL, 1u, nonce)) {
             ERRR("NULL log accepted");
@@ -991,14 +971,13 @@ int aeadNonceLogTest(int argc, char *argv[]) {
         if (aeadNonceLogObserve(log, 1u, NULL)) {
             ERRR("NULL nonce accepted");
         }
-        aeadNonceLogFree(log);
     }
 
     TEST("concurrent observers: every unique tuple observed exactly once") {
         /* Threads write disjoint nonce ranges under the same key. The
          * union should fit under capacity so no eviction kicks in;
          * post-join we verify every tuple is rejected as a duplicate. */
-        aeadNonceLog *log = aeadNonceLogCreate(8192u);
+        cleaner(aeadNonceLogFree) aeadNonceLog *log = aeadNonceLogCreate(8192u);
 
         const uint32_t kThreads = 8u;
         const uint32_t kIters = 512u;
@@ -1035,7 +1014,6 @@ int aeadNonceLogTest(int argc, char *argv[]) {
                 break;
             }
         }
-        aeadNonceLogFree(log);
     }
 
     TEST("aeadNonceLogCreate fails closed under OOM (returns NULL, no crash)") {
@@ -1049,11 +1027,10 @@ int aeadNonceLogTest(int argc, char *argv[]) {
         failing.localMalloc = aeadOomFailMalloc;
         failing.localCalloc = aeadOomFailCalloc;
         datakitConfigSet(&failing);
-        aeadNonceLog *log = aeadNonceLogCreate(1024);
+        cleaner(aeadNonceLogFree) aeadNonceLog *log = aeadNonceLogCreate(1024);
         datakitConfigSet(&saved); /* restore before any allocation */
         if (log != NULL) {
             ERRR("aeadNonceLogCreate must return NULL under OOM (fail closed)");
-            aeadNonceLogFree(log);
         }
     }
 

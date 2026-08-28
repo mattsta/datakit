@@ -85,6 +85,7 @@ SEGMENT_IMPL_SCOPE SEGMENT_VALUE_TYPE SEGMENT_NAME(SEGMENT_SUFFIX, Combine)(
 /* Create new small segment tree */
 SEGMENT_IMPL_SCOPE SEGMENT_SMALL_TYPENAME(SEGMENT_SUFFIX) *
     SEGMENT_NAME(SEGMENT_SUFFIX, SmallNew)(segmentOp op) {
+    /* @own: caller */
     SEGMENT_SMALL_TYPENAME(SEGMENT_SUFFIX) *seg =
         zcalloc(1, sizeof(SEGMENT_SMALL_TYPENAME(SEGMENT_SUFFIX)));
     seg->count = 0;
@@ -137,6 +138,7 @@ SEGMENT_IMPL_SCOPE SEGMENT_SMALL_TYPENAME(SEGMENT_SUFFIX) *
 
     size_t size = sizeof(SEGMENT_SMALL_TYPENAME(SEGMENT_SUFFIX)) +
                   capacity * sizeof(SEGMENT_VALUE_TYPE);
+    /* @own: caller */
     SEGMENT_SMALL_TYPENAME(SEGMENT_SUFFIX) *seg = zcalloc(1, size);
     seg->count = count;
     seg->capacity = capacity;
@@ -181,6 +183,7 @@ SEGMENT_IMPL_SCOPE SEGMENT_SMALL_TYPENAME(SEGMENT_SUFFIX) *
         size_t newSize = sizeof(SEGMENT_SMALL_TYPENAME(SEGMENT_SUFFIX)) +
                          newCapacity * sizeof(SEGMENT_VALUE_TYPE);
 
+        /* @own: caller */
         SEGMENT_SMALL_TYPENAME(SEGMENT_SUFFIX) *newSeg = zrealloc(seg, newSize);
         if (!newSeg) {
             if (success) {

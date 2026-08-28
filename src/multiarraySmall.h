@@ -30,6 +30,7 @@ size_t multiarraySmallBytes(const multiarraySmall *mar);
 /* Direct API requires the container be exactly the same type as the elements
  * in the container (e.g. sizeof(*container) must be the width of elements) */
 #define _marsOff(width, offset) ((width) * (offset))
+/* @own: caller; free=zfree */
 #define multiarraySmallDirectNew(e) (zcalloc(1, sizeof(*(e))))
 #define multiarraySmallDirectFree(e) (zfree(e))
 #define multiarraySmallDirectGet(e, idx) (&(e)[idx])
@@ -39,6 +40,7 @@ size_t multiarraySmallBytes(const multiarraySmall *mar);
 
 /* Native API allows you to use uint8_t to store arbitrary objects by letting
  * you specify the individual element width with each access. */
+/* @own: caller; free=zfree */
 #define multiarraySmallNativeNew(what) (zcalloc(1, sizeof(what)))
 #define multiarraySmallNativeFree(e) (zfree(e))
 #define multiarraySmallNativeGet(e, what, idx) (&((what *)(e))[idx])
@@ -74,6 +76,7 @@ int multiarraySmallTest(int argc, char *argv[]);
  * ==================================================================== */
 #define _multiarraySmallNativeGrowShrink(what, holder, count)                  \
     do {                                                                       \
+        /* @own: caller; free=zfree */                                         \
         (what) = zrealloc((what), (sizeof(holder)) * (count));                 \
     } while (0)
 
@@ -142,6 +145,7 @@ int multiarraySmallTest(int argc, char *argv[]);
  * ==================================================================== */
 #define _multiarraySmallDirectGrowShrink(what, count)                          \
     do {                                                                       \
+        /* @own: caller; free=zfree */                                         \
         (what) = zrealloc((what), (sizeof(*(what))) * (count));                \
     } while (0)
 

@@ -4,11 +4,15 @@
  */
 
 #include "multidictP.h"
+#include "../cleaner.h"
 #include "../datakit.h"
 #include "../persist.h"
 
 #include <string.h>
 #include <unistd.h>
+
+defcleanerName(multidictP *, zfree, MultidictP);
+defcleaner(multidictClass *, multidictDefaultClassFree);
 
 /* ============================================================================
  * Lifecycle
@@ -20,32 +24,38 @@ multidictP *multidictNewP(persistCtx *ctx) {
         return NULL;
     }
 
-    multidictP *d = zcalloc(1, sizeof(*d));
+    cleanerName(zfree, MultidictP) multidictP *d = zcalloc(1, sizeof(*d));
     d->ctx = ctx;
 
     /* Create underlying multidict with default type and class */
-    multidictClass *qdc = multidictDefaultClassNew();
+    cleaner(multidictDefaultClassFree) multidictClass *qdc =
+        multidictDefaultClassNew();
+    /* @own: container; free=multidictFree */
     d->d = multidictNew(&multidictTypeExactKey, qdc, 0);
     if (!d->d) {
-        zfree(d);
         return NULL;
     }
 
+    /* The multidict holds the class for its lifetime */
+    qdc = NULL;
+
     /* Initialize persistence context for multidict type */
     if (!persistCtxInitForType(ctx, &persistOpsMultidict)) {
+        multidictClass *cls = multidictGetClass(d->d);
         multidictFree(d->d);
-        zfree(d);
+        multidictDefaultClassFree(cls);
         return NULL;
     }
 
     /* Save initial snapshot */
     if (!persistCtxSaveSnapshot(ctx, d->d, &persistOpsMultidict)) {
         multidictFree(d->d);
-        zfree(d);
         return NULL;
     }
 
-    return d;
+    multidictP *out = d;
+    d = NULL;
+    return out;
 }
 
 multidictP *multidictOpenP(persistCtx *ctx) {
@@ -64,6 +74,7 @@ multidictP *multidictOpenP(persistCtx *ctx) {
         return NULL;
     }
 
+    /* @own: caller; free=multidictCloseP */
     multidictP *d = zcalloc(1, sizeof(*d));
     d->ctx = ctx;
     d->d = recovered;
@@ -81,9 +92,13 @@ void multidictCloseP(multidictP *d) {
         persistCtxSync(d->ctx);
     }
 
-    /* Free underlying multidict */
+    /* Free underlying multidict; it privately owns a default class
+     * (created by NewP or by restore). The class must outlive the dict
+     * because teardown runs class callbacks, so free it after. */
     if (d->d) {
+        multidictClass *cls = multidictGetClass(d->d);
         multidictFree(d->d);
+        multidictDefaultClassFree(cls);
     }
 
     zfree(d);

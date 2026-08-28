@@ -6,7 +6,8 @@
 
 #include "hmacKeyring.h"
 
-#include "aesGcm.h"  /* aesGcmKey + aesGcmInit for the cached schedule */
+#include "aesGcm.h" /* aesGcmKey + aesGcmInit for the cached schedule */
+#include "cleaner.h"
 #include "ctmem.h"   /* dkSecureZero */
 #include "datakit.h" /* zmalloc / zfree */
 #include "flex.h"
@@ -15,6 +16,15 @@
 #include <pthread.h>
 #include <stdatomic.h>
 #include <string.h>
+
+/* Scope-exit cleaners (see cleaner.h idioms). Buffers holding key
+ * material are wiped before free by their owning code paths and so are
+ * NOT managed here — only allocations whose disposal is a plain zfree
+ * carry a cleaner. */
+defcleanerName(hmacKeyring *, zfree, Ring);
+defcleanerName(uint8_t *, zfree, Bytes);
+defcleanerName(uint64_t *, zfree, U64);
+defcleaner(flex *, flexFree);
 
 #define HMAC_KEYRING_CAPACITY ((size_t)16)
 
@@ -72,6 +82,22 @@ struct hmacKeyring {
  * with every other crypto module. */
 static inline void hmacKeyringSecureWipe(void *ptr, size_t len) {
     dkSecureZero(ptr, len);
+}
+
+/* Secret-holding heap scratch with its wipe length: the scope-exit
+ * cleanup wipes DCE-resistantly then frees, so every early return
+ * releases key material safely. Success paths disarm by zeroing the
+ * holder ({0}) after ownership transfers into a keyring slot. */
+typedef struct hkrSecretBuf {
+    void *ptr;
+    size_t len;
+} hkrSecretBuf;
+
+static DK_FN_UNUSED void hkrSecretBufWipeFree_cleanup(hkrSecretBuf *b) {
+    if (b->ptr != NULL) {
+        hmacKeyringSecureWipe(b->ptr, b->len);
+        zfree(b->ptr);
+    }
 }
 
 /* Zero-clean + free everything an entry owns. Caller MUST hold the
@@ -160,13 +186,14 @@ static hmacKeyringEntry *hmacKeyringFindFreeLocked(hmacKeyring *ring) {
 }
 
 hmacKeyring *hmacKeyringCreate(void) {
-    hmacKeyring *ring = zmalloc(sizeof(*ring));
+    cleanerName(zfree, Ring) hmacKeyring *ring = zmalloc(sizeof(*ring));
     memset(ring, 0, sizeof(*ring));
     if (pthread_rwlock_init(&ring->lock, NULL) != 0) {
-        zfree(ring);
         return NULL;
     }
-    return ring;
+    hmacKeyring *out = ring;
+    ring = NULL;
+    return out;
 }
 
 void hmacKeyringFree(hmacKeyring *ring) {
@@ -218,8 +245,16 @@ static bool hmacKeyringInstallInternal(
     if (prepared_size == 0) {
         return false;
     }
-    uint8_t *raw_copy = zmalloc(key_len);
-    uint8_t *prepared_storage = zmalloc(prepared_size);
+    cleanerName(hkrSecretBuf, WipeFree) hkrSecretBuf rawCopyBuf = {0};
+    /* @own: container; free=zfree */
+    rawCopyBuf.ptr = zmalloc(key_len);
+    rawCopyBuf.len = key_len;
+    cleanerName(hkrSecretBuf, WipeFree) hkrSecretBuf preparedBuf = {0};
+    /* @own: container; free=zfree */
+    preparedBuf.ptr = zmalloc(prepared_size);
+    preparedBuf.len = prepared_size;
+    uint8_t *raw_copy = rawCopyBuf.ptr;
+    uint8_t *prepared_storage = preparedBuf.ptr;
     memcpy(raw_copy, key_bytes, key_len);
 
     hmacKey prepared;
@@ -239,20 +274,17 @@ static bool hmacKeyringInstallInternal(
      * length and so will be cached too — this costs ~280 bytes per slot
      * and is never consumed unless the envelope-Open path explicitly asks
      * via hmacKeyringGetAesGcmKey. */
+    cleanerName(hkrSecretBuf, WipeFree) hkrSecretBuf schedBuf = {0};
     aesGcmKey *aead_sched = NULL;
     if (key_len == AES128_KEY_LEN || key_len == AES256_KEY_LEN) {
-        aead_sched = zmalloc(sizeof(*aead_sched));
+        /* @own: container; free=zfree */
+        schedBuf.ptr = zmalloc(sizeof(*aead_sched));
+        schedBuf.len = sizeof(*aead_sched);
+        aead_sched = schedBuf.ptr;
         if (!aesGcmInit(aead_sched, raw_copy, key_len)) {
             /* Should be unreachable — aesGcmInit only rejects invalid
-             * lengths and we just gated on the valid set. Defensive
-             * cleanup keeps the failure path uniform with the duplicate-
-             * id / capacity branches below. */
-            dkSecureZero(aead_sched, sizeof(*aead_sched));
-            zfree(aead_sched);
-            hmacKeyringSecureWipe(raw_copy, key_len);
-            zfree(raw_copy);
-            hmacKeyringSecureWipe(prepared_storage, prepared_size);
-            zfree(prepared_storage);
+             * lengths and we just gated on the valid set. The scope-exit
+             * wipe+free covers this and every other failure path. */
             return false;
         }
     }
@@ -261,28 +293,12 @@ static bool hmacKeyringInstallInternal(
 
     if (hmacKeyringFindLockedMut(ring, id) != NULL) {
         pthread_rwlock_unlock(&ring->lock);
-        hmacKeyringSecureWipe(raw_copy, key_len);
-        zfree(raw_copy);
-        hmacKeyringSecureWipe(prepared_storage, prepared_size);
-        zfree(prepared_storage);
-        if (aead_sched != NULL) {
-            dkSecureZero(aead_sched, sizeof(*aead_sched));
-            zfree(aead_sched);
-        }
         return false;
     }
 
     hmacKeyringEntry *slot = hmacKeyringFindFreeLocked(ring);
     if (slot == NULL) {
         pthread_rwlock_unlock(&ring->lock);
-        hmacKeyringSecureWipe(raw_copy, key_len);
-        zfree(raw_copy);
-        hmacKeyringSecureWipe(prepared_storage, prepared_size);
-        zfree(prepared_storage);
-        if (aead_sched != NULL) {
-            dkSecureZero(aead_sched, sizeof(*aead_sched));
-            zfree(aead_sched);
-        }
         return false;
     }
 
@@ -302,6 +318,11 @@ static bool hmacKeyringInstallInternal(
      * the slot (e.g. fresh slot acquired via a different path). */
     slot->generation++;
     ring->count++;
+
+    /* Ownership now lives in the slot — disarm the scope-exit wipes. */
+    rawCopyBuf = (hkrSecretBuf){0};
+    preparedBuf = (hkrSecretBuf){0};
+    schedBuf = (hkrSecretBuf){0};
 
     pthread_rwlock_unlock(&ring->lock);
     return true;
@@ -689,7 +710,7 @@ static const hmacHashAlgo *hkrTagToAlgo(uint64_t tag) {
  * zmalloc'd flex; caller owns and frees via flexFree. Returns NULL if
  * any installed slot uses an algo we cannot tag. */
 static flex *hkrBuildSnapshotFlex(const hmacKeyring *ring) {
-    flex *f = flexNew();
+    cleaner(flexFree) flex *f = flexNew();
     pthread_rwlock_rdlock((pthread_rwlock_t *)&ring->lock);
     /* leading floor sentinel. Only written when the floor is non-
      * zero so a fresh keyring snapshot stays bit-identical to the legacy
@@ -718,7 +739,6 @@ static flex *hkrBuildSnapshotFlex(const hmacKeyring *ring) {
         uint64_t tag = 0;
         if (!hkrAlgoToTag(e->algo, &tag)) {
             pthread_rwlock_unlock((pthread_rwlock_t *)&ring->lock);
-            flexFree(f);
             return NULL;
         }
         flexPushUnsigned(&f, (uint64_t)e->id, FLEX_ENDPOINT_TAIL);
@@ -731,7 +751,10 @@ static flex *hkrBuildSnapshotFlex(const hmacKeyring *ring) {
         flexPushBytes(&f, e->raw_key_bytes, e->raw_key_len, FLEX_ENDPOINT_TAIL);
     }
     pthread_rwlock_unlock((pthread_rwlock_t *)&ring->lock);
-    return f;
+    /* @own: caller; free=flexFree */
+    flex *out = f;
+    f = NULL;
+    return out;
 }
 
 size_t hmacKeyringSnapshotSize(const hmacKeyring *ring) {
@@ -1017,13 +1040,14 @@ static uint8_t *hkrPersistSnapshot(const void *structure, size_t *len) {
         *len = 0;
         return NULL;
     }
-    uint8_t *out = zmalloc(need);
+    cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(need);
     size_t written = 0;
-    if (!hmacKeyringSnapshot(ring, out, need, &written)) {
-        zfree(out);
+    if (!hmacKeyringSnapshot(ring, buf, need, &written)) {
         return NULL;
     }
     *len = written;
+    uint8_t *out = buf;
+    buf = NULL;
     return out;
 }
 
@@ -1486,7 +1510,8 @@ int hmacKeyringTest(int argc, char *argv[]) {
         const uint32_t kThreads = 8u;
         const uint32_t kIters = 4096u;
         const size_t total = (size_t)kThreads * (size_t)kIters;
-        uint64_t *collected = zmalloc(total * sizeof(uint64_t));
+        cleanerName(zfree, U64) uint64_t *collected =
+            zmalloc(total * sizeof(uint64_t));
         hmacKeyringNonceWorkerCtx ctxs[8];
         pthread_t tids[8];
         for (uint32_t t = 0; t < kThreads; t++) {
@@ -1524,7 +1549,6 @@ int hmacKeyringTest(int argc, char *argv[]) {
                 (unsigned long long)collected[0],
                 (unsigned long long)collected[total - 1]);
         }
-        zfree(collected);
         hmacKeyringFree(ring);
     }
 
@@ -1551,7 +1575,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
         if (sz < 8u) {
             ERRR("snapshot size too small");
         }
-        uint8_t *buf = zmalloc(sz);
+        cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(sz);
         size_t written = 0;
         if (!hmacKeyringSnapshot(src, buf, sz, &written)) {
             ERRR("snapshot should succeed");
@@ -1598,7 +1622,6 @@ int hmacKeyringTest(int argc, char *argv[]) {
             ERRR("restored counter did not advance from saved value");
         }
 
-        zfree(buf);
         hmacKeyringFree(src);
         hmacKeyringFree(dst);
     }
@@ -1648,7 +1671,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
          * refuse, leaving the target keyring untouched. The cap is the
          * defense against a tampered persist file driving an attacker-
          * controlled zmalloc through Install. */
-        flex *f = flexNew();
+        cleaner(flexFree) flex *f = flexNew();
         const hmacKeyId id = 9u;
         const uint64_t algo_tag = 0u; /* SHA-256 */
         const uint8_t salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {0x01, 0x02, 0x03,
@@ -1657,7 +1680,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
 
         /* Oversized key: HMAC_KEYRING_MAX_KEY_BYTES + 1 bytes. */
         const size_t oversize_len = HMAC_KEYRING_MAX_KEY_BYTES + 1u;
-        uint8_t *oversize_key = zmalloc(oversize_len);
+        cleanerName(zfree, Bytes) uint8_t *oversize_key = zmalloc(oversize_len);
         memset(oversize_key, 0xAB, oversize_len);
 
         flexPushUnsigned(&f, (uint64_t)id, FLEX_ENDPOINT_TAIL);
@@ -1667,7 +1690,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
         flexPushBytes(&f, oversize_key, oversize_len, FLEX_ENDPOINT_TAIL);
 
         const size_t flex_bytes = flexBytes(f);
-        uint8_t *snap = zmalloc(flex_bytes);
+        cleanerName(zfree, Bytes) uint8_t *snap = zmalloc(flex_bytes);
         memcpy(snap, f, flex_bytes);
 
         hmacKeyring *dst = hmacKeyringCreate();
@@ -1679,14 +1702,11 @@ int hmacKeyringTest(int argc, char *argv[]) {
                 hmacKeyringSize(dst));
         }
 
-        zfree(snap);
-        zfree(oversize_key);
-        flexFree(f);
-
         /* Build a valid snapshot with key_len == HMAC_KEYRING_MAX_KEY_BYTES
          * exactly — this must SUCCEED (cap is inclusive of equality). */
-        flex *f_ok = flexNew();
-        uint8_t *max_key = zmalloc(HMAC_KEYRING_MAX_KEY_BYTES);
+        cleaner(flexFree) flex *f_ok = flexNew();
+        cleanerName(zfree, Bytes) uint8_t *max_key =
+            zmalloc(HMAC_KEYRING_MAX_KEY_BYTES);
         memset(max_key, 0xCD, HMAC_KEYRING_MAX_KEY_BYTES);
         flexPushUnsigned(&f_ok, (uint64_t)id, FLEX_ENDPOINT_TAIL);
         flexPushUnsigned(&f_ok, algo_tag, FLEX_ENDPOINT_TAIL);
@@ -1695,7 +1715,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
         flexPushBytes(&f_ok, max_key, HMAC_KEYRING_MAX_KEY_BYTES,
                       FLEX_ENDPOINT_TAIL);
         const size_t ok_bytes = flexBytes(f_ok);
-        uint8_t *ok_snap = zmalloc(ok_bytes);
+        cleanerName(zfree, Bytes) uint8_t *ok_snap = zmalloc(ok_bytes);
         memcpy(ok_snap, f_ok, ok_bytes);
 
         hmacKeyring *dst_ok = hmacKeyringCreate();
@@ -1707,9 +1727,6 @@ int hmacKeyringTest(int argc, char *argv[]) {
                 hmacKeyringSize(dst_ok));
         }
 
-        zfree(ok_snap);
-        zfree(max_key);
-        flexFree(f_ok);
         hmacKeyringFree(dst);
         hmacKeyringFree(dst_ok);
 
@@ -1717,7 +1734,8 @@ int hmacKeyringTest(int argc, char *argv[]) {
          * enforcement so the API cannot be used to seed a slot that
          * Restore would have refused). */
         hmacKeyring *direct = hmacKeyringCreate();
-        uint8_t *over = zmalloc(HMAC_KEYRING_MAX_KEY_BYTES + 1u);
+        cleanerName(zfree, Bytes) uint8_t *over =
+            zmalloc(HMAC_KEYRING_MAX_KEY_BYTES + 1u);
         memset(over, 0xEF, HMAC_KEYRING_MAX_KEY_BYTES + 1u);
         if (hmacKeyringInstallUnsalted(direct, 1u, &hmacAlgoSHA256, over,
                                        HMAC_KEYRING_MAX_KEY_BYTES + 1u)) {
@@ -1729,7 +1747,6 @@ int hmacKeyringTest(int argc, char *argv[]) {
                                HMAC_KEYRING_MAX_KEY_BYTES + 1u, s)) {
             ERRR("Install with oversized key MUST be refused");
         }
-        zfree(over);
         hmacKeyringFree(direct);
     }
 
@@ -2028,7 +2045,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
                                                             0x04};
         hmacKeyringInstall(ring, 50u, &hmacAlgoSHA256, key, sizeof(key), salt);
         const size_t sz = hmacKeyringSnapshotSize(ring);
-        uint8_t *buf = zmalloc(sz);
+        cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(sz);
         size_t written = 0;
         if (!hmacKeyringSnapshot(ring, buf, sz, &written)) {
             ERRR("snapshot with floor set must succeed");
@@ -2044,7 +2061,6 @@ int hmacKeyringTest(int argc, char *argv[]) {
         if (hmacKeyringSize(dst) != 1u) {
             ERR("restored slot count expected 1 got %zu", hmacKeyringSize(dst));
         }
-        zfree(buf);
         hmacKeyringFree(ring);
         hmacKeyringFree(dst);
     }
@@ -2059,7 +2075,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
         const uint8_t key[16] = {0x88};
         hmacKeyringInstallUnsalted(src, 1u, &hmacAlgoSHA256, key, sizeof(key));
         const size_t sz = hmacKeyringSnapshotSize(src);
-        uint8_t *buf = zmalloc(sz);
+        cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(sz);
         hmacKeyringSnapshot(src, buf, sz, NULL);
 
         /* Total flex entry count must be exactly HMAC_KEYRING_ENTRIES_PER_SLOT
@@ -2076,7 +2092,6 @@ int hmacKeyringTest(int argc, char *argv[]) {
             ERR("legacy restore expected floor=0 got %u",
                 (unsigned)hmacKeyringMinValidKeyId(dst));
         }
-        zfree(buf);
         hmacKeyringFree(src);
         hmacKeyringFree(dst);
     }

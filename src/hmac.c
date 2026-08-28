@@ -9,6 +9,7 @@
 #include "hmac.h"
 
 #include "blake3.h"
+#include "cleaner.h"
 #include "ctmem.h" /* dkSecureZero */
 #include "datakit.h"
 #include "hash/sha256ArmCrypto.h"
@@ -16,6 +17,22 @@
 #include "sha256.h"
 
 #include <string.h>
+
+/* Scope-exit cleaner for the overflow heap storage buffers (see
+ * cleaner.h idioms). */
+defcleanerName(uint8_t *, zfree, Bytes);
+
+#ifdef DATAKIT_TEST
+/* Scope-exit cleaner for a fixed 4-lane array of owned buffers
+ * (defcleanerName only covers single pointers). */
+static DK_FN_UNUSED void freeLaneStorage4_cleanup(uint8_t *(*lanes)[4]) {
+    for (uint32_t lane = 0; lane < 4; lane++) {
+        if ((*lanes)[lane]) {
+            zfree((*lanes)[lane]);
+        }
+    }
+}
+#endif
 
 /* RFC 2104 §2: inner pad byte 0x36 and outer pad byte 0x5c are XOR'd into
  * every byte of the (zero-padded) key to derive the inner and outer keys. */
@@ -128,7 +145,7 @@ void hmacCompute(const hmacHashAlgo *algo, const uint8_t *key, size_t key_len,
     uint8_t stack_storage[1024];
     size_t need = hmacCtxSize(algo);
     void *storage = NULL;
-    uint8_t *heap = NULL;
+    cleanerName(zfree, Bytes) uint8_t *heap = NULL;
 
     if (need <= sizeof(stack_storage)) {
         storage = stack_storage;
@@ -141,10 +158,6 @@ void hmacCompute(const hmacHashAlgo *algo, const uint8_t *key, size_t key_len,
     hmacInit(&ctx, algo, storage, need, key, key_len);
     hmacUpdate(&ctx, data, data_len);
     hmacFinal(&ctx, out);
-
-    if (heap) {
-        zfree(heap);
-    }
 }
 
 /* ------------------------------------------------------------------------ */
@@ -206,7 +219,7 @@ void hmacComputeWithKey(const hmacKey *prep, const void *data, size_t data_len,
      * in 1 KiB.  Larger ctxs (exotic hashes) hit the heap. */
     uint8_t stack_storage[2048];
     void *storage = NULL;
-    uint8_t *heap = NULL;
+    cleanerName(zfree, Bytes) uint8_t *heap = NULL;
     if (algo->ctx_size * 2 <= sizeof(stack_storage)) {
         storage = stack_storage;
     } else {
@@ -232,9 +245,6 @@ void hmacComputeWithKey(const hmacKey *prep, const void *data, size_t data_len,
     algo->final(outer, out);
 
     dkSecureZero(inner_digest, sizeof(inner_digest));
-    if (heap) {
-        zfree(heap);
-    }
 }
 
 /* Type signature of the platform 4-lane SHA-256 compressor we pick at
@@ -514,7 +524,7 @@ static int reportMismatch(const char *name, const uint8_t *got,
 }
 
 static void runBench(size_t payload, uint32_t iters) {
-    uint8_t *buf = zmalloc(payload);
+    cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(payload);
     memset(buf, 0x5a, payload);
     uint8_t key[32];
     memset(key, 0xa5, sizeof(key));
@@ -533,7 +543,6 @@ static void runBench(size_t payload, uint32_t iters) {
     printf("    hmac-sha256: payload=%zu iters=%u  %.2f MiB in %.3fs = %.2f "
            "MiB/s\n",
            payload, iters, mib, secs, secs > 0 ? mib / secs : 0.0);
-    zfree(buf);
 }
 
 int hmacTest(int argc, char *argv[]) {
@@ -561,11 +570,11 @@ int hmacTest(int argc, char *argv[]) {
         }
 
         size_t storageSize = hmacCtxSize(&hmacAlgoSHA256);
-        uint8_t *storage = zmalloc(storageSize);
+        cleanerName(zfree, Bytes) uint8_t *storage = zmalloc(storageSize);
 
         for (uint32_t trial = 0; trial < 32; trial++) {
             size_t n = (size_t)(rand() % 4096);
-            uint8_t *buf = zmalloc(n + 1);
+            cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(n + 1);
             for (size_t i = 0; i < n; i++) {
                 buf[i] = (uint8_t)rand();
             }
@@ -588,7 +597,6 @@ int hmacTest(int argc, char *argv[]) {
                 off += chunk;
             }
             hmacFinal(&ctx, streamed);
-            zfree(buf);
 
             if (!digestEqual(oneShot, streamed, 32)) {
                 char nameBuf[64];
@@ -597,12 +605,11 @@ int hmacTest(int argc, char *argv[]) {
                 err += reportMismatch(nameBuf, streamed, oneShot, 32);
             }
         }
-        zfree(storage);
     }
 
     TEST("one-shot matches incremental on RFC vectors") {
         size_t storageSize = hmacCtxSize(&hmacAlgoSHA256);
-        uint8_t *storage = zmalloc(storageSize);
+        cleanerName(zfree, Bytes) uint8_t *storage = zmalloc(storageSize);
         for (size_t i = 0; i < HMAC_TEST_VECTOR_COUNT; i++) {
             const hmacTestVector *v = &hmacTestVectorsTable[i];
             uint8_t oneShot[32];
@@ -623,7 +630,6 @@ int hmacTest(int argc, char *argv[]) {
                 err += reportMismatch(v->name, incremental, oneShot, 32);
             }
         }
-        zfree(storage);
     }
 
     TEST("testHmacFinalWipesScratch") {
@@ -633,7 +639,7 @@ int hmacTest(int argc, char *argv[]) {
          * disclose the pad blocks. We pattern-fill the storage before
          * Init so any byte that survives Final stands out. */
         const size_t storage_size = hmacCtxSize(&hmacAlgoSHA256);
-        uint8_t *storage = zmalloc(storage_size);
+        cleanerName(zfree, Bytes) uint8_t *storage = zmalloc(storage_size);
         /* Pattern-fill defeats "happened to be zero" coincidences. */
         memset(storage, 0xA5, storage_size);
 
@@ -669,7 +675,8 @@ int hmacTest(int argc, char *argv[]) {
 
         /* Mirror on BLAKE3 so the contract holds for every algorithm. */
         const size_t b3_storage_size = hmacCtxSize(&hmacAlgoBLAKE3);
-        uint8_t *b3_storage = zmalloc(b3_storage_size);
+        cleanerName(zfree, Bytes) uint8_t *b3_storage =
+            zmalloc(b3_storage_size);
         memset(b3_storage, 0x5A, b3_storage_size);
         hmacCtx b3_ctx;
         hmacInit(&b3_ctx, &hmacAlgoBLAKE3, b3_storage, b3_storage_size, key,
@@ -688,9 +695,6 @@ int hmacTest(int argc, char *argv[]) {
         if (!b3_all_zero) {
             ERRR("hmacFinal did not zero BLAKE3 ctx->scratch");
         }
-
-        zfree(storage);
-        zfree(b3_storage);
     }
 
     TEST("different keys produce different outputs") {
@@ -738,7 +742,7 @@ int hmacTest(int argc, char *argv[]) {
 
     TEST("prepared-key API: matches hmacCompute on all RFC vectors") {
         size_t prepSize = hmacPreparedSize(&hmacAlgoSHA256);
-        uint8_t *prepStorage = zmalloc(prepSize);
+        cleanerName(zfree, Bytes) uint8_t *prepStorage = zmalloc(prepSize);
         for (size_t i = 0; i < HMAC_TEST_VECTOR_COUNT; i++) {
             const hmacTestVector *v = &hmacTestVectorsTable[i];
 
@@ -756,7 +760,6 @@ int hmacTest(int argc, char *argv[]) {
                 err += reportMismatch(v->name, fromPrepared, fromCompute, 32);
             }
         }
-        zfree(prepStorage);
     }
 
     TEST("prepared-key API: reuse across many messages") {
@@ -767,7 +770,7 @@ int hmacTest(int argc, char *argv[]) {
             key[i] = (uint8_t)(i * 7);
         }
         size_t prepSize = hmacPreparedSize(&hmacAlgoSHA256);
-        uint8_t *prepStorage = zmalloc(prepSize);
+        cleanerName(zfree, Bytes) uint8_t *prepStorage = zmalloc(prepSize);
         hmacKey prep;
         hmacPrepareKey(&prep, &hmacAlgoSHA256, prepStorage, prepSize, key,
                        sizeof(key));
@@ -789,7 +792,6 @@ int hmacTest(int argc, char *argv[]) {
                 break;
             }
         }
-        zfree(prepStorage);
     }
 
     TEST("prepared-key streaming init matches plain init on random sizes") {
@@ -801,20 +803,22 @@ int hmacTest(int argc, char *argv[]) {
         uint8_t key[32];
         memset(key, 0xa7, sizeof(key));
         const size_t prep_size = hmacPreparedSize(&hmacAlgoSHA256);
-        uint8_t *prep_storage = zmalloc(prep_size);
+        cleanerName(zfree, Bytes) uint8_t *prep_storage = zmalloc(prep_size);
         hmacKey prep;
         hmacPrepareKey(&prep, &hmacAlgoSHA256, prep_storage, prep_size, key,
                        sizeof(key));
 
         const size_t ctx_size = hmacCtxSize(&hmacAlgoSHA256);
-        uint8_t *plain_storage = zmalloc(ctx_size);
-        uint8_t *prep_init_storage = zmalloc(ctx_size);
+        cleanerName(zfree, Bytes) uint8_t *plain_storage = zmalloc(ctx_size);
+        cleanerName(zfree, Bytes) uint8_t *prep_init_storage =
+            zmalloc(ctx_size);
 
         const size_t sizes[] = {0u,  1u,   31u,  32u,  63u,  64u,
                                 65u, 127u, 128u, 129u, 511u, 1023u};
         for (size_t s = 0; s < sizeof(sizes) / sizeof(sizes[0]); s++) {
             const size_t n = sizes[s];
-            uint8_t *msg = (n > 0) ? zmalloc(n) : NULL;
+            cleanerName(zfree, Bytes) uint8_t *msg =
+                (n > 0) ? zmalloc(n) : NULL;
             for (size_t i = 0; i < n; i++) {
                 msg[i] = (uint8_t)((i * 1103515245u + 12345u) >> 8);
             }
@@ -839,9 +843,6 @@ int hmacTest(int argc, char *argv[]) {
             if (memcmp(plain_out, prep_out, sizeof(plain_out)) != 0) {
                 ERR("Mismatch at len=%zu", n);
             }
-            if (msg) {
-                zfree(msg);
-            }
         }
 
         /* Multiple Updates with the same prepared init must still match
@@ -864,10 +865,6 @@ int hmacTest(int argc, char *argv[]) {
         if (memcmp(one_shot, split, sizeof(one_shot)) != 0) {
             ERRR("Chunked vs concatenated streaming update mismatch");
         }
-
-        zfree(plain_storage);
-        zfree(prep_init_storage);
-        zfree(prep_storage);
     }
 
     TEST("prepared-key API: perf bench (small messages where it matters)") {
@@ -891,7 +888,7 @@ int hmacTest(int argc, char *argv[]) {
                iters, payload, secs, secs * 1e9 / iters);
 
         size_t prepSize = hmacPreparedSize(&hmacAlgoSHA256);
-        uint8_t *prepStorage = zmalloc(prepSize);
+        cleanerName(zfree, Bytes) uint8_t *prepStorage = zmalloc(prepSize);
         hmacKey prep;
         hmacPrepareKey(&prep, &hmacAlgoSHA256, prepStorage, prepSize, key,
                        sizeof(key));
@@ -906,7 +903,6 @@ int hmacTest(int argc, char *argv[]) {
                "= %.0f ns/op  (%.2fx vs plain)\n",
                iters, payload, prep_secs, prep_secs * 1e9 / iters,
                secs / (prep_secs > 0 ? prep_secs : 1.0));
-        zfree(prepStorage);
     }
 
     TEST("hmacComputeBatch4: matches serial hmacComputeWithKey on SHA-256") {
@@ -915,8 +911,10 @@ int hmacTest(int argc, char *argv[]) {
         const uint8_t key_c[32] = {0x70, 0x80, 0x90};
         const uint8_t key_d[32] = {0xA0, 0xB0, 0xC0};
         const size_t ps = hmacPreparedSize(&hmacAlgoSHA256);
-        uint8_t *st_a = zmalloc(ps), *st_b = zmalloc(ps);
-        uint8_t *st_c = zmalloc(ps), *st_d = zmalloc(ps);
+        cleanerName(zfree, Bytes) uint8_t *st_a = zmalloc(ps);
+        cleanerName(zfree, Bytes) uint8_t *st_b = zmalloc(ps);
+        cleanerName(zfree, Bytes) uint8_t *st_c = zmalloc(ps);
+        cleanerName(zfree, Bytes) uint8_t *st_d = zmalloc(ps);
         hmacKey p_a, p_b, p_c, p_d;
         hmacPrepareKey(&p_a, &hmacAlgoSHA256, st_a, ps, key_a, 32);
         hmacPrepareKey(&p_b, &hmacAlgoSHA256, st_b, ps, key_b, 32);
@@ -939,7 +937,7 @@ int hmacTest(int argc, char *argv[]) {
             {4096, 64, 1, 0},     /* descending */
         };
         const size_t kCases = sizeof(test_lens) / sizeof(test_lens[0]);
-        uint8_t *buf = zmalloc(8192);
+        cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(8192);
         for (size_t i = 0; i < 8192; i++) {
             buf[i] = (uint8_t)(i * 13u + 7u);
         }
@@ -964,20 +962,16 @@ int hmacTest(int argc, char *argv[]) {
                 }
             }
         }
-
-        zfree(buf);
-        zfree(st_a);
-        zfree(st_b);
-        zfree(st_c);
-        zfree(st_d);
     }
 
     TEST("hmacComputeBatch4: mixed algos fall back to serial") {
         const uint8_t key[32] = {0xAA};
         const size_t ps_sha = hmacPreparedSize(&hmacAlgoSHA256);
         const size_t ps_b3 = hmacPreparedSize(&hmacAlgoBLAKE3);
-        uint8_t *st0 = zmalloc(ps_sha), *st1 = zmalloc(ps_b3);
-        uint8_t *st2 = zmalloc(ps_sha), *st3 = zmalloc(ps_sha);
+        cleanerName(zfree, Bytes) uint8_t *st0 = zmalloc(ps_sha);
+        cleanerName(zfree, Bytes) uint8_t *st1 = zmalloc(ps_b3);
+        cleanerName(zfree, Bytes) uint8_t *st2 = zmalloc(ps_sha);
+        cleanerName(zfree, Bytes) uint8_t *st3 = zmalloc(ps_sha);
         hmacKey p0, p1, p2, p3;
         hmacPrepareKey(&p0, &hmacAlgoSHA256, st0, ps_sha, key, 32);
         hmacPrepareKey(&p1, &hmacAlgoBLAKE3, st1, ps_b3, key, 32);
@@ -997,16 +991,13 @@ int hmacTest(int argc, char *argv[]) {
                 ERR("mixed-algo fallback lane %u mismatch", i);
             }
         }
-        zfree(st0);
-        zfree(st1);
-        zfree(st2);
-        zfree(st3);
     }
 
     TEST("hmacComputeBatch4: perf bench (4 lanes, 1KiB each)") {
         const uint8_t key[32] = {0xBB};
         const size_t ps = hmacPreparedSize(&hmacAlgoSHA256);
-        uint8_t *st[4];
+        __attribute__((cleanup(freeLaneStorage4_cleanup)))
+        uint8_t *st[4] = {NULL, NULL, NULL, NULL};
         hmacKey p[4];
         const hmacKey *preps[4];
         for (uint32_t i = 0; i < 4u; i++) {
@@ -1015,7 +1006,7 @@ int hmacTest(int argc, char *argv[]) {
             preps[i] = &p[i];
         }
         const size_t payload = 1024;
-        uint8_t *buf = zmalloc(payload);
+        cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(payload);
         memset(buf, 0xC3, payload);
         const void *data[4] = {buf, buf, buf, buf};
         const size_t lens[4] = {payload, payload, payload, payload};
@@ -1054,11 +1045,6 @@ int hmacTest(int argc, char *argv[]) {
         /* Sanity: lane 0 of both must match. */
         if (memcmp(serial_out[0], batch_out[0], 32) != 0) {
             ERRR("perf bench: serial vs batch lane 0 mismatch");
-        }
-
-        zfree(buf);
-        for (uint32_t i = 0; i < 4u; i++) {
-            zfree(st[i]);
         }
     }
 

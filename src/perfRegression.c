@@ -12,6 +12,7 @@
 
 #include "blake3.h"
 #include "chacha20poly1305.h"
+#include "cleaner.h"
 #include "clusterMailbox.h"
 #include "ctest.h"
 #include "datakit.h"
@@ -29,6 +30,38 @@
 
 #define PERF_REG_KEY_LEN ((size_t)32)
 #define PERF_REG_NONCE_LEN ((size_t)12)
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleanerName(uint8_t *, zfree, U8Buf);
+
+/* Scope-exit cleaner for a fixed 4-lane buffer array (benchSha256Multi4):
+ * frees whichever slots were allocated. */
+static DK_FN_UNUSED void freeLaneBufs4_cleanup(uint8_t *(*bufs)[4]) {
+    for (uint32_t lane = 0; lane < 4; lane++) {
+        if ((*bufs)[lane]) {
+            zfree((*bufs)[lane]);
+        }
+    }
+}
+
+/* Scope-exit cleaner for a runtime-sized array of owned buffers
+ * (benchMailbox's pre-built envelope batch): frees each element then the
+ * index array itself. */
+typedef struct perfRegPtrArray {
+    uint8_t **items;
+    uint32_t count;
+} perfRegPtrArray;
+
+static DK_FN_UNUSED void perfRegPtrArray_cleanup(perfRegPtrArray *pa) {
+    if (pa->items) {
+        for (uint32_t i = 0; i < pa->count; i++) {
+            if (pa->items[i]) {
+                zfree(pa->items[i]);
+            }
+        }
+        zfree(pa->items);
+    }
+}
 
 static double monoNowSec(void) {
     struct timespec ts;
@@ -92,7 +125,7 @@ static void antiDce(const uint8_t *buf, size_t len) {
 
 /* ---- BLAKE3 plain hash, varying payload --------------------------- */
 static void benchBlake3(size_t bytes) {
-    uint8_t *buf = zmalloc(bytes ? bytes : 1u);
+    cleanerName(zfree, U8Buf) uint8_t *buf = zmalloc(bytes ? bytes : 1u);
     fillDeterministic(buf, bytes, 0xB1u);
     uint8_t out[BLAKE3_OUT_LEN];
     const uint32_t iters = pickIters(bytes);
@@ -103,12 +136,11 @@ static void benchBlake3(size_t bytes) {
     const double secs = monoNowSec() - t0;
     emitRow("blake3", "hash", bytes, iters, secs);
     antiDce(out, sizeof(out));
-    zfree(buf);
 }
 
 /* ---- SHA-256 (auto-dispatched to ARM crypto on Apple Silicon) ----- */
 static void benchSha256(size_t bytes) {
-    uint8_t *buf = zmalloc(bytes ? bytes : 1u);
+    cleanerName(zfree, U8Buf) uint8_t *buf = zmalloc(bytes ? bytes : 1u);
     fillDeterministic(buf, bytes, 0xA7u);
     uint8_t out[SHA256_DIGEST_LEN];
     const uint32_t iters = pickIters(bytes);
@@ -119,13 +151,12 @@ static void benchSha256(size_t bytes) {
     const double secs = monoNowSec() - t0;
     emitRow("sha256", "hash", bytes, iters, secs);
     antiDce(out, sizeof(out));
-    zfree(buf);
 }
 
 /* ---- xxHash: XXH64 / XXH3-64 / XXH3-128 (deps/xxHash) ----------- */
 
 static void benchXxh64(size_t bytes) {
-    uint8_t *buf = zmalloc(bytes ? bytes : 1u);
+    cleanerName(zfree, U8Buf) uint8_t *buf = zmalloc(bytes ? bytes : 1u);
     fillDeterministic(buf, bytes, 0x64u);
     const uint32_t iters = pickIters(bytes);
     volatile uint64_t sink = 0;
@@ -136,11 +167,10 @@ static void benchXxh64(size_t bytes) {
     const double secs = monoNowSec() - t0;
     emitRow("xxh64", "hash", bytes, iters, secs);
     (void)sink;
-    zfree(buf);
 }
 
 static void benchXxh3_64(size_t bytes) {
-    uint8_t *buf = zmalloc(bytes ? bytes : 1u);
+    cleanerName(zfree, U8Buf) uint8_t *buf = zmalloc(bytes ? bytes : 1u);
     fillDeterministic(buf, bytes, 0x33u);
     const uint32_t iters = pickIters(bytes);
     volatile uint64_t sink = 0;
@@ -151,11 +181,10 @@ static void benchXxh3_64(size_t bytes) {
     const double secs = monoNowSec() - t0;
     emitRow("xxh3_64", "hash", bytes, iters, secs);
     (void)sink;
-    zfree(buf);
 }
 
 static void benchXxh3_128(size_t bytes) {
-    uint8_t *buf = zmalloc(bytes ? bytes : 1u);
+    cleanerName(zfree, U8Buf) uint8_t *buf = zmalloc(bytes ? bytes : 1u);
     fillDeterministic(buf, bytes, 0x77u);
     const uint32_t iters = pickIters(bytes);
     volatile uint64_t sink = 0;
@@ -167,7 +196,6 @@ static void benchXxh3_128(size_t bytes) {
     const double secs = monoNowSec() - t0;
     emitRow("xxh3_128", "hash", bytes, iters, secs);
     (void)sink;
-    zfree(buf);
 }
 
 /* ---- rapidhash: three variants × two modes ---------------------- */
@@ -176,7 +204,7 @@ typedef uint64_t (*rapidhashOneShot)(const void *, size_t);
 
 static void benchRapidhashOneShot(const char *label, rapidhashOneShot fn,
                                   size_t bytes) {
-    uint8_t *buf = zmalloc(bytes ? bytes : 1u);
+    cleanerName(zfree, U8Buf) uint8_t *buf = zmalloc(bytes ? bytes : 1u);
     fillDeterministic(buf, bytes, 0xD3u);
     const uint32_t iters = pickIters(bytes);
     volatile uint64_t sink = 0;
@@ -187,7 +215,6 @@ static void benchRapidhashOneShot(const char *label, rapidhashOneShot fn,
     const double secs = monoNowSec() - t0;
     emitRow("rapidhash", label, bytes, iters, secs);
     (void)sink;
-    zfree(buf);
 }
 
 /* Streaming: 64-byte chunks across the input.  This represents the
@@ -195,7 +222,7 @@ static void benchRapidhashOneShot(const char *label, rapidhashOneShot fn,
  * absolute best-case (one Update covers everything). */
 static void benchRapidhashStream(const char *label, rapidhashVariant variant,
                                  rapidhashMode mode, size_t bytes) {
-    uint8_t *buf = zmalloc(bytes ? bytes : 1u);
+    cleanerName(zfree, U8Buf) uint8_t *buf = zmalloc(bytes ? bytes : 1u);
     fillDeterministic(buf, bytes, 0xD7u);
     const size_t chunk = 64;
     const uint32_t iters = pickIters(bytes);
@@ -218,7 +245,6 @@ static void benchRapidhashStream(const char *label, rapidhashVariant variant,
     const double secs = monoNowSec() - t0;
     emitRow("rapidhash", label, bytes, iters, secs);
     (void)sink;
-    zfree(buf);
 }
 
 /* ---- SHA-256 4-lane multi-buffer (ARM crypto fast path) ---------- */
@@ -227,7 +253,8 @@ static void benchSha256Multi4(size_t bytes_per_lane) {
      * entry point sees identical work per lane. */
     const size_t nb = bytes_per_lane / SHA256_BLOCK_LEN;
     const size_t actual = nb * SHA256_BLOCK_LEN;
-    uint8_t *bufs[4];
+    __attribute__((cleanup(freeLaneBufs4_cleanup)))
+    uint8_t *bufs[4] = {NULL, NULL, NULL, NULL};
     for (uint32_t lane = 0; lane < 4; lane++) {
         bufs[lane] = zmalloc(actual ? actual : 1u);
         fillDeterministic(bufs[lane], actual, 0xC1u + lane);
@@ -255,17 +282,13 @@ static void benchSha256Multi4(size_t bytes_per_lane) {
     if ((st[0][0] | st[3][7]) == 0xFFFFFFFF) {
         printf("# anti-DCE multi4 %08x\n", st[0][0]);
     }
-
-    for (uint32_t lane = 0; lane < 4; lane++) {
-        zfree(bufs[lane]);
-    }
 }
 
 /* ---- HMAC-SHA-256 plain (per-call key derivation) ----------------- */
 static void benchHmacSha256Plain(size_t bytes) {
     uint8_t key[PERF_REG_KEY_LEN];
     fillDeterministic(key, sizeof(key), 0xC0u);
-    uint8_t *buf = zmalloc(bytes ? bytes : 1u);
+    cleanerName(zfree, U8Buf) uint8_t *buf = zmalloc(bytes ? bytes : 1u);
     fillDeterministic(buf, bytes, 0x42u);
     uint8_t out[32];
     const uint32_t iters = pickIters(bytes);
@@ -276,14 +299,13 @@ static void benchHmacSha256Plain(size_t bytes) {
     const double secs = monoNowSec() - t0;
     emitRow("hmac", "sha256_plain", bytes, iters, secs);
     antiDce(out, sizeof(out));
-    zfree(buf);
 }
 
 /* ---- HMAC-SHA-256 with prepared key (the hot path) ---------------- */
 static void benchHmacSha256Prepared(size_t bytes) {
     uint8_t key[PERF_REG_KEY_LEN];
     fillDeterministic(key, sizeof(key), 0xC0u);
-    uint8_t *buf = zmalloc(bytes ? bytes : 1u);
+    cleanerName(zfree, U8Buf) uint8_t *buf = zmalloc(bytes ? bytes : 1u);
     fillDeterministic(buf, bytes, 0x42u);
     uint8_t prep_storage[2048];
     hmacKey prep;
@@ -298,7 +320,6 @@ static void benchHmacSha256Prepared(size_t bytes) {
     const double secs = monoNowSec() - t0;
     emitRow("hmac", "sha256_prepared", bytes, iters, secs);
     antiDce(out, sizeof(out));
-    zfree(buf);
 }
 
 /* ---- flexEnvelope wrap+verify under each algorithm ---------------- */
@@ -306,7 +327,7 @@ static void benchEnvelope(flexEnvelopeAlgo algo, const char *algo_label,
                           size_t bytes) {
     uint8_t key[PERF_REG_KEY_LEN];
     fillDeterministic(key, sizeof(key), 0xE1u);
-    uint8_t *payload = zmalloc(bytes ? bytes : 1u);
+    cleanerName(zfree, U8Buf) uint8_t *payload = zmalloc(bytes ? bytes : 1u);
     fillDeterministic(payload, bytes, 0x91u);
     const bool keyed = flexEnvelopeAlgoIsKeyed(algo);
     flexEnvelopeWrapParams wp = {
@@ -316,7 +337,7 @@ static void benchEnvelope(flexEnvelopeAlgo algo, const char *algo_label,
     };
     const size_t total =
         flexEnvelopeWrappedSize((uint64_t)bytes, algo, FLEX_ENV_FLAG_NONE);
-    uint8_t *wrapped = zmalloc(total);
+    cleanerName(zfree, U8Buf) uint8_t *wrapped = zmalloc(total);
     size_t written = 0;
     flexEnvelopeWrap(wrapped, total, payload, (uint64_t)bytes, &wp, &written);
 
@@ -384,9 +405,6 @@ static void benchEnvelope(flexEnvelopeAlgo algo, const char *algo_label,
     /* The wrapped buffer is regenerated by the wrap loop above; sink
      * its trailing digest so the wrap loop's writes are observed. */
     antiDce(wrapped + total - 1u, 1u);
-
-    zfree(payload);
-    zfree(wrapped);
 }
 
 /* ---- ChaCha20-Poly1305 AEAD seal+open ---------------------------- */
@@ -395,9 +413,9 @@ static void benchAead(size_t bytes) {
     uint8_t nonce[PERF_REG_NONCE_LEN];
     fillDeterministic(key, sizeof(key), 0xAEu);
     fillDeterministic(nonce, sizeof(nonce), 0xADu);
-    uint8_t *plain = zmalloc(bytes ? bytes : 1u);
+    cleanerName(zfree, U8Buf) uint8_t *plain = zmalloc(bytes ? bytes : 1u);
     fillDeterministic(plain, bytes, 0x77u);
-    uint8_t *ct = zmalloc(bytes ? bytes : 1u);
+    cleanerName(zfree, U8Buf) uint8_t *ct = zmalloc(bytes ? bytes : 1u);
     uint8_t tag[CHACHA20_POLY1305_TAG_LEN];
     const uint32_t iters = pickIters(bytes);
 
@@ -417,9 +435,6 @@ static void benchAead(size_t bytes) {
     const double secs_open = monoNowSec() - t_o0;
     emitRow("aead", "chacha20poly1305_open", bytes, iters, secs_open);
     antiDce(plain, bytes > 0 ? 1u : 0u);
-
-    zfree(plain);
-    zfree(ct);
 }
 
 /* ---- clusterMailbox seal + ingest end-to-end --------------------- */
@@ -431,10 +446,10 @@ static void benchMailbox(size_t bytes) {
     hmacKeyringInstallUnsalted(ring, K, &hmacAlgoSHA256, key, sizeof(key));
     clusterMailbox *mb =
         clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
-    uint8_t *payload = zmalloc(bytes ? bytes : 1u);
+    cleanerName(zfree, U8Buf) uint8_t *payload = zmalloc(bytes ? bytes : 1u);
     fillDeterministic(payload, bytes, 0x31u);
     const size_t sealed_sz = clusterMailboxSealedSize(mb, bytes);
-    uint8_t *envelope = zmalloc(sealed_sz);
+    cleanerName(zfree, U8Buf) uint8_t *envelope = zmalloc(sealed_sz);
     /* Seal once to size + warm caches. */
     size_t written = 0;
     clusterMailboxSeal(mb, 1u, 1u, 0u, payload, bytes, K, envelope, sealed_sz,
@@ -462,8 +477,14 @@ static void benchMailbox(size_t bytes) {
          * number on origin 1).  Cap the batch so we don't blow up
          * memory at large `bytes`. */
         const uint32_t batch_n = (bytes <= 1024u) ? 256u : 32u;
-        uint8_t **envelopes = zmalloc(batch_n * sizeof(uint8_t *));
+        __attribute__((
+            cleanup(perfRegPtrArray_cleanup))) perfRegPtrArray envelopesArr = {
+            .items = zmalloc(batch_n * sizeof(uint8_t *)), /* @own: container */
+            .count = batch_n,
+        };
+        uint8_t **envelopes = envelopesArr.items;
         for (uint32_t i = 0; i < batch_n; i++) {
+            /* @own: container; free=zfree */
             envelopes[i] = zmalloc(sealed_sz);
             size_t w = 0;
             clusterMailboxSeal(mb, /* origin */ 2u, /* seq */ (uint64_t)i + 1u,
@@ -507,15 +528,8 @@ static void benchMailbox(size_t bytes) {
         const double secs_ingest = monoNowSec() - t_i0;
         emitRow("mailbox", "ingest", bytes, real_iters > 0 ? real_iters : 1u,
                 secs_ingest);
-
-        for (uint32_t i = 0; i < batch_n; i++) {
-            zfree(envelopes[i]);
-        }
-        zfree(envelopes);
     }
 
-    zfree(payload);
-    zfree(envelope);
     clusterMailboxFree(mb);
     hmacKeyringFree(ring);
 }

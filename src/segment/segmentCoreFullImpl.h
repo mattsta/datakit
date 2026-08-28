@@ -31,6 +31,12 @@
 #define SEGMENT_IMPL_SCOPE
 #endif
 
+#include "../cleaner.h"
+
+/* Scope-exit cleaner for value-array scratch. Each instantiation TU
+ * includes this template exactly once, so the static is unique. */
+defcleanerName(SEGMENT_VALUE_TYPE *, zfree, SegmentVals);
+
 /* ====================================================================
  * IDENTITY AND COMBINE HELPERS (duplicated for Full tier)
  * ==================================================================== */
@@ -71,6 +77,7 @@ SEGMENT_NAME(SEGMENT_SUFFIX, Combine)(SEGMENT_VALUE_TYPE a,
 /* Create new full segment tree */
 SEGMENT_IMPL_SCOPE SEGMENT_FULL_TYPENAME(SEGMENT_SUFFIX) *
     SEGMENT_NAME(SEGMENT_SUFFIX, FullNew)(segmentOp op) {
+    /* @own: caller */
     SEGMENT_FULL_TYPENAME(SEGMENT_SUFFIX) *seg =
         zcalloc(1, sizeof(SEGMENT_FULL_TYPENAME(SEGMENT_SUFFIX)));
     seg->count = 0;
@@ -122,13 +129,16 @@ SEGMENT_IMPL_SCOPE SEGMENT_FULL_TYPENAME(SEGMENT_SUFFIX) *
     }
     capacity <<= 1;
 
+    /* @own: caller */
     SEGMENT_FULL_TYPENAME(SEGMENT_SUFFIX) *seg =
         zcalloc(1, sizeof(SEGMENT_FULL_TYPENAME(SEGMENT_SUFFIX)));
     seg->count = count;
     seg->capacity = capacity;
     seg->maxCapacity = (SEGMENT_INDEX_TYPE_FULL)-1;
     seg->operation = op;
+    /* @own: container */
     seg->tree = zcalloc(capacity, sizeof(SEGMENT_VALUE_TYPE));
+    /* @own: container */
     seg->lazy = zcalloc(capacity, sizeof(SEGMENT_VALUE_TYPE));
 
     SEGMENT_NAME(SEGMENT_SUFFIX, FullBuild)(seg, values, count);
@@ -147,18 +157,16 @@ SEGMENT_IMPL_SCOPE SEGMENT_FULL_TYPENAME(SEGMENT_SUFFIX) *
 
     /* Extract all values */
     SEGMENT_INDEX_TYPE_SMALL count = smallTier->count;
-    SEGMENT_VALUE_TYPE *values = zmalloc(count * sizeof(SEGMENT_VALUE_TYPE));
+    cleanerName(zfree, SegmentVals) SEGMENT_VALUE_TYPE *values =
+        zmalloc(count * sizeof(SEGMENT_VALUE_TYPE));
 
     for (SEGMENT_INDEX_TYPE_SMALL i = 0; i < count; i++) {
         values[i] = SEGMENT_NAME(SEGMENT_SUFFIX, SmallGet)(smallTier, i);
     }
 
     /* Create Full from values */
-    SEGMENT_FULL_TYPENAME(SEGMENT_SUFFIX) *full = SEGMENT_NAME(
-        SEGMENT_SUFFIX, FullNewFromArray)(values, count, smallTier->operation);
-
-    zfree(values);
-    return full;
+    return SEGMENT_NAME(SEGMENT_SUFFIX, FullNewFromArray)(values, count,
+                                                          smallTier->operation);
 }
 
 /* Free full segment tree */
@@ -199,8 +207,10 @@ SEGMENT_IMPL_SCOPE SEGMENT_FULL_TYPENAME(SEGMENT_SUFFIX) *
         newCapacity <<= 1;
 
         /* Reallocate arrays */
+        /* @own: container */
         SEGMENT_VALUE_TYPE *newTree =
             zrealloc(seg->tree, newCapacity * sizeof(SEGMENT_VALUE_TYPE));
+        /* @own: container */
         SEGMENT_VALUE_TYPE *newLazy =
             zrealloc(seg->lazy, newCapacity * sizeof(SEGMENT_VALUE_TYPE));
         if (!newTree || !newLazy) {

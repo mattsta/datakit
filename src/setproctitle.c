@@ -32,6 +32,7 @@ bool setProctitleInit(char *os_argv[]) {
         size += strlen(environ[i]) + 1;
     }
 
+    /* @own: static */
     char *p = zmalloc(size);
     os_argv_last = os_argv[0];
 

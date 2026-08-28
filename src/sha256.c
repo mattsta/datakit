@@ -256,12 +256,16 @@ void sha256Hash(const void *data, size_t len, uint8_t out[SHA256_DIGEST_LEN]) {
 
 #ifdef DATAKIT_TEST
 
+#include "cleaner.h"
 #include "ctest.h"
 #include "datakit.h"
 #include "hash/sha256TestVectors.h"
 
 #include <stdlib.h>
 #include <time.h>
+
+/* Scope-exit cleaners (see cleaner.h idioms) */
+defcleanerName(uint8_t *, zfree, U8);
 
 static int hashEqual(const uint8_t *a, const uint8_t *b) {
     return memcmp(a, b, SHA256_DIGEST_LEN) == 0;
@@ -306,11 +310,10 @@ int sha256Test(int argc, char *argv[]) {
 
     TEST("one million 'a's") {
         const size_t n = 1000000;
-        uint8_t *buf = zmalloc(n);
+        cleanerName(zfree, U8) uint8_t *buf = zmalloc(n);
         memset(buf, 'a', n);
         uint8_t out[SHA256_DIGEST_LEN];
         sha256Hash(buf, n, out);
-        zfree(buf);
         static const uint8_t expected[SHA256_DIGEST_LEN] = {
             0xcd, 0xc7, 0x6e, 0x5c, 0x99, 0x14, 0xfb, 0x92, 0x81, 0xa1, 0xc7,
             0xe2, 0x84, 0xd7, 0x3e, 0x67, 0xf1, 0x80, 0x9a, 0x48, 0xa4, 0x97,
@@ -325,7 +328,7 @@ int sha256Test(int argc, char *argv[]) {
                                        120, 127, 128, 129, 1023, 1024, 1025};
         const size_t nSizes = sizeof(sizes) / sizeof(sizes[0]);
         const size_t maxSize = 1025;
-        uint8_t *buf = zmalloc(maxSize);
+        cleanerName(zfree, U8) uint8_t *buf = zmalloc(maxSize);
         /* Deterministic fill so streaming/one-shot use identical input. */
         for (size_t i = 0; i < maxSize; i++) {
             buf[i] = (uint8_t)((i * 31 + 7) & 0xff);
@@ -357,14 +360,13 @@ int sha256Test(int argc, char *argv[]) {
                 reportMismatch(nameBuf, streamed, oneShot, &err);
             }
         }
-        zfree(buf);
     }
 
     TEST("streaming agreement on random inputs") {
         srand(0xC0FFEE);
         for (uint32_t trial = 0; trial < 32; trial++) {
             size_t n = (size_t)(rand() % 4096);
-            uint8_t *buf = zmalloc(n + 1);
+            cleanerName(zfree, U8) uint8_t *buf = zmalloc(n + 1);
             for (size_t i = 0; i < n; i++) {
                 buf[i] = (uint8_t)rand();
             }
@@ -386,7 +388,6 @@ int sha256Test(int argc, char *argv[]) {
                 off += chunk;
             }
             sha256Final(&ctx, streamed);
-            zfree(buf);
 
             if (!hashEqual(oneShot, streamed)) {
                 char nameBuf[64];
@@ -401,7 +402,7 @@ int sha256Test(int argc, char *argv[]) {
         /* Throughput on a moderate buffer. Never fails. */
         const size_t bufSize = 1 << 20; /* 1 MiB */
         const uint32_t iters = 64;      /* total 64 MiB */
-        uint8_t *buf = zmalloc(bufSize);
+        cleanerName(zfree, U8) uint8_t *buf = zmalloc(bufSize);
         memset(buf, 0xa5, bufSize);
 
         uint8_t out[SHA256_DIGEST_LEN];
@@ -421,8 +422,6 @@ int sha256Test(int argc, char *argv[]) {
         double mib = (double)((uint64_t)bufSize * iters) / (1024.0 * 1024.0);
         printf("    sha256: %.2f MiB in %.3fs = %.2f MiB/s\n", mib, secs,
                secs > 0 ? mib / secs : 0.0);
-
-        zfree(buf);
     }
 
     TEST_FINAL_RESULT;

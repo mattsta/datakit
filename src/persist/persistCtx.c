@@ -43,6 +43,7 @@ persistCtxConfig persistCtxDefaultConfig(void) {
 
 static char *makeSnapshotPath(const char *basePath) {
     size_t len = strlen(basePath) + 6; /* ".snap\0" */
+    /* @own: caller; free=zfree */
     char *path = zmalloc(len);
     snprintf(path, len, "%s.snap", basePath);
     return path;
@@ -50,6 +51,7 @@ static char *makeSnapshotPath(const char *basePath) {
 
 static char *makeWalPath(const char *basePath) {
     size_t len = strlen(basePath) + 5; /* ".wal\0" */
+    /* @own: caller; free=zfree */
     char *path = zmalloc(len);
     snprintf(path, len, "%s.wal", basePath);
     return path;
@@ -63,6 +65,7 @@ static char *makeWalPath(const char *basePath) {
 /* Helper to duplicate a string using zmalloc */
 static char *zstrdupInternal(const char *s) {
     size_t len = strlen(s) + 1;
+    /* @own: caller; free=zfree */
     char *dup = zmalloc(len);
     memcpy(dup, s, len);
     return dup;
@@ -74,6 +77,7 @@ persistCtx *persistCtxNew(const char *basePath,
         return NULL;
     }
 
+    /* @own: caller; free=persistCtxFree */
     persistCtx *ctx = zcalloc(1, sizeof(*ctx));
 
     /* Store paths */

@@ -4,12 +4,15 @@
  */
 
 #include "multiOrderedSetP.h"
+#include "../cleaner.h"
 #include "../databox.h"
 #include "../datakit.h"
 #include "../persist.h"
 
 #include <string.h>
 #include <unistd.h>
+
+defcleanerName(multiOrderedSetP *, zfree, MultiOrderedSetP);
 
 /* ============================================================================
  * Lifecycle
@@ -22,15 +25,16 @@ multiOrderedSetP *multiOrderedSetNewP(persistCtx *ctx) {
         return NULL;
     }
 
-    multiOrderedSetP *mos = zcalloc(1, sizeof(*mos));
+    cleanerName(zfree, MultiOrderedSetP) multiOrderedSetP *mos =
+        zcalloc(1, sizeof(*mos));
     mos->ctx = ctx;
 
     /* Create underlying multiOrderedSet (starts as Small tier) */
+    /* @own: container; free=multiOrderedSetFree */
     mos->mos = multiOrderedSetNew();
 
     /* Initialize persistence context for multiOrderedSet type */
     if (!persistCtxInitForType(ctx, &persistOpsMultiOrderedSet)) {
-        zfree(mos);
         return NULL;
     }
 
@@ -39,11 +43,12 @@ multiOrderedSetP *multiOrderedSetNewP(persistCtx *ctx) {
         if (mos->mos) {
             multiOrderedSetFree(mos->mos);
         }
-        zfree(mos);
         return NULL;
     }
 
-    return mos;
+    multiOrderedSetP *out = mos;
+    mos = NULL;
+    return out;
 }
 
 multiOrderedSetP *multiOrderedSetOpenP(persistCtx *ctx) {
@@ -62,9 +67,11 @@ multiOrderedSetP *multiOrderedSetOpenP(persistCtx *ctx) {
     /* Note: recovered can be NULL for empty set, but we need non-NULL for
      * proper operation */
     if (!recovered) {
+        /* @own: container; free=multiOrderedSetFree */
         recovered = multiOrderedSetNew();
     }
 
+    /* @own: caller; free=multiOrderedSetCloseP */
     multiOrderedSetP *mos = zcalloc(1, sizeof(*mos));
     mos->ctx = ctx;
     mos->mos = recovered;
