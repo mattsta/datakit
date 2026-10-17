@@ -114,6 +114,9 @@ defcleaner(flex *, flexFree);
 
 #if FLEX_ENABLE_PTR_MDSC
 #include "mdsc.h"
+#ifdef DATAKIT_TEST
+defcleaner(mdsc *, mdscfree);
+#endif
 #endif
 
 /* Toggle for enabling performance-damaging assert() locations */
@@ -1380,16 +1383,17 @@ DK_STATIC void flexLoadFixedLength_(const flexEntryData *entry, databox *r) {
         r->type = DATABOX_UNSIGNED_64;
         break;
     case FLEX_UINT_96B:
-        assert(r->big);
-        assert(r->data.i128);
-        *r->data.u128 = varintBigExternalGet(d, 96 / 8);
-        r->type = DATABOX_UNSIGNED_128;
-        break;
     case FLEX_UINT_128B:
-        assert(r->big);
-        assert(r->data.u128);
-        *r->data.u128 = varintBigExternalGet(d, 128 / 8);
         r->type = DATABOX_UNSIGNED_128;
+        if (!r->big) {
+            /* A plain databox has no 128-bit store: report the type only,
+             * and never write through whatever its pointer holds. */
+            r->data.ptr = NULL;
+            break;
+        }
+        assert(r->data.u128);
+        *r->data.u128 = varintBigExternalGet(
+            d, encoding == FLEX_UINT_96B ? 96 / 8 : 128 / 8);
         break;
     case FLEX_NEG_8B:
     case FLEX_NEG_16B:
@@ -1405,16 +1409,17 @@ DK_STATIC void flexLoadFixedLength_(const flexEntryData *entry, databox *r) {
         r->data.i64 = SIGNED_RESTORE(r->data.i64); /* restore sign and offset */
         break;
     case FLEX_NEG_96B:
-        assert(r->big);
-        *r->data.i128 = varintBigExternalGet(d, 96 / 8);
-        *r->data.i128 = SIGNED_RESTORE(*r->data.i128);
-        r->type = DATABOX_SIGNED_128;
-        break;
     case FLEX_NEG_128B:
-        assert(r->big);
-        *r->data.i128 = varintBigExternalGet(d, 128 / 8);
-        *r->data.i128 = SIGNED_RESTORE(*r->data.i128);
         r->type = DATABOX_SIGNED_128;
+        if (!r->big) {
+            /* Type only, as for the unsigned case above. */
+            r->data.ptr = NULL;
+            break;
+        }
+        assert(r->data.i128);
+        *r->data.i128 = varintBigExternalGet(
+            d, encoding == FLEX_NEG_96B ? 96 / 8 : 128 / 8);
+        *r->data.i128 = SIGNED_RESTORE(*r->data.i128);
         break;
     case FLEX_REAL_B16B:
         /* Restore 2 byte real to 4 byte real */
@@ -3272,6 +3277,11 @@ bool flexGetSingleDatabox(const uint8_t *buf, size_t buflen, databox *out) {
     if (!fe) {
         return false;
     }
+    /* A plain databox cannot hold a 96/128-bit value; that needs
+     * flexGetSingleDataboxBig. */
+    if (FLEX_IS_INTEGER_BIG(fe[0])) {
+        return false;
+    }
     flexGetByType(fe, out);
     return true;
 }
@@ -3354,12 +3364,18 @@ bool flexGetTwoDataboxes(const uint8_t *buf, size_t buflen, databox *a,
     if (!fe) {
         return false;
     }
-    flexGetByType(fe, a);
-    fe = flexNext(f, fe);
-    if (!fe) {
+    flexEntry *const second = flexNext(f, fe);
+    if (!second) {
         return false;
     }
-    flexGetByType(fe, b);
+    /* Plain databoxes cannot hold a 96/128-bit value.  Both entries are
+     * checked before either box is written, so a refusal leaves both
+     * untouched. */
+    if (FLEX_IS_INTEGER_BIG(fe[0]) || FLEX_IS_INTEGER_BIG(second[0])) {
+        return false;
+    }
+    flexGetByType(fe, a);
+    flexGetByType(second, b);
     return true;
 }
 
@@ -5645,6 +5661,14 @@ bool flexValidateBufferDeep(const uint8_t *buf, size_t buflen) {
         if (cursor >= end) {
             return false;
         }
+        /* An MDSC entry's payload is a pointer into the process that wrote
+         * it.  Decoding one dereferences that pointer, so bytes from
+         * outside this process must never carry one. */
+        if (cursor[0] == FLEX_EXTERNAL_MDSC_48B ||
+            cursor[0] == FLEX_EXTERNAL_MDSC_64B) {
+            return false;
+        }
+
         const size_t remaining = (size_t)(end - cursor);
         size_t entry_len = 0;
         if (!flexRawEntryLengthSafe((const flexEntry *)cursor, remaining,
@@ -6538,6 +6562,131 @@ int32_t flexTest(int32_t argc, char **argv) {
     flexEntry *fe = NULL;
     (void)f;
     (void)fe;
+
+    printf("Verify decoding never writes through or yields an untrusted "
+           "pointer:\n");
+    {
+        int32_t bad = 0;
+        const __uint128_t wideU = (__uint128_t)1 << 80;
+        const __int128_t wideS = -((__int128_t)1 << 100);
+
+        cleaner(flexFree) flex *wide = flexNew();
+        databoxBig w;
+        DATABOX_BIG_UNSIGNED_128(&w, wideU);
+        flexPushDataboxBig(&wide, &w, FLEX_ENDPOINT_TAIL);
+        DATABOX_BIG_SIGNED_128(&w, wideS);
+        flexPushDataboxBig(&wide, &w, FLEX_ENDPOINT_TAIL);
+        if (!flexValidateBufferDeep(wide, flexBytes(wide))) {
+            printf("  FAIL: 96/128-bit entries failed the deep gate\n");
+            bad++;
+        }
+
+        /* A plain box reports the type only and leaves the memory its
+         * pointer names alone; a databoxBig gets the value. */
+        for (int32_t i = 0; i < 2; i++) {
+            __int128_t sentinel = 12345;
+            databox plain = {.data.i128 = &sentinel};
+            flexGetByType(flexIndex(wide, i), &plain);
+            const databoxType want =
+                i == 0 ? DATABOX_UNSIGNED_128 : DATABOX_SIGNED_128;
+            if (plain.type != want || plain.data.ptr || sentinel != 12345) {
+                printf("  FAIL: plain box decode of 128-bit entry %" PRId32
+                       "\n",
+                       i);
+                bad++;
+            }
+
+            databoxBig big;
+            DATABOX_BIG_INIT(&big);
+            flexGetByType(flexIndex(wide, i), (databox *)&big);
+            if (big.type != want ||
+                (i == 0 ? *big.data.u128 != wideU : *big.data.i128 != wideS)) {
+                printf("  FAIL: big box decode of 128-bit entry %" PRId32 "\n",
+                       i);
+                bad++;
+            }
+        }
+
+        /* The plain-box unwrap helpers refuse a 96/128-bit entry and leave
+         * their outputs untouched; the big helper decodes it. */
+        cleaner(flexFree) flex *one = flexNewFromDataboxBig(&w);
+        databox out = databoxNewSigned(77);
+        databoxBig outBig;
+        if (flexGetSingleDatabox(one, flexBytes(one), &out) ||
+            out.type != DATABOX_SIGNED_64 || out.data.i != 77 ||
+            !flexGetSingleDataboxBig(one, flexBytes(one), &outBig) ||
+            outBig.type != DATABOX_SIGNED_128 || *outBig.data.i128 != wideS) {
+            printf("  FAIL: single unwrap of a 128-bit entry\n");
+            bad++;
+        }
+
+        cleaner(flexFree) flex *pair = flexNew();
+        flexPushSigned(&pair, 5, FLEX_ENDPOINT_TAIL);
+        flexPushDataboxBig(&pair, &w, FLEX_ENDPOINT_TAIL);
+        databox a = databoxNewSigned(1);
+        databox b = databoxNewSigned(2);
+        if (flexGetTwoDataboxes(pair, flexBytes(pair), &a, &b) ||
+            a.data.i != 1 || b.data.i != 2) {
+            printf("  FAIL: pair unwrap of a 128-bit entry\n");
+            bad++;
+        }
+
+#if FLEX_ENABLE_PTR_MDSC
+        /* An MDSC entry is a pointer into the writing process.  Built and
+         * read here it is real, but no untrusted gate may accept it. */
+        cleaner(mdscfree) mdsc *s = mdscnewlen("pointer payload", 15);
+        const databox ptrBox = {.type = DATABOX_PTR_MDSC, .data.ptr = s};
+        const databox *ptrRow[1] = {&ptrBox};
+        cleaner(flexFree) flex *ptrs = flexNew();
+        flexAppendMultiple(&ptrs, 1, ptrRow);
+        databox local = {{0}};
+        flexGetByType(flexHead(ptrs), &local);
+        if (local.type != DATABOX_PTR_MDSC || local.data.ptr != s ||
+            flexValidateBufferDeep(ptrs, flexBytes(ptrs)) ||
+            flexGetSingleDatabox(ptrs, flexBytes(ptrs), &out) ||
+            flexGetSingleDataboxBig(ptrs, flexBytes(ptrs), &outBig)) {
+            printf("  FAIL: an MDSC entry passed an untrusted gate\n");
+            bad++;
+        }
+
+        /* Integers whose tag byte is flipped to an MDSC tag: the payload
+         * becomes an attacker-chosen address. */
+        static const struct {
+            uint64_t value;
+            flexEncoding integer;
+            flexEncoding pointer;
+        } retags[] = {
+            {UINT64_C(0x2898282a2828), FLEX_UINT_48B, FLEX_EXTERNAL_MDSC_48B},
+            {UINT64_C(0x1122334455667788), FLEX_UINT_64B,
+             FLEX_EXTERNAL_MDSC_64B},
+        };
+        for (size_t i = 0; i < COUNT_ARRAY(retags); i++) {
+            cleaner(flexFree) flex *retag = flexNew();
+            flexPushUnsigned(&retag, retags[i].value, FLEX_ENDPOINT_TAIL);
+            flexEntry *const rf = flexHead(retag);
+            if (rf[0] != retags[i].integer) {
+                printf("  FAIL: retag %zu built encoding %d\n", i, rf[0]);
+                bad++;
+                continue;
+            }
+            /* The entry is the last one, so its trailer is the last byte. */
+            rf[0] = retags[i].pointer;
+            retag[flexBytes(retag) - 1] = retags[i].pointer;
+            if (flexValidateBufferDeep(retag, flexBytes(retag))) {
+                printf("  FAIL: retag %zu passed the deep gate\n", i);
+                bad++;
+            } else if (flexGetSingleDatabox(retag, flexBytes(retag), &out)) {
+                printf("  FAIL: retag %zu passed the single unwrap\n", i);
+                bad++;
+            }
+        }
+#endif
+
+        if (bad) {
+            return bad;
+        }
+        printf("  ok\n");
+    }
 
     printf("Verify a SIGNED databox round-trips through flexInsertByType at "
            "every width boundary:\n");

@@ -35,8 +35,18 @@ void flexFree(flex *f);
  * The rest of flex assumes well-formed input and asserts on it.  Pass
  * untrusted bytes to flexHead / flexNext / flexGetByType / flexCount
  * only after flexValidateBufferDeep accepts them.  That check covers
- * forward iteration over this flex's own entries; it does not verify
- * reverse-traversal trailers or the contents of nested containers.
+ * forward iteration and decoding of this flex's own entries:
+ *   - It rejects MDSC entries, whose payload is a pointer into the
+ *     process that wrote them, so validated bytes never decode to a
+ *     pointer flex would dereference.  Container references
+ *     (DATABOX_CONTAINER_REFERENCE_EXTERNAL) are opaque integers that
+ *     flex never dereferences; a caller that stores pointers in them
+ *     must not accept them from untrusted bytes.
+ *   - A 96/128-bit entry decodes fully only into a databoxBig set up
+ *     with DATABOX_BIG_INIT; see flexGetByType.
+ *   - It does not verify reverse-traversal trailers, so walk untrusted
+ *     bytes forward only (flexHead / flexNext, not flexTail / flexPrev).
+ *   - It does not verify the contents of nested containers.
  *
  * flexTest runs every single-byte mutation of several valid flexes
  * through these functions. */
@@ -70,8 +80,10 @@ bool flexValidateBuffer(const uint8_t *buf, size_t buflen);
  * walk terminates exactly at the buffer's claimed end (no trailing
  * garbage, no truncation).
  *
- * Returns true iff the buffer is structurally valid for safe iteration
- * with flexHead / flexNext / flexGetByTypeCopy / flexCount.
+ * Returns true iff the buffer is structurally valid for safe forward
+ * iteration with flexHead / flexNext / flexGetByType / flexCount and
+ * holds no MDSC (pointer) entry; see the paragraph above for what it
+ * does not cover.
  *
  * Designed for callers that consume flex bytes from untrusted sources
  * WITHOUT a wrapping MAC (synthetic fuzzers, cross-process IPC, on-disk
@@ -165,17 +177,20 @@ void flexPushByType(flex **ff, const databox *box, flexEndpoint where);
  * flexGetSingleDatabox: the defensive inverse for bytes from an untrusted
  * source (replication / on-disk recovery).  Validates the buffer envelope
  * and that it holds exactly one element, then extracts it into `*out`.
- * Returns false (leaving *out untouched) on any malformation.  For BYTES
- * the extracted box points INTO `buf`, so it is valid only while `buf`
+ * Returns false (leaving *out untouched) on any malformation, on an MDSC
+ * (pointer) entry, and on a 96/128-bit integer, which a plain databox
+ * cannot hold (use flexGetSingleDataboxBig for those).  For BYTES the
+ * extracted box points INTO `buf`, so it is valid only while `buf`
  * lives; copy via databox helpers if it must outlive the buffer. */
 flex *flexNewFromDatabox(const databox *box);
 bool flexGetSingleDatabox(const uint8_t *buf, size_t buflen, databox *out);
 
 /* Defensive 2-element flex unwrap — the [index,value] / [start,count] /
  * [key,field] pair shape.  Validates the buffer + requires exactly two
- * elements, then extracts them into *a and *b.  Returns false on any
- * malformation.  (For BYTES the boxes point into `buf`; copy if they must
- * outlive it.) */
+ * elements, then extracts them into *a and *b.  Returns false, leaving
+ * both boxes untouched, on any malformation, an MDSC (pointer) entry, or
+ * a 96/128-bit integer.  (For BYTES the boxes point into `buf`; copy if
+ * they must outlive it.) */
 bool flexGetTwoDataboxes(const uint8_t *buf, size_t buflen, databox *a,
                          databox *b);
 
@@ -195,8 +210,9 @@ flex *flexNewFromDataboxPtrs(const databox *const *boxes, size_t n);
 /* databoxBig arm of the factory — for values that may exceed 64 bits (numeric
  * quantum sets / intsetBig).  A plain databox cannot hold a 128-bit value
  * inline (its data.i128 is a pointer), and flexGetByType into a plain databox
- * ASSERTS on a 128-bit element, so 128-bit-capable encode/decode must go
- * through a databoxBig (which carries the 16-byte `extra` backing store).
+ * reports only the type of a 128-bit element (see flexGetByType), so
+ * 128-bit-capable encode/decode must go through a databoxBig (which carries
+ * the 16-byte `extra` backing store).
  *
  * flexPushDataboxBig: append one numeric databoxBig (64- or 128-bit) to `*ff`.
  *   128-bit values are normalised through DATABOX_BIG_*_128 so the push never
@@ -204,7 +220,8 @@ flex *flexNewFromDataboxPtrs(const databox *const *boxes, size_t n);
  * flexNewFromDataboxBig: a fresh 1-element flex holding `b` (free with
  * flexFree). flexGetSingleDataboxBig: defensive inverse — validate + require
  * exactly one element + decode into `*out` (DATABOX_BIG_INIT'd internally so
- * 128-bit has storage).  Returns false on malformation. */
+ * 128-bit has storage).  Returns false on malformation or an MDSC (pointer)
+ * entry. */
 void flexPushDataboxBig(flex **ff, const databoxBig *b, flexEndpoint where);
 flex *flexNewFromDataboxBig(const databoxBig *b);
 bool flexGetSingleDataboxBig(const uint8_t *buf, size_t buflen,
@@ -343,7 +360,13 @@ flexEntry DK_FN_PURE *flexTailWithElements(const flex *const f,
  *     it, so 'len' is larger than flexBytes(data.bytes.start).  Use
  *     flexBytes for the nested flex's size.  Inserting or pushing the box
  *     back sizes the entry from the nested flex and ignores 'len', so a
- *     box read here round-trips. */
+ *     box read here round-trips.
+ *   - A 96/128-bit integer is written through data.i128 / data.u128 only
+ *     when 'box' is a databoxBig set up with DATABOX_BIG_INIT.  Into a
+ *     plain databox (big == 0) only the type is reported (SIGNED_128 or
+ *     UNSIGNED_128) and data.ptr is set to NULL.  A box's 'big' flag must
+ *     therefore be initialized: zero the box, or use DATABOX_BIG_INIT.
+ *   - An MDSC entry reports DATABOX_PTR_MDSC with the stored pointer. */
 void flexGetByType(const flexEntry *fe, databox *box);
 void flexGetByTypeWithReference(const flexEntry *const fe, databox *box,
                                 const struct multimapAtom *referenceContainer);
