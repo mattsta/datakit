@@ -3170,6 +3170,10 @@ void flexPushFloat16(flex **const ff, const float value, flexEndpoint where) {
     flexPush_(flexInsertFloat16, value);
 }
 
+void flexPushFloatB16(flex **const ff, const float value, flexEndpoint where) {
+    flexPush_(flexInsertFloatB16, value);
+}
+
 void flexPushFloat(flex **const ff, const float value, flexEndpoint where) {
     flexPush_(flexInsertFloat, value);
 }
@@ -7434,6 +7438,47 @@ int32_t flexTest(int32_t argc, char **argv) {
                     assert(NULL && "flexIndexWithMiddle diverged!");
                 }
             }
+        }
+        printf("  SUCCESS\n\n");
+    }
+
+    printf(
+        "Verify flexPushFloatB16 matches flexInsertFloatB16 at both ends:\n");
+    {
+        int32_t bad = 0;
+        /* 1.5 and -2.0 are exact in bfloat16; 3.14159 rounds. */
+        static const float values[] = {1.5f, -2.0f, 3.14159f, 0.0f};
+        cleaner(flexFree) flex *pushed = flexNew();
+        cleaner(flexFree) flex *inserted = flexNew();
+        for (size_t i = 0; i < sizeof(values) / sizeof(*values); i++) {
+            flexPushFloatB16(&pushed, values[i], FLEX_ENDPOINT_TAIL);
+            flexInsertFloatB16(&inserted, FLEX_ENTRY_AFTER_TAIL(inserted),
+                               values[i]);
+        }
+        flexPushFloatB16(&pushed, 7.0f, FLEX_ENDPOINT_HEAD);
+        flexInsertFloatB16(&inserted, FLEX_ENTRY_HEAD(inserted), 7.0f);
+
+        if (!flexEqual(pushed, inserted)) {
+            printf("  push and insert encodings differ\n");
+            bad++;
+        }
+
+        databox got = {{0}};
+        flexGetByType(flexHead(pushed), &got);
+        if (got.type != DATABOX_FLOAT_32 || got.data.f32 != 7.0f) {
+            printf("  head reads back type %d value %f\n", got.type,
+                   (double)got.data.f32);
+            bad++;
+        }
+
+        flexGetByType(flexIndex(pushed, 1), &got);
+        if (got.type != DATABOX_FLOAT_32 || got.data.f32 != 1.5f) {
+            printf("  first tail value reads back %f\n", (double)got.data.f32);
+            bad++;
+        }
+
+        if (bad) {
+            assert(NULL && "flexPushFloatB16 mismatch");
         }
         printf("  SUCCESS\n\n");
     }
