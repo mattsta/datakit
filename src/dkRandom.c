@@ -382,6 +382,41 @@ int dkRandomTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("dkRandomBounded is exactly uniform where rejection matters") {
+        /* bound = 0xAAAAAAAAAAAAAAAB is about 2^64 / 1.5, so without
+         * rejection the multiply-shift maps one source value to some
+         * results and two to others, alternating with the result's
+         * parity: odd results would come out about 1/3 of the time, not
+         * 1/2.  Rejection discards about 1/3 of draws to remove that.
+         * Over 4096 draws the odd share must lie in [0.40, 0.60]
+         * (Hoeffding false-failure bound 2e^-81.92, about 4e-36; the
+         * no-rejection share sits about 20 sd below the band). */
+        const uint64_t bound = UINT64_C(0xAAAAAAAAAAAAAAAB);
+        const uint64_t draws = 4096;
+        const uint64_t lowest = draws * 2 / 5;
+        const uint64_t highest = draws * 3 / 5;
+
+        uint64_t odd = 0;
+        for (uint64_t d = 0; d < draws; d++) {
+            const uint64_t v = dkRandomBounded(bound);
+
+            if (v >= bound) {
+                ERR("dkRandomBounded(0x%016" PRIx64 ") returned 0x%016" PRIx64,
+                    bound, v);
+                break;
+            }
+
+            odd += v & UINT64_C(1);
+        }
+
+        if (odd < lowest || odd > highest) {
+            ERR("dkRandomBounded(0x%016" PRIx64 ") gave %" PRIu64 " odd "
+                "results in %" PRIu64 " draws, outside [%" PRIu64 ", %" PRIu64
+                "]",
+                bound, odd, draws, lowest, highest);
+        }
+    }
+
     TEST("a forked child does not repeat the parent's next word") {
         /* At a block boundary both sides refill, and the child's refill
          * re-keys because the state was seeded with the real pid.  In
