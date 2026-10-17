@@ -725,9 +725,9 @@ static flex *hkrBuildSnapshotFlex(const hmacKeyring *ring) {
                          FLEX_ENDPOINT_TAIL);
         flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
         /* Final entry must be a bytes record to match the per-slot record
-         * shape so Restore's record-length math stays uniform. One
-         * harmless marker byte (0xFF) — zero-length bytes interacts
-         * poorly with flexGetByTypeCopy's allocator path. */
+         * shape so Restore's record-length math stays uniform. It holds
+         * one harmless marker byte (0xFF), and Restore requires exactly
+         * one byte. */
         static const uint8_t marker = 0xFFu;
         flexPushBytes(&f, &marker, 1, FLEX_ENDPOINT_TAIL);
     }
@@ -798,6 +798,36 @@ typedef struct hkrRestoreUndoLog {
     size_t count;
 } hkrRestoreUndoLog;
 
+/* Restore's field decoders.  flexGetByTypeBig never reads the box's
+ * prior state and gives it its own storage for a wide value, so a
+ * crafted entry cannot steer a write.  No snapshot field can hold a
+ * 96/128-bit value: anything other than the expected type is refused.
+ *
+ * hkrReadBytes borrows from 'fe', so the result is valid only while the
+ * snapshot buffer is.  Borrowing also keeps raw key bytes from being
+ * copied to the heap. */
+static bool hkrReadU64(const flexEntry *fe, uint64_t *out) {
+    databoxBig box;
+    flexGetByTypeBig(fe, &box);
+    if (box.type != DATABOX_UNSIGNED_64) {
+        return false;
+    }
+    *out = box.data.u64;
+    return true;
+}
+
+static bool hkrReadBytes(const flexEntry *fe, const uint8_t **start,
+                         size_t *len) {
+    databoxBig box;
+    flexGetByTypeBig(fe, &box);
+    if (box.type != DATABOX_BYTES) {
+        return false;
+    }
+    *start = box.data.bytes.start;
+    *len = box.len;
+    return true;
+}
+
 bool hmacKeyringRestore(hmacKeyring *ring, const uint8_t *buf, size_t len) {
     if (ring == NULL || buf == NULL) {
         return false;
@@ -833,23 +863,21 @@ bool hmacKeyringRestore(hmacKeyring *ring, const uint8_t *buf, size_t len) {
      * they match the sentinel pattern, read entries 3..5 and skip to
      * the next record. If they DON'T, the per-slot loop below will
      * re-walk those two entries via the regular id/algo decoders — which
-     * is correct only if our peek didn't advance the iterator. The flex
-     * API gives us flexGetByTypeCopy which is read-only, so the iterator
-     * stays put until we explicitly call flexNext. */
+     * is correct only if our peek didn't advance the iterator. Decoding
+     * an entry is read-only, so the iterator stays put until we
+     * explicitly call flexNext. */
     if (records > 0 && fe != NULL) {
-        databox peek_id;
-        flexGetByTypeCopy(fe, &peek_id);
-        if (peek_id.type == DATABOX_UNSIGNED_64 && peek_id.data.u64 == 0u) {
+        uint64_t peek_id = 0;
+        if (hkrReadU64(fe, &peek_id) && peek_id == 0u) {
             /* id == 0 means either (a) sentinel or (b) malformed slot.
              * Disambiguate via the algo tag in entry 2. */
             flexEntry *fe_algo = flexNext(f, fe);
             if (fe_algo == NULL) {
                 return false;
             }
-            databox peek_algo;
-            flexGetByTypeCopy(fe_algo, &peek_algo);
-            if (peek_algo.type != DATABOX_UNSIGNED_64 ||
-                peek_algo.data.u64 != HMAC_KEYRING_ALGO_TAG_FLOOR) {
+            uint64_t peek_algo = 0;
+            if (!hkrReadU64(fe_algo, &peek_algo) ||
+                peek_algo != HMAC_KEYRING_ALGO_TAG_FLOOR) {
                 /* id == 0 with a real-algo tag is a malformed slot.
                  * Reject up front rather than letting the per-slot loop
                  * trip on the same id == 0 check. */
@@ -860,38 +888,29 @@ bool hmacKeyringRestore(hmacKeyring *ring, const uint8_t *buf, size_t len) {
             if (fe_floor == NULL) {
                 return false;
             }
-            databox box_floor;
-            flexGetByTypeCopy(fe_floor, &box_floor);
-            if (box_floor.type != DATABOX_UNSIGNED_64 ||
-                box_floor.data.u64 > UINT32_MAX) {
+            uint64_t floor_id = 0;
+            if (!hkrReadU64(fe_floor, &floor_id) || floor_id > UINT32_MAX) {
                 return false;
             }
-            parsed_floor = (hmacKeyId)box_floor.data.u64;
+            parsed_floor = (hmacKeyId)floor_id;
             have_floor_sentinel = true;
 
             flexEntry *fe_pad1 = flexNext(f, fe_floor);
             if (fe_pad1 == NULL) {
                 return false;
             }
-            databox box_pad1;
-            flexGetByTypeCopy(fe_pad1, &box_pad1);
-            if (box_pad1.type != DATABOX_UNSIGNED_64) {
+            uint64_t pad1 = 0;
+            if (!hkrReadU64(fe_pad1, &pad1)) {
                 return false;
             }
             flexEntry *fe_pad2 = flexNext(f, fe_pad1);
             if (fe_pad2 == NULL) {
                 return false;
             }
-            databox box_pad2;
-            flexGetByTypeCopy(fe_pad2, &box_pad2);
-            if (!DATABOX_IS_BYTES(&box_pad2) || box_pad2.len != 1u) {
-                if (box_pad2.allocated) {
-                    zfree(box_pad2.data.bytes.start);
-                }
+            const uint8_t *pad2 = NULL;
+            size_t pad2_len = 0;
+            if (!hkrReadBytes(fe_pad2, &pad2, &pad2_len) || pad2_len != 1u) {
                 return false;
-            }
-            if (box_pad2.allocated) {
-                zfree(box_pad2.data.bytes.start);
             }
             /* Advance the iterator past the sentinel and decrement the
              * slot count we still have to consume. */
@@ -906,25 +925,22 @@ bool hmacKeyringRestore(hmacKeyring *ring, const uint8_t *buf, size_t len) {
         }
 
         /* Entry 1: id (unsigned). */
-        databox box_id;
-        flexGetByTypeCopy(fe, &box_id);
-        if (box_id.type != DATABOX_UNSIGNED_64 ||
-            box_id.data.u64 > UINT32_MAX || box_id.data.u64 == 0) {
+        uint64_t raw_id = 0;
+        if (!hkrReadU64(fe, &raw_id) || raw_id > UINT32_MAX || raw_id == 0) {
             goto rollback;
         }
-        const hmacKeyId id = (hmacKeyId)box_id.data.u64;
+        const hmacKeyId id = (hmacKeyId)raw_id;
         fe = flexNext(f, fe);
         if (fe == NULL) {
             goto rollback;
         }
 
         /* Entry 2: algo tag (unsigned). */
-        databox box_algo;
-        flexGetByTypeCopy(fe, &box_algo);
-        if (box_algo.type != DATABOX_UNSIGNED_64) {
+        uint64_t tag = 0;
+        if (!hkrReadU64(fe, &tag)) {
             goto rollback;
         }
-        const hmacHashAlgo *algo = hkrTagToAlgo(box_algo.data.u64);
+        const hmacHashAlgo *algo = hkrTagToAlgo(tag);
         if (algo == NULL) {
             goto rollback;
         }
@@ -934,49 +950,38 @@ bool hmacKeyringRestore(hmacKeyring *ring, const uint8_t *buf, size_t len) {
         }
 
         /* Entry 3: salt (bytes, exactly 4). */
-        databox box_salt;
-        flexGetByTypeCopy(fe, &box_salt);
-        if (!DATABOX_IS_BYTES(&box_salt) || box_salt.len != 4) {
-            if (box_salt.allocated) {
-                zfree(box_salt.data.bytes.start);
-            }
+        const uint8_t *salt_bytes = NULL;
+        size_t salt_len = 0;
+        if (!hkrReadBytes(fe, &salt_bytes, &salt_len) || salt_len != 4) {
             goto rollback;
         }
         uint8_t salt[4];
-        memcpy(salt, box_salt.data.bytes.start, 4);
-        if (box_salt.allocated) {
-            zfree(box_salt.data.bytes.start);
-        }
+        memcpy(salt, salt_bytes, 4);
         fe = flexNext(f, fe);
         if (fe == NULL) {
             goto rollback;
         }
 
         /* Entry 4: counter (unsigned). */
-        databox box_ctr;
-        flexGetByTypeCopy(fe, &box_ctr);
-        if (box_ctr.type != DATABOX_UNSIGNED_64) {
+        uint64_t counter = 0;
+        if (!hkrReadU64(fe, &counter)) {
             goto rollback;
         }
-        const uint64_t counter = box_ctr.data.u64;
         fe = flexNext(f, fe);
         if (fe == NULL) {
             goto rollback;
         }
 
         /* Entry 5: key bytes. */
-        databox box_key;
-        flexGetByTypeCopy(fe, &box_key);
-        if (!DATABOX_IS_BYTES(&box_key) || box_key.len == 0 ||
-            box_key.len > HMAC_KEYRING_MAX_KEY_BYTES) {
+        const uint8_t *key_bytes = NULL;
+        size_t key_len = 0;
+        if (!hkrReadBytes(fe, &key_bytes, &key_len) || key_len == 0 ||
+            key_len > HMAC_KEYRING_MAX_KEY_BYTES) {
             /* Reject oversized keys explicitly. A tampered snapshot with
-             * box_key.len in the GiB range would otherwise drive a
+             * key_len in the GiB range would otherwise drive a
              * downstream Install allocation. The cap is the same one
              * the in-memory Install path enforces, so this is symmetric
              * not redundant. */
-            if (box_key.allocated) {
-                zfree(box_key.data.bytes.start);
-            }
             goto rollback;
         }
         /* Snapshot wire format predates the explicit unsalted-vs-salted
@@ -989,14 +994,11 @@ bool hmacKeyringRestore(hmacKeyring *ring, const uint8_t *buf, size_t len) {
          * fail-closed all-zero-salt-rejection contract landed. */
         bool installed;
         if (hmacKeyringSaltIsZero(salt)) {
-            installed = hmacKeyringInstallUnsalted(
-                ring, id, algo, box_key.data.bytes.start, box_key.len);
+            installed =
+                hmacKeyringInstallUnsalted(ring, id, algo, key_bytes, key_len);
         } else {
-            installed = hmacKeyringInstall(
-                ring, id, algo, box_key.data.bytes.start, box_key.len, salt);
-        }
-        if (box_key.allocated) {
-            zfree(box_key.data.bytes.start);
+            installed =
+                hmacKeyringInstall(ring, id, algo, key_bytes, key_len, salt);
         }
         if (!installed) {
             goto rollback;
@@ -1185,10 +1187,109 @@ static void *hmacKeyringMtWorker(void *arg) {
 
 #include <pthread.h>
 
+/* Fill the stack below the caller with 0xFF so a decoder that reads an
+ * uninitialized box sees big = 1 and an all-ones pointer.  ASan is off
+ * here so the array is not framed by redzones, which would leave the
+ * top of the next frame unpoisoned. */
+static __attribute__((noinline, no_sanitize("address"))) void
+hkrTestPoisonStack(void) {
+    volatile uint8_t junk[8192];
+    for (size_t i = 0; i < sizeof(junk); i++) {
+        junk[i] = 0xFF;
+    }
+}
+
+/* Copy of 'src' with entry 'idx' replaced by 'wide' (a SIZE_MAX index
+ * copies every entry unchanged). */
+static flex *hkrTestReplaceEntry(const flex *src, size_t idx,
+                                 const databoxBig *wide) {
+    /* @own: caller; free=flexFree */
+    flex *out = flexNew();
+    size_t i = 0;
+    for (flexEntry *fe = flexHead(src); fe != NULL; fe = flexNext(src, fe)) {
+        databoxBig box;
+        flexGetByTypeBig(fe, &box);
+        const databox *push =
+            (i == idx) ? (const databox *)wide : (const databox *)&box;
+        flexPushByType(&out, push, FLEX_ENDPOINT_TAIL);
+        i++;
+    }
+    return out;
+}
+
 int hmacKeyringTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int err = 0;
+
+    TEST("snapshot/restore: a 96/128-bit value in any field is refused") {
+        /* A floor sentinel plus a salted and an unsalted slot, so every
+         * field Restore decodes is covered: 15 entries. */
+        hmacKeyring *ring = hmacKeyringCreate();
+        const uint8_t key[16] = {0x5A, 0x5A, 0x5A, 0x01};
+        const uint8_t salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {0x0A, 0x0B, 0x0C,
+                                                            0x0D};
+        hmacKeyringSetMinValidKeyId(ring, 5u);
+        hmacKeyringInstall(ring, 10u, &hmacAlgoSHA256, key, sizeof(key), salt);
+        hmacKeyringInstallUnsalted(ring, 11u, &hmacAlgoBLAKE3, key,
+                                   sizeof(key));
+        hmacKeyringRestoreAeadCounter(ring, 10u, 77u);
+        const size_t sz = hmacKeyringSnapshotSize(ring);
+        cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(sz);
+        size_t written = 0;
+        if (!hmacKeyringSnapshot(ring, buf, sz, &written)) {
+            ERRR("snapshot failed");
+        }
+        hmacKeyringFree(ring);
+        const flex *src = (const flex *)buf;
+        const size_t entries = flexCount(src);
+        if (entries != 3u * HMAC_KEYRING_ENTRIES_PER_SLOT) {
+            ERR("snapshot has %zu entries, expected 15", entries);
+        }
+
+        databoxBig wides[3];
+        DATABOX_BIG_UNSIGNED_128(&wides[0], (__uint128_t)1 << 64);
+        DATABOX_BIG_UNSIGNED_128(&wides[1], ((__uint128_t)1 << 127) | 1u);
+        DATABOX_BIG_SIGNED_128(&wides[2], -((__int128_t)1 << 100));
+
+        /* The rebuild itself must restore, so a refusal below is due to
+         * the replaced field alone. */
+        {
+            cleaner(flexFree) flex *same =
+                hkrTestReplaceEntry(src, SIZE_MAX, NULL);
+            hmacKeyring *dst = hmacKeyringCreate();
+            hkrTestPoisonStack();
+            if (!hmacKeyringRestore(dst, same, flexBytes(same)) ||
+                hmacKeyringSize(dst) != 2u ||
+                hmacKeyringMinValidKeyId(dst) != 5u) {
+                ERRR("unmodified rebuild did not restore");
+            }
+            hmacKeyringFree(dst);
+        }
+
+        for (size_t w = 0; w < 3; w++) {
+            for (size_t idx = 0; idx < entries; idx++) {
+                cleaner(flexFree) flex *bad =
+                    hkrTestReplaceEntry(src, idx, &wides[w]);
+                databoxBig check;
+                flexGetByTypeBig(flexIndex(bad, (int32_t)idx), &check);
+                if (!check.big) {
+                    ERR("value %zu at entry %zu was not stored wide", w, idx);
+                }
+                hmacKeyring *dst = hmacKeyringCreate();
+                hkrTestPoisonStack();
+                if (hmacKeyringRestore(dst, bad, flexBytes(bad))) {
+                    ERR("value %zu at entry %zu was accepted", w, idx);
+                }
+                /* Refusal rolls back: nothing installed, no floor. */
+                if (hmacKeyringSize(dst) != 0u ||
+                    hmacKeyringMinValidKeyId(dst) != HMAC_KEY_ID_INVALID) {
+                    ERR("value %zu at entry %zu left partial state", w, idx);
+                }
+                hmacKeyringFree(dst);
+            }
+        }
+    }
 
     TEST("create + free roundtrip on empty keyring") {
         hmacKeyring *ring = hmacKeyringCreate();

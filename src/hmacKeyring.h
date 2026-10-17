@@ -541,7 +541,7 @@ bool hmacKeyringRestoreAeadCounter(hmacKeyring *ring, hmacKeyId id,
  * 2. algo tag (unsigned: HMAC_KEYRING_ALGO_TAG_FLOOR == 0xFF)
  * 3. floor key id (unsigned)
  * 4. padding (unsigned 0)
- * 5. padding (bytes len 0)
+ * 5. padding (bytes, exactly 1: a 0xFF marker)
  *
  * Per-installed-slot encoding (five sequential flex entries):
  *
@@ -577,8 +577,10 @@ bool hmacKeyringSnapshot(const hmacKeyring *ring, uint8_t *out, size_t out_cap,
                          size_t *out_written);
 
 /* Reload installed keys from a flex-encoded snapshot buffer. Returns
- * false on malformed flex framing, unknown algo tag, or duplicate id
- * collision with an already-present entry. Successful restore installs
+ * false on malformed flex framing, a field of the wrong type (every
+ * integer field must be a 64-bit unsigned value, so a 96/128-bit entry
+ * is refused), unknown algo tag, or duplicate id collision with an
+ * already-present entry. Successful restore installs
  * every record atomically — a mid-way failure rolls back so the
  * keyring is left exactly as it was. */
 bool hmacKeyringRestore(hmacKeyring *ring, const uint8_t *buf, size_t len);
