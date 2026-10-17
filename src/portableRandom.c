@@ -253,6 +253,43 @@ uint64_t portableRandom64(portableRandomState *r) {
     return val;
 }
 
+/* Words generated per pid check and budget charge in
+ * portableRandomFill64.  Far below the refuel budget, so a fill never
+ * emits more than DK_PR_REFUEL_BYTES under one key. */
+#define DK_PR_FILL_CHUNK_WORDS 256
+
+void portableRandomFill64(portableRandomState *r, uint64_t *out, size_t count) {
+    while (count > 0) {
+        const size_t words =
+            count < DK_PR_FILL_CHUNK_WORDS ? count : DK_PR_FILL_CHUNK_WORDS;
+        const int64_t charge = (int64_t)(words * sizeof(*out));
+
+        pid_t pid = r->pid;
+        bool newPid = false;
+        if (pid != -1) {
+            pid = getpid();
+            newPid = pid != r->pid;
+        }
+
+        /* Re-key before generating if this chunk would exhaust the
+         * budget, then charge the chunk to the new key. */
+        r->remainingBytesBeforeRefuel -= charge;
+        if (r->remainingBytesBeforeRefuel <= 0 || newPid) {
+            portableRandom_stir(r, pid);
+            r->remainingBytesBeforeRefuel -= charge;
+        }
+
+        for (size_t w = 0; w < words; w++) {
+            uint64_t val;
+            genWidth(val);
+            out[w] = val;
+        }
+
+        out += words;
+        count -= words;
+    }
+}
+
 #ifdef DATAKIT_TEST
 #include "cleaner.h"
 #include "ctest.h"
@@ -261,10 +298,25 @@ uint64_t portableRandom64(portableRandomState *r) {
 
 defcleanerName(uint8_t *, zfree, Bytes);
 
+/* Draw one word through portableRandom64, or through a one-word
+ * portableRandomFill64 if 'fill'. */
+static uint64_t portableRandomTestDraw(portableRandomState *r,
+                                       const bool fill) {
+    if (fill) {
+        uint64_t word = 0;
+        portableRandomFill64(r, &word, 1);
+        return word;
+    }
+
+    return portableRandom64(r);
+}
+
 /* Fork; draw one word from 'r' in the child (sent back over a pipe) and
- * one in the parent.  Returns false if pipe/fork/read failed.  The child
- * _exits so it runs no atexit or sanitizer handlers. */
+ * one in the parent, through portableRandomFill64 if 'fill'.  Returns
+ * false if pipe/fork/read failed.  The child _exits so it runs no atexit
+ * or sanitizer handlers. */
 static bool portableRandomTestForkedNextWord(portableRandomState *r,
+                                             const bool fill,
                                              uint64_t *childWord,
                                              uint64_t *parentWord) {
     int fds[2];
@@ -281,14 +333,14 @@ static bool portableRandomTestForkedNextWord(portableRandomState *r,
 
     if (kid == 0) {
         (void)close(fds[0]);
-        const uint64_t word = portableRandom64(r);
+        const uint64_t word = portableRandomTestDraw(r, fill);
         const ssize_t wrote = write(fds[1], &word, sizeof(word));
         (void)close(fds[1]);
         _exit(wrote == (ssize_t)sizeof(word) ? 0 : 1);
     }
 
     (void)close(fds[1]);
-    *parentWord = portableRandom64(r);
+    *parentWord = portableRandomTestDraw(r, fill);
 
     uint64_t got = 0;
     size_t have = 0;
@@ -323,6 +375,16 @@ static bool portableRandomTestAllZero(const uint8_t *buf, size_t len) {
     }
 
     return true;
+}
+
+/* Copy 'r' into 'frozen' with its fork check off and a budget so large
+ * that it never re-keys: 'frozen' then continues r's current key
+ * stream, which a re-keyed 'r' must leave. */
+static void portableRandomTestFreeze(const portableRandomState *r,
+                                     portableRandomState *frozen) {
+    *frozen = *r;
+    frozen->pid = -1;
+    frozen->remainingBytesBeforeRefuel = INT64_MAX / 2;
 }
 
 int portableRandomTest(int argc, char *argv[]) {
@@ -396,6 +458,131 @@ int portableRandomTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("portableRandomFill64 returns portableRandom64's words") {
+        /* Two frozen copies of one state: a 300-word fill (two chunks)
+         * from one must equal 300 portableRandom64 draws from the
+         * other. */
+        portableRandomState r;
+        portableRandom_init(&r, getpid());
+        (void)portableRandom64(&r);
+
+        portableRandomState byFill;
+        portableRandomState byWord;
+        portableRandomTestFreeze(&r, &byFill);
+        portableRandomTestFreeze(&r, &byWord);
+
+        uint64_t filled[300];
+        portableRandomFill64(&byFill, filled, COUNT_ARRAY(filled));
+
+        for (size_t w = 0; w < COUNT_ARRAY(filled); w++) {
+            const uint64_t want = portableRandom64(&byWord);
+            if (filled[w] != want) {
+                ERR("fill word %zu is 0x%016" PRIx64 ", not 0x%016" PRIx64, w,
+                    filled[w], want);
+                break;
+            }
+        }
+    }
+
+    TEST("portableRandomFill64 charges eight bytes per word") {
+        /* A 64-word fill charges 512 bytes and a 300-word fill 2400,
+         * whatever the chunking. */
+        portableRandomState r;
+        portableRandom_init(&r, getpid());
+        (void)portableRandom64(&r); /* budget := DK_PR_REFUEL_BYTES */
+
+        uint64_t out[300];
+        portableRandomFill64(&r, out, 64);
+        int64_t want = (int64_t)DK_PR_REFUEL_BYTES - 64 * 8;
+        if (r.remainingBytesBeforeRefuel != want) {
+            ERR("after a 64-word fill the budget is %" PRId64 ", not "
+                "%" PRId64,
+                (int64_t)r.remainingBytesBeforeRefuel, want);
+        }
+
+        portableRandomFill64(&r, out, COUNT_ARRAY(out));
+        want -= (int64_t)(COUNT_ARRAY(out) * 8);
+        if (r.remainingBytesBeforeRefuel != want) {
+            ERR("after a 300-word fill the budget is %" PRId64 ", not "
+                "%" PRId64,
+                (int64_t)r.remainingBytesBeforeRefuel, want);
+        }
+
+        /* A zero-word fill charges nothing and writes nothing. */
+        out[0] = 0x5A;
+        portableRandomFill64(&r, out, 0);
+        if (r.remainingBytesBeforeRefuel != want || out[0] != 0x5A) {
+            ERRR("a zero-word fill changed the budget or the output");
+        }
+    }
+
+    TEST("portableRandomFill64 re-keys before a chunk that exhausts the "
+         "budget") {
+        /* With room for the chunk plus one word, the fill stays on the
+         * old key (it matches a frozen copy).  With room for one word
+         * less than the chunk, it re-keys first: its first word leaves
+         * the frozen stream (false-positive 2^-64) and the new budget is
+         * charged for the whole chunk. */
+        const int64_t chunkBytes = 64 * (int64_t)sizeof(uint64_t);
+        const int64_t slack[] = {(int64_t)sizeof(uint64_t),
+                                 -(int64_t)sizeof(uint64_t)};
+
+        for (size_t c = 0; c < COUNT_ARRAY(slack); c++) {
+            const bool rekeys = slack[c] < 0;
+            portableRandomState r;
+            portableRandom_init(&r, getpid());
+            (void)portableRandom64(&r);
+            r.remainingBytesBeforeRefuel = chunkBytes + slack[c];
+
+            portableRandomState frozen;
+            portableRandomTestFreeze(&r, &frozen);
+
+            uint64_t got[64];
+            uint64_t old[64];
+            portableRandomFill64(&r, got, COUNT_ARRAY(got));
+            portableRandomFill64(&frozen, old, COUNT_ARRAY(old));
+
+            const int64_t want =
+                rekeys ? (int64_t)DK_PR_REFUEL_BYTES - chunkBytes : slack[c];
+            if (r.remainingBytesBeforeRefuel != want) {
+                ERR("slack %" PRId64 ": the budget is %" PRId64 ", not "
+                    "%" PRId64,
+                    slack[c], (int64_t)r.remainingBytesBeforeRefuel, want);
+            }
+
+            if (rekeys && got[0] == old[0]) {
+                ERRR("a fill that exhausts the budget generated its first "
+                     "word from the old key");
+            }
+
+            if (!rekeys && memcmp(got, old, sizeof(got)) != 0) {
+                ERRR("a fill within the budget left the old key stream");
+            }
+        }
+    }
+
+    TEST("a fill larger than the budget re-keys within the fill") {
+        /* Two and a bit refuel intervals of words in one call.  The fill
+         * must re-key as it goes, so the budget ends positive and no key
+         * emitted more than DK_PR_REFUEL_BYTES. */
+        const size_t words =
+            2 * ((size_t)DK_PR_REFUEL_BYTES / sizeof(uint64_t)) + 5;
+        cleanerName(zfree, Bytes) uint8_t *buf =
+            zcalloc(words, sizeof(uint64_t));
+
+        portableRandomState r;
+        portableRandom_init(&r, getpid());
+        portableRandomFill64(&r, (uint64_t *)buf, words);
+
+        if (r.remainingBytesBeforeRefuel <= 0 ||
+            r.remainingBytesBeforeRefuel > (int64_t)DK_PR_REFUEL_BYTES) {
+            ERR("after a %zu-word fill the budget is %" PRId64
+                ", outside (0, %" PRIu64 "]",
+                words, (int64_t)r.remainingBytesBeforeRefuel,
+                (uint64_t)DK_PR_REFUEL_BYTES);
+        }
+    }
+
     TEST("portableRandomDirectFull fills every byte it is asked for") {
         /* Each fill must succeed, write exactly the requested length
          * (the guard bytes after it stay untouched), not be all zero,
@@ -462,21 +649,26 @@ int portableRandomTest(int argc, char *argv[]) {
 
     TEST("a real pid makes a forked child's next word differ") {
         /* With a real pid, a forked child re-keys, so its next word
-         * differs from the parent's (false-positive 2^-64).  The initial
-         * stir runs before the fork so neither side crosses a refuel
-         * edge. */
-        portableRandomState r;
-        portableRandom_init(&r, getpid());
-        (void)portableRandom64(&r);
+         * differs from the parent's (false-positive 2^-64), whether it
+         * is drawn by portableRandom64 or by portableRandomFill64.  The
+         * initial stir runs before the fork so neither side crosses a
+         * refuel edge. */
+        for (uint32_t c = 0; c < 2; c++) {
+            const bool fill = c == 1;
+            portableRandomState r;
+            portableRandom_init(&r, getpid());
+            (void)portableRandom64(&r);
 
-        uint64_t childWord = 0;
-        uint64_t parentWord = 0;
-        if (!portableRandomTestForkedNextWord(&r, &childWord, &parentWord)) {
-            ERRR("the fork probe could not run (pipe/fork/read failed)");
-        } else if (childWord == parentWord) {
-            ERR("a forked child drew 0x%016" PRIx64 ", the same word as "
-                "the parent",
-                childWord);
+            uint64_t childWord = 0;
+            uint64_t parentWord = 0;
+            if (!portableRandomTestForkedNextWord(&r, fill, &childWord,
+                                                  &parentWord)) {
+                ERRR("the fork probe could not run (pipe/fork/read failed)");
+            } else if (childWord == parentWord) {
+                ERR("%s: a forked child drew 0x%016" PRIx64 ", the same "
+                    "word as the parent",
+                    fill ? "fill" : "word", childWord);
+            }
         }
     }
 
@@ -489,7 +681,8 @@ int portableRandomTest(int argc, char *argv[]) {
 
         uint64_t childWord = 0;
         uint64_t parentWord = 0;
-        if (!portableRandomTestForkedNextWord(&r, &childWord, &parentWord)) {
+        if (!portableRandomTestForkedNextWord(&r, false, &childWord,
+                                              &parentWord)) {
             ERRR("the fork probe could not run (pipe/fork/read failed)");
         } else if (childWord != parentWord) {
             ERR("with pid -1 a forked child drew 0x%016" PRIx64 " and the "

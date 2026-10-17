@@ -5,12 +5,14 @@
 #include <stdbool.h>
 #include <unistd.h>
 
+#include "datakit.h"
 #include "portableRandom.h"
 
 /* Words generated per refill.  Each drawing thread carries this block
- * (512 bytes) beside its portableRandomState.  A refill amortises the
- * call overhead of a draw; portableRandom still charges its refuel
- * budget and checks the pid per word generated. */
+ * (512 bytes) beside its portableRandomState.  A refill is one
+ * portableRandomFill64 call, so the pid check (a syscall on libcs that
+ * do not cache the pid) and the refuel budget charge run once per block
+ * rather than once per word, and a draw is a TLS read. */
 #define DK_RANDOM_BLOCK_WORDS 64
 
 /* Count of dkRandomBounded(0) calls; relaxed, nothing orders against
@@ -35,41 +37,54 @@ static void dkRandomForkHandlerRegister(void) {
     (void)pthread_atfork(NULL, NULL, dkRandomForkChild);
 }
 
-/* Per-thread generator and output block.  blockUsed starts full so a
- * thread's first draw refills. */
-static _Thread_local portableRandomState prs;
-static _Thread_local uint64_t block[DK_RANDOM_BLOCK_WORDS];
-static _Thread_local uint32_t blockUsed = DK_RANDOM_BLOCK_WORDS;
-static _Thread_local uint64_t blockGeneration;
-static _Thread_local bool seeded;
+/* Per-thread generator and output block, in one struct so a draw
+ * resolves one TLS address (on Darwin each _Thread_local variable is
+ * its own thunk call).  The fields a draw reads come first.  blockUsed
+ * starts full so a thread's first draw refills. */
+typedef struct dkRandomThread {
+    uint32_t blockUsed;
+    bool seeded;
+    uint64_t blockGeneration;
+    uint64_t block[DK_RANDOM_BLOCK_WORDS];
+    portableRandomState prs;
+} dkRandomThread;
 
-uint64_t dkRandom64(void) {
-    if (!seeded) {
+static _Thread_local dkRandomThread dkRandomTls = {.blockUsed =
+                                                       DK_RANDOM_BLOCK_WORDS};
+
+/* Out of line so the draw path stays a load, a compare and a return. */
+__attribute__((noinline)) static void
+dkRandomRefill(dkRandomThread *const t, const uint64_t generation) {
+    if (!t->seeded) {
         /* Seed with the real pid, never -1: portableRandom skips its
          * fork check for a state initialised with -1, and that check is
          * what re-keys a forked child.  portableRandom_init keys from
-         * the OS and leaves the refuel budget at 0, so the first draw
+         * the OS and leaves the refuel budget at 0, so the first fill
          * also runs a full portableRandom_stir. */
         (void)pthread_once(&forkHandlerOnce, dkRandomForkHandlerRegister);
-        portableRandom_init(&prs, getpid());
-        seeded = true;
+        portableRandom_init(&t->prs, getpid());
+        t->seeded = true;
     }
 
+    /* One fill: one pid check and one budget charge for the whole
+     * block.  After a fork, that pid check re-keys the state. */
+    portableRandomFill64(&t->prs, t->block, DK_RANDOM_BLOCK_WORDS);
+
+    t->blockUsed = 0;
+    t->blockGeneration = generation;
+}
+
+uint64_t dkRandom64(void) {
+    dkRandomThread *const t = &dkRandomTls;
     const uint64_t generation =
         atomic_load_explicit(&forkGeneration, memory_order_relaxed);
-    if (blockUsed == DK_RANDOM_BLOCK_WORDS || generation != blockGeneration) {
-        /* Refill one word at a time so the refuel budget is charged per
-         * word generated.  After a fork the first word's pid check
-         * re-keys the state. */
-        for (uint32_t w = 0; w < DK_RANDOM_BLOCK_WORDS; w++) {
-            block[w] = portableRandom64(&prs);
-        }
 
-        blockUsed = 0;
-        blockGeneration = generation;
+    if (unlikely(t->blockUsed == DK_RANDOM_BLOCK_WORDS ||
+                 generation != t->blockGeneration)) {
+        dkRandomRefill(t, generation);
     }
 
-    return block[blockUsed++];
+    return t->block[t->blockUsed++];
 }
 
 uint64_t dkRandomBounded(const uint64_t bound) {
@@ -120,7 +135,7 @@ uint64_t dkRandomZeroBoundTotal(void) {
  * (atBoundary) or reads the second word of a fresh block. */
 static void dkRandomTestPositionBlock(const bool atBoundary) {
     (void)dkRandom64(); /* seeds the thread on first use */
-    while (blockUsed != DK_RANDOM_BLOCK_WORDS) {
+    while (dkRandomTls.blockUsed != DK_RANDOM_BLOCK_WORDS) {
         (void)dkRandom64();
     }
 

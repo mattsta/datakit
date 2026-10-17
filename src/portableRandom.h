@@ -19,6 +19,13 @@ void portableRandom_add(portableRandomState *r, const uint8_t *key, size_t len);
 uint32_t portableRandom32(portableRandomState *r);
 uint64_t portableRandom64(portableRandomState *r);
 
+/* Write `count` words to `out`: the same words that `count` calls of
+ * portableRandom64 would return, but with one pid check and one budget
+ * charge per chunk of words rather than per word.  A chunk that would
+ * exhaust the refuel budget re-keys before it is generated, so no key
+ * ever emits more than DK_PR_REFUEL_BYTES. */
+void portableRandomFill64(portableRandomState *r, uint64_t *out, size_t count);
+
 /* Bytes emitted between OS re-keys; installed by portableRandom_stir.
  * Each draw charges the bytes it produces against it. */
 #define DK_PR_REFUEL_BYTES 100000
