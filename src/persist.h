@@ -385,7 +385,13 @@ struct persistOps {
     /* True when an empty instance of this type is not a meaningful
      * value, so an embedding application may delete a key when its last
      * element is removed.  Advisory: the persist layer does not read
-     * it. */
+     * it, and false only means the ops table gives no such advice, not
+     * that an empty instance must be kept.  Of the built-in tables,
+     * persistOpsIntsetBig, persistOpsMultimap, and persistOpsMultilist
+     * set it; every other built-in table leaves it false, so a
+     * consistent per-type policy (for example, treating intset like
+     * intsetBig) belongs to the embedding application.  The field's
+     * place in the struct, after applyOp, is part of the layout. */
     bool deletesWhenEmpty;
 
     /* ---- Optional Optimization Hooks ---- */
