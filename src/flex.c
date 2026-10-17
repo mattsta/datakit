@@ -1165,6 +1165,14 @@ DK_STATIC DK_FN_CONST flexEncoding flexEncodingSignedBig(__int128_t value) {
          * so we adjust all values by one. */
         const __uint128_t converted = DK_INT128_TO_UINT128(value) - 1;
 
+        /* A 64-bit negative encoding decodes into an int64_t, so it holds
+         * stored magnitudes up to INT64_MAX (values down to INT64_MIN).
+         * A value below INT64_MIN is wide and needs a wide encoding, even
+         * when its magnitude would fit 64 unsigned bits. */
+        if (converted > INT64_MAX && (converted >> 64) == 0) {
+            return FLEX_NEG_96B;
+        }
+
         /* To save us from having to compare 16 ranges, just:
          *   - turn negative number positive (unsigned)
          *   - compare in unsigned range
@@ -7049,12 +7057,14 @@ int32_t flexTest(int32_t argc, char **argv) {
             }
         }
         /* The 128-bit arm at the boundaries where a one-off width choice
-         * truncates: just past 2^64 and 2^96 in magnitude. */
+         * truncates: just past 2^64 and 2^96 in magnitude, and just below
+         * INT64_MIN, where the stored magnitude still fits 64 unsigned
+         * bits but the value does not fit an int64_t. */
         const __int128_t bigVals[] = {
-            -((__int128_t)1 << 64) - 1,
-            -((__int128_t)1 << 64) - 2,
-            -((__int128_t)1 << 96) - 1,
-            -((__int128_t)1 << 96) - 2,
+            -((__int128_t)1 << 64) - 1, -((__int128_t)1 << 64) - 2,
+            -((__int128_t)1 << 96) - 1, -((__int128_t)1 << 96) - 2,
+            -((__int128_t)1 << 63) - 1, -((__int128_t)1 << 63) - 2,
+            -((__int128_t)1 << 64) + 1, -((__int128_t)1 << 64),
         };
         for (size_t i = 0; i < sizeof(bigVals) / sizeof(bigVals[0]); i++) {
             cleaner(flexFree) flex *rt = flexNew();
@@ -7069,6 +7079,21 @@ int32_t flexTest(int32_t argc, char **argv) {
                 *out.data.i128 != bigVals[i]) {
                 printf("  FAIL: 128-bit value %zu read back as type %d\n", i,
                        (int)out.type);
+                bad++;
+            }
+
+            /* The multi-element writer chooses its width separately. */
+            const databox *row[1] = {(const databox *)&in};
+            cleaner(flexFree) flex *appended = flexNew();
+            flexAppendMultiple(&appended, 1, row);
+            databoxBig single;
+            if (!flexGetSingleDataboxBig(appended, flexBytes(appended),
+                                         &single) ||
+                single.type != DATABOX_SIGNED_128 ||
+                *single.data.i128 != bigVals[i]) {
+                printf("  FAIL: appended 128-bit value %zu read back as type "
+                       "%d\n",
+                       i, (int)single.type);
                 bad++;
             }
         }

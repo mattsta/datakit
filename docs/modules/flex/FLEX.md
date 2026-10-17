@@ -161,6 +161,10 @@ Notes that matter when reading flex bytes by hand:
   `FLEX_UINT_8B` and `-42` in `FLEX_NEG_8B`.
 - `FLEX_IS_INTEGER` covers 201-216 only; the 96/128-bit encodings are a
   separate `FLEX_IS_INTEGER_BIG` class and require a `databoxBig`.
+- A `FLEX_NEG_*` 64-bit-or-narrower encoding decodes into an `int64_t`, so
+  it holds values down to `INT64_MIN` only. A value below `INT64_MIN` is
+  stored as `FLEX_NEG_96B` or wider, even when its biased magnitude would
+  fit 64 unsigned bits, and reads back as `DATABOX_SIGNED_128`.
 - Immediate encodings occupy **one** byte total: there is no trailing
   reverse encoding to skip, because there is no payload between them.
 
