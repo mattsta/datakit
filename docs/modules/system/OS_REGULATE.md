@@ -161,7 +161,11 @@ OSRegulateReadyAwait OSRegulateReadyPipeAwaitMs(int readFd, uint64_t budgetMs);
 ```c
 /* Write PID to file and lock it
  * path: file path to write PID
- * Returns: true on success, false if already locked (another instance running)
+ * Returns: true on success, false if already locked (another instance
+ * running) or the file cannot be opened or written. The file is
+ * truncated only after the lock is taken, so a refused second instance
+ * leaves the running instance's pid intact. The locked descriptor is
+ * close-on-exec, so an exec'd child does not keep the lock alive.
  */
 bool OSRegulateWritePidToFile(const char *path);
 

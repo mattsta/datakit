@@ -878,10 +878,112 @@ static int dkTestDaemonizeReadyTest(int argc, char *argv[]) {
         }
     }
 
+    /* --- (7) the pidfile: a second instance is refused without
+     *         truncating the running instance's pid or leaking a
+     *         descriptor, and a successor rewrites a longer stale pid
+     *         exactly. */
+    {
+        char path[64];
+        snprintf(path, sizeof(path), "/tmp/dkTestPidFile.%d", (int)getpid());
+        (void)unlink(path);
+
+        int hold[2] = {-1, -1};
+        REXPECT(pipe(hold) == 0, "pipe for the pidfile owner");
+        cleaner(fdClose) int holdRead = hold[0];
+        cleaner(fdClose) int holdWrite = hold[1];
+        cleaner(fdClose) int lockedRead = -1;
+        cleaner(fdClose) int lockedWrite = -1;
+        REXPECT(OSRegulateReadyPipeNew(&lockedRead, &lockedWrite),
+                "readiness pair for the pidfile owner");
+
+        const pid_t owner = holdRead >= 0 && lockedRead >= 0 ? fork() : -1;
+        if (owner == 0) {
+            close(holdWrite);
+            close(lockedRead);
+            if (!OSRegulateWritePidToFile(path)) {
+                _exit(1);
+            }
+
+            OSRegulateReadyPipeSignal(&lockedWrite);
+            uint8_t discard;
+            while (read(holdRead, &discard, 1) > 0) {
+                /* The parent never writes. */
+            }
+            _exit(0);
+        }
+
+        REXPECT(owner > 0, "fork for the pidfile owner");
+        if (owner > 0) {
+            close(fdRelease(&holdRead));
+            close(fdRelease(&lockedWrite));
+            REXPECT(OSRegulateReadyPipeAwaitMs(lockedRead, kGenerousMs) ==
+                        OS_REGULATE_READY_AWAIT_READY,
+                    "owner wrote and locked the pidfile");
+
+            /* The lowest free descriptor number, before and after a
+             * refused write: a leaked descriptor takes it. */
+            const int probeBefore = dup(STDERR_FILENO);
+            close(probeBefore);
+            REXPECT(!OSRegulateWritePidToFile(path),
+                    "a second instance is refused while the lock is held");
+            const int probeAfter = dup(STDERR_FILENO);
+            close(probeAfter);
+            REXPECT(probeAfter == probeBefore,
+                    "a refused pidfile write leaks no descriptor");
+
+            char want[32];
+            snprintf(want, sizeof(want), "%d\n", (int)owner);
+            char got[32] = {0};
+            cleaner(fdClose) int readBack = open(path, O_RDONLY | O_CLOEXEC);
+            const ssize_t n =
+                readBack >= 0 ? read(readBack, got, sizeof(got) - 1) : -1;
+            REXPECT(n == (ssize_t)strlen(want) && memcmp(got, want, n) == 0,
+                    "a refused write leaves the owner's pid in the file");
+
+            close(fdRelease(&holdWrite));
+            int status = 0;
+            REXPECT(OSRegulateProcessAwaitExitMs(owner, kGenerousMs, &status) &&
+                        WIFEXITED(status) && WEXITSTATUS(status) == 0,
+                    "pidfile owner exited cleanly");
+        }
+
+        /* The owner is gone and its lock with it.  Leave a longer stale
+         * pid behind; the successor must replace it exactly. */
+        cleaner(fdClose) int stale = open(path, O_WRONLY | O_CLOEXEC);
+        REXPECT(stale >= 0 && write(stale, "99999999999\n", 12) == 12,
+                "stale pid written");
+
+        const pid_t successor = fork();
+        if (successor == 0) {
+            _exit(OSRegulateWritePidToFile(path) ? 0 : 1);
+        }
+
+        REXPECT(successor > 0, "fork for the pidfile successor");
+        if (successor > 0) {
+            int status = 0;
+            REXPECT(
+                OSRegulateProcessAwaitExitMs(successor, kGenerousMs, &status) &&
+                    WIFEXITED(status) && WEXITSTATUS(status) == 0,
+                "successor took the released lock");
+
+            char want[32];
+            snprintf(want, sizeof(want), "%d\n", (int)successor);
+            char got[32] = {0};
+            cleaner(fdClose) int readBack = open(path, O_RDONLY | O_CLOEXEC);
+            const ssize_t n =
+                readBack >= 0 ? read(readBack, got, sizeof(got) - 1) : -1;
+            REXPECT(n == (ssize_t)strlen(want) && memcmp(got, want, n) == 0,
+                    "successor's pid replaced the longer stale pid exactly");
+        }
+
+        (void)unlink(path);
+    }
+
 #undef REXPECT
     if (failures == 0) {
         printf("dkTestDaemonizeReady: OK (ready, writer gone, expired, "
-               "idempotent signal, stdio placement, daemonize end to end)\n");
+               "idempotent signal, stdio placement, daemonize end to end, "
+               "pidfile)\n");
     }
     return failures;
 }

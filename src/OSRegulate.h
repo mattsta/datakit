@@ -16,6 +16,12 @@ typedef enum OSRegulateDaemonizeStatus {
 
 /* Process */
 OSRegulateDaemonizeStatus OSRegulateDaemonize(const char **errMsg);
+
+/* Write this process's pid to `path` under an exclusive, non-blocking
+ * flock(), keeping the descriptor (close-on-exec) open for the life of
+ * the process so the lock is held.  Returns false, leaving the file
+ * untouched, when another process holds the lock (an instance is
+ * already running) or the file cannot be opened or written. */
 bool OSRegulateWritePidToFile(const char *path);
 void OSRegulateDaemonizeThenExitNoWait(void);
 void OSRegulateExitClean(void);

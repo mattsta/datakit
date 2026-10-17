@@ -308,25 +308,42 @@ void OSRegulateDaemonizeThenExitNoWait(void) {
 }
 
 bool OSRegulateWritePidToFile(const char *path) {
-    FILE *fp = fopen(path, "w");
-    if (fp) {
-        /* Lock the pid so we aren't running twice */
-        if (flock(fileno(fp), LOCK_EX | LOCK_NB) != 0) {
+    /* Open without truncating: the file may belong to a running instance,
+     * and only the lock holder may rewrite it.  Close-on-exec, so an
+     * exec'd child cannot keep the lock alive after this process exits. */
+    cleaner(fdClose) int fd = open(path, O_WRONLY | O_CREAT | O_CLOEXEC, 0644);
+    if (fd < 0) {
+        return false;
+    }
+
+    /* Lock the pid so we aren't running twice */
+    if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
+        return false;
+    }
+
+    char line[32];
+    const int len = snprintf(line, sizeof(line), "%d\n", (int)getpid());
+    if (len <= 0 || (size_t)len >= sizeof(line) || ftruncate(fd, 0) != 0) {
+        return false;
+    }
+
+    for (int written = 0; written < len;) {
+        const ssize_t n = write(fd, line + written, (size_t)(len - written));
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+
+        if (n <= 0) {
             return false;
         }
 
-        fprintf(fp, "%d\n", (int)getpid());
-        fflush(fp);
-
-#if 0
-        /* Don't close pid FD because we want to keep it locked */
-        fclose(fp);
-#endif
-
-        return true;
+        written += (int)n;
     }
 
-    return false;
+    /* The descriptor stays open for the life of the process: closing it
+     * would release the lock. */
+    (void)fdRelease(&fd);
+    return true;
 }
 
 void OSRegulateExitClean(void) {
