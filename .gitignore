@@ -20,3 +20,11 @@ CMakeFiles
 # Per-developer clangd LSP config (machine-specific SDK paths etc.).
 # Copy .clangd.sample to .clangd and customize; do not commit.
 .clangd
+
+# Upstream xxHash's test suite, CLI, fuzzers and CI configuration are
+# not vendored (datakit builds only the library); a local upstream
+# clone of deps/xxHash still has them on disk.
+/deps/xxHash/tests/
+/deps/xxHash/cli/
+/deps/xxHash/fuzz/
+/deps/xxHash/.github/

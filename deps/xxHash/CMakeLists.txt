@@ -27,10 +27,6 @@ add_definitions(
     # Note: can't build xxhash.c with this option.
     #    -DXXH_INLINE_ALL
 
-    # 0 = crash on null pointer
-    # 1 = null pointers return 0 value hash
-    -DXXH_ACCEPT_NULL_INPUT_POINTER=0
-
     # 0 = memcpy
     # 1 = __packed__
     # 2 = unaligned reads
