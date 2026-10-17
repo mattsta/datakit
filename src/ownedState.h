@@ -297,17 +297,22 @@ uint64_t ownedCellWriterViolationTotal(void);
 
 /* ---- ownedStateRow: per-name counters ---- */
 
-/* A declaration may point at a static row. The row is enrolled into a
+/* A declaration may point at a row. The row is enrolled into a
  * process-wide list on the primitive's first operation and never
  * removed, so ownedStateRowCount/ownedStateRowAt can enumerate every
- * declared name. Counters aggregate across all instances sharing a row,
- * and the counters are one shared cache line per row, so instances that
- * share a row contend for it under concurrent use.
+ * declared name; a row must therefore live for the rest of the process
+ * (static storage, or never freed). Counters aggregate across all
+ * instances sharing a row, and the counters are one shared cache line
+ * per row, so instances that share a row contend for it under
+ * concurrent use.
  *
  * Enrolment is lock-free: a CAS on `enrolled` elects one thread, which
  * writes name and kind and pushes the row with a release CAS. Later
- * calls are a single acquire load. ownedSlot and ownedSeq enrol their
- * own rows; the ARENA and CELL kinds are for rows a caller enrols. */
+ * calls are a single acquire load. A caller that loses the CAS returns
+ * at once, so under concurrent first use it can move a counter before
+ * the winner's push lands and a walk can briefly miss a row whose
+ * counters have moved. ownedSlot and ownedSeq enrol their own rows; the
+ * ARENA and CELL kinds are for rows a caller enrols. */
 typedef enum ownedStateKind {
     OWNED_ROW_ARENA = 0,
     OWNED_ROW_CELL,
@@ -468,8 +473,11 @@ uint64_t ownedSlotClaimRefusedTotal(const ownedSlotDecl *decl);
  * zeroed before any other thread can reach the instance. Destruct only
  * after all readers and writers are joined. An instance with zero
  * versions or no storage ignores publishes, reads OVERWRITTEN, moves no
- * counter and enrols no row. Stamps wrap after 2^62 publications
- * (unsigned, so defined). */
+ * counter and enrols no row. A stamp holds 4n, so behaviour is
+ * unspecified past 2^62 publications on one instance (about 146 years
+ * at one publication per nanosecond): the arithmetic wraps without
+ * undefined behaviour, but the stale-writer check and the reader's
+ * verdicts no longer hold. */
 
 typedef enum ownedSeqReadResult {
     OWNED_SEQ_VALID = 0,   /* dst holds all of publication `want` */

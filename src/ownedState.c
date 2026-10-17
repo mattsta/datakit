@@ -522,8 +522,11 @@ static void ownedSlotNote_(const ownedSlot *s, ownedSlotEvent event,
     }
 }
 
-/* Enrol on the first operation, so the row is listed before any counter
- * moves. */
+/* Enrol on every operation (a single acquire load once enrolled). On a
+ * single thread the row is listed before any counter moves. Under
+ * concurrent first use, a caller that loses the enrolment CAS returns at
+ * once and may move a counter before the winner's push lands, so a walk
+ * can briefly miss a row whose counters have moved. */
 static void ownedSlotEnrol_(const ownedSlot *s) {
     if (s->decl && s->decl->row) {
         ownedStateRowEnrol(s->decl->row, s->decl->name, OWNED_ROW_SLOT);
