@@ -31,10 +31,17 @@
 #ifndef XXH_INLINE_ALL
 #define XXH_INLINE_ALL
 #endif
+/* xxhash's XXH_malloc/XXH_free wrappers call libc malloc/free, and the
+ * header defines them unconditionally, so an inlined copy trips
+ * datakit.h's deprecated redeclaration of both.  XXH_NO_STDLIB is
+ * upstream's switch for an embedding with no library allocator; its
+ * only cost is XXH*_createState(), which nothing here calls. */
+#ifndef XXH_NO_STDLIB
+#define XXH_NO_STDLIB
+#endif
 #if 0
 #define XXH_FORCE_MEMORY_ACCESS 2
 #endif
-#define XXH_NOSTATE 1
 #include "../deps/xxHash/xxhash.h"
 
 #if 0

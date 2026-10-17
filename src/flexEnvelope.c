@@ -1731,16 +1731,10 @@ static bool streamHashInit(uint16_t algo, void *u_state, hmacCtx *hmac,
         return true;
     case FLEX_ENV_ALGO_XXH3_64:
     case FLEX_ENV_ALGO_XXH3_128:
-        /* XXH3 v0.7 (the bundled deps/xxHash version) is experimental and
-         * its streaming API is not chunk-invariant: a single big update
-         * and many small updates over the same bytes can produce
-         * different digests, and neither matches XXH3_64bits/_128bits
-         * one-shot output above ~256 bytes. Rather than ship a
-         * streaming API whose envelope bytes depend on caller chunking
-         * (a wire-format hazard), we refuse XXH3 in the streaming API
-         * and direct callers to XXH64 (chunk-invariant) or to the keyed
-         * algorithms for authentication. See the divergence note in
-         * deps/xxHash/xxh3.h ("XXH3 is still considered experimental"). */
+        /* The envelope streaming API does not offer XXH3: Init refuses
+         * it, and streaming callers use XXH64 for an unkeyed checksum or
+         * a keyed algorithm for authentication.  One-shot wrap and
+         * unwrap support XXH3_64 and XXH3_128. */
         return false;
     case FLEX_ENV_ALGO_BLAKE3_KEYED: {
         /* BLAKE3 keyed mode is defined ONLY for a 32-byte key. Anything
@@ -3189,11 +3183,10 @@ int flexEnvelopeTest(int argc, char *argv[]) {
          * one-shot wrap byte-for-byte across algorithms and chunk
          * sizes.
          *
-         * XXH3_64 / XXH3_128 are intentionally excluded — the
-         * experimental XXH3 v0.7 streaming API in deps/xxHash isn't
-         * chunk-invariant (see streamHashInit comment and the dedicated
-         * "refuses XXH3 in streaming" test below). Streaming envelopes
-         * are restricted to XXH64 and the keyed algorithms. */
+         * XXH3_64 / XXH3_128 are excluded because the streaming API
+         * does not offer them (see streamHashInit and the "refuses
+         * XXH3" test below). Streaming envelopes are restricted to
+         * XXH64, rapidhash and the keyed algorithms. */
         const flexEnvelopeAlgo all_algos[] = {
             FLEX_ENV_ALGO_XXH64,        FLEX_ENV_ALGO_RAPIDHASH,
             FLEX_ENV_ALGO_BLAKE3_KEYED, FLEX_ENV_ALGO_HMAC_SHA256,
@@ -3409,21 +3402,19 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         }
     }
 
-    TEST("envelope: wrap stream refuses XXH3 (v0.7 streaming non-invariant)") {
+    TEST("envelope: wrap stream refuses XXH3 (not offered for streaming)") {
         flexEnvelopeWrapStream ctx;
         uint8_t header[64];
         size_t hw = 0;
         flexEnvelopeWrapParams wp = {.algo = FLEX_ENV_ALGO_XXH3_64};
         if (flexEnvelopeWrapStreamInit(&ctx, 16, &wp, header, sizeof(header),
                                        &hw)) {
-            ERRR("wrap stream Init accepted XXH3_64 — streaming wire "
-                 "format would depend on caller chunking!");
+            ERRR("wrap stream Init accepted XXH3_64");
         }
         wp.algo = FLEX_ENV_ALGO_XXH3_128;
         if (flexEnvelopeWrapStreamInit(&ctx, 16, &wp, header, sizeof(header),
                                        &hw)) {
-            ERRR("wrap stream Init accepted XXH3_128 — streaming wire "
-                 "format would depend on caller chunking!");
+            ERRR("wrap stream Init accepted XXH3_128");
         }
     }
 
