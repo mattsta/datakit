@@ -861,6 +861,22 @@ abstractFlexInsert(multimapFull *const m, const multimapFullIdx mapIdx,
         if (useHighestInsertPosition) {
             assert(NULL && "Not implemented!");
             __builtin_unreachable();
+        } else if (keysCanBecomePointers && m->mapIsSet &&
+                   !forceFullWidthComparison) {
+            /* Set semantics with externalized keys: the pointer insert has
+             * no dedupe mode, so look for the whole row first and insert
+             * (as a full-width row, which may externalize the key) only
+             * when it is absent.  The probe uses the same full-width
+             * comparison the insert positions with. */
+            found = flexFindByTypeSortedWithMiddleFullWidth(
+                        *map, m->elementsPerEntry, elements, middle) != NULL;
+            if (!found) {
+                flexInsertReplaceByTypeSortedWithMiddleMultiDirectLongKeysBecomePointers(
+                    map, m->elementsPerEntry, elements, &middle, false,
+                    keyAsPointer);
+            }
+
+            multimapReplacedOutClear_(replacedOut, m->elementsPerEntry);
         } else if (keysCanBecomePointers) {
             found =
                 flexInsertReplaceByTypeSortedWithMiddleMultiDirectLongKeysBecomePointersReplacing(

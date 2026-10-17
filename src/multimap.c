@@ -1389,6 +1389,96 @@ int32_t multimapInsertReplacingSweep(void) {
         }
     }
 
+    TEST("a set inserted with externalized keys stores each member once") {
+        /* Short members (never externalized) and long members (always
+         * externalized), each inserted twice, in enough volume to split
+         * sub-maps.  The second insert of a member is a no-op that reports
+         * found, so count and the physical rows agree. */
+        enum { setRows = 120 };
+        cleanerName(multimapFullFree, Sweep) multimapFull *m =
+            multimapFullSetNew(2, 2048);
+        /* A wrongly minted second allocation stays referenced by the map,
+         * so it is freed with the first ones, after the last lookup. */
+        void *allocs[setRows] = {0};
+        void *extraAllocs[setRows] = {0};
+        char val[64];
+        memset(val, 's', sizeof(val));
+        for (uint32_t pass = 0; pass < 2; pass++) {
+            for (uint64_t i = 0; i < setRows; i++) {
+                char key[64];
+                snprintf(key, sizeof(key), "a-long-set-member-key-%06" PRIu64,
+                         i);
+                const databox kLong = databoxNewBytesString(key);
+                const databox kShort = databoxNewUnsigned(i);
+                const databox v = databoxNewBytes(val, sizeof(val));
+                const databox *e[2] = {(i & 1) ? &kLong : &kShort, &v};
+                void *alloc = NULL;
+                databox out[1] = {databoxNewUnsigned(UINT64_MAX)};
+                const bool found =
+                    multimapFullInsertAllowExternalizeKeysReplacing(
+                        m, e, &alloc, out);
+                if (found != (pass == 1)) {
+                    ERR("set-externalize: pass %u member %" PRIu64 " found=%d",
+                        pass, i, found);
+                }
+
+                if (out[0].type != DATABOX_VOID) {
+                    ERR("set-externalize: pass %u member %" PRIu64
+                        " reported type %d, expected VOID",
+                        pass, i, (int)out[0].type);
+                }
+
+                if (pass == 0) {
+                    allocs[i] = alloc;
+                    if ((i & 1) && !alloc) {
+                        ERR("set-externalize: long member %" PRIu64
+                            " was not externalized",
+                            i);
+                    }
+                } else if (alloc) {
+                    ERR("set-externalize: re-inserting member %" PRIu64
+                        " minted a second key allocation",
+                        i);
+                    extraAllocs[i] = alloc;
+                }
+            }
+        }
+
+        /* The same key with a different value is a different set member. */
+        const databox k0 = databoxNewUnsigned(0);
+        const databox other = databoxNewUnsigned(1);
+        const databox *e0[2] = {&k0, &other};
+        void *alloc0 = NULL;
+        if (multimapFullInsertAllowExternalizeKeys(m, e0, &alloc0)) {
+            ERRR("set-externalize: a new (key, value) pair reported found");
+        }
+
+        multimapIterator it;
+        multimapFullIteratorInit(m, &it, true);
+        databox a;
+        databox b;
+        databox *ab[2] = {&a, &b};
+        size_t physical = 0;
+        while (multimapFullIteratorNext(&it, ab)) {
+            physical++;
+        }
+
+        if (multimapFullCount(m) != setRows + 1 || physical != setRows + 1) {
+            ERR("set-externalize: count %zu, iterated rows %zu, expected %d",
+                multimapFullCount(m), physical, setRows + 1);
+        }
+
+        for (uint64_t i = 0; i < setRows; i++) {
+            if (allocs[i]) {
+                mdscfree(allocs[i]);
+            }
+
+            if (extraAllocs[i]) {
+                mdscfree(extraAllocs[i]);
+            }
+        }
+    }
+
     TEST("replacing insert: a set reports VOID on a duplicate member") {
         cleaner(multimapFree) multimap *m = multimapSetNew(RP_WIDTH);
         const databox c = databoxNewUnsigned(5);
