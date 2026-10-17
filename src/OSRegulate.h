@@ -129,7 +129,11 @@ void OSRegulateWakeSignal(int writeFd);
 void OSRegulateWakeDrain(int readFd);
 
 /* Wait until the wake is signalled or `budgetMs` elapses; drains on a
- * wake.  Returns true when woken, false on expiry or poll() failure.
+ * wake.  Returns true when a wake was consumed, false on expiry or
+ * poll() failure (including a descriptor that is not open).  Once
+ * every write end is closed (pipe platforms) no wake can arrive: after
+ * delivering any wake still pending, the await waits out the budget and
+ * returns false, as an idle await does, rather than returning at once.
  * Signals interrupting the wait do not extend the budget. */
 bool OSRegulateWakeAwaitMs(int readFd, uint64_t budgetMs);
 

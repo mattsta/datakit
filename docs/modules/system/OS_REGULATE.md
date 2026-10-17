@@ -301,7 +301,11 @@ void OSRegulateWakeSignal(int writeFd);
 void OSRegulateWakeDrain(int readFd);
 
 /* Wait up to budgetMs; drains and returns true on a wake, false on
- * expiry or poll() failure. Signals do not extend the budget. */
+ * expiry or poll() failure (a descriptor that is not open included).
+ * Signals do not extend the budget. Once every write end of a pipe is
+ * closed no wake can arrive: a pending wake is still delivered, then
+ * each await waits out its budget and returns false, so a loop on it
+ * does not spin. */
 bool OSRegulateWakeAwaitMs(int readFd, uint64_t budgetMs);
 
 /* Example: a supervisor woken by SIGCHLD */

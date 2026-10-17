@@ -585,32 +585,95 @@ void OSRegulateWakeSignal(int writeFd) {
     errno = savedErrno;
 }
 
+/* What a drain found: a wake consumed, nothing pending, or (pipe only)
+ * end-of-file because every write end is closed. */
+typedef enum osRegulateWakeDrained {
+    OS_REGULATE_WAKE_DRAINED_WAKE,
+    OS_REGULATE_WAKE_DRAINED_EMPTY,
+    OS_REGULATE_WAKE_DRAINED_HUNG_UP,
+} osRegulateWakeDrained;
+
+static osRegulateWakeDrained osRegulateWakeDrainFd(int readFd) {
+#if defined(OS_REGULATE_HAVE_EVENTFD)
+    uint64_t count = 0;
+    return read(readFd, &count, sizeof(count)) == (ssize_t)sizeof(count)
+               ? OS_REGULATE_WAKE_DRAINED_WAKE
+               : OS_REGULATE_WAKE_DRAINED_EMPTY;
+#else
+    bool woke = false;
+    uint8_t buf[64];
+    for (;;) {
+        const ssize_t got = read(readFd, buf, sizeof(buf));
+        if (got > 0) {
+            woke = true;
+            continue;
+        }
+
+        if (got < 0 && errno == EINTR) {
+            continue;
+        }
+
+        /* EAGAIN once drained; 0 is end-of-file */
+        if (woke) {
+            return OS_REGULATE_WAKE_DRAINED_WAKE;
+        }
+
+        return got == 0 ? OS_REGULATE_WAKE_DRAINED_HUNG_UP
+                        : OS_REGULATE_WAKE_DRAINED_EMPTY;
+    }
+#endif
+}
+
 void OSRegulateWakeDrain(int readFd) {
     if (readFd < 0) {
         return;
     }
-#if defined(OS_REGULATE_HAVE_EVENTFD)
-    uint64_t count = 0;
-    (void)read(readFd, &count, sizeof(count));
-#else
-    uint8_t buf[64];
-    while (read(readFd, buf, sizeof(buf)) > 0) {
-        /* drain until EAGAIN */
-    }
-#endif
+
+    (void)osRegulateWakeDrainFd(readFd);
 }
 
 bool OSRegulateWakeAwaitMs(int readFd, uint64_t budgetMs) {
     if (readFd < 0) {
         return false;
     }
-    struct pollfd want = {.fd = readFd, .events = POLLIN};
-    if (osRegulatePollUntil(&want, timeUtilMonotonicMs(), budgetMs) > 0) {
-        OSRegulateWakeDrain(readFd);
-        return true;
-    }
 
-    return false;
+    const uint64_t startMs = timeUtilMonotonicMs();
+    struct pollfd want = {.fd = readFd, .events = POLLIN};
+    for (;;) {
+        const int n = osRegulatePollUntil(&want, startMs, budgetMs);
+        if (n <= 0) {
+            return false;
+        }
+
+        /* Not a descriptor poll() can wait on (closed, or an error
+         * condition): a poll() failure, as the header documents. */
+        if (want.revents & (POLLNVAL | POLLERR)) {
+            return false;
+        }
+
+        osRegulateWakeDrained drained = OS_REGULATE_WAKE_DRAINED_EMPTY;
+        if (want.revents & POLLIN) {
+            drained = osRegulateWakeDrainFd(readFd);
+            if (drained == OS_REGULATE_WAKE_DRAINED_WAKE) {
+                return true;
+            }
+        }
+
+        if (drained == OS_REGULATE_WAKE_DRAINED_HUNG_UP ||
+            (want.revents & POLLHUP)) {
+            /* Every write end is closed, so no wake can arrive, and
+             * poll() would report the hang-up at once forever.  Wait
+             * out the budget as an idle await would, so a caller
+             * looping on the await does not spin; a negative fd makes
+             * poll() a plain timed sleep. */
+            struct pollfd none = {.fd = -1};
+            (void)osRegulatePollUntil(&none, startMs, budgetMs);
+            return false;
+        }
+
+        /* Readable but already drained (another consumer won the
+         * race): wait on the time remaining. */
+    }
 }
 
 /* ====================================================================

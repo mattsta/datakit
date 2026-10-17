@@ -969,6 +969,56 @@ static int dkTestWakeFdTest(int argc, char *argv[]) {
     }
     close(rd);
 
+    /* A pair that has been closed: its numbers are not open descriptors
+     * (nothing else in this single-threaded test opens one meanwhile).
+     * A Signal whose write fails still preserves errno (the check above
+     * cannot fail: a successful write never touches errno), and an
+     * await on a closed descriptor is a poll() failure, not a wake. */
+    {
+        int closedRd = -1;
+        int closedWr = -1;
+        WEXPECT(OSRegulateWakeFdNew(&closedRd, &closedWr), "second pair");
+        if (closedWr != closedRd) {
+            close(closedWr);
+        }
+        close(closedRd);
+
+        errno = EBUSY;
+        OSRegulateWakeSignal(closedWr);
+        WEXPECT(errno == EBUSY, "a failing Signal preserves errno");
+        WEXPECT(!OSRegulateWakeAwaitMs(closedRd, kGenerousMs),
+                "an await on a closed descriptor is not a wake");
+    }
+
+    /* Every write end closed (pipe platforms; an eventfd is one
+     * descriptor and cannot hang up): a wake still pending is
+     * delivered, then each await waits out its budget and reports no
+     * wake instead of returning at once, so a loop on it cannot spin. */
+    {
+        cleaner(fdClose) int hupRd = -1;
+        int hupWr = -1;
+        WEXPECT(OSRegulateWakeFdNew(&hupRd, &hupWr), "hang-up pair");
+        if (hupRd >= 0 && hupWr != hupRd) {
+            OSRegulateWakeSignal(hupWr);
+            close(hupWr);
+            WEXPECT(OSRegulateWakeAwaitMs(hupRd, kGenerousMs),
+                    "a wake sent before the hang-up is delivered");
+
+            static const int kAwaits = 3;
+            const uint64_t startMs = timeUtilMonotonicMs();
+            int woken = 0;
+            for (int i = 0; i < kAwaits; i++) {
+                woken += OSRegulateWakeAwaitMs(hupRd, kShortMs);
+            }
+            const uint64_t elapsedMs = timeUtilMonotonicMs() - startMs;
+            WEXPECT(woken == 0, "a hung-up pair reports no wake");
+            /* Each await ends once the millisecond clock has moved by
+             * its budget, so allow one tick per await. */
+            WEXPECT(elapsedMs + kAwaits >= kAwaits * kShortMs,
+                    "a hung-up pair's await waits out its budget");
+        }
+    }
+
     if (failures == 0) {
         printf("dkTestWakeFd: PASS\n");
     }
