@@ -24,5 +24,6 @@ __uint128_t portableRandom128(portableRandomState *r);
 void portableRandomBy8(portableRandomState *r, void *fill, size_t count);
 void portableRandomBy16(portableRandomState *r, void *fill, size_t count);
 
-/* Call system random entropy source directly */
+/* Read from the OS entropy source without blocking.  Returns the number
+ * of bytes written, or -1, on every platform. */
 ssize_t portableRandomDirect(void *dst, size_t requestedLen);

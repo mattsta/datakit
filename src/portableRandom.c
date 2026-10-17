@@ -67,7 +67,9 @@ ssize_t portableRandomDirect(void *const dst, const size_t requestedLen) {
     return syscall(SYS_getrandom, dst, requestedLen, DK_GRND_NONBLOCK);
 #elif DK_HAVE_GETENTROPY || DK_HAVE_GETENTROPY_SYS_RANDOM
     (void)DK_GRND_NONBLOCK;
-    return getentropy(dst, requestedLen);
+    /* getentropy() returns 0 for a complete fill; normalise to the
+     * bytes-written contract. */
+    return getentropy(dst, requestedLen) == 0 ? (ssize_t)requestedLen : -1;
 #else
     /* Random source not found! */
     return -1;
