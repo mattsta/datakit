@@ -743,80 +743,92 @@ flexRawEntryLengthReverse(flexEntry *const fe) {
  * ==================================================================== */
 /* Payload size for every encoding whose size depends on the encoding
  * byte alone: fixed-width numbers and references plus the immediates.
- * Returns false for every other value, including the container tags
- * (sized by their inner varint), FLEX_SAME, the reserved compressed
- * container tags, FLEX_REAL_32D/64D, and the MDSC references when
- * FLEX_ENABLE_PTR_MDSC is off.
+ * Every other value is absent: the container tags (sized by their inner
+ * varint), FLEX_SAME, the reserved compressed container tags,
+ * FLEX_REAL_32D/64D, and the MDSC references when FLEX_ENABLE_PTR_MDSC
+ * is off.
  *
- * Shared by the decode path, which asserts on false, and by
- * flexRawEntryLengthSafe, which rejects the entry. */
+ * This one case list expands into two switches: the decode-size switch
+ * (flexDataSizeForFixedWidthEncodingWithInnerEntry, which adds the
+ * container cases and asserts on anything else) and
+ * flexFixedWidthPayloadSize (used by flexRawEntryLengthSafe, which
+ * rejects anything else).  Sharing the list keeps the decoder and the
+ * validator in step; expanding it in place keeps the decode path a
+ * single jump table.  'SIZE_IS(n)' must leave the switch. */
+#if FLEX_ENABLE_PTR_MDSC
+#define FLEX_FIXED_WIDTH_MDSC_CASES_(SIZE_IS)                                  \
+    case FLEX_EXTERNAL_MDSC_48B:                                               \
+        SIZE_IS(48 / 8);                                                       \
+    case FLEX_EXTERNAL_MDSC_64B:                                               \
+        SIZE_IS(64 / 8);
+#else
+#define FLEX_FIXED_WIDTH_MDSC_CASES_(SIZE_IS)
+#endif
+
+#define FLEX_FIXED_WIDTH_CASES_(encoding, SIZE_IS)                             \
+    case FLEX_NEG_8B:                                                          \
+    case FLEX_NEG_16B:                                                         \
+    case FLEX_NEG_24B:                                                         \
+    case FLEX_NEG_32B:                                                         \
+    case FLEX_NEG_40B:                                                         \
+    case FLEX_NEG_48B:                                                         \
+    case FLEX_NEG_56B:                                                         \
+    case FLEX_NEG_64B:                                                         \
+    case FLEX_UINT_8B:                                                         \
+    case FLEX_UINT_16B:                                                        \
+    case FLEX_UINT_24B:                                                        \
+    case FLEX_UINT_32B:                                                        \
+    case FLEX_UINT_40B:                                                        \
+    case FLEX_UINT_48B:                                                        \
+    case FLEX_UINT_56B:                                                        \
+    case FLEX_UINT_64B:                                                        \
+        SIZE_IS((size_t)EXTERNAL_VARINT_WIDTH_FROM_ENCODING_(encoding));       \
+    case FLEX_UINT_96B:                                                        \
+    case FLEX_NEG_96B:                                                         \
+        SIZE_IS(96 / 8);                                                       \
+    case FLEX_UINT_128B:                                                       \
+    case FLEX_NEG_128B:                                                        \
+        SIZE_IS(128 / 8);                                                      \
+    case FLEX_REAL_B16B:                                                       \
+    case FLEX_REAL_16B:                                                        \
+        SIZE_IS(16 / 8);                                                       \
+    case FLEX_REAL_32B:                                                        \
+        SIZE_IS(32 / 8);                                                       \
+    case FLEX_REAL_64B:                                                        \
+        SIZE_IS(64 / 8);                                                       \
+        FLEX_FIXED_WIDTH_MDSC_CASES_(SIZE_IS)                                  \
+    case FLEX_CONTAINER_REFERENCE_EXTERNAL_8:                                  \
+    case FLEX_CONTAINER_REFERENCE_EXTERNAL_16:                                 \
+    case FLEX_CONTAINER_REFERENCE_EXTERNAL_24:                                 \
+    case FLEX_CONTAINER_REFERENCE_EXTERNAL_32:                                 \
+    case FLEX_CONTAINER_REFERENCE_EXTERNAL_40:                                 \
+    case FLEX_CONTAINER_REFERENCE_EXTERNAL_48:                                 \
+    case FLEX_CONTAINER_REFERENCE_EXTERNAL_56:                                 \
+    case FLEX_CONTAINER_REFERENCE_EXTERNAL_64:                                 \
+        SIZE_IS((size_t)EXTERNAL_VARINT_WIDTH_FROM_REFERENCE_(encoding));      \
+    case FLEX_BYTES_EMPTY:                                                     \
+    case FLEX_TRUE:                                                            \
+    case FLEX_FALSE:                                                           \
+    case FLEX_NULL:                                                            \
+        /* immediate encoding, no value */                                     \
+        SIZE_IS(0);
+
+/* Returns false for every encoding the table above does not size. */
 DK_INLINE_ALWAYS bool flexFixedWidthPayloadSize(const flexEncoding encoding,
                                                 size_t *const outSize) {
+#define FLEX_FIXED_WIDTH_STORE_(size)                                          \
+    do {                                                                       \
+        *outSize = (size);                                                     \
+        return true;                                                           \
+    } while (0)
+
     switch (encoding) {
-    case FLEX_NEG_8B:
-    case FLEX_NEG_16B:
-    case FLEX_NEG_24B:
-    case FLEX_NEG_32B:
-    case FLEX_NEG_40B:
-    case FLEX_NEG_48B:
-    case FLEX_NEG_56B:
-    case FLEX_NEG_64B:
-    case FLEX_UINT_8B:
-    case FLEX_UINT_16B:
-    case FLEX_UINT_24B:
-    case FLEX_UINT_32B:
-    case FLEX_UINT_40B:
-    case FLEX_UINT_48B:
-    case FLEX_UINT_56B:
-    case FLEX_UINT_64B:
-        *outSize = (size_t)EXTERNAL_VARINT_WIDTH_FROM_ENCODING_(encoding);
-        return true;
-    case FLEX_UINT_96B:
-    case FLEX_NEG_96B:
-        *outSize = 96 / 8;
-        return true;
-    case FLEX_UINT_128B:
-    case FLEX_NEG_128B:
-        *outSize = 128 / 8;
-        return true;
-    case FLEX_REAL_B16B:
-    case FLEX_REAL_16B:
-        *outSize = 16 / 8;
-        return true;
-    case FLEX_REAL_32B:
-        *outSize = 32 / 8;
-        return true;
-    case FLEX_REAL_64B:
-        *outSize = 64 / 8;
-        return true;
-#if FLEX_ENABLE_PTR_MDSC
-    case FLEX_EXTERNAL_MDSC_48B:
-        *outSize = 48 / 8;
-        return true;
-    case FLEX_EXTERNAL_MDSC_64B:
-        *outSize = 64 / 8;
-        return true;
-#endif
-    case FLEX_CONTAINER_REFERENCE_EXTERNAL_8:
-    case FLEX_CONTAINER_REFERENCE_EXTERNAL_16:
-    case FLEX_CONTAINER_REFERENCE_EXTERNAL_24:
-    case FLEX_CONTAINER_REFERENCE_EXTERNAL_32:
-    case FLEX_CONTAINER_REFERENCE_EXTERNAL_40:
-    case FLEX_CONTAINER_REFERENCE_EXTERNAL_48:
-    case FLEX_CONTAINER_REFERENCE_EXTERNAL_56:
-    case FLEX_CONTAINER_REFERENCE_EXTERNAL_64:
-        *outSize = (size_t)EXTERNAL_VARINT_WIDTH_FROM_REFERENCE_(encoding);
-        return true;
-    case FLEX_BYTES_EMPTY:
-    case FLEX_TRUE:
-    case FLEX_FALSE:
-    case FLEX_NULL:
-        /* immediate encoding, no value */
-        *outSize = 0;
-        return true;
+        FLEX_FIXED_WIDTH_CASES_(encoding, FLEX_FIXED_WIDTH_STORE_)
     default:
         return false;
     }
+
+#undef FLEX_FIXED_WIDTH_STORE_
 }
 
 /* Return bytes needed to store fixed type encoded by 'encoding' */
@@ -829,7 +841,10 @@ DK_INLINE_ALWAYS size_t flexDataSizeForFixedWidthEncodingWithInnerEntry(
         *encodingSize = 1; /* ONE side of the encoding */
     }
 
+#define FLEX_FIXED_WIDTH_RETURN_(size) return (size)
+
     switch (encoding) {
+        FLEX_FIXED_WIDTH_CASES_(encoding, FLEX_FIXED_WIDTH_RETURN_)
     case FLEX_CONTAINER_MAP:
     case FLEX_CONTAINER_LIST:
     case FLEX_CONTAINER_SET:
@@ -846,18 +861,13 @@ DK_INLINE_ALWAYS size_t flexDataSizeForFixedWidthEncodingWithInnerEntry(
         return len + lensize;
     }
     default:
-        break;
+        /* Writers never emit an encoding outside the table, and the
+         * validators reject one. */
+        assert(NULL);
+        __builtin_unreachable();
     }
 
-    size_t fixedSize = 0;
-    if (flexFixedWidthPayloadSize(encoding, &fixedSize)) {
-        return fixedSize;
-    }
-
-    /* Writers never emit an encoding outside the table, and the validators
-     * reject one. */
-    assert(NULL);
-    __builtin_unreachable();
+#undef FLEX_FIXED_WIDTH_RETURN_
 }
 
 DK_STATIC DK_FN_CONST uint_fast8_t flexEncodingLength(flexEncoding encoding,
