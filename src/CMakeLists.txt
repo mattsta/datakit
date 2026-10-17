@@ -295,7 +295,16 @@ endif()
 #set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wstrict-overflow=5 -Wfloat-equal")
 #set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wsuggest-attribute=const -Wsuggest-attribute=pure -Wsuggest-attribute=noreturn -Wsuggest-attribute=format")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wshadow -fstrict-aliasing -Wunused-macros")
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wformat -Wignored-attributes")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wformat -Werror=format -Wignored-attributes")
+# -Wformat-truncation is not in the -Wformat group, so -Werror=format
+# does not promote it; promote it separately where the compiler
+# supports the option (Apple clang does not).
+include(CheckCCompilerFlag)
+check_c_compiler_flag("-Werror=format-truncation"
+                      HAVE_WERROR_FORMAT_TRUNCATION)
+if(HAVE_WERROR_FORMAT_TRUNCATION)
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Werror=format-truncation")
+endif()
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-math-errno") # We don't use errno for libc math
 
 if(CMAKE_C_COMPILER_ID MATCHES "Clang")
@@ -365,7 +374,7 @@ if(DATAKIT_UBSAN_ALLOW_UNALIGNED)
 endif()
 
 if(CMAKE_BUILD_TYPE MATCHES Debug)
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O0 -g -Wno-format")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O0 -g")
 else()
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -g")
 endif()
