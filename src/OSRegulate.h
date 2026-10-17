@@ -72,6 +72,11 @@ bool OSRegulateParentStillExisits(void);
  * nothing else reaps the child: if another thread reaps it and the pid
  * is reused, they act on the new process. */
 
+/* All three take one process: a `pid` of 0 or below (a process group or
+ * "any child" to waitpid(), and what a failed fork() returns) is
+ * rejected with errno EINVAL; WatchFd returns -1, ReapNow and
+ * AwaitExitMs return false at once without reaping anything. */
+
 /* Returns a descriptor that becomes readable when `pid` exits, or -1
  * when the platform has no exit notification (errno ENOSYS) or arming
  * failed (which includes `pid` already having exited).  -1 never means

@@ -354,6 +354,13 @@ bool OSRegulateParentStillExisits(void) {
 /* Process-exit events.  The watch fd is the only platform-specific
  * piece; the bounded await is portable code polling it. */
 int OSRegulateProcessExitWatchFd(pid_t pid) {
+    /* 0 and negative pids name process groups or "any process" to the
+     * kernel, never one process. */
+    if (pid <= 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
 #if defined(OS_REGULATE_HAVE_KQUEUE)
     /* A kqueue fd carrying a one-shot EVFILT_PROC/NOTE_EXIT filter is
      * itself select/poll-able, so it satisfies the pollable-fd contract
@@ -398,6 +405,15 @@ int OSRegulateProcessExitWatchFd(pid_t pid) {
 }
 
 bool OSRegulateProcessReapNow(pid_t pid, int *outStatus) {
+    /* waitpid() reads 0 and negative pids as "any child" or a process
+     * group: such a reap would take an unrelated child's status, and
+     * the 0 return for "none ready" would equal pid 0 and read as
+     * reaped. */
+    if (pid <= 0) {
+        errno = EINVAL;
+        return false;
+    }
+
     int status = 0;
     const pid_t reaped = waitpid(pid, &status, WNOHANG);
 
@@ -416,6 +432,12 @@ bool OSRegulateProcessReapNow(pid_t pid, int *outStatus) {
 
 bool OSRegulateProcessAwaitExitMs(pid_t pid, uint64_t budgetMs,
                                   int *outStatus) {
+    /* See ReapNow: 0 and negative pids never name one child. */
+    if (pid <= 0) {
+        errno = EINVAL;
+        return false;
+    }
+
     if (OSRegulateProcessReapNow(pid, outStatus)) {
         return true;
     }

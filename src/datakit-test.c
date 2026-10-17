@@ -558,6 +558,69 @@ static int dkTestProcessExitWaitTest(int argc, char *argv[]) {
         }
     }
 
+    /* --- (4) a pid of 0 or below never names one child: all three calls
+     * reject it with EINVAL, reap nothing, and do not wait.  First with
+     * no child alive, where waitpid(-1) answers ECHILD (which ReapNow
+     * reads as "already reaped"); then with a live child, where
+     * waitpid(0, WNOHANG) answers 0, equal to the pid.  A blocking
+     * waitpid(-1) with that child alive would hang, so -1 is only tried
+     * while no child exists. */
+    {
+        static const pid_t badPids[] = {0, -1};
+        for (size_t i = 0; i < sizeof(badPids) / sizeof(badPids[0]); i++) {
+            int status = 12345;
+            errno = 0;
+            PEXPECT(!OSRegulateProcessReapNow(badPids[i], &status) &&
+                        errno == EINVAL,
+                    "ReapNow rejects pid <= 0 with EINVAL");
+            errno = 0;
+            PEXPECT(!OSRegulateProcessAwaitExitMs(badPids[i], kGenerousMs,
+                                                  &status) &&
+                        errno == EINVAL,
+                    "AwaitExitMs rejects pid <= 0 with EINVAL");
+            errno = 0;
+            cleaner(fdClose) int watchFd =
+                OSRegulateProcessExitWatchFd(badPids[i]);
+            PEXPECT(watchFd == -1 && errno == EINVAL,
+                    "ExitWatchFd rejects pid <= 0 with EINVAL");
+            PEXPECT(status == 12345, "a rejected pid leaves status untouched");
+        }
+
+        int hold[2] = {-1, -1};
+        PEXPECT(pipe(hold) == 0, "pipe for the bystander child");
+        cleaner(fdClose) int holdRead = hold[0];
+        cleaner(fdClose) int holdWrite = hold[1];
+        const pid_t child = holdRead >= 0 ? fork() : -1;
+        if (child == 0) {
+            close(holdWrite);
+            uint8_t discard;
+            while (read(holdRead, &discard, 1) > 0) {
+                /* The parent never writes. */
+            }
+            _exit(kChildExitCode);
+        }
+
+        PEXPECT(child > 0, "fork for the bystander child");
+        if (child > 0) {
+            close(fdRelease(&holdRead));
+            int status = 0;
+            errno = 0;
+            PEXPECT(!OSRegulateProcessReapNow(0, &status) && errno == EINVAL,
+                    "ReapNow(0) with a live child is not 'reaped'");
+            errno = 0;
+            PEXPECT(!OSRegulateProcessAwaitExitMs(0, kGenerousMs, &status) &&
+                        errno == EINVAL,
+                    "AwaitExitMs(0) with a live child is not 'reaped'");
+
+            /* The bystander's status is still there for its own pid. */
+            close(fdRelease(&holdWrite));
+            PEXPECT(OSRegulateProcessAwaitExitMs(child, kGenerousMs, &status),
+                    "bystander child reaped by its own pid");
+            PEXPECT(WIFEXITED(status) && WEXITSTATUS(status) == kChildExitCode,
+                    "bystander child status was not taken by a pid <= 0");
+        }
+    }
+
 #undef PEXPECT
     if (failures == 0) {
         printf(

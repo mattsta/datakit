@@ -230,7 +230,10 @@ platform, which is the signal to reach for the exit watch fd instead.
 wait on a pollable exit notification instead: a kqueue `EVFILT_PROC` /
 `NOTE_EXIT` descriptor on macOS and the BSD family, and a pidfd
 (`pidfd_open`) on Linux. The watch fd works for any pid the caller can observe;
-`ReapNow` and `AwaitExitMs` require a child of the caller.
+`ReapNow` and `AwaitExitMs` require a child of the caller. All three take
+exactly one process: a pid of 0 or below (a process group or "any child" to
+`waitpid()`, and what a failed `fork()` returns) is rejected with `EINVAL`
+without reaping or waiting.
 
 ```c
 /* Descriptor that becomes readable (POLLIN) when `pid` exits, or -1.
