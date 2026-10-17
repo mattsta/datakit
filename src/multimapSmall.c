@@ -237,8 +237,13 @@ bool multimapSmallRandomValue(multimapSmall *m, const bool fromTail,
         const uint64_t randomElement = dkRandomBounded(totalWholeElements);
 
         /* Restore random element to an offset inside the list, walking
-         * from the nearest of head/middle/tail.  The int32_t narrowing is
-         * safe: a Small map upgrades to Medium far below 2^31 elements. */
+         * from the nearest of head/middle/tail.  The offset is below
+         * 'count', and the int32_t narrowing follows flex's own index
+         * contract: flexIndex and flexIndexWithMiddle take int32_t, so a
+         * flex addressed through them holds at most INT32_MAX entries.  A
+         * standalone Small map never upgrades, so this, not the generic
+         * multimap's tier limit, is what bounds it. */
+        assert(count <= INT32_MAX);
         foundP = flexIndexWithMiddle(
             m->map, m->elementsPerEntry,
             (int32_t)(randomElement * m->elementsPerEntry), GET_MIDDLE(m));
