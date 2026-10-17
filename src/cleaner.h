@@ -26,6 +26,27 @@
 #define cleanerName(cleanupFunction, name)                                     \
     __attribute__((cleanup(cleanupFunction##name##_cleanup)))
 
+/* File-descriptor scope: `cleaner(fdClose) int fd = open(...);` closes
+ * fd at scope exit when it is >= 0, so -1 (the failure value of every
+ * descriptor-returning call) is the disarmed state.  errno is preserved
+ * across the close, so a failure path can return straight after the
+ * failing call and the caller still reads that call's errno.  Transfer
+ * ownership with fdRelease(), which hands back the descriptor and
+ * disarms the local. */
+static DK_FN_UNUSED void fdClose_cleanup(int *fd) {
+    if (*fd >= 0) {
+        const int savedErrno = errno;
+        close(*fd);
+        errno = savedErrno;
+    }
+}
+
+static inline int fdRelease(int *fd) {
+    const int released = *fd;
+    *fd = -1;
+    return released;
+}
+
 /* Usage idioms:
  *
  * Scope-exit free (never leaks on any early return):
@@ -41,6 +62,13 @@
  *     *result = out;
  *     out = NULL;      // disarmed: caller owns it now
  *     return true;     // failure paths above still free automatically
+ *
+ * Descriptors use the same shape, with -1 as the disarmed value:
+ *     cleaner(fdClose) int fd = open(path, O_RDONLY | O_CLOEXEC);
+ *     if (fd < 0 || !setUp(fd)) {
+ *         return -1;          // closed here if it was opened
+ *     }
+ *     return fdRelease(&fd);  // disarmed: caller owns it now
  *
  * goto interaction: a goto must never jump forward over a cleaner
  * declaration (clang rejects the jump, same class as VLA rules).

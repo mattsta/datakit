@@ -592,8 +592,8 @@ static int dkTestDaemonizeReadyTest(int argc, char *argv[]) {
     /* --- (1) the child signals: READY, and the byte outranks the
      *         close that follows it. */
     {
-        int rd = -1;
-        int wr = -1;
+        cleaner(fdClose) int rd = -1;
+        cleaner(fdClose) int wr = -1;
         REXPECT(OSRegulateReadyPipeNew(&rd, &wr), "pipe created");
         const pid_t child = fork();
         if (child == 0) {
@@ -602,12 +602,11 @@ static int dkTestDaemonizeReadyTest(int argc, char *argv[]) {
             _exit(0);
         }
         REXPECT(child > 0, "fork for signalling child");
-        close(wr);
+        close(fdRelease(&wr));
         const OSRegulateReadyAwait v =
             OSRegulateReadyPipeAwaitMs(rd, kGenerousMs);
         REXPECT(v == OS_REGULATE_READY_AWAIT_READY,
                 "a signalling child reads as READY");
-        close(rd);
         if (child > 0) {
             int status = 0;
             REXPECT(waitpid(child, &status, 0) == child, "child reaped");
@@ -617,8 +616,8 @@ static int dkTestDaemonizeReadyTest(int argc, char *argv[]) {
     /* --- (2) the child dies without signalling: WRITER_GONE, not
      *         EXPIRED; end-of-file reports the exit before the budget. */
     {
-        int rd = -1;
-        int wr = -1;
+        cleaner(fdClose) int rd = -1;
+        cleaner(fdClose) int wr = -1;
         REXPECT(OSRegulateReadyPipeNew(&rd, &wr), "pipe created");
         const pid_t child = fork();
         if (child == 0) {
@@ -626,12 +625,11 @@ static int dkTestDaemonizeReadyTest(int argc, char *argv[]) {
             _exit(3);
         }
         REXPECT(child > 0, "fork for unsignalled child");
-        close(wr);
+        close(fdRelease(&wr));
         const OSRegulateReadyAwait v =
             OSRegulateReadyPipeAwaitMs(rd, kGenerousMs);
         REXPECT(v == OS_REGULATE_READY_AWAIT_WRITER_GONE,
                 "a child that died unsignalled reads as WRITER_GONE");
-        close(rd);
         if (child > 0) {
             int status = 0;
             REXPECT(waitpid(child, &status, 0) == child, "child reaped");
@@ -640,8 +638,8 @@ static int dkTestDaemonizeReadyTest(int argc, char *argv[]) {
 
     /* --- (3) the child is alive and silent: EXPIRED at the budget. */
     {
-        int rd = -1;
-        int wr = -1;
+        cleaner(fdClose) int rd = -1;
+        cleaner(fdClose) int wr = -1;
         REXPECT(OSRegulateReadyPipeNew(&rd, &wr), "pipe created");
         const pid_t child = fork();
         if (child == 0) {
@@ -651,11 +649,10 @@ static int dkTestDaemonizeReadyTest(int argc, char *argv[]) {
             }
         }
         REXPECT(child > 0, "fork for silent child");
-        close(wr);
+        close(fdRelease(&wr));
         const OSRegulateReadyAwait v = OSRegulateReadyPipeAwaitMs(rd, kShortMs);
         REXPECT(v == OS_REGULATE_READY_AWAIT_EXPIRED,
                 "a silent live child reads as EXPIRED");
-        close(rd);
         /* Guarded: kill(-1, ...) would signal every process we may. */
         if (child > 0) {
             kill(child, SIGKILL);
@@ -666,8 +663,8 @@ static int dkTestDaemonizeReadyTest(int argc, char *argv[]) {
 
     /* --- (4) signalling twice is idempotent and leaves no descriptor. */
     {
-        int rd = -1;
-        int wr = -1;
+        cleaner(fdClose) int rd = -1;
+        cleaner(fdClose) int wr = -1;
         REXPECT(OSRegulateReadyPipeNew(&rd, &wr), "pipe created");
         OSRegulateReadyPipeSignal(&wr);
         REXPECT(wr == -1, "signal closes and clears the write end");
@@ -675,7 +672,6 @@ static int dkTestDaemonizeReadyTest(int argc, char *argv[]) {
         REXPECT(OSRegulateReadyPipeAwaitMs(rd, kGenerousMs) ==
                     OS_REGULATE_READY_AWAIT_READY,
                 "the one byte reads as READY");
-        close(rd);
     }
 
 #undef REXPECT

@@ -1,4 +1,5 @@
 #include "OSRegulate.h"
+#include "cleaner.h"
 #include "timeUtil.h"
 #include "versionOSRuntime.h"
 
@@ -70,7 +71,7 @@ OSRegulateDaemonizeStatus OSRegulateDaemonize(const char **errMsg) {
     }
 
     /* close default FDs (like daemonize()) */
-    const int fd = open("/dev/null", O_RDWR, 0);
+    cleaner(fdClose) int fd = open("/dev/null", O_RDWR, 0);
     if (fd == -1) {
         re("Failed to open /dev/null");
     }
@@ -83,10 +84,12 @@ OSRegulateDaemonizeStatus OSRegulateDaemonize(const char **errMsg) {
         re("Failed to dup2 stdout");
     }
 
-    if (fd > STDERR_FILENO) {
-        if (close(fd) == -1) {
-            re("Failed to close /dev/null");
-        }
+    /* With a standard stream already closed, /dev/null itself landed on
+     * that stream's number and is now the stream: keep it. */
+    if (fd <= STDERR_FILENO) {
+        (void)fdRelease(&fd);
+    } else if (close(fdRelease(&fd)) == -1) {
+        re("Failed to close /dev/null");
     }
 
     return OS_REGULATE_DAEMONIZE_CHILD;
@@ -217,20 +220,17 @@ static int g_daemonizeReadyWriteFd = -1;
 
 OSRegulateDaemonizeStatus OSRegulateDaemonizeUntilReady(uint64_t readyBudgetMs,
                                                         const char **errMsg) {
-    int readyRead = -1;
-    int readyWrite = -1;
+    cleaner(fdClose) int readyRead = -1;
+    cleaner(fdClose) int readyWrite = -1;
     if (!OSRegulateReadyPipeNew(&readyRead, &readyWrite)) {
         re("Failed to create the readiness pipe");
     }
     const OSRegulateDaemonizeStatus status = OSRegulateDaemonize(errMsg);
     switch (status) {
     case OS_REGULATE_DAEMONIZE_ERROR:
-        close(readyRead);
-        close(readyWrite);
         return status;
     case OS_REGULATE_DAEMONIZE_CHILD:
-        close(readyRead);
-        g_daemonizeReadyWriteFd = readyWrite;
+        g_daemonizeReadyWriteFd = fdRelease(&readyWrite);
         return status;
     case OS_REGULATE_DAEMONIZE_PARENT:
         break;
@@ -238,11 +238,12 @@ OSRegulateDaemonizeStatus OSRegulateDaemonizeUntilReady(uint64_t readyBudgetMs,
     /* The foreground parent: wait for the child's readiness, then exit
      * with a status a service manager can act on.  _exit() on both
      * paths: the parent must not run atexit handlers or flush stdio
-     * buffers it shares with the child after the fork. */
-    close(readyWrite);
+     * buffers it shares with the child after the fork.  The write end is
+     * closed before the wait so the child's end-of-file can be seen. */
+    close(fdRelease(&readyWrite));
     const OSRegulateReadyAwait verdict =
         OSRegulateReadyPipeAwaitMs(readyRead, readyBudgetMs);
-    close(readyRead);
+    close(fdRelease(&readyRead));
     if (verdict == OS_REGULATE_READY_AWAIT_READY) {
         OSRegulateExitClean();
     }
@@ -313,7 +314,7 @@ int OSRegulateProcessExitWatchFd(pid_t pid) {
     /* A kqueue fd carrying a one-shot EVFILT_PROC/NOTE_EXIT filter is
      * itself select/poll-able, so it satisfies the pollable-fd contract
      * without the caller ever calling kevent(). */
-    const int kq = kqueue();
+    cleaner(fdClose) int kq = kqueue();
     if (kq < 0) {
         return -1;
     }
@@ -325,16 +326,13 @@ int OSRegulateProcessExitWatchFd(pid_t pid) {
     /* Register the filter (changelist of 1, no eventlist read yet).
      * ESRCH here means the process is already gone, so no event will
      * ever arrive: report "no event source" rather than a fd that never
-     * becomes readable.  errno is preserved across the close because
+     * becomes readable.  The scope-exit close preserves errno, because
      * the caller reads ESRCH as an exit report. */
     if (kevent(kq, &ev, 1, NULL, 0, NULL) < 0) {
-        const int armErrno = errno;
-        close(kq);
-        errno = armErrno;
         return -1;
     }
 
-    return kq;
+    return fdRelease(&kq);
 #elif defined(OS_REGULATE_HAVE_PIDFD)
     /* pidfd_open() has no libc wrapper on every supported glibc/musl
      * vintage, so go through the syscall directly.  The returned fd
@@ -383,14 +381,12 @@ bool OSRegulateProcessAwaitExitMs(pid_t pid, uint64_t budgetMs,
 
     /* errno is cleared first so only an ESRCH from this arm counts. */
     errno = 0;
-    const int watchFd = OSRegulateProcessExitWatchFd(pid);
+    cleaner(fdClose) int watchFd = OSRegulateProcessExitWatchFd(pid);
     const int armErrno = errno;
     if (watchFd >= 0) {
         struct pollfd watch = {.fd = watchFd, .events = POLLIN};
         const int n = osRegulatePollUntil(&watch, startMs, budgetMs);
         exitReported = n > 0 && (watch.revents & POLLIN) != 0;
-
-        close(watchFd);
     } else if (armErrno == ESRCH) {
         /* Arming fails with ESRCH once the kernel has begun tearing the
          * process down, which can precede the point where
