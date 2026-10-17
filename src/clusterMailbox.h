@@ -439,8 +439,9 @@ size_t clusterMailboxBuildRotateAnnounce(
     uint8_t out[CLUSTER_MAILBOX_ROTATE_ANNOUNCE_PAYLOAD_LEN], hmacKeyId new_id);
 
 /* Parse a rotation-announcement payload back into a key id. Returns
- * false on malformed flex framing, wrong entry count, non-unsigned
- * type, out-of-range value, or zero-id (zero is reserved as
+ * false on malformed flex framing, wrong entry count, an entry that is
+ * not a 64-bit unsigned integer (96/128-bit included), out-of-range
+ * value, or zero-id (zero is reserved as
  * HMAC_KEY_ID_INVALID).  Validates via flexValidateBufferDeep + flexCount
  * == 1 + strict type check on the single entry — the deep validator
  * walks every entry's length-encoding bytes so this routine is safe
@@ -479,15 +480,16 @@ size_t cmEncodeInnerHeader(uint8_t *out, size_t out_cap, uint32_t origin_id,
  * `src_len - *hdr_len`).
  *
  * Returns false on any of: short buffer, malformed flex framing, wrong
- * entry count, non-unsigned entry types, or any value outside its
- * representable range (origin_id > UINT32_MAX, msg_type > UINT8_MAX).
+ * entry count, an entry that is not a 64-bit unsigned integer
+ * (96/128-bit included), or any value outside its representable range
+ * (origin_id > UINT32_MAX, msg_type > UINT8_MAX).
  *
  * Safe under arbitrary input: the framing check uses
  * flexValidateBufferDeep, which performs an O(N) walk of every entry's
  * length-encoding bytes before any iterator runs.  A synthetic byte-
  * tamper that survives envelope verification (computationally infeasible
  * in production, trivial inside a unit test) cannot induce flexNext /
- * flexGetByTypeCopy to overread the buffer here. */
+ * flexGetByTypeBig to overread the buffer here. */
 bool cmDecodeInnerHeader(const uint8_t *src, size_t src_len,
                          uint32_t *origin_id, uint64_t *sequence,
                          uint8_t *msg_type, size_t *hdr_len);
@@ -552,7 +554,8 @@ bool clusterMailboxSnapshot(const clusterMailbox *mb, uint8_t *out,
  * sequences the snapshot had marked as seen. See the
  * cmReorientWindowBits doc-comment in clusterMailbox.c for rationale.
  *
- * Returns false on malformed input. */
+ * Returns false on malformed input, including any field that is not a
+ * 64-bit unsigned integer (a 96/128-bit entry is refused). */
 bool clusterMailboxRestore(clusterMailbox *mb, const uint8_t *buf, size_t len);
 
 /* --- Envelope-wrapped snapshot/restore convenience helpers --------

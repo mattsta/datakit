@@ -409,6 +409,21 @@ size_t cmEncodeInnerHeader(uint8_t *out, size_t out_cap, uint32_t origin_id,
     return n;
 }
 
+/* Decode one wire or snapshot field, which must be a 64-bit unsigned
+ * integer.  flexGetByTypeBig never reads the box's prior state and gives
+ * it its own storage for a wide value, so a crafted entry cannot steer a
+ * write, and it borrows instead of allocating.  No field can hold a
+ * 96/128-bit value: it is refused with every other type. */
+static bool cmReadU64(const flexEntry *fe, uint64_t *out) {
+    databoxBig box;
+    flexGetByTypeBig(fe, &box);
+    if (box.type != DATABOX_UNSIGNED_64) {
+        return false;
+    }
+    *out = box.data.u64;
+    return true;
+}
+
 /* Parse a flex-encoded inner header from `src`. `src_len` is the total
  * length of the payload region returned by envelope verify — it
  * includes the flex prefix AND any trailing opaque payload bytes.
@@ -417,8 +432,9 @@ size_t cmEncodeInnerHeader(uint8_t *out, size_t out_cap, uint32_t origin_id,
  * flex prefix consumed (so the caller can compute payload start /
  * length as `src + *hdr_len` and `src_len - *hdr_len`). Returns false
  * on any of: short buffer, malformed flex framing, wrong entry count,
- * non-unsigned entry types, or any value outside its representable
- * range (origin_id > UINT32_MAX, msg_type > UINT8_MAX). */
+ * an entry that is not a 64-bit unsigned integer (96/128-bit included),
+ * or any value outside its representable range (origin_id >
+ * UINT32_MAX, msg_type > UINT8_MAX). */
 bool cmDecodeInnerHeader(const uint8_t *src, size_t src_len,
                          uint32_t *origin_id, uint64_t *sequence,
                          uint8_t *msg_type, size_t *hdr_len) {
@@ -439,7 +455,7 @@ bool cmDecodeInnerHeader(const uint8_t *src, size_t src_len,
      * MAC pre-gate required.  The production path still goes through
      * the envelope MAC for replay protection and authenticity, but
      * synthetic fuzzers (and any future caller that bypasses the
-     * envelope) cannot induce flexGetByTypeCopy / flexNext to overread. */
+     * envelope) cannot induce flexGetByTypeBig / flexNext to overread. */
     if (!flexValidateBufferDeep(src, flex_len)) {
         return false;
     }
@@ -452,36 +468,33 @@ bool cmDecodeInnerHeader(const uint8_t *src, size_t src_len,
     if (fe == NULL) {
         return false;
     }
-    databox box;
+    uint64_t v = 0;
 
     /* Entry 1: origin_id (unsigned, must fit in uint32_t). */
-    flexGetByTypeCopy(fe, &box);
-    if (box.type != DATABOX_UNSIGNED_64 || box.data.u64 > UINT32_MAX) {
+    if (!cmReadU64(fe, &v) || v > UINT32_MAX) {
         return false;
     }
-    const uint32_t origin = (uint32_t)box.data.u64;
+    const uint32_t origin = (uint32_t)v;
 
     fe = flexNext(f, fe);
     if (fe == NULL) {
         return false;
     }
     /* Entry 2: sequence (unsigned 64-bit). */
-    flexGetByTypeCopy(fe, &box);
-    if (box.type != DATABOX_UNSIGNED_64) {
+    if (!cmReadU64(fe, &v)) {
         return false;
     }
-    const uint64_t seq = box.data.u64;
+    const uint64_t seq = v;
 
     fe = flexNext(f, fe);
     if (fe == NULL) {
         return false;
     }
     /* Entry 3: msg_type (unsigned, must fit in uint8_t). */
-    flexGetByTypeCopy(fe, &box);
-    if (box.type != DATABOX_UNSIGNED_64 || box.data.u64 > UINT8_MAX) {
+    if (!cmReadU64(fe, &v) || v > UINT8_MAX) {
         return false;
     }
-    const uint8_t mtype = (uint8_t)box.data.u64;
+    const uint8_t mtype = (uint8_t)v;
 
     *origin_id = origin;
     *sequence = seq;
@@ -824,10 +837,10 @@ static clusterMailboxIngestResult cmIngestImpl(clusterMailbox *mb,
 
     /* decode the flex-encoded inner header. Returns
      * false (→ BAD_FRAME) on any of: short payload, malformed flex
-     * framing, wrong entry count, non-unsigned types, or out-of-range
-     * values. `hdr_len` is the length the flex prefix consumed —
-     * the remainder of `payload_bytes` is the opaque application
-     * payload that gets handed to the apply callback below. */
+     * framing, wrong entry count, an entry that is not a 64-bit
+     * unsigned integer, or out-of-range values. `hdr_len` is the length the
+     * flex prefix consumed — the remainder of `payload_bytes` is the opaque
+     * application payload that gets handed to the apply callback below. */
     uint32_t origin_id = 0;
     uint64_t sequence = 0;
     uint8_t msg_type = 0;
@@ -1133,7 +1146,7 @@ bool clusterMailboxParseRotateAnnounce(const uint8_t *payload, size_t len,
                                        hmacKeyId *out_new_id) {
     /* Parse the 1-entry flex.  flexValidateBufferDeep performs the full
      * O(N) framing walk (every entry's length-encoding bytes are bound-
-     * checked) before flexGetByTypeCopy touches the contents.  This
+     * checked) before flexGetByTypeBig touches the contents.  This
      * makes the parser safe under arbitrary input bytes; the production
      * path still gates via envelope MAC for replay/authenticity, but a
      * synthetic byte-mutation fuzzer cannot induce an overread here. */
@@ -1151,12 +1164,11 @@ bool clusterMailboxParseRotateAnnounce(const uint8_t *payload, size_t len,
     if (fe == NULL) {
         return false;
     }
-    databox box;
-    flexGetByTypeCopy(fe, &box);
-    if (box.type != DATABOX_UNSIGNED_64 || box.data.u64 > UINT32_MAX) {
+    uint64_t v = 0;
+    if (!cmReadU64(fe, &v) || v > UINT32_MAX) {
         return false;
     }
-    const hmacKeyId id = (hmacKeyId)box.data.u64;
+    const hmacKeyId id = (hmacKeyId)v;
     if (id == HMAC_KEY_ID_INVALID) {
         return false;
     }
@@ -1306,33 +1318,30 @@ bool clusterMailboxRestore(clusterMailbox *mb, const uint8_t *buf, size_t len) {
         if (fe == NULL) {
             return false;
         }
-        databox box;
-        flexGetByTypeCopy(fe, &box);
-        if (box.type != DATABOX_UNSIGNED_64 || box.data.u64 == 0 ||
-            box.data.u64 > UINT32_MAX) {
+        uint64_t raw_origin = 0;
+        if (!cmReadU64(fe, &raw_origin) || raw_origin == 0 ||
+            raw_origin > UINT32_MAX) {
             return false;
         }
-        const uint32_t origin_id = (uint32_t)box.data.u64;
+        const uint32_t origin_id = (uint32_t)raw_origin;
         fe = flexNext(f, fe);
         if (fe == NULL) {
             return false;
         }
 
-        flexGetByTypeCopy(fe, &box);
-        if (box.type != DATABOX_UNSIGNED_64 || box.data.u64 == 0) {
+        uint64_t seq = 0;
+        if (!cmReadU64(fe, &seq) || seq == 0) {
             return false;
         }
-        const uint64_t seq = box.data.u64;
         fe = flexNext(f, fe);
         if (fe == NULL) {
             return false;
         }
 
-        flexGetByTypeCopy(fe, &box);
-        if (box.type != DATABOX_UNSIGNED_64) {
+        uint64_t window_bits = 0;
+        if (!cmReadU64(fe, &window_bits)) {
             return false;
         }
-        const uint64_t window_bits = box.data.u64;
         fe = flexNext(f, fe);
 
         clusterMailboxOrigin *slot = cmLookupOriginMut(mb, origin_id);
@@ -1609,6 +1618,76 @@ static bool cmRecordApply(const clusterFrame *frame, void *ctx) {
     return true;
 }
 
+/* Fill the stack below the caller with 0xFF so a decoder that reads an
+ * uninitialized box sees big = 1 and an all-ones pointer.  ASan is off
+ * here so the array is not framed by redzones, which would leave the
+ * top of the next frame unpoisoned. */
+static __attribute__((noinline, no_sanitize("address"))) void
+cmTestPoisonStack(void) {
+    volatile uint8_t junk[8192];
+    for (size_t i = 0; i < sizeof(junk); i++) {
+        junk[i] = 0xFF;
+    }
+}
+
+/* Copy of 'src' with entry 'idx' replaced by 'wide' (a SIZE_MAX index
+ * copies every entry unchanged).  The crafted entry is checked to be
+ * stored wide, so a refusal is about the width and not a narrowed value. */
+static flex *cmTestReplaceEntry(const flex *src, size_t idx,
+                                const databoxBig *wide) {
+    /* @own: caller; free=flexFree */
+    flex *out = flexNew();
+    size_t i = 0;
+    for (flexEntry *fe = flexHead(src); fe != NULL; fe = flexNext(src, fe)) {
+        databoxBig box;
+        flexGetByTypeBig(fe, &box);
+        const databox *push =
+            (i == idx) ? (const databox *)wide : (const databox *)&box;
+        flexPushByType(&out, push, FLEX_ENDPOINT_TAIL);
+        i++;
+    }
+    if (idx != SIZE_MAX) {
+        databoxBig check;
+        flexGetByTypeBig(flexIndex(out, (int32_t)idx), &check);
+        assert(check.big);
+    }
+    return out;
+}
+
+/* 2^64, 2^127 + 1 and -2^100: the 96-bit and 128-bit unsigned encodings
+ * and a negative one. */
+#define CM_TEST_WIDE_COUNT 3u
+static void cmTestWideValues(databoxBig wides[CM_TEST_WIDE_COUNT]) {
+    DATABOX_BIG_UNSIGNED_128(&wides[0], (__uint128_t)1 << 64);
+    DATABOX_BIG_UNSIGNED_128(&wides[1], ((__uint128_t)1 << 127) | 1u);
+    DATABOX_BIG_SIGNED_128(&wides[2], -((__int128_t)1 << 100));
+}
+
+/* Seal 'inner' (a header flex followed by 'payload') the way
+ * clusterMailboxSeal does, so Ingest verifies the MAC and reaches the
+ * inner-header decoder. */
+static size_t cmTestSealInner(const flex *inner, const uint8_t *key,
+                              size_t key_len, uint8_t *out, size_t out_cap) {
+    uint8_t frame[128];
+    const size_t hlen = flexBytes(inner);
+    const uint8_t payload[3] = {'a', 'b', 'c'};
+    assert(hlen + sizeof(payload) <= sizeof(frame));
+    memcpy(frame, inner, hlen);
+    memcpy(frame + hlen, payload, sizeof(payload));
+    const flexEnvelopeWrapParams wp = {
+        .key = key,
+        .key_len = key_len,
+        .algo = FLEX_ENV_ALGO_HMAC_SHA256,
+        .on_wire_flags = FLEX_ENV_FLAG_NONE,
+    };
+    size_t written = 0;
+    if (!flexEnvelopeWrap(out, out_cap, frame, hlen + sizeof(payload), &wp,
+                          &written)) {
+        return 0;
+    }
+    return written;
+}
+
 int clusterMailboxTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -1619,6 +1698,193 @@ int clusterMailboxTest(int argc, char *argv[]) {
         0xc0, 0xd0, 0xe0, 0xf0, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
         0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0xfe, 0xff};
     const hmacKeyId K1 = 100u;
+
+    TEST("inner header: a 96/128-bit field is refused, sealed or not") {
+        databoxBig wides[CM_TEST_WIDE_COUNT];
+        cmTestWideValues(wides);
+        uint8_t hdr[CLUSTER_MAILBOX_INNER_HEADER_MAX_BYTES];
+        const size_t hlen =
+            cmEncodeInnerHeader(hdr, sizeof(hdr), 7u, 12345u, 42u);
+        if (hlen == 0) {
+            ERRR("encode failed");
+        }
+        const flex *src = (const flex *)hdr;
+
+        hmacKeyring *ring = hmacKeyringCreate();
+        hmacKeyringInstallUnsalted(ring, K1, &hmacAlgoSHA256, test_key,
+                                   sizeof(test_key));
+        cmTestCtx ctx = {0};
+        clusterMailbox *mb = clusterMailboxCreate(
+            ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx);
+        uint8_t sealed[256];
+
+        /* The rebuilt header, sealed by hand, must be applied, so a
+         * refusal below is due to the replaced field alone. */
+        {
+            cleaner(flexFree) flex *same =
+                cmTestReplaceEntry(src, SIZE_MAX, NULL);
+            const size_t n = cmTestSealInner(same, test_key, sizeof(test_key),
+                                             sealed, sizeof(sealed));
+            cmTestPoisonStack();
+            if (n == 0 ||
+                clusterMailboxIngest(mb, sealed, n, K1) != CLUSTER_MAILBOX_OK ||
+                ctx.apply_count != 1u || ctx.sequence != 12345u) {
+                ERRR("hand-sealed unmodified header was not applied");
+            }
+        }
+
+        for (size_t w = 0; w < CM_TEST_WIDE_COUNT; w++) {
+            for (size_t idx = 0; idx < 3u; idx++) {
+                cleaner(flexFree) flex *bad =
+                    cmTestReplaceEntry(src, idx, &wides[w]);
+                uint32_t origin = 0;
+                uint64_t seq = 0;
+                uint8_t mtype = 0;
+                size_t consumed = 0;
+                cmTestPoisonStack();
+                if (cmDecodeInnerHeader(bad, flexBytes(bad), &origin, &seq,
+                                        &mtype, &consumed)) {
+                    ERR("decode accepted value %zu at entry %zu", w, idx);
+                }
+
+                const size_t n = cmTestSealInner(
+                    bad, test_key, sizeof(test_key), sealed, sizeof(sealed));
+                if (n == 0) {
+                    ERR("seal failed for value %zu at entry %zu", w, idx);
+                    continue;
+                }
+                cmTestPoisonStack();
+                const clusterMailboxIngestResult rc =
+                    clusterMailboxIngest(mb, sealed, n, K1);
+                if (rc != CLUSTER_MAILBOX_ERR_BAD_FRAME) {
+                    ERR("ingest of value %zu at entry %zu gave rc=%d", w, idx,
+                        (int32_t)rc);
+                }
+            }
+        }
+        if (ctx.apply_count != 1u ||
+            clusterMailboxLastApplied(mb, 7u) != 12345u) {
+            ERRR("a refused frame reached apply or moved the watermark");
+        }
+        clusterMailboxFree(mb);
+        hmacKeyringFree(ring);
+    }
+
+    TEST("rotation announce: a 96/128-bit key id is refused") {
+        databoxBig wides[CM_TEST_WIDE_COUNT];
+        cmTestWideValues(wides);
+        uint8_t buf[CLUSTER_MAILBOX_ROTATE_ANNOUNCE_PAYLOAD_LEN];
+        if (clusterMailboxBuildRotateAnnounce(buf, 0x1234u) == 0) {
+            ERRR("build failed");
+        }
+        const flex *src = (const flex *)buf;
+        for (size_t w = 0; w < CM_TEST_WIDE_COUNT; w++) {
+            cleaner(flexFree) flex *bad = cmTestReplaceEntry(src, 0, &wides[w]);
+            hmacKeyId got = 0;
+            cmTestPoisonStack();
+            if (clusterMailboxParseRotateAnnounce(bad, flexBytes(bad), &got)) {
+                ERR("parse accepted value %zu", w);
+            }
+        }
+    }
+
+    TEST("restore: a 96/128-bit field is refused, wrapped or not") {
+        databoxBig wides[CM_TEST_WIDE_COUNT];
+        cmTestWideValues(wides);
+        hmacKeyring *ring = hmacKeyringCreate();
+        hmacKeyringInstallUnsalted(ring, K1, &hmacAlgoSHA256, test_key,
+                                   sizeof(test_key));
+        cmTestCtx ctx = {0};
+        clusterMailbox *mb = clusterMailboxCreate(
+            ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx);
+        const uint8_t payload[] = "w";
+        const size_t sz = clusterMailboxSealedSize(mb, sizeof(payload));
+        for (uint32_t origin = 60u; origin <= 61u; origin++) {
+            cleanerName(zfree, Bytes) uint8_t *b = zmalloc(sz);
+            size_t w = 0;
+            clusterMailboxSeal(mb, origin, origin + 3u, 0u, payload,
+                               sizeof(payload), K1, b, sz, &w);
+            clusterMailboxIngest(mb, b, w, K1);
+        }
+        const size_t snap_sz = clusterMailboxSnapshotSize(mb);
+        cleanerName(zfree, Bytes) uint8_t *snap = zmalloc(snap_sz);
+        size_t snap_len = 0;
+        if (!clusterMailboxSnapshot(mb, snap, snap_sz, &snap_len)) {
+            ERRR("snapshot failed");
+        }
+        clusterMailboxFree(mb);
+        const flex *src = (const flex *)snap;
+        const size_t entries = flexCount(src);
+        if (entries != 2u * CLUSTER_MAILBOX_PERSIST_ENTRIES_PER_SLOT) {
+            ERR("snapshot has %zu entries, expected 6", entries);
+        }
+
+        flexEnvelopeWrapParams wp = {
+            .algo = FLEX_ENV_ALGO_HMAC_BLAKE3,
+            .key = test_key,
+            .key_len = sizeof(test_key),
+        };
+        flexEnvelopeVerifyParams vp = {
+            .key = test_key,
+            .key_len = sizeof(test_key),
+        };
+        uint8_t wrapped[256];
+
+        /* The rebuild must restore both ways, so a refusal below is due
+         * to the replaced field alone. */
+        {
+            cleaner(flexFree) flex *same =
+                cmTestReplaceEntry(src, SIZE_MAX, NULL);
+            clusterMailbox *dst = clusterMailboxCreate(
+                ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
+            cmTestPoisonStack();
+            if (!clusterMailboxRestore(dst, same, flexBytes(same)) ||
+                clusterMailboxLastApplied(dst, 61u) != 64u) {
+                ERRR("unmodified rebuild did not restore");
+            }
+            clusterMailboxFree(dst);
+            size_t n = 0;
+            dst = clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL,
+                                       NULL);
+            if (!flexEnvelopeWrap(wrapped, sizeof(wrapped), same,
+                                  flexBytes(same), &wp, &n) ||
+                !clusterMailboxRestoreWrapped(dst, &vp, wrapped, n) ||
+                clusterMailboxLastApplied(dst, 60u) != 63u) {
+                ERRR("unmodified rebuild did not restore wrapped");
+            }
+            clusterMailboxFree(dst);
+        }
+
+        for (size_t w = 0; w < CM_TEST_WIDE_COUNT; w++) {
+            for (size_t idx = 0; idx < entries; idx++) {
+                cleaner(flexFree) flex *bad =
+                    cmTestReplaceEntry(src, idx, &wides[w]);
+                clusterMailbox *dst = clusterMailboxCreate(
+                    ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
+                cmTestPoisonStack();
+                if (clusterMailboxRestore(dst, bad, flexBytes(bad))) {
+                    ERR("restore accepted value %zu at entry %zu", w, idx);
+                }
+                clusterMailboxFree(dst);
+
+                size_t n = 0;
+                if (!flexEnvelopeWrap(wrapped, sizeof(wrapped), bad,
+                                      flexBytes(bad), &wp, &n)) {
+                    ERR("wrap failed for value %zu at entry %zu", w, idx);
+                    continue;
+                }
+                dst = clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256,
+                                           NULL, NULL);
+                cmTestPoisonStack();
+                if (clusterMailboxRestoreWrapped(dst, &vp, wrapped, n)) {
+                    ERR("wrapped restore accepted value %zu at entry %zu", w,
+                        idx);
+                }
+                clusterMailboxFree(dst);
+            }
+        }
+        hmacKeyringFree(ring);
+    }
 
     TEST("create/free roundtrip + algo gating") {
         hmacKeyring *ring = hmacKeyringCreate();
