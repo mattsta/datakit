@@ -3521,7 +3521,7 @@ void multiroarRepr(multiroar *r, uint64_t highest) {
         const databox chunkKey = databoxNewUnsigned(i);
         if (multimapLookupInto(r->map, &chunkKey, &value, 1)) {
             printf("[%" PRIu64 "] = %d (%" PRIu64 " byte%s)\n", i,
-                   GET_CHUNK_TYPE(&value), value.len,
+                   GET_CHUNK_TYPE(&value), (uint64_t)value.len,
                    value.len == 1 ? "" : "s");
         }
     }

@@ -799,7 +799,7 @@ size_t OSRegulateLinuxSmapBytesByFieldForPid(const char *field, int64_t pid) {
         fp = fopen("/proc/self/smaps", "r");
     } else {
         char filename[128];
-        snprintf(filename, sizeof(filename), "/proc/%ld/smaps", pid);
+        snprintf(filename, sizeof(filename), "/proc/%" PRId64 "/smaps", pid);
         fp = fopen(filename, "r");
     }
 

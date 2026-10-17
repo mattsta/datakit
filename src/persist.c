@@ -2035,7 +2035,9 @@ static uint8_t *flexPersistSnapshot(const void *structure, size_t *len) {
 }
 
 static void *flexPersistRestore(const uint8_t *data, size_t len) {
-    if (!flexValidateBuffer(data, len)) {
+    /* flexValidateBuffer also refuses NULL; testing it here as well lets
+     * the compiler see that the copy below never reads from NULL. */
+    if (!data || !flexValidateBuffer(data, len)) {
         return NULL;
     }
     /* @own: caller; free=flexFree */
