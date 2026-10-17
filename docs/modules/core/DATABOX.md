@@ -811,14 +811,15 @@ for (int i = 0; i < 5; i++) {
 ## 128-Bit Integer Support (databoxBig)
 
 ```c
-/* 32-byte databoxBig for 128-bit integers */
+/* 32-byte, 16-byte-aligned databoxBig for 128-bit integers */
 typedef struct databoxBig {
-    databoxUnion data;   /* 8 bytes */
-    databoxInternals_;   /* 8 bytes: same type/flags/len as databox */
-    uint8_t extra[16];   /* Backing store for the 128-bit value */
+    databoxUnion data;                /* 8 bytes */
+    databoxInternals_;                /* 8 bytes: same type/flags/len as databox */
+    _Alignas(16) uint8_t extra[16];   /* Backing store for the 128-bit value */
 } databoxBig;
 
-/* Sets big = true and points data.u128 at the box's own 'extra' */
+/* Sets big = true and points data.u128 at the box's own 'extra';
+ * leaves every other field as it was */
 #define DATABOX_BIG_INIT(dbig)
 
 /* Set 128-bit values (each does DATABOX_BIG_INIT first) */

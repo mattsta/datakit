@@ -937,10 +937,13 @@ int databoxCompare(const databox *restrict a, const databox *restrict b) {
 
 #ifdef DATAKIT_TEST
 #include "cleaner.h"
+#include "flex.h"
 #include <stdio.h> /* printf */
 
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleanerName(uint8_t *, zfree, U8);
+defcleanerName(databoxBig *, zfree, Big);
+defcleaner(flex *, flexFree);
 
 const char *databoxReprStr(const databox *const box) {
     _Thread_local static char buf[256];
@@ -2040,6 +2043,43 @@ int databoxTest(int argc, char *argv[]) {
         }
 
         printf("  verified 128-bit integer operations\n");
+    }
+
+    TEST("databoxBig: the 128-bit store is 16-byte aligned in any layout") {
+        /* The 8-byte member ahead of the box puts it at 8 mod 16 whenever
+         * databoxBig itself is only 8-aligned. */
+        struct {
+            _Alignas(16) uint64_t pad;
+            databoxBig b;
+        } padded;
+        databoxBig arr[3];
+        cleanerName(zfree, Big) databoxBig *heap = zcalloc(3, sizeof(*heap));
+        databoxBig *const where[] = {&padded.b, &arr[0],  &arr[1], &arr[2],
+                                     &heap[0],  &heap[1], &heap[2]};
+        if (_Alignof(databoxBig) != 16 || sizeof(databoxBig) != 32 ||
+            offsetof(databoxBig, extra) != 16) {
+            ERRR("databoxBig layout is not 32 bytes with a 16-aligned extra");
+        }
+
+        /* Decode a 128-bit entry into each placement: the store through
+         * data.u128 is a full __uint128_t write. */
+        const __uint128_t wide = UINT128_MAX - 12345;
+        databoxBig in;
+        DATABOX_BIG_UNSIGNED_128(&in, wide);
+        cleaner(flexFree) flex *f = flexNewFromDataboxBig(&in);
+        for (size_t i = 0; i < COUNT_ARRAY(where); i++) {
+            databoxBig *const b = where[i];
+            if (((uintptr_t)b->extra % 16) != 0) {
+                ERR("databoxBig.extra at placement %zu is not 16-aligned", i);
+                continue;
+            }
+
+            DATABOX_BIG_INIT(b);
+            flexGetByType(flexHead(f), (databox *)b);
+            if (b->type != DATABOX_UNSIGNED_128 || *b->data.u128 != wide) {
+                ERR("128-bit decode at placement %zu read back wrong", i);
+            }
+        }
     }
 
     TEST("FUZZ: random signed comparison with oracle") {

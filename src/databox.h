@@ -181,16 +181,28 @@ typedef struct databox {
 _Static_assert(sizeof(databox) == 16, "databox struct too big!");
 #endif
 
-/* 'databoxBig' is 32 bytes total */
+/* 'databoxBig' is 32 bytes total and 16-byte aligned.
+ *
+ * 'extra' is the inline store for a 96/128-bit value: DATABOX_BIG_INIT
+ * aims data.i128 / data.u128 at it, and decoders write the value through
+ * that pointer as a full __int128_t / __uint128_t, which needs 16-byte
+ * alignment.  The leading 16 bytes are layout-compatible with 'databox',
+ * so a databoxBig may be passed wherever a 'databox *' is expected. */
 typedef struct databoxBig {
-    databoxUnion data;                  /* 8 bytes */
-    databoxInternals_;                  /* 8 bytes */
-    uint8_t extra[sizeof(__uint128_t)]; /* 16 bytes */
+    databoxUnion data;                               /* 8 bytes */
+    databoxInternals_;                               /* 8 bytes */
+    _Alignas(16) uint8_t extra[sizeof(__uint128_t)]; /* 16 bytes */
 } databoxBig;
 #if DK_C11
 _Static_assert(sizeof(__int128_t) == sizeof(__uint128_t),
                "Your 128 bit integers are weird?");
 _Static_assert(sizeof(databoxBig) == 32, "databoxBig struct too big!");
+_Static_assert(_Alignof(databoxBig) == 16,
+               "databoxBig must be 16-byte aligned for its 128-bit store");
+_Static_assert(offsetof(databoxBig, extra) % 16 == 0,
+               "databoxBig.extra must be 16-byte aligned");
+_Static_assert(offsetof(databoxBig, extra) == sizeof(databox),
+               "databoxBig must begin with a complete databox");
 #endif
 
 #define DATABOX_BIG_INIT(dbig)                                                 \
