@@ -2476,6 +2476,7 @@ static void intsetBigPersistFree(void *structure) {
 }
 
 const persistOps persistOpsIntsetBig = {
+    .deletesWhenEmpty = true,
     .type = PERSIST_TYPE_INTSETBIG,
     .name = "intsetBig",
     .snapshot = intsetBigPersistSnapshot,
@@ -3044,6 +3045,7 @@ static void *multimapPersistNewEmpty(void) {
 }
 
 const persistOps persistOpsMultimap = {
+    .deletesWhenEmpty = true,
     .type = PERSIST_TYPE_MULTIMAP,
     .name = "multimap",
     .snapshot = multimapPersistSnapshot,
@@ -3411,6 +3413,7 @@ static void *multilistPersistNewEmpty(void) {
 }
 
 const persistOps persistOpsMultilist = {
+    .deletesWhenEmpty = true,
     .type = PERSIST_TYPE_MULTILIST,
     .name = "multilist",
     .snapshot = multilistPersistSnapshot,

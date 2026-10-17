@@ -382,6 +382,11 @@ struct persistOps {
      * Returns true on success. */
     bool (*applyOp)(void *structure, persistOp op, const uint8_t *data,
                     size_t len);
+    /* True when an empty instance of this type is not a meaningful
+     * value, so an embedding application may delete a key when its last
+     * element is removed.  Advisory: the persist layer does not read
+     * it. */
+    bool deletesWhenEmpty;
 
     /* ---- Optional Optimization Hooks ---- */
 
