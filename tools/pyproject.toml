@@ -1,0 +1,19 @@
+[project]
+name = "dktools"
+version = "0.1.0"
+description = "datakit platform automation: allocation-ownership audit and enforcement tooling"
+readme = "README.md"
+authors = [
+    { name = "Matt Stancliff", email = "matt@genges.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "libclang>=18.1.1",
+]
+
+[project.scripts]
+dktools = "dktools.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.9.26,<0.10.0"]
+build-backend = "uv_build"
