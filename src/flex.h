@@ -46,7 +46,11 @@ void flexFree(flex *f);
  *     with DATABOX_BIG_INIT; see flexGetByType.
  *   - It does not verify reverse-traversal trailers, so walk untrusted
  *     bytes forward only (flexHead / flexNext, not flexTail / flexPrev).
- *   - It does not verify the contents of nested containers.
+ *   - It does not verify the contents of nested containers.  A
+ *     container box decoded from validated bytes points at nested flex
+ *     bytes nobody has checked; validate them before reading them
+ *     (flexPeekTotalBytes(start, len, &total), then
+ *     flexValidateBufferDeep(start, total)).
  *
  * flexTest runs every single-byte mutation of several valid flexes
  * through these functions and decodes every buffer the deep check
@@ -256,8 +260,11 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
  * the key; every slot is VOID when nothing was replaced).  'replacedOut'
  * may alias the value boxes in 'box' (new values in, old values out).
  * Only inline payloads (integers up to 64 bits, reals, pointers,
- * references) stay valid; a BYTES slot points into the rewritten flex and
- * must not be read.  A 96/128-bit integer does not fit a databox, so its
+ * references) stay valid.  A BYTES or container slot reports where the
+ * old entry was, and the replace rewrites those bytes in place even when
+ * the flex is not reallocated, so such a slot must not be read; a caller
+ * that needs an old variable-length value reads it with flexGetByTypeCopy
+ * before the insert.  A 96/128-bit integer does not fit a databox, so its
  * slot reports only the type (SIGNED_128 or UNSIGNED_128) with a NULL
  * payload pointer; read such a value before the insert if it is needed. */
 bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectReplacing(
