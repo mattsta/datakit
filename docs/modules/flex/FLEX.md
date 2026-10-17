@@ -161,10 +161,22 @@ Notes that matter when reading flex bytes by hand:
   `FLEX_UINT_8B` and `-42` in `FLEX_NEG_8B`.
 - `FLEX_IS_INTEGER` covers 201-216 only; the 96/128-bit encodings are a
   separate `FLEX_IS_INTEGER_BIG` class and require a `databoxBig`.
-- A `FLEX_NEG_*` 64-bit-or-narrower encoding decodes into an `int64_t`, so
-  it holds values down to `INT64_MIN` only. A value below `INT64_MIN` is
-  stored as `FLEX_NEG_96B` or wider, even when its biased magnitude would
-  fit 64 unsigned bits, and reads back as `DATABOX_SIGNED_128`.
+- The writer stores a value below `INT64_MIN` as `FLEX_NEG_96B` or wider,
+  even when its biased magnitude would fit 64 unsigned bits, so
+  `FLEX_NEG_64B` magnitudes stay at or below `INT64_MAX`.
+- The format also accepts a `FLEX_NEG_64B` magnitude with bit 63 set
+  (2^63 to 2^64 - 1), and `flexValidateBufferDeep` passes it. Such an entry
+  holds a value in [-2^64, -2^63 - 1], and every reader treats it as that
+  value: it decodes as `DATABOX_SIGNED_128` (type-only into a plain
+  databox, the full value through `flexGetByTypeBig`), sorts and compares
+  among the other integers by value, and is refused by the 64-bit helpers
+  (`flexGetSigned`/`Unsigned`, `flexReplaceSigned`/`Unsigned`,
+  `flexIncrby*`, `flexCompareSigned`/`Unsigned`, `flexGetSingleDatabox`). Whether an integer is wide is
+  therefore a property of the entry, not of its encoding byte alone.
+- An in-place integer replace (`flexReplaceSigned`/`Unsigned`, and the
+  `flexIncrby*` calls built on them) keeps the entry's width when the new
+  value fits it, and switches the entry between `FLEX_UINT_*` and
+  `FLEX_NEG_*` of that width to follow the new value's sign.
 - Immediate encodings occupy **one** byte total: there is no trailing
   reverse encoding to skip, because there is no payload between them.
 

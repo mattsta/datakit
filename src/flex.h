@@ -386,6 +386,9 @@ flexEntry DK_FN_PURE *flexTailWithElements(const flex *const f,
  *     therefore be initialized: zero the box, or use DATABOX_BIG_INIT.
  *     The owner of the destination sets it up (see databox.h); when the
  *     destination is yours, prefer flexGetByTypeBig.
+ *   - "96/128-bit integer" means the value, not only the encoding: a
+ *     64-bit negative entry whose stored magnitude exceeds INT64_MAX
+ *     holds a value below INT64_MIN and decodes as SIGNED_128 too.
  *   - Only type, data and (for variable-length types) len are written;
  *     the flag bits ('allocated', 'big') are left as they were.
  *   - An MDSC entry reports DATABOX_PTR_MDSC with the stored pointer.
@@ -423,7 +426,11 @@ bool flexGetNextByTypeBig(flex *f, flexEntry **fe, databoxBig *box);
 bool flexGetSigned(flexEntry *fe, int64_t *value);
 bool flexGetUnsigned(flexEntry *fe, uint64_t *value);
 
-/* Replace */
+/* Replace.  flexReplaceSigned/Unsigned and flexIncrby* take 64-bit
+ * integer entries (flexIncrbySigned also booleans) and return false for
+ * any other entry, 96/128-bit values included.  A new value that fits
+ * the entry's width is written in place, and the entry's sign follows
+ * the new value. */
 void flexReplaceByType(flex **ff, flexEntry *fe, const databox *box);
 void flexReplaceBytes(flex **ff, flexEntry *fe, const void *s,
                       const size_t len);

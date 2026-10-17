@@ -724,6 +724,29 @@ DK_INLINE_ALWAYS void flexEntryDataPopulate(const flexEntry *restrict fe,
     fed->fe = fe;
 }
 
+/* A negative encoding stores value v as the magnitude -v - 1.  In
+ * FLEX_NEG_64B a magnitude up to INT64_MAX is a 64-bit value; one with
+ * bit 63 set is a value in [-2^64, -2^63 - 1], which only a 128-bit type
+ * holds.  The encoder stores those values as FLEX_NEG_96B, but the format
+ * accepts both, so wideness is a property of the entry, not of its
+ * encoding byte alone.  The payload is little-endian, so bit 63 is the
+ * top bit of its last byte. */
+DK_INLINE_ALWAYS bool flexNeg64IsWide_(const flexEntry *fe) {
+    return fe[0] == FLEX_NEG_64B && (fe[1 + sizeof(uint64_t) - 1] & 0x80);
+}
+
+/* True when the entry at 'fe' decodes to DATABOX_SIGNED_128 or
+ * DATABOX_UNSIGNED_128. */
+DK_INLINE_ALWAYS bool flexEntryIsIntegerWide_(const flexEntry *fe) {
+    return FLEX_IS_INTEGER_BIG(fe[0]) || flexNeg64IsWide_(fe);
+}
+
+/* True when the entry at 'fe' decodes to DATABOX_SIGNED_64 or
+ * DATABOX_UNSIGNED_64. */
+DK_INLINE_ALWAYS bool flexEntryIsIntegerNarrow_(const flexEntry *fe) {
+    return FLEX_IS_INTEGER(fe[0]) && !flexNeg64IsWide_(fe);
+}
+
 /* Return total number of bytes used by entry at 'fe'. */
 DK_INLINE_ALWAYS size_t flexRawEntryLength(flexEntry *const fe) {
     size_t len;
@@ -1097,11 +1120,10 @@ flexEncodingReferenceUnsigned(uint64_t encodedValue) {
 }
 
 /* increase the negative number by one because we don't store
- * signed zero and can use '0' to store '-1', etc. */
+ * signed zero and can use '0' to store '-1', etc.  The writer stores the
+ * negation of the result, so a negative value v is stored as the
+ * magnitude -v - 1, and the decoder restores it as -magnitude - 1. */
 #define SIGNED_PREPARE(v) ((v) + 1)
-
-/* restore the sign bit then go one lower to reverse SIGNED_PREPARE */
-#define SIGNED_RESTORE(v) (-(v) - 1)
 
 DK_STATIC DK_FN_CONST inline int64_t flexPrepareSigned(int64_t value) {
     /* We don't store "signed zero," so we can save
@@ -1410,14 +1432,17 @@ DK_STATIC void flexLoadFixedLength_(const flexEntryData *entry, databox *r) {
     case FLEX_NEG_40B:
     case FLEX_NEG_48B:
     case FLEX_NEG_56B:
-    case FLEX_NEG_64B:
+    case FLEX_NEG_64B: {
+        uint64_t magnitude;
         varintExternalGetQuick_(
-            d, EXTERNAL_VARINT_WIDTH_FROM_ENCODING_(encoding), r->data.i64);
-        r->type = DATABOX_SIGNED_64;
-        r->data.i64 = SIGNED_RESTORE(r->data.i64); /* restore sign and offset */
-        break;
-    case FLEX_NEG_96B:
-    case FLEX_NEG_128B:
+            d, EXTERNAL_VARINT_WIDTH_FROM_ENCODING_(encoding), magnitude);
+        if (likely(magnitude <= INT64_MAX)) {
+            r->type = DATABOX_SIGNED_64;
+            r->data.i64 = -(int64_t)magnitude - 1;
+            break;
+        }
+
+        /* A FLEX_NEG_64B value below INT64_MIN (see flexNeg64IsWide_). */
         r->type = DATABOX_SIGNED_128;
         if (!r->big) {
             /* Type only, as for the unsigned case above. */
@@ -1425,10 +1450,26 @@ DK_STATIC void flexLoadFixedLength_(const flexEntryData *entry, databox *r) {
             break;
         }
         assert(r->data.i128);
-        *r->data.i128 = varintBigExternalGet(
-            d, encoding == FLEX_NEG_96B ? 96 / 8 : 128 / 8);
-        *r->data.i128 = SIGNED_RESTORE(*r->data.i128);
+        *r->data.i128 = -(__int128_t)magnitude - 1;
         break;
+    }
+    case FLEX_NEG_96B:
+    case FLEX_NEG_128B: {
+        r->type = DATABOX_SIGNED_128;
+        if (!r->big) {
+            /* Type only, as for the unsigned case above. */
+            r->data.ptr = NULL;
+            break;
+        }
+        assert(r->data.i128);
+        const __uint128_t magnitude = varintBigExternalGet(
+            d, encoding == FLEX_NEG_96B ? 96 / 8 : 128 / 8);
+        /* -magnitude - 1 is ~magnitude.  Computing it unsigned keeps the
+         * decode defined for a FLEX_NEG_128B magnitude above INT128_MAX,
+         * which has no 128-bit value (it wraps). */
+        *r->data.i128 = (__int128_t)~magnitude;
+        break;
+    }
     case FLEX_REAL_B16B:
         /* Restore 2 byte real to 4 byte real */
         memcpy(&r->data.u16, d, 2);
@@ -1506,7 +1547,10 @@ DK_STATIC void flexLoadFixedLength_(const flexEntryData *entry, databox *r) {
     }
 }
 
+/* The 64-bit loaders take narrow entries only: their box has no wide
+ * storage. */
 DK_STATIC int64_t flexLoadSigned(const flexEntryData *entry) {
+    assert(!flexEntryIsIntegerWide_(entry->fe));
     databox box;
     flexLoadFixedLength_(entry, &box);
     return box.data.i64;
@@ -1522,6 +1566,7 @@ DK_STATIC __int128_t flexLoadSignedBig(const flexEntryData *entry) {
 }
 
 DK_STATIC uint64_t flexLoadUnsigned(const flexEntryData *entry) {
+    assert(!flexEntryIsIntegerWide_(entry->fe));
     databox box;
     flexLoadFixedLength_(entry, &box);
     return box.data.u64;
@@ -2788,7 +2833,7 @@ bool flexReplaceInteger__(flex **const ff, flexEntry *const fe,
 
     /* TODO: Also allow replace of non-integers, but integer-storage types.
      */
-    if (!FLEX_IS_INTEGER(entry.encoding)) {
+    if (!flexEntryIsIntegerNarrow_(fe)) {
         return false;
     }
 
@@ -2825,14 +2870,24 @@ bool flexReplaceInteger__(flex **const ff, flexEntry *const fe,
          * still takes 8 bytes, even though we could store '4' as
          * just one byte). */
 
-        /* Save new integer with the _original_ encoding, even if original
-         * encoding is larger than the optimal encoding for this value. */
-
-        /* flexSaveInteger will recast 'value' to the proper type for
-         * writing.
-         */
-        varintExternalPutFixedWidthQuick_(FLEX_ENTRY_DATA(&entry),
-                                          useBox.data.u64, oldEncodingSize);
+        /* Save new integer with the _original_ encoding's width, even if
+         * that is larger than the optimal encoding for this value.  The
+         * sign comes from the new value: a negative value is stored as
+         * its magnitude (the negation of its prepared value) under the
+         * NEG encoding of that width, so the encoding byte at each end of
+         * the entry is rewritten to match. */
+        const bool negative =
+            ((enc - FLEX_NEG_8B) % FLEX_INTEGER_ENCODING_STEP) == 0;
+        const flexEncoding widthBase =
+            entry.encoding -
+            ((entry.encoding - FLEX_NEG_8B) % FLEX_INTEGER_ENCODING_STEP);
+        const flexEncoding inPlace = widthBase + (negative ? 0 : 1);
+        const uint64_t stored =
+            negative ? (uint64_t)-useBox.data.i64 : useBox.data.u64;
+        flexData *const data = FLEX_ENTRY_DATA(&entry);
+        varintExternalPutFixedWidthQuick_(data, stored, oldEncodingSize);
+        fe[0] = inPlace;
+        data[oldEncodingSize] = inPlace;
         return true;
     }
 
@@ -2890,9 +2945,9 @@ bool flexIncrbySigned(flex **const ff, flexEntry *const fe,
      * value can't round-trip through the int64 result and needs a
      * wide increment variant. The gate must precede the load:
      * flexLoadSigned decodes a 96/128-bit entry THROUGH a wide pointer
-     * the narrow databox here does not provide, so the encoding must
-     * be rejected before it is ever loaded. */
-    if (!FLEX_IS_INTEGER(entry.encoding) && !FLEX_IS_BOOL(entry.encoding)) {
+     * the narrow databox here does not provide, so the entry must be
+     * rejected before it is ever loaded. */
+    if (!flexEntryIsIntegerNarrow_(fe) && !FLEX_IS_BOOL(entry.encoding)) {
         return false;
     }
 
@@ -2947,7 +3002,7 @@ bool flexIncrbyUnsigned(flex **const ff, flexEntry *const fe,
 
     flexEntryData entry;
     flexEntryDataPopulate(fe, &entry);
-    if (!FLEX_IS_INTEGER(entry.encoding)) {
+    if (!flexEntryIsIntegerNarrow_(fe)) {
         return false;
     }
 
@@ -3324,7 +3379,7 @@ bool flexGetSingleDatabox(const uint8_t *buf, size_t buflen, databox *out) {
     }
     /* A plain databox cannot hold a 96/128-bit value; that needs
      * flexGetSingleDataboxBig. */
-    if (FLEX_IS_INTEGER_BIG(fe[0])) {
+    if (flexEntryIsIntegerWide_(fe)) {
         return false;
     }
     flexGetByType(fe, out);
@@ -3412,7 +3467,7 @@ bool flexGetTwoDataboxes(const uint8_t *buf, size_t buflen, databox *a,
     /* Plain databoxes cannot hold a 96/128-bit value.  Both entries are
      * checked before either box is written, so a refusal leaves both
      * untouched. */
-    if (FLEX_IS_INTEGER_BIG(fe[0]) || FLEX_IS_INTEGER_BIG(second[0])) {
+    if (flexEntryIsIntegerWide_(fe) || flexEntryIsIntegerWide_(second)) {
         return false;
     }
     flexGetByType(fe, a);
@@ -3856,7 +3911,7 @@ void flexGetByTypeCopy(const flexEntry *const fe, databox *box) {
         box->type = DATABOX_BYTES;
         box->allocated = true;
         box->big = false;
-    } else if (FLEX_IS_INTEGER_BIG(entry.encoding)) {
+    } else if (flexEntryIsIntegerWide_(fe)) {
         /* With big set the caller supplied the storage, and its owner is
          * unchanged.  Otherwise the value goes to a heap block the box
          * owns, so the result never depends on storage outside the box. */
@@ -4185,7 +4240,7 @@ bool flexCompareBytes(flexEntry *fe, const void *data, const size_t len) {
         return false;
     }
 
-    if (FLEX_IS_INTEGER(entry.encoding)) {
+    if (flexEntryIsIntegerNarrow_(fe)) {
         /* Try to compare encoded values. Don't compare encoding because
          * different implementations may encoded integers differently. */
         int64_t val;
@@ -4203,7 +4258,7 @@ DK_STATIC bool flexEntryCompareSigned__(const flexEntryData *entry,
     DK_NOTUSED(len);
 
     /* Compare current entry with specified entry */
-    if (FLEX_IS_INTEGER(entry->encoding)) {
+    if (flexEntryIsIntegerNarrow_(entry->fe)) {
         const int64_t val = flexLoadSigned(entry);
         if (val == *(int64_t *)src) {
             return true;
@@ -4218,7 +4273,7 @@ DK_STATIC bool flexEntryCompareUnsigned__(const flexEntryData *entry,
     DK_NOTUSED(len);
 
     /* Compare current entry with specified entry */
-    if (FLEX_IS_INTEGER(entry->encoding)) {
+    if (flexEntryIsIntegerNarrow_(entry->fe)) {
         const uint64_t val = flexLoadUnsigned(entry);
         if (val == *(uint64_t *)src) {
             return true;
@@ -4273,7 +4328,7 @@ bool flexCompareSigned(flexEntry *fe, int64_t val) {
         while (_count--) {                                                     \
             flexEntryData _entry = {0};                                        \
             flexEntryDataPopulate(_fe, &_entry);                               \
-            if (FLEX_IS_INTEGER_BIG(_entry.encoding)) {                        \
+            if (flexEntryIsIntegerWide_(_fe)) {                                \
                 DATABOX_BIG_INIT(&_big);                                       \
             }                                                                  \
             flexLoadFixedLength_(&_entry, _box);                               \
@@ -4938,19 +4993,9 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMulti(
             for (int_fast32_t i = 0; i < elementsPerEntry - 1; i++) {
                 prior = flexNext(*ff, prior);
                 assert(prior);
-                switch ((flexEncoding)prior[0]) {
-                case FLEX_NEG_96B:
-                case FLEX_NEG_128B:
-                    replacedOut[i].type = DATABOX_SIGNED_128;
-                    break;
-                case FLEX_UINT_96B:
-                case FLEX_UINT_128B:
-                    replacedOut[i].type = DATABOX_UNSIGNED_128;
-                    break;
-                default:
-                    flexGetByType(prior, &replacedOut[i]);
-                    break;
-                }
+                /* The slot was reset above, so its 'big' is clear and a
+                 * wide value decodes type-only. */
+                flexGetByType(prior, &replacedOut[i]);
             }
         }
 
@@ -6191,13 +6236,13 @@ void flexRepr(const flex *f) {
                     printReadable(fe, entry.len);
 #endif
                 }
-            } else if (FLEX_IS_INTEGER(entry.encoding) &&
+            } else if (flexEntryIsIntegerNarrow_(entry.fe) &&
                        entry.encoding < FLEX_UINT_64B) {
                 printf("[#:%" PRId64 "]", flexLoadSigned(&entry));
-            } else if (FLEX_IS_INTEGER(entry.encoding) &&
+            } else if (flexEntryIsIntegerNarrow_(entry.fe) &&
                        entry.encoding == FLEX_UINT_64B) {
                 printf("[#:%" PRIu64 "]", flexLoadUnsigned(&entry));
-            } else if (FLEX_IS_INTEGER_BIG(entry.encoding)) {
+            } else if (flexEntryIsIntegerWide_(entry.fe)) {
                 uint8_t buf[64];
                 int wroteLen;
                 if (entry.encoding < FLEX_UINT_128B) {
@@ -7643,6 +7688,334 @@ static int32_t flexTestWideSorted(void) {
     return bad;
 }
 
+/* Push a FLEX_NEG_64B entry that stores 'magnitude' as given.  The
+ * encoder never writes a magnitude above INT64_MAX (it stores those
+ * values as FLEX_NEG_96B), so these bytes are written directly. */
+static flexEntry *flexTestPushNeg64(flex **const ff, const uint64_t magnitude) {
+    flexPushSigned(ff, INT64_MIN, FLEX_ENDPOINT_TAIL);
+    flexEntry *const fe = flexTail(*ff);
+    assert(fe[0] == FLEX_NEG_64B);
+    varintExternalPutFixedWidthQuick_(fe + 1, magnitude, VARINT_WIDTH_64B);
+    return fe;
+}
+
+/* The value a FLEX_NEG_64B magnitude stands for. */
+static flexTestWide flexTestNeg64Value(const uint64_t magnitude) {
+    return flexTestWideS(-(__int128_t)magnitude - 1);
+}
+
+/* FLEX_NEG_64B entries whose magnitude has bit 63 set hold values in
+ * [-2^64, -2^63 - 1].  Every reader decodes them as that value. */
+static int32_t flexTestNeg64Wide(void) {
+    int32_t bad = 0;
+    const uint64_t top = UINT64_C(1) << 63;
+    const uint64_t mags[] = {top, top + 1, top + 12345, UINT64_MAX - 1,
+                             UINT64_MAX};
+    const size_t magCount = sizeof(mags) / sizeof(mags[0]);
+
+    for (size_t i = 0; i < magCount; i++) {
+        const flexTestWide want = flexTestNeg64Value(mags[i]);
+        /* What a 64-bit decode of these bytes would report. */
+        const int64_t wrapped = (int64_t)~mags[i];
+
+        cleaner(flexFree) flex *f = flexNew();
+        flexEntry *fe = flexTestPushNeg64(&f, mags[i]);
+        if (!flexValidateBufferDeep(f, flexBytes(f))) {
+            printf("  FAIL: magnitude %zu rejected by deep validation\n", i);
+            bad++;
+            continue;
+        }
+
+        databoxBig b;
+        memset(&b, 0xFF, sizeof(b));
+        flexGetByTypeBig(fe, &b);
+        if (!flexTestWideMatches((const databox *)&b, want) || !b.big ||
+            b.data.ptr != (void *)b.extra || b.allocated) {
+            printf("  FAIL: magnitude %zu flexGetByTypeBig\n", i);
+            bad++;
+        }
+
+        databox plain = {{0}};
+        flexGetByType(fe, &plain);
+        if (plain.type != DATABOX_SIGNED_128 || plain.data.ptr) {
+            printf("  FAIL: magnitude %zu plain decode is not type-only\n", i);
+            bad++;
+        }
+
+        int64_t s = 0;
+        uint64_t u = 0;
+        if (flexGetSigned(fe, &s) || flexGetUnsigned(fe, &u)) {
+            printf("  FAIL: magnitude %zu read as a 64-bit value\n", i);
+            bad++;
+        }
+
+        databox copy = {{0}};
+        flexGetByTypeCopy(fe, &copy);
+        if (!flexTestWideMatches(&copy, want) || !copy.allocated || !copy.big) {
+            printf("  FAIL: magnitude %zu flexGetByTypeCopy\n", i);
+            bad++;
+        }
+
+        databoxFreeData(&copy);
+
+        if (flexCompareSigned(fe, wrapped) ||
+            flexCompareUnsigned(fe, (uint64_t)wrapped) ||
+            flexFindSigned(f, flexHead(f), wrapped, 0) ||
+            flexFindUnsigned(f, flexHead(f), (uint64_t)wrapped, 0)) {
+            printf("  FAIL: magnitude %zu matched a 64-bit value\n", i);
+            bad++;
+        }
+
+        if (flexIncrbySigned(&f, fe, 1, NULL) ||
+            flexIncrbyUnsigned(&f, fe, 1, NULL)) {
+            printf("  FAIL: magnitude %zu took a 64-bit increment\n", i);
+            bad++;
+        }
+
+        databox one = {{0}};
+        databoxBig oneBig;
+        memset(&oneBig, 0xFF, sizeof(oneBig));
+        if (flexGetSingleDatabox(f, flexBytes(f), &one) ||
+            !flexGetSingleDataboxBig(f, flexBytes(f), &oneBig) ||
+            !flexTestWideMatches((const databox *)&oneBig, want)) {
+            printf("  FAIL: magnitude %zu single-databox decode\n", i);
+            bad++;
+        }
+
+        /* The canonical encoding of the same value compares equal. */
+        cleaner(flexFree) flex *canon = flexNew();
+        databoxBig c;
+        flexTestWideBox(want, true, &c);
+        flexPushDataboxBig(&canon, &c, FLEX_ENDPOINT_TAIL);
+        databoxBig cb;
+        flexGetByTypeBig(flexHead(canon), &cb);
+        if (flexHead(canon)[0] != FLEX_NEG_96B ||
+            databoxCompare((const databox *)&b, (const databox *)&cb) != 0) {
+            printf("  FAIL: magnitude %zu differs from its canonical form\n",
+                   i);
+            bad++;
+        }
+
+        flexPushSigned(&f, -1, FLEX_ENDPOINT_TAIL);
+        databox pa = {{0}};
+        databox pb = {{0}};
+        databoxBig ba;
+        databoxBig bb;
+        if (flexGetTwoDataboxes(f, flexBytes(f), &pa, &pb) ||
+            !flexGetTwoDataboxesBig(f, flexBytes(f), &ba, &bb) ||
+            !flexTestWideMatches((const databox *)&ba, want) ||
+            bb.type != DATABOX_SIGNED_64 || bb.data.i64 != -1) {
+            printf("  FAIL: magnitude %zu two-databox decode\n", i);
+            bad++;
+        }
+
+        /* The 64-bit replace refuses it, as for any wide entry, and the
+         * value survives. */
+        fe = flexHead(f);
+        databoxBig r;
+        if (flexReplaceSigned(&f, fe, -5) || flexReplaceUnsigned(&f, fe, 5) ||
+            (flexGetByTypeBig(flexHead(f), &r),
+             !flexTestWideMatches((const databox *)&r, want))) {
+            printf("  FAIL: magnitude %zu took a 64-bit replace\n", i);
+            bad++;
+        }
+    }
+
+    /* Sorted: crafted entries among canonical wide and narrow values. */
+    struct {
+        flexTestWide v;
+        uint64_t neg64; /* nonzero: store as this FLEX_NEG_64B magnitude */
+    } rows[] = {
+        {flexTestNeg64Value(UINT64_MAX), UINT64_MAX},
+        {flexTestWideS(-((__int128_t)1 << 64) + 7), 0},
+        {flexTestNeg64Value(top + 12345), top + 12345},
+        {flexTestWideS(-((__int128_t)1 << 63) - 2), 0},
+        {flexTestNeg64Value(top), top},
+        {flexTestWideS(INT64_MIN), 0},
+        {flexTestWideS(-1), 0},
+        {flexTestWideU(0), 0},
+        {flexTestWideU(5), 0},
+        {flexTestWideU((__uint128_t)1 << 64), 0},
+    };
+    const size_t rowCount = sizeof(rows) / sizeof(rows[0]);
+
+    cleaner(flexFree) flex *f = flexNew();
+    for (size_t i = 0; i < rowCount; i++) {
+        if (rows[i].neg64) {
+            flexTestPushNeg64(&f, rows[i].neg64);
+        } else {
+            databoxBig k;
+            flexTestWideBox(rows[i].v, false, &k);
+            flexPushDataboxBig(&f, &k, FLEX_ENDPOINT_TAIL);
+        }
+    }
+
+    for (size_t i = 0; i < rowCount; i++) {
+        databoxBig k;
+        flexTestWideBox(rows[i].v, true, &k);
+        const databox *const kp = (const databox *)&k;
+        if (flexFindByTypeSorted(f, 1, kp) != flexIndex(f, (int32_t)i) ||
+            flexCompareEntries(f, &kp, 1, (int_fast32_t)i) != 0 ||
+            (i > 0 &&
+             flexCompareEntries(f, &kp, 1, (int_fast32_t)i - 1) >= 0)) {
+            printf("  FAIL: sorted find of row %zu\n", i);
+            bad++;
+        }
+    }
+
+    const flexTestWide absent[] = {
+        flexTestWideS(-((__int128_t)1 << 64) + 1),
+        flexTestWideS(-((__int128_t)1 << 63) - 12345),
+        flexTestWideS(-((__int128_t)1 << 63) - 1 - 12346),
+        flexTestWideS((__int128_t)INT64_MIN + 1),
+    };
+    for (size_t i = 0; i < sizeof(absent) / sizeof(absent[0]); i++) {
+        databoxBig k;
+        flexTestWideBox(absent[i], false, &k);
+        if (flexFindByTypeSorted(f, 1, (const databox *)&k)) {
+            printf("  FAIL: sorted find of absent value %zu\n", i);
+            bad++;
+        }
+    }
+
+    /* Sorted inserts land between the crafted entries. */
+    const flexTestWide added[] = {
+        flexTestWideS(-((__int128_t)1 << 64) + 1),
+        flexTestWideS(-((__int128_t)1 << 63) - 100),
+        flexTestWideS((__int128_t)INT64_MIN + 1),
+    };
+    flexTestWide oracle[sizeof(rows) / sizeof(rows[0]) +
+                        sizeof(added) / sizeof(added[0])];
+    size_t oracleCount = 0;
+    for (size_t i = 0; i < rowCount; i++) {
+        oracle[oracleCount++] = rows[i].v;
+    }
+
+    for (size_t i = 0; i < sizeof(added) / sizeof(added[0]); i++) {
+        databoxBig k;
+        flexTestWideBox(added[i], false, &k);
+        flexInsertByTypeSorted(&f, (const databox *)&k);
+        oracle[oracleCount++] = added[i];
+    }
+
+    qsort(oracle, oracleCount, sizeof(oracle[0]), flexTestWideCmp);
+    size_t at = 0;
+    for (flexEntry *fe = flexHeadIfAny(f); fe; fe = flexNext(f, fe), at++) {
+        databoxBig b;
+        flexGetByTypeBig(fe, &b);
+        if (at >= oracleCount ||
+            !flexTestWideMatches((const databox *)&b, oracle[at])) {
+            printf("  FAIL: sorted insert position %zu\n", at);
+            bad++;
+        }
+    }
+
+    if (at != oracleCount) {
+        printf("  FAIL: sorted insert left %zu of %zu entries\n", at,
+               oracleCount);
+        bad++;
+    }
+
+    /* A key-match replace reports a crafted value as type-only. */
+    cleaner(flexFree) flex *m = flexNew();
+    flexPushSigned(&m, 1, FLEX_ENDPOINT_TAIL);
+    flexTestPushNeg64(&m, top);
+    flexPushSigned(&m, 2, FLEX_ENDPOINT_TAIL);
+    flexTestPushNeg64(&m, UINT64_MAX);
+    flexEntry *mid = flexMiddle(m, 2);
+    const databox key = databoxNewSigned(1);
+    const databox val = databoxNewSigned(7);
+    const databox *row[2] = {&key, &val};
+    databox replaced = {{0}};
+    if (!flexInsertReplaceByTypeSortedWithMiddleMultiDirectReplacing(
+            &m, 2, row, &mid, true, &replaced) ||
+        replaced.type != DATABOX_SIGNED_128 || replaced.data.ptr) {
+        printf("  FAIL: replaced crafted value not reported type-only\n");
+        bad++;
+    }
+
+    return bad;
+}
+
+/* Read the middle of a [bytes, integer, bytes] flex forward and in
+ * reverse, and check both against 'want'. */
+static bool flexTestReplaceReadsBack(flex *f, const flexTestWide want) {
+    if (flexCount(f) != 3 || !flexValidateBufferDeep(f, flexBytes(f))) {
+        return false;
+    }
+
+    databoxBig fwd;
+    databoxBig rev;
+    flexGetByTypeBig(flexNext(f, flexHead(f)), &fwd);
+    flexGetByTypeBig(flexPrev(f, flexTail(f)), &rev);
+    return flexTestWideMatches((const databox *)&fwd, want) &&
+           flexTestWideMatches((const databox *)&rev, want);
+}
+
+/* flexReplaceSigned/Unsigned and flexIncrby* across sign changes, in
+ * place (the new value fits the old width) and re-encoded. */
+static int32_t flexTestReplaceSign(void) {
+    int32_t bad = 0;
+    const int64_t starts[] = {-3, 3, -300, 300, INT64_MIN, INT64_MAX, -1, 0};
+    const int64_t signedNew[] = {-5,  7,    -1,        0,        -200,
+                                 200, -128, INT64_MIN, INT64_MAX};
+    const uint64_t unsignedNew[] = {0, 255, 65535, UINT64_MAX};
+
+    for (size_t s = 0; s < sizeof(starts) / sizeof(starts[0]); s++) {
+        for (size_t n = 0; n < sizeof(signedNew) / sizeof(signedNew[0]); n++) {
+            cleaner(flexFree) flex *f = flexNew();
+            flexPushBytes(&f, "a", 1, FLEX_ENDPOINT_TAIL);
+            flexPushSigned(&f, starts[s], FLEX_ENDPOINT_TAIL);
+            flexPushBytes(&f, "b", 1, FLEX_ENDPOINT_TAIL);
+            if (!flexReplaceSigned(&f, flexNext(f, flexHead(f)),
+                                   signedNew[n]) ||
+                !flexTestReplaceReadsBack(f, flexTestWideS(signedNew[n]))) {
+                printf("  FAIL: replace %" PRId64 " with signed %" PRId64 "\n",
+                       starts[s], signedNew[n]);
+                bad++;
+            }
+        }
+
+        for (size_t n = 0; n < sizeof(unsignedNew) / sizeof(unsignedNew[0]);
+             n++) {
+            cleaner(flexFree) flex *f = flexNew();
+            flexPushBytes(&f, "a", 1, FLEX_ENDPOINT_TAIL);
+            flexPushSigned(&f, starts[s], FLEX_ENDPOINT_TAIL);
+            flexPushBytes(&f, "b", 1, FLEX_ENDPOINT_TAIL);
+            if (!flexReplaceUnsigned(&f, flexNext(f, flexHead(f)),
+                                     unsignedNew[n]) ||
+                !flexTestReplaceReadsBack(f, flexTestWideU(unsignedNew[n]))) {
+                printf("  FAIL: replace %" PRId64 " with unsigned %" PRIu64
+                       "\n",
+                       starts[s], unsignedNew[n]);
+                bad++;
+            }
+        }
+    }
+
+    const struct {
+        int64_t start;
+        int64_t by;
+    } incrs[] = {{-3, -1}, {3, -10}, {-3, 10}, {-1, 1}, {0, -1}, {-300, 299}};
+    for (size_t i = 0; i < sizeof(incrs) / sizeof(incrs[0]); i++) {
+        cleaner(flexFree) flex *f = flexNew();
+        flexPushBytes(&f, "a", 1, FLEX_ENDPOINT_TAIL);
+        flexPushSigned(&f, incrs[i].start, FLEX_ENDPOINT_TAIL);
+        flexPushBytes(&f, "b", 1, FLEX_ENDPOINT_TAIL);
+        const int64_t want = incrs[i].start + incrs[i].by;
+        int64_t got = 0;
+        if (!flexIncrbySigned(&f, flexNext(f, flexHead(f)), incrs[i].by,
+                              &got) ||
+            got != want || !flexTestReplaceReadsBack(f, flexTestWideS(want))) {
+            printf("  FAIL: %" PRId64 " incremented by %" PRId64 "\n",
+                   incrs[i].start, incrs[i].by);
+            bad++;
+        }
+    }
+
+    return bad;
+}
+
 #include "jebuf.h"
 #include <locale.h>
 int32_t flexTest(int32_t argc, char **argv) {
@@ -8442,6 +8815,26 @@ int32_t flexTest(int32_t argc, char **argv) {
         const int32_t bad = flexTestWideSorted();
         if (bad) {
             printf("  FAIL: %" PRId32 " wide sorted checks\n", bad);
+            return bad;
+        }
+        printf("  ok\n");
+    }
+
+    printf("Verify NEG_64B magnitudes above INT64_MAX decode as 128-bit:\n");
+    {
+        const int32_t bad = flexTestNeg64Wide();
+        if (bad) {
+            printf("  FAIL: %" PRId32 " NEG_64B wide checks\n", bad);
+            return bad;
+        }
+        printf("  ok\n");
+    }
+
+    printf("Verify integer replace and increment across sign changes:\n");
+    {
+        const int32_t bad = flexTestReplaceSign();
+        if (bad) {
+            printf("  FAIL: %" PRId32 " replace checks\n", bad);
             return bad;
         }
         printf("  ok\n");
