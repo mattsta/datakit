@@ -4569,7 +4569,19 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMulti(
     const struct multimapAtom *const referenceContainer,
     const bool useSurrogateKeyForInsert, const databox *const surrogateKey,
     const bool useHighestInsertPosition, const bool newKeysBecomeShared,
-    void **keyAsAllocation, const bool fullWidthDedupe) {
+    void **keyAsAllocation, const bool fullWidthDedupe,
+    databox *const replacedOut) {
+    /* When 'replacedOut' is non-NULL it holds 'elementsPerEntry - 1' slots
+     * that receive the value entries a replace overwrites, in tuple order.
+     * Slots start VOID, so a call that does not replace (new key,
+     * full-width insert, set dedupe hit, key-only map) reports VOID.  Only
+     * inline payloads remain valid after the overwrite. */
+    if (replacedOut) {
+        for (int_fast32_t i = 0; i < elementsPerEntry - 1; i++) {
+            replacedOut[i] = (databox){.type = DATABOX_VOID};
+        }
+    }
+
     /* If no middle given, discover current middle (or head, if no
      * elements). */
     const size_t initialCount = flexCount_(*ff) / elementsPerEntry;
@@ -4747,6 +4759,30 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMulti(
             return true;
         }
 
+        /* Capture the old values before the replace rewrites them.  A
+         * 96/128-bit integer does not fit a databox, so its slot reports
+         * only the type (payload pointer NULL). */
+        if (replacedOut) {
+            flexEntry *prior = fe;
+            for (int_fast32_t i = 0; i < elementsPerEntry - 1; i++) {
+                prior = flexNext(*ff, prior);
+                assert(prior);
+                switch ((flexEncoding)prior[0]) {
+                case FLEX_NEG_96B:
+                case FLEX_NEG_128B:
+                    replacedOut[i].type = DATABOX_SIGNED_128;
+                    break;
+                case FLEX_UINT_96B:
+                case FLEX_UINT_128B:
+                    replacedOut[i].type = DATABOX_UNSIGNED_128;
+                    break;
+                default:
+                    flexGetByType(prior, &replacedOut[i]);
+                    break;
+                }
+            }
+        }
+
         /* 1 below because the replacement is *after* the key.
          * We don't need to overwrite the key since we already found
          * it, we know it exists, and 'fe' is pointing right at it. */
@@ -4822,7 +4858,17 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
     const bool compareUsingKeyElementOnly) {
     return abstractInsertReplaceByTypeSortedWithMiddleMulti(
         ff, elementsPerEntry, box, middleEntry, compareUsingKeyElementOnly,
-        false, NULL, false, NULL, false, false, NULL, false);
+        false, NULL, false, NULL, false, false, NULL, false, NULL);
+}
+
+/* As above, also reporting replaced values (see flex.h). */
+bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectReplacing(
+    flex **const ff, const uint_fast32_t elementsPerEntry,
+    const databox **const box, flexEntry **const middleEntry,
+    const bool compareUsingKeyElementOnly, databox *const replacedOut) {
+    return abstractInsertReplaceByTypeSortedWithMiddleMulti(
+        ff, elementsPerEntry, box, middleEntry, compareUsingKeyElementOnly,
+        false, NULL, false, NULL, false, false, NULL, false, replacedOut);
 }
 
 /* TRUE SET insert: full-width compare AND dedupe — a found
@@ -4835,7 +4881,7 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectSet(
     const databox **const box, flexEntry **const middleEntry) {
     return abstractInsertReplaceByTypeSortedWithMiddleMulti(
         ff, elementsPerEntry, box, middleEntry, false, false, NULL, false, NULL,
-        false, false, NULL, true);
+        false, false, NULL, true, NULL);
 }
 
 bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectLongKeysBecomePointers(
@@ -4844,7 +4890,19 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectLongKeysBecomePointers(
     const bool compareUsingKeyElementOnly, void **recoveredPointer) {
     return abstractInsertReplaceByTypeSortedWithMiddleMulti(
         ff, elementsPerEntry, box, middleEntry, compareUsingKeyElementOnly,
-        false, NULL, false, NULL, false, true, recoveredPointer, false);
+        false, NULL, false, NULL, false, true, recoveredPointer, false, NULL);
+}
+
+/* As above, also reporting replaced values (see flex.h). */
+bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectLongKeysBecomePointersReplacing(
+    flex **const ff, const uint_fast32_t elementsPerEntry,
+    const databox **const box, flexEntry **const middleEntry,
+    const bool compareUsingKeyElementOnly, void **recoveredPointer,
+    databox *const replacedOut) {
+    return abstractInsertReplaceByTypeSortedWithMiddleMulti(
+        ff, elementsPerEntry, box, middleEntry, compareUsingKeyElementOnly,
+        false, NULL, false, NULL, false, true, recoveredPointer, false,
+        replacedOut);
 }
 
 bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReference(
@@ -4854,7 +4912,7 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReference(
     const struct multimapAtom *const referenceContainer) {
     return abstractInsertReplaceByTypeSortedWithMiddleMulti(
         ff, elementsPerEntry, box, middleEntry, compareUsingKeyElementOnly,
-        true, referenceContainer, false, NULL, false, false, NULL, false);
+        true, referenceContainer, false, NULL, false, false, NULL, false, NULL);
 }
 
 /* TRUE SET insert with atom references — the reference-container
@@ -4865,7 +4923,7 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceSet(
     const struct multimapAtom *const referenceContainer) {
     return abstractInsertReplaceByTypeSortedWithMiddleMulti(
         ff, elementsPerEntry, box, middleEntry, false, true, referenceContainer,
-        false, NULL, false, false, NULL, true);
+        false, NULL, false, false, NULL, true, NULL);
 }
 
 bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKey(
@@ -4875,8 +4933,8 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKey(
     const struct multimapAtom *const referenceContainer) {
     return abstractInsertReplaceByTypeSortedWithMiddleMulti(
         ff, elementsPerEntry, box, middleEntry, compareUsingKeyElementOnly,
-        true, referenceContainer, true, boxInsertKey, false, false, NULL,
-        false);
+        true, referenceContainer, true, boxInsertKey, false, false, NULL, false,
+        NULL);
 }
 
 void flexAppendMultiple(flex **ff, const uint_fast32_t elementsPerEntry,
@@ -6568,6 +6626,67 @@ int32_t flexTest(int32_t argc, char **argv) {
             }
         }
         printf("  SUCCESS\n\n");
+    }
+
+    printf("Verify replacing sorted inserts report the overwritten value:\n");
+    {
+        cleaner(flexFree) flex *m = flexNew();
+        flexEntry *mid = NULL;
+        const databox key = databoxNewSigned(1);
+        databox replaced[1];
+
+        databoxBig wideNeg;
+        DATABOX_BIG_SIGNED_128(&wideNeg, -(((__int128_t)1 << 100) + 7));
+        databoxBig wideUns;
+        DATABOX_BIG_UNSIGNED_128(&wideUns, ((__uint128_t)1 << 100) + 7);
+        const databox small = databoxNewSigned(42);
+        const databox other = databoxNewSigned(43);
+        const databox newKey = databoxNewSigned(2);
+
+        /* (key, value, expected type of the replaced slot) per step. */
+        const struct {
+            const databox *key;
+            const databox *val;
+            databoxType replacedType;
+        } steps[] = {
+            {&key, (const databox *)&wideNeg, DATABOX_VOID},
+            {&key, &small, DATABOX_SIGNED_128},
+            {&key, (const databox *)&wideUns, DATABOX_UNSIGNED_64},
+            {&key, &other, DATABOX_UNSIGNED_128},
+            {&newKey, &small, DATABOX_VOID},
+        };
+
+        int32_t bad = 0;
+        for (size_t i = 0; i < sizeof(steps) / sizeof(steps[0]); i++) {
+            const databox *row[2] = {steps[i].key, steps[i].val};
+            flexInsertReplaceByTypeSortedWithMiddleMultiDirectReplacing(
+                &m, 2, row, &mid, true, replaced);
+            bool ok = replaced[0].type == steps[i].replacedType;
+            if (steps[i].replacedType == DATABOX_SIGNED_128 ||
+                steps[i].replacedType == DATABOX_UNSIGNED_128) {
+                /* Type only: a databox has no room for the payload. */
+                ok = ok && !replaced[0].big && replaced[0].data.ptr == NULL;
+            } else if (steps[i].replacedType == DATABOX_UNSIGNED_64) {
+                ok = ok && replaced[0].data.u == 42;
+            }
+
+            if (!ok) {
+                printf("  FAIL: step %zu reported type %d\n", i,
+                       (int)replaced[0].type);
+                bad++;
+            }
+        }
+
+        if (flexCount(m) != 4) {
+            printf("  FAIL: expected 2 entries of 2 elements, found %zu\n",
+                   flexCount(m));
+            bad++;
+        }
+
+        if (bad) {
+            return bad;
+        }
+        printf("  ok\n");
     }
 
     printf("Verify flexIndexWithMiddle matches flexIndex at every index:\n");
