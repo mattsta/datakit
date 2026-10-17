@@ -741,39 +741,46 @@ int timerWheelTest(int argc, char *argv[]) {
     }
 
     TEST("timerWheel: sub-resolution timer after wheel timer") {
-        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
-        testCallbackState state = {.callCount = 0, .shouldReschedule = true};
+        /* A repeat shorter than the wheel resolution must fire on every
+         * 100μs advance, whether its previous fire came from a wheel slot
+         * or from the pending queue.  Which path fires depends on where
+         * the real clock falls inside a tick, so run the scenario many
+         * times to cover both phases.  AdvanceTime shifts the wheel's
+         * epoch while the real clock keeps running, so elapsed real time
+         * can add fires but never remove them: require at least one new
+         * fire per step. */
+        for (int trial = 0; trial < 64; trial++) {
+            cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
+            testCallbackState state = {.callCount = 0,
+                                       .shouldReschedule = true};
 
-        /* First a normal delay, then sub-resolution repeat */
-        timerWheelRegister(tw, 5000, 100, testCountingCallback, &state);
+            /* First a normal delay, then sub-resolution repeat */
+            timerWheelRegister(tw, 5000, 100, testCountingCallback, &state);
 
-        /* Initially no fires */
-        timerWheelProcessTimerEvents(tw);
-        if (state.callCount != 0) {
-            ERR("Timer should not fire before delay, callCount=%d",
-                state.callCount);
-        }
+            /* Initially no fires */
+            timerWheelProcessTimerEvents(tw);
+            if (state.callCount != 0) {
+                ERR("Timer should not fire before delay, callCount=%d",
+                    state.callCount);
+            }
 
-        /* After delay plus one resolution unit (wheel slot granularity),
-         * timer should fire. Wheel resolution is 1000μs. */
-        timerWheelAdvanceTime(tw, 6000);
-        if (state.callCount < 1) {
-            ERR("Timer should fire after delay, callCount=%d", state.callCount);
-        }
+            /* After delay plus one resolution unit (wheel slot
+             * granularity), timer should fire. Wheel resolution is
+             * 1000μs. */
+            timerWheelAdvanceTime(tw, 6000);
+            if (state.callCount < 1) {
+                ERR("Timer should fire after delay, callCount=%d",
+                    state.callCount);
+            }
 
-        /* Now timer is rescheduled with 100μs sub-resolution repeat, so
-         * every 100μs advance must fire it again.  AdvanceTime shifts the
-         * wheel's epoch while the real monotonic clock keeps running, so
-         * real time elapsed between steps can add fires but never remove
-         * them: require at least one new fire per step, not an exact
-         * total. */
-        for (int step = 1; step <= 3; step++) {
-            const int before = state.callCount;
-            timerWheelAdvanceTime(tw, 100);
-            if (state.callCount <= before) {
-                ERR("Timer should fire again after sub-res advance %d, "
-                    "callCount=%d",
-                    step, state.callCount);
+            for (int step = 1; step <= 3; step++) {
+                const int before = state.callCount;
+                timerWheelAdvanceTime(tw, 100);
+                if (state.callCount <= before) {
+                    ERR("trial %d: timer should fire again after sub-res "
+                        "advance %d, callCount=%d",
+                        trial, step, state.callCount);
+                }
             }
         }
     }

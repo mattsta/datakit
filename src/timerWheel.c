@@ -841,13 +841,16 @@ static void processSlot(timerWheel *tw, flex **slot,
                  * tombstone now whether or not it asked to repeat */
                 dropCancellation(tw, e.id);
             } else if (reschedule && e.repeatIntervalUs > 0) {
-                /* Schedule relative to wheel's current position (after this
-                 * slot), NOT the final target time. This ensures repeating
-                 * timers fire at each interval as the wheel advances, rather
-                 * than jumping to the final target and missing intermediate
-                 * fires. */
+                /* Repeat from the end of this slot while the wheel is
+                 * catching up, so a lagging wheel fires each interval as
+                 * it advances instead of jumping to the target.  Once the
+                 * slot reaches `currentTime`, repeat from `currentTime`:
+                 * the slot's end lies in the future then, and using it
+                 * would delay a sub-resolution repeat by up to a tick. */
+                const timerWheelAdjustedUs slotEnd =
+                    tw->currentTimeUs + WHEEL0_RESOLUTION_US;
                 e.expireTimeUs =
-                    expiryAfter(tw->currentTimeUs + WHEEL0_RESOLUTION_US,
+                    expiryAfter(slotEnd < currentTime ? slotEnd : currentTime,
                                 e.repeatIntervalUs);
                 scheduleTimerEntry(tw, &e);
                 tw->timerCount++;
