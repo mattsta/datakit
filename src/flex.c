@@ -2403,12 +2403,16 @@ DK_STATIC void flexInsertByType_(flex **const ff, flexEntry *const fe,
     case DATABOX_CONTAINER_FLEX_LIST:
     case DATABOX_CONTAINER_FLEX_SET:
     case DATABOX_CONTAINER_FLEX_TUPLE: {
-        /* Nested flex, stored whole; same encoding as insertContentsFromBox
-         * (a zero 'len' means "size it from the nested flex's header"). */
+        /* Nested flex, stored whole; same encoding as insertContentsFromBox.
+         * The entry is sized from the nested flex's own header, never from
+         * 'len': flexGetByType reports a container's len with its reverse
+         * trailer included, so a box read back from a flex carries a len
+         * larger than the nested flex, and the insert reserves space from
+         * the header. */
         const flex *const inner = box->data.bytes.start;
         flexInsert_(ff, fe,
                     FLEX_CONTAINER_MAP + DATABOX_CONTAINER_OFFSET(box->type),
-                    inner, databoxLen(box) ?: flexBytes(inner));
+                    inner, flexBytes(inner));
         break;
     }
     default:
@@ -2666,16 +2670,23 @@ insertContentsFromBox(databox *box, flexInsertContents *c,
     case DATABOX_CONTAINER_FLEX_LIST:
     case DATABOX_CONTAINER_FLEX_SET:
     case DATABOX_CONTAINER_FLEX_TUPLE:
+        /* Derive flex encoding from box encoding using enum offset math */
+        c->encoding = FLEX_CONTAINER_MAP + DATABOX_CONTAINER_OFFSET(box->type);
+        c->data = box->data.bytes.start;
+        /* Sized from the nested flex's own header, never from 'len': the
+         * insert reserves space from that header, and flexGetByType
+         * reports a container's len with its reverse trailer included. */
+        c->len = flexBytes(c->data);
+        break;
     case DATABOX_CONTAINER_CFLEX_MAP:
     case DATABOX_CONTAINER_CFLEX_LIST:
     case DATABOX_CONTAINER_CFLEX_SET:
     case DATABOX_CONTAINER_CFLEX_TUPLE:
         /* TODO: we aren't storing nested compressed maps.
          *       if map is compressed, must uncompress for storage. */
-        /* Derive flex encoding from box encoding using enum offset math */
         c->encoding = FLEX_CONTAINER_MAP + DATABOX_CONTAINER_OFFSET(box->type);
-        c->data = box->data.bytes.start;         /* flex or cflex */
-        c->len = box->len ?: flexBytes(c->data); /* if given, use; else calc */
+        c->data = box->data.bytes.start;
+        c->len = cflexBytes(c->data);
         break;
     case DATABOX_TRUE:
         c->encoding = FLEX_TRUE;
@@ -6598,6 +6609,106 @@ int32_t flexTest(int32_t argc, char **argv) {
         printf("  ok (%zu values, box and bytes; %zu 128-bit values)\n",
                sizeof(vals) / sizeof(vals[0]),
                sizeof(bigVals) / sizeof(bigVals[0]));
+    }
+
+    printf("Verify a nested container read back with flexGetByType writes "
+           "back whole:\n");
+    {
+        /* Nested sizes on both sides of the 1/2-byte (64/65) and 2/3-byte
+         * (16447/16448) boundaries of the size varint the trailer holds.
+         * No flex is exactly 65 or 16448 bytes: the byte that would make
+         * it so also widens its own total-bytes varint. */
+        static const size_t innerSizes[] = {62,    63,    64,    66,   67,
+                                            16446, 16447, 16449, 16450};
+        enum { ROUND_TRIP_FILL_ = 16448 };
+        cleanerName(zfree, Bytes) uint8_t *fill = zmalloc(ROUND_TRIP_FILL_);
+        memset(fill, 'n', ROUND_TRIP_FILL_);
+
+        int32_t bad = 0;
+        for (size_t s = 0; s < COUNT_ARRAY(innerSizes); s++) {
+            /* One string sized near the target, padded with one-byte TRUE
+             * entries to land on it exactly. */
+            const size_t target = innerSizes[s];
+            cleaner(flexFree) flex *inner = NULL;
+            for (size_t len = target - 12; len < target && !inner; len++) {
+                cleaner(flexFree) flex *candidate = flexNew();
+                flexPushBytes(&candidate, fill, len, FLEX_ENDPOINT_TAIL);
+                const databox t = {.type = DATABOX_TRUE};
+                while (flexBytes(candidate) < target) {
+                    flexPushByType(&candidate, &t, FLEX_ENDPOINT_TAIL);
+                }
+
+                if (flexBytes(candidate) == target) {
+                    inner = candidate;
+                    candidate = NULL;
+                }
+            }
+
+            if (!inner) {
+                printf("  FAIL: no nested flex of %zu bytes\n", target);
+                bad++;
+                continue;
+            }
+
+            cleaner(flexFree) flex *outer = flexNew();
+            const databox nested = {.data.bytes.start = inner,
+                                    .type = DATABOX_CONTAINER_FLEX_MAP,
+                                    .len = flexBytes(inner)};
+            flexPushByType(&outer, &nested, FLEX_ENDPOINT_TAIL);
+
+            /* The read-back len includes the trailer after the nested
+             * flex, so it is larger than the nested flex. */
+            databox got = {{0}};
+            flexGetByType(flexHead(outer), &got);
+            if (got.len <= flexBytes(inner)) {
+                printf("  FAIL: %zu: read-back len %zu\n", target,
+                       (size_t)got.len);
+                bad++;
+            }
+
+            /* Push at both ends, insert in the middle, and replace: the
+             * first three go through flexInsertByType, the replace through
+             * insertContentsFromBox. */
+            cleaner(flexFree) flex *copy = flexNew();
+            flexPushBytes(&copy, "first", strlen("first"), FLEX_ENDPOINT_TAIL);
+            flexPushByType(&copy, &got, FLEX_ENDPOINT_TAIL);
+            flexPushByType(&copy, &got, FLEX_ENDPOINT_HEAD);
+            flexInsertByType(&copy, flexIndex(copy, 1), &got);
+            flexReplaceByType(&copy, flexIndex(copy, 2), &got);
+
+            /* A sorted row goes through insertContentsFromBox too. */
+            cleaner(flexFree) flex *sorted = flexNew();
+            flexEntry *mid = NULL;
+            const databox key = databoxNewSigned(1);
+            const databox *row[2] = {&key, &got};
+            flexInsertReplaceByTypeSortedWithMiddleMultiDirect(&sorted, 2, row,
+                                                               &mid, true);
+
+            if (!flexValidateBufferDeep(copy, flexBytes(copy)) ||
+                flexCount(copy) != 4 ||
+                !flexValidateBufferDeep(sorted, flexBytes(sorted)) ||
+                flexCount(sorted) != 2) {
+                printf("  FAIL: %zu: written flexes are malformed\n", target);
+                bad++;
+                continue;
+            }
+
+            /* Every copy reads back whole from the head (forward sizing)
+             * and from the tail (the trailer). */
+            for (int32_t i = 0; i < 4; i++) {
+                bad += flexValidateSweepCheckNested(copy, i, inner);
+                bad += flexValidateSweepCheckNested(copy, i - 4, inner);
+            }
+
+            bad += flexValidateSweepCheckNested(sorted, 1, inner);
+            bad += flexValidateSweepCheckNested(sorted, -1, inner);
+        }
+
+        if (bad) {
+            printf("  %" PRId32 " container round trips FAILED\n", bad);
+            return bad;
+        }
+        printf("  ok (%zu nested sizes)\n", COUNT_ARRAY(innerSizes));
     }
 
     printf("Verify external-reference encoding round-trips every tier:\n");

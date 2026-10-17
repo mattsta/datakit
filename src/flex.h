@@ -333,7 +333,17 @@ flexEntry DK_FN_PURE *flexTailWithElements(const flex *const f,
 #define flexHeadOrIndex(f, endpoint)                                           \
     ((endpoint) == FLEX_ENDPOINT_HEAD ? flexHead(f) : flexIndex(f, endpoint))
 
-/* Retrieve data */
+/* Retrieve data
+ *
+ * flexGetByType decodes the entry at 'fe' into 'box' without copying:
+ *   - BYTES and container boxes point into the flex, so they are valid
+ *     only until the flex changes.
+ *   - A nested container (DATABOX_CONTAINER_FLEX_*) reports 'len' as the
+ *     nested flex's bytes plus the reverse-traversal trailer stored after
+ *     it, so 'len' is larger than flexBytes(data.bytes.start).  Use
+ *     flexBytes for the nested flex's size.  Inserting or pushing the box
+ *     back sizes the entry from the nested flex and ignores 'len', so a
+ *     box read here round-trips. */
 void flexGetByType(const flexEntry *fe, databox *box);
 void flexGetByTypeWithReference(const flexEntry *const fe, databox *box,
                                 const struct multimapAtom *referenceContainer);
