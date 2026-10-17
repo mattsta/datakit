@@ -38,7 +38,10 @@ void portableRandomFill64(portableRandomState *r, uint64_t *out, size_t count);
 #define DK_PR_REFUEL_BYTES 100000
 
 /* Read from the OS entropy source without blocking.  Returns the number
- * of bytes written, or -1, on every platform. */
+ * of bytes written, or -1, on every platform.  Where the source is
+ * getentropy() (macOS, the BSDs), a request over 256 bytes fails with
+ * -1; elsewhere it can succeed.  Use portableRandomDirectFull for
+ * larger fills. */
 ssize_t portableRandomDirect(void *dst, size_t requestedLen);
 
 /* Fill `requestedLen` bytes from the OS CSPRNG.  Returns true only if
