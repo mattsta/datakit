@@ -58,7 +58,14 @@ uv run dktools perfdiff BASELINE.tsv CURRENT.tsv [--tolerance PCT]
 - Exits 0 when every matched row is within the tolerance (default
   10%), 1 when any row's ns_per_op grew or mb_per_sec fell by more
   than the tolerance (the offending rows print to stdout as TSV under
-  a `REGRESSION` header), and 2 on a missing or malformed file.
+  a `REGRESSION` header), and 2 on any input error: a file that is
+  missing, unreadable, a directory, or not UTF-8, a malformed row, a
+  metric that is not a finite non-negative number, or a bad
+  `--tolerance`. Input errors print one line to stderr, never a
+  traceback.
+- A baseline metric of 0 (printed for sub-precision values and for
+  mb_per_sec of zero-byte rows) is not compared; a row whose baseline
+  metrics are both 0 is listed on stderr as skipped.
 - Rows missing from CURRENT or new in it are listed on stderr and do
   not change the exit code.
 - The baseline is a local file, not committed; generate it from a
