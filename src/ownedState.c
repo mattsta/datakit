@@ -368,8 +368,12 @@ void ownedCellPublish(ownedCell *c, void *fresh) {
         return;
     }
     ownedCellWriterCheck_(c);
+    /* acq_rel: the release half publishes `fresh`; the acquire half lets
+     * this writer, which now owns `stale` and may release it inline, see
+     * the initialisation by whichever writer published it, even when no
+     * other happens-before edge orders the two writers. */
     void *const stale =
-        atomic_exchange_explicit(&c->v.indirect, fresh, memory_order_release);
+        atomic_exchange_explicit(&c->v.indirect, fresh, memory_order_acq_rel);
     if (!stale) {
         return;
     }

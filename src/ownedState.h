@@ -224,7 +224,7 @@ typedef enum ownedWriterDiscipline {
 } ownedWriterDiscipline;
 
 typedef enum ownedCellForm {
-    OWNED_CELL_INDIRECT = 0, /* _Atomic(void *): release exchange; the
+    OWNED_CELL_INDIRECT = 0, /* _Atomic(void *): acq_rel exchange; the
                               * displaced value retires through an arena */
     OWNED_CELL_INLINE = 1,   /* _Atomic uint64_t: release store, no arena */
 } ownedCellForm;
@@ -271,8 +271,11 @@ typedef struct ownedCell {
 void ownedCellInit(ownedCell *c, const ownedCellDecl *decl, void *owner,
                    ownedArena *arena);
 
-/* INDIRECT: run the writer check, publish `fresh` with a release
- * exchange and retire the displaced value. */
+/* INDIRECT: run the writer check, publish `fresh` with an acq_rel
+ * exchange and retire the displaced value. The acquire half gives the
+ * displacing writer the displaced value's initialisation even when the
+ * writers are not otherwise ordered, so releasing it inline (no arena)
+ * is race-free. */
 void ownedCellPublish(ownedCell *c, void *fresh);
 
 /* INDIRECT: acquire load. Call only inside an Enter/Exit scope on the

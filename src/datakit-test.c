@@ -1081,7 +1081,9 @@ static int dkTestInflightGateTest(int argc, char *argv[]) {
  *      decline predicate, writer predicate, counters per declaration,
  *      zero versions, a delayed writer that must not replace a newer
  *      publication, nested publication on N == 1, MPSC, and overlapping
- *      writers with a concurrent reader.
+ *      writers with a concurrent reader;
+ *  10. concurrent readers against a writer whose release frees, under
+ *      both release rules, and unserialized writers on one cell.
  * ==================================================================== */
 typedef struct dkOwnedCargo {
     uint64_t id;
@@ -1490,6 +1492,191 @@ static int dkTestOwnedReadersOnly(void) {
 
     ownedArenaDestruct(&a);
 #undef ROEXPECT
+    return err;
+}
+
+/* Concurrent readers against a writer whose release frees the displaced
+ * object, under both release rules. Readers enter the arena, read the
+ * cell, check the object's fields and exit; the writer publishes fresh
+ * objects and drains. A premature release shows as a bad field here, as
+ * a heap-use-after-free under ASan, or as a race under ThreadSanitizer. */
+#define DK_OWNED_SOAK_MAGIC UINT64_C(0x50a4c0ffee50a4c0)
+#define DK_OWNED_SOAK_PUBLISHES 20000u
+#define DK_OWNED_SOAK_DRAIN_EVERY 64u
+#define DK_OWNED_SOAK_READERS 3
+#define DK_OWNED_CELL_RACE_PUBLISHES 20000u
+
+typedef struct dkOwnedSoakObj {
+    uint64_t magic;
+    uint64_t id;
+} dkOwnedSoakObj;
+
+static _Atomic uint64_t g_dkOwnedSoakBadReleases = 0;
+
+static void dkOwnedSoakRelease_(void *cargo) {
+    dkOwnedSoakObj *o = cargo;
+    if (o->magic != DK_OWNED_SOAK_MAGIC) {
+        atomic_fetch_add_explicit(&g_dkOwnedSoakBadReleases, 1,
+                                  memory_order_relaxed);
+    }
+    o->magic = 0;
+    zfree(o);
+}
+
+static uint64_t dkOwnedSoakNowUs_(void) {
+    return timeUtilMonotonicUs();
+}
+
+static dkOwnedSoakObj *dkOwnedSoakObjNew_(uint64_t id) {
+    /* @own: caller; free=dkOwnedSoakRelease_ */
+    dkOwnedSoakObj *o = zmalloc(sizeof(*o));
+    o->magic = DK_OWNED_SOAK_MAGIC;
+    o->id = id;
+    return o;
+}
+
+static const ownedArenaDecl dkOwnedSoakArenaDecls_[2] = {
+    {.name = "datakit.selftest.arena.soak.grace",
+     .graceUs = 200,
+     .holdMultiple = 1000,
+     .nowUs = dkOwnedSoakNowUs_,
+     .release = OWNED_RELEASE_GRACE_AND_READERS},
+    {.name = "datakit.selftest.arena.soak.readers",
+     .nowUs = dkOwnedSoakNowUs_,
+     .release = OWNED_RELEASE_READERS_ONLY,
+     .reportHorizonUs = 0},
+};
+
+static const ownedCellDecl dkOwnedSoakCellDecl_ = {
+    .name = "datakit.selftest.cell.soak",
+    .form = OWNED_CELL_INDIRECT,
+    .discipline = OWNED_WRITER_CLASS,
+    .writer_ok = NULL,
+    .note_violation = NULL,
+    .release = dkOwnedSoakRelease_,
+    .describe = NULL,
+    .oom = OWNED_OOM_LEAK,
+};
+
+/* No arena, free on displacement, writers not serialized. */
+static const ownedCellDecl dkOwnedRaceCellDecl_ = {
+    .name = "datakit.selftest.cell.race",
+    .form = OWNED_CELL_INDIRECT,
+    .discipline = OWNED_WRITER_INSTANCE,
+    .writer_ok = NULL,
+    .note_violation = NULL,
+    .release = dkOwnedSoakRelease_,
+    .describe = NULL,
+    .oom = OWNED_OOM_FREE,
+};
+
+typedef struct dkOwnedSoakReader {
+    ownedArena *arena;
+    ownedCell *cell;
+    _Atomic bool *stop;
+    uint64_t reads;
+    uint64_t bad;
+} dkOwnedSoakReader;
+
+static void *dkOwnedSoakReaderMain_(void *arg) {
+    dkOwnedSoakReader *r = arg;
+    while (!atomic_load_explicit(r->stop, memory_order_acquire)) {
+        ownedArenaEnter(r->arena);
+        const dkOwnedSoakObj *o = ownedCellRead(r->cell);
+        if (o) {
+            r->reads++;
+            if (o->magic != DK_OWNED_SOAK_MAGIC) {
+                r->bad++;
+            }
+        }
+        ownedArenaExit(r->arena);
+    }
+    return NULL;
+}
+
+static void *dkOwnedRaceWriterMain_(void *arg) {
+    ownedCell *c = arg;
+    for (uint32_t i = 0; i < DK_OWNED_CELL_RACE_PUBLISHES; i++) {
+        ownedCellPublish(c, dkOwnedSoakObjNew_(i));
+    }
+    return NULL;
+}
+
+static int dkTestOwnedArenaSoak(void) {
+    int err = 0;
+#define SOAKEXPECT(cond, msg)                                                  \
+    do {                                                                       \
+        if (!(cond)) {                                                         \
+            printf("dkTestOwnedState FAIL: soak: %s (%s:%d)\n", (msg),         \
+                   __FILE__, __LINE__);                                        \
+            err++;                                                             \
+        }                                                                      \
+    } while (0)
+    atomic_store_explicit(&g_dkOwnedSoakBadReleases, 0, memory_order_relaxed);
+    for (int rule = 0; rule < 2; rule++) {
+        ownedArena arena;
+        ownedArenaInit(&arena, &dkOwnedSoakArenaDecls_[rule]);
+        ownedCell cell;
+        ownedCellInit(&cell, &dkOwnedSoakCellDecl_, NULL, &arena);
+        _Atomic bool stop = false;
+        dkOwnedSoakReader readers[DK_OWNED_SOAK_READERS];
+        pthread_t th[DK_OWNED_SOAK_READERS];
+        int started = 0;
+        for (int i = 0; i < DK_OWNED_SOAK_READERS; i++) {
+            readers[i] = (dkOwnedSoakReader){
+                .arena = &arena, .cell = &cell, .stop = &stop};
+            if (pthread_create(&th[i], NULL, dkOwnedSoakReaderMain_,
+                               &readers[i]) != 0) {
+                break;
+            }
+            started++;
+        }
+        SOAKEXPECT(started == DK_OWNED_SOAK_READERS, "readers started");
+        for (uint32_t i = 0; i < DK_OWNED_SOAK_PUBLISHES; i++) {
+            ownedCellPublish(&cell, dkOwnedSoakObjNew_(i));
+            if (i % DK_OWNED_SOAK_DRAIN_EVERY == 0) {
+                ownedArenaDrain(&arena);
+            }
+        }
+        atomic_store_explicit(&stop, true, memory_order_release);
+        uint64_t reads = 0;
+        uint64_t bad = 0;
+        for (int i = 0; i < started; i++) {
+            pthread_join(th[i], NULL);
+            reads += readers[i].reads;
+            bad += readers[i].bad;
+        }
+        SOAKEXPECT(bad == 0, "no reader saw a released object");
+        SOAKEXPECT(reads > 0, "the readers read published objects");
+        ownedCellDestruct(&cell);
+        ownedArenaDestruct(&arena);
+    }
+
+    /* Two writers that no happens-before edge serializes: each displaces
+     * the other's objects and, with no arena, releases them inline. The
+     * release reads the displaced object's fields. */
+    {
+        ownedCell cell;
+        ownedCellInit(&cell, &dkOwnedRaceCellDecl_, NULL, NULL);
+        pthread_t th[2];
+        int started = 0;
+        for (int i = 0; i < 2; i++) {
+            if (pthread_create(&th[i], NULL, dkOwnedRaceWriterMain_, &cell) !=
+                0) {
+                break;
+            }
+            started++;
+        }
+        SOAKEXPECT(started == 2, "racing writers started");
+        for (int i = 0; i < started; i++) {
+            pthread_join(th[i], NULL);
+        }
+        ownedCellDestruct(&cell);
+    }
+    SOAKEXPECT(atomic_load_explicit(&g_dkOwnedSoakBadReleases,
+                                    memory_order_relaxed) == 0,
+               "every release found its object intact");
+#undef SOAKEXPECT
     return err;
 }
 
@@ -2353,6 +2540,9 @@ static int dkTestOwnedStateTest(int argc, char *argv[]) {
                 pthread_join(rt, NULL);
                 OEXPECT(reader.mixedReads == 0,
                         "seq overlap: no VALID read carried a mixed payload");
+                /* Without a VALID read the check above is vacuous. */
+                OEXPECT(reader.validReads > 0,
+                        "seq overlap: the reader validated at least one copy");
                 /* Liveness: after the writers are joined, one publication
                  * into every version must read VALID. */
                 bool healed = true;
@@ -2384,6 +2574,7 @@ static int dkTestOwnedStateTest(int argc, char *argv[]) {
     /* READERS_ONLY runs after the default block so that block's
      * process-wide baselines are untouched by it. */
     failures += dkTestOwnedReadersOnly();
+    failures += dkTestOwnedArenaSoak();
 
     if (failures == 0) {
         printf("dkTestOwnedState: PASS\n");
