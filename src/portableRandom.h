@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <unistd.h>
 
@@ -25,3 +26,16 @@ uint64_t portableRandom64(portableRandomState *r);
 /* Read from the OS entropy source without blocking.  Returns the number
  * of bytes written, or -1, on every platform. */
 ssize_t portableRandomDirect(void *dst, size_t requestedLen);
+
+/* Fill `requestedLen` bytes from the OS CSPRNG.  Returns true only if
+ * every byte was filled; on false the buffer must not be used.  Use
+ * this for key material: the other functions here are an RC4-based
+ * stream with known keystream biases, whose re-key falls back to a
+ * time/pid mix when the OS source is unavailable.  The OS read is
+ * non-blocking, so this fails rather than blocks if the kernel pool is
+ * not yet initialised. */
+bool portableRandomDirectFull(void *dst, size_t requestedLen);
+
+#ifdef DATAKIT_TEST
+int portableRandomTest(int argc, char *argv[]);
+#endif

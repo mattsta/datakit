@@ -64,6 +64,10 @@ void portableRandom_init(portableRandomState *r, pid_t pid) {
     }
 }
 
+/* getentropy() rejects requests over 256 bytes, so full fills are
+ * chunked at that size on every arm. */
+#define DK_PR_DIRECT_MAX_CHUNK_BYTES 256
+
 ssize_t portableRandomDirect(void *const dst, const size_t requestedLen) {
     /* "1" means GRND_NONBLOCK. If no entropy and WOULDBLOCK, -1 is returned
      * with EAGAIN. */
@@ -83,6 +87,30 @@ ssize_t portableRandomDirect(void *const dst, const size_t requestedLen) {
     /* Random source not found! */
     return -1;
 #endif
+}
+
+bool portableRandomDirectFull(void *const dst, const size_t requestedLen) {
+    uint8_t *out = dst;
+    size_t filled = 0;
+
+    while (filled < requestedLen) {
+        size_t want = requestedLen - filled;
+        if (want > DK_PR_DIRECT_MAX_CHUNK_BYTES) {
+            want = DK_PR_DIRECT_MAX_CHUNK_BYTES;
+        }
+
+        const ssize_t n = portableRandomDirect(out + filled, want);
+
+        /* A non-positive answer is a failure, not a retry, so a source
+         * with nothing to give cannot hang the caller. */
+        if (n <= 0) {
+            return false;
+        }
+
+        filled += (size_t)n;
+    }
+
+    return true;
 }
 
 void portableRandom_stir(portableRandomState *r, pid_t pid) {
@@ -224,3 +252,252 @@ uint64_t portableRandom64(portableRandomState *r) {
 
     return val;
 }
+
+#ifdef DATAKIT_TEST
+#include "cleaner.h"
+#include "ctest.h"
+
+#include <sys/wait.h>
+
+defcleanerName(uint8_t *, zfree, Bytes);
+
+/* Fork; draw one word from 'r' in the child (sent back over a pipe) and
+ * one in the parent.  Returns false if pipe/fork/read failed.  The child
+ * _exits so it runs no atexit or sanitizer handlers. */
+static bool portableRandomTestForkedNextWord(portableRandomState *r,
+                                             uint64_t *childWord,
+                                             uint64_t *parentWord) {
+    int fds[2];
+    if (pipe(fds) != 0) {
+        return false;
+    }
+
+    const pid_t kid = fork();
+    if (kid < 0) {
+        (void)close(fds[0]);
+        (void)close(fds[1]);
+        return false;
+    }
+
+    if (kid == 0) {
+        (void)close(fds[0]);
+        const uint64_t word = portableRandom64(r);
+        const ssize_t wrote = write(fds[1], &word, sizeof(word));
+        (void)close(fds[1]);
+        _exit(wrote == (ssize_t)sizeof(word) ? 0 : 1);
+    }
+
+    (void)close(fds[1]);
+    *parentWord = portableRandom64(r);
+
+    uint64_t got = 0;
+    size_t have = 0;
+    while (have < sizeof(got)) {
+        const ssize_t n =
+            read(fds[0], (uint8_t *)&got + have, sizeof(got) - have);
+        if (n <= 0) {
+            break;
+        }
+
+        have += (size_t)n;
+    }
+
+    (void)close(fds[0]);
+
+    int status = 0;
+    (void)waitpid(kid, &status, 0);
+
+    if (have != sizeof(got)) {
+        return false;
+    }
+
+    *childWord = got;
+    return true;
+}
+
+static bool portableRandomTestAllZero(const uint8_t *buf, size_t len) {
+    for (size_t i = 0; i < len; i++) {
+        if (buf[i]) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+int portableRandomTest(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+    int err = 0;
+
+    TEST("the refuel budget is charged one word width per word") {
+        /* portableRandom64 charges sizeof(uint64_t) of refuel budget per
+         * call.  The first draw after init stirs and resets the budget
+         * to DK_PR_REFUEL_BYTES. */
+        portableRandomState r;
+        portableRandom_init(&r, getpid());
+
+        (void)portableRandom64(&r); /* crosses the initial refuel edge */
+
+        if (r.remainingBytesBeforeRefuel != (int64_t)DK_PR_REFUEL_BYTES) {
+            ERR("after the first draw the budget is %" PRId64 ", not the "
+                "refuel budget %" PRIu64,
+                (int64_t)r.remainingBytesBeforeRefuel,
+                (uint64_t)DK_PR_REFUEL_BYTES);
+        }
+
+        const uint64_t wordBytes = (uint64_t)sizeof(uint64_t);
+        const uint64_t draws = 1000; /* far below one refuel interval */
+
+        for (uint64_t d = 0; d < draws; d++) {
+            (void)portableRandom64(&r);
+        }
+
+        const int64_t want =
+            (int64_t)DK_PR_REFUEL_BYTES - (int64_t)(draws * wordBytes);
+        if (r.remainingBytesBeforeRefuel != want) {
+            ERR("after %" PRIu64 " draws of %" PRIu64 " bytes the budget is "
+                "%" PRId64 ", not %" PRId64,
+                draws, wordBytes, (int64_t)r.remainingBytesBeforeRefuel, want);
+        }
+    }
+
+    TEST("the refuel edge is crossed exactly once, at the budget") {
+        /* The re-stir happens on exactly the draw that exhausts the
+         * budget. */
+        portableRandomState r;
+        portableRandom_init(&r, getpid());
+
+        (void)portableRandom64(&r); /* budget := DK_PR_REFUEL_BYTES */
+
+        const uint64_t wordBytes = (uint64_t)sizeof(uint64_t);
+        const uint64_t wordsPerRefuel =
+            (uint64_t)DK_PR_REFUEL_BYTES / wordBytes;
+
+        /* Stop one draw short of the edge. */
+        for (uint64_t d = 1; d < wordsPerRefuel; d++) {
+            (void)portableRandom64(&r);
+        }
+
+        const int64_t beforeEdge = (int64_t)r.remainingBytesBeforeRefuel;
+        if (beforeEdge != (int64_t)wordBytes) {
+            ERR("one draw short of the refuel edge the budget is %" PRId64
+                ", not one word (%" PRIu64 ")",
+                beforeEdge, wordBytes);
+        }
+
+        (void)portableRandom64(&r); /* the draw that crosses */
+
+        if (r.remainingBytesBeforeRefuel != (int64_t)DK_PR_REFUEL_BYTES) {
+            ERR("crossing the refuel edge left the budget at %" PRId64
+                ", not the full refuel budget %" PRIu64,
+                (int64_t)r.remainingBytesBeforeRefuel,
+                (uint64_t)DK_PR_REFUEL_BYTES);
+        }
+    }
+
+    TEST("portableRandomDirectFull fills every byte it is asked for") {
+        /* Each fill must succeed, write exactly the requested length
+         * (the guard bytes after it stay untouched), not be all zero,
+         * and differ from a second fill of the same length.  The
+         * all-zero and repeat checks apply from 16 bytes up, where an
+         * OS source fails them with probability at most 2^-128. */
+        const size_t lens[] = {1, 256, 257, 4096};
+        const size_t guard = 16;
+
+        for (size_t i = 0; i < COUNT_ARRAY(lens); i++) {
+            const size_t len = lens[i];
+            cleanerName(zfree, Bytes) uint8_t *a = zcalloc(1, len + guard);
+            cleanerName(zfree, Bytes) uint8_t *b = zcalloc(1, len + guard);
+
+            if (!portableRandomDirectFull(a, len) ||
+                !portableRandomDirectFull(b, len)) {
+                ERR("portableRandomDirectFull(%zu) returned false", len);
+            } else {
+                if (!portableRandomTestAllZero(a + len, guard) ||
+                    !portableRandomTestAllZero(b + len, guard)) {
+                    ERR("portableRandomDirectFull(%zu) wrote past the end",
+                        len);
+                }
+
+                if (len >= 16) {
+                    if (portableRandomTestAllZero(a, len)) {
+                        ERR("portableRandomDirectFull(%zu) left the buffer "
+                            "all zero",
+                            len);
+                    }
+
+                    if (memcmp(a, b, len) == 0) {
+                        ERR("two portableRandomDirectFull(%zu) fills are "
+                            "identical",
+                            len);
+                    }
+                }
+            }
+        }
+
+        /* One-byte fills: at least one of 32 must be nonzero
+         * (false-positive 2^-256). */
+        bool anyNonZero = false;
+        for (uint32_t t = 0; t < 32 && !anyNonZero; t++) {
+            uint8_t one = 0;
+            if (!portableRandomDirectFull(&one, 1)) {
+                ERRR("portableRandomDirectFull(1) returned false");
+                break;
+            }
+
+            anyNonZero = one != 0;
+        }
+
+        if (!anyNonZero) {
+            ERRR("32 one-byte portableRandomDirectFull fills were all zero");
+        }
+
+        uint8_t untouched = 0x5A;
+        if (!portableRandomDirectFull(&untouched, 0) || untouched != 0x5A) {
+            ERRR("a zero-length portableRandomDirectFull must succeed "
+                 "without writing");
+        }
+    }
+
+    TEST("a real pid makes a forked child's next word differ") {
+        /* With a real pid, a forked child re-keys, so its next word
+         * differs from the parent's (false-positive 2^-64).  The initial
+         * stir runs before the fork so neither side crosses a refuel
+         * edge. */
+        portableRandomState r;
+        portableRandom_init(&r, getpid());
+        (void)portableRandom64(&r);
+
+        uint64_t childWord = 0;
+        uint64_t parentWord = 0;
+        if (!portableRandomTestForkedNextWord(&r, &childWord, &parentWord)) {
+            ERRR("the fork probe could not run (pipe/fork/read failed)");
+        } else if (childWord == parentWord) {
+            ERR("a forked child drew 0x%016" PRIx64 ", the same word as "
+                "the parent",
+                childWord);
+        }
+    }
+
+    TEST("a -1 pid disables the fork re-key (negative control)") {
+        /* Negative control: with pid -1 the fork check is disabled, so
+         * the child's next word equals the parent's. */
+        portableRandomState r;
+        portableRandom_init(&r, -1);
+        (void)portableRandom64(&r);
+
+        uint64_t childWord = 0;
+        uint64_t parentWord = 0;
+        if (!portableRandomTestForkedNextWord(&r, &childWord, &parentWord)) {
+            ERRR("the fork probe could not run (pipe/fork/read failed)");
+        } else if (childWord != parentWord) {
+            ERR("with pid -1 a forked child drew 0x%016" PRIx64 " and the "
+                "parent 0x%016" PRIx64,
+                childWord, parentWord);
+        }
+    }
+
+    TEST_FINAL_RESULT;
+}
+#endif /* DATAKIT_TEST */

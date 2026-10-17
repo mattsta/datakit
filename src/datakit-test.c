@@ -91,6 +91,7 @@
 #include "persist/multimapP.h"
 #include "persist/multiroarP.h"
 #include "persist/persistCtx.h"
+#include "portableRandom.h"
 #include "ptrPrevNext.h"
 
 /* ptrlib is a guard-less config-macro header; its test entry point is
@@ -8850,6 +8851,10 @@ static const TestEntry testRegistry[] = {
 
     /* Distributed / Cluster */
     T_A_ADJ(clusterRing, "ring,cluster,chr"),
+
+
+    /* Random generators */
+    T(portableRandom),
 
     /* Crypto helpers (header-only; tests live in this file) */
     T_A(dkTestSecureZero, "secureZero"),
