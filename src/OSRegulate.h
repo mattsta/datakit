@@ -59,12 +59,39 @@ void OSRegulateDaemonizeSignalReady(void);
 bool OSRegulateRequestSignalChildWhenParentExits(int sig);
 bool OSRegulateParentStillExisits(void);
 
-/* Parent-death watch fd.  On kqueue platforms (macOS/BSD) returns a
- * kqueue fd armed with a one-shot EVFILT_PROC/NOTE_EXIT filter on
- * `parent`; block in kevent() on it to receive an event the instant
- * the parent process exits.  Returns -1 on Linux (PR_SET_PDEATHSIG
- * covers that case) or on error (caller should fall back to polling). */
-int OSRegulateParentDeathKqueueFd(pid_t parent);
+/* Waiting for a process to exit.  waitpid() has no timeout, so these
+ * wait on a pollable exit notification instead: kqueue
+ * EVFILT_PROC/NOTE_EXIT on macOS and the BSDs, a pidfd on Linux.  The
+ * watch fd works for any observable pid; ReapNow and AwaitExitMs
+ * require a child of the caller.  Like any pid-based API they assume
+ * nothing else reaps the child: if another thread reaps it and the pid
+ * is reused, they act on the new process. */
+
+/* Returns a descriptor that becomes readable when `pid` exits, or -1
+ * when the platform has no exit notification (errno ENOSYS) or arming
+ * failed (which includes `pid` already having exited).  -1 never means
+ * "still running".  errno is preserved on failure; for an unreaped
+ * child, ESRCH means its exit is already under way.  The caller closes
+ * the fd. */
+int OSRegulateProcessExitWatchFd(pid_t pid);
+
+/* Reap `pid` if it has already exited; true when reaped, or when
+ * waitpid() reports ECHILD (already reaped elsewhere, or not a child).
+ * In the ECHILD case the exit status is unknown and *outStatus is set
+ * to 0.  Never blocks. */
+bool OSRegulateProcessReapNow(pid_t pid, int *outStatus);
+
+/* Wait up to `budgetMs` for child `pid` to exit, then reap it.  Returns
+ * true only if it was reaped within the budget (see ReapNow for the
+ * ECHILD case).  Never signals the child, and signals interrupting the
+ * wait do not extend the budget.  Once an exit has been reported (the
+ * watch fd became readable, or arming failed with ESRCH) the reap
+ * blocks, because the notification can precede the point where a
+ * WNOHANG reap succeeds; otherwise the final reap is non-blocking.
+ * Without an exit notification on the platform it does not wait: it
+ * only makes non-blocking reap attempts. */
+bool OSRegulateProcessAwaitExitMs(pid_t pid, uint64_t budgetMs, int *outStatus);
+
 
 /* CPUs */
 size_t OSRegulateCPUCountGet(void);

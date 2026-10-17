@@ -427,6 +427,145 @@ static int testCtMemEqStructuralTest(int argc, char *argv[]) {
 }
 
 /* ====================================================================
+ * OSRegulate process-exit events: waiting for another process to end
+ * (kqueue EVFILT_PROC/NOTE_EXIT on the BSD family, pidfd on Linux).
+ * Three properties are checked:
+ *
+ *   1. an exiting child is reaped inside a budget, with its exit
+ *      status recovered;
+ *   2. a child that outlives the budget returns false (the helper
+ *      never signals it) and is still reapable after the caller's own
+ *      kill;
+ *   3. the watch fd is a readiness source: not readable while the
+ *      child lives, readable once it exits.
+ *
+ * Every wait here is bounded and event-driven; the test never sleeps.
+ * The live child blocks in read() on a pipe the parent holds open, so
+ * its lifetime is controlled by the parent closing that pipe rather
+ * than by any timing.
+ * ==================================================================== */
+static int dkTestProcessExitWaitTest(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+
+    int failures = 0;
+#define PEXPECT(cond, msg)                                                     \
+    do {                                                                       \
+        if (!(cond)) {                                                         \
+            printf("dkTestProcessExitWait FAIL: %s (%s:%d)\n", (msg),          \
+                   __FILE__, __LINE__);                                        \
+            failures++;                                                        \
+        }                                                                      \
+    } while (0)
+
+    /* Budgets: the generous one only bounds a wait an event is expected
+     * to satisfy, so it costs nothing when the event lands.  The short
+     * one is the deliberate expiry case. */
+    static const uint64_t kGenerousMs = 30000;
+    static const uint64_t kShortMs = 25;
+    static const int kChildExitCode = 7;
+
+    /* --- (1) child exits promptly: reaped within budget, status kept. */
+    {
+        const pid_t child = fork();
+        if (child == 0) {
+            _exit(kChildExitCode);
+        }
+
+        PEXPECT(child > 0, "fork for prompt-exit child");
+        if (child > 0) {
+            int status = 0;
+            PEXPECT(OSRegulateProcessAwaitExitMs(child, kGenerousMs, &status),
+                    "prompt-exit child reaped within budget");
+            PEXPECT(WIFEXITED(status) && WEXITSTATUS(status) == kChildExitCode,
+                    "prompt-exit child status recovered");
+        }
+    }
+
+    /* --- (2) + (3) long-lived child: budget expiry, watch-fd
+     * readiness, then reap after the caller's own kill. */
+    {
+        int hold[2] = {-1, -1};
+        PEXPECT(pipe(hold) == 0, "pipe for long-lived child");
+        if (hold[0] >= 0) {
+            const pid_t child = fork();
+            if (child == 0) {
+                close(hold[1]);
+                /* Blocks until the parent closes its write end (read
+                 * returns 0) or the parent kills us. */
+                uint8_t discard;
+                while (read(hold[0], &discard, 1) > 0) {
+                    /* The parent never writes; drain defensively. */
+                }
+                _exit(0);
+            }
+
+            PEXPECT(child > 0, "fork for long-lived child");
+            close(hold[0]); /* the parent keeps only the write end */
+
+            if (child > 0) {
+                /* (2) the budget expires with the child alive: false,
+                 * and the helper must not have signalled it. */
+                int status = 0;
+                PEXPECT(!OSRegulateProcessAwaitExitMs(child, kShortMs, &status),
+                        "live child not reaped inside short budget");
+
+                /* (3) the watch fd exists and is NOT yet readable. */
+                const int watchFd = OSRegulateProcessExitWatchFd(child);
+                PEXPECT(watchFd >= 0, "watch fd armed on a live child");
+                if (watchFd >= 0) {
+                    struct pollfd watch = {.fd = watchFd, .events = POLLIN};
+                    int n;
+                    while ((n = poll(&watch, 1, 0)) < 0 && errno == EINTR) {
+                        /* re-park */
+                    }
+
+                    PEXPECT(n == 0, "watch fd not readable while child lives");
+
+                    /* Release the child by closing the pipe: its read
+                     * returns 0 and it exits.  The watch fd must then
+                     * become readable within the bounded park. */
+                    close(hold[1]);
+                    hold[1] = -1;
+                    while ((n = poll(&watch, 1, (int)kGenerousMs)) < 0 &&
+                           errno == EINTR) {
+                        /* re-park */
+                    }
+
+                    PEXPECT(n == 1, "watch fd readable after child exit");
+                    close(watchFd);
+                }
+
+                if (hold[1] >= 0) {
+                    close(hold[1]);
+                    hold[1] = -1;
+                }
+
+                /* Kill, then the same bounded await reaps.  Harmless if
+                 * the child already exited. */
+                kill(child, SIGKILL);
+                PEXPECT(
+                    OSRegulateProcessAwaitExitMs(child, kGenerousMs, &status),
+                    "child reaped after the caller's kill");
+
+                /* A second reap of a gone child reports gone (ECHILD)
+                 * instead of blocking. */
+                PEXPECT(OSRegulateProcessReapNow(child, NULL),
+                        "already-reaped child reports gone");
+            }
+        }
+    }
+
+#undef PEXPECT
+    if (failures == 0) {
+        printf(
+            "dkTestProcessExitWait: OK (await, expiry, watch-fd readiness)\n");
+        return 0;
+    }
+    return 1;
+}
+
+/* ====================================================================
  * Readiness pipe: the cross-process "ready" event a daemonizing parent
  * waits on.  Three children, three verdicts (signalled, died
  * unsignalled, alive but silent), each decided by what the pipe
@@ -10859,6 +10998,7 @@ static const TestEntry testRegistry[] = {
     T_A_ADJ(clusterRing, "ring,cluster,chr"),
 
     /* OS process/event primitives (tests live in this file) */
+    T_A(dkTestProcessExitWait, "processExitWait,procWait"),
     T_A(dkTestInflightGate, "inflightGate,inflight"),
     T_A(dkTestOwnedState, "ownedState,owned"),
     T_A(dkTestOwnedSeqGate, "ownedSeqGate,seqGate"),

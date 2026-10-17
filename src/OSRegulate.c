@@ -9,6 +9,7 @@
 #include <stdio.h>        /* snprintf */
 #include <sys/file.h>     /* flock */
 #include <sys/resource.h> /* getrlimit */
+#include <sys/wait.h>     /* waitpid / WNOHANG */
 #include <unistd.h>       /* _exit */
 
 /* rusage */
@@ -19,10 +20,17 @@
 #include <sys/prctl.h> /* for OSRegulateRequestSignalChildWhenParentExits() */
 #endif
 
+/* Process-exit event source: kqueue on the BSD family, pidfd on Linux,
+ * none elsewhere. */
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) ||       \
     defined(__OpenBSD__) || defined(__DragonFly__)
 #define OS_REGULATE_HAVE_KQUEUE 1
 #include <sys/event.h> /* kqueue / EVFILT_PROC / NOTE_EXIT */
+#elif DK_OS_LINUX
+#include <sys/syscall.h> /* SYS_pidfd_open */
+#if defined(SYS_pidfd_open)
+#define OS_REGULATE_HAVE_PIDFD 1
+#endif
 #endif
 
 /* If errorMsg provided, set then return error.
@@ -296,39 +304,125 @@ bool OSRegulateParentStillExisits(void) {
     return !(getppid() == 1);
 }
 
-int OSRegulateParentDeathKqueueFd(pid_t parent) {
-#ifdef OS_REGULATE_HAVE_KQUEUE
-    /* Event-driven parent-death watch for platforms without
-     * PR_SET_PDEATHSIG (macOS/BSD).  Returns a kqueue fd armed with a
-     * one-shot EVFILT_PROC/NOTE_EXIT filter on `parent`; a dedicated
-     * thread blocks in kevent() on the returned fd and receives an
-     * event the instant the parent process exits.  This replaces the
-     * getppid() poll that otherwise rides a data-plane (listener)
-     * thread, so parent-death detection no longer depends on that
-     * thread's health. */
+/* Process-exit events.  The watch fd is the only platform-specific
+ * piece; the bounded await is portable code polling it. */
+int OSRegulateProcessExitWatchFd(pid_t pid) {
+#if defined(OS_REGULATE_HAVE_KQUEUE)
+    /* A kqueue fd carrying a one-shot EVFILT_PROC/NOTE_EXIT filter is
+     * itself select/poll-able, so it satisfies the pollable-fd contract
+     * without the caller ever calling kevent(). */
     const int kq = kqueue();
     if (kq < 0) {
         return -1;
     }
 
     struct kevent ev;
-    EV_SET(&ev, (uintptr_t)parent, EVFILT_PROC, EV_ADD | EV_ONESHOT, NOTE_EXIT,
-           0, NULL);
+    EV_SET(&ev, (uintptr_t)pid, EVFILT_PROC, EV_ADD | EV_ONESHOT, NOTE_EXIT, 0,
+           NULL);
 
-    /* Register the filter (changelist of 1, no eventlist read yet). */
+    /* Register the filter (changelist of 1, no eventlist read yet).
+     * ESRCH here means the process is already gone, so no event will
+     * ever arrive: report "no event source" rather than a fd that never
+     * becomes readable.  errno is preserved across the close because
+     * the caller reads ESRCH as an exit report. */
     if (kevent(kq, &ev, 1, NULL, 0, NULL) < 0) {
+        const int armErrno = errno;
         close(kq);
+        errno = armErrno;
         return -1;
     }
 
     return kq;
+#elif defined(OS_REGULATE_HAVE_PIDFD)
+    /* pidfd_open() has no libc wrapper on every supported glibc/musl
+     * vintage, so go through the syscall directly.  The returned fd
+     * becomes readable (POLLIN) when the process exits. */
+    const int pidfd = (int)syscall(SYS_pidfd_open, pid, 0);
+    if (pidfd < 0) {
+        return -1;
+    }
+
+    return pidfd;
 #else
-    /* Linux: PR_SET_PDEATHSIG covers parent death; no kqueue fd. */
-    (void)parent;
+    /* No kqueue and no pidfd: this platform offers no process-exit
+     * event source, so callers must fall back to their own polling.
+     * errno is set so a caller never reads a stale value as the arm's. */
+    (void)pid;
+    errno = ENOSYS;
     return -1;
 #endif
 }
 
+bool OSRegulateProcessReapNow(pid_t pid, int *outStatus) {
+    int status = 0;
+    const pid_t reaped = waitpid(pid, &status, WNOHANG);
+
+    /* ECHILD: already reaped (or never ours); either way it is gone, and
+     * its status is unknown, so 0 is reported. */
+    if (reaped == pid || (reaped < 0 && errno == ECHILD)) {
+        if (outStatus) {
+            *outStatus = status;
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
+bool OSRegulateProcessAwaitExitMs(pid_t pid, uint64_t budgetMs,
+                                  int *outStatus) {
+    if (OSRegulateProcessReapNow(pid, outStatus)) {
+        return true;
+    }
+
+    const uint64_t startMs = timeUtilMonotonicMs();
+    bool exitReported = false;
+
+    /* errno is cleared first so only an ESRCH from this arm counts. */
+    errno = 0;
+    const int watchFd = OSRegulateProcessExitWatchFd(pid);
+    const int armErrno = errno;
+    if (watchFd >= 0) {
+        struct pollfd watch = {.fd = watchFd, .events = POLLIN};
+        const int n = osRegulatePollUntil(&watch, startMs, budgetMs);
+        exitReported = n > 0 && (watch.revents & POLLIN) != 0;
+
+        close(watchFd);
+    } else if (armErrno == ESRCH) {
+        /* Arming fails with ESRCH once the kernel has begun tearing the
+         * process down, which can precede the point where
+         * waitpid(WNOHANG) reports it.  For an unreaped child the pid
+         * cannot have been reused, so ESRCH counts as a reported exit. */
+        exitReported = true;
+    }
+
+    if (exitReported) {
+        /* The exit has been reported, so a blocking waitpid is bounded
+         * by the kernel's in-progress exit; a WNOHANG reap can still
+         * answer "running" for a moment after the notification. */
+        int status = 0;
+        pid_t reaped;
+        while ((reaped = waitpid(pid, &status, 0)) < 0 && errno == EINTR) {
+            /* retry */
+        }
+        if (reaped == pid || (reaped < 0 && errno == ECHILD)) {
+            if (outStatus) {
+                *outStatus = status;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /* The budget expired or there was no event source.  Nothing has
+     * reported an exit, so the final reap must not block. */
+    return OSRegulateProcessReapNow(pid, outStatus);
+}
+
+/* ====================================================================
+ * Wake descriptor
+ * ==================================================================== */
 /* ====================================================================
  * CPUs
  * ==================================================================== */
