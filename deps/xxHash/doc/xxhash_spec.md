@@ -1,5 +1,4 @@
-xxHash fast digest algorithm
-======================
+# xxHash fast digest algorithm
 
 ### Notices
 
@@ -18,22 +17,19 @@ Distribution of this document is unlimited.
 
 0.2.0 (29/06/23)
 
+## Table of Contents
 
-Table of Contents
----------------------
 - [Introduction](#introduction)
 - [XXH32 algorithm description](#xxh32-algorithm-description)
 - [XXH64 algorithm description](#xxh64-algorithm-description)
 - [XXH3 algorithm description](#xxh3-algorithm-overview)
-   - [Small inputs](#xxh3-algorithm-description-for-small-inputs)
-   - [Medium inputs](#xxh3-algorithm-description-for-medium-inputs)
-   - [Large inputs](#xxh3-algorithm-description-for-large-inputs)
+  - [Small inputs](#xxh3-algorithm-description-for-small-inputs)
+  - [Medium inputs](#xxh3-algorithm-description-for-medium-inputs)
+  - [Large inputs](#xxh3-algorithm-description-for-large-inputs)
 - [Performance considerations](#performance-considerations)
 - [Reference Implementation](#reference-implementation)
 
-
-Introduction
-----------------
+## Introduction
 
 This document describes the xxHash digest algorithm for both 32-bit and 64-bit variants, named `XXH32` and `XXH64`. The algorithm takes an input a message of arbitrary length and an optional seed value, then produces an output of 32 or 64-bit as "fingerprint" or "digest".
 
@@ -54,7 +50,7 @@ When an operation ingests input or secret as multi-bytes values, it reads it usi
 - `+`: denotes modular addition
 - `-`: denotes modular subtraction
 - `*`: denotes modular multiplication
-    - **Exception:** In `XXH3`, if it is in the form `(u128)x * (u128)y`, it denotes 64-bit by 64-bit normal multiplication into a full 128-bit result.
+  - **Exception:** In `XXH3`, if it is in the form `(u128)x * (u128)y`, it denotes 64-bit by 64-bit normal multiplication into a full 128-bit result.
 - `X <<< s`: denotes the value obtained by circularly shifting (rotating) `X` left by `s` bit positions.
 - `X >> s`: denotes the value obtained by shifting `X` right by s bit positions. Upper `s` bits become `0`.
 - `X << s`: denotes the value obtained by shifting `X` left by s bit positions. Lower `s` bits become `0`.
@@ -62,9 +58,7 @@ When an operation ingests input or secret as multi-bytes values, it reads it usi
 - `X | Y`: denotes the bit-wise OR of `X` and `Y` (same width).
 - `~X`: denotes the bit-wise negation of `X`.
 
-
-XXH32 Algorithm Description
--------------------------------------
+## XXH32 Algorithm Description
 
 ### Overview
 
@@ -113,7 +107,7 @@ A stripe is a contiguous segment of 16 bytes.
 It is evenly divided into 4 _lanes_, of 4 bytes each.
 The first lane is used to update accumulator 1, the second lane is used to update accumulator 2, and so on.
 
-Each lane read its associated 32-bit value using __little-endian__ convention.
+Each lane read its associated 32-bit value using **little-endian** convention.
 
 For each {lane, accumulator}, the update process is called a _round_, and applies the following formula:
 
@@ -185,11 +179,9 @@ The final mix ensures that all input bits have a chance to impact any bit in the
 
 The `XXH32()` function produces an unsigned 32-bit value as output.
 
-For systems which require to store and/or display the result in binary or hexadecimal format, the canonical format is defined to reproduce the same value as the natural decimal format, hence follows __big-endian__ convention (most significant byte first).
+For systems which require to store and/or display the result in binary or hexadecimal format, the canonical format is defined to reproduce the same value as the natural decimal format, hence follows **big-endian** convention (most significant byte first).
 
-
-XXH64 Algorithm Description
--------------------------------------
+## XXH64 Algorithm Description
 
 ### Overview
 
@@ -238,7 +230,7 @@ A stripe is a contiguous segment of 32 bytes.
 It is evenly divided into 4 _lanes_, of 8 bytes each.
 The first lane is used to update accumulator 1, the second lane is used to update accumulator 2, and so on.
 
-Each lane read its associated 64-bit value using __little-endian__ convention.
+Each lane read its associated 64-bit value using **little-endian** convention.
 
 For each {lane, accumulator}, the update process is called a _round_, and applies the following formula:
 
@@ -333,10 +325,9 @@ The final mix ensures that all input bits have a chance to impact any bit in the
 
 The `XXH64()` function produces an unsigned 64-bit value as output.
 
-For systems which require to store and/or display the result in binary or hexadecimal format, the canonical format is defined to reproduce the same value as the natural decimal format, hence follows __big-endian__ convention (most significant byte first).
+For systems which require to store and/or display the result in binary or hexadecimal format, the canonical format is defined to reproduce the same value as the natural decimal format, hence follows **big-endian** convention (most significant byte first).
 
-XXH3 Algorithm Overview
--------------------------------------
+## XXH3 Algorithm Overview
 
 XXH3 comes in two different versions: XXH3-64 and XXH3-128 (or XXH128), producing 64 and 128 bits of output, respectively.
 
@@ -420,8 +411,7 @@ avalanche_XXH64(u64 x):
   return x;
 ```
 
-XXH3 Algorithm Description (for small inputs)
--------------------------------------
+## XXH3 Algorithm Description (for small inputs)
 
 The algorithm for small inputs (0-16 bytes of input) is further divided into 4 cases: empty, 1-3 bytes, 4-8 bytes, and 9-16 bytes of input.
 
@@ -549,9 +539,7 @@ XXH3_128_9to16():
           avalanche(high)}; // higher half
 ```
 
-
-XXH3 Algorithm Description (for medium inputs)
--------------------------------------
+## XXH3 Algorithm Description (for medium inputs)
 
 This algorithm is used for medium inputs (17-240 bytes of input). Its internal hash state is stored inside 1 (XXH3-64) or 2 (XXH3-128) "accumulators", each storing an unsigned 64-bit value.
 
@@ -600,7 +588,7 @@ The input is split into several 16-byte chunks and mixed, and the result is adde
 
 #### 17-128 bytes of input
 
-The input is read as *N* 16-byte chunks starting from the beginning and *N* chunks starting from the end, where *N* is the smallest number that these 2*N* chunks cover the whole input. These chunks are paired up and mixed, and the results are accumulated to the accumulator(s).
+The input is read as _N_ 16-byte chunks starting from the beginning and _N_ chunks starting from the end, where _N_ is the smallest number that these 2*N* chunks cover the whole input. These chunks are paired up and mixed, and the results are accumulated to the accumulator(s).
 
 ```c
 // the loop variable `i` should be signed to avoid underflow in implementation
@@ -667,8 +655,7 @@ XXH3_128_17to240():
           (u64)0 - avalanche(high)}; // higher half
 ```
 
-XXH3 Algorithm Description (for large inputs)
--------------------------------------
+## XXH3 Algorithm Description (for large inputs)
 
 This algorithm is used for inputs larger than 240 bytes. The internal hash state is stored inside 8 "accumulators", each one storing an unsigned 64-bit value.
 
@@ -692,7 +679,7 @@ stripesPerBlock = (secretLength-64) / 8; // default 16; at least 9
 blockSize = 64 * stripesPerBlock;        // default 1024; at least 576
 ```
 
-The process of processing a full block is called a *round*. It consists of the following two sub-steps:
+The process of processing a full block is called a _round_. It consists of the following two sub-steps:
 
 #### Step 2-1. Process stripes in the block
 
@@ -790,9 +777,7 @@ XXH3_128_large():
           finalMerge(~((u64)inputLength * PRIME64_2), secretLength - 75)}; // higher half
 ```
 
-
-Performance considerations
-----------------------------------
+## Performance considerations
 
 The xxHash algorithms are simple and compact to implement. They provide a system independent "fingerprint" or digest of a message of arbitrary length.
 
@@ -804,17 +789,14 @@ On 32-bit systems though, positions are reversed: `XXH64` performance is reduced
 
 Finally, when vector operations are possible, `XXH3` is likely the faster variant.
 
-
-Reference Implementation
-----------------------------------------
+## Reference Implementation
 
 A reference library written in C is available at https://www.xxhash.com.
 The web page also links to multiple other implementations written in many different languages.
 It links to the [github project page](https://github.com/Cyan4973/xxHash) where an [issue board](https://github.com/Cyan4973/xxHash/issues) can be used for further public discussions on the topic.
 
+## Version changes
 
-Version changes
---------------------
 v0.2.0: added XXH3 specification, by Adrien Wu
 v0.1.1: added a note on rationale for selection of constants
 v0.1.0: initial release

@@ -373,8 +373,8 @@ cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(n);
 // no explicit frees — every return path releases both
 ```
 
-   Ownership handoff on a success path uses the disarm idiom (the
-   cleanup skips NULL):
+Ownership handoff on a success path uses the disarm idiom (the
+cleanup skips NULL):
 
 ```c
 cleaner(multimapFree) multimap *m = multimapNew(2);
@@ -394,11 +394,11 @@ return out;
 /* @own: static */
 ```
 
-   Grammar: `@own: (caller|container|static|cache)(; free=IDENT)?`.
-   `caller` = returned or written through an out-param, the caller
-   releases it; `container` = adopted into a struct, that struct's
-   Free releases it; `static` = deliberate process-lifetime;
-   `cache` = owned by a pool that manages reuse and release.
+Grammar: `@own: (caller|container|static|cache)(; free=IDENT)?`.
+`caller` = returned or written through an out-param, the caller
+releases it; `container` = adopted into a struct, that struct's
+Free releases it; `static` = deliberate process-lifetime;
+`cache` = owned by a pool that manages reuse and release.
 
 **The gate.** `ctest -R allocOwnership` (or
 `cd tools && uv run dktools allocaudit check --constructors`) must
@@ -421,7 +421,7 @@ to its releasing function.
 - Paired teardown with ordering (a multidict and its class): the
   class must outlive `multidictFree` because teardown runs class
   callbacks — `cls = multidictGetClass(d); multidictFree(d);
-  multidictDefaultClassFree(cls);`.
+multidictDefaultClassFree(cls);`.
 - Loop-body braces are the per-iteration scope; a cleaner declared
   inside the loop body fires every iteration.
 - Never extend a large buffer's lifetime past its original free

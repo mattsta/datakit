@@ -600,17 +600,17 @@ while (running) {
 
 ## Complexity
 
-| Operation      | Complexity               | Notes                                                             |
-| -------------- | ------------------------ | ----------------------------------------------------------------- |
-| Register       | O(1) amortized           | Append into one slot flex                                         |
-| Unregister     | O(log c)                 | c = outstanding cancellations; O(1) when none                     |
-| StopAll        | O(allocated slots)       | O(1) inside a callback (watermark only)                           |
-| Process (tick) | O(1) amortized           | Plus O(k) for k fired timers; occasional cascades                 |
-| Cascade        | O(entries in slot)       | Once per upper-wheel slot entry                                   |
-| Count          | O(1)                     | Never walks storage                                               |
-| Reconcile      | O(n)                     | n = all stored entries                                            |
-| Next event     | O(1) cached              | Miss: pending, wheel-0 slots, 2 slots per level, overflow head    |
-| GetStats       | O(slots) + optional O(n) | Memory walk; reconcile at most once per cancellation batch        |
+| Operation      | Complexity               | Notes                                                          |
+| -------------- | ------------------------ | -------------------------------------------------------------- |
+| Register       | O(1) amortized           | Append into one slot flex                                      |
+| Unregister     | O(log c)                 | c = outstanding cancellations; O(1) when none                  |
+| StopAll        | O(allocated slots)       | O(1) inside a callback (watermark only)                        |
+| Process (tick) | O(1) amortized           | Plus O(k) for k fired timers; occasional cascades              |
+| Cascade        | O(entries in slot)       | Once per upper-wheel slot entry                                |
+| Count          | O(1)                     | Never walks storage                                            |
+| Reconcile      | O(n)                     | n = all stored entries                                         |
+| Next event     | O(1) cached              | Miss: pending, wheel-0 slots, 2 slots per level, overflow head |
+| GetStats       | O(slots) + optional O(n) | Memory walk; reconcile at most once per cancellation batch     |
 
 **Memory:**
 
