@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import allocaudit
+from . import allocaudit, perfdiff
 
 
 def _repo_default() -> Path:
@@ -58,7 +58,24 @@ def main(argv: list[str] | None = None) -> int:
         "(flexNew/multimapNew/... — see CONSTRUCTORS)",
     )
 
+    pd = sub.add_parser(
+        "perfdiff",
+        help="compare two perfRegression TSV outputs "
+        "(exit 0 clean, 1 regression, 2 input error)",
+    )
+    pd.add_argument("baseline", type=Path, help="baseline TSV path")
+    pd.add_argument("current", type=Path, help="current TSV path")
+    pd.add_argument(
+        "--tolerance",
+        type=float,
+        default=10.0,
+        help="regression tolerance percent (default 10.0)",
+    )
+
     args = parser.parse_args(argv)
+
+    if args.command == "perfdiff":
+        return perfdiff.run(args.baseline, args.current, args.tolerance)
 
     if args.command == "allocaudit":
         result = allocaudit.run_audit(

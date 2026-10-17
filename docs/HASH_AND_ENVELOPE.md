@@ -129,7 +129,8 @@ vary; the perfRegression harness captures the canonical baselines.
 | SHA-256                  | SHA-NI or ARMv8-Crypto          | hardware-bounded         | preferred over BLAKE3 where hosts have the ext.            |
 
 Use `./build-perf/src/datakit-test test perfRegression` +
-`python3 scripts/perfDiff.py` for the live numbers on your hardware
+`cd tools && uv run dktools perfdiff BASELINE.tsv CURRENT.tsv` (against a
+locally kept, uncommitted baseline TSV) for the live numbers on your hardware
 — see `docs/HASH_PERFORMANCE.md` for the per-algorithm baseline
 spreadsheet and the regression bar (5 %).
 

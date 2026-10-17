@@ -10,8 +10,8 @@
  *   https://raw.githubusercontent.com/BLAKE3-team/BLAKE3/master/test_vectors/test_vectors.json
  * The full 35 input-length test cases × 3 modes (plain hash, keyed
  * hash, derive-key) all match.  Refresh procedure: re-fetch the
- * canonical JSON and run the diff script in scripts/ (or inline the
- * compare).
+ * canonical JSON and compare the first 32 bytes of each expected
+ * output against this table.
  *
  * Each entry's three hex fields are: hash (plain), keyed_hash, derive_key. */
 

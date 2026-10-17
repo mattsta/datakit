@@ -15,9 +15,11 @@ Rules for a capture:
   note the why here in the same section.
 
 The row-level regression gate is `datakit-test test perfRegression`
-compared against a locally kept TSV via `scripts/perfDiff.py`
-(tolerance 10% routine / 5% release). This ledger keeps the headline
-numbers and decisions; the TSV keeps every row.
+compared against a locally kept TSV with
+`cd tools && uv run dktools perfdiff BASELINE.tsv CURRENT.tsv`
+(tolerance 10% routine / 5% release, via `--tolerance`). The baseline
+TSV stays local to each machine and is not committed. This ledger keeps
+the headline numbers and decisions; the TSV keeps every row.
 
 ---
 
@@ -158,7 +160,7 @@ to 32× on tiny objects (256B minimum atom) and pre-commits its pool.
 
 `./build-perf/src/datakit-test test perfRegression`, MB/s at 1 MiB
 payload: hmac_blake3 wrap ≈ 1388, verify ≈ 1424; ChaCha20-Poly1305
-seal/open ≈ 586. Full rows go to the TSV for `perfDiff.py`.
+seal/open ≈ 586. Full rows go to the local TSV for `dktools perfdiff`.
 
 ### Reproduce
 

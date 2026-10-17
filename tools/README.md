@@ -45,3 +45,23 @@ runs with plain `ctest`, `datakit-check`, and `datakit-quickcheck`.
 
 Coding-practice documentation: `docs/development/CONTRIBUTING.md`
 (Memory Management) and the idiom block in `src/cleaner.h`.
+
+## perfdiff — perf regression comparison
+
+Compares two `perfRegression` TSV outputs row by row, keyed on
+(module, name, bytes):
+
+```sh
+uv run dktools perfdiff BASELINE.tsv CURRENT.tsv [--tolerance PCT]
+```
+
+- Exits 0 when every matched row is within the tolerance (default
+  10%), 1 when any row's ns_per_op grew or mb_per_sec fell by more
+  than the tolerance (the offending rows print to stdout as TSV under
+  a `REGRESSION` header), and 2 on a missing or malformed file.
+- Rows missing from CURRENT or new in it are listed on stderr and do
+  not change the exit code.
+- The baseline is a local file, not committed; generate it from a
+  perf build with
+  `./build-perf/src/datakit-test test perfRegression > perf.baseline.tsv`.
+  Paths are relative to `tools/` when run as shown.
