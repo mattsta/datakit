@@ -475,6 +475,7 @@ add_library(${PROJECT_NAME} OBJECT
     mflex.c
 
     OSRegulate.c
+    inflightGate.c
     setproctitle.c
     versionOSRuntime.c
 

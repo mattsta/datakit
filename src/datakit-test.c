@@ -49,6 +49,7 @@
 #include "hmac.h"
 #include "hmacKeyring.h"
 #include "hyperloglog.h"
+#include "inflightGate.h"
 #include "intersectInt.h"
 #include "intset.h"
 #include "intsetU32.h"
@@ -60,6 +61,7 @@
 #include "membound.h"
 #include "memtest.h"
 #include "mflex.h"
+#include "monotonicCond.h"
 #include "multiFenwick.h" /* Separate multi-fenwick system (wraps multiple trees) */
 #include "multiOrderedSet.h"
 #include "multiTimer.h"
@@ -415,6 +417,226 @@ static int testCtMemEqStructuralTest(int argc, char *argv[]) {
         return 0;
     }
     return 1;
+}
+
+/* ====================================================================
+ * inflightGate: in-flight counter with a bounded wait for zero.
+ *
+ * Four properties, each with its own case:
+ *   1. an exit-to-zero with no waiter registered never touches the
+ *      gate's mutex (it completes while another thread holds that
+ *      mutex; a broadcast would block there);
+ *   2. a registered waiter is released by the last exit;
+ *   3. the budget expires with a straggler still inside;
+ *   4. an exit landing between the waiter's count read and its park
+ *      still wakes the waiter.
+ * ==================================================================== */
+typedef struct dkTestGateCtl {
+    inflightGate *gate;
+    pthread_mutex_t mu;
+    pthread_cond_t cv;
+    bool holding;  /* holder owns gate->mu */
+    bool release;  /* holder may drop gate->mu */
+    bool exitDone; /* the no-waiter Exit returned */
+    bool armed;    /* the waiter is about to park */
+    inflightGateVerdict verdict;
+} dkTestGateCtl;
+
+/* Bounded handshake on the control block — the test never spins. */
+static void dkTestGateSet(dkTestGateCtl *c, bool *field) {
+    pthread_mutex_lock(&c->mu);
+    *field = true;
+    pthread_cond_broadcast(&c->cv);
+    pthread_mutex_unlock(&c->mu);
+}
+
+static bool dkTestGateAwait(dkTestGateCtl *c, const bool *field,
+                            const uint64_t budgetMs) {
+    const uint64_t startMs = timeUtilMonotonicMs();
+    bool got = false;
+    pthread_mutex_lock(&c->mu);
+    for (;;) {
+        if (*field) {
+            got = true;
+            break;
+        }
+
+        const uint64_t elapsedMs = timeUtilMonotonicMs() - startMs;
+        if (elapsedMs >= budgetMs) {
+            break;
+        }
+
+        (void)monotonicCondWaitMs(&c->cv, &c->mu, budgetMs - elapsedMs);
+    }
+
+    pthread_mutex_unlock(&c->mu);
+    return got;
+}
+
+/* Budgets shared by the helper threads and the test body: one generous
+ * enough that only a lost wake can expire it, one deliberately short
+ * for the straggler case. */
+#define DK_TEST_GATE_GENEROUS_MS 30000
+#define DK_TEST_GATE_SHORT_MS 20
+/* Rounds of the lost-wake race.  Each round is one thread create plus a
+ * handshake, so this costs milliseconds of wall clock while giving the
+ * window hundreds of independent chances to be hit. */
+#define DK_TEST_GATE_RACE_ROUNDS 256
+
+static void *dkTestGateHolderMain(void *arg) {
+    dkTestGateCtl *c = arg;
+    pthread_mutex_lock(&c->gate->mu);
+    dkTestGateSet(c, &c->holding);
+    (void)dkTestGateAwait(c, &c->release, DK_TEST_GATE_GENEROUS_MS);
+    pthread_mutex_unlock(&c->gate->mu);
+    return NULL;
+}
+
+static void *dkTestGateExiterMain(void *arg) {
+    dkTestGateCtl *c = arg;
+    inflightGateEnter(c->gate);
+    inflightGateExit(c->gate);
+    dkTestGateSet(c, &c->exitDone);
+    return NULL;
+}
+
+static void *dkTestGateArmedExiterMain(void *arg) {
+    dkTestGateCtl *c = arg;
+    /* Fire the moment the waiter says it is entering the park: this is
+     * the window between its count read and its wait. */
+    (void)dkTestGateAwait(c, &c->armed, DK_TEST_GATE_GENEROUS_MS);
+    inflightGateExit(c->gate);
+    return NULL;
+}
+
+static void *dkTestGateWaiterMain(void *arg) {
+    dkTestGateCtl *c = arg;
+    dkTestGateSet(c, &c->armed);
+    c->verdict = inflightGateAwaitZeroMs(c->gate, DK_TEST_GATE_GENEROUS_MS);
+    return NULL;
+}
+
+static int dkTestInflightGateTest(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+
+    int failures = 0;
+#define GEXPECT(cond, msg)                                                     \
+    do {                                                                       \
+        if (!(cond)) {                                                         \
+            printf("dkTestInflightGate FAIL: %s (%s:%d)\n", (msg), __FILE__,   \
+                   __LINE__);                                                  \
+            failures++;                                                        \
+        }                                                                      \
+    } while (0)
+
+    inflightGate gate = INFLIGHT_GATE_INIT;
+
+    GEXPECT(inflightGateDepth(&gate) == 0, "a fresh gate is idle");
+    GEXPECT(inflightGateAwaitZeroMs(&gate, DK_TEST_GATE_SHORT_MS) ==
+                INFLIGHT_GATE_IDLE,
+            "await on an idle gate returns IDLE at once");
+
+    /* --- Property 3: budget expiry with a straggler. --- */
+    inflightGateEnter(&gate);
+    inflightGateEnter(&gate);
+    inflightGateExit(&gate);
+    GEXPECT(inflightGateDepth(&gate) == 1, "one straggler remains");
+    GEXPECT(inflightGateAwaitZeroMs(&gate, DK_TEST_GATE_SHORT_MS) ==
+                INFLIGHT_GATE_EXPIRED,
+            "a straggler expires the budget");
+    inflightGateExit(&gate);
+    GEXPECT(inflightGateDepth(&gate) == 0, "the straggler left");
+
+    /* The await above constructed the gate's mutex/condvar, so the
+     * holder below can take that mutex. */
+    dkTestGateCtl ctl;
+    memset(&ctl, 0, sizeof(ctl));
+    ctl.gate = &gate;
+    pthread_mutex_init(&ctl.mu, NULL);
+    monotonicCondInit(&ctl.cv);
+
+    /* --- Property 1: an exit-to-zero with no waiter never broadcasts.
+     *
+     * The holder owns gate->mu for the whole window.  An Exit that took
+     * that mutex would block until the holder released it, so the Exit
+     * returning shows that it did not. --- */
+    {
+        pthread_t holder;
+        pthread_t exiter;
+        GEXPECT(pthread_create(&holder, NULL, dkTestGateHolderMain, &ctl) == 0,
+                "holder thread started");
+        GEXPECT(dkTestGateAwait(&ctl, &ctl.holding, DK_TEST_GATE_GENEROUS_MS),
+                "holder took the gate mutex");
+        GEXPECT(pthread_create(&exiter, NULL, dkTestGateExiterMain, &ctl) == 0,
+                "exiter thread started");
+        GEXPECT(dkTestGateAwait(&ctl, &ctl.exitDone, DK_TEST_GATE_GENEROUS_MS),
+                "exit-to-zero with no waiter completed under a held mutex");
+        dkTestGateSet(&ctl, &ctl.release);
+        pthread_join(exiter, NULL);
+        pthread_join(holder, NULL);
+        GEXPECT(inflightGateDepth(&gate) == 0, "no-waiter exit left it idle");
+    }
+
+    /* --- Property 2: the last exit releases a registered waiter. --- */
+    {
+        inflightGateEnter(&gate);
+        pthread_mutex_lock(&ctl.mu);
+        ctl.armed = false;
+        ctl.verdict = INFLIGHT_GATE_EXPIRED;
+        pthread_mutex_unlock(&ctl.mu);
+
+        pthread_t waiter;
+        GEXPECT(pthread_create(&waiter, NULL, dkTestGateWaiterMain, &ctl) == 0,
+                "waiter thread started");
+        GEXPECT(dkTestGateAwait(&ctl, &ctl.armed, DK_TEST_GATE_GENEROUS_MS),
+                "waiter registered");
+        inflightGateExit(&gate);
+        pthread_join(waiter, NULL);
+        GEXPECT(ctl.verdict == INFLIGHT_GATE_IDLE,
+                "the last exit woke the waiter");
+    }
+
+    /* --- Property 4: the exit lands in the waiter's own window. --- */
+    for (uint32_t round = 0; round < DK_TEST_GATE_RACE_ROUNDS; round++) {
+        inflightGateEnter(&gate);
+        pthread_mutex_lock(&ctl.mu);
+        ctl.armed = false;
+        pthread_mutex_unlock(&ctl.mu);
+
+        pthread_t racer;
+        if (pthread_create(&racer, NULL, dkTestGateArmedExiterMain, &ctl) !=
+            0) {
+            GEXPECT(false, "race exiter thread started");
+            inflightGateExit(&gate);
+            break;
+        }
+
+        dkTestGateSet(&ctl, &ctl.armed);
+        const inflightGateVerdict v =
+            inflightGateAwaitZeroMs(&gate, DK_TEST_GATE_GENEROUS_MS);
+        pthread_join(racer, NULL);
+        if (v != INFLIGHT_GATE_IDLE) {
+            GEXPECT(false, "an exit inside the waiter's window was lost");
+            break;
+        }
+    }
+
+    GEXPECT(inflightGateDepth(&gate) == 0, "the race left the gate idle");
+    GEXPECT(strcmp(inflightGateVerdictName(INFLIGHT_GATE_IDLE), "idle") == 0,
+            "IDLE names itself");
+    GEXPECT(strcmp(inflightGateVerdictName(INFLIGHT_GATE_EXPIRED), "expired") ==
+                0,
+            "EXPIRED names itself");
+
+    pthread_mutex_destroy(&ctl.mu);
+    pthread_cond_destroy(&ctl.cv);
+
+    if (failures == 0) {
+        printf("dkTestInflightGate: PASS\n");
+    }
+#undef GEXPECT
+    return failures;
 }
 
 /* ====================================================================
@@ -8853,6 +9075,8 @@ static const TestEntry testRegistry[] = {
     /* Distributed / Cluster */
     T_A_ADJ(clusterRing, "ring,cluster,chr"),
 
+    /* OS process/event primitives (tests live in this file) */
+    T_A(dkTestInflightGate, "inflightGate,inflight"),
 
     /* Random generators */
     T_A(dkRandom, "rng"), T(portableRandom),
