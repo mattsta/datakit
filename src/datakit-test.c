@@ -2022,6 +2022,16 @@ static int dkTestOwnedStateTest(int argc, char *argv[]) {
                         ownedSeqPublishedTotal() == pubBefore,
                     "seq: publish(NULL, len > 0) is refused, no number "
                     "assigned");
+            /* The same holds for PublishWith without a fill: the version
+             * would otherwise read VALID with an older publication's
+             * bytes. */
+            OEXPECT(!ownedSeqPublishWith(&sa, 16, NULL, NULL) &&
+                        ownedSeqAssigned(&sa) == assignedBefore &&
+                        ownedSeqPublishedTotal() == pubBefore &&
+                        ownedSeqReadAt(&sa, assignedBefore + 1, out,
+                                       sizeof(out), &outLen) == OWNED_SEQ_TORN,
+                    "seq: publishWith(len > 0, NULL fill) is refused, no "
+                    "number assigned, nothing reads VALID");
         }
 
         /* Oversize publish is refused before a number exists. */

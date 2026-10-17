@@ -533,12 +533,16 @@ void ownedSeqInit(ownedSeq *s, const ownedSeqDecl *decl, void *owner,
 void ownedSeqDestruct(ownedSeq *s);
 
 /* Publish `len` bytes from `src` (Publish), or whatever `fill` writes
- * through the version handle (PublishWith). Never waits. The writer
- * check runs first and never refuses the write. Returns false, with no
- * number assigned, for a zero-version instance, for len >
- * version_bytes (counted as refused_oversize), and in Publish for a
- * NULL src with len > 0. An abandoned publication returns true and is
- * counted as publish_abandoned. */
+ * through the version handle (PublishWith). PublishWith's fill must
+ * write every byte in [0, len): a reader that validates the publication
+ * copies `len` bytes, and any byte the fill skipped holds whatever an
+ * earlier publication left there. Never waits. The writer check runs
+ * first and never refuses the write. Returns false, with no number
+ * assigned, for a zero-version instance, for len > version_bytes
+ * (counted as refused_oversize), and for len > 0 with nothing to write
+ * it (Publish with a NULL src, PublishWith with a NULL fill). An
+ * abandoned publication returns true and is counted as
+ * publish_abandoned. */
 bool ownedSeqPublish(ownedSeq *s, const void *src, size_t len);
 bool ownedSeqPublishWith(ownedSeq *s, size_t len, ownedSeqFillFn fill,
                          void *ctx);

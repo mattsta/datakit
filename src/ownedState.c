@@ -976,6 +976,11 @@ static void ownedSeqCursorAdvance_(ownedSeq *s, uint64_t n) {
 
 bool ownedSeqPublishWith(ownedSeq *s, size_t len, ownedSeqFillFn fill,
                          void *ctx) {
+    if (!fill && len > 0) {
+        /* Nothing would write the bytes: refuse before a number is
+         * assigned rather than publish stale bytes as VALID. */
+        return false;
+    }
     if (!ownedSeqArmed_(s)) {
         return false; /* zero versions: nothing to write into */
     }
