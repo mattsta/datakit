@@ -685,6 +685,88 @@ static int dkTestDaemonizeReadyTest(int argc, char *argv[]) {
     return failures;
 }
 
+/* Async-signal-safe wake descriptor (OSRegulate.h): an idle await
+ * expires, a signalled one wakes and drains, several signals coalesce
+ * into one wake, a wake raised inside a signal handler is delivered,
+ * and Signal preserves errno. */
+static int dkTestWakeFdHandlerWr = -1;
+static void dkTestWakeFdSignalHandler(int sig) {
+    (void)sig;
+    OSRegulateWakeSignal(dkTestWakeFdHandlerWr);
+}
+
+static int dkTestWakeFdTest(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+
+    int failures = 0;
+#define WEXPECT(cond, msg)                                                     \
+    do {                                                                       \
+        if (!(cond)) {                                                         \
+            printf("dkTestWakeFd FAIL: %s (%s:%d)\n", (msg), __FILE__,         \
+                   __LINE__);                                                  \
+            failures++;                                                        \
+        }                                                                      \
+    } while (0)
+
+    static const uint64_t kGenerousMs =
+        30000;                           /* bounds a wait an event satisfies */
+    static const uint64_t kShortMs = 20; /* the deliberate expiry case */
+
+    int rd = -1;
+    int wr = -1;
+    WEXPECT(OSRegulateWakeFdNew(&rd, &wr), "wake pair created");
+    if (rd < 0 || wr < 0) {
+        return failures ? failures : 1;
+    }
+
+    WEXPECT(!OSRegulateWakeAwaitMs(rd, kShortMs), "idle await expires");
+
+    OSRegulateWakeSignal(wr);
+    WEXPECT(OSRegulateWakeAwaitMs(rd, kGenerousMs), "signalled await wakes");
+    WEXPECT(!OSRegulateWakeAwaitMs(rd, kShortMs), "delivery drained the wake");
+
+    OSRegulateWakeSignal(wr);
+    OSRegulateWakeSignal(wr);
+    OSRegulateWakeSignal(wr);
+    WEXPECT(OSRegulateWakeAwaitMs(rd, kGenerousMs),
+            "coalesced signals wake once");
+    WEXPECT(!OSRegulateWakeAwaitMs(rd, kShortMs),
+            "coalesced signals leave nothing pending");
+
+    /* Raised from a signal handler, where a condition variable cannot be
+     * signalled.  raise() runs the handler synchronously. */
+    dkTestWakeFdHandlerWr = wr;
+    struct sigaction act;
+    memset(&act, 0, sizeof(act));
+    act.sa_handler = dkTestWakeFdSignalHandler;
+    sigemptyset(&act.sa_mask);
+    struct sigaction old;
+    WEXPECT(sigaction(SIGUSR1, &act, &old) == 0, "install SIGUSR1 handler");
+    WEXPECT(raise(SIGUSR1) == 0, "raise SIGUSR1");
+    WEXPECT(OSRegulateWakeAwaitMs(rd, kGenerousMs),
+            "wake raised inside a signal handler is delivered");
+    (void)sigaction(SIGUSR1, &old, NULL);
+    dkTestWakeFdHandlerWr = -1;
+
+    errno = EBUSY;
+    OSRegulateWakeSignal(wr);
+    WEXPECT(errno == EBUSY, "Signal preserves errno");
+    OSRegulateWakeDrain(rd);
+    WEXPECT(!OSRegulateWakeAwaitMs(rd, kShortMs), "Drain consumed the wake");
+
+    if (wr != rd) {
+        close(wr);
+    }
+    close(rd);
+
+    if (failures == 0) {
+        printf("dkTestWakeFd: PASS\n");
+    }
+#undef WEXPECT
+    return failures;
+}
+
 /* ====================================================================
  * inflightGate: in-flight counter with a bounded wait for zero.
  *
@@ -10999,6 +11081,7 @@ static const TestEntry testRegistry[] = {
 
     /* OS process/event primitives (tests live in this file) */
     T_A(dkTestProcessExitWait, "processExitWait,procWait"),
+    T_A(dkTestWakeFd, "wakeFd,wake"),
     T_A(dkTestInflightGate, "inflightGate,inflight"),
     T_A(dkTestOwnedState, "ownedState,owned"),
     T_A(dkTestOwnedSeqGate, "ownedSeqGate,seqGate"),

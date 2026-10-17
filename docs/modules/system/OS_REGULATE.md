@@ -6,8 +6,11 @@
 
 **Key Features:**
 
-- Process daemonization and management
-- Parent-death detection (`PR_SET_PDEATHSIG` on Linux, kqueue on macOS/BSD)
+- Process daemonization and management, including a readiness handshake
+- Process-exit watch descriptors (kqueue on macOS/BSD, pidfd on Linux) and a
+  bounded wait-then-reap for children
+- Async-signal-safe wake descriptor (eventfd on Linux, pipe elsewhere)
+- Parent-death detection (`PR_SET_PDEATHSIG` on Linux, exit watch fd elsewhere)
 - File descriptor limit adjustment
 - CPU count detection
 - Memory usage and configuration checks
@@ -41,15 +44,6 @@ typedef enum OSRegulateDaemonizeStatus {
  * Returns: PARENT, CHILD, or ERROR
  */
 OSRegulateDaemonizeStatus OSRegulateDaemonize(const char **errMsg);
-
-/* Daemonize and exit parent after callback returns true
- * cb: callback to check if child is ready
- * userData: passed to callback
- */
-void OSRegulateDaemonizeThenExit(
-    OSRegulateDaemonizeParentExitCallback *cb,
-    void *userData
-);
 
 /* Daemonize and exit parent immediately */
 void OSRegulateDaemonizeThenExitNoWait(void);
@@ -92,6 +86,67 @@ non-NULL, sets it to a static description (`"Failure to fork() daemon"`,
 `"Failed to run setsid()"`, `"Failed to open /dev/null"`, ...). The string is not
 owned by the caller and must not be freed.
 
+### Daemonize Until Ready
+
+```c
+/* Daemonize, then hold the foreground parent until the child signals
+ * readiness. The parent exits 0 on READY, and nonzero if the child exits
+ * first or readyBudgetMs elapses. Both parent exits use _exit(), so the
+ * parent runs no atexit handlers and does not flush stdio buffers it
+ * shares with the child.
+ * Returns (in the child): OS_REGULATE_DAEMONIZE_CHILD, or ERROR
+ */
+OSRegulateDaemonizeStatus OSRegulateDaemonizeUntilReady(uint64_t readyBudgetMs,
+                                                        const char **errMsg);
+
+/* Called once by the child when it is ready to serve. Idempotent. */
+void OSRegulateDaemonizeSignalReady(void);
+
+/* Example: a service manager sees a failure if startup fails */
+const char *error = NULL;
+if (OSRegulateDaemonizeUntilReady(30000, &error) ==
+    OS_REGULATE_DAEMONIZE_ERROR) {
+    fprintf(stderr, "Daemonize failed: %s\n", error);
+    exit(1);
+}
+
+/* Child: open listeners, load state, ... */
+if (!startServing()) {
+    exit(1); /* the parent sees end-of-file and exits nonzero */
+}
+
+OSRegulateDaemonizeSignalReady(); /* the parent exits 0 */
+```
+
+### Readiness Channel
+
+The primitive under `OSRegulateDaemonizeUntilReady`, usable on its own for any
+one-shot cross-process "ready" event. It is an `AF_UNIX` stream socketpair: one
+byte means ready, and end-of-file means every writer closed without signalling
+(for example, the child died). A socket is used instead of a pipe so a late
+signal, sent after the reader has gone, cannot raise `SIGPIPE`.
+
+```c
+typedef enum OSRegulateReadyAwait {
+    OS_REGULATE_READY_AWAIT_READY,       /* the writer signalled */
+    OS_REGULATE_READY_AWAIT_WRITER_GONE, /* no writer left, or unwaitable */
+    OS_REGULATE_READY_AWAIT_EXPIRED,     /* budget elapsed, writer alive */
+} OSRegulateReadyAwait;
+
+/* Create the pair (both ends close-on-exec). The parent keeps the read
+ * end and the child the write end; each closes the other after fork(). */
+bool OSRegulateReadyPipeNew(int *outRead, int *outWrite);
+
+/* Send the ready byte and close the write end; sets *inoutWriteFd to -1.
+ * A negative descriptor is a no-op, so repeated calls are safe. */
+void OSRegulateReadyPipeSignal(int *inoutWriteFd);
+
+/* Wait up to budgetMs. Signals interrupting the wait do not extend the
+ * budget. WRITER_GONE is also returned for a negative readFd or a
+ * poll()/read() failure other than EINTR. */
+OSRegulateReadyAwait OSRegulateReadyPipeAwaitMs(int readFd, uint64_t budgetMs);
+```
+
 ### PID File Management
 
 ```c
@@ -127,31 +182,18 @@ bool OSRegulateRequestSignalChildWhenParentExits(int sig);
  */
 bool OSRegulateParentStillExisits(void);
 
-/* Parent-death watch fd (kqueue platforms: macOS/BSD)
- * parent: PID to watch
- * Returns: a kqueue fd armed with a one-shot EVFILT_PROC/NOTE_EXIT filter
- *          on `parent`, or -1 on Linux (PR_SET_PDEATHSIG covers that case)
- *          or on error
- *
- * Block in kevent() on the returned fd to receive an event the instant the
- * parent process exits - no polling, and no dependence on the health of a
- * data-plane thread. On -1 the caller should fall back to polling
- * OSRegulateParentStillExisits(). Close the fd with close() when done.
- */
-int OSRegulateParentDeathKqueueFd(pid_t parent);
-
 /* Example: Child monitors parent */
 if (OSRegulateRequestSignalChildWhenParentExits(SIGTERM)) {
     /* Linux: kernel signals us directly, nothing else to do */
     printf("Will receive SIGTERM if parent exits\n");
 } else {
-    /* macOS/BSD: block a dedicated thread on the kqueue fd */
-    const int kq = OSRegulateParentDeathKqueueFd(getppid());
-    if (kq >= 0) {
-        struct kevent ev;
-        (void)kevent(kq, NULL, 0, &ev, 1, NULL); /* blocks until parent exits */
+    /* macOS/BSD: wait on the parent's exit watch fd (see below) */
+    const int watch = OSRegulateProcessExitWatchFd(getppid());
+    if (watch >= 0) {
+        struct pollfd pfd = {.fd = watch, .events = POLLIN};
+        (void)poll(&pfd, 1, -1); /* blocks until the parent exits */
         printf("Parent died, exiting\n");
-        close(kq);
+        close(watch);
     } else {
         /* Last resort: poll */
         while (running && OSRegulateParentStillExisits()) {
@@ -163,14 +205,102 @@ if (OSRegulateRequestSignalChildWhenParentExits(SIGTERM)) {
 
 **Choosing a parent-death mechanism:**
 
-| Platform  | Mechanism                                  | API                                           |
-| --------- | ------------------------------------------ | --------------------------------------------- |
-| Linux     | `prctl(PR_SET_PDEATHSIG)` - kernel signal  | `OSRegulateRequestSignalChildWhenParentExits` |
-| macOS/BSD | kqueue `EVFILT_PROC` / `NOTE_EXIT` - event | `OSRegulateParentDeathKqueueFd`               |
-| Fallback  | `getppid()` poll                           | `OSRegulateParentStillExisits`                |
+| Platform  | Mechanism                                     | API                                           |
+| --------- | --------------------------------------------- | --------------------------------------------- |
+| Linux     | `prctl(PR_SET_PDEATHSIG)` - kernel signal     | `OSRegulateRequestSignalChildWhenParentExits` |
+| Linux     | pidfd - pollable descriptor                   | `OSRegulateProcessExitWatchFd`                |
+| macOS/BSD | kqueue `EVFILT_PROC` / `NOTE_EXIT` - pollable | `OSRegulateProcessExitWatchFd`                |
+| Fallback  | `getppid()` poll                              | `OSRegulateParentStillExisits`                |
 
 `OSRegulateRequestSignalChildWhenParentExits()` returns false on every non-Linux
-platform, which is the signal to reach for the kqueue fd instead.
+platform, which is the signal to reach for the exit watch fd instead.
+
+### Process-Exit Watch and Bounded Reap
+
+`waitpid()` has no timeout, and a `WNOHANG` loop is a sleep-poll. These calls
+wait on a pollable exit notification instead: a kqueue `EVFILT_PROC` /
+`NOTE_EXIT` descriptor on macOS and the BSD family, and a pidfd
+(`pidfd_open`) on Linux. The watch fd works for any pid the caller can observe;
+`ReapNow` and `AwaitExitMs` require a child of the caller.
+
+```c
+/* Descriptor that becomes readable (POLLIN) when `pid` exits, or -1.
+ * -1 means "no event source", never "still running": errno is ENOSYS
+ * when the platform has no exit notification, and otherwise the arming
+ * error (ESRCH once the process is exiting or gone). The caller closes
+ * the fd. */
+int OSRegulateProcessExitWatchFd(pid_t pid);
+
+/* Non-blocking reap. True when `pid` was reaped, or when waitpid()
+ * reports ECHILD (already reaped elsewhere, or not a child); in the
+ * ECHILD case the status is unknown and *outStatus is set to 0. */
+bool OSRegulateProcessReapNow(pid_t pid, int *outStatus);
+
+/* Wait up to budgetMs for child `pid` to exit, then reap it. True only
+ * if it was reaped within the budget. Never signals the child; signals
+ * interrupting the wait do not extend the budget. */
+bool OSRegulateProcessAwaitExitMs(pid_t pid, uint64_t budgetMs,
+                                  int *outStatus);
+
+/* Example: stop a worker, escalating if it does not exit */
+kill(worker, SIGTERM);
+int status = 0;
+if (!OSRegulateProcessAwaitExitMs(worker, 5000, &status)) {
+    kill(worker, SIGKILL);
+    (void)OSRegulateProcessAwaitExitMs(worker, 5000, &status);
+}
+```
+
+`OSRegulateProcessAwaitExitMs` reaps first, then waits on the watch fd. Once
+an exit has been reported (the fd became readable, or arming failed with
+`ESRCH`, which for an unreaped child means its exit is under way) the final
+reap is a blocking `waitpid()`, because the notification can arrive just before
+a `WNOHANG` reap would succeed. Otherwise the final reap is non-blocking. On a
+platform with no exit notification it only makes non-blocking reap attempts.
+
+Like any pid-based API, these assume nothing else reaps the child. If another
+thread reaps it (for example with `waitpid(-1, ...)`) and the pid is reused,
+they act on the new process.
+
+## Wake Descriptor
+
+An async-signal-safe wakeup for a loop that reacts to events raised in signal
+handlers or other threads. `pthread_cond_signal()` cannot be called from a
+signal handler; `write(2)` can. On Linux this is one eventfd used for both
+roles; elsewhere it is a non-blocking, close-on-exec pipe. Wakes coalesce: any
+number of signals before a drain wake the waiter once, so the consumer must
+re-check its state after each wake rather than count wakes.
+
+```c
+/* *outRead is polled, *outWrite is signalled (the same fd on Linux).
+ * Close both, but only once if they are equal. */
+bool OSRegulateWakeFdNew(int *outRead, int *outWrite);
+
+/* Safe in signal handlers. Never blocks; preserves errno. */
+void OSRegulateWakeSignal(int writeFd);
+
+/* Consume pending wakes. Never blocks. */
+void OSRegulateWakeDrain(int readFd);
+
+/* Wait up to budgetMs; drains and returns true on a wake, false on
+ * expiry or poll() failure. Signals do not extend the budget. */
+bool OSRegulateWakeAwaitMs(int readFd, uint64_t budgetMs);
+
+/* Example: a supervisor woken by SIGCHLD */
+static int wakeWrite = -1;
+static void onChild(int sig) {
+    (void)sig;
+    OSRegulateWakeSignal(wakeWrite);
+}
+
+int wakeRead;
+OSRegulateWakeFdNew(&wakeRead, &wakeWrite);
+signal(SIGCHLD, onChild);
+while (running) {
+    (void)OSRegulateWakeAwaitMs(wakeRead, 1000);
+    reapExitedChildren(); /* re-check state after every wake or timeout */
+}
+```
 
 ## CPU Information
 
@@ -356,12 +486,9 @@ size_t OSRegulateLinuxSmapBytesByFieldForPid(
  * pid: process ID, or -1 for self
  * Returns: total AnonHugePages in bytes
  *
- * Convenience wrapper over the "AnonHugePages:" field. Note the int
- * return type: totals above INT_MAX (2 GB of huge pages) truncate. Call
- * OSRegulateLinuxSmapBytesByFieldForPid("AnonHugePages:", pid) directly
- * for a full-width size_t result.
+ * Convenience wrapper over the "AnonHugePages:" field.
  */
-int OSRegulateLinuxTransparentHugePagesGetAnonHugePagesSize(
+size_t OSRegulateLinuxTransparentHugePagesGetAnonHugePagesSize(
     int64_t pid
 );
 
@@ -655,9 +782,12 @@ support anywhere in datakit.
 | Feature                     | Linux | macOS | BSD family | Behavior elsewhere              |
 | --------------------------- | ----- | ----- | ---------- | ------------------------------- |
 | Daemonize                   | ✓     | ✓     | ✓          | POSIX fork/setsid               |
+| Readiness channel           | ✓     | ✓     | ✓          | POSIX socketpair                |
 | PID file                    | ✓     | ✓     | ✓          | POSIX flock                     |
 | Parent death signal (prctl) | ✓     | ✗     | ✗          | returns false                   |
-| Parent death kqueue fd      | ✗     | ✓     | ✓          | returns -1                      |
+| Process-exit watch fd       | ✓     | ✓     | ✓          | returns -1, errno ENOSYS        |
+| Bounded reap (AwaitExitMs)  | ✓     | ✓     | ✓          | non-blocking reap attempts only |
+| Wake descriptor             | ✓     | ✓     | ✓          | POSIX pipe                      |
 | Parent poll (getppid)       | ✓     | ✓     | ✓          | always available                |
 | CPU count                   | ✓     | ✓     | ✓          | `_SC_NPROCESSORS_ONLN`          |
 | FD limit adjust             | ✓     | ✓     | ✓          | POSIX get/setrlimit             |
@@ -669,7 +799,11 @@ support anywhere in datakit.
 | Resource usage              | ✓     | ✓     | ✓          | POSIX getrusage                 |
 | Network validation          | ✓     | ✓     | ✓          | pure address math               |
 
-The "kqueue" rows cover macOS, FreeBSD, NetBSD, OpenBSD, and DragonFly.
+The process-exit watch fd is a kqueue descriptor on macOS, FreeBSD, NetBSD,
+OpenBSD, and DragonFly, and a pidfd on Linux (kernel 5.3 or later, built
+against headers that define `SYS_pidfd_open`); a Linux build without
+`SYS_pidfd_open` takes the "elsewhere" column. The wake descriptor is an
+eventfd on Linux and a pipe everywhere else.
 `OSRegulateRSSGet()` uses `/proc/self/stat` on Linux and Mach task info on macOS;
 elsewhere it returns 0.
 
@@ -740,4 +874,13 @@ if (totalMem == 0) {
 
 ## Testing
 
-The OSRegulate module includes validation in server/daemon applications but doesn't have a dedicated test suite. Integration testing is done through actual daemon usage.
+The process-exit, wake and readiness primitives have tests in `datakit-test`:
+
+```bash
+./build/src/datakit-test test dkTestProcessExitWait
+./build/src/datakit-test test dkTestWakeFd
+./build/src/datakit-test test dkTestDaemonizeReady
+```
+
+`OSRegulateDaemonizeUntilReady` itself is not tested, because it exits the
+calling process. The remaining entry points are exercised through daemon usage.

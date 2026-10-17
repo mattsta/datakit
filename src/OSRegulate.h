@@ -92,6 +92,31 @@ bool OSRegulateProcessReapNow(pid_t pid, int *outStatus);
  * only makes non-blocking reap attempts. */
 bool OSRegulateProcessAwaitExitMs(pid_t pid, uint64_t budgetMs, int *outStatus);
 
+/* Wake descriptor: an async-signal-safe wakeup for a loop that reacts
+ * to events raised in signal handlers or other threads (a condition
+ * variable cannot be signalled from a handler).  An eventfd on Linux,
+ * a non-blocking close-on-exec pipe elsewhere.  Wakes coalesce, so the
+ * consumer must re-check its state after each wake rather than count
+ * wakes. */
+
+/* Create the pair.  On success *outRead is the descriptor to poll and
+ * *outWrite the one to signal (equal on eventfd platforms).  Both are
+ * non-blocking and close-on-exec; the caller owns and closes both
+ * (compare the two before closing — one descriptor on eventfd). */
+bool OSRegulateWakeFdNew(int *outRead, int *outWrite);
+
+/* Signal the wake from any context, signal handlers included.  Never
+ * blocks; a full pipe (a wake already pending) is success.  Preserves
+ * errno. */
+void OSRegulateWakeSignal(int writeFd);
+
+/* Consume every pending wake.  Never blocks. */
+void OSRegulateWakeDrain(int readFd);
+
+/* Wait until the wake is signalled or `budgetMs` elapses; drains on a
+ * wake.  Returns true when woken, false on expiry or poll() failure.
+ * Signals interrupting the wait do not extend the budget. */
+bool OSRegulateWakeAwaitMs(int readFd, uint64_t budgetMs);
 
 /* CPUs */
 size_t OSRegulateCPUCountGet(void);

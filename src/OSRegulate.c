@@ -17,7 +17,9 @@
 #include <sys/time.h>
 
 #if DK_OS_LINUX
-#include <sys/prctl.h> /* for OSRegulateRequestSignalChildWhenParentExits() */
+#include <sys/eventfd.h> /* OSRegulateWakeFdNew() */
+#include <sys/prctl.h>   /* for OSRegulateRequestSignalChildWhenParentExits() */
+#define OS_REGULATE_HAVE_EVENTFD 1
 #endif
 
 /* Process-exit event source: kqueue on the BSD family, pidfd on Linux,
@@ -423,6 +425,83 @@ bool OSRegulateProcessAwaitExitMs(pid_t pid, uint64_t budgetMs,
 /* ====================================================================
  * Wake descriptor
  * ==================================================================== */
+bool OSRegulateWakeFdNew(int *outRead, int *outWrite) {
+    if (!outRead || !outWrite) {
+        return false;
+    }
+#if defined(OS_REGULATE_HAVE_EVENTFD)
+    const int efd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    if (efd < 0) {
+        return false;
+    }
+    *outRead = efd;
+    *outWrite = efd;
+    return true;
+#else
+    int fds[2];
+    if (pipe(fds) != 0) {
+        return false;
+    }
+    for (size_t i = 0; i < 2; i++) {
+        const int fl = fcntl(fds[i], F_GETFL, 0);
+        const int fd = fcntl(fds[i], F_GETFD, 0);
+        if (fl < 0 || fd < 0 || fcntl(fds[i], F_SETFL, fl | O_NONBLOCK) < 0 ||
+            fcntl(fds[i], F_SETFD, fd | FD_CLOEXEC) < 0) {
+            close(fds[0]);
+            close(fds[1]);
+            return false;
+        }
+    }
+    *outRead = fds[0];
+    *outWrite = fds[1];
+    return true;
+#endif
+}
+
+void OSRegulateWakeSignal(int writeFd) {
+    if (writeFd < 0) {
+        return;
+    }
+    /* Only async-signal-safe calls below: write(2) and errno accesses. */
+    const int savedErrno = errno;
+#if defined(OS_REGULATE_HAVE_EVENTFD)
+    const uint64_t one = 1;
+    (void)write(writeFd, &one, sizeof(one));
+#else
+    const uint8_t one = 1;
+    (void)write(writeFd, &one, sizeof(one));
+#endif
+    errno = savedErrno;
+}
+
+void OSRegulateWakeDrain(int readFd) {
+    if (readFd < 0) {
+        return;
+    }
+#if defined(OS_REGULATE_HAVE_EVENTFD)
+    uint64_t count = 0;
+    (void)read(readFd, &count, sizeof(count));
+#else
+    uint8_t buf[64];
+    while (read(readFd, buf, sizeof(buf)) > 0) {
+        /* drain until EAGAIN */
+    }
+#endif
+}
+
+bool OSRegulateWakeAwaitMs(int readFd, uint64_t budgetMs) {
+    if (readFd < 0) {
+        return false;
+    }
+    struct pollfd want = {.fd = readFd, .events = POLLIN};
+    if (osRegulatePollUntil(&want, timeUtilMonotonicMs(), budgetMs) > 0) {
+        OSRegulateWakeDrain(readFd);
+        return true;
+    }
+
+    return false;
+}
+
 /* ====================================================================
  * CPUs
  * ==================================================================== */
