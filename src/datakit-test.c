@@ -2316,26 +2316,34 @@ static int dkTestOwnedStateTest(int argc, char *argv[]) {
  *              and a value per slot, written under a lock; the reader
  *              loads seq, value, seq with acquire;
  *   converted  ownedSeq with one-word versions, read through
- *              ownedSeqReadWordAt (seq_cst loads);
- *   probe      the same ownedSeq storage read with acquire loads.  It is
- *              not a correct ownedSeq reader; it separates the cost of
- *              the seq_cst loads from the cost of the layout and index
- *              arithmetic.
+ *              ownedSeqReadWordAt;
+ *   probe      the same ownedSeq storage read with the same acquire
+ *              loads, but indexed with a mask instead of the reader's
+ *              `% versions` and declaration loads. Because N is a power
+ *              of two it is a correct reader of this ring; it separates
+ *              the cost of the layout (stride and header words) from the
+ *              cost of the index arithmetic and call shape.
  *
- * Bounds asserted:
+ * Every configuration runs DK_GATE_TRIALS times, interleaved so that a
+ * change in host load hits every reader alike, and each bound is
+ * checked on the smallest of the trials' p99 values. Other processes
+ * can only add time to a walk, so the least disturbed trial is the
+ * best estimate of a reader's own tail, while a cost the reader itself
+ * causes shows in every trial (the median is printed alongside):
  *   B1  the converted reader's storm / R = 1 ratio is at most twice
  *       the reference's, so ownedSeq adds no concurrency term;
  *   B2  the probe's p99 is within 1.25x of the reference's at both R,
- *       so the layout and arithmetic add no cost;
+ *       so the layout adds no cost;
  *   B3  the converted storm walk's p99 is below 1 ms.
- * The seq_cst cost (converted / probe) is printed, not bounded.  Under
- * ThreadSanitizer B1 and B3 are printed but not asserted.
+ * The index-arithmetic cost (converted / probe) is printed, not bounded.
+ * Under ThreadSanitizer B1 and B3 are printed but not asserted.
  *
  * The result depends on the machine and its load, so it is run by name
  * rather than as part of the default test run.
  * ==================================================================== */
 #define DK_GATE_N 4096u
-#define DK_GATE_WALKS 200u
+#define DK_GATE_WALKS 400u
+#define DK_GATE_TRIALS 9u
 #define DK_GATE_STORM_R 8u
 #define DK_GATE_WRITER_PACE_NS 20000u /* about 50k appends/s */
 
@@ -2436,12 +2444,11 @@ static int dkGateSeqWalk_(uint64_t since, uint64_t until, uint64_t probe) {
     return 0;
 }
 
-/* Probe: the ownedSeq layout read with acquire loads, as the reference
- * reads its ring.  Acquire loads are not enough for ownedSeq's
- * validation argument, so this is for cost attribution only: if it
- * costs what the reference costs, the converted reader's extra cost is
- * the seq_cst loads (ldar rather than ldapr on AArch64); otherwise it is
- * the layout or arithmetic. */
+/* Probe: the ownedSeq layout read with the converted reader's acquire
+ * loads, indexed with a constant mask and stride as the reference
+ * indexes its ring. If it costs what the reference costs, the layout
+ * adds nothing, and the converted reader's extra cost is its index
+ * arithmetic (`% versions` and the declaration loads) and call shape. */
 static int dkGateSeqWalkAcquire_(uint64_t since, uint64_t until,
                                  uint64_t probe) {
     const uint64_t cur = ownedSeqCursor(&g_dkGateSeq_);
@@ -2549,6 +2556,10 @@ static int dkGateCmpU64_(const void *a, const void *b) {
     return x < y ? -1 : (x > y ? 1 : 0);
 }
 
+static void dkGateSortU64_(uint64_t *v, size_t n) {
+    qsort(v, n, sizeof(*v), dkGateCmpU64_);
+}
+
 defcleanerName(dkGateReaderCtx *, zfree, GateReaderCtx);
 defcleanerName(pthread_t *, zfree, Threads);
 defcleanerName(uint64_t *, zfree, U64s);
@@ -2612,46 +2623,54 @@ static int dkTestOwnedSeqGateTest(int argc, char *argv[]) {
         dkGateSeqAppend_(i);
     }
 
+    /* [flavour][storm][trial]; trials are the outer loop, so drift in
+     * host load spreads over every configuration. */
+    static const char *const names[3] = {"reference", "converted", "probe"};
+    const uint32_t widths[2] = {1, DK_GATE_STORM_R};
+    uint64_t p99[3][2][DK_GATE_TRIALS];
     uint64_t unp[3][2] = {{0, 0}, {0, 0}, {0, 0}};
     uint64_t app[3][2] = {{0, 0}, {0, 0}, {0, 0}};
-    /* [flavour][storm] */
-    const uint64_t ref1 =
-        dkGateRun_(DK_GATE_REFERENCE, 1, &unp[0][0], &app[0][0]);
-    const uint64_t refR =
-        dkGateRun_(DK_GATE_REFERENCE, DK_GATE_STORM_R, &unp[0][1], &app[0][1]);
-    const uint64_t seq1 =
-        dkGateRun_(DK_GATE_CONVERTED, 1, &unp[1][0], &app[1][0]);
-    const uint64_t seqR =
-        dkGateRun_(DK_GATE_CONVERTED, DK_GATE_STORM_R, &unp[1][1], &app[1][1]);
-    const uint64_t acq1 =
-        dkGateRun_(DK_GATE_ACQUIRE_PROBE, 1, &unp[2][0], &app[2][0]);
-    const uint64_t acqR = dkGateRun_(DK_GATE_ACQUIRE_PROBE, DK_GATE_STORM_R,
-                                     &unp[2][1], &app[2][1]);
-    printf("ownedSeqGate: probe (ownedSeq layout, acquire loads) R=1 "
-           "p99_walk_ns=%" PRIu64 " per_slot_ns=%.1f unprovable=%" PRIu64
-           "; R=%u p99_walk_ns=%" PRIu64 " per_slot_ns=%.1f unprovable=%" PRIu64
-           "\n",
-           acq1, (double)acq1 / (DK_GATE_N - 1u), unp[2][0], DK_GATE_STORM_R,
-           acqR, (double)acqR / (DK_GATE_N - 1u), unp[2][1]);
+    for (uint32_t t = 0; t < DK_GATE_TRIALS; t++) {
+        for (int f = 0; f < 3; f++) {
+            for (int w = 0; w < 2; w++) {
+                uint64_t u = 0;
+                uint64_t a = 0;
+                p99[f][w][t] = dkGateRun_((dkGateFlavour)f, widths[w], &u, &a);
+                unp[f][w] += u;
+                app[f][w] += a;
+            }
+        }
+    }
+    uint64_t best[3][2];
+    uint64_t med[3][2];
+    for (int f = 0; f < 3; f++) {
+        for (int w = 0; w < 2; w++) {
+            dkGateSortU64_(p99[f][w], DK_GATE_TRIALS);
+            best[f][w] = p99[f][w][0];
+            med[f][w] = p99[f][w][DK_GATE_TRIALS / 2];
+        }
+    }
+    const uint64_t ref1 = best[DK_GATE_REFERENCE][0];
+    const uint64_t refR = best[DK_GATE_REFERENCE][1];
+    const uint64_t seq1 = best[DK_GATE_CONVERTED][0];
+    const uint64_t seqR = best[DK_GATE_CONVERTED][1];
+    const uint64_t acq1 = best[DK_GATE_ACQUIRE_PROBE][0];
+    const uint64_t acqR = best[DK_GATE_ACQUIRE_PROBE][1];
 
     printf("ownedSeqGate: window=%u slots walks=%u/reader storm_R=%u "
-           "writer_pace_ns=%u\n",
+           "writer_pace_ns=%u trials=%u (smallest and median per-trial "
+           "p99)\n",
            DK_GATE_N - 1u, DK_GATE_WALKS, DK_GATE_STORM_R,
-           DK_GATE_WRITER_PACE_NS);
-    printf("ownedSeqGate: reference  R=1 p99_walk_ns=%" PRIu64
-           " per_slot_ns=%.1f unprovable=%" PRIu64 " appends=%" PRIu64 "\n",
-           ref1, (double)ref1 / (DK_GATE_N - 1u), unp[0][0], app[0][0]);
-    printf("ownedSeqGate: reference  R=%u p99_walk_ns=%" PRIu64
-           " per_slot_ns=%.1f unprovable=%" PRIu64 " appends=%" PRIu64 "\n",
-           DK_GATE_STORM_R, refR, (double)refR / (DK_GATE_N - 1u), unp[0][1],
-           app[0][1]);
-    printf("ownedSeqGate: converted  R=1 p99_walk_ns=%" PRIu64
-           " per_slot_ns=%.1f unprovable=%" PRIu64 " appends=%" PRIu64 "\n",
-           seq1, (double)seq1 / (DK_GATE_N - 1u), unp[1][0], app[1][0]);
-    printf("ownedSeqGate: converted  R=%u p99_walk_ns=%" PRIu64
-           " per_slot_ns=%.1f unprovable=%" PRIu64 " appends=%" PRIu64 "\n",
-           DK_GATE_STORM_R, seqR, (double)seqR / (DK_GATE_N - 1u), unp[1][1],
-           app[1][1]);
+           DK_GATE_WRITER_PACE_NS, DK_GATE_TRIALS);
+    for (int f = 0; f < 3; f++) {
+        for (int w = 0; w < 2; w++) {
+            printf("ownedSeqGate: %-9s R=%u p99_walk_ns=%" PRIu64
+                   " (median %" PRIu64 ") per_slot_ns=%.1f unprovable=%" PRIu64
+                   " appends=%" PRIu64 "\n",
+                   names[f], widths[w], best[f][w], med[f][w],
+                   (double)best[f][w] / (DK_GATE_N - 1u), unp[f][w], app[f][w]);
+        }
+    }
 
     /* B1 is relative to the reference's own scaling: with eight readers
      * and a writer sharing cache lines the reference slows down too, so
@@ -2661,28 +2680,29 @@ static int dkTestOwnedSeqGateTest(int argc, char *argv[]) {
     const double refScale = ref1 ? (double)refR / (double)ref1 : 0.0;
     const double seqScale = seq1 ? (double)seqR / (double)seq1 : 0.0;
     const bool b1 = seqScale <= 2.0 * refScale;
-    /* B2 bounds the probe, not the converted reader, so it covers the
-     * layout, stride, modulo and call shape but not the memory order.
-     * The converted / probe ratio is the cost of the seq_cst loads the
-     * validation argument requires; it is printed, not bounded. */
+    /* B2 bounds the probe, not the converted reader: the probe shares the
+     * converted reader's storage and memory orders and the reference's
+     * index arithmetic, so B2 covers the layout alone. The converted /
+     * probe ratio is the cost of `% versions`, the declaration loads and
+     * the call; it is printed, not bounded. */
     const bool b2one = acq1 * 4u <= ref1 * 5u;
     const bool b2storm = acqR * 4u <= refR * 5u;
     const bool b3 = seqR < 1000000u;
     printf("ownedSeqGate: B1 no-concurrency-term %s (converted storm/R=1 "
            "scaling %.2f <= 2x reference scaling %.2f)\n",
            b1 ? "ok" : "FAIL", seqScale, refScale);
-    printf("ownedSeqGate: B2 layout-and-arithmetic R=1=%s storm=%s (acquire "
-           "probe p99 <= 1.25x reference p99); memory-order price R=1 %.2fx "
-           "storm %.2fx (converted / probe), reported\n",
+    printf("ownedSeqGate: B2 layout R=1=%s storm=%s (probe p99 <= 1.25x "
+           "reference p99); index arithmetic R=1 %.2fx storm %.2fx "
+           "(converted / probe), reported\n",
            b2one ? "ok" : "FAIL", b2storm ? "ok" : "FAIL",
            acq1 ? (double)seq1 / (double)acq1 : 0.0,
            acqR ? (double)seqR / (double)acqR : 0.0);
     printf("ownedSeqGate: B3 absolute storm p99 %" PRIu64 " ns %s 1 ms\n", seqR,
            b3 ? "<" : "FAIL >=");
-    /* Under ThreadSanitizer, seq_cst accesses go through the runtime's
-     * slower synchronizing path, which adds a concurrency cost of its
-     * own; B1 and B3 are printed but not asserted there.  B2 compares
-     * two acquire-load readers and is asserted in every build. */
+    /* Under ThreadSanitizer every atomic access goes through the runtime,
+     * which adds a concurrency cost of its own; B1 and B3 are printed but
+     * not asserted there.  B2 compares two readers with the same loads
+     * and is asserted in every build. */
 #if defined(__SANITIZE_THREAD__) ||                                            \
     (defined(__has_feature) && __has_feature(thread_sanitizer))
     const bool instrumented = true;
