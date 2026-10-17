@@ -147,6 +147,56 @@ static bool testRegisterFarCallback(timerWheel *tw, timerWheelId id,
     return false;
 }
 
+/* The lagging-clock placement: inside a callback fired from a wheel-0
+ * slot, `now` is moved past the wheel clock without processing (the
+ * advance's own processing pass returns at once inside a callback), so
+ * the two registrations are placed by processPending against a wheel
+ * clock that lags `now` by lagUs.  A level chosen from the delay
+ * measured from `now` with the slot offset measured from the wheel
+ * clock wraps the far one into a slot nearer in ring order than the
+ * near one's; placed by the wheel clock alone, the far one takes the
+ * level its wheel-clock offset needs and nothing wraps. */
+typedef struct testLaggingClockState {
+    testCallbackState self;
+    testCallbackState nearTimer;
+    testCallbackState farTimer;
+    uint64_t lagUs;
+    uint64_t nearDelayUs;
+    uint64_t farDelayUs;
+    uint64_t registeredAtUs;
+} testLaggingClockState;
+
+static bool testLagThenRegisterCallback(timerWheel *tw, timerWheelId id,
+                                        void *clientData) {
+    (void)id;
+    testLaggingClockState *s = clientData;
+    s->self.callCount++;
+    timerWheelAdvanceTime(tw, s->lagUs);
+    s->registeredAtUs = timeUtilMonotonicUs();
+    timerWheelRegister(tw, s->nearDelayUs, 0, testCountingCallback,
+                       &s->nearTimer);
+    timerWheelRegister(tw, s->farDelayUs, 0, testCountingCallback,
+                       &s->farTimer);
+    return false;
+}
+
+/* A periodic timer that cancels another timer on its first fire */
+typedef struct testCancelOtherState {
+    testCallbackState self;
+    timerWheelId victim;
+} testCancelOtherState;
+
+static bool testCancelOtherCallback(timerWheel *tw, timerWheelId id,
+                                    void *clientData) {
+    (void)id;
+    testCancelOtherState *s = clientData;
+    s->self.callCount++;
+    if (s->self.callCount == 1) {
+        timerWheelUnregister(tw, s->victim);
+    }
+    return true;
+}
+
 /* Equivalent callbacks for multiTimer comparison */
 static bool mtCountingCallback(multiTimer *t, multiTimerId id,
                                void *clientData) {
@@ -870,9 +920,11 @@ int timerWheelTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("timerWheel: repeat period of one full wheel0 revolution") {
-        /* A 255ms repeat reschedules into the exact slot index being
-         * processed (offset 256 == one full wheel0 revolution). The
-         * timer must survive the slot being cleared and keep firing. */
+        /* A 255ms repeat measured from the slot after its fire is one
+         * full wheel0 revolution (256ms) from the wheel clock: placed
+         * by the wheel clock it takes wheel 1, one slot on, never the
+         * wheel0 slot index being processed (which was detached and
+         * cleared). The timer must keep firing every revolution. */
         cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {.callCount = 0, .shouldReschedule = true};
 
@@ -1203,6 +1255,274 @@ int timerWheelTest(int argc, char *argv[]) {
         if (offset > 1000000) {
             ERR("Nearer wheel timer masked by overflow entry: %" PRId64 "us",
                 offset);
+        }
+    }
+
+    /* The next-event query returns the minimum expiry over every live
+     * stored entry, and never 0 while one is stored.  An event loop that
+     * sleeps without a timeout when the query answers 0 would otherwise
+     * stop processing, and an answer later than the minimum would sleep
+     * past a due timer. */
+
+    TEST("timerWheel: tombstone-only nearest wheel-0 slot does not mask a "
+         "later live timer") {
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
+        testCallbackState a = {0};
+        testCallbackState b = {0};
+        const uint64_t aDelayUs = 10000;
+        const uint64_t bDelayUs = 100000;
+
+        const uint64_t before = timeUtilMonotonicUs();
+        const timerWheelId aId =
+            timerWheelRegister(tw, aDelayUs, 0, testCountingCallback, &a);
+        timerWheelRegister(tw, bDelayUs, 0, testCountingCallback, &b);
+        timerWheelUnregister(tw, aId);
+
+        const timerWheelSystemMonotonicUs next =
+            timerWheelNextTimerEventStartUs(tw);
+        if (next == 0) {
+            ERRR("A live timer was masked by a tombstone-only nearer slot: "
+                 "the query answered no timer");
+        } else {
+            const int64_t diff = next - (int64_t)(before + bDelayUs);
+            if (diff < -5000 || diff > 5000) {
+                ERR("Query should name the live %" PRIu64
+                    "us timer, off by %" PRId64 "us",
+                    bDelayUs, diff);
+            }
+        }
+
+        timerWheelAdvanceTime(tw, bDelayUs + aDelayUs);
+        if (a.callCount != 0 || b.callCount != 1) {
+            ERR("Expected the cancelled timer silent and the live one fired "
+                "once: %d, %d",
+                a.callCount, b.callCount);
+        }
+    }
+
+    TEST("timerWheel: cancelled higher-wheel slot does not mask a later "
+         "one") {
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
+        testCallbackState q = {0};
+        testCallbackState p = {0};
+        const uint64_t qDelayUs = 300000; /* wheel 1, slot +1 */
+        const uint64_t pDelayUs = 600000; /* wheel 1, slot +2 */
+
+        const uint64_t before = timeUtilMonotonicUs();
+        const timerWheelId qId =
+            timerWheelRegister(tw, qDelayUs, 0, testCountingCallback, &q);
+        timerWheelRegister(tw, pDelayUs, 0, testCountingCallback, &p);
+        timerWheelUnregister(tw, qId);
+
+        const timerWheelSystemMonotonicUs next =
+            timerWheelNextTimerEventStartUs(tw);
+        if (next == 0) {
+            ERRR("A live wheel-1 timer was masked by a cancelled nearer "
+                 "wheel-1 slot: the query answered no timer");
+        } else {
+            const int64_t diff = next - (int64_t)(before + pDelayUs);
+            if (diff < -5000 || diff > 5000) {
+                ERR("Query should name the live %" PRIu64
+                    "us timer, off by %" PRId64 "us",
+                    pDelayUs, diff);
+            }
+        }
+
+        timerWheelAdvanceTime(tw, pDelayUs + qDelayUs);
+        if (q.callCount != 0 || p.callCount != 1) {
+            ERR("Expected the cancelled timer silent and the live one fired "
+                "once: %d, %d",
+                q.callCount, p.callCount);
+        }
+    }
+
+    TEST("timerWheel: wrapped wheel-0 placement does not delay a nearer "
+         "timer") {
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
+        testLaggingClockState s;
+        memset(&s, 0, sizeof(s));
+        s.lagUs = 200000;
+        s.nearDelayUs = 50000;
+        s.farDelayUs = 100000;
+
+        /* Fired from a wheel-0 slot, so its registrations are placed by
+         * processPending against the lagging wheel clock: the far
+         * timer's wheel-clock offset (lag + 100ms) exceeds the 256-slot
+         * wheel, so a level taken from its 100ms delay would wrap it
+         * into a slot nearer in ring order than the near timer's
+         * (lag + 50ms); from the wheel clock it takes wheel 1. */
+        timerWheelRegister(tw, 1000, 0, testLagThenRegisterCallback, &s);
+        timerWheelAdvanceTime(tw, 2000);
+        if (s.self.callCount != 1) {
+            ERR("Registrar callback did not fire, callCount=%d",
+                s.self.callCount);
+        }
+
+        const timerWheelSystemMonotonicUs next =
+            timerWheelNextTimerEventStartUs(tw);
+        const int64_t diff = next - (int64_t)(s.registeredAtUs + s.nearDelayUs);
+        if (next == 0 || diff < -5000 || diff > 5000) {
+            ERR("Query should name the near %" PRIu64
+                "us timer, not the wrapped far one: off by %" PRId64 "us",
+                s.nearDelayUs, diff);
+        }
+
+        /* Both still fire, each at its own time */
+        timerWheelAdvanceTime(tw, s.nearDelayUs + 10000);
+        if (s.nearTimer.callCount != 1 || s.farTimer.callCount != 0) {
+            ERR("At ~60ms only the near timer should have fired: %d, %d",
+                s.nearTimer.callCount, s.farTimer.callCount);
+        }
+        timerWheelAdvanceTime(tw, s.farDelayUs);
+        if (s.farTimer.callCount != 1) {
+            ERR("Far timer did not fire, callCount=%d", s.farTimer.callCount);
+        }
+    }
+
+    TEST("timerWheel: cancel of another timer inside a firing callback") {
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
+        testCancelOtherState p;
+        memset(&p, 0, sizeof(p));
+        testCallbackState q = {0};
+        const uint64_t periodUs = 20000;
+        const uint64_t qDelayUs = 30000;
+        const uint64_t stepUs = 10000;
+        const uint64_t spanUs = 200000;
+
+        timerWheelRegister(tw, periodUs, periodUs, testCancelOtherCallback, &p);
+        p.victim =
+            timerWheelRegister(tw, qDelayUs, 0, testCountingCallback, &q);
+
+        for (uint64_t advanced = 0; advanced < spanUs; advanced += stepUs) {
+            timerWheelAdvanceTime(tw, stepUs);
+
+            /* P is live after every pass, so the query never answers 0;
+             * between P's first fire and Q's slot, Q's tombstone is the
+             * nearest wheel-0 slot */
+            const timerWheelSystemMonotonicUs next =
+                timerWheelNextTimerEventStartUs(tw);
+            if (next == 0) {
+                ERR("Query answered no timer after %" PRIu64
+                    "us with the periodic timer live",
+                    advanced + stepUs);
+                break;
+            }
+            const timerWheelUs offset =
+                timerWheelNextTimerEventOffsetFromNowUs(tw);
+            if (offset > (timerWheelUs)(periodUs + 2000)) {
+                ERR("Query named %" PRId64 "us, beyond one period of the "
+                    "periodic timer, after %" PRIu64 "us",
+                    offset, advanced + stepUs);
+            }
+        }
+
+        if (q.callCount != 0) {
+            ERR("Cancelled timer fired, callCount=%d", q.callCount);
+        }
+        /* A repeat is re-placed one wheel-0 slot past its firing slot,
+         * so the period as fired is periodUs plus one resolution */
+        if (p.self.callCount < 8 || p.self.callCount > 10) {
+            ERR("Periodic timer fired %d times over %" PRIu64
+                "us, expected 8-10",
+                p.self.callCount, spanUs);
+        }
+        if (timerWheelCount(tw) != 1) {
+            ERR("Expected only the periodic timer live, count=%zu",
+                timerWheelCount(tw));
+        }
+    }
+
+    TEST("timerWheel: a phase-heavy wheel-1 placement does not hide a "
+         "nearer timer in the next slot") {
+        /* A slot is floor(cur / R) + floor((E - cur) / R), which is
+         * floor(E / R) or one less, so a higher wheel's slot order is
+         * expiry order only to within one slot.  With the wheel clock
+         * 200ms into wheel 1's current slot, the 400ms timer X lands
+         * one slot on while the earlier 520ms timer Y sits two slots
+         * on: the first live slot alone names X. */
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
+        testCallbackState y = {0};
+        testCallbackState x = {0};
+        const uint64_t yDelayUs = 520000; /* wheel 1, slot +2 */
+        const uint64_t phaseUs = 200000;
+        const uint64_t xDelayUs = 400000; /* wheel 1, slot +1 from 200ms */
+        const uint64_t marginUs = 20000;
+
+        const uint64_t beforeY = timeUtilMonotonicUs();
+        timerWheelRegister(tw, yDelayUs, 0, testCountingCallback, &y);
+        timerWheelAdvanceTime(tw, phaseUs);
+        timerWheelRegister(tw, xDelayUs, 0, testCountingCallback, &x);
+
+        /* The advance moved the wheel's time base back by phaseUs, so
+         * Y's absolute due time is phaseUs earlier than registered */
+        const timerWheelSystemMonotonicUs next =
+            timerWheelNextTimerEventStartUs(tw);
+        const int64_t diff = next - (int64_t)(beforeY + yDelayUs - phaseUs);
+        if (next == 0 || diff < -5000 || diff > 5000) {
+            ERR("Query should name the %" PRIu64
+                "us timer in the next wheel-1 slot, not the %" PRIu64
+                "us one: off by %" PRId64 "us",
+                yDelayUs, xDelayUs, diff);
+        }
+
+        /* Y fires before X, each at its own time */
+        timerWheelAdvanceTime(tw, yDelayUs - phaseUs + marginUs);
+        if (y.callCount != 1 || x.callCount != 0) {
+            ERR("At ~%" PRIu64 "us only the %" PRIu64
+                "us timer should have fired: %d, %d",
+                yDelayUs + marginUs, yDelayUs, y.callCount, x.callCount);
+        }
+        timerWheelAdvanceTime(tw, phaseUs + xDelayUs - yDelayUs);
+        if (x.callCount != 1) {
+            ERR("The %" PRIu64 "us timer did not fire, callCount=%d", xDelayUs,
+                x.callCount);
+        }
+    }
+
+    TEST("timerWheel: a lagging-clock registration does not wrap past a "
+         "nearer one in a higher wheel") {
+        /* The lagging-clock registrar with a 10s lag: a level taken from
+         * the delay measured from `now` (3s and 7s, both wheel 1) with
+         * the slot offset measured from the wheel clock (13s and 17s)
+         * wraps the 7s timer past wheel 1's 64 slots to a slot nearer
+         * in ring order than the 3s timer's.  From the wheel clock the
+         * 7s timer's 17s offset takes wheel 2. */
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
+        testLaggingClockState s;
+        memset(&s, 0, sizeof(s));
+        s.lagUs = 10000000;
+        s.nearDelayUs = 3000000;
+        s.farDelayUs = 7000000;
+        const uint64_t marginUs = 10000;
+
+        timerWheelRegister(tw, 1000, 0, testLagThenRegisterCallback, &s);
+        timerWheelAdvanceTime(tw, 2000);
+        if (s.self.callCount != 1) {
+            ERR("Registrar callback did not fire, callCount=%d",
+                s.self.callCount);
+        }
+
+        const timerWheelSystemMonotonicUs next =
+            timerWheelNextTimerEventStartUs(tw);
+        const int64_t diff = next - (int64_t)(s.registeredAtUs + s.nearDelayUs);
+        if (next == 0 || diff < -5000 || diff > 5000) {
+            ERR("Query should name the near %" PRIu64
+                "us timer, not the far %" PRIu64
+                "us one wrapped nearer in wheel 1: off by %" PRId64 "us",
+                s.nearDelayUs, s.farDelayUs, diff);
+        }
+
+        /* Both fire, each at its own time */
+        timerWheelAdvanceTime(tw, s.nearDelayUs + marginUs);
+        if (s.nearTimer.callCount != 1 || s.farTimer.callCount != 0) {
+            ERR("At ~%" PRIu64 "us only the near timer should have "
+                "fired: %d, %d",
+                s.nearDelayUs + marginUs, s.nearTimer.callCount,
+                s.farTimer.callCount);
+        }
+        timerWheelAdvanceTime(tw, s.farDelayUs - s.nearDelayUs);
+        if (s.farTimer.callCount != 1) {
+            ERR("Far timer did not fire, callCount=%d", s.farTimer.callCount);
         }
     }
 

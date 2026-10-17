@@ -67,13 +67,29 @@ its first entry is always the earliest long-delay timer.
 
 ### Placement
 
-A registration is placed by its delay:
+An entry is placed by its delay, measured from the wheel clock
+(`currentTimeUs`, the time the wheel has processed up to) rather than from the
+current time:
 
 - delay < 1ms (below wheel 0's resolution): the **pending** queue, which fires on
   the next processing pass
 - delay < the span of some wheel level: that level, at slot
   `(currentSlot + delay / levelResolution) mod levelSize`
 - delay >= the total wheel span: **overflow**
+
+Every placement (registration, repeat, re-insert of a not-yet-due entry,
+pending drain, overflow pull, cascade) uses this one base. The wheel clock lags
+the current time between processing passes, and the slot offset is measured
+from it, so choosing the level from the same base keeps a level-L delay in
+`[levelResolution, levelSize * levelResolution)` and its slot offset in
+`[1, levelSize)`: an entry never wraps past the ring and never lands in the
+current, already-cascaded slot.
+
+Overflow entries move into the wheel once they are within range of the wheel
+clock. A processing pass pulls them before the catch-up, so they cascade in
+expiry order with the wheel's own entries, and once more after it, so an entry
+that comes due during a lag longer than the wheels' coverage is placed into
+pending and fires in the same pass.
 
 Expiry arithmetic saturates rather than wraps: an absurd delay becomes
 "effectively never" (`UINT64_MAX`) and parks in overflow instead of silently
@@ -311,8 +327,21 @@ The returned absolute time shares the time base of `timeUtilMonotonicUs()`.
 The result is cached: a processing pass invalidates the cache, and a new
 registration folds into it (a new timer can only move the next expiry earlier),
 so register-heavy workloads keep O(1) next-event queries. On a cache miss the
-scan covers the pending queue, the nearest occupied slot of each wheel level,
-and the first overflow entry.
+scan covers:
+
+- the pending queue;
+- every occupied wheel-0 slot (found through the occupancy bitmap), because a
+  slot holding only cancelled entries has no live expiry and must not mask a
+  later live timer;
+- for each upper wheel, the first slot in ring order holding a live entry, plus
+  its successor slot. An entry's slot is `floor(E / R)` or one less, so slot
+  order matches expiry order to within one slot and the wheel's minimum lies in
+  one of those two slots;
+- the first overflow entry.
+
+The result is 0 only when no live timer is stored. A query made from inside a
+callback is answered but not cached, because the slot being processed is
+detached and repeats are not yet re-inserted while the callback runs.
 
 ### Statistics
 
@@ -580,7 +609,7 @@ while (running) {
 | Cascade        | O(entries in slot)       | Once per upper-wheel slot entry                                   |
 | Count          | O(1)                     | Never walks storage                                               |
 | Reconcile      | O(n)                     | n = all stored entries                                            |
-| Next event     | O(1) cached              | Cache miss scans pending + nearest slot per level + overflow head |
+| Next event     | O(1) cached              | Miss: pending, wheel-0 slots, 2 slots per level, overflow head    |
 | GetStats       | O(slots) + optional O(n) | Memory walk; reconcile at most once per cancellation batch        |
 
 **Memory:**

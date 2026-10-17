@@ -359,12 +359,21 @@ static void insertTimerIntoWheelSlot(timerWheel *tw, int32_t level,
     }
 }
 
-/* Place a timer entry by how far away its expiry is: sub-resolution
- * delays go to pending (the wheel cannot represent them), in-span
- * delays go to the proper wheel slot, and beyond-span delays go to
- * overflow. Placement only - the caller owns timerCount accounting. */
-static void scheduleTimerEntry(timerWheel *tw, const timerWheelEntry *e,
-                               timerWheelDurationUs delay) {
+/* Place a timer entry by the distance of its expiry from the wheel
+ * clock: sub-resolution delays go to pending (the wheel cannot represent
+ * them), in-span delays go to their wheel slot, and beyond-span delays
+ * go to overflow. Placement only - the caller owns timerCount
+ * accounting.
+ *
+ * Level and slot use the same base as getSlotIndex (the wheel clock),
+ * so a level-L delay lies in [R_L, size_L * R_L) and its slot offset in
+ * [1, size_L): it never wraps and never lands in the current,
+ * already-cascaded slot. */
+static void scheduleTimerEntry(timerWheel *tw, const timerWheelEntry *e) {
+    const timerWheelDurationUs delay = e->expireTimeUs > tw->currentTimeUs
+                                           ? e->expireTimeUs - tw->currentTimeUs
+                                           : 0;
+
     if (delay < WHEEL0_RESOLUTION_US) {
         insertTimerIntoSlot(&tw->pendingTimers, e);
         return;
@@ -530,7 +539,7 @@ timerWheelId timerWheelRegister(timerWheel *tw,
         return id;
     }
 
-    scheduleTimerEntry(tw, &e, startAfterMicroseconds);
+    scheduleTimerEntry(tw, &e);
     return id;
 }
 
@@ -824,19 +833,15 @@ static void processSlot(timerWheel *tw, flex **slot,
                 e.expireTimeUs =
                     expiryAfter(tw->currentTimeUs + WHEEL0_RESOLUTION_US,
                                 e.repeatIntervalUs);
-                scheduleTimerEntry(tw, &e, e.repeatIntervalUs);
+                scheduleTimerEntry(tw, &e);
                 tw->timerCount++;
             }
         } else {
-            /* Timer not ready yet - re-insert into appropriate location.
-             * The delay must be measured from the WHEEL's clock
-             * (tw->currentTimeUs, which lags 'currentTime' during
-             * catch-up), because getSlotIndex computes the slot offset
-             * from that same clock: a mixed-base delay can select a
-             * level whose span the wheel-clock offset then overflows,
-             * wrapping the timer into an already-passed slot (a full
-             * revolution late).  cascadeWheel uses the same base. */
-            scheduleTimerEntry(tw, &e, e.expireTimeUs - tw->currentTimeUs);
+            /* Timer not ready yet - re-insert into appropriate location,
+             * measured from the wheel's clock (tw->currentTimeUs, which
+             * lags 'currentTime' during catch-up), as every placement
+             * is (scheduleTimerEntry); cascadeWheel uses the same base. */
+            scheduleTimerEntry(tw, &e);
         }
     }
 
@@ -906,8 +911,11 @@ static void cascadeWheel(timerWheel *tw, int32_t level) {
     flexFree((flex *)f);
 }
 
-/* Process overflow timers that are now within wheel range */
-static void processOverflow(timerWheel *tw, timerWheelAdjustedUs currentTime) {
+/* Move overflow timers that are now within range of the wheel clock
+ * into the wheel.  Range and placement read the same clock: an entry in
+ * range of `now` but not of the lagging wheel clock would be placed
+ * straight back into overflow. */
+static void processOverflow(timerWheel *tw) {
     if (multimapCount(tw->overflow) == 0) {
         return;
     }
@@ -927,7 +935,7 @@ static void processOverflow(timerWheel *tw, timerWheelAdjustedUs currentTime) {
         /* Strictly within wheel range: a delay of exactly the full
          * wheel span still maps to overflow, so pulling it out here
          * would put it straight back (and loop forever) */
-        if (expireTimeUs < currentTime + MAX_WHEEL_COVERAGE_US) {
+        if (expireTimeUs < tw->currentTimeUs + MAX_WHEEL_COVERAGE_US) {
             const timerWheelEntry e = {
                 .expireTimeUs = expireTimeUs,
                 .cb =
@@ -946,9 +954,7 @@ static void processOverflow(timerWheel *tw, timerWheelAdjustedUs currentTime) {
                 continue;
             }
 
-            const timerWheelDurationUs delay =
-                expireTimeUs > currentTime ? expireTimeUs - currentTime : 0;
-            scheduleTimerEntry(tw, &e, delay);
+            scheduleTimerEntry(tw, &e);
         } else {
             /* No more overflow timers within range */
             break;
@@ -998,12 +1004,14 @@ static void processPending(timerWheel *tw) {
                  * runs after the wheel has advanced to `now`, so we use
                  * `now` directly (unlike processSlot which uses wheel pos). */
                 e.expireTimeUs = expiryAfter(now, e.repeatIntervalUs);
-                scheduleTimerEntry(tw, &e, e.repeatIntervalUs);
+                scheduleTimerEntry(tw, &e);
                 tw->timerCount++;
             }
         } else {
-            /* Timer not due yet - insert into appropriate location */
-            scheduleTimerEntry(tw, &e, e.expireTimeUs - now);
+            /* Timer not due yet - insert into appropriate location,
+             * measured from the wheel clock (scheduleTimerEntry): `now`
+             * may lead it, as when a callback moved time unprocessed */
+            scheduleTimerEntry(tw, &e);
         }
     }
 
@@ -1049,8 +1057,10 @@ void timerWheelProcessTimerEvents(timerWheel *tw) {
     const timerWheelAdjustedUs now = adjustedNowUs(tw);
     tw->nextExpiryCacheValid = false;
 
-    /* Process overflow timers that may have come into range */
-    processOverflow(tw, now);
+    /* Overflow timers in range of the wheel clock enter the wheel
+     * before the catch-up, so they cascade in expiry order with the
+     * wheel's own entries */
+    processOverflow(tw);
 
     if (tw->timerCount == 0) {
         /* No entries anywhere, so every remaining tombstone is stale
@@ -1146,6 +1156,13 @@ void timerWheelProcessTimerEvents(timerWheel *tw) {
         }
     }
 
+    /* The wheel clock now stands at or past `now`, so every overflow
+     * timer due by `now` is in its range: one that was out of range of
+     * the lagging clock before the catch-up (a lag beyond the wheels'
+     * coverage) is placed here with a zero delay, into pending, and
+     * fires in this same pass */
+    processOverflow(tw);
+
     /* Process any timers scheduled during callbacks */
     processPending(tw);
 }
@@ -1201,32 +1218,69 @@ timerWheelSystemMonotonicUs timerWheelNextTimerEventStartUs(timerWheel *tw) {
         earliest = flexMinExpiry(tw, tw->pendingTimers);
     }
 
-    /* Check wheel 0 first (most likely to have nearest timer). The
-     * first occupied slot in ring order is the nearest slot. */
-    const uint32_t w0Dist = wheel0OccupiedDistance(tw, tw->slotIndex[0]);
-    if (w0Dist < WHEEL0_SIZE) {
-        const uint32_t idx = (tw->slotIndex[0] + w0Dist) & WHEEL0_MASK;
-        const timerWheelAdjustedUs slotMin = flexMinExpiry(tw, tw->wheel0[idx]);
-        if (slotMin < earliest) {
-            earliest = slotMin;
+    /* Wheel 0: minimum over every occupied slot.  The nearest slot alone
+     * is not enough, because a slot holding only cancelled entries has
+     * no live expiry.  The occupancy bitmap bounds the walk to
+     * WHEEL0_SIZE slots. */
+    for (uint32_t word = 0; word < WHEEL0_SIZE / 64; word++) {
+        for (uint64_t bits = tw->wheel0Occupied[word]; bits; bits &= bits - 1) {
+            const uint32_t idx = word * 64 + (uint32_t)__builtin_ctzll(bits);
+            if (!tw->wheel0[idx]) {
+                continue;
+            }
+
+            const timerWheelAdjustedUs slotMin =
+                flexMinExpiry(tw, tw->wheel0[idx]);
+            if (slotMin < earliest) {
+                earliest = slotMin;
+            }
         }
     }
 
-    /* Each higher wheel contributes its nearest occupied slot: level
-     * order says nothing about time order, and a nearer timer here
-     * must not be masked by pending/wheel0 having some (later) entry */
+    /* Each higher wheel contributes the minimum of its first slot in
+     * ring order holding a live entry and of that slot's successor.
+     * Level order says nothing about time order, so every wheel is
+     * consulted whatever pending and wheel 0 hold.
+     *
+     * Why two slots are exact: every placement measures from the wheel
+     * clock (scheduleTimerEntry, cascadeWheel), so a level-L entry sits
+     * at ring offset [1, size) from the current slot c — no wrap, never
+     * the current slot — and the entry cascade empties a slot when the
+     * wheel enters it.  So ring order from c is absolute slot order over
+     * c+1 .. c+size-1.  An entry's absolute slot j is floor(cur / R) +
+     * floor((E - cur) / R), which is floor(E / R) or one less, so
+     * j * R <= E < (j + 2) * R.  For the first live slot s every entry in
+     * a slot at or past s + 2 expires at or after (s + 2) * R, later than
+     * every entry in s: the wheel's live minimum lies in s or s + 1.  A
+     * tombstone-only slot contributes nothing and does not end the walk.
+     * The successor of the last ring slot is the current slot, which
+     * holds nothing. */
     for (int32_t level = 1; level < NUM_WHEELS; level++) {
         const uint32_t size = getWheelSize(level);
         for (uint32_t i = 0; i < size; i++) {
             const uint32_t idx = (tw->slotIndex[level] + i) & (size - 1);
             flex **slot = getSlot(tw, level, idx);
-            if (*slot && flexCount(*slot) > 0) {
-                const timerWheelAdjustedUs slotMin = flexMinExpiry(tw, *slot);
-                if (slotMin < earliest) {
-                    earliest = slotMin;
-                }
-                break;
+            if (!*slot || flexCount(*slot) == 0) {
+                continue;
             }
+
+            const timerWheelAdjustedUs slotMin = flexMinExpiry(tw, *slot);
+            if (slotMin == UINT64_MAX) {
+                continue;
+            }
+
+            if (slotMin < earliest) {
+                earliest = slotMin;
+            }
+
+            flex **next = getSlot(tw, level, (idx + 1) & (size - 1));
+            if (*next && flexCount(*next) > 0) {
+                const timerWheelAdjustedUs nextMin = flexMinExpiry(tw, *next);
+                if (nextMin < earliest) {
+                    earliest = nextMin;
+                }
+            }
+            break;
         }
     }
 
@@ -1245,8 +1299,14 @@ timerWheelSystemMonotonicUs timerWheelNextTimerEventStartUs(timerWheel *tw) {
         return 0;
     }
 
-    tw->cachedNextExpiry = earliest;
-    tw->nextExpiryCacheValid = true;
+    /* A walk made inside a callback sees the slot being processed
+     * detached and repeats not yet re-inserted, so its answer is not
+     * the wheel's minimum and must not outlive the callback: only a
+     * query made outside processing is cached. */
+    if (tw->context != TIMER_WHEEL_CONTEXT_TIMER) {
+        tw->cachedNextExpiry = earliest;
+        tw->nextExpiryCacheValid = true;
+    }
 
     return (timerWheelSystemMonotonicUs)adjustedToAbsolute(tw, earliest);
 }
