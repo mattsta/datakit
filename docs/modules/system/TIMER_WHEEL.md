@@ -337,7 +337,8 @@ scan covers:
   its successor slot. An entry's slot is `floor(E / R)` or one less, so slot
   order matches expiry order to within one slot and the wheel's minimum lies in
   one of those two slots;
-- the first overflow entry.
+- the overflow map from its head, skipping cancelled entries, up to the first
+  live one.
 
 The result is 0 only when no live timer is stored. A query made from inside a
 callback is answered but not cached, because the slot being processed is

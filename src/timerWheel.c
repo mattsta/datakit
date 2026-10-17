@@ -1204,6 +1204,38 @@ static timerWheelAdjustedUs flexMinExpiry(const timerWheel *tw, const flex *f) {
     return earliest;
 }
 
+/* The smaller of `earliest` and the first live overflow expiry.  The
+ * multimap is sorted by expiry, so the walk stops at the first entry
+ * that is not tombstoned, or as soon as entries can no longer beat
+ * `earliest`.  Each skipped entry is a pending cancellation, so the
+ * walk visits at most cancelledPending + 1 entries.  The iterator fills
+ * every element of an entry, so the out array is full width even though
+ * only the expiry and id are read. */
+static timerWheelAdjustedUs
+overflowMinLiveExpiry(const timerWheel *tw, timerWheelAdjustedUs earliest) {
+    if (multimapCount(tw->overflow) == 0) {
+        return earliest;
+    }
+
+    multimapIterator iter;
+    multimapIteratorInit(tw->overflow, &iter, true);
+    databox boxes[ELEMENTS_PER_TIMER];
+    while (multimapIteratorNextInto(&iter, boxes, ELEMENTS_PER_TIMER)) {
+        const timerWheelAdjustedUs expireTimeUs = boxes[0].data.u64;
+        if (expireTimeUs >= earliest) {
+            break;
+        }
+
+        if (isTimerCancelled(tw, boxes[3].data.u64)) {
+            continue;
+        }
+
+        return expireTimeUs;
+    }
+
+    return earliest;
+}
+
 timerWheelSystemMonotonicUs timerWheelNextTimerEventStartUs(timerWheel *tw) {
     if (tw->nextExpiryCacheValid) {
         return (timerWheelSystemMonotonicUs)adjustedToAbsolute(
@@ -1284,16 +1316,11 @@ timerWheelSystemMonotonicUs timerWheelNextTimerEventStartUs(timerWheel *tw) {
         }
     }
 
-    /* Check overflow (sorted by expiry - first entry is earliest).
-     * First fills ALL elementsPerEntry slots, so the out array must be
-     * full width even though only the expiry is needed. */
-    if (multimapCount(tw->overflow) > 0) {
-        databox boxes[ELEMENTS_PER_TIMER];
-        multimapFirstInto(tw->overflow, boxes, ELEMENTS_PER_TIMER);
-        if (boxes[0].data.u64 < earliest) {
-            earliest = boxes[0].data.u64;
-        }
-    }
+    /* Overflow is sorted by expiry, so its first live entry is its
+     * earliest.  Cancelled entries stay stored until processing pulls
+     * them into range, so skip tombstones from the head; the walk is
+     * bounded by the number of pending cancellations. */
+    earliest = overflowMinLiveExpiry(tw, earliest);
 
     if (earliest == UINT64_MAX) {
         return 0;

@@ -1551,6 +1551,43 @@ int timerWheelTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("timerWheel: a cancelled overflow timer is not the next event") {
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
+        testCallbackState state = {0};
+        const uint64_t hourUs = UINT64_C(60) * 60 * 1000000;
+
+        /* A cancelled overflow entry stays stored until processing pulls
+         * it into range, which is hours away. */
+        const timerWheelId only = timerWheelRegister(
+            tw, 20 * hourUs, 0, testCountingCallback, &state);
+        timerWheelUnregister(tw, only);
+        timerWheelProcessTimerEvents(tw);
+        if (timerWheelCount(tw) != 0) {
+            ERR("Expected no live timer, got %zu", timerWheelCount(tw));
+        }
+        if (timerWheelNextTimerEventStartUs(tw) != 0) {
+            ERRR("A wheel holding only a cancelled overflow timer must "
+                 "report no next event");
+        }
+
+        /* A cancelled overflow head must not hide the live one behind
+         * it. */
+        const uint64_t before = timeUtilMonotonicUs();
+        const timerWheelId head = timerWheelRegister(
+            tw, 20 * hourUs, 0, testCountingCallback, &state);
+        timerWheelRegister(tw, 30 * hourUs, 0, testCountingCallback, &state);
+        timerWheelUnregister(tw, head);
+        timerWheelProcessTimerEvents(tw);
+        const timerWheelSystemMonotonicUs next =
+            timerWheelNextTimerEventStartUs(tw);
+        const int64_t diff = next - (int64_t)(before + 30 * hourUs);
+        if (diff < -5000 || diff > 5000) {
+            ERR("Query should name the live 30h overflow timer, off by "
+                "%" PRId64 "us",
+                diff);
+        }
+    }
+
     /* ================================================================
      * Statistics Tests
      * ================================================================ */
