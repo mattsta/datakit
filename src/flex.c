@@ -4643,14 +4643,10 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMulti(
     databox *const replacedOut) {
     /* When 'replacedOut' is non-NULL it holds 'elementsPerEntry - 1' slots
      * that receive the value entries a replace overwrites, in tuple order.
-     * Slots start VOID, so a call that does not replace (new key,
-     * full-width insert, set dedupe hit, key-only map) reports VOID.  Only
-     * inline payloads remain valid after the overwrite. */
-    if (replacedOut) {
-        for (int_fast32_t i = 0; i < elementsPerEntry - 1; i++) {
-            replacedOut[i] = (databox){.type = DATABOX_VOID};
-        }
-    }
+     * A call that does not replace (new key, full-width insert, set dedupe
+     * hit, key-only map) reports VOID in every slot.  The slots may alias
+     * the caller's value boxes (new values in, old values out), so they
+     * are written only after every box has been encoded. */
 
     /* If no middle given, discover current middle (or head, if no
      * elements). */
@@ -4711,6 +4707,9 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMulti(
      * while returning 'found', so the caller's reply looked correct
      * as the structure silently diverged. */
     if (fullWidthDedupe && found) {
+        for (int_fast32_t i = 0; replacedOut && i < elementsPerEntry - 1; i++) {
+            replacedOut[i] = (databox){.type = DATABOX_VOID};
+        }
         return true;
     }
 
@@ -4808,6 +4807,14 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMulti(
         insertContentsFromBox(&copyBox[i], &content[i],
                               CONVERSION_OVERRIDE_NONE, i, bigBuffer);
         contents[i] = &content[i];
+    }
+
+    /* Every value box is encoded, so 'replacedOut' may now overwrite
+     * them. */
+    if (replacedOut) {
+        for (int_fast32_t i = 0; i < elementsPerEntry - 1; i++) {
+            replacedOut[i] = (databox){.type = DATABOX_VOID};
+        }
     }
 
     flexHeaderInfo headerDiff = {0};
@@ -7055,6 +7062,61 @@ int32_t flexTest(int32_t argc, char **argv) {
         if (flexCount(m) != 4) {
             printf("  FAIL: expected 2 entries of 2 elements, found %zu\n",
                    flexCount(m));
+            bad++;
+        }
+
+        if (bad) {
+            return bad;
+        }
+        printf("  ok\n");
+    }
+
+    printf("Verify replacing inserts accept replacedOut aliasing the new "
+           "values:\n");
+    {
+        /* The exchange idiom: new values in, old values out, same boxes. */
+        cleaner(flexFree) flex *m = flexNew();
+        flexEntry *mid = NULL;
+        const databox key = databoxNewUnsigned(1);
+        databox vals[2] = {databoxNewUnsigned(100), databoxNewUnsigned(101)};
+        const databox *row[3] = {&key, &vals[0], &vals[1]};
+
+        int32_t bad = 0;
+        const bool firstFound =
+            flexInsertReplaceByTypeSortedWithMiddleMultiDirectReplacing(
+                &m, 3, row, &mid, true, vals);
+        if (firstFound || vals[0].type != DATABOX_VOID ||
+            vals[1].type != DATABOX_VOID) {
+            printf("  FAIL: new-key insert reported a replacement\n");
+            bad++;
+        }
+
+        vals[0] = databoxNewUnsigned(200);
+        vals[1] = databoxNewUnsigned(201);
+        const bool secondFound =
+            flexInsertReplaceByTypeSortedWithMiddleMultiDirectReplacing(
+                &m, 3, row, &mid, true, vals);
+        if (!secondFound || vals[0].type != DATABOX_UNSIGNED_64 ||
+            vals[0].data.u != 100 || vals[1].type != DATABOX_UNSIGNED_64 ||
+            vals[1].data.u != 101) {
+            printf("  FAIL: exchange reported types %d/%d\n", (int)vals[0].type,
+                   (int)vals[1].type);
+            bad++;
+        }
+
+        /* The flex holds the new values. */
+        uint64_t stored[3] = {0};
+        for (int32_t i = 0; i < 3 && flexCount(m) == 3; i++) {
+            databox got = {{0}};
+            flexGetByType(flexIndex(m, i), &got);
+            stored[i] = got.type == DATABOX_UNSIGNED_64 ? got.data.u : 0;
+        }
+
+        if (flexCount(m) != 3 || stored[0] != 1 || stored[1] != 200 ||
+            stored[2] != 201) {
+            printf("  FAIL: flex holds %" PRIu64 "/%" PRIu64 "/%" PRIu64
+                   " in %zu entries\n",
+                   stored[0], stored[1], stored[2], flexCount(m));
             bad++;
         }
 

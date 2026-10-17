@@ -252,12 +252,13 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
 /* Replacing variants of the two inserts named without the suffix: same
  * behavior, and a key-match replace also reports the values it overwrote
  * through 'replacedOut' ('elementsPerEntry - 1' slots in tuple order after
- * the key; every slot is VOID when nothing was replaced).  Only inline
- * payloads (integers up to 64 bits, reals, pointers, references) stay
- * valid; a BYTES slot points into the rewritten flex and must not be read.
- * A 96/128-bit integer does not fit a databox, so its slot reports only
- * the type (SIGNED_128 or UNSIGNED_128) with a NULL payload pointer; read
- * such a value before the insert if it is needed. */
+ * the key; every slot is VOID when nothing was replaced).  'replacedOut'
+ * may alias the value boxes in 'box' (new values in, old values out).
+ * Only inline payloads (integers up to 64 bits, reals, pointers,
+ * references) stay valid; a BYTES slot points into the rewritten flex and
+ * must not be read.  A 96/128-bit integer does not fit a databox, so its
+ * slot reports only the type (SIGNED_128 or UNSIGNED_128) with a NULL
+ * payload pointer; read such a value before the insert if it is needed. */
 bool flexInsertReplaceByTypeSortedWithMiddleMultiDirectReplacing(
     flex **ff, uint_fast32_t elementsPerEntry, const databox *box[],
     flexEntry **middleEntry, bool compareUsingKeyElementOnly,
