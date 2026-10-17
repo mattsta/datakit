@@ -548,12 +548,24 @@ void ownedSlotInit(ownedSlot *s, const ownedSlotDecl *decl) {
     atomic_store_explicit(&s->word, OWNED_SLOT_EMPTY, memory_order_relaxed);
 }
 
+/* Internal state, never returned: a Retire displaced CLAIMED and the
+ * claimant has not yet released. It reads as RETIRED. The claimant's
+ * Publish moves it to RETIRED with a CAS and releases only if that CAS
+ * wins, so a Publish that meets plain RETIRED (a thread whose claim was
+ * refused, or a claimant publishing again) releases nothing. */
+#define OWNED_SLOT_RETIRED_CLAIMED_ 4
+
+static ownedSlotState ownedSlotPublic_(int st) {
+    return st == OWNED_SLOT_RETIRED_CLAIMED_ ? OWNED_SLOT_RETIRED
+                                             : (ownedSlotState)st;
+}
+
 ownedSlotState ownedSlotLoad(const ownedSlot *s) {
     if (!s) {
         return OWNED_SLOT_RETIRED;
     }
-    return (ownedSlotState)atomic_load_explicit(&((ownedSlot *)s)->word,
-                                                memory_order_acquire);
+    return ownedSlotPublic_(
+        atomic_load_explicit(&((ownedSlot *)s)->word, memory_order_acquire));
 }
 
 bool ownedSlotClaim(ownedSlot *s, ownedSlotState *out_prior) {
@@ -574,7 +586,7 @@ bool ownedSlotClaim(ownedSlot *s, ownedSlotState *out_prior) {
     }
     /* CLAIMED (another claimant) or RETIRED: counted and reported. */
     const uint64_t n = ownedSlotBump_(s, OWNED_SLOT_C_CLAIM_REFUSED);
-    ownedSlotNote_(s, OWNED_SLOT_C_CLAIM_REFUSED, (ownedSlotState)st, n);
+    ownedSlotNote_(s, OWNED_SLOT_C_CLAIM_REFUSED, ownedSlotPublic_(st), n);
     return false;
 }
 
@@ -586,25 +598,31 @@ bool ownedSlotPublish(ownedSlot *s, bool still_armed, ownedReleaseFn release,
     ownedSlotEnrol_(s);
     int expect = OWNED_SLOT_CLAIMED;
     /* Acquire on failure, so a release run below sees what the retirer
-     * wrote before its exchange. */
+     * wrote before its CAS. */
     if (atomic_compare_exchange_strong_explicit(
             &s->word, &expect,
             still_armed ? OWNED_SLOT_ARMED : OWNED_SLOT_EMPTY,
             memory_order_release, memory_order_acquire)) {
         return true;
     }
-    if (expect != OWNED_SLOT_RETIRED) {
-        /* Not claimed by anyone (EMPTY or ARMED): a misuse. Leave the
-         * slot and the cargo alone. */
+    if (expect != OWNED_SLOT_RETIRED_CLAIMED_) {
+        /* No live claim: EMPTY or ARMED (nobody claimed), or RETIRED (a
+         * claim refused after a retire, or a claimant whose release has
+         * already run). A misuse: leave the slot and the cargo alone. */
         return false;
     }
-    /* A Retire happened while claimed: the claimant releases the cargo
-     * (whenever a release is supplied, even for a NULL cargo) and stores
-     * RETIRED with release to publish its final field writes. */
+    /* A Retire happened while claimed. The CAS to RETIRED decides which
+     * Publish releases, so the release runs once even if Publish is
+     * repeated; acq_rel also publishes this claimant's field writes. */
+    if (!atomic_compare_exchange_strong_explicit(
+            &s->word, &expect, OWNED_SLOT_RETIRED, memory_order_acq_rel,
+            memory_order_relaxed)) {
+        return false;
+    }
+    /* Whenever a release is supplied, even for a NULL cargo. */
     if (release) {
         release(cargo);
     }
-    atomic_store_explicit(&s->word, OWNED_SLOT_RETIRED, memory_order_release);
     const uint64_t n = ownedSlotBump_(s, OWNED_SLOT_C_RELEASE_BY_CLAIMANT);
     ownedSlotNote_(s, OWNED_SLOT_C_RELEASE_BY_CLAIMANT, OWNED_SLOT_RETIRED, n);
     return false;
@@ -616,8 +634,24 @@ ownedSlotState ownedSlotRetire(ownedSlot *s, ownedReleaseFn release,
         return OWNED_SLOT_RETIRED;
     }
     ownedSlotEnrol_(s);
-    const int prior = atomic_exchange_explicit(&s->word, OWNED_SLOT_RETIRED,
-                                               memory_order_acq_rel);
+    /* CLAIMED moves to the internal RETIRED_CLAIMED, which the claimant's
+     * Publish consumes; EMPTY and ARMED move to RETIRED. A slot already
+     * retired is left as it is. */
+    int prior = atomic_load_explicit(&s->word, memory_order_relaxed);
+    for (;;) {
+        if (prior == OWNED_SLOT_RETIRED ||
+            prior == OWNED_SLOT_RETIRED_CLAIMED_) {
+            return OWNED_SLOT_RETIRED;
+        }
+        const int next = prior == OWNED_SLOT_CLAIMED
+                             ? OWNED_SLOT_RETIRED_CLAIMED_
+                             : OWNED_SLOT_RETIRED;
+        if (atomic_compare_exchange_weak_explicit(&s->word, &prior, next,
+                                                  memory_order_acq_rel,
+                                                  memory_order_relaxed)) {
+            break;
+        }
+    }
     switch ((ownedSlotState)prior) {
     case OWNED_SLOT_ARMED:
         /* This caller now owns the fields. */
@@ -627,7 +661,7 @@ ownedSlotState ownedSlotRetire(ownedSlot *s, ownedReleaseFn release,
         break;
     case OWNED_SLOT_CLAIMED: {
         /* The claimant owns the fields; its Publish fails against
-         * RETIRED and releases there. */
+         * RETIRED_CLAIMED and releases there. */
         const uint64_t n = ownedSlotBump_(s, OWNED_SLOT_C_RETIRE_MET_CLAIMED);
         ownedSlotNote_(s, OWNED_SLOT_C_RETIRE_MET_CLAIMED, OWNED_SLOT_CLAIMED,
                        n);

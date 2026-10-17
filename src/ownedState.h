@@ -324,15 +324,18 @@ const char *ownedStateKindName(ownedStateKind kind);
  *   RETIRED  terminal; no further claims
  *
  * Claim moves EMPTY/ARMED to CLAIMED; Publish moves CLAIMED back to
- * ARMED or EMPTY; Retire exchanges to RETIRED. Cargo is released once:
- * by Retire if it displaced ARMED, or by the claimant's Publish if
- * Retire displaced CLAIMED (Publish's CAS then fails against RETIRED).
+ * ARMED or EMPTY; Retire moves any other state to RETIRED. Cargo is
+ * released once: by Retire if it displaced ARMED, or by the claimant's
+ * Publish if Retire displaced CLAIMED (Publish's CAS then fails, and the
+ * word records internally that the claimant's release is still owed, so
+ * only that one Publish releases; the state still reads RETIRED).
  *
  * A zero-filled slot is valid (EMPTY == 0). With a NULL decl the slot
  * runs the same protocol but moves no counters and emits no notes.
- * Claim and Publish are one CAS each, Retire one exchange; no
- * allocation or locking. The fields a claimant writes are published by
- * the same word's release operations, so no fence is needed. */
+ * Claim and Publish are one CAS each (Publish two when it releases),
+ * Retire one CAS retried on interference; no allocation or locking. The
+ * fields a claimant writes are published by the same word's release
+ * operations, so no fence is needed. */
 typedef enum ownedSlotState {
     OWNED_SLOT_EMPTY = 0,
     OWNED_SLOT_ARMED = 1,
@@ -383,14 +386,16 @@ bool ownedSlotClaim(ownedSlot *s, ownedSlotState *out_prior);
 
 /* CLAIMED -> ARMED (still_armed) or EMPTY, with release. If a Retire
  * happened meanwhile, runs release(cargo) when release is non-NULL
- * (whatever the cargo), stores RETIRED, counts release_by_claimant,
- * notifies, and returns false. Calling it on a slot the caller has not
- * claimed (EMPTY or ARMED) is a misuse: it returns false and changes
+ * (whatever the cargo), counts release_by_claimant, notifies, and
+ * returns false; the slot stays RETIRED. Calling it without a live claim
+ * is a misuse: on EMPTY or ARMED (never claimed), or on RETIRED (a claim
+ * refused after a retire, or a claimant publishing again after its
+ * release ran) it returns false, releases nothing and changes
  * nothing. */
 bool ownedSlotPublish(ownedSlot *s, bool still_armed, ownedReleaseFn release,
                       void *cargo);
 
-/* Exchange to RETIRED (acq_rel) and return the displaced state. Who
+/* Move to RETIRED (acq_rel) and return the displaced state. Who
  * releases the cargo depends on that state:
  *
  *   EMPTY    nobody; there is no cargo

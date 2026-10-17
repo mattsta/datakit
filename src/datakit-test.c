@@ -1854,6 +1854,41 @@ static int dkTestOwnedStateTest(int argc, char *argv[]) {
                         OWNED_SLOT_ARMED &&
                     g_dkSlotReleases == 1,
                 "slot: and the cargo is still released once, by the retire");
+
+        /* A Publish that holds no live claim never releases: a thread
+         * whose claim was refused after a retire of ARMED (the retire
+         * already released), and a claimant repeating its Publish after
+         * releasing once. */
+        ownedSlot sr = OWNED_SLOT_INIT(NULL);
+        g_dkSlotReleases = 0;
+        OEXPECT(ownedSlotClaim(&sr, &prior) &&
+                    ownedSlotPublish(&sr, true, dkSlotRelease_, &cargo) &&
+                    ownedSlotRetire(&sr, dkSlotRelease_, &cargo) ==
+                        OWNED_SLOT_ARMED &&
+                    g_dkSlotReleases == 1 && !ownedSlotClaim(&sr, &prior),
+                "slot: a retire of ARMED releases and refuses later claims");
+        OEXPECT(!ownedSlotPublish(&sr, true, dkSlotRelease_, &cargo) &&
+                    g_dkSlotReleases == 1 &&
+                    ownedSlotLoad(&sr) == OWNED_SLOT_RETIRED,
+                "slot: a refused claimant's Publish releases nothing");
+        ownedSlot sp = OWNED_SLOT_INIT(NULL);
+        g_dkSlotReleases = 0;
+        OEXPECT(ownedSlotClaim(&sp, &prior) &&
+                    ownedSlotRetire(&sp, dkSlotRelease_, &cargo) ==
+                        OWNED_SLOT_CLAIMED &&
+                    ownedSlotLoad(&sp) == OWNED_SLOT_RETIRED &&
+                    ownedSlotRetire(&sp, dkSlotRelease_, &cargo) ==
+                        OWNED_SLOT_RETIRED &&
+                    !ownedSlotClaim(&sp, &prior) && g_dkSlotReleases == 0,
+                "slot: a retire of CLAIMED reads RETIRED and leaves the "
+                "release to the claimant");
+        OEXPECT(!ownedSlotPublish(&sp, true, dkSlotRelease_, &cargo) &&
+                    g_dkSlotReleases == 1 &&
+                    !ownedSlotPublish(&sp, true, dkSlotRelease_, &cargo) &&
+                    g_dkSlotReleases == 1 &&
+                    ownedSlotLoad(&sp) == OWNED_SLOT_RETIRED,
+                "slot: a repeated Publish after the claimant's release "
+                "releases nothing");
         (void)fields;
     }
 
