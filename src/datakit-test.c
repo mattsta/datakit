@@ -9,6 +9,7 @@
 
 /* Add all includes here so we get their test main functions defined. */
 #include "../deps/sha1/sha1.h"
+#include "OSRegulate.h"
 #include "aeadNonceLog.h"
 #include "aesGcm.h"
 #include "atomPool.h"
@@ -122,9 +123,14 @@ extern int bigmathTest(int argc, char *argv[]);
 #include "intsetBig.h"
 #endif
 
+#include <errno.h>
+#include <poll.h>   /* process-exit watch fd readiness */
+#include <signal.h> /* kill */
 #include <stdbool.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/wait.h> /* WIFEXITED / WEXITSTATUS */
+#include <unistd.h>   /* fork / pipe / read */
 
 #include "cleaner.h"
 
@@ -418,6 +424,126 @@ static int testCtMemEqStructuralTest(int argc, char *argv[]) {
         return 0;
     }
     return 1;
+}
+
+/* ====================================================================
+ * Readiness pipe: the cross-process "ready" event a daemonizing parent
+ * waits on.  Three children, three verdicts (signalled, died
+ * unsignalled, alive but silent), each decided by what the pipe
+ * carries (a byte, end-of-file, nothing) rather than by timing.
+ * ==================================================================== */
+static int dkTestDaemonizeReadyTest(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+
+    int failures = 0;
+#define REXPECT(cond, msg)                                                     \
+    do {                                                                       \
+        if (!(cond)) {                                                         \
+            printf("dkTestDaemonizeReady FAIL: %s (%s:%d)\n", (msg), __FILE__, \
+                   __LINE__);                                                  \
+            failures++;                                                        \
+        }                                                                      \
+    } while (0)
+
+    static const uint64_t kGenerousMs = 30000;
+    static const uint64_t kShortMs = 25;
+
+    /* --- (1) the child signals: READY, and the byte outranks the
+     *         close that follows it. */
+    {
+        int rd = -1;
+        int wr = -1;
+        REXPECT(OSRegulateReadyPipeNew(&rd, &wr), "pipe created");
+        const pid_t child = fork();
+        if (child == 0) {
+            close(rd);
+            OSRegulateReadyPipeSignal(&wr);
+            _exit(0);
+        }
+        REXPECT(child > 0, "fork for signalling child");
+        close(wr);
+        const OSRegulateReadyAwait v =
+            OSRegulateReadyPipeAwaitMs(rd, kGenerousMs);
+        REXPECT(v == OS_REGULATE_READY_AWAIT_READY,
+                "a signalling child reads as READY");
+        close(rd);
+        if (child > 0) {
+            int status = 0;
+            REXPECT(waitpid(child, &status, 0) == child, "child reaped");
+        }
+    }
+
+    /* --- (2) the child dies without signalling: WRITER_GONE, not
+     *         EXPIRED; end-of-file reports the exit before the budget. */
+    {
+        int rd = -1;
+        int wr = -1;
+        REXPECT(OSRegulateReadyPipeNew(&rd, &wr), "pipe created");
+        const pid_t child = fork();
+        if (child == 0) {
+            close(rd);
+            _exit(3);
+        }
+        REXPECT(child > 0, "fork for unsignalled child");
+        close(wr);
+        const OSRegulateReadyAwait v =
+            OSRegulateReadyPipeAwaitMs(rd, kGenerousMs);
+        REXPECT(v == OS_REGULATE_READY_AWAIT_WRITER_GONE,
+                "a child that died unsignalled reads as WRITER_GONE");
+        close(rd);
+        if (child > 0) {
+            int status = 0;
+            REXPECT(waitpid(child, &status, 0) == child, "child reaped");
+        }
+    }
+
+    /* --- (3) the child is alive and silent: EXPIRED at the budget. */
+    {
+        int rd = -1;
+        int wr = -1;
+        REXPECT(OSRegulateReadyPipeNew(&rd, &wr), "pipe created");
+        const pid_t child = fork();
+        if (child == 0) {
+            close(rd);
+            for (;;) {
+                pause();
+            }
+        }
+        REXPECT(child > 0, "fork for silent child");
+        close(wr);
+        const OSRegulateReadyAwait v = OSRegulateReadyPipeAwaitMs(rd, kShortMs);
+        REXPECT(v == OS_REGULATE_READY_AWAIT_EXPIRED,
+                "a silent live child reads as EXPIRED");
+        close(rd);
+        /* Guarded: kill(-1, ...) would signal every process we may. */
+        if (child > 0) {
+            kill(child, SIGKILL);
+            int status = 0;
+            REXPECT(waitpid(child, &status, 0) == child, "child reaped");
+        }
+    }
+
+    /* --- (4) signalling twice is idempotent and leaves no descriptor. */
+    {
+        int rd = -1;
+        int wr = -1;
+        REXPECT(OSRegulateReadyPipeNew(&rd, &wr), "pipe created");
+        OSRegulateReadyPipeSignal(&wr);
+        REXPECT(wr == -1, "signal closes and clears the write end");
+        OSRegulateReadyPipeSignal(&wr);
+        REXPECT(OSRegulateReadyPipeAwaitMs(rd, kGenerousMs) ==
+                    OS_REGULATE_READY_AWAIT_READY,
+                "the one byte reads as READY");
+        close(rd);
+    }
+
+#undef REXPECT
+    if (failures == 0) {
+        printf("dkTestDaemonizeReady: OK (ready, writer gone, expired, "
+               "idempotent signal)\n");
+    }
+    return failures;
 }
 
 /* ====================================================================
@@ -10736,6 +10862,7 @@ static const TestEntry testRegistry[] = {
     T_A(dkTestInflightGate, "inflightGate,inflight"),
     T_A(dkTestOwnedState, "ownedState,owned"),
     T_A(dkTestOwnedSeqGate, "ownedSeqGate,seqGate"),
+    T_A(dkTestDaemonizeReady, "daemonizeReady,daemonize"),
 
     /* Random generators */
     T_A(dkRandom, "rng"), T(portableRandom),

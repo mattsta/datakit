@@ -8,8 +8,6 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 
-typedef bool(OSRegulateDaemonizeParentExitCallback)(void *userData);
-
 typedef enum OSRegulateDaemonizeStatus {
     OS_REGULATE_DAEMONIZE_PARENT,
     OS_REGULATE_DAEMONIZE_CHILD,
@@ -18,11 +16,45 @@ typedef enum OSRegulateDaemonizeStatus {
 
 /* Process */
 OSRegulateDaemonizeStatus OSRegulateDaemonize(const char **errMsg);
-void OSRegulateDaemonizeThenExit(OSRegulateDaemonizeParentExitCallback *cb,
-                                 void *userData);
 bool OSRegulateWritePidToFile(const char *path);
 void OSRegulateDaemonizeThenExitNoWait(void);
 void OSRegulateExitClean(void);
+
+/* Readiness channel: a one-shot cross-process "ready" event.  The
+ * child sends one byte when ready; the parent waits on the read end and
+ * also sees end-of-file if every writer closes without signalling (the
+ * child died), which an eventfd could not report. */
+typedef enum OSRegulateReadyAwait {
+    OS_REGULATE_READY_AWAIT_READY,       /* the writer signalled */
+    OS_REGULATE_READY_AWAIT_WRITER_GONE, /* no writer left, or unwaitable */
+    OS_REGULATE_READY_AWAIT_EXPIRED,     /* budget elapsed, writer alive */
+} OSRegulateReadyAwait;
+
+/* Create the pair.  Both ends are close-on-exec; the read end is meant
+ * for the parent and the write end for the child (each closes the
+ * other's end after the fork).  The caller owns both descriptors. */
+bool OSRegulateReadyPipeNew(int *outRead, int *outWrite);
+
+/* Signal readiness once and close the write end (idempotent on a
+ * descriptor already signalled; a negative descriptor is a no-op). */
+void OSRegulateReadyPipeSignal(int *inoutWriteFd);
+
+/* Wait until the writer signals, every writer is gone, or `budgetMs`
+ * elapses.  Signals interrupting the wait do not extend the budget.
+ * WRITER_GONE is also returned when readiness can no longer be
+ * observed: a negative readFd, or a poll()/read() failure other than
+ * EINTR. */
+OSRegulateReadyAwait OSRegulateReadyPipeAwaitMs(int readFd, uint64_t budgetMs);
+
+/* Daemonize, then hold the foreground parent until the child signals
+ * readiness: the parent exits 0 on READY and nonzero if the child exits
+ * first or readyBudgetMs elapses.  Both exits use _exit(), so the
+ * parent runs no atexit handlers.  The child gets
+ * OS_REGULATE_DAEMONIZE_CHILD and calls OSRegulateDaemonizeSignalReady()
+ * once it is ready to serve. */
+OSRegulateDaemonizeStatus OSRegulateDaemonizeUntilReady(uint64_t readyBudgetMs,
+                                                        const char **errMsg);
+void OSRegulateDaemonizeSignalReady(void);
 
 bool OSRegulateRequestSignalChildWhenParentExits(int sig);
 bool OSRegulateParentStillExisits(void);

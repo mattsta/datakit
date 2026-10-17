@@ -1,8 +1,11 @@
 #include "OSRegulate.h"
+#include "timeUtil.h"
 #include "versionOSRuntime.h"
 
 #include <errno.h>        /* strerror */
 #include <fcntl.h>        /* open */
+#include <limits.h>       /* INT_MAX (poll timeout width) */
+#include <poll.h>         /* poll on a process-exit watch fd */
 #include <stdio.h>        /* snprintf */
 #include <sys/file.h>     /* flock */
 #include <sys/resource.h> /* getrlimit */
@@ -79,17 +82,165 @@ OSRegulateDaemonizeStatus OSRegulateDaemonize(const char **errMsg) {
     return OS_REGULATE_DAEMONIZE_CHILD;
 }
 
-void OSRegulateDaemonizeThenExit(OSRegulateDaemonizeParentExitCallback *cb,
-                                 void *userData) {
-    if (!OSRegulateDaemonize(NULL)) {
-        /* Now we're the parent process, but we need to wait until the child
-         * process is ready before we exit. */
-        while (!cb(userData)) {
-            nanosleep(&(struct timespec){1, 0}, NULL);
+/* Wait for POLLIN on one descriptor until it is ready or `budgetMs` has
+ * elapsed since `startMs` (timeUtilMonotonicMs).  An EINTR re-polls on
+ * the time remaining, so signals cannot extend the wait, and a budget
+ * wider than poll()'s int timeout is waited out in INT_MAX slices.
+ * Returns the last poll() result: > 0 ready, 0 expired, < 0 failed with
+ * errno set to something other than EINTR. */
+static int osRegulatePollUntil(struct pollfd *pfd, const uint64_t startMs,
+                               const uint64_t budgetMs) {
+    for (;;) {
+        const uint64_t elapsedMs = timeUtilMonotonicMs() - startMs;
+        const uint64_t remainingMs =
+            elapsedMs >= budgetMs ? 0 : budgetMs - elapsedMs;
+        const int timeoutMs =
+            remainingMs > (uint64_t)INT_MAX ? INT_MAX : (int)remainingMs;
+        const int n = poll(pfd, 1, timeoutMs);
+        if (n < 0 && errno == EINTR) {
+            continue;
         }
 
+        if (n == 0 && remainingMs > (uint64_t)timeoutMs) {
+            continue;
+        }
+
+        return n;
+    }
+}
+
+/* The readiness channel is a stream socketpair rather than a pipe so a
+ * late signal, sent after the reader has exited, cannot raise SIGPIPE:
+ * sockets support MSG_NOSIGNAL / SO_NOSIGPIPE, pipes do not.  A stream
+ * still carries both facts: one byte, and EOF once every writer closes. */
+#if defined(MSG_NOSIGNAL)
+#define OS_REGULATE_READY_SEND_FLAGS MSG_NOSIGNAL
+#else
+#define OS_REGULATE_READY_SEND_FLAGS 0
+#endif
+
+bool OSRegulateReadyPipeNew(int *outRead, int *outWrite) {
+    if (!outRead || !outWrite) {
+        return false;
+    }
+    int fds[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) != 0) {
+        return false;
+    }
+    for (size_t i = 0; i < 2; i++) {
+        const int fd = fcntl(fds[i], F_GETFD, 0);
+        if (fd < 0 || fcntl(fds[i], F_SETFD, fd | FD_CLOEXEC) < 0) {
+            close(fds[0]);
+            close(fds[1]);
+            return false;
+        }
+#if defined(SO_NOSIGPIPE)
+        const int one = 1;
+        if (setsockopt(fds[i], SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one)) <
+            0) {
+            close(fds[0]);
+            close(fds[1]);
+            return false;
+        }
+#endif
+    }
+    *outRead = fds[0];
+    *outWrite = fds[1];
+    return true;
+}
+
+void OSRegulateReadyPipeSignal(int *inoutWriteFd) {
+    if (!inoutWriteFd || *inoutWriteFd < 0) {
+        return;
+    }
+    const uint8_t one = 1;
+    for (;;) {
+        const ssize_t n = send(*inoutWriteFd, &one, sizeof(one),
+                               OS_REGULATE_READY_SEND_FLAGS);
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+        break;
+    }
+    /* Closing is part of the signal: the reader's end-of-file is the
+     * "writer gone" fact, and a signalled writer has nothing more to
+     * say. */
+    close(*inoutWriteFd);
+    *inoutWriteFd = -1;
+}
+
+OSRegulateReadyAwait OSRegulateReadyPipeAwaitMs(int readFd, uint64_t budgetMs) {
+    if (readFd < 0) {
+        return OS_REGULATE_READY_AWAIT_WRITER_GONE;
+    }
+    const uint64_t startMs = timeUtilMonotonicMs();
+    struct pollfd want = {.fd = readFd, .events = POLLIN};
+    for (;;) {
+        const int n = osRegulatePollUntil(&want, startMs, budgetMs);
+        if (n == 0) {
+            return OS_REGULATE_READY_AWAIT_EXPIRED;
+        }
+        /* A poll failure means readiness can no longer be observed, so
+         * it is reported as WRITER_GONE (not ready), as documented in
+         * the header. */
+        if (n < 0) {
+            return OS_REGULATE_READY_AWAIT_WRITER_GONE;
+        }
+        /* Readable or hung up: one byte is the signal, end-of-file is
+         * every writer gone.  A signal followed by the close reads the
+         * byte first, so READY wins whenever it was sent. */
+        uint8_t byte = 0;
+        const ssize_t got = read(readFd, &byte, sizeof(byte));
+        if (got > 0) {
+            return OS_REGULATE_READY_AWAIT_READY;
+        }
+        if (got < 0 && errno == EINTR) {
+            continue;
+        }
+        return OS_REGULATE_READY_AWAIT_WRITER_GONE;
+    }
+}
+
+/* The child's write end of the readiness channel, kept after the fork
+ * so the child can signal from wherever it becomes ready. */
+static int g_daemonizeReadyWriteFd = -1;
+
+OSRegulateDaemonizeStatus OSRegulateDaemonizeUntilReady(uint64_t readyBudgetMs,
+                                                        const char **errMsg) {
+    int readyRead = -1;
+    int readyWrite = -1;
+    if (!OSRegulateReadyPipeNew(&readyRead, &readyWrite)) {
+        re("Failed to create the readiness pipe");
+    }
+    const OSRegulateDaemonizeStatus status = OSRegulateDaemonize(errMsg);
+    switch (status) {
+    case OS_REGULATE_DAEMONIZE_ERROR:
+        close(readyRead);
+        close(readyWrite);
+        return status;
+    case OS_REGULATE_DAEMONIZE_CHILD:
+        close(readyRead);
+        g_daemonizeReadyWriteFd = readyWrite;
+        return status;
+    case OS_REGULATE_DAEMONIZE_PARENT:
+        break;
+    }
+    /* The foreground parent: wait for the child's readiness, then exit
+     * with a status a service manager can act on.  _exit() on both
+     * paths: the parent must not run atexit handlers or flush stdio
+     * buffers it shares with the child after the fork. */
+    close(readyWrite);
+    const OSRegulateReadyAwait verdict =
+        OSRegulateReadyPipeAwaitMs(readyRead, readyBudgetMs);
+    close(readyRead);
+    if (verdict == OS_REGULATE_READY_AWAIT_READY) {
         OSRegulateExitClean();
     }
+    _exit(EXIT_FAILURE);
+}
+
+void OSRegulateDaemonizeSignalReady(void) {
+    OSRegulateReadyPipeSignal(&g_daemonizeReadyWriteFd);
 }
 
 void OSRegulateDaemonizeThenExitNoWait(void) {
