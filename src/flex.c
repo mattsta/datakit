@@ -2364,9 +2364,32 @@ DK_STATIC void flexInsertByType_(flex **const ff, flexEntry *const fe,
         break;
     }
     case DATABOX_UNSIGNED_64:
+    case DATABOX_PTR:
+        /* No native pointer encoding: a pointer is stored as an integer,
+         * as in insertContentsFromBox. */
         flexInsert_(ff, fe, flexEncodingUnsigned(box->data.u), &box->data.u,
                     sizeof(box->data.u));
         break;
+    case DATABOX_CONTAINER_REFERENCE_EXTERNAL: {
+        /* Same encoding as insertContentsFromBox. */
+        const uint64_t encoded =
+            flexEncodingReferenceUnsignedEncode(box->data.u64);
+        flexInsert_(ff, fe, flexEncodingReferenceUnsigned(box->data.u64),
+                    &encoded, sizeof(encoded));
+        break;
+    }
+#if FLEX_ENABLE_PTR_MDSC
+    case DATABOX_PTR_MDSC: {
+        /* Same encoding as insertContentsFromBox: the pointer itself, in 6
+         * bytes when its top 16 bits are clear. */
+        const uint64_t ptr = (uintptr_t)box->data.ptr;
+        const bool fits48 = ptr < (UINT64_C(1) << 48);
+        flexInsert_(ff, fe,
+                    fits48 ? FLEX_EXTERNAL_MDSC_48B : FLEX_EXTERNAL_MDSC_64B,
+                    &ptr, fits48 ? 48 / 8 : 64 / 8);
+        break;
+    }
+#endif
     case DATABOX_SIGNED_128: {
         assert(box->big);
         /* Same order as the 64-bit arm. */
@@ -3199,9 +3222,14 @@ void flexPushByType(flex **const ff, const databox *box, flexEndpoint where) {
     case DATABOX_CONTAINER_FLEX_LIST:
     case DATABOX_CONTAINER_FLEX_SET:
     case DATABOX_CONTAINER_FLEX_TUPLE:
-        /* No 128-bit or container flexPush_ helper exists, and neither type
-         * needs bytes-canonicalisation — route through the shared insert
-         * path so push stays type-complete without a parallel encoder. */
+    case DATABOX_CONTAINER_REFERENCE_EXTERNAL:
+#if FLEX_ENABLE_PTR_MDSC
+    case DATABOX_PTR_MDSC:
+#endif
+        /* No flexPush_ helper exists for these, and none of them needs
+         * bytes-canonicalisation — route through the shared insert path so
+         * push accepts every type flexInsertByType encodes, which includes
+         * every type flexGetByType reports. */
         flexInsertByType(ff,
                          (where == FLEX_ENDPOINT_HEAD)
                              ? FLEX_ENTRY_HEAD(*ff)
@@ -3224,6 +3252,7 @@ void flexPushByType(flex **const ff, const databox *box, flexEndpoint where) {
         flexPush_(flexInsertNull, NULL);
         break;
     default:
+        assert(NULL && "box type has no flexPushByType encoding");
         __builtin_unreachable();
     }
 }
@@ -6900,6 +6929,78 @@ int32_t flexTest(int32_t argc, char **argv) {
             }
         }
         printf("  SUCCESS\n\n");
+    }
+
+    printf("Verify push and insert accept every type flexGetByType "
+           "reports:\n");
+    {
+        /* The types with no flexPush_ helper: references, a plain pointer
+         * (stored as an integer), and an MDSC pointer.  Each push must
+         * match the bytes flexAppendMultiple writes for the same box, and
+         * read back unchanged. */
+        int32_t bad = 0;
+#if FLEX_ENABLE_PTR_MDSC
+        cleaner(mdscfree) mdsc *s = mdscnewlen("pushed pointer", 14);
+#endif
+        static const uint64_t refs[] = {
+            0, 255, 256, 70000, UINT64_C(1) << 40, UINT64_MAX};
+        enum { PUSH_TYPE_CASES_ = COUNT_ARRAY(refs) + 2 };
+        for (size_t i = 0; i < PUSH_TYPE_CASES_; i++) {
+            databox in = {{0}};
+            databoxType wantType = DATABOX_CONTAINER_REFERENCE_EXTERNAL;
+            if (i < COUNT_ARRAY(refs)) {
+                in.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL;
+                in.data.u64 = refs[i];
+            } else if (i == COUNT_ARRAY(refs)) {
+                in.type = DATABOX_PTR;
+                in.data.ptr = &bad;
+                wantType = DATABOX_UNSIGNED_64;
+            } else {
+#if FLEX_ENABLE_PTR_MDSC
+                in.type = DATABOX_PTR_MDSC;
+                in.data.ptr = s;
+                wantType = DATABOX_PTR_MDSC;
+#else
+                continue;
+#endif
+            }
+
+            const databox *row[1] = {&in};
+            cleaner(flexFree) flex *oracle = flexNew();
+            flexAppendMultiple(&oracle, 1, row);
+
+            cleaner(flexFree) flex *pushed = flexNew();
+            flexPushByType(&pushed, &in, FLEX_ENDPOINT_TAIL);
+            cleaner(flexFree) flex *inserted = flexNew();
+            flexInsertByType(&inserted, flexHead(inserted), &in);
+
+            /* And the box read back from the push pushes back the same. */
+            databox got = {{0}};
+            flexGetByType(flexHead(pushed), &got);
+            cleaner(flexFree) flex *again = flexNew();
+            flexPushByType(&again, &got, FLEX_ENDPOINT_HEAD);
+
+            const size_t oracleBytes = flexBytes(oracle);
+            const flex *const writes[3] = {pushed, inserted, again};
+            bool sameBytes = true;
+            for (size_t w = 0; w < COUNT_ARRAY(writes); w++) {
+                sameBytes = sameBytes && flexBytes(writes[w]) == oracleBytes &&
+                            memcmp(writes[w], oracle, oracleBytes) == 0;
+            }
+
+            const bool sameValue =
+                got.type == wantType && got.data.u64 == in.data.u64;
+            if (!sameValue || !sameBytes) {
+                printf("  FAIL: case %zu (type %d) read back as type %d\n", i,
+                       (int)in.type, (int)got.type);
+                bad++;
+            }
+        }
+
+        if (bad) {
+            return bad;
+        }
+        printf("  ok\n");
     }
 
     printf("Verify replacing sorted inserts report the overwritten value:\n");
