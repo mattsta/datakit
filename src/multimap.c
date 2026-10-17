@@ -1586,6 +1586,183 @@ int32_t multimapInsertReplacingSweep(void) {
     return err;
 }
 
+/* RandomValue and LookupByPosition through one tier, for the per-tier
+ * selection checks below. */
+typedef bool (*rvDrawFn)(void *m, bool fromTail, databox **boxes,
+                         multimapEntry *me);
+typedef bool (*rvPositionFn)(void *m, int64_t row, databox **boxes);
+typedef bool (*rvInsertFn)(void *m, const databox *elements[]);
+
+static bool rvSmallDraw(void *m, bool fromTail, databox **boxes,
+                        multimapEntry *me) {
+    return multimapSmallRandomValue(m, fromTail, boxes, me);
+}
+
+static bool rvSmallPosition(void *m, int64_t row, databox **boxes) {
+    return multimapSmallLookupByPosition(m, row, boxes);
+}
+
+static bool rvSmallInsert(void *m, const databox *elements[]) {
+    return multimapSmallInsert(m, elements);
+}
+
+static bool rvMediumDraw(void *m, bool fromTail, databox **boxes,
+                         multimapEntry *me) {
+    return multimapMediumRandomValue(m, fromTail, boxes, me);
+}
+
+static bool rvMediumPosition(void *m, int64_t row, databox **boxes) {
+    return multimapMediumLookupByPosition(m, row, boxes);
+}
+
+static bool rvMediumInsert(void *m, const databox *elements[]) {
+    return multimapMediumInsert(m, elements);
+}
+
+static bool rvFullDraw(void *m, bool fromTail, databox **boxes,
+                       multimapEntry *me) {
+    return multimapFullRandomValue(m, fromTail, boxes, me);
+}
+
+static bool rvFullPosition(void *m, int64_t row, databox **boxes) {
+    return multimapFullLookupByPosition(m, row, boxes);
+}
+
+static bool rvFullInsert(void *m, const databox *elements[]) {
+    return multimapFullInsert(m, elements);
+}
+
+/* Fill keys [0, rows) with a 64-byte value (enough to split a Full
+ * container into several sub-maps), then check that RandomValue draws rows
+ * uniformly, that fromTail always returns the last row, and that drawing
+ * leaves the process-wide random() stream alone.
+ *
+ * rows = 768 is 3 * 256, chosen so the common broken draws all show up: a
+ * dead low bit leaves every odd row unreached, a draw capped below 'rows'
+ * (say a 9-bit draw) leaves rows 512..767 unreached, and a modulo of a
+ * 10-bit draw gives rows 0..255 double weight.
+ *
+ * Why this cannot flake: with 64 expected hits per row, the Pearson
+ * statistic of a uniform draw is close to chi-square with 767 degrees of
+ * freedom (mean 767, sd about 39).  The ceiling of 2 * 767 is about 19 sd
+ * out; the Laurent-Massart bound puts the chance of a uniform draw passing
+ * it below e^-100.  A row is never drawn with probability e^-64 per row.
+ * The double-weight modulo above scores about 6900, a dead low bit about
+ * 49000, so both fail by a wide margin.
+ *
+ * A bias of order n / 2^31 (what random() % n has) is below anything a
+ * sample of this size can see.  What a test can pin is that RandomValue
+ * draws from its own per-thread generator: a caller's seeded random()
+ * sequence must come out the same with RandomValue calls in between.  The
+ * last check pins that; a draw through random() fails it on the first
+ * step. */
+static int32_t rvSelectionCheck(const char *where, void *m, rvInsertFn insert,
+                                rvDrawFn draw, rvPositionFn position) {
+    int32_t err = 0;
+    enum { rows = 768, drawsPerRow = 64, draws = rows * drawsPerRow };
+
+    char payload[64];
+    memset(payload, 'p', sizeof(payload));
+    for (uint64_t i = 0; i < rows; i++) {
+        const databox key = databoxNewUnsigned(i);
+        const databox val = databoxNewBytes(payload, sizeof(payload));
+        const databox *elements[2] = {&key, &val};
+        insert(m, elements);
+    }
+
+    uint32_t hits[rows] = {0};
+    for (uint64_t d = 0; d < draws; d++) {
+        databox k = {{0}};
+        databox v = {{0}};
+        databox *boxes[2] = {&k, &v};
+        multimapEntry me;
+        if (!draw(m, false, boxes, &me)) {
+            ERR("%s: a draw failed on a non-empty container", where);
+            return err;
+        }
+
+        if (k.type != DATABOX_UNSIGNED_64 || k.data.u >= rows) {
+            ERR("%s: a draw returned key %" PRIu64 " (type %d), outside "
+                "[0, %d)",
+                where, (uint64_t)k.data.u, (int)k.type, rows);
+            return err;
+        }
+
+        hits[k.data.u]++;
+    }
+
+    uint32_t unreached = 0;
+    double chiSquare = 0;
+    for (uint32_t i = 0; i < rows; i++) {
+        if (hits[i] == 0) {
+            unreached++;
+        }
+
+        const double delta = (double)hits[i] - drawsPerRow;
+        chiSquare += delta * delta / drawsPerRow;
+    }
+
+    if (unreached) {
+        ERR("%s: %" PRIu32 " of %d rows were never drawn in %d draws", where,
+            unreached, rows, draws);
+    }
+
+    const double chiSquareCeiling = 2.0 * (rows - 1);
+    if (chiSquare > chiSquareCeiling) {
+        ERR("%s: chi-square %.1f over %d rows exceeds %.1f; the draw is not "
+            "uniform",
+            where, chiSquare, rows, chiSquareCeiling);
+    }
+
+    /* fromTail: the same row on every call, the container's last. */
+    databox lastKey = {{0}};
+    databox lastVal = {{0}};
+    databox *lastBoxes[2] = {&lastKey, &lastVal};
+    if (!position(m, rows - 1, lastBoxes) || lastKey.data.u != rows - 1) {
+        ERR("%s: could not read the last row by position", where);
+    }
+
+    for (uint32_t d = 0; d < drawsPerRow; d++) {
+        databox k = {{0}};
+        databox v = {{0}};
+        databox *boxes[2] = {&k, &v};
+        multimapEntry me;
+        if (!draw(m, true, boxes, &me) || k.data.u != lastKey.data.u) {
+            ERR("%s: fromTail returned key %" PRIu64 ", not the last row "
+                "%" PRIu64,
+                where, (uint64_t)k.data.u, (uint64_t)lastKey.data.u);
+            break;
+        }
+    }
+
+    /* A seeded random() sequence is the same with draws interleaved. */
+    enum { streamLen = 16 };
+    const uint32_t seed = 0x5eed;
+    uint64_t expected[streamLen];
+    srandom(seed);
+    for (uint32_t i = 0; i < streamLen; i++) {
+        expected[i] = (uint64_t)random();
+    }
+
+    srandom(seed);
+    for (uint32_t i = 0; i < streamLen; i++) {
+        databox k = {{0}};
+        databox v = {{0}};
+        databox *boxes[2] = {&k, &v};
+        multimapEntry me;
+        draw(m, false, boxes, &me);
+        const uint64_t got = (uint64_t)random();
+        if (got != expected[i]) {
+            ERR("%s: RandomValue advanced the random() stream (step %" PRIu32
+                ": %" PRIu64 " != %" PRIu64 ")",
+                where, i, got, expected[i]);
+            break;
+        }
+    }
+
+    return err;
+}
+
 int multimapTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -4905,6 +5082,27 @@ int multimapTest(int argc, char *argv[]) {
         }
 
 #undef SOAK_NEXT
+    }
+
+    TEST("random row selection per tier: uniform, fromTail, random() kept") {
+        cleaner(multimapSmallFree) multimapSmall *small =
+            multimapSmallNew(2, false);
+        err += rvSelectionCheck("small", small, rvSmallInsert, rvSmallDraw,
+                                rvSmallPosition);
+
+        cleanerName(multimapMediumFree, Sweep) multimapMedium *medium =
+            multimapMediumNew(2);
+        err += rvSelectionCheck("medium", medium, rvMediumInsert, rvMediumDraw,
+                                rvMediumPosition);
+
+        cleanerName(multimapFullFree, Sweep) multimapFull *full =
+            multimapFullNew(2);
+        err += rvSelectionCheck("full", full, rvFullInsert, rvFullDraw,
+                                rvFullPosition);
+        if (multimapFullNodeCount(full) < 2) {
+            ERR("full: the container did not split (%zu sub-map)",
+                multimapFullNodeCount(full));
+        }
     }
 
     TEST_FINAL_RESULT;
