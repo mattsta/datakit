@@ -476,6 +476,7 @@ add_library(${PROJECT_NAME} OBJECT
 
     OSRegulate.c
     inflightGate.c
+    ownedState.c
     setproctitle.c
     versionOSRuntime.c
 
@@ -669,6 +670,12 @@ if(BuildTestBinary)
             message(STATUS "Removed intsetBig test (no __int128 support)")
         endif()
     endif()
+
+    # dkTestOwnedSeqGate asserts wall-clock latency ratios under a busy
+    # writer, so its verdict depends on host load and core count.  It
+    # stays runnable by name (datakit-test test ownedSeqGate) but is not
+    # registered with ctest.
+    list(REMOVE_ITEM datakitTests "dkTestOwnedSeqGate")
 
     # Report discovered tests
     list(LENGTH datakitTests NUM_TESTS)

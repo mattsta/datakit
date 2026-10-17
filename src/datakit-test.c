@@ -83,6 +83,7 @@
 #include "multimapSmall.h"
 #include "multiroar.h"
 #include "offsetArray.h"
+#include "ownedState.h"
 #include "perfRegression.h"
 #include "persist.h"
 #include "persist/flexP.h"
@@ -636,6 +637,1662 @@ static int dkTestInflightGateTest(int argc, char *argv[]) {
         printf("dkTestInflightGate: PASS\n");
     }
 #undef GEXPECT
+    return failures;
+}
+
+/* ====================================================================
+ * ownedState
+ *
+ * The clock is injected, so grace periods are driven rather than
+ * waited out.
+ *
+ *   1. grace and idle observation are both required to release a row;
+ *   2. the idle stamp releases rows on a gate that is busy at every
+ *      Drain;
+ *   3. the release and describe callbacks run;
+ *   4. the hold report fires once per row and keeps the row;
+ *   5. writer predicate: the declared writer is silent, a foreign
+ *      writer is counted and reported and its write still lands, and a
+ *      NULL predicate disables the check;
+ *   6. a displaced value is retired, not freed by its displacer;
+ *   7. destruct releases every remaining row, held ones included;
+ *   8. ownedSlot transitions, exactly-once release, NULL note, counters
+ *      per declaration, and a zero-filled slot with no declaration;
+ *   9. ownedSeq: VALID, OVERWRITTEN and TORN verdicts, the two cursors,
+ *      the inline word reader, oversize refusal and CAPACITY, the
+ *      decline predicate, writer predicate, counters per declaration,
+ *      zero versions, a delayed writer that must not replace a newer
+ *      publication, nested publication on N == 1, MPSC, and overlapping
+ *      writers with a concurrent reader.
+ * ==================================================================== */
+typedef struct dkOwnedCargo {
+    uint64_t id;
+    bool released;
+} dkOwnedCargo;
+
+static uint64_t g_dkOwnedNowUs;
+static uint32_t g_dkOwnedReleases;
+static uint32_t g_dkOwnedHoldCalls;
+static uint64_t g_dkOwnedHoldId;
+static uint64_t g_dkOwnedHoldAge;
+static uint32_t g_dkOwnedHoldDepth;
+static char g_dkOwnedHoldLabel[32];
+static bool g_dkOwnedWriterOk;
+static uint32_t g_dkOwnedViolationNotes;
+static ownedArena g_dkOwnedArena;
+
+static uint64_t dkOwnedNowUs_(void) {
+    return g_dkOwnedNowUs;
+}
+
+static void dkOwnedRelease_(void *cargo) {
+    ((dkOwnedCargo *)cargo)->released = true;
+    g_dkOwnedReleases++;
+}
+
+static void dkOwnedDescribe_(const void *cargo, const char **outLabel,
+                             uint64_t *outId) {
+    *outLabel = "widget";
+    *outId = cargo ? ((const dkOwnedCargo *)cargo)->id : 0;
+}
+
+static void dkOwnedNoteHold_(void *ctx, const char *arenaName,
+                             const char *label, uint64_t id, uint64_t ageUs,
+                             uint32_t depth) {
+    (void)ctx;
+    (void)arenaName;
+    snprintf(g_dkOwnedHoldLabel, sizeof(g_dkOwnedHoldLabel), "%s",
+             label ? label : "");
+    g_dkOwnedHoldId = id;
+    g_dkOwnedHoldAge = ageUs;
+    g_dkOwnedHoldDepth = depth;
+    g_dkOwnedHoldCalls++;
+}
+
+static bool dkOwnedWriterOk_(const void *owner) {
+    (void)owner;
+    return g_dkOwnedWriterOk;
+}
+
+static void dkOwnedNoteViolation_(const ownedCellDecl *decl,
+                                  const void *owner) {
+    (void)decl;
+    (void)owner;
+    g_dkOwnedViolationNotes++;
+}
+
+#define DK_OWNED_GRACE_US ((uint64_t)1000)
+#define DK_OWNED_HOLD_MULTIPLE ((uint64_t)5)
+
+static const ownedArenaDecl dkOwnedArenaDecl_ = {
+    .name = "datakit.selftest.arena",
+    .graceUs = DK_OWNED_GRACE_US,
+    .holdMultiple = DK_OWNED_HOLD_MULTIPLE,
+    .nowUs = dkOwnedNowUs_,
+    .noteHold = dkOwnedNoteHold_,
+    .noteCtx = NULL,
+};
+
+static const ownedCellDecl dkOwnedCellDecl_ = {
+    .name = "datakit.selftest.cell",
+    .form = OWNED_CELL_INDIRECT,
+    .discipline = OWNED_WRITER_SERIALIZED,
+    .writer_ok = dkOwnedWriterOk_,
+    .note_violation = dkOwnedNoteViolation_,
+    .release = dkOwnedRelease_,
+    .describe = dkOwnedDescribe_,
+    .oom = OWNED_OOM_LEAK,
+};
+
+/* No predicate: a NULL writer_ok disables the check. */
+static const ownedCellDecl dkOwnedDeclineDecl_ = {
+    .name = "datakit.selftest.cell.declines",
+    .form = OWNED_CELL_INDIRECT,
+    .discipline = OWNED_WRITER_SERIALIZED,
+    .writer_ok = NULL,
+    .note_violation = dkOwnedNoteViolation_,
+    .release = dkOwnedRelease_,
+    .describe = dkOwnedDescribe_,
+    .oom = OWNED_OOM_FREE,
+};
+
+static const ownedCellDecl dkOwnedInlineDecl_ = {
+    .name = "datakit.selftest.cell.inline",
+    .form = OWNED_CELL_INLINE,
+    .discipline = OWNED_WRITER_CLASS,
+    .writer_ok = dkOwnedWriterOk_,
+    .note_violation = dkOwnedNoteViolation_,
+};
+
+/* ownedSlot fixtures. */
+static uint32_t g_dkSlotReleases;
+static void *g_dkSlotReleasedCargo;
+static uint32_t g_dkSlotNotes;
+static const char *g_dkSlotNoteName;
+static int g_dkSlotNoteDisplaced;
+static uint64_t g_dkSlotNoteReading;
+
+static void dkSlotRelease_(void *cargo) {
+    g_dkSlotReleases++;
+    g_dkSlotReleasedCargo = cargo;
+}
+
+static void dkSlotNote_(void *ctx, const ownedSlotDecl *decl,
+                        ownedSlotEvent event, ownedSlotState displaced,
+                        uint64_t reading) {
+    (void)ctx;
+    (void)event;
+    g_dkSlotNotes++;
+    g_dkSlotNoteName = decl ? decl->name : NULL;
+    g_dkSlotNoteDisplaced = (int)displaced;
+    g_dkSlotNoteReading = reading;
+}
+
+static ownedStateRow g_dkSlotRowA;
+static ownedStateRow g_dkSlotRowB;
+static const ownedSlotDecl dkSlotDeclA_ = {
+    .name = "datakit.selftest.slot.a",
+    .note = dkSlotNote_,
+    .noteCtx = NULL,
+    .row = &g_dkSlotRowA,
+};
+static const ownedSlotDecl dkSlotDeclB_ = {
+    .name = "datakit.selftest.slot.b",
+    .note = dkSlotNote_,
+    .noteCtx = NULL,
+    .row = &g_dkSlotRowB,
+};
+/* NULL note: counts only. */
+static ownedStateRow g_dkSlotRowQuiet;
+static const ownedSlotDecl dkSlotDeclQuiet_ = {
+    .name = "datakit.selftest.slot.quiet",
+    .note = NULL,
+    .noteCtx = NULL,
+    .row = &g_dkSlotRowQuiet,
+};
+
+/* ownedSeq fixtures. */
+static ownedStateRow dkSeqRowA_;
+static ownedStateRow dkSeqRowB_;
+static _Atomic uint64_t g_dkSeqViolationNotes = 0;
+static bool g_dkSeqWriterOk = true;
+
+static bool dkSeqWriterOk_(const void *owner) {
+    (void)owner;
+    return g_dkSeqWriterOk;
+}
+static void dkSeqNoteViolation_(const ownedSeqDecl *decl, const void *owner) {
+    (void)decl;
+    (void)owner;
+    atomic_fetch_add_explicit(&g_dkSeqViolationNotes, 1, memory_order_relaxed);
+}
+
+#define DK_SEQ_BYTES 64u
+/* N = 4, CLAIM, NULL predicate. */
+static const ownedSeqDecl dkSeqDeclA_ = {
+    .name = "dk.seq.a",
+    .versions = 4,
+    .version_bytes = DK_SEQ_BYTES,
+    .discipline = OWNED_WRITER_CLAIM,
+    .writer_ok = NULL,
+    .note_violation = NULL,
+    .row = &dkSeqRowA_,
+};
+/* N = 1: the classic seqlock, used by the nested and overlap cases. */
+static const ownedSeqDecl dkSeqDeclOne_ = {
+    .name = "dk.seq.one",
+    .versions = 1,
+    .version_bytes = DK_SEQ_BYTES,
+    .discipline = OWNED_WRITER_CLAIM,
+    .writer_ok = NULL,
+    .note_violation = NULL,
+    .row = &dkSeqRowB_,
+};
+/* A checked writer sharing row A, so both declarations count on it. */
+static const ownedSeqDecl dkSeqDeclChecked_ = {
+    .name = "dk.seq.a",
+    .versions = 4,
+    .version_bytes = DK_SEQ_BYTES,
+    .discipline = OWNED_WRITER_CLASS,
+    .writer_ok = dkSeqWriterOk_,
+    .note_violation = dkSeqNoteViolation_,
+    .row = &dkSeqRowA_,
+};
+/* A wide ring for the MPSC case: N much larger than the total number of
+ * publications, so no version is ever shared. */
+static const ownedSeqDecl dkSeqDeclWide_ = {
+    .name = "dk.seq.wide",
+    .versions = 1024,
+    .version_bytes = DK_SEQ_BYTES,
+    .discipline = OWNED_WRITER_CLAIM,
+    .writer_ok = NULL,
+    .note_violation = NULL,
+    .row = NULL,
+};
+
+/* A payload whose every byte names its writer, so a mixed copy is
+ * detectable byte by byte. */
+static void dkSeqPayload_(uint8_t *buf, uint8_t tag) {
+    for (size_t i = 0; i < DK_SEQ_BYTES; i++) {
+        buf[i] = (uint8_t)(tag ^ (uint8_t)i);
+    }
+}
+static bool dkSeqPayloadWhole_(const uint8_t *buf, size_t len) {
+    if (len != DK_SEQ_BYTES) {
+        return false;
+    }
+    const uint8_t tag = buf[0];
+    for (size_t i = 0; i < DK_SEQ_BYTES; i++) {
+        if (buf[i] != (uint8_t)(tag ^ (uint8_t)i)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Read the publication being written from inside its own fill,
+ * single-threaded. */
+typedef struct dkSeqInsideFill {
+    ownedSeq *seq;
+    uint64_t number;               /* this publication's number */
+    ownedSeqReadResult readInside; /* readAt(number) from inside */
+    uint64_t assignedInside;
+    uint64_t cursorInside;
+} dkSeqInsideFill;
+static void dkSeqInsideFillFn_(ownedSeqVersionRef *v, void *ctx) {
+    dkSeqInsideFill *f = ctx;
+    uint8_t payload[DK_SEQ_BYTES];
+    dkSeqPayload_(payload, 0x33);
+    ownedSeqPutBytes(v, 0, payload, sizeof(payload));
+    uint8_t out[DK_SEQ_BYTES];
+    size_t outLen = 0;
+    f->readInside =
+        ownedSeqReadAt(f->seq, f->number, out, sizeof(out), &outLen);
+    f->assignedInside = ownedSeqAssigned(f->seq);
+    f->cursorInside = ownedSeqCursor(f->seq);
+}
+
+/* Publish B from inside A's fill on N == 1. */
+typedef struct dkSeqNestedFill {
+    ownedSeq *seq;
+    uint64_t innerNumber;
+} dkSeqNestedFill;
+static void dkSeqNestedFillFn_(ownedSeqVersionRef *v, void *ctx) {
+    dkSeqNestedFill *f = ctx;
+    uint8_t a[DK_SEQ_BYTES];
+    dkSeqPayload_(a, 0xA0);
+    ownedSeqPutBytes(v, 0, a, sizeof(a));
+    uint8_t b[DK_SEQ_BYTES];
+    dkSeqPayload_(b, 0xB0);
+    f->innerNumber = ownedSeqAssigned(f->seq) + 1;
+    (void)ownedSeqPublish(f->seq, b, sizeof(b));
+}
+
+/* Writer thread: `count` publications, tagged per writer. */
+typedef struct dkSeqWriterCtx {
+    ownedSeq *seq;
+    uint8_t tag;
+    uint32_t count;
+} dkSeqWriterCtx;
+static void *dkSeqWriterMain_(void *arg) {
+    dkSeqWriterCtx *w = arg;
+    uint8_t payload[DK_SEQ_BYTES];
+    dkSeqPayload_(payload, w->tag);
+    for (uint32_t i = 0; i < w->count; i++) {
+        (void)ownedSeqPublish(w->seq, payload, sizeof(payload));
+    }
+    return NULL;
+}
+/* Reader thread: every VALID read must be one writer's bytes. */
+typedef struct dkSeqReaderCtx {
+    ownedSeq *seq;
+    _Atomic bool *stop;
+    uint64_t validReads;
+    uint64_t mixedReads;
+} dkSeqReaderCtx;
+static void *dkSeqReaderMain_(void *arg) {
+    dkSeqReaderCtx *r = arg;
+    uint8_t out[DK_SEQ_BYTES];
+    while (!atomic_load_explicit(r->stop, memory_order_acquire)) {
+        const uint64_t want = ownedSeqAssigned(r->seq);
+        if (want == 0) {
+            continue;
+        }
+        size_t outLen = 0;
+        if (ownedSeqReadAt(r->seq, want, out, sizeof(out), &outLen) ==
+            OWNED_SEQ_VALID) {
+            r->validReads++;
+            if (!dkSeqPayloadWhole_(out, outLen)) {
+                r->mixedReads++;
+            }
+        }
+    }
+    return NULL;
+}
+
+/* READERS_ONLY release rule.  The default-rule block above uses a
+ * declaration that does not set `.release`, so it also checks that the
+ * zero value selects the default rule. */
+#define DK_OWNED_RO_HORIZON_US ((uint64_t)1000)
+static uint32_t g_dkRoHoldCalls = 0;
+static void dkOwnedRoNoteHold_(void *ctx, const char *arenaName,
+                               const char *label, uint64_t id, uint64_t ageUs,
+                               uint32_t depth) {
+    (void)ctx;
+    (void)arenaName;
+    (void)label;
+    (void)id;
+    (void)ageUs;
+    (void)depth;
+    g_dkRoHoldCalls++;
+}
+static const ownedArenaDecl dkOwnedRoArenaDecl_ = {
+    .name = "datakit.selftest.arena.readers_only",
+    .graceUs = 0,
+    .holdMultiple = 0,
+    .nowUs = dkOwnedNowUs_,
+    .noteHold = dkOwnedRoNoteHold_,
+    .noteCtx = NULL,
+    .release = OWNED_RELEASE_READERS_ONLY,
+    .reportHorizonUs = DK_OWNED_RO_HORIZON_US,
+};
+
+static int dkTestOwnedReadersOnly(void) {
+    int err = 0;
+#define ROEXPECT(cond, msg)                                                    \
+    do {                                                                       \
+        if (!(cond)) {                                                         \
+            printf("dkTestOwnedState FAIL: readers-only: %s (%s:%d)\n", (msg), \
+                   __FILE__, __LINE__);                                        \
+            err++;                                                             \
+        }                                                                      \
+    } while (0)
+    ownedArena a;
+    ownedArenaInit(&a, &dkOwnedRoArenaDecl_);
+    ROEXPECT(a.initialized, "a READERS_ONLY arena comes up");
+
+    /* (a) No clock: an idle gate releases on the first pass with the
+     * clock never advanced.  The default rule keeps such a row because
+     * its grace has not elapsed (step 1a of the default block). */
+    dkOwnedCargo ra = {.id = 101, .released = false};
+    ownedArenaRetire(&a, &ra, dkOwnedRelease_, dkOwnedDescribe_,
+                     OWNED_OOM_FREE);
+    ownedArenaDrain(&a);
+    ROEXPECT(ra.released, "(a) idle gate, no clock advance: released");
+
+    /* (b) A reader in its scope holds the row however much time passes;
+     * its exit releases it on the next pass. */
+    dkOwnedCargo rb = {.id = 102, .released = false};
+    ownedArenaEnter(&a);
+    ownedArenaRetire(&a, &rb, dkOwnedRelease_, dkOwnedDescribe_,
+                     OWNED_OOM_FREE);
+    g_dkOwnedNowUs += 1000 * DK_OWNED_GRACE_US;
+    ownedArenaDrain(&a);
+    ROEXPECT(!rb.released, "(b) a resident reader holds the row past any time");
+    ROEXPECT(g_dkRoHoldCalls == 1,
+             "(b) the hold is reported once, past the horizon");
+    ownedArenaDrain(&a);
+    ROEXPECT(!rb.released && g_dkRoHoldCalls == 1,
+             "(b) the report is a level edge and still releases nothing");
+    ownedArenaExit(&a);
+    ownedArenaDrain(&a);
+    ROEXPECT(rb.released, "(b) the reader's exit releases it");
+
+    /* (c) Epoch: a scope that entered and exited to zero after the
+     * retire publishes the epoch; a reader that entered later cannot
+     * hold the row (it could not have found it). */
+    dkOwnedCargo rc = {.id = 103, .released = false};
+    ownedArenaRetire(&a, &rc, dkOwnedRelease_, dkOwnedDescribe_,
+                     OWNED_OOM_FREE);
+    ownedArenaEnter(&a);
+    ownedArenaExit(&a);  /* reads epoch >= rc's, takes the gate to zero */
+    ownedArenaEnter(&a); /* resident at the sample */
+    ownedArenaDrain(&a);
+    ROEXPECT(rc.released, "(c) a post-retire zero releases a busy-gate row");
+    ownedArenaExit(&a);
+
+    /* (d) An exit whose epoch read precedes the retire releases nothing:
+     * the gate went to zero before row d existed, and a reader resident
+     * across the retire is still inside. */
+    ownedArenaEnter(&a);
+    ownedArenaEnter(&a);
+    ownedArenaExit(&a); /* not to zero */
+    dkOwnedCargo rd = {.id = 104, .released = false};
+    ownedArenaRetire(&a, &rd, dkOwnedRelease_, dkOwnedDescribe_,
+                     OWNED_OOM_FREE);
+    ownedArenaDrain(&a);
+    ROEXPECT(!rd.released,
+             "(d) an idle epoch older than the row releases nothing");
+    ownedArenaExit(&a);
+    ownedArenaDrain(&a);
+    ROEXPECT(rd.released, "(d) and the departure releases it");
+
+    ownedArenaDestruct(&a);
+#undef ROEXPECT
+    return err;
+}
+
+static int dkTestOwnedStateTest(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+
+    int failures = 0;
+#define OEXPECT(cond, msg)                                                     \
+    do {                                                                       \
+        if (!(cond)) {                                                         \
+            printf("dkTestOwnedState FAIL: %s (%s:%d)\n", (msg), __FILE__,     \
+                   __LINE__);                                                  \
+            failures++;                                                        \
+        }                                                                      \
+    } while (0)
+
+    g_dkOwnedNowUs = 1000000;
+    g_dkOwnedReleases = 0;
+    g_dkOwnedHoldCalls = 0;
+    g_dkOwnedViolationNotes = 0;
+    g_dkOwnedWriterOk = true;
+
+    const uint64_t baseDeferred = ownedArenaDeferredTotal();
+    const uint64_t baseRetired = ownedArenaRetiredTotal();
+    const uint64_t baseGraceHeld = ownedArenaGraceHeldTotal();
+    const uint64_t baseNeverLeft = ownedArenaHeldReadersNeverLeftTotal();
+    const uint64_t baseLive = ownedArenaLiveRows();
+    const uint64_t baseViolations = ownedCellWriterViolationTotal();
+
+    ownedArenaInit(&g_dkOwnedArena, &dkOwnedArenaDecl_);
+    OEXPECT(g_dkOwnedArena.initialized, "a declared arena comes up");
+    OEXPECT(ownedArenaDepth(&g_dkOwnedArena) == 0, "a fresh arena is idle");
+
+    /* --- 1a: the grace has not elapsed. --- */
+    dkOwnedCargo rowA = {.id = 11, .released = false};
+    ownedArenaRetire(&g_dkOwnedArena, &rowA, dkOwnedRelease_, dkOwnedDescribe_,
+                     OWNED_OOM_FREE);
+    OEXPECT(ownedArenaDeferredTotal() == baseDeferred + 1,
+            "the retire parked one row");
+    OEXPECT(ownedArenaLiveRows() == baseLive + 1,
+            "live_rows counts the parked row");
+    g_dkOwnedNowUs += DK_OWNED_GRACE_US / 2;
+    ownedArenaDrain(&g_dkOwnedArena);
+    OEXPECT(!rowA.released, "a row inside its grace is kept");
+    OEXPECT(ownedArenaGraceHeldTotal() == baseGraceHeld,
+            "a row inside its grace is not a grace hold");
+
+    /* --- 1b: grace elapsed, but a reader is inside its scope. --- */
+    ownedArenaEnter(&g_dkOwnedArena);
+    OEXPECT(ownedArenaDepth(&g_dkOwnedArena) == 1, "the reader scope is open");
+    g_dkOwnedNowUs += DK_OWNED_GRACE_US;
+    ownedArenaDrain(&g_dkOwnedArena);
+    OEXPECT(!rowA.released, "a present reader holds the row past the grace");
+    OEXPECT(ownedArenaGraceHeldTotal() == baseGraceHeld + 1,
+            "a row past grace with readers present is counted");
+
+    /* --- 1c: both.  The reader departs; the next pass releases. --- */
+    ownedArenaExit(&g_dkOwnedArena);
+    ownedArenaDrain(&g_dkOwnedArena);
+    OEXPECT(rowA.released, "grace elapsed and readers departed releases");
+    OEXPECT(ownedArenaRetiredTotal() == baseRetired + 1,
+            "the release is counted");
+    OEXPECT(ownedArenaLiveRows() == baseLive, "live_rows fell back");
+
+    /* --- 2: the idle stamp.  The gate holds a reader at every Drain, so
+     * the direct sample never reads idle; the row still releases because
+     * the gate was observed empty after the row was parked. --- */
+    dkOwnedCargo rowB = {.id = 22, .released = false};
+    ownedArenaRetire(&g_dkOwnedArena, &rowB, dkOwnedRelease_, dkOwnedDescribe_,
+                     OWNED_OOM_FREE);
+    g_dkOwnedNowUs += 10;
+    ownedArenaEnter(&g_dkOwnedArena);
+    ownedArenaExit(&g_dkOwnedArena);  /* publishes the stamp */
+    ownedArenaEnter(&g_dkOwnedArena); /* and now a resident reader */
+    g_dkOwnedNowUs += 2 * DK_OWNED_GRACE_US;
+    ownedArenaDrain(&g_dkOwnedArena);
+    OEXPECT(rowB.released,
+            "a post-park idle stamp releases while the gate reads busy");
+    ownedArenaExit(&g_dkOwnedArena);
+
+    /* --- 3 and 4: the hold report, both cargo callbacks, once per row. */
+    dkOwnedCargo rowC = {.id = 33, .released = false};
+    ownedArenaEnter(&g_dkOwnedArena);
+    g_dkOwnedNowUs += 1; /* park strictly after the standing stamp */
+    ownedArenaRetire(&g_dkOwnedArena, &rowC, dkOwnedRelease_, dkOwnedDescribe_,
+                     OWNED_OOM_FREE);
+    g_dkOwnedNowUs += DK_OWNED_HOLD_MULTIPLE * DK_OWNED_GRACE_US + 1;
+    ownedArenaDrain(&g_dkOwnedArena);
+    OEXPECT(!rowC.released, "a reported row is kept, not released");
+    OEXPECT(ownedArenaHeldReadersNeverLeftTotal() == baseNeverLeft + 1,
+            "the hold counter moved by exactly one");
+    OEXPECT(g_dkOwnedHoldCalls == 1, "the hold is reported once");
+    OEXPECT(strcmp(g_dkOwnedHoldLabel, "widget") == 0,
+            "the describe fn supplied the line's label");
+    OEXPECT(g_dkOwnedHoldId == 33,
+            "the describe fn supplied the line's identity");
+    OEXPECT(g_dkOwnedHoldAge > DK_OWNED_HOLD_MULTIPLE * DK_OWNED_GRACE_US,
+            "the line carries the row's age");
+    OEXPECT(g_dkOwnedHoldDepth == 1, "the line carries the live gate depth");
+    ownedArenaDrain(&g_dkOwnedArena);
+    OEXPECT(ownedArenaHeldReadersNeverLeftTotal() == baseNeverLeft + 1,
+            "the hold counter moves once per row, not once per pass");
+    OEXPECT(g_dkOwnedHoldCalls == 1, "and the report is not repeated");
+    ownedArenaExit(&g_dkOwnedArena); /* the long-lived reader leaves */
+
+    /* --- 5 and 6: the cell. --- */
+    ownedCell cell;
+    ownedCellInit(&cell, &dkOwnedCellDecl_, NULL, &g_dkOwnedArena);
+    OEXPECT(ownedCellRead(&cell) == NULL, "an unpublished cell reads absent");
+
+    dkOwnedCargo v1 = {.id = 41, .released = false};
+    dkOwnedCargo v2 = {.id = 42, .released = false};
+    dkOwnedCargo v3 = {.id = 43, .released = false};
+    ownedCellPublish(&cell, &v1);
+    OEXPECT(ownedCellRead(&cell) == &v1,
+            "the publication is what a reader sees");
+    OEXPECT(ownedCellWriterViolationTotal() == baseViolations,
+            "a publication by the declared writer is silent");
+
+    const uint64_t deferredBeforeSupersede = ownedArenaDeferredTotal();
+    ownedCellPublish(&cell, &v2);
+    OEXPECT(ownedCellRead(&cell) == &v2, "the successor displaces it");
+    OEXPECT(!v1.released,
+            "a displaced value is retired, not freed by its displacer");
+    OEXPECT(ownedArenaDeferredTotal() == deferredBeforeSupersede + 1,
+            "and it retired through the cell's arena");
+
+    g_dkOwnedWriterOk = false;
+    ownedCellPublish(&cell, &v3);
+    OEXPECT(ownedCellWriterViolationTotal() == baseViolations + 1,
+            "an undeclared writer is counted");
+    OEXPECT(g_dkOwnedViolationNotes == 1, "and named");
+    OEXPECT(ownedCellRead(&cell) == &v3,
+            "and the publication is never stopped halfway");
+    g_dkOwnedWriterOk = true;
+
+    ownedCell declining;
+    ownedCellInit(&declining, &dkOwnedDeclineDecl_, NULL, &g_dkOwnedArena);
+    dkOwnedCargo v4 = {.id = 44, .released = false};
+    g_dkOwnedWriterOk = false; /* would fail, if anything asked */
+    ownedCellPublish(&declining, &v4);
+    OEXPECT(ownedCellWriterViolationTotal() == baseViolations + 1,
+            "a NULL predicate disables the check");
+    OEXPECT(g_dkOwnedViolationNotes == 1, "and says nothing");
+    OEXPECT(ownedCellRead(&declining) == &v4, "and publishes normally");
+    g_dkOwnedWriterOk = true;
+
+    ownedCell word;
+    ownedCellInit(&word, &dkOwnedInlineDecl_, NULL, NULL);
+    OEXPECT(ownedCellLoad(&word) == 0, "an inline cell starts absent");
+    ownedCellStore(&word, UINT64_C(0x5eed));
+    OEXPECT(ownedCellLoad(&word) == UINT64_C(0x5eed),
+            "the inline publication reads back");
+    OEXPECT(ownedCellRead(&word) == NULL,
+            "an inline cell has no indirect value to hand out");
+
+    ownedCellDestruct(&cell);
+    OEXPECT(v3.released, "the cell's destructor releases the current value");
+    ownedCellDestruct(&declining);
+    OEXPECT(v4.released, "on every declaration, predicate or none");
+    ownedCellDestruct(&word);
+    OEXPECT(ownedCellLoad(&word) == 0, "and an inline cell is left absent");
+
+    /* --- 7: destruct releases every remaining row, held ones included. */
+    ownedArenaDestruct(&g_dkOwnedArena);
+    OEXPECT(rowC.released, "destruct releases the reported (held) row");
+    OEXPECT(v1.released, "destruct releases every surviving row");
+    OEXPECT(ownedArenaLiveRows() == baseLive,
+            "and live_rows returns to its baseline");
+    ownedArenaDestruct(&g_dkOwnedArena); /* idempotent */
+    OEXPECT(!g_dkOwnedArena.initialized, "a destructed arena stays down");
+
+    /* ownedSlot.  Each case uses a fresh slot where it needs one, since
+     * RETIRED is terminal.  ARMED is reached only through the protocol
+     * (a claim followed by publish(still_armed=true)), never by storing
+     * it directly.  The "row N" labels name the transitions. */
+    {
+        ownedSlot sa = OWNED_SLOT_INIT(&dkSlotDeclA_);
+        ownedSlotState prior = OWNED_SLOT_RETIRED;
+        uint64_t fields = 0;
+        uint64_t cargo = 0xC0FFEE;
+        g_dkSlotReleases = 0;
+        g_dkSlotNotes = 0;
+        const size_t rowsBefore = ownedStateRowCount();
+
+        /* rows 1-4: the ordinary tick */
+        OEXPECT(ownedSlotClaim(&sa, &prior) && prior == OWNED_SLOT_EMPTY,
+                "row 1: an EMPTY slot is claimable and reports EMPTY");
+        OEXPECT(ownedStateRowCount() == rowsBefore + 1 &&
+                    g_dkSlotRowA.kind == OWNED_ROW_SLOT &&
+                    g_dkSlotRowA.name == dkSlotDeclA_.name,
+                "the row is enrolled on the first operation, as a slot row");
+        fields = 1;
+        OEXPECT(ownedSlotPublish(&sa, true, dkSlotRelease_, &cargo) &&
+                    ownedSlotLoad(&sa) == OWNED_SLOT_ARMED &&
+                    g_dkSlotReleases == 0,
+                "row 3: publish(still_armed) leaves ARMED and runs no release");
+        OEXPECT(ownedSlotClaim(&sa, &prior) && prior == OWNED_SLOT_ARMED,
+                "row 2: the next claim is told ARMED (the fields are cargo)");
+        fields = 0;
+        OEXPECT(ownedSlotPublish(&sa, false, dkSlotRelease_, &cargo) &&
+                    ownedSlotLoad(&sa) == OWNED_SLOT_EMPTY &&
+                    g_dkSlotReleases == 0,
+                "row 4: publish(!still_armed) leaves EMPTY, the resting "
+                "state, and runs no release");
+
+        /* row 5: a second claimant meets CLAIMED */
+        OEXPECT(ownedSlotClaim(&sa, &prior) && prior == OWNED_SLOT_EMPTY,
+                "the holder claims");
+        OEXPECT(!ownedSlotClaim(&sa, &prior) &&
+                    ownedSlotLoad(&sa) == OWNED_SLOT_CLAIMED &&
+                    ownedSlotClaimRefusedTotal(&dkSlotDeclA_) == 1 &&
+                    g_dkSlotNotes == 1 &&
+                    g_dkSlotNoteDisplaced == OWNED_SLOT_CLAIMED,
+                "row 5: a claim against CLAIMED is refused, counted on "
+                "claim_refused_total, named with the displaced state, and "
+                "the word is unchanged");
+        OEXPECT(ownedSlotPublish(&sa, false, dkSlotRelease_, &cargo),
+                "the holder publishes back EMPTY");
+
+        /* row 6: a retire meets the resting state */
+        OEXPECT(ownedSlotRetire(&sa, dkSlotRelease_, &cargo) ==
+                        OWNED_SLOT_EMPTY &&
+                    g_dkSlotReleases == 0 &&
+                    ownedSlotRetireMetClaimedTotal(&dkSlotDeclA_) == 0,
+                "row 6: a retire that displaces EMPTY runs no release and "
+                "moves no counter");
+
+        /* row 7: a retire meets ARMED; the retirer runs the release */
+        ownedSlot sb = OWNED_SLOT_INIT(&dkSlotDeclA_);
+        OEXPECT(ownedSlotClaim(&sb, &prior) && prior == OWNED_SLOT_EMPTY,
+                "a pass claims a fresh slot");
+        fields = 7;
+        OEXPECT(ownedSlotPublish(&sb, true, dkSlotRelease_, &cargo) &&
+                    ownedSlotLoad(&sb) == OWNED_SLOT_ARMED,
+                "and publishes ARMED");
+        OEXPECT(ownedSlotRetire(&sb, dkSlotRelease_, &cargo) ==
+                        OWNED_SLOT_ARMED &&
+                    g_dkSlotReleases == 1 && g_dkSlotReleasedCargo == &cargo,
+                "row 7: a retire that displaces ARMED runs the release "
+                "exactly once, in the retire, with the given cargo");
+        fields = 0;
+        /* row 10: RETIRED is terminal */
+        OEXPECT(ownedSlotRetire(&sb, dkSlotRelease_, &cargo) ==
+                        OWNED_SLOT_RETIRED &&
+                    g_dkSlotReleases == 1 &&
+                    ownedSlotRetireMetClaimedTotal(&dkSlotDeclA_) == 0,
+                "row 10: a second retire is told RETIRED and releases "
+                "nothing");
+        /* row 11: no claim after a retire */
+        const uint64_t refusedBefore =
+            ownedSlotClaimRefusedTotal(&dkSlotDeclA_);
+        OEXPECT(!ownedSlotClaim(&sb, &prior) &&
+                    ownedSlotClaimRefusedTotal(&dkSlotDeclA_) ==
+                        refusedBefore + 1 &&
+                    g_dkSlotNoteDisplaced == OWNED_SLOT_RETIRED,
+                "row 11: a RETIRED slot admits no claim, counted and named "
+                "RETIRED");
+
+        /* rows 8-9: a retire lands while the slot is claimed */
+        ownedSlot sc = OWNED_SLOT_INIT(&dkSlotDeclA_);
+        OEXPECT(ownedSlotClaim(&sc, &prior) && prior == OWNED_SLOT_EMPTY,
+                "the pass claims");
+        fields = 42; /* the pass owns them from here */
+        g_dkSlotNotes = 0;
+        OEXPECT(ownedSlotRetire(&sc, dkSlotRelease_, &cargo) ==
+                        OWNED_SLOT_CLAIMED &&
+                    g_dkSlotReleases == 1 && fields == 42 &&
+                    ownedSlotRetireMetClaimedTotal(&dkSlotDeclA_) == 1 &&
+                    g_dkSlotNotes == 1 &&
+                    g_dkSlotNoteDisplaced == OWNED_SLOT_CLAIMED &&
+                    g_dkSlotNoteReading == 1 &&
+                    g_dkSlotNoteName == dkSlotDeclA_.name,
+                "row 8: a retire that displaces CLAIMED touches nothing, "
+                "runs no release, counts retire_met_claimed_total and notes "
+                "once with the instance's name");
+        OEXPECT(!ownedSlotPublish(&sc, true, dkSlotRelease_, &cargo) &&
+                    g_dkSlotReleases == 2 &&
+                    ownedSlotLoad(&sc) == OWNED_SLOT_RETIRED &&
+                    ownedSlotReleaseByClaimantTotal(&dkSlotDeclA_) == 1 &&
+                    g_dkSlotNotes == 2 &&
+                    g_dkSlotNoteDisplaced == OWNED_SLOT_RETIRED,
+                "row 9: the holder's publish-back fails against RETIRED, "
+                "runs the release exactly once in the publish, stores "
+                "RETIRED back, counts release_by_claimant_total and notes "
+                "once");
+        fields = 0;
+
+        /* Exactly one release per lifecycle: sb (released by the retire)
+         * and sc (released by the claimant) once each, and sa (nothing
+         * present at its retire) zero times. */
+        OEXPECT(g_dkSlotReleases == 2,
+                "slot: cargo has exactly one release per lifecycle");
+
+        /* A NULL note counts and says nothing. */
+        ownedSlot sq = OWNED_SLOT_INIT(&dkSlotDeclQuiet_);
+        g_dkSlotNotes = 0;
+        OEXPECT(ownedSlotClaim(&sq, &prior) &&
+                    ownedSlotRetire(&sq, dkSlotRelease_, &cargo) ==
+                        OWNED_SLOT_CLAIMED &&
+                    ownedSlotRetireMetClaimedTotal(&dkSlotDeclQuiet_) == 1 &&
+                    g_dkSlotNotes == 0,
+                "slot: a NULL note moves the counter and reports nothing");
+        OEXPECT(!ownedSlotPublish(&sq, false, dkSlotRelease_, &cargo) &&
+                    ownedSlotReleaseByClaimantTotal(&dkSlotDeclQuiet_) == 1 &&
+                    g_dkSlotNotes == 0,
+                "and its claimant's release likewise");
+
+        /* Counters are per declaration: a second name driven through row
+         * 8 reads 1 on its own row while A still reads 1. */
+        ownedSlot sd = OWNED_SLOT_INIT(&dkSlotDeclB_);
+        OEXPECT(ownedSlotClaim(&sd, &prior) &&
+                    ownedSlotRetire(&sd, dkSlotRelease_, &cargo) ==
+                        OWNED_SLOT_CLAIMED &&
+                    ownedSlotRetireMetClaimedTotal(&dkSlotDeclB_) == 1 &&
+                    ownedSlotRetireMetClaimedTotal(&dkSlotDeclA_) == 1 &&
+                    ownedStateRowAt(0) != NULL,
+                "slot: each declaration reads its own count");
+        (void)ownedSlotPublish(&sd, false, dkSlotRelease_, &cargo);
+
+        /* A zero-filled slot with no declaration runs the same protocol
+         * with the same return values; no counter moves, no row is
+         * enrolled, no note fires. */
+        ownedSlot su;
+        memset(&su, 0, sizeof(su)); /* zero fill is EMPTY */
+        const size_t rowsNow = ownedStateRowCount();
+        g_dkSlotNotes = 0;
+        g_dkSlotReleases = 0;
+        OEXPECT(ownedSlotLoad(&su) == OWNED_SLOT_EMPTY &&
+                    ownedSlotClaim(&su, &prior) && prior == OWNED_SLOT_EMPTY &&
+                    ownedSlotPublish(&su, true, dkSlotRelease_, &cargo) &&
+                    ownedSlotLoad(&su) == OWNED_SLOT_ARMED &&
+                    ownedSlotClaim(&su, &prior) && prior == OWNED_SLOT_ARMED &&
+                    !ownedSlotClaim(&su, &prior) &&
+                    ownedSlotRetire(&su, dkSlotRelease_, &cargo) ==
+                        OWNED_SLOT_CLAIMED &&
+                    g_dkSlotReleases == 0 &&
+                    !ownedSlotPublish(&su, true, dkSlotRelease_, &cargo) &&
+                    g_dkSlotReleases == 1 &&
+                    ownedSlotLoad(&su) == OWNED_SLOT_RETIRED &&
+                    !ownedSlotClaim(&su, &prior) &&
+                    ownedSlotRetire(&su, dkSlotRelease_, &cargo) ==
+                        OWNED_SLOT_RETIRED,
+                "slot: a slot without a declaration runs every transition "
+                "with the declared slot's return values");
+        OEXPECT(ownedStateRowCount() == rowsNow && g_dkSlotNotes == 0,
+                "and enrols no row and fires no note");
+
+        /* Publish without a claim is a misuse: it returns false and
+         * leaves the state and the cargo alone. */
+        ownedSlot sm = OWNED_SLOT_INIT(NULL);
+        g_dkSlotReleases = 0;
+        OEXPECT(!ownedSlotPublish(&sm, true, dkSlotRelease_, &cargo) &&
+                    ownedSlotLoad(&sm) == OWNED_SLOT_EMPTY &&
+                    g_dkSlotReleases == 0,
+                "slot: publish on an EMPTY slot changes nothing");
+        OEXPECT(ownedSlotClaim(&sm, &prior) &&
+                    ownedSlotPublish(&sm, true, dkSlotRelease_, &cargo) &&
+                    !ownedSlotPublish(&sm, false, dkSlotRelease_, &cargo) &&
+                    ownedSlotLoad(&sm) == OWNED_SLOT_ARMED &&
+                    g_dkSlotReleases == 0,
+                "slot: publish on an ARMED slot changes nothing");
+        OEXPECT(ownedSlotRetire(&sm, dkSlotRelease_, &cargo) ==
+                        OWNED_SLOT_ARMED &&
+                    g_dkSlotReleases == 1,
+                "slot: and the cargo is still released once, by the retire");
+        (void)fields;
+    }
+
+    /* ownedSeq */
+    {
+        uint8_t out[DK_SEQ_BYTES];
+        size_t outLen = 0;
+        uint8_t payload[DK_SEQ_BYTES];
+
+        /* A runtime-sized instance through ownedSeqInit; storage from the
+         * owner, zeroed by Init. */
+        ownedSeq sa;
+        cleanerName(zfree, Bytes) uint8_t *storageA =
+            (uint8_t *)zmalloc(ownedSeqStorageBytes(&dkSeqDeclA_));
+        OEXPECT(storageA != NULL && ownedSeqStorageBytes(&dkSeqDeclA_) ==
+                                        4u * (16u + DK_SEQ_BYTES),
+                "seq: the stride is 16 + roundup8(version_bytes)");
+        ownedSeqInit(&sa, &dkSeqDeclA_, NULL, storageA);
+        const uint64_t pubBase = ownedSeqPublishedTotal();
+        const uint64_t tornBase = ownedSeqTornReadsTotal();
+        const uint64_t overBase = ownedSeqOverwrittenReadsTotal();
+        const uint64_t abandonBase = ownedSeqPublishAbandonedTotal();
+        const uint64_t oversizeBase = ownedSeqPublishRefusedOversizeTotal();
+
+        /* A published version reads VALID, byte for byte. */
+        dkSeqPayload_(payload, 0x11);
+        OEXPECT(ownedSeqPublish(&sa, payload, sizeof(payload)) &&
+                    ownedSeqCursor(&sa) == 1 && ownedSeqAssigned(&sa) == 1,
+                "seq: the first publication is number 1 on both cursors");
+        OEXPECT(ownedSeqReadAt(&sa, 1, out, sizeof(out), &outLen) ==
+                        OWNED_SEQ_VALID &&
+                    outLen == DK_SEQ_BYTES &&
+                    memcmp(out, payload, DK_SEQ_BYTES) == 0 &&
+                    ownedSeqPublishedTotal() == pubBase + 1 &&
+                    ownedSeqColumnTotal(&dkSeqDeclA_, OWNED_SEQ_C_PUBLISHED) ==
+                        1,
+                "seq: VALID, whole, and counted on the row");
+
+        /* OVERWRITTEN is reachable and is not TORN: N = 4, publish four
+         * more (five total), so version 0 now holds 5. */
+        for (uint8_t i = 0; i < 4; i++) {
+            dkSeqPayload_(payload, (uint8_t)(0x20 + i));
+            OEXPECT(ownedSeqPublish(&sa, payload, sizeof(payload)),
+                    "seq: publications land");
+        }
+        OEXPECT(ownedSeqReadAt(&sa, 1, out, sizeof(out), &outLen) ==
+                        OWNED_SEQ_OVERWRITTEN &&
+                    ownedSeqOverwrittenReadsTotal() == overBase + 1 &&
+                    ownedSeqTornReadsTotal() == tornBase,
+                "seq: a recycled version reads OVERWRITTEN, not TORN");
+        OEXPECT(ownedSeqReadAt(&sa, 5, out, sizeof(out), &outLen) ==
+                        OWNED_SEQ_VALID &&
+                    out[0] == 0x23,
+                "seq: the version's current publication reads VALID");
+
+        /* TORN mid-publication, and the two cursors differ, both read
+         * from inside the fill on one thread. */
+        dkSeqInsideFill inside = {.seq = &sa,
+                                  .number = ownedSeqAssigned(&sa) + 1};
+        OEXPECT(
+            ownedSeqPublishWith(&sa, DK_SEQ_BYTES, dkSeqInsideFillFn_, &inside),
+            "seq: the fill-callback publication lands");
+        OEXPECT(inside.readInside == OWNED_SEQ_TORN,
+                "seq: a read of the number being written is TORN");
+        OEXPECT(inside.assignedInside == inside.number &&
+                    inside.cursorInside == inside.number - 1,
+                "seq: inside the fill assigned == s and cursor == s - 1");
+        OEXPECT(ownedSeqReadAt(&sa, inside.number, out, sizeof(out), &outLen) ==
+                        OWNED_SEQ_VALID &&
+                    out[0] == 0x33,
+                "seq: and it reads VALID once published");
+
+        /* The inline single-word reader agrees with ReadAt on every
+         * verdict for a one-word declaration, and reads OVERWRITTEN for
+         * a declaration that is not one word. */
+        {
+            static ownedStateRow wordRow;
+            static const ownedSeqDecl wordDecl = {
+                .name = "dk.seq.word",
+                .versions = 4,
+                .version_bytes = sizeof(uint64_t),
+                .discipline = OWNED_WRITER_CLAIM,
+                .writer_ok = NULL,
+                .note_violation = NULL,
+                .row = &wordRow,
+            };
+            static _Atomic uint64_t
+                wordStorage[OWNED_SEQ_STORAGE_WORDS(4u, sizeof(uint64_t))];
+            ownedSeq sw = OWNED_SEQ_INIT(&wordDecl, wordStorage);
+            uint64_t w = 0;
+            const uint64_t one = UINT64_C(0x1111111111111111);
+            const uint64_t two = UINT64_C(0x2222222222222222);
+            OEXPECT(ownedSeqReadWordAt(&sw, 1, &w) == OWNED_SEQ_TORN,
+                    "seq word: never-written reads TORN through the word "
+                    "reader");
+            OEXPECT(ownedSeqPublish(&sw, &one, sizeof(one)) &&
+                        ownedSeqReadWordAt(&sw, 1, &w) == OWNED_SEQ_VALID &&
+                        w == one,
+                    "seq word: a published word reads VALID and whole");
+            for (int i = 0; i < 4; i++) {
+                (void)ownedSeqPublish(&sw, &two, sizeof(two));
+            }
+            OEXPECT(
+                ownedSeqReadWordAt(&sw, 1, &w) == OWNED_SEQ_OVERWRITTEN &&
+                    ownedSeqReadWordAt(&sw, 5, &w) == OWNED_SEQ_VALID &&
+                    w == two &&
+                    ownedSeqColumnTotal(&wordDecl,
+                                        OWNED_SEQ_C_OVERWRITTEN_READS) == 1 &&
+                    ownedSeqColumnTotal(&wordDecl, OWNED_SEQ_C_TORN_READS) == 1,
+                "seq word: recycled reads OVERWRITTEN, counted on the row "
+                "as ReadAt counts");
+            uint64_t wide = 0;
+            OEXPECT(ownedSeqReadWordAt(&sa, ownedSeqAssigned(&sa), &wide) ==
+                        OWNED_SEQ_OVERWRITTEN,
+                    "seq word: a declaration wider than one word reads "
+                    "OVERWRITTEN");
+        }
+
+        /* TORN, never written: a retry may succeed. */
+        OEXPECT(ownedSeqReadAt(&sa, ownedSeqAssigned(&sa) + 1, out, sizeof(out),
+                               &outLen) == OWNED_SEQ_TORN,
+                "seq: a number the ring has not reached is TORN");
+
+        /* A NULL source with a non-zero length is refused before a number
+         * is assigned. */
+        {
+            const uint64_t assignedBefore = ownedSeqAssigned(&sa);
+            const uint64_t pubBefore = ownedSeqPublishedTotal();
+            OEXPECT(!ownedSeqPublish(&sa, NULL, DK_SEQ_BYTES) &&
+                        ownedSeqAssigned(&sa) == assignedBefore &&
+                        ownedSeqPublishedTotal() == pubBefore,
+                    "seq: publish(NULL, len > 0) is refused, no number "
+                    "assigned");
+        }
+
+        /* Oversize publish is refused before a number exists. */
+        {
+            const uint64_t assignedBefore = ownedSeqAssigned(&sa);
+            uint8_t big[DK_SEQ_BYTES + 1];
+            memset(big, 0x5A, sizeof(big));
+            OEXPECT(!ownedSeqPublish(&sa, big, sizeof(big)) &&
+                        ownedSeqAssigned(&sa) == assignedBefore &&
+                        ownedSeqPublishRefusedOversizeTotal() ==
+                            oversizeBase + 1 &&
+                        ownedSeqColumnTotal(&dkSeqDeclA_,
+                                            OWNED_SEQ_C_REFUSED_OVERSIZE) == 1,
+                    "seq: oversize is refused, no number assigned, counted");
+        }
+        /* CAPACITY copies nothing and reports the length. */
+        {
+            uint8_t small[8];
+            memset(small, 0xEE, sizeof(small));
+            const uint64_t want = ownedSeqAssigned(&sa);
+            OEXPECT(ownedSeqReadAt(&sa, want, small, sizeof(small), &outLen) ==
+                            OWNED_SEQ_CAPACITY &&
+                        outLen == DK_SEQ_BYTES && small[0] == 0xEE,
+                    "seq: an undersized dst reads CAPACITY with the "
+                    "required length and nothing copied");
+            OEXPECT(ownedSeqReadAt(&sa, want, out, sizeof(out), &outLen) ==
+                            OWNED_SEQ_VALID &&
+                        outLen == DK_SEQ_BYTES,
+                    "seq: a correctly sized retry reads VALID");
+        }
+
+        /* The decline predicate allows N - 1 further publications. */
+        {
+            const uint64_t before = ownedSeqAssigned(&sa);
+            dkSeqPayload_(payload, 0x44);
+            (void)ownedSeqPublish(&sa, payload, sizeof(payload));
+            (void)ownedSeqPublish(&sa, payload, sizeof(payload));
+            OEXPECT(ownedSeqReadCanSucceed(&sa, before),
+                    "seq: after 2 further publications a reader may retry");
+            (void)ownedSeqPublish(&sa, payload, sizeof(payload));
+            OEXPECT(!ownedSeqReadCanSucceed(&sa, before),
+                    "seq: after 3 (N - 1) it declines");
+        }
+
+        /* Writer predicate, and counters per declaration: the checked
+         * decl shares row A, so publications through either count on
+         * one row. */
+        ownedSeq sc;
+        cleanerName(zfree, Bytes) uint8_t *storageC =
+            (uint8_t *)zmalloc(ownedSeqStorageBytes(&dkSeqDeclChecked_));
+        ownedSeqInit(&sc, &dkSeqDeclChecked_, NULL, storageC);
+        const uint64_t violBase = ownedCellWriterViolationTotal();
+        const uint64_t rowAPublishedBefore =
+            ownedSeqColumnTotal(&dkSeqDeclA_, OWNED_SEQ_C_PUBLISHED);
+        /* The declared writer is silent. */
+        g_dkSeqWriterOk = true;
+        atomic_store_explicit(&g_dkSeqViolationNotes, 0, memory_order_relaxed);
+        dkSeqPayload_(payload, 0x66);
+        OEXPECT(ownedSeqPublish(&sc, payload, sizeof(payload)) &&
+                    ownedCellWriterViolationTotal() == violBase &&
+                    atomic_load_explicit(&g_dkSeqViolationNotes,
+                                         memory_order_relaxed) == 0,
+                "seq: the declared writer is silent");
+        /* A foreign writer is counted and reported, and still lands. */
+        g_dkSeqWriterOk = false;
+        dkSeqPayload_(payload, 0x77);
+        OEXPECT(ownedSeqPublish(&sc, payload, sizeof(payload)) &&
+                    ownedCellWriterViolationTotal() == violBase + 1 &&
+                    atomic_load_explicit(&g_dkSeqViolationNotes,
+                                         memory_order_relaxed) == 1 &&
+                    ownedSeqReadAt(&sc, 2, out, sizeof(out), &outLen) ==
+                        OWNED_SEQ_VALID &&
+                    out[0] == 0x77,
+                "seq: a foreign writer is counted, reported, and its "
+                "publication still lands");
+        g_dkSeqWriterOk = true;
+        /* A NULL predicate (sa's decl) disables the check. */
+        dkSeqPayload_(payload, 0x88);
+        OEXPECT(ownedSeqPublish(&sa, payload, sizeof(payload)) &&
+                    ownedCellWriterViolationTotal() == violBase + 1,
+                "seq: a NULL predicate disables the check");
+        OEXPECT(ownedSeqColumnTotal(&dkSeqDeclA_, OWNED_SEQ_C_PUBLISHED) ==
+                        rowAPublishedBefore + 3 &&
+                    ownedSeqColumnTotal(&dkSeqDeclChecked_,
+                                        OWNED_SEQ_C_PUBLISHED) ==
+                        rowAPublishedBefore + 3,
+                "seq: two declarations sharing one row aggregate on it");
+
+        /* A zero-version seq ignores publishes and counts nothing. */
+        {
+            ownedSeq sz;
+            memset(&sz, 0, sizeof(sz));
+            const size_t rowsNow = ownedStateRowCount();
+            const uint64_t pubNow = ownedSeqPublishedTotal();
+            const uint64_t overNow = ownedSeqOverwrittenReadsTotal();
+            OEXPECT(!ownedSeqPublish(&sz, payload, sizeof(payload)) &&
+                        ownedSeqReadAt(&sz, 1, out, sizeof(out), &outLen) ==
+                            OWNED_SEQ_OVERWRITTEN &&
+                        ownedSeqCursor(&sz) == 0 &&
+                        ownedSeqAssigned(&sz) == 0 &&
+                        ownedSeqVersions(&sz) == 0 &&
+                        !ownedSeqReadCanSucceed(&sz, 0) &&
+                        ownedSeqPublishedTotal() == pubNow &&
+                        ownedSeqOverwrittenReadsTotal() == overNow &&
+                        ownedStateRowCount() == rowsNow,
+                    "seq: a zero-version seq refuses publishes, its decline "
+                    "predicate is false, no counter moves, no row enrols");
+        }
+
+        /* A delayed writer never replaces a newer publication.  A writer
+         * that took number n and was delayed until n + N had completed in
+         * the same version must abandon.  The delay is reproduced on one
+         * thread by rewinding `assigned` once n + N has landed, so the
+         * next publish takes number n again. */
+        {
+            static ownedStateRow lateRow;
+            static const ownedSeqDecl lateDecl = {
+                .name = "dk.seq.late",
+                .versions = 4,
+                .version_bytes = DK_SEQ_BYTES,
+                .discipline = OWNED_WRITER_CLAIM,
+                .writer_ok = NULL,
+                .note_violation = NULL,
+                .row = &lateRow,
+            };
+            ownedSeq sl;
+            cleanerName(zfree, Bytes) uint8_t *storageL =
+                (uint8_t *)zmalloc(ownedSeqStorageBytes(&lateDecl));
+            ownedSeqInit(&sl, &lateDecl, NULL, storageL);
+            for (uint8_t i = 1; i <= 5; i++) {
+                dkSeqPayload_(payload, (uint8_t)(0x50 + i));
+                (void)ownedSeqPublish(&sl, payload, sizeof(payload));
+            }
+            /* Version 0 now holds number 5; replay number 1 into it. */
+            atomic_store_explicit(&sl.assigned, 0, memory_order_relaxed);
+            dkSeqPayload_(payload, 0xEE);
+            OEXPECT(
+                ownedSeqPublish(&sl, payload, sizeof(payload)) &&
+                    ownedSeqColumnTotal(&lateDecl,
+                                        OWNED_SEQ_C_PUBLISH_ABANDONED) == 1 &&
+                    ownedSeqColumnTotal(&lateDecl, OWNED_SEQ_C_PUBLISHED) == 5,
+                "seq: a writer older than the version's publication "
+                "abandons");
+            atomic_store_explicit(&sl.assigned, 5, memory_order_relaxed);
+            uint8_t newest[DK_SEQ_BYTES];
+            dkSeqPayload_(newest, 0x55);
+            OEXPECT(ownedSeqReadAt(&sl, 5, out, sizeof(out), &outLen) ==
+                            OWNED_SEQ_VALID &&
+                        memcmp(out, newest, DK_SEQ_BYTES) == 0 &&
+                        ownedSeqCursor(&sl) == 5,
+                    "seq: the newer publication survives and reads VALID");
+            OEXPECT(ownedSeqReadAt(&sl, 1, out, sizeof(out), &outLen) ==
+                        OWNED_SEQ_OVERWRITTEN,
+                    "seq: the delayed writer's number reads OVERWRITTEN");
+            ownedSeqDestruct(&sl);
+        }
+
+        /* Nested publication on N == 1: a publish from inside another's
+         * fill finds the version held and abandons without writing. */
+        {
+            ownedSeq so;
+            cleanerName(zfree, Bytes) uint8_t *storageO =
+                (uint8_t *)zmalloc(ownedSeqStorageBytes(&dkSeqDeclOne_));
+            ownedSeqInit(&so, &dkSeqDeclOne_, NULL, storageO);
+            const uint64_t abandonNow = ownedSeqPublishAbandonedTotal();
+            dkSeqNestedFill nested = {.seq = &so, .innerNumber = 0};
+            const uint64_t outerNumber = ownedSeqAssigned(&so) + 1;
+            (void)ownedSeqPublishWith(&so, DK_SEQ_BYTES, dkSeqNestedFillFn_,
+                                      &nested);
+            OEXPECT(ownedSeqPublishAbandonedTotal() == abandonNow + 1 &&
+                        ownedSeqColumnTotal(&dkSeqDeclOne_,
+                                            OWNED_SEQ_C_PUBLISH_ABANDONED) == 1,
+                    "seq: the writer that finds the version held abandons, "
+                    "counted once");
+            {
+                uint8_t a[DK_SEQ_BYTES];
+                dkSeqPayload_(a, 0xA0);
+                OEXPECT(ownedSeqReadAt(&so, outerNumber, out, sizeof(out),
+                                       &outLen) == OWNED_SEQ_VALID &&
+                            memcmp(out, a, DK_SEQ_BYTES) == 0,
+                        "seq: the holder's publication reads VALID and "
+                        "whole; the abandoning writer stored nothing");
+            }
+            OEXPECT(ownedSeqReadAt(&so, nested.innerNumber, out, sizeof(out),
+                                   &outLen) == OWNED_SEQ_TORN,
+                    "seq: the abandoned number reads TORN while the version "
+                    "holds an older publication");
+            dkSeqPayload_(payload, 0xC0);
+            OEXPECT(ownedSeqPublish(&so, payload, sizeof(payload)) &&
+                        ownedSeqReadAt(&so, ownedSeqAssigned(&so), out,
+                                       sizeof(out),
+                                       &outLen) == OWNED_SEQ_VALID &&
+                        memcmp(out, payload, DK_SEQ_BYTES) == 0 &&
+                        ownedSeqCursor(&so) == ownedSeqAssigned(&so),
+                    "seq: the version returned to service; the next "
+                    "publication reads VALID");
+            OEXPECT(ownedSeqReadAt(&so, nested.innerNumber, out, sizeof(out),
+                                   &outLen) == OWNED_SEQ_OVERWRITTEN,
+                    "seq: once lapped, the abandoned number reads "
+                    "OVERWRITTEN");
+            ownedSeqDestruct(&so);
+        }
+
+        /* MPSC: kWriters writers, kPerWriter publications each, on a ring
+         * wide enough that no version is shared. */
+        {
+            enum { kWriters = 4, kPerWriter = 32 };
+            ownedSeq sw;
+            cleanerName(zfree, Bytes) uint8_t *storageW =
+                (uint8_t *)zmalloc(ownedSeqStorageBytes(&dkSeqDeclWide_));
+            ownedSeqInit(&sw, &dkSeqDeclWide_, NULL, storageW);
+            const uint64_t pubNow = ownedSeqPublishedTotal();
+            const uint64_t abandonNow = ownedSeqPublishAbandonedTotal();
+            pthread_t th[kWriters];
+            dkSeqWriterCtx ctx[kWriters];
+            for (int i = 0; i < kWriters; i++) {
+                ctx[i] = (dkSeqWriterCtx){.seq = &sw,
+                                          .tag = (uint8_t)(0x10 * (i + 1)),
+                                          .count = kPerWriter};
+                OEXPECT(pthread_create(&th[i], NULL, dkSeqWriterMain_,
+                                       &ctx[i]) == 0,
+                        "seq mpsc: writer started");
+            }
+            for (int i = 0; i < kWriters; i++) {
+                pthread_join(th[i], NULL);
+            }
+            OEXPECT(ownedSeqAssigned(&sw) == kWriters * kPerWriter &&
+                        ownedSeqCursor(&sw) == kWriters * kPerWriter &&
+                        ownedSeqPublishedTotal() ==
+                            pubNow + kWriters * kPerWriter &&
+                        ownedSeqPublishAbandonedTotal() == abandonNow,
+                    "seq mpsc: every number distinct, all published, none "
+                    "abandoned");
+            bool allWhole = true;
+            for (uint64_t n = 1; n <= kWriters * kPerWriter; n++) {
+                if (ownedSeqReadAt(&sw, n, out, sizeof(out), &outLen) !=
+                        OWNED_SEQ_VALID ||
+                    !dkSeqPayloadWhole_(out, outLen)) {
+                    allWhole = false;
+                }
+            }
+            OEXPECT(allWhole, "seq mpsc: every version validates and holds one "
+                              "writer's payload whole");
+            ownedSeqDestruct(&sw);
+        }
+
+        /* Overlapping writers, N == 1 and N == 4, with a concurrent
+         * reader, followed by a liveness check. */
+        {
+            const ownedSeqDecl *decls[2] = {&dkSeqDeclOne_, &dkSeqDeclA_};
+            for (int d = 0; d < 2; d++) {
+                enum { kWriters = 8, kPerWriter = 2000 };
+                ownedSeq sv;
+                cleanerName(zfree, Bytes) uint8_t *storageV =
+                    (uint8_t *)zmalloc(ownedSeqStorageBytes(decls[d]));
+                ownedSeqInit(&sv, decls[d], NULL, storageV);
+                _Atomic bool stop = false;
+                dkSeqReaderCtx reader = {.seq = &sv, .stop = &stop};
+                pthread_t rt;
+                OEXPECT(pthread_create(&rt, NULL, dkSeqReaderMain_, &reader) ==
+                            0,
+                        "seq overlap: reader started");
+                pthread_t th[kWriters];
+                dkSeqWriterCtx ctx[kWriters];
+                for (int i = 0; i < kWriters; i++) {
+                    ctx[i] = (dkSeqWriterCtx){.seq = &sv,
+                                              .tag = (uint8_t)(0x10 * (i + 1)),
+                                              .count = kPerWriter};
+                    OEXPECT(pthread_create(&th[i], NULL, dkSeqWriterMain_,
+                                           &ctx[i]) == 0,
+                            "seq overlap: writer started");
+                }
+                for (int i = 0; i < kWriters; i++) {
+                    pthread_join(th[i], NULL);
+                }
+                atomic_store_explicit(&stop, true, memory_order_release);
+                pthread_join(rt, NULL);
+                OEXPECT(reader.mixedReads == 0,
+                        "seq overlap: no VALID read carried a mixed payload");
+                /* Liveness: after the writers are joined, one publication
+                 * into every version must read VALID. */
+                bool healed = true;
+                for (uint32_t v = 0; v < decls[d]->versions; v++) {
+                    dkSeqPayload_(payload, 0xD0);
+                    (void)ownedSeqPublish(&sv, payload, sizeof(payload));
+                    if (ownedSeqReadAt(&sv, ownedSeqAssigned(&sv), out,
+                                       sizeof(out),
+                                       &outLen) != OWNED_SEQ_VALID ||
+                        memcmp(out, payload, DK_SEQ_BYTES) != 0) {
+                        healed = false;
+                    }
+                }
+                OEXPECT(healed,
+                        "seq overlap: after the writers are joined, every "
+                        "version returns to service");
+                ownedSeqDestruct(&sv);
+            }
+            /* Eight writers on N == 1 overlap, so some publications must
+             * have been abandoned. */
+            OEXPECT(ownedSeqPublishAbandonedTotal() > abandonBase + 1,
+                    "seq overlap: publish_abandoned_total moved");
+        }
+
+        ownedSeqDestruct(&sc);
+        ownedSeqDestruct(&sa);
+    }
+
+    /* READERS_ONLY runs after the default block so that block's
+     * process-wide baselines are untouched by it. */
+    failures += dkTestOwnedReadersOnly();
+
+    if (failures == 0) {
+        printf("dkTestOwnedState: PASS\n");
+    }
+#undef OEXPECT
+    return failures;
+}
+
+/* ====================================================================
+ * ownedSeq read-cost benchmark.
+ *
+ * Measures the p99 time of a whole-window walk (DK_GATE_N - 1 slots,
+ * newest first) for three readers, at R = 1 and at R = DK_GATE_STORM_R
+ * concurrent readers, while one paced writer appends:
+ *
+ *   reference  a classic single-version seqlock ring: a sequence word
+ *              and a value per slot, written under a lock; the reader
+ *              loads seq, value, seq with acquire;
+ *   converted  ownedSeq with one-word versions, read through
+ *              ownedSeqReadWordAt (seq_cst loads);
+ *   probe      the same ownedSeq storage read with acquire loads.  It is
+ *              not a correct ownedSeq reader; it separates the cost of
+ *              the seq_cst loads from the cost of the layout and index
+ *              arithmetic.
+ *
+ * Bounds asserted:
+ *   B1  the converted reader's storm / R = 1 ratio is at most twice
+ *       the reference's, so ownedSeq adds no concurrency term;
+ *   B2  the probe's p99 is within 1.25x of the reference's at both R,
+ *       so the layout and arithmetic add no cost;
+ *   B3  the converted storm walk's p99 is below 1 ms.
+ * The seq_cst cost (converted / probe) is printed, not bounded.  Under
+ * ThreadSanitizer B1 and B3 are printed but not asserted.
+ *
+ * The result depends on the machine and its load, so it is run by name
+ * rather than as part of the default test run.
+ * ==================================================================== */
+#define DK_GATE_N 4096u
+#define DK_GATE_WALKS 200u
+#define DK_GATE_STORM_R 8u
+#define DK_GATE_WRITER_PACE_NS 20000u /* about 50k appends/s */
+
+typedef struct dkGateRefSlot {
+    _Atomic uint64_t seq;
+    _Atomic uint64_t keyHash;
+} dkGateRefSlot;
+static dkGateRefSlot g_dkGateRef[DK_GATE_N];
+static _Atomic uint64_t g_dkGateRefSeq;
+static pthread_mutex_t g_dkGateWriterLock = PTHREAD_MUTEX_INITIALIZER;
+
+static void dkGateRefAppend_(uint64_t h) {
+    pthread_mutex_lock(&g_dkGateWriterLock);
+    const uint64_t s =
+        atomic_load_explicit(&g_dkGateRefSeq, memory_order_relaxed) + 1;
+    dkGateRefSlot *slot = &g_dkGateRef[s & (DK_GATE_N - 1u)];
+    atomic_store_explicit(&slot->seq, 0, memory_order_release);
+    atomic_store_explicit(&slot->keyHash, h, memory_order_release);
+    atomic_store_explicit(&slot->seq, s, memory_order_release);
+    atomic_store_explicit(&g_dkGateRefSeq, s, memory_order_release);
+    pthread_mutex_unlock(&g_dkGateWriterLock);
+}
+
+/* Walk (since, until] newest first.  Returns 1 if `probe` is found, 0 if
+ * not, and -1 if a slot fails validation or the window has been
+ * lapped. */
+static int dkGateRefWalk_(uint64_t since, uint64_t until, uint64_t probe) {
+    const uint64_t cur =
+        atomic_load_explicit(&g_dkGateRefSeq, memory_order_acquire);
+    if (until > cur) {
+        until = cur;
+    }
+    if (until <= since) {
+        return 0;
+    }
+    if (cur - since >= DK_GATE_N) {
+        return -1;
+    }
+    for (uint64_t s = until; s > since; s--) {
+        const dkGateRefSlot *slot = &g_dkGateRef[s & (DK_GATE_N - 1u)];
+        const uint64_t s1 =
+            atomic_load_explicit(&slot->seq, memory_order_acquire);
+        const uint64_t h =
+            atomic_load_explicit(&slot->keyHash, memory_order_acquire);
+        const uint64_t s2 =
+            atomic_load_explicit(&slot->seq, memory_order_acquire);
+        if (s1 != s || s2 != s) {
+            return -1;
+        }
+        if (h == probe) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static const ownedSeqDecl g_dkGateSeqDecl_ = {
+    .name = "dk.seq.gate",
+    .versions = DK_GATE_N,
+    .version_bytes = sizeof(uint64_t),
+    .discipline = OWNED_WRITER_CLAIM,
+    .writer_ok = NULL,
+    .note_violation = NULL,
+    .row = NULL,
+};
+static _Atomic uint64_t
+    g_dkGateSeqStorage_[OWNED_SEQ_STORAGE_WORDS(DK_GATE_N, sizeof(uint64_t))];
+static ownedSeq g_dkGateSeq_ =
+    OWNED_SEQ_INIT(&g_dkGateSeqDecl_, g_dkGateSeqStorage_);
+
+static void dkGateSeqAppend_(uint64_t h) {
+    pthread_mutex_lock(&g_dkGateWriterLock);
+    (void)ownedSeqPublish(&g_dkGateSeq_, &h, sizeof(h));
+    pthread_mutex_unlock(&g_dkGateWriterLock);
+}
+
+static int dkGateSeqWalk_(uint64_t since, uint64_t until, uint64_t probe) {
+    const uint64_t cur = ownedSeqCursor(&g_dkGateSeq_);
+    if (until > cur) {
+        until = cur;
+    }
+    if (until <= since) {
+        return 0;
+    }
+    if (cur - since >= (uint64_t)ownedSeqVersions(&g_dkGateSeq_)) {
+        return -1;
+    }
+    for (uint64_t s = until; s > since; s--) {
+        uint64_t h = 0;
+        /* ownedSeq's inline single-word reader. */
+        if (ownedSeqReadWordAt(&g_dkGateSeq_, s, &h) != OWNED_SEQ_VALID) {
+            return -1;
+        }
+        if (h == probe) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Probe: the ownedSeq layout read with acquire loads, as the reference
+ * reads its ring.  Acquire loads are not enough for ownedSeq's
+ * validation argument, so this is for cost attribution only: if it
+ * costs what the reference costs, the converted reader's extra cost is
+ * the seq_cst loads (ldar rather than ldapr on AArch64); otherwise it is
+ * the layout or arithmetic. */
+static int dkGateSeqWalkAcquire_(uint64_t since, uint64_t until,
+                                 uint64_t probe) {
+    const uint64_t cur = ownedSeqCursor(&g_dkGateSeq_);
+    if (until > cur) {
+        until = cur;
+    }
+    if (until <= since) {
+        return 0;
+    }
+    if (cur - since >= (uint64_t)DK_GATE_N) {
+        return -1;
+    }
+    const size_t stride = OWNED_SEQ_STORAGE_WORDS(1u, sizeof(uint64_t));
+    for (uint64_t s = until; s > since; s--) {
+        _Atomic uint64_t *const v =
+            &g_dkGateSeqStorage_[(size_t)((s - 1) & (DK_GATE_N - 1u)) * stride];
+        const uint64_t published = 4u * s;
+        const uint64_t v1 = atomic_load_explicit(&v[0], memory_order_acquire);
+        if (v1 != published) {
+            return -1;
+        }
+        const uint64_t h = atomic_load_explicit(&v[OWNED_SEQ_HEADER_WORDS],
+                                                memory_order_acquire);
+        const uint64_t v2 = atomic_load_explicit(&v[0], memory_order_acquire);
+        if (v2 != published) {
+            return -1;
+        }
+        if (h == probe) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+typedef enum dkGateFlavour {
+    DK_GATE_REFERENCE = 0,
+    DK_GATE_CONVERTED = 1,
+    DK_GATE_ACQUIRE_PROBE = 2,
+} dkGateFlavour;
+
+typedef struct dkGateWriterCtx {
+    _Atomic bool *stop;
+    bool converted;
+    uint64_t appends;
+} dkGateWriterCtx;
+
+static void *dkGateWriterMain_(void *arg) {
+    dkGateWriterCtx *w = arg;
+    uint64_t x = UINT64_C(0x9E3779B97F4A7C15);
+    uint64_t next = timeUtilMonotonicNs();
+    while (!atomic_load_explicit(w->stop, memory_order_acquire)) {
+        /* Appends are paced on the monotonic clock (busy-waiting), so a
+         * whole-window walk sees a steady append rate instead of a ring
+         * lapped underneath it. */
+        if (timeUtilMonotonicNs() < next) {
+            continue;
+        }
+        next += DK_GATE_WRITER_PACE_NS;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        if (w->converted) {
+            dkGateSeqAppend_(x);
+        } else {
+            dkGateRefAppend_(x);
+        }
+        w->appends++;
+    }
+    return NULL;
+}
+
+typedef struct dkGateReaderCtx {
+    dkGateFlavour flavour;
+    uint64_t walkNs[DK_GATE_WALKS];
+    uint64_t unprovable;
+} dkGateReaderCtx;
+
+static void *dkGateReaderMain_(void *arg) {
+    dkGateReaderCtx *r = arg;
+    for (uint32_t i = 0; i < DK_GATE_WALKS; i++) {
+        const uint64_t cur =
+            r->flavour != DK_GATE_REFERENCE
+                ? ownedSeqCursor(&g_dkGateSeq_)
+                : atomic_load_explicit(&g_dkGateRefSeq, memory_order_acquire);
+        /* The largest window: DK_GATE_N - 1 slots, newest first. */
+        const uint64_t since =
+            cur > (DK_GATE_N - 1u) ? cur - (DK_GATE_N - 1u) : 0;
+        const uint64_t t0 = timeUtilMonotonicNs();
+        const int v = r->flavour == DK_GATE_CONVERTED
+                          ? dkGateSeqWalk_(since, cur, 1)
+                          : (r->flavour == DK_GATE_ACQUIRE_PROBE
+                                 ? dkGateSeqWalkAcquire_(since, cur, 1)
+                                 : dkGateRefWalk_(since, cur, 1));
+        r->walkNs[i] = timeUtilMonotonicNs() - t0;
+        if (v < 0) {
+            r->unprovable++;
+        }
+    }
+    return NULL;
+}
+
+static int dkGateCmpU64_(const void *a, const void *b) {
+    const uint64_t x = *(const uint64_t *)a;
+    const uint64_t y = *(const uint64_t *)b;
+    return x < y ? -1 : (x > y ? 1 : 0);
+}
+
+defcleanerName(dkGateReaderCtx *, zfree, GateReaderCtx);
+defcleanerName(pthread_t *, zfree, Threads);
+defcleanerName(uint64_t *, zfree, U64s);
+
+/* One configuration: R readers walking against a paced writer; returns
+ * the p99 whole-window walk in ns across every reader's walks. */
+static uint64_t dkGateRun_(dkGateFlavour flavour, uint32_t readers,
+                           uint64_t *outUnprovable, uint64_t *outAppends) {
+    _Atomic bool stop = false;
+    dkGateWriterCtx w = {.stop = &stop,
+                         .converted = flavour != DK_GATE_REFERENCE};
+    pthread_t wt;
+    if (pthread_create(&wt, NULL, dkGateWriterMain_, &w) != 0) {
+        return UINT64_MAX;
+    }
+    cleanerName(zfree, GateReaderCtx) dkGateReaderCtx *ctx =
+        zcalloc(readers, sizeof(*ctx));
+    cleanerName(zfree, Threads) pthread_t *th = zcalloc(readers, sizeof(*th));
+    for (uint32_t i = 0; i < readers; i++) {
+        ctx[i].flavour = flavour;
+        if (pthread_create(&th[i], NULL, dkGateReaderMain_, &ctx[i]) != 0) {
+            readers = i;
+            break;
+        }
+    }
+    for (uint32_t i = 0; i < readers; i++) {
+        pthread_join(th[i], NULL);
+    }
+    atomic_store_explicit(&stop, true, memory_order_release);
+    pthread_join(wt, NULL);
+    const size_t total = (size_t)readers * DK_GATE_WALKS;
+    cleanerName(zfree, U64s) uint64_t *all =
+        zcalloc(total ? total : 1, sizeof(*all));
+    size_t k = 0;
+    uint64_t unprovable = 0;
+    for (uint32_t i = 0; i < readers; i++) {
+        for (uint32_t j = 0; j < DK_GATE_WALKS; j++) {
+            all[k++] = ctx[i].walkNs[j];
+        }
+        unprovable += ctx[i].unprovable;
+    }
+    qsort(all, k, sizeof(*all), dkGateCmpU64_);
+    const uint64_t p99 = k ? all[(k * 99u) / 100u] : UINT64_MAX;
+    if (outUnprovable) {
+        *outUnprovable = unprovable;
+    }
+    if (outAppends) {
+        *outAppends = w.appends;
+    }
+    return p99;
+}
+
+static int dkTestOwnedSeqGateTest(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+    int failures = 0;
+
+    /* Fill both rings once so every window is full before measuring. */
+    for (uint64_t i = 1; i <= DK_GATE_N; i++) {
+        dkGateRefAppend_(i);
+        dkGateSeqAppend_(i);
+    }
+
+    uint64_t unp[3][2] = {{0, 0}, {0, 0}, {0, 0}};
+    uint64_t app[3][2] = {{0, 0}, {0, 0}, {0, 0}};
+    /* [flavour][storm] */
+    const uint64_t ref1 =
+        dkGateRun_(DK_GATE_REFERENCE, 1, &unp[0][0], &app[0][0]);
+    const uint64_t refR =
+        dkGateRun_(DK_GATE_REFERENCE, DK_GATE_STORM_R, &unp[0][1], &app[0][1]);
+    const uint64_t seq1 =
+        dkGateRun_(DK_GATE_CONVERTED, 1, &unp[1][0], &app[1][0]);
+    const uint64_t seqR =
+        dkGateRun_(DK_GATE_CONVERTED, DK_GATE_STORM_R, &unp[1][1], &app[1][1]);
+    const uint64_t acq1 =
+        dkGateRun_(DK_GATE_ACQUIRE_PROBE, 1, &unp[2][0], &app[2][0]);
+    const uint64_t acqR = dkGateRun_(DK_GATE_ACQUIRE_PROBE, DK_GATE_STORM_R,
+                                     &unp[2][1], &app[2][1]);
+    printf("ownedSeqGate: probe (ownedSeq layout, acquire loads) R=1 "
+           "p99_walk_ns=%" PRIu64 " per_slot_ns=%.1f unprovable=%" PRIu64
+           "; R=%u p99_walk_ns=%" PRIu64 " per_slot_ns=%.1f unprovable=%" PRIu64
+           "\n",
+           acq1, (double)acq1 / (DK_GATE_N - 1u), unp[2][0], DK_GATE_STORM_R,
+           acqR, (double)acqR / (DK_GATE_N - 1u), unp[2][1]);
+
+    printf("ownedSeqGate: window=%u slots walks=%u/reader storm_R=%u "
+           "writer_pace_ns=%u\n",
+           DK_GATE_N - 1u, DK_GATE_WALKS, DK_GATE_STORM_R,
+           DK_GATE_WRITER_PACE_NS);
+    printf("ownedSeqGate: reference  R=1 p99_walk_ns=%" PRIu64
+           " per_slot_ns=%.1f unprovable=%" PRIu64 " appends=%" PRIu64 "\n",
+           ref1, (double)ref1 / (DK_GATE_N - 1u), unp[0][0], app[0][0]);
+    printf("ownedSeqGate: reference  R=%u p99_walk_ns=%" PRIu64
+           " per_slot_ns=%.1f unprovable=%" PRIu64 " appends=%" PRIu64 "\n",
+           DK_GATE_STORM_R, refR, (double)refR / (DK_GATE_N - 1u), unp[0][1],
+           app[0][1]);
+    printf("ownedSeqGate: converted  R=1 p99_walk_ns=%" PRIu64
+           " per_slot_ns=%.1f unprovable=%" PRIu64 " appends=%" PRIu64 "\n",
+           seq1, (double)seq1 / (DK_GATE_N - 1u), unp[1][0], app[1][0]);
+    printf("ownedSeqGate: converted  R=%u p99_walk_ns=%" PRIu64
+           " per_slot_ns=%.1f unprovable=%" PRIu64 " appends=%" PRIu64 "\n",
+           DK_GATE_STORM_R, seqR, (double)seqR / (DK_GATE_N - 1u), unp[1][1],
+           app[1][1]);
+
+    /* B1 is relative to the reference's own scaling: with eight readers
+     * and a writer sharing cache lines the reference slows down too, so
+     * a fixed bound would measure the machine.  A concurrency term
+     * specific to ownedSeq shows as a converted storm / R = 1 ratio
+     * above twice the reference's. */
+    const double refScale = ref1 ? (double)refR / (double)ref1 : 0.0;
+    const double seqScale = seq1 ? (double)seqR / (double)seq1 : 0.0;
+    const bool b1 = seqScale <= 2.0 * refScale;
+    /* B2 bounds the probe, not the converted reader, so it covers the
+     * layout, stride, modulo and call shape but not the memory order.
+     * The converted / probe ratio is the cost of the seq_cst loads the
+     * validation argument requires; it is printed, not bounded. */
+    const bool b2one = acq1 * 4u <= ref1 * 5u;
+    const bool b2storm = acqR * 4u <= refR * 5u;
+    const bool b3 = seqR < 1000000u;
+    printf("ownedSeqGate: B1 no-concurrency-term %s (converted storm/R=1 "
+           "scaling %.2f <= 2x reference scaling %.2f)\n",
+           b1 ? "ok" : "FAIL", seqScale, refScale);
+    printf("ownedSeqGate: B2 layout-and-arithmetic R=1=%s storm=%s (acquire "
+           "probe p99 <= 1.25x reference p99); memory-order price R=1 %.2fx "
+           "storm %.2fx (converted / probe), reported\n",
+           b2one ? "ok" : "FAIL", b2storm ? "ok" : "FAIL",
+           acq1 ? (double)seq1 / (double)acq1 : 0.0,
+           acqR ? (double)seqR / (double)acqR : 0.0);
+    printf("ownedSeqGate: B3 absolute storm p99 %" PRIu64 " ns %s 1 ms\n", seqR,
+           b3 ? "<" : "FAIL >=");
+    /* Under ThreadSanitizer, seq_cst accesses go through the runtime's
+     * slower synchronizing path, which adds a concurrency cost of its
+     * own; B1 and B3 are printed but not asserted there.  B2 compares
+     * two acquire-load readers and is asserted in every build. */
+#if defined(__SANITIZE_THREAD__) ||                                            \
+    (defined(__has_feature) && __has_feature(thread_sanitizer))
+    const bool instrumented = true;
+#else
+    const bool instrumented = false;
+#endif
+    if (!b1) {
+        if (instrumented) {
+            printf("ownedSeqGate: B1 reported, not asserted: this binary is "
+                   "instrumented (ThreadSanitizer)\n");
+        } else {
+            failures++;
+        }
+    }
+    if (!b2one || !b2storm) {
+        failures++;
+    }
+    if (!b3) {
+        if (instrumented) {
+            printf("ownedSeqGate: B3 reported, not asserted: this binary is "
+                   "instrumented (ThreadSanitizer)\n");
+        } else {
+            failures++;
+        }
+    }
+    printf("ownedSeqGate: %s%s\n", failures == 0 ? "PASS" : "FAIL",
+           instrumented ? " (ThreadSanitizer: B2 asserted, B1/B3 reported)"
+                        : "");
     return failures;
 }
 
@@ -9077,6 +10734,8 @@ static const TestEntry testRegistry[] = {
 
     /* OS process/event primitives (tests live in this file) */
     T_A(dkTestInflightGate, "inflightGate,inflight"),
+    T_A(dkTestOwnedState, "ownedState,owned"),
+    T_A(dkTestOwnedSeqGate, "ownedSeqGate,seqGate"),
 
     /* Random generators */
     T_A(dkRandom, "rng"), T(portableRandom),
