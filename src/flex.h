@@ -26,6 +26,21 @@ void flexReset(flex **ff);
 flex *flexDuplicate(const flex *f);
 void flexFree(flex *f);
 
+/* Validators for untrusted input.
+ *
+ * flexValidateBuffer, flexValidateBufferDeep and flexPeekTotalBytes
+ * accept any (buf, buflen) pair: each returns true or false without
+ * asserting and without reading outside [buf, buf + buflen).
+ *
+ * The rest of flex assumes well-formed input and asserts on it.  Pass
+ * untrusted bytes to flexHead / flexNext / flexGetByType / flexCount
+ * only after flexValidateBufferDeep accepts them.  That check covers
+ * forward iteration over this flex's own entries; it does not verify
+ * reverse-traversal trailers or the contents of nested containers.
+ *
+ * flexTest runs every single-byte mutation of several valid flexes
+ * through these functions. */
+
 /* flexValidateBuffer — defensive bounds-check on a putative flex buffer.
  *
  * Returns true iff `buf` of length `buflen` parses as a well-formed
@@ -33,10 +48,10 @@ void flexFree(flex *f);
  *
  * Designed for callers that consume flex bytes from untrusted sources
  * (cross-node replication, on-disk recovery, plugin-supplied byte
- * blobs, etc.) and must NOT crash on malformed input.  Use this as a
- * gate before passing a buffer into flexCount / flexHead / flexNext /
- * flexGetByType — those iterate based on the header's claim and will
- * walk past the end if the header lies.
+ * blobs, etc.) and must NOT crash on malformed input.  It checks only
+ * the header; before iterating untrusted bytes with flexCount /
+ * flexHead / flexNext / flexGetByType, use flexValidateBufferDeep,
+ * which also bounds every entry.
  *
  * Conservative: does NOT walk every entry's bytes (that would
  * duplicate flex's internal logic); it only validates the outer
@@ -426,6 +441,11 @@ bool cflexConvertToFlex(const cflex *c, flex **fBuffer, size_t *fBufferLen);
 #ifdef DATAKIT_TEST
 void flexRepr(const flex *f);
 int32_t flexTest(int32_t argc, char *argv[]);
+
+/* Run every single-byte mutation of several valid flexes through the
+ * validators.  Returns the number of failures.  flexTest runs it; other
+ * suites may call it too. */
+int32_t flexValidateTotalitySweep(void);
 #endif
 
 __END_DECLS
