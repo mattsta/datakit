@@ -17,7 +17,10 @@ flex *multimapMediumDump(const multimapMedium *m);
 
 bool multimapMediumInsert(multimapMedium *m, const databox *elements[]);
 /* multimapMediumInsert that also reports the replaced value entries
- * ('elementsPerEntry - 1' slots, VOID when nothing was replaced). */
+ * ('elementsPerEntry - 1' slots, VOID when nothing was replaced).  Integers
+ * up to 64 bits, reals and pointers stay valid; a BYTES or container slot
+ * must not be read.  A replaced 96/128-bit integer reports only its type
+ * (SIGNED_128 or UNSIGNED_128) with a NULL payload pointer. */
 bool multimapMediumInsertReplacing(multimapMedium *m, const databox *elements[],
                                    databox *replacedOut);
 void multimapMediumInsertFullWidth(multimapMedium *m,

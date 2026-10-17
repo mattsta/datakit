@@ -24,9 +24,12 @@ flex *multimapDump(const multimap *m);
 bool multimapInsert(multimap **m, const databox *elements[]);
 /* multimapInsert that also reports the value entries a replace overwrote
  * through 'replacedOut' ('elementsPerEntry - 1' slots in tuple order after
- * the key, every one VOID when nothing was replaced).  Only inline payloads
- * (integers, pointers) survive the overwrite; a BYTES slot must not be
- * read. */
+ * the key, every one VOID when nothing was replaced).  Integers up to 64
+ * bits, reals and pointers are reported by value and stay valid.  A BYTES
+ * or container slot points into the rewritten map and must not be read.  A
+ * 96/128-bit integer does not fit a databox, so its slot reports only the
+ * type (SIGNED_128 or UNSIGNED_128) with a NULL payload pointer (data.i128
+ * or data.u128); read such a value before the insert if it is needed. */
 bool multimapInsertReplacing(multimap **m, const databox *elements[],
                              databox *replacedOut);
 void multimapInsertFullWidth(multimap **m, const databox *elements[]);
