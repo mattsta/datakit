@@ -1,12 +1,25 @@
 #pragma once
 
 #include <stdatomic.h> /* C11 */
+#include <stdbool.h>
+#include <stdint.h>
 
 /* Shared Communal Data Structure Sharing */
 
 /* The 'sharrow' interface only requires one struct member:
  *  'checkedOut'
- */
+ *
+ * checkedOut must be declared _Atomic: one of _Atomic uint32_t,
+ * _Atomic int64_t, _Atomic uint64_t, or a pointer _Atomic uint64_t * to
+ * a counter held elsewhere. Any other type, a plain (non-_Atomic)
+ * integer included, is a compile error.
+ *
+ * The count is the number of owners beyond the first: a new object
+ * starts at 0, each sharrowRetain adds one, and the release that finds
+ * 0 is the final one and runs the releaser. Once the final release has
+ * run, the counter's value is not meaningful (it has wrapped below
+ * zero), which matters only for sharrowReleaseCustom, whose counter
+ * lives in an object that outlives the release. */
 
 /* Memory ordering.  The thread that drops the last reference runs the
  * releaser, which frees the block and everything it owns, so it must
@@ -39,13 +52,15 @@
 /* PURPOSE: prevents running atomics when (s)->checkedOut is NULL pointer;
  *          the result is inverted due to the OR condition in the final
  *          check, so here, "false" means GO AHEAD and "true" means STOP NOW. */
+/* Dispatches on the member's address, which keeps its qualifiers (see
+ * sharrowElement__). */
 /* clang-format off */
-#define sharrowReleaseQualify_(s)                     \
-    _Generic((s)->checkedOut,                          \
-                  uint32_t: false,                      \
-                   int64_t: false,                       \
-                  uint64_t: false,                        \
-        _Atomic uint64_t *: (s)->checkedOut ? false : true )
+#define sharrowReleaseQualify_(s)                           \
+    _Generic(&(s)->checkedOut,                               \
+              _Atomic uint32_t *: false,                      \
+               _Atomic int64_t *: false,                       \
+              _Atomic uint64_t *: false,                        \
+             _Atomic uint64_t **: (s)->checkedOut ? false : true )
 /* clang-format on */
 
 #define sharrowRelease(name, s)                                                \
@@ -69,18 +84,19 @@
 #define sharrowElement_(s) sharrowElement__((s)->checkedOut)
 
 /* Clang doesn't know this syntax, so it re-formats like a ternary. Avoid. */
-/* Note: "_Atomic" is a property of pointers here, but NOT of scalar types.
- * _Atomic <int> is meaningless here, so just go without, but we *do* need
- * _Atomic for the pointer types. */
+/* Dispatch on the member's address rather than its value: lvalue
+ * conversion of the value would strip _Atomic, so a plain integer member
+ * would match and the atomics would then run on a non-atomic object.
+ * The address keeps the qualifier, so only _Atomic members match. */
 /* No default here because we get a better error message if no type
  * matches than if we fall back to a default value. */
 /* clang-format off */
-#define sharrowElement__(checkedOut) \
-    _Generic((checkedOut),            \
-                uint32_t: &checkedOut, \
-                 int64_t: &checkedOut,  \
-                uint64_t: &checkedOut,   \
-        _Atomic uint64_t *: checkedOut    )
+#define sharrowElement__(checkedOut)                \
+    _Generic(&(checkedOut),                          \
+              _Atomic uint32_t *: &(checkedOut),      \
+               _Atomic int64_t *: &(checkedOut),       \
+              _Atomic uint64_t *: &(checkedOut),        \
+             _Atomic uint64_t **: (checkedOut)           )
 /* clang-format on */
 
 /* The final owner's acquire comes from the acq_rel decrement in

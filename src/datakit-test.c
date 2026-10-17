@@ -106,6 +106,7 @@ extern int bigmathTest(int argc, char *argv[]);
 #include "rapidhash.h"
 #include "segment/segmentI64.h" /* New 2-tier template system */
 #include "sha256.h"
+#include "sharrow.h"
 #include "str.h"
 #include "strDoubleFormat.h"
 #include "stringPool.h"
@@ -3009,6 +3010,175 @@ static int dkTestOwnedSeqGateTest(int argc, char *argv[]) {
     printf("ownedSeqGate: %s%s\n", failures == 0 ? "PASS" : "FAIL",
            instrumented ? " (ThreadSanitizer: B2 asserted, B1/B3 reported)"
                         : "");
+    return failures;
+}
+
+/* ====================================================================
+ * sharrow: release through a `checkedOut` member.
+ *
+ * checkedOut counts owners beyond the first, so a new object starts at
+ * 0 and the release that finds 0 is the final one. Covers each member
+ * type the dispatch accepts, the NULL-pointer short circuit, the custom
+ * form, and a concurrent final release, which must observe every other
+ * owner's writes.
+ * ==================================================================== */
+typedef struct dkSharrowU32 {
+    _Atomic uint32_t checkedOut;
+} dkSharrowU32;
+typedef struct dkSharrowI64 {
+    _Atomic int64_t checkedOut;
+} dkSharrowI64;
+typedef struct dkSharrowU64 {
+    _Atomic uint64_t checkedOut;
+} dkSharrowU64;
+typedef struct dkSharrowPtr {
+    _Atomic uint64_t *checkedOut;
+} dkSharrowPtr;
+
+#define DK_SHARROW_OWNERS 4
+typedef struct dkSharrowShared {
+    _Atomic uint32_t checkedOut;
+    uint32_t marks[DK_SHARROW_OWNERS];
+    uint32_t marksSeen; /* written by the final owner */
+    uint32_t releases;
+} dkSharrowShared;
+
+static uint32_t g_dkSharrowReleases;
+
+static void sharrowReleaserDkU32(dkSharrowU32 *s) {
+    (void)s;
+    g_dkSharrowReleases++;
+}
+static void sharrowReleaserDkI64(dkSharrowI64 *s) {
+    (void)s;
+    g_dkSharrowReleases++;
+}
+static void sharrowReleaserDkU64(dkSharrowU64 *s) {
+    (void)s;
+    g_dkSharrowReleases++;
+}
+static void sharrowReleaserDkPtr(dkSharrowPtr *s) {
+    (void)s;
+    g_dkSharrowReleases++;
+}
+static void sharrowReleaserDkShared(dkSharrowShared *s) {
+    uint32_t seen = 0;
+    for (int i = 0; i < DK_SHARROW_OWNERS; i++) {
+        seen += s->marks[i];
+    }
+    s->marksSeen = seen;
+    s->releases++;
+}
+
+typedef struct dkSharrowOwner {
+    dkSharrowShared *shared;
+    int index;
+} dkSharrowOwner;
+
+static void *dkSharrowOwnerMain_(void *arg) {
+    dkSharrowOwner *o = arg;
+    o->shared->marks[o->index] = 1;
+    sharrowRelease(DkShared, o->shared);
+    return NULL;
+}
+
+static int dkTestSharrowTest(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+    int failures = 0;
+#define SHEXPECT(cond, msg)                                                    \
+    do {                                                                       \
+        if (!(cond)) {                                                         \
+            printf("dkTestSharrow FAIL: %s (%s:%d)\n", (msg), __FILE__,        \
+                   __LINE__);                                                  \
+            failures++;                                                        \
+        }                                                                      \
+    } while (0)
+
+    /* One owner: the first release is final. */
+    g_dkSharrowReleases = 0;
+    dkSharrowU32 a = {0};
+    sharrowRelease(DkU32, &a);
+    SHEXPECT(g_dkSharrowReleases == 1, "a lone owner's release is final");
+
+    /* Two owners: a retain makes the next release non-final. */
+    g_dkSharrowReleases = 0;
+    dkSharrowU32 b = {0};
+    sharrowRetain(&b);
+    SHEXPECT(sharrowCount(&b) == 1, "a retain counts one extra owner");
+    sharrowRelease(DkU32, &b);
+    SHEXPECT(g_dkSharrowReleases == 0 && sharrowCount(&b) == 0,
+             "the first of two releases is not final");
+    sharrowRelease(DkU32, &b);
+    SHEXPECT(g_dkSharrowReleases == 1, "the second release is final");
+
+    /* Every other member type, and RetainCount. */
+    g_dkSharrowReleases = 0;
+    dkSharrowI64 c = {0};
+    dkSharrowU64 d = {0};
+    sharrowRetainCount(&d, 2);
+    sharrowRelease(DkI64, &c);
+    sharrowRelease(DkU64, &d);
+    sharrowRelease(DkU64, &d);
+    SHEXPECT(g_dkSharrowReleases == 1 && sharrowCount(&d) == 0,
+             "int64 and uint64 members count owners alike");
+    sharrowRelease(DkU64, &d);
+    SHEXPECT(g_dkSharrowReleases == 2, "and release on the last owner");
+
+    /* A pointer member counts through the pointee; NULL releases at once
+     * without touching any counter. */
+    g_dkSharrowReleases = 0;
+    _Atomic uint64_t outside = 1;
+    dkSharrowPtr p = {.checkedOut = &outside};
+    dkSharrowPtr q = {.checkedOut = NULL};
+    sharrowRelease(DkPtr, &p);
+    SHEXPECT(g_dkSharrowReleases == 0 && outside == 0,
+             "a pointer member decrements its pointee");
+    sharrowRelease(DkPtr, &p);
+    SHEXPECT(g_dkSharrowReleases == 1, "and releases on the last owner");
+    sharrowRelease(DkPtr, &q);
+    SHEXPECT(g_dkSharrowReleases == 2,
+             "a NULL pointer member releases at once");
+
+    /* Custom: the count lives in another object. */
+    g_dkSharrowReleases = 0;
+    dkSharrowU64 target = {0};
+    dkSharrowU32 holder = {0};
+    sharrowRetain(&holder);
+    sharrowReleaseCustom(DkU64, &target, &holder);
+    SHEXPECT(g_dkSharrowReleases == 0, "a custom release honours the holder");
+    sharrowReleaseCustom(DkU64, &target, &holder);
+    SHEXPECT(g_dkSharrowReleases == 1 && sharrowCount(&target) == 0,
+             "and runs the target's releaser, leaving the target's own "
+             "counter alone");
+
+    /* Concurrent final release: each owner writes its mark and releases;
+     * exactly one release is final and it sees every mark. */
+    {
+        dkSharrowShared shared = {.checkedOut = DK_SHARROW_OWNERS - 1};
+        dkSharrowOwner owners[DK_SHARROW_OWNERS];
+        pthread_t th[DK_SHARROW_OWNERS];
+        int started = 0;
+        for (int i = 0; i < DK_SHARROW_OWNERS; i++) {
+            owners[i] = (dkSharrowOwner){.shared = &shared, .index = i};
+            if (pthread_create(&th[i], NULL, dkSharrowOwnerMain_, &owners[i]) !=
+                0) {
+                break;
+            }
+            started++;
+        }
+        SHEXPECT(started == DK_SHARROW_OWNERS, "owner threads started");
+        for (int i = 0; i < started; i++) {
+            pthread_join(th[i], NULL);
+        }
+        SHEXPECT(shared.releases == 1 && shared.marksSeen == DK_SHARROW_OWNERS,
+                 "one final release, and it saw every owner's write");
+    }
+
+    if (failures == 0) {
+        printf("dkTestSharrow: PASS\n");
+    }
+#undef SHEXPECT
     return failures;
 }
 
@@ -11454,6 +11624,7 @@ static const TestEntry testRegistry[] = {
     T_A(dkTestInflightGate, "inflightGate,inflight"),
     T_A(dkTestOwnedState, "ownedState,owned"),
     T_A(dkTestOwnedSeqGate, "ownedSeqGate,seqGate"),
+    T_A(dkTestSharrow, "sharrow"),
     T_A(dkTestDaemonizeReady, "daemonizeReady,daemonize"),
 
     /* Random generators */
