@@ -1,4 +1,5 @@
 #include "multimapSmall.h"
+#include "dkRandom.h"
 #include "multimapSmallInternal.h"
 
 multimapSmall *multimapSmallNew(multimapElements elementsPerEntry,
@@ -232,15 +233,17 @@ bool multimapSmallRandomValue(multimapSmall *m, const bool fromTail,
     if (fromTail) {
         foundP = flexTailWithElements(m->map, m->elementsPerEntry);
     } else {
-        /* delete random entry in the map */
-        const uint_fast32_t totalWholeElements = count / m->elementsPerEntry;
-        const uint_fast32_t randomElement = random() % totalWholeElements;
+        /* Pick a uniformly random entry with a per-thread draw. */
+        const uint64_t totalWholeElements =
+            (uint64_t)count / m->elementsPerEntry;
+        const uint64_t randomElement = dkRandomBounded(totalWholeElements);
 
         /* Restore random element to an offset inside the list, walking
-         * from the nearest of head/middle/tail */
-        foundP = flexIndexWithMiddle(m->map, m->elementsPerEntry,
-                                     randomElement * m->elementsPerEntry,
-                                     GET_MIDDLE(m));
+         * from the nearest of head/middle/tail.  The int32_t narrowing is
+         * safe: a Small map upgrades to Medium far below 2^31 elements. */
+        foundP = flexIndexWithMiddle(
+            m->map, m->elementsPerEntry,
+            (int32_t)(randomElement * m->elementsPerEntry), GET_MIDDLE(m));
     }
 
     me->map = &m->map;

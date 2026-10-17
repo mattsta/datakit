@@ -64,6 +64,12 @@ bool multimapFullExistsWithReference(
 
 bool multimapFullLookup(multimapFull *m, const databox *key,
                         databox *elements[]);
+/* Select one row.  fromTail == false picks a row uniformly at random across
+ * all sub-maps.  fromTail == true returns the container's last row (its
+ * greatest key) on every call; it is a positional selector, not a sample.
+ * Callers that want a random sample pass false.  'foundBox', when non-NULL,
+ * receives elementsPerEntry non-copying boxes that reference the flex and
+ * are invalidated by any mutation of the container. */
 bool multimapFullRandomValue(multimapFull *m, const bool fromTail,
                              databox **foundBox, multimapEntry *me);
 bool multimapFullGetUnderlyingEntry(multimapFull *m, const databox *key,

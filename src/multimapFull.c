@@ -1,11 +1,13 @@
 #include "multimapFull.h"
 #include "cleaner.h"
+#include "dkRandom.h"
 #include "multimapFullInternal.h"
 
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleanerName(const flex **, zfree, MapPtrs);
 defcleanerName(flex **, zfree, Maps);
 defcleanerName(multimapFullMiddle *, zfree, Middles);
+defcleanerName(uint64_t *, zfree, U64);
 defcleaner(multimapFull *, multimapFullFree);
 defcleaner(flex *, flexFree);
 
@@ -2045,14 +2047,12 @@ bool multimapFullRandomValue(multimapFull *m, const bool fromTail,
         return false;
     }
 
-    /* Uniform selection: every row is equally likely.  Pick a global
-     * row, then locate it through the bidirectional map scan +
-     * middle-anchored flex walk; fromTail addresses the container's
-     * last row. */
+    /* Uniform selection: every row is equally likely.  Pick a global row
+     * with a per-thread uniform draw, then locate it through the
+     * bidirectional map scan + middle-anchored flex walk.  fromTail always
+     * addresses the container's last row (see multimapFull.h). */
     const int64_t row =
-        fromTail ? (int64_t)m->values - 1
-                 : (int64_t)((((uint64_t)random() << 32) | (uint64_t)random()) %
-                             m->values);
+        fromTail ? (int64_t)m->values - 1 : (int64_t)dkRandomBounded(m->values);
 
     multimapFullIdx mapIdx;
     flex **map;
@@ -3444,6 +3444,116 @@ int multimapFullTest(int argc, char *argv[]) {
         for (uint32_t j = 2; j < arity; j++) {
             if (out[j].data.u64 != 0xAA00 + j) {
                 ERR("Sentinel %u corrupted: %" PRIu64, j, out[j].data.u64);
+            }
+        }
+    }
+
+    TEST("random row selection is uniform, and fromTail is not a sample") {
+        /* Over draws = rows * 64, every row must be drawn at least once
+         * and no row may take more than 8x its expected share (expected
+         * 64, sd ~8, so the ceiling of 512 is unreachable by a uniform
+         * draw).  fromTail must return the container's last row on every
+         * call. */
+        const uint64_t rows = 512;
+        const uint64_t drawsPerRow = 64;
+        const uint64_t draws = rows * drawsPerRow;
+        const uint64_t shareHeadroom = 8;
+        const uint64_t perRowCeiling = drawsPerRow * shareHeadroom;
+
+        const uint32_t arity = 2;
+        cleaner(multimapFullFree) multimapFull *m = multimapFullNew(arity);
+
+        /* Wide values force several sub-maps so the cross-sub-map walk is
+         * exercised. */
+        char payload[64];
+        memset(payload, 'p', sizeof(payload));
+        for (uint64_t i = 0; i < rows; i++) {
+            const databox key = databoxNewUnsigned(i);
+            const databox val = databoxNewBytes(payload, sizeof(payload));
+            const databox *elements[2] = {&key, &val};
+            multimapFullInsert(m, elements);
+        }
+
+        if (multimapFullCount(m) != rows) {
+            ERR("expected %" PRIu64 " rows, got %zu", rows,
+                multimapFullCount(m));
+        }
+
+        if (m->count < 2) {
+            ERR("container did not split: %" PRIu32 " sub-map(s)",
+                (uint32_t)m->count);
+        }
+
+        /* Uniform draws. */
+        cleanerName(zfree, U64) uint64_t *hits = zcalloc(rows, sizeof(*hits));
+        for (uint64_t d = 0; d < draws; d++) {
+            databox k = {{0}};
+            databox v = {{0}};
+            databox *boxes[2] = {&k, &v};
+            multimapEntry me;
+            if (!multimapFullRandomValue(m, false, boxes, &me)) {
+                ERRR("uniform draw failed on a non-empty container");
+                break;
+            }
+
+            if (k.data.u >= rows) {
+                ERR("draw returned key %" PRIu64 " outside [0, %" PRIu64 ")",
+                    (uint64_t)k.data.u, rows);
+                break;
+            }
+
+            hits[k.data.u]++;
+        }
+
+        uint64_t unreached = 0;
+        uint64_t widest = 0;
+        uint64_t widestRow = 0;
+        for (uint64_t i = 0; i < rows; i++) {
+            if (hits[i] == 0) {
+                unreached++;
+            }
+
+            if (hits[i] > widest) {
+                widest = hits[i];
+                widestRow = i;
+            }
+        }
+
+        if (unreached > 0) {
+            ERR("%" PRIu64 " of %" PRIu64 " rows were never drawn in %" PRIu64
+                " uniform draws",
+                unreached, rows, draws);
+        }
+
+        if (widest > perRowCeiling) {
+            ERR("row %" PRIu64 " took %" PRIu64 " of %" PRIu64 " draws "
+                "(ceiling %" PRIu64 ", expected share %" PRIu64 ")",
+                widestRow, widest, draws, perRowCeiling, drawsPerRow);
+        }
+
+        /* fromTail: the same row on every call, the container's last. */
+        databox lastKey = {{0}};
+        databox lastVal = {{0}};
+        databox *lastBoxes[2] = {&lastKey, &lastVal};
+        if (!multimapFullLookupByPosition(m, (int64_t)rows - 1, lastBoxes)) {
+            ERRR("could not read the container's last row by position");
+        }
+
+        for (uint64_t d = 0; d < drawsPerRow; d++) {
+            databox k = {{0}};
+            databox v = {{0}};
+            databox *boxes[2] = {&k, &v};
+            multimapEntry me;
+            if (!multimapFullRandomValue(m, true, boxes, &me)) {
+                ERRR("tail draw failed on a non-empty container");
+                break;
+            }
+
+            if (k.data.u != lastKey.data.u) {
+                ERR("fromTail returned key %" PRIu64 ", not the container's "
+                    "last row %" PRIu64,
+                    (uint64_t)k.data.u, (uint64_t)lastKey.data.u);
+                break;
             }
         }
     }

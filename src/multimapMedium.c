@@ -1,5 +1,6 @@
 #include "multimapMedium.h"
 #include "cleaner.h"
+#include "dkRandom.h"
 #include "multimapMediumInternal.h"
 
 /* Scope-exit cleaners (see cleaner.h idioms) */
@@ -405,13 +406,11 @@ bool multimapMediumRandomValue(multimapMedium *m, const bool fromTail,
         return false;
     }
 
-    /* Uniform selection: every row is equally likely.  Pick a global
-     * row, then locate it; fromTail addresses the container's last
+    /* Uniform selection: pick a global row with a per-thread uniform
+     * draw, then locate it; fromTail addresses the container's last
      * row. */
     const int64_t row =
-        fromTail ? (int64_t)rows - 1
-                 : (int64_t)((((uint64_t)random() << 32) | (uint64_t)random()) %
-                             rows);
+        fromTail ? (int64_t)rows - 1 : (int64_t)dkRandomBounded(rows);
 
     size_t mapIdx;
     flexEntry *foundP = multimapMediumRowByPosition_(m, row, &mapIdx);

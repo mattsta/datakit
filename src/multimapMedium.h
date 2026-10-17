@@ -48,6 +48,8 @@ bool multimapMediumExistsWithReference(
 bool multimapMediumLookup(multimapMedium *m, const databox *key,
                           databox *elements[]);
 
+/* fromTail == false: uniform random row; true: the last row, every call.
+ * See multimapFull.h. */
 bool multimapMediumRandomValue(multimapMedium *m, const bool fromTail,
                                databox **foundBox, multimapEntry *me);
 bool multimapMediumDeleteRandomValue(multimapMedium *m,

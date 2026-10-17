@@ -33,6 +33,8 @@ bool multimapSmallExistsWithReference(
 
 bool multimapSmallLookup(multimapSmall *m, const databox *key,
                          databox *elements[]);
+/* fromTail == false: uniform random row; true: the last row, every call.
+ * See multimapFull.h. */
 bool multimapSmallRandomValue(multimapSmall *m, bool fromTail,
                               databox **foundBox, multimapEntry *me);
 bool multimapSmallDeleteRandomValue(multimapSmall *m, bool deleteFromTail,
