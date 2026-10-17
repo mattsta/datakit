@@ -5108,6 +5108,76 @@ int multimapTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("replacing insert: replacedOut may alias the new value boxes") {
+        /* The exchange idiom: new values in, old values out, same boxes. */
+        cleaner(multimapSmallFree) multimapSmall *small =
+            multimapSmallNew(RP_WIDTH, false);
+        cleanerName(multimapMediumFree, Sweep) multimapMedium *medium =
+            multimapMediumNew(RP_WIDTH);
+        cleanerName(multimapFullFree, Sweep) multimapFull *full =
+            multimapFullNew(RP_WIDTH);
+        cleaner(multimapFree) multimap *generic = multimapNew(RP_WIDTH);
+        struct {
+            const char *where;
+            rpInsertFn fn;
+            void *m;
+        } layers[] = {
+            {"small", rpSmall, small},
+            {"medium", rpMedium, medium},
+            {"full", rpFull, full},
+            {"generic", rpGeneric, &generic},
+        };
+
+        for (size_t l = 0; l < COUNT_ARRAY(layers); l++) {
+            const char *where = layers[l].where;
+            for (uint64_t key = 0; key < 8; key++) {
+                const databox k = databoxNewUnsigned(key);
+                databox v[RP_VALUES] = {databoxNewUnsigned(100 + key),
+                                        databoxNewPtr(RP_PTR_TAG(key))};
+                const databox *e[RP_WIDTH] = {&k, &v[0], &v[1]};
+                if (layers[l].fn(layers[l].m, e, v)) {
+                    ERR("%s alias: fresh key %" PRIu64 " reported a replace",
+                        where, key);
+                }
+
+                v[0] = databoxNewUnsigned(200 + key);
+                v[1] = databoxNewPtr(RP_PTR_TAG(key + 1000));
+                if (!layers[l].fn(layers[l].m, e, v)) {
+                    ERR("%s alias: key %" PRIu64 " was not replaced", where,
+                        key);
+                }
+
+                if (v[0].type != DATABOX_UNSIGNED_64 ||
+                    v[0].data.u != 100 + key ||
+                    v[1].data.u != (uintptr_t)RP_PTR_TAG(key)) {
+                    ERR("%s alias: key %" PRIu64 " reported (%" PRIu64
+                        ", 0x%" PRIx64 "), expected (%" PRIu64 ", 0x%" PRIx64
+                        ")",
+                        where, key, (uint64_t)v[0].data.u,
+                        (uint64_t)v[1].data.u, 100 + key,
+                        (uint64_t)(uintptr_t)RP_PTR_TAG(key));
+                }
+
+                /* Read back what the exchange stored. */
+                const databox again = databoxNewUnsigned(300 + key);
+                const databox tag = databoxNewPtr(RP_PTR_TAG(key + 2000));
+                const databox *probe[RP_WIDTH] = {&k, &again, &tag};
+                databox stored[RP_VALUES];
+                layers[l].fn(layers[l].m, probe, stored);
+                if (stored[0].type != DATABOX_UNSIGNED_64 ||
+                    stored[0].data.u != 200 + key ||
+                    stored[1].data.u != (uintptr_t)RP_PTR_TAG(key + 1000)) {
+                    ERR("%s alias: key %" PRIu64 " stored (%" PRIu64
+                        ", 0x%" PRIx64 "), expected (%" PRIu64 ", 0x%" PRIx64
+                        ")",
+                        where, key, (uint64_t)stored[0].data.u,
+                        (uint64_t)stored[1].data.u, 200 + key,
+                        (uint64_t)(uintptr_t)RP_PTR_TAG(key + 1000));
+                }
+            }
+        }
+    }
+
     TEST_FINAL_RESULT;
 }
 #endif /* DATAKIT_TEST */
