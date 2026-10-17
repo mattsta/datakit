@@ -3986,14 +3986,25 @@ bool flexGetUnsigned(flexEntry *fe, uint64_t *value) {
 /* ====================================================================
  * flex delete operations
  * ==================================================================== */
-/* Delete entry at 'fe' while maintaining the validity of 'fe' after the
- * deletion (and potential shrink-induced realloc) */
-void flexDelete(flex **const ff, flexEntry **fe) {
+/* Delete 'count' entries at '*fe' and leave '*fe' at the entry that
+ * followed them (or at the end).  A delete can shrink the header, which
+ * moves every entry down by the header's change, so the cursor is
+ * restored from its offset plus that change, not from the offset alone. */
+DK_INLINE_ALWAYS void flexDeleteKeepCursor_(flex **const ff, flexEntry **fe,
+                                            const int_fast32_t count,
+                                            const bool drain) {
     assert(ff && *ff && fe && *fe);
 
     const size_t offset = *fe - *ff;
-    flexDelete__(ff, *fe, 1, false);
-    *fe = *ff + offset;
+    flexHeaderInfo headerInfo = {0};
+    flexDelete___(ff, *fe, count, drain, &headerInfo, NULL);
+    *fe = *ff + offset + headerInfo.headerDiff;
+}
+
+/* Delete entry at 'fe' while maintaining the validity of 'fe' after the
+ * deletion (and potential shrink-induced realloc) */
+void flexDelete(flex **const ff, flexEntry **fe) {
+    flexDeleteKeepCursor_(ff, fe, 1, false);
 }
 
 /* Same as flexDelete() but don't update fe */
@@ -4004,32 +4015,14 @@ void flexDeleteNoUpdateEntry(flex **const ff, flexEntry *fe) {
 }
 
 void flexDeleteDrain(flex **const ff, flexEntry **fe) {
-    assert(ff && *ff && fe && *fe);
-
-    const size_t offset = *fe - *ff;
-    flexDelete__(ff, *fe, 1, true);
-
-    /* Store pointer to current element in fe, because flexDelete will
-     * do a realloc which might result in a different "f"-pointer.
-     * When the delete direction is back to front, we might delete the last
-     * entry and end up with "p" pointing to FLEX_END, so check this. */
-    *fe = *ff + offset;
+    flexDeleteKeepCursor_(ff, fe, 1, true);
 }
 
 /* Delete 'num' entries from flex starting at 'fe'.
  * Also update *fe in place, to be able to iterate over the
  * flex, while deleting entries. */
 void flexDeleteCount(flex **const ff, flexEntry **fe, const uint32_t count) {
-    assert(ff && *ff && fe && *fe);
-
-    const size_t offset = *fe - *ff;
-    flexDelete__(ff, *fe, count, false);
-
-    /* Store pointer to current element in fe, because flexDelete will
-     * do a realloc which might result in a different "f"-pointer.
-     * When the delete direction is back to front, we might delete the last
-     * entry and end up with "p" pointing to FLEX_END, so check this. */
-    *fe = *ff + offset;
+    flexDeleteKeepCursor_(ff, fe, count, false);
 }
 
 void flexDeleteSortedValueWithMiddle(flex **const ff,
@@ -4070,9 +4063,7 @@ void flexDeleteSortedValueWithMiddle(flex **const ff,
 
 void flexDeleteCountDrain(flex **const ff, flexEntry **fe,
                           const uint32_t count) {
-    const size_t offset = *fe - *ff;
-    flexDelete__(ff, *fe, count, true);
-    *fe = *ff + offset;
+    flexDeleteKeepCursor_(ff, fe, count, true);
 }
 
 void flexDeleteOffsetCount(flex **const ff, const int32_t offset,
@@ -6479,6 +6470,103 @@ static int32_t randstring(uint8_t *target, uint32_t min, uint32_t max) {
     return len;
 }
 
+/* Delete while iterating, from a flex past the 16 KiB header boundary down
+ * to empty, rotating through the four cursor-keeping deletes.  After each
+ * delete the cursor must sit on the entry that followed the deleted ones
+ * (or at the end), and every remaining entry must hold its value. */
+static int32_t flexTestDeleteCursor(const size_t payloadLen,
+                                    const size_t entries) {
+    int32_t bad = 0;
+    char buf[64];
+    assert(payloadLen >= 5 && payloadLen <= sizeof(buf));
+
+    cleaner(zfree) void *oracleMem = zcalloc(entries, sizeof(uint32_t));
+    uint32_t *const oracle = oracleMem;
+    cleaner(flexFree) flex *f = flexNew();
+    for (size_t i = 0; i < entries; i++) {
+        oracle[i] = (uint32_t)i;
+        memset(buf, 'x', payloadLen);
+        memcpy(buf, &oracle[i], sizeof(oracle[i]));
+        flexPushBytes(&f, buf, payloadLen, FLEX_ENDPOINT_TAIL);
+    }
+
+    size_t count = entries;
+    size_t at = 0;
+    size_t shrinks = 0;
+    flexEntry *fe = flexHead(f);
+    for (size_t step = 0; count > 0 && bad < 8; step++) {
+        if (step % 3 == 0) {
+            /* keep this one */
+            fe = flexNext(f, fe);
+            at++;
+        } else {
+            const uint32_t n = (step % 4 == 1 && at + 1 < count) ? 2 : 1;
+            const size_t headerBefore = FLEX_HEADER_SIZE(f);
+            switch (step % 4) {
+            case 0:
+                flexDelete(&f, &fe);
+                break;
+            case 1:
+                flexDeleteCount(&f, &fe, n);
+                break;
+            case 2:
+                flexDeleteDrain(&f, &fe);
+                break;
+            default:
+                flexDeleteCountDrain(&f, &fe, 1);
+                break;
+            }
+
+            memmove(&oracle[at], &oracle[at + n],
+                    (count - at - n) * sizeof(*oracle));
+            count -= n;
+            shrinks += FLEX_HEADER_SIZE(f) < headerBefore;
+
+            const flexEntry *want =
+                at < count ? flexIndex(f, (int32_t)at) : FLEX_ENTRY_END(f);
+            if (fe != want || flexCount(f) != count ||
+                !flexValidateBufferDeep(f, flexBytes(f))) {
+                printf("  FAIL: cursor off after a delete at %zu of %zu "
+                       "(%zu-byte entries)\n",
+                       at, count, payloadLen);
+                bad++;
+                break;
+            }
+
+            size_t i = 0;
+            for (flexEntry *e = flexHeadIfAny(f); e; e = flexNext(f, e), i++) {
+                databox box = {{0}};
+                flexGetByType(e, &box);
+                uint32_t id = UINT32_MAX;
+                if (box.type == DATABOX_BYTES && box.len == payloadLen) {
+                    memcpy(&id, box.data.bytes.start, sizeof(id));
+                }
+
+                if (i >= count || id != oracle[i]) {
+                    printf("  FAIL: entry %zu wrong after a delete\n", i);
+                    bad++;
+                    break;
+                }
+            }
+        }
+
+        if (count > 0 && (at >= count || fe == FLEX_ENTRY_END(f))) {
+            fe = flexHead(f);
+            at = 0;
+        }
+    }
+
+    /* The header must actually have shrunk during the walk: once below
+     * 64 bytes, and again below 16 KiB for the 62-byte entries. */
+    if (shrinks < (payloadLen > 5 ? 2u : 1u)) {
+        printf("  FAIL: %zu header shrinks with %zu-byte entries\n", shrinks,
+               payloadLen);
+        bad++;
+    }
+
+    return bad;
+}
+
 static void verify(flex *f, flexEntryData *e) {
     int32_t len = flexCount(f);
     flexEntryData _e = {0};
@@ -8284,6 +8372,19 @@ int32_t flexTest(int32_t argc, char **argv) {
 
         if (bad) {
             printf("  FAIL: %" PRId32 " self-push checks\n", bad);
+            return bad;
+        }
+        printf("  ok\n");
+    }
+
+    printf("Verify delete cursors across header shrinks:\n");
+    {
+        /* 7-byte entries cross the 64-byte boundary; 62-byte entries
+         * start past 16 KiB and cross both. */
+        const int32_t bad =
+            flexTestDeleteCursor(5, 20) + flexTestDeleteCursor(60, 280);
+        if (bad) {
+            printf("  FAIL: %" PRId32 " delete cursor checks\n", bad);
             return bad;
         }
         printf("  ok\n");
