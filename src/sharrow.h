@@ -8,9 +8,22 @@
  *  'checkedOut'
  */
 
+/* Memory ordering.  The thread that drops the last reference runs the
+ * releaser, which frees the block and everything it owns, so it must
+ * observe every other owner's writes.  Each drop is therefore an
+ * acq_rel decrement: the release half publishes the dropping owner's
+ * accesses, and the acquire half lets the final drop (which reads from
+ * the release sequence of all earlier drops) observe them.  An acq_rel
+ * RMW is used rather than a relaxed decrement plus an acquire fence on
+ * the zero branch because ThreadSanitizer does not model standalone
+ * fences.  Retains stay relaxed: a retain is legal only from a thread
+ * that already holds a reference. */
+
+/* Observer only; not a synchronisation point. */
 #define sharrowCount(s)                                                        \
     atomic_load_explicit(sharrowElement_(s), memory_order_relaxed)
 
+/* Relaxed: legal only from a thread that already holds a reference. */
 #define sharrowRetain(s)                                                       \
     atomic_fetch_add_explicit(sharrowElement_(s), 1, memory_order_relaxed)
 
@@ -70,9 +83,11 @@
         _Atomic uint64_t *: checkedOut    )
 /* clang-format on */
 
+/* The final owner's acquire comes from the acq_rel decrement in
+ * sharrowRelease_. */
 #define sharrowReleaseCheckIsFinalOwner_(s) (sharrowRelease_(s) == 0)
 
 #define sharrowReleaseCheckSafe_(s)
 
 #define sharrowRelease_(s)                                                     \
-    atomic_fetch_sub_explicit(sharrowElement_(s), 1, memory_order_relaxed)
+    atomic_fetch_sub_explicit(sharrowElement_(s), 1, memory_order_acq_rel)
