@@ -3385,11 +3385,7 @@ bool flexGetSingleDataboxBig(const uint8_t *buf, size_t buflen,
     if (!fe) {
         return false;
     }
-    /* Point data.u128 at the inline `extra` store so a 128-bit decode has
-     * somewhere to land; harmless for narrower types (flexGetByType overwrites
-     * the union for those). */
-    DATABOX_BIG_INIT(out);
-    flexGetByType(fe, (databox *)out);
+    flexGetByTypeBig(fe, out);
     return true;
 }
 
@@ -3421,6 +3417,31 @@ bool flexGetTwoDataboxes(const uint8_t *buf, size_t buflen, databox *a,
     }
     flexGetByType(fe, a);
     flexGetByType(second, b);
+    return true;
+}
+
+bool flexGetTwoDataboxesBig(const uint8_t *buf, size_t buflen, databoxBig *a,
+                            databoxBig *b) {
+    if (!buf || !a || !b) {
+        return false;
+    }
+    if (!flexValidateBufferDeep(buf, buflen)) {
+        return false;
+    }
+    const flex *f = (const flex *)buf;
+    if (flexCount(f) != 2) {
+        return false;
+    }
+    flexEntry *fe = flexHead(f);
+    if (!fe) {
+        return false;
+    }
+    flexEntry *const second = flexNext(f, fe);
+    if (!second) {
+        return false;
+    }
+    flexGetByTypeBig(fe, a);
+    flexGetByTypeBig(second, b);
     return true;
 }
 
@@ -3834,8 +3855,27 @@ void flexGetByTypeCopy(const flexEntry *const fe, databox *box) {
         box->len = entry.len;
         box->type = DATABOX_BYTES;
         box->allocated = true;
+        box->big = false;
+    } else if (FLEX_IS_INTEGER_BIG(entry.encoding)) {
+        /* With big set the caller supplied the storage, and its owner is
+         * unchanged.  Otherwise the value goes to a heap block the box
+         * owns, so the result never depends on storage outside the box. */
+        if (!box->big) {
+            /* @own: caller; free=databoxFreeData */
+            __uint128_t *payload = zmalloc(sizeof(*payload));
+            assert(((uintptr_t)payload % _Alignof(__uint128_t)) == 0);
+            box->data.u128 = payload;
+            box->big = true;
+            box->allocated = true;
+        }
+
+        flexLoadFixedLength_(&entry, box);
     } else {
         flexLoadFixedLength_(&entry, box);
+        /* Nothing here borrows a wide pointer, and only a copied
+         * subcontainer below owns memory. */
+        box->big = false;
+        box->allocated = false;
         if (FLEX_IS_FORWARD_DECLARE_SUBCONTAINER(entry.encoding)) {
             /* copy the flex or cflex at 'box->data' to
              * newly allocated memory then attach it to the box. */
@@ -3859,9 +3899,61 @@ bool flexGetNextByType(flex *const f, flexEntry **const fe, databox *box) {
     return true;
 }
 
+/* Capability-owning decode behind flexGetByTypeBig, with an optional
+ * reference resolve.  Every header field of 'box' is reset first, so stale
+ * 'allocated', 'len' or 'big' bits in the destination never survive, and
+ * the pointer is aimed at the box's own 'extra' so a wide value has
+ * somewhere to land.  'big' is kept only when the result is wide.
+ *
+ * A reference entry decodes to a narrow reference id, which overwrites
+ * the pointer, so 'big' is cleared before the id is resolved through
+ * 'referenceContainer'.  A 96/128-bit value resolved that way is
+ * therefore reported type-only instead of written through the id. */
+DK_INLINE_ALWAYS void
+flexGetByTypeBigResolve_(const flexEntry *const fe, databoxBig *const box,
+                         const bool useReference,
+                         const multimapAtom *const referenceContainer) {
+    box->type = DATABOX_VOID;
+    box->allocated = false;
+    box->created = false;
+    box->unused = 0;
+    box->len = 0;
+    DATABOX_BIG_INIT(box);
+
+    flexGetByType(fe, (databox *)box);
+    if (useReference && box->type == DATABOX_CONTAINER_REFERENCE_EXTERNAL) {
+        box->big = false;
+        multimapAtomLookupConvert(referenceContainer, (databox *)box);
+    }
+
+    box->big =
+        box->type == DATABOX_SIGNED_128 || box->type == DATABOX_UNSIGNED_128;
+}
+
+void flexGetByTypeBig(const flexEntry *const fe, databoxBig *box) {
+    flexGetByTypeBigResolve_(fe, box, false, NULL);
+}
+
+bool flexGetNextByTypeBig(flex *const f, flexEntry **const fe,
+                          databoxBig *box) {
+    *fe = flexNext(f, *fe);
+
+    if (!*fe) {
+        return false;
+    }
+
+    flexGetByTypeBig(*fe, box);
+    return true;
+}
+
 bool flexGetSigned(flexEntry *fe, int64_t *value) {
-    databox box;
-    flexGetByType(fe, &box);
+    databoxBig box;
+    flexGetByTypeBig(fe, &box);
+
+    if (box.big) {
+        /* Stored wide means the value does not fit 64 bits. */
+        return false;
+    }
 
     if (box.type == DATABOX_UNSIGNED_64 && box.data.u64 > INT64_MAX) {
         /* If our integer is larger than our return type,
@@ -3874,8 +3966,13 @@ bool flexGetSigned(flexEntry *fe, int64_t *value) {
 }
 
 bool flexGetUnsigned(flexEntry *fe, uint64_t *value) {
-    databox box;
-    flexGetByType(fe, &box);
+    databoxBig box;
+    flexGetByTypeBig(fe, &box);
+
+    if (box.big) {
+        /* Stored wide means the value does not fit 64 bits. */
+        return false;
+    }
 
     if (box.type == DATABOX_SIGNED_64 && box.data.i64 < 0) {
         /* we can't return negative integers! */
@@ -6403,6 +6500,371 @@ static void verify(flex *f, flexEntryData *e) {
     }
 }
 
+/* 96/128-bit oracle: a value's two's-complement bits plus its sign, so one
+ * array holds the whole signed and unsigned 128-bit range. */
+typedef struct flexTestWide {
+    __uint128_t bits;
+    bool negative;
+} flexTestWide;
+
+static flexTestWide flexTestWideS(const __int128_t v) {
+    return (flexTestWide){.bits = (__uint128_t)v, .negative = v < 0};
+}
+
+static flexTestWide flexTestWideU(const __uint128_t v) {
+    return (flexTestWide){.bits = v, .negative = false};
+}
+
+static bool flexTestWideIsWide(const flexTestWide v) {
+    return v.negative ? (__int128_t)v.bits < INT64_MIN : v.bits > UINT64_MAX;
+}
+
+/* The canonical read-back type: a non-negative value is unsigned, and a
+ * value that fits 64 bits is a 64-bit type. */
+static databoxType flexTestWideType(const flexTestWide v) {
+    if (v.negative) {
+        return flexTestWideIsWide(v) ? DATABOX_SIGNED_128 : DATABOX_SIGNED_64;
+    }
+
+    return flexTestWideIsWide(v) ? DATABOX_UNSIGNED_128 : DATABOX_UNSIGNED_64;
+}
+
+/* Box 'v' for writing.  'viaSigned' boxes a non-negative value as a
+ * signed type where it fits one, to check it still reads back unsigned. */
+static void flexTestWideBox(const flexTestWide v, bool viaSigned,
+                            databoxBig *box) {
+    const bool wide = flexTestWideIsWide(v);
+    viaSigned =
+        v.negative || (viaSigned && (wide ? v.bits <= (__uint128_t)INT128_MAX
+                                          : v.bits <= INT64_MAX));
+    memset(box, 0, sizeof(*box));
+    if (wide && viaSigned) {
+        DATABOX_BIG_SIGNED_128(box, (__int128_t)v.bits);
+    } else if (wide) {
+        DATABOX_BIG_UNSIGNED_128(box, v.bits);
+    } else if (viaSigned) {
+        box->type = DATABOX_SIGNED_64;
+        box->data.i64 = (int64_t)(__int128_t)v.bits;
+    } else {
+        box->type = DATABOX_UNSIGNED_64;
+        box->data.u64 = (uint64_t)v.bits;
+    }
+}
+
+static bool flexTestWideMatches(const databox *got, const flexTestWide want) {
+    if (got->type != flexTestWideType(want)) {
+        return false;
+    }
+
+    __uint128_t bits = 0;
+    switch (got->type) {
+    case DATABOX_SIGNED_64:
+        bits = (__uint128_t)(__int128_t)got->data.i64;
+        break;
+    case DATABOX_UNSIGNED_64:
+        bits = got->data.u64;
+        break;
+    default:
+        if (!got->data.ptr) {
+            return false;
+        }
+
+        memcpy(&bits, got->data.ptr, sizeof(bits));
+        break;
+    }
+
+    return bits == want.bits;
+}
+
+/* The value set every wide test includes. */
+static size_t flexTestWideFixedSet(flexTestWide *out) {
+    size_t n = 0;
+    out[n++] = flexTestWideU((__uint128_t)1 << 64);
+    out[n++] = flexTestWideU(((__uint128_t)1 << 95) - 1);
+    out[n++] = flexTestWideU((__uint128_t)1 << 95);
+    out[n++] = flexTestWideU((__uint128_t)1 << 127);
+    out[n++] = flexTestWideU(UINT128_MAX);
+    out[n++] = flexTestWideS(-((__int128_t)1 << 63) - 1);
+    out[n++] = flexTestWideS(-((__int128_t)1 << 95));
+    out[n++] = flexTestWideS(INT128_MIN);
+    out[n++] = flexTestWideS(INT128_MAX);
+    return n;
+}
+
+/* 2^s - 1, 2^s, -2^s and -2^s - 1 for every s < 128, then the fixed set,
+ * which together hit every integer encoding width. */
+#define FLEX_TEST_WIDE_SWEEP_MAX (128 * 4 + 16)
+static size_t flexTestWideSweep(flexTestWide *out) {
+    size_t n = 0;
+    for (uint32_t s = 0; s < 128; s++) {
+        const __uint128_t p = (__uint128_t)1 << s;
+        out[n++] = flexTestWideU(p - 1);
+        out[n++] = flexTestWideU(p);
+        if (s < 127) {
+            out[n++] = flexTestWideS(-(__int128_t)p);
+            out[n++] = flexTestWideS(-(__int128_t)p - 1);
+        } else {
+            out[n++] = flexTestWideS(INT128_MIN);
+        }
+    }
+
+    return n + flexTestWideFixedSet(out + n);
+}
+
+static int32_t flexTestWideDecoders(void) {
+    int32_t bad = 0;
+    flexTestWide vals[FLEX_TEST_WIDE_SWEEP_MAX];
+    const size_t n = flexTestWideSweep(vals);
+
+    cleaner(flexFree) flex *f = flexNew();
+    for (size_t i = 0; i < n; i++) {
+        databoxBig box;
+        flexTestWideBox(vals[i], i % 2 == 1, &box);
+        flexPushDataboxBig(&f, &box, FLEX_ENDPOINT_TAIL);
+    }
+
+    bool seen[256] = {0};
+    for (flexEntry *fe = flexHeadIfAny(f); fe; fe = flexNext(f, fe)) {
+        seen[fe[0]] = true;
+    }
+
+    for (uint32_t e = FLEX_NEG_8B; e <= FLEX_UINT_128B; e++) {
+        if (!seen[e]) {
+            printf("  FAIL: no entry with integer encoding %" PRIu32 "\n", e);
+            bad++;
+        }
+    }
+
+    /* flexGetByTypeBig ignores a poisoned destination entirely. */
+    size_t i = 0;
+    for (flexEntry *fe = flexHeadIfAny(f); fe && i < n;
+         fe = flexNext(f, fe), i++) {
+        databoxBig b;
+        memset(&b, 0xFF, sizeof(b));
+        flexGetByTypeBig(fe, &b);
+        const bool wide = flexTestWideIsWide(vals[i]);
+        if (!flexTestWideMatches((const databox *)&b, vals[i]) || b.allocated ||
+            b.created || b.big != wide ||
+            (wide && b.data.u128 != (__uint128_t *)b.extra)) {
+            printf("  FAIL: flexGetByTypeBig entry %zu\n", i);
+            bad++;
+        }
+    }
+
+    if (i != n) {
+        printf("  FAIL: decoded %zu of %zu entries\n", i, n);
+        bad++;
+    }
+
+    /* flexGetNextByTypeBig walks the same values. */
+    {
+        flexEntry *fe = flexHead(f);
+        databoxBig b;
+        memset(&b, 0xFF, sizeof(b));
+        flexGetByTypeBig(fe, &b);
+        bool ok = flexTestWideMatches((const databox *)&b, vals[0]);
+        size_t walked = 1;
+        memset(&b, 0xFF, sizeof(b));
+        while (flexGetNextByTypeBig(f, &fe, &b)) {
+            ok = ok && walked < n &&
+                 flexTestWideMatches((const databox *)&b, vals[walked]) &&
+                 b.big == flexTestWideIsWide(vals[walked]) && !b.allocated;
+            walked++;
+            memset(&b, 0xFF, sizeof(b));
+        }
+
+        if (!ok || walked != n || fe) {
+            printf("  FAIL: flexGetNextByTypeBig walked %zu of %zu\n", walked,
+                   n);
+            bad++;
+        }
+    }
+
+    /* flexGetByTypeCopy: a plain box gets a heap-owned wide value, and a
+     * DATABOX_BIG_INIT'd box gets it in its own extra. */
+    i = 0;
+    for (flexEntry *fe = flexHeadIfAny(f); fe && i < n;
+         fe = flexNext(f, fe), i++) {
+        const bool wide = flexTestWideIsWide(vals[i]);
+        databox plain = {{0}};
+        flexGetByTypeCopy(fe, &plain);
+        const uint8_t *const p = plain.data.ptr;
+        const bool inFlex =
+            p >= (const uint8_t *)f && p < (const uint8_t *)f + flexBytes(f);
+        if (!flexTestWideMatches(&plain, vals[i]) || plain.allocated != wide ||
+            plain.big != wide ||
+            (wide && (inFlex || ((uintptr_t)p % 16) != 0))) {
+            printf("  FAIL: flexGetByTypeCopy into a plain box, entry %zu\n",
+                   i);
+            bad++;
+        }
+
+        databoxFreeData(&plain);
+        if (wide &&
+            (plain.type != DATABOX_VOID || plain.data.ptr || plain.big)) {
+            printf("  FAIL: copied wide entry %zu not released\n", i);
+            bad++;
+        }
+
+        databoxBig big;
+        memset(&big, 0xFF, sizeof(big));
+        DATABOX_BIG_INIT(&big);
+        flexGetByTypeCopy(fe, (databox *)&big);
+        if (!flexTestWideMatches((const databox *)&big, vals[i]) ||
+            big.big != wide ||
+            (wide && big.data.u128 != (__uint128_t *)big.extra) ||
+            (!wide && big.allocated)) {
+            printf("  FAIL: flexGetByTypeCopy into a big box, entry %zu\n", i);
+            bad++;
+        }
+
+        /* The payload is inline, so this releases nothing. */
+        databoxFreeData((databox *)&big);
+        if (wide && !flexTestWideMatches((const databox *)&big, vals[i])) {
+            printf("  FAIL: FreeData touched inline entry %zu\n", i);
+            bad++;
+        }
+    }
+
+    const __uint128_t wu = UINT128_MAX - 3;
+    const __int128_t ws = INT128_MIN + 3;
+    databoxBig wU;
+    databoxBig wS;
+    DATABOX_BIG_UNSIGNED_128(&wU, wu);
+    DATABOX_BIG_SIGNED_128(&wS, ws);
+
+    /* One box reused across copies: a narrow copy drops the capability,
+     * so the next wide copy goes to the heap instead of through the
+     * narrow value. */
+    {
+        cleaner(flexFree) flex *two = flexNew();
+        flexPushSigned(&two, 7, FLEX_ENDPOINT_TAIL);
+        flexPushDataboxBig(&two, &wU, FLEX_ENDPOINT_TAIL);
+        databoxBig reuse;
+        memset(&reuse, 0, sizeof(reuse));
+        DATABOX_BIG_INIT(&reuse);
+        flexGetByTypeCopy(flexIndex(two, 0), (databox *)&reuse);
+        const bool narrowOk = reuse.type == DATABOX_UNSIGNED_64 &&
+                              reuse.data.u64 == 7 && !reuse.big;
+        flexGetByTypeCopy(flexIndex(two, 1), (databox *)&reuse);
+        if (!narrowOk || reuse.type != DATABOX_UNSIGNED_128 || !reuse.big ||
+            !reuse.allocated || reuse.data.u128 == (__uint128_t *)reuse.extra ||
+            *reuse.data.u128 != wu) {
+            printf("  FAIL: reused copy box\n");
+            bad++;
+        }
+
+        databoxFreeData((databox *)&reuse);
+    }
+
+    /* flexGetTwoDataboxesBig decodes every pair shape. */
+    {
+        cleaner(flexFree) flex *p1 = flexNew();
+        flexPushDataboxBig(&p1, &wU, FLEX_ENDPOINT_TAIL);
+        flexPushBytes(&p1, "pair payload", 12, FLEX_ENDPOINT_TAIL);
+        cleaner(flexFree) flex *p2 = flexNew();
+        flexPushSigned(&p2, -5, FLEX_ENDPOINT_TAIL);
+        flexPushDataboxBig(&p2, &wS, FLEX_ENDPOINT_TAIL);
+        cleaner(flexFree) flex *p3 = flexNew();
+        flexPushDataboxBig(&p3, &wS, FLEX_ENDPOINT_TAIL);
+        flexPushDataboxBig(&p3, &wU, FLEX_ENDPOINT_TAIL);
+
+        databoxBig a;
+        databoxBig b;
+        memset(&a, 0xFF, sizeof(a));
+        memset(&b, 0xFF, sizeof(b));
+        bool ok = flexGetTwoDataboxesBig(p1, flexBytes(p1), &a, &b) &&
+                  a.type == DATABOX_UNSIGNED_128 && a.big && !a.allocated &&
+                  a.data.u128 == (__uint128_t *)a.extra && *a.data.u128 == wu &&
+                  b.type == DATABOX_BYTES && !b.big && !b.allocated &&
+                  b.len == 12 &&
+                  (const uint8_t *)b.data.bytes.start > (const uint8_t *)p1 &&
+                  (const uint8_t *)b.data.bytes.start <
+                      (const uint8_t *)p1 + flexBytes(p1) &&
+                  memcmp(b.data.bytes.start, "pair payload", 12) == 0;
+
+        memset(&a, 0xFF, sizeof(a));
+        memset(&b, 0xFF, sizeof(b));
+        ok = ok && flexGetTwoDataboxesBig(p2, flexBytes(p2), &a, &b) &&
+             a.type == DATABOX_SIGNED_64 && a.data.i64 == -5 && !a.big &&
+             !a.allocated && b.type == DATABOX_SIGNED_128 && b.big &&
+             b.data.i128 == (__int128_t *)b.extra && *b.data.i128 == ws;
+
+        memset(&a, 0xFF, sizeof(a));
+        memset(&b, 0xFF, sizeof(b));
+        ok = ok && flexGetTwoDataboxesBig(p3, flexBytes(p3), &a, &b) &&
+             a.type == DATABOX_SIGNED_128 && *a.data.i128 == ws &&
+             b.type == DATABOX_UNSIGNED_128 && *b.data.u128 == wu;
+        if (!ok) {
+            printf("  FAIL: flexGetTwoDataboxesBig pair decode\n");
+            bad++;
+        }
+
+        /* Refusals leave both boxes untouched. */
+        cleaner(flexFree) flex *one = flexNewFromDataboxBig(&wU);
+        cleaner(flexFree) flex *three = flexDuplicate(p3);
+        flexPushSigned(&three, 1, FLEX_ENDPOINT_TAIL);
+        const struct {
+            const flex *f;
+            size_t len;
+        } refuse[] = {
+            {one, flexBytes(one)},
+            {three, flexBytes(three)},
+            {p3, flexBytes(p3) - 1},
+        };
+        for (size_t r = 0; r < COUNT_ARRAY(refuse); r++) {
+            databoxBig poison;
+            memset(&poison, 0xFF, sizeof(poison));
+            memset(&a, 0xFF, sizeof(a));
+            memset(&b, 0xFF, sizeof(b));
+            if (flexGetTwoDataboxesBig(refuse[r].f, refuse[r].len, &a, &b) ||
+                memcmp(&a, &poison, sizeof(a)) != 0 ||
+                memcmp(&b, &poison, sizeof(b)) != 0) {
+                printf("  FAIL: flexGetTwoDataboxesBig refusal %zu\n", r);
+                bad++;
+            }
+        }
+    }
+
+    /* flexGetSingleDataboxBig decodes with the same capability rules. */
+    {
+        cleaner(flexFree) flex *s1 = flexNew();
+        flexPushSigned(&s1, -77, FLEX_ENDPOINT_TAIL);
+        databoxBig o;
+        memset(&o, 0xFF, sizeof(o));
+        if (!flexGetSingleDataboxBig(s1, flexBytes(s1), &o) ||
+            o.type != DATABOX_SIGNED_64 || o.data.i64 != -77 || o.big ||
+            o.allocated) {
+            printf("  FAIL: flexGetSingleDataboxBig narrow decode\n");
+            bad++;
+        }
+    }
+
+    /* flexGetSigned / flexGetUnsigned refuse a value wider than 64 bits. */
+    {
+        cleaner(flexFree) flex *g = flexNew();
+        flexPushDataboxBig(&g, &wU, FLEX_ENDPOINT_TAIL);
+        flexPushDataboxBig(&g, &wS, FLEX_ENDPOINT_TAIL);
+        flexPushSigned(&g, -7, FLEX_ENDPOINT_TAIL);
+        flexPushUnsigned(&g, 7, FLEX_ENDPOINT_TAIL);
+        int64_t sv = 1;
+        uint64_t uv = 1;
+        const bool ok = !flexGetSigned(flexIndex(g, 0), &sv) &&
+                        !flexGetUnsigned(flexIndex(g, 0), &uv) &&
+                        !flexGetSigned(flexIndex(g, 1), &sv) &&
+                        !flexGetUnsigned(flexIndex(g, 1), &uv) && sv == 1 &&
+                        uv == 1 && flexGetSigned(flexIndex(g, 2), &sv) &&
+                        sv == -7 && flexGetUnsigned(flexIndex(g, 3), &uv) &&
+                        uv == 7;
+        if (!ok) {
+            printf("  FAIL: flexGetSigned / flexGetUnsigned on a wide value\n");
+            bad++;
+        }
+    }
+
+    return bad;
+}
+
 /* ====================================================================
  * Validator mutation sweep
  * ====================================================================
@@ -6416,7 +6878,7 @@ static void verify(flex *f, flexEntryData *e) {
  *     reports the same prefix;
  *   - every buffer the deep gate accepts decodes the way an untrusted
  *     reader would decode it: flexHead/flexNext visit exactly flexCount
- *     entries, flexGetByType into a databoxBig returns in-bounds payloads
+ *     entries, flexGetByTypeBig returns in-bounds payloads
  *     and never a pointer, a plain databox gets the type only for a
  *     96/128-bit entry, and when every trailer is the one the writer
  *     emits, flexTail/flexPrev visit the same entries in reverse.
@@ -6506,8 +6968,7 @@ flexValidateSweepDecode(const char *const name, const uint8_t *const buf,
         }
 
         databoxBig big;
-        DATABOX_BIG_INIT(&big);
-        flexGetByType(fe, (databox *)&big);
+        flexGetByTypeBig(fe, &big);
 
         /* Variable-length payloads must lie inside the buffer. */
         const bool variable = big.type == DATABOX_BYTES ||
@@ -6561,8 +7022,7 @@ flexValidateSweepDecode(const char *const name, const uint8_t *const buf,
         }
 
         databoxBig big;
-        DATABOX_BIG_INIT(&big);
-        flexGetByType(fe, (databox *)&big);
+        flexGetByTypeBig(fe, &big);
         fe = flexPrev(f, fe);
     }
 
@@ -7073,8 +7533,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             flexInsertByType(&rt, FLEX_ENTRY_AFTER_TAIL(rt),
                              (const databox *)&in);
             databoxBig out;
-            DATABOX_BIG_INIT(&out);
-            flexGetByType(flexHead(rt), (databox *)&out);
+            flexGetByTypeBig(flexHead(rt), &out);
             if (out.type != DATABOX_SIGNED_128 ||
                 *out.data.i128 != bigVals[i]) {
                 printf("  FAIL: 128-bit value %zu read back as type %d\n", i,
@@ -7599,6 +8058,16 @@ int32_t flexTest(int32_t argc, char **argv) {
 
         if (bad) {
             printf("  FAIL: %" PRId32 " self-push checks\n", bad);
+            return bad;
+        }
+        printf("  ok\n");
+    }
+
+    printf("Verify capability-owning decoders at every integer width:\n");
+    {
+        const int32_t bad = flexTestWideDecoders();
+        if (bad) {
+            printf("  FAIL: %" PRId32 " wide decoder checks\n", bad);
             return bad;
         }
         printf("  ok\n");

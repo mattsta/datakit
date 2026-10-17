@@ -545,7 +545,7 @@ databoxFree(heapBox);         /* frees bytes, then frees heapBox */
 
 `databoxFreeData` only releases when `allocated` is set **and** the type is
 `DATABOX_BYTES`, `DATABOX_SIGNED_128` / `DATABOX_UNSIGNED_128` (a heap
-payload from one of the copy helpers), or
+payload from one of the copy helpers or `flexGetByTypeCopy`), or
 `DATABOX_PTR_MDSC` (released with `mdscfree`). A `databoxBig` whose payload
 pointer aims at its own `extra` holds the value inline and is left alone,
 even if a stale `allocated` bit is set. It is a no-op for every other type,
@@ -877,7 +877,33 @@ value — it can only borrow one. `databoxBig` supplies that storage in
 `extra`, and `DATABOX_BIG_INIT` is what aims the pointer at it. Anything
 that may hold more than 64 bits (numeric quantum sets, `intsetBig`,
 `flexPushDataboxBig`, `flexGetSingleDataboxBig`) must therefore use a
-`databoxBig`; decoding a 128-bit element into a plain `databox` asserts.
+`databoxBig`. Decoding a 128-bit element into a plain `databox` with
+`big = 0` reports only the type (`data.ptr == NULL`), and pushing such a
+type-only box asserts.
+
+`extra` is 16-byte aligned (`_Alignof(databoxBig) == 16`, static-asserted)
+because decoders store the value through `data.u128` as a full
+`__uint128_t`. The size stays 32 bytes; structs that embed a `databoxBig`
+inherit the 16-byte alignment.
+
+### Who sets up the wide capability
+
+Decoders read `big` on the destination: with `big = 1` they write the value
+through the pointer, with `big = 0` they report the type only. So **whoever
+owns the destination storage sets it up before decoding**:
+
+- A caller passing its own box to a fill-in API uses `DATABOX_BIG_INIT` on a
+  `databoxBig` to receive wide values, or zeroes the box to receive the type
+  only. An uninitialized box is a caller bug: stale `big` bits turn into a
+  write through a stale pointer.
+- When the destination is yours anyway, prefer the capability-owning
+  decoders in flex (`flexGetByTypeBig`, `flexGetNextByTypeBig`,
+  `flexGetTwoDataboxesBig`): they ignore the box's prior state and return
+  `big = 1` exactly when the value is wide.
+- Library-filled results and library temporaries always carry their own
+  wide storage.
+- A narrow decode overwrites the pointer, so re-run `DATABOX_BIG_INIT`
+  before each decode into the same box.
 
 ## Best Practices
 

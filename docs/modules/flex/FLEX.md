@@ -321,6 +321,8 @@ bool flexGetTwoDataboxes(const uint8_t *buf, size_t buflen,
                          databox *a, databox *b);
 bool flexGetSingleDataboxBig(const uint8_t *buf, size_t buflen,
                              databoxBig *out);
+bool flexGetTwoDataboxesBig(const uint8_t *buf, size_t buflen,
+                            databoxBig *a, databoxBig *b);
 
 /* 64- or 128-bit numeric append; 128-bit values are normalised through
  * the DATABOX_BIG_*_128 macros so the push never depends on the caller
@@ -335,6 +337,12 @@ The returned flex **is** the byte buffer (length via `flexBytes`); free it
 with `flexFree`. The unwrap calls return false and leave their outputs
 untouched on any malformation. For `DATABOX_BYTES` the extracted box points
 into `buf`, so it is valid only while `buf` lives.
+
+The plain-box unwraps (`flexGetSingleDatabox`, `flexGetTwoDataboxes`) also
+refuse a 96/128-bit element, which a `databox` cannot hold. The `*Big`
+unwraps accept every element and decode with `flexGetByTypeBig`: the
+output's prior state is ignored, a wide value lands in the box's own
+`extra` with `big = 1`, and any other value has `big = 0`.
 
 `flexNewFromDataboxPtrs` takes the `const databox **` convention that
 multimap and the persist ops use, avoiding a copy into a contiguous array
@@ -708,10 +716,15 @@ void flexGetByTypeCopy(const flexEntry *const fe, databox *box);
 /* Get and advance to next entry */
 bool flexGetNextByType(flex *f, flexEntry **fe, databox *box);
 
-/* Get signed integer value */
+/* Capability-owning decode into a databoxBig: every type, including
+ * 96/128-bit, decodes fully whatever the box held before */
+void flexGetByTypeBig(const flexEntry *fe, databoxBig *box);
+bool flexGetNextByTypeBig(flex *f, flexEntry **fe, databoxBig *box);
+
+/* Get signed integer value (false if it does not fit int64_t) */
 bool flexGetSigned(flexEntry *fe, int64_t *value);
 
-/* Get unsigned integer value */
+/* Get unsigned integer value (false if negative or wider than 64 bits) */
 bool flexGetUnsigned(flexEntry *fe, uint64_t *value);
 ```
 
@@ -754,10 +767,40 @@ false. The bytes it hands back point **into the flex buffer**, so they are
 valid only until the next flex mutation. Use `flexGetByTypeCopy` when the
 value must outlive the flex, and release it with `databoxFreeData`.
 
-A 128-bit element cannot be decoded into a plain `databox` (its `data.i128`
-is a pointer with nothing behind it) and will assert. Use
-`flexGetSingleDataboxBig` or decode into a `DATABOX_BIG_INIT`'d
-`databoxBig`.
+#### 96/128-bit elements
+
+A plain `databox` has no room for a 96/128-bit value: `data.i128` is a
+pointer. `flexGetByType` reads the destination's `big` flag to decide what
+to do. With `big = 1` (a `DATABOX_BIG_INIT`'d `databoxBig`) it writes the
+value through the pointer; with `big = 0` it reports only the type
+(`SIGNED_128` / `UNSIGNED_128`) and sets `data.ptr = NULL`. The owner of
+the destination sets this up, and an uninitialized box is a bug (see
+databox's "Who sets up the wide capability").
+
+When the box is yours, use `flexGetByTypeBig` instead. It never reads the
+box's prior state, so uninitialized or reused storage is fine. On return
+`allocated = 0`, and `big = 1` exactly when the value is wide, with
+`data.i128` / `data.u128` aimed at the box's own `extra`. A narrow result
+has `big = 0`, so its first 16 bytes can be copied out as a plain
+`databox`. A wide value borrows from the box, the way BYTES borrow from the
+flex; keep it with `databoxCopy` (owned) or `databoxBigCopyFrom`
+(re-homed).
+
+```c
+databoxBig box;                       /* no initialization needed */
+flexGetByTypeBig(fe, &box);
+if (box.type == DATABOX_SIGNED_128) {
+    __int128_t v = *box.data.i128;    /* points at box.extra */
+}
+```
+
+`flexGetByTypeCopy` returns a self-contained value. BYTES and containers
+are copied to the heap (`allocated = 1`). A wide value is written into the
+storage the box already points at when `big = 1` (`allocated` unchanged);
+otherwise it goes to a 16-byte heap block with `allocated = 1` and
+`big = 1`. Every other value has `allocated = 0` and `big = 0`. Release the
+result with `databoxFreeData`. As with `flexGetByType`, `big` must be
+initialized.
 
 ## Finding Elements
 

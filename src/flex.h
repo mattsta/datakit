@@ -42,8 +42,9 @@ void flexFree(flex *f);
  *     (DATABOX_CONTAINER_REFERENCE_EXTERNAL) are opaque integers that
  *     flex never dereferences; a caller that stores pointers in them
  *     must not accept them from untrusted bytes.
- *   - A 96/128-bit entry decodes fully only into a databoxBig set up
- *     with DATABOX_BIG_INIT; see flexGetByType.
+ *   - A 96/128-bit entry decodes fully only into wide-capable storage:
+ *     flexGetByTypeBig, or a databoxBig set up with DATABOX_BIG_INIT;
+ *     see flexGetByType.
  *   - It does not verify reverse-traversal trailers, so walk untrusted
  *     bytes forward only (flexHead / flexNext, not flexTail / flexPrev).
  *   - It does not verify the contents of nested containers.  A
@@ -194,8 +195,8 @@ bool flexGetSingleDatabox(const uint8_t *buf, size_t buflen, databox *out);
  * [key,field] pair shape.  Validates the buffer + requires exactly two
  * elements, then extracts them into *a and *b.  Returns false, leaving
  * both boxes untouched, on any malformation, an MDSC (pointer) entry, or
- * a 96/128-bit integer.  (For BYTES the boxes point into `buf`; copy if
- * they must outlive it.) */
+ * a 96/128-bit integer (use flexGetTwoDataboxesBig for those).  (For
+ * BYTES the boxes point into `buf`; copy if they must outlive it.) */
 bool flexGetTwoDataboxes(const uint8_t *buf, size_t buflen, databox *a,
                          databox *b);
 
@@ -224,13 +225,21 @@ flex *flexNewFromDataboxPtrs(const databox *const *boxes, size_t n);
  *   depends on the caller having set ->big.
  * flexNewFromDataboxBig: a fresh 1-element flex holding `b` (free with
  * flexFree). flexGetSingleDataboxBig: defensive inverse — validate + require
- * exactly one element + decode into `*out` (DATABOX_BIG_INIT'd internally so
- * 128-bit has storage).  Returns false on malformation or an MDSC (pointer)
- * entry. */
+ * exactly one element + decode into `*out` with flexGetByTypeBig, so any
+ * prior state of `*out` is ignored and every type, 96/128-bit included,
+ * decodes fully.  Returns false, leaving `*out` untouched, on malformation
+ * or an MDSC (pointer) entry.
+ * flexGetTwoDataboxesBig: the same for the 2-element pair shape (see
+ * flexGetTwoDataboxes), decoding both entries with flexGetByTypeBig.
+ * Returns false, leaving both boxes untouched, on malformation or an MDSC
+ * entry.  In both, a 96/128-bit value lives in the box's own `extra` and
+ * BYTES point into `buf`. */
 void flexPushDataboxBig(flex **ff, const databoxBig *b, flexEndpoint where);
 flex *flexNewFromDataboxBig(const databoxBig *b);
 bool flexGetSingleDataboxBig(const uint8_t *buf, size_t buflen,
                              databoxBig *out);
+bool flexGetTwoDataboxesBig(const uint8_t *buf, size_t buflen, databoxBig *a,
+                            databoxBig *b);
 
 /* Self-test for the flex<->databox factory (round-trip + defensive unwrap).
  * Returns the number of failed checks (0 == all passed). */
@@ -375,14 +384,42 @@ flexEntry DK_FN_PURE *flexTailWithElements(const flex *const f,
  *     plain databox (big == 0) only the type is reported (SIGNED_128 or
  *     UNSIGNED_128) and data.ptr is set to NULL.  A box's 'big' flag must
  *     therefore be initialized: zero the box, or use DATABOX_BIG_INIT.
- *   - An MDSC entry reports DATABOX_PTR_MDSC with the stored pointer. */
+ *     The owner of the destination sets it up (see databox.h); when the
+ *     destination is yours, prefer flexGetByTypeBig.
+ *   - Only type, data and (for variable-length types) len are written;
+ *     the flag bits ('allocated', 'big') are left as they were.
+ *   - An MDSC entry reports DATABOX_PTR_MDSC with the stored pointer.
+ *
+ * flexGetByTypeBig decodes into a databoxBig and owns its wide capability:
+ * it never reads the box's prior state, so uninitialized or poisoned
+ * storage is fine.  On return allocated = 0, and big = 1 exactly when the
+ * value is 96/128-bit, with data.i128 / data.u128 aimed at box->extra.
+ * Any other value has big = 0, so its leading 16 bytes can be copied out
+ * as a plain databox.  BYTES and containers borrow from the flex as with
+ * flexGetByType, and a wide value borrows from 'box' itself: copy the box
+ * with databoxCopy (owned) or databoxBigCopyFrom (re-homed) to keep it
+ * past either.  flexGetNextByTypeBig is flexGetNextByType decoding with
+ * flexGetByTypeBig.
+ *
+ * flexGetByTypeCopy produces a self-contained value that never borrows
+ * from the flex: BYTES and containers are copied to the heap
+ * (allocated = 1).  A 96/128-bit value is written into the storage 'box'
+ * already points at when 'box->big' is set (a DATABOX_BIG_INIT'd
+ * databoxBig, or a box that already owns a wide heap payload), leaving
+ * 'allocated' as it was; otherwise it goes to a 16-byte heap block with
+ * allocated = 1 and big = 1.  Every other value has allocated = 0 and
+ * big = 0.  Release the result with databoxFreeData.  As with
+ * flexGetByType, 'big' must be initialized. */
 void flexGetByType(const flexEntry *fe, databox *box);
 void flexGetByTypeWithReference(const flexEntry *const fe, databox *box,
                                 const struct multimapAtom *referenceContainer);
 void flexGetByTypeCopy(const flexEntry *const fe, databox *box);
 bool flexGetNextByType(flex *f, flexEntry **fe, databox *box);
+void flexGetByTypeBig(const flexEntry *fe, databoxBig *box);
+bool flexGetNextByTypeBig(flex *f, flexEntry **fe, databoxBig *box);
 
-/* Retrieve specific data */
+/* Retrieve specific data.  Each returns false when the value does not fit
+ * the result type, including any 96/128-bit value. */
 bool flexGetSigned(flexEntry *fe, int64_t *value);
 bool flexGetUnsigned(flexEntry *fe, uint64_t *value);
 
