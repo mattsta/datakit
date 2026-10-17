@@ -197,6 +197,26 @@ static bool testCancelOtherCallback(timerWheel *tw, timerWheelId id,
     return true;
 }
 
+/* Fires and repeats for the differential test; the answer, not the
+ * callback, is what is checked. */
+static bool testOracleCallback(timerWheel *tw, timerWheelId id,
+                               void *clientData) {
+    (void)tw;
+    (void)id;
+    (void)clientData;
+    return true;
+}
+
+/* xorshift64 for reproducible differential workloads */
+static uint64_t testOracleRand(uint64_t *state) {
+    uint64_t x = *state;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    *state = x;
+    return x;
+}
+
 /* Equivalent callbacks for multiTimer comparison */
 static bool mtCountingCallback(multiTimer *t, multiTimerId id,
                                void *clientData) {
@@ -1588,6 +1608,126 @@ int timerWheelTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("timerWheel: next-event query matches a brute-force oracle") {
+        /* Random register / cancel / advance mixes across pending, every
+         * wheel level, and overflow.  After each step the query (with its
+         * cache dropped, so it walks) must equal an oracle that decodes
+         * every stored entry.  Before the cache is dropped, the cached
+         * answer may only be early (a cancellation does not refresh it),
+         * never late, and never "nothing" while a timer is live. */
+#ifdef SANITIZER_BUILD
+        const int rounds = 4;
+        const int steps = 500;
+#else
+        const int rounds = 16;
+        const int steps = 1500;
+#endif
+        uint64_t rng = UINT64_C(0x9E3779B97F4A7C15);
+        uint64_t checks = 0;
+        uint64_t mismatches = 0;
+        uint64_t lateCached = 0;
+
+        for (int round = 0; round < rounds; round++) {
+            cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
+            timerWheelId ids[512];
+            size_t nids = 0;
+            const bool fineSteps = (round & 1) != 0;
+
+            for (int step = 0; step < steps; step++) {
+                const uint64_t r = testOracleRand(&rng) % 100;
+                if (r < 40) {
+                    uint64_t delay;
+                    switch (testOracleRand(&rng) % 5) {
+                    case 0:
+                        delay = testOracleRand(&rng) % 3000;
+                        break;
+                    case 1:
+                        delay = testOracleRand(&rng) % 300000;
+                        break;
+                    case 2:
+                        delay = 200000 + testOracleRand(&rng) % 20000000;
+                        break;
+                    case 3:
+                        delay = testOracleRand(&rng) % UINT64_C(1200000000);
+                        break;
+                    default:
+                        /* Beyond the wheels' ~18.6h coverage */
+                        delay = UINT64_C(70000000000) +
+                                testOracleRand(&rng) % UINT64_C(10000000000);
+                        break;
+                    }
+                    const uint64_t repeat =
+                        (testOracleRand(&rng) & 63) == 0
+                            ? 50000 + testOracleRand(&rng) % 500000
+                            : 0;
+                    const timerWheelId id = timerWheelRegister(
+                        tw, delay, repeat, testOracleCallback, NULL);
+                    if (nids < sizeof(ids) / sizeof(ids[0])) {
+                        ids[nids++] = id;
+                    } else {
+                        ids[testOracleRand(&rng) % nids] = id;
+                    }
+                } else if (r < 55 && nids) {
+                    timerWheelUnregister(tw, ids[testOracleRand(&rng) % nids]);
+                } else {
+                    uint64_t advance;
+                    if (fineSteps) {
+                        advance = testOracleRand(&rng) % 1000;
+                    } else {
+                        switch (testOracleRand(&rng) % 4) {
+                        case 0:
+                            advance = testOracleRand(&rng) % 1000;
+                            break;
+                        case 1:
+                            advance = testOracleRand(&rng) % 300000;
+                            break;
+                        case 2:
+                            advance = testOracleRand(&rng) % 3000000;
+                            break;
+                        default:
+                            advance =
+                                testOracleRand(&rng) % UINT64_C(400000000);
+                            break;
+                        }
+                    }
+                    timerWheelAdvanceTime(tw, advance);
+                }
+
+                const timerWheelSystemMonotonicUs want =
+                    timerWheelTestNextEventOracle(tw);
+                const timerWheelSystemMonotonicUs cached =
+                    timerWheelNextTimerEventStartUs(tw);
+                if (want != 0 && (cached == 0 || cached > want)) {
+                    lateCached++;
+                }
+
+                timerWheelTestInvalidateNextEventCache(tw);
+                const timerWheelSystemMonotonicUs got =
+                    timerWheelNextTimerEventStartUs(tw);
+                checks++;
+                if (got != want) {
+                    if (mismatches < 4) {
+                        printf("    oracle mismatch round %d step %d: got "
+                               "%" PRId64 " want %" PRId64 "\n",
+                               round, step, got, want);
+                    }
+                    mismatches++;
+                }
+            }
+        }
+
+        if (mismatches != 0) {
+            ERR("Next-event query disagreed with the oracle %" PRIu64
+                " times in %" PRIu64 " checks",
+                mismatches, checks);
+        }
+        if (lateCached != 0) {
+            ERR("Cached next-event answer was later than the oracle %" PRIu64
+                " times in %" PRIu64 " checks",
+                lateCached, checks);
+        }
+    }
+
     /* ================================================================
      * Statistics Tests
      * ================================================================ */
@@ -2177,6 +2317,57 @@ int timerWheelTest(int argc, char *argv[]) {
 
             printf("    %-12zu  %9.1f cy  %9.1f cy  %7.2fx\n", count, twCycles,
                    mtCycles, mtCycles / twCycles);
+        }
+        printf("\n");
+    }
+
+    TEST("BENCHMARK: process-then-query event loop") {
+        /* The event-loop shape: process 1ms of time, then ask for the
+         * next event.  Processing drops the next-event cache, so every
+         * query here walks the wheel.  Repeating timers keep the
+         * population steady: "near" delays are uniform in 1-255ms
+         * (wheel 0), "idle" ones are 20-40s timeouts (wheels 1 and 2). */
+        printf("    Measuring next-event queries after each 1ms pass...\n");
+        const struct {
+            size_t nearCount;
+            size_t idleCount;
+        } shapes[] = {{100, 0},
+                      {BENCH_SCALE_1K, 0},
+                      {BENCH_SCALE_10K, 0},
+                      {BENCH_SCALE_1K, BENCH_SCALE_10K}};
+        const int iterations = BENCH_QUERY_COUNT / 50;
+
+        printf("    %-8s  %-8s  %14s  %14s\n", "Near", "Idle", "query ns/iter",
+               "process ns/iter");
+        uint64_t rng = 12345;
+        for (size_t s = 0; s < sizeof(shapes) / sizeof(shapes[0]); s++) {
+            cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
+            for (size_t i = 0; i < shapes[s].nearCount; i++) {
+                const uint64_t d = 1000 + testOracleRand(&rng) % 254000;
+                timerWheelRegister(tw, d, d, testOracleCallback, NULL);
+            }
+            for (size_t i = 0; i < shapes[s].idleCount; i++) {
+                const uint64_t d = 20000000 + testOracleRand(&rng) % 20000000;
+                timerWheelRegister(tw, d, d, testOracleCallback, NULL);
+            }
+
+            volatile int64_t sink = 0;
+            uint64_t processNs = 0;
+            uint64_t queryNs = 0;
+            for (int i = 0; i < iterations; i++) {
+                const uint64_t a = timeUtilMonotonicNs();
+                timerWheelAdvanceTime(tw, 1000);
+                const uint64_t b = timeUtilMonotonicNs();
+                sink += timerWheelNextTimerEventStartUs(tw);
+                const uint64_t c = timeUtilMonotonicNs();
+                processNs += b - a;
+                queryNs += c - b;
+            }
+            (void)sink;
+
+            printf("    %-8zu  %-8zu  %14.0f  %14.0f\n", shapes[s].nearCount,
+                   shapes[s].idleCount, (double)queryNs / iterations,
+                   (double)processNs / iterations);
         }
         printf("\n");
     }

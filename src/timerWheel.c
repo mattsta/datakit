@@ -241,6 +241,22 @@ static inline uint32_t getWheelSize(int32_t level) {
     }
 }
 
+/* Get the span of one slot for a level, in microseconds */
+static inline uint64_t getWheelResolution(int32_t level) {
+    switch (level) {
+    case 0:
+        return WHEEL0_RESOLUTION_US;
+    case 1:
+        return WHEEL1_RESOLUTION_US;
+    case 2:
+        return WHEEL2_RESOLUTION_US;
+    case 3:
+        return WHEEL3_RESOLUTION_US;
+    default:
+        return 0;
+    }
+}
+
 /* ====================================================================
  * Timer Entry Operations
  * ==================================================================== */
@@ -1250,21 +1266,45 @@ timerWheelSystemMonotonicUs timerWheelNextTimerEventStartUs(timerWheel *tw) {
         earliest = flexMinExpiry(tw, tw->pendingTimers);
     }
 
-    /* Wheel 0: minimum over every occupied slot.  The nearest slot alone
-     * is not enough, because a slot holding only cancelled entries has
-     * no live expiry.  The occupancy bitmap bounds the walk to
-     * WHEEL0_SIZE slots. */
-    for (uint32_t word = 0; word < WHEEL0_SIZE / 64; word++) {
-        for (uint64_t bits = tw->wheel0Occupied[word]; bits; bits &= bits - 1) {
-            const uint32_t idx = word * 64 + (uint32_t)__builtin_ctzll(bits);
+    /* Wheel 0: the first slot in ring order from the current slot that
+     * holds a live entry.  The wheel clock is always a whole number of
+     * wheel-0 ticks (it starts at 0 and only ever moves by whole ticks),
+     * and every placement measures from it, so the slot at ring offset i
+     * holds exactly the expiries in [(c + i) * R0, (c + i + 1) * R0) for
+     * c = currentTimeUs / R0.  Ring order is therefore absolute order,
+     * and the first live slot holds the wheel's minimum.  A slot holding
+     * only cancelled entries has no live expiry and does not end the
+     * walk.  The walk also stops once a slot's lower bound cannot beat
+     * what pending already holds.  The occupancy bitmap skips empty
+     * slots, so the walk visits at most WHEEL0_SIZE occupied slots. */
+    {
+        const uint64_t base = tw->currentTimeUs / WHEEL0_RESOLUTION_US;
+        uint32_t offset = 0;
+        while (offset < WHEEL0_SIZE) {
+            const uint32_t from = (tw->slotIndex[0] + offset) & WHEEL0_MASK;
+            const uint32_t dist = wheel0OccupiedDistance(tw, from);
+            if (dist >= WHEEL0_SIZE - offset) {
+                break;
+            }
+
+            offset += dist;
+            if ((base + offset) * WHEEL0_RESOLUTION_US >= earliest) {
+                break;
+            }
+
+            const uint32_t idx = (tw->slotIndex[0] + offset) & WHEEL0_MASK;
+            offset++;
             if (!tw->wheel0[idx]) {
                 continue;
             }
 
             const timerWheelAdjustedUs slotMin =
                 flexMinExpiry(tw, tw->wheel0[idx]);
-            if (slotMin < earliest) {
-                earliest = slotMin;
+            if (slotMin != UINT64_MAX) {
+                if (slotMin < earliest) {
+                    earliest = slotMin;
+                }
+                break;
             }
         }
     }
@@ -1286,10 +1326,22 @@ timerWheelSystemMonotonicUs timerWheelNextTimerEventStartUs(timerWheel *tw) {
      * every entry in s: the wheel's live minimum lies in s or s + 1.  A
      * tombstone-only slot contributes nothing and does not end the walk.
      * The successor of the last ring slot is the current slot, which
-     * holds nothing. */
+     * holds nothing.
+     *
+     * The same lower bound prunes: ring offset i is absolute slot
+     * floor(cur / R) + i, whose entries all expire at or after that slot
+     * times R.  Once that bound reaches the earliest expiry found so far,
+     * neither that slot nor anything after it in this wheel can be
+     * earlier, so the wheel's walk ends without decoding it. */
     for (int32_t level = 1; level < NUM_WHEELS; level++) {
         const uint32_t size = getWheelSize(level);
+        const uint64_t resolution = getWheelResolution(level);
+        const uint64_t base = tw->currentTimeUs / resolution;
         for (uint32_t i = 0; i < size; i++) {
+            if ((base + i) * resolution >= earliest) {
+                break;
+            }
+
             const uint32_t idx = (tw->slotIndex[level] + i) & (size - 1);
             flex **slot = getSlot(tw, level, idx);
             if (!*slot || flexCount(*slot) == 0) {
@@ -1306,7 +1358,8 @@ timerWheelSystemMonotonicUs timerWheelNextTimerEventStartUs(timerWheel *tw) {
             }
 
             flex **next = getSlot(tw, level, (idx + 1) & (size - 1));
-            if (*next && flexCount(*next) > 0) {
+            if (*next && flexCount(*next) > 0 &&
+                (base + i + 1) * resolution < earliest) {
                 const timerWheelAdjustedUs nextMin = flexMinExpiry(tw, *next);
                 if (nextMin < earliest) {
                     earliest = nextMin;
@@ -1403,3 +1456,57 @@ void timerWheelResetStats(timerWheel *tw) {
     /* overflowCount / pendingCount / cancelledPending / memoryBytes are
      * current state computed by timerWheelGetStats, not counters */
 }
+
+#ifdef DATAKIT_TEST
+/* Test hooks for the next-event differential test (declared in
+ * timerWheel.h). */
+void timerWheelTestInvalidateNextEventCache(timerWheel *tw) {
+    tw->nextExpiryCacheValid = false;
+}
+
+static void oracleFlexMin(const timerWheel *tw, const flex *f,
+                          timerWheelAdjustedUs *earliest) {
+    if (!f) {
+        return;
+    }
+
+    for (flexEntry *fe = flexHeadIfAny(f); fe;) {
+        timerWheelEntry e;
+        fe = readTimerEntry(f, fe, &e);
+        if (!isTimerCancelled(tw, e.id) && e.expireTimeUs < *earliest) {
+            *earliest = e.expireTimeUs;
+        }
+    }
+}
+
+timerWheelSystemMonotonicUs
+timerWheelTestNextEventOracle(const timerWheel *tw) {
+    timerWheelAdjustedUs earliest = UINT64_MAX;
+
+    flex *const *wheels[NUM_WHEELS] = {tw->wheel0, tw->wheel1, tw->wheel2,
+                                       tw->wheel3};
+    for (int32_t level = 0; level < NUM_WHEELS; level++) {
+        for (uint32_t i = 0; i < getWheelSize(level); i++) {
+            oracleFlexMin(tw, wheels[level][i], &earliest);
+        }
+    }
+
+    oracleFlexMin(tw, tw->pendingTimers, &earliest);
+
+    multimapIterator iter;
+    multimapIteratorInit(tw->overflow, &iter, true);
+    databox boxes[ELEMENTS_PER_TIMER];
+    while (multimapIteratorNextInto(&iter, boxes, ELEMENTS_PER_TIMER)) {
+        if (!isTimerCancelled(tw, boxes[3].data.u64) &&
+            boxes[0].data.u64 < earliest) {
+            earliest = boxes[0].data.u64;
+        }
+    }
+
+    if (earliest == UINT64_MAX) {
+        return 0;
+    }
+
+    return (timerWheelSystemMonotonicUs)adjustedToAbsolute(tw, earliest);
+}
+#endif

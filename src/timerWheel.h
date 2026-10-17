@@ -441,4 +441,11 @@ void timerWheelResetStats(timerWheel *tw);
 
 #ifdef DATAKIT_TEST
 int timerWheelTest(int argc, char *argv[]);
+
+/* Test hooks for the next-event differential test: drop the next-event
+ * cache so the next query walks the wheel, and a brute-force answer to
+ * the same query that decodes every entry (skipping tombstones) and
+ * uses none of the bounds the real query relies on. */
+void timerWheelTestInvalidateNextEventCache(timerWheel *tw);
+timerWheelSystemMonotonicUs timerWheelTestNextEventOracle(const timerWheel *tw);
 #endif

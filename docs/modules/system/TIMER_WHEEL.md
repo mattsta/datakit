@@ -330,15 +330,24 @@ so register-heavy workloads keep O(1) next-event queries. On a cache miss the
 scan covers:
 
 - the pending queue;
-- every occupied wheel-0 slot (found through the occupancy bitmap), because a
-  slot holding only cancelled entries has no live expiry and must not mask a
-  later live timer;
+- wheel 0, from the current slot in ring order, through the occupancy bitmap, up
+  to the first slot holding a live entry. The wheel clock is always a whole
+  number of 1ms ticks, so a wheel-0 slot holds exactly the expiries of its own
+  millisecond and ring order is expiry order. A slot holding only cancelled
+  entries has no live expiry and does not end the walk;
 - for each upper wheel, the first slot in ring order holding a live entry, plus
   its successor slot. An entry's slot is `floor(E / R)` or one less, so slot
   order matches expiry order to within one slot and the wheel's minimum lies in
   one of those two slots;
 - the overflow map from its head, skipping cancelled entries, up to the first
   live one.
+
+Every slot at ring offset `i` holds only expiries at or after
+`(floor(clock / R) + i) * R`, so each walk also stops as soon as that bound
+reaches the earliest expiry already found: with a near timer in pending or wheel
+0, the upper wheels' far slots are never decoded. A miss therefore decodes the
+entries of a few slots rather than every stored timer, which keeps the
+process-then-query event loop cheap.
 
 The result is 0 only when no live timer is stored. A query made from inside a
 callback is answered but not cached, because the slot being processed is
