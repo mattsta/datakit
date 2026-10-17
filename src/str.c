@@ -44,9 +44,10 @@
  * representation.
  *
  * Resulting 'box' may end up containing the converted value of 'p'
- * as one of:
- *   - unsigned 64 bit integers (0 to UINT64_MAX)
- *   - signed 64 bit integers (INT64_MIN to -1)
+ * as exactly one of:
+ *   - signed 64 bit integers (INT64_MIN to INT64_MAX)
+ *   - unsigned 64 bit integers (INT64_MAX + 1 to UINT64_MAX), only for
+ *     positives above the signed range
  *   - float
  *   - double
  *
@@ -59,13 +60,15 @@ bool StrScanScanReliable(const void *const p_, const size_t len,
     const uint8_t *restrict p = p_;
     int_fast32_t sign = 1; /* positive = 1, negative = -1 */
 
-    uint32_t dig = 0; /* number of digits */
+    uint32_t dig = 0; /* byte index into 'p', the sign included */
 
     /* This dumb type is because GCC sees 'uint64_t'
      * as 'long unsigned int' but the overflow functions
      * only take 'long long unsigned int' */
     unsigned long long int x = 0; /* significand */
-    uint64_t maxAbsoluteValueX = UINT64_MAX;
+    /* Largest magnitude a SIGNED_64 holds for the sign: INT64_MAX, or 2^63
+     * after a leading '-'. */
+    uint64_t maxAbsoluteValueX = INT64_MAX;
 
     /* Don't allow leading zeroes (unless it's 0.xxxx)
      * Don't allow leading dot (we don't consider .1234 a valid parse) */
@@ -187,26 +190,20 @@ bool StrScanScanReliable(const void *const p_, const size_t len,
         }
     }
 
-    /* Signed numbers (prefer first so future math can handle going
-     * negative fairly easily) */
-    if (dig < 19 || (dig == 19 && x <= maxAbsoluteValueX)) {
-        /* Fast path for decimal 64 bit signed integers. */
-        /* If digits < 19 or digits == 19 and accumulator < 2^63 (+neg) ... */
-        /* We can safely multiply the known-unsigned 'x' by 'sign' to obtain
-         * the final result. */
+    /* 'x' is the exact magnitude (accumulation is overflow-checked), so
+     * classify by value: SIGNED_64 if it fits the sign's bound (INT64_MIN
+     * included), UNSIGNED_64 for positives above INT64_MAX, otherwise no
+     * 64-bit integer form. */
+    if (x <= maxAbsoluteValueX) {
+        /* 'x' is unsigned, so 'x * sign' is the two's-complement negation
+         * for a negative sign, INT64_MIN's magnitude 2^63 included. */
         const int64_t y = x * sign;
         box->data.i = y;
         box->type = DATABOX_SIGNED_64;
         return true;
     }
 
-    /* Unsigned numbers (prefer second only if number is 2^63+) */
-    if (dig <= 20 && sign > 0) {
-        /* Fast path for decimal 64 bit unsigned integers. */
-        /* If digits <= 20 and NOT signed... */
-        /* This is okay because we use overflow-safe multiply and
-         * addition checks in the original calculation of 'x',
-         * so we don't have to worry about wrap-around while decoding */
+    if (sign > 0) {
         box->data.u = x;
         box->type = DATABOX_UNSIGNED_64;
         return true;
@@ -1333,6 +1330,66 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
         if (!worked) {
             databoxReprSay("Expected success, but got", &result);
             assert(NULL);
+        }
+        /* A positive above INT64_MAX reads as UNSIGNED_64. */
+        assert(result.type == DATABOX_UNSIGNED_64);
+        assert(result.data.u == (uint64_t)INT64_MAX + 1);
+    }
+
+    TEST("Reliable number parsing integer edges, by value?") {
+        /* Canonical spellings at and just past the edges of
+         * [INT64_MIN, UINT64_MAX], each with its expected reading. */
+        const struct {
+            const char *s;
+            bool ok;
+            databoxType type;
+            int64_t i;
+            uint64_t u;
+        } rows[] = {
+            {"-9223372036854775808", true, DATABOX_SIGNED_64, INT64_MIN, 0},
+            {"-9223372036854775807", true, DATABOX_SIGNED_64, -INT64_MAX, 0},
+            {"-1000000000000000000", true, DATABOX_SIGNED_64,
+             INT64_C(-1000000000000000000), 0},
+            {"-999999999999999999", true, DATABOX_SIGNED_64,
+             INT64_C(-999999999999999999), 0},
+            {"9223372036854775807", true, DATABOX_SIGNED_64, INT64_MAX, 0},
+            {"1000000000000000000", true, DATABOX_SIGNED_64,
+             INT64_C(1000000000000000000), 0},
+            {"9999999999999999999", true, DATABOX_UNSIGNED_64, 0,
+             UINT64_C(9999999999999999999)},
+            {"18446744073709551615", true, DATABOX_UNSIGNED_64, 0, UINT64_MAX},
+            {"-9223372036854775809", false, DATABOX_VOID, 0, 0},
+            {"-10000000000000000000", false, DATABOX_VOID, 0, 0},
+            {"18446744073709551616", false, DATABOX_VOID, 0, 0},
+        };
+        for (size_t i = 0; i < COUNT_ARRAY(rows); i++) {
+            databox result = {{0}};
+            const bool worked =
+                StrScanScanReliable(rows[i].s, strlen(rows[i].s), &result);
+            if (worked != rows[i].ok) {
+                ERR("'%s': expected %s, got %s", rows[i].s,
+                    rows[i].ok ? "a number" : "no number",
+                    worked ? "a number" : "no number");
+                continue;
+            }
+            if (!worked) {
+                continue;
+            }
+            if (result.type != rows[i].type) {
+                databoxReprSay("Unexpected type for", &result);
+                ERR("'%s': wrong type", rows[i].s);
+                continue;
+            }
+            if (rows[i].type == DATABOX_SIGNED_64 &&
+                result.data.i != rows[i].i) {
+                ERR("'%s': expected %" PRId64 ", got %" PRId64, rows[i].s,
+                    rows[i].i, (int64_t)result.data.i);
+            }
+            if (rows[i].type == DATABOX_UNSIGNED_64 &&
+                result.data.u != rows[i].u) {
+                ERR("'%s': expected %" PRIu64 ", got %" PRIu64, rows[i].s,
+                    rows[i].u, (uint64_t)result.data.u);
+            }
         }
     }
 
