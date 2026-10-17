@@ -75,9 +75,9 @@ The four metadata bits live in the same 8 bytes as `type` and `len`:
 
 | Flag        | Meaning                                                                    |
 | ----------- | -------------------------------------------------------------------------- |
-| `allocated` | `data.bytes.start` is owned heap memory; `databoxFreeData` will free it    |
+| `allocated` | the box owns heap memory behind `data` (BYTES, a 96/128-bit payload, MDSC); `databoxFreeData` will free it |
 | `created`   | the box was created by a retrieve-and-create path                          |
-| `big`       | the box is really a `databoxBig` (its `data.i128`/`u128` point at `extra`) |
+| `big`       | `data.i128`/`u128` is a live pointer to 16 bytes of storage (a `databoxBig`'s `extra`, or an owned heap payload) |
 | `unused`    | 5 reserved bits                                                            |
 
 **Zero-initialize boxes you hand to a fill-in API.** Container getters
@@ -491,6 +491,31 @@ or fewer, so a copy can come out cheaper than its source.
 None of the three handle `DATABOX_BYTES_OFFSET`: resolve an offset box with
 `databoxOffsetBoxToRealBox()` first.
 
+A 96/128-bit value is owned the same way as BYTES. All three copy its
+16-byte payload to a heap block and set `allocated = 1` and `big = 1`, so
+the copy survives the source (a `databoxBig`, a multilist entry, a flex)
+going away; release it with `databoxFreeData`. Every other copy result has
+`big = 0`. A type-only wide box (`data.ptr == NULL`, as a decode into a
+plain box reports it) stays type-only, and `databoxAllocateIfNeeded` leaves
+an already-owned wide payload alone.
+
+```c
+/* 'borrowed' points into storage that is about to change or go away */
+databox kept = databoxCopy(borrowed);  /* heap-owned if 96/128-bit */
+/* ... */
+databoxFreeData(&kept);
+
+/* Or keep it without allocating, in a databoxBig you own */
+databoxBig keptBig;
+databoxBigCopyFrom(&keptBig, borrowed);
+```
+
+`databoxBigCopyFrom(dst, src)` copies `src` into a `databoxBig` without
+allocating: a wide payload is copied into `dst->extra` and the pointer is
+aimed there (`big = 1`); any other value gets `big = 0`. `dst` never owns
+anything (`allocated = 0`): BYTES keep borrowing from wherever `src` points,
+and `src` keeps whatever it owned. `src` may alias `dst`.
+
 ### Freeing databoxes
 
 ```c
@@ -519,9 +544,12 @@ databoxFree(heapBox);         /* frees bytes, then frees heapBox */
 ```
 
 `databoxFreeData` only releases when `allocated` is set **and** the type is
-`DATABOX_BYTES` (or `DATABOX_PTR_MDSC`, which is released with `mdscfree`).
-It is a no-op for every other type, so calling it on an embedded or
-reference box is always safe:
+`DATABOX_BYTES`, `DATABOX_SIGNED_128` / `DATABOX_UNSIGNED_128` (a heap
+payload from one of the copy helpers), or
+`DATABOX_PTR_MDSC` (released with `mdscfree`). A `databoxBig` whose payload
+pointer aims at its own `extra` holds the value inline and is left alone,
+even if a stale `allocated` bit is set. It is a no-op for every other type,
+so calling it on an embedded or reference box is always safe:
 
 ```c
 /* Embedded databoxes hold no heap memory */

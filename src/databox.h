@@ -205,6 +205,24 @@ _Static_assert(offsetof(databoxBig, extra) == sizeof(databox),
                "databoxBig must begin with a complete databox");
 #endif
 
+/* 96/128-bit values and the 'big' flag.
+ *
+ * A wide value does not fit the 8-byte data union, so data.i128 /
+ * data.u128 points at it and 'big' records that the pointer is live
+ * (aimed at 16 bytes of storage).  Decoders read 'big' on the
+ * destination: with big = 1 they write the value through the pointer;
+ * with big = 0 they report only the type and set data.ptr = NULL.
+ *
+ * The rule: whoever owns the destination storage establishes its wide
+ * capability before decoding.  A caller passing its own box sets it up
+ * with DATABOX_BIG_INIT on a databoxBig (or zeroes it to accept the type
+ * only); a box that is not initialized is a caller bug, because stale
+ * 'big' bits turn into a write through a stale pointer.  Library-filled
+ * results and library temporaries always carry their own wide storage.
+ *
+ * DATABOX_BIG_INIT aims the pointer at dbig->extra and sets big = 1.  It
+ * leaves every other field as it was.  A narrow decode overwrites the
+ * pointer, so re-run it before each decode into the same box. */
 #define DATABOX_BIG_INIT(dbig)                                                 \
     do {                                                                       \
         (dbig)->big = true;                                                    \
@@ -528,9 +546,31 @@ databox databoxVoid(void);
 
 void databoxRetainBytesSelfExact(databox *dst, void *bytes);
 ssize_t databoxRetainBytesSelf(databox *dst, databoxRetainCache *cache);
+/* Owning copies.  databoxCopy returns, and databoxCopyBytesFromBox writes
+ * to 'dst', a copy that is independent of the source's storage;
+ * databoxAllocateIfNeeded makes 'box' independent in place.  BYTES are
+ * copied to the heap (or embedded when they fit 8 bytes), and a 96/128-bit
+ * payload is copied to a 16-byte heap block with allocated = 1 and
+ * big = 1.  Release either with databoxFreeData.  Every other result has
+ * big = 0, and a type-only wide box (data.ptr == NULL) stays type-only.
+ * databoxAllocateIfNeeded leaves an already-owned wide payload alone. */
 void databoxCopyBytesFromBox(databox *dst, const databox *src);
 bool databoxAllocateIfNeeded(databox *box);
 databox databoxCopy(const databox *src);
+
+/* Re-homing copy: copy 'src' into 'dst' without allocating.  A 96/128-bit
+ * payload is copied into dst->extra and data.i128 / data.u128 is aimed
+ * there, with big = 1; any other value gets big = 0.  'dst' never owns
+ * anything (allocated = 0): BYTES still borrow from wherever 'src' points,
+ * and 'src' keeps whatever it owned.  'src' may alias 'dst'.  Use this to
+ * keep a wide value read from storage that is about to go away, such as
+ * a library-filled entry. */
+void databoxBigCopyFrom(databoxBig *dst, const databox *src);
+
+/* Releases what the box owns: allocated BYTES, an allocated 96/128-bit
+ * heap payload, or an allocated MDSC pointer; the box becomes VOID.  A
+ * databoxBig whose payload pointer is aimed at its own 'extra' owns
+ * nothing and is left as is. */
 void databoxFreeData(databox *box);
 void databoxFree(databox *box);
 

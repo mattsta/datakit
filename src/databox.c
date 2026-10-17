@@ -230,8 +230,44 @@ ssize_t databoxRetainBytesSelf(databox *restrict dst,
     return -2;
 }
 
+/* 96/128-bit values live behind data.i128 / data.u128, so copies own them
+ * the way they own BYTES: in a 16-byte heap block with 'allocated' set,
+ * released by databoxFreeData.  'big' marks a live payload pointer, so a
+ * heap-owned wide box has big = 1 and every other copy result has
+ * big = 0.  A type-only wide box (data.ptr == NULL, as a plain-box decode
+ * reports it) stays type-only. */
+static bool databoxIsWide_(const databox *box) {
+    return box->type == DATABOX_SIGNED_128 || box->type == DATABOX_UNSIGNED_128;
+}
+
+/* Point 'dst' at an owned heap copy of the wide payload 'src' refers to.
+ * memcpy reads the payload, so 'src' storage needs no particular
+ * alignment.  'dst' and 'src' may be the same box. */
+static void databoxOwnWidePayload_(databox *dst, const databox *src) {
+    if (!src->data.ptr) {
+        dst->data.ptr = NULL;
+        dst->allocated = false;
+        dst->big = false;
+        return;
+    }
+
+    /* @own: container; free=databoxFreeData */
+    __uint128_t *payload = zmalloc(sizeof(*payload));
+    assert(((uintptr_t)payload % _Alignof(__uint128_t)) == 0);
+    memcpy(payload, src->data.ptr, sizeof(*payload));
+    dst->data.u128 = payload;
+    dst->allocated = true;
+    dst->big = true;
+}
+
 void databoxCopyBytesFromBox(databox *dst, const databox *src) {
     *dst = *src;
+    if (databoxIsWide_(src)) {
+        databoxOwnWidePayload_(dst, src);
+        return;
+    }
+
+    dst->big = false;
     if (DATABOX_IS_BYTES_EMBED(src)) {
         /* Nothing remaining to copy since bytes are embeded */
         return;
@@ -255,6 +291,16 @@ void databoxCopyBytesFromBox(databox *dst, const databox *src) {
 }
 
 bool databoxAllocateIfNeeded(databox *restrict box) {
+    if (databoxIsWide_(box)) {
+        /* An owned payload is already independent of its source. */
+        if (box->allocated || !box->data.ptr) {
+            return false;
+        }
+
+        databoxOwnWidePayload_(box, box);
+        return true;
+    }
+
     if (DATABOX_IS_BYTES_EMBED(box)) {
         /* Nothing remaining to copy since bytes are embeded */
         return false;
@@ -275,6 +321,12 @@ bool databoxAllocateIfNeeded(databox *restrict box) {
 databox databoxCopy(const databox *restrict src) {
     databox dst_ = *src;
     databox *restrict dst = &dst_;
+    if (databoxIsWide_(src)) {
+        databoxOwnWidePayload_(dst, src);
+        return dst_;
+    }
+
+    dst->big = false;
     if (DATABOX_IS_BYTES_EMBED(src)) {
         /* Nothing remaining to copy since bytes are embeded */
         return dst_;
@@ -292,6 +344,30 @@ databox databoxCopy(const databox *restrict src) {
     return dst_;
 }
 
+void databoxBigCopyFrom(databoxBig *dst, const databox *src) {
+    /* Read the payload first: 'src' may be 'dst' itself, or point into it. */
+    __uint128_t payload = 0;
+    const bool wide = databoxIsWide_(src) && src->data.ptr;
+    if (wide) {
+        memcpy(&payload, src->data.ptr, sizeof(payload));
+    }
+
+    if ((const void *)src != (const void *)dst) {
+        memcpy(dst, src, sizeof(*src));
+    }
+
+    /* 'dst' never owns anything: BYTES keep borrowing from their source
+     * and a wide payload lives in dst->extra. */
+    dst->allocated = false;
+    if (wide) {
+        memcpy(dst->extra, &payload, sizeof(payload));
+        dst->data.u128 = (__uint128_t *)dst->extra;
+        dst->big = true;
+    } else {
+        dst->big = false;
+    }
+}
+
 void databoxFreeData(databox *box) {
     if (box) {
         if (box->allocated) {
@@ -301,6 +377,20 @@ void databoxFreeData(databox *box) {
                 zfree(box->data.ptr);
                 box->data.ptr = NULL;
                 box->allocated = false;
+                box->type = DATABOX_VOID;
+            } else if (databoxIsWide_(box)) {
+                /* A databoxBig whose pointer is aimed at its own 'extra'
+                 * holds the value inline; DATABOX_BIG_INIT does not clear
+                 * 'allocated', so that flag may be stale here. */
+                if (box->data.ptr == (void *)((uint8_t *)box + sizeof(*box))) {
+                    return;
+                }
+
+                /* The payload is gone, so the pointer is no longer live. */
+                zfree(box->data.ptr);
+                box->data.ptr = NULL;
+                box->allocated = false;
+                box->big = false;
                 box->type = DATABOX_VOID;
             } else {
 #if DATABOX_ENABLE_PTR_MDSC
@@ -2389,6 +2479,171 @@ int databoxTest(int argc, char *argv[]) {
         if (databoxCompare(&pLo, &sNeg) <= 0) {
             ERRR("PTR (as unsigned) must order above negative signed");
         }
+    }
+
+    TEST("databox: copy helpers own 96/128-bit payloads") {
+        /* Wide oracle values; negatives are SIGNED_128, the rest
+         * UNSIGNED_128. */
+        const __int128_t sw[] = {
+            -((__int128_t)1 << 63) - 1,
+            -((__int128_t)1 << 95),
+            INT128_MIN,
+        };
+        const __uint128_t uw[] = {
+            (__uint128_t)1 << 64, ((__uint128_t)1 << 95) - 1,
+            (__uint128_t)1 << 95, (__uint128_t)1 << 127,
+            UINT128_MAX,          (__uint128_t)INT128_MAX,
+        };
+        const size_t n = COUNT_ARRAY(sw) + COUNT_ARRAY(uw);
+
+        for (size_t i = 0; i < n; i++) {
+            const bool neg = i < COUNT_ARRAY(sw);
+            const __uint128_t want =
+                neg ? (__uint128_t)sw[i] : uw[i - COUNT_ARRAY(sw)];
+            const databoxType type =
+                neg ? DATABOX_SIGNED_128 : DATABOX_UNSIGNED_128;
+
+            databoxBig src;
+            memset(&src, 0, sizeof(src));
+            DATABOX_BIG_INIT(&src);
+            src.type = type;
+            memcpy(src.extra, &want, sizeof(want));
+
+            /* databoxCopy: owned heap payload, independent of 'src'. */
+            databox copy = databoxCopy((const databox *)&src);
+
+            /* databoxCopyBytesFromBox into a poisoned destination. */
+            databox bytesCopy;
+            memset(&bytesCopy, 0xFF, sizeof(bytesCopy));
+            databoxCopyBytesFromBox(&bytesCopy, (const databox *)&src);
+
+            /* databoxAllocateIfNeeded on a box borrowing src.extra. */
+            databox borrowed;
+            memcpy(&borrowed, &src, sizeof(borrowed));
+            const bool allocated = databoxAllocateIfNeeded(&borrowed);
+            const void *const ownedPtr = borrowed.data.ptr;
+            const bool again = databoxAllocateIfNeeded(&borrowed);
+
+            /* Overwrite the source: every copy must keep its value. */
+            memset(src.extra, 0xA5, sizeof(src.extra));
+
+            databox *const copies[] = {&copy, &bytesCopy, &borrowed};
+            for (size_t c = 0; c < COUNT_ARRAY(copies); c++) {
+                const databox *const got = copies[c];
+                __uint128_t v = 0;
+                if (got->data.ptr) {
+                    memcpy(&v, got->data.ptr, sizeof(v));
+                }
+                if (got->type != type || !got->allocated || !got->big ||
+                    !got->data.ptr || got->data.ptr == (void *)src.extra ||
+                    v != want) {
+                    ERR("wide value %zu copy %zu is not an owned copy", i, c);
+                }
+            }
+
+            if (!allocated || again || borrowed.data.ptr != ownedPtr) {
+                ERR("wide value %zu: AllocateIfNeeded returned %d then %d", i,
+                    allocated, again);
+            }
+
+            for (size_t c = 0; c < COUNT_ARRAY(copies); c++) {
+                databoxFreeData(copies[c]);
+                if (copies[c]->type != DATABOX_VOID || copies[c]->data.ptr ||
+                    copies[c]->allocated || copies[c]->big) {
+                    ERR("wide value %zu copy %zu not released", i, c);
+                }
+            }
+        }
+
+        /* A type-only wide box has no payload and stays type-only. */
+        const databox typeOnly = {.type = DATABOX_SIGNED_128};
+        databox t = databoxCopy(&typeOnly);
+        databox t2 = typeOnly;
+        if (t.type != DATABOX_SIGNED_128 || t.data.ptr || t.allocated ||
+            t.big || databoxAllocateIfNeeded(&t2) || t2.allocated) {
+            ERRR("type-only wide box gained a payload");
+        }
+        databoxFreeData(&t);
+
+        /* A narrow copy of a databoxBig carries no live pointer. */
+        databoxBig narrow;
+        memset(&narrow, 0, sizeof(narrow));
+        DATABOX_BIG_INIT(&narrow);
+        narrow.type = DATABOX_SIGNED_64;
+        narrow.data.i64 = -42;
+        databox narrowCopy = databoxCopy((const databox *)&narrow);
+        databox narrowBytes;
+        memset(&narrowBytes, 0xFF, sizeof(narrowBytes));
+        databoxCopyBytesFromBox(&narrowBytes, (const databox *)&narrow);
+        if (narrowCopy.big || narrowCopy.data.i64 != -42 || narrowBytes.big ||
+            narrowBytes.data.i64 != -42) {
+            ERRR("narrow copy of a databoxBig kept big = 1");
+        }
+
+        /* A wide value held inline is not freed, even when a poisoned
+         * box leaves 'allocated' set. */
+        databoxBig inl;
+        memset(&inl, 0xFF, sizeof(inl));
+        DATABOX_BIG_SIGNED_128(&inl, INT128_MIN + 7);
+        databoxFreeData((databox *)&inl);
+        if (inl.type != DATABOX_SIGNED_128 ||
+            inl.data.i128 != (__int128_t *)inl.extra ||
+            *inl.data.i128 != INT128_MIN + 7) {
+            ERRR("FreeData touched an inline wide payload");
+        }
+    }
+
+    TEST("databoxBigCopyFrom: re-homes a wide value without allocating") {
+        const __uint128_t want = ((__uint128_t)1 << 127) + 99;
+
+        /* From a heap-owned copy: the copy survives freeing the source. */
+        databoxBig src;
+        DATABOX_BIG_UNSIGNED_128(&src, want);
+        databox owned = databoxCopy((const databox *)&src);
+        databoxBig dst;
+        memset(&dst, 0xFF, sizeof(dst));
+        databoxBigCopyFrom(&dst, &owned);
+        databoxFreeData(&owned);
+        if (dst.type != DATABOX_UNSIGNED_128 || !dst.big || dst.allocated ||
+            dst.data.u128 != (__uint128_t *)dst.extra ||
+            *dst.data.u128 != want) {
+            ERRR("re-homed copy of an owned wide box is wrong");
+        }
+
+        /* From a box borrowing other storage, aliased in place. */
+        __uint128_t outside = want - 5;
+        databoxBig self;
+        memset(&self, 0xFF, sizeof(self));
+        self.type = DATABOX_UNSIGNED_128;
+        self.allocated = false;
+        self.big = true;
+        self.data.u128 = &outside;
+        databoxBigCopyFrom(&self, (const databox *)&self);
+        outside = 0;
+        if (self.data.u128 != (__uint128_t *)self.extra || !self.big ||
+            self.allocated || *self.data.u128 != want - 5) {
+            ERRR("aliased re-home did not move the payload inline");
+        }
+
+        /* Narrow values copy as is, with big = 0 and nothing owned. */
+        const databox neg = databoxNewSigned(-5);
+        memset(&dst, 0xFF, sizeof(dst));
+        databoxBigCopyFrom(&dst, &neg);
+        if (dst.type != DATABOX_SIGNED_64 || dst.data.i64 != -5 || dst.big ||
+            dst.allocated) {
+            ERRR("narrow re-home is wrong");
+        }
+
+        /* Owned BYTES are borrowed, never adopted. */
+        databox bytes =
+            databoxNewBytesAllocateOrEmbed("a value longer than 8", 21);
+        memset(&dst, 0xFF, sizeof(dst));
+        databoxBigCopyFrom(&dst, &bytes);
+        if (dst.type != DATABOX_BYTES || dst.allocated || dst.big ||
+            dst.data.ptr != bytes.data.ptr || dst.len != 21) {
+            ERRR("BYTES re-home adopted or lost the source bytes");
+        }
+        databoxFreeData(&bytes);
     }
 
     printf("\n=== All databox fuzz tests completed! ===\n\n");
