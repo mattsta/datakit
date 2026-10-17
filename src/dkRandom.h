@@ -15,8 +15,14 @@
  * cannot reach half the residues of a bound that is a multiple of 2^32,
  * is modulo-biased, and reads process-global libc state.
  *
- * A forked child never repeats the parent's draws: it discards the
- * output block it inherited and re-keys from the OS (see dkRandom.c).
+ * A child of fork() never repeats the parent's draws: a pthread_atfork
+ * handler makes it discard the output block it inherited and re-key
+ * from the OS (see dkRandom.c).  That covers only forks that run atfork
+ * handlers.  A child made without them (glibc _Fork(), a raw fork or
+ * clone syscall), or any child if registering the handler failed,
+ * re-keys at its next refill instead, when the pid check sees the new
+ * pid.  Until then it can return the rest of the parent's buffered
+ * block: up to 63 words the parent also returns.
  *
  * Not for key material: the generator is an RC4-based stream with known
  * keystream biases (see portableRandom.h).  Use
@@ -45,7 +51,10 @@ uint64_t dkRandom64(void);
  * dkRandomZeroBoundTotal(). */
 uint64_t dkRandomBounded(uint64_t bound);
 
-/* Process-wide count of dkRandomBounded(0) calls, for tests. */
+/* Process-wide count of dkRandomBounded(0) calls: a misuse diagnostic.
+ * A nonzero count means some caller asked for a value in an empty
+ * interval.  Counting costs nothing on valid calls; only the bound == 0
+ * error path increments it. */
 uint64_t dkRandomZeroBoundTotal(void);
 
 #ifdef DATAKIT_TEST
