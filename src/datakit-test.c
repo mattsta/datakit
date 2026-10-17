@@ -25,6 +25,7 @@
 #include "databoxLinear.h"
 #include "dataspeed.h"
 #include "dj.h"
+#include "dkRandom.h"
 #include "dod.h"
 #include "fastmutex.h"
 #include "fenwick/fenwickI64.h" /* New 2-tier template system */
@@ -8854,7 +8855,7 @@ static const TestEntry testRegistry[] = {
 
 
     /* Random generators */
-    T(portableRandom),
+    T_A(dkRandom, "rng"), T(portableRandom),
 
     /* Crypto helpers (header-only; tests live in this file) */
     T_A(dkTestSecureZero, "secureZero"),

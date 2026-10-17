@@ -489,6 +489,7 @@ add_library(${PROJECT_NAME} OBJECT
     strDoubleFormat.c
     util.c
     portableRandom.c
+    dkRandom.c
     # quickcount.c
 
     # quickdictClassAtom.c
