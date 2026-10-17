@@ -23,6 +23,9 @@ __uint128_t portableRandom128(portableRandomState *r);
  * (8 * count) bytes OR (16 * count) bytes! */
 void portableRandomBy8(portableRandomState *r, void *fill, size_t count);
 void portableRandomBy16(portableRandomState *r, void *fill, size_t count);
+/* Bytes emitted between OS re-keys; installed by portableRandom_stir.
+ * Each draw charges the bytes it produces against it. */
+#define DK_PR_REFUEL_BYTES 100000
 
 /* Read from the OS entropy source without blocking.  Returns the number
  * of bytes written, or -1, on every platform. */

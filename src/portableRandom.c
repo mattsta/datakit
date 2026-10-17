@@ -141,8 +141,8 @@ void portableRandom_stir(portableRandomState *r, pid_t pid) {
         (void)dropped;
     }
 
-    /* Seed with system entropy again after 100k bytes consumed */
-    r->remainingBytesBeforeRefuel = 100000;
+    /* Re-key from the OS after DK_PR_REFUEL_BYTES bytes. */
+    r->remainingBytesBeforeRefuel = DK_PR_REFUEL_BYTES;
 }
 
 void portableRandom_add(portableRandomState *r, const uint8_t *key,
