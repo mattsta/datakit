@@ -1903,7 +1903,11 @@ abstractWriteFullEntry(flexEntry *restrict *restrict fe,
     bool feIsEntryHoldingData = false;                                         \
     if ((data > f) && (data < (f + flexSize))) {                               \
         copyFromSelf = true;                                                   \
-        feIsEntryHoldingData = ((fe + FLEX_LENGTH_OF_ENCODING(fe)) == data);   \
+        /* An append position (fe at the end) holds no entry to read. */       \
+        if (fe < f + flexSize) {                                               \
+            feIsEntryHoldingData =                                             \
+                ((fe + FLEX_LENGTH_OF_ENCODING(fe)) == data);                  \
+        }                                                                      \
     }                                                                          \
                                                                                \
     /* Per-i self-aliasing tracking for contents[i] in                         \
@@ -6992,6 +6996,57 @@ int32_t flexTest(int32_t argc, char **argv) {
             }
         }
         printf("  SUCCESS\n\n");
+    }
+
+    printf("Verify a value read from a flex pushes onto its own tail:\n");
+    {
+        /* The pushed box points into the flex it is pushed onto, and the
+         * insert position is the flex's end. */
+        int32_t bad = 0;
+        cleaner(flexFree) flex *self = flexNew();
+        flexPushBytes(&self, "hello world", strlen("hello world"),
+                      FLEX_ENDPOINT_TAIL);
+        databox got = {{0}};
+        flexGetByType(flexHead(self), &got);
+        flexPushByType(&self, &got, FLEX_ENDPOINT_TAIL);
+        for (int32_t i = 0; i < 2 && flexCount(self) == 2; i++) {
+            if (!flexCompareString(flexIndex(self, i), "hello world",
+                                   strlen("hello world"))) {
+                bad++;
+            }
+        }
+
+        if (flexCount(self) != 2 ||
+            !flexValidateBufferDeep(self, flexBytes(self))) {
+            bad++;
+        }
+
+        /* A nested container pushed onto the flex holding it. */
+        cleaner(flexFree) flex *inner = flexNew();
+        flexPushBytes(&inner, "inner", strlen("inner"), FLEX_ENDPOINT_TAIL);
+        flexPushSigned(&inner, -12345, FLEX_ENDPOINT_TAIL);
+        cleaner(flexFree) flex *selfNested = flexNew();
+        const databox nested = {.data.bytes.start = inner,
+                                .type = DATABOX_CONTAINER_FLEX_MAP,
+                                .len = flexBytes(inner)};
+        flexPushByType(&selfNested, &nested, FLEX_ENDPOINT_TAIL);
+        flexGetByType(flexHead(selfNested), &got);
+        flexPushByType(&selfNested, &got, FLEX_ENDPOINT_TAIL);
+        if (flexCount(selfNested) != 2 ||
+            !flexValidateBufferDeep(selfNested, flexBytes(selfNested))) {
+            bad++;
+        } else {
+            for (int32_t i = 0; i < 2; i++) {
+                bad += flexValidateSweepCheckNested(selfNested, i, inner);
+                bad += flexValidateSweepCheckNested(selfNested, i - 2, inner);
+            }
+        }
+
+        if (bad) {
+            printf("  FAIL: %" PRId32 " self-push checks\n", bad);
+            return bad;
+        }
+        printf("  ok\n");
     }
 
     printf("Verify embedded types:\n");
