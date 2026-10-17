@@ -176,8 +176,12 @@ bool StrScanScanReliable(const void *const p_, const size_t len,
             return false;
         } else if (*p == '-') {
             /* Only accept negation if it's the first character *AND*
-             * if more characters exist. (i.e. '-' is not standalone number) */
-            if (dig == 0 && len > 1) {
+             * if more characters exist. (i.e. '-' is not standalone number)
+             * No leading zero after the sign either: "-0" and "-01" would
+             * render back as "0" and "-1".  "-0." may still begin a float,
+             * whose round trip is checked below. */
+            if (dig == 0 && len > 1 &&
+                !(p[1] == '0' && (len == 2 || p[2] != '.'))) {
                 sign = -1;
                 maxAbsoluteValueX = DK_INT64_TO_UINT64(INT64_MIN);
             } else {
@@ -231,6 +235,11 @@ DK_INLINE_ALWAYS bool StrScanScanReliableConvert128_(
     const uint8_t *buf = (const uint8_t *)p_;
     /* If byte length is within the range of a 128 bit integer... */
     if (len >= 20 && len <= 40) {
+        /* Reject leading zeros, before or after the sign, as
+         * StrScanScanReliable does. */
+        if (buf[0] == '0' || (buf[0] == '-' && buf[1] == '0')) {
+            return false;
+        }
         if (buf[0] == '-') {
             /* and if all bytes of the buffer are numeric... */
             if (requireDigitCheck) {
@@ -813,6 +822,27 @@ __attribute__((optnone)) int strTest(int argc, char *argv[]) {
     TEST("verify empty string doesn't convert to zero") {
         databox got;
         assert(StrScanScanReliable("", 0, &got) == false);
+    }
+
+    TEST("non-canonical integer spellings do not convert") {
+        databox got;
+        assert(StrScanScanReliable("-0", 2, &got) == false);
+        assert(StrScanScanReliable("-01", 3, &got) == false);
+        assert(StrScanScanReliable("-007", 4, &got) == false);
+        assert(StrScanScanReliable("01", 2, &got) == false);
+        assert(StrScanScanReliable("-1", 2, &got) == true);
+        assert(got.type == DATABOX_SIGNED_64 && got.data.i == -1);
+        assert(StrScanScanReliable("-0.5", 4, &got) == true);
+
+        const char *padded = "00000000000000000001";
+        databox sm;
+        databoxBig smb;
+        databoxBig *final;
+        assert(!StrScanScanReliableConvert128_(padded, strlen(padded), &sm,
+                                               &smb, &final, true));
+        const char *negPadded = "-0000000000000000001";
+        assert(!StrScanScanReliableConvert128_(negPadded, strlen(negPadded),
+                                               &sm, &smb, &final, true));
     }
 
     TEST("128 smallest") {
