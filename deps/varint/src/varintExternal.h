@@ -74,6 +74,14 @@ void varintExternalPutFixedWidth(void *p, uint64_t v, varintWidth encoding);
 void varintExternalPutFixedWidthBig(void *p, __uint128_t v,
                                     varintWidth encoding);
 uint64_t varintExternalGet(const void *p, varintWidth encoding);
+
+/* Like varintExternalGet, but checks 'encoding' instead of asserting.
+ * Returns false, without reading 'p' or writing '*out', when 'out' is
+ * NULL or 'encoding' is outside [VARINT_WIDTH_8B, VARINT_WIDTH_64B];
+ * otherwise stores the decoded value in '*out' and returns true.  The
+ * caller must ensure 'encoding' bytes are readable at 'p'. */
+bool varintExternalTryGet(const void *p, varintWidth encoding, uint64_t *out);
+
 __uint128_t varintBigExternalGet(const void *p, varintWidth encoding);
 #define varintExternalLen(v) varintExternalSignedEncoding((uint64_t)(v))
 varintWidth varintExternalSignedEncoding(int64_t value);

@@ -269,6 +269,18 @@ uint64_t varintExternalGet(const void *p, varintWidth encoding) {
     return varintExternalLoadFromEncodingBigEndian_(p, encoding);
 }
 
+bool varintExternalTryGet(const void *p, const varintWidth encoding,
+                          uint64_t *const out) {
+    /* Same width bounds the loaders assert on. */
+    if (out == NULL || encoding < VARINT_WIDTH_8B ||
+        encoding > VARINT_WIDTH_64B) {
+        return false;
+    }
+
+    *out = varintExternalGet(p, encoding);
+    return true;
+}
+
 __uint128_t varintBigExternalGet(const void *p, varintWidth encoding) {
     if (endianIsLittle()) {
         return varintBigExternalLoadFromEncodingLittleEndian_(p, encoding);
