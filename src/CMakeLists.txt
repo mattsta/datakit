@@ -296,9 +296,11 @@ endif()
 #set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wsuggest-attribute=const -Wsuggest-attribute=pure -Wsuggest-attribute=noreturn -Wsuggest-attribute=format")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wshadow -fstrict-aliasing -Wunused-macros")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wformat -Werror=format -Wignored-attributes")
-# -Wformat-truncation is not in the -Wformat group, so -Werror=format
-# does not promote it; promote it separately where the compiler
-# supports the option (Apple clang does not).
+# Promote -Wformat-truncation explicitly so it is an error whatever the
+# compiler groups under -Wformat.  Current GCC already promotes it (and
+# -Wformat-overflow) through -Werror=format, so there the flag is
+# redundant but harmless.  Compilers without the option (Apple clang 15,
+# for one) fail the check and leave the flag off.
 include(CheckCCompilerFlag)
 check_c_compiler_flag("-Werror=format-truncation"
                       HAVE_WERROR_FORMAT_TRUNCATION)
