@@ -3899,8 +3899,8 @@ bool flexGetNextByType(flex *const f, flexEntry **const fe, databox *box) {
     return true;
 }
 
-/* Capability-owning decode behind flexGetByTypeBig, with an optional
- * reference resolve.  Every header field of 'box' is reset first, so stale
+/* Capability-owning decode shared by flexGetByTypeBig and the sorted
+ * search probes.  Every header field of 'box' is reset first, so stale
  * 'allocated', 'len' or 'big' bits in the destination never survive, and
  * the pointer is aimed at the box's own 'extra' so a wide value has
  * somewhere to land.  'big' is kept only when the result is wide.
@@ -4504,12 +4504,10 @@ DK_INLINE_ALWAYS flexEntry *abstractFindPositionByTypeSortedDirect(
         /* Move 'fe' up or down by following next/prev entries. */
         moveByOffsets_(mid, elementsPerEntry, fe, prevOffsetIndexPhysical);
 
-#if 1
-        databox box;
-#else
+        /* The probe is a library temporary, so it carries its own wide
+         * storage: flexGetByTypeBigResolve_ sets it up for each decode,
+         * because a narrow element overwrites the payload pointer. */
         databoxBig box;
-        DATABOX_BIG_INIT(&box);
-#endif
 
 /* TODO: test speed difference of:
  *         - single key lookup
@@ -4591,12 +4589,8 @@ DK_INLINE_ALWAYS flexEntry *abstractFindPositionByTypeSortedDirect(
         flexEntry *walkingFE = fe;
         /* TODO: make this a do-while? */
         for (uint_fast32_t i = 0; i < compareElementDepth; i++) {
-            if (useReference) {
-                flexGetByTypeWithReference(walkingFE, (databox *)&box,
-                                           referenceContainer);
-            } else {
-                flexGetByType(walkingFE, (databox *)&box);
-            }
+            flexGetByTypeBigResolve_(walkingFE, &box, useReference,
+                                     referenceContainer);
 
             const int compared =
                 databoxCompare((databox *)&box, compareAgainst[i]);
@@ -5175,11 +5169,11 @@ int flexCompareEntries(const flex *const f,
                        const uint_fast32_t elementsPerEntry,
                        const int_fast32_t offset) {
     flexEntry *fCompare = flexIndex(f, offset * elementsPerEntry);
-    databox box;
+    databoxBig box;
 
     for (uint_fast32_t i = 0; i < elementsPerEntry; i++) {
-        flexGetByType(fCompare, &box);
-        const int compared = databoxCompare(&box, elements[i]);
+        flexGetByTypeBig(fCompare, &box);
+        const int compared = databoxCompare((const databox *)&box, elements[i]);
 
         /* If equal and not at last element, check next deeper element. */
         if (compared == 0 && ((i + 1) < elementsPerEntry)) {
@@ -7329,6 +7323,238 @@ int32_t flexValidateTotalitySweep(void) {
 #undef FLEX_SWEEP_BYTE_VALUES
 #undef FLEX_SWEEP_PEEK_SLACK
 
+/* Total order over flexTestWide values, for qsort. */
+static int flexTestWideCmp(const void *a_, const void *b_) {
+    const flexTestWide *a = a_;
+    const flexTestWide *b = b_;
+    if (a->negative != b->negative) {
+        return a->negative ? -1 : 1;
+    }
+
+    if (a->negative) {
+        const __int128_t x = (__int128_t)a->bits;
+        const __int128_t y = (__int128_t)b->bits;
+        return (x > y) - (x < y);
+    }
+
+    return (a->bits > b->bits) - (a->bits < b->bits);
+}
+
+static uint64_t flexTestWideRand(uint64_t *state) {
+    /* xorshift64*: deterministic, independent of the global rand() seed */
+    *state ^= *state >> 12;
+    *state ^= *state << 25;
+    *state ^= *state >> 27;
+    return *state * UINT64_C(2685821657736338717);
+}
+
+/* Sorted insert and find over 64 distinct 96/128-bit keys mixed with
+ * 64-bit keys, against a qsort oracle; then a 2-element map whose
+ * duplicate narrow keys are ordered by wide values. */
+static int32_t flexTestWideSorted(void) {
+    int32_t bad = 0;
+    enum { WIDE_KEYS = 64, NARROW_KEYS = 16, KEYS = WIDE_KEYS + NARROW_KEYS };
+    flexTestWide keys[KEYS];
+    size_t n = flexTestWideFixedSet(keys);
+    uint64_t state = UINT64_C(0x9E3779B97F4A7C15);
+
+    while (n < KEYS) {
+        const bool wantWide = n < WIDE_KEYS;
+        __uint128_t r = ((__uint128_t)flexTestWideRand(&state) << 64) |
+                        flexTestWideRand(&state);
+        flexTestWide v;
+        if (!wantWide) {
+            v = (r & 1) ? flexTestWideS((int64_t)(uint64_t)r)
+                        : flexTestWideU((uint64_t)(r >> 64));
+        } else {
+            if (r & 2) {
+                /* about half are 96-bit */
+                r &= ((__uint128_t)1 << 96) - 1;
+            }
+            v = (r & 1) ? flexTestWideS(-(__int128_t)(r >> 2) - INT64_MAX)
+                        : flexTestWideU(r | ((__uint128_t)1 << 64));
+        }
+
+        bool fresh = flexTestWideIsWide(v) == wantWide;
+        for (size_t j = 0; fresh && j < n; j++) {
+            fresh = flexTestWideCmp(&keys[j], &v) != 0;
+        }
+
+        if (fresh) {
+            keys[n++] = v;
+        }
+    }
+
+    /* Insert in a shuffled order. */
+    size_t order[KEYS];
+    for (size_t i = 0; i < KEYS; i++) {
+        order[i] = i;
+    }
+
+    for (size_t i = KEYS - 1; i > 0; i--) {
+        const size_t j = flexTestWideRand(&state) % (i + 1);
+        const size_t t = order[i];
+        order[i] = order[j];
+        order[j] = t;
+    }
+
+    cleaner(flexFree) flex *f = flexNew();
+    for (size_t i = 0; i < KEYS; i++) {
+        databoxBig k;
+        flexTestWideBox(keys[order[i]], i % 3 == 0, &k);
+        flexInsertByTypeSorted(&f, (const databox *)&k);
+    }
+
+    qsort(keys, KEYS, sizeof(keys[0]), flexTestWideCmp);
+    if (flexCount(f) != KEYS) {
+        printf("  FAIL: sorted flex holds %zu of %d keys\n", flexCount(f),
+               KEYS);
+        return bad + 1;
+    }
+
+    size_t i = 0;
+    for (flexEntry *fe = flexHeadIfAny(f); fe; fe = flexNext(f, fe), i++) {
+        databoxBig b;
+        flexGetByTypeBig(fe, &b);
+        if (!flexTestWideMatches((const databox *)&b, keys[i])) {
+            printf("  FAIL: sorted position %zu holds the wrong key\n", i);
+            bad++;
+        }
+    }
+
+    /* Every key is found and compares equal at its own position. */
+    for (i = 0; i < KEYS; i++) {
+        databoxBig k;
+        flexTestWideBox(keys[i], i % 2 == 0, &k);
+        const databox *const kp = (const databox *)&k;
+        flexEntry *const found = flexFindByTypeSorted(f, 1, kp);
+        databoxBig got;
+        if (found) {
+            flexGetByTypeBig(found, &got);
+        }
+
+        if (!found || !flexTestWideMatches((const databox *)&got, keys[i]) ||
+            flexCompareEntries(f, &kp, 1, (int_fast32_t)i) != 0 ||
+            (i + 1 < KEYS &&
+             flexCompareEntries(f, &kp, 1, (int_fast32_t)i + 1) <= 0)) {
+            printf("  FAIL: sorted find of key %zu\n", i);
+            bad++;
+        }
+
+        /* The next value up, when it is not a key, is not found. */
+        flexTestWide absent = keys[i];
+        absent.bits += 1;
+        bool probe =
+            absent.negative ? (__int128_t)absent.bits < 0 : absent.bits != 0;
+        for (size_t j = 0; probe && j < KEYS; j++) {
+            probe = flexTestWideCmp(&absent, &keys[j]) != 0;
+        }
+
+        if (probe) {
+            flexTestWideBox(absent, false, &k);
+            if (flexFindByTypeSorted(f, 1, (const databox *)&k)) {
+                printf("  FAIL: found absent neighbour of key %zu\n", i);
+                bad++;
+            }
+        }
+    }
+
+    /* [narrow key, wide value] rows with duplicate keys: the full-width
+     * compare decodes a narrow element and then a wide one per probe. */
+    flexTestWide wideKeys[WIDE_KEYS];
+    size_t wideCount = 0;
+    for (i = 0; i < KEYS; i++) {
+        if (flexTestWideIsWide(keys[i]) && wideCount < WIDE_KEYS) {
+            wideKeys[wideCount++] = keys[i];
+        }
+    }
+
+    if (wideCount != WIDE_KEYS) {
+        printf("  FAIL: %zu wide keys generated\n", wideCount);
+        return bad + 1;
+    }
+
+    enum { ROWS = 32 };
+    struct {
+        int64_t key;
+        flexTestWide val;
+    } rows[ROWS];
+    for (size_t r = 0; r < ROWS; r++) {
+        rows[r].key = (int64_t)(r % 4) - 2;
+        rows[r].val = wideKeys[(r * 7) % WIDE_KEYS];
+    }
+
+    cleaner(flexFree) flex *m = flexNew();
+    flexEntry *mid = NULL;
+    for (size_t r = 0; r < ROWS; r++) {
+        const size_t at = (r * 13) % ROWS;
+        const databox key = databoxNewSigned(rows[at].key);
+        databoxBig val;
+        flexTestWideBox(rows[at].val, false, &val);
+        const databox *row[2] = {&key, (const databox *)&val};
+        flexInsertReplaceByTypeSortedWithMiddleMultiDirect(&m, 2, row, &mid,
+                                                           false);
+    }
+
+    /* Oracle order: key, then value. */
+    for (size_t a = 1; a < ROWS; a++) {
+        for (size_t b = a; b > 0; b--) {
+            const bool less =
+                rows[b].key < rows[b - 1].key ||
+                (rows[b].key == rows[b - 1].key &&
+                 flexTestWideCmp(&rows[b].val, &rows[b - 1].val) < 0);
+            if (!less) {
+                break;
+            }
+
+            const __typeof__(rows[0]) t = rows[b];
+            rows[b] = rows[b - 1];
+            rows[b - 1] = t;
+        }
+    }
+
+    if (flexCount(m) != ROWS * 2) {
+        printf("  FAIL: row map holds %zu elements\n", flexCount(m));
+        return bad + 1;
+    }
+
+    flexEntry *fe = flexHead(m);
+    for (size_t r = 0; r < ROWS; r++) {
+        databoxBig k;
+        databoxBig v;
+        flexGetByTypeBig(fe, &k);
+        fe = flexNext(m, fe);
+        flexGetByTypeBig(fe, &v);
+        fe = flexNext(m, fe);
+        if (k.type !=
+                (rows[r].key < 0 ? DATABOX_SIGNED_64 : DATABOX_UNSIGNED_64) ||
+            k.data.i64 != rows[r].key ||
+            !flexTestWideMatches((const databox *)&v, rows[r].val)) {
+            printf("  FAIL: row %zu out of order\n", r);
+            bad++;
+        }
+
+        const databox key = databoxNewSigned(rows[r].key);
+        databoxBig val;
+        flexTestWideBox(rows[r].val, true, &val);
+        const databox *row[2] = {&key, (const databox *)&val};
+        flexEntry *const found = flexFindByTypeSortedWithMiddleFullWidth(
+            m, 2, row, flexMiddle(m, 2));
+        databoxBig got;
+        if (found) {
+            flexGetByTypeBig(flexNext(m, found), &got);
+        }
+
+        if (!found ||
+            !flexTestWideMatches((const databox *)&got, rows[r].val)) {
+            printf("  FAIL: full-width find of row %zu\n", r);
+            bad++;
+        }
+    }
+
+    return bad;
+}
+
 #include "jebuf.h"
 #include <locale.h>
 int32_t flexTest(int32_t argc, char **argv) {
@@ -8108,6 +8334,16 @@ int32_t flexTest(int32_t argc, char **argv) {
         assert(FLEX_TRUE == 253);
         assert(FLEX_FALSE == 254);
         assert(FLEX_NULL == 255);
+    }
+
+    printf("Verify sorted insert and find over 96/128-bit keys:\n");
+    {
+        const int32_t bad = flexTestWideSorted();
+        if (bad) {
+            printf("  FAIL: %" PRId32 " wide sorted checks\n", bad);
+            return bad;
+        }
+        printf("  ok\n");
     }
 
 #if 1

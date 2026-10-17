@@ -898,6 +898,15 @@ for a plain sorted list, `2` for key-value pairs, `N` for wider records. It
 is also the stride the binary search uses, so passing the wrong value
 searches the wrong positions rather than merely returning "not found".
 
+The searches, the sorted inserts built on them, and `flexCompareEntries`
+decode each probed element with `flexGetByTypeBig`, so sorted flexes
+(multimap keys, sorted-set scores) order and find 96/128-bit elements like
+any other number, including in full-width compares where a narrow element
+is followed by a wide one. One limit: an element resolved through a
+`multimapAtom` reference container (`...WithReference`) to a 96/128-bit
+value comes back type-only, which `databoxCompare` cannot order, so
+reference-mapped sorted flexes must not atomize wide values.
+
 ### Search Examples
 
 ```c
