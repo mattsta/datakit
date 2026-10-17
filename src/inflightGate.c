@@ -42,23 +42,46 @@ static void inflightGateEnsureReady(inflightGate *g) {
 }
 
 void inflightGateWakeAllWaiters(inflightGate *g) {
-    /* A registered waiter has already constructed the pair; the check
-     * keeps this function safe to call on its own. */
     inflightGateEnsureReady(g);
 
-    /* Broadcasting under the mutex closes the window between a waiter's
-     * count read and its park: either this thread locks first and the
-     * waiter then reads the zero count, or the waiter is already parked
-     * and receives the broadcast. */
+    /* Under the mutex, so the wake cannot fall between a waiter's count
+     * read and its park. */
     pthread_mutex_lock(&g->mu);
     pthread_cond_broadcast(&g->cv);
     pthread_mutex_unlock(&g->mu);
 }
 
+uint32_t inflightGateExitArmed(inflightGate *g) {
+    /* The waiter that set ARMED constructed the pair first. This thread
+     * saw ARMED through a relaxed load, so it takes its own
+     * happens-before edge to that construction here (an acquire load of
+     * `ready`, or the init lock). */
+    inflightGateEnsureReady(g);
+
+    /* Decrement inside the critical section: a waiter that reads the
+     * resulting zero holds the mutex, so this section, broadcast and
+     * unlock included, is complete before the waiter can return. */
+    pthread_mutex_lock(&g->mu);
+    const uint32_t prev =
+        atomic_fetch_sub_explicit(&g->count, 1, memory_order_seq_cst);
+    if ((prev & INFLIGHT_GATE_DEPTH_MASK) == 1) {
+        pthread_cond_broadcast(&g->cv);
+    }
+
+    pthread_mutex_unlock(&g->mu);
+    return prev & INFLIGHT_GATE_DEPTH_MASK;
+}
+
 inflightGateVerdict inflightGateAwaitZeroMs(inflightGate *g,
                                             const uint64_t budgetMs) {
-    /* Already idle: return without constructing the gate. */
-    if (atomic_load_explicit(&g->count, memory_order_acquire) == 0) {
+    /* Idle and never constructed: return without constructing it. No
+     * exit can still be inside the mutex path, because one that was
+     * would have decremented after seeing ARMED, which a waiter sets only
+     * after constructing the pair, and the acquire load below that reads
+     * zero would then see `ready` set. The count is loaded first for
+     * that reason. */
+    if (atomic_load_explicit(&g->count, memory_order_acquire) == 0 &&
+        !atomic_load_explicit(&g->ready, memory_order_acquire)) {
         return INFLIGHT_GATE_IDLE;
     }
 
@@ -68,12 +91,16 @@ inflightGateVerdict inflightGateAwaitZeroMs(inflightGate *g,
     inflightGateVerdict verdict = INFLIGHT_GATE_EXPIRED;
 
     pthread_mutex_lock(&g->mu);
-    /* Register before every count read, so an exiter that sees no waiter
-     * has a decrement this thread's next count read observes. */
-    atomic_fetch_add_explicit(&g->waiters, 1, memory_order_seq_cst);
+    /* Register, then arm with an RMW on the count word: from here on an
+     * exit that would reach zero takes the mutex instead of its CAS. */
+    atomic_fetch_add_explicit(&g->waiters, 1, memory_order_relaxed);
+    uint32_t cur = atomic_fetch_or_explicit(&g->count, INFLIGHT_GATE_ARMED,
+                                            memory_order_seq_cst);
 
     for (;;) {
-        if (atomic_load_explicit(&g->count, memory_order_seq_cst) == 0) {
+        /* Read under the mutex; see the header for why a zero here
+         * means no exit can touch the gate again. */
+        if ((cur & INFLIGHT_GATE_DEPTH_MASK) == 0) {
             verdict = INFLIGHT_GATE_IDLE;
             break;
         }
@@ -84,9 +111,15 @@ inflightGateVerdict inflightGateAwaitZeroMs(inflightGate *g,
         }
 
         (void)monotonicCondWaitMs(&g->cv, &g->mu, budgetMs - elapsedMs);
+        cur = atomic_load_explicit(&g->count, memory_order_seq_cst);
     }
 
-    atomic_fetch_sub_explicit(&g->waiters, 1, memory_order_seq_cst);
+    /* The last waiter disarms, so exits go back to the CAS path. */
+    if (atomic_fetch_sub_explicit(&g->waiters, 1, memory_order_relaxed) == 1) {
+        atomic_fetch_and_explicit(&g->count, ~INFLIGHT_GATE_ARMED,
+                                  memory_order_seq_cst);
+    }
+
     pthread_mutex_unlock(&g->mu);
     return verdict;
 }

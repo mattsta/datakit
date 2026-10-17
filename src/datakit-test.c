@@ -777,7 +777,11 @@ static int dkTestWakeFdTest(int argc, char *argv[]) {
  *   2. a registered waiter is released by the last exit;
  *   3. the budget expires with a straggler still inside;
  *   4. an exit landing between the waiter's count read and its park
- *      still wakes the waiter.
+ *      still wakes the waiter;
+ *   5. drain-then-free: once the wait returns IDLE the gate's storage
+ *      can be freed while the exiting thread is still returning from
+ *      Exit (under ASan a late touch of the gate reports a
+ *      heap-use-after-free).
  * ==================================================================== */
 typedef struct dkTestGateCtl {
     inflightGate *gate;
@@ -863,6 +867,37 @@ static void *dkTestGateWaiterMain(void *arg) {
     c->verdict = inflightGateAwaitZeroMs(c->gate, DK_TEST_GATE_GENEROUS_MS);
     return NULL;
 }
+
+/* Drain-then-free rounds. Each round allocates a gate, enters it, has
+ * the exiter thread leave it, waits for zero and frees it at once. The
+ * exiter spins on a round counter so its Exit lands as close as possible
+ * to the wait; the round count is capped by a wall-clock budget. */
+#define DK_TEST_GATE_FREE_ROUNDS 200000u
+#define DK_TEST_GATE_FREE_BUDGET_MS 3000u
+
+typedef struct dkTestGateFreeCtl {
+    _Atomic(inflightGate *) cur;
+    _Atomic uint32_t round;
+    _Atomic bool quit;
+} dkTestGateFreeCtl;
+
+static void *dkTestGateFreeExiterMain(void *arg) {
+    dkTestGateFreeCtl *c = arg;
+    uint32_t seen = 0;
+    for (;;) {
+        uint32_t round;
+        while ((round = atomic_load_explicit(&c->round,
+                                             memory_order_acquire)) == seen) {
+            if (atomic_load_explicit(&c->quit, memory_order_acquire)) {
+                return NULL;
+            }
+        }
+        seen = round;
+        inflightGateExit(atomic_load_explicit(&c->cur, memory_order_relaxed));
+    }
+}
+
+defcleanerName(inflightGate *, zfree, InflightGate);
 
 static int dkTestInflightGateTest(int argc, char *argv[]) {
     (void)argc;
@@ -971,6 +1006,42 @@ static int dkTestInflightGateTest(int argc, char *argv[]) {
     }
 
     GEXPECT(inflightGateDepth(&gate) == 0, "the race left the gate idle");
+
+    /* --- Property 5: drain-then-free. --- */
+    {
+        dkTestGateFreeCtl fc;
+        memset(&fc, 0, sizeof(fc));
+        pthread_t exiter;
+        GEXPECT(pthread_create(&exiter, NULL, dkTestGateFreeExiterMain, &fc) ==
+                    0,
+                "drain-then-free exiter started");
+        const uint64_t startMs = timeUtilMonotonicMs();
+        uint32_t rounds = 0;
+        uint32_t lost = 0;
+        for (uint32_t round = 1; round <= DK_TEST_GATE_FREE_ROUNDS; round++) {
+            cleanerName(zfree, InflightGate) inflightGate *g =
+                zmalloc(sizeof(*g));
+            *g = (inflightGate)INFLIGHT_GATE_INIT;
+            inflightGateEnter(g);
+            atomic_store_explicit(&fc.cur, g, memory_order_relaxed);
+            atomic_store_explicit(&fc.round, round, memory_order_release);
+            if (inflightGateAwaitZeroMs(g, DK_TEST_GATE_GENEROUS_MS) !=
+                INFLIGHT_GATE_IDLE) {
+                lost++;
+            }
+            rounds = round;
+            /* g is freed here, as a teardown would free its owner. */
+            if (timeUtilMonotonicMs() - startMs >=
+                DK_TEST_GATE_FREE_BUDGET_MS) {
+                break;
+            }
+        }
+        atomic_store_explicit(&fc.quit, true, memory_order_release);
+        pthread_join(exiter, NULL);
+        GEXPECT(lost == 0, "every drain-then-free round read IDLE");
+        GEXPECT(rounds > 0, "drain-then-free ran at least one round");
+    }
+
     GEXPECT(strcmp(inflightGateVerdictName(INFLIGHT_GATE_IDLE), "idle") == 0,
             "IDLE names itself");
     GEXPECT(strcmp(inflightGateVerdictName(INFLIGHT_GATE_EXPIRED), "expired") ==
