@@ -23,6 +23,15 @@
 #define OS_REGULATE_HAVE_EVENTFD 1
 #endif
 
+/* pipe2() sets O_NONBLOCK and O_CLOEXEC atomically with creation.  Linux
+ * (glibc 2.9+, musl) and the BSDs have it; macOS does not, and falls
+ * back to fcntl() after pipe().  Linux uses an eventfd for the wake
+ * descriptor, so only the BSDs reach the pipe2() path. */
+#if defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) ||     \
+    defined(__DragonFly__)
+#define OS_REGULATE_HAVE_PIPE2 1
+#endif
+
 /* Process-exit event source: kqueue on the BSD family, pidfd on Linux,
  * none elsewhere. */
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) ||       \
@@ -132,33 +141,68 @@ static int osRegulatePollUntil(struct pollfd *pfd, const uint64_t startMs,
 #define OS_REGULATE_READY_SEND_FLAGS 0
 #endif
 
+/* Set close-on-exec on a descriptor that could not get it atomically at
+ * creation.  Platforms with SOCK_CLOEXEC / pipe2() never call this, so
+ * only they close the window in which another thread's fork+exec
+ * inherits the descriptor. */
+static DK_FN_UNUSED bool osRegulateSetCloexec(int fd) {
+    const int flags = fcntl(fd, F_GETFD, 0);
+    return flags >= 0 && fcntl(fd, F_SETFD, flags | FD_CLOEXEC) >= 0;
+}
+
+/* Move a descriptor above the standard streams, keeping it
+ * close-on-exec.  A process started with stdin or stdout closed gets
+ * those numbers back from the next socketpair(), and the dup2() of
+ * /dev/null onto the streams in OSRegulateDaemonize() would then
+ * silently close the channel. */
+static bool osRegulateFdAboveStdio(int *fd) {
+    if (*fd > STDERR_FILENO) {
+        return true;
+    }
+
+    const int moved = fcntl(*fd, F_DUPFD_CLOEXEC, STDERR_FILENO + 1);
+    if (moved < 0) {
+        return false;
+    }
+
+    close(*fd);
+    *fd = moved;
+    return true;
+}
+
 bool OSRegulateReadyPipeNew(int *outRead, int *outWrite) {
     if (!outRead || !outWrite) {
         return false;
     }
     int fds[2];
+#if defined(SOCK_CLOEXEC)
+    if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, fds) != 0) {
+        return false;
+    }
+#else
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) != 0) {
         return false;
     }
-    for (size_t i = 0; i < 2; i++) {
-        const int fd = fcntl(fds[i], F_GETFD, 0);
-        if (fd < 0 || fcntl(fds[i], F_SETFD, fd | FD_CLOEXEC) < 0) {
-            close(fds[0]);
-            close(fds[1]);
-            return false;
-        }
-#if defined(SO_NOSIGPIPE)
-        const int one = 1;
-        if (setsockopt(fds[i], SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one)) <
-            0) {
-            close(fds[0]);
-            close(fds[1]);
-            return false;
-        }
 #endif
+    cleaner(fdClose) int rd = fds[0];
+    cleaner(fdClose) int wr = fds[1];
+#if !defined(SOCK_CLOEXEC)
+    if (!osRegulateSetCloexec(rd) || !osRegulateSetCloexec(wr)) {
+        return false;
     }
-    *outRead = fds[0];
-    *outWrite = fds[1];
+#endif
+    if (!osRegulateFdAboveStdio(&rd) || !osRegulateFdAboveStdio(&wr)) {
+        return false;
+    }
+#if defined(SO_NOSIGPIPE)
+    const int one = 1;
+    if (setsockopt(rd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one)) < 0 ||
+        setsockopt(wr, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one)) < 0) {
+        return false;
+    }
+#endif
+    *outRead = fdRelease(&rd);
+    *outWrite = fdRelease(&wr);
     return true;
 }
 
@@ -433,23 +477,31 @@ bool OSRegulateWakeFdNew(int *outRead, int *outWrite) {
     *outRead = efd;
     *outWrite = efd;
     return true;
+#elif defined(OS_REGULATE_HAVE_PIPE2)
+    int fds[2];
+    if (pipe2(fds, O_NONBLOCK | O_CLOEXEC) != 0) {
+        return false;
+    }
+    *outRead = fds[0];
+    *outWrite = fds[1];
+    return true;
 #else
     int fds[2];
     if (pipe(fds) != 0) {
         return false;
     }
+    cleaner(fdClose) int rd = fds[0];
+    cleaner(fdClose) int wr = fds[1];
+    const int ends[2] = {rd, wr};
     for (size_t i = 0; i < 2; i++) {
-        const int fl = fcntl(fds[i], F_GETFL, 0);
-        const int fd = fcntl(fds[i], F_GETFD, 0);
-        if (fl < 0 || fd < 0 || fcntl(fds[i], F_SETFL, fl | O_NONBLOCK) < 0 ||
-            fcntl(fds[i], F_SETFD, fd | FD_CLOEXEC) < 0) {
-            close(fds[0]);
-            close(fds[1]);
+        const int fl = fcntl(ends[i], F_GETFL, 0);
+        if (fl < 0 || fcntl(ends[i], F_SETFL, fl | O_NONBLOCK) < 0 ||
+            !osRegulateSetCloexec(ends[i])) {
             return false;
         }
     }
-    *outRead = fds[0];
-    *outWrite = fds[1];
+    *outRead = fdRelease(&rd);
+    *outWrite = fdRelease(&wr);
     return true;
 #endif
 }

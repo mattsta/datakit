@@ -125,6 +125,7 @@ extern int bigmathTest(int argc, char *argv[]);
 #endif
 
 #include <errno.h>
+#include <fcntl.h>  /* descriptor flags of OSRegulate pairs */
 #include <poll.h>   /* process-exit watch fd readiness */
 #include <signal.h> /* kill */
 #include <stdbool.h>
@@ -674,10 +675,92 @@ static int dkTestDaemonizeReadyTest(int argc, char *argv[]) {
                 "the one byte reads as READY");
     }
 
+    /* --- (5) the pair is close-on-exec and numbered above the standard
+     *         streams even when the creator starts with stdin and stdout
+     *         closed (the next socketpair() would otherwise get 0 and
+     *         1).  Run in a child, whose exit code is the verdict, so
+     *         the test process keeps its own stdio. */
+    {
+        const pid_t child = fork();
+        if (child == 0) {
+            close(STDIN_FILENO);
+            close(STDOUT_FILENO);
+            int rd = -1;
+            int wr = -1;
+            if (!OSRegulateReadyPipeNew(&rd, &wr)) {
+                _exit(2);
+            }
+
+            const bool above = rd > STDERR_FILENO && wr > STDERR_FILENO;
+            const bool cloexec = (fcntl(rd, F_GETFD) & FD_CLOEXEC) &&
+                                 (fcntl(wr, F_GETFD) & FD_CLOEXEC);
+            _exit(above && cloexec ? 0 : 1);
+        }
+
+        REXPECT(child > 0, "fork for the closed-stdio pair child");
+        if (child > 0) {
+            int status = 0;
+            REXPECT(OSRegulateProcessAwaitExitMs(child, kGenerousMs, &status),
+                    "closed-stdio pair child reaped");
+            REXPECT(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+                    "pair is close-on-exec and above stderr with stdio "
+                    "closed");
+        }
+    }
+
+    /* --- (6) DaemonizeUntilReady end to end.  A launcher child
+     *         daemonizes; its daemon either signals or exits silently,
+     *         and the launcher (the foreground parent) must exit 0 or 1
+     *         to match.  Launchers start with stdio open and with stdin
+     *         and stdout closed, where the readiness channel would land
+     *         on the streams /dev/null replaces.  The daemons are
+     *         re-parented away from the test process, so only the
+     *         launchers are reaped here. */
+    for (int closedStdio = 0; closedStdio < 2; closedStdio++) {
+        for (int signals = 0; signals < 2; signals++) {
+            const pid_t launcher = fork();
+            if (launcher == 0) {
+                if (closedStdio) {
+                    close(STDIN_FILENO);
+                    close(STDOUT_FILENO);
+                }
+
+                const OSRegulateDaemonizeStatus st =
+                    OSRegulateDaemonizeUntilReady(kGenerousMs, NULL);
+                if (st == OS_REGULATE_DAEMONIZE_CHILD) {
+                    if (signals) {
+                        OSRegulateDaemonizeSignalReady();
+                    }
+                    _exit(0);
+                }
+
+                _exit(4);
+            }
+
+            REXPECT(launcher > 0, "fork for the daemonize launcher");
+            if (launcher > 0) {
+                int status = 0;
+                REXPECT(OSRegulateProcessAwaitExitMs(launcher, kGenerousMs,
+                                                     &status),
+                        "daemonize launcher reaped");
+                const int want = signals ? 0 : 1;
+                if (!(WIFEXITED(status) && WEXITSTATUS(status) == want)) {
+                    printf("dkTestDaemonizeReady: launcher (stdio %s, daemon "
+                           "%s) exit status %d, want %d\n",
+                           closedStdio ? "closed" : "open",
+                           signals ? "signals" : "silent",
+                           WIFEXITED(status) ? WEXITSTATUS(status) : -1, want);
+                }
+                REXPECT(WIFEXITED(status) && WEXITSTATUS(status) == want,
+                        "launcher exit status follows the daemon's readiness");
+            }
+        }
+    }
+
 #undef REXPECT
     if (failures == 0) {
         printf("dkTestDaemonizeReady: OK (ready, writer gone, expired, "
-               "idempotent signal)\n");
+               "idempotent signal, stdio placement, daemonize end to end)\n");
     }
     return failures;
 }
@@ -751,6 +834,14 @@ static int dkTestWakeFdTest(int argc, char *argv[]) {
     WEXPECT(errno == EBUSY, "Signal preserves errno");
     OSRegulateWakeDrain(rd);
     WEXPECT(!OSRegulateWakeAwaitMs(rd, kShortMs), "Drain consumed the wake");
+
+    /* Both ends are non-blocking and close-on-exec. */
+    WEXPECT((fcntl(rd, F_GETFL) & O_NONBLOCK) &&
+                (fcntl(wr, F_GETFL) & O_NONBLOCK),
+            "wake pair is non-blocking");
+    WEXPECT((fcntl(rd, F_GETFD) & FD_CLOEXEC) &&
+                (fcntl(wr, F_GETFD) & FD_CLOEXEC),
+            "wake pair is close-on-exec");
 
     if (wr != rd) {
         close(wr);

@@ -118,6 +118,13 @@ if (!startServing()) {
 OSRegulateDaemonizeSignalReady(); /* the parent exits 0 */
 ```
 
+The readiness channel is numbered above the standard streams, so a process
+started with stdin or stdout closed still gets a working channel after the
+`/dev/null` redirect. The child's write end is close-on-exec, so signal before
+any `exec()`. A child forked before the signal holds the write end too, so if
+the daemon then dies unsignalled the parent waits out `readyBudgetMs` instead of
+seeing the exit at once.
+
 ### Readiness Channel
 
 The primitive under `OSRegulateDaemonizeUntilReady`, usable on its own for any
@@ -133,7 +140,9 @@ typedef enum OSRegulateReadyAwait {
     OS_REGULATE_READY_AWAIT_EXPIRED,     /* budget elapsed, writer alive */
 } OSRegulateReadyAwait;
 
-/* Create the pair (both ends close-on-exec). The parent keeps the read
+/* Create the pair (both ends close-on-exec, atomically where the
+ * platform has SOCK_CLOEXEC, and numbered above the standard streams so
+ * a later stdio redirect cannot close them). The parent keeps the read
  * end and the child the write end; each closes the other after fork(). */
 bool OSRegulateReadyPipeNew(int *outRead, int *outWrite);
 

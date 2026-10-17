@@ -30,8 +30,10 @@ typedef enum OSRegulateReadyAwait {
     OS_REGULATE_READY_AWAIT_EXPIRED,     /* budget elapsed, writer alive */
 } OSRegulateReadyAwait;
 
-/* Create the pair.  Both ends are close-on-exec; the read end is meant
- * for the parent and the write end for the child (each closes the
+/* Create the pair.  Both ends are close-on-exec (set atomically where
+ * the platform has SOCK_CLOEXEC) and numbered above the standard
+ * streams, so redirecting stdio cannot close them; the read end is
+ * meant for the parent and the write end for the child (each closes the
  * other's end after the fork).  The caller owns both descriptors. */
 bool OSRegulateReadyPipeNew(int *outRead, int *outWrite);
 
@@ -51,7 +53,10 @@ OSRegulateReadyAwait OSRegulateReadyPipeAwaitMs(int readFd, uint64_t budgetMs);
  * first or readyBudgetMs elapses.  Both exits use _exit(), so the
  * parent runs no atexit handlers.  The child gets
  * OS_REGULATE_DAEMONIZE_CHILD and calls OSRegulateDaemonizeSignalReady()
- * once it is ready to serve. */
+ * once it is ready to serve.  The child's write end is close-on-exec, so
+ * signal before any exec(); a child forked before the signal holds the
+ * write end too, so if the daemon then dies unsignalled the parent
+ * waits out readyBudgetMs instead of seeing the exit at once. */
 OSRegulateDaemonizeStatus OSRegulateDaemonizeUntilReady(uint64_t readyBudgetMs,
                                                         const char **errMsg);
 void OSRegulateDaemonizeSignalReady(void);
@@ -101,7 +106,8 @@ bool OSRegulateProcessAwaitExitMs(pid_t pid, uint64_t budgetMs, int *outStatus);
 
 /* Create the pair.  On success *outRead is the descriptor to poll and
  * *outWrite the one to signal (equal on eventfd platforms).  Both are
- * non-blocking and close-on-exec; the caller owns and closes both
+ * non-blocking and close-on-exec (set atomically by eventfd() and
+ * pipe2() where available); the caller owns and closes both
  * (compare the two before closing — one descriptor on eventfd). */
 bool OSRegulateWakeFdNew(int *outRead, int *outWrite);
 
