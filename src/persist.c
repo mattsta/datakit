@@ -2890,14 +2890,17 @@ static void *multimapPersistRestore(const uint8_t *data, size_t len) {
     flexEntry *fe = flexHead(f);
 
     databox *elements[elementsPerEntry];
-    databox elementStorage[elementsPerEntry];
+    /* databoxBig so a 96/128-bit member decodes into storage the box
+     * owns; a plain databox would carry no payload for it. */
+    databoxBig elementStorage[elementsPerEntry];
     for (uint32_t i = 0; i < elementsPerEntry; i++) {
-        elements[i] = &elementStorage[i];
+        elements[i] = (databox *)&elementStorage[i];
     }
 
     for (size_t e = 0; e < numEntries; e++) {
         /* Read elementsPerEntry databoxes for one entry */
         for (uint32_t i = 0; i < elementsPerEntry; i++) {
+            DATABOX_BIG_INIT(&elementStorage[i]);
             flexGetByType(fe, elements[i]);
             fe = flexNext(f, fe);
         }
@@ -3007,12 +3010,15 @@ static bool multimapPersistApplyOp(void *structure, persistOp op,
         if (argc == 0 || argc > 32) {
             return false;
         }
-        databox boxes[32];
+        /* databoxBig so a 96/128-bit member decodes into storage the box
+         * owns; a plain databox would carry no payload for it. */
+        databoxBig boxes[32];
         const databox *boxPtrs[32];
         flexEntry *fe = flexHead(f);
         for (size_t i = 0; i < argc; i++) {
-            flexGetByType(fe, &boxes[i]);
-            boxPtrs[i] = &boxes[i];
+            DATABOX_BIG_INIT(&boxes[i]);
+            flexGetByType(fe, (databox *)&boxes[i]);
+            boxPtrs[i] = (const databox *)&boxes[i];
             fe = flexNext(f, fe);
         }
         multimapInsert(m, boxPtrs);
@@ -3129,9 +3135,10 @@ static void *multilistPersistRestore(const uint8_t *data, size_t len) {
     size_t count = flexCount(f);
     flexEntry *fe = flexHead(f);
     for (size_t i = 0; i < count; i++) {
-        databox box;
-        flexGetByType(fe, &box);
-        multilistPushByTypeTail(&ml, state, &box);
+        databoxBig box; /* room for a 96/128-bit element */
+        DATABOX_BIG_INIT(&box);
+        flexGetByType(fe, (databox *)&box);
+        multilistPushByTypeTail(&ml, state, (databox *)&box);
         fe = flexNext(f, fe);
     }
 
@@ -3484,18 +3491,20 @@ static void *multidictPersistRestore(const uint8_t *data, size_t len) {
     size_t count = flexCount(f);
     flexEntry *fe = flexHead(f);
     for (size_t i = 0; i + 1 < count; i += 2) {
-        databox key, val;
+        databoxBig key, val; /* room for 96/128-bit keys and values */
+        DATABOX_BIG_INIT(&key);
+        DATABOX_BIG_INIT(&val);
 
         /* Get key */
-        flexGetByType(fe, &key);
+        flexGetByType(fe, (databox *)&key);
         fe = flexNext(f, fe);
 
         /* Get value */
-        flexGetByType(fe, &val);
+        flexGetByType(fe, (databox *)&val);
         fe = flexNext(f, fe);
 
         /* Add to multidict */
-        multidictAdd(d, &key, &val);
+        multidictAdd(d, (databox *)&key, (databox *)&val);
     }
 
     return d;
@@ -3764,7 +3773,10 @@ static void *multilruPersistRestore(const uint8_t *data, size_t len) {
 
     /* Read configuration */
     flexEntry *fe = flexHead(f);
-    databox db;
+    /* Zeroed: these fields are 64-bit integers, so 'big' must be clear
+     * for a malformed wide entry to decode type-only instead of writing
+     * through an uninitialised pointer. */
+    databox db = {{0}};
 
     flexGetByType(fe, &db);
     size_t maxLevels = (size_t)db.data.u64;
@@ -4210,21 +4222,23 @@ static void *multiOrderedSetPersistRestore(const uint8_t *data, size_t len) {
 
     flexEntry *fe = flexHead(f);
     for (size_t i = 0; i < count / 2 && fe; i++) {
-        databox score, member;
+        databoxBig score, member; /* room for 96/128-bit scores/members */
+        DATABOX_BIG_INIT(&score);
+        DATABOX_BIG_INIT(&member);
 
         /* Read score */
-        flexGetByType(fe, &score);
+        flexGetByType(fe, (databox *)&score);
         fe = flexNext(f, fe);
         if (!fe) {
             break;
         }
 
         /* Read member */
-        flexGetByType(fe, &member);
+        flexGetByType(fe, (databox *)&member);
         fe = flexNext(f, fe);
 
         /* Add to multiOrderedSet */
-        multiOrderedSetAdd(&mos, &score, &member);
+        multiOrderedSetAdd(&mos, (databox *)&score, (databox *)&member);
     }
 
     /* Return the multiOrderedSet directly (not wrapped in pointer-to-pointer).
@@ -5554,6 +5568,44 @@ int persistTest(int argc, char *argv[]) {
     /* ================================================================
      * Multilist Persistence Tests
      * ================================================================ */
+
+    TEST("128-bit values survive multimap snapshot and multilist restore") {
+        /* Restore decodes every member through flexGetByType; a 96/128-bit
+         * member must land in storage the decode box owns. */
+        const __int128_t wide = -((__int128_t)1 << 100) - 7;
+        databoxBig wideBox;
+        DATABOX_BIG_SIGNED_128(&wideBox, wide);
+
+        cleaner(multimapFree) multimap *m = multimapNew(2);
+        const databox key = databoxNewBytesString("wide");
+        const databox *row[] = {&key, (const databox *)&wideBox};
+        multimapInsert(&m, row);
+        persist *pm = persistCreate(&persistOpsMultimap, NULL);
+        persistAttachSnapshot(pm, persistStoreMemory(0));
+        if (!persistSnapshot(pm, m)) {
+            ERRR("multimap snapshot with a 128-bit value failed");
+        }
+        cleaner(multimapFree) multimap *mr = persistRestore(pm);
+        databoxBig got;
+        DATABOX_BIG_INIT(&got);
+        databox *gotPtrs[] = {(databox *)&got};
+        if (!mr || !multimapLookup(mr, &key, gotPtrs)) {
+            ERRR("restored multimap lost the 128-bit row");
+        } else if (got.type != DATABOX_SIGNED_128 || *got.data.i128 != wide) {
+            ERRR("restored multimap 128-bit value read back wrong");
+        }
+        persistClose(pm);
+
+        /* multilist restore decodes from the snapshot flex directly, so
+         * hand it a flex carrying the 128-bit element. */
+        cleaner(flexFree) flex *mlSnap = flexNew();
+        flexPushByType(&mlSnap, (const databox *)&wideBox, FLEX_ENDPOINT_TAIL);
+        cleaner(multilistFree) multilist *mlr = persistOpsMultilist.restore(
+            (const uint8_t *)mlSnap, flexBytes(mlSnap));
+        if (!mlr || multilistCount(mlr) != 1) {
+            ERRR("restored multilist lost the 128-bit element");
+        }
+    }
 
     TEST("multilist snapshot and restore") {
         cleaner(multilistFree) multilist *ml =
@@ -7006,6 +7058,31 @@ int persistTest(int argc, char *argv[]) {
      * the supplied buffer length
      * These tests invoke restore directly (not through the snapshot
      * file format) so we can hand it crafted malformed bytes. */
+    TEST("multimap WAL insert replays a 128-bit value") {
+        /* The replayed INSERT record is a flex of the row's members; a
+         * 128-bit member must decode into storage the box owns. */
+        cleaner(multimapFree) multimap *m = multimapNew(2);
+        cleaner(flexFree) flex *rec = flexNew();
+        const databox key = databoxNewBytesString("wide");
+        databoxBig wide;
+        DATABOX_BIG_SIGNED_128(&wide, -((__int128_t)1 << 100) - 7);
+        flexPushByType(&rec, &key, FLEX_ENDPOINT_TAIL);
+        flexPushByType(&rec, (const databox *)&wide, FLEX_ENDPOINT_TAIL);
+        if (!persistOpsMultimap.applyOp(&m, PERSIST_OP_INSERT,
+                                        (const uint8_t *)rec, flexBytes(rec))) {
+            ERRR("multimap INSERT replay refused a valid 128-bit row");
+        }
+        databoxBig got;
+        DATABOX_BIG_INIT(&got);
+        databox *gotPtrs[1] = {(databox *)&got};
+        if (!multimapLookup(m, &key, gotPtrs)) {
+            ERRR("replayed 128-bit row not found");
+        } else if (got.type != DATABOX_SIGNED_128 ||
+                   *got.data.i128 != -((__int128_t)1 << 100) - 7) {
+            ERRR("replayed 128-bit value read back wrong");
+        }
+    }
+
     TEST("restore: NULL input is rejected by all flex-backed ops") {
         if (persistOpsFlex.restore(NULL, 0) != NULL) {
             ERRR("flex restore accepted NULL input");
