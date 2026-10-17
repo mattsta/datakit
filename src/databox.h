@@ -155,6 +155,13 @@ typedef union databoxUnion {
 _Static_assert(sizeof(databoxUnion) == 8, "databox value too big!");
 #endif
 
+/* Bit width of the databox length field and the largest length it can
+ * hold.  Longer lengths would be truncated, so callers taking a length
+ * from untrusted input must reject anything above DATABOX_BYTES_LEN_MAX.
+ * DATABOX_LEN_BITS is fixed by the databox layout below. */
+#define DATABOX_LEN_BITS 48
+#define DATABOX_BYTES_LEN_MAX ((UINT64_C(1) << DATABOX_LEN_BITS) - 1)
+
 /* Macro-ize common databox metadata because we must share _exactly_ the same
  * layout and fields between 'databox' and 'databoxBig' */
 #define databoxInternals_                                                      \
@@ -163,7 +170,7 @@ _Static_assert(sizeof(databoxUnion) == 8, "databox value too big!");
     uint64_t created : 1;   /* bool; if retrieved+created, true. */            \
     uint64_t big : 1;       /* bool; true if actually a databoxBig */          \
     uint64_t unused : 5;                                                       \
-    uint64_t len : 48 /* length of 'data.bytes'. 281 TB should be enough. */
+    uint64_t len : DATABOX_LEN_BITS /* length of 'data.bytes' (281 TB) */
 
 /* databox is a 8 + 8 = 16 byte struct. */
 typedef struct databox {
