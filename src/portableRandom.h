@@ -17,12 +17,7 @@ void portableRandom_stir(portableRandomState *r, pid_t pid);
 void portableRandom_add(portableRandomState *r, const uint8_t *key, size_t len);
 uint32_t portableRandom32(portableRandomState *r);
 uint64_t portableRandom64(portableRandomState *r);
-__uint128_t portableRandom128(portableRandomState *r);
 
-/* Note: these iterate in 8 or 16 byte units where total length of 'fill' is
- * (8 * count) bytes OR (16 * count) bytes! */
-void portableRandomBy8(portableRandomState *r, void *fill, size_t count);
-void portableRandomBy16(portableRandomState *r, void *fill, size_t count);
 /* Bytes emitted between OS re-keys; installed by portableRandom_stir.
  * Each draw charges the bytes it produces against it. */
 #define DK_PR_REFUEL_BYTES 100000

@@ -224,27 +224,3 @@ uint64_t portableRandom64(portableRandomState *r) {
 
     return val;
 }
-
-void portableRandomBy8(portableRandomState *r, void *const fill_,
-                       const size_t count) {
-    uint64_t *fill = fill_;
-    pid_t pid;
-    bool new_pid;
-
-    randomSetup(*fill);
-    for (size_t f = 0; f < count; f++) {
-        genWidth(fill[f]);
-    }
-}
-
-void portableRandomBy16(portableRandomState *r, void *const fill_,
-                        const size_t count) {
-    __uint128_t *fill = fill_;
-    pid_t pid;
-    bool new_pid;
-
-    randomSetup(*fill);
-    for (size_t f = 0; f < count; f++) {
-        genWidth(fill[f]);
-    }
-}
