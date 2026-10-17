@@ -699,13 +699,32 @@ if(BuildTestBinary)
     # site in src/ must be SCOPED (cleaner attribute) or @own-ANNOTATED.
     # Runs the dktools audit (tools/ uv project) when uv is available;
     # exits nonzero on any violation ("100% clean pattern" required).
+    # Paths come from PROJECT_SOURCE_DIR (datakit's own root), not
+    # CMAKE_SOURCE_DIR, which is the enclosing project's root when
+    # datakit is built through add_subdirectory().  uvGate.sh reports
+    # SKIP (77) instead of failing when uv cannot set up the tools
+    # environment, as on an offline machine with nothing cached.
     find_program(UV_EXECUTABLE uv)
-    if(UV_EXECUTABLE AND EXISTS "${CMAKE_SOURCE_DIR}/tools/pyproject.toml")
+    set(DK_TOOLS_DIR "${PROJECT_SOURCE_DIR}/tools")
+    if(UV_EXECUTABLE AND EXISTS "${DK_TOOLS_DIR}/pyproject.toml")
         add_test(NAME allocOwnership
-            COMMAND ${UV_EXECUTABLE} run dktools allocaudit check --constructors
-            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/tools)
+            COMMAND sh ${DK_TOOLS_DIR}/uvGate.sh ${UV_EXECUTABLE} ${DK_TOOLS_DIR}
+                dktools --repo ${PROJECT_SOURCE_DIR}
+                allocaudit check --constructors
+            WORKING_DIRECTORY ${DK_TOOLS_DIR})
         set_tests_properties(allocOwnership PROPERTIES
             TIMEOUT 300
+            SKIP_RETURN_CODE 77
+            LABELS "gate")
+        # The tools' own tests (perfdiff exit codes), through the same
+        # environment and skip rule.
+        add_test(NAME dktoolsSelfTest
+            COMMAND sh ${DK_TOOLS_DIR}/uvGate.sh ${UV_EXECUTABLE} ${DK_TOOLS_DIR}
+                python -m unittest discover -s ${DK_TOOLS_DIR}/tests
+            WORKING_DIRECTORY ${DK_TOOLS_DIR})
+        set_tests_properties(dktoolsSelfTest PROPERTIES
+            TIMEOUT 120
+            SKIP_RETURN_CODE 77
             LABELS "gate")
         message(STATUS "Registered allocOwnership gate (dktools allocaudit)")
     else()

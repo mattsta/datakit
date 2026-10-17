@@ -42,6 +42,17 @@ uv run dktools allocaudit report --constructors # markdown report
 The audit is enforced as the ctest test `allocOwnership`
 (registered in `src/CMakeLists.txt` whenever `uv` is on PATH), so it
 runs with plain `ctest`, `datakit-check`, and `datakit-quickcheck`.
+The tools' own tests (`tests/`, stdlib `unittest`) run as the ctest
+test `dktoolsSelfTest`, or directly from the repository root:
+
+```sh
+uv run --project tools python -m unittest discover -s tools/tests
+```
+
+Both ctest entries go through `uvGate.sh`, which reports the test as
+skipped rather than failed when uv cannot set up this environment (an
+offline machine with nothing cached), and runs uv with `--frozen` so a
+test never rewrites `uv.lock`.
 
 Coding-practice documentation: `docs/development/CONTRIBUTING.md`
 (Memory Management) and the idiom block in `src/cleaner.h`.
@@ -71,4 +82,6 @@ uv run dktools perfdiff BASELINE.tsv CURRENT.tsv [--tolerance PCT]
 - The baseline is a local file, not committed; generate it from a
   perf build with
   `./build-perf/src/datakit-test test perfRegression > perf.baseline.tsv`.
-  Paths are relative to `tools/` when run as shown.
+  Paths are relative to `tools/` when run as shown; from the repository
+  root, where the TSVs are generated, use
+  `uv run --project tools dktools perfdiff perf.baseline.tsv perf.current.tsv`.
