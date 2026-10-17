@@ -504,6 +504,70 @@ int portableRandomTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("portableRandom32 charges four bytes per word") {
+        /* The first draw after init stirs and installs the full budget;
+         * each later draw charges sizeof(uint32_t), and the draw that
+         * exhausts the budget re-stirs. */
+        portableRandomState r;
+        portableRandom_init(&r, getpid());
+        (void)portableRandom32(&r);
+
+        if (r.remainingBytesBeforeRefuel != (int64_t)DK_PR_REFUEL_BYTES) {
+            ERR("after the first draw the budget is %" PRId64 ", not "
+                "%" PRIu64,
+                (int64_t)r.remainingBytesBeforeRefuel,
+                (uint64_t)DK_PR_REFUEL_BYTES);
+        }
+
+        const uint64_t wordBytes = (uint64_t)sizeof(uint32_t);
+        const uint64_t wordsPerRefuel =
+            (uint64_t)DK_PR_REFUEL_BYTES / wordBytes;
+        for (uint64_t d = 1; d < wordsPerRefuel; d++) {
+            (void)portableRandom32(&r);
+        }
+
+        if (r.remainingBytesBeforeRefuel != (int64_t)wordBytes) {
+            ERR("one draw short of the refuel edge the budget is %" PRId64
+                ", not one word (%" PRIu64 ")",
+                (int64_t)r.remainingBytesBeforeRefuel, wordBytes);
+        }
+
+        (void)portableRandom32(&r);
+
+        if (r.remainingBytesBeforeRefuel != (int64_t)DK_PR_REFUEL_BYTES) {
+            ERR("crossing the refuel edge left the budget at %" PRId64
+                ", not %" PRIu64,
+                (int64_t)r.remainingBytesBeforeRefuel,
+                (uint64_t)DK_PR_REFUEL_BYTES);
+        }
+    }
+
+    TEST("crossing the refuel edge re-keys the stream") {
+        /* A frozen copy continues the current key stream.  Before the
+         * edge the state matches it word for word; the draw that crosses
+         * the edge re-keys, so it must differ (false-positive 2^-64). */
+        const int64_t wordBytes = (int64_t)sizeof(uint64_t);
+        portableRandomState r;
+        portableRandom_init(&r, getpid());
+        (void)portableRandom64(&r);
+        r.remainingBytesBeforeRefuel = 2 * wordBytes;
+
+        portableRandomState frozen;
+        portableRandomTestFreeze(&r, &frozen);
+
+        const uint64_t before = portableRandom64(&r);
+        if (before != portableRandom64(&frozen)) {
+            ERRR("a draw before the refuel edge left the frozen stream");
+        }
+
+        const uint64_t crossing = portableRandom64(&r);
+        if (crossing == portableRandom64(&frozen)) {
+            ERR("the draw that crossed the refuel edge returned 0x%016" PRIx64
+                ", the old key's next word",
+                crossing);
+        }
+    }
+
     TEST("portableRandomFill64 returns portableRandom64's words") {
         /* Two frozen copies of one state: a 300-word fill (two chunks)
          * from one must equal 300 portableRandom64 draws from the
