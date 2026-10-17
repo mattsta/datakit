@@ -2300,8 +2300,11 @@ DK_STATIC void flexInsertByType_(flex **const ff, flexEntry *const fe,
                     box->data.bytes.embed, databoxLen(box));
         break;
     case DATABOX_SIGNED_64: {
+        /* Choose the encoding from the original value, then store the
+         * offset payload (same order as flexInsertSigned). */
+        const flexEncoding encoding = flexEncodingSigned(box->data.i);
         const intmax_t i = flexPrepareSigned(box->data.i);
-        flexInsert_(ff, fe, flexEncodingSigned(i), &i, sizeof(i));
+        flexInsert_(ff, fe, encoding, &i, sizeof(i));
         break;
     }
     case DATABOX_UNSIGNED_64:
@@ -2310,8 +2313,10 @@ DK_STATIC void flexInsertByType_(flex **const ff, flexEntry *const fe,
         break;
     case DATABOX_SIGNED_128: {
         assert(box->big);
+        /* Same order as the 64-bit arm. */
+        const flexEncoding encoding = flexEncodingSignedBig(*box->data.i128);
         const __int128_t add = flexPrepareSignedBig(*box->data.i128);
-        flexInsert_(ff, fe, flexEncodingSignedBig(add), &add, sizeof(add));
+        flexInsert_(ff, fe, encoding, &add, sizeof(add));
         break;
     }
     case DATABOX_UNSIGNED_128:
@@ -6154,6 +6159,78 @@ int32_t flexTest(int32_t argc, char **argv) {
     flexEntry *fe = NULL;
     (void)f;
     (void)fe;
+
+    printf("Verify a SIGNED databox round-trips through flexInsertByType at "
+           "every width boundary:\n");
+    {
+        /* Insert each value as a SIGNED_64 box and as its decimal spelling
+         * (scanned by StrScanScanReliable); each must read back unchanged.
+         * Non-negative values may read back as UNSIGNED_64. */
+        const int64_t vals[] = {
+            -1,          -2,          -255,          -256,      -257,
+            -65535,      -65536,      -65537,        -16777216, -16777217,
+            -4294967296, -4294967297, INT64_MIN + 1, INT64_MIN, 0,
+            1,           255,         256,           65536,     INT64_MAX,
+        };
+        int32_t bad = 0;
+        for (size_t i = 0; i < sizeof(vals) / sizeof(vals[0]); i++) {
+            cleaner(flexFree) flex *rt = flexNew();
+            const databox in = databoxNewSigned(vals[i]);
+            flexInsertByType(&rt, FLEX_ENTRY_AFTER_TAIL(rt), &in);
+            char spelled[32];
+            const int sl =
+                snprintf(spelled, sizeof(spelled), "%" PRId64, vals[i]);
+            flexPushBytes(&rt, spelled, (size_t)sl, FLEX_ENDPOINT_TAIL);
+            for (size_t j = 0; j < 2; j++) {
+                databox out = {0};
+                flexGetByType(flexIndex(rt, (int32_t)j), &out);
+                bool same = false;
+                if (out.type == DATABOX_SIGNED_64) {
+                    same = out.data.i == vals[i];
+                } else if (out.type == DATABOX_UNSIGNED_64) {
+                    same = vals[i] >= 0 && out.data.u == (uint64_t)vals[i];
+                }
+                if (!same) {
+                    printf("  FAIL: %" PRId64 " (%s) read back as type %d "
+                           "i=%" PRIdMAX " u=%" PRIuMAX "\n",
+                           vals[i], j == 0 ? "box" : "bytes", (int)out.type,
+                           out.data.i, out.data.u);
+                    bad++;
+                }
+            }
+        }
+        /* The 128-bit arm at the boundaries where a one-off width choice
+         * truncates: just past 2^64 and 2^96 in magnitude. */
+        const __int128_t bigVals[] = {
+            -((__int128_t)1 << 64) - 1,
+            -((__int128_t)1 << 64) - 2,
+            -((__int128_t)1 << 96) - 1,
+            -((__int128_t)1 << 96) - 2,
+        };
+        for (size_t i = 0; i < sizeof(bigVals) / sizeof(bigVals[0]); i++) {
+            cleaner(flexFree) flex *rt = flexNew();
+            databoxBig in;
+            DATABOX_BIG_SIGNED_128(&in, bigVals[i]);
+            flexInsertByType(&rt, FLEX_ENTRY_AFTER_TAIL(rt),
+                             (const databox *)&in);
+            databoxBig out;
+            DATABOX_BIG_INIT(&out);
+            flexGetByType(flexHead(rt), (databox *)&out);
+            if (out.type != DATABOX_SIGNED_128 ||
+                *out.data.i128 != bigVals[i]) {
+                printf("  FAIL: 128-bit value %zu read back as type %d\n", i,
+                       (int)out.type);
+                bad++;
+            }
+        }
+        if (bad) {
+            printf("  %" PRId32 " signed round-trips FAILED\n", bad);
+            return bad;
+        }
+        printf("  ok (%zu values, box and bytes; %zu 128-bit values)\n",
+               sizeof(vals) / sizeof(vals[0]),
+               sizeof(bigVals) / sizeof(bigVals[0]));
+    }
 
     printf("Verify external-reference encoding round-trips every tier:\n");
     {
