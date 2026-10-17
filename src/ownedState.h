@@ -184,7 +184,9 @@ void ownedArenaRetire(ownedArena *arena, void *cargo, ownedReleaseFn release,
 /* Release every row whose rule is satisfied. Never waits. */
 void ownedArenaDrain(ownedArena *arena);
 
-/* Process-wide counters across all arenas (relaxed loads). */
+/* Process-wide counters across all arenas: sums of relaxed loads over
+ * per-thread stripes, so updates from different threads do not share a
+ * cache line. */
 uint64_t ownedArenaDeferredTotal(void);  /* rows parked */
 uint64_t ownedArenaRetiredTotal(void);   /* rows released */
 uint64_t ownedArenaGraceHeldTotal(void); /* rows past grace with readers
@@ -279,7 +281,9 @@ uint64_t ownedCellWriterViolationTotal(void);
 /* A declaration may point at a static row. The row is enrolled into a
  * process-wide list on the primitive's first operation and never
  * removed, so ownedStateRowCount/ownedStateRowAt can enumerate every
- * declared name. Counters aggregate across all instances sharing a row.
+ * declared name. Counters aggregate across all instances sharing a row,
+ * and the counters are one shared cache line per row, so instances that
+ * share a row contend for it under concurrent use.
  *
  * Enrolment is lock-free: a CAS on `enrolled` elects one thread, which
  * writes name and kind and pushes the row with a release CAS. Later

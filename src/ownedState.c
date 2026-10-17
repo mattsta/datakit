@@ -6,39 +6,94 @@
 
 #include <string.h>
 
-/* Process-wide counters (relaxed). */
-static _Atomic uint64_t g_owned_deferred_total = 0;
-static _Atomic uint64_t g_owned_retired_total = 0;
-static _Atomic uint64_t g_owned_grace_held_total = 0;
-static _Atomic uint64_t g_owned_never_left_total = 0;
-static _Atomic uint64_t g_owned_live_rows = 0;
-static _Atomic uint64_t g_owned_writer_violation_total = 0;
+/* Process-wide counters (relaxed), striped. Unrelated instances updated
+ * by different threads would otherwise move one shared cache line on
+ * every publish and every missed read. Each thread takes a stripe, round
+ * robin, on its first update; a total is the sum over the stripes. A
+ * stripe on its own may wrap (live rows are added on one thread and
+ * removed on another), but the sum modulo 2^64 is exact. A total read
+ * while updates are in flight is a sum of relaxed loads and may miss
+ * some of them, as a relaxed load of a single counter may. */
+typedef enum ownedTotal_ {
+    OWNED_T_ARENA_DEFERRED = 0,
+    OWNED_T_ARENA_RETIRED,
+    OWNED_T_ARENA_GRACE_HELD,
+    OWNED_T_ARENA_NEVER_LEFT,
+    OWNED_T_ARENA_LIVE_ROWS,
+    OWNED_T_WRITER_VIOLATION,
+    OWNED_T_SEQ_PUBLISHED,
+    OWNED_T_SEQ_TORN_READS,
+    OWNED_T_SEQ_OVERWRITTEN_READS,
+    OWNED_T_SEQ_PUBLISH_ABANDONED,
+    OWNED_T_SEQ_REFUSED_OVERSIZE,
+    OWNED_T_COUNT_
+} ownedTotal_;
+
+#define OWNED_STRIPES 16u
+/* Covers the 128-byte lines of Apple silicon and the adjacent-line
+ * prefetch pairs of x86-64. */
+#define OWNED_STRIPE_ALIGN 128
+
+typedef struct ownedStripe_ {
+    _Alignas(OWNED_STRIPE_ALIGN) _Atomic uint64_t c[OWNED_T_COUNT_];
+} ownedStripe_;
+
+static ownedStripe_ g_owned_stripes[OWNED_STRIPES];
+static _Atomic uint32_t g_owned_stripe_next = 0;
+static _Thread_local ownedStripe_ *g_owned_stripe_mine = NULL;
+
+static ownedStripe_ *ownedStripeMine_(void) {
+    ownedStripe_ *s = g_owned_stripe_mine;
+    if (!s) {
+        const uint32_t i = atomic_fetch_add_explicit(&g_owned_stripe_next, 1,
+                                                     memory_order_relaxed);
+        s = &g_owned_stripes[i % OWNED_STRIPES];
+        g_owned_stripe_mine = s;
+    }
+    return s;
+}
+
+static void ownedTotalAdd_(ownedTotal_ t) {
+    atomic_fetch_add_explicit(&ownedStripeMine_()->c[t], 1,
+                              memory_order_relaxed);
+}
+
+static void ownedTotalSub_(ownedTotal_ t) {
+    atomic_fetch_sub_explicit(&ownedStripeMine_()->c[t], 1,
+                              memory_order_relaxed);
+}
+
+static uint64_t ownedTotalRead_(ownedTotal_ t) {
+    uint64_t sum = 0;
+    for (uint32_t i = 0; i < OWNED_STRIPES; i++) {
+        sum += atomic_load_explicit(&g_owned_stripes[i].c[t],
+                                    memory_order_relaxed);
+    }
+    return sum;
+}
 
 uint64_t ownedArenaDeferredTotal(void) {
-    return atomic_load_explicit(&g_owned_deferred_total, memory_order_relaxed);
+    return ownedTotalRead_(OWNED_T_ARENA_DEFERRED);
 }
 
 uint64_t ownedArenaRetiredTotal(void) {
-    return atomic_load_explicit(&g_owned_retired_total, memory_order_relaxed);
+    return ownedTotalRead_(OWNED_T_ARENA_RETIRED);
 }
 
 uint64_t ownedArenaGraceHeldTotal(void) {
-    return atomic_load_explicit(&g_owned_grace_held_total,
-                                memory_order_relaxed);
+    return ownedTotalRead_(OWNED_T_ARENA_GRACE_HELD);
 }
 
 uint64_t ownedArenaHeldReadersNeverLeftTotal(void) {
-    return atomic_load_explicit(&g_owned_never_left_total,
-                                memory_order_relaxed);
+    return ownedTotalRead_(OWNED_T_ARENA_NEVER_LEFT);
 }
 
 uint64_t ownedArenaLiveRows(void) {
-    return atomic_load_explicit(&g_owned_live_rows, memory_order_relaxed);
+    return ownedTotalRead_(OWNED_T_ARENA_LIVE_ROWS);
 }
 
 uint64_t ownedCellWriterViolationTotal(void) {
-    return atomic_load_explicit(&g_owned_writer_violation_total,
-                                memory_order_relaxed);
+    return ownedTotalRead_(OWNED_T_WRITER_VIOLATION);
 }
 
 /* ====================================================================
@@ -79,9 +134,8 @@ void ownedArenaDestruct(ownedArena *arena) {
         if (arena->rows[i].release) {
             arena->rows[i].release(arena->rows[i].cargo);
         }
-        atomic_fetch_add_explicit(&g_owned_retired_total, 1,
-                                  memory_order_relaxed);
-        atomic_fetch_sub_explicit(&g_owned_live_rows, 1, memory_order_relaxed);
+        ownedTotalAdd_(OWNED_T_ARENA_RETIRED);
+        ownedTotalSub_(OWNED_T_ARENA_LIVE_ROWS);
     }
     zfree(arena->rows);
     arena->rows = NULL;
@@ -198,8 +252,8 @@ void ownedArenaRetire(ownedArena *arena, void *cargo, ownedReleaseFn release,
                                      .epoch = epoch};
     arena->count = i + 1;
     pthread_mutex_unlock(&arena->lock);
-    atomic_fetch_add_explicit(&g_owned_deferred_total, 1, memory_order_relaxed);
-    atomic_fetch_add_explicit(&g_owned_live_rows, 1, memory_order_relaxed);
+    ownedTotalAdd_(OWNED_T_ARENA_DEFERRED);
+    ownedTotalAdd_(OWNED_T_ARENA_LIVE_ROWS);
 }
 
 void ownedArenaDrain(ownedArena *arena) {
@@ -251,16 +305,13 @@ void ownedArenaDrain(ownedArena *arena) {
             if (row.release) {
                 row.release(row.cargo);
             }
-            atomic_fetch_add_explicit(&g_owned_retired_total, 1,
-                                      memory_order_relaxed);
-            atomic_fetch_sub_explicit(&g_owned_live_rows, 1,
-                                      memory_order_relaxed);
+            ownedTotalAdd_(OWNED_T_ARENA_RETIRED);
+            ownedTotalSub_(OWNED_T_ARENA_LIVE_ROWS);
             continue;
         }
         if (c1) {
             /* Past grace but readers remain. */
-            atomic_fetch_add_explicit(&g_owned_grace_held_total, 1,
-                                      memory_order_relaxed);
+            ownedTotalAdd_(OWNED_T_ARENA_GRACE_HELD);
             /* Report horizon. */
             const bool past_horizon =
                 readers_only
@@ -270,8 +321,7 @@ void ownedArenaDrain(ownedArena *arena) {
             if (!row.heldNoted && past_horizon) {
                 /* Report once per row; the row is kept. */
                 row.heldNoted = true;
-                atomic_fetch_add_explicit(&g_owned_never_left_total, 1,
-                                          memory_order_relaxed);
+                ownedTotalAdd_(OWNED_T_ARENA_NEVER_LEFT);
                 if (arena->decl->noteHold) {
                     const char *label = "cargo";
                     uint64_t id = 0;
@@ -306,8 +356,7 @@ static void ownedCellWriterCheck_(const ownedCell *c) {
     if (d->writer_ok(c->owner)) {
         return;
     }
-    atomic_fetch_add_explicit(&g_owned_writer_violation_total, 1,
-                              memory_order_relaxed);
+    ownedTotalAdd_(OWNED_T_WRITER_VIOLATION);
     if (d->note_violation) {
         d->note_violation(d, c->owner);
     }
@@ -701,31 +750,20 @@ uint64_t ownedSlotClaimRefusedTotal(const ownedSlotDecl *decl) {
  * the value argument needs.
  * ==================================================================== */
 
-static _Atomic uint64_t g_owned_seq_published_total = 0;
-static _Atomic uint64_t g_owned_seq_torn_reads_total = 0;
-static _Atomic uint64_t g_owned_seq_overwritten_reads_total = 0;
-static _Atomic uint64_t g_owned_seq_publish_abandoned_total = 0;
-static _Atomic uint64_t g_owned_seq_refused_oversize_total = 0;
-
 uint64_t ownedSeqPublishedTotal(void) {
-    return atomic_load_explicit(&g_owned_seq_published_total,
-                                memory_order_relaxed);
+    return ownedTotalRead_(OWNED_T_SEQ_PUBLISHED);
 }
 uint64_t ownedSeqTornReadsTotal(void) {
-    return atomic_load_explicit(&g_owned_seq_torn_reads_total,
-                                memory_order_relaxed);
+    return ownedTotalRead_(OWNED_T_SEQ_TORN_READS);
 }
 uint64_t ownedSeqOverwrittenReadsTotal(void) {
-    return atomic_load_explicit(&g_owned_seq_overwritten_reads_total,
-                                memory_order_relaxed);
+    return ownedTotalRead_(OWNED_T_SEQ_OVERWRITTEN_READS);
 }
 uint64_t ownedSeqPublishAbandonedTotal(void) {
-    return atomic_load_explicit(&g_owned_seq_publish_abandoned_total,
-                                memory_order_relaxed);
+    return ownedTotalRead_(OWNED_T_SEQ_PUBLISH_ABANDONED);
 }
 uint64_t ownedSeqPublishRefusedOversizeTotal(void) {
-    return atomic_load_explicit(&g_owned_seq_refused_oversize_total,
-                                memory_order_relaxed);
+    return ownedTotalRead_(OWNED_T_SEQ_REFUSED_OVERSIZE);
 }
 
 uint64_t ownedSeqColumnTotal(const ownedSeqDecl *decl, ownedSeqColumn column) {
@@ -756,9 +794,11 @@ static _Atomic uint64_t *ownedSeqVersion_(const ownedSeq *s, uint64_t index) {
                                 (size_t)index * ownedSeqStride_(s->decl));
 }
 
+/* The row's counters are one shared line per declaration: instances that
+ * share a row pay for it under concurrent use, as the header notes. */
 static void ownedSeqBump_(const ownedSeq *s, ownedSeqColumn column,
-                          _Atomic uint64_t *global) {
-    atomic_fetch_add_explicit(global, 1, memory_order_relaxed);
+                          ownedTotal_ total) {
+    ownedTotalAdd_(total);
     if (s->decl->row) {
         atomic_fetch_add_explicit(&s->decl->row->c[column], 1,
                                   memory_order_relaxed);
@@ -781,8 +821,7 @@ static void ownedSeqWriterCheck_(const ownedSeq *s) {
     if (d->writer_ok(s->owner)) {
         return;
     }
-    atomic_fetch_add_explicit(&g_owned_writer_violation_total, 1,
-                              memory_order_relaxed);
+    ownedTotalAdd_(OWNED_T_WRITER_VIOLATION);
     if (d->note_violation) {
         d->note_violation(d, s->owner);
     }
@@ -898,7 +937,7 @@ bool ownedSeqPublishWith(ownedSeq *s, size_t len, ownedSeqFillFn fill,
     if (len > s->decl->version_bytes) {
         /* Refused before a number is assigned: no version consumed. */
         ownedSeqBump_(s, OWNED_SEQ_C_REFUSED_OVERSIZE,
-                      &g_owned_seq_refused_oversize_total);
+                      OWNED_T_SEQ_REFUSED_OVERSIZE);
         return false;
     }
     /* T1: enter by CAS from a stamp no writer holds and whose number is
@@ -922,7 +961,7 @@ bool ownedSeqPublishWith(ownedSeq *s, size_t len, ownedSeqFillFn fill,
          * OVERWRITTEN once it holds a newer one. The holder's
          * publication is untouched. */
         ownedSeqBump_(s, OWNED_SEQ_C_PUBLISH_ABANDONED,
-                      &g_owned_seq_publish_abandoned_total);
+                      OWNED_T_SEQ_PUBLISH_ABANDONED);
         return true;
     }
     /* Fill: seq_cst stores into `used` and the payload, all inside this
@@ -941,12 +980,12 @@ bool ownedSeqPublishWith(ownedSeq *s, size_t len, ownedSeqFillFn fill,
                                                 memory_order_seq_cst,
                                                 memory_order_seq_cst)) {
         ownedSeqCursorAdvance_(s, n);
-        ownedSeqBump_(s, OWNED_SEQ_C_PUBLISHED, &g_owned_seq_published_total);
+        ownedSeqBump_(s, OWNED_SEQ_C_PUBLISHED, OWNED_T_SEQ_PUBLISHED);
         return true;
     }
     /* Unreachable given exclusivity; counted rather than asserted. */
     ownedSeqBump_(s, OWNED_SEQ_C_PUBLISH_ABANDONED,
-                  &g_owned_seq_publish_abandoned_total);
+                  OWNED_T_SEQ_PUBLISH_ABANDONED);
     return true;
 }
 
@@ -956,11 +995,11 @@ ownedSeqReadResult ownedSeqReadMissed(ownedSeq *s, ownedSeqReadResult r) {
     }
     ownedSeqEnrol_(s);
     if (r == OWNED_SEQ_TORN) {
-        ownedSeqBump_(s, OWNED_SEQ_C_TORN_READS, &g_owned_seq_torn_reads_total);
+        ownedSeqBump_(s, OWNED_SEQ_C_TORN_READS, OWNED_T_SEQ_TORN_READS);
         return r;
     }
     ownedSeqBump_(s, OWNED_SEQ_C_OVERWRITTEN_READS,
-                  &g_owned_seq_overwritten_reads_total);
+                  OWNED_T_SEQ_OVERWRITTEN_READS);
     return OWNED_SEQ_OVERWRITTEN;
 }
 
@@ -995,7 +1034,7 @@ ownedSeqReadResult ownedSeqReadAt(ownedSeq *s, uint64_t want, void *dst,
     ownedSeqEnrol_(s);
     if (want == 0) {
         ownedSeqBump_(s, OWNED_SEQ_C_OVERWRITTEN_READS,
-                      &g_owned_seq_overwritten_reads_total);
+                      OWNED_T_SEQ_OVERWRITTEN_READS);
         return OWNED_SEQ_OVERWRITTEN;
     }
     _Atomic uint64_t *const v =
@@ -1011,12 +1050,11 @@ ownedSeqReadResult ownedSeqReadAt(ownedSeq *s, uint64_t want, void *dst,
         const bool torn =
             (v1 == published + OWNED_SEQ_TAG_INPROGRESS) || (v1 < published);
         if (torn) {
-            ownedSeqBump_(s, OWNED_SEQ_C_TORN_READS,
-                          &g_owned_seq_torn_reads_total);
+            ownedSeqBump_(s, OWNED_SEQ_C_TORN_READS, OWNED_T_SEQ_TORN_READS);
             return OWNED_SEQ_TORN;
         }
         ownedSeqBump_(s, OWNED_SEQ_C_OVERWRITTEN_READS,
-                      &g_owned_seq_overwritten_reads_total);
+                      OWNED_T_SEQ_OVERWRITTEN_READS);
         return OWNED_SEQ_OVERWRITTEN;
     }
     /* C: `used` first, then the payload words. */
@@ -1032,7 +1070,7 @@ ownedSeqReadResult ownedSeqReadAt(ownedSeq *s, uint64_t want, void *dst,
             return OWNED_SEQ_CAPACITY;
         }
         ownedSeqBump_(s, OWNED_SEQ_C_OVERWRITTEN_READS,
-                      &g_owned_seq_overwritten_reads_total);
+                      OWNED_T_SEQ_OVERWRITTEN_READS);
         return OWNED_SEQ_OVERWRITTEN;
     }
     {
@@ -1060,7 +1098,7 @@ ownedSeqReadResult ownedSeqReadAt(ownedSeq *s, uint64_t want, void *dst,
     const uint64_t v2 = atomic_load_explicit(&v[0], memory_order_seq_cst);
     if (v2 != published) {
         ownedSeqBump_(s, OWNED_SEQ_C_OVERWRITTEN_READS,
-                      &g_owned_seq_overwritten_reads_total);
+                      OWNED_T_SEQ_OVERWRITTEN_READS);
         return OWNED_SEQ_OVERWRITTEN;
     }
     if (outLen) {
