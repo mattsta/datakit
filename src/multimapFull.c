@@ -1452,6 +1452,9 @@ abstractInsert(multimapFull *m, const databox *elements[],
                 if (useHighestInsertPosition) {
                     assert(NULL && "Not implemented!");
                     __builtin_unreachable();
+                } else if (keysCanBecomePointers) {
+                    found = multimapFullFlexInsertExternalizeLargeKeys(
+                        m, mapIdx, map, elements, keyAsPointer, replacedOut);
                 } else if (forceFullWidthComparison) {
                     found = multimapFullFlexInsertFullWidth(m, mapIdx, map,
                                                             elements);
@@ -1480,6 +1483,10 @@ abstractInsert(multimapFull *m, const databox *elements[],
                 if (useHighestInsertPosition) {
                     assert(NULL && "Not implemented!");
                     __builtin_unreachable();
+                } else if (keysCanBecomePointers) {
+                    found = multimapFullFlexInsertExternalizeLargeKeys(
+                        m, nextIdx, nextMap, elements, keyAsPointer,
+                        replacedOut);
                 } else if (forceFullWidthComparison) {
                     found = multimapFullFlexInsertFullWidth(m, nextIdx, nextMap,
                                                             elements);

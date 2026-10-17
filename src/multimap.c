@@ -1326,6 +1326,69 @@ int32_t multimapInsertReplacingSweep(void) {
         }
     }
 
+    TEST("externalized inserts that split a multimapFull still externalize") {
+        /* 35-byte keys with 100-byte values overflow the default sub-map
+         * size every ~19 rows, so most of these inserts land on the
+         * split / new-map path.  Every fresh long key must come back as an
+         * allocation, whichever path stored it. */
+        enum { splitRows = 200 };
+        cleanerName(multimapFullFree, Sweep) multimapFull *m =
+            multimapFullNew(2);
+        void *allocs[splitRows] = {0};
+        char val[100];
+        memset(val, 'v', sizeof(val));
+        uint64_t missed = 0;
+        for (uint64_t i = 0; i < splitRows; i++) {
+            char key[64];
+            snprintf(key, sizeof(key),
+                     "long-key-needs-externalizing-%06" PRIu64, i);
+            const databox k = databoxNewBytesString(key);
+            const databox v = databoxNewBytes(val, sizeof(val));
+            const databox *e[2] = {&k, &v};
+            if (multimapFullInsertAllowExternalizeKeys(m, e, &allocs[i])) {
+                ERR("split-externalize: fresh key %" PRIu64 " was reported "
+                    "as a replace",
+                    i);
+            }
+
+            if (!allocs[i]) {
+                missed++;
+            }
+        }
+
+        if (missed) {
+            ERR("split-externalize: %" PRIu64 " of %d fresh long keys were "
+                "stored inline instead of externalized (%zu sub-maps)",
+                missed, splitRows, multimapFullNodeCount(m));
+        }
+
+        if (multimapFullNodeCount(m) < 2) {
+            ERR("split-externalize: expected several sub-maps, got %zu",
+                multimapFullNodeCount(m));
+        }
+
+        if (multimapFullCount(m) != splitRows) {
+            ERR("split-externalize: count %zu, expected %d",
+                multimapFullCount(m), splitRows);
+        }
+
+        for (uint64_t i = 0; i < splitRows; i++) {
+            char key[64];
+            snprintf(key, sizeof(key),
+                     "long-key-needs-externalizing-%06" PRIu64, i);
+            const databox k = databoxNewBytesString(key);
+            if (!multimapFullExists(m, &k)) {
+                ERR("split-externalize: key %" PRIu64 " is not found", i);
+            }
+        }
+
+        for (uint64_t i = 0; i < splitRows; i++) {
+            if (allocs[i]) {
+                mdscfree(allocs[i]);
+            }
+        }
+    }
+
     TEST("replacing insert: a set reports VOID on a duplicate member") {
         cleaner(multimapFree) multimap *m = multimapSetNew(RP_WIDTH);
         const databox c = databoxNewUnsigned(5);
