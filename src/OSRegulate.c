@@ -430,6 +430,35 @@ bool OSRegulateProcessReapNow(pid_t pid, int *outStatus) {
     return false;
 }
 
+/* Reap `pid` with non-blocking attempts until it is reaped or `budgetMs`
+ * has elapsed since `startMs` (timeUtilMonotonicMs).  This is the wait
+ * when no exit notification can be armed (descriptor exhaustion, or a
+ * kernel or sandbox refusing pidfd_open), so the budget still holds.
+ * The sleep between attempts starts at 1 ms and doubles up to 50 ms,
+ * and is cut to the time remaining so it never overshoots the deadline;
+ * a signal cutting a sleep short only brings the next attempt forward. */
+static bool osRegulateReapPollUntil(pid_t pid, const uint64_t startMs,
+                                    const uint64_t budgetMs, int *outStatus) {
+    static const uint64_t maxStepMs = 50;
+    uint64_t stepMs = 1;
+    for (;;) {
+        if (OSRegulateProcessReapNow(pid, outStatus)) {
+            return true;
+        }
+
+        const uint64_t elapsedMs = timeUtilMonotonicMs() - startMs;
+        if (elapsedMs >= budgetMs) {
+            return false;
+        }
+
+        const uint64_t remainingMs = budgetMs - elapsedMs;
+        const uint64_t sleepMs = stepMs < remainingMs ? stepMs : remainingMs;
+        (void)poll(NULL, 0, (int)sleepMs);
+
+        stepMs = stepMs * 2 < maxStepMs ? stepMs * 2 : maxStepMs;
+    }
+}
+
 bool OSRegulateProcessAwaitExitMs(pid_t pid, uint64_t budgetMs,
                                   int *outStatus) {
     /* See ReapNow: 0 and negative pids never name one child. */
@@ -452,6 +481,12 @@ bool OSRegulateProcessAwaitExitMs(pid_t pid, uint64_t budgetMs,
     if (watchFd >= 0) {
         struct pollfd watch = {.fd = watchFd, .events = POLLIN};
         const int n = osRegulatePollUntil(&watch, startMs, budgetMs);
+        if (n < 0) {
+            /* The notification can no longer be observed; the budget
+             * still holds. */
+            return osRegulateReapPollUntil(pid, startMs, budgetMs, outStatus);
+        }
+
         exitReported = n > 0 && (watch.revents & POLLIN) != 0;
     } else if (armErrno == ESRCH) {
         /* Arming fails with ESRCH once the kernel has begun tearing the
@@ -459,6 +494,12 @@ bool OSRegulateProcessAwaitExitMs(pid_t pid, uint64_t budgetMs,
          * waitpid(WNOHANG) reports it.  For an unreaped child the pid
          * cannot have been reused, so ESRCH counts as a reported exit. */
         exitReported = true;
+    } else {
+        /* No notification could be armed: no event source on this
+         * platform, or a run-time refusal (EMFILE, ENFILE, ENOMEM, or
+         * ENOSYS / EPERM from an older kernel or a sandbox).  Polling
+         * keeps the caller's budget instead of giving up at once. */
+        return osRegulateReapPollUntil(pid, startMs, budgetMs, outStatus);
     }
 
     if (exitReported) {
@@ -479,8 +520,8 @@ bool OSRegulateProcessAwaitExitMs(pid_t pid, uint64_t budgetMs,
         return false;
     }
 
-    /* The budget expired or there was no event source.  Nothing has
-     * reported an exit, so the final reap must not block. */
+    /* The budget expired.  Nothing has reported an exit, so the final
+     * reap must not block. */
     return OSRegulateProcessReapNow(pid, outStatus);
 }
 

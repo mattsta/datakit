@@ -98,8 +98,12 @@ bool OSRegulateProcessReapNow(pid_t pid, int *outStatus);
  * watch fd became readable, or arming failed with ESRCH) the reap
  * blocks, because the notification can precede the point where a
  * WNOHANG reap succeeds; otherwise the final reap is non-blocking.
- * Without an exit notification on the platform it does not wait: it
- * only makes non-blocking reap attempts. */
+ * The budget is always honoured: when no exit notification can be armed
+ * (none on the platform, or a run-time refusal such as descriptor
+ * exhaustion or a kernel without pidfd_open), it makes non-blocking
+ * reap attempts until the deadline, sleeping 1 ms between the first
+ * attempts and doubling up to 50 ms, so an exit is seen at most one
+ * step late. */
 bool OSRegulateProcessAwaitExitMs(pid_t pid, uint64_t budgetMs, int *outStatus);
 
 /* Wake descriptor: an async-signal-safe wakeup for a loop that reacts

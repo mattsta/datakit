@@ -131,6 +131,7 @@ extern int bigmathTest(int argc, char *argv[]);
 #include <stdbool.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/resource.h>
 #include <sys/wait.h> /* WIFEXITED / WEXITSTATUS */
 #include <unistd.h>   /* fork / pipe / read */
 
@@ -618,6 +619,63 @@ static int dkTestProcessExitWaitTest(int argc, char *argv[]) {
                     "bystander child reaped by its own pid");
             PEXPECT(WIFEXITED(status) && WEXITSTATUS(status) == kChildExitCode,
                     "bystander child status was not taken by a pid <= 0");
+        }
+    }
+
+    /* --- (5) the budget holds when no exit notification can be armed.
+     * A waiter child exhausts its descriptors, so kqueue() or
+     * pidfd_open() fails with EMFILE, then awaits a target that exits a
+     * moment later.  The waiter's exit code carries the verdict.  The
+     * target's short sleep only orders its exit after the waiter's
+     * setup; the budget, not the sleep, bounds the test. */
+    {
+        static const int kTargetExitCode = 5;
+        const pid_t waiter = fork();
+        if (waiter == 0) {
+            const pid_t target = fork();
+            if (target == 0) {
+                (void)poll(NULL, 0, 300);
+                _exit(kTargetExitCode);
+            }
+
+            if (target < 0) {
+                _exit(2);
+            }
+
+            struct rlimit lim;
+            if (getrlimit(RLIMIT_NOFILE, &lim) == 0 && lim.rlim_cur > 64) {
+                lim.rlim_cur = 64;
+                (void)setrlimit(RLIMIT_NOFILE, &lim);
+            }
+
+            /* Every descriptor taken is released by _exit(). */
+            while (dup(STDERR_FILENO) >= 0 || errno == EINTR) {
+                /* fill the table */
+            }
+
+            if (errno != EMFILE) {
+                _exit(3);
+            }
+
+            int status = 0;
+            const bool reaped =
+                OSRegulateProcessAwaitExitMs(target, kGenerousMs, &status);
+            _exit(reaped && WIFEXITED(status) &&
+                          WEXITSTATUS(status) == kTargetExitCode
+                      ? 0
+                      : 1);
+        }
+
+        PEXPECT(waiter > 0, "fork for the descriptor-exhausted waiter");
+        if (waiter > 0) {
+            int status = 0;
+            PEXPECT(OSRegulateProcessAwaitExitMs(waiter, kGenerousMs, &status),
+                    "descriptor-exhausted waiter reaped");
+            PEXPECT(WIFEXITED(status) && WEXITSTATUS(status) != 3,
+                    "waiter exhausted its descriptors (EMFILE)");
+            PEXPECT(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+                    "AwaitExitMs kept its budget without an exit "
+                    "notification and reaped the target with its status");
         }
     }
 

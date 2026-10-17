@@ -267,8 +267,14 @@ if (!OSRegulateProcessAwaitExitMs(worker, 5000, &status)) {
 an exit has been reported (the fd became readable, or arming failed with
 `ESRCH`, which for an unreaped child means its exit is under way) the final
 reap is a blocking `waitpid()`, because the notification can arrive just before
-a `WNOHANG` reap would succeed. Otherwise the final reap is non-blocking. On a
-platform with no exit notification it only makes non-blocking reap attempts.
+a `WNOHANG` reap would succeed. Otherwise the final reap is non-blocking.
+
+The budget is always honoured. When no exit notification can be armed, either
+because the platform has none or because arming fails at run time (descriptor
+exhaustion, `ENOMEM`, or `ENOSYS` / `EPERM` from a kernel without `pidfd_open`
+or a sandbox that blocks it), it falls back to non-blocking reap attempts until
+the deadline, sleeping 1ms between the first attempts and doubling up to 50ms.
+An exit is then seen at most one step late.
 
 Like any pid-based API, these assume nothing else reaps the child. If another
 thread reaps it (for example with `waitpid(-1, ...)`) and the pid is reused,
