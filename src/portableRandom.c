@@ -56,8 +56,14 @@ void portableRandom_init(portableRandomState *r, pid_t pid) {
     /* Mix OS entropy in through the key schedule, which only swaps
      * entries and so preserves the permutation (writing entropy straight
      * into s[] would break it permanently, since later stirs only swap).
-     * The key is zeroed first, so a short read still keys the state, and
-     * the first draw re-keys through portableRandom_stir regardless. */
+     * The key is zeroed first, so a short read still keys the state.
+     *
+     * The first draw re-keys through portableRandom_stir anyway, but
+     * this read is not redundant.  A stir permutes the current state
+     * rather than replacing it, so this key survives every later stir.
+     * If all of a stir's OS sources fail, the stir keys from the time
+     * and pid alone, and this key is then the only OS entropy in the
+     * state.  The read costs one syscall per state. */
     uint8_t key[DK_PR_KEYSIZE] = {0};
     if (portableRandomDirect(key, sizeof(key)) > 0) {
         portableRandom_add(r, key, sizeof(key));
