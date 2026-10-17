@@ -5,6 +5,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <errno.h>
 #include <fcntl.h>
 #include <sys/time.h>
 #if DK_HAVE_GETRANDOM
@@ -74,6 +75,36 @@ void portableRandom_init(portableRandomState *r, pid_t pid) {
  * chunked at that size on every arm. */
 #define DK_PR_DIRECT_MAX_CHUNK_BYTES 256
 
+/* Read up to `len` bytes from /dev/urandom, retrying reads that a signal
+ * interrupts.  Returns the bytes read, or -1 if nothing could be read.
+ * O_CLOEXEC keeps the descriptor out of any child that another thread
+ * fork+execs while it is open.  On Linux /dev/urandom never blocks, even
+ * before the kernel pool is initialised. */
+static ssize_t portableRandomUrandom(void *const dst, const size_t len) {
+    const int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        return -1;
+    }
+
+    uint8_t *out = dst;
+    size_t got = 0;
+    while (got < len) {
+        const ssize_t n = read(fd, out + got, len - got);
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+
+        if (n <= 0) {
+            break;
+        }
+
+        got += (size_t)n;
+    }
+
+    (void)close(fd);
+    return got > 0 || len == 0 ? (ssize_t)got : -1;
+}
+
 ssize_t portableRandomDirect(void *const dst, const size_t requestedLen) {
     /* "1" means GRND_NONBLOCK. If no entropy and WOULDBLOCK, -1 is returned
      * with EAGAIN. */
@@ -90,8 +121,10 @@ ssize_t portableRandomDirect(void *const dst, const size_t requestedLen) {
      * bytes-written contract. */
     return getentropy(dst, requestedLen) == 0 ? (ssize_t)requestedLen : -1;
 #else
-    /* Random source not found! */
-    return -1;
+    /* No OS call was detected at build time (detection runs test
+     * programs, so a cross build detects none), so read the device. */
+    (void)DK_GRND_NONBLOCK;
+    return portableRandomUrandom(dst, requestedLen);
 #endif
 }
 
@@ -120,7 +153,6 @@ bool portableRandomDirectFull(void *const dst, const size_t requestedLen) {
 }
 
 void portableRandom_stir(portableRandomState *r, pid_t pid) {
-    int fd;
     ssize_t n;
     struct timeval tv;
     union {
@@ -156,12 +188,7 @@ void portableRandom_stir(portableRandomState *r, pid_t pid) {
 #endif
 
     if (n != DK_PR_KEYSIZE) {
-        fd = open("/dev/urandom", O_RDONLY);
-
-        if (fd >= 0) {
-            n = read(fd, &key.bytes, DK_PR_KEYSIZE);
-            (void)close(fd);
-        }
+        n = portableRandomUrandom(&key.bytes, DK_PR_KEYSIZE);
     }
 
     if (n != DK_PR_KEYSIZE) {
@@ -593,6 +620,32 @@ int portableRandomTest(int argc, char *argv[]) {
                 ", outside (0, %" PRIu64 "]",
                 words, (int64_t)r.remainingBytesBeforeRefuel,
                 (uint64_t)DK_PR_REFUEL_BYTES);
+        }
+    }
+
+    TEST("the /dev/urandom reader fills every byte it is asked for") {
+        /* The reader backs portableRandomDirect when no OS call was
+         * detected, and every stir whose OS call fails.  A 300-byte read
+         * must return 300, leave the guard untouched, not be all zero,
+         * and differ from a second read (false-positive 2^-2400).  An
+         * empty read returns 0. */
+        uint8_t a[300 + 16] = {0};
+        uint8_t b[300 + 16] = {0};
+        const size_t len = 300;
+
+        if (portableRandomUrandom(a, len) != (ssize_t)len ||
+            portableRandomUrandom(b, len) != (ssize_t)len) {
+            ERRR("a 300-byte /dev/urandom read came back short");
+        } else if (!portableRandomTestAllZero(a + len, sizeof(a) - len) ||
+                   !portableRandomTestAllZero(b + len, sizeof(b) - len)) {
+            ERRR("a /dev/urandom read wrote past the end");
+        } else if (portableRandomTestAllZero(a, len) ||
+                   memcmp(a, b, len) == 0) {
+            ERRR("two /dev/urandom reads were all zero or identical");
+        }
+
+        if (portableRandomUrandom(a, 0) != 0) {
+            ERRR("an empty /dev/urandom read must return 0");
         }
     }
 

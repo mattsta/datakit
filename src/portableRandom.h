@@ -50,7 +50,9 @@ ssize_t portableRandomDirect(void *dst, size_t requestedLen);
  * stream with known keystream biases, whose re-key falls back to a
  * time/pid mix when the OS source is unavailable.  The OS read is
  * non-blocking, so this fails rather than blocks if the kernel pool is
- * not yet initialised. */
+ * not yet initialised.  If the build detected no OS call (as happens
+ * when cross-compiling), this reads /dev/urandom instead; on Linux that
+ * device does not wait for the pool to initialise. */
 bool portableRandomDirectFull(void *dst, size_t requestedLen);
 
 #ifdef DATAKIT_TEST
