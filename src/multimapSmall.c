@@ -1,5 +1,6 @@
 #include "multimapSmall.h"
 #include "dkRandom.h"
+#include "multimapInternal.h"
 #include "multimapSmallInternal.h"
 
 multimapSmall *multimapSmallNew(multimapElements elementsPerEntry,
@@ -85,10 +86,7 @@ bool multimapSmallInsertReplacing(multimapSmall *m, const databox *elements[],
     if (m->mapIsSet) {
         replaced = flexInsertReplaceByTypeSortedWithMiddleMultiDirectSet(
             &m->map, m->elementsPerEntry, elements, &middle);
-        for (multimapElements i = 1; replacedOut && i < m->elementsPerEntry;
-             i++) {
-            replacedOut[i - 1] = (databox){.type = DATABOX_VOID};
-        }
+        multimapReplacedOutClear_(replacedOut, m->elementsPerEntry);
     } else {
         replaced = flexInsertReplaceByTypeSortedWithMiddleMultiDirectReplacing(
             &m->map, m->elementsPerEntry, elements, &middle, true, replacedOut);

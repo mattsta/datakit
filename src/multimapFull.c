@@ -2,6 +2,7 @@
 #include "cleaner.h"
 #include "dkRandom.h"
 #include "multimapFullInternal.h"
+#include "multimapInternal.h"
 
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleanerName(const flex **, zfree, MapPtrs);
@@ -873,11 +874,7 @@ abstractFlexInsert(multimapFull *const m, const multimapFullIdx mapIdx,
              * anyway, desyncing count from physical rows. */
             found = flexInsertReplaceByTypeSortedWithMiddleMultiDirectSet(
                 map, m->elementsPerEntry, elements, &middle);
-            /* A set never overwrites a value: nothing was replaced. */
-            for (multimapElements i = 1; replacedOut && i < m->elementsPerEntry;
-                 i++) {
-                replacedOut[i - 1] = (databox){.type = DATABOX_VOID};
-            }
+            multimapReplacedOutClear_(replacedOut, m->elementsPerEntry);
         } else {
             found = flexInsertReplaceByTypeSortedWithMiddleMultiDirectReplacing(
                 map, m->elementsPerEntry, elements, &middle,
