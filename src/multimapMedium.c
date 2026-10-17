@@ -196,18 +196,31 @@ void multimapMediumInsertWithSurrogateKey(
 }
 
 bool multimapMediumInsert(multimapMedium *m, const databox *elements[]) {
+    return multimapMediumInsertReplacing(m, elements, NULL);
+}
+
+/* 'replacedOut' as multimapSmallInsertReplacing: a map replace reports the
+ * overwritten value entries, a set (which never overwrites) reports VOID. */
+bool multimapMediumInsertReplacing(multimapMedium *m, const databox *elements[],
+                                   databox *replacedOut) {
     size_t mapIdx = multimapMediumBinarySearch(m, elements[0]);
 
     flexEntry *middle = GET_MIDDLE(m, mapIdx);
     /* Maps: key-only compare, found => replace values.  Sets: the
      * dedupe variant — see multimapSmallInsert. */
-    const bool replaced =
-        m->mapIsSet
-            ? flexInsertReplaceByTypeSortedWithMiddleMultiDirectSet(
-                  &m->map[mapIdx], m->elementsPerEntry, elements, &middle)
-            : flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
-                  &m->map[mapIdx], m->elementsPerEntry, elements, &middle,
-                  true);
+    bool replaced;
+    if (m->mapIsSet) {
+        replaced = flexInsertReplaceByTypeSortedWithMiddleMultiDirectSet(
+            &m->map[mapIdx], m->elementsPerEntry, elements, &middle);
+        for (multimapElements i = 1; replacedOut && i < m->elementsPerEntry;
+             i++) {
+            replacedOut[i - 1] = (databox){.type = DATABOX_VOID};
+        }
+    } else {
+        replaced = flexInsertReplaceByTypeSortedWithMiddleMultiDirectReplacing(
+            &m->map[mapIdx], m->elementsPerEntry, elements, &middle, true,
+            replacedOut);
+    }
     SET_MIDDLE(m, mapIdx, middle);
     return replaced;
 }

@@ -13,6 +13,11 @@ size_t multimapSmallBytes(const multimapSmall *m);
 flex *multimapSmallDump(const multimapSmall *m);
 
 bool multimapSmallInsert(multimapSmall *m, const databox *elements[]);
+/* multimapSmallInsert that also reports the replaced value entries
+ * ('elementsPerEntry - 1' slots, VOID when nothing was replaced; see
+ * flexInsertReplaceByTypeSortedWithMiddleMultiDirectReplacing). */
+bool multimapSmallInsertReplacing(multimapSmall *m, const databox *elements[],
+                                  databox *replacedOut);
 void multimapSmallInsertFullWidth(multimapSmall *m, const databox *elements[]);
 void multimapSmallAppend(multimapSmall *m, const databox *elements[]);
 

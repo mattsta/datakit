@@ -283,9 +283,19 @@ multimap *multimapCopy(const multimap *m) {
 }
 
 bool multimapInsert(multimap **m, const databox *elements[]) {
+    return multimapInsertReplacing(m, elements, NULL);
+}
+
+/* As multimapInsert, and on a replace also reports the overwritten value
+ * entries through 'replacedOut' (NULL, or elementsPerEntry - 1 slots; VOID
+ * when nothing was replaced).  The tier that holds the key fills the report
+ * before any upgrade; inline integer and pointer payloads survive the
+ * upgrade, BYTES payloads do not. */
+bool multimapInsertReplacing(multimap **m, const databox *elements[],
+                             databox *replacedOut) {
     /* Insert new elements */
     bool replaced;
-    MULTIMAP_SETRESULT(replaced, *m, Insert, elements);
+    MULTIMAP_SETRESULT(replaced, *m, InsertReplacing, elements, replacedOut);
 
     /* Now check multimap to see if we should grow to a larger
      * representation. */
@@ -957,6 +967,9 @@ void multimapVerify(const multimap *m) {
 
 #include "str.h" /* for xoroshiro128plus */
 
+#include "mdsc.h" /* mdscfree for the replacing sweep's externalized keys */
+#include <inttypes.h>
+
 #define REPORT_TIME 1
 #if REPORT_TIME
 #define TIME_INIT PERF_TIMERS_SETUP
@@ -1059,11 +1072,376 @@ static bool processUntilWideWalker(void *userData, const databox *elements[]) {
     return true;
 }
 
+defcleanerName(flex *, flexFree, Sweep);
+defcleanerName(multimapMedium *, multimapMediumFree, Sweep);
+defcleanerName(multimapFull *, multimapFullFree, Sweep);
+
+/* Replacing-insert sweep: every tuple is [key][counter][pointer]; the
+ * pointers are synthetic tags and are never dereferenced. */
+#define RP_WIDTH 3
+#define RP_VALUES (RP_WIDTH - 1)
+#define RP_PTR_TAG(i) ((void *)(uintptr_t)(0x10000u + (uint64_t)(i) * 16u))
+
+/* The report of one replacing insert against what it must say. */
+static int32_t rpJudge(const char *where, const uint64_t key,
+                       const bool replaced, const databox out[RP_VALUES],
+                       const bool expectReplaced, const uint64_t counter,
+                       const uint64_t ptrIdx) {
+    int err = 0;
+    if (replaced != expectReplaced) {
+        ERR("%s: key %" PRIu64 " replaced=%d, expected %d", where, key,
+            (int)replaced, (int)expectReplaced);
+    }
+
+    if (!expectReplaced) {
+        for (size_t i = 0; i < RP_VALUES; i++) {
+            if (out[i].type != DATABOX_VOID) {
+                ERR("%s: key %" PRIu64 " fresh insert reported slot %zu "
+                    "type %d, expected VOID",
+                    where, key, i, (int)out[i].type);
+            }
+        }
+        return err;
+    }
+
+    if (out[0].type == DATABOX_VOID || out[0].data.u != counter) {
+        ERR("%s: key %" PRIu64 " replaced counter reported %" PRIu64
+            " (type %d), expected %" PRIu64,
+            where, key, (uint64_t)out[0].data.u, (int)out[0].type, counter);
+    }
+
+    if (out[1].type == DATABOX_VOID ||
+        out[1].data.u != (uintptr_t)RP_PTR_TAG(ptrIdx)) {
+        ERR("%s: key %" PRIu64 " replaced pointer reported 0x%" PRIx64
+            " (type %d), expected 0x%" PRIx64,
+            where, key, (uint64_t)out[1].data.u, (int)out[1].type,
+            (uint64_t)(uintptr_t)RP_PTR_TAG(ptrIdx));
+    }
+
+    return err;
+}
+
+/* One replacing insert of [key][counter][RP_PTR_TAG(ptrIdx)] through a
+ * layer, judged against the expected report. */
+typedef bool (*rpInsertFn)(void *m, const databox *elements[],
+                           databox *replacedOut);
+
+static bool rpFlex(void *m, const databox *elements[], databox *out) {
+    flexEntry *middle = NULL;
+    return flexInsertReplaceByTypeSortedWithMiddleMultiDirectReplacing(
+        (flex **)m, RP_WIDTH, elements, &middle, true, out);
+}
+
+static bool rpSmall(void *m, const databox *elements[], databox *out) {
+    return multimapSmallInsertReplacing(m, elements, out);
+}
+
+static bool rpMedium(void *m, const databox *elements[], databox *out) {
+    return multimapMediumInsertReplacing(m, elements, out);
+}
+
+static bool rpFull(void *m, const databox *elements[], databox *out) {
+    return multimapFullInsertReplacing(m, elements, out);
+}
+
+static bool rpGeneric(void *m, const databox *elements[], databox *out) {
+    return multimapInsertReplacing((multimap **)m, elements, out);
+}
+
+static int32_t rpOne(const char *where, rpInsertFn fn, void *m,
+                     const uint64_t key, const databox *counter,
+                     const uint64_t ptrIdx, const bool expectReplaced,
+                     const uint64_t expectCounter,
+                     const uint64_t expectPtrIdx) {
+    const databox k = databoxNewUnsigned(key);
+    const databox p = databoxNewPtr(RP_PTR_TAG(ptrIdx));
+    const databox *elements[RP_WIDTH] = {&k, counter, &p};
+    databox out[RP_VALUES];
+    /* Poison the report so a slot the call never wrote reads as an error. */
+    for (size_t i = 0; i < RP_VALUES; i++) {
+        out[i] = databoxNewUnsigned(UINT64_MAX);
+    }
+
+    const bool replaced = fn(m, elements, out);
+    return rpJudge(where, key, replaced, out, expectReplaced, expectCounter,
+                   expectPtrIdx);
+}
+
+/* Fresh inserts of keys [0, n) report VOID; replacing each then reports the
+ * counter and pointer it held. */
+static int32_t rpExercise(const char *where, rpInsertFn fn, void *m,
+                          const uint64_t n) {
+    int32_t err = 0;
+    for (uint64_t i = 0; i < n; i++) {
+        const databox c = databoxNewUnsigned(i);
+        err += rpOne(where, fn, m, i, &c, i, false, 0, 0);
+    }
+
+    for (uint64_t i = 0; i < n; i++) {
+        const databox c = databoxNewUnsigned(i + 1000);
+        err += rpOne(where, fn, m, i, &c, i + 1000, true, i, i);
+    }
+
+    return err;
+}
+
+/* Insert [key][wideValue][tag], then replace it with an inline counter.  A
+ * 96/128-bit integer does not fit a databox, so its slot reports only the
+ * type with a NULL payload pointer (see flex.h); the pointer slot reports
+ * normally, and the next replace of the key reports the counter. */
+static int32_t rpWide(const char *where, rpInsertFn fn, void *m,
+                      const uint64_t key, const databox *wideValue,
+                      const databoxType expectType) {
+    int32_t err = 0;
+    err += rpOne(where, fn, m, key, wideValue, key, false, 0, 0);
+
+    const databox k = databoxNewUnsigned(key);
+    const databox c = databoxNewUnsigned(key + 1000);
+    const databox tag = databoxNewPtr(RP_PTR_TAG(key + 1000));
+    const databox *elements[RP_WIDTH] = {&k, &c, &tag};
+    databox out[RP_VALUES];
+    for (size_t i = 0; i < RP_VALUES; i++) {
+        out[i] = databoxNewUnsigned(UINT64_MAX);
+    }
+
+    if (!fn(m, elements, out)) {
+        ERR("%s: key %" PRIu64 " replace of a wide value was not a replace",
+            where, key);
+    }
+
+    if (out[0].type != expectType || out[0].data.u128 != NULL) {
+        ERR("%s: key %" PRIu64 " replaced wide value reported type %d "
+            "payload %p, expected type %d payload NULL",
+            where, key, (int)out[0].type, (void *)out[0].data.u128,
+            (int)expectType);
+    }
+
+    if (out[1].type == DATABOX_VOID ||
+        out[1].data.u != (uintptr_t)RP_PTR_TAG(key)) {
+        ERR("%s: key %" PRIu64 " replaced pointer reported 0x%" PRIx64
+            " (type %d), expected 0x%" PRIx64,
+            where, key, (uint64_t)out[1].data.u, (int)out[1].type,
+            (uint64_t)(uintptr_t)RP_PTR_TAG(key));
+    }
+
+    const databox again = databoxNewUnsigned(key + 2000);
+    err += rpOne(where, fn, m, key, &again, key + 2000, true, key + 1000,
+                 key + 1000);
+    return err;
+}
+
+int32_t multimapInsertReplacingSweep(void) {
+    int err = 0;
+
+    TEST("replacing insert: flex layer reports the replaced tuple") {
+        cleanerName(flexFree, Sweep) flex *f = flexNew();
+        err += rpExercise("flex", rpFlex, &f, 64);
+    }
+
+    TEST("replacing insert: flex layer with a key that becomes a pointer") {
+        cleanerName(flexFree, Sweep) flex *f = flexNew();
+        flexEntry *middle = NULL;
+        static const char longKey[] = "a-key-long-enough-to-externalize";
+        const databox k = databoxNewBytesString(longKey);
+        const databox c0 = databoxNewUnsigned(7);
+        const databox tag0 = databoxNewPtr(RP_PTR_TAG(7));
+        const databox *e0[RP_WIDTH] = {&k, &c0, &tag0};
+        databox out[RP_VALUES];
+        void *keyAlloc = NULL;
+        bool replaced =
+            flexInsertReplaceByTypeSortedWithMiddleMultiDirectLongKeysBecomePointersReplacing(
+                &f, RP_WIDTH, e0, &middle, true, &keyAlloc, out);
+        err += rpJudge("flex-long-key insert", 0, replaced, out, false, 0, 0);
+        if (!keyAlloc) {
+            ERRR("flex-long-key: the long key was not externalized");
+        }
+
+        const databox c1 = databoxNewUnsigned(8);
+        const databox tag1 = databoxNewPtr(RP_PTR_TAG(8));
+        const databox *e1[RP_WIDTH] = {&k, &c1, &tag1};
+        void *keyAllocReplace = NULL;
+        replaced =
+            flexInsertReplaceByTypeSortedWithMiddleMultiDirectLongKeysBecomePointersReplacing(
+                &f, RP_WIDTH, e1, &middle, true, &keyAllocReplace, out);
+        err += rpJudge("flex-long-key replace", 0, replaced, out, true, 7, 7);
+        if (keyAllocReplace) {
+            ERRR("flex-long-key: a replace minted a second key allocation");
+            mdscfree(keyAllocReplace);
+        }
+
+        if (keyAlloc) {
+            mdscfree(keyAlloc);
+        }
+    }
+
+    TEST("replacing insert: multimapSmall reports the replaced tuple") {
+        cleaner(multimapSmallFree) multimapSmall *m =
+            multimapSmallNew(RP_WIDTH, false);
+        err += rpExercise("small", rpSmall, m, 32);
+    }
+
+    TEST("replacing insert: multimapMedium reports the replaced tuple") {
+        cleanerName(multimapMediumFree, Sweep) multimapMedium *m =
+            multimapMediumNew(RP_WIDTH);
+        err += rpExercise("medium", rpMedium, m, 256);
+    }
+
+    TEST("replacing insert: multimapFull reports the replaced tuple") {
+        cleanerName(multimapFullFree, Sweep) multimapFull *m =
+            multimapFullNew(RP_WIDTH);
+        err += rpExercise("full", rpFull, m, 4096);
+    }
+
+    TEST("replacing insert: multimapFull externalized (MDSC) key") {
+        cleanerName(multimapFullFree, Sweep) multimapFull *m =
+            multimapFullNew(RP_WIDTH);
+        static const char longKey[] = "another-key-long-enough-to-externalize";
+        const databox k = databoxNewBytesString(longKey);
+        const databox c0 = databoxNewUnsigned(11);
+        const databox tag0 = databoxNewPtr(RP_PTR_TAG(11));
+        const databox *e0[RP_WIDTH] = {&k, &c0, &tag0};
+        databox out[RP_VALUES];
+        void *keyAlloc = NULL;
+        bool replaced = multimapFullInsertAllowExternalizeKeysReplacing(
+            m, e0, &keyAlloc, out);
+        err += rpJudge("full-mdsc insert", 0, replaced, out, false, 0, 0);
+        if (!keyAlloc) {
+            ERRR("full-mdsc: the long key was not externalized");
+        }
+
+        const databox c1 = databoxNewUnsigned(12);
+        const databox tag1 = databoxNewPtr(RP_PTR_TAG(12));
+        const databox *e1[RP_WIDTH] = {&k, &c1, &tag1};
+        void *keyAllocReplace = NULL;
+        replaced = multimapFullInsertAllowExternalizeKeysReplacing(
+            m, e1, &keyAllocReplace, out);
+        err += rpJudge("full-mdsc replace", 0, replaced, out, true, 11, 11);
+        if (keyAllocReplace) {
+            ERRR("full-mdsc: a replace minted a second key allocation");
+            mdscfree(keyAllocReplace);
+        }
+
+        if (keyAlloc) {
+            mdscfree(keyAlloc);
+        }
+    }
+
+    TEST("replacing insert: a set reports VOID on a duplicate member") {
+        cleaner(multimapFree) multimap *m = multimapSetNew(RP_WIDTH);
+        const databox c = databoxNewUnsigned(5);
+        err += rpOne("set first", rpGeneric, &m, 5, &c, 5, false, 0, 0);
+        databox out[RP_VALUES];
+        const databox k = databoxNewUnsigned(5);
+        const databox p = databoxNewPtr(RP_PTR_TAG(5));
+        const databox *e[RP_WIDTH] = {&k, &c, &p};
+        const bool found = multimapInsertReplacing(&m, e, out);
+        err += rpJudge("set duplicate", 5, false, out, false, 0, 0);
+        if (!found) {
+            ERRR("set duplicate: the member was not found");
+        }
+    }
+
+    TEST("replacing insert: a replaced 96/128-bit value reports its type") {
+        __uint128_t u128 = ((__uint128_t)UINT64_C(0x0123456789ABCDEF) << 64) |
+                           UINT64_C(0x1122334455667788);
+        __uint128_t u96 = (__uint128_t)1 << 80;
+        __int128_t s128 = -(__int128_t)u128;
+        __int128_t s96 = -(__int128_t)u96;
+        const databox wide[] = {
+            {.type = DATABOX_UNSIGNED_128, .big = true, .data.u128 = &u128},
+            {.type = DATABOX_UNSIGNED_128, .big = true, .data.u128 = &u96},
+            {.type = DATABOX_SIGNED_128, .big = true, .data.i128 = &s128},
+            {.type = DATABOX_SIGNED_128, .big = true, .data.i128 = &s96},
+        };
+
+        cleanerName(flexFree, Sweep) flex *f = flexNew();
+        cleaner(multimapSmallFree) multimapSmall *small =
+            multimapSmallNew(RP_WIDTH, false);
+        cleanerName(multimapMediumFree, Sweep) multimapMedium *medium =
+            multimapMediumNew(RP_WIDTH);
+        cleanerName(multimapFullFree, Sweep) multimapFull *full =
+            multimapFullNew(RP_WIDTH);
+        cleaner(multimapFree) multimap *generic = multimapNew(RP_WIDTH);
+        for (uint64_t w = 0; w < COUNT_ARRAY(wide); w++) {
+            const databoxType t = wide[w].type;
+            err += rpWide("flex wide", rpFlex, &f, w, &wide[w], t);
+            err += rpWide("small wide", rpSmall, small, w, &wide[w], t);
+            err += rpWide("medium wide", rpMedium, medium, w, &wide[w], t);
+            err += rpWide("full wide", rpFull, full, w, &wide[w], t);
+            err += rpWide("generic wide", rpGeneric, &generic, w, &wide[w], t);
+        }
+    }
+
+    TEST("replacing insert: a replace that upgrades Small->Medium->Full") {
+        /* A replace that grows its value past the tier's byte limit is the
+         * call that upgrades the tier: its report is taken by the tier that
+         * held the key, before the upgrade moves the flex bytes. */
+        const flexCapSizeLimit limit = FLEX_CAP_LEVEL_2048;
+        const size_t smallCap = flexOptimizationSizeLimit[limit];
+        const size_t mediumCap = smallCap * 3;
+        cleaner(multimapFree) multimap *m = multimapNewLimit(RP_WIDTH, limit);
+        cleanerName(zfree, Bytes) uint8_t *wide = zmalloc(mediumCap);
+        memset(wide, 'w', mediumCap);
+
+        uint64_t next = 0;
+        while (multimapType_(m) == MULTIMAP_TYPE_SMALL &&
+               multimapBytes(m) + 1024 < smallCap) {
+            const databox c = databoxNewUnsigned(next);
+            err += rpOne("upgrade fill small", rpGeneric, &m, next, &c, next,
+                         false, 0, 0);
+            next++;
+        }
+
+        if (multimapType_(m) != MULTIMAP_TYPE_SMALL || next < 3) {
+            ERR("upgrade: fill left type %d after %" PRIu64 " keys, expected "
+                "SMALL with at least three entries",
+                (int)multimapType_(m), next);
+        }
+
+        const databox grow1 = databoxNewBytes(wide, smallCap);
+        err += rpOne("upgrade small->medium", rpGeneric, &m, 0, &grow1, 5000,
+                     true, 0, 0);
+        if (multimapType_(m) != MULTIMAP_TYPE_MEDIUM) {
+            ERR("upgrade: the growing replace left type %d, expected MEDIUM",
+                (int)multimapType_(m));
+        }
+
+        while (multimapType_(m) == MULTIMAP_TYPE_MEDIUM &&
+               multimapBytes(m) + 2048 < mediumCap) {
+            const databox c = databoxNewUnsigned(next);
+            err += rpOne("upgrade fill medium", rpGeneric, &m, next, &c, next,
+                         false, 0, 0);
+            next++;
+        }
+
+        const databox grow2 = databoxNewBytes(wide, mediumCap);
+        err += rpOne("upgrade medium->full", rpGeneric, &m, 1, &grow2, 6000,
+                     true, 1, 1);
+        if (multimapType_(m) != MULTIMAP_TYPE_FULL) {
+            ERR("upgrade: the growing replace left type %d, expected FULL",
+                (int)multimapType_(m));
+        }
+
+        /* Every key still reports what it held, now from the Full tier. */
+        for (uint64_t i = 2; i < next; i++) {
+            const databox c = databoxNewUnsigned(i + 1000);
+            err += rpOne("upgrade after full", rpGeneric, &m, i, &c, i + 1000,
+                         true, i, i);
+        }
+    }
+
+    return err;
+}
+
 int multimapTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
 
     int err = 0;
+
+    TEST("replacing insert sweep (every layer)") {
+        err += multimapInsertReplacingSweep();
+    }
 
     TEST("small: create...") {
         cleaner(multimapFree) multimap *m =

@@ -65,6 +65,14 @@ void multimapSmallInsertWithSurrogateKey(
 }
 
 bool multimapSmallInsert(multimapSmall *m, const databox *elements[]) {
+    return multimapSmallInsertReplacing(m, elements, NULL);
+}
+
+/* 'replacedOut' (NULL, or 'elementsPerEntry - 1' slots) reports the value
+ * entries a map replace overwrote; a set never overwrites a value, so a set
+ * reports every slot VOID. */
+bool multimapSmallInsertReplacing(multimapSmall *m, const databox *elements[],
+                                  databox *replacedOut) {
     flexEntry *middle = GET_MIDDLE(m);
     /* Maps (!mapIsSet): key-only compare, found => replace values.
      * Sets (mapIsSet): full-width compare AND dedupe — the Set variant
@@ -72,12 +80,18 @@ bool multimapSmallInsert(multimapSmall *m, const databox *elements[]) {
      * call with compareUsingKeyElementOnly=false is the
      * duplicates-ALLOWED sorted bag (InsertFullWidth), which silently
      * duplicated every re-inserted set member here for years. */
-    const bool replaced =
-        m->mapIsSet
-            ? flexInsertReplaceByTypeSortedWithMiddleMultiDirectSet(
-                  &m->map, m->elementsPerEntry, elements, &middle)
-            : flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
-                  &m->map, m->elementsPerEntry, elements, &middle, true);
+    bool replaced;
+    if (m->mapIsSet) {
+        replaced = flexInsertReplaceByTypeSortedWithMiddleMultiDirectSet(
+            &m->map, m->elementsPerEntry, elements, &middle);
+        for (multimapElements i = 1; replacedOut && i < m->elementsPerEntry;
+             i++) {
+            replacedOut[i - 1] = (databox){.type = DATABOX_VOID};
+        }
+    } else {
+        replaced = flexInsertReplaceByTypeSortedWithMiddleMultiDirectReplacing(
+            &m->map, m->elementsPerEntry, elements, &middle, true, replacedOut);
+    }
     SET_MIDDLE(m, middle);
     return replaced;
 }

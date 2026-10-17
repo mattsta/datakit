@@ -22,6 +22,13 @@ size_t multimapBytes(const multimap *m);
 flex *multimapDump(const multimap *m);
 
 bool multimapInsert(multimap **m, const databox *elements[]);
+/* multimapInsert that also reports the value entries a replace overwrote
+ * through 'replacedOut' ('elementsPerEntry - 1' slots in tuple order after
+ * the key, every one VOID when nothing was replaced).  Only inline payloads
+ * (integers, pointers) survive the overwrite; a BYTES slot must not be
+ * read. */
+bool multimapInsertReplacing(multimap **m, const databox *elements[],
+                             databox *replacedOut);
 void multimapInsertFullWidth(multimap **m, const databox *elements[]);
 void multimapAppend(multimap **m, const databox *elements[]);
 
@@ -174,4 +181,9 @@ void multimapCopyKeys(multimap **restrict dst, const multimap *restrict src);
 void multimapRepr(const multimap *m);
 void multimapVerify(const multimap *m);
 int multimapTest(int argc, char *argv[]);
+/* Tests the ...InsertReplacing entry points of every layer (flex, Small,
+ * Medium, Full, the generic multimap and its tier upgrades): a replace
+ * reports the tuple it overwrote, a fresh insert reports VOID.  Returns the
+ * number of failures.  Run by multimapTest and multimapFullTest. */
+int32_t multimapInsertReplacingSweep(void);
 #endif

@@ -16,6 +16,10 @@ size_t multimapMediumBytes(const multimapMedium *m);
 flex *multimapMediumDump(const multimapMedium *m);
 
 bool multimapMediumInsert(multimapMedium *m, const databox *elements[]);
+/* multimapMediumInsert that also reports the replaced value entries
+ * ('elementsPerEntry - 1' slots, VOID when nothing was replaced). */
+bool multimapMediumInsertReplacing(multimapMedium *m, const databox *elements[],
+                                   databox *replacedOut);
 void multimapMediumInsertFullWidth(multimapMedium *m,
                                    const databox *elements[]);
 void multimapMediumAppend(multimapMedium *m, const databox *elements[]);

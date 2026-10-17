@@ -39,6 +39,17 @@ void multimapFullInsertFullWidth(multimapFull *m, const databox *elements[]);
 bool multimapFullInsertAllowExternalizeKeys(multimapFull *m,
                                             const databox *elements[],
                                             void **keyAllocation);
+/* The replacing forms of the two inserts above: on a replace they report the
+ * overwritten value entries through 'replacedOut' ('elementsPerEntry - 1'
+ * slots in tuple order after the key, every one VOID when nothing was
+ * replaced).  Only inline payloads (integers, pointers) survive the
+ * overwrite; a BYTES slot must not be read. */
+bool multimapFullInsertReplacing(multimapFull *m, const databox *elements[],
+                                 databox *replacedOut);
+bool multimapFullInsertAllowExternalizeKeysReplacing(multimapFull *m,
+                                                     const databox *elements[],
+                                                     void **keyAllocation,
+                                                     databox *replacedOut);
 void multimapFullAppend(multimapFull *m, const databox *elements[]);
 
 bool multimapFullInsertWithSurrogateKey(
