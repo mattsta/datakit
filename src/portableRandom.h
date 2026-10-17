@@ -12,7 +12,14 @@ typedef struct portableRandomState {
     uint8_t s[256];
 } portableRandomState;
 
-/* User space PRNG seeded by OS RNG */
+/* User space PRNG seeded by OS RNG.
+ *
+ * A re-key (portableRandom_stir, which any draw may run) does not wait
+ * for the kernel pool: where getrandom() exists it reads without
+ * blocking, and early in boot, before the pool is initialised, it keys
+ * from /dev/urandom instead, and failing that from a time/pid mix.
+ * Where getentropy() is the only source (macOS, OpenBSD), the re-key
+ * calls it as is. */
 void portableRandom_init(portableRandomState *r, pid_t pid);
 void portableRandom_stir(portableRandomState *r, pid_t pid);
 void portableRandom_add(portableRandomState *r, const uint8_t *key, size_t len);

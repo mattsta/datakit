@@ -134,11 +134,18 @@ void portableRandom_stir(portableRandomState *r, pid_t pid) {
 
     r->pid = pid;
 
+    /* A stir must not wait for the kernel pool.  getrandom without
+     * GRND_NONBLOCK waits for it to initialise, which can take a long
+     * time early in boot, and any draw can stir.  Before the pool is ready the
+     * non-blocking call fails with EAGAIN, and the key comes from
+     * /dev/urandom instead, then from the time/pid mix below.  Key
+     * material must come from portableRandomDirectFull, which fails
+     * rather than return bytes from an uninitialised pool. */
 #if DK_HAVE_GETRANDOM
-    n = getrandom(&key.bytes, DK_PR_KEYSIZE, 0);
+    n = getrandom(&key.bytes, DK_PR_KEYSIZE, GRND_NONBLOCK);
 #elif DK_HAVE_LINUX_SYS_GETRANDOM
     /* Linux 3.17 SYS_getrandom, not available in Glibc prior to 2.25. */
-    n = syscall(SYS_getrandom, &key.bytes, DK_PR_KEYSIZE, 0);
+    n = syscall(SYS_getrandom, &key.bytes, DK_PR_KEYSIZE, GRND_NONBLOCK);
 #elif DK_HAVE_GETENTROPY || DK_HAVE_GETENTROPY_SYS_RANDOM
     n = 0;
     if (getentropy(&key.bytes, DK_PR_KEYSIZE) == 0) {
