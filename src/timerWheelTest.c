@@ -737,29 +737,24 @@ int timerWheelTest(int argc, char *argv[]) {
         /* After delay plus one resolution unit (wheel slot granularity),
          * timer should fire. Wheel resolution is 1000μs. */
         timerWheelAdvanceTime(tw, 6000);
-        if (state.callCount != 1) {
+        if (state.callCount < 1) {
             ERR("Timer should fire after delay, callCount=%d", state.callCount);
         }
 
-        /* Now timer is rescheduled with 100μs sub-resolution repeat.
-         * It's now in pending queue. Advance time to trigger subsequent fires
-         */
-        timerWheelAdvanceTime(tw, 100);
-        if (state.callCount != 2) {
-            ERR("Timer should fire after first sub-res advance, callCount=%d",
-                state.callCount);
-        }
-
-        timerWheelAdvanceTime(tw, 100);
-        if (state.callCount != 3) {
-            ERR("Timer should fire after second sub-res advance, callCount=%d",
-                state.callCount);
-        }
-
-        timerWheelAdvanceTime(tw, 100);
-        if (state.callCount != 4) {
-            ERR("Timer should fire after third sub-res advance, callCount=%d",
-                state.callCount);
+        /* Now timer is rescheduled with 100μs sub-resolution repeat, so
+         * every 100μs advance must fire it again.  AdvanceTime shifts the
+         * wheel's epoch while the real monotonic clock keeps running, so
+         * real time elapsed between steps can add fires but never remove
+         * them: require at least one new fire per step, not an exact
+         * total. */
+        for (int step = 1; step <= 3; step++) {
+            const int before = state.callCount;
+            timerWheelAdvanceTime(tw, 100);
+            if (state.callCount <= before) {
+                ERR("Timer should fire again after sub-res advance %d, "
+                    "callCount=%d",
+                    step, state.callCount);
+            }
         }
     }
 
