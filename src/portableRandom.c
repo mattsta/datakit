@@ -215,6 +215,12 @@ void portableRandom_stir(portableRandomState *r, pid_t pid) {
 
 void portableRandom_add(portableRandomState *r, const uint8_t *key,
                         size_t len) {
+    /* An empty key has nothing to mix in, and key[n % len] below would
+     * divide by zero. */
+    if (len == 0) {
+        return;
+    }
+
     for (uint32_t n = 0; n < sizeof(r->s); n++) {
         uint8_t val = r->s[r->i];
         r->j += val + key[n % len];
@@ -620,6 +626,33 @@ int portableRandomTest(int argc, char *argv[]) {
                 ", outside (0, %" PRIu64 "]",
                 words, (int64_t)r.remainingBytesBeforeRefuel,
                 (uint64_t)DK_PR_REFUEL_BYTES);
+        }
+    }
+
+    TEST("an empty key leaves the state unchanged") {
+        /* portableRandom_add with len 0 must return without mixing (and
+         * without dividing by zero). */
+        portableRandomState r;
+        portableRandom_init(&r, getpid());
+        (void)portableRandom64(&r);
+
+        uint8_t s[sizeof(r.s)];
+        memcpy(s, r.s, sizeof(s));
+        const uint8_t i = r.i;
+        const uint8_t j = r.j;
+
+        const uint8_t key[1] = {0x5A};
+        portableRandom_add(&r, key, 0);
+
+        if (r.i != i || r.j != j || memcmp(s, r.s, sizeof(s)) != 0) {
+            ERRR("portableRandom_add with an empty key changed the state");
+        } else {
+            /* A caller with no key may well pass NULL. */
+            portableRandom_add(&r, NULL, 0);
+
+            if (r.i != i || r.j != j || memcmp(s, r.s, sizeof(s)) != 0) {
+                ERRR("portableRandom_add(NULL, 0) changed the state");
+            }
         }
     }
 
