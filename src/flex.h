@@ -49,7 +49,8 @@ void flexFree(flex *f);
  *   - It does not verify the contents of nested containers.
  *
  * flexTest runs every single-byte mutation of several valid flexes
- * through these functions. */
+ * through these functions and decodes every buffer the deep check
+ * accepts. */
 
 /* flexValidateBuffer — defensive bounds-check on a putative flex buffer.
  *

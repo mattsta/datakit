@@ -6381,39 +6381,217 @@ static void verify(flex *f, flexEntryData *e) {
  * Feeds every single-byte mutation (each offset x each other byte value)
  * of several valid flexes to flexValidateBuffer, flexValidateBufferDeep
  * and flexPeekTotalBytes.  An assertion on the validate path aborts the
- * test; the last corpus line printed names the buffer.  Verdicts are
- * checked only where they are known: unmutated buffers pass both
- * validators, and a deep pass implies a shallow pass.
+ * test; the last corpus line printed names the buffer.  Checked for
+ * every mutation:
+ *   - the shallow gate accepts exactly when the peek succeeds and
+ *     reports the whole buffer, and a peek over a longer outer buffer
+ *     reports the same prefix;
+ *   - every buffer the deep gate accepts decodes the way an untrusted
+ *     reader would decode it: flexHead/flexNext visit exactly flexCount
+ *     entries, flexGetByType into a databoxBig returns in-bounds payloads
+ *     and never a pointer, a plain databox gets the type only for a
+ *     96/128-bit entry, and when every trailer is the one the writer
+ *     emits, flexTail/flexPrev visit the same entries in reverse.
+ * Unmutated buffers must pass both gates and have intact trailers.
  *
- * Corpus: strings (split-varint lengths), integers and immediates
- * (fixed-width table), nested containers (inner varints of one and two
- * bytes), and a flex whose total-bytes header varint is multi-byte. */
+ * Corpus: strings (split-varint lengths of one, two and three bytes),
+ * integers and immediates, 96/128-bit integers, reals, references and
+ * empty bytes (the fixed-width table), nested containers (inner varints
+ * of one and two bytes), and a flex whose total-bytes header varint is
+ * multi-byte. */
 #define FLEX_SWEEP_BYTE_VALUES 256
+#define FLEX_SWEEP_PEEK_SLACK 16
 
-/* Sweep one valid flex.  Returns the number of failures found. */
+/* True when the bytes after the entry at 'fe' are the trailer the
+ * writer emits for that entry, so reverse traversal over it is defined.
+ * 'entryLen' is the entry's size from the forward walk; reads stay
+ * inside [fe, fe + entryLen). */
+static bool flexValidateSweepTrailerIntact(const flexEntry *const fe,
+                                           const size_t entryLen) {
+    const flexEncoding encoding = fe[0];
+    if (FLEX_IS_IMMEDIATE(encoding)) {
+        return entryLen == 1;
+    }
+
+    uint8_t expected[16];
+    varintWidth width;
+    if (FLEX_IS_STR(encoding)) {
+        /* [LEN][DATA][LEN REVERSED] */
+        varintWidth forwardWidth;
+        size_t len;
+        varintSplitFullNoZeroGet_(fe, forwardWidth, len);
+        varintSplitFullNoZeroReversedPutForward_(expected, width, len);
+        return width == forwardWidth && entryLen == len + 2 * (size_t)width &&
+               memcmp(fe + entryLen - width, expected, width) == 0;
+    }
+
+    if (fe[entryLen - 1] != encoding) {
+        return false;
+    }
+
+    if (FLEX_IS_FORWARD_DECLARE_SUBCONTAINER(encoding)) {
+        /* [TAG][NESTED FLEX][NESTED SIZE REVERSED][TAG] */
+        varintWidth innerWidth;
+        size_t innerLen;
+        varintSplitFullNoZeroGet_(fe + 1, innerWidth, innerLen);
+        varintSplitFullNoZeroReversedPutForward_(expected, width, innerLen);
+        return width == innerWidth && entryLen == innerLen + width + 2 &&
+               memcmp(fe + 1 + innerLen, expected, width) == 0;
+    }
+
+    return true;
+}
+
+/* Decode a buffer flexValidateBufferDeep accepted.  'seen' has room for
+ * one entry pointer per buffer byte.  With 'requireTrailers' a trailer
+ * the writer would not emit is a failure; otherwise it only skips the
+ * reverse walk, which the deep gate does not cover.  Returns the number
+ * of failures; '*reversed' reports whether the reverse walk ran. */
+static int32_t
+flexValidateSweepDecode(const char *const name, const uint8_t *const buf,
+                        const size_t bytes, const size_t pos, const uint32_t v,
+                        const bool requireTrailers,
+                        const flexEntry **const seen, bool *const reversed) {
+    const flex *const f = (const flex *)buf;
+    const uint8_t *const end = buf + bytes;
+    const size_t count = flexCount(f);
+    size_t visited = 0;
+    bool trailersIntact = true;
+    *reversed = false;
+
+#define FLEX_SWEEP_DECODE_FAIL_(what)                                          \
+    do {                                                                       \
+        printf("  ERROR! %s: offset %zu value %" PRIu32 ": %s\n", name, pos,   \
+               v, (what));                                                     \
+        return 1;                                                              \
+    } while (0)
+
+    flexEntry *fe = flexHeadIfAny(f);
+    while (fe) {
+        if (visited == count || fe >= end) {
+            FLEX_SWEEP_DECODE_FAIL_("forward walk passed the entry count");
+        }
+
+        if (fe[0] == FLEX_EXTERNAL_MDSC_48B ||
+            fe[0] == FLEX_EXTERNAL_MDSC_64B) {
+            FLEX_SWEEP_DECODE_FAIL_("deep gate accepted a pointer entry");
+        }
+
+        databoxBig big;
+        DATABOX_BIG_INIT(&big);
+        flexGetByType(fe, (databox *)&big);
+
+        /* Variable-length payloads must lie inside the buffer. */
+        const bool variable = big.type == DATABOX_BYTES ||
+                              (big.type >= DATABOX_CONTAINER_FLEX_MAP &&
+                               big.type <= DATABOX_CONTAINER_FLEX_TUPLE);
+        const uint8_t *const start = (const uint8_t *)big.data.bytes.start;
+        if (variable && big.len &&
+            (start < fe || start >= end || big.len > (size_t)(end - start))) {
+            FLEX_SWEEP_DECODE_FAIL_("payload outside the buffer");
+        }
+
+        /* A plain box gets the type of a 96/128-bit entry and no write. */
+        databox plain = {{0}};
+        flexGetByType(fe, &plain);
+        if (plain.type != big.type) {
+            FLEX_SWEEP_DECODE_FAIL_("plain and big decodes disagree");
+        }
+
+        if ((plain.type == DATABOX_SIGNED_128 ||
+             plain.type == DATABOX_UNSIGNED_128) &&
+            plain.data.ptr) {
+            FLEX_SWEEP_DECODE_FAIL_("plain box got a 128-bit pointer");
+        }
+
+        flexEntry *const next = flexNext(f, fe);
+        const size_t entryLen = (size_t)((next ? next : end) - fe);
+        trailersIntact =
+            trailersIntact && flexValidateSweepTrailerIntact(fe, entryLen);
+        seen[visited++] = fe;
+        fe = next;
+    }
+
+    if (visited != count) {
+        FLEX_SWEEP_DECODE_FAIL_("forward walk visited fewer entries");
+    }
+
+    if (!trailersIntact) {
+        if (requireTrailers) {
+            FLEX_SWEEP_DECODE_FAIL_("an entry's trailer is not the writer's");
+        }
+
+        return 0;
+    }
+
+    /* Every trailer is the writer's, so reverse traversal must mirror the
+     * forward walk exactly. */
+    fe = count ? flexTail(f) : NULL;
+    for (size_t i = count; i-- > 0;) {
+        if (fe != seen[i]) {
+            FLEX_SWEEP_DECODE_FAIL_("reverse walk diverged");
+        }
+
+        databoxBig big;
+        DATABOX_BIG_INIT(&big);
+        flexGetByType(fe, (databox *)&big);
+        fe = flexPrev(f, fe);
+    }
+
+    if (fe) {
+        FLEX_SWEEP_DECODE_FAIL_("reverse walk passed the head");
+    }
+
+#undef FLEX_SWEEP_DECODE_FAIL_
+
+    *reversed = true;
+    return 0;
+}
+
+/* Sweep one valid flex.  Offsets in [skipFrom, skipTo) are not mutated
+ * (pass 0, 0 to mutate every offset); a long string's interior bytes are
+ * payload no validator reads.  Returns the number of failures found. */
 static int32_t flexValidateTotalitySweepOne(const char *const name,
-                                            const flex *const f) {
+                                            const flex *const f,
+                                            const size_t skipFrom,
+                                            const size_t skipTo) {
     int32_t failures = 0;
     const size_t bytes = flexBytes(f);
+    const size_t mutated = bytes - (skipTo - skipFrom);
 
     printf("  %s: %zu bytes, %zu entries, %zu mutations\n", name, bytes,
-           flexCount(f), bytes * (FLEX_SWEEP_BYTE_VALUES - 1));
+           flexCount(f), mutated * (FLEX_SWEEP_BYTE_VALUES - 1));
     fflush(stdout);
 
-    if (!flexValidateBuffer((const uint8_t *)f, bytes)) {
+    /* Slack after the buffer lets the peek see a longer outer buffer. */
+    cleanerName(zfree, Bytes) uint8_t *scratch =
+        zcalloc(1, bytes + FLEX_SWEEP_PEEK_SLACK);
+    memcpy(scratch, f, bytes);
+
+    cleaner(zfree) void *seenStore = zcalloc(bytes, sizeof(flexEntry *));
+    const flexEntry **const seen = seenStore;
+
+    bool reversed = false;
+    if (!flexValidateBuffer(scratch, bytes)) {
         printf("  ERROR! %s: unmutated buffer failed the shallow gate\n", name);
         return failures + 1;
     }
 
-    if (!flexValidateBufferDeep((const uint8_t *)f, bytes)) {
+    if (!flexValidateBufferDeep(scratch, bytes)) {
         printf("  ERROR! %s: unmutated buffer failed the deep gate\n", name);
         return failures + 1;
     }
 
-    cleanerName(zfree, Bytes) uint8_t *scratch = zmalloc(bytes);
-    memcpy(scratch, f, bytes);
+    failures += flexValidateSweepDecode(
+        name, scratch, bytes, 0, FLEX_SWEEP_BYTE_VALUES, true, seen, &reversed);
 
+    size_t accepted = 0;
+    size_t reverseWalked = 0;
     for (size_t pos = 0; pos < bytes; pos++) {
+        if (pos >= skipFrom && pos < skipTo) {
+            continue;
+        }
+
         const uint8_t honest = scratch[pos];
         for (uint32_t v = 0; v < FLEX_SWEEP_BYTE_VALUES; v++) {
             if ((uint8_t)v == honest) {
@@ -6422,28 +6600,54 @@ static int32_t flexValidateTotalitySweepOne(const char *const name,
 
             scratch[pos] = (uint8_t)v;
 
-            /* An abort in either call is the failure this sweep
-             * detects. */
+            /* An abort in any call is a failure this sweep detects. */
             const bool shallow = flexValidateBuffer(scratch, bytes);
             const bool deep = flexValidateBufferDeep(scratch, bytes);
 
-            /* The deep walk begins with the shallow gate, so a deep
-             * pass without a shallow one is a contradiction. */
-            if (deep && !shallow) {
+            /* The shallow gate accepts exactly the buffers whose header
+             * claims the whole buffer, which is what the peek reports. */
+            size_t total = 0;
+            const bool peeked = flexPeekTotalBytes(scratch, bytes, &total);
+            if (shallow != (peeked && total == bytes) ||
+                (peeked && total > bytes)) {
                 printf("  ERROR! %s: offset %zu value %" PRIu32
-                       " passed deep and failed shallow\n",
+                       " shallow %d disagrees with peek %d (total %zu)\n",
+                       name, pos, v, shallow, peeked, total);
+                failures++;
+            }
+
+            /* A longer outer buffer leaves a successful peek unchanged. */
+            size_t outerTotal = 0;
+            const bool outerPeeked = flexPeekTotalBytes(
+                scratch, bytes + FLEX_SWEEP_PEEK_SLACK, &outerTotal);
+            if (peeked && (!outerPeeked || outerTotal != total)) {
+                printf("  ERROR! %s: offset %zu value %" PRIu32
+                       " peek changed with a longer outer buffer\n",
                        name, pos, v);
                 failures++;
             }
 
-            /* The peek shares the shallow gate's header decode, so it
-             * is swept on the same bytes. */
-            size_t total = 0;
-            (void)flexPeekTotalBytes(scratch, bytes, &total);
+            if (deep) {
+                if (!shallow) {
+                    printf("  ERROR! %s: offset %zu value %" PRIu32
+                           " passed deep and failed shallow\n",
+                           name, pos, v);
+                    failures++;
+                }
+
+                accepted++;
+                failures += flexValidateSweepDecode(name, scratch, bytes, pos,
+                                                    v, false, seen, &reversed);
+                reverseWalked += reversed;
+            }
         }
 
         scratch[pos] = honest;
     }
+
+    printf("    deep accepted %zu mutations, decoded all, reverse-walked "
+           "%zu\n",
+           accepted, reverseWalked);
 
     return failures;
 }
@@ -6491,7 +6695,30 @@ int32_t flexValidateTotalitySweep(void) {
             flexPushBytes(&strs, words[i], strlen(words[i]),
                           FLEX_ENDPOINT_TAIL);
         }
-        failures += flexValidateTotalitySweepOne("strings", strs);
+        failures += flexValidateTotalitySweepOne("strings", strs, 0, 0);
+    }
+
+    {
+        /* One string long enough for a 3-byte length varint, between
+         * shorter ones.  Only its edges are mutated: the interior is
+         * payload no validator reads. */
+        enum { SWEEP_LONG_STRING_ = 16500, SWEEP_LONG_EDGE_ = 24 };
+        cleanerName(zfree, Bytes) uint8_t *longString =
+            zmalloc(SWEEP_LONG_STRING_);
+        memset(longString, 'x', SWEEP_LONG_STRING_);
+
+        cleaner(flexFree) flex *wideStrs = flexNew();
+        flexPushBytes(&wideStrs, "head", strlen("head"), FLEX_ENDPOINT_TAIL);
+        flexPushBytes(&wideStrs, longString, SWEEP_LONG_STRING_,
+                      FLEX_ENDPOINT_TAIL);
+        flexPushBytes(&wideStrs, "tail", strlen("tail"), FLEX_ENDPOINT_TAIL);
+
+        const flexEntry *const longEntry = flexIndexDirect(wideStrs, 1);
+        assert(varintSplitFullNoZeroGetLenQuick_(longEntry) == 3);
+        const size_t payloadStart = (size_t)(longEntry - wideStrs) + 3;
+        failures += flexValidateTotalitySweepOne(
+            "3-byte-string", wideStrs, payloadStart + SWEEP_LONG_EDGE_,
+            payloadStart + SWEEP_LONG_STRING_ - SWEEP_LONG_EDGE_);
     }
 
     {
@@ -6509,7 +6736,40 @@ int32_t flexValidateTotalitySweep(void) {
         flexPushByType(&nums, &t, FLEX_ENDPOINT_TAIL);
         flexPushByType(&nums, &fa, FLEX_ENDPOINT_TAIL);
         flexPushByType(&nums, &nil, FLEX_ENDPOINT_TAIL);
-        failures += flexValidateTotalitySweepOne("numbers", nums);
+        failures += flexValidateTotalitySweepOne("numbers", nums, 0, 0);
+    }
+
+    {
+        /* The rest of the fixed-width table: 96- and 128-bit integers of
+         * both signs, every real width, references of several widths, and
+         * empty bytes. */
+        cleaner(flexFree) flex *fixed = flexNew();
+        databoxBig wide;
+        DATABOX_BIG_UNSIGNED_128(&wide, (__uint128_t)1 << 80);
+        flexPushDataboxBig(&fixed, &wide, FLEX_ENDPOINT_TAIL);
+        DATABOX_BIG_UNSIGNED_128(&wide, ((__uint128_t)1 << 100) + 7);
+        flexPushDataboxBig(&fixed, &wide, FLEX_ENDPOINT_TAIL);
+        DATABOX_BIG_SIGNED_128(&wide, -((__int128_t)1 << 80));
+        flexPushDataboxBig(&fixed, &wide, FLEX_ENDPOINT_TAIL);
+        DATABOX_BIG_SIGNED_128(&wide, -((__int128_t)1 << 100) - 7);
+        flexPushDataboxBig(&fixed, &wide, FLEX_ENDPOINT_TAIL);
+
+        flexPushFloat16(&fixed, 1.5f, FLEX_ENDPOINT_TAIL);
+        flexInsertFloatB16(&fixed, FLEX_ENTRY_AFTER_TAIL(fixed), -2.0f);
+        flexPushFloat(&fixed, 3.14159f, FLEX_ENDPOINT_TAIL);
+        flexPushDouble(&fixed, 2.718281828459045, FLEX_ENDPOINT_TAIL);
+
+        static const uint64_t refs[] = {
+            0, 255, 256, 70000, UINT64_C(1) << 40, UINT64_MAX};
+        for (size_t i = 0; i < sizeof(refs) / sizeof(*refs); i++) {
+            const databox ref = {.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL,
+                                 .data.u64 = refs[i]};
+            const databox *refBox[1] = {&ref};
+            flexAppendMultiple(&fixed, 1, refBox);
+        }
+
+        flexPushBytes(&fixed, "", 0, FLEX_ENDPOINT_TAIL);
+        failures += flexValidateTotalitySweepOne("fixed-width", fixed, 0, 0);
     }
 
     {
@@ -6553,7 +6813,7 @@ int32_t flexValidateTotalitySweep(void) {
             failures += flexValidateSweepCheckNested(outer, -2, wide);
         }
 
-        failures += flexValidateTotalitySweepOne("nested", outer);
+        failures += flexValidateTotalitySweepOne("nested", outer, 0, 0);
     }
 
     {
@@ -6564,7 +6824,7 @@ int32_t flexValidateTotalitySweep(void) {
             flexPushSigned(&big, i * 1000, FLEX_ENDPOINT_TAIL);
         }
         assert(FLEX_TOTAL_BYTES_WIDTH(big) > 1);
-        failures += flexValidateTotalitySweepOne("wide-header", big);
+        failures += flexValidateTotalitySweepOne("wide-header", big, 0, 0);
     }
 
     if (failures == 0) {
@@ -6579,6 +6839,7 @@ int32_t flexValidateTotalitySweep(void) {
 }
 
 #undef FLEX_SWEEP_BYTE_VALUES
+#undef FLEX_SWEEP_PEEK_SLACK
 
 #include "jebuf.h"
 #include <locale.h>
