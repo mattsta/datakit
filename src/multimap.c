@@ -4389,8 +4389,8 @@ int multimapTest(int argc, char *argv[]) {
     do {                                                                       \
         databox searchKey = databoxNewSigned(val);                             \
         if (!multimapExists(m, &searchKey)) {                                  \
-            ERR("Expected value %lld not found in result map!",                \
-                (long long)(val));                                             \
+            ERR("Expected value %" PRId64 " not found in result map!",         \
+                (int64_t)(val));                                               \
             assert(false);                                                     \
         }                                                                      \
     } while (0)
@@ -4399,7 +4399,8 @@ int multimapTest(int argc, char *argv[]) {
     do {                                                                       \
         databox searchKey = databoxNewSigned(val);                             \
         if (multimapExists(m, &searchKey)) {                                   \
-            ERR("Value %lld should NOT be in result map!", (long long)(val));  \
+            ERR("Value %" PRId64 " should NOT be in result map!",              \
+                (int64_t)(val));                                               \
             assert(false);                                                     \
         }                                                                      \
     } while (0)
@@ -4768,11 +4769,12 @@ int multimapTest(int argc, char *argv[]) {
 
             if (multimapCount(result) != expectedCount) {
                 ERR("Trial %d: Expected intersection count %zu, got %zu "
-                    "(A: [%lld..%lld], B: [%lld..%lld], overlap: [%lld..%lld])",
+                    "(A: [%" PRId64 "..%" PRId64 "], B: [%" PRId64 "..%" PRId64
+                    "], overlap: [%" PRId64 "..%" PRId64 "])",
                     trial, expectedCount, multimapCount(result),
-                    (long long)startA, (long long)(startA + sizeA - 1),
-                    (long long)startB, (long long)(startB + sizeB - 1),
-                    (long long)overlapStart, (long long)(overlapEnd - 1));
+                    (int64_t)startA, (int64_t)(startA + sizeA - 1),
+                    (int64_t)startB, (int64_t)(startB + sizeB - 1),
+                    (int64_t)overlapStart, (int64_t)(overlapEnd - 1));
                 assert(false);
             }
         }
@@ -4999,8 +5001,8 @@ int multimapTest(int argc, char *argv[]) {
                         }
                     }
                     if (!(a < shCount && shKey[a] == rk)) {
-                        ERR("op %d: RandomValue returned absent key %lld", op,
-                            (long long)rk);
+                        ERR("op %d: RandomValue returned absent key %" PRId64,
+                            op, (int64_t)rk);
                         soakFail++;
                     }
                 }
@@ -5008,8 +5010,8 @@ int multimapTest(int argc, char *argv[]) {
                 /* exists probe (present and absent) */
                 const databox kb = databoxNewSigned(k);
                 if (multimapExists(m, &kb) != present) {
-                    ERR("op %d: exists(%lld)=%d != shadow %d", op, (long long)k,
-                        !present, present);
+                    ERR("op %d: exists(%" PRId64 ")=%d != shadow %d", op,
+                        (int64_t)k, !present, present);
                     soakFail++;
                 }
             }
@@ -5029,14 +5031,14 @@ int multimapTest(int argc, char *argv[]) {
                 databox fe[2];
                 databox le[2];
                 if (!multimapFirstInto(m, fe, 2) || fe[0].data.i != shKey[0]) {
-                    ERR("op %d: first key %lld != shadow %lld", op,
-                        (long long)fe[0].data.i, (long long)shKey[0]);
+                    ERR("op %d: first key %" PRId64 " != shadow %" PRId64, op,
+                        (int64_t)fe[0].data.i, (int64_t)shKey[0]);
                     soakFail++;
                 }
                 if (!multimapLastInto(m, le, 2) ||
                     le[0].data.i != shKey[shCount - 1]) {
-                    ERR("op %d: last key %lld != shadow %lld", op,
-                        (long long)le[0].data.i, (long long)shKey[shCount - 1]);
+                    ERR("op %d: last key %" PRId64 " != shadow %" PRId64, op,
+                        (int64_t)le[0].data.i, (int64_t)shKey[shCount - 1]);
                     soakFail++;
                 }
             }
@@ -5056,10 +5058,11 @@ int multimapTest(int argc, char *argv[]) {
                     }
                     if (row[0].data.i != shKey[seen] ||
                         row[1].data.i != shVal[seen]) {
-                        ERR("op %d: row %d (%lld,%lld) != shadow (%lld,%lld)",
-                            op, seen, (long long)row[0].data.i,
-                            (long long)row[1].data.i, (long long)shKey[seen],
-                            (long long)shVal[seen]);
+                        ERR("op %d: row %d (%" PRId64 ",%" PRId64
+                            ") != shadow (%" PRId64 ",%" PRId64 ")",
+                            op, seen, (int64_t)row[0].data.i,
+                            (int64_t)row[1].data.i, (int64_t)shKey[seen],
+                            (int64_t)shVal[seen]);
                         soakFail++;
                         break;
                     }
