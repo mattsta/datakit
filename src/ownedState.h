@@ -16,9 +16,8 @@
  *               number; readers copy a version out and validate it.
  *
  * Threading contract
- *   - Publication is a release operation and reading is an acquire
- *     (seq_cst for ownedSeq). A published value is never modified; a
- *     successor replaces it.
+ *   - Publication is a release operation and reading is an acquire. A
+ *     published value is never modified; a successor replaces it.
  *   - A declaration may supply a writer_ok predicate. A publication that
  *     fails it is counted and passed to note_violation, but is still
  *     performed: abandoning it partway would leave a half-written
@@ -427,10 +426,17 @@ uint64_t ownedSlotClaimRefusedTotal(const ownedSlotDecl *decl);
  * cursor may still be in progress or abandoned.
  *
  * Readers copy the version and check the stamp before and after; they
- * never write. Every stamp, length and payload access on both sides is a
- * seq_cst atomic, which is what the validation argument in ownedState.c
- * relies on and what keeps ThreadSanitizer quiet. No accessor returns a
- * pointer into a version.
+ * never write to the version (a missed read moves a counter, below).
+ * Every stamp, length and payload access on both sides is an atomic:
+ * the writer's entry CAS acquires, its length and payload stores and its
+ * exit CAS release, and every reader load acquires. The validation
+ * argument in ownedState.c shows these orders suffice; no seq_cst total
+ * order is needed. No accessor returns a pointer into a version.
+ *
+ * Versions are 8-byte aligned and packed at the stride below, so
+ * adjacent versions share cache lines. A caller that wants one version
+ * per line can pick version_bytes = line - 16 (48 for 64-byte lines,
+ * 112 for 128-byte lines) and line-aligned storage.
  *
  * Lifecycle: the caller supplies 8-byte-aligned storage of
  * ownedSeqStorageBytes() (or OWNED_SEQ_STORAGE_WORDS for static storage)
@@ -568,7 +574,7 @@ static inline ownedSeqReadResult ownedSeqReadWordAt(ownedSeq *s, uint64_t want,
                                                           sizeof(uint64_t)) *
                                   sizeof(uint64_t)));
     const uint64_t published = 4u * want;
-    const uint64_t v1 = atomic_load_explicit(&v[0], memory_order_seq_cst);
+    const uint64_t v1 = atomic_load_explicit(&v[0], memory_order_acquire);
     if (v1 != published) {
         return ownedSeqReadMissed(
             s, (v1 == published + OWNED_SEQ_TAG_INPROGRESS || v1 < published)
@@ -576,8 +582,8 @@ static inline ownedSeqReadResult ownedSeqReadWordAt(ownedSeq *s, uint64_t want,
                    : OWNED_SEQ_OVERWRITTEN);
     }
     const uint64_t w =
-        atomic_load_explicit(&v[OWNED_SEQ_HEADER_WORDS], memory_order_seq_cst);
-    const uint64_t v2 = atomic_load_explicit(&v[0], memory_order_seq_cst);
+        atomic_load_explicit(&v[OWNED_SEQ_HEADER_WORDS], memory_order_acquire);
+    const uint64_t v2 = atomic_load_explicit(&v[0], memory_order_acquire);
     if (v2 != published) {
         return ownedSeqReadMissed(s, OWNED_SEQ_OVERWRITTEN);
     }

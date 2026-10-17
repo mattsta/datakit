@@ -675,12 +675,12 @@ uint64_t ownedSlotClaimRefusedTotal(const ownedSlotDecl *decl) {
  *                                                       before the
  *                                                       instance is
  *                                                       reachable
- *   T1  standing   -> 4n + 1   CAS_strong seq_cst       writer n, entry;
+ *   T1  standing   -> 4n + 1   CAS_strong acquire       writer n, entry;
  *       (tag not INPROGRESS                             refused when the
  *        and standing >> 2 < n)                         version is held
  *                                                       or newer: the
  *                                                       writer abandons
- *   T2  4n + 1     -> 4n       CAS_strong seq_cst       the same writer,
+ *   T2  4n + 1     -> 4n       CAS_strong release       the same writer,
  *                                                       exit
  *
  * `cursor` moves by a monotone-max CAS, release, only after a T2 that
@@ -693,8 +693,8 @@ uint64_t ownedSlotClaimRefusedTotal(const ownedSlotDecl *decl) {
  * succeeds only from a non-INPROGRESS stamp, so two claim windows on j
  * never overlap in the stamp's modification order, and every store of
  * the earlier holder is sequenced before its T2, which precedes the
- * later holder's T1 in that order; with all accesses seq_cst, it also
- * precedes the later holder's stores in S. Because a writer that cannot
+ * later holder's T1 in that order and, by the window-order step below,
+ * happens before the later holder's stores. Because a writer that cannot
  * enter writes nothing, "exactly one publication was inside the
  * version" is a statement about payload stores and not only about
  * stamps.
@@ -716,38 +716,51 @@ uint64_t ownedSlotClaimRefusedTotal(const ownedSlotDecl *decl) {
  * is why the exit CAS is strong. A writer that abandoned did not enter,
  * so it owes no exit.
  *
- * Ordering, per version. Every access to a stamp, to `used` and to a
- * payload word (the writer's T1, T2 and payload stores; the reader's
- * R1, its payload loads C and its R2) is memory_order_seq_cst, so all
- * of them lie in the single total order S of C11 7.17.3, which is
- * consistent with happens-before and with every location's modification
- * order. A seq_cst load observes the last seq_cst modification of its
- * location that precedes it in S (every modification of these locations
- * after the zero fill is seq_cst).
- *   Lower bound: R1 read 4s, written by W_pub(s). A seq_cst load is also
- *   an acquire and W_pub(s) also a release, so all of P(s) (s's payload
- *   stores) happen before all of C: C observes P(s) or later.
- *   Upper bound: suppose C read P(m), m >= s + N, same version. R2 read
- *   4s, which W_pub(s) wrote and which precedes W_in(m)'s 4m + 1 in the
- *   stamp's modification order. Were W_in(m) before R2 in S, R2 would
- *   have observed 4m + 1 or later, not 4s, so R2 <_S W_in(m). C is
- *   sequenced before R2 and W_in(m) before P(m), and S is consistent
- *   with sequenced-before, so C <_S P(m), and a seq_cst load that
- *   precedes a seq_cst store to its location in S cannot observe that
- *   store. Contradiction.
+ * Ordering, per version. Writer: T1 is a CAS with acquire on success,
+ * every store to `used` and to a payload word is a release store, and T2
+ * is a CAS with release on success. Reader: R1, the load of `used`, every
+ * payload load (C) and R2 are acquire loads. P(x) names publication x's
+ * stores to `used` and the payload. The argument uses only
+ * happens-before and the coherence rules of C11 5.1.2.4, not the single
+ * total order of seq_cst operations, so these orders suffice (and on
+ * x86-64 a release store is a plain mov where a seq_cst store is an
+ * xchg).
+ *   Window order: if holder a's window precedes holder b's on a version,
+ *   every store of a happens before every store of b. Every stamp
+ *   modification after the zero fill is an RMW (a successful T1 or T2),
+ *   so the stamp's modification order from T2(a) on is a release
+ *   sequence headed by T2(a). T1(b) reads a value in that sequence and is
+ *   an acquire, so T2(a) synchronizes with T1(b); a's stores are
+ *   sequenced before T2(a) and b's after T1(b). By write-write coherence,
+ *   each word's modification order then lists the holders' stores in
+ *   window order.
+ *   Lower bound: R1 read 4s, which only T2(s) writes. T2(s) is a release
+ *   and R1 an acquire, so P(s), sequenced before T2(s), happens before
+ *   every C, sequenced after R1. By write-read coherence each C reads s's
+ *   last store to its word or a store later in that word's modification
+ *   order, which by window order belongs to s or to a later holder.
+ *   Upper bound: suppose C read a store of P(m) for a later holder m.
+ *   That store is a release and C an acquire, so T1(m), sequenced before
+ *   it, happens before C and so before R2. By write-read coherence R2
+ *   reads T1(m)'s 4m + 1 or a later stamp. T1(m) follows T2(s) in the
+ *   stamp's modification order and 4s is written only by T2(s), so R2
+ *   cannot have read 4s. Contradiction: every C read s's last store.
  *   Premise: 4s appears exactly once in the version's modification
  *   order (an entry writes 4m + 1, nothing else writes a stamp), so
  *   "R2 read 4s" names one point in that order. The argument does not
  *   rely on numbers entering in order: fetch_add on `assigned` orders
  *   numbers, not entries, and under concurrent writers the holder of
  *   s + N can enter before the holder of s, which then abandons.
- *   Every access on both sides must be seq_cst: a relaxed payload load
- *   is not in S, and a non-seq_cst payload store could be observed by a
- *   later load regardless of S.
+ *   Each order carries one edge: T1 acquire for window order; T2 release
+ *   and R1 acquire for the lower bound; release payload stores and
+ *   acquire payload loads for the upper bound. R2 needs none (C is
+ *   sequenced before it); it is an acquire for symmetry. A word below
+ *   `used` that s never stored has no lower bound, so C may read an
+ *   older holder's store: hence the fill contract in the header.
  *
  * ThreadSanitizer silence is a separate fact: it never reports two
- * atomic accesses, whatever their orders. The seq_cst orders are what
- * the value argument needs.
+ * atomic accesses, whatever their orders. The orders above are what the
+ * value argument needs.
  * ==================================================================== */
 
 uint64_t ownedSeqPublishedTotal(void) {
@@ -864,7 +877,7 @@ void ownedSeqPutWord(ownedSeqVersionRef *v, size_t wordIndex, uint64_t w) {
     if (!v || wordIndex >= (v->capacity + 7u) / 8u) {
         return;
     }
-    atomic_store_explicit(&v->words[wordIndex], w, memory_order_seq_cst);
+    atomic_store_explicit(&v->words[wordIndex], w, memory_order_release);
 }
 
 void ownedSeqPutBytes(ownedSeqVersionRef *v, size_t offset, const void *src,
@@ -872,9 +885,9 @@ void ownedSeqPutBytes(ownedSeqVersionRef *v, size_t offset, const void *src,
     if (!v || !src || offset > v->capacity || len > v->capacity - offset) {
         return;
     }
-    /* Merge partial words; every store is seq_cst so it is in the
-     * proof's total order. The merge load reads this writer's own
-     * claimed version, so it needs no ordering. */
+    /* Merge partial words; every store is a release, as the ordering
+     * argument requires. The merge load reads this writer's own claimed
+     * version, so it needs no ordering. */
     const uint8_t *in = (const uint8_t *)src;
     size_t pos = offset;
     size_t remaining = len;
@@ -890,7 +903,7 @@ void ownedSeqPutBytes(ownedSeqVersionRef *v, size_t offset, const void *src,
             w = atomic_load_explicit(&v->words[wi], memory_order_relaxed);
         }
         memcpy((uint8_t *)&w + within, in, take);
-        atomic_store_explicit(&v->words[wi], w, memory_order_seq_cst);
+        atomic_store_explicit(&v->words[wi], w, memory_order_release);
         in += take;
         pos += take;
         remaining -= take;
@@ -951,11 +964,13 @@ bool ownedSeqPublishWith(ownedSeq *s, size_t len, ownedSeqFillFn fill,
     _Atomic uint64_t *const v =
         ownedSeqVersion_(s, (n - 1) % s->decl->versions);
     const uint64_t claim = 4u * n + OWNED_SEQ_TAG_INPROGRESS;
-    uint64_t standing = atomic_load_explicit(&v[0], memory_order_seq_cst);
+    /* The load only seeds the CAS, which compares against the stamp as it
+     * stands; the acquire that window order needs is the CAS's own. */
+    uint64_t standing = atomic_load_explicit(&v[0], memory_order_relaxed);
     if ((standing & 3u) == OWNED_SEQ_TAG_INPROGRESS || (standing >> 2) >= n ||
         !atomic_compare_exchange_strong_explicit(&v[0], &standing, claim,
-                                                 memory_order_seq_cst,
-                                                 memory_order_seq_cst)) {
+                                                 memory_order_acquire,
+                                                 memory_order_relaxed)) {
         /* Number n is consumed and never published. A reader asking for
          * it reads TORN while the version holds an older publication and
          * OVERWRITTEN once it holds a newer one. The holder's
@@ -964,9 +979,9 @@ bool ownedSeqPublishWith(ownedSeq *s, size_t len, ownedSeqFillFn fill,
                       OWNED_T_SEQ_PUBLISH_ABANDONED);
         return true;
     }
-    /* Fill: seq_cst stores into `used` and the payload, all inside this
+    /* Fill: release stores into `used` and the payload, all inside this
      * writer's claim window. */
-    atomic_store_explicit(&v[1], (uint64_t)len, memory_order_seq_cst);
+    atomic_store_explicit(&v[1], (uint64_t)len, memory_order_release);
     ownedSeqVersionRef ref = {.words = &v[OWNED_SEQ_HEADER_WORDS],
                               .capacity = s->decl->version_bytes};
     if (fill) {
@@ -977,8 +992,8 @@ bool ownedSeqPublishWith(ownedSeq *s, size_t len, ownedSeqFillFn fill,
      * spurious failure cannot leave the version INPROGRESS. */
     uint64_t expected = claim;
     if (atomic_compare_exchange_strong_explicit(&v[0], &expected, 4u * n,
-                                                memory_order_seq_cst,
-                                                memory_order_seq_cst)) {
+                                                memory_order_release,
+                                                memory_order_relaxed)) {
         ownedSeqCursorAdvance_(s, n);
         ownedSeqBump_(s, OWNED_SEQ_C_PUBLISHED, OWNED_T_SEQ_PUBLISHED);
         return true;
@@ -1041,7 +1056,7 @@ ownedSeqReadResult ownedSeqReadAt(ownedSeq *s, uint64_t want, void *dst,
         ownedSeqVersion_(s, (want - 1) % s->decl->versions);
     const uint64_t published = 4u * want;
     /* R1. */
-    const uint64_t v1 = atomic_load_explicit(&v[0], memory_order_seq_cst);
+    const uint64_t v1 = atomic_load_explicit(&v[0], memory_order_acquire);
     if (v1 != published) {
         /* TORN when `want` is in progress or the version still holds an
          * older number (its writer has not entered yet, or abandoned, in
@@ -1058,11 +1073,11 @@ ownedSeqReadResult ownedSeqReadAt(ownedSeq *s, uint64_t want, void *dst,
         return OWNED_SEQ_OVERWRITTEN;
     }
     /* C: `used` first, then the payload words. */
-    const uint64_t used = atomic_load_explicit(&v[1], memory_order_seq_cst);
+    const uint64_t used = atomic_load_explicit(&v[1], memory_order_acquire);
     if (used > (uint64_t)dstCap || used > (uint64_t)s->decl->version_bytes) {
         /* A shortfall is trustworthy only if the stamp still stands:
          * validate (R2) before reporting a length. */
-        const uint64_t v2 = atomic_load_explicit(&v[0], memory_order_seq_cst);
+        const uint64_t v2 = atomic_load_explicit(&v[0], memory_order_acquire);
         if (v2 == published && used <= (uint64_t)s->decl->version_bytes) {
             if (outLen) {
                 *outLen = (size_t)used;
@@ -1081,7 +1096,7 @@ ownedSeqReadResult ownedSeqReadAt(ownedSeq *s, uint64_t want, void *dst,
          * and only the tail with a variable-length one. */
         while (remaining >= 8u) {
             const uint64_t w = atomic_load_explicit(
-                &v[OWNED_SEQ_HEADER_WORDS + wi], memory_order_seq_cst);
+                &v[OWNED_SEQ_HEADER_WORDS + wi], memory_order_acquire);
             memcpy(out, &w, 8u);
             out += 8u;
             remaining -= 8u;
@@ -1089,13 +1104,12 @@ ownedSeqReadResult ownedSeqReadAt(ownedSeq *s, uint64_t want, void *dst,
         }
         if (remaining > 0) {
             const uint64_t w = atomic_load_explicit(
-                &v[OWNED_SEQ_HEADER_WORDS + wi], memory_order_seq_cst);
+                &v[OWNED_SEQ_HEADER_WORDS + wi], memory_order_acquire);
             memcpy(out, &w, remaining);
         }
     }
-    /* R2: a seq_cst load; the reader writes nothing (see the ordering
-     * argument above). */
-    const uint64_t v2 = atomic_load_explicit(&v[0], memory_order_seq_cst);
+    /* R2; the reader writes nothing (see the ordering argument above). */
+    const uint64_t v2 = atomic_load_explicit(&v[0], memory_order_acquire);
     if (v2 != published) {
         ownedSeqBump_(s, OWNED_SEQ_C_OVERWRITTEN_READS,
                       OWNED_T_SEQ_OVERWRITTEN_READS);
