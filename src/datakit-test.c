@@ -1099,7 +1099,10 @@ static bool g_dkOwnedWriterOk;
 static uint32_t g_dkOwnedViolationNotes;
 static ownedArena g_dkOwnedArena;
 
+static uint32_t g_dkOwnedNowCalls;
+
 static uint64_t dkOwnedNowUs_(void) {
+    g_dkOwnedNowCalls++;
     return g_dkOwnedNowUs;
 }
 
@@ -1552,6 +1555,16 @@ static int dkTestOwnedStateTest(int argc, char *argv[]) {
             "the release is counted");
     OEXPECT(ownedArenaLiveRows() == baseLive, "live_rows fell back");
 
+    /* --- 1d: a reader scope reads no clock under the default rule; the
+     * idle observation is carried by the retire epoch. --- */
+    {
+        const uint32_t callsBefore = g_dkOwnedNowCalls;
+        ownedArenaEnter(&g_dkOwnedArena);
+        ownedArenaExit(&g_dkOwnedArena);
+        OEXPECT(g_dkOwnedNowCalls == callsBefore,
+                "Enter and Exit leave the clock unread");
+    }
+
     /* --- 2: the idle stamp.  The gate holds a reader at every Drain, so
      * the direct sample never reads idle; the row still releases because
      * the gate was observed empty after the row was parked. --- */
@@ -1592,6 +1605,35 @@ static int dkTestOwnedStateTest(int argc, char *argv[]) {
             "the hold counter moves once per row, not once per pass");
     OEXPECT(g_dkOwnedHoldCalls == 1, "and the report is not repeated");
     ownedArenaExit(&g_dkOwnedArena); /* the long-lived reader leaves */
+
+    /* --- 4b: the report horizon saturates.  holdMultiple * graceUs past
+     * UINT64_MAX means "never report", not a wrapped, early horizon. --- */
+    {
+        static const ownedArenaDecl farDecl = {
+            .name = "datakit.selftest.arena.far",
+            .graceUs = DK_OWNED_GRACE_US,
+            /* The product wraps to a few hundred microseconds. */
+            .holdMultiple = UINT64_MAX / DK_OWNED_GRACE_US + 1,
+            .nowUs = dkOwnedNowUs_,
+            .noteHold = dkOwnedNoteHold_,
+            .noteCtx = NULL,
+        };
+        ownedArena far;
+        ownedArenaInit(&far, &farDecl);
+        dkOwnedCargo rowF = {.id = 66, .released = false};
+        const uint32_t holdsBefore = g_dkOwnedHoldCalls;
+        ownedArenaEnter(&far);
+        ownedArenaRetire(&far, &rowF, dkOwnedRelease_, dkOwnedDescribe_,
+                         OWNED_OOM_FREE);
+        g_dkOwnedNowUs += 10 * DK_OWNED_GRACE_US;
+        ownedArenaDrain(&far);
+        OEXPECT(!rowF.released && g_dkOwnedHoldCalls == holdsBefore,
+                "a horizon past UINT64_MAX never reports");
+        ownedArenaExit(&far);
+        ownedArenaDrain(&far);
+        OEXPECT(rowF.released, "and the row still releases once idle");
+        ownedArenaDestruct(&far);
+    }
 
     /* --- 5 and 6: the cell. --- */
     ownedCell cell;

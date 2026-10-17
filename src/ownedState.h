@@ -30,16 +30,27 @@
  * ownedArena release rules
  *   GRACE_AND_READERS (default): a row is released when graceUs has
  *   elapsed since it was retired AND the reader gate has been observed
- *   empty at some instant after the retire. The grace covers short
- *   readers that never enter the gate; the idle observation covers
- *   readers that do. A row still held after holdMultiple * graceUs is
- *   reported once through noteHold and kept, never freed.
+ *   empty at some instant after the retire (sampled at zero by Drain, or
+ *   brought to zero by an exit that had already observed the row's
+ *   retire epoch). The grace covers short readers that never enter the
+ *   gate; the idle observation covers readers that do. A row still held
+ *   after holdMultiple * graceUs (saturating; 0 reports as soon as the
+ *   grace has passed) is reported once through noteHold and kept, never
+ *   freed.
  *
- *   READERS_ONLY: no clock is consulted. Valid only when every reader
+ *   READERS_ONLY: no clock decides a release (nowUs still dates rows for
+ *   hold reports, so it is still required). Valid only when every reader
  *   enters the gate before loading a retirable pointer. A row is
  *   released when the gate is sampled at zero under the arena lock, or
  *   when an exit that brought the gate to zero had already observed the
- *   row's retire epoch.
+ *   row's retire epoch. A row older than reportHorizonUs is reported
+ *   once; 0 never reports.
+ *
+ *   Reader cost: every Enter and Exit is an atomic RMW on the gate's one
+ *   count word, so readers on different cores that enter at the same
+ *   time serialize on that cache line, as the read side of a
+ *   reader-writer lock does. Neither rule reads the clock on the reader
+ *   path.
  *
  * Declarations (ownedArenaDecl, ownedCellDecl, ownedSlotDecl,
  * ownedSeqDecl) carry the caller's policy as function pointers and must
@@ -60,10 +71,14 @@
 /* Per-cargo callbacks. */
 
 /* Release a retired cargo. ownedArena calls it from Drain and Destruct
- * with the arena lock held, so it must not block, take locks or call
- * back into the arena. ownedSlot calls it inline with no ownedState
- * lock held, and calls it even for a NULL cargo (the pointer is opaque
- * to the slot). */
+ * with the arena lock held: it must not call back into the arena, and
+ * must not take or wait on any lock that a thread calling Retire or
+ * Drain on that arena may hold (an allocator's internal locks are fine,
+ * as the arena itself frees and grows its array under its lock). Drain
+ * runs a whole batch of releases in one critical section, so a Retire
+ * on another thread waits for all of them. ownedSlot calls it inline
+ * with no ownedState lock held, and calls it even for a NULL cargo (the
+ * pointer is opaque to the slot). */
 typedef void (*ownedReleaseFn)(void *cargo);
 
 /* Describe a cargo for hold reports: a static label (e.g. "entry") and
@@ -94,8 +109,8 @@ typedef enum ownedOomPolicy {
 /* ---- ownedArena: reader gate and deferred release ---- */
 
 /* One retired object. parkedUs is the retire time; heldNoted records
- * that the hold report fired; epoch is the retire sequence number
- * (READERS_ONLY only; 0 under the default rule). */
+ * that the hold report fired; epoch is the retire sequence number (both
+ * rules). */
 typedef struct ownedArenaRow {
     void *cargo;
     ownedReleaseFn release;
@@ -119,7 +134,9 @@ typedef struct ownedArenaDecl {
     const char *name;         /* used in hold reports */
     uint64_t graceUs;         /* GRACE_AND_READERS: minimum age */
     uint64_t holdMultiple;    /* GRACE_AND_READERS: report after
-                                 holdMultiple * graceUs */
+                                 holdMultiple * graceUs (saturating, so
+                                 a product past UINT64_MAX never
+                                 reports); 0 = as soon as past grace */
     ownedNowUsFn nowUs;       /* required */
     ownedHoldNoteFn noteHold; /* optional; NULL = count only */
     void *noteCtx;
@@ -129,23 +146,23 @@ typedef struct ownedArenaDecl {
 } ownedArenaDecl;
 
 typedef struct ownedArena {
-    /* Reader gate. idleUs is the largest clock value an exiting reader
-     * read before observing the gate at zero, so idleUs > parkedUs means
-     * the gate was empty at some instant after that row was retired. It
-     * lets a gate that is never sampled idle still release rows. */
+    /* Reader gate. idleUs is not used by either rule and stays zero. */
     inflightGate readers;
     _Atomic uint64_t idleUs;
-    /* READERS_ONLY: retireEpoch increments on every retire (under lock);
-     * idleEpoch is the largest retireEpoch an exiter read before a
-     * decrement that brought the gate to zero. */
+    /* retireEpoch increments on every retire (under lock); idleEpoch is
+     * the largest retireEpoch an exiter read before a decrement that
+     * brought the gate to zero, so idleEpoch >= row.epoch means the gate
+     * was empty at some instant after that row was retired. It lets a
+     * gate that is never sampled idle still release rows. */
     _Atomic uint64_t retireEpoch;
     _Atomic uint64_t idleEpoch;
 
     /* Retirers and Drain both modify rows/count, so they hold `lock`.
      * The critical section grows (zrealloc) or compacts the array and
      * calls nowUs, noteHold and the rows' release and describe
-     * callbacks, none of which may take locks. Callers may retire while
-     * holding their own locks as long as this one is ordered last. */
+     * callbacks, none of which may take a lock that a Retire or Drain
+     * caller may hold. Callers may retire while holding their own locks
+     * as long as this one is ordered last. */
     pthread_mutex_t lock;
     ownedArenaRow *rows;
     size_t count;
@@ -165,12 +182,12 @@ void ownedArenaInit(ownedArena *arena, const ownedArenaDecl *decl);
 void ownedArenaDestruct(ownedArena *arena);
 
 /* Reader scope. Enter before the first load that can return a
- * retirable pointer; Exit on every return path. Non-blocking: one atomic
- * RMW each. Under the default rule Exit also reads the clock before its
- * decrement and, when a load after the decrement reads zero, advances
- * idleUs with a CAS. Under READERS_ONLY it loads retireEpoch before the
- * decrement and, when that decrement reached zero, advances idleEpoch
- * the same way. NULL-safe. */
+ * retirable pointer; Exit on every return path. Non-blocking: Enter is
+ * one atomic RMW and Exit one CAS on the gate's count word (see
+ * inflightGate.h, including how concurrent scopes contend for it). Under
+ * both rules Exit loads retireEpoch before its decrement and, when that
+ * decrement reached zero, advances idleEpoch with a CAS (monotone max);
+ * it reads no clock. NULL-safe. */
 void ownedArenaEnter(ownedArena *arena);
 void ownedArenaExit(ownedArena *arena);
 uint32_t ownedArenaDepth(const ownedArena *arena);

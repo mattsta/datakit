@@ -154,12 +154,16 @@ void ownedArenaEnter(ownedArena *arena) {
     inflightGateEnter(&arena->readers);
 }
 
-/* READERS_ONLY exit: read retireEpoch before the decrement; if this
- * decrement reached zero, publish that epoch to idleEpoch (monotone
- * max). The acquire load reads from the retire that stamped the epoch,
- * so that retire, and the unpublish before it, happen before this
- * exit. */
-static void ownedArenaExitReadersOnly_(ownedArena *arena) {
+/* Both rules: read retireEpoch before the decrement; if this decrement
+ * reached zero, publish that epoch to idleEpoch (monotone max, so
+ * concurrent exiters never move it back). The acquire load reads from
+ * the retire that stamped the epoch (or a later one), so that retire,
+ * and the unpublish before it, happen before this exit. No clock is
+ * read. */
+void ownedArenaExit(ownedArena *arena) {
+    if (!arena) {
+        return;
+    }
     const uint64_t e =
         atomic_load_explicit(&arena->retireEpoch, memory_order_acquire);
     if (inflightGateExitPrev(&arena->readers) != 1) {
@@ -169,31 +173,6 @@ static void ownedArenaExitReadersOnly_(ownedArena *arena) {
         atomic_load_explicit(&arena->idleEpoch, memory_order_relaxed);
     while (prev < e && !atomic_compare_exchange_weak_explicit(
                            &arena->idleEpoch, &prev, e, memory_order_release,
-                           memory_order_relaxed)) {
-        /* prev reloaded by the exchange. */
-    }
-}
-
-void ownedArenaExit(ownedArena *arena) {
-    if (!arena) {
-        return;
-    }
-    if (arena->decl && arena->decl->release == OWNED_RELEASE_READERS_ONLY) {
-        ownedArenaExitReadersOnly_(arena);
-        return;
-    }
-    /* Read the clock before the decrement, so an idle observation after
-     * it covers time t. */
-    const uint64_t t =
-        (arena->decl && arena->decl->nowUs) ? arena->decl->nowUs() : 0;
-    inflightGateExit(&arena->readers);
-    if (inflightGateDepth(&arena->readers) != 0) {
-        return;
-    }
-    /* Monotone max, so concurrent exiters never move the stamp back. */
-    uint64_t prev = atomic_load_explicit(&arena->idleUs, memory_order_relaxed);
-    while (prev < t && !atomic_compare_exchange_weak_explicit(
-                           &arena->idleUs, &prev, t, memory_order_release,
                            memory_order_relaxed)) {
         /* prev reloaded by the exchange. */
     }
@@ -236,14 +215,11 @@ void ownedArenaRetire(ownedArena *arena, void *cargo, ownedReleaseFn release,
     }
     const size_t i = arena->count;
     /* Epochs are assigned under the lock, so rows carry increasing
-     * epochs; the release pairs with the exiter's acquire. The default
-     * rule does not use epochs. */
-    const uint64_t epoch =
-        (arena->decl->release == OWNED_RELEASE_READERS_ONLY)
-            ? atomic_fetch_add_explicit(&arena->retireEpoch, 1,
-                                        memory_order_release) +
-                  1
-            : 0;
+     * epochs; the release pairs with the exiter's acquire. Both rules use
+     * them. */
+    const uint64_t epoch = atomic_fetch_add_explicit(&arena->retireEpoch, 1,
+                                                     memory_order_release) +
+                           1;
     arena->rows[i] = (ownedArenaRow){.cargo = cargo,
                                      .release = release,
                                      .describe = describe,
@@ -256,6 +232,19 @@ void ownedArenaRetire(ownedArena *arena, void *cargo, ownedReleaseFn release,
     ownedTotalAdd_(OWNED_T_ARENA_LIVE_ROWS);
 }
 
+/* GRACE_AND_READERS report horizon, holdMultiple * graceUs, saturating:
+ * a product past UINT64_MAX is a horizon no age exceeds (never report),
+ * not a wrapped and early one. A zero product reports a row as soon as
+ * it is past grace with readers present. */
+static uint64_t ownedArenaGraceHorizonUs_(const ownedArenaDecl *decl) {
+    if (decl->graceUs != 0 && decl->holdMultiple > UINT64_MAX / decl->graceUs) {
+        return UINT64_MAX;
+    }
+    return decl->holdMultiple * decl->graceUs;
+}
+
+/* Every release callback runs here, under the arena lock, so a Retire on
+ * another thread waits for the whole batch. */
 void ownedArenaDrain(ownedArena *arena) {
     if (!arena || !arena->initialized) {
         return;
@@ -273,22 +262,22 @@ void ownedArenaDrain(ownedArena *arena) {
      * against a concurrent Enter on its own, which is one reason the
      * default rule also requires the grace period.
      *
-     * READERS_ONLY uses no clock:
-     *  - direct: SampleLatest is an RMW, so zero means every earlier
-     *    scope has exited (its exit is in this RMW's release sequence)
-     *    and every later Enter reads from this RMW and so observes the
-     *    unpublish that preceded the retire.
-     *  - epoch: an exiter read retireEpoch >= row.epoch (acquire) before
-     *    a decrement that reached zero, so both statements hold for that
-     *    decrement; idleEpoch carries it here by release/acquire.
-     * The clock is used only for the hold report's age. */
+     * READERS_ONLY: SampleLatest is an RMW, so zero means every earlier
+     * scope has exited (its exit is in this RMW's release sequence) and
+     * every later Enter reads from this RMW and so observes the unpublish
+     * that preceded the retire.
+     *
+     * Both rules also accept the epoch: an exiter read retireEpoch >=
+     * row.epoch (acquire) before a decrement that reached zero, so the
+     * gate was empty at an instant after the row's retire, and every
+     * scope entered before that instant has exited; idleEpoch carries
+     * this here by release/acquire. Only the default rule's grace and
+     * both rules' hold reports read the clock. */
     const bool readers_only =
         arena->decl->release == OWNED_RELEASE_READERS_ONLY;
     const bool gate_idle_now =
         readers_only ? (inflightGateSampleLatest(&arena->readers) == 0)
                      : (inflightGateDepth(&arena->readers) == 0);
-    const uint64_t idle_us =
-        atomic_load_explicit(&arena->idleUs, memory_order_acquire);
     const uint64_t idle_epoch =
         atomic_load_explicit(&arena->idleEpoch, memory_order_acquire);
     const uint64_t now = arena->decl->nowUs();
@@ -298,9 +287,7 @@ void ownedArenaDrain(ownedArena *arena) {
         /* Monotonic clock: now >= parkedUs, no underflow. */
         const uint64_t age = now - row.parkedUs;
         const bool c1 = readers_only || age > arena->decl->graceUs;
-        const bool c2 = readers_only
-                            ? (gate_idle_now || idle_epoch >= row.epoch)
-                            : (gate_idle_now || (idle_us > row.parkedUs));
+        const bool c2 = gate_idle_now || idle_epoch >= row.epoch;
         if (c1 && c2) {
             if (row.release) {
                 row.release(row.cargo);
@@ -314,10 +301,9 @@ void ownedArenaDrain(ownedArena *arena) {
             ownedTotalAdd_(OWNED_T_ARENA_GRACE_HELD);
             /* Report horizon. */
             const bool past_horizon =
-                readers_only
-                    ? (arena->decl->reportHorizonUs > 0 &&
-                       age > arena->decl->reportHorizonUs)
-                    : (age > arena->decl->holdMultiple * arena->decl->graceUs);
+                readers_only ? (arena->decl->reportHorizonUs > 0 &&
+                                age > arena->decl->reportHorizonUs)
+                             : (age > ownedArenaGraceHorizonUs_(arena->decl));
             if (!row.heldNoted && past_horizon) {
                 /* Report once per row; the row is kept. */
                 row.heldNoted = true;
@@ -964,7 +950,7 @@ bool ownedSeqPublish(ownedSeq *s, const void *src, size_t len) {
     return ownedSeqPublishWith(s, len, ownedSeqFlatFillFn_, &f);
 }
 
-/* Monotone max, as ownedArenaExit does for idleUs. */
+/* Monotone max, as ownedArenaExit does for idleEpoch. */
 static void ownedSeqCursorAdvance_(ownedSeq *s, uint64_t n) {
     uint64_t prev = atomic_load_explicit(&s->cursor, memory_order_relaxed);
     while (prev < n && !atomic_compare_exchange_weak_explicit(
