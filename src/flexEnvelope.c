@@ -1810,7 +1810,7 @@ static bool streamHashUpdate(uint16_t algo, void *u_state, hmacCtx *hmac,
         return XXH3_64bits_update((XXH3_state_t *)u_state, data, len) == XXH_OK;
     case FLEX_ENV_ALGO_XXH3_128:
         /* XXH3 128-bit streaming shares the same update function as the
-         * 64-bit variant; only reset/digest differ. See xxh3.h. */
+         * 64-bit variant; only reset/digest differ (see xxhash.h). */
         return XXH3_64bits_update((XXH3_state_t *)u_state, data, len) == XXH_OK;
     case FLEX_ENV_ALGO_BLAKE3_KEYED:
         blake3HasherUpdate((blake3Hasher *)u_state, data, len);
@@ -2426,6 +2426,101 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         }
         if (flexEnvelopeAlgoDigestLen((flexEnvelopeAlgo)9999) != 0) {
             ERRR("unknown algo should report digest_len 0");
+        }
+    }
+
+    TEST("envelope: xxh64 / xxh3_64 / xxh3_128 known answers") {
+        /* Digests are persisted inside envelopes, so the hash identity
+         * is part of the format: a dependency bump that changes any
+         * output must fail here rather than silently orphan stored
+         * envelopes.  The length-0 values are xxHash's published
+         * empty-input references; the rest were produced by a
+         * standalone build of the vendored xxHash 0.8.3.  The lengths
+         * reach every XXH3 size class (0, 1-3, 4-8, 9-16, 17-128,
+         * 129-240, and the long-input loop beyond 240).  Input byte i
+         * is (i * 131 + 7) mod 256.  Each value is checked both from
+         * the library call and from the bytes the envelope adapter
+         * writes (little-endian; for 128 bits the low half first). */
+        static const struct {
+            size_t len;
+            uint64_t xxh64;
+            uint64_t xxh3_64;
+            uint64_t xxh3_128High;
+            uint64_t xxh3_128Low;
+        } kats[] = {
+            {0, UINT64_C(0xef46db3751d8e999), UINT64_C(0x2d06800538d394c2),
+             UINT64_C(0x99aa06d3014798d8), UINT64_C(0x6001c324468d497f)},
+            {1, UINT64_C(0xa96c7f0ce858bbb7), UINT64_C(0x4c5cca45d0f4811f),
+             UINT64_C(0x495b62073ef70ca4), UINT64_C(0x4c5cca45d0f4811f)},
+            {3, UINT64_C(0xbed43740ee6332bb), UINT64_C(0x6e3e2670e61106ac),
+             UINT64_C(0x390cdc5b4a895dd7), UINT64_C(0x6e3e2670e61106ac)},
+            {8, UINT64_C(0x994b676b71ce94dd), UINT64_C(0xf9fd4dd0b04d78f5),
+             UINT64_C(0x6a86a3bda6af4e3d), UINT64_C(0x61ddbe7f31a6100d)},
+            {16, UINT64_C(0x94ad0095e72b24d5), UINT64_C(0x86abf6baccea0858),
+             UINT64_C(0x7f9a218b0425449a), UINT64_C(0xe2ce54a7c19c730d)},
+            {17, UINT64_C(0x1464f2eff23b5fe1), UINT64_C(0xb58bf5dc5022d071),
+             UINT64_C(0x66fc23f6439dbd77), UINT64_C(0x8d96ef110fcdebb4)},
+            {128, UINT64_C(0x0430e433b792e757), UINT64_C(0x10d17f72c0ccba41),
+             UINT64_C(0xaec730751478556c), UINT64_C(0xff361dec1385710a)},
+            {129, UINT64_C(0x1f9708e5a00618fa), UINT64_C(0x1648bdc3db49d1a2),
+             UINT64_C(0x98cd36ccbb557926), UINT64_C(0x4545b3a09738e31a)},
+            {240, UINT64_C(0xca0b65cc61295ca7), UINT64_C(0xb6cfaf343fab81e6),
+             UINT64_C(0x5293e17bf553903d), UINT64_C(0x3f2c53e72293711f)},
+            {241, UINT64_C(0x0ffefe0dfc875cf4), UINT64_C(0x956cae592c67279e),
+             UINT64_C(0xb53840fe3fedf161), UINT64_C(0x956cae592c67279e)},
+            {1000, UINT64_C(0x0bf0bdbcc82eb373), UINT64_C(0x571d5cbfef44331b),
+             UINT64_C(0x622239c5c47a6910), UINT64_C(0x571d5cbfef44331b)},
+            {2048, UINT64_C(0xafd8cdfc2fae9426), UINT64_C(0x8b46caa67dab3a30),
+             UINT64_C(0x56b77f207158a2ba), UINT64_C(0x8b46caa67dab3a30)},
+        };
+
+        uint8_t input[2048];
+        for (size_t i = 0; i < sizeof(input); i++) {
+            input[i] = (uint8_t)(i * 131 + 7);
+        }
+
+        for (size_t k = 0; k < sizeof(kats) / sizeof(kats[0]); k++) {
+            const size_t len = kats[k].len;
+            const XXH128_hash_t h128 = XXH3_128bits(input, len);
+            if (XXH64(input, len, 0) != kats[k].xxh64) {
+                ERR("XXH64 known answer mismatch at length %zu", len);
+            }
+            if (XXH3_64bits(input, len) != kats[k].xxh3_64) {
+                ERR("XXH3_64 known answer mismatch at length %zu", len);
+            }
+            if (h128.high64 != kats[k].xxh3_128High ||
+                h128.low64 != kats[k].xxh3_128Low) {
+                ERR("XXH3_128 known answer mismatch at length %zu", len);
+            }
+
+            uint8_t want[16];
+            uint8_t got[16];
+            for (uint32_t i = 0; i < 8u; i++) {
+                want[i] = (uint8_t)(kats[k].xxh64 >> (i * 8u));
+            }
+            hashXXH64(input, len, NULL, 0, got);
+            if (memcmp(got, want, 8) != 0) {
+                ERR("xxh64 envelope digest bytes mismatch at length %zu", len);
+            }
+
+            for (uint32_t i = 0; i < 8u; i++) {
+                want[i] = (uint8_t)(kats[k].xxh3_64 >> (i * 8u));
+            }
+            hashXXH3_64(input, len, NULL, 0, got);
+            if (memcmp(got, want, 8) != 0) {
+                ERR("xxh3_64 envelope digest bytes mismatch at length %zu",
+                    len);
+            }
+
+            for (uint32_t i = 0; i < 8u; i++) {
+                want[i] = (uint8_t)(kats[k].xxh3_128Low >> (i * 8u));
+                want[8u + i] = (uint8_t)(kats[k].xxh3_128High >> (i * 8u));
+            }
+            hashXXH3_128(input, len, NULL, 0, got);
+            if (memcmp(got, want, 16) != 0) {
+                ERR("xxh3_128 envelope digest bytes mismatch at length %zu",
+                    len);
+            }
         }
     }
 
