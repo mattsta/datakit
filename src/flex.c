@@ -5380,6 +5380,22 @@ size_t flexBytesLength(const flex *f) {
     return FLEX_TOTAL_BYTES_WIDTH(f);
 }
 
+/* A flex is one self-describing buffer (header, entries, trailers), so
+ * physical equality of metadata and entries is byte equality.  The
+ * header's total-bytes field rejects a size mismatch before memcmp. */
+bool flexEqual(const flex *a, const flex *b) {
+    if (a == b) {
+        return true;
+    }
+
+    if (!a || !b) {
+        return false;
+    }
+
+    const size_t bytes = flexBytes(a);
+    return bytes == flexBytes(b) && memcmp(a, b, bytes) == 0;
+}
+
 /* ====================================================================
  * Untrusted-input validation
  * ====================================================================
@@ -7418,6 +7434,51 @@ int32_t flexTest(int32_t argc, char **argv) {
                     assert(NULL && "flexIndexWithMiddle diverged!");
                 }
             }
+        }
+        printf("  SUCCESS\n\n");
+    }
+
+    printf("Verify flexEqual compares metadata and entries exactly:\n");
+    {
+        int32_t bad = 0;
+        cleaner(flexFree) flex *a = flexNew();
+        cleaner(flexFree) flex *b = flexNew();
+        if (!flexEqual(a, b) || !flexEqual(a, a)) {
+            printf("  empty flexes should be equal\n");
+            bad++;
+        }
+
+        if (flexEqual(a, NULL) || flexEqual(NULL, a) ||
+            !flexEqual(NULL, NULL)) {
+            printf("  NULL handling wrong\n");
+            bad++;
+        }
+
+        flexPushBytes(&a, "abc", 3, FLEX_ENDPOINT_TAIL);
+        flexPushSigned(&a, -77, FLEX_ENDPOINT_TAIL);
+        flexPushBytes(&b, "abc", 3, FLEX_ENDPOINT_TAIL);
+        if (flexEqual(a, b)) {
+            printf("  differing counts compared equal\n");
+            bad++;
+        }
+
+        flexPushSigned(&b, -77, FLEX_ENDPOINT_TAIL);
+        if (!flexEqual(a, b)) {
+            printf("  identical contents compared unequal\n");
+            bad++;
+        }
+
+        /* Same length, one byte different. */
+        cleaner(flexFree) flex *c = flexNew();
+        flexPushBytes(&c, "abd", 3, FLEX_ENDPOINT_TAIL);
+        flexPushSigned(&c, -77, FLEX_ENDPOINT_TAIL);
+        if (flexBytes(c) != flexBytes(a) || flexEqual(a, c)) {
+            printf("  same-size differing contents compared equal\n");
+            bad++;
+        }
+
+        if (bad) {
+            assert(NULL && "flexEqual mismatch");
         }
         printf("  SUCCESS\n\n");
     }
