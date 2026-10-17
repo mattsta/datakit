@@ -46,13 +46,22 @@ void portableRandom_init(portableRandomState *r, pid_t pid) {
     r->i = 0;
     r->j = 0;
 
-    /* Set indexes 0 to 255 to values 0 to 255 */
+    /* s[] must remain a permutation of 0..255: RC4 outputs s[] entries,
+     * so a missing value can never be emitted and a duplicate is
+     * over-represented. */
     for (size_t i = 0; i < sizeof(r->s); i++) {
         r->s[i] = i;
     }
 
-    /* Attempt to overwrite the initial state with actual random values */
-    portableRandomDirect(r->s, sizeof(r->s));
+    /* Mix OS entropy in through the key schedule, which only swaps
+     * entries and so preserves the permutation (writing entropy straight
+     * into s[] would break it permanently, since later stirs only swap).
+     * The key is zeroed first, so a short read still keys the state, and
+     * the first draw re-keys through portableRandom_stir regardless. */
+    uint8_t key[DK_PR_KEYSIZE] = {0};
+    if (portableRandomDirect(key, sizeof(key)) > 0) {
+        portableRandom_add(r, key, sizeof(key));
+    }
 }
 
 ssize_t portableRandomDirect(void *const dst, const size_t requestedLen) {
