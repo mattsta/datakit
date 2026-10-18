@@ -320,71 +320,97 @@ void GMPZAPI(gcd)(mp_int rop, mp_int op1, mp_int op2) {
     CHECK(mp_int_gcd(op1, op2, rop));
 }
 
-/* gmp: mpz_get_str */
+/* Map a gmp radix (negative means upper-case digits) to an imath radix,
+   or 0 when imath cannot print in that base. */
+static mp_size get_str_radix(int radix) {
+    const int64_t r = radix < 0 ? -(int64_t)radix : (int64_t)radix;
+    if (r < MP_MIN_RADIX || r > MP_MAX_RADIX) {
+        return 0;
+    }
+    return (mp_size)r;
+}
+
+/* Apply gmp's digit case to the characters actually written. The
+   buffer size comes from a length estimate that may over-count, so the
+   terminator, not that estimate, bounds the loop. */
+static void get_str_case(char *str, int radix) {
+    for (char *p = str; *p != '\0'; p++) {
+        const int c = (unsigned char)*p;
+        *p = (char)(radix < 0 ? toupper(c) : tolower(c));
+    }
+}
+
+/* gmp: mpz_get_str. Returns NULL for an unsupported radix, a failed
+   allocation (when str is NULL) or a failed conversion. */
 char *GMPZAPI(get_str)(char *str, int radix, mp_int op) {
-    int i, r, len;
-
-    /* Support negative radix like gmp */
-    r = radix;
-    if (r < 0) {
-        r = -r;
+    const mp_size r = get_str_radix(radix);
+    if (r == 0) {
+        return NULL;
     }
 
-    /* Compute the length of the string needed to hold the int */
-    len = mp_int_string_len(op, r);
-    if (str == NULL) {
-        str = malloc(len);
+    /* The length needed to hold the int, terminator included */
+    const mp_result need = mp_int_string_len(op, r);
+    if (need < 2) {
+        return NULL;
     }
+    const size_t len = (size_t)need;
 
-    /* Convert to string using imath function */
-    CHECK(mp_int_to_string(op, r, str, len));
-
-    /* Change case to match gmp */
-    for (i = 0; i < len - 1; i++) {
-        if (radix < 0) {
-            str[i] = toupper(str[i]);
-        } else {
-            str[i] = tolower(str[i]);
+    char *out = str;
+    if (out == NULL) {
+        out = malloc(len);
+        if (out == NULL) {
+            return NULL;
         }
     }
 
-    return str;
+    if (mp_int_to_string(op, r, out, len) != MP_OK) {
+        if (str == NULL) {
+            free(out);
+        }
+        return NULL;
+    }
+
+    get_str_case(out, radix);
+    return out;
 }
 
-/* gmp: mpq_get_str */
+/* gmp: mpq_get_str. Returns NULL under the same conditions as
+   mpz_get_str. */
 char *GMPQAPI(get_str)(char *str, int radix, mp_rat op) {
-    int i, r, len;
-
     /* Only print numerator if it is a whole number */
     if (mp_int_compare_value(mp_rat_denom_ref(op), 1) == 0) {
         return GMPZAPI(get_str)(str, radix, mp_rat_numer_ref(op));
     }
 
-    /* Support negative radix like gmp */
-    r = radix;
-    if (r < 0) {
-        r = -r;
+    const mp_size r = get_str_radix(radix);
+    if (r == 0) {
+        return NULL;
     }
 
-    /* Compute the length of the string needed to hold the int */
-    len = mp_rat_string_len(op, r);
-    if (str == NULL) {
-        str = malloc(len);
+    /* The length needed to hold the rational, terminator included */
+    const mp_result need = mp_rat_string_len(op, r);
+    if (need < 2) {
+        return NULL;
     }
+    const size_t len = (size_t)need;
 
-    /* Convert to string using imath function */
-    CHECK(mp_rat_to_string(op, r, str, len));
-
-    /* Change case to match gmp */
-    for (i = 0; i < len; i++) {
-        if (radix < 0) {
-            str[i] = toupper(str[i]);
-        } else {
-            str[i] = tolower(str[i]);
+    char *out = str;
+    if (out == NULL) {
+        out = malloc(len);
+        if (out == NULL) {
+            return NULL;
         }
     }
 
-    return str;
+    if (mp_rat_to_string(op, r, out, (int)len) != MP_OK) {
+        if (str == NULL) {
+            free(out);
+        }
+        return NULL;
+    }
+
+    get_str_case(out, radix);
+    return out;
 }
 
 /* gmp: mpz_set_str */
@@ -402,8 +428,12 @@ int GMPQAPI(set_str)(mp_rat rop, char *s, int base) {
     int res = 0;
 
     /* Copy string to temporary storage so we can modify it below */
-    str = malloc(strlen(s) + 1);
-    strcpy(str, s);
+    const size_t len = strlen(s) + 1;
+    str = malloc(len);
+    if (str == NULL) {
+        return -1;
+    }
+    memcpy(str, s, len);
 
     /* Properly format the string as an int by terminating at the / */
     slash = strchr(str, '/');
@@ -754,6 +784,12 @@ void *GMPZAPI(export)(void *rop, size_t *countp, int order, size_t size,
     /* Allocate space for the result if needed */
     if (rop == NULL) {
         rop = malloc(num_words * size);
+        if (rop == NULL) {
+            if (countp) {
+                *countp = 0;
+            }
+            return NULL;
+        }
     }
 
     if (endian == 0) {

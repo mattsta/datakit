@@ -646,8 +646,49 @@ mp_result mp_rat_to_decimal(mp_rat r, mp_size radix, mp_size prec,
         break; /* No action required */
 
     default:
-        return MP_BADARG; /* Invalid rounding specifier */
+        res = MP_BADARG; /* Invalid rounding specifier */
+        goto CLEANUP;
     }
+
+    if (res != MP_OK) {
+        goto CLEANUP;
+    }
+
+    /* Rounding up can carry out of the significant fractional digits
+       (0.96 to one place makes T1 = 10, one digit too many). T1 then
+       equals radix^(prec - lead_0 + 1): absorb the carry into one fewer
+       leading zero, or into the integer part when there are none. */
+    if (prec > 0) {
+        if ((res = mp_int_expt_value(radix, prec - lead_0 + 1, TEMP(2))) !=
+            MP_OK) {
+            goto CLEANUP;
+        }
+
+        if (mp_int_compare(TEMP(1), TEMP(2)) >= 0) {
+            if (lead_0 > 1) {
+                lead_0 -= 1;
+            } else {
+                if ((res = mp_int_add_value(TEMP(0), 1, TEMP(0))) != MP_OK) {
+                    goto CLEANUP;
+                }
+                mp_int_zero(TEMP(1));
+                lead_0 = (int)prec;
+            }
+        }
+    }
+
+    /* Output. left counts the characters still available, including the
+       terminator. Every write checks it first, and on MP_TRUNC the output
+       is left terminated, matching mp_int_to_string(). mp_int_to_string()
+       itself needs a limit of at least 2. */
+    if (left < 2) {
+        if (left == 1) {
+            *start = '\0';
+        }
+        res = MP_TRUNC;
+        goto CLEANUP;
+    }
+    *start = '\0';
 
     /* The sign of the output should be the sign of the numerator, but if all
        the
@@ -656,6 +697,11 @@ mp_result mp_rat_to_decimal(mp_rat r, mp_size radix, mp_size prec,
     if ((MP_SIGN(MP_NUMER_P(r))) == MP_NEG &&
         (mp_int_compare_zero(TEMP(0)) != 0 ||
          mp_int_compare_zero(TEMP(1)) != 0)) {
+        /* The sign, at least one digit and the terminator */
+        if (left < 3) {
+            res = MP_TRUNC;
+            goto CLEANUP;
+        }
         *start++ = '-';
         left -= 1;
     }
@@ -672,16 +718,20 @@ mp_result mp_rat_to_decimal(mp_rat r, mp_size radix, mp_size prec,
         goto CLEANUP;
     }
 
-    *start++ = '.';
-    left -= 1;
-
-    if (left < prec + 1) {
+    /* The point, prec fractional digits and the terminator. On truncation
+       the output stays terminated after the integer part. */
+    if ((int64_t)left < (int64_t)prec + 2) {
         res = MP_TRUNC;
         goto CLEANUP;
     }
 
+    *start++ = '.';
+    left -= 1;
+
+    /* lead_0 - 1 explicit zeros, then the remaining prec - lead_0 + 1
+       significant digits and the terminator, which fit in what is left. */
     memset(start, '0', lead_0 - 1);
-    left -= lead_0;
+    left -= lead_0 - 1;
     start += lead_0 - 1;
 
     res = mp_int_to_string(TEMP(1), radix, start, left);
