@@ -12,8 +12,8 @@
  * reallocate `contents` IN PLACE and NEVER relocate the handle itself.
  *
  * INVARIANT: a pointer to an intsetU32 stays valid across any in-place
- * mutation.  A holder of the handle (the keyspace value slot, a captured
- * ZVM key databox, a deferred persist snapshot reading it later on another
+ * mutation.  A holder of the handle (a value slot in a keyspace, a databox
+ * that captured it, a persist snapshot that reads it later on another
  * thread) may therefore keep the SAME pointer across mutations — the buffer
  * moves underneath the handle, but the handle does not.  This is the same
  * stable-outer-handle contract intsetBig exposes (its {multimap*;count}
