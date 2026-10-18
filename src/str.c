@@ -993,6 +993,54 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("StrAddInt64 / StrSubInt64 / StrMulInt64 detect overflow exactly") {
+        static const struct {
+            char op; /* '+', '-', '*' */
+            int64_t a;
+            int64_t b;
+            bool ok;
+            int64_t want;
+        } cases[] = {
+            {'+', INT64_MAX, 1, false, 0},
+            {'+', INT64_MAX - 1, 1, true, INT64_MAX},
+            {'+', INT64_MIN, -1, false, 0},
+            {'+', INT64_MIN, INT64_MAX, true, -1},
+            {'-', INT64_MIN, 1, false, 0},
+            {'-', 0, INT64_MIN, false, 0},
+            {'-', -1, INT64_MIN, true, INT64_MAX},
+            {'*', 3, 4, true, 12},
+            {'*', -3, 5, true, -15},
+            {'*', INT64_C(1) << 32, INT64_C(1) << 30, true, INT64_C(1) << 62},
+            {'*', INT64_C(3037000499), INT64_C(3037000499), true,
+             INT64_C(9223372030926249001)},
+            {'*', INT64_C(3037000500), INT64_C(3037000500), false, 0},
+            {'*', INT64_MAX, 2, false, 0},
+            {'*', INT64_MIN, -1, false, 0},
+            {'*', INT64_MIN, 1, true, INT64_MIN},
+            {'*', INT64_C(1) << 62, -2, true, INT64_MIN},
+        };
+
+        for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
+            int64_t v = cases[i].a;
+            bool ok;
+            if (cases[i].op == '+') {
+                ok = StrAddInt64(&v, cases[i].b);
+            } else if (cases[i].op == '-') {
+                ok = StrSubInt64(&v, cases[i].b);
+            } else {
+                ok = StrMulInt64(&v, cases[i].b) == 0;
+            }
+
+            const int64_t want = cases[i].ok ? cases[i].want : cases[i].a;
+            if (ok != cases[i].ok || v != want) {
+                ERR("%" PRId64 " %c %" PRId64 ": ok=%d value=%" PRId64
+                    ", want ok=%d value=%" PRId64,
+                    cases[i].a, cases[i].op, cases[i].b, ok, v, cases[i].ok,
+                    want);
+            }
+        }
+    }
+
 #if 1
     TEST("verify empty string doesn't convert to zero") {
         databox got;

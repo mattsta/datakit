@@ -988,40 +988,15 @@ bool StrSubInt64(int64_t *pA, int64_t iB) {
     return StrAddInt64(pA, -iB);
 }
 
-#define TWOPOWER32 (((int64_t)1) << 32)
-#define TWOPOWER31 (((int64_t)1) << 31)
+/* Unlike the add and subtract helpers, returns 0 on success and 1 on
+ * overflow (leaving *pA unchanged), as sqlite3MulInt64 does. */
 int32_t StrMulInt64(int64_t *pA, int64_t iB) {
-    int64_t iA = *pA;
-    int64_t iA1, iA0, iB1, iB0, r;
-
-    iA1 = iA / TWOPOWER32;
-    iA0 = iA % TWOPOWER32;
-    iB1 = iB / TWOPOWER32;
-    iB0 = iB % TWOPOWER32;
-    if (iA1 == 0) {
-        if (iB1 == 0) {
-            *pA *= iB;
-            return 0;
-        }
-
-        r = iA0 * iB1;
-    } else if (iB1 == 0) {
-        r = iA1 * iB0;
-    } else {
-        /* If both iA1 and iB1 are non-zero, overflow will result */
+    int64_t product;
+    if (__builtin_mul_overflow(*pA, iB, &product)) {
         return 1;
     }
 
-    if (r < (-TWOPOWER31) || r >= TWOPOWER31) {
-        return 1;
-    }
-
-    r *= TWOPOWER32;
-    if (StrAddInt64(&r, iA0 * iB0)) {
-        return 1;
-    }
-
-    *pA = r;
+    *pA = product;
     return 0;
 }
 
