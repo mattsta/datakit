@@ -6,7 +6,15 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import allocaudit, leakcheck, perfdiff, toolchain, validate, verify
+from . import (
+    allocaudit,
+    leakcheck,
+    perfdiff,
+    toolchain,
+    validate,
+    vendorsync,
+    verify,
+)
 from .gitutil import ToolError
 
 
@@ -199,6 +207,37 @@ def main(argv: list[str] | None = None) -> int:
     va.add_argument("-j", "--jobs", type=int, default=None, help="parallel jobs")
     toolchain.add_arguments(va)
 
+    vs = sub.add_parser(
+        "vendorsync",
+        help="mirror a vendored dependency from its upstream repository "
+        "(exit 0 synced, 1 refused, 2 input error)",
+    )
+    vs.add_argument(
+        "name", help=f"vendored dependency ({', '.join(vendorsync.VENDORED)})"
+    )
+    vs.add_argument(
+        "--upstream", type=Path, required=True, help="upstream git checkout"
+    )
+    vs.add_argument("--rev", default="HEAD", help="upstream revision (default HEAD)")
+    vs.add_argument(
+        "--stage",
+        action="store_true",
+        help="stage exactly the paths whose index entry differs from upstream",
+    )
+    vs.add_argument(
+        "--accept-local-loss",
+        action="store_true",
+        help="overwrite datakit versions that never existed upstream",
+    )
+    vs.add_argument(
+        "--force-ignored",
+        action="store_true",
+        help="with --stage, git add -f the upstream files .gitignore hides",
+    )
+    vs.add_argument(
+        "--dry-run", action="store_true", help="report only; write and stage nothing"
+    )
+
     args = parser.parse_args(argv)
 
     try:
@@ -213,6 +252,18 @@ def _split(value: str) -> list[str]:
 
 
 def _dispatch(args: argparse.Namespace) -> int:
+    if args.command == "vendorsync":
+        return vendorsync.run(
+            args.repo,
+            args.name,
+            args.upstream,
+            rev=args.rev,
+            do_stage=args.stage,
+            accept_local_loss=args.accept_local_loss,
+            force_ignored=args.force_ignored,
+            dry_run=args.dry_run,
+        )
+
     if args.command == "validate":
         return validate.run(
             args.repo,

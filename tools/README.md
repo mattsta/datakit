@@ -155,6 +155,38 @@ uv run --project tools dktools leakcheck --tree         # every tracked file
   terms match with a space, hyphen, underscore or nothing between the
   words.
 
+## vendorsync — mirror a vendored dependency
+
+Makes a vendored tree hold exactly its upstream's tracked files at a
+revision (supported: `varint`, at `deps/varint`):
+
+```sh
+uv run --project tools dktools vendorsync varint --upstream DIR [--rev REV] \
+    [--stage] [--accept-local-loss] [--force-ignored] [--dry-run]
+```
+
+- Adds new files, rewrites changed ones (content and executable bit),
+  and deletes files datakit tracks there that upstream no longer has.
+  Upstream content comes from `git ls-tree` and `git cat-file`, so
+  upstream export attributes cannot alter it. A second run at the same
+  revision writes nothing.
+- Before writing, every datakit version the sync replaces (HEAD,
+  index and working tree) is looked up in upstream's whole history.
+  One upstream never had is a datakit-local edit: it is printed with
+  its diff against the upstream revision, and the sync refuses
+  (exit 1) unless `--accept-local-loss` is given.
+- Upstream files that datakit's `.gitignore` hides are written but
+  listed separately, since `git add` would skip them silently;
+  `--stage --force-ignored` stages them with `git add -f`.
+- `--stage` stages exactly the paths whose index entry differs from
+  upstream, by explicit path. Without it the files are written and
+  listed; `--dry-run` writes and stages nothing.
+- Prints the upstream revision and subject, then added, modified and
+  deleted counts for the working tree (this run's writes) and against
+  the index (what `--stage` stages), the ignored files, and any
+  untracked extras (not upstream, left alone). Exits 0 on success, 1
+  on a refusal, 2 on an input error.
+
 ## perfdiff — perf regression comparison
 
 Compares two `perfRegression` TSV outputs row by row, keyed on
