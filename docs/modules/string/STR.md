@@ -275,11 +275,13 @@ SWAR digit generation works and when the table variant is preferable.
 /* Fastest - no checks, must be all digits */
 uint64_t StrBufToUInt64Fast(const void *buf, size_t len);
 
-/* With numeric validation */
+/* With numeric validation: false on a non-digit or a value above
+ * UINT64_MAX; leading zeros are allowed */
 bool StrBufToUInt64FastCheckNumeric(const void *buf, size_t len,
                                     uint64_t *value);
 
-/* With overflow checking */
+/* With overflow checking only (bytes must be digits): false, with
+ * *value = UINT64_MAX, for a value above UINT64_MAX */
 bool StrBufToUInt64FastCheckOverflow(const void *buf, size_t len,
                                      uint64_t *value);
 

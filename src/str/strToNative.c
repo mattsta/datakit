@@ -115,24 +115,13 @@ bool StrBufToUInt64(const void *s, const size_t slen,
     }
 
     for (; (plen < slen) && (p[0] >= '0' && p[0] <= '9'); plen++, p++) {
-#if 0
-        /* Slower... */
-        if (__builtin_mul_overflow(v, 10ULL, &v) ||
-            __builtin_add_overflow(v, pDeref & 0x0FULL, &v)) {
+        /* A wrapped v*10+d can still be >= the previous v (2050000000000000000
+         * becomes 2053255926290448384 on its twentieth digit), so a "got
+         * smaller" test misses overflow: check each step exactly. */
+        if (__builtin_mul_overflow(v, UINT64_C(10), &v) ||
+            __builtin_add_overflow(v, (uint64_t)(p[0] - '0'), &v)) {
             return false;
         }
-#else
-        const uint64_t before = v;
-
-        v = v * 10ULL + p[0] - '0';
-
-        /* If we added the current character, but got *smaller*,
-         * we wrapped around. */
-        if (v < before) {
-            /* overflow */
-            return false;
-        }
-#endif
     }
 
     /* Return error if not all bytes were used. */
@@ -235,7 +224,10 @@ bool StrBufToUInt64FastCheckNumeric(const void *restrict buf_, size_t len,
     for (size_t i = 0; i < len; i++, buf++) {
         const char thing = *buf;
         if (likely(thing >= '0' && thing <= '9')) {
-            *ret = (*ret * 10ULL) + (thing - '0');
+            if (__builtin_mul_overflow(*ret, UINT64_C(10), ret) ||
+                __builtin_add_overflow(*ret, (uint64_t)(thing - '0'), ret)) {
+                return false; /* above UINT64_MAX */
+            }
         } else {
             return false;
         }
@@ -250,13 +242,10 @@ bool StrBufToUInt64FastCheckOverflow(const void *buf_, const size_t len,
     uint64_t ret = 0;
 
     for (size_t i = 0; i < len; i++, buf++) {
-        const uint64_t before = ret;
-        ret = (ret * 10ULL) + (*buf - '0');
-
-        /* If value got smaller after addition, we wrapped
-         * around and our integer parsing is no longer valid. */
-        if (ret < before) {
-            /* You want overflow let's just give you a biiiig value. */
+        /* Exact overflow check: a wrapped ret*10+d is not always smaller
+         * than the previous ret */
+        if (__builtin_mul_overflow(ret, UINT64_C(10), &ret) ||
+            __builtin_add_overflow(ret, (uint64_t)(*buf - '0'), &ret)) {
             *value = UINT64_MAX;
             return false;
         }

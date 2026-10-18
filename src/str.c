@@ -466,6 +466,82 @@ DK_FN_NO_OPTIMIZE static void testStrBufToUInt64(void) {
     strcpy(buf, "18446744073709551615");
     assert(StrBufToUInt64(buf, strlen(buf), &v) == true);
     assert(v == UINT64_MAX);
+
+    /* Values above UINT64_MAX are refused, including those whose wrapped
+     * v*10+d is not smaller than v (2050000000000000000 * 10 wraps to
+     * 2053255926290448384) */
+    static const char *const above[] = {
+        "18446744073709551616", /* UINT64_MAX + 1 */
+        "18446744073709551619",  "18446744073709551620",
+        "20500000000000000000",  "36893488147419103232",  /* 2^65 */
+        "99999999999999999999",  "184467440737095516150", /* UINT64_MAX*10 */
+        "100000000000000000000",                          /* 21 digits */
+    };
+    for (size_t i = 0; i < sizeof(above) / sizeof(*above); i++) {
+        v = 12345;
+        if (StrBufToUInt64(above[i], strlen(above[i]), &v) || v != 12345) {
+            printf("StrBufToUInt64 accepted %s\n", above[i]);
+            assert(NULL);
+        }
+
+        uint64_t n = 0;
+        if (StrBufToUInt64FastCheckNumeric(above[i], strlen(above[i]), &n)) {
+            printf("StrBufToUInt64FastCheckNumeric accepted %s\n", above[i]);
+            assert(NULL);
+        }
+
+        n = 0;
+        if (StrBufToUInt64FastCheckOverflow(above[i], strlen(above[i]), &n) ||
+            n != UINT64_MAX) {
+            printf("StrBufToUInt64FastCheckOverflow accepted %s\n", above[i]);
+            assert(NULL);
+        }
+    }
+
+    /* The largest 20-digit values in range, and 19-digit ones near 10^19 */
+    static const struct {
+        const char *s;
+        uint64_t want;
+    } edge[] = {
+        {"18446744073709551614", UINT64_MAX - 1},
+        {"18446744073709551610", UINT64_MAX - 5},
+        {"10000000000000000000", UINT64_C(10000000000000000000)},
+        {"9999999999999999999", UINT64_C(9999999999999999999)},
+        {"1844674407370955161", UINT64_MAX / 10},
+        {"10", 10},
+    };
+    for (size_t i = 0; i < sizeof(edge) / sizeof(*edge); i++) {
+        const size_t len = strlen(edge[i].s);
+        uint64_t a = 0;
+        uint64_t b = 0;
+        uint64_t c = 0;
+        if (!StrBufToUInt64(edge[i].s, len, &a) || a != edge[i].want ||
+            !StrBufToUInt64FastCheckNumeric(edge[i].s, len, &b) ||
+            b != edge[i].want ||
+            !StrBufToUInt64FastCheckOverflow(edge[i].s, len, &c) ||
+            c != edge[i].want) {
+            printf("StrBufToUInt64 family misparsed %s\n", edge[i].s);
+            assert(NULL);
+        }
+    }
+
+    /* Grammar: leading zeros, signs and non-digits fail; only the
+     * FastCheck parsers allow leading zeros */
+    static const char *const malformed[] = {
+        "", "00", "007", "-1", "-0", "1a", "a1", "1.0", "1e3", "1-", "1 2"};
+    for (size_t i = 0; i < sizeof(malformed) / sizeof(*malformed); i++) {
+        v = 12345;
+        if (StrBufToUInt64(malformed[i], strlen(malformed[i]), &v) ||
+            v != 12345) {
+            printf("StrBufToUInt64 accepted '%s'\n", malformed[i]);
+            assert(NULL);
+        }
+    }
+
+    uint64_t lz = 0;
+    assert(StrBufToUInt64FastCheckNumeric("007", 3, &lz) && lz == 7);
+    assert(!StrBufToUInt64FastCheckNumeric("0x7", 3, &lz));
+    (void)lz;
 }
 
 static void testStrInt64ToBuf(size_t (*strFn)(void *, size_t, int64_t)) {
