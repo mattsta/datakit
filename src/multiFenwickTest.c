@@ -639,6 +639,99 @@ int multiFenwickTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("wide: 96/128-bit values are refused and never stored") {
+        /* The sums have no wide arithmetic, so every entry point refuses
+         * a 96/128-bit value, with or without a payload, and leaves the
+         * tree as it was. */
+        databoxBig wideS;
+        databoxBig wideU;
+        memset(&wideS, 0, sizeof(wideS));
+        memset(&wideU, 0, sizeof(wideU));
+        DATABOX_BIG_SIGNED_128(&wideS, -((__int128_t)1 << 100));
+        DATABOX_BIG_UNSIGNED_128(&wideU, ((__uint128_t)1 << 64) + 5);
+        databox deferred = {{0}};
+        deferred.type = DATABOX_SIGNED_128; /* no payload: data.ptr NULL */
+        const databox *wides[3] = {(const databox *)&wideS,
+                                   (const databox *)&wideU, &deferred};
+
+        /* A refused first update creates no tree. */
+        multiFenwick *none = NULL;
+        if (multiFenwickUpdate(&none, 3, wides[0]) || none) {
+            ERRR("Update accepted a wide delta into an empty tree");
+        }
+        multiFenwickFree(none);
+
+        enum { WIDE_N = 8 };
+        const int64_t vals[WIDE_N] = {5, 2, 8, 1, 9, 3, 7, 4};
+        databox values[WIDE_N];
+        for (size_t i = 0; i < WIDE_N; i++) {
+            values[i] = DATABOX_SIGNED(vals[i]);
+        }
+
+        cleaner(multiFenwickFree) multiFenwick *mfw =
+            multiFenwickNewFromArray(values, WIDE_N);
+        if (!mfw) {
+            ERRR("NewFromArray of 64-bit values failed");
+        } else {
+            for (size_t w = 0; w < 3; w++) {
+                const databox *wide = wides[w];
+                for (size_t i = 0; i < WIDE_N; i++) {
+                    if (multiFenwickUpdate(&mfw, i, wide)) {
+                        ERR("wide %zu: Update(%zu) accepted it", w, i);
+                    }
+
+                    if (multiFenwickSet(&mfw, i, wide)) {
+                        ERR("wide %zu: Set(%zu) accepted it", w, i);
+                    }
+                }
+
+                if (multiFenwickUpdate(&mfw, 4 * WIDE_N, wide) ||
+                    multiFenwickCount(mfw) != WIDE_N) {
+                    ERR("wide %zu: an update past the end was not refused "
+                        "cleanly",
+                        w);
+                }
+
+                if (multiFenwickLowerBound(mfw, wide) != SIZE_MAX) {
+                    ERR("wide %zu: LowerBound did not refuse it", w);
+                }
+
+                /* A wide value anywhere in the array refuses the array. */
+                databox mixed[WIDE_N];
+                memcpy(mixed, values, sizeof(mixed));
+                mixed[w == 1 ? WIDE_N - 1 : w] = *wide;
+                cleaner(multiFenwickFree) multiFenwick *bad =
+                    multiFenwickNewFromArray(mixed, WIDE_N);
+                if (bad) {
+                    ERR("wide %zu: NewFromArray accepted it", w);
+                }
+            }
+
+            /* The tree is unchanged, and still only 64-bit. */
+            int64_t sum = 0;
+            for (size_t i = 0; i < WIDE_N; i++) {
+                sum += vals[i];
+                const databox wantVal = DATABOX_SIGNED(vals[i]);
+                const databox wantSum = DATABOX_SIGNED(sum);
+                databox got;
+                databox query;
+                if (!multiFenwickGet(mfw, i, &got) ||
+                    databoxCompareNumeric(&got, &wantVal) != 0 ||
+                    got.type == DATABOX_SIGNED_128 ||
+                    got.type == DATABOX_UNSIGNED_128) {
+                    ERR("element %zu changed (want %" PRId64 ")", i, vals[i]);
+                }
+
+                if (!multiFenwickQuery(mfw, i, &query) ||
+                    databoxCompareNumeric(&query, &wantSum) != 0 ||
+                    query.type == DATABOX_SIGNED_128 ||
+                    query.type == DATABOX_UNSIGNED_128) {
+                    ERR("prefix sum %zu changed (want %" PRId64 ")", i, sum);
+                }
+            }
+        }
+    }
+
     /* =================================================================
      * CATEGORY 6: STRESS TESTS (3 tests)
      * ================================================================= */

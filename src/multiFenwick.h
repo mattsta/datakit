@@ -103,6 +103,10 @@
  * - Does not support minimum/maximum queries (use segment tree)
  * - Requires non-negative indices
  * - All values must be numeric databox types
+ * - 96/128-bit values (SIGNED_128, UNSIGNED_128) are not supported: the
+ *   sums have no wide arithmetic.  They are refused on the way in
+ *   (Update and Set return false, NewFromArray returns NULL, LowerBound
+ *   returns SIZE_MAX), so no wide value is ever stored or returned.
  */
 
 /* Opaque multiFenwick tree type */
@@ -117,7 +121,7 @@ multiFenwick *multiFenwickNew(void);
 
 /* Create multiFenwick tree from databox array
  * Time: O(n log n) via repeated updates
- * Returns NULL on allocation failure
+ * Returns NULL on allocation failure, or if any value is 96/128-bit
  * All databoxes should be the same numeric type */
 multiFenwick *multiFenwickNewFromArray(const databox *values, size_t count);
 
@@ -133,7 +137,8 @@ void multiFenwickFree(multiFenwick *mfw);
  * mfw: pointer-to-pointer (may upgrade tier)
  * idx: 0-based index
  * delta: databox value to add (can be negative for signed types)
- * Returns true on success, false on allocation failure or invalid type */
+ * Returns true on success, false on allocation failure or invalid type
+ * (a 96/128-bit delta is refused before anything changes) */
 bool multiFenwickUpdate(multiFenwick **mfw, size_t idx, const databox *delta);
 
 /* Query: compute prefix sum [0, idx]
@@ -163,7 +168,7 @@ bool multiFenwickGet(const multiFenwick *mfw, size_t idx, databox *result);
 /* Set single element to exact value (not delta)
  * Time: O(log n)
  * Computes delta = value - get(idx), then updates
- * Returns true on success */
+ * Returns true on success, false for a 96/128-bit value (nothing changes) */
 bool multiFenwickSet(multiFenwick **mfw, size_t idx, const databox *value);
 
 /* ====================================================================
@@ -182,7 +187,8 @@ size_t multiFenwickBytes(const multiFenwick *mfw);
 
 /* Find smallest index with cumulative sum >= target
  * Time: O(log^2 n) naive, O(log n) with binary lifting
- * Returns SIZE_MAX if no such index exists or tree is empty
+ * Returns SIZE_MAX if no such index exists, the tree is empty, or 'target'
+ * is 96/128-bit
  * Requires non-negative values for correctness
  * Comparison uses databox comparison logic */
 size_t multiFenwickLowerBound(const multiFenwick *mfw, const databox *target);

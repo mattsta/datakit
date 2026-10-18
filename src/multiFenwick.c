@@ -21,6 +21,26 @@ struct multiFenwick {
     mflexState *state; /* State for multilist operations */
 };
 
+/* The sums run through databoxAdd / databoxSubtract, which have no
+ * 96/128-bit arithmetic, so wide values are refused at every entry
+ * point (Update, Set, NewFromArray, LowerBound). */
+static inline bool multiFenwickIsWide_(const databox *box) {
+    return box->type == DATABOX_SIGNED_128 || box->type == DATABOX_UNSIGNED_128;
+}
+
+/* Read the BIT cell at 0-based position 'pos' into 'entry'.  Cells only
+ * ever hold 64-bit and floating-point values (wide values are refused on
+ * the way in), so a cell never decodes deferred.  A deferred box is still
+ * refused here: it has no payload, and the arithmetic must never see it. */
+static inline bool multiFenwickCellGet_(const multiFenwick *mfw, uint64_t pos,
+                                        multilistEntry *entry) {
+    if (!multilistIndex(mfw->tree, mfw->state, (mlOffsetId)pos, entry, true)) {
+        return false;
+    }
+
+    return !databoxIsWideDeferred(&entry->box);
+}
+
 /* Create new multiFenwick tree */
 multiFenwick *multiFenwickNew(void) {
     /* multiFenwickFree NULL-checks each member, so the cleaner is safe
@@ -62,6 +82,12 @@ multiFenwick *multiFenwickNewFromArray(const databox *values, size_t count) {
         return multiFenwickNew();
     }
 
+    for (size_t i = 0; i < count; i++) {
+        if (multiFenwickIsWide_(&values[i])) {
+            return NULL;
+        }
+    }
+
     cleaner(multiFenwickFree) multiFenwick *mfw = multiFenwickNew();
     if (!mfw) {
         return NULL;
@@ -101,7 +127,7 @@ multiFenwick *multiFenwickNewFromArray(const databox *values, size_t count) {
         while (idx <= capacity) {
             /* Get current value at BIT position idx */
             multilistEntry entry;
-            if (multilistIndex(mfw->tree, mfw->state, idx - 1, &entry, true)) {
+            if (multiFenwickCellGet_(mfw, idx - 1, &entry)) {
                 /* Add values[i] to current BIT value */
                 databox newVal;
                 if (!databoxAdd(&entry.box, &values[i], &newVal)) {
@@ -197,7 +223,7 @@ static bool multiFenwickEnsureCapacity(multiFenwick *mfw, uint64_t idx) {
             if (pos == 1) {
                 /* First element is just query(0) */
                 multilistEntry entry;
-                if (multilistIndex(mfw->tree, mfw->state, 0, &entry, true)) {
+                if (multiFenwickCellGet_(mfw, 0, &entry)) {
                     value = entry.box;
                 } else {
                     continue;
@@ -211,8 +237,7 @@ static bool multiFenwickEnsureCapacity(multiFenwick *mfw, uint64_t idx) {
                 uint64_t p = pos;
                 while (p > 0 && p <= oldCapacity) {
                     multilistEntry entry;
-                    if (multilistIndex(mfw->tree, mfw->state, p - 1, &entry,
-                                       true)) {
+                    if (multiFenwickCellGet_(mfw, p - 1, &entry)) {
                         databox temp;
                         if (!databoxAdd(&sumPos, &entry.box, &temp)) {
                             continue;
@@ -226,8 +251,7 @@ static bool multiFenwickEnsureCapacity(multiFenwick *mfw, uint64_t idx) {
                 p = pos - 1;
                 while (p > 0 && p <= oldCapacity) {
                     multilistEntry entry;
-                    if (multilistIndex(mfw->tree, mfw->state, p - 1, &entry,
-                                       true)) {
+                    if (multiFenwickCellGet_(mfw, p - 1, &entry)) {
                         databox temp;
                         if (!databoxAdd(&sumPrev, &entry.box, &temp)) {
                             continue;
@@ -249,8 +273,7 @@ static bool multiFenwickEnsureCapacity(multiFenwick *mfw, uint64_t idx) {
                 if (parent > oldCapacity) {
                     /* This parent is in the newly allocated range */
                     multilistEntry entry;
-                    if (multilistIndex(mfw->tree, mfw->state, parent - 1,
-                                       &entry, true)) {
+                    if (multiFenwickCellGet_(mfw, parent - 1, &entry)) {
                         databox newVal;
                         if (databoxAdd(&entry.box, &value, &newVal)) {
                             multilistReplaceByTypeAtIndex(
@@ -268,7 +291,7 @@ static bool multiFenwickEnsureCapacity(multiFenwick *mfw, uint64_t idx) {
 
 /* Update: add delta to element at idx */
 bool multiFenwickUpdate(multiFenwick **mfw, size_t idx, const databox *delta) {
-    if (!mfw || !delta) {
+    if (!mfw || !delta || multiFenwickIsWide_(delta)) {
         return false;
     }
 
@@ -293,7 +316,7 @@ bool multiFenwickUpdate(multiFenwick **mfw, size_t idx, const databox *delta) {
     while (i <= tree->capacity) {
         /* Get current value at BIT position i */
         multilistEntry entry;
-        if (!multilistIndex(tree->tree, tree->state, i - 1, &entry, true)) {
+        if (!multiFenwickCellGet_(tree, i - 1, &entry)) {
             return false;
         }
 
@@ -329,7 +352,7 @@ bool multiFenwickQuery(const multiFenwick *mfw, size_t idx, databox *result) {
 
     /* Get a zero value of the right type */
     multilistEntry entry;
-    if (!multilistIndex(mfw->tree, mfw->state, 0, &entry, true)) {
+    if (!multiFenwickCellGet_(mfw, 0, &entry)) {
         *result = DATABOX_BOX_VOID;
         return false;
     }
@@ -339,7 +362,7 @@ bool multiFenwickQuery(const multiFenwick *mfw, size_t idx, databox *result) {
 
     /* BIT query: traverse downward subtracting LSB */
     while (i > 0) {
-        if (multilistIndex(mfw->tree, mfw->state, i - 1, &entry, true)) {
+        if (multiFenwickCellGet_(mfw, i - 1, &entry)) {
             databox temp;
             if (!databoxAdd(&sum, &entry.box, &temp)) {
                 *result = DATABOX_BOX_VOID;
@@ -429,7 +452,7 @@ bool multiFenwickGet(const multiFenwick *mfw, size_t idx, databox *result) {
 
 /* Set single element to exact value */
 bool multiFenwickSet(multiFenwick **mfw, size_t idx, const databox *value) {
-    if (!mfw || !value) {
+    if (!mfw || !value || multiFenwickIsWide_(value)) {
         return false;
     }
 
@@ -481,7 +504,7 @@ size_t multiFenwickBytes(const multiFenwick *mfw) {
 /* Lower bound search - O(log²n) implementation using binary search on queries
  * Simpler and more reliable than binary lifting on BIT values */
 size_t multiFenwickLowerBound(const multiFenwick *mfw, const databox *target) {
-    if (!mfw || !target || mfw->count == 0) {
+    if (!mfw || !target || mfw->count == 0 || multiFenwickIsWide_(target)) {
         return SIZE_MAX;
     }
 
@@ -527,7 +550,7 @@ void multiFenwickClear(multiFenwick *mfw) {
     databox zero = DATABOX_SIGNED(0);
     if (mfw->count > 0) {
         multilistEntry entry;
-        if (multilistIndex(mfw->tree, mfw->state, 0, &entry, true)) {
+        if (multiFenwickCellGet_(mfw, 0, &entry)) {
             zero = databoxZeroLike(&entry.box);
         }
     }
