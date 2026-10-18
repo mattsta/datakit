@@ -752,6 +752,51 @@ DK_FN_UNUSED static bool osrParseKernelU64_(const char *s, uint64_t max,
     return true;
 }
 
+/* The resident set size, in pages, from the text of a /proc/<pid>/stat
+ * file: field 24.  Field 2 (comm) is the executable name in parentheses
+ * and may itself hold spaces and ')', so fields are counted from the
+ * LAST ')' in the line, after which every field is a space-separated
+ * token.  Writes *pages and returns true only when field 24 is an
+ * unsigned decimal of at most 'maxPages'. */
+DK_FN_UNUSED static bool
+osrProcStatRssPages_(const char *stat, uint64_t maxPages, uint64_t *pages) {
+    const char *p = strrchr(stat, ')');
+    if (!p) {
+        return false;
+    }
+
+    p++;
+    for (int field = 3; field <= 24; field++) {
+        if (*p != ' ') {
+            return false;
+        }
+
+        p++;
+        const char *const start = p;
+        while (*p != '\0' && *p != ' ' && *p != '\n') {
+            p++;
+        }
+
+        if (p == start) {
+            return false;
+        }
+
+        if (field == 24) {
+            char digits[24];
+            const size_t n = (size_t)(p - start);
+            if (n >= sizeof(digits)) {
+                return false;
+            }
+
+            memcpy(digits, start, n);
+            digits[n] = '\0';
+            return osrParseKernelU64_(digits, maxPages, pages);
+        }
+    }
+
+    return false;
+}
+
 /* ====================================================================
  * Networking
  * ==================================================================== */
@@ -1092,14 +1137,10 @@ size_t OSRegualteLinuxSmapPrivateDirtyGet(int64_t pid) {
 #include <unistd.h>
 
 size_t OSRegulateRSSGet(void) {
-    int page = sysconf(_SC_PAGESIZE);
-    size_t rss;
+    const int64_t page = sysconf(_SC_PAGESIZE);
     char buf[4096];
     char filename[256];
     int fd;
-    int count;
-    char *p;
-    char *x;
 
     if (page <= 0) {
         return 0;
@@ -1110,7 +1151,7 @@ size_t OSRegulateRSSGet(void) {
         return 0;
     }
 
-    /* Leave room to terminate: the field scan below uses strchr */
+    /* Leave room to terminate: the field scan uses string functions */
     const ssize_t got = read(fd, buf, sizeof(buf) - 1);
     if (got <= 0) {
         close(fd);
@@ -1120,33 +1161,12 @@ size_t OSRegulateRSSGet(void) {
     close(fd);
     buf[got] = '\0';
 
-    p = buf;
-    count = 23; /* RSS is the 24th field in /proc/<pid>/stat */
-    while (p && count--) {
-        p = strchr(p, ' ');
-        if (p) {
-            p++;
-        }
-    }
-
-    if (!p) {
-        return 0;
-    }
-
-    x = strchr(p, ' ');
-    if (!x) {
-        return 0;
-    }
-
-    *x = '\0';
-
     uint64_t pages = 0;
-    if (!osrParseKernelU64_(p, SIZE_MAX / (size_t)page, &pages)) {
-        return 0; /* malformed field: RSS unknown */
+    if (!osrProcStatRssPages_(buf, SIZE_MAX / (size_t)page, &pages)) {
+        return 0; /* malformed stat line: RSS unknown */
     }
 
-    rss = (size_t)pages * (size_t)page;
-    return rss;
+    return (size_t)pages * (size_t)page;
 }
 #elif defined(HAVE_TASKINFO)
 #include <mach/mach_init.h>
@@ -1158,21 +1178,20 @@ size_t OSRegulateRSSGet(void) {
 #include <unistd.h>
 
 size_t OSRegulateRSSGet(void) {
-    task_t task = MACH_PORT_NULL;
-    struct task_basic_info t_info = {0};
-    mach_msg_type_number_t t_info_count = TASK_BASIC_INFO_COUNT;
-
-    if (task_for_pid(current_task(), getpid(), &task) != KERN_SUCCESS) {
+    /* mach_task_self() is this task's cached send right; unlike a
+     * task_for_pid() lookup it takes no new port reference to release */
+    struct mach_task_basic_info info = {0};
+    mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t)&info,
+                  &count) != KERN_SUCCESS) {
         return 0;
     }
 
-    task_info(task, TASK_BASIC_INFO, (task_info_t)&t_info, &t_info_count);
-
-    return t_info.resident_size;
+    return (size_t)info.resident_size;
 }
 #else
 size_t OSRegulateRSSGet(void) {
-    return -1;
+    return 0; /* unknown, as on any error */
 }
 #endif
 
@@ -1339,3 +1358,83 @@ bool OSRegulateNetworkIsAllIPv6(const struct sockaddr_in6 *const sa6) {
 
     return true;
 }
+
+#ifdef DATAKIT_TEST
+#include "ctest.h"
+
+/* Deterministic checks of the kernel-file parsers on synthetic input;
+ * nothing here reads /proc or needs privileges */
+int OSRegulateTest(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+    int err = 0;
+
+    TEST("/proc/<pid>/stat RSS field, comm with spaces and parentheses") {
+        /* Fields 3..23 are filler ("S", then 1 to 20); field 24 (RSS) is
+         * the value under test.  Each comm holds what a naive space count
+         * trips on. */
+        static const struct {
+            const char *comm;
+            const char *rss;
+            uint64_t max;
+            bool ok;
+            uint64_t want;
+        } cases[] = {
+            {"(cat)", "4321", UINT64_MAX, true, 4321},
+            {"(my prog)", "777", UINT64_MAX, true, 777},
+            {"(a b c d e f g h)", "5", UINT64_MAX, true, 5},
+            {"(evil) 1 2 3)", "99", UINT64_MAX, true, 99},
+            {"((nested) (x))", "123456789", UINT64_MAX, true, 123456789},
+            {"())", "0", UINT64_MAX, true, 0},
+            {"( )", "18446744073709551615", UINT64_MAX, true, UINT64_MAX},
+            {"(big)", "18446744073709551616", UINT64_MAX, false, 0},
+            {"(cap)", "1001", 1000, false, 0},
+            {"(neg)", "-1", UINT64_MAX, false, 0},
+            {"(junk)", "12x", UINT64_MAX, false, 0},
+        };
+
+        for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
+            char line[256];
+            snprintf(line, sizeof(line),
+                     "4242 %s S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 "
+                     "19 20 %s 22 23\n",
+                     cases[i].comm, cases[i].rss);
+
+            uint64_t pages = 31337;
+            const bool ok = osrProcStatRssPages_(line, cases[i].max, &pages);
+            if (ok != cases[i].ok || (ok && pages != cases[i].want) ||
+                (!ok && pages != 31337)) {
+                ERR("stat line '%s': ok=%d pages=%" PRIu64 ", want ok=%d "
+                    "pages=%" PRIu64,
+                    line, ok, pages, cases[i].ok, cases[i].want);
+            }
+        }
+
+        /* Lines that end too early or have no comm at all */
+        static const char *const malformed[] = {
+            "",
+            "4242 cat S 1 2 3",
+            "4242 (cat) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20",
+            "4242 (cat)  S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 "
+            "21 22",
+            "4242 (cat)S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 "
+            "21 22",
+        };
+        for (size_t i = 0; i < sizeof(malformed) / sizeof(*malformed); i++) {
+            uint64_t pages = 31337;
+            if (osrProcStatRssPages_(malformed[i], UINT64_MAX, &pages) ||
+                pages != 31337) {
+                ERR("malformed stat line '%s' parsed", malformed[i]);
+            }
+        }
+    }
+
+    TEST("this process has a resident set") {
+        if (OSRegulateRSSGet() == 0) {
+            ERRR("OSRegulateRSSGet returned 0 for a running process");
+        }
+    }
+
+    TEST_FINAL_RESULT;
+}
+#endif

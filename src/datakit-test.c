@@ -11980,9 +11980,9 @@ static const TestEntry testRegistry[] = {
     /* Utilities */
     T(util), T_ADJ(databox), T_ADJ(databoxLinear), T(offsetArray), T(multiheap),
     T_ADJ(membound), T_ADJ(memtest), T_ADJ(bbits), T_ADJ(ulid), T(persist),
-    T_A(persistCtx, "pctx"), T_A(multimapP, "mmP"), T_A(multilistP, "mlP"),
-    T_A(multidictP, "mdP"), T_A(flexP, "fP"), T_A(intsetP, "isP"),
-    T_A(multiOrderedSetP, "mosP"), T_A(multiroarP, "mrP"),
+    T(OSRegulate), T_A(persistCtx, "pctx"), T_A(multimapP, "mmP"),
+    T_A(multilistP, "mlP"), T_A(multidictP, "mdP"), T_A(flexP, "fP"),
+    T_A(intsetP, "isP"), T_A(multiOrderedSetP, "mosP"), T_A(multiroarP, "mrP"),
     T_A(multilruP, "mlruP"),
 
     /* Distributed / Cluster */

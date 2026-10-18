@@ -177,3 +177,7 @@ bool OSRegulateNetworkIsPrivateIPv6(const struct sockaddr_in6 *sa6);
 bool OSRegulateNetworkIsAll(const struct addrinfo *ai);
 bool OSRegulateNetworkIsAllIPv4(const struct sockaddr_in *sa);
 bool OSRegulateNetworkIsAllIPv6(const struct sockaddr_in6 *sa6);
+
+#ifdef DATAKIT_TEST
+int OSRegulateTest(int argc, char *argv[]);
+#endif
