@@ -463,6 +463,25 @@ multilistFull *multilistFullAppendValuesFromFlex(multilistFull *ml,
     return ml;
 }
 
+/* Concatenate every node, in order, into one new flex.  A compressed node
+ * is opened into 'state' and copied out before the next node reuses it.
+ *
+ * Returns a new flex; release with flexFree(). */
+flex *multilistFullDump(const multilistFull *ml, mflexState *state) {
+    if (ml->count == 1) {
+        /* @own: caller; free=flexFree */
+        return flexDuplicate(mflexOpenReadOnly(getNode(0), state));
+    }
+
+    /* @own: caller; free=flexFree */
+    flex *all = flexNew();
+    for (mlNodeId i = 0; i < ml->count; i++) {
+        flexBulkAppendFlex(&all, mflexOpenReadOnly(getNode(i), state));
+    }
+
+    return all;
+}
+
 /* Create new (potentially multi-node) multilistFull from
  * a single existing flex.
  *

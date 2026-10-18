@@ -506,6 +506,7 @@ bool multilistSmallPop(multilistSmall *ml, databox *box, bool fromTail);
 bool multilistSmallIndex(multilistSmall *ml, mlOffsetId index,
                          multilistEntry *entry);
 void multilistSmallRotate(multilistSmall *ml);
+flex *multilistSmallDump(const multilistSmall *ml);
 ```
 
 ### Medium-Specific (`multilistMedium.h`)
@@ -516,6 +517,7 @@ void multilistMediumPushByTypeHead(multilistMedium *ml, const databox *box);
 void multilistMediumPushByTypeTail(multilistMedium *ml, const databox *box);
 bool multilistMediumPop(multilistMedium *ml, databox *box, bool fromTail);
 void multilistMediumRotate(multilistMedium *ml);
+flex *multilistMediumDump(const multilistMedium *ml);
 ```
 
 ### Full-Specific (`multilistFull.h`)
@@ -530,8 +532,13 @@ void multilistFullPushByTypeTail(multilistFull *ml, mflexState *state,
 bool multilistFullPop(multilistFull *ml, mflexState *state, databox *box,
                       bool fromTail);
 void multilistFullRotate(multilistFull *ml, mflexState *state[2]);
+flex *multilistFullDump(const multilistFull *ml, mflexState *state);
 void multilistFullSetCompressDepth(multilistFull *ml, uint32_t depth);
 ```
+
+Every tier's `Pop` returns an owned copy of the removed element (see
+`multilistPop` in [MULTILIST.md](MULTILIST.md)), and every tier's `Dump`
+returns its elements as one new flex (see `multilistDump`).
 
 `multilistAdapter.h` exists precisely to paper over this signature mismatch: it
 defines `multilistSmallAdapter*` / `multilistMediumAdapter*` macros that accept

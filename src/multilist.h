@@ -31,6 +31,13 @@ void multilistSetOptions(multilist *ml, int fill, int depth);
 size_t multilistCount(const multilist *m);
 size_t multilistBytes(const multilist *m);
 
+/* Every element, in list order, as one new flex; release with flexFree.
+ * The element encodings are copied byte for byte and never decoded, so
+ * the result is identical to pushing each element onto an empty flex in
+ * order, 96/128-bit values included.  'state' is the scratch space for
+ * opening compressed Full-tier nodes; Small and Medium ignore it. */
+flex *multilistDump(const multilist *m, mflexState *state);
+
 /* TODO: add multi-argument versions so we can, e.g. append
  *       40 databoxes at once as efficiently as possible. */
 void multilistPushByTypeHead(multilist **m, mflexState *state,

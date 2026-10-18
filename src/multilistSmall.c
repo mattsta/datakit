@@ -67,6 +67,11 @@ multilistSmall *multilistSmallNewFromFlexConsume(flex *fl) {
     return ml;
 }
 
+flex *multilistSmallDump(const multilistSmall *ml) {
+    /* @own: caller; free=flexFree */
+    return flexDuplicate(ml->fl);
+}
+
 multilistSmall *multilistSmallNewFromFlex(const flex *fl) {
     multilistSmall *ml = multilistSmallCreateContainer();
     /* @own: container; free=flexFree */

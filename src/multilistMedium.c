@@ -102,6 +102,12 @@ void multilistMediumAppendFlex(multilistMedium *ml, const flex *fl) {
     }
 }
 
+flex *multilistMediumDump(const multilistMedium *ml) {
+    const flex *const both[2] = {F0, F1};
+    /* @own: caller; free=flexFree */
+    return flexBulkMergeFlex(both, 2);
+}
+
 void multilistMediumAppendValuesFromFlex(multilistMedium *ml, const flex *fl) {
     multilistMediumAppendFlex(ml, fl);
 }

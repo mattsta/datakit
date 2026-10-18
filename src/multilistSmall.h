@@ -98,6 +98,9 @@ void multilistSmallReleaseIterator(multilistIterator *iter);
 /* Copy entire multilistSmall */
 multilistSmall *multilistSmallDuplicate(multilistSmall *orig);
 
+/* Every element, in order, as one new flex (see multilistDump) */
+flex *multilistSmallDump(const multilistSmall *ml);
+
 /* Get entry based on index */
 bool multilistSmallIndex(multilistSmall *ml, mlOffsetId index,
                          multilistEntry *entry);

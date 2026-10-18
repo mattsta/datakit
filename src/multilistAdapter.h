@@ -87,6 +87,9 @@
 /* Copy entire */
 #define multilistSmallAdapterDuplicate(orig) multilistSmallDuplicate(orig)
 
+/* Every element as one flex */
+#define multilistSmallAdapterDump(ml, state) multilistSmallDump(ml)
+
 /* Get entry based on index */
 #define multilistSmallAdapterIndex(ml, state, index, entry, open)              \
     multilistSmallIndex(ml, index, entry)
@@ -188,6 +191,9 @@
 
 /* Copy entire */
 #define multilistMediumAdapterDuplicate(orig) multilistMediumDuplicate(orig)
+
+/* Every element as one flex */
+#define multilistMediumAdapterDump(ml, state) multilistMediumDump(ml)
 
 /* Get entry based on index */
 #define multilistMediumAdapterIndex(ml, state, index, entry, open)             \

@@ -120,6 +120,9 @@ void multilistFullIteratorRelease(multilistIterator *iter);
 /* Copy entire multilistFull */
 multilistFull *multilistFullDuplicate(multilistFull *orig);
 
+/* Every element, in order, as one new flex (see multilistDump) */
+flex *multilistFullDump(const multilistFull *ml, mflexState *state);
+
 /* Get entry based on index */
 bool multilistFullIndex(multilistFull *ml, mflexState *state, mlOffsetId index,
                         multilistEntry *entry, bool openNode);

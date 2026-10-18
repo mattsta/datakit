@@ -322,6 +322,10 @@ void multilistRotate(multilist *m, mflexState *state[2]) {
     MULTILIST_NORETURN(m, Rotate, state);
 }
 
+flex *multilistDump(const multilist *m, mflexState *state) {
+    MULTILIST_RETURN(m, Dump, state);
+}
+
 /* ====================================================================
  * Testing
  * ==================================================================== */
@@ -3226,6 +3230,150 @@ int multilistTest(int argc, char *argv[]) {
             if (multilistCount(ml) != 0) {
                 ERR("%s: %zu elements left after popping all", name,
                     multilistCount(ml));
+            }
+        }
+    }
+
+    TEST("multilistDump: byte-identical to decode and re-encode, all tiers") {
+        const struct {
+            const char *name;
+            flexCapSizeLimit limit;
+            uint32_t depth;
+            uint32_t count;
+            multilistType wantType;
+        } configs[] = {
+            {"Small", FLEX_CAP_LEVEL_65536, 0, 60, MULTILIST_TYPE_SMALL},
+            {"Medium", FLEX_CAP_LEVEL_512, 0, 60, MULTILIST_TYPE_MEDIUM},
+            {"Full depth 0", FLEX_CAP_LEVEL_128, 0, 400, MULTILIST_TYPE_FULL},
+            {"Full depth 1", FLEX_CAP_LEVEL_512, 1, 600, MULTILIST_TYPE_FULL},
+        };
+
+        for (size_t c = 0; c < sizeof(configs) / sizeof(*configs); c++) {
+            const char *const name = configs[c].name;
+            mlwVal want[MLW_MAX];
+            size_t n = 0;
+            cleaner(multilistFree) multilist *ml =
+                multilistNew(configs[c].limit, configs[c].depth);
+
+            {
+                /* An empty list dumps to an empty flex. */
+                cleaner(flexFree) flex *dump = multilistDump(ml, s0);
+                cleaner(flexFree) flex *empty = flexNew();
+                if (flexBytes(dump) != flexBytes(empty) ||
+                    memcmp(dump, empty, flexBytes(empty))) {
+                    ERR("%s: empty list did not dump to an empty flex", name);
+                }
+            }
+
+            for (uint32_t i = 0; i < configs[c].count; i++) {
+                const mlwVal v = mlwGen(i);
+                const bool head = i % 7 == 6;
+                mlwPush(&ml, s0, &v, head);
+                mlwInsertAt(want, &n, head ? 0 : n, v);
+            }
+
+            /* Mutate the way a live list would be: rotate, replace, insert,
+             * and delete a range. */
+            for (int r = 0; r < 3; r++) {
+                const mlwVal moved = want[n - 1];
+                multilistRotate(ml, s);
+                mlwRemoveAt(want, &n, n - 1);
+                mlwInsertAt(want, &n, 0, moved);
+            }
+
+            {
+                const mlwVal v = mlwBoundary(3);
+                databoxBig storage;
+                char buf[64];
+                multilistReplaceByTypeAtIndex(
+                    &ml, s0, (mlNodeId)(n / 3),
+                    mlwBox(&v, &storage, buf, sizeof(buf)));
+                want[n / 3] = v;
+            }
+
+            {
+                const mlwVal v = mlwBoundary(5);
+                multilistEntry entry;
+                memset(&entry, 0xFF, sizeof(entry));
+                if (multilistIndexGet(ml, s0, (mlOffsetId)(n / 2), &entry)) {
+                    databoxBig storage;
+                    char buf[64];
+                    multilistInsertByTypeAfter(
+                        &ml, s, &entry, mlwBox(&v, &storage, buf, sizeof(buf)));
+                    mlwInsertAt(want, &n, n / 2 + 1, v);
+                } else {
+                    ERR("%s: insert anchor not found", name);
+                }
+            }
+
+            const size_t delAt = n / 4;
+            multilistDelRange(&ml, s0, (mlOffsetId)delAt, 3);
+            for (int k = 0; k < 3; k++) {
+                mlwRemoveAt(want, &n, delAt);
+            }
+
+            if (_multilistType(ml) != configs[c].wantType) {
+                ERR("%s: landed tier %d, wanted %d", name,
+                    (int)_multilistType(ml), (int)configs[c].wantType);
+            }
+
+            /* The reference is the element-at-a-time decode and re-encode. */
+            cleaner(flexFree) flex *ref = flexNew();
+            {
+                multilistIterator iter;
+                multilistEntry entry;
+                multilistIteratorInitForwardReadOnly(ml, s, &iter);
+                while (multilistNext(&iter, &entry)) {
+                    flexPushByType(&ref, &entry.box, FLEX_ENDPOINT_TAIL);
+                }
+
+                multilistIteratorRelease(&iter);
+            }
+
+            cleaner(flexFree) flex *dump = multilistDump(ml, s0);
+            if (flexBytes(dump) != flexBytes(ref) ||
+                memcmp(dump, ref, flexBytes(ref))) {
+                ERR("%s: dump (%zu bytes) differs from decode and re-encode "
+                    "(%zu bytes)",
+                    name, flexBytes(dump), flexBytes(ref));
+            }
+
+            /* Check the dump's elements against the oracle too. */
+            if (flexCount(dump) != n) {
+                ERR("%s: dump holds %zu elements, want %zu", name,
+                    flexCount(dump), n);
+            } else {
+                flexEntry *fe = flexHead(dump);
+                for (size_t i = 0; i < n; i++) {
+                    databoxBig got;
+                    memset(&got, 0xFF, sizeof(got));
+                    flexGetByTypeBig(fe, &got);
+                    const char *why =
+                        mlwCheck((const databox *)&got, &want[i], got.extra);
+                    if (why) {
+                        ERR("%s: dump element %zu: %s", name, i, why);
+                        break;
+                    }
+
+                    fe = flexNext(dump, fe);
+                }
+            }
+
+            /* Dumping reads only: the list is unchanged and a second dump
+             * is identical. */
+            err += mlwVerify(ml, s, want, n, name);
+            cleaner(flexFree) flex *again = multilistDump(ml, s0);
+            if (flexBytes(again) != flexBytes(dump) ||
+                memcmp(again, dump, flexBytes(dump))) {
+                ERR("%s: a second dump differs from the first", name);
+            }
+
+            /* A list emptied in place (it keeps its tier) dumps empty. */
+            multilistDelRange(&ml, s0, 0, (int64_t)n);
+            cleaner(flexFree) flex *emptied = multilistDump(ml, s0);
+            if (flexCount(emptied) != 0 || multilistCount(ml) != 0) {
+                ERR("%s: emptied list dumped %zu elements", name,
+                    flexCount(emptied));
             }
         }
     }

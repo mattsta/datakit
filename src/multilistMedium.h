@@ -99,6 +99,9 @@ void multilistMediumReleaseIterator(multilistIterator *iter);
 /* Copy entire multilistMedium */
 multilistMedium *multilistMediumDuplicate(multilistMedium *orig);
 
+/* Every element, in order, as one new flex (see multilistDump) */
+flex *multilistMediumDump(const multilistMedium *ml);
+
 /* Get entry based on index */
 bool multilistMediumIndex(multilistMedium *ml, mlOffsetId index,
                           multilistEntry *entry);
