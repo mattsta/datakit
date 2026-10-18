@@ -372,6 +372,14 @@ void multilistMediumRewindTail(multilistMedium *ml, multilistIterator *iter) {
     multilistMediumIteratorInit(ml, iter, false);
 }
 
+/* Release an iterator.  The Full tier closes the node a writable
+ * iterator holds open; a Medium iterator reads the live flexes directly
+ * and holds nothing open, so there is nothing to close and nothing
+ * changes. */
+void multilistMediumReleaseIterator(multilistIterator *iter) {
+    (void)iter;
+}
+
 bool multilistMediumNext(multilistIterator *iter, multilistEntry *entry) {
     entry->ml = iter->ml;
 

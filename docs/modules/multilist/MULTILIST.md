@@ -622,6 +622,12 @@ bool multilistNext(multilistIterator *iter, multilistEntry *entry);
 void multilistIteratorRelease(multilistIterator *iter);
 ```
 
+Releasing a writable Full iterator closes the node it holds open, and the
+iterator forgets that node, so releasing twice or rewinding after a release
+is safe. Releasing a read-only iterator, or any Small or Medium iterator,
+changes nothing. The tier-level forms are `multilistSmallReleaseIterator()`,
+`multilistMediumReleaseIterator()` and `multilistFullIteratorRelease()`.
+
 `multilistIteratorInit()` returns void and always succeeds;
 `multilistIteratorInitAtIdx()` returns `false` when `idx` is out of range.
 

@@ -1076,10 +1076,16 @@ bool multilistFullIteratorInitAtIdx(multilistFull *ml, mflexState *state[2],
     return false;
 }
 
+/* Close the node a writable iterator holds open.  The iterator forgets
+ * the closed node (as Next does when it leaves a node), so releasing
+ * twice, or rewinding after a release, never closes it a second time.
+ * A read-only iterator holds nothing to close: releasing it is a no-op. */
 void multilistFullIteratorRelease(multilistIterator *iter) {
     if (!iter->readOnly && iter->f) {
         mflexCloseGrow(getNodeMlPtr(iter->ml, iter->nodeIdx), iter->state[0],
                        iter->f);
+        iter->f = NULL;
+        iter->fe = NULL;
     }
 }
 

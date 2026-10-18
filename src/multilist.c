@@ -853,6 +853,23 @@ static void mlrTierRewind(multilist *ml, multilistIterator *iter, bool tail) {
     }
 }
 
+/* Call the tier's own iterator release for 'ml'. */
+static void mlrTierRelease(multilist *ml, multilistIterator *iter) {
+    switch (_multilistType(ml)) {
+    case MULTILIST_TYPE_SMALL:
+        multilistSmallReleaseIterator(iter);
+        break;
+    case MULTILIST_TYPE_MEDIUM:
+        multilistMediumReleaseIterator(iter);
+        break;
+    case MULTILIST_TYPE_FULL:
+        multilistFullIteratorRelease(iter);
+        break;
+    default:
+        assert(NULL);
+    }
+}
+
 /* Take 'steps' elements from 'iter', which must start at the head
  * (forward) or the tail (reverse) of ids 0..n-1.  When steps >= n the
  * walk must then be exhausted.  Returns NULL, or what went wrong. */
@@ -3188,6 +3205,93 @@ int multilistTest(int argc, char *argv[]) {
                     multilistIteratorInit(ml, s, &iter, true, true);
                     why = mlrWalk(&iter, n, true, n);
                     multilistIteratorRelease(&iter);
+                    if (!why && multilistCount(ml) != n) {
+                        why = "the count changed";
+                    }
+                }
+
+                if (why) {
+                    ERR("%s, %s: %s", configs[c].name,
+                        ro ? "read-only" : "writable", why);
+                }
+            }
+        }
+    }
+
+    TEST("tier iterator release, mid-walk and after the walk, every tier") {
+        /* Each tier's own release, mid-walk and after an exhausted walk.
+         * Small and Medium hold nothing open, so release is a no-op: the
+         * iterator is byte-for-byte unchanged and keeps walking.  Full
+         * closes a writable iterator's open node.  On every tier the list
+         * must read back intact and the iterator must rewind cleanly. */
+        const struct {
+            const char *name;
+            flexCapSizeLimit limit;
+            uint32_t depth;
+            uint32_t count;
+            multilistType wantType;
+        } configs[] = {
+            {"Small", FLEX_CAP_LEVEL_65536, 0, 60, MULTILIST_TYPE_SMALL},
+            {"Medium", FLEX_CAP_LEVEL_512, 0, 40, MULTILIST_TYPE_MEDIUM},
+            {"Full depth 0", FLEX_CAP_LEVEL_512, 0, 300, MULTILIST_TYPE_FULL},
+            {"Full depth 1", FLEX_CAP_LEVEL_512, 1, 600, MULTILIST_TYPE_FULL},
+        };
+
+        for (size_t c = 0; c < sizeof(configs) / sizeof(*configs); c++) {
+            for (int ro = 0; ro < 2; ro++) {
+                const uint32_t n = configs[c].count;
+                const bool full = configs[c].wantType == MULTILIST_TYPE_FULL;
+                cleaner(multilistFree) multilist *ml =
+                    multilistNew(configs[c].limit, configs[c].depth);
+                char buf[MLR_LEN + 1];
+                for (uint32_t i = 0; i < n; i++) {
+                    const databox box = mlrBox(i, buf);
+                    multilistPushByTypeTail(&ml, s0, &box);
+                }
+
+                if (_multilistType(ml) != configs[c].wantType) {
+                    ERR("%s: landed tier %d", configs[c].name,
+                        (int)_multilistType(ml));
+                    continue;
+                }
+
+                multilistIterator iter;
+                memset(&iter, 0, sizeof(iter));
+                multilistIteratorInit(ml, s, &iter, true, ro);
+                const char *why = mlrWalk(&iter, n, true, n / 2);
+                if (!why) {
+                    multilistIterator before;
+                    memcpy(&before, &iter, sizeof(iter));
+                    mlrTierRelease(ml, &iter);
+                    if (!full) {
+                        /* a no-op: unchanged, and the walk goes on */
+                        multilistEntry entry;
+                        if (memcmp(&before, &iter, sizeof(iter)) != 0) {
+                            why = "release changed the iterator";
+                        } else if (!multilistNext(&iter, &entry) ||
+                                   !mlrIs(&entry.box, n / 2)) {
+                            why = "the walk did not continue after release";
+                        }
+                    }
+                }
+
+                if (!why) {
+                    mlrTierRewind(ml, &iter, false);
+                    why = mlrWalk(&iter, n, true, n);
+                }
+
+                if (!why) {
+                    /* release after an exhausted walk */
+                    mlrTierRelease(ml, &iter);
+                    mlrTierRewind(ml, &iter, true);
+                    why = mlrWalk(&iter, n, false, n);
+                    mlrTierRelease(ml, &iter);
+                }
+
+                if (!why) {
+                    multilistIteratorInit(ml, s, &iter, true, true);
+                    why = mlrWalk(&iter, n, true, n);
+                    mlrTierRelease(ml, &iter);
                     if (!why && multilistCount(ml) != n) {
                         why = "the count changed";
                     }

@@ -191,6 +191,13 @@ void multilistSmallRewindTail(multilistSmall *ml, multilistIterator *iter) {
     multilistSmallIteratorInit(ml, iter, false);
 }
 
+/* Release an iterator.  The Full tier closes the node a writable
+ * iterator holds open; a Small iterator reads the live flex directly and
+ * holds nothing open, so there is nothing to close and nothing changes. */
+void multilistSmallReleaseIterator(multilistIterator *iter) {
+    (void)iter;
+}
+
 bool multilistSmallNext(multilistIterator *iter, multilistEntry *entry) {
     entry->ml = iter->ml;
     entry->nodeIdx = iter->nodeIdx;
