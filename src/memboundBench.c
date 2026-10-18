@@ -221,9 +221,10 @@ static void fragReport(membound *pool) {
     }
     size_t rss1;
     mi_process_info(&e, &u, &s, &rss1, &prss, &ccommit, &pcommit, &pf);
-    const long miResident = (long)rss1 - (long)rss0; /* memshard's RSS growth */
-    printf("memshard      live=%8zuKB  resident(RSS delta)=%8ldKB (%.2fx live) "
-           "-- no churn bloat: footprint tracks live\n",
+    /* memshard's RSS growth */
+    const int64_t miResident = (int64_t)rss1 - (int64_t)rss0;
+    printf("memshard      live=%8zuKB  resident(RSS delta)=%8" PRId64
+           "KB (%.2fx live) -- no churn bloat: footprint tracks live\n",
            miLive / 1024, miResident / 1024,
            (double)miResident / (double)miLive);
     for (int i = 0; i < N; i++) {
@@ -232,9 +233,9 @@ static void fragReport(membound *pool) {
     mi_collect(true);
     size_t rss2;
     mi_process_info(&e, &u, &s, &rss2, &prss, &ccommit, &pcommit, &pf);
-    printf("memshard      after free+mi_collect: resident(RSS delta)=%8ldKB "
-           "(retained for reuse, not returned to OS)\n",
-           ((long)rss2 - (long)rss0) / 1024);
+    printf("memshard      after free+mi_collect: resident(RSS delta)=%8" PRId64
+           "KB (retained for reuse, not returned to OS)\n",
+           ((int64_t)rss2 - (int64_t)rss0) / 1024);
 
     /* ---- membound (STD pool) ---- pre-commits its pool, so committed ==
      * capacity regardless of churn; this quantifies the fixed/min-atom cost. */

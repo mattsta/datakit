@@ -748,7 +748,7 @@ static inline int memboundLog64(size_t value) {
 
 #if defined(__GNUC__) || defined(__clang__)
     /* Use 64-bit count leading zeros */
-    return 64 - __builtin_clzll((unsigned long long)(value - 1));
+    return 64 - __builtin_clzll((uint64_t)(value - 1));
 #else
     int log = 0;
     value--;
@@ -766,13 +766,13 @@ static inline int memboundLog(int64_t iValue) {
     }
 
 #if defined(__GNUC__) || defined(__clang__)
-    return 64 - __builtin_clzll((unsigned long long)(iValue - 1));
+    return 64 - __builtin_clzll((uint64_t)(iValue - 1));
 #elif defined(__aarch64__)
-    const int leadingZeros = __builtin_clzll((unsigned long long)(iValue - 1));
+    const int leadingZeros = __builtin_clzll((uint64_t)(iValue - 1));
     return 64 - leadingZeros;
 #elif defined(__amd64__) || defined(__x86_64__)
-    unsigned long long result;
-    asm("bsrq %1, %0" : "=r"(result) : "r"((unsigned long long)(iValue - 1)));
+    uint64_t result;
+    asm("bsrq %1, %0" : "=r"(result) : "r"((uint64_t)(iValue - 1)));
     return (int)(result + 1);
 #else
     int iLog = 0;
