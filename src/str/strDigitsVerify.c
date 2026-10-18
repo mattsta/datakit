@@ -11,8 +11,9 @@
 bool StrIsDigitsIndividual(const void *buf_, const size_t size) {
     const uint8_t *buf = (const uint8_t *)buf_;
 
-    /* Compilers properly optimize this into the most efficient version */
-#pragma unroll 8
+    /* Compilers properly optimize this into the most efficient version.
+     * clang and GCC both honor this spelling; GCC ignores "unroll 8". */
+#pragma GCC unroll 8
     for (size_t i = 0; i < size; i++) {
         if (buf[i] < '0' || buf[i] > '9') {
             return false;
