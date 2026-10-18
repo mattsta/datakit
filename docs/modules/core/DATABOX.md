@@ -641,6 +641,30 @@ assert(databoxCompare(&n1, &n2) < 0);
 
 `databoxEqual` is exactly `databoxCompare(a, b) == 0`.
 
+### Hashing numbers by value
+
+```c
+/* true, with a 64-bit key in *key, for a numeric box; false otherwise */
+bool databoxNumericHashKey(const databox *box, uint64_t *key);
+```
+
+A hash table that uses `databoxCompare` for equality must hash numbers so
+that equal values hash alike, whatever their boxes: `22`, `22.0f`, `22.0`
+and a 128-bit 22 are one key. `databoxNumericHashKey` gives that key for
+`SIGNED_64`, `UNSIGNED_64`, 96/128-bit boxes (with a payload; a deferred box
+aborts), `FLOAT_32`, `DOUBLE_64`, `DATABOX_PTR` and
+`DATABOX_CONTAINER_REFERENCE_EXTERNAL`; it returns false for every other
+type, which the caller hashes by bytes.
+
+- An integer in the int64 range keys as its int64 bits, in any box,
+  integral reals included.
+- Other integers, up to the 128-bit range, key as a mix of their sign and
+  magnitude, in any box.
+- `-0.0` keys as 0; every NaN shares one key.
+- Any other real keys as a mix of its double bits.
+
+Unequal values may share a key: it is a hash input, not an identity.
+
 ### Compare classes
 
 - **Bytes vs bytes** — natural sort, not plain `memcmp`. A run of ASCII

@@ -546,6 +546,22 @@ databox databoxNewReal(double value);
 bool databoxEqual(const databox *a, const databox *b);
 int databoxCompare(const databox *a, const databox *b);
 
+/* A 64-bit key for hashing a number by value, so that boxes databoxCompare
+ * calls equal get equal keys whatever their types.  For a numeric box
+ * (SIGNED_64, UNSIGNED_64, 96/128-bit with a payload, FLOAT_32, DOUBLE_64,
+ * and PTR and CONTAINER_REFERENCE_EXTERNAL, which join the unsigned order)
+ * it writes *key and returns true; any other box returns false, and the
+ * caller hashes its bytes instead.
+ *   - An integer value in the int64 range keys as its int64 bits, in any
+ *     box: UNSIGNED_64 5, SIGNED_128 5, 5.0f and 5.0 all key as 5.
+ *   - Other integer values, up to the 128-bit range, key as a mix of their
+ *     sign and magnitude, in any box (integral reals included).
+ *   - -0.0 keys as 0, and every NaN, of any sign or payload, has one key.
+ *   - Any other real keys as a mix of its double bits (a float widens).
+ * Unequal values may share a key: it is a hash input, not an identity.
+ * Aborts on a deferred 96/128-bit box (no payload). */
+bool databoxNumericHashKey(const databox *box, uint64_t *key);
+
 /* Canonical numerals.
  *
  * datakit stores a byte string that spells a number as that number, in its

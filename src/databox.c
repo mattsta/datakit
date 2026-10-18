@@ -960,6 +960,86 @@ int databoxCompare(const databox *restrict a, const databox *restrict b) {
 #endif
 }
 
+/* splitmix64's finalizer: spreads every input bit over the result. */
+DK_INLINE_ALWAYS uint64_t databoxHashMix_(uint64_t x) {
+    x = (x ^ (x >> 30)) * UINT64_C(0xBF58476D1CE4E5B9);
+    x = (x ^ (x >> 27)) * UINT64_C(0x94D049BB133111EB);
+    return x ^ (x >> 31);
+}
+
+/* Distinct inputs for the three mixed classes: positive and negative
+ * integers outside the int64 range, and reals that are not integers. */
+#define DATABOX_HASH_TAG_POSITIVE UINT64_C(0x9E3779B97F4A7C15)
+#define DATABOX_HASH_TAG_NEGATIVE UINT64_C(0xC2B2AE3D27D4EB4F)
+#define DATABOX_HASH_TAG_REAL UINT64_C(0x165667B19E3779F9)
+
+/* The key of an integer value: its int64 bits inside the int64 range,
+ * otherwise a mix of its sign and 128-bit magnitude. */
+DK_INLINE_ALWAYS uint64_t databoxIntegerKey_(const databoxIntegerValue_ v) {
+    if (!v.negative && v.magnitude <= INT64_MAX) {
+        return (uint64_t)v.magnitude;
+    }
+
+    if (v.negative && v.magnitude <= ((__uint128_t)1 << 63)) {
+        return 0 - (uint64_t)v.magnitude;
+    }
+
+    const uint64_t tag =
+        v.negative ? DATABOX_HASH_TAG_NEGATIVE : DATABOX_HASH_TAG_POSITIVE;
+    return databoxHashMix_(
+        (uint64_t)v.magnitude ^
+        databoxHashMix_((uint64_t)(v.magnitude >> 64) ^ tag));
+}
+
+bool databoxNumericHashKey(const databox *box, uint64_t *key) {
+    if (!databoxJoinsNumeric_(box)) {
+        return false;
+    }
+
+    if (box->type == DATABOX_SIGNED_128 || box->type == DATABOX_UNSIGNED_128) {
+        if (unlikely(databoxIsWideDeferred(box))) {
+            databoxWidePayloadMissing(box, "databoxNumericHashKey");
+        }
+    }
+
+    if (!DATABOX_IS_FLOAT(box)) {
+        *key = databoxIntegerKey_(databoxIntegerValueOf_(box));
+        return true;
+    }
+
+    const double d = databoxRealOf_(box);
+    if (d != d) {
+        /* Every NaN is one value. */
+        *key = databoxHashMix_(UINT64_C(0x7FF8000000000000) ^
+                               DATABOX_HASH_TAG_REAL);
+        return true;
+    }
+
+    /* An integral real within the 128-bit integer range keys as that
+     * integer, so it matches every integer box of the same value; -0.0 is
+     * the integer 0.  The truncation and its back-conversion are exact, as
+     * in databoxCompareIntegerReal_. */
+    if (d >= -0x1p127 && d < 0x1p128) {
+        const bool negative = d < 0;
+        const double magnitude = negative ? -d : d;
+        const __uint128_t whole = (__uint128_t)magnitude;
+        if ((double)whole == magnitude) {
+            const databoxIntegerValue_ v = {.magnitude = whole,
+                                            .negative = negative};
+            *key = databoxIntegerKey_(v);
+            return true;
+        }
+    }
+
+    /* Any other real (a fraction, an infinity, or beyond the integer
+     * range) equals only reals of the same value, which have the same
+     * double bits. */
+    uint64_t bits;
+    memcpy(&bits, &d, sizeof(bits));
+    *key = databoxHashMix_(bits ^ DATABOX_HASH_TAG_REAL);
+    return true;
+}
+
 /* Integer numerals beyond 64 bits are 20 to 40 bytes long: 2^64 has 20
  * digits, and INT128_MIN is a '-' and 39 digits. */
 #define DATABOX_CANONICAL_WIDE_MIN_LEN 20
@@ -3562,6 +3642,56 @@ int databoxTest(int argc, char *argv[]) {
                 n);
         }
         printf("    %zu values, %zu ordered pairs\n", n, n * n);
+
+        /* databoxNumericHashKey over the same corpus: compare-equal values
+         * must share a key.  The corpus holds no unequal pair whose keys
+         * may legitimately collide, so any shared key between unequal
+         * values is reported too. */
+        uint64_t keys[COUNT_ARRAY(corpus)];
+        for (size_t i = 0; i < n; i++) {
+            if (!databoxNumericHashKey((const databox *)&corpus[i], &keys[i])) {
+                ERR("%s has no numeric hash key",
+                    databoxReprStr((const databox *)&corpus[i]));
+            }
+        }
+
+        size_t equalPairs = 0;
+        for (size_t i = 0; i < n; i++) {
+            for (size_t j = 0; j < n; j++) {
+                if (got[i][j] == 0) {
+                    equalPairs += i != j;
+                    if (keys[i] != keys[j]) {
+                        printf("    %s and ",
+                               databoxReprStr((const databox *)&corpus[i]));
+                        ERR("%s compare equal but key differently",
+                            databoxReprStr((const databox *)&corpus[j]));
+                    }
+                } else if (keys[i] == keys[j]) {
+                    printf("    %s and ",
+                           databoxReprStr((const databox *)&corpus[i]));
+                    ERR("%s differ but share a key",
+                        databoxReprStr((const databox *)&corpus[j]));
+                }
+            }
+        }
+
+        /* Bytes and the immediate types have no numeric key. */
+        const databox notNumbers[] = {databoxNewBytesString("5"),
+                                      DATABOX_BOX_TRUE, DATABOX_BOX_NULL,
+                                      DATABOX_BOX_VOID};
+        for (size_t i = 0; i < COUNT_ARRAY(notNumbers); i++) {
+            uint64_t key = UINT64_C(0xA5A5A5A5A5A5A5A5);
+            if (databoxNumericHashKey(&notNumbers[i], &key) ||
+                key != UINT64_C(0xA5A5A5A5A5A5A5A5)) {
+                ERR("type %d got a numeric hash key", (int)notNumbers[i].type);
+            }
+        }
+
+        if (equalPairs < 40) {
+            ERR("only %zu equal pairs exercised the hash", equalPairs);
+        }
+        printf("    hash keys: %zu equal ordered pairs share their keys\n",
+               equalPairs);
     }
 
     TEST("databoxCanonicalNumeral: the canonical-numeral table") {
