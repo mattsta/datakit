@@ -2509,14 +2509,10 @@ static bool multidictLRUSelectVictim(multidict *d, mdLRUCandidates *cands,
 
     while (cands->skip < MD_LRU_CANDIDATES) {
         if (cands->pos >= cands->count) {
-            /* Refill from the cold end; the passed-over candidates lead */
-            memset(cands->ptr, 0, sizeof(cands->ptr));
-            multilruGetNLowest(d->lru, cands->ptr, MD_LRU_CANDIDATES);
-            cands->count = 0;
-            while (cands->count < MD_LRU_CANDIDATES &&
-                   cands->ptr[cands->count]) {
-                cands->count++;
-            }
+            /* Refill from the cold end; the passed-over candidates lead.
+             * Only the first 'count' slots are written. */
+            cands->count = (uint32_t)multilruCollectLowest(d->lru, cands->ptr,
+                                                           MD_LRU_CANDIDATES);
 
             cands->pos = cands->skip;
             if (cands->pos >= cands->count) {
@@ -8992,7 +8988,9 @@ int multidictTest(int argc, char *argv[]) {
          * coldest entries, in their original order */
         assert(testLruTrackingExact_(vd));
         multilruPtr coldest[7] = {0};
-        multilruGetNLowest(vd->lru, coldest, 7);
+        const size_t coldestGot = multilruCollectLowest(vd->lru, coldest, 7);
+        assert(coldestGot == 7);
+        (void)coldestGot;
         for (int32_t n = 0; n < 7; n++) {
             databox ck;
             databoxWide ckWide;
@@ -9190,6 +9188,88 @@ int multidictTest(int argc, char *argv[]) {
     printf("Test 20.12: Reads do not promote, accesses promote once...\n");
     err += multidictTestLruPromotion_(&multidictTypeExactKey);
     err += multidictTestLruPromotion_(&multidictTypeCaseKey);
+
+    printf("Test 20.13: Fewer tracked keys than the candidate window...\n");
+    {
+        cleaner(multidictMmClassFree) multidictClass *wqdc =
+            multidictMmClassNew();
+        cleaner(multidictFree) multidict *wd =
+            multidictNew(&multidictTypeExactKey, wqdc, 19);
+        const bool lruOn = multidictEnableLRU(wd, 4);
+        assert(lruOn);
+        (void)lruOn;
+        multidictSetEvictPolicy(wd, MULTIDICT_EVICT_LRU);
+
+        /* Five keys, all at level 0 in insertion order, so every refill
+         * of the candidate window comes back short.  Key 0, the coldest,
+         * is vetoed. */
+        enum { keys = 5 };
+        for (int32_t i = 0; i < keys; i++) {
+            char keyBuf[32];
+            snprintf(keyBuf, sizeof(keyBuf), "lruveto-%05d", i);
+            databox key = databoxNewBytesString(keyBuf);
+            databox val = databoxNewSigned(i);
+            multidictAdd(wd, &key, &val);
+        }
+        assert(testLruTrackingExact_(wd));
+
+        const uint64_t bytes = multidictKeyBytes(wd) + multidictValBytes(wd);
+        const uint64_t entryBytes = bytes / keys;
+        assert(entryBytes * keys == bytes);
+
+        testLruVetoActive_ = true;
+        testLruVetoes_ = 0;
+        testLruVetoBad_ = 0;
+        testLruEvicted_ = 0;
+        multidictSetEvictionCallback(wd, lruVetoCb_, NULL);
+
+        /* Evicting four takes keys 1..4 coldest first and passes over the
+         * vetoed key 0 once */
+        multidictSetMaxMemory(wd, bytes - 4 * entryBytes);
+        uint32_t evicted = multidictEvictToLimit(wd);
+        assert(evicted == 4);
+        assert(testLruEvicted_ == 4);
+        assert(testLruVetoes_ == 1);
+        assert(testLruVetoBad_ == 0);
+        for (int32_t n = 0; n < 4; n++) {
+            assert(testLruEvictOrder_[n] == n + 1);
+        }
+        assert(multidictCount(wd) == 1);
+        assert(testLruTrackingExact_(wd));
+
+        /* The only tracked entry is key 0.  Collecting a window of 8
+         * writes exactly one handle and leaves the other slots alone. */
+        multilruPtr window[8];
+        for (size_t n = 0; n < 8; n++) {
+            window[n] = SIZE_MAX;
+        }
+        const size_t got = multilruCollectLowest(wd->lru, window, 8);
+        assert(got == 1);
+        (void)got;
+        for (size_t n = 1; n < 8; n++) {
+            assert(window[n] == SIZE_MAX);
+        }
+        databox ck;
+        databoxWide ckWide;
+        const bool resolved = multidictLRUKeyOf(wd, window[0], &ck, &ckWide);
+        assert(resolved);
+        (void)resolved;
+        assert(testKeyIndex_(&ck, "lruveto-") == 0);
+
+        /* A limit only key 0's eviction could meet: the refill finds
+         * nothing but the passed-over key, so nothing is evicted and key
+         * 0 stays tracked */
+        multidictSetMaxMemory(wd, 1);
+        evicted = multidictEvictToLimit(wd);
+        assert(evicted == 0);
+        assert(testLruEvicted_ == 4);
+        assert(testLruVetoes_ > 1);
+        assert(testLruVetoBad_ == 0);
+        assert(multidictCount(wd) == 1);
+        assert(testLruTrackingExact_(wd));
+
+        testLruVetoActive_ = false;
+    }
 
     printf("=== LRU eviction tests passed! ===\n");
 
