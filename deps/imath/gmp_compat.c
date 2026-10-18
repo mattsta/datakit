@@ -32,7 +32,7 @@
 #include <string.h>
 
 #ifdef NDEBUG
-#define CHECK(res) (res)
+#define CHECK(res) ((void)(res)) /* still evaluated for its side effects */
 #else
 #define CHECK(res) assert(((res) == MP_OK) && "expected MP_OK")
 #endif
@@ -738,17 +738,22 @@ void *GMPZAPI(export)(void *rop, size_t *countp, int order, size_t size,
                       int endian, size_t nails, mp_int op) {
     size_t i, j;
     size_t num_used_bytes;
-    size_t num_words, num_missing_bytes;
+    size_t num_words;
     ptrdiff_t word_offset;
     unsigned char *dst;
     mp_digit *src;
     int src_bits;
 
-    /* We do not have a complete implementation. Assert to ensure our
-     * restrictions are in place. */
-    assert(nails == 0 && "Do not support non-full words");
-    assert(endian == 1 || endian == 0 || endian == -1);
-    assert(order == 1 || order == -1);
+    /* We do not have a complete implementation: nails are unsupported,
+     * and order and endian take only gmp's documented values. Anything
+     * else fails cleanly in every build, not only under assert. */
+    if (nails != 0 || (endian != 1 && endian != 0 && endian != -1) ||
+        (order != 1 && order != -1)) {
+        if (countp) {
+            *countp = 0;
+        }
+        return NULL;
+    }
 
     /* Test for zero */
     if (mp_int_compare_zero(op) == 0) {
@@ -790,8 +795,8 @@ void *GMPZAPI(export)(void *rop, size_t *countp, int order, size_t size,
        pad the word with extra zeros. Otherwise, the missing bytes can be filled
        directly from the zeros in the last digit in the number.
      */
-    num_missing_bytes = (size * num_words) - num_used_bytes;
-    assert(num_missing_bytes < size);
+    /* Ceil division leaves fewer than size missing bytes. */
+    assert((size * num_words) - num_used_bytes < size);
 
     /* Allocate space for the result if needed */
     if (rop == NULL) {
@@ -868,11 +873,13 @@ void GMPZAPI(import)(mp_int rop, size_t count, int order, size_t size,
         return;
     }
 
-    /* We do not have a complete implementation. Assert to ensure our
-     * restrictions are in place. */
-    assert(nails == 0 && "Do not support non-full words");
-    assert(endian == 1 || endian == 0 || endian == -1);
-    assert(order == 1 || order == -1);
+    /* We do not have a complete implementation: nails are unsupported,
+     * and order and endian take only gmp's documented values. Anything
+     * else leaves rop unchanged in every build, not only under assert. */
+    if (nails != 0 || (endian != 1 && endian != 0 && endian != -1) ||
+        (order != 1 && order != -1)) {
+        return;
+    }
 
     if (endian == 0) {
         endian = HOST_ENDIAN;
@@ -947,9 +954,12 @@ size_t GMPZAPI(sizeinbase)(mp_int op, int base) {
         return 1;
     }
 
-    /* Compute string length in base */
+    /* Compute string length in base. An unsupported base reports a
+       negative mp_result; there is no size to give for it. */
     res = mp_int_string_len(op, base);
-    CHECK((res > 0) == MP_OK);
+    if (res <= 0) {
+        return 0;
+    }
 
     /* Now adjust the final size by getting rid of string artifacts */
     size = res;

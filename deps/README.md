@@ -35,8 +35,12 @@ These changes are datakit's own and are not upstream. Carry them forward when re
     - `impz_get_str` and `impq_get_str` return NULL for an unsupported radix, a failed allocation or a failed conversion. They use `size_t` lengths and apply digit case only up to the terminator.
     - `impq_set_str` and `impz_export` check their `malloc`.
     - The `_MSC_VER` `ssize_t` shim is removed (datakit builds with clang and GCC only). Word strides are `ptrdiff_t`.
+    - Under `NDEBUG`, `CHECK` is `((void)(res))`, which still evaluates its argument.
+    - `impz_sizeinbase` returns 0 for an unsupported base. Upstream's `CHECK((res > 0) == MP_OK)` asserted the opposite of the intended condition, so it fired on every call in assert builds.
+    - `impz_export` and `impz_import` reject nonzero nails and unsupported order or endian values at run time, not only under `assert`.
     - `impz_export` and `impz_import` use `size_t` indices. They reject a zero word size, a byte total that overflows `size_t`, and a digit count beyond `mp_size`, and `impz_import` checks `mp_int_init_size`.
   - `mp_rat_to_decimal` counts leading zeros in an `mp_size`, the type of `prec`.
+  - `tests/imathEdgeTest.c` is datakit's own ctest, `imath-edge`. The `imath-edge-test` target in `deps/imath/CMakeLists.txt` builds it from `imath.c`, `imrat.c` and `gmp_compat.c`, with ASan/UBSan when `EnableASAN`/`EnableUBSAN` are set. It runs canary-bounded checks of every string writer at every limit, plus `get_str` case and bounds, `set_str` and export/import round trips.
   - `pi.c` parses its digit count and radix with checked `strtoimax`. It sizes its output buffer with `mp_int_string_len()` and checks the allocation and the conversion.
 - xxHash
   - `deps/xxHash/CMakeLists.txt` is datakit's own build file; upstream has no root CMake build. It builds the C library without the C++-only `-Wno-extra-semi`.

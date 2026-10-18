@@ -35,6 +35,29 @@ set_target_properties(imath-library PROPERTIES VERSION 3.6 SOVERSION 3.6)
 add_executable(pi-${PROJECT_NAME} pi.c)
 target_link_libraries(pi-${PROJECT_NAME} imath-static)
 
+# imath-edge: canary-bounded checks for imath's string writers and the
+# gmp_compat layer. It compiles imrat.c and gmp_compat.c, which the
+# libraries above do not, so they are built and tested on every build.
+# It uses its own sources rather than the imath object library so the
+# sanitizers apply to all of the code under test.
+add_executable(imath-edge-test
+    tests/imathEdgeTest.c
+    imath.c
+    imrat.c
+    gmp_compat.c)
+target_include_directories(imath-edge-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+if(EnableASAN)
+    target_compile_options(imath-edge-test PRIVATE
+        -fsanitize=address -fno-omit-frame-pointer)
+    target_link_options(imath-edge-test PRIVATE -fsanitize=address)
+endif()
+if(EnableUBSAN)
+    target_compile_options(imath-edge-test PRIVATE
+        -fsanitize=undefined -fno-sanitize-recover=undefined)
+    target_link_options(imath-edge-test PRIVATE -fsanitize=undefined)
+endif()
+add_test(NAME imath-edge COMMAND imath-edge-test)
+
 if(Build32Bit)
     set_target_properties(imath
                           PROPERTIES COMPILE_FLAGS "-m32" LINK_FLAGS "-m32")
