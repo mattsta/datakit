@@ -1624,6 +1624,7 @@ const persistOps persistOpsClusterMailbox = {
 #include "ctest.h"
 
 #include <pthread.h>
+#include <sched.h> /* sched_yield — retire/reinstall race test */
 
 /* Apply callback that records the most recent frame's contents into
  * caller-owned storage and counts the calls. */
@@ -3983,29 +3984,51 @@ int dkTestMailboxStatsAlignmentTest(int argc, char *argv[]) {
 
 /* === Concurrent retire-during-Seal/Ingest =================================
  *
- * Wave 4 Track H migrated cmSealImpl and cmIngestImpl to copy the keyring
- * raw bytes into a stack buffer via hmacKeyringGetRawCopy BEFORE the
- * envelope HMAC compute reads them. This test exercises the precise race
- * the migration closes:
+ * cmSealImpl and cmIngestImpl copy the keyring raw bytes into a stack
+ * buffer via hmacKeyringGetRawCopy before the envelope HMAC reads them.
+ * This test exercises the race that the copy closes:
  *
- * Thread A (writer): tight loop of Seal + Ingest under key id K.
- * Thread B (rotator): tight loop of Retire(K) + Reinstall(K) with
- *                     identical bytes.
+ * Writer thread:  a direct hmacKeyringGetRawCopy of key id K, then
+ *                 Seal + Ingest under K, in a loop.
+ * Rotator thread: Retire(K), yield, Reinstall(K) with identical bytes,
+ *                 yield, in a loop.
  *
- * Without the migration the writer thread's borrowed pointer (from
- * hmacKeyringGetRaw) could be invalidated by the rotator thread's
- * Retire — the keyring entry's `raw_key_bytes` is `dkSecureZero`d
- * BEFORE the rwlock is involved on slot teardown, so the writer would
- * either (a) hash zeros (verify-fails harmlessly) or (b) hash bytes
- * from a freshly-reused heap slot (cross-key contamination).
+ * With a borrowed pointer (hmacKeyringGetRaw) the writer could hash
+ * bytes that a concurrent Retire has already zeroed or freed. With the
+ * copy, every read either fails cleanly (K is not installed at that
+ * instant) or returns the complete installed key. Every reinstall uses
+ * the same bytes, so the test pins these deterministic properties:
  *
- * With the migration the writer's stack copy is independent of any
- * subsequent Retire: the copy is made under the rwlock and lives in
- * the writer's own frame. Under ASAN, a regression would surface as
- * a heap-use-after-free in the envelope hash compute. Under UBSAN
- * the same bytes-from-freed-slot path would show as a use after free
- * of the slot's algo descriptor. Without sanitizers the test still
- * serves as a smoke test against crash. */
+ *   - a GetRawCopy that returns true yields exactly the installed key
+ *     bytes and the SHA-256 descriptor and writes nothing past the key
+ *     length; one that returns false reports length 0 and leaves the
+ *     buffer and the algo pointer untouched;
+ *   - after a successful Seal, Ingest returns OK or KEY_MISSING. It
+ *     never returns VERIFY_FAILED (a torn or zeroed key on either side)
+ *     and never REPLAY (the writer's sequences strictly increase);
+ *   - every OK Ingest runs the apply callback exactly once, with the
+ *     sealed origin, sequence, msg_type and payload bytes intact;
+ *   - the rotator is the only mutator, so every Retire and every
+ *     Reinstall succeeds, and after both threads join K is installed
+ *     and one Seal + Ingest returns OK.
+ *
+ * Progress is counted, not timed. The writer starts only once the
+ * rotator is running, and the rotator keeps rotating until it has done
+ * CM_RACE_TARGET_ROTATIONS rotations and the writer has completed
+ * CM_RACE_TARGET_OK applied round trips, so every counted round trip
+ * overlaps live rotation. CM_RACE_ROTATION_CAP bounds the run: a writer
+ * that cannot make progress fails the test instead of hanging it. Under
+ * ASan a regression to a borrowed pointer surfaces as a
+ * heap-use-after-free in the envelope hash. */
+#define CM_RACE_TARGET_OK ((uint64_t)1000)
+#define CM_RACE_TARGET_ROTATIONS ((uint64_t)1000)
+#define CM_RACE_ROTATION_CAP ((uint64_t)2000000)
+#define CM_RACE_PAYLOAD_LEN 32u
+#define CM_RACE_PAYLOAD_BYTE 0x5Au
+#define CM_RACE_MSG_TYPE 3u
+#define CM_RACE_COPY_CAP 64u
+#define CM_RACE_COPY_SENTINEL 0xEEu
+
 typedef struct cmRetireRaceCtx {
     clusterMailbox *mb;
     hmacKeyring *ring;
@@ -4013,79 +4036,149 @@ typedef struct cmRetireRaceCtx {
     const uint8_t *key_bytes;
     size_t key_len;
     uint32_t origin;
-    _Atomic uint64_t writer_seq;
+
+    /* Shared between the threads while they run. */
+    _Atomic int rotator_started;
     _Atomic int rotator_done;
-    _Atomic uint64_t writer_iters_done;
-    _Atomic uint64_t rotator_iters_done;
-    _Atomic int writer_crashed; /* tripped only if the writer caught a
-                                 * post-rotation Seal succeeding against
-                                 * a freed-then-zero keyring slot */
+    _Atomic uint64_t writer_ok; /* applied Seal + Ingest round trips */
+
+    /* Written only by the rotator; read after join. */
+    uint64_t rotations;
+    uint64_t rotator_failures; /* a Retire or Reinstall returned false */
+
+    /* Written only by the thread calling Seal/Ingest (the writer, then
+     * the main thread after join); the apply callback runs inside
+     * Ingest on that same thread. */
+    uint64_t next_seq;
+    uint64_t expect_seq;
+    uint64_t applied;
+    uint64_t apply_bad;    /* applied frame did not match what was sealed */
+    uint64_t result_bad;   /* Ingest result other than OK / KEY_MISSING */
+    uint64_t key_missing;  /* Seal or Ingest found K retired */
+    uint64_t copies_ok;    /* GetRawCopy returned the complete key */
+    uint64_t copies_empty; /* GetRawCopy found K retired */
+    uint64_t copies_bad;   /* GetRawCopy result broke its contract */
 } cmRetireRaceCtx;
 
-static bool cmRetireRaceApply(const clusterFrame *f, void *ctx) {
-    (void)f;
-    (void)ctx;
+static bool cmRetireRaceApply(const clusterFrame *f, void *vctx) {
+    cmRetireRaceCtx *c = (cmRetireRaceCtx *)vctx;
+    bool good = f->origin_id == c->origin && f->sequence == c->expect_seq &&
+                f->msg_type == CM_RACE_MSG_TYPE &&
+                f->payload_len == CM_RACE_PAYLOAD_LEN;
+    for (size_t i = 0; good && i < f->payload_len; i++) {
+        good = f->payload[i] == CM_RACE_PAYLOAD_BYTE;
+    }
+    if (!good) {
+        c->apply_bad++;
+        return false;
+    }
+    c->applied++;
     return true;
+}
+
+/* Read K by copy and check the result against the GetRawCopy contract. */
+static void cmRetireRaceCheckCopy(cmRetireRaceCtx *c) {
+    uint8_t copy[CM_RACE_COPY_CAP];
+    memset(copy, CM_RACE_COPY_SENTINEL, sizeof(copy));
+    size_t len = SIZE_MAX;
+    const hmacHashAlgo *algo = NULL;
+    const bool found = hmacKeyringGetRawCopy(c->ring, c->key_id, copy,
+                                             sizeof(copy), &len, &algo);
+    bool good;
+    size_t untouchedFrom;
+    if (found) {
+        good = len == c->key_len && algo == &hmacAlgoSHA256 &&
+               memcmp(copy, c->key_bytes, c->key_len) == 0;
+        untouchedFrom = c->key_len;
+    } else {
+        good = len == 0 && algo == NULL;
+        untouchedFrom = 0;
+    }
+    for (size_t i = untouchedFrom; good && i < sizeof(copy); i++) {
+        good = copy[i] == CM_RACE_COPY_SENTINEL;
+    }
+    if (!good) {
+        c->copies_bad++;
+    } else if (found) {
+        c->copies_ok++;
+    } else {
+        c->copies_empty++;
+    }
+    dkSecureZero(copy, sizeof(copy));
+}
+
+/* One Seal + Ingest under K with the next sequence. Returns the Ingest
+ * result, or CLUSTER_MAILBOX_ERR_KEY_MISSING when Seal could not read K.
+ * Counts every outcome that breaks the round-trip contract. */
+static clusterMailboxIngestResult
+cmRetireRaceRoundTrip(cmRetireRaceCtx *c, uint8_t *buf, size_t cap) {
+    uint8_t payload[CM_RACE_PAYLOAD_LEN];
+    memset(payload, CM_RACE_PAYLOAD_BYTE, sizeof(payload));
+    const uint64_t seq = ++c->next_seq;
+    size_t written = 0;
+    if (!clusterMailboxSeal(c->mb, c->origin, seq, CM_RACE_MSG_TYPE, payload,
+                            sizeof(payload), c->key_id, buf, cap, &written)) {
+        /* With valid arguments Seal fails only when K is retired at the
+         * instant it copies the key. */
+        c->key_missing++;
+        return CLUSTER_MAILBOX_ERR_KEY_MISSING;
+    }
+    c->expect_seq = seq;
+    const uint64_t appliedBefore = c->applied;
+    const clusterMailboxIngestResult rc =
+        clusterMailboxIngest(c->mb, buf, written, c->key_id);
+    if (rc == CLUSTER_MAILBOX_OK) {
+        if (c->applied != appliedBefore + 1u) {
+            c->result_bad++;
+        }
+    } else if (rc == CLUSTER_MAILBOX_ERR_KEY_MISSING) {
+        c->key_missing++;
+    } else {
+        c->result_bad++;
+    }
+    return rc;
 }
 
 static void *cmRetireRaceWriter(void *vctx) {
     cmRetireRaceCtx *c = (cmRetireRaceCtx *)vctx;
-    const size_t ITERS = 4000u;
-    uint8_t payload[32];
-    memset(payload, 0x5A, sizeof(payload));
-    const size_t cap = clusterMailboxSealedSize(c->mb, sizeof(payload));
+    const size_t cap = clusterMailboxSealedSize(c->mb, CM_RACE_PAYLOAD_LEN);
     cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(cap);
-    for (size_t i = 0; i < ITERS; i++) {
-        const uint64_t seq =
-            atomic_fetch_add_explicit(&c->writer_seq, 1, memory_order_acq_rel) +
-            1u;
-        size_t written = 0;
-        /* Seal may legitimately fail if the rotator's Retire arrived
-         * BEFORE the writer's GetRawCopy lock acquire. That's fine —
-         * the writer just skips this iteration. The migration's job
-         * is to ensure that whenever Seal SUCCEEDS, the bytes used
-         * were a coherent snapshot of some installed version of the
-         * key. */
-        if (!clusterMailboxSeal(c->mb, c->origin, seq, 0u, payload,
-                                sizeof(payload), c->key_id, buf, cap,
-                                &written)) {
-            continue;
+    /* Wait for the rotator so every round trip overlaps rotation. The
+     * done check covers a rotator that failed to start. */
+    while (!atomic_load_explicit(&c->rotator_started, memory_order_acquire) &&
+           !atomic_load_explicit(&c->rotator_done, memory_order_acquire)) {
+        sched_yield();
+    }
+    while (!atomic_load_explicit(&c->rotator_done, memory_order_acquire)) {
+        cmRetireRaceCheckCopy(c);
+        if (cmRetireRaceRoundTrip(c, buf, cap) == CLUSTER_MAILBOX_OK) {
+            atomic_fetch_add_explicit(&c->writer_ok, 1u, memory_order_release);
         }
-        /* Same applies to Ingest: a Retire that lands between the
-         * Seal-side and Ingest-side calls will cause the Ingest to
-         * return KEY_MISSING, which is correct. */
-        const clusterMailboxIngestResult rc =
-            clusterMailboxIngest(c->mb, buf, written, c->key_id);
-        if (rc != CLUSTER_MAILBOX_OK && rc != CLUSTER_MAILBOX_ERR_KEY_MISSING &&
-            rc != CLUSTER_MAILBOX_ERR_VERIFY_FAILED &&
-            rc != CLUSTER_MAILBOX_ERR_REPLAY) {
-            /* Any other result class is an invariant violation. */
-            atomic_fetch_add_explicit(&c->writer_crashed, 1,
-                                      memory_order_relaxed);
-        }
-        atomic_fetch_add_explicit(&c->writer_iters_done, 1u,
-                                  memory_order_relaxed);
     }
     return NULL;
 }
 
 static void *cmRetireRaceRotator(void *vctx) {
     cmRetireRaceCtx *c = (cmRetireRaceCtx *)vctx;
-    const size_t ITERS = 4000u;
-    for (size_t i = 0; i < ITERS; i++) {
-        if (!hmacKeyringRetire(c->ring, c->key_id)) {
-            /* The writer may briefly hold the slot via lookup; Retire
-             * itself takes the write lock so this is just "slot was
-             * already retired this round" — keep going. */
+    atomic_store_explicit(&c->rotator_started, 1, memory_order_release);
+    uint64_t i = 0;
+    for (; i < CM_RACE_ROTATION_CAP; i++) {
+        if (i >= CM_RACE_TARGET_ROTATIONS &&
+            atomic_load_explicit(&c->writer_ok, memory_order_acquire) >=
+                CM_RACE_TARGET_OK) {
+            break;
         }
+        if (!hmacKeyringRetire(c->ring, c->key_id)) {
+            c->rotator_failures++;
+        }
+        sched_yield();
         if (!hmacKeyringInstallUnsalted(c->ring, c->key_id, &hmacAlgoSHA256,
                                         c->key_bytes, c->key_len)) {
-            /* Same race: a Retire in flight while we install would
-             * fail with id-already-present; tolerate. */
+            c->rotator_failures++;
         }
-        atomic_fetch_add_explicit(&c->rotator_iters_done, 1u,
-                                  memory_order_relaxed);
+        sched_yield();
     }
+    c->rotations = i;
     atomic_store_explicit(&c->rotator_done, 1, memory_order_release);
     return NULL;
 }
@@ -4104,68 +4197,110 @@ int dkTestKeyringGetRawCopyMigrationClusterTest(int argc, char *argv[]) {
 
     TEST(
         "Seal/Ingest under concurrent Retire+Reinstall — no UAF, no torn key") {
-        hmacKeyring *ring = hmacKeyringCreate();
-        if (!hmacKeyringInstallUnsalted(ring, KID, &hmacAlgoSHA256, key,
-                                        sizeof(key))) {
-            ERRR("retireRace: initial keyring install failed");
-        }
-        clusterMailbox *mb = clusterMailboxCreate(
-            ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRetireRaceApply, NULL);
-        if (mb == NULL) {
-            ERRR("retireRace: mailbox create failed");
-        }
-
         cmRetireRaceCtx ctx = {0};
-        ctx.mb = mb;
-        ctx.ring = ring;
         ctx.key_id = KID;
         ctx.key_bytes = key;
         ctx.key_len = sizeof(key);
         ctx.origin = ORIGIN;
 
-        pthread_t writer_thr;
-        pthread_t rotator_thr;
-        if (pthread_create(&writer_thr, NULL, cmRetireRaceWriter, &ctx) != 0) {
-            ERRR("retireRace: spawn writer failed");
+        hmacKeyring *ring = hmacKeyringCreate();
+        clusterMailbox *mb = NULL;
+        if (ring == NULL || !hmacKeyringInstallUnsalted(
+                                ring, KID, &hmacAlgoSHA256, key, sizeof(key))) {
+            ERRR("retireRace: initial keyring install failed");
+        } else {
+            mb = clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256,
+                                      cmRetireRaceApply, &ctx);
+            if (mb == NULL) {
+                ERRR("retireRace: mailbox create failed");
+            }
         }
-        if (pthread_create(&rotator_thr, NULL, cmRetireRaceRotator, &ctx) !=
-            0) {
-            ERRR("retireRace: spawn rotator failed");
-        }
-        pthread_join(writer_thr, NULL);
-        pthread_join(rotator_thr, NULL);
+        ctx.mb = mb;
+        ctx.ring = ring;
 
-        const int crashed =
-            atomic_load_explicit(&ctx.writer_crashed, memory_order_acquire);
-        const uint64_t writer_iters =
-            atomic_load_explicit(&ctx.writer_iters_done, memory_order_acquire);
-        const uint64_t rotator_iters =
-            atomic_load_explicit(&ctx.rotator_iters_done, memory_order_acquire);
+        bool ran = false;
+        if (mb != NULL) {
+            pthread_t writer_thr;
+            pthread_t rotator_thr;
+            if (pthread_create(&writer_thr, NULL, cmRetireRaceWriter, &ctx) !=
+                0) {
+                ERRR("retireRace: spawn writer failed");
+            } else {
+                if (pthread_create(&rotator_thr, NULL, cmRetireRaceRotator,
+                                   &ctx) != 0) {
+                    ERRR("retireRace: spawn rotator failed");
+                    /* Release the writer from its start wait. */
+                    atomic_store_explicit(&ctx.rotator_done, 1,
+                                          memory_order_release);
+                } else {
+                    pthread_join(rotator_thr, NULL);
+                    ran = true;
+                }
+                pthread_join(writer_thr, NULL);
+            }
+        }
 
-        if (crashed != 0) {
-            ERR("retireRace: writer observed unexpected Ingest result class "
-                "%d times — possible UAF or torn key",
-                crashed);
-        }
-        /* Both threads must have made meaningful progress, otherwise
-         * we are not actually exercising the race. */
-        if (writer_iters < 100u) {
-            ERR("retireRace: writer only completed %" PRIu64
-                " iterations — race coverage too thin",
-                writer_iters);
-        }
-        if (rotator_iters < 100u) {
-            ERR("retireRace: rotator only completed %" PRIu64
-                " iterations — race coverage too thin",
-                rotator_iters);
-        }
-        /* Restore a clean keyring binding so cleanup is well-defined
-         * regardless of which thread last touched the slot. */
-        (void)hmacKeyringRetire(ring, KID);
-        if (!hmacKeyringInstallUnsalted(ring, KID, &hmacAlgoSHA256, key,
-                                        sizeof(key))) {
-            /* Slot was already retired AND not reinstalled by rotator's
-             * last action — install fresh now. */
+        if (ran) {
+            const uint64_t writerOk =
+                atomic_load_explicit(&ctx.writer_ok, memory_order_acquire);
+            if (writerOk < CM_RACE_TARGET_OK) {
+                ERR("retireRace: writer completed only %" PRIu64 " of %" PRIu64
+                    " applied round trips before the rotator hit its cap of "
+                    "%" PRIu64 " rotations",
+                    writerOk, CM_RACE_TARGET_OK, CM_RACE_ROTATION_CAP);
+            }
+            if (ctx.rotations < CM_RACE_TARGET_ROTATIONS) {
+                ERR("retireRace: rotator did only %" PRIu64 " of %" PRIu64
+                    " rotations",
+                    ctx.rotations, CM_RACE_TARGET_ROTATIONS);
+            }
+            if (ctx.rotator_failures != 0) {
+                ERR("retireRace: %" PRIu64 " Retire/Reinstall calls failed "
+                    "with the rotator as the only mutator",
+                    ctx.rotator_failures);
+            }
+            if (ctx.copies_bad != 0) {
+                ERR("retireRace: %" PRIu64 " of %" PRIu64
+                    " GetRawCopy reads returned a torn, wrong or overrun "
+                    "copy, or touched the buffer on failure",
+                    ctx.copies_bad,
+                    ctx.copies_ok + ctx.copies_empty + ctx.copies_bad);
+            }
+            if (ctx.result_bad != 0) {
+                ERR("retireRace: %" PRIu64 " round trips ended in a result "
+                    "other than OK or KEY_MISSING, or applied the wrong "
+                    "number of frames",
+                    ctx.result_bad);
+            }
+            if (ctx.apply_bad != 0) {
+                ERR("retireRace: %" PRIu64 " applied frames did not match "
+                    "the sealed origin, sequence, msg_type or payload",
+                    ctx.apply_bad);
+            }
+            if (ctx.applied != writerOk) {
+                ERR("retireRace: apply ran %" PRIu64 " times for %" PRIu64
+                    " OK round trips",
+                    ctx.applied, writerOk);
+            }
+
+            /* Quiescent: the rotator's last action was a Reinstall, so K
+             * is installed and a full copy and a round trip must work. */
+            const uint64_t copiesOkBefore = ctx.copies_ok;
+            cmRetireRaceCheckCopy(&ctx);
+            if (ctx.copies_ok != copiesOkBefore + 1u) {
+                ERRR("retireRace: GetRawCopy after join did not return the "
+                     "complete key");
+            }
+            const size_t cap =
+                clusterMailboxSealedSize(mb, CM_RACE_PAYLOAD_LEN);
+            cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(cap);
+            const clusterMailboxIngestResult rc =
+                cmRetireRaceRoundTrip(&ctx, buf, cap);
+            if (rc != CLUSTER_MAILBOX_OK || ctx.applied != writerOk + 1u) {
+                ERR("retireRace: Seal + Ingest after join returned %d "
+                    "(applied %" PRIu64 ", expected %" PRIu64 ")",
+                    (int)rc, ctx.applied, writerOk + 1u);
+            }
         }
 
         clusterMailboxFree(mb);
