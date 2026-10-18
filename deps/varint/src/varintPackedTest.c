@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <inttypes.h>
 #include <stdlib.h>
 
 #define PACK_STORAGE_BITS 12
@@ -129,6 +130,82 @@ static int checkMisaligned(const char *name, const uint32_t bits,
     return failures;
 }
 
+/* SetIncr saturates at [0, 2^bits - 1] and no write reaches a neighbouring
+ * value. For every bit alignment of a target value, with several neighbour
+ * patterns on both sides, check max+1, max+huge, 0-1, 0+INT64_MIN, plain
+ * increments and decrements, and (assert-free builds only) an oversized Set. */
+static int checkSaturation(const char *name, const uint32_t bits,
+                           const packedSetFn set, const packedGetFn get,
+                           const packedIncrFn incr) {
+    uint64_t storage[64] = {0};
+    const uint16_t mask = (uint16_t)((1u << bits) - 1);
+    const uint16_t neighbours[][2] = {
+        {0, 0},
+        {mask, mask},
+        {(uint16_t)(0x5555 & mask), (uint16_t)(0xaaaa & mask)}};
+    const struct {
+        uint16_t start;
+        int64_t incrBy;
+        uint16_t expect;
+    } cases[] = {
+        {mask, 1, mask},         /* max + 1 stays at max */
+        {mask, INT64_MAX, mask}, /* max + huge stays at max */
+        {(uint16_t)(mask - 1), 1, mask},
+        {(uint16_t)(mask - 1), 2, mask},
+        {0, -1, 0},        /* 0 - 1 stays at 0 */
+        {0, INT64_MIN, 0}, /* 0 + INT64_MIN stays at 0 */
+        {mask, -1, (uint16_t)(mask - 1)},
+        {5, -2, 3}, /* a decrement lowers the value */
+        {3, -5, 0},
+        {mask, INT64_MIN, 0},
+        {0, mask, mask},
+        {1, 2, 3},
+    };
+    int failures = 0;
+
+    for (uint32_t t = 1; t < 130; t++) {
+        for (size_t n = 0; n < sizeof(neighbours) / sizeof(*neighbours); n++) {
+            for (size_t c = 0; c < sizeof(cases) / sizeof(*cases); c++) {
+                memset(storage, 0, sizeof(storage));
+                set(storage, t - 1, neighbours[n][0]);
+                set(storage, t + 1, neighbours[n][1]);
+                set(storage, t, cases[c].start);
+                incr(storage, t, cases[c].incrBy);
+
+                const uint16_t got = get(storage, t);
+                const uint16_t before = get(storage, t - 1);
+                const uint16_t after = get(storage, t + 1);
+                if (got != cases[c].expect || before != neighbours[n][0] ||
+                    after != neighbours[n][1]) {
+                    printf("%s [%u] %u%+" PRId64 ": got %u (expected %u), "
+                           "neighbours %u/%u (expected %u/%u)\n",
+                           name, t, cases[c].start, cases[c].incrBy, got,
+                           cases[c].expect, before, after, neighbours[n][0],
+                           neighbours[n][1]);
+                    failures++;
+                }
+            }
+
+#ifdef NDEBUG
+            /* Set asserts that the value fits; without the assert it keeps
+             * only the low 'bits' bits */
+            memset(storage, 0, sizeof(storage));
+            set(storage, t - 1, neighbours[n][0]);
+            set(storage, t + 1, neighbours[n][1]);
+            set(storage, t, 0xffff);
+            if (get(storage, t) != mask ||
+                get(storage, t - 1) != neighbours[n][0] ||
+                get(storage, t + 1) != neighbours[n][1]) {
+                printf("%s [%u]: oversized Set reached a neighbour\n", name, t);
+                failures++;
+            }
+#endif
+        }
+    }
+
+    return failures;
+}
+
 int main(int argc, const char *argv[]) {
     int32_t i;
     uint64_t j;
@@ -147,6 +224,22 @@ int main(int argc, const char *argv[]) {
                         varintPackedSlot64_13SetHalf);
     if (misaligned) {
         printf("misaligned storage: %d failures\n", misaligned);
+        return 1;
+    }
+
+    const int saturation =
+        checkSaturation("slot8", 12, varintPackedCompact12Set,
+                        varintPackedCompact12Get,
+                        varintPackedCompact12SetIncr) +
+        checkSaturation("slot16", 12, varintPackedSlot16_12Set,
+                        varintPackedSlot16_12Get,
+                        varintPackedSlot16_12SetIncr) +
+        checkSaturation("slot32", 12, varintPacked12Set, varintPacked12Get,
+                        varintPacked12SetIncr) +
+        checkSaturation("slot64", 13, varintPackedSlot64_13Set,
+                        varintPackedSlot64_13Get, varintPackedSlot64_13SetIncr);
+    if (saturation) {
+        printf("SetIncr saturation: %d failures\n", saturation);
         return 1;
     }
 

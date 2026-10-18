@@ -79,6 +79,15 @@ size_t varintPacked{N}CountFromStorageBytes(size_t bytes);
 
 where `{N}` is replaced by `PACK_STORAGE_BITS` (e.g., `varintPacked12Set` for 12-bit packing).
 
+No operation ever writes into a neighbouring value:
+
+- `Set` requires `value` to fit in `N` bits (asserted) and discards any
+  higher bits.
+- `SetIncr` saturates. The result is clamped to `[0, 2^N - 1]`, so an
+  increment past the maximum stays at the maximum, and a negative `delta`
+  lowers the value and stops at 0 instead of wrapping.
+- `SetHalf` divides the value by two, rounding down.
+
 ## Real-World Examples
 
 ### Example 1: IP Address Components

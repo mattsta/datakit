@@ -315,8 +315,16 @@ if(VARINT_BUILD_TESTS)
     add_test(NAME varint-dd-stream-fuzz COMMAND varintDDStreamFuzz 20000 24151)
     add_test(NAME varint-dd-docs COMMAND varintDDDocTest)
 
-    # Generate debug symbols on macOS
-    if(APPLE)
+    # Generate dSYM bundles on macOS, but only when the build compiles with
+    # debug info (-g, as Debug and RelWithDebInfo do): without it dsymutil
+    # has nothing to collect and prints "no debug symbols in executable".
+    string(TOUPPER "${CMAKE_BUILD_TYPE}" VARINT_BUILD_TYPE_UPPER)
+    set(VARINT_DEBUG_INFO OFF)
+    if(" ${CMAKE_C_FLAGS} ${CMAKE_C_FLAGS_${VARINT_BUILD_TYPE_UPPER}} " MATCHES " -g")
+        set(VARINT_DEBUG_INFO ON)
+    endif()
+
+    if(APPLE AND VARINT_DEBUG_INFO)
         add_custom_command(TARGET ${PROJECT_NAME}Compare POST_BUILD COMMAND dsymutil ${PROJECT_NAME}Compare COMMENT "Generating OS X Debug Info")
         add_custom_command(TARGET ${DIMENSION}Test POST_BUILD COMMAND dsymutil ${DIMENSION}Test COMMENT "Generating OS X Debug Info")
         add_custom_command(TARGET ${PACKED}Test POST_BUILD COMMAND dsymutil ${PACKED}Test COMMENT "Generating OS X Debug Info")

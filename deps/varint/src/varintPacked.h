@@ -198,6 +198,9 @@
     PACKED_NAME(PACKED_NAME(PACK_FUNCTION_PREFIX, PACK_STORAGE_BITS), SlotLoad)
 #define PACKED_SLOT_STORE                                                      \
     PACKED_NAME(PACKED_NAME(PACK_FUNCTION_PREFIX, PACK_STORAGE_BITS), SlotStore)
+#define PACKED_SATURATING_ADD                                                  \
+    PACKED_NAME(PACKED_NAME(PACK_FUNCTION_PREFIX, PACK_STORAGE_BITS),          \
+                SaturatingAdd)
 
 /* Packed storage may start at any address (e.g. inside a byte stream), so
  * storage is addressed through a slot type with alignment 1 and every slot
@@ -217,6 +220,9 @@ static inline void PACKED_SLOT_STORE(PACKED_SLOT *dst,
     memcpy(dst, &slot, sizeof(slot));
 }
 
+/* Store 'val' at 'offset'. 'val' must fit in BITS_PER_VALUE bits (asserted);
+ * any higher bits are discarded, so a value never reaches the bits of its
+ * neighbours. */
 PACKED_STATIC void PACKED_ARRAY_SET(void *_dst, const PACKED_LEN_TYPE offset,
                                     const VALUE_TYPE val) {
     PACKED_SLOT *restrict out;
@@ -232,6 +238,8 @@ PACKED_STATIC void PACKED_ARRAY_SET(void *_dst, const PACKED_LEN_TYPE offset,
     bitsAvailable = BITS_PER_SLOT - startBit;
 
     assert(0 == (~VALUE_MASK & val));
+    const uint64_t fitted =
+        (uint64_t)MICRO_PROMOTION_TYPE_CAST(val) & VALUE_MASK;
 
 #if SLOT_CAN_HOLD_ENTIRE_VALUE
     if (BITS_PER_VALUE <= bitsAvailable) {
@@ -247,8 +255,7 @@ PACKED_STATIC void PACKED_ARRAY_SET(void *_dst, const PACKED_LEN_TYPE offset,
         SLOT_STORAGE_TYPE current = PACKED_SLOT_LOAD(out);
         current = (SLOT_STORAGE_TYPE)((current &
                                        ~((uint64_t)VALUE_MASK << startBit)) |
-                                      ((uint64_t)MICRO_PROMOTION_TYPE_CAST(val)
-                                       << startBit));
+                                      (fitted << startBit));
         PACKED_SLOT_STORE(out, current);
     } else {
 #endif
@@ -286,8 +293,8 @@ PACKED_STATIC void PACKED_ARRAY_SET(void *_dst, const PACKED_LEN_TYPE offset,
          * be expected.  If you're debugging a raw byte array of packed
          * integers, remember to not read the bit values in the bytes
          * as if they should just be concatenated together. */
-        low = (uint64_t)MICRO_PROMOTION_TYPE_CAST(val) << startBit;
-        high = (uint64_t)MICRO_PROMOTION_TYPE_CAST(val) >> bitsAvailable;
+        low = fitted << startBit;
+        high = fitted >> bitsAvailable;
 
         SLOT_STORAGE_TYPE slot0 = PACKED_SLOT_LOAD(&out[0]);
         SLOT_STORAGE_TYPE slot1 = PACKED_SLOT_LOAD(&out[1]);
@@ -379,6 +386,27 @@ PACKED_STATIC void PACKED_ARRAY_SET_HALF(void *_dst,
 #endif
 }
 
+/* 'current' plus 'incrBy', clamped to [0, VALUE_MASK]: an increment stops at
+ * the largest value BITS_PER_VALUE bits can hold and a decrement stops at 0.
+ * Requires current <= VALUE_MASK (every stored value is). */
+static inline VALUE_TYPE PACKED_SATURATING_ADD(const VALUE_TYPE current,
+                                               const int64_t incrBy) {
+    const uint64_t cur = (uint64_t)current;
+    if (incrBy >= 0) {
+        const uint64_t room = (uint64_t)VALUE_MASK - cur;
+        return (VALUE_TYPE)((uint64_t)incrBy >= room ? (uint64_t)VALUE_MASK
+                                                     : cur + (uint64_t)incrBy);
+    }
+
+    /* Magnitude of a negative int64_t, INT64_MIN included */
+    const uint64_t decrBy = (uint64_t)0 - (uint64_t)incrBy;
+    return (VALUE_TYPE)(decrBy >= cur ? 0 : cur - decrBy);
+}
+
+/* Add 'incrBy' (which may be negative) to the value at 'offset', saturating:
+ * the result is clamped to [0, 2^BITS_PER_VALUE - 1], so counting past the
+ * maximum keeps the maximum, a decrement never goes below 0 or wraps, and
+ * the neighbouring values are never touched. */
 PACKED_STATIC void PACKED_ARRAY_SET_INCR(void *_dst,
                                          const PACKED_LEN_TYPE offset,
                                          const int64_t incrBy) {
@@ -400,10 +428,7 @@ PACKED_STATIC void PACKED_ARRAY_SET_INCR(void *_dst,
         SLOT_STORAGE_TYPE slot = PACKED_SLOT_LOAD(out);
         const VALUE_TYPE current =
             (MICRO_PROMOTION_TYPE_CAST(slot) >> startBit) & VALUE_MASK;
-        VALUE_TYPE val = (VALUE_TYPE)(current + incrBy);
-        /* Detect overflow: if result is less than operand, wraparound occurred
-         */
-        val = (val < current) ? (VALUE_TYPE)(current - incrBy) : val;
+        const VALUE_TYPE val = PACKED_SATURATING_ADD(current, incrBy);
         slot =
             (SLOT_STORAGE_TYPE)((slot & ~((uint64_t)VALUE_MASK << startBit)) |
                                 ((uint64_t)MICRO_PROMOTION_TYPE_CAST(val)
@@ -424,10 +449,7 @@ PACKED_STATIC void PACKED_ARRAY_SET_INCR(void *_dst,
         const VALUE_TYPE current =
             (VALUE_TYPE)(low | (high & (((uint64_t)VALUE_MASK >> bitsAvailable)
                                         << bitsAvailable)));
-        VALUE_TYPE val = (VALUE_TYPE)(current + incrBy);
-        /* Detect overflow: if result is less than operand, wraparound occurred
-         */
-        val = (val < current) ? (VALUE_TYPE)(current - incrBy) : val;
+        const VALUE_TYPE val = PACKED_SATURATING_ADD(current, incrBy);
 
         /* SET */
         low = (uint64_t)MICRO_PROMOTION_TYPE_CAST(val) << startBit;
@@ -656,6 +678,7 @@ PACKED_STATIC bool PACKED_ARRAY_DELETE_MEMBER_BYTES(void *_dst,
 #undef PACKED_SLOT
 #undef PACKED_SLOT_LOAD
 #undef PACKED_SLOT_STORE
+#undef PACKED_SATURATING_ADD
 #undef SLOT_CAN_HOLD_ENTIRE_VALUE
 
 #undef PACKED_STATIC

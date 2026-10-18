@@ -237,12 +237,13 @@ typedef enum varintSplitFullNoZeroByte {
  * Since 6 bit values have no additional data and 14 bit values have 1 byte
  * of additional data and 22 bit values have 2 bytes of additional data,
  * we can just shift down our type byte by 6 to obtain
- * the "additional" width of the embedded type (if any). */
+ * the "additional" width of the embedded type (if any).
+ * Both arms are varintWidth, so the length has one type. */
 #define varintSplitFullNoZeroGetLenQuick_(ptr)                                 \
     (1 +                                                                       \
      (varintSplitFullNoZeroEncoding2_(ptr) == VARINT_SPLIT_FULL_NO_ZERO_VAR    \
           ? varintSplitFullNoZeroEncodingWidthBytesExternal_(ptr)              \
-          : (ptr)[0] >> 6))
+          : (varintWidth)((ptr)[0] >> 6)))
 
 #define varintSplitFullNoZeroGetLen_(ptr, valsize)                             \
     do {                                                                       \
