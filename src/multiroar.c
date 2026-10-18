@@ -2270,9 +2270,9 @@ uint64_t multiroarSerializedSize(const multiroar *r) {
         size += 1;
 
         /* Chunk data */
-        uint8_t chunkType = GET_CHUNK_TYPE(value);
+        uint8_t chunkKind = GET_CHUNK_TYPE(value);
 
-        switch (chunkType) {
+        switch (chunkKind) {
         case CHUNK_TYPE_ALL_0:
         case CHUNK_TYPE_ALL_1:
             /* No data */
@@ -2371,11 +2371,11 @@ uint64_t multiroarSerialize(const multiroar *r, void *buf, uint64_t bufSize) {
         if (p >= end) {
             return 0;
         }
-        uint8_t chunkType = GET_CHUNK_TYPE(value);
-        *p++ = chunkType;
+        uint8_t chunkKind = GET_CHUNK_TYPE(value);
+        *p++ = chunkKind;
 
         /* Chunk data */
-        switch (chunkType) {
+        switch (chunkKind) {
         case CHUNK_TYPE_ALL_0:
         case CHUNK_TYPE_ALL_1:
             /* No data */
@@ -2488,10 +2488,10 @@ multiroar *multiroarDeserialize(const void *buf, uint64_t bufSize) {
         if (p >= end) {
             return NULL;
         }
-        uint8_t chunkType = *p++;
+        uint8_t chunkKind = *p++;
 
         /* Reconstruct chunk directly as bytes blob */
-        switch (chunkType) {
+        switch (chunkKind) {
         case CHUNK_TYPE_ALL_0:
             /* Skip - not stored in map */
             continue;
@@ -2542,7 +2542,7 @@ multiroar *multiroarDeserialize(const void *buf, uint64_t bufSize) {
             if (!chunk) {
                 return NULL;
             }
-            chunk[0] = chunkType;
+            chunk[0] = chunkKind;
             memcpy(chunk + 1, tempCount, countBytes); /* TaggedVarint count */
 
             /* Read positions and pack them */
