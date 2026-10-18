@@ -9129,9 +9129,9 @@ static int dkTestNonceLogEvictionPerfTest(int argc, char *argv[]) {
         for (uint64_t i = 1u; i <= kCap; i++) {
             dkTestNonceLogMkNonce(i, nonce);
             if (!aeadNonceLogObserve(log, kKeyId, nonce)) {
-                printf("dkTestNonceLogEvictionPerf: A setup observe %llu "
-                       "refused\n",
-                       (unsigned long long)i);
+                printf("dkTestNonceLogEvictionPerf: A setup observe %" PRIu64
+                       " refused\n",
+                       i);
                 failures++;
                 goto endA;
             }
@@ -9191,8 +9191,9 @@ static int dkTestNonceLogEvictionPerfTest(int argc, char *argv[]) {
         for (uint64_t i = 1u; i <= kCap; i++) {
             dkTestNonceLogMkNonce(i, nonce);
             if (!aeadNonceLogObserve(log, kKeyId, nonce)) {
-                printf("dkTestNonceLogEvictionPerf: B fill iter %llu refused\n",
-                       (unsigned long long)i);
+                printf("dkTestNonceLogEvictionPerf: B fill iter %" PRIu64
+                       " refused\n",
+                       i);
                 failures++;
                 goto endB;
             }
@@ -9201,9 +9202,9 @@ static int dkTestNonceLogEvictionPerfTest(int argc, char *argv[]) {
         for (uint64_t i = 0; i < kEvictions; i++) {
             dkTestNonceLogMkNonce(kCap + 1u + i, nonce);
             if (!aeadNonceLogObserve(log, kKeyId, nonce)) {
-                printf(
-                    "dkTestNonceLogEvictionPerf: B evict iter %llu refused\n",
-                    (unsigned long long)i);
+                printf("dkTestNonceLogEvictionPerf: B evict iter %" PRIu64
+                       " refused\n",
+                       i);
                 failures++;
                 break;
             }
@@ -9216,9 +9217,9 @@ static int dkTestNonceLogEvictionPerfTest(int argc, char *argv[]) {
                    per_ns, kMaxPerInsertNs);
             failures++;
         }
-        printf("dkTestNonceLogEvictionPerf: B cap=%zu evictions=%llu "
-               "per-insert=%.1f ns\n",
-               kCap, (unsigned long long)kEvictions, per_ns);
+        printf("dkTestNonceLogEvictionPerf: B cap=%zu evictions=%" PRIu64
+               " per-insert=%.1f ns\n",
+               kCap, kEvictions, per_ns);
     endB:
         /* Scope exit releases the log on every path out of this block. */
         ;
@@ -9343,26 +9344,27 @@ static int dkTestReplicatorRetryDropTest(int argc, char *argv[]) {
 
         if (ctx_b.reject_count != 3) {
             printf("dkTestReplicatorRetryDrop: expected 3 rejects for seq 5, "
-                   "got %llu\n",
-                   (unsigned long long)ctx_b.reject_count);
+                   "got %" PRIu64 "\n",
+                   ctx_b.reject_count);
             failures++;
         }
         if (clusterReplicatorDroppedCount(rep) != 1) {
             printf("dkTestReplicatorRetryDrop: expected dropped_count=1, got "
-                   "%llu\n",
-                   (unsigned long long)clusterReplicatorDroppedCount(rep));
+                   "%" PRIu64 "\n",
+                   clusterReplicatorDroppedCount(rep));
             failures++;
         }
         if (ctx_b.accept_count != 9) {
-            printf("dkTestReplicatorRetryDrop: expected 9 accepts, got %llu\n",
-                   (unsigned long long)ctx_b.accept_count);
+            printf("dkTestReplicatorRetryDrop: expected 9 accepts, got %" PRIu64
+                   "\n",
+                   ctx_b.accept_count);
             failures++;
         }
         clusterMailbox *mb = clusterReplicatorMailbox(rep);
         if (clusterMailboxLastApplied(mb, 1u) != 10) {
             printf("dkTestReplicatorRetryDrop: expected watermark=10, got "
-                   "%llu\n",
-                   (unsigned long long)clusterMailboxLastApplied(mb, 1u));
+                   "%" PRIu64 "\n",
+                   clusterMailboxLastApplied(mb, 1u));
             failures++;
         }
         for (uint64_t i = 0; i < ctx_b.accept_count && i < 16; i++) {
@@ -9407,21 +9409,21 @@ skip_case2:
         }
         if (clusterReplicatorDroppedCount(rep) != 0) {
             printf("dkTestReplicatorRetryDrop: legacy dropped_count expected "
-                   "0, got %llu\n",
-                   (unsigned long long)clusterReplicatorDroppedCount(rep));
+                   "0, got %" PRIu64 "\n",
+                   clusterReplicatorDroppedCount(rep));
             failures++;
         }
         clusterMailbox *mb = clusterReplicatorMailbox(rep);
         if (clusterMailboxLastApplied(mb, 1u) != 0) {
             printf("dkTestReplicatorRetryDrop: legacy watermark expected 0, "
-                   "got %llu\n",
-                   (unsigned long long)clusterMailboxLastApplied(mb, 1u));
+                   "got %" PRIu64 "\n",
+                   clusterMailboxLastApplied(mb, 1u));
             failures++;
         }
         if (ctx_c.reject_count != 50) {
             printf("dkTestReplicatorRetryDrop: legacy reject_count expected "
-                   "50, got %llu\n",
-                   (unsigned long long)ctx_c.reject_count);
+                   "50, got %" PRIu64 "\n",
+                   ctx_c.reject_count);
             failures++;
         }
         clusterReplicatorFree(rep);
@@ -9802,8 +9804,9 @@ static int dkTestClusterRingFlexSerializeTest(int argc, char *argv[]) {
             .initialState = src_nodes[i].state,
         };
         if (clusterRingAddNode(src, &nc) != CLUSTER_OK) {
-            printf("dkTestClusterRingFlexSerialize: AddNode #%llu failed\n",
-                   (unsigned long long)src_nodes[i].id);
+            printf("dkTestClusterRingFlexSerialize: AddNode #%" PRIu64
+                   " failed\n",
+                   src_nodes[i].id);
             failures++;
         }
     }
@@ -9853,28 +9856,28 @@ static int dkTestClusterRingFlexSerializeTest(int argc, char *argv[]) {
     for (size_t i = 0; i < kN; i++) {
         const clusterNode *n = clusterRingGetNode(dst, src_nodes[i].id);
         if (n == NULL) {
-            printf("dkTestClusterRingFlexSerialize: node id=%llu missing in "
-                   "restored ring\n",
-                   (unsigned long long)src_nodes[i].id);
+            printf("dkTestClusterRingFlexSerialize: node id=%" PRIu64
+                   " missing in restored ring\n",
+                   src_nodes[i].id);
             failures++;
             continue;
         }
         if (clusterNodeGetState(n) != src_nodes[i].state) {
-            printf("dkTestClusterRingFlexSerialize: node id=%llu state "
-                   "mismatch\n",
-                   (unsigned long long)src_nodes[i].id);
+            printf("dkTestClusterRingFlexSerialize: node id=%" PRIu64
+                   " state mismatch\n",
+                   src_nodes[i].id);
             failures++;
         }
         if (clusterNodeGetWeight(n) != src_nodes[i].weight) {
-            printf("dkTestClusterRingFlexSerialize: node id=%llu weight "
-                   "mismatch\n",
-                   (unsigned long long)src_nodes[i].id);
+            printf("dkTestClusterRingFlexSerialize: node id=%" PRIu64
+                   " weight mismatch\n",
+                   src_nodes[i].id);
             failures++;
         }
         if (clusterNodeGetCapacity(n) != src_nodes[i].cap) {
-            printf("dkTestClusterRingFlexSerialize: node id=%llu capacity "
-                   "mismatch\n",
-                   (unsigned long long)src_nodes[i].id);
+            printf("dkTestClusterRingFlexSerialize: node id=%" PRIu64
+                   " capacity mismatch\n",
+                   src_nodes[i].id);
             failures++;
         }
         const clusterLocation *loc = clusterNodeGetLocation(n);
@@ -9886,23 +9889,23 @@ static int dkTestClusterRingFlexSerializeTest(int argc, char *argv[]) {
             loc->regionId != src_nodes[i].loc.regionId ||
             loc->countryId != src_nodes[i].loc.countryId ||
             loc->continentId != src_nodes[i].loc.continentId) {
-            printf("dkTestClusterRingFlexSerialize: node id=%llu location "
-                   "mismatch\n",
-                   (unsigned long long)src_nodes[i].id);
+            printf("dkTestClusterRingFlexSerialize: node id=%" PRIu64
+                   " location mismatch\n",
+                   src_nodes[i].id);
             failures++;
         }
         const char *got_name = clusterNodeGetName(n);
         if (got_name == NULL || strcmp(got_name, src_nodes[i].name) != 0) {
-            printf("dkTestClusterRingFlexSerialize: node id=%llu name "
-                   "mismatch\n",
-                   (unsigned long long)src_nodes[i].id);
+            printf("dkTestClusterRingFlexSerialize: node id=%" PRIu64
+                   " name mismatch\n",
+                   src_nodes[i].id);
             failures++;
         }
         const char *got_addr = clusterNodeGetAddress(n);
         if (got_addr == NULL || strcmp(got_addr, src_nodes[i].addr) != 0) {
-            printf("dkTestClusterRingFlexSerialize: node id=%llu address "
-                   "mismatch\n",
-                   (unsigned long long)src_nodes[i].id);
+            printf("dkTestClusterRingFlexSerialize: node id=%" PRIu64
+                   " address mismatch\n",
+                   src_nodes[i].id);
             failures++;
         }
     }
@@ -10373,7 +10376,7 @@ int dkTestMailboxInnerHeaderFlexTest(int argc, char *argv[]) {
             ERR("origin mismatch: got 0x%x", origin);
         }
         if (seq != SEQ) {
-            ERR("sequence mismatch: got 0x%llx", (unsigned long long)seq);
+            ERR("sequence mismatch: got 0x%" PRIx64, seq);
         }
         if (mtype != MTYPE) {
             ERR("msg_type mismatch: got %u", (unsigned)mtype);
@@ -11168,22 +11171,21 @@ static int dkTestClusterE2EReplayProtectionTest(int argc, char *argv[]) {
     clusterMailboxStats stats_after_valid;
     clusterMailboxGetStats(mb, &stats_after_valid);
     if (stats_after_valid.apply_ok != (uint64_t)D4_VALID_INGESTS) {
-        printf("dkTestClusterE2EReplay: apply_ok=%llu expected %d after valid "
-               "phase\n",
-               (unsigned long long)stats_after_valid.apply_ok,
-               D4_VALID_INGESTS);
+        printf("dkTestClusterE2EReplay: apply_ok=%" PRIu64
+               " expected %d after valid phase\n",
+               stats_after_valid.apply_ok, D4_VALID_INGESTS);
         failures++;
     }
     if (valid_success != (uint64_t)D4_VALID_INGESTS) {
-        printf("dkTestClusterE2EReplay: valid_success=%llu expected %d\n",
-               (unsigned long long)valid_success, D4_VALID_INGESTS);
+        printf("dkTestClusterE2EReplay: valid_success=%" PRIu64
+               " expected %d\n",
+               valid_success, D4_VALID_INGESTS);
         failures++;
     }
     if (clusterMailboxLastApplied(mb, D4_ORIGIN_ID) !=
         (uint64_t)D4_VALID_INGESTS) {
-        printf("dkTestClusterE2EReplay: lastApplied=%llu expected %d\n",
-               (unsigned long long)clusterMailboxLastApplied(mb, D4_ORIGIN_ID),
-               D4_VALID_INGESTS);
+        printf("dkTestClusterE2EReplay: lastApplied=%" PRIu64 " expected %d\n",
+               clusterMailboxLastApplied(mb, D4_ORIGIN_ID), D4_VALID_INGESTS);
         failures++;
     }
 
@@ -11270,40 +11272,39 @@ static int dkTestClusterE2EReplayProtectionTest(int argc, char *argv[]) {
         (uint64_t)(D4_ENV_REPLAYS + D4_SEQ_REPLAYS);
 
     if (final_stats.apply_ok != exp_apply_ok) {
-        printf("dkTestClusterE2EReplay: final apply_ok=%llu expected %llu\n",
-               (unsigned long long)final_stats.apply_ok,
-               (unsigned long long)exp_apply_ok);
+        printf("dkTestClusterE2EReplay: final apply_ok=%" PRIu64
+               " expected %" PRIu64 "\n",
+               final_stats.apply_ok, exp_apply_ok);
         failures++;
     }
     if (final_stats.verify_failed != exp_verify_failed) {
-        printf(
-            "dkTestClusterE2EReplay: final verify_failed=%llu expected %llu\n",
-            (unsigned long long)final_stats.verify_failed,
-            (unsigned long long)exp_verify_failed);
+        printf("dkTestClusterE2EReplay: final verify_failed=%" PRIu64
+               " expected %" PRIu64 "\n",
+               final_stats.verify_failed, exp_verify_failed);
         failures++;
     }
     if (final_stats.replay_rejected != exp_replay_rejected) {
-        printf("dkTestClusterE2EReplay: final replay_rejected=%llu expected "
-               "%llu\n",
-               (unsigned long long)final_stats.replay_rejected,
-               (unsigned long long)exp_replay_rejected);
+        printf("dkTestClusterE2EReplay: final replay_rejected=%" PRIu64
+               " expected %" PRIu64 "\n",
+               final_stats.replay_rejected, exp_replay_rejected);
         failures++;
     }
     const uint64_t replay_class_caught =
         final_stats.replay_rejected + final_stats.verify_failed;
     if (replay_class_caught < (uint64_t)D4_ENV_REPLAYS) {
-        printf("dkTestClusterE2EReplay: replay_class_caught=%llu < %d\n",
-               (unsigned long long)replay_class_caught, D4_ENV_REPLAYS);
+        printf("dkTestClusterE2EReplay: replay_class_caught=%" PRIu64 " < %d\n",
+               replay_class_caught, D4_ENV_REPLAYS);
         failures++;
     }
     if (final_stats.ingest_total != (uint64_t)D4_TOTAL_FRAMES) {
-        printf("dkTestClusterE2EReplay: ingest_total=%llu expected %d\n",
-               (unsigned long long)final_stats.ingest_total, D4_TOTAL_FRAMES);
+        printf("dkTestClusterE2EReplay: ingest_total=%" PRIu64 " expected %d\n",
+               final_stats.ingest_total, D4_TOTAL_FRAMES);
         failures++;
     }
     if (final_stats.apply_rejected != 0u) {
-        printf("dkTestClusterE2EReplay: apply_rejected=%llu expected 0\n",
-               (unsigned long long)final_stats.apply_rejected);
+        printf("dkTestClusterE2EReplay: apply_rejected=%" PRIu64
+               " expected 0\n",
+               final_stats.apply_rejected);
         failures++;
     }
     if (final_stats.algo_mismatch != 0u || final_stats.bad_frame != 0u ||
@@ -11346,21 +11347,19 @@ static int dkTestClusterE2EReplayProtectionTest(int argc, char *argv[]) {
         }
     }
     if (app_ctx.apply_invocations != 1u) {
-        printf("dkTestClusterE2EReplay: replicator apply_invocations=%llu "
-               "expected 1\n",
-               (unsigned long long)app_ctx.apply_invocations);
+        printf("dkTestClusterE2EReplay: replicator apply_invocations=%" PRIu64
+               " expected 1\n",
+               app_ctx.apply_invocations);
         failures++;
     }
 
-    printf("dkTestClusterE2EReplay counters: apply_ok=%llu verify_failed=%llu "
-           "replay_rejected=%llu "
-           "ingest_total=%llu nonceLog.size=%zu apply_invocations=%llu\n",
-           (unsigned long long)final_stats.apply_ok,
-           (unsigned long long)final_stats.verify_failed,
-           (unsigned long long)final_stats.replay_rejected,
-           (unsigned long long)final_stats.ingest_total,
-           aeadNonceLogSize(nonceLog),
-           (unsigned long long)app_ctx.apply_invocations);
+    printf("dkTestClusterE2EReplay counters: apply_ok=%" PRIu64
+           " verify_failed=%" PRIu64 " replay_rejected=%" PRIu64
+           " ingest_total=%" PRIu64
+           " nonceLog.size=%zu apply_invocations=%" PRIu64 "\n",
+           final_stats.apply_ok, final_stats.verify_failed,
+           final_stats.replay_rejected, final_stats.ingest_total,
+           aeadNonceLogSize(nonceLog), app_ctx.apply_invocations);
 
 cleanup_after_phase1:
     clusterReplicatorFree(rep);
@@ -11630,9 +11629,9 @@ static int dkTestEnvelopeStructAwareFuzzTest(int argc, char *argv[]) {
             total_mut[ai] == 0
                 ? 0.0
                 : ((double)reject_mut[ai] * 100.0 / (double)total_mut[ai]);
-        printf("  %-25s total=%-8llu rejected=%-8llu rate=%.4f%%\n",
-               kAlgoNames[ai], (unsigned long long)total_mut[ai],
-               (unsigned long long)reject_mut[ai], rate);
+        printf("  %-25s total=%-8" PRIu64 " rejected=%-8" PRIu64
+               " rate=%.4f%%\n",
+               kAlgoNames[ai], total_mut[ai], reject_mut[ai], rate);
         if (total_mut[ai] != reject_mut[ai]) {
             failures++;
         }
