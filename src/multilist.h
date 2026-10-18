@@ -77,6 +77,11 @@ bool multilistIteratorInitAtIdx(const multilist *ml, mflexState *state[2],
 #define multilistIteratorInitAtIdxReverseReadOnly(ml, s, iter, idx)            \
     multilistIteratorInitAtIdx(ml, s, iter, idx, false, true)
 
+/* multilistNext, multilistIndex and multilistIndexNear fill 'entry'
+ * completely (it needs no initialization) and decode the element into
+ * entry->box with its own wide storage, so a 96/128-bit element reads back
+ * whole.  entry->box borrows from the list and from the entry; see
+ * multilistEntry in multilistCommon.h for how long it stays valid. */
 bool multilistNext(multilistIterator *iter, multilistEntry *entry);
 
 void multilistRewind(multilist *ml, multilistIterator *iter);
@@ -84,6 +89,8 @@ void multilistRewindTail(multilist *ml, multilistIterator *iter);
 
 void multilistIteratorRelease(multilistIterator *iter);
 
+/* With openNode false the Full tier only checks that 'index' exists and
+ * leaves entry->fe and entry->box unset; Small and Medium always decode. */
 bool multilistIndex(const multilist *ml, mflexState *state, mlOffsetId index,
                     multilistEntry *entry, bool openNode);
 #define multilistIndexGet(ml, s, i, e) multilistIndex(ml, s, i, e, true)
@@ -104,6 +111,17 @@ bool multilistIndexNear(const multilist *ml, mflexState *state,
     multilistIndexNear(ml, s, i, a, ai, e, false)
 
 void multilistRotate(multilist *m, mflexState *state[2]);
+
+/* Remove the head or tail element and return it in *got as a
+ * self-contained value (flexGetByTypeCopy), on every tier:
+ *   - BYTES and containers are heap copies (allocated = 1);
+ *   - a 96/128-bit value lands in the storage got->data points at when
+ *     got->big is set (a DATABOX_BIG_INIT'd databoxBig), and otherwise in
+ *     a 16-byte heap block (allocated = 1, big = 1);
+ *   - every other value has allocated = 0 and big = 0.
+ * 'got' must be zeroed or a DATABOX_BIG_INIT'd databoxBig, because its
+ * 'big' flag is read.  Release the result with databoxFreeData.  Returns
+ * false, leaving *got untouched, when the list is empty. */
 bool multilistPop(multilist **m, mflexState *state, databox *got,
                   bool fromTail);
 #define multilistPopTail(ml, s, box) multilistPop(ml, s, box, true)

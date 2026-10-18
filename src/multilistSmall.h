@@ -108,7 +108,8 @@ bool multilistSmallIndexNear(multilistSmall *ml, mlOffsetId index,
 /* Move ends of list */
 void multilistSmallRotate(multilistSmall *ml);
 
-/* Remove and return head or tail of list */
+/* Remove and return head or tail of list as an owned value; 'box' must be
+ * zeroed or DATABOX_BIG_INIT'd (see multilistPop in multilist.h) */
 bool multilistSmallPop(multilistSmall *ml, databox *box, bool fromTail);
 #define multilistSmallPopFromTail(ml, box) multilistSmallPop(ml, box, true)
 #define multilistSmallPopFromHead(ml, box) multilistSmallPop(ml, box, false)

@@ -139,7 +139,8 @@ bool multilistFullIndexNear(multilistFull *ml, mflexState *state,
 /* Move ends of list */
 void multilistFullRotate(multilistFull *ml, mflexState *state[2]);
 
-/* Remove and return head or tail of list */
+/* Remove and return head or tail of list as an owned value; 'box' must be
+ * zeroed or DATABOX_BIG_INIT'd (see multilistPop in multilist.h) */
 bool multilistFullPop(multilistFull *ml, mflexState *state, databox *box,
                       bool fromTail);
 #define multilistFullPopTail(ml, s, box) multilistFullPop(ml, s, box, true)

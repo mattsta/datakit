@@ -109,16 +109,19 @@ typedef struct multilistIterator {
     uint32_t type; /* variant tag, used for function dispatching */
 } multilistIterator;
 
-/* Result of multilistIndex() or multilistNext();
+/* Result of multilistNext(), multilistIndex() or multilistIndexNear();
  * the value itself is in 'box' */
 typedef struct multilistEntry {
     void *ml;         /* pointer back to the (untagged) multilist instance */
     flexEntry *fe;
-    databox box;
+    union {
+        databox box;       /* the element */
+        databoxBig boxBig; /* same bytes; 'extra' holds a wide payload */
+    };
     mlNodeId nodeIdx; /* only used for Medium and Full */
     int32_t offset;
     flex *f;          /* Full only */
-} multilistEntry;
+} multilistEntry; /* 64 bytes, 16-byte aligned */
 
 /* State for compression operations (Full variant) */
 typedef mflexState multilistState;
@@ -126,7 +129,28 @@ typedef mflexState multilistState;
 
 Note the field order above matches the header exactly; `multilistEntry` has no
 `type` field, and neither struct is meant to be constructed by hand - always
-fill one via `multilistIndex()` / `multilistNext()`.
+fill one via `multilistNext()` / `multilistIndex()` / `multilistIndexNear()`.
+They fill every field and never read the entry's previous contents, so an
+uninitialized entry is fine.
+
+The entry carries its own storage for 96/128-bit elements. Every read decodes
+with `flexGetByTypeBig()` into `boxBig`, so a wide element reads back whole:
+`box.type` is `DATABOX_SIGNED_128` / `DATABOX_UNSIGNED_128`, `box.big` is 1,
+and `box.data.i128` / `box.data.u128` points at `boxBig.extra`. Every other
+value has `box.big == 0`.
+
+`entry.box` **borrows**, in two ways:
+
+- BYTES and containers point into the list's flex. They stay valid until the
+  list is next modified.
+- A 96/128-bit value points into the entry itself. It stays valid until the
+  entry is reused or goes out of scope, so a struct copy
+  (`databox v = entry.box;`) still points back into the entry.
+
+To keep a value beyond that, copy it. `databoxCopy(&entry.box)` gives an owned
+copy (a wide payload goes to a 16-byte heap block; release it with
+`databoxFreeData()`). `databoxBigCopyFrom(&dst, &entry.box)` re-homes the value
+into another `databoxBig` without allocating.
 
 ## Creation Functions
 
@@ -333,13 +357,30 @@ bool multilistPop(multilist **m, mflexState *state, databox *got,
 #define multilistPopHead(ml, s, box) multilistPop(ml, s, box, false)
 ```
 
-A successful pop **copies** the value into `got` (`databoxCopyBytesFromBox()`),
-so byte results must be released with `databoxFreeData()`.
+The element is removed, so a successful pop returns a **self-contained** copy
+in `got` (`flexGetByTypeCopy()`). The behavior is the same on every tier:
 
-Read the copy through `databoxCBytes()` / `databoxBytes()`, **not** through
-`box.data.bytes.cstart`: `databoxCopyBytesFromBox()` embeds byte values of 8
-bytes or fewer directly in the box as `DATABOX_BYTES_EMBED` and only heap
-allocates longer ones. `databoxFreeData()` is correct for both cases.
+- BYTES and containers are heap copies (`DATABOX_BYTES`, `allocated = 1`).
+- A 96/128-bit value goes into the storage `got->data` points at when
+  `got->big` is set (a `DATABOX_BIG_INIT`'d `databoxBig`). Otherwise it goes
+  into a 16-byte heap block (`allocated = 1`, `big = 1`).
+- Every other value has `allocated = 0` and `big = 0`.
+
+`got` must be zeroed (`databox got = {{0}};`) or a `DATABOX_BIG_INIT`'d
+`databoxBig`, because its `big` flag is read. Always release the result with
+`databoxFreeData()`. That call is a no-op for values that own nothing, and for
+a wide value held inline in a `databoxBig`. When the list is empty the pop
+returns false and leaves `got` untouched.
+
+```c
+/* Receive a wide value inline, without a heap block */
+databoxBig wide;
+DATABOX_BIG_INIT(&wide);
+if (multilistPopTail(&ml, state, (databox *)&wide)) {
+    /* wide.data.u128 points at wide.extra for a 96/128-bit value */
+    databoxFreeData((databox *)&wide);
+}
+```
 
 ```c
 #include <inttypes.h>
@@ -354,7 +395,7 @@ multilistPushByTypeTail(&queue, state, &item1);
 databox item2 = databoxNewBytesString("second");
 multilistPushByTypeTail(&queue, state, &item2);
 
-databox result;
+databox result = {{0}};
 if (multilistPopHead(&queue, state, &result)) {
     printf("Dequeued: %.*s\n", (int)result.len, databoxCBytes(&result));
     /* Prints: "first" */
@@ -370,7 +411,7 @@ multilistPushByTypeHead(&stack, state, &val1);
 databox val2 = databoxNewSigned(20);
 multilistPushByTypeHead(&stack, state, &val2);
 
-databox popped;
+databox popped = {{0}};
 if (multilistPopHead(&stack, state, &popped)) {
     printf("Popped: %" PRId64 "\n", popped.data.i64);
     /* Prints: 20 (last in, first out) */
@@ -493,11 +534,13 @@ if (multilistIndexCheck(ml, state, 100, &entry)) {
 }
 ```
 
-The returned `entry.box` borrows memory owned by the list. It is valid only
-until the next mutation, and it must not be passed to `databoxFreeData()`.
-Unlike a popped box, an entry box from `flexGetByType()` is always plain
-`DATABOX_BYTES`, so `entry.box.data.bytes.cstart` is safe here (and
-`databoxCBytes(&entry.box)` works for both cases).
+The returned `entry.box` borrows (see the lifetime rules under
+`multilistEntry`): a byte value is valid only until the next mutation, a
+96/128-bit value lives in the entry itself, and the box must not be passed to
+`databoxFreeData()`. An entry's byte value is always plain `DATABOX_BYTES`, so
+`entry.box.data.bytes.cstart` is safe here (and `databoxCBytes(&entry.box)`
+works too). With `openNode` false the Full tier only checks that the index
+exists; it does not set `entry.fe` or `entry.box`.
 
 ## Iteration
 
@@ -609,7 +652,7 @@ void multilistRotate(multilist *m, mflexState *state[2]);
 `multilistRotate()` copies the **tail** entry to the **head** and deletes the
 old tail. It takes `multilist *` (not `multilist **`) because rotation cannot
 change the element count and therefore never triggers an upgrade. Rotating a
-list of 0 or 1 elements is a no-op.
+list of 0 or 1 elements is a no-op. A 96/128-bit tail moves intact.
 
 ```c
 /* Example: Round-robin processing.
@@ -711,7 +754,7 @@ mflexState *state = mflexStateCreate();
 databox item = databoxNewBytesString("task");
 multilistPushByTypeTail(&queue, state, &item);
 
-databox result;
+databox result = {{0}};
 if (multilistPopHead(&queue, state, &result)) {
     /* Process result */
     databoxFreeData(&result);
@@ -730,7 +773,7 @@ mflexState *state = mflexStateCreate();
 databox item = databoxNewSigned(42);
 multilistPushByTypeHead(&stack, state, &item);
 
-databox result;
+databox result = {{0}};
 if (multilistPopHead(&stack, state, &result)) {
     printf("Popped: %" PRId64 "\n", result.data.i64);
     databoxFreeData(&result);
@@ -749,7 +792,7 @@ multilistPushByTypeHead(&deque, state, &front);
 databox back = databoxNewBytesString("back");
 multilistPushByTypeTail(&deque, state, &back);
 
-databox result;
+databox result = {{0}};
 if (multilistPopHead(&deque, state, &result)) {
     databoxFreeData(&result);
 }
@@ -772,7 +815,7 @@ multilistPushByTypeHead(&buffer, state, &item);
 
 /* Evict the oldest entry once over the cap */
 if (multilistCount(buffer) > maxSize) {
-    databox old;
+    databox old = {{0}};
     if (multilistPopTail(&buffer, state, &old)) {
         databoxFreeData(&old);
     }
@@ -845,7 +888,7 @@ multilistIteratorRelease(&iter);  /* Required for Full; harmless otherwise */
 ### 4. Free Data from Pop Operations
 
 ```c
-databox result;
+databox result = {{0}};
 if (multilistPopHead(&ml, state, &result)) {
     /* Use result... */
     databoxFreeData(&result);  /* pop allocated a copy */

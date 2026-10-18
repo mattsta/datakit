@@ -299,7 +299,7 @@ void boundedAppend(multilist **ml, mflexState *state, const void *data,
     multilistPushByTypeTail(ml, state, &item);
 
     while (multilistCount(*ml) > maxEntries) {
-        databox old;
+        databox old = {{0}};
         if (!multilistPopHead(ml, state, &old)) {
             break;
         }

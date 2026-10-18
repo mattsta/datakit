@@ -360,7 +360,7 @@ bool multilistMediumNext(multilistIterator *iter, multilistEntry *entry) {
 
     if (iter->fe) {
         /* Populate value from existing flex position */
-        flexGetByType(iter->fe, &entry->box);
+        flexGetByTypeBig(iter->fe, &entry->boxBig);
 
         entry->nodeIdx = iter->nodeIdx;
 
@@ -461,7 +461,7 @@ bool multilistMediumIndexNear(multilistMedium *ml, mlOffsetId index,
         return false;
     }
 
-    flexGetByType(entry->fe, &entry->box);
+    flexGetByTypeBig(entry->fe, &entry->boxBig);
     return true;
 }
 
@@ -494,12 +494,12 @@ void multilistMediumRotate(multilistMedium *ml) {
     /* Get tail entry position */
     flexEntry *fe = flexTail(*tail);
 
-    /* Get tail entry */
-    databox box = {{0}};
-    flexGetByType(fe, &box);
+    /* Get tail entry (a databoxBig, so a 96/128-bit value has storage) */
+    databoxBig box;
+    flexGetByTypeBig(fe, &box);
 
     /* Copy tail entry to head (must happen before tail is deleted). */
-    flexPushByType(&F0, &box, FLEX_ENDPOINT_HEAD);
+    flexPushByType(&F0, (const databox *)&box, FLEX_ENDPOINT_HEAD);
 
     /* Remove tail entry. */
     flexDeleteRange(tail, -1, 1);
@@ -527,11 +527,9 @@ bool multilistMediumPop(multilistMedium *ml, databox *box, bool fromTail) {
         fromTail ? FLEX_ENDPOINT_TAIL : FLEX_ENDPOINT_HEAD;
     const flexEntry *fe = flexHeadOrTail(*ffl, flIdx);
 
-    databox found = {{0}};
     if (fe) {
-        flexGetByType(fe, &found);
-        *box = found;
-        databoxCopyBytesFromBox(box, &found);
+        /* The element is about to be deleted, so hand out an owned copy. */
+        flexGetByTypeCopy(fe, box);
         flexDeleteRange(ffl, flIdx, 1);
 
         /* F0 must hold elements whenever the list is nonempty */

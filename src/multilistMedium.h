@@ -109,7 +109,8 @@ bool multilistMediumIndexNear(multilistMedium *ml, mlOffsetId index,
 /* Move ends of list */
 void multilistMediumRotate(multilistMedium *ml);
 
-/* Remove and return head or tail of list */
+/* Remove and return head or tail of list as an owned value; 'box' must be
+ * zeroed or DATABOX_BIG_INIT'd (see multilistPop in multilist.h) */
 bool multilistMediumPop(multilistMedium *ml, databox *box, bool fromTail);
 #define multilistMediumPopFromTail(ml, box) multilistMediumPop(ml, box, true)
 #define multilistMediumPopFromHead(ml, box) multilistMediumPop(ml, box, false)

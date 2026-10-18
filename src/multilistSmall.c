@@ -182,7 +182,7 @@ bool multilistSmallNext(multilistIterator *iter, multilistEntry *entry) {
 
     if (iter->fe) {
         /* Populate value from existing flex position */
-        flexGetByType(iter->fe, &entry->box);
+        flexGetByTypeBig(iter->fe, &entry->boxBig);
 
         entry->fe = iter->fe;
         entry->offset = iter->offset;
@@ -226,7 +226,7 @@ bool multilistSmallIndexNear(multilistSmall *ml, mlOffsetId index,
         return false;
     }
 
-    flexGetByType(entry->fe, &entry->box);
+    flexGetByTypeBig(entry->fe, &entry->boxBig);
     return true;
 }
 
@@ -246,12 +246,12 @@ void multilistSmallRotate(multilistSmall *ml) {
     /* Get tail entry position */
     flexEntry *fe = flexTail(ml->fl);
 
-    /* Get tail entry */
-    databox box = {{0}};
-    flexGetByType(fe, &box);
+    /* Get tail entry (a databoxBig, so a 96/128-bit value has storage) */
+    databoxBig box;
+    flexGetByTypeBig(fe, &box);
 
     /* Copy tail entry to head (must happen before tail is deleted). */
-    flexPushByType(&ml->fl, &box, FLEX_ENDPOINT_HEAD);
+    flexPushByType(&ml->fl, (const databox *)&box, FLEX_ENDPOINT_HEAD);
 
     /* Remove tail entry. */
     flexDeleteRange(&ml->fl, -1, 1);
@@ -269,11 +269,9 @@ bool multilistSmallPop(multilistSmall *ml, databox *box, bool fromTail) {
         fromTail ? FLEX_ENDPOINT_TAIL : FLEX_ENDPOINT_HEAD;
     const flexEntry *fe = flexHeadOrTail(ml->fl, flIdx);
 
-    databox found = {{0}};
     if (fe) {
-        flexGetByType(fe, &found);
-        *box = found;
-        databoxCopyBytesFromBox(box, &found);
+        /* The element is about to be deleted, so hand out an owned copy. */
+        flexGetByTypeCopy(fe, box);
         flexDeleteRange(&ml->fl, flIdx, 1);
         return true;
     }
