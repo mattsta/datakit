@@ -177,6 +177,7 @@
  * Debug Bounds Checking (enabled with OFFSETARRAY_DEBUG)
  * --------------------------------------------------------------------------*/
 #ifdef OFFSETARRAY_DEBUG
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -189,17 +190,18 @@
 
 static inline void offsetArrayBoundsCheck_(bool hasObj, bool aboveLow,
                                            bool belowHigh, const char *name,
-                                           long long idx, const char *file,
+                                           int64_t idx, const char *file,
                                            int line) {
     if (!hasObj) {
-        fprintf(stderr, "%s:%d: offsetArrayGet(%s, %lld): array is empty\n",
+        fprintf(stderr,
+                "%s:%d: offsetArrayGet(%s, %" PRId64 "): array is empty\n",
                 file, line, name, idx);
         abort();
     }
     if (!aboveLow || !belowHigh) {
         fprintf(stderr,
-                "%s:%d: offsetArrayGet(%s, %lld): index out of bounds\n", file,
-                line, name, idx);
+                "%s:%d: offsetArrayGet(%s, %" PRId64 "): index out of bounds\n",
+                file, line, name, idx);
         abort();
     }
 }
