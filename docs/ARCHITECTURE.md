@@ -345,9 +345,14 @@ For sequences of **increasing integers**:
 /* First deltas: 5, 3, 7, 5, ... */
 /* Delta-of-delta: 5, -2, 4, -2, ... (smaller values!) */
 
-/* dod is a bitstream, not an allocated object. Write through a
- * dodWriter, read back through a dodReader. */
-dodWriter w = {0};
+/* dod is a bitstream, not a container. Write every value through a
+ * dodWriter, which allocates and grows the stream; read back through a
+ * dodReader. */
+const dodVal values[] = {100, 105, 108, 115, 120, 125, 131};
+const size_t count = sizeof(values) / sizeof(*values);
+
+dodWriter w;
+dodInit(&w);
 for (size_t i = 0; i < count; i++) {
     dodWrite(&w, values[i]);
 }
@@ -356,9 +361,11 @@ dodCloseWrites(&w);
 dodReader r;
 dodReaderInitFromWriter(&r, &w);
 for (size_t i = 2; i < count; i++) {  /* first two seed the reader */
-    dodVal v = dodReaderNext(&r, w.d);
-    /* Process v */
+    const dodVal v = dodReaderNext(&r, w.d);
+    (void)v; /* Process v */
 }
+
+zfree(w.d); /* the writer's stream */
 ```
 
 `dodReadAll(d, vals, count)` decodes a whole stream in one call, and

@@ -245,16 +245,22 @@ For sequences of increasing integers:
 
 ```c
 /* Timestamps: 1000000, 1000060, 1000120, 1000180...
- * dod is a bitstream written through a dodWriter, not an object. */
-dodWriter w = {0};
+ * dod is a bitstream written through a dodWriter, which allocates and
+ * grows the stream itself. */
+dodWriter w;
+dodInit(&w);
 for (int64_t ts = 1000000; ts < 2000000; ts += 60) {
     dodWrite(&w, ts);
 }
 dodCloseWrites(&w);
 
-/* Original: ~16,667 values * 8 bytes = 133 KB */
-/* Delta-of-delta: ~2-3 bytes per value = 33-50 KB */
-/* Compression: 3-4x (70-75% savings) */
+/* Original: 16,667 values * 8 bytes = ~133 KB.
+ * A constant interval makes every delta-of-delta 0, which costs 1 bit:
+ * a 48-bit header plus 16,665 bits, about 2 KB. Irregular data costs more
+ * (9-16 bits per value for small jitter, up to 72 for arbitrary values). */
+printf("%zu values in %zu bytes\n", w.count, (w.usedBits + 7) / 8);
+
+zfree(w.d); /* the writer's stream */
 ```
 
 ### Half-Precision Floats (float16/bfloat16)

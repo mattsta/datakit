@@ -8,7 +8,8 @@
 
 - Lossless compression for int64_t values
 - Optimized for monotonically increasing sequences (timestamps, counters)
-- Achieves 10-50x compression for typical timestamp data
+- Up to ~60x compression for timestamps at a regular interval (1 bit per
+  value), less as the interval jitters
 - Variable-length encoding adapts to data patterns
 - Hierarchical bit allocation for optimal space usage
 - Streaming write and random read support
@@ -33,17 +34,17 @@ Values:     1000, 1001, 1002, 1003, 1004, 1005
 Deltas:          1,    1,    1,    1,    1
 Delta-of-delta:       0,    0,    0,    0
 
-Instead of 6 × 64 = 384 bits, we store:
-  - First value: 64 bits
-  - 5 delta-of-deltas of 0: 5 bits
-  Total: 69 bits! (5.6x compression)
+Instead of 6 × 64 = 384 bits, a dodWrite() stream stores:
+  - Header with the first two values: 48 bits
+  - 4 delta-of-deltas of 0: 4 bits
+  Total: 52 bits (7.4x compression; ~60x on long runs)
 ```
 
 ### Delta-of-Delta Calculation
 
-```c
-value[0] = t[0]                     /* First value */
-value[1] = t[1]                     /* Second value */
+```text
+value[0] = t[0]                     (first value)
+value[1] = t[1]                     (second value)
 
 For i >= 2:
   delta[i] = value[i] - value[i-1]
@@ -87,7 +88,7 @@ typedef int64_t dodVal;     /* Signed 64-bit value type */
 
 ```c
 typedef struct dodWriter {
-    dod *d;                 /* Writer stream (caller-allocated, zeroed) */
+    dod *d;                 /* Writer stream, owned and grown by the writer */
 
     /* Helper values for delta-of-delta calculation
      * If OPEN: t[0]=t_n_1, t[1]=t_n_0 (previous two values)
@@ -97,7 +98,7 @@ typedef struct dodWriter {
     /* Metadata */
     size_t count;           /* Number of values (if < 2, only in t[2]) */
     size_t usedBits;        /* Next bit offset to write */
-    size_t totalBytes;      /* Allocated bytes */
+    size_t totalBytes;      /* Bytes allocated for d */
 } dodWriter;
 ```
 
@@ -128,9 +129,14 @@ the smallest form that holds the pair.
 
 Writer rules:
 
-- `d` must be allocated and zeroed before the second `dodWrite()`, which
-  writes the header.
-- Leave room for the header plus 72 bits for each later value.
+- The writer owns `d`. Start with `dodInit()` (`d` NULL) and `dodWrite()`
+  allocates the stream on the second value, which writes the header. After
+  that it grows the stream with `zrealloc` as values arrive, keeping
+  `totalBytes` current and leaving room for readers to decode everything
+  written.
+- You may preallocate instead. `d` must then come zero-filled from the
+  zmalloc family (`zcalloc`), with `totalBytes` set to its size.
+- Free the stream with `zfree(w.d)`.
 - Write every value through `dodWrite()`. Never fill `t[]` or `count` by
   hand, or the header is never written.
 - A stream never records how many values it holds; track the count
@@ -194,25 +200,33 @@ void dodWrite(dodWriter *const w, const dodVal val);
 
 /* Close writer: t[] becomes (first value, last value) */
 void dodCloseWrites(dodWriter *const w);
+```
 
-/* Example: Basic writing */
-dodWriter writer;
-dodInit(&writer);
-writer.d = zcalloc(1024, sizeof(dod));
-writer.totalBytes = 1024 * sizeof(dod);
+```c
+#include "datakit.h"
+#include "dod.h"
 
-/* Every value goes through dodWrite(); the second one writes the header */
-for (int i = 0; i < 1000; i++) {
-    dodWrite(&writer, 1000 + i);  /* Regular increment */
+#include <stdio.h>
+
+/* Example: basic writing */
+void exampleBasicWriting(void) {
+    dodWriter writer;
+    dodInit(&writer);
+
+    /* Every value goes through dodWrite(): the second one allocates the
+     * stream and writes the header, later ones grow it as needed */
+    for (int i = 0; i < 1000; i++) {
+        dodWrite(&writer, 1000 + i); /* Regular increment */
+    }
+
+    dodCloseWrites(&writer);
+
+    printf("Compressed %zu values from %zu bits to %zu bits (%.2fx)\n",
+           writer.count, writer.count * 64, writer.usedBits,
+           (writer.count * 64.0) / writer.usedBits);
+
+    zfree(writer.d);
 }
-
-dodCloseWrites(&writer);
-
-printf("Compressed %zu values from %zu bits to %zu bits (%.2fx)\n",
-       writer.count, writer.count * 64, writer.usedBits,
-       (writer.count * 64.0) / writer.usedBits);
-
-zfree(writer.d);
 ```
 
 ### Reading Data
@@ -234,24 +248,38 @@ bool dodReadAll(const dod *w, uint64_t *vals, size_t count);
 /* Read a writer stream's header: t[] = first two values, usedBits = the
  * header's end, count = 2. Does not change w->d. */
 void dodInitFromExisting(dodWriter *const w, const dod *d);
+```
 
-/* Example: Reading a writer stream you only have the bytes of */
-dodWriter reader = {0};
-reader.d = /* ... compressed data ... */;
-dodInitFromExisting(&reader, reader.d);
+```c
+#include "datakit.h"
+#include "dod.h"
 
-/* Random access */
-int64_t value = dodRead(&reader, 42);
-printf("Value at index 42: %" PRId64 "\n", value);
+#include <inttypes.h>
+#include <stdio.h>
 
-/* Value 42 again, decoded with dodGet() from the header's end */
-size_t bits = reader.usedBits;
-value = dodGet(reader.d, &bits, reader.t[0], reader.t[1], 41);
+/* Example: reading a writer stream you only have the bytes of, plus the
+ * value count you tracked ('stream' holds at least two values) */
+void exampleReadStream(dod *stream, size_t count) {
+    dodWriter reader = {0};
+    reader.d = stream;
+    dodInitFromExisting(&reader, stream);
 
-/* Read all ('count' tracked by you; the stream does not record it) */
-int64_t *values = zmalloc(sizeof(int64_t) * count);
-dodReadAll(reader.d, (uint64_t *)values, count);
-zfree(values);
+    if (count > 42) {
+        /* Random access */
+        int64_t value = dodRead(&reader, 42);
+        printf("Value at index 42: %" PRId64 "\n", value);
+
+        /* Value 42 again, decoded with dodGet() from the header's end */
+        size_t bits = reader.usedBits;
+        value = dodGet(stream, &bits, reader.t[0], reader.t[1], 41);
+        printf("Value at index 42: %" PRId64 "\n", value);
+    }
+
+    /* Read all; the stream does not record its count */
+    int64_t *values = zmalloc(sizeof(int64_t) * (count < 2 ? 2 : count));
+    dodReadAll(stream, (uint64_t *)values, count);
+    zfree(values);
+}
 ```
 
 ### Resumable Reader (O(1) Sequential Access)
@@ -289,15 +317,23 @@ size_t dodReaderRemaining(const dodReader *r, size_t totalCount);
 ```
 
 ```c
-/* Sequential walk in O(n) total instead of O(n^2) */
-dodReader r;
-dodReaderInitFromWriter(&r, &writer);
+#include "dod.h"
 
-/* Remaining shrinks as you read, so re-test it rather than
- * caching it as a loop bound. */
-while (dodReaderRemaining(&r, writer.count) > 0) {
-    const dodVal v = dodReaderNext(&r, writer.d);
-    consume(v);
+/* Sequential walk in O(n) total instead of O(n^2). The reader starts with
+ * the first two values already known; the loop yields the rest. */
+int64_t exampleSumAfterFirstTwo(const dodWriter *writer) {
+    dodReader r;
+    dodReaderInitFromWriter(&r, writer);
+
+    /* Remaining shrinks as you read, so re-test it rather than
+     * caching it as a loop bound. */
+    int64_t sum = 0;
+    while (dodReaderRemaining(&r, writer->count) > 0) {
+        const dodVal v = dodReaderNext(&r, writer->d);
+        sum += v;
+    }
+
+    return sum;
 }
 ```
 
@@ -309,7 +345,11 @@ total you already track (`writer.count`).
 ### Example 1: Timestamp Compression
 
 ```c
+#include "datakit.h"
 #include "dod.h"
+
+#include <inttypes.h>
+#include <stdio.h>
 #include <time.h>
 
 typedef struct TimestampLog {
@@ -320,9 +360,8 @@ typedef struct TimestampLog {
 TimestampLog *timestampLogNew(void) {
     TimestampLog *log = zcalloc(1, sizeof(*log));
 
+    /* The writer allocates and grows its stream on demand */
     dodInit(&log->writer);
-    log->writer.d = zcalloc(4096, sizeof(dod));
-    log->writer.totalBytes = 4096 * sizeof(dod);
 
     log->startTime = time(NULL);
 
@@ -400,7 +439,7 @@ void exampleTimestampLog(void) {
     }
 
     timestampLogPrintStats(log);
-    /* Expected: ~50x compression for regular 1-second intervals */
+    /* Expected: ~60x; a constant 1-second step costs 1 bit per value */
 
     /* Retrieve specific timestamp */
     time_t ts = timestampLogGetAt(log, 1800);  /* 30 minutes in */
@@ -413,7 +452,10 @@ void exampleTimestampLog(void) {
 ### Example 2: Counter Array Compression
 
 ```c
+#include "datakit.h"
 #include "dod.h"
+
+#include <stdio.h>
 
 #define NUM_COUNTERS 100
 
@@ -426,6 +468,7 @@ CounterArray *counterArrayNew(void) {
     CounterArray *array = zcalloc(1, sizeof(*array));
 
     for (int i = 0; i < NUM_COUNTERS; i++) {
+        /* Preallocate 8 KB each (optional: writers grow on demand) */
         dodInit(&array->counters[i]);
         array->counters[i].d = zcalloc(1024, sizeof(dod));
         array->counters[i].totalBytes = 1024 * sizeof(dod);
@@ -487,7 +530,8 @@ void exampleCounterArray(void) {
     }
 
     counterArrayPrintStats(array);
-    /* Expected: 20-40x compression for monotonic counters */
+    /* Expected: ~60x; each counter's step is constant, so every value
+     * after the first two costs 1 bit */
 
     counterArrayFree(array);
 }
@@ -496,7 +540,12 @@ void exampleCounterArray(void) {
 ### Example 3: Event ID Sequence
 
 ```c
+#include "datakit.h"
 #include "dod.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 typedef struct Event {
     int64_t id;
@@ -514,9 +563,8 @@ typedef struct EventStream {
 EventStream *eventStreamNew(void) {
     EventStream *stream = zcalloc(1, sizeof(*stream));
 
+    /* The writer allocates and grows its stream on demand */
     dodInit(&stream->ids);
-    stream->ids.d = zcalloc(4096, sizeof(dod));
-    stream->ids.totalBytes = 4096 * sizeof(dod);
 
     stream->events = zmalloc(sizeof(Event) * 1000);
     stream->count = 0;
@@ -610,15 +658,16 @@ void exampleEventStream(void) {
 
 ### Compression Ratio
 
-Typical compression ratios for different patterns:
+Ratios follow from the entry sizes. Each value after the first two costs
+the bits of its delta-of-delta's range:
 
-| Data Pattern       | Compression Ratio | Example                    |
-| ------------------ | ----------------- | -------------------------- |
-| Constant increment | 30-60x            | `t, t+1, t+2, t+3...`      |
-| Regular timestamps | 20-40x            | Events every second        |
-| Variable increment | 10-20x            | `t, t+1, t+3, t+4, t+8...` |
-| Random increasing  | 4-8x              | Irregular timestamps       |
-| Random values      | 1-2x              | No pattern                 |
+| Data Pattern                   | Bits/Value | Ratio vs 64-bit | Example                      |
+| ------------------------------ | ---------- | --------------- | ---------------------------- |
+| Constant step                  | 1          | ~60x            | `t, t+1, t+2, t+3...`        |
+| Delta-of-delta within ±64      | ≤9         | ≥7x             | Timestamps with small jitter |
+| Delta-of-delta within ±2368    | ≤16        | ≥4x             | Irregular timestamps         |
+| Random 32-bit values           | ~40        | ~1.6x           | No pattern                   |
+| Arbitrary int64 values         | up to 72   | <1x             | Worst case                   |
 
 ### Speed
 
@@ -636,16 +685,16 @@ call and re-decodes from the beginning each time. Iterating a stream with
 
 ### Memory Usage
 
-```c
-/* Bit usage by encoding type */
-Zero delta: 1 bit
-Small delta (±64): 9 bits
-Medium delta (±320): 12 bits
-Large delta (±2368): 16 bits
-Very large: 16-72 bits
+```text
+Bit usage by delta-of-delta range:
+  0                1 bit
+  within ±64       9 bits
+  within ±320      12 bits
+  within ±2368     16 bits
+  larger           16-72 bits
 
-/* Average for timestamps (1-second intervals): ~2 bits per value */
-/* vs 64 bits uncompressed = ~32x compression */
+Timestamps at a constant 1-second interval: 1 bit per value after the
+first two, plus a 48-130 bit header, so ~60x against 64-bit values.
 ```
 
 ## Best Practices
@@ -653,60 +702,105 @@ Very large: 16-72 bits
 ### 1. Use for Monotonic Sequences
 
 ```c
-/* GOOD: Timestamps */
-for (int i = 0; i < 10000; i++) {
-    dodWrite(&writer, startTime + i);
-}
-/* Achieves 30-50x compression */
+#include "datakit.h"
+#include "dod.h"
 
-/* GOOD: Counters */
-int64_t counter = 0;
-for (int i = 0; i < 10000; i++) {
-    counter += 1 + (rand() % 10);
-    dodWrite(&writer, counter);
-}
-/* Achieves 15-25x compression */
+#include <stdlib.h>
 
-/* BAD: Random values */
-for (int i = 0; i < 10000; i++) {
-    dodWrite(&writer, rand());
+void exampleSequenceShapes(int64_t startTime) {
+    /* GOOD: Timestamps at a constant step: 1 bit per value, ~60x */
+    dodWriter timestamps;
+    dodInit(&timestamps);
+    for (int i = 0; i < 10000; i++) {
+        dodWrite(&timestamps, startTime + i);
+    }
+
+    /* OK: Counters with a step of 1-10: the delta-of-delta stays within
+     * ±9, so 9 bits per value, ~7x */
+    dodWriter counters;
+    dodInit(&counters);
+    int64_t counter = 0;
+    for (int i = 0; i < 10000; i++) {
+        counter += 1 + (rand() % 10);
+        dodWrite(&counters, counter);
+    }
+
+    /* BAD: Random values: ~40 bits per value, ~1.6x */
+    dodWriter random;
+    dodInit(&random);
+    for (int i = 0; i < 10000; i++) {
+        dodWrite(&random, rand());
+    }
+
+    zfree(timestamps.d);
+    zfree(counters.d);
+    zfree(random.d);
 }
-/* Achieves only 1-2x compression */
 ```
 
 ### 2. Close Writer When Done
 
 ```c
-/* Write all values */
-for (int i = 0; i < count; i++) {
-    dodWrite(&writer, values[i]);
+#include "datakit.h"
+#include "dod.h"
+
+#include <inttypes.h>
+#include <stdio.h>
+
+void exampleCloseWriter(const int64_t *values, size_t count) {
+    dodWriter writer;
+    dodInit(&writer);
+
+    /* Write all values */
+    for (size_t i = 0; i < count; i++) {
+        dodWrite(&writer, values[i]);
+    }
+
+    /* Close: t[] switches to (first value, last value); write nothing
+     * more to this writer afterwards */
+    dodCloseWrites(&writer);
+
+    printf("Range: %" PRId64 " to %" PRId64 "\n", writer.t[0], writer.t[1]);
+
+    zfree(writer.d);
 }
-
-/* Important: Close to finalize metadata */
-dodCloseWrites(&writer);
-
-/* Now t[0] = first value, t[1] = last value */
-printf("Range: %" PRId64 " to %" PRId64 "\n", writer.t[0], writer.t[1]);
 ```
 
-### 3. Allocate Sufficient Space
+### 3. Preallocate to Skip Growth (Optional)
+
+A `dodWriter` grows its own stream, so preallocating only saves the
+reallocations. Raw `dodAppend()` streams do not grow; size those for the
+worst case yourself.
 
 ```c
-/* Worst case: the header plus 72 bits for every value after the first two,
- * plus one slot of slack because a read near the end may touch the next
- * word */
+#include "datakit.h"
+#include "dod.h"
 
-size_t count = 100000;
-size_t safeSize = (DOD_WRITER_HEADER_MAX_BITS + count * 72 + 63) / 64 + 1;
-dod *compressed = zcalloc(safeSize, sizeof(dod));
+void examplePreallocate(dodWriter *writer, size_t count) {
+    /* Worst case: the header plus 72 bits for every value after the first
+     * two, plus one slot of slack because a read near the end may touch
+     * the next word */
+    const size_t safeSize =
+        (DOD_WRITER_HEADER_MAX_BITS + count * 72 + 63) / 64 + 1;
+
+    dodInit(writer);
+    writer->d = zcalloc(safeSize, sizeof(dod));
+    writer->totalBytes = safeSize * sizeof(dod);
+}
 ```
 
 ### 4. Monitor Compression Efficiency
 
 ```c
-if (writer.count > 2 &&
-    (writer.count * 64.0) / writer.usedBits < 3.0) {
-    printf("Warning: Poor compression - data may not be monotonic\n");
+#include "dod.h"
+
+#include <stdio.h>
+
+void exampleCheckRatio(const dodWriter *writer) {
+    if (writer->count > 2 &&
+        (writer->count * 64.0) / writer->usedBits < 3.0) {
+        printf("Warning: Poor compression - data may not be monotonic\n");
+    }
 }
 ```
 
@@ -714,12 +808,12 @@ if (writer.count > 2 &&
 
 ### Delta-of-Delta Formula
 
-```c
-/* Encoding */
+```text
+Encoding (modulo 2^64):
 delta[i] = value[i] - value[i-1]
 deltaOfDelta[i] = delta[i] - delta[i-1]
 
-/* Decoding */
+Decoding (modulo 2^64):
 delta[i] = delta[i-1] + deltaOfDelta[i]
 value[i] = value[i-1] + delta[i]
 ```
@@ -728,7 +822,7 @@ value[i] = value[i-1] + delta[i]
 
 The encoding uses overlapping ranges for smooth fallback:
 
-```c
+```text
 Range 0:  [0, 0]              (1 bit)
 Range 7:  [-64, 64]           (9 bits)
 Range 9:  [-320, 320]         (12 bits)

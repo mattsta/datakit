@@ -600,8 +600,11 @@ the buffer, so "compressed size" is `(usedBits + 7) / 8`, and the
 baseline is `count * sizeof(int64_t)` or `count * sizeof(double)`.
 
 ```c
+#include "datakit.h"
 #include "dod.h"
 #include "timeUtil.h"
+
+#include <stdio.h>
 
 enum { DOD_N = 100000 };
 
