@@ -11155,13 +11155,17 @@ int32_t flexTest(int32_t argc, char **argv) {
                         case 3:
                         case 4:
                         case 5:
-                            /* signed (randomly negative) big integers */
+                            /* signed (randomly negative) big integers.
+                             * Shift unsigned: the product may be negative
+                             * and the shifted value can exceed int64_t, so
+                             * a signed shift is undefined.  The unsigned
+                             * shift keeps the same low 64 bits. */
                             buflen = snprintf(
                                 buf, bufbuflen, "%" PRId64,
-                                (int64_t)(rand() % 2 ? -1 : 1) *
-                                        (int64_t)(0LL + rand())
-                                    /* triggers sanitizer but not a problem */
-                                    << 45);
+                                (int64_t)((uint64_t)((int64_t)(rand() % 2 ? -1
+                                                                          : 1) *
+                                                     (int64_t)(0LL + rand()))
+                                          << 45));
                             break;
                         case 6:
                             /* Floats */
