@@ -53,7 +53,7 @@ defcleaner(multilru *, multilruFree);
  */
 
 /* Read up to 64 bits from a byte array starting at bitOffset */
-DK_STATIC inline uint64_t readBitsLE(const uint8_t *data, uint32_t bitOffset,
+DK_INLINE_ALWAYS uint64_t readBitsLE(const uint8_t *data, uint32_t bitOffset,
                                      uint8_t numBits) {
     uint64_t result = 0;
     uint32_t byteOffset = bitOffset / 8;
@@ -75,7 +75,7 @@ DK_STATIC inline uint64_t readBitsLE(const uint8_t *data, uint32_t bitOffset,
 }
 
 /* Write up to 64 bits to a byte array starting at bitOffset */
-DK_STATIC inline void writeBitsLE(uint8_t *data, uint32_t bitOffset,
+DK_INLINE_ALWAYS void writeBitsLE(uint8_t *data, uint32_t bitOffset,
                                   uint8_t numBits, uint64_t value) {
     uint32_t byteOffset = bitOffset / 8;
     uint32_t bitShift = bitOffset % 8;
@@ -567,9 +567,14 @@ DK_STATIC inline void entry16SetHead(void *e, bool v) {
  * ====================================================================
  * These functions dispatch to the appropriate width-specific accessor.
  * Using a switch on entryWidth allows the compiler to optimize.
+ *
+ * Every list operation runs through these dispatchers and the bit
+ * primitives under them, so they are always inlined.  A plain inline hint
+ * is not enough: this file is large enough that GCC's unit-growth budget
+ * runs out first and leaves the hottest accessors as out-of-line calls.
  */
 
-DK_STATIC inline uint64_t entryGetPrev(const multilru *mlru, uint64_t idx) {
+DK_INLINE_ALWAYS uint64_t entryGetPrev(const multilru *mlru, uint64_t idx) {
     const void *e = entryPtr(mlru, idx);
     switch (mlru->entryWidth) {
     case 5:
@@ -595,7 +600,7 @@ DK_STATIC inline uint64_t entryGetPrev(const multilru *mlru, uint64_t idx) {
     }
 }
 
-DK_STATIC inline uint64_t entryGetNext(const multilru *mlru, uint64_t idx) {
+DK_INLINE_ALWAYS uint64_t entryGetNext(const multilru *mlru, uint64_t idx) {
     const void *e = entryPtr(mlru, idx);
     switch (mlru->entryWidth) {
     case 5:
@@ -621,7 +626,7 @@ DK_STATIC inline uint64_t entryGetNext(const multilru *mlru, uint64_t idx) {
     }
 }
 
-DK_STATIC inline uint8_t entryGetLevel(const multilru *mlru, uint64_t idx) {
+DK_INLINE_ALWAYS uint8_t entryGetLevel(const multilru *mlru, uint64_t idx) {
     const void *e = entryPtr(mlru, idx);
     switch (mlru->entryWidth) {
     case 5:
@@ -647,7 +652,7 @@ DK_STATIC inline uint8_t entryGetLevel(const multilru *mlru, uint64_t idx) {
     }
 }
 
-DK_STATIC inline bool entryGetPopulated(const multilru *mlru, uint64_t idx) {
+DK_INLINE_ALWAYS bool entryGetPopulated(const multilru *mlru, uint64_t idx) {
     const void *e = entryPtr(mlru, idx);
     switch (mlru->entryWidth) {
     case 5:
@@ -673,7 +678,7 @@ DK_STATIC inline bool entryGetPopulated(const multilru *mlru, uint64_t idx) {
     }
 }
 
-DK_STATIC inline bool entryGetHead(const multilru *mlru, uint64_t idx) {
+DK_INLINE_ALWAYS bool entryGetHead(const multilru *mlru, uint64_t idx) {
     const void *e = entryPtr(mlru, idx);
     switch (mlru->entryWidth) {
     case 5:
@@ -699,7 +704,7 @@ DK_STATIC inline bool entryGetHead(const multilru *mlru, uint64_t idx) {
     }
 }
 
-DK_STATIC inline void entrySetPrev(multilru *mlru, uint64_t idx, uint64_t v) {
+DK_INLINE_ALWAYS void entrySetPrev(multilru *mlru, uint64_t idx, uint64_t v) {
     void *e = entryPtr(mlru, idx);
     switch (mlru->entryWidth) {
     case 5:
@@ -732,7 +737,7 @@ DK_STATIC inline void entrySetPrev(multilru *mlru, uint64_t idx, uint64_t v) {
     }
 }
 
-DK_STATIC inline void entrySetNext(multilru *mlru, uint64_t idx, uint64_t v) {
+DK_INLINE_ALWAYS void entrySetNext(multilru *mlru, uint64_t idx, uint64_t v) {
     void *e = entryPtr(mlru, idx);
     switch (mlru->entryWidth) {
     case 5:
@@ -765,7 +770,7 @@ DK_STATIC inline void entrySetNext(multilru *mlru, uint64_t idx, uint64_t v) {
     }
 }
 
-DK_STATIC inline void entrySetLevel(multilru *mlru, uint64_t idx, uint8_t v) {
+DK_INLINE_ALWAYS void entrySetLevel(multilru *mlru, uint64_t idx, uint8_t v) {
     void *e = entryPtr(mlru, idx);
     switch (mlru->entryWidth) {
     case 5:
@@ -798,7 +803,7 @@ DK_STATIC inline void entrySetLevel(multilru *mlru, uint64_t idx, uint8_t v) {
     }
 }
 
-DK_STATIC inline void entrySetPopulated(multilru *mlru, uint64_t idx, bool v) {
+DK_INLINE_ALWAYS void entrySetPopulated(multilru *mlru, uint64_t idx, bool v) {
     void *e = entryPtr(mlru, idx);
     switch (mlru->entryWidth) {
     case 5:
@@ -831,7 +836,7 @@ DK_STATIC inline void entrySetPopulated(multilru *mlru, uint64_t idx, bool v) {
     }
 }
 
-DK_STATIC inline void entrySetHead(multilru *mlru, uint64_t idx, bool v) {
+DK_INLINE_ALWAYS void entrySetHead(multilru *mlru, uint64_t idx, bool v) {
     void *e = entryPtr(mlru, idx);
     switch (mlru->entryWidth) {
     case 5:
