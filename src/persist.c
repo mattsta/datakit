@@ -577,10 +577,19 @@ void persistGetConfig(const persist *p, persistConfig *config) {
 }
 
 void persistGetStats(const persist *p, persistStats *stats) {
-    if (p && stats) {
-        *stats = p->stats;
-        stats->walSequence = p->walSequence;
+    if (!stats) {
+        return;
     }
+
+    /* The void return cannot report a NULL persist, so the caller's
+     * struct is always written: zeros when there is nothing to read. */
+    if (!p) {
+        memset(stats, 0, sizeof(*stats));
+        return;
+    }
+
+    *stats = p->stats;
+    stats->walSequence = p->walSequence;
 }
 
 void persistResetStats(persist *p) {
@@ -5458,8 +5467,20 @@ int persistTest(int argc, char *argv[]) {
         persistStats stats;
         persistGetStats(p, &stats);
         if (stats.walEntries != 3) {
-            ERR("Expected 3 WAL entries, got %llu",
-                (unsigned long long)stats.walEntries);
+            ERR("Expected 3 WAL entries, got %" PRIu64, stats.walEntries);
+        }
+
+        /* A NULL persist still writes the caller's struct, as zeros. */
+        {
+            persistStats none;
+            memset(&none, 0xA5, sizeof(none));
+            persistGetStats(NULL, &none);
+            const persistStats zero = {0};
+            if (memcmp(&none, &zero, sizeof(none)) != 0) {
+                ERRR("persistGetStats(NULL) did not zero the struct");
+            }
+
+            persistGetStats(p, NULL); /* must not crash */
         }
 
         /* Recover and verify */

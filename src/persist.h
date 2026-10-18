@@ -740,7 +740,8 @@ void *persistRecover(persist *p);
 /* Sync any buffered data */
 bool persistSync(persist *p);
 
-/* Get statistics */
+/* Get statistics.  Always writes '*stats' when it is non-NULL: all zeros
+ * when 'p' is NULL. */
 void persistGetStats(const persist *p, persistStats *stats);
 
 /* Reset statistics */
