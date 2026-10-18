@@ -31,6 +31,7 @@
 #include "../deps/xxHash/xxhash.h"
 
 #include "cleaner.h"
+#include "ctmem.h" /* dkSecureZero */
 #include "dks.h"
 #include "fibbuf.h"
 
@@ -307,20 +308,13 @@ void DKS_FREE(DKS_TYPE *s) {
 
 DK_FN_NO_OPTIMIZE void DKS_FREEZERO(DKS_TYPE *s) {
     if (s) {
-#if __STDC_LIB_EXT1__
-        /* Guaranteed memory zero out, but only in C11 mode
-         * and only on platforms with the correct headers
-         * and libc and whatnot */
-        const size_t len = DKS_LEN(s);
-        memset_s(s, len, 0, len);
-#else
-        /* Note: the compiler may notice we're modifying
-         * data then just freeing it, which could allow the
-         * compiler to not zero out the memory since it
-         * isn't going to be accessed again. */
-        memset(s, 0, DKS_LEN(s));
-#endif
-        zfree(DKS_BASE(s, NULL));
+        /* Wipe everything the string tracks: header, contents, free space
+         * and the terminator. dkSecureZero cannot be dropped as a dead
+         * store before the free. */
+        const size_t size = DKS_ALLOCSIZE(s);
+        void *const base = DKS_BASE(s, NULL);
+        dkSecureZero(base, size);
+        zfree(base);
     }
 }
 
@@ -2153,6 +2147,26 @@ DK_STATIC void DKS_RANDBYTES(uint8_t *buf, size_t len) {
     }
 }
 
+/* DKS_FREEZERO check: a free hook that inspects one watched allocation just
+ * before passing it on to the real free */
+static void (*freezeroRealFree)(void *ptr);
+static const uint8_t *freezeroWatch;
+static size_t freezeroWatchLen;
+static bool freezeroSawWatch;
+static bool freezeroWatchZero;
+
+static void freezeroCheckingFree(void *ptr) {
+    if (ptr && ptr == freezeroWatch) {
+        freezeroSawWatch = true;
+        freezeroWatchZero = true;
+        for (size_t i = 0; i < freezeroWatchLen; i++) {
+            freezeroWatchZero = freezeroWatchZero && freezeroWatch[i] == 0;
+        }
+    }
+
+    freezeroRealFree(ptr);
+}
+
 #define UNUSED(x) (void)(x)
 int DKS_TEST(int argc, char *argv[]) {
     UNUSED(argv);
@@ -2952,6 +2966,36 @@ int DKS_TEST(int argc, char *argv[]) {
         }
         testCond("DKS_TOUPPER() long string SIMD", allUpper, true, "%d");
         DKS_FREE(x);
+    }
+
+    {
+        /* DKS_FREEZERO must leave every tracked byte zero, including spare
+         * capacity, by the time the allocation reaches the allocator */
+        DKS_TYPE *x = DKS_NEW("correct horse battery staple");
+        x = DKS_EXPANDBY(x, 200);
+        const size_t fzLen = DKS_LEN(x);
+        const size_t fzAvail = DKS_AVAIL(x);
+        memset(x + fzLen, 'S', fzAvail); /* secret bytes in the free space */
+
+        freezeroWatch = DKS_BASE(x, NULL);
+        freezeroWatchLen = DKS_ALLOCSIZE(x);
+        freezeroSawWatch = false;
+        freezeroWatchZero = false;
+
+        datakitConfig saved = datakitConfigMemory__;
+        datakitConfig checking = saved;
+        freezeroRealFree = saved.localFree;
+        checking.localFree = freezeroCheckingFree;
+        datakitConfigSet(&checking);
+        DKS_FREEZERO(x);
+        datakitConfigSet(&saved);
+
+        testCond("DKS_FREEZERO() freed the string", freezeroSawWatch, true,
+                 "%d");
+        testCond("DKS_FREEZERO() zeroed header, data and free space",
+                 freezeroWatchZero, true, "%d");
+        testCondGte("DKS_FREEZERO() watched past the contents",
+                    freezeroWatchLen, fzLen + fzAvail + 1, "%zu");
     }
 
     if (!bigTests) {

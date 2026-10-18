@@ -620,9 +620,12 @@ uint8_t *mdscnative(mdsc *s, size_t *len);
 mds *s = mdsnew("Hello");
 mdsfree(s);
 
-/* Secure erase */
+/* Secure erase: wipes the header, contents, free space and terminator with
+ * dkSecureZero, then frees. Bytes the string no longer tracks are not
+ * covered: an mdsc shrunk after growing, or free space mdsclear() had to
+ * hide. Wipe a secret before shrinking such a string. */
 mds *secret = mdsnew("password123");
-mdsfreezero(secret);  /* Zeros memory before freeing */
+mdsfreezero(secret);
 
 /* Convert to a plain buffer: the string bytes are moved to the front of
  * the existing allocation and the base pointer is returned. */
