@@ -142,12 +142,16 @@ bool multilistIndexNearWide(const multilist *ml, mflexState *state,
 void multilistRotate(multilist *m, mflexState *state[2]);
 
 /* Remove the head or tail element and return it in *got as a
- * self-contained value (flexGetByTypeCopy), on every tier:
- *   - BYTES and containers are heap copies (allocated = 1);
+ * self-contained value, on every tier:
+ *   - BYTES of 8 bytes or less are embedded (DATABOX_BYTES_EMBED,
+ *     allocated = 0), so read them with databoxBytes / databoxCBytes;
+ *   - longer BYTES and containers are heap copies (allocated = 1);
  *   - a 96/128-bit value lands in the storage got->data points at when
  *     got->big is set (a DATABOX_BIG_INIT'd databoxBig), and otherwise in
  *     a 16-byte heap block (allocated = 1, big = 1);
  *   - every other value has allocated = 0 and big = 0.
+ * Popping a narrow value (an integer, a float or a short string) never
+ * allocates.
  * 'got' must be zeroed or a DATABOX_BIG_INIT'd databoxBig, because its
  * 'big' flag is read.  Release the result with databoxFreeData.  Returns
  * false, leaving *got untouched, when the list is empty. */

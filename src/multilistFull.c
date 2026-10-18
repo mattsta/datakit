@@ -1436,7 +1436,8 @@ bool multilistFullPop(multilistFull *ml, mflexState *state, databox *box,
     flexEntry *fe = flexHeadOrTail(f, flIdx);
 
     if (fe) {
-        flexGetByTypeCopy(fe, box);
+        /* The element is about to be deleted, so hand out an owned copy. */
+        multilistPopCopy_(fe, box);
 
         if (!multilistFullDelIndex(ml, nodeIdx, &f, &fe)) {
             mflexCloseShrink(node, state, f);

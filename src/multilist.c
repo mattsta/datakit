@@ -3391,8 +3391,23 @@ int multilistTest(int argc, char *argv[]) {
                     why = "wide pop into a plain box is not heap-owned";
                 }
 
-                if (!why && expect.isStr && !dst.allocated) {
-                    why = "popped string is not an owned copy";
+                if (!why && expect.isStr) {
+                    /* Up to 8 bytes embedded with nothing to free, longer
+                     * ones a heap copy. */
+                    const bool embed = databoxLen((const databox *)&dst) <=
+                                       sizeof(dst.data.bytes.embed8);
+                    if (embed &&
+                        (dst.type != DATABOX_BYTES_EMBED || dst.allocated)) {
+                        why = "popped short string is not embedded";
+                    } else if (!embed &&
+                               (dst.type != DATABOX_BYTES || !dst.allocated)) {
+                        why = "popped long string is not an owned copy";
+                    }
+                }
+
+                if (!why && !mlwIsWide(&expect) && !expect.isStr &&
+                    dst.allocated) {
+                    why = "popped integer claims to own memory";
                 }
 
                 if (why) {

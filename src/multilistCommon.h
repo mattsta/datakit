@@ -3,6 +3,7 @@
 #include "mflex.h"
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 /* mlNodeId is the offset extent in our 'nodes' array.
  * Offsets can be forward (positive) or reverse (negative).
@@ -97,3 +98,32 @@ _Static_assert(offsetof(multilistIterator, wide) % 16 == 0,
                "the iterator's wide slot must be 16-byte aligned");
 
 typedef mflexState multilistState;
+
+/* Internal to the tier Pop implementations: the self-contained copy of
+ * the element at 'fe', which is about to be deleted.  It is
+ * flexGetByTypeCopy()'s result, except that BYTES of 8 bytes or less come
+ * back embedded (DATABOX_BYTES_EMBED, allocated = 0), so popping a narrow
+ * value never allocates.  Fixed-width values decode once; long BYTES,
+ * containers and 96/128-bit values go through flexGetByTypeCopy(), which
+ * writes a wide value in band when got->big is set and to a heap payload
+ * otherwise. */
+static inline void multilistPopCopy_(const flexEntry *fe, databox *got) {
+    databox found = {{0}};
+    flexGetByTypeInto(fe, &found, NULL);
+    if (found.type == DATABOX_BYTES) {
+        if (found.len <= sizeof(found.data.bytes.embed8)) {
+            databox embed = {{0}};
+            memcpy(embed.data.bytes.embed8, found.data.bytes.start, found.len);
+            embed.type = DATABOX_BYTES_EMBED;
+            embed.len = found.len;
+            *got = embed;
+            return;
+        }
+    } else if (found.type < DATABOX_BYTES && !databoxIsWideDeferred(&found)) {
+        /* Nothing below BYTES borrows from the flex; flags are clear. */
+        *got = found;
+        return;
+    }
+
+    flexGetByTypeCopy(fe, got);
+}

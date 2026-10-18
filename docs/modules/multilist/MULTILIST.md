@@ -369,13 +369,20 @@ bool multilistPop(multilist **m, mflexState *state, databox *got,
 ```
 
 The element is removed, so a successful pop returns a **self-contained** copy
-in `got` (`flexGetByTypeCopy()`). The behavior is the same on every tier:
+in `got`. The behavior is the same on every tier:
 
-- BYTES and containers are heap copies (`DATABOX_BYTES`, `allocated = 1`).
+- BYTES of 8 bytes or less are embedded in the box (`DATABOX_BYTES_EMBED`,
+  `allocated = 0`). Read them with `databoxBytes()` / `databoxCBytes()`, not
+  `.data.bytes.cstart`.
+- Longer BYTES and containers are heap copies (`DATABOX_BYTES`,
+  `allocated = 1`).
 - A 96/128-bit value goes into the storage `got->data` points at when
   `got->big` is set (a `DATABOX_BIG_INIT`'d `databoxBig`). Otherwise it goes
   into a 16-byte heap block (`allocated = 1`, `big = 1`).
 - Every other value has `allocated = 0` and `big = 0`.
+
+So popping a narrow value (an integer, a float or a short string) never
+allocates.
 
 `got` must be zeroed (`databox got = {{0}};`) or a `DATABOX_BIG_INIT`'d
 `databoxBig`, because its `big` flag is read. Always release the result with
