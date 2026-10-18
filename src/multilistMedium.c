@@ -175,21 +175,36 @@ void multilistMediumDelEntry(multilistIterator *iter, multilistEntry *entry) {
     multilistMedium *const ml = entry->ml;
     flexDelete(&ml->fl[entry->nodeIdx], &entry->fe);
 
+    /* The delete can move the flex, so re-aim both views of it. */
+    entry->f = ml->fl[entry->nodeIdx];
+    iter->f = entry->f;
+
+    if (iter->fe) {
+        if (iter->forward) {
+            /* The next element now sits where the deleted one was. */
+            iter->fe = entry->fe;
+        } else if (entry->fe == iter->f + flexBytes(iter->f)) {
+            /* The deleted element was the tail; the previous one is the
+             * new tail. */
+            iter->fe = flexTail(iter->f);
+        } else {
+            iter->fe = flexPrev(iter->f, entry->fe);
+        }
+    }
+
     /* If deleted only element in F0 and F1 stil has data,
-     * move F1 to F0 since F0 must always have elements (if data exists). */
+     * move F1 to F0 since F0 must always have elements (if data exists).
+     * The deleted element was F0's only one, so nothing precedes it; a
+     * forward iterator continues at the head of the new F0. */
     if (flexCount(F0) == 0 && flexCount(F1) > 0) {
         assert(entry->nodeIdx == 0);
         swapF();
-    }
-
-    if (iter->fe) {
-        if (!iter->forward && entry->fe) {
-            /* update for reverse direction */
-            iter->fe = flexPrev(ml->fl[entry->nodeIdx], entry->fe);
-        } else {
-            /* update for forward direction */
-            iter->fe = entry->fe;
-        }
+        entry->f = F0;
+        entry->fe = flexHead(F0);
+        iter->nodeIdx = 0;
+        iter->f = F0;
+        iter->offset = 0;
+        iter->fe = iter->forward ? flexHead(F0) : NULL;
     }
 }
 

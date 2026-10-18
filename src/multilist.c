@@ -2242,6 +2242,82 @@ int multilistTest(int argc, char *argv[]) {
         printf("  verified negative index access with unbalanced structure\n");
     }
 
+    TEST("MEDIUM: DelEntry while iterating visits every element") {
+        /* Each delete reallocs the flex being iterated, and deleting F0's
+         * last element moves F1 into F0; iteration must survive both and
+         * still visit every element exactly once, in both directions. */
+        const int total = 60;
+        for (int pass = 0; pass < 4; pass++) {
+            const bool forward = pass < 2;
+            const int every = pass % 2 == 0 ? 1 : 2; /* delete all, or half */
+            cleaner(multilistFree) multilist *ml =
+                multilistNew(FLEX_CAP_LEVEL_512, 0);
+            char buf[64];
+            for (int i = 0; i < total; i++) {
+                snprintf(buf, sizeof(buf), "medium-del-%02d-padding", i);
+                const databox box = databoxNewBytesString(buf);
+                multilistPushByTypeTail(&ml, s0, &box);
+            }
+
+            if (_multilistType(ml) != MULTILIST_TYPE_MEDIUM) {
+                ERR("pass %d: landed tier %d, wanted Medium", pass,
+                    (int)_multilistType(ml));
+            }
+
+            bool kept[60];
+            multilistIterator iter;
+            multilistEntry entry;
+            multilistIteratorInit(ml, s, &iter, forward, false);
+            int visited = 0;
+            while (multilistNext(&iter, &entry)) {
+                const int i = forward ? visited : total - 1 - visited;
+                snprintf(buf, sizeof(buf), "medium-del-%02d-padding", i);
+                if (visited >= total || entry.box.len != strlen(buf) ||
+                    memcmp(entry.box.data.bytes.start, buf, entry.box.len)) {
+                    ERR("pass %d: element %d read back wrong", pass, i);
+                    break;
+                }
+
+                kept[i] = visited % every != 0;
+                if (!kept[i]) {
+                    multilistDelEntry(&iter, &entry);
+                }
+
+                visited++;
+            }
+
+            multilistIteratorRelease(&iter);
+            if (visited != total) {
+                ERR("pass %d: visited %d of %d elements", pass, visited, total);
+                continue;
+            }
+
+            int remaining = 0;
+            multilistIteratorInitForwardReadOnly(ml, s, &iter);
+            for (int i = 0; i < total; i++) {
+                if (!kept[i]) {
+                    continue;
+                }
+
+                snprintf(buf, sizeof(buf), "medium-del-%02d-padding", i);
+                if (!multilistNext(&iter, &entry) ||
+                    entry.box.len != strlen(buf) ||
+                    memcmp(entry.box.data.bytes.start, buf, entry.box.len)) {
+                    ERR("pass %d: kept element %d missing", pass, i);
+                    break;
+                }
+
+                remaining++;
+            }
+
+            multilistIteratorRelease(&iter);
+            if ((int)multilistCount(ml) != remaining) {
+                ERR("pass %d: %zu elements left, want %d", pass,
+                    multilistCount(ml), remaining);
+            }
+        }
+    }
+
     TEST("FUZZ: stress random operations") {
         cleaner(multilistFree) multilist *ml = multilistNew(4, 2);
         size_t count = 0;
