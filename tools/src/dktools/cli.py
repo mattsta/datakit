@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import allocaudit, perfdiff, toolchain, verify
+from . import allocaudit, leakcheck, perfdiff, toolchain, verify
 from .gitutil import ToolError
 
 
@@ -119,6 +119,39 @@ def main(argv: list[str] | None = None) -> int:
     vf.add_argument("-j", "--jobs", type=int, default=None, help="parallel jobs")
     toolchain.add_arguments(vf)
 
+    lc = sub.add_parser(
+        "leakcheck",
+        help="leakage gate over the staged diff, a range, or the tree "
+        "(exit 0 clean, 1 hard hit, 2 input error)",
+    )
+    lc_mode = lc.add_mutually_exclusive_group()
+    lc_mode.add_argument(
+        "--staged",
+        action="store_const",
+        dest="mode",
+        const="staged",
+        help="added lines of the staged diff (default)",
+    )
+    lc_mode.add_argument(
+        "--range",
+        dest="rev_range",
+        metavar="A..B",
+        default=None,
+        help="added lines of git diff A..B (A...B: from the merge base)",
+    )
+    lc_mode.add_argument(
+        "--tree",
+        action="store_const",
+        dest="mode",
+        const="tree",
+        help="every tracked file under src/ docs/ include/ tools/ and top-level *.md",
+    )
+    lc.add_argument(
+        "--include-vendored",
+        action="store_true",
+        help="also check deps/ and src/memshard/",
+    )
+
     args = parser.parse_args(argv)
 
     try:
@@ -129,6 +162,10 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _dispatch(args: argparse.Namespace) -> int:
+    if args.command == "leakcheck":
+        mode = "range" if args.rev_range is not None else args.mode or "staged"
+        return leakcheck.run(args.repo, mode, args.rev_range, args.include_vendored)
+
     if args.command == "verify":
         return verify.run(
             args.repo,

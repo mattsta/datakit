@@ -96,6 +96,33 @@ place builds get them from; the system `cc` is never used:
 | `clang22` (default) | `clang-22`, `clang++`, `llvm-ar`, `llvm-ranlib` from `--llvm-dir` / `$DKTOOLS_LLVM_DIR` (default: Homebrew LLVM) | `dev`, `debug` (CMakePresets.json) |
 | `gcc15` | `gcc-15`, `g++-15`, overridden by `--gcc-cc`/`--gcc-cxx` or `$DKTOOLS_GCC_CC`/`$DKTOOLS_GCC_CXX` | `release` (`-DCMAKE_BUILD_TYPE=Release`, no preset) |
 
+## leakcheck — the leakage gate
+
+Checks text about to enter history for terms that must never appear in
+datakit (downstream project names and internals, project-management
+labels, scratch timestamps, local filesystem paths):
+
+```sh
+uv run --project tools dktools leakcheck                # staged diff (default)
+uv run --project tools dktools leakcheck --range A..B   # added lines of A..B
+uv run --project tools dktools leakcheck --tree         # every tracked file
+```
+
+- `--staged` and `--range` check only added lines (`A...B` diffs
+  from the merge base); `--tree` checks every line of every tracked
+  file under `src/`, `docs/`, `include/`, `tools/`, and the top-level
+  `*.md` files.
+- Vendored code (`deps/`, `src/memshard/`) mirrors upstream and is
+  skipped unless `--include-vendored` is given.
+- Each hit prints as `path:line: [term] text`. Hard terms fail the
+  gate (exit 1); patterns that also match ordinary code print under a
+  separate `REVIEW` heading and do not change the exit code. Exits 0
+  with no hard hit, 2 on an input error.
+- The term list and its matching rules live in
+  `src/dktools/leakcheck.py`, the single source of truth. Multi-word
+  terms match with a space, hyphen, underscore or nothing between the
+  words.
+
 ## perfdiff — perf regression comparison
 
 Compares two `perfRegression` TSV outputs row by row, keyed on
