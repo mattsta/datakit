@@ -141,12 +141,12 @@ value; don't rely on the `big` and `allocated` bits.
 16 bytes of payload storage, which a 16-byte `databox` doesn't have. Where the
 payload goes depends on the read:
 
-| Read | A wide element comes back |
-|---|---|
-| `multilistNext()` | whole: `big` is 1 and `data.i128` / `data.u128` points at the iterator's `wide` slot, valid until the next `multilistNext()` on that iterator |
-| `multilistIndexWide()`, `multilistIndexNearWide()` | whole: the payload is in the `databoxWide` slot you pass |
-| `multilistIndex()`, `multilistIndexNear()` | **deferred**: the type only, with `data.ptr == NULL` (`databoxIsWideDeferred()`) |
-| `multilistPop()` | an owned value (see [Pop from Ends](#pop-from-ends)) |
+| Read                                               | A wide element comes back                                                                                                                     |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `multilistNext()`                                  | whole: `big` is 1 and `data.i128` / `data.u128` points at the iterator's `wide` slot, valid until the next `multilistNext()` on that iterator |
+| `multilistIndexWide()`, `multilistIndexNearWide()` | whole: the payload is in the `databoxWide` slot you pass                                                                                      |
+| `multilistIndex()`, `multilistIndexNear()`         | **deferred**: the type only, with `data.ptr == NULL` (`databoxIsWideDeferred()`)                                                              |
+| `multilistPop()`                                   | an owned value (see [Pop from Ends](#pop-from-ends))                                                                                          |
 
 Narrow elements never touch a slot, so iteration and the Wide reads cost
 nothing extra on lists without wide values. The slot is part of the iterator

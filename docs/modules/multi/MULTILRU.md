@@ -557,20 +557,20 @@ no width downgrade**, so the entry array never shrinks; it only stops growing.
 
 ### Time Complexity
 
-| Operation          | Complexity       | Notes                                          |
-| ------------------ | ---------------- | ---------------------------------------------- |
-| Insert             | O(1) amortized   | Array growth and width migration amortize      |
-| InsertWeighted     | O(1) amortized   | Plus the policy pass, which may evict          |
-| Increase           | O(1)             | Unlink and relink, `levelMask` update          |
-| UpdateWeight       | O(1)             | Adjusts entry, level, and total weight         |
-| RemoveMinimum      | O(1)             | `levelMask` gives the coldest level directly   |
-| Delete             | O(1)             | Direct index access                            |
-| EvictN             | O(n + demotions) | Demotions are bounded by `maxLevels` per entry |
-| Count / Bytes      | O(1)             | Cached values                                  |
-| GetStats           | O(1)             | Counters maintained incrementally              |
-| LevelCount/Weight  | O(1)             | Per-level totals are maintained                |
-| Collect/GetN       | O(n + levels)    | Walks the level lists                          |
-| Width migration    | O(capacity)      | One-time cost per tier boundary                |
+| Operation         | Complexity       | Notes                                          |
+| ----------------- | ---------------- | ---------------------------------------------- |
+| Insert            | O(1) amortized   | Array growth and width migration amortize      |
+| InsertWeighted    | O(1) amortized   | Plus the policy pass, which may evict          |
+| Increase          | O(1)             | Unlink and relink, `levelMask` update          |
+| UpdateWeight      | O(1)             | Adjusts entry, level, and total weight         |
+| RemoveMinimum     | O(1)             | `levelMask` gives the coldest level directly   |
+| Delete            | O(1)             | Direct index access                            |
+| EvictN            | O(n + demotions) | Demotions are bounded by `maxLevels` per entry |
+| Count / Bytes     | O(1)             | Cached values                                  |
+| GetStats          | O(1)             | Counters maintained incrementally              |
+| LevelCount/Weight | O(1)             | Per-level totals are maintained                |
+| Collect/GetN      | O(n + levels)    | Walks the level lists                          |
+| Width migration   | O(capacity)      | One-time cost per tier boundary                |
 
 ### Space Complexity
 

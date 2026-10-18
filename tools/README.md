@@ -91,10 +91,10 @@ uv run --project tools dktools verify NAME --tests REGEX [--serial REGEX] \
 Compilers and presets live in `src/dktools/toolchain.py`, the single
 place builds get them from; the system `cc` is never used:
 
-| name | programs | presets |
-| --- | --- | --- |
-| `clang22` (default) | `clang-22`, `clang++`, `llvm-ar`, `llvm-ranlib` from `--llvm-dir` / `$DKTOOLS_LLVM_DIR` (default: Homebrew LLVM) | `dev`, `debug` (CMakePresets.json) |
-| `gcc15` | `gcc-15`, `g++-15`, overridden by `--gcc-cc`/`--gcc-cxx` or `$DKTOOLS_GCC_CC`/`$DKTOOLS_GCC_CXX` | `release` (`-DCMAKE_BUILD_TYPE=Release`, no preset) |
+| name                | programs                                                                                                         | presets                                             |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| `clang22` (default) | `clang-22`, `clang++`, `llvm-ar`, `llvm-ranlib` from `--llvm-dir` / `$DKTOOLS_LLVM_DIR` (default: Homebrew LLVM) | `dev`, `debug` (CMakePresets.json)                  |
+| `gcc15`             | `gcc-15`, `g++-15`, overridden by `--gcc-cc`/`--gcc-cxx` or `$DKTOOLS_GCC_CC`/`$DKTOOLS_GCC_CXX`                 | `release` (`-DCMAKE_BUILD_TYPE=Release`, no preset) |
 
 ## validate — the full matrix on a revision
 
