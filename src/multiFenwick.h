@@ -97,6 +97,12 @@
  * behavior. Mixing types (e.g., int64_t and double) is supported but
  * may produce unexpected results due to type coercion.
  *
+ * Integer sums and differences are exact over SIGNED_64 / UNSIGNED_64.
+ * Storage keeps integers in canonical form, so a non-negative integer may
+ * come back as UNSIGNED_64 even if it went in as SIGNED_64: read results
+ * by value (a negative result is always SIGNED_64, and a result above
+ * INT64_MAX is always UNSIGNED_64), not by the type that went in.
+ *
  * LIMITATIONS
  * -----------
  * - Does not support range updates directly

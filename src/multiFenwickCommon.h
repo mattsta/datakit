@@ -123,9 +123,47 @@ static inline databoxType databoxResultType(const databox *a,
     return ta;
 }
 
+/* Exact value of a 64-bit integer box (SIGNED_64 or UNSIGNED_64), or 0 for
+ * VOID.  Flex stores integers canonically, so a non-negative value stored
+ * as SIGNED_64 reads back as UNSIGNED_64: integer arithmetic must depend
+ * on the value, never on which of the two types carries it.
+ * Returns false for any other type. */
+static inline bool multiFenwickIntValue_(const databox *box, __int128_t *v) {
+    switch (box->type) {
+    case DATABOX_SIGNED_64:
+        *v = box->data.i64;
+        return true;
+    case DATABOX_UNSIGNED_64:
+        *v = box->data.u64;
+        return true;
+    case DATABOX_VOID:
+        *v = 0;
+        return true;
+    default:
+        return false;
+    }
+}
+
+/* Box the exact integer result 'r'.  A negative result is SIGNED_64 and a
+ * result above INT64_MAX is UNSIGNED_64; in between, 'resType' picks the
+ * type (both views of the bits agree there).  A result outside the 64-bit
+ * range wraps modulo 2^64, as 64-bit integer sums always have here. */
+static inline databox multiFenwickIntBox_(__int128_t r, databoxType resType) {
+    if (r < 0) {
+        return DATABOX_SIGNED((int64_t)(uint64_t)r);
+    }
+
+    if (r > INT64_MAX || resType == DATABOX_UNSIGNED_64) {
+        return DATABOX_UNSIGNED((uint64_t)r);
+    }
+
+    return DATABOX_SIGNED((int64_t)r);
+}
+
 /* Add two databoxes: result = a + b
  * Supports mixed types with automatic coercion
- * Result type is determined by databoxResultType */
+ * Result type is determined by databoxResultType, except that an integer
+ * result takes the type its value needs (see multiFenwickIntBox_) */
 static inline bool databoxAdd(const databox *a, const databox *b,
                               databox *result) {
     if (!a || !b || !result) {
@@ -149,44 +187,15 @@ static inline bool databoxAdd(const databox *a, const databox *b,
     /* Determine result type */
     databoxType resType = databoxResultType(a, b);
 
-    /* For integer-only ops, use integer arithmetic to avoid precision loss */
+    /* For integer-only ops, use exact integer arithmetic */
     if (resType == DATABOX_SIGNED_64 || resType == DATABOX_UNSIGNED_64) {
-        /* Extract integer values */
-        int64_t va_i = 0, vb_i = 0;
-        uint64_t va_u = 0, vb_u = 0;
-
-        if (a->type == DATABOX_SIGNED_64) {
-            va_i = a->data.i64;
-        } else if (a->type == DATABOX_UNSIGNED_64) {
-            va_u = a->data.u64;
-        } else if (a->type == DATABOX_VOID) {
-            va_i = 0;
-        } else {
-            goto use_double; /* Fall back to double for mixed float/int */
+        __int128_t va;
+        __int128_t vb;
+        if (!multiFenwickIntValue_(a, &va) || !multiFenwickIntValue_(b, &vb)) {
+            goto use_double; /* not two integers: the double path decides */
         }
 
-        if (b->type == DATABOX_SIGNED_64) {
-            vb_i = b->data.i64;
-        } else if (b->type == DATABOX_UNSIGNED_64) {
-            vb_u = b->data.u64;
-        } else if (b->type == DATABOX_VOID) {
-            vb_i = 0;
-        } else {
-            goto use_double;
-        }
-
-        /* Perform integer addition */
-        if (resType == DATABOX_UNSIGNED_64) {
-            /* Both are unsigned */
-            *result = DATABOX_UNSIGNED(va_u + vb_u);
-        } else {
-            /* At least one is signed - convert and add */
-            int64_t a_signed =
-                (a->type == DATABOX_UNSIGNED_64) ? (int64_t)va_u : va_i;
-            int64_t b_signed =
-                (b->type == DATABOX_UNSIGNED_64) ? (int64_t)vb_u : vb_i;
-            *result = DATABOX_SIGNED(a_signed + b_signed);
-        }
+        *result = multiFenwickIntBox_(va + vb, resType);
         return true;
     }
 
@@ -216,12 +225,9 @@ static inline bool databoxSubtract(const databox *a, const databox *b,
     }
     if (DATABOX_IS_VOID(a)) {
         /* 0 - b = -b */
-        if (b->type == DATABOX_SIGNED_64) {
-            *result = DATABOX_SIGNED(-b->data.i64);
-            return true;
-        } else if (b->type == DATABOX_UNSIGNED_64) {
-            /* Can't negate unsigned properly, promote to signed */
-            *result = DATABOX_SIGNED(-(int64_t)b->data.u64);
+        __int128_t vbInt;
+        if (multiFenwickIntValue_(b, &vbInt)) {
+            *result = multiFenwickIntBox_(-vbInt, DATABOX_SIGNED_64);
             return true;
         }
         double vb;
@@ -239,37 +245,17 @@ static inline bool databoxSubtract(const databox *a, const databox *b,
     /* Determine result type */
     databoxType resType = databoxResultType(a, b);
 
-    /* For integer-only ops, use integer arithmetic to avoid precision loss */
+    /* For integer-only ops, use exact integer arithmetic: two UNSIGNED_64
+     * operands (which every non-negative stored value reads back as) give
+     * a negative SIGNED_64 when b > a, never a wrapped unsigned value. */
     if (resType == DATABOX_SIGNED_64 || resType == DATABOX_UNSIGNED_64) {
-        int64_t va_i = 0, vb_i = 0;
-        uint64_t va_u = 0, vb_u = 0;
-
-        if (a->type == DATABOX_SIGNED_64) {
-            va_i = a->data.i64;
-        } else if (a->type == DATABOX_UNSIGNED_64) {
-            va_u = a->data.u64;
-        } else {
+        __int128_t va;
+        __int128_t vb;
+        if (!multiFenwickIntValue_(a, &va) || !multiFenwickIntValue_(b, &vb)) {
             goto use_double_sub;
         }
 
-        if (b->type == DATABOX_SIGNED_64) {
-            vb_i = b->data.i64;
-        } else if (b->type == DATABOX_UNSIGNED_64) {
-            vb_u = b->data.u64;
-        } else {
-            goto use_double_sub;
-        }
-
-        /* Perform integer subtraction */
-        if (resType == DATABOX_UNSIGNED_64) {
-            *result = DATABOX_UNSIGNED(va_u - vb_u);
-        } else {
-            int64_t a_signed =
-                (a->type == DATABOX_UNSIGNED_64) ? (int64_t)va_u : va_i;
-            int64_t b_signed =
-                (b->type == DATABOX_UNSIGNED_64) ? (int64_t)vb_u : vb_i;
-            *result = DATABOX_SIGNED(a_signed - b_signed);
-        }
+        *result = multiFenwickIntBox_(va - vb, resType);
         return true;
     }
 
@@ -346,7 +332,14 @@ static inline int databoxCompareNumeric(const databox *a, const databox *b) {
         }
     }
 
-    /* Mixed types: convert both to double and compare */
+    /* Mixed SIGNED_64 / UNSIGNED_64: compare the exact values */
+    __int128_t ia;
+    __int128_t ib;
+    if (multiFenwickIntValue_(a, &ia) && multiFenwickIntValue_(b, &ib)) {
+        return ia < ib ? -1 : ia > ib ? 1 : 0;
+    }
+
+    /* Other mixed types: convert both to double and compare */
     double va, vb;
     if (!databoxToDouble(a, &va) || !databoxToDouble(b, &vb)) {
         return 0;

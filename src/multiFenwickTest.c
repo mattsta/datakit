@@ -70,6 +70,21 @@ static uint64_t randSeed(uint64_t *seed) {
     return *seed;
 }
 
+/* 'box' is the 64-bit integer 'want'.  Flex stores integers canonically,
+ * so a non-negative value may come back as either SIGNED_64 or
+ * UNSIGNED_64; any other type, or a wrapped value, is a mismatch. */
+static bool mfwIntIs(const databox *box, int64_t want) {
+    if (box->type == DATABOX_SIGNED_64) {
+        return box->data.i64 == want;
+    }
+
+    if (box->type == DATABOX_UNSIGNED_64) {
+        return want >= 0 && box->data.u64 == (uint64_t)want;
+    }
+
+    return false;
+}
+
 int multiFenwickTest(int argc, char *argv[]) {
     int err = 0;
 
@@ -662,7 +677,7 @@ int multiFenwickTest(int argc, char *argv[]) {
         multiFenwickFree(none);
 
         enum { WIDE_N = 8 };
-        const int64_t vals[WIDE_N] = {5, 2, 8, 1, 9, 3, 7, 4};
+        const int64_t vals[WIDE_N] = {5, -2, 8, 1, 9, -3, 7, 4};
         databox values[WIDE_N];
         for (size_t i = 0; i < WIDE_N; i++) {
             values[i] = DATABOX_SIGNED(vals[i]);
@@ -728,6 +743,121 @@ int multiFenwickTest(int argc, char *argv[]) {
                     query.type == DATABOX_UNSIGNED_128) {
                     ERR("prefix sum %zu changed (want %" PRId64 ")", i, sum);
                 }
+            }
+        }
+    }
+
+    TEST("differential: signed Update, Set, Get and Query against an array") {
+        /* Random signed values, small and beyond 2^53, through Update
+         * (add) and Set (assign), growing the tree as indexes arrive.
+         * Each step checks the touched element, the count and one
+         * prefix sum; every 150 steps every element and prefix sum is
+         * checked against the oracle. */
+        enum { DIFF_N = 300, DIFF_OPS = 1500 };
+        static int64_t oracle[DIFF_N];
+        memset(oracle, 0, sizeof(oracle));
+        size_t count = 0;
+        uint64_t seed = 4242;
+        cleaner(multiFenwickFree) multiFenwick *mfw = NULL;
+        bool failed = false;
+        for (uint32_t op = 0; op < DIFF_OPS && !failed; op++) {
+            const size_t idx = randSeed(&seed) % DIFF_N;
+            const uint64_t r = randSeed(&seed);
+            const int64_t v = op % 3 == 0 ? (int64_t)(r % ((uint64_t)1 << 51)) -
+                                                ((int64_t)1 << 50)
+                                          : (int64_t)(r % 2001) - 1000;
+            const databox box = DATABOX_SIGNED(v);
+            const bool set = op % 4 == 3;
+            if (!(set ? multiFenwickSet(&mfw, idx, &box)
+                      : multiFenwickUpdate(&mfw, idx, &box))) {
+                ERR("op %u: %s(%zu, %" PRId64 ") failed", op,
+                    set ? "Set" : "Update", idx, v);
+                failed = true;
+                break;
+            }
+
+            oracle[idx] = set ? v : oracle[idx] + v;
+            if (idx + 1 > count) {
+                count = idx + 1;
+            }
+
+            databox got;
+            if (multiFenwickCount(mfw) != count ||
+                !multiFenwickGet(mfw, idx, &got) ||
+                !mfwIntIs(&got, oracle[idx])) {
+                ERR("op %u: element %zu or the count is wrong (want %" PRId64
+                    ")",
+                    op, idx, oracle[idx]);
+                failed = true;
+            }
+
+            const size_t q = randSeed(&seed) % count;
+            int64_t prefix = 0;
+            for (size_t i = 0; i <= q; i++) {
+                prefix += oracle[i];
+            }
+
+            if (!multiFenwickQuery(mfw, q, &got) || !mfwIntIs(&got, prefix)) {
+                ERR("op %u: prefix sum %zu is wrong (want %" PRId64 ")", op, q,
+                    prefix);
+                failed = true;
+            }
+
+            if (op % 150 == 149) {
+                prefix = 0;
+                for (size_t i = 0; i < count && !failed; i++) {
+                    prefix += oracle[i];
+                    databox el;
+                    databox sum;
+                    if (!multiFenwickGet(mfw, i, &el) ||
+                        !mfwIntIs(&el, oracle[i]) ||
+                        !multiFenwickQuery(mfw, i, &sum) ||
+                        !mfwIntIs(&sum, prefix)) {
+                        ERR("op %u: sweep differs at %zu", op, i);
+                        failed = true;
+                    }
+                }
+            }
+        }
+    }
+
+    TEST("differential: LowerBound against an array") {
+        /* LowerBound needs non-negative values (monotonic prefix sums).
+         * Targets are random, every exact prefix sum, and past the end. */
+        enum { LB_N = 200 };
+        static int64_t prefix[LB_N];
+        uint64_t seed = 777;
+        cleaner(multiFenwickFree) multiFenwick *mfw = multiFenwickNew();
+        int64_t total = 0;
+        for (size_t i = 0; i < LB_N; i++) {
+            const int64_t v = (int64_t)(randSeed(&seed) % 1001);
+            const databox box = DATABOX_SIGNED(v);
+            if (!multiFenwickUpdate(&mfw, i, &box)) {
+                ERR("Update(%zu) failed", i);
+            }
+
+            total += v;
+            prefix[i] = total;
+        }
+
+        for (uint32_t k = 0; k < 3 * LB_N; k++) {
+            const int64_t target =
+                k < LB_N ? prefix[k]
+                         : (int64_t)(randSeed(&seed) % (uint64_t)(total + 50));
+            size_t want = SIZE_MAX;
+            for (size_t i = 0; i < LB_N; i++) {
+                if (prefix[i] >= target) {
+                    want = i;
+                    break;
+                }
+            }
+
+            const databox t = DATABOX_SIGNED(target);
+            const size_t got = multiFenwickLowerBound(mfw, &t);
+            if (got != want) {
+                ERR("LowerBound(%" PRId64 ") = %zu, want %zu", target, got,
+                    want);
+                break;
             }
         }
     }
