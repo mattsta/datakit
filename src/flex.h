@@ -479,6 +479,13 @@ bool flexCompareUnsigned(flexEntry *fe, uint64_t val);
 bool flexCompareSigned(flexEntry *fe, int64_t val);
 
 /* Finding (head to tail) */
+/* The first entry from the head equal to the bytes 'vstr' of length 'vlen',
+ * comparing one entry and then skipping 'skip' entries (skip 1 visits every
+ * other entry, e.g. the keys of a key/value flex).  A string entry matches
+ * exactly the same bytes, and a numeric entry (96/128-bit included) matches
+ * when 'vstr' is a numeral whose canonical number (databoxCanonical) has the
+ * same value, so "22" finds a stored 22 and 22.0, and a raw stored "22".
+ * Returns NULL when nothing matches. */
 flexEntry *flexFind(flex *f, const void *vstr, uint32_t vlen, uint32_t skip);
 flexEntry *flexFindSigned(const flex *f, flexEntry *fe, int64_t val,
                           uint32_t skip);

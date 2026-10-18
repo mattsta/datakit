@@ -873,7 +873,10 @@ initialized.
 ### Linear Search
 
 ```c
-/* Find bytes in flex (from head) */
+/* Find bytes in flex (from head): a string entry matches the same bytes,
+ * and a numeric entry matches a numeral of the same value ("22" finds a
+ * stored 22, 22.0 or raw "22"; "18446744073709551616" finds 2^64).
+ * 'skip' entries are skipped after each comparison. */
 flexEntry *flexFind(flex *f, const void *vstr, uint32_t vlen, uint32_t skip);
 
 /* Find signed integer */

@@ -5507,81 +5507,59 @@ flexEntry *flexFindByTypeReverse(flex *f, flexEntry *fe, const databox *box,
     return flexFindByTypeDirectional_(f, fe, skip, false, box);
 }
 
-#if 0
-/* Legacy Find function */
-flexEntry *flexFind(flexEntry *fe, const void *vstr, uint32_t vlen,
-        uint32_t skip) __attribute__((deprecated));
-/* Start at flexEntry 'fe' and find pointer to the entry equal to the specified
- * entry. Skip 'skip' entries between every comparison.
- * Returns NULL when the field could not be found. */
-flexEntry *flexFind(flexEntry *fe, const void *vstr, uint32_t vlen,
-        uint32_t skip) {
-    int32_t skipCount = 0;
-    int64_t vll = 0;
-    bool processedEncoding = false;
-    bool encoded = false;
+/* What flexFind looks for: the caller's bytes, and their canonical number
+ * when they spell one. */
+typedef struct flexFindProbe_ {
+    const uint8_t *bytes;
+    size_t len;
+    const databox *number; /* NULL when the bytes are not a numeral */
+} flexFindProbe_;
 
-    if (!fe) {
-        return NULL;
+DK_STATIC bool flexEntryCompareProbe__(const flexEntryData *entry,
+                                       const uint8_t *src, const size_t len) {
+    DK_NOTUSED(len);
+    const flexFindProbe_ *const probe = (const flexFindProbe_ *)src;
+
+    /* A string entry matches exactly the same bytes.  The empty string has
+     * an encoding of its own. */
+    if (entry->encoding == FLEX_BYTES_EMPTY) {
+        return probe->len == 0;
     }
 
-    while (!IS_END(fe)) {
-        assert(NULL && "fix me");
-        uint8_t prevlensize = 0;
-        uint8_t lensize = 0;
-        size_t len;
-
-        flexEntryData e = {0};
-        flexEntryDataPopulate(fe + prevlensize, &e);
-        lensize = e.encodingSize;
-        len = e.len;
-
-        flexEntry *q = fe + prevlensize + lensize;
-
-        if (skipCount == 0) {
-            /* Compare current entry with specified entry */
-            if (FLEX_IS_STR(e.encoding)) {
-                if (len == vlen && memcmp(q, vstr, vlen) == 0) {
-                    return fe;
-                }
-            } else {
-                /* Find out if the searched field can be encoded. Note that
-                 * we do it only the first time, once done vencoding is set
-                 * to non-zero and vll is set to the integer value. */
-                if (!processedEncoding) {
-                    if (vlen <= 32 && string2ll(vstr, vlen, &vll)) {
-                        encoded = true;
-                    }
-
-                    processedEncoding = true;
-                }
-
-                /* Compare current entry with specified entry, do it only
-                 * if we are encoded because if there is no encoding
-                 * possible for the field it can't be a valid integer. */
-                if (encoded) {
-                    int64_t ll = 3; // flexLoadSigned(q, encoding);
-                    assert(NULL);
-                    if (ll == vll) {
-                        return fe;
-                    }
-                }
-            }
-
-            /* Reset skip count */
-            skipCount = skip;
-        } else {
-            /* Skip entry */
-            skipCount--;
-        }
-
-        /* Move to next entry */
-        fe = q + len;
+    if (FLEX_IS_STR(entry->encoding)) {
+        return entry->len == probe->len &&
+               (probe->len == 0 ||
+                memcmp(FLEX_ENTRY_DATA(entry), probe->bytes, probe->len) == 0);
     }
 
-    return NULL;
+    /* A numeric entry matches a numeral of the same value. */
+    if (!probe->number) {
+        return false;
+    }
+
+    databox got = {{0}};
+    databoxWide slot;
+    flexGetByTypeInto(entry->fe, &got, &slot);
+    const bool numeric = DATABOX_IS_NUMERIC(&got) ||
+                         got.type == DATABOX_SIGNED_128 ||
+                         got.type == DATABOX_UNSIGNED_128;
+    return numeric && databoxCompare(&got, probe->number) == 0;
 }
-#endif
+
+flexEntry *flexFind(flex *f, const void *vstr, uint32_t vlen, uint32_t skip) {
+    const databox bytes = {
+        .data.bytes.custart = vstr, .type = DATABOX_BYTES, .len = vlen};
+    databoxBig scratch;
+    const databox *const canonical = databoxCanonical(&bytes, &scratch);
+    const flexFindProbe_ probe = {
+        .bytes = vstr,
+        .len = vlen,
+        .number = canonical == &bytes ? NULL : canonical,
+    };
+
+    return flexFind_(f, flexHead(f), skip, true, (const uint8_t *)&probe,
+                     sizeof(probe), flexEntryCompareProbe__);
+}
 
 /* ====================================================================
  * flex element count retrieval
@@ -8950,6 +8928,71 @@ int32_t flexTest(int32_t argc, char **argv) {
         }
         printf("  ok (%zu spellings, %" PRIu32 " numerals)\n",
                COUNT_ARRAY(spellings), numerals);
+    }
+
+    printf("Verify flexFind matches strings by bytes and numbers by value:\n");
+    {
+        cleaner(flexFree) flex *ff = flexNew();
+        flexPushBytes(&ff, "hello", 5, FLEX_ENDPOINT_TAIL); /* 0 */
+        flexPushBytes(&ff, "22", 2, FLEX_ENDPOINT_TAIL);    /* 1: 22 */
+        const databox raw22 = databoxNewBytesString("22");
+        flexInsertByType(&ff, FLEX_ENTRY_AFTER_TAIL(ff), &raw22); /* 2 */
+        flexPushBytes(&ff, "18446744073709551616", 20,
+                      FLEX_ENDPOINT_TAIL);               /* 3: 2^64 */
+        flexPushDouble(&ff, 22.5, FLEX_ENDPOINT_TAIL);   /* 4 */
+        flexPushBytes(&ff, "-0", 2, FLEX_ENDPOINT_TAIL); /* 5: bytes */
+        flexPushBytes(&ff, "", 0, FLEX_ENDPOINT_TAIL);   /* 6 */
+        flexPushByType(&ff, &DATABOX_BOX_TRUE, FLEX_ENDPOINT_TAIL); /* 7 */
+        flexPushBytes(&ff, "7", 1, FLEX_ENDPOINT_TAIL);             /* 8: 7 */
+
+        const struct {
+            const char *s;
+            uint32_t skip;
+            int32_t want; /* entry index, or -1 for no match */
+        } finds[] = {
+            {"hello", 0, 0},
+            {"22", 0, 1},
+            {"22.0", 0, 1},
+            {"18446744073709551616", 0, 3},
+            {"22.5", 0, 4},
+            {"-0", 0, 5},
+            {"", 0, 6},
+            {"7", 0, 8},
+            {"nothere", 0, -1},
+            {"true", 0, -1},
+            {"1e3", 0, -1},
+            {"0018446744073709551616", 0, -1},
+            {"22", 1, 2},
+            {"hello", 1, 0},
+            {"7", 1, 8},
+            {"22.5", 1, 4},
+            {"18446744073709551616", 1, -1},
+            {"-0", 1, -1},
+        };
+        int32_t bad = 0;
+        for (size_t i = 0; i < COUNT_ARRAY(finds); i++) {
+            const flexEntry *const found = flexFind(
+                ff, finds[i].s, (uint32_t)strlen(finds[i].s), finds[i].skip);
+            const flexEntry *const want =
+                finds[i].want < 0 ? NULL : flexIndex(ff, finds[i].want);
+            if (found != want) {
+                printf("  FAIL: flexFind('%s', skip %" PRIu32
+                       ") found the wrong entry\n",
+                       finds[i].s, finds[i].skip);
+                bad++;
+            }
+        }
+
+        cleaner(flexFree) flex *empty = flexNew();
+        if (flexFind(empty, "x", 1, 0) != NULL) {
+            printf("  FAIL: flexFind on an empty flex found an entry\n");
+            bad++;
+        }
+
+        if (bad) {
+            return bad;
+        }
+        printf("  ok (%zu finds)\n", COUNT_ARRAY(finds));
     }
 
     printf("Verify a nested container read back with flexGetByType writes "
