@@ -341,12 +341,16 @@ if (multilistMediumBytes(medium) > (flexOptimizationSizeLimit[limit] * 3)) {
 **Process:**
 
 1. `multilistFullNewFromFlexConsumeGrow()` reallocs the Medium struct into the
-   24-byte Full struct and takes ownership of both flexes
+   24-byte Full struct, records `fill` and `compress`, and takes ownership of
+   both flexes
 2. Each incoming flex holding more than one element is itself split at its
-   middle, so a two-flex Medium becomes up to **four** nodes
+   middle, so a two-flex Medium becomes up to **four** nodes (an empty flex is
+   freed and adds no node)
 3. Each resulting flex is converted with `mflexConvertFromFlexNoCompress()` and
    appended to the node array
-4. `multilistFullSetDepth()` records `fill` and `compress`
+4. The depth rule is applied once over all the nodes: the `compress` nodes at
+   each end stay uncompressed and every node between them is compressed. The
+   function takes any number of input flexes, not just the Medium tier's two.
 5. Re-tag the pointer as Full, preserving the depth/limit high bits
 
 **Example:**

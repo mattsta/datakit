@@ -71,6 +71,12 @@ multilistFull *multilistFullAppendValuesFlex(multilistFull *ml,
                                              mflexState *state, const flex *fl);
 multilistFull *multilistFulllCreateFlex(int fill, int compress,
                                         mflexState *state, const flex *fl);
+/* Build a list from the 'flCount' flexes in 'fl' (any count, 0 included),
+ * in order, taking ownership of every one of them.  '_ml' is NULL or an
+ * allocation to reuse, and is reallocated into the list.  A flex of two
+ * or more elements becomes two nodes (split at its middle), a
+ * one-element flex one node, and an empty flex is freed.  The depth rule
+ * is applied to every node through 'state'. */
 multilistFull *multilistFullNewFromFlexConsumeGrow(void *_ml, mflexState *state,
                                                    flex *fl[], size_t flCount,
                                                    uint32_t depth,

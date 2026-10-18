@@ -575,6 +575,15 @@ void multilistFullAppendFlex(multilistFull *ml, flex *fl) {
     }
 }
 
+/* Build a list from the 'flCount' flexes in 'fl', in order, consuming
+ * them.  '_ml' is NULL or an allocation to reuse (the Medium tier being
+ * upgraded), and is reallocated into the list.  A flex of two or more
+ * elements is split at its middle into two nodes, a one-element flex
+ * becomes one node, and an empty flex is freed and adds nothing; with no
+ * elements at all the list keeps the one empty node every list has.
+ * Every node starts never-compress, and the depth rule is applied once,
+ * through 'state', after all of them are in place, so any count of
+ * inputs gives compressed interior nodes and uncompressed end nodes. */
 multilistFull *multilistFullNewFromFlexConsumeGrow(void *_ml, mflexState *state,
                                                    flex *fl[], size_t flCount,
                                                    const uint32_t depth,
@@ -584,33 +593,16 @@ multilistFull *multilistFullNewFromFlexConsumeGrow(void *_ml, mflexState *state,
 
     /* Clean our fields... */
     memset(ml, 0, sizeof(*ml));
+    multilistFullSetFill(ml, fillLimit);
+    ml->compress = multilistFullClampDepth_(depth);
 
-    /* create initial mulitlistFull structure... */
-    const size_t f0Count = flexCount(fl[0]);
-    assert(f0Count > 0);
-
-    if (f0Count == 1) {
-        mflex *m = mflexConvertFromFlexNoCompress(fl[0]);
-        reallocIncrCountBefore(ml, 0, m);
-        ml->values += flexCount(fl[0]);
-    } else {
-        flex *f0 = fl[0];
-        flex *f1 = flexSplit(&f0, 1);
-        mflex *m0 = mflexConvertFromFlexNoCompress(f0);
-        reallocIncrCountBefore(ml, 0, m0);
-
-        ml->values += flexCount(f0);
-        multilistFullAppendFlexNode__(ml, f1);
-    }
-
-    multilistFullSetDepth(ml, fillLimit, depth);
-
-    for (size_t i = 1; i < flCount; i++) {
+    for (size_t i = 0; i < flCount; i++) {
         flex *firstHalf = fl[i];
         const size_t iCount = flexCount(firstHalf);
 
         if (iCount == 0) {
-            /* No entries? no actions! */
+            /* Consumed, but nothing to keep. */
+            flexFree(firstHalf);
             continue;
         }
 
@@ -624,10 +616,14 @@ multilistFull *multilistFullNewFromFlexConsumeGrow(void *_ml, mflexState *state,
             multilistFullAppendFlexNode__(ml, firstHalf);
             multilistFullAppendFlexNode__(ml, secondHalf);
         }
-
-        multilistFullCompressRenew__(ml, state);
     }
 
+    if (ml->count == 0) {
+        mflex *m = mflexNewNoCompress();
+        reallocIncrCountBefore(ml, 0, m);
+    }
+
+    multilistFullApplyDepthRule_(ml, state);
     return ml;
 }
 
@@ -4057,6 +4053,71 @@ int multilistFullTest(int argc, char *argv[]) {
             }
 
             multilistFullFree(ml);
+        }
+    }
+
+    TEST("NewFromFlexConsumeGrow keeps the depth rule for any input count") {
+        /* 0 to 6 input flexes, from a uniform and a mixed size pattern
+         * (empty, one-element and multi-element flexes), at depths 0 to
+         * 2.  The list must hold the inputs' elements in order, with two
+         * nodes per multi-element input and one per one-element input,
+         * and every node must match the depth rule exactly. */
+        enum { CG_MAX_IN = 6, CG_MAX = 256 };
+        static uint32_t want[CG_MAX];
+        static const uint32_t patterns[2][CG_MAX_IN] = {
+            {8, 8, 8, 8, 8, 8},
+            {9, 1, 0, 14, 2, 1},
+        };
+        char buf[MLF_SPLIT_LEN + 1];
+        for (uint32_t d = 0; d <= 2; d++) {
+            for (uint32_t p = 0; p < 2; p++) {
+                for (uint32_t in = 0; in <= CG_MAX_IN; in++) {
+                    flex *fl[CG_MAX_IN];
+                    uint32_t n = 0;
+                    mlNodeId wantNodes = 0;
+                    for (uint32_t i = 0; i < in; i++) {
+                        const uint32_t c = patterns[p][i];
+                        fl[i] = flexNew();
+                        for (uint32_t k = 0; k < c; k++) {
+                            const databox box = mlfSplitBox(n, buf);
+                            flexPushByType(&fl[i], &box, FLEX_ENDPOINT_TAIL);
+                            want[n] = n;
+                            n++;
+                        }
+
+                        wantNodes += c >= 2 ? 2 : (mlNodeId)c;
+                    }
+
+                    if (wantNodes == 0) {
+                        wantNodes = 1;
+                    }
+
+                    multilistFull *ml = multilistFullNewFromFlexConsumeGrow(
+                        NULL, s0, fl, in, d, FLEX_CAP_LEVEL_512);
+                    mlNodeId bad = -1;
+                    const char *why =
+                        ml->count != wantNodes ? "wrong node count" : NULL;
+                    if (!why && ml->compress != d) {
+                        why = "the depth was not recorded";
+                    }
+
+                    if (!why) {
+                        why = mlfDepthRuleExact(ml, &bad);
+                    }
+
+                    if (!why) {
+                        why = mlfSplitCheck(ml, s, want, n);
+                    }
+
+                    if (why) {
+                        ERR("depth %u, pattern %u, %u inputs (%u nodes): "
+                            "node %d: %s",
+                            d, p, in, (unsigned)ml->count, bad, why);
+                    }
+
+                    multilistFullFree(ml);
+                }
+            }
         }
     }
 
