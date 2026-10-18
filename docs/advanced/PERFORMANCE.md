@@ -281,31 +281,57 @@ for (int i = 0; i < 1000; i++) {
 
 #### XOF (Double Compression)
 
-**Compression ratios** depend on data pattern:
+**Compression ratios** depend on how many low mantissa bits change between
+values, not on how smooth the series looks. Measured with `xofWrite()`,
+10,000 values per pattern:
 
-| Data Pattern             | Compression Ratio | Speed (encode) |
-| ------------------------ | ----------------- | -------------- |
-| Constant values          | 64x               | 20 ns/value    |
-| Slowly varying (sensors) | 10-20x            | 20 ns/value    |
-| Random walk (stocks)     | 4-8x              | 20 ns/value    |
-| Random values            | 1-2x              | 20 ns/value    |
+| Data Pattern                        | Bits/Value | Ratio  |
+| ----------------------------------- | ---------- | ------ |
+| Constant                            | 1.0        | ~64x   |
+| Smooth readings rounded to 0.1      | 4.7        | ~14x   |
+| Integer counter `0, 1, 2, ...`      | 16         | 4x     |
+| Random walk in cents                | 31         | ~2x    |
+| Smooth `25 + sin(i/100)`, full bits | 55         | ~1.16x |
+| Random values in [0, 1]             | 65         | ~0.99x |
 
-**Best Practice**: Use for time-series with temporal locality.
+For encode and decode speed, run the `compressionBench` test from a `perf`
+preset build; sanitizer builds distort the timings.
+
+**Best Practice**: Quantize time series to the precision you need before
+writing them.
 
 ```c
-/* GOOD: Temperature sensors */
-xofWriter *temp = ...;
-for (int i = 0; i < 86400; i++) {
-    double t = 20.0 + 5.0 * sin(i * M_PI / 43200);
-    xofWrite(temp, t);  // Excellent compression
-}
-// 15-20x compression
+#include "datakit.h"
+#include "xof.h"
 
-/* BAD: Random values */
-xofWriter *random = ...;
-for (int i = 0; i < 86400; i++) {
-    double r = rand() / (double)RAND_MAX;
-    xofWrite(random, r);  // Poor compression (~1.5x)
+#include <math.h>
+#include <stdlib.h>
+
+void exampleSensorDay(void) {
+    /* GOOD: A day of per-second temperatures kept to 0.1 degree:
+     * measured 1.14 bits/value, ~56x */
+    xofWriter rounded = {0};
+    for (int i = 0; i < 86400; i++) {
+        const double t = 20.0 + 5.0 * sin(i * M_PI / 43200);
+        xofWrite(&rounded, round(t * 10.0) / 10.0);
+    }
+
+    /* POOR: The same curve at full precision: measured 50.7 bits/value,
+     * ~1.26x, since the low mantissa bits change every sample */
+    xofWriter full = {0};
+    for (int i = 0; i < 86400; i++) {
+        xofWrite(&full, 20.0 + 5.0 * sin(i * M_PI / 43200));
+    }
+
+    /* BAD: Random values: measured 64.9 bits/value, ~0.99x */
+    xofWriter random = {0};
+    for (int i = 0; i < 86400; i++) {
+        xofWrite(&random, rand() / (double)RAND_MAX);
+    }
+
+    zfree(rounded.d);
+    zfree(full.d);
+    zfree(random.d);
 }
 ```
 

@@ -52,7 +52,7 @@ char *s = malloc(3);  // "hi\0"
 Multiple layers of compression:
 
 1. **Structural**: Variable encoding, packed formats
-2. **Algorithmic**: XOR filter (xof), delta-of-delta (dod)
+2. **Algorithmic**: XOR-encoded doubles (xof), delta-of-delta (dod)
 3. **Generic**: LZ4 compression (multilist Full variant)
 4. **Specialized**: Float16/bfloat16, intset encoding
 
@@ -220,24 +220,32 @@ for (int i = 1; i <= 10000; i++) {
 // vs int64_t[10000] = 80,000 bytes (4x savings!)
 ```
 
-### XOR Filter Compression (xof)
+### XOR-Encoded Doubles (xof)
 
 For time-series double values:
 
 ```c
-/* Temperature readings every minute for 24 hours */
-xofWriter writer = {...};
+/* Temperature readings every minute for 24 hours, kept to 0.1 degree */
+xofWriter writer = {0}; /* the writer allocates and grows its stream */
 for (int i = 0; i < 1440; i++) {
-    double temp = 20.0 + 5.0 * sin(i * M_PI / 720);
-    xofWrite(&writer, temp);
+    const double temp = 20.0 + 5.0 * sin(i * M_PI / 720);
+    xofWrite(&writer, round(temp * 10.0) / 10.0);
 }
 
-/* Uncompressed: 1440 * 8 = 11,520 bytes */
-/* XOF compressed: ~700-800 bytes */
-/* Compression: 15-16x (93% savings) */
+/* Uncompressed: 1440 * 8 = 11,520 bytes.
+ * Measured for exactly this series:
+ *   rounded to 0.1 (as written):  9.2 bits/value, ~1.7 KB, ~6.9x
+ *   left at full precision:       56.5 bits/value, ~10 KB, ~1.13x
+ * The low mantissa bits of computed doubles change on every sample, so
+ * only repeated or quantized values compress well. */
+printf("%zu values in %zu bytes\n", writer.count, (writer.usedBits + 7) / 8);
+
+zfree(writer.d); /* the writer's stream */
 ```
 
-**Why it works**: Consecutive temperatures have similar bit patterns. XOR produces many zeros, which compress to 1-2 bits.
+**Why it works**: the XOR of two values that share their sign, exponent and
+leading mantissa bits is mostly zeros, and an exact repeat costs 1 bit.
+Rounding to the precision you need makes the low bits repeat too.
 
 ### Delta-of-Delta Encoding (dod)
 
@@ -256,8 +264,9 @@ dodCloseWrites(&w);
 
 /* Original: 16,667 values * 8 bytes = ~133 KB.
  * A constant interval makes every delta-of-delta 0, which costs 1 bit:
- * a 48-bit header plus 16,665 bits, about 2 KB. Irregular data costs more
- * (9-16 bits per value for small jitter, up to 72 for arbitrary values). */
+ * measured 1.00 bits/value, ~2 KB, ~64x. Irregular data costs more
+ * (measured over 10,000 values: delta-of-delta within ±64 8.9 bits/value,
+ * within ±2368 15.4, uniform 64-bit values 71.9). */
 printf("%zu values in %zu bytes\n", w.count, (w.usedBits + 7) / 8);
 
 zfree(w.d); /* the writer's stream */

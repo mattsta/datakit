@@ -371,25 +371,34 @@ zfree(w.d); /* the writer's stream */
 `dodReadAll(d, vals, count)` decodes a whole stream in one call, and
 `dodReaderNextN()` decodes in batches.
 
-#### XOR Filter (xof)
+#### XOR-Encoded Doubles (xof)
 
-For sequences of **floating-point** numbers:
+For sequences of **floating-point** numbers (a lossless float codec, not an
+XOR filter):
 
 ```c
-/* Like dod, xof is a bitstream written through a xofWriter. */
+/* Like dod, xof is a bitstream written through a xofWriter, which
+ * allocates and grows the stream. Repeated values and values with few
+ * significant bits compress well; full-precision computed doubles barely
+ * do (measured ratios in docs/modules/compression/XOF.md). */
 xofWriter w = {0};
-xofWrite(&w, 1.234);
-xofWrite(&w, 1.235);  /* Similar values compress well */
-xofWrite(&w, 1.236);
+xofWrite(&w, 1.25);
+xofWrite(&w, 1.25); /* repeated: 1 bit */
+xofWrite(&w, 1.5);
 
-/* Sequential read */
+/* Sequential read: the reader starts on the first value */
 xofReader r;
 xofReaderInitFromWriter(&r, &w);
-double val = xofReaderNext(&r, w.d);
+const double second = xofReaderNext(&r, w.d);
 
 /* Or random access by index, and bulk decode */
-double first = xofGet(w.d, 0);
+const double first = xofGet(w.d, 0);
+double out[3];
 xofReadAll(w.d, out, w.count);
+(void)first;
+(void)second;
+
+zfree(w.d); /* the writer's stream */
 ```
 
 #### Half-Precision Float (float16)

@@ -14,9 +14,10 @@ temporal locality: consecutive values often share most of their bit pattern.
 
 - Lossless compression for IEEE 754 double-precision floats
 - Optimized for time-series data with smooth changes
-- Compresses repeated and low-precision values well (~64x for a constant,
-  ~14x for readings rounded to 0.1). Full-precision computed doubles,
-  whose low mantissa bits change every sample, barely compress (~1.1x).
+- Compresses repeated and low-precision values well (measured ~64x for a
+  constant, ~14x for a smooth curve rounded to 0.1). Full-precision
+  computed doubles, whose low mantissa bits change every sample, barely
+  compress (measured ~1.1-1.2x).
 - Bit-level encoding for maximum space efficiency
 - Streaming write and random read support
 - Based on XOR operations for fast encoding/decoding
@@ -595,9 +596,9 @@ looks:
 | Data Pattern                        | Bits/Value | Ratio  |
 | ----------------------------------- | ---------- | ------ |
 | Constant                            | 1.0        | ~64x   |
-| Smooth readings rounded to 0.1      | 4.7        | ~14x   |
+| `25 + sin(i/100)` rounded to 0.1    | 4.7        | ~14x   |
 | Integer counter `0, 1, 2, ...`      | 16         | 4x     |
-| Random walk in cents                | 31         | ~2x    |
+| Random walk of ±0.01 steps, cents   | 31         | ~2x    |
 | Smooth `25 + sin(i/100)`, full bits | 55         | ~1.16x |
 | Linear `20.5 + i*0.1`               | 56         | ~1.14x |
 | Random values in [0, 1]             | 65         | ~0.99x |
@@ -643,21 +644,22 @@ rounded to a coarse precision, ~50 for full-precision computed doubles.
 #include <stdlib.h>
 
 void exampleSeriesShapes(void) {
-    /* GOOD: Smooth readings at the precision you need (0.1): ~14x */
+    /* GOOD: Smooth readings at the precision you need (0.1): measured
+     * 4.7 bits per value, ~14x */
     xofWriter rounded = {0};
     for (int i = 0; i < 1000; i++) {
         const double temp = round((25.0 + sin(i / 100.0)) * 10.0) / 10.0;
         xofWrite(&rounded, temp);
     }
 
-    /* POOR: The same curve at full precision: ~1.16x, since the low
-     * mantissa bits change every sample */
+    /* POOR: The same curve at full precision: measured 55 bits per value,
+     * ~1.16x, since the low mantissa bits change every sample */
     xofWriter full = {0};
     for (int i = 0; i < 1000; i++) {
         xofWrite(&full, 25.0 + sin(i / 100.0));
     }
 
-    /* BAD: Random values: ~1x */
+    /* BAD: Random values: measured 65 bits per value, ~0.99x */
     xofWriter random = {0};
     for (int i = 0; i < 1000; i++) {
         xofWrite(&random, rand() / (double)RAND_MAX);
