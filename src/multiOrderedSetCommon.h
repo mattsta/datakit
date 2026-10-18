@@ -93,8 +93,8 @@ DK_INLINE_ALWAYS bool mosScoreInRange(const databox *score, const databox *min,
  * fit a databox, so it decodes only into storage that is set up for it
  * (see databox.h, "the destination owner sets the wide capability"):
  *
- *   - Caller boxes (GetScore, GetByRank, First, Last, IteratorNext,
- *     RandomMembers) are filled in place, as flexGetByType fills them.
+ *   - Caller boxes (GetScore, GetByRank, First, Last, IteratorNext) are
+ *     filled in place, as flexGetByType fills them.
  *     Pass a DATABOX_BIG_INIT'd databoxBig, re-initialized before each
  *     call, to receive a wide value; a zeroed box receives the type only.
  *     A BYTES result borrows from the set until the set changes.
@@ -102,24 +102,35 @@ DK_INLINE_ALWAYS bool mosScoreInRange(const databox *score, const databox *min,
  *     never read the destination and return self-contained values:
  *     BYTES and 96/128-bit values are heap copies.  Release each one
  *     with databoxFreeData.
- *   - Every value the set decodes for its own use goes into a databoxBig:
- *     flexGetByTypeBig sets up and normalizes the capability itself; for
- *     a decoder that fills a box in place (multidictFind, the tier
- *     iterators), mosBoxArm sets the capability up and mosBoxSettle
- *     clears 'big' again when the result is narrow.
+ *   - Array outputs (RandomMembers) ignore the destination's flags: each
+ *     slot is cleared before it is filled, so a 96/128-bit value comes
+ *     back deferred (type only, data.ptr == NULL; databoxIsWideDeferred).
+ *   - Every value the set decodes for its own use is a plain databox with
+ *     a stack databoxWide beside it: flexGetByTypeInto decodes into the
+ *     pair directly, and for a decoder that fills a box in place
+ *     (multidictFind, the tier iterators) mosBoxAim points the box at
+ *     the slot first.  Narrow values never touch the slot.
  * ==================================================================== */
 
 DK_INLINE_ALWAYS bool mosBoxIsWide(const databox *box) {
     return box->type == DATABOX_SIGNED_128 || box->type == DATABOX_UNSIGNED_128;
 }
 
-DK_INLINE_ALWAYS void mosBoxArm(databoxBig *box) {
-    memset(box, 0, sizeof(databox));
-    DATABOX_BIG_INIT(box);
+/* Point 'box' at 'slot' for a decoder that fills a box in place: the
+ * header is cleared and big = 1, so a 96/128-bit value is written into
+ * 'slot'.  A narrow value overwrites the pointer and leaves big = 1,
+ * which nothing reads on a narrow value; re-aim before each decode. */
+DK_INLINE_ALWAYS void mosBoxAim(databox *box, databoxWide *slot) {
+    memset(box, 0, sizeof(*box));
+    box->big = true;
+    box->data.u128 = (__uint128_t *)slot->b;
 }
 
-DK_INLINE_ALWAYS void mosBoxSettle(databoxBig *box) {
-    box->big = mosBoxIsWide((const databox *)box);
+/* Clear one slot of an array output before it is filled in place, so a
+ * 96/128-bit value is reported deferred instead of being written through
+ * whatever the slot held. */
+DK_INLINE_ALWAYS void mosBoxClear(databox *box) {
+    memset(box, 0, sizeof(*box));
 }
 
 /* Self-contained copy of the entry at 'fe' for a removing read; the
@@ -186,10 +197,11 @@ DK_INLINE_ALWAYS flexEntry *mosFindMemberLinear(const flex *f,
             break;
         }
 
-        databoxBig currentMember;
-        flexGetByTypeBig(memberEntry, &currentMember);
+        databox currentMember;
+        databoxWide currentMemberWide;
+        flexGetByTypeInto(memberEntry, &currentMember, &currentMemberWide);
 
-        if (databoxCompare((const databox *)&currentMember, member) == 0) {
+        if (databoxCompare(&currentMember, member) == 0) {
             return entry; /* Found: return pointer to score */
         }
 

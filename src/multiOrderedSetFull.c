@@ -48,19 +48,28 @@ static inline databox memberToPoolId(multiOrderedSetFull *m,
 
 /* Read the member stored at 'memberEntry' into 'member'.  In pool mode
  * the entry is a pool ID and the member comes from the pool; otherwise
- * the entry is decoded straight into 'member', filled in place, so a
- * caller box or an armed temporary receives a 96/128-bit member. */
+ * the entry is decoded straight into 'member'.  With a NULL 'slot' the
+ * caller's box is filled in place (the public read contract); with a
+ * slot, a 96/128-bit member lands in 'slot' (the set's own temporaries). */
 static inline bool readMember(const multiOrderedSetFull *m,
-                              const flexEntry *memberEntry, databox *member) {
+                              const flexEntry *memberEntry, databox *member,
+                              databoxWide *slot) {
     if (m->pool) {
-        databoxBig idBox;
-        flexGetByTypeBig(memberEntry, &idBox);
+        databox idBox;
+        flexGetByTypeInto(memberEntry, &idBox, NULL);
         if (idBox.type == DATABOX_UNSIGNED_64) {
+            if (slot) {
+                mosBoxAim(member, slot);
+            }
             return atomPoolLookup(m->pool, idBox.data.u64, member);
         }
     }
 
-    flexGetByType(memberEntry, member);
+    if (slot) {
+        flexGetByTypeInto(memberEntry, member, slot);
+    } else {
+        flexGetByType(memberEntry, member);
+    }
     return true;
 }
 
@@ -113,44 +122,56 @@ static void setMiddle(multiOrderedSetFull *m, uint32_t idx, uint32_t mid) {
     }
 }
 
-/* rangeBox holds each sub-map's head (minimum) score as a databoxBig
- * image, so a 96/128-bit head keeps its payload.  The multiarray moves
- * its elements, so the image is copied in and out with memcpy and a
- * wide payload pointer is re-aimed at the reader's own 'extra'. */
-static inline bool getRangeScore(const multiOrderedSetFull *m, uint32_t idx,
-                                 databoxBig *out) {
-    void *slot;
-    multiarrayNativeGet(m->rangeBox, databoxBig, slot, idx);
-    if (!slot) {
-        return false;
-    }
-
-    memcpy(out, slot, sizeof(*out));
-    if (out->big) {
-        out->data.u128 = (__uint128_t *)out->extra;
-    }
-
-    return true;
+/* rangeBox holds each sub-map's head (minimum) score as a 16-byte box,
+ * read in place.  A 96/128-bit head keeps its value in a 16-byte heap
+ * payload the set owns (big = 1, allocated = 1).  The multiarray moves
+ * boxes but never their payloads, so the pointer stays valid and a read
+ * never writes.  rangeBoxRefresh reuses a payload in place, allocates
+ * one only when a head turns wide and frees it when the head turns
+ * narrow; every path that drops a box releases it with databoxFreeData.
+ * Every other box has allocated = 0 and big = 0. */
+static inline databox *getRangeBox(const multiOrderedSetFull *m, uint32_t idx) {
+    databox *box;
+    multiarrayNativeGet(m->rangeBox, databox, box, idx);
+    return box;
 }
 
-static inline void setRangeScore(multiOrderedSetFull *m, uint32_t idx,
-                                 const databoxBig *in) {
-    void *slot;
-    multiarrayNativeGet(m->rangeBox, databoxBig, slot, idx);
-    if (slot) {
-        memcpy(slot, in, sizeof(*in));
-    }
-}
-
-/* Image of 'head's score, or of the INT64_MAX sentinel an empty sub-map
- * holds when 'head' is NULL */
-static inline void rangeScoreFrom(const flexEntry *head, databoxBig *out) {
+/* Decode 'head' into rangeBox 'rb', or the INT64_MAX sentinel an empty
+ * sub-map holds when 'head' is NULL.  A new box starts zeroed. */
+static void rangeBoxRefresh(databox *rb, const flexEntry *head) {
+    databoxWide *payload = (rb->allocated && mosBoxIsWide(rb))
+                               ? (databoxWide *)rb->data.ptr
+                               : NULL;
     if (head) {
-        flexGetByTypeBig(head, out);
+        flexGetByTypeInto(head, rb, payload);
     } else {
-        memset(out, 0, sizeof(*out));
-        out->type = DATABOX_SIGNED_64;
-        out->data.i = INT64_MAX;
+        rb->type = DATABOX_SIGNED_64;
+        rb->data.i = INT64_MAX;
+    }
+
+    if (likely(!mosBoxIsWide(rb))) {
+        if (unlikely(payload)) {
+            zfree(payload);
+            rb->allocated = false;
+            rb->big = false;
+        }
+
+        return;
+    }
+
+    if (!payload) {
+        /* @own: container; free=databoxFreeData */
+        payload = zmalloc(sizeof(*payload));
+        flexGetByTypeInto(head, rb, payload);
+    }
+
+    rb->allocated = true; /* the decode borrows; the set owns the payload */
+}
+
+/* Release every rangeBox payload before the boxes are dropped */
+static void rangeBoxReleaseAll(multiOrderedSetFull *m) {
+    for (uint32_t i = 0; i < m->mapCount; i++) {
+        databoxFreeData(getRangeBox(m, i));
     }
 }
 
@@ -181,10 +202,9 @@ static int32_t findSubMapForScore(const multiOrderedSetFull *m,
 
     while (left < right) {
         const int32_t mid = (left + right + 1) / 2; /* upper mid: bias right */
-        databoxBig rangeScore;
+        const databox *rangeScore = getRangeBox(m, (uint32_t)mid);
 
-        if (getRangeScore(m, (uint32_t)mid, &rangeScore) &&
-            databoxCompare((const databox *)&rangeScore, score) <= 0) {
+        if (rangeScore && databoxCompare(rangeScore, score) <= 0) {
             left =
                 mid; /* sub-map mid's min <= score: candidate, search right */
         } else {
@@ -216,17 +236,18 @@ static void splitSubMap(multiOrderedSetFull *m, uint32_t mapIdx) {
      * PAIR index in [1, pairs-1] with score[k] != score[k-1]. */
     const size_t mid = pairs / 2;
     size_t k = 0;
-    databoxBig prevScore;
-    databoxBig curScore;
+    databox prevScore;
+    databox curScore;
+    databoxWide prevScoreWide;
+    databoxWide curScoreWide;
 
     for (size_t i = (mid < 1 ? 1 : mid); i < pairs; i++) {
-        flexGetByTypeBig(
+        flexGetByTypeInto(
             flexIndex(map, (int32_t)((i - 1) * MOS_ELEMENTS_PER_ENTRY)),
-            &prevScore);
-        flexGetByTypeBig(flexIndex(map, (int32_t)(i * MOS_ELEMENTS_PER_ENTRY)),
-                         &curScore);
-        if (databoxCompare((const databox *)&curScore,
-                           (const databox *)&prevScore) != 0) {
+            &prevScore, &prevScoreWide);
+        flexGetByTypeInto(flexIndex(map, (int32_t)(i * MOS_ELEMENTS_PER_ENTRY)),
+                          &curScore, &curScoreWide);
+        if (databoxCompare(&curScore, &prevScore) != 0) {
             k = i;
             break;
         }
@@ -234,14 +255,13 @@ static void splitSubMap(multiOrderedSetFull *m, uint32_t mapIdx) {
 
     if (k == 0) {
         for (size_t i = (mid < 1 ? 1 : mid); i >= 1; i--) {
-            flexGetByTypeBig(
+            flexGetByTypeInto(
                 flexIndex(map, (int32_t)((i - 1) * MOS_ELEMENTS_PER_ENTRY)),
-                &prevScore);
-            flexGetByTypeBig(
+                &prevScore, &prevScoreWide);
+            flexGetByTypeInto(
                 flexIndex(map, (int32_t)(i * MOS_ELEMENTS_PER_ENTRY)),
-                &curScore);
-            if (databoxCompare((const databox *)&curScore,
-                               (const databox *)&prevScore) != 0) {
+                &curScore, &curScoreWide);
+            if (databoxCompare(&curScore, &prevScore) != 0) {
                 k = i;
                 break;
             }
@@ -268,8 +288,8 @@ static void splitSubMap(multiOrderedSetFull *m, uint32_t mapIdx) {
      * can relocate the multiarrays, but 'upper' itself is not moved). */
     flexEntry *upMid = flexMiddle(upper, MOS_ELEMENTS_PER_ENTRY);
     uint32_t upperMiddle = upMid ? (uint32_t)(upMid - upper) : FLEX_EMPTY_SIZE;
-    databoxBig upperRange;
-    rangeScoreFrom(flexHead(upper), &upperRange);
+    databox upperRange = {{0}};
+    rangeBoxRefresh(&upperRange, flexHead(upper));
 
     /* Insert the upper half at mapIdx+1 across all 3 parallel arrays. Each
      * insert needs that array's current element count (== m->mapCount); use a
@@ -282,7 +302,7 @@ static void splitSubMap(multiOrderedSetFull *m, uint32_t mapIdx) {
     multiarrayNativeInsert(m->scoreMap, flex *, 64, cScore, insertAt, &upper);
     multiarrayNativeInsert(m->middle, uint32_t, 64, cMid, insertAt,
                            &upperMiddle);
-    multiarrayNativeInsert(m->rangeBox, databoxBig, 64, cRange, insertAt,
+    multiarrayNativeInsert(m->rangeBox, databox, 64, cRange, insertAt,
                            &upperRange);
     m->mapCount++;
 
@@ -316,9 +336,10 @@ static void insertIntoSubMap(multiOrderedSetFull *m, uint32_t mapIdx,
     /* Update rangeBox if needed */
     flexEntry *head = flexHead(map);
     if (head) {
-        databoxBig rangeScore;
-        rangeScoreFrom(head, &rangeScore);
-        setRangeScore(m, mapIdx, &rangeScore);
+        databox *rangeScore = getRangeBox(m, mapIdx);
+        if (rangeScore) {
+            rangeBoxRefresh(rangeScore, head);
+        }
     }
 
     /* Split oversized sub-maps so the structure scales. Requires >=2 pairs;
@@ -343,9 +364,10 @@ static void removeFromSubMap(multiOrderedSetFull *m, uint32_t mapIdx,
     if (m->pool) {
         flexEntry *memberEntry = flexNext(map, entry);
         if (memberEntry) {
-            databoxBig memberOrId;
-            flexGetByTypeBig(memberEntry, &memberOrId);
-            releasePoolMember(m, (const databox *)&memberOrId);
+            databox memberOrId;
+            databoxWide memberOrIdWide;
+            flexGetByTypeInto(memberEntry, &memberOrId, &memberOrIdWide);
+            releasePoolMember(m, &memberOrId);
         }
     }
 
@@ -358,9 +380,10 @@ static void removeFromSubMap(multiOrderedSetFull *m, uint32_t mapIdx,
      * flexHead() returns non-NULL even for empty flex (points past header),
      * so we must check flexCount() to avoid reading invalid memory.  An
      * empty map holds the INT64_MAX sentinel. */
-    databoxBig rangeScore;
-    rangeScoreFrom(flexCount(map) > 0 ? flexHead(map) : NULL, &rangeScore);
-    setRangeScore(m, mapIdx, &rangeScore);
+    databox *rangeScore = getRangeBox(m, mapIdx);
+    if (rangeScore) {
+        rangeBoxRefresh(rangeScore, flexCount(map) > 0 ? flexHead(map) : NULL);
+    }
 }
 
 /* Reclaim an emptied sub-map slot so rangeBox stays monotonic for
@@ -389,8 +412,9 @@ static void reclaimEmptySubMap(multiOrderedSetFull *m, uint32_t mapIdx) {
     multiarrayNativeDelete(m->scoreMap, flex *, cScore, mapIdx);
     uint32_t cMiddle = m->mapCount;
     multiarrayNativeDelete(m->middle, uint32_t, cMiddle, mapIdx);
+    databoxFreeData(getRangeBox(m, mapIdx));
     uint32_t cRange = m->mapCount;
-    multiarrayNativeDelete(m->rangeBox, databoxBig, cRange, mapIdx);
+    multiarrayNativeDelete(m->rangeBox, databox, cRange, mapIdx);
 
     m->mapCount--;
 }
@@ -404,29 +428,26 @@ static void reclaimAllEmptySubMaps(multiOrderedSetFull *m) {
     }
 }
 
-/* Look up 'member's score in the member index into wide-capable storage */
+/* Look up 'member's score in the member index; a 96/128-bit score lands
+ * in 'slot' */
 static bool findScore(const multiOrderedSetFull *m, const databox *member,
-                      databoxBig *score) {
-    mosBoxArm(score);
-    if (!multidictFind((multidict *)m->memberIndex, member, (databox *)score)) {
-        return false;
-    }
-
-    mosBoxSettle(score);
-    return true;
+                      databox *score, databoxWide *slot) {
+    mosBoxAim(score, slot);
+    return multidictFind((multidict *)m->memberIndex, member, score);
 }
 
 /* Find entry in score maps by member (using member index for score lookup) */
 static flexEntry *findEntryByMember(const multiOrderedSetFull *m,
                                     const databox *member, uint32_t *mapIdx) {
     /* First, get the score from member index */
-    databoxBig score;
-    if (!findScore(m, member, &score)) {
+    databox score;
+    databoxWide scoreWide;
+    if (!findScore(m, member, &score, &scoreWide)) {
         return NULL;
     }
 
     /* Find the sub-map containing this score */
-    *mapIdx = findSubMapForScore(m, (const databox *)&score);
+    *mapIdx = findSubMapForScore(m, &score);
     flex *map = getSubMap(m, *mapIdx);
     if (!map) {
         return NULL;
@@ -452,14 +473,15 @@ static flexEntry *findEntryByMember(const multiOrderedSetFull *m,
             break;
         }
 
-        databoxBig currentScore, currentMemberOrId;
-        flexGetByTypeBig(entry, &currentScore);
-        flexGetByTypeBig(memberEntry, &currentMemberOrId);
+        databox currentScore, currentMemberOrId;
+        databoxWide currentScoreWide, currentMemberOrIdWide;
+        flexGetByTypeInto(entry, &currentScore, &currentScoreWide);
+        flexGetByTypeInto(memberEntry, &currentMemberOrId,
+                          &currentMemberOrIdWide);
 
-        const int scoreCmp = databoxCompare((const databox *)&currentScore,
-                                            (const databox *)&score);
-        if (scoreCmp == 0 && databoxCompare((const databox *)&currentMemberOrId,
-                                            &memberToMatch) == 0) {
+        const int scoreCmp = databoxCompare(&currentScore, &score);
+        if (scoreCmp == 0 &&
+            databoxCompare(&currentMemberOrId, &memberToMatch) == 0) {
             return entry;
         }
 
@@ -491,20 +513,20 @@ multiOrderedSetFull *multiOrderedSetFullNew(void) {
     /* Create initial sub-map */
     m->scoreMap = multiarrayNativeNew(flex *);
     m->middle = multiarrayNativeNew(uint32_t);
-    m->rangeBox = multiarrayNativeNew(databoxBig);
+    m->rangeBox = multiarrayNativeNew(databox);
 
     /* @own: container; free=multiOrderedSetFullFree */
     flex *initialMap = flexNew();
     uint32_t initialMiddle = FLEX_EMPTY_SIZE;
-    databoxBig initialRange;
-    rangeScoreFrom(NULL, &initialRange);
+    databox initialRange = {{0}};
+    rangeBoxRefresh(&initialRange, NULL);
 
     /* Use multiarrayNativeInsert instead of non-existent Append */
     uint32_t mapCount = 0;
     multiarrayNativeInsert(m->scoreMap, flex *, 64, mapCount, 0, &initialMap);
     multiarrayNativeInsert(m->middle, uint32_t, 64, mapCount, 0,
                            &initialMiddle);
-    multiarrayNativeInsert(m->rangeBox, databoxBig, 64, mapCount, 0,
+    multiarrayNativeInsert(m->rangeBox, databox, 64, mapCount, 0,
                            &initialRange);
 
     m->mapCount = 1;
@@ -557,12 +579,13 @@ multiOrderedSetFullNewFromMedium(struct multiOrderedSetMedium *medium,
                 break;
             }
 
-            databoxBig score, member;
-            flexGetByTypeBig(entry, &score);
-            flexGetByTypeBig(memberEntry, &member);
+            databox score = {{0}};
+            databox member = {{0}};
+            databoxWide scoreWide, memberWide;
+            flexGetByTypeInto(entry, &score, &scoreWide);
+            flexGetByTypeInto(memberEntry, &member, &memberWide);
 
-            multiOrderedSetFullAdd(m, (const databox *)&score,
-                                   (const databox *)&member);
+            multiOrderedSetFullAdd(m, &score, &member);
 
             entry = flexNext(maps[mapIdx], memberEntry);
         }
@@ -597,7 +620,7 @@ multiOrderedSetFull *multiOrderedSetFullCopy(const multiOrderedSetFull *m) {
 
     copy->scoreMap = multiarrayNativeNew(flex *);
     copy->middle = multiarrayNativeNew(uint32_t);
-    copy->rangeBox = multiarrayNativeNew(databoxBig);
+    copy->rangeBox = multiarrayNativeNew(databox);
 
     /* One count per array: each insert advances its own count, and the
      * native-to-medium promotion keys off it */
@@ -609,12 +632,16 @@ multiOrderedSetFull *multiOrderedSetFullCopy(const multiOrderedSetFull *m) {
         /* @own: container; free=multiOrderedSetFullFree */
         flex *mapCopy = origMap ? flexDuplicate(origMap) : flexNew();
         uint32_t mid = getMiddle(m, i);
-        databoxBig rangeCopy = {{0}};
-        getRangeScore(m, i, &rangeCopy);
+
+        /* Rebuilt from the copy's own head, so the copy never shares a
+         * payload (or borrowed bytes) with the original */
+        databox rangeCopy = {{0}};
+        rangeBoxRefresh(&rangeCopy,
+                        flexCount(mapCopy) > 0 ? flexHead(mapCopy) : NULL);
 
         multiarrayNativeInsert(copy->scoreMap, flex *, 64, cScore, i, &mapCopy);
         multiarrayNativeInsert(copy->middle, uint32_t, 64, cMid, i, &mid);
-        multiarrayNativeInsert(copy->rangeBox, databoxBig, 64, cRange, i,
+        multiarrayNativeInsert(copy->rangeBox, databox, 64, cRange, i,
                                &rangeCopy);
     }
 
@@ -643,8 +670,9 @@ multiOrderedSetFull *multiOrderedSetFullCopy(const multiOrderedSetFull *m) {
                         break;
                     }
                     /* Get old pool ID, look up member in source pool */
-                    databoxBig oldId;
-                    flexGetByTypeBig(memberEntry, &oldId);
+                    databox oldId;
+                    databoxWide oldIdWide;
+                    flexGetByTypeInto(memberEntry, &oldId, &oldIdWide);
                     databox member = {{0}};
                     if (atomPoolLookup(m->pool, oldId.data.u64, &member)) {
                         /* Intern in new pool and update entry */
@@ -673,8 +701,9 @@ multiOrderedSetFull *multiOrderedSetFullCopy(const multiOrderedSetFull *m) {
                     if (!memberEntry) {
                         break;
                     }
-                    databoxBig idBox;
-                    flexGetByTypeBig(memberEntry, &idBox);
+                    databox idBox;
+                    databoxWide idBoxWide;
+                    flexGetByTypeInto(memberEntry, &idBox, &idBoxWide);
                     if (idBox.type == DATABOX_UNSIGNED_64) {
                         /* Re-intern to increment refcount */
                         databox member = {{0}};
@@ -711,9 +740,11 @@ void multiOrderedSetFullFree(multiOrderedSetFull *m) {
                     if (!memberEntry) {
                         break;
                     }
-                    databoxBig memberOrId;
-                    flexGetByTypeBig(memberEntry, &memberOrId);
-                    releasePoolMember(m, (const databox *)&memberOrId);
+                    databox memberOrId;
+                    databoxWide memberOrIdWide;
+                    flexGetByTypeInto(memberEntry, &memberOrId,
+                                      &memberOrIdWide);
+                    releasePoolMember(m, &memberOrId);
                     entry = flexNext(map, memberEntry);
                 }
             }
@@ -736,6 +767,7 @@ void multiOrderedSetFullFree(multiOrderedSetFull *m) {
         }
     }
 
+    rangeBoxReleaseAll(m);
     multiarrayNativeFree(m->scoreMap);
     multiarrayNativeFree(m->middle);
     multiarrayNativeFree(m->rangeBox);
@@ -755,9 +787,11 @@ void multiOrderedSetFullReset(multiOrderedSetFull *m) {
                     if (!memberEntry) {
                         break;
                     }
-                    databoxBig memberOrId;
-                    flexGetByTypeBig(memberEntry, &memberOrId);
-                    releasePoolMember(m, (const databox *)&memberOrId);
+                    databox memberOrId;
+                    databoxWide memberOrIdWide;
+                    flexGetByTypeInto(memberEntry, &memberOrId,
+                                      &memberOrIdWide);
+                    releasePoolMember(m, &memberOrId);
                     entry = flexNext(map, memberEntry);
                 }
             }
@@ -780,25 +814,26 @@ void multiOrderedSetFullReset(multiOrderedSetFull *m) {
     }
 
     /* Reset to single empty map */
+    rangeBoxReleaseAll(m);
     multiarrayNativeFree(m->scoreMap);
     multiarrayNativeFree(m->middle);
     multiarrayNativeFree(m->rangeBox);
 
     m->scoreMap = multiarrayNativeNew(flex *);
     m->middle = multiarrayNativeNew(uint32_t);
-    m->rangeBox = multiarrayNativeNew(databoxBig);
+    m->rangeBox = multiarrayNativeNew(databox);
 
     /* @own: container; free=multiOrderedSetFullFree */
     flex *initialMap = flexNew();
     uint32_t initialMiddle = FLEX_EMPTY_SIZE;
-    databoxBig initialRange;
-    rangeScoreFrom(NULL, &initialRange);
+    databox initialRange = {{0}};
+    rangeBoxRefresh(&initialRange, NULL);
 
     uint32_t resetCount = 0;
     multiarrayNativeInsert(m->scoreMap, flex *, 64, resetCount, 0, &initialMap);
     multiarrayNativeInsert(m->middle, uint32_t, 64, resetCount, 0,
                            &initialMiddle);
-    multiarrayNativeInsert(m->rangeBox, databoxBig, 64, resetCount, 0,
+    multiarrayNativeInsert(m->rangeBox, databox, 64, resetCount, 0,
                            &initialRange);
 
     m->mapCount = 1;
@@ -838,8 +873,7 @@ size_t multiOrderedSetFullBytes(const multiOrderedSetFull *m) {
 
 bool multiOrderedSetFullAdd(multiOrderedSetFull *m, const databox *score,
                             const databox *member) {
-    databoxBig existingScore;
-    bool existed = findScore(m, member, &existingScore);
+    bool existed = multidictExists(m->memberIndex, member);
 
     if (existed) {
         /* Remove old entry from score maps */
@@ -880,8 +914,7 @@ bool multiOrderedSetFullAddNX(multiOrderedSetFull *m, const databox *score,
 
 bool multiOrderedSetFullAddXX(multiOrderedSetFull *m, const databox *score,
                               const databox *member) {
-    databoxBig existingScore;
-    if (!findScore(m, member, &existingScore)) {
+    if (!multidictExists(m->memberIndex, member)) {
         return false;
     }
 
@@ -905,12 +938,13 @@ bool multiOrderedSetFullAddGetPrevious(multiOrderedSetFull *m,
                                        const databox *score,
                                        const databox *member,
                                        databox *prevScore) {
-    databoxBig existingScore;
-    bool existed = findScore(m, member, &existingScore);
+    databox existingScore;
+    databoxWide existingScoreWide;
+    bool existed = findScore(m, member, &existingScore, &existingScoreWide);
 
     if (existed) {
         /* Self-contained: the stored score is replaced below */
-        *prevScore = databoxCopy((const databox *)&existingScore);
+        *prevScore = databoxCopy(&existingScore);
         uint32_t mapIdx;
         flexEntry *entry = findEntryByMember(m, member, &mapIdx);
         if (entry) {
@@ -929,11 +963,12 @@ bool multiOrderedSetFullAddGetPrevious(multiOrderedSetFull *m,
 
 bool multiOrderedSetFullIncrBy(multiOrderedSetFull *m, const databox *delta,
                                const databox *member, databox *result) {
-    databoxBig existingScore;
-    bool existed = findScore(m, member, &existingScore);
+    databox existingScore;
+    databoxWide existingScoreWide;
+    bool existed = findScore(m, member, &existingScore, &existingScoreWide);
 
     if (existed) {
-        if (!mosDataboxAdd((const databox *)&existingScore, delta, result)) {
+        if (!mosDataboxAdd(&existingScore, delta, result)) {
             return false;
         }
 
@@ -960,8 +995,7 @@ bool multiOrderedSetFullIncrBy(multiOrderedSetFull *m, const databox *delta,
  * ==================================================================== */
 
 bool multiOrderedSetFullRemove(multiOrderedSetFull *m, const databox *member) {
-    databoxBig score;
-    if (!findScore(m, member, &score)) {
+    if (!multidictExists(m->memberIndex, member)) {
         return false;
     }
 
@@ -978,13 +1012,14 @@ bool multiOrderedSetFullRemove(multiOrderedSetFull *m, const databox *member) {
 
 bool multiOrderedSetFullRemoveGetScore(multiOrderedSetFull *m,
                                        const databox *member, databox *score) {
-    databoxBig existingScore;
-    if (!findScore(m, member, &existingScore)) {
+    databox existingScore;
+    databoxWide existingScoreWide;
+    if (!findScore(m, member, &existingScore, &existingScoreWide)) {
         return false;
     }
 
     /* Self-contained: the stored score is deleted below */
-    *score = databoxCopy((const databox *)&existingScore);
+    *score = databoxCopy(&existingScore);
     uint32_t mapIdx;
     flexEntry *entry = findEntryByMember(m, member, &mapIdx);
     if (entry) {
@@ -1013,25 +1048,24 @@ size_t multiOrderedSetFullRemoveRangeByScore(multiOrderedSetFull *m,
                 break;
             }
 
-            databoxBig score;
-            flexGetByTypeBig(entry, &score);
+            databox score;
+            databoxWide scoreWide;
+            flexGetByTypeInto(entry, &score, &scoreWide);
 
-            if (mosScoreInRange((const databox *)&score, &range->min,
-                                range->minExclusive, &range->max,
-                                range->maxExclusive)) {
+            if (mosScoreInRange(&score, &range->min, range->minExclusive,
+                                &range->max, range->maxExclusive)) {
                 flexEntry *nextEntry = flexNext(map, memberEntry);
 
                 /* In pool mode, convert pool ID to member for memberIndex */
-                databoxBig member;
-                mosBoxArm(&member);
-                if (!readMember(m, memberEntry, (databox *)&member)) {
+                databox member = {{0}};
+                databoxWide memberWide;
+                if (!readMember(m, memberEntry, &member, &memberWide)) {
                     entry = nextEntry;
                     continue;
                 }
-                mosBoxSettle(&member);
 
                 /* Remove from member index */
-                multidictDelete(m->memberIndex, (const databox *)&member);
+                multidictDelete(m->memberIndex, &member);
 
                 /* Remove from score map.  Removing shifts the following
                  * pairs down, may move the flex and may shrink its
@@ -1044,7 +1078,7 @@ size_t multiOrderedSetFullRemoveRangeByScore(multiOrderedSetFull *m,
                 map = getSubMap(m, mapIdx);
                 entry = nextEntry ? flexHead(map) + offset : NULL;
             } else {
-                int cmp = databoxCompare((const databox *)&score, &range->max);
+                int cmp = databoxCompare(&score, &range->max);
                 if (cmp > 0 || (cmp == 0 && range->maxExclusive)) {
                     break;
                 }
@@ -1089,14 +1123,13 @@ size_t multiOrderedSetFullRemoveRangeByRank(multiOrderedSetFull *m,
 
             if (currentRank >= start) {
                 /* In pool mode, convert pool ID to member for memberIndex */
-                databoxBig member;
-                mosBoxArm(&member);
-                if (!readMember(m, memberEntry, (databox *)&member)) {
+                databox member = {{0}};
+                databoxWide memberWide;
+                if (!readMember(m, memberEntry, &member, &memberWide)) {
                     currentRank++;
                     entry = flexNext(map, memberEntry);
                     continue;
                 }
-                mosBoxSettle(&member);
 
                 flexEntry *nextEntry = flexNext(map, memberEntry);
 
@@ -1104,7 +1137,7 @@ size_t multiOrderedSetFullRemoveRangeByRank(multiOrderedSetFull *m,
                  * flex and may shrink its header: the next pair then
                  * starts where this one did, measured from the head */
                 const size_t offset = (size_t)(entry - flexHead(map));
-                multidictDelete(m->memberIndex, (const databox *)&member);
+                multidictDelete(m->memberIndex, &member);
                 removeFromSubMap(m, mapIdx, entry);
                 removed++;
 
@@ -1147,18 +1180,17 @@ size_t multiOrderedSetFullPopMin(multiOrderedSetFull *m, size_t count,
             }
 
             /* In pool mode, convert pool ID back to member string */
-            databoxBig member;
-            mosBoxArm(&member);
-            if (!readMember(m, memberEntry, (databox *)&member)) {
+            databox member = {{0}};
+            databoxWide memberWide;
+            if (!readMember(m, memberEntry, &member, &memberWide)) {
                 break;
             }
-            mosBoxSettle(&member);
 
             /* Self-contained results: copy before the entry goes away */
             mosReadOwned(head, &scores[popped]);
-            members[popped] = databoxCopy((const databox *)&member);
+            members[popped] = databoxCopy(&member);
 
-            multidictDelete(m->memberIndex, (const databox *)&member);
+            multidictDelete(m->memberIndex, &member);
             removeFromSubMap(m, mapIdx, head);
 
             /* Refresh map pointer after removal */
@@ -1200,18 +1232,17 @@ size_t multiOrderedSetFullPopMax(multiOrderedSetFull *m, size_t count,
             }
 
             /* In pool mode, convert pool ID back to member string */
-            databoxBig member;
-            mosBoxArm(&member);
-            if (!readMember(m, memberEntry, (databox *)&member)) {
+            databox member = {{0}};
+            databoxWide memberWide;
+            if (!readMember(m, memberEntry, &member, &memberWide)) {
                 break;
             }
-            mosBoxSettle(&member);
 
             /* Self-contained results: copy before the entry goes away */
             mosReadOwned(entry, &scores[popped]);
-            members[popped] = databoxCopy((const databox *)&member);
+            members[popped] = databoxCopy(&member);
 
-            multidictDelete(m->memberIndex, (const databox *)&member);
+            multidictDelete(m->memberIndex, &member);
             removeFromSubMap(m, mapIdx, entry);
 
             map = getSubMap(m, mapIdx);
@@ -1239,8 +1270,7 @@ bool multiOrderedSetFullGetScore(const multiOrderedSetFull *m,
 
 int64_t multiOrderedSetFullGetRank(const multiOrderedSetFull *m,
                                    const databox *member) {
-    databoxBig score;
-    if (!findScore(m, member, &score)) {
+    if (!multidictExists(m->memberIndex, member)) {
         return -1;
     }
 
@@ -1271,11 +1301,12 @@ int64_t multiOrderedSetFullGetRank(const multiOrderedSetFull *m,
                 break;
             }
 
-            databoxBig currentMemberOrId;
-            flexGetByTypeBig(memberEntry, &currentMemberOrId);
+            databox currentMemberOrId;
+            databoxWide currentMemberOrIdWide;
+            flexGetByTypeInto(memberEntry, &currentMemberOrId,
+                              &currentMemberOrIdWide);
 
-            if (databoxCompare((const databox *)&currentMemberOrId,
-                               &memberToMatch) == 0) {
+            if (databoxCompare(&currentMemberOrId, &memberToMatch) == 0) {
                 return rank;
             }
 
@@ -1334,7 +1365,7 @@ bool multiOrderedSetFullGetByRank(const multiOrderedSetFull *m, int64_t rank,
         flexGetByType(entry, score);
 
         /* In pool mode, convert pool ID back to member string */
-        return readMember(m, memberEntry, member);
+        return readMember(m, memberEntry, member, NULL);
     }
 
     return false;
@@ -1356,17 +1387,17 @@ size_t multiOrderedSetFullCountByScore(const multiOrderedSetFull *m,
 
         flexEntry *entry = flexHead(map);
         while (entry) {
-            databoxBig score;
-            flexGetByTypeBig(entry, &score);
+            databox score;
+            databoxWide scoreWide;
+            flexGetByTypeInto(entry, &score, &scoreWide);
 
-            int cmp = databoxCompare((const databox *)&score, &range->max);
+            int cmp = databoxCompare(&score, &range->max);
             if (cmp > 0 || (cmp == 0 && range->maxExclusive)) {
                 break;
             }
 
-            if (mosScoreInRange((const databox *)&score, &range->min,
-                                range->minExclusive, &range->max,
-                                range->maxExclusive)) {
+            if (mosScoreInRange(&score, &range->min, range->minExclusive,
+                                &range->max, range->maxExclusive)) {
                 count++;
             }
 
@@ -1435,10 +1466,11 @@ bool multiOrderedSetFullIteratorInitAtScore(const multiOrderedSetFull *m,
 
         flexEntry *entry = flexHead(map);
         while (entry) {
-            databoxBig currentScore;
-            flexGetByTypeBig(entry, &currentScore);
+            databox currentScore;
+            databoxWide currentScoreWide;
+            flexGetByTypeInto(entry, &currentScore, &currentScoreWide);
 
-            if (databoxCompare((const databox *)&currentScore, score) >= 0) {
+            if (databoxCompare(&currentScore, score) >= 0) {
                 iter->mapIndex = mapIdx;
                 iter->current = entry;
                 iter->valid = true;
@@ -1519,7 +1551,7 @@ bool multiOrderedSetFullIteratorNext(mosIterator *iter, databox *member,
     flexGetByType(entry, score);
 
     /* In pool mode, convert pool ID back to member string */
-    if (!readMember(m, memberEntry, member)) {
+    if (!readMember(m, memberEntry, member, NULL)) {
         iter->valid = false;
         return false;
     }
@@ -1584,7 +1616,7 @@ bool multiOrderedSetFullFirst(const multiOrderedSetFull *m, databox *member,
                 flexGetByType(entry, score);
 
                 /* In pool mode, convert pool ID back to member string */
-                return readMember(m, memberEntry, member);
+                return readMember(m, memberEntry, member, NULL);
             }
         }
     }
@@ -1608,7 +1640,7 @@ bool multiOrderedSetFullLast(const multiOrderedSetFull *m, databox *member,
                     flexGetByType(entry, score);
 
                     /* In pool mode, convert pool ID back to member string */
-                    return readMember(m, memberEntry, member);
+                    return readMember(m, memberEntry, member, NULL);
                 }
             }
         }
@@ -1637,6 +1669,10 @@ size_t multiOrderedSetFullRandomMembers(const multiOrderedSetFull *m,
 
     for (size_t i = 0; i < absCount; i++) {
         size_t idx = mosRandom() % m->totalEntries;
+        /* Fill the slots ignoring what they held: a 96/128-bit value comes
+         * back deferred (type only) */
+        mosBoxClear(&members[retrieved]);
+        mosBoxClear(&scores[retrieved]);
         if (multiOrderedSetFullGetByRank(m, (int64_t)idx, &members[retrieved],
                                          &scores[retrieved])) {
             retrieved++;
@@ -1713,11 +1749,17 @@ static int mosFullCheckInvariants(const multiOrderedSetFull *m) {
         }
         databoxBig headScore;
         flexGetByTypeBig(flexHead(map), &headScore);
-        databoxBig rb;
-        if (getRangeScore(m, i, &rb) &&
-            databoxCompare((const databox *)&rb, (const databox *)&headScore) !=
-                0) {
+        const databox *rb = getRangeBox(m, i);
+        if (rb && databoxCompare(rb, (const databox *)&headScore) != 0) {
             printf("  INVARIANT FAIL: submap %u rangeBox != head score\n", i);
+            bad++;
+        }
+
+        /* A wide head owns a heap payload; every other head owns nothing */
+        const bool rbWide = rb && mosBoxIsWide(rb);
+        if (rb && (rbWide ? !(rb->big && rb->allocated && rb->data.ptr)
+                          : (rb->big || rb->allocated))) {
+            printf("  INVARIANT FAIL: submap %u rangeBox flags wrong\n", i);
             bad++;
         }
         if (havePrev && databoxCompare((const databox *)&prevLast,
@@ -2353,11 +2395,9 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
         /* A positive wide value reads back UNSIGNED_128 (canonical form) */
         size_t wideHeads = 0;
         for (uint32_t s = 0; s < m->mapCount; s++) {
-            databoxBig head;
-            if (getRangeScore(m, s, &head) &&
-                (head.type == DATABOX_SIGNED_128 ||
-                 head.type == DATABOX_UNSIGNED_128) &&
-                head.big && head.data.i128 == (__int128_t *)head.extra) {
+            const databox *head = getRangeBox(m, s);
+            if (head && mosBoxIsWide(head) && head->big && head->allocated &&
+                head->data.ptr) {
                 wideHeads++;
             }
         }
@@ -2367,6 +2407,15 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
         }
 
         multiOrderedSetFull *copy = multiOrderedSetFullCopy(m);
+        if (copy->mapCount != m->mapCount) {
+            ERR("copy has %u sub-maps, original %u", copy->mapCount,
+                m->mapCount);
+        }
+        for (uint32_t s = 0; s < m->mapCount && s < copy->mapCount; s++) {
+            if (getRangeBox(copy, s)->data.ptr == getRangeBox(m, s)->data.ptr) {
+                ERR("copy shares the rangeBox payload of sub-map %u", s);
+            }
+        }
         const multiOrderedSetFull *sets[2] = {m, copy};
         for (int which = 0; which < 2; which++) {
             if (mosFullCheckInvariants(sets[which]) != 0) {
@@ -2417,6 +2466,141 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
         }
         if (mosFullCheckInvariants(m) != 0) {
             ERRR("invariants violated after wide range removal");
+        }
+        multiOrderedSetFullFree(m);
+    }
+
+    TEST("MOS-Full: rangeBox payload is reused in place and freed on narrow") {
+        multiOrderedSetFull *m = multiOrderedSetFullNew();
+        const __int128_t w1 = -((__int128_t)1 << 70);
+        const __int128_t w2 = -((__int128_t)1 << 71);
+
+        const databox narrowScore = databoxNewSigned(10);
+        const databox m1 = databoxNewSigned(1);
+        multiOrderedSetFullAdd(m, &narrowScore, &m1);
+        const databox *rb = getRangeBox(m, 0);
+        if (mosBoxIsWide(rb) || rb->allocated || rb->big) {
+            ERRR("narrow head should own nothing");
+        }
+
+        /* narrow -> wide: the head gets a payload */
+        databoxBig s2;
+        memset(&s2, 0, sizeof(s2));
+        DATABOX_BIG_SIGNED_128(&s2, w1);
+        const databox m2 = databoxNewSigned(2);
+        multiOrderedSetFullAdd(m, (const databox *)&s2, &m2);
+        rb = getRangeBox(m, 0);
+        const void *payload = rb->data.ptr;
+        if (rb->type != DATABOX_SIGNED_128 || !rb->allocated || !rb->big ||
+            !payload || *rb->data.i128 != w1) {
+            ERRR("wide head did not get an owned payload");
+        }
+
+        /* wide -> wide: the same payload is rewritten in place */
+        databoxBig s3;
+        memset(&s3, 0, sizeof(s3));
+        DATABOX_BIG_SIGNED_128(&s3, w2);
+        const databox m3 = databoxNewSigned(3);
+        multiOrderedSetFullAdd(m, (const databox *)&s3, &m3);
+        rb = getRangeBox(m, 0);
+        if (rb->data.ptr != payload || *rb->data.i128 != w2) {
+            ERRR("wide head refresh did not reuse its payload");
+        }
+
+        multiOrderedSetFullRemove(m, &m3);
+        rb = getRangeBox(m, 0);
+        if (rb->data.ptr != payload || *rb->data.i128 != w1) {
+            ERRR("wide head after removal did not reuse its payload");
+        }
+
+        /* wide -> narrow: the payload is freed (the leak checker sees it
+         * otherwise) and the flags are cleared */
+        multiOrderedSetFullRemove(m, &m2);
+        rb = getRangeBox(m, 0);
+        if (mosBoxIsWide(rb) || rb->allocated || rb->big ||
+            rb->data.i64 != 10) {
+            ERRR("narrow head after a wide one kept a payload");
+        }
+
+        /* wide again, then drop it through the empty-map sentinel and Free */
+        multiOrderedSetFullAdd(m, (const databox *)&s2, &m2);
+        multiOrderedSetFullRemove(m, &m1);
+        if (mosFullCheckInvariants(m) != 0) {
+            ERRR("invariants violated across head transitions");
+        }
+        multiOrderedSetFullRemove(m, &m2);
+        rb = getRangeBox(m, 0);
+        if (rb->type != DATABOX_SIGNED_64 || rb->data.i64 != INT64_MAX ||
+            rb->allocated) {
+            ERRR("empty sub-map should hold the narrow sentinel");
+        }
+        multiOrderedSetFullAdd(m, (const databox *)&s3, &m3);
+        multiOrderedSetFullReset(m);
+        multiOrderedSetFullAdd(m, (const databox *)&s3, &m3);
+        multiOrderedSetFullFree(m);
+    }
+
+    TEST("MOS-Full: mixed narrow and wide heads across splits and reclaim") {
+        /* Scores alternate narrow and wide in sorted runs, so sub-map heads
+         * flip between the two as pairs are added, popped and reclaimed */
+        multiOrderedSetFull *m = multiOrderedSetFullNew();
+        m->maxMapSize = 192;
+        const int N = 600;
+        for (int i = 0; i < N; i++) {
+            databoxBig score;
+            memset(&score, 0, sizeof(score));
+            if ((i / 7) & 1) {
+                DATABOX_BIG_SIGNED_128(&score, ((__int128_t)i << 66) * -1);
+            } else {
+                *(databox *)&score = databoxNewSigned((int64_t)i * 1000);
+            }
+            const databox member = databoxNewSigned(i);
+            multiOrderedSetFullAdd(m, (const databox *)&score, &member);
+        }
+        if (m->mapCount <= 1 || mosFullCheckInvariants(m) != 0) {
+            ERR("mixed build: mapCount %u or invariants wrong", m->mapCount);
+        }
+
+        size_t left = (size_t)N;
+        for (int round = 0; round < 6 && left > 0; round++) {
+            databox members[40];
+            databox scores[40];
+            memset(members, 0xFF, sizeof(members));
+            memset(scores, 0xFF, sizeof(scores));
+            const size_t popped =
+                (round & 1) ? multiOrderedSetFullPopMax(m, 40, members, scores)
+                            : multiOrderedSetFullPopMin(m, 40, members, scores);
+            for (size_t i = 0; i < popped; i++) {
+                if (mosBoxIsWide(&scores[i]) &&
+                    !(scores[i].allocated && scores[i].big &&
+                      scores[i].data.ptr)) {
+                    ERR("popped wide score %zu is not heap-owned", i);
+                }
+                databoxFreeData(&members[i]);
+                databoxFreeData(&scores[i]);
+            }
+            left -= popped;
+            if (multiOrderedSetFullCount(m) != left ||
+                mosFullCheckInvariants(m) != 0) {
+                ERR("round %d: count %zu (want %zu) or invariants wrong", round,
+                    multiOrderedSetFullCount(m), left);
+            }
+        }
+
+        /* RandomMembers ignores poisoned destinations: wide values come
+         * back deferred, narrow ones in full */
+        databox members[16];
+        databox scores[16];
+        memset(members, 0xFF, sizeof(members));
+        memset(scores, 0xFF, sizeof(scores));
+        const size_t got =
+            multiOrderedSetFullRandomMembers(m, -16, members, scores);
+        for (size_t i = 0; i < got; i++) {
+            if (mosBoxIsWide(&scores[i])
+                    ? !databoxIsWideDeferred(&scores[i])
+                    : (scores[i].big || scores[i].allocated)) {
+                ERR("random member %zu: score not deferred or flags stale", i);
+            }
         }
         multiOrderedSetFullFree(m);
     }

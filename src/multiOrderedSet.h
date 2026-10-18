@@ -220,11 +220,14 @@
  * owns the destination sets up its wide capability.
  *
  *   - Read APIs that fill caller boxes (GetScore, GetByRank, First, Last,
- *     IteratorNext, RandomMembers) fill them in place, as flexGetByType
- *     does.  Pass a DATABOX_BIG_INIT'd databoxBig, re-initialized before
- *     each call, to receive a wide value; a zeroed box receives the type
- *     only (data.ptr == NULL).  BYTES results borrow from the set until it
+ *     IteratorNext) fill them in place, as flexGetByType does.  Pass a
+ *     DATABOX_BIG_INIT'd databoxBig, re-initialized before each call, to
+ *     receive a wide value; a zeroed box receives the type only
+ *     (data.ptr == NULL).  BYTES results borrow from the set until it
  *     changes.
+ *   - RandomMembers fills arrays and ignores their prior contents: each
+ *     slot is cleared before it is filled, so a wide score or member comes
+ *     back deferred (type only; databoxIsWideDeferred).
  *   - Removing reads (AddGetPrevious, RemoveGetScore, PopMin, PopMax)
  *     never read their destination boxes and return self-contained
  *     values: BYTES and 96/128-bit values are heap copies (allocated = 1).

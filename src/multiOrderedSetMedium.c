@@ -68,11 +68,12 @@ static int getMapIndexForScore(const multiOrderedSetMedium *m,
         return 0;
     }
 
-    databoxBig maxScore0;
-    flexGetByTypeBig(lastEntry, &maxScore0);
+    databox maxScore0;
+    databoxWide maxScore0Wide;
+    flexGetByTypeInto(lastEntry, &maxScore0, &maxScore0Wide);
 
     /* If score <= max of map[0], it goes in map[0], else map[1] */
-    return (databoxCompare(score, (const databox *)&maxScore0) <= 0) ? 0 : 1;
+    return (databoxCompare(score, &maxScore0) <= 0) ? 0 : 1;
 }
 
 /* Find member in a specific map (linear scan), returns entry pointing to score
@@ -85,10 +86,11 @@ static flexEntry *findMemberInMap(const flex *map, const databox *member) {
             break;
         }
 
-        databoxBig currentMember;
-        flexGetByTypeBig(memberEntry, &currentMember);
+        databox currentMember;
+        databoxWide currentMemberWide;
+        flexGetByTypeInto(memberEntry, &currentMember, &currentMemberWide);
 
-        if (databoxCompare((const databox *)&currentMember, member) == 0) {
+        if (databoxCompare(&currentMember, member) == 0) {
             return entry;
         }
 
@@ -183,13 +185,14 @@ multiOrderedSetMediumNewFromSmall(struct multiOrderedSetSmall *small, flex *map,
                 break;
             }
 
-            databoxBig score, member;
-            flexGetByTypeBig(entry, &score);
-            flexGetByTypeBig(memberEntry, &member);
+            databox score = {{0}};
+            databox member = {{0}};
+            databoxWide scoreWide, memberWide;
+            flexGetByTypeInto(entry, &score, &scoreWide);
+            flexGetByTypeInto(memberEntry, &member, &memberWide);
 
             int targetMap = (idx < splitPoint) ? 0 : 1;
-            insertIntoMap(m, targetMap, (const databox *)&score,
-                          (const databox *)&member);
+            insertIntoMap(m, targetMap, &score, &member);
 
             idx++;
             entry = flexNext(map, memberEntry);
@@ -322,10 +325,11 @@ bool multiOrderedSetMediumIncrBy(multiOrderedSetMedium *m, const databox *delta,
     flexEntry *existing = findMemberAnyMap(m, member, &existingMap);
 
     if (existing) {
-        databoxBig currentScore;
-        flexGetByTypeBig(existing, &currentScore);
+        databox currentScore;
+        databoxWide currentScoreWide;
+        flexGetByTypeInto(existing, &currentScore, &currentScoreWide);
 
-        if (!mosDataboxAdd((const databox *)&currentScore, delta, result)) {
+        if (!mosDataboxAdd(&currentScore, delta, result)) {
             return false;
         }
 
@@ -387,12 +391,12 @@ size_t multiOrderedSetMediumRemoveRangeByScore(multiOrderedSetMedium *m,
                 break;
             }
 
-            databoxBig score;
-            flexGetByTypeBig(entry, &score);
+            databox score;
+            databoxWide scoreWide;
+            flexGetByTypeInto(entry, &score, &scoreWide);
 
-            if (mosScoreInRange((const databox *)&score, &range->min,
-                                range->minExclusive, &range->max,
-                                range->maxExclusive)) {
+            if (mosScoreInRange(&score, &range->min, range->minExclusive,
+                                &range->max, range->maxExclusive)) {
                 /* Removing shifts the following pairs down, may move the
                  * flex and may shrink its header: the next pair then
                  * starts where this one did, measured from the head */
@@ -404,7 +408,7 @@ size_t multiOrderedSetMediumRemoveRangeByScore(multiOrderedSetMedium *m,
                 removed++;
                 entry = hasNext ? flexHead(m->map[mapIdx]) + offset : NULL;
             } else {
-                int cmp = databoxCompare((const databox *)&score, &range->max);
+                int cmp = databoxCompare(&score, &range->max);
                 if (cmp > 0 || (cmp == 0 && range->maxExclusive)) {
                     break;
                 }
@@ -589,10 +593,11 @@ int64_t multiOrderedSetMediumGetRank(const multiOrderedSetMedium *m,
                 break;
             }
 
-            databoxBig currentMember;
-            flexGetByTypeBig(memberEntry, &currentMember);
+            databox currentMember;
+            databoxWide currentMemberWide;
+            flexGetByTypeInto(memberEntry, &currentMember, &currentMemberWide);
 
-            if (databoxCompare((const databox *)&currentMember, member) == 0) {
+            if (databoxCompare(&currentMember, member) == 0) {
                 return rank;
             }
 
@@ -664,17 +669,17 @@ size_t multiOrderedSetMediumCountByScore(const multiOrderedSetMedium *m,
         flexEntry *entry = flexHead(m->map[mapIdx]);
 
         while (entry) {
-            databoxBig score;
-            flexGetByTypeBig(entry, &score);
+            databox score;
+            databoxWide scoreWide;
+            flexGetByTypeInto(entry, &score, &scoreWide);
 
-            int cmp = databoxCompare((const databox *)&score, &range->max);
+            int cmp = databoxCompare(&score, &range->max);
             if (cmp > 0 || (cmp == 0 && range->maxExclusive)) {
                 break;
             }
 
-            if (mosScoreInRange((const databox *)&score, &range->min,
-                                range->minExclusive, &range->max,
-                                range->maxExclusive)) {
+            if (mosScoreInRange(&score, &range->min, range->minExclusive,
+                                &range->max, range->maxExclusive)) {
                 count++;
             }
 
@@ -742,10 +747,11 @@ bool multiOrderedSetMediumIteratorInitAtScore(const multiOrderedSetMedium *m,
     for (int mapIdx = targetMap; mapIdx < 2; mapIdx++) {
         flexEntry *entry = flexHead(m->map[mapIdx]);
         while (entry) {
-            databoxBig currentScore;
-            flexGetByTypeBig(entry, &currentScore);
+            databox currentScore;
+            databoxWide currentScoreWide;
+            flexGetByTypeInto(entry, &currentScore, &currentScoreWide);
 
-            if (databoxCompare((const databox *)&currentScore, score) >= 0) {
+            if (databoxCompare(&currentScore, score) >= 0) {
                 iter->mapIndex = mapIdx;
                 iter->current = entry;
                 iter->valid = true;
@@ -936,6 +942,10 @@ size_t multiOrderedSetMediumRandomMembers(const multiOrderedSetMedium *m,
             idx = (mosRandom() % (total - retrieved)) + retrieved;
         }
 
+        /* Fill the slots ignoring what they held: a 96/128-bit value comes
+         * back deferred (type only) */
+        mosBoxClear(&members[retrieved]);
+        mosBoxClear(&scores[retrieved]);
         if (multiOrderedSetMediumGetByRank(m, (int64_t)idx, &members[retrieved],
                                            &scores[retrieved])) {
             retrieved++;

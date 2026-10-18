@@ -487,37 +487,31 @@ multiOrderedSet *multiOrderedSetUnion(const multiOrderedSet *sets[],
         mosIterator iter;
         multiOrderedSetIteratorInit(sets[i], &iter, true);
 
-        databoxBig member, score;
+        databox member, score;
+        databoxWide memberWide, scoreWide;
         for (;;) {
-            mosBoxArm(&member);
-            mosBoxArm(&score);
-            if (!multiOrderedSetIteratorNext(&iter, (databox *)&member,
-                                             (databox *)&score)) {
+            mosBoxAim(&member, &memberWide);
+            mosBoxAim(&score, &scoreWide);
+            if (!multiOrderedSetIteratorNext(&iter, &member, &score)) {
                 break;
             }
-            mosBoxSettle(&member);
-            mosBoxSettle(&score);
 
             /* Check if member already exists in result */
-            databoxBig existingScore;
-            mosBoxArm(&existingScore);
-            if (multiOrderedSetGetScore(result, (const databox *)&member,
-                                        (databox *)&existingScore)) {
-                mosBoxSettle(&existingScore);
+            databox existingScore;
+            databoxWide existingScoreWide;
+            mosBoxAim(&existingScore, &existingScoreWide);
+            if (multiOrderedSetGetScore(result, &member, &existingScore)) {
                 /* Combine scores using aggregate */
                 databox newScore;
-                applyAggregate(&newScore, (const databox *)&existingScore,
-                               (const databox *)&score, 1.0, weight, aggregate);
-                multiOrderedSetAdd(&result, &newScore,
-                                   (const databox *)&member);
+                applyAggregate(&newScore, &existingScore, &score, 1.0, weight,
+                               aggregate);
+                multiOrderedSetAdd(&result, &newScore, &member);
             } else {
                 /* New member, add with weighted score */
                 databox weightedScore;
-                double val =
-                    mosDataboxToDouble((const databox *)&score) * weight;
+                double val = mosDataboxToDouble(&score) * weight;
                 DATABOX_SET_DOUBLE(&weightedScore, val);
-                multiOrderedSetAdd(&result, &weightedScore,
-                                   (const databox *)&member);
+                multiOrderedSetAdd(&result, &weightedScore, &member);
             }
         }
     }
@@ -551,23 +545,21 @@ multiOrderedSet *multiOrderedSetIntersect(const multiOrderedSet *sets[],
     mosIterator iter;
     multiOrderedSetIteratorInit(sets[smallestIdx], &iter, true);
 
-    databoxBig member, score;
+    databox member, score;
+    databoxWide memberWide, scoreWide;
     for (;;) {
-        mosBoxArm(&member);
-        mosBoxArm(&score);
-        if (!multiOrderedSetIteratorNext(&iter, (databox *)&member,
-                                         (databox *)&score)) {
+        mosBoxAim(&member, &memberWide);
+        mosBoxAim(&score, &scoreWide);
+        if (!multiOrderedSetIteratorNext(&iter, &member, &score)) {
             break;
         }
-        mosBoxSettle(&member);
-        mosBoxSettle(&score);
 
         bool inAll = true;
         databox combinedScore;
         double weight0 = weights ? weights[smallestIdx] : 1.0;
 
         /* Apply weight to initial score */
-        double val = mosDataboxToDouble((const databox *)&score) * weight0;
+        double val = mosDataboxToDouble(&score) * weight0;
         DATABOX_SET_DOUBLE(&combinedScore, val);
 
         /* Check if member exists in all other sets */
@@ -576,23 +568,20 @@ multiOrderedSet *multiOrderedSetIntersect(const multiOrderedSet *sets[],
                 continue;
             }
 
-            databoxBig otherScore;
-            mosBoxArm(&otherScore);
-            if (multiOrderedSetGetScore(sets[i], (const databox *)&member,
-                                        (databox *)&otherScore)) {
-                mosBoxSettle(&otherScore);
+            databox otherScore;
+            databoxWide otherScoreWide;
+            mosBoxAim(&otherScore, &otherScoreWide);
+            if (multiOrderedSetGetScore(sets[i], &member, &otherScore)) {
                 double weight = weights ? weights[i] : 1.0;
-                applyAggregate(&combinedScore, &combinedScore,
-                               (const databox *)&otherScore, 1.0, weight,
-                               aggregate);
+                applyAggregate(&combinedScore, &combinedScore, &otherScore, 1.0,
+                               weight, aggregate);
             } else {
                 inAll = false;
             }
         }
 
         if (inAll) {
-            multiOrderedSetAdd(&result, &combinedScore,
-                               (const databox *)&member);
+            multiOrderedSetAdd(&result, &combinedScore, &member);
         }
     }
 
@@ -618,16 +607,16 @@ multiOrderedSet *multiOrderedSetDifference(const multiOrderedSet *sets[],
         mosIterator iter;
         multiOrderedSetIteratorInit(sets[i], &iter, true);
 
-        databoxBig member, score;
+        /* Only the member is needed: the score is read type-only */
+        databox member, score;
+        databoxWide memberWide;
         for (;;) {
-            mosBoxArm(&member);
-            mosBoxArm(&score);
-            if (!multiOrderedSetIteratorNext(&iter, (databox *)&member,
-                                             (databox *)&score)) {
+            mosBoxAim(&member, &memberWide);
+            mosBoxClear(&score);
+            if (!multiOrderedSetIteratorNext(&iter, &member, &score)) {
                 break;
             }
-            mosBoxSettle(&member);
-            multiOrderedSetRemove(&result, (const databox *)&member);
+            multiOrderedSetRemove(&result, &member);
         }
     }
 
@@ -896,22 +885,53 @@ static bool mosWideSeen_(const mosWidePair *p, size_t n, mosWideNum v,
     return false;
 }
 
-/* Fill 'n' pairs: a third wide scores, the rest 64-bit, with every
- * 50th pair sharing the score 2^64 (integer members only); members
- * rotate through BYTES, 64-bit and wide integers. */
+/* Which values a scenario uses: only 64-bit and BYTES (normal), only
+ * 96/128-bit integers (extended), or both (mixed). */
+typedef enum mosWideMode {
+    MOS_WIDE_MIXED = 0,
+    MOS_WIDE_NORMAL,
+    MOS_WIDE_EXTENDED,
+} mosWideMode;
+
+static mosWideMode mosWideMode_ = MOS_WIDE_MIXED;
+
+/* The score every 50th pair shares */
+static mosWideNum mosWideShared_(void) {
+    return mosWideMode_ == MOS_WIDE_NORMAL ? mosWideU_((__uint128_t)1 << 62)
+                                           : mosWideU_((__uint128_t)1 << 64);
+}
+
+/* Score 'i' of a fixed sequence in the current mode */
+static mosWideNum mosWideScoreAt_(size_t i) {
+    if (mosWideMode_ == MOS_WIDE_NORMAL) {
+        return mosWideS_((int64_t)mosWideMix_(i) >> 2);
+    }
+
+    return mosWideValue_(i);
+}
+
+/* Fill 'n' pairs: in mixed mode a third wide scores, the rest 64-bit,
+ * with every 50th pair sharing one score (integer members only); members
+ * rotate through BYTES, 64-bit and wide integers.  Normal mode keeps
+ * every value 64-bit or BYTES; extended mode makes every score and
+ * member a 96/128-bit integer. */
 static void mosWideFill_(mosWidePair *p, size_t n) {
     size_t wideScores = 0;
     size_t wideMembers = 0;
+    const mosWideNum shared = mosWideShared_();
     for (size_t i = 0; i < n; i++) {
         mosWidePair *pair = &p[i];
         memset(pair, 0, sizeof(*pair));
 
         const bool sharedScore = (i % 50) == 1;
         if (sharedScore) {
-            pair->score = mosWideU_((__uint128_t)1 << 64);
+            pair->score = shared;
         } else {
             do {
-                if (i % 3 == 0) {
+                const bool wide =
+                    mosWideMode_ == MOS_WIDE_EXTENDED ||
+                    (mosWideMode_ == MOS_WIDE_MIXED && i % 3 == 0);
+                if (wide) {
                     pair->score = mosWideValue_(wideScores++);
                 } else {
                     const int64_t v =
@@ -919,11 +939,16 @@ static void mosWideFill_(mosWidePair *p, size_t n) {
                     pair->score = mosWideS_(v);
                 }
             } while (mosWideSeen_(p, i, pair->score, false) ||
-                     mosWideNumCmp_(pair->score,
-                                    mosWideU_((__uint128_t)1 << 64)) == 0);
+                     mosWideNumCmp_(pair->score, shared) == 0);
         }
 
-        const size_t kind = sharedScore ? 2 : i % 3;
+        size_t kind = sharedScore ? 2 : i % 3;
+        if (mosWideMode_ == MOS_WIDE_NORMAL && kind == 2) {
+            kind = 1;
+        } else if (mosWideMode_ == MOS_WIDE_EXTENDED) {
+            kind = 2;
+        }
+
         if (kind == 0) {
             pair->memberIsBytes = true;
             snprintf(pair->memberStr, sizeof(pair->memberStr), "wm-%05zu", i);
@@ -1087,6 +1112,42 @@ static int mosWideVerify_(const multiOrderedSet *mos, const mosWidePair *sorted,
             ERRR("Last mismatch");
         }
 
+        /* RandomMembers ignores poisoned destinations: a wide value comes
+         * back deferred, any other value whole with clean flags */
+        databox rMembers[8];
+        databox rScores[8];
+        memset(rMembers, 0xFF, sizeof(rMembers));
+        memset(rScores, 0xFF, sizeof(rScores));
+        mosTestPoisonStack_();
+        const size_t picked =
+            multiOrderedSetRandomMembers(mos, -8, rMembers, rScores);
+        if (picked == 0) {
+            ERRR("RandomMembers returned nothing");
+        }
+        for (size_t i = 0; i < picked; i++) {
+            const databox *boxes[2] = {&rMembers[i], &rScores[i]};
+            for (size_t j = 0; j < 2; j++) {
+                const databox *b = boxes[j];
+                if (mosBoxIsWide(b) ? !databoxIsWideDeferred(b)
+                                    : (b->big || b->allocated)) {
+                    ERR("RandomMembers slot %zu.%zu not deferred or stale", i,
+                        j);
+                }
+            }
+
+            /* A narrow score finds its pair in the oracle */
+            mosWideNum s;
+            if (mosWideNumFromBox_(&rScores[i], &s)) {
+                bool found = false;
+                for (size_t k = 0; k < n && !found; k++) {
+                    found = mosWideNumCmp_(sorted[k].score, s) == 0;
+                }
+                if (!found) {
+                    ERR("RandomMembers score %zu is not in the set", i);
+                }
+            }
+        }
+
         /* Range counts with wide bounds, inclusive and exclusive */
         for (size_t a = 0; a < n; a += 1 + n / 7) {
             const size_t b = n - 1 - (a / 2);
@@ -1194,7 +1255,7 @@ static int mosWideScenario_(size_t n, multiOrderedSetType tier) {
         mosWideDrop_(sorted, &live, at);
         size_t gen = 5000 + i * 3;
         do {
-            moved.score = mosWideValue_(gen++);
+            moved.score = mosWideScoreAt_(gen++);
         } while (mosWideSeen_(sorted, live, moved.score, false));
 
         databoxBig score;
@@ -3084,68 +3145,93 @@ int multiOrderedSetTest(int argc, char *argv[]) {
     }
 
     TEST("multiOrderedSet: 96/128-bit scores and members in every tier") {
-        err += mosWideScenario_(12, MOS_TYPE_SMALL);
-        err += mosWideScenario_(120, MOS_TYPE_MEDIUM);
-        err += mosWideScenario_(900, MOS_TYPE_FULL);
+        const mosWideMode modes[3] = {MOS_WIDE_NORMAL, MOS_WIDE_EXTENDED,
+                                      MOS_WIDE_MIXED};
+        for (size_t mode = 0; mode < 3; mode++) {
+            mosWideMode_ = modes[mode];
+            err += mosWideScenario_(12, MOS_TYPE_SMALL);
+            err += mosWideScenario_(120, MOS_TYPE_MEDIUM);
+            err += mosWideScenario_(900, MOS_TYPE_FULL);
+        }
+        mosWideMode_ = MOS_WIDE_MIXED;
     }
 
-    TEST("multiOrderedSet: set operations keep 96/128-bit members") {
-        /* A holds members 0..39, B holds 20..59: |A u B| = 60,
-         * |A n B| = 20, |A - B| = 20 */
-        cleaner(multiOrderedSetFree) multiOrderedSet *a = multiOrderedSetNew();
-        cleaner(multiOrderedSetFree) multiOrderedSet *b = multiOrderedSetNew();
-        mosWideNum members[60];
-        for (size_t i = 0; i < 60; i++) {
-            members[i] = mosWideValue_(i < 9 ? i : 100 + i);
-            databoxBig member;
-            databoxBig score;
-            mosWideNumBox_(&member, members[i]);
-            mosWideNumBox_(&score, mosWideValue_(200 + i));
-            if (i < 40) {
-                multiOrderedSetAdd(&a, (databox *)&score, (databox *)&member);
-            }
-            if (i >= 20) {
-                multiOrderedSetAdd(&b, (databox *)&score, (databox *)&member);
-            }
-        }
-
-        const multiOrderedSet *sets[2] = {a, b};
-        mosTestPoisonStack_();
-        cleaner(multiOrderedSetFree) multiOrderedSet *u =
-            multiOrderedSetUnion(sets, NULL, 2, MOS_AGGREGATE_MAX);
-        mosTestPoisonStack_();
-        cleaner(multiOrderedSetFree) multiOrderedSet *x =
-            multiOrderedSetIntersect(sets, NULL, 2, MOS_AGGREGATE_MIN);
-        mosTestPoisonStack_();
-        cleaner(multiOrderedSetFree) multiOrderedSet *d =
-            multiOrderedSetDifference(sets, 2);
-
-        if (multiOrderedSetCount(u) != 60 || multiOrderedSetCount(x) != 20 ||
-            multiOrderedSetCount(d) != 20) {
-            ERR("set sizes union %zu, intersect %zu, difference %zu",
-                multiOrderedSetCount(u), multiOrderedSetCount(x),
-                multiOrderedSetCount(d));
-        }
-
-        for (size_t i = 0; i < 60; i++) {
-            databoxBig member;
-            mosWideNumBox_(&member, members[i]);
-            const bool inA = i < 40;
-            const bool inB = i >= 20;
-            if (!multiOrderedSetExists(u, (databox *)&member) ||
-                multiOrderedSetExists(x, (databox *)&member) != (inA && inB) ||
-                multiOrderedSetExists(d, (databox *)&member) != (inA && !inB)) {
-                ERR("set membership wrong for member %zu", i);
+    for (int mode = 0; mode < 3; mode++) {
+        TEST_DESC("multiOrderedSet: set operations keep members (mode %d)",
+                  mode) {
+            /* A holds members 0..39, B holds 20..59: |A u B| = 60,
+             * |A n B| = 20, |A - B| = 20.  Mode 0 uses only 64-bit values,
+             * mode 1 only 96/128-bit values, mode 2 alternates them. */
+            cleaner(multiOrderedSetFree) multiOrderedSet *a =
+                multiOrderedSetNew();
+            cleaner(multiOrderedSetFree) multiOrderedSet *b =
+                multiOrderedSetNew();
+            mosWideNum members[60];
+            mosWideNum scores[60];
+            for (size_t i = 0; i < 60; i++) {
+                const bool wide = mode == 1 || (mode == 2 && (i & 1));
+                members[i] = wide ? mosWideValue_(i < 9 ? i : 100 + i)
+                                  : mosWideS_((int64_t)i * 7919 - 100000);
+                scores[i] = wide ? mosWideValue_(200 + i)
+                                 : mosWideS_((int64_t)i * 31 - 500);
+                databoxBig member;
+                databoxBig score;
+                mosWideNumBox_(&member, members[i]);
+                mosWideNumBox_(&score, scores[i]);
+                if (i < 40) {
+                    multiOrderedSetAdd(&a, (databox *)&score,
+                                       (databox *)&member);
+                }
+                if (i >= 20) {
+                    multiOrderedSetAdd(&b, (databox *)&score,
+                                       (databox *)&member);
+                }
             }
 
-            /* Union scores are doubles of the wide inputs */
-            databox score = {{0}};
-            const mosWideNum want = mosWideValue_(200 + i);
-            const double wantD =
-                want.neg ? (double)(__int128_t)want.bits : (double)want.bits;
-            if (!multiOrderedSetGetScore(u, (databox *)&member, &score) ||
-                score.type != DATABOX_DOUBLE_64 || score.data.d64 != wantD) {
-                ERR("union score wrong for member %zu", i);
+            const multiOrderedSet *sets[2] = {a, b};
+            mosTestPoisonStack_();
+            cleaner(multiOrderedSetFree) multiOrderedSet *u =
+                multiOrderedSetUnion(sets, NULL, 2, MOS_AGGREGATE_MAX);
+            mosTestPoisonStack_();
+            cleaner(multiOrderedSetFree) multiOrderedSet *x =
+                multiOrderedSetIntersect(sets, NULL, 2, MOS_AGGREGATE_MIN);
+            mosTestPoisonStack_();
+            cleaner(multiOrderedSetFree) multiOrderedSet *d =
+                multiOrderedSetDifference(sets, 2);
+
+            if (multiOrderedSetCount(u) != 60 ||
+                multiOrderedSetCount(x) != 20 ||
+                multiOrderedSetCount(d) != 20) {
+                ERR("set sizes union %zu, intersect %zu, difference %zu",
+                    multiOrderedSetCount(u), multiOrderedSetCount(x),
+                    multiOrderedSetCount(d));
+            }
+
+            for (size_t i = 0; i < 60; i++) {
+                databoxBig member;
+                mosWideNumBox_(&member, members[i]);
+                const bool inA = i < 40;
+                const bool inB = i >= 20;
+                if (!multiOrderedSetExists(u, (databox *)&member) ||
+                    multiOrderedSetExists(x, (databox *)&member) !=
+                        (inA && inB) ||
+                    multiOrderedSetExists(d, (databox *)&member) !=
+                        (inA && !inB)) {
+                    ERR("set membership wrong for member %zu", i);
+                }
+
+                /* Union scores are doubles of the inputs, stored in their
+                 * canonical form: an integral double that fits 64 bits
+                 * reads back as an integer */
+                databox score = {{0}};
+                const mosWideNum want = scores[i];
+                const double wantD = want.neg ? (double)(__int128_t)want.bits
+                                              : (double)want.bits;
+                double gotD = 0;
+                if (!multiOrderedSetGetScore(u, (databox *)&member, &score) ||
+                    !mosScoreToDouble(&score, &gotD) || gotD != wantD) {
+                    ERR("union score wrong for member %zu", i);
+                }
             }
         }
     }

@@ -206,11 +206,12 @@ bool multiOrderedSetSmallIncrBy(multiOrderedSetSmall *m, const databox *delta,
 
     if (existing) {
         /* Get current score */
-        databoxBig currentScore;
-        flexGetByTypeBig(existing, &currentScore);
+        databox currentScore;
+        databoxWide currentScoreWide;
+        flexGetByTypeInto(existing, &currentScore, &currentScoreWide);
 
         /* Add delta to current score */
-        if (!mosDataboxAdd((const databox *)&currentScore, delta, result)) {
+        if (!mosDataboxAdd(&currentScore, delta, result)) {
             return false; /* Type mismatch or overflow */
         }
 
@@ -259,18 +260,18 @@ size_t multiOrderedSetSmallRemoveRangeByScore(multiOrderedSetSmall *m,
     flexEntry *entry = flexHead(m->map);
 
     while (entry) {
-        databoxBig score;
+        databox score;
+        databoxWide scoreWide;
         flexEntry *memberEntry = flexNext(m->map, entry);
         if (!memberEntry) {
             break;
         }
 
-        flexGetByTypeBig(entry, &score);
+        flexGetByTypeInto(entry, &score, &scoreWide);
 
         /* Check if in range */
-        if (mosScoreInRange((const databox *)&score, &range->min,
-                            range->minExclusive, &range->max,
-                            range->maxExclusive)) {
+        if (mosScoreInRange(&score, &range->min, range->minExclusive,
+                            &range->max, range->maxExclusive)) {
             /* Removing shifts the following pairs down, may move the flex
              * and may shrink its header: the next pair then starts where
              * this one did, measured from the head */
@@ -281,7 +282,7 @@ size_t multiOrderedSetSmallRemoveRangeByScore(multiOrderedSetSmall *m,
             entry = hasNext ? flexHead(m->map) + offset : NULL;
         } else {
             /* If score > max, we can stop (sorted order) */
-            int cmp = databoxCompare((const databox *)&score, &range->max);
+            int cmp = databoxCompare(&score, &range->max);
             if (cmp > 0 || (cmp == 0 && range->maxExclusive)) {
                 break;
             }
@@ -404,10 +405,11 @@ int64_t multiOrderedSetSmallGetRank(const multiOrderedSetSmall *m,
             break;
         }
 
-        databoxBig currentMember;
-        flexGetByTypeBig(memberEntry, &currentMember);
+        databox currentMember;
+        databoxWide currentMemberWide;
+        flexGetByTypeInto(memberEntry, &currentMember, &currentMemberWide);
 
-        if (databoxCompare((const databox *)&currentMember, member) == 0) {
+        if (databoxCompare(&currentMember, member) == 0) {
             return rank;
         }
 
@@ -463,18 +465,18 @@ size_t multiOrderedSetSmallCountByScore(const multiOrderedSetSmall *m,
     flexEntry *entry = flexHead(m->map);
 
     while (entry) {
-        databoxBig score;
-        flexGetByTypeBig(entry, &score);
+        databox score;
+        databoxWide scoreWide;
+        flexGetByTypeInto(entry, &score, &scoreWide);
 
         /* If score > max, we can stop */
-        int cmp = databoxCompare((const databox *)&score, &range->max);
+        int cmp = databoxCompare(&score, &range->max);
         if (cmp > 0 || (cmp == 0 && range->maxExclusive)) {
             break;
         }
 
-        if (mosScoreInRange((const databox *)&score, &range->min,
-                            range->minExclusive, &range->max,
-                            range->maxExclusive)) {
+        if (mosScoreInRange(&score, &range->min, range->minExclusive,
+                            &range->max, range->maxExclusive)) {
             count++;
         }
 
@@ -526,10 +528,11 @@ bool multiOrderedSetSmallIteratorInitAtScore(const multiOrderedSetSmall *m,
     /* Find first entry with score >= given score */
     flexEntry *entry = flexHead(m->map);
     while (entry) {
-        databoxBig currentScore;
-        flexGetByTypeBig(entry, &currentScore);
+        databox currentScore;
+        databoxWide currentScoreWide;
+        flexGetByTypeInto(entry, &currentScore, &currentScoreWide);
 
-        if (databoxCompare((const databox *)&currentScore, score) >= 0) {
+        if (databoxCompare(&currentScore, score) >= 0) {
             iter->current = entry;
             iter->valid = true;
             return true;
@@ -647,6 +650,15 @@ bool multiOrderedSetSmallLast(const multiOrderedSetSmall *m, databox *member,
  * Random
  * ==================================================================== */
 
+/* Fill one array slot pair with the pair at 'rank', ignoring what the
+ * slots held: a 96/128-bit value comes back deferred (type only) */
+static bool mosSmallRandomPick_(const multiOrderedSetSmall *m, size_t rank,
+                                databox *member, databox *score) {
+    mosBoxClear(member);
+    mosBoxClear(score);
+    return multiOrderedSetSmallGetByRank(m, (int64_t)rank, member, score);
+}
+
 size_t multiOrderedSetSmallRandomMembers(const multiOrderedSetSmall *m,
                                          int64_t count, databox *members,
                                          databox *scores) {
@@ -663,8 +675,7 @@ size_t multiOrderedSetSmallRandomMembers(const multiOrderedSetSmall *m,
         /* With duplicates: simple random selection */
         for (size_t i = 0; i < absCount; i++) {
             size_t idx = mosRandom() % total;
-            if (multiOrderedSetSmallGetByRank(m, (int64_t)idx, &members[i],
-                                              &scores[i])) {
+            if (mosSmallRandomPick_(m, idx, &members[i], &scores[i])) {
                 retrieved++;
             }
         }
@@ -685,9 +696,8 @@ size_t multiOrderedSetSmallRandomMembers(const multiOrderedSetSmall *m,
                 size_t bit = idx % 8;
                 if (!(selected[byte] & (1 << bit))) {
                     selected[byte] |= (1 << bit);
-                    if (multiOrderedSetSmallGetByRank(m, (int64_t)idx,
-                                                      &members[retrieved],
-                                                      &scores[retrieved])) {
+                    if (mosSmallRandomPick_(m, idx, &members[retrieved],
+                                            &scores[retrieved])) {
                         retrieved++;
                     }
                 }
@@ -699,9 +709,8 @@ size_t multiOrderedSetSmallRandomMembers(const multiOrderedSetSmall *m,
                 size_t remaining = total - i;
                 size_t needed = absCount - retrieved;
                 if ((mosRandom() % remaining) < needed) {
-                    if (multiOrderedSetSmallGetByRank(m, (int64_t)i,
-                                                      &members[retrieved],
-                                                      &scores[retrieved])) {
+                    if (mosSmallRandomPick_(m, i, &members[retrieved],
+                                            &scores[retrieved])) {
                         retrieved++;
                     }
                 }
