@@ -613,9 +613,11 @@ for (uint32_t i = 0; i < got; i++) {
 before it is filled, so a 96/128-bit key comes back deferred (type only,
 `data.ptr == NULL`; test with `databoxIsWideDeferred`).
 
-`multidictGetRandomKey` can transiently fail while a rehash is in flight if
-it lands on an empty slot; `multidictPopRandom` already retries internally
-for this reason.
+`multidictGetRandomKey` and `multidictPopRandom` fail only on an empty
+dict, rehash in flight or not. Deletes leave an emptied slot allocated, so
+a random probe can land on one: after a bounded number of probes the call
+walks the live slots from a random start and takes the first entry it
+finds.
 
 A BYTES key from either sampler borrows from its slot. Any later call on
 the dict, a lookup included, can run a rehash step that moves the entry and
@@ -802,6 +804,15 @@ multidictSetMaxMemory(d, 256ULL * 1024 * 1024);
 
 The LRU levels are backed by [multilru](MULTILRU.md), so the level count
 here means the same thing it does there.
+
+Under `MULTIDICT_EVICT_LRU`, `multidictEvictToLimit` evicts the coldest
+entry first: the lowest level, oldest within it. A victim leaves LRU
+tracking only when its delete commits. Reading its value for the eviction
+callback is not an access, so an entry the callback vetoes stays tracked
+with its level and rank unchanged and is evictable again later. Within one
+call a vetoed entry is not offered again: eviction moves on to the
+next-coldest entry, and once 64 entries have been passed over, the rest of
+the call picks random victims.
 
 ### Byte-Based Expansion
 

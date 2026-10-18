@@ -86,7 +86,12 @@ typedef void(multidictIterProcess)(void *privdata, const databox *key,
                                    const databox *val);
 
 /* Eviction callback - called when an entry is about to be evicted due to
- * memory pressure. Return true to allow eviction, false to prevent it. */
+ * memory pressure. Return true to allow eviction, false to prevent it.
+ * A vetoed entry stays in the dict and, under LRU eviction, keeps its LRU
+ * level and rank unchanged (reading it for the callback is not an access).
+ * The same multidictEvictToLimit call does not offer a vetoed LRU victim
+ * again and moves on to the next-coldest entry; once 64 LRU entries have
+ * been passed over, the rest of that call picks random victims. */
 typedef bool(multidictEvictionCallback)(void *privdata, const databox *key,
                                         const databox *val);
 
@@ -319,6 +324,8 @@ bool multidictIteratorGetSafe(multidict *d, multidictIterator *iter);
 bool multidictIteratorNext(multidictIterator *iter, multidictEntry *e);
 void multidictIteratorRelease(multidictIterator *iter);
 
+/* Fills 'keybox' with a random key; returns false only when the dict is
+ * empty, including while a rehash is in flight. */
 bool multidictGetRandomKey(multidict *d, databox *keybox);
 uint32_t multidictGetSomeKeys(multidict *d, databox *keys, uint32_t count);
 void multidictEmpty(multidict *d);

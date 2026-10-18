@@ -285,12 +285,29 @@ DK_INLINE_ALWAYS uint32_t multidictHashOfKey_(multidict *d,
         (ht)->totalBytes = (ht)->usedBytes + (ht)->keyBytes + (ht)->valBytes;  \
     } while (0)
 
+/* The cold end of the LRU as one multidictEvictToLimit call walks it.
+ * Victims are picked without being removed from tracking: an entry
+ * leaves the LRU only when multidictDelete commits its eviction, so a
+ * vetoed victim keeps its level and position exactly.  Passed-over
+ * entries stay at the cold end ahead of every untried one, so after a
+ * refill the first 'skip' candidates are the ones already passed over.
+ * Once 'skip' fills the window, the call picks random victims instead. */
+#define MD_LRU_CANDIDATES 64
+typedef struct mdLRUCandidates {
+    multilruPtr ptr[MD_LRU_CANDIDATES];
+    uint32_t count; /* candidates the last refill found */
+    uint32_t pos;   /* next candidate to try */
+    uint32_t skip;  /* candidates passed over (vetoed or unresolvable) */
+} mdLRUCandidates;
+
 /* Forward declarations for LRU tracking (defined later) */
 static void multidictLRUOnInsert(multidict *d, const databox *keybox);
 static void multidictLRUOnAccess(multidict *d, const databox *keybox);
 static void multidictLRUOnDelete(multidict *d, const databox *keybox);
-static bool multidictLRUSelectVictim(multidict *d, databox *keybox,
-                                     databoxWide *slot);
+static bool multidictLRUSelectVictim(multidict *d, mdLRUCandidates *cands,
+                                     databox *keybox, databoxWide *slot);
+DK_INLINE_ALWAYS bool multidictFindNoTouch_(multidict *d, const databox *keybox,
+                                            databox *valbox);
 
 /* ====================================================================
  * Hash Functions
@@ -1315,47 +1332,42 @@ bool multidictPopRandom(multidict *d, databox *keybox, databox *valbox) {
         return false;
     }
 
-    /* Retry loop - GetRandomKey can occasionally fail during rehashing
-     * transitions when it lands on empty slots. Retry a few times. */
-    const int maxRetries = 10;
-    for (int retry = 0; retry < maxRetries; retry++) {
-        /* Get a random key */
-        databox key;
-        databoxWide keyWide;
-        mdBoxAim_(&key, &keyWide);
-        if (!multidictGetRandomKey(d, &key)) {
-            continue; /* Retry - might have landed on empty slot */
-        }
-
-        /* The key borrows its bytes from its slot, and the rehash step the
-         * find below runs can move the entry and free that slot: copy it
-         * first, then find and delete by the copy */
-        databox ownedKey = databoxCopy(&key);
-
-        /* Get the value for this key */
-        databox val;
-        databoxWide valWide;
-        mdBoxAim_(&val, &valWide);
-        if (!multidictFind(d, &ownedKey, &val)) {
-            databoxFreeData(&ownedKey);
-            continue; /* Key might have moved during rehash - retry */
-        }
-
-        /* The entry goes away with the delete: hand back owned copies */
-        *keybox = ownedKey;
-        *valbox = databoxCopy(&val);
-
-        /* Delete the entry */
-        if (multidictDelete(d, keybox)) {
-            return true; /* Success! */
-        }
-
-        /* Delete failed (key might have been rehashed) - retry */
-        databoxFreeData(keybox);
-        databoxFreeData(valbox);
+    /* Get a random key; this fails only on an empty dict */
+    databox key;
+    databoxWide keyWide;
+    mdBoxAim_(&key, &keyWide);
+    if (!multidictGetRandomKey(d, &key)) {
+        return false;
     }
 
-    return false; /* Failed after retries */
+    /* The key borrows its bytes from its slot, and the rehash step the
+     * find below runs can move the entry and free that slot: copy it
+     * first, then find and delete by the copy.  The find and the delete
+     * search both tables while a rehash is in flight, so they find the
+     * entry the key was just read from. */
+    databox ownedKey = databoxCopy(&key);
+
+    /* Get the value for this key; the entry is about to go, so the
+     * lookup does not promote it in the LRU */
+    databox val;
+    databoxWide valWide;
+    mdBoxAim_(&val, &valWide);
+    if (!multidictFindNoTouch_(d, &ownedKey, &val)) {
+        databoxFreeData(&ownedKey);
+        return false;
+    }
+
+    /* The entry goes away with the delete: hand back owned copies */
+    *keybox = ownedKey;
+    *valbox = databoxCopy(&val);
+
+    if (multidictDelete(d, keybox)) {
+        return true;
+    }
+
+    databoxFreeData(keybox);
+    databoxFreeData(valbox);
+    return false;
 }
 
 /* Destroy an entire multidictionary */
@@ -1383,8 +1395,11 @@ void multidictFree(multidict *d) {
     zfree(d);
 }
 
-/* Returns value in inout param 'val' - hot path, optimized */
-bool multidictFind(multidict *d, const databox *keybox, databox *valbox) {
+/* Lookup without the LRU promotion: multidictFind is this plus the
+ * promotion, and eviction reads a victim's value through this so a
+ * vetoed victim keeps its LRU rank. */
+DK_INLINE_ALWAYS bool multidictFindNoTouch_(multidict *d, const databox *keybox,
+                                            databox *valbox) {
     if (unlikely(HTSIZE(d, 0) == 0)) {
         return false;
     }
@@ -1402,19 +1417,13 @@ bool multidictFind(multidict *d, const databox *keybox, databox *valbox) {
         multidictSlot *slot1 = *SLOT_BY_HASH_PTR_PTR(d, 1, hash);
         if (slot1 &&
             d->shared->findValueByKey(d->shared, slot1, keybox, valbox)) {
-            multidictLRUOnAccess(d, keybox);
             return true;
         }
 
         /* Then search ht[0] (older table, entries may not be migrated yet) */
         multidictSlot *slot0 = *SLOT_BY_HASH_PTR_PTR(d, 0, hash);
-        if (slot0 &&
-            d->shared->findValueByKey(d->shared, slot0, keybox, valbox)) {
-            multidictLRUOnAccess(d, keybox);
-            return true;
-        }
-
-        return false;
+        return slot0 &&
+               d->shared->findValueByKey(d->shared, slot0, keybox, valbox);
     }
 
     /* Not rehashing - simple case, single table lookup */
@@ -1424,7 +1433,12 @@ bool multidictFind(multidict *d, const databox *keybox, databox *valbox) {
         target = *SLOT_BY_HASH_PTR_PTR(d, 0, hash);
     }
 
-    bool found = d->shared->findValueByKey(d->shared, target, keybox, valbox);
+    return d->shared->findValueByKey(d->shared, target, keybox, valbox);
+}
+
+/* Returns value in inout param 'val' - hot path, optimized */
+bool multidictFind(multidict *d, const databox *keybox, databox *valbox) {
+    const bool found = multidictFindNoTouch_(d, keybox, valbox);
 
     /* LRU tracking: promote on access (no recursion since lruKeyToPtr
      * has lruEnabled=false) */
@@ -1888,34 +1902,35 @@ uint32_t multidictEvictToLimit(multidict *d) {
     const uint32_t maxAttempts = multidictCount(d) * 2 + 100; /* Safety limit */
     databox keybox;
     databoxWide keyWide;
+    mdLRUCandidates lruCands;
+    lruCands.count = 0;
+    lruCands.pos = 0;
+    lruCands.skip = 0;
 
     /* Use user bytes (key + val) for limit comparison, not total overhead */
     while (multidictUserBytes(d) > d->maxMemory && multidictCount(d) > 0 &&
            attempts < maxAttempts) {
         attempts++;
 
-        bool gotVictim = false;
+        bool fromLRU = false;
 
         /* Select victim based on eviction policy */
         if (d->evictPolicy == MULTIDICT_EVICT_LRU && d->lruEnabled) {
-            /* LRU eviction: select coldest entry */
-            gotVictim = multidictLRUSelectVictim(d, &keybox, &keyWide);
-            if (gotVictim) {
+            /* LRU eviction: the coldest entry not yet passed over */
+            fromLRU = multidictLRUSelectVictim(d, &lruCands, &keybox, &keyWide);
+            if (fromLRU) {
                 lruVictims++;
             }
         }
 
-        if (!gotVictim) {
-            /* Fallback to random eviction */
+        if (!fromLRU) {
+            /* Fallback to random eviction; this fails only on an empty
+             * dict, which the loop guard already excludes */
             mdBoxAim_(&keybox, &keyWide);
             if (!multidictGetRandomKey(d, &keybox)) {
-                /* While a rehash is in flight the pick can land on an
-                 * emptied slot; the loop guard ends this when no keys are
-                 * left or the attempts run out */
-                continue;
+                break;
             }
             mdBoxSettle_(&keybox);
-            gotVictim = true;
             randomVictims++;
         }
 
@@ -1924,26 +1939,32 @@ uint32_t multidictEvictToLimit(multidict *d) {
          * entry and free that slot: work from an owned copy instead */
         databox victim = databoxCopy(&keybox);
 
-        /* Call eviction callback if set */
+        /* Call eviction callback if set.  The lookup does not promote the
+         * victim, so a vetoed one keeps its LRU rank. */
+        bool vetoed = false;
         if (d->evictionCb) {
             databox valbox;
             databoxWide valWide;
             mdBoxAim_(&valbox, &valWide);
-            if (multidictFind(d, &victim, &valbox)) {
+            if (multidictFindNoTouch_(d, &victim, &valbox)) {
                 mdBoxSettle_(&valbox);
-                if (!d->evictionCb(d->evictionPrivdata, &victim, &valbox)) {
-                    /* Callback vetoed this eviction, try another key */
-                    databoxFreeData(&victim);
-                    continue;
-                }
+                vetoed = !d->evictionCb(d->evictionPrivdata, &victim, &valbox);
             }
         }
 
-        /* Delete the entry (LRU tracking already handled by
-         * multidictLRUSelectVictim or will be handled by multidictDelete for
-         * random eviction) */
-        const bool deleted = multidictDelete(d, &victim);
+        /* The delete drops the victim's LRU tracking with the entry */
+        const bool deleted = !vetoed && multidictDelete(d, &victim);
         databoxFreeData(&victim);
+        if (!deleted && fromLRU) {
+            /* Still tracked, at the cold end: pass over it from now on */
+            lruCands.skip++;
+        }
+
+        if (vetoed) {
+            /* Callback vetoed this eviction, try another key */
+            continue;
+        }
+
         if (deleted) {
             evicted++;
         } else {
@@ -2236,35 +2257,23 @@ static bool findKeyByHashInSlot(multidict *d, multidictSlot *slot,
     return false;
 }
 
-/* Internal: Select victim using LRU policy (called from eviction) */
-static bool multidictLRUSelectVictim(multidict *d, databox *keybox,
-                                     databoxWide *slot) {
-    if (!d->lruEnabled || !d->lru) {
-        return false;
-    }
-
-    multilruPtr ptr;
-    if (!multilruRemoveMinimum(d->lru, &ptr)) {
-        return false; /* Empty */
-    }
-
-    /* Get hash from ptrToKey */
+/* Internal: the key tracked under LRU handle 'ptr', found through the
+ * hash recorded for it */
+static bool multidictLRUKeyOf(multidict *d, multilruPtr ptr, databox *keybox,
+                              databoxWide *slot) {
     if (ptr >= d->lruPtrToKeySize) {
         return false;
     }
-    lruKeyRef *refs = (lruKeyRef *)d->lruPtrToKey;
+    const lruKeyRef *refs = (const lruKeyRef *)d->lruPtrToKey;
     if (!refs[ptr].valid) {
         return false;
     }
 
-    uint32_t hash = refs[ptr].hash;
-    refs[ptr].valid = 0; /* Mark as used */
+    const uint32_t hash = refs[ptr].hash;
 
     /* Find key by hash in the appropriate slot */
     uint32_t slotIdx = hash & HTMASK(d, 0);
     if (findKeyByHashInSlot(d, SLOT(d, 0, slotIdx), hash, keybox, slot)) {
-        /* Also remove from keyToPtr */
-        multidictDelete(d->lruKeyToPtr, keybox);
         return true;
     }
 
@@ -2272,9 +2281,50 @@ static bool multidictLRUSelectVictim(multidict *d, databox *keybox,
     if (multidictIsRehashing(d)) {
         slotIdx = hash & HTMASK(d, 1);
         if (findKeyByHashInSlot(d, SLOT(d, 1, slotIdx), hash, keybox, slot)) {
-            multidictDelete(d->lruKeyToPtr, keybox);
             return true;
         }
+    }
+
+    return false;
+}
+
+/* Internal: Select victim using LRU policy (called from eviction).  The
+ * victim stays tracked; multidictDelete untracks it if the eviction
+ * commits, and otherwise the caller counts it in cands->skip. */
+static bool multidictLRUSelectVictim(multidict *d, mdLRUCandidates *cands,
+                                     databox *keybox, databoxWide *slot) {
+    if (!d->lruEnabled || !d->lru) {
+        return false;
+    }
+
+    while (cands->skip < MD_LRU_CANDIDATES) {
+        if (cands->pos >= cands->count) {
+            /* Refill from the cold end; the passed-over candidates lead */
+            memset(cands->ptr, 0, sizeof(cands->ptr));
+            multilruGetNLowest(d->lru, cands->ptr, MD_LRU_CANDIDATES);
+            cands->count = 0;
+            while (cands->count < MD_LRU_CANDIDATES &&
+                   cands->ptr[cands->count]) {
+                cands->count++;
+            }
+
+            cands->pos = cands->skip;
+            if (cands->pos >= cands->count) {
+                return false; /* every tracked entry was passed over */
+            }
+        }
+
+        const multilruPtr ptr = cands->ptr[cands->pos++];
+        if (!multilruIsPopulated(d->lru, ptr)) {
+            continue; /* already untracked since the refill */
+        }
+
+        if (multidictLRUKeyOf(d, ptr, keybox, slot)) {
+            return true;
+        }
+
+        /* No key resolves for this handle: leave it and pass over it */
+        cands->skip++;
     }
 
     return false;
@@ -2433,43 +2483,73 @@ void multidictIteratorRelease(multidictIterator *iter) {
     }
 }
 
+/* Random slot probes multidictGetRandomKey makes before it walks */
+#define MD_RANDOM_KEY_PROBES 128
+
+/* Live slot 'pos', counting ht[0] slots first and then ht[1] slots */
+DK_INLINE_ALWAYS multidictSlot *mdLiveSlot_(multidict *d, uint64_t pos) {
+    const uint64_t size0 = HTSIZE(d, 0);
+    return pos < size0 ? HT(d, 0)->table[pos] : HT(d, 1)->table[pos - size0];
+}
+
+/* Deliver a random key of 'slot' into 'keybox'; false when the slot is
+ * NULL or holds no entries */
+DK_INLINE_ALWAYS bool mdRandomKeyInSlot_(multidict *d, multidictSlot *slot,
+                                         databox *keybox) {
+    if (!slot) {
+        return false;
+    }
+
+    const uint32_t listlen = d->shared->countSlot(slot);
+    if (listlen == 0) {
+        return false;
+    }
+
+    const uint32_t listele = (uint32_t)((uint64_t)random() % listlen);
+    return d->shared->findKeyByPosition(d->shared, slot, listele, keybox);
+}
+
 /* Return a random entry from the hash table. Useful to
  * implement randomized algorithms */
 bool multidictGetRandomKey(multidict *d, databox *keybox) {
-    multidictSlot *current = NULL;
-    int32_t listlen;
-
     if (multidictSize(d) == 0) {
         return false;
     }
 
     multidictRehashStep(d);
 
-    if (multidictIsRehashing(d)) {
-        do {
-            /* We are sure there are no elements in indexes from 0
-             * to rehashidx-1 */
-            uint32_t h =
-                d->rehashidx +
-                (random() % (HTSIZE(d, 0) + HTSIZE(d, 1) - d->rehashidx));
-            current = (h >= HTSIZE(d, 0)) ? HT(d, 1)->table[h - HTSIZE(d, 0)]
-                                          : HT(d, 0)->table[h];
-        } while (!current);
-    } else {
-        do {
-            current = HT(d, 0)->table[SLOT_IDX(d, 0, random())];
-        } while (!current);
+    /* The live slots: while rehashing, ht[0] holds nothing below
+     * rehashidx, so they are ht[0] from rehashidx on and then all of
+     * ht[1]; otherwise all of ht[0].  'pos' indexes them as one run. */
+    const uint64_t first = multidictIsRehashing(d) ? d->rehashidx : 0;
+    const uint64_t end = multidictIsRehashing(d)
+                             ? (uint64_t)HTSIZE(d, 0) + HTSIZE(d, 1)
+                             : HTSIZE(d, 0);
+    const uint64_t span = end - first;
+
+    /* A probe can land on a NULL slot or on one a delete emptied but left
+     * allocated.  After a bounded number of probes, walk every live slot
+     * from a random start instead, so this fails only on an empty dict. */
+    for (uint32_t probe = 0; probe < MD_RANDOM_KEY_PROBES; probe++) {
+        const uint64_t pos = first + (uint64_t)random() % span;
+        if (mdRandomKeyInSlot_(d, mdLiveSlot_(d, pos), keybox)) {
+            return true;
+        }
     }
 
-    /* Now we found a non empty slot, so count the elements and
-     * select a random index. */
-    listlen = d->shared->countSlot(current);
-    if (listlen == 0) {
-        return false;
+    const uint64_t start = (uint64_t)random() % span;
+    for (uint64_t i = 0; i < span; i++) {
+        uint64_t off = start + i;
+        if (off >= span) {
+            off -= span;
+        }
+
+        if (mdRandomKeyInSlot_(d, mdLiveSlot_(d, first + off), keybox)) {
+            return true;
+        }
     }
 
-    int32_t listele = random() % listlen;
-    return d->shared->findKeyByPosition(d->shared, current, listele, keybox);
+    return false;
 }
 
 /* Sample the dictionary to return multiple keys from random locations.
@@ -3227,6 +3307,83 @@ static bool evictRehashCb_(void *privdata, const databox *key,
         testEvictRehashBad_++;
     }
     return true;
+}
+
+/* The index NNNNN of a BYTES key spelled 'prefix' + five digits, or -1
+ * when the key is not spelled that way */
+static int32_t testKeyIndex_(const databox *key, const char *prefix) {
+    const size_t prefixLen = strlen(prefix);
+    if (!DATABOX_IS_BYTES(key) || key->len != prefixLen + 5) {
+        return -1;
+    }
+
+    const char *k = databoxCBytes(key);
+    if (memcmp(k, prefix, prefixLen) != 0) {
+        return -1;
+    }
+
+    int32_t idx = 0;
+    for (size_t i = prefixLen; i < prefixLen + 5; i++) {
+        if (k[i] < '0' || k[i] > '9') {
+            return -1;
+        }
+        idx = idx * 10 + (k[i] - '0');
+    }
+    return idx;
+}
+
+/* LRU veto test: while testLruVetoActive_ is set, vetoes the eviction of
+ * every "lruveto-NNNNN" key whose index is a multiple of 10 below 100;
+ * logs the index of each eviction it allows, in order */
+#define TEST_LRU_VETO_MAX 256
+static bool testLruVetoActive_ = false;
+static int32_t testLruVetoes_ = 0;
+static int32_t testLruVetoBad_ = 0;
+static int32_t testLruEvicted_ = 0;
+static int32_t testLruEvictOrder_[TEST_LRU_VETO_MAX];
+static bool lruVetoCb_(void *privdata, const databox *key, const databox *val) {
+    (void)privdata;
+    const int32_t idx = testKeyIndex_(key, "lruveto-");
+    if (idx < 0 || !DATABOX_IS_INTEGER(val) || val->data.i != idx) {
+        testLruVetoBad_++;
+        return true;
+    }
+
+    if (testLruVetoActive_ && idx % 10 == 0 && idx < 100) {
+        testLruVetoes_++;
+        return false;
+    }
+
+    if (testLruEvicted_ < TEST_LRU_VETO_MAX) {
+        testLruEvictOrder_[testLruEvicted_] = idx;
+    }
+    testLruEvicted_++;
+    return true;
+}
+
+/* True when every key of 'd' is LRU-tracked and nothing else is: the
+ * multilru, the key-to-handle dict and the dict hold the same count, and
+ * each key has an LRU level */
+static bool testLruTrackingExact_(multidict *d) {
+    const uint64_t count = multidictCount(d);
+    if (multilruCount(d->lru) != count ||
+        multidictCount(d->lruKeyToPtr) != count) {
+        return false;
+    }
+
+    multidictIterator iter;
+    multidictIteratorGetSafe(d, &iter);
+    multidictEntry e;
+    uint64_t seen = 0;
+    bool ok = true;
+    while (multidictIteratorNext(&iter, &e)) {
+        seen++;
+        if (multidictGetLRULevel(d, &e.key) < 0) {
+            ok = false;
+        }
+    }
+    multidictIteratorRelease(&iter);
+    return ok && seen == count;
 }
 
 /* ====================================================================
@@ -5313,6 +5470,107 @@ int multidictTest(int argc, char *argv[]) {
         multidictEmpty(d);
     }
 
+    printf("Test 6.4: Random key never fails on a non-empty dict...\n");
+    {
+        /* Deletes leave emptied slots allocated, and a rehash is kept in
+         * flight (resize on, so shrinks start their own), so the random
+         * picks keep landing on NULL and emptied slots.  Every pick must
+         * still succeed while entries remain, and return a live key. */
+        cleaner(multidictMmClassFree) multidictClass *rqdc =
+            multidictMmClassNew();
+        cleaner(multidictFree) multidict *rd =
+            multidictNew(&multidictTypeExactKey, rqdc, 7);
+        multidictResizeEnable(rd);
+
+        enum { total = 3000, deleted = 2000 };
+        static bool alive[total];
+        static int32_t order[total];
+        for (int32_t i = 0; i < total; i++) {
+            char keyBuf[32];
+            snprintf(keyBuf, sizeof(keyBuf), "grk%05d", i);
+            databox key = databoxNewBytesString(keyBuf);
+            databox val = databoxNewSigned(i);
+            multidictAdd(rd, &key, &val);
+            alive[i] = true;
+            order[i] = i;
+        }
+        assert(multidictCount(rd) == total);
+
+        testRandSeed(64);
+        for (int32_t i = total - 1; i > 0; i--) {
+            const int32_t j =
+                (int32_t)(((uint32_t)testRand() << 15 | testRand()) %
+                          (uint32_t)(i + 1));
+            const int32_t t = order[i];
+            order[i] = order[j];
+            order[j] = t;
+        }
+
+        uint32_t picks = 0, picksRehashing = 0;
+        for (int32_t n = 0; n < deleted; n++) {
+            if (!multidictIsRehashing(rd)) {
+                multidictExpand(rd, (uint64_t)HTSIZE(rd, 0) * 2);
+            }
+
+            /* Pick twice per delete; the key is read before the dict is
+             * used again, so its borrowed bytes are still valid */
+            for (int pick = 0; pick < 2; pick++) {
+                picksRehashing += multidictIsRehashing(rd);
+                databox rk = {{0}};
+                const bool got = multidictGetRandomKey(rd, &rk);
+                const int32_t idx = got ? testKeyIndex_(&rk, "grk") : -1;
+                if (!got || idx < 0 || !alive[idx]) {
+                    printf("ERROR: GetRandomKey at count %" PRIu64
+                           ": got=%d idx=%d\n",
+                           multidictCount(rd), got, idx);
+                    assert(NULL);
+                }
+                picks++;
+            }
+
+            char keyBuf[32];
+            snprintf(keyBuf, sizeof(keyBuf), "grk%05d", order[n]);
+            databox key = databoxNewBytesString(keyBuf);
+            assert(multidictDelete(rd, &key));
+            alive[order[n]] = false;
+        }
+
+        printf("    %u picks, %u with a rehash in flight\n", picks,
+               picksRehashing);
+        assert(picksRehashing > picks / 2);
+
+        /* Drain the rest with PopRandom: each pop succeeds while entries
+         * remain and returns a live key with its own value */
+        uint64_t remaining = multidictCount(rd);
+        assert(remaining == total - deleted);
+        while (remaining > 0) {
+            databox pk;
+            databox pv;
+            if (!multidictPopRandom(rd, &pk, &pv)) {
+                printf("ERROR: PopRandom failed at count %" PRIu64 "\n",
+                       remaining);
+                assert(NULL);
+            }
+            const int32_t idx = testKeyIndex_(&pk, "grk");
+            assert(idx >= 0 && alive[idx]);
+            assert(DATABOX_IS_INTEGER(&pv) && pv.data.i == idx);
+            alive[idx] = false;
+            databoxFreeData(&pk);
+            databoxFreeData(&pv);
+            remaining--;
+            assert(multidictCount(rd) == remaining);
+        }
+
+        for (int32_t i = 0; i < total; i++) {
+            assert(!alive[i]);
+        }
+
+        databox rk = {{0}};
+        assert(!multidictGetRandomKey(rd, &rk));
+        databox pk, pv;
+        assert(!multidictPopRandom(rd, &pk, &pv));
+    }
+
     /* ================================================================
      * SECTION 7: Stress Tests / Fuzzing
      * ================================================================ */
@@ -7061,6 +7319,124 @@ int multidictTest(int argc, char *argv[]) {
 
         printf(
             "    No-LRU operations: no crash, operations silently ignored\n");
+    }
+
+    printf("Test 20.9: Vetoed LRU victims stay tracked at their rank...\n");
+    {
+        cleaner(multidictMmClassFree) multidictClass *vqdc =
+            multidictMmClassNew();
+        cleaner(multidictFree) multidict *vd =
+            multidictNew(&multidictTypeExactKey, vqdc, 11);
+        const bool lruOn = multidictEnableLRU(vd, 4);
+        assert(lruOn);
+        (void)lruOn;
+        multidictSetEvictPolicy(vd, MULTIDICT_EVICT_LRU);
+
+        /* Keys 0..149 stay at LRU level 0 in insertion order (0 is the
+         * coldest); 150..199 are touched up to level 1 */
+        enum { total = 200, cold = 150 };
+        static bool present[total];
+        for (int32_t i = 0; i < total; i++) {
+            char keyBuf[32];
+            snprintf(keyBuf, sizeof(keyBuf), "lruveto-%05d", i);
+            databox key = databoxNewBytesString(keyBuf);
+            databox val = databoxNewSigned(i);
+            multidictAdd(vd, &key, &val);
+            present[i] = true;
+        }
+        for (int32_t i = cold; i < total; i++) {
+            char keyBuf[32];
+            snprintf(keyBuf, sizeof(keyBuf), "lruveto-%05d", i);
+            databox key = databoxNewBytesString(keyBuf);
+            multidictTouch(vd, &key);
+        }
+        assert(testLruTrackingExact_(vd));
+
+        /* Every entry has the same size, so a limit of 'evict' entries
+         * below the current bytes evicts exactly that many */
+        const uint64_t bytes = multidictKeyBytes(vd) + multidictValBytes(vd);
+        const uint64_t entryBytes = bytes / total;
+        assert(entryBytes * total == bytes);
+
+        testLruVetoActive_ = true;
+        testLruVetoes_ = 0;
+        testLruVetoBad_ = 0;
+        testLruEvicted_ = 0;
+        multidictSetEvictionCallback(vd, lruVetoCb_, NULL);
+
+        /* Round 1: evict 60 with keys 0, 10, ..., 90 vetoed.  The victims
+         * are the 60 coldest keys that are not vetoed, coldest first, and
+         * each vetoed key is offered once (0..60 are reached; 70..90 are
+         * not). */
+        multidictSetMaxMemory(vd, bytes - 60 * entryBytes);
+        uint32_t evicted = multidictEvictToLimit(vd);
+        assert(evicted == 60);
+        assert(testLruEvicted_ == 60);
+        assert(testLruVetoBad_ == 0);
+        assert(testLruVetoes_ == 7);
+
+        int32_t expect = 0;
+        for (int32_t n = 0; n < 60; n++) {
+            while (expect % 10 == 0 && expect < 100) {
+                expect++;
+            }
+            if (testLruEvictOrder_[n] != expect) {
+                printf("ERROR: round 1 victim %d is key %d, expected %d\n", n,
+                       testLruEvictOrder_[n], expect);
+                assert(NULL);
+            }
+            present[expect] = false;
+            expect++;
+        }
+        assert(multidictCount(vd) == total - 60);
+
+        /* Every survivor, the vetoed keys included, is still tracked, and
+         * the vetoed keys kept their level and rank: they are still the
+         * coldest entries, in their original order */
+        assert(testLruTrackingExact_(vd));
+        multilruPtr coldest[7] = {0};
+        multilruGetNLowest(vd->lru, coldest, 7);
+        for (int32_t n = 0; n < 7; n++) {
+            databox ck;
+            databoxWide ckWide;
+            assert(multidictLRUKeyOf(vd, coldest[n], &ck, &ckWide));
+            assert(testKeyIndex_(&ck, "lruveto-") == n * 10);
+            assert(multidictGetLRULevel(vd, &ck) == 0);
+        }
+
+        /* Round 2: veto lifted.  The vetoed keys are evictable again and
+         * go first, then eviction continues through the level-0 keys in
+         * insertion order */
+        testLruVetoActive_ = false;
+        testLruEvicted_ = 0;
+        const uint64_t bytes2 = multidictKeyBytes(vd) + multidictValBytes(vd);
+        multidictSetMaxMemory(vd, bytes2 - 12 * entryBytes);
+        evicted = multidictEvictToLimit(vd);
+        assert(evicted == 12);
+        assert(testLruEvicted_ == 12);
+        assert(testLruVetoes_ == 7);
+
+        int32_t next = 0;
+        for (int32_t n = 0; n < 12; n++) {
+            while (!present[next]) {
+                next++;
+            }
+            assert(next < cold);
+            if (testLruEvictOrder_[n] != next) {
+                printf("ERROR: round 2 victim %d is key %d, expected %d\n", n,
+                       testLruEvictOrder_[n], next);
+                assert(NULL);
+            }
+            present[next] = false;
+        }
+        for (int32_t i = 0; i <= 60; i += 10) {
+            assert(!present[i]); /* round 2's first seven victims */
+        }
+        assert(present[80] && present[90]);
+
+        assert(multidictCount(vd) == total - 72);
+        assert(testLruTrackingExact_(vd));
+        assert(testLruVetoBad_ == 0);
     }
 
     printf("=== LRU eviction tests passed! ===\n");
