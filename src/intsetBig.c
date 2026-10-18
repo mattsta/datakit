@@ -890,7 +890,7 @@ void intsetBigRepr(const intsetBig *isb) {
     }
 }
 
-__attribute__((optnone)) int intsetBigTest(int argc, char *argv[]) {
+DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int err = 0;

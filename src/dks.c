@@ -305,7 +305,7 @@ void DKS_FREE(DKS_TYPE *s) {
     }
 }
 
-__attribute__((optnone)) void DKS_FREEZERO(DKS_TYPE *s) {
+DK_FN_NO_OPTIMIZE void DKS_FREEZERO(DKS_TYPE *s) {
     if (s) {
 #if __STDC_LIB_EXT1__
         /* Guaranteed memory zero out, but only in C11 mode

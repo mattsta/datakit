@@ -347,7 +347,7 @@ defcleanerName(uint8_t *, zfree, U8);
 #define TIME_FINISH(i, what)
 #endif
 
-__attribute__((optnone)) static void testStrBufToInt64(void) {
+DK_FN_NO_OPTIMIZE static void testStrBufToInt64(void) {
     char buf[32];
     int64_t v;
     (void)v;
@@ -409,7 +409,7 @@ __attribute__((optnone)) static void testStrBufToInt64(void) {
     assert(StrBufToInt64(buf, strlen(buf), &v) == false);
 }
 
-__attribute__((optnone)) static void testStrBufToUInt64(void) {
+DK_FN_NO_OPTIMIZE static void testStrBufToUInt64(void) {
     char buf[32];
     uint64_t v;
     (void)v;
@@ -561,7 +561,7 @@ static uint64_t microTestB(uint32_t start) {
 
 #include "strDoubleFormat.h"
 #include <wchar.h>
-__attribute__((optnone)) int strTest(int argc, char *argv[]) {
+DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
 

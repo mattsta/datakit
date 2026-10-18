@@ -261,6 +261,29 @@
 #define DK_FN_UNUSED
 #endif
 
+/* Keep a function unoptimized: timing loops the optimizer would fold away,
+ * or stores it could drop.  clang spells this optnone; GCC has no optnone
+ * and takes optimize("O0"). */
+#if defined(__clang__)
+#define DK_FN_NO_OPTIMIZE __attribute__((optnone))
+#else
+#define DK_FN_NO_OPTIMIZE __attribute__((optimize("O0")))
+#endif
+
+/* Exempt intended unsigned wraparound (and, in the second form, intended
+ * narrowing conversions) from clang's integer sanitizers.  Those checks
+ * exist only in clang; GCC's sanitizers have nothing to exempt. */
+#if defined(__clang__)
+#define DK_FN_NO_SANITIZE_UNSIGNED_WRAP                                        \
+    __attribute__((no_sanitize("unsigned-integer-overflow")))
+#define DK_FN_NO_SANITIZE_UNSIGNED_WRAP_CONVERSION                             \
+    __attribute__((                                                            \
+        no_sanitize("unsigned-integer-overflow", "implicit-conversion")))
+#else
+#define DK_FN_NO_SANITIZE_UNSIGNED_WRAP
+#define DK_FN_NO_SANITIZE_UNSIGNED_WRAP_CONVERSION
+#endif
+
 /* ====================================================================
  * Integer Helpers
  * ==================================================================== */

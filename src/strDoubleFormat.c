@@ -16,7 +16,7 @@
 /* Disable unsigned overflow sanitizer for intentional wraparound in digit math.
  * The overflow checks in the digit generation loops are part of the algorithm.
  */
-__attribute__((no_sanitize("unsigned-integer-overflow"))) size_t
+DK_FN_NO_SANITIZE_UNSIGNED_WRAP size_t
 StrDoubleFormatToBufNice(void *buf_, const size_t len, const double v);
 
 /* This is a C port of an Erlang port of Scheme code from 1996.
@@ -582,7 +582,7 @@ static size_t niceDoubleDispatch(const double v, int32_t exp /* 11 bits */,
 /* ====================================================================
  * Public Interface
  * ==================================================================== */
-__attribute__((no_sanitize("unsigned-integer-overflow"))) size_t
+DK_FN_NO_SANITIZE_UNSIGNED_WRAP size_t
 StrDoubleFormatToBufNice(void *buf_, const size_t len, const double v) {
     uint8_t *const buf = buf_;
 

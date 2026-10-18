@@ -121,9 +121,9 @@ DK_INLINE_ALWAYS uint64_t encodeTenThousands_(const uint64_t hi,
 /**
  * itoa for x < 100.
  */
-__attribute__((no_sanitize("unsigned-integer-overflow"))) /* x - 10 */
-DK_INLINE_ALWAYS char *
-itoaHundred_(char *out, const uint32_t x) {
+/* overflow catches the x - 10 */
+DK_FN_NO_SANITIZE_UNSIGNED_WRAP
+DK_INLINE_ALWAYS char *itoaHundred_(char *out, const uint32_t x) {
     /*
      * -1 if x < 10, 0 otherwise.  Tried to get an sbb, but ?:
      * gets us branches.
@@ -152,9 +152,8 @@ itoaHundred_(char *out, const uint32_t x) {
  * itoa for x < 10k.
  */
 /* overflow catches the -8U and conversion catches the + ZERO_CHARS */
-__attribute__((no_sanitize("unsigned-integer-overflow", "implicit-conversion")))
-DK_INLINE_ALWAYS char *
-itoaTenThousand_(char *out, const uint32_t x) {
+DK_FN_NO_SANITIZE_UNSIGNED_WRAP_CONVERSION
+DK_INLINE_ALWAYS char *itoaTenThousand_(char *out, const uint32_t x) {
     const uint32_t x_div_PO2 = (x * 10486UL) >> 20;
     const uint32_t x_mod_PO2 = x - PO2 * x_div_PO2;
     uint32_t buf = encodeHundreds_(x_div_PO2, x_mod_PO2);
@@ -224,9 +223,8 @@ DK_INLINE_ALWAYS uint64_t idivPO8_(const uint32_t x) {
     return (wide * mul) >> 57;
 }
 
-__attribute__((no_sanitize("unsigned-integer-overflow", "implicit-conversion")))
-size_t
-StrUInt32ToBuf(void *out_, size_t dstLen, uint32_t x) {
+DK_FN_NO_SANITIZE_UNSIGNED_WRAP_CONVERSION
+size_t StrUInt32ToBuf(void *out_, size_t dstLen, uint32_t x) {
     char *out = out_;
     const char *const outStart = out_;
 
@@ -326,9 +324,8 @@ DK_INLINE_ALWAYS uint64_t ldivPO16_(const uint64_t x) {
 }
 
 /* Requires 20 byte 'out' */
-__attribute__((no_sanitize("unsigned-integer-overflow", "implicit-conversion")))
-size_t
-StrUInt64ToBuf(void *out_, size_t dstLen, uint64_t x) {
+DK_FN_NO_SANITIZE_UNSIGNED_WRAP_CONVERSION
+size_t StrUInt64ToBuf(void *out_, size_t dstLen, uint64_t x) {
     char *out = out_;
     const char *const outStart = out_;
     (void)dstLen;
