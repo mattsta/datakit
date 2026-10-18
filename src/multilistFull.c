@@ -716,23 +716,24 @@ DK_STATIC void multilistFullMergeNodes_(multilistFull *ml, mflexState *state[2],
     }
 }
 
-/* Split 'node' into two parts, parameterized by 'offset' and 'after'.
+/* Split 'node' into two parts at the element at 'offset', so a value can
+ * be pushed onto the end of the returned node that touches that element.
  *
- * The 'after' argument controls which mflex gets returned.
- * If 'after', returned node has elements after 'offset'.
- *             input node keeps elements up to 'offset', including 'offset'.
- * If !'after', returned node has elements up to 'offset', including 'offset'.
- *              input node keeps elements after 'offset'.
+ * 'offset' is an entry offset: from the node head when zero or positive,
+ * from the node tail when negative (a reverse walk gives -1 for the last
+ * element).  It is resolved to a head offset OFFSET before splitting.
  *
- * If 'after', returned node will have elements _after_ 'offset'.
- *             The returned node will have elements [OFFSET+1, END].
+ * If 'after', the returned node is placed after the input node.
+ *             The returned node has elements [OFFSET+1, END].
  *             The input node keeps elements [0, OFFSET].
+ *             Pushing at the returned node's head lands right after OFFSET.
  *
- * If !'after', returned node will keep elements up to and including 'offset'.
- *             The returned node will have elements [0, OFFSET].
- *             The input node keeps elements [OFFSET+1, END].
+ * If !'after', the returned node is placed before the input node.
+ *              The returned node has elements [0, OFFSET-1].
+ *              The input node keeps elements [OFFSET, END].
+ *              Pushing at the returned node's tail lands right before OFFSET.
  *
- * The input node keeps all elements not taken by the returned node.
+ * Either side may be empty (OFFSET at the node's head or tail).
  *
  * Returns index of newly allocated nodeId */
 /* Worker function for _multilistFullSplitNode().
@@ -740,11 +741,17 @@ DK_STATIC void multilistFullMergeNodes_(multilistFull *ml, mflexState *state[2],
 DK_STATIC mlNodeId multilistFullSplitNodeFromOpen_(
     multilistFull *ml, mflexState *state, mflex **node, flex **ff,
     const mlNodeId nodeIdx, const int offset, const bool after) {
-    /* -1 here means "continue deleting until the list ends" */
-    const int origStart = after ? offset + 1 : 0;
-    const int origExtent = after ? -1 : offset;
+    /* A tail-relative offset must be made head-relative: the split range
+     * below is a head-relative start plus a count. */
+    const int at = offset < 0 ? (int)flexCount(*ff) + offset : offset;
+    assert(at >= 0 && (size_t)at < flexCount(*ff));
 
-    D("After %d (%d); ranges: [%d, %d]", after, offset, origStart, origExtent);
+    /* An extent of -1 means "continue deleting until the list ends" */
+    const int origStart = after ? at + 1 : 0;
+    const int origExtent = after ? -1 : at;
+
+    D("After %d (%d -> %d); ranges: [%d, %d]", after, offset, at, origStart,
+      origExtent);
 
     flex *deletedContents = flexSplitRange(ff, origStart, origExtent);
     mflexCloseShrink(node, state, *ff);
@@ -1747,6 +1754,72 @@ static bool mlfIndexSame(multilistFull *ml, mflexState *state, mlOffsetId i,
     databoxWide slot;
     flexGetByTypeInto(entry.fe, &entry.box, &slot);
     return mlfWideSame(&entry.box, want, &slot);
+}
+
+/* Split test elements: fixed-width strings, one per id. */
+#define MLF_SPLIT_LEN 24
+static databox mlfSplitBox(uint32_t id, char buf[MLF_SPLIT_LEN + 1]) {
+    snprintf(buf, MLF_SPLIT_LEN + 1, "split-%06" PRIu32 "-xxxxxxxxxxx", id);
+    return databoxNewBytes(buf, MLF_SPLIT_LEN);
+}
+
+static bool mlfSplitIs(const databox *box, uint32_t id) {
+    char buf[MLF_SPLIT_LEN + 1];
+    const databox want = mlfSplitBox(id, buf);
+    return box->type == DATABOX_BYTES && box->len == MLF_SPLIT_LEN &&
+           memcmp(box->data.bytes.start, want.data.bytes.start,
+                  MLF_SPLIT_LEN) == 0;
+}
+
+/* Compare 'ml' with the oracle 'want' (element ids, head to tail) by
+ * walking it forward and in reverse, and check its node accounting.
+ * Returns NULL on a match, else what differed. */
+static const char *mlfSplitCheck(multilistFull *ml, mflexState *state[2],
+                                 const uint32_t *want, uint32_t n) {
+    if (multilistFullCount(ml) != n) {
+        return "wrong value count";
+    }
+
+    size_t sum = 0;
+    for (mlNodeId at = 0; at < ml->count; at++) {
+        const size_t c = mflexCount(getNode(at));
+        if (c == 0) {
+            return "empty node";
+        }
+
+        sum += c;
+    }
+
+    if (sum != n) {
+        return "node counts do not add up to the value count";
+    }
+
+    for (int dir = 0; dir < 2; dir++) {
+        const bool forward = dir == 0;
+        multilistIterator iter;
+        multilistEntry entry;
+        multilistFullIteratorInitReadOnly(ml, state, &iter, forward);
+        uint32_t seen = 0;
+        while (multilistFullNext(&iter, &entry)) {
+            if (seen >= n) {
+                return "walked past the end";
+            }
+
+            const uint32_t idx = forward ? seen : n - 1 - seen;
+            if (!mlfSplitIs(&entry.box, want[idx])) {
+                return forward ? "forward walk differs"
+                               : "reverse walk differs";
+            }
+
+            seen++;
+        }
+
+        if (seen != n) {
+            return "walk ended early";
+        }
+    }
+
+    return NULL;
 }
 
 int multilistFullTest(int argc, char *argv[]) {
@@ -3047,6 +3120,105 @@ int multilistFullTest(int argc, char *argv[]) {
                                 assert(NULL);
                             }
                         }
+                    }
+
+                    multilistFullFree(ml);
+                }
+            }
+        }
+    }
+
+    TEST("insert into a full node before and after every position, from "
+         "forward and reverse entries") {
+        /* Every node is full, so every insert splits its node.  The entry
+         * comes from a forward walk (head-relative offset) or a reverse
+         * walk (tail-relative, negative offset).  After each insert the
+         * list must match an array oracle.  Depth 1 compresses the
+         * interior nodes. */
+        enum { SPLIT_NODES = 4, SPLIT_MAX = 512, SPLIT_INS = 100000 };
+        static uint32_t want[SPLIT_MAX + 1];
+        bool failed = false;
+        for (uint32_t d = 0; d < 2 && !failed; d++) {
+            char buf[MLF_SPLIT_LEN + 1];
+
+            /* Node capacity: the push that opens a second node is one
+             * past it. */
+            multilistFull *probe = multilistFullNew(FLEX_CAP_LEVEL_512, d);
+            uint32_t perNode = 0;
+            while (probe->count < 2) {
+                const databox box = mlfSplitBox(perNode, buf);
+                multilistFullPushByTypeTail(probe, s0, &box);
+                perNode++;
+            }
+            multilistFullFree(probe);
+            perNode--;
+
+            const uint32_t n = perNode * SPLIT_NODES;
+            if (perNode < 2 || n > SPLIT_MAX) {
+                ERR("depth %u: node capacity %u is out of range", d, perNode);
+                break;
+            }
+
+            for (uint32_t g = 0; g < n && !failed; g++) {
+                for (uint32_t mode = 0; mode < 4 && !failed; mode++) {
+                    const bool after = mode & 1;
+                    const bool forward = !(mode & 2);
+                    multilistFull *ml = multilistFullNew(FLEX_CAP_LEVEL_512, d);
+                    for (uint32_t i = 0; i < n; i++) {
+                        const databox box = mlfSplitBox(i, buf);
+                        multilistFullPushByTypeTail(ml, s0, &box);
+                        want[i] = i;
+                    }
+
+                    if (ml->count != SPLIT_NODES ||
+                        (d && !mflexIsCompressed(getNode(1)))) {
+                        ERR("depth %u: built %u nodes, interior %s", d,
+                            (unsigned)ml->count,
+                            mflexIsCompressed(getNode(1)) ? "compressed"
+                                                          : "uncompressed");
+                        failed = true;
+                    }
+
+                    multilistIterator iter;
+                    multilistEntry entry;
+                    multilistFullIteratorInitReadOnly(ml, s, &iter, forward);
+                    const uint32_t steps = forward ? g + 1 : n - g;
+                    bool found = true;
+                    for (uint32_t k = 0; k < steps && found; k++) {
+                        found = multilistFullNext(&iter, &entry);
+                    }
+
+                    const databox ins = mlfSplitBox(SPLIT_INS + g, buf);
+                    if (!found || !mlfSplitIs(&entry.box, g) ||
+                        (entry.offset < 0) == forward ||
+                        mflexAllowInsert_(ml, entry.nodeIdx,
+                                          DATABOX_SIZE(&ins))) {
+                        ERR("depth %u: element %u: bad %s entry (offset %d)", d,
+                            g, forward ? "forward" : "reverse",
+                            found ? (int)entry.offset : 0);
+                        failed = true;
+                        multilistFullFree(ml);
+                        break;
+                    }
+
+                    if (after) {
+                        multilistFullInsertByTypeAfter(ml, s, &entry, &ins);
+                    } else {
+                        multilistFullInsertByTypeBefore(ml, s, &entry, &ins);
+                    }
+
+                    const uint32_t pos = after ? g + 1 : g;
+                    memmove(&want[pos + 1], &want[pos],
+                            (n - pos) * sizeof(*want));
+                    want[pos] = SPLIT_INS + g;
+
+                    const char *why = mlfSplitCheck(ml, s, want, n + 1);
+                    if (why) {
+                        ERR("depth %u: insert %s element %u from a %s "
+                            "entry: %s",
+                            d, after ? "after" : "before", g,
+                            forward ? "forward" : "reverse", why);
+                        failed = true;
                     }
 
                     multilistFullFree(ml);

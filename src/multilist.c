@@ -3252,13 +3252,9 @@ int multilistTest(int argc, char *argv[]) {
 
             err += mlwVerify(ml, s, want, n, name);
 
-            /* InsertBefore / InsertAfter wide values at both ends and the
-             * middle.  Normal data skips this step: on the Full tier an
-             * insert that splits a full node at an entry found by a
-             * reverse walk (negative node offset) misplaces the value,
-             * which is independent of the element width and out of this
-             * test's scope. */
-            for (size_t k = 0; data != MLW_DATA_NORMAL && k < 6; k++) {
+            /* InsertBefore / InsertAfter wide values (normal values in
+             * normal data) at both ends and the middle. */
+            for (size_t k = 0; k < 6; k++) {
                 const size_t at = (k / 2) == 0   ? 0
                                   : (k / 2) == 1 ? n / 2
                                                  : n - 1;
