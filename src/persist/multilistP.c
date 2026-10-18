@@ -624,8 +624,7 @@ int multilistPTest(int argc, char *argv[]) {
             }
 
             if (val != count) {
-                ERR("Element %d should be %d, got %lld", count, count,
-                    (long long)val);
+                ERR("Element %d should be %d, got %" PRId64, count, count, val);
             }
             count++;
         }
@@ -1227,8 +1226,7 @@ int multilistPTest(int argc, char *argv[]) {
         multilistGetStatsP(ml, &stats);
 
         if (stats.totalOps != 25) {
-            ERR("Total ops should be 25, got %llu",
-                (unsigned long long)stats.totalOps);
+            ERR("Total ops should be 25, got %" PRIu64, stats.totalOps);
         }
 
         multilistCloseP(ml);
