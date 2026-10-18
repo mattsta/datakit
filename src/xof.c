@@ -226,17 +226,48 @@ double xofGet(const xof *const x, const size_t offset) {
                         &currentLengthOfBits, offset);
 }
 
+/* Longest entry xofAppend() writes: type, leading zeroes, length, 64 bits */
+#define XOF_MAX_ENTRY_BITS (BITS_TYPE + BITS_LEADING_ZEROS + BITS_DATA + 64)
+
+/* Make 'w->d' big enough for 'extraBits' more bits after 'usedBits', plus
+ * what a reader touches past the end: decoding the last entry reads its
+ * 2-bit type, one bit beyond a final 1-bit entry, through whole 64-bit
+ * words. Grows with zrealloc (at least doubling) and zeroes the new tail,
+ * since repeated values are only skipped bits and rely on it. A NULL
+ * 'w->d' is allocated here. */
+static void xofWriterReserve(xofWriter *const w, const size_t extraBits) {
+    const size_t endBits = w->usedBits + extraBits;
+    const size_t needBytes = ((endBits / 64) + 1) * sizeof(xof);
+    const size_t haveBytes = w->d ? w->totalBytes : 0;
+    if (haveBytes >= needBytes) {
+        return;
+    }
+
+    size_t newBytes = haveBytes * 2;
+    if (newBytes < needBytes) {
+        newBytes = needBytes;
+    }
+
+    /* @own: container; free=zfree */
+    w->d = zrealloc(w->d, newBytes);
+    memset((uint8_t *)w->d + haveBytes, 0, newBytes - haveBytes);
+    w->totalBytes = newBytes;
+}
+
 void xofWrite(xofWriter *const w, const double val) {
     if (w->count == 0) {
         /* First value: use xofInit to write raw 64-bit double. The XOR
          * window starts unset (-1, -1), so the first XOR entry is always
          * a NEW entry: readers start with no window and can only decode
          * a SAME entry after a NEW one has set it. */
+        w->usedBits = 0;
+        xofWriterReserve(w, 64);
         w->currentLeadingZeroes = -1;
         w->currentTrailingZeroes = -1;
         xofInit(w->d, &w->usedBits, val);
     } else {
         /* Subsequent values: encode as XOR delta from previous */
+        xofWriterReserve(w, XOF_MAX_ENTRY_BITS);
         xofAppend(w->d, &w->usedBits, &w->currentLeadingZeroes,
                   &w->currentTrailingZeroes, w->prevVal, val);
     }
@@ -344,6 +375,94 @@ defcleanerName(xof *, zfree, Bits);
 defcleanerName(double *, zfree, Doubles);
 
 #define RD(max) (((double)rand() / (double)(RAND_MAX)) * (max))
+
+static void xofTestWriterFree_cleanup(xofWriter *w) {
+    zfree(w->d);
+}
+
+static uint64_t xofTestRand(uint64_t *state) {
+    /* splitmix64 */
+    uint64_t z = (*state += 0x9e3779b97f4a7c15ULL);
+    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+    return z ^ (z >> 31);
+}
+
+/* Write 'bits' (as doubles) through a writer that starts from NULL
+ * (initialBytes 0) or a small zeroed preallocation, then read every value
+ * back through every read path: xofReader (Next and NextN), xofGet() and
+ * xofReadAll(), comparing exact bits. The writer must keep room for
+ * everything a reader touches. */
+static int xofCheckGrownWriter(const char *what, const uint64_t *bits,
+                               const size_t n, const size_t initialBytes) {
+    int err = 0;
+    cleaner(xofTestWriterFree) xofWriter w = {0};
+    if (initialBytes) {
+        /* @own: container; free=zfree */
+        w.d = zcalloc(1, initialBytes);
+        w.totalBytes = initialBytes;
+    }
+
+    for (size_t i = 0; i < n; i++) {
+        xofWrite(&w, xofDoubleFromBits(bits[i]));
+    }
+
+    if (w.count != n || w.totalBytes < ((w.usedBits / 64) + 1) * sizeof(xof)) {
+        ERR("%s: count %zu, %zu bytes for %zu bits", what, w.count,
+            w.totalBytes, w.usedBits);
+    }
+
+    xofReader r;
+    xofReaderInitFromWriter(&r, &w);
+    for (size_t i = 0; i < n; i++) {
+        const double got =
+            i == 0 ? xofReaderCurrent(&r) : xofReaderNext(&r, w.d);
+        if (xofBitsFromDouble(got) != bits[i]) {
+            ERR("%s: reader [%zu] = %016" PRIx64 ", want %016" PRIx64, what, i,
+                xofBitsFromDouble(got), bits[i]);
+            break;
+        }
+    }
+
+    if (r.bitOffset != w.usedBits || xofReaderRemaining(&r, n) != 0) {
+        ERR("%s: reader ended at bit %zu, writer at %zu", what, r.bitOffset,
+            w.usedBits);
+    }
+
+    cleanerName(zfree, Doubles) double *all = zcalloc(n, sizeof(*all));
+    xofReader batch;
+    xofReaderInitFromWriter(&batch, &w);
+    xofReaderNextN(&batch, w.d, all, n - 1);
+    for (size_t i = 1; i < n; i++) {
+        if (xofBitsFromDouble(all[i - 1]) != bits[i]) {
+            ERR("%s: NextN [%zu] wrong", what, i);
+            break;
+        }
+    }
+
+    xofReadAll(w.d, all, n);
+    for (size_t i = 0; i < n; i++) {
+        if (xofBitsFromDouble(all[i]) != bits[i]) {
+            ERR("%s: ReadAll [%zu] wrong", what, i);
+            break;
+        }
+    }
+
+    /* xofGet() replays from the start: check a spread of offsets */
+    for (size_t i = 0; i < n; i += 97) {
+        if (xofBitsFromDouble(xofGet(w.d, i)) != bits[i]) {
+            ERR("%s: xofGet(%zu) wrong", what, i);
+            break;
+        }
+    }
+
+    if (xofBitsFromDouble(xofGet(w.d, n - 1)) != bits[n - 1]) {
+        ERR("%s: xofGet(last) wrong", what);
+    }
+
+    return err;
+}
+
 int xofTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -995,6 +1114,30 @@ int xofTest(int argc, char *argv[]) {
 
             zfree(w.d);
         }
+    }
+
+    TEST("xofWriter - grows well past its initial capacity") {
+        const size_t n = 3000;
+        cleanerName(zfree, Bits) uint64_t *bits = zcalloc(n, sizeof(*bits));
+
+        /* Random bit patterns: mostly NEW entries, up to 78 bits each */
+        uint64_t rng = 0x452821e638d01377ULL;
+        for (size_t i = 0; i < n; i++) {
+            bits[i] = xofTestRand(&rng);
+        }
+
+        err += xofCheckGrownWriter("random from NULL", bits, n, 0);
+        err += xofCheckGrownWriter("random from 8 bytes", bits, n, 8);
+        err += xofCheckGrownWriter("random from 16 bytes", bits, n, 16);
+
+        /* Repeated values: 1-bit entries, so the stream ends mid-word and
+         * the reader's 2-bit type read reaches past the last entry */
+        for (size_t i = 0; i < n; i++) {
+            bits[i] = xofBitsFromDouble(i < n / 2 ? 42.5 : -7.25);
+        }
+
+        err += xofCheckGrownWriter("repeats from NULL", bits, n, 0);
+        err += xofCheckGrownWriter("repeats from 8 bytes", bits, n, 8);
     }
 
     TEST("xofReader - xofReaderRemaining") {

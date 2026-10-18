@@ -7,7 +7,14 @@
 typedef uint64_t xof;
 typedef uint64_t xofVal;
 
+/* Writer: xofWrite() appends values to 'd'. Start from {0} (every field
+ * zero); the writer resets its XOR window on the first value. */
 typedef struct xofWriter {
+    /* Stream, owned by the writer: xofWrite() allocates it when NULL and
+     * grows it with zrealloc as values arrive, keeping 'totalBytes' current
+     * and room for readers to decode everything written. A caller may
+     * preallocate it instead, zero-filled from the zmalloc family, with
+     * 'totalBytes' set to its size. Free it with zfree(). */
     xof *d;
 
     /* State of tail entry needed for appending next entry... */
@@ -20,7 +27,7 @@ typedef struct xofWriter {
     /* Number of elements inside 'd' */
     size_t count;
 
-    /* Total bytes allocated for 'd' */
+    /* Bytes allocated for 'd' (ignored while 'd' is NULL) */
     size_t totalBytes;
 } xofWriter;
 

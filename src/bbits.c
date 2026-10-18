@@ -326,9 +326,10 @@ bool bbitsDodXofAppend(bbitsDodXof *dx, const dodVal newKey,
                 kw->totalBytes = kwCeil;
             }
 
-            if (vwCeil < BYTES_PER_BITMAP) {
+            if (vwCeil < vw->totalBytes) {
                 /* @own: container; free=zfree */
                 vw->d = zrealloc(vw->d, vwCeil);
+                vw->totalBytes = vwCeil;
             }
         }
 
@@ -356,12 +357,13 @@ bool bbitsDodXofAppend(bbitsDodXof *dx, const dodVal newKey,
         *vw = (xofWriter){.currentLeadingZeroes = -1,
                           .currentTrailingZeroes = -1};
 
-        /* The key writer owns its stream from here and grows it if it must */
+        /* The writers own these from here and grow them if they must */
         /* @own: container; free=zfree */
         kw->d = zcalloc(1, BYTES_PER_BITMAP);
         kw->totalBytes = BYTES_PER_BITMAP;
         /* @own: container; free=zfree */
         vw->d = zcalloc(1, BYTES_PER_BITMAP);
+        vw->totalBytes = BYTES_PER_BITMAP;
 
         /* Initialize original t0/t1 for keys */
         dx->keyT0[dx->count - 1] = 0;
