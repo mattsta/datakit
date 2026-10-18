@@ -57,6 +57,45 @@ test never rewrites `uv.lock`.
 Coding-practice documentation: `docs/development/CONTRIBUTING.md`
 (Memory Management) and the idiom block in `src/cleaner.h`.
 
+## verify — build HEAD plus named paths in isolation
+
+Builds and tests exactly HEAD plus the paths you name, so unrelated
+uncommitted work in the tree cannot make a change look good or bad:
+
+```sh
+uv run --project tools dktools verify NAME --tests REGEX [--serial REGEX] \
+    [--compiler clang22|gcc15] [--preset dev|debug] [--target T]... \
+    [--root DIR] [-j N] PATH[=FILE]...
+```
+
+- Each `PATH` takes its working-tree content (or its deletion, when it
+  is gone from the working tree); `PATH=FILE` stages `FILE`'s content
+  at `PATH`. The tree is written through a private `GIT_INDEX_FILE`
+  (the real index is never touched), exported with `git archive` into
+  `ROOT/verify/NAME/src`, then configured and built there. `ROOT` is
+  `--root`, else `$DKTOOLS_SCRATCH`, else `dktools/` under the system
+  temp dir.
+- `--tests` runs in parallel (`-j N`, default the CPU count);
+  `--serial` runs one test at a time (the `*P` tests that share fixed
+  temp paths) and is excluded from the parallel run. Both are
+  whole-name ctest regexes, and one that matches nothing fails.
+- The build covers the four preset targets unless `--target` is given.
+  `allocaudit check --constructors` then runs on the exported tree
+  with the tree's own dktools.
+- Prints a result block (tree hash, build and warning count, ctest,
+  sanitizer reports from the test output, allocaudit, failing test
+  names, log paths), also kept in `ROOT/verify/NAME/result.txt`. Exits
+  0 only when everything passed with 0 warnings and no sanitizer
+  report, 1 otherwise, 2 on an input error (one stderr line).
+
+Compilers and presets live in `src/dktools/toolchain.py`, the single
+place builds get them from; the system `cc` is never used:
+
+| name | programs | presets |
+| --- | --- | --- |
+| `clang22` (default) | `clang-22`, `clang++`, `llvm-ar`, `llvm-ranlib` from `--llvm-dir` / `$DKTOOLS_LLVM_DIR` (default: Homebrew LLVM) | `dev`, `debug` (CMakePresets.json) |
+| `gcc15` | `gcc-15`, `g++-15`, overridden by `--gcc-cc`/`--gcc-cxx` or `$DKTOOLS_GCC_CC`/`$DKTOOLS_GCC_CXX` | `release` (`-DCMAKE_BUILD_TYPE=Release`, no preset) |
+
 ## perfdiff — perf regression comparison
 
 Compares two `perfRegression` TSV outputs row by row, keyed on

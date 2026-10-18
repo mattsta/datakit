@@ -6,7 +6,8 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import allocaudit, perfdiff
+from . import allocaudit, perfdiff, toolchain, verify
+from .gitutil import ToolError
 
 
 def _repo_default() -> Path:
@@ -72,7 +73,77 @@ def main(argv: list[str] | None = None) -> int:
         help="regression tolerance percent (default 10.0)",
     )
 
+    vf = sub.add_parser(
+        "verify",
+        help="build HEAD plus exactly the given paths in isolation and test it "
+        "(exit 0 pass, 1 fail, 2 input error)",
+    )
+    vf.add_argument("name", help="work-dir name under ROOT/verify")
+    vf.add_argument(
+        "specs",
+        nargs="+",
+        metavar="PATH[=FILE]",
+        help="repo path to take from the working tree, or FILE's content "
+        "staged at PATH",
+    )
+    vf.add_argument("--tests", default=None, help="ctest name regex, run in parallel")
+    vf.add_argument(
+        "--serial",
+        default=None,
+        help="ctest name regex, run one at a time (excluded from --tests)",
+    )
+    vf.add_argument(
+        "--compiler",
+        choices=toolchain.COMPILERS,
+        default=toolchain.DEFAULT_COMPILER,
+        help=f"named compiler (default {toolchain.DEFAULT_COMPILER})",
+    )
+    vf.add_argument(
+        "--preset",
+        choices=tuple(toolchain.PRESETS),
+        default=None,
+        help="build preset (default: the compiler's first; gcc15 builds release)",
+    )
+    vf.add_argument(
+        "--target",
+        action="append",
+        default=None,
+        help="build target, repeatable (default: the four preset targets)",
+    )
+    vf.add_argument(
+        "--root",
+        type=Path,
+        default=None,
+        help="scratch root (env DKTOOLS_SCRATCH, default: dktools/ in the temp dir)",
+    )
+    vf.add_argument("-j", "--jobs", type=int, default=None, help="parallel jobs")
+    toolchain.add_arguments(vf)
+
     args = parser.parse_args(argv)
+
+    try:
+        return _dispatch(args)
+    except ToolError as exc:
+        print(f"dktools {args.command}: {exc}", file=sys.stderr)
+        return 2
+
+
+def _dispatch(args: argparse.Namespace) -> int:
+    if args.command == "verify":
+        return verify.run(
+            args.repo,
+            verify.VerifyOptions(
+                name=args.name,
+                specs=args.specs,
+                tests=args.tests,
+                serial=args.serial,
+                compiler=toolchain.from_args(args.compiler, args),
+                preset=args.preset,
+                targets=args.target,
+                root=args.root,
+                jobs=args.jobs,
+            ),
+        )
 
     if args.command == "perfdiff":
         return perfdiff.run(args.baseline, args.current, args.tolerance)
