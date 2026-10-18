@@ -3497,15 +3497,13 @@ static void *multidictPersistRestore(const uint8_t *data, size_t len) {
     flexEntry *fe = flexHead(f);
     for (size_t i = 0; i + 1 < count; i += 2) {
         databoxBig key, val; /* room for 96/128-bit keys and values */
-        DATABOX_BIG_INIT(&key);
-        DATABOX_BIG_INIT(&val);
 
         /* Get key */
-        flexGetByType(fe, (databox *)&key);
+        flexGetByTypeBig(fe, &key);
         fe = flexNext(f, fe);
 
         /* Get value */
-        flexGetByType(fe, (databox *)&val);
+        flexGetByTypeBig(fe, &val);
         fe = flexNext(f, fe);
 
         /* Add to multidict */
@@ -4228,18 +4226,16 @@ static void *multiOrderedSetPersistRestore(const uint8_t *data, size_t len) {
     flexEntry *fe = flexHead(f);
     for (size_t i = 0; i < count / 2 && fe; i++) {
         databoxBig score, member; /* room for 96/128-bit scores/members */
-        DATABOX_BIG_INIT(&score);
-        DATABOX_BIG_INIT(&member);
 
         /* Read score */
-        flexGetByType(fe, (databox *)&score);
+        flexGetByTypeBig(fe, &score);
         fe = flexNext(f, fe);
         if (!fe) {
             break;
         }
 
         /* Read member */
-        flexGetByType(fe, (databox *)&member);
+        flexGetByTypeBig(fe, &member);
         fe = flexNext(f, fe);
 
         /* Add to multiOrderedSet */
