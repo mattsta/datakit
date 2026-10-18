@@ -40,7 +40,6 @@
 
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleanerName(dod *, zfree, DodBuf);
-defcleanerName(xof *, zfree, XofBuf);
 defcleanerName(int64_t *, zfree, I64Buf);
 defcleanerName(uint8_t *, zfree, U8Buf);
 defcleanerName(uint32_t *, zfree, U32Buf);
@@ -386,18 +385,23 @@ static void benchVarintBP128(BenchReport *r, const int64_t *values,
  * ============================================================================
  */
 
+/* Scope-exit release of a writer-owned xof stream */
+static void benchXofWriterFree_cleanup(xofWriter *w) {
+    zfree(w->d);
+}
+
 /* datakit xof benchmark */
 static void benchXof(BenchReport *r, const double *values, size_t count) {
     /* Encode */
     uint64_t startEncode = timeUtilMonotonicUs();
 
-    /* Held by 'w' below for the rest of this function's lifetime; freed via
-     * this scope-exit cleaner since 'w' never escapes benchXof. */
-    cleanerName(zfree, XofBuf) xof *xofBuf =
-        zcalloc(1, count * 16); /* Conservative allocation */
-
-    xofWriter w = {0};
-    w.d = xofBuf;
+    /* The writer owns its stream and may zrealloc it, so the stream is freed
+     * through the writer ('w.d'), never through a copy of the pointer.
+     * Preallocated (128 bits per value covers xof's 78-bit worst case) so
+     * the timing measures encoding, not growth. */
+    cleaner(benchXofWriterFree) xofWriter w = {0};
+    /* @own: container; free=zfree */
+    w.d = zcalloc(1, count * 16);
     w.totalBytes = count * 16;
 
     for (size_t i = 0; i < count; i++) {
