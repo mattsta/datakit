@@ -864,8 +864,9 @@ uint32_t multidictLongLongHashFunction(uint64_t key);
  * seeded from the dictionary's seed */
 uint32_t multidictGenHashFunction(multidict *d, const void *key, int32_t len);
 
-/* Case-insensitive ASCII hash (djb hash variant): folds exactly 'A'-'Z',
- * as multidictTypeCaseKey's compare does */
+/* Case-insensitive ASCII hash: multidictGenHashFunction (same seed) over
+ * the key with exactly 'A'-'Z' folded, as multidictTypeCaseKey's compare
+ * folds; folds in stack chunks, never allocates */
 uint32_t multidictGenCaseHashFunction(multidict *d, const uint8_t *buf,
                                       int32_t len);
 ```
@@ -1072,7 +1073,8 @@ multidictClass *cls = multidictDefaultClassNew();
 /* Exact (case-sensitive) keys: XXH64/XXH32 over the key bytes */
 multidict *exactDict = multidictNew(&multidictTypeExactKey, cls, 0);
 
-/* Case-insensitive string keys: a djb-style ASCII-folding hash */
+/* Case-insensitive string keys: the same seeded hash over ASCII-folded
+ * bytes */
 multidict *ciDict = multidictNew(&multidictTypeCaseKey, cls, 0);
 ```
 

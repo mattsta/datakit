@@ -1,5 +1,8 @@
 #include "multidict.h"
 
+#ifndef XXH_STATIC_LINKING_ONLY
+#define XXH_STATIC_LINKING_ONLY /* stack states for the streamed case hash */
+#endif
 #include "../deps/xxHash/xxhash.h"
 #include "asmUtils.h"
 #include "cleaner.h"
@@ -469,20 +472,56 @@ uint32_t multidictGenHashFunction(multidict *d, const void *key, int32_t len) {
     }
 }
 
-/* An ASCII case-insensitive hash (djb).  It folds exactly 'A'-'Z' to
- * 'a'-'z', the set multidictTypeCaseKey's compare folds, so keys that
- * compare equal hash equal. */
+/* Copy 'len' bytes of 'src' to 'dst' with exactly 'A'-'Z' folded to
+ * 'a'-'z' (branch-free, so it vectorizes) */
+DK_INLINE_ALWAYS void mdFoldAscii_(uint8_t *dst, const uint8_t *src,
+                                   size_t len) {
+    for (size_t i = 0; i < len; i++) {
+        const uint8_t c = src[i];
+        dst[i] = c | (uint8_t)(((uint8_t)(c - 'A') < 26u) << 5);
+    }
+}
+
+/* Bytes folded per step of the case hash */
+#define MD_CASE_HASH_CHUNK 256
+
+/* An ASCII case-insensitive hash: multidictGenHashFunction, the seeded
+ * hash of exact keys, over the key with exactly 'A'-'Z' folded to
+ * 'a'-'z' (the set multidictTypeCaseKey's compare folds, so keys that
+ * compare equal hash equal).  Folding happens in a stack chunk: a key
+ * that fits one is hashed in one call, and a longer one streams its
+ * chunks through the same hash, which gives the same value as hashing
+ * all the folded bytes at once.  Nothing is allocated. */
 uint32_t multidictGenCaseHashFunction(multidict *d, const uint8_t *buf,
                                       int32_t len) {
-    uint32_t hash = d->seed;
-
-    while (len-- > 0) {
-        uint8_t c =
-            *buf++; /* Read once to avoid multiple evaluation in DK_LOWER */
-        hash = ((hash << 5) + hash) + (DK_LOWER(c)); /* hash * 33 + c */
+    uint8_t folded[MD_CASE_HASH_CHUNK];
+    const size_t total = len > 0 ? (size_t)len : 0;
+    if (total <= sizeof(folded)) {
+        mdFoldAscii_(folded, buf, total);
+        return multidictGenHashFunction(d, folded, (int32_t)total);
     }
 
-    return hash;
+    if (DK_BITS == 64) {
+        XXH64_state_t state;
+        XXH64_reset(&state, d->seed);
+        for (size_t at = 0; at < total; at += sizeof(folded)) {
+            const size_t left = total - at;
+            const size_t n = left < sizeof(folded) ? left : sizeof(folded);
+            mdFoldAscii_(folded, buf + at, n);
+            XXH64_update(&state, folded, n);
+        }
+        return (uint32_t)XXH64_digest(&state);
+    } else {
+        XXH32_state_t state;
+        XXH32_reset(&state, d->seed);
+        for (size_t at = 0; at < total; at += sizeof(folded)) {
+            const size_t left = total - at;
+            const size_t n = left < sizeof(folded) ? left : sizeof(folded);
+            mdFoldAscii_(folded, buf + at, n);
+            XXH32_update(&state, folded, n);
+        }
+        return XXH32_digest(&state);
+    }
 }
 
 /* ====================================================================
@@ -4411,6 +4450,114 @@ static int multidictTestKeyCompare_(void) {
             multidictGenCaseHashFunction(d, a, (int32_t)len) !=
                 multidictGenCaseHashFunction(d, b, (int32_t)len)) {
             printf("ERROR: case flip round %d does not match\n", round);
+            err++;
+        }
+    }
+
+    /* The case hash is the seeded exact hash of the folded bytes, for
+     * keys that fit one fold chunk and for keys streamed in several */
+    static const uint32_t lens[] = {0,   1,   7,   63,  64,  255, 256,
+                                    257, 300, 511, 512, 513, 1000};
+    for (size_t li = 0; li < sizeof(lens) / sizeof(*lens); li++) {
+        uint8_t raw[1000];
+        uint8_t folded[1000];
+        uint8_t flipped[1000];
+        const uint32_t len = lens[li];
+        for (uint32_t i = 0; i < len; i++) {
+            raw[i] = (uint8_t)testRand();
+            folded[i] = testFoldAscii_(raw[i]);
+            flipped[i] = (raw[i] >= 'a' && raw[i] <= 'z')
+                             ? (uint8_t)(raw[i] - ('a' - 'A'))
+                             : raw[i];
+        }
+
+        const uint32_t h = multidictGenCaseHashFunction(d, raw, (int32_t)len);
+        if (h != multidictGenHashFunction(d, folded, (int32_t)len) ||
+            h != multidictGenCaseHashFunction(d, flipped, (int32_t)len) ||
+            !fold(NULL, raw, len, flipped, len)) {
+            printf("ERROR: case hash of a %" PRIu32 "-byte key is not the "
+                   "seeded hash of its folded bytes\n",
+                   len);
+            err++;
+        }
+    }
+
+    /* Keys built from the blocks "b[" and "a|" all collide under a djb33
+     * fold hash for every seed (98 * 33 + 91 == 97 * 33 + 124, and h * 33
+     * + c chains the collision).  The seeded hash tells them apart, and
+     * places them differently under different seeds. */
+    {
+        enum { blocks = 6, keys = 1 << blocks };
+        uint8_t set[keys][blocks * 2];
+        for (uint32_t k = 0; k < keys; k++) {
+            for (uint32_t b = 0; b < blocks; b++) {
+                set[k][b * 2] = ((k >> b) & 1) ? 'b' : 'a';
+                set[k][b * 2 + 1] = ((k >> b) & 1) ? '[' : '|';
+            }
+        }
+
+        /* An independent djb33 fold over each key confirms the set */
+        for (uint32_t seed = 0; seed < 3; seed++) {
+            uint32_t first = 0;
+            for (uint32_t k = 0; k < keys; k++) {
+                uint32_t h = seed * 7919u;
+                for (uint32_t i = 0; i < blocks * 2; i++) {
+                    h = h * 33u + testFoldAscii_(set[k][i]);
+                }
+                if (k == 0) {
+                    first = h;
+                } else if (h != first) {
+                    printf("ERROR: djb collision set does not collide\n");
+                    err++;
+                    break;
+                }
+            }
+        }
+
+        cleaner(multidictFree) multidict *d2 =
+            multidictNew(&multidictTypeCaseKey, qdc, 9001);
+        uint32_t hashes[keys];
+        uint32_t sameAcrossSeeds = 0;
+        for (uint32_t k = 0; k < keys; k++) {
+            hashes[k] = multidictGenCaseHashFunction(d, set[k], blocks * 2);
+            sameAcrossSeeds += hashes[k] == multidictGenCaseHashFunction(
+                                                d2, set[k], blocks * 2);
+        }
+
+        uint32_t collisions = 0;
+        for (uint32_t a = 0; a < keys; a++) {
+            for (uint32_t b = a + 1; b < keys; b++) {
+                collisions += hashes[a] == hashes[b];
+            }
+        }
+
+        if (collisions != 0 || sameAcrossSeeds != 0) {
+            printf("ERROR: case hash: %" PRIu32 " collisions in the djb set, "
+                   "%" PRIu32 " keys hash alike under two seeds\n",
+                   collisions, sameAcrossSeeds);
+            err++;
+        }
+
+        /* In a dict they spread over the slots instead of piling up */
+        for (uint32_t k = 0; k < keys; k++) {
+            const databox kb = databoxNewBytes(set[k], blocks * 2);
+            const databox vb = DATABOX_UNSIGNED(k);
+            multidictAdd(d2, &kb, &vb);
+        }
+        for (int32_t pass = 0; pass < 2; pass++) {
+            while (multidictRehash(d2, 100)) {
+            }
+            multidictExpand(d2, 256); /* refused while a rehash runs */
+        }
+        while (multidictRehash(d2, 100)) {
+        }
+
+        multidictDetailedStats stats;
+        multidictGetDetailedStats(d2, &stats);
+        if (multidictCount(d2) != keys || stats.maxChainLen > 8) {
+            printf("ERROR: djb collision set piles %" PRIu64
+                   " keys into one slot\n",
+                   stats.maxChainLen);
             err++;
         }
     }

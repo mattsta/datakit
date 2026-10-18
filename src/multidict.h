@@ -419,7 +419,11 @@ int multidictGetLRULevel(multidict *d, const databox *keybox);
 /* Hashes */
 uint32_t multidictIntHashFunction(uint32_t key);
 uint32_t multidictLongLongHashFunction(uint64_t key);
+/* The seeded hash of exact keys: XXH64 (XXH32 on 32-bit builds) with the
+ * dict's seed */
 uint32_t multidictGenHashFunction(multidict *d, const void *key, int32_t len);
+/* The seeded hash of case keys: multidictGenHashFunction of the key with
+ * 'A'-'Z' folded to 'a'-'z', computed without allocating */
 uint32_t multidictGenCaseHashFunction(multidict *d, const uint8_t *buf,
                                       int32_t len);
 
