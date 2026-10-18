@@ -874,7 +874,7 @@ bool OSRegulateAdjustOpenFilesLimit(const size_t requestedFdCount,
 /* ====================================================================
  * Usage
  * ==================================================================== */
-bool OSRegulateResourceUsageGet(long *selfMaxRSS, long *childMaxRSS,
+bool OSRegulateResourceUsageGet(int64_t *selfMaxRSS, int64_t *childMaxRSS,
                                 float *selfSystemCPU, float *selfUserCPU,
                                 float *childSystemCPU, float *childUserCPU) {
     struct rusage self;
@@ -893,8 +893,8 @@ bool OSRegulateResourceUsageGet(long *selfMaxRSS, long *childMaxRSS,
     *childMaxRSS = children.ru_maxrss;
 #else
     /* Linux and FreeBSD report size in KB */
-    *selfMaxRSS = self.ru_maxrss * 1024ULL;
-    *childMaxRSS = children.ru_maxrss * 1024ULL;
+    *selfMaxRSS = (int64_t)self.ru_maxrss * 1024;
+    *childMaxRSS = (int64_t)children.ru_maxrss * 1024;
 #endif
 
     *selfSystemCPU =

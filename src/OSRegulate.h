@@ -155,7 +155,7 @@ bool OSRegulateAdjustOpenFilesLimit(const size_t requestedFdCount,
                                     size_t *limitActuallySet, char **statusMsg);
 
 /* Usage */
-bool OSRegulateResourceUsageGet(long *selfMaxRSS, long *childMaxRSS,
+bool OSRegulateResourceUsageGet(int64_t *selfMaxRSS, int64_t *childMaxRSS,
                                 float *selfSystemCPU, float *selfUserCPU,
                                 float *childSystemCPU, float *childUserCPU);
 

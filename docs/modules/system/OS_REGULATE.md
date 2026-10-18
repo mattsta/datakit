@@ -547,8 +547,8 @@ printf("Anon Huge Pages: %zu MB\n", anonHuge / 1024 / 1024);
  * Returns: true on success
  */
 bool OSRegulateResourceUsageGet(
-    long *selfMaxRSS,
-    long *childMaxRSS,
+    int64_t *selfMaxRSS,
+    int64_t *childMaxRSS,
     float *selfSystemCPU,
     float *selfUserCPU,
     float *childSystemCPU,
@@ -556,21 +556,21 @@ bool OSRegulateResourceUsageGet(
 );
 
 /* Example: Print resource usage */
-long selfRSS, childRSS;
+int64_t selfRSS, childRSS;
 float selfSysCPU, selfUserCPU, childSysCPU, childUserCPU;
 
 if (OSRegulateResourceUsageGet(&selfRSS, &childRSS,
                                &selfSysCPU, &selfUserCPU,
                                &childSysCPU, &childUserCPU)) {
     printf("Self:\n");
-    printf("  Max RSS: %ld MB\n", selfRSS / 1024 / 1024);
+    printf("  Max RSS: %" PRId64 " MB\n", selfRSS / 1024 / 1024);
     printf("  System CPU: %.2f seconds\n", selfSysCPU);
     printf("  User CPU: %.2f seconds\n", selfUserCPU);
     printf("  Total CPU: %.2f seconds\n", selfSysCPU + selfUserCPU);
 
     if (childRSS > 0 || childSysCPU > 0 || childUserCPU > 0) {
         printf("Children:\n");
-        printf("  Max RSS: %ld MB\n", childRSS / 1024 / 1024);
+        printf("  Max RSS: %" PRId64 " MB\n", childRSS / 1024 / 1024);
         printf("  System CPU: %.2f seconds\n", childSysCPU);
         printf("  User CPU: %.2f seconds\n", childUserCPU);
     }
@@ -747,13 +747,13 @@ void printMemoryStatus(void) {
 #endif
 
     /* Get resource usage */
-    long maxRSS, childRSS;
+    int64_t maxRSS, childRSS;
     float sysCPU, userCPU, childSysCPU, childUserCPU;
 
     if (OSRegulateResourceUsageGet(&maxRSS, &childRSS,
                                    &sysCPU, &userCPU,
                                    &childSysCPU, &childUserCPU)) {
-        printf("Max RSS: %ld MB\n", maxRSS / 1024 / 1024);
+        printf("Max RSS: %" PRId64 " MB\n", maxRSS / 1024 / 1024);
         printf("CPU time: %.2fs system, %.2fs user\n", sysCPU, userCPU);
     }
 }
