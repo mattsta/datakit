@@ -1811,8 +1811,8 @@ __attribute__((unused)) static void compressedRepr(multilistFull *ml) {
 
 static void mlInfo(multilistFull *ml) {
 #if ML_TEST_VERBOSE
-    printf("Container length (nodes): %lu\n", ml->count);
-    printf("Container values (elements): %lu\n", ml->values);
+    printf("Container length (nodes): %" PRId32 "\n", ml->count);
+    printf("Container values (elements): %" PRId64 "\n", ml->values);
     if (mlHead(ml)) {
         printf("\t(elements in head: %zu)\n", flexCount(mlHead(ml)->data.fl));
     }
