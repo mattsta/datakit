@@ -1898,7 +1898,6 @@ uint32_t multidictEvictToLimit(multidict *d) {
     uint32_t evicted = 0;
     uint32_t attempts = 0;
     uint32_t deleteFailures = 0;
-    uint32_t lruVictims = 0, randomVictims = 0;
     const uint32_t maxAttempts = multidictCount(d) * 2 + 100; /* Safety limit */
     databox keybox;
     databoxWide keyWide;
@@ -1918,9 +1917,6 @@ uint32_t multidictEvictToLimit(multidict *d) {
         if (d->evictPolicy == MULTIDICT_EVICT_LRU && d->lruEnabled) {
             /* LRU eviction: the coldest entry not yet passed over */
             fromLRU = multidictLRUSelectVictim(d, &lruCands, &keybox, &keyWide);
-            if (fromLRU) {
-                lruVictims++;
-            }
         }
 
         if (!fromLRU) {
@@ -1931,7 +1927,6 @@ uint32_t multidictEvictToLimit(multidict *d) {
                 break;
             }
             mdBoxSettle_(&keybox);
-            randomVictims++;
         }
 
         /* The victim key borrows its bytes from its slot, and the rehash
@@ -1973,15 +1968,6 @@ uint32_t multidictEvictToLimit(multidict *d) {
             if (deleteFailures > 50) {
                 break;
             }
-        }
-
-        /* Debug output every 1000 attempts */
-        if (attempts % 1000 == 0) {
-            printf("      [evict-loop] attempts=%u evicted=%u delFail=%u "
-                   "lruV=%u randV=%u\n",
-                   attempts, evicted, deleteFailures, lruVictims,
-                   randomVictims);
-            fflush(stdout);
         }
     }
 
