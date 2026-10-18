@@ -534,7 +534,17 @@ bool multilistFullPop(multilistFull *ml, mflexState *state, databox *box,
 void multilistFullRotate(multilistFull *ml, mflexState *state[2]);
 flex *multilistFullDump(const multilistFull *ml, mflexState *state);
 void multilistFullSetCompressDepth(multilistFull *ml, uint32_t depth);
+void multilistFullSetCompressDepthWithState(multilistFull *ml,
+                                            mflexState *state, uint32_t depth);
+void multilistFullAppendFlex(multilistFull *ml, flex *fl);
+void multilistFullAppendFlexWithState(multilistFull *ml, mflexState *state,
+                                      flex *fl);
 ```
+
+Setting the depth of a populated list re-applies the depth rule to every node,
+and `AppendFlex` compresses the node the new tail pushes into the interior. The
+plain forms borrow a temporary `mflexState` only when a node actually has to be
+compressed or decompressed; the `WithState` forms use the caller's.
 
 Every tier's `Pop` returns an owned copy of the removed element (see
 `multilistPop` in [MULTILIST.md](MULTILIST.md)), and every tier's `Dump`

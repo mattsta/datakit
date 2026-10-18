@@ -36,7 +36,17 @@ size_t multilistFullBytes(const multilistFull *ml);
 size_t multilistFullBytesActual(const multilistFull *ml);
 
 /* Settings */
+/* Set the compress depth (clamped to 32767) and put every existing node
+ * on the depth rule for it: the 'depth' nodes at each end are never
+ * compressed, and every node between them is compressed; depth 0
+ * decompresses every node.  The list holds no mflexState, so when a node
+ * has to be compressed or decompressed this borrows a temporary one for
+ * the call; when nodes only need retagging, or the depth is unchanged,
+ * nothing is allocated.  A caller that holds a state can pass it to
+ * multilistFullSetCompressDepthWithState instead. */
 void multilistFullSetCompressDepth(multilistFull *ml, uint32_t depth);
+void multilistFullSetCompressDepthWithState(multilistFull *ml,
+                                            mflexState *state, uint32_t depth);
 void multilistFullSetFill(multilistFull *ml, uint32_t fill);
 void multilistFullSetOptions(multilistFull *ml, uint32_t fill, uint32_t depth);
 
@@ -50,8 +60,13 @@ void multilistFullPushByTypeTail(multilistFull *ml, mflexState *state,
                                  const databox *box);
 
 /* Bulk appending */
-/* AppendFlex keeps 'fl' inside new tail. */
+/* AppendFlex keeps 'fl' inside a new tail node and keeps the depth rule:
+ * the node the new tail pushes into the interior is compressed, through a
+ * temporary mflexState that is allocated only when that is needed.
+ * AppendFlexWithState uses the caller's state instead. */
 void multilistFullAppendFlex(multilistFull *ml, flex *fl);
+void multilistFullAppendFlexWithState(multilistFull *ml, mflexState *state,
+                                      flex *fl);
 multilistFull *multilistFullAppendValuesFlex(multilistFull *ml,
                                              mflexState *state, const flex *fl);
 multilistFull *multilistFulllCreateFlex(int fill, int compress,

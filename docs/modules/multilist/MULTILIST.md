@@ -231,6 +231,15 @@ interior nodes with LZ4. Depth 0 disables compression. The depth is stored in an
 8-bit field of the tagged pointer, so the usable range is 0-255;
 `multilistFullSetCompressDepth()` additionally clamps to 32767 internally.
 
+Changing the depth of a populated Full list with
+`multilistFullSetCompressDepth()` puts every existing node on the new rule:
+nodes that become end nodes are decompressed, and nodes that become interior
+are compressed. That needs an `mflexState`, which the call borrows for its own
+duration only when some node has to be compressed or decompressed;
+`multilistFullSetCompressDepthWithState()` uses the caller's state instead.
+`multilistFullAppendFlex()` likewise compresses the node the new tail pushes
+into the interior (`multilistFullAppendFlexWithState()` takes a state).
+
 ### Metadata Functions
 
 ```c

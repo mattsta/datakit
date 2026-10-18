@@ -148,13 +148,91 @@ size_t multilistFullBytesActual(const multilistFull *ml) {
 }
 
 #define COMPRESS_MAX ((1 << 15) - 1)
-void multilistFullSetCompressDepth(multilistFull *ml, uint32_t compress) {
+static uint16_t multilistFullClampDepth_(uint32_t compress) {
     if (compress > COMPRESS_MAX) {
         assert(NULL);
         compress = COMPRESS_MAX;
     }
 
-    ml->compress = compress;
+    return (uint16_t)compress;
+}
+
+DK_STATIC void multilistFullCompressRange__(const multilistFull *ml,
+                                            mflexState *state, mlNodeId lo,
+                                            mlNodeId hi);
+
+/* Whether node 'at' is one of the end nodes the depth rule keeps
+ * uncompressed.  With compression off every node is an end node. */
+static bool multilistFullIsEndNode_(const multilistFull *ml, mlNodeId at) {
+    const mlNodeId depth = (mlNodeId)ml->compress;
+    return depth == 0 || at < depth || at > (ml->count - 1) - depth;
+}
+
+/* Whether putting every node on the depth rule has to compress or
+ * decompress a node, which needs an mflexState: a compressed end node,
+ * or an uncompressed interior node.  Every other change is a retag. */
+static bool multilistFullDepthRuleNeedsState_(const multilistFull *ml) {
+    for (mlNodeId at = 0; at < ml->count; at++) {
+        if (multilistFullIsEndNode_(ml, at) == mflexIsCompressed(getNode(at))) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/* Put every node on the depth rule for the current depth: end nodes are
+ * never compressed and interior nodes are compressed.  'state' may be
+ * NULL only when multilistFullDepthRuleNeedsState_() is false: then every
+ * end node is already uncompressed (mflexSetCompressNever only retags
+ * it) and every interior node is already compressed (left alone). */
+static void multilistFullApplyDepthRule_(const multilistFull *ml,
+                                         mflexState *state) {
+    if (ml->compress == 0) {
+        for (mlNodeId at = 0; at < ml->count; at++) {
+            mflexSetCompressNever(getNodePtr(at), state);
+        }
+
+        return;
+    }
+
+    multilistFullCompressRange__(ml, state, 0, ml->count - 1);
+}
+
+/* Change the compress depth of a list that may hold nodes, using
+ * 'state' to compress or decompress the nodes the new depth moves
+ * across the end/interior boundary. */
+void multilistFullSetCompressDepthWithState(multilistFull *ml,
+                                            mflexState *state,
+                                            uint32_t compress) {
+    assert(state);
+    const uint16_t depth = multilistFullClampDepth_(compress);
+    if (depth == ml->compress) {
+        return;
+    }
+
+    ml->compress = depth;
+    multilistFullApplyDepthRule_(ml, state);
+}
+
+/* Change the compress depth.  The list holds no mflexState, so when a
+ * node has to be compressed or decompressed for the new depth this
+ * borrows a temporary one for the duration of the call; a list whose
+ * nodes only need retagging (an empty list, a single node, or a change
+ * that moves no node across a boundary) allocates nothing. */
+void multilistFullSetCompressDepth(multilistFull *ml, uint32_t compress) {
+    const uint16_t depth = multilistFullClampDepth_(compress);
+    if (depth == ml->compress) {
+        return;
+    }
+
+    ml->compress = depth;
+    if (multilistFullDepthRuleNeedsState_(ml)) {
+        cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
+        multilistFullApplyDepthRule_(ml, state);
+    } else {
+        multilistFullApplyDepthRule_(ml, NULL);
+    }
 }
 
 #define FILL_MAX (flexOptimizationSizeLimits - 1)
@@ -446,14 +524,55 @@ void multilistFullPushByTypeTail(multilistFull *ml, mflexState *state,
     ml->values++;
 }
 
-/* Note: *keeps* 'fl' inside new node. */
-void multilistFullAppendFlex(multilistFull *ml, flex *fl) {
+/* Append 'fl' as a new never-compress tail node, keeping 'fl' itself
+ * as the node's memory.  The depth rule is not re-applied: the caller
+ * does that. */
+DK_STATIC void multilistFullAppendFlexNode__(multilistFull *ml, flex *fl) {
     multilistFullInsertNodeAfter__Empty(ml, mlTailIdx(ml));
 
     ml->values += flexCount(fl);
 
     mflex **node = mlTailPtr(ml);
     *node = mflexConvertFromFlexNoCompress(fl);
+}
+
+/* The node an append moved out of the tail's end zone into the
+ * interior, or -1 if none did (compression off, or too few nodes for an
+ * interior). */
+static mlNodeId multilistFullAppendMovedNode_(const multilistFull *ml) {
+    if (!multilistFullAllowsCompression(ml)) {
+        return -1;
+    }
+
+    const mlNodeId moved = ml->count - 1 - (mlNodeId)ml->compress;
+    if (moved < 0 || multilistFullIsEndNode_(ml, moved)) {
+        return -1;
+    }
+
+    return moved;
+}
+
+/* Note: *keeps* 'fl' inside the new tail node.  The new tail pushes the
+ * node 'compress' places before it into the interior, where it is
+ * compressed through 'state'. */
+void multilistFullAppendFlexWithState(multilistFull *ml, mflexState *state,
+                                      flex *fl) {
+    multilistFullAppendFlexNode__(ml, fl);
+    const mlNodeId moved = multilistFullAppendMovedNode_(ml);
+    if (moved >= 0) {
+        mflexSetCompressAuto(getNodePtr(moved), state);
+    }
+}
+
+/* As multilistFullAppendFlexWithState, borrowing a temporary mflexState
+ * only when a node has to be compressed. */
+void multilistFullAppendFlex(multilistFull *ml, flex *fl) {
+    multilistFullAppendFlexNode__(ml, fl);
+    const mlNodeId moved = multilistFullAppendMovedNode_(ml);
+    if (moved >= 0 && !mflexIsCompressed(getNode(moved))) {
+        cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
+        mflexSetCompressAuto(getNodePtr(moved), state);
+    }
 }
 
 multilistFull *multilistFullNewFromFlexConsumeGrow(void *_ml, mflexState *state,
@@ -481,7 +600,7 @@ multilistFull *multilistFullNewFromFlexConsumeGrow(void *_ml, mflexState *state,
         reallocIncrCountBefore(ml, 0, m0);
 
         ml->values += flexCount(f0);
-        multilistFullAppendFlex(ml, f1);
+        multilistFullAppendFlexNode__(ml, f1);
     }
 
     multilistFullSetDepth(ml, fillLimit, depth);
@@ -497,13 +616,13 @@ multilistFull *multilistFullNewFromFlexConsumeGrow(void *_ml, mflexState *state,
 
         if (iCount == 1) {
             /* inserting flex with one element, so don't split into two nodes */
-            multilistFullAppendFlex(ml, firstHalf);
+            multilistFullAppendFlexNode__(ml, firstHalf);
         } else {
             /* inserting a flex with more than one element, so split! */
             flex *secondHalf = flexSplit(&firstHalf, 1);
 
-            multilistFullAppendFlex(ml, firstHalf);
-            multilistFullAppendFlex(ml, secondHalf);
+            multilistFullAppendFlexNode__(ml, firstHalf);
+            multilistFullAppendFlexNode__(ml, secondHalf);
         }
 
         multilistFullCompressRenew__(ml, state);
@@ -1931,6 +2050,33 @@ static const char *mlfDepthRuleCheck(const multilistFull *ml,
         if (!edge && !mflexIsCompressed(node) &&
             mflexBytesUncompressed(node) > 64 && !mlfNodeIsAutoCompress(node)) {
             return "an interior node is marked never-compress";
+        }
+    }
+
+    return NULL;
+}
+
+/* The strict form of the depth rule, for a list whose nodes were all
+ * just put on it (SetCompressDepth, AppendFlex): end nodes are
+ * uncompressed and never-compress, and interior nodes over 64 bytes are
+ * compressed, not merely on auto compression.  Depth 0 makes every node
+ * an end node.  Returns NULL, or what failed with its node in 'badNode'. */
+static const char *mlfDepthRuleExact(const multilistFull *ml,
+                                     mlNodeId *badNode) {
+    for (mlNodeId at = 0; at < ml->count; at++) {
+        const mflex *node = getNode(at);
+        const bool big = mflexBytesUncompressed(node) > 64;
+        *badNode = at;
+        if (multilistFullIsEndNode_(ml, at)) {
+            if (mflexIsCompressed(node)) {
+                return "an end node is compressed";
+            }
+
+            if (big && mlfNodeIsAutoCompress(node)) {
+                return "an end node is on auto compression";
+            }
+        } else if (big && !mflexIsCompressed(node)) {
+            return "an interior node is not compressed";
         }
     }
 
@@ -3759,6 +3905,158 @@ int multilistFullTest(int argc, char *argv[]) {
                     "%u; each must happen",
                     d, entryNodeDrops, popNodeDrops, rangeNodeDrops);
             }
+        }
+    }
+
+    TEST("SetCompressDepth on a populated list puts every node on the new "
+         "depth rule") {
+        /* Lists of 0 to 13 full nodes go through depth sequences that
+         * raise, lower, repeat and turn off compression, alternating the
+         * stateless call and the WithState call.  After every change
+         * each node must match the rule exactly and the list must match
+         * an array oracle; pushes at both ends must then keep both. */
+        enum { SD_MAX = 1024, SD_NEW = 400000 };
+        static uint32_t want[SD_MAX];
+        static const uint32_t seqs[][7] = {
+            {0, 1, 2, 0, UINT32_MAX},       {0, 2, 1, 3, 0, UINT32_MAX},
+            {1, 1, 4, 1, 0, UINT32_MAX},    {2, 0, 6, 0, UINT32_MAX},
+            {3, 2, 1, 0, 2, 5, UINT32_MAX},
+        };
+        char buf[MLF_SPLIT_LEN + 1];
+        multilistFull *probe = multilistFullNew(FLEX_CAP_LEVEL_512, 0);
+        uint32_t perNode = 0;
+        while (probe->count < 2) {
+            const databox box = mlfSplitBox(perNode, buf);
+            multilistFullPushByTypeTail(probe, s0, &box);
+            perNode++;
+        }
+        multilistFullFree(probe);
+        perNode--;
+
+        const uint32_t sizes[] = {0,           1,           perNode,
+                                  perNode * 2, perNode * 3, perNode * 5 + 1,
+                                  perNode * 8, perNode * 13};
+        bool failed = false;
+        for (size_t z = 0; z < sizeof(sizes) / sizeof(*sizes) && !failed; z++) {
+            for (size_t q = 0; q < sizeof(seqs) / sizeof(*seqs) && !failed;
+                 q++) {
+                uint32_t n = sizes[z];
+                uint32_t nextId = SD_NEW;
+                if (n + 64 > SD_MAX) {
+                    ERR("size %u is too large for the oracle", n);
+                    failed = true;
+                    break;
+                }
+
+                multilistFull *ml =
+                    multilistFullNew(FLEX_CAP_LEVEL_512, seqs[q][0]);
+                for (uint32_t i = 0; i < n; i++) {
+                    const databox box = mlfSplitBox(i, buf);
+                    multilistFullPushByTypeTail(ml, s0, &box);
+                    want[i] = i;
+                }
+
+                for (uint32_t k = 1; seqs[q][k] != UINT32_MAX && !failed; k++) {
+                    const uint32_t d = seqs[q][k];
+                    if (k % 2) {
+                        multilistFullSetCompressDepth(ml, d);
+                    } else {
+                        multilistFullSetCompressDepthWithState(ml, s0, d);
+                    }
+
+                    mlNodeId bad = -1;
+                    const char *why = ml->compress != d
+                                          ? "the depth was not recorded"
+                                          : mlfDepthRuleExact(ml, &bad);
+                    if (!why) {
+                        why = mlfSplitCheck(ml, s, want, n);
+                    }
+
+                    /* The list keeps working on the new depth. */
+                    for (uint32_t p = 0; p < 8 && !why; p++) {
+                        const databox box = mlfSplitBox(nextId, buf);
+                        if (p % 2) {
+                            multilistFullPushByTypeHead(ml, s0, &box);
+                            memmove(&want[1], &want[0], n * sizeof(*want));
+                            want[0] = nextId++;
+                        } else {
+                            multilistFullPushByTypeTail(ml, s0, &box);
+                            want[n] = nextId++;
+                        }
+
+                        n++;
+                    }
+
+                    if (!why) {
+                        why = mlfSplitCheck(ml, s, want, n);
+                    }
+
+                    if (!why) {
+                        why = mlfDepthRuleCheck(ml, &bad);
+                    }
+
+                    if (why) {
+                        ERR("%u elements, sequence %zu, step %u (depth %u, "
+                            "%u nodes): node %d: %s",
+                            sizes[z], q, k, d, (unsigned)ml->count, bad, why);
+                        failed = true;
+                    }
+                }
+
+                multilistFullFree(ml);
+            }
+        }
+    }
+
+    TEST("AppendFlex keeps the depth rule as appended nodes move inward") {
+        /* Each append pushes the node 'depth' places before the new tail
+         * into the interior, which must then be compressed.  Appends of
+         * one-element and multi-element flexes alternate between
+         * AppendFlex and AppendFlexWithState; after each one every node
+         * must match the rule exactly and the list must match an array
+         * oracle. */
+        enum { AF_MAX = 512, AF_APPENDS = 9 };
+        static uint32_t want[AF_MAX];
+        char buf[MLF_SPLIT_LEN + 1];
+        for (uint32_t d = 0; d <= 2; d++) {
+            multilistFull *ml = multilistFullNew(FLEX_CAP_LEVEL_512, d);
+            uint32_t n = 0;
+            for (; n < 6; n++) {
+                const databox box = mlfSplitBox(n, buf);
+                multilistFullPushByTypeTail(ml, s0, &box);
+                want[n] = n;
+            }
+
+            for (uint32_t a = 0; a < AF_APPENDS; a++) {
+                const uint32_t take = a % 3 == 0 ? 1 : 4 + a;
+                flex *fl = flexNew();
+                for (uint32_t k = 0; k < take; k++) {
+                    const databox box = mlfSplitBox(n, buf);
+                    flexPushByType(&fl, &box, FLEX_ENDPOINT_TAIL);
+                    want[n] = n;
+                    n++;
+                }
+
+                if (a % 2) {
+                    multilistFullAppendFlexWithState(ml, s0, fl);
+                } else {
+                    multilistFullAppendFlex(ml, fl);
+                }
+
+                mlNodeId bad = -1;
+                const char *why = mlfDepthRuleExact(ml, &bad);
+                if (!why) {
+                    why = mlfSplitCheck(ml, s, want, n);
+                }
+
+                if (why) {
+                    ERR("depth %u append %u (%u nodes): node %d: %s", d, a,
+                        (unsigned)ml->count, bad, why);
+                    break;
+                }
+            }
+
+            multilistFullFree(ml);
         }
     }
 
