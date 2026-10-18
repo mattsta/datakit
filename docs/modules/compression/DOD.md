@@ -54,6 +54,12 @@ Decompression:
   value[i] = value[i-1] + delta[i]
 ```
 
+All of this arithmetic is done modulo 2^64 (in `uint64_t`). Every `int64_t`
+sequence round-trips exactly, including `INT64_MIN`/`INT64_MAX` and steps
+whose deltas do not fit in `int64_t`, such as alternating between the two
+ends. The stored delta-of-delta is the true one reduced to its `int64_t`
+residue, which equals the true value whenever that fits.
+
 ### Variable-Length Encoding
 
 DOD uses hierarchical encoding based on the magnitude of the delta-of-delta:
@@ -714,13 +720,17 @@ The encoding uses overlapping ranges for smooth fallback:
 
 ```c
 Range 0:  [0, 0]              (1 bit)
-Range 7:  [-64, 63]           (9 bits)
-Range 9:  [-320, 319]         (12 bits)
-Range 12: [-2368, 2367]       (16 bits)
-Range V8: [-2624, 2623]       (16 bits)
+Range 7:  [-64, 64]           (9 bits)
+Range 9:  [-320, 320]         (12 bits)
+Range 12: [-2368, 2368]       (16 bits)
+Range V8: [-2624, 2624]       (16 bits)
 ...
 Range V64: full int64_t       (72 bits)
 ```
+
+The payload of each range stores the magnitude minus the smallest
+magnitude the range can hold, so `100` + `000000` is ±1 and `1100` +
+`00000000` is ±65.
 
 Each range includes all smaller ranges, ensuring optimal encoding.
 

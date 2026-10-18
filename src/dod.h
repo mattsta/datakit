@@ -37,6 +37,10 @@ typedef struct dodReader {
     size_t valuesRead;   /* Count of values decoded so far */
 } dodReader;
 
+/* Every int64_t sequence round-trips exactly, including INT64_MIN and
+ * INT64_MAX neighbours and steps that do not fit in int64_t: the delta
+ * math is modulo 2^64, so the stored delta-of-delta is the true one
+ * reduced to its int64_t residue (equal to it whenever it fits). */
 dodVal dodGet(const dod *d, size_t *consumedBits, dodVal originalStartVal,
               dodVal currentVal, size_t valueOffsetToReturn);
 void dodAppend(dod *d, dodVal t0, dodVal t1, dodVal newVal,

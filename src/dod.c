@@ -162,17 +162,28 @@ static const dodFormat dodBitCategory[] = {
 /* ====================================================================
  * Core delta math
  * ==================================================================== */
-#define delta(t_n, t_n_1, t_n_0) (((t_n) - (t_n_1)) - ((t_n_1) - (t_n_0)))
-//    (((int64_t)(t_n) - (t_n_1)) - ((int64_t)(t_n_1) - (t_n_2)))
-//    ((int64_t)((t_n) - (t_n_1)) - (int64_t)((t_n_1) - (t_n_2)))
+/* Delta-of-delta arithmetic runs in uint64_t (arithmetic modulo 2^64).
+ * Encode and decode are then exact inverses for every int64_t input,
+ * including sequences whose deltas do not fit in int64_t: the stored
+ * value is the true delta-of-delta reduced to its int64_t residue, and
+ * decoding adds it back modulo 2^64. Whenever the true delta-of-delta
+ * fits in int64_t, the residue equals it. */
+static inline int64_t dodDelta(const dodVal t_n, const dodVal t_n_1,
+                               const dodVal t_n_0) {
+    const uint64_t n = (uint64_t)t_n;
+    const uint64_t n1 = (uint64_t)t_n_1;
+    const uint64_t n0 = (uint64_t)t_n_0;
+    return (int64_t)((n - n1) - (n1 - n0));
+}
 
-/* The delta calculation was this, but it caused signed overflows on
- * subtraction with big numbers:
- *      ((int64_t)((t_n) - (t_n_1)) - (int64_t)((t_n_1) - (t_n_2)))
- */
-
-#define undelta(delta_, t_n_1, t_n_2)                                          \
-    (((delta_) + (t_n_1)) + ((t_n_1) - (t_n_2)))
+/* Inverse of dodDelta(): 'delta' is the delta-of-delta as a uint64_t
+ * residue (a negative delta-of-delta is its two's complement). */
+static inline dodVal dodUndelta(const uint64_t delta, const dodVal t_n_1,
+                                const dodVal t_n_0) {
+    const uint64_t n1 = (uint64_t)t_n_1;
+    const uint64_t n0 = (uint64_t)t_n_0;
+    return (dodVal)((delta + n1) + (n1 - n0));
+}
 
 /* ====================================================================
  * Get one value from a dod given previous conditions
@@ -267,15 +278,16 @@ dodVal dodGet(const dod *restrict const d, size_t *restrict consumedBits,
     dodVal t0 = 0;
     dodVal t1 = originalStartVal;
 
-#define UNDELTA(delta) undelta(delta, t1, t0)
+#define UNDELTA(delta) dodUndelta((uint64_t)(delta), t1, t0)
 
+/* The magnitude (boost + payload) reaches 2^63 for INT64_MIN, so it is
+ * formed and negated in uint64_t. */
 #define UNDELTA_BITS_BOOST(boost, valBits)                                     \
-    UNDELTA(((int64_t)boost) +                                                 \
-            (int64_t)varintBitstreamGet(d, *consumedBits, valBits))
+    UNDELTA((uint64_t)(boost) + varintBitstreamGet(d, *consumedBits, valBits))
 
 #define UNDELTA_BITS_BOOST_NEGATIVE(boost, valBits)                            \
-    UNDELTA(-(((int64_t)boost) +                                               \
-              (int64_t)varintBitstreamGet(d, *consumedBits, valBits)))
+    UNDELTA((uint64_t)0 - ((uint64_t)(boost) +                                 \
+                           varintBitstreamGet(d, *consumedBits, valBits)))
 
 Dispatch:
     while (true) {
@@ -521,8 +533,8 @@ IDispatch:
 #define ICONSUME_UPDATE_CONSUME(boost, typeBits, dataBits)                     \
     do {                                                                       \
         consumedBits += (typeBits); /* jump over type bits */                  \
-        currentVal =                                                           \
-            boost + (int64_t)varintBitstreamGet(d, consumedBits, dataBits);    \
+        currentVal = (int64_t)((uint64_t)(boost) +                             \
+                               varintBitstreamGet(d, consumedBits, dataBits)); \
         consumedBits += (dataBits); /* jump over data bits */                  \
     } while (0)
 
@@ -530,7 +542,9 @@ IDispatch:
     do {                                                                       \
         consumedBits += (typeBits); /* jump over type bits */                  \
         currentVal =                                                           \
-            -(boost + (int64_t)varintBitstreamGet(d, consumedBits, dataBits)); \
+            (int64_t)((uint64_t)0 -                                            \
+                      ((uint64_t)(boost) +                                     \
+                       varintBitstreamGet(d, consumedBits, dataBits)));        \
         consumedBits += (dataBits); /* jump over data bits */                  \
     } while (0)
 
@@ -720,7 +734,7 @@ void dodAppend(dod *const d, const dodVal t0, const dodVal t1,
            (ssize_t)newVal);
 #endif
 
-    const int64_t dval = delta(newVal, t1, t0);
+    const int64_t dval = dodDelta(newVal, t1, t0);
 
 #if 0
     printf("Conforming: %" PRId64 "\n", dval);
@@ -820,14 +834,14 @@ void dodInitFromExisting(dodWriter *const w, const dod *d) {
         _varintBitstreamRestoreSigned(t1, 16);
         break;
     case DOD_FLOOR_NS_HR_4:
-        w->t[0] = varintBitstreamGet(d, w->usedBits, 64);
+        w->t[0] = (dodVal)varintBitstreamGet(d, w->usedBits, 64);
         w->usedBits += 64;
         t1 = varintBitstreamGet(d, w->usedBits, 45);
         w->usedBits += 45;
         _varintBitstreamRestoreSigned(t1, 45);
         break;
     case DOD_FLOOR_NS_HR_12:
-        w->t[0] = varintBitstreamGet(d, w->usedBits, 64);
+        w->t[0] = (dodVal)varintBitstreamGet(d, w->usedBits, 64);
         w->usedBits += 64;
         t1 = varintBitstreamGet(d, w->usedBits, 46);
         w->usedBits += 46;
@@ -835,7 +849,8 @@ void dodInitFromExisting(dodWriter *const w, const dod *d) {
         break;
     }
 
-    w->t[1] = w->t[0] + t1;
+    /* Modulo 2^64, like the rest of the delta math */
+    w->t[1] = (dodVal)((uint64_t)w->t[0] + (uint64_t)t1);
 }
 
 /* NOTE: 'vals' must have length >= 2 because we ALWAYS write [0] AND [1] */
@@ -1091,6 +1106,152 @@ static int testBits(const uint8_t typeBits, const uint8_t dataBits,
     return err;
 }
 
+/* Reference encoder, written from the format description rather than
+ * from dodAppend(): the delta-of-delta is computed exactly in 128 bits
+ * and reduced to its int64_t residue, the magnitude is kept in 128 bits,
+ * and bits are written one at a time, most significant first. */
+typedef struct dodModelCategory {
+    uint8_t metaBits;
+    uint8_t valBits;
+    uint8_t code; /* positive designator; +1 is the negative one */
+} dodModelCategory;
+
+static const dodModelCategory dodModelCategories[] = {
+    {3, 6, 0x04},  {4, 8, 0x0c},  {5, 11, 0x1c}, {8, 8, 0xf0},
+    {8, 16, 0xf2}, {8, 24, 0xf4}, {8, 32, 0xf6}, {8, 40, 0xf8},
+    {8, 48, 0xfa}, {8, 56, 0xfc}, {8, 64, 0xfe}};
+
+static void dodModelPutBits(uint64_t *buf, size_t *pos, const uint32_t nbits,
+                            const uint64_t val) {
+    for (uint32_t b = nbits; b-- > 0;) {
+        if ((val >> b) & 1) {
+            buf[*pos / 64] |= 1ULL << (63 - (*pos % 64));
+        }
+
+        (*pos)++;
+    }
+}
+
+static void dodModelAppend(uint64_t *buf, size_t *pos, const dodVal t0,
+                           const dodVal t1, const dodVal tn) {
+    const __int128 two63 = (__int128)1 << 63;
+    const __int128 two64 = (__int128)1 << 64;
+    __int128 r = ((__int128)tn - t1) - ((__int128)t1 - t0);
+    while (r >= two63) {
+        r -= two64;
+    }
+
+    while (r < -two63) {
+        r += two64;
+    }
+
+    if (r == 0) {
+        (*pos)++; /* a single zero bit */
+        return;
+    }
+
+    const __int128 mag = r < 0 ? -r : r;
+    __int128 base = 1; /* smallest magnitude of the current category */
+    for (size_t k = 0; k < COUNT_ARRAY(dodModelCategories); k++) {
+        const dodModelCategory *c = &dodModelCategories[k];
+        const __int128 span = (__int128)1 << c->valBits;
+        if (mag < base + span) {
+            dodModelPutBits(buf, pos, c->metaBits, c->code + (r < 0 ? 1 : 0));
+            dodModelPutBits(buf, pos, c->valBits, (uint64_t)(mag - base));
+            return;
+        }
+
+        base += span;
+    }
+
+    assert(NULL && "magnitude outside every category");
+}
+
+/* Encode 'values' with dodAppend() and with the reference model, require
+ * identical bitstreams, then decode with dodGet(), dodReader and the
+ * absolute-offset dodGet() form and require the original values back. */
+static int dodCheckRoundTrip(const char *what, const dodVal *values,
+                             const size_t count) {
+    int err = 0;
+    assert(count >= 2);
+
+    /* 72 bits per value worst case, plus a slot of slack for the
+     * two-slot split write at the end */
+    const size_t slots = ((count * 72) / 64) + 2;
+    cleanerName(zfree, Dods) dod *bits = zcalloc(slots, sizeof(*bits));
+    cleanerName(zfree, Dods) uint64_t *model = zcalloc(slots, sizeof(*model));
+
+    size_t bitsUsed = 0;
+    size_t modelBits = 0;
+    for (size_t i = 2; i < count; i++) {
+        dodAppend(bits, values[i - 2], values[i - 1], values[i], &bitsUsed);
+        dodModelAppend(model, &modelBits, values[i - 2], values[i - 1],
+                       values[i]);
+    }
+
+    if (bitsUsed != modelBits) {
+        ERR("%s: dodAppend used %zu bits but the model used %zu", what,
+            bitsUsed, modelBits);
+    }
+
+    for (size_t s = 0; s < slots; s++) {
+        if (bits[s] != model[s]) {
+            ERR("%s: slot %zu is 0x%016" PRIx64 " but the model wrote "
+                "0x%016" PRIx64,
+                what, s, bits[s], model[s]);
+            break;
+        }
+    }
+
+    dodReader r;
+    dodReaderInit(&r, values[0], values[1]);
+    for (size_t i = 2; i < count; i++) {
+        const dodVal got = dodReaderNext(&r, bits);
+        if (got != values[i]) {
+            ERR("%s: [%zu] dodReaderNext gave %" PRId64 ", expected %" PRId64,
+                what, i, got, values[i]);
+            break;
+        }
+    }
+
+    if (r.consumedBits != bitsUsed) {
+        ERR("%s: reader consumed %zu bits, writer used %zu", what,
+            r.consumedBits, bitsUsed);
+    }
+
+    /* dodGet() with an absolute offset replays from the start */
+    size_t consumedBits = 0;
+    const dodVal last =
+        dodGet(bits, &consumedBits, values[0], values[1], count - 2);
+    if (last != values[count - 1]) {
+        ERR("%s: dodGet(offset %zu) gave %" PRId64 ", expected %" PRId64, what,
+            count - 2, last, values[count - 1]);
+    }
+
+    return err;
+}
+
+/* Build a sequence whose delta-of-deltas are exactly 'dods' (modulo 2^64),
+ * starting from v0 and v1. */
+static void dodSequenceFromDods(dodVal *out, const dodVal v0, const dodVal v1,
+                                const int64_t *dods, const size_t ndods) {
+    out[0] = v0;
+    out[1] = v1;
+    for (size_t i = 0; i < ndods; i++) {
+        const uint64_t prev = (uint64_t)out[i + 1];
+        const uint64_t delta = prev - (uint64_t)out[i];
+        out[i + 2] = (dodVal)(prev + delta + (uint64_t)dods[i]);
+    }
+}
+
+static uint64_t dodTestRand(uint64_t *state) {
+    /* splitmix64 */
+    uint64_t z = (*state += 0x9e3779b97f4a7c15ULL);
+    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+    return z ^ (z >> 31);
+}
+
 int dodTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -1315,6 +1476,140 @@ int dodTest(int argc, char *argv[]) {
                         i, values[i], retrieved);
                 }
             }
+        }
+    }
+
+    TEST("full int64 range: extremes round trip exactly") {
+        static const dodVal altMinMax[] = {INT64_MIN, INT64_MAX, INT64_MIN,
+                                           INT64_MAX, INT64_MIN, INT64_MAX,
+                                           INT64_MIN, INT64_MAX};
+        static const dodVal altMaxMin[] = {INT64_MAX, INT64_MIN, INT64_MAX,
+                                           INT64_MIN, INT64_MAX, INT64_MIN,
+                                           INT64_MAX, INT64_MIN};
+        static const dodVal mixed[] = {
+            0,         INT64_MAX,     INT64_MIN,     0,
+            -1,        INT64_MIN,     INT64_MAX,     1,
+            INT64_MIN, INT64_MIN,     INT64_MAX,     INT64_MAX,
+            0,         INT64_MIN + 1, INT64_MAX - 1, INT64_MIN};
+        static const dodVal constMin[] = {INT64_MIN, INT64_MIN, INT64_MIN,
+                                          INT64_MIN, INT64_MIN};
+        static const dodVal constMax[] = {INT64_MAX, INT64_MAX, INT64_MAX,
+                                          INT64_MAX, INT64_MAX};
+        static const dodVal wrapRamp[] = {INT64_MAX - 2, INT64_MAX - 1,
+                                          INT64_MAX,     INT64_MIN,
+                                          INT64_MIN + 1, INT64_MIN + 2};
+        /* deltas of +2^62 then -6755390026418175967: a true
+         * delta-of-delta below INT64_MIN */
+        static const dodVal bigDeltas[] = {0, 4611686018427387904LL,
+                                           -2143704007990788063LL,
+                                           7079668028863987745LL, INT64_MIN};
+
+        err += dodCheckRoundTrip("alternating MIN/MAX", altMinMax,
+                                 COUNT_ARRAY(altMinMax));
+        err += dodCheckRoundTrip("alternating MAX/MIN", altMaxMin,
+                                 COUNT_ARRAY(altMaxMin));
+        err += dodCheckRoundTrip("mixed extremes", mixed, COUNT_ARRAY(mixed));
+        err +=
+            dodCheckRoundTrip("constant MIN", constMin, COUNT_ARRAY(constMin));
+        err +=
+            dodCheckRoundTrip("constant MAX", constMax, COUNT_ARRAY(constMax));
+        err += dodCheckRoundTrip("ramp across the wrap", wrapRamp,
+                                 COUNT_ARRAY(wrapRamp));
+        err += dodCheckRoundTrip("deltas past int64", bigDeltas,
+                                 COUNT_ARRAY(bigDeltas));
+    }
+
+    TEST("full int64 range: every category boundary and the int64 ends") {
+        int64_t dods[128];
+        size_t ndods = 0;
+
+        /* Category k holds magnitudes [base_k, base_k + 2^valBits) */
+        int64_t base = 1;
+        for (size_t k = 0; k + 1 < COUNT_ARRAY(dodModelCategories); k++) {
+            const int64_t edges[] = {base - 1, base, base + 1};
+            for (size_t e = 0; e < COUNT_ARRAY(edges); e++) {
+                dods[ndods++] = edges[e];
+                dods[ndods++] = -edges[e];
+            }
+
+            base += (int64_t)1 << dodModelCategories[k].valBits;
+        }
+
+        /* 'base' is now where the 64-bit category starts */
+        const int64_t ends[] = {base - 1,      base,          base + 1,
+                                -(base - 1),   -base,         -(base + 1),
+                                INT64_MAX,     INT64_MIN,     INT64_MAX - 1,
+                                INT64_MIN + 1, INT64_MIN + 2, 0};
+        for (size_t e = 0; e < COUNT_ARRAY(ends); e++) {
+            dods[ndods++] = ends[e];
+        }
+
+        assert(ndods + 2 <= COUNT_ARRAY(dods));
+
+        const dodVal starts[][2] = {{0, 0},
+                                    {INT64_MAX, INT64_MAX},
+                                    {INT64_MIN, INT64_MIN},
+                                    {INT64_MIN, INT64_MAX},
+                                    {1700000000000LL, 1700000001000LL}};
+        dodVal seq[130];
+        for (size_t s = 0; s < COUNT_ARRAY(starts); s++) {
+            dodSequenceFromDods(seq, starts[s][0], starts[s][1], dods, ndods);
+
+            /* The generated sequence must carry exactly these dods */
+            for (size_t i = 0; i < ndods; i++) {
+                const int64_t got = dodDelta(seq[i + 2], seq[i + 1], seq[i]);
+                if (got != dods[i]) {
+                    ERR("start %zu: dod[%zu] is %" PRId64 ", built %" PRId64, s,
+                        i, got, dods[i]);
+                }
+            }
+
+            err += dodCheckRoundTrip("category boundaries", seq, ndods + 2);
+        }
+    }
+
+    TEST("full int64 range: random differential against the model") {
+        uint64_t rng = 0x243f6a8885a308d3ULL;
+        const size_t count = 4096;
+        cleanerName(zfree, I64) dodVal *values =
+            zcalloc(count, sizeof(*values));
+
+        for (size_t round = 0; round < 8; round++) {
+            for (size_t i = 0; i < count; i++) {
+                const uint64_t pick = dodTestRand(&rng);
+                const uint64_t prev = i ? (uint64_t)values[i - 1] : 0;
+                switch (pick % 5) {
+                case 0: /* any int64 */
+                    values[i] = (dodVal)dodTestRand(&rng);
+                    break;
+                case 1: { /* an int64 end or its neighbour */
+                    static const dodVal edge[] = {INT64_MIN, INT64_MIN + 1,
+                                                  INT64_MAX, INT64_MAX - 1,
+                                                  0,         -1};
+                    values[i] = edge[(pick >> 8) % COUNT_ARRAY(edge)];
+                    break;
+                }
+                case 2: /* small step, wrapping */
+                    values[i] = (dodVal)(prev + ((pick >> 8) % 4096) - 2048);
+                    break;
+                case 3: { /* step of a random width, wrapping */
+                    const uint32_t width = (uint32_t)((pick >> 8) % 64);
+                    const uint64_t step =
+                        dodTestRand(&rng) & (~0ULL >> (63 - width));
+                    values[i] =
+                        (dodVal)((pick >> 16) & 1 ? prev + step : prev - step);
+                    break;
+                }
+                default: /* repeat the last step: zero dod */
+                    values[i] =
+                        i >= 2
+                            ? (dodVal)(prev + (prev - (uint64_t)values[i - 2]))
+                            : (dodVal)prev;
+                    break;
+                }
+            }
+
+            err += dodCheckRoundTrip("random differential", values, count);
         }
     }
 
