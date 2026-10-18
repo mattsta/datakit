@@ -185,9 +185,10 @@ return (head <= key) ? 1 : 0;
 ```
 
 So a Medium lookup is O(1) routing plus one binary search over roughly half the
-rows. The head of `map[1]` is decoded into a `databoxBig` temporary (resolving
-a reference through the atom container on surrogate-keyed maps), so a
-96/128-bit head key is compared by value.
+rows. The head of `map[1]` is decoded into a plain `databox` temporary with a
+stack `databoxWide` slot (resolving a reference through the atom container on
+surrogate-keyed maps), so a 96/128-bit head key is compared by value and a
+narrow one never touches the slot.
 
 ### Characteristics
 
@@ -267,7 +268,7 @@ From `multimapFullInternal.h`:
 struct multimapFull {
     multiarray *map;           /* flex *; maps in low->high order */
     multiarray *middle;        /* multimapFullMiddle; middle byte offsets */
-    multiarray *rangeBox;      /* databoxBig; head key of maps 1..N-1 */
+    multiarray *rangeBox;      /* databox; head key of maps 1..N-1 */
     multimapFullIdx count;     /* number of submaps */
     multimapFullValues values; /* total rows across every submap */
     multimapElements elementsPerEntry;
@@ -427,11 +428,21 @@ into the submap's flex. Any in-submap mutation that can realloc the flex -
 replace, resize, field increment - refreshes the owning rangeBox afterwards, so
 a stale box can never survive into the next range search.
 
-Each range box is a 32-byte `databoxBig`, so a 96/128-bit head key is stored
-inline in its `extra` (`big = 1`, never heap-owned). The multiarray moves
-entries as submaps are added, removed and regrouped, which leaves that inline
-pointer aimed at the old slot, so every access goes through `getRangeBox()`,
-which re-aims it.
+Each range box is a 16-byte `databox`. A 96/128-bit head key points at a
+16-byte heap payload the map owns (`big = 1`, `allocated = 1`):
+
+- A refresh reuses that payload in place, so it allocates only when a head key
+  changes from narrow to wide and frees only when it changes back. Refreshes
+  run on every insert and delete that can change a submap's head, not only on
+  splits and merges.
+- Every removal frees it: deleting a submap (including `map[0]`, which drops
+  `rangeBox[0]`), merging, trimming, `multimapReset()` and `multimapFree()`.
+- The multiarray moves boxes as submaps are added, removed and regrouped, but
+  the heap payload stays put, so reading a range box never writes to it.
+  Concurrent readers of a map with wide boundary keys share the boxes
+  read-only.
+- `multimapCopy()` rebuilds every range box from the copied submaps' heads, so
+  a copy never shares a payload.
 
 ## multimapAtom
 

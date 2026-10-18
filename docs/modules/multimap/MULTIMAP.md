@@ -148,8 +148,16 @@ rule: **the owner of the output box sets up its wide capability**.
   the payload pointer.
 - A zeroed box receives only the type (`SIGNED_128` / `UNSIGNED_128`, with
   `data.ptr == NULL`). An uninitialized box is a caller bug.
-- `multimapDeleteRandomValue()` copies through `flexGetByTypeCopy()`, so its
-  boxes need an initialized `big` flag too.
+- `multimapDeleteRandomValue()` is a removing read, like `multilistPop()`: a
+  wide value is written in band into an armed box, and otherwise comes back
+  in a 16-byte heap payload the caller owns (`big = 1`, `allocated = 1`).
+  BYTES of 8 bytes or less come back embedded (`DATABOX_BYTES_EMBED`, nothing
+  owned) and longer strings as heap copies. Release each box with
+  `databoxFreeData()`; its `big` flag must be initialized too.
+- Two removing paths report a wide value type-only (`data.ptr == NULL`,
+  `big = 0`) whatever the box holds, as documented exceptions:
+  `multimapInsertReplacing()`'s `replacedOut` and the `foundReference` of
+  `multimapDeleteWithFound()` / `multimapDeleteWithReference()`.
 
 ```c
 databoxBig val;
@@ -556,7 +564,8 @@ bool multimapDeleteRandomValue(multimap **m, bool fromTail,
 
 `multimapDeleteRandomValue()` takes the same full-width `deleted` array contract
 as `multimapRandomValue()`, but the values it hands back are **copies**, so they
-stay valid after the row is gone.
+stay valid after the row is gone (short strings embedded, longer strings and
+unarmed wide values on the heap; see "96/128-bit Values").
 
 ```c
 databox key = databoxNewBytesString("username");
@@ -681,10 +690,11 @@ bool multimapProcessPredicate(const multimapPredicate *p, const databox *value);
 Returning `false` from the walker also stops the walk.
 
 Unlike `multimapDeleteByPredicate()`, this path supports every
-`multimapCondition`. The walk decodes each row into its own `databoxBig`
-storage (16 columns on the stack, wider rows on the heap), so the walker
-receives 96/128-bit values with live payloads. The boxes are reused for the
-next row: copy anything the walker keeps.
+`multimapCondition`. The walk decodes each row into its own boxes plus one
+`databoxWide` slot per column (16 columns on the stack, wider rows on the
+heap), so the walker receives 96/128-bit values with live payloads and `big`
+set exactly on them. The boxes and slots are reused for the next row: copy
+anything the walker keeps.
 
 ```c
 static bool printElement(void *userData, const databox *elements[]) {

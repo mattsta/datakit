@@ -12,7 +12,8 @@
 #include "cleaner.h"
 #include "timeUtil.h"
 
-defcleanerName(databoxBig *, zfree, DataboxBigs);
+defcleanerName(databox *, zfree, Databoxes);
+defcleanerName(databoxWide *, zfree, DataboxWides);
 defcleanerName(databox **, zfree, DataboxPtrs);
 defcleanerName(int64_t *, zfree, Int64);
 defcleanerName(int32_t *, zfree, Int32);
@@ -532,8 +533,9 @@ int64_t multimapFieldIncr(multimap **m, const databox *key,
     }
 
     /* Step 3: read offset field */
-    databoxBig current;
-    flexGetByTypeBig(me.fe, &current);
+    databox current;
+    databoxWide currentWide;
+    flexGetByTypeInto(me.fe, &current, &currentWide);
 
     /* Nothing to change... */
     if (incrBy == 0) {
@@ -577,7 +579,7 @@ int64_t multimapFieldIncr(multimap **m, const databox *key,
 #endif
 
     /* Step 5: replace entry */
-    multimapReplaceEntry(m, &me, (const databox *)&current);
+    multimapReplaceEntry(m, &me, &current);
 
     /* Step 6: return updated count */
     return current.data.i;
@@ -711,59 +713,45 @@ iterFull:
 }
 
 /* Rows decoded into library-owned storage (ProcessUntil and the key set
- * operations).  The tier iterators decode in place through the caller's
- * boxes, so each box is a databoxBig that is reset and re-armed before
- * every row: a narrow element overwrites the payload pointer, and a later
- * 96/128-bit element decoded into the same box would be written through
- * it.  After the row, 'big' is kept only on 96/128-bit values. */
-DK_INLINE_ALWAYS void multimapRowArm_(databoxBig *const row,
-                                      const size_t elementsPerEntry) {
-    for (size_t i = 0; i < elementsPerEntry; i++) {
-        *(databox *)&row[i] = (databox){{0}};
-        DATABOX_BIG_INIT(&row[i]);
-    }
-}
-
-DK_INLINE_ALWAYS void multimapRowSettle_(databoxBig *const row,
-                                         const size_t elementsPerEntry) {
-    for (size_t i = 0; i < elementsPerEntry; i++) {
-        row[i].big = row[i].type == DATABOX_SIGNED_128 ||
-                     row[i].type == DATABOX_UNSIGNED_128;
-    }
-}
-
-/* Aim elements[i] at row[i]. */
-DK_INLINE_ALWAYS void multimapRowBind_(databoxBig *const row,
+ * operations).  Each row is plain boxes plus one databoxWide slot per
+ * column, decoded through the tier's WithSlots iterator: a 96/128-bit
+ * element borrows its column's slot with big = 1, and a narrow element
+ * writes only type, data and len.  The boxes start zeroed, and before
+ * each row any 'big' left by a wide element is cleared, so 'big' is set
+ * exactly on 96/128-bit values.  Narrow rows never take that branch. */
+DK_INLINE_ALWAYS void multimapRowBind_(databox *const row,
                                        databox **const elements,
                                        const size_t elementsPerEntry) {
     for (size_t i = 0; i < elementsPerEntry; i++) {
-        elements[i] = (databox *)&row[i];
+        row[i] = (databox){{0}};
+        elements[i] = &row[i];
     }
 }
 
 typedef bool(multimapTierIteratorNext)(multimapIterator *iter,
-                                       databox *elements[]);
+                                       databox *elements[], databoxWide *slots);
 
 DK_INLINE_ALWAYS bool multimapIteratorNextRow_(multimapIterator *const iter,
                                                multimapTierIteratorNext *next,
                                                databox **const elements,
-                                               databoxBig *const row) {
-    multimapRowArm_(row, iter->elementsPerEntry);
-    if (!next(iter, elements)) {
-        return false;
+                                               databox *const row,
+                                               databoxWide *const slots) {
+    for (size_t i = 0; i < iter->elementsPerEntry; i++) {
+        if (unlikely(row[i].big)) {
+            row[i].big = false;
+        }
     }
 
-    multimapRowSettle_(row, iter->elementsPerEntry);
-    return true;
+    return next(iter, elements, slots);
 }
 
 /* One loop per tier so the tier's Next is a direct (inlinable) call. */
 DK_INLINE_ALWAYS size_t multimapProcessRows_(
     multimapIterator *const iter, multimapTierIteratorNext *next,
     const multimapPredicate *p, multimapElementWalker *walker, void *userData,
-    databox **const elements, databoxBig *const row) {
+    databox **const elements, databox *const row, databoxWide *const slots) {
     size_t processed = 0;
-    while (multimapIteratorNextRow_(iter, next, elements, row) &&
+    while (multimapIteratorNextRow_(iter, next, elements, row, slots) &&
            multimapProcessPredicate(p, elements[0])) {
         processed++;
         if (!walker(userData, (const databox **)elements)) {
@@ -791,36 +779,41 @@ size_t multimapProcessUntil(multimap *m, const multimapPredicate *p,
      * as usual. */
     const bool useHeapElements = iter.elementsPerEntry > 16 ? true : false;
 
-    databoxBig rowStack[16];
+    databox rowStack[16];
     databox *elementsStack[16];
-    databoxBig *row = rowStack;
+    databoxWide slotsStack[16];
+    databox *row = rowStack;
     databox **elements = elementsStack;
+    databoxWide *slots = slotsStack;
 
-    cleanerName(zfree, DataboxBigs) databoxBig *heapRow = NULL;
+    cleanerName(zfree, Databoxes) databox *heapRow = NULL;
     cleanerName(zfree, DataboxPtrs) databox **heapElementPtrs = NULL;
+    cleanerName(zfree, DataboxWides) databoxWide *heapSlots = NULL;
     if (useHeapElements) {
         /* The iterator populates through elements[0..N-1], so the heap
-         * path needs BOTH an array of N boxes AND an array of N
-         * pointers into it. */
+         * path needs an array of N boxes, an array of N pointers into
+         * it, and N wide slots. */
         heapRow = zcalloc(iter.elementsPerEntry, sizeof(*heapRow));
         heapElementPtrs =
             zcalloc(iter.elementsPerEntry, sizeof(*heapElementPtrs));
+        heapSlots = zcalloc(iter.elementsPerEntry, sizeof(*heapSlots));
         row = heapRow;
         elements = heapElementPtrs;
+        slots = heapSlots;
     }
 
     multimapRowBind_(row, elements, iter.elementsPerEntry);
 
     switch (multimapType_(m)) {
     case MULTIMAP_TYPE_SMALL:
-        return multimapProcessRows_(&iter, multimapSmallIteratorNext, p, walker,
-                                    userData, elements, row);
+        return multimapProcessRows_(&iter, multimapSmallIteratorNextWithSlots,
+                                    p, walker, userData, elements, row, slots);
     case MULTIMAP_TYPE_MEDIUM:
-        return multimapProcessRows_(&iter, multimapMediumIteratorNext, p,
-                                    walker, userData, elements, row);
+        return multimapProcessRows_(&iter, multimapMediumIteratorNextWithSlots,
+                                    p, walker, userData, elements, row, slots);
     case MULTIMAP_TYPE_FULL:
-        return multimapProcessRows_(&iter, multimapFullIteratorNext, p, walker,
-                                    userData, elements, row);
+        return multimapProcessRows_(&iter, multimapFullIteratorNextWithSlots, p,
+                                    walker, userData, elements, row, slots);
     default:
         assert(NULL);
         __builtin_unreachable();
@@ -835,59 +828,76 @@ void multimapIntersectKeys(multimap **restrict dst,
     const size_t epeB = b->elementsPerEntry;
 
     /* Use stack for small element counts, heap for larger to avoid overflow */
-    databoxBig eaStack_[MULTIMAP_STACK_THRESHOLD];
-    databoxBig ebStack_[MULTIMAP_STACK_THRESHOLD];
+    databox eaStack_[MULTIMAP_STACK_THRESHOLD];
+    databox ebStack_[MULTIMAP_STACK_THRESHOLD];
     databox *eaStack[MULTIMAP_STACK_THRESHOLD];
     databox *ebStack[MULTIMAP_STACK_THRESHOLD];
+    databoxWide waStack[MULTIMAP_STACK_THRESHOLD];
+    databoxWide wbStack[MULTIMAP_STACK_THRESHOLD];
 
-    cleanerName(zfree, DataboxBigs) databoxBig *eaHeap_ = NULL;
-    cleanerName(zfree, DataboxBigs) databoxBig *ebHeap_ = NULL;
+    cleanerName(zfree, Databoxes) databox *eaHeap_ = NULL;
+    cleanerName(zfree, Databoxes) databox *ebHeap_ = NULL;
     cleanerName(zfree, DataboxPtrs) databox **eaHeap = NULL;
     cleanerName(zfree, DataboxPtrs) databox **ebHeap = NULL;
+    cleanerName(zfree, DataboxWides) databoxWide *waHeap = NULL;
+    cleanerName(zfree, DataboxWides) databoxWide *wbHeap = NULL;
 
-    databoxBig *ea_, *eb_;
+    databox *ea_, *eb_;
     databox **ea, **eb;
+    databoxWide *wa, *wb;
 
     if (epeA <= MULTIMAP_STACK_THRESHOLD) {
         ea_ = eaStack_;
         ea = eaStack;
+        wa = waStack;
     } else {
         eaHeap_ = zmalloc(epeA * sizeof(*eaHeap_));
         eaHeap = zmalloc(epeA * sizeof(databox *));
+        waHeap = zmalloc(epeA * sizeof(*waHeap));
         ea_ = eaHeap_;
         ea = eaHeap;
+        wa = waHeap;
     }
 
     if (epeB <= MULTIMAP_STACK_THRESHOLD) {
         eb_ = ebStack_;
         eb = ebStack;
+        wb = wbStack;
     } else {
         ebHeap_ = zmalloc(epeB * sizeof(*ebHeap_));
         ebHeap = zmalloc(epeB * sizeof(databox *));
+        wbHeap = zmalloc(epeB * sizeof(*wbHeap));
         eb_ = ebHeap_;
         eb = ebHeap;
+        wb = wbHeap;
     }
 
     multimapRowBind_(ea_, ea, epeA);
     multimapRowBind_(eb_, eb, epeB);
 
-    bool foundA = multimapIteratorNextRow_(a, multimapIteratorNext, ea, ea_);
-    bool foundB = multimapIteratorNextRow_(b, multimapIteratorNext, eb, eb_);
+#define nextA_()                                                               \
+    multimapIteratorNextRow_(a, multimapIteratorNextWithSlots, ea, ea_, wa)
+#define nextB_()                                                               \
+    multimapIteratorNextRow_(b, multimapIteratorNextWithSlots, eb, eb_, wb)
+    bool foundA = nextA_();
+    bool foundB = nextB_();
 
     /* element-by-element zipper algorithm for intersecting two sorted lists. */
     while (foundA && foundB) {
         const int compared = databoxCompare(ea[0], eb[0]);
         if (compared < 0) {
-            foundA = multimapIteratorNextRow_(a, multimapIteratorNext, ea, ea_);
+            foundA = nextA_();
         } else if (compared > 0) {
-            foundB = multimapIteratorNextRow_(b, multimapIteratorNext, eb, eb_);
+            foundB = nextB_();
         } else {
             /* Keys compare equal, so add key to result map */
             multimapInsert(dst, (const databox **)&ea[0]);
-            foundA = multimapIteratorNextRow_(a, multimapIteratorNext, ea, ea_);
-            foundB = multimapIteratorNextRow_(b, multimapIteratorNext, eb, eb_);
+            foundA = nextA_();
+            foundB = nextB_();
         }
     }
+#undef nextA_
+#undef nextB_
 }
 
 void multimapDifferenceKeys(multimap **restrict dst,
@@ -902,14 +912,20 @@ void multimapDifferenceKeys(multimap **restrict dst,
 #else
     assert(a->elementsPerEntry == 1);
     assert(a->elementsPerEntry == b->elementsPerEntry);
-    databoxBig ea_;
-    databoxBig eb_;
-    databox *ea[1] = {(databox *)&ea_};
-    databox *eb[1] = {(databox *)&eb_};
+    databox ea_ = {{0}};
+    databox eb_ = {{0}};
+    databoxWide wa;
+    databoxWide wb;
+    databox *ea[1] = {&ea_};
+    databox *eb[1] = {&eb_};
 #endif
 
-    bool foundA = multimapIteratorNextRow_(a, multimapIteratorNext, ea, &ea_);
-    bool foundB = multimapIteratorNextRow_(b, multimapIteratorNext, eb, &eb_);
+#define nextA_()                                                               \
+    multimapIteratorNextRow_(a, multimapIteratorNextWithSlots, ea, &ea_, &wa)
+#define nextB_()                                                               \
+    multimapIteratorNextRow_(b, multimapIteratorNextWithSlots, eb, &eb_, &wb)
+    bool foundA = nextA_();
+    bool foundB = nextB_();
 
     while (foundA && foundB) {
         const int compared = databoxCompare(ea[0], eb[0]);
@@ -918,20 +934,16 @@ void multimapDifferenceKeys(multimap **restrict dst,
              * Since B is sorted and we haven't found ea yet, ea is NOT in B.
              * Add it to the difference and advance A. */
             multimapInsert(dst, (const databox **)ea);
-            foundA =
-                multimapIteratorNextRow_(a, multimapIteratorNext, ea, &ea_);
+            foundA = nextA_();
         } else if (compared > 0) {
             /* ea > eb: element in B is smaller than current A element.
              * Just advance B to catch up - ea might still be in B. */
-            foundB =
-                multimapIteratorNextRow_(b, multimapIteratorNext, eb, &eb_);
+            foundB = nextB_();
         } else {
             /* ea == eb: element exists in both A and B.
              * Don't add to difference, advance both. */
-            foundA =
-                multimapIteratorNextRow_(a, multimapIteratorNext, ea, &ea_);
-            foundB =
-                multimapIteratorNextRow_(b, multimapIteratorNext, eb, &eb_);
+            foundA = nextA_();
+            foundB = nextB_();
         }
     }
 
@@ -941,16 +953,17 @@ void multimapDifferenceKeys(multimap **restrict dst,
      */
     while (foundA) {
         multimapInsert(dst, (const databox **)&ea[0]);
-        foundA = multimapIteratorNextRow_(a, multimapIteratorNext, ea, &ea_);
+        foundA = nextA_();
     }
 
     if (symmetricDifference) {
         while (foundB) {
             multimapInsert(dst, (const databox **)&eb[0]);
-            foundB =
-                multimapIteratorNextRow_(b, multimapIteratorNext, eb, &eb_);
+            foundB = nextB_();
         }
     }
+#undef nextA_
+#undef nextB_
 }
 
 /* This is basically a 'union' function.
@@ -963,27 +976,34 @@ void multimapCopyKeys(multimap **restrict dst, const multimap *restrict src) {
     const size_t epe = msrc.elementsPerEntry;
 
     /* Use stack for small element counts, heap for larger to avoid overflow */
-    databoxBig bsrcStack_[MULTIMAP_STACK_THRESHOLD];
+    databox bsrcStack_[MULTIMAP_STACK_THRESHOLD];
     databox *bsrcStack[MULTIMAP_STACK_THRESHOLD];
-    cleanerName(zfree, DataboxBigs) databoxBig *bsrcHeap_ = NULL;
+    databoxWide wsrcStack[MULTIMAP_STACK_THRESHOLD];
+    cleanerName(zfree, Databoxes) databox *bsrcHeap_ = NULL;
     cleanerName(zfree, DataboxPtrs) databox **bsrcHeap = NULL;
+    cleanerName(zfree, DataboxWides) databoxWide *wsrcHeap = NULL;
 
-    databoxBig *bsrc_;
+    databox *bsrc_;
     databox **bsrc;
+    databoxWide *wsrc;
 
     if (epe <= MULTIMAP_STACK_THRESHOLD) {
         bsrc_ = bsrcStack_;
         bsrc = bsrcStack;
+        wsrc = wsrcStack;
     } else {
         bsrcHeap_ = zmalloc(epe * sizeof(*bsrcHeap_));
         bsrcHeap = zmalloc(epe * sizeof(databox *));
+        wsrcHeap = zmalloc(epe * sizeof(*wsrcHeap));
         bsrc_ = bsrcHeap_;
         bsrc = bsrcHeap;
+        wsrc = wsrcHeap;
     }
 
     multimapRowBind_(bsrc_, bsrc, epe);
 
-    while (multimapIteratorNextRow_(&msrc, multimapIteratorNext, bsrc, bsrc_)) {
+    while (multimapIteratorNextRow_(&msrc, multimapIteratorNextWithSlots, bsrc,
+                                    bsrc_, wsrc)) {
         multimapInsert(dst, (const databox **)&bsrc[0]);
     }
 }
@@ -1011,7 +1031,9 @@ void multimapVerify(const multimap *m) {
 #include "str.h" /* for xoroshiro128plus */
 
 #include "mdsc.h" /* mdscfree for the replacing sweep's externalized keys */
+#include "persist/multimapP.h" /* the wide persist sweep's round trips */
 #include <inttypes.h>
+#include <unistd.h> /* getpid, unlink for the wide persist sweep */
 
 #define REPORT_TIME 1
 #if REPORT_TIME
@@ -1062,7 +1084,7 @@ static size_t multimapReport_(const multimap *m, const bool print) {
         break;
     case MULTIMAP_TYPE_FULL:
         count = mmf(m)->count;
-        rangeBoxBytes = sizeof(databoxBig) * (count - 1);
+        rangeBoxBytes = sizeof(databox) * (count - 1);
         middleBytes = sizeof(multimapFullMiddle) * count;
         mapPtrBytes = sizeof(flex *) * count;
         containerBytes = sizeof(*mmf(m));
@@ -1743,6 +1765,19 @@ static mwInt mwRandWide(uint64_t *rng) {
     return (mwInt){.bits = mag, .neg = false};
 }
 
+/* Sort 'rows' by key and drop repeated keys; returns how many are kept. */
+static size_t mwSortUnique(mwRow *rows, const size_t n) {
+    qsort(rows, n, sizeof(*rows), mwRowKeyCmp);
+    size_t kept = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (kept == 0 || mwCmp(&rows[kept - 1].key, &rows[i].key) != 0) {
+            rows[kept++] = rows[i];
+        }
+    }
+
+    return kept;
+}
+
 /* Fill 'rows' with distinct keys sorted ascending: the design's boundary
  * set W, narrow keys around the 64-bit limits, then random wide keys.  Two
  * of every three values are wide; the rest are small integers. */
@@ -1777,15 +1812,7 @@ static size_t mwBuildRows(mwRow *rows, const size_t cap, uint64_t *rng) {
         n++;
     }
 
-    qsort(rows, n, sizeof(*rows), mwRowKeyCmp);
-    size_t kept = 0;
-    for (size_t i = 0; i < n; i++) {
-        if (kept == 0 || mwCmp(&rows[kept - 1].key, &rows[i].key) != 0) {
-            rows[kept++] = rows[i];
-        }
-    }
-
-    return kept;
+    return mwSortUnique(rows, n);
 }
 
 static void mwShuffle(size_t *order, const size_t n, uint64_t *rng) {
@@ -2488,6 +2515,590 @@ int32_t multimapWideSweep(void) {
     return err;
 }
 
+/* ====================================================================
+ * The normal / extended / mixed matrix
+ * ==================================================================== */
+/* Live blocks from the datakit allocator, counted while a window opened by
+ * mxCountBegin is open.  A window that builds and frees maps must end
+ * where it began, which catches a leaked rangeBox payload or row copy. */
+static datakitConfig mxSavedAlloc;
+static int64_t mxLive;
+
+static void *mxCalloc(size_t count, size_t sz) {
+    void *p = mxSavedAlloc.localCalloc(count, sz);
+    mxLive += p != NULL;
+    return p;
+}
+
+static void *mxMalloc(size_t sz) {
+    void *p = mxSavedAlloc.localMalloc(sz);
+    mxLive += p != NULL;
+    return p;
+}
+
+static void mxReallocCount(const void *ptr, const void *p, const size_t sz) {
+    if (!ptr && p) {
+        mxLive++;
+    } else if (ptr && !p && !sz) {
+        mxLive--;
+    }
+}
+
+static void *mxRealloc(void *ptr, size_t sz) {
+    void *p = mxSavedAlloc.localRealloc(ptr, sz);
+    mxReallocCount(ptr, p, sz);
+    return p;
+}
+
+static void *mxReallocSlate(void *ptr, size_t sz) {
+    void *p = mxSavedAlloc.localReallocSlate(ptr, sz);
+    mxReallocCount(ptr, p, sz);
+    return p;
+}
+
+static void mxFree(void *ptr) {
+    mxLive -= ptr != NULL;
+    mxSavedAlloc.localFree(ptr);
+}
+
+static int mxMemalign(void **ptr, size_t alignment, size_t sz) {
+    const int r = mxSavedAlloc.localMemalign(ptr, alignment, sz);
+    mxLive += r == 0;
+    return r;
+}
+
+static void mxCountBegin(void) {
+    mxSavedAlloc = datakitConfigMemory__;
+    datakitConfig counting = mxSavedAlloc;
+    counting.localCalloc = mxCalloc;
+    counting.localMalloc = mxMalloc;
+    counting.localRealloc = mxRealloc;
+    counting.localReallocSlate = mxReallocSlate;
+    counting.localFree = mxFree;
+    counting.localMemalign = mxMemalign;
+    mxLive = 0;
+    datakitConfigSet(&counting);
+}
+
+static int64_t mxCountEnd(void) {
+    datakitConfigSet(&mxSavedAlloc);
+    return mxLive;
+}
+
+void multimapTestAllocCountBegin(void) {
+    mxCountBegin();
+}
+
+int64_t multimapTestAllocCountEnd(void) {
+    return mxCountEnd();
+}
+
+typedef enum mxMode { MX_NORMAL, MX_EXTENDED, MX_MIXED } mxMode;
+static const char *const mxModeName[] = {"normal", "extended", "mixed"};
+
+/* A random 64-bit integer of either sign. */
+static mwInt mxRandNarrow(uint64_t *rng) {
+    const uint64_t r = mwRand(rng);
+    if (mwRand(rng) & 1) {
+        return mwSmall((int64_t)(r | ((uint64_t)1 << 63)));
+    }
+
+    return (mwInt){.bits = r};
+}
+
+/* Sorted distinct rows for 'mode': normal rows hold only 64-bit keys and
+ * values, extended rows only 96/128-bit ones, and mixed rows interleave
+ * both across the 2^63 / 2^64 / 2^96 boundaries (mwBuildRows). */
+static size_t mxBuildRows(mwRow *rows, const size_t cap, const mxMode mode,
+                          uint64_t *rng) {
+    if (mode == MX_MIXED) {
+        return mwBuildRows(rows, cap, rng);
+    }
+
+    const __uint128_t one = 1;
+    const mwInt narrowFixed[] = {
+        mwSmall(INT64_MIN),   mwSmall(-1),
+        mwSmall(0),           mwSmall(1),
+        mwSmall(INT64_MAX),   {.bits = (__uint128_t)INT64_MAX + 1},
+        {.bits = UINT64_MAX},
+    };
+    const mwInt wideFixed[] = {
+        {.bits = one << 64},
+        {.bits = (one << 95) - 1},
+        {.bits = one << 95},
+        {.bits = one << 127},
+        {.bits = ~(__uint128_t)0},
+        {.bits = ~(__uint128_t)0 >> 1},
+        {.bits = (__uint128_t)0 - (one << 63) - 1, .neg = true},
+        {.bits = (__uint128_t)0 - (one << 95), .neg = true},
+        {.bits = one << 127, .neg = true},
+    };
+
+    const bool wide = mode == MX_EXTENDED;
+    const mwInt *fixed = wide ? wideFixed : narrowFixed;
+    const size_t fixedCount =
+        wide ? COUNT_ARRAY(wideFixed) : COUNT_ARRAY(narrowFixed);
+    for (size_t n = 0; n < cap; n++) {
+        if (n < fixedCount) {
+            rows[n].key = fixed[n];
+        } else {
+            rows[n].key = wide ? mwRandWide(rng) : mxRandNarrow(rng);
+        }
+
+        rows[n].val = wide ? mwRandWide(rng) : mwSmall((int64_t)(n * 7) - 50);
+        rows[n].present = false;
+    }
+
+    return mwSortUnique(rows, cap);
+}
+
+enum { mxPoolMax = 160 };
+
+/* 'want' evenly spaced rows of the sorted 'pool', both extremes included. */
+static size_t mxSubset(mwRow *dst, const mwRow *pool, const size_t built,
+                       size_t want) {
+    if (want > built) {
+        want = built;
+    }
+
+    for (size_t i = 0; i < want; i++) {
+        dst[i] = pool[want == 1 ? 0 : (i * (built - 1)) / (want - 1)];
+        dst[i].present = false;
+    }
+
+    return want;
+}
+
+/* The tier 'want' rows of 'pool' build under 'limit'. */
+static multimapType mxTierFor(const mwRow *pool, const size_t built,
+                              const size_t want, const flexCapSizeLimit limit) {
+    mwRow rows[mxPoolMax];
+    const size_t n = mxSubset(rows, pool, built, want);
+    multimap *m = multimapNewLimit(2, limit);
+    for (size_t i = 0; i < n; i++) {
+        mwInsert(&m, &rows[i]);
+    }
+
+    const multimapType type = multimapType_(m);
+    multimapFree(m);
+    return type;
+}
+
+/* A row count that builds 'target' under 'limit': the middle of the
+ * counts that reach it, or all of the pool for Full.  0 if none does. */
+static size_t mxRowsForTier(const mwRow *pool, const size_t built,
+                            const flexCapSizeLimit limit,
+                            const multimapType target) {
+    size_t first = 0;
+    size_t last = 0;
+    for (size_t n = 3; n <= built; n++) {
+        const multimapType type = mxTierFor(pool, built, n, limit);
+        if (type == target) {
+            first = first ? first : n;
+            last = n;
+        } else if (type > target) {
+            break;
+        }
+    }
+
+    if (!first) {
+        return 0;
+    }
+
+    return target == MULTIMAP_TYPE_FULL ? last : (first + last) / 2;
+}
+
+/* Read an integer box back into the oracle's form. */
+static bool mxFromBox(const databox *box, mwInt *out) {
+    switch (box->type) {
+    case DATABOX_SIGNED_64:
+        *out = mwSmall(box->data.i64);
+        return true;
+    case DATABOX_UNSIGNED_64:
+        *out = (mwInt){.bits = box->data.u64};
+        return true;
+    case DATABOX_SIGNED_128:
+    case DATABOX_UNSIGNED_128:
+        if (!box->data.ptr) {
+            return false;
+        }
+
+        memcpy(&out->bits, box->data.ptr, sizeof(out->bits));
+        out->neg = box->type == DATABOX_SIGNED_128;
+        return true;
+    default:
+        return false;
+    }
+}
+
+/* The present row whose key is 'key', or NULL. */
+static mwRow *mxFind(mwRow *rows, const size_t n, const mwInt *key) {
+    size_t lo = 0;
+    size_t hi = n;
+    while (lo < hi) {
+        const size_t mid = (lo + hi) / 2;
+        const int c = mwCmp(&rows[mid].key, key);
+        if (c == 0) {
+            return rows[mid].present ? &rows[mid] : NULL;
+        }
+
+        if (c < 0) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+
+    return NULL;
+}
+
+/* A documented type-only report: the type of 'want' with no payload. */
+static bool mxTypeOnly(const databox *got, const mwInt *want) {
+    const databoxType type =
+        want->neg ? DATABOX_SIGNED_128 : DATABOX_UNSIGNED_128;
+    return got->type == type && !got->data.ptr && !got->big &&
+           databoxIsWideDeferred(got);
+}
+
+/* The removing reads: InsertReplacing's replacedOut, DeleteWithFound and
+ * a DeleteRandomValue drain that empties the map, alternating armed and
+ * zeroed boxes. */
+static int32_t mxRemovingReads(const char *where, multimap **m, mwRow *rows,
+                               const size_t n, uint64_t *rng) {
+    int32_t err = 0;
+    for (size_t i = 0; i < n; i += 3) {
+        if (!rows[i].present) {
+            continue;
+        }
+
+        const mwInt next = (i % 2) ? mwRandWide(rng) : mwSmall((int64_t)i);
+        const databox key = mwBox(&rows[i].key);
+        const databox val = mwBox(&next);
+        const databox *e[2] = {&key, &val};
+        databoxBig out;
+        databox *replaced = mwArm(&out);
+        if (!multimapInsertReplacing(m, e, replaced)) {
+            ERR("%s: InsertReplacing row %zu reported no replace", where, i);
+        } else if (mwIsWide(&rows[i].val) ? !mxTypeOnly(replaced, &rows[i].val)
+                                          : !mwHolds(replaced, &rows[i].val)) {
+            ERR("%s: InsertReplacing row %zu reported a wrong old value", where,
+                i);
+        }
+
+        rows[i].val = next;
+    }
+
+    for (size_t i = 1; i < n; i += 4) {
+        if (!rows[i].present) {
+            continue;
+        }
+
+        const databox key = mwBox(&rows[i].key);
+        databoxBig found;
+        databox *f = mwArm(&found);
+        if (!multimapDeleteWithFound(m, &key, f)) {
+            ERR("%s: DeleteWithFound row %zu found nothing", where, i);
+        } else if (mwIsWide(&rows[i].key) ? !mxTypeOnly(f, &rows[i].key)
+                                          : !mwHolds(f, &rows[i].key)) {
+            ERR("%s: DeleteWithFound row %zu reported a wrong key", where, i);
+        }
+
+        rows[i].present = false;
+    }
+
+    err += mwCheckReads(where, *m, rows, n);
+
+    for (size_t k = 0; multimapCount(*m); k++) {
+        const bool armed = k % 2 == 0;
+        databoxBig kb;
+        databoxBig vb;
+        databox *e[2];
+        if (armed) {
+            e[0] = mwArm(&kb);
+            e[1] = mwArm(&vb);
+            kb.allocated = false;
+            vb.allocated = false;
+        } else {
+            memset(&kb, 0, sizeof(kb));
+            memset(&vb, 0, sizeof(vb));
+            e[0] = (databox *)&kb;
+            e[1] = (databox *)&vb;
+        }
+
+        if (!multimapDeleteRandomValue(m, k % 3 == 0, e)) {
+            ERR("%s: DeleteRandomValue failed with %zu rows left", where,
+                multimapCount(*m));
+            break;
+        }
+
+        mwInt gotKey;
+        mwRow *r = mxFromBox(e[0], &gotKey) ? mxFind(rows, n, &gotKey) : NULL;
+        if (!r || !mwHolds(e[0], &r->key) || !mwHolds(e[1], &r->val)) {
+            ERR("%s: DeleteRandomValue %zu removed an unexpected row", where,
+                k);
+        } else {
+            for (size_t c = 0; c < 2; c++) {
+                const mwInt *v = c == 0 ? &r->key : &r->val;
+                const databoxBig *b = c == 0 ? &kb : &vb;
+                if (!mwIsWide(v)) {
+                    continue;
+                }
+
+                /* Armed: in band, nothing owned.  Zeroed: a heap payload
+                 * the caller owns. */
+                const void *extra = b->extra;
+                const bool ok =
+                    armed ? e[c]->data.ptr == extra && !e[c]->allocated
+                          : e[c]->allocated && e[c]->big &&
+                                e[c]->data.ptr != extra;
+                if (!ok) {
+                    ERR("%s: DeleteRandomValue %zu column %zu has the wrong "
+                        "owner (%s box)",
+                        where, k, c, armed ? "armed" : "zeroed");
+                }
+            }
+
+            r->present = false;
+        }
+
+        databoxFreeData(e[0]);
+        databoxFreeData(e[1]);
+    }
+
+    for (size_t i = 0; i < n; i++) {
+        if (rows[i].present) {
+            ERR("%s: row %zu survived the DeleteRandomValue drain", where, i);
+            break;
+        }
+    }
+
+    return err;
+}
+
+/* DeleteRandomValue copies BYTES the way multilistPop does: 8 bytes or
+ * less embedded with nothing owned, longer strings on the heap.  Drains a
+ * map of 64-bit keys and string values of every length 0..20 under
+ * 'limit', checking each removed value against the key it came with. */
+static int32_t mxRemovedBytes(const char *where, const flexCapSizeLimit limit,
+                              const size_t rows) {
+    int32_t err = 0;
+    const char text[] = "abcdefghijklmnopqrstuvwxyz";
+    multimap *m = multimapNewLimit(2, limit);
+    for (size_t i = 0; i < rows; i++) {
+        const databox key = databoxNewUnsigned(i);
+        const databox val = databoxNewBytes(text, i % 21);
+        const databox *e[2] = {&key, &val};
+        multimapInsert(&m, e);
+    }
+
+    bool seen[rows];
+    memset(seen, 0, sizeof(seen));
+    for (size_t k = 0; multimapCount(m); k++) {
+        databox kb = {{0}};
+        databox vb = {{0}};
+        databox *e[2] = {&kb, &vb};
+        if (!multimapDeleteRandomValue(&m, k % 2 == 0, e)) {
+            ERR("%s: DeleteRandomValue failed", where);
+            break;
+        }
+
+        const size_t i = kb.type == DATABOX_UNSIGNED_64 ? kb.data.u64 : rows;
+        const size_t len = i < rows ? i % 21 : 0;
+        const bool shortBytes = len <= sizeof(vb.data.bytes.embed8);
+        if (i >= rows || seen[i]) {
+            ERR("%s: DeleteRandomValue %zu removed an unexpected key", where,
+                k);
+        } else if (vb.len != len || memcmp(databoxBytes(&vb), text, len) ||
+                   vb.type !=
+                       (shortBytes ? DATABOX_BYTES_EMBED : DATABOX_BYTES) ||
+                   vb.allocated != !shortBytes || vb.big) {
+            ERR("%s: DeleteRandomValue %zu returned a wrong %zu-byte string",
+                where, k, len);
+        } else {
+            seen[i] = true;
+        }
+
+        databoxFreeData(&kb);
+        databoxFreeData(&vb);
+    }
+
+    multimapFree(m);
+    return err;
+}
+
+int32_t multimapWideMatrixSweep(void) {
+    int32_t err = 0;
+    uint64_t rng = 0xD1B54A32D192ED03ULL;
+    struct {
+        const char *tier;
+        flexCapSizeLimit limit;
+        multimapType expect;
+    } const plans[] = {
+        {"small", FLEX_CAP_LEVEL_2048, MULTIMAP_TYPE_SMALL},
+        {"medium", FLEX_CAP_LEVEL_256, MULTIMAP_TYPE_MEDIUM},
+        {"full", FLEX_CAP_LEVEL_64, MULTIMAP_TYPE_FULL},
+    };
+
+    for (size_t mode = MX_NORMAL; mode <= MX_MIXED; mode++) {
+        mwRow pool[mxPoolMax];
+        const size_t built = mxBuildRows(pool, mxPoolMax, mode, &rng);
+        for (size_t p = 0; p < COUNT_ARRAY(plans); p++) {
+            char where[64];
+            snprintf(where, sizeof(where), "%s %s", mxModeName[mode],
+                     plans[p].tier);
+            const size_t want =
+                mxRowsForTier(pool, built, plans[p].limit, plans[p].expect);
+            if (!want) {
+                ERR("%s: no row count builds the tier", where);
+                continue;
+            }
+
+            mwRow rows[mxPoolMax];
+            const size_t n = mxSubset(rows, pool, built, want);
+
+            /* Build, exercise every read path, drain and free inside one
+             * counting window: every rangeBox payload, row copy and
+             * removed value must be released. */
+            mxCountBegin();
+            multimap *m = multimapNewLimit(2, plans[p].limit);
+            err += mwExercise(where, &m, rows, n, plans[p].expect, &rng);
+            multimapVerify(m);
+            err += mxRemovingReads(where, &m, rows, n, &rng);
+            multimapFree(m);
+            if (mode == MX_NORMAL) {
+                const size_t bytesRows[] = {10, 60, 400};
+                err += mxRemovedBytes(where, plans[p].limit, bytesRows[p]);
+            }
+
+            const int64_t live = mxCountEnd();
+            if (live != 0) {
+                ERR("%s: %" PRId64 " allocations outlived the map", where,
+                    live);
+            }
+        }
+    }
+
+    return err;
+}
+
+/* Snapshot, WAL and recovery through multimapP in each data mode: rows
+ * inserted before a compaction live in the snapshot, later inserts and
+ * deletes in the WAL, and the reopened map must hold exactly the oracle's
+ * rows. */
+int32_t multimapWidePersistSweep(void) {
+    int32_t err = 0;
+    uint64_t rng = 0x94D049BB133111EBULL;
+    const char *tmp = getenv("TMPDIR");
+    if (!tmp || !*tmp) {
+        tmp = "/tmp";
+    }
+
+    struct {
+        const char *tier;
+        flexCapSizeLimit limit;
+        multimapType expect;
+    } const plans[] = {
+        {"small", FLEX_CAP_LEVEL_2048, MULTIMAP_TYPE_SMALL},
+        {"medium", FLEX_CAP_LEVEL_256, MULTIMAP_TYPE_MEDIUM},
+        {"full", FLEX_CAP_LEVEL_64, MULTIMAP_TYPE_FULL},
+    };
+
+    for (size_t mode = MX_NORMAL; mode <= MX_MIXED; mode++) {
+        mwRow pool[mxPoolMax];
+        const size_t built = mxBuildRows(pool, mxPoolMax, mode, &rng);
+        for (size_t p = 0; p < COUNT_ARRAY(plans); p++) {
+            char where[64];
+            snprintf(where, sizeof(where), "persist %s %s", mxModeName[mode],
+                     plans[p].tier);
+            const size_t want =
+                mxRowsForTier(pool, built, plans[p].limit, plans[p].expect);
+            if (!want) {
+                ERR("%s: no row count builds the tier", where);
+                continue;
+            }
+
+            mwRow rows[mxPoolMax];
+            const size_t n = mxSubset(rows, pool, built, want);
+            size_t order[mxPoolMax];
+            mwShuffle(order, n, &rng);
+
+            char base[512];
+            char snap[600];
+            char wal[600];
+            snprintf(base, sizeof(base), "%s/dkMultimapWideP.%d.%zu.%zu", tmp,
+                     (int)getpid(), mode, p);
+            snprintf(snap, sizeof(snap), "%s.snap", base);
+            snprintf(wal, sizeof(wal), "%s.wal", base);
+            unlink(snap);
+            unlink(wal);
+
+            persistCtx *ctx = persistCtxNew(base, NULL);
+            multimapP *mp = ctx ? multimapNewConfigureP(ctx, 2, false, false,
+                                                        plans[p].limit)
+                                : NULL;
+            if (!mp) {
+                ERR("%s: could not create the persistent map", where);
+                if (ctx) {
+                    persistCtxFree(ctx);
+                }
+                continue;
+            }
+
+            for (size_t k = 0; k < n; k++) {
+                mwRow *r = &rows[order[k]];
+                const databox key = mwBox(&r->key);
+                const databox val = mwBox(&r->val);
+                const databox *e[2] = {&key, &val};
+                multimapInsertP(mp, e);
+                r->present = true;
+                if (k == n / 2 && !multimapCompactP(mp)) {
+                    ERR("%s: compaction failed", where);
+                }
+            }
+
+            for (size_t k = 0; k < n; k += 4) {
+                mwRow *r = &rows[order[k]];
+                const databox key = mwBox(&r->key);
+                if (!multimapDeleteP(mp, &key)) {
+                    ERR("%s: delete of row %zu failed", where, order[k]);
+                }
+
+                r->present = false;
+            }
+
+            if (multimapType_(multimapGetP(mp)) != plans[p].expect && n > 3) {
+                /* Deletes never shrink the tier, so the build reached it. */
+                ERR("%s: built tier %d, expected %d", where,
+                    (int)multimapType_(multimapGetP(mp)), (int)plans[p].expect);
+            }
+
+            err += mwCheckReads(where, multimapGetP(mp), rows, n);
+            multimapCloseP(mp);
+            persistCtxFree(ctx);
+
+            ctx = persistCtxOpen(base, NULL);
+            mp = ctx ? multimapOpenP(ctx) : NULL;
+            if (!mp) {
+                ERR("%s: recovery failed", where);
+            } else {
+                char reopened[80];
+                snprintf(reopened, sizeof(reopened), "%s reopened", where);
+                err += mwCheckReads(reopened, multimapGetP(mp), rows, n);
+                multimapCloseP(mp);
+            }
+
+            if (ctx) {
+                persistCtxFree(ctx);
+            }
+
+            unlink(snap);
+            unlink(wal);
+        }
+    }
+
+    return err;
+}
+
 /* RandomValue and LookupByPosition through one tier, for the per-tier
  * selection checks below. */
 typedef bool (*rvDrawFn)(void *m, bool fromTail, databox **boxes,
@@ -2673,6 +3284,14 @@ int multimapTest(int argc, char *argv[]) {
 
     TEST("96/128-bit keys and values through every tier") {
         err += multimapWideSweep();
+    }
+
+    TEST("normal / extended / mixed matrix through every tier") {
+        err += multimapWideMatrixSweep();
+    }
+
+    TEST("normal / extended / mixed persist round trips") {
+        err += multimapWidePersistSweep();
     }
 
     TEST("replacing insert sweep (every layer)") {

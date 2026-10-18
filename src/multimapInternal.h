@@ -36,16 +36,46 @@ DK_INLINE_ALWAYS void multimapIteratorDecode_(const flexEntry *const fe,
     }
 }
 
-/* Decode the entry at 'fe' into a library-owned temporary that can hold
- * any value, including a 96/128-bit one (see flexGetByTypeBig).  With a
- * non-NULL 'referenceContainer', a reference entry is resolved to the
- * value it names, which may also be wide. */
-static inline void
-multimapGetByTypeBig_(const flexEntry *const fe, databoxBig *const box,
-                      const multimapAtom *const referenceContainer) {
-    flexGetByTypeBig(fe, box);
-    if (referenceContainer &&
-        box->type == DATABOX_CONTAINER_REFERENCE_EXTERNAL) {
-        multimapAtomLookupConvertBig(referenceContainer, box);
+/* The self-contained copy DeleteRandomValue hands back for the entry at
+ * 'fe', which is about to be deleted, matching multilistPop: BYTES of 8
+ * bytes or less come back embedded (DATABOX_BYTES_EMBED, allocated = 0),
+ * other values below BYTES decode once with their flags clear, and long
+ * BYTES, containers and 96/128-bit values go through flexGetByTypeCopy,
+ * which writes a wide value in band when box->big is set and to a 16-byte
+ * heap payload the caller owns otherwise. */
+static inline void multimapRemovedCopy_(const flexEntry *const fe,
+                                        databox *const box) {
+    databox found = {{0}};
+    flexGetByTypeInto(fe, &found, NULL);
+    if (found.type == DATABOX_BYTES) {
+        if (found.len <= sizeof(found.data.bytes.embed8)) {
+            databox embed = {{0}};
+            memcpy(embed.data.bytes.embed8, found.data.bytes.start, found.len);
+            embed.type = DATABOX_BYTES_EMBED;
+            embed.len = found.len;
+            *box = embed;
+            return;
+        }
+    } else if (found.type < DATABOX_BYTES && !databoxIsWideDeferred(&found)) {
+        /* Nothing below BYTES borrows from the flex. */
+        *box = found;
+        return;
+    }
+
+    flexGetByTypeCopy(fe, box);
+}
+
+/* Decode the entry at 'fe' into a library-owned temporary: a plain box
+ * plus a 'slot' that receives a 96/128-bit value (flexGetByTypeInto).
+ * With a non-NULL 'referenceContainer', a reference entry is resolved to
+ * the value it names, which may also be wide and lands in 'slot' too. */
+DK_INLINE_ALWAYS void
+multimapGetByTypeInto_(const flexEntry *const fe, databox *const box,
+                       databoxWide *const slot,
+                       const multimapAtom *const referenceContainer) {
+    if (referenceContainer) {
+        flexGetByTypeIntoWithReference(fe, box, slot, referenceContainer);
+    } else {
+        flexGetByTypeInto(fe, box, slot);
     }
 }

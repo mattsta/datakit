@@ -10,15 +10,16 @@
  * 'map' is a map for each tiny map. (count * sizeof(map))
  * 'middle' is an array of integer offsets into maps for midpoint memories.
  * 'count' is the total number of values across all map.
- * 'rangeBox' is the [low] key of each map after map[0], as a databoxBig so
- *            a 96/128-bit key is held inline (access it via getRangeBox).
+ * 'rangeBox' is the [low] key of each map after map[0], as a 16-byte
+ *            databox; a 96/128-bit key points at a 16-byte heap payload
+ *            the map owns (access it via getRangeBox).
  * 'maxSize' is the size in bytes before we split a map in half.
  * 'values' is the count of all key/value pairs across all maps.
  * 'elementsPerEntry' allows multiple (or not) values per key */
 struct multimapFull {
     multiarray *map;           /* flex *; maps stored in low->high order */
     multiarray *middle;        /* multimapFullMiddle; middle offsets */
-    multiarray *rangeBox;      /* rangeBox; [head] databoxBigs for each map */
+    multiarray *rangeBox;      /* rangeBox; [head] databox for each map */
     multimapFullIdx count;     /* total number of maps */
     multimapFullValues values; /* count of all "rows" in every map */
     multimapElements elementsPerEntry; /* max 4 billion "columns" per row. */

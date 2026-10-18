@@ -34,7 +34,7 @@ defcleaner(flex *, flexFree);
 #define CACHE_FILL 65536
 #define MAP_STORAGE_MAX (CACHE_FILL / (sizeof(flex *)))
 #define MIDDLE_STORAGE_MAX (CACHE_FILL / sizeof(multimapFullMiddle))
-#define RANGEBOX_STORAGE_MAX (CACHE_FILL / (sizeof(databoxBig)))
+#define RANGEBOX_STORAGE_MAX (CACHE_FILL / (sizeof(databox)))
 
 /* Create new array entries at 'idx' and populate them with values */
 #define reallocIncrCount(m, idx, newMap, newMiddle, newRangeBox)               \
@@ -53,7 +53,7 @@ defcleaner(flex *, flexFree);
             assert((m)->count > 0);                                            \
             /* Use (count - 1) because there's no rangeBox for map[0] */       \
             enterCount_ = (m)->count - 1;                                      \
-            multiarrayNativeInsert((m)->rangeBox, databoxBig,                  \
+            multiarrayNativeInsert((m)->rangeBox, databox,                     \
                                    RANGEBOX_STORAGE_MAX, enterCount_,          \
                                    (idx) - 1, &(newRangeBox));                 \
         }                                                                      \
@@ -79,21 +79,14 @@ defcleaner(flex *, flexFree);
             /* Use (count - 1) because there's no rangeBox for map[0] */       \
             enterCount_ = (m)->count - 1;                                      \
                                                                                \
-            /* This extra retrieve/free should be annotated throughout         \
-             * our code where referenceContainer is performing                 \
-             * reallocDecrCount operations, but we seem to be missing some     \
-             * annotations because we end up with memory leaks in all cases    \
-             * unless we centralize the range box free operation to here. */   \
-            /* If removing this (idx) > 0 branch, remember to update whichIdx  \
-             * to be a ternary again: whichIdx = idx ? idx - 1 : 0 */          \
-            size_t whichIdx = 0;                                               \
-            if ((idx) > 0) {                                                   \
-                whichIdx = (idx) - 1;                                          \
-                databox *rangeBox_ = getRangeBox(m, whichIdx);                 \
-                databoxFreeData(rangeBox_);                                    \
-            }                                                                  \
-                                                                               \
-            multiarrayNativeDelete((m)->rangeBox, databoxBig, enterCount_,     \
+            /* The removed rangeBox may own a heap payload (a reference        \
+             * map's copied BYTES key or a 96/128-bit key), so it is released  \
+             * here for every removal.  Deleting map[0] removes rangeBox[0]    \
+             * (the head of the old map[1], which becomes map[0] and needs no  \
+             * rangeBox), so that branch releases it too. */                   \
+            const size_t whichIdx = (idx) > 0 ? (idx) - 1 : 0;                 \
+            databoxFreeData(getRangeBox(m, whichIdx));                         \
+            multiarrayNativeDelete((m)->rangeBox, databox, enterCount_,        \
                                    whichIdx);                                  \
         }                                                                      \
                                                                                \
@@ -130,19 +123,77 @@ static inline multimapFullMiddle getMiddle(const multimapFull *m,
     return *middle;
 }
 
-/* Each rangeBox is a databoxBig, so a 96/128-bit head key is stored inline
- * in its 'extra' (big = 1, allocated = 0) and never owns a heap payload.
- * The multiarray moves entries when it inserts, deletes or regroups them,
- * which leaves an inline payload pointer aimed at the old slot, so every
- * access goes through here and re-aims it. */
+/* Each rangeBox is a 16-byte databox holding the head key of a map after
+ * map[0].  A narrow key is held by value or borrows its BYTES from the map
+ * (a reference map holds a heap copy instead, allocated = 1).  A 96/128-bit
+ * key points at a 16-byte heap payload the map owns (big = 1,
+ * allocated = 1).  The multiarray moves the boxes when it inserts, deletes
+ * or regroups them, but a heap payload doesn't move, so reading a rangeBox
+ * never writes to it. */
 static inline databox *getRangeBox(const multimapFull *m, multimapFullIdx idx) {
-    databoxBig *box;
-    multiarrayNativeGet(m->rangeBox, databoxBig, box, idx);
-    if (box->big) {
-        box->data.u128 = (__uint128_t *)box->extra;
+    databox *box;
+    multiarrayNativeGet(m->rangeBox, databox, box, idx);
+    return box;
+}
+
+DK_INLINE_ALWAYS bool rangeBoxIsWide_(const databox *box) {
+    return box->type == DATABOX_SIGNED_128 || box->type == DATABOX_UNSIGNED_128;
+}
+
+/* Set rangeBox 'rb' to the decoded head key 'head'.  A wide payload the
+ * rangeBox already owns is reused in place, so a refresh only allocates on
+ * a narrow-to-wide change and only frees on a wide-to-narrow change.
+ * 'ownBytes' copies a BYTES key to the heap (reference maps, whose head
+ * decodes to bytes outside the map). */
+static void rangeBoxAssign_(databox *const rb, const databox *const head,
+                            const bool ownBytes) {
+    void *payload = NULL;
+    if (rb->allocated) {
+        if (rangeBoxIsWide_(rb)) {
+            payload = rb->data.ptr;
+        } else {
+            databoxFreeData(rb);
+        }
     }
 
-    return (databox *)box;
+    if (unlikely(rangeBoxIsWide_(head))) {
+        databoxWidePayloadRequire(head);
+        if (!payload) {
+            /* @own: container; free=databoxFreeData */
+            payload = zmalloc(sizeof(databoxWide));
+        }
+
+        memcpy(payload, head->data.ptr, sizeof(databoxWide));
+        *rb = *head;
+        rb->data.ptr = payload;
+        rb->allocated = true;
+        rb->big = true;
+        return;
+    }
+
+    if (unlikely(payload != NULL)) {
+        zfree(payload);
+    }
+
+    *rb = *head;
+    rb->allocated = false;
+    rb->big = false;
+    if (ownBytes) {
+        (void)databoxAllocateIfNeeded(rb);
+    }
+}
+
+/* Refresh rangeBox[idx - 1] from the head of 'map'.  A reference map
+ * resolves its head through 'referenceContainer' and keeps a heap copy of
+ * a BYTES key, because the resolved bytes live outside the map. */
+static void rangeBoxRefresh_(multimapFull *m, const multimapFullIdx idx,
+                             const flex *map, const bool useReference,
+                             const multimapAtom *referenceContainer) {
+    databox head;
+    databoxWide headWide;
+    multimapGetByTypeInto_(flexHead(map), &head, &headWide,
+                           useReference ? referenceContainer : NULL);
+    rangeBoxAssign_(getRangeBox(m, idx - 1), &head, useReference);
 }
 
 static inline void setMiddle(multimapFull *m, multimapFullIdx idx,
@@ -171,11 +222,9 @@ static inline void setMiddle(multimapFull *m, multimapFullIdx idx,
     do {                                                                       \
         /* TODO: optimize rangeBox to only update if head changed? */          \
         if ((idx) > 0 && flexCount(map_) > 0) {                                \
-            /* Minus one becase rangeBox[0] is for map[1], etc */              \
-            databox *rangeBox_ = getRangeBox(m, (idx) - 1);                    \
-            /* The decode resets 'allocated', so release a copy first */       \
-            databoxFreeData(rangeBox_);                                        \
-            flexGetByTypeBig(flexHead(map_), (databoxBig *)rangeBox_);         \
+            /* rangeBox[idx - 1] is for map[idx]; a wide payload it owns is    \
+             * reused in place */                                              \
+            rangeBoxRefresh_(m, idx, map_, false, NULL);                       \
         }                                                                      \
     } while (0)
 
@@ -190,18 +239,10 @@ static inline void setMiddle(multimapFull *m, multimapFullIdx idx,
          * so don't bother updating a rangebox we are just going to elete      \
          * after this update. */                                               \
         if ((idx) > 0 && flexCount(map_) > 0) {                                \
-            /* Minus one becase rangeBox[0] is for map[1], etc */              \
-            databox *rangeBox = getRangeBox(m, (idx) - 1);                     \
-            databoxFreeData(rangeBox);                                         \
-                                                                               \
-            /* This looks weird, but we want to COPY the value inside rangeBox \
-             * if it is referencing data inside 'map_'.  A 96/128-bit value    \
-             * already lives in the rangeBox's own 'extra'. */                 \
-            multimapGetByTypeBig_(flexHead(map_), (databoxBig *)rangeBox,      \
-                                  ref);                                        \
-            if (!rangeBox->big) {                                              \
-                (void)databoxAllocateIfNeeded(rangeBox);                       \
-            }                                                                  \
+            /* rangeBox[idx - 1] is for map[idx].  It keeps its own copy of    \
+             * the resolved key (BYTES on the heap, a wide key in its owned    \
+             * payload), since a reference names data outside 'map_'. */       \
+            rangeBoxRefresh_(m, idx, map_, true, ref);                         \
         }                                                                      \
     } while (0)
 
@@ -220,23 +261,22 @@ static inline void setMiddle(multimapFull *m, multimapFullIdx idx,
  * copy survives any flex realloc and CANNOT be re-derived without the
  * reference container, so it must be left alone — overwriting it with
  * the raw reference box would corrupt range binary search and leak the
- * copy's allocation.  databoxFreeData before assignment keeps the
- * refresh leak-free even for a map whose rangeBox was once a copy. */
+ * copy's allocation.  rangeBoxAssign_ releases an owned BYTES copy and
+ * reuses an owned wide payload, so the refresh is leak-free even for a
+ * map whose rangeBox was once a copy. */
 #define updateRangeBoxForIdxAfterInMapMutation(m, idx, map_)                   \
     do {                                                                       \
         if ((idx) > 0 && flexCount(map_) > 0) {                                \
-            /* flexGetByTypeBig resets every flag bit (a garbage .allocated    \
-             * stored into the rangeBox would become a bad free on the next    \
-             * refresh) and gives a wide head key its own storage */           \
-            databoxBig mutatedHead_;                                           \
-            flexGetByTypeBig(flexHead(map_), &mutatedHead_);                   \
+            databox mutatedHead_;                                              \
+            databoxWide mutatedHeadWide_;                                      \
+            flexGetByTypeInto(flexHead(map_), &mutatedHead_,                   \
+                              &mutatedHeadWide_);                              \
             if (mutatedHead_.type != DATABOX_CONTAINER_REFERENCE_EXTERNAL) {   \
-                /* Minus one because rangeBox[0] is for map[1], etc */         \
-                databox *rangeBox_ = getRangeBox(m, (idx) - 1);                \
-                databoxFreeData(rangeBox_);                                    \
-                /* re-homes a wide payload into the rangeBox's 'extra' */      \
-                databoxBigCopyFrom((databoxBig *)rangeBox_,                    \
-                                   (const databox *)&mutatedHead_);            \
+                /* rangeBox[idx - 1] is for map[idx].  The assign sets every   \
+                 * flag bit itself and copies a wide key into the payload the  \
+                 * rangeBox owns. */                                           \
+                rangeBoxAssign_(getRangeBox(m, (idx) - 1), &mutatedHead_,      \
+                                false);                                        \
             }                                                                  \
         }                                                                      \
     } while (0)
@@ -247,7 +287,7 @@ static inline void setMiddle(multimapFull *m, multimapFullIdx idx,
  * Creation
  * ==================================================================== */
 static const multimapFull multimapFullNull = {0};
-static const databoxBig rangeBoxNull = {{0}};
+static const databox rangeBoxNull = {{0}};
 
 multimapFull *multimapFullNew(multimapElements elementsPerEntry) {
     /* @own: caller; free=multimapFullFree */
@@ -630,7 +670,7 @@ size_t multimapFullBytesFull(const multimapFull *m) {
      * have grown to individual types, etc, but we don't have
      * multiarrayBytes() implemented yet! */
     Bytes += sizeof(*m);
-    Bytes += sizeof(databoxBig) * (m->count - 1);
+    Bytes += sizeof(databox) * (m->count - 1);
     Bytes += sizeof(multimapFullMiddle) * m->count;
     Bytes += sizeof(flex *) * m->count;
 
@@ -996,7 +1036,9 @@ DK_INLINE_ALWAYS bool abstractFlexDelete(
 
     if (foundP) {
         if (foundReference) {
-            flexGetByType(foundP, foundReference);
+            /* The row is being deleted, so a 96/128-bit key is reported
+             * type-only (see multimapDeleteWithFound). */
+            flexGetByTypeInto(foundP, foundReference, NULL);
         }
 
         flexDeleteSortedValueWithMiddle(map, m->elementsPerEntry, foundP,
@@ -1165,10 +1207,10 @@ int64_t multimapFullFieldIncr(multimapFull *m, const databox *key,
     }
 
     /* (unlikely) else, return current value; a 96/128-bit value can't be
-     * read as int64_t, so it reports 0 */
-    databoxBig curVal;
-    flexGetByTypeBig(current, &curVal);
-    return curVal.big ? 0 : curVal.data.i;
+     * read as int64_t, so it reports 0 (only its type is decoded) */
+    databox curVal;
+    flexGetByTypeInto(current, &curVal, NULL);
+    return databoxIsWideDeferred(&curVal) ? 0 : curVal.data.i;
 }
 
 /* ====================================================================
@@ -1188,20 +1230,25 @@ DK_FN_UNUSED static void strictConsistencyCheck(const multimapFull *m) {
     }
 
     /* Walk only the key of each row, so any row width works. */
+    /* 'prev' and 'key' decode into alternating slots, so 'prev' keeps its
+     * wide payload while the next key is read. */
     bool isFirst = true;
-    databoxBig prev;
+    databox prev;
+    databoxWide keyWide[2];
+    uint32_t slot = 0;
     for (multimapFullIdx i = 0; i < m->count; i++) {
         const flex *map = getMap(m, i);
         flexEntry *fe = flexCount(map) ? flexHead(map) : NULL;
         while (fe) {
-            databoxBig key;
-            flexGetByTypeBig(fe, &key);
+            databox key;
+            flexGetByTypeInto(fe, &key, &keyWide[slot]);
+            slot ^= 1;
             for (multimapElements e = 0; fe && e < m->elementsPerEntry; e++) {
                 fe = flexNext(map, fe);
             }
 
             if (isFirst) {
-                databoxBigCopyFrom(&prev, (const databox *)&key);
+                prev = key;
                 isFirst = false;
                 continue;
             }
@@ -1215,10 +1262,10 @@ DK_FN_UNUSED static void strictConsistencyCheck(const multimapFull *m) {
              * key list. */
             if (prev.type != DATABOX_CONTAINER_REFERENCE_EXTERNAL &&
                 key.type != DATABOX_CONTAINER_REFERENCE_EXTERNAL) {
-                assert(databoxCompare((databox *)&prev, (databox *)&key) <= 0);
+                assert(databoxCompare(&prev, &key) <= 0);
             }
 
-            databoxBigCopyFrom(&prev, (const databox *)&key);
+            prev = key;
         }
     }
 }
@@ -1372,17 +1419,18 @@ abstractInsert(multimapFull *m, const databox *elements[],
                  * range boxes because map[0] has no range box,
                  * so just use the head value directly for insert
                  * comparisons. */
-                databoxBig got;
+                databox got;
+                databoxWide gotWide;
                 const flexEntry *fe = flexHead(*map);
-                multimapGetByTypeBig_(
-                    fe, &got, useSurrogateKey ? referenceContainer : NULL);
+                multimapGetByTypeInto_(fe, &got, &gotWide,
+                                       useSurrogateKey ? referenceContainer
+                                                       : NULL);
 
 #if NOISY_MAPPING
-                databoxReprSay("Deciding based on head[0] of:",
-                               (databox *)&got);
+                databoxReprSay("Deciding based on head[0] of:", &got);
 #endif
                 currentPositionLargerThanNewKey =
-                    databoxCompare((databox *)&got, elements[0]) > 0;
+                    databoxCompare(&got, elements[0]) > 0;
             } else {
                 /* else, this multimapFull has multiple maps,
                  * but the one we're trying to insert into ONLY
@@ -2117,7 +2165,7 @@ bool multimapFullDeleteRandomValue(multimapFull *m, const bool deleteFromTail,
                                    databox **deletedBox) {
     multimapEntry me;
     /* Pass NULL for deletedBox to multimapFullRandomValue, then manually
-     * copy the data using flexGetByTypeCopy. This avoids use-after-free
+     * copy the data using multimapRemovedCopy_. This avoids use-after-free
      * since flexGetByType returns pointers to internal flex data which
      * become invalid after multimapFullDeleteEntry. */
     if (!multimapFullRandomValue(m, deleteFromTail, NULL, &me)) {
@@ -2128,7 +2176,7 @@ bool multimapFullDeleteRandomValue(multimapFull *m, const bool deleteFromTail,
     if (deletedBox) {
         flexEntry *fe = me.fe;
         for (size_t i = 0; i < m->elementsPerEntry; i++) {
-            flexGetByTypeCopy(fe, deletedBox[i]);
+            multimapRemovedCopy_(fe, deletedBox[i]);
             fe = flexNext(*me.map, fe);
         }
     }
@@ -2411,9 +2459,10 @@ bool multimapFullDeleteByPredicate(multimapFull *m,
     const size_t before = flexCount(*me.map) / m->elementsPerEntry;
     int compared = 1;
     if (flexEntryIsValid(*me.map, me.fe)) {
-        databoxBig value;
-        flexGetByTypeBig(me.fe, &value);
-        compared = databoxCompare((databox *)&value, &p->compareAgainst);
+        databox value;
+        databoxWide valueWide;
+        flexGetByTypeInto(me.fe, &value, &valueWide);
+        compared = databoxCompare(&value, &p->compareAgainst);
     }
 
     /* see multimapSmall for comments */
@@ -2446,7 +2495,7 @@ bool multimapFullDeleteByPredicate(multimapFull *m,
 #define CTEST_INCLUDE_KVGEN
 #include "ctest.h"
 
-#include "multimap.h" /* multimapInsertReplacingSweep, multimapWideSweep */
+#include "multimap.h" /* the cross-tier sweeps and the allocation counter */
 
 #define DOUBLE_NEWLINE 0
 #include "perf.h"
@@ -2519,7 +2568,7 @@ static size_t multimapFullReport_(const multimapFull *m, const bool print) {
         Count += flexCount(getMap(m, q));
     }
 
-    size_t rangeBoxBytes = sizeof(databoxBig) * (m->count - 1);
+    size_t rangeBoxBytes = sizeof(databox) * (m->count - 1);
     size_t middleBytes = sizeof(multimapFullMiddle) * m->count;
     size_t mapPtrBytes = sizeof(flex *) * m->count;
     size_t containerBytes = sizeof(*m);
@@ -2551,9 +2600,14 @@ void multimapFullVerify(const multimapFull *m) {
         return;
     }
 
-    databoxBig lowest;
+    /* 'lowest' and 'next' decode into alternating slots, so 'lowest' keeps
+     * its wide payload while the next key is read. */
+    databoxWide keyWide[2];
+    uint32_t slot = 0;
+    databox lowest;
     size_t lowestMapIdx = 0;
-    flexGetByTypeBig(getMapLowest(m), &lowest);
+    flexGetByTypeInto(getMapLowest(m), &lowest, &keyWide[slot]);
+    slot ^= 1;
 
     for (multimapFullIdx i = 0; i < m->count; i++) {
         flex *zl = getMap(m, i);
@@ -2566,15 +2620,16 @@ void multimapFullVerify(const multimapFull *m) {
          * borrowed bytes pointer, that pointer must live INSIDE the
          * current flex allocation (a stale pointer into a freed/moved
          * allocation is a use-after-free waiting for the next search).
-         * A 96/128-bit key must live inline in the rangeBox itself. */
+         * A 96/128-bit key must live in a heap payload the rangeBox owns,
+         * never inside the map. */
         if (i > 0 && flexCount(zl) > 0) {
-            databoxBig head;
-            flexGetByTypeBig(flexHead(zl), &head);
+            databox head;
+            databoxWide headWide;
+            flexGetByTypeInto(flexHead(zl), &head, &headWide);
 
             const databox *rangeBox = getRangeBox(m, i - 1);
-            const databoxBig *rangeBoxBig = (const databoxBig *)rangeBox;
             if (head.type != DATABOX_CONTAINER_REFERENCE_EXTERNAL) {
-                assert(databoxCompare((databox *)&head, rangeBox) == 0);
+                assert(databoxCompare(&head, rangeBox) == 0);
                 if (rangeBox->type == DATABOX_BYTES && !rangeBox->allocated &&
                     !DATABOX_IS_BYTES_EMBED(rangeBox)) {
                     const uint8_t *start = rangeBox->data.bytes.start;
@@ -2584,9 +2639,10 @@ void multimapFullVerify(const multimapFull *m) {
 
             if (rangeBox->type == DATABOX_SIGNED_128 ||
                 rangeBox->type == DATABOX_UNSIGNED_128) {
-                assert(rangeBox->big && !rangeBox->allocated);
-                assert(rangeBox->data.u128 ==
-                       (const __uint128_t *)rangeBoxBig->extra);
+                const uint8_t *payload = rangeBox->data.ptr;
+                assert(rangeBox->big && rangeBox->allocated && payload);
+                assert(payload < zl || payload >= zl + flexBytes(zl));
+                (void)payload;
             } else {
                 assert(!rangeBox->big);
             }
@@ -2594,11 +2650,11 @@ void multimapFullVerify(const multimapFull *m) {
 
         for (multimapFullIdx j = 0; j < flexCount(zl);
              j += m->elementsPerEntry) {
-            databoxBig next;
-            flexGetByTypeBig(flexIndex(zl, j), &next);
+            databox next;
+            flexGetByTypeInto(flexIndex(zl, j), &next, &keyWide[slot]);
+            slot ^= 1;
 
-            if (i > 0 &&
-                databoxCompare((databox *)&lowest, (databox *)&next) > 0) {
+            if (i > 0 && databoxCompare(&lowest, &next) > 0) {
                 printf("Lowest was previously %.*s from map %zu, but found "
                        "element %.*s at (%d, %d)\n",
                        (int)lowest.len, lowest.data.bytes.start, lowestMapIdx,
@@ -2607,16 +2663,204 @@ void multimapFullVerify(const multimapFull *m) {
                 __builtin_unreachable();
             }
 
-            databoxBigCopyFrom(&lowest, (const databox *)&next);
+            lowest = next;
             lowestMapIdx = i;
         }
     }
+}
+
+/* Every rangeBox equals its map's head key.  A wide one owns a heap payload
+ * outside every map (big = 1, allocated = 1); a narrow one owns nothing.
+ * Returns the number of failures. */
+static int32_t rangeBoxOwnershipCheck_(const char *where,
+                                       const multimapFull *m) {
+    int32_t err = 0;
+    for (multimapFullIdx i = 1; i < m->count; i++) {
+        databox head;
+        databoxWide headWide;
+        flexGetByTypeInto(flexHead(getMap(m, i)), &head, &headWide);
+        const databox *rb = getRangeBox(m, i - 1);
+        if (databoxCompare(&head, rb) != 0) {
+            ERR("%s: rangeBox[%" PRIu32 "] differs from its map's head", where,
+                i - 1);
+        }
+
+        if (!rangeBoxIsWide_(rb)) {
+            if (rb->big || rb->allocated) {
+                ERR("%s: narrow rangeBox[%" PRIu32 "] claims a payload", where,
+                    i - 1);
+            }
+
+            continue;
+        }
+
+        if (!rb->big || !rb->allocated || !rb->data.ptr) {
+            ERR("%s: wide rangeBox[%" PRIu32 "] doesn't own its payload", where,
+                i - 1);
+            continue;
+        }
+
+        const uint8_t *payload = rb->data.ptr;
+        for (multimapFullIdx j = 0; j < m->count; j++) {
+            const flex *map = getMap(m, j);
+            if (payload >= map && payload < map + flexBytes(map)) {
+                ERR("%s: wide rangeBox[%" PRIu32 "] points into map %" PRIu32,
+                    where, i - 1, j);
+            }
+        }
+    }
+
+    return err;
 }
 
 int multimapFullTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int err = 0;
+
+    TEST("16-byte rangeBoxes own wide boundary keys and reuse them in place") {
+        const __uint128_t two64 = (__uint128_t)1 << 64;
+        /* Ascending: Wn(9) < ... < Wn(2) < N(1) < N(5) < N(6) < Wp(1) <
+         * ... < Wp(9).  Wn is below -2^64, Wp at or above 2^64. */
+#define RB_WN(k)                                                               \
+    ((databox){.type = DATABOX_SIGNED_128,                                     \
+               .big = true,                                                    \
+               .data.i128 = &(__int128_t){-(__int128_t)two64 - (k)}})
+#define RB_WP(k)                                                               \
+    ((databox){.type = DATABOX_UNSIGNED_128,                                   \
+               .big = true,                                                    \
+               .data.u128 = &(__uint128_t){two64 + (k)}})
+#define RB_N(k) databoxNewUnsigned(k)
+
+        multimapTestAllocCountBegin();
+        {
+            /* map0 [Wn9]  map1 [Wn3 Wn2 N1]  map2 [N5 N6 Wp1]
+             * map3 [Wp5 Wp6 Wp7]  map4 [Wp9] */
+            const databox keys[][3] = {
+                {RB_WN(9)},
+                {RB_WN(3), RB_WN(2), RB_N(1)},
+                {RB_N(5), RB_N(6), RB_WP(1)},
+                {RB_WP(5), RB_WP(6), RB_WP(7)},
+                {RB_WP(9)},
+            };
+            const size_t rows[] = {1, 3, 3, 3, 1};
+            /* @own: container; free=multimapFullFree */
+            flex *maps[5];
+            multimapFullMiddle middles[5] = {0};
+            const databox val = databoxNewUnsigned(7);
+            for (size_t i = 0; i < 5; i++) {
+                /* @own: container; free=multimapFullFree */
+                maps[i] = flexNew();
+                for (size_t r = 0; r < rows[i]; r++) {
+                    flexPushByType(&maps[i], &keys[i][r], FLEX_ENDPOINT_TAIL);
+                    flexPushByType(&maps[i], &val, FLEX_ENDPOINT_TAIL);
+                }
+            }
+
+            /* @own: caller; free=multimapFullFree */
+            multimapFull *m =
+                multimapFullNewFromManyGrow(NULL, maps, middles, 5, 2, false);
+            /* No two maps fit together, so deletes never merge them. */
+            m->maxSize = 1;
+            err += rangeBoxOwnershipCheck_("built", m);
+
+            const void *p0 = getRangeBox(m, 0)->data.ptr;
+            const void *p2 = getRangeBox(m, 2)->data.ptr;
+
+            /* Deleting a head refreshes the rangeBox: wide to wide reuses
+             * the payload, wide to narrow frees it. */
+            databox k = RB_WN(3);
+            multimapFullDelete(m, &k);
+            err += rangeBoxOwnershipCheck_("delete Wn3", m);
+            if (getRangeBox(m, 0)->data.ptr != p0) {
+                ERRR("wide to wide refresh moved the payload");
+            }
+
+            k = RB_WN(2);
+            multimapFullDelete(m, &k);
+            err += rangeBoxOwnershipCheck_("delete Wn2", m);
+            if (getRangeBox(m, 0)->type != DATABOX_UNSIGNED_64) {
+                ERRR("wide to narrow refresh kept a wide rangeBox");
+            }
+
+            /* Narrow to narrow, then narrow to wide allocates. */
+            k = RB_N(5);
+            multimapFullDelete(m, &k);
+            err += rangeBoxOwnershipCheck_("delete N5", m);
+            k = RB_N(6);
+            multimapFullDelete(m, &k);
+            err += rangeBoxOwnershipCheck_("delete N6", m);
+            if (getRangeBox(m, 1)->type != DATABOX_UNSIGNED_128) {
+                ERRR("narrow to wide refresh didn't take the wide key");
+            }
+
+            /* An insert above a wide head splits that map; the lower half
+             * keeps its rangeBox, refreshed in place. */
+            const databox k8 = RB_WP(8);
+            const databox *row[2] = {&k8, &val};
+            multimapFullInsert(m, row);
+            err += rangeBoxOwnershipCheck_("insert Wp8", m);
+            if (getRangeBox(m, 2)->data.ptr != p2) {
+                ERRR("insert refresh moved the wide payload");
+            }
+
+            /* A copy rebuilds its own payloads (freed at the block's end,
+             * inside the counting window). */
+            {
+                cleaner(multimapFullFree) multimapFull *copy =
+                    multimapFullCopy(m);
+                err += rangeBoxOwnershipCheck_("copy", copy);
+                if (copy->count != m->count) {
+                    ERR("copy has %" PRIu32 " maps, original %" PRIu32,
+                        copy->count, m->count);
+                } else {
+                    for (multimapFullIdx i = 0; i + 1 < m->count; i++) {
+                        const databox *a = getRangeBox(m, i);
+                        const databox *b = getRangeBox(copy, i);
+                        if (rangeBoxIsWide_(a) && a->data.ptr == b->data.ptr) {
+                            ERR("copy shares rangeBox[%" PRIu32 "]'s payload",
+                                i);
+                        }
+                    }
+                }
+            }
+
+            /* Deleting a whole map above map[0], then map[0] itself while
+             * rangeBox[0] holds a wide key, then trimming whole leading
+             * maps: each removal frees its rangeBox. */
+            k = RB_N(1);
+            multimapFullDelete(m, &k);
+            err += rangeBoxOwnershipCheck_("delete map1", m);
+            if (!rangeBoxIsWide_(getRangeBox(m, 0))) {
+                ERRR("rangeBox[0] should hold Wp1 before map 0 goes");
+            }
+
+            k = RB_WN(9);
+            multimapFullDelete(m, &k);
+            err += rangeBoxOwnershipCheck_("delete map0", m);
+
+            const multimapPredicate trim = {
+                .condition = MULTIMAP_CONDITION_LESS_THAN_EQUAL,
+                .compareAgainst = RB_WP(6)};
+            multimapFullDeleteByPredicate(m, &trim);
+            err += rangeBoxOwnershipCheck_("trim", m);
+            if (multimapFullCount(m) != 3) {
+                ERR("trim left %zu rows, expected 3 (Wp7 Wp8 Wp9)",
+                    multimapFullCount(m));
+            }
+
+            multimapFullFree(m);
+        }
+
+        const int64_t live = multimapTestAllocCountEnd();
+        if (live != 0) {
+            ERR("%" PRId64 " allocations outlived the map", live);
+        }
+
+#undef RB_WN
+#undef RB_WP
+#undef RB_N
+    }
 
 #if 1
     TEST("flex validators are total over every single-byte mutation") {
@@ -2634,6 +2878,14 @@ int multimapFullTest(int argc, char *argv[]) {
 
     TEST("96/128-bit keys and values through every tier") {
         err += multimapWideSweep();
+    }
+
+    TEST("normal / extended / mixed matrix through every tier") {
+        err += multimapWideMatrixSweep();
+    }
+
+    TEST("normal / extended / mixed persist round trips") {
+        err += multimapWidePersistSweep();
     }
 
     TEST("create") {
@@ -3522,13 +3774,13 @@ int multimapFullTest(int argc, char *argv[]) {
         }
     }
 
-    TEST("rangeBoxes hold 96/128-bit head keys inline across 2048+ "
-         "sub-maps") {
-        /* One row per sub-map (maxSize 64), so the rangeBox multiarray
-         * grows past its native row limit and regroups, and inserts,
-         * splits, merges and trims keep moving rangeBoxes.  Each move
-         * leaves an inline payload pointer aimed at the old slot. */
-        enum { fwRows = 5000 };
+    TEST("rangeBoxes own 96/128-bit head keys across 4096+ sub-maps") {
+        /* About two rows per sub-map (maxSize 64), so the rangeBox
+         * multiarray grows past its native limit (4096 16-byte boxes) and
+         * regroups, and inserts, splits, merges and trims keep moving
+         * rangeBoxes.  A move copies the box but not its heap payload, so
+         * every wide boundary key must still read back by value. */
+        enum { fwRows = 9000 };
         cleaner(multimapFullFree) multimapFull *m = multimapFullNew(2);
         m->maxSize = 64;
 
@@ -3643,7 +3895,7 @@ int multimapFullTest(int argc, char *argv[]) {
 #undef FW_KEY
     }
 
-    TEST("a surrogate-keyed rangeBox holds a 96/128-bit atom value inline") {
+    TEST("a surrogate-keyed rangeBox owns a 96/128-bit atom value") {
         /* The rangeBox of a surrogate-keyed map holds the resolved head
          * key.  The atom table holds narrow values and one wide value,
          * inserted last so building the table never resolves it. */
@@ -3674,11 +3926,9 @@ int multimapFullTest(int argc, char *argv[]) {
                                                     false, ma);
 
         const databox *rb = getRangeBox(m, 0);
-        if (rb->type != DATABOX_UNSIGNED_128 || !rb->big || rb->allocated ||
-            rb->data.u128 !=
-                (const __uint128_t *)((const databoxBig *)rb)->extra ||
-            *rb->data.u128 != wideAtom) {
-            ERRR("rangeBox does not hold the wide atom value inline");
+        if (rb->type != DATABOX_UNSIGNED_128 || !rb->big || !rb->allocated ||
+            !rb->data.u128 || *rb->data.u128 != wideAtom) {
+            ERRR("rangeBox does not own the wide atom value");
         }
 
         __uint128_t above = (__uint128_t)1 << 80;

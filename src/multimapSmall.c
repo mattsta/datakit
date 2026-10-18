@@ -278,7 +278,7 @@ bool multimapSmallDeleteRandomValue(multimapSmall *m, const bool deleteFromTail,
                                     databox **deletedBox) {
     multimapEntry me;
     /* Pass NULL for deletedBox to multimapSmallRandomValue, then manually
-     * copy the data using flexGetByTypeCopy. This avoids use-after-free
+     * copy the data using multimapRemovedCopy_. This avoids use-after-free
      * since flexGetByType returns pointers to internal flex data which
      * become invalid after multimapSmallDeleteEntry. */
     if (!multimapSmallRandomValue(m, deleteFromTail, NULL, &me)) {
@@ -289,7 +289,7 @@ bool multimapSmallDeleteRandomValue(multimapSmall *m, const bool deleteFromTail,
     if (deletedBox) {
         flexEntry *fe = me.fe;
         for (size_t i = 0; i < m->elementsPerEntry; i++) {
-            flexGetByTypeCopy(fe, deletedBox[i]);
+            multimapRemovedCopy_(fe, deletedBox[i]);
             fe = flexNext(m->map, fe);
         }
     }
@@ -329,7 +329,9 @@ DK_INLINE_ALWAYS bool abstractDelete(multimapSmall *m, const databox **elements,
 
     if (foundP) {
         if (foundReference) {
-            flexGetByType(foundP, foundReference);
+            /* The row is being deleted, so a 96/128-bit key is reported
+             * type-only (see multimapDeleteWithFound). */
+            flexGetByTypeInto(foundP, foundReference, NULL);
         }
 
         flexDeleteSortedValueWithMiddle(&m->map, m->elementsPerEntry, foundP,
@@ -439,10 +441,10 @@ int64_t multimapSmallFieldIncr(multimapSmall *m, const databox *key,
     }
 
     /* (unlikely) else, return current value; a 96/128-bit value can't be
-     * read as int64_t, so it reports 0 */
-    databoxBig curVal;
-    flexGetByTypeBig(current, &curVal);
-    return curVal.big ? 0 : curVal.data.i;
+     * read as int64_t, so it reports 0 (only its type is decoded) */
+    databox curVal;
+    flexGetByTypeInto(current, &curVal, NULL);
+    return databoxIsWideDeferred(&curVal) ? 0 : curVal.data.i;
 }
 
 void multimapSmallReset(multimapSmall *m) {
@@ -592,10 +594,11 @@ bool multimapSmallDeleteByPredicate(multimapSmall *m,
     /* By default, assume the value we found is at the end of the list. */
     int compared = 1;
     if (flexEntryIsValid(m->map, startP)) {
-        databoxBig value;
-        flexGetByTypeBig(startP, &value);
+        databox value;
+        databoxWide valueWide;
+        flexGetByTypeInto(startP, &value, &valueWide);
 
-        compared = databoxCompare((databox *)&value, &p->compareAgainst);
+        compared = databoxCompare(&value, &p->compareAgainst);
     }
 
     switch (p->condition) {

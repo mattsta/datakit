@@ -60,10 +60,22 @@ bool multimapExistsWithReference(const multimap *m, const databox *key,
  * a databoxBig armed with DATABOX_BIG_INIT, and re-arm it before each
  * read, since a narrow value overwrites the payload pointer.  A zeroed box
  * receives only the type (data.ptr NULL).  An uninitialized box is a
- * caller bug.  DeleteRandomValue copies through flexGetByTypeCopy, so its
- * boxes need an initialized 'big' too.  Rows the library decodes for
- * itself (ProcessUntil walkers, the key set operations) always carry
- * wide storage, with 'big' set exactly on 96/128-bit values. */
+ * caller bug.  Rows the library decodes for itself (ProcessUntil walkers,
+ * the key set operations) always carry wide storage, with 'big' set
+ * exactly on 96/128-bit values.
+ *
+ * Removing reads.  DeleteRandomValue hands back values that outlive the
+ * row, the way multilistPop does: a 96/128-bit value is written in band
+ * when the box has 'big' set (an armed databoxBig), and otherwise comes
+ * back in a 16-byte heap payload the caller owns (big = 1,
+ * allocated = 1).  BYTES of 8 bytes or less come back embedded
+ * (DATABOX_BYTES_EMBED, nothing owned) and longer ones as heap copies.
+ * Release each box with databoxFreeData, and initialize 'big' as for any
+ * read.  Two removing
+ * paths are documented exceptions that report a 96/128-bit value
+ * type-only (data.ptr NULL, big = 0) whatever the box holds:
+ * InsertReplacing's replacedOut and DeleteWithFound / DeleteWithReference's
+ * foundReference. */
 bool multimapLookup(const multimap *m, const databox *key, databox *elements[]);
 
 /* NOTE: despite the scalar-looking `databox **found`, this fills a
@@ -75,6 +87,10 @@ bool multimapRandomValue(multimap *m, bool fromTail, databox **found,
 
 bool multimapDelete(multimap **m, const databox *key);
 bool multimapDeleteFullWidth(multimap **m, const databox *elements[]);
+/* foundReference, when non-NULL, receives the deleted row's key as stored
+ * (the reference id in a surrogate-keyed map).  A BYTES key points into
+ * the rewritten map and must not be read, and a 96/128-bit key is
+ * reported type-only (see "Removing reads" above). */
 bool multimapDeleteWithReference(multimap **m, const databox *key,
                                  const struct multimapAtom *referenceContainer,
                                  databox *foundReference);
@@ -221,4 +237,21 @@ int32_t multimapInsertReplacingSweep(void);
  * 0xFF-poisoned output boxes.  Returns the number of failures.  Run by
  * multimapTest and multimapFullTest. */
 int32_t multimapWideSweep(void);
+/* The normal / extended / mixed matrix (64-bit only, 96/128-bit only, and
+ * interleaved across the 2^63 / 2^64 / 2^96 boundaries) through Small,
+ * Medium and Full maps.  Each map is built, read through every path,
+ * trimmed, refilled, copied, read through the removing paths
+ * (InsertReplacing, DeleteWithFound, a DeleteRandomValue drain) and freed
+ * inside an allocation-counting window that must end where it began.
+ * Returns the number of failures. */
+int32_t multimapWideMatrixSweep(void);
+/* The same three data modes through multimapP: snapshot, WAL and
+ * recovery, checked against the oracle before and after reopening.
+ * Returns the number of failures. */
+int32_t multimapWidePersistSweep(void);
+/* Count live blocks from the datakit allocator between Begin and End (not
+ * nestable, single-threaded).  End restores the allocator and returns the
+ * blocks allocated and not freed inside the window. */
+void multimapTestAllocCountBegin(void);
+int64_t multimapTestAllocCountEnd(void);
 #endif

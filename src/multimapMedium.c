@@ -104,10 +104,12 @@ DK_INLINE_ALWAYS size_t multimapMediumBinarySearch_(
     }
 
     const flexEntry *restrict head = flexHead(m->map[1]);
-    databoxBig got;
-    multimapGetByTypeBig_(head, &got, useReference ? referenceContainer : NULL);
+    databox got;
+    databoxWide gotWide;
+    multimapGetByTypeInto_(head, &got, &gotWide,
+                           useReference ? referenceContainer : NULL);
 
-    const int compared = databoxCompare((databox *)&got, key);
+    const int compared = databoxCompare(&got, key);
 
     if (compared <= 0) {
         /* head of map 1 is <= key, so insert into [1] */
@@ -133,7 +135,8 @@ DK_STATIC size_t multimapMediumBinarySearchFullWidth(
     multimapMedium *m, const databox *elements[]) {
     /* We split the search space based on the head element of map[1],
      * so if we're < element[x], use map[0], else use map[1] */
-    databoxBig got;
+    databox got;
+    databoxWide gotWide;
     flexEntry *start = flexHead(m->map[1]);
     size_t mapIdx = 1;
 
@@ -143,10 +146,10 @@ DK_STATIC size_t multimapMediumBinarySearchFullWidth(
         return 0;
     }
 
-    flexGetByTypeBig(start, &got);
+    flexGetByTypeInto(start, &got, &gotWide);
 
     for (size_t i = 0; i < m->elementsPerEntry; i++) {
-        const int compared = databoxCompare((databox *)&got, elements[i]);
+        const int compared = databoxCompare(&got, elements[i]);
 
         if (compared < 0) {
             /* head of map 1 is < key, so insert into [1] */
@@ -166,7 +169,7 @@ DK_STATIC size_t multimapMediumBinarySearchFullWidth(
 
             start = flexNext(m->map[1], start);
             assert(start);
-            flexGetByTypeBig(start, &got);
+            flexGetByTypeInto(start, &got, &gotWide);
             /* if same, loop again and check next element pair */
             /* If this is the last loop, we were equal against every
              * compare element, and we return mapIdx==1 as mapIdx
@@ -472,7 +475,7 @@ bool multimapMediumDeleteRandomValue(multimapMedium *m,
                                      databox **deletedBox) {
     multimapEntry me;
     /* Pass NULL for deletedBox to multimapMediumRandomValue, then manually
-     * copy the data using flexGetByTypeCopy. This avoids use-after-free
+     * copy the data using multimapRemovedCopy_. This avoids use-after-free
      * since flexGetByType returns pointers to internal flex data which
      * become invalid after multimapMediumDeleteEntry. */
     if (!multimapMediumRandomValue(m, deleteFromTail, NULL, &me)) {
@@ -483,7 +486,7 @@ bool multimapMediumDeleteRandomValue(multimapMedium *m,
     if (deletedBox) {
         flexEntry *fe = me.fe;
         for (size_t i = 0; i < m->elementsPerEntry; i++) {
-            flexGetByTypeCopy(fe, deletedBox[i]);
+            multimapRemovedCopy_(fe, deletedBox[i]);
             fe = flexNext(*me.map, fe);
         }
     }
@@ -541,7 +544,9 @@ abstractDelete(multimapMedium *m, const databox **elements,
 
     if (foundP) {
         if (foundReference) {
-            flexGetByType(foundP, foundReference);
+            /* The row is being deleted, so a 96/128-bit key is reported
+             * type-only (see multimapDeleteWithFound). */
+            flexGetByTypeInto(foundP, foundReference, NULL);
         }
 
         flexDeleteSortedValueWithMiddle(&m->map[mapIdx], m->elementsPerEntry,
@@ -656,10 +661,10 @@ int64_t multimapMediumFieldIncr(multimapMedium *m, const databox *key,
     }
 
     /* (unlikely) else, return current value; a 96/128-bit value can't be
-     * read as int64_t, so it reports 0 */
-    databoxBig curVal;
-    flexGetByTypeBig(current, &curVal);
-    return curVal.big ? 0 : curVal.data.i;
+     * read as int64_t, so it reports 0 (only its type is decoded) */
+    databox curVal;
+    flexGetByTypeInto(current, &curVal, NULL);
+    return databoxIsWideDeferred(&curVal) ? 0 : curVal.data.i;
 }
 
 void multimapMediumReset(multimapMedium *m) {
@@ -866,10 +871,11 @@ bool multimapMediumDeleteByPredicate(multimapMedium *m,
     /* By default, assume the value we found is at the end of the list. */
     int compared = 1;
     if (flexEntryIsValid(m->map[mapIdx], startP)) {
-        databoxBig value;
-        flexGetByTypeBig(startP, &value);
+        databox value;
+        databoxWide valueWide;
+        flexGetByTypeInto(startP, &value, &valueWide);
 
-        compared = databoxCompare((databox *)&value, &p->compareAgainst);
+        compared = databoxCompare(&value, &p->compareAgainst);
     }
 
     switch (p->condition) {
