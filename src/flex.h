@@ -157,9 +157,12 @@ void flexBulkPushBytesMembers(flex **ff, const flexBytesMember *members,
                               size_t count);
 
 /* Insert to head or tail of flex */
-/* Bytes content that parses as a numeral is ALWAYS canonicalised to its
- * minimum best representation — that is the platform contract.  Readers
- * interpret the stored encoding; writers never force a wider one. */
+/* Bytes content that spells a numeral is always stored as its canonical
+ * number, in its minimum representation (databoxCanonical in databox.h): a
+ * 64-bit integer, float or double, or a 96/128-bit integer for integer
+ * numerals beyond 64 bits.  That is the platform contract.  Readers interpret
+ * the stored encoding; writers never force a wider one.  flexPushByType does
+ * the same for BYTES and BYTES_EMBED boxes. */
 void flexPushBytes(flex **ff, const void *data, size_t len, flexEndpoint where);
 void flexPushSigned(flex **ff, int64_t i, flexEndpoint where);
 void flexPushUnsigned(flex **ff, uint64_t u, flexEndpoint where);
@@ -248,7 +251,8 @@ bool flexGetTwoDataboxesBig(const uint8_t *buf, size_t buflen, databoxBig *a,
  * Returns the number of failed checks (0 == all passed). */
 int flexFactorySelfTest(void);
 
-/* Insert at existing position 'fe' */
+/* Insert at existing position 'fe'.  flexInsertBytes canonicalizes a numeral
+ * exactly as flexPushBytes does; flexInsertByType stores BYTES verbatim. */
 void flexInsertBytes(flex **ff, flexEntry *fe, const void *data,
                      const size_t len);
 void flexInsertSigned(flex **ff, flexEntry *fe, int64_t i);

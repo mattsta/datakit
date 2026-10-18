@@ -546,6 +546,54 @@ databox databoxNewReal(double value);
 bool databoxEqual(const databox *a, const databox *b);
 int databoxCompare(const databox *a, const databox *b);
 
+/* Canonical numerals.
+ *
+ * datakit stores a byte string that spells a number as that number, in its
+ * minimum representation, and readers interpret.  These two functions are
+ * the one home of that rule; flexInsertBytes and every container boundary
+ * use them.
+ *
+ * databoxCanonicalNumeral writes the canonical form of 'in' to *out and
+ * returns true when 'in' is a BYTES or BYTES_EMBED box holding a numeral:
+ *   - content StrScanScanReliable accepts becomes its SIGNED_64,
+ *     UNSIGNED_64, FLOAT_32 or DOUBLE_64 box (big = 0);
+ *   - an integer numeral beyond 64 bits, down to INT128_MIN and up to
+ *     UINT128_MAX, with the same syntax (no sign but a leading '-', no
+ *     leading zeros), becomes a SIGNED_128 box when negative and an
+ *     UNSIGNED_128 box when positive.  Its payload is stored in out->extra
+ *     (big = 1, allocated = 0).  StrScanScanReliableConvert128 parses it.
+ * Anything else returns false and leaves *out untouched, and the caller keeps
+ * 'in' as it is.  Boxes of any other type, numbers included, return false.
+ *
+ * It never allocates.  A 128-bit result points into 'out' itself, so it is
+ * valid for as long as 'out' is and must not be copied by value; use
+ * databoxBigCopyFrom to move it.  'in' is only read: the result does not
+ * borrow from its bytes. */
+bool databoxCanonicalNumeral(const databox *in, databoxBig *out);
+
+/* The box to store or compare with: 'in' itself, or 'scratch' holding the
+ * canonical numeral of 'in'.  The inline fast reject returns 'in' with no
+ * call for boxes that are not BYTES or BYTES_EMBED, for empty strings, and
+ * for strings whose first byte is neither '-' nor a digit, because no
+ * numeral starts any other way.  Only a numeral-looking string pays for
+ * databoxCanonicalNumeral.  'scratch' is written only when the result is
+ * 'scratch'. */
+static inline const databox *databoxCanonical(const databox *in,
+                                              databoxBig *scratch) {
+    if (!DATABOX_IS_BYTES(in) || in->len == 0) {
+        return in;
+    }
+
+    const uint8_t first = DATABOX_IS_BYTES_EMBED(in)
+                              ? in->data.bytes.embed[0]
+                              : in->data.bytes.custart[0];
+    if (first != '-' && (uint8_t)(first - '0') > 9) {
+        return in;
+    }
+
+    return databoxCanonicalNumeral(in, scratch) ? (const databox *)scratch : in;
+}
+
 /* Trivial constructors are inline: they appear on hot paths (boxing
  * entries for flex/multimap inserts) where a function call per element
  * would dominate the work. */

@@ -211,9 +211,10 @@ has no 4-byte external form, so the next width up is `1 + 4`.
 ### Automatic Value Canonicalisation
 
 `flexPushBytes` and `flexInsertBytes` run the byte string through
-`StrScanScanReliable` first. A string that parses cleanly as a number is
-stored in its **numeric** encoding, not as bytes — so pushing `"42"` and
-reading it back yields `DATABOX_UNSIGNED_64`, not `DATABOX_BYTES`:
+`databoxCanonical` (see [databox](../core/DATABOX.md#canonical-numerals))
+first. A string that spells a number is stored in its **numeric** encoding,
+not as bytes, so pushing `"42"` and reading it back yields
+`DATABOX_UNSIGNED_64`, not `DATABOX_BYTES`:
 
 ```c
 flexPushBytes(&f, "42", 2, FLEX_ENDPOINT_TAIL);
@@ -225,6 +226,22 @@ assert(DATABOX_IS_INTEGER(&box));   /* NOT DATABOX_IS_BYTES */
 
 This is a storage win for numeral-heavy data, and it is why round-tripping a
 flex is value-preserving rather than byte-preserving.
+
+What counts as a numeral:
+
+| Pushed bytes | Stored as |
+|---|---|
+| `"22"`, `"0"`, `"-5"` | integer |
+| `"9223372036854775808"` to `"18446744073709551615"` | unsigned 64-bit integer |
+| `"18446744073709551616"` to `"340282366920938463463374607431768211455"` | 96/128-bit unsigned integer |
+| `"-9223372036854775809"` to `"-170141183460469231731687303715884105728"` | 96/128-bit signed integer |
+| `"22.0"`, `"-0.5"`, and reals whose re-print gives exactly the input bytes | float or double |
+| `"007"`, `"01"`, `"-0"`, `"-01"`, `"+5"`, `" 22"`, `"22 "`, `"1e3"`, `".5"`, `"5."`, `"-0.0"`, `"299.5000"`, `"123.10"`, `"nan"`, numerals beyond the 128-bit range | bytes, verbatim |
+
+A numeral beyond 64 bits is a 96/128-bit element, so read it back with
+`flexGetByTypeInto` (a `databoxWide` slot) or `flexGetByTypeBig`; a plain
+`flexGetByType` reports only its type (see
+[96/128-bit elements](#96128-bit-elements)).
 
 `flexPushByType` routes `DATABOX_BYTES` / `DATABOX_BYTES_EMBED` through
 `flexInsertBytes`, so **endpoint pushes canonicalise too**. The positional
@@ -2162,8 +2179,9 @@ flexGetByType(flexHead(f), &box);
 assert(DATABOX_IS_BYTES(&box));   /* fails: it is an integer */
 ```
 
-Any push of a numeral-looking string lands in a numeric encoding. Test with
-`DATABOX_IS_INTEGER` / `DATABOX_IS_FLOAT` as well, or keep the value out of
+Any push of a numeral lands in a numeric encoding, including a 96/128-bit
+integer for integer numerals beyond 64 bits. Test with `DATABOX_IS_INTEGER` /
+`DATABOX_IS_FLOAT` and the 128-bit types as well, or keep the value out of
 numeral form.
 
 ### 6. Holding Decoded Bytes Across a Mutation

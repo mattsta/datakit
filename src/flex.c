@@ -2433,7 +2433,8 @@ void flexInsertNull(flex **const ff, flexEntry *const fe, void *none) {
     flexInsert_(ff, fe, encoding, NULL, 0);
 }
 
-/* Auto-conversion to signed integer or float or double. */
+/* Stores a numeral as its canonical number (databoxCanonical: a 64-bit
+ * integer, float, double or 128-bit integer), and anything else as bytes. */
 void flexInsertBytes(flex **const ff, flexEntry *const fe, const void *data,
                      size_t len) {
 /* 'fe' MUST be inside the bounds of 'f' but not be f itself. */
@@ -2444,9 +2445,12 @@ void flexInsertBytes(flex **const ff, flexEntry *const fe, const void *data,
     assert(fe <= (*ff + flexTotalBytes_(*ff)));
 #endif
 
-    databox box;
-    if (StrScanScanReliable(data, len, &box)) {
-        flexInsertByType(ff, fe, &box);
+    const databox bytes = {
+        .data.bytes.custart = data, .type = DATABOX_BYTES, .len = len};
+    databoxBig scratch;
+    const databox *const canonical = databoxCanonical(&bytes, &scratch);
+    if (canonical != &bytes) {
+        flexInsertByType(ff, fe, canonical);
     } else {
         flexInsert_(ff, fe, FLEX_STRING_ENCODING(len), data, len);
     }
@@ -3317,16 +3321,14 @@ void flexPushBytes(flex **const ff, const void *data, size_t len,
 
 /* Push a databox to the head/tail of `*ff`.
  *
- * NOTE on the deliberate asymmetry vs flexInsertByType_: the DATABOX_BYTES
- * cases below route through flexInsertBytes, which CANONICALISES a numeric
- * byte string ("22" -> integer 22) via StrScanScanReliable.  flexInsertByType_
- * stores DATABOX_BYTES raw (no canonicalisation).  Push's canonicalising
- * behaviour is load-bearing — it matches how flex-backed containers
- * (multimap/multilist) normalise members on insert — so the two are NOT
- * interchangeable for byte strings and must stay separate switches.  Numeric /
- * fixed-width types carry no such concern, so the wide-integer and nested
- * container cases delegate to the shared insert path rather than duplicate
- * their encoders. */
+ * The BYTES cases route through flexInsertBytes, which stores a numeral as
+ * its canonical number ("22" -> integer 22, databoxCanonical).
+ * flexInsertByType stores BYTES verbatim, so the two are not interchangeable
+ * for byte strings and stay separate switches.  Callers that insert at a
+ * position canonicalize first when they need the canonical form.  Numeric and
+ * fixed-width types have no such difference, so the wide-integer and nested
+ * container cases use the shared insert path instead of duplicating its
+ * encoders. */
 void flexPushByType(flex **const ff, const databox *box, flexEndpoint where) {
     /* Special case: if databox is NULL, insert NULL encoding. */
     if (!box) {
@@ -8516,6 +8518,56 @@ static bool flexTestDeferredAborts_(int32_t path, databoxType type) {
     return WIFEXITED(status) && WEXITSTATUS(status) == FLEX_TEST_ABORT_STATUS;
 }
 
+/* The decimal spelling of a numeric box read back from a flex: integers in
+ * plain decimal (an independent formatter, for the 128-bit arms too) and
+ * reals as StrDoubleFormatToBufNice prints them.  'buf' holds at least 64
+ * bytes.  Returns the length, or 0 for a non-numeric box. */
+static size_t flexTestSpellNumber_(const databox *box, char *buf) {
+    bool negative = false;
+    __uint128_t magnitude = 0;
+    switch (box->type) {
+    case DATABOX_SIGNED_64:
+        negative = box->data.i < 0;
+        magnitude = negative ? 0 - (uint64_t)box->data.i : box->data.u;
+        break;
+    case DATABOX_UNSIGNED_64:
+        magnitude = box->data.u;
+        break;
+    case DATABOX_SIGNED_128:
+        negative = *box->data.i128 < 0;
+        magnitude = negative ? 0 - (__uint128_t)*box->data.i128
+                             : (__uint128_t)*box->data.i128;
+        break;
+    case DATABOX_UNSIGNED_128:
+        magnitude = *box->data.u128;
+        break;
+    case DATABOX_FLOAT_32:
+        return StrDoubleFormatToBufNice(buf, 64, box->data.f32);
+    case DATABOX_DOUBLE_64:
+        return StrDoubleFormatToBufNice(buf, 64, box->data.d64);
+    default:
+        return 0;
+    }
+
+    char reversed[40];
+    size_t digits = 0;
+    do {
+        reversed[digits++] = (char)('0' + (int)(magnitude % 10));
+        magnitude /= 10;
+    } while (magnitude);
+
+    size_t at = 0;
+    if (negative) {
+        buf[at++] = '-';
+    }
+
+    while (digits) {
+        buf[at++] = reversed[--digits];
+    }
+
+    return at;
+}
+
 int32_t flexTest(int32_t argc, char **argv) {
     setlocale(LC_ALL, "");
 
@@ -8769,6 +8821,135 @@ int32_t flexTest(int32_t argc, char **argv) {
         printf("  ok (%zu values, box and bytes; %zu 128-bit values)\n",
                sizeof(vals) / sizeof(vals[0]),
                sizeof(bigVals) / sizeof(bigVals[0]));
+    }
+
+    printf("Verify pushed and inserted numerals store as their canonical "
+           "numbers:\n");
+    {
+        /* Each string goes in through flexPushBytes, flexPushByType with a
+         * BYTES box (and a BYTES_EMBED box when it fits) and
+         * flexInsertBytes.  A numeral must read back equal to
+         * databoxCanonical's result and re-print as its input; anything else
+         * must read back as the same bytes.  The spellings cover each
+         * integer width the encoder picks, 2^64, 2^96 and the 128-bit
+         * limits, reals, and near-numerals on both sides of them. */
+        static const char *const spellings[] = {
+            "22",
+            "0",
+            "-5",
+            "255",
+            "256",
+            "-129",
+            "65536",
+            "9223372036854775807",
+            "9223372036854775808",
+            "-9223372036854775808",
+            "18446744073709551615",
+            "18446744073709551616",
+            "-9223372036854775809",
+            "-18446744073709551616",
+            "79228162514264337593543950335",
+            "79228162514264337593543950336",
+            "-79228162514264337593543950336",
+            "170141183460469231731687303715884105727",
+            "170141183460469231731687303715884105728",
+            "-170141183460469231731687303715884105728",
+            "340282366920938463463374607431768211455",
+            "340282366920938463463374607431768211456",
+            "-170141183460469231731687303715884105729",
+            "0018446744073709551616",
+            "22.0",
+            "-0.5",
+            "0.4",
+            "299.5",
+            "007",
+            "-0",
+            "+5",
+            " 22",
+            "1e3",
+            "299.5000",
+            "-0.0",
+            "hello",
+        };
+        int32_t bad = 0;
+        uint32_t numerals = 0;
+        uint32_t wide = 0;
+        for (size_t i = 0; i < COUNT_ARRAY(spellings); i++) {
+            const char *const s = spellings[i];
+            const size_t len = strlen(s);
+            const databox bytes = {
+                .data.bytes.ccstart = s, .type = DATABOX_BYTES, .len = len};
+            databoxBig scratch;
+            const databox *const expect = databoxCanonical(&bytes, &scratch);
+
+            cleaner(flexFree) flex *pf = flexNew();
+            flexPushBytes(&pf, s, len, FLEX_ENDPOINT_TAIL);
+            flexPushByType(&pf, &bytes, FLEX_ENDPOINT_TAIL);
+            size_t ways = 2;
+            if (len <= sizeof(bytes.data.bytes.embed)) {
+                databox embed = {{0}};
+                embed.type = DATABOX_BYTES_EMBED;
+                embed.len = len;
+                memcpy(embed.data.bytes.embed, s, len);
+                flexPushByType(&pf, &embed, FLEX_ENDPOINT_HEAD);
+                ways++;
+            }
+            flexInsertBytes(&pf, flexHead(pf), s, len);
+            ways++;
+
+            if (flexCount(pf) != ways) {
+                printf("  FAIL: '%s' made %zu entries, expected %zu\n", s,
+                       flexCount(pf), ways);
+                bad++;
+                continue;
+            }
+
+            for (size_t j = 0; j < ways; j++) {
+                databox got = {{0}};
+                databoxWide slot;
+                flexGetByTypeInto(flexIndex(pf, (int32_t)j), &got, &slot);
+                bool same;
+                if (expect == &bytes) {
+                    same = DATABOX_IS_BYTES(&got) && got.len == len &&
+                           memcmp(databoxBytes(&got), s, len) == 0;
+                } else {
+                    char spelled[64];
+                    const size_t spelledLen =
+                        flexTestSpellNumber_(&got, spelled);
+                    same = databoxCompare(&got, expect) == 0 &&
+                           spelledLen == len && memcmp(spelled, s, len) == 0;
+                }
+
+                if (!same) {
+                    printf("  FAIL: '%s' (entry %zu) read back as %s,", s, j,
+                           databoxReprStr(&got));
+                    printf(" expected %s\n", expect == &bytes
+                                                 ? "the same bytes"
+                                                 : databoxReprStr(expect));
+                    bad++;
+                }
+            }
+
+            if (expect != &bytes) {
+                numerals++;
+                wide += expect->type == DATABOX_SIGNED_128 ||
+                        expect->type == DATABOX_UNSIGNED_128;
+            }
+        }
+
+        if (wide != 10 || numerals != 25) {
+            printf("  FAIL: %" PRIu32 " numerals (%" PRIu32
+                   " wide); expected 25 (10 wide)\n",
+                   numerals, wide);
+            bad++;
+        }
+
+        if (bad) {
+            printf("  %" PRId32 " canonical round-trips FAILED\n", bad);
+            return bad;
+        }
+        printf("  ok (%zu spellings, %" PRIu32 " numerals)\n",
+               COUNT_ARRAY(spellings), numerals);
     }
 
     printf("Verify a nested container read back with flexGetByType writes "
@@ -11389,25 +11570,21 @@ int32_t flexTest(int32_t argc, char **argv) {
                     uint8_t *str = NULL;
                     ssize_t len = -1;
                     databox got = {{0}};
-                    flexGetByType(fe, &got);
+                    databoxWide slot;
+                    flexGetByTypeInto(fe, &got, &slot);
 
                     if (got.type == DATABOX_BYTES) {
                         str = got.data.bytes.start;
                         len = got.len;
                         buflen = len;
                         memcpy(buf, str, buflen);
-                    } else if (got.type == DATABOX_SIGNED_64) {
-                        buflen =
-                            snprintf(buf, bufbuflen, "%" PRIdMAX, got.data.i);
-                    } else if (got.type == DATABOX_UNSIGNED_64) {
-                        buflen =
-                            snprintf(buf, bufbuflen, "%" PRIuMAX, got.data.u);
-                    } else if (got.type == DATABOX_FLOAT_32) {
-                        buflen = StrDoubleFormatToBufNice(buf, bufbuflen,
-                                                          got.data.f32);
-                    } else if (got.type == DATABOX_DOUBLE_64) {
-                        buflen = StrDoubleFormatToBufNice(buf, bufbuflen,
-                                                          got.data.d64);
+                    } else if (DATABOX_IS_NUMERIC(&got) ||
+                               got.type == DATABOX_SIGNED_128 ||
+                               got.type == DATABOX_UNSIGNED_128) {
+                        /* randstring's digit-only strings of 20 to 39 digits
+                         * are integer numerals beyond 64 bits, so they read
+                         * back as 128-bit integers. */
+                        buflen = flexTestSpellNumber_(&got, buf);
                     } else {
                         assert(NULL && "Unexpected type!");
                     }

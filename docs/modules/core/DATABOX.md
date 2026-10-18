@@ -660,6 +660,56 @@ assert(databoxCompare(&n1, &n2) < 0);
 
 Comparing a `DATABOX_VOID` box asserts in debug builds.
 
+## Canonical Numerals
+
+datakit stores a byte string that spells a number as that number, in its
+minimum representation, and readers interpret. These two functions are the
+one home of that rule; `flexInsertBytes` (and so every flex push) uses them.
+
+```c
+/* true, with *out holding the canonical number, when 'in' is a BYTES or
+ * BYTES_EMBED numeral; false, with *out untouched, otherwise. */
+bool databoxCanonicalNumeral(const databox *in, databoxBig *out);
+
+/* 'in' itself, or 'scratch' holding the canonical numeral of 'in'. */
+static inline const databox *databoxCanonical(const databox *in,
+                                              databoxBig *scratch);
+```
+
+| Bytes | Canonical form |
+|---|---|
+| `"22"`, `"0"`, `"-5"`, up to `"9223372036854775807"`, down to `"-9223372036854775808"` | `DATABOX_SIGNED_64` |
+| `"9223372036854775808"` to `"18446744073709551615"` | `DATABOX_UNSIGNED_64` |
+| `"18446744073709551616"` to `"340282366920938463463374607431768211455"` | `DATABOX_UNSIGNED_128` |
+| `"-9223372036854775809"` to `"-170141183460469231731687303715884105728"` | `DATABOX_SIGNED_128` |
+| `"22.0"`, `"-0.5"`, `"0.4"`: reals whose re-print gives exactly the input bytes | `DATABOX_FLOAT_32` when the value is exact as a float, else `DATABOX_DOUBLE_64` |
+| `"007"`, `"01"`, `"-0"`, `"-01"`, `"+5"`, `" 22"`, `"22 "`, `"1e3"`, `".5"`, `"5."`, `"-0.0"`, `"299.5000"`, `"123.10"`, `"nan"`, `"inf"`, numerals outside the 128-bit range | not a numeral: the caller keeps the bytes |
+
+The 64-bit forms are exactly what `StrScanScanReliable` accepts; the 128-bit
+forms are the integers beyond 64 bits that `StrScanScanReliableConvert128`
+accepts. Only `DATABOX_BYTES` and `DATABOX_BYTES_EMBED` are canonicalized;
+every other type, numbers included, passes through.
+
+Ownership and lifetime:
+
+- Neither function allocates. The result never borrows from the input bytes.
+- A narrow result has `big = 0`. A 128-bit result keeps its payload in the
+  `databoxBig`'s own `extra` (`big = 1`, `allocated = 0`), so it is valid for
+  as long as the scratch is and must not be copied by value; move it with
+  `databoxBigCopyFrom`.
+- On a rejection, `*out` (or `scratch`) is not written.
+
+`databoxCanonical` is the form to use at a boundary. Its inline fast reject
+returns `in` without a call for non-bytes boxes, empty strings, and strings
+whose first byte is neither `-` nor a digit, so ordinary string keys pay one
+or two branches and only numeral-looking strings reach the scanner:
+
+```c
+databoxBig scratch;
+const databox *key = databoxCanonical(callerKey, &scratch);
+/* store or compare 'key' */
+```
+
 ## Debugging and Display
 
 ```c

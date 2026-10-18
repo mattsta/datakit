@@ -1049,9 +1049,57 @@ int databoxCompare(const databox *restrict a, const databox *restrict b) {
 #endif
 }
 
+/* Integer numerals beyond 64 bits are 20 to 40 bytes long: 2^64 has 20
+ * digits, and INT128_MIN is a '-' and 39 digits. */
+#define DATABOX_CANONICAL_WIDE_MIN_LEN 20
+#define DATABOX_CANONICAL_WIDE_MAX_LEN 40
+
+bool databoxCanonicalNumeral(const databox *in, databoxBig *out) {
+    if (!DATABOX_IS_BYTES(in) || in->len == 0) {
+        return false;
+    }
+
+    const uint8_t *const p = DATABOX_IS_BYTES_EMBED(in)
+                                 ? in->data.bytes.embed
+                                 : in->data.bytes.custart;
+    const size_t len = in->len;
+
+    /* The 64-bit scanner decides every narrow form: integers, floats and
+     * doubles. */
+    databox narrow = {{0}};
+    if (StrScanScanReliable(p, len, &narrow)) {
+        memcpy(out, &narrow, sizeof(narrow));
+        return true;
+    }
+
+    if (len < DATABOX_CANONICAL_WIDE_MIN_LEN ||
+        len > DATABOX_CANONICAL_WIDE_MAX_LEN) {
+        return false;
+    }
+
+    /* The 128-bit scanner adds only the integers beyond 64 bits.  It writes
+     * 'out' only for those, so a narrow result here (one the 64-bit scanner
+     * just rejected) leaves 'out' untouched and the string stays bytes. */
+    databox small;
+    databoxBig *use = NULL;
+    if (!StrScanScanReliableConvert128(p, len, &small, out, &use) ||
+        use != out) {
+        return false;
+    }
+
+    /* The scanner set the type, the payload and 'big'; the rest of the
+     * metadata may be whatever the caller's scratch held. */
+    out->allocated = false;
+    out->created = false;
+    out->unused = 0;
+    out->len = 0;
+    return true;
+}
+
 #ifdef DATAKIT_TEST
 #include "cleaner.h"
 #include "flex.h"
+#include "strDoubleFormat.h"
 #include <stdio.h> /* printf */
 
 /* Scope-exit cleaners (see cleaner.h idioms) */
@@ -1226,6 +1274,336 @@ static bool databoxTestCompareAborts_(const databox *a, const databox *b) {
 
     return WIFEXITED(status) &&
            WEXITSTATUS(status) == DATABOX_TEST_ABORT_STATUS;
+}
+
+/* Canonical-numeral tests.  The integer oracle below shares no code with
+ * the scanners: it checks the syntax itself and classifies the exact
+ * magnitude.  Reals have no independent oracle, so the 64-bit scanner
+ * decides them and every accepted real must re-print to exactly its input
+ * bytes, which is the scanner's contract. */
+typedef struct dbCanonTally_ {
+    uint32_t strings;
+    uint32_t narrow;
+    uint32_t wide;
+    uint32_t reals;
+    uint32_t bytes;
+} dbCanonTally_;
+
+/* Decimal spelling of 'magnitude', after a '-' when 'negative'.  'buf'
+ * holds at least 42 bytes.  Returns the length. */
+static size_t dbCanonSpell_(char *buf, __uint128_t magnitude, bool negative) {
+    char reversed[40];
+    size_t digits = 0;
+    do {
+        reversed[digits++] = (char)('0' + (int)(magnitude % 10));
+        magnitude /= 10;
+    } while (magnitude);
+
+    size_t at = 0;
+    if (negative) {
+        buf[at++] = '-';
+    }
+
+    while (digits) {
+        buf[at++] = reversed[--digits];
+    }
+
+    buf[at] = '\0';
+    return at;
+}
+
+/* Sets *shaped when 's' is an optional '-' followed by one or more decimal
+ * digits.  Returns true, with *expect holding the canonical box, when it is
+ * also a canonical integer numeral: no leading zero, not "-0", and within
+ * INT128_MIN..UINT128_MAX. */
+static bool dbCanonIntegerOracle_(const uint8_t *s, size_t len, bool *shaped,
+                                  databoxBig *expect) {
+    *shaped = false;
+    const bool negative = len > 0 && s[0] == '-';
+    const size_t start = negative ? 1 : 0;
+    if (len == start) {
+        return false;
+    }
+
+    for (size_t i = start; i < len; i++) {
+        if (s[i] < '0' || s[i] > '9') {
+            return false;
+        }
+    }
+
+    *shaped = true;
+    if (s[start] == '0' && (negative || len - start > 1)) {
+        return false;
+    }
+
+    __uint128_t magnitude = 0;
+    for (size_t i = start; i < len; i++) {
+        if (__builtin_mul_overflow(magnitude, (__uint128_t)10, &magnitude) ||
+            __builtin_add_overflow(magnitude, (__uint128_t)(s[i] - '0'),
+                                   &magnitude)) {
+            return false;
+        }
+    }
+
+    memset(expect, 0, sizeof(*expect));
+    if (negative) {
+        if (magnitude <= ((__uint128_t)1 << 63)) {
+            expect->type = DATABOX_SIGNED_64;
+            expect->data.u = 0 - (uint64_t)magnitude;
+        } else if (magnitude <= ((__uint128_t)1 << 127)) {
+            DATABOX_BIG_SIGNED_128(expect, (__int128_t)(0 - magnitude));
+        } else {
+            return false;
+        }
+    } else if (magnitude <= INT64_MAX) {
+        expect->type = DATABOX_SIGNED_64;
+        expect->data.i = (int64_t)magnitude;
+    } else if (magnitude <= UINT64_MAX) {
+        expect->type = DATABOX_UNSIGNED_64;
+        expect->data.u = (uint64_t)magnitude;
+    } else {
+        DATABOX_BIG_UNSIGNED_128(expect, magnitude);
+    }
+
+    return true;
+}
+
+/* Same type and the same value bits. */
+static bool dbCanonSame_(const databox *a, const databox *b) {
+    if (a->type != b->type) {
+        return false;
+    }
+
+    switch (a->type) {
+    case DATABOX_SIGNED_64:
+    case DATABOX_UNSIGNED_64:
+        return a->data.u == b->data.u;
+    case DATABOX_FLOAT_32:
+        return memcmp(&a->data.f32, &b->data.f32, sizeof(a->data.f32)) == 0;
+    case DATABOX_DOUBLE_64:
+        return memcmp(&a->data.d64, &b->data.d64, sizeof(a->data.d64)) == 0;
+    case DATABOX_SIGNED_128:
+    case DATABOX_UNSIGNED_128:
+        return *a->data.u128 == *b->data.u128;
+    default:
+        return false;
+    }
+}
+
+/* Check databoxCanonicalNumeral and databoxCanonical on one string, as a
+ * BYTES box and (when it fits) a BYTES_EMBED box.  'mustStayBytes' marks a
+ * near-numeral that no rule may accept. */
+static int dbCanonCheck_(const void *s_, size_t len, bool mustStayBytes,
+                         dbCanonTally_ *tally) {
+    const uint8_t *const s = s_;
+    const int shown = (int)len;
+    int err = 0;
+    tally->strings++;
+
+    bool shaped = false;
+    databoxBig expect = {{0}};
+    bool numeral = dbCanonIntegerOracle_(s, len, &shaped, &expect);
+    if (shaped) {
+        /* Each scanner must agree with the oracle over its own range. */
+        databox narrow = {{0}};
+        const bool narrowOk = StrScanScanReliable(s, len, &narrow);
+        const bool oracleNarrow =
+            numeral && (expect.type == DATABOX_SIGNED_64 ||
+                        expect.type == DATABOX_UNSIGNED_64);
+        if (narrowOk != oracleNarrow ||
+            (narrowOk && !dbCanonSame_(&narrow, (const databox *)&expect))) {
+            ERR("StrScanScanReliable disagrees with the oracle on '%.*s'",
+                shown, s);
+        }
+
+        if (len >= 20 && len <= 40) {
+            databox small = {{0}};
+            databoxBig big = {{0}};
+            databoxBig *use = NULL;
+            const bool wideOk =
+                StrScanScanReliableConvert128(s, len, &small, &big, &use);
+            const databox *const scanned =
+                use == &big ? (const databox *)&big : &small;
+            if (wideOk != numeral ||
+                (wideOk && !dbCanonSame_(scanned, (const databox *)&expect))) {
+                ERR("StrScanScanReliableConvert128 disagrees with the oracle "
+                    "on '%.*s'",
+                    shown, s);
+            }
+        }
+    } else {
+        databox real = {{0}};
+        numeral = StrScanScanReliable(s, len, &real);
+        if (numeral) {
+            const double v =
+                real.type == DATABOX_FLOAT_32 ? real.data.f32 : real.data.d64;
+            uint8_t printed[64];
+            const size_t printedLen =
+                StrDoubleFormatToBufNice(printed, sizeof(printed), v);
+            if (!DATABOX_IS_FLOAT(&real)) {
+                ERR("'%.*s' scanned as a non-real type %d", shown, s,
+                    (int)real.type);
+            } else if (printedLen != len || memcmp(printed, s, len) != 0) {
+                ERR("real '%.*s' re-prints as '%.*s'", shown, s,
+                    (int)printedLen, printed);
+            } else if ((real.type == DATABOX_FLOAT_32) !=
+                       ((double)(float)v == v)) {
+                ERR("real '%.*s' has the wrong width", shown, s);
+            }
+
+            memset(&expect, 0, sizeof(expect));
+            memcpy(&expect, &real, sizeof(real));
+        }
+    }
+
+    if (mustStayBytes && numeral) {
+        ERR("near-numeral '%.*s' scans as a number", shown, s);
+    }
+
+    if (!numeral) {
+        tally->bytes++;
+    } else if (DATABOX_IS_FLOAT((const databox *)&expect)) {
+        tally->reals++;
+    } else if (expect.big) {
+        tally->wide++;
+    } else {
+        tally->narrow++;
+    }
+
+    for (int embed = 0; embed < 2; embed++) {
+        databox in = {{0}};
+        if (embed) {
+            if (len > sizeof(in.data.bytes.embed)) {
+                break;
+            }
+
+            in.type = DATABOX_BYTES_EMBED;
+            memcpy(in.data.bytes.embed, s, len);
+        } else {
+            in.type = DATABOX_BYTES;
+            in.data.bytes.custart = s;
+        }
+        in.len = len;
+
+        /* A poisoned 'out': a rejection must leave it alone, and an
+         * acceptance must clear everything the result does not use. */
+        databoxBig out;
+        databoxBig poison;
+        memset(&poison, 0xA5, sizeof(poison));
+        memcpy(&out, &poison, sizeof(out));
+        const bool got = databoxCanonicalNumeral(&in, &out);
+        if (got != numeral) {
+            ERR("databoxCanonicalNumeral('%.*s', embed %d) returned %d", shown,
+                s, embed, (int)got);
+        } else if (!got) {
+            if (memcmp(&out, &poison, sizeof(out)) != 0) {
+                ERR("rejected '%.*s' but wrote 'out'", shown, s);
+            }
+        } else {
+            const bool wide = out.type == DATABOX_SIGNED_128 ||
+                              out.type == DATABOX_UNSIGNED_128;
+            if (!dbCanonSame_((const databox *)&out,
+                              (const databox *)&expect)) {
+                ERR("'%.*s' canonicalized to %s", shown, s,
+                    databoxReprStr((const databox *)&out));
+            } else if (out.allocated || out.created || out.unused || out.len ||
+                       out.big != wide ||
+                       (wide && out.data.u128 != (__uint128_t *)out.extra)) {
+                ERR("'%.*s' canonicalized with stray metadata", shown, s);
+            }
+        }
+
+        /* The fast reject is exact: the wrapper hands back the scratch
+         * exactly when the primitive accepts, and never writes it
+         * otherwise. */
+        databoxBig scratch;
+        memcpy(&scratch, &poison, sizeof(scratch));
+        const databox *const use = databoxCanonical(&in, &scratch);
+        if (use != &in && use != (const databox *)&scratch) {
+            ERR("databoxCanonical('%.*s') returned a foreign box", shown, s);
+        } else if ((use == (const databox *)&scratch) != numeral) {
+            ERR("databoxCanonical('%.*s', embed %d) disagrees with the "
+                "primitive",
+                shown, s, embed);
+        } else if (use == &in &&
+                   memcmp(&scratch, &poison, sizeof(scratch)) != 0) {
+            ERR("databoxCanonical('%.*s') wrote an unused scratch", shown, s);
+        }
+    }
+
+    return err;
+}
+
+/* Every near-numeral variant of the numeral 'n', each with one defect, plus
+ * real-shaped variants the scanner may accept. */
+static int dbCanonMutations_(const char *n, dbCanonTally_ *tally) {
+    int err = 0;
+    const size_t len = strlen(n);
+    const bool negative = n[0] == '-';
+    const char *const sign = negative ? "-" : "";
+    const char *const digits = n + negative;
+    const int digitsLen = (int)strlen(digits);
+    char m[128];
+
+#define DB_CANON_MUTATE(mustStayBytes, ...)                                    \
+    do {                                                                       \
+        const int mlen_ = snprintf(m, sizeof(m), __VA_ARGS__);                 \
+        err += dbCanonCheck_(m, (size_t)mlen_, (mustStayBytes), tally);        \
+    } while (0)
+
+    /* Syntax defects: always bytes. */
+    DB_CANON_MUTATE(true, "%s0%s", sign, digits);  /* leading zero */
+    DB_CANON_MUTATE(true, "%s00%s", sign, digits); /* leading zeros */
+    DB_CANON_MUTATE(true, "+%s", n);               /* explicit plus */
+    DB_CANON_MUTATE(true, " %s", n);               /* leading blank */
+    DB_CANON_MUTATE(true, "%s ", n);               /* trailing blank */
+    DB_CANON_MUTATE(true, "\t%s", n);              /* leading tab */
+    DB_CANON_MUTATE(true, "%s\n", n);              /* trailing newline */
+    DB_CANON_MUTATE(true, "x%s", n);               /* leading letter */
+    DB_CANON_MUTATE(true, "%sx", n);               /* trailing letter */
+    DB_CANON_MUTATE(true, "%se3", n);              /* exponent */
+    DB_CANON_MUTATE(true, "%sE-3", n);             /* exponent */
+    DB_CANON_MUTATE(true, "%s.", n);               /* trailing dot */
+    DB_CANON_MUTATE(true, "%s.50", n);             /* trailing fraction 0 */
+    DB_CANON_MUTATE(true, "%s0x%s", sign, digits); /* hex prefix */
+    DB_CANON_MUTATE(true, "%s,000", n);            /* digit grouping */
+    DB_CANON_MUTATE(true, "%s-", n);               /* trailing minus */
+    DB_CANON_MUTATE(true, "--%s", digits);         /* double minus */
+    if (digitsLen >= 2) {
+        /* a minus inside the digits */
+        DB_CANON_MUTATE(true, "%s%.1s-%s", sign, digits, digits + 1);
+    }
+
+    /* Bytes the formatter cannot express: an embedded NUL and a high byte
+     * after the digits. */
+    memcpy(m, n, len);
+    m[len] = '\0';
+    m[len + 1] = '1';
+    err += dbCanonCheck_(m, len + 2, true, tally);
+    m[len] = (char)0xB5;
+    err += dbCanonCheck_(m, len + 1, true, tally);
+
+    /* Real-shaped variants: the scanner decides, and the re-print rule
+     * must hold for whatever it accepts. */
+    DB_CANON_MUTATE(false, "%s.0", n);
+    DB_CANON_MUTATE(false, "%s.5", n);
+    DB_CANON_MUTATE(false, "%s0.%s", sign, digits);
+    if (digitsLen >= 2) {
+        DB_CANON_MUTATE(false, "%s%.1s.%s", sign, digits, digits + 1);
+    }
+#undef DB_CANON_MUTATE
+
+    return err;
+}
+
+/* xorshift64: a deterministic generator for the real-shaped corpus. */
+static uint64_t dbCanonNext_(uint64_t *state) {
+    uint64_t x = *state;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    *state = x;
+    return x;
 }
 
 int databoxTest(int argc, char *argv[]) {
@@ -2840,6 +3218,314 @@ int databoxTest(int argc, char *argv[]) {
         if (databoxCompare((const databox *)&full, &narrowU) <= 0 ||
             databoxCompare(&narrowS, (const databox *)&full) >= 0) {
             ERRR("wide compare with a payload is wrong");
+        }
+    }
+
+    TEST("databoxCanonicalNumeral: the canonical-numeral table") {
+        const __uint128_t two64 = (__uint128_t)1 << 64;
+        const struct {
+            const char *s;
+            databoxType type; /* DATABOX_BYTES: stays bytes */
+            int64_t i;
+            uint64_t u;
+            double d;
+            __int128_t wide;
+            __uint128_t uwide;
+        } rows[] = {
+#define DB_CANON_ROW(str, t, field, v) {.s = (str), .type = (t), .field = (v)}
+#define DB_CANON_BYTES(str) {.s = (str), .type = DATABOX_BYTES}
+            DB_CANON_ROW("22", DATABOX_SIGNED_64, i, 22),
+            DB_CANON_ROW("0", DATABOX_SIGNED_64, i, 0),
+            DB_CANON_ROW("-5", DATABOX_SIGNED_64, i, -5),
+            DB_CANON_ROW("9223372036854775807", DATABOX_SIGNED_64, i,
+                         INT64_MAX),
+            DB_CANON_ROW("-9223372036854775808", DATABOX_SIGNED_64, i,
+                         INT64_MIN),
+            DB_CANON_ROW("9223372036854775808", DATABOX_UNSIGNED_64, u,
+                         UINT64_C(9223372036854775808)),
+            DB_CANON_ROW("18446744073709551615", DATABOX_UNSIGNED_64, u,
+                         UINT64_MAX),
+            DB_CANON_ROW("22.0", DATABOX_FLOAT_32, d, 22.0),
+            DB_CANON_ROW("-0.5", DATABOX_FLOAT_32, d, -0.5),
+            DB_CANON_ROW("299.5", DATABOX_FLOAT_32, d, 299.5),
+            DB_CANON_ROW("0.0", DATABOX_FLOAT_32, d, 0.0),
+            DB_CANON_ROW("0.4", DATABOX_DOUBLE_64, d, 0.4),
+            DB_CANON_ROW("18446744073709551616", DATABOX_UNSIGNED_128, uwide,
+                         two64),
+            DB_CANON_ROW("-9223372036854775809", DATABOX_SIGNED_128, wide,
+                         (__int128_t)INT64_MIN - 1),
+            DB_CANON_ROW("-18446744073709551616", DATABOX_SIGNED_128, wide,
+                         -(__int128_t)two64),
+            DB_CANON_ROW("170141183460469231731687303715884105727",
+                         DATABOX_UNSIGNED_128, uwide, (__uint128_t)INT128_MAX),
+            DB_CANON_ROW("170141183460469231731687303715884105728",
+                         DATABOX_UNSIGNED_128, uwide,
+                         (__uint128_t)INT128_MAX + 1),
+            DB_CANON_ROW("-170141183460469231731687303715884105728",
+                         DATABOX_SIGNED_128, wide, INT128_MIN),
+            DB_CANON_ROW("340282366920938463463374607431768211455",
+                         DATABOX_UNSIGNED_128, uwide, UINT128_MAX),
+            DB_CANON_BYTES(""),
+            DB_CANON_BYTES("007"),
+            DB_CANON_BYTES("01"),
+            DB_CANON_BYTES("-0"),
+            DB_CANON_BYTES("-01"),
+            DB_CANON_BYTES("+5"),
+            DB_CANON_BYTES(" 22"),
+            DB_CANON_BYTES("22 "),
+            DB_CANON_BYTES("1e3"),
+            DB_CANON_BYTES(".5"),
+            DB_CANON_BYTES("5."),
+            DB_CANON_BYTES("0."),
+            DB_CANON_BYTES("-"),
+            DB_CANON_BYTES("."),
+            DB_CANON_BYTES("-0.0"),
+            DB_CANON_BYTES("299.5000"),
+            DB_CANON_BYTES("123.10"),
+            DB_CANON_BYTES("0x10"),
+            DB_CANON_BYTES("1,000"),
+            DB_CANON_BYTES("nan"),
+            DB_CANON_BYTES("inf"),
+            DB_CANON_BYTES("-inf"),
+            DB_CANON_BYTES("0018446744073709551616"),
+            DB_CANON_BYTES("-018446744073709551616"),
+            DB_CANON_BYTES("340282366920938463463374607431768211456"),
+            DB_CANON_BYTES("-170141183460469231731687303715884105729"),
+            DB_CANON_BYTES("1000000000000000000000000000000000000000"),
+#undef DB_CANON_BYTES
+#undef DB_CANON_ROW
+        };
+
+        for (size_t r = 0; r < COUNT_ARRAY(rows); r++) {
+            const size_t len = strlen(rows[r].s);
+            const databox in = {.data.bytes.ccstart = rows[r].s,
+                                .type = DATABOX_BYTES,
+                                .len = len};
+            databoxBig out = {{0}};
+            const bool got = databoxCanonicalNumeral(&in, &out);
+            databoxBig scratch = {{0}};
+            const databox *const use = databoxCanonical(&in, &scratch);
+            if (rows[r].type == DATABOX_BYTES) {
+                if (got || use != &in) {
+                    ERR("'%s' should stay bytes, got %s", rows[r].s,
+                        databoxReprStr((const databox *)&out));
+                }
+                continue;
+            }
+
+            bool same = got && use == (const databox *)&scratch &&
+                        out.type == rows[r].type &&
+                        dbCanonSame_((const databox *)&out, use);
+            if (same) {
+                switch (rows[r].type) {
+                case DATABOX_SIGNED_64:
+                    same = out.data.i == rows[r].i;
+                    break;
+                case DATABOX_UNSIGNED_64:
+                    same = out.data.u == rows[r].u;
+                    break;
+                case DATABOX_FLOAT_32: {
+                    const float want = (float)rows[r].d;
+                    same = memcmp(&out.data.f32, &want, sizeof(want)) == 0;
+                    break;
+                }
+                case DATABOX_DOUBLE_64:
+                    same = out.data.d64 == rows[r].d;
+                    break;
+                case DATABOX_SIGNED_128:
+                    same = *out.data.i128 == rows[r].wide;
+                    break;
+                case DATABOX_UNSIGNED_128:
+                    same = *out.data.u128 == rows[r].uwide;
+                    break;
+                default:
+                    same = false;
+                    break;
+                }
+            }
+
+            if (!same) {
+                ERR("'%s' canonicalized to %s (returned %d)", rows[r].s,
+                    databoxReprStr((const databox *)&out), (int)got);
+            }
+        }
+
+        /* Only BYTES and BYTES_EMBED are canonicalized; every other type,
+         * numbers included, passes through. */
+        static const char twentyTwo[] = "22";
+        const databox others[] = {
+            databoxNewSigned(22),
+            databoxNewUnsigned(22),
+            DATABOX_DOUBLE(22.0),
+            DATABOX_BOX_TRUE,
+            DATABOX_BOX_NULL,
+            databoxNewPtr((void *)twentyTwo),
+            {.data.bytes.ccstart = twentyTwo,
+             .type = DATABOX_BYTES_NEVER_FREE,
+             .len = 2},
+        };
+        for (size_t o = 0; o < COUNT_ARRAY(others); o++) {
+            databoxBig out;
+            memset(&out, 0xA5, sizeof(out));
+            const databoxBig poison = out;
+            if (databoxCanonicalNumeral(&others[o], &out) ||
+                memcmp(&out, &poison, sizeof(out)) != 0 ||
+                databoxCanonical(&others[o], &out) != &others[o]) {
+                ERR("type %d was canonicalized", (int)others[o].type);
+            }
+        }
+    }
+
+    TEST("databoxCanonicalNumeral: differential over integer boundaries and "
+         "near-numerals") {
+        dbCanonTally_ tally = {0};
+        char spelled[48];
+
+        /* Each width's boundaries, one either side, with both signs: the
+         * signed maximum and minimum and the unsigned maximum. */
+        static const uint32_t widths[] = {8, 16, 32, 64, 128};
+        for (size_t w = 0; w < COUNT_ARRAY(widths); w++) {
+            const uint32_t bits = widths[w];
+            const __uint128_t half = (__uint128_t)1 << (bits - 1);
+            const __uint128_t full =
+                bits == 128 ? UINT128_MAX : ((__uint128_t)1 << bits) - 1;
+            const __uint128_t magnitudes[] = {half - 2, half - 1, half,
+                                              half + 1, full - 1, full};
+            for (size_t m = 0; m < COUNT_ARRAY(magnitudes); m++) {
+                for (int negative = 0; negative < 2; negative++) {
+                    dbCanonSpell_(spelled, magnitudes[m], negative);
+                    err +=
+                        dbCanonCheck_(spelled, strlen(spelled), false, &tally);
+                    err += dbCanonMutations_(spelled, &tally);
+                }
+            }
+
+            if (bits < 128) {
+                for (int negative = 0; negative < 2; negative++) {
+                    dbCanonSpell_(spelled, full + 1, negative);
+                    err +=
+                        dbCanonCheck_(spelled, strlen(spelled), false, &tally);
+                    err += dbCanonMutations_(spelled, &tally);
+                }
+            }
+        }
+
+        /* Past 128 bits, which no 128-bit value can spell. */
+        static const char *const beyond[] = {
+            "340282366920938463463374607431768211456",
+            "340282366920938463463374607431768211457",
+            "-340282366920938463463374607431768211456",
+            "999999999999999999999999999999999999999",
+            "-999999999999999999999999999999999999999",
+            "1000000000000000000000000000000000000000",
+            "-1000000000000000000000000000000000000000",
+            "10000000000000000000000000000000000000000",
+        };
+        for (size_t b = 0; b < COUNT_ARRAY(beyond); b++) {
+            err += dbCanonCheck_(beyond[b], strlen(beyond[b]), false, &tally);
+            err += dbCanonMutations_(beyond[b], &tally);
+        }
+
+        /* Decimal-length boundaries: 10^k - 1, 10^k and 10^k + 1. */
+        __uint128_t power = 1;
+        for (int k = 0; k <= 38; k++) {
+            const __uint128_t near[] = {power - 1, power, power + 1};
+            for (size_t n = 0; n < COUNT_ARRAY(near); n++) {
+                for (int negative = 0; negative < 2; negative++) {
+                    dbCanonSpell_(spelled, near[n], negative);
+                    err +=
+                        dbCanonCheck_(spelled, strlen(spelled), false, &tally);
+                }
+            }
+            power *= 10;
+        }
+
+        /* Every value at every width and both signs was exercised, every
+         * 64-bit form appeared, and the 128-bit arm was reached. */
+        if (tally.narrow < 100 || tally.wide < 40 || tally.bytes < 1000 ||
+            tally.reals < 20) {
+            ERR("corpus too thin: %" PRIu32 " narrow, %" PRIu32
+                " wide, %" PRIu32 " reals, %" PRIu32 " bytes",
+                tally.narrow, tally.wide, tally.reals, tally.bytes);
+        }
+        printf("    %" PRIu32 " strings: %" PRIu32 " narrow, %" PRIu32
+               " wide, %" PRIu32 " reals, %" PRIu32 " bytes\n",
+               tally.strings, tally.narrow, tally.wide, tally.reals,
+               tally.bytes);
+    }
+
+    TEST("databoxCanonicalNumeral: real-shaped strings follow the scanner") {
+        dbCanonTally_ tally = {0};
+        uint64_t state = UINT64_C(0x9E3779B97F4A7C15);
+        char s[64];
+        for (int i = 0; i < 20000; i++) {
+            size_t at = 0;
+            const uint64_t r = dbCanonNext_(&state);
+            if (r & 1) {
+                s[at++] = '-';
+            }
+
+            /* 0 to 16 integer digits, then 1 to 17 fraction digits. */
+            const uint32_t intDigits = (uint32_t)((r >> 1) % 17);
+            if (intDigits == 0) {
+                s[at++] = '0';
+            } else {
+                s[at++] = (char)('1' + dbCanonNext_(&state) % 9);
+                for (uint32_t k = 1; k < intDigits; k++) {
+                    s[at++] = (char)('0' + dbCanonNext_(&state) % 10);
+                }
+            }
+
+            s[at++] = '.';
+            const uint32_t fracDigits = 1 + (uint32_t)((r >> 8) % 17);
+            for (uint32_t k = 0; k < fracDigits; k++) {
+                s[at++] = (char)('0' + dbCanonNext_(&state) % 10);
+            }
+
+            err += dbCanonCheck_(s, at, false, &tally);
+        }
+
+        /* Values the formatter prints, which the scanner should mostly take
+         * back. */
+        for (int i = 1; i <= 2000; i++) {
+            const double v = (i & 1 ? -1.0 : 1.0) * (double)i / 64.0;
+            const size_t n = StrDoubleFormatToBufNice(s, sizeof(s), v);
+            err += dbCanonCheck_(s, n, false, &tally);
+        }
+
+        if (tally.reals < 2000) {
+            ERR("only %" PRIu32 " of %" PRIu32 " real-shaped strings scanned",
+                tally.reals, tally.strings);
+        }
+        printf("    %" PRIu32 " strings: %" PRIu32 " reals, %" PRIu32
+               " bytes\n",
+               tally.strings, tally.reals, tally.bytes);
+    }
+
+    TEST("databoxCanonical: the fast reject never rejects a numeral") {
+        /* Every first byte in front of tails that make a numeral with a
+         * digit or '-' in front, and near-numerals otherwise. */
+        static const char *const tails[] = {
+            "",
+            "1",
+            "0",
+            "5.5",
+            "22",
+            "18446744073709551616",
+            "170141183460469231731687303715884105727"};
+        dbCanonTally_ tally = {0};
+        char s[64];
+        for (uint32_t c = 0; c < 256; c++) {
+            for (size_t t = 0; t < COUNT_ARRAY(tails); t++) {
+                const size_t tailLen = strlen(tails[t]);
+                s[0] = (char)c;
+                memcpy(s + 1, tails[t], tailLen);
+                err += dbCanonCheck_(s, tailLen + 1, false, &tally);
+            }
+        }
+
+        if (tally.narrow == 0 || tally.wide == 0 || tally.reals == 0) {
+            ERRR("the first-byte sweep reached no numeral");
         }
     }
 
