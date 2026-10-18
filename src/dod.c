@@ -754,6 +754,7 @@ void dodInit(dodWriter *const w) {
     w->d = NULL;
     w->t[0] = 0;
     w->t[1] = 0;
+    w->count = 0;
     w->usedBits = 0;
     w->totalBytes = 0;
 }
@@ -1610,6 +1611,31 @@ int dodTest(int argc, char *argv[]) {
             }
 
             err += dodCheckRoundTrip("random differential", values, count);
+        }
+    }
+
+    TEST("dodInit sets every writer field") {
+        /* Poison the struct first so a field dodInit skips reads as 0xA5 */
+        dodWriter w;
+        memset(&w, 0xA5, sizeof(w));
+        dodInit(&w);
+
+        if (w.d != NULL || w.t[0] != 0 || w.t[1] != 0 || w.count != 0 ||
+            w.usedBits != 0 || w.totalBytes != 0) {
+            ERR("dodInit left a field unset: d=%p t={%" PRId64 ", %" PRId64
+                "} count=%zu usedBits=%zu totalBytes=%zu",
+                (void *)w.d, w.t[0], w.t[1], w.count, w.usedBits, w.totalBytes);
+        }
+
+        /* The first two values go to t[] and are counted from zero */
+        dod stream[4] = {0};
+        w.d = stream;
+        dodWrite(&w, 11);
+        dodWrite(&w, 22);
+        if (w.count != 2 || w.t[0] != 11 || w.t[1] != 22) {
+            ERR("fresh writer after two writes: count=%zu t={%" PRId64
+                ", %" PRId64 "}",
+                w.count, w.t[0], w.t[1]);
         }
     }
 
