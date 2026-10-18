@@ -2616,7 +2616,7 @@ int ulidTest(int argc, char *argv[]) {
     TEST("ulid encode/decode roundtrip (scalar)") {
         ulidSetEncodeImpl(ULID_ENCODE_SCALAR);
 
-        ulid_t orig, decoded;
+        ulid_t orig, decoded = {0};
         char encoded[ULID_ENCODED_LENGTH + 1];
 
         printf("    Sample scalar encode/decode:\n");
@@ -2658,7 +2658,7 @@ int ulidTest(int argc, char *argv[]) {
     TEST("ulid encode/decode roundtrip (SWAR)") {
         ulidSetEncodeImpl(ULID_ENCODE_SWAR);
 
-        ulid_t orig, decoded;
+        ulid_t orig, decoded = {0};
         char encoded[ULID_ENCODED_LENGTH + 1];
 
         printf("    Sample SWAR encode/decode:\n");
@@ -2690,7 +2690,7 @@ int ulidTest(int argc, char *argv[]) {
 
 #if ULID_HAS_SSE2
     TEST("ulid encode/decode roundtrip (SSE2)") {
-        ulid_t orig, decoded;
+        ulid_t orig, decoded = {0};
         char encoded[ULID_ENCODED_LENGTH + 1];
 
         for (int32_t test = 0; test < 1000; test++) {
@@ -2710,7 +2710,7 @@ int ulidTest(int argc, char *argv[]) {
 
 #if ULID_HAS_AVX2
     TEST("ulid encode/decode roundtrip (AVX2)") {
-        ulid_t orig, decoded;
+        ulid_t orig, decoded = {0};
         char encoded[ULID_ENCODED_LENGTH + 1];
 
         for (int32_t test = 0; test < 1000; test++) {
@@ -2730,7 +2730,7 @@ int ulidTest(int argc, char *argv[]) {
 
 #if ULID_HAS_NEON
     TEST("ulid encode/decode roundtrip (NEON)") {
-        ulid_t orig, decoded;
+        ulid_t orig, decoded = {0};
         char encoded[ULID_ENCODED_LENGTH + 1];
 
         printf("    Sample NEON encode/decode:\n");
@@ -2762,7 +2762,7 @@ int ulidTest(int argc, char *argv[]) {
 #endif
 
     TEST("ulid cross-implementation compatibility") {
-        ulid_t orig, decoded;
+        ulid_t orig, decoded = {0};
         char encoded[ULID_ENCODED_LENGTH + 1];
 
         printf("    Sample cross-impl verification:\n");
@@ -2845,7 +2845,7 @@ int ulidTest(int argc, char *argv[]) {
     }
 
     TEST("ulid lowercase decode support") {
-        ulid_t id, decoded;
+        ulid_t id, decoded = {0};
         char encoded[ULID_ENCODED_LENGTH + 1];
         char lowercase[ULID_ENCODED_LENGTH + 1];
 
@@ -3195,7 +3195,7 @@ int ulidTest(int argc, char *argv[]) {
      * Basic Functionality Tests - 64-bit Variants
      * ================================================================ */
     TEST("ulid64 encode/decode roundtrip (EPOCH2020)") {
-        ulid64_t orig, decoded;
+        ulid64_t orig, decoded = {0};
         char encoded[ULID64_ENCODED_LENGTH + 1];
 
         printf("    Sample EPOCH2020 IDs:\n");
@@ -3312,7 +3312,7 @@ int ulidTest(int argc, char *argv[]) {
             }
 
             /* Verify roundtrip */
-            ulid_t decoded;
+            ulid_t decoded = {0};
             if (!ulidDecode(encoded, &decoded)) {
                 ERR("Failed to decode DUALNS: %s", encoded);
             }
@@ -3362,7 +3362,7 @@ int ulidTest(int argc, char *argv[]) {
         }
 
         /* Test 3: Round-trip via string encoding */
-        ulid_t decoded;
+        ulid_t decoded = {0};
         if (!ulidDecode(encoded, &decoded)) {
             ERR("Failed to decode DUALNS from __uint128_t: %s", encoded);
         }
@@ -3472,7 +3472,7 @@ int ulidTest(int argc, char *argv[]) {
 
             printf("      Encoded as Base36: %s\n", encoded);
 
-            ulid_t decoded;
+            ulid_t decoded = {0};
             if (!ulidDecode(encoded, &decoded)) {
                 ERR("Failed to decode DUALNS_INTERLEAVED: %s", encoded);
             }
@@ -3620,7 +3620,7 @@ int ulidTest(int argc, char *argv[]) {
     }
 
     TEST("ulid64 all variants roundtrip") {
-        ulid64_t orig, decoded;
+        ulid64_t orig, decoded = {0};
         char encoded[ULID64_ENCODED_LENGTH + 1];
 
         /* Test all 64-bit variants (DUALNS is 128-bit, tested separately) */
@@ -3654,7 +3654,7 @@ int ulidTest(int argc, char *argv[]) {
      * 32-bit Variant Tests
      * ================================================================ */
     TEST("ulid32 encode/decode roundtrip") {
-        ulid32_t orig, decoded;
+        ulid32_t orig, decoded = {0};
         char encoded[ULID32_ENCODED_LENGTH + 1];
 
         printf("    Sample 32-bit IDs:\n");
