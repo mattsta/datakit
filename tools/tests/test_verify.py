@@ -97,6 +97,28 @@ class Scanners(unittest.TestCase):
         )
         self.assertEqual(groups["other"], {"(no source location)": 1})
 
+    def test_linker_notes_are_not_warnings(self) -> None:
+        tree = self.dir / "tree"
+        note = "warning: no debug symbols in executable (-arch arm64)"
+        text = (
+            f"{note}\n"
+            "[  5%] Built target varint\n"
+            f"  {note}  \n"
+            "warning: no debug symbols in executable (-arch x86_64)\n"
+            # Anything else shaped like a warning still counts.
+            f"{tree}/src/a.c:1:1: warning: no debug symbols in executable "
+            "(-arch arm64)\n"
+            "ld: warning: no debug symbols in executable (-arch arm64)\n"
+            f"{note} extra\n"
+            "warning: no debug symbols in executable\n"
+        )
+        log = self.log("notes.log", text)
+        self.assertEqual(steps.count_linker_notes(log), 3)
+        self.assertEqual(steps.count_warning_lines(log), 4)
+        self.assertEqual(len(steps.warnings(log, tree)), 4)
+        self.assertTrue(steps.is_linker_note(note))
+        self.assertFalse(steps.is_linker_note("ld: " + note))
+
     def test_sanitizer_reports(self) -> None:
         log = self.log(
             "out.log",
@@ -221,6 +243,21 @@ class VerifyRun(unittest.TestCase):
                 self.assertIn("verify t: FAIL", out)
         code, out = self.run_verify(FakeRunner({"ctest": 8}, {"ctest": CTEST_FAIL}))
         self.assertIn("failed    flex multimapP", out)
+
+    def test_linker_notes_alone_pass(self) -> None:
+        note = "warning: no debug symbols in executable (-arch arm64)\n"
+        outputs = {
+            "build": note * 3,
+            "ctest": CTEST_PASS,
+            "allocaudit": "100% clean pattern\n",
+        }
+        code, out = self.run_verify(FakeRunner({}, outputs))
+        self.assertEqual(code, 0, out)
+        self.assertIn("build     ok, 0 warning lines, 3 linker notes", out)
+        outputs["build"] = note + "src/a.c:1:1: warning: x\n"
+        code, out = self.run_verify(FakeRunner({}, outputs))
+        self.assertEqual(code, 1, out)
+        self.assertIn("build     ok, 1 warning lines, 1 linker notes", out)
 
     def test_serial_tests_run_alone_and_leave_the_parallel_set(self) -> None:
         runner = FakeRunner({}, {"ctest": CTEST_PASS, "ctest-serial": CTEST_PASS})

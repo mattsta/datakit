@@ -24,9 +24,10 @@ exported tree, and runs the leakage gate over the added lines of
 
 Writes a markdown summary to ``ROOT/validate/<short hash>/summary.md``
 and prints it, with compiler warnings grouped by file and split into
-datakit ``src/``, ``deps/`` and other.  Exits 0 only when every step
-passed with no warning, sanitizer report or hard leak hit; 1 on any
-failure; 2 on an input error.
+datakit ``src/``, ``deps/`` and other.  The macOS "no debug symbols in
+executable" linker notes are counted apart and are not warnings.
+Exits 0 only when every step passed with no warning, sanitizer report
+or hard leak hit; 1 on any failure; 2 on an input error.
 """
 
 from __future__ import annotations
@@ -76,6 +77,7 @@ class ConfigResult:
     serial_result: CtestResult
     warnings: list[Warning_]
     warning_lines: int
+    linker_notes: int
     sanitizer: list[SanitizerHit]
     test_outputs: list[Path]
     extra_skip: str
@@ -154,6 +156,7 @@ def _run_config(
         serial_result=steps.parse_ctest(serial.log),
         warnings=steps.warnings(build.log, src),
         warning_lines=steps.count_warning_lines(build.log),
+        linker_notes=steps.count_linker_notes(build.log),
         sanitizer=steps.sanitizer_reports(outputs),
         test_outputs=outputs,
         extra_skip=extra_skip,
@@ -194,7 +197,8 @@ def render(
     for r in results:
         md.append(
             f"| {r.config.label} | {_step_cell(r.configure)} | {_step_cell(r.build)} "
-            f"| {len(r.warnings)} distinct ({r.warning_lines} lines) "
+            f"| {len(r.warnings)} distinct ({r.warning_lines} lines; "
+            f"{r.linker_notes} linker notes) "
             f"| {_step_cell(r.ctest, r.ctest_result)} "
             f"| {_step_cell(r.serial, r.serial_result)} "
             f"| {len(r.sanitizer)} |"

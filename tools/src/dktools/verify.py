@@ -22,11 +22,14 @@ run.  Both are whole-name regexes, and a regex that matches no test is
 a failure.  ``allocaudit check --constructors`` runs on the tree with
 the tree's own dktools.
 
-Prints a result block (tree hash, build, warning count, ctest,
-sanitizer and allocaudit results, failing test names, log paths) and
-also writes it to ``ROOT/verify/NAME/result.txt``.  Exits 0 only when
-every step passed with zero compiler warnings and no sanitizer report,
-1 otherwise, and 2 on an input error.
+Prints a result block (tree hash, build, warning and linker-note
+counts, ctest, sanitizer and allocaudit results, failing test names,
+log paths) and also writes it to ``ROOT/verify/NAME/result.txt``.
+Exits 0 only when every step passed with zero warning lines and no
+sanitizer report, 1 otherwise, and 2 on an input error.  The macOS
+"no debug symbols in executable" lines are linker notes, not warnings
+(``steps.is_linker_note``): they are counted on their own and never
+fail the run.
 """
 
 from __future__ import annotations
@@ -108,6 +111,7 @@ def run(repo: Path, opts: VerifyOptions) -> int:
             "build", config.build_command(src, jobs, targets), build.log, cwd=src
         )
     warn = steps.count_warning_lines(build.log)
+    notes = steps.count_linker_notes(build.log)
 
     ctest = Step("ctest", work / "ctest.log")
     serial = Step("ctest-serial", work / "ctest-serial.log")
@@ -161,12 +165,13 @@ def run(repo: Path, opts: VerifyOptions) -> int:
         and alloc.ok
     )
 
+    counts = f"{warn} warning lines, {notes} linker notes"
     if not configure.ok:
         build_line = f"FAILED (configure exit {configure.code})"
     elif not build.ok:
-        build_line = f"FAILED (exit {build.code}), {warn} warning lines"
+        build_line = f"FAILED (exit {build.code}), {counts}"
     else:
-        build_line = f"ok, {warn} warning lines"
+        build_line = f"ok, {counts}"
     lines = [
         f"verify {name}: {'PASS' if passed else 'FAIL'}",
         f"  tree      {tree} (HEAD {head} + {len(specs)} path(s))",

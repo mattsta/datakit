@@ -88,9 +88,36 @@ class Warning_:
     text: str
 
 
+#: The note macOS ``dsymutil`` prints when asked to collect the debug
+#: info of an executable that was linked without any (vendored builds
+#: run it after linking each test executable, also in Release builds).
+#: It is a linker-stage note, not a diagnostic about the code: verify
+#: and validate count it apart and never fail on it.  Only this exact
+#: shape matches; every other ``warning:`` line, ``ld: warning:``
+#: included, still counts as a warning.
+_LINKER_NOTE = re.compile(
+    r"^warning: no debug symbols in executable \(-arch [^)\s]+\)$"
+)
+
+
+def is_linker_note(line: str) -> bool:
+    """True for the macOS "no debug symbols in executable" note."""
+    return _LINKER_NOTE.match(line.strip()) is not None
+
+
+def _is_warning(line: str) -> bool:
+    return "warning:" in line and not is_linker_note(line)
+
+
 def count_warning_lines(log: Path) -> int:
-    """Lines containing ``warning:`` (every compiler and linker warning)."""
-    return sum(1 for line in read_lines(log) if "warning:" in line)
+    """Lines containing ``warning:`` (compiler and linker warnings),
+    except the macOS linker notes ``count_linker_notes`` counts."""
+    return sum(1 for line in read_lines(log) if _is_warning(line))
+
+
+def count_linker_notes(log: Path) -> int:
+    """macOS "no debug symbols in executable" note lines in a build log."""
+    return sum(1 for line in read_lines(log) if is_linker_note(line))
 
 
 def warnings(log: Path, tree: Path) -> list[Warning_]:
@@ -99,12 +126,12 @@ def warnings(log: Path, tree: Path) -> list[Warning_]:
     A source compiled into both the static and shared library warns
     twice with the same location and text; those count once.  Paths
     are normalized first: a header reached as ``src/../deps/x.h`` is
-    ``deps/x.h``."""
+    ``deps/x.h``.  Linker notes are not warnings and are left out."""
     root = os.path.normpath(tree.resolve()) + os.sep
     root_unresolved = os.path.normpath(tree) + os.sep
     seen: dict[tuple[str | None, int, str], Warning_] = {}
     for line in read_lines(log):
-        if "warning:" not in line:
+        if not _is_warning(line):
             continue
         m = _WARNING.match(line)
         if m is None:

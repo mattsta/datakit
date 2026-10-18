@@ -82,11 +82,18 @@ uv run --project tools dktools verify NAME --tests REGEX [--serial REGEX] \
 - The build covers the four preset targets unless `--target` is given.
   `allocaudit check --constructors` then runs on the exported tree
   with the tree's own dktools.
-- Prints a result block (tree hash, build and warning count, ctest,
-  sanitizer reports from the test output, allocaudit, failing test
-  names, log paths), also kept in `ROOT/verify/NAME/result.txt`. Exits
-  0 only when everything passed with 0 warnings and no sanitizer
-  report, 1 otherwise, 2 on an input error (one stderr line).
+- Prints a result block (tree hash, build with its warning-line and
+  linker-note counts, ctest, sanitizer reports from the test output,
+  allocaudit, failing test names, log paths), also kept in
+  `ROOT/verify/NAME/result.txt`. Exits 0 only when everything passed
+  with 0 warning lines and no sanitizer report, 1 otherwise, 2 on an
+  input error (one stderr line).
+- `warning: no debug symbols in executable (-arch ARCH)` lines are
+  macOS linker notes (`dsymutil` run on an executable built without
+  debug info, as in an all-targets Release build), not compiler
+  warnings: they show as `linker notes N` and never fail the run.
+  Every other `warning:` line, `ld: warning:` included, still fails.
+  `validate` counts them the same way.
 
 Compilers and presets live in `src/dktools/toolchain.py`, the single
 place builds get them from; the system `cc` is never used:

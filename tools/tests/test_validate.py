@@ -151,6 +151,20 @@ class ValidateRun(unittest.TestCase):
         self.assertIn("- datakit src/: 1\n  - `src/a.c`: 1", gcc)
         self.assertIn("- deps/: 1\n  - `deps/varint/src/v.c`: 1", gcc)
 
+    def test_linker_notes_are_counted_but_pass(self) -> None:
+        note = "warning: no debug symbols in executable (-arch arm64)\n"
+        runner = MatrixRunner(
+            outputs={
+                "gcc15-release build": note * 2,
+                "allocaudit": "100% clean pattern\n",
+            }
+        )
+        code, out = self.run_validate(runner)
+        self.assertEqual(code, 0, out)
+        self.assertIn("| 0 distinct (0 lines; 2 linker notes) |", out)
+        gcc = out.split("### gcc15-release", 1)[1]
+        self.assertIn("- other: 0", gcc)
+
     def test_failures_exit_1(self) -> None:
         cases = {
             "test failure": (
