@@ -24,6 +24,8 @@
 #include "databox.h"
 #include "datakit.h"
 #include "dod.h"
+#include "flex.h"
+#include "float16.h"
 #include "mflex.h"
 #include "multilist.h"
 #include "multilistFull.h"
@@ -52,6 +54,10 @@ defcleanerName(multilist *, multilistFree, List);
 defcleanerName(multilistFull *, multilistFullFree, ListFull);
 defcleanerName(mflex *, mflexFree, Mflex);
 defcleanerName(mflexState *, mflexStateFree, MflexState);
+defcleanerName(flex *, flexFree, Flex);
+defcleanerName(flex *, zfree, FlexBuf);
+defcleanerName(float *, zfree, FloatBuf);
+defcleanerName(uint16_t *, zfree, U16Buf);
 
 /* ============================================================================
  * Benchmark Result Reporting System
@@ -813,6 +819,150 @@ static void runMultilistBenchmarks(void) {
     }
 }
 
+/* ============================================================================
+ * float16 conversion and LZ4 (cflex) throughput
+ * ============================================================================
+ * Medians over interleaved rounds, so background load hits every variant
+ * alike. Sanitized builds run one short round as a smoke test. */
+#ifdef BENCH_SANITIZED
+#define BENCH_CODEC_ROUNDS 1
+#else
+#define BENCH_CODEC_ROUNDS 7
+#endif
+
+static double benchMedian(double *runs, size_t n) {
+    qsort(runs, n, sizeof(double), benchCmpDouble);
+    return runs[n / 2];
+}
+
+#if __F16C__
+#define BENCH_FLOAT16_HARDWARE "F16C"
+#elif defined(__aarch64__)
+#define BENCH_FLOAT16_HARDWARE "NEON"
+#else
+#define BENCH_FLOAT16_HARDWARE "none (software path)"
+#endif
+
+static void runFloat16Benchmarks(void) {
+#ifdef BENCH_SANITIZED
+    const size_t count = 100000;
+#else
+    const size_t count = 4000000;
+#endif
+    cleanerName(zfree, FloatBuf) float *in = zcalloc(count, sizeof(*in));
+    cleanerName(zfree, U16Buf) uint16_t *half = zcalloc(count, sizeof(*half));
+    for (size_t i = 0; i < count; i++) {
+        in[i] = (float)(20.0 + 5.0 * sin((double)i / 1000.0));
+    }
+
+    /* 0 hardware encode, 1 software encode, 2 hardware decode, 3 software
+     * decode; ns per value */
+    double runs[4][BENCH_CODEC_ROUNDS];
+    volatile float sink = 0;
+    for (size_t r = 0; r < BENCH_CODEC_ROUNDS; r++) {
+        uint64_t t = timeUtilMonotonicNs();
+        for (size_t i = 0; i < count; i++) {
+            half[i] = float16Encode(in[i]);
+        }
+        runs[0][r] = (double)(timeUtilMonotonicNs() - t) / (double)count;
+
+        t = timeUtilMonotonicNs();
+        for (size_t i = 0; i < count; i++) {
+            half[i] = float16Encode_(in[i]);
+        }
+        runs[1][r] = (double)(timeUtilMonotonicNs() - t) / (double)count;
+
+        float acc = 0;
+        t = timeUtilMonotonicNs();
+        for (size_t i = 0; i < count; i++) {
+            acc += float16Decode(half[i]);
+        }
+        runs[2][r] = (double)(timeUtilMonotonicNs() - t) / (double)count;
+
+        t = timeUtilMonotonicNs();
+        for (size_t i = 0; i < count; i++) {
+            acc += float16Decode_(half[i]);
+        }
+        runs[3][r] = (double)(timeUtilMonotonicNs() - t) / (double)count;
+        sink += acc;
+    }
+
+    (void)sink;
+    printf("\n  float16 conversion, %zu values, median of %d interleaved "
+           "rounds (hardware path: %s)\n",
+           count, BENCH_CODEC_ROUNDS, BENCH_FLOAT16_HARDWARE);
+    const double hwEnc = benchMedian(runs[0], BENCH_CODEC_ROUNDS);
+    const double swEnc = benchMedian(runs[1], BENCH_CODEC_ROUNDS);
+    const double hwDec = benchMedian(runs[2], BENCH_CODEC_ROUNDS);
+    const double swDec = benchMedian(runs[3], BENCH_CODEC_ROUNDS);
+    printf("  encode: hardware %6.3f ns/value, software %6.3f ns/value "
+           "(%.1fx)\n",
+           hwEnc, swEnc, swEnc / hwEnc);
+    printf("  decode: hardware %6.3f ns/value, software %6.3f ns/value "
+           "(%.1fx)\n",
+           hwDec, swDec, swDec / hwDec);
+}
+
+/* LZ4 throughput through the flex <-> cflex conversions mflex uses, on a
+ * ~64 KB flex of 'log100' lines */
+static void runLz4Benchmarks(void) {
+    cleanerName(flexFree, Flex) flex *f = flexNew();
+    for (size_t i = 0; i < 640; i++) {
+        char line[101];
+        mlLogLine100(line, i);
+        flexPushBytes(&f, line, 100, FLEX_ENDPOINT_TAIL);
+    }
+
+    const size_t rawBytes = flexBytes(f);
+    cleanerName(zfree, U8Buf) uint8_t *cbuf = zcalloc(1, rawBytes);
+    if (!flexConvertToCFlex(f, cbuf, rawBytes - 1)) {
+        printf("  LZ4: log100 flex did not compress\n");
+        return;
+    }
+
+    const size_t compressedBytes = cflexBytes(cbuf);
+    size_t outLen = rawBytes;
+    /* cflexConvertToFlex may zrealloc 'out'; the cleaner frees whatever
+     * it ends up pointing at */
+    cleanerName(zfree, FlexBuf) flex *out = zcalloc(1, outLen);
+
+#ifdef BENCH_SANITIZED
+    const size_t iterations = 50;
+#else
+    const size_t iterations = 2000;
+#endif
+    double runs[2][BENCH_CODEC_ROUNDS];
+    for (size_t r = 0; r < BENCH_CODEC_ROUNDS; r++) {
+        uint64_t t = timeUtilMonotonicNs();
+        for (size_t i = 0; i < iterations; i++) {
+            flexConvertToCFlex(f, cbuf, rawBytes - 1);
+        }
+        runs[0][r] = (double)(timeUtilMonotonicNs() - t);
+
+        t = timeUtilMonotonicNs();
+        for (size_t i = 0; i < iterations; i++) {
+            cflexConvertToFlex(cbuf, &out, &outLen);
+        }
+        runs[1][r] = (double)(timeUtilMonotonicNs() - t);
+    }
+
+    const bool roundTrips = memcmp(out, f, rawBytes) == 0;
+
+    /* MB/s of uncompressed flex bytes */
+    const double mb = (double)rawBytes * (double)iterations / 1e6;
+    const double compressMBs =
+        mb / (benchMedian(runs[0], BENCH_CODEC_ROUNDS) / 1e9);
+    const double decompressMBs =
+        mb / (benchMedian(runs[1], BENCH_CODEC_ROUNDS) / 1e9);
+    printf("\n  LZ4 via flex <-> cflex, log100 flex of %zu B -> %zu B, "
+           "median of %d interleaved rounds%s\n",
+           rawBytes, compressedBytes, BENCH_CODEC_ROUNDS,
+           roundTrips ? "" : " (ROUND TRIP FAILED)");
+    printf("  compress %8.0f MB/s, decompress %8.0f MB/s (uncompressed "
+           "bytes per second)\n",
+           compressMBs, decompressMBs);
+}
+
 #ifdef DATAKIT_TEST
 #include "ctest.h"
 
@@ -898,6 +1048,8 @@ int compressionBenchTest(int argc, char *argv[]) {
     printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
            "━━━━━━━━━━━━━━\n");
     runMultilistBenchmarks();
+    runLz4Benchmarks();
+    runFloat16Benchmarks();
 
     printf("\n");
     printf("╔══════════════════════════════════════════════════════════════════"
