@@ -62,7 +62,7 @@ list *listCreate(void) {
  *
  * This function can't fail. */
 void listRelease(list *l) {
-    signed long len;
+    size_t len;
     listNode *current, *next;
 
     current = l->head;
@@ -618,7 +618,7 @@ int listTest(int argc, char *argv[]) {
         }
 
         if (listLength(copy) != listLength(orig)) {
-            ERR("Copy length %lu != orig length %zu", listLength(copy),
+            ERR("Copy length %zu != orig length %zu", listLength(copy),
                 listLength(orig));
         }
 
