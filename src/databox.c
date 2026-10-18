@@ -1078,17 +1078,26 @@ const char *databoxReprStr(const databox *const box) {
         snprintf(buf, bufLen, "{UNSIGNED: %" PRIu64 "}", box->data.u64);
         break;
     case DATABOX_SIGNED_128: {
-        assert(box->big);
+        /* A deferred wide box has a type and no payload to print. */
+        if (databoxIsWideDeferred(box)) {
+            snprintf(buf, bufLen, "{SIGNED128: deferred}");
+            break;
+        }
+
         const int written =
             StrInt128ToBuf(bufBig, sizeof(bufBig), *box->data.i128);
         snprintf(buf, bufLen, "{SIGNED128: %.*s}", written, bufBig);
         break;
     }
     case DATABOX_UNSIGNED_128: {
-        assert(box->big);
+        if (databoxIsWideDeferred(box)) {
+            snprintf(buf, bufLen, "{UNSIGNED128: deferred}");
+            break;
+        }
+
         const int written =
             StrUInt128ToBuf(bufBig, sizeof(bufBig), *box->data.u128);
-        snprintf(buf, bufLen, "{UNSIGNED128: %.*s", written, bufBig);
+        snprintf(buf, bufLen, "{UNSIGNED128: %.*s}", written, bufBig);
         break;
     }
     case DATABOX_FLOAT_32:
@@ -2754,6 +2763,46 @@ int databoxTest(int argc, char *argv[]) {
         for (size_t i = 0; i < COUNT_ARRAY(narrow); i++) {
             if (databoxIsWideDeferred(&narrow[i])) {
                 ERR("narrow box %zu reads as deferred", i);
+            }
+        }
+    }
+
+    TEST("databoxReprStr: wide boxes, with and without a payload") {
+        /* A deferred box (0xFF everywhere but the type and a NULL pointer,
+         * so 'big' is set too) prints as deferred and is never read
+         * through; a box with a payload prints its value. */
+        const struct {
+            databoxType type;
+            const char *deferred;
+            const char *live;
+        } cases[] = {
+            {DATABOX_SIGNED_128, "{SIGNED128: deferred}",
+             "{SIGNED128: -170141183460469231731687303715884105728}"},
+            {DATABOX_UNSIGNED_128, "{UNSIGNED128: deferred}",
+             "{UNSIGNED128: 340282366920938463463374607431768211455}"},
+        };
+
+        for (size_t i = 0; i < COUNT_ARRAY(cases); i++) {
+            databox deferred;
+            memset(&deferred, 0xFF, sizeof(deferred));
+            deferred.type = cases[i].type;
+            deferred.data.ptr = NULL;
+            const char *got = databoxReprStr(&deferred);
+            if (strcmp(got, cases[i].deferred) != 0) {
+                ERR("deferred type %d printed as %s", (int)cases[i].type, got);
+            }
+
+            databoxBig live;
+            memset(&live, 0, sizeof(live));
+            if (cases[i].type == DATABOX_SIGNED_128) {
+                DATABOX_BIG_SIGNED_128(&live, INT128_MIN);
+            } else {
+                DATABOX_BIG_UNSIGNED_128(&live, UINT128_MAX);
+            }
+
+            got = databoxReprStr((const databox *)&live);
+            if (strcmp(got, cases[i].live) != 0) {
+                ERR("type %d printed as %s", (int)cases[i].type, got);
             }
         }
     }
