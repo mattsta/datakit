@@ -548,6 +548,7 @@ typedef struct clusterRingStats {
     uint64_t memoryBytes;
 } clusterRingStats;
 
+/* Fill every field of 'stats' from 'ring'. A NULL 'ring' fills all zeros. */
 void clusterRingGetStats(const clusterRing *ring, clusterRingStats *stats);
 
 /* ====================================================================

@@ -2395,7 +2395,14 @@ clusterResult clusterRingUpdateNodeLoad(clusterRing *ring, uint64_t nodeId,
  * ==================================================================== */
 
 void clusterRingGetStats(const clusterRing *ring, clusterRingStats *stats) {
-    if (!ring || !stats) {
+    if (!stats) {
+        return;
+    }
+
+    /* No ring reports an empty ring, so the caller never reads an
+     * unwritten field. */
+    if (!ring) {
+        memset(stats, 0, sizeof(*stats));
         return;
     }
 
@@ -4256,6 +4263,23 @@ static int testStats(void) {
 
         if (stats.memoryBytes == 0) {
             ERRR("Memory usage should be > 0");
+            err++;
+        }
+    }
+
+    TEST("Stats of a NULL ring are all zero") {
+        clusterRingStats stats;
+        memset(&stats, 0xA5, sizeof(stats));
+        clusterRingGetStats(NULL, &stats);
+
+        const uint8_t *bytes = (const uint8_t *)&stats;
+        bool allZero = true;
+        for (size_t i = 0; i < sizeof(stats); i++) {
+            allZero = allZero && bytes[i] == 0;
+        }
+
+        if (!allZero) {
+            ERRR("NULL ring should report all-zero stats");
             err++;
         }
     }
