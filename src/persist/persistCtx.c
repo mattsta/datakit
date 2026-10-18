@@ -410,6 +410,7 @@ void persistCtxGetStats(const persistCtx *ctx, persistCtxStats *stats) {
 
 #ifdef DATAKIT_TEST
 #include "../ctest.h"
+#include "../dkTestTmp.h"
 #include <unistd.h>
 
 int persistCtxTest(int argc, char *argv[]) {
@@ -417,6 +418,7 @@ int persistCtxTest(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
 
     TEST("persistCtx default config") {
         persistCtxConfig config = persistCtxDefaultConfig();
@@ -429,47 +431,51 @@ int persistCtxTest(int argc, char *argv[]) {
     }
 
     TEST("persistCtx create and free") {
-        const char *path = "/tmp/persistCtxTest";
-        persistCtx *ctx = persistCtxNew(path, NULL);
-        if (!ctx) {
-            ERRR("Failed to create persistCtx");
+        char path[PATH_MAX];
+        if (!dkTestTmpDirPath(&tmp, "persistCtxTest", path, sizeof(path))) {
+            ERR("could not create a scratch directory: %s", strerror(errno));
+        } else {
+            persistCtx *ctx = persistCtxNew(path, NULL);
+            if (!ctx) {
+                ERRR("Failed to create persistCtx");
+            } else {
+                if (strcmp(ctx->basePath, path) != 0) {
+                    ERRR("Base path not set correctly");
+                }
+                persistCtxFree(ctx);
+            }
         }
-        if (strcmp(ctx->basePath, path) != 0) {
-            ERRR("Base path not set correctly");
-        }
-        persistCtxFree(ctx);
-
-        /* Clean up */
-        char snapPath[256], walPath[256];
-        snprintf(snapPath, sizeof(snapPath), "%s.snap", path);
-        snprintf(walPath, sizeof(walPath), "%s.wal", path);
-        unlink(snapPath);
-        unlink(walPath);
     }
 
     TEST("persistCtx exists check") {
-        const char *path = "/tmp/persistCtxExistsTest";
+        char path[PATH_MAX];
+        char snapPath[PATH_MAX];
+        if (!dkTestTmpDirPath(&tmp, "persistCtxExistsTest", path,
+                              sizeof(path)) ||
+            !dkTestTmpDirPath(&tmp, "persistCtxExistsTest.snap", snapPath,
+                              sizeof(snapPath))) {
+            ERR("could not create a scratch directory: %s", strerror(errno));
+        } else {
+            /* Should not exist initially */
+            if (persistCtxExists(path)) {
+                ERRR("Context should not exist yet");
+            }
 
-        /* Should not exist initially */
-        if (persistCtxExists(path)) {
-            ERRR("Context should not exist yet");
+            /* Create files manually */
+            FILE *f = fopen(snapPath, "w");
+            if (f) {
+                fclose(f);
+            }
+
+            /* Now should exist */
+            if (!persistCtxExists(path)) {
+                ERRR("Context should exist now");
+            }
         }
+    }
 
-        /* Create files manually */
-        char snapPath[256];
-        snprintf(snapPath, sizeof(snapPath), "%s.snap", path);
-        FILE *f = fopen(snapPath, "w");
-        if (f) {
-            fclose(f);
-        }
-
-        /* Now should exist */
-        if (!persistCtxExists(path)) {
-            ERRR("Context should exist now");
-        }
-
-        /* Clean up */
-        unlink(snapPath);
+    if (!dkTestTmpDirRemove(&tmp)) {
+        ERRR("could not remove the scratch directory");
     }
 
     TEST_FINAL_RESULT;

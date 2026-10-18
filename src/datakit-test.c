@@ -27,6 +27,7 @@
 #include "dataspeed.h"
 #include "dj.h"
 #include "dkRandom.h"
+#include "dkTestTmp.h"
 #include "dod.h"
 #include "fastmutex.h"
 #include "fenwick/fenwickI64.h" /* New 2-tier template system */
@@ -883,9 +884,12 @@ static int dkTestDaemonizeReadyTest(int argc, char *argv[]) {
      *         descriptor, and a successor rewrites a longer stale pid
      *         exactly. */
     {
-        char path[64];
-        snprintf(path, sizeof(path), "/tmp/dkTestPidFile.%d", (int)getpid());
-        (void)unlink(path);
+        cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+        char path[PATH_MAX];
+        if (!dkTestTmpDirPath(&tmp, "pidfile", path, sizeof(path))) {
+            REXPECT(false, "scratch directory for the pidfile");
+            return failures;
+        }
 
         int hold[2] = {-1, -1};
         REXPECT(pipe(hold) == 0, "pipe for the pidfile owner");

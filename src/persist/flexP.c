@@ -252,7 +252,12 @@ int flexPTest(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    const char *basePath = "/tmp/flexPTest";
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    char basePath[PATH_MAX];
+    if (!dkTestTmpDirPath(&tmp, "flexPTest", basePath, sizeof(basePath))) {
+        ERR("could not create a scratch directory: %s", strerror(errno));
+        return err;
+    }
 
     TEST("flexP create empty and close") {
         ptestCleanupFiles(basePath);

@@ -284,7 +284,13 @@ static int test_multiroarP_basic(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    const char *basePath = "/tmp/multiroarPTest_basic";
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    char basePath[PATH_MAX];
+    if (!dkTestTmpDirPath(&tmp, "multiroarPTest_basic", basePath,
+                          sizeof(basePath))) {
+        ERR("could not create a scratch directory: %s", strerror(errno));
+        return err;
+    }
 
     TEST("multiroarP basic persistence")
 
@@ -400,7 +406,13 @@ static int test_multiroarP_recovery(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    const char *basePath = "/tmp/multiroarPTest_recovery";
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    char basePath[PATH_MAX];
+    if (!dkTestTmpDirPath(&tmp, "multiroarPTest_recovery", basePath,
+                          sizeof(basePath))) {
+        ERR("could not create a scratch directory: %s", strerror(errno));
+        return err;
+    }
 
     TEST("multiroarP recovery from crash")
 
@@ -450,7 +462,13 @@ static int test_multiroarP_compaction(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    const char *basePath = "/tmp/multiroarPTest_compaction";
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    char basePath[PATH_MAX];
+    if (!dkTestTmpDirPath(&tmp, "multiroarPTest_compaction", basePath,
+                          sizeof(basePath))) {
+        ERR("could not create a scratch directory: %s", strerror(errno));
+        return err;
+    }
 
     TEST("multiroarP compaction")
 
@@ -503,7 +521,13 @@ static int test_multiroarP_fuzzing(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    const char *basePath = "/tmp/multiroarPTest_fuzzing";
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    char basePath[PATH_MAX];
+    if (!dkTestTmpDirPath(&tmp, "multiroarPTest_fuzzing", basePath,
+                          sizeof(basePath))) {
+        ERR("could not create a scratch directory: %s", strerror(errno));
+        return err;
+    }
 
     TEST("multiroarP fuzzing with random operations")
 

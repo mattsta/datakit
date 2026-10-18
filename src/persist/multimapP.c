@@ -360,7 +360,12 @@ int multimapPTest(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    const char *basePath = "/tmp/multimapPTest";
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    char basePath[PATH_MAX];
+    if (!dkTestTmpDirPath(&tmp, "multimapPTest", basePath, sizeof(basePath))) {
+        ERR("could not create a scratch directory: %s", strerror(errno));
+        return err;
+    }
 
     TEST("multimapP create empty and close") {
         ptestCleanupFiles(basePath);

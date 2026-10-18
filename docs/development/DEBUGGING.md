@@ -542,10 +542,10 @@ Review warnings in `build-warnings.txt`.
 mkdir build-analyze
 cd build-analyze
 scan-build cmake ..
-scan-build make -j8
+scan-build -o scan-results make -j8
 
-# View results
-scan-view /tmp/scan-build-<timestamp>
+# View results (scan-build prints the report directory it wrote)
+scan-view scan-results/<timestamp>
 ```
 
 ### Clang-Tidy

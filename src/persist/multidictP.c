@@ -319,7 +319,12 @@ int multidictPTest(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    const char *basePath = "/tmp/multidictPTest";
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    char basePath[PATH_MAX];
+    if (!dkTestTmpDirPath(&tmp, "multidictPTest", basePath, sizeof(basePath))) {
+        ERR("could not create a scratch directory: %s", strerror(errno));
+        return err;
+    }
 
     TEST("multidictP create empty and close") {
         ptestCleanupFiles(basePath);
@@ -1072,12 +1077,13 @@ int multidictPTest(int argc, char *argv[]) {
         /* The snapshot is published through a temp file beside it, so a
          * directory made read-only after the stores are open fails the
          * initial save */
-        const char *dir = "/tmp/multidictPTestReadOnly";
-        char path[64];
-        snprintf(path, sizeof(path), "%s/dict", dir);
-        ptestCleanupFiles(path);
-        rmdir(dir);
-        if (mkdir(dir, 0700) != 0) {
+        char dir[PATH_MAX];
+        char path[PATH_MAX];
+        char probe[PATH_MAX];
+        if (!dkTestTmpDirPath(&tmp, "readOnly", dir, sizeof(dir)) ||
+            !dkTestTmpDirPath(&tmp, "readOnly/dict", path, sizeof(path)) ||
+            !dkTestTmpDirPath(&tmp, "readOnly/probe", probe, sizeof(probe)) ||
+            mkdir(dir, 0700) != 0) {
             ERRR("could not create the test directory");
         } else {
             persistCtx *ctx = persistCtxNew(path, NULL);
@@ -1086,8 +1092,6 @@ int multidictPTest(int argc, char *argv[]) {
             }
 
             chmod(dir, 0500);
-            char probe[80];
-            snprintf(probe, sizeof(probe), "%s/probe", dir);
             const int fd = open(probe, O_RDWR | O_CREAT, 0600);
             if (fd >= 0) {
                 /* Permissions are not enforced (running as root) */

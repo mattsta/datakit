@@ -308,7 +308,13 @@ static int test_multiOrderedSetP_basic(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    const char *basePath = "/tmp/multiOrderedSetPTest_basic";
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    char basePath[PATH_MAX];
+    if (!dkTestTmpDirPath(&tmp, "multiOrderedSetPTest_basic", basePath,
+                          sizeof(basePath))) {
+        ERR("could not create a scratch directory: %s", strerror(errno));
+        return err;
+    }
 
     TEST("multiOrderedSetP basic persistence")
 
@@ -433,7 +439,13 @@ static int test_multiOrderedSetP_iteration(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    const char *basePath = "/tmp/multiOrderedSetPTest_iteration";
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    char basePath[PATH_MAX];
+    if (!dkTestTmpDirPath(&tmp, "multiOrderedSetPTest_iteration", basePath,
+                          sizeof(basePath))) {
+        ERR("could not create a scratch directory: %s", strerror(errno));
+        return err;
+    }
 
     TEST("multiOrderedSetP iteration order")
 
@@ -509,7 +521,13 @@ static int test_multiOrderedSetP_compaction(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    const char *basePath = "/tmp/multiOrderedSetPTest_compaction";
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    char basePath[PATH_MAX];
+    if (!dkTestTmpDirPath(&tmp, "multiOrderedSetPTest_compaction", basePath,
+                          sizeof(basePath))) {
+        ERR("could not create a scratch directory: %s", strerror(errno));
+        return err;
+    }
 
     TEST("multiOrderedSetP compaction")
 
@@ -569,7 +587,13 @@ static int test_multiOrderedSetP_resetReuse(int argc, char *argv[]) {
     (void)argv;
 
     int err = 0;
-    const char *basePath = "/tmp/multiOrderedSetPTest_resetReuse";
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    char basePath[PATH_MAX];
+    if (!dkTestTmpDirPath(&tmp, "multiOrderedSetPTest_resetReuse", basePath,
+                          sizeof(basePath))) {
+        ERR("could not create a scratch directory: %s", strerror(errno));
+        return err;
+    }
 
     TEST("multiOrderedSetP reset then reuse survives recovery") {
         ptestCleanupFiles(basePath);

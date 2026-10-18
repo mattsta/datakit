@@ -4637,6 +4637,7 @@ const persistOps persistOpsMultiLRU = {
  */
 #ifdef DATAKIT_TEST
 #include "ctest.h"
+#include "dkTestTmp.h"
 
 /* Free a test multidict together with the default class it holds; the
  * class must outlive the dict because teardown runs class callbacks. */
@@ -7809,13 +7810,18 @@ int persistTest(int argc, char *argv[]) {
     }
 
     TEST("durability: atomic snapshot publish leaves no torn temp file") {
-        const char *snapPath = "/tmp/dk_persist_atomic_test.snap";
-        const char *walPath = "/tmp/dk_persist_atomic_test.wal";
-        char tmpPath[256];
-        snprintf(tmpPath, sizeof(tmpPath), "%s.tmp", snapPath);
-        unlink(snapPath);
-        unlink(walPath);
-        unlink(tmpPath);
+        cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+        char snapPath[PATH_MAX];
+        char walPath[PATH_MAX];
+        char tmpPath[PATH_MAX];
+        if (!dkTestTmpDirPath(&tmp, "atomic.snap", snapPath,
+                              sizeof(snapPath)) ||
+            !dkTestTmpDirPath(&tmp, "atomic.wal", walPath, sizeof(walPath)) ||
+            !dkTestTmpDirPath(&tmp, "atomic.snap.tmp", tmpPath,
+                              sizeof(tmpPath))) {
+            ERR("could not create a scratch directory: %s", strerror(errno));
+            return err;
+        }
 
         cleaner(multilistFree) multilist *ml =
             multilistNew(FLEX_CAP_LEVEL_512, 0);
