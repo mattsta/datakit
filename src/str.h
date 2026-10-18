@@ -446,6 +446,9 @@ bool StrBufToUInt64FastCheckNumeric(const void *buf_, size_t len,
  * the value is above UINT64_MAX */
 bool StrBufToUInt64FastCheckOverflow(const void *buf, size_t len,
                                      uint64_t *value);
+/* The StrBufToUInt64 / StrBufToInt64 grammar for 128-bit values: false,
+ * leaving *value alone, on any non-canonical input or a value outside the
+ * type */
 bool StrBufToUInt128(const void *buf, const size_t bufLen, __uint128_t *value);
 bool StrBufToInt128(const void *buf, const size_t bufLen, __int128_t *value);
 

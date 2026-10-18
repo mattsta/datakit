@@ -258,13 +258,20 @@ bool StrBufToUInt64FastCheckOverflow(const void *buf_, const size_t len,
 }
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
-/* Adapted from https://github.com/apache/orc/blob/master/c%2B%2B/src/Int128.cc
+/* Unchecked 128-bit magnitude: bufLen bytes the caller has verified are all
+ * digits.  Fails on an empty buffer or a value above UINT128_MAX.
+ * Adapted from https://github.com/apache/orc/blob/master/c%2B%2B/src/Int128.cc
  * (Apache2) */
-bool StrBufToUInt128(const void *buf, const size_t bufLen, __uint128_t *value) {
+static bool strBufToUInt128Digits_(const void *buf, const size_t bufLen,
+                                   __uint128_t *value) {
     const uint8_t *s = buf;
 
     size_t position = 0;
     __uint128_t result = 0;
+
+    if (bufLen == 0) {
+        return false;
+    }
 
     /* Create 128 bit integer by extracting 64 bit integers then multiplying
      * up to power of (base 10) digits converted.
@@ -318,11 +325,17 @@ bool StrBufToUInt128(const void *buf, const size_t bufLen, __uint128_t *value) {
     return true;
 }
 
-bool StrBufToInt128(const void *buf, const size_t bufLen, __int128_t *value) {
+/* Unchecked signed form: an optional '-' and then digits the caller has
+ * verified.  Fails on no digits or a value outside the int128 range. */
+static bool strBufToInt128Digits_(const void *buf, const size_t bufLen,
+                                  __int128_t *value) {
     const uint8_t *s = buf;
     int sign = 1;
 
-    assert(bufLen <= 40);
+    /* A sign and at most 39 digits */
+    if (bufLen == 0 || bufLen > 40) {
+        return false;
+    }
 
     size_t digits = bufLen;
     size_t position = 0;
@@ -338,7 +351,7 @@ bool StrBufToInt128(const void *buf, const size_t bufLen, __int128_t *value) {
     }
 
     __uint128_t got;
-    if (!StrBufToUInt128(&s[position], digits, &got)) {
+    if (!strBufToUInt128Digits_(&s[position], digits, &got)) {
         return false;
     }
 
@@ -368,6 +381,41 @@ bool StrBufToInt128(const void *buf, const size_t bufLen, __int128_t *value) {
     }
 
     return true;
+}
+
+/* "0", or a nonzero digit followed by digits: the canonical spelling the
+ * StrBufTo* parsers accept */
+static bool strBufIsCanonicalDigits_(const uint8_t *s, const size_t len) {
+    if (len == 0) {
+        return false;
+    }
+
+    if (s[0] == '0') {
+        return len == 1;
+    }
+
+    return StrIsDigitsFast(s, len);
+}
+
+bool StrBufToUInt128(const void *buf, const size_t bufLen, __uint128_t *value) {
+    if (!strBufIsCanonicalDigits_(buf, bufLen)) {
+        return false;
+    }
+
+    return strBufToUInt128Digits_(buf, bufLen, value);
+}
+
+bool StrBufToInt128(const void *buf, const size_t bufLen, __int128_t *value) {
+    const uint8_t *s = buf;
+    const size_t signLen = (bufLen > 0 && s[0] == '-') ? 1 : 0;
+
+    /* After a '-' the magnitude must start with a nonzero digit: no "-0" */
+    if (!strBufIsCanonicalDigits_(s + signLen, bufLen - signLen) ||
+        (signLen && s[1] == '0')) {
+        return false;
+    }
+
+    return strBufToInt128Digits_(buf, bufLen, value);
 }
 
 /* Obsolete poorly written legacy functions */

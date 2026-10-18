@@ -247,9 +247,10 @@ DK_INLINE_ALWAYS bool StrScanScanReliableConvert128_(
                 }
             }
 
-            /* Attempt to convert the buffer to an integer */
+            /* Attempt to convert the buffer to an integer (its form is
+             * verified above, so skip the public parser's re-check) */
             __int128_t result;
-            if (!StrBufToInt128(buf, len, &result)) {
+            if (!strBufToInt128Digits_(buf, len, &result)) {
                 return false;
             }
 
@@ -276,7 +277,7 @@ DK_INLINE_ALWAYS bool StrScanScanReliableConvert128_(
             }
 
             __uint128_t result;
-            if (!StrBufToUInt128(buf, len, &result)) {
+            if (!strBufToUInt128Digits_(buf, len, &result)) {
                 return false;
             }
 
@@ -949,8 +950,8 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
         for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
             databox box = {{0}};
             /* The sign is only parsed with allowFloatWords set */
-            const StrScanFmt fmt = StrScanScan(
-                (const uint8_t *)cases[i].s, &box, cases[i].opt, true, false);
+            const StrScanFmt fmt = StrScanScan((const uint8_t *)cases[i].s,
+                                               &box, cases[i].opt, true, false);
             if (fmt != cases[i].fmt) {
                 ERR("StrScanScan(%s) format %d, want %d", cases[i].s, fmt,
                     cases[i].fmt);
@@ -4416,6 +4417,44 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
         const char *badNeg = "-180000000000000000000000000000000000000";
         if (StrBufToInt128(badNeg, strlen(badNeg), &v)) {
             ERRR("-1.8e38 must be rejected (was silently wrapping)");
+        }
+    }
+
+    TEST("StrBufToUInt128 / StrBufToInt128: canonical digits only") {
+        /* The same grammar as StrBufToUInt64 / StrBufToInt64 */
+        static const char *const refused[] = {
+            "", "-", "00", "01", "-0", "-01", "+1", " 1", "1 ", "1a", "a",
+            "1.0", "--1", "1-", "0x10",
+            /* UINT128_MAX + 1, then 40 digits */
+            "340282366920938463463374607431768211456",
+            "1000000000000000000000000000000000000000"};
+        for (size_t i = 0; i < sizeof(refused) / sizeof(*refused); i++) {
+            const size_t len = strlen(refused[i]);
+            __uint128_t u = 7;
+            __int128_t s = 7;
+            if (StrBufToUInt128(refused[i], len, &u) || u != 7) {
+                ERR("StrBufToUInt128 accepted '%s'", refused[i]);
+            }
+            if (StrBufToInt128(refused[i], len, &s) || s != 7) {
+                ERR("StrBufToInt128 accepted '%s'", refused[i]);
+            }
+        }
+
+        __uint128_t u = 0;
+        const char *umax = "340282366920938463463374607431768211455";
+        if (!StrBufToUInt128(umax, strlen(umax), &u) || u != ~(__uint128_t)0) {
+            ERRR("UINT128_MAX must parse exactly");
+        }
+        if (!StrBufToUInt128("0", 1, &u) || u != 0) {
+            ERRR("\"0\" must parse as 0");
+        }
+
+        __int128_t s = 1;
+        if (!StrBufToInt128("0", 1, &s) || s != 0) {
+            ERRR("\"0\" must parse as signed 0");
+        }
+        if (!StrBufToInt128("-1", 2, &s) || s != -1) {
+            ERRR("\"-1\" must parse as -1");
         }
     }
 
