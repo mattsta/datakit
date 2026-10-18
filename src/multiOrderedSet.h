@@ -466,10 +466,12 @@ multiOrderedSet *multiOrderedSetDifference(const multiOrderedSet *sets[],
  * Random Access
  * ==================================================================== */
 
-/* Get random member(s).
- * If count > 0, returns distinct members.
- * If count < 0, may return duplicates (abs(count) members).
- * Returns actual count retrieved. */
+/* Get random member(s) into members[] and scores[].
+ * If count >= 0, returns min(count, size) distinct members, in no
+ * particular order; the arrays need room for that many.
+ * If count < 0, returns exactly -count members, each drawn independently,
+ * so a member may repeat; the arrays need room for -count.
+ * Returns the number of pairs written (0 for an empty set). */
 size_t multiOrderedSetRandomMembers(const multiOrderedSet *mos, int64_t count,
                                     databox *members, databox *scores);
 

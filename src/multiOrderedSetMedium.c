@@ -7,11 +7,8 @@
 /* ====================================================================
  * Random Number Generator
  * ==================================================================== */
+/* xorshift64star state for RandomMembers */
 static uint64_t mosRandomState = 0x98765432FEDCBA01ULL;
-
-static inline uint64_t mosRandom(void) {
-    return xorshift64star(&mosRandomState);
-}
 
 /* ====================================================================
  * Databox Arithmetic Helper
@@ -917,42 +914,25 @@ bool multiOrderedSetMediumLast(const multiOrderedSetMedium *m, databox *member,
  * Random
  * ==================================================================== */
 
+/* Fill one array slot pair with the pair at 'rank', ignoring what the
+ * slots held: a 96/128-bit value comes back deferred (type only) */
+static bool mosMediumRandomPick_(const void *set, size_t rank, databox *member,
+                                 databox *score) {
+    mosBoxClear(member);
+    mosBoxClear(score);
+    return multiOrderedSetMediumGetByRank(set, (int64_t)rank, member, score);
+}
+
 size_t multiOrderedSetMediumRandomMembers(const multiOrderedSetMedium *m,
                                           int64_t count, databox *members,
                                           databox *scores) {
-    size_t total = multiOrderedSetMediumCount(m);
+    const size_t total = multiOrderedSetMediumCount(m);
     if (total == 0) {
         return 0;
     }
 
-    bool allowDuplicates = (count < 0);
-    size_t absCount = (size_t)(count < 0 ? -count : count);
-    size_t retrieved = 0;
-
-    if (absCount > total && !allowDuplicates) {
-        absCount = total;
-    }
-
-    for (size_t i = 0; i < absCount; i++) {
-        size_t idx;
-        if (allowDuplicates) {
-            idx = mosRandom() % total;
-        } else {
-            /* Simple selection for distinct elements */
-            idx = (mosRandom() % (total - retrieved)) + retrieved;
-        }
-
-        /* Fill the slots ignoring what they held: a 96/128-bit value comes
-         * back deferred (type only) */
-        mosBoxClear(&members[retrieved]);
-        mosBoxClear(&scores[retrieved]);
-        if (multiOrderedSetMediumGetByRank(m, (int64_t)idx, &members[retrieved],
-                                           &scores[retrieved])) {
-            retrieved++;
-        }
-    }
-
-    return retrieved;
+    return mosRandomMembersFill(m, mosMediumRandomPick_, &mosRandomState, total,
+                                count, members, scores);
 }
 
 /* ====================================================================

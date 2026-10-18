@@ -1,8 +1,10 @@
 #pragma once
 
+#include "cleaner.h"
 #include "databox.h"
 #include "flex.h"
 #include "flexCapacityManagement.h"
+#include "str.h" /* xorshift64star */
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -220,4 +222,96 @@ DK_INLINE_ALWAYS int64_t mosNormalizeRank(int64_t rank, size_t count) {
         return -1; /* Out of bounds */
     }
     return rank;
+}
+
+/* ====================================================================
+ * Random members
+ * ==================================================================== */
+
+/* Fill members[slot] and scores[slot] with the pair at 'rank' (each tier
+ * clears the slots first, so a 96/128-bit value comes back deferred) */
+typedef bool mosRankPick(const void *set, size_t rank, databox *member,
+                         databox *score);
+
+defcleanerName(uint64_t *, zfree, MosRankSet);
+
+/* RandomMembers for any tier over a set of 'total' > 0 pairs, drawing
+ * from the tier's xorshift64star state 'rng':
+ *   - count < 0: exactly -count picks, each rank drawn independently, so
+ *     members may repeat;
+ *   - count >= 0: min(count, total) distinct ranks.  When they are a
+ *     large share of the set, one selection-sampling pass picks them
+ *     (ascending); otherwise ranks are drawn and rejected against a hash
+ *     set sized to the request, so a small sample of a big set costs
+ *     O(count), not O(total).
+ * Returns the number of slot pairs filled. */
+static inline size_t mosRandomMembersFill(const void *set, mosRankPick *pick,
+                                          uint64_t *rng, size_t total,
+                                          int64_t count, databox *members,
+                                          databox *scores) {
+    size_t retrieved = 0;
+    if (count < 0) {
+        const uint64_t want = (uint64_t)0 - (uint64_t)count;
+        for (uint64_t i = 0; i < want; i++) {
+            const size_t rank = xorshift64star(rng) % total;
+            if (pick(set, rank, &members[retrieved], &scores[retrieved])) {
+                retrieved++;
+            }
+        }
+
+        return retrieved;
+    }
+
+    const size_t want = (uint64_t)count < total ? (size_t)count : total;
+    if (want == 0) {
+        return 0;
+    }
+
+    if (want > total / 4) {
+        /* Selection sampling: rank i is taken with probability
+         * needed / remaining, which reaches 1 once every remaining rank is
+         * needed, so exactly 'want' ranks are taken */
+        for (size_t i = 0; i < total && retrieved < want; i++) {
+            const size_t remaining = total - i;
+            const size_t needed = want - retrieved;
+            if (xorshift64star(rng) % remaining < needed &&
+                pick(set, i, &members[retrieved], &scores[retrieved])) {
+                retrieved++;
+            }
+        }
+
+        return retrieved;
+    }
+
+    /* Rejection sampling against an open-addressing set of rank + 1
+     * (0 = empty slot), at most half full.  At most a quarter of the ranks
+     * are taken, so each draw is new with probability >= 3/4. */
+    size_t slots = 16;
+    while (slots < want * 2) {
+        slots <<= 1;
+    }
+
+    const size_t mask = slots - 1;
+    cleanerName(zfree, MosRankSet) uint64_t *seen =
+        zcalloc(slots, sizeof(*seen));
+    size_t draws = 0;
+    while (retrieved < want && draws < want * 64) {
+        draws++;
+        const size_t rank = xorshift64star(rng) % total;
+        size_t at = rank & mask;
+        while (seen[at] != 0 && seen[at] != (uint64_t)rank + 1) {
+            at = (at + 1) & mask;
+        }
+
+        if (seen[at] != 0) {
+            continue; /* already taken */
+        }
+
+        seen[at] = (uint64_t)rank + 1;
+        if (pick(set, rank, &members[retrieved], &scores[retrieved])) {
+            retrieved++;
+        }
+    }
+
+    return retrieved;
 }

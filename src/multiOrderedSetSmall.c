@@ -4,17 +4,11 @@
 #include "cleaner.h"
 #include "str.h" /* for random functions */
 
-/* Scope-exit cleaners (see cleaner.h idioms) */
-defcleanerName(uint8_t *, zfree, U8);
-
 /* ====================================================================
  * Random Number Generator
  * ==================================================================== */
+/* xorshift64star state for RandomMembers */
 static uint64_t mosRandomState = 0x12345678ABCDEF01ULL;
-
-static inline uint64_t mosRandom(void) {
-    return xorshift64star(&mosRandomState);
-}
 
 /* ====================================================================
  * Databox Arithmetic Helper
@@ -652,73 +646,23 @@ bool multiOrderedSetSmallLast(const multiOrderedSetSmall *m, databox *member,
 
 /* Fill one array slot pair with the pair at 'rank', ignoring what the
  * slots held: a 96/128-bit value comes back deferred (type only) */
-static bool mosSmallRandomPick_(const multiOrderedSetSmall *m, size_t rank,
-                                databox *member, databox *score) {
+static bool mosSmallRandomPick_(const void *set, size_t rank, databox *member,
+                                databox *score) {
     mosBoxClear(member);
     mosBoxClear(score);
-    return multiOrderedSetSmallGetByRank(m, (int64_t)rank, member, score);
+    return multiOrderedSetSmallGetByRank(set, (int64_t)rank, member, score);
 }
 
 size_t multiOrderedSetSmallRandomMembers(const multiOrderedSetSmall *m,
                                          int64_t count, databox *members,
                                          databox *scores) {
-    size_t total = multiOrderedSetSmallCount(m);
+    const size_t total = multiOrderedSetSmallCount(m);
     if (total == 0) {
         return 0;
     }
 
-    bool allowDuplicates = (count < 0);
-    size_t absCount = (size_t)(count < 0 ? -count : count);
-    size_t retrieved = 0;
-
-    if (allowDuplicates) {
-        /* With duplicates: simple random selection */
-        for (size_t i = 0; i < absCount; i++) {
-            size_t idx = mosRandom() % total;
-            if (mosSmallRandomPick_(m, idx, &members[i], &scores[i])) {
-                retrieved++;
-            }
-        }
-    } else {
-        /* Without duplicates: Fisher-Yates on indices */
-        if (absCount > total) {
-            absCount = total;
-        }
-
-        /* For small counts, use simple rejection sampling */
-        if (absCount <= total / 4) {
-            /* Use a simple set to track selected indices */
-            cleanerName(zfree, U8) uint8_t *selected =
-                zcalloc(1, (total + 7) / 8);
-            while (retrieved < absCount) {
-                size_t idx = mosRandom() % total;
-                size_t byte = idx / 8;
-                size_t bit = idx % 8;
-                if (!(selected[byte] & (1 << bit))) {
-                    selected[byte] |= (1 << bit);
-                    if (mosSmallRandomPick_(m, idx, &members[retrieved],
-                                            &scores[retrieved])) {
-                        retrieved++;
-                    }
-                }
-            }
-        } else {
-            /* For larger counts, iterate and select */
-            for (size_t i = 0; i < total && retrieved < absCount; i++) {
-                /* Probability of selection */
-                size_t remaining = total - i;
-                size_t needed = absCount - retrieved;
-                if ((mosRandom() % remaining) < needed) {
-                    if (mosSmallRandomPick_(m, i, &members[retrieved],
-                                            &scores[retrieved])) {
-                        retrieved++;
-                    }
-                }
-            }
-        }
-    }
-
-    return retrieved;
+    return mosRandomMembersFill(m, mosSmallRandomPick_, &mosRandomState, total,
+                                count, members, scores);
 }
 
 /* ====================================================================

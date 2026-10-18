@@ -1404,6 +1404,107 @@ static int mosWideScenario_(size_t n, multiOrderedSetType tier) {
     return err;
 }
 
+defcleanerName(databox *, zfree, Boxes);
+defcleanerName(uint8_t *, zfree, Seen);
+
+/* Pair 'i' of the RandomMembers sets: member "rm-NNNNNN", score 3 * i */
+static void mosRandomPair_(size_t i, char *buf, size_t bufLen, databox *member,
+                           databox *score) {
+    const int len = snprintf(buf, bufLen, "rm-%06zu", i);
+    *member = databoxNewBytes(buf, (size_t)len);
+    *score = databoxNewSigned((int64_t)i * 3);
+}
+
+/* The pair index a RandomMembers result names, or SIZE_MAX when the
+ * member is not one of the set's or its score is not that member's */
+static size_t mosRandomPairIndex_(const databox *member, const databox *score,
+                                  size_t total) {
+    if (!DATABOX_IS_BYTES(member) || member->len != 9) {
+        return SIZE_MAX;
+    }
+
+    const char *b = databoxCBytes(member);
+    if (memcmp(b, "rm-", 3) != 0) {
+        return SIZE_MAX;
+    }
+
+    size_t i = 0;
+    for (size_t d = 3; d < 9; d++) {
+        if (b[d] < '0' || b[d] > '9') {
+            return SIZE_MAX;
+        }
+        i = i * 10 + (size_t)(b[d] - '0');
+    }
+
+    if (i >= total || mosDataboxToDouble(score) != (double)i * 3.0) {
+        return SIZE_MAX;
+    }
+
+    return i;
+}
+
+/* RandomMembers on a set of 'total' pairs: count >= 0 returns exactly
+ * min(count, total) distinct pairs of the set, count < 0 exactly -count
+ * pairs of the set.  Returns failures. */
+static int mosRandomMembersCheck_(const multiOrderedSet *mos, size_t total) {
+    int err = 0;
+    const int64_t counts[] = {0,
+                              1,
+                              2,
+                              (int64_t)(total / 8) + 1,
+                              (int64_t)(total / 4),
+                              (int64_t)(total / 4) + 1,
+                              (int64_t)(total / 2),
+                              (int64_t)total - 1,
+                              (int64_t)total,
+                              (int64_t)total + 5,
+                              -1,
+                              -3,
+                              -(int64_t)total,
+                              -(int64_t)(total * 2 + 3)};
+    const size_t cap = total * 2 + 8;
+    cleanerName(zfree, Boxes) databox *members = zcalloc(cap, sizeof(*members));
+    cleanerName(zfree, Boxes) databox *scores = zcalloc(cap, sizeof(*scores));
+    cleanerName(zfree, Seen) uint8_t *seen = zcalloc(total, 1);
+
+    for (size_t c = 0; c < sizeof(counts) / sizeof(*counts); c++) {
+        const int64_t count = counts[c];
+        const bool distinct = count >= 0;
+        const size_t want =
+            distinct ? ((size_t)count < total ? (size_t)count : total)
+                     : (size_t)(-count);
+        for (int round = 0; round < 3; round++) {
+            memset(seen, 0, total);
+            const size_t got =
+                multiOrderedSetRandomMembers(mos, count, members, scores);
+            if (got != want) {
+                ERR("RandomMembers(%" PRId64 ") of %zu returned %zu, want %zu",
+                    count, total, got, want);
+                continue;
+            }
+
+            for (size_t i = 0; i < got; i++) {
+                const size_t at =
+                    mosRandomPairIndex_(&members[i], &scores[i], total);
+                if (at == SIZE_MAX) {
+                    ERR("RandomMembers(%" PRId64 ") of %zu: slot %zu is not "
+                        "a pair of the set",
+                        count, total, i);
+                    continue;
+                }
+
+                if (distinct && seen[at]) {
+                    ERR("RandomMembers(%" PRId64 ") of %zu repeated pair %zu",
+                        count, total, at);
+                }
+                seen[at] = 1;
+            }
+        }
+    }
+
+    return err;
+}
+
 int multiOrderedSetTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -1841,6 +1942,47 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         /* Out of bounds */
         found = multiOrderedSetGetByRank(mos, 10, &gotMember, &gotScore);
         assert(!found);
+    }
+
+    TEST("multiOrderedSet: RandomMembers counts and distinctness, all tiers") {
+        /* Grow one set through every tier, checking the RandomMembers
+         * contract at sizes on each side of the sampler's thresholds */
+        const size_t sizes[] = {1, 2, 3, 5, 8, 17, 40, 100, 300, 1000, 3000};
+        multiOrderedSet *mos = multiOrderedSetNewLimit(FLEX_CAP_LEVEL_64);
+        bool tierSeen[3] = {false, false, false};
+        size_t have = 0;
+        char buf[16];
+        for (size_t s = 0; s < sizeof(sizes) / sizeof(*sizes); s++) {
+            for (; have < sizes[s]; have++) {
+                databox member;
+                databox score;
+                mosRandomPair_(have, buf, sizeof(buf), &member, &score);
+                multiOrderedSetAdd(&mos, &score, &member);
+            }
+
+            if (multiOrderedSetCount(mos) != have) {
+                ERR("RandomMembers set holds %zu, want %zu",
+                    multiOrderedSetCount(mos), have);
+            }
+
+            const int type = mosType_(mos);
+            if (type == MOS_TYPE_SMALL) {
+                tierSeen[0] = true;
+            } else if (type == MOS_TYPE_MEDIUM) {
+                tierSeen[1] = true;
+            } else if (type == MOS_TYPE_FULL) {
+                tierSeen[2] = true;
+            }
+
+            err += mosRandomMembersCheck_(mos, have);
+        }
+
+        if (!tierSeen[0] || !tierSeen[1] || !tierSeen[2]) {
+            ERR("RandomMembers sizes covered tiers small=%d medium=%d full=%d",
+                tierSeen[0], tierSeen[1], tierSeen[2]);
+        }
+
+        multiOrderedSetFree(mos);
     }
 
     /* ================================================================

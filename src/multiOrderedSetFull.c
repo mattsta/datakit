@@ -8,11 +8,8 @@
 /* ====================================================================
  * Random Number Generator
  * ==================================================================== */
+/* xorshift64star state for RandomMembers */
 static uint64_t mosRandomState = 0xABCDEF0123456789ULL;
-
-static inline uint64_t mosRandom(void) {
-    return xorshift64star(&mosRandomState);
-}
 
 /* ====================================================================
  * Databox Arithmetic Helper
@@ -1652,6 +1649,15 @@ bool multiOrderedSetFullLast(const multiOrderedSetFull *m, databox *member,
  * Random
  * ==================================================================== */
 
+/* Fill one array slot pair with the pair at 'rank', ignoring what the
+ * slots held: a 96/128-bit value comes back deferred (type only) */
+static bool mosFullRandomPick_(const void *set, size_t rank, databox *member,
+                               databox *score) {
+    mosBoxClear(member);
+    mosBoxClear(score);
+    return multiOrderedSetFullGetByRank(set, (int64_t)rank, member, score);
+}
+
 size_t multiOrderedSetFullRandomMembers(const multiOrderedSetFull *m,
                                         int64_t count, databox *members,
                                         databox *scores) {
@@ -1659,27 +1665,9 @@ size_t multiOrderedSetFullRandomMembers(const multiOrderedSetFull *m,
         return 0;
     }
 
-    bool allowDuplicates = (count < 0);
-    size_t absCount = (size_t)(count < 0 ? -count : count);
-    size_t retrieved = 0;
-
-    if (absCount > m->totalEntries && !allowDuplicates) {
-        absCount = m->totalEntries;
-    }
-
-    for (size_t i = 0; i < absCount; i++) {
-        size_t idx = mosRandom() % m->totalEntries;
-        /* Fill the slots ignoring what they held: a 96/128-bit value comes
-         * back deferred (type only) */
-        mosBoxClear(&members[retrieved]);
-        mosBoxClear(&scores[retrieved]);
-        if (multiOrderedSetFullGetByRank(m, (int64_t)idx, &members[retrieved],
-                                         &scores[retrieved])) {
-            retrieved++;
-        }
-    }
-
-    return retrieved;
+    return mosRandomMembersFill(m, mosFullRandomPick_, &mosRandomState,
+                                (size_t)m->totalEntries, count, members,
+                                scores);
 }
 
 /* ====================================================================
