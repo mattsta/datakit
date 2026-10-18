@@ -555,7 +555,10 @@ bool clusterMailboxSnapshot(const clusterMailbox *mb, uint8_t *out,
  * cmReorientWindowBits doc-comment in clusterMailbox.c for rationale.
  *
  * Returns false on malformed input, including any field that is not a
- * 64-bit unsigned integer (a 96/128-bit entry is refused). */
+ * 64-bit unsigned integer (a 96/128-bit entry is refused), and when the
+ * origin table has no room for the snapshot's new origins.  Restore is
+ * all or nothing: every record is validated before any is merged, so on
+ * false the mailbox is unchanged. */
 bool clusterMailboxRestore(clusterMailbox *mb, const uint8_t *buf, size_t len);
 
 /* --- Envelope-wrapped snapshot/restore convenience helpers --------
@@ -588,9 +591,9 @@ bool clusterMailboxSnapshotWrapped(const clusterMailbox *mb,
                                    size_t *out_written);
 
 /* Verify the envelope, decode the inner snapshot, MAX-merge it into
- * `mb`'s watermark table. On verify failure the mailbox is left
- * untouched. Same semantics as plain Restore otherwise: monotonic
- * merge per origin. */
+ * `mb`'s watermark table. On verify failure, as on any refusal by the
+ * plain Restore it calls, the mailbox is left untouched. Same semantics
+ * as plain Restore otherwise: monotonic merge per origin. */
 bool clusterMailboxRestoreWrapped(clusterMailbox *mb,
                                   const flexEnvelopeVerifyParams *params,
                                   const uint8_t *buf, size_t len);

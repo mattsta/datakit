@@ -1308,11 +1308,15 @@ bool clusterMailboxRestore(clusterMailbox *mb, const uint8_t *buf, size_t len) {
         return false;
     }
 
-    /* Load every record, MAX-merging with any pre-existing watermark.
-     * MAX preserves the strict "only forward" semantic — a stale
-     * snapshot can never RESTORE last_applied backwards. The bitmap
-     * is re-oriented to the merged frame (the higher last_applied) and
-     * OR'd; see cmReorientWindowBits for the orientation policy. */
+    /* Restore is all or nothing: every record is parsed and validated,
+     * and the origin table checked for room, before the first one is
+     * merged, so a refused snapshot leaves the mailbox untouched. */
+    struct {
+        uint32_t origin_id;
+        uint64_t seq;
+        uint64_t window_bits;
+    } recs[CLUSTER_MAILBOX_ORIGIN_CAP];
+
     flexEntry *fe = flexHead(f);
     for (size_t i = 0; i < slots; i++) {
         if (fe == NULL) {
@@ -1323,14 +1327,13 @@ bool clusterMailboxRestore(clusterMailbox *mb, const uint8_t *buf, size_t len) {
             raw_origin > UINT32_MAX) {
             return false;
         }
-        const uint32_t origin_id = (uint32_t)raw_origin;
+        recs[i].origin_id = (uint32_t)raw_origin;
         fe = flexNext(f, fe);
         if (fe == NULL) {
             return false;
         }
 
-        uint64_t seq = 0;
-        if (!cmReadU64(fe, &seq) || seq == 0) {
+        if (!cmReadU64(fe, &recs[i].seq) || recs[i].seq == 0) {
             return false;
         }
         fe = flexNext(f, fe);
@@ -1338,18 +1341,55 @@ bool clusterMailboxRestore(clusterMailbox *mb, const uint8_t *buf, size_t len) {
             return false;
         }
 
-        uint64_t window_bits = 0;
-        if (!cmReadU64(fe, &window_bits)) {
+        if (!cmReadU64(fe, &recs[i].window_bits)) {
             return false;
         }
         fe = flexNext(f, fe);
+    }
+
+    /* Every origin the snapshot names that the table lacks (counted once
+     * when the snapshot repeats it) needs a free slot */
+    size_t free_slots = 0;
+    for (size_t i = 0; i < CLUSTER_MAILBOX_ORIGIN_CAP; i++) {
+        if (atomic_load_explicit(&mb->origins[i].origin_id,
+                                 memory_order_acquire) == 0u) {
+            free_slots++;
+        }
+    }
+
+    size_t new_origins = 0;
+    for (size_t i = 0; i < slots; i++) {
+        bool repeated = false;
+        for (size_t j = 0; j < i && !repeated; j++) {
+            repeated = recs[j].origin_id == recs[i].origin_id;
+        }
+
+        if (!repeated && cmLookupOriginMut(mb, recs[i].origin_id) == NULL) {
+            new_origins++;
+        }
+    }
+
+    if (new_origins > free_slots) {
+        return false;
+    }
+
+    /* Merge every record, MAX-merging with any pre-existing watermark.
+     * MAX preserves the strict "only forward" semantic — a stale
+     * snapshot can never RESTORE last_applied backwards. The bitmap
+     * is re-oriented to the merged frame (the higher last_applied) and
+     * OR'd; see cmReorientWindowBits for the orientation policy.
+     * Nothing below can fail: the table has room for every insert. */
+    for (size_t i = 0; i < slots; i++) {
+        const uint32_t origin_id = recs[i].origin_id;
+        const uint64_t seq = recs[i].seq;
+        const uint64_t window_bits = recs[i].window_bits;
 
         clusterMailboxOrigin *slot = cmLookupOriginMut(mb, origin_id);
         const bool fresh_slot = (slot == NULL);
         if (slot == NULL) {
             slot = cmInsertOrigin(mb, origin_id);
             if (slot == NULL) {
-                return false;
+                return false; /* unreachable: room was checked above */
             }
         }
         /* Snapshot/restore is single-threaded per the header contract;
@@ -2671,6 +2711,100 @@ int clusterMailboxTest(int argc, char *argv[]) {
                                   flexBytes(too_many))) {
             ERRR("Restore must reject slot count > capacity");
         }
+        clusterMailboxFree(mb);
+        hmacKeyringFree(ring);
+    }
+
+    TEST("restore: a snapshot refused at record N leaves the mailbox as is") {
+        hmacKeyring *ring = hmacKeyringCreate();
+        clusterMailbox *mb =
+            clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
+
+        /* Origins 1..5 at sequences 100..500 with window bits set */
+        cleaner(flexFree) flex *base = flexNew();
+        for (uint64_t o = 1; o <= 5; o++) {
+            flexPushUnsigned(&base, o, FLEX_ENDPOINT_TAIL);
+            flexPushUnsigned(&base, o * 100u, FLEX_ENDPOINT_TAIL);
+            flexPushUnsigned(&base, 0x5u << o, FLEX_ENDPOINT_TAIL);
+        }
+        if (!clusterMailboxRestore(mb, (const uint8_t *)base,
+                                   flexBytes(base))) {
+            ERRR("Restore of the base snapshot failed");
+        }
+
+        clusterMailboxOrigin before[CLUSTER_MAILBOX_ORIGIN_CAP];
+        memcpy(before, mb->origins, sizeof(before));
+        const size_t countBefore = clusterMailboxOriginCount(mb);
+
+        /* Each snapshot first advances existing origins 1..3 and adds new
+         * origins 40..41, records Restore would have merged before
+         * reaching the bad record that follows them */
+        for (int kind = 0; kind < 4; kind++) {
+            cleaner(flexFree) flex *bad = flexNew();
+            for (uint64_t o = 1; o <= 3; o++) {
+                flexPushUnsigned(&bad, o, FLEX_ENDPOINT_TAIL);
+                flexPushUnsigned(&bad, o * 100u + 50u, FLEX_ENDPOINT_TAIL);
+                flexPushUnsigned(&bad, 0xFFu, FLEX_ENDPOINT_TAIL);
+            }
+            for (uint64_t o = 40; o <= 41; o++) {
+                flexPushUnsigned(&bad, o, FLEX_ENDPOINT_TAIL);
+                flexPushUnsigned(&bad, 7u, FLEX_ENDPOINT_TAIL);
+                flexPushUnsigned(&bad, 1u, FLEX_ENDPOINT_TAIL);
+            }
+
+            switch (kind) {
+            case 0: /* origin 0 */
+                flexPushUnsigned(&bad, 0u, FLEX_ENDPOINT_TAIL);
+                flexPushUnsigned(&bad, 9u, FLEX_ENDPOINT_TAIL);
+                flexPushUnsigned(&bad, 0u, FLEX_ENDPOINT_TAIL);
+                break;
+            case 1: /* sequence 0 */
+                flexPushUnsigned(&bad, 42u, FLEX_ENDPOINT_TAIL);
+                flexPushUnsigned(&bad, 0u, FLEX_ENDPOINT_TAIL);
+                flexPushUnsigned(&bad, 0u, FLEX_ENDPOINT_TAIL);
+                break;
+            case 2: /* window bits that are not an unsigned integer */
+                flexPushUnsigned(&bad, 42u, FLEX_ENDPOINT_TAIL);
+                flexPushUnsigned(&bad, 9u, FLEX_ENDPOINT_TAIL);
+                flexPushBytes(&bad, "nope", 4, FLEX_ENDPOINT_TAIL);
+                break;
+            default:
+                /* More new origins than the table has free slots */
+                for (uint64_t o = 1000;
+                     o < 1000 + CLUSTER_MAILBOX_ORIGIN_CAP - 5 - 2 + 1; o++) {
+                    flexPushUnsigned(&bad, o, FLEX_ENDPOINT_TAIL);
+                    flexPushUnsigned(&bad, 3u, FLEX_ENDPOINT_TAIL);
+                    flexPushUnsigned(&bad, 0u, FLEX_ENDPOINT_TAIL);
+                }
+                break;
+            }
+
+            if (clusterMailboxRestore(mb, (const uint8_t *)bad,
+                                      flexBytes(bad))) {
+                ERR("Restore accepted bad snapshot kind %d", kind);
+            }
+            if (memcmp(before, mb->origins, sizeof(before)) != 0 ||
+                clusterMailboxOriginCount(mb) != countBefore) {
+                ERR("Refused snapshot kind %d changed the mailbox", kind);
+                memcpy(before, mb->origins, sizeof(before));
+            }
+        }
+
+        /* The same leading records alone still merge */
+        cleaner(flexFree) flex *good = flexNew();
+        for (uint64_t o = 1; o <= 3; o++) {
+            flexPushUnsigned(&good, o, FLEX_ENDPOINT_TAIL);
+            flexPushUnsigned(&good, o * 100u + 50u, FLEX_ENDPOINT_TAIL);
+            flexPushUnsigned(&good, 0xFFu, FLEX_ENDPOINT_TAIL);
+        }
+        if (!clusterMailboxRestore(mb, (const uint8_t *)good,
+                                   flexBytes(good)) ||
+            clusterMailboxLastApplied(mb, 2u) != 250u ||
+            clusterMailboxLastApplied(mb, 5u) != 500u ||
+            clusterMailboxOriginCount(mb) != countBefore) {
+            ERRR("Restore of the valid leading records did not merge");
+        }
+
         clusterMailboxFree(mb);
         hmacKeyringFree(ring);
     }
