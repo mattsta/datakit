@@ -195,96 +195,38 @@ static bool multiFenwickEnsureCapacity(multiFenwick *mfw, uint64_t idx) {
         newCapacity <<= 1;
     }
 
-    /* Get a zero value of the appropriate type
-     * If tree is empty, we can't infer type yet, so use SIGNED_64 as default.
-     * Type coercion in databoxAdd will handle mismatches. */
-    databox zero = DATABOX_SIGNED(0);
+    /* The new cells' parents need the existing values.  Capacity is a
+     * power of two, so cell 'oldCapacity' (1-based) covers every existing
+     * element: it holds their total.  A new cell j in (oldCapacity,
+     * newCapacity] covers (j - LSB(j), j], which reaches an existing
+     * element only when j is a power of two, and then holds that same
+     * total.  Read it before changing anything, so a failed read leaves
+     * the tree exactly as it was. */
+    databox total = DATABOX_SIGNED(0);
+    if (oldCapacity > 0) {
+        multilistEntry entry;
+        if (!multiFenwickCellGet_(mfw, oldCapacity - 1, &entry)) {
+            return false;
+        }
 
-    /* Add zero elements to expand capacity */
+        total = entry.box;
+    }
+
+    /* If the tree is empty we can't infer a type yet, so new cells start
+     * as SIGNED_64 zero; databoxAdd coerces on the first update. */
+    const databox zero = DATABOX_SIGNED(0);
     for (uint64_t i = oldCapacity; i < newCapacity; i++) {
         multilistPushByTypeTail(&mfw->tree, mfw->state, &zero);
     }
 
-    /* Update metadata */
+    /* Every index replaced here is below newCapacity, so it exists */
+    for (uint64_t j = oldCapacity * 2; oldCapacity > 0 && j <= newCapacity;
+         j <<= 1) {
+        multilistReplaceByTypeAtIndex(&mfw->tree, mfw->state, j - 1, &total);
+    }
+
     mfw->count = newCount;
     mfw->capacity = newCapacity;
-
-    /* CRITICAL: Retroactively propagate existing values to new parent nodes
-     * When capacity grows, old values haven't updated the new parent positions
-     */
-    if (oldCapacity > 0) {
-        uint64_t oldCount = (newCount < oldCapacity) ? newCount : oldCapacity;
-
-        for (uint64_t pos = 1; pos <= oldCount; pos++) {
-            /* Get the actual value at this position (not the BIT value) */
-            databox value;
-
-            /* Compute value = query(pos) - query(pos-1) */
-            if (pos == 1) {
-                /* First element is just query(0) */
-                multilistEntry entry;
-                if (multiFenwickCellGet_(mfw, 0, &entry)) {
-                    value = entry.box;
-                } else {
-                    continue;
-                }
-            } else {
-                /* value = query(pos) - query(pos-1) */
-                databox sumPos = databoxZeroLike(&zero);
-                databox sumPrev = databoxZeroLike(&zero);
-
-                /* Compute query(pos) */
-                uint64_t p = pos;
-                while (p > 0 && p <= oldCapacity) {
-                    multilistEntry entry;
-                    if (multiFenwickCellGet_(mfw, p - 1, &entry)) {
-                        databox temp;
-                        if (!databoxAdd(&sumPos, &entry.box, &temp)) {
-                            continue;
-                        }
-                        sumPos = temp;
-                    }
-                    p -= multiFenwickLSB(p);
-                }
-
-                /* Compute query(pos-1) */
-                p = pos - 1;
-                while (p > 0 && p <= oldCapacity) {
-                    multilistEntry entry;
-                    if (multiFenwickCellGet_(mfw, p - 1, &entry)) {
-                        databox temp;
-                        if (!databoxAdd(&sumPrev, &entry.box, &temp)) {
-                            continue;
-                        }
-                        sumPrev = temp;
-                    }
-                    p -= multiFenwickLSB(p);
-                }
-
-                if (!databoxSubtract(&sumPos, &sumPrev, &value)) {
-                    continue;
-                }
-            }
-
-            /* Now propagate this value to parents in range (oldCapacity,
-             * newCapacity] */
-            uint64_t parent = pos + multiFenwickLSB(pos);
-            while (parent <= newCapacity) {
-                if (parent > oldCapacity) {
-                    /* This parent is in the newly allocated range */
-                    multilistEntry entry;
-                    if (multiFenwickCellGet_(mfw, parent - 1, &entry)) {
-                        databox newVal;
-                        if (databoxAdd(&entry.box, &value, &newVal)) {
-                            multilistReplaceByTypeAtIndex(
-                                &mfw->tree, mfw->state, parent - 1, &newVal);
-                        }
-                    }
-                }
-                parent += multiFenwickLSB(parent);
-            }
-        }
-    }
 
     return true;
 }

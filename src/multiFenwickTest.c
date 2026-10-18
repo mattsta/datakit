@@ -821,6 +821,75 @@ int multiFenwickTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("growth: values and prefix sums survive every capacity doubling") {
+        /* Appending one element at a time crosses every power of two up
+         * to 256; after each append every element and prefix sum must
+         * still match.  Then sparse indexes force multi-step doublings. */
+        enum { GROW_N = 130 };
+        static int64_t oracle[GROW_N];
+        cleaner(multiFenwickFree) multiFenwick *mfw = NULL;
+        bool failed = false;
+        for (size_t n = 0; n < GROW_N && !failed; n++) {
+            oracle[n] = (int64_t)(n * 37 + 1) * (n % 2 ? -1 : 1);
+            const databox box = DATABOX_SIGNED(oracle[n]);
+            if (!multiFenwickUpdate(&mfw, n, &box) ||
+                multiFenwickCount(mfw) != n + 1) {
+                ERR("append %zu failed", n);
+                failed = true;
+                break;
+            }
+
+            int64_t prefix = 0;
+            for (size_t i = 0; i <= n && !failed; i++) {
+                prefix += oracle[i];
+                databox el;
+                databox sum;
+                if (!multiFenwickGet(mfw, i, &el) ||
+                    !mfwIntIs(&el, oracle[i]) ||
+                    !multiFenwickQuery(mfw, i, &sum) ||
+                    !mfwIntIs(&sum, prefix)) {
+                    ERR("after append %zu: index %zu differs", n, i);
+                    failed = true;
+                }
+            }
+        }
+
+        const size_t sparse[] = {0, 3, 17, 300, 1025, 5000};
+        const int64_t sparseVal[] = {-9, 40, -700, 12345, -1, 77};
+        enum { SPARSE_N = sizeof(sparse) / sizeof(*sparse) };
+        cleaner(multiFenwickFree) multiFenwick *sp = NULL;
+        for (size_t k = 0; k < SPARSE_N && !failed; k++) {
+            const databox box = DATABOX_SIGNED(sparseVal[k]);
+            if (!multiFenwickUpdate(&sp, sparse[k], &box) ||
+                multiFenwickCount(sp) != sparse[k] + 1) {
+                ERR("sparse update at %zu failed", sparse[k]);
+                failed = true;
+                break;
+            }
+
+            int64_t prefix = 0;
+            for (size_t j = 0; j <= k && !failed; j++) {
+                prefix += sparseVal[j];
+                databox el;
+                databox sum;
+                databox gap;
+                if (!multiFenwickGet(sp, sparse[j], &el) ||
+                    !mfwIntIs(&el, sparseVal[j]) ||
+                    !multiFenwickQuery(sp, sparse[j], &sum) ||
+                    !mfwIntIs(&sum, prefix) ||
+                    /* no two sparse indexes are adjacent: the one
+                     * below each is an untouched zero */
+                    (sparse[j] > 0 &&
+                     (!multiFenwickGet(sp, sparse[j] - 1, &gap) ||
+                      !mfwIntIs(&gap, 0)))) {
+                    ERR("after sparse step %zu: index %zu differs", k,
+                        sparse[j]);
+                    failed = true;
+                }
+            }
+        }
+    }
+
     TEST("differential: LowerBound against an array") {
         /* LowerBound needs non-negative values (monotonic prefix sums).
          * Targets are random, every exact prefix sum, and past the end. */
