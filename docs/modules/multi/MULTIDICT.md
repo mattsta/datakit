@@ -807,6 +807,18 @@ multidictSetMaxMemory(d, 256ULL * 1024 * 1024);
 The LRU levels are backed by [multilru](MULTILRU.md), so the level count
 here means the same thing it does there.
 
+A new key is tracked at the coldest level. Each access promotes a key one
+level, once per call:
+
+- `multidictFind`, `multidictFindByString`, `multidictTouch`;
+- a successful replace: `multidictAdd` of a present key, `multidictAddXX`,
+  `multidictReplace`;
+- a successful `multidictIncrBy` / `multidictIncrByFloat` of a present key.
+
+Reads that change nothing do not promote: `multidictExists`,
+`multidictExistsByString`, `multidictAddNX` of a present key,
+`multidictGetLRULevel`, a failed increment, iteration, scans and random keys.
+
 Under `MULTIDICT_EVICT_LRU`, `multidictEvictToLimit` evicts the coldest
 entry first: the lowest level, oldest within it. A victim leaves LRU
 tracking only when its delete commits. Reading its value for the eviction

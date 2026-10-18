@@ -1634,10 +1634,11 @@ bool multidictFindByString(multidict *d, const char *key, uint8_t **val) {
  * Convenience Functions
  * ==================================================================== */
 
-/* Check if a key exists without retrieving the value */
+/* Check if a key exists without retrieving the value.  A pure read: it
+ * does not promote the key in the LRU. */
 bool multidictExists(multidict *d, const databox *keybox) {
     databox unused = {{0}};
-    return multidictFind(d, keybox, &unused);
+    return multidictFindNoTouch_(d, keybox, &unused);
 }
 
 /* Check if a string key exists */
@@ -1658,9 +1659,10 @@ multidictResult multidictIncrBy(multidict *d, const databox *keybox,
         return MULTIDICT_ERR;
     }
 
-    /* Try to find existing value */
+    /* Try to find existing value.  The store below is the one LRU access
+     * an increment makes, so the read does not promote. */
     databox valbox = {{0}};
-    bool exists = multidictFind(d, keybox, &valbox);
+    bool exists = multidictFindNoTouch_(d, keybox, &valbox);
 
     int64_t newVal;
     if (exists) {
@@ -1704,9 +1706,10 @@ multidictResult multidictIncrByFloat(multidict *d, const databox *keybox,
         return MULTIDICT_ERR;
     }
 
-    /* Try to find existing value */
+    /* Try to find existing value; as in multidictIncrBy, only the store
+     * below promotes */
     databox valbox = {{0}};
-    bool exists = multidictFind(d, keybox, &valbox);
+    bool exists = multidictFindNoTouch_(d, keybox, &valbox);
 
     double newVal;
     if (exists) {
@@ -5171,6 +5174,161 @@ static int multidictTestCaseDifferential_(multidictType *type, uint32_t seed,
         err++;
     }
 
+    return err;
+}
+
+/* Scan callback that does nothing: scans must not promote */
+static void testIgnoreScanCb_(void *privdata, const databox *key,
+                              const databox *val) {
+    (void)privdata;
+    (void)key;
+    (void)val;
+}
+
+/* The LRU level of one key after each kind of operation: reads that
+ * touch nothing leave it, and each access raises it by exactly one.  A
+ * case dict runs every operation under a different spelling. */
+static int multidictTestLruPromotion_(multidictType *type) {
+    int err = 0;
+    const bool fold = type == &multidictTypeCaseKey;
+    cleaner(multidictMmClassFree) multidictClass *qdc = multidictMmClassNew();
+    cleaner(multidictFree) multidict *d = multidictNew(type, qdc, 21);
+    multidictEnableLRU(d, 16);
+
+    const databox stored = databoxNewBytesString("rank");
+    const databox other = databoxNewBytesString("bystander");
+    const databox text = databoxNewBytesString("text");
+    const databox ten = DATABOX_SIGNED(10);
+    multidictAdd(d, &stored, &text);
+    multidictAdd(d, &other, &ten);
+
+    /* Spellings: a case dict sees "rank" under these, an exact one
+     * always as "rank" */
+    static const char *const spellings[] = {"RANK", "Rank", "rAnK", "raNK"};
+    uint32_t next = 0;
+#define TEST_RANK_KEY()                                                        \
+    databoxNewBytesString(fold ? spellings[next++ % 4] : "rank")
+
+    int32_t expect = 0;
+#define TEST_RANK_STEP(what, delta)                                            \
+    do {                                                                       \
+        expect += (delta);                                                     \
+        const databox probe = TEST_RANK_KEY();                                 \
+        const int level = multidictGetLRULevel(d, &probe);                     \
+        if (level != expect) {                                                 \
+            printf("ERROR: LRU level %d after %s, expected %d\n", level,       \
+                   (what), expect);                                            \
+            err++;                                                             \
+            expect = level;                                                    \
+        }                                                                      \
+    } while (0)
+
+    TEST_RANK_STEP("insert", 0);
+
+    /* Reads that change nothing */
+    databox k = TEST_RANK_KEY();
+    if (!multidictExists(d, &k)) {
+        err++;
+    }
+    TEST_RANK_STEP("exists", 0);
+
+    if (!multidictExistsByString(d, fold ? "RANK" : "rank")) {
+        err++;
+    }
+    TEST_RANK_STEP("exists by string", 0);
+
+    k = TEST_RANK_KEY();
+    if (multidictAddNX(d, &k, &ten) != MULTIDICT_ERR) {
+        err++;
+    }
+    TEST_RANK_STEP("add-NX of a present key", 0);
+
+    int64_t ires = 0;
+    k = TEST_RANK_KEY();
+    if (multidictIncrBy(d, &k, 1, &ires) != MULTIDICT_ERR) {
+        err++; /* the value is text */
+    }
+    TEST_RANK_STEP("failed increment", 0);
+
+    multidictIterator iter;
+    multidictEntry e;
+    multidictIteratorInit(d, &iter);
+    while (multidictIteratorNext(&iter, &e)) {
+    }
+    multidictIteratorRelease(&iter);
+    uint64_t cursor = 0;
+    do {
+        cursor = multidictScan(d, cursor, testIgnoreScanCb_, NULL);
+    } while (cursor != 0);
+    for (int32_t i = 0; i < 8; i++) {
+        databox rk = {{0}};
+        multidictGetRandomKey(d, &rk);
+    }
+    TEST_RANK_STEP("iteration, scan and random keys", 0);
+
+    /* Accesses: one level each */
+    databox v = {{0}};
+    k = TEST_RANK_KEY();
+    if (!multidictFind(d, &k, &v)) {
+        err++;
+    }
+    TEST_RANK_STEP("find", 1);
+
+    uint8_t *bytes = NULL;
+    if (!multidictFindByString(d, fold ? "rANK" : "rank", &bytes)) {
+        err++;
+    }
+    TEST_RANK_STEP("find by string", 1);
+
+    k = TEST_RANK_KEY();
+    multidictTouch(d, &k);
+    TEST_RANK_STEP("touch", 1);
+
+    k = TEST_RANK_KEY();
+    if (multidictAdd(d, &k, &text) != MULTIDICT_OK_REPLACED) {
+        err++;
+    }
+    TEST_RANK_STEP("add of a present key", 1);
+
+    k = TEST_RANK_KEY();
+    if (multidictAddXX(d, &k, &text) != MULTIDICT_OK_REPLACED) {
+        err++;
+    }
+    TEST_RANK_STEP("add-XX", 1);
+
+    k = TEST_RANK_KEY();
+    if (multidictReplace(d, &k, &ten) != MULTIDICT_OK_REPLACED) {
+        err++;
+    }
+    TEST_RANK_STEP("replace", 1);
+
+    k = TEST_RANK_KEY();
+    if (multidictIncrBy(d, &k, 5, &ires) != MULTIDICT_OK_REPLACED ||
+        ires != 15) {
+        err++;
+    }
+    TEST_RANK_STEP("increment", 1);
+
+    double dres = 0;
+    k = TEST_RANK_KEY();
+    if (multidictIncrByFloat(d, &k, 0.5, &dres) != MULTIDICT_OK_REPLACED ||
+        dres != 15.5) {
+        err++;
+    }
+    TEST_RANK_STEP("float increment", 1);
+
+    /* The bystander was never accessed, and a key added through add-NX
+     * starts at the coldest level */
+    const databox fresh = databoxNewBytesString("fresh");
+    if (multidictGetLRULevel(d, &other) != 0 ||
+        multidictAddNX(d, &fresh, &ten) != MULTIDICT_OK_INSERTED ||
+        multidictGetLRULevel(d, &fresh) != 0 || !testLruTrackingExact_(d)) {
+        printf("ERROR: LRU bystander or fresh key level\n");
+        err++;
+    }
+
+#undef TEST_RANK_STEP
+#undef TEST_RANK_KEY
     return err;
 }
 
@@ -8722,6 +8880,10 @@ int multidictTest(int argc, char *argv[]) {
         assert(multidictGetLRULevel(hd, &key0) == 1);
         assert(testLruTrackingExact_(hd));
     }
+
+    printf("Test 20.12: Reads do not promote, accesses promote once...\n");
+    err += multidictTestLruPromotion_(&multidictTypeExactKey);
+    err += multidictTestLruPromotion_(&multidictTypeCaseKey);
 
     printf("=== LRU eviction tests passed! ===\n");
 
