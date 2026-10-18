@@ -2879,8 +2879,7 @@ int flexEnvelopeTest(int argc, char *argv[]) {
             ERRR("PEEK_ONLY failed to skip digest");
         }
         if (pl != plen) {
-            ERR("PEEK_ONLY returned wrong payload_len: %llu",
-                (unsigned long long)pl);
+            ERR("PEEK_ONLY returned wrong payload_len: %" PRIu64, pl);
         }
         /* Without PEEK_ONLY, the corrupt digest must be caught. */
         vp.opts = 0;
@@ -3234,9 +3233,9 @@ int flexEnvelopeTest(int argc, char *argv[]) {
         /* Surfaces a flake if a future change starts accepting random
          * inputs at a measurable rate. */
         if (acceptedAsValid > 8) {
-            ERR("Random byte fuzz accepted %llu inputs as valid envelopes "
-                "(expected near-zero)",
-                (unsigned long long)acceptedAsValid);
+            ERR("Random byte fuzz accepted %" PRIu64
+                " inputs as valid envelopes (expected near-zero)",
+                acceptedAsValid);
         }
     }
 
@@ -3394,9 +3393,8 @@ int flexEnvelopeTest(int argc, char *argv[]) {
                     }
                     if (parsed_plen != (uint64_t)plen || parsed_algo != algo) {
                         ERR("verify-stream parsed mismatch "
-                            "(algo=%s plen=%zu got plen=%llu algo=%u)",
-                            flexEnvelopeAlgoName(algo), plen,
-                            (unsigned long long)parsed_plen,
+                            "(algo=%s plen=%zu got plen=%" PRIu64 " algo=%u)",
+                            flexEnvelopeAlgoName(algo), plen, parsed_plen,
                             (uint32_t)parsed_algo);
                     }
                     /* Feed payload+digest in 7-byte chunks. */
@@ -5016,12 +5014,12 @@ int dkTestFlexEnvelopeKeyringRetireRaceTest(int argc, char *argv[]) {
         /* Both threads must have made meaningful progress, otherwise
          * we are not actually exercising the race. */
         if (writer_iters < 100u) {
-            ERR("envRetireRace: writer only completed %llu iterations",
-                (unsigned long long)writer_iters);
+            ERR("envRetireRace: writer only completed %" PRIu64 " iterations",
+                writer_iters);
         }
         if (rotator_iters < 100u) {
-            ERR("envRetireRace: rotator only completed %llu iterations",
-                (unsigned long long)rotator_iters);
+            ERR("envRetireRace: rotator only completed %" PRIu64 " iterations",
+                rotator_iters);
         }
 
         /* Ensure the slot is in a clean state regardless of which

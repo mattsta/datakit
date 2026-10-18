@@ -1109,7 +1109,7 @@ int aeadNonceLogTest(int argc, char *argv[]) {
         for (uint64_t i = 0; i < cap * 4u; i++) {
             nonceFromCounter(i, nonce);
             if (!aeadNonceLogObserve(log, 1u, nonce)) {
-                ERR("observe iter %llu refused", (unsigned long long)i);
+                ERR("observe iter %" PRIu64 " refused", i);
                 break;
             }
             if (aeadNonceLogSize(log) > aeadNonceLogCapacity(log)) {
@@ -1168,8 +1168,7 @@ int aeadNonceLogTest(int argc, char *argv[]) {
         for (uint64_t i = 0; i < (uint64_t)kThreads * (uint64_t)kIters; i++) {
             nonceFromCounter(i, nonce);
             if (aeadNonceLogObserve(log, 1u, nonce)) {
-                ERR("nonce %llu unexpectedly insertable post-fill",
-                    (unsigned long long)i);
+                ERR("nonce %" PRIu64 " unexpectedly insertable post-fill", i);
                 break;
             }
         }

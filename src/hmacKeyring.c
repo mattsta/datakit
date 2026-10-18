@@ -1519,7 +1519,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
             ERRR("Peek should succeed");
         }
         if (peek != 3u) {
-            ERR("Peek expected 3, got %llu", (unsigned long long)peek);
+            ERR("Peek expected 3, got %" PRIu64, peek);
         }
         hmacKeyringFree(ring);
     }
@@ -1641,16 +1641,15 @@ int hmacKeyringTest(int argc, char *argv[]) {
         }
         for (size_t i = 1; i < total; i++) {
             if (collected[i] == collected[i - 1]) {
-                ERR("duplicate nonce at index %zu (value %llu)", i,
-                    (unsigned long long)collected[i]);
+                ERR("duplicate nonce at index %zu (value %" PRIu64 ")", i,
+                    collected[i]);
                 break;
             }
         }
         if (collected[0] != 0u ||
             collected[total - 1] != (uint64_t)(total - 1)) {
-            ERR("expected range [0..%zu], got [%llu..%llu]", total - 1,
-                (unsigned long long)collected[0],
-                (unsigned long long)collected[total - 1]);
+            ERR("expected range [0..%zu], got [%" PRIu64 "..%" PRIu64 "]",
+                total - 1, collected[0], collected[total - 1]);
         }
         hmacKeyringFree(ring);
     }
@@ -1708,8 +1707,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
         uint64_t ctr = 0;
         hmacKeyringPeekAeadCounter(dst, 11u, &ctr);
         if (ctr != 7777u) {
-            ERR("restored counter expected 7777, got %llu",
-                (unsigned long long)ctr);
+            ERR("restored counter expected 7777, got %" PRIu64, ctr);
         }
         uint8_t nonce[12];
         hmacKeyringNextAeadNonce(dst, 11u, nonce);

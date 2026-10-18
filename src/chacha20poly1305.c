@@ -1893,8 +1893,8 @@ int chacha20poly1305Test(int argc, char *argv[]) {
         for (uint32_t i = 0; i < kThreads; i++) {
             pthread_join(threads[i], NULL);
             if (args[i].errors != 0) {
-                printf("ERROR! thread %u: %lld errors\n", i,
-                       (long long)args[i].errors);
+                printf("ERROR! thread %u: %" PRId64 " errors\n", i,
+                       args[i].errors);
                 err += (int)args[i].errors;
             }
         }

@@ -463,6 +463,7 @@ void blake3AVX2Compress8(const uint32_t *const cv_inputs[8],
 
 #include "ctest.h"
 
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
@@ -583,9 +584,9 @@ int blake3AVX2Test(int argc, char *argv[]) {
             blake3AVX2CompressInPlace(cv_a, block, block_len, counter, flags);
             if (memcmp(cv_p, cv_a, sizeof(cv_p)) != 0) {
                 if (mismatches++ < 3) {
-                    printf("mismatch at iter=%d counter=%llu flags=0x%02x "
-                           "len=%u\n",
-                           iter, (unsigned long long)counter, flags, block_len);
+                    printf("mismatch at iter=%d counter=%" PRIu64
+                           " flags=0x%02x len=%u\n",
+                           iter, counter, flags, block_len);
                 }
             }
         }
