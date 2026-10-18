@@ -8,8 +8,12 @@
 
 #ifdef DATAKIT_TEST
 
+#include "cleaner.h"
 #include "ctest.h"
 #include <inttypes.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/types.h>
 
 /* Deterministic xorshift so failures reproduce */
 #define BM_NEXT() (rng ^= rng << 13, rng ^= rng >> 7, rng ^= rng << 17, rng)
@@ -31,6 +35,54 @@ static bool bigmathEqualsU128(bigmath *b, const __uint128_t v) {
     const int cmp = bigmathCompare(b, &expect);
     bigmathReset(&expect);
     return cmp == 0;
+}
+
+defcleanerName(char *, zfree, Chars);
+
+/* Fill digits[0..n-1] with a deterministic decimal string with a
+ * nonzero leading digit, and terminate it at digits[n]. */
+static void bigmathTestDigits(char *digits, const size_t n, uint64_t rng) {
+    for (size_t i = 0; i < n; i++) {
+        digits[i] = (char)('0' + BM_NEXT() % 10);
+    }
+    if (n > 0 && digits[0] == '0') {
+        digits[0] = '7';
+    }
+    digits[n] = '\0';
+}
+
+/* Build the value of a decimal digit string by Horner's rule
+ * (b = b * 10 + digit), independent of imath's string reader. */
+static void bigmathFromDigits(bigmath *b, const char *digits) {
+    bigmathInitUnsigned(b, 0);
+    for (const char *p = digits; *p; p++) {
+        bigmath d;
+        bigmathMultiplyValue(b, 10, b);
+        bigmathInitUnsigned(&d, (uint64_t)(*p - '0'));
+        bigmathAdd(b, &d, b);
+        bigmathFree(&d);
+    }
+}
+
+/* Print b with bigmathReprFile into a temporary file and check the
+ * file holds exactly want and a newline. */
+static bool bigmathTestReprIs(bigmath *b, const char *want) {
+    FILE *fp = tmpfile();
+    if (fp == NULL) {
+        return false;
+    }
+
+    bigmathReprFile(b, fp);
+    const size_t wantLen = strlen(want);
+    const bool sizeOk = ftello(fp) == (off_t)(wantLen + 1);
+    rewind(fp);
+
+    cleanerName(zfree, Chars) char *got = zmalloc(wantLen + 2);
+    const size_t n = fread(got, 1, wantLen + 2, fp);
+    fclose(fp);
+
+    return sizeOk && n == wantLen + 1 && memcmp(got, want, wantLen) == 0 &&
+           got[wantLen] == '\n';
 }
 
 int bigmathTest(int argc, char *argv[]) {
@@ -712,6 +764,99 @@ int bigmathTest(int argc, char *argv[]) {
         mp_int_clear(&SMALL);
         mp_int_clear(&BIG);
         mp_int_clear(&BIGREF);
+    }
+
+    TEST("Repr prints values of every size in full") {
+        const size_t lens[] = {1, 1023, 1024, 1025, 5000};
+        for (size_t i = 0; i < COUNT_ARRAY(lens); i++) {
+            const size_t n = lens[i];
+            /* digits[0] is reserved for the negative form's '-' */
+            cleanerName(zfree, Chars) char *digits = zmalloc(n + 2);
+            bigmathTestDigits(digits + 1, n, 0x5EED5EED00000000ULL + n);
+
+            bigmath b;
+            bigmathFromDigits(&b, digits + 1);
+            if (!bigmathTestReprIs(&b, digits + 1)) {
+                ERR("Repr of a %zu-digit value is not exact", n);
+            }
+
+            digits[0] = '-';
+            bigmathMultiplyValue(&b, -1, &b);
+            if (!bigmathTestReprIs(&b, digits)) {
+                ERR("Repr of a negative %zu-digit value is not exact", n);
+            }
+            bigmathReset(&b);
+        }
+
+        bigmath zero;
+        bigmathInit(&zero);
+        if (!bigmathTestReprIs(&zero, "0")) {
+            ERRR("Repr of zero is not \"0\"");
+        }
+        bigmathReset(&zero);
+    }
+
+    TEST("imath: to_string never writes past limit") {
+        char digits[41];
+        bigmathTestDigits(digits, 40, 0xC0FFEE00C0FFEE00ULL);
+
+        for (int32_t neg = 0; neg < 2; neg++) {
+            mpz_t z;
+            mp_int_init(&z);
+            for (const char *p = digits; *p; p++) {
+                mp_int_mul_value(&z, 10, &z);
+                mp_int_add_value(&z, *p - '0', &z);
+            }
+            if (neg) {
+                mp_int_neg(&z, &z);
+            }
+
+            char full[42];
+            snprintf(full, sizeof(full), "%s%s", neg ? "-" : "", digits);
+            const size_t fullLen = strlen(full);
+            const size_t signLen = neg ? 1 : 0;
+
+            for (size_t limit = 2; limit <= fullLen + 3; limit++) {
+                char buf[64];
+                memset(buf, 'X', sizeof(buf));
+                const mp_result res = mp_int_to_string(&z, 10, buf, limit);
+
+                for (size_t k = limit; k < sizeof(buf); k++) {
+                    if (buf[k] != 'X') {
+                        ERR("to_string wrote byte %zu with limit %zu", k,
+                            limit);
+                        break;
+                    }
+                }
+
+                if (memchr(buf, '\0', limit) == NULL) {
+                    ERR("to_string left no terminator within limit %zu", limit);
+                    continue;
+                }
+
+                if (limit > fullLen) {
+                    if (res != MP_OK || strcmp(buf, full) != 0) {
+                        ERR("to_string limit %zu: res %d, got \"%s\"", limit,
+                            res, buf);
+                    }
+                    continue;
+                }
+
+                /* Truncated: the sign, then the lowest-order digits that
+                 * fit, limit - 1 characters in all. */
+                const size_t keep = limit - 1 - signLen;
+                const char *tail = digits + (40 - keep);
+                if (res != MP_TRUNC || strlen(buf) != limit - 1 ||
+                    (neg && buf[0] != '-') ||
+                    memcmp(buf + signLen, tail, keep) != 0) {
+                    ERR("to_string truncation at limit %zu: res %d, got "
+                        "\"%s\"",
+                        limit, res, buf);
+                }
+            }
+
+            mp_int_clear(&z);
+        }
     }
 
     TEST_FINAL_RESULT;

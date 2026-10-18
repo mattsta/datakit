@@ -20,6 +20,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 
 typedef struct bigmath {
     uint8_t math[64];
@@ -31,6 +32,10 @@ void bigmathInitSigned(bigmath *b, int64_t value);
 bool bigmathInitFromString(bigmath *b, const void *str);
 void bigmathInitCopy(bigmath *dst, bigmath *src);
 void bigmathFree(bigmath *b);
+
+/* Print b in base 10 (leading '-' when negative) and a newline, to fp
+ * or to stdout. Values of any size print in full, never truncated. */
+void bigmathReprFile(bigmath *b, FILE *fp);
 void bigmathRepr(bigmath *b);
 
 void bigmathShiftLeft(bigmath *b, uint32_t howMuch, bigmath *result);

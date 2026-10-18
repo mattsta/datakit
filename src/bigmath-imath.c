@@ -11,8 +11,12 @@
 
 #include "../deps/imath/imath.c"
 
+#include "cleaner.h"
+
 #include <assert.h>
 #include <stdio.h>
+
+defcleanerName(char *, zfree, Chars);
 
 #define MPZ(x) (mpz_t *)(x)
 
@@ -56,10 +60,29 @@ void bigmathFree(bigmath *b) {
     mp_int_clear(MPZ(b));
 }
 
+void bigmathReprFile(bigmath *b, FILE *fp) {
+    /* mp_int_string_len() counts sign, digits and terminator. It may
+     * over-estimate but never under-estimates, so a buffer of that
+     * size always holds the full value. */
+    const mp_result need = mp_int_string_len(MPZ(b), 10);
+    assert(need >= 2);
+
+    char stackBuf[1024];
+    cleanerName(zfree, Chars) char *heapBuf = NULL;
+    char *buf = stackBuf;
+    if ((size_t)need > sizeof(stackBuf)) {
+        heapBuf = zmalloc((size_t)need);
+        buf = heapBuf;
+    }
+
+    const mp_result res = mp_int_to_string(MPZ(b), 10, buf, (size_t)need);
+    assert(res == MP_OK);
+    (void)res;
+    fprintf(fp, "%s\n", buf);
+}
+
 void bigmathRepr(bigmath *b) {
-    char buf[1024] = {0};
-    mp_int_to_string(MPZ(b), 10, buf, sizeof(buf));
-    printf("%s\n", buf);
+    bigmathReprFile(b, stdout);
 }
 
 void bigmathShiftLeft(bigmath *b, uint32_t howMuch, bigmath *result) {
