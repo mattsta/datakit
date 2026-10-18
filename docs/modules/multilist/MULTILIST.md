@@ -514,13 +514,14 @@ deletes nothing and returns false.
 
 ```c
 bool multilistReplaceByTypeAtIndex(multilist **m, mflexState *state,
-                                   mlNodeId index, const databox *box);
+                                   mlOffsetId index, const databox *box);
 ```
 
-Note the public prototype takes `mlNodeId` (`int32_t`), not `mlOffsetId`, so
-replacement is limited to indexes that fit in 32 bits. Negative indexes count
-from the tail. An index outside the list (an empty list included) returns false
-and changes nothing, on every tier.
+`index` is a full-width `mlOffsetId`, like every other list index, so an index
+is never narrowed onto another element. Negative indexes count from the tail.
+An index outside the list (an empty list included) returns false and changes
+nothing, on every tier. `multilistReplaceAtIndexP()` takes the same
+`mlOffsetId` index.
 
 ```c
 mflexState *state = mflexStateCreate();

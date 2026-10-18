@@ -268,7 +268,7 @@ bool multilistDelRangeP(multilistP *ml, mlOffsetId start, int64_t values) {
     return result;
 }
 
-bool multilistReplaceAtIndexP(multilistP *ml, mlNodeId index,
+bool multilistReplaceAtIndexP(multilistP *ml, mlOffsetId index,
                               const databox *box) {
     if (!ml || !ml->ml || !ml->ctx || !box) {
         return false;
@@ -1154,11 +1154,15 @@ int multilistPTest(int argc, char *argv[]) {
                 }
             }
 
-            const mlNodeId badIdx[] = {(mlNodeId)n, (mlNodeId)(-n - 1),
-                                       INT32_MAX, INT32_MIN};
+            /* The last four would land on elements 1, n - 1, 0 and n - 1
+             * if the index were narrowed to 32 bits. */
+            const mlOffsetId big = (mlOffsetId)1 << 32;
+            const mlOffsetId badIdx[] = {
+                n,         -n - 1,  INT32_MAX,   INT32_MIN, INT64_MAX,
+                INT64_MIN, big + 1, big + n - 1, -big,      -big - 1};
             for (size_t k = 0; k < sizeof(badIdx) / sizeof(*badIdx); k++) {
                 if (multilistReplaceAtIndexP(ml, badIdx[k], &rep)) {
-                    ERR("ReplaceAtIndexP(%" PRId32 ") was accepted", badIdx[k]);
+                    ERR("ReplaceAtIndexP(%" PRId64 ") was accepted", badIdx[k]);
                 }
             }
 

@@ -233,7 +233,7 @@ bool multilistDelRange(multilist **m, mflexState *state, mlOffsetId start,
 }
 
 bool multilistReplaceByTypeAtIndex(multilist **m, mflexState *state,
-                                   mlNodeId index, const databox *box) {
+                                   mlOffsetId index, const databox *box) {
     MULTILIST_RETURN(*m, ReplaceByTypeAtIndex, state, index, box);
 }
 
@@ -3130,11 +3130,26 @@ int multilistTest(int argc, char *argv[]) {
             }
 
             const databox rep = mlrBox(900000, buf);
-            const mlNodeId badRep[] = {(mlNodeId)n, (mlNodeId)n + 1,
-                                       -(mlNodeId)n - 1, INT32_MAX, INT32_MIN};
+            /* Past 32 bits too: each of the last five would land on a
+             * real element (1, n - 1, 0, 1, n - 1) if it were narrowed to
+             * 32 bits on the way in. */
+            const mlOffsetId badRep[] = {sn,
+                                         sn + 1,
+                                         -sn - 1,
+                                         INT32_MAX,
+                                         INT32_MIN,
+                                         (mlOffsetId)INT32_MAX + 1,
+                                         (mlOffsetId)INT32_MIN - 1,
+                                         INT64_MAX,
+                                         INT64_MIN,
+                                         big + 1,
+                                         big + sn - 1,
+                                         -big,
+                                         -big + 1,
+                                         -big - 1};
             for (size_t k = 0; k < sizeof(badRep) / sizeof(*badRep); k++) {
                 if (multilistReplaceByTypeAtIndex(&ml, s0, badRep[k], &rep)) {
-                    ERR("%s: Replace(%" PRId32 ") was accepted", name,
+                    ERR("%s: Replace(%" PRId64 ") was accepted", name,
                         badRep[k]);
                 }
             }
@@ -3160,14 +3175,12 @@ int multilistTest(int argc, char *argv[]) {
             /* The edges are accepted: replace both ends, delete the last
              * element with an oversized count and the first exactly. */
             const databox repHead = mlrBox(900001, buf);
-            if (!multilistReplaceByTypeAtIndex(&ml, s0, -(mlNodeId)n,
-                                               &repHead)) {
+            if (!multilistReplaceByTypeAtIndex(&ml, s0, -sn, &repHead)) {
                 ERR("%s: Replace(-count) was refused", name);
             }
             want[0] = 900001;
             const databox repTail = mlrBox(900002, buf);
-            if (!multilistReplaceByTypeAtIndex(&ml, s0, (mlNodeId)n - 1,
-                                               &repTail)) {
+            if (!multilistReplaceByTypeAtIndex(&ml, s0, sn - 1, &repTail)) {
                 ERR("%s: Replace(count - 1) was refused", name);
             }
             want[n - 1] = 900002;
@@ -3202,8 +3215,7 @@ int multilistTest(int argc, char *argv[]) {
                     multilistIndexCheck(ml, s0, emptyIdx[k], &entry) ||
                     multilistIteratorInitAtIdx(ml, s, &iter, emptyIdx[k], true,
                                                true) ||
-                    multilistReplaceByTypeAtIndex(
-                        &ml, s0, (mlNodeId)(emptyIdx[k] % 2), &rep) ||
+                    multilistReplaceByTypeAtIndex(&ml, s0, emptyIdx[k], &rep) ||
                     multilistDelRange(&ml, s0, emptyIdx[k], 1)) {
                     ERR("%s: the empty list accepted index %" PRId64, name,
                         emptyIdx[k]);
@@ -3931,7 +3943,7 @@ int multilistTest(int argc, char *argv[]) {
                 databoxBig storage;
                 char buf[64];
                 multilistReplaceByTypeAtIndex(
-                    &ml, s0, (mlNodeId)replaceAt[k],
+                    &ml, s0, (mlOffsetId)replaceAt[k],
                     mlwBox(&v, &storage, buf, sizeof(buf)));
                 want[replaceAt[k]] = v;
             }
@@ -4174,7 +4186,7 @@ int multilistTest(int argc, char *argv[]) {
                 databoxBig storage;
                 char buf[64];
                 multilistReplaceByTypeAtIndex(
-                    &ml, s0, (mlNodeId)(n / 3),
+                    &ml, s0, (mlOffsetId)(n / 3),
                     mlwBox(&v, &storage, buf, sizeof(buf)));
                 want[n / 3] = v;
             }

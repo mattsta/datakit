@@ -91,7 +91,7 @@ bool multilistDelRangeP(multilistP *ml, mlOffsetId start, int64_t values);
 
 /* Replace at index - automatically persisted.  An index outside the list
  * returns false and is not logged. */
-bool multilistReplaceAtIndexP(multilistP *ml, mlNodeId index,
+bool multilistReplaceAtIndexP(multilistP *ml, mlOffsetId index,
                               const databox *box);
 
 /* Reset (clear all entries) - automatically persisted */

@@ -69,9 +69,10 @@ bool multilistDelRange(multilist **m, mflexState *state, mlOffsetId start,
 
 /* Replace the element at 'index' (negative counts from the tail) with
  * 'box'.  Returns false, changing nothing, when 'index' is outside the
- * list, an empty list included. */
+ * list, an empty list included.  'index' is a full-width list index, so
+ * no index is ever truncated onto another element. */
 bool multilistReplaceByTypeAtIndex(multilist **m, mflexState *state,
-                                   mlNodeId index, const databox *box);
+                                   mlOffsetId index, const databox *box);
 
 void multilistIteratorInit(multilist *ml, mflexState *state[2],
                            multilistIterator *iter, bool forward,
