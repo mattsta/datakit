@@ -765,8 +765,11 @@ bool multimapMediumIteratorInit(multimapMedium *m, multimapIterator *iter,
             me.fe = flexHead(tmp);
             me.map = &tmp;
         } else {
-            tmp = m->map[1];
-            me.mapIdx = 1;
+            /* map[1] can be empty (deletes, or a conform swap), and an
+             * empty flex has no tail entry: start in map[0] then. */
+            const uint32_t last = flexCount(m->map[1]) ? 1 : 0;
+            tmp = m->map[last];
+            me.mapIdx = last;
             me.fe = flexTail(tmp);
             me.map = &tmp;
         }
@@ -933,9 +936,12 @@ static multimapMedium *buildSplitMedium(size_t count, size_t splitAt) {
         flexPushByType(&f, &valbox, FLEX_ENDPOINT_TAIL);
     }
 
-    /* Find the byte offset of the split entry (splitAt-th key). */
+    /* Find the byte offset of the split entry (splitAt-th key).  The
+     * split sizes both halves from the row count, so it must be the
+     * flex's middle row. */
     flexEntry *splitEntry = flexIndex(f, (int32_t)(splitAt * 2));
     assert(splitEntry != NULL);
+    assert(splitEntry == flexMiddle(f, 2));
     const uint32_t middle = (uint32_t)(splitEntry - f);
 
     return multimapMediumNewFromOneGrow(NULL, f, middle, 2, false);
@@ -1194,6 +1200,45 @@ int multimapMediumTest(int argc, char *argv[]) {
         }
         if (missing > 0) {
             ERR("%zu of 600 keys missing after reset-reuse", missing);
+        }
+    }
+
+    TEST("medium: reverse iteration with an empty map[1]") {
+        /* Deleting every key of map[1] leaves map[0] holding all rows.
+         * Reverse iteration starts at the tail of map[1], which an empty
+         * flex doesn't have, so it must start in map[0]. */
+        cleaner(multimapMediumFree) multimapMedium *m = buildSplitMedium(10, 5);
+        for (uint64_t i = 5; i < 10; i++) {
+            const databox keybox = databoxNewUnsigned(i);
+            if (!multimapMediumDelete(m, &keybox)) {
+                ERR("delete of key %" PRIu64 " failed", i);
+            }
+        }
+
+        if (flexCount(m->map[1]) != 0 || multimapMediumCount(m) != 5) {
+            ERR("expected map[1] empty with 5 rows, got %zu rows",
+                multimapMediumCount(m));
+        }
+
+        multimapIterator iter;
+        multimapMediumIteratorInit(m, &iter, false);
+        databox key = {{0}};
+        databox val = {{0}};
+        databox *elements[2] = {&key, &val};
+        uint64_t expect = 5;
+        while (multimapMediumIteratorNext(&iter, elements)) {
+            if (expect == 0 || key.data.u != expect - 1) {
+                ERR("reverse iteration gave key %" PRIu64 ", expected "
+                    "%" PRIu64,
+                    (uint64_t)key.data.u, expect - 1);
+                break;
+            }
+
+            expect--;
+        }
+
+        if (expect != 0) {
+            ERR("reverse iteration stopped with %" PRIu64 " rows left", expect);
         }
     }
 
