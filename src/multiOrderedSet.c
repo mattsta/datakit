@@ -2069,7 +2069,8 @@ int multiOrderedSetTest(int argc, char *argv[]) {
                                               : "Full");
             }
             if (found && gotScore.data.i != 0) {
-                ERR("Entry m0 has wrong score %ld after inserting m%d!",
+                ERR("Entry m0 has wrong score %" PRIdMAX
+                    " after inserting m%d!",
                     gotScore.data.i, i);
             }
         }
@@ -2944,8 +2945,8 @@ int multiOrderedSetTest(int argc, char *argv[]) {
                 while (
                     multiOrderedSetIteratorNext(&iter, &gotMember, &gotScore) &&
                     shown < 10) {
-                    printf("        score=%ld member='%.*s'\n", gotScore.data.i,
-                           (int)gotMember.len,
+                    printf("        score=%" PRIdMAX " member='%.*s'\n",
+                           gotScore.data.i, (int)gotMember.len,
                            (char *)databoxBytes(&gotMember));
                     shown++;
                 }

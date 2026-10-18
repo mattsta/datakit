@@ -773,7 +773,8 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
             ERRR("GetScore for member1 failed");
         }
         if (foundScore.data.i != 100) {
-            ERR("member1 score should be 100, got %ld", foundScore.data.i);
+            ERR("member1 score should be 100, got %" PRIdMAX,
+                foundScore.data.i);
         }
 
         /* Test GetRank */
@@ -889,7 +890,8 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
             ERR("Should pop 1, got %zu", popped);
         }
         if (scores[0].data.i != 40) {
-            ERR("Popped score should be 40 (max), got %ld", scores[0].data.i);
+            ERR("Popped score should be 40 (max), got %" PRIdMAX,
+                scores[0].data.i);
         }
         databoxFreeData(&members[0]);
 
@@ -919,7 +921,8 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
         databox m, s;
         while (multiOrderedSetSmallIteratorNext(&iter, &m, &s)) {
             if (s.data.i != idx * 10) {
-                ERR("Forward iter[%d] score mismatch: expected %d, got %ld",
+                ERR("Forward iter[%d] score mismatch: expected %d, got "
+                    "%" PRIdMAX,
                     idx, idx * 10, s.data.i);
             }
             idx++;

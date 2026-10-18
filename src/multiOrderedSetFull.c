@@ -1811,7 +1811,7 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
                 ERR("GetScore for member%03d failed", i);
             }
             if (score.data.i != i * 10) {
-                ERR("member%03d score should be %d, got %ld", i, i * 10,
+                ERR("member%03d score should be %d, got %" PRIdMAX, i, i * 10,
                     score.data.i);
             }
         }
@@ -1823,7 +1823,7 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
                 ERR("GetByRank(%d) failed", i);
             }
             if (s.data.i != i * 10) {
-                ERR("Rank %d should have score %d, got %ld", i, i * 10,
+                ERR("Rank %d should have score %d, got %" PRIdMAX, i, i * 10,
                     s.data.i);
             }
         }
@@ -1873,7 +1873,7 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
                 }
                 if (score.data.i != i * 10) {
                     ERR("[%s] Pool mode: poolmember%03d score should be %d, "
-                        "got %ld",
+                        "got %" PRIdMAX,
                         typeNames[t], i, i * 10, score.data.i);
                 }
             }
