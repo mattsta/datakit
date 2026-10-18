@@ -357,8 +357,8 @@ void SHA1Init(SHA1_CTX *context) {
 /*
  * Run your data through this.
  */
-void SHA1Update(SHA1_CTX *context, const uint8_t *data, unsigned int len) {
-    unsigned int i, j;
+void SHA1Update(SHA1_CTX *context, const uint8_t *data, uint32_t len) {
+    uint32_t i, j;
 
     _DIAGASSERT(context != 0);
     _DIAGASSERT(data != 0);
@@ -385,7 +385,7 @@ void SHA1Update(SHA1_CTX *context, const uint8_t *data, unsigned int len) {
  * Add padding and return the message digest.
  */
 void SHA1Final(uint8_t digest[20], SHA1_CTX *context) {
-    unsigned int i;
+    uint32_t i;
     uint8_t finalcount[8];
     uint32_t used;
 
