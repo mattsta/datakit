@@ -192,14 +192,39 @@
 /* Math helpers */
 #define startOffset(offset) ((uint64_t)(offset) * BITS_PER_VALUE)
 
+#define PACKED_SLOT                                                            \
+    PACKED_NAME(PACKED_NAME(PACK_FUNCTION_PREFIX, PACK_STORAGE_BITS), Slot)
+#define PACKED_SLOT_LOAD                                                       \
+    PACKED_NAME(PACKED_NAME(PACK_FUNCTION_PREFIX, PACK_STORAGE_BITS), SlotLoad)
+#define PACKED_SLOT_STORE                                                      \
+    PACKED_NAME(PACKED_NAME(PACK_FUNCTION_PREFIX, PACK_STORAGE_BITS), SlotStore)
+
+/* Packed storage may start at any address (e.g. inside a byte stream), so
+ * storage is addressed through a slot type with alignment 1 and every slot
+ * is read and written through memcpy. Neither assumes the natural alignment
+ * of SLOT_STORAGE_TYPE, and a fixed-size memcpy still compiles to a single
+ * load or store with the same address arithmetic as a plain array access. */
+typedef SLOT_STORAGE_TYPE PACKED_SLOT __attribute__((aligned(1)));
+
+static inline SLOT_STORAGE_TYPE PACKED_SLOT_LOAD(const PACKED_SLOT *src) {
+    SLOT_STORAGE_TYPE slot;
+    memcpy(&slot, src, sizeof(slot));
+    return slot;
+}
+
+static inline void PACKED_SLOT_STORE(PACKED_SLOT *dst,
+                                     const SLOT_STORAGE_TYPE slot) {
+    memcpy(dst, &slot, sizeof(slot));
+}
+
 PACKED_STATIC void PACKED_ARRAY_SET(void *_dst, const PACKED_LEN_TYPE offset,
                                     const VALUE_TYPE val) {
-    SLOT_STORAGE_TYPE *restrict out;
+    PACKED_SLOT *restrict out;
     uint32_t startBit;
     uint32_t bitsAvailable;
     const uint64_t startBitOffset = startOffset(offset);
 
-    SLOT_STORAGE_TYPE *dst = (SLOT_STORAGE_TYPE *)_dst;
+    PACKED_SLOT *dst = (PACKED_SLOT *)_dst;
 
     out = &dst[startBitOffset / BITS_PER_SLOT];
     startBit = startBitOffset % BITS_PER_SLOT;
@@ -219,13 +244,12 @@ PACKED_STATIC void PACKED_ARRAY_SET(void *_dst, const PACKED_LEN_TYPE offset,
          * Storing the same 4095 in position 0 backed by a 64 bit slot is:
          * [0000000000000000000000000000000000000000000000000000111111111111]
          */
-        SLOT_STORAGE_TYPE current;
-        memcpy(&current, out, sizeof(SLOT_STORAGE_TYPE));
+        SLOT_STORAGE_TYPE current = PACKED_SLOT_LOAD(out);
         current = (SLOT_STORAGE_TYPE)((current &
                                        ~((uint64_t)VALUE_MASK << startBit)) |
                                       ((uint64_t)MICRO_PROMOTION_TYPE_CAST(val)
                                        << startBit));
-        memcpy(out, &current, sizeof(SLOT_STORAGE_TYPE));
+        PACKED_SLOT_STORE(out, current);
     } else {
 #endif
         /* target position is split across two slots */
@@ -265,9 +289,8 @@ PACKED_STATIC void PACKED_ARRAY_SET(void *_dst, const PACKED_LEN_TYPE offset,
         low = (uint64_t)MICRO_PROMOTION_TYPE_CAST(val) << startBit;
         high = (uint64_t)MICRO_PROMOTION_TYPE_CAST(val) >> bitsAvailable;
 
-        SLOT_STORAGE_TYPE slot0, slot1;
-        memcpy(&slot0, &out[0], sizeof(SLOT_STORAGE_TYPE));
-        memcpy(&slot1, &out[1], sizeof(SLOT_STORAGE_TYPE));
+        SLOT_STORAGE_TYPE slot0 = PACKED_SLOT_LOAD(&out[0]);
+        SLOT_STORAGE_TYPE slot1 = PACKED_SLOT_LOAD(&out[1]);
 
         slot0 =
             (SLOT_STORAGE_TYPE)((slot0 & ~((uint64_t)VALUE_MASK << startBit)) |
@@ -276,8 +299,8 @@ PACKED_STATIC void PACKED_ARRAY_SET(void *_dst, const PACKED_LEN_TYPE offset,
                                      ~((uint64_t)VALUE_MASK >> bitsAvailable)) |
                                     high);
 
-        memcpy(&out[0], &slot0, sizeof(SLOT_STORAGE_TYPE));
-        memcpy(&out[1], &slot1, sizeof(SLOT_STORAGE_TYPE));
+        PACKED_SLOT_STORE(&out[0], slot0);
+        PACKED_SLOT_STORE(&out[1], slot1);
 #if SLOT_CAN_HOLD_ENTIRE_VALUE
     }
 #endif
@@ -285,12 +308,12 @@ PACKED_STATIC void PACKED_ARRAY_SET(void *_dst, const PACKED_LEN_TYPE offset,
 
 PACKED_STATIC void PACKED_ARRAY_SET_HALF(void *_dst,
                                          const PACKED_LEN_TYPE offset) {
-    SLOT_STORAGE_TYPE *restrict out;
+    PACKED_SLOT *restrict out;
     uint32_t startBit;
     uint32_t bitsAvailable;
     const uint64_t startBitOffset = startOffset(offset);
 
-    SLOT_STORAGE_TYPE *dst = (SLOT_STORAGE_TYPE *)_dst;
+    PACKED_SLOT *dst = (PACKED_SLOT *)_dst;
 
     out = &dst[startBitOffset / BITS_PER_SLOT];
     startBit = startBitOffset % BITS_PER_SLOT;
@@ -300,8 +323,7 @@ PACKED_STATIC void PACKED_ARRAY_SET_HALF(void *_dst,
 #if SLOT_CAN_HOLD_ENTIRE_VALUE
     if (BITS_PER_VALUE <= bitsAvailable) {
         /* target position is fully inside out[0] */
-        SLOT_STORAGE_TYPE slot;
-        memcpy(&slot, out, sizeof(SLOT_STORAGE_TYPE));
+        SLOT_STORAGE_TYPE slot = PACKED_SLOT_LOAD(out);
         const VALUE_TYPE current =
             (MICRO_PROMOTION_TYPE_CAST(slot) >> startBit) & VALUE_MASK;
 
@@ -315,16 +337,15 @@ PACKED_STATIC void PACKED_ARRAY_SET_HALF(void *_dst,
             (SLOT_STORAGE_TYPE)((slot & ~((uint64_t)VALUE_MASK << startBit)) |
                                 ((uint64_t)MICRO_PROMOTION_TYPE_CAST(val)
                                  << startBit));
-        memcpy(out, &slot, sizeof(SLOT_STORAGE_TYPE));
+        PACKED_SLOT_STORE(out, slot);
     } else {
 #endif
         /* target position is split across two slots */
         uint64_t low, high;
 
         /* GET */
-        SLOT_STORAGE_TYPE slot0, slot1;
-        memcpy(&slot0, &out[0], sizeof(SLOT_STORAGE_TYPE));
-        memcpy(&slot1, &out[1], sizeof(SLOT_STORAGE_TYPE));
+        SLOT_STORAGE_TYPE slot0 = PACKED_SLOT_LOAD(&out[0]);
+        SLOT_STORAGE_TYPE slot1 = PACKED_SLOT_LOAD(&out[1]);
 
         low = MICRO_PROMOTION_TYPE_CAST(slot0) >> startBit;
         high = (uint64_t)(MICRO_PROMOTION_TYPE_CAST(slot1)) << bitsAvailable;
@@ -351,8 +372,8 @@ PACKED_STATIC void PACKED_ARRAY_SET_HALF(void *_dst,
                                      ~((uint64_t)VALUE_MASK >> bitsAvailable)) |
                                     high);
 
-        memcpy(&out[0], &slot0, sizeof(SLOT_STORAGE_TYPE));
-        memcpy(&out[1], &slot1, sizeof(SLOT_STORAGE_TYPE));
+        PACKED_SLOT_STORE(&out[0], slot0);
+        PACKED_SLOT_STORE(&out[1], slot1);
 #if SLOT_CAN_HOLD_ENTIRE_VALUE
     }
 #endif
@@ -361,12 +382,12 @@ PACKED_STATIC void PACKED_ARRAY_SET_HALF(void *_dst,
 PACKED_STATIC void PACKED_ARRAY_SET_INCR(void *_dst,
                                          const PACKED_LEN_TYPE offset,
                                          const int64_t incrBy) {
-    SLOT_STORAGE_TYPE *restrict out;
+    PACKED_SLOT *restrict out;
     uint32_t startBit;
     uint32_t bitsAvailable;
     const uint64_t startBitOffset = startOffset(offset);
 
-    SLOT_STORAGE_TYPE *dst = (SLOT_STORAGE_TYPE *)_dst;
+    PACKED_SLOT *dst = (PACKED_SLOT *)_dst;
 
     out = &dst[startBitOffset / BITS_PER_SLOT];
     startBit = startBitOffset % BITS_PER_SLOT;
@@ -376,8 +397,7 @@ PACKED_STATIC void PACKED_ARRAY_SET_INCR(void *_dst,
 #if SLOT_CAN_HOLD_ENTIRE_VALUE
     if (BITS_PER_VALUE <= bitsAvailable) {
         /* target position is fully inside out[0] */
-        SLOT_STORAGE_TYPE slot;
-        memcpy(&slot, out, sizeof(SLOT_STORAGE_TYPE));
+        SLOT_STORAGE_TYPE slot = PACKED_SLOT_LOAD(out);
         const VALUE_TYPE current =
             (MICRO_PROMOTION_TYPE_CAST(slot) >> startBit) & VALUE_MASK;
         VALUE_TYPE val = (VALUE_TYPE)(current + incrBy);
@@ -388,16 +408,15 @@ PACKED_STATIC void PACKED_ARRAY_SET_INCR(void *_dst,
             (SLOT_STORAGE_TYPE)((slot & ~((uint64_t)VALUE_MASK << startBit)) |
                                 ((uint64_t)MICRO_PROMOTION_TYPE_CAST(val)
                                  << startBit));
-        memcpy(out, &slot, sizeof(SLOT_STORAGE_TYPE));
+        PACKED_SLOT_STORE(out, slot);
     } else {
 #endif
         /* target position is split across two slots */
         uint64_t low, high;
 
         /* GET */
-        SLOT_STORAGE_TYPE slot0, slot1;
-        memcpy(&slot0, &out[0], sizeof(SLOT_STORAGE_TYPE));
-        memcpy(&slot1, &out[1], sizeof(SLOT_STORAGE_TYPE));
+        SLOT_STORAGE_TYPE slot0 = PACKED_SLOT_LOAD(&out[0]);
+        SLOT_STORAGE_TYPE slot1 = PACKED_SLOT_LOAD(&out[1]);
 
         low = MICRO_PROMOTION_TYPE_CAST(slot0) >> startBit;
         high = (uint64_t)(MICRO_PROMOTION_TYPE_CAST(slot1)) << bitsAvailable;
@@ -421,8 +440,8 @@ PACKED_STATIC void PACKED_ARRAY_SET_INCR(void *_dst,
                                      ~((uint64_t)VALUE_MASK >> bitsAvailable)) |
                                     high);
 
-        memcpy(&out[0], &slot0, sizeof(SLOT_STORAGE_TYPE));
-        memcpy(&out[1], &slot1, sizeof(SLOT_STORAGE_TYPE));
+        PACKED_SLOT_STORE(&out[0], slot0);
+        PACKED_SLOT_STORE(&out[1], slot1);
 #if SLOT_CAN_HOLD_ENTIRE_VALUE
     }
 #endif
@@ -430,13 +449,13 @@ PACKED_STATIC void PACKED_ARRAY_SET_INCR(void *_dst,
 
 PACKED_STATIC VALUE_TYPE PACKED_ARRAY_GET(const void *src_,
                                           const PACKED_LEN_TYPE offset) {
-    const SLOT_STORAGE_TYPE *restrict in = NULL;
+    const PACKED_SLOT *restrict in = NULL;
     uint32_t startBit = 0;
     uint32_t bitsAvailable = 0;
     VALUE_TYPE out = 0;
     const uint64_t startBitOffset = startOffset(offset);
 
-    SLOT_STORAGE_TYPE *src = (SLOT_STORAGE_TYPE *)src_;
+    const PACKED_SLOT *src = (const PACKED_SLOT *)src_;
 
     in = &src[startBitOffset / BITS_PER_SLOT];
     startBit = startBitOffset % BITS_PER_SLOT;
@@ -448,8 +467,7 @@ PACKED_STATIC VALUE_TYPE PACKED_ARRAY_GET(const void *src_,
         /* stored value is fully contained inside in[0] */
         /* If value is entirely in one slot, we just need to shift down
          * the packed integer then mask away other values. */
-        SLOT_STORAGE_TYPE slot;
-        memcpy(&slot, in, sizeof(SLOT_STORAGE_TYPE));
+        const SLOT_STORAGE_TYPE slot = PACKED_SLOT_LOAD(&in[0]);
         out = (MICRO_PROMOTION_TYPE_CAST(slot) >> startBit) & VALUE_MASK;
     } else {
 #endif
@@ -458,9 +476,8 @@ PACKED_STATIC VALUE_TYPE PACKED_ARRAY_GET(const void *src_,
 
         /* Restore from two slots by moving in[0] bits down and
          * in[1] bits up */
-        SLOT_STORAGE_TYPE slot0, slot1;
-        memcpy(&slot0, &in[0], sizeof(SLOT_STORAGE_TYPE));
-        memcpy(&slot1, &in[1], sizeof(SLOT_STORAGE_TYPE));
+        const SLOT_STORAGE_TYPE slot0 = PACKED_SLOT_LOAD(&in[0]);
+        const SLOT_STORAGE_TYPE slot1 = PACKED_SLOT_LOAD(&in[1]);
 
         low = MICRO_PROMOTION_TYPE_CAST(slot0) >> startBit;
         high = (uint64_t)(MICRO_PROMOTION_TYPE_CAST(slot1)) << bitsAvailable;
@@ -635,7 +652,10 @@ PACKED_STATIC bool PACKED_ARRAY_DELETE_MEMBER_BYTES(void *_dst,
 #undef VALUE_MASK
 #undef PACKED_ARRAY_SET
 #undef PACKED_ARRAY_GET
-#undef starOffset
+#undef startOffset
+#undef PACKED_SLOT
+#undef PACKED_SLOT_LOAD
+#undef PACKED_SLOT_STORE
 #undef SLOT_CAN_HOLD_ENTIRE_VALUE
 
 #undef PACKED_STATIC

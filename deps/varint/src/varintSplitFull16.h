@@ -158,11 +158,12 @@ typedef enum varintSplitFull16Tag {
  * If we're VAR, get VAR length.  else, our other three prefixes are:
  *   - 00 for embedded 14-bit values
  *   - 01 for embedded 22-bit values
- *   - 10 for embedded 30-bit values */
+ *   - 10 for embedded 30-bit values
+ * Both arms are varintWidth arithmetic, so the length has one type. */
 #define varintSplitFull16GetLenQuick_(ptr)                                     \
     (varintSplitFull16Encoding2_(ptr) == VARINT_SPLIT_FULL_16_VAR              \
          ? 1 + varintSplitFull16EncodingWidthBytesExternal_(ptr)               \
-         : 2 + ((ptr)[0] >> 6))
+         : 2 + (varintWidth)((ptr)[0] >> 6))
 
 #define varintSplitFull16GetLen_(ptr, valsize)                                 \
     do {                                                                       \

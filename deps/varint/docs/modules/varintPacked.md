@@ -391,6 +391,12 @@ Slot 0: [11111111111100000000111111111111]
 Slot 1: [00000000000000000000000000001111]
 ```
 
+Storage has no alignment requirement: the array may start at any byte
+address, for example inside a larger byte stream. Slots are read and
+written through `memcpy` on a slot type with alignment 1, which compiles
+to the same single loads and stores as a plain array access. Each slot
+is stored in host byte order.
+
 ## When to Use varintPacked
 
 ### Use When:
