@@ -1010,6 +1010,19 @@ void multilistFullIteratorRelease(multilistIterator *iter) {
     }
 }
 
+/* Restart an initialized iterator at the head (forward) or the tail
+ * (reverse), keeping its state pair and readOnly mode.  The open node is
+ * released first, so this is safe mid-iteration. */
+void multilistFullRewind(multilistFull *ml, multilistIterator *iter) {
+    multilistFullIteratorRelease(iter);
+    multilistFullIteratorInit(ml, iter->state, iter, true, iter->readOnly);
+}
+
+void multilistFullRewindTail(multilistFull *ml, multilistIterator *iter) {
+    multilistFullIteratorRelease(iter);
+    multilistFullIteratorInit(ml, iter->state, iter, false, iter->readOnly);
+}
+
 /* Get next element in iterator.
  *
  * Note: You must NOT insert into the list while iterating over it.

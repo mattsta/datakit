@@ -810,6 +810,73 @@ static uint32_t mlwVerify(multilist *ml, mflexState *s[2], const mlwVal *want,
 }
 
 #define OK printf("\tOK\n")
+/* Tier Rewind test elements: fixed-width strings, one per id. */
+#define MLR_LEN 24
+static databox mlrBox(uint32_t id, char buf[MLR_LEN + 1]) {
+    snprintf(buf, MLR_LEN + 1, "rw-%06" PRIu32 "-xxxxxxxxxxxxxx", id);
+    return databoxNewBytes(buf, MLR_LEN);
+}
+
+static bool mlrIs(const databox *box, uint32_t id) {
+    char buf[MLR_LEN + 1];
+    const databox want = mlrBox(id, buf);
+    return box->type == DATABOX_BYTES && box->len == MLR_LEN &&
+           memcmp(box->data.bytes.start, want.data.bytes.start, MLR_LEN) == 0;
+}
+
+/* Call the tier's own Rewind or RewindTail for 'ml'. */
+static void mlrTierRewind(multilist *ml, multilistIterator *iter, bool tail) {
+    switch (_multilistType(ml)) {
+    case MULTILIST_TYPE_SMALL:
+        if (tail) {
+            multilistSmallRewindTail(mls(ml), iter);
+        } else {
+            multilistSmallRewind(mls(ml), iter);
+        }
+        break;
+    case MULTILIST_TYPE_MEDIUM:
+        if (tail) {
+            multilistMediumRewindTail(mlm(ml), iter);
+        } else {
+            multilistMediumRewind(mlm(ml), iter);
+        }
+        break;
+    case MULTILIST_TYPE_FULL:
+        if (tail) {
+            multilistFullRewindTail(mlf(ml), iter);
+        } else {
+            multilistFullRewind(mlf(ml), iter);
+        }
+        break;
+    default:
+        assert(NULL);
+    }
+}
+
+/* Take 'steps' elements from 'iter', which must start at the head
+ * (forward) or the tail (reverse) of ids 0..n-1.  When steps >= n the
+ * walk must then be exhausted.  Returns NULL, or what went wrong. */
+static const char *mlrWalk(multilistIterator *iter, uint32_t n, bool forward,
+                           uint32_t steps) {
+    multilistEntry entry;
+    for (uint32_t k = 0; k < steps && k < n; k++) {
+        if (!multilistNext(iter, &entry)) {
+            return "walk ended early";
+        }
+
+        if (!mlrIs(&entry.box, forward ? k : n - 1 - k)) {
+            return forward ? "wrong element walking forward"
+                           : "wrong element walking in reverse";
+        }
+    }
+
+    if (steps >= n && multilistNext(iter, &entry)) {
+        return "walked past the end";
+    }
+
+    return NULL;
+}
+
 int multilistTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -3045,6 +3112,93 @@ int multilistTest(int argc, char *argv[]) {
         }
 #undef FUZZ_PAYLOAD
 #undef FUZZ_NEXT
+    }
+
+    TEST("tier Rewind and RewindTail restart every tier's iterator") {
+        /* Each tier's own Rewind / RewindTail, called mid-walk and after
+         * an exhausted walk, restarts at the head / tail and then yields
+         * every element in order.  On Full the iterator keeps its state
+         * pair and readOnly mode, and a writable iterator's open node is
+         * released (the list must read back intact afterwards). */
+        const struct {
+            const char *name;
+            flexCapSizeLimit limit;
+            uint32_t depth;
+            uint32_t count;
+            multilistType wantType;
+        } configs[] = {
+            {"Small", FLEX_CAP_LEVEL_65536, 0, 60, MULTILIST_TYPE_SMALL},
+            {"Medium", FLEX_CAP_LEVEL_512, 0, 40, MULTILIST_TYPE_MEDIUM},
+            {"Full depth 0", FLEX_CAP_LEVEL_512, 0, 300, MULTILIST_TYPE_FULL},
+            {"Full depth 1", FLEX_CAP_LEVEL_512, 1, 600, MULTILIST_TYPE_FULL},
+        };
+
+        for (size_t c = 0; c < sizeof(configs) / sizeof(*configs); c++) {
+            for (int ro = 0; ro < 2; ro++) {
+                const uint32_t n = configs[c].count;
+                cleaner(multilistFree) multilist *ml =
+                    multilistNew(configs[c].limit, configs[c].depth);
+                char buf[MLR_LEN + 1];
+                for (uint32_t i = 0; i < n; i++) {
+                    const databox box = mlrBox(i, buf);
+                    multilistPushByTypeTail(&ml, s0, &box);
+                }
+
+                if (_multilistType(ml) != configs[c].wantType ||
+                    (configs[c].depth > 0 &&
+                     multilistFullBytesActual(mlf(ml)) >= multilistBytes(ml))) {
+                    ERR("%s: landed tier %d, or no node was compressed",
+                        configs[c].name, (int)_multilistType(ml));
+                    continue;
+                }
+
+                multilistIterator iter;
+                memset(&iter, 0, sizeof(iter));
+                multilistIteratorInit(ml, s, &iter, true, ro);
+                const char *why = mlrWalk(&iter, n, true, n / 3);
+                if (!why) {
+                    mlrTierRewind(ml, &iter, false);
+                    why = mlrWalk(&iter, n, true, n);
+                }
+
+                if (!why) {
+                    mlrTierRewind(ml, &iter, true);
+                    why = mlrWalk(&iter, n, false, n / 2);
+                }
+
+                if (!why) {
+                    mlrTierRewind(ml, &iter, true);
+                    why = mlrWalk(&iter, n, false, n);
+                }
+
+                if (!why) {
+                    mlrTierRewind(ml, &iter, false);
+                    why = mlrWalk(&iter, n, true, n);
+                }
+
+                if (!why && configs[c].wantType == MULTILIST_TYPE_FULL &&
+                    (iter.readOnly != (bool)ro || iter.state[0] != s0 ||
+                     iter.state[1] != s1)) {
+                    why = "the iterator lost its state pair or readOnly mode";
+                }
+
+                multilistIteratorRelease(&iter);
+
+                if (!why) {
+                    multilistIteratorInit(ml, s, &iter, true, true);
+                    why = mlrWalk(&iter, n, true, n);
+                    multilistIteratorRelease(&iter);
+                    if (!why && multilistCount(ml) != n) {
+                        why = "the count changed";
+                    }
+                }
+
+                if (why) {
+                    ERR("%s, %s: %s", configs[c].name,
+                        ro ? "read-only" : "writable", why);
+                }
+            }
+        }
     }
 
     TEST("wide: normal, extended and mixed data through every read path, "

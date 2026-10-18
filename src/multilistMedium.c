@@ -361,6 +361,17 @@ bool multilistMediumIteratorInitAtIdx(multilistMedium *ml,
     return false;
 }
 
+/* Restart an initialized iterator at the head (forward) or the tail
+ * (reverse).  Medium holds no per-iterator state to release, so this is
+ * a fresh init; it is safe mid-iteration. */
+void multilistMediumRewind(multilistMedium *ml, multilistIterator *iter) {
+    multilistMediumIteratorInit(ml, iter, true);
+}
+
+void multilistMediumRewindTail(multilistMedium *ml, multilistIterator *iter) {
+    multilistMediumIteratorInit(ml, iter, false);
+}
+
 bool multilistMediumNext(multilistIterator *iter, multilistEntry *entry) {
     entry->ml = iter->ml;
 

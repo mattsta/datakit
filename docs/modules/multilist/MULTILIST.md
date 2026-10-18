@@ -703,9 +703,12 @@ while (multilistNext(&iter, &entry)) {
 multilistIteratorRelease(&iter);
 ```
 
-Call the unified names. The tier headers also declare
-`multilistSmallRewind()`, `multilistMediumRewind()`, `multilistFullRewind()`
-and their `RewindTail` forms, but those have no definitions.
+Each tier also has its own pair, for code that holds a tier pointer
+directly: `multilistSmallRewind()`, `multilistMediumRewind()` and
+`multilistFullRewind()`, plus their `RewindTail` forms. They behave the same
+way. Small and Medium keep no per-iterator state, so for them a rewind is a
+fresh init. `multilistFullRewind*()` releases the open node first and keeps
+the iterator's state pair and `readOnly` mode.
 
 ## Special Operations
 

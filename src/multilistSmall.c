@@ -180,6 +180,17 @@ bool multilistSmallIteratorInitAtIdx(multilistSmall *ml,
     return false;
 }
 
+/* Restart an initialized iterator at the head (forward) or the tail
+ * (reverse).  Small holds no per-iterator state to release, so this is a
+ * fresh init; it is safe mid-iteration. */
+void multilistSmallRewind(multilistSmall *ml, multilistIterator *iter) {
+    multilistSmallIteratorInit(ml, iter, true);
+}
+
+void multilistSmallRewindTail(multilistSmall *ml, multilistIterator *iter) {
+    multilistSmallIteratorInit(ml, iter, false);
+}
+
 bool multilistSmallNext(multilistIterator *iter, multilistEntry *entry) {
     entry->ml = iter->ml;
     entry->nodeIdx = iter->nodeIdx;
