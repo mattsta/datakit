@@ -14,6 +14,7 @@
 #ifdef DATAKIT_TEST
 defcleanerName(uint8_t *, zfree, Bytes);
 defcleanerName(multilruPtr *, zfree, Ptrs);
+defcleanerName(uint64_t *, zfree, U64s);
 defcleaner(multilru *, multilruFree);
 #endif
 
@@ -341,51 +342,80 @@ DK_STATIC inline void entry7SetHead(void *e, bool v) {
     p[6] = (p[6] & 0x7F) | ((v ? 1 : 0) << 7);
 }
 
+/* Native-width loads and stores at any alignment.  Entries sit at
+ * idx * entryWidth, so a 9-byte entry's 32-bit fields (and any field of
+ * a width that does not divide the allocation's alignment) are
+ * misaligned; memcpy of a constant size compiles to one load or store
+ * where the target allows unaligned access, and is defined everywhere. */
+DK_INLINE_ALWAYS uint32_t entryLoad32(const void *p) {
+    uint32_t v;
+    memcpy(&v, p, sizeof(v));
+    return v;
+}
+DK_INLINE_ALWAYS void entryStore32(void *p, uint32_t v) {
+    memcpy(p, &v, sizeof(v));
+}
+DK_INLINE_ALWAYS uint64_t entryLoad64(const void *p) {
+    uint64_t v;
+    memcpy(&v, p, sizeof(v));
+    return v;
+}
+DK_INLINE_ALWAYS void entryStore64(void *p, uint64_t v) {
+    memcpy(p, &v, sizeof(v));
+}
+DK_INLINE_ALWAYS __uint128_t entryLoad128(const void *p) {
+    __uint128_t v;
+    memcpy(&v, p, sizeof(v));
+    return v;
+}
+DK_INLINE_ALWAYS void entryStore128(void *p, __uint128_t v) {
+    memcpy(p, &v, sizeof(v));
+}
+
 /* --- 8-byte entries (28-bit addresses) --- */
 /* Layout: prev[0:27], next[28:55], level[56:61], pop[62], head[63] */
 DK_STATIC inline uint64_t entry8GetPrev(const void *e) {
-    return (*(const uint64_t *)e) & 0x0FFFFFFF;
+    return entryLoad64(e) & 0x0FFFFFFF;
 }
 DK_STATIC inline uint64_t entry8GetNext(const void *e) {
-    return ((*(const uint64_t *)e) >> 28) & 0x0FFFFFFF;
+    return (entryLoad64(e) >> 28) & 0x0FFFFFFF;
 }
 DK_STATIC inline uint8_t entry8GetLevel(const void *e) {
-    return ((*(const uint64_t *)e) >> 56) & 0x3F;
+    return (entryLoad64(e) >> 56) & 0x3F;
 }
 DK_STATIC inline bool entry8GetPopulated(const void *e) {
-    return ((*(const uint64_t *)e) >> 62) & 1;
+    return (entryLoad64(e) >> 62) & 1;
 }
 DK_STATIC inline bool entry8GetHead(const void *e) {
-    return ((*(const uint64_t *)e) >> 63) & 1;
+    return (entryLoad64(e) >> 63) & 1;
 }
 DK_STATIC inline void entry8SetPrev(void *e, uint64_t v) {
-    uint64_t *p = e;
-    *p = (*p & ~0x0FFFFFFFULL) | (v & 0x0FFFFFFF);
+    entryStore64(e, (entryLoad64(e) & ~0x0FFFFFFFULL) | (v & 0x0FFFFFFF));
 }
 DK_STATIC inline void entry8SetNext(void *e, uint64_t v) {
-    uint64_t *p = e;
-    *p = (*p & ~(0x0FFFFFFFULL << 28)) | ((v & 0x0FFFFFFF) << 28);
+    entryStore64(e, (entryLoad64(e) & ~(0x0FFFFFFFULL << 28)) |
+                        ((v & 0x0FFFFFFF) << 28));
 }
 DK_STATIC inline void entry8SetLevel(void *e, uint8_t v) {
-    uint64_t *p = e;
-    *p = (*p & ~(0x3FULL << 56)) | ((uint64_t)(v & 0x3F) << 56);
+    entryStore64(e, (entryLoad64(e) & ~(0x3FULL << 56)) |
+                        ((uint64_t)(v & 0x3F) << 56));
 }
 DK_STATIC inline void entry8SetPopulated(void *e, bool v) {
-    uint64_t *p = e;
-    *p = (*p & ~(1ULL << 62)) | ((uint64_t)(v ? 1 : 0) << 62);
+    entryStore64(e, (entryLoad64(e) & ~(1ULL << 62)) |
+                        ((uint64_t)(v ? 1 : 0) << 62));
 }
 DK_STATIC inline void entry8SetHead(void *e, bool v) {
-    uint64_t *p = e;
-    *p = (*p & ~(1ULL << 63)) | ((uint64_t)(v ? 1 : 0) << 63);
+    entryStore64(e, (entryLoad64(e) & ~(1ULL << 63)) |
+                        ((uint64_t)(v ? 1 : 0) << 63));
 }
 
 /* --- 9-byte entries (32-bit addresses) --- */
 /* Layout: prev[0:31], next[32:63], level[64:69], pop[70], head[71] */
 DK_STATIC inline uint64_t entry9GetPrev(const void *e) {
-    return *(const uint32_t *)e;
+    return entryLoad32(e);
 }
 DK_STATIC inline uint64_t entry9GetNext(const void *e) {
-    return *(const uint32_t *)((const uint8_t *)e + 4);
+    return entryLoad32((const uint8_t *)e + 4);
 }
 DK_STATIC inline uint8_t entry9GetLevel(const void *e) {
     return ((const uint8_t *)e)[8] & 0x3F;
@@ -397,10 +427,10 @@ DK_STATIC inline bool entry9GetHead(const void *e) {
     return (((const uint8_t *)e)[8] >> 7) & 1;
 }
 DK_STATIC inline void entry9SetPrev(void *e, uint64_t v) {
-    *(uint32_t *)e = (uint32_t)v;
+    entryStore32(e, (uint32_t)v);
 }
 DK_STATIC inline void entry9SetNext(void *e, uint64_t v) {
-    *(uint32_t *)((uint8_t *)e + 4) = (uint32_t)v;
+    entryStore32((uint8_t *)e + 4, (uint32_t)v);
 }
 DK_STATIC inline void entry9SetLevel(void *e, uint8_t v) {
     uint8_t *p = e;
@@ -517,49 +547,44 @@ DK_STATIC inline void entry12SetHead(void *e, bool v) {
 /* --- 16-byte entries (60-bit addresses) --- */
 /* Layout: prev[0:59], next[60:119], level[120:125], pop[126], head[127] */
 DK_STATIC inline uint64_t entry16GetPrev(const void *e) {
-    const __uint128_t *p = e;
-    return (uint64_t)(*p & (((__uint128_t)1 << 60) - 1));
+    return (uint64_t)(entryLoad128(e) & (((__uint128_t)1 << 60) - 1));
 }
 DK_STATIC inline uint64_t entry16GetNext(const void *e) {
-    const __uint128_t *p = e;
-    return (uint64_t)((*p >> 60) & (((__uint128_t)1 << 60) - 1));
+    return (uint64_t)((entryLoad128(e) >> 60) & (((__uint128_t)1 << 60) - 1));
 }
 DK_STATIC inline uint8_t entry16GetLevel(const void *e) {
-    const __uint128_t *p = e;
-    return (uint8_t)((*p >> 120) & 0x3F);
+    return (uint8_t)((entryLoad128(e) >> 120) & 0x3F);
 }
 DK_STATIC inline bool entry16GetPopulated(const void *e) {
-    const __uint128_t *p = e;
-    return (*p >> 126) & 1;
+    return (entryLoad128(e) >> 126) & 1;
 }
 DK_STATIC inline bool entry16GetHead(const void *e) {
-    const __uint128_t *p = e;
-    return (*p >> 127) & 1;
+    return (entryLoad128(e) >> 127) & 1;
 }
 DK_STATIC inline void entry16SetPrev(void *e, uint64_t v) {
-    __uint128_t *p = e;
-    __uint128_t mask = ((__uint128_t)1 << 60) - 1;
-    *p = (*p & ~mask) | (v & mask);
+    const __uint128_t mask = ((__uint128_t)1 << 60) - 1;
+    entryStore128(e, (entryLoad128(e) & ~mask) | (v & mask));
 }
 DK_STATIC inline void entry16SetNext(void *e, uint64_t v) {
-    __uint128_t *p = e;
-    __uint128_t mask = (((__uint128_t)1 << 60) - 1) << 60;
-    *p = (*p & ~mask) | (((__uint128_t)v & (((__uint128_t)1 << 60) - 1)) << 60);
+    const __uint128_t mask = (((__uint128_t)1 << 60) - 1) << 60;
+    entryStore128(e,
+                  (entryLoad128(e) & ~mask) |
+                      (((__uint128_t)v & (((__uint128_t)1 << 60) - 1)) << 60));
 }
 DK_STATIC inline void entry16SetLevel(void *e, uint8_t v) {
-    __uint128_t *p = e;
-    __uint128_t mask = (__uint128_t)0x3F << 120;
-    *p = (*p & ~mask) | (((__uint128_t)(v & 0x3F)) << 120);
+    const __uint128_t mask = (__uint128_t)0x3F << 120;
+    entryStore128(e, (entryLoad128(e) & ~mask) |
+                         (((__uint128_t)(v & 0x3F)) << 120));
 }
 DK_STATIC inline void entry16SetPopulated(void *e, bool v) {
-    __uint128_t *p = e;
-    __uint128_t mask = (__uint128_t)1 << 126;
-    *p = (*p & ~mask) | (((__uint128_t)(v ? 1 : 0)) << 126);
+    const __uint128_t mask = (__uint128_t)1 << 126;
+    entryStore128(e, (entryLoad128(e) & ~mask) |
+                         (((__uint128_t)(v ? 1 : 0)) << 126));
 }
 DK_STATIC inline void entry16SetHead(void *e, bool v) {
-    __uint128_t *p = e;
-    __uint128_t mask = (__uint128_t)1 << 127;
-    *p = (*p & ~mask) | (((__uint128_t)(v ? 1 : 0)) << 127);
+    const __uint128_t mask = (__uint128_t)1 << 127;
+    entryStore128(e, (entryLoad128(e) & ~mask) |
+                         (((__uint128_t)(v ? 1 : 0)) << 127));
 }
 
 /* ====================================================================
@@ -2119,6 +2144,48 @@ static void testEvictionCallback(size_t ptr, void *userData) {
     if (testEvictCount < 100) {
         testEvictedPtrs[testEvictCount++] = ptr;
     }
+}
+
+/* A fixed mix of inserts, promotions, deletes and evictions; writes the
+ * handle of every RemoveMinimum and then every surviving entry's level to
+ * trace[], returning how many values it wrote.  Identical traces from two
+ * caches mean the entry encoding round-trips at both widths. */
+#define MLRU_WIDTH_TRACE_MAX 8192
+static size_t mlruWidthWorkload_(multilru *mlru, uint64_t *trace) {
+    enum { inserts = 1500 };
+    multilruPtr ptrs[inserts];
+    size_t n = 0;
+    uint64_t seed[2] = {0x9E3779B97F4A7C15ULL, 0xD1B54A32D192ED03ULL};
+
+    for (size_t i = 0; i < inserts; i++) {
+        ptrs[i] = multilruInsert(mlru);
+    }
+
+    for (size_t i = 0; i < 4 * inserts; i++) {
+        multilruIncrease(mlru, ptrs[xoroshiro128plus(seed) % inserts]);
+    }
+
+    for (size_t i = 0; i < inserts; i += 7) {
+        multilruDelete(mlru, ptrs[i]);
+        ptrs[i] = 0;
+    }
+
+    for (size_t i = 0; i < 400 && n < MLRU_WIDTH_TRACE_MAX; i++) {
+        multilruPtr out = 0;
+        if (!multilruRemoveMinimum(mlru, &out)) {
+            break;
+        }
+        trace[n++] = out;
+    }
+
+    for (size_t i = 0; i < inserts && n < MLRU_WIDTH_TRACE_MAX; i++) {
+        if (ptrs[i] && multilruIsPopulated(mlru, ptrs[i])) {
+            trace[n++] =
+                ((uint64_t)ptrs[i] << 8) | multilruGetLevel(mlru, ptrs[i]);
+        }
+    }
+
+    return n;
 }
 
 int multilruTest(int argc, char *argv[]) {
@@ -5059,6 +5126,50 @@ int multilruTest(int argc, char *argv[]) {
         const multilruPtr fresh = multilruInsertWeighted(mlru, 100);
         if (fresh != 0 && !multilruIsPopulated(mlru, fresh)) {
             ERR("Insert returned freed handle %" PRIu64, (uint64_t)fresh);
+        }
+    }
+
+    TEST("every entry width runs the same workload identically") {
+        /* Widths above 5 normally need 64K to 16T entries.  Upgrading a
+         * small cache in place (as growth does) puts every width,
+         * including the 9-byte one whose fields are misaligned, through
+         * the full workload; the width-5 run is the reference trace. */
+        static const uint8_t widths[] = {5, 6, 7, 8, 9, 10, 11, 12, 16};
+        cleanerName(zfree, U64s) uint64_t *reference =
+            zcalloc(MLRU_WIDTH_TRACE_MAX, sizeof(uint64_t));
+        cleanerName(zfree, U64s) uint64_t *trace =
+            zcalloc(MLRU_WIDTH_TRACE_MAX, sizeof(uint64_t));
+        size_t referenceLen = 0;
+
+        for (size_t w = 0; w < sizeof(widths); w++) {
+            cleaner(multilruFree) multilru *mlru =
+                multilruNewWithLevelsCapacity(4, 64);
+            if (!upgradeWidth(mlru, widths[w])) {
+                ERR("upgradeWidth to %u failed", widths[w]);
+                continue;
+            }
+
+            const size_t len = mlruWidthWorkload_(mlru, trace);
+            if (mlru->entryWidth != widths[w]) {
+                ERR("width %u became %u during the workload", widths[w],
+                    mlru->entryWidth);
+            }
+
+            if (!verifyInvariants(mlru, "width workload")) {
+                ERR("invariants failed at width %u", widths[w]);
+            }
+
+            if (w == 0) {
+                memcpy(reference, trace, len * sizeof(*trace));
+                referenceLen = len;
+            } else if (len != referenceLen ||
+                       memcmp(reference, trace, len * sizeof(*trace)) != 0) {
+                ERR("width %u trace differs from width 5", widths[w]);
+            }
+        }
+
+        if (referenceLen < 1000) {
+            ERR("workload trace too short (%zu)", referenceLen);
         }
     }
 
