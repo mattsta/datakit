@@ -136,12 +136,13 @@ typedef struct multidictClass {
 ### Iterator Types
 
 ```c
-/* Slot-level iterator (64 bytes + slot reference) */
+/* Slot-level iterator: 144 bytes, 16-byte aligned (statically asserted) */
 typedef struct multidictSlotIterator {
     uint8_t iterspace[64];   /* Stack-allocated iterator state */
     multidictSlot *slot;
     void *entry;
     uint32_t index;
+    databoxWide wide[3];     /* Wide key, val, extra of the current entry */
 } multidictSlotIterator;
 
 /* Dictionary-level iterator */
@@ -155,32 +156,30 @@ typedef struct multidictIterator {
     bool safe;               /* Safe to modify during iteration? */
 } multidictIterator;
 
-/* Entry returned during iteration.  Each field is a databox with a
- * databoxBig's storage behind it, so a 96/128-bit key or value lives in
- * the entry; 96 bytes, 16-byte aligned (statically asserted). */
+/* Entry returned during iteration: 48 bytes (statically asserted) */
 typedef struct multidictEntry {
-    union {
-        databox key;
-        databoxBig keyBig;
-    };
-    union {
-        databox val;
-        databoxBig valBig;
-    };
-    union {
-        databox extra; /* Optional third field */
-        databoxBig extraBig;
-    };
+    databox key;
+    databox val;
+    databox extra; /* Optional third field */
 } multidictEntry;
 ```
 
-The library sets every field up before it fills the entry, so an entry
-needs no initialization. The fields borrow: BYTES point into the dict
-until it changes, and a 96/128-bit value points into the entry itself
-(`big = 1`, payload in the field's `extra`), so a struct copy of
-`entry.key` is valid only while `entry` is. Keep a value longer with
-`databoxCopy` (owned; release with `databoxFreeData`) or
-`databoxBigCopyFrom` (re-homed into another `databoxBig`).
+The library sets the key and value flags up before it fills the entry,
+so an entry needs no initialization: a 96/128-bit value has `big = 1`,
+every other value `big = 0`, and `allocated = 0` throughout. The fields
+borrow. BYTES point into the dict until it changes. A 96/128-bit value
+points into the iterator's `wide` slots (`wide[0]` for the key,
+`wide[1]` for the value, `wide[2]` for `extra`) and is valid until the
+next `multidictIteratorNext` on that iterator. A struct copy of an
+iterator has its own slots, and a field read from the original still
+points into the original. Keep a value longer with `databoxCopy` (owned;
+release with `databoxFreeData`) or `databoxBigCopyFrom` (re-homed into a
+`databoxBig`).
+
+A slot class's `iterNext` fills entries the same way: it decodes a wide
+field into `iter->wide[i]` (with `flexGetByTypeInto`, or
+`multimapIteratorNextWithSlots` for a multimap-backed slot) and sets up
+the key and value flags.
 
 ### Statistics Types
 
@@ -436,12 +435,13 @@ Keys and values may be 96/128-bit integers. Where such a value lands
 follows the rule in `databox.h`: whoever owns the destination sets up
 its wide capability.
 
-| Destination                                                                                 | Who sets it up | Wide value                                                                  |
-| ------------------------------------------------------------------------------------------- | -------------- | --------------------------------------------------------------------------- |
-| `multidictFind` `valbox`, `multidictGetRandomKey` `keybox`, `multidictGetSomeKeys` `keys[]` | caller         | written to a `DATABOX_BIG_INIT`'d `databoxBig`; type only into a zeroed box |
-| `multidictGetAndDelete`, `multidictPopRandom` outputs                                       | library        | heap copy, prior contents ignored                                           |
-| `multidictEntry` fields                                                                     | library        | in the field's own storage                                                  |
-| scan and eviction callback arguments                                                        | library        | valid for the call                                                          |
+| Destination                                                 | Who sets it up | Wide value                                                                       |
+| ----------------------------------------------------------- | -------------- | -------------------------------------------------------------------------------- |
+| `multidictFind` `valbox`, `multidictGetRandomKey` `keybox`  | caller         | written to a `DATABOX_BIG_INIT`'d `databoxBig`; type only into a zeroed box      |
+| `multidictGetSomeKeys` `keys[]`                             | library        | deferred (type only, `databoxIsWideDeferred`); prior contents ignored            |
+| `multidictGetAndDelete`, `multidictPopRandom` outputs       | library        | heap copy, prior contents ignored                                                |
+| `multidictEntry` fields                                     | library        | in the iterator's `wide` slots, valid until the next `multidictIteratorNext`     |
+| scan and eviction callback arguments                        | library        | in stack slots, valid for the call; `big = 1` exactly for a wide value           |
 
 - A key hashes by value: a 128-bit box holding a value that fits 64 bits
   finds the entry stored under the 64-bit form.
@@ -594,7 +594,7 @@ bool multidictGetRandomKey(multidict *d, databox *keybox);
 uint32_t multidictGetSomeKeys(multidict *d, databox *keys, uint32_t count);
 
 /* Example */
-databox randomKey;
+databox randomKey = {{0}}; /* zeroed: a wide key arrives type-only */
 if (multidictGetRandomKey(d, &randomKey)) {
     printf("Random key: ");
     databoxRepr(&randomKey);
@@ -608,6 +608,10 @@ for (uint32_t i = 0; i < got; i++) {
     consider(&sample[i]);
 }
 ```
+
+`multidictGetSomeKeys` ignores what `keys[]` held: each slot is cleared
+before it is filled, so a 96/128-bit key comes back deferred (type only,
+`data.ptr == NULL`; test with `databoxIsWideDeferred`).
 
 `multidictGetRandomKey` can transiently fail while a rehash is in flight if
 it lands on an empty slot; `multidictPopRandom` already retries internally

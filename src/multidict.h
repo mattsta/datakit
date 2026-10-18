@@ -113,7 +113,10 @@ typedef struct multidictClass {
     size_t (*sizeBytes)(multidictSlot *slot);
     /* END OF CACHE LINE 1 (8 pointers * 8 bytes = 64 bytes) */
 
-    /* Iteration */
+    /* Iteration.  iterNext fills the entry the way multidictEntry
+     * documents: a 96/128-bit field is decoded into iter->wide[0..2]
+     * (key, val, extra), and the key and value flags are set up so the
+     * entry needs no initialization. */
     bool (*getIter)(struct multidictSlotIterator *iter, multidictSlot *slot);
     bool (*iterNext)(struct multidictSlotIterator *iter,
                      struct multidictEntry *entry);
@@ -141,6 +144,12 @@ typedef struct multidictClass {
     /* END OF CACHE LINE 2 (Currently 4 remaining bytes to fill up line) */
 } multidictClass;
 
+/* A slot class's iteration state.  'wide' is the wide storage for the
+ * entry the class fills: a 96/128-bit key, value or extra field is
+ * decoded into wide[0], wide[1] or wide[2] (flexGetByTypeInto with that
+ * slot), so the entry field points into the iterator and stays valid
+ * until the next iterNext.  Narrow values never touch it.
+ * 144 bytes, 16-byte aligned. */
 typedef struct multidictSlotIterator {
     uint8_t iterspace[64]; /* 64 bytes the iterator can use as it needs.
                               Mainly used for mocking a stack-allocated struct
@@ -148,7 +157,12 @@ typedef struct multidictSlotIterator {
     multidictSlot *slot;
     void *entry;
     uint32_t index;
+    databoxWide wide[3]; /* key, val, extra */
 } multidictSlotIterator;
+#if DK_C11
+_Static_assert(sizeof(multidictSlotIterator) == 144,
+               "multidictSlotIterator carries three wide slots at its tail");
+#endif
 
 /* If safe is set to 1 this is a safe iterator, that means, you can call
  * multidictAdd, multidictFind, and other functions against the multidictionary
@@ -166,38 +180,29 @@ typedef struct multidictIterator {
 } multidictIterator;
 
 /* An entry the library fills (multidictIteratorNext, slot iterators).
- * Each field is a databox with the storage of a databoxBig behind it:
- * 'key' and 'keyBig' are the same bytes, and a 96/128-bit key or value
- * lives in its field's 'extra', which data.i128 / data.u128 points at
- * (big = 1).  Any other value has big = 0.  The library sets every field
- * up before each fill, so the entry needs no initialization.
+ * A 96/128-bit key or value has big = 1 and data.i128 / data.u128
+ * pointing at the slot iterator's 'wide' storage; any other value has
+ * big = 0 and allocated = 0.  The library sets the key and value up
+ * before each fill, so the entry needs no initialization.  'extra' is
+ * written only by slot classes that use it.
  *
  * Lifetime: the fields borrow.  BYTES point into the dict until it
- * changes; a 96/128-bit value points into the entry itself, so a copy
- * of 'entry.key' is valid only while 'entry' is.  Keep a value past
- * that with databoxCopy (owned; release with databoxFreeData) or
- * databoxBigCopyFrom (re-homed into another databoxBig).
+ * changes; a 96/128-bit value points into the iterator and is valid
+ * until the next multidictIteratorNext on it.  A struct copy of the
+ * iterator has its own storage, and a field read from the original still
+ * points into the original.  Keep a value longer with databoxCopy
+ * (owned; release with databoxFreeData) or databoxBigCopyFrom (re-homed
+ * into a databoxBig).
  *
- * 3 * databoxBig = 96 bytes, 16-byte aligned. */
+ * 3 * databox = 48 bytes. */
 typedef struct multidictEntry {
-    union {
-        databox key;
-        databoxBig keyBig;
-    };
-    union {
-        databox val;
-        databoxBig valBig;
-    };
-    union {
-        databox extra; /* sometimes we need a third field */
-        databoxBig extraBig;
-    };
+    databox key;
+    databox val;
+    databox extra; /* sometimes we need a third field */
 } multidictEntry;
 #if DK_C11
-_Static_assert(sizeof(multidictEntry) == 96,
-               "multidictEntry is three databoxBig fields");
-_Static_assert(_Alignof(multidictEntry) == 16,
-               "multidictEntry wide storage must be 16-byte aligned");
+_Static_assert(sizeof(multidictEntry) == 48,
+               "multidictEntry is three databox fields");
 #endif
 
 typedef multidictIterProcess multidictScanFunction;
@@ -226,18 +231,22 @@ bool multidictIsRehashing_(const multidict *d);  /* Is rehash in progress? */
  * owner sets the wide capability"):
  *
  *   - Caller boxes (multidictFind's valbox, multidictGetRandomKey's
- *     keybox, multidictGetSomeKeys' keys) are filled in place, as
- *     flexGetByType fills them: pass a DATABOX_BIG_INIT'd databoxBig,
- *     re-initialized before each call, to receive a wide value; a zeroed
- *     box receives the type only.  BYTES results borrow from the dict
- *     until it changes.
+ *     keybox) are filled in place, as flexGetByType fills them: pass a
+ *     DATABOX_BIG_INIT'd databoxBig, re-initialized before each call, to
+ *     receive a wide value; a zeroed box receives the type only.  BYTES
+ *     results borrow from the dict until it changes.
+ *   - multidictGetSomeKeys ignores the prior contents of 'keys': each
+ *     slot is cleared before it is filled, so a 96/128-bit key comes back
+ *     deferred (type only, data.ptr == NULL; databoxIsWideDeferred).
+ *     Read it again with multidictGetRandomKey or iteration if needed.
  *   - Removing reads (multidictGetAndDelete, multidictPopRandom) never
  *     read their destination boxes and return self-contained values:
  *     BYTES and 96/128-bit values are heap copies.  Release each one with
  *     databoxFreeData.
- *   - multidictEntry fields, and the boxes passed to scan callbacks and
- *     eviction callbacks, carry their own wide storage and are valid for
- *     the duration of the call (callbacks) or until the entry is reused.
+ *   - multidictEntry fields carry their wide values in the iterator (see
+ *     multidictEntry).  The boxes passed to scan callbacks and eviction
+ *     callbacks carry their own wide storage and are valid for the
+ *     duration of the call; in both, big = 1 exactly for a wide value.
  *   - multidictIncrBy and multidictIncrByFloat treat a 96/128-bit value as
  *     non-numeric and fail with MULTIDICT_ERR. */
 

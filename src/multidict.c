@@ -159,38 +159,69 @@ struct multidict {
 /* ====================================================================
  * 96/128-bit keys and values
  * ====================================================================
- * Slot classes fill boxes in place, the way flexGetByType does, so a
- * 96/128-bit key or value lands only in storage set up for it.  Every
- * box the dict fills for itself (temporaries, multidictEntry fields) is a
- * databoxBig: mdBoxArm_ sets up its wide capability and clears the rest
- * of the header, and mdBoxSettle_ clears 'big' again when the result is
- * narrow, so the box never claims a payload it does not have. */
+ * Every box the dict fills for itself is a plain databox with a
+ * databoxWide beside it, so a 96/128-bit key or value lands only in
+ * storage set up for it:
+ *   - iteration decodes straight into the slots (the slot iterator's
+ *     'wide', or a stack pair) through multimapIteratorNextWithSlots;
+ *   - a slot class or multidict read that fills a box in place (lastKey,
+ *     findValueByKey, findKeyByPosition, multidictFind) gets a box aimed
+ *     at a stack slot with mdBoxAim_ first.
+ * Narrow values never touch the slot. */
 DK_INLINE_ALWAYS bool mdBoxIsWide_(const databox *box) {
     return box->type == DATABOX_SIGNED_128 || box->type == DATABOX_UNSIGNED_128;
 }
 
-DK_INLINE_ALWAYS void mdBoxArm_(databoxBig *box) {
-    memset(box, 0, sizeof(databox));
-    DATABOX_BIG_INIT(box);
+/* Point 'box' at 'slot' for an in-place decode: the header is cleared and
+ * big = 1, so a 96/128-bit value is written into 'slot'.  A narrow value
+ * overwrites the pointer and leaves big = 1, which nothing reads on a
+ * narrow value; mdBoxSettle_ clears it where a box is handed to user
+ * code.  Re-aim before each decode. */
+DK_INLINE_ALWAYS void mdBoxAim_(databox *box, databoxWide *slot) {
+    memset(box, 0, sizeof(*box));
+    box->big = true;
+    box->data.u128 = (__uint128_t *)slot->b;
 }
 
-DK_INLINE_ALWAYS void mdBoxSettle_(databoxBig *box) {
-    box->big = mdBoxIsWide_((const databox *)box);
+DK_INLINE_ALWAYS void mdBoxSettle_(databox *box) {
+    box->big = mdBoxIsWide_(box);
+}
+
+/* Clear the type, flags and length of a box a decode fills through a
+ * slot, so its flags come out as big = (wide), allocated = 0.  One store;
+ * the decode writes the rest. */
+DK_INLINE_ALWAYS void mdBoxHeaderClear_(databox *box) {
+    memset((uint8_t *)box + sizeof(databoxUnion), 0,
+           sizeof(*box) - sizeof(databoxUnion));
 }
 
 /* Deliver a decoded value into a caller box the way flexGetByType fills
  * one: type, data and len are written and the flags are left as they
  * were; a 96/128-bit value is written through dst's payload pointer when
  * dst->big is set, and otherwise dst receives the type only. */
-DK_INLINE_ALWAYS void mdBoxDeliver_(databox *dst, const databoxBig *src) {
+DK_INLINE_ALWAYS void mdBoxDeliver_(databox *dst, const databox *src) {
     dst->type = src->type;
     dst->len = src->len;
-    if (!mdBoxIsWide_((const databox *)src)) {
+    if (!mdBoxIsWide_(src)) {
         dst->data = src->data;
     } else if (dst->big) {
-        memcpy(dst->data.u128, src->extra, sizeof(src->extra));
+        memcpy(dst->data.u128, src->data.u128, sizeof(*src->data.u128));
     } else {
         dst->data.ptr = NULL;
+    }
+}
+
+/* Copy 'src' into 'dst', moving a 96/128-bit payload into 'slot' so the
+ * copy outlives the storage 'src' borrowed it from.  BYTES keep
+ * borrowing from the dict. */
+DK_INLINE_ALWAYS void mdBoxRehome_(databox *dst, const databox *src,
+                                   databoxWide *slot) {
+    *dst = *src;
+    if (mdBoxIsWide_(src) && src->data.ptr) {
+        memcpy(slot->b, src->data.ptr, sizeof(slot->b));
+        dst->data.u128 = (__uint128_t *)slot->b;
+        dst->big = true;
+        dst->allocated = false;
     }
 }
 
@@ -258,7 +289,8 @@ DK_INLINE_ALWAYS uint32_t multidictHashOfKey_(multidict *d,
 static void multidictLRUOnInsert(multidict *d, const databox *keybox);
 static void multidictLRUOnAccess(multidict *d, const databox *keybox);
 static void multidictLRUOnDelete(multidict *d, const databox *keybox);
-static bool multidictLRUSelectVictim(multidict *d, databoxBig *keybox);
+static bool multidictLRUSelectVictim(multidict *d, databox *keybox,
+                                     databoxWide *slot);
 
 /* ====================================================================
  * Hash Functions
@@ -869,32 +901,31 @@ bool multidictRehash(multidict *d, int32_t n) {
          * HT 1.  Repeat until 'current' has no remaining elements.
          * This should be efficient since, on a well behaved multidict class,
          * 'current' will fit entirely into L1 cache. */
-        databoxBig keybox;
+        databox keybox;
+        databoxWide keyWide;
         bool freeCurrentContainer = true;
 
         /* We check 'current' in the while condition because if we move
          * the entire slot, we need to abort the while loop with no cleanup. */
         while (current) {
-            mdBoxArm_(&keybox);
-            if (!shared->lastKey(current, (databox *)&keybox)) {
+            mdBoxAim_(&keybox, &keyWide);
+            if (!shared->lastKey(current, &keybox)) {
                 break;
             }
-            mdBoxSettle_(&keybox);
 
             /* Get target multimap for new hash slot; created on-demand below */
-            multidictSlot **target = SLOT_BY_HASH_PTR_PTR(
-                d, 1, multidictHashOfKey_(d, (const databox *)&keybox));
+            multidictSlot **target =
+                SLOT_BY_HASH_PTR_PTR(d, 1, multidictHashOfKey_(d, &keybox));
 
             /* All slots should be previously allocated. Target must exist. */
             assert(target);
 
             /* Get key and value sizes for byte tracking transfer.  The
              * value is only measured, so its type is enough. */
-            const size_t keySize = mdBoxSize_((const databox *)&keybox);
+            const size_t keySize = mdBoxSize_(&keybox);
             size_t valSize = 0;
             databox valbox = {{0}};
-            if (shared->findValueByKey(shared, current,
-                                       (const databox *)&keybox, &valbox)) {
+            if (shared->findValueByKey(shared, current, &keybox, &valbox)) {
                 valSize = mdBoxSize_(&valbox);
             }
 
@@ -1252,15 +1283,15 @@ bool multidictGetAndDelete(multidict *d, const databox *keybox,
     }
 
     /* First, find the value */
-    databoxBig found;
-    mdBoxArm_(&found);
-    if (!multidictFind(d, keybox, (databox *)&found)) {
+    databox found;
+    databoxWide foundWide;
+    mdBoxAim_(&found, &foundWide);
+    if (!multidictFind(d, keybox, &found)) {
         return false; /* Key doesn't exist */
     }
-    mdBoxSettle_(&found);
 
     /* The stored value goes away with the delete: hand back an owned copy */
-    *valbox = databoxCopy((const databox *)&found);
+    *valbox = databoxCopy(&found);
 
     /* Now delete it - this should succeed since we just found it */
     bool deleted = multidictDelete(d, keybox);
@@ -1289,25 +1320,25 @@ bool multidictPopRandom(multidict *d, databox *keybox, databox *valbox) {
     const int maxRetries = 10;
     for (int retry = 0; retry < maxRetries; retry++) {
         /* Get a random key */
-        databoxBig key;
-        mdBoxArm_(&key);
-        if (!multidictGetRandomKey(d, (databox *)&key)) {
+        databox key;
+        databoxWide keyWide;
+        mdBoxAim_(&key, &keyWide);
+        if (!multidictGetRandomKey(d, &key)) {
             continue; /* Retry - might have landed on empty slot */
         }
-        mdBoxSettle_(&key);
 
         /* Get the value for this key */
-        databoxBig val;
-        mdBoxArm_(&val);
-        if (!multidictFind(d, (const databox *)&key, (databox *)&val)) {
+        databox val;
+        databoxWide valWide;
+        mdBoxAim_(&val, &valWide);
+        if (!multidictFind(d, &key, &val)) {
             continue; /* Key might have moved during rehash - retry */
         }
-        mdBoxSettle_(&val);
 
         /* The entry goes away with the delete: hand back owned copies, and
          * delete by the copied key, which no longer points into the slot */
-        *keybox = databoxCopy((const databox *)&key);
-        *valbox = databoxCopy((const databox *)&val);
+        *keybox = databoxCopy(&key);
+        *valbox = databoxCopy(&val);
 
         /* Delete the entry */
         if (multidictDelete(d, keybox)) {
@@ -1850,7 +1881,8 @@ uint32_t multidictEvictToLimit(multidict *d) {
     uint32_t deleteFailures = 0;
     uint32_t lruVictims = 0, randomVictims = 0;
     const uint32_t maxAttempts = multidictCount(d) * 2 + 100; /* Safety limit */
-    databoxBig keybox;
+    databox keybox;
+    databoxWide keyWide;
 
     /* Use user bytes (key + val) for limit comparison, not total overhead */
     while (multidictUserBytes(d) > d->maxMemory && multidictCount(d) > 0 &&
@@ -1862,7 +1894,7 @@ uint32_t multidictEvictToLimit(multidict *d) {
         /* Select victim based on eviction policy */
         if (d->evictPolicy == MULTIDICT_EVICT_LRU && d->lruEnabled) {
             /* LRU eviction: select coldest entry */
-            gotVictim = multidictLRUSelectVictim(d, &keybox);
+            gotVictim = multidictLRUSelectVictim(d, &keybox, &keyWide);
             if (gotVictim) {
                 lruVictims++;
             }
@@ -1870,8 +1902,8 @@ uint32_t multidictEvictToLimit(multidict *d) {
 
         if (!gotVictim) {
             /* Fallback to random eviction */
-            mdBoxArm_(&keybox);
-            if (!multidictGetRandomKey(d, (databox *)&keybox)) {
+            mdBoxAim_(&keybox, &keyWide);
+            if (!multidictGetRandomKey(d, &keybox)) {
                 break; /* No keys left or error */
             }
             mdBoxSettle_(&keybox);
@@ -1881,14 +1913,12 @@ uint32_t multidictEvictToLimit(multidict *d) {
 
         /* Call eviction callback if set */
         if (d->evictionCb) {
-            databoxBig valbox;
-            mdBoxArm_(&valbox);
-            if (multidictFind(d, (const databox *)&keybox,
-                              (databox *)&valbox)) {
+            databox valbox;
+            databoxWide valWide;
+            mdBoxAim_(&valbox, &valWide);
+            if (multidictFind(d, &keybox, &valbox)) {
                 mdBoxSettle_(&valbox);
-                if (!d->evictionCb(d->evictionPrivdata,
-                                   (const databox *)&keybox,
-                                   (const databox *)&valbox)) {
+                if (!d->evictionCb(d->evictionPrivdata, &keybox, &valbox)) {
                     /* Callback vetoed this eviction, try another key */
                     continue;
                 }
@@ -1898,7 +1928,7 @@ uint32_t multidictEvictToLimit(multidict *d) {
         /* Delete the entry (LRU tracking already handled by
          * multidictLRUSelectVictim or will be handled by multidictDelete for
          * random eviction) */
-        if (multidictDelete(d, (const databox *)&keybox)) {
+        if (multidictDelete(d, &keybox)) {
             evicted++;
         } else {
             deleteFailures++;
@@ -2164,10 +2194,11 @@ static void multidictLRUOnDelete(multidict *d, const databox *keybox) {
 }
 
 /* Internal: Find first key in slot matching hash (for LRU eviction).  The
- * key is re-homed into 'keybox', since a 96/128-bit key in 'entry' would
- * not outlive this call. */
+ * key is copied into 'keybox' with a 96/128-bit payload moved to 'wide',
+ * since the slot iterator holding it does not outlive this call. */
 static bool findKeyByHashInSlot(multidict *d, multidictSlot *slot,
-                                uint32_t targetHash, databoxBig *keybox) {
+                                uint32_t targetHash, databox *keybox,
+                                databoxWide *wide) {
     if (!slot) {
         return false;
     }
@@ -2182,7 +2213,7 @@ static bool findKeyByHashInSlot(multidict *d, multidictSlot *slot,
     while (d->shared->iterNext(&iter, &entry)) {
         uint32_t h = multidictKeyHash(d, &entry.key);
         if (h == targetHash) {
-            databoxBigCopyFrom(keybox, &entry.key);
+            mdBoxRehome_(keybox, &entry.key, wide);
             return true;
         }
     }
@@ -2190,7 +2221,8 @@ static bool findKeyByHashInSlot(multidict *d, multidictSlot *slot,
 }
 
 /* Internal: Select victim using LRU policy (called from eviction) */
-static bool multidictLRUSelectVictim(multidict *d, databoxBig *keybox) {
+static bool multidictLRUSelectVictim(multidict *d, databox *keybox,
+                                     databoxWide *slot) {
     if (!d->lruEnabled || !d->lru) {
         return false;
     }
@@ -2214,17 +2246,17 @@ static bool multidictLRUSelectVictim(multidict *d, databoxBig *keybox) {
 
     /* Find key by hash in the appropriate slot */
     uint32_t slotIdx = hash & HTMASK(d, 0);
-    if (findKeyByHashInSlot(d, SLOT(d, 0, slotIdx), hash, keybox)) {
+    if (findKeyByHashInSlot(d, SLOT(d, 0, slotIdx), hash, keybox, slot)) {
         /* Also remove from keyToPtr */
-        multidictDelete(d->lruKeyToPtr, (const databox *)keybox);
+        multidictDelete(d->lruKeyToPtr, keybox);
         return true;
     }
 
     /* During rehashing, also check ht[1] */
     if (multidictIsRehashing(d)) {
         slotIdx = hash & HTMASK(d, 1);
-        if (findKeyByHashInSlot(d, SLOT(d, 1, slotIdx), hash, keybox)) {
-            multidictDelete(d->lruKeyToPtr, (const databox *)keybox);
+        if (findKeyByHashInSlot(d, SLOT(d, 1, slotIdx), hash, keybox, slot)) {
+            multidictDelete(d->lruKeyToPtr, keybox);
             return true;
         }
     }
@@ -2486,6 +2518,9 @@ uint32_t multidictGetSomeKeys(multidict *d, databox *keys, uint32_t count) {
                 uint32_t slotCount = shared->countSlot(slot);
                 for (uint32_t pos = 0; pos < slotCount && stored < count;
                      pos++) {
+                    /* Ignore what the slot held: a 96/128-bit key comes
+                     * back deferred (type only) */
+                    memset(&keys[stored], 0, sizeof(keys[stored]));
                     if (shared->findKeyByPosition(shared, slot, pos,
                                                   &keys[stored])) {
                         stored++;
@@ -2931,16 +2966,13 @@ DK_STATIC bool mmSlotIterNext(multidictSlotIterator *iter,
         return false;
     }
 
-    /* The entry is library-filled: set up every field's wide storage
-     * first, so the entry's prior contents are never read */
-    mdBoxArm_(&entry->keyBig);
-    mdBoxArm_(&entry->valBig);
-    memset(&entry->extraBig, 0, sizeof(entry->extraBig));
+    /* The entry is library-filled: clear the key and value flags, then
+     * decode a wide key or value into the iterator's own slots */
+    mdBoxHeaderClear_(&entry->key);
+    mdBoxHeaderClear_(&entry->val);
     databox *elements[2] = {&entry->key, &entry->val};
 
-    if (multimapIteratorNext(&state->mmIter, elements)) {
-        mdBoxSettle_(&entry->keyBig);
-        mdBoxSettle_(&entry->valBig);
+    if (multimapIteratorNextWithSlots(&state->mmIter, elements, iter->wide)) {
         iter->index++;
         return true;
     }
@@ -2972,22 +3004,16 @@ DK_STATIC bool mmSlotFindKeyByPos(multidictClass *qdc, multidictSlot *slot,
      * the caller's box: decoding every key into it would let a narrow
      * key overwrite the payload pointer a later wide key is written
      * through. */
-    databoxBig key;
-    databoxBig val;
-    databox *elements[2] = {(databox *)&key, (databox *)&val};
-    uint32_t idx = 0;
-    for (;;) {
-        mdBoxArm_(&key);
-        mdBoxArm_(&val);
-        if (!multimapIteratorNext(&mmIter, elements)) {
-            break;
-        }
-
+    databox key;
+    databox val;
+    databoxWide wide[2];
+    databox *elements[2] = {&key, &val};
+    for (uint32_t idx = 0;
+         multimapIteratorNextWithSlots(&mmIter, elements, wide); idx++) {
         if (idx == pos) {
             mdBoxDeliver_(keybox, &key);
             return true;
         }
-        idx++;
     }
     return false;
 }
@@ -3003,18 +3029,18 @@ DK_STATIC void mmSlotIterateAll(multidictClass *qdc, multidictSlot *slot,
     multimapIterator mmIter;
     multimapIteratorInit(wrapper->m, &mmIter, true);
 
-    databoxBig key, val;
-    databox *elements[2] = {(databox *)&key, (databox *)&val};
+    /* The callback sees big = 1 exactly for a wide value */
+    databox key, val;
+    databoxWide wide[2];
+    databox *elements[2] = {&key, &val};
     for (;;) {
-        mdBoxArm_(&key);
-        mdBoxArm_(&val);
-        if (!multimapIteratorNext(&mmIter, elements)) {
+        mdBoxHeaderClear_(&key);
+        mdBoxHeaderClear_(&val);
+        if (!multimapIteratorNextWithSlots(&mmIter, elements, wide)) {
             break;
         }
 
-        mdBoxSettle_(&key);
-        mdBoxSettle_(&val);
-        process(privdata, (const databox *)&key, (const databox *)&val);
+        process(privdata, &key, &val);
     }
 }
 
@@ -3026,9 +3052,9 @@ DK_STATIC bool mmSlotLastKey(multidictSlot *slot, databox *keybox) {
     mmSlotWrapper *wrapper = (mmSlotWrapper *)slot;
     /* multimapLast populates all elements: elements[0]=key, elements[1]=value
      */
-    databoxBig lastVal;
-    mdBoxArm_(&lastVal);
-    databox *elements[2] = {keybox, (databox *)&lastVal};
+    /* The value is discarded, so its type is enough */
+    databox lastVal = {{0}};
+    databox *elements[2] = {keybox, &lastVal};
     return multimapLast(wrapper->m, elements);
 }
 
@@ -3037,23 +3063,21 @@ DK_STATIC bool mmSlotMigrateLast(void *dst, void *src) {
     mmSlotWrapper *dstWrapper = (mmSlotWrapper *)dst;
 
     /* Get last key-value from source */
-    databoxBig key, val;
-    mdBoxArm_(&key);
-    mdBoxArm_(&val);
-    databox *elements[2] = {(databox *)&key, (databox *)&val};
+    databox key, val;
+    databoxWide keyWide, valWide;
+    mdBoxAim_(&key, &keyWide);
+    mdBoxAim_(&val, &valWide);
+    databox *elements[2] = {&key, &val};
     if (!multimapLast(srcWrapper->m, elements)) {
         return false;
     }
-    mdBoxSettle_(&key);
-    mdBoxSettle_(&val);
 
     /* Insert into destination */
-    const databox *insertElements[2] = {(const databox *)&key,
-                                        (const databox *)&val};
+    const databox *insertElements[2] = {&key, &val};
     multimapInsert(&dstWrapper->m, insertElements);
 
     /* Delete from source */
-    multimapDelete(&srcWrapper->m, (const databox *)&key);
+    multimapDelete(&srcWrapper->m, &key);
     return true;
 }
 
@@ -3110,6 +3134,7 @@ void multidictDefaultClassFree(multidictClass *qdc) {
  * Comprehensive Test Function
  * ==================================================================== */
 #ifdef DATAKIT_TEST
+#include "persist.h" /* snapshot round trips of wide pairs */
 
 /* Scope-exit cleaners (see cleaner.h idioms).  A dict must be destroyed
  * before the class it borrows, so a class cleaner is always declared
@@ -3335,11 +3360,35 @@ static mdWideVal mdWideInt_(size_t i) {
     return v;
 }
 
+/* Which values a run uses: only 64-bit and BYTES (normal), only
+ * 96/128-bit integers (extended), or all of them (mixed) */
+typedef enum mdWideMode {
+    MD_WIDE_MIXED = 0,
+    MD_WIDE_NORMAL,
+    MD_WIDE_EXTENDED,
+} mdWideMode;
+
 /* Pair 'i': keys rotate wide / 64-bit / BYTES, values rotate wide /
- * 64-bit / BYTES on a different period, so every combination occurs */
-static void mdWideFill_(mdWidePair *p, size_t n) {
+ * 64-bit / BYTES on a different period, so every combination occurs.
+ * Normal mode replaces every wide value with a 64-bit one; extended mode
+ * makes every key and value wide. */
+static void mdWideFill_(mdWidePair *p, size_t n, mdWideMode mode) {
     for (size_t i = 0; i < n; i++) {
         memset(&p[i], 0, sizeof(p[i]));
+        if (mode == MD_WIDE_EXTENDED) {
+            p[i].key = mdWideInt_(i);
+            p[i].val = mdWideInt_(1000 + i);
+            p[i].live = true;
+            continue;
+        }
+
+        if (mode == MD_WIDE_NORMAL && i % 3 == 0) {
+            p[i].key.bits = (__uint128_t)(i * 0x9E3779B97F4A7C15ULL >> 1);
+            p[i].val.bits = i * 13 + 1;
+            p[i].live = true;
+            continue;
+        }
+
         switch (i % 3) {
         case 0:
             p[i].key = mdWideInt_(i / 3);
@@ -3357,7 +3406,11 @@ static void mdWideFill_(mdWidePair *p, size_t n) {
         switch (i % 4) {
         case 0:
         case 1:
-            p[i].val = mdWideInt_(1000 + i);
+            if (mode == MD_WIDE_NORMAL) {
+                p[i].val.bits = i * 7 + 3;
+            } else {
+                p[i].val = mdWideInt_(1000 + i);
+            }
             break;
         case 2:
             p[i].val.bits = i * 7;
@@ -3466,36 +3519,80 @@ static int mdWideVerify_(multidict *d, const mdWidePair *p, size_t n) {
         err++;
     }
 
-    /* Iterate into an entry poisoned before every call */
+    /* Iterate (unsafe, then safe) into an entry poisoned before every
+     * call: wide fields point into the iterator's own slots */
     cleanerName(zfree, SeenBytes) uint8_t *seen = zcalloc(1, n + 1);
-    multidictIterator iter;
-    multidictIteratorInit(d, &iter);
-    multidictEntry entry;
-    size_t visited = 0;
-    for (;;) {
-        memset(&entry, 0xFF, sizeof(entry));
-        mdTestPoisonStack_();
-        if (!multidictIteratorNext(&iter, &entry)) {
-            break;
+    for (int safe = 0; safe < 2; safe++) {
+        memset(seen, 0, n + 1);
+        multidictIterator iter;
+        if (safe) {
+            multidictIteratorGetSafe(d, &iter);
+        } else {
+            multidictIteratorInit(d, &iter);
         }
+        const uint8_t *slotsLo = (const uint8_t *)iter.iter.wide;
+        const uint8_t *slotsHi = slotsLo + sizeof(iter.iter.wide);
+        multidictEntry entry;
+        size_t visited = 0;
+        for (;;) {
+            memset(&entry, 0xFF, sizeof(entry));
+            mdTestPoisonStack_();
+            if (!multidictIteratorNext(&iter, &entry)) {
+                break;
+            }
 
-        visited++;
-        const size_t at = mdWideFind_(p, n, &entry.key);
-        if (at == SIZE_MAX || seen[at] ||
-            !mdWideMatches_(&entry.val, &p[at].val) ||
-            entry.key.big != mdWideIsWide_(&p[at].key) ||
-            entry.val.big != mdWideIsWide_(&p[at].val) || entry.key.allocated ||
-            entry.val.allocated) {
-            printf("ERROR: wide iteration entry %zu wrong\n", visited);
-            err++;
-            break;
+            visited++;
+            const size_t at = mdWideFind_(p, n, &entry.key);
+            bool ok = at != SIZE_MAX && !seen[at] &&
+                      mdWideMatches_(&entry.val, &p[at].val) &&
+                      entry.key.big == mdWideIsWide_(&p[at].key) &&
+                      entry.val.big == mdWideIsWide_(&p[at].val) &&
+                      !entry.key.allocated && !entry.val.allocated;
+            const databox *fields[2] = {&entry.key, &entry.val};
+            for (size_t f = 0; ok && f < 2; f++) {
+                const uint8_t *at8 = (const uint8_t *)fields[f]->data.ptr;
+                if (fields[f]->big && (at8 < slotsLo || at8 >= slotsHi)) {
+                    ok = false;
+                }
+            }
+
+            if (!ok) {
+                printf("ERROR: wide %s iteration entry %zu wrong\n",
+                       safe ? "safe" : "unsafe", visited);
+                err++;
+                break;
+            }
+            seen[at] = 1;
         }
-        seen[at] = 1;
+        multidictIteratorRelease(&iter);
+        if (visited != live) {
+            printf("ERROR: wide %s iteration visited %zu of %zu\n",
+                   safe ? "safe" : "unsafe", visited, live);
+            err++;
+        }
     }
-    multidictIteratorRelease(&iter);
-    if (visited != live) {
-        printf("ERROR: wide iteration visited %zu of %zu\n", visited, live);
-        err++;
+
+    /* GetSomeKeys ignores poisoned destinations: a wide key comes back
+     * deferred, any other key whole with clean flags */
+    if (live > 0) {
+        databox some[16];
+        memset(some, 0xFF, sizeof(some));
+        mdTestPoisonStack_();
+        const uint32_t got = multidictGetSomeKeys(d, some, 16);
+        if (got == 0) {
+            printf("ERROR: GetSomeKeys returned nothing\n");
+            err++;
+        }
+        for (uint32_t i = 0; i < got; i++) {
+            const bool wide = some[i].type == DATABOX_SIGNED_128 ||
+                              some[i].type == DATABOX_UNSIGNED_128;
+            if (wide ? !databoxIsWideDeferred(&some[i])
+                     : (some[i].big || some[i].allocated ||
+                        mdWideFind_(p, n, &some[i]) == SIZE_MAX)) {
+                printf("ERROR: GetSomeKeys slot %u wrong\n", i);
+                err++;
+            }
+        }
     }
 
     /* Scan to completion; duplicates are allowed, misses are not */
@@ -3519,11 +3616,11 @@ static int mdWideVerify_(multidict *d, const mdWidePair *p, size_t n) {
     return err;
 }
 
-static int multidictTestWide_(void) {
+static int multidictTestWide_(mdWideMode mode) {
     int err = 0;
     const size_t n = 600;
     cleanerName(zfree, WidePairs) mdWidePair *p = zcalloc(n, sizeof(*p));
-    mdWideFill_(p, n);
+    mdWideFill_(p, n, mode);
 
     cleaner(multidictMmClassFree) multidictClass *qdc = multidictMmClassNew();
     cleaner(multidictFree) multidict *d =
@@ -3568,7 +3665,7 @@ static int multidictTestWide_(void) {
     }
 
     /* A zeroed caller box receives a wide value's type only */
-    {
+    if (mode != MD_WIDE_NORMAL) {
         databoxBig key;
         mdWideBox_(&key, &p[0].key);
         databox val = {{0}};
@@ -3591,10 +3688,23 @@ static int multidictTestWide_(void) {
         }
     }
 
-    /* Copy and Merge carry wide pairs */
+    /* Copy, Merge and a persist snapshot round trip carry wide pairs */
     {
         cleaner(multidictFree) multidict *copy = multidictCopy(d);
         err += mdWideVerify_(copy, p, n);
+
+        size_t snapLen = 0;
+        cleanerName(zfree, SeenBytes) uint8_t *snap =
+            persistOpsMultidict.snapshot(d, &snapLen);
+        multidict *restored =
+            snap ? persistOpsMultidict.restore(snap, snapLen) : NULL;
+        if (!restored) {
+            printf("ERROR: persist snapshot round trip failed\n");
+            err++;
+        } else {
+            err += mdWideVerify_(restored, p, n);
+            persistOpsMultidict.free(restored);
+        }
 
         cleaner(multidictFree) multidict *merged =
             multidictNew(&multidictTypeExactKey, qdc, 0);
@@ -3686,6 +3796,14 @@ static int multidictTestWide_(void) {
             multidictAdd(e, (databox *)&key, (databox *)&val);
         }
 
+        /* multidictEvictToLimit holds the victim's borrowed BYTES key
+         * across rehash steps, and a step can free it (a separate defect),
+         * so the table is kept stable here: this checks only what the
+         * callback receives */
+        while (multidictRehash(e, 100)) {
+        }
+        multidictResizeDisable(e);
+
         mdWideEvictPairs_ = p;
         mdWideEvictCount_ = n;
         mdWideEvictSeen_ = 0;
@@ -3712,9 +3830,64 @@ static int multidictTestWide_(void) {
                         mdWideMatches_((databox *)&val, &p[i].val);
         }
         multidictSetMaxMemory(e, 0);
+        multidictResizeEnable(e);
         err += mdWideVerify_(e, p, n);
     }
 
+    return err;
+}
+
+/* A slot class decodes wide fields into the slot iterator it is given,
+ * and a struct copy of a slot iterator decodes into its own slots */
+static int multidictTestSlotIteratorWide_(void) {
+    int err = 0;
+    cleaner(multidictMmClassFree) multidictClass *qdc = multidictMmClassNew();
+    multidictSlot *slot = qdc->createSlot();
+
+    const __uint128_t k1 = ((__uint128_t)1 << 100) + 1;
+    const __uint128_t k2 = ((__uint128_t)1 << 100) + 2;
+    const __int128_t v1 = -((__int128_t)1 << 90);
+    const __int128_t v2 = -((__int128_t)1 << 91);
+    databoxBig key;
+    databoxBig val;
+    memset(&key, 0, sizeof(key));
+    memset(&val, 0, sizeof(val));
+    DATABOX_BIG_UNSIGNED_128(&key, k1);
+    DATABOX_BIG_SIGNED_128(&val, v1);
+    qdc->insertByType(qdc, slot, (databox *)&key, (databox *)&val);
+    DATABOX_BIG_UNSIGNED_128(&key, k2);
+    DATABOX_BIG_SIGNED_128(&val, v2);
+    qdc->insertByType(qdc, slot, (databox *)&key, (databox *)&val);
+
+    multidictSlotIterator iter;
+    multidictEntry first;
+    memset(&iter, 0xFF, sizeof(iter));
+    memset(&first, 0xFF, sizeof(first));
+    if (!qdc->getIter(&iter, slot) || !qdc->iterNext(&iter, &first)) {
+        printf("ERROR: slot iterator produced nothing\n");
+        err++;
+    } else {
+        multidictSlotIterator copy = iter;
+        multidictEntry second;
+        memset(&second, 0xFF, sizeof(second));
+        const bool more = qdc->iterNext(&copy, &second);
+
+        if (first.key.data.u128 != (__uint128_t *)iter.wide[0].b ||
+            first.val.data.i128 != (__int128_t *)iter.wide[1].b ||
+            !first.key.big || first.key.allocated ||
+            *first.key.data.u128 != k1 || *first.val.data.i128 != v1) {
+            printf("ERROR: slot iterator entry does not use its slots\n");
+            err++;
+        }
+
+        if (!more || second.key.data.u128 != (__uint128_t *)copy.wide[0].b ||
+            *second.key.data.u128 != k2 || *second.val.data.i128 != v2) {
+            printf("ERROR: copied slot iterator did not use its own slots\n");
+            err++;
+        }
+    }
+
+    qdc->freeSlot(qdc, slot);
     return err;
 }
 
@@ -7239,8 +7412,11 @@ int multidictTest(int argc, char *argv[]) {
         }
     }
 
-    printf("\n--- 96/128-bit keys and values ---\n");
-    err += multidictTestWide_();
+    printf("\n--- 96/128-bit keys and values: normal / extended / mixed ---\n");
+    err += multidictTestWide_(MD_WIDE_NORMAL);
+    err += multidictTestWide_(MD_WIDE_EXTENDED);
+    err += multidictTestWide_(MD_WIDE_MIXED);
+    err += multidictTestSlotIteratorWide_();
 
     /* ================================================================
      * Cleanup
