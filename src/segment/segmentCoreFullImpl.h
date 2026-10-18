@@ -373,8 +373,9 @@ SEGMENT_NAME(SEGMENT_SUFFIX,
                           : seg->operation == SEGMENT_OP_MAX ? "MAX"
                                                              : "SUM");
 
-    printf("SegmentFull [op=%s, count=%lu, capacity=%lu, bytes=%zu]\n", opName,
-           (unsigned long)seg->count, (unsigned long)seg->capacity,
+    printf("SegmentFull [op=%s, count=%" PRIu64 ", capacity=%" PRIu64
+           ", bytes=%zu]\n",
+           opName, (uint64_t)seg->count, (uint64_t)seg->capacity,
            SEGMENT_NAME(SEGMENT_SUFFIX, FullBytes)(seg));
 }
 #endif

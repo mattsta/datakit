@@ -395,8 +395,8 @@ FENWICK_NAME(FENWICK_SUFFIX,
         return;
     }
 
-    printf("FenwickFull [count=%lu, capacity=%lu, bytes=%zu]\n",
-           (unsigned long)fw->count, (unsigned long)fw->capacity,
+    printf("FenwickFull [count=%" PRIu64 ", capacity=%" PRIu64 ", bytes=%zu]\n",
+           (uint64_t)fw->count, (uint64_t)fw->capacity,
            FENWICK_NAME(FENWICK_SUFFIX, FullBytes)(fw));
 }
 #endif
