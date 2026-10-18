@@ -528,7 +528,9 @@ caller's box under the usual rule: arm a `databoxBig` to receive a wide value.
 ### String Interning
 
 The `*Convert` calls rewrite the caller's `databox` in place into a
-`DATABOX_CONTAINER_REFERENCE_EXTERNAL` box whose `data.u` is the atom ID.
+`DATABOX_CONTAINER_REFERENCE_EXTERNAL` box whose `data.u` is the atom ID. The
+whole box is replaced: the `big` and `allocated` bits of the value it held
+(a 96/128-bit value's, for one) are cleared, and nothing it owned is freed.
 
 ```c
 multimapAtom *atoms = multimapAtomNew();

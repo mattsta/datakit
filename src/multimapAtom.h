@@ -15,6 +15,10 @@ multimapAtom *multimapAtomNew(void);
 multimapAtom *multimapAtomNewCompress(mflexState *state);
 void multimapAtomFree(multimapAtom *ma);
 
+/* The *Convert calls (InsertConvert, InsertIfNewConvert*, RetainConvert)
+ * replace the caller's value box with the atom's reference as a whole
+ * box: the 'big' and 'allocated' bits of the value it held, such as a
+ * 96/128-bit value's, are cleared, and nothing it owned is freed. */
 void multimapAtomInsert(multimapAtom *ma, const databox *box);
 void multimapAtomInsertConvert(multimapAtom *ma, databox *box);
 bool multimapAtomInsertIfNewConvert(multimapAtom *ma, databox *key);
