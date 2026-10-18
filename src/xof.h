@@ -36,6 +36,11 @@ typedef struct xofReader {
     size_t valuesRead;                  /* Count of values decoded */
 } xofReader;
 
+/* Raw stream: xofInit() writes the first value, then each xofAppend()
+ * encodes the next one against the previous. '*prevLeadingZeroes' and
+ * '*prevTrailingZeroes' carry the XOR window between calls and must start
+ * at -1, so the first XOR entry sets a window before any entry reuses it
+ * (xofWrite() does this itself). */
 void xofInit(xof *x, size_t *bitsUsed, double val);
 void xofAppend(xof *x, size_t *bitsUsed, int_fast32_t *prevLeadingZeroes,
                int_fast32_t *prevTrailingZeroes, double prevVal, double newVal);

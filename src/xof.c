@@ -228,7 +228,12 @@ double xofGet(const xof *const x, const size_t offset) {
 
 void xofWrite(xofWriter *const w, const double val) {
     if (w->count == 0) {
-        /* First value: use xofInit to write raw 64-bit double */
+        /* First value: use xofInit to write raw 64-bit double. The XOR
+         * window starts unset (-1, -1), so the first XOR entry is always
+         * a NEW entry: readers start with no window and can only decode
+         * a SAME entry after a NEW one has set it. */
+        w->currentLeadingZeroes = -1;
+        w->currentTrailingZeroes = -1;
         xofInit(w->d, &w->usedBits, val);
     } else {
         /* Subsequent values: encode as XOR delta from previous */
@@ -937,6 +942,59 @@ int xofTest(int argc, char *argv[]) {
 
         zfree(w.d);
         printf("xofReaderInitFromWriter: PASS\n");
+    }
+
+    TEST("xofWriter - zero-initialized writer starts a fresh XOR window") {
+        /* 1.0 then 0xBFF0000000000001 XOR to 0x8000000000000001: no
+         * leading or trailing zeroes. With a {0, 0} window left over from
+         * zero-initialization the writer used to emit this as a 64-bit
+         * SAME entry, which a reader (starting with no window) cannot
+         * decode. */
+        const double values[] = {1.0,
+                                 xofDoubleFromBits(0xBFF0000000000001ULL),
+                                 1.0,
+                                 3.5,
+                                 xofDoubleFromBits(1ULL),
+                                 -0.0};
+        const size_t count = sizeof(values) / sizeof(*values);
+
+        for (int stale = 0; stale < 2; stale++) {
+            xofWriter w = {0};
+            if (stale) {
+                /* Any leftover window must be ignored too */
+                w.currentLeadingZeroes = 0;
+                w.currentTrailingZeroes = 63;
+            }
+
+            /* @own: container; free=zfree */
+            w.d = zcalloc(64, sizeof(*w.d));
+            w.totalBytes = 64 * sizeof(*w.d);
+            for (size_t i = 0; i < count; i++) {
+                xofWrite(&w, values[i]);
+            }
+
+            xofReader r;
+            xofReaderInitFromWriter(&r, &w);
+            double all[sizeof(values) / sizeof(*values)];
+            xofReadAll(w.d, all, count);
+            for (size_t i = 0; i < count; i++) {
+                const double viaReader =
+                    i == 0 ? xofReaderCurrent(&r) : xofReaderNext(&r, w.d);
+                const uint64_t want = xofBitsFromDouble(values[i]);
+                if (xofBitsFromDouble(viaReader) != want ||
+                    xofBitsFromDouble(xofGet(w.d, i)) != want ||
+                    xofBitsFromDouble(all[i]) != want) {
+                    ERR("[%zu] (stale window %d): reader %016" PRIx64
+                        ", get %016" PRIx64 ", readAll %016" PRIx64
+                        ", want %016" PRIx64,
+                        i, stale, xofBitsFromDouble(viaReader),
+                        xofBitsFromDouble(xofGet(w.d, i)),
+                        xofBitsFromDouble(all[i]), want);
+                }
+            }
+
+            zfree(w.d);
+        }
     }
 
     TEST("xofReader - xofReaderRemaining") {
