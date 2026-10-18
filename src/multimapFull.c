@@ -754,9 +754,12 @@ multimapFull *multimapFullCopy(const multimapFull *restrict const m) {
     }
 
     /* First arg of NULL will allocate a new multimap instead of re-using an
-     * existing one. */
-    multimapFull *const copy = multimapFullNewFromManyGrow(
-        NULL, maps, middles, howMany, m->elementsPerEntry, m->mapIsSet);
+     * existing one.  The grow reads only middle[0, count), so a map with no
+     * inner maps (DeleteNMapsIterate can empty one) passes no middles at
+     * all, rather than a stack array nothing was written to. */
+    multimapFull *const copy =
+        multimapFullNewFromManyGrow(NULL, maps, howMany ? middles : NULL,
+                                    howMany, m->elementsPerEntry, m->mapIsSet);
 
     /* The grow decodes each rangeBox from its map's head.  In a
      * surrogate-keyed map that head is a reference id, not the resolved
