@@ -14,8 +14,8 @@
 #define PACK_STORAGE_BITS 12
 #endif
 
-#if PACK_STORAGE_BITS > 64
-#error "Can't pack larger than 64 bits."
+#if PACK_STORAGE_BITS > 64 || PACK_STORAGE_BITS < 1
+#error "PACK_STORAGE_BITS must be 1 to 64."
 #endif
 
 #if (PACK_STORAGE_BITS == 8) || (PACK_STORAGE_BITS == 16) ||                   \
@@ -31,8 +31,10 @@
  *  The "waste overhead" only matters if you think you may have unpredictable
  *  storage patterns where sometimes you store 1,000 values and other times
  *  you store one value.)
- * Obviously, your SLOT_STORAGE_TYPE can't contain fewer bytes than your
- * STORAGE_BITS (e.g. STORAGE_BITS of 17 *must* use uint32_t)
+ * Every width from 1 to 64 bits works with every slot type (uint8_t,
+ * uint16_t, uint32_t, uint64_t): a value may span as many slots as its width
+ * needs, e.g. 61 bits in uint8_t slots touch up to nine. VALUE_TYPE must be
+ * wide enough for the width (the default is).
  *
  * Set reads and rewrites whole slots, keeping the bits beside the value, so
  * the storage must be initialized (e.g. from calloc) before the first Set. */
@@ -170,24 +172,31 @@
 
 /* Shared defines */
 #define BITS_PER_SLOT (sizeof(SLOT_STORAGE_TYPE) * 8)
-/* Cast to uint32_t to avoid undefined behavior with left shifts */
-#define VALUE_MASK                                                             \
-    ((uint32_t)(MICRO_PROMOTION_TYPE)((1ULL << BITS_PER_VALUE) - 1))
+/* All BITS_PER_VALUE bits set; a 64-bit constant so every width up to 64
+ * keeps its high bits */
+#define VALUE_MASK (UINT64_MAX >> (64 - BITS_PER_VALUE))
 
-/* This define is an optimization.  If we are using compact storage
- * (example: storing 12 bit packed across slots of uint8_t), then we
- * know up front we can *never* store a packed value inside just one
- * slot.  If we let the compiler know this too, it can optimize away
- * the "if (value in one slot)" branch and just use always-two-slot
- * reading/writing. */
-#ifndef PACK_STORAGE_COMPACT
-#define SLOT_CAN_HOLD_ENTIRE_VALUE 1
-#endif
-/* We can't define HOLD_ENTIRE_VALUE as below because BITS_PER_SLOT has sizeof()
- * the preprocessor doesn't know about.  We don't want to manually define bit
- * widths per type, so we juse use the STORAGE_COMPACT setting to determine
- * if we are using sub-slot-widths or not.
- * #define SLOT_CAN_HOLD_ENTIRE_VALUE (BITS_PER_VALUE <= BITS_PER_SLOT) */
+/* These are compile-time constants (BITS_PER_SLOT uses sizeof, so they are
+ * C expressions, not preprocessor ones); every branch on them folds away.
+ *
+ * Values start at multiples of BITS_PER_VALUE, so within a slot (a power of
+ * two wide) they start at multiples of PACKED_START_STEP, the largest power
+ * of two dividing BITS_PER_VALUE, capped at the slot width. The latest
+ * start in a slot is BITS_PER_SLOT - PACKED_START_STEP, which bounds how
+ * many slots one value can touch. */
+#define PACKED_LOWEST_SET_BIT ((BITS_PER_VALUE) & -(BITS_PER_VALUE))
+#define PACKED_START_STEP                                                      \
+    (PACKED_LOWEST_SET_BIT < BITS_PER_SLOT ? PACKED_LOWEST_SET_BIT             \
+                                           : BITS_PER_SLOT)
+#define PACKED_MAX_SLOTS                                                       \
+    ((BITS_PER_SLOT - PACKED_START_STEP + BITS_PER_VALUE + BITS_PER_SLOT -     \
+      1) /                                                                     \
+     BITS_PER_SLOT)
+
+/* A value can sit entirely inside one slot only if it is no wider than one;
+ * with wider values (e.g. 12 bits in uint8_t slots under
+ * PACK_STORAGE_COMPACT) the single-slot branch folds away. */
+#define SLOT_CAN_HOLD_ENTIRE_VALUE (BITS_PER_VALUE <= BITS_PER_SLOT)
 
 /* Math helpers */
 #define startOffset(offset) ((uint64_t)(offset) * BITS_PER_VALUE)
@@ -201,6 +210,10 @@
 #define PACKED_SATURATING_ADD                                                  \
     PACKED_NAME(PACKED_NAME(PACK_FUNCTION_PREFIX, PACK_STORAGE_BITS),          \
                 SaturatingAdd)
+#define PACKED_WIDE_READ                                                       \
+    PACKED_NAME(PACKED_NAME(PACK_FUNCTION_PREFIX, PACK_STORAGE_BITS), WideRead)
+#define PACKED_WIDE_WRITE                                                      \
+    PACKED_NAME(PACKED_NAME(PACK_FUNCTION_PREFIX, PACK_STORAGE_BITS), WideWrite)
 
 /* Packed storage may start at any address (e.g. inside a byte stream), so
  * storage is addressed through a slot type with alignment 1 and every slot
@@ -218,6 +231,52 @@ static inline SLOT_STORAGE_TYPE PACKED_SLOT_LOAD(const PACKED_SLOT *src) {
 static inline void PACKED_SLOT_STORE(PACKED_SLOT *dst,
                                      const SLOT_STORAGE_TYPE slot) {
     memcpy(dst, &slot, sizeof(slot));
+}
+
+/* Values that can touch three or more slots (PACKED_MAX_SLOTS > 2, e.g. 13
+ * bits in uint8_t slots or 63 bits in uint32_t slots) go through these two
+ * helpers, which walk exactly the slots the value occupies. The value's low
+ * bits sit in the first slot, starting at bit 'startBitOffset' of the
+ * storage. */
+static inline uint64_t PACKED_WIDE_READ(const PACKED_SLOT *base,
+                                        const uint64_t startBitOffset) {
+    const PACKED_SLOT *in = &base[startBitOffset / BITS_PER_SLOT];
+    const uint32_t startBit = (uint32_t)(startBitOffset % BITS_PER_SLOT);
+    uint64_t out = (uint64_t)PACKED_SLOT_LOAD(&in[0]) >> startBit;
+
+    /* 'have' < BITS_PER_VALUE <= 64 inside the loop, so the shift is
+     * defined */
+    uint32_t have = (uint32_t)BITS_PER_SLOT - startBit;
+    for (size_t k = 1; have < BITS_PER_VALUE; k++) {
+        out |= (uint64_t)PACKED_SLOT_LOAD(&in[k]) << have;
+        have += (uint32_t)BITS_PER_SLOT;
+    }
+
+    return out & VALUE_MASK;
+}
+
+static inline void PACKED_WIDE_WRITE(PACKED_SLOT *base,
+                                     const uint64_t startBitOffset,
+                                     const uint64_t value) {
+    PACKED_SLOT *out = &base[startBitOffset / BITS_PER_SLOT];
+    const uint32_t startBit = (uint32_t)(startBitOffset % BITS_PER_SLOT);
+
+    /* First slot: the value's low bits from 'startBit' up */
+    SLOT_STORAGE_TYPE slot = PACKED_SLOT_LOAD(&out[0]);
+    slot = (SLOT_STORAGE_TYPE)((slot & ~(VALUE_MASK << startBit)) |
+                               (value << startBit));
+    PACKED_SLOT_STORE(&out[0], slot);
+
+    /* Later slots: the next BITS_PER_SLOT bits of the value each, keeping
+     * the bits above the value's end in the last one */
+    uint32_t done = (uint32_t)BITS_PER_SLOT - startBit;
+    for (size_t k = 1; done < BITS_PER_VALUE; k++) {
+        slot = PACKED_SLOT_LOAD(&out[k]);
+        slot = (SLOT_STORAGE_TYPE)((slot & ~(VALUE_MASK >> done)) |
+                                   (value >> done));
+        PACKED_SLOT_STORE(&out[k], slot);
+        done += (uint32_t)BITS_PER_SLOT;
+    }
 }
 
 /* Store 'val' at 'offset'. 'val' must fit in BITS_PER_VALUE bits (asserted);
@@ -241,8 +300,12 @@ PACKED_STATIC void PACKED_ARRAY_SET(void *_dst, const PACKED_LEN_TYPE offset,
     const uint64_t fitted =
         (uint64_t)MICRO_PROMOTION_TYPE_CAST(val) & VALUE_MASK;
 
-#if SLOT_CAN_HOLD_ENTIRE_VALUE
-    if (BITS_PER_VALUE <= bitsAvailable) {
+    if (PACKED_MAX_SLOTS > 2) {
+        PACKED_WIDE_WRITE(dst, startBitOffset, fitted);
+        return;
+    }
+
+    if (SLOT_CAN_HOLD_ENTIRE_VALUE && BITS_PER_VALUE <= bitsAvailable) {
         /* target position is fully inside out[0] */
         /* We set bits starting at position zero, so values are stored
          * from RIGHT to LEFT.
@@ -258,7 +321,6 @@ PACKED_STATIC void PACKED_ARRAY_SET(void *_dst, const PACKED_LEN_TYPE offset,
                                       (fitted << startBit));
         PACKED_SLOT_STORE(out, current);
     } else {
-#endif
         /* target position is split across two slots */
         uint64_t low, high;
 
@@ -308,9 +370,7 @@ PACKED_STATIC void PACKED_ARRAY_SET(void *_dst, const PACKED_LEN_TYPE offset,
 
         PACKED_SLOT_STORE(&out[0], slot0);
         PACKED_SLOT_STORE(&out[1], slot1);
-#if SLOT_CAN_HOLD_ENTIRE_VALUE
     }
-#endif
 }
 
 PACKED_STATIC void PACKED_ARRAY_SET_HALF(void *_dst,
@@ -327,12 +387,21 @@ PACKED_STATIC void PACKED_ARRAY_SET_HALF(void *_dst,
 
     bitsAvailable = BITS_PER_SLOT - startBit;
 
-#if SLOT_CAN_HOLD_ENTIRE_VALUE
-    if (BITS_PER_VALUE <= bitsAvailable) {
+    if (PACKED_MAX_SLOTS > 2) {
+        const uint64_t current = PACKED_WIDE_READ(dst, startBitOffset);
+        if (current) {
+            PACKED_WIDE_WRITE(dst, startBitOffset, current / 2);
+        }
+
+        return;
+    }
+
+    if (SLOT_CAN_HOLD_ENTIRE_VALUE && BITS_PER_VALUE <= bitsAvailable) {
         /* target position is fully inside out[0] */
         SLOT_STORAGE_TYPE slot = PACKED_SLOT_LOAD(out);
         const VALUE_TYPE current =
-            (MICRO_PROMOTION_TYPE_CAST(slot) >> startBit) & VALUE_MASK;
+            (VALUE_TYPE)((MICRO_PROMOTION_TYPE_CAST(slot) >> startBit) &
+                         VALUE_MASK);
 
         if (!current) {
             /* No sense trying to divide and set nothing */
@@ -346,7 +415,6 @@ PACKED_STATIC void PACKED_ARRAY_SET_HALF(void *_dst,
                                  << startBit));
         PACKED_SLOT_STORE(out, slot);
     } else {
-#endif
         /* target position is split across two slots */
         uint64_t low, high;
 
@@ -381,9 +449,7 @@ PACKED_STATIC void PACKED_ARRAY_SET_HALF(void *_dst,
 
         PACKED_SLOT_STORE(&out[0], slot0);
         PACKED_SLOT_STORE(&out[1], slot1);
-#if SLOT_CAN_HOLD_ENTIRE_VALUE
     }
-#endif
 }
 
 /* 'current' plus 'incrBy', clamped to [0, VALUE_MASK]: an increment stops at
@@ -422,12 +488,20 @@ PACKED_STATIC void PACKED_ARRAY_SET_INCR(void *_dst,
 
     bitsAvailable = BITS_PER_SLOT - startBit;
 
-#if SLOT_CAN_HOLD_ENTIRE_VALUE
-    if (BITS_PER_VALUE <= bitsAvailable) {
+    if (PACKED_MAX_SLOTS > 2) {
+        const VALUE_TYPE current =
+            (VALUE_TYPE)PACKED_WIDE_READ(dst, startBitOffset);
+        PACKED_WIDE_WRITE(dst, startBitOffset,
+                          (uint64_t)PACKED_SATURATING_ADD(current, incrBy));
+        return;
+    }
+
+    if (SLOT_CAN_HOLD_ENTIRE_VALUE && BITS_PER_VALUE <= bitsAvailable) {
         /* target position is fully inside out[0] */
         SLOT_STORAGE_TYPE slot = PACKED_SLOT_LOAD(out);
         const VALUE_TYPE current =
-            (MICRO_PROMOTION_TYPE_CAST(slot) >> startBit) & VALUE_MASK;
+            (VALUE_TYPE)((MICRO_PROMOTION_TYPE_CAST(slot) >> startBit) &
+                         VALUE_MASK);
         const VALUE_TYPE val = PACKED_SATURATING_ADD(current, incrBy);
         slot =
             (SLOT_STORAGE_TYPE)((slot & ~((uint64_t)VALUE_MASK << startBit)) |
@@ -435,7 +509,6 @@ PACKED_STATIC void PACKED_ARRAY_SET_INCR(void *_dst,
                                  << startBit));
         PACKED_SLOT_STORE(out, slot);
     } else {
-#endif
         /* target position is split across two slots */
         uint64_t low, high;
 
@@ -464,9 +537,7 @@ PACKED_STATIC void PACKED_ARRAY_SET_INCR(void *_dst,
 
         PACKED_SLOT_STORE(&out[0], slot0);
         PACKED_SLOT_STORE(&out[1], slot1);
-#if SLOT_CAN_HOLD_ENTIRE_VALUE
     }
-#endif
 }
 
 PACKED_STATIC VALUE_TYPE PACKED_ARRAY_GET(const void *src_,
@@ -484,15 +555,18 @@ PACKED_STATIC VALUE_TYPE PACKED_ARRAY_GET(const void *src_,
 
     bitsAvailable = BITS_PER_SLOT - startBit;
 
-#if SLOT_CAN_HOLD_ENTIRE_VALUE
-    if (BITS_PER_VALUE <= bitsAvailable) {
+    if (PACKED_MAX_SLOTS > 2) {
+        return (VALUE_TYPE)PACKED_WIDE_READ(src, startBitOffset);
+    }
+
+    if (SLOT_CAN_HOLD_ENTIRE_VALUE && BITS_PER_VALUE <= bitsAvailable) {
         /* stored value is fully contained inside in[0] */
         /* If value is entirely in one slot, we just need to shift down
          * the packed integer then mask away other values. */
         const SLOT_STORAGE_TYPE slot = PACKED_SLOT_LOAD(&in[0]);
-        out = (MICRO_PROMOTION_TYPE_CAST(slot) >> startBit) & VALUE_MASK;
+        out = (VALUE_TYPE)((MICRO_PROMOTION_TYPE_CAST(slot) >> startBit) &
+                           VALUE_MASK);
     } else {
-#endif
         /* stored value is split across two slots */
         uint64_t low, high;
 
@@ -509,9 +583,7 @@ PACKED_STATIC VALUE_TYPE PACKED_ARRAY_GET(const void *src_,
          * this packed integer. */
         out = (VALUE_TYPE)(low | (high & ((VALUE_MASK >> bitsAvailable)
                                           << bitsAvailable)));
-#if SLOT_CAN_HOLD_ENTIRE_VALUE
     }
-#endif
 
     return out;
 }
@@ -680,6 +752,11 @@ PACKED_STATIC bool PACKED_ARRAY_DELETE_MEMBER_BYTES(void *_dst,
 #undef PACKED_SLOT_STORE
 #undef PACKED_SATURATING_ADD
 #undef SLOT_CAN_HOLD_ENTIRE_VALUE
+#undef PACKED_WIDE_READ
+#undef PACKED_WIDE_WRITE
+#undef PACKED_LOWEST_SET_BIT
+#undef PACKED_START_STEP
+#undef PACKED_MAX_SLOTS
 
 #undef PACKED_STATIC
 #undef PACK_STATIC

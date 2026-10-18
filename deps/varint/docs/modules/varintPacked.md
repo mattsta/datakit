@@ -400,6 +400,12 @@ Slot 0: [11111111111100000000111111111111]
 Slot 1: [00000000000000000000000000001111]
 ```
 
+Every width from 1 to 64 bits works with every slot type (`uint8_t`,
+`uint16_t`, `uint32_t`, `uint64_t`). A value spans as many slots as its
+width needs, up to nine (for example 61 bits in `uint8_t` slots). Each operation
+touches exactly the slots its value occupies, so storage sized at
+`ceil(count * bits / slotBits)` slots is enough.
+
 Storage has no alignment requirement: the array may start at any byte
 address, for example inside a larger byte stream. Slots are read and
 written through `memcpy` on a slot type with alignment 1, which compiles

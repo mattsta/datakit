@@ -46,7 +46,180 @@
 #define PACK_FUNCTION_PREFIX varintPackedSlot64_
 #include "varintPacked.h"
 
+/* Every width 1..64 on every slot type */
+#define PACKED_WIDTHS_SLOT uint8_t
+#define PACKED_WIDTHS_PREFIX vpw8_
+#include "varintPackedTestWidths.inc"
+#undef PACKED_WIDTHS_SLOT
+#undef PACKED_WIDTHS_PREFIX
+
+#define PACKED_WIDTHS_SLOT uint16_t
+#define PACKED_WIDTHS_PREFIX vpw16_
+#include "varintPackedTestWidths.inc"
+#undef PACKED_WIDTHS_SLOT
+#undef PACKED_WIDTHS_PREFIX
+
+#define PACKED_WIDTHS_SLOT uint32_t
+#define PACKED_WIDTHS_PREFIX vpw32_
+#include "varintPackedTestWidths.inc"
+#undef PACKED_WIDTHS_SLOT
+#undef PACKED_WIDTHS_PREFIX
+
+#define PACKED_WIDTHS_SLOT uint64_t
+#define PACKED_WIDTHS_PREFIX vpw64_
+#include "varintPackedTestWidths.inc"
+#undef PACKED_WIDTHS_SLOT
+#undef PACKED_WIDTHS_PREFIX
+
 #include "perf.h"
+
+typedef struct widthCase {
+    uint32_t bits;
+    void (*set)(void *, uint32_t, uint64_t);
+    uint64_t (*get)(const void *, uint32_t);
+    void (*incr)(void *, uint32_t, int64_t);
+    void (*half)(void *, uint32_t);
+} widthCase;
+
+#define WIDTHS_LIST(X)                                                         \
+    X(1)                                                                       \
+    X(2) X(3) X(4) X(5) X(6) X(7) X(8) X(9) X(10) X(11) X(12) X(13) X(14)      \
+        X(15) X(16) X(17) X(18) X(19) X(20) X(21) X(22) X(23) X(24) X(25)      \
+            X(26) X(27) X(28) X(29) X(30) X(31) X(32) X(33) X(34) X(35) X(36)  \
+                X(37) X(38) X(39) X(40) X(41) X(42) X(43) X(44) X(45) X(46)    \
+                    X(47) X(48) X(49) X(50) X(51) X(52) X(53) X(54) X(55)      \
+                        X(56) X(57) X(58) X(59) X(60) X(61) X(62) X(63) X(64)
+
+#define WIDTH_CASE(prefix, n)                                                  \
+    {n, PACKED_NAME(PACKED_NAME(prefix, n), Set),                              \
+     PACKED_NAME(PACKED_NAME(prefix, n), Get),                                 \
+     PACKED_NAME(PACKED_NAME(prefix, n), SetIncr),                             \
+     PACKED_NAME(PACKED_NAME(prefix, n), SetHalf)},
+#define WIDTH_CASE8(n) WIDTH_CASE(vpw8_, n)
+#define WIDTH_CASE16(n) WIDTH_CASE(vpw16_, n)
+#define WIDTH_CASE32(n) WIDTH_CASE(vpw32_, n)
+#define WIDTH_CASE64(n) WIDTH_CASE(vpw64_, n)
+
+static const widthCase widthCases8[] = {WIDTHS_LIST(WIDTH_CASE8)};
+static const widthCase widthCases16[] = {WIDTHS_LIST(WIDTH_CASE16)};
+static const widthCase widthCases32[] = {WIDTHS_LIST(WIDTH_CASE32)};
+static const widthCase widthCases64[] = {WIDTHS_LIST(WIDTH_CASE64)};
+
+static uint64_t widthRand(uint64_t x) {
+    /* splitmix64 finalizer: a fixed pseudo-random value per index */
+    x += 0x9e3779b97f4a7c15ULL;
+    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+    return x ^ (x >> 31);
+}
+
+/* Background value of index 'i' in pass 'pass': all 0, all max, or a fixed
+ * pseudo-random value */
+static uint64_t widthBackground(const uint32_t pass, const uint32_t i,
+                                const uint32_t bits, const uint64_t mask) {
+    if (pass == 0) {
+        return 0;
+    }
+
+    if (pass == 1) {
+        return mask;
+    }
+
+    return widthRand(i + 977u * bits) & mask;
+}
+
+/* One width on one slot type. The storage is allocated at exactly the size
+ * the values need, so a touch past the end is an ASan report. Over three
+ * backgrounds (all 0, all max, pseudo-random), every value in turn takes
+ * 0, max and two alternating patterns, max+1, 0-1 and a halving, and each
+ * time it must read back right while both neighbours keep their background.
+ * The whole array is checked against the background after each pass. The
+ * value count covers every bit alignment within a slot. */
+static int checkWidth(const char *slotName, const size_t slotBytes,
+                      const widthCase *c) {
+    const uint32_t slotBits = (uint32_t)(slotBytes * 8);
+    const uint32_t count = 2 * slotBits + 3;
+    const uint64_t mask = c->bits == 64 ? UINT64_MAX : (1ULL << c->bits) - 1;
+    const uint64_t totalBits = (uint64_t)count * c->bits;
+    const size_t bytes =
+        (size_t)((totalBits + slotBits - 1) / slotBits) * slotBytes;
+    uint8_t *storage = calloc(1, bytes);
+    int failures = 0;
+
+    const uint64_t patterns[] = {0, mask, 0x5555555555555555ULL & mask,
+                                 0xaaaaaaaaaaaaaaaaULL & mask};
+
+    for (uint32_t pass = 0; pass < 3 && !failures; pass++) {
+        for (uint32_t i = 0; i < count; i++) {
+            c->set(storage, i, widthBackground(pass, i, c->bits, mask));
+        }
+
+        for (uint32_t t = 0; t < count && !failures; t++) {
+            for (size_t p = 0; p < sizeof(patterns) / sizeof(*patterns); p++) {
+                c->set(storage, t, patterns[p]);
+                if (c->get(storage, t) != patterns[p]) {
+                    failures++;
+                }
+            }
+
+            c->set(storage, t, mask);
+            c->incr(storage, t, 1);
+            if (c->get(storage, t) != mask) {
+                failures++;
+            }
+
+            c->set(storage, t, 0);
+            c->incr(storage, t, -1);
+            if (c->get(storage, t) != 0) {
+                failures++;
+            }
+
+            c->set(storage, t, mask);
+            c->half(storage, t);
+            if (c->get(storage, t) != mask / 2) {
+                failures++;
+            }
+
+            if ((t > 0 && c->get(storage, t - 1) !=
+                              widthBackground(pass, t - 1, c->bits, mask)) ||
+                (t + 1 < count &&
+                 c->get(storage, t + 1) !=
+                     widthBackground(pass, t + 1, c->bits, mask))) {
+                failures++;
+            }
+
+            if (failures) {
+                printf("%s slots, %u bits: value %u (pass %u) went wrong\n",
+                       slotName, c->bits, t, pass);
+            }
+
+            c->set(storage, t, widthBackground(pass, t, c->bits, mask));
+        }
+
+        for (uint32_t i = 0; i < count && !failures; i++) {
+            if (c->get(storage, i) != widthBackground(pass, i, c->bits, mask)) {
+                printf("%s slots, %u bits: value %u changed (pass %u)\n",
+                       slotName, c->bits, i, pass);
+                failures++;
+            }
+        }
+    }
+
+    free(storage);
+    return failures;
+}
+
+static int checkAllWidths(void) {
+    int failures = 0;
+    for (size_t w = 0; w < 64; w++) {
+        failures += checkWidth("uint8_t", sizeof(uint8_t), &widthCases8[w]);
+        failures += checkWidth("uint16_t", sizeof(uint16_t), &widthCases16[w]);
+        failures += checkWidth("uint32_t", sizeof(uint32_t), &widthCases32[w]);
+        failures += checkWidth("uint64_t", sizeof(uint64_t), &widthCases64[w]);
+    }
+
+    return failures;
+}
 
 typedef void (*packedSetFn)(void *, uint32_t, uint16_t);
 typedef uint16_t (*packedGetFn)(const void *, uint32_t);
@@ -240,6 +413,12 @@ int main(int argc, const char *argv[]) {
                         varintPackedSlot64_13Get, varintPackedSlot64_13SetIncr);
     if (saturation) {
         printf("SetIncr saturation: %d failures\n", saturation);
+        return 1;
+    }
+
+    const int widths = checkAllWidths();
+    if (widths) {
+        printf("widths 1..64 on every slot type: %d failures\n", widths);
         return 1;
     }
 
