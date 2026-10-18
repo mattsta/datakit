@@ -3023,11 +3023,13 @@ static bool multimapPersistApplyOp(void *structure, persistOp op,
     }
 
     case PERSIST_OP_DELETE: {
-        databox key;
-        if (!flexGetSingleDatabox(data, len, &key)) {
+        /* databoxBig: a 96/128-bit key must replay too; the plain unwrap
+         * refuses wide entries, which silently dropped the delete. */
+        databoxBig key;
+        if (!flexGetSingleDataboxBig(data, len, &key)) {
             return false;
         }
-        multimapDelete(m, &key);
+        multimapDelete(m, (const databox *)&key);
         return true;
     }
 
@@ -4186,11 +4188,21 @@ static uint8_t *multiOrderedSetPersistSnapshot(const void *structure,
         mosIterator iter;
         multiOrderedSetIteratorInit(mos, &iter, true); /* forward */
 
-        databox member, score;
-        while (multiOrderedSetIteratorNext(&iter, &member, &score)) {
+        /* databoxBig, re-armed each step: the iterator writes a 96/128-bit
+         * score or member into the armed storage, and a narrow value
+         * overwrites the payload pointer. */
+        databoxBig member, score;
+        for (;;) {
+            DATABOX_BIG_INIT(&member);
+            DATABOX_BIG_INIT(&score);
+            if (!multiOrderedSetIteratorNext(&iter, (databox *)&member,
+                                             (databox *)&score)) {
+                break;
+            }
+
             /* Store score first, then member (matches sorted order) */
-            flexPushByType(&f, &score, FLEX_ENDPOINT_TAIL);
-            flexPushByType(&f, &member, FLEX_ENDPOINT_TAIL);
+            flexPushByType(&f, (const databox *)&score, FLEX_ENDPOINT_TAIL);
+            flexPushByType(&f, (const databox *)&member, FLEX_ENDPOINT_TAIL);
         }
 
         multiOrderedSetIteratorRelease(&iter);
@@ -7485,6 +7497,61 @@ int persistTest(int argc, char *argv[]) {
                    *got.data.i128 != -((__int128_t)1 << 100) - 7) {
             ERRR("replayed 128-bit value read back wrong");
         }
+    }
+
+    TEST("multimap WAL delete replays for a 128-bit key") {
+        cleaner(multimapFree) multimap *m = multimapNew(2);
+        databoxBig wideKey;
+        DATABOX_BIG_SIGNED_128(&wideKey, ((__int128_t)1 << 90) + 3);
+        const databox val = DATABOX_SIGNED(7);
+        const databox *row[2] = {(const databox *)&wideKey, &val};
+        multimapInsert(&m, row);
+
+        cleaner(flexFree) flex *rec = flexNew();
+        flexPushByType(&rec, (const databox *)&wideKey, FLEX_ENDPOINT_TAIL);
+        if (!persistOpsMultimap.applyOp(&m, PERSIST_OP_DELETE,
+                                        (const uint8_t *)rec, flexBytes(rec))) {
+            ERRR("multimap DELETE replay refused a 128-bit key");
+        }
+
+        if (multimapExists(m, (const databox *)&wideKey)) {
+            ERRR("replayed DELETE left the 128-bit key in place");
+        }
+    }
+
+    TEST("multiOrderedSet snapshot round-trips 128-bit scores and members") {
+        cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+            multiOrderedSetNew();
+        databoxBig wideScore, wideMember;
+        DATABOX_BIG_SIGNED_128(&wideScore, -((__int128_t)1 << 100) - 7);
+        DATABOX_BIG_UNSIGNED_128(&wideMember, ((__uint128_t)1 << 127) + 1);
+        const databox narrowScore = DATABOX_SIGNED(5);
+        const databox narrowMember = databoxNewBytesString("narrow");
+        multiOrderedSetAdd(&mos, (const databox *)&wideScore,
+                           (const databox *)&wideMember);
+        multiOrderedSetAdd(&mos, &narrowScore, &narrowMember);
+
+        persist *p = persistCreate(&persistOpsMultiOrderedSet, NULL);
+        persistAttachSnapshot(p, persistStoreMemory(0));
+        if (!persistSnapshot(p, mos)) {
+            ERRR("multiOrderedSet snapshot with 128-bit values failed");
+        }
+
+        cleaner(multiOrderedSetFree) multiOrderedSet *restored =
+            persistRestore(p);
+        databoxBig got;
+        DATABOX_BIG_INIT(&got);
+        if (!restored || multiOrderedSetCount(restored) != 2) {
+            ERRR("restored multiOrderedSet lost entries");
+        } else if (!multiOrderedSetGetScore(restored,
+                                            (const databox *)&wideMember,
+                                            (databox *)&got) ||
+                   got.type != DATABOX_SIGNED_128 ||
+                   *got.data.i128 != -((__int128_t)1 << 100) - 7) {
+            ERRR("restored 128-bit score read back wrong");
+        }
+
+        persistClose(p);
     }
 
     TEST("restore: NULL input is rejected by all flex-backed ops") {
