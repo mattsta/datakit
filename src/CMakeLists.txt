@@ -718,8 +718,8 @@ if(BuildTestBinary)
             TIMEOUT 300
             SKIP_RETURN_CODE 77
             LABELS "gate")
-        # The tools' own tests (perfdiff exit codes), through the same
-        # environment and skip rule.
+        # The tools' own unit tests (tools/tests: every dktools
+        # subcommand), through the same environment and skip rule.
         add_test(NAME dktoolsSelfTest
             COMMAND sh ${DK_TOOLS_DIR}/uvGate.sh ${UV_EXECUTABLE} ${DK_TOOLS_DIR}
                 python -m unittest discover -s ${DK_TOOLS_DIR}/tests

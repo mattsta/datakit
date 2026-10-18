@@ -83,7 +83,8 @@ def main(argv: list[str] | None = None) -> int:
 
     vf = sub.add_parser(
         "verify",
-        help="build HEAD plus exactly the given paths in isolation and test it "
+        help="build HEAD plus exactly the given paths, the index or every "
+        "changed tracked path in isolation and test it "
         "(exit 0 pass, 1 fail, 2 input error)",
     )
     vf.add_argument("name", help="work-dir name under ROOT/verify")

@@ -57,10 +57,11 @@ test never rewrites `uv.lock`.
 Coding-practice documentation: `docs/development/CONTRIBUTING.md`
 (Memory Management) and the idiom block in `src/cleaner.h`.
 
-## verify — build HEAD plus named paths in isolation
+## verify — build HEAD plus one change in isolation
 
-Builds and tests exactly HEAD plus the paths you name, so unrelated
-uncommitted work in the tree cannot make a change look good or bad:
+Builds and tests exactly HEAD plus the paths you name (or the index,
+or every changed tracked path), so unrelated uncommitted work in the
+tree cannot make a change look good or bad:
 
 ```sh
 uv run --project tools dktools verify NAME --tests REGEX [--serial REGEX] \

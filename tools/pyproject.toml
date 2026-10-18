@@ -1,7 +1,7 @@
 [project]
 name = "dktools"
 version = "0.1.0"
-description = "datakit platform automation: allocation-ownership audit and enforcement tooling"
+description = "datakit platform automation: allocation-ownership audit, isolated verify builds, the validate matrix, the leakage gate, vendored-dependency sync and perf comparison"
 readme = "README.md"
 authors = [
     { name = "Matt Stancliff", email = "matt@genges.com" }
