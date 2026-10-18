@@ -2928,7 +2928,7 @@ int DKS_TEST(int argc, char *argv[]) {
         DKS_TOLOWER(x);
         bool allLower = true;
         for (size_t i = 0; i < longLen; i++) {
-            if (x[i] != 'a' + (i % 26)) {
+            if (x[i] != (char)('a' + (i % 26))) {
                 allLower = false;
                 break;
             }
@@ -2945,7 +2945,7 @@ int DKS_TEST(int argc, char *argv[]) {
         DKS_TOUPPER(x);
         bool allUpper = true;
         for (size_t i = 0; i < longLen; i++) {
-            if (x[i] != 'A' + (i % 26)) {
+            if (x[i] != (char)('A' + (i % 26))) {
                 allUpper = false;
                 break;
             }
@@ -3414,7 +3414,7 @@ int DKS_TEST(int argc, char *argv[]) {
         DKS_TOLOWER(x);
         bool allLower = true;
         for (size_t i = 0; i < longLen; i++) {
-            if (x[i] != 'a' + (i % 26)) {
+            if (x[i] != (char)('a' + (i % 26))) {
                 allLower = false;
                 break;
             }
@@ -3431,7 +3431,7 @@ int DKS_TEST(int argc, char *argv[]) {
         DKS_TOUPPER(x);
         bool allUpper = true;
         for (size_t i = 0; i < longLen; i++) {
-            if (x[i] != 'A' + (i % 26)) {
+            if (x[i] != (char)('A' + (i % 26))) {
                 allUpper = false;
                 break;
             }
