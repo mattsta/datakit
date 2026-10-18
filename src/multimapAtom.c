@@ -176,7 +176,7 @@ bool multimapAtomInsertIfNewConvertAndRetain(multimapAtom *ma, databox *key) {
 /* Lookup ATOM REFERENCE to USER DATA VALUE */
 bool multimapAtomLookup(const multimapAtom *ma, const databox *ref,
                         databox *key) {
-    databox count;
+    databox count = {{0}};
     databox *elements[2] = {key, &count};
 
     return multimapLookup(ma->mapAtomForward, ref, elements);
@@ -184,18 +184,48 @@ bool multimapAtomLookup(const multimapAtom *ma, const databox *ref,
 
 void multimapAtomLookupResult(const multimapAtom *ma, const databox *key,
                               multimapAtomResult *result) {
-    databox count;
+    databox count = {{0}};
     databox *elements[2] = {&result->val, &count};
 
+    /* 'val' is a plain databox with no wide storage, so a 96/128-bit
+     * value is reported type-only instead of written through whatever
+     * the caller's box held. */
+    result->val.big = false;
     multimapLookup(ma->mapAtomForward, key, elements);
     result->refcount = count.data.u;
 }
 
 void multimapAtomLookupConvert(const multimapAtom *ma, databox *box) {
-    databox count;
+    /* The reference is copied out first so the lookup key is never the
+     * box being decoded into. */
+    const databox ref = *box;
+    databox count = {{0}};
     databox *elements[2] = {box, &count};
 
-    multimapLookup(ma->mapAtomForward, box, elements);
+    /* A plain databox can't hold a 96/128-bit value: report it type-only
+     * rather than write it through the reference id in the payload. */
+    box->big = false;
+    if (!multimapLookup(ma->mapAtomForward, &ref, elements)) {
+        *box = ref;
+    }
+}
+
+void multimapAtomLookupConvertBig(const multimapAtom *ma, databoxBig *box) {
+    const databox ref = {.data = box->data, .type = box->type};
+    databox *const out = (databox *)box;
+    databox count = {{0}};
+    databox *elements[2] = {out, &count};
+
+    /* Reset every header bit, then aim the payload pointer at 'extra' so
+     * a wide value has somewhere to land. */
+    *out = (databox){{0}};
+    DATABOX_BIG_INIT(box);
+    if (multimapLookup(ma->mapAtomForward, &ref, elements)) {
+        box->big = box->type == DATABOX_SIGNED_128 ||
+                   box->type == DATABOX_UNSIGNED_128;
+    } else {
+        *out = ref;
+    }
 }
 
 /* Lookup USER DATA VALUE to ATOM REFERENCE */
@@ -206,7 +236,9 @@ bool multimapAtomLookupReference(const multimapAtom *ma, const databox *key,
 
 void multimapAtomLookupRefcount(const multimapAtom *ma, const databox *key,
                                 databox *count) {
-    databox val;
+    /* Zeroed: the value is discarded, so a 96/128-bit one decodes
+     * type-only instead of through a stale pointer. */
+    databox val = {{0}};
     databox *elements[2] = {&val, count};
 
     multimapLookup(ma->mapAtomForward, key, elements);
@@ -438,6 +470,17 @@ bool populateSet(void *userData, const databox *elements[]) {
 #include "multimapFull.h"
 #include "timeUtil.h"
 #include <inttypes.h>
+
+/* Fill the stack below the caller with 0xFF so a temporary that is read
+ * before it is set up sees big = 1 and an all-ones pointer.  ASan is off
+ * here so the array is not framed by redzones. */
+static __attribute__((noinline, no_sanitize("address"))) void
+atomTestPoisonStack(void) {
+    volatile uint8_t junk[8192];
+    for (size_t i = 0; i < sizeof(junk); i++) {
+        junk[i] = 0xFF;
+    }
+}
 int multimapAtomTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -1419,6 +1462,141 @@ int multimapAtomTest(int argc, char *argv[]) {
         if (!multimapAtomLookupReference(ma, &keyB, &refOut) ||
             refOut.data.u != 5) {
             ERRR("new key B not bound to id 5");
+        }
+
+        multimapAtomFree(ma);
+    }
+
+    TEST("reference lookups resolve 96/128-bit atom values") {
+        /* Rows go straight into the forward map ({ID, value, refcount}):
+         * every lookup under test reads only that map.  The values are
+         * the 96/128-bit boundary set plus narrow and BYTES values, and
+         * every output box starts 0xFF-poisoned, so stale 'big' bits
+         * and a garbage payload pointer are always present. */
+        multimapAtom *ma = multimapAtomNew();
+        const __uint128_t one = 1;
+        __uint128_t store[9] = {
+            one << 64,          (one << 95) - 1, one << 95,
+            one << 127,         ~(__uint128_t)0, ~(__uint128_t)0 >> 1,
+            -(one << 63) - one, -(one << 95),    one << 127};
+        enum { atomWideCount = 9, atomValueCount = 12 };
+        databox vals[atomValueCount];
+        for (size_t i = 0; i < atomWideCount; i++) {
+            /* The last three are negative: -2^63-1, -2^95, INT128_MIN. */
+            const bool neg = i >= 6;
+            vals[i] = (databox){.type = neg ? DATABOX_SIGNED_128
+                                            : DATABOX_UNSIGNED_128,
+                                .big = true,
+                                .data.u128 = &store[i]};
+        }
+        vals[9] = databoxNewSigned(-5);
+        vals[10] = databoxNewUnsigned(77);
+        vals[11] = databoxNewBytesString("a value longer than eight bytes");
+
+        const uint64_t idBase = 100;
+        for (size_t i = 0; i < atomValueCount; i++) {
+            const databox ref = {.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL,
+                                 .data.u = idBase + i};
+            const databox *row[3] = {&ref, &vals[i], &DATABOX_BOX_FALSE};
+            multimapInsert(&ma->mapAtomForward, row);
+        }
+
+        /* Pass 0 runs on a Small forward map; pass 1 adds filler rows
+         * until it is a Full map with several sub-maps. */
+        for (int pass = 0; pass < 2; pass++) {
+            if (pass == 1) {
+                for (uint64_t f = 0; f < 400; f++) {
+                    const databox ref = {
+                        .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL,
+                        .data.u = 1000 + f};
+                    const databox fill = databoxNewUnsigned(f);
+                    const databox *row[3] = {&ref, &fill, &DATABOX_BOX_FALSE};
+                    multimapInsert(&ma->mapAtomForward, row);
+                }
+            }
+
+            for (size_t i = 0; i < atomValueCount; i++) {
+                const databox *want = &vals[i];
+                const bool wide = i < atomWideCount;
+                const databox ref = {.type =
+                                         DATABOX_CONTAINER_REFERENCE_EXTERNAL,
+                                     .data.u = idBase + i};
+
+                databoxBig big;
+                memset(&big, 0xFF, sizeof(big));
+                big.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL;
+                big.data.u = idBase + i;
+                multimapAtomLookupConvertBig(ma, &big);
+                if (big.type != want->type || big.big != wide ||
+                    big.allocated) {
+                    ERR("pass %d value %zu: ConvertBig gave type %d big %d "
+                        "allocated %d",
+                        pass, i, big.type, big.big, big.allocated);
+                } else if (wide) {
+                    if (big.data.u128 != (__uint128_t *)big.extra ||
+                        *big.data.u128 != store[i]) {
+                        ERR("pass %d value %zu: ConvertBig wide value wrong",
+                            pass, i);
+                    }
+                } else if (databoxCompare((databox *)&big, want) != 0) {
+                    ERR("pass %d value %zu: ConvertBig narrow value wrong",
+                        pass, i);
+                }
+
+                databox plain;
+                memset(&plain, 0xFF, sizeof(plain));
+                plain.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL;
+                plain.data.u = idBase + i;
+                multimapAtomLookupConvert(ma, &plain);
+                if (plain.type != want->type) {
+                    ERR("pass %d value %zu: Convert gave type %d", pass, i,
+                        plain.type);
+                } else if (wide) {
+                    if (plain.big || plain.data.ptr) {
+                        ERR("pass %d value %zu: Convert of a wide value is "
+                            "not type-only",
+                            pass, i);
+                    }
+                } else if (databoxCompare(&plain, want) != 0) {
+                    ERR("pass %d value %zu: Convert narrow value wrong", pass,
+                        i);
+                }
+
+                multimapAtomResult result;
+                memset(&result, 0xFF, sizeof(result));
+                multimapAtomLookupResult(ma, &ref, &result);
+                if (result.val.type != want->type) {
+                    ERR("pass %d value %zu: Result gave type %d", pass, i,
+                        result.val.type);
+                } else if (wide && (result.val.big || result.val.data.ptr)) {
+                    ERR("pass %d value %zu: Result of a wide value is not "
+                        "type-only",
+                        pass, i);
+                }
+
+                databox count = {{0}};
+                atomTestPoisonStack();
+                multimapAtomLookupRefcount(ma, &ref, &count);
+                if (count.type != DATABOX_FALSE) {
+                    ERR("pass %d value %zu: refcount type %d", pass, i,
+                        count.type);
+                }
+            }
+
+            /* A reference that is not in the table stays a reference. */
+            databoxBig miss;
+            memset(&miss, 0xFF, sizeof(miss));
+            miss.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL;
+            miss.data.u = 999;
+            multimapAtomLookupConvertBig(ma, &miss);
+            if (miss.type != DATABOX_CONTAINER_REFERENCE_EXTERNAL ||
+                miss.data.u != 999 || miss.big || miss.allocated) {
+                ERR("pass %d: ConvertBig changed a missing reference", pass);
+            }
+
+            if (pass == 1 && multimapCount(ma->mapAtomForward) < 400) {
+                ERRR("filler rows missing from the forward map");
+            }
         }
 
         multimapAtomFree(ma);

@@ -469,6 +469,7 @@ void multimapAtomInsertWithExactAtomID(multimapAtom *ma, uint64_t atomRef,
 bool multimapAtomLookup(const multimapAtom *ma, const databox *ref,
                         databox *key);
 void multimapAtomLookupConvert(const multimapAtom *ma, databox *box);
+void multimapAtomLookupConvertBig(const multimapAtom *ma, databoxBig *box);
 void multimapAtomLookupResult(const multimapAtom *ma, const databox *key,
                               multimapAtomResult *result);
 void multimapAtomLookupRefcount(const multimapAtom *ma, const databox *key,
@@ -492,6 +493,18 @@ size_t multimapAtomBytes(const multimapAtom *ma);
 ```
 
 `multimapAtomResult` is `{databox val; uint64_t refcount;}`.
+
+### 96/128-bit Atom Values
+
+`multimapAtomLookupConvert()` copies the reference out before decoding, so the
+box is never both the lookup key and the output. A plain `databox` has no room
+for a wide value, so a 96/128-bit atom value comes back type-only
+(`data.ptr == NULL`, `big = 0`); `multimapAtomLookupResult()` reports
+`result->val` the same way. `multimapAtomLookupConvertBig()` resolves into a
+`databoxBig`: it reads only the reference from the box, then sets `big = 1`
+exactly for a wide value, which lives in `box->extra`. A reference that is not
+in the table is left in the box. `multimapAtomLookup()` decodes into the
+caller's box under the usual rule: arm a `databoxBig` to receive a wide value.
 
 ### String Interning
 
