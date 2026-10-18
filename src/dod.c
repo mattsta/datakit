@@ -885,20 +885,45 @@ dodVal dodRead(dodWriter *const w, const size_t offset) {
 /* ====================================================================
  * Write to cannonical dod
  * ==================================================================== */
+/* Make 'w->d' big enough for 'extraBits' more bits after 'usedBits', plus
+ * what a reader touches past the end: decoding the last entry reads its
+ * 8-bit type, up to 7 bits beyond the stream, through whole 64-bit words.
+ * Grows with zrealloc (at least doubling) and zeroes the new tail, since
+ * zero entries are only skipped bits and rely on it. A NULL 'w->d' is
+ * allocated here. */
+static void dodWriterReserve(dodWriter *const w, const size_t extraBits) {
+    const size_t endBits = w->usedBits + extraBits;
+    const size_t needBytes = (((endBits + 6) / 64) + 1) * sizeof(dod);
+    const size_t haveBytes = w->d ? w->totalBytes : 0;
+    if (haveBytes >= needBytes) {
+        return;
+    }
+
+    size_t newBytes = haveBytes * 2;
+    if (newBytes < needBytes) {
+        newBytes = needBytes;
+    }
+
+    /* @own: container; free=zfree */
+    w->d = zrealloc(w->d, newBytes);
+    memset((uint8_t *)w->d + haveBytes, 0, newBytes - haveBytes);
+    w->totalBytes = newBytes;
+}
+
 void dodWrite(dodWriter *const w, const dodVal val) {
     if (w->count == 0) {
         /* First value: kept in t[0] until the second one arrives */
         w->t[0] = val;
     } else if (w->count == 1) {
         /* Second value: the stream starts with a header holding both */
-        assert(w->d);
+        w->usedBits = 0;
+        dodWriterReserve(w, DOD_WRITER_HEADER_MAX_BITS);
         w->t[1] = val;
         w->usedBits = dodHeaderWrite(w->d, w->t[0], val);
     } else {
-        /* else, we can write to bitmap directly. */
-
-        /* bitmap must be created prior to here with proper extent */
-        assert(w->d);
+        /* else, we can write to bitmap directly: one entry is at most
+         * 72 bits */
+        dodWriterReserve(w, 72);
 
         dodAppend(w->d, w->t[0], w->t[1], val, &w->usedBits);
 
@@ -1334,21 +1359,39 @@ static void dodSequenceFromDods(dodVal *out, const dodVal v0, const dodVal v1,
  * on the open and the closed writer, dodInitFromExisting() plus dodGet()
  * (absolute and sequential), and dodReadAll(). 'expectedCode' is the header
  * code the first two values must select (-1: don't check). */
-static int dodCheckWriterStream(const char *what, const dodVal *vals,
-                                const size_t n, const int expectedCode) {
-    int err = 0;
-    const size_t slots = ((DOD_WRITER_HEADER_MAX_BITS + n * 72) / 64) + 2;
-    cleanerName(zfree, Dods) dod *stream = zcalloc(slots, sizeof(*stream));
+static void dodTestWriterFree_cleanup(dodWriter *w) {
+    zfree(w->d);
+}
 
-    dodWriter w;
+static int dodCheckWriterStream(const char *what, const dodVal *vals,
+                                const size_t n, const int expectedCode,
+                                const size_t initialBytes) {
+    int err = 0;
+
+    /* The writer owns its stream: NULL (initialBytes 0) or a zeroed
+     * preallocation, grown by dodWrite() as needed */
+    cleaner(dodTestWriterFree) dodWriter w;
     dodInit(&w);
-    w.d = stream;
+    if (initialBytes) {
+        /* @own: container; free=zfree */
+        w.d = zcalloc(1, initialBytes);
+        w.totalBytes = initialBytes;
+    }
+
     for (size_t i = 0; i < n; i++) {
         dodWrite(&w, vals[i]);
     }
 
+    const dod *const stream = w.d;
+
     if (w.count != n) {
         ERR("%s: count %zu after %zu writes", what, w.count, n);
+    }
+
+    /* Room for everything a reader touches: whole words through the 8-bit
+     * type read at the last entry */
+    if (n >= 2 && w.totalBytes < (((w.usedBits + 6) / 64) + 1) * sizeof(dod)) {
+        ERR("%s: %zu bytes for %zu bits", what, w.totalBytes, w.usedBits);
     }
 
     if (n >= 2 && expectedCode >= 0 &&
@@ -1844,16 +1887,17 @@ int dodTest(int argc, char *argv[]) {
                 (void *)w.d, w.t[0], w.t[1], w.count, w.usedBits, w.totalBytes);
         }
 
-        /* The first two values go to t[] and are counted from zero */
-        dod stream[4] = {0};
-        w.d = stream;
+        /* The first two values go to t[] and are counted from zero; the
+         * second allocates the stream */
         dodWrite(&w, 11);
         dodWrite(&w, 22);
-        if (w.count != 2 || w.t[0] != 11 || w.t[1] != 22) {
+        if (w.count != 2 || w.t[0] != 11 || w.t[1] != 22 || !w.d) {
             ERR("fresh writer after two writes: count=%zu t={%" PRId64
-                ", %" PRId64 "}",
-                w.count, w.t[0], w.t[1]);
+                ", %" PRId64 "} d=%p",
+                w.count, w.t[0], w.t[1], (void *)w.d);
         }
+
+        zfree(w.d);
     }
 
     TEST("writer streams: write, close, reopen and read back") {
@@ -1906,8 +1950,11 @@ int dodTest(int argc, char *argv[]) {
                                   : (dodVal)(prev + step);
                 }
 
+                /* Writer-allocated, tiny and roomy preallocations */
+                const size_t initialBytes[] = {0, 8, 4096};
                 err += dodCheckWriterStream("writer stream", vals, n,
-                                            pairs[p].code);
+                                            pairs[p].code,
+                                            initialBytes[(p + l) % 3]);
             }
         }
 
@@ -1918,6 +1965,28 @@ int dodTest(int argc, char *argv[]) {
         if (dodRead(&empty, 0) != 0 || empty.t[0] != 0 || empty.t[1] != 0) {
             ERRR("empty writer did not stay empty");
         }
+    }
+
+    TEST("writer streams grow well past their initial capacity") {
+        /* Worst-case entries (72 bits each) from a 16-byte preallocation
+         * and from no allocation at all; every read path then runs over
+         * the grown stream, so ASan sees any write or read past it */
+        const size_t n = 3000;
+        cleanerName(zfree, I64) dodVal *vals = zcalloc(n, sizeof(*vals));
+        uint64_t rng = 0xa4093822299f31d0ULL;
+        for (size_t i = 0; i < n; i++) {
+            vals[i] = (dodVal)dodTestRand(&rng);
+        }
+
+        err += dodCheckWriterStream("grown from 16 bytes", vals, n, -1, 16);
+        err += dodCheckWriterStream("grown from NULL", vals, n, -1, 0);
+
+        /* Regular timestamps: one bit per entry, many entries per word */
+        for (size_t i = 0; i < n; i++) {
+            vals[i] = 1700000000000LL + (dodVal)i * 1000;
+        }
+
+        err += dodCheckWriterStream("grown, regular", vals, n, -1, 8);
     }
 
     TEST("dodReader - O(1) sequential access") {

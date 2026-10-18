@@ -48,14 +48,16 @@ bool bbitsDodDodAppend(bbitsDodDod *dd, const dodVal newKey,
              * up to 8 bytes ahead when bits span word boundaries */
             const size_t kwCeil = DOD_DIV_CEIL(kw->usedBits, 8) + 8;
             const size_t vwCeil = DOD_DIV_CEIL(vw->usedBits, 8) + 8;
-            if (kwCeil < BYTES_PER_BITMAP) {
+            if (kwCeil < kw->totalBytes) {
                 /* @own: container; free=zfree */
                 kw->d = zrealloc(kw->d, kwCeil);
+                kw->totalBytes = kwCeil;
             }
 
-            if (vwCeil < BYTES_PER_BITMAP) {
+            if (vwCeil < vw->totalBytes) {
                 /* @own: container; free=zfree */
                 vw->d = zrealloc(vw->d, vwCeil);
+                vw->totalBytes = vwCeil;
             }
         }
 
@@ -86,10 +88,13 @@ bool bbitsDodDodAppend(bbitsDodDod *dd, const dodVal newKey,
         *kw = (dodWriter){0};
         *vw = (dodWriter){0};
 
+        /* The writers own these from here and grow them if they must */
         /* @own: container; free=zfree */
         kw->d = zcalloc(1, BYTES_PER_BITMAP);
+        kw->totalBytes = BYTES_PER_BITMAP;
         /* @own: container; free=zfree */
         vw->d = zcalloc(1, BYTES_PER_BITMAP);
+        vw->totalBytes = BYTES_PER_BITMAP;
 
         /* Initialize original t0/t1 - will be set on first two writes */
         dd->keyT0[dd->count - 1] = 0;
@@ -315,9 +320,10 @@ bool bbitsDodXofAppend(bbitsDodXof *dx, const dodVal newKey,
              * up to 8 bytes ahead when bits span word boundaries */
             const size_t kwCeil = DOD_DIV_CEIL(kw->usedBits, 8) + 8;
             const size_t vwCeil = DOD_DIV_CEIL(vw->usedBits, 8) + 8;
-            if (kwCeil < BYTES_PER_BITMAP) {
+            if (kwCeil < kw->totalBytes) {
                 /* @own: container; free=zfree */
                 kw->d = zrealloc(kw->d, kwCeil);
+                kw->totalBytes = kwCeil;
             }
 
             if (vwCeil < BYTES_PER_BITMAP) {
@@ -350,8 +356,10 @@ bool bbitsDodXofAppend(bbitsDodXof *dx, const dodVal newKey,
         *vw = (xofWriter){.currentLeadingZeroes = -1,
                           .currentTrailingZeroes = -1};
 
+        /* The key writer owns its stream from here and grows it if it must */
         /* @own: container; free=zfree */
         kw->d = zcalloc(1, BYTES_PER_BITMAP);
+        kw->totalBytes = BYTES_PER_BITMAP;
         /* @own: container; free=zfree */
         vw->d = zcalloc(1, BYTES_PER_BITMAP);
 

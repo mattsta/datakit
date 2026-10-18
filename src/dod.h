@@ -21,8 +21,11 @@ typedef int64_t dodVal;
 #define DOD_WRITER_HEADER_MAX_BITS 130
 
 typedef struct dodWriter {
-    /* Writer stream; must be allocated and zeroed before the second
-     * dodWrite(), with room for the header plus 72 bits per later value */
+    /* Writer stream, owned by the writer: dodWrite() allocates it when NULL
+     * and grows it with zrealloc as values arrive, keeping 'totalBytes'
+     * current and room for readers to decode everything written. A caller
+     * may preallocate it instead, zero-filled from the zmalloc family, with
+     * 'totalBytes' set to its size. Free it with zfree(). */
     dod *d;
 
     /* If this writer is OPEN, then t[2] is the write helpers (the last two
@@ -41,7 +44,7 @@ typedef struct dodWriter {
      * bit offset of the first delta-of-delta entry (the header's end). */
     size_t usedBits;
 
-    /* Total bytes allocated for 'd' */
+    /* Bytes allocated for 'd' (ignored while 'd' is NULL) */
     size_t totalBytes;
 } dodWriter;
 
