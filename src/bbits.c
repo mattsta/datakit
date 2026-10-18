@@ -172,27 +172,35 @@ bool bbitsDodDodGetOffsetCount(bbitsDodDod *dd, ssize_t offset,
         }
     }
 
-    /* If negative count, return all elements */
-    if (*count < 0 || *count > (ssize_t)dd->elements) {
-        *count = dd->elements;
+    /* Nothing to read at or past the end */
+    if ((size_t)offset >= dd->elements) {
+        return false;
+    }
+
+    /* A negative count, or one running past the end, reads to the end */
+    const size_t available = dd->elements - (size_t)offset;
+    if (*count < 0 || (size_t)*count > available) {
+        *count = (ssize_t)available;
     }
 
     size_t currentCount = 0;
     /* Find first bitmap pair having 'offset' within it... */
     size_t i;
     for (i = 0; i < dd->count; i++) {
-        kw = &dd->key[i];
-        vw = &dd->val[i];
-
-        assert(kw->count == vw->count);
+        assert(dd->key[i].count == dd->val[i].count);
 
         /* If offset is within this bitmap, stop here */
-        if (currentCount + kw->count > (size_t)offset) {
+        if (currentCount + dd->key[i].count > (size_t)offset) {
             break;
         }
 
-        currentCount += kw->count;
+        currentCount += dd->key[i].count;
     }
+
+    /* offset < elements, so the scan stopped inside a bitmap pair */
+    assert(i < dd->count);
+    kw = &dd->key[i];
+    vw = &dd->val[i];
 
     /* startOffset is how far into this bitmap to start reading */
     size_t startOffset = (size_t)offset - currentCount;
@@ -412,27 +420,35 @@ bool bbitsDodXofGetOffsetCount(bbitsDodXof *dx, ssize_t offset, ssize_t *count,
         }
     }
 
-    /* If negative count, return all elements */
-    if (*count < 0 || *count > (ssize_t)dx->elements) {
-        *count = dx->elements;
+    /* Nothing to read at or past the end */
+    if ((size_t)offset >= dx->elements) {
+        return false;
+    }
+
+    /* A negative count, or one running past the end, reads to the end */
+    const size_t available = dx->elements - (size_t)offset;
+    if (*count < 0 || (size_t)*count > available) {
+        *count = (ssize_t)available;
     }
 
     size_t currentCount = 0;
     /* Find first bitmap pair having 'offset' within it... */
     size_t i;
     for (i = 0; i < dx->count; i++) {
-        kw = &dx->key[i];
-        vw = &dx->val[i];
-
-        assert(kw->count == vw->count);
+        assert(dx->key[i].count == dx->val[i].count);
 
         /* If offset is within this bitmap, stop here */
-        if (currentCount + kw->count > (size_t)offset) {
+        if (currentCount + dx->key[i].count > (size_t)offset) {
             break;
         }
 
-        currentCount += kw->count;
+        currentCount += dx->key[i].count;
     }
+
+    /* offset < elements, so the scan stopped inside a bitmap pair */
+    assert(i < dx->count);
+    kw = &dx->key[i];
+    vw = &dx->val[i];
 
     /* startOffset is how far into this bitmap to start reading */
     size_t startOffset = (size_t)offset - currentCount;
@@ -906,6 +922,125 @@ int bbitsTest(int argc, char *argv[]) {
         zfree(keys);
         zfree(vals);
         bbitsDodDodFree(&dd);
+    }
+
+    /* Reads that start at or past the end are refused; reads that run past
+     * the end stop at the end and report the shorter count. */
+    printf("Testing offset/count range clamping...\n");
+    {
+        /* Irregular values so the DoD stream spills into several segments */
+#define BBITS_CLAMP_VAL(i) (((uint64_t)(i) * 2654435761u) % 1000003)
+        const size_t numElements = 5000;
+        bbitsDodDod dd = {0};
+        bbitsDodXof dx = {0};
+        for (size_t i = 0; i < numElements; i++) {
+            bbitsDodDodAppend(&dd, (dodVal)(i * 100),
+                              (dodVal)BBITS_CLAMP_VAL(i));
+            bbitsDodXofAppend(&dx, (dodVal)(i * 100), (double)i * 0.123 + 42.0);
+        }
+
+        if (dd.count < 2 || dx.count < 2) {
+            ERR("Expected multiple segments, got %zu and %zu", dd.count,
+                dx.count);
+        }
+
+        const ssize_t pastEnd[] = {(ssize_t)numElements,
+                                   (ssize_t)numElements + 7};
+        for (size_t p = 0; p < sizeof(pastEnd) / sizeof(*pastEnd); p++) {
+            ssize_t count = 1;
+            uint64_t *keys = NULL;
+            uint64_t *vals = NULL;
+            double *dvals = NULL;
+            if (bbitsDodDodGetOffsetCount(&dd, pastEnd[p], &count, &keys, &vals,
+                                          NULL, NULL, NULL)) {
+                ERR("DodDod offset %zd should be refused", pastEnd[p]);
+                zfree(keys);
+                zfree(vals);
+            }
+
+            count = 1;
+            if (bbitsDodXofGetOffsetCount(&dx, pastEnd[p], &count, &keys,
+                                          &dvals, NULL, NULL, NULL)) {
+                ERR("DodXof offset %zd should be refused", pastEnd[p]);
+                zfree(keys);
+                zfree(dvals);
+            }
+        }
+
+        /* {offset, requested count, count expected back} */
+        const ssize_t cases[][3] = {
+            {(ssize_t)numElements - 10, -1, 10},
+            {(ssize_t)numElements - 10, 50, 10},
+            {-10, 50, 10},
+            {1000, (ssize_t)numElements, (ssize_t)numElements - 1000},
+            {(ssize_t)numElements - 1, 1, 1},
+        };
+        for (size_t c = 0; c < sizeof(cases) / sizeof(*cases); c++) {
+            const size_t start = cases[c][0] < 0
+                                     ? numElements + (size_t)cases[c][0]
+                                     : (size_t)cases[c][0];
+            const size_t want = (size_t)cases[c][2];
+
+            ssize_t count = cases[c][1];
+            uint64_t *keys = NULL;
+            uint64_t *vals = NULL;
+            double mean = 0, variance = 0, stddev = 0;
+            if (!bbitsDodDodGetOffsetCount(&dd, cases[c][0], &count, &keys,
+                                           &vals, &mean, &variance, &stddev)) {
+                ERR("DodDod case %zu refused", c);
+                continue;
+            }
+
+            if ((size_t)count != want) {
+                ERR("DodDod case %zu: count %zd, expected %zu", c, count, want);
+            }
+
+            double sum = 0;
+            for (size_t j = 0; j < want && j < (size_t)count; j++) {
+                const size_t src = start + j;
+                if (keys[j] != src * 100 || vals[j] != BBITS_CLAMP_VAL(src)) {
+                    ERR("DodDod case %zu: wrong pair at %zu", c, j);
+                    break;
+                }
+                sum += (double)BBITS_CLAMP_VAL(src);
+            }
+
+            if (fabs(mean - sum / (double)want) > 1e-6) {
+                ERR("DodDod case %zu: mean %f, expected %f", c, mean,
+                    sum / (double)want);
+            }
+
+            zfree(keys);
+            zfree(vals);
+
+            count = cases[c][1];
+            double *dvals = NULL;
+            if (!bbitsDodXofGetOffsetCount(&dx, cases[c][0], &count, &keys,
+                                           &dvals, NULL, NULL, NULL)) {
+                ERR("DodXof case %zu refused", c);
+                continue;
+            }
+
+            if ((size_t)count != want) {
+                ERR("DodXof case %zu: count %zd, expected %zu", c, count, want);
+            }
+
+            for (size_t j = 0; j < want && j < (size_t)count; j++) {
+                const size_t src = start + j;
+                if (keys[j] != src * 100 ||
+                    dvals[j] != (double)src * 0.123 + 42.0) {
+                    ERR("DodXof case %zu: wrong pair at %zu", c, j);
+                    break;
+                }
+            }
+
+            zfree(keys);
+            zfree(dvals);
+        }
+
+        bbitsDodDodFree(&dd);
+        bbitsDodXofFree(&dx);
+#undef BBITS_CLAMP_VAL
     }
 
     TEST_FINAL_RESULT;

@@ -46,6 +46,15 @@ typedef struct bbitsDodXof {
  * ==================================================================== */
 bool bbitsDodDodAppend(bbitsDodDod *dd, const dodVal newKey,
                        const dodVal newVal);
+
+/* Read '*count' pairs starting at 'offset' into new zmalloc'd '*key' and
+ * '*val' arrays (caller frees both with zfree). A negative 'offset' counts
+ * back from the end. A negative '*count', or one running past the end, reads
+ * to the end, and '*count' is set to the number of pairs actually read.
+ * Returns false, allocating nothing, when the structure is empty or 'offset'
+ * lies outside it. If 'mean', 'variance' and 'stddev' are all non-NULL they
+ * receive running statistics over the values read. The DodXof variant below
+ * follows the same contract. */
 bool bbitsDodDodGetOffsetCount(bbitsDodDod *dd, ssize_t offset, ssize_t *count,
                                uint64_t **key, uint64_t **val, double *mean,
                                double *variance, double *stddev);
