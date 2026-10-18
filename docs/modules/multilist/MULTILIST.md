@@ -654,22 +654,6 @@ old tail. It takes `multilist *` (not `multilist **`) because rotation cannot
 change the element count and therefore never triggers an upgrade. Rotating a
 list of 0 or 1 elements is a no-op. A 96/128-bit tail moves intact.
 
-### Dump
-
-```c
-/* Every element, in list order, as one new flex */
-flex *multilistDump(const multilist *m, mflexState *state);
-```
-
-`multilistDump()` returns a new flex holding every element in order. Release
-it with `flexFree()`. The element encodings are copied byte for byte and
-never decoded. The result is therefore identical to pushing each element onto
-an empty flex in order, including 96/128-bit values. Small duplicates its
-flex, Medium merges its two flexes with one allocation, and Full appends each
-node. `state` is scratch space for opening compressed Full nodes, and Small and
-Medium ignore it. The dump only reads the list. The persist layer uses it for
-multilist snapshots.
-
 ```c
 /* Example: Round-robin processing.
  * Because rotate pulls from the tail, read the tail before each rotation. */
@@ -687,6 +671,22 @@ for (uint32_t round = 0; round < 1000; round++) {
     }
 }
 ```
+
+### Dump
+
+```c
+/* Every element, in list order, as one new flex */
+flex *multilistDump(const multilist *m, mflexState *state);
+```
+
+`multilistDump()` returns a new flex holding every element in order. Release
+it with `flexFree()`. The element encodings are copied byte for byte and
+never decoded. The result is therefore identical to pushing each element onto
+an empty flex in order, including 96/128-bit values. Small duplicates its
+flex, Medium merges its two flexes with one allocation, and Full appends each
+node. `state` is scratch space for opening compressed Full nodes, and Small and
+Medium ignore it. The dump only reads the list. The persist layer uses it for
+multilist snapshots.
 
 ## Performance Characteristics
 
