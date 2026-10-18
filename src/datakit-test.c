@@ -1734,10 +1734,17 @@ typedef struct dkSeqReaderCtx {
     uint64_t validReads;
     uint64_t mixedReads;
 } dkSeqReaderCtx;
+/* The iteration that observes `stop` still reads once.  The test sets
+ * `stop` only after every writer is joined, so that last read sees a
+ * settled publication and must read VALID.  This makes "the reader
+ * validated at least one copy" depend on the seqlock, not on whether
+ * the scheduler ran this thread while the writers were publishing. */
 static void *dkSeqReaderMain_(void *arg) {
     dkSeqReaderCtx *r = arg;
     uint8_t out[DK_SEQ_BYTES];
-    while (!atomic_load_explicit(r->stop, memory_order_acquire)) {
+    bool stopped = false;
+    do {
+        stopped = atomic_load_explicit(r->stop, memory_order_acquire);
         const uint64_t want = ownedSeqAssigned(r->seq);
         if (want == 0) {
             continue;
@@ -1750,7 +1757,7 @@ static void *dkSeqReaderMain_(void *arg) {
                 r->mixedReads++;
             }
         }
-    }
+    } while (!stopped);
     return NULL;
 }
 
