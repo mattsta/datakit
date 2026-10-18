@@ -1799,7 +1799,10 @@ CTEST_INCLUDE_GEN(str)
 
 #define OK printf("\tOK\n")
 
+/* Build with -DML_TEST_VERBOSE=1 to print list shapes as the tests run */
+#ifndef ML_TEST_VERBOSE
 #define ML_TEST_VERBOSE 0
+#endif
 
 __attribute__((unused)) static void compressedRepr(multilistFull *ml) {
     printf("[");
@@ -1813,16 +1816,12 @@ static void mlInfo(multilistFull *ml) {
 #if ML_TEST_VERBOSE
     printf("Container length (nodes): %" PRId32 "\n", ml->count);
     printf("Container values (elements): %" PRId64 "\n", ml->values);
-    if (mlHead(ml)) {
-        printf("\t(elements in head: %zu)\n", flexCount(mlHead(ml)->data.fl));
-    }
-
-    if (mlTail(ml)) {
-        printf("\t(elements in tail: %zu)\n", flexCount(mlTail(ml)->data.fl));
-    }
-
-    if (mlHead(ml) == mlTail(ml)) {
-        printf("\tHEAD==TAIL\n");
+    if (ml->count > 0) {
+        printf("\t(elements in head: %zu)\n", mflexCount(mlHead(ml)));
+        printf("\t(elements in tail: %zu)\n", mflexCount(mlTail(ml)));
+        if (mlHead(ml) == mlTail(ml)) {
+            printf("\tHEAD==TAIL\n");
+        }
     }
 
     printf("\n");
