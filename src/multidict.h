@@ -165,15 +165,40 @@ typedef struct multidictIterator {
     bool safe;
 } multidictIterator;
 
-/* databox = 16 bytes (static-asserted in databox.h); 3 * databox = 48-byte
- * struct, no padding — already optimal, don't "fix" it. */
+/* An entry the library fills (multidictIteratorNext, slot iterators).
+ * Each field is a databox with the storage of a databoxBig behind it:
+ * 'key' and 'keyBig' are the same bytes, and a 96/128-bit key or value
+ * lives in its field's 'extra', which data.i128 / data.u128 points at
+ * (big = 1).  Any other value has big = 0.  The library sets every field
+ * up before each fill, so the entry needs no initialization.
+ *
+ * Lifetime: the fields borrow.  BYTES point into the dict until it
+ * changes; a 96/128-bit value points into the entry itself, so a copy
+ * of 'entry.key' is valid only while 'entry' is.  Keep a value past
+ * that with databoxCopy (owned; release with databoxFreeData) or
+ * databoxBigCopyFrom (re-homed into another databoxBig).
+ *
+ * 3 * databoxBig = 96 bytes, 16-byte aligned. */
 typedef struct multidictEntry {
-    /* used to have 'iterator' here, but... it wasn't used. */
-    databox key;
-    databox val;
-    databox extra; /* sometimes we need a third field */
-    /* used to have 'offset' here too, but it was unused. */
+    union {
+        databox key;
+        databoxBig keyBig;
+    };
+    union {
+        databox val;
+        databoxBig valBig;
+    };
+    union {
+        databox extra; /* sometimes we need a third field */
+        databoxBig extraBig;
+    };
 } multidictEntry;
+#if DK_C11
+_Static_assert(sizeof(multidictEntry) == 96,
+               "multidictEntry is three databoxBig fields");
+_Static_assert(_Alignof(multidictEntry) == 16,
+               "multidictEntry wide storage must be 16-byte aligned");
+#endif
 
 typedef multidictIterProcess multidictScanFunction;
 
@@ -191,6 +216,30 @@ bool multidictIsRehashing_(const multidict *d);  /* Is rehash in progress? */
 #define multidictSize(d) multidictCount(d)
 #define multidictSlots(d) multidictSlotCount(d)
 #define multidictIsRehashing(d) multidictIsRehashing_(d)
+
+/* 96/128-bit keys and values.
+ *
+ * Keys and values may be 96/128-bit integers; a key hashes by value, so a
+ * 128-bit box holding a value that fits 64 bits finds the same entry as
+ * the 64-bit box.  Such a value does not fit a databox, so where it lands
+ * depends on who owns the destination (see databox.h, "the destination
+ * owner sets the wide capability"):
+ *
+ *   - Caller boxes (multidictFind's valbox, multidictGetRandomKey's
+ *     keybox, multidictGetSomeKeys' keys) are filled in place, as
+ *     flexGetByType fills them: pass a DATABOX_BIG_INIT'd databoxBig,
+ *     re-initialized before each call, to receive a wide value; a zeroed
+ *     box receives the type only.  BYTES results borrow from the dict
+ *     until it changes.
+ *   - Removing reads (multidictGetAndDelete, multidictPopRandom) never
+ *     read their destination boxes and return self-contained values:
+ *     BYTES and 96/128-bit values are heap copies.  Release each one with
+ *     databoxFreeData.
+ *   - multidictEntry fields, and the boxes passed to scan callbacks and
+ *     eviction callbacks, carry their own wide storage and are valid for
+ *     the duration of the call (callbacks) or until the entry is reused.
+ *   - multidictIncrBy and multidictIncrByFloat treat a 96/128-bit value as
+ *     non-numeric and fail with MULTIDICT_ERR. */
 
 /* API */
 multidict *multidictNew(multidictType *type, multidictClass *qdc, int32_t seed);

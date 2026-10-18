@@ -155,15 +155,32 @@ typedef struct multidictIterator {
     bool safe;               /* Safe to modify during iteration? */
 } multidictIterator;
 
-/* Entry returned during iteration.
- * databox is statically asserted at 16 bytes, so this is exactly
- * 48 bytes with no padding. */
+/* Entry returned during iteration.  Each field is a databox with a
+ * databoxBig's storage behind it, so a 96/128-bit key or value lives in
+ * the entry; 96 bytes, 16-byte aligned (statically asserted). */
 typedef struct multidictEntry {
-    databox key;
-    databox val;
-    databox extra;  /* Optional third field */
+    union {
+        databox key;
+        databoxBig keyBig;
+    };
+    union {
+        databox val;
+        databoxBig valBig;
+    };
+    union {
+        databox extra; /* Optional third field */
+        databoxBig extraBig;
+    };
 } multidictEntry;
 ```
+
+The library sets every field up before it fills the entry, so an entry
+needs no initialization. The fields borrow: BYTES point into the dict
+until it changes, and a 96/128-bit value points into the entry itself
+(`big = 1`, payload in the field's `extra`), so a struct copy of
+`entry.key` is valid only while `entry` is. Keep a value longer with
+`databoxCopy` (owned; release with `databoxFreeData`) or
+`databoxBigCopyFrom` (re-homed into another `databoxBig`).
 
 ### Statistics Types
 
@@ -357,7 +374,19 @@ if (multidictFind(d, &searchKey, &foundValue)) {
            (int)foundValue.len,
            foundValue.data.bytes.start);
 }
+
+/* Example: a value that may be 96/128-bit.  The caller owns the
+ * destination, so it sets up the wide capability (re-run
+ * DATABOX_BIG_INIT before each call). */
+databoxBig wideValue;
+DATABOX_BIG_INIT(&wideValue);
+if (multidictFind(d, &searchKey, (databox *)&wideValue)) {
+    /* wideValue.data.u128 points at wideValue.extra if it is wide */
+}
 ```
+
+`valbox` is filled in place, as `flexGetByType` fills a box: a zeroed
+`databox` receives a 96/128-bit value's type only (`data.ptr == NULL`).
 
 ### Deletion
 
@@ -391,8 +420,34 @@ bool multidictPopRandom(multidict *d, databox *keybox, databox *valbox);
 databox k, v;
 while (multidictPopRandom(d, &k, &v)) {
     process(&k, &v);
+    databoxFreeData(&k);
+    databoxFreeData(&v);
 }
 ```
+
+The entry is gone once these return, so they never read their
+destination boxes and hand back self-contained values: BYTES and
+96/128-bit values are heap copies (`allocated = 1`). Release every
+returned box with `databoxFreeData`.
+
+### 96/128-bit Keys and Values
+
+Keys and values may be 96/128-bit integers. Where such a value lands
+follows the rule in `databox.h`: whoever owns the destination sets up
+its wide capability.
+
+| Destination                                                                                 | Who sets it up | Wide value                                                                  |
+| ------------------------------------------------------------------------------------------- | -------------- | --------------------------------------------------------------------------- |
+| `multidictFind` `valbox`, `multidictGetRandomKey` `keybox`, `multidictGetSomeKeys` `keys[]` | caller         | written to a `DATABOX_BIG_INIT`'d `databoxBig`; type only into a zeroed box |
+| `multidictGetAndDelete`, `multidictPopRandom` outputs                                       | library        | heap copy, prior contents ignored                                           |
+| `multidictEntry` fields                                                                     | library        | in the field's own storage                                                  |
+| scan and eviction callback arguments                                                        | library        | valid for the call                                                          |
+
+- A key hashes by value: a 128-bit box holding a value that fits 64 bits
+  finds the entry stored under the 64-bit form.
+- The byte statistics count a 96/128-bit key or value as 16 bytes.
+- `multidictIncrBy` and `multidictIncrByFloat` treat a 96/128-bit value
+  as non-numeric and return `MULTIDICT_ERR`.
 
 ## Copy and Merge
 
