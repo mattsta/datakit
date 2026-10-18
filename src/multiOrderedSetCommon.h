@@ -87,12 +87,87 @@ DK_INLINE_ALWAYS bool mosScoreInRange(const databox *score, const databox *min,
 }
 
 /* ====================================================================
+ * 96/128-bit values
+ * ====================================================================
+ * Scores and members may be 96/128-bit integers.  Such a value does not
+ * fit a databox, so it decodes only into storage that is set up for it
+ * (see databox.h, "the destination owner sets the wide capability"):
+ *
+ *   - Caller boxes (GetScore, GetByRank, First, Last, IteratorNext,
+ *     RandomMembers) are filled in place, as flexGetByType fills them.
+ *     Pass a DATABOX_BIG_INIT'd databoxBig, re-initialized before each
+ *     call, to receive a wide value; a zeroed box receives the type only.
+ *     A BYTES result borrows from the set until the set changes.
+ *   - Removing reads (AddGetPrevious, RemoveGetScore, PopMin, PopMax)
+ *     never read the destination and return self-contained values:
+ *     BYTES and 96/128-bit values are heap copies.  Release each one
+ *     with databoxFreeData.
+ *   - Every value the set decodes for its own use goes into a databoxBig:
+ *     flexGetByTypeBig sets up and normalizes the capability itself; for
+ *     a decoder that fills a box in place (multidictFind, the tier
+ *     iterators), mosBoxArm sets the capability up and mosBoxSettle
+ *     clears 'big' again when the result is narrow.
+ * ==================================================================== */
+
+DK_INLINE_ALWAYS bool mosBoxIsWide(const databox *box) {
+    return box->type == DATABOX_SIGNED_128 || box->type == DATABOX_UNSIGNED_128;
+}
+
+DK_INLINE_ALWAYS void mosBoxArm(databoxBig *box) {
+    memset(box, 0, sizeof(databox));
+    DATABOX_BIG_INIT(box);
+}
+
+DK_INLINE_ALWAYS void mosBoxSettle(databoxBig *box) {
+    box->big = mosBoxIsWide((const databox *)box);
+}
+
+/* Self-contained copy of the entry at 'fe' for a removing read; the
+ * prior contents of 'out' are ignored. */
+DK_INLINE_ALWAYS void mosReadOwned(const flexEntry *fe, databox *out) {
+    memset(out, 0, sizeof(*out));
+    flexGetByTypeCopy(fe, out);
+}
+
+/* Numeric score as a double.  Returns false for a non-numeric box. */
+DK_INLINE_ALWAYS bool mosScoreToDouble(const databox *box, double *out) {
+    switch (box->type) {
+    case DATABOX_DOUBLE_64:
+        *out = box->data.d64;
+        return true;
+    case DATABOX_FLOAT_32:
+        *out = (double)box->data.f32;
+        return true;
+    case DATABOX_SIGNED_64:
+        *out = (double)box->data.i64;
+        return true;
+    case DATABOX_UNSIGNED_64:
+        *out = (double)box->data.u64;
+        return true;
+    case DATABOX_SIGNED_128:
+        if (!box->data.i128) {
+            return false;
+        }
+        *out = (double)*box->data.i128;
+        return true;
+    case DATABOX_UNSIGNED_128:
+        if (!box->data.u128) {
+            return false;
+        }
+        *out = (double)*box->data.u128;
+        return true;
+    default:
+        return false;
+    }
+}
+
+/* ====================================================================
  * Entry Reading/Writing Helpers
  * ====================================================================
  * Each entry is [score, member] in the flex.
  * ==================================================================== */
 
-/* Read entry at position: returns score and member databoxes */
+/* Read entry at position into caller boxes (filled in place, see above) */
 DK_INLINE_ALWAYS void mosReadEntry(const flex *f, const flexEntry *entry,
                                    databox *score, databox *member) {
     flexGetByType(entry, score);
@@ -111,10 +186,10 @@ DK_INLINE_ALWAYS flexEntry *mosFindMemberLinear(const flex *f,
             break;
         }
 
-        databox currentMember;
-        flexGetByType(memberEntry, &currentMember);
+        databoxBig currentMember;
+        flexGetByTypeBig(memberEntry, &currentMember);
 
-        if (databoxCompare(&currentMember, member) == 0) {
+        if (databoxCompare((const databox *)&currentMember, member) == 0) {
             return entry; /* Found: return pointer to score */
         }
 

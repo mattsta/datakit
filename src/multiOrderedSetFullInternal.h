@@ -38,7 +38,7 @@ struct multiOrderedSetFull {
     multidictClass *mdClass; /* class for memberIndex (owned by us) */
     multiarray *scoreMap;    /* flex *; sorted (score,member/memberID) */
     multiarray *middle;      /* uint32_t; middle offsets per sub-map */
-    multiarray *rangeBox;    /* databox; score bounds per sub-map */
+    multiarray *rangeBox;    /* databoxBig images; head score per sub-map */
     atomPool *pool;          /* Optional: atom pool for member interning */
     uint32_t mapCount;       /* Number of sub-maps */
     uint64_t

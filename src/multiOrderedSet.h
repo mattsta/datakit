@@ -211,6 +211,31 @@
  *
  * ==================================================================== */
 
+/* ====================================================================
+ * 96/128-bit scores and members
+ * ====================================================================
+ *
+ * Scores and members may be 96/128-bit integers.  Such a value does not
+ * fit a databox, so where it lands follows the rule in databox.h: whoever
+ * owns the destination sets up its wide capability.
+ *
+ *   - Read APIs that fill caller boxes (GetScore, GetByRank, First, Last,
+ *     IteratorNext, RandomMembers) fill them in place, as flexGetByType
+ *     does.  Pass a DATABOX_BIG_INIT'd databoxBig, re-initialized before
+ *     each call, to receive a wide value; a zeroed box receives the type
+ *     only (data.ptr == NULL).  BYTES results borrow from the set until it
+ *     changes.
+ *   - Removing reads (AddGetPrevious, RemoveGetScore, PopMin, PopMax)
+ *     never read their destination boxes and return self-contained
+ *     values: BYTES and 96/128-bit values are heap copies (allocated = 1).
+ *     Release every returned box with databoxFreeData.
+ *   - Ranges (mosRangeSpec) and input boxes may be wide: point data.i128
+ *     or data.u128 at storage that outlives the call (a databoxBig set up
+ *     with DATABOX_BIG_SIGNED_128 / DATABOX_BIG_UNSIGNED_128).
+ *   - IncrBy and the set operations combine scores as doubles, so a wide
+ *     score converts to the nearest double there.
+ * ==================================================================== */
+
 typedef struct multiOrderedSet multiOrderedSet;
 
 /* ====================================================================
@@ -289,7 +314,8 @@ bool multiOrderedSetAddXX(multiOrderedSet **mos, const databox *score,
                           const databox *member);
 
 /* Add member with score, optionally getting the previous score.
- * Returns true if member already existed. */
+ * Returns true if member already existed; *prevScore is then a
+ * self-contained copy (release with databoxFreeData). */
 bool multiOrderedSetAddGetPrevious(multiOrderedSet **mos, const databox *score,
                                    const databox *member, databox *prevScore);
 
@@ -308,7 +334,8 @@ bool multiOrderedSetIncrBy(multiOrderedSet **mos, const databox *delta,
 bool multiOrderedSetRemove(multiOrderedSet **mos, const databox *member);
 
 /* Remove member and return its score.
- * Returns true if member existed. */
+ * Returns true if member existed; *score is then a self-contained copy
+ * (release with databoxFreeData). */
 bool multiOrderedSetRemoveGetScore(multiOrderedSet **mos, const databox *member,
                                    databox *score);
 
@@ -325,13 +352,17 @@ size_t multiOrderedSetRemoveRangeByRank(multiOrderedSet **mos, int64_t start,
 
 /* Pop member(s) with lowest score.
  * Returns count of members popped (up to count).
- * members and scores arrays must have space for 'count' elements. */
+ * members and scores arrays must have space for 'count' elements.
+ * Every returned box is self-contained: release each with
+ * databoxFreeData. */
 size_t multiOrderedSetPopMin(multiOrderedSet **mos, size_t count,
                              databox *members, databox *scores);
 
 /* Pop member(s) with highest score.
  * Returns count of members popped (up to count).
- * members and scores arrays must have space for 'count' elements. */
+ * members and scores arrays must have space for 'count' elements.
+ * Every returned box is self-contained: release each with
+ * databoxFreeData. */
 size_t multiOrderedSetPopMax(multiOrderedSet **mos, size_t count,
                              databox *members, databox *scores);
 
@@ -342,7 +373,8 @@ size_t multiOrderedSetPopMax(multiOrderedSet **mos, size_t count,
 /* Check if member exists */
 bool multiOrderedSetExists(const multiOrderedSet *mos, const databox *member);
 
-/* Get score of member.
+/* Get score of member, filled in place (see "96/128-bit scores and
+ * members" above).
  * Returns true if member exists. */
 bool multiOrderedSetGetScore(const multiOrderedSet *mos, const databox *member,
                              databox *score);
@@ -389,7 +421,8 @@ bool multiOrderedSetIteratorInitAtRank(const multiOrderedSet *mos,
                                        mosIterator *iter, int64_t rank,
                                        bool forward);
 
-/* Get next (score, member) pair.
+/* Get next (score, member) pair, filled in place (see "96/128-bit scores
+ * and members" above; re-initialize wide storage before each call).
  * Returns false when iteration complete. */
 bool multiOrderedSetIteratorNext(mosIterator *iter, databox *member,
                                  databox *score);

@@ -25,38 +25,8 @@ static bool mosDataboxAdd(const databox *base, const databox *delta,
                           databox *out) {
     /* Convert both to double and add */
     double baseVal, deltaVal;
-
-    switch (base->type) {
-    case DATABOX_DOUBLE_64:
-        baseVal = base->data.d64;
-        break;
-    case DATABOX_FLOAT_32:
-        baseVal = (double)base->data.f32;
-        break;
-    case DATABOX_SIGNED_64:
-        baseVal = (double)base->data.i64;
-        break;
-    case DATABOX_UNSIGNED_64:
-        baseVal = (double)base->data.u64;
-        break;
-    default:
-        return false;
-    }
-
-    switch (delta->type) {
-    case DATABOX_DOUBLE_64:
-        deltaVal = delta->data.d64;
-        break;
-    case DATABOX_FLOAT_32:
-        deltaVal = (double)delta->data.f32;
-        break;
-    case DATABOX_SIGNED_64:
-        deltaVal = (double)delta->data.i64;
-        break;
-    case DATABOX_UNSIGNED_64:
-        deltaVal = (double)delta->data.u64;
-        break;
-    default:
+    if (!mosScoreToDouble(base, &baseVal) ||
+        !mosScoreToDouble(delta, &deltaVal)) {
         return false;
     }
 
@@ -220,7 +190,7 @@ bool multiOrderedSetSmallAddGetPrevious(multiOrderedSetSmall *m,
 
     if (existing) {
         /* Get the previous score before removing */
-        flexGetByType(existing, prevScore);
+        mosReadOwned(existing, prevScore);
         mosRemoveEntry(m, existing);
         mosInsertSorted(m, score, member);
         return true; /* Existed, prevScore filled */
@@ -236,11 +206,11 @@ bool multiOrderedSetSmallIncrBy(multiOrderedSetSmall *m, const databox *delta,
 
     if (existing) {
         /* Get current score */
-        databox currentScore;
-        flexGetByType(existing, &currentScore);
+        databoxBig currentScore;
+        flexGetByTypeBig(existing, &currentScore);
 
         /* Add delta to current score */
-        if (!mosDataboxAdd(&currentScore, delta, result)) {
+        if (!mosDataboxAdd((const databox *)&currentScore, delta, result)) {
             return false; /* Type mismatch or overflow */
         }
 
@@ -278,7 +248,7 @@ bool multiOrderedSetSmallRemoveGetScore(multiOrderedSetSmall *m,
         return false;
     }
 
-    flexGetByType(existing, score);
+    mosReadOwned(existing, score);
     mosRemoveEntry(m, existing);
     return true;
 }
@@ -289,26 +259,29 @@ size_t multiOrderedSetSmallRemoveRangeByScore(multiOrderedSetSmall *m,
     flexEntry *entry = flexHead(m->map);
 
     while (entry) {
-        databox score, member;
+        databoxBig score;
         flexEntry *memberEntry = flexNext(m->map, entry);
         if (!memberEntry) {
             break;
         }
 
-        flexGetByType(entry, &score);
-        flexGetByType(memberEntry, &member);
+        flexGetByTypeBig(entry, &score);
 
         /* Check if in range */
-        if (mosScoreInRange(&score, &range->min, range->minExclusive,
-                            &range->max, range->maxExclusive)) {
-            /* Get next entry before removing */
-            flexEntry *nextEntry = flexNext(m->map, memberEntry);
+        if (mosScoreInRange((const databox *)&score, &range->min,
+                            range->minExclusive, &range->max,
+                            range->maxExclusive)) {
+            /* Removing shifts the following pairs down, may move the flex
+             * and may shrink its header: the next pair then starts where
+             * this one did, measured from the head */
+            const size_t offset = (size_t)(entry - flexHead(m->map));
+            const bool hasNext = flexNext(m->map, memberEntry) != NULL;
             mosRemoveEntry(m, entry);
             removed++;
-            entry = nextEntry;
+            entry = hasNext ? flexHead(m->map) + offset : NULL;
         } else {
             /* If score > max, we can stop (sorted order) */
-            int cmp = databoxCompare(&score, &range->max);
+            int cmp = databoxCompare((const databox *)&score, &range->max);
             if (cmp > 0 || (cmp == 0 && range->maxExclusive)) {
                 break;
             }
@@ -360,8 +333,8 @@ size_t multiOrderedSetSmallPopMin(multiOrderedSetSmall *m, size_t count,
             return i;
         }
 
-        flexGetByType(head, &scores[i]);
-        flexGetByType(memberEntry, &members[i]);
+        mosReadOwned(head, &scores[i]);
+        mosReadOwned(memberEntry, &members[i]);
         mosRemoveEntry(m, head);
     }
 
@@ -392,8 +365,8 @@ size_t multiOrderedSetSmallPopMax(multiOrderedSetSmall *m, size_t count,
             return i;
         }
 
-        flexGetByType(scoreEntry, &scores[i]);
-        flexGetByType(memberEntry, &members[i]);
+        mosReadOwned(scoreEntry, &scores[i]);
+        mosReadOwned(memberEntry, &members[i]);
         mosRemoveEntry(m, scoreEntry);
     }
 
@@ -431,10 +404,10 @@ int64_t multiOrderedSetSmallGetRank(const multiOrderedSetSmall *m,
             break;
         }
 
-        databox currentMember;
-        flexGetByType(memberEntry, &currentMember);
+        databoxBig currentMember;
+        flexGetByTypeBig(memberEntry, &currentMember);
 
-        if (databoxCompare(&currentMember, member) == 0) {
+        if (databoxCompare((const databox *)&currentMember, member) == 0) {
             return rank;
         }
 
@@ -490,17 +463,18 @@ size_t multiOrderedSetSmallCountByScore(const multiOrderedSetSmall *m,
     flexEntry *entry = flexHead(m->map);
 
     while (entry) {
-        databox score;
-        flexGetByType(entry, &score);
+        databoxBig score;
+        flexGetByTypeBig(entry, &score);
 
         /* If score > max, we can stop */
-        int cmp = databoxCompare(&score, &range->max);
+        int cmp = databoxCompare((const databox *)&score, &range->max);
         if (cmp > 0 || (cmp == 0 && range->maxExclusive)) {
             break;
         }
 
-        if (mosScoreInRange(&score, &range->min, range->minExclusive,
-                            &range->max, range->maxExclusive)) {
+        if (mosScoreInRange((const databox *)&score, &range->min,
+                            range->minExclusive, &range->max,
+                            range->maxExclusive)) {
             count++;
         }
 
@@ -552,10 +526,10 @@ bool multiOrderedSetSmallIteratorInitAtScore(const multiOrderedSetSmall *m,
     /* Find first entry with score >= given score */
     flexEntry *entry = flexHead(m->map);
     while (entry) {
-        databox currentScore;
-        flexGetByType(entry, &currentScore);
+        databoxBig currentScore;
+        flexGetByTypeBig(entry, &currentScore);
 
-        if (databoxCompare(&currentScore, score) >= 0) {
+        if (databoxCompare((const databox *)&currentScore, score) >= 0) {
             iter->current = entry;
             iter->valid = true;
             return true;
@@ -617,15 +591,9 @@ bool multiOrderedSetSmallIteratorNext(mosIterator *iter, databox *member,
     if (iter->forward) {
         iter->current = flexNext(m->map, memberEntry);
     } else {
-        /* Move backwards: need to find previous score entry */
-        size_t currentOffset = entry - m->map;
-        if (currentOffset >= MOS_ELEMENTS_PER_ENTRY * 2) {
-            /* There's a previous entry */
-            iter->current =
-                flexIndex(m->map, currentOffset - MOS_ELEMENTS_PER_ENTRY);
-        } else {
-            iter->current = NULL;
-        }
+        /* Move backwards: the previous pair's score is two elements back */
+        flexEntry *prevMember = flexPrev(m->map, entry);
+        iter->current = prevMember ? flexPrev(m->map, prevMember) : NULL;
     }
 
     iter->valid = (iter->current != NULL);
@@ -765,13 +733,13 @@ void multiOrderedSetSmallRepr(const multiOrderedSetSmall *m) {
             break;
         }
 
-        databox score, member;
-        flexGetByType(entry, &score);
-        flexGetByType(memberEntry, &member);
+        databoxBig score, member;
+        flexGetByTypeBig(entry, &score);
+        flexGetByTypeBig(memberEntry, &member);
 
         printf("    [%d] ", idx);
-        databoxReprSay("score=", &score);
-        databoxReprSay(" member=", &member);
+        databoxReprSay("score=", (const databox *)&score);
+        databoxReprSay(" member=", (const databox *)&member);
         printf("\n");
 
         idx++;
@@ -954,6 +922,9 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
         if (scores[1].data.i != 10) {
             ERRR("Second popped score should be 10");
         }
+        for (size_t j = 0; j < popped; j++) {
+            databoxFreeData(&members[j]);
+        }
 
         if (multiOrderedSetSmallCount(mos) != 3) {
             ERRR("Count should be 3 after pop min");
@@ -967,6 +938,7 @@ int multiOrderedSetSmallTest(int argc, char *argv[]) {
         if (scores[0].data.i != 40) {
             ERR("Popped score should be 40 (max), got %ld", scores[0].data.i);
         }
+        databoxFreeData(&members[0]);
 
         if (multiOrderedSetSmallCount(mos) != 2) {
             ERRR("Count should be 2 after pop max");
