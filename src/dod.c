@@ -641,7 +641,8 @@ static void dodWriteInteger(dod *restrict const d,
     /* Shorthand... */
 #define fmt dodBitCategory[i]
 
-#pragma unroll 5
+    /* clang and GCC both honor this spelling; GCC ignores "unroll 5" */
+#pragma GCC unroll 5
     for (size_t i = 1; i < COUNT_ARRAY(dodBitCategory) - 1; i++) {
         const int64_t rangeCheck = (1LL << fmt.val) + adjustmentBase;
 
