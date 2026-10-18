@@ -104,7 +104,7 @@ multilist *multilistNewFromFlex(const flexCapSizeLimit limit,
 }
 
 multilist *multilistDuplicate(const multilist *mlOrig) {
-    const static size_t **dupers[4] = {NULL, &&sm, &&md, &&full};
+    static const size_t **dupers[4] = {NULL, &&sm, &&md, &&full};
 
     const multilistType type = _multilistType(mlOrig);
     goto *dupers[type];
@@ -210,7 +210,7 @@ void multilistInsertByTypeBefore(multilist **ml, mflexState *state[2],
  * Remove
  * ==================================================================== */
 void multilistDelEntry(multilistIterator *iter, multilistEntry *entry) {
-    const static size_t **dupers[4] = {NULL, &&sm, &&md, &&full};
+    static const size_t **dupers[4] = {NULL, &&sm, &&md, &&full};
 
     goto *dupers[iter->type];
 
@@ -329,7 +329,7 @@ void multilistRewindTail(multilist *ml, multilistIterator *iter) {
 }
 
 bool multilistNext(multilistIterator *iter, multilistEntry *entry) {
-    const static size_t **dupers[4] = {NULL, &&sm, &&md, &&full};
+    static const size_t **dupers[4] = {NULL, &&sm, &&md, &&full};
 
     goto *dupers[iter->type];
 
