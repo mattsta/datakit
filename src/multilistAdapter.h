@@ -40,7 +40,7 @@
 /* Bulk appending not conforming to multilist* protocol */
 #define multilistSmallAdapterAppendFlex(ml, fl) multilistSmallAppendFlex(ml, fl)
 #define multilistSmallAdapterAppendValuesFromFlex(ml, fl)                      \
-    multilistSmallaluesFromFlex(ml, fl)
+    multilistSmallAppendValuesFromFlex(ml, fl)
 #define multilistSmallAdapterNewFromFlex(fl) multilistSmallNewFromFlex(fl)
 #define multilistSmallAdapterNewFromFlexConsume(fl)                            \
     multilistSmallNewFromFlexConsume(fl)
@@ -51,9 +51,10 @@
 #define multilistSmallAdapterInsertByTypeAfter(ml, state, entry, box)          \
     multilistSmallInsertByTypeAfter(ml, entry, box)
 
-/* Delete based on entry cursor */
-#define multilistSmallAdapterDelEntry(m, iter, entry)                          \
-    multilistSmallDelEntry(m, iter, entry)
+/* Delete based on entry cursor (the same arguments as
+ * multilistFullDelEntry) */
+#define multilistSmallAdapterDelEntry(iter, entry)                             \
+    multilistSmallDelEntry(iter, entry)
 
 /* Delete based on position */
 #define multilistSmallAdapterDelRange(ml, state, start, values)                \
@@ -156,9 +157,10 @@
 #define multilistMediumAdapterInsertByTypeAfter(ml, state, entry, box)         \
     multilistMediumInsertByTypeAfter(ml, entry, box)
 
-/* Delete based on entry cursor */
-#define multilistMediumAdapterDelEntry(m, iter, entry)                         \
-    multilistMediumDelEntry(m, iter, entry)
+/* Delete based on entry cursor (the same arguments as
+ * multilistFullDelEntry) */
+#define multilistMediumAdapterDelEntry(iter, entry)                            \
+    multilistMediumDelEntry(iter, entry)
 
 /* Delete based on position */
 #define multilistMediumAdapterDelRange(ml, state, start, values)               \

@@ -373,6 +373,9 @@ defcleanerName(int64_t *, zfree, I64);
 defcleaner(multilist *, multilistFree);
 defcleaner(mflexState *, mflexStateFree);
 defcleaner(flex *, flexFree);
+defcleaner(multilistSmall *, multilistSmallFree);
+defcleaner(multilistMedium *, multilistMediumFree);
+defcleaner(multilistFull *, multilistFullFree);
 
 CTEST_INCLUDE_GEN(str)
 
@@ -421,8 +424,8 @@ static void multilistInsertAfter(multilist **ml, mflexState *state[2],
                                &DATABOX_WITH_BYTES(data, len));
 }
 
-bool multilistReplaceAtIndex(multilist **ml, mflexState *state,
-                             mlOffsetId index, void *data, size_t len) {
+static bool multilistReplaceAtIndex(multilist **ml, mflexState *state,
+                                    mlOffsetId index, void *data, size_t len) {
     return multilistReplaceByTypeAtIndex(ml, state, index,
                                          &DATABOX_WITH_BYTES(data, len));
 }
@@ -909,6 +912,220 @@ static const char *mlrListIs(multilist *ml, mflexState *s[2],
 
     return NULL;
 }
+
+/* Whether flex 'f' holds exactly the ids 'want', in order. */
+static bool mlaFlexIs(const flex *f, const uint32_t *want, uint32_t n) {
+    if (flexCount(f) != n) {
+        return false;
+    }
+
+    flexEntry *fe = flexHeadIfAny(f);
+    for (uint32_t i = 0; i < n; i++, fe = flexNext(f, fe)) {
+        if (!fe) {
+            return false;
+        }
+
+        databox box = {{0}};
+        flexGetByTypeInto(fe, &box, NULL);
+        if (!mlrIs(&box, want[i])) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/* Drive one tier through every multilist{Small,Medium}Adapter* macro
+ * (and the tier functions they name), checking each result against the
+ * id oracle 'want'.  PFX is Small or Medium; 'why' is set on the first
+ * failure. */
+#define MLA_EXERCISE(PFX, why)                                                 \
+    do {                                                                       \
+        char buf_[MLR_LEN + 1];                                                \
+        uint32_t want_[16];                                                    \
+        uint32_t n_ = 0;                                                       \
+        databox box_;                                                          \
+        cleaner(multilist##PFX##Free) multilist##PFX *ml_ =                    \
+            multilist##PFX##AdapterNew(7, 3);                                  \
+        multilist##PFX##AdapterSetCompressDepth(ml_, 2);                       \
+        multilist##PFX##AdapterSetFill(ml_, 5);                                \
+        multilist##PFX##AdapterSetOptions(ml_, 5, 2);                          \
+        if (multilist##PFX##AdapterCount(ml_) != 0) {                          \
+            why = "New is not empty";                                          \
+            break;                                                             \
+        }                                                                      \
+                                                                               \
+        /* [0, 1, 2] by pushes */                                              \
+        box_ = mlrBox(1, buf_);                                                \
+        multilist##PFX##AdapterPushByTypeTail(ml_, s0, &box_);                 \
+        box_ = mlrBox(2, buf_);                                                \
+        multilist##PFX##AdapterPushByTypeTail(ml_, s0, &box_);                 \
+        box_ = mlrBox(0, buf_);                                                \
+        multilist##PFX##AdapterPushByTypeHead(ml_, s0, &box_);                 \
+        want_[n_++] = 0;                                                       \
+        want_[n_++] = 1;                                                       \
+        want_[n_++] = 2;                                                       \
+                                                                               \
+        /* AppendFlex [3, 4], AppendValuesFromFlex [5, 6] */                   \
+        cleaner(flexFree) flex *f34_ = flexNew();                              \
+        cleaner(flexFree) flex *f56_ = flexNew();                              \
+        for (uint32_t i_ = 3; i_ <= 6; i_++) {                                 \
+            box_ = mlrBox(i_, buf_);                                           \
+            flexPushByType(i_ <= 4 ? &f34_ : &f56_, &box_,                     \
+                           FLEX_ENDPOINT_TAIL);                                \
+            want_[n_++] = i_;                                                  \
+        }                                                                      \
+        multilist##PFX##AdapterAppendFlex(ml_, f34_);                          \
+        multilist##PFX##AdapterAppendValuesFromFlex(ml_, f56_);                \
+                                                                               \
+        /* Insert 100 before id 3 and 101 after it, through Index */           \
+        multilistEntry e_;                                                     \
+        if (!multilist##PFX##AdapterIndex(ml_, s0, 3, &e_, true)) {            \
+            why = "Index(3) failed";                                           \
+            break;                                                             \
+        }                                                                      \
+        box_ = mlrBox(100, buf_);                                              \
+        multilist##PFX##AdapterInsertByTypeBefore(ml_, s, &e_, &box_);         \
+        if (!multilist##PFX##AdapterIndex(ml_, s0, 4, &e_, true)) {            \
+            why = "Index(4) failed";                                           \
+            break;                                                             \
+        }                                                                      \
+        box_ = mlrBox(101, buf_);                                              \
+        multilist##PFX##AdapterInsertByTypeAfter(ml_, s, &e_, &box_);          \
+        memmove(&want_[4], &want_[3], (n_ - 3) * sizeof(*want_));              \
+        want_[3] = 100;                                                        \
+        n_++;                                                                  \
+        memmove(&want_[6], &want_[5], (n_ - 5) * sizeof(*want_));              \
+        want_[5] = 101;                                                        \
+        n_++;                                                                  \
+                                                                               \
+        /* Replace the tail with 102; delete the head */                       \
+        box_ = mlrBox(102, buf_);                                              \
+        if (!multilist##PFX##AdapterReplaceByTypeAtIndex(ml_, s0, -1,          \
+                                                         &box_) ||             \
+            !multilist##PFX##AdapterDelRange(ml_, s0, 0, 1)) {                 \
+            why = "Replace or DelRange failed";                                \
+            break;                                                             \
+        }                                                                      \
+        want_[n_ - 1] = 102;                                                   \
+        memmove(&want_[0], &want_[1], (n_ - 1) * sizeof(*want_));              \
+        n_--;                                                                  \
+                                                                               \
+        /* IndexNear from an anchor at index 3 */                              \
+        multilistEntry anchor_, near_;                                         \
+        if (!multilist##PFX##AdapterIndex(ml_, s0, 3, &anchor_, true) ||       \
+            !multilist##PFX##AdapterIndexNear(ml_, s0, 4, &anchor_, 3, &near_, \
+                                              true) ||                         \
+            !mlrIs(&near_.box, want_[4])) {                                    \
+            why = "IndexNear misread";                                         \
+            break;                                                             \
+        }                                                                      \
+                                                                               \
+        /* Walk: DelEntry the head, Release, Rewind, RewindTail, AtIdx */      \
+        multilistIterator it_;                                                 \
+        memset(&it_, 0, sizeof(it_));                                          \
+        multilist##PFX##AdapterIteratorInit(ml_, s, &it_, true, false);        \
+        if (!multilist##PFX##AdapterNext(&it_, &e_) ||                         \
+            !mlrIs(&e_.box, want_[0])) {                                       \
+            why = "Next misread the head";                                     \
+            break;                                                             \
+        }                                                                      \
+        multilist##PFX##AdapterDelEntry(&it_, &e_);                            \
+        memmove(&want_[0], &want_[1], (n_ - 1) * sizeof(*want_));              \
+        n_--;                                                                  \
+        if (!multilist##PFX##AdapterNext(&it_, &e_) ||                         \
+            !mlrIs(&e_.box, want_[0])) {                                       \
+            why = "Next after DelEntry misread";                               \
+            break;                                                             \
+        }                                                                      \
+        multilist##PFX##AdapterReleaseIterator(&it_);                          \
+        multilist##PFX##AdapterRewind(ml_, &it_);                              \
+        if (!multilist##PFX##AdapterNext(&it_, &e_) ||                         \
+            !mlrIs(&e_.box, want_[0])) {                                       \
+            why = "Rewind misread";                                            \
+            break;                                                             \
+        }                                                                      \
+        multilist##PFX##AdapterRewindTail(ml_, &it_);                          \
+        if (!multilist##PFX##AdapterNext(&it_, &e_) ||                         \
+            !mlrIs(&e_.box, want_[n_ - 1])) {                                  \
+            why = "RewindTail misread";                                        \
+            break;                                                             \
+        }                                                                      \
+        if (!multilist##PFX##AdapterIteratorInitAtIdx(ml_, s, &it_, 2, true,   \
+                                                      true) ||                 \
+            !multilist##PFX##AdapterNext(&it_, &e_) ||                         \
+            !mlrIs(&e_.box, want_[2])) {                                       \
+            why = "IteratorInitAtIdx misread";                                 \
+            break;                                                             \
+        }                                                                      \
+                                                                               \
+        /* Duplicate and Dump */                                               \
+        {                                                                      \
+            cleaner(multilist##PFX##Free) multilist##PFX *dup_ =               \
+                multilist##PFX##AdapterDuplicate(ml_);                         \
+            cleaner(flexFree) flex *dump_ =                                    \
+                multilist##PFX##AdapterDump(dup_, s0);                         \
+            if (!mlaFlexIs(dump_, want_, n_)) {                                \
+                why = "Duplicate or Dump differs";                             \
+                break;                                                         \
+            }                                                                  \
+        }                                                                      \
+                                                                               \
+        /* Rotate, then Pop, PopFromTail and PopFromHead */                    \
+        multilist##PFX##AdapterRotate(ml_, s);                                 \
+        const uint32_t last_ = want_[n_ - 1];                                  \
+        memmove(&want_[1], &want_[0], (n_ - 1) * sizeof(*want_));              \
+        want_[0] = last_;                                                      \
+        databox got_ = {{0}};                                                  \
+        bool popped_ = multilist##PFX##AdapterPop(ml_, s0, &got_, true) &&     \
+                       mlrIs(&got_, want_[n_ - 1]);                            \
+        databoxFreeData(&got_);                                                \
+        memset(&got_, 0, sizeof(got_));                                        \
+        popped_ = popped_ && multilist##PFX##AdapterPopFromTail(ml_, &got_) && \
+                  mlrIs(&got_, want_[n_ - 2]);                                 \
+        databoxFreeData(&got_);                                                \
+        memset(&got_, 0, sizeof(got_));                                        \
+        popped_ = popped_ && multilist##PFX##AdapterPopFromHead(ml_, &got_) && \
+                  mlrIs(&got_, want_[0]);                                      \
+        databoxFreeData(&got_);                                                \
+        n_ -= 2;                                                               \
+        memmove(&want_[0], &want_[1], (n_ - 1) * sizeof(*want_));              \
+        n_--;                                                                  \
+        if (!popped_ || multilist##PFX##AdapterCount(ml_) != n_ ||             \
+            multilist##PFX##AdapterBytes(ml_) == 0) {                          \
+            why = "Rotate, Pop or Count went wrong";                           \
+            break;                                                             \
+        }                                                                      \
+        {                                                                      \
+            cleaner(flexFree) flex *dump_ =                                    \
+                multilist##PFX##AdapterDump(ml_, s0);                          \
+            if (!mlaFlexIs(dump_, want_, n_)) {                                \
+                why = "the list differs after the pops";                       \
+                break;                                                         \
+            }                                                                  \
+        }                                                                      \
+                                                                               \
+        /* The constructors: Create, NewFromFlex, NewFromFlexConsume */        \
+        {                                                                      \
+            const uint32_t w34_[2] = {3, 4};                                   \
+            cleaner(multilist##PFX##Free) multilist##PFX *c_ =                 \
+                multilist##PFX##AdapterCreate();                               \
+            cleaner(multilist##PFX##Free) multilist##PFX *nf_ =                \
+                multilist##PFX##AdapterNewFromFlex(f34_);                      \
+            cleaner(multilist##PFX##Free) multilist##PFX *nc_ =                \
+                multilist##PFX##AdapterNewFromFlexConsume(                     \
+                    flexDuplicate(f34_));                                      \
+            cleaner(flexFree) flex *d1_ =                                      \
+                multilist##PFX##AdapterDump(nf_, s0);                          \
+            cleaner(flexFree) flex *d2_ =                                      \
+                multilist##PFX##AdapterDump(nc_, s0);                          \
+            if (multilist##PFX##AdapterCount(c_) != 0 ||                       \
+                !mlaFlexIs(d1_, w34_, 2) || !mlaFlexIs(d2_, w34_, 2)) {        \
+                why = "Create, NewFromFlex or NewFromFlexConsume differs";     \
+                break;                                                         \
+            }                                                                  \
+        }                                                                      \
+    } while (0)
 
 /* The flex an entry's element lives in, on each tier. */
 static const flex *mloFlex(const multilist *ml, const multilistEntry *entry) {
@@ -3258,6 +3475,85 @@ int multilistTest(int argc, char *argv[]) {
                     databoxFreeData(&got);
                     memset(&got, 0, sizeof(got));
                 }
+            }
+        }
+    }
+
+    TEST("every tier declaration links, and every Adapter macro resolves to "
+         "working code") {
+        /* Small and Medium through every multilist{Small,Medium}Adapter*
+         * macro, including New and the Set* settings (accepted and
+         * ignored), checked against an id oracle; Medium's
+         * NewFromFlexConsumeGrow from a Small; and Full's SetOptions,
+         * SetDepth, AppendValuesFlex, AppendValuesFromFlex, NewFromFlex
+         * and multilistFulllCreateFlex. */
+        const char *why = NULL;
+        MLA_EXERCISE(Small, why);
+        if (why) {
+            ERR("Small: %s", why);
+        }
+
+        why = NULL;
+        MLA_EXERCISE(Medium, why);
+        if (why) {
+            ERR("Medium: %s", why);
+        }
+
+        char buf[MLR_LEN + 1];
+        enum { LK_N = 200 };
+        static uint32_t want[2 * LK_N];
+        cleaner(flexFree) flex *src = flexNew();
+        for (uint32_t i = 0; i < LK_N; i++) {
+            const databox box = mlrBox(i, buf);
+            flexPushByType(&src, &box, FLEX_ENDPOINT_TAIL);
+            want[i] = i;
+            want[LK_N + i] = i;
+        }
+
+        {
+            /* Small -> Medium the way the upgrade does it */
+            flex *fl = flexDuplicate(src);
+            cleaner(multilistMediumFree) multilistMedium *md =
+                multilistMediumAdapterNewFromFlexConsumeGrow(
+                    multilistSmallAdapterNewFromFlexConsume(fl), fl);
+            cleaner(flexFree) flex *dump = multilistMediumAdapterDump(md, s0);
+            if (!mlaFlexIs(dump, want, LK_N)) {
+                ERRR("Medium NewFromFlexConsumeGrow differs");
+            }
+        }
+
+        {
+            cleaner(multilistFullFree) multilistFull *a =
+                multilistFullNewFromFlex(FLEX_CAP_LEVEL_512, 0, s0, src);
+            cleaner(multilistFullFree) multilistFull *b =
+                multilistFulllCreateFlex(FLEX_CAP_LEVEL_512, 0, s0, src);
+            multilistFullAppendValuesFromFlex(a, s0, src);
+            multilistFullAppendValuesFlex(b, s0, src);
+            cleaner(flexFree) flex *da = multilistFullDump(a, s0);
+            cleaner(flexFree) flex *db = multilistFullDump(b, s0);
+            if (!mlaFlexIs(da, want, 2 * LK_N) ||
+                !mlaFlexIs(db, want, 2 * LK_N)) {
+                ERRR("Full NewFromFlex / FulllCreateFlex / AppendValues "
+                     "differ");
+            }
+
+            /* Depth 1 compresses interior nodes, depth 0 decompresses */
+            multilistFullSetOptions(a, FLEX_CAP_LEVEL_512, 1);
+            multilistFullSetDepth(b, FLEX_CAP_LEVEL_512, 1);
+            const bool compressed =
+                multilistFullBytesActual(a) < multilistFullBytes(a) &&
+                multilistFullBytesActual(b) < multilistFullBytes(b);
+            multilistFullSetOptions(a, FLEX_CAP_LEVEL_512, 0);
+            multilistFullSetDepth(b, FLEX_CAP_LEVEL_512, 0);
+            if (!compressed ||
+                multilistFullBytesActual(a) != multilistFullBytes(a) ||
+                multilistFullBytesActual(b) != multilistFullBytes(b)) {
+                ERRR("Full SetOptions / SetDepth did not apply the depth");
+            }
+
+            cleaner(flexFree) flex *da2 = multilistFullDump(a, s0);
+            if (!mlaFlexIs(da2, want, 2 * LK_N)) {
+                ERRR("Full SetOptions changed the contents");
             }
         }
     }

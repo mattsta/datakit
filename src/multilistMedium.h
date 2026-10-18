@@ -36,7 +36,10 @@ void multilistMediumFree(multilistMedium *ml);
 size_t multilistMediumCount(const multilistMedium *ml);
 size_t multilistMediumBytes(const multilistMedium *ml);
 
-/* Settings */
+/* Settings.  Medium never compresses and has no node size limit of its
+ * own: the owning multilist keeps the fill limit and compress depth and
+ * decides tier moves.  New and these setters accept them for signature
+ * parity with Full and ignore them. */
 void multilistMediumSetCompressDepth(multilistMedium *ml, int depth);
 void multilistMediumSetFill(multilistMedium *ml, int fill);
 void multilistMediumSetOptions(multilistMedium *ml, int fill, int depth);

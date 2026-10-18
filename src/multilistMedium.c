@@ -39,6 +39,32 @@ multilistMedium *multilistMediumCreate(void) {
     return ml;
 }
 
+/* Medium keeps two flexes and never compresses.  The fill limit and the
+ * compress depth belong to the multilist that owns the tier (it keeps
+ * them in its tagged pointer and decides when to move to Full), so the
+ * Medium struct has no field for either: they are accepted for
+ * signature parity with Full and ignored. */
+multilistMedium *multilistMediumNew(int fill, int compress) {
+    (void)fill;
+    (void)compress;
+    return multilistMediumCreate();
+}
+
+void multilistMediumSetCompressDepth(multilistMedium *ml, int depth) {
+    (void)ml;
+    (void)depth;
+}
+
+void multilistMediumSetFill(multilistMedium *ml, int fill) {
+    (void)ml;
+    (void)fill;
+}
+
+void multilistMediumSetOptions(multilistMedium *ml, int fill, int depth) {
+    multilistMediumSetFill(ml, fill);
+    multilistMediumSetCompressDepth(ml, depth);
+}
+
 /* ====================================================================
  * Copy
  * ==================================================================== */

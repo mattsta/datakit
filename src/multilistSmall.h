@@ -36,7 +36,10 @@ void multilistSmallFree(multilistSmall *ml);
 size_t multilistSmallCount(const multilistSmall *ml);
 size_t multilistSmallBytes(const multilistSmall *ml);
 
-/* Settings */
+/* Settings.  Small never compresses and has no node size limit of its
+ * own: the owning multilist keeps the fill limit and compress depth and
+ * decides tier moves.  New and these setters accept them for signature
+ * parity with Full and ignore them. */
 void multilistSmallSetCompressDepth(multilistSmall *ml, int depth);
 void multilistSmallSetFill(multilistSmall *ml, int fill);
 void multilistSmallSetOptions(multilistSmall *ml, int fill, int depth);

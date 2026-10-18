@@ -17,6 +17,32 @@ multilistSmall *multilistSmallCreate(void) {
     return ml;
 }
 
+/* Small keeps one flex and never compresses.  The fill limit and the
+ * compress depth belong to the multilist that owns the tier (it keeps
+ * them in its tagged pointer and decides when to move to Medium), so
+ * the Small struct has no field for either: they are accepted for
+ * signature parity with Full and ignored. */
+multilistSmall *multilistSmallNew(int fill, int compress) {
+    (void)fill;
+    (void)compress;
+    return multilistSmallCreate();
+}
+
+void multilistSmallSetCompressDepth(multilistSmall *ml, int depth) {
+    (void)ml;
+    (void)depth;
+}
+
+void multilistSmallSetFill(multilistSmall *ml, int fill) {
+    (void)ml;
+    (void)fill;
+}
+
+void multilistSmallSetOptions(multilistSmall *ml, int fill, int depth) {
+    multilistSmallSetFill(ml, fill);
+    multilistSmallSetCompressDepth(ml, depth);
+}
+
 /* ====================================================================
  * Copy
  * ==================================================================== */

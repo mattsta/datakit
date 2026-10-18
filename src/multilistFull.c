@@ -249,6 +249,10 @@ void multilistFullSetDepth(multilistFull *ml, uint32_t fill, uint32_t depth) {
     multilistFullSetCompressDepth(ml, depth);
 }
 
+void multilistFullSetOptions(multilistFull *ml, uint32_t fill, uint32_t depth) {
+    multilistFullSetDepth(ml, fill, depth);
+}
+
 /* Create a new multilistFull with some default parameters. */
 multilistFull *multilistFullNew(uint32_t fill, uint32_t compress) {
     multilistFull *ml = multilistFullCreate();
@@ -689,6 +693,17 @@ multilistFull *multilistFullNewFromFlex(int fill, int compress,
                                         mflexState *state, const flex *fl) {
     return multilistFullAppendValuesFromFlex(multilistFullNew(fill, compress),
                                              state, fl);
+}
+
+multilistFull *multilistFullAppendValuesFlex(multilistFull *ml,
+                                             mflexState *state,
+                                             const flex *fl) {
+    return multilistFullAppendValuesFromFlex(ml, state, fl);
+}
+
+multilistFull *multilistFulllCreateFlex(int fill, int compress,
+                                        mflexState *state, const flex *fl) {
+    return multilistFullNewFromFlex(fill, compress, state, fl);
 }
 
 DK_STATIC void multilistFullDelNode__(multilistFull *ml, mflexState *state,
@@ -1749,8 +1764,9 @@ void multilistFullRepr(multilistFull *ml) {
 #define multilistFullPushHead(a, b, c, d) multilistFullPush_(Head, a, b, c, d)
 #define multilistFullPushTail(a, b, c, d) multilistFullPush_(Tail, a, b, c, d)
 
-bool multilistFullReplaceAtIndex(multilistFull *ml, mflexState *state,
-                                 mlOffsetId index, void *data, size_t len) {
+static bool multilistFullReplaceAtIndex(multilistFull *ml, mflexState *state,
+                                        mlOffsetId index, void *data,
+                                        size_t len) {
     return multilistFullReplaceByTypeAtIndex(ml, state, index,
                                              &DATABOX_WITH_BYTES(data, len));
 }
@@ -1851,7 +1867,7 @@ static int itrprintrRev(multilistFull *ml, mflexState *state[2], bool print) {
 }
 
 /* Passthrough to flexCompare(); for testing only */
-int multilistFullCompare(flexEntry *p1, const void *val, int vcount) {
+static int multilistFullCompare(flexEntry *p1, const void *val, int vcount) {
     return flexCompareBytes(p1, val, vcount);
 }
 

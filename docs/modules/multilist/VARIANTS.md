@@ -558,6 +558,13 @@ returns its elements as one new flex (see `multilistDump`).
 defines `multilistSmallAdapter*` / `multilistMediumAdapter*` macros that accept
 the Full-shaped argument list and discard the state, `readOnly`, and `openNode`
 parameters, so `multilist.c` can dispatch all three variants through one macro.
+Every adapter macro names a defined function. Small and Medium never compress
+and have no fill limit of their own (the owning `multilist` keeps both in its
+tagged pointer), so their `New(fill, compress)`, `SetCompressDepth`, `SetFill`
+and `SetOptions` accept the values for signature parity and ignore them. Full's
+`multilistFullSetOptions` is `multilistFullSetDepth` (fill, then depth), and
+`multilistFullAppendValuesFlex` / `multilistFulllCreateFlex` are the same calls
+as `multilistFullAppendValuesFromFlex` / `multilistFullNewFromFlex`.
 
 **Note:** direct variant functions are primarily for internal use. Application
 code should use the unified `multilist` API.

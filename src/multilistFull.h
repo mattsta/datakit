@@ -48,7 +48,10 @@ void multilistFullSetCompressDepth(multilistFull *ml, uint32_t depth);
 void multilistFullSetCompressDepthWithState(multilistFull *ml,
                                             mflexState *state, uint32_t depth);
 void multilistFullSetFill(multilistFull *ml, uint32_t fill);
+/* SetFill then SetCompressDepth; SetOptions and SetDepth are the same
+ * call under two names. */
 void multilistFullSetOptions(multilistFull *ml, uint32_t fill, uint32_t depth);
+void multilistFullSetDepth(multilistFull *ml, uint32_t fill, uint32_t depth);
 
 /* Free */
 void multilistFullFree(multilistFull *ml);
@@ -69,8 +72,18 @@ void multilistFullPushByTypeTail(multilistFull *ml, mflexState *state,
 void multilistFullAppendFlex(multilistFull *ml, flex *fl);
 void multilistFullAppendFlexWithState(multilistFull *ml, mflexState *state,
                                       flex *fl);
+/* Push every element of 'fl' (not consumed) onto the tail, one by one;
+ * returns 'ml'.  AppendValuesFlex is the same call under another name. */
+multilistFull *multilistFullAppendValuesFromFlex(multilistFull *ml,
+                                                 mflexState *state,
+                                                 const flex *fl);
 multilistFull *multilistFullAppendValuesFlex(multilistFull *ml,
                                              mflexState *state, const flex *fl);
+/* A new list (multilistFullNew(fill, compress)) holding every element of
+ * 'fl' (not consumed), pushed one by one.  multilistFulllCreateFlex is
+ * the same call under another name. */
+multilistFull *multilistFullNewFromFlex(int fill, int compress,
+                                        mflexState *state, const flex *fl);
 multilistFull *multilistFulllCreateFlex(int fill, int compress,
                                         mflexState *state, const flex *fl);
 /* Build a list from the 'flCount' flexes in 'fl' (any count, 0 included),
