@@ -403,8 +403,19 @@ SUCCESS (0.123456 sec total; 0.012345 sec deletion; 1,234,567 total bytes)
 ./build-perf/src/datakit-test speed --json     # machine-readable
 ```
 
-Always measure with the `perf` preset. Sanitizer builds add 3-10x
-overhead and invalidate every number.
+Always measure with the `perf` preset. Sanitizer builds invalidate every
+number, and unevenly. Measured across perfRegression's rows (Apple M1 Max,
+clang 22), the `dev` preset (ASan+UBSan) ran 1.0-7.7x slower than `perf`.
+Memory-bandwidth-bound and hardware-instruction paths (xxh3 on large
+inputs, SHA-256 with ARMv8 Crypto) barely changed. Scalar code with many
+instrumented loads and stores per byte (BLAKE3 at 16 KiB and up, membound)
+slowed the most. Reproduce it with:
+
+```sh
+./build-dev/src/datakit-test test perfRegression > dev.tsv
+./build-perf/src/datakit-test test perfRegression > perf.tsv
+uv run --project tools dktools perfdiff perf.tsv dev.tsv --tolerance 0
+```
 
 ## Continuous Integration
 

@@ -8,8 +8,13 @@ the point of this file is the time series.
 Rules for a capture:
 
 - **perf preset only** (`cmake --preset perf`: Release-O3,
-  `-mcpu=native`, `-flto`, no sanitizers). Sanitizer builds add 3-10×
-  overhead and invalidate every number.
+  `-mcpu=native`, `-flto`, no sanitizers). Sanitizer builds invalidate
+  every number, unevenly. The `dev` preset ran perfRegression's rows
+  1.0-7.7× slower than `perf` on an Apple M1 Max with clang 22: about 1.0×
+  for memory-bandwidth-bound or hardware-instruction paths, the most for
+  scalar code with many loads and stores per byte. See
+  [development/TESTING.md](development/TESTING.md) for the comparison
+  commands.
 - Record hardware, date, and the exact commands.
 - If a number legitimately regresses (e.g. a security fix adds work),
   note the why here in the same section.

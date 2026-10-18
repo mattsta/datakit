@@ -94,8 +94,12 @@ cmake --preset perf   && cmake --build --preset perf
 cmake --preset safe   && cmake --build --preset safe
 ```
 
-Never benchmark with a sanitizer preset — ASAN/UBSAN add 3-10x
-overhead and invalidate the measurement.
+Never benchmark with a sanitizer preset. ASAN/UBSAN slowed perfRegression's
+rows by 1.0-7.7x (`dev` vs `perf`, Apple M1 Max, clang 22): hardly at all
+for memory-bandwidth-bound or hardware-instruction paths, most for scalar
+code doing many loads and stores per byte. That invalidates the measurement
+and can change which variant looks fastest. The commands to reproduce this
+are in [TESTING.md](TESTING.md).
 
 All presets set `CMAKE_EXPORT_COMPILE_COMMANDS=ON`, so
 `build-<preset>/compile_commands.json` is available for clangd and

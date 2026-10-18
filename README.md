@@ -23,8 +23,14 @@ cmake --preset safe   && cmake --build --preset safe    # Release-O3 + sanitizer
 ```
 
 Each preset builds into `build-<preset>/`. Use `perf` for any
-benchmark number — sanitizers add 3-10x overhead and invalidate
-measurements.
+benchmark number. Sanitizers slow code down unevenly, by 1.0-7.7x across
+perfRegression's rows (`dev` vs `perf` on an Apple M1 Max, clang 22).
+Paths bound by memory bandwidth or hardware instructions barely change;
+scalar code doing many loads and stores per byte (BLAKE3, membound) slows
+the most. That invalidates measurements and can reorder rankings. To
+reproduce, run `datakit-test test perfRegression` from both builds and
+compare the outputs with `dktools perfdiff` (see
+[docs/development/TESTING.md](docs/development/TESTING.md)).
 
 A plain out-of-source build also works:
 
