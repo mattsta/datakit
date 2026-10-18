@@ -18,7 +18,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from dktools import steps, toolchain, validate
+from dktools import leakcheck, steps, toolchain, validate
 from dktools.gitutil import ToolError
 from dktools.steps import Step
 
@@ -177,11 +177,13 @@ class ValidateRun(unittest.TestCase):
                 self.assertIn(needle, out)
 
     def test_leakage_gate_over_the_range(self) -> None:
-        self.repo.write("src/c.c", "/* kraft */\n")
+        # Only leakcheck.py and its tests may spell the terms out.
+        term = leakcheck.HARD_TERMS[0].label
+        self.repo.write("src/c.c", f"/* {term} */\n")
         self.head = self.repo.commit("leak", "src/c.c")
         code, out = self.run_validate(MatrixRunner())
         self.assertEqual(code, 1)
-        self.assertIn("src/c.c:1: [kraft]", out)
+        self.assertIn(f"src/c.c:1: [{term}]", out)
         code, out = self.run_validate(MatrixRunner(), leak_base="")
         self.assertEqual(code, 0, out)
         self.assertIn("skipped (empty --leak-base)", out)
