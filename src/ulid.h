@@ -123,8 +123,11 @@ void ulidGenerate(ulidGen *g, ulid_t *out);
  * Returns length written (25) on success, 0 on error */
 size_t ulidEncode(const ulid_t *ulid, char *out, size_t outLen);
 
-/* Decode Base36 string to ULID
- * Returns true on success, false on invalid input */
+/* Decode Base36 string to ULID (case-insensitive)
+ * Returns true on success, false on invalid input: a string that is not
+ * exactly 25 chars, has a non-Base36 char, or encodes a value above
+ * 2^128 - 1. On false '*out' is unspecified. Every ulidDecode* variant
+ * below follows the same contract. */
 bool ulidDecode(const char *str, ulid_t *out);
 
 /* Extract nanosecond timestamp from ULID */
@@ -271,7 +274,10 @@ void ulid64GenerateWithConfig(ulidGen *g, ulid64_t *out,
 /* Encode ULID64 to Base36 string (13 chars + null terminator) */
 size_t ulid64Encode(const ulid64_t *id, char *out, size_t outLen);
 
-/* Decode Base36 string to ULID64 */
+/* Decode Base36 string to ULID64 (case-insensitive)
+ * Returns false for a string that is not exactly 13 chars, has a non-Base36
+ * char, or encodes a value above UINT64_MAX ("3w5e11264sgsf"); '*out' is
+ * then left unwritten. */
 bool ulid64Decode(const char *str, ulid64_t *out);
 
 /* Extract timestamp from ULID64 (returns nanoseconds since Unix epoch) */
@@ -310,6 +316,13 @@ uint64_t ulidGetSecondTimestampNs(const ulid_t *id);
 /* ====================================================================
  * 128-bit DUALNS_INTERLEAVED Variant API
  * ==================================================================== */
+
+/* Bit i of ts1 lands at bit 2i and bit i of ts2 at bit 2i+1, so IDs sort in
+ * Z-order: by the full interleaved value, where the most significant bit at
+ * which either timestamp differs decides (ts2's bit wins at equal
+ * positions). Neither timestamp alone orders them; DUALNS orders by ts1
+ * then ts2. The ulid_t bytes (big-endian) and the Base36 string sort the
+ * same way as the value. */
 
 /* Generate DUALNS_INTERLEAVED (128-bit: bit-interleaved dual timestamps) */
 void ulidGenerateDualNsInterleaved(ulidGen *g, ulid_t *out);
@@ -403,7 +416,10 @@ void ulid32Generate(ulidGen *g, ulid32_t *out, ulidVariantType type);
 /* Encode ULID32 to Base36 string (7 chars + null terminator) */
 size_t ulid32Encode(const ulid32_t *id, char *out, size_t outLen);
 
-/* Decode Base36 string to ULID32 */
+/* Decode Base36 string to ULID32 (case-insensitive)
+ * Returns false for a string that is not exactly 7 chars, has a non-Base36
+ * char, or encodes a value above UINT32_MAX ("1z141z3"); '*out' is then
+ * left unwritten. */
 bool ulid32Decode(const char *str, ulid32_t *out);
 
 /* Extract timestamp from ULID32 (returns nanoseconds since Unix epoch) */

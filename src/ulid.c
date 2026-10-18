@@ -193,8 +193,9 @@ static bool isZero128(const uint8_t *num) {
     return true;
 }
 
-/* Multiply 128-bit number by 36 and add a value */
-static void mul128by36AndAdd(uint8_t *num, uint8_t addVal) {
+/* Multiply 128-bit number by 36 and add a value.
+ * Returns true if the result did not fit in 128 bits. */
+static bool mul128by36AndAdd(uint8_t *num, uint8_t addVal) {
     uint32_t carry = addVal;
 
     for (int32_t i = 15; i >= 0; i--) {
@@ -202,6 +203,8 @@ static void mul128by36AndAdd(uint8_t *num, uint8_t addVal) {
         num[i] = (uint8_t)(product & 0xFF);
         carry = product >> 8;
     }
+
+    return carry != 0;
 }
 
 /* ====================================================================
@@ -250,15 +253,17 @@ bool ulidDecodeScalar(const char *str, ulid_t *out) {
 
     memset(out->data, 0, 16);
 
+    bool overflow = false;
     for (size_t i = 0; i < ULID_ENCODED_LENGTH; i++) {
         uint8_t val = base36DecodeTable[(uint8_t)str[i]];
         if (val == 0xFF) {
             return false; /* Invalid character */
         }
-        mul128by36AndAdd(out->data, val);
+        overflow |= mul128by36AndAdd(out->data, val);
     }
 
-    return true;
+    /* 25 base36 digits reach past 2^128 */
+    return !overflow;
 }
 
 /* ====================================================================
@@ -363,12 +368,14 @@ bool ulidDecodeSWAR(const char *str, ulid_t *out) {
     memset(out->data, 0, 16);
 
     /* Accumulate with full 128-bit precision */
+    bool overflow = false;
     for (size_t i = 0; i < ULID_ENCODED_LENGTH; i++) {
         uint8_t val = base36DecodeTable[(uint8_t)str[i]];
-        mul128by36AndAdd(out->data, val);
+        overflow |= mul128by36AndAdd(out->data, val);
     }
 
-    return true;
+    /* 25 base36 digits reach past 2^128 */
+    return !overflow;
 }
 
 /* ====================================================================
@@ -516,13 +523,14 @@ bool ulidDecodeSSE2(const char *str, ulid_t *out) {
         }
     }
 
-    /* Accumulate into 128-bit result */
+    /* Accumulate into 128-bit result; 25 base36 digits reach past 2^128 */
     memset(out->data, 0, 16);
+    bool overflow = false;
     for (size_t i = 0; i < ULID_ENCODED_LENGTH; i++) {
-        mul128by36AndAdd(out->data, values[i]);
+        overflow |= mul128by36AndAdd(out->data, values[i]);
     }
 
-    return true;
+    return !overflow;
 }
 #endif /* ULID_HAS_SSE2 */
 
@@ -642,13 +650,14 @@ bool ulidDecodeAVX2(const char *str, ulid_t *out) {
         }
     }
 
-    /* Accumulate into 128-bit result */
+    /* Accumulate into 128-bit result; 25 base36 digits reach past 2^128 */
     memset(out->data, 0, 16);
+    bool overflow = false;
     for (size_t i = 0; i < ULID_ENCODED_LENGTH; i++) {
-        mul128by36AndAdd(out->data, values[i]);
+        overflow |= mul128by36AndAdd(out->data, values[i]);
     }
 
-    return true;
+    return !overflow;
 }
 #endif /* ULID_HAS_AVX2 */
 
@@ -776,13 +785,14 @@ bool ulidDecodeNEON(const char *str, ulid_t *out) {
         }
     }
 
-    /* Accumulate into 128-bit result */
+    /* Accumulate into 128-bit result; 25 base36 digits reach past 2^128 */
     memset(out->data, 0, 16);
+    bool overflow = false;
     for (size_t i = 0; i < ULID_ENCODED_LENGTH; i++) {
-        mul128by36AndAdd(out->data, values[i]);
+        overflow |= mul128by36AndAdd(out->data, values[i]);
     }
 
-    return true;
+    return !overflow;
 }
 #endif /* ULID_HAS_NEON */
 
@@ -1020,13 +1030,18 @@ bool ulid64Decode(const char *str, ulid64_t *out) {
         return false;
     }
 
+    /* 13 base36 digits reach past 2^64, so refuse values that overflow */
     uint64_t value = 0;
     for (size_t i = 0; i < ULID64_ENCODED_LENGTH; i++) {
         uint8_t digitValue = base36DecodeTable[(uint8_t)str[i]];
         if (digitValue == 0xFF) {
             return false; /* Invalid character */
         }
-        value = value * 36 + digitValue;
+
+        if (__builtin_mul_overflow(value, 36, &value) ||
+            __builtin_add_overflow(value, digitValue, &value)) {
+            return false;
+        }
     }
 
     out->data = value;
@@ -1068,13 +1083,18 @@ bool ulid32Decode(const char *str, ulid32_t *out) {
         return false;
     }
 
+    /* 7 base36 digits reach past 2^32, so refuse values that overflow */
     uint32_t value = 0;
     for (size_t i = 0; i < ULID32_ENCODED_LENGTH; i++) {
         uint8_t digitValue = base36DecodeTable[(uint8_t)str[i]];
         if (digitValue == 0xFF) {
             return false;
         }
-        value = value * 36 + digitValue;
+
+        if (__builtin_mul_overflow(value, 36, &value) ||
+            __builtin_add_overflow(value, digitValue, &value)) {
+            return false;
+        }
     }
 
     out->data = value;
@@ -1426,8 +1446,9 @@ __uint128_t ulidToDualNsU128(const ulid_t *id) {
 
 /* Interleave bits from two 64-bit values into a 128-bit value
  * Output bit pattern: ts1[0], ts2[0], ts1[1], ts2[1], ..., ts1[63], ts2[63]
- * This creates a value that maintains sort order based on ts1 while encoding
- * both */
+ * The result sorts in Z-order: the most significant bit where either
+ * timestamp differs decides, with ts2's bit above ts1's at each position.
+ * It is not ordered by ts1 alone. */
 static inline __uint128_t interleaveBits64(__attribute__((unused)) uint64_t ts1,
                                            uint64_t ts2) {
     __uint128_t result = 0;
@@ -2378,6 +2399,46 @@ uint64_t ulid64GetMaxTimestamp(ulidVariantType type) {
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleanerName(ulid_t *, zfree, Ulids);
 defcleanerName(ulid64_t *, zfree, Ulid64s);
+
+/* Add one to a fixed-width uppercase Base36 string, digit by digit.
+ * Returns false if the carry runs off the front. */
+static bool ulidTestBase36Increment(char *s, size_t len) {
+    static const char digits[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    for (size_t i = len; i-- > 0;) {
+        const char *at = strchr(digits, s[i]);
+        assert(at && *at);
+        if (at[1] != '\0') {
+            s[i] = at[1];
+            return true;
+        }
+        s[i] = '0';
+    }
+    return false;
+}
+
+/* Z-order comparison of (a1, a2) and (b1, b2), worked out without
+ * interleaving: the pair's most significant differing bit decides, and at
+ * equal bit positions ts2's bit sits above ts1's. */
+static int ulidTestZOrderCompare(uint64_t a1, uint64_t a2, uint64_t b1,
+                                 uint64_t b2) {
+    const uint64_t d1 = a1 ^ b1;
+    const uint64_t d2 = a2 ^ b2;
+    if (d1 == 0 && d2 == 0) {
+        return 0;
+    }
+
+    const bool ts2Decides =
+        d2 != 0 && (d1 == 0 || __builtin_clzll(d2) <= __builtin_clzll(d1));
+    if (ts2Decides) {
+        return a2 < b2 ? -1 : 1;
+    }
+
+    return a1 < b1 ? -1 : 1;
+}
+
+static int ulidTestSign(int v) {
+    return (v > 0) - (v < 0);
+}
 
 int ulidTest(int argc, char *argv[]) {
     (void)argc;
@@ -3490,29 +3551,83 @@ int ulidTest(int argc, char *argv[]) {
             printf("      Full roundtrip: __uint128_t -> ulid_t -> string -> "
                    "ulid_t -> __uint128_t ✓\n");
 
-            /* Test 7: Sort order preservation based on first timestamp */
-            printf("      Testing sort order preservation:\n");
+            /* Test 7: Sort order. Interleaving gives Z-order: IDs sort by
+             * the full interleaved value, where the most significant
+             * differing bit of either timestamp decides. Neither timestamp
+             * alone orders them. The ulid_t bytes and the Base36 string
+             * must sort the same way as the value. */
+            printf("      Testing Z-order sort contract:\n");
 
-            /* Create IDs with known timestamp relationships */
-            uint64_t base_ts = timeUtilNs();
-            uint64_t ts1_a = base_ts;
-            uint64_t ts2_a = base_ts + 100;
-            uint64_t ts1_b = base_ts + 1000; /* Later first timestamp */
-            uint64_t ts2_b = base_ts + 50;   /* Earlier second timestamp */
+            const uint64_t ts1_a = 1700000000000000000ULL;
+            const uint64_t ts2_a = ts1_a + 100;
 
-            __uint128_t interleaved_a = interleaveBits64Dispatch(ts1_a, ts2_a);
-            __uint128_t interleaved_b = interleaveBits64Dispatch(ts1_b, ts2_b);
+            /* {a1, a2, b1, b2, expected sign of a vs b} */
+            const struct {
+                uint64_t a1, a2, b1, b2;
+                int want;
+            } zcases[] = {
+                /* ts1's highest differing bit is above ts2's: ts1 decides */
+                {0x1000, 0x10, 0x2000, 0x08, -1},
+                /* ts1_b > ts1_a, but ts2 differs at a higher bit and
+                 * decides: b sorts first */
+                {1000, 0x800, 1001, 0x400, 1},
+                /* Same highest bit in both: ts2's bit is the higher one */
+                {1, 0, 0, 1, -1},
+                {0, 0, 1, 1, -1},
+                {ts1_a, ts2_a, ts1_a, ts2_a, 0},
+            };
 
-            /* Interleaved_b should be > interleaved_a because ts1_b > ts1_a */
-            if (interleaved_b <= interleaved_a) {
-                ERR("Sort order not preserved: ts1_b > ts1_a but interleaved_b "
-                    "<= interleaved_a%s",
-                    "");
+            uint64_t zseed[2] = {0x9E3779B97F4A7C15ULL, 0xD1B54A32D192ED03ULL};
+            for (size_t zc = 0; zc < COUNT_ARRAY(zcases) + 2000; zc++) {
+                uint64_t a1, a2, b1, b2;
+                int want;
+                if (zc < COUNT_ARRAY(zcases)) {
+                    a1 = zcases[zc].a1;
+                    a2 = zcases[zc].a2;
+                    b1 = zcases[zc].b1;
+                    b2 = zcases[zc].b2;
+                    want = zcases[zc].want;
+                } else {
+                    /* Pairs near each other, so both timestamps get to
+                     * decide across the run */
+                    a1 = xoroshiro128plus(zseed);
+                    a2 = xoroshiro128plus(zseed);
+                    const uint64_t r = xoroshiro128plus(zseed);
+                    b1 = a1 ^ (r & ((1ULL << (r % 64)) - 1));
+                    b2 = a2 ^ ((r >> 7) & ((1ULL << ((r >> 32) % 64)) - 1));
+                    want = ulidTestZOrderCompare(a1, a2, b1, b2);
+                }
+
+                if (ulidTestZOrderCompare(a1, a2, b1, b2) != want) {
+                    ERR("Z-order oracle disagrees with case %zu", zc);
+                }
+
+                const __uint128_t va = interleaveBits64Dispatch(a1, a2);
+                const __uint128_t vb = interleaveBits64Dispatch(b1, b2);
+                const int byValue = (va > vb) - (va < vb);
+
+                ulid_t ida, idb;
+                ulidFromDualNsInterleaved(&ida, a1, a2);
+                ulidFromDualNsInterleaved(&idb, b1, b2);
+                const int byBytes =
+                    ulidTestSign(memcmp(ida.data, idb.data, sizeof(ida.data)));
+
+                char sa[ULID_ENCODED_LENGTH + 1];
+                char sb[ULID_ENCODED_LENGTH + 1];
+                ulidEncode(&ida, sa, sizeof(sa));
+                ulidEncode(&idb, sb, sizeof(sb));
+                const int byString = ulidTestSign(strcmp(sa, sb));
+
+                if (byValue != want || byBytes != want || byString != want) {
+                    ERR("Z-order case %zu: value %d bytes %d string %d, "
+                        "expected %d",
+                        zc, byValue, byBytes, byString, want);
+                    break;
+                }
             }
 
-            printf("        ts1_a=%" PRIu64 " < ts1_b=%" PRIu64 "\n", ts1_a,
-                   ts1_b);
-            printf("        interleaved_a < interleaved_b ✓\n");
+            printf("        interleaved value, bytes and Base36 string all "
+                   "follow Z-order ✓\n");
 
             /* Test 8: Create ulid_t from two timestamps and verify */
             ulid_t id_from_ts;
@@ -4058,6 +4173,130 @@ int ulidTest(int argc, char *argv[]) {
         /* Prevent optimization */
         if (ts1 == 0 && ts2 == 0) {
             printf("Unexpected result\n");
+        }
+    }
+
+    TEST("decoders refuse values past the type and wrong lengths") {
+        /* ulid64: the encoding of UINT64_MAX decodes, one more is refused */
+        {
+            const ulid64_t max = {.data = UINT64_MAX};
+            char s[ULID64_ENCODED_LENGTH + 2];
+            ulid64Encode(&max, s, sizeof(s));
+            if (strcasecmp(s, "3w5e11264sgsf") != 0) {
+                ERR("UINT64_MAX encodes as %s", s);
+            }
+
+            ulid64_t got = {0};
+            if (!ulid64Decode(s, &got) || got.data != UINT64_MAX) {
+                ERR("ulid64 max %s did not decode", s);
+            }
+
+            if (!ulid64Decode("3w5e11264sgsf", &got) ||
+                got.data != UINT64_MAX) {
+                ERRR("ulid64 lowercase max did not decode");
+            }
+
+            char over[ULID64_ENCODED_LENGTH + 2];
+            memcpy(over, s, sizeof(over));
+            if (!ulidTestBase36Increment(over, ULID64_ENCODED_LENGTH)) {
+                ERRR("ulid64 max has no successor");
+            }
+            got.data = 7;
+            if (ulid64Decode(over, &got) || got.data != 7) {
+                ERR("ulid64 max+1 %s was accepted", over);
+            }
+
+            if (ulid64Decode("ZZZZZZZZZZZZZ", &got)) {
+                ERRR("ulid64 all-Z was accepted");
+            }
+
+            if (ulid64Decode("00000000000000", &got) ||
+                ulid64Decode("000000000000", &got)) {
+                ERRR("ulid64 accepted a wrong length");
+            }
+        }
+
+        /* ulid32 */
+        {
+            const ulid32_t max = {.data = UINT32_MAX};
+            char s[ULID32_ENCODED_LENGTH + 2];
+            ulid32Encode(&max, s, sizeof(s));
+            if (strcasecmp(s, "1z141z3") != 0) {
+                ERR("UINT32_MAX encodes as %s", s);
+            }
+
+            ulid32_t got = {0};
+            if (!ulid32Decode(s, &got) || got.data != UINT32_MAX) {
+                ERR("ulid32 max %s did not decode", s);
+            }
+
+            char over[ULID32_ENCODED_LENGTH + 2];
+            memcpy(over, s, sizeof(over));
+            if (!ulidTestBase36Increment(over, ULID32_ENCODED_LENGTH)) {
+                ERRR("ulid32 max has no successor");
+            }
+            got.data = 7;
+            if (ulid32Decode(over, &got) || got.data != 7) {
+                ERR("ulid32 max+1 %s was accepted", over);
+            }
+
+            if (ulid32Decode("ZZZZZZZ", &got) ||
+                ulid32Decode("00000000", &got) ||
+                ulid32Decode("000000", &got)) {
+                ERRR("ulid32 accepted all-Z or a wrong length");
+            }
+        }
+
+        /* 128-bit: every decoder variant */
+        {
+            bool (*decoders[])(const char *, ulid_t *) = {
+                ulidDecode,     ulidDecodeScalar, ulidDecodeSWAR,
+#if ULID_HAS_SSE2
+                ulidDecodeSSE2,
+#endif
+#if ULID_HAS_AVX2
+                ulidDecodeAVX2,
+#endif
+#if ULID_HAS_NEON
+                ulidDecodeNEON,
+#endif
+            };
+
+            ulid_t max;
+            memset(max.data, 0xFF, sizeof(max.data));
+            char s[ULID_ENCODED_LENGTH + 2];
+            ulidEncodeScalar(&max, s, sizeof(s));
+
+            char over[ULID_ENCODED_LENGTH + 2];
+            memcpy(over, s, sizeof(over));
+            if (!ulidTestBase36Increment(over, ULID_ENCODED_LENGTH)) {
+                ERRR("ulid max has no successor");
+            }
+
+            char tooLong[ULID_ENCODED_LENGTH + 2];
+            memset(tooLong, '0', ULID_ENCODED_LENGTH + 1);
+            tooLong[ULID_ENCODED_LENGTH + 1] = '\0';
+
+            char allZ[ULID_ENCODED_LENGTH + 1];
+            memset(allZ, 'Z', ULID_ENCODED_LENGTH);
+            allZ[ULID_ENCODED_LENGTH] = '\0';
+
+            for (size_t d = 0; d < sizeof(decoders) / sizeof(*decoders); d++) {
+                ulid_t got = {0};
+                if (!decoders[d](s, &got) ||
+                    memcmp(got.data, max.data, sizeof(max.data)) != 0) {
+                    ERR("decoder %zu: max %s did not decode", d, s);
+                }
+
+                if (decoders[d](over, &got)) {
+                    ERR("decoder %zu: max+1 %s was accepted", d, over);
+                }
+
+                if (decoders[d](allZ, &got) || decoders[d](tooLong, &got) ||
+                    decoders[d](tooLong + 2, &got)) {
+                    ERR("decoder %zu: accepted all-Z or a wrong length", d);
+                }
+            }
         }
     }
 
