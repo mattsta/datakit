@@ -384,23 +384,20 @@ int databoxLinearTest(int argc, char *argv[]) {
             ssize_t len = databoxLinearEncode(&a, &dl);
 
             if (len != 1) {
-                ERR("Value %llu should encode to 1 byte, got %zd",
-                    (unsigned long long)values[i], len);
+                ERR("Value %" PRIu64 " should encode to 1 byte, got %zd",
+                    values[i], len);
             }
 
             databox b = {{0}};
             if (!databoxLinearDecode(&dl, &b)) {
-                ERR("Failed to decode value %llu",
-                    (unsigned long long)values[i]);
+                ERR("Failed to decode value %" PRIu64, values[i]);
             }
             if (b.type != DATABOX_UNSIGNED_64) {
-                ERR("Type mismatch for value %llu",
-                    (unsigned long long)values[i]);
+                ERR("Type mismatch for value %" PRIu64, values[i]);
             }
             if (b.data.u != values[i]) {
-                ERR("Value mismatch: expected %llu, got %llu",
-                    (unsigned long long)values[i],
-                    (unsigned long long)b.data.u);
+                ERR("Value mismatch: expected %" PRIu64 ", got %" PRIuMAX,
+                    values[i], b.data.u);
             }
         }
     }
@@ -460,16 +457,16 @@ int databoxLinearTest(int argc, char *argv[]) {
             /* Positive values decode as unsigned */
             if (values[i] >= 0) {
                 if (b.data.i != values[i]) {
-                    ERR("Value mismatch for %lld", (long long)values[i]);
+                    ERR("Value mismatch for %" PRId64, values[i]);
                 }
             } else {
                 if (b.type != DATABOX_SIGNED_64) {
-                    ERR("Negative %lld should decode as SIGNED",
-                        (long long)values[i]);
+                    ERR("Negative %" PRId64 " should decode as SIGNED",
+                        values[i]);
                 }
                 if (b.data.i != values[i]) {
-                    ERR("Value mismatch: expected %lld, got %lld",
-                        (long long)values[i], (long long)b.data.i);
+                    ERR("Value mismatch: expected %" PRId64 ", got %" PRIdMAX,
+                        values[i], b.data.i);
                 }
             }
         }
@@ -649,8 +646,7 @@ int databoxLinearTest(int argc, char *argv[]) {
             ERRR("DecodeParts failed");
         }
         if (b.data.u != 12345) {
-            ERR("DecodeParts value mismatch: got %llu",
-                (unsigned long long)b.data.u);
+            ERR("DecodeParts value mismatch: got %" PRIuMAX, b.data.u);
         }
     }
 
@@ -667,7 +663,7 @@ int databoxLinearTest(int argc, char *argv[]) {
         DATABOX_LINEAR_DECODE(&dl, &b, len + 1); /* +1 for type byte */
 
         if (b.data.i != -999) {
-            ERR("Macro decode failed: got %lld", (long long)b.data.i);
+            ERR("Macro decode failed: got %" PRIdMAX, b.data.i);
         }
     }
 
@@ -704,9 +700,8 @@ int databoxLinearTest(int argc, char *argv[]) {
             ssize_t len = databoxLinearEncode(&a, &dl);
 
             if (len != cases[i].expectedBytes) {
-                ERR("Value %llu should encode to %d bytes, got %zd",
-                    (unsigned long long)cases[i].val, cases[i].expectedBytes,
-                    len);
+                ERR("Value %" PRIu64 " should encode to %d bytes, got %zd",
+                    cases[i].val, cases[i].expectedBytes, len);
             }
         }
     }
@@ -732,9 +727,9 @@ int databoxLinearTest(int argc, char *argv[]) {
                     ERR("Failed to decode at boundary 2^%d value %d", bits, i);
                 }
                 if (b.data.u != vals[i]) {
-                    ERR("Boundary 2^%d[%d]: expected %llu, got %llu", bits, i,
-                        (unsigned long long)vals[i],
-                        (unsigned long long)b.data.u);
+                    ERR("Boundary 2^%d[%d]: expected %" PRIu64
+                        ", got %" PRIuMAX,
+                        bits, i, vals[i], b.data.u);
                 }
             }
         }
@@ -758,12 +753,11 @@ int databoxLinearTest(int argc, char *argv[]) {
 
             databox b = {{0}};
             if (!databoxLinearDecode(&dl, &b)) {
-                ERR("Failed to decode signed boundary %lld",
-                    (long long)boundaries[i]);
+                ERR("Failed to decode signed boundary %" PRId64, boundaries[i]);
             }
             if (b.data.i != boundaries[i]) {
-                ERR("Signed boundary: expected %lld, got %lld",
-                    (long long)boundaries[i], (long long)b.data.i);
+                ERR("Signed boundary: expected %" PRId64 ", got %" PRIdMAX,
+                    boundaries[i], b.data.i);
             }
         }
     }
@@ -781,7 +775,7 @@ int databoxLinearTest(int argc, char *argv[]) {
         databox b = {{0}};
         databoxLinearDecode(&dl, &b);
         if (b.data.i != -1) {
-            ERR("-1 roundtrip failed: got %lld", (long long)b.data.i);
+            ERR("-1 roundtrip failed: got %" PRIdMAX, b.data.i);
         }
     }
 
@@ -795,8 +789,9 @@ int databoxLinearTest(int argc, char *argv[]) {
             databox b = {{0}};
             databoxLinearDecode(&dl, &b);
             if (b.data.u != val) {
-                ERR("2^%d roundtrip failed: expected %llu, got %llu", i,
-                    (unsigned long long)val, (unsigned long long)b.data.u);
+                ERR("2^%d roundtrip failed: expected %" PRIu64
+                    ", got %" PRIuMAX,
+                    i, val, b.data.u);
             }
         }
     }
@@ -811,8 +806,9 @@ int databoxLinearTest(int argc, char *argv[]) {
             databox b = {{0}};
             databoxLinearDecode(&dl, &b);
             if (b.data.i != val) {
-                ERR("-2^%d roundtrip failed: expected %lld, got %lld", i,
-                    (long long)val, (long long)b.data.i);
+                ERR("-2^%d roundtrip failed: expected %" PRId64
+                    ", got %" PRIdMAX,
+                    i, val, b.data.i);
             }
         }
     }
@@ -895,13 +891,12 @@ int databoxLinearTest(int argc, char *argv[]) {
 
             databox b = {{0}};
             if (!databoxLinearDecode(&dl, &b)) {
-                ERR("Fuzz unsigned[%d]: decode failed for %llu", i,
-                    (unsigned long long)val);
+                ERR("Fuzz unsigned[%d]: decode failed for %" PRIu64, i, val);
                 break;
             }
             if (b.data.u != val) {
-                ERR("Fuzz unsigned[%d]: expected %llu, got %llu", i,
-                    (unsigned long long)val, (unsigned long long)b.data.u);
+                ERR("Fuzz unsigned[%d]: expected %" PRIu64 ", got %" PRIuMAX, i,
+                    val, b.data.u);
                 break;
             }
         }
@@ -918,16 +913,15 @@ int databoxLinearTest(int argc, char *argv[]) {
 
             databox b = {{0}};
             if (!databoxLinearDecode(&dl, &b)) {
-                ERR("Fuzz signed[%d]: decode failed for %lld", i,
-                    (long long)val);
+                ERR("Fuzz signed[%d]: decode failed for %" PRId64, i, val);
                 break;
             }
 
             /* Positive signed values decode as unsigned */
             int64_t result = (val >= 0) ? (int64_t)b.data.u : b.data.i;
             if (result != val) {
-                ERR("Fuzz signed[%d]: expected %lld, got %lld", i,
-                    (long long)val, (long long)result);
+                ERR("Fuzz signed[%d]: expected %" PRId64 ", got %" PRId64, i,
+                    val, result);
                 break;
             }
         }
@@ -992,8 +986,8 @@ int databoxLinearTest(int argc, char *argv[]) {
             /* Verify minimal encoding */
             int expectedLen = (val <= 255) ? 1 : (val <= 65535) ? 2 : 3;
             if (len != expectedLen) {
-                ERR("Fuzz small[%d]: %llu should be %d bytes, got %zd", i,
-                    (unsigned long long)val, expectedLen, len);
+                ERR("Fuzz small[%d]: %" PRIu64 " should be %d bytes, got %zd",
+                    i, val, expectedLen, len);
             }
 
             databox b = {{0}};
@@ -1017,8 +1011,8 @@ int databoxLinearTest(int argc, char *argv[]) {
             databox b = {{0}};
             databoxLinearDecode(&dl, &b);
             if (b.data.i != val) {
-                ERR("Fuzz neg[%d]: expected %lld, got %lld", i, (long long)val,
-                    (long long)b.data.i);
+                ERR("Fuzz neg[%d]: expected %" PRId64 ", got %" PRIdMAX, i, val,
+                    b.data.i);
                 break;
             }
         }
@@ -1039,16 +1033,13 @@ int databoxLinearTest(int argc, char *argv[]) {
             ssize_t len2 = databoxLinearEncode(&a, &dl2);
 
             if (len1 != len2) {
-                ERR("Double encode length mismatch for %llu",
-                    (unsigned long long)vals[i]);
+                ERR("Double encode length mismatch for %" PRIu64, vals[i]);
             }
             if (dl1.type != dl2.type) {
-                ERR("Double encode type mismatch for %llu",
-                    (unsigned long long)vals[i]);
+                ERR("Double encode type mismatch for %" PRIu64, vals[i]);
             }
             if (memcmp(&dl1.data, &dl2.data, len1) != 0) {
-                ERR("Double encode data mismatch for %llu",
-                    (unsigned long long)vals[i]);
+                ERR("Double encode data mismatch for %" PRIu64, vals[i]);
             }
         }
     }
@@ -1089,8 +1080,7 @@ int databoxLinearTest(int argc, char *argv[]) {
             /* Should produce identical encoding */
             if (len1 != len2 || dl1.type != dl2.type ||
                 memcmp(&dl1.data, &dl2.data, len1) != 0) {
-                ERR("Encode/decode/encode cycle failed for %llu",
-                    (unsigned long long)val);
+                ERR("Encode/decode/encode cycle failed for %" PRIu64, val);
                 break;
             }
         }
@@ -1144,8 +1134,7 @@ int databoxLinearTest(int argc, char *argv[]) {
                                     &b);
 
         if (b.data.u != 999) {
-            ERR("PARTS_DECODE macro failed: got %llu",
-                (unsigned long long)b.data.u);
+            ERR("PARTS_DECODE macro failed: got %" PRIuMAX, b.data.u);
         }
     }
 
@@ -1176,8 +1165,8 @@ int databoxLinearTest(int argc, char *argv[]) {
             ssize_t len = databoxLinearEncode(&a, &dl);
 
             if (len != ranges[i].width) {
-                ERR("Max value %llu should encode to %d bytes, got %zd",
-                    (unsigned long long)ranges[i].maxVal, ranges[i].width, len);
+                ERR("Max value %" PRIu64 " should encode to %d bytes, got %zd",
+                    ranges[i].maxVal, ranges[i].width, len);
             }
 
             /* Also test min value for this width (if not first range) */
@@ -1186,8 +1175,9 @@ int databoxLinearTest(int argc, char *argv[]) {
                 a.data.u = minVal;
                 len = databoxLinearEncode(&a, &dl);
                 if (len != ranges[i].width) {
-                    ERR("Min value %llu should encode to %d bytes, got %zd",
-                        (unsigned long long)minVal, ranges[i].width, len);
+                    ERR("Min value %" PRIu64
+                        " should encode to %d bytes, got %zd",
+                        minVal, ranges[i].width, len);
                 }
             }
         }
@@ -1210,8 +1200,8 @@ int databoxLinearTest(int argc, char *argv[]) {
             ssize_t len = databoxLinearEncode(&a, &dl);
 
             if (len != ranges[i].width) {
-                ERR("Signed %lld should encode to %d bytes, got %zd",
-                    (long long)ranges[i].minVal, ranges[i].width, len);
+                ERR("Signed %" PRId64 " should encode to %d bytes, got %zd",
+                    ranges[i].minVal, ranges[i].width, len);
             }
         }
     }
@@ -1229,7 +1219,7 @@ int databoxLinearTest(int argc, char *argv[]) {
             databox b = {{0}};
             databoxLinearDecode(&dl, &b);
             if (b.data.u != val) {
-                ERR("Sequential %llu failed", (unsigned long long)val);
+                ERR("Sequential %" PRIu64 " failed", val);
                 break;
             }
         }
@@ -1246,7 +1236,7 @@ int databoxLinearTest(int argc, char *argv[]) {
 
             int64_t result = (val >= 0) ? (int64_t)b.data.u : b.data.i;
             if (result != val) {
-                ERR("Sequential signed %lld failed", (long long)val);
+                ERR("Sequential signed %" PRId64 " failed", val);
                 break;
             }
         }
