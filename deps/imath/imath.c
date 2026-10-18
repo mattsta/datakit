@@ -59,6 +59,16 @@
 #define STATIC static
 #endif
 
+/* Exempt intended unsigned wraparound from clang's
+   -fsanitize=unsigned-integer-overflow. That check exists only in clang;
+   GCC has no such sanitizer and rejects the attribute name. */
+#if defined(__clang__)
+#define IMATH_NO_SANITIZE_UNSIGNED_WRAP                                        \
+    __attribute__((no_sanitize("unsigned-integer-overflow")))
+#else
+#define IMATH_NO_SANITIZE_UNSIGNED_WRAP
+#endif
+
 #define NEGATE_I64(v)                                                          \
     (((v) == INT64_MIN ? (uint64_t)INT64_MAX + 1 : (uint64_t)(-(v))))
 
@@ -2526,9 +2536,9 @@ STATIC int32_t s_ksqr(mp_digit *da, mp_digit *dc, mp_size size_a) {
     return 1;
 }
 
-__attribute__((no_sanitize("unsigned-integer-overflow"))) /* t + t */
-STATIC void
-s_usqr(mp_digit *da, mp_digit *dc, mp_size size_a) {
+/* t + t and w + u wrap by design; ov records the lost carry */
+IMATH_NO_SANITIZE_UNSIGNED_WRAP
+STATIC void s_usqr(mp_digit *da, mp_digit *dc, mp_size size_a) {
     mp_size i, j;
     mp_word w;
 
