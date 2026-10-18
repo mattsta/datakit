@@ -21,8 +21,12 @@
  */
 
 #include "cleaner.h"
+#include "databox.h"
 #include "datakit.h"
 #include "dod.h"
+#include "mflex.h"
+#include "multilist.h"
+#include "multilistFull.h"
 #include "timeUtil.h"
 #include "xof.h"
 
@@ -44,6 +48,10 @@ defcleanerName(int64_t *, zfree, I64Buf);
 defcleanerName(uint8_t *, zfree, U8Buf);
 defcleanerName(uint32_t *, zfree, U32Buf);
 defcleanerName(double *, zfree, DoubleBuf);
+defcleanerName(multilist *, multilistFree, List);
+defcleanerName(multilistFull *, multilistFullFree, ListFull);
+defcleanerName(mflex *, mflexFree, Mflex);
+defcleanerName(mflexState *, mflexStateFree, MflexState);
 
 /* ============================================================================
  * Benchmark Result Reporting System
@@ -580,6 +588,231 @@ static void runFloatBenchmarks(size_t count, const char *sizeLabel) {
     benchReportSummary(&r);
 }
 
+/* ============================================================================
+ * multilist / mflex LZ4 compression
+ * ============================================================================
+ * Named data patterns, each written through the public APIs:
+ *   - log100:    100-byte structured log lines ("2026-10-18T12:MM:SS.mmmZ
+ *                INFO req=N path=... status=... bytes=...", space-padded)
+ *   - loginLine: "[INFO] User N logged in at timestamp T" (N = i % 1000,
+ *                T fixed), about 49 bytes
+ *   - int64:     the 64-bit integers 0, 1, 2, ...
+ * Footprints come from multilistFull (the tier a multilist of this size
+ * runs as), comparing its uncompressed flex bytes with the bytes its
+ * nodes are stored in. Timings go through multilist itself. */
+static size_t mlLogLine100(char out[101], size_t i) {
+    static const char *const paths[] = {"/api/v1/items", "/api/v1/users",
+                                        "/healthz", "/api/v1/orders"};
+    static const char *const levels[] = {"INFO", "INFO", "INFO", "WARN"};
+    int n = snprintf(out, 101,
+                     "2026-10-18T12:%02zu:%02zu.%03zuZ %s req=%08zu "
+                     "path=%s status=%d bytes=%zu",
+                     (i / 60000) % 60, (i / 1000) % 60, i % 1000, levels[i % 4],
+                     i, paths[(i * 7) % 4], (i % 50) ? 200 : 500,
+                     200 + (i * 37) % 1800);
+    while (n < 100) {
+        out[n++] = ' ';
+    }
+
+    out[100] = '\0';
+    return 100;
+}
+
+static size_t mlLoginLine(char out[101], size_t i) {
+    return (size_t)snprintf(out, 101,
+                            "[INFO] User %zu logged in at timestamp %d",
+                            i % 1000, 1760788800);
+}
+
+static void benchListFootprint(const char *pattern, size_t count,
+                               uint32_t depth) {
+    cleanerName(multilistFullFree, ListFull) multilistFull *ml =
+        multilistFullNew(FLEX_CAP_LEVEL_4096, depth);
+    cleanerName(mflexStateFree, MflexState) mflexState *state =
+        mflexStateCreate();
+    size_t payload = 0;
+    for (size_t i = 0; i < count; i++) {
+        char line[101];
+        const size_t len = strcmp(pattern, "log100") == 0
+                               ? mlLogLine100(line, i)
+                               : mlLoginLine(line, i);
+        payload += len;
+        const databox box = databoxNewBytesString(line);
+        multilistFullPushByTypeTail(ml, state, &box);
+    }
+
+    const size_t flexBytes = multilistFullBytes(ml);
+    const size_t stored = multilistFullBytesActual(ml);
+    printf("  %-9s x%-8zu depth %u: payload %10zu B, flex %10zu B, stored "
+           "%10zu B (%5.1f%% of flex, %5.2fx)\n",
+           pattern, count, depth, payload, flexBytes, stored,
+           100.0 * (double)stored / (double)flexBytes,
+           (double)flexBytes / (double)stored);
+}
+
+typedef enum {
+    MFLEX_REPEATED,
+    MFLEX_SEQUENTIAL,
+    MFLEX_RANDOM,
+    MFLEX_STRINGS,
+    MFLEX_MIXED
+} mflexBenchPattern;
+
+static void benchMflexFootprint(const char *name, mflexBenchPattern pattern,
+                                size_t count) {
+    cleanerName(mflexFree, Mflex) mflex *m = mflexNew();
+    cleanerName(mflexStateFree, MflexState) mflexState *state =
+        mflexStateCreate();
+    uint64_t rng = 0x243f6a8885a308d3ULL;
+    for (size_t i = 0; i < count; i++) {
+        char s[64];
+        switch (pattern) {
+        case MFLEX_REPEATED:
+            mflexPushSigned(&m, state, 42, FLEX_ENDPOINT_TAIL);
+            break;
+        case MFLEX_SEQUENTIAL:
+            mflexPushSigned(&m, state, (int64_t)i, FLEX_ENDPOINT_TAIL);
+            break;
+        case MFLEX_RANDOM: {
+            /* splitmix64 */
+            uint64_t z = (rng += 0x9e3779b97f4a7c15ULL);
+            z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+            z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+            mflexPushSigned(&m, state, (int64_t)(z ^ (z >> 31)),
+                            FLEX_ENDPOINT_TAIL);
+            break;
+        }
+        case MFLEX_STRINGS: {
+            const int n = snprintf(s, sizeof(s), "user:%zu:session:%zu",
+                                   i % 500, (i * 7919) % 100000);
+            mflexPushBytes(&m, state, s, (size_t)n, FLEX_ENDPOINT_TAIL);
+            break;
+        }
+        case MFLEX_MIXED:
+            if (i % 2) {
+                mflexPushSigned(&m, state, (int64_t)(i * 3),
+                                FLEX_ENDPOINT_TAIL);
+            } else {
+                const int n = snprintf(s, sizeof(s), "event-%zu", i % 64);
+                mflexPushBytes(&m, state, s, (size_t)n, FLEX_ENDPOINT_TAIL);
+            }
+            break;
+        }
+    }
+
+    const size_t flexBytes = mflexBytesUncompressed(m);
+    const size_t stored = mflexBytesActual(m);
+    printf("  mflex %-36s n=%5zu: flex %7zu B, stored %7zu B (%6.2fx, %s)\n",
+           name, count, flexBytes, stored, (double)flexBytes / (double)stored,
+           mflexIsCompressed(m) ? "compressed" : "uncompressed");
+}
+
+/* Push 'count' values at the tail, then pop them all from the head;
+ * returns microseconds for the whole cycle */
+static double benchListPushPop(const char *pattern, size_t count,
+                               uint32_t depth) {
+    cleanerName(multilistFree, List) multilist *ml =
+        multilistNew(FLEX_CAP_LEVEL_4096, depth);
+    cleanerName(mflexStateFree, MflexState) mflexState *state =
+        mflexStateCreate();
+    char line[101];
+
+    const uint64_t start = timeUtilMonotonicUs();
+    for (size_t i = 0; i < count; i++) {
+        databox box;
+        if (strcmp(pattern, "int64") == 0) {
+            box = (databox){.type = DATABOX_SIGNED_64, .data.i64 = (int64_t)i};
+        } else {
+            mlLogLine100(line, i);
+            box = databoxNewBytesString(line);
+        }
+
+        multilistPushByTypeTail(&ml, state, &box);
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        databox got = {0};
+        multilistPopHead(&ml, state, &got);
+        databoxFreeData(&got);
+    }
+
+    return (double)(timeUtilMonotonicUs() - start);
+}
+
+static int benchCmpDouble(const void *a, const void *b) {
+    const double x = *(const double *)a;
+    const double y = *(const double *)b;
+    return (x > y) - (x < y);
+}
+
+#if defined(__SANITIZE_ADDRESS__)
+#define BENCH_SANITIZED 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define BENCH_SANITIZED 1
+#endif
+#endif
+
+static void runMultilistBenchmarks(void) {
+    printf("\n  multilist LZ4 footprint (FLEX_CAP_LEVEL_4096 nodes; depth N "
+           "leaves N nodes at each end uncompressed, 0 = never compress)\n");
+    const uint32_t depths[] = {0, 1, 2, 5};
+    for (size_t d = 0; d < sizeof(depths) / sizeof(*depths); d++) {
+        benchListFootprint("log100", 1000000, depths[d]);
+    }
+
+    benchListFootprint("loginLine", 100000, 0);
+    benchListFootprint("loginLine", 100000, 1);
+
+    printf("\n  mflex LZ4 footprint (one mflex; stored is what it keeps)\n");
+    const size_t counts[] = {512, 4096};
+    for (size_t c = 0; c < sizeof(counts) / sizeof(*counts); c++) {
+        benchMflexFootprint("repeated integers (42)", MFLEX_REPEATED,
+                            counts[c]);
+        benchMflexFootprint("sequential integers (0, 1, 2, ...)",
+                            MFLEX_SEQUENTIAL, counts[c]);
+        benchMflexFootprint("random 64-bit integers", MFLEX_RANDOM, counts[c]);
+        benchMflexFootprint("strings \"user:N:session:M\"", MFLEX_STRINGS,
+                            counts[c]);
+        benchMflexFootprint("mixed integers and \"event-N\"", MFLEX_MIXED,
+                            counts[c]);
+    }
+
+    /* Timings: medians over rounds that interleave the depths, so drift
+     * and background load hit every depth alike. Sanitized builds run one
+     * short round as a smoke test; their timings mean nothing. */
+#ifdef BENCH_SANITIZED
+    enum { ROUNDS = 1 };
+    const size_t count = 100000;
+#else
+    enum { ROUNDS = 7 };
+    const size_t count = 1000000;
+#endif
+    const uint32_t timedDepths[] = {0, 2, 1};
+    const char *const patterns[] = {"int64", "log100"};
+    printf("\n  multilist push+pop timings (%zu pushes to the tail, then %zu "
+           "pops from the head; median of %d interleaved rounds)\n",
+           count, count, ROUNDS);
+    for (size_t p = 0; p < 2; p++) {
+        double runs[3][ROUNDS];
+        for (size_t r = 0; r < ROUNDS; r++) {
+            for (size_t d = 0; d < 3; d++) {
+                runs[d][r] =
+                    benchListPushPop(patterns[p], count, timedDepths[d]);
+            }
+        }
+
+        for (size_t d = 0; d < 3; d++) {
+            qsort(runs[d], ROUNDS, sizeof(double), benchCmpDouble);
+            printf("  %-6s depth %u: median %8.1f ms (min %8.1f, max "
+                   "%8.1f), %6.0f ns per push+pop\n",
+                   patterns[p], timedDepths[d], runs[d][ROUNDS / 2] / 1000.0,
+                   runs[d][0] / 1000.0, runs[d][ROUNDS - 1] / 1000.0,
+                   runs[d][ROUNDS / 2] * 1000.0 / (double)count);
+        }
+    }
+}
+
 #ifdef DATAKIT_TEST
 #include "ctest.h"
 
@@ -658,6 +891,14 @@ int compressionBenchTest(int argc, char *argv[]) {
     runIntegerBenchmarks(10000000, "XLARGE");
     runFloatBenchmarks(10000000, "XLARGE");
 
+    printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+           "━━━━━━━━━━━━━━━━\n");
+    printf("                     MULTILIST / MFLEX LZ4 COMPRESSION             "
+           "             \n");
+    printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+           "━━━━━━━━━━━━━━\n");
+    runMultilistBenchmarks();
+
     printf("\n");
     printf("╔══════════════════════════════════════════════════════════════════"
            "═════════════╗\n");
@@ -673,8 +914,8 @@ int compressionBenchTest(int argc, char *argv[]) {
            "general-purpose   ║\n");
     printf("║                                                                  "
            "             ║\n");
-    printf("║  FLOAT:   xof excels on smooth time series (bit-level XOR "
-           "tracking)           ║\n");
+    printf("║  FLOAT:   xof excels on repeated or low-precision values (XOR "
+           "of shared bits) ║\n");
     printf("║           varintFloat offers precision/space tradeoffs (lossy "
            "modes)          ║\n");
     printf("║                                                                  "
