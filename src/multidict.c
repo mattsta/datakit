@@ -649,10 +649,10 @@ DK_STATIC uint64_t multidictFingerprint(const multidict *d) {
     uint64_t integers[6], hash = 0;
     int32_t j;
 
-    integers[0] = (long)d->ht[0].table;
+    integers[0] = (uintptr_t)d->ht[0].table;
     integers[1] = HTSIZE(d, 0);
     integers[2] = HTCOUNT(d, 0);
-    integers[3] = (long)d->ht[1].table;
+    integers[3] = (uintptr_t)d->ht[1].table;
     integers[4] = HTSIZE(d, 1);
     integers[5] = HTCOUNT(d, 1);
 
@@ -6515,9 +6515,9 @@ int multidictTest(int argc, char *argv[]) {
             } else if (result != 1) {
                 incrWrongValue++;
                 if (incrWrongValue <= 5) {
-                    printf("  IncrBy key incr_%d returned result=%lld "
-                           "(expected 1), res=%d\n",
-                           i, (long long)result, res);
+                    printf("  IncrBy key incr_%d returned result=%" PRId64
+                           " (expected 1), res=%d\n",
+                           i, result, res);
                 }
             } else {
                 incrSuccess++;
