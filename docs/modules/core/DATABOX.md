@@ -905,6 +905,33 @@ owns the destination storage sets it up before decoding**:
 - A narrow decode overwrites the pointer, so re-run `DATABOX_BIG_INIT`
   before each decode into the same box.
 
+### Wide slots and deferred boxes
+
+```c
+/* 16 bytes, 16-byte aligned: storage for one 96/128-bit payload */
+typedef struct databoxWide {
+    _Alignas(16) uint8_t b[16];
+} databoxWide;
+
+/* True for a 96/128-bit type with data.ptr == NULL */
+static inline bool databoxIsWideDeferred(const databox *box);
+```
+
+A `databoxWide` is a slot, not a box. A decoder that is handed a slot aims
+a plain `databox`'s `data.i128`/`data.u128` at it, with `big = 1` and
+`allocated = 0`, so the box borrows the slot and the value is valid for as
+long as the slot is. Narrow values never touch the slot, so one on the stack
+or at the tail of an iterator costs nothing until a wide value arrives. Use
+a `databoxBig` when you want the box and its storage in one object, and a
+`databoxWide` when the box is a plain `databox` (an entry, an array element,
+a temporary) and the storage sits elsewhere.
+
+A **deferred** box has a wide type and no payload (`data.ptr == NULL`). A
+decode reports a wide value this way when its destination has no wide
+storage, so the caller still learns the type and can read the value again
+into storage it owns. No flag bit marks the state; `databoxIsWideDeferred`
+tests the type and the pointer.
+
 ## Best Practices
 
 ### 1. Always Check Types

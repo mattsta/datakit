@@ -209,9 +209,10 @@ _Static_assert(offsetof(databoxBig, extra) == sizeof(databox),
  *
  * A wide value does not fit the 8-byte data union, so data.i128 /
  * data.u128 points at it and 'big' records that the pointer is live
- * (aimed at 16 bytes of storage).  Decoders read 'big' on the
- * destination: with big = 1 they write the value through the pointer;
- * with big = 0 they report only the type and set data.ptr = NULL.
+ * (aimed at 16 bytes of storage: a databoxBig's 'extra', a databoxWide
+ * slot, or a heap payload).  Decoders read 'big' on the destination: with
+ * big = 1 they write the value through the pointer; with big = 0 they
+ * report only the type and set data.ptr = NULL (databoxIsWideDeferred).
  *
  * The rule: whoever owns the destination storage establishes its wide
  * capability before decoding.  A caller passing its own box sets it up
@@ -228,6 +229,33 @@ _Static_assert(offsetof(databoxBig, extra) == sizeof(databox),
         (dbig)->big = true;                                                    \
         (dbig)->data.u128 = (__uint128_t *)(dbig)->extra;                      \
     } while (0)
+
+/* 'databoxWide' is 16 bytes of 16-byte-aligned storage for one 96/128-bit
+ * payload.  It is a slot, not a box: a decoder that is handed a slot aims
+ * a plain databox's data.i128 / data.u128 at it, with big = 1 and
+ * allocated = 0, so the box borrows the slot and the value is valid for
+ * as long as the slot is.  Narrow values never touch the slot, so a slot
+ * on the stack or at the tail of an iterator costs nothing until a wide
+ * value arrives. */
+typedef struct databoxWide {
+    _Alignas(16) uint8_t b[sizeof(__uint128_t)];
+} databoxWide;
+#if DK_C11
+_Static_assert(sizeof(databoxWide) == 16, "databoxWide must be 16 bytes");
+_Static_assert(_Alignof(databoxWide) == 16,
+               "databoxWide must be 16-byte aligned for its 128-bit store");
+#endif
+
+/* A deferred wide box has a 96/128-bit type and no payload: data.ptr is
+ * NULL.  A decode reports a wide value this way when its destination has
+ * no wide storage, so the caller still learns the type and can read the
+ * value again into storage it owns.  There is no flag bit for this state;
+ * the type and the NULL pointer identify it. */
+static inline bool databoxIsWideDeferred(const databox *box) {
+    return (box->type == DATABOX_SIGNED_128 ||
+            box->type == DATABOX_UNSIGNED_128) &&
+           !box->data.ptr;
+}
 
 /* Growable databox where databoxStr.box.data.ptr == databoxStr.bytes */
 typedef struct databoxStr {

@@ -2646,6 +2646,53 @@ int databoxTest(int argc, char *argv[]) {
         databoxFreeData(&bytes);
     }
 
+    TEST("databoxWide: a 16-byte aligned slot a plain box can borrow") {
+        struct {
+            uint8_t pad;
+            databoxWide slot;
+        } skewed;
+        if (sizeof(databoxWide) != 16 || _Alignof(databoxWide) != 16 ||
+            ((uintptr_t)&skewed.slot % 16) != 0) {
+            ERRR("databoxWide is not 16 bytes at 16-byte alignment");
+        }
+
+        /* A box aimed at a slot carries the full value. */
+        databoxWide slot;
+        databox box = {{0}};
+        box.type = DATABOX_SIGNED_128;
+        box.big = true;
+        box.data.i128 = (__int128_t *)&slot;
+        *box.data.i128 = INT128_MIN + 3;
+        if (databoxIsWideDeferred(&box) || *box.data.i128 != INT128_MIN + 3) {
+            ERRR("a box aimed at a slot reads as deferred");
+        }
+
+        /* Wide type with no payload is deferred, for either signedness. */
+        const databoxType wideTypes[] = {DATABOX_SIGNED_128,
+                                         DATABOX_UNSIGNED_128};
+        for (size_t i = 0; i < COUNT_ARRAY(wideTypes); i++) {
+            databox deferred;
+            memset(&deferred, 0xFF, sizeof(deferred));
+            deferred.type = wideTypes[i];
+            deferred.big = false;
+            deferred.data.ptr = NULL;
+            if (!databoxIsWideDeferred(&deferred)) {
+                ERR("type %d with a NULL payload is not deferred",
+                    (int)wideTypes[i]);
+            }
+        }
+
+        /* Narrow values are never deferred, even with a zero payload. */
+        const databox narrow[] = {databoxNewSigned(0), databoxNewUnsigned(0),
+                                  DATABOX_DOUBLE(0.0), databoxNull(),
+                                  databoxVoid(),       {{0}}};
+        for (size_t i = 0; i < COUNT_ARRAY(narrow); i++) {
+            if (databoxIsWideDeferred(&narrow[i])) {
+                ERR("narrow box %zu reads as deferred", i);
+            }
+        }
+    }
+
     printf("\n=== All databox fuzz tests completed! ===\n\n");
 
     TEST_FINAL_RESULT;
