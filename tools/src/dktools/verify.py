@@ -14,8 +14,10 @@ PATHs, ``--staged`` takes exactly the current index (HEAD plus what
 is staged), and ``--all-changed`` takes HEAD plus every tracked path
 that differs in the working tree (modified, added to the index, or
 deleted); untracked files never take part.  Either flag refuses (exit
-2) when the result would be plain HEAD: name an unchanged PATH to
-build HEAD on purpose.  Nothing else from the working tree leaks in,
+2) when the result would be plain HEAD ("index matches HEAD", "no
+tracked changes"): name an unchanged PATH to build HEAD on purpose.
+A refused run, like any input error found while building the tree,
+leaves an earlier result under NAME untouched.  Nothing else from the working tree leaks in,
 and the real index is never touched: the tree is written through a
 private GIT_INDEX_FILE (a copy of the index for ``--staged``),
 exported with ``git archive`` into ``ROOT/verify/NAME/src``, then
@@ -62,6 +64,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -128,9 +131,9 @@ def build_source_tree(
         tree = gitutil.build_tree(repo, index_file, specs)
     changes = gitutil.tree_changes(repo, "HEAD", tree)
     if not changes and source != "paths":
-        what = "nothing is staged" if source == "staged" else "no tracked path changed"
+        why = "index matches HEAD" if source == "staged" else "no tracked changes"
         raise ToolError(
-            f"--{source}: {what}, so the tree would be plain HEAD "
+            f"--{source}: {why}, nothing to verify "
             "(name an unchanged PATH to build HEAD on purpose)"
         )
     return tree, changes
@@ -253,14 +256,18 @@ def run(repo: Path, opts: VerifyOptions) -> int:
     config = toolchain.build_config(opts.compiler, opts.preset)
     jobs = opts.jobs or os.cpu_count() or 4
 
+    # Every input check that can refuse runs before ROOT/verify/NAME is
+    # recreated, so a refused run leaves the previous result in place.
+    # The tree is written through a throwaway index outside it.
+    head = gitutil.git_text(repo, "rev-parse", "--short", "HEAD")
+    with tempfile.TemporaryDirectory(prefix="dktools-verify-") as tmp:
+        tree, changes = build_source_tree(repo, Path(tmp) / "index", source, specs)
+    config.compiler.check()
+
     root = gitutil.scratch_root(opts.root).resolve()
     work = gitutil.fresh_dir(root / "verify" / name)
     src = work / "src"
-
-    head = gitutil.git_text(repo, "rev-parse", "--short", "HEAD")
-    tree, changes = build_source_tree(repo, work / "index", source, specs)
     gitutil.export_tree(repo, tree, src)
-    config.compiler.check()
     config.check_presets_file(src)
     bindir = config.binary_dir(src)
 

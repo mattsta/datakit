@@ -651,14 +651,38 @@ class VerifyRun(unittest.TestCase):
 
     def test_staged_and_all_changed_refuse_plain_head(self) -> None:
         self.repo.write("src/stray.c", "int stray;\n")  # untracked: not a change
-        for kw in ({"staged": True}, {"all_changed": True}):
+        for kw, why in (
+            ({"staged": True}, "--staged: index matches HEAD, nothing to verify"),
+            ({"all_changed": True}, "--all-changed: no tracked changes, nothing"),
+        ):
             with self.subTest(kw=kw):
-                with self.assertRaisesRegex(ToolError, "plain HEAD"):
+                with self.assertRaisesRegex(ToolError, f"^{why}"):
                     self.run_verify(FakeRunner({}, self.PASSING), specs=[], **kw)
         # An unchanged PATH builds plain HEAD on purpose.
         code, out = self.run_verify(FakeRunner({}, self.PASSING), specs=["src/a.c"])
         self.assertEqual(code, 0, out)
         self.assertIn(" + 1 path(s), 0 changed)\n", out)
+
+    def test_refused_runs_keep_the_previous_result(self) -> None:
+        self.repo.write("src/a.c", "int changed;\n")
+        code, out = self.run_verify(FakeRunner({}, self.PASSING))
+        self.assertEqual(code, 0, out)
+        work = self.root / "verify" / "t"
+        kept = {p: p.read_bytes() for p in work.rglob("*") if p.is_file()}
+        self.assertIn(work / "result.txt", kept)
+        self.repo.write("src/a.c", "int a;\n")  # back to HEAD: nothing changed
+        for kw in (
+            {"specs": [], "staged": True},
+            {"specs": [], "all_changed": True},
+            {"specs": ["src/missing.c"]},
+        ):
+            with self.subTest(kw=kw):
+                runner = FakeRunner({}, self.PASSING)
+                with self.assertRaises(ToolError):
+                    self.run_verify(runner, **kw)
+                self.assertEqual(runner.calls, [])
+                now = {p: p.read_bytes() for p in work.rglob("*") if p.is_file()}
+                self.assertEqual(now, kept)
 
     def test_source_flags_conflict(self) -> None:
         for kw in (

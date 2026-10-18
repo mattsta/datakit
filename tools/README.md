@@ -84,9 +84,11 @@ uv run --project tools dktools verify NAME --tests REGEX [--serial REGEX] \
   deleted. Untracked files never take part. The two flags exclude each
   other and `PATH` arguments.
 - Either flag refuses (exit 2) when the tree would be plain HEAD
-  (nothing staged, or no tracked path changed): an empty change set
+  (`index matches HEAD`, `no tracked changes`): an empty change set
   there is a mistake, not a request. To build HEAD on purpose, name an
-  unchanged `PATH`.
+  unchanged `PATH`. A refused run, like any other input error found
+  while building the tree, leaves the previous result under `NAME`
+  untouched.
 - The result's `tree` line says what was taken, and a `changed` line
   follows for every path that differs from HEAD (`A`, `M`, `D` or `T`
   and the path), in every mode.
