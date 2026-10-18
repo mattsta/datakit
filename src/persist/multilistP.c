@@ -242,6 +242,13 @@ bool multilistDelRangeP(multilistP *ml, mlOffsetId start, int64_t values) {
         return false;
     }
 
+    /* A range that deletes nothing is refused before it is logged, so
+     * the WAL only holds operations that change the list. */
+    const mlOffsetId count = (mlOffsetId)multilistCount(ml->ml);
+    if (values <= 0 || start >= count || start < -count) {
+        return false;
+    }
+
     /* Encode start and values as databoxes for WAL */
     const databox startBox = DATABOX_SIGNED(start);
     const databox valuesBox = DATABOX_SIGNED(values);
@@ -264,6 +271,12 @@ bool multilistDelRangeP(multilistP *ml, mlOffsetId start, int64_t values) {
 bool multilistReplaceAtIndexP(multilistP *ml, mlNodeId index,
                               const databox *box) {
     if (!ml || !ml->ml || !ml->ctx || !box) {
+        return false;
+    }
+
+    /* An index outside the list is refused before it is logged. */
+    const mlOffsetId count = (mlOffsetId)multilistCount(ml->ml);
+    if (index >= count || index < -count) {
         return false;
     }
 
@@ -1087,6 +1100,107 @@ int multilistPTest(int argc, char *argv[]) {
             }
 
             multilistCloseP(ml);
+            persistCtxFree(ctx);
+        }
+
+        ptestCleanupFiles(basePath);
+    }
+
+    TEST("multilistP refuses no-op deletes and out-of-range replaces "
+         "without logging them") {
+        /* Zero and negative counts, starts outside the list (both signs,
+         * and far beyond 32 bits), and replace indexes outside the list
+         * must return false, log nothing (totalOps unchanged) and leave
+         * the list as it was, before and after recovery.  An empty list
+         * refuses every range and index. */
+        ptestCleanupFiles(basePath);
+        ptestBoxTracker tracker;
+        ptestBoxTrackerInit(&tracker);
+        const mlOffsetId n = 12;
+        {
+            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            multilistP *ml = multilistNewP(ctx, FLEX_CAP_LEVEL_2048, 0);
+            const databox rep = DATABOX_SIGNED(-77);
+
+            /* Empty list first */
+            if (multilistDelRangeP(ml, 0, 1) || multilistDelRangeP(ml, -1, 1) ||
+                multilistReplaceAtIndexP(ml, 0, &rep) ||
+                multilistReplaceAtIndexP(ml, -1, &rep)) {
+                ERRR("an empty list accepted a delete or a replace");
+            }
+
+            for (mlOffsetId i = 0; i < n; i++) {
+                databox box = DATABOX_SIGNED(i * 3);
+                multilistPushTailP(ml, &box);
+                ptestBoxTrackerPushTail(&tracker, &box);
+            }
+
+            persistCtxStats before;
+            multilistGetStatsP(ml, &before);
+            const struct {
+                mlOffsetId start;
+                int64_t values;
+            } noops[] = {{0, 0},
+                         {0, -1},
+                         {n, 1},
+                         {-n - 1, 1},
+                         {INT64_MAX, 1},
+                         {INT64_MIN, 5},
+                         {(mlOffsetId)1 << 32, 1},
+                         {-1, 0}};
+            for (size_t k = 0; k < sizeof(noops) / sizeof(*noops); k++) {
+                if (multilistDelRangeP(ml, noops[k].start, noops[k].values)) {
+                    ERR("DelRangeP(%" PRId64 ", %" PRId64 ") was accepted",
+                        noops[k].start, noops[k].values);
+                }
+            }
+
+            const mlNodeId badIdx[] = {(mlNodeId)n, (mlNodeId)(-n - 1),
+                                       INT32_MAX, INT32_MIN};
+            for (size_t k = 0; k < sizeof(badIdx) / sizeof(*badIdx); k++) {
+                if (multilistReplaceAtIndexP(ml, badIdx[k], &rep)) {
+                    ERR("ReplaceAtIndexP(%" PRId32 ") was accepted", badIdx[k]);
+                }
+            }
+
+            persistCtxStats after;
+            multilistGetStatsP(ml, &after);
+            if (after.totalOps != before.totalOps) {
+                ERR("refused calls logged %" PRIu64 " operations",
+                    after.totalOps - before.totalOps);
+            }
+
+            if (!verifyMultilistMatchesTracker(ml, &tracker)) {
+                ERRR("a refused call changed the list");
+            }
+
+            /* The edges are still accepted. */
+            if (!multilistReplaceAtIndexP(ml, -1, &rep) ||
+                !multilistDelRangeP(ml, -n, 1)) {
+                ERRR("an edge replace or delete was refused");
+            }
+            tracker.boxes[n - 1] = rep;
+            memmove(&tracker.boxes[0], &tracker.boxes[1],
+                    (tracker.count - 1) * sizeof(*tracker.boxes));
+            tracker.count--;
+
+            multilistCloseP(ml);
+            persistCtxFree(ctx);
+        }
+
+        {
+            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            multilistP *ml = multilistOpenP(ctx);
+            if (!ml) {
+                ERRR("Recovery failed");
+            } else {
+                if (!verifyMultilistMatchesTracker(ml, &tracker)) {
+                    ERRR("recovered list differs");
+                }
+
+                multilistCloseP(ml);
+            }
+
             persistCtxFree(ctx);
         }
 

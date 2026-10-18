@@ -505,6 +505,11 @@ Use a read-write iterator (`multilistIteratorInitForward` /
 `...InitReverse`) when you intend to delete; the read-only variants exist for
 pure traversal.
 
+`multilistDelRange()` clamps the count to the end of the list and returns true
+only when it deleted something. On every tier a count of zero or less, an empty
+list, or a `start` outside the list (`start >= count` or `start < -count`)
+deletes nothing and returns false.
+
 ### Replace at Index
 
 ```c
@@ -514,7 +519,8 @@ bool multilistReplaceByTypeAtIndex(multilist **m, mflexState *state,
 
 Note the public prototype takes `mlNodeId` (`int32_t`), not `mlOffsetId`, so
 replacement is limited to indexes that fit in 32 bits. Negative indexes count
-from the tail.
+from the tail. An index outside the list (an empty list included) returns false
+and changes nothing, on every tier.
 
 ```c
 mflexState *state = mflexStateCreate();
@@ -572,6 +578,12 @@ box must not be passed to `databoxFreeData()`. An entry's byte value is always
 plain `DATABOX_BYTES`, so `entry.box.data.bytes.cstart` is safe here (and
 `databoxCBytes(&entry.box)` works too). With `openNode` false the Full tier
 only checks that the index exists; it does not set `entry.fe` or `entry.box`.
+
+An index outside the list (`index >= count` or `index < -count`, which is every
+index of an empty list) returns false, from both macros and on every tier. The
+one use of the failed entry: on an empty list `multilistIndexGet()` aims it at
+the empty head, so `multilistInsertByTypeBefore()` / `...After()` can add the
+first element with it.
 
 A single read has nowhere to put a 96/128-bit payload, so `multilistIndex()`
 and `multilistIndexNear()` report a wide element **deferred**: the type is set

@@ -84,10 +84,13 @@ bool multilistPopHeadP(multilistP *ml, databox *got);
 /* Pop from tail - automatically persisted */
 bool multilistPopTailP(multilistP *ml, databox *got);
 
-/* Delete range - automatically persisted */
+/* Delete range - automatically persisted.  A range that would delete
+ * nothing (values <= 0, an empty list, or a start outside the list)
+ * returns false and is not logged. */
 bool multilistDelRangeP(multilistP *ml, mlOffsetId start, int64_t values);
 
-/* Replace at index - automatically persisted */
+/* Replace at index - automatically persisted.  An index outside the list
+ * returns false and is not logged. */
 bool multilistReplaceAtIndexP(multilistP *ml, mlNodeId index,
                               const databox *box);
 

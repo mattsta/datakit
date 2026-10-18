@@ -526,8 +526,23 @@ void multilistFullPushByTypeTail(multilistFull *ml, mflexState *state,
 
 /* Append 'fl' as a new never-compress tail node, keeping 'fl' itself
  * as the node's memory.  The depth rule is not re-applied: the caller
- * does that. */
+ * does that.  An empty 'fl' is freed and adds no node, and on an empty
+ * list 'fl' replaces the one empty node instead of following it, so the
+ * list never holds an empty node beside others. */
 DK_STATIC void multilistFullAppendFlexNode__(multilistFull *ml, flex *fl) {
+    if (flexCount(fl) == 0) {
+        flexFree(fl);
+        return;
+    }
+
+    if (ml->count == 1 && ml->values == 0) {
+        mflex **only = getNodePtr(0);
+        mflexFree(*only);
+        ml->values = flexCount(fl);
+        *only = mflexConvertFromFlexNoCompress(fl);
+        return;
+    }
+
     multilistFullInsertNodeAfter__Empty(ml, mlTailIdx(ml));
 
     ml->values += flexCount(fl);
@@ -1075,7 +1090,8 @@ void multilistFullInsertByTypeAfter(multilistFull *ml, mflexState *state[2],
  * Returns false if no entires were deleted. */
 bool multilistFullDelRange(multilistFull *ml, mflexState *state,
                            const mlOffsetId start, const int64_t values) {
-    if (values <= 0 || ml->values == 0) {
+    if (values <= 0 || start >= ml->values || start < -ml->values) {
+        /* (an empty list has no valid start) */
         return false;
     }
 
@@ -1449,11 +1465,27 @@ DK_STATIC bool multilistFullIndexEngine_(multilistFull *ml, mflexState *state,
 
     mlNodeId nodeIdx = 0;
     const mlOffsetId originalIndex = index;
+    const mlOffsetId count = ml->values;
+
+    /* Range check first, so negating 'index' below cannot overflow.
+     * Every index of an empty list is out of range, but an opened entry
+     * is still aimed at the list's one (empty) node, so
+     * InsertByType{Before,After} can add a first element through it. */
+    if (index >= count || index < -count) {
+        if (count == 0 && openNode) {
+            entry->ml = ml;
+            entry->nodeIdx = 0;
+            entry->offset = 0;
+            entry->f = mflexOpen(getNode(0), state);
+            entry->fe = flexHead(entry->f);
+        }
+
+        return false;
+    }
 
 #if 1
     /* Pre-process 'index' to determine if it would be faster to Iterate
      * from the other side of the list as was requested. */
-    const mlOffsetId count = ml->values;
     const mlOffsetId halfCount = count / 2;
     if (index >= 0) {
         if (index < count && index > halfCount) {
@@ -4056,6 +4088,79 @@ int multilistFullTest(int argc, char *argv[]) {
             }
 
             multilistFullFree(ml);
+        }
+    }
+
+    TEST("AppendFlex on an empty list, and of an empty flex, leaves no empty "
+         "node") {
+        /* A new list and a list emptied by pops each hold one empty
+         * node: the appended flex must replace it.  Appending an empty
+         * flex must add nothing.  The list must then match an array
+         * oracle with no empty node, follow the depth rule, and pop its
+         * head correctly. */
+        enum { AE_N = 20 };
+        static uint32_t want[AE_N + 8];
+        char buf[MLF_SPLIT_LEN + 1];
+        for (uint32_t d = 0; d <= 1; d++) {
+            for (int emptied = 0; emptied < 2; emptied++) {
+                for (int withState = 0; withState < 2; withState++) {
+                    multilistFull *ml = multilistFullNew(FLEX_CAP_LEVEL_512, d);
+                    if (emptied) {
+                        for (uint32_t i = 0; i < AE_N; i++) {
+                            const databox box = mlfSplitBox(i, buf);
+                            multilistFullPushByTypeTail(ml, s0, &box);
+                        }
+
+                        databox got = {{0}};
+                        while (multilistFullPopHead(ml, s0, &got)) {
+                            databoxFreeData(&got);
+                            memset(&got, 0, sizeof(got));
+                        }
+                    }
+
+                    uint32_t n = 0;
+                    for (int round = 0; round < 3; round++) {
+                        /* empty, then 7 elements, then empty again */
+                        flex *fl = flexNew();
+                        for (uint32_t k = 0; round == 1 && k < 7; k++) {
+                            const databox box = mlfSplitBox(100 + n, buf);
+                            flexPushByType(&fl, &box, FLEX_ENDPOINT_TAIL);
+                            want[n] = 100 + n;
+                            n++;
+                        }
+
+                        if (withState) {
+                            multilistFullAppendFlexWithState(ml, s0, fl);
+                        } else {
+                            multilistFullAppendFlex(ml, fl);
+                        }
+
+                        mlNodeId bad = -1;
+                        const char *why = ml->count != 1
+                                              ? "an empty node was kept"
+                                              : mlfSplitCheck(ml, s, want, n);
+                        if (!why) {
+                            why = mlfDepthRuleExact(ml, &bad);
+                        }
+
+                        if (why) {
+                            ERR("depth %u, %s list, %s, round %d: %s", d,
+                                emptied ? "emptied" : "new",
+                                withState ? "WithState" : "stateless", round,
+                                why);
+                        }
+                    }
+
+                    databox head = {{0}};
+                    if (!multilistFullPopHead(ml, s0, &head) ||
+                        !mlfSplitIs(&head, want[0])) {
+                        ERR("depth %u: the head popped wrong", d);
+                    }
+
+                    databoxFreeData(&head);
+                    multilistFullFree(ml);
+                }
+            }
         }
     }
 

@@ -121,10 +121,14 @@ void multilistSmallDelEntry(multilistIterator *iter, multilistEntry *entry) {
 /* ====================================================================
  * Delete by position
  * ==================================================================== */
+/* Delete up to 'values' elements starting at 'start' (negative counts
+ * from the tail).  Returns true if anything was deleted; a count of zero
+ * or less, an empty list, or a start outside the list deletes nothing
+ * and returns false. */
 bool multilistSmallDelRange(multilistSmall *ml, const mlOffsetId start,
                             const int64_t values) {
     const mlOffsetId currentValues = flexCount(ml->fl);
-    if (values < 0 || currentValues == 0) {
+    if (values <= 0 || start >= currentValues || start < -currentValues) {
         return false;
     }
 
@@ -144,9 +148,15 @@ bool multilistSmallDelRange(multilistSmall *ml, const mlOffsetId start,
 /* ====================================================================
  * Replace by index
  * ==================================================================== */
+/* Returns false, changing nothing, when 'index' is outside the list. */
 bool multilistSmallReplaceByTypeAtIndex(multilistSmall *ml, mlOffsetId index,
                                         const databox *box) {
-    flexEntry *fe = flexIndex(ml->fl, index);
+    const mlOffsetId values = flexCount(ml->fl);
+    if (index >= values || index < -values) {
+        return false;
+    }
+
+    flexEntry *fe = flexIndex(ml->fl, (int32_t)index);
     flexReplaceByType(&ml->fl, fe, box);
     return true;
 }
@@ -236,9 +246,18 @@ bool multilistSmallIndexNear(multilistSmall *ml, mlOffsetId index,
                              const multilistEntry *anchor, mlOffsetId anchorIdx,
                              multilistEntry *entry) {
     entry->ml = ml;
-    entry->offset = index;
 
+    /* Check the range at full width: the flex walk takes an int32_t, so
+     * an index beyond it would otherwise wrap onto a real element. */
     const mlOffsetId values = flexCount(ml->fl);
+    if (index >= values || index < -values) {
+        /* Aimed at the head, so an empty list can take a first insert */
+        entry->offset = 0;
+        entry->fe = flexHead(ml->fl);
+        return false;
+    }
+
+    entry->offset = (int32_t)index;
     const mlOffsetId a = anchorIdx < 0 ? values + anchorIdx : anchorIdx;
 
     entry->fe = (anchor && anchor->fe)

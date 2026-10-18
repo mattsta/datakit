@@ -872,6 +872,44 @@ static void mlrTierRelease(multilist *ml, multilistIterator *iter) {
     }
 }
 
+/* Compare 'ml' with the oracle 'want' (ids, head to tail) by its count
+ * and by walking it forward and in reverse.  Returns NULL on a match,
+ * else what differed. */
+static const char *mlrListIs(multilist *ml, mflexState *s[2],
+                             const uint32_t *want, uint32_t n) {
+    if (multilistCount(ml) != n) {
+        return "wrong count";
+    }
+
+    for (int dir = 0; dir < 2; dir++) {
+        const bool forward = dir == 0;
+        multilistIterator iter;
+        multilistEntry entry;
+        multilistIteratorInitReadOnly(ml, s, &iter, forward);
+        uint32_t seen = 0;
+        const char *why = NULL;
+        while (!why && multilistNext(&iter, &entry)) {
+            if (seen >= n ||
+                !mlrIs(&entry.box, want[forward ? seen : n - 1 - seen])) {
+                why = forward ? "forward walk differs" : "reverse walk differs";
+            }
+
+            seen++;
+        }
+
+        multilistIteratorRelease(&iter);
+        if (!why && seen != n) {
+            why = "walk ended early";
+        }
+
+        if (why) {
+            return why;
+        }
+    }
+
+    return NULL;
+}
+
 /* The flex an entry's element lives in, on each tier. */
 static const flex *mloFlex(const multilist *ml, const multilistEntry *entry) {
     switch (_multilistType(ml)) {
@@ -3014,6 +3052,201 @@ int multilistTest(int argc, char *argv[]) {
 
         if (!negativeOffsets) {
             ERRR("no walk produced a tail-relative offset");
+        }
+    }
+
+    TEST("edge inputs on every tier: out-of-range indexes, empty lists, "
+         "no-op deletes and invalid replaces") {
+        /* On a populated list of each tier: the first and last valid
+         * indexes of both signs read the right element; every index past
+         * either end (by one, by two, at the int64 limits and past 32
+         * bits) is refused by IndexGet, IndexCheck, InitAtIdx and
+         * Replace, and DelRange refuses zero and negative counts and
+         * starts outside the list; refused calls change nothing.  Then
+         * the same list, emptied by pops, refuses everything, iterates
+         * nothing, and still takes a first insert through IndexGet's
+         * entry. */
+        enum { EI_MAX = 600 };
+        const struct {
+            const char *name;
+            flexCapSizeLimit limit;
+            uint32_t depth;
+            uint32_t count;
+            multilistType wantType;
+        } configs[] = {
+            {"Small", FLEX_CAP_LEVEL_65536, 0, 60, MULTILIST_TYPE_SMALL},
+            {"Medium", FLEX_CAP_LEVEL_512, 0, 40, MULTILIST_TYPE_MEDIUM},
+            {"Full depth 0", FLEX_CAP_LEVEL_512, 0, 300, MULTILIST_TYPE_FULL},
+            {"Full depth 1", FLEX_CAP_LEVEL_512, 1, 600, MULTILIST_TYPE_FULL},
+        };
+        static uint32_t want[EI_MAX];
+        const mlOffsetId big = (mlOffsetId)1 << 32;
+        for (size_t c = 0; c < sizeof(configs) / sizeof(*configs); c++) {
+            const char *name = configs[c].name;
+            uint32_t n = configs[c].count;
+            cleaner(multilistFree) multilist *ml =
+                multilistNew(configs[c].limit, configs[c].depth);
+            char buf[MLR_LEN + 1];
+            for (uint32_t i = 0; i < n; i++) {
+                const databox box = mlrBox(i, buf);
+                multilistPushByTypeTail(&ml, s0, &box);
+                want[i] = i;
+            }
+
+            if (_multilistType(ml) != configs[c].wantType) {
+                ERR("%s: landed tier %d", name, (int)_multilistType(ml));
+                continue;
+            }
+
+            const mlOffsetId sn = n;
+            multilistEntry entry;
+            multilistIterator iter;
+            const mlOffsetId good[] = {0, sn - 1, -1, -sn};
+            for (size_t k = 0; k < sizeof(good) / sizeof(*good); k++) {
+                const uint32_t pos =
+                    (uint32_t)(good[k] < 0 ? sn + good[k] : good[k]);
+                if (!multilistIndexGet(ml, s0, good[k], &entry) ||
+                    !mlrIs(&entry.box, want[pos]) ||
+                    !multilistIndexCheck(ml, s0, good[k], &entry)) {
+                    ERR("%s: valid index %" PRId64 " misread", name, good[k]);
+                }
+            }
+
+            const mlOffsetId bad[] = {sn,      sn + 1,    -sn - 1,
+                                      -sn - 2, INT64_MAX, INT64_MIN,
+                                      big,     big + 1,   -big};
+            for (size_t k = 0; k < sizeof(bad) / sizeof(*bad); k++) {
+                if (multilistIndexGet(ml, s0, bad[k], &entry) ||
+                    multilistIndexCheck(ml, s0, bad[k], &entry)) {
+                    ERR("%s: index %" PRId64 " was accepted", name, bad[k]);
+                }
+
+                memset(&iter, 0, sizeof(iter));
+                if (multilistIteratorInitAtIdx(ml, s, &iter, bad[k], true,
+                                               true)) {
+                    ERR("%s: InitAtIdx(%" PRId64 ") was accepted", name,
+                        bad[k]);
+                }
+            }
+
+            const databox rep = mlrBox(900000, buf);
+            const mlNodeId badRep[] = {(mlNodeId)n, (mlNodeId)n + 1,
+                                       -(mlNodeId)n - 1, INT32_MAX, INT32_MIN};
+            for (size_t k = 0; k < sizeof(badRep) / sizeof(*badRep); k++) {
+                if (multilistReplaceByTypeAtIndex(&ml, s0, badRep[k], &rep)) {
+                    ERR("%s: Replace(%" PRId32 ") was accepted", name,
+                        badRep[k]);
+                }
+            }
+
+            const struct {
+                mlOffsetId start;
+                int64_t values;
+            } noop[] = {{0, 0},   {sn - 1, 0},  {0, -1},        {0, INT64_MIN},
+                        {sn, 1},  {-sn - 1, 1}, {INT64_MAX, 1}, {INT64_MIN, 3},
+                        {big, 1}, {-big, 1}};
+            for (size_t k = 0; k < sizeof(noop) / sizeof(*noop); k++) {
+                if (multilistDelRange(&ml, s0, noop[k].start, noop[k].values)) {
+                    ERR("%s: DelRange(%" PRId64 ", %" PRId64 ") was accepted",
+                        name, noop[k].start, noop[k].values);
+                }
+            }
+
+            const char *why = mlrListIs(ml, s, want, n);
+            if (why) {
+                ERR("%s: after the refused calls: %s", name, why);
+            }
+
+            /* The edges are accepted: replace both ends, delete the last
+             * element with an oversized count and the first exactly. */
+            const databox repHead = mlrBox(900001, buf);
+            if (!multilistReplaceByTypeAtIndex(&ml, s0, -(mlNodeId)n,
+                                               &repHead)) {
+                ERR("%s: Replace(-count) was refused", name);
+            }
+            want[0] = 900001;
+            const databox repTail = mlrBox(900002, buf);
+            if (!multilistReplaceByTypeAtIndex(&ml, s0, (mlNodeId)n - 1,
+                                               &repTail)) {
+                ERR("%s: Replace(count - 1) was refused", name);
+            }
+            want[n - 1] = 900002;
+            if (!multilistDelRange(&ml, s0, -1, INT64_MAX) ||
+                !multilistDelRange(&ml, s0, -(mlOffsetId)(n - 1), 1)) {
+                ERR("%s: an edge DelRange was refused", name);
+            }
+            n -= 2;
+            memmove(&want[0], &want[1], n * sizeof(*want));
+            why = mlrListIs(ml, s, want, n);
+            if (why) {
+                ERR("%s: after the edge replaces and deletes: %s", name, why);
+            }
+
+            /* Empty the list, keeping its tier. */
+            databox got = {{0}};
+            while (multilistPopTail(&ml, s0, &got)) {
+                databoxFreeData(&got);
+                memset(&got, 0, sizeof(got));
+            }
+
+            if (_multilistType(ml) != configs[c].wantType ||
+                multilistCount(ml) != 0) {
+                ERR("%s: popping everything left tier %d with %zu elements",
+                    name, (int)_multilistType(ml), multilistCount(ml));
+                continue;
+            }
+
+            const mlOffsetId emptyIdx[] = {0, -1, 1, INT64_MIN};
+            for (size_t k = 0; k < sizeof(emptyIdx) / sizeof(*emptyIdx); k++) {
+                if (multilistIndexGet(ml, s0, emptyIdx[k], &entry) ||
+                    multilistIndexCheck(ml, s0, emptyIdx[k], &entry) ||
+                    multilistIteratorInitAtIdx(ml, s, &iter, emptyIdx[k], true,
+                                               true) ||
+                    multilistReplaceByTypeAtIndex(
+                        &ml, s0, (mlNodeId)(emptyIdx[k] % 2), &rep) ||
+                    multilistDelRange(&ml, s0, emptyIdx[k], 1)) {
+                    ERR("%s: the empty list accepted index %" PRId64, name,
+                        emptyIdx[k]);
+                }
+            }
+
+            if (multilistPopHead(&ml, s0, &got)) {
+                ERR("%s: the empty list popped something", name);
+            }
+
+            multilistRotate(ml, s);
+            for (int dir = 0; dir < 2; dir++) {
+                multilistIteratorInit(ml, s, &iter, dir == 0, true);
+                if (multilistNext(&iter, &entry)) {
+                    ERR("%s: the empty list iterated an element", name);
+                }
+                multilistIteratorRelease(&iter);
+            }
+
+            /* A first insert through IndexGet's entry on the empty list,
+             * once before and (after emptying again) once after. */
+            for (int after = 0; after < 2; after++) {
+                const databox first = mlrBox(800000 + (uint32_t)after, buf);
+                memset(&entry, 0xFF, sizeof(entry));
+                multilistIndexGet(ml, s0, 0, &entry);
+                if (after) {
+                    multilistInsertByTypeAfter(&ml, s, &entry, &first);
+                } else {
+                    multilistInsertByTypeBefore(&ml, s, &entry, &first);
+                }
+
+                want[0] = 800000 + (uint32_t)after;
+                why = mlrListIs(ml, s, want, 1);
+                if (why) {
+                    ERR("%s: the first insert %s: %s", name,
+                        after ? "after" : "before", why);
+                }
+
+                if (multilistPopHead(&ml, s0, &got)) {
+                    databoxFreeData(&got);
+                    memset(&got, 0, sizeof(got));
+                }
+            }
         }
     }
 

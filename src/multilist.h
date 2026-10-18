@@ -52,9 +52,24 @@ void multilistInsertByTypeBefore(multilist **m, mflexState *state[2],
                                  multilistEntry *node, const databox *box);
 #endif
 
+/* Delete the element 'entry' names, which multilistNext just returned
+ * from the writable iterator 'iter'.  The walk then goes on with the
+ * element after it (forward) or before it (reverse), and the iterator's
+ * offset keeps naming that element, so later entries carry right
+ * offsets. */
 void multilistDelEntry(multilistIterator *iter, multilistEntry *entry);
+
+/* Delete up to 'values' elements starting at index 'start' (negative
+ * counts from the tail), clamped to the end of the list.  Returns true
+ * if anything was deleted.  A count of zero or less, an empty list, or
+ * a start outside the list deletes nothing and returns false, on every
+ * tier. */
 bool multilistDelRange(multilist **m, mflexState *state, mlOffsetId start,
                        int64_t values);
+
+/* Replace the element at 'index' (negative counts from the tail) with
+ * 'box'.  Returns false, changing nothing, when 'index' is outside the
+ * list, an empty list included. */
 bool multilistReplaceByTypeAtIndex(multilist **m, mflexState *state,
                                    mlNodeId index, const databox *box);
 
@@ -102,7 +117,11 @@ void multilistIteratorRelease(multilistIterator *iter);
  * (databoxIsWideDeferred), because a single read has no storage of its
  * own for the payload.  Use multilistIndexWide when the value is needed.
  * With openNode false the Full tier only checks that 'index' exists and
- * leaves entry->fe and entry->box unset; Small and Medium always decode. */
+ * leaves entry->fe and entry->box unset; Small and Medium always decode.
+ * An index outside the list (index >= count or index < -count, any index
+ * of an empty list) returns false and leaves 'entry' unusable, with one
+ * exception: on an empty list multilistIndexGet aims 'entry' at the empty
+ * head, so InsertByTypeBefore/After can add the first element with it. */
 bool multilistIndex(const multilist *ml, mflexState *state, mlOffsetId index,
                     multilistEntry *entry, bool openNode);
 #define multilistIndexGet(ml, s, i, e) multilistIndex(ml, s, i, e, true)

@@ -219,15 +219,20 @@ void multilistMediumDelEntry(multilistIterator *iter, multilistEntry *entry) {
 /* ====================================================================
  * Delete by position
  * ==================================================================== */
+/* Delete up to 'values' elements starting at 'start' (negative counts
+ * from the tail).  Returns true if anything was deleted; a count of zero
+ * or less, an empty list, or a start outside the list deletes nothing
+ * and returns false. */
 bool multilistMediumDelRange(multilistMedium *ml, const mlOffsetId start,
                              const int64_t values) {
     const mlOffsetId countF0 = flexCount(F0);
-    if (values < 0 || countF0 == 0) {
+    const mlOffsetId countF1 = flexCount(F1);
+    const mlOffsetId currentValues = countF0 + countF1;
+    if (values <= 0 || countF0 == 0 || start >= currentValues ||
+        start < -currentValues) {
         return false;
     }
 
-    const mlOffsetId countF1 = flexCount(F1);
-    const mlOffsetId currentValues = countF0 + countF1;
     mlOffsetId extent = values; /* range is inclusive of start position */
 
     if (start >= 0 && extent > (currentValues - start)) {
@@ -443,10 +448,19 @@ bool multilistMediumIndexNear(multilistMedium *ml, mlOffsetId index,
                               const multilistEntry *anchor,
                               mlOffsetId anchorIdx, multilistEntry *entry) {
     entry->ml = ml;
-    entry->offset = index;
+
+    const mlOffsetId values = multilistMediumCount(ml);
+    if (values == 0) {
+        /* Nothing to index, but aimed at the empty head so a first insert
+         * can use the entry */
+        entry->nodeIdx = 0;
+        entry->offset = 0;
+        entry->f = F0;
+        entry->fe = flexHead(F0);
+        return false;
+    }
 
     /* Negative index counts from the tail: -1 is the last element */
-    const mlOffsetId values = multilistMediumCount(ml);
     if (index < 0) {
         index = values + index;
         if (index < 0) {

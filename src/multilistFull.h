@@ -63,7 +63,9 @@ void multilistFullPushByTypeTail(multilistFull *ml, mflexState *state,
 /* AppendFlex keeps 'fl' inside a new tail node and keeps the depth rule:
  * the node the new tail pushes into the interior is compressed, through a
  * temporary mflexState that is allocated only when that is needed.
- * AppendFlexWithState uses the caller's state instead. */
+ * AppendFlexWithState uses the caller's state instead.  Both take
+ * ownership of 'fl': an empty 'fl' is freed and adds nothing, and on an
+ * empty list 'fl' becomes the list's only node. */
 void multilistFullAppendFlex(multilistFull *ml, flex *fl);
 void multilistFullAppendFlexWithState(multilistFull *ml, mflexState *state,
                                       flex *fl);
