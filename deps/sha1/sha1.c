@@ -363,12 +363,18 @@ void SHA1Update(SHA1_CTX *context, const uint8_t *data, uint32_t len) {
     _DIAGASSERT(context != 0);
     _DIAGASSERT(data != 0);
 
+    /* count is the 64-bit message length in bits: len << 3 adds the low
+     * 29 bits of len (plus a carry), len >> 29 the high 3. */
     j = context->count[0];
     if ((context->count[0] += len << 3) < j) {
-        context->count[1] += (len >> 29) + 1;
+        context->count[1]++;
     }
+    context->count[1] += len >> 29;
+
+    /* j bytes are buffered (j <= 63); len > 63 - j means the input
+     * completes a block, without the j + len overflow near UINT32_MAX. */
     j = (j >> 3) & 63;
-    if ((j + len) > 63) {
+    if (len > 63 - j) {
         (void)memcpy(&context->buffer[j], data, (i = 64 - j));
         SHA1Transform(context->state, context->buffer);
         for (; i + 63 < len; i += 64) {
@@ -426,6 +432,7 @@ void SHA1Final(uint8_t digest[20], SHA1_CTX *context) {
 #ifdef DATAKIT_TEST
 #include <inttypes.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 /* Known-answer vectors. The empty-input digest and the FIPS PUB 180-1
  * vectors are the published values. The prefix vectors were computed
@@ -526,6 +533,20 @@ int sha1Test(int argc, char **argv) {
         failures +=
             sha1TestCheck("million-a", as, 1, 1000000, sha1TestChunks[c],
                           "34aa973cd4c4daa4f61eeb2bdbad27316534016f");
+    }
+
+    /* One SHA1Update of 2^29 bytes: len << 3 wraps to 0 in 32 bits, so
+     * the whole message length must arrive through len >> 29 into the
+     * high count word. The digest of 2^29 zero bytes is from shasum. */
+    const uint32_t bigLen = UINT32_C(1) << 29;
+    uint8_t *zeros = calloc(1, bigLen);
+    if (zeros == NULL) {
+        printf("sha1: cannot allocate %" PRIu32 " bytes\n", bigLen);
+        failures++;
+    } else {
+        failures += sha1TestCheck("zeros", zeros, 0, bigLen, bigLen,
+                                  "5b088492c9f4778f409b7ae61477dec124c99033");
+        free(zeros);
     }
 
     return failures;
