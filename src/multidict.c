@@ -1980,7 +1980,9 @@ uint32_t multidictEvictToLimit(multidict *d) {
  *
  * Design Note: To avoid duplicating keys (which could be very large),
  * we store only the key hash in lruPtrToKey. During eviction, we use
- * the hash to find the slot and iterate to locate the actual key.
+ * the hash to find the slot and iterate to locate the actual key; a key
+ * with a matching hash is confirmed by looking its handle up in
+ * lruKeyToPtr, since keys in one slot can share a hash.
  * This trades O(slot_size) eviction lookup for zero key duplication.
  */
 
@@ -2138,16 +2140,11 @@ int multidictGetLRULevel(multidict *d, const databox *keybox) {
     return (int)multilruGetLevel(d->lru, ptr);
 }
 
-/* Helper: compute hash for a key */
+/* Helper: the hash LRU tracking records for a key.  It must be the slot
+ * hash, the dict type's own hash function, so the recorded hash selects
+ * the slot that holds the key. */
 static uint32_t multidictKeyHash(multidict *d, const databox *keybox) {
-    uint64_t scratch;
-    size_t len;
-    uint8_t *data;
-    if (mdKeyHashBytes_(keybox, &scratch, &data, &len)) {
-        return multidictGenHashFunction(d, data, len);
-    }
-    /* Fallback for non-bytes types */
-    return multidictGenHashFunction(d, &keybox->data, sizeof(keybox->data));
+    return multidictHashOfKey_(d, keybox);
 }
 
 /* Internal: Register a key with LRU tracking (called from multidictAdd) */
@@ -2216,12 +2213,15 @@ static void multidictLRUOnDelete(multidict *d, const databox *keybox) {
     }
 }
 
-/* Internal: Find first key in slot matching hash (for LRU eviction).  The
- * key is copied into 'keybox' with a 96/128-bit payload moved to 'wide',
- * since the slot iterator holding it does not outlive this call. */
+/* Internal: Find the key in 'slot' tracked under LRU handle 'ptr' (for
+ * LRU eviction).  Keys in one slot can share the recorded 32-bit hash, so
+ * a hash match is confirmed through the key-to-handle dict: the key is the
+ * one whose handle is 'ptr'.  The key is copied into 'keybox' with a
+ * 96/128-bit payload moved to 'wide', since the slot iterator holding it
+ * does not outlive this call. */
 static bool findKeyByHashInSlot(multidict *d, multidictSlot *slot,
-                                uint32_t targetHash, databox *keybox,
-                                databoxWide *wide) {
+                                uint32_t targetHash, multilruPtr ptr,
+                                databox *keybox, databoxWide *wide) {
     if (!slot) {
         return false;
     }
@@ -2234,8 +2234,13 @@ static bool findKeyByHashInSlot(multidict *d, multidictSlot *slot,
 
     multidictEntry entry;
     while (d->shared->iterNext(&iter, &entry)) {
-        uint32_t h = multidictKeyHash(d, &entry.key);
-        if (h == targetHash) {
+        if (multidictKeyHash(d, &entry.key) != targetHash) {
+            continue;
+        }
+
+        databox ptrBox = {{0}};
+        if (multidictFind(d->lruKeyToPtr, &entry.key, &ptrBox) &&
+            ptrBox.data.u64 == ptr) {
             mdBoxRehome_(keybox, &entry.key, wide);
             return true;
         }
@@ -2243,8 +2248,8 @@ static bool findKeyByHashInSlot(multidict *d, multidictSlot *slot,
     return false;
 }
 
-/* Internal: the key tracked under LRU handle 'ptr', found through the
- * hash recorded for it */
+/* Internal: the key tracked under LRU handle 'ptr', found in the slot the
+ * hash recorded for it selects */
 static bool multidictLRUKeyOf(multidict *d, multilruPtr ptr, databox *keybox,
                               databoxWide *slot) {
     if (ptr >= d->lruPtrToKeySize) {
@@ -2259,14 +2264,15 @@ static bool multidictLRUKeyOf(multidict *d, multilruPtr ptr, databox *keybox,
 
     /* Find key by hash in the appropriate slot */
     uint32_t slotIdx = hash & HTMASK(d, 0);
-    if (findKeyByHashInSlot(d, SLOT(d, 0, slotIdx), hash, keybox, slot)) {
+    if (findKeyByHashInSlot(d, SLOT(d, 0, slotIdx), hash, ptr, keybox, slot)) {
         return true;
     }
 
     /* During rehashing, also check ht[1] */
     if (multidictIsRehashing(d)) {
         slotIdx = hash & HTMASK(d, 1);
-        if (findKeyByHashInSlot(d, SLOT(d, 1, slotIdx), hash, keybox, slot)) {
+        if (findKeyByHashInSlot(d, SLOT(d, 1, slotIdx), hash, ptr, keybox,
+                                slot)) {
             return true;
         }
     }
@@ -3370,6 +3376,61 @@ static bool testLruTrackingExact_(multidict *d) {
     }
     multidictIteratorRelease(&iter);
     return ok && seen == count;
+}
+
+/* LRU order tests: keys are spelled prefix[0] or prefix[1] + five digits
+ * and each value is the key's code, index * 2 + spelling.  The callback
+ * allows every eviction and logs the codes in eviction order. */
+typedef struct testLruOrderLog {
+    const char *prefix[2];
+    int32_t order[TEST_LRU_VETO_MAX];
+    int32_t evicted;
+    int32_t bad;
+} testLruOrderLog;
+
+static int32_t testLruCode_(const testLruOrderLog *log, const databox *key) {
+    for (int32_t spelling = 0; spelling < 2; spelling++) {
+        const int32_t idx = testKeyIndex_(key, log->prefix[spelling]);
+        if (idx >= 0) {
+            return idx * 2 + spelling;
+        }
+    }
+    return -1;
+}
+
+static bool lruOrderCb_(void *privdata, const databox *key,
+                        const databox *val) {
+    testLruOrderLog *log = privdata;
+    const int32_t code = testLruCode_(log, key);
+    if (code < 0 || !DATABOX_IS_INTEGER(val) || val->data.i != code) {
+        log->bad++;
+    } else if (log->evicted < TEST_LRU_VETO_MAX) {
+        log->order[log->evicted] = code;
+    }
+    log->evicted++;
+    return true;
+}
+
+/* Every key hashes alike: all keys share one slot and one LRU hash */
+static uint32_t testConstHash_(multidict *d, const void *key, uint32_t len) {
+    (void)d;
+    (void)key;
+    (void)len;
+    return 0x5eedU;
+}
+
+static multidictType testConstHashType_ = {testConstHash_,
+                                           multidictStringKeyCompare_};
+
+/* Key 'index' in spelling 0 ("lrucase-NNNNN") or 1 ("LRUCASE-NNNNN") */
+static databox testLruCaseKey_(char *buf, size_t bufLen, int32_t index,
+                               int32_t spelling) {
+    if (spelling) {
+        snprintf(buf, bufLen, "LRUCASE-%05d", index);
+    } else {
+        snprintf(buf, bufLen, "lrucase-%05d", index);
+    }
+    return databoxNewBytesString(buf);
 }
 
 /* ====================================================================
@@ -7423,6 +7484,139 @@ int multidictTest(int argc, char *argv[]) {
         assert(multidictCount(vd) == total - 72);
         assert(testLruTrackingExact_(vd));
         assert(testLruVetoBad_ == 0);
+    }
+
+    printf("Test 20.10: Case-insensitive dict evicts in LRU order...\n");
+    {
+        cleaner(multidictMmClassFree) multidictClass *cqdc =
+            multidictMmClassNew();
+        cleaner(multidictFree) multidict *cd =
+            multidictNew(&multidictTypeCaseKey, cqdc, 13);
+        const bool lruOn = multidictEnableLRU(cd, 4);
+        assert(lruOn);
+        (void)lruOn;
+        multidictSetEvictPolicy(cd, MULTIDICT_EVICT_LRU);
+
+        /* Each index goes in as two keys that differ only in case: the
+         * slot layer compares bytes, so they are distinct entries, and the
+         * case hash gives both one slot and one LRU hash.  The LRU hash
+         * must be the slot hash for any victim to resolve, and promoting
+         * one spelling of a pair below means whichever of the two the
+         * slot holds first, one victim must be told apart from its
+         * same-hash, promoted neighbour. */
+        enum { indexes = 40, entries = indexes * 2 };
+        char keyBuf[32];
+        for (int32_t i = 0; i < indexes; i++) {
+            for (int32_t s = 0; s < 2; s++) {
+                databox key = testLruCaseKey_(keyBuf, sizeof(keyBuf), i, s);
+                databox val = databoxNewSigned(i * 2 + s);
+                multidictAdd(cd, &key, &val);
+            }
+        }
+        assert(multidictCount(cd) == entries);
+
+        char lowBuf[32], upBuf[32];
+        databox low = testLruCaseKey_(lowBuf, sizeof(lowBuf), 0, 0);
+        databox up = testLruCaseKey_(upBuf, sizeof(upBuf), 0, 1);
+        assert(multidictKeyHash(cd, &low) == multidictKeyHash(cd, &up));
+        assert(multidictKeyHash(cd, &low) == multidictHashOfKey_(cd, &low));
+
+        /* A lookup promotes only the spelling looked up: code 6 (index 3,
+         * lower case) by multidictFind and code 11 (index 5, upper case)
+         * by multidictTouch; their other spellings stay cold */
+        char key3Buf[32], key5Buf[32];
+        databox key3 = testLruCaseKey_(key3Buf, sizeof(key3Buf), 3, 0);
+        databox found = {{0}};
+        assert(multidictFind(cd, &key3, &found));
+        databox key5 = testLruCaseKey_(key5Buf, sizeof(key5Buf), 5, 1);
+        multidictTouch(cd, &key5);
+        assert(testLruTrackingExact_(cd));
+
+        const uint64_t bytes = multidictKeyBytes(cd) + multidictValBytes(cd);
+        const uint64_t entryBytes = bytes / entries;
+        assert(entryBytes * entries == bytes);
+
+        testLruOrderLog log = {.prefix = {"lrucase-", "LRUCASE-"}};
+        multidictSetEvictionCallback(cd, lruOrderCb_, &log);
+        multidictSetMaxMemory(cd, bytes - 30 * entryBytes);
+        const uint32_t evicted = multidictEvictToLimit(cd);
+        assert(evicted == 30);
+        assert(log.evicted == 30);
+        assert(log.bad == 0);
+
+        /* Exactly insertion order without the two promoted codes: any
+         * random victim or same-hash mix-up breaks it */
+        int32_t expect = 0;
+        for (int32_t n = 0; n < 30; n++) {
+            while (expect == 6 || expect == 11) {
+                expect++;
+            }
+            if (log.order[n] != expect) {
+                printf("ERROR: case victim %d is code %d, expected %d\n", n,
+                       log.order[n], expect);
+                assert(NULL);
+            }
+            expect++;
+        }
+
+        assert(multidictCount(cd) == entries - 30);
+        assert(multidictGetLRULevel(cd, &key3) == 1);
+        assert(multidictGetLRULevel(cd, &key5) == 1);
+        assert(testLruTrackingExact_(cd));
+    }
+
+    printf("Test 20.11: Same-hash keys in one slot evict in LRU order...\n");
+    {
+        cleaner(multidictMmClassFree) multidictClass *hqdc =
+            multidictMmClassNew();
+        cleaner(multidictFree) multidict *hd =
+            multidictNew(&testConstHashType_, hqdc, 17);
+        const bool lruOn = multidictEnableLRU(hd, 4);
+        assert(lruOn);
+        (void)lruOn;
+        multidictSetEvictPolicy(hd, MULTIDICT_EVICT_LRU);
+
+        /* Every key has the same hash, so all share one slot and one LRU
+         * hash.  Key 0 goes in first, so the slot holds it first in either
+         * key or insertion order; it is then promoted, so every victim
+         * handle's first hash match is key 0, a key that must stay: each
+         * victim has to be found by its handle. */
+        enum { keys = 30, evict = 10 };
+        for (int32_t i = 0; i < keys; i++) {
+            char keyBuf[32];
+            snprintf(keyBuf, sizeof(keyBuf), "samehash-%05d", i);
+            databox key = databoxNewBytesString(keyBuf);
+            databox val = databoxNewSigned(i * 2);
+            multidictAdd(hd, &key, &val);
+        }
+        databox key0 = databoxNewBytesString("samehash-00000");
+        multidictTouch(hd, &key0);
+        assert(multidictCount(hd) == keys);
+        assert(testLruTrackingExact_(hd));
+
+        const uint64_t bytes = multidictKeyBytes(hd) + multidictValBytes(hd);
+        const uint64_t entryBytes = bytes / keys;
+        assert(entryBytes * keys == bytes);
+
+        testLruOrderLog log = {.prefix = {"samehash-", "SAMEHASH-"}};
+        multidictSetEvictionCallback(hd, lruOrderCb_, &log);
+        multidictSetMaxMemory(hd, bytes - evict * entryBytes);
+        const uint32_t evicted = multidictEvictToLimit(hd);
+        assert(evicted == evict);
+        assert(log.evicted == evict);
+        assert(log.bad == 0);
+        for (int32_t n = 0; n < evict; n++) {
+            const int32_t expect = (n + 1) * 2; /* keys 1..10 */
+            if (log.order[n] != expect) {
+                printf("ERROR: same-hash victim %d is code %d, expected %d\n",
+                       n, log.order[n], expect);
+                assert(NULL);
+            }
+        }
+
+        assert(multidictCount(hd) == keys - evict);
+        assert(multidictGetLRULevel(hd, &key0) == 1);
+        assert(testLruTrackingExact_(hd));
     }
 
     printf("=== LRU eviction tests passed! ===\n");
