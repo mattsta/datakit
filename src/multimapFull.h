@@ -127,6 +127,9 @@ bool multimapFullIteratorInitAt(multimapFull *m, multimapIterator *iter,
 bool multimapFullIteratorInit(multimapFull *m, multimapIterator *iter,
                               bool forward);
 bool multimapFullIteratorNext(multimapIterator *iter, databox *elements[]);
+/* See multimapIteratorNextWithSlots. */
+bool multimapFullIteratorNextWithSlots(multimapIterator *iter,
+                                       databox *elements[], databoxWide *slots);
 
 bool multimapFullDeleteByPredicate(multimapFull *m, const multimapPredicate *p);
 

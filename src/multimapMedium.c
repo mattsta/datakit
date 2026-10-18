@@ -781,50 +781,69 @@ bool multimapMediumIteratorInit(multimapMedium *m, multimapIterator *iter,
     return multimapMediumIteratorInitAt_(m, iter, forward, &me);
 }
 
-bool multimapMediumIteratorNext(multimapIterator *iter, databox *elements[]) {
-    if (iter->entry) {
-        flexEntry *current = iter->entry;
-        if (iter->forward) {
-            /* Populate forward */
-            for (multimapElements i = 0; i < iter->elementsPerEntry; i++) {
-                flexGetByType(current, elements[i]);
-                current = flexNext(iter->map, current);
+DK_INLINE_ALWAYS bool multimapMediumIteratorNext_(multimapIterator *iter,
+                                                  databox *elements[],
+                                                  databoxWide *slots) {
+    for (;;) {
+        if (iter->entry) {
+            flexEntry *current = iter->entry;
+            if (iter->forward) {
+                /* Populate forward */
+                for (multimapElements i = 0; i < iter->elementsPerEntry; i++) {
+                    multimapIteratorDecode_(current, elements[i], slots, i);
+                    current = flexNext(iter->map, current);
+                }
+
+                iter->entry = current;
+            } else {
+                /* Populate reverse */
+                for (multimapElements i = 0; i < iter->elementsPerEntry; i++) {
+                    const multimapElements at =
+                        (iter->elementsPerEntry - 1) - i;
+                    multimapIteratorDecode_(current, elements[at], slots, at);
+                    current = flexPrev(iter->map, current);
+                }
+
+                iter->entry = current;
             }
 
-            iter->entry = current;
-        } else {
-            /* Populate reverse */
-            for (multimapElements i = 0; i < iter->elementsPerEntry; i++) {
-                flexGetByType(current,
-                              elements[(iter->elementsPerEntry - 1) - i]);
-                current = flexPrev(iter->map, current);
-            }
-
-            iter->entry = current;
+            return true;
         }
 
-        return true;
+        /* If moving forward and reached end of first map,
+         * begin iterating over second map. */
+        if (iter->forward && iter->mapIndex == 0) {
+            iter->mapIndex = 1;
+            iter->map = ((multimapMedium *)iter->mm)->map[1];
+            iter->entry = flexCount(iter->map) ? flexHead(iter->map) : NULL;
+            continue;
+        }
+
+        /* If moving reverse and reached beginning of second map,
+         * begin iterating over first map. */
+        if (!iter->forward && iter->mapIndex == 1) {
+            iter->mapIndex = 0;
+            iter->map = ((multimapMedium *)iter->mm)->map[0];
+            iter->entry = flexCount(iter->map) ? flexTail(iter->map) : NULL;
+            continue;
+        }
+
+        return false;
+    }
+}
+
+bool multimapMediumIteratorNext(multimapIterator *iter, databox *elements[]) {
+    return multimapMediumIteratorNext_(iter, elements, NULL);
+}
+
+bool multimapMediumIteratorNextWithSlots(multimapIterator *iter,
+                                         databox *elements[],
+                                         databoxWide *slots) {
+    if (!slots) {
+        return multimapMediumIteratorNext_(iter, elements, NULL);
     }
 
-    /* If moving forward and reached end of first map,
-     * begin iterating over second map. */
-    if (iter->forward && iter->mapIndex == 0) {
-        iter->mapIndex = 1;
-        iter->map = ((multimapMedium *)iter->mm)->map[1];
-        iter->entry = flexCount(iter->map) ? flexHead(iter->map) : NULL;
-        return multimapMediumIteratorNext(iter, elements);
-    }
-
-    /* If moving reverse and reached beginning of second map,
-     * begin iterating over first map. */
-    if (!iter->forward && iter->mapIndex == 1) {
-        iter->mapIndex = 0;
-        iter->map = ((multimapMedium *)iter->mm)->map[0];
-        iter->entry = flexCount(iter->map) ? flexTail(iter->map) : NULL;
-        return multimapMediumIteratorNext(iter, elements);
-    }
-
-    return false;
+    return multimapMediumIteratorNext_(iter, elements, slots);
 }
 
 bool multimapMediumDeleteByPredicate(multimapMedium *m,

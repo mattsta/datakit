@@ -20,6 +20,22 @@ multimapReplacedOutClear_(databox *const replacedOut,
     }
 }
 
+/* Decode element 'i' of a row for the tier iterators.  With NULL 'slots'
+ * this is flexGetByType, so the caller's box keeps the in-band contract.
+ * Otherwise a 96/128-bit value lands in slots[i] (flexGetByTypeInto) and
+ * a narrow value never touches it.  The tier iterators inline this with
+ * 'slots' known to be NULL or non-NULL, so the test folds away. */
+DK_INLINE_ALWAYS void multimapIteratorDecode_(const flexEntry *const fe,
+                                              databox *const box,
+                                              databoxWide *const slots,
+                                              const size_t i) {
+    if (slots) {
+        flexGetByTypeInto(fe, box, &slots[i]);
+    } else {
+        flexGetByType(fe, box);
+    }
+}
+
 /* Decode the entry at 'fe' into a library-owned temporary that can hold
  * any value, including a 96/128-bit one (see flexGetByTypeBig).  With a
  * non-NULL 'referenceContainer', a reference entry is resolved to the

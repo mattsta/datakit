@@ -168,6 +168,20 @@ void multimapIteratorInit(const multimap *m, multimapIterator *iter,
                           bool forward);
 bool multimapIteratorNext(multimapIterator *iter, databox **elements);
 
+/* multimapIteratorNext that decodes 96/128-bit elements into storage the
+ * iterating code owns rather than through the caller's boxes.  'slots'
+ * holds elementsPerEntry databoxWide slots, one per tuple position:
+ * elements[i] is decoded with flexGetByTypeInto into slots[i], so a wide
+ * element comes back with big = 1, allocated = 0 and its payload in
+ * slots[i], valid until the slot is reused.  A narrow element writes only
+ * type, data and len (the boxes' flag bits are left as they were) and
+ * never touches its slot.  With NULL 'slots' this is multimapIteratorNext
+ * (the in-band caller-box contract above).  This is the entry point for
+ * library code that iterates a multimap into its own entries, such as the
+ * multidict slot class. */
+bool multimapIteratorNextWithSlots(multimapIterator *iter, databox **elements,
+                                   databoxWide *slots);
+
 /* Iterator companion to the *Into readers above: same contract, same
  * width rule (`n` == elementsPerEntry). */
 static inline bool multimapIteratorNextInto(multimapIterator *iter,

@@ -526,7 +526,9 @@ bool multimapSmallIteratorInit(multimapSmall *m, multimapIterator *iter,
     return multimapSmallIteratorInitAt_(m, iter, forward, startAt);
 }
 
-bool multimapSmallIteratorNext(multimapIterator *iter, databox *elements[]) {
+DK_INLINE_ALWAYS bool multimapSmallIteratorNext_(multimapIterator *iter,
+                                                 databox *elements[],
+                                                 databoxWide *slots) {
     if (iter->entry) {
         flexEntry *current = iter->entry;
         assert(current < iter->map + flexBytes(iter->map));
@@ -534,7 +536,7 @@ bool multimapSmallIteratorNext(multimapIterator *iter, databox *elements[]) {
         if (iter->forward) {
             /* Populate forward */
             for (multimapElements i = 0; i < iter->elementsPerEntry; i++) {
-                flexGetByType(current, elements[i]);
+                multimapIteratorDecode_(current, elements[i], slots, i);
                 current = flexNext(iter->map, current);
             }
 
@@ -542,8 +544,8 @@ bool multimapSmallIteratorNext(multimapIterator *iter, databox *elements[]) {
         } else {
             /* Populate reverse */
             for (multimapElements i = 0; i < iter->elementsPerEntry; i++) {
-                flexGetByType(current,
-                              elements[(iter->elementsPerEntry - 1) - i]);
+                const multimapElements at = (iter->elementsPerEntry - 1) - i;
+                multimapIteratorDecode_(current, elements[at], slots, at);
                 current = flexPrev(iter->map, current);
             }
 
@@ -554,6 +556,20 @@ bool multimapSmallIteratorNext(multimapIterator *iter, databox *elements[]) {
     }
 
     return false;
+}
+
+bool multimapSmallIteratorNext(multimapIterator *iter, databox *elements[]) {
+    return multimapSmallIteratorNext_(iter, elements, NULL);
+}
+
+bool multimapSmallIteratorNextWithSlots(multimapIterator *iter,
+                                        databox *elements[],
+                                        databoxWide *slots) {
+    if (!slots) {
+        return multimapSmallIteratorNext_(iter, elements, NULL);
+    }
+
+    return multimapSmallIteratorNext_(iter, elements, slots);
 }
 
 bool multimapSmallDeleteByPredicate(multimapSmall *m,

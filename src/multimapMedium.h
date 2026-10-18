@@ -86,6 +86,10 @@ bool multimapMediumIteratorInitAt(multimapMedium *m, multimapIterator *iter,
 bool multimapMediumIteratorInit(multimapMedium *m, multimapIterator *iter,
                                 bool forward);
 bool multimapMediumIteratorNext(multimapIterator *iter, databox *elements[]);
+/* See multimapIteratorNextWithSlots. */
+bool multimapMediumIteratorNextWithSlots(multimapIterator *iter,
+                                         databox *elements[],
+                                         databoxWide *slots);
 
 bool multimapMediumDeleteByPredicate(multimapMedium *m,
                                      const multimapPredicate *p);

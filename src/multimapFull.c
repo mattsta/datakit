@@ -2284,64 +2284,83 @@ bool multimapFullIteratorInit(multimapFull *m, multimapIterator *iter,
     return multimapFullIteratorInitAt_(m, iter, forward, &me);
 }
 
-bool multimapFullIteratorNext(multimapIterator *iter, databox *elements[]) {
-    if (iter->entry) {
-        flexEntry *current = iter->entry;
+DK_INLINE_ALWAYS bool multimapFullIteratorNext_(multimapIterator *iter,
+                                                databox *elements[],
+                                                databoxWide *slots) {
+    for (;;) {
+        if (iter->entry) {
+            flexEntry *current = iter->entry;
+            if (iter->forward) {
+                /* Populate forward */
+                for (multimapElements i = 0; i < iter->elementsPerEntry; i++) {
+                    multimapIteratorDecode_(current, elements[i], slots, i);
+                    current = flexNext(iter->map, current);
+                }
+
+                iter->entry = current;
+            } else {
+                /* Populate reverse */
+                for (multimapElements i = 0; i < iter->elementsPerEntry; i++) {
+                    const multimapElements at =
+                        (iter->elementsPerEntry - 1) - i;
+                    multimapIteratorDecode_(current, elements[at], slots, at);
+                    current = flexPrev(iter->map, current);
+                }
+
+                iter->entry = current;
+            }
+
+            return true;
+        }
+
+        /* If moving forward and reached end of map,
+         * begin iterating over next map. */
         if (iter->forward) {
-            /* Populate forward */
-            for (multimapElements i = 0; i < iter->elementsPerEntry; i++) {
-                flexGetByType(current, elements[i]);
-                current = flexNext(iter->map, current);
+            multimapFull *local = (multimapFull *)iter->mm;
+            iter->mapIndex++;
+            if (iter->mapIndex < local->count) {
+                iter->map = getMap(local, iter->mapIndex);
+                iter->entry = flexHead(iter->map);
+
+                /* We DO NOT allow empty maps, so we MUST have a head of a
+                 * map. */
+                assert(flexCount(iter->map) &&
+                       "multimapFull interior map is empty?");
+                continue;
             }
 
-            iter->entry = current;
-        } else {
-            /* Populate reverse */
-            for (multimapElements i = 0; i < iter->elementsPerEntry; i++) {
-                flexGetByType(current,
-                              elements[(iter->elementsPerEntry - 1) - i]);
-                current = flexPrev(iter->map, current);
-            }
-
-            iter->entry = current;
+            /* ran out of maps to iterate! */
+            return false;
         }
 
-        return true;
-    }
-
-    /* If moving forward and reached end of map,
-     * begin iterating over next map. */
-    if (iter->forward) {
-        multimapFull *local = (multimapFull *)iter->mm;
-        iter->mapIndex++;
-        if (iter->mapIndex < local->count) {
+        /* If moving reverse and reached beginning of map,
+         * begin iterating over previous map (if exists). */
+        /* Note: we check BEFORE decrementing to ensure we process map 0.
+         * If we decrement first, then check > 0, we would skip map 0. */
+        if (iter->mapIndex > 0) {
+            iter->mapIndex--;
+            multimapFull *local = (multimapFull *)iter->mm;
             iter->map = getMap(local, iter->mapIndex);
-            iter->entry = flexHead(iter->map);
-
-            /* We DO NOT allow empty maps, so we MUST have a head of a map. */
-            assert(flexCount(iter->map) &&
-                   "multimapFull interior map is empty?");
-
-            return multimapFullIteratorNext(iter, elements);
+            iter->entry = flexTail(iter->map);
+            continue;
         }
 
-        /* ran out of maps to iterate! */
         return false;
     }
+}
 
-    /* If moving reverse and reached beginning of map,
-     * begin iterating over previous map (if exists). */
-    /* Note: we check BEFORE decrementing to ensure we process map 0.
-     * If we decrement first, then check > 0, we would skip map 0. */
-    if (!iter->forward && iter->mapIndex > 0) {
-        iter->mapIndex--;
-        multimapFull *local = (multimapFull *)iter->mm;
-        iter->map = getMap(local, iter->mapIndex);
-        iter->entry = flexTail(iter->map);
-        return multimapFullIteratorNext(iter, elements);
+bool multimapFullIteratorNext(multimapIterator *iter, databox *elements[]) {
+    return multimapFullIteratorNext_(iter, elements, NULL);
+}
+
+bool multimapFullIteratorNextWithSlots(multimapIterator *iter,
+                                       databox *elements[],
+                                       databoxWide *slots) {
+    if (!slots) {
+        return multimapFullIteratorNext_(iter, elements, NULL);
     }
 
-    return false;
+    return multimapFullIteratorNext_(iter, elements, slots);
 }
 
 bool multimapFullDeleteByPredicate(multimapFull *m,

@@ -695,6 +695,21 @@ iterFull:
     return multimapFullIteratorNext(iter, elements);
 }
 
+bool multimapIteratorNextWithSlots(multimapIterator *iter, databox **elements,
+                                   databoxWide *slots) {
+    const void **jumper[4] = {NULL, &&iterSmall, &&iterMedium, &&iterFull};
+    goto *jumper[iter->type];
+
+iterSmall:
+    return multimapSmallIteratorNextWithSlots(iter, elements, slots);
+
+iterMedium:
+    return multimapMediumIteratorNextWithSlots(iter, elements, slots);
+
+iterFull:
+    return multimapFullIteratorNextWithSlots(iter, elements, slots);
+}
+
 /* Rows decoded into library-owned storage (ProcessUntil and the key set
  * operations).  The tier iterators decode in place through the caller's
  * boxes, so each box is a databoxBig that is reset and re-armed before
@@ -1958,6 +1973,80 @@ static int32_t mwCheckSets(const char *where, multimap *m, const mwRow *rows,
     return err;
 }
 
+/* multimapIteratorNextWithSlots in both directions: plain 0xFF-poisoned
+ * boxes and slots.  A wide element must borrow exactly its own slot, and a
+ * narrow element must leave its slot untouched.  NULL slots must keep the
+ * in-band contract on armed boxes. */
+static int32_t mwCheckSlotIteration(const char *where, multimap *m,
+                                    const mwRow *rows, const size_t n,
+                                    const size_t present) {
+    int32_t err = 0;
+    uint8_t poison[sizeof(databoxWide)];
+    memset(poison, 0xFF, sizeof(poison));
+    for (int dir = 0; dir < 4; dir++) {
+        const bool forward = (dir & 1) == 0;
+        const bool useSlots = dir < 2;
+        multimapIterator iter;
+        multimapIteratorInit(m, &iter, forward);
+        size_t idx = forward ? 0 : n;
+        size_t seen = 0;
+        for (;;) {
+            databox kb;
+            databox vb;
+            databoxBig kbig;
+            databoxBig vbig;
+            databoxWide slots[2];
+            databox *e[2];
+            memset(slots, 0xFF, sizeof(slots));
+            if (useSlots) {
+                memset(&kb, 0xFF, sizeof(kb));
+                memset(&vb, 0xFF, sizeof(vb));
+                e[0] = &kb;
+                e[1] = &vb;
+            } else {
+                e[0] = mwArm(&kbig);
+                e[1] = mwArm(&vbig);
+            }
+
+            if (!multimapIteratorNextWithSlots(&iter, e,
+                                               useSlots ? slots : NULL)) {
+                break;
+            }
+
+            const mwRow *want = forward ? mwNextPresent(rows, n, &idx)
+                                        : mwPrevPresent(rows, &idx);
+            bool ok =
+                want && mwHolds(e[0], &want->key) && mwHolds(e[1], &want->val);
+            for (size_t i = 0; ok && useSlots && i < 2; i++) {
+                const mwInt *v = i == 0 ? &want->key : &want->val;
+                if (mwIsWide(v)) {
+                    ok = e[i]->data.ptr == (void *)&slots[i] && e[i]->big &&
+                         !e[i]->allocated;
+                } else {
+                    ok = memcmp(&slots[i], poison, sizeof(poison)) == 0;
+                }
+            }
+
+            if (!ok) {
+                ERR("%s: %s slot iteration (%s) wrong at row %zu", where,
+                    forward ? "forward" : "reverse",
+                    useSlots ? "slots" : "in-band", seen);
+                break;
+            }
+
+            seen++;
+        }
+
+        if (seen != present) {
+            ERR("%s: %s slot iteration (%s) saw %zu rows, expected %zu", where,
+                forward ? "forward" : "reverse", useSlots ? "slots" : "in-band",
+                seen, present);
+        }
+    }
+
+    return err;
+}
+
 /* Every read path of 'm' against the rows marked present. */
 static int32_t mwCheckReads(const char *where, multimap *m, const mwRow *rows,
                             const size_t n) {
@@ -2031,6 +2120,8 @@ static int32_t mwCheckReads(const char *where, multimap *m, const mwRow *rows,
                 forward ? "forward" : "reverse", seen, present);
         }
     }
+
+    err += mwCheckSlotIteration(where, m, rows, n, present);
 
     if (present) {
         size_t lo = 0;

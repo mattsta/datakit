@@ -647,6 +647,22 @@ if (multimapIteratorInitAt(m, &iter, true, &startKey)) {
 Do not mutate a multimap while an iterator over it is live; insert and delete
 both move flex bytes.
 
+### Iterating Into Your Own Wide Slots
+
+```c
+bool multimapIteratorNextWithSlots(multimapIterator *iter, databox **elements,
+                                   databoxWide *slots);
+```
+
+Library code that iterates a multimap into entries it owns (the multidict slot
+class, for example) passes `slots`, an array of `elementsPerEntry`
+`databoxWide` slots, one per column. Each element is decoded with
+`flexGetByTypeInto()` into `slots[i]`: a 96/128-bit element comes back with
+`big = 1`, `allocated = 0` and its payload in `slots[i]`, valid until that slot
+is reused. A narrow element writes only type, data and len, leaves the box's
+flag bits as they were, and never touches its slot. With `slots == NULL` it is
+`multimapIteratorNext()`, with the in-band caller-box contract.
+
 ### Walking With a Predicate
 
 ```c

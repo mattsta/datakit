@@ -79,6 +79,10 @@ bool multimapSmallIteratorInitAt(multimapSmall *m, multimapIterator *iter,
 bool multimapSmallIteratorInit(multimapSmall *m, multimapIterator *iter,
                                bool forward);
 bool multimapSmallIteratorNext(multimapIterator *iter, databox *elements[]);
+/* See multimapIteratorNextWithSlots. */
+bool multimapSmallIteratorNextWithSlots(multimapIterator *iter,
+                                        databox *elements[],
+                                        databoxWide *slots);
 
 bool multimapSmallDeleteByPredicate(multimapSmall *m,
                                     const multimapPredicate *p);
