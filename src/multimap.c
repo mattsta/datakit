@@ -2674,14 +2674,12 @@ static multimapType mxTierFor(const mwRow *pool, const size_t built,
                               const size_t want, const flexCapSizeLimit limit) {
     mwRow rows[mxPoolMax];
     const size_t n = mxSubset(rows, pool, built, want);
-    multimap *m = multimapNewLimit(2, limit);
+    cleaner(multimapFree) multimap *m = multimapNewLimit(2, limit);
     for (size_t i = 0; i < n; i++) {
         mwInsert(&m, &rows[i]);
     }
 
-    const multimapType type = multimapType_(m);
-    multimapFree(m);
-    return type;
+    return multimapType_(m);
 }
 
 /* A row count that builds 'target' under 'limit': the middle of the
@@ -2883,7 +2881,7 @@ static int32_t mxRemovedBytes(const char *where, const flexCapSizeLimit limit,
                               const size_t rows) {
     int32_t err = 0;
     const char text[] = "abcdefghijklmnopqrstuvwxyz";
-    multimap *m = multimapNewLimit(2, limit);
+    cleaner(multimapFree) multimap *m = multimapNewLimit(2, limit);
     for (size_t i = 0; i < rows; i++) {
         const databox key = databoxNewUnsigned(i);
         const databox val = databoxNewBytes(text, i % 21);
@@ -2922,7 +2920,6 @@ static int32_t mxRemovedBytes(const char *where, const flexCapSizeLimit limit,
         databoxFreeData(&vb);
     }
 
-    multimapFree(m);
     return err;
 }
 
@@ -2960,11 +2957,14 @@ int32_t multimapWideMatrixSweep(void) {
              * counting window: every rangeBox payload, row copy and
              * removed value must be released. */
             mxCountBegin();
-            multimap *m = multimapNewLimit(2, plans[p].limit);
-            err += mwExercise(where, &m, rows, n, plans[p].expect, &rng);
-            multimapVerify(m);
-            err += mxRemovingReads(where, &m, rows, n, &rng);
-            multimapFree(m);
+            {
+                cleaner(multimapFree) multimap *m =
+                    multimapNewLimit(2, plans[p].limit);
+                err += mwExercise(where, &m, rows, n, plans[p].expect, &rng);
+                multimapVerify(m);
+                err += mxRemovingReads(where, &m, rows, n, &rng);
+            }
+
             if (mode == MX_NORMAL) {
                 const size_t bytesRows[] = {10, 60, 400};
                 err += mxRemovedBytes(where, plans[p].limit, bytesRows[p]);
