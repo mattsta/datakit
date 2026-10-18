@@ -755,8 +755,28 @@ multimapFull *multimapFullCopy(const multimapFull *restrict const m) {
 
     /* First arg of NULL will allocate a new multimap instead of re-using an
      * existing one. */
-    return multimapFullNewFromManyGrow(NULL, maps, middles, howMany,
-                                       m->elementsPerEntry, m->mapIsSet);
+    multimapFull *const copy = multimapFullNewFromManyGrow(
+        NULL, maps, middles, howMany, m->elementsPerEntry, m->mapIsSet);
+
+    /* The grow decodes each rangeBox from its map's head.  In a
+     * surrogate-keyed map that head is a reference id, not the resolved
+     * key the source routes by, and there is no reference container here
+     * to resolve it.  The source's rangeBoxes already hold the routing
+     * keys, so the copy takes those, with its own copy of any BYTES or
+     * wide payload.  A rangeBox that borrows bytes from a source map
+     * equals the decoded head, so it keeps the box decoded from the
+     * copy's own map. */
+    for (multimapFullIdx i = 1; i < howMany; i++) {
+        const databox *const src = getRangeBox(m, i - 1);
+        databox *const dst = getRangeBox(copy, i - 1);
+        if (!src->allocated && databoxCompare(dst, src) == 0) {
+            continue;
+        }
+
+        rangeBoxAssign_(dst, src, true);
+    }
+
+    return copy;
 }
 
 /* ====================================================================
@@ -2713,6 +2733,74 @@ static int32_t rangeBoxOwnershipCheck_(const char *where,
     return err;
 }
 
+/* Check a surrogate-keyed 1-element map whose rows are atom ids
+ * 0..count-1 naming vals[0..count-1] in 'ma', against the oracle
+ * 'present':
+ *   - every rangeBox equals its map's resolved head key;
+ *   - the rows resolve to strictly ascending values, one per present id;
+ *   - every id is found by its value exactly when present.
+ * Returns the number of failures. */
+static int32_t surrogateCopyCheck_(const char *where, const multimapFull *m,
+                                   const multimapAtom *ma, const databox *vals,
+                                   const bool *present, const size_t count) {
+    int32_t err = 0;
+    for (multimapFullIdx i = 1; i < m->count; i++) {
+        databox head = {{0}};
+        databoxWide headWide;
+        multimapGetByTypeInto_(flexHead(getMap(m, i)), &head, &headWide, ma);
+        if (databoxCompare(&head, getRangeBox(m, i - 1)) != 0) {
+            ERR("%s: rangeBox[%" PRIu32 "] is not map %" PRIu32
+                "'s resolved head",
+                where, i - 1, i);
+        }
+    }
+
+    size_t want = 0;
+    for (size_t id = 0; id < count; id++) {
+        want += present[id];
+    }
+
+    databoxWide rowWide[2];
+    uint32_t slot = 0;
+    databox prev = {{0}};
+    size_t rows = 0;
+    for (multimapFullIdx i = 0; i < m->count; i++) {
+        const flex *map = getMap(m, i);
+        for (flexEntry *fe = flexHead(map); fe; fe = flexNext(map, fe)) {
+            databox row = {{0}};
+            multimapGetByTypeInto_(fe, &row, &rowWide[slot], ma);
+            slot ^= 1;
+            if (rows && databoxCompare(&prev, &row) >= 0) {
+                ERR("%s: row %zu is not above the row before it", where, rows);
+            }
+
+            prev = row;
+            rows++;
+        }
+    }
+
+    if (rows != want || multimapFullCount(m) != want) {
+        ERR("%s: %zu rows walked, %zu counted, %zu expected", where, rows,
+            multimapFullCount(m), want);
+    }
+
+    for (size_t id = 0; id < count; id++) {
+        databox found = {{0}};
+        const bool exists =
+            multimapFullExistsWithReference(m, &vals[id], &found, ma);
+        if (exists != present[id]) {
+            ERR("%s: id %zu exists %d, expected %d", where, id, exists,
+                present[id]);
+        } else if (exists &&
+                   (found.type != DATABOX_CONTAINER_REFERENCE_EXTERNAL ||
+                    found.data.u != id)) {
+            ERR("%s: value of id %zu found under another id", where, id);
+        }
+    }
+
+    return err;
+}
+
 int multimapFullTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -3953,6 +4041,87 @@ int multimapFullTest(int argc, char *argv[]) {
                     got, cases[i].mapIdx);
             }
         }
+
+        multimapAtomFree(ma);
+    }
+
+    TEST("a copy of a surrogate-keyed map routes by resolved keys") {
+        /* Rows are atom ids sorted by their atom values, as in
+         * multimapAtom's reverse map.  The copy is checked against an
+         * oracle of the ids it holds right after the copy and again after
+         * inserts and deletes on it; the source must stay unchanged. */
+        enum { copyAtoms = 2400 };
+        multimapAtom *ma = multimapAtomNew();
+        static __uint128_t wideVals[copyAtoms];
+        static char strVals[copyAtoms][24];
+        static databox vals[copyAtoms];
+        for (size_t i = 0; i < copyAtoms; i++) {
+            if (i % 4 == 0) {
+                wideVals[i] = ((__uint128_t)1 << 70) + i * 3;
+                vals[i] = (databox){.type = DATABOX_UNSIGNED_128,
+                                    .big = true,
+                                    .data.u128 = &wideVals[i]};
+            } else if (i % 4 == 1) {
+                vals[i] = databoxNewSigned((int64_t)i * 7 - 5000);
+            } else {
+                snprintf(strVals[i], sizeof(strVals[i]), "copy key %06zu", i);
+                vals[i] = databoxNewBytesString(strVals[i]);
+            }
+
+            /* A fresh table hands out ids 0, 1, 2, ... */
+            multimapAtomInsert(ma, &vals[i]);
+        }
+
+        bool inSource[copyAtoms];
+        cleaner(multimapFullFree) multimapFull *m = multimapFullNew(1);
+        for (size_t k = 0; k < copyAtoms; k++) {
+            /* 7919 is prime, so this visits every id once, out of order. */
+            const size_t i = (k * 7919) % copyAtoms;
+            inSource[i] = i % 5 != 4;
+            if (inSource[i]) {
+                const databox ref = {
+                    .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL, .data.u = i};
+                const databox *elements[1] = {&vals[i]};
+                multimapFullInsertWithSurrogateKey(m, elements, &ref, ma);
+            }
+        }
+
+        if (m->count < 3) {
+            ERR("source has %" PRIu32 " sub-maps, expected several", m->count);
+        }
+
+        cleaner(multimapFullFree) multimapFull *c = multimapFullCopy(m);
+        err += surrogateCopyCheck_("source", m, ma, vals, inSource, copyAtoms);
+        err +=
+            surrogateCopyCheck_("fresh copy", c, ma, vals, inSource, copyAtoms);
+
+        bool inCopy[copyAtoms];
+        memcpy(inCopy, inSource, sizeof(inCopy));
+        for (size_t i = 0; i < copyAtoms; i++) {
+            if (!inCopy[i]) {
+                const databox ref = {
+                    .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL, .data.u = i};
+                const databox *elements[1] = {&vals[i]};
+                multimapFullInsertWithSurrogateKey(c, elements, &ref, ma);
+                inCopy[i] = true;
+            }
+
+            if (i % 3 == 0) {
+                databox found = {{0}};
+                if (!multimapFullDeleteWithReference(c, &vals[i], ma, &found) ||
+                    found.type != DATABOX_CONTAINER_REFERENCE_EXTERNAL ||
+                    found.data.u != i) {
+                    ERR("copy: delete of id %zu failed", i);
+                }
+
+                inCopy[i] = false;
+            }
+        }
+
+        err +=
+            surrogateCopyCheck_("mutated copy", c, ma, vals, inCopy, copyAtoms);
+        err += surrogateCopyCheck_("source after copy mutations", m, ma, vals,
+                                   inSource, copyAtoms);
 
         multimapAtomFree(ma);
     }

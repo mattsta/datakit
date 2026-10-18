@@ -441,8 +441,11 @@ Each range box is a 16-byte `databox`. A 96/128-bit head key points at a
   the heap payload stays put, so reading a range box never writes to it.
   Concurrent readers of a map with wide boundary keys share the boxes
   read-only.
-- `multimapCopy()` rebuilds every range box from the copied submaps' heads, so
-  a copy never shares a payload.
+- `multimapCopy()` gives the copy its own range boxes and never shares a
+  payload. It takes each box's key from the source's range box, because a
+  surrogate-keyed map's submap heads are reference ids and the copy has no
+  reference container to resolve them. A box that borrows bytes from a source
+  submap is rebuilt from the copied submap's head instead.
 
 ## multimapAtom
 
