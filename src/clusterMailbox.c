@@ -2062,8 +2062,8 @@ int clusterMailboxTest(int argc, char *argv[]) {
             ERRR("Out-of-order seq=5 must be rejected as replay");
         }
         if (clusterMailboxLastApplied(mb, 9u) != 10u) {
-            ERR("Watermark should still be 10, got %llu",
-                (unsigned long long)clusterMailboxLastApplied(mb, 9u));
+            ERR("Watermark should still be 10, got %" PRIu64,
+                clusterMailboxLastApplied(mb, 9u));
         }
         clusterMailboxFree(mb);
         hmacKeyringFree(ring);
@@ -2094,7 +2094,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
             clusterMailboxSeal(mb, 7u, s, 0u, payload, sizeof(payload), K1, buf,
                                sz, &w);
             if (clusterMailboxIngest(mb, buf, w, K1) != CLUSTER_MAILBOX_OK) {
-                ERR("In-window seq=%llu rejected", (unsigned long long)s);
+                ERR("In-window seq=%" PRIu64 " rejected", s);
             }
         }
         if (ctx.apply_count != 4u) {
@@ -2365,8 +2365,7 @@ int clusterMailboxTest(int argc, char *argv[]) {
         clusterMailboxStats st;
         clusterMailboxGetStats(mb, &st);
         if (st.ingest_total != 4u) {
-            ERR("ingest_total expected 4, got %llu",
-                (unsigned long long)st.ingest_total);
+            ERR("ingest_total expected 4, got %" PRIu64, st.ingest_total);
         }
         if (st.apply_ok != 1u) {
             ERRR("apply_ok != 1");
@@ -2543,8 +2542,8 @@ int clusterMailboxTest(int argc, char *argv[]) {
             ERR("Expected APPLY_REJECTED, got %d", (int32_t)rc);
         }
         if (clusterMailboxLastApplied(mb, 3u) != 1u) {
-            ERR("Watermark must stay at 1 after apply rejection, got %llu",
-                (unsigned long long)clusterMailboxLastApplied(mb, 3u));
+            ERR("Watermark must stay at 1 after apply rejection, got %" PRIu64,
+                clusterMailboxLastApplied(mb, 3u));
         }
 
         clusterMailboxFree(mb);
@@ -2595,8 +2594,8 @@ int clusterMailboxTest(int argc, char *argv[]) {
             clusterMailboxSeal(mb_a, sends[i].origin, sends[i].seq, 0u, payload,
                                sizeof(payload), K1, buf, sz, &w);
             if (clusterMailboxIngest(mb_a, buf, w, K1) != CLUSTER_MAILBOX_OK) {
-                ERR("Setup ingest failed for (origin=%u, seq=%llu)",
-                    sends[i].origin, (unsigned long long)sends[i].seq);
+                ERR("Setup ingest failed for (origin=%u, seq=%" PRIu64 ")",
+                    sends[i].origin, sends[i].seq);
             }
         }
 
@@ -3065,8 +3064,8 @@ int clusterMailboxTest(int argc, char *argv[]) {
          * bytes form a valid envelope with the right key, framing,
          * and inner header. Anything > 0 is a regression. */
         if (accepted != 0) {
-            ERR("Fuzz accepted %llu random inputs (expected 0)",
-                (unsigned long long)accepted);
+            ERR("Fuzz accepted %" PRIu64 " random inputs (expected 0)",
+                accepted);
         }
         /* Watermark table must still be empty — no random input got
          * far enough to register an origin. */
@@ -3099,8 +3098,8 @@ int clusterMailboxTest(int argc, char *argv[]) {
                                sizeof(payload), K1, buf, sz, &written);
             if (clusterMailboxIngest(mb, buf, written, K1) !=
                 CLUSTER_MAILBOX_OK) {
-                ERR("Ingest failed for (origin=%u, seq=%llu)", sends[i].origin,
-                    (unsigned long long)sends[i].seq);
+                ERR("Ingest failed for (origin=%u, seq=%" PRIu64 ")",
+                    sends[i].origin, sends[i].seq);
             }
         }
         if (clusterMailboxLastApplied(mb, 1u) != 6u ||
@@ -3152,8 +3151,9 @@ int clusterMailboxTest(int argc, char *argv[]) {
             ERRR("Second ingest should be apply-rejected");
         }
         if (clusterMailboxLastApplied(mb, 5u) != 10u) {
-            ERR("Watermark should still be 10 after apply rejection, got %llu",
-                (unsigned long long)clusterMailboxLastApplied(mb, 5u));
+            ERR("Watermark should still be 10 after apply rejection, got "
+                "%" PRIu64,
+                clusterMailboxLastApplied(mb, 5u));
         }
 
         /* Attacker replays an OLDER seq=5 for origin 5. Pre-fix this
@@ -3243,8 +3243,8 @@ int clusterMailboxTest(int argc, char *argv[]) {
             ERRR("Restore of one-record snapshot failed");
         }
         if (clusterMailboxLastApplied(mb_b, 50u) != 5u) {
-            ERR("Origin 50 should be at seq 5 after restore, got %llu",
-                (unsigned long long)clusterMailboxLastApplied(mb_b, 50u));
+            ERR("Origin 50 should be at seq 5 after restore, got %" PRIu64,
+                clusterMailboxLastApplied(mb_b, 50u));
         }
         if (clusterMailboxLastApplied(mb_b, 60u) != 0u) {
             ERRR("Origin 60 must NOT be persisted (apply-rejected has no "
@@ -3447,14 +3447,14 @@ int dkTestMailboxWindowOrientationTest(int argc, char *argv[]) {
         size_t w_ = 0;                                                         \
         if (!clusterMailboxSeal((mb_), ORIGIN, (uint64_t)(seq_), 0u, pl,       \
                                 sizeof(pl), KID, b_, sz_, &w_)) {              \
-            ERR("snapshotRestore: seal failed (seq=%llu)",                     \
-                (unsigned long long)(seq_));                                   \
+            ERR("snapshotRestore: seal failed (seq=%" PRIu64 ")",              \
+                (uint64_t)(seq_));                                             \
         }                                                                      \
         const clusterMailboxIngestResult r_ =                                  \
             clusterMailboxIngest((mb_), b_, w_, KID);                          \
         if (r_ != CLUSTER_MAILBOX_OK) {                                        \
-            ERR("snapshotRestore: ingest rc=%d (seq=%llu)", (int32_t)r_,       \
-                (unsigned long long)(seq_));                                   \
+            ERR("snapshotRestore: ingest rc=%d (seq=%" PRIu64 ")",             \
+                (int32_t)r_, (uint64_t)(seq_));                                \
         }                                                                      \
     } while (0)
 
@@ -3467,15 +3467,14 @@ int dkTestMailboxWindowOrientationTest(int argc, char *argv[]) {
         size_t w_ = 0;                                                         \
         if (!clusterMailboxSeal((mb_), ORIGIN, (uint64_t)(seq_), 0u, pl,       \
                                 sizeof(pl), KID, b_, sz_, &w_)) {              \
-            ERR("snapshotRestore: try-seal failed (seq=%llu)",                 \
-                (unsigned long long)(seq_));                                   \
+            ERR("snapshotRestore: try-seal failed (seq=%" PRIu64 ")",          \
+                (uint64_t)(seq_));                                             \
         }                                                                      \
         const clusterMailboxIngestResult r_ =                                  \
             clusterMailboxIngest((mb_), b_, w_, KID);                          \
         if (r_ != (expected_)) {                                               \
-            ERR("snapshotRestore: expected rc=%d got rc=%d (seq=%llu)",        \
-                (int32_t)(expected_), (int32_t)r_,                             \
-                (unsigned long long)(seq_));                                   \
+            ERR("snapshotRestore: expected rc=%d got rc=%d (seq=%" PRIu64 ")", \
+                (int32_t)(expected_), (int32_t)r_, (uint64_t)(seq_));          \
         }                                                                      \
     } while (0)
 
@@ -3900,8 +3899,8 @@ int dkTestMailboxStatsRaceTest(int argc, char *argv[]) {
             ERRR("statsRace: reader did not run any iterations");
         }
         if (clusterMailboxLastApplied(mb, ORIGIN) != 1000u) {
-            ERR("statsRace: final last_applied != 1000, got %llu",
-                (unsigned long long)clusterMailboxLastApplied(mb, ORIGIN));
+            ERR("statsRace: final last_applied != 1000, got %" PRIu64,
+                clusterMailboxLastApplied(mb, ORIGIN));
         }
         if (clusterMailboxOriginCount(mb) != 1u) {
             ERR("statsRace: final origin_count != 1, got %zu",
@@ -4151,14 +4150,14 @@ int dkTestKeyringGetRawCopyMigrationClusterTest(int argc, char *argv[]) {
         /* Both threads must have made meaningful progress, otherwise
          * we are not actually exercising the race. */
         if (writer_iters < 100u) {
-            ERR("retireRace: writer only completed %llu iterations — race "
-                "coverage too thin",
-                (unsigned long long)writer_iters);
+            ERR("retireRace: writer only completed %" PRIu64
+                " iterations — race coverage too thin",
+                writer_iters);
         }
         if (rotator_iters < 100u) {
-            ERR("retireRace: rotator only completed %llu iterations — race "
-                "coverage too thin",
-                (unsigned long long)rotator_iters);
+            ERR("retireRace: rotator only completed %" PRIu64
+                " iterations — race coverage too thin",
+                rotator_iters);
         }
         /* Restore a clean keyring binding so cleanup is well-defined
          * regardless of which thread last touched the slot. */
