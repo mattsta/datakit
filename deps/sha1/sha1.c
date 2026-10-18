@@ -387,6 +387,7 @@ void SHA1Update(SHA1_CTX *context, const uint8_t *data, unsigned int len) {
 void SHA1Final(uint8_t digest[20], SHA1_CTX *context) {
     unsigned int i;
     uint8_t finalcount[8];
+    uint32_t used;
 
     _DIAGASSERT(digest != 0);
     _DIAGASSERT(context != 0);
@@ -396,11 +397,22 @@ void SHA1Final(uint8_t digest[20], SHA1_CTX *context) {
                                    ((3 - (i & 3)) * 8)) &
                                   255); /* Endian independent */
     }
-    SHA1Update(context, (const uint8_t *)"\200", 1);
-    while ((context->count[0] & 504) != 448) {
-        SHA1Update(context, (const uint8_t *)"\0", 1);
+
+    /* Pad in place: one 0x80 byte, zeros up to byte 56 of a block, then
+     * the 64-bit big-endian message length in bits. When fewer than 9
+     * bytes of the current block remain, the padding spills into one
+     * more block. Every SHA1Transform() here reads the full 64-byte
+     * context->buffer. */
+    used = (context->count[0] >> 3) & 63;
+    context->buffer[used++] = 0x80;
+    if (used > 56) {
+        (void)memset(&context->buffer[used], 0, 64 - used);
+        SHA1Transform(context->state, context->buffer);
+        used = 0;
     }
-    SHA1Update(context, finalcount, 8); /* Should cause a SHA1Transform() */
+    (void)memset(&context->buffer[used], 0, 56 - used);
+    (void)memcpy(&context->buffer[56], finalcount, 8);
+    SHA1Transform(context->state, context->buffer);
 
     if (digest) {
         for (i = 0; i < 20; i++) {
@@ -412,44 +424,110 @@ void SHA1Final(uint8_t digest[20], SHA1_CTX *context) {
 }
 
 #ifdef DATAKIT_TEST
+#include <inttypes.h>
 #include <stdio.h>
-#include <stdlib.h>
-/*************************************************************/
-int sha1Test(int argc, char **argv) {
-    int i, j;
-    SHA1_CTX context;
-    uint8_t digest[20], buffer[16384];
-    FILE *file;
 
-    if (argc > 2) {
-        puts("Public domain SHA-1 implementation - by Steve Reid "
-             "<steve@edmweb.com>");
-        puts("Produces the SHA-1 hash of a file, or stdin if no file is "
-             "specified.");
-        exit(0);
+/* Known-answer vectors. The empty-input digest and the FIPS PUB 180-1
+ * vectors are the published values. The prefix vectors were computed
+ * with an independent SHA-1 (shasum) over prefixes of sha1TestPattern
+ * and pin every padding boundary: 55 bytes is the longest message whose
+ * padding fits in its own block, 56 and 57 spill into a second block,
+ * 63/64/65 straddle one full block, 119/120 repeat the 55/56 boundary
+ * one block later and 128 is exactly two blocks. */
+static const char sha1TestPattern[] =
+    "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ+/"
+    "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ+/";
+
+typedef struct {
+    const char *data; /* NULL means a prefix of sha1TestPattern */
+    uint32_t len;
+    const char *hex;
+} sha1TestVector;
+
+static const sha1TestVector sha1TestVectors[] = {
+    {"", 0, "da39a3ee5e6b4b0d3255bfef95601890afd80709"},
+    {"abc", 3, "a9993e364706816aba3e25717850c26c9cd0d89d"},
+    {"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq", 56,
+     "84983e441c3bd26ebaae4aa1f95129e5e54670f1"},
+    {NULL, 55, "9340477258b95b9c56bcd313f092ae5dbae8f29b"},
+    {NULL, 56, "c36256841f28695b1a551b7f3d20cc45f1b613e4"},
+    {NULL, 57, "e10336cca44542f78d6288799d96341f83a1d38f"},
+    {NULL, 63, "4df67b96b98741c1a9ada3720ed78368f015b4a9"},
+    {NULL, 64, "c780a9e38419c3104226137fe158098283246434"},
+    {NULL, 65, "fd74a03da2a25f32cd6eb912fd3b6f6595d2ce34"},
+    {NULL, 119, "ac5913a5a6b46284a037e15282b0bf153aafe7da"},
+    {NULL, 120, "95bf6b00b64e02c13c42f471a979de4c05a4844b"},
+    {NULL, 128, "c7f167dca466d8f2d098ce06a2b8942603b20071"},
+};
+
+/* Update chunk sizes. The digest must not depend on how the input is
+ * split across SHA1Update() calls. */
+static const uint32_t sha1TestChunks[] = {1, 3, 17, 55, 63, 64, 65, 1000};
+
+static void sha1TestHex(const uint8_t digest[SHA1_DIGEST_LENGTH],
+                        char hex[SHA1_DIGEST_STRING_LENGTH]) {
+    static const char digits[] = "0123456789abcdef";
+    for (uint32_t i = 0; i < SHA1_DIGEST_LENGTH; i++) {
+        hex[i * 2] = digits[digest[i] >> 4];
+        hex[i * 2 + 1] = digits[digest[i] & 15];
     }
-    if (argc < 2) {
-        file = stdin;
-    } else {
-        if (!(file = fopen(argv[1], "rb"))) {
-            fputs("Unable to open file.", stderr);
-            exit(-1);
+    hex[SHA1_DIGEST_STRING_LENGTH - 1] = '\0';
+}
+
+/* Hash len bytes in chunk-sized updates. When period is non-zero the
+ * input is data repeated (data holds at least period + chunk bytes of
+ * the repeating sequence); otherwise data holds all len bytes. */
+static int sha1TestCheck(const char *what, const uint8_t *data, uint32_t period,
+                         uint32_t len, uint32_t chunk, const char *want) {
+    SHA1_CTX ctx;
+    uint8_t digest[SHA1_DIGEST_LENGTH];
+    char got[SHA1_DIGEST_STRING_LENGTH];
+
+    SHA1Init(&ctx);
+    for (uint32_t off = 0; off < len; off += chunk) {
+        const uint32_t n = len - off < chunk ? len - off : chunk;
+        const uint32_t at = period ? off % period : off;
+        SHA1Update(&ctx, data + at, n);
+    }
+    SHA1Final(digest, &ctx);
+    sha1TestHex(digest, got);
+
+    if (strcmp(got, want) != 0) {
+        printf("sha1: %s len=%" PRIu32 " chunk=%" PRIu32 ": got %s, want %s\n",
+               what, len, chunk, got, want);
+        return 1;
+    }
+    return 0;
+}
+
+/* Run the known-answer vectors; returns the number of failures. */
+int sha1Test(int argc, char **argv) {
+    (void)argc;
+    (void)argv;
+    int failures = 0;
+
+    for (uint32_t v = 0;
+         v < sizeof(sha1TestVectors) / sizeof(sha1TestVectors[0]); v++) {
+        const sha1TestVector *tv = &sha1TestVectors[v];
+        const char *data = tv->data ? tv->data : sha1TestPattern;
+        for (uint32_t c = 0;
+             c < sizeof(sha1TestChunks) / sizeof(sha1TestChunks[0]); c++) {
+            failures += sha1TestCheck(tv->data ? "vector" : "pattern",
+                                      (const uint8_t *)data, 0, tv->len,
+                                      sha1TestChunks[c], tv->hex);
         }
     }
-    SHA1Init(&context);
-    while (!feof(file)) { /* note: what if ferror(file) */
-        i = fread(buffer, 1, 16384, file);
-        SHA1Update(&context, buffer, i);
+
+    /* FIPS PUB 180-1: one million repetitions of "a". */
+    static uint8_t as[2048];
+    memset(as, 'a', sizeof(as));
+    for (uint32_t c = 0; c < sizeof(sha1TestChunks) / sizeof(sha1TestChunks[0]);
+         c++) {
+        failures +=
+            sha1TestCheck("million-a", as, 1, 1000000, sha1TestChunks[c],
+                          "34aa973cd4c4daa4f61eeb2bdbad27316534016f");
     }
-    SHA1Final(digest, &context);
-    fclose(file);
-    for (i = 0; i < 5; i++) {
-        for (j = 0; j < 4; j++) {
-            printf("%02X", digest[i * 4 + j]);
-        }
-        putchar(' ');
-    }
-    putchar('\n');
-    exit(0);
+
+    return failures;
 }
 #endif
