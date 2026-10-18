@@ -72,8 +72,8 @@ void xofAppend(xof *restrict const x, size_t *restrict const bitsUsed,
     memcpy(&v, &newVal, sizeof(newVal));
 #endif
 
-    /* ULL because of builtin APIs */
-    const unsigned long long compared = o ^ v;
+    /* __builtin_clzll/ctzll take a 64-bit unsigned argument. */
+    const uint64_t compared = o ^ v;
     if (compared == 0) {
         /* use single zero bit, no change in data. */
         *bitsUsed += 1;
