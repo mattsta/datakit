@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import allocaudit, leakcheck, perfdiff, toolchain, verify
+from . import allocaudit, leakcheck, perfdiff, toolchain, validate, verify
 from .gitutil import ToolError
 
 
@@ -152,6 +152,53 @@ def main(argv: list[str] | None = None) -> int:
         help="also check deps/ and src/memshard/",
     )
 
+    va = sub.add_parser(
+        "validate",
+        help="full compiler x preset matrix on an exported revision "
+        "(exit 0 pass, 1 fail, 2 input error)",
+    )
+    va.add_argument("--rev", default="HEAD", help="revision to export (default HEAD)")
+    va.add_argument(
+        "--compilers",
+        default=",".join(toolchain.COMPILERS),
+        help=f"comma-separated compilers (default {','.join(toolchain.COMPILERS)})",
+    )
+    va.add_argument(
+        "--presets",
+        default="dev,debug",
+        help="comma-separated presets (default dev,debug; gcc15 builds release)",
+    )
+    va.add_argument(
+        "--serial",
+        default=validate.DEFAULT_SERIAL,
+        help="ctest name regex run one at a time (default: the *P and persist tests)",
+    )
+    va.add_argument(
+        "--skip",
+        default=validate.DEFAULT_SKIP,
+        help=f"ctest name regex never run (default {validate.DEFAULT_SKIP})",
+    )
+    va.add_argument(
+        "--debug-skip",
+        default=validate.DEFAULT_DEBUG_SKIP,
+        help="ctest name regex also skipped in debug builds "
+        f"(default {validate.DEFAULT_DEBUG_SKIP}; '' runs them)",
+    )
+    va.add_argument(
+        "--leak-base",
+        default=validate.DEFAULT_LEAK_BASE,
+        help="leakage gate checks merge-base(BASE, REV)..REV "
+        f"(default {validate.DEFAULT_LEAK_BASE}; '' skips it)",
+    )
+    va.add_argument(
+        "--root",
+        type=Path,
+        default=None,
+        help="scratch root (env DKTOOLS_SCRATCH, default: dktools/ in the temp dir)",
+    )
+    va.add_argument("-j", "--jobs", type=int, default=None, help="parallel jobs")
+    toolchain.add_arguments(va)
+
     args = parser.parse_args(argv)
 
     try:
@@ -161,7 +208,29 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
 
+def _split(value: str) -> list[str]:
+    return [part.strip() for part in value.split(",") if part.strip()]
+
+
 def _dispatch(args: argparse.Namespace) -> int:
+    if args.command == "validate":
+        return validate.run(
+            args.repo,
+            validate.ValidateOptions(
+                rev=args.rev,
+                compilers=[
+                    toolchain.from_args(n, args) for n in _split(args.compilers)
+                ],
+                presets=_split(args.presets),
+                serial=args.serial,
+                skip=args.skip,
+                debug_skip=args.debug_skip,
+                leak_base=args.leak_base,
+                root=args.root,
+                jobs=args.jobs,
+            ),
+        )
+
     if args.command == "leakcheck":
         mode = "range" if args.rev_range is not None else args.mode or "staged"
         return leakcheck.run(args.repo, mode, args.rev_range, args.include_vendored)

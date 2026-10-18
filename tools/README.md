@@ -96,6 +96,38 @@ place builds get them from; the system `cc` is never used:
 | `clang22` (default) | `clang-22`, `clang++`, `llvm-ar`, `llvm-ranlib` from `--llvm-dir` / `$DKTOOLS_LLVM_DIR` (default: Homebrew LLVM) | `dev`, `debug` (CMakePresets.json) |
 | `gcc15` | `gcc-15`, `g++-15`, overridden by `--gcc-cc`/`--gcc-cxx` or `$DKTOOLS_GCC_CC`/`$DKTOOLS_GCC_CXX` | `release` (`-DCMAKE_BUILD_TYPE=Release`, no preset) |
 
+## validate — the full matrix on a revision
+
+Runs every compiler and preset on a committed revision, exported with
+`git archive` so uncommitted work never takes part:
+
+```sh
+uv run --project tools dktools validate [--rev REV] \
+    [--compilers clang22,gcc15] [--presets dev,debug] \
+    [--serial REGEX] [--skip REGEX] [--debug-skip REGEX] \
+    [--leak-base BASE] [--root DIR] [-j N]
+```
+
+- The matrix is every requested preset each compiler supports:
+  by default `clang22-dev`, `clang22-debug` and `gcc15-release`.
+- Per configuration: a clean configure, an all-targets build,
+  warnings grouped by file, the parallel ctest set (everything outside
+  the serial and skip sets), then the serial set one test at a time.
+- Default serial set: `.*P`, `persist`, `persistCtx`,
+  `dkTestNonceLogEvictionPerf`, `dkTestKeyringGetRawCopyMigrationCluster`.
+  Default skip set: `varint-.*`, `perfRegression`, `compressionBench`.
+  Debug builds also skip `multimap` and `multiFenwick` (too slow under
+  Debug with sanitizers; `--debug-skip ''` runs them), and the summary
+  says so.
+- Then: UBSan (`runtime error:`) and ASan/LSan reports in the test
+  output, `allocaudit check --constructors` on the exported tree, and
+  the leakage gate over `merge-base(BASE, REV)..REV` (`BASE` defaults
+  to `origin/main`; `--leak-base ''` skips it).
+- Writes `ROOT/validate/<hash>/summary.md` (warnings split into
+  datakit `src/`, `deps/` and other) and prints it. Exits 0 only when
+  everything passed with no warning, sanitizer report or hard leak
+  hit; 1 on any failure; 2 on an input error.
+
 ## leakcheck — the leakage gate
 
 Checks text about to enter history for terms that must never appear in
