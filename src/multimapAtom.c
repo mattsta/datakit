@@ -1356,15 +1356,16 @@ int multimapAtomTest(int argc, char *argv[]) {
         databox minRef;
         bool found = multimapAtomLookupMin(ma, &minRef);
         assert(found);
-        printf("Min ref: %lu (expected ref for key 100)\n", minRef.data.u);
+        printf("Min ref: %" PRIuMAX " (expected ref for key 100)\n",
+               minRef.data.u);
 
         /* Verify the min ref maps to key 100 */
         databox minKey;
         found = multimapAtomLookup(ma, &minRef, &minKey);
         assert(found);
-        printf("Min key: %ld (expected 100)\n", minKey.data.i);
+        printf("Min key: %" PRIdMAX " (expected 100)\n", minKey.data.i);
         if (minKey.data.i != 100) {
-            ERR("Expected min key to be 100 but got %ld", minKey.data.i);
+            ERR("Expected min key to be 100 but got %" PRIdMAX, minKey.data.i);
         }
 
         multimapAtomFree(ma);
