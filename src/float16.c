@@ -291,9 +291,19 @@ __attribute__((unused)) static void yieldAllFloats(void) {
     }
 }
 
-__attribute__((no_sanitize("integer", "undefined")))
-__attribute__((optnone)) int
-float16Test(int argc, char *argv[]) {
+/* The timing loops must not be optimized away, and the sanitizers stay off
+ * for the whole test.  optnone and the "integer" sanitizer group are
+ * clang-only, so GCC gets its own spelling of each. */
+#if defined(__clang__)
+#define FLOAT16_TEST_ATTRS                                                     \
+    __attribute__((no_sanitize("integer", "undefined")))                       \
+    __attribute__((optnone))
+#else
+#define FLOAT16_TEST_ATTRS                                                     \
+    __attribute__((no_sanitize("undefined"))) __attribute__((optimize("O0")))
+#endif
+
+FLOAT16_TEST_ATTRS int float16Test(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     /* 10 million iterations provides reliable timing while keeping tests fast.
