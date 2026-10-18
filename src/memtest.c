@@ -97,6 +97,52 @@ DK_FN_UNUSED static bool memtestParseU64_(const char *s, int base, uint64_t max,
     return true;
 }
 
+/* Parse the address range that starts a BSD /proc/<pid>/map line:
+ * "<start> <end> ...", each a hexadecimal address with an optional "0x"
+ * prefix, separated by blanks.  Returns true only when both parse as
+ * addresses and end >= start. */
+DK_FN_UNUSED static bool
+memtestParseBsdMapRange_(const char *line, uint64_t *start, uint64_t *end) {
+    uint64_t bounds[2];
+    const char *p = line;
+    for (size_t i = 0; i < 2; i++) {
+        while (*p == ' ' || *p == '\t') {
+            p++;
+        }
+
+        if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) {
+            p += 2;
+        }
+
+        /* Copy the token: memtestParseU64_ parses a whole string */
+        char token[24];
+        size_t n = 0;
+        while (p[n] != '\0' && p[n] != ' ' && p[n] != '\t' && p[n] != '\n') {
+            if (n + 1 >= sizeof(token)) {
+                return false; /* longer than any 64-bit address */
+            }
+
+            token[n] = p[n];
+            n++;
+        }
+
+        token[n] = '\0';
+        if (!memtestParseU64_(token, 16, UINTPTR_MAX, &bounds[i])) {
+            return false;
+        }
+
+        p += n;
+    }
+
+    if (bounds[1] < bounds[0]) {
+        return false;
+    }
+
+    *start = bounds[0];
+    *end = bounds[1];
+    return true;
+}
+
 /* ============================================================================
  * Progress Reporting Context
  * ============================================================================
@@ -689,10 +735,15 @@ size_t memtestProcessMemory(int passes) {
 
     /* BSD /proc/pid/map format: start end resident private_resident ... */
     while (fgets(line, sizeof(line), fp)) {
-        size_t start_addr, end_addr;
-        if (sscanf(line, "%zx %zx", &start_addr, &end_addr) != 2) {
+        /* Skip a line whose range does not parse, or ends before it starts */
+        uint64_t startAddr = 0;
+        uint64_t endAddr = 0;
+        if (!memtestParseBsdMapRange_(line, &startAddr, &endAddr)) {
             continue;
         }
+
+        const size_t start_addr = (size_t)startAddr;
+        const size_t end_addr = (size_t)endAddr;
 
         /* Check for rw permissions in the line */
         if (!strstr(line, "rw")) {
@@ -892,6 +943,45 @@ static int memtest_run_unit_tests(void) {
             } else if (!ok && got != 12345) {
                 ERR("parse '%s' base %d: failed but wrote %" PRIu64, cases[i].s,
                     cases[i].base, got);
+            }
+        }
+    }
+
+    TEST("BSD /proc map lines parse to checked address ranges") {
+        static const struct {
+            const char *line;
+            bool ok;
+            uint64_t start;
+            uint64_t end;
+        } cases[] = {
+            {"0x400000 0x401000 1 0 0xfffff80 rw- 1 0 0x1000 COW NC vnode\n",
+             true, 0x400000, 0x401000},
+            {"0x800a00000 0x800a21000 33 0 0x0 rwx 2 0 0x1000\n", true,
+             0x800a00000ULL, 0x800a21000ULL},
+            {"400000 401000 rw-\n", true, 0x400000, 0x401000},
+            {"  0X10\t0X20 rw-\n", true, 0x10, 0x20},
+            {"0xffffffffffffffff 0xffffffffffffffff rw-\n", true, UINT64_MAX,
+             UINT64_MAX},
+            {"0x10000000000000000 0x10000000000000001 rw-\n", false, 0, 0},
+            {"0x2000 0x1000 rw-\n", false, 0, 0}, /* ends before start */
+            {"0x2000\n", false, 0, 0},
+            {"0x2000 rw-\n", false, 0, 0},
+            {"-0x10 0x20 rw-\n", false, 0, 0},
+            {"0x 0x20 rw-\n", false, 0, 0},
+            {"0x10g 0x20 rw-\n", false, 0, 0},
+            {"", false, 0, 0},
+        };
+
+        for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+            uint64_t start = 7;
+            uint64_t end = 7;
+            const bool ok =
+                memtestParseBsdMapRange_(cases[i].line, &start, &end);
+            if (ok != cases[i].ok ||
+                (ok && (start != cases[i].start || end != cases[i].end)) ||
+                (!ok && (start != 7 || end != 7))) {
+                ERR("map line %zu: ok=%d start=%" PRIx64 " end=%" PRIx64, i, ok,
+                    start, end);
             }
         }
     }

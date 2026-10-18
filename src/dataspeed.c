@@ -225,6 +225,47 @@ DK_FN_UNUSED static bool dataspeedParseCacheSize_(const char *s,
     return true;
 }
 
+/* Parse a plain sysfs decimal such as "64\n": digits, then only blanks or a
+ * newline, at most 'max'.  Returns false (leaving *value alone) on
+ * anything else. */
+DK_FN_UNUSED static bool dataspeedParseSysfsUInt_(const char *s, uint64_t max,
+                                                  uint64_t *value) {
+    if (*s < '0' || *s > '9') {
+        return false; /* strtoull would accept blanks and a sign */
+    }
+
+    errno = 0;
+    char *end = NULL;
+    const uint64_t parsed = strtoull(s, &end, 10);
+    if (errno != 0 || end == s) {
+        return false;
+    }
+
+    while (*end == ' ' || *end == '\t' || *end == '\n') {
+        end++;
+    }
+
+    if (*end != '\0' || parsed > max) {
+        return false;
+    }
+
+    *value = parsed;
+    return true;
+}
+
+/* Read the first line of a small sysfs file into buf (NUL-terminated) */
+DK_FN_UNUSED static bool dataspeedReadLine_(const char *path, char *buf,
+                                            size_t len) {
+    FILE *fp = fopen(path, "r");
+    if (!fp) {
+        return false;
+    }
+
+    const bool ok = fgets(buf, (int)len, fp) != NULL;
+    fclose(fp);
+    return ok;
+}
+
 /* ============================================================================
  * System Information Detection
  * ============================================================================
@@ -324,19 +365,17 @@ void dataspeedGetSystemInfo(dataspeedSystemInfo *info) {
                 dataspeedParseCacheSize_(buf, &size)) {
                 snprintf(path, sizeof(path),
                          "/sys/devices/system/cpu/cpu0/cache/index%d/level", i);
-                FILE *fp2 = fopen(path, "r");
-                if (fp2) {
-                    int level = 0;
-                    if (fscanf(fp2, "%d", &level) == 1) {
-                        if (level == 1) {
-                            info->cache.l1d_size = size;
-                        } else if (level == 2) {
-                            info->cache.l2_size = size;
-                        } else if (level == 3) {
-                            info->cache.l3_size = size;
-                        }
+                char levelBuf[32];
+                uint64_t level = 0;
+                if (dataspeedReadLine_(path, levelBuf, sizeof(levelBuf)) &&
+                    dataspeedParseSysfsUInt_(levelBuf, 16, &level)) {
+                    if (level == 1) {
+                        info->cache.l1d_size = size;
+                    } else if (level == 2) {
+                        info->cache.l2_size = size;
+                    } else if (level == 3) {
+                        info->cache.l3_size = size;
                     }
-                    fclose(fp2);
                 }
             }
             fclose(fp);
@@ -346,13 +385,11 @@ void dataspeedGetSystemInfo(dataspeedSystemInfo *info) {
     /* Cache line size */
     snprintf(path, sizeof(path),
              "/sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size");
-    fp = fopen(path, "r");
-    if (fp) {
-        int line_size = 0;
-        if (fscanf(fp, "%d", &line_size) == 1) {
-            info->cache.line_size = line_size;
-        }
-        fclose(fp);
+    char lineBuf[32];
+    uint64_t lineSize = 0;
+    if (dataspeedReadLine_(path, lineBuf, sizeof(lineBuf)) &&
+        dataspeedParseSysfsUInt_(lineBuf, 1 << 20, &lineSize)) {
+        info->cache.line_size = (size_t)lineSize;
     }
     if (info->cache.line_size == 0) {
         info->cache.line_size = 64;
