@@ -738,6 +738,15 @@ DK_INLINE_ALWAYS bool flexNeg64IsWide_(const flexEntry *fe) {
     return fe[0] == FLEX_NEG_64B && (fe[1 + sizeof(uint64_t) - 1] & 0x80);
 }
 
+/* FLEX_NEG_128B magnitudes up to INT128_MAX cover the values
+ * [INT128_MIN, -1].  A magnitude with bit 127 set stands for a value
+ * below INT128_MIN, which no databox holds, so the format does not
+ * contain it.  FLEX_NEG_96B needs no such check: its largest magnitude,
+ * 2^96 - 1, is the value -2^96. */
+DK_INLINE_ALWAYS bool flexNeg128OutOfRange_(const flexEntry *fe) {
+    return fe[0] == FLEX_NEG_128B && (fe[1 + sizeof(__uint128_t) - 1] & 0x80);
+}
+
 /* True when the entry at 'fe' decodes to DATABOX_SIGNED_128 or
  * DATABOX_UNSIGNED_128. */
 DK_INLINE_ALWAYS bool flexEntryIsIntegerWide_(const flexEntry *fe) {
@@ -1516,7 +1525,9 @@ DK_STATIC void flexLoadFixedLength_(const flexEntryData *entry, databox *r,
                 d, encoding == FLEX_NEG_96B ? 96 / 8 : 128 / 8);
             /* -magnitude - 1 is ~magnitude.  Computing it unsigned keeps
              * the decode defined for a FLEX_NEG_128B magnitude above
-             * INT128_MAX, which has no 128-bit value (it wraps). */
+             * INT128_MAX, which has no 128-bit value (it wraps); the
+             * writer never stores one and flexValidateBufferDeep rejects
+             * one (see flexNeg128OutOfRange_). */
             *out = (__int128_t)~magnitude;
         }
         break;
@@ -5943,6 +5954,11 @@ bool flexValidateBufferDeep(const uint8_t *buf, size_t buflen) {
                                     &entry_len)) {
             return false;
         }
+
+        /* The entry fits, so its whole payload is readable. */
+        if (flexNeg128OutOfRange_((const flexEntry *)cursor)) {
+            return false;
+        }
         cursor += entry_len;
     }
 
@@ -8226,6 +8242,141 @@ static int32_t flexTestNeg64Wide(void) {
     return bad;
 }
 
+/* Push 'v' between an integer and a string, so the entry under test is
+ * neither the first nor the last one the validator walks.  Returns the
+ * entry. */
+static flexEntry *flexTestPushWideMiddle(flex **const ff,
+                                         const flexTestWide v) {
+    flexPushSigned(ff, 5, FLEX_ENDPOINT_TAIL);
+    databoxBig box;
+    flexTestWideBox(v, true, &box);
+    flexPushDataboxBig(ff, &box, FLEX_ENDPOINT_TAIL);
+    flexPushBytes(ff, "x", 1, FLEX_ENDPOINT_TAIL);
+    return flexNext(*ff, flexHead(*ff));
+}
+
+/* True when deep validation accepts 'f' and its middle entry decodes to
+ * 'want' through both the entry and single-buffer readers. */
+static bool flexTestWideMiddleReads(const flex *const f,
+                                    const flexTestWide want) {
+    if (!flexValidateBufferDeep(f, flexBytes(f))) {
+        return false;
+    }
+
+    databoxBig b;
+    flexGetByTypeBig(flexNext(f, flexHead(f)), &b);
+    return flexTestWideMatches((const databox *)&b, want);
+}
+
+/* Negative 96/128-bit magnitudes at the edge of the range.  A
+ * FLEX_NEG_128B magnitude above INT128_MAX stands for a value below
+ * INT128_MIN; deep validation rejects it.  FLEX_NEG_96B has no
+ * out-of-range magnitude. */
+static int32_t flexTestNegWideRange(void) {
+    int32_t bad = 0;
+    const __uint128_t top = (__uint128_t)1 << 127;
+
+    /* INT128_MIN, |v| = 2^127, is the largest magnitude: stored as
+     * INT128_MAX. */
+    {
+        const flexTestWide want = flexTestWideS(INT128_MIN);
+        cleaner(flexFree) flex *f = flexNew();
+        flexEntry *const fe = flexTestPushWideMiddle(&f, want);
+        if (fe[0] != FLEX_NEG_128B ||
+            varintBigExternalGet(fe + 1, VARINT_WIDTH_128B) !=
+                (__uint128_t)INT128_MAX) {
+            printf("  FAIL: INT128_MIN not stored as magnitude INT128_MAX\n");
+            bad++;
+        }
+
+        if (!flexTestWideMiddleReads(f, want)) {
+            printf("  FAIL: INT128_MIN rejected or misread\n");
+            bad++;
+        }
+
+        databoxBig one;
+        cleaner(flexFree) flex *single = flexNew();
+        databoxBig box;
+        flexTestWideBox(want, true, &box);
+        flexPushDataboxBig(&single, &box, FLEX_ENDPOINT_TAIL);
+        if (!flexGetSingleDataboxBig(single, flexBytes(single), &one) ||
+            !flexTestWideMatches((const databox *)&one, want)) {
+            printf("  FAIL: INT128_MIN single-databox decode\n");
+            bad++;
+        }
+
+        /* Stored 2^127, 2^127 + 1, ..., 2^128 - 1: |v| = 2^127 + 1 and
+         * up.  Each is rejected, by the deep check and by the
+         * single-buffer reader that runs it. */
+        const __uint128_t over[] = {top, top + 1, top + 12345, UINT128_MAX - 1,
+                                    UINT128_MAX};
+        for (size_t i = 0; i < sizeof(over) / sizeof(over[0]); i++) {
+            varintExternalPutFixedWidthBig(fe + 1, over[i], VARINT_WIDTH_128B);
+            if (flexValidateBufferDeep(f, flexBytes(f))) {
+                printf("  FAIL: NEG_128B magnitude over INT128_MAX (%zu) "
+                       "accepted\n",
+                       i);
+                bad++;
+            }
+
+            flexEntry *const sfe = flexHead(single);
+            varintExternalPutFixedWidthBig(sfe + 1, over[i], VARINT_WIDTH_128B);
+            if (flexGetSingleDataboxBig(single, flexBytes(single), &one)) {
+                printf("  FAIL: NEG_128B magnitude over INT128_MAX (%zu) "
+                       "decoded as a single databox\n",
+                       i);
+                bad++;
+            }
+        }
+
+        /* Below the limit the same entry is accepted again. */
+        varintExternalPutFixedWidthBig(fe + 1, (__uint128_t)INT128_MAX - 1,
+                                       VARINT_WIDTH_128B);
+        if (!flexTestWideMiddleReads(f, flexTestWideS(INT128_MIN + 1))) {
+            printf("  FAIL: NEG_128B magnitude INT128_MAX - 1 not "
+                   "INT128_MIN + 1\n");
+            bad++;
+        }
+
+        varintExternalPutFixedWidthBig(fe + 1, (__uint128_t)INT128_MAX,
+                                       VARINT_WIDTH_128B);
+        if (!flexTestWideMiddleReads(f, want)) {
+            printf("  FAIL: restored INT128_MIN rejected or misread\n");
+            bad++;
+        }
+    }
+
+    /* -2^96 is the largest FLEX_NEG_96B magnitude (all twelve payload
+     * bytes set), and the next value down needs FLEX_NEG_128B. */
+    {
+        const __int128_t min96 = -((__int128_t)1 << 96);
+        const flexTestWide want = flexTestWideS(min96);
+        cleaner(flexFree) flex *f = flexNew();
+        const flexEntry *const fe = flexTestPushWideMiddle(&f, want);
+        if (fe[0] != FLEX_NEG_96B ||
+            varintBigExternalGet(fe + 1, VARINT_WIDTH_96B) !=
+                ((__uint128_t)1 << 96) - 1) {
+            printf("  FAIL: -2^96 not stored as NEG_96B magnitude 2^96 - 1\n");
+            bad++;
+        }
+
+        if (!flexTestWideMiddleReads(f, want)) {
+            printf("  FAIL: -2^96 rejected or misread\n");
+            bad++;
+        }
+
+        const flexTestWide below = flexTestWideS(min96 - 1);
+        cleaner(flexFree) flex *g = flexNew();
+        const flexEntry *const ge = flexTestPushWideMiddle(&g, below);
+        if (ge[0] != FLEX_NEG_128B || !flexTestWideMiddleReads(g, below)) {
+            printf("  FAIL: -2^96 - 1 not stored as NEG_128B\n");
+            bad++;
+        }
+    }
+
+    return bad;
+}
+
 /* Read the middle of a [bytes, integer, bytes] flex forward and in
  * reverse, and check both against 'want'. */
 static bool flexTestReplaceReadsBack(flex *f, const flexTestWide want) {
@@ -9203,6 +9354,16 @@ int32_t flexTest(int32_t argc, char **argv) {
         const int32_t bad = flexTestNeg64Wide();
         if (bad) {
             printf("  FAIL: %" PRId32 " NEG_64B wide checks\n", bad);
+            return bad;
+        }
+        printf("  ok\n");
+    }
+
+    printf("Verify deep validation bounds NEG_96B/NEG_128B magnitudes:\n");
+    {
+        const int32_t bad = flexTestNegWideRange();
+        if (bad) {
+            printf("  FAIL: %" PRId32 " negative wide range checks\n", bad);
             return bad;
         }
         printf("  ok\n");

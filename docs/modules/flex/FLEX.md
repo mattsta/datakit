@@ -173,6 +173,12 @@ Notes that matter when reading flex bytes by hand:
   (`flexGetSigned`/`Unsigned`, `flexReplaceSigned`/`Unsigned`,
   `flexIncrby*`, `flexCompareSigned`/`Unsigned`, `flexGetSingleDatabox`). Whether an integer is wide is
   therefore a property of the entry, not of its encoding byte alone.
+- A `FLEX_NEG_128B` magnitude runs up to `INT128_MAX`, which stands for
+  `INT128_MIN`. A magnitude with bit 127 set would be a value below
+  `INT128_MIN` that no databox holds; the writer never stores one and
+  `flexValidateBufferDeep` rejects it. Every `FLEX_NEG_96B` magnitude is in
+  range: the largest, 2^96 - 1, is -2^96, and the next value down is stored
+  as `FLEX_NEG_128B`.
 - An in-place integer replace (`flexReplaceSigned`/`Unsigned`, and the
   `flexIncrby*` calls built on them) keeps the entry's width when the new
   value fits it, and switches the entry between `FLEX_UINT_*` and
@@ -293,10 +299,11 @@ on-disk snapshot, IPC, a plugin blob, a fuzzer:
 bool flexValidateBuffer(const uint8_t *buf, size_t buflen);
 
 /* O(N): walks every entry's length encoding, confirms each entry fits,
- * confirms the header's count matches the entries actually present, and
+ * confirms the header's count matches the entries actually present,
  * confirms the walk lands exactly on the claimed end (no trailing garbage,
- * no truncation).  Use when the bytes are NOT MAC-gated.  Does not decode
- * payloads. */
+ * no truncation), and rejects a FLEX_NEG_128B magnitude with bit 127 set
+ * (a value below INT128_MIN).  Use when the bytes are NOT MAC-gated.
+ * Reads no other payload bytes. */
 bool flexValidateBufferDeep(const uint8_t *buf, size_t buflen);
 
 /* O(1): read the leading total-bytes claim WITHOUT requiring
