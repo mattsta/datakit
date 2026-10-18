@@ -832,7 +832,9 @@ bool hmacKeyringRestore(hmacKeyring *ring, const uint8_t *buf, size_t len) {
     if (ring == NULL || buf == NULL) {
         return false;
     }
-    if (!flexValidateBuffer(buf, len)) {
+    /* The bytes may come from disk or a peer: bound every entry, not
+     * just the header, before walking them below */
+    if (!flexValidateBufferDeep(buf, len)) {
         return false;
     }
     const flex *f = (const flex *)buf;
@@ -1760,6 +1762,57 @@ int hmacKeyringTest(int argc, char *argv[]) {
         big[written] = 0xCC;
         if (hmacKeyringRestore(dst, big, written + 1u)) {
             ERRR("Trailing junk must be rejected");
+        }
+
+        hmacKeyringFree(src);
+        hmacKeyringFree(dst);
+    }
+
+    TEST("snapshot/restore: a valid header over a corrupt key entry is "
+         "refused") {
+        hmacKeyring *src = hmacKeyringCreate();
+        const uint8_t key[16] = {0x5A};
+        hmacKeyringInstallUnsalted(src, 5u, &hmacAlgoSHA256, key, sizeof(key));
+
+        uint8_t buf[256];
+        size_t written = 0;
+        if (!hmacKeyringSnapshot(src, buf, sizeof(buf), &written)) {
+            ERRR("Snapshot failed");
+        }
+
+        /* Give the last entry (the 16-byte key) the encoding byte of a
+         * 64-byte string: the total-bytes header still matches the
+         * buffer, but the key now claims bytes past the end of it */
+        cleaner(flexFree) flex *longer = flexNew();
+        uint8_t filler[64];
+        memset(filler, 0xAB, sizeof(filler));
+        flexPushBytes(&longer, filler, sizeof(filler), FLEX_ENDPOINT_TAIL);
+        const uint8_t *longEntry = (const uint8_t *)flexHead(longer);
+        const size_t longLen =
+            flexBytes(longer) - (size_t)(longEntry - (const uint8_t *)longer);
+
+        const flex *f = (const flex *)buf;
+        uint8_t *last = (uint8_t *)flexIndex(f, (int32_t)(flexCount(f) - 1));
+        const size_t lastLen = written - (size_t)(last - buf);
+        if (lastLen >= longLen) {
+            ERR("key entry is %zu bytes, not shorter than %zu", lastLen,
+                longLen);
+        }
+
+        last[0] = longEntry[0];
+        if (!flexValidateBuffer(buf, written)) {
+            ERRR("the corrupt snapshot's header should still validate");
+        }
+        if (flexValidateBufferDeep(buf, written)) {
+            ERRR("the corrupt snapshot should fail deep validation");
+        }
+
+        hmacKeyring *dst = hmacKeyringCreate();
+        if (hmacKeyringRestore(dst, buf, written)) {
+            ERRR("Restore accepted a corrupt key entry");
+        }
+        if (hmacKeyringSize(dst) != 0u) {
+            ERRR("Refused restore left keys installed");
         }
 
         hmacKeyringFree(src);

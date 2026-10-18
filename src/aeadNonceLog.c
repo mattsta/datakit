@@ -468,7 +468,9 @@ aeadNonceLog *aeadNonceLogFromBytes(const uint8_t *buf, size_t len) {
     if (buf == NULL) {
         return NULL;
     }
-    if (!flexValidateBuffer(buf, len)) {
+    /* The bytes may come from disk or a peer: bound every entry, not
+     * just the header, before walking them below */
+    if (!flexValidateBufferDeep(buf, len)) {
         return NULL;
     }
     const flex *f = (const flex *)buf;
@@ -915,6 +917,60 @@ int aeadNonceLogTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int err = 0;
+
+    TEST("FromBytes refuses a valid header over a corrupt last entry") {
+        cleaner(aeadNonceLogFree) aeadNonceLog *log = aeadNonceLogCreate(64u);
+        uint8_t nonce[AEAD_NONCE_LOG_NONCE_LEN] = {0};
+        nonceFromCounter(5u, nonce);
+        aeadNonceLogObserve(log, 7u, nonce);
+        nonceFromCounter(6u, nonce);
+        aeadNonceLogObserve(log, 9u, nonce);
+        const size_t need = aeadNonceLogToBytes(log, NULL, 0);
+        cleanerName(zfree, TestBytes) uint8_t *snap = zcalloc(1, need);
+        if (aeadNonceLogToBytes(log, snap, need) != need) {
+            ERRR("ToBytes failed");
+        }
+
+        {
+            cleaner(aeadNonceLogFree) aeadNonceLog *back =
+                aeadNonceLogFromBytes(snap, need);
+            if (back == NULL || aeadNonceLogSize(back) != 2u) {
+                ERRR("unmodified snapshot did not restore");
+            }
+        }
+
+        /* Give the last entry (the second record's small gen) the
+         * encoding byte of a full 64-bit integer: the total-bytes header
+         * still matches the buffer, but the entry now claims payload bytes
+         * past the end of it */
+        cleaner(flexFree) flex *wide64 = flexNew();
+        flexPushUnsigned(&wide64, UINT64_MAX, FLEX_ENDPOINT_TAIL);
+        const uint8_t *wideEntry = (const uint8_t *)flexHead(wide64);
+        const size_t wideLen =
+            flexBytes(wide64) - (size_t)(wideEntry - (const uint8_t *)wide64);
+
+        const flex *f = (const flex *)snap;
+        uint8_t *last = (uint8_t *)flexIndex(f, (int32_t)(flexCount(f) - 1));
+        const size_t lastLen = need - (size_t)(last - snap);
+        if (lastLen >= wideLen) {
+            ERR("last entry is %zu bytes, not shorter than %zu", lastLen,
+                wideLen);
+        }
+
+        last[0] = wideEntry[0];
+        if (!flexValidateBuffer(snap, need)) {
+            ERRR("the corrupt snapshot's header should still validate");
+        }
+        if (flexValidateBufferDeep(snap, need)) {
+            ERRR("the corrupt snapshot should fail deep validation");
+        }
+
+        cleaner(aeadNonceLogFree) aeadNonceLog *back =
+            aeadNonceLogFromBytes(snap, need);
+        if (back != NULL) {
+            ERRR("FromBytes accepted a corrupt last entry");
+        }
+    }
 
     TEST("FromBytes refuses a 96/128-bit value in every field") {
         /* Two records, so the header and every per-record field are

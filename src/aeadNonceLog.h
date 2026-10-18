@@ -99,8 +99,10 @@ size_t aeadNonceLogToBytes(const aeadNonceLog *log, uint8_t *out,
 
 /* Parse a previously-serialized log. Returns a freshly-allocated
  * aeadNonceLog populated with the same capacity and record set; caller
- * frees via aeadNonceLogFree. Returns NULL on parse/validation failure,
- * including any field that is not a 64-bit unsigned integer (a
+ * frees via aeadNonceLogFree. Every entry of the buffer is bounded with
+ * flexValidateBufferDeep before it is read. Returns NULL on
+ * parse/validation failure, including a malformed entry anywhere in the
+ * buffer and any field that is not a 64-bit unsigned integer (a
  * 96/128-bit entry is refused). */
 aeadNonceLog *aeadNonceLogFromBytes(const uint8_t *buf, size_t len);
 

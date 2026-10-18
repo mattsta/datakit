@@ -554,8 +554,9 @@ bool hmacKeyringRestoreAeadCounter(hmacKeyring *ring, hmacKeyId id,
  * Total flex entry count is 5 * N when no floor is set, 5 * (N + 1) when
  * one is. The sentinel uses id == 0 (otherwise invalid for a slot) so a
  * legacy snapshot without a sentinel is unambiguously detected on
- * restore. Use `flexValidateBuffer` on the snapshot buffer before
- * calling Restore.
+ * restore. Restore bounds every entry of the buffer with
+ * `flexValidateBufferDeep` before reading it, and refuses a buffer
+ * that fails.
  *
  * SECURITY: snapshot bytes carry the raw keys. They MUST be wrapped
  * through flexEnvelopeSeal (AEAD class) before being written anywhere
