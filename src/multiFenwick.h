@@ -143,14 +143,23 @@ void multiFenwickFree(multiFenwick *mfw);
  * CORE OPERATIONS
  * ==================================================================== */
 
+/* Largest index Update and Set accept.  Cells are addressed with the
+ * multilist's 32-bit node index, and capacity is the next power of two
+ * above the count, so indexes stay below 2^30. */
+#define MULTIFENWICK_INDEX_MAX ((((uint64_t)1) << 30) - 1)
+
 /* Update: add delta to element at idx
  * Time: O(log n)
- * mfw: pointer-to-pointer (may upgrade tier)
- * idx: 0-based index
+ * mfw: pointer-to-pointer (created if NULL)
+ * idx: 0-based index, at most MULTIFENWICK_INDEX_MAX
  * delta: databox value to add (can be negative for signed types)
- * Returns true on success, false on allocation failure or invalid type
- * (a non-numeric delta, such as VOID, BYTES or 96/128-bit, is refused
- * before anything changes) */
+ * Returns true on success.  Returns false for a non-numeric delta (VOID,
+ * BYTES, 96/128-bit, ...), an index above MULTIFENWICK_INDEX_MAX, or a
+ * failed allocation of a new tree.
+ * Transactional: every check, and the read and sum of every cell the
+ * update touches, happens before the first write, and the writes cannot
+ * fail.  So a false return leaves every cell, the count and the capacity
+ * unchanged, and a NULL '*mfw' stays NULL. */
 bool multiFenwickUpdate(multiFenwick **mfw, size_t idx, const databox *delta);
 
 /* Query: compute prefix sum [0, idx]
@@ -180,8 +189,9 @@ bool multiFenwickGet(const multiFenwick *mfw, size_t idx, databox *result);
 /* Set single element to exact value (not delta)
  * Time: O(log n)
  * Computes delta = value - get(idx), then updates
- * Returns true on success, false for a non-numeric value (nothing
- * changes) */
+ * Returns true on success, false for a non-numeric value or an index above
+ * MULTIFENWICK_INDEX_MAX (nothing changes: the write is one transactional
+ * Update) */
 bool multiFenwickSet(multiFenwick **mfw, size_t idx, const databox *value);
 
 /* ====================================================================

@@ -853,6 +853,68 @@ int multiFenwickTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("transactional Update: a refused update changes nothing") {
+        /* Every refusal (non-numeric delta, index above the maximum) is
+         * decided before the first write: the elements, the count and the
+         * byte size stay as they were, and a NULL tree stays NULL. */
+        const databox one = DATABOX_SIGNED(1);
+        const databox bytes = databoxNewBytesString("nope");
+        const size_t badIdx[] = {(size_t)MULTIFENWICK_INDEX_MAX + 1,
+                                 (size_t)1 << 40, SIZE_MAX};
+
+        cleaner(multiFenwickFree) multiFenwick *none = NULL;
+        for (size_t k = 0; k < sizeof(badIdx) / sizeof(*badIdx); k++) {
+            if (multiFenwickUpdate(&none, badIdx[k], &one) ||
+                multiFenwickSet(&none, badIdx[k], &one) || none) {
+                ERR("index %zu: a refused write created a tree", badIdx[k]);
+            }
+        }
+
+        enum { TX_N = 37 };
+        int64_t vals[TX_N];
+        cleaner(multiFenwickFree) multiFenwick *mfw = NULL;
+        for (size_t i = 0; i < TX_N; i++) {
+            vals[i] = (int64_t)(i * 13 % 29) - 14;
+            const databox v = DATABOX_SIGNED(vals[i]);
+            if (!multiFenwickUpdate(&mfw, i, &v)) {
+                ERR("Update(%zu) failed", i);
+            }
+        }
+
+        const size_t bytesBefore = multiFenwickBytes(mfw);
+        for (size_t k = 0; k < sizeof(badIdx) / sizeof(*badIdx); k++) {
+            if (multiFenwickUpdate(&mfw, badIdx[k], &one) ||
+                multiFenwickSet(&mfw, badIdx[k], &one)) {
+                ERR("index %zu was accepted", badIdx[k]);
+            }
+        }
+
+        for (size_t i = 0; i < TX_N + 8; i++) {
+            if (multiFenwickUpdate(&mfw, i, &bytes)) {
+                ERR("a BYTES delta at %zu was accepted", i);
+            }
+        }
+
+        if (multiFenwickCount(mfw) != TX_N ||
+            multiFenwickBytes(mfw) != bytesBefore) {
+            ERR("refused updates changed the count (%zu) or size (%zu -> "
+                "%zu)",
+                multiFenwickCount(mfw), bytesBefore, multiFenwickBytes(mfw));
+        }
+
+        int64_t prefix = 0;
+        for (size_t i = 0; i < TX_N; i++) {
+            prefix += vals[i];
+            databox el;
+            databox sum;
+            if (!multiFenwickGet(mfw, i, &el) || !mfwIntIs(&el, vals[i]) ||
+                !multiFenwickQuery(mfw, i, &sum) || !mfwIntIs(&sum, prefix)) {
+                ERR("index %zu changed after refused updates", i);
+                break;
+            }
+        }
+    }
+
     TEST("differential: signed Update, Set, Get and Query against an array") {
         /* Random signed values, small and beyond 2^53, through Update
          * (add) and Set (assign), growing the tree as indexes arrive.

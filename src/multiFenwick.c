@@ -192,49 +192,29 @@ void multiFenwickFree(multiFenwick *mfw) {
     zfree(mfw);
 }
 
-/* Ensure capacity for given index
- * Returns true on success */
-static bool multiFenwickEnsureCapacity(multiFenwick *mfw, uint64_t idx) {
-    if (!mfw) {
-        return false;
+/* Capacity (a power of two, > idx + 1) needed to hold index 'idx', growing
+ * from 'current'. */
+static uint64_t multiFenwickCapacityFor_(uint64_t current, uint64_t idx) {
+    uint64_t capacity = current == 0 ? 1 : current;
+    while (capacity <= idx + 1) {
+        capacity <<= 1;
     }
 
-    uint64_t newCount = idx + 1;
+    return capacity;
+}
 
-    /* Check if we need to grow */
-    if (idx < mfw->capacity) {
-        /* Have capacity, just update logical count */
-        if (newCount > mfw->count) {
-            mfw->count = newCount;
-        }
-        return true;
-    }
-
-    /* Need to grow capacity */
-    uint64_t oldCapacity = mfw->capacity;
-    uint64_t newCapacity = (oldCapacity == 0) ? 1 : oldCapacity;
-
-    /* Find next power of 2 > newCount */
-    while (newCapacity <= newCount) {
-        newCapacity <<= 1;
-    }
-
-    /* The new cells' parents need the existing values.  Capacity is a
-     * power of two, so cell 'oldCapacity' (1-based) covers every existing
-     * element: it holds their total.  A new cell j in (oldCapacity,
-     * newCapacity] covers (j - LSB(j), j], which reaches an existing
-     * element only when j is a power of two, and then holds that same
-     * total.  Read it before changing anything, so a failed read leaves
-     * the tree exactly as it was. */
-    databox total = DATABOX_SIGNED(0);
-    if (oldCapacity > 0) {
-        multilistEntry entry;
-        if (!multiFenwickCellGet_(mfw, oldCapacity - 1, &entry)) {
-            return false;
-        }
-
-        total = entry.box;
-    }
+/* Grow the tree's cells to 'newCapacity' (a power of two above the
+ * current capacity), keeping every element's value.  'total' is the
+ * value of cell 'oldCapacity' (1-based), the sum of every existing
+ * element.
+ *
+ * A new cell j in (oldCapacity, newCapacity] covers (j - LSB(j), j],
+ * which reaches an existing element only when j is a power of two, and
+ * then holds exactly that total; every other new cell is zero.  Pushes
+ * and in-range replaces cannot fail, so neither can this. */
+static void multiFenwickGrow_(multiFenwick *mfw, uint64_t newCapacity,
+                              const databox *total) {
+    const uint64_t oldCapacity = mfw->capacity;
 
     /* If the tree is empty we can't infer a type yet, so new cells start
      * as SIGNED_64 zero; databoxAdd coerces on the first update. */
@@ -243,24 +223,74 @@ static bool multiFenwickEnsureCapacity(multiFenwick *mfw, uint64_t idx) {
         multilistPushByTypeTail(&mfw->tree, mfw->state, &zero);
     }
 
-    /* Every index replaced here is below newCapacity, so it exists */
     for (uint64_t j = oldCapacity * 2; oldCapacity > 0 && j <= newCapacity;
          j <<= 1) {
-        multilistReplaceByTypeAtIndex(&mfw->tree, mfw->state, j - 1, &total);
+        const bool replaced = multilistReplaceByTypeAtIndex(
+            &mfw->tree, mfw->state, (mlNodeId)(j - 1), total);
+        assert(replaced);
+        (void)replaced;
     }
 
-    mfw->count = newCount;
     mfw->capacity = newCapacity;
-
-    return true;
 }
 
-/* Update: add delta to element at idx */
+/* Update: add delta to element at idx.
+ *
+ * Transactional: every step that can fail (the argument checks, and the
+ * read and sum of every cell the update touches) runs before the first
+ * write.  The write phase is pushes and in-range replaces, which cannot
+ * fail, so a false return leaves the tree (cells, count and capacity)
+ * exactly as it was, and a NULL '*mfw' stays NULL. */
 bool multiFenwickUpdate(multiFenwick **mfw, size_t idx, const databox *delta) {
-    if (!mfw || !delta || !multiFenwickIsNumeric_(delta)) {
+    if (!mfw || !delta || !multiFenwickIsNumeric_(delta) ||
+        idx > MULTIFENWICK_INDEX_MAX) {
         return false;
     }
 
+    /* Plan: the capacity this index needs, and the new value of every
+     * cell on its update chain, computed from the cells as they are.
+     * A chain cell beyond the current capacity does not exist yet: it
+     * will hold the existing total (see multiFenwickGrow_) or zero. */
+    const multiFenwick *cur = *mfw; /* NULL: a new, empty tree */
+    const uint64_t oldCapacity = cur ? cur->capacity : 0;
+    const uint64_t newCapacity =
+        idx < oldCapacity ? oldCapacity
+                          : multiFenwickCapacityFor_(oldCapacity, idx);
+    databox total = DATABOX_SIGNED(0);
+    if (newCapacity > oldCapacity && oldCapacity > 0) {
+        multilistEntry entry;
+        if (!multiFenwickCellGet_(cur, oldCapacity - 1, &entry)) {
+            return false;
+        }
+
+        total = entry.box;
+    }
+
+    /* A chain has at most one cell per bit of the capacity */
+    databox planned[64];
+    size_t steps = 0;
+    for (uint64_t i = idx + 1; i <= newCapacity; i = multiFenwickParent(i)) {
+        databox base = DATABOX_SIGNED(0);
+        if (i <= oldCapacity) {
+            multilistEntry entry;
+            if (!multiFenwickCellGet_(cur, i - 1, &entry)) {
+                return false;
+            }
+
+            base = entry.box;
+        } else if (oldCapacity > 0 && (i & (i - 1)) == 0) {
+            base = total;
+        }
+
+        assert(steps < sizeof(planned) / sizeof(*planned));
+        if (!databoxAdd(&base, delta, &planned[steps])) {
+            return false;
+        }
+
+        steps++;
+    }
+
+    /* Apply: past creating a new tree, nothing below can fail. */
     if (!*mfw) {
         /* @own: caller; free=multiFenwickFree */
         *mfw = multiFenwickNew();
@@ -270,36 +300,20 @@ bool multiFenwickUpdate(multiFenwick **mfw, size_t idx, const databox *delta) {
     }
 
     multiFenwick *tree = *mfw;
-
-    /* Ensure capacity */
-    if (!multiFenwickEnsureCapacity(tree, idx)) {
-        return false;
+    if (newCapacity > oldCapacity) {
+        multiFenwickGrow_(tree, newCapacity, &total);
     }
 
-    /* BIT update: traverse upward adding LSB
-     * Convert to 1-based indexing internally */
-    uint64_t i = idx + 1;
-    while (i <= tree->capacity) {
-        /* Get current value at BIT position i */
-        multilistEntry entry;
-        if (!multiFenwickCellGet_(tree, i - 1, &entry)) {
-            return false;
-        }
+    steps = 0;
+    for (uint64_t i = idx + 1; i <= tree->capacity; i = multiFenwickParent(i)) {
+        const bool replaced = multilistReplaceByTypeAtIndex(
+            &tree->tree, tree->state, (mlNodeId)(i - 1), &planned[steps++]);
+        assert(replaced);
+        (void)replaced;
+    }
 
-        /* Add delta to current value
-         * databoxAdd handles type coercion automatically */
-        databox newVal;
-        if (!databoxAdd(&entry.box, delta, &newVal)) {
-            return false;
-        }
-
-        /* Update the multilist entry */
-        if (!multilistReplaceByTypeAtIndex(&tree->tree, tree->state, i - 1,
-                                           &newVal)) {
-            return false;
-        }
-
-        i = multiFenwickParent(i);
+    if (idx + 1 > tree->count) {
+        tree->count = idx + 1;
     }
 
     return true;
@@ -418,22 +432,15 @@ bool multiFenwickGet(const multiFenwick *mfw, size_t idx, databox *result) {
 
 /* Set single element to exact value */
 bool multiFenwickSet(multiFenwick **mfw, size_t idx, const databox *value) {
-    if (!mfw || !value || !multiFenwickIsNumeric_(value)) {
+    if (!mfw || !value || !multiFenwickIsNumeric_(value) ||
+        idx > MULTIFENWICK_INDEX_MAX) {
         return false;
     }
 
-    if (!*mfw) {
-        /* @own: caller; free=multiFenwickFree */
-        *mfw = multiFenwickNew();
-        if (!*mfw) {
-            return false;
-        }
-    }
-
-    /* Get current value */
+    /* Get current value (an absent tree or index is zero; Update creates
+     * the tree, so a refused Set leaves a NULL '*mfw' NULL) */
     databox current;
-    if (!multiFenwickGet(*mfw, idx, &current)) {
-        /* Index out of bounds - just use zero */
+    if (!*mfw || !multiFenwickGet(*mfw, idx, &current)) {
         current = databoxZeroLike(value);
     }
 
