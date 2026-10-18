@@ -716,162 +716,79 @@ DK_INLINE_ALWAYS int databoxCompareInteger128(const databox *a,
                                        databoxIntegerValueOf_(b));
 }
 
+/* The order of reals: the IEEE order, except that NaN sorts above +inf and
+ * equals only NaN (every NaN, whatever its sign or payload, is the same
+ * key).  -0.0 equals +0.0. */
+DK_INLINE_ALWAYS double databoxRealOf_(const databox *box) {
+    return box->type == DATABOX_FLOAT_32 ? (double)box->data.f32
+                                         : box->data.d64;
+}
+
 DK_INLINE_ALWAYS int databoxCompareFloat(const databox *a, const databox *b) {
-    const size_t aFloat = a->type == DATABOX_FLOAT_32;
-    const size_t bFloat = b->type == DATABOX_FLOAT_32;
-
-#if 1
-    const double useA = aFloat ? a->data.f32 : a->data.d64;
-    const double useB = bFloat ? b->data.f32 : b->data.d64;
-
-    _gtlteqReturn(useA, useB);
-#else
-    useA = a->data.d64;
-    useB = b->data.d64;
-
-    if (aFloat && bFloat) {
-        useA = a->data.f32;
-        useB = b->data.f32;
-    } else if (aFloat && !bFloat) {
-        useA = a->data.f32;
-    } else if (!aFloat && bFloat) {
-        useB = b->data.f32;
+    const double useA = databoxRealOf_(a);
+    const double useB = databoxRealOf_(b);
+    const bool aNaN = useA != useA;
+    const bool bNaN = useB != useB;
+    if (unlikely(aNaN || bNaN)) {
+        return (int)aNaN - (int)bNaN;
     }
 
     _gtlteqReturn(useA, useB);
-#endif
 }
 
-/*
-** Do a comparison between a 64-bit signed integer and a 64-bit floating-point
-** number.  Return negative, zero, or positive if the first (int64_t) is less
-** than, equal to, or greater than the second (double).
-*/
-/* Logic initially from sqlite3; adapted to databox+unsigned+float */
+/* An integer of any width against a real, by exact mathematical value: no
+ * conversion that can round.  NaN is above every integer. */
+DK_INLINE_ALWAYS int databoxCompareIntegerReal_(const databoxIntegerValue_ a,
+                                                const double r) {
+    if (unlikely(r != r)) {
+        return -1;
+    }
+
+    /* -0.0 is not below zero, so it takes the non-negative side. */
+    const bool rNegative = r < 0;
+    if (a.negative != rNegative) {
+        return a.negative ? -1 : 1;
+    }
+
+    /* Same side of zero: compare the magnitudes.  A magnitude of 2^128 or
+     * more (infinity included) is beyond every integer magnitude.  Below
+     * that, the conversion to an integer truncates exactly, and the
+     * truncated part converts back exactly, so the remainder is the
+     * fraction. */
+    const double rMagnitude = rNegative ? -r : r;
+    int cmp;
+    if (rMagnitude >= 0x1p128) {
+        cmp = -1;
+    } else {
+        const __uint128_t whole = (__uint128_t)rMagnitude;
+        if (a.magnitude != whole) {
+            cmp = a.magnitude < whole ? -1 : 1;
+        } else {
+            cmp = rMagnitude > (double)whole ? -1 : 0;
+        }
+    }
+
+    return a.negative ? -cmp : cmp;
+}
+
 DK_INLINE_ALWAYS int databoxCompareInt64Float(const databox *a,
                                               const databox *b) {
     assert(IS_INTEGER(a) && DATABOX_IS_FLOAT(b));
-
-    const bool aIsUnsigned = a->type == DATABOX_UNSIGNED_64;
-    const double r =
-        b->type == DATABOX_FLOAT_32 ? (double)b->data.f32 : b->data.d64;
-
-    /* Use the portable comparison helpers from floatExtended.h */
-    if (aIsUnsigned) {
-        return dk_compare_uint64_double(a->data.u, r);
-    }
-
-    return dk_compare_int64_double(a->data.i, r);
+    return databoxCompareIntegerReal_(databoxIntegerValueOf_(a),
+                                      databoxRealOf_(b));
 }
 
 DK_INLINE_ALWAYS int databoxCompareInt128Float(const databox *a,
                                                const databox *b) {
-    assert(IS_INTEGER(a) && DATABOX_IS_FLOAT(b));
+    assert(DATABOX_IS_FLOAT(b));
     databoxCompareRequirePayload_(a);
-
-    const bool aIsUnsigned =
-        (a->type == DATABOX_UNSIGNED_64) || (a->type == DATABOX_UNSIGNED_128);
-    const double r =
-        b->type == DATABOX_FLOAT_32 ? (double)b->data.f32 : b->data.d64;
-
-#if DK_HAS_FLOAT_EXTENDED
-    /* Extended precision path - can directly compare 128-bit integers with
-     * floats because dk_float_extended has enough mantissa bits. */
-    if (aIsUnsigned) {
-        const __uint128_t ua =
-            (a->type == DATABOX_UNSIGNED_64) ? a->data.u : *a->data.u128;
-        const dk_float_extended x = (dk_float_extended)ua;
-        const dk_float_extended y = (dk_float_extended)r;
-        _gtlteqReturn(x, y);
-    }
-
-    const __int128_t ia =
-        (a->type == DATABOX_SIGNED_64) ? a->data.i : *a->data.i128;
-    const dk_float_extended x = (dk_float_extended)ia;
-    const dk_float_extended y = (dk_float_extended)r;
-    _gtlteqReturn(x, y);
-#else
-    /* Fallback path - no extended precision available.
-     * We convert the float to __int128 and compare integer parts.
-     * This may lose fractional precision but maintains consistent ordering. */
-    if (aIsUnsigned) {
-        /* Negative double is always less than unsigned */
-        if (r < 0) {
-            return 1; /* a > b */
-        }
-
-        /* Check if double exceeds uint128 range */
-        if (r > (double)UINT128_MAX) {
-            return -1; /* a < b */
-        }
-
-        const __uint128_t ua =
-            (a->type == DATABOX_UNSIGNED_64) ? a->data.u : *a->data.u128;
-
-        /* Truncate double to integer for comparison.
-         * For ordering consistency, we compare integer parts first,
-         * then handle fractional part to break ties. */
-        const __uint128_t r_truncated = (__uint128_t)r;
-
-        if (ua < r_truncated) {
-            return -1;
-        }
-
-        if (ua > r_truncated) {
-            return 1;
-        }
-
-        /* Integer parts equal - check fractional part */
-        const double frac = r - (double)r_truncated;
-        if (frac > 0.0) {
-            return -1; /* a < b because b has positive fractional part */
-        }
-
-        return 0;
-    }
-
-    /* Signed path */
-    if (r < (double)INT128_MIN) {
-        return 1; /* a > b */
-    }
-
-    if (r > (double)INT128_MAX) {
-        return -1; /* a < b */
-    }
-
-    const __int128_t ia =
-        (a->type == DATABOX_SIGNED_64) ? a->data.i : *a->data.i128;
-
-    const __int128_t r_truncated = (__int128_t)r;
-
-    if (ia < r_truncated) {
-        return -1;
-    }
-
-    if (ia > r_truncated) {
-        return 1;
-    }
-
-    /* Integer parts equal - check fractional part */
-    const double frac = r - (double)r_truncated;
-    if (frac > 0.0) {
-        return -1; /* a < b */
-    }
-
-    if (frac < 0.0) {
-        return 1; /* a > b */
-    }
-
-    return 0;
-#endif
+    return databoxCompareIntegerReal_(databoxIntegerValueOf_(a),
+                                      databoxRealOf_(b));
 }
 
-int databoxCompare(const databox *restrict a, const databox *restrict b) {
-#if 1
-    if (IS_BYTES(a) && IS_BYTES(b)) {
-        return databoxCompareBytes(a, b);
-    }
-
+/* Both types are below c3bMAX_LT: the numeric jump table. */
+DK_INLINE_ALWAYS int databoxCompareNumeric_(const databox *restrict a,
+                                            const databox *restrict b) {
     /* Note: we use the 3 bit shift here instead of aligning the
      *       types to byte boundaries (i.e. c8b) because compilers
      *       generate more optimal code this way.
@@ -883,105 +800,103 @@ int databoxCompare(const databox *restrict a, const databox *restrict b) {
      *
      *       Also, DATABOX_SIGNED_128 and DATABOX_UNSIGNED_128 are in positions
      *       6 and 7 which still fill out the maximum 3 bits */
+    assert(a->type < (1 << 3));
+    assert(b->type < (1 << 3));
+    switch (c3b(a->type, b->type)) {
+    /* Common cases */
+    case c3b(DATABOX_UNSIGNED_64, DATABOX_UNSIGNED_64):
+    case c3b(DATABOX_UNSIGNED_64, DATABOX_SIGNED_64):
+    case c3b(DATABOX_SIGNED_64, DATABOX_UNSIGNED_64):
+    case c3b(DATABOX_SIGNED_64, DATABOX_SIGNED_64):
+        return databoxCompareInteger(a, b);
+    case c3b(DATABOX_FLOAT_32, DATABOX_FLOAT_32):
+    case c3b(DATABOX_FLOAT_32, DATABOX_DOUBLE_64):
+    case c3b(DATABOX_DOUBLE_64, DATABOX_FLOAT_32):
+    case c3b(DATABOX_DOUBLE_64, DATABOX_DOUBLE_64):
+        return databoxCompareFloat(a, b);
+    case c3b(DATABOX_UNSIGNED_64, DATABOX_FLOAT_32):
+    case c3b(DATABOX_UNSIGNED_64, DATABOX_DOUBLE_64):
+    case c3b(DATABOX_SIGNED_64, DATABOX_FLOAT_32):
+    case c3b(DATABOX_SIGNED_64, DATABOX_DOUBLE_64):
+        return databoxCompareInt64Float(a, b);
+    case c3b(DATABOX_FLOAT_32, DATABOX_UNSIGNED_64):
+    case c3b(DATABOX_FLOAT_32, DATABOX_SIGNED_64):
+    case c3b(DATABOX_DOUBLE_64, DATABOX_UNSIGNED_64):
+    case c3b(DATABOX_DOUBLE_64, DATABOX_SIGNED_64):
+        return -databoxCompareInt64Float(b, a);
+
+    /* Bigger cases */
+    case c3b(DATABOX_UNSIGNED_128, DATABOX_UNSIGNED_128):
+    case c3b(DATABOX_UNSIGNED_128, DATABOX_SIGNED_128):
+    case c3b(DATABOX_UNSIGNED_128, DATABOX_UNSIGNED_64):
+    case c3b(DATABOX_UNSIGNED_128, DATABOX_SIGNED_64):
+    case c3b(DATABOX_SIGNED_128, DATABOX_UNSIGNED_128):
+    case c3b(DATABOX_SIGNED_128, DATABOX_SIGNED_128):
+    case c3b(DATABOX_SIGNED_128, DATABOX_UNSIGNED_64):
+    case c3b(DATABOX_SIGNED_128, DATABOX_SIGNED_64):
+    case c3b(DATABOX_UNSIGNED_64, DATABOX_UNSIGNED_128):
+    case c3b(DATABOX_UNSIGNED_64, DATABOX_SIGNED_128):
+    case c3b(DATABOX_SIGNED_64, DATABOX_UNSIGNED_128):
+    case c3b(DATABOX_SIGNED_64, DATABOX_SIGNED_128):
+        return databoxCompareInteger128(a, b);
+    case c3b(DATABOX_UNSIGNED_128, DATABOX_FLOAT_32):
+    case c3b(DATABOX_UNSIGNED_128, DATABOX_DOUBLE_64):
+    case c3b(DATABOX_SIGNED_128, DATABOX_FLOAT_32):
+    case c3b(DATABOX_SIGNED_128, DATABOX_DOUBLE_64):
+        return databoxCompareInt128Float(a, b);
+    case c3b(DATABOX_FLOAT_32, DATABOX_UNSIGNED_128):
+    case c3b(DATABOX_FLOAT_32, DATABOX_SIGNED_128):
+    case c3b(DATABOX_DOUBLE_64, DATABOX_UNSIGNED_128):
+    case c3b(DATABOX_DOUBLE_64, DATABOX_SIGNED_128):
+        return -databoxCompareInt128Float(b, a);
+    default:
+#ifndef NDEBUG
+        printf("Attempted to compare: %" PRIu32 " and %" PRIu32 "?",
+               (uint32_t)a->type, (uint32_t)b->type);
+#endif
+        assert(NULL && "Either you tried to compare against DATABOX_VOID "
+                       "or we created new numeric types and didn't add "
+                       "corresponding comparison table entries.");
+        __builtin_unreachable();
+    }
+}
+
+/* DATABOX_PTR and DATABOX_CONTAINER_REFERENCE_EXTERNAL join the numeric
+ * class as UNSIGNED_64.  flex stores both as unsigned integers, so a stored
+ * and decoded pointer comes back UNSIGNED_64 and must order exactly like its
+ * live box; and the order stays transitive only if they compare by value
+ * against every numeric type, reals and 96/128-bit integers included. */
+DK_INLINE_ALWAYS bool databoxJoinsNumeric_(const databox *box) {
+    return (box->type >= DATABOX_SIGNED_64 && box->type <= DATABOX_DOUBLE_64) ||
+           box->type == DATABOX_PTR ||
+           box->type == DATABOX_CONTAINER_REFERENCE_EXTERNAL;
+}
+
+int databoxCompare(const databox *restrict a, const databox *restrict b) {
+#if 1
+    if (IS_BYTES(a) && IS_BYTES(b)) {
+        return databoxCompareBytes(a, b);
+    }
 
     /* Verify types of 'a' and 'b' are no larger than 3 bits each. */
     if (a->type < c3bMAX_LT && b->type < c3bMAX_LT) {
-        assert(a->type < (1 << 3));
-        assert(b->type < (1 << 3));
-        switch (c3b(a->type, b->type)) {
-        /* Common cases */
-        case c3b(DATABOX_UNSIGNED_64, DATABOX_UNSIGNED_64):
-        case c3b(DATABOX_UNSIGNED_64, DATABOX_SIGNED_64):
-        case c3b(DATABOX_SIGNED_64, DATABOX_UNSIGNED_64):
-        case c3b(DATABOX_SIGNED_64, DATABOX_SIGNED_64):
-            return databoxCompareInteger(a, b);
-        case c3b(DATABOX_FLOAT_32, DATABOX_FLOAT_32):
-        case c3b(DATABOX_FLOAT_32, DATABOX_DOUBLE_64):
-        case c3b(DATABOX_DOUBLE_64, DATABOX_FLOAT_32):
-        case c3b(DATABOX_DOUBLE_64, DATABOX_DOUBLE_64):
-            return databoxCompareFloat(a, b);
-        case c3b(DATABOX_UNSIGNED_64, DATABOX_FLOAT_32):
-        case c3b(DATABOX_UNSIGNED_64, DATABOX_DOUBLE_64):
-        case c3b(DATABOX_SIGNED_64, DATABOX_FLOAT_32):
-        case c3b(DATABOX_SIGNED_64, DATABOX_DOUBLE_64):
-            return databoxCompareInt64Float(a, b);
-        case c3b(DATABOX_FLOAT_32, DATABOX_UNSIGNED_64):
-        case c3b(DATABOX_FLOAT_32, DATABOX_SIGNED_64):
-        case c3b(DATABOX_DOUBLE_64, DATABOX_UNSIGNED_64):
-        case c3b(DATABOX_DOUBLE_64, DATABOX_SIGNED_64):
-            return -databoxCompareInt64Float(b, a);
-
-        /* Bigger cases */
-        case c3b(DATABOX_UNSIGNED_128, DATABOX_UNSIGNED_128):
-        case c3b(DATABOX_UNSIGNED_128, DATABOX_SIGNED_128):
-        case c3b(DATABOX_UNSIGNED_128, DATABOX_UNSIGNED_64):
-        case c3b(DATABOX_UNSIGNED_128, DATABOX_SIGNED_64):
-        case c3b(DATABOX_SIGNED_128, DATABOX_UNSIGNED_128):
-        case c3b(DATABOX_SIGNED_128, DATABOX_SIGNED_128):
-        case c3b(DATABOX_SIGNED_128, DATABOX_UNSIGNED_64):
-        case c3b(DATABOX_SIGNED_128, DATABOX_SIGNED_64):
-        case c3b(DATABOX_UNSIGNED_64, DATABOX_UNSIGNED_128):
-        case c3b(DATABOX_UNSIGNED_64, DATABOX_SIGNED_128):
-        case c3b(DATABOX_SIGNED_64, DATABOX_UNSIGNED_128):
-        case c3b(DATABOX_SIGNED_64, DATABOX_SIGNED_128):
-            return databoxCompareInteger128(a, b);
-        case c3b(DATABOX_UNSIGNED_128, DATABOX_FLOAT_32):
-        case c3b(DATABOX_UNSIGNED_128, DATABOX_DOUBLE_64):
-        case c3b(DATABOX_SIGNED_128, DATABOX_FLOAT_32):
-        case c3b(DATABOX_SIGNED_128, DATABOX_DOUBLE_64):
-            return databoxCompareInt128Float(a, b);
-        case c3b(DATABOX_FLOAT_32, DATABOX_UNSIGNED_128):
-        case c3b(DATABOX_FLOAT_32, DATABOX_SIGNED_128):
-        case c3b(DATABOX_DOUBLE_64, DATABOX_UNSIGNED_128):
-        case c3b(DATABOX_DOUBLE_64, DATABOX_SIGNED_128):
-            return -databoxCompareInt128Float(b, a);
-        default:
-#ifndef NDEBUG
-            printf("Attempted to compare: %" PRIu32 " and %" PRIu32 "?",
-                   (uint32_t)a->type, (uint32_t)b->type);
-#endif
-            assert(NULL && "Either you tried to compare against DATABOX_VOID "
-                           "or we created new numeric types and didn't add "
-                           "corresponding comparison table entries.");
-            __builtin_unreachable();
-        }
+        return databoxCompareNumeric_(a, b);
     } else {
-        /* This looks weird since we have that big jump table for
-         * numeric type compares above, but IS_INTEGER
-         * checks for (IS_SIGNED, IS_UNSIGNED, IS_REFERENCE) while the
-         * above switch only checks for (IS_SIGNED, IS_UNSIGNED).
-         *
-         * We don't want to pollute the above jump table with
-         * 2^3 integer cases per function when 2^2 signed/unsigned combinations
-         * are more likely.
-         * So, if we fell through to here, check one more time: */
-        /* Type-order architecture: the NUMERIC class cross-compares by
-         * value (the jump table above); everything else compares equal
-         * only to its own type and mismatches sort by the global type
-         * order (below). DATABOX_PTR is a deliberate exception that
-         * JOINS the numeric class as DATABOX_UNSIGNED_64 (raw pointer
-         * bits): flex storage already coerces PTR to unsigned, so a
-         * stored-then-decoded pointer comes back UNSIGNED_64 and must
-         * order identically against its own live PTR box or a
-         * container disagrees with itself. Joining the existing
-         * integer total order (rather than PTR-only special cases)
-         * keeps mixed comparisons transitive. */
-        const bool aPtr = DATABOX_IS_PTR(a);
-        const bool bPtr = DATABOX_IS_PTR(b);
-        if ((aPtr || IS_INTEGER(a)) && (bPtr || IS_INTEGER(b))) {
-            if (!aPtr && !bPtr) {
-                return databoxCompareInteger(a, b);
-            }
-
+        /* Type-order architecture: the numeric class cross-compares by
+         * value; everything else compares equal only to its own type, and
+         * mismatches sort by the global type order (below). */
+        if (databoxJoinsNumeric_(a) && databoxJoinsNumeric_(b)) {
             databox aa = *a;
             databox bb = *b;
-            if (aPtr) {
+            if (aa.type >= c3bMAX_LT) {
                 aa.type = DATABOX_UNSIGNED_64;
             }
-            if (bPtr) {
+
+            if (bb.type >= c3bMAX_LT) {
                 bb.type = DATABOX_UNSIGNED_64;
             }
-            return databoxCompareInteger(&aa, &bb);
+
+            return databoxCompareNumeric_(&aa, &bb);
         }
 
         /* If types are the same by this point, we
@@ -1600,6 +1515,117 @@ static uint64_t dbCanonNext_(uint64_t *state) {
     x ^= x << 17;
     *state = x;
     return x;
+}
+
+/* Exact-value oracle for the numeric order, built from bit patterns rather
+ * than floating-point arithmetic.  A finite value is (-1)^negative *
+ * mantissa * 2^exponent, zero is never negative, and the ranks place -inf
+ * below every finite value, then +inf, then NaN. */
+typedef struct dbOrderValue_ {
+    int rank; /* 0 -inf, 1 finite, 2 +inf, 3 NaN */
+    bool negative;
+    __uint128_t mantissa;
+    int exponent;
+} dbOrderValue_;
+
+static dbOrderValue_ dbOrderOfDouble_(double d) {
+    uint64_t bits;
+    memcpy(&bits, &d, sizeof(bits));
+    const bool sign = bits >> 63;
+    const uint32_t biased = (uint32_t)((bits >> 52) & 0x7FF);
+    const uint64_t fraction = bits & ((UINT64_C(1) << 52) - 1);
+    dbOrderValue_ v = {.rank = 1};
+    if (biased == 0x7FF) {
+        v.rank = fraction ? 3 : (sign ? 0 : 2);
+        return v;
+    }
+
+    if (biased == 0) {
+        v.mantissa = fraction;
+        v.exponent = -1074;
+    } else {
+        v.mantissa = fraction | (UINT64_C(1) << 52);
+        v.exponent = (int)biased - 1075;
+    }
+
+    v.negative = sign && v.mantissa != 0;
+    return v;
+}
+
+static dbOrderValue_ dbOrderOf_(const databox *box) {
+    dbOrderValue_ v = {.rank = 1};
+    switch (box->type) {
+    case DATABOX_FLOAT_32:
+        return dbOrderOfDouble_((double)box->data.f32);
+    case DATABOX_DOUBLE_64:
+        return dbOrderOfDouble_(box->data.d64);
+    case DATABOX_SIGNED_64:
+        v.negative = box->data.i < 0;
+        v.mantissa = v.negative ? (__uint128_t)(-(box->data.i + 1)) + 1
+                                : (__uint128_t)box->data.i;
+        return v;
+    case DATABOX_SIGNED_128: {
+        const __int128_t i = *box->data.i128;
+        v.negative = i < 0;
+        v.mantissa = v.negative ? (__uint128_t)(-(i + 1)) + 1 : (__uint128_t)i;
+        return v;
+    }
+    case DATABOX_UNSIGNED_128:
+        v.mantissa = *box->data.u128;
+        return v;
+    default: /* UNSIGNED_64, PTR, REFERENCE */
+        v.mantissa = box->data.u;
+        return v;
+    }
+}
+
+static int dbOrderBits_(__uint128_t m) {
+    int bits = 0;
+    while (m) {
+        bits++;
+        m >>= 1;
+    }
+
+    return bits;
+}
+
+static int dbOrderCompare_(const dbOrderValue_ *a, const dbOrderValue_ *b) {
+    if (a->rank != b->rank) {
+        return a->rank < b->rank ? -1 : 1;
+    }
+
+    if (a->rank != 1) {
+        return 0; /* the same infinity, or two NaNs */
+    }
+
+    if (a->negative != b->negative) {
+        return a->negative ? -1 : 1;
+    }
+
+    /* Compare magnitudes: zero first, then by binary length, then aligned. */
+    int cmp;
+    if (a->mantissa == 0 || b->mantissa == 0) {
+        cmp = (a->mantissa != 0) - (b->mantissa != 0);
+    } else {
+        const int aLen = dbOrderBits_(a->mantissa) + a->exponent;
+        const int bLen = dbOrderBits_(b->mantissa) + b->exponent;
+        if (aLen != bLen) {
+            cmp = aLen < bLen ? -1 : 1;
+        } else {
+            /* Equal lengths: shift the shorter mantissa up to the longer's
+             * width; neither then exceeds 128 bits. */
+            __uint128_t am = a->mantissa;
+            __uint128_t bm = b->mantissa;
+            if (a->exponent > b->exponent) {
+                am <<= (a->exponent - b->exponent);
+            } else {
+                bm <<= (b->exponent - a->exponent);
+            }
+            cmp = am < bm ? -1 : am > bm ? 1 : 0;
+        }
+    }
+
+    return a->negative ? -cmp : cmp;
 }
 
 int databoxTest(int argc, char *argv[]) {
@@ -3335,6 +3361,207 @@ int databoxTest(int argc, char *argv[]) {
             ERR("%zu integer boxes in the matrix, expected 67", count);
         }
         printf("    %zu boxes, %zu ordered pairs\n", count, pairs);
+    }
+
+    TEST("databoxCompare: the numeric order is a strict weak order") {
+        /* Integers of every width, reals near the 2^24, 2^53, 2^63, 2^64
+         * and 2^128 boundaries, +/-0, +/-inf, NaNs with different signs and
+         * payloads, and the pointer types that join the unsigned order.
+         * Every pair must agree with the exact-value oracle, and the
+         * matrix of results must be reflexive, antisymmetric and
+         * transitive. */
+        databoxBig corpus[96];
+        size_t n = 0;
+#define DB_ORDER_ADD(box)                                                      \
+    do {                                                                       \
+        memset(&corpus[n], 0, sizeof(corpus[n]));                              \
+        const databox one_ = (box);                                            \
+        memcpy(&corpus[n], &one_, sizeof(one_));                               \
+        n++;                                                                   \
+    } while (0)
+#define DB_ORDER_ADD_I128(v)                                                   \
+    do {                                                                       \
+        memset(&corpus[n], 0, sizeof(corpus[n]));                              \
+        DATABOX_BIG_SIGNED_128(&corpus[n], (v));                               \
+        n++;                                                                   \
+    } while (0)
+#define DB_ORDER_ADD_U128(v)                                                   \
+    do {                                                                       \
+        memset(&corpus[n], 0, sizeof(corpus[n]));                              \
+        DATABOX_BIG_UNSIGNED_128(&corpus[n], (v));                             \
+        n++;                                                                   \
+    } while (0)
+#define DB_ORDER_ADD_BITS64(bits)                                              \
+    do {                                                                       \
+        const uint64_t b_ = (bits);                                            \
+        double d_;                                                             \
+        memcpy(&d_, &b_, sizeof(d_));                                          \
+        DB_ORDER_ADD(DATABOX_DOUBLE(d_));                                      \
+    } while (0)
+#define DB_ORDER_ADD_FLOAT(f)                                                  \
+    do {                                                                       \
+        databox f_ = {{0}};                                                    \
+        DATABOX_SET_FLOAT(&f_, (f));                                           \
+        DB_ORDER_ADD(f_);                                                      \
+    } while (0)
+
+        const int64_t two53 = INT64_C(1) << 53;
+        const int64_t signeds[] = {0,
+                                   1,
+                                   -1,
+                                   2,
+                                   two53 - 1,
+                                   two53,
+                                   two53 + 1,
+                                   -two53,
+                                   -two53 - 1,
+                                   INT64_MAX,
+                                   INT64_MAX - 1023,
+                                   INT64_MIN,
+                                   INT64_MIN + 1,
+                                   16777217};
+        for (size_t i = 0; i < COUNT_ARRAY(signeds); i++) {
+            DB_ORDER_ADD(databoxNewSigned(signeds[i]));
+        }
+
+        const uint64_t unsigneds[] = {UINT64_C(9223372036854775808),
+                                      UINT64_C(9223372036854775809), UINT64_MAX,
+                                      UINT64_MAX - 2047, 5};
+        for (size_t i = 0; i < COUNT_ARRAY(unsigneds); i++) {
+            DB_ORDER_ADD(databoxNewUnsigned(unsigneds[i]));
+        }
+
+        const __int128_t two64 = (__int128_t)1 << 64;
+        DB_ORDER_ADD_U128((__uint128_t)two64);
+        DB_ORDER_ADD_U128((__uint128_t)two64 + 1);
+        DB_ORDER_ADD_U128((__uint128_t)1 << 100);
+        DB_ORDER_ADD_U128(UINT128_MAX);
+        DB_ORDER_ADD_U128((__uint128_t)1 << 127);
+        DB_ORDER_ADD_U128(7);
+        DB_ORDER_ADD_I128(-two64);
+        DB_ORDER_ADD_I128(-two64 - 1);
+        DB_ORDER_ADD_I128(INT128_MIN);
+        DB_ORDER_ADD_I128(INT128_MAX);
+        DB_ORDER_ADD_I128(-((__int128_t)1 << 100));
+        DB_ORDER_ADD_I128(-7);
+
+        const double doubles[] = {0.5,
+                                  -0.5,
+                                  0.1,
+                                  1.0,
+                                  2.0,
+                                  7.0,
+                                  9007199254740992.0, /* 2^53 */
+                                  9007199254740994.0, /* 2^53 + 2 */
+                                  -9007199254740992.0,
+                                  9223372036854775808.0,  /* 2^63 */
+                                  -9223372036854775808.0, /* -2^63 */
+                                  18446744073709551616.0, /* 2^64 */
+                                  18446744073709549568.0, /* 2^64 - 2048 */
+                                  0x1p100,
+                                  -0x1p100,
+                                  0x1p127,
+                                  0x1p128,
+                                  -0x1p127,
+                                  -0x1p128,
+                                  1e300,
+                                  -1e300,
+                                  4.9e-324,
+                                  -4.9e-324};
+        for (size_t i = 0; i < COUNT_ARRAY(doubles); i++) {
+            DB_ORDER_ADD(DATABOX_DOUBLE(doubles[i]));
+        }
+
+        DB_ORDER_ADD_FLOAT(0.5f);
+        DB_ORDER_ADD_FLOAT(16777216.0f);
+        DB_ORDER_ADD_FLOAT(-3.25f);
+        DB_ORDER_ADD_FLOAT(0.1f);
+        DB_ORDER_ADD_FLOAT(0.0f);
+        DB_ORDER_ADD_FLOAT(-0.0f);
+        DB_ORDER_ADD_FLOAT(__builtin_inff());
+        DB_ORDER_ADD_FLOAT(-__builtin_inff());
+        DB_ORDER_ADD_FLOAT(__builtin_nanf(""));
+        DB_ORDER_ADD_BITS64(UINT64_C(0x0000000000000000)); /* +0.0 */
+        DB_ORDER_ADD_BITS64(UINT64_C(0x8000000000000000)); /* -0.0 */
+        DB_ORDER_ADD_BITS64(UINT64_C(0x7FF0000000000000)); /* +inf */
+        DB_ORDER_ADD_BITS64(UINT64_C(0xFFF0000000000000)); /* -inf */
+        DB_ORDER_ADD_BITS64(UINT64_C(0x7FF8000000000000)); /* quiet NaN */
+        DB_ORDER_ADD_BITS64(UINT64_C(0xFFF8000000000000)); /* -NaN */
+        DB_ORDER_ADD_BITS64(UINT64_C(0x7FF0000000000001)); /* payload NaN */
+        DB_ORDER_ADD_BITS64(UINT64_C(0xFFFFFFFFFFFFFFFF)); /* all-ones NaN */
+
+        static const char pointee[2] = "p";
+        DB_ORDER_ADD(databoxNewPtr(NULL));
+        DB_ORDER_ADD(databoxNewPtr((void *)(uintptr_t)5));
+        DB_ORDER_ADD(databoxNewPtr((void *)pointee));
+        databox reference = {{0}};
+        reference.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL;
+        reference.data.u = 7;
+        DB_ORDER_ADD(reference);
+        reference.data.u = UINT64_MAX;
+        DB_ORDER_ADD(reference);
+#undef DB_ORDER_ADD_FLOAT
+#undef DB_ORDER_ADD_BITS64
+#undef DB_ORDER_ADD_U128
+#undef DB_ORDER_ADD_I128
+#undef DB_ORDER_ADD
+        assert(n <= COUNT_ARRAY(corpus));
+
+        int8_t got[COUNT_ARRAY(corpus)][COUNT_ARRAY(corpus)];
+        size_t mismatches = 0;
+        for (size_t i = 0; i < n; i++) {
+            const dbOrderValue_ oi = dbOrderOf_((const databox *)&corpus[i]);
+            for (size_t j = 0; j < n; j++) {
+                const dbOrderValue_ oj =
+                    dbOrderOf_((const databox *)&corpus[j]);
+                const int c = databoxCompare((const databox *)&corpus[i],
+                                             (const databox *)&corpus[j]);
+                got[i][j] = (int8_t)((c > 0) - (c < 0));
+                const int want = dbOrderCompare_(&oi, &oj);
+                if (got[i][j] != want && mismatches++ < 20) {
+                    printf("    %s against ",
+                           databoxReprStr((const databox *)&corpus[i]));
+                    ERR("%s gave %d, expected %d",
+                        databoxReprStr((const databox *)&corpus[j]),
+                        (int)got[i][j], want);
+                }
+            }
+        }
+
+        if (mismatches) {
+            ERR("%zu pairs disagree with the oracle", mismatches);
+        }
+
+        size_t violations = 0;
+        for (size_t i = 0; i < n; i++) {
+            if (got[i][i] != 0) {
+                violations++;
+            }
+
+            for (size_t j = 0; j < n; j++) {
+                if (got[i][j] != -got[j][i]) {
+                    violations++;
+                }
+
+                for (size_t k = 0; k < n; k++) {
+                    /* a <= b <= c implies a <= c, strictly if either step
+                     * is strict. */
+                    if (got[i][j] <= 0 && got[j][k] <= 0) {
+                        const int want =
+                            (got[i][j] < 0 || got[j][k] < 0) ? -1 : 0;
+                        if (got[i][k] != want) {
+                            violations++;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (violations) {
+            ERR("%zu strict-weak-order violations over %zu values", violations,
+                n);
+        }
+        printf("    %zu values, %zu ordered pairs\n", n, n * n);
     }
 
     TEST("databoxCanonicalNumeral: the canonical-numeral table") {

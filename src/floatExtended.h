@@ -224,7 +224,11 @@ static inline int dk_compare_int64_double(int64_t i, double d) {
 
     /* Handle special float values */
     if (d != d) { /* NaN */
-        return 1; /* NaN compares as greater (arbitrary but consistent) */
+        /* The integer compares greater than NaN here, while the extended
+         * path above reports them equal, so NaN results differ by
+         * platform.  databoxCompare orders NaN itself and does not use
+         * these helpers. */
+        return 1;
     }
 
     /* Check double range against int64 limits.
@@ -303,7 +307,7 @@ static inline int dk_compare_uint64_double(uint64_t u, double d) {
     /* Fallback path - handle edge cases explicitly */
 
     /* Handle special float values */
-    if (d != d) { /* NaN */
+    if (d != d) { /* NaN: as in dk_compare_int64_double */
         return 1;
     }
 

@@ -650,11 +650,20 @@ assert(databoxCompare(&n1, &n2) < 0);
   `"120abc" < "120zzz"`. The ordering is a strict total order (run-length
   first is transitive), which is what makes it safe as the binary-search
   comparator inside flex and multimap.
-- **Numeric vs numeric** — signed, unsigned, 128-bit, float, and double all
-  cross-compare by value, in either direction, without precision loss.
-- **`DATABOX_PTR`** — joins the unsigned integer order (raw pointer bits),
-  because flex storage decodes stored pointers back as `DATABOX_UNSIGNED_64`
-  and a container must not disagree with itself.
+- **Numeric vs numeric** — signed, unsigned, 96/128-bit, float, and double
+  all cross-compare by exact mathematical value, in either direction, on every
+  platform: an integer above 2^53 against a double never goes through a
+  rounding conversion. The order is a strict weak order:
+  - `-0.0` equals `+0.0` (and the integer 0);
+  - `-inf` and `+inf` sit below and above every finite value;
+  - NaN sorts above `+inf` and equals only NaN. Every NaN, whatever its sign
+    or payload, float or double, is the same value.
+- **`DATABOX_PTR`** and **`DATABOX_CONTAINER_REFERENCE_EXTERNAL`** — join
+  the numeric class as unsigned integers (raw pointer bits, or the
+  reference id), against every numeric type. flex stores a pointer as an
+  unsigned integer and decodes it back as `DATABOX_UNSIGNED_64`, and a
+  container must not disagree with itself; joining the whole numeric class,
+  reals included, keeps the order transitive.
 - **Everything else** (`TRUE`, `FALSE`, `NULL`, bytes-vs-number, …) — equal
   only to its own type; mismatched types sort by the global type order.
 
