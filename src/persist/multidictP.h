@@ -75,15 +75,20 @@ uint64_t multidictBytesP(const multidictP *d);
  * ============================================================================
  */
 
-/* Add key-value pair - returns result code */
+/* Each mutation returns exactly what its multidict counterpart returns
+ * for the same dict state, and its WAL record replays to the same result.
+ *
+ * Add or replace a key-value pair, as multidictAdd */
 multidictResult multidictAddP(multidictP *d, const databox *key,
                               const databox *val);
 
-/* Replace value for key (insert if not exists) */
+/* Replace the value of a present key, as multidictReplace does: returns
+ * MULTIDICT_OK_REPLACED, or MULTIDICT_ERR (logging nothing) when the key
+ * is absent.  Use multidictAddP to insert or replace. */
 multidictResult multidictReplaceP(multidictP *d, const databox *key,
                                   const databox *val);
 
-/* Delete by key - returns true if found and deleted */
+/* Delete by key, as multidictDelete: true if found and deleted */
 bool multidictDeleteP(multidictP *d, const databox *key);
 
 /* Clear all entries */
