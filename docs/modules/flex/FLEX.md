@@ -941,13 +941,15 @@ is also the stride the binary search uses, so passing the wrong value
 searches the wrong positions rather than merely returning "not found".
 
 The searches, the sorted inserts built on them, and `flexCompareEntries`
-decode each probed element with `flexGetByTypeBig`, so sorted flexes
+decode each probed element into a plain `databox` with a stack
+`databoxWide` slot (the `flexGetByTypeInto` decode), so sorted flexes
 (multimap keys, sorted-set scores) order and find 96/128-bit elements like
 any other number, including in full-width compares where a narrow element
-is followed by a wide one. One limit: an element resolved through a
+is followed by a wide one. Narrow elements never touch the slot, so the
+probe costs what a plain decode does. An element resolved through a
 `multimapAtom` reference container (`...WithReference`) to a 96/128-bit
-value comes back type-only, which `databoxCompare` cannot order, so
-reference-mapped sorted flexes must not atomize wide values.
+value lands in the same slot, so reference-mapped sorted flexes may atomize
+wide values too.
 
 ### Search Examples
 

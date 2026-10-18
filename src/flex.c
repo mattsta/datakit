@@ -4049,37 +4049,6 @@ bool flexGetNextByType(flex *const f, flexEntry **const fe, databox *box) {
     return true;
 }
 
-/* Capability-owning decode shared by flexGetByTypeBig and the sorted
- * search probes.  Every header field of 'box' is reset first, so stale
- * 'allocated', 'len' or 'big' bits in the destination never survive, and
- * the pointer is aimed at the box's own 'extra' so a wide value has
- * somewhere to land.  'big' is kept only when the result is wide.
- *
- * A reference entry decodes to a narrow reference id, which overwrites
- * the pointer, so 'big' is cleared before the id is resolved through
- * 'referenceContainer'.  A 96/128-bit value resolved that way is
- * therefore reported type-only instead of written through the id. */
-DK_INLINE_ALWAYS void
-flexGetByTypeBigResolve_(const flexEntry *const fe, databoxBig *const box,
-                         const bool useReference,
-                         const multimapAtom *const referenceContainer) {
-    box->type = DATABOX_VOID;
-    box->allocated = false;
-    box->created = false;
-    box->unused = 0;
-    box->len = 0;
-    DATABOX_BIG_INIT(box);
-
-    flexGetByType(fe, (databox *)box);
-    if (useReference && box->type == DATABOX_CONTAINER_REFERENCE_EXTERNAL) {
-        box->big = false;
-        multimapAtomLookupConvert(referenceContainer, (databox *)box);
-    }
-
-    box->big =
-        box->type == DATABOX_SIGNED_128 || box->type == DATABOX_UNSIGNED_128;
-}
-
 void flexGetByTypeBig(const flexEntry *const fe, databoxBig *box) {
     /* Clear every header bit so the result never depends on the box's
      * prior state, then decode with 'extra' as the slot. */
@@ -4100,11 +4069,14 @@ bool flexGetNextByTypeBig(flex *const f, flexEntry **const fe,
     return true;
 }
 
+/* flexGetSigned and flexGetUnsigned only need to know that a value is
+ * wide, never its payload, so they decode with no slot: a wide value
+ * comes back deferred and nothing is written for it. */
 bool flexGetSigned(flexEntry *fe, int64_t *value) {
-    databoxBig box;
-    flexGetByTypeBig(fe, &box);
+    databox box;
+    flexGetByTypeInto(fe, &box, NULL);
 
-    if (box.big) {
+    if (box.type == DATABOX_SIGNED_128 || box.type == DATABOX_UNSIGNED_128) {
         /* Stored wide means the value does not fit 64 bits. */
         return false;
     }
@@ -4120,10 +4092,10 @@ bool flexGetSigned(flexEntry *fe, int64_t *value) {
 }
 
 bool flexGetUnsigned(flexEntry *fe, uint64_t *value) {
-    databoxBig box;
-    flexGetByTypeBig(fe, &box);
+    databox box;
+    flexGetByTypeInto(fe, &box, NULL);
 
-    if (box.big) {
+    if (box.type == DATABOX_SIGNED_128 || box.type == DATABOX_UNSIGNED_128) {
         /* Stored wide means the value does not fit 64 bits. */
         return false;
     }
@@ -4645,10 +4617,12 @@ DK_INLINE_ALWAYS flexEntry *abstractFindPositionByTypeSortedDirect(
         /* Move 'fe' up or down by following next/prev entries. */
         moveByOffsets_(mid, elementsPerEntry, fe, prevOffsetIndexPhysical);
 
-        /* The probe is a library temporary, so it carries its own wide
-         * storage: flexGetByTypeBigResolve_ sets it up for each decode,
-         * because a narrow element overwrites the payload pointer. */
-        databoxBig box;
+        /* The probe is a plain box plus a stack slot.  Narrow elements
+         * decode straight into the box and never touch 'wide'; a 96/128-bit
+         * element (stored, or resolved through 'referenceContainer') lands
+         * in 'wide', so databoxCompare always sees a full value. */
+        databox box;
+        databoxWide wide;
 
 /* TODO: test speed difference of:
  *         - single key lookup
@@ -4730,11 +4704,13 @@ DK_INLINE_ALWAYS flexEntry *abstractFindPositionByTypeSortedDirect(
         flexEntry *walkingFE = fe;
         /* TODO: make this a do-while? */
         for (uint_fast32_t i = 0; i < compareElementDepth; i++) {
-            flexGetByTypeBigResolve_(walkingFE, &box, useReference,
-                                     referenceContainer);
+            const flexEncoding probed =
+                flexDecode_(walkingFE, &box, &wide, FLEX_WIDE_STORE_SLOT_);
+            if (useReference && FLEX_IS_REF_EXTERNAL(probed)) {
+                flexResolveReferenceInto_(&box, &wide, referenceContainer);
+            }
 
-            const int compared =
-                databoxCompare((databox *)&box, compareAgainst[i]);
+            const int compared = databoxCompare(&box, compareAgainst[i]);
             if (compared < 0) {
                 /* current key < search box */
                 min = mid + 1;
@@ -5300,11 +5276,13 @@ int flexCompareEntries(const flex *const f,
                        const uint_fast32_t elementsPerEntry,
                        const int_fast32_t offset) {
     flexEntry *fCompare = flexIndex(f, offset * elementsPerEntry);
-    databoxBig box;
+    /* A plain box plus a stack slot, as in the sorted-search probe. */
+    databox box;
+    databoxWide wide;
 
     for (uint_fast32_t i = 0; i < elementsPerEntry; i++) {
-        flexGetByTypeBig(fCompare, &box);
-        const int compared = databoxCompare((const databox *)&box, elements[i]);
+        flexDecode_(fCompare, &box, &wide, FLEX_WIDE_STORE_SLOT_);
+        const int compared = databoxCompare(&box, elements[i]);
 
         /* If equal and not at last element, check next deeper element. */
         if (compared == 0 && ((i + 1) < elementsPerEntry)) {
@@ -7719,6 +7697,82 @@ static uint64_t flexTestWideRand(uint64_t *state) {
 /* Sorted insert and find over 64 distinct 96/128-bit keys mixed with
  * 64-bit keys, against a qsort oracle; then a 2-element map whose
  * duplicate narrow keys are ordered by wide values. */
+/* Sorted [reference, value] rows whose keys are atoms for 96/128-bit and
+ * narrow values.  Every insert and find probes through the reference
+ * container, so each probe resolves a wide atom into the probe's slot;
+ * a type-only resolve would make databoxCompare read through NULL. */
+static int32_t flexTestWideReferenceSorted(void) {
+    int32_t bad = 0;
+    enum { NARROW_REF_KEYS = 4, REF_KEYS_MAX = 16 };
+    flexTestWide keys[REF_KEYS_MAX];
+    size_t n = flexTestWideFixedSet(keys);
+    keys[n++] = flexTestWideS(-5);
+    keys[n++] = flexTestWideU(7);
+    keys[n++] = flexTestWideU((uint64_t)1 << 40);
+    keys[n++] = flexTestWideS(INT64_MIN);
+    assert(n <= REF_KEYS_MAX);
+
+    cleaner(multimapAtomFree) multimapAtom *atoms = multimapAtomNew();
+    cleaner(flexFree) flex *f = flexNew();
+    flexEntry *middle = f + FLEX_EMPTY_SIZE;
+
+    /* Insert in a fixed scrambled order (7 is coprime with n). */
+    for (size_t i = 0; i < n; i++) {
+        const size_t k = (i * 7) % n;
+        databoxBig key;
+        flexTestWideBox(keys[k], false, &key);
+        databox ref = *(const databox *)&key;
+        multimapAtomInsertConvert(atoms, &ref);
+        const databox val = databoxNewUnsigned(k);
+        const databox *row[2] = {(const databox *)&key, &val};
+        flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKey(
+            &f, 2, row, &ref, &middle, true, atoms);
+    }
+
+    if (flexCount(f) != 2 * n) {
+        printf("  FAIL: reference-sorted flex holds %zu of %zu elements\n",
+               flexCount(f), 2 * n);
+        return bad + 1;
+    }
+
+    /* Keys resolve in ascending order. */
+    flexTestWide sorted[REF_KEYS_MAX];
+    memcpy(sorted, keys, n * sizeof(keys[0]));
+    qsort(sorted, n, sizeof(sorted[0]), flexTestWideCmp);
+    size_t i = 0;
+    for (flexEntry *fe = flexHeadIfAny(f); fe && i < n;
+         fe = flexNext(f, flexNext(f, fe)), i++) {
+        databox got;
+        databoxWide slot;
+        flexGetByTypeIntoWithReference(fe, &got, &slot, atoms);
+        if (!flexTestWideMatches(&got, sorted[i])) {
+            printf("  FAIL: reference-sorted position %zu holds the wrong "
+                   "key\n",
+                   i);
+            bad++;
+        }
+    }
+
+    /* Every key is found through the references, with its own value. */
+    for (i = 0; i < n; i++) {
+        databoxBig key;
+        flexTestWideBox(keys[i], true, &key);
+        flexEntry *const found = flexFindByTypeSortedWithMiddleWithReference(
+            f, 2, (const databox *)&key, middle, atoms);
+        databox val = {{0}};
+        if (found) {
+            flexGetByType(flexNext(f, found), &val);
+        }
+
+        if (!found || val.type != DATABOX_UNSIGNED_64 || val.data.u64 != i) {
+            printf("  FAIL: reference-sorted find of key %zu\n", i);
+            bad++;
+        }
+    }
+
+    return bad;
+}
+
 static int32_t flexTestWideSorted(void) {
     int32_t bad = 0;
     enum { WIDE_KEYS = 64, NARROW_KEYS = 16, KEYS = WIDE_KEYS + NARROW_KEYS };
@@ -9129,6 +9183,16 @@ int32_t flexTest(int32_t argc, char **argv) {
         const int32_t bad = flexTestWideSorted();
         if (bad) {
             printf("  FAIL: %" PRId32 " wide sorted checks\n", bad);
+            return bad;
+        }
+        printf("  ok\n");
+    }
+
+    printf("Verify reference-sorted probes resolve 96/128-bit atoms:\n");
+    {
+        const int32_t bad = flexTestWideReferenceSorted();
+        if (bad) {
+            printf("  FAIL: %" PRId32 " wide reference checks\n", bad);
             return bad;
         }
         printf("  ok\n");
