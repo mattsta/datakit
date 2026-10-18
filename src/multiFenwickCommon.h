@@ -28,8 +28,10 @@ static inline uint64_t multiFenwickPrev(uint64_t idx) {
     return idx - multiFenwickLSB(idx);
 }
 
-/* Databox arithmetic operations for Fenwick tree accumulation
- * These handle type-specific addition and subtraction */
+/* Standalone databox arithmetic helpers.  The tree does not sum with
+ * these: multiFenwick.c keeps exact integer parts and double floating
+ * parts (see multiFenwickNum there).  These remain as simple, typed
+ * helpers, which the tests also use to build oracles. */
 
 /* Extract numeric value from databox as double (universal representation)
  * Returns true on success */

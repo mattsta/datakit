@@ -21,7 +21,7 @@
  * ------------
  * - Supports any numeric databox type (SIGNED_64, UNSIGNED_64, FLOAT_32,
  * DOUBLE_64)
- * - No datatype decay - maintains precision of chosen type
+ * - Integer sums are exact; floating sums run in double precision
  * - Uses multilist for efficient storage
  * - Same O(log n) performance as standard fenwick
  * - Tiered architecture for optimal memory usage
@@ -91,31 +91,56 @@
  * -------------
  * NOT thread-safe. External synchronization required.
  *
- * TYPE CONSISTENCY
- * ----------------
- * All databox values should use the same numeric type for consistent
- * behavior. Mixing types (e.g., int64_t and double) is supported but
- * may produce unexpected results due to type coercion.
+ * VALUES
+ * ------
+ * Accepted: SIGNED_64, UNSIGNED_64, and finite FLOAT_32 or DOUBLE_64.
+ * Every other input is refused, before anything changes: VOID, BYTES,
+ * booleans, pointers, containers, 96/128-bit values (SIGNED_128,
+ * UNSIGNED_128), NaN and +/-infinity.  Update and Set return false,
+ * NewFromArray returns NULL and LowerBound returns SIZE_MAX, so nothing
+ * else is ever stored or returned.
  *
- * Integer sums and differences are exact over SIGNED_64 / UNSIGNED_64.
- * Storage keeps integers in canonical form, so a non-negative integer may
- * come back as UNSIGNED_64 even if it went in as SIGNED_64: read results
- * by value (a negative result is always SIGNED_64, and a result above
- * INT64_MAX is always UNSIGNED_64), not by the type that went in.
+ * Results are typed by value, not by the type that went in (storage
+ * keeps values canonically):
+ * - an integer result is SIGNED_64 when negative, UNSIGNED_64 otherwise;
+ * - a result with any floating part is DOUBLE_64.
+ *
+ * Integer arithmetic is exact.  Each stored cell holds the sum of a
+ * block of consecutive elements; the cell at the capacity holds the
+ * total of all of them.  Every cell must fit [INT64_MIN, UINT64_MAX]:
+ * an Update or Set that would push one outside is refused, and
+ * NewFromArray refuses such an array.  With non-negative elements every
+ * cell is at most the total, so the rule is just "the total fits in a
+ * uint64_t".  Query, RangeQuery and Get compute their result exactly
+ * from the cells and return false (result VOID) only when that result
+ * itself is outside [INT64_MIN, UINT64_MAX]: a range or an element can
+ * be returned even when a prefix sum around it can not.
+ *
+ * Floating arithmetic runs in double, FLOAT_32 inputs included, and is
+ * rounded as double arithmetic is.  A cell or result that would not be
+ * finite is treated as out of range, as above.  In a tree that mixes
+ * integer and floating values, a cell that has taken any floating value
+ * is a double; integer cells stay exact, and a sum keeps its integer
+ * cells' part exact until the one final conversion to double.  Keep a
+ * tree all-integer when results must be exact above 2^53.
+ *
+ * NULL AND RANGE HANDLING
+ * -----------------------
+ * - A NULL tree is an empty tree: Count and Bytes return 0, Query, Get
+ *   and RangeQuery return false, LowerBound returns SIZE_MAX, Clear and
+ *   Free do nothing.  Update and Set create the tree.
+ * - A NULL value, delta, target or 'mfw' pointer-to-pointer is refused.
+ * - A NULL 'result' makes Query, Get and RangeQuery return false.  On
+ *   every other false return a non-NULL 'result' is set to VOID.
+ * - Query and Get need idx < count; RangeQuery needs
+ *   left <= right < count.  Update and Set take any idx up to
+ *   MULTIFENWICK_INDEX_MAX and extend count to idx + 1.
  *
  * LIMITATIONS
  * -----------
  * - Does not support range updates directly
  * - Does not support minimum/maximum queries (use segment tree)
- * - Requires non-negative indices
- * - All values must be SIGNED_64, UNSIGNED_64, FLOAT_32 or DOUBLE_64.
- *   Every other type is refused on the way in: VOID, BYTES, booleans,
- *   pointers, containers, and 96/128-bit values (SIGNED_128,
- *   UNSIGNED_128), which the sums have no wide arithmetic for.  Update
- *   and Set return false, NewFromArray returns NULL and LowerBound
- *   returns SIZE_MAX, before anything changes, so no other type is ever
- *   stored or returned.  The one exception: a VOID element of
- *   NewFromArray's array means zero.
+ * - Indexes are 0 to MULTIFENWICK_INDEX_MAX
  */
 
 /* Opaque multiFenwick tree type */
@@ -128,12 +153,14 @@ typedef struct multiFenwick multiFenwick;
 /* Create new empty multiFenwick tree */
 multiFenwick *multiFenwickNew(void);
 
-/* Create multiFenwick tree from databox array
- * Time: O(n log n) via repeated updates
- * Returns NULL on allocation failure, or if any value is neither numeric
- * nor VOID (a VOID element is zero; cells take the zero of the first
- * numeric element, SIGNED_64 if there is none)
- * All databoxes should be the same numeric type */
+/* Create multiFenwick tree from databox array: element i is values[i]
+ * Time: O(n)
+ * count 0 gives a new empty tree ('values' is not read and may be NULL).
+ * Returns NULL, with nothing allocated or left behind, when 'values' is
+ * NULL with a non-zero count, when count - 1 is above
+ * MULTIFENWICK_INDEX_MAX, when any element is not an accepted value
+ * (VOID included: write a zero for a zero), or when a stored block sum
+ * would be out of range (see VALUES above), or on allocation failure. */
 multiFenwick *multiFenwickNewFromArray(const databox *values, size_t count);
 
 /* Free multiFenwick tree */
@@ -144,18 +171,20 @@ void multiFenwickFree(multiFenwick *mfw);
  * ==================================================================== */
 
 /* Largest index Update and Set accept.  Cells are addressed with the
- * multilist's 32-bit node index, and capacity is the next power of two
- * above the count, so indexes stay below 2^30. */
+ * multilist's 32-bit node index, and capacity is the smallest power of
+ * two at or above the count, so it stays at or below 2^30. */
 #define MULTIFENWICK_INDEX_MAX ((((uint64_t)1) << 30) - 1)
 
 /* Update: add delta to element at idx
  * Time: O(log n)
  * mfw: pointer-to-pointer (created if NULL)
- * idx: 0-based index, at most MULTIFENWICK_INDEX_MAX
- * delta: databox value to add (can be negative for signed types)
- * Returns true on success.  Returns false for a non-numeric delta (VOID,
- * BYTES, 96/128-bit, ...), an index above MULTIFENWICK_INDEX_MAX, or a
- * failed allocation of a new tree.
+ * idx: 0-based index, at most MULTIFENWICK_INDEX_MAX; past the end it
+ *      extends the count to idx + 1 (the elements between are zero)
+ * delta: value to add (negative to subtract)
+ * Returns true on success.  Returns false for a NULL 'mfw' or 'delta',
+ * a delta that is not an accepted value (see VALUES above), an index
+ * above MULTIFENWICK_INDEX_MAX, a stored block sum that would go out of
+ * range, or a failed allocation of a new tree.
  * Transactional: every check, and the read and sum of every cell the
  * update touches, happens before the first write, and the writes cannot
  * fail.  So a false return leaves every cell, the count and the capacity
@@ -164,34 +193,34 @@ bool multiFenwickUpdate(multiFenwick **mfw, size_t idx, const databox *delta);
 
 /* Query: compute prefix sum [0, idx]
  * Time: O(log n)
- * idx: 0-based index
- * result: output databox to store sum
- * Returns true on success, false if out of bounds
- * Result will be a VOID databox if tree is empty */
+ * Returns true on success.  Returns false for a NULL tree or result,
+ * idx >= count (so always on an empty tree), or a sum out of range;
+ * a non-NULL result is then VOID. */
 bool multiFenwickQuery(const multiFenwick *mfw, size_t idx, databox *result);
 
-/* Range query: compute sum [left, right]
+/* Range query: compute sum [left, right] (inclusive), exactly, from the
+ * two prefix sums around it
  * Time: O(log n)
- * left, right: 0-based indices (inclusive)
- * result: output databox to store sum
- * Returns true on success
- * Returns VOID databox if left > right */
+ * Returns true on success.  Returns false for a NULL tree or result,
+ * left > right, right >= count, or a sum out of range; a non-NULL result
+ * is then VOID. */
 bool multiFenwickRangeQuery(const multiFenwick *mfw, size_t left, size_t right,
                             databox *result);
 
 /* Get single element value at idx
- * Time: O(log n)
- * Computes: query(idx) - query(idx-1)
- * result: output databox to store value
- * Returns true on success, false if out of bounds */
+ * Time: O(log n), from the cells covering the element alone (no prefix
+ * sum is formed, so an element is returned whenever it is in range)
+ * Returns true on success.  Returns false for a NULL tree or result,
+ * idx >= count, or a value out of range; a non-NULL result is then
+ * VOID. */
 bool multiFenwickGet(const multiFenwick *mfw, size_t idx, databox *result);
 
 /* Set single element to exact value (not delta)
  * Time: O(log n)
- * Computes delta = value - get(idx), then updates
- * Returns true on success, false for a non-numeric value or an index above
- * MULTIFENWICK_INDEX_MAX (nothing changes: the write is one transactional
- * Update) */
+ * One transactional Update by value - current, with that difference kept
+ * exact (it may need more than 64 bits, as from INT64_MIN to
+ * UINT64_MAX).  An element past the end, or of a NULL tree, is zero.
+ * Returns false, changing nothing, for the same reasons as Update. */
 bool multiFenwickSet(multiFenwick **mfw, size_t idx, const databox *value);
 
 /* ====================================================================
@@ -209,14 +238,22 @@ size_t multiFenwickBytes(const multiFenwick *mfw);
  * ==================================================================== */
 
 /* Find smallest index with cumulative sum >= target
- * Time: O(log^2 n) naive, O(log n) with binary lifting
- * Returns SIZE_MAX if no such index exists, the tree is empty, or 'target'
- * is not numeric
- * Requires non-negative values for correctness
- * Comparison uses databox comparison logic */
+ * Time: O(log^2 n) (binary search over prefix sums)
+ * Comparisons are exact, integers against doubles included.
+ * Returns SIZE_MAX for a NULL or empty tree, a NULL target, a target
+ * that is not an accepted value, or when no prefix sum reaches the
+ * target.
+ * With non-negative elements the prefix sums never fall and the result
+ * is the smallest such index; a target at or below the first element
+ * (any zero or negative target included) returns 0.  With negative
+ * elements the prefix sums
+ * can fall; a returned index i then still has prefix(i) >= target and
+ * either i == 0 or prefix(i - 1) < target, but it need not be the
+ * smallest, and SIZE_MAX can be returned although some prefix sum
+ * reaches the target. */
 size_t multiFenwickLowerBound(const multiFenwick *mfw, const databox *target);
 
-/* Reset all values to zero (maintains capacity)
+/* Reset all values to zero; the count and capacity stay as they were
  * Time: O(n) */
 void multiFenwickClear(multiFenwick *mfw);
 
