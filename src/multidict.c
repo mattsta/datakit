@@ -8,6 +8,7 @@
 #include "flex.h"
 #include "multilru.h"
 #include "multimap.h"
+#include "str.h"
 #include "timeUtil.h"
 
 #include <assert.h>
@@ -362,7 +363,9 @@ uint32_t multidictGenHashFunction(multidict *d, const void *key, int32_t len) {
     }
 }
 
-/* And an ASCII case insensitive hash function (based on djb hash) */
+/* An ASCII case-insensitive hash (djb).  It folds exactly 'A'-'Z' to
+ * 'a'-'z', the set multidictTypeCaseKey's compare folds, so keys that
+ * compare equal hash equal. */
 uint32_t multidictGenCaseHashFunction(multidict *d, const uint8_t *buf,
                                       int32_t len) {
     uint32_t hash = d->seed;
@@ -2857,21 +2860,22 @@ DK_STATIC uint32_t multidictStringHashFunction_(multidict *d, const void *key,
     return multidictGenHashFunction(d, key, len);
 }
 
+/* Exact key equality: same length and same bytes.  Keys are binary, so an
+ * embedded NUL is an ordinary byte. */
 DK_STATIC int32_t multidictStringKeyCompare_(void *privdata, const void *key1,
                                              const uint32_t k1len,
                                              const void *key2,
                                              const uint32_t k2len) {
     DK_NOTUSED(privdata);
 
-    /* Keys must be same length to be equal */
-    if (k1len != k2len) {
-        return 0; /* not equal */
-    }
-
-    return strncmp(key1, key2, k1len) == 0;
+    return k1len == k2len && (k1len == 0 || memcmp(key1, key2, k1len) == 0);
 }
 
-/* Case-insensitive key comparison */
+/* ASCII case-insensitive key equality: same length, and the same bytes
+ * once 'A'-'Z' are folded to 'a'-'z'.  Every other byte, NUL and bytes
+ * above 0x7F included, must match exactly, whatever the C locale is.
+ * multidictGenCaseHashFunction folds the same set, so keys equal here
+ * hash equal. */
 DK_STATIC int32_t multidictStringCaseKeyCompare_(void *privdata,
                                                  const void *key1,
                                                  const uint32_t k1len,
@@ -2879,12 +2883,8 @@ DK_STATIC int32_t multidictStringCaseKeyCompare_(void *privdata,
                                                  const uint32_t k2len) {
     DK_NOTUSED(privdata);
 
-    /* Keys must be same length to be equal */
-    if (k1len != k2len) {
-        return 0; /* not equal */
-    }
-
-    return strncasecmp(key1, key2, k1len) == 0;
+    return k1len == k2len &&
+           StrUtf8EqualCaseInsensitiveAscii(key1, k1len, key2, k2len);
 }
 
 DK_STATIC uint32_t multidictStringCaseHashFunction_(multidict *d,
@@ -3223,6 +3223,7 @@ void multidictDefaultClassFree(multidictClass *qdc) {
  * ==================================================================== */
 #ifdef DATAKIT_TEST
 #include "persist.h" /* snapshot round trips of wide pairs */
+#include <locale.h>  /* the case compare ignores the C locale */
 
 /* Scope-exit cleaners (see cleaner.h idioms).  A dict must be destroyed
  * before the class it borrows, so a class cleaner is always declared
@@ -4137,6 +4138,132 @@ static int multidictTestSlotIteratorWide_(void) {
     }
 
     qdc->freeSlot(qdc, slot);
+    return err;
+}
+
+/* The oracle fold: exactly 'A'-'Z' to 'a'-'z' */
+static uint8_t testFoldAscii_(uint8_t c) {
+    return (c >= 'A' && c <= 'Z') ? (uint8_t)(c + ('a' - 'A')) : c;
+}
+
+/* The built-in key compares are length-checked, binary-safe and
+ * locale-free, and the case hash folds exactly what the case compare
+ * folds */
+static int multidictTestKeyCompare_(void) {
+    int err = 0;
+    int32_t (*const exact)(void *, const void *, const uint32_t, const void *,
+                           const uint32_t) = multidictTypeExactKey.keyCompare;
+    int32_t (*const fold)(void *, const void *, const uint32_t, const void *,
+                          const uint32_t) = multidictTypeCaseKey.keyCompare;
+
+    static const struct {
+        const char *a;
+        uint32_t alen;
+        const char *b;
+        uint32_t blen;
+        bool exactEq;
+        bool foldEq;
+    } cases[] = {
+        {"hello", 5, "hello", 5, true, true},
+        {"hello", 5, "HeLLo", 5, false, true},
+        {"hello", 5, "hell", 4, false, false},
+        {"hell", 4, "hello", 5, false, false},
+        {"", 0, "", 0, true, true},
+        {"a\0b", 3, "a\0b", 3, true, true},
+        {"a\0b", 3, "a\0c", 3, false, false},
+        {"a\0B", 3, "a\0b", 3, false, true},
+        {"\0\0", 2, "\0\0", 2, true, true},
+        {"\0x", 2, "\0y", 2, false, false},
+        {"a\0", 2, "a", 1, false, false},
+        {"\xc4", 1, "\xe4", 1, false, false}, /* Latin-1 A/a umlaut */
+        {"@", 1, "`", 1, false, false},       /* one bit apart, no letters */
+        {"[", 1, "{", 1, false, false},
+        {"Z_", 2, "z_", 2, false, true},
+    };
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
+        const bool e = exact(NULL, cases[i].a, cases[i].alen, cases[i].b,
+                             cases[i].blen) != 0;
+        const bool f = fold(NULL, cases[i].a, cases[i].alen, cases[i].b,
+                            cases[i].blen) != 0;
+        if (e != cases[i].exactEq || f != cases[i].foldEq) {
+            printf("ERROR: key compare case %zu: exact %d fold %d\n", i, e, f);
+            err++;
+        }
+    }
+
+    /* Every byte pair: the case compare folds exactly the oracle's set,
+     * and the case hash agrees with it */
+    cleaner(multidictMmClassFree) multidictClass *qdc = multidictMmClassNew();
+    cleaner(multidictFree) multidict *d =
+        multidictNew(&multidictTypeCaseKey, qdc, 77);
+    for (uint32_t a = 0; a < 256; a++) {
+        for (uint32_t b = 0; b < 256; b++) {
+            const uint8_t ab = (uint8_t)a;
+            const uint8_t bb = (uint8_t)b;
+            const bool want = testFoldAscii_(ab) == testFoldAscii_(bb);
+            const bool got = fold(NULL, &ab, 1, &bb, 1) != 0;
+            if (got != want) {
+                printf("ERROR: case compare of 0x%02x and 0x%02x is %d\n", a, b,
+                       got);
+                err++;
+            }
+
+            if (want && multidictGenCaseHashFunction(d, &ab, 1) !=
+                            multidictGenCaseHashFunction(d, &bb, 1)) {
+                printf("ERROR: case hash of 0x%02x and 0x%02x differs\n", a, b);
+                err++;
+            }
+        }
+    }
+
+    /* Longer keys: any case flip of a key compares and hashes equal */
+    testRandSeed(4242);
+    for (int32_t round = 0; round < 200; round++) {
+        uint8_t a[24];
+        uint8_t b[24];
+        const uint32_t len = (uint32_t)(testRand() % sizeof(a));
+        for (uint32_t i = 0; i < len; i++) {
+            a[i] = (uint8_t)testRand();
+            b[i] = a[i];
+            if (testRand() & 1) {
+                if (a[i] >= 'A' && a[i] <= 'Z') {
+                    b[i] = (uint8_t)(a[i] + ('a' - 'A'));
+                } else if (a[i] >= 'a' && a[i] <= 'z') {
+                    b[i] = (uint8_t)(a[i] - ('a' - 'A'));
+                }
+            }
+        }
+
+        if (!fold(NULL, a, len, b, len) ||
+            multidictGenCaseHashFunction(d, a, (int32_t)len) !=
+                multidictGenCaseHashFunction(d, b, (int32_t)len)) {
+            printf("ERROR: case flip round %d does not match\n", round);
+            err++;
+        }
+    }
+
+    /* A locale that folds Latin-1 does not change the case compare */
+    const char *prior = setlocale(LC_CTYPE, NULL);
+    char saved[64] = {0};
+    if (prior) {
+        snprintf(saved, sizeof(saved), "%s", prior);
+    }
+
+    static const char *latin1[] = {"en_US.ISO8859-1", "en_US.ISO-8859-1",
+                                   "de_DE.ISO8859-1"};
+    for (size_t i = 0; i < sizeof(latin1) / sizeof(*latin1); i++) {
+        if (setlocale(LC_CTYPE, latin1[i])) {
+            if (fold(NULL, "\xc4", 1, "\xe4", 1) ||
+                !fold(NULL, "A\xc4", 2, "a\xc4", 2)) {
+                printf("ERROR: case compare follows locale %s\n", latin1[i]);
+                err++;
+            }
+            break;
+        }
+    }
+    setlocale(LC_CTYPE, saved[0] ? saved : "C");
+
     return err;
 }
 
@@ -5871,6 +5998,9 @@ int multidictTest(int argc, char *argv[]) {
      * SECTION 9: Case-Insensitive Key Type
      * ================================================================ */
     printf("\n--- Section 9: Case-Insensitive Key Type ---\n");
+
+    printf("Test 9.0: Key compares are binary-safe and locale-free...\n");
+    err += multidictTestKeyCompare_();
 
     printf("Test 9.1: Create with case-insensitive type...\n");
     {
