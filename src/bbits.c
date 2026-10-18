@@ -177,6 +177,11 @@ bool bbitsDodDodGetOffsetCount(bbitsDodDod *dd, ssize_t offset,
         return false;
     }
 
+    /* Nothing to read for a zero count */
+    if (*count == 0) {
+        return false;
+    }
+
     /* A negative count, or one running past the end, reads to the end */
     const size_t available = dd->elements - (size_t)offset;
     if (*count < 0 || (size_t)*count > available) {
@@ -260,15 +265,20 @@ bool bbitsDodDodGetOffsetCount(bbitsDodDod *dd, ssize_t offset,
     }
 
     if (mean && variance && stddev) {
-        *mean = 0;
-        *variance = 0;
+        /* Welford: 'm2' accumulates squared deviations from the mean */
+        double runMean = 0;
+        double m2 = 0;
         for (size_t j = 0; j < (size_t)*count; j++) {
-            const double delta = (double)((*val)[j]) - *mean;
-            *mean += delta / (j + 1); /* fix zero-based index */
-            *variance += delta * ((*val)[j] - *mean);
+            const double x = (double)(*val)[j];
+            const double delta = x - runMean;
+            runMean += delta / (double)(j + 1);
+            m2 += delta * (x - runMean);
         }
 
-        *stddev = sqrt(*variance / *count);
+        /* Population statistics; *count > 0 here */
+        *mean = runMean;
+        *variance = m2 / (double)*count;
+        *stddev = sqrt(*variance);
     }
 
     return true;
@@ -425,6 +435,11 @@ bool bbitsDodXofGetOffsetCount(bbitsDodXof *dx, ssize_t offset, ssize_t *count,
         return false;
     }
 
+    /* Nothing to read for a zero count */
+    if (*count == 0) {
+        return false;
+    }
+
     /* A negative count, or one running past the end, reads to the end */
     const size_t available = dx->elements - (size_t)offset;
     if (*count < 0 || (size_t)*count > available) {
@@ -508,15 +523,20 @@ bool bbitsDodXofGetOffsetCount(bbitsDodXof *dx, ssize_t offset, ssize_t *count,
     }
 
     if (mean && variance && stddev) {
-        *mean = 0;
-        *variance = 0;
+        /* Welford: 'm2' accumulates squared deviations from the mean */
+        double runMean = 0;
+        double m2 = 0;
         for (size_t j = 0; j < (size_t)*count; j++) {
-            const double delta = (*val)[j] - *mean;
-            *mean += delta / (j + 1); /* fix zero-based index */
-            *variance += delta * ((*val)[j] - *mean);
+            const double x = (*val)[j];
+            const double delta = x - runMean;
+            runMean += delta / (double)(j + 1);
+            m2 += delta * (x - runMean);
         }
 
-        *stddev = sqrt(*variance / *count);
+        /* Population statistics; *count > 0 here */
+        *mean = runMean;
+        *variance = m2 / (double)*count;
+        *stddev = sqrt(*variance);
     }
 
     return true;
@@ -919,6 +939,13 @@ int bbitsTest(int argc, char *argv[]) {
             ERR("Mean mismatch: expected 30.0, got %f", mean);
         }
 
+        /* Population variance = (400+100+0+100+400)/5 = 200 */
+        if (fabs(variance - 200.0) > 1e-9 ||
+            fabs(stddev - sqrt(200.0)) > 1e-9) {
+            ERR("Variance/stddev mismatch: got %f/%f, expected 200/%f",
+                variance, stddev, sqrt(200.0));
+        }
+
         zfree(keys);
         zfree(vals);
         bbitsDodDodFree(&dd);
@@ -1041,6 +1068,97 @@ int bbitsTest(int argc, char *argv[]) {
         bbitsDodDodFree(&dd);
         bbitsDodXofFree(&dx);
 #undef BBITS_CLAMP_VAL
+    }
+
+    /* mean/variance/stddev are population statistics; check them against a
+     * two-pass computation over the generated values themselves */
+    printf("Testing statistics against a two-pass oracle...\n");
+    {
+#define BBITS_STAT_DOD(i) (((uint64_t)(i) * 2654435761u) % 1000003)
+#define BBITS_STAT_XOF(i) ((double)(i) * 0.123 - 77.0)
+        const size_t numElements = 3000;
+        bbitsDodDod dd = {0};
+        bbitsDodXof dx = {0};
+        for (size_t i = 0; i < numElements; i++) {
+            bbitsDodDodAppend(&dd, (dodVal)i, (dodVal)BBITS_STAT_DOD(i));
+            bbitsDodXofAppend(&dx, (dodVal)i, BBITS_STAT_XOF(i));
+        }
+
+        /* {offset, count}: whole set, a middle window, one element */
+        const ssize_t windows[][2] = {{0, -1}, {700, 1500}, {2999, 1}};
+        for (size_t w = 0; w < sizeof(windows) / sizeof(*windows); w++) {
+            const size_t start = (size_t)windows[w][0];
+            const size_t n =
+                windows[w][1] < 0 ? numElements - start : (size_t)windows[w][1];
+
+            for (int kind = 0; kind < 2; kind++) {
+                double sum = 0;
+                for (size_t j = 0; j < n; j++) {
+                    sum += kind == 0 ? (double)BBITS_STAT_DOD(start + j)
+                                     : BBITS_STAT_XOF(start + j);
+                }
+                const double wantMean = sum / (double)n;
+
+                double sq = 0;
+                for (size_t j = 0; j < n; j++) {
+                    const double x = kind == 0
+                                         ? (double)BBITS_STAT_DOD(start + j)
+                                         : BBITS_STAT_XOF(start + j);
+                    sq += (x - wantMean) * (x - wantMean);
+                }
+                const double wantVar = sq / (double)n;
+
+                ssize_t count = windows[w][1];
+                uint64_t *keys = NULL;
+                uint64_t *vals = NULL;
+                double *dvals = NULL;
+                double mean = -1, variance = -1, stddev = -1;
+                const bool ok =
+                    kind == 0
+                        ? bbitsDodDodGetOffsetCount(&dd, windows[w][0], &count,
+                                                    &keys, &vals, &mean,
+                                                    &variance, &stddev)
+                        : bbitsDodXofGetOffsetCount(&dx, windows[w][0], &count,
+                                                    &keys, &dvals, &mean,
+                                                    &variance, &stddev);
+                if (!ok || (size_t)count != n) {
+                    ERR("window %zu kind %d: read failed", w, kind);
+                } else {
+                    const double tol = 1e-9 * (1 + fabs(wantVar));
+                    if (fabs(mean - wantMean) > 1e-9 * (1 + fabs(wantMean)) ||
+                        fabs(variance - wantVar) > tol ||
+                        fabs(stddev - sqrt(wantVar)) > tol) {
+                        ERR("window %zu kind %d: got %f/%f/%f, expected "
+                            "%f/%f/%f",
+                            w, kind, mean, variance, stddev, wantMean, wantVar,
+                            sqrt(wantVar));
+                    }
+                }
+
+                zfree(keys);
+                zfree(vals);
+                zfree(dvals);
+            }
+        }
+
+        /* A zero count reads nothing and allocates nothing */
+        ssize_t count = 0;
+        uint64_t *keys = NULL;
+        uint64_t *vals = NULL;
+        double *dvals = NULL;
+        double mean = -1, variance = -1, stddev = -1;
+        if (bbitsDodDodGetOffsetCount(&dd, 0, &count, &keys, &vals, &mean,
+                                      &variance, &stddev) ||
+            bbitsDodXofGetOffsetCount(&dx, 0, &count, &keys, &dvals, &mean,
+                                      &variance, &stddev) ||
+            keys || vals || dvals) {
+            ERRR("A zero count should be refused without allocating");
+        }
+
+        bbitsDodDodFree(&dd);
+        bbitsDodXofFree(&dx);
+#undef BBITS_STAT_DOD
+#undef BBITS_STAT_XOF
     }
 
     TEST_FINAL_RESULT;

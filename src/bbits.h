@@ -51,10 +51,12 @@ bool bbitsDodDodAppend(bbitsDodDod *dd, const dodVal newKey,
  * '*val' arrays (caller frees both with zfree). A negative 'offset' counts
  * back from the end. A negative '*count', or one running past the end, reads
  * to the end, and '*count' is set to the number of pairs actually read.
- * Returns false, allocating nothing, when the structure is empty or 'offset'
- * lies outside it. If 'mean', 'variance' and 'stddev' are all non-NULL they
- * receive running statistics over the values read. The DodXof variant below
- * follows the same contract. */
+ * Returns false, allocating nothing, when there is nothing to read: the
+ * structure is empty, 'offset' lies outside it, or '*count' is 0. If 'mean',
+ * 'variance' and 'stddev' are all non-NULL they receive the population
+ * statistics of the values read (variance = sum of squared deviations / n,
+ * stddev = its square root); n is at least 1 whenever true is returned. The
+ * DodXof variant below follows the same contract. */
 bool bbitsDodDodGetOffsetCount(bbitsDodDod *dd, ssize_t offset, ssize_t *count,
                                uint64_t **key, uint64_t **val, double *mean,
                                double *variance, double *stddev);
