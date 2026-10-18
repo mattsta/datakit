@@ -647,7 +647,7 @@ int64_t random = intsetRandom(is);
 
 // multilru (random from LRU)
 multilruPtr candidates[10];
-multilruGetNLowest(lru, candidates, 10);  // 10 LRU candidates
+size_t got = multilruCollectLowest(lru, candidates, 10);  // up to 10 LRU candidates
 ```
 
 ---

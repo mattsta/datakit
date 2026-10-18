@@ -395,28 +395,28 @@ and `capacity * 8` more when weights are allocated.
 ### Sampling Cold and Hot Entries
 
 ```c
+size_t multilruCollectLowest(multilru *mlru, multilruPtr out[], size_t n);
+size_t multilruCollectHighest(multilru *mlru, multilruPtr out[], size_t n);
 void multilruGetNLowest(multilru *mlru, multilruPtr out[], size_t n);
 void multilruGetNHighest(multilru *mlru, multilruPtr out[], size_t n);
 
-/* Example: inspect 10 eviction candidates */
-multilruPtr candidates[10] = {0};   /* pre-zero: see caveat below */
-multilruGetNLowest(mlru, candidates, 10);
+/* Example: inspect up to 10 eviction candidates */
+multilruPtr candidates[10];
+const size_t got = multilruCollectLowest(mlru, candidates, 10);
 
-for (size_t i = 0; i < 10; i++) {
-    if (candidates[i] == 0) {
-        break;  /* fewer than 10 entries existed */
-    }
+for (size_t i = 0; i < got; i++) {
     printf("candidate %zu: entry %zu\n", i, candidates[i]);
 }
 ```
 
-**Caveat**: neither function reports how many slots it filled. If the cache
-holds fewer than `n` entries, the tail of `out[]` is left exactly as you
-passed it in. Zero the array first (as above) or clamp `n` with
-`multilruCount()` before calling.
+The `Collect` forms return how many entries they wrote and leave the slots
+past that count untouched. The `GetN` forms fill all `n` slots: the entries
+found, then `0` (never a live entry) in every slot past the last one, so a
+`0` marks the end when the cache holds fewer than `n` entries.
 
-`GetNLowest` walks levels upward from 0, oldest-first within each level.
-`GetNHighest` walks levels downward from the top, newest-first.
+`CollectLowest`/`GetNLowest` walk levels upward from 0, oldest-first within
+each level. `CollectHighest`/`GetNHighest` walk levels downward from the top,
+newest-first.
 
 ## Runtime Configuration
 
@@ -569,7 +569,7 @@ no width downgrade**, so the entry array never shrinks; it only stops growing.
 | Count / Bytes      | O(1)             | Cached values                                  |
 | GetStats           | O(1)             | Counters maintained incrementally              |
 | LevelCount/Weight  | O(1)             | Per-level totals are maintained                |
-| GetNLowest/Highest | O(n + levels)    | Walks the level lists                          |
+| Collect/GetN       | O(n + levels)    | Walks the level lists                          |
 | Width migration    | O(capacity)      | One-time cost per tier boundary                |
 
 ### Space Complexity
@@ -891,8 +891,9 @@ A reader-writer lock buys nothing here because there is no read-only path.
   large keeps its wider entries.
 - **`RemoveMinimum` may only demote**: callers that expect one call to free
   one entry must use `multilruEvictN()` instead.
-- **`GetNLowest`/`GetNHighest` do not report a fill count**: pre-zero the
-  output array or clamp `n` to `multilruCount()`.
+- **`GetNLowest`/`GetNHighest` do not report a fill count**: they mark the
+  end with `0` slots instead. Use `multilruCollectLowest()` /
+  `multilruCollectHighest()` when you need the count.
 
 ## See Also
 

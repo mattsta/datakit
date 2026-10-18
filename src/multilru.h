@@ -420,10 +420,20 @@ void multilruGetStats(const multilru *mlru, multilruStats *stats);
  * Bulk Query Operations
  * ==================================================================== */
 
-/* Get up to n entries from coldest (level 0, oldest first) */
+/* Write up to n entries from coldest (level 0, oldest first) into out[] and
+ * return how many were written. Slots past that count are not touched. */
+size_t multilruCollectLowest(multilru *mlru, multilruPtr out[], size_t n);
+
+/* Write up to n entries from hottest (highest level, newest first) into
+ * out[] and return how many were written. Slots past that count are not
+ * touched. */
+size_t multilruCollectHighest(multilru *mlru, multilruPtr out[], size_t n);
+
+/* Fill all n slots of out[]: entries as multilruCollectLowest finds them,
+ * then 0 (never a live entry) in every slot past the last one found. */
 void multilruGetNLowest(multilru *mlru, multilruPtr out[], size_t n);
 
-/* Get up to n entries from hottest (highest level, newest first) */
+/* As multilruGetNLowest, from hottest (multilruCollectHighest order) */
 void multilruGetNHighest(multilru *mlru, multilruPtr out[], size_t n);
 
 /* ====================================================================

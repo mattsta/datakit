@@ -1804,7 +1804,7 @@ void multilruGetStats(const multilru *mlru, multilruStats *stats) {
  * Bulk Queries
  * ==================================================================== */
 
-void multilruGetNLowest(multilru *mlru, multilruPtr out[], size_t n) {
+size_t multilruCollectLowest(multilru *mlru, multilruPtr out[], size_t n) {
     size_t found = 0;
 
     /* Scan levels from 0 upward */
@@ -1828,9 +1828,11 @@ void multilruGetNLowest(multilru *mlru, multilruPtr out[], size_t n) {
             current = next;
         }
     }
+
+    return found;
 }
 
-void multilruGetNHighest(multilru *mlru, multilruPtr out[], size_t n) {
+size_t multilruCollectHighest(multilru *mlru, multilruPtr out[], size_t n) {
     size_t found = 0;
 
     /* Scan levels from highest downward */
@@ -1856,6 +1858,23 @@ void multilruGetNHighest(multilru *mlru, multilruPtr out[], size_t n) {
             }
             current = prev;
         }
+    }
+
+    return found;
+}
+
+/* Slots past the last entry found are set to 0, which no live entry uses */
+void multilruGetNLowest(multilru *mlru, multilruPtr out[], size_t n) {
+    const size_t found = multilruCollectLowest(mlru, out, n);
+    for (size_t i = found; i < n; i++) {
+        out[i] = 0;
+    }
+}
+
+void multilruGetNHighest(multilru *mlru, multilruPtr out[], size_t n) {
+    const size_t found = multilruCollectHighest(mlru, out, n);
+    for (size_t i = found; i < n; i++) {
+        out[i] = 0;
     }
 }
 
@@ -2673,6 +2692,76 @@ int multilruTest(int argc, char *argv[]) {
         printf("evictN and evictToSize: PASSED\n");
     }
 
+    TEST("collect and getN with n above the population") {
+        cleaner(multilruFree) multilru *mlru = multilruNew();
+        const multilruPtr sentinel = (multilruPtr)0xDEADBEEF;
+
+        /* Empty cache: nothing written, GetN zero-fills */
+        multilruPtr out[10];
+        for (size_t i = 0; i < 10; i++) {
+            out[i] = sentinel;
+        }
+        assert(multilruCollectLowest(mlru, out, 10) == 0);
+        assert(multilruCollectHighest(mlru, out, 10) == 0);
+        for (size_t i = 0; i < 10; i++) {
+            assert(out[i] == sentinel);
+        }
+
+        /* Three entries, the last one promoted */
+        multilruPtr e[3];
+        for (size_t i = 0; i < 3; i++) {
+            e[i] = multilruInsert(mlru);
+        }
+        multilruIncrease(mlru, e[2]);
+
+        for (int highest = 0; highest < 2; highest++) {
+            multilruPtr got[10];
+            for (size_t i = 0; i < 10; i++) {
+                got[i] = sentinel;
+            }
+
+            const size_t n = highest ? multilruCollectHighest(mlru, got, 10)
+                                     : multilruCollectLowest(mlru, got, 10);
+            assert(n == 3);
+            for (size_t i = n; i < 10; i++) {
+                assert(got[i] == sentinel); /* untouched */
+            }
+
+            /* Every entry appears exactly once */
+            for (size_t i = 0; i < 3; i++) {
+                size_t seen = 0;
+                for (size_t j = 0; j < n; j++) {
+                    seen += got[j] == e[i];
+                }
+                assert(seen == 1);
+            }
+
+            /* Coldest first vs hottest first */
+            assert(got[0] == (highest ? e[2] : e[0]));
+
+            multilruPtr filled[10];
+            for (size_t i = 0; i < 10; i++) {
+                filled[i] = sentinel;
+            }
+            if (highest) {
+                multilruGetNHighest(mlru, filled, 10);
+            } else {
+                multilruGetNLowest(mlru, filled, 10);
+            }
+
+            for (size_t i = 0; i < 10; i++) {
+                assert(filled[i] == (i < n ? got[i] : 0));
+            }
+        }
+
+        /* n smaller than the population stops at n */
+        multilruPtr two[2];
+        assert(multilruCollectLowest(mlru, two, 2) == 2);
+        assert(two[0] == e[0] && two[1] == e[1]);
+
+        printf("collect and getN with n above the population: PASSED\n");
+    }
+
     TEST("edge cases") {
         cleaner(multilruFree) multilru *mlru = multilruNew();
 
@@ -3351,9 +3440,8 @@ int multilruTest(int argc, char *argv[]) {
                         multilruPtr removed;
                         multilruRemoveMinimum(mlru, &removed);
                     } else {
-                        multilruPtr lowest[1] = {0};
-                        multilruGetNLowest(mlru, lowest, 1);
-                        if (lowest[0] != 0) {
+                        multilruPtr lowest[1];
+                        if (multilruCollectLowest(mlru, lowest, 1) == 1) {
                             multilruIncrease(mlru, lowest[0]);
                         }
                     }
@@ -3989,9 +4077,14 @@ int multilruTest(int argc, char *argv[]) {
             }
         }
 
+        /* Every handle issued after the hot set, so a hot slot that was
+         * evicted and handed to a new entry is not mistaken for a survivor */
+        multilruPtr issued[400 + 1000];
+        size_t issuedCount = 0;
+
         /* Fill rest of cache */
         for (int i = 0; i < 400; i++) {
-            multilruInsert(mlru);
+            issued[issuedCount++] = multilruInsert(mlru);
         }
 
         /* Record hot set levels before scan */
@@ -4002,14 +4095,20 @@ int multilruTest(int argc, char *argv[]) {
 
         /* Simulate scan: insert 1000 entries (2x cache size) */
         for (int i = 0; i < 1000; i++) {
-            multilruInsert(mlru);
+            issued[issuedCount++] = multilruInsert(mlru);
         }
 
-        /* Check how many hot entries survived. Inserts never promote an
-         * existing entry, so the scan can only have demoted a survivor. */
+        /* Check how many hot entries survived: still populated, and their
+         * slot never reissued. Inserts never promote an existing entry, so
+         * the scan can only have demoted a survivor. */
         int survived = 0;
         for (int i = 0; i < 100; i++) {
-            if (multilruIsPopulated(mlru, hotSet[i])) {
+            bool reissued = false;
+            for (size_t k = 0; k < issuedCount && !reissued; k++) {
+                reissued = issued[k] == hotSet[i];
+            }
+
+            if (!reissued && multilruIsPopulated(mlru, hotSet[i])) {
                 survived++;
                 assert(multilruGetLevel(mlru, hotSet[i]) <= hotLevelsBefore[i]);
             }
