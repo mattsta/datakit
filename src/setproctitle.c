@@ -47,7 +47,7 @@ bool setProctitleInit(char *os_argv[]) {
             size = strlen(environ[i]) + 1;
             os_argv_last = environ[i] + size;
 
-            strncpy(p, environ[i], size);
+            memcpy(p, environ[i], size); /* size includes the NUL */
             environ[i] = (char *)p;
             p += size;
         }
