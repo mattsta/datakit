@@ -357,8 +357,10 @@ Both increment functions:
 /* Find value by key */
 bool multidictFind(multidict *d, const databox *keybox, databox *valbox);
 
-/* Convenience function for string keys */
-bool multidictFindByString(multidict *d, char *key, uint8_t **val);
+/* Convenience function for string keys: true only when the key is present
+ * and its value is a byte string; *val borrows the value's bytes (length
+ * not reported, not NUL-terminated) */
+bool multidictFindByString(multidict *d, const char *key, uint8_t **val);
 
 /* Existence checks that skip materializing the value */
 bool multidictExists(multidict *d, const databox *keybox);

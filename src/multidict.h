@@ -295,7 +295,12 @@ multidictResult multidictAdd(multidict *d, const databox *keybox,
 bool multidictDelete(multidict *ht, const databox *keybox);
 void multidictFree(multidict *d);
 bool multidictFind(multidict *d, const databox *keybox, databox *valbox);
-bool multidictFindByString(multidict *d, char *key, uint8_t **val);
+/* Find the value of the C-string key 'key'.  True only when the key is
+ * present and its value is a byte string: '*val' then points at the
+ * value's bytes, borrowed from the dict until it changes.  The length is
+ * not reported and the bytes are not NUL-terminated; use multidictFind
+ * for anything else. */
+bool multidictFindByString(multidict *d, const char *key, uint8_t **val);
 bool multidictResize(multidict *d);
 
 /* Conditional Insert Operations */

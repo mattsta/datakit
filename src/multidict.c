@@ -1617,13 +1617,17 @@ bool multidictFind(multidict *d, const databox *keybox, databox *valbox) {
     return found;
 }
 
-bool multidictFindByString(multidict *d, char *key, uint8_t **val) {
-    databox keybox = databoxNewBytesString(key);
+bool multidictFindByString(multidict *d, const char *key, uint8_t **val) {
+    const databox keybox = databoxNewBytesString(key);
     databox valbox = {{0}};
-    multidictFind(d, &keybox, &valbox);
-    size_t nolen;
+    if (!multidictFind(d, &keybox, &valbox) || valbox.type != DATABOX_BYTES) {
+        return false;
+    }
 
-    return databoxGetBytes(&valbox, val, &nolen);
+    /* A stored byte string borrows from the dict; any other value would
+     * point into 'valbox', which goes away on return */
+    *val = valbox.data.bytes.start;
+    return true;
 }
 
 /* ====================================================================
@@ -5269,11 +5273,31 @@ int multidictTest(int argc, char *argv[]) {
         databox val = databoxNewBytesString("strval");
         multidictAdd(d, &key, &val);
 
-        uint8_t *foundVal;
-        bool found = multidictFindByString(d, "strkey", &foundVal);
-        assert(found == true);
+        /* A present byte-string value: its bytes, borrowed from the dict */
+        static const char strkey[] = "strkey";
+        uint8_t *foundVal = NULL;
+        bool found = multidictFindByString(d, strkey, &foundVal);
+        assert(found == true && foundVal != NULL);
+        assert(memcmp(foundVal, "strval", 6) == 0);
         (void)found;
+
+        /* An absent key, and a value that is not a byte string, report
+         * false and leave '*val' alone */
+        uint8_t sentinel = 0;
+        uint8_t *untouched = &sentinel;
+        found = multidictFindByString(d, "nostrkey", &untouched);
+        assert(found == false && untouched == &sentinel);
+
+        databox intKey = databoxNewBytesString("strint");
+        databox intVal = databoxNewSigned(42);
+        multidictAdd(d, &intKey, &intVal);
+        found = multidictFindByString(d, "strint", &untouched);
+        assert(found == false && untouched == &sentinel);
+
         multidictDelete(d, &key);
+        multidictDelete(d, &intKey);
+        found = multidictFindByString(d, strkey, &untouched);
+        assert(found == false && untouched == &sentinel);
     }
 
     /* ================================================================
