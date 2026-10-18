@@ -7,6 +7,9 @@ bool stringmatchlen(const char *pattern, int patternLen, const char *string,
                     int stringLen, int nocase);
 bool stringmatch(const char *pattern, const char *string, int nocase);
 uint64_t humanToBytes(const void *buf_, size_t len, bool *err);
+/* Format 'n' bytes into 'buf' as "N B" below 1 KiB, else with five
+ * decimals in the largest binary unit (KiB through EiB) that keeps the
+ * value at or above 1. Every uint64_t fits, so it always returns true. */
 bool bytesToHuman(void *buf, size_t len, uint64_t n);
 void secondsToHuman(void *buf, size_t len, double sec);
 bool pathIsBaseName(char *path);

@@ -140,26 +140,11 @@ bool bytesToHuman(void *const buf, const size_t len, const uint64_t n) {
     } else if (n < (1024ULL * 1024 * 1024 * 1024 * 1024 * 1024)) {
         d = (double)n / (1024LL * 1024 * 1024 * 1024 * 1024);
         snprintf(buf, len, "%.5f PiB", d);
-    } else if (n < (1024ULL * 1024 * 1024 * 1024 * 1024 * 1024 * 1024)) {
+    } else {
+        /* UINT64_MAX is just under 16 EiB, so EiB is the largest unit any
+         * uint64_t needs. */
         d = (double)n / (1024ULL * 1024 * 1024 * 1024 * 1024 * 1024);
         snprintf(buf, len, "%.5f EiB", d);
-    } else if (n < (1024ULL * 1024 * 1024 * 1024 * 1024 * 1024 * 1024 * 1024)) {
-        d = (double)n / (1024ULL * 1024 * 1024 * 1024 * 1024 * 1024 * 1024);
-        snprintf(buf, len, "%.5f ZiB", d);
-    } else if (n < (1024ULL * 1024 * 1024 * 1024 * 1024 * 1024 * 1024 * 1024 *
-                    1024)) {
-        d = (double)n /
-            (1024ULL * 1024 * 1024 * 1024 * 1024 * 1024 * 1024 * 1024);
-        snprintf(buf, len, "%.5f YiB", d);
-    } else if (n < (1024ULL * 1024 * 1024 * 1024 * 1024 * 1024 * 1024 * 1024 *
-                    1024 * 1024)) {
-        d = (double)n /
-            (1024ULL * 1024 * 1024 * 1024 * 1024 * 1024 * 1024 * 1024 * 1024);
-        snprintf(buf, len, "%.5f XiB", d);
-    } else {
-        /* Let's hope we never need this */
-        snprintf(buf, len, "%" PRIu64 " B", n);
-        return false;
     }
 
     return true;
@@ -516,6 +501,32 @@ int utilTest(int argc, char **argv) {
         const uint64_t GB__12 = humanToBytes("12   GB", 7, &errr);
         assert(!errr);
         assert(GB__12 == (12ULL * 1000 * 1000 * 1000));
+    }
+
+    TEST("bytesToHuman") {
+        const uint64_t EiB = 1ULL << 60;
+        const struct {
+            uint64_t n;
+            const char *want;
+        } cases[] = {
+            {0, "0 B"},
+            {1023, "1023 B"},
+            {1024, "1.00000 KiB"},
+            {3ULL << 29, "1.50000 GiB"},
+            {3ULL << 49, "1.50000 PiB"},
+            {EiB, "1.00000 EiB"},
+            {3 * EiB, "3.00000 EiB"},
+            {UINT64_MAX, "16.00000 EiB"},
+        };
+
+        for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
+            char buf[64];
+            const bool ok = bytesToHuman(buf, sizeof(buf), cases[i].n);
+            if (!ok || strcmp(buf, cases[i].want) != 0) {
+                ERR("bytesToHuman(%" PRIu64 ") = %s (%d), expected %s",
+                    cases[i].n, buf, ok, cases[i].want);
+            }
+        }
     }
 
     TEST("pow2Ceiling64 stress test") {
