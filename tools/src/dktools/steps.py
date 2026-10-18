@@ -97,9 +97,11 @@ def warnings(log: Path, tree: Path) -> list[Warning_]:
     """Distinct warnings in a build log, paths relative to `tree`.
 
     A source compiled into both the static and shared library warns
-    twice with the same location and text; those count once."""
-    root = str(tree.resolve()) + os.sep
-    root_unresolved = str(tree) + os.sep
+    twice with the same location and text; those count once.  Paths
+    are normalized first: a header reached as ``src/../deps/x.h`` is
+    ``deps/x.h``."""
+    root = os.path.normpath(tree.resolve()) + os.sep
+    root_unresolved = os.path.normpath(tree) + os.sep
     seen: dict[tuple[str | None, int, str], Warning_] = {}
     for line in read_lines(log):
         if "warning:" not in line:
@@ -108,7 +110,7 @@ def warnings(log: Path, tree: Path) -> list[Warning_]:
         if m is None:
             w = Warning_(None, 0, line.strip())
         else:
-            path = m["file"]
+            path = os.path.normpath(m["file"])
             for prefix in (root, root_unresolved):
                 if path.startswith(prefix):
                     path = path[len(prefix) :]

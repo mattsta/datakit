@@ -81,16 +81,20 @@ class Scanners(unittest.TestCase):
             f"{tree}/src/flex.c:10:5: warning: unused variable 'x' [-Wunused-variable]\n"
             f"{tree}/src/flex.c:10:5: warning: unused variable 'x' [-Wunused-variable]\n"
             f"{tree}/deps/varint/src/v.c:3:1: warning: shadow [-Wshadow]\n"
+            # gcc names headers by their include path.
+            f"{tree}/src/../deps/varint/src/w.h:7:2: warning: sign [-Wsign-compare]\n"
             "ld: warning: object file built for newer macOS\n"
             "some unrelated line\n"
         )
         log = self.log("build.log", text)
-        self.assertEqual(steps.count_warning_lines(log), 4)
+        self.assertEqual(steps.count_warning_lines(log), 5)
         found = steps.warnings(log, tree)
-        self.assertEqual(len(found), 3)
+        self.assertEqual(len(found), 4)
         groups = steps.group_warnings(found)
         self.assertEqual(groups["src"], {"src/flex.c": 1})
-        self.assertEqual(groups["deps"], {"deps/varint/src/v.c": 1})
+        self.assertEqual(
+            groups["deps"], {"deps/varint/src/v.c": 1, "deps/varint/src/w.h": 1}
+        )
         self.assertEqual(groups["other"], {"(no source location)": 1})
 
     def test_sanitizer_reports(self) -> None:
