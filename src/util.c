@@ -2,10 +2,47 @@
 #include "str.h"
 
 #include <stdio.h>
+#include <strings.h> /* strncasecmp */
 
 /* ====================================================================
  * Readable string-to-value helpers
  * ==================================================================== */
+/* Every unit humanToBytes accepts. Z and Y units are absent on purpose:
+ * 1 ZB (10^21) and 1 ZiB (2^70) already exceed UINT64_MAX, so they are
+ * refused like any other unknown unit. */
+static const struct {
+    const char *name;
+    uint64_t mul;
+} humanUnits[] = {
+    {"b", 1ULL},
+    {"k", 1000ULL},
+    {"kb", 1000ULL},
+    {"kib", 1ULL << 10},
+    {"m", 1000ULL * 1000},
+    {"mb", 1000ULL * 1000},
+    {"mib", 1ULL << 20},
+    {"g", 1000ULL * 1000 * 1000},
+    {"gb", 1000ULL * 1000 * 1000},
+    {"gib", 1ULL << 30},
+    {"t", 1000ULL * 1000 * 1000 * 1000},
+    {"tb", 1000ULL * 1000 * 1000 * 1000},
+    {"tib", 1ULL << 40},
+    {"p", 1000ULL * 1000 * 1000 * 1000 * 1000},
+    {"pb", 1000ULL * 1000 * 1000 * 1000 * 1000},
+    {"pib", 1ULL << 50},
+    {"e", 1000ULL * 1000 * 1000 * 1000 * 1000 * 1000},
+    {"eb", 1000ULL * 1000 * 1000 * 1000 * 1000 * 1000},
+    {"eib", 1ULL << 60},
+};
+
+static uint64_t humanToBytesRefuse(bool *err) {
+    if (err) {
+        *err = true;
+    }
+
+    return 0;
+}
+
 uint64_t humanToBytes(const void *buf_, const size_t len, bool *err) {
     const char *buf = buf_;
 
@@ -13,87 +50,43 @@ uint64_t humanToBytes(const void *buf_, const size_t len, bool *err) {
         *err = false;
     }
 
-    /* Search the first non digit character. */
-    const char *u = buf;
-
-    size_t processed = 0;
-    for (size_t i = 0; StrIsdigit(*u) && i < len; i++) {
-        /* Count digits */
-        processed++;
-
-        /* Advance 'u' string */
-        u++;
+    /* Digits come first */
+    size_t digitsCount = 0;
+    while (digitsCount < len && StrIsdigit(buf[digitsCount])) {
+        digitsCount++;
     }
-
-    /* '- 1' because we were advancing 'u' *after* each digit, so after the
-     * final digit, we have 'u' advanced one beyond the last digit found. */
-    const char *const finalDigit = u;
-    const size_t digitsCount = finalDigit - buf;
 
     uint64_t val;
-    const bool worked = StrBufToUInt64(buf, digitsCount, &val);
-    if (!worked) {
-        if (err) {
-            *err = true;
-        }
-
-        return 0;
+    if (!StrBufToUInt64(buf, digitsCount, &val)) {
+        return humanToBytesRefuse(err);
     }
 
-    /* Jump over any white space between digits and multiplier */
-    assert(digitsCount <= len);
-    const size_t remainingBytesAfterDigits = len - digitsCount;
-    for (size_t i = 0; StrIsspace(*u) && i < remainingBytesAfterDigits; i++) {
-        u++;
+    /* Then optional white space, then the unit: the rest of 'buf', up to
+     * 'len' or a NUL, whichever comes first. */
+    size_t at = digitsCount;
+    while (at < len && StrIsspace(buf[at])) {
+        at++;
     }
 
-    /* unit multiplier */
-    /* TODO: we could make this more efficient by switching on the first
-     * lowercase value of 'u' to pick a proper branch from KMGTPEZY, but right
-     * now we're apparently fine running lots of compares all the time (though,
-     * in reality, we are most likely to hit a truth value within the first half
-     * of the branches) */
-    uint64_t mul;
-    if (*u == '\0' || processed == len || !strcasecmp(u, "b")) {
+    const char *const unit = buf + at;
+    const size_t unitLen = strnlen(unit, len - at);
+
+    uint64_t mul = 0;
+    if (unitLen == 0) {
         mul = 1;
-    } else if (!strcasecmp(u, "kib")) {
-        mul = 1024;
-    } else if (!strcasecmp(u, "k") || !strcasecmp(u, "kb")) {
-        mul = 1000;
-    } else if (!strcasecmp(u, "mib")) {
-        mul = 1024 * 1024;
-    } else if (!strcasecmp(u, "m") || !strcasecmp(u, "mb")) {
-        mul = 1000 * 1000;
-    } else if (!strcasecmp(u, "gib")) {
-        mul = 1024LL * 1024 * 1024;
-    } else if (!strcasecmp(u, "g") || !strcasecmp(u, "gb")) {
-        mul = 1000LL * 1000 * 1000;
-    } else if (!strcasecmp(u, "tib")) {
-        mul = 1024LL * 1024 * 1024 * 1024;
-    } else if (!strcasecmp(u, "t") || !strcasecmp(u, "tb")) {
-        mul = 1000LL * 1000 * 1000 * 1000;
-    } else if (!strcasecmp(u, "pib")) {
-        mul = 1024LL * 1024 * 1024 * 1024 * 1024;
-    } else if (!strcasecmp(u, "p") || !strcasecmp(u, "pb")) {
-        mul = 1000LL * 1000 * 1000 * 1000 * 1000;
-    } else if (!strcasecmp(u, "eib")) {
-        mul = 1024LL * 1024 * 1024 * 1024 * 1024 * 1024;
-    } else if (!strcasecmp(u, "e") || !strcasecmp(u, "eb")) {
-        mul = 1000LL * 1000 * 1000 * 1000 * 1000 * 1000;
-    } else if (!strcasecmp(u, "zib")) {
-        mul = 1024ULL * 1024 * 1024 * 1024 * 1024 * 1024 * 1024;
-    } else if (!strcasecmp(u, "z") || !strcasecmp(u, "zb")) {
-        mul = 1000ULL * 1000 * 1000 * 1000 * 1000 * 1000 * 1000;
-    } else if (!strcasecmp(u, "yib")) {
-        mul = 1024ULL * 1024 * 1024 * 1024 * 1024 * 1024 * 1024 * 1024;
-    } else if (!strcasecmp(u, "y") || !strcasecmp(u, "yb")) {
-        mul = 1000ULL * 1000 * 1000 * 1000 * 1000 * 1000 * 1000 * 1000;
     } else {
-        if (err) {
-            *err = true;
+        for (size_t i = 0; i < COUNT_ARRAY(humanUnits); i++) {
+            if (strlen(humanUnits[i].name) == unitLen &&
+                !strncasecmp(unit, humanUnits[i].name, unitLen)) {
+                mul = humanUnits[i].mul;
+                break;
+            }
         }
+    }
 
-        return false;
+    /* Unknown unit, or a product that does not fit */
+    if (mul == 0 || val > UINT64_MAX / mul) {
+        return humanToBytesRefuse(err);
     }
 
     return val * mul;
@@ -501,6 +494,98 @@ int utilTest(int argc, char **argv) {
         const uint64_t GB__12 = humanToBytes("12   GB", 7, &errr);
         assert(!errr);
         assert(GB__12 == (12ULL * 1000 * 1000 * 1000));
+    }
+
+    TEST("humanToBytes unit boundaries") {
+        /* Written out independently of the parser's own table */
+        const struct {
+            const char *unit;
+            uint64_t mul;
+        } units[] = {
+            {"", 1},
+            {"b", 1},
+            {"B", 1},
+            {"k", 1000},
+            {"KB", 1000},
+            {"kib", 1024},
+            {"m", 1000000},
+            {"mb", 1000000},
+            {"MiB", 1048576},
+            {"g", 1000000000},
+            {"gb", 1000000000},
+            {"gib", 1073741824},
+            {"t", 1000000000000},
+            {"TB", 1000000000000},
+            {"tib", 1099511627776},
+            {"p", 1000000000000000},
+            {"pb", 1000000000000000},
+            {"pib", 1125899906842624},
+            {"e", 1000000000000000000},
+            {"eb", 1000000000000000000},
+            {"EiB", 1152921504606846976},
+        };
+
+        for (size_t i = 0; i < sizeof(units) / sizeof(*units); i++) {
+            const uint64_t max = UINT64_MAX / units[i].mul;
+            char buf[64];
+            bool e = true;
+
+            /* The largest count that fits is accepted exactly */
+            int n =
+                snprintf(buf, sizeof(buf), "%" PRIu64 "%s", max, units[i].unit);
+            uint64_t got = humanToBytes(buf, (size_t)n, &e);
+            if (e || got != max * units[i].mul) {
+                ERR("%s: got %" PRIu64 " err=%d, expected %" PRIu64, buf, got,
+                    e, max * units[i].mul);
+            }
+
+            /* One more is refused, never wrapped. For bytes, max + 1 is
+             * 2^64, which uint64_t cannot print; it is spelled out. */
+            if (max == UINT64_MAX) {
+                n = snprintf(buf, sizeof(buf), "18446744073709551616%s",
+                             units[i].unit);
+            } else {
+                n = snprintf(buf, sizeof(buf), "%" PRIu64 "%s", max + 1,
+                             units[i].unit);
+            }
+            e = false;
+            got = humanToBytes(buf, (size_t)n, &e);
+            if (!e || got != 0) {
+                ERR("%s: got %" PRIu64 " err=%d, expected refusal", buf, got,
+                    e);
+            }
+        }
+
+        /* Units no uint64_t can hold, unknown units, digits that overflow
+         * on their own, and a missing number are all refused */
+        const char *refused[] = {"0zb",
+                                 "1z",
+                                 "1zb",
+                                 "1zib",
+                                 "1ZiB",
+                                 "1y",
+                                 "1yb",
+                                 "1yib",
+                                 "1q",
+                                 "1 kbb",
+                                 "gb",
+                                 "",
+                                 "18446744073709551616"};
+        for (size_t i = 0; i < sizeof(refused) / sizeof(*refused); i++) {
+            bool e = false;
+            const uint64_t got =
+                humanToBytes(refused[i], strlen(refused[i]), &e);
+            if (!e || got != 0) {
+                ERR("\"%s\": got %" PRIu64 " err=%d, expected refusal",
+                    refused[i], got, e);
+            }
+        }
+
+        /* Only the first 'len' bytes count */
+        bool e = true;
+        if (humanToBytes("12GBxyz", 4, &e) != 12000000000ULL || e) {
+            ERRR("len-bounded \"12GB\" should parse");
+        }
     }
 
     TEST("bytesToHuman") {

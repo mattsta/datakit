@@ -6,6 +6,12 @@
 bool stringmatchlen(const char *pattern, int patternLen, const char *string,
                     int stringLen, int nocase);
 bool stringmatch(const char *pattern, const char *string, int nocase);
+/* Parse "<digits>[ ...][unit]" from the first 'len' bytes of 'buf_' (or up
+ * to a NUL) into a byte count. Units are case-insensitive: b; k/kb, m/mb,
+ * g/gb, t/tb, p/pb, e/eb (powers of 1000); kib through eib (powers of 1024);
+ * no unit means bytes. A missing number, an unknown unit, a Z or Y unit, or
+ * any result above UINT64_MAX is refused: the return is 0 and '*err' (if
+ * non-NULL) is set to true. On success '*err' is set to false. */
 uint64_t humanToBytes(const void *buf_, size_t len, bool *err);
 /* Format 'n' bytes into 'buf' as "N B" below 1 KiB, else with five
  * decimals in the largest binary unit (KiB through EiB) that keeps the
