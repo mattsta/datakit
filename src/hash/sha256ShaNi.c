@@ -568,22 +568,32 @@ int sha256ShaNiTest(int argc, char *argv[]) {
         memset(buf, 0x5a, bufSize);
 
         struct timespec t0, t1;
-        uint8_t out[SHA256_DIGEST_LEN];
+        const size_t nb = bufSize / SHA256_BLOCK_LEN;
 
-        /* Portable baseline. */
+        /* Portable baseline: the scalar compress function itself.
+         * (sha256Hash() would dispatch to whatever hardware path the
+         * host has and time that instead.) */
+        uint32_t stRef[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+                             0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
         clock_gettime(CLOCK_MONOTONIC, &t0);
-        sha256Hash(buf, bufSize, out);
+        sha256PortableCompressBlocks(stRef, buf, nb);
         clock_gettime(CLOCK_MONOTONIC, &t1);
         double secsRef = (double)(t1.tv_sec - t0.tv_sec) +
                          (double)(t1.tv_nsec - t0.tv_nsec) / 1e9;
 
-        /* SHA-NI. The wrapper covers padding overhead but that's negligible
-         * at 64 MiB. */
+        /* SHA-NI compress over the same blocks (this test only runs when
+         * SHA-NI is available) */
+        uint32_t stAcc[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+                             0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
         clock_gettime(CLOCK_MONOTONIC, &t0);
-        shaniHash(buf, bufSize, out);
+        sha256ShaNiCompressBlocks(stAcc, buf, nb);
         clock_gettime(CLOCK_MONOTONIC, &t1);
         double secsAcc = (double)(t1.tv_sec - t0.tv_sec) +
                          (double)(t1.tv_nsec - t0.tv_nsec) / 1e9;
+
+        if (memcmp(stRef, stAcc, sizeof(stRef)) != 0) {
+            ERRR("portable and SHA-NI compress disagree on the bench input");
+        }
 
         double mib = (double)bufSize / (1024.0 * 1024.0);
         double mibsRef = secsRef > 0 ? mib / secsRef : 0;

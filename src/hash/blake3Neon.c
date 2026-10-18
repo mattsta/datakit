@@ -664,7 +664,8 @@ int blake3NeonTest(int argc, char *argv[]) {
         }
         prng_fill(buf, MB);
 
-        /* Portable: official one-shot. */
+        /* Public one-shot hasher. It dispatches to the NEON paths on this
+         * hardware, so it is the end-to-end figure, not a portable one. */
         uint8_t digest[BLAKE3_OUT_LEN];
         double t0 = now_seconds();
         const uint32_t iters = 64;
@@ -672,14 +673,34 @@ int blake3NeonTest(int argc, char *argv[]) {
             blake3Hash(buf, MB, digest);
         }
         double t1 = now_seconds();
-        double portable_mib_s = (double)iters / (t1 - t0);
+        double public_mib_s = (double)iters / (t1 - t0);
+
+        /* Portable single-block compress: the scalar kernel in the same
+         * shape as the NEON single-block loop below. */
+        uint32_t cv[8];
+        memcpy(cv, REF_IV, sizeof(cv));
+        const uint32_t niters = 64;
+        volatile uint32_t portable_sink = 0;
+        t0 = now_seconds();
+        for (uint32_t i = 0; i < niters; i++) {
+            uint32_t cur[8];
+            memcpy(cur, cv, sizeof(cur));
+            const size_t nblocks = MB / BLAKE3_BLOCK_LEN;
+            for (size_t b = 0; b < nblocks; b++) {
+                portable_compress_in_place(cur, buf + b * BLAKE3_BLOCK_LEN,
+                                           BLAKE3_BLOCK_LEN, (uint64_t)b, 0);
+            }
+            for (int k = 0; k < 8; k++) {
+                portable_sink ^= cur[k];
+            }
+        }
+        t1 = now_seconds();
+        (void)portable_sink;
+        double portable_mib_s = (double)niters / (t1 - t0);
 
         /* NEON single-block compress throughput: raw block-level
          * compress in the same shape the hasher's bulk path uses. */
-        uint32_t cv[8];
-        memcpy(cv, REF_IV, sizeof(cv));
         t0 = now_seconds();
-        const uint32_t niters = 64;
         /* Volatile sink defeats dead-code elimination: without consuming
          * `cur` after the loop, -O3 NDEBUG can fold the whole bench away
          * and report `inf MiB/s`. */
@@ -736,9 +757,16 @@ int blake3NeonTest(int argc, char *argv[]) {
         (void)batch_sink;
         double batch_mib_s = (double)niters / (t1 - t0);
 
-        printf("    portable blake3Hash:        %7.1f MiB/s\n", portable_mib_s);
-        printf("    NEON single-block compress: %7.1f MiB/s\n", neon_mib_s);
-        printf("    NEON 4-way batched:         %7.1f MiB/s\n", batch_mib_s);
+        printf("    public blake3Hash (dispatched): %7.1f MiB/s\n",
+               public_mib_s);
+        printf("    portable single-block compress: %7.1f MiB/s\n",
+               portable_mib_s);
+        printf("    NEON single-block compress:     %7.1f MiB/s (%.2fx "
+               "portable)\n",
+               neon_mib_s, neon_mib_s / portable_mib_s);
+        printf("    NEON 4-way batched:             %7.1f MiB/s (%.2fx "
+               "portable)\n",
+               batch_mib_s, batch_mib_s / portable_mib_s);
         free(buf);
     }
 

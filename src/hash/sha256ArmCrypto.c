@@ -868,17 +868,19 @@ int sha256ArmCryptoTest(int argc, char *argv[]) {
         cleanerName(zfree, U8) uint8_t *buf = zmalloc(bufSize);
         memset(buf, 0xa5, bufSize);
 
-        uint8_t out[SHA256_DIGEST_LEN];
-
-        /* Portable timing */
+        /* Portable timing: the scalar compress function itself, fed the
+         * same bulk buffer as the crypto timing below. (sha256Update()
+         * would dispatch to the crypto path on this hardware and time
+         * crypto against crypto.) */
         struct timespec t0, t1;
-        sha256Ctx ctx;
-        sha256Init(&ctx);
+        uint32_t portableState[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372,
+                                     0xa54ff53a, 0x510e527f, 0x9b05688c,
+                                     0x1f83d9ab, 0x5be0cd19};
         clock_gettime(CLOCK_MONOTONIC, &t0);
         for (uint32_t i = 0; i < iters; i++) {
-            sha256Update(&ctx, buf, bufSize);
+            sha256PortableCompressBlocks(portableState, buf,
+                                         bufSize / SHA256_BLOCK_LEN);
         }
-        sha256Final(&ctx, out);
         clock_gettime(CLOCK_MONOTONIC, &t1);
         double secs_portable = (double)(t1.tv_sec - t0.tv_sec) +
                                (double)(t1.tv_nsec - t0.tv_nsec) / 1e9;
@@ -908,9 +910,10 @@ int sha256ArmCryptoTest(int argc, char *argv[]) {
             printf("    speedup:  %.2fx\n", crypto_rate / portable_rate);
         }
 
-        /* Touch `state` so the optimizer can't elide the loop. */
-        if ((state[0] | state[7]) == 0xFFFFFFFF) {
-            printf("    (anti-DCE: %08x)\n", state[0]);
+        /* Same input, same block count: both paths must agree, and using
+         * both states keeps the optimizer from eliding either loop. */
+        if (memcmp(state, portableState, sizeof(state)) != 0) {
+            ERRR("portable and crypto compress disagree on the bench input");
         }
     }
 
