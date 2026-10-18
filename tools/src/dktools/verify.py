@@ -30,6 +30,11 @@ sanitizer report, 1 otherwise, and 2 on an input error.  The macOS
 "no debug symbols in executable" lines are linker notes, not warnings
 (``steps.is_linker_note``): they are counted on their own and never
 fail the run.
+
+Each sanitizer report (UBSan ``runtime error:``, ASan/LSan/TSan
+``ERROR:``) prints as one ``report`` line: the test whose ctest output
+section holds it, the report's first line unshortened, and its
+``LOG:LINE``.
 """
 
 from __future__ import annotations
@@ -77,6 +82,13 @@ def _ctest_line(step: Step, result: steps.CtestResult) -> str:
         return "not run"
     detail = result.summary or ("no tests matched" if result.no_tests else "no summary")
     return f"{'ok' if step.ok else 'FAILED'} ({detail})"
+
+
+def _sanitizer_line(hits: list[steps.SanitizerHit]) -> str:
+    if not hits:
+        return "ok, no reports"
+    tests = steps.tests_with_reports(hits)
+    return f"{len(hits)} report(s) from {len(tests)} test(s): {' '.join(tests)}"
 
 
 def run(repo: Path, opts: VerifyOptions) -> int:
@@ -179,7 +191,7 @@ def run(repo: Path, opts: VerifyOptions) -> int:
         f"  build     {build_line}",
         f"  ctest     {_ctest_line(ctest, ctest_result) if opts.tests else '-'}",
         f"  serial    {_ctest_line(serial, serial_result) if opts.serial else '-'}",
-        f"  sanitizer {'ok, no reports' if not sanitizer else f'{len(sanitizer)} report line(s)'}",
+        f"  sanitizer {_sanitizer_line(sanitizer)}",
         f"  alloc     {'ok' if alloc.ok else 'FAILED'} ({steps.last_line(alloc.log)})",
     ]
     if failed:
@@ -187,8 +199,8 @@ def run(repo: Path, opts: VerifyOptions) -> int:
     not_run = ctest_result.not_run + serial_result.not_run
     if not_run:
         lines.append(f"  not run   {' '.join(not_run)}")
-    for hit in sanitizer[:5]:
-        lines.append(f"  report    {hit.log.name}:{hit.line}: {hit.text[:160]}")
+    for hit in sanitizer:
+        lines.append(f"  report    {hit.describe()}")
     lines.append("  logs")
     for step in (configure, build, ctest, serial, alloc):
         if step.log.exists():

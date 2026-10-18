@@ -247,7 +247,10 @@ def render(
     if not hits:
         md.append("none")
     for h in hits[:40]:
-        md.append(f"- `{h.log.parent.name}/{h.log.name}:{h.line}`: {h.text[:200]}")
+        md.append(
+            f"- `{h.log.parent.name}/{h.log.name}:{h.line}` "
+            f"{h.test or '(unknown test)'}: {h.text}"
+        )
     if len(hits) > 40:
         md.append(f"- ... and {len(hits) - 40} more")
 

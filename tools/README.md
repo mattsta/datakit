@@ -94,6 +94,11 @@ uv run --project tools dktools verify NAME --tests REGEX [--serial REGEX] \
   warnings: they show as `linker notes N` and never fail the run.
   Every other `warning:` line, `ld: warning:` included, still fails.
   `validate` counts them the same way.
+- Every sanitizer report (UBSan `runtime error:`, ASan/LSan/TSan
+  `ERROR:`) fails the run and prints as
+  `report    TEST: FIRST LINE (LOG:LINE)`: the test whose section of
+  ctest's output log holds it and the report's first line in full. The
+  `sanitizer` line counts the reports and names the tests.
 
 Compilers and presets live in `src/dktools/toolchain.py`, the single
 place builds get them from; the system `cc` is never used:

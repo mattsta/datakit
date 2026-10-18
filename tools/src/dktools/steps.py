@@ -256,21 +256,44 @@ _SANITIZER = re.compile(
 )
 
 
+#: ctest's per-test output log (LastTest.log) opens each test's section
+#: with "N/M Testing: NAME"; with -j the sections stay whole, each
+#: written when its test finishes.
+_TEST_SECTION = re.compile(r"^\d+/\d+ Testing: (?P<name>\S+)\s*$")
+
+
 @dataclass(frozen=True)
 class SanitizerHit:
+    """One sanitizer report: its first line, where it is, which test."""
+
     log: Path
     line: int
     text: str
+    test: str | None = None  # None: outside any test's section
+
+    def describe(self) -> str:
+        """``TEST: FIRST LINE (LOG:LINE)``, the first line unshortened."""
+        return f"{self.test or '(unknown test)'}: {self.text} ({self.log.name}:{self.line})"
 
 
 def sanitizer_reports(logs: Iterable[Path]) -> list[SanitizerHit]:
-    """Every sanitizer report line in the given logs."""
+    """The first line of every sanitizer report in the given logs, with
+    the test whose LastTest.log section it sits in."""
     hits: list[SanitizerHit] = []
     for log in logs:
+        test: str | None = None
         for n, line in enumerate(read_lines(log), start=1):
-            if _SANITIZER.search(line):
-                hits.append(SanitizerHit(log, n, line.strip()))
+            section = _TEST_SECTION.match(line)
+            if section:
+                test = section["name"]
+            elif _SANITIZER.search(line):
+                hits.append(SanitizerHit(log, n, line.strip(), test))
     return hits
+
+
+def tests_with_reports(hits: Iterable[SanitizerHit]) -> list[str]:
+    """The distinct test names behind `hits`, in first-report order."""
+    return list(dict.fromkeys(h.test or "(unknown test)" for h in hits))
 
 
 # -- allocation audit -------------------------------------------------

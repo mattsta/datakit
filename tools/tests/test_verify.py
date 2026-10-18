@@ -45,6 +45,34 @@ The following tests FAILED:
 Errors while running CTest
 """
 
+#: A ctest LastTest.log: one section per test; {long} is a report.
+LAST_TEST_LOG = """\
+Start testing: Oct 18 12:38 EDT
+----------------------------------------------------------
+47/181 Testing: dod
+47/181 Test: dod
+Command: "/b/src/datakit-test" "test" "dod"
+Directory: /b/src
+"dod" start time: Oct 18 12:38 EDT
+Output:
+----------------------------------------------------------
+{long}
+<end of output>
+Test time =   2.57 sec
+----------------------------------------------------------
+Test Passed.
+"dod" end time: Oct 18 12:38 EDT
+"dod" time elapsed: 00:00:02
+----------------------------------------------------------
+
+18/181 Testing: varint-dd
+18/181 Test: varint-dd
+Output:
+varint.h:1:2: runtime error: load of misaligned address
+==7==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x1
+<end of output>
+"""
+
 
 class Scanners(unittest.TestCase):
     def setUp(self) -> None:
@@ -128,6 +156,19 @@ class Scanners(unittest.TestCase):
         )
         hits = steps.sanitizer_reports([log, self.dir / "absent.log"])
         self.assertEqual([h.line for h in hits], [2, 3, 4])
+        self.assertEqual({h.test for h in hits}, {None})
+
+    def test_sanitizer_reports_name_their_test(self) -> None:
+        long = "src/dod.c:723:26: runtime error: signed integer overflow: " + "9" * 200
+        log = self.log("LastTest.log", LAST_TEST_LOG.format(long=long))
+        hits = steps.sanitizer_reports([log])
+        self.assertEqual(
+            [(h.test, h.line) for h in hits],
+            [("dod", 10), ("varint-dd", 22), ("varint-dd", 23)],
+        )
+        self.assertEqual(hits[0].text, long)
+        self.assertEqual(hits[0].describe(), f"dod: {long} (LastTest.log:10)")
+        self.assertEqual(steps.tests_with_reports(hits), ["dod", "varint-dd"])
 
     def test_ctest_command(self) -> None:
         cmd = steps.ctest_command(Path("b"), 8, "a|b", exclude=["c.*P", ""])
@@ -243,6 +284,23 @@ class VerifyRun(unittest.TestCase):
                 self.assertIn("verify t: FAIL", out)
         code, out = self.run_verify(FakeRunner({"ctest": 8}, {"ctest": CTEST_FAIL}))
         self.assertIn("failed    flex multimapP", out)
+
+    def test_sanitizer_reports_print_test_and_full_line(self) -> None:
+        long = "src/dod.c:723:26: runtime error: signed integer overflow: " + "7" * 200
+        outputs = {
+            "ctest": CTEST_PASS,
+            "ctest-output": LAST_TEST_LOG.format(long=long),
+            "allocaudit": "100% clean pattern\n",
+        }
+        code, out = self.run_verify(FakeRunner({}, outputs))
+        self.assertEqual(code, 1, out)
+        self.assertIn("sanitizer 3 report(s) from 2 test(s): dod varint-dd\n", out)
+        self.assertIn(f"  report    dod: {long} (ctest-output.log:10)\n", out)
+        self.assertIn(
+            "  report    varint-dd: ==7==ERROR: AddressSanitizer: "
+            "heap-buffer-overflow on address 0x1 (ctest-output.log:23)\n",
+            out,
+        )
 
     def test_linker_notes_alone_pass(self) -> None:
         note = "warning: no debug symbols in executable (-arch arm64)\n"

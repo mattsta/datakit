@@ -174,8 +174,11 @@ class ValidateRun(unittest.TestCase):
             ),
             "sanitizer": (
                 {},
-                {"ctest-serial-output": "x.c:1:1: runtime error: overflow\n"},
-                "runtime error: overflow",
+                {
+                    "ctest-serial-output": "1/1 Testing: flexP\n"
+                    "x.c:1:1: runtime error: overflow\n"
+                },
+                "ctest-serial-output.log:2` flexP: x.c:1:1: runtime error: overflow",
             ),
             "build": ({"clang22-debug build": 2}, {}, "FAIL (2)"),
             "alloc": (
