@@ -419,10 +419,10 @@ struct persistOps {
 
     /* ---- Optional Per-Fold Context Hooks ----
      *
-     * Some codecs need ambient per-thread context beyond the bytes
-     * (e.g. Carrier's quantum-set codec resolves members through a
-     * shared atom table and must serialize against concurrent live
-     * mutators).  A fold engine that is about to call this type's
+     * Some codecs need per-thread context beyond the bytes (for
+     * example, a codec that resolves members through a shared atom
+     * table must serialize against concurrent writers).  A fold
+     * engine that is about to call this type's
      * restore/applyOp/snapshot/free MUST bracket the calls:
      *
      *     void *tok = ops->foldEnter ? ops->foldEnter() : NULL;

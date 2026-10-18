@@ -2985,31 +2985,23 @@ int multimapFullTest(int argc, char *argv[]) {
     }
 
     TEST("binary-search-vs-iteration agreement on mixed-length numeric keys") {
-        /* BUG-A regression: the previous databoxCompareBytes_
-         * natural-sort produced a non-transitive ordering on
-         * mixed-length numeric-suffix strings like the carrier
-         * persist test keyset ("g_0_..", "g_1_..", ..., "g_10_..").
-         * Sorted into a flex by that comparator, the resulting
-         * sequence was "locally sorted" but not "globally sorted":
-         * binary search walked the wrong branch and reported
-         * "not found" for keys that iteration could still see.
+        /* Regression: an earlier databoxCompareBytes_ natural sort
+         * ordered mixed-length numeric-suffix strings ("g_0_..",
+         * "g_1_..", ..., "g_10_..") non-transitively.  A flex sorted by
+         * it was sorted locally but not globally, so binary search took
+         * the wrong branch and missed keys that iteration still found.
          *
-         * Lock that down here.  We build a 4-element multimap of
-         * the same shape carrierStateMultimapNew() builds (the
-         * carrier kv[] storage), insert every key the BUG-A soak
-         * exposed, and then assert: for EVERY inserted key,
-         * multimapFullExists must find it AND
-         * multimapFullIteratorNext walking the whole map must also
-         * visit it. */
+         * Build a map with 4 elements per entry, insert those keys, and
+         * require that multimapFullExists finds every key and that a
+         * full multimapFullIteratorNext walk visits every key. */
         cleaner(multimapFullFree) multimapFull *m = multimapFullNew(4);
         char buf[600][16];
         size_t n = 0;
         for (int it = 0; it < 12; it++) {
             for (int k = 0; k < 50; k++) {
                 snprintf(buf[n], sizeof(buf[n]), "g_%d_%d", it, k);
-                /* Match how carrier emits embed-form keys.  Use
-                 * databoxNewBytesAllowEmbed because keys ≤ 8 bytes
-                 * take the embed path. */
+                /* databoxNewBytesAllowEmbed: keys of 8 bytes or less
+                 * take the embedded form. */
                 const databox key =
                     databoxNewBytesAllowEmbed(buf[n], strlen(buf[n]));
                 const databox val =

@@ -2445,8 +2445,8 @@ static uint8_t *intsetBigPersistEncodeOp(persistOp op, const void *args,
     (void)argc;
     /* args is a const databoxBig *.  Only numeric members belong in an
      * intsetBig; reject anything else (the factory would otherwise push it
-     * verbatim).  The member rides flex like every other Carrier value — a
-     * 1-element flex via the databoxBig factory arm. */
+     * verbatim).  The member is written as a 1-element flex through the
+     * databoxBig factory arm, like any other value. */
     const databoxBig *b = args;
     switch (b->type) {
     case DATABOX_SIGNED_64:
@@ -3201,23 +3201,18 @@ static uint8_t *multilistPersistEncodeOp(persistOp op, const void *args,
 
 /* Identity-verified POP apply.
  *
- * A pop's operand MAY carry the exact element the executor removed
- * (a 1-element flex in the PUSH-operand shape — the same encoding
- * the pop's inverse uses to push it back).  A blind end-pop is
- * count-exact but element-identity-INEXACT: a replayed or
- * double-executed pop removes whichever element sits at the end NOW,
- * silently converting a duplicated delivery into a lost element
- * elsewhere in the list.  With the operand present the fold becomes
- * element-exact:
- *   (1) the popping end matches → pop it — the fast path, and the
- *       only path a single-executor schedule ever takes;
- *   (2) present elsewhere → remove exactly that element
- *       (out-of-order interleave of independent pops);
- *   (3) absent → this pop's effect is already applied — a COUNTED
- *       idempotent no-op, the identity dedupe that an executor
- *       stamp alone cannot provide.
- * Operand-less pops (datakit-native rows, manufactured cross-shard
- * removals) keep the positional behavior unchanged. */
+ * A POP record may carry the element the origin removed, encoded as a
+ * 1-element flex like a PUSH operand.  A plain end-pop is exact about
+ * the count but not about which element: applying the same pop twice
+ * removes whatever is at the end by then, turning a duplicate into a
+ * lost element elsewhere in the list.  With the operand, replay is
+ * exact:
+ *   (1) the popping end holds it: pop it, the usual case;
+ *   (2) it is elsewhere in the list: remove that element, which happens
+ *       when independent pops are applied out of order;
+ *   (3) it is absent: the pop was already applied, so the record is a
+ *       counted, idempotent no-op.
+ * Pops without an operand keep the plain positional behaviour. */
 static _Atomic uint64_t mlPopIdentityDeepRemoveTotal = 0; /* arm 2 */
 static _Atomic uint64_t mlPopIdentityAbsentNoopTotal = 0; /* arm 3 */
 
@@ -3323,19 +3318,12 @@ static bool multilistPersistApplyOp(void *structure, persistOp op,
             return multilistApplyPopIdentity(ml, state, (const databox *)&want,
                                              fromTail);
         }
-        /* Operand-less pop folding onto an EMPTY list is a counted
-         * no-op, never a rejection — mirroring the identity arm's
-         * absent-is-no-op rule above and the live drain's own
-         * tolerance.  The cross-shard move coordinator submits its
-         * COMMIT-remove pop BEFORE the drain learns whether the src
-         * has an element (durability-first ordering), so a
-         * nil-returning racing pop legitimately deposits a durable
-         * pop row that found nothing; the executor already concluded
-         * "nothing popped" when it wrote the verdict.  Rejecting the
-         * row here made the canonical fold DISAGREE with live
-         * semantics and permanently wedged the key: watermark held,
-         * every subsequent WAL-merged read of the key failing
-         * forever. */
+        /* An operand-less pop on an empty list is a no-op, never a
+         * rejection, matching the identity arm's absent rule above and
+         * the live pop, which returns nothing on an empty list.  A writer
+         * may log a pop before it knows whether the list has an element;
+         * refusing the record would make replay disagree with the live
+         * result and stop recovery. */
         if (!*ml || multilistCount(*ml) == 0) {
             return true;
         }
