@@ -2444,6 +2444,7 @@ DK_STATIC void flexInsertByType_(flex **const ff, flexEntry *const fe,
     }
 #endif
     case DATABOX_SIGNED_128: {
+        databoxWidePayloadRequire(box);
         assert(box->big);
         /* Same order as the 64-bit arm. */
         const flexEncoding encoding = flexEncodingSignedBig(*box->data.i128);
@@ -2452,6 +2453,7 @@ DK_STATIC void flexInsertByType_(flex **const ff, flexEntry *const fe,
         break;
     }
     case DATABOX_UNSIGNED_128:
+        databoxWidePayloadRequire(box);
         assert(box->big);
         flexInsert_(ff, fe, flexEncodingUnsignedBig(*box->data.u128),
                     box->data.u128, sizeof(*box->data.u128));
@@ -2637,6 +2639,7 @@ insertContentsFromBox(databox *box, flexInsertContents *c,
         c->len = sizeof(box->data.u64);
         break;
     case DATABOX_SIGNED_128:
+        databoxWidePayloadRequire(box);
         assert(box->big);
         /* Note: we MUST NOT modify the i128 inside 'box' because it
          *       STILL points to the ORIGINAL i128.
@@ -2661,6 +2664,7 @@ insertContentsFromBox(databox *box, flexInsertContents *c,
         c->len = sizeof(*box->data.i128);
         break;
     case DATABOX_UNSIGNED_128:
+        databoxWidePayloadRequire(box);
         assert(box->big);
         c->encoding = flexEncodingUnsignedBig(*box->data.u128);
         c->data = box->data.u128;
@@ -3396,12 +3400,14 @@ void flexPushDataboxBig(flex **const ff, const databoxBig *b,
         /* Reconstruct a fully-formed big databox (sets ->big + ->extra) so the
          * push never trips flexInsertByType_'s assert(box->big), regardless of
          * how the caller's databoxBig was assembled. */
+        databoxWidePayloadRequire((const databox *)b);
         databoxBig t;
         DATABOX_BIG_SIGNED_128(&t, *b->data.i128);
         flexPushByType(ff, (const databox *)&t, where);
         break;
     }
     case DATABOX_UNSIGNED_128: {
+        databoxWidePayloadRequire((const databox *)b);
         databoxBig t;
         DATABOX_BIG_UNSIGNED_128(&t, *b->data.u128);
         flexPushByType(ff, (const databox *)&t, where);
@@ -6099,6 +6105,9 @@ bool cflexConvertToFlex(const cflex *c, flex **fBuffer, size_t *fBufferLen) {
 
 #include "strDoubleFormat.h"
 #include <inttypes.h>
+#include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 /* Define KEYGEN/VALGEN before any ctest.h includes (including via list.c) */
 #define CTEST_INCLUDE_KEYGEN
@@ -8018,6 +8027,64 @@ static int32_t flexTestReplaceSign(void) {
 
 #include "jebuf.h"
 #include <locale.h>
+/* Feed a deferred wide box (wide type, data.ptr == NULL) to one insert or
+ * encode path in a child and report whether the child aborted.  The
+ * child turns SIGABRT into a distinct exit status, which keeps the
+ * platform crash reporter out of it, and silences its stderr. */
+#define FLEX_TEST_DEFERRED_PATHS 4
+#define FLEX_TEST_ABORT_STATUS 86
+static void flexTestAbortHandler_(int sig) {
+    (void)sig;
+    _exit(FLEX_TEST_ABORT_STATUS);
+}
+
+static bool flexTestDeferredAborts_(int32_t path, databoxType type) {
+    fflush(stdout);
+    fflush(stderr);
+    const pid_t kid = fork();
+    if (kid < 0) {
+        return false;
+    }
+
+    if (kid == 0) {
+        (void)signal(SIGABRT, flexTestAbortHandler_);
+        if (!freopen("/dev/null", "w", stderr)) {
+            _exit(2);
+        }
+
+        cleaner(flexFree) flex *f = flexNew();
+        flexPushSigned(&f, 1, FLEX_ENDPOINT_TAIL);
+        databoxBig deferred;
+        memset(&deferred, 0, sizeof(deferred));
+        deferred.type = type;
+        databox *const box = (databox *)&deferred;
+        const databox *row[1] = {box};
+        switch (path) {
+        case 0: /* flexInsertByType */
+            flexPushByType(&f, box, FLEX_ENDPOINT_TAIL);
+            break;
+        case 1: /* insertContentsFromBox through replace */
+            flexReplaceByType(&f, flexHead(f), box);
+            break;
+        case 2: /* insertContentsFromBox through a multi-element append */
+            flexAppendMultiple(&f, 1, row);
+            break;
+        default: /* flexPushDataboxBig */
+            flexPushDataboxBig(&f, &deferred, FLEX_ENDPOINT_TAIL);
+            break;
+        }
+
+        _exit(0);
+    }
+
+    int status = 0;
+    if (waitpid(kid, &status, 0) != kid) {
+        return false;
+    }
+
+    return WIFEXITED(status) && WEXITSTATUS(status) == FLEX_TEST_ABORT_STATUS;
+}
+
 int32_t flexTest(int32_t argc, char **argv) {
     setlocale(LC_ALL, "");
 
@@ -8157,6 +8224,27 @@ int32_t flexTest(int32_t argc, char **argv) {
             }
         }
 #endif
+
+        if (bad) {
+            return bad;
+        }
+        printf("  ok\n");
+    }
+
+    printf("Verify inserting or encoding a deferred wide box fails fast:\n");
+    {
+        int32_t bad = 0;
+        for (int32_t path = 0; path < FLEX_TEST_DEFERRED_PATHS; path++) {
+            for (int32_t sign = 0; sign < 2; sign++) {
+                const databoxType type =
+                    sign ? DATABOX_SIGNED_128 : DATABOX_UNSIGNED_128;
+                if (!flexTestDeferredAborts_(path, type)) {
+                    printf("  FAIL: path %" PRId32 " type %d did not abort\n",
+                           path, (int)type);
+                    bad++;
+                }
+            }
+        }
 
         if (bad) {
             return bad;
