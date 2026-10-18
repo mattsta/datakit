@@ -3080,22 +3080,12 @@ defcleaner(multilist *, multilistFree);
 static uint8_t *multilistPersistSnapshot(const void *structure, size_t *len) {
     const multilist *ml = structure;
 
-    /* Create a flex to hold all elements */
-    cleaner(flexFree) flex *f = flexNew();
-
-    /* Iterate through all elements and add to flex */
-    __attribute__((cleanup(freeMflexStates2_cleanup)))
-    mflexState *state[2] = {mflexStateCreate(), mflexStateCreate()};
-    multilistIterator iter;
-    multilistIteratorInit((multilist *)ml, state, &iter, true,
-                          true); /* forward, readOnly */
-
-    multilistEntry entry;
-    while (multilistNext(&iter, &entry)) {
-        flexPushByType(&f, &entry.box, FLEX_ENDPOINT_TAIL);
-    }
-
-    multilistIteratorRelease(&iter);
+    /* Every element in order as one flex.  The dump copies the element
+     * encodings without decoding them, so its bytes are exactly those of
+     * pushing each element in turn, and 96/128-bit elements need no
+     * special handling. */
+    cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
+    cleaner(flexFree) flex *f = multilistDump(ml, state);
 
     *len = flexBytes(f);
     /* @own: caller; free=zfree */
@@ -3105,7 +3095,9 @@ static uint8_t *multilistPersistSnapshot(const void *structure, size_t *len) {
 }
 
 static void *multilistPersistRestore(const uint8_t *data, size_t len) {
-    if (!flexValidateBuffer(data, len)) {
+    /* Every element is decoded below, so validate each entry, not just the
+     * header. */
+    if (!flexValidateBufferDeep(data, len)) {
         return NULL;
     }
 
@@ -3136,8 +3128,7 @@ static void *multilistPersistRestore(const uint8_t *data, size_t len) {
     flexEntry *fe = flexHead(f);
     for (size_t i = 0; i < count; i++) {
         databoxBig box; /* room for a 96/128-bit element */
-        DATABOX_BIG_INIT(&box);
-        flexGetByType(fe, (databox *)&box);
+        flexGetByTypeBig(fe, &box);
         multilistPushByTypeTail(&ml, state, (databox *)&box);
         fe = flexNext(f, fe);
     }
@@ -3255,8 +3246,11 @@ static bool multilistApplyPopIdentity(multilist **ml, mflexState *state,
     if (multilistIndexGet(*ml, state, fromTail ? (mlOffsetId)(cnt - 1) : 0,
                           &end) &&
         databoxEqual(&end.box, want)) {
-        databox got;
-        return multilistPop(ml, state, &got, fromTail);
+        /* The popped value is an owned copy nobody needs. */
+        databox got = {{0}};
+        const bool popped = multilistPop(ml, state, &got, fromTail);
+        databoxFreeData(&got);
+        return popped;
     }
     /* Not at the popping end — search FROM that end and remove by
      * identity.  The iterator wants two scratch states; the replay
@@ -3306,14 +3300,15 @@ static bool multilistPersistApplyOp(void *structure, persistOp op,
     switch (op) {
     case PERSIST_OP_PUSH_HEAD:
     case PERSIST_OP_PUSH_TAIL: {
-        databox box;
-        if (!flexGetSingleDatabox(data, len, &box)) {
+        /* databoxBig: the pushed value may be 96/128-bit */
+        databoxBig box;
+        if (!flexGetSingleDataboxBig(data, len, &box)) {
             return false;
         }
         if (op == PERSIST_OP_PUSH_HEAD) {
-            multilistPushByTypeHead(ml, state, &box);
+            multilistPushByTypeHead(ml, state, (const databox *)&box);
         } else {
-            multilistPushByTypeTail(ml, state, &box);
+            multilistPushByTypeTail(ml, state, (const databox *)&box);
         }
         return true;
     }
@@ -3321,9 +3316,11 @@ static bool multilistPersistApplyOp(void *structure, persistOp op,
     case PERSIST_OP_POP_HEAD:
     case PERSIST_OP_POP_TAIL: {
         const bool fromTail = (op == PERSIST_OP_POP_TAIL);
-        databox want;
-        if (data && len && flexGetSingleDatabox(data, len, &want)) {
-            return multilistApplyPopIdentity(ml, state, &want, fromTail);
+        /* databoxBig: the identity operand may be 96/128-bit */
+        databoxBig want;
+        if (data && len && flexGetSingleDataboxBig(data, len, &want)) {
+            return multilistApplyPopIdentity(ml, state, (const databox *)&want,
+                                             fromTail);
         }
         /* Operand-less pop folding onto an EMPTY list is a counted
          * no-op, never a rejection — mirroring the identity arm's
@@ -3341,8 +3338,11 @@ static bool multilistPersistApplyOp(void *structure, persistOp op,
         if (!*ml || multilistCount(*ml) == 0) {
             return true;
         }
-        databox got;
-        return multilistPop(ml, state, &got, fromTail);
+        /* The popped value is an owned copy nobody needs. */
+        databox got = {{0}};
+        const bool popped = multilistPop(ml, state, &got, fromTail);
+        databoxFreeData(&got);
+        return popped;
     }
 
     case PERSIST_OP_DELETE_AT: {
@@ -3392,13 +3392,18 @@ static bool multilistPersistApplyOp(void *structure, persistOp op,
     }
 
     case PERSIST_OP_REPLACE: {
-        /* [index, value] as a 2-element flex. */
-        databox indexBox, valueBox;
-        if (!flexGetTwoDataboxes(data, len, &indexBox, &valueBox)) {
+        /* [index, value] as a 2-element flex; the value may be
+         * 96/128-bit. */
+        databoxBig indexBox, valueBox;
+        if (!flexGetTwoDataboxesBig(data, len, &indexBox, &valueBox)) {
+            return false;
+        }
+        if (indexBox.type != DATABOX_SIGNED_64 &&
+            indexBox.type != DATABOX_UNSIGNED_64) {
             return false;
         }
         return multilistReplaceByTypeAtIndex(
-            ml, state, (mlNodeId)indexBox.data.i, &valueBox);
+            ml, state, (mlNodeId)indexBox.data.i, (const databox *)&valueBox);
     }
 
     case PERSIST_OP_CLEAR:
@@ -4508,6 +4513,120 @@ static void testMultidictFreeWithClass(multidict *d) {
 
 defcleanerName(multidict *, testMultidictFreeWithClass, Dict);
 
+/* Element 'id' of the multilist wide-element tests, built in 'out' (and
+ * 'buf' for a string): 96/128-bit values around each limit and generated
+ * ones of both signs, strings, and 64-bit values.  Every value is boxed in
+ * the type it reads back as. */
+static const databox *persistTestMlValue(uint32_t id, databoxBig *out,
+                                         char *buf, size_t cap) {
+    const __uint128_t one = 1;
+    memset(out, 0, sizeof(*out));
+    switch (id % 5) {
+    case 0: {
+        const __uint128_t positive[] = {one << 64,       (one << 95) - 1,
+                                        one << 95,       one << 127,
+                                        ~(__uint128_t)0, (one << 127) - 1};
+        DATABOX_BIG_UNSIGNED_128(out, positive[(id / 5) % 6]);
+        break;
+    }
+    case 1: {
+        const __int128_t negative[] = {-((__int128_t)1 << 63) - 1,
+                                       -((__int128_t)1 << 95),
+                                       (__int128_t)(one << 127)};
+        DATABOX_BIG_SIGNED_128(out, negative[(id / 5) % 3]);
+        break;
+    }
+    case 2: {
+        const int n =
+            id % 3 == 0
+                ? snprintf(buf, cap, "pml-%" PRIu32 "-long-enough-to-copy", id)
+                : snprintf(buf, cap, "pml-%" PRIu32, id);
+        *(databox *)out = databoxNewBytes(buf, (size_t)n);
+        break;
+    }
+    case 3: {
+        /* Unique per id: the low word is the id. */
+        const uint64_t hi =
+            (((uint64_t)id + 1) * UINT64_C(0x9E3779B97F4A7C15) >> 3) | 1;
+        const __uint128_t mag = ((__uint128_t)hi << 64) | id;
+        if (id & 4) {
+            DATABOX_BIG_SIGNED_128(out, -(__int128_t)mag);
+        } else {
+            DATABOX_BIG_UNSIGNED_128(out, mag);
+        }
+        break;
+    }
+    default:
+        *(databox *)out = id & 1 ? databoxNewSigned(-(int64_t)id * 7919 - 1)
+                                 : databoxNewUnsigned(UINT64_MAX - id);
+        break;
+    }
+
+    return (const databox *)out;
+}
+
+/* Same type and the same value bytes. */
+static bool persistTestBoxSame(const databox *a, const databox *b) {
+    if (a->type != b->type) {
+        return false;
+    }
+
+    switch (a->type) {
+    case DATABOX_SIGNED_128:
+    case DATABOX_UNSIGNED_128:
+        return a->big && a->data.ptr && b->data.ptr &&
+               memcmp(a->data.ptr, b->data.ptr, sizeof(__uint128_t)) == 0;
+    case DATABOX_BYTES:
+        return databoxLen(a) == databoxLen(b) &&
+               memcmp(databoxBytes(a), databoxBytes(b), databoxLen(a)) == 0;
+    default:
+        return a->data.u64 == b->data.u64;
+    }
+}
+
+/* Read 'ml' through 0xFF-poisoned entries and compare it, in order, with
+ * the elements 'ids' names.  Returns the number of errors reported. */
+static int persistTestMlVerify(const multilist *ml, const uint32_t *ids,
+                               size_t n, const char *what) {
+    int err = 0;
+    if (!ml || multilistCount(ml) != n) {
+        ERR("%s: list holds %zu elements, want %zu", what,
+            ml ? multilistCount(ml) : 0, n);
+        return err;
+    }
+
+    cleaner(mflexStateFree) mflexState *s0 = mflexStateCreate();
+    cleaner(mflexStateFree) mflexState *s1 = mflexStateCreate();
+    mflexState *s[2] = {s0, s1};
+    multilistIterator iter;
+    multilistIteratorInitForwardReadOnly((multilist *)ml, s, &iter);
+    for (size_t i = 0; i < n; i++) {
+        multilistEntry entry;
+        memset(&entry, 0xFF, sizeof(entry));
+        databoxBig storage;
+        char buf[64];
+        if (!multilistNext(&iter, &entry) ||
+            !persistTestBoxSame(
+                &entry.box,
+                persistTestMlValue(ids[i], &storage, buf, sizeof(buf)))) {
+            ERR("%s: element %zu (id %" PRIu32 ") differs", what, i, ids[i]);
+            break;
+        }
+    }
+
+    multilistIteratorRelease(&iter);
+    return err;
+}
+
+/* Apply a POP row whose operand is 'operand' (the identity form). */
+static bool persistTestMlApplyPop(multilist **ml, bool fromTail,
+                                  const databox *operand) {
+    cleaner(flexFree) flex *f = flexNewFromDatabox(operand);
+    return persistOpsMultilist.applyOp(
+        ml, fromTail ? PERSIST_OP_POP_TAIL : PERSIST_OP_POP_HEAD,
+        (const uint8_t *)f, flexBytes(f));
+}
+
 int persistTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -5570,8 +5689,8 @@ int persistTest(int argc, char *argv[]) {
      * ================================================================ */
 
     TEST("128-bit values survive multimap snapshot and multilist restore") {
-        /* Restore decodes every member through flexGetByType; a 96/128-bit
-         * member must land in storage the decode box owns. */
+        /* Restore decodes every member; a 96/128-bit member must land in
+         * storage the decode box owns. */
         const __int128_t wide = -((__int128_t)1 << 100) - 7;
         databoxBig wideBox;
         DATABOX_BIG_SIGNED_128(&wideBox, wide);
@@ -5695,6 +5814,295 @@ int persistTest(int argc, char *argv[]) {
 
         multilistFree(recovered);
         persistClose(p);
+    }
+
+    TEST("multilist: 96/128-bit elements survive snapshot and restore") {
+        /* One list per tier: Small, Medium (between the 512-byte limit and
+         * 3x it), and Full with compressed interior nodes. */
+        const struct {
+            const char *name;
+            flexCapSizeLimit limit;
+            uint32_t depth;
+            uint32_t count;
+            size_t minBytes;
+            size_t maxBytes;
+        } configs[] = {
+            {"Small", FLEX_CAP_LEVEL_65536, 0, 40, 0, 65536},
+            {"Medium", FLEX_CAP_LEVEL_512, 0, 50, 512, 3 * 512},
+            {"Full", FLEX_CAP_LEVEL_128, 1, 400, 3 * 128, SIZE_MAX},
+        };
+
+        for (size_t c = 0; c < sizeof(configs) / sizeof(*configs); c++) {
+            const char *const name = configs[c].name;
+            uint32_t ids[400];
+            size_t n = 0;
+            cleaner(multilistFree) multilist *ml =
+                multilistNew(configs[c].limit, configs[c].depth);
+            cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
+            for (uint32_t id = 0; id < configs[c].count; id++) {
+                databoxBig storage;
+                char buf[64];
+                const databox *box =
+                    persistTestMlValue(id, &storage, buf, sizeof(buf));
+                if (id % 6 == 5) {
+                    multilistPushByTypeHead(&ml, state, box);
+                    memmove(&ids[1], &ids[0], n * sizeof(*ids));
+                    ids[0] = id;
+                } else {
+                    multilistPushByTypeTail(&ml, state, box);
+                    ids[n] = id;
+                }
+                n++;
+            }
+
+            const size_t bytes = multilistBytes(ml);
+            if (bytes <= configs[c].minBytes || bytes > configs[c].maxBytes) {
+                ERR("%s: %zu bytes is outside its tier's range", name, bytes);
+            }
+
+            persist *p = persistCreate(&persistOpsMultilist, NULL);
+            persistAttachSnapshot(p, persistStoreMemory(0));
+            if (!persistSnapshot(p, ml)) {
+                ERR("%s: snapshot failed", name);
+            }
+
+            cleaner(multilistFree) multilist *restored = persistRestore(p);
+            err += persistTestMlVerify(restored, ids, n, name);
+
+            /* The snapshot is the list's dump, byte for byte. */
+            size_t len = 0;
+            cleanerName(zfree, Bytes) uint8_t *snap =
+                persistOpsMultilist.snapshot(ml, &len);
+            cleaner(flexFree) flex *dump = multilistDump(ml, state);
+            if (!snap || len != flexBytes(dump) || memcmp(snap, dump, len)) {
+                ERR("%s: snapshot bytes differ from the dump", name);
+            }
+
+            persistClose(p);
+        }
+    }
+
+    TEST("multilist restore: deep-validates the snapshot before decoding") {
+        /* A header that claims one entry more than the body holds passes
+         * the O(1) envelope check; decoding it would walk off the end. */
+        cleaner(flexFree) flex *f = flexNew();
+        for (int i = 1; i <= 4; i++) {
+            flexPushUnsigned(&f, (uint64_t)i, FLEX_ENDPOINT_TAIL);
+        }
+
+        const size_t bytes = flexBytes(f);
+        cleanerName(zfree, Bytes) uint8_t *tampered = zmalloc(bytes);
+        memcpy(tampered, f, bytes);
+        /* A small flex has a 1-byte total and a 1-byte count. */
+        if (tampered[1] != 4) {
+            ERRR("unexpected flex header layout");
+        } else {
+            tampered[1] = 5;
+            if (!flexValidateBuffer(tampered, bytes)) {
+                ERRR("the envelope check should accept the tampered count");
+            }
+
+            cleaner(multilistFree) multilist *restored =
+                persistOpsMultilist.restore(tampered, bytes);
+            if (restored) {
+                ERRR("restore accepted a snapshot whose count lies");
+            }
+        }
+    }
+
+    TEST("multilist WAL: 96/128-bit operands replay under strictRecovery") {
+        /* strictRecovery fails recovery on any row apply refuses, so a
+         * dropped PUSH or REPLACE operand fails the test. */
+        persistConfig cfg = persistDefaultConfig();
+        cfg.strictRecovery = true;
+        persist *p = persistCreate(&persistOpsMultilist, &cfg);
+        persistAttachSnapshot(p, persistStoreMemory(0));
+        persistAttachWAL(p, persistStoreMemory(0));
+
+        cleaner(multilistFree) multilist *ml =
+            multilistNew(FLEX_CAP_LEVEL_128, 0);
+        cleaner(mflexStateFree) mflexState *s0 = mflexStateCreate();
+        cleaner(mflexStateFree) mflexState *s1 = mflexStateCreate();
+        mflexState *s[2] = {s0, s1};
+        persistSnapshot(p, ml);
+
+        uint32_t ids[200];
+        size_t n = 0;
+        uint32_t nextId = 0;
+        databoxBig storage;
+        char buf[64];
+
+        /* PUSH_HEAD / PUSH_TAIL */
+        for (int i = 0; i < 120; i++) {
+            const uint32_t id = nextId++;
+            const databox *box =
+                persistTestMlValue(id, &storage, buf, sizeof(buf));
+            const bool head = i % 4 == 3;
+            if (head) {
+                multilistPushByTypeHead(&ml, s0, box);
+                memmove(&ids[1], &ids[0], n * sizeof(*ids));
+                ids[0] = id;
+            } else {
+                multilistPushByTypeTail(&ml, s0, box);
+                ids[n] = id;
+            }
+            n++;
+            persistLogOp(p, head ? PERSIST_OP_PUSH_HEAD : PERSIST_OP_PUSH_TAIL,
+                         box, 1);
+        }
+
+        /* REPLACE [index, wide value] */
+        const size_t replaceAt[] = {0, 5, n - 1};
+        for (size_t k = 0; k < sizeof(replaceAt) / sizeof(*replaceAt); k++) {
+            const uint32_t id = 5 * (nextId++) + (uint32_t)(k % 2);
+            const databox *box =
+                persistTestMlValue(id, &storage, buf, sizeof(buf));
+            const databox idxBox = DATABOX_SIGNED((int64_t)replaceAt[k]);
+            const databox *args[2] = {&idxBox, box};
+            multilistReplaceByTypeAtIndex(&ml, s0, (mlNodeId)replaceAt[k], box);
+            persistLogOp(p, PERSIST_OP_REPLACE, args, 2);
+            ids[replaceAt[k]] = id;
+        }
+
+        /* ROTATE, starting with a wide tail */
+        {
+            const uint32_t id = 5 * (nextId++) + 1;
+            const databox *box =
+                persistTestMlValue(id, &storage, buf, sizeof(buf));
+            multilistPushByTypeTail(&ml, s0, box);
+            persistLogOp(p, PERSIST_OP_PUSH_TAIL, box, 1);
+            ids[n++] = id;
+        }
+
+        for (int r = 0; r < 3; r++) {
+            const uint32_t moved = ids[n - 1];
+            multilistRotate(ml, s);
+            persistLogOp(p, PERSIST_OP_ROTATE, NULL, 0);
+            memmove(&ids[1], &ids[0], (n - 1) * sizeof(*ids));
+            ids[0] = moved;
+        }
+
+        /* Operand-less POPs over wide values and strings */
+        for (int k = 0; k < 7; k++) {
+            const bool fromTail = k % 2 == 0;
+            databox got = {{0}};
+            multilistPop(&ml, s0, &got, fromTail);
+            databoxFreeData(&got);
+            persistLogOp(p,
+                         fromTail ? PERSIST_OP_POP_TAIL : PERSIST_OP_POP_HEAD,
+                         NULL, 0);
+            if (!fromTail) {
+                memmove(&ids[0], &ids[1], (n - 1) * sizeof(*ids));
+            }
+            n--;
+        }
+
+        err += persistTestMlVerify(ml, ids, n, "live list");
+        if (multilistBytes(ml) <= 3 * 128) {
+            ERRR("the WAL list never reached the Full tier");
+        }
+
+        persistSync(p);
+        cleaner(multilistFree) multilist *recovered = persistRecover(p);
+        persistStats stats;
+        persistGetStats(p, &stats);
+        if (!recovered) {
+            ERRR("strict recovery refused the wide WAL");
+        } else if (stats.entriesSkipped != 0) {
+            ERR("recovery skipped %" PRIu64 " rows", stats.entriesSkipped);
+        }
+
+        err += persistTestMlVerify(recovered, ids, n, "recovered list");
+        persistClose(p);
+    }
+
+    TEST("multilist WAL: POP identity with 96/128-bit operands") {
+        /* Ids 0..59 in order: 0, 1 and 3 mod 5 are wide (3 is unique),
+         * 2 a string, 4 a unique 64-bit value.  The replay state stands in
+         * for persistRecover's, which the Full tier needs. */
+        cleaner(multilistFree) multilist *ml =
+            multilistNew(FLEX_CAP_LEVEL_128, 0);
+        cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
+        persistSetReplayState(state);
+        uint32_t ids[60];
+        size_t n = 0;
+        databoxBig storage;
+        char buf[64];
+        for (uint32_t id = 0; id < 60; id++) {
+            multilistPushByTypeTail(
+                &ml, state, persistTestMlValue(id, &storage, buf, sizeof(buf)));
+            ids[n++] = id;
+        }
+
+        const struct {
+            const char *what;
+            bool fromTail;
+            uint32_t operandId;
+            int deep;   /* expected change in the deep-remove counter */
+            int absent; /* expected change in the absent counter */
+        } pops[] = {
+            /* the popping end matches: a plain pop */
+            {"wide operand at the head", false, 0, 0, 0},
+            /* present elsewhere: removed by identity, searched from the
+             * tail */
+            {"wide operand mid-list", true, 33, 1, 0},
+            /* absent: an already-applied pop */
+            {"absent wide operand", false, 1003, 0, 1},
+            /* a 64-bit operand found by scanning past wide elements */
+            {"64-bit operand among wide elements", false, 19, 1, 0},
+            {"64-bit operand at the tail", true, 59, 0, 0},
+        };
+
+        for (size_t k = 0; k < sizeof(pops) / sizeof(*pops); k++) {
+            const uint64_t deep0 = persistMultilistPopIdentityDeepRemoveTotal();
+            const uint64_t absent0 =
+                persistMultilistPopIdentityAbsentNoopTotal();
+            const databox *operand = persistTestMlValue(
+                pops[k].operandId, &storage, buf, sizeof(buf));
+            if (!persistTestMlApplyPop(&ml, pops[k].fromTail, operand)) {
+                ERR("%s: apply refused the row", pops[k].what);
+            }
+
+            const uint64_t deep =
+                persistMultilistPopIdentityDeepRemoveTotal() - deep0;
+            const uint64_t absent =
+                persistMultilistPopIdentityAbsentNoopTotal() - absent0;
+            if (deep != (uint64_t)pops[k].deep ||
+                absent != (uint64_t)pops[k].absent) {
+                ERR("%s: ran the wrong arm (deep %" PRIu64 ", absent %" PRIu64
+                    ")",
+                    pops[k].what, deep, absent);
+            }
+
+            for (size_t i = 0; i < n; i++) {
+                if (ids[i] == pops[k].operandId) {
+                    memmove(&ids[i], &ids[i + 1], (n - i - 1) * sizeof(*ids));
+                    n--;
+                    break;
+                }
+            }
+
+            err += persistTestMlVerify(ml, ids, n, pops[k].what);
+        }
+
+        /* A REPLACE whose index is not a 64-bit integer is refused. */
+        {
+            databoxBig wideIdx;
+            DATABOX_BIG_UNSIGNED_128(&wideIdx, (__uint128_t)1 << 64);
+            const databox value = DATABOX_SIGNED(7);
+            const databox *args[2] = {(const databox *)&wideIdx, &value};
+            size_t len = 0;
+            cleanerName(zfree, Bytes) uint8_t *row =
+                persistOpsMultilist.encodeOp(PERSIST_OP_REPLACE, args, 2, &len);
+            if (!row || persistOpsMultilist.applyOp(&ml, PERSIST_OP_REPLACE,
+                                                    row, len)) {
+                ERRR("REPLACE with a 128-bit index was not refused");
+            }
+
+            err += persistTestMlVerify(ml, ids, n, "after refused REPLACE");
+        }
+
+        persistSetReplayState(NULL);
     }
 
     /* ================================================================
@@ -6742,8 +7150,9 @@ int persistTest(int argc, char *argv[]) {
             }
             case 4: { /* Pop (if not empty) */
                 if (multilistCount(ml) > 0) {
-                    databox got;
+                    databox got = {{0}};
                     multilistPop(&ml, state, &got, FLEX_ENDPOINT_TAIL);
+                    databoxFreeData(&got);
                 }
                 break;
             }

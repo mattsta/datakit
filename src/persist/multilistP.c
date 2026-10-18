@@ -376,9 +376,11 @@ static bool verifyMultilistMatchesTracker(multilistP *ml,
         return false;
     }
 
+    /* openNode: the Full tier decodes the element only for an opened
+     * node. */
     multilistEntry entry;
     for (uint32_t i = 0; i < tracker->count; i++) {
-        if (!multilistIndex(ml->ml, ml->state, i, &entry, false)) {
+        if (!multilistIndex(ml->ml, ml->state, i, &entry, true)) {
             printf("  [verify] Failed to get index %u\n", i);
             return false;
         }
@@ -389,6 +391,42 @@ static bool verifyMultilistMatchesTracker(multilistP *ml,
     }
 
     return true;
+}
+
+/* Element 'i' of the wide-element test, built in 'storage' (and 'str' for
+ * a string), which must outlive every use of the returned box: positive
+ * and negative 96/128-bit values around each limit, strings, and 64-bit
+ * values. */
+static const databox *mlpWideValue(uint32_t i, databoxBig *storage, char *str,
+                                   size_t cap) {
+    const __uint128_t one = 1;
+    memset(storage, 0, sizeof(*storage));
+    switch (i % 4) {
+    case 0: {
+        const __uint128_t positive[] = {one << 64, (one << 95) - 1, one << 95,
+                                        one << 127, ~(__uint128_t)0};
+        DATABOX_BIG_UNSIGNED_128(storage, positive[(i / 4) % 5]);
+        break;
+    }
+    case 1: {
+        const __int128_t negative[] = {-((__int128_t)1 << 63) - 1,
+                                       -((__int128_t)1 << 95),
+                                       (__int128_t)(one << 127)};
+        DATABOX_BIG_SIGNED_128(storage, negative[(i / 4) % 3]);
+        break;
+    }
+    case 2: {
+        const int n = snprintf(str, cap, "mlp-wide-%" PRIu32 "-padding", i);
+        *(databox *)storage = databoxNewBytes(str, (size_t)n);
+        break;
+    }
+    default:
+        *(databox *)storage = (i / 4) % 2 ? databoxNewSigned(-(int64_t)i * 7919)
+                                          : databoxNewUnsigned(UINT64_MAX - i);
+        break;
+    }
+
+    return (const databox *)storage;
 }
 
 int multilistPTest(int argc, char *argv[]) {
@@ -620,7 +658,7 @@ int multilistPTest(int argc, char *argv[]) {
         }
 
         /* Pop from tail */
-        databox got;
+        databox got = {{0}};
         if (!multilistPopTailP(ml, &got)) {
             ERRR("Pop tail failed");
         }
@@ -629,6 +667,7 @@ int multilistPTest(int argc, char *argv[]) {
         if (!ptestBoxesEqual(&got, &expected)) {
             ERRR("Pop tail value mismatch");
         }
+        databoxFreeData(&got);
 
         /* Pop from head */
         if (!multilistPopHeadP(ml, &got)) {
@@ -638,6 +677,7 @@ int multilistPTest(int argc, char *argv[]) {
         if (!ptestBoxesEqual(&got, &expected)) {
             ERRR("Pop head value mismatch");
         }
+        databoxFreeData(&got);
 
         if (!verifyMultilistMatchesTracker(ml, &tracker)) {
             ERRR("Post-pop verification failed");
@@ -664,15 +704,18 @@ int multilistPTest(int argc, char *argv[]) {
             }
 
             /* Pop some */
-            databox got;
             for (int i = 0; i < 5; i++) {
+                databox got = {{0}};
                 databox expected;
                 multilistPopTailP(ml, &got);
+                databoxFreeData(&got);
                 ptestBoxTrackerPopTail(&tracker, &expected);
             }
             for (int i = 0; i < 3; i++) {
+                databox got = {{0}};
                 databox expected;
                 multilistPopHeadP(ml, &got);
+                databoxFreeData(&got);
                 ptestBoxTrackerPopHead(&tracker, &expected);
             }
 
@@ -718,7 +761,8 @@ int multilistPTest(int argc, char *argv[]) {
             } else {
                 /* Pop if not empty */
                 if (tracker.count > 0) {
-                    databox got, expected;
+                    databox got = {{0}};
+                    databox expected;
                     if (i % 2 == 0) {
                         multilistPopHeadP(ml, &got);
                         ptestBoxTrackerPopHead(&tracker, &expected);
@@ -726,6 +770,7 @@ int multilistPTest(int argc, char *argv[]) {
                         multilistPopTailP(ml, &got);
                         ptestBoxTrackerPopTail(&tracker, &expected);
                     }
+                    databoxFreeData(&got);
                 }
             }
         }
@@ -988,9 +1033,10 @@ int multilistPTest(int argc, char *argv[]) {
             multilistPushTailP(ml, &box);
         }
 
-        databox got;
         for (int i = 0; i < 5; i++) {
+            databox got = {{0}};
             multilistPopTailP(ml, &got);
+            databoxFreeData(&got);
         }
 
         persistCtxStats stats;
@@ -1002,6 +1048,126 @@ int multilistPTest(int argc, char *argv[]) {
         }
 
         multilistCloseP(ml);
+        persistCtxFree(ctx);
+        ptestCleanupFiles(basePath);
+    }
+
+    TEST("multilistP 96/128-bit elements survive WAL replay and compaction") {
+        /* strictRecovery, so a WAL row that replay refuses fails the reopen
+         * instead of being skipped.  The tracker's boxes point into
+         * 'storage' and 'strs', which outlive every check. */
+        enum { MLP_WIDE_COUNT = 160, MLP_WIDE_SLOTS = MLP_WIDE_COUNT + 4 };
+        static databoxBig storage[MLP_WIDE_SLOTS];
+        static char strs[MLP_WIDE_SLOTS][48];
+        ptestCleanupFiles(basePath);
+        persistCtxConfig cfg = persistCtxDefaultConfig();
+        cfg.strictRecovery = true;
+        ptestBoxTracker tracker;
+        ptestBoxTrackerInit(&tracker);
+
+        persistCtx *ctx = persistCtxNew(basePath, &cfg);
+        multilistP *ml = ctx ? multilistNewP(ctx, FLEX_CAP_LEVEL_128, 0) : NULL;
+        if (!ml) {
+            ERRR("Failed to create multilistP");
+        }
+
+        for (uint32_t i = 0; ml && i < MLP_WIDE_COUNT; i++) {
+            const databox *box =
+                mlpWideValue(i, &storage[i], strs[i], sizeof(strs[i]));
+            if (i % 5 == 4) {
+                multilistPushHeadP(ml, box);
+                ptestBoxTrackerPushHead(&tracker, box);
+            } else {
+                multilistPushTailP(ml, box);
+                ptestBoxTrackerPushTail(&tracker, box);
+            }
+        }
+
+        if (ml) {
+            /* Replace with a wide value (logged as REPLACE). */
+            const databox *rep =
+                mlpWideValue(1, &storage[MLP_WIDE_COUNT], strs[MLP_WIDE_COUNT],
+                             sizeof(strs[MLP_WIDE_COUNT]));
+            if (!multilistReplaceAtIndexP(ml, 7, rep)) {
+                ERRR("wide replace failed");
+            }
+            tracker.boxes[7] = *rep;
+
+            /* Pop both ends: into a zeroed box, then a databoxBig. */
+            databox got = {{0}};
+            databox expected;
+            if (!multilistPopTailP(ml, &got) ||
+                !ptestBoxTrackerPopTail(&tracker, &expected) ||
+                !ptestBoxesEqual(&got, &expected)) {
+                ERRR("tail pop of the wide list read back wrong");
+            }
+            databoxFreeData(&got);
+
+            databoxBig gotBig;
+            DATABOX_BIG_INIT(&gotBig);
+            if (!multilistPopHeadP(ml, (databox *)&gotBig) ||
+                !ptestBoxTrackerPopHead(&tracker, &expected) ||
+                !ptestBoxesEqual((databox *)&gotBig, &expected)) {
+                ERRR("head pop of the wide list read back wrong");
+            }
+            databoxFreeData((databox *)&gotBig);
+
+            /* Past Medium's 3x limit, so the Full tier is covered. */
+            if (multilistBytesP(ml) <= 3 * 128) {
+                ERR("list is only %zu bytes; it never reached Full",
+                    multilistBytesP(ml));
+            }
+
+            if (!verifyMultilistMatchesTracker(ml, &tracker)) {
+                ERRR("live wide list does not match the tracker");
+            }
+
+            multilistCloseP(ml);
+        }
+        persistCtxFree(ctx);
+
+        /* Reopen: snapshot of the empty list plus WAL replay. */
+        ctx = persistCtxOpen(basePath, &cfg);
+        ml = ctx ? multilistOpenP(ctx) : NULL;
+        if (!ml) {
+            ERRR("WAL replay of the wide list failed");
+        } else {
+            if (!verifyMultilistMatchesTracker(ml, &tracker)) {
+                ERRR("WAL-replayed wide list does not match the tracker");
+            }
+
+            /* Compact (snapshot via the dump), then log more wide values on
+             * top. */
+            if (!multilistCompactP(ml)) {
+                ERRR("compaction of the wide list failed");
+            }
+
+            for (uint32_t k = 0; k < 3; k++) {
+                const uint32_t slot = MLP_WIDE_COUNT + 1 + k;
+                const databox *box =
+                    mlpWideValue(4 * k + (k & 1), &storage[slot], strs[slot],
+                                 sizeof(strs[slot]));
+                multilistPushTailP(ml, box);
+                ptestBoxTrackerPushTail(&tracker, box);
+            }
+
+            multilistCloseP(ml);
+        }
+        persistCtxFree(ctx);
+
+        /* Reopen: the compacted snapshot plus the newer WAL rows. */
+        ctx = persistCtxOpen(basePath, &cfg);
+        ml = ctx ? multilistOpenP(ctx) : NULL;
+        if (!ml) {
+            ERRR("snapshot + WAL recovery of the wide list failed");
+        } else {
+            if (!verifyMultilistMatchesTracker(ml, &tracker)) {
+                ERRR("snapshot-recovered wide list does not match the "
+                     "tracker");
+            }
+
+            multilistCloseP(ml);
+        }
         persistCtxFree(ctx);
         ptestCleanupFiles(basePath);
     }

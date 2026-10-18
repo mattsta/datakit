@@ -75,7 +75,10 @@ void multilistPushHeadP(multilistP *ml, const databox *box);
 /* Push to tail - automatically persisted */
 void multilistPushTailP(multilistP *ml, const databox *box);
 
-/* Pop from head - automatically persisted */
+/* Pop from head - automatically persisted.  *got receives an owned copy
+ * of the removed element; 'got' must be zeroed or a DATABOX_BIG_INIT'd
+ * databoxBig, and the result is released with databoxFreeData (see
+ * multilistPop in multilist.h).  The same holds for multilistPopTailP. */
 bool multilistPopHeadP(multilistP *ml, databox *got);
 
 /* Pop from tail - automatically persisted */
