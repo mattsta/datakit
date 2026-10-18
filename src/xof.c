@@ -13,6 +13,23 @@
 #include "../deps/varint/src/varintBitstream.h"
 
 /* ====================================================================
+ * Bit views of a double
+ * ==================================================================== */
+/* memcpy is the defined way to reinterpret the bits; it compiles to a
+ * register move. */
+static inline uint64_t xofBitsFromDouble(const double val) {
+    uint64_t bits;
+    memcpy(&bits, &val, sizeof(bits));
+    return bits;
+}
+
+static inline double xofDoubleFromBits(const uint64_t bits) {
+    double val;
+    memcpy(&val, &bits, sizeof(val));
+    return val;
+}
+
+/* ====================================================================
  * Types
  * ==================================================================== */
 typedef enum xofType {
@@ -31,8 +48,7 @@ void xofInit(xof *restrict const x, size_t *restrict const bitsUsed,
              const double val) {
     assert(sizeof(uint64_t) == sizeof(double));
 
-    const uint64_t *const v = (uint64_t *)&val;
-    varintBitstreamSet(x, 0, 64, *v);
+    varintBitstreamSet(x, 0, 64, xofBitsFromDouble(val));
     *bitsUsed = 64;
 }
 
@@ -143,7 +159,7 @@ double xofGetCached(const xof *restrict const x,
 
 Dispatch:
     if (consumedValues == offset) {
-        return *(double *)currentValueBits;
+        return xofDoubleFromBits(*currentValueBits);
     }
 
     consumedValues++;
@@ -237,7 +253,7 @@ bool xofReadAll(const xof *x, double *vals, size_t count) {
     size_t bitOffset = 64;
 
     /* Write first entry (bit reinterpret, not numeric cast)... */
-    vals[0] = *(double *)&currentValueBits;
+    vals[0] = xofDoubleFromBits(currentValueBits);
 
     /* Fetch remaining entries... */
     for (size_t i = 1; i < count; i++) {
@@ -286,7 +302,7 @@ double xofReaderNext(xofReader *r, const xof *x) {
 
 double xofReaderCurrent(const xofReader *r) {
     /* Return current value without advancing */
-    return *(double *)&r->currentValueBits;
+    return xofDoubleFromBits(r->currentValueBits);
 }
 
 size_t xofReaderNextN(xofReader *r, const xof *x, double *out, size_t n) {
@@ -682,6 +698,59 @@ int xofTest(int argc, char *argv[]) {
     /* ================================================================
      * xofReader tests
      * ================================================================ */
+    TEST("bit-exact special values") {
+        /* -0.0, smallest subnormal, NaNs with payloads, -inf, a repeat (the
+         * one-bit SAME path), 1.0 and +0.0: every reader must hand back the
+         * exact bits, which a == comparison cannot check. */
+        const uint64_t patterns[] = {
+            0x8000000000000000ULL, 0x0000000000000001ULL, 0x7FF8000000000001ULL,
+            0x7FF0000000000001ULL, 0xFFF0000000000000ULL, 0xFFF0000000000000ULL,
+            0x3FF0000000000000ULL, 0x0000000000000000ULL,
+        };
+        const size_t count = sizeof(patterns) / sizeof(*patterns);
+
+        double values[sizeof(patterns) / sizeof(*patterns)];
+        for (size_t i = 0; i < count; i++) {
+            values[i] = xofDoubleFromBits(patterns[i]);
+        }
+
+        xof bits[64] = {0};
+        size_t bitsUsed = 0;
+        xofInit(bits, &bitsUsed, values[0]);
+        int_fast32_t prevLZ = -1;
+        int_fast32_t prevTZ = -1;
+        for (size_t i = 1; i < count; i++) {
+            xofAppend(bits, &bitsUsed, &prevLZ, &prevTZ, values[i - 1],
+                      values[i]);
+        }
+
+        /* The stream opens with the first value's raw IEEE-754 bits */
+        if (varintBitstreamGet(bits, 0, 64) != patterns[0]) {
+            ERR("First 64 bits are 0x%016" PRIx64 ", expected 0x%016" PRIx64,
+                (uint64_t)varintBitstreamGet(bits, 0, 64), patterns[0]);
+        }
+
+        double all[sizeof(patterns) / sizeof(*patterns)];
+        xofReadAll(bits, all, count);
+
+        xofReader r;
+        xofReaderInit(&r, bits);
+        for (size_t i = 0; i < count; i++) {
+            const double viaReader =
+                i == 0 ? xofReaderCurrent(&r) : xofReaderNext(&r, bits);
+            const uint64_t got[3] = {xofBitsFromDouble(all[i]),
+                                     xofBitsFromDouble(xofGet(bits, i)),
+                                     xofBitsFromDouble(viaReader)};
+            for (size_t k = 0; k < 3; k++) {
+                if (got[k] != patterns[i]) {
+                    ERR("[%zu] reader %zu gave 0x%016" PRIx64
+                        ", expected 0x%016" PRIx64,
+                        i, k, got[k], patterns[i]);
+                }
+            }
+        }
+    }
+
     TEST("xofReader - sequential reading") {
         const size_t count = 10000;
         cleanerName(zfree, Bits) xof *bits = zcalloc(count * 2, sizeof(*bits));
