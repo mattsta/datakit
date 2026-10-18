@@ -1871,11 +1871,17 @@ static bool mlfIndexSame(multilistFull *ml, mflexState *state, mlOffsetId i,
  * node that is not compressed is a real depth-rule failure. */
 #define MLF_SPLIT_LEN 48
 static databox mlfSplitBox(uint32_t id, char buf[MLF_SPLIT_LEN + 1]) {
-    /* id % 1000000 keeps the id at six digits, so the string is exactly
-     * MLF_SPLIT_LEN bytes and GCC can prove the buffer is large enough. */
-    snprintf(buf, MLF_SPLIT_LEN + 1,
-             "split-%06" PRIu32 "-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-             id % 1000000);
+    /* "split-" then the id as six digits, written into a fixed template
+     * so the string is always exactly MLF_SPLIT_LEN bytes. */
+    static const char tmpl[] =
+        "split-000000-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+    _Static_assert(sizeof(tmpl) == MLF_SPLIT_LEN + 1, "template length");
+    memcpy(buf, tmpl, sizeof(tmpl));
+    for (size_t d = 11; d >= 6; d--) {
+        buf[d] = (char)('0' + id % 10);
+        id /= 10;
+    }
+
     return databoxNewBytes(buf, MLF_SPLIT_LEN);
 }
 
