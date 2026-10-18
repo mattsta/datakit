@@ -96,30 +96,23 @@ float16Decode_(const uint16_t value) {
     return v.f;
 }
 
-#include "endianIsLittle.h"
+#include <string.h>
 uint16_t bfloat16Encode_(const float value) {
-    if (endianIsLittle()) {
-        // cppcheck-suppress invalidPointerCast - intentional type-punning for
-        // bfloat16 encoding
-        const uint16_t *MSB = (uint16_t *)&value;
-        return MSB[1];
-    }
-
-    // cppcheck-suppress invalidPointerCast - intentional type-punning for
-    // bfloat16 encoding
-    return *(uint16_t *)&value;
+    /* bfloat16 is the high half of the float's bit pattern.  memcpy reads
+     * the bits without an aliasing violation, and the shift picks the high
+     * half on either byte order. */
+    uint32_t bits;
+    memcpy(&bits, &value, sizeof(bits));
+    return (uint16_t)(bits >> 16);
 }
 
 float bfloat16Decode_(const uint16_t value) {
-    if (endianIsLittle()) {
-        union v {
-            uint16_t ret[2];
-            float value;
-        } got = {.ret[1] = value};
-        return got.value;
-    }
-
-    return (float)value;
+    /* The inverse of encode: place the bits as the float's high half and
+     * zero the low half, on either byte order. */
+    const uint32_t bits = (uint32_t)value << 16;
+    float result;
+    memcpy(&result, &bits, sizeof(result));
+    return result;
 }
 
 /* ====================================================================
@@ -269,6 +262,7 @@ size_t float16DecodeBatch(const uint16_t *src, float *dst, size_t count) {
 #ifdef DATAKIT_TEST
 #include "perf.h"
 #include <assert.h>
+#include <inttypes.h>
 #include <stdlib.h>
 
 #define REPORT_TIME 1
@@ -310,6 +304,24 @@ float16Test(int argc, char *argv[]) {
 
     size_t incr = 0;
     float incrf = 0.0;
+    int err = 0;
+
+    /* bfloat16 is exactly the high half of a float: every pattern decodes
+     * to that float bit for bit and encodes back to itself. */
+    for (uint32_t i = 0; i <= UINT16_MAX; i++) {
+        const float decoded = bfloat16Decode((uint16_t)i);
+        uint32_t bits;
+        memcpy(&bits, &decoded, sizeof(bits));
+        if (bits != i << 16) {
+            printf("bfloat16Decode(0x%04" PRIx32 ") gave bits 0x%08" PRIx32
+                   "\n",
+                   i, bits);
+            err++;
+        } else if (bfloat16Encode(decoded) != i) {
+            printf("bfloat16 0x%04" PRIx32 " did not round-trip\n", i);
+            err++;
+        }
+    }
 
 #if 0
     yieldAllFloats();
@@ -504,9 +516,9 @@ float16Test(int argc, char *argv[]) {
     {
         TIME_INIT;
         for (size_t i = 0; i < testers; i++) {
-            const uint16_t *MSB = (uint16_t *)&in;
-            const uint16_t got = MSB[1];
-            incr += got;
+            uint32_t bits;
+            memcpy(&bits, &in, sizeof(bits));
+            incr += (uint16_t)(bits >> 16);
         }
 
         TIME_FINISH(testers, "bfloat16Encode software (inline)");
@@ -515,11 +527,9 @@ float16Test(int argc, char *argv[]) {
     {
         TIME_INIT;
         for (size_t i = 0; i < testers; i++) {
-            union v {
-                uint16_t ret[2];
-                float value;
-            } got = {.ret[1] = created};
-            const float gv = got.value;
+            const uint32_t bits = (uint32_t)created << 16;
+            float gv;
+            memcpy(&gv, &bits, sizeof(gv));
             incrf += gv;
         }
 
@@ -657,7 +667,7 @@ float16Test(int argc, char *argv[]) {
     (void)incr;
     (void)incrf;
 
-    return 0; /* All tests passed */
+    return err;
 }
 
 #endif
