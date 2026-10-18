@@ -966,7 +966,8 @@ uint16_t bitmapToSetPositions(const void *bitmap, uint8_t positions[]) {
 }
 ```
 
-This is **62x faster** than using `varintPacked13InsertSorted()` because:
+This is much faster than using `varintPacked13InsertSorted()` (not
+benchmarked in-tree) because:
 
 1. Bits are emitted in sorted order
 2. No binary search needed

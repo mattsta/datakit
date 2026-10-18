@@ -114,19 +114,30 @@ poly1305SetForceBackend(POLY1305_FORCE_AUTO);
 
 ### Throughput reference numbers
 
-Order-of-magnitude figures on Apple M-series (single-thread, hot
-cache, 4 KiB payload, dev preset). Hardware-specific numbers will
-vary; the perfRegression harness captures the canonical baselines.
+Measured with `./build-perf/src/datakit-test test perfRegression` on an
+Apple M1 Max (single thread, macOS 14.8, clang 22 `perf` preset), with the
+backend auto-selected (NEON for ChaCha20-Poly1305, ARMv8 Crypto for
+SHA-256):
 
-| Primitive                | Backend                         | Throughput (approx.)     | Notes                                                      |
-| ------------------------ | ------------------------------- | ------------------------ | ---------------------------------------------------------- |
-| ChaCha20-Poly1305 (Seal) | scalar                          | ~150 MB/s                | portable-C baseline                                        |
-| ChaCha20-Poly1305 (Seal) | NEON 4-block + Poly1305 2-block | ~202 MB/s                | M1/M2 with NEON dispatch active                            |
-| AES-GCM (Seal/Open)      | scalar                          | ~80 MB/s                 | pure-C ref; cache-timing-vulnerable, avoid in prod         |
-| AES-GCM (Seal/Open)      | ARMv8-AES + PMULL               | multi-GB/s               | M-series with hardware-AES dispatch; ≥ 30× scalar baseline |
-| AES-GCM (Seal/Open)      | AES-NI + PCLMUL                 | multi-GB/s               | x86-64 with AES-NI dispatch; ≥ 30× scalar baseline         |
-| BLAKE3 (≥ 8 KiB)         | AVX2 8-way                      | ≥ 2× scalar x86 baseline | dispatch active for inputs ≥ 8 chunks (8 KiB)              |
-| SHA-256                  | SHA-NI or ARMv8-Crypto          | hardware-bounded         | preferred over BLAKE3 where hosts have the ext.            |
+| Primitive                 | 64 B      | 1 KiB      | 16 KiB     | 1 MiB      |
+| ------------------------- | --------- | ---------- | ---------- | ---------- |
+| ChaCha20-Poly1305 Seal    | 201 MB/s  | 497 MB/s   | 579 MB/s   | 585 MB/s   |
+| ChaCha20-Poly1305 Open    | 201 MB/s  | 492 MB/s   | 579 MB/s   | 585 MB/s   |
+| SHA-256                   | 685 MB/s  | 1787 MB/s  | 1996 MB/s  | 1999 MB/s  |
+| BLAKE3                    | 580 MB/s  | 778 MB/s   | 1391 MB/s  | 1424 MB/s  |
+
+The other backends have no measured figures here:
+
+- Scalar ChaCha20-Poly1305 is selectable with `chacha20SetForceBackend`.
+- Scalar AES-GCM is a cache-timing-vulnerable reference; avoid it in
+  production.
+- AES-GCM on ARMv8-AES + PMULL or AES-NI + PCLMUL is the fast hardware
+  path.
+- BLAKE3 AVX2 8-way covers inputs of 8 KiB and up on x86-64.
+- SHA-NI is the x86-64 hardware path for SHA-256.
+
+Measure these with perfRegression on the hardware in question; on hosts
+with the SHA extensions, SHA-256 is preferred over BLAKE3.
 
 Use `./build-perf/src/datakit-test test perfRegression` +
 `cd tools && uv run dktools perfdiff BASELINE.tsv CURRENT.tsv` (against a
@@ -584,7 +595,9 @@ hmacPrepareKey(&prep, &hmacAlgoSHA256,
                my_key, sizeof(my_key));
 
 /* Per-envelope verify uses the prepared key — skips the K_ipad/K_opad
- * block compressions on every call.  ~2x faster on small payloads. */
+ * block compressions on every call. Measured by perfRegression (Apple M1
+ * Max, perf preset): a 64-byte HMAC-SHA-256 envelope verifies in 192 ns
+ * prepared vs 417 ns plain (2.2x); by 16 KiB the gain is ~3%. */
 flexEnvelopeVerifyParams vp = { .prepared_key = &prep };
 
 /* In a tight loop: */

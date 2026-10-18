@@ -449,23 +449,25 @@ multiarrayLarge *sequential = multiarrayLargeNew(sizeof(T), 1024);
 
 ## Benchmarks
 
-### multimap Variant Performance (1000 random inserts)
+### multimap Variant Performance
 
-```
-Small:   ~100 ms  (many large memmoves)
-Medium:  ~60 ms   (smaller memmoves, 2 maps)
-Full:    ~40 ms   (minimal memmoves per map)
-```
+There is no in-tree benchmark comparing the multimap variants, so no
+figures are given. For random inserts, the shape is:
 
-### multilist Variant Performance (1M operations)
+- **Small** (one flex) moves the whole flex for each mid-map insert.
+- **Medium** splits the data across two flexes, so each memmove is smaller.
+- **Full** splits it across many maps, so each insert moves the least data.
 
-```
-Operation        Small    Medium   Full
-Push Head        2.1s     2.3s     2.5s
-Push Tail        2.1s     2.3s     2.5s
-Pop Head         1.8s     1.9s     2.0s
-Iteration        0.9s     1.0s     1.2s
-```
+### multilist Performance at Scale
+
+A multilist holding a million elements runs as the Full variant (Small and
+Medium promote themselves as they grow), so there is no like-for-like
+Small/Medium figure at this size. `compressionBench` measures the Full
+variant directly. On an Apple M1 Max with clang 22 and the `perf` preset,
+1,000,000 tail pushes followed by 1,000,000 head pops of 64-bit integers
+take 129 ms with compression off (depth 0), the median of 7 interleaved
+rounds. The figures for other depths and for 100-byte strings are in
+[PERFORMANCE.md](PERFORMANCE.md#multilist-performance).
 
 ### Memory Overhead (10,000 elements, 16 bytes each)
 

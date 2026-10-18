@@ -43,8 +43,9 @@ datakit automatically selects optimal encoding:
 
 /* Traditional: char* pointer + malloc */
 char *s = malloc(3);  // "hi\0"
-// Pointer: 8 bytes + malloc overhead (16-32 bytes) = 24-40 bytes
-// vs flex: 4 bytes (6-10x savings!)
+// Pointer: 8 bytes, plus the allocator's smallest block for the string
+// (malloc_size() reports 16 bytes for malloc(3) on macOS) = 24 bytes,
+// vs flex: 4 bytes inline
 ```
 
 ### 3. Compression Awareness

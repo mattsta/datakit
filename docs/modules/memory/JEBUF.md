@@ -394,8 +394,9 @@ Total waste: 408 / 16600 (2.5% overhead)
 
 The test suite runs timed loops over all three tiers and prints per-call
 timings rather than asserting fixed numbers, so no figures are quoted here.
-Measure with the cmake `perf` preset - sanitizer builds add 3-10x overhead and
-invalidate the numbers:
+Measure with the cmake `perf` preset. Sanitizer builds invalidate the numbers:
+the `dev` preset (ASan+UBSan) ran perfRegression's rows 1.0-7.7x slower than
+`perf` on an Apple M1 Max, unevenly across code:
 
 ```bash
 ./src/datakit-test test jebuf

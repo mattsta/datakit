@@ -691,7 +691,9 @@ return c0 + c1 + c2 + c3;
 #endif
 ```
 
-This avoids false register dependencies in Intel CPUs, providing **2x speedup**.
+This avoids the false output dependency `popcnt` has on some Intel CPUs, which
+otherwise serializes back-to-back `popcnt` instructions. The gain has not been
+measured here (it needs an affected x86-64 host).
 
 ### Exact POPCNT
 

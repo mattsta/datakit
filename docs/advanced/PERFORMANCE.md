@@ -174,8 +174,8 @@ pops from the head, median of 7 rounds that interleave the depths.
 
 | Data (pattern)                   | depth 0  | depth 2  | depth 1  |
 | -------------------------------- | -------- | -------- | -------- |
-| 64-bit integers `0, 1, 2, ...`   | 128 ms   | 141 ms   | 141 ms   |
-| 100-byte structured log lines    | 489 ms   | 573 ms   | 572 ms   |
+| 64-bit integers `0, 1, 2, ...`   | 129 ms   | 143 ms   | 142 ms   |
+| 100-byte structured log lines    | 495 ms   | 579 ms   | 573 ms   |
 | Stored size, the same log lines  | 104.1 MB | 24.9 MB  | 24.9 MB  |
 
 These timings are from one machine: an Apple M1 Max (10 cores) on macOS
@@ -190,8 +190,10 @@ cmake --preset perf && cmake --build --preset perf
 **Guideline**: for large lists, depth 1 and depth 2 store the same bytes,
 since nearly every node is interior. Depth 2 keeps one more node at each
 end uncompressed for workloads that read just past the ends. Depth 0 makes
-pushes and pops 10-17% faster in the measurements above, at ~4x the memory
-on text like the log lines.
+pushes and pops 11-17% faster in the measurements above, at ~4x the memory
+on text like the log lines. Incompressible nodes (like the integers) are
+still tried with LZ4 at depth 1 or 2 and kept uncompressed, which is where
+their extra time goes.
 
 #### Iterator vs Index Access
 
@@ -359,21 +361,27 @@ void exampleSensorDay(void) {
 
 #### Float16 Encoding
 
-**Hardware acceleration** makes a huge difference:
+`float16Encode()` / `float16Decode()` use hardware conversion when the
+build targets it: F16C (`_cvtss_sh`/`_cvtsh_ss`) on x86-64 with `-mf16c`,
+NEON `vcvt` on AArch64. Everything else uses the portable bit-manipulation
+functions `float16Encode_()` / `float16Decode_()`.
 
-```c
-#if __F16C__
-/* Hardware: Intel Ivy Bridge+, AMD Jaguar+ */
-uint16_t f16 = float16Encode(value);  // ~0.5 ns
-float f32 = float16Decode(f16);       // ~0.5 ns
-#else
-/* Software fallback */
-uint16_t f16 = float16Encode(value);  // ~15 ns (30x slower)
-float f32 = float16Decode(f16);       // ~12 ns (24x slower)
-#endif
-```
+Measured by `compressionBench` over 4,000,000 values, median of 7
+interleaved rounds, on an Apple M1 Max with clang 22 (`perf` preset):
 
-**Guideline**: Compile with `-mf16c` on modern x86 CPUs.
+| Path               | Encode         | Decode         |
+| ------------------ | -------------- | -------------- |
+| NEON hardware      | 0.38 ns/value  | 0.99 ns/value  |
+| Portable software  | 0.46 ns/value  | 0.99 ns/value  |
+
+On this machine the compiler vectorizes the portable loops, so hardware
+conversion gains little (1.2x encode, 1.0x decode) in bulk loops. F16C on
+x86-64 has not been measured here; run the same bench on that hardware
+before relying on a figure.
+
+**Guideline**: build with `-mf16c` (or `-march=native`) on x86-64 so the
+hardware path is available, and measure with the command in
+[multilist Performance](#multilist-performance).
 
 ### Memory Management Performance
 
@@ -423,7 +431,7 @@ fibbuf *fb = fibbufNew();
 | Push head        | O(n)           | Must shift all data |
 | Index access     | O(n)           | Sequential scan     |
 | Binary search    | O(log n)       | Sorted flex only    |
-| Find with middle | O(log n/2)     | ~2x faster          |
+| Find with middle | O(log n)       | caller passes the middle entry, so the search skips locating it |
 | Delete           | O(n)           | Must shift data     |
 | Merge            | O(n+m)         | Concatenation       |
 
@@ -611,13 +619,13 @@ for (int i = 0; i < 1000000; i++) {
 ### 4. Not Checking Hardware Features
 
 ```c
-/* Check for F16C support */
-#if __F16C__
+/* Check which float16 path the build uses */
+#if __F16C__ || defined(__aarch64__)
     printf("Using hardware float16 conversion\n");
-    // 30x faster than software
+    // Measure the gain on your hardware: see Float16 Encoding above
 #else
     printf("Using software float16 conversion\n");
-    // Consider alternatives
+    // Build with -mf16c on x86-64 to enable the hardware path
 #endif
 ```
 

@@ -164,7 +164,8 @@ clock_gettime(CLOCK_MONOTONIC, &ts);
 return (uint64_t)ts.tv_sec * 1000000000ULL + ts.tv_nsec;
 ```
 
-`CLOCK_MONOTONIC_COARSE` is deliberately not used anywhere: its ~1ms resolution
+`CLOCK_MONOTONIC_COARSE` is deliberately not used anywhere: it only advances
+once per kernel tick (milliseconds, set by the kernel's timer frequency), which
 is too coarse for the timing this module exists to support.
 
 ## Usage Examples
@@ -605,7 +606,6 @@ Measure with the cmake `perf` preset if the call cost matters to your loop.
 - Never goes backwards
 - Perfect for measuring elapsed time
 - Unaffected by clock adjustments
-- Usually faster than wall clock
 
 **Disadvantages:**
 

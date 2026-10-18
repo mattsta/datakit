@@ -494,8 +494,11 @@ Result: USE UNCOMPRESSED (no real savings)
 **Notes**:
 
 - n = size of flex data
-- LZ4 compression is very fast (~500 MB/s)
-- LZ4 decompression is very fast (~2000 MB/s)
+- LZ4 through the flex <-> cflex conversions mflex uses, on a 66,565-byte
+  flex of 100-byte structured log lines (compressing to 10,764 B): measured
+  ~2.4 GB/s compress and ~8.2 GB/s decompress (uncompressed bytes per
+  second; `compressionBench`, median of 7 interleaved rounds, Apple M1 Max,
+  clang 22 `perf` preset). Throughput depends on the data and the machine.
 - For small arrays (< 1KB), overhead dominates
 
 ### Space Complexity

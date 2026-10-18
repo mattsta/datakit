@@ -95,14 +95,14 @@ have no meaning in a clang/gcc-only tree.
 
 ```c
 #if __F16C__
-/* Hardware conversion: ~0.5 ns per conversion */
+/* Hardware conversion */
 #include <immintrin.h>
 
 #define float16Encode(v) _cvtss_sh(v, 0)
 #define float16Decode(v) _cvtsh_ss(v)
 
 #else
-/* Software fallback: ~15 ns per conversion */
+/* Software fallback */
 uint16_t float16Encode(float value) {
     /* Bit manipulation implementation */
 }
@@ -123,26 +123,26 @@ gcc -mf16c -O3 -o program program.c
 gcc -march=native -dM -E - < /dev/null | grep F16C
 ```
 
-**Performance impact:**
-
-```
-Hardware (F16C):  0.5 ns/conversion  (200M conversions/sec)
-Software:        15.0 ns/conversion  (66M conversions/sec)
-Speedup:         30x
-```
+**Performance impact:** F16C has not been measured here, because there is no
+x86-64 test host. The same comparison on AArch64 (NEON hardware conversion
+vs the portable functions) is in
+[PERFORMANCE.md](PERFORMANCE.md#float16-encoding). There the vectorized
+portable loops come within 1.2x of hardware, so measure on your target with
+`./build-perf/src/datakit-test test compressionBench` before relying on a
+speed-up.
 
 ### Random Number Generation
 
 Different platforms provide different random sources:
 
 ```c
-/* Linux 3.17+ - fastest, most secure */
+/* Linux 3.17+ */
 #ifdef __linux__
     #include <sys/random.h>
     ssize_t getrandom(void *buf, size_t buflen, unsigned int flags);
 #endif
 
-/* macOS, OpenBSD - secure, slower */
+/* macOS, OpenBSD */
 #if defined(__APPLE__) || defined(__OpenBSD__)
     #include <sys/random.h>
     int getentropy(void *buf, size_t buflen);
@@ -156,13 +156,11 @@ Different platforms provide different random sources:
 #endif
 ```
 
-**Performance comparison:**
-
-```
-getrandom():      ~500 ns for 16 bytes
-getentropy():     ~1200 ns for 16 bytes
-/dev/urandom:     ~2000 ns for 16 bytes (open/read/close)
-```
+**Performance comparison:** there is no in-tree benchmark for these sources,
+so no figures are given. `getrandom()` and `getentropy()` are single system
+calls. The `/dev/urandom` fallback costs an `open`, a `read` and a `close`
+per use unless the descriptor is kept open, so it is the slowest of the
+three.
 
 ### Memory Management
 

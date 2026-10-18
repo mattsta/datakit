@@ -749,32 +749,27 @@ pthread_mutex_t mutex;
 
 ### Lock Contention Impact
 
-```c
-/* Single mutex (high contention) */
-// Throughput: ~100K ops/sec across 8 threads
+datakit ships no lock benchmark, so there are no figures here. The shape of
+the trade-off is general:
 
-/* Sharded locks (medium contention) */
-// Throughput: ~600K ops/sec across 8 threads
-
-/* Per-thread (no contention) */
-// Throughput: ~2M ops/sec across 8 threads
-```
+- **Single lock**: every thread serializes on it, so adding threads stops
+  adding throughput once the lock is the bottleneck.
+- **Sharded locks**: threads only contend when they hit the same shard, so
+  throughput grows with the number of shards until the shards stop being
+  the bottleneck.
+- **Per-thread structures**: no contention, at the cost of merging results
+  across threads.
 
 ### Read-Write Lock Performance
 
-```c
-/* 90% reads, 10% writes */
-Mutex:   ~200K ops/sec
-RWLock:  ~800K ops/sec (4x improvement)
+- **Read-mostly workloads**: a read-write lock lets readers proceed
+  together, which can be a large win over a mutex.
+- **Mixed workloads**: the gain shrinks as writers block readers more
+  often.
+- **Write-heavy workloads**: a read-write lock's extra bookkeeping can make
+  it slower than a plain mutex.
 
-/* 50% reads, 50% writes */
-Mutex:   ~150K ops/sec
-RWLock:  ~180K ops/sec (marginal improvement)
-
-/* 10% reads, 90% writes */
-Mutex:   ~120K ops/sec
-RWLock:  ~100K ops/sec (slower due to overhead)
-```
+Measure your own workload, with the `perf` preset, before choosing.
 
 ## See Also
 

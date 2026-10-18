@@ -697,8 +697,10 @@ void benchmarkExample(void) {
 }
 ```
 
-Build with the cmake `perf` preset before believing any of these numbers -
-sanitizer builds add 3-10x overhead and change the ranking.
+Build with the cmake `perf` preset before believing any of these numbers.
+Sanitizer builds slow code down unevenly (the `dev` preset ran
+perfRegression's rows 1.0-7.7x slower than `perf` on an Apple M1 Max), so
+they can change the ranking.
 
 ### Example 12: What Compression Does and Does Not Show Up In
 

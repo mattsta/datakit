@@ -555,8 +555,9 @@ hardware with a different compiler. The structural expectation is:
 - AVX2 doubles the vector width over SSE4.1; NEON matches SSE4.1's width
 
 Measure your own distribution under the cmake `perf` preset before choosing a
-specific entry point over `intersectIntAuto`. Sanitizer builds add 3-10x
-overhead and invalidate any timing taken from them.
+specific entry point over `intersectIntAuto`. Sanitizer builds invalidate any
+timing taken from them: the `dev` preset (ASan+UBSan) ran perfRegression's
+rows 1.0-7.7x slower than `perf` on an Apple M1 Max, unevenly across code.
 
 ### Space Complexity
 

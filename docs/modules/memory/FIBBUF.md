@@ -404,8 +404,9 @@ Size    Fibonacci   Doubling    Fib Waste   Double Waste
 The test suite includes timed loops of 70,000,000 iterations per case, covering
 the 16-bit, 32-bit, and 64-bit tiers plus the out-of-table 20% path. It prints
 per-call timings rather than asserting fixed numbers, so no figures are quoted
-here - run it yourself under the cmake `perf` preset (sanitizer builds add
-3-10x overhead and invalidate the numbers):
+here - run it yourself under the cmake `perf` preset. Sanitizer builds
+invalidate the numbers: the `dev` preset (ASan+UBSan) ran perfRegression's
+rows 1.0-7.7x slower than `perf` on an Apple M1 Max, unevenly across code.
 
 ```bash
 ./src/datakit-test test fibbuf

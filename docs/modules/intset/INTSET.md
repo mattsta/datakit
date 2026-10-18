@@ -586,8 +586,22 @@ intsetFree(intersectSet);
 | Bytes            | O(1)                           | summed array sizes                                        |
 
 The binary search is branchless (the midpoint step compiles to a
-conditional move) and issues two prefetches per level, measured 1.3-2.1x
-faster than a branchy search across all sizes.
+conditional move) and issues two prefetches per level.
+
+`./build-perf/intsetSearchBench` (10M random probes) compares it with a
+branchy search. Medians of 3 runs on an Apple M1 Max, clang 22 `perf`
+preset:
+
+| Elements  | Speed-up |
+| --------- | -------- |
+| 64        | 2.4x     |
+| 1,024     | 2.0x     |
+| 65,536    | 1.5x     |
+| 1,048,576 | 1.5x     |
+| 2,097,152 | 1.3x     |
+
+The memory-bound large sizes vary from run to run: at 1M elements the three
+runs gave 1.0x, 1.5x and 1.9x.
 
 ## Memory Efficiency
 
