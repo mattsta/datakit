@@ -13,6 +13,9 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -72,6 +75,56 @@ varint.h:1:2: runtime error: load of misaligned address
 ==7==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x1
 <end of output>
 """
+
+#: ctest output for a test whose executable was never built.
+CTEST_NO_EXE = """\
+Test project {bindir}
+      Start  1: varint-packed
+Could not find executable {exe}
+Looked in the following places:
+{exe}
+Unable to find executable: {exe}
+ 1/3 Test  #1: varint-packed ....................***Not Run   0.00 sec
+      Start  2: skipme
+ 2/3 Test  #2: skipme ...........................***Not Run (Disabled)   0.00 sec
+ 3/3 Test  #3: databox ..........................   Passed    0.10 sec
+
+33% tests passed, 1 tests failed out of 3
+
+The following tests did not run:
+\t  2 - skipme (Disabled)
+
+The following tests FAILED:
+\t  1 - varint-packed (Not Run)
+Errors while running CTest
+"""
+
+
+def write_codemodel(bindir: Path, targets: dict[str, list[str]]) -> None:
+    """A File API reply naming `targets` (name -> artifact paths)."""
+    reply = bindir / ".cmake" / "api" / "v1" / "reply"
+    reply.mkdir(parents=True, exist_ok=True)
+    refs = []
+    for name, paths in targets.items():
+        file = f"target-{name}.json"
+        artifacts = [{"path": p} for p in paths]
+        (reply / file).write_text(json.dumps({"name": name, "artifacts": artifacts}))
+        refs.append({"name": name, "jsonFile": file})
+    model = {"configurations": [{"name": "Release", "targets": refs}]}
+    (reply / "codemodel-v2-1.json").write_text(json.dumps(model))
+    index = {"reply": {"codemodel-v2": {"jsonFile": "codemodel-v2-1.json"}}}
+    (reply / "index-1.json").write_text(json.dumps(index))
+
+
+def commands_text(commands: dict[str, list[str]]) -> str:
+    """ctestCommands.cmake output for `commands`."""
+    return "".join("\x1f".join([n, *c]) + "\x1e" for n, c in commands.items())
+
+
+def show_only_json(commands: dict[str, list[str]]) -> str:
+    """``ctest --show-only=json-v1`` output for `commands`."""
+    tests = [{"name": n, "command": c} for n, c in commands.items()]
+    return json.dumps({"kind": "ctestInfo", "tests": tests})
 
 
 class Scanners(unittest.TestCase):
@@ -170,6 +223,108 @@ class Scanners(unittest.TestCase):
         self.assertEqual(hits[0].describe(), f"dod: {long} (LastTest.log:10)")
         self.assertEqual(steps.tests_with_reports(hits), ["dod", "varint-dd"])
 
+    def test_parse_ctest_missing_executable(self) -> None:
+        exe = "/w/build/deps/varint/src/varintPackedTest"
+        log = self.log("noexe.log", CTEST_NO_EXE.format(bindir="/w/build", exe=exe))
+        result = steps.parse_ctest(log)
+        self.assertEqual(result.missing, {"varint-packed": exe})
+        # Missing executables are not ordinary failures; a disabled
+        # test's "Not Run" is not a missing executable.
+        self.assertEqual(result.failed, [])
+        self.assertEqual(result.not_run, ["skipme"])
+        # A "Not Run" failure without the executable line stays a failure.
+        other = self.log(
+            "other.log",
+            " 1/1 Test  #1: needsfile ...***Not Run   0.00 sec\n"
+            "The following tests FAILED:\n\t  1 - needsfile (Not Run)\n",
+        )
+        self.assertEqual(steps.parse_ctest(other).failed, ["needsfile"])
+        self.assertEqual(steps.parse_ctest(other).missing, {})
+
+    def test_targets_for_tests(self) -> None:
+        bindir = self.dir / "build"
+        steps.request_codemodel(bindir)
+        self.assertTrue((bindir / ".cmake/api/v1/query/codemodel-v2").is_file())
+        self.assertEqual(steps.target_artifacts(bindir), {})
+        write_codemodel(
+            bindir,
+            {
+                "datakit-test": ["src/datakit-test"],
+                "varintPackedTest": ["deps/varint/src/varintPackedTest"],
+                "datakit-shared": ["src/libdatakit.dylib", "src/libdatakit.1.dylib"],
+                "check": [],
+            },
+        )
+        artifacts = steps.target_artifacts(bindir)
+        real = os.path.realpath(bindir)
+        self.assertEqual(artifacts[f"{real}/src/datakit-test"], "datakit-test")
+        self.assertEqual(artifacts[f"{real}/src/libdatakit.1.dylib"], "datakit-shared")
+        self.assertNotIn("check", artifacts.values())
+
+        listing = self.log(
+            "tests.json",
+            "$ ctest --show-only=json-v1\n"
+            + show_only_json(
+                {"databox": ["x"], "varint-packed": [], "gate": [], "wrapped": []}
+            ),
+        )
+        self.assertEqual(
+            steps.parse_test_names(listing),
+            ["databox", "varint-packed", "gate", "wrapped"],
+        )
+        self.assertEqual(steps.parse_test_names(self.log("bad.json", "$ x\n{")), [])
+        self.assertEqual(steps.parse_test_names(self.dir / "absent.json"), [])
+
+        commands = {
+            "databox": [f"{bindir}/src/datakit-test", "test", "databox"],
+            "varint-packed": [f"{bindir}/deps/varint/src/varintPackedTest"],
+            "gate": ["/bin/sh", f"{bindir}/../tools/uvGate.sh", "src/x"],
+            "wrapped": ["/bin/sh", "run.sh", f"{bindir}/src/datakit-test"],
+            "bare": [],
+        }
+        out = self.dir / "commands.txt"
+        out.write_text(commands_text(commands))
+        self.assertEqual(steps.parse_test_commands(out), commands)
+        self.assertEqual(steps.parse_test_commands(self.dir / "absent.txt"), {})
+        self.assertEqual(
+            steps.targets_for_tests(commands, artifacts),
+            {
+                "databox": ["datakit-test"],
+                "varint-packed": ["varintPackedTest"],
+                "wrapped": ["datakit-test"],
+            },
+        )
+
+    @unittest.skipIf(shutil.which("cmake") is None, "cmake not on PATH")
+    def test_ctest_commands_script(self) -> None:
+        bindir = self.dir / "build"
+        (bindir / "sub").mkdir(parents=True)
+        (bindir / "CTestTestfile.cmake").write_text(
+            'add_test(top "/b/top" "a b" "q\\"q" "back\\\\slash")\n'
+            'set_tests_properties(top PROPERTIES  LABELS "gate")\n'
+            'subdirs("sub")\n'
+            'subdirs("missing")\n'
+        )
+        (bindir / "sub" / "CTestTestfile.cmake").write_text(
+            'add_test([=[sub-test]=] "/b/sub/exe")\n'
+            "add_test(none NOT_AVAILABLE)\n"
+            "add_test(bare)\n"
+        )
+        out = self.dir / "commands.txt"
+        proc = subprocess.run(
+            steps.test_commands_command(bindir, out), capture_output=True, check=False
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(
+            steps.parse_test_commands(out),
+            {
+                "top": ["/b/top", "a b", 'q"q', "back\\slash"],
+                "sub-test": ["/b/sub/exe"],
+                "none": ["NOT_AVAILABLE"],
+                "bare": [],
+            },
+        )
+
     def test_ctest_command(self) -> None:
         cmd = steps.ctest_command(Path("b"), 8, "a|b", exclude=["c.*P", ""])
         self.assertIn("--no-tests=error", cmd)
@@ -190,21 +345,42 @@ class Scanners(unittest.TestCase):
 class FakeRunner:
     """Stands in for steps.run_logged: canned output per step name."""
 
-    def __init__(self, codes: dict[str, int], outputs: dict[str, str]) -> None:
+    def __init__(
+        self,
+        codes: dict[str, int],
+        outputs: dict[str, str],
+        codemodel: dict[str, list[str]] | None = None,
+    ) -> None:
         self.codes = codes
         self.outputs = outputs
+        self.codemodel = codemodel  # written by "configure", when given
         self.calls: list[tuple[str, list[str]]] = []
 
     def __call__(self, name, cmd, log, cwd=None, env=None) -> Step:
         self.calls.append((name, list(cmd)))
         log.parent.mkdir(parents=True, exist_ok=True)
         log.write_text(self.outputs.get(name, ""))
+        if name == "configure" and self.codemodel is not None:
+            bindir = Path(cmd[cmd.index("-B") + 1])
+            self.assertQueried(bindir)
+            write_codemodel(bindir, self.codemodel)
+        if name == "test-commands":
+            out = next(a for a in cmd if a.startswith("-DOUT="))[len("-DOUT=") :]
+            Path(out).write_text(self.outputs.get("test-commands-out", ""))
         if name.startswith("ctest"):
             binary_dir = Path(cmd[cmd.index("--test-dir") + 1])
             temp = binary_dir / "Testing" / "Temporary"
             temp.mkdir(parents=True, exist_ok=True)
             (temp / "LastTest.log").write_text(self.outputs.get(name + "-output", ""))
         return Step(name, log, self.codes.get(name, 0))
+
+    @staticmethod
+    def assertQueried(bindir: Path) -> None:
+        if not (bindir / ".cmake/api/v1/query/codemodel-v2").is_file():
+            raise AssertionError("configure ran without the codemodel query")
+
+    def command(self, name: str) -> list[str]:
+        return dict(self.calls)[name]
 
 
 class VerifyRun(unittest.TestCase):
@@ -257,7 +433,27 @@ class VerifyRun(unittest.TestCase):
         self.assertEqual((src / "src" / "a.c").read_text(), "int a2;\n")
         self.assertFalse((src / "src" / "stray.c").exists())
         names = [name for name, _ in runner.calls]
-        self.assertEqual(names, ["configure", "build", "ctest", "allocaudit"])
+        self.assertEqual(
+            names,
+            [
+                "configure",
+                "ctest-list",
+                "test-commands",
+                "build",
+                "ctest",
+                "allocaudit",
+            ],
+        )
+        script = runner.command("test-commands")[-2:]
+        self.assertEqual(script, ["-P", str(steps.CTEST_COMMANDS_SCRIPT)])
+        self.assertTrue(steps.CTEST_COMMANDS_SCRIPT.is_file())
+        listing = runner.command("ctest-list")
+        self.assertIn("--show-only=json-v1", listing)
+        self.assertEqual(listing[listing.index("-R") + 1], "^(databox)$")
+        build = runner.command("build")
+        self.assertEqual(
+            build[build.index("--target") + 1 :], list(toolchain.PRESET_TARGETS)
+        )
         configure = runner.calls[0][1]
         self.assertIn("--preset", configure)
         self.assertIn(f"-DCMAKE_C_COMPILER={sys.executable}", configure)
@@ -301,6 +497,87 @@ class VerifyRun(unittest.TestCase):
             "heap-buffer-overflow on address 0x1 (ctest-output.log:23)\n",
             out,
         )
+
+    def bindir(self) -> Path:
+        return self.root.resolve() / "verify" / "t" / "src" / "build-clang22-dev"
+
+    def test_builds_the_targets_the_selected_tests_run(self) -> None:
+        b = self.bindir()
+        runner = FakeRunner(
+            {},
+            {
+                # ctest's JSON omits the commands of unbuilt executables.
+                "ctest-list": show_only_json(
+                    {
+                        "databox": [],
+                        "varint-packed": [],
+                        "varint-dd": [],
+                        "allocOwnership": [],
+                    }
+                ),
+                "test-commands-out": commands_text(
+                    {
+                        "databox": [f"{b}/src/datakit-test", "test", "databox"],
+                        "varint-packed": [f"{b}/deps/varint/src/varintPackedTest"],
+                        "varint-dd": [f"{b}/deps/varint/src/varintDDTest", "1"],
+                        "varint-other": [f"{b}/deps/varint/src/varintOtherTest"],
+                        "allocOwnership": ["/bin/sh", "uvGate.sh"],
+                    }
+                ),
+                "ctest": CTEST_PASS,
+                "ctest-serial": CTEST_PASS,
+                "allocaudit": "100% clean pattern\n",
+            },
+            codemodel={
+                "datakit-test": ["src/datakit-test"],
+                "varintPackedTest": ["deps/varint/src/varintPackedTest"],
+                "varintDDTest": ["deps/varint/src/varintDDTest"],
+                "varintOtherTest": ["deps/varint/src/varintOtherTest"],
+            },
+        )
+        code, out = self.run_verify(runner, tests="databox|varint-.*", serial="dd")
+        self.assertEqual(code, 0, out)
+        listing = runner.command("ctest-list")
+        self.assertEqual(listing[listing.index("-R") + 1], "^(databox|varint-.*|dd)$")
+        build = runner.command("build")
+        self.assertEqual(
+            build[build.index("--target") + 1 :],
+            [*toolchain.PRESET_TARGETS, "varintPackedTest", "varintDDTest"],
+        )
+        self.assertIn(
+            "  targets   datakit-test datakit-static datakit-shared datakit-library"
+            " + 2 for the selected tests: varintPackedTest varintDDTest\n",
+            out,
+        )
+
+    def test_missing_executables_are_their_own_error(self) -> None:
+        b = self.bindir()
+        exe = f"{b}/deps/varint/src/varintPackedTest"
+        runner = FakeRunner(
+            {"ctest": 8},
+            {
+                "ctest": CTEST_NO_EXE.format(bindir=b, exe=exe),
+                "allocaudit": "100% clean pattern\n",
+            },
+            codemodel={"varintPackedTest": ["deps/varint/src/varintPackedTest"]},
+        )
+        code, out = self.run_verify(runner, targets=["datakit-test"])
+        self.assertEqual(code, 1, out)
+        names = [name for name, _ in runner.calls]
+        self.assertNotIn("ctest-list", names)
+        build = runner.command("build")
+        self.assertEqual(build[build.index("--target") + 1 :], ["datakit-test"])
+        self.assertIn("  targets   datakit-test (--target)\n", out)
+        self.assertIn(
+            "  missing   1 test(s) did not run, executable not built: varint-packed\n",
+            out,
+        )
+        self.assertIn(
+            "  hint      not built: varintPackedTest; "
+            "add them with --target, or use --target all\n",
+            out,
+        )
+        self.assertNotIn("  failed ", out)
 
     def test_linker_notes_alone_pass(self) -> None:
         note = "warning: no debug symbols in executable (-arch arm64)\n"

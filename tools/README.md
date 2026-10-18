@@ -79,8 +79,21 @@ uv run --project tools dktools verify NAME --tests REGEX [--serial REGEX] \
   `--serial` runs one test at a time (the `*P` tests that share fixed
   temp paths) and is excluded from the parallel run. Both are
   whole-name ctest regexes, and one that matches nothing fails.
-- The build covers the four preset targets unless `--target` is given.
-  `allocaudit check --constructors` then runs on the exported tree
+- Without `--target`, the build covers the four preset targets plus
+  every target the selected tests run. Configure writes the CMake File
+  API codemodel (each target's artifacts), `ctest --show-only=json-v1`
+  names the selected tests, `src/dktools/ctestCommands.cmake`
+  (`cmake -P`) reads every test's command line from the build's
+  `CTestTestfile.cmake` files (ctest's JSON leaves out the command of
+  a test whose executable is not built yet), and a test needs every
+  target whose artifact its command names. `--tests 'varint-.*'`
+  therefore builds `deps/varint`'s test executables too; the `targets`
+  line lists what was added. `--target` builds exactly the targets
+  given (`--target all` builds everything).
+- A test whose executable was still not built (an explicit `--target`
+  list that leaves it out) is reported on a `missing` line, apart from
+  real failures, with a `hint` naming the targets to add.
+- `allocaudit check --constructors` then runs on the exported tree
   with the tree's own dktools.
 - Prints a result block (tree hash, build with its warning-line and
   linker-note counts, ctest, sanitizer reports from the test output,

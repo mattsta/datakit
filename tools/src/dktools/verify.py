@@ -22,6 +22,19 @@ run.  Both are whole-name regexes, and a regex that matches no test is
 a failure.  ``allocaudit check --constructors`` runs on the tree with
 the tree's own dktools.
 
+Without ``--target`` the build covers the four preset targets plus
+every target the selected tests run: configure is asked for the CMake
+File API codemodel (each target's artifacts), ``ctest
+--show-only=json-v1`` names the selected tests, ``ctestCommands.cmake``
+gives every test's command line (ctest's JSON omits the command of a
+test whose executable is not built yet), and a test needs every
+target whose artifact its command names.  So
+``--tests 'varint-.*'`` builds deps/varint's test executables without
+``--target all``.  ``--target`` builds exactly the listed targets.  A
+test that still finds no executable (an explicit ``--target`` list
+that leaves it out) is reported on its own ``missing`` line with the
+targets to add, not as an ordinary failure.
+
 Prints a result block (tree hash, build, warning and linker-note
 counts, ctest, sanitizer and allocaudit results, failing test names,
 log paths) and also writes it to ``ROOT/verify/NAME/result.txt``.
@@ -91,6 +104,89 @@ def _sanitizer_line(hits: list[steps.SanitizerHit]) -> str:
     return f"{len(hits)} report(s) from {len(tests)} test(s): {' '.join(tests)}"
 
 
+@dataclass
+class TargetPlan:
+    """The build targets and why: the preset targets plus each target
+    a selected test runs, or exactly the --target list."""
+
+    targets: list[str]
+    explicit: bool
+    added: list[str] = field(default_factory=list)
+    artifacts: dict[str, str] = field(default_factory=dict)
+
+    def line(self) -> str:
+        if self.explicit:
+            return f"{' '.join(self.targets)} (--target)"
+        base = [t for t in self.targets if t not in self.added]
+        text = " ".join(base)
+        if self.added:
+            text += (
+                f" + {len(self.added)} for the selected tests: {' '.join(self.added)}"
+            )
+        return text
+
+    def target_of(self, exe: str) -> str | None:
+        return self.artifacts.get(os.path.realpath(exe))
+
+
+def _plan_targets(bindir: Path, work: Path, opts: VerifyOptions) -> TargetPlan:
+    """After configure: the targets to build (see TargetPlan)."""
+    artifacts = steps.target_artifacts(bindir)
+    if opts.targets:
+        return TargetPlan(list(opts.targets), True, artifacts=artifacts)
+    plan = TargetPlan(list(toolchain.PRESET_TARGETS), False, artifacts=artifacts)
+    include = "|".join(r for r in (opts.tests, opts.serial) if r)
+    listing = steps.run_logged(
+        "ctest-list",
+        steps.list_tests_command(bindir, include),
+        work / "tests.json",
+        cwd=bindir,
+    )
+    commands_out = work / "test-commands.txt"
+    steps.run_logged(
+        "test-commands",
+        steps.test_commands_command(bindir, commands_out),
+        work / "test-commands.log",
+        cwd=bindir,
+    )
+    commands = steps.parse_test_commands(commands_out)
+    selected = {
+        test: commands[test]
+        for test in steps.parse_test_names(listing.log)
+        if test in commands
+    }
+    needed = steps.targets_for_tests(selected, artifacts)
+    for test_targets in needed.values():
+        for target in test_targets:
+            if target not in plan.targets:
+                plan.targets.append(target)
+                plan.added.append(target)
+    return plan
+
+
+def _missing_lines(
+    missing: dict[str, str], plan: TargetPlan, bindir: Path
+) -> list[str]:
+    """The result lines for tests whose executable was never built."""
+    if not missing:
+        return []
+    names: list[str] = []
+    for exe in missing.values():
+        target = plan.target_of(exe)
+        if target is None:
+            real = os.path.realpath(exe)
+            top = os.path.realpath(bindir) + os.sep
+            target = real[len(top) :] if real.startswith(top) else exe
+        names.append(target)
+    names = list(dict.fromkeys(names))
+    return [
+        f"  missing   {len(missing)} test(s) did not run, executable not built: "
+        f"{' '.join(missing)}",
+        f"  hint      not built: {' '.join(names)}; "
+        "add them with --target, or use --target all",
+    ]
+
+
 def run(repo: Path, opts: VerifyOptions) -> int:
     """Run the verification; return the exit code (ToolError: input)."""
     name = gitutil.check_name(opts.name)
@@ -101,7 +197,6 @@ def run(repo: Path, opts: VerifyOptions) -> int:
     specs = parse_specs(opts.specs)
     config = toolchain.build_config(opts.compiler, opts.preset)
     jobs = opts.jobs or os.cpu_count() or 4
-    targets = opts.targets or list(toolchain.PRESET_TARGETS)
 
     root = gitutil.scratch_root(opts.root).resolve()
     work = gitutil.fresh_dir(root / "verify" / name)
@@ -114,13 +209,16 @@ def run(repo: Path, opts: VerifyOptions) -> int:
     config.check_presets_file(src)
     bindir = config.binary_dir(src)
 
+    steps.request_codemodel(bindir)
     configure = steps.run_logged(
         "configure", config.configure_command(src), work / "configure.log", cwd=src
     )
     build = Step("build", work / "build.log")
+    plan: TargetPlan | None = None
     if configure.ok:
+        plan = _plan_targets(bindir, work, opts)
         build = steps.run_logged(
-            "build", config.build_command(src, jobs, targets), build.log, cwd=src
+            "build", config.build_command(src, jobs, plan.targets), build.log, cwd=src
         )
     warn = steps.count_warning_lines(build.log)
     notes = steps.count_linker_notes(build.log)
@@ -188,6 +286,7 @@ def run(repo: Path, opts: VerifyOptions) -> int:
         f"verify {name}: {'PASS' if passed else 'FAIL'}",
         f"  tree      {tree} (HEAD {head} + {len(specs)} path(s))",
         f"  config    {config.label}",
+        f"  targets   {plan.line() if plan else '-'}",
         f"  build     {build_line}",
         f"  ctest     {_ctest_line(ctest, ctest_result) if opts.tests else '-'}",
         f"  serial    {_ctest_line(serial, serial_result) if opts.serial else '-'}",
@@ -199,12 +298,23 @@ def run(repo: Path, opts: VerifyOptions) -> int:
     not_run = ctest_result.not_run + serial_result.not_run
     if not_run:
         lines.append(f"  not run   {' '.join(not_run)}")
+    if plan is not None:
+        missing = {**ctest_result.missing, **serial_result.missing}
+        lines += _missing_lines(missing, plan, bindir)
     for hit in sanitizer:
         lines.append(f"  report    {hit.describe()}")
     lines.append("  logs")
-    for step in (configure, build, ctest, serial, alloc):
-        if step.log.exists():
-            lines.append(f"    {step.log}")
+    for log in (
+        configure.log,
+        work / "tests.json",
+        work / "test-commands.log",
+        build.log,
+        ctest.log,
+        serial.log,
+        alloc.log,
+    ):
+        if log.exists():
+            lines.append(f"    {log}")
     for out in test_outputs:
         lines.append(f"    {out}")
     text = "\n".join(lines) + "\n"

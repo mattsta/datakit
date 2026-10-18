@@ -220,6 +220,8 @@ def render(
     any_failed = False
     for r in results:
         failed = r.ctest_result.failed + r.serial_result.failed
+        for missing in (r.ctest_result.missing, r.serial_result.missing):
+            failed += [f"{name} (executable not built)" for name in missing]
         if failed:
             any_failed = True
             md.append(f"- {r.config.label}: {', '.join(failed)}")

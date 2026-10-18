@@ -8,6 +8,7 @@ sanitizer reports) so every result line can name the log behind it.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -168,15 +169,27 @@ def group_warnings(found: Iterable[Warning_]) -> dict[str, dict[str, int]]:
 #: "100% tests passed out of 3" (CMake 4) or "..., 0 tests failed out of 3".
 _CTEST_SUMMARY = re.compile(r"\d+% tests passed(?:, \d+ tests? failed)? out of \d+")
 _CTEST_FAILED = re.compile(r"^\s*\d+\s+-\s+(?P<name>\S+)\s+\((?P<why>[^)]*)\)")
+#: ctest's line for a test whose executable does not exist, printed
+#: right before that test's "***Not Run" result line.
+_CTEST_NO_EXE = re.compile(r"^Unable to find executable:\s*(?P<exe>.+?)\s*$")
+_CTEST_NOT_RUN = re.compile(
+    r"^\s*\d+/\d+\s+Test\s+#\d+:\s+(?P<name>\S+)\s+\.*\s*\*\*\*Not Run\b"
+)
 
 
 @dataclass
 class CtestResult:
-    """What a ctest run printed."""
+    """What a ctest run printed.
+
+    `missing` maps each test that could not start because its
+    executable was never built to that executable; those tests are
+    left out of `failed`, which holds the tests that ran and failed
+    (or did not run for another reason)."""
 
     summary: str = ""
     failed: list[str] = field(default_factory=list)
     not_run: list[str] = field(default_factory=list)
+    missing: dict[str, str] = field(default_factory=dict)
     no_tests: bool = False
 
 
@@ -212,10 +225,22 @@ def ctest_command(
 
 
 def parse_ctest(log: Path) -> CtestResult:
-    """Summary line, failed and not-run test names from ctest output."""
+    """Summary line, failed, not-run and missing-executable test names
+    from ctest output."""
     result = CtestResult()
     section: list[str] | None = None
+    no_exe: str | None = None
     for line in read_lines(log):
+        exe = _CTEST_NO_EXE.match(line)
+        if exe:
+            no_exe = exe["exe"]
+            continue
+        not_run = _CTEST_NOT_RUN.match(line)
+        if not_run:
+            if no_exe is not None:
+                result.missing[not_run["name"]] = no_exe
+            no_exe = None
+            continue
         m = _CTEST_SUMMARY.search(line)
         if m:
             result.summary = m.group(0)
@@ -235,6 +260,7 @@ def parse_ctest(log: Path) -> CtestResult:
                 section.append(fm["name"])
             elif line.strip():
                 section = None
+    result.failed = [name for name in result.failed if name not in result.missing]
     return result
 
 
@@ -245,6 +271,146 @@ def keep_test_log(binary_dir: Path, dest: Path) -> Path | None:
         return None
     shutil.copyfile(src, dest)
     return dest
+
+
+# -- the targets selected tests need ----------------------------------
+#
+# A targeted build (the four preset targets) leaves out executables
+# such as deps/varint's test programs, and ctest then reports their
+# tests "Not Run".  CMake's own records name the targets a test needs:
+#
+# - ``ctest --show-only=json-v1 -R REGEX`` names the selected tests,
+#   with ctest's own regex rules.  It leaves out the command of a test
+#   whose executable is not built yet, so it cannot give the commands.
+# - ``ctestCommands.cmake`` (``cmake -P``) evaluates the build's
+#   CTestTestfile.cmake files and records every test's command line,
+#   built or not.
+# - The File API codemodel, requested before configure, gives every
+#   target's artifacts.
+#
+# A test needs each target whose artifact its command line names.
+
+#: The File API query file asking configure for the codemodel.
+_CODEMODEL_QUERY = Path(".cmake", "api", "v1", "query", "codemodel-v2")
+
+
+def request_codemodel(binary_dir: Path) -> None:
+    """Ask the next configure of `binary_dir` to write the codemodel."""
+    query = binary_dir / _CODEMODEL_QUERY
+    query.parent.mkdir(parents=True, exist_ok=True)
+    query.touch()
+
+
+def _read_json(path: Path) -> dict | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _real(binary_dir: Path, path: str) -> str:
+    return os.path.realpath(binary_dir / path)
+
+
+def target_artifacts(binary_dir: Path) -> dict[str, str]:
+    """Artifact path (resolved) -> target name, from the codemodel
+    configure wrote; {} when there is none."""
+    reply = binary_dir / ".cmake" / "api" / "v1" / "reply"
+    indexes = sorted(reply.glob("index-*.json"))
+    if not indexes:
+        return {}
+    index = _read_json(indexes[-1]) or {}
+    entry = index.get("reply", {}).get("codemodel-v2", {})
+    if not isinstance(entry, dict) or "jsonFile" not in entry:
+        return {}
+    codemodel = _read_json(reply / entry["jsonFile"]) or {}
+    artifacts: dict[str, str] = {}
+    for configuration in codemodel.get("configurations", []):
+        for ref in configuration.get("targets", []):
+            target = _read_json(reply / ref.get("jsonFile", "")) or {}
+            name = target.get("name") or ref.get("name")
+            for artifact in target.get("artifacts", []):
+                path = artifact.get("path")
+                if name and path:
+                    artifacts[_real(binary_dir, path)] = name
+    return artifacts
+
+
+def list_tests_command(binary_dir: Path, include: str) -> list[str]:
+    """ctest argv printing the tests `include` matches as JSON."""
+    return [
+        "ctest",
+        "--test-dir",
+        str(binary_dir),
+        "--show-only=json-v1",
+        "-R",
+        anchored(include),
+    ]
+
+
+def parse_test_names(log: Path) -> list[str]:
+    """The test names in a logged ``--show-only=json-v1`` run (the
+    log's leading ``$ argv`` line is skipped); [] when the log holds
+    no test list."""
+    lines = read_lines(log)
+    if lines and lines[0].startswith("$ "):
+        lines = lines[1:]
+    try:
+        data = json.loads("\n".join(lines))
+    except ValueError:
+        return []
+    tests = data.get("tests", []) if isinstance(data, dict) else []
+    return [t["name"] for t in tests if isinstance(t.get("name"), str)]
+
+
+#: The cmake -P script that records every test's command line.
+CTEST_COMMANDS_SCRIPT = Path(__file__).with_name("ctestCommands.cmake")
+
+
+def test_commands_command(binary_dir: Path, out: Path) -> list[str]:
+    """cmake argv writing every test's command line to `out`."""
+    return [
+        "cmake",
+        f"-DDIR={binary_dir}",
+        f"-DOUT={out}",
+        "-P",
+        str(CTEST_COMMANDS_SCRIPT),
+    ]
+
+
+def parse_test_commands(out: Path) -> dict[str, list[str]]:
+    """Test name -> command line from ctestCommands.cmake's output
+    (records end with ASCII 30, fields split by ASCII 31); {} when the
+    file is absent."""
+    try:
+        text = out.read_bytes().decode("utf-8", "surrogateescape")
+    except FileNotFoundError:
+        return {}
+    commands: dict[str, list[str]] = {}
+    for record in text.split("\x1e"):
+        if record:
+            name, *command = record.split("\x1f")
+            commands[name] = command
+    return commands
+
+
+def targets_for_tests(
+    commands: Mapping[str, Sequence[str]], artifacts: Mapping[str, str]
+) -> dict[str, list[str]]:
+    """Test name -> the targets whose artifacts its command line runs
+    or names by absolute path (tests needing no built target, such as
+    a ``sh`` gate script, are left out)."""
+    needed: dict[str, list[str]] = {}
+    for test, command in commands.items():
+        targets = [
+            artifacts[real]
+            for real in (os.path.realpath(arg) for arg in command if os.path.isabs(arg))
+            if real in artifacts
+        ]
+        if targets:
+            needed[test] = list(dict.fromkeys(targets))
+    return needed
 
 
 # -- sanitizers -------------------------------------------------------
