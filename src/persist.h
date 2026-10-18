@@ -776,7 +776,20 @@ extern const persistOps persistOpsMultiroar;
 extern const persistOps persistOpsHyperloglog;
 extern const persistOps persistOpsMultilist;
 extern const persistOps persistOpsMultimap;
+/* persistOpsMultidict snapshots record how the dict's keys match:
+ * nothing for multidictTypeExactKey (the original layout), a tag for
+ * multidictTypeCaseKey and another for any other type.  Its restore
+ * rebuilds an exact or case dict from the record (a snapshot without one
+ * restores exact, as it always did) and refuses one written by a dict
+ * with a custom type, which it cannot rebuild: restoring it under other
+ * key matching would merge or split keys.  To persist a dict with a
+ * custom type, use a copy of persistOpsMultidict whose .restore calls
+ * multidictPersistRestoreAs with that type; it too refuses a snapshot
+ * written by a dict of another kind (exact, case or custom). */
 extern const persistOps persistOpsMultidict;
+struct multidictType;
+void *multidictPersistRestoreAs(const uint8_t *data, size_t len,
+                                struct multidictType *type);
 extern const persistOps persistOpsMultiarray;
 extern const persistOps persistOpsMultiOrderedSet;
 extern const persistOps persistOpsMultiLRU;

@@ -287,6 +287,8 @@ bool multidictIsRehashing_(const multidict *d);  /* Is rehash in progress? */
 /* API */
 multidict *multidictNew(multidictType *type, multidictClass *qdc, int32_t seed);
 multidictClass *multidictGetClass(multidict *d);
+/* The type 'd' was created with (how its keys hash and match) */
+multidictType *multidictGetType(const multidict *d);
 multidictClass *multidictDefaultClassNew(void);
 void multidictDefaultClassFree(multidictClass *qdc);
 bool multidictExpand(multidict *d, uint64_t size);
@@ -437,8 +439,10 @@ uint32_t multidictGenCaseHashFunction(multidict *d, const uint8_t *buf,
  * above 0x7F) must match exactly, independent of the C locale.  "Key",
  * "KEY" and "key" are one key, stored under the spelling first added (see
  * multidictType).  Integer and other non-byte-string keys match exactly.
- * A persist snapshot does not record the type: multidictP and the persist
- * restore of a multidict rebuild an exact-key dict. */
+ * Persist snapshots record which of the two a dict uses, so it restores
+ * with the same key matching (multidictNewPWithType, multidictOpenP); a
+ * dict with any other type persists only through a caller-supplied
+ * restore (see persistOpsMultidict in persist.h). */
 extern multidictType multidictTypeExactKey; /* exact keys */
 extern multidictType multidictTypeCaseKey;  /* ASCII case-insensitive keys */
 

@@ -41,10 +41,19 @@ typedef struct multidictP {
  * ============================================================================
  */
 
-/* Create new persistent multidict */
+/* Create new persistent multidict with exact keys (multidictTypeExactKey) */
 multidictP *multidictNewP(persistCtx *ctx);
 
-/* Open existing persistent multidict (recover from files) */
+/* Create new persistent multidict whose keys match by 'type': one of the
+ * built-in types, multidictTypeExactKey or multidictTypeCaseKey.  Returns
+ * NULL for any other type, which multidictOpenP could not rebuild (see
+ * persistOpsMultidict in persist.h for persisting a custom type). */
+multidictP *multidictNewPWithType(persistCtx *ctx, multidictType *type);
+
+/* Open existing persistent multidict (recover from files).  The dict
+ * comes back with the key type it was created with, recorded in its
+ * snapshots; files written before that record existed restore as exact
+ * keys. */
 multidictP *multidictOpenP(persistCtx *ctx);
 
 /* Close persistent multidict (syncs and frees) */

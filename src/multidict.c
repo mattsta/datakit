@@ -913,6 +913,10 @@ multidictClass *multidictGetClass(multidict *d) {
     return d->shared;
 }
 
+multidictType *multidictGetType(const multidict *d) {
+    return d->type;
+}
+
 /* ====================================================================
  * Accessor Functions (for encapsulation)
  * ==================================================================== */
@@ -3441,6 +3445,7 @@ void multidictDefaultClassFree(multidictClass *qdc) {
  * BEFORE the dict cleaner that uses it. */
 defcleaner(multidict *, multidictFree);
 defcleaner(multidictClass *, multidictMmClassFree);
+defcleaner(flex *, flexFree);
 
 /* Simple PRNG for reproducible tests */
 static uint32_t testRandState = 12345;
@@ -5054,6 +5059,157 @@ static int multidictTestCustomCompare_(void) {
             multidictCount(d) != 2) {
             printf("ERROR: NULL keyCompare does not match exact bytes\n");
             err++;
+        }
+    }
+
+    return err;
+}
+
+/* A snapshot of 'd' through persistOpsMultidict; NULL on failure */
+static uint8_t *testSnapshot_(multidict *d, size_t *len) {
+    *len = 0;
+    return persistOpsMultidict.snapshot(d, len);
+}
+
+/* Restore through 'as' (NULL: persistOpsMultidict.restore), then check
+ * that the dict has 'type' and 'count' entries, and that "fOO", a
+ * spelling no snapshot here stores, finds the stored "Foo" exactly when
+ * the keys match by case */
+static bool testRestoreIs_(const uint8_t *snap, size_t len, multidictType *as,
+                           multidictType *type, uint64_t count) {
+    multidict *r = as ? multidictPersistRestoreAs(snap, len, as)
+                      : persistOpsMultidict.restore(snap, len);
+    if (!r) {
+        return false;
+    }
+
+    const databox probe = databoxNewBytesString("fOO");
+    databox v = {{0}};
+    const bool found = multidictFind(r, &probe, &v);
+    const bool ok = multidictGetType(r) == type && multidictCount(r) == count &&
+                    found == (type == &multidictTypeCaseKey && count > 0);
+    persistOpsMultidict.free(r);
+    return ok;
+}
+
+/* Persist snapshots record how keys match: case dicts restore as case
+ * dicts, exact and untagged (older) snapshots as exact dicts, custom
+ * types only through multidictPersistRestoreAs with a custom type, and
+ * every mismatch or unknown record is refused */
+static int multidictTestPersistKeys_(void) {
+    int err = 0;
+    cleaner(multidictMmClassFree) multidictClass *qdc = multidictMmClassNew();
+    const databox foo = databoxNewBytesString("Foo");
+    const databox bar = databoxNewBytesString("bar");
+    const databox one = DATABOX_SIGNED(1);
+
+    cleaner(multidictFree) multidict *exact =
+        multidictNew(&multidictTypeExactKey, qdc, 1);
+    cleaner(multidictFree) multidict *ci =
+        multidictNew(&multidictTypeCaseKey, qdc, 2);
+    cleaner(multidictFree) multidict *ciEmpty =
+        multidictNew(&multidictTypeCaseKey, qdc, 3);
+    cleaner(multidictFree) multidict *custom =
+        multidictNew(&testTrimType_, qdc, 4);
+    multidict *const all[] = {exact, ci, custom};
+    for (size_t i = 0; i < 3; i++) {
+        multidictAdd(all[i], &foo, &one);
+        multidictAdd(all[i], &bar, &one);
+    }
+
+    size_t exactLen, ciLen, ciEmptyLen, customLen;
+    cleanerName(zfree, SeenBytes) uint8_t *exactSnap =
+        testSnapshot_(exact, &exactLen);
+    cleanerName(zfree, SeenBytes) uint8_t *ciSnap = testSnapshot_(ci, &ciLen);
+    cleanerName(zfree, SeenBytes) uint8_t *ciEmptySnap =
+        testSnapshot_(ciEmpty, &ciEmptyLen);
+    cleanerName(zfree, SeenBytes) uint8_t *customSnap =
+        testSnapshot_(custom, &customLen);
+
+    /* An exact dict keeps the untagged layout: just its pairs */
+    if (!exactSnap || flexCount((const flex *)exactSnap) != 4 || !ciSnap ||
+        flexCount((const flex *)ciSnap) != 5 || !ciEmptySnap ||
+        flexCount((const flex *)ciEmptySnap) != 1 || !customSnap) {
+        printf("ERROR: multidict snapshot layout\n");
+        return err + 1;
+    }
+
+    /* Built-in types restore by themselves, or as the same type */
+    if (!testRestoreIs_(exactSnap, exactLen, NULL, &multidictTypeExactKey, 2) ||
+        !testRestoreIs_(ciSnap, ciLen, NULL, &multidictTypeCaseKey, 2) ||
+        !testRestoreIs_(ciEmptySnap, ciEmptyLen, NULL, &multidictTypeCaseKey,
+                        0) ||
+        !testRestoreIs_(exactSnap, exactLen, &multidictTypeExactKey,
+                        &multidictTypeExactKey, 2) ||
+        !testRestoreIs_(ciSnap, ciLen, &multidictTypeCaseKey,
+                        &multidictTypeCaseKey, 2)) {
+        printf("ERROR: built-in key types did not round trip\n");
+        err++;
+    }
+
+    /* A custom type needs the caller's type; the trim type matches "Foo"
+     * exactly, so "FOO" is a miss there: check it by trailing spaces */
+    multidict *r =
+        multidictPersistRestoreAs(customSnap, customLen, &testTrimType_);
+    const databox padded = databoxNewBytesString("Foo  ");
+    databox v = {{0}};
+    if (persistOpsMultidict.restore(customSnap, customLen) != NULL || !r ||
+        multidictGetType(r) != &testTrimType_ || multidictCount(r) != 2 ||
+        !multidictFind(r, &padded, &v)) {
+        printf("ERROR: custom key type restore\n");
+        err++;
+    }
+    if (r) {
+        persistOpsMultidict.free(r);
+    }
+
+    /* Every mismatch is refused */
+    if (multidictPersistRestoreAs(ciSnap, ciLen, &multidictTypeExactKey) ||
+        multidictPersistRestoreAs(ciSnap, ciLen, &testTrimType_) ||
+        multidictPersistRestoreAs(exactSnap, exactLen, &multidictTypeCaseKey) ||
+        multidictPersistRestoreAs(exactSnap, exactLen, &testTrimType_) ||
+        multidictPersistRestoreAs(customSnap, customLen,
+                                  &multidictTypeCaseKey) ||
+        multidictPersistRestoreAs(customSnap, customLen,
+                                  &multidictTypeExactKey) ||
+        multidictPersistRestoreAs(ciSnap, ciLen, NULL)) {
+        printf("ERROR: a key type mismatch was not refused\n");
+        err++;
+    }
+
+    /* Data written before the record existed: pairs only, restored as
+     * exact keys, so the two spellings stay two entries */
+    {
+        cleaner(flexFree) flex *old = flexNew();
+        const databox fooUpper = databoxNewBytesString("FOO");
+        const databox two = DATABOX_SIGNED(2);
+        const databox *pairs[] = {&foo, &one, &fooUpper, &two};
+        for (size_t i = 0; i < 4; i++) {
+            flexPushByType(&old, pairs[i], FLEX_ENDPOINT_TAIL);
+        }
+        if (!testRestoreIs_(old, flexBytes(old), NULL, &multidictTypeExactKey,
+                            2) ||
+            multidictPersistRestoreAs(old, flexBytes(old),
+                                      &multidictTypeCaseKey)) {
+            printf("ERROR: an untagged snapshot did not restore exact\n");
+            err++;
+        }
+    }
+
+    /* An unknown or malformed record is refused */
+    {
+        const databox unknown = DATABOX_UNSIGNED(7);
+        const databox text = databoxNewBytesString("case");
+        const databox *const heads[] = {&unknown, &text};
+        for (size_t h = 0; h < 2; h++) {
+            cleaner(flexFree) flex *bad = flexNew();
+            flexPushByType(&bad, heads[h], FLEX_ENDPOINT_TAIL);
+            flexPushByType(&bad, &foo, FLEX_ENDPOINT_TAIL);
+            flexPushByType(&bad, &one, FLEX_ENDPOINT_TAIL);
+            if (persistOpsMultidict.restore(bad, flexBytes(bad)) != NULL) {
+                printf("ERROR: key record %zu was not refused\n", h);
+                err++;
+            }
         }
     }
 
@@ -7293,6 +7449,9 @@ int multidictTest(int argc, char *argv[]) {
     err += multidictTestCaseDifferential_(&multidictTypeCaseKey, 0x5eed, false);
     err += multidictTestCaseDifferential_(&multidictTypeCaseKey, 0xca5e, true);
     err += multidictTestCaseDifferential_(&multidictTypeExactKey, 0xe7ac, true);
+
+    printf("Test 9.7: Persist snapshots record how keys match...\n");
+    err += multidictTestPersistKeys_();
 
     /* ================================================================
      * SECTION 10: Print Stats (Visual Verification)

@@ -20,18 +20,25 @@ defcleaner(multidictClass *, multidictDefaultClassFree);
  */
 
 multidictP *multidictNewP(persistCtx *ctx) {
-    if (!ctx) {
+    return multidictNewPWithType(ctx, &multidictTypeExactKey);
+}
+
+multidictP *multidictNewPWithType(persistCtx *ctx, multidictType *type) {
+    /* multidictOpenP recovers through persistOpsMultidict, which rebuilds
+     * the built-in types only */
+    if (!ctx ||
+        (type != &multidictTypeExactKey && type != &multidictTypeCaseKey)) {
         return NULL;
     }
 
     cleanerName(zfree, MultidictP) multidictP *d = zcalloc(1, sizeof(*d));
     d->ctx = ctx;
 
-    /* Create underlying multidict with default type and class */
+    /* Create underlying multidict with the type and a default class */
     cleaner(multidictDefaultClassFree) multidictClass *qdc =
         multidictDefaultClassNew();
     /* @own: container; free=multidictFree */
-    d->d = multidictNew(&multidictTypeExactKey, qdc, 0);
+    d->d = multidictNew(type, qdc, 0);
     if (!d->d) {
         return NULL;
     }
@@ -823,6 +830,139 @@ int multidictPTest(int argc, char *argv[]) {
 
         multidictCloseP(d);
         persistCtxFree(ctx);
+        ptestCleanupFiles(basePath);
+    }
+
+    TEST("multidictP case keys survive WAL replay and compaction") {
+        ptestCleanupFiles(basePath);
+        const databox alpha = databoxNewBytesString("Alpha");
+        const databox ALPHA = databoxNewBytesString("ALPHA");
+        const databox aLpHa = databoxNewBytesString("aLpHa");
+        const databox beta = databoxNewBytesString("BETA");
+        const databox betaLow = databoxNewBytesString("beta");
+        const databox gamma = databoxNewBytesString("Gamma");
+        const databox GAMMA = databoxNewBytesString("GAMMA");
+        const databox one = DATABOX_SIGNED(1);
+        const databox two = DATABOX_SIGNED(2);
+        const databox three = DATABOX_SIGNED(3);
+
+        /* Only built-in types can be reopened */
+        {
+            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            static multidictType custom = {NULL, NULL};
+            custom = multidictTypeCaseKey;
+            if (multidictNewPWithType(ctx, &custom) ||
+                multidictNewPWithType(ctx, NULL)) {
+                ERRR("multidictNewPWithType accepted a custom type");
+            }
+            persistCtxFree(ctx);
+            ptestCleanupFiles(basePath);
+        }
+
+        /* Session 1: everything lives in the WAL after the empty, tagged
+         * snapshot NewP writes */
+        {
+            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            multidictP *d = multidictNewPWithType(ctx, &multidictTypeCaseKey);
+            if (!d || multidictAddP(d, &alpha, &one) != MULTIDICT_OK_INSERTED ||
+                multidictAddP(d, &beta, &two) != MULTIDICT_OK_INSERTED ||
+                multidictAddP(d, &ALPHA, &three) != MULTIDICT_OK_REPLACED ||
+                multidictCountP(d) != 2) {
+                ERRR("case multidictP session 1");
+            }
+            multidictCloseP(d);
+            persistCtxFree(ctx);
+        }
+
+        /* Session 2: replayed from the WAL as a case dict */
+        {
+            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            multidictP *d = multidictOpenP(ctx);
+            databox v = {{0}};
+            if (!d ||
+                multidictGetType(multidictGetP(d)) != &multidictTypeCaseKey ||
+                multidictCountP(d) != 2 || !multidictFindP(d, &aLpHa, &v) ||
+                !ptestBoxesEqual(&v, &three) ||
+                !multidictDeleteP(d, &betaLow) || multidictCountP(d) != 1) {
+                ERRR("case multidictP after WAL replay");
+            }
+
+            /* Compact, then keep logging on top of the new snapshot */
+            if (!multidictCompactP(d) ||
+                multidictAddP(d, &gamma, &one) != MULTIDICT_OK_INSERTED) {
+                ERRR("case multidictP compaction");
+            }
+            multidictCloseP(d);
+            persistCtxFree(ctx);
+        }
+
+        /* Session 3: restored from the compacted snapshot plus the WAL;
+         * keys differing only in case are still one entry, under the
+         * spelling that first inserted it */
+        {
+            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            multidictP *d = multidictOpenP(ctx);
+            databox v = {{0}};
+            if (!d ||
+                multidictGetType(multidictGetP(d)) != &multidictTypeCaseKey ||
+                multidictCountP(d) != 2 || !multidictExistsP(d, &GAMMA) ||
+                !multidictFindP(d, &ALPHA, &v) ||
+                !ptestBoxesEqual(&v, &three) ||
+                multidictAddP(d, &aLpHa, &two) != MULTIDICT_OK_REPLACED ||
+                multidictCountP(d) != 2) {
+                ERRR("case multidictP after compaction");
+            }
+
+            bool alphaKept = false;
+            multidictIterator iter;
+            multidictIteratorInitP(d, &iter);
+            multidictEntry e;
+            while (multidictIteratorNext(&iter, &e)) {
+                alphaKept = alphaKept ||
+                            (DATABOX_IS_BYTES(&e.key) && e.key.len == 5 &&
+                             memcmp(databoxCBytes(&e.key), "Alpha", 5) == 0);
+            }
+            multidictIteratorRelease(&iter);
+            if (!alphaKept) {
+                ERRR("case multidictP lost the stored spelling");
+            }
+            multidictCloseP(d);
+            persistCtxFree(ctx);
+        }
+
+        ptestCleanupFiles(basePath);
+    }
+
+    TEST("multidictP exact dicts reopen exact") {
+        ptestCleanupFiles(basePath);
+        const databox lower = databoxNewBytesString("key");
+        const databox upper = databoxNewBytesString("KEY");
+        const databox one = DATABOX_SIGNED(1);
+        const databox two = DATABOX_SIGNED(2);
+        {
+            persistCtx *ctx = persistCtxNew(basePath, NULL);
+            multidictP *d = multidictNewP(ctx);
+            multidictAddP(d, &lower, &one);
+            multidictCompactP(d);
+            multidictAddP(d, &upper, &two);
+            multidictCloseP(d);
+            persistCtxFree(ctx);
+        }
+
+        {
+            persistCtx *ctx = persistCtxOpen(basePath, NULL);
+            multidictP *d = multidictOpenP(ctx);
+            databox v = {{0}};
+            if (!d ||
+                multidictGetType(multidictGetP(d)) != &multidictTypeExactKey ||
+                multidictCountP(d) != 2 || !multidictFindP(d, &upper, &v) ||
+                !ptestBoxesEqual(&v, &two)) {
+                ERRR("exact multidictP did not reopen exact");
+            }
+            multidictCloseP(d);
+            persistCtxFree(ctx);
+        }
+
         ptestCleanupFiles(basePath);
     }
 

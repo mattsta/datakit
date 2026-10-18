@@ -928,8 +928,34 @@ spelling. A lookup that misses a key's exact bytes walks that key's slot,
 comparing each byte-string key there, so a case dict pays per slot entry on
 those lookups (two entries a slot on average at the default load factor).
 
-A persist snapshot does not record the dict type: `multidictP` and the
-persist restore of a multidict rebuild an exact-key dict.
+### Persisting the Key Type
+
+A `persistOpsMultidict` snapshot records how the dict's keys match, so a
+restore rebuilds the same kind of dict:
+
+- An exact-key dict writes its key/value pairs only, the original layout. A
+  snapshot without a record (including any written before the record existed)
+  restores as an exact-key dict.
+- A case dict, or a dict with any other type, writes one leading unsigned
+  element first (case or custom), which makes the element count odd.
+- The WAL carries no record: its operations replay onto the dict the snapshot
+  restored, and every recovery starts from a snapshot, so replayed adds,
+  replaces and deletes match keys the way the restored dict does. Compaction
+  writes a new snapshot with the record.
+
+```c
+/* multidictP: create with a built-in type; open restores it */
+multidictP *pd = multidictNewPWithType(ctx, &multidictTypeCaseKey);
+multidictP *again = multidictOpenP(ctx2); /* a case dict again */
+```
+
+`persistOpsMultidict.restore` refuses a snapshot written by a dict with a
+custom type, because restoring it under other key matching would merge or split
+keys. To persist such a dict, give persist a copy of `persistOpsMultidict` whose
+`.restore` calls `multidictPersistRestoreAs(data, len, &myType)`. That call
+refuses any snapshot written by a dict of another kind (exact, case or custom),
+so a mismatch fails the recovery instead of changing the keys.
+`multidictNewPWithType` accepts only the built-in types.
 
 ## Creating a Custom multidictClass
 
