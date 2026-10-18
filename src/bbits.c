@@ -117,39 +117,23 @@ bool bbitsDodDodAppend(bbitsDodDod *dd, const dodVal newKey,
     return true;
 }
 
-/* Helper: Read all values from a dod bitmap using stored t0/t1 values */
+/* Helper: Read all values from a dodWrite() bitmap. A single value lives
+ * only in the writer (stored here as t0); from two values on, the bitmap's
+ * header holds the first two and dodReadAll() decodes the rest after it. */
 static void bbitsReadDodAll(const dod *d, dodVal t0, dodVal t1, uint64_t *vals,
                             size_t elemCount) {
     if (elemCount == 0) {
         return;
     }
 
-    /* First value is always t0 */
-    vals[0] = (uint64_t)t0;
-
     if (elemCount == 1) {
+        vals[0] = (uint64_t)t0;
         return;
     }
 
-    /* Second value is always t1 */
-    vals[1] = (uint64_t)t1;
-
-    if (elemCount == 2) {
-        return;
-    }
-
-    /* Read remaining values using dodGet with proper t0/t1 tracking */
-    dodVal currentT0 = t0;
-    dodVal currentT1 = t1;
-    size_t consumedBits = 0;
-
-    for (size_t i = 2; i < elemCount; i++) {
-        dodVal retrieved = dodGet(d, &consumedBits, currentT0, currentT1, 1);
-        vals[i] = (uint64_t)retrieved;
-        /* Rotate for next iteration */
-        currentT0 = currentT1;
-        currentT1 = retrieved;
-    }
+    dodReadAll(d, vals, elemCount);
+    assert(vals[0] == (uint64_t)t0 && vals[1] == (uint64_t)t1);
+    (void)t1;
 }
 
 bool bbitsDodDodGetOffsetCount(bbitsDodDod *dd, ssize_t offset,

@@ -7,20 +7,38 @@
 typedef uint64_t dod;
 typedef int64_t dodVal;
 
+/* There are two kinds of dod stream:
+ *   - Raw streams, written with dodAppend(): delta-of-delta entries from
+ *     bit 0. The caller keeps the first two values and passes them to
+ *     dodGet() or dodReaderInit().
+ *   - Writer streams, written with dodWrite(): a header holding the first
+ *     two values (at most DOD_WRITER_HEADER_MAX_BITS bits), then the
+ *     entries. dodRead(), dodReadAll(), dodInitFromExisting(),
+ *     dodCloseWrites() and dodReaderInitFromWriter() read the header, so a
+ *     writer stream decodes from the stream alone. To use dodGet() on one,
+ *     start at the bit offset dodInitFromExisting() puts in 'usedBits'.
+ * The stream never records how many values it holds. */
+#define DOD_WRITER_HEADER_MAX_BITS 130
+
 typedef struct dodWriter {
+    /* Writer stream; must be allocated and zeroed before the second
+     * dodWrite(), with room for the header plus 72 bits per later value */
     dod *d;
 
-    /* If this writer is OPEN, then t[2] is the write helpers.
+    /* If this writer is OPEN, then t[2] is the write helpers (the last two
+     * values written).
      * If this writer is CLOSED, then t[2] is:
      *  - [0] - lowest complete value in 'd' (first)
-     *  - [1] - highest complete value in 'd' (last) */
+     *  - [1] - highest complete value in 'd' (last)
+     * A closed writer must not be written to again. */
     dodVal t[2];
 
-    /* Number of elements in 'd' */
-    /* (If <= 2, values are ONLY in t[2] */
+    /* Number of elements written */
+    /* (If < 2, the values are ONLY in t[2] and 'd' is untouched) */
     size_t count;
 
-    /* Next bit offset to write inside 'd' */
+    /* Next bit offset to write inside 'd'. After dodInitFromExisting(), the
+     * bit offset of the first delta-of-delta entry (the header's end). */
     size_t usedBits;
 
     /* Total bytes allocated for 'd' */
@@ -46,21 +64,34 @@ dodVal dodGet(const dod *d, size_t *consumedBits, dodVal originalStartVal,
 void dodAppend(dod *d, dodVal t0, dodVal t1, dodVal newVal,
                size_t *currentBits);
 
+/* Value at index 'offset' (0 is the first value written) of an open or
+ * closed writer; 'offset' must be below the number of values written.
+ * With fewer than two values written it reads t[], and returns 0 for an
+ * 'offset' past them. */
 dodVal dodRead(dodWriter *const w, const size_t offset);
 void dodWrite(dodWriter *const w, const dodVal val);
+
+/* Read the header of writer stream 'd' (at least two values written):
+ * t[] gets the first two values, 'usedBits' the bit offset of the first
+ * entry and 'count' is set to 2. 'w->d' is not changed. */
 void dodInitFromExisting(dodWriter *const w, const dod *d);
+
+/* Switch 'w' to the closed form of t[] (first, last). */
 void dodCloseWrites(dodWriter *const w);
 
+/* Decode the first 'count' values of writer stream 'd' (at least two values
+ * written) into 'vals', which must have room for at least 2. */
 bool dodReadAll(const dod *w, uint64_t *vals, size_t count);
 
 /* ====================================================================
  * dodReader API - O(1) resumable sequential access
  * ==================================================================== */
 
-/* Initialize reader from first two values (t0, t1) */
+/* Initialize reader for a raw stream from its first two values (t0, t1) */
 void dodReaderInit(dodReader *r, dodVal firstVal, dodVal secondVal);
 
-/* Initialize reader from a writer (reads first two values from writer state) */
+/* Initialize reader for a writer's stream, open or closed: with two or more
+ * values written it starts after the header, from the two values it holds */
 void dodReaderInitFromWriter(dodReader *r, const dodWriter *w);
 
 /* Read next value - O(1) operation. Advances iterator state. */

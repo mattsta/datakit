@@ -21,13 +21,21 @@
            : 0)
 #endif
 
-typedef enum dodFloor {
-    DOD_FLOOR_SEC_HR_4 = 0,  /* 32 bit t0, 14 bit t1 */
-    DOD_FLOOR_SEC_HR_12 = 1, /* 32 bit t0, 16 bit t1 */
-    DOD_FLOOR_NS_HR_4 = 2,   /* 64 bit t0, 45 bit t1 */
-    DOD_FLOOR_NS_HR_12 = 3   /* 64 bit t0, 46 bit t1 */
-    /* don't add more; we only use two bits for floor storage */
-} dodFloor;
+/* Writer streams (dodWrite) start with a header holding the first two
+ * values, so the stream alone is enough to decode it:
+ *   - 2 bits: header code
+ *   - t0: 32 bits (codes 0 and 1, t0 in [0, UINT32_MAX]) or 64 bits
+ *   - t1: the difference t1 - t0 (modulo 2^64) in sign-magnitude form in
+ *     14, 16 or 45 bits (codes 0, 1, 2), or t1 itself in 64 bits (code 3)
+ * The writer always picks the smallest code that holds the pair.
+ * Delta-of-delta entries follow the header. */
+typedef enum dodHeader {
+    DOD_HEADER_T0_32_DELTA_14 = 0,
+    DOD_HEADER_T0_32_DELTA_16 = 1,
+    DOD_HEADER_T0_64_DELTA_45 = 2,
+    DOD_HEADER_T0_64_T1_64 = 3
+    /* two bits of code: no room for more */
+} dodHeader;
 
 /* ====================================================================
  * Give varintBitstream our types for the bitstream
@@ -35,6 +43,93 @@ typedef enum dodFloor {
 #define VBITS dod
 #define VBITSVAL dod
 #include "../deps/varint/src/varintBitstream.h"
+
+/* ====================================================================
+ * Writer stream header
+ * ==================================================================== */
+_Static_assert(DOD_WRITER_HEADER_MAX_BITS == 2 + 64 + 64,
+               "header size bound out of date");
+
+/* Write the header for first values t0, t1 at bit 0 of 'd'; returns its
+ * length in bits (where the first delta-of-delta entry starts). */
+static size_t dodHeaderWrite(dod *const d, const dodVal t0, const dodVal t1) {
+    const uint64_t delta = (uint64_t)t1 - (uint64_t)t0;
+    const bool negative = (int64_t)delta < 0;
+    const uint64_t magnitude = negative ? (uint64_t)0 - delta : delta;
+    const bool t0Fits32 = t0 >= 0 && (uint64_t)t0 <= UINT32_MAX;
+
+    dodHeader code;
+    uint32_t t0Bits = 64;
+    uint32_t deltaBits = 0;
+    if (t0Fits32 && magnitude < (1ULL << 13)) {
+        code = DOD_HEADER_T0_32_DELTA_14;
+        t0Bits = 32;
+        deltaBits = 14;
+    } else if (t0Fits32 && magnitude < (1ULL << 15)) {
+        code = DOD_HEADER_T0_32_DELTA_16;
+        t0Bits = 32;
+        deltaBits = 16;
+    } else if (magnitude < (1ULL << 44)) {
+        code = DOD_HEADER_T0_64_DELTA_45;
+        deltaBits = 45;
+    } else {
+        code = DOD_HEADER_T0_64_T1_64;
+    }
+
+    size_t bits = 0;
+    varintBitstreamSet(d, bits, 2, code);
+    bits += 2;
+    varintBitstreamSet(d, bits, t0Bits, (uint64_t)t0);
+    bits += t0Bits;
+
+    if (code == DOD_HEADER_T0_64_T1_64) {
+        varintBitstreamSet(d, bits, 64, (uint64_t)t1);
+        bits += 64;
+    } else {
+        /* Top bit of the field is the sign, the rest is the magnitude */
+        const uint64_t field =
+            magnitude | (negative ? 1ULL << (deltaBits - 1) : 0);
+        varintBitstreamSet(d, bits, deltaBits, field);
+        bits += deltaBits;
+    }
+
+    return bits;
+}
+
+/* Read the header of writer stream 'd' into *t0, *t1; returns its length in
+ * bits (where the first delta-of-delta entry starts). */
+static size_t dodHeaderRead(const dod *const d, dodVal *const t0,
+                            dodVal *const t1) {
+    const dodHeader code = (dodHeader)varintBitstreamGet(d, 0, 2);
+    size_t bits = 2;
+
+    uint32_t deltaBits = 0;
+    if (code == DOD_HEADER_T0_32_DELTA_14 ||
+        code == DOD_HEADER_T0_32_DELTA_16) {
+        *t0 = (dodVal)varintBitstreamGet(d, bits, 32);
+        bits += 32;
+        deltaBits = code == DOD_HEADER_T0_32_DELTA_14 ? 14 : 16;
+    } else {
+        *t0 = (dodVal)varintBitstreamGet(d, bits, 64);
+        bits += 64;
+        deltaBits = code == DOD_HEADER_T0_64_DELTA_45 ? 45 : 0;
+    }
+
+    if (code == DOD_HEADER_T0_64_T1_64) {
+        *t1 = (dodVal)varintBitstreamGet(d, bits, 64);
+        bits += 64;
+    } else {
+        const uint64_t field = varintBitstreamGet(d, bits, deltaBits);
+        bits += deltaBits;
+        const uint64_t signBit = 1ULL << (deltaBits - 1);
+        const uint64_t magnitude = field & (signBit - 1);
+        const uint64_t delta =
+            (field & signBit) ? (uint64_t)0 - magnitude : magnitude;
+        *t1 = (dodVal)((uint64_t)*t0 + delta);
+    }
+
+    return bits;
+}
 
 /* ====================================================================
  * Extended helper values for stacked ranges
@@ -763,21 +858,42 @@ void dodInit(dodWriter *const w) {
  * Read from cannonical dod
  * ==================================================================== */
 dodVal dodRead(dodWriter *const w, const size_t offset) {
-    if (w->d) {
-        size_t consumedBits = 0;
-        return dodGet(w->d, &consumedBits, w->t[0], w->t[1], offset);
+    /* Fewer than two values: they live only in t[], no stream yet */
+    if (w->count < 2) {
+        return offset < w->count ? w->t[offset] : 0;
     }
 
-    return 0;
+    if (!w->d) {
+        return 0;
+    }
+
+    /* The header holds values 0 and 1; entries follow it */
+    dodVal t0;
+    dodVal t1;
+    size_t consumedBits = dodHeaderRead(w->d, &t0, &t1);
+    if (offset == 0) {
+        return t0;
+    }
+
+    if (offset == 1) {
+        return t1;
+    }
+
+    return dodGet(w->d, &consumedBits, t0, t1, offset - 1);
 }
 
 /* ====================================================================
  * Write to cannonical dod
  * ==================================================================== */
 void dodWrite(dodWriter *const w, const dodVal val) {
-    /* If less than two elements, populate preconditions, not bitmap */
-    if (w->count < 2) {
-        w->t[w->count] = val;
+    if (w->count == 0) {
+        /* First value: kept in t[0] until the second one arrives */
+        w->t[0] = val;
+    } else if (w->count == 1) {
+        /* Second value: the stream starts with a header holding both */
+        assert(w->d);
+        w->t[1] = val;
+        w->usedBits = dodHeaderWrite(w->d, w->t[0], val);
     } else {
         /* else, we can write to bitmap directly. */
 
@@ -796,69 +912,28 @@ void dodWrite(dodWriter *const w, const dodVal val) {
 }
 
 void dodCloseWrites(dodWriter *const w) {
-    dodWriter grabData;
-    dodInitFromExisting(&grabData, w->d);
-    w->t[0] = grabData.t[0];
+    if (w->count >= 2) {
+        /* t[1] already holds the last value; the first is in the header */
+        dodVal second;
+        dodHeaderRead(w->d, &w->t[0], &second);
+    } else if (w->count == 1) {
+        /* One value: it is both the first and the last */
+        w->t[1] = w->t[0];
+    }
 }
 
 /* ====================================================================
  * Get dod cached reader
  * ==================================================================== */
 void dodInitFromExisting(dodWriter *const w, const dod *d) {
-    /* Layout:
-     *   - t0:
-     *     - 32 or 64 bits
-     *       - floor'd to 4 hours or 6 hours
-     *   - t1
-     *       - 14 bits (4 hrs)
-     *       - 16 bits (12 hrs) */
-
-    /* TODO:
-     *   populate 'elements' and 'bytes' and cache highest value (?) */
-    dodVal t1 = 0;
-    const uint8_t floorControl = varintBitstreamGet(d, 0, 2);
-    w->usedBits = 2;
-
-    switch (floorControl) {
-    case DOD_FLOOR_SEC_HR_4:
-        w->t[0] = varintBitstreamGet(d, w->usedBits, 32);
-        w->usedBits += 32;
-        t1 = varintBitstreamGet(d, w->usedBits, 14);
-        w->usedBits += 14;
-        _varintBitstreamRestoreSigned(t1, 14);
-        break;
-    case DOD_FLOOR_SEC_HR_12:
-        w->t[0] = varintBitstreamGet(d, w->usedBits, 32);
-        w->usedBits += 32;
-        t1 = varintBitstreamGet(d, w->usedBits, 16);
-        w->usedBits += 16;
-        _varintBitstreamRestoreSigned(t1, 16);
-        break;
-    case DOD_FLOOR_NS_HR_4:
-        w->t[0] = (dodVal)varintBitstreamGet(d, w->usedBits, 64);
-        w->usedBits += 64;
-        t1 = varintBitstreamGet(d, w->usedBits, 45);
-        w->usedBits += 45;
-        _varintBitstreamRestoreSigned(t1, 45);
-        break;
-    case DOD_FLOOR_NS_HR_12:
-        w->t[0] = (dodVal)varintBitstreamGet(d, w->usedBits, 64);
-        w->usedBits += 64;
-        t1 = varintBitstreamGet(d, w->usedBits, 46);
-        w->usedBits += 46;
-        _varintBitstreamRestoreSigned(t1, 46);
-        break;
-    }
-
-    /* Modulo 2^64, like the rest of the delta math */
-    w->t[1] = (dodVal)((uint64_t)w->t[0] + (uint64_t)t1);
+    /* The header holds the first two values; the stream does not record
+     * how many follow, so 'count' covers just those two. */
+    w->usedBits = dodHeaderRead(d, &w->t[0], &w->t[1]);
+    w->count = 2;
 }
 
 /* NOTE: 'vals' must have length >= 2 because we ALWAYS write [0] AND [1] */
 bool dodReadAll(const dod *const d, uint64_t *vals, size_t count) {
-    dodWriter tmp;
-    dodInitFromExisting(&tmp, d);
-
     if (!count) {
         return false;
     }
@@ -869,17 +944,19 @@ bool dodReadAll(const dod *const d, uint64_t *vals, size_t count) {
         count = 2;
     }
 
-    vals[0] = tmp.t[0];
-    vals[1] = tmp.t[1];
+    dodVal t0;
+    dodVal t1;
+    size_t consumedBits = dodHeaderRead(d, &t0, &t1);
 
-    size_t consumedBits = 0;
+    vals[0] = (uint64_t)t0;
+    vals[1] = (uint64_t)t1;
+
     for (size_t i = 2; i < count; i++) {
-        const dodVal retrieved =
-            dodGet(d, &consumedBits, tmp.t[0], tmp.t[1], 1);
-        tmp.t[0] = tmp.t[1];
-        tmp.t[1] = retrieved;
+        const dodVal retrieved = dodGet(d, &consumedBits, t0, t1, 1);
+        t0 = t1;
+        t1 = retrieved;
 
-        vals[i] = retrieved;
+        vals[i] = (uint64_t)retrieved;
     }
 
     return true;
@@ -897,9 +974,16 @@ void dodReaderInit(dodReader *r, dodVal firstVal, dodVal secondVal) {
 }
 
 void dodReaderInitFromWriter(dodReader *r, const dodWriter *w) {
-    r->consumedBits = 0;
-    r->t0 = w->t[0];
-    r->t1 = w->t[1];
+    if (w->count >= 2 && w->d) {
+        /* Start after the header, from the first two values it holds. This
+         * works for open and closed writers alike. */
+        r->consumedBits = dodHeaderRead(w->d, &r->t0, &r->t1);
+    } else {
+        r->consumedBits = 0;
+        r->t0 = w->t[0];
+        r->t1 = w->t[1];
+    }
+
     r->valuesRead = 2; /* We already have the first two values */
 }
 
@@ -1243,6 +1327,139 @@ static void dodSequenceFromDods(dodVal *out, const dodVal v0, const dodVal v1,
         const uint64_t delta = prev - (uint64_t)out[i];
         out[i + 2] = (dodVal)(prev + delta + (uint64_t)dods[i]);
     }
+}
+
+/* Write 'vals' through a dodWriter, then read every value back through
+ * every reader of writer streams: dodRead() and dodReaderInitFromWriter()
+ * on the open and the closed writer, dodInitFromExisting() plus dodGet()
+ * (absolute and sequential), and dodReadAll(). 'expectedCode' is the header
+ * code the first two values must select (-1: don't check). */
+static int dodCheckWriterStream(const char *what, const dodVal *vals,
+                                const size_t n, const int expectedCode) {
+    int err = 0;
+    const size_t slots = ((DOD_WRITER_HEADER_MAX_BITS + n * 72) / 64) + 2;
+    cleanerName(zfree, Dods) dod *stream = zcalloc(slots, sizeof(*stream));
+
+    dodWriter w;
+    dodInit(&w);
+    w.d = stream;
+    for (size_t i = 0; i < n; i++) {
+        dodWrite(&w, vals[i]);
+    }
+
+    if (w.count != n) {
+        ERR("%s: count %zu after %zu writes", what, w.count, n);
+    }
+
+    if (n >= 2 && expectedCode >= 0 &&
+        varintBitstreamGet(stream, 0, 2) != (uint64_t)expectedCode) {
+        ERR("%s: header code %" PRIu64 ", expected %d", what,
+            varintBitstreamGet(stream, 0, 2), expectedCode);
+    }
+
+    for (int closed = 0; closed < 2; closed++) {
+        if (closed) {
+            dodCloseWrites(&w);
+            if (n >= 1 && (w.t[0] != vals[0] || w.t[1] != vals[n - 1])) {
+                ERR("%s: closed t = {%" PRId64 ", %" PRId64
+                    "}, expected first/last {%" PRId64 ", %" PRId64 "}",
+                    what, w.t[0], w.t[1], vals[0], vals[n - 1]);
+            }
+        }
+
+        for (size_t i = 0; i < n; i++) {
+            const dodVal got = dodRead(&w, i);
+            if (got != vals[i]) {
+                ERR("%s (%s): dodRead(%zu) = %" PRId64 ", expected %" PRId64,
+                    what, closed ? "closed" : "open", i, got, vals[i]);
+                break;
+            }
+        }
+
+        if (n >= 2) {
+            dodReader r;
+            dodReaderInitFromWriter(&r, &w);
+            if (r.t0 != vals[0] || r.t1 != vals[1]) {
+                ERR("%s (%s): reader starts at {%" PRId64 ", %" PRId64 "}",
+                    what, closed ? "closed" : "open", r.t0, r.t1);
+            }
+
+            for (size_t i = 2; i < n; i++) {
+                const dodVal got = dodReaderNext(&r, stream);
+                if (got != vals[i]) {
+                    ERR("%s (%s): reader [%zu] = %" PRId64
+                        ", expected %" PRId64,
+                        what, closed ? "closed" : "open", i, got, vals[i]);
+                    break;
+                }
+            }
+
+            if (dodReaderRemaining(&r, n) != 0 ||
+                r.consumedBits != w.usedBits) {
+                ERR("%s (%s): reader ended at bit %zu, writer at %zu", what,
+                    closed ? "closed" : "open", r.consumedBits, w.usedBits);
+            }
+        }
+    }
+
+    if (n >= 2) {
+        /* Reopen from the stream alone */
+        dodWriter r;
+        memset(&r, 0xA5, sizeof(r));
+        dodInitFromExisting(&r, stream);
+        if (r.t[0] != vals[0] || r.t[1] != vals[1] || r.count != 2) {
+            ERR("%s: reopened t = {%" PRId64 ", %" PRId64 "} count %zu", what,
+                r.t[0], r.t[1], r.count);
+        }
+
+        /* dodGet() from the header's end: absolute offsets... */
+        for (size_t k = 1; k + 1 < n; k++) {
+            size_t bits = r.usedBits;
+            const dodVal got = dodGet(stream, &bits, r.t[0], r.t[1], k);
+            if (got != vals[k + 1]) {
+                ERR("%s: dodGet(offset %zu) = %" PRId64 ", expected %" PRId64,
+                    what, k, got, vals[k + 1]);
+                break;
+            }
+        }
+
+        /* ...and one value at a time */
+        size_t bits = r.usedBits;
+        dodVal t0 = r.t[0];
+        dodVal t1 = r.t[1];
+        for (size_t i = 2; i < n; i++) {
+            const dodVal got = dodGet(stream, &bits, t0, t1, 1);
+            if (got != vals[i]) {
+                ERR("%s: sequential dodGet [%zu] = %" PRId64
+                    ", expected %" PRId64,
+                    what, i, got, vals[i]);
+                break;
+            }
+
+            t0 = t1;
+            t1 = got;
+        }
+
+        if (bits != w.usedBits) {
+            ERR("%s: decoding ended at bit %zu, writer at %zu", what, bits,
+                w.usedBits);
+        }
+
+        cleanerName(zfree, Dods) uint64_t *all = zcalloc(n, sizeof(*all));
+        if (!dodReadAll(stream, all, n)) {
+            ERR("%s: dodReadAll refused %zu values", what, n);
+        }
+
+        for (size_t i = 0; i < n; i++) {
+            if (all[i] != (uint64_t)vals[i]) {
+                ERR("%s: dodReadAll [%zu] = %" PRId64 ", expected %" PRId64,
+                    what, i, (dodVal)all[i], vals[i]);
+                break;
+            }
+        }
+    }
+
+    return err;
 }
 
 static uint64_t dodTestRand(uint64_t *state) {
@@ -1636,6 +1853,70 @@ int dodTest(int argc, char *argv[]) {
             ERR("fresh writer after two writes: count=%zu t={%" PRId64
                 ", %" PRId64 "}",
                 w.count, w.t[0], w.t[1]);
+        }
+    }
+
+    TEST("writer streams: write, close, reopen and read back") {
+        /* Each pair of first values selects one header code */
+        const struct {
+            dodVal first;
+            dodVal second;
+            int code;
+        } pairs[] = {
+            {100, 150, DOD_HEADER_T0_32_DELTA_14},
+            {0, 8191, DOD_HEADER_T0_32_DELTA_14},
+            {UINT32_MAX, (dodVal)UINT32_MAX - 8191, DOD_HEADER_T0_32_DELTA_14},
+            {100, 100 + 8192, DOD_HEADER_T0_32_DELTA_16},
+            {5, 5 - 32767, DOD_HEADER_T0_32_DELTA_16},
+            {-1, 5, DOD_HEADER_T0_64_DELTA_45},
+            {(dodVal)UINT32_MAX + 1, (dodVal)UINT32_MAX + 2,
+             DOD_HEADER_T0_64_DELTA_45},
+            {100, 100 + 32768, DOD_HEADER_T0_64_DELTA_45},
+            {0, (1LL << 44) - 1, DOD_HEADER_T0_64_DELTA_45},
+            {0, -((1LL << 44) - 1), DOD_HEADER_T0_64_DELTA_45},
+            {INT64_MIN, INT64_MIN, DOD_HEADER_T0_64_DELTA_45},
+            /* INT64_MIN - INT64_MAX is 1 modulo 2^64 */
+            {INT64_MAX, INT64_MIN, DOD_HEADER_T0_64_DELTA_45},
+            {0, 1LL << 44, DOD_HEADER_T0_64_T1_64},
+            {0, -(1LL << 44), DOD_HEADER_T0_64_T1_64},
+            /* INT64_MAX - INT64_MIN is -1 modulo 2^64 */
+            {INT64_MIN, INT64_MAX, DOD_HEADER_T0_64_DELTA_45},
+            {INT64_MIN, 0, DOD_HEADER_T0_64_T1_64},
+            {0, INT64_MIN, DOD_HEADER_T0_64_T1_64},
+            {INT64_MAX, -1, DOD_HEADER_T0_64_T1_64},
+            {1700000000000LL, 1700000001000LL, DOD_HEADER_T0_64_DELTA_45},
+        };
+        const size_t lengths[] = {1, 2, 3, 4, 40};
+
+        uint64_t rng = 0x13198a2e03707344ULL;
+        dodVal vals[40];
+        for (size_t p = 0; p < COUNT_ARRAY(pairs); p++) {
+            for (size_t l = 0; l < COUNT_ARRAY(lengths); l++) {
+                const size_t n = lengths[l];
+                vals[0] = pairs[p].first;
+                vals[1] = pairs[p].second;
+                for (size_t i = 2; i < n; i++) {
+                    const uint64_t pick = dodTestRand(&rng);
+                    const uint64_t prev = (uint64_t)vals[i - 1];
+                    const uint64_t step = prev - (uint64_t)vals[i - 2];
+                    /* Mostly regular steps, some jitter, some anything */
+                    vals[i] = pick % 4 == 0 ? (dodVal)dodTestRand(&rng)
+                              : pick % 4 == 1
+                                  ? (dodVal)(prev + step + (pick >> 60))
+                                  : (dodVal)(prev + step);
+                }
+
+                err += dodCheckWriterStream("writer stream", vals, n,
+                                            pairs[p].code);
+            }
+        }
+
+        /* A writer with no values reads 0 and closes to zeros */
+        dodWriter empty;
+        dodInit(&empty);
+        dodCloseWrites(&empty);
+        if (dodRead(&empty, 0) != 0 || empty.t[0] != 0 || empty.t[1] != 0) {
+            ERRR("empty writer did not stay empty");
         }
     }
 

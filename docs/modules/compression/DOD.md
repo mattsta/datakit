@@ -87,7 +87,7 @@ typedef int64_t dodVal;     /* Signed 64-bit value type */
 
 ```c
 typedef struct dodWriter {
-    dod *d;                 /* Compressed data array */
+    dod *d;                 /* Writer stream (caller-allocated, zeroed) */
 
     /* Helper values for delta-of-delta calculation
      * If OPEN: t[0]=t_n_1, t[1]=t_n_0 (previous two values)
@@ -95,11 +95,47 @@ typedef struct dodWriter {
     dodVal t[2];
 
     /* Metadata */
-    size_t count;           /* Number of values (if <= 2, only in t[2]) */
+    size_t count;           /* Number of values (if < 2, only in t[2]) */
     size_t usedBits;        /* Next bit offset to write */
     size_t totalBytes;      /* Allocated bytes */
 } dodWriter;
 ```
+
+### Stream Kinds
+
+There are two kinds of dod stream:
+
+- **Raw streams** come from `dodAppend()`. They hold only delta-of-delta
+  entries, starting at bit 0. The caller keeps the first two values and
+  passes them to `dodGet()` or `dodReaderInit()`.
+- **Writer streams** come from `dodWrite()`. They start with a header that
+  holds the first two values, and the entries follow it. `dodRead()`,
+  `dodReadAll()`, `dodInitFromExisting()`, `dodCloseWrites()` and
+  `dodReaderInitFromWriter()` read that header, so a writer stream decodes
+  from the stream alone.
+
+The header is at most `DOD_WRITER_HEADER_MAX_BITS` (130) bits:
+
+| Code | t0      | t1                                     | Bits |
+| ---- | ------- | -------------------------------------- | ---- |
+| `00` | 32 bits | t1 - t0, sign-magnitude, 14 bits       | 48   |
+| `01` | 32 bits | t1 - t0, sign-magnitude, 16 bits       | 50   |
+| `10` | 64 bits | t1 - t0 (mod 2^64), sign-magnitude, 45 | 111  |
+| `11` | 64 bits | t1, 64 bits                            | 130  |
+
+The 32-bit forms need t0 in `[0, UINT32_MAX]`. The writer always picks
+the smallest form that holds the pair.
+
+Writer rules:
+
+- `d` must be allocated and zeroed before the second `dodWrite()`, which
+  writes the header.
+- Leave room for the header plus 72 bits for each later value.
+- Write every value through `dodWrite()`. Never fill `t[]` or `count` by
+  hand, or the header is never written.
+- A stream never records how many values it holds; track the count
+  yourself, for example `writer.count`.
+- Once `dodCloseWrites()` has run, write nothing more to that writer.
 
 ### dodType Encoding
 
@@ -156,21 +192,17 @@ void dodAppend(dod *d, dodVal t0, dodVal t1, dodVal newVal,
 /* Write value using dodWriter */
 void dodWrite(dodWriter *const w, const dodVal val);
 
-/* Close writer (finalizes metadata) */
+/* Close writer: t[] becomes (first value, last value) */
 void dodCloseWrites(dodWriter *const w);
 
 /* Example: Basic writing */
-dodWriter writer = {0};
+dodWriter writer;
+dodInit(&writer);
 writer.d = zcalloc(1024, sizeof(dod));
 writer.totalBytes = 1024 * sizeof(dod);
 
-/* First two values stored in t[2] */
-writer.t[0] = 1000;
-writer.t[1] = 1001;
-writer.count = 2;
-
-/* Write subsequent values */
-for (int i = 2; i < 1000; i++) {
+/* Every value goes through dodWrite(); the second one writes the header */
+for (int i = 0; i < 1000; i++) {
     dodWrite(&writer, 1000 + i);  /* Regular increment */
 }
 
@@ -186,21 +218,24 @@ zfree(writer.d);
 ### Reading Data
 
 ```c
-/* Get value at specific offset */
+/* Decode from bit *consumedBits: after 'valueOffsetToReturn' values, given
+ * the two values before that position (raw stream: start at bit 0 with
+ * the first two values; writer stream: start at the header's end) */
 dodVal dodGet(const dod *d, size_t *consumedBits,
               dodVal originalStartVal, dodVal currentVal,
               size_t valueOffsetToReturn);
 
-/* Read value using dodWriter (random access) */
+/* Value at index 'offset' (0 = first) of a writer, open or closed */
 dodVal dodRead(dodWriter *const w, const size_t offset);
 
-/* Read all values at once */
+/* Read the first 'count' values of a writer stream (room for at least 2) */
 bool dodReadAll(const dod *w, uint64_t *vals, size_t count);
 
-/* Initialize reader from existing compressed data */
+/* Read a writer stream's header: t[] = first two values, usedBits = the
+ * header's end, count = 2. Does not change w->d. */
 void dodInitFromExisting(dodWriter *const w, const dod *d);
 
-/* Example: Reading */
+/* Example: Reading a writer stream you only have the bytes of */
 dodWriter reader = {0};
 reader.d = /* ... compressed data ... */;
 dodInitFromExisting(&reader, reader.d);
@@ -209,7 +244,11 @@ dodInitFromExisting(&reader, reader.d);
 int64_t value = dodRead(&reader, 42);
 printf("Value at index 42: %" PRId64 "\n", value);
 
-/* Read all */
+/* Value 42 again, decoded with dodGet() from the header's end */
+size_t bits = reader.usedBits;
+value = dodGet(reader.d, &bits, reader.t[0], reader.t[1], 41);
+
+/* Read all ('count' tracked by you; the stream does not record it) */
 int64_t *values = zmalloc(sizeof(int64_t) * count);
 dodReadAll(reader.d, (uint64_t *)values, count);
 zfree(values);
@@ -229,10 +268,11 @@ typedef struct dodReader {
     size_t valuesRead;   /* How many values decoded so far */
 } dodReader;
 
-/* Seed from the first two values (which live in the writer's t[2]) */
+/* Raw stream: seed from the first two values, which you kept */
 void dodReaderInit(dodReader *r, dodVal firstVal, dodVal secondVal);
 
-/* Or seed directly from a writer */
+/* Writer stream: seed from the writer (open or closed); with two or more
+ * values written it starts after the header */
 void dodReaderInitFromWriter(dodReader *r, const dodWriter *w);
 
 /* Decode the next value; O(1), advances the reader */
@@ -280,11 +320,8 @@ typedef struct TimestampLog {
 TimestampLog *timestampLogNew(void) {
     TimestampLog *log = zcalloc(1, sizeof(*log));
 
+    dodInit(&log->writer);
     log->writer.d = zcalloc(4096, sizeof(dod));
-    log->writer.t[0] = 0;
-    log->writer.t[1] = 0;
-    log->writer.count = 0;
-    log->writer.usedBits = 0;
     log->writer.totalBytes = 4096 * sizeof(dod);
 
     log->startTime = time(NULL);
@@ -293,15 +330,9 @@ TimestampLog *timestampLogNew(void) {
 }
 
 void timestampLogRecord(TimestampLog *log, time_t timestamp) {
-    if (log->writer.count == 0) {
-        log->writer.t[0] = timestamp;
-        log->writer.count = 1;
-    } else if (log->writer.count == 1) {
-        log->writer.t[1] = timestamp;
-        log->writer.count = 2;
-    } else {
-        dodWrite(&log->writer, timestamp);
-    }
+    /* dodWrite() keeps the first value in t[0] and writes the header on
+     * the second, so every value goes through it */
+    dodWrite(&log->writer, timestamp);
 }
 
 void timestampLogRecordNow(TimestampLog *log) {
@@ -395,11 +426,8 @@ CounterArray *counterArrayNew(void) {
     CounterArray *array = zcalloc(1, sizeof(*array));
 
     for (int i = 0; i < NUM_COUNTERS; i++) {
+        dodInit(&array->counters[i]);
         array->counters[i].d = zcalloc(1024, sizeof(dod));
-        array->counters[i].t[0] = 0;
-        array->counters[i].t[1] = 0;
-        array->counters[i].count = 0;
-        array->counters[i].usedBits = 0;
         array->counters[i].totalBytes = 1024 * sizeof(dod);
     }
 
@@ -409,15 +437,7 @@ CounterArray *counterArrayNew(void) {
 
 void counterArrayRecord(CounterArray *array, int64_t values[NUM_COUNTERS]) {
     for (int i = 0; i < NUM_COUNTERS; i++) {
-        if (array->counters[i].count == 0) {
-            array->counters[i].t[0] = values[i];
-            array->counters[i].count = 1;
-        } else if (array->counters[i].count == 1) {
-            array->counters[i].t[1] = values[i];
-            array->counters[i].count = 2;
-        } else {
-            dodWrite(&array->counters[i], values[i]);
-        }
+        dodWrite(&array->counters[i], values[i]);
     }
     array->sampleCount++;
 }
@@ -494,11 +514,8 @@ typedef struct EventStream {
 EventStream *eventStreamNew(void) {
     EventStream *stream = zcalloc(1, sizeof(*stream));
 
+    dodInit(&stream->ids);
     stream->ids.d = zcalloc(4096, sizeof(dod));
-    stream->ids.t[0] = 0;
-    stream->ids.t[1] = 0;
-    stream->ids.count = 0;
-    stream->ids.usedBits = 0;
     stream->ids.totalBytes = 4096 * sizeof(dod);
 
     stream->events = zmalloc(sizeof(Event) * 1000);
@@ -511,15 +528,7 @@ EventStream *eventStreamNew(void) {
 void eventStreamAdd(EventStream *stream, int64_t id,
                    const char *type, const char *data) {
     /* Store ID in compressed form */
-    if (stream->ids.count == 0) {
-        stream->ids.t[0] = id;
-        stream->ids.count = 1;
-    } else if (stream->ids.count == 1) {
-        stream->ids.t[1] = id;
-        stream->ids.count = 2;
-    } else {
-        dodWrite(&stream->ids, id);
-    }
+    dodWrite(&stream->ids, id);
 
     /* Store event data uncompressed */
     if (stream->count >= stream->capacity) {
@@ -683,11 +692,12 @@ printf("Range: %" PRId64 " to %" PRId64 "\n", writer.t[0], writer.t[1]);
 ### 3. Allocate Sufficient Space
 
 ```c
-/* Worst case: every value uses 72 bits */
-/* Safe allocation: count * 72 / 64 * sizeof(uint64_t) */
+/* Worst case: the header plus 72 bits for every value after the first two,
+ * plus one slot of slack because a read near the end may touch the next
+ * word */
 
 size_t count = 100000;
-size_t safeSize = (count * 72 + 63) / 64;
+size_t safeSize = (DOD_WRITER_HEADER_MAX_BITS + count * 72 + 63) / 64 + 1;
 dod *compressed = zcalloc(safeSize, sizeof(dod));
 ```
 
