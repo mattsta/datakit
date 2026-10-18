@@ -78,7 +78,7 @@ typedef enum {
     MULTIDICT_OK_INSERTED = 1  /* New key was inserted */
 } multidictResult;
 
-/* Hash table configuration */
+/* Hash table configuration: how keys hash and match (see How Keys Match) */
 typedef struct multidictType {
     uint32_t (*hashFunction)(struct multidict *d, const void *key,
                              uint32_t len);
@@ -435,13 +435,13 @@ Keys and values may be 96/128-bit integers. Where such a value lands
 follows the rule in `databox.h`: whoever owns the destination sets up
 its wide capability.
 
-| Destination                                                 | Who sets it up | Wide value                                                                       |
-| ----------------------------------------------------------- | -------------- | -------------------------------------------------------------------------------- |
-| `multidictFind` `valbox`, `multidictGetRandomKey` `keybox`  | caller         | written to a `DATABOX_BIG_INIT`'d `databoxBig`; type only into a zeroed box      |
-| `multidictGetSomeKeys` `keys[]`                             | library        | deferred (type only, `databoxIsWideDeferred`); prior contents ignored            |
-| `multidictGetAndDelete`, `multidictPopRandom` outputs       | library        | heap copy, prior contents ignored                                                |
-| `multidictEntry` fields                                     | library        | in the iterator's `wide` slots, valid until the next `multidictIteratorNext`     |
-| scan and eviction callback arguments                        | library        | in stack slots, valid for the call; `big = 1` exactly for a wide value           |
+| Destination                                                | Who sets it up | Wide value                                                                   |
+| ---------------------------------------------------------- | -------------- | ---------------------------------------------------------------------------- |
+| `multidictFind` `valbox`, `multidictGetRandomKey` `keybox` | caller         | written to a `DATABOX_BIG_INIT`'d `databoxBig`; type only into a zeroed box  |
+| `multidictGetSomeKeys` `keys[]`                            | library        | deferred (type only, `databoxIsWideDeferred`); prior contents ignored        |
+| `multidictGetAndDelete`, `multidictPopRandom` outputs      | library        | heap copy, prior contents ignored                                            |
+| `multidictEntry` fields                                    | library        | in the iterator's `wide` slots, valid until the next `multidictIteratorNext` |
+| scan and eviction callback arguments                       | library        | in stack slots, valid for the call; `big = 1` exactly for a wide value       |
 
 - A key hashes by value: a 128-bit box holding a value that fits 64 bits
   finds the entry stored under the 64-bit form.
@@ -850,7 +850,8 @@ uint32_t multidictLongLongHashFunction(uint64_t key);
  * seeded from the dictionary's seed */
 uint32_t multidictGenHashFunction(multidict *d, const void *key, int32_t len);
 
-/* Case-insensitive ASCII hash (djb hash variant) */
+/* Case-insensitive ASCII hash (djb hash variant): folds exactly 'A'-'Z',
+ * as multidictTypeCaseKey's compare does */
 uint32_t multidictGenCaseHashFunction(multidict *d, const uint8_t *buf,
                                       int32_t len);
 ```
@@ -858,10 +859,10 @@ uint32_t multidictGenCaseHashFunction(multidict *d, const uint8_t *buf,
 ### Predefined Types
 
 ```c
-/* Exact key matching (case-sensitive) */
+/* Exact key matching (case-sensitive, binary-safe) */
 extern multidictType multidictTypeExactKey;
 
-/* Case-insensitive key matching */
+/* ASCII case-insensitive key matching (see How Keys Match) */
 extern multidictType multidictTypeCaseKey;
 
 /* Example: Use predefined types with the built-in slot class */
@@ -869,6 +870,51 @@ multidictClass *cls = multidictDefaultClassNew();
 multidict *exact = multidictNew(&multidictTypeExactKey, cls, 0);
 multidict *caseInsensitive = multidictNew(&multidictTypeCaseKey, cls, 0);
 ```
+
+### How Keys Match
+
+A type's `keyCompare` decides when two byte-string keys (`DATABOX_BYTES`,
+`DATABOX_BYTES_EMBED`) are the same key. The dict reads it once, in
+`multidictNew`:
+
+- `multidictTypeExactKey` (or a `NULL` compare): keys match by their exact
+  bytes. Keys are binary, so `"a\0b"` and `"a\0c"` are different keys. This
+  path goes straight to the slot layer and pays nothing for the other kind.
+- `multidictTypeCaseKey`: keys match ASCII case-insensitively. Only `'A'`-`'Z'`
+  and `'a'`-`'z'` fold together; NUL, punctuation and bytes above `0x7F` must
+  match exactly, and the C locale has no effect. Its hash folds the same
+  letters, so keys that compare equal always hash equal.
+- Any other compare: byte-string keys it reports equal are one key. Keys it
+  reports equal must hash equal under the type's `hashFunction`. The compare
+  gets the class's `privdata`.
+
+Integer, float and other non-byte-string keys match by value, exactly, in
+every type.
+
+Matching applies to every operation that looks a key up: add, the
+conditional adds and replace, find, exists, delete, get-and-delete,
+increments, touch and LRU level, eviction, copy and merge.
+
+A dict holds one entry per key under the spelling that first inserted it:
+
+```c
+multidict *ci = multidictNew(&multidictTypeCaseKey, cls, 0);
+databox foo = databoxNewBytesString("Foo");
+databox FOO = databoxNewBytesString("FOO");
+databox one = DATABOX_SIGNED(1);
+databox two = DATABOX_SIGNED(2);
+multidictAdd(ci, &foo, &one); /* MULTIDICT_OK_INSERTED, stored as "Foo" */
+multidictAdd(ci, &FOO, &two); /* MULTIDICT_OK_REPLACED, still "Foo" = 2 */
+/* multidictFind(ci, "foo") finds 2; iteration reports the key "Foo" */
+```
+
+Iteration, scans, random keys and eviction callbacks report the stored
+spelling. A lookup that misses a key's exact bytes walks that key's slot,
+comparing each byte-string key there, so a case dict pays per slot entry on
+those lookups (two entries a slot on average at the default load factor).
+
+A persist snapshot does not record the dict type: `multidictP` and the
+persist restore of a multidict rebuild an exact-key dict.
 
 ## Creating a Custom multidictClass
 

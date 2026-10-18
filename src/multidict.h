@@ -64,6 +64,33 @@ typedef struct multidictLoadMetrics {
     uint64_t targetSlotBytes; /* Target avg slot size for expansion */
 } multidictLoadMetrics;
 
+/* How a dict hashes and matches its keys.
+ *
+ * hashFunction hashes the bytes of a key: a byte string's own bytes, and
+ * for any other key the bytes of its value.
+ *
+ * keyCompare decides when two byte-string keys (DATABOX_BYTES and
+ * DATABOX_BYTES_EMBED) are the same key; it returns nonzero when they
+ * are.  It is resolved once, when the dict is created:
+ *   - NULL, or the compare of multidictTypeExactKey: keys match by their
+ *     exact bytes, straight through the slot layer.  This is the fast path
+ *     and is never slowed by the other kinds.
+ *   - Any other compare: every operation that matches a key (add, find,
+ *     delete, exists, the conditional adds, increments, touch and LRU
+ *     level, eviction, copy and merge) treats byte-string keys it reports
+ *     equal as one key.  Keys it reports equal must hash equal.  The
+ *     compare receives the class's privdata.
+ * Integer, float and every other non-byte-string key always match by
+ * value, exactly, whatever the compare is.
+ *
+ * Spelling: a dict holds one entry per key, under the spelling that first
+ * inserted it.  Adding or replacing under another spelling the compare
+ * reports equal updates the value and keeps the stored spelling, and
+ * iteration, scans, random keys and eviction callbacks report the stored
+ * spelling.  A lookup that does not match a key's exact bytes walks the
+ * key's slot comparing each byte-string key there, so its cost grows
+ * with slot size (two entries a slot on average at the default load
+ * factor). */
 typedef struct multidictType {
     uint32_t (*hashFunction)(struct multidict *d, const void *key,
                              uint32_t len);
@@ -379,9 +406,20 @@ uint32_t multidictGenHashFunction(multidict *d, const void *key, int32_t len);
 uint32_t multidictGenCaseHashFunction(multidict *d, const uint8_t *buf,
                                       int32_t len);
 
-/* Hash table types */
+/* Hash table types.
+ *
+ * multidictTypeExactKey: byte-string keys match by their exact bytes;
+ * keys are binary, so they may hold NUL bytes.
+ *
+ * multidictTypeCaseKey: byte-string keys match ASCII case-insensitively:
+ * 'A'-'Z' and 'a'-'z' fold together, and every other byte (NUL, bytes
+ * above 0x7F) must match exactly, independent of the C locale.  "Key",
+ * "KEY" and "key" are one key, stored under the spelling first added (see
+ * multidictType).  Integer and other non-byte-string keys match exactly.
+ * A persist snapshot does not record the type: multidictP and the persist
+ * restore of a multidict rebuild an exact-key dict. */
 extern multidictType multidictTypeExactKey; /* exact keys */
-extern multidictType multidictTypeCaseKey;  /* case insensitive keys */
+extern multidictType multidictTypeCaseKey;  /* ASCII case-insensitive keys */
 
 /* Debugging */
 void multidictRepr(const multidict *d);

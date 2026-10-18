@@ -114,7 +114,9 @@ struct multidict {
     uint8_t autoResize : 1;         /* BOOL. auto expand/shrink enabled? */
     uint8_t lruEnabled : 1;         /* BOOL. LRU tracking enabled? */
     uint8_t useByteBasedExpand : 1; /* BOOL. use byte-based expansion? */
-    uint8_t unused : 3;             /* available */
+    uint8_t keysByCompare : 1; /* BOOL. byte-string keys match by the type's
+                                  keyCompare, not by exact bytes */
+    uint8_t unused : 2;        /* available */
     /* Self-management fields */
     uint64_t maxMemory;                    /* 0 = unlimited */
     multidictEvictionCallback *evictionCb; /* called before eviction */
@@ -309,6 +311,110 @@ static bool multidictLRUSelectVictim(multidict *d, mdLRUCandidates *cands,
                                      databox *keybox, databoxWide *slot);
 DK_INLINE_ALWAYS bool multidictFindNoTouch_(multidict *d, const databox *keybox,
                                             databox *valbox);
+DK_STATIC int32_t multidictStringKeyCompare_(void *privdata, const void *key1,
+                                             const uint32_t k1len,
+                                             const void *key2,
+                                             const uint32_t k2len);
+
+/* ====================================================================
+ * Keys matched by the type's compare
+ * ====================================================================
+ * The slot layer matches keys by their exact bytes.  In a dict whose
+ * type brings its own keyCompare (keysByCompare, set once in
+ * multidictNew), a byte-string key also matches a stored byte-string key
+ * the compare reports equal, and the dict keeps one entry per such key
+ * under the spelling that first inserted it.  The dict honours that by
+ * handing the slot layer the stored spelling: an operation looks for the
+ * exact bytes first, and only on a miss walks the key's slot through the
+ * class iterator for a match.  The type's hash puts every matching
+ * spelling in the same slot.  Exact dicts test keysByCompare once per
+ * operation and never come here. */
+#define MD_MATCH_BY_COMPARE(d, keybox)                                         \
+    ((d)->keysByCompare && DATABOX_IS_BYTES(keybox))
+
+/* The byte-string key in 'slot' that the type's compare reports equal to
+ * byte-string 'keybox'.  'stored' borrows from the slot, so it is valid
+ * until the slot changes. */
+DK_STATIC bool mdSlotMatch_(multidict *d, multidictSlot *slot,
+                            const databox *keybox, databox *stored) {
+    multidictSlotIterator iter;
+    if (!slot || !d->shared->getIter(&iter, slot)) {
+        return false;
+    }
+
+    const void *want = databoxCBytes(keybox);
+    const uint32_t wantLen = (uint32_t)databoxLen(keybox);
+    multidictEntry entry;
+    while (d->shared->iterNext(&iter, &entry)) {
+        if (DATABOX_IS_BYTES(&entry.key) &&
+            d->type->keyCompare(d->shared->privdata, want, wantLen,
+                                databoxCBytes(&entry.key),
+                                (uint32_t)databoxLen(&entry.key))) {
+            *stored = entry.key;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/* A stored spelling copied out of its slot, so it stays valid while an
+ * add or delete changes the slot */
+typedef struct mdKeyCopy {
+    databox box;
+    uint8_t *heap; /* the copy, when it does not fit 'buf' */
+    uint8_t buf[64];
+} mdKeyCopy;
+
+/* The key an add or delete hands the slot layer for byte-string 'keybox':
+ * the stored spelling when the dict holds the key under another one,
+ * copied into 'copy', and otherwise 'keybox' itself.  Release 'copy' with
+ * mdKeyCopyRelease_ either way. */
+DK_STATIC const databox *mdKeyForUpdate_(multidict *d, const databox *keybox,
+                                         mdKeyCopy *copy) {
+    copy->heap = NULL;
+    if (HTSIZE(d, 0) == 0) {
+        return keybox; /* emptied: no table yet */
+    }
+
+    /* While rehashing a key may be in either table; the newer one first */
+    const uint32_t hash = multidictHashOfKey_(d, keybox);
+    for (int32_t t = d->rehashing; t >= 0; t--) {
+        multidictSlot *slot = *SLOT_BY_HASH_PTR_PTR(d, t, hash);
+        if (!slot) {
+            continue;
+        }
+
+        /* The value is not read, so its type is enough */
+        databox unused = {{0}};
+        if (d->shared->findValueByKey(d->shared, slot, keybox, &unused)) {
+            return keybox; /* stored under these exact bytes */
+        }
+
+        databox stored;
+        if (mdSlotMatch_(d, slot, keybox, &stored)) {
+            const size_t len = databoxLen(&stored);
+            uint8_t *bytes = copy->buf;
+            if (len > sizeof(copy->buf)) {
+                /* @own: container; free=mdKeyCopyRelease_ */
+                copy->heap = zmalloc(len);
+                bytes = copy->heap;
+            }
+
+            memcpy(bytes, databoxCBytes(&stored), len);
+            copy->box = DATABOX_WITH_BYTES(bytes, len);
+            return &copy->box;
+        }
+    }
+
+    return keybox; /* not stored: it goes in under this spelling */
+}
+
+DK_INLINE_ALWAYS void mdKeyCopyRelease_(mdKeyCopy *copy) {
+    if (copy->heap) {
+        zfree(copy->heap);
+    }
+}
 
 /* ====================================================================
  * Hash Functions
@@ -743,6 +849,8 @@ multidict *multidictNew(multidictType *type, multidictClass *qdc,
 
     d->type = type;
     d->shared = qdc;
+    d->keysByCompare = type->keyCompare != NULL &&
+                       type->keyCompare != multidictStringKeyCompare_;
     d->rehashidx = MULTIDICT_REHASHIDX_INVALID;
     d->rehashing = false;
     d->iterators = 0;
@@ -1051,11 +1159,10 @@ int64_t multidictRehashMilliseconds(multidict *d, int64_t ms) {
     return rehashes;
 }
 
-/* Add new element to the target hash table.
- * Returns: MULTIDICT_OK_INSERTED if new key, MULTIDICT_OK_REPLACED if updated,
- *          MULTIDICT_ERR on error */
-multidictResult multidictAdd(multidict *d, const databox *keybox,
-                             const databox *valbox) {
+/* multidictAdd for a key the slot layer can match by its exact bytes */
+DK_STATIC multidictResult multidictAddExact_(multidict *d,
+                                             const databox *keybox,
+                                             const databox *valbox) {
     DBG_PRINT("multidictAdd ENTER\n");
     DBG_DICT_STATE(d, "  state before add");
 
@@ -1117,11 +1224,6 @@ multidictResult multidictAdd(multidict *d, const databox *keybox,
     if (hadOldValue) {
         oldValSize = mdBoxSize_(&oldVal);
     }
-    /* If we removed from old table, this is effectively a replacement (key
-     * existed) */
-    (void)removedFromOldTable; /* Currently we let insertByType handle the
-                                  semantics */
-
     const int64_t insertResult =
         d->shared->insertByType(d->shared, op.result, keybox, valbox);
     const size_t lenAfter = d->shared->sizeBytes(op.result);
@@ -1132,11 +1234,14 @@ multidictResult multidictAdd(multidict *d, const databox *keybox,
     /* Convert to typed result */
     multidictResult result;
     if (insertResult == 1) {
-        /* New insert: add both key and value bytes */
+        /* New to this table: add both key and value bytes.  A key moved
+         * here out of ht[0] above already existed, so for the caller and
+         * the LRU (which still tracks it) this is a replacement. */
         op.ht->count++;
         op.ht->keyBytes += keySize;
         op.ht->valBytes += valSize;
-        result = MULTIDICT_OK_INSERTED;
+        result =
+            removedFromOldTable ? MULTIDICT_OK_REPLACED : MULTIDICT_OK_INSERTED;
     } else if (insertResult == 0) {
         /* Replacement: key stays same, update value bytes delta */
         op.ht->valBytes += valSize;
@@ -1161,6 +1266,30 @@ multidictResult multidictAdd(multidict *d, const databox *keybox,
     DBG_DICT_STATE(d, "  state after add");
 
     return result;
+}
+
+/* multidictAdd for a key matched by the type's compare: a key stored under
+ * another spelling keeps that spelling.  Kept out of line so the exact
+ * path's frame does not carry the key copy. */
+DK_STATIC __attribute__((noinline)) multidictResult multidictAddMatched_(
+    multidict *d, const databox *keybox, const databox *valbox) {
+    mdKeyCopy copy;
+    const databox *key = mdKeyForUpdate_(d, keybox, &copy);
+    const multidictResult result = multidictAddExact_(d, key, valbox);
+    mdKeyCopyRelease_(&copy);
+    return result;
+}
+
+/* Add new element to the target hash table.
+ * Returns: MULTIDICT_OK_INSERTED if new key, MULTIDICT_OK_REPLACED if updated,
+ *          MULTIDICT_ERR on error */
+multidictResult multidictAdd(multidict *d, const databox *keybox,
+                             const databox *valbox) {
+    if (unlikely(MD_MATCH_BY_COMPARE(d, keybox))) {
+        return multidictAddMatched_(d, keybox, valbox);
+    }
+
+    return multidictAddExact_(d, keybox, valbox);
 }
 
 /* ====================================================================
@@ -1257,8 +1386,8 @@ static bool multidictDeleteFromSlot_(multidict *d, int htidx,
     return deleted;
 }
 
-/* Search and remove an element - optimized for common case (key exists) */
-bool multidictDelete(multidict *d, const databox *keybox) {
+/* multidictDelete for a key the slot layer can match by its exact bytes */
+DK_STATIC bool multidictDeleteExact_(multidict *d, const databox *keybox) {
     if (unlikely(HTSIZE(d, 0) == 0)) {
         return false; /* d->ht[0].table is NULL */
     }
@@ -1289,6 +1418,26 @@ bool multidictDelete(multidict *d, const databox *keybox) {
         return true;
     }
     return false;
+}
+
+/* multidictDelete for a key matched by the type's compare, out of line as
+ * multidictAddMatched_ is */
+DK_STATIC __attribute__((noinline)) bool
+multidictDeleteMatched_(multidict *d, const databox *keybox) {
+    mdKeyCopy copy;
+    const databox *key = mdKeyForUpdate_(d, keybox, &copy);
+    const bool deleted = multidictDeleteExact_(d, key);
+    mdKeyCopyRelease_(&copy);
+    return deleted;
+}
+
+/* Search and remove an element - optimized for common case (key exists) */
+bool multidictDelete(multidict *d, const databox *keybox) {
+    if (unlikely(MD_MATCH_BY_COMPARE(d, keybox))) {
+        return multidictDeleteMatched_(d, keybox);
+    }
+
+    return multidictDeleteExact_(d, keybox);
 }
 
 /* ====================================================================
@@ -1398,6 +1547,37 @@ void multidictFree(multidict *d) {
     zfree(d);
 }
 
+/* Lookup while rehashing, or in a dict whose keys match by the type's
+ * compare.  While rehashing, both tables are searched, not just the slot
+ * lookup's choice: a non-NULL ht[1] slot need not hold the key, which can
+ * still be in ht[0] awaiting migration. */
+DK_STATIC bool multidictFindSlow_(multidict *d, const databox *keybox,
+                                  databox *valbox) {
+    const uint32_t hash = multidictHashOfKey_(d, keybox);
+    const bool byCompare = MD_MATCH_BY_COMPARE(d, keybox);
+
+    /* ht[1] first (newer table), then ht[0] */
+    for (int32_t t = d->rehashing; t >= 0; t--) {
+        multidictSlot *slot = *SLOT_BY_HASH_PTR_PTR(d, t, hash);
+        if (!slot) {
+            continue;
+        }
+
+        if (d->shared->findValueByKey(d->shared, slot, keybox, valbox)) {
+            return true;
+        }
+
+        /* Stored under another spelling: look it up by that one.  Nothing
+         * changes the slot in between, so the borrowed spelling holds. */
+        databox stored;
+        if (byCompare && mdSlotMatch_(d, slot, keybox, &stored)) {
+            return d->shared->findValueByKey(d->shared, slot, &stored, valbox);
+        }
+    }
+
+    return false;
+}
+
 /* Lookup without the LRU promotion: multidictFind is this plus the
  * promotion, and eviction reads a victim's value through this so a
  * vetoed victim keeps its LRU rank. */
@@ -1409,24 +1589,9 @@ DK_INLINE_ALWAYS bool multidictFindNoTouch_(multidict *d, const databox *keybox,
 
     multidictRehashStep(d);
 
-    /* During rehashing, we must search BOTH tables, not just the slot lookup.
-     * The slot lookup may return a non-NULL slot in ht[1] that doesn't contain
-     * our key, while our key is still in ht[0] awaiting migration.
-     * Bug fix: always search both tables during rehashing. */
-    if (unlikely(d->rehashing)) {
-        uint32_t hash = multidictHashOfKey_(d, keybox);
-
-        /* Search ht[1] first (newer table) */
-        multidictSlot *slot1 = *SLOT_BY_HASH_PTR_PTR(d, 1, hash);
-        if (slot1 &&
-            d->shared->findValueByKey(d->shared, slot1, keybox, valbox)) {
-            return true;
-        }
-
-        /* Then search ht[0] (older table, entries may not be migrated yet) */
-        multidictSlot *slot0 = *SLOT_BY_HASH_PTR_PTR(d, 0, hash);
-        return slot0 &&
-               d->shared->findValueByKey(d->shared, slot0, keybox, valbox);
+    /* One test of the flags byte sends both cases to the slow path */
+    if (unlikely(d->rehashing | d->keysByCompare)) {
+        return multidictFindSlow_(d, keybox, valbox);
     }
 
     /* Not rehashing - simple case, single table lookup */
@@ -4267,6 +4432,744 @@ static int multidictTestKeyCompare_(void) {
     return err;
 }
 
+/* Is 'box' the byte string 'bytes' of 'len' bytes? */
+static bool testBoxIsBytes_(const databox *box, const void *bytes, size_t len) {
+    return DATABOX_IS_BYTES(box) && databoxLen(box) == len &&
+           (len == 0 || memcmp(databoxCBytes(box), bytes, len) == 0);
+}
+
+/* Does 'box' hold the integer 'want'? */
+static bool testBoxIsInt_(const databox *box, int64_t want) {
+    return DATABOX_IS_INTEGER(box) && box->data.i == want;
+}
+
+/* Is 'key' the one entry of 'd', under exactly this spelling, holding a
+ * value equal to 'val'? */
+static bool testOnlyEntryIs_(multidict *d, const void *key, size_t len,
+                             const databox *val) {
+    multidictIterator iter;
+    multidictIteratorInit(d, &iter);
+    multidictEntry e;
+    uint32_t seen = 0;
+    bool ok = true;
+    while (multidictIteratorNext(&iter, &e)) {
+        seen++;
+        ok = ok && testBoxIsBytes_(&e.key, key, len) &&
+             databoxEqual(&e.val, val);
+    }
+    multidictIteratorRelease(&iter);
+    return ok && seen == 1;
+}
+
+/* Is 'key' one of the 'n' C strings in 'names', spelled exactly? */
+static bool testKeyIsOneOf_(const databox *key, const char *const *names,
+                            size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        if (testBoxIsBytes_(key, names[i], strlen(names[i]))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool testRecordEvictionCb_(void *privdata, const databox *key,
+                                  const databox *val) {
+    (void)val;
+    int32_t *bad = privdata;
+    static const char *const stored[] = {"Alpha", "BETA", "gamma"};
+    if (!testKeyIsOneOf_(key, stored, 3)) {
+        (*bad)++;
+    }
+    return true;
+}
+
+static void testSpellingScanCb_(void *privdata, const databox *key,
+                                const databox *val) {
+    (void)val;
+    int32_t *bad = privdata;
+    static const char *const stored[] = {"Alpha", "BETA", "gamma"};
+    if (!testKeyIsOneOf_(key, stored, 3)) {
+        (*bad)++;
+    }
+}
+
+/* Each key-matching operation of a case dict, apart from LRU (Test
+ * 20.10) and rehashing (Test 9.6) */
+static int multidictTestCaseOps_(void) {
+    int err = 0;
+    cleaner(multidictMmClassFree) multidictClass *qdc = multidictMmClassNew();
+    cleaner(multidictFree) multidict *d =
+        multidictNew(&multidictTypeCaseKey, qdc, 99);
+
+    const databox one = DATABOX_SIGNED(1);
+    const databox two = DATABOX_SIGNED(2);
+    const databox three = DATABOX_SIGNED(3);
+    databox Key = databoxNewBytesString("Key");
+    databox KEY = databoxNewBytesString("KEY");
+    databox kEY = databoxNewBytesString("kEY");
+    databox key = databoxNewBytesString("key");
+    databox other = databoxNewBytesString("other");
+
+    /* Conditional adds and replace match across spellings */
+    if (multidictAddNX(d, &Key, &one) != MULTIDICT_OK_INSERTED ||
+        multidictAddNX(d, &KEY, &two) != MULTIDICT_ERR ||
+        multidictAddXX(d, &kEY, &two) != MULTIDICT_OK_REPLACED ||
+        multidictReplace(d, &KEY, &three) != MULTIDICT_OK_REPLACED ||
+        multidictAddXX(d, &other, &one) != MULTIDICT_ERR ||
+        multidictReplace(d, &other, &one) != MULTIDICT_ERR ||
+        !testOnlyEntryIs_(d, "Key", 3, &three)) {
+        printf("ERROR: case conditional adds\n");
+        err++;
+    }
+
+    /* Exists, by box and by string, and FindByString */
+    databox bytesVal = databoxNewBytesString("payload");
+    multidictAdd(d, &key, &bytesVal); /* replaces "Key" */
+    uint8_t *found = NULL;
+    if (!multidictExists(d, &kEY) || !multidictExistsByString(d, "KEY") ||
+        multidictExistsByString(d, "KEYS") ||
+        !multidictFindByString(d, "kEy", &found) || !found ||
+        memcmp(found, "payload", 7) != 0) {
+        printf("ERROR: case exists / find by string\n");
+        err++;
+    }
+
+    /* Increments create under the first spelling, then match any */
+    databox counter = databoxNewBytesString("Counter");
+    databox COUNTER = databoxNewBytesString("COUNTER");
+    databox counterLow = databoxNewBytesString("counter");
+    int64_t ival = 0;
+    double dval = 0;
+    if (multidictIncrBy(d, &counter, 5, &ival) != MULTIDICT_OK_INSERTED ||
+        multidictIncrBy(d, &COUNTER, 2, &ival) != MULTIDICT_OK_REPLACED ||
+        ival != 7 ||
+        multidictIncrByFloat(d, &counterLow, 0.5, &dval) !=
+            MULTIDICT_OK_REPLACED ||
+        dval != 7.5 || multidictCount(d) != 2) {
+        printf("ERROR: case increments\n");
+        err++;
+    }
+
+    /* Get-and-delete by another spelling */
+    databox got = {{0}};
+    if (!multidictGetAndDelete(d, &KEY, &got) ||
+        !testBoxIsBytes_(&got, "payload", 7) || multidictExists(d, &key) ||
+        multidictCount(d) != 1) {
+        printf("ERROR: case get-and-delete\n");
+        err++;
+    }
+    databoxFreeData(&got);
+    multidictDelete(d, &COUNTER);
+
+    /* Bulk add and delete; the stored spellings are the first ones */
+    static const char *const stored[] = {"Alpha", "BETA", "gamma"};
+    databox firsts[3];
+    databox seconds[3];
+    databox vals[3];
+    static const char *const again[] = {"ALPHA", "beta", "GaMmA"};
+    for (int32_t i = 0; i < 3; i++) {
+        firsts[i] = databoxNewBytesString(stored[i]);
+        seconds[i] = databoxNewBytesString(again[i]);
+        vals[i] = (databox)DATABOX_SIGNED(10 + i);
+    }
+
+    if (multidictCount(d) != 0 ||
+        multidictAddMultiple(d, firsts, vals, 3) != 3 ||
+        multidictAddMultiple(d, seconds, vals, 3) != 0 ||
+        multidictCount(d) != 3) {
+        printf("ERROR: case bulk add\n");
+        err++;
+    }
+
+    /* Iteration, scan, random keys and pops report the stored spelling */
+    multidictIterator iter;
+    multidictIteratorInit(d, &iter);
+    multidictEntry e;
+    while (multidictIteratorNext(&iter, &e)) {
+        if (!testKeyIsOneOf_(&e.key, stored, 3)) {
+            printf("ERROR: case iteration reported another spelling\n");
+            err++;
+        }
+    }
+    multidictIteratorRelease(&iter);
+
+    int32_t bad = 0;
+    uint64_t cursor = 0;
+    do {
+        cursor = multidictScan(d, cursor, testSpellingScanCb_, &bad);
+    } while (cursor != 0);
+
+    for (int32_t i = 0; i < 20; i++) {
+        databox rk = {{0}};
+        if (!multidictGetRandomKey(d, &rk) ||
+            !testKeyIsOneOf_(&rk, stored, 3)) {
+            bad++;
+        }
+    }
+
+    databox keys[3];
+    const uint32_t some = multidictGetSomeKeys(d, keys, 3);
+    if (some == 0) {
+        bad++;
+    }
+    for (uint32_t i = 0; i < some; i++) {
+        if (!testKeyIsOneOf_(&keys[i], stored, 3)) {
+            bad++;
+        }
+    }
+
+    if (bad) {
+        printf("ERROR: case scan or random key reported another spelling\n");
+        err++;
+    }
+
+    /* Copy keeps the type; merge matches dst keys across spellings */
+    {
+        cleaner(multidictFree) multidict *copy = multidictCopy(d);
+        databox fv = {{0}};
+        if (multidictCount(copy) != 3 ||
+            !multidictFind(copy, &seconds[0], &fv) || !testBoxIsInt_(&fv, 10)) {
+            printf("ERROR: case copy\n");
+            err++;
+        }
+
+        cleaner(multidictFree) multidict *src =
+            multidictNew(&multidictTypeCaseKey, qdc, 5);
+        databox delta = databoxNewBytesString("Delta");
+        const databox ninety = DATABOX_SIGNED(90);
+        multidictAdd(src, &seconds[0], &ninety); /* "ALPHA" */
+        multidictAdd(src, &delta, &ninety);
+        if (multidictMerge(copy, src, MULTIDICT_MERGE_KEEP) != 1 ||
+            multidictCount(copy) != 4 ||
+            !multidictFind(copy, &firsts[0], &fv) || !testBoxIsInt_(&fv, 10)) {
+            printf("ERROR: case merge (keep)\n");
+            err++;
+        }
+
+        if (multidictMerge(copy, src, MULTIDICT_MERGE_REPLACE) != 2 ||
+            multidictCount(copy) != 4 ||
+            !multidictFind(copy, &firsts[0], &fv) || !testBoxIsInt_(&fv, 90)) {
+            printf("ERROR: case merge (replace)\n");
+            err++;
+        }
+
+        bool alphaKept = false;
+        multidictIteratorInit(copy, &iter);
+        while (multidictIteratorNext(&iter, &e)) {
+            alphaKept = alphaKept || testBoxIsBytes_(&e.key, "Alpha", 5);
+        }
+        multidictIteratorRelease(&iter);
+        if (!alphaKept) {
+            printf("ERROR: case merge replaced the stored spelling\n");
+            err++;
+        }
+    }
+
+    /* Random eviction reports the stored spelling */
+    bad = 0;
+    multidictSetEvictionCallback(d, testRecordEvictionCb_, &bad);
+    multidictSetMaxMemory(d, 1);
+    if (multidictEvictToLimit(d) != 3 || multidictCount(d) != 0 || bad) {
+        printf("ERROR: case eviction\n");
+        err++;
+    }
+    multidictSetMaxMemory(d, 0);
+    multidictSetEvictionCallback(d, NULL, NULL);
+
+    /* Pop random hands back the stored spelling */
+    multidictAdd(d, &firsts[1], &one);
+    databox pk = {{0}};
+    databox pv = {{0}};
+    if (!multidictPopRandom(d, &pk, &pv) || !testBoxIsBytes_(&pk, "BETA", 4) ||
+        !testBoxIsInt_(&pv, 1) || multidictCount(d) != 0) {
+        printf("ERROR: case pop random\n");
+        err++;
+    }
+    databoxFreeData(&pk);
+    databoxFreeData(&pv);
+
+    /* Bulk delete under other spellings */
+    multidictAddMultiple(d, firsts, vals, 3);
+    if (multidictDeleteMultiple(d, seconds, 3) != 3 || multidictCount(d) != 0) {
+        printf("ERROR: case bulk delete\n");
+        err++;
+    }
+
+    /* Integer keys match exactly: 0x41 and 0x61 differ only in the case
+     * bit of their low byte, so the case hash folds them together */
+    const databox intA = DATABOX_UNSIGNED(0x41);
+    const databox inta = DATABOX_UNSIGNED(0x61);
+    databox bytesA = databoxNewBytesString("A");
+    databox iv = {{0}};
+    if (multidictAdd(d, &intA, &one) != MULTIDICT_OK_INSERTED ||
+        multidictAdd(d, &inta, &two) != MULTIDICT_OK_INSERTED ||
+        multidictAdd(d, &bytesA, &three) != MULTIDICT_OK_INSERTED ||
+        multidictCount(d) != 3 || !multidictFind(d, &intA, &iv) ||
+        !testBoxIsInt_(&iv, 1) || !multidictFind(d, &inta, &iv) ||
+        !testBoxIsInt_(&iv, 2) || !multidictDelete(d, &inta) ||
+        !multidictFind(d, &intA, &iv) || multidictCount(d) != 2) {
+        printf("ERROR: case dict integer keys are not exact\n");
+        err++;
+    }
+    multidictEmpty(d);
+
+    /* Long keys: the stored spelling is copied off the heap for updates */
+    char lower[150];
+    char upper[150];
+    for (size_t i = 0; i < sizeof(lower); i++) {
+        lower[i] = (char)('a' + i % 26);
+        upper[i] = (char)('A' + i % 26);
+    }
+    databox longLow = databoxNewBytes(lower, sizeof(lower));
+    databox longUp = databoxNewBytes(upper, sizeof(upper));
+    if (multidictAdd(d, &longLow, &one) != MULTIDICT_OK_INSERTED ||
+        multidictAdd(d, &longUp, &two) != MULTIDICT_OK_REPLACED ||
+        !testOnlyEntryIs_(d, lower, sizeof(lower), &two) ||
+        !multidictDelete(d, &longUp) || multidictCount(d) != 0 ||
+        multidictKeyBytes(d) != 0) {
+        printf("ERROR: case dict long keys\n");
+        err++;
+    }
+
+    return err;
+}
+
+/* Keys with embedded NUL are binary: they differ past the NUL */
+static int multidictTestBinaryKeys_(multidictType *type) {
+    int err = 0;
+    cleaner(multidictMmClassFree) multidictClass *qdc = multidictMmClassNew();
+    cleaner(multidictFree) multidict *d = multidictNew(type, qdc, 3);
+
+    static const struct {
+        const char *bytes;
+        size_t len;
+    } keys[] = {
+        {"a\0b", 3}, {"a\0c", 3}, {"a", 1},       {"a\0", 2},     {"\0", 1},
+        {"\0\0", 2}, {"", 0},     {"x\0\xc4", 3}, {"x\0\xe4", 3},
+    };
+    const size_t n = sizeof(keys) / sizeof(*keys);
+
+    for (size_t i = 0; i < n; i++) {
+        const databox k = databoxNewBytes(keys[i].bytes, keys[i].len);
+        const databox v = DATABOX_SIGNED((int64_t)i);
+        if (multidictAdd(d, &k, &v) != MULTIDICT_OK_INSERTED) {
+            printf("ERROR: binary key %zu did not insert\n", i);
+            err++;
+        }
+    }
+
+    if (multidictCount(d) != n) {
+        printf("ERROR: binary keys collapsed: %" PRIu64 " of %zu\n",
+               multidictCount(d), n);
+        err++;
+    }
+
+    for (size_t i = 0; i < n; i++) {
+        const databox k = databoxNewBytes(keys[i].bytes, keys[i].len);
+        databox v = {{0}};
+        if (!multidictFind(d, &k, &v) || !testBoxIsInt_(&v, (int64_t)i)) {
+            printf("ERROR: binary key %zu found the wrong entry\n", i);
+            err++;
+        }
+    }
+
+    /* Deleting one leaves the rest */
+    const databox gone = databoxNewBytes("a\0b", 3);
+    const databox kept = databoxNewBytes("a\0c", 3);
+    databox v = {{0}};
+    if (!multidictDelete(d, &gone) || multidictExists(d, &gone) ||
+        !multidictFind(d, &kept, &v) || !testBoxIsInt_(&v, 1) ||
+        multidictCount(d) != n - 1) {
+        printf("ERROR: binary key delete\n");
+        err++;
+    }
+
+    /* In a case dict the letter after the NUL still folds */
+    if (type == &multidictTypeCaseKey) {
+        const databox upper = databoxNewBytes("A\0C", 3);
+        if (!multidictFind(d, &upper, &v) || !testBoxIsInt_(&v, 1)) {
+            printf("ERROR: case fold past an embedded NUL\n");
+            err++;
+        }
+    }
+
+    return err;
+}
+
+/* An exact dict keeps every spelling as its own key */
+static int multidictTestExactDistinct_(void) {
+    int err = 0;
+    cleaner(multidictMmClassFree) multidictClass *qdc = multidictMmClassNew();
+    cleaner(multidictFree) multidict *d =
+        multidictNew(&multidictTypeExactKey, qdc, 7);
+
+    static const char *const spellings[] = {"Key", "KEY", "key", "kEy"};
+    for (int32_t i = 0; i < 4; i++) {
+        const databox k = databoxNewBytesString(spellings[i]);
+        const databox v = DATABOX_SIGNED(i);
+        if (multidictAdd(d, &k, &v) != MULTIDICT_OK_INSERTED) {
+            printf("ERROR: exact spelling '%s' did not insert\n", spellings[i]);
+            err++;
+        }
+    }
+
+    const databox KEY = databoxNewBytesString("KEY");
+    const databox absent = databoxNewBytesString("KEy");
+    databox v = {{0}};
+    if (multidictCount(d) != 4 || multidictFind(d, &absent, &v) ||
+        multidictAddXX(d, &absent, &KEY) != MULTIDICT_ERR ||
+        !multidictDelete(d, &KEY) || multidictExists(d, &KEY) ||
+        multidictCount(d) != 3) {
+        printf("ERROR: exact dict matched across case\n");
+        err++;
+    }
+
+    for (int32_t i = 0; i < 4; i++) {
+        const databox k = databoxNewBytesString(spellings[i]);
+        const bool want = i != 1;
+        if (multidictFind(d, &k, &v) != want ||
+            (want && !testBoxIsInt_(&v, i))) {
+            printf("ERROR: exact spelling '%s' lost its value\n", spellings[i]);
+            err++;
+        }
+    }
+
+    return err;
+}
+
+/* A custom compare: keys equal up to trailing spaces, with a hash that
+ * ignores them too */
+static uint32_t testTrimmedLen_(const void *key, uint32_t len) {
+    const uint8_t *k = key;
+    while (len > 0 && k[len - 1] == ' ') {
+        len--;
+    }
+    return len;
+}
+
+static uint32_t testTrimHash_(multidict *d, const void *key, uint32_t len) {
+    return multidictGenHashFunction(d, key, (int32_t)testTrimmedLen_(key, len));
+}
+
+static int32_t testTrimCompare_(void *privdata, const void *key1,
+                                const uint32_t k1len, const void *key2,
+                                const uint32_t k2len) {
+    (void)privdata;
+    const uint32_t a = testTrimmedLen_(key1, k1len);
+    const uint32_t b = testTrimmedLen_(key2, k2len);
+    return a == b && (a == 0 || memcmp(key1, key2, a) == 0);
+}
+
+static multidictType testTrimType_ = {testTrimHash_, testTrimCompare_};
+
+/* A type with no compare matches exact bytes */
+static multidictType testNullCompareType_ = {multidictStringHashFunction_,
+                                             NULL};
+
+static int multidictTestCustomCompare_(void) {
+    int err = 0;
+    cleaner(multidictMmClassFree) multidictClass *qdc = multidictMmClassNew();
+    {
+        cleaner(multidictFree) multidict *d =
+            multidictNew(&testTrimType_, qdc, 11);
+        const databox plain = databoxNewBytesString("abc");
+        const databox padded = databoxNewBytesString("abc   ");
+        const databox other = databoxNewBytesString("ab c");
+        const databox one = DATABOX_SIGNED(1);
+        const databox two = DATABOX_SIGNED(2);
+        databox v = {{0}};
+        if (multidictAdd(d, &padded, &one) != MULTIDICT_OK_INSERTED ||
+            multidictAdd(d, &plain, &two) != MULTIDICT_OK_REPLACED ||
+            multidictAdd(d, &other, &one) != MULTIDICT_OK_INSERTED ||
+            multidictCount(d) != 2 || !multidictFind(d, &plain, &v) ||
+            !testBoxIsInt_(&v, 2) || !multidictDelete(d, &plain) ||
+            multidictExists(d, &padded) || multidictCount(d) != 1) {
+            printf("ERROR: custom keyCompare not honoured\n");
+            err++;
+        }
+    }
+
+    {
+        cleaner(multidictFree) multidict *d =
+            multidictNew(&testNullCompareType_, qdc, 11);
+        const databox a = databoxNewBytesString("abc");
+        const databox b = databoxNewBytesString("ABC");
+        const databox one = DATABOX_SIGNED(1);
+        if (multidictAdd(d, &a, &one) != MULTIDICT_OK_INSERTED ||
+            multidictAdd(d, &b, &one) != MULTIDICT_OK_INSERTED ||
+            multidictCount(d) != 2) {
+            printf("ERROR: NULL keyCompare does not match exact bytes\n");
+            err++;
+        }
+    }
+
+    return err;
+}
+
+/* Differential test: random mixed-case adds, conditional adds, replaces,
+ * increments, finds, deletes and pops against an oracle that matches keys
+ * the way the dict's type should, under growth, shrinking and rehashes
+ * forced in flight.  Keys carry an index, letters that may change case,
+ * and sometimes an embedded NUL, a Latin-1 byte or padding past 64 bytes. */
+#define TEST_CI_BASES 160
+#define TEST_CI_MAX_KEY 96
+typedef struct testCiEntry {
+    uint8_t key[TEST_CI_MAX_KEY];
+    uint32_t len;
+    int64_t val;
+} testCiEntry;
+
+typedef struct testCiOracle {
+    bool fold; /* keys match ASCII case-insensitively */
+    uint32_t count;
+    testCiEntry e[TEST_CI_BASES * 8];
+} testCiOracle;
+
+defcleanerName(testCiOracle *, zfree, CiOracle);
+
+/* Key 'base' with the case of its first three letters set from 'flips' */
+static uint32_t testCiKey_(uint32_t base, uint32_t flips, uint8_t *out) {
+    uint32_t len =
+        (uint32_t)snprintf((char *)out, TEST_CI_MAX_KEY, "%05" PRIu32, base);
+    for (uint32_t j = 0; j < 6; j++) {
+        const uint8_t c = (uint8_t)('a' + (base * 7 + j * 5) % 26);
+        out[len++] =
+            (j < 3 && (flips >> j) & 1) ? (uint8_t)(c - ('a' - 'A')) : c;
+    }
+
+    if (base % 7 == 0) {
+        out[len++] = '\0';
+        out[len++] = 'q';
+    }
+
+    if (base % 5 == 0) {
+        out[len++] = 0xc4;
+    }
+
+    if (base % 10 == 0) {
+        while (len < 80) {
+            out[len] = (uint8_t)('m' + len % 8);
+            len++;
+        }
+    }
+
+    return len;
+}
+
+static bool testCiEq_(const testCiOracle *o, const uint8_t *a, uint32_t alen,
+                      const uint8_t *b, uint32_t blen) {
+    if (alen != blen) {
+        return false;
+    }
+
+    for (uint32_t i = 0; i < alen; i++) {
+        if (o->fold ? testFoldAscii_(a[i]) != testFoldAscii_(b[i])
+                    : a[i] != b[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static int32_t testCiFind_(const testCiOracle *o, const uint8_t *key,
+                           uint32_t len) {
+    for (uint32_t i = 0; i < o->count; i++) {
+        if (testCiEq_(o, o->e[i].key, o->e[i].len, key, len)) {
+            return (int32_t)i;
+        }
+    }
+    return -1;
+}
+
+static int32_t testCiFindExact_(const testCiOracle *o, const databox *key) {
+    if (!DATABOX_IS_BYTES(key)) {
+        return -1;
+    }
+
+    for (uint32_t i = 0; i < o->count; i++) {
+        if (testBoxIsBytes_(key, o->e[i].key, o->e[i].len)) {
+            return (int32_t)i;
+        }
+    }
+    return -1;
+}
+
+static void testCiRemove_(testCiOracle *o, int32_t at) {
+    o->e[at] = o->e[--o->count];
+}
+
+/* The dict holds exactly the oracle: same count, every entry under the
+ * oracle's spelling with its value, each once, and key bytes adding up */
+static int testCiVerify_(multidict *d, const testCiOracle *o, bool lru,
+                         uint32_t step) {
+    int err = 0;
+    bool seen[TEST_CI_BASES * 8] = {0};
+    uint64_t keyBytes = 0;
+    for (uint32_t i = 0; i < o->count; i++) {
+        keyBytes += o->e[i].len;
+    }
+
+    multidictIterator iter;
+    multidictIteratorInit(d, &iter);
+    multidictEntry e;
+    uint32_t n = 0;
+    while (multidictIteratorNext(&iter, &e)) {
+        n++;
+        const int32_t at = testCiFindExact_(o, &e.key);
+        if (at < 0 || seen[at] || !testBoxIsInt_(&e.val, o->e[at].val)) {
+            err++;
+            continue;
+        }
+        seen[at] = true;
+    }
+    multidictIteratorRelease(&iter);
+
+    if (err || n != o->count || multidictCount(d) != o->count ||
+        multidictKeyBytes(d) != keyBytes ||
+        (lru && !testLruTrackingExact_(d))) {
+        printf("ERROR: differential step %" PRIu32 ": %" PRIu32
+               " entries, %d bad, count %" PRIu64 " (oracle %" PRIu32
+               "), key bytes %" PRIu64 " (oracle %" PRIu64 ")\n",
+               step, n, err, multidictCount(d), o->count, multidictKeyBytes(d),
+               keyBytes);
+        return 1;
+    }
+    return 0;
+}
+
+static int multidictTestCaseDifferential_(multidictType *type, uint32_t seed,
+                                          bool lru) {
+    int err = 0;
+    cleanerName(zfree, CiOracle) testCiOracle *o = zcalloc(1, sizeof(*o));
+    o->fold = type == &multidictTypeCaseKey;
+
+    cleaner(multidictMmClassFree) multidictClass *qdc = multidictMmClassNew();
+    cleaner(multidictFree) multidict *d =
+        multidictNew(type, qdc, (int32_t)seed);
+    if (lru) {
+        multidictEnableLRU(d, 4);
+    }
+
+    testRandSeed(seed);
+    uint32_t inFlight = 0;
+    int64_t nextVal = 1;
+    const uint32_t steps = 6000;
+    for (uint32_t step = 0; step < steps && !err; step++) {
+        /* Grow for the first half, then mostly drain so the dict shrinks */
+        const bool draining = step >= steps / 2;
+        uint8_t key[TEST_CI_MAX_KEY];
+        const uint32_t len =
+            testCiKey_(testRand() % TEST_CI_BASES, testRand() % 8, key);
+        const databox kb = databoxNewBytes(key, len);
+        const int32_t at = testCiFind_(o, key, len);
+        const databox vb = DATABOX_SIGNED(nextVal);
+
+        if (step % 400 == 0 && !multidictIsRehashing(d) &&
+            multidictSlotCount(d) < 4096) {
+            multidictExpand(d, multidictSlotCount(d) * 4);
+        }
+        inFlight += multidictIsRehashing(d);
+
+        const uint32_t op = testRand() % 100;
+        bool ok = true;
+        if (op < (draining ? 10u : 30u)) {
+            ok = multidictAdd(d, &kb, &vb) ==
+                 (at >= 0 ? MULTIDICT_OK_REPLACED : MULTIDICT_OK_INSERTED);
+            if (at >= 0) {
+                o->e[at].val = nextVal;
+            } else {
+                testCiEntry *ne = &o->e[o->count++];
+                memcpy(ne->key, key, len);
+                ne->len = len;
+                ne->val = nextVal;
+            }
+            nextVal++;
+        } else if (op < 38) {
+            ok = multidictAddNX(d, &kb, &vb) ==
+                 (at >= 0 ? MULTIDICT_ERR : MULTIDICT_OK_INSERTED);
+            if (at < 0) {
+                testCiEntry *ne = &o->e[o->count++];
+                memcpy(ne->key, key, len);
+                ne->len = len;
+                ne->val = nextVal;
+            }
+            nextVal++;
+        } else if (op < 46) {
+            ok = multidictReplace(d, &kb, &vb) ==
+                 (at >= 0 ? MULTIDICT_OK_REPLACED : MULTIDICT_ERR);
+            if (at >= 0) {
+                o->e[at].val = nextVal;
+            }
+            nextVal++;
+        } else if (op < 50) {
+            int64_t result = 0;
+            const int64_t inc = 1 + testRand() % 5;
+            ok = multidictIncrBy(d, &kb, inc, &result) ==
+                 (at >= 0 ? MULTIDICT_OK_REPLACED : MULTIDICT_OK_INSERTED);
+            if (at >= 0) {
+                o->e[at].val += inc;
+            } else {
+                testCiEntry *ne = &o->e[o->count++];
+                memcpy(ne->key, key, len);
+                ne->len = len;
+                ne->val = inc;
+            }
+            ok = ok && result == (at >= 0 ? o->e[at].val : inc);
+        } else if (op < 70) {
+            databox v = {{0}};
+            const bool found = multidictFind(d, &kb, &v);
+            ok = found == (at >= 0) &&
+                 (!found || testBoxIsInt_(&v, o->e[at].val));
+        } else if (op < (draining ? 94u : 86u)) {
+            ok = multidictDelete(d, &kb) == (at >= 0);
+            if (at >= 0) {
+                testCiRemove_(o, at);
+            }
+        } else if (op < 97) {
+            databox v = {{0}};
+            const bool got = multidictGetAndDelete(d, &kb, &v);
+            ok = got == (at >= 0) && (!got || testBoxIsInt_(&v, o->e[at].val));
+            if (got) {
+                databoxFreeData(&v);
+            }
+            if (at >= 0) {
+                testCiRemove_(o, at);
+            }
+        } else {
+            databox pk = {{0}};
+            databox pv = {{0}};
+            const bool popped = multidictPopRandom(d, &pk, &pv);
+            const int32_t pat = popped ? testCiFindExact_(o, &pk) : -1;
+            ok = popped == (o->count > 0) &&
+                 (!popped || (pat >= 0 && testBoxIsInt_(&pv, o->e[pat].val)));
+            if (pat >= 0) {
+                testCiRemove_(o, pat);
+            }
+            databoxFreeData(&pk);
+            databoxFreeData(&pv);
+        }
+
+        if (!ok) {
+            printf("ERROR: differential step %" PRIu32 ": op %" PRIu32
+                   " on base %.5s\n",
+                   step, op, (const char *)key);
+            err++;
+        }
+
+        if (step % 500 == 499) {
+            err += testCiVerify_(d, o, lru, step);
+        }
+    }
+
+    err += testCiVerify_(d, o, lru, steps);
+    if (inFlight == 0) {
+        printf("ERROR: differential never ran with a rehash in flight\n");
+        err++;
+    }
+
+    return err;
+}
+
 int multidictTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -6002,7 +6905,7 @@ int multidictTest(int argc, char *argv[]) {
     printf("Test 9.0: Key compares are binary-safe and locale-free...\n");
     err += multidictTestKeyCompare_();
 
-    printf("Test 9.1: Create with case-insensitive type...\n");
+    printf("Test 9.1: Case-insensitive find, replace and delete...\n");
     {
         cleaner(multidictMmClassFree) multidictClass *qdcCase =
             multidictMmClassNew();
@@ -6010,28 +6913,57 @@ int multidictTest(int argc, char *argv[]) {
             multidictNew(&multidictTypeCaseKey, qdcCase, 54321);
         assert(dCase != NULL);
 
-        /* Insert with lowercase */
         databox key1 = databoxNewBytesString("hello");
         databox val1 = databoxNewBytesString("world");
-        multidictAdd(dCase, &key1, &val1);
+        assert(multidictAdd(dCase, &key1, &val1) == MULTIDICT_OK_INSERTED);
 
-        /* Find with uppercase - currently does NOT work because:
-         * - The case-insensitive hash correctly maps "HELLO" to same slot
-         * - BUT the slot impl (multimap) uses binary comparison internally,
-         *   not the dict's keyCompare function
-         * - TODO: Future enhancement - pass keyCompare to slot operations */
+        /* Any spelling finds the one entry */
+        static const char *spellings[] = {"hello", "HELLO", "HeLLo", "hellO"};
+        for (size_t i = 0; i < sizeof(spellings) / sizeof(*spellings); i++) {
+            databox key = databoxNewBytesString(spellings[i]);
+            databox found = {{0}};
+            if (!multidictFind(dCase, &key, &found) ||
+                !testBoxIsBytes_(&found, "world", 5)) {
+                printf("ERROR: case find of '%s' failed\n", spellings[i]);
+                err++;
+            }
+        }
+
+        /* Replacing under another spelling keeps the first one */
         databox key2 = databoxNewBytesString("HELLO");
-        databox found;
-        bool result = multidictFind(dCase, &key2, &found);
-        printf("  Case-insensitive find 'HELLO' for 'hello': %s\n",
-               result ? "found" : "not found");
-        printf("  (Known limitation: slot impl uses binary compare)\n");
+        databox val2 = databoxNewBytesString("there");
+        if (multidictAdd(dCase, &key2, &val2) != MULTIDICT_OK_REPLACED ||
+            multidictCount(dCase) != 1 ||
+            !testOnlyEntryIs_(dCase, "hello", 5, &val2)) {
+            printf("ERROR: case replace did not keep 'hello'\n");
+            err++;
+        }
 
-        /* Verify same-case lookup works */
-        databox key3 = databoxNewBytesString("hello");
-        result = multidictFind(dCase, &key3, &found);
-        assert(result == true); /* Same case must work */
+        databox key3 = databoxNewBytesString("hElLo");
+        if (!multidictDelete(dCase, &key3) || multidictCount(dCase) != 0 ||
+            multidictExists(dCase, &key1) || multidictDelete(dCase, &key1)) {
+            printf("ERROR: case delete failed\n");
+            err++;
+        }
     }
+
+    printf("Test 9.2: Every key-matching operation in a case dict...\n");
+    err += multidictTestCaseOps_();
+
+    printf("Test 9.3: Binary keys with embedded NUL, both types...\n");
+    err += multidictTestBinaryKeys_(&multidictTypeExactKey);
+    err += multidictTestBinaryKeys_(&multidictTypeCaseKey);
+
+    printf("Test 9.4: Exact dict keeps case-differing keys distinct...\n");
+    err += multidictTestExactDistinct_();
+
+    printf("Test 9.5: A custom keyCompare is honoured...\n");
+    err += multidictTestCustomCompare_();
+
+    printf("Test 9.6: Case dict against a folding oracle...\n");
+    err += multidictTestCaseDifferential_(&multidictTypeCaseKey, 0x5eed, false);
+    err += multidictTestCaseDifferential_(&multidictTypeCaseKey, 0xca5e, true);
+    err += multidictTestCaseDifferential_(&multidictTypeExactKey, 0xe7ac, true);
 
     /* ================================================================
      * SECTION 10: Print Stats (Visual Verification)
@@ -7627,21 +8559,17 @@ int multidictTest(int argc, char *argv[]) {
         (void)lruOn;
         multidictSetEvictPolicy(cd, MULTIDICT_EVICT_LRU);
 
-        /* Each index goes in as two keys that differ only in case: the
-         * slot layer compares bytes, so they are distinct entries, and the
-         * case hash gives both one slot and one LRU hash.  The LRU hash
-         * must be the slot hash for any victim to resolve, and promoting
-         * one spelling of a pair below means whichever of the two the
-         * slot holds first, one victim must be told apart from its
-         * same-hash, promoted neighbour. */
-        enum { indexes = 40, entries = indexes * 2 };
+        /* Index i goes in under spelling i % 2, valued by its code
+         * (index * 2 + spelling), so the eviction callback can check that
+         * each victim comes back under the spelling that inserted it */
+        enum { indexes = 40, entries = indexes };
         char keyBuf[32];
         for (int32_t i = 0; i < indexes; i++) {
-            for (int32_t s = 0; s < 2; s++) {
-                databox key = testLruCaseKey_(keyBuf, sizeof(keyBuf), i, s);
-                databox val = databoxNewSigned(i * 2 + s);
-                multidictAdd(cd, &key, &val);
-            }
+            databox key = testLruCaseKey_(keyBuf, sizeof(keyBuf), i, i % 2);
+            databox val = databoxNewSigned(i * 2 + i % 2);
+            const multidictResult added = multidictAdd(cd, &key, &val);
+            assert(added == MULTIDICT_OK_INSERTED);
+            (void)added;
         }
         assert(multidictCount(cd) == entries);
 
@@ -7651,15 +8579,23 @@ int multidictTest(int argc, char *argv[]) {
         assert(multidictKeyHash(cd, &low) == multidictKeyHash(cd, &up));
         assert(multidictKeyHash(cd, &low) == multidictHashOfKey_(cd, &low));
 
-        /* A lookup promotes only the spelling looked up: code 6 (index 3,
-         * lower case) by multidictFind and code 11 (index 5, upper case)
-         * by multidictTouch; their other spellings stay cold */
-        char key3Buf[32], key5Buf[32];
+        /* The other spelling of an index is the same key: a find of index
+         * 3, a touch of index 5 and a replace of index 9, each under the
+         * spelling not stored, promote the stored entry */
+        char key3Buf[32], key5Buf[32], key9Buf[32];
         databox key3 = testLruCaseKey_(key3Buf, sizeof(key3Buf), 3, 0);
         databox found = {{0}};
-        assert(multidictFind(cd, &key3, &found));
-        databox key5 = testLruCaseKey_(key5Buf, sizeof(key5Buf), 5, 1);
+        const bool found3 = multidictFind(cd, &key3, &found);
+        assert(found3 && DATABOX_IS_INTEGER(&found) && found.data.i == 7);
+        (void)found3;
+        databox key5 = testLruCaseKey_(key5Buf, sizeof(key5Buf), 5, 0);
         multidictTouch(cd, &key5);
+        databox key9 = testLruCaseKey_(key9Buf, sizeof(key9Buf), 9, 0);
+        databox val9 = databoxNewSigned(19);
+        const multidictResult replaced9 = multidictAdd(cd, &key9, &val9);
+        assert(replaced9 == MULTIDICT_OK_REPLACED);
+        (void)replaced9;
+        assert(multidictCount(cd) == entries);
         assert(testLruTrackingExact_(cd));
 
         const uint64_t bytes = multidictKeyBytes(cd) + multidictValBytes(cd);
@@ -7674,16 +8610,17 @@ int multidictTest(int argc, char *argv[]) {
         assert(log.evicted == 30);
         assert(log.bad == 0);
 
-        /* Exactly insertion order without the two promoted codes: any
-         * random victim or same-hash mix-up breaks it */
+        /* Exactly insertion order without the three promoted indexes: any
+         * random victim, or a promotion that missed the stored entry,
+         * breaks it */
         int32_t expect = 0;
         for (int32_t n = 0; n < 30; n++) {
-            while (expect == 6 || expect == 11) {
+            while (expect == 3 || expect == 5 || expect == 9) {
                 expect++;
             }
-            if (log.order[n] != expect) {
-                printf("ERROR: case victim %d is code %d, expected %d\n", n,
-                       log.order[n], expect);
+            if (log.order[n] != expect * 2 + expect % 2) {
+                printf("ERROR: case victim %d is code %d, expected index %d\n",
+                       n, log.order[n], expect);
                 assert(NULL);
             }
             expect++;
@@ -7692,7 +8629,20 @@ int multidictTest(int argc, char *argv[]) {
         assert(multidictCount(cd) == entries - 30);
         assert(multidictGetLRULevel(cd, &key3) == 1);
         assert(multidictGetLRULevel(cd, &key5) == 1);
+        assert(multidictGetLRULevel(cd, &key9) == 1);
         assert(testLruTrackingExact_(cd));
+
+        /* The survivors, the replaced one included, keep the spelling
+         * that inserted them */
+        multidictIterator iter;
+        multidictIteratorInit(cd, &iter);
+        multidictEntry e;
+        while (multidictIteratorNext(&iter, &e)) {
+            const int32_t code = testLruCode_(&log, &e.key);
+            assert(code >= 0 && code % 2 == (code / 2) % 2);
+            assert(DATABOX_IS_INTEGER(&e.val) && e.val.data.i == code);
+        }
+        multidictIteratorRelease(&iter);
     }
 
     printf("Test 20.11: Same-hash keys in one slot evict in LRU order...\n");
