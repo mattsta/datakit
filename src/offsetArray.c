@@ -529,6 +529,83 @@ int offsetArrayTest(int argc, char *argv[]) {
         offsetArrayFree(&a);
     }
 
+    /* ----------------------------------------------------------------
+     * Bounds-checked access (offsetArrayGet under OFFSETARRAY_DEBUG)
+     * ---------------------------------------------------------------- */
+
+    TEST("checked access is the same lvalue as unchecked access") {
+        offsetArrayInt a = {0};
+        for (int i = 500; i >= 490; i--) {
+            offsetArrayGrow(&a, i);
+            offsetArrayGetChecked_(&a, i) = i * 3;
+        }
+        offsetArrayGrow(&a, 510);
+        offsetArrayGetChecked_(&a, 510) = 7;
+        offsetArrayGetChecked_(&a, 510) += 1;
+
+        for (int i = 490; i <= 500; i++) {
+            if (&offsetArrayGetChecked_(&a, i) != &offsetArrayGet(&a, i)) {
+                ERR("Checked and unchecked access differ at %d", i);
+            }
+            if (offsetArrayGet(&a, i) != i * 3) {
+                ERR("Value at %d should be %d, got %d", i, i * 3,
+                    offsetArrayGet(&a, i));
+            }
+        }
+        if (offsetArrayGetChecked_(&a, 510) != 8) {
+            ERR("Value at 510 should be 8, got %d",
+                offsetArrayGetChecked_(&a, 510));
+        }
+
+        offsetArrayFree(&a);
+    }
+
+    TEST("checked access evaluates its arguments once") {
+        offsetArrayInt arrs[2] = {{0}, {0}};
+        for (int i = 10; i <= 12; i++) {
+            offsetArrayGrowZero(&arrs[1], i);
+        }
+
+        size_t which = 1;
+        int idx = 10;
+        offsetArrayGetChecked_(&arrs[which++], idx++) = 99;
+        if (which != 2 || idx != 11) {
+            ERR("Arguments evaluated more than once: which=%zu idx=%d", which,
+                idx);
+        }
+        if (offsetArrayGet(&arrs[1], 10) != 99 ||
+            offsetArrayGet(&arrs[1], 11) != 0) {
+            ERRR("Checked write landed on the wrong element");
+        }
+
+        offsetArrayFree(&arrs[1]);
+    }
+
+    TEST("checked access on struct and size_t storage") {
+        offsetArrayStruct s = {0};
+        offsetArrayGrow(&s, -5);
+        offsetArrayGrow(&s, 5);
+        TestStruct *p = &offsetArrayGetChecked_(&s, -5);
+        p->id = 1;
+        offsetArrayGetChecked_(&s, 5).id = 2;
+        if (offsetArrayGet(&s, -5).id != 1 || offsetArrayGet(&s, 5).id != 2) {
+            ERRR("Struct members written through checked access were lost");
+        }
+        offsetArrayFree(&s);
+
+        offsetArraySizeT z = {0};
+        const size_t lo = 7;
+        const size_t hi = 10;
+        offsetArrayGrow(&z, hi);
+        offsetArrayGrow(&z, lo);
+        offsetArrayGetChecked_(&z, lo) = 40;
+        offsetArrayGetChecked_(&z, hi) = 43;
+        if (offsetArrayGet(&z, lo) != 40 || offsetArrayGet(&z, hi) != 43) {
+            ERRR("size_t values written through checked access were lost");
+        }
+        offsetArrayFree(&z);
+    }
+
     TEST_FINAL_RESULT;
 }
 #endif

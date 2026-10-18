@@ -175,18 +175,33 @@
 
 /* ----------------------------------------------------------------------------
  * Debug Bounds Checking (enabled with OFFSETARRAY_DEBUG)
+ * ----------------------------------------------------------------------------
+ * offsetArrayGetChecked_ is offsetArrayGet with an aborting bounds check.  It
+ * is an lvalue like offsetArrayGet (assign through it, take its address), and
+ * evaluates 'arr' and 'idx' once each.  Building with -DOFFSETARRAY_DEBUG
+ * makes offsetArrayGet this form.  It is always defined so the offsetArray
+ * tests exercise it in every build.
  * --------------------------------------------------------------------------*/
-#ifdef OFFSETARRAY_DEBUG
 #include <inttypes.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 
+#define offsetArrayGetChecked_(arr, idx)                                       \
+    (*({                                                                       \
+        __typeof__(arr) arrC_ = (arr);                                         \
+        /* the type offsetArrayGet's (idx) - offset is computed in */          \
+        const __typeof__((idx) - (arr)->offset) idxC_ = (idx);                 \
+        offsetArrayBoundsCheck_(arrC_->obj != NULL, idxC_ >= arrC_->offset,    \
+                                idxC_ <= arrC_->highest, #arr, (int64_t)idxC_, \
+                                __FILE__, __LINE__);                           \
+        &arrC_->obj[offsetArrayAdjusted_(arrC_, idxC_)];                       \
+    }))
+
+#ifdef OFFSETARRAY_DEBUG
 #undef offsetArrayGet
-#define offsetArrayGet(arr, idx)                                               \
-    (offsetArrayBoundsCheck_((arr)->obj != NULL, (idx) >= (arr)->offset,       \
-                             (idx) <= (arr)->highest, #arr, idx, __FILE__,     \
-                             __LINE__),                                        \
-     (arr)->obj[offsetArrayAdjusted_(arr, idx)])
+#define offsetArrayGet(arr, idx) offsetArrayGetChecked_(arr, idx)
+#endif
 
 static inline void offsetArrayBoundsCheck_(bool hasObj, bool aboveLow,
                                            bool belowHigh, const char *name,
@@ -205,7 +220,6 @@ static inline void offsetArrayBoundsCheck_(bool hasObj, bool aboveLow,
         abort();
     }
 }
-#endif
 
 #ifdef DATAKIT_TEST
 int offsetArrayTest(int argc, char *argv[]);

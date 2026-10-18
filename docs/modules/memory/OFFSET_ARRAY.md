@@ -256,6 +256,14 @@ index first, printing `file:line`, the array's name, and the offending index to
 out of bounds". There is no cost in normal builds, and no way to enable it per
 array — it is a translation-unit-wide switch.
 
+The checked form is still an lvalue, so everything written against
+`offsetArrayGet` compiles the same way in both modes: assigning through it,
+compound assignment (`+=`), member access on struct storage, and taking an
+element's address. It evaluates `arr` and `idx` once each, so arguments with
+side effects behave as they do in a normal build. The offsetArray tests
+exercise the checked form in every build, not only under
+`-DOFFSETARRAY_DEBUG`.
+
 ### Freeing Memory
 
 ```c
