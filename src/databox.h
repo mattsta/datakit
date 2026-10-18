@@ -257,6 +257,21 @@ static inline bool databoxIsWideDeferred(const databox *box) {
            !box->data.ptr;
 }
 
+/* Fail fast on a wide box without a payload.  Comparisons, inserts and
+ * encoders read a 96/128-bit value through data.i128 / data.u128, and a
+ * deferred box has nothing there, so reaching one of those paths with it
+ * is a caller bug.  databoxWidePayloadRequire, used only inside their
+ * 96/128-bit arms, prints the caller's name and aborts instead of
+ * dereferencing NULL.  Narrow values never reach it. */
+__attribute__((noreturn, cold)) void
+databoxWidePayloadMissing(const databox *box, const char *where);
+#define databoxWidePayloadRequire(box)                                         \
+    do {                                                                       \
+        if (unlikely(!(box)->data.ptr)) {                                      \
+            databoxWidePayloadMissing((box), __func__);                        \
+        }                                                                      \
+    } while (0)
+
 /* Growable databox where databoxStr.box.data.ptr == databoxStr.bytes */
 typedef struct databoxStr {
     databox box;

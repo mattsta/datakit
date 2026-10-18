@@ -2,6 +2,9 @@
 #include "floatExtended.h"
 #include "str.h"
 
+#include <stdio.h>  /* fprintf */
+#include <stdlib.h> /* abort */
+
 #if DATABOX_ENABLE_PTR_MDSC
 #include "mdsc.h"
 #endif
@@ -636,8 +639,28 @@ DK_INLINE_ALWAYS int databoxCompareInteger(const databox *a, const databox *b) {
 #endif
 }
 
+void databoxWidePayloadMissing(const databox *box, const char *where) {
+    fprintf(stderr,
+            "%s: %s box has no payload (a deferred wide value); read it "
+            "into wide storage before using it\n",
+            where,
+            box->type == DATABOX_SIGNED_128 ? "SIGNED_128" : "UNSIGNED_128");
+    abort();
+}
+
+/* The 96/128-bit comparison arms read the payload of whichever operand is
+ * wide, so a deferred operand stops here instead of at a NULL load. */
+DK_INLINE_ALWAYS void databoxCompareRequirePayload_(const databox *box) {
+    if (unlikely(databoxIsWideDeferred(box))) {
+        databoxWidePayloadMissing(box, "databoxCompare");
+    }
+}
+
 DK_INLINE_ALWAYS int databoxCompareInteger128(const databox *a,
                                               const databox *b) {
+    databoxCompareRequirePayload_(a);
+    databoxCompareRequirePayload_(b);
+
     const size_t aSigned =
         (a->type == DATABOX_SIGNED_64) || (a->type == DATABOX_SIGNED_128);
     const size_t bSigned =
@@ -748,6 +771,7 @@ DK_INLINE_ALWAYS int databoxCompareInt64Float(const databox *a,
 DK_INLINE_ALWAYS int databoxCompareInt128Float(const databox *a,
                                                const databox *b) {
     assert(IS_INTEGER(a) && DATABOX_IS_FLOAT(b));
+    databoxCompareRequirePayload_(a);
 
     const bool aIsUnsigned =
         (a->type == DATABOX_UNSIGNED_64) || (a->type == DATABOX_UNSIGNED_128);
@@ -1153,6 +1177,47 @@ void databoxRepr(const databox *const box) {
 #define CTEST_INCLUDE_KEYGEN
 #include "ctest.h"
 #include "perf.h"
+
+#include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+/* Run databoxCompare(a, b) in a child and report whether the child
+ * aborted.  The child turns SIGABRT into a distinct exit status, which
+ * keeps the platform crash reporter out of it, and sends its stderr to
+ * /dev/null so the expected message does not clutter the test log. */
+#define DATABOX_TEST_ABORT_STATUS 86
+static void databoxTestAbortHandler_(int sig) {
+    (void)sig;
+    _exit(DATABOX_TEST_ABORT_STATUS);
+}
+
+static bool databoxTestCompareAborts_(const databox *a, const databox *b) {
+    fflush(stdout);
+    fflush(stderr);
+    const pid_t kid = fork();
+    if (kid < 0) {
+        return false;
+    }
+
+    if (kid == 0) {
+        (void)signal(SIGABRT, databoxTestAbortHandler_);
+        if (!freopen("/dev/null", "w", stderr)) {
+            _exit(2);
+        }
+
+        (void)databoxCompare(a, b);
+        _exit(0);
+    }
+
+    int status = 0;
+    if (waitpid(kid, &status, 0) != kid) {
+        return false;
+    }
+
+    return WIFEXITED(status) &&
+           WEXITSTATUS(status) == DATABOX_TEST_ABORT_STATUS;
+}
 
 int databoxTest(int argc, char *argv[]) {
     (void)argc;
@@ -2690,6 +2755,42 @@ int databoxTest(int argc, char *argv[]) {
             if (databoxIsWideDeferred(&narrow[i])) {
                 ERR("narrow box %zu reads as deferred", i);
             }
+        }
+    }
+
+    TEST("databoxCompare: a deferred wide operand fails fast") {
+        databox deferredS = {{0}};
+        deferredS.type = DATABOX_SIGNED_128;
+        databox deferredU = {{0}};
+        deferredU.type = DATABOX_UNSIGNED_128;
+        databoxBig full;
+        DATABOX_BIG_UNSIGNED_128(&full, (__uint128_t)1 << 100);
+        const databox narrowS = databoxNewSigned(-7);
+        const databox narrowU = databoxNewUnsigned(7);
+        const databox real = DATABOX_DOUBLE(1.5);
+
+        /* Every wide arm, with the deferred box on either side. */
+        const struct {
+            const databox *a;
+            const databox *b;
+        } dies[] = {
+            {&deferredS, &narrowS},
+            {&narrowU, &deferredU},
+            {&deferredU, (const databox *)&full},
+            {(const databox *)&full, &deferredS},
+            {&deferredS, &real},
+            {&real, &deferredU},
+        };
+        for (size_t i = 0; i < COUNT_ARRAY(dies); i++) {
+            if (!databoxTestCompareAborts_(dies[i].a, dies[i].b)) {
+                ERR("compare case %zu did not abort", i);
+            }
+        }
+
+        /* A wide box with its payload still compares normally. */
+        if (databoxCompare((const databox *)&full, &narrowU) <= 0 ||
+            databoxCompare(&narrowS, (const databox *)&full) >= 0) {
+            ERRR("wide compare with a payload is wrong");
         }
     }
 

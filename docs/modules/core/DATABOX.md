@@ -932,6 +932,12 @@ storage, so the caller still learns the type and can read the value again
 into storage it owns. No flag bit marks the state; `databoxIsWideDeferred`
 tests the type and the pointer.
 
+A deferred box is not a value. Comparing, inserting or encoding one is a
+caller bug, and those paths fail fast: their 96/128-bit arms call
+`databoxWidePayloadRequire(box)`, which prints the caller's name and aborts
+through `databoxWidePayloadMissing` instead of dereferencing NULL. Narrow
+values never reach the check.
+
 ## Best Practices
 
 ### 1. Always Check Types
