@@ -1866,14 +1866,16 @@ static bool mlfIndexSame(multilistFull *ml, mflexState *state, mlOffsetId i,
     return mlfWideSame(&entry.box, want, &slot);
 }
 
-/* Split test elements: fixed-width strings, one per id. */
 /* Split test elements: fixed-width strings, one per id.  The long run of
  * 'x' makes any node of two or more of them compress, so an interior
  * node that is not compressed is a real depth-rule failure. */
 #define MLF_SPLIT_LEN 48
 static databox mlfSplitBox(uint32_t id, char buf[MLF_SPLIT_LEN + 1]) {
+    /* id % 1000000 keeps the id at six digits, so the string is exactly
+     * MLF_SPLIT_LEN bytes and GCC can prove the buffer is large enough. */
     snprintf(buf, MLF_SPLIT_LEN + 1,
-             "split-%06" PRIu32 "-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", id);
+             "split-%06" PRIu32 "-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+             id % 1000000);
     return databoxNewBytes(buf, MLF_SPLIT_LEN);
 }
 
