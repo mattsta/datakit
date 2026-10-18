@@ -32,34 +32,28 @@ multidictP *multidictNewPWithType(persistCtx *ctx, multidictType *type) {
         return NULL;
     }
 
+    /* Every failure below releases all three through their cleaners: the
+     * dict first, then the class it borrows, then the wrapper */
     cleanerName(zfree, MultidictP) multidictP *d = zcalloc(1, sizeof(*d));
-    d->ctx = ctx;
-
-    /* Create underlying multidict with the type and a default class */
     cleaner(multidictDefaultClassFree) multidictClass *qdc =
         multidictDefaultClassNew();
-    /* @own: container; free=multidictFree */
-    d->d = multidictNew(type, qdc, 0);
-    if (!d->d) {
+    cleaner(multidictFree) multidict *dict = multidictNew(type, qdc, 0);
+    if (!d || !qdc || !dict) {
         return NULL;
     }
 
-    /* The multidict holds the class for its lifetime */
+    /* Initialize persistence context for multidict type, and save the
+     * initial snapshot, which records the key type */
+    if (!persistCtxInitForType(ctx, &persistOpsMultidict) ||
+        !persistCtxSaveSnapshot(ctx, dict, &persistOpsMultidict)) {
+        return NULL;
+    }
+
+    /* The wrapper holds the dict, and the dict the class, from here on */
+    d->ctx = ctx;
+    d->d = dict;
+    dict = NULL;
     qdc = NULL;
-
-    /* Initialize persistence context for multidict type */
-    if (!persistCtxInitForType(ctx, &persistOpsMultidict)) {
-        multidictClass *cls = multidictGetClass(d->d);
-        multidictFree(d->d);
-        multidictDefaultClassFree(cls);
-        return NULL;
-    }
-
-    /* Save initial snapshot */
-    if (!persistCtxSaveSnapshot(ctx, d->d, &persistOpsMultidict)) {
-        multidictFree(d->d);
-        return NULL;
-    }
 
     multidictP *out = d;
     d = NULL;
@@ -84,6 +78,12 @@ multidictP *multidictOpenP(persistCtx *ctx) {
 
     /* @own: caller; free=multidictCloseP */
     multidictP *d = zcalloc(1, sizeof(*d));
+    if (!d) {
+        /* The recovered dict owns its own default class */
+        persistOpsMultidict.free(recovered);
+        return NULL;
+    }
+
     d->ctx = ctx;
     d->d = recovered;
 
@@ -282,8 +282,11 @@ void multidictGetStatsP(const multidictP *d, persistCtxStats *stats) {
  */
 
 #ifdef DATAKIT_TEST
+#include "../multimap.h" /* allocation counting seam */
 #include "persistTestCommon.h"
+#include <fcntl.h>
 #include <inttypes.h>
+#include <sys/stat.h>
 
 /* Helper to verify multidict matches tracker */
 static bool verifyMultidictMatchesTracker(multidictP *d,
@@ -1063,6 +1066,57 @@ int multidictPTest(int argc, char *argv[]) {
         multidictCloseP(d);
         persistCtxFree(ctx);
         ptestCleanupFiles(basePath);
+    }
+
+    TEST("multidictP creation frees everything when the snapshot fails") {
+        /* The snapshot is published through a temp file beside it, so a
+         * directory made read-only after the stores are open fails the
+         * initial save */
+        const char *dir = "/tmp/multidictPTestReadOnly";
+        char path[64];
+        snprintf(path, sizeof(path), "%s/dict", dir);
+        ptestCleanupFiles(path);
+        rmdir(dir);
+        if (mkdir(dir, 0700) != 0) {
+            ERRR("could not create the test directory");
+        } else {
+            persistCtx *ctx = persistCtxNew(path, NULL);
+            if (!ctx || !persistCtxInitForType(ctx, &persistOpsMultidict)) {
+                ERRR("could not open the test stores");
+            }
+
+            chmod(dir, 0500);
+            char probe[80];
+            snprintf(probe, sizeof(probe), "%s/probe", dir);
+            const int fd = open(probe, O_RDWR | O_CREAT, 0600);
+            if (fd >= 0) {
+                /* Permissions are not enforced (running as root) */
+                close(fd);
+                unlink(probe);
+                printf("  skipped: directory permissions not enforced\n");
+            } else if (ctx) {
+                multidictType *const types[] = {&multidictTypeExactKey,
+                                                &multidictTypeCaseKey};
+                for (size_t t = 0; t < 2; t++) {
+                    multimapTestAllocCountBegin();
+                    multidictP *d = multidictNewPWithType(ctx, types[t]);
+                    const int64_t live = multimapTestAllocCountEnd();
+                    if (d) {
+                        multidictCloseP(d);
+                        ERRR("multidictNewP succeeded without a snapshot");
+                    } else if (live != 0) {
+                        ERR("failed multidictNewP left %" PRId64
+                            " blocks allocated",
+                            live);
+                    }
+                }
+            }
+
+            chmod(dir, 0700);
+            persistCtxFree(ctx);
+            ptestCleanupFiles(path);
+            rmdir(dir);
+        }
     }
 
     TEST_FINAL_RESULT;
