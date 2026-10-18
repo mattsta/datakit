@@ -338,7 +338,11 @@ void mflexCloseGrow(mflex **mm, mflexState *const state, flex *f) {
         STATE_COMPRESSED_SIZE = allocSize;
     }
 
-    if (flexConvertToCFlex(f, STATE_COMPRESSED, STATE_COMPRESSED_SIZE)) {
+    /* Keep the compressed form only when it is strictly smaller than the
+     * flex: the scratch buffer can be bigger than 'f' (it is sized up to an
+     * allocator class), so cap the budget LZ4 may fill at one byte under
+     * the flex size, and an incompressible flex stays a flex. */
+    if (flexConvertToCFlex(f, STATE_COMPRESSED, totalBytes - 1)) {
         /* Now we need to return STATE_COMPRESSED, but we don't
          * want to waste 'f', so swap f<->STATE_COMPRESSED. */
         if (STATE_UNCOMPRESSED_RETAINED) {
@@ -742,6 +746,58 @@ int mflexTest(int argc, char *argv[]) {
         mflexPushByType(&m, resetState, &box, FLEX_ENDPOINT_TAIL);
         if (mflexCount(m) != 1) {
             ERR("Expected 1 after post-reset push, got %zu", mflexCount(m));
+        }
+    }
+
+    TEST("stored size never exceeds the flex, on every close path") {
+        /* Incompressible (sequential and random integers, random bytes)
+         * and compressible (repeated) data. After every push (grow close)
+         * and every delete (shrink close), the stored size must not be
+         * larger than the flex, and a compressed mflex must be strictly
+         * smaller. */
+        for (int pattern = 0; pattern < 4; pattern++) {
+            cleaner(mflexStateFree) mflexState *s = mflexStateCreate();
+            cleaner(mflexFree) mflex *m = mflexNew();
+            uint64_t rng = 0x243f6a8885a308d3ULL + (uint64_t)pattern;
+            for (int64_t i = 0; i < 4096; i++) {
+                /* splitmix64 */
+                uint64_t z = (rng += 0x9e3779b97f4a7c15ULL);
+                z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+                z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+                z ^= z >> 31;
+                if (pattern == 0) {
+                    mflexPushSigned(&m, s, i, FLEX_ENDPOINT_TAIL);
+                } else if (pattern == 1) {
+                    mflexPushSigned(&m, s, (int64_t)z, FLEX_ENDPOINT_TAIL);
+                } else if (pattern == 2) {
+                    mflexPushBytes(&m, s, &z, sizeof(z), FLEX_ENDPOINT_TAIL);
+                } else {
+                    mflexPushSigned(&m, s, 42, FLEX_ENDPOINT_TAIL);
+                }
+
+                const size_t raw = mflexBytesUncompressed(m);
+                const size_t stored = mflexBytesActual(m);
+                if (stored > raw || (mflexIsCompressed(m) && stored >= raw)) {
+                    ERR("pattern %d push %" PRId64 ": stored %zu, flex %zu%s",
+                        pattern, i, stored, raw,
+                        mflexIsCompressed(m) ? " (compressed)" : "");
+                    break;
+                }
+            }
+
+            /* Shrink path: delete from the front until empty */
+            while (mflexCount(m) > 0) {
+                const size_t left = mflexCount(m);
+                mflexDeleteOffsetCount(&m, s, 0,
+                                       (uint32_t)(left < 37 ? left : 37));
+                const size_t raw = mflexBytesUncompressed(m);
+                const size_t stored = mflexBytesActual(m);
+                if (stored > raw || (mflexIsCompressed(m) && stored >= raw)) {
+                    ERR("pattern %d delete at %zu left: stored %zu, flex %zu",
+                        pattern, mflexCount(m), stored, raw);
+                    break;
+                }
+            }
         }
     }
 
