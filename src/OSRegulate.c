@@ -826,29 +826,31 @@ int OSRegulateTFOMode() {
     return tfo;
 }
 
-bool OSRegulateTcpBacklogMeetsLimit(int tcpBacklogListenLength) {
-#if HAVE_PROC_SOMAXCONN
-    FILE *fp = fopen("/proc/sys/net/core/somaxconn", "r");
-    char buf[64] = {0};
-    bool limitFits = true;
-
-    if (!fp) {
+/* Whether a listen() backlog of 'requested' fits the somaxconn limit the
+ * kernel file holds as 'contents', or NULL when the file could not be
+ * read.  A limit that cannot be read or parsed cannot be checked, so it
+ * does not fit; a limit of 0 or a requested length of 0 or less imposes
+ * nothing, so it fits. */
+DK_FN_UNUSED static bool osrBacklogFits_(const char *contents, int requested) {
+    uint64_t somaxconn = 0;
+    if (!contents || !osrParseKernelU64_(contents, INT_MAX, &somaxconn)) {
         return false;
     }
 
-    if (fgets(buf, sizeof(buf), fp) != NULL) {
-        /* An unparsable limit is nothing to check against, so it is no
-         * known problem: limitFits stays true */
-        uint64_t somaxconn = 0;
-        if (osrParseKernelU64_(buf, INT_MAX, &somaxconn) && somaxconn > 0 &&
-            tcpBacklogListenLength > 0 &&
-            somaxconn < (uint64_t)tcpBacklogListenLength) {
-            limitFits = false;
-        }
+    return somaxconn == 0 || requested <= 0 || somaxconn >= (uint64_t)requested;
+}
+
+bool OSRegulateTcpBacklogMeetsLimit(int tcpBacklogListenLength) {
+#if HAVE_PROC_SOMAXCONN
+    FILE *fp = fopen("/proc/sys/net/core/somaxconn", "r");
+    if (!fp) {
+        return osrBacklogFits_(NULL, tcpBacklogListenLength);
     }
 
+    char buf[64] = {0};
+    const bool readOk = fgets(buf, sizeof(buf), fp) != NULL;
     fclose(fp);
-    return limitFits;
+    return osrBacklogFits_(readOk ? buf : NULL, tcpBacklogListenLength);
 #else
     (void)tcpBacklogListenLength;
     return true;
@@ -1425,6 +1427,39 @@ int OSRegulateTest(int argc, char *argv[]) {
             if (osrProcStatRssPages_(malformed[i], UINT64_MAX, &pages) ||
                 pages != 31337) {
                 ERR("malformed stat line '%s' parsed", malformed[i]);
+            }
+        }
+    }
+
+    TEST("somaxconn backlog check: unreadable and unparsable both fail") {
+        static const struct {
+            const char *contents; /* NULL: the file could not be read */
+            int requested;
+            bool fits;
+        } cases[] = {
+            {NULL, 128, false},
+            {"", 128, false},
+            {"\n", 128, false},
+            {"junk\n", 128, false},
+            {"-1\n", 128, false},
+            {"4096x\n", 128, false},
+            {"99999999999999999999\n", 128, false},
+            {"2147483648\n", 128, false}, /* above INT_MAX */
+            {"4096\n", 4096, true},
+            {"4096\n", 4097, false},
+            {"4096\n", 511, true},
+            {"128\n", 511, false},
+            {"0\n", 511, true},  /* no limit configured */
+            {"128\n", 0, true},  /* nothing requested */
+            {"128\n", -5, true}, /* nothing requested */
+            {"2147483647\n", INT_MAX, true},
+        };
+        for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
+            if (osrBacklogFits_(cases[i].contents, cases[i].requested) !=
+                cases[i].fits) {
+                ERR("somaxconn '%s' for %d: want fits=%d",
+                    cases[i].contents ? cases[i].contents : "(unreadable)",
+                    cases[i].requested, cases[i].fits);
             }
         }
     }

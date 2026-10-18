@@ -414,10 +414,12 @@ if (tfoMode & 2) {
  * Returns: true if system limit >= requested
  * Reads from: /proc/sys/net/core/somaxconn (Linux)
  *
- * Where /proc/sys/net/core/somaxconn is unavailable there is nothing to
- * check, so this returns true ("no known problem"), not false. The same
- * holds when the file is readable but does not hold a single unsigned
- * decimal number. On Linux a file that cannot be opened returns false.
+ * On Linux, a somaxconn file that cannot be read, or that does not hold
+ * a single unsigned decimal number, cannot be checked, so this returns
+ * false. A limit of 0, or a requested length of 0 or less, imposes
+ * nothing and returns true. On platforms without
+ * /proc/sys/net/core/somaxconn there is nothing to check, so this returns
+ * true ("no known problem").
  */
 bool OSRegulateTcpBacklogMeetsLimit(int tcpBacklogListenLength);
 
