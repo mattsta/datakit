@@ -765,23 +765,7 @@ static inline int memboundLog(int64_t iValue) {
         return 0;
     }
 
-#if defined(__GNUC__) || defined(__clang__)
     return 64 - __builtin_clzll((uint64_t)(iValue - 1));
-#elif defined(__aarch64__)
-    const int leadingZeros = __builtin_clzll((uint64_t)(iValue - 1));
-    return 64 - leadingZeros;
-#elif defined(__amd64__) || defined(__x86_64__)
-    uint64_t result;
-    asm("bsrq %1, %0" : "=r"(result) : "r"((uint64_t)(iValue - 1)));
-    return (int)(result + 1);
-#else
-    int iLog = 0;
-    iValue--;
-    while (iValue >>= 1) {
-        iLog++;
-    }
-    return iLog + 1;
-#endif
 }
 
 /* Next power of 2 >= x */
