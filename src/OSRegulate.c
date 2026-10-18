@@ -8,6 +8,7 @@
 #include <limits.h>       /* INT_MAX (poll timeout width) */
 #include <poll.h>         /* poll on a process-exit watch fd */
 #include <stdio.h>        /* snprintf */
+#include <stdlib.h>       /* strtoull */
 #include <sys/file.h>     /* flock */
 #include <sys/resource.h> /* getrlimit */
 #include <sys/wait.h>     /* waitpid / WNOHANG */
@@ -714,6 +715,44 @@ size_t OSRegulateCPUCountGet(void) {
 }
 
 /* ====================================================================
+ * Kernel value parsing
+ * ==================================================================== */
+/* Parse the unsigned decimal integer a /proc or /sys file holds in 's':
+ * digits with optional surrounding blanks and a trailing newline.  Writes
+ * *value and returns true only when that is all of 's' and the value is at
+ * most 'max'; a sign, an empty string, any other character, or a value
+ * past 'max' (or past UINT64_MAX) returns false and leaves *value alone. */
+DK_FN_UNUSED static bool osrParseKernelU64_(const char *s, uint64_t max,
+                                            uint64_t *value) {
+    while (*s == ' ' || *s == '\t') {
+        s++;
+    }
+
+    /* strtoull would accept a sign (and negate "-1" into a huge value) */
+    if (*s < '0' || *s > '9') {
+        return false;
+    }
+
+    errno = 0;
+    char *end = NULL;
+    const uint64_t parsed = strtoull(s, &end, 10);
+    if (errno != 0 || end == s) {
+        return false;
+    }
+
+    while (*end == ' ' || *end == '\t' || *end == '\n') {
+        end++;
+    }
+
+    if (*end != '\0' || parsed > max) {
+        return false;
+    }
+
+    *value = parsed;
+    return true;
+}
+
+/* ====================================================================
  * Networking
  * ==================================================================== */
 /* Modes:
@@ -728,8 +767,11 @@ int OSRegulateTFOMode() {
 
         if (fp) {
             char buf[64] = {0};
-            if (fgets(buf, sizeof(buf), fp) != NULL) {
-                tfo = atoi(buf);
+            uint64_t mode = 0;
+            /* An unparsable value reads as TFO off */
+            if (fgets(buf, sizeof(buf), fp) != NULL &&
+                osrParseKernelU64_(buf, INT_MAX, &mode)) {
+                tfo = (int)mode;
             }
 
             fclose(fp);
@@ -750,8 +792,12 @@ bool OSRegulateTcpBacklogMeetsLimit(int tcpBacklogListenLength) {
     }
 
     if (fgets(buf, sizeof(buf), fp) != NULL) {
-        const int somaxconn = atoi(buf);
-        if (somaxconn > 0 && somaxconn < tcpBacklogListenLength) {
+        /* An unparsable limit is nothing to check against, so it is no
+         * known problem: limitFits stays true */
+        uint64_t somaxconn = 0;
+        if (osrParseKernelU64_(buf, INT_MAX, &somaxconn) && somaxconn > 0 &&
+            tcpBacklogListenLength > 0 &&
+            somaxconn < (uint64_t)tcpBacklogListenLength) {
             limitFits = false;
         }
     }
@@ -931,7 +977,10 @@ bool OSRegulateLinuxOvercommitEnabled(void) {
 
     fclose(fp);
 
-    const int overcommitSetting = atoi(buf);
+    uint64_t overcommitSetting = 0;
+    if (!osrParseKernelU64_(buf, INT_MAX, &overcommitSetting)) {
+        return false; /* unparsable, as unreadable */
+    }
 
     /* Ovecommit of 0 or 1 is enabled, 2 is disabled. */
     return overcommitSetting <= 1;
@@ -1000,10 +1049,20 @@ size_t OSRegulateLinuxSmapBytesByFieldForPid(const char *field, int64_t pid) {
 
     while (fgets(line, sizeof(line), fp) != NULL) {
         if (strncmp(line, field, flen) == 0) {
-            char *const p = strchr(line, 'k');
+            /* "<field>   <n> kB": search past the field name, which may
+             * hold a 'k' itself (as "Locked:" does) */
+            char *const p = strchr(line + flen, 'k');
             if (p) {
                 *p = '\0';
-                bytes += strtol(line + flen, NULL, 10) * 1024;
+                uint64_t kb = 0;
+                size_t lineBytes = 0;
+                if (!osrParseKernelU64_(line + flen, SIZE_MAX, &kb) ||
+                    __builtin_mul_overflow(kb, (size_t)1024, &lineBytes) ||
+                    __builtin_add_overflow(bytes, lineBytes, &bytes)) {
+                    /* A malformed or impossible line: the sum is unknown */
+                    fclose(fp);
+                    return 0;
+                }
             }
         }
     }
@@ -1042,17 +1101,24 @@ size_t OSRegulateRSSGet(void) {
     char *p;
     char *x;
 
+    if (page <= 0) {
+        return 0;
+    }
+
     snprintf(filename, 256, "/proc/%d/stat", getpid());
     if ((fd = open(filename, O_RDONLY)) == -1) {
         return 0;
     }
 
-    if (read(fd, buf, 4096) <= 0) {
+    /* Leave room to terminate: the field scan below uses strchr */
+    const ssize_t got = read(fd, buf, sizeof(buf) - 1);
+    if (got <= 0) {
         close(fd);
         return 0;
     }
 
     close(fd);
+    buf[got] = '\0';
 
     p = buf;
     count = 23; /* RSS is the 24th field in /proc/<pid>/stat */
@@ -1074,8 +1140,12 @@ size_t OSRegulateRSSGet(void) {
 
     *x = '\0';
 
-    rss = strtoll(p, NULL, 10);
-    rss *= page;
+    uint64_t pages = 0;
+    if (!osrParseKernelU64_(p, SIZE_MAX / (size_t)page, &pages)) {
+        return 0; /* malformed field: RSS unknown */
+    }
+
+    rss = (size_t)pages * (size_t)page;
     return rss;
 }
 #elif defined(HAVE_TASKINFO)

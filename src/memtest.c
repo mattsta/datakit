@@ -61,6 +61,43 @@ static uint64_t memtest_time_ns(void) {
 }
 
 /* ============================================================================
+ * Number Parsing
+ * ============================================================================
+ */
+/* Parse all of 's' as an unsigned integer in 'base' (10 or 16): digits of
+ * that base only, with no sign, "0x" prefix or blanks.  Writes *value and
+ * returns true only when the value is at most 'max'; anything else
+ * (including an empty string or a value past UINT64_MAX) returns false and
+ * leaves *value alone. */
+DK_FN_UNUSED static bool memtestParseU64_(const char *s, int base, uint64_t max,
+                                          uint64_t *value) {
+    if (*s == '\0') {
+        return false;
+    }
+
+    /* Check the digits first: strtoull would accept blanks, a sign (and
+     * negate "-1" into a huge value) and, in base 16, a "0x" prefix */
+    for (const char *c = s; *c; c++) {
+        const bool digit = *c >= '0' && *c <= '9';
+        const bool hexLetter =
+            (*c >= 'a' && *c <= 'f') || (*c >= 'A' && *c <= 'F');
+        if (!digit && !(base == 16 && hexLetter)) {
+            return false;
+        }
+    }
+
+    errno = 0;
+    char *end = NULL;
+    const uint64_t parsed = strtoull(s, &end, base);
+    if (errno != 0 || *end != '\0' || parsed > max) {
+        return false;
+    }
+
+    *value = parsed;
+    return true;
+}
+
+/* ============================================================================
  * Progress Reporting Context
  * ============================================================================
  */
@@ -599,8 +636,17 @@ size_t memtestProcessMemory(int passes) {
             continue;
         }
 
-        start_vect[regions] = strtoul(start, NULL, 16);
-        size_vect[regions] = strtoul(end, NULL, 16) - start_vect[regions];
+        /* Skip a line whose range does not parse, or ends before it starts */
+        uint64_t startAddr = 0;
+        uint64_t endAddr = 0;
+        if (!memtestParseU64_(start, 16, UINTPTR_MAX, &startAddr) ||
+            !memtestParseU64_(end, 16, UINTPTR_MAX, &endAddr) ||
+            endAddr < startAddr) {
+            continue;
+        }
+
+        start_vect[regions] = (size_t)startAddr;
+        size_vect[regions] = (size_t)(endAddr - startAddr);
         regions++;
     }
 
@@ -802,6 +848,71 @@ static int memtest_run_unit_tests(void) {
         free(mem);
     }
 
+    TEST("number parsing accepts whole numbers only") {
+        static const struct {
+            const char *s;
+            int base;
+            uint64_t max;
+            bool ok;
+            uint64_t want;
+        } cases[] = {
+            {"1", 10, 1000, true, 1},
+            {"1000", 10, 1000, true, 1000},
+            {"0", 10, 1000, true, 0},
+            {"007", 10, 1000, true, 7},
+            {"1001", 10, 1000, false, 0},
+            {"18446744073709551615", 10, UINT64_MAX, true, UINT64_MAX},
+            {"18446744073709551616", 10, UINT64_MAX, false, 0},
+            {"99999999999999999999999", 10, UINT64_MAX, false, 0},
+            {"", 10, 1000, false, 0},
+            {"-1", 10, UINT64_MAX, false, 0},
+            {"+1", 10, 1000, false, 0},
+            {" 1", 10, 1000, false, 0},
+            {"1 ", 10, 1000, false, 0},
+            {"12x", 10, 1000, false, 0},
+            {"1a", 10, 1000, false, 0},
+            {"7f12abcd0000", 16, UINT64_MAX, true, 0x7f12abcd0000ULL},
+            {"FFFFFFFFFFFFFFFF", 16, UINT64_MAX, true, UINT64_MAX},
+            {"10000000000000000", 16, UINT64_MAX, false, 0},
+            {"0x10", 16, UINT64_MAX, false, 0},
+            {"-1", 16, UINT64_MAX, false, 0},
+            {"ag", 16, UINT64_MAX, false, 0},
+        };
+
+        for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+            uint64_t got = 12345;
+            const bool ok =
+                memtestParseU64_(cases[i].s, cases[i].base, cases[i].max, &got);
+            if (ok != cases[i].ok) {
+                ERR("parse '%s' base %d: returned %d, want %d", cases[i].s,
+                    cases[i].base, ok, cases[i].ok);
+            } else if (ok && got != cases[i].want) {
+                ERR("parse '%s' base %d: got %" PRIu64 ", want %" PRIu64,
+                    cases[i].s, cases[i].base, got, cases[i].want);
+            } else if (!ok && got != 12345) {
+                ERR("parse '%s' base %d: failed but wrote %" PRIu64, cases[i].s,
+                    cases[i].base, got);
+            }
+        }
+    }
+
+    TEST("command line rejects malformed sizes and passes") {
+        static const char *bad[][2] = {
+            {"abc", NULL}, {"12x", NULL},     {"-1", NULL},
+            {"0", NULL},   {"1048577", NULL}, {"99999999999999999999", NULL},
+            {"1", "0"},    {"1", "1001"},     {"1", "2x"},
+            {"1", "-3"},
+        };
+        for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+            char *argv[3] = {"memtest", (char *)bad[i][0], (char *)bad[i][1]};
+            const int argc = bad[i][1] ? 3 : 2;
+            if (memtestTest(argc, argv) != 1) {
+                ERR("memtest '%s' '%s' should be rejected", bad[i][0],
+                    bad[i][1] ? bad[i][1] : "");
+            }
+        }
+    }
+
     /* Test allocate and test */
     TEST("alloc and test - 1MB") {
         memtestResult result;
@@ -852,24 +963,32 @@ int memtestTest(int argc, char *argv[]) {
 #endif
     }
 
-    /* Parse MB and optional passes */
-    size_t megabytes = (size_t)atol(args[0]);
-    int passes = 1;
-
-    if (megabytes == 0 || megabytes > 1024 * 1024) {
-        fprintf(stderr, "Error: Invalid size '%s' (must be 1-%zu MB)\n",
+    /* Parse MB and optional passes: whole decimal numbers only, so "12x",
+     * "-1" or an out-of-range value is an error, never a silent 0 or wrap */
+    uint64_t megabytesArg = 0;
+    if (!memtestParseU64_(args[0], 10, 1024 * 1024, &megabytesArg) ||
+        megabytesArg == 0) {
+        fprintf(stderr,
+                "Error: Invalid size '%s' (must be a whole number of MB, "
+                "1-%zu)\n",
                 args[0], (size_t)(1024 * 1024));
         memtest_print_usage();
         return 1;
     }
+    const size_t megabytes = (size_t)megabytesArg;
+    int passes = 1;
 
     if (nargs >= 2) {
-        passes = atoi(args[1]);
-        if (passes <= 0 || passes > 1000) {
-            fprintf(stderr, "Error: Invalid passes '%s' (must be 1-1000)\n",
+        uint64_t passesArg = 0;
+        if (!memtestParseU64_(args[1], 10, 1000, &passesArg) ||
+            passesArg == 0) {
+            fprintf(stderr,
+                    "Error: Invalid passes '%s' (must be a whole number, "
+                    "1-1000)\n",
                     args[1]);
             return 1;
         }
+        passes = (int)passesArg;
     }
 
     /* Run the full memory test with live progress */

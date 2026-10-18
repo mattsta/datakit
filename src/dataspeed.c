@@ -1,6 +1,7 @@
 #include "dataspeed.h"
 
 #include <assert.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <locale.h>
@@ -184,6 +185,46 @@ static const char *format_bytes(size_t bytes, char *buf, size_t buflen) {
     return buf;
 }
 
+/* Parse a sysfs cache size such as "32K\n" into bytes: decimal digits, an
+ * optional K or M multiplier, then only blanks or a newline.  Returns false
+ * (leaving *bytes alone) on a sign, no digits, any other character, or a
+ * size past SIZE_MAX. */
+DK_FN_UNUSED static bool dataspeedParseCacheSize_(const char *s,
+                                                  size_t *bytes) {
+    if (*s < '0' || *s > '9') {
+        return false; /* strtoull would accept blanks and a sign */
+    }
+
+    errno = 0;
+    char *end = NULL;
+    const uint64_t count = strtoull(s, &end, 10);
+    if (errno != 0 || end == s) {
+        return false;
+    }
+
+    size_t scale = 1;
+    if (*end == 'K') {
+        scale = 1024;
+        end++;
+    } else if (*end == 'M') {
+        scale = 1024 * 1024;
+        end++;
+    }
+
+    while (*end == ' ' || *end == '\t' || *end == '\n') {
+        end++;
+    }
+
+    size_t size = 0;
+    /* The multiply also fails when count itself does not fit size_t */
+    if (*end != '\0' || __builtin_mul_overflow(count, scale, &size)) {
+        return false;
+    }
+
+    *bytes = size;
+    return true;
+}
+
 /* ============================================================================
  * System Information Detection
  * ============================================================================
@@ -277,14 +318,10 @@ void dataspeedGetSystemInfo(dataspeedSystemInfo *info) {
         fp = fopen(path, "r");
         if (fp) {
             char buf[32];
-            if (fgets(buf, sizeof(buf), fp)) {
-                size_t size = strtoul(buf, NULL, 10);
-                if (strchr(buf, 'K')) {
-                    size *= 1024;
-                } else if (strchr(buf, 'M')) {
-                    size *= 1024 * 1024;
-                }
-
+            size_t size = 0;
+            /* A malformed size leaves this cache level unreported */
+            if (fgets(buf, sizeof(buf), fp) &&
+                dataspeedParseCacheSize_(buf, &size)) {
                 snprintf(path, sizeof(path),
                          "/sys/devices/system/cpu/cpu0/cache/index%d/level", i);
                 FILE *fp2 = fopen(path, "r");

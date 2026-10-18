@@ -330,6 +330,8 @@ bool StrScanToDouble(const void *str, databox *box, bool allowFloatWords,
 #include "cleaner.h"
 #include "ctest.h"
 
+#include <errno.h> /* the strtoull speed test checks errno */
+
 #define DOUBLE_NEWLINE 0
 #include "perf.h"
 
@@ -1765,9 +1767,16 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
             TIME_INIT;
             for (size_t i = 0; i < loopBooster; i++) {
                 PERF_TIMERS_STAT_START;
-                uint64_t intval = strtoull("18446744073709551615", NULL, 10);
+                /* Timed with the checks a correct strtoull caller makes:
+                 * errno reset, then errno and end pointer tested */
+                const char *digits = "18446744073709551615";
+                char *end = NULL;
+                errno = 0;
+                const uint64_t intval = strtoull(digits, &end, 10);
+                const bool parsed = errno == 0 && end == digits + 20;
                 PERF_TIMERS_STAT_STOP(i);
-                assert(intval);
+                assert(parsed);
+                (void)parsed;
                 assert(intval == 18446744073709551615ULL);
             }
             TIME_FINISH(loopBooster, "strtoull");

@@ -393,7 +393,8 @@ if (OSRegulateAdjustOpenFilesLimit(10000, &actualLimit, &msg)) {
  *
  * Gated on the running kernel version via versionOSRuntime's
  * linuxKernelHasTFOServerIPv4 (>= 3.7). Returns 0 anywhere the file
- * cannot be read, including all non-Linux platforms.
+ * cannot be read, including all non-Linux platforms, and when it does
+ * not hold a single unsigned decimal number.
  */
 int OSRegulateTFOMode(void);
 
@@ -414,7 +415,9 @@ if (tfoMode & 2) {
  * Reads from: /proc/sys/net/core/somaxconn (Linux)
  *
  * Where /proc/sys/net/core/somaxconn is unavailable there is nothing to
- * check, so this returns true ("no known problem"), not false.
+ * check, so this returns true ("no known problem"), not false. The same
+ * holds when the file is readable but does not hold a single unsigned
+ * decimal number. On Linux a file that cannot be opened returns false.
  */
 bool OSRegulateTcpBacklogMeetsLimit(int tcpBacklogListenLength);
 
@@ -464,7 +467,8 @@ printf("Process RSS: %zu MB (%.1f%% of total)\n",
 
 ```c
 /* Check if memory overcommit is enabled
- * Returns: true if overcommit enabled (settings 0 or 1)
+ * Returns: true if overcommit enabled (settings 0 or 1); false when the
+ *          file cannot be read or does not hold an unsigned decimal number
  * Reads from: /proc/sys/vm/overcommit_memory
  */
 bool OSRegulateLinuxOvercommitEnabled(void);
@@ -501,7 +505,9 @@ if (!OSRegulateLinuxMemorySettingsAreOkay()) {
 /* Get sum of specific field from /proc/[pid]/smaps
  * field: field name with trailing ":" (e.g., "Rss:", "Private_Dirty:")
  * pid: process ID, or -1 for self
- * Returns: total bytes for field across all mappings
+ * Returns: total bytes for field across all mappings; 0 when the file
+ *          cannot be read, or when a matching line's kB value does not
+ *          parse or the total would overflow size_t
  */
 size_t OSRegulateLinuxSmapBytesByFieldForPid(
     const char *field,
