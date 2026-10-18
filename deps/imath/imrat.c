@@ -559,7 +559,8 @@ mp_result mp_rat_to_decimal(mp_rat r, mp_size radix, mp_size prec,
     mpz_t temp[3];
     mp_result res;
     char *start = str;
-    int len, lead_0, left = limit, last = 0;
+    int len, left = limit, last = 0;
+    mp_size lead_0; /* counts up to prec, which is an mp_size */
 
     SETUP(mp_int_init_copy(TEMP(last), MP_NUMER_P(r)), last);
     SETUP(mp_int_init(TEMP(last)), last);
@@ -672,7 +673,7 @@ mp_result mp_rat_to_decimal(mp_rat r, mp_size radix, mp_size prec,
                     goto CLEANUP;
                 }
                 mp_int_zero(TEMP(1));
-                lead_0 = (int)prec;
+                lead_0 = prec;
             }
         }
     }
@@ -731,7 +732,8 @@ mp_result mp_rat_to_decimal(mp_rat r, mp_size radix, mp_size prec,
     /* lead_0 - 1 explicit zeros, then the remaining prec - lead_0 + 1
        significant digits and the terminator, which fit in what is left. */
     memset(start, '0', lead_0 - 1);
-    left -= lead_0 - 1;
+    /* lead_0 <= prec < left here, so lead_0 - 1 fits an int */
+    left -= (int)(lead_0 - 1);
     start += lead_0 - 1;
 
     res = mp_int_to_string(TEMP(1), radix, start, left);

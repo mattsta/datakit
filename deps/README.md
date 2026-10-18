@@ -34,6 +34,9 @@ These changes are datakit's own and are not upstream. Carry them forward when re
   - `gmp_compat.c`:
     - `impz_get_str` and `impq_get_str` return NULL for an unsupported radix, a failed allocation or a failed conversion. They use `size_t` lengths and apply digit case only up to the terminator.
     - `impq_set_str` and `impz_export` check their `malloc`.
+    - The `_MSC_VER` `ssize_t` shim is removed (datakit builds with clang and GCC only). Word strides are `ptrdiff_t`.
+    - `impz_export` and `impz_import` use `size_t` indices. They reject a zero word size, a byte total that overflows `size_t`, and a digit count beyond `mp_size`, and `impz_import` checks `mp_int_init_size`.
+  - `mp_rat_to_decimal` counts leading zeros in an `mp_size`, the type of `prec`.
   - `pi.c` parses its digit count and radix with checked `strtoimax`. It sizes its output buffer with `mp_int_string_len()` and checks the allocation and the conversion.
 - xxHash
   - `deps/xxHash/CMakeLists.txt` is datakit's own build file; upstream has no root CMake build. It builds the C library without the C++-only `-Wno-extra-semi`.

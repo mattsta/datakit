@@ -26,14 +26,10 @@
 #include "gmp_compat.h"
 #include <assert.h>
 #include <ctype.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#if defined(_MSC_VER)
-#include <BaseTsd.h>
-typedef SSIZE_T ssize_t;
-#endif
 
 #ifdef NDEBUG
 #define CHECK(res) (res)
@@ -740,10 +736,10 @@ unsigned long GMPZAPI(fdiv_q_ui)(mp_int q, mp_int n, unsigned long d) {
 /* gmp: mpz_export */
 void *GMPZAPI(export)(void *rop, size_t *countp, int order, size_t size,
                       int endian, size_t nails, mp_int op) {
-    int i, j;
-    int num_used_bytes;
+    size_t i, j;
+    size_t num_used_bytes;
     size_t num_words, num_missing_bytes;
-    ssize_t word_offset;
+    ptrdiff_t word_offset;
     unsigned char *dst;
     mp_digit *src;
     int src_bits;
@@ -763,10 +759,26 @@ void *GMPZAPI(export)(void *rop, size_t *countp, int order, size_t size,
         return rop;
     }
 
-    /* Calculate how many words we need */
-    num_used_bytes = mp_int_unsigned_len(op);
+    /* gmp requires a word size of at least one byte; the signed word
+       stride below must also be representable. */
+    if (size == 0 || size > PTRDIFF_MAX / 2) {
+        if (countp) {
+            *countp = 0;
+        }
+        return NULL;
+    }
+
+    /* Calculate how many words we need. mp_int_unsigned_len() reports
+       failure as a negative mp_result; a nonzero value needs >= 1 byte. */
+    const mp_result used_len = mp_int_unsigned_len(op);
+    if (used_len <= 0) {
+        if (countp) {
+            *countp = 0;
+        }
+        return NULL;
+    }
+    num_used_bytes = (size_t)used_len;
     num_words = (num_used_bytes + (size - 1)) / size; /* ceil division */
-    assert(num_used_bytes > 0);
 
     /* Check to see if we will have missing bytes in the last word.
 
@@ -802,7 +814,9 @@ void *GMPZAPI(export)(void *rop, size_t *countp, int order, size_t size,
     src = MP_DIGITS(op);
     src_bits = MP_DIGIT_BIT;
 
-    word_offset = (endian >= 0 ? size : -size) + (order < 0 ? size : -size);
+    const ptrdiff_t stride = (ptrdiff_t)size;
+    word_offset =
+        (endian >= 0 ? stride : -stride) + (order < 0 ? stride : -stride);
 
     for (i = 0; i < num_words; i++) {
         for (j = 0; j < size && i * size + j < num_used_bytes; j++) {
@@ -838,12 +852,19 @@ void GMPZAPI(import)(mp_int rop, size_t count, int order, size_t size,
     mp_int tmp = &tmpz;
     size_t total_size;
     size_t num_digits;
-    ssize_t word_offset;
+    ptrdiff_t word_offset;
     const unsigned char *src;
     mp_digit *dst;
     int dst_bits;
-    int i, j;
+    size_t i, j;
     if (count == 0 || op == NULL) {
+        return;
+    }
+
+    /* gmp requires a word size of at least one byte. The byte total and
+       the signed word stride must not overflow, and the digit count
+       must fit imath's mp_size; otherwise rop is left unchanged. */
+    if (size == 0 || size > PTRDIFF_MAX / 2 || count > SIZE_MAX / size) {
         return;
     }
 
@@ -859,10 +880,16 @@ void GMPZAPI(import)(mp_int rop, size_t count, int order, size_t size,
 
     /* Compute number of needed digits by ceil division */
     total_size = count * size;
-    num_digits = (total_size + sizeof(mp_digit) - 1) / sizeof(mp_digit);
+    num_digits = total_size / sizeof(mp_digit) +
+                 (total_size % sizeof(mp_digit) != 0 ? 1 : 0);
+    if (num_digits > (mp_size) ~(mp_size)0) {
+        return;
+    }
 
     /* Init temporary */
-    mp_int_init_size(tmp, num_digits);
+    if (mp_int_init_size(tmp, (mp_size)num_digits) != MP_OK) {
+        return;
+    }
     for (i = 0; i < num_digits; i++) {
         MP_DIGITS(tmp)[i] = 0;
     }
@@ -873,7 +900,9 @@ void GMPZAPI(import)(mp_int rop, size_t count, int order, size_t size,
     dst = MP_DIGITS(tmp);
     dst_bits = 0;
 
-    word_offset = (endian >= 0 ? size : -size) + (order < 0 ? size : -size);
+    const ptrdiff_t stride = (ptrdiff_t)size;
+    word_offset =
+        (endian >= 0 ? stride : -stride) + (order < 0 ? stride : -stride);
 
     for (i = 0; i < count; i++) {
         for (j = 0; j < size; j++) {
@@ -890,7 +919,7 @@ void GMPZAPI(import)(mp_int rop, size_t count, int order, size_t size,
         src += word_offset;
     }
 
-    (tmp)->used = num_digits;
+    (tmp)->used = (mp_size)num_digits; /* range-checked above */
 
     /* Remove leading zeros from number */
     {
