@@ -656,68 +656,64 @@ DK_INLINE_ALWAYS void databoxCompareRequirePayload_(const databox *box) {
     }
 }
 
+/* An integer of any width as a sign and a magnitude.  Every SIGNED_64,
+ * UNSIGNED_64, SIGNED_128 and UNSIGNED_128 value fits: magnitudes reach
+ * 2^127 for negatives and 2^128 - 1 for positives, and zero is never
+ * negative. */
+typedef struct databoxIntegerValue_ {
+    __uint128_t magnitude;
+    bool negative;
+} databoxIntegerValue_;
+
+DK_INLINE_ALWAYS databoxIntegerValue_
+databoxIntegerValueOf_(const databox *box) {
+    databoxIntegerValue_ v = {0};
+    switch (box->type) {
+    case DATABOX_SIGNED_64:
+        v.negative = box->data.i < 0;
+        v.magnitude = v.negative ? 0 - (uint64_t)box->data.i : box->data.u;
+        break;
+    case DATABOX_SIGNED_128: {
+        const __int128_t i = *box->data.i128;
+        v.negative = i < 0;
+        v.magnitude = v.negative ? 0 - (__uint128_t)i : (__uint128_t)i;
+        break;
+    }
+    case DATABOX_UNSIGNED_128:
+        v.magnitude = *box->data.u128;
+        break;
+    default:
+        /* UNSIGNED_64, and the boxes that join the unsigned order */
+        v.magnitude = box->data.u;
+        break;
+    }
+
+    return v;
+}
+
+DK_INLINE_ALWAYS int databoxIntegerValueCompare_(const databoxIntegerValue_ a,
+                                                 const databoxIntegerValue_ b) {
+    if (a.negative != b.negative) {
+        return a.negative ? -1 : 1;
+    }
+
+    /* Same sign: a larger magnitude is larger when positive and smaller
+     * when negative. */
+    if (a.negative) {
+        _gtlteqReturn(b.magnitude, a.magnitude);
+    }
+
+    _gtlteqReturn(a.magnitude, b.magnitude);
+}
+
+/* Integers of mixed widths, at least one of them 96/128-bit: compare by
+ * value as sign and magnitude, so every width and sign pairing is exact. */
 DK_INLINE_ALWAYS int databoxCompareInteger128(const databox *a,
                                               const databox *b) {
     databoxCompareRequirePayload_(a);
     databoxCompareRequirePayload_(b);
-
-    const size_t aSigned =
-        (a->type == DATABOX_SIGNED_64) || (a->type == DATABOX_SIGNED_128);
-    const size_t bSigned =
-        (b->type == DATABOX_SIGNED_64) || (b->type == DATABOX_SIGNED_128);
-
-    switch (c1b(aSigned, bSigned)) {
-    case c1b(false, false): {
-        __uint128_t ua =
-            a->type == DATABOX_UNSIGNED_64 ? a->data.u : *a->data.u128;
-        __uint128_t ub =
-            b->type == DATABOX_UNSIGNED_64 ? b->data.u : *b->data.u128;
-
-        /* Simplest case: two unsigned values, compare as unsigned. */
-        _gtlteqReturn(ua, ub);
-    }
-    case c1b(false, true): {
-        __uint128_t ua =
-            a->type == DATABOX_UNSIGNED_64 ? a->data.u : *a->data.u128;
-        __int128_t ib =
-            b->type == DATABOX_SIGNED_64 ? b->data.i : *b->data.i128;
-
-        /* If b is negative, then a is larger, OR
-         * If a's unsigned value is larger than the largest
-         * possible signed value, it's clearly bigger too. */
-        if (ib < 0 || ua > INT128_MAX) {
-            return 1;
-        }
-
-        /* else, we can safely cast a->data.u to a signed int
-         * without losing any precision. */
-        _gtlteqReturn(ua, (__uint128_t)ib);
-    }
-    case c1b(true, false): {
-        __int128_t ia =
-            a->type == DATABOX_SIGNED_64 ? a->data.i : *a->data.i128;
-        __uint128_t ub =
-            b->type == DATABOX_UNSIGNED_64 ? b->data.u : *b->data.u128;
-
-        if (ia < 0 || ub > INT128_MAX) {
-            return -1;
-        }
-
-        _gtlteqReturn(a->data.i, b->data.i);
-    }
-    case c1b(true, true): {
-        /* Here both values are signed (or we've restricted
-         * their values to be compared as signed), so compare
-         * as signed: */
-        __int128_t ia =
-            a->type == DATABOX_SIGNED_64 ? a->data.i : *a->data.i128;
-        __int128_t ib =
-            b->type == DATABOX_SIGNED_64 ? b->data.i : *b->data.i128;
-        _gtlteqReturn(ia, ib);
-    }
-    default:
-        __builtin_unreachable();
-    }
+    return databoxIntegerValueCompare_(databoxIntegerValueOf_(a),
+                                       databoxIntegerValueOf_(b));
 }
 
 DK_INLINE_ALWAYS int databoxCompareFloat(const databox *a, const databox *b) {
@@ -3219,6 +3215,126 @@ int databoxTest(int argc, char *argv[]) {
             databoxCompare(&narrowS, (const databox *)&full) >= 0) {
             ERRR("wide compare with a payload is wrong");
         }
+    }
+
+    TEST("databoxCompare: integers of every width and sign by value") {
+        /* Boundary values, each boxed in every integer type that can hold
+         * it, compared pairwise.  The oracle orders values above INT128_MAX
+         * (only unsigned boxes hold them) after every other value, and
+         * compares the rest as __int128. */
+        const __int128_t two63 = (__int128_t)1 << 63;
+        const __int128_t two64 = (__int128_t)1 << 64;
+        const __int128_t two96 = (__int128_t)1 << 96;
+        const __int128_t signedValues[] = {
+            0,
+            1,
+            -1,
+            2,
+            -2,
+            INT64_MAX,
+            INT64_MAX - 1,
+            two63,
+            two63 + 1,
+            INT64_MIN,
+            INT64_MIN + 1,
+            (__int128_t)INT64_MIN - 1,
+            two64 - 1,
+            two64 - 2,
+            two64,
+            two64 + 1,
+            -two64,
+            -two64 + 1,
+            -two64 - 1,
+            two96 - 1,
+            two96,
+            two96 + 1,
+            -two96,
+            -two96 - 1,
+            -two96 + 1,
+            INT128_MAX,
+            INT128_MAX - 1,
+            INT128_MIN,
+            INT128_MIN + 1,
+        };
+        const __uint128_t aboveValues[] = {(__uint128_t)INT128_MAX + 1,
+                                           (__uint128_t)INT128_MAX + 2,
+                                           UINT128_MAX - 1, UINT128_MAX};
+        enum { MATRIX_FORMS_ = 4 };
+        enum {
+            MATRIX_VALUES_ =
+                COUNT_ARRAY(signedValues) + COUNT_ARRAY(aboveValues)
+        };
+
+        databoxBig boxes[MATRIX_VALUES_ * MATRIX_FORMS_];
+        struct {
+            bool above;
+            __int128_t s;
+            __uint128_t u;
+        } oracle[COUNT_ARRAY(boxes)];
+        size_t count = 0;
+        for (size_t v = 0; v < MATRIX_VALUES_; v++) {
+            const bool above = v >= COUNT_ARRAY(signedValues);
+            const __int128_t s = above ? 0 : signedValues[v];
+            const __uint128_t u =
+                above ? aboveValues[v - COUNT_ARRAY(signedValues)]
+                      : (__uint128_t)s;
+            for (int form = 0; form < MATRIX_FORMS_; form++) {
+                databoxBig *const b = &boxes[count];
+                memset(b, 0, sizeof(*b));
+                if (form == 0 && !above && s >= INT64_MIN && s <= INT64_MAX) {
+                    b->type = DATABOX_SIGNED_64;
+                    b->data.i = (int64_t)s;
+                } else if (form == 1 && !above && s >= 0 && s <= two64 - 1) {
+                    b->type = DATABOX_UNSIGNED_64;
+                    b->data.u = (uint64_t)s;
+                } else if (form == 2 && !above) {
+                    DATABOX_BIG_SIGNED_128(b, s);
+                } else if (form == 3 && (above || s >= 0)) {
+                    DATABOX_BIG_UNSIGNED_128(b, u);
+                } else {
+                    continue;
+                }
+
+                oracle[count].above = above;
+                oracle[count].s = s;
+                oracle[count].u = u;
+                count++;
+            }
+        }
+
+        size_t pairs = 0;
+        for (size_t i = 0; i < count; i++) {
+            for (size_t j = 0; j < count; j++) {
+                int want;
+                if (oracle[i].above != oracle[j].above) {
+                    want = oracle[i].above ? 1 : -1;
+                } else if (oracle[i].above) {
+                    want = oracle[i].u < oracle[j].u   ? -1
+                           : oracle[i].u > oracle[j].u ? 1
+                                                       : 0;
+                } else {
+                    want = oracle[i].s < oracle[j].s   ? -1
+                           : oracle[i].s > oracle[j].s ? 1
+                                                       : 0;
+                }
+
+                const int got = databoxCompare((const databox *)&boxes[i],
+                                               (const databox *)&boxes[j]);
+                if ((got > 0) - (got < 0) != want) {
+                    printf("    %s against ",
+                           databoxReprStr((const databox *)&boxes[i]));
+                    ERR("%s gave %d, expected %d",
+                        databoxReprStr((const databox *)&boxes[j]), got, want);
+                }
+                pairs++;
+            }
+        }
+
+        /* 9 SIGNED_64, 9 UNSIGNED_64, 29 SIGNED_128 and 20 UNSIGNED_128 */
+        if (count != 67) {
+            ERR("%zu integer boxes in the matrix, expected 67", count);
+        }
+        printf("    %zu boxes, %zu ordered pairs\n", count, pairs);
     }
 
     TEST("databoxCanonicalNumeral: the canonical-numeral table") {
