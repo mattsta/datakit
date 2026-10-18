@@ -753,7 +753,13 @@ int32_t StrAtoi64(const void *_zNum, int64_t *pNum, int32_t length, uint8_t enc,
     } /* Skip leading zeros. */
     for (i = 0; &zNum[i] < zEnd && (c = zNum[i]) >= '0' && c <= '9';
          i += incr) {
-        u = StrValTimes10(u) + c - '0';
+        /* Saturate rather than wrap: past 19 digits the return code is 1
+         * either way, but *pNum must then be the clamped bound below, not
+         * a wrapped magnitude */
+        if (__builtin_mul_overflow(u, UINT64_C(10), &u) ||
+            __builtin_add_overflow(u, (uint64_t)(c - '0'), &u)) {
+            u = UINT64_MAX;
+        }
     }
 
     if (u > INT64_MAX) {

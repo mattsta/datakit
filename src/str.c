@@ -408,6 +408,29 @@ DK_FN_NO_OPTIMIZE static void testStrBufToInt64(void) {
 
     strcpy(buf, "9223372036854775808"); /* overflow */
     assert(StrBufToInt64(buf, strlen(buf), &v) == false);
+
+    /* The negative edge, exact on both sides, and malformed signs */
+    strcpy(buf, "-9223372036854775807");
+    assert(StrBufToInt64(buf, strlen(buf), &v) == true);
+    assert(v == -INT64_MAX);
+
+    static const char *const refused[] = {"-9223372036854775810",
+                                          "-18446744073709551615",
+                                          "-18446744073709551616",
+                                          "-99999999999999999999",
+                                          "-0",
+                                          "-",
+                                          "--1",
+                                          "-01",
+                                          "+1",
+                                          "1-"};
+    for (size_t i = 0; i < sizeof(refused) / sizeof(*refused); i++) {
+        v = 12345;
+        if (StrBufToInt64(refused[i], strlen(refused[i]), &v) || v != 12345) {
+            printf("StrBufToInt64 accepted '%s'\n", refused[i]);
+            assert(NULL);
+        }
+    }
 }
 
 DK_FN_NO_OPTIMIZE static void testStrBufToUInt64(void) {
@@ -894,6 +917,80 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
         printf("    StrUInt4/8DigitsToBuf stress test passed!\n");
     }
 #endif
+
+    TEST("StrScanScan applies the sign to INT32_MIN and INT64_MIN exactly") {
+        /* Each magnitude here sits exactly at the bound the scanner
+         * accepts for a negative value, where negating the signed cast
+         * would overflow */
+        static const struct {
+            const char *s;
+            StrScanOpt opt;
+            StrScanFmt fmt;
+            int64_t i;  /* for STRSCAN_INT */
+            uint64_t u; /* for STRSCAN_I64 / STRSCAN_U64 */
+        } cases[] = {
+            {"-2147483648", STRSCAN_OPT_TOINT, STRSCAN_INT, INT32_MIN, 0},
+            {"-2147483647", STRSCAN_OPT_TOINT, STRSCAN_INT, -INT32_MAX, 0},
+            {"2147483647", STRSCAN_OPT_TOINT, STRSCAN_INT, INT32_MAX, 0},
+            {"-0x80000000", STRSCAN_OPT_TOINT, STRSCAN_INT, INT32_MIN, 0},
+            {"-0x7fffffff", STRSCAN_OPT_TOINT, STRSCAN_INT, -INT32_MAX, 0},
+            {"-9223372036854775808LL", STRSCAN_OPT_C | STRSCAN_OPT_LL,
+             STRSCAN_I64, 0, UINT64_C(0x8000000000000000)},
+            {"-9223372036854775807LL", STRSCAN_OPT_C | STRSCAN_OPT_LL,
+             STRSCAN_I64, 0, UINT64_C(0x8000000000000001)},
+            {"-0x8000000000000000LL", STRSCAN_OPT_C | STRSCAN_OPT_LL,
+             STRSCAN_I64, 0, UINT64_C(0x8000000000000000)},
+            {"-0xffffffffffffffffULL", STRSCAN_OPT_C | STRSCAN_OPT_LL,
+             STRSCAN_U64, 0, 1},
+            {"-1LL", STRSCAN_OPT_C | STRSCAN_OPT_LL, STRSCAN_I64, 0,
+             UINT64_MAX},
+        };
+
+        for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
+            databox box = {{0}};
+            /* The sign is only parsed with allowFloatWords set */
+            const StrScanFmt fmt = StrScanScan(
+                (const uint8_t *)cases[i].s, &box, cases[i].opt, true, false);
+            if (fmt != cases[i].fmt) {
+                ERR("StrScanScan(%s) format %d, want %d", cases[i].s, fmt,
+                    cases[i].fmt);
+            } else if (fmt == STRSCAN_INT && box.data.i64 != cases[i].i) {
+                ERR("StrScanScan(%s) = %" PRId64 ", want %" PRId64, cases[i].s,
+                    box.data.i64, cases[i].i);
+            } else if (fmt != STRSCAN_INT && box.data.u64 != cases[i].u) {
+                ERR("StrScanScan(%s) = %" PRIx64 ", want %" PRIx64, cases[i].s,
+                    box.data.u64, cases[i].u);
+            }
+        }
+    }
+
+    TEST("StrAtoi64 clamps magnitudes past 64 bits instead of wrapping") {
+        static const struct {
+            const char *s;
+            int32_t rc;
+            int64_t want;
+        } cases[] = {
+            {"-9223372036854775808", 0, INT64_MIN},
+            {"9223372036854775807", 0, INT64_MAX},
+            {"9223372036854775808", 2, INT64_MAX},
+            {"18446744073709551616", 1, INT64_MAX},
+            {"20500000000000000000", 1, INT64_MAX},
+            {"36893488147419103232", 1, INT64_MAX},
+            {"-36893488147419103232", 1, INT64_MIN},
+            {"123456789012345678901234567890", 1, INT64_MAX},
+            {"-123456789012345678901234567890", 1, INT64_MIN},
+        };
+        for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
+            int64_t got = 0;
+            const int32_t rc = StrAtoi64(
+                cases[i].s, &got, (int32_t)strlen(cases[i].s), STR_UTF8, false);
+            if (rc != cases[i].rc || got != cases[i].want) {
+                ERR("StrAtoi64(%s) = %" PRId32 ", %" PRId64 "; want %" PRId32
+                    ", %" PRId64,
+                    cases[i].s, rc, got, cases[i].rc, cases[i].want);
+            }
+        }
+    }
 
 #if 1
     TEST("verify empty string doesn't convert to zero") {

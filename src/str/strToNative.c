@@ -75,7 +75,9 @@ bool StrBufToInt64(const void *s, const size_t slen, int64_t *value) {
             return false;
         }
 
-        *value = -(int64_t)v;
+        /* v is the magnitude, up to 2^63: (int64_t)v cannot hold 2^63,
+         * and negating INT64_MIN is undefined, so build that one directly */
+        *value = v == DK_INT64_TO_UINT64(INT64_MIN) ? INT64_MIN : -(int64_t)v;
     } else {
         if (v > INT64_MAX) { /* Overflow. */
             return false;

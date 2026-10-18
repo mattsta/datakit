@@ -105,6 +105,22 @@ DK_INLINE_ALWAYS void StrScanDouble(uint64_t x, databox *box, int32_t ex2,
 
 #define U64x(hi, lo) (((uint64_t)0x##hi << 32) + (uint64_t)0x##lo)
 
+/* Apply the sign to a scanned magnitude without signed overflow.  The
+ * scanners accept magnitudes up to 2^31 (or 2^32 - 1, or 2^64 - 1) and
+ * store the two's-complement result, but -(int32_t)x or -(int64_t)x is
+ * undefined once the cast lands on INT32_MIN or INT64_MIN: negate in
+ * unsigned arithmetic instead, then reinterpret. */
+DK_FN_NO_SANITIZE_UNSIGNED_WRAP_CONVERSION DK_INLINE_ALWAYS int32_t
+StrScanSigned32_(uint64_t x, int32_t neg) {
+    const uint32_t magnitude = (uint32_t)x;
+    return (int32_t)(neg ? 0u - magnitude : magnitude);
+}
+
+DK_FN_NO_SANITIZE_UNSIGNED_WRAP DK_INLINE_ALWAYS uint64_t
+StrScanSigned64_(uint64_t x, int32_t neg) {
+    return neg ? UINT64_C(0) - x : x;
+}
+
 /* Parse hexadecimal number. */
 DK_STATIC StrScanFmt StrScanHex(const uint8_t *p, databox *box, StrScanFmt fmt,
                                 StrScanOpt opt, int32_t ex2, int32_t neg,
@@ -131,7 +147,7 @@ DK_STATIC StrScanFmt StrScanHex(const uint8_t *p, databox *box, StrScanFmt fmt,
     switch (fmt) {
     case STRSCAN_INT:
         if (!(opt & STRSCAN_OPT_TONUM) && x < 0x80000000u + neg) {
-            DATABOX_SET_SIGNED(box, neg ? -(int32_t)x : (int32_t)x);
+            DATABOX_SET_SIGNED(box, StrScanSigned32_(x, neg));
             return STRSCAN_INT; /* Fast path for 32 bit integers. */
         }
 
@@ -146,7 +162,7 @@ DK_STATIC StrScanFmt StrScanHex(const uint8_t *p, databox *box, StrScanFmt fmt,
             return STRSCAN_ERROR;
         }
 
-        DATABOX_SET_UNSIGNED(box, neg ? -(int32_t)x : (int32_t)x);
+        DATABOX_SET_UNSIGNED(box, StrScanSigned32_(x, neg));
         return STRSCAN_U32;
     case STRSCAN_I64:
     case STRSCAN_U64:
@@ -154,7 +170,7 @@ DK_STATIC StrScanFmt StrScanHex(const uint8_t *p, databox *box, StrScanFmt fmt,
             return STRSCAN_ERROR;
         }
 
-        DATABOX_SET_UNSIGNED(box, neg ? (uint64_t)-(int64_t)x : x);
+        DATABOX_SET_UNSIGNED(box, StrScanSigned64_(x, neg));
         return fmt;
     default:
         break;
@@ -201,12 +217,12 @@ DK_STATIC StrScanFmt StrScanOctal(const uint8_t *p, databox *box,
             return STRSCAN_ERROR;
         }
 
-        DATABOX_SET_SIGNED(box, neg ? -(int32_t)x : (int32_t)x);
+        DATABOX_SET_SIGNED(box, StrScanSigned32_(x, neg));
         break;
     default:
     case STRSCAN_I64:
     case STRSCAN_U64:
-        DATABOX_SET_UNSIGNED(box, neg ? (uint64_t)-(int64_t)x : x);
+        DATABOX_SET_UNSIGNED(box, StrScanSigned64_(x, neg));
         break;
     }
 
@@ -292,7 +308,7 @@ DK_STATIC StrScanFmt StrScanDecimal(const uint8_t *p, databox *box,
             switch (fmt) {
             case STRSCAN_INT:
                 if (!(opt & STRSCAN_OPT_TONUM) && x < 0x80000000u + neg) {
-                    DATABOX_SET_SIGNED(box, neg ? -(int32_t)x : (int32_t)x);
+                    DATABOX_SET_SIGNED(box, StrScanSigned32_(x, neg));
                     return STRSCAN_INT; /* Fast path for 32 bit integers. */
                 }
 
@@ -307,11 +323,11 @@ DK_STATIC StrScanFmt StrScanDecimal(const uint8_t *p, databox *box,
                     return STRSCAN_ERROR;
                 }
 
-                DATABOX_SET_UNSIGNED(box, neg ? -(int32_t)x : (int32_t)x);
+                DATABOX_SET_UNSIGNED(box, StrScanSigned32_(x, neg));
                 return STRSCAN_U32;
             case STRSCAN_I64:
             case STRSCAN_U64:
-                DATABOX_SET_UNSIGNED(box, neg ? (uint64_t)-(int64_t)x : x);
+                DATABOX_SET_UNSIGNED(box, StrScanSigned64_(x, neg));
                 return fmt;
             default:
             plainnumber: /* Fast path for plain numbers < 2^63. */
@@ -736,7 +752,7 @@ StrScanFmt StrScanScan(const uint8_t *p, databox *box, StrScanOpt opt,
         /* Fast path for decimal 32 bit integers. */
         if (fmt == STRSCAN_INT && base == 10 &&
             (dig < 10 || (dig == 10 && *sp <= '2' && x < 0x80000000u + neg))) {
-            int32_t y = neg ? -(int32_t)x : (int32_t)x;
+            int32_t y = StrScanSigned32_(x, neg);
             if ((opt & STRSCAN_OPT_TONUM)) {
                 DATABOX_SET_DOUBLE(box, (double)y);
                 return STRSCAN_NUM;
