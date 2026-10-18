@@ -3289,16 +3289,7 @@ static inline int memboundMicroLog(int value) {
     if (value <= 1) {
         return 0;
     }
-#if defined(__GNUC__) || defined(__clang__)
     return 32 - __builtin_clz((unsigned)(value - 1));
-#else
-    int log = 0;
-    value--;
-    while (value >>= 1) {
-        log++;
-    }
-    return log + 1;
-#endif
 }
 
 /* MICRO tier MemboundLink - 4 bytes (uses 16-bit indices) */
@@ -3656,19 +3647,8 @@ static inline int memboundCompactLog(int value) {
     if (value <= 1) {
         return 0;
     }
-#if defined(__GNUC__) || defined(__clang__)
-    /* Fast path: use hardware CLZ */
+    /* Hardware CLZ; value > 1 here, so the operand is never 0 */
     return 32 - __builtin_clz((unsigned int)value - 1);
-#else
-    /* Portable path */
-    int n = 0;
-    int v = value - 1;
-    while (v > 0) {
-        v >>= 1;
-        n++;
-    }
-    return n;
-#endif
 }
 
 /* COMPACT tier Link node - 8 bytes (uses 32-bit indices) */

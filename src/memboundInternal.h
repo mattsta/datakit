@@ -144,15 +144,9 @@
  * PREFETCH hints tell the CPU to start loading data before we need it.
  * Used when walking extent lists to prefetch next extent while processing
  * current one. */
-#if defined(__GNUC__) || defined(__clang__)
 #define MEMBOUND_LIKELY(x) __builtin_expect(!!(x), 1)
 #define MEMBOUND_UNLIKELY(x) __builtin_expect(!!(x), 0)
 #define MEMBOUND_PREFETCH(addr) __builtin_prefetch(addr, 0, 0)
-#else
-#define MEMBOUND_LIKELY(x) (x)
-#define MEMBOUND_UNLIKELY(x) (x)
-#define MEMBOUND_PREFETCH(addr) ((void)0)
-#endif
 
 /* ====================================================================
  * Constants
@@ -746,17 +740,8 @@ static inline int memboundLog64(size_t value) {
         return 0;
     }
 
-#if defined(__GNUC__) || defined(__clang__)
     /* Use 64-bit count leading zeros */
     return 64 - __builtin_clzll((uint64_t)(value - 1));
-#else
-    int log = 0;
-    value--;
-    while (value >>= 1) {
-        log++;
-    }
-    return log + 1;
-#endif
 }
 
 /* Fast ceiling log2 using platform intrinsics - for block indices */
