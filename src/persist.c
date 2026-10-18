@@ -5368,8 +5368,8 @@ int persistTest(int argc, char *argv[]) {
         store->truncate(store->ctx);
 
         if (store->size(store->ctx) != 5) {
-            ERR("After truncate, size should be 5, got %lld",
-                (long long)store->size(store->ctx));
+            ERR("After truncate, size should be 5, got %" PRId64,
+                store->size(store->ctx));
         }
 
         store->close(store->ctx);
@@ -5417,8 +5417,8 @@ int persistTest(int argc, char *argv[]) {
         flexGetByType(fe1, &box1);
         flexGetByType(fe2, &box2);
         if (box1.data.i != box2.data.i || box1.data.i != 42) {
-            ERR("First element mismatch: %lld vs %lld", (long long)box1.data.i,
-                (long long)box2.data.i);
+            ERR("First element mismatch: %" PRIdMAX " vs %" PRIdMAX,
+                box1.data.i, box2.data.i);
         }
 
         fe1 = flexNext(f, fe1);
@@ -5426,8 +5426,8 @@ int persistTest(int argc, char *argv[]) {
         flexGetByType(fe1, &box1);
         flexGetByType(fe2, &box2);
         if (box1.data.i != box2.data.i || box1.data.i != -100) {
-            ERR("Second element mismatch: %lld vs %lld", (long long)box1.data.i,
-                (long long)box2.data.i);
+            ERR("Second element mismatch: %" PRIdMAX " vs %" PRIdMAX,
+                box1.data.i, box2.data.i);
         }
 
         flexFree(restored);
@@ -5499,19 +5499,19 @@ int persistTest(int argc, char *argv[]) {
         databox box;
         flexGetByType(fe, &box);
         if (box.data.i != -50) {
-            ERR("First should be -50, got %lld", (long long)box.data.i);
+            ERR("First should be -50, got %" PRIdMAX, box.data.i);
         }
 
         fe = flexNext(recovered, fe);
         flexGetByType(fe, &box);
         if (box.data.i != 100) {
-            ERR("Second should be 100, got %lld", (long long)box.data.i);
+            ERR("Second should be 100, got %" PRIdMAX, box.data.i);
         }
 
         fe = flexNext(recovered, fe);
         flexGetByType(fe, &box);
         if (box.data.i != 200) {
-            ERR("Third should be 200, got %lld", (long long)box.data.i);
+            ERR("Third should be 200, got %" PRIdMAX, box.data.i);
         }
 
         flexFree(recovered);
@@ -5551,8 +5551,7 @@ int persistTest(int argc, char *argv[]) {
         /* Verify WAL was truncated - new WAL should be small */
         int64_t walSize = walStore->size(walStore->ctx);
         if (walSize > 100) { /* Header only should be ~24 bytes */
-            ERR("WAL should be small after compaction, got %lld",
-                (long long)walSize);
+            ERR("WAL should be small after compaction, got %" PRId64, walSize);
         }
 
         /* Recover should still work */
@@ -5694,16 +5693,14 @@ int persistTest(int argc, char *argv[]) {
             ERRR("key1 not found");
         }
         if (foundVal.data.i != 100) {
-            ERR("key1 value should be 100, got %lld",
-                (long long)foundVal.data.i);
+            ERR("key1 value should be 100, got %" PRIdMAX, foundVal.data.i);
         }
 
         if (!multimapLookup(restored, &key2, foundPtrs)) {
             ERRR("key2 not found");
         }
         if (foundVal.data.i != 200) {
-            ERR("key2 value should be 200, got %lld",
-                (long long)foundVal.data.i);
+            ERR("key2 value should be 200, got %" PRIdMAX, foundVal.data.i);
         }
 
         multimapFree(restored);
@@ -5823,7 +5820,7 @@ int persistTest(int argc, char *argv[]) {
                             INT16_MAX, INT16_MIN, INT32_MAX, INT32_MIN};
         for (size_t i = 0; i < COUNT_ARRAY(values); i++) {
             if (!intsetFind(restored, values[i])) {
-                ERR("Missing value: %lld", (long long)values[i]);
+                ERR("Missing value: %" PRId64, values[i]);
             }
         }
 
@@ -5907,8 +5904,8 @@ int persistTest(int argc, char *argv[]) {
         mflexState *state2 = NULL;
         if (multilistIndex(restored, state2, 0, &entry, true)) {
             if (entry.box.data.i != 0) {
-                ERR("First element should be 0, got %lld",
-                    (long long)entry.box.data.i);
+                ERR("First element should be 0, got %" PRIdMAX,
+                    entry.box.data.i);
             }
         } else {
             ERRR("Could not get first element");
@@ -5916,8 +5913,8 @@ int persistTest(int argc, char *argv[]) {
 
         if (multilistIndex(restored, state2, -1, &entry, true)) {
             if (entry.box.data.i != 490) {
-                ERR("Last element should be 490, got %lld",
-                    (long long)entry.box.data.i);
+                ERR("Last element should be 490, got %" PRIdMAX,
+                    entry.box.data.i);
             }
         } else {
             ERRR("Could not get last element");
@@ -6410,9 +6407,8 @@ int persistTest(int argc, char *argv[]) {
         }
 
         if (multidictCount(restored) != multidictCount(d)) {
-            ERR("Count mismatch: %llu vs %llu",
-                (unsigned long long)multidictCount(restored),
-                (unsigned long long)multidictCount(d));
+            ERR("Count mismatch: %" PRIu64 " vs %" PRIu64,
+                multidictCount(restored), multidictCount(d));
         }
 
         /* Verify some entries */
@@ -6422,8 +6418,8 @@ int persistTest(int argc, char *argv[]) {
             if (!multidictFind(restored, &key, &val)) {
                 ERR("Key %d not found", i);
             } else if (val.data.i != i * 1000) {
-                ERR("Key %d: expected value %d, got %lld", i, i * 1000,
-                    (long long)val.data.i);
+                ERR("Key %d: expected value %d, got %" PRIdMAX, i, i * 1000,
+                    val.data.i);
             }
         }
 
@@ -6633,8 +6629,8 @@ int persistTest(int argc, char *argv[]) {
         for (int i = 0; i < 4; i++) {
             flexGetByType(fe, &box);
             if (box.data.i != expected[i]) {
-                ERR("Element %d: expected %lld, got %lld", i,
-                    (long long)expected[i], (long long)box.data.i);
+                ERR("Element %d: expected %" PRId64 ", got %" PRIdMAX, i,
+                    expected[i], box.data.i);
             }
             fe = flexNext(recovered, fe);
         }
@@ -6733,7 +6729,7 @@ int persistTest(int argc, char *argv[]) {
 
         for (size_t i = 0; i < COUNT_ARRAY(values); i++) {
             if (!intsetFind(restored, values[i])) {
-                ERR("Missing medium value: %lld", (long long)values[i]);
+                ERR("Missing medium value: %" PRId64, values[i]);
             }
         }
 
@@ -6780,7 +6776,7 @@ int persistTest(int argc, char *argv[]) {
 
         for (size_t i = 0; i < COUNT_ARRAY(values); i++) {
             if (!intsetFind(restored, values[i])) {
-                ERR("Missing full tier value: %lld", (long long)values[i]);
+                ERR("Missing full tier value: %" PRId64, values[i]);
             }
         }
 
@@ -7021,8 +7017,8 @@ int persistTest(int argc, char *argv[]) {
             if (!multimapLookup(restored, &key, vals)) {
                 ERR("Missing key %d", i);
             } else if (val.data.i != i * 7 - 1000) {
-                ERR("Key %d: expected %d, got %lld", i, i * 7 - 1000,
-                    (long long)val.data.i);
+                ERR("Key %d: expected %d, got %" PRIdMAX, i, i * 7 - 1000,
+                    val.data.i);
             }
         }
 
@@ -7136,8 +7132,8 @@ int persistTest(int argc, char *argv[]) {
             if (!multilistIndex(restored, s2, i, &entry, true)) {
                 ERR("Failed to get index %d", i);
             } else if (entry.box.data.i != i) {
-                ERR("Index %d: expected %d, got %lld", i, i,
-                    (long long)entry.box.data.i);
+                ERR("Index %d: expected %d, got %" PRIdMAX, i, i,
+                    entry.box.data.i);
             }
         }
 
@@ -7165,8 +7161,8 @@ int persistTest(int argc, char *argv[]) {
             ERRR("Empty multidict restore failed");
         }
         if (multidictCount(restored) != 0) {
-            ERR("Empty multidict should have 0 elements, got %llu",
-                (unsigned long long)multidictCount(restored));
+            ERR("Empty multidict should have 0 elements, got %" PRIu64,
+                multidictCount(restored));
         }
 
         testMultidictFreeWithClass(restored);
@@ -7197,8 +7193,8 @@ int persistTest(int argc, char *argv[]) {
         }
 
         if (multidictCount(restored) != 1000) {
-            ERR("Expected 1000 entries, got %llu",
-                (unsigned long long)multidictCount(restored));
+            ERR("Expected 1000 entries, got %" PRIu64,
+                multidictCount(restored));
         }
 
         /* Verify all entries */
@@ -7208,8 +7204,8 @@ int persistTest(int argc, char *argv[]) {
             if (!multidictFind(restored, &key, &val)) {
                 ERR("Missing key %d", i * 17);
             } else if (val.data.i != i) {
-                ERR("Key %d: expected value %d, got %lld", i * 17, i,
-                    (long long)val.data.i);
+                ERR("Key %d: expected value %d, got %" PRIdMAX, i * 17, i,
+                    val.data.i);
             }
         }
 
@@ -7471,8 +7467,7 @@ int persistTest(int argc, char *argv[]) {
         /* Verify all values we tracked */
         for (size_t i = 0; i < addedCount; i++) {
             if (!intsetFind(restored, addedValues[i])) {
-                ERR("Fuzz intset missing value: %lld",
-                    (long long)addedValues[i]);
+                ERR("Fuzz intset missing value: %" PRId64, addedValues[i]);
             }
         }
 
@@ -7736,8 +7731,8 @@ int persistTest(int argc, char *argv[]) {
             databox box;
             flexGetByType(fe, &box);
             if (box.data.i != i) {
-                ERR("Post-compaction element %d: expected %d, got %lld", i, i,
-                    (long long)box.data.i);
+                ERR("Post-compaction element %d: expected %d, got %" PRIdMAX, i,
+                    i, box.data.i);
             }
             fe = flexNext(afterCompact, fe);
         }

@@ -894,8 +894,7 @@ int multimapPTest(int argc, char *argv[]) {
 
         /* 15 inserts + 5 deletes = 20 total ops */
         if (stats.totalOps != 20) {
-            ERR("Total ops should be 20, got %llu",
-                (unsigned long long)stats.totalOps);
+            ERR("Total ops should be 20, got %" PRIu64, stats.totalOps);
         }
 
         multimapCloseP(m);

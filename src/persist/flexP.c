@@ -834,8 +834,7 @@ int flexPTest(int argc, char *argv[]) {
         flexGetStatsP(f, &stats);
 
         if (stats.totalOps != 25) {
-            ERR("Total ops should be 25, got %llu",
-                (unsigned long long)stats.totalOps);
+            ERR("Total ops should be 25, got %" PRIu64, stats.totalOps);
         }
 
         flexCloseP(f);
@@ -864,8 +863,7 @@ int flexPTest(int argc, char *argv[]) {
         flexGetByTypeP(f, fe, &lastBox);
 
         if (lastBox.data.i != 9) {
-            ERR("Last element should be 9, got %lld",
-                (long long)lastBox.data.i);
+            ERR("Last element should be 9, got %" PRIdMAX, lastBox.data.i);
         }
 
         fe = flexIndexP(f, -10);
@@ -877,8 +875,7 @@ int flexPTest(int argc, char *argv[]) {
         flexGetByTypeP(f, fe, &firstBox);
 
         if (firstBox.data.i != 0) {
-            ERR("First element should be 0, got %lld",
-                (long long)firstBox.data.i);
+            ERR("First element should be 0, got %" PRIdMAX, firstBox.data.i);
         }
 
         flexCloseP(f);

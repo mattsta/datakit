@@ -221,8 +221,9 @@ static bool verifyIntsetMatchesTracker(intsetP *is,
     /* Verify all tracker values exist in intset */
     for (uint32_t i = 0; i < tracker->count; i++) {
         if (!intsetFindP(is, tracker->values[i])) {
-            printf("  [verify] Value %lld at tracker[%u] not found in intset\n",
-                   (long long)tracker->values[i], i);
+            printf("  [verify] Value %" PRId64
+                   " at tracker[%u] not found in intset\n",
+                   tracker->values[i], i);
             return false;
         }
     }
@@ -235,9 +236,9 @@ static bool verifyIntsetMatchesTracker(intsetP *is,
             return false;
         }
         if (isValue != tracker->values[i]) {
-            printf(
-                "  [verify] Mismatch at index %u: intset=%lld, tracker=%lld\n",
-                i, (long long)isValue, (long long)tracker->values[i]);
+            printf("  [verify] Mismatch at index %u: intset=%" PRId64
+                   ", tracker=%" PRId64 "\n",
+                   i, isValue, tracker->values[i]);
             return false;
         }
     }
@@ -286,8 +287,9 @@ int intsetPTest(int argc, char *argv[]) {
             bool addedToTracker = ptestTrackerAdd(&tracker, val);
 
             if (addedToIntset != addedToTracker) {
-                ERR("Add result mismatch for %lld: intset=%d, tracker=%d",
-                    (long long)val, addedToIntset, addedToTracker);
+                ERR("Add result mismatch for %" PRId64
+                    ": intset=%d, tracker=%d",
+                    val, addedToIntset, addedToTracker);
             }
         }
 
@@ -445,7 +447,7 @@ int intsetPTest(int argc, char *argv[]) {
             bool removedFromTracker = ptestTrackerRemove(&tracker, val);
 
             if (removedFromIntset != removedFromTracker) {
-                ERR("Remove mismatch for %lld", (long long)val);
+                ERR("Remove mismatch for %" PRId64, val);
             }
         }
 
@@ -457,7 +459,7 @@ int intsetPTest(int argc, char *argv[]) {
         for (int i = 0; i < 50; i += 2) {
             int64_t val = i * 100;
             if (intsetRemoveP(is, val)) {
-                ERR("Remove of non-existent %lld should fail", (long long)val);
+                ERR("Remove of non-existent %" PRId64 " should fail", val);
             }
         }
 
@@ -657,7 +659,7 @@ int intsetPTest(int argc, char *argv[]) {
                 bool inIntset = intsetFindP(is, val);
                 bool inTracker = ptestTrackerContains(&tracker, val);
                 if (inIntset != inTracker) {
-                    ERR("Lookup mismatch for %lld at op %d", (long long)val, i);
+                    ERR("Lookup mismatch for %" PRId64 " at op %d", val, i);
                 }
                 break;
             }
@@ -889,8 +891,7 @@ int intsetPTest(int argc, char *argv[]) {
         intsetGetStatsP(is, &stats);
 
         if (stats.totalOps != 30) {
-            ERR("Total ops should be 30, got %llu",
-                (unsigned long long)stats.totalOps);
+            ERR("Total ops should be 30, got %" PRIu64, stats.totalOps);
         }
 
         intsetCloseP(is);

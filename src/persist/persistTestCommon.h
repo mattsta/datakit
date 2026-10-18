@@ -503,15 +503,16 @@ static inline void ptestGenerateStringBox(databox *box, int seed) {
 #define PTEST_VERIFY_CONTAINS(structure, value, finder)                        \
     do {                                                                       \
         if (!finder(structure, value)) {                                       \
-            ERR("Value %lld should exist but not found", (long long)(value));  \
+            ERR("Value %" PRId64 " should exist but not found",                \
+                (int64_t)(value));                                             \
         }                                                                      \
     } while (0)
 
 #define PTEST_VERIFY_NOT_CONTAINS(structure, value, finder)                    \
     do {                                                                       \
         if (finder(structure, value)) {                                        \
-            ERR("Value %lld should not exist but was found",                   \
-                (long long)(value));                                           \
+            ERR("Value %" PRId64 " should not exist but was found",            \
+                (int64_t)(value));                                             \
         }                                                                      \
     } while (0)
 
