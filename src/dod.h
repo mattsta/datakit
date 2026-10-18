@@ -67,6 +67,9 @@ dodVal dodGet(const dod *d, size_t *consumedBits, dodVal originalStartVal,
 void dodAppend(dod *d, dodVal t0, dodVal t1, dodVal newVal,
                size_t *currentBits);
 
+/* Reset every field of 'w': no values, no stream (dodWrite() allocates it) */
+void dodInit(dodWriter *const w);
+
 /* Value at index 'offset' (0 is the first value written) of an open or
  * closed writer; 'offset' must be below the number of values written.
  * With fewer than two values written it reads t[], and returns 0 for an
