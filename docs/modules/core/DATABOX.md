@@ -73,12 +73,12 @@ typedef union databoxUnion {
 
 The four metadata bits live in the same 8 bytes as `type` and `len`:
 
-| Flag        | Meaning                                                                    |
-| ----------- | -------------------------------------------------------------------------- |
-| `allocated` | the box owns heap memory behind `data` (BYTES, a 96/128-bit payload, MDSC); `databoxFreeData` will free it |
-| `created`   | the box was created by a retrieve-and-create path                          |
+| Flag        | Meaning                                                                                                          |
+| ----------- | ---------------------------------------------------------------------------------------------------------------- |
+| `allocated` | the box owns heap memory behind `data` (BYTES, a 96/128-bit payload, MDSC); `databoxFreeData` will free it       |
+| `created`   | the box was created by a retrieve-and-create path                                                                |
 | `big`       | `data.i128`/`u128` is a live pointer to 16 bytes of storage (a `databoxBig`'s `extra`, or an owned heap payload) |
-| `unused`    | 5 reserved bits                                                            |
+| `unused`    | 5 reserved bits                                                                                                  |
 
 **Zero-initialize boxes you hand to a fill-in API.** Container getters
 (`flexGetByType`, and the multimap getters layered on it) write `type`,
