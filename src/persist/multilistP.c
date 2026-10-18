@@ -376,11 +376,11 @@ static bool verifyMultilistMatchesTracker(multilistP *ml,
         return false;
     }
 
-    /* openNode: the Full tier decodes the element only for an opened
-     * node. */
+    /* The Wide read, so a 96/128-bit element compares by value. */
     multilistEntry entry;
+    databoxWide wide;
     for (uint32_t i = 0; i < tracker->count; i++) {
-        if (!multilistIndex(ml->ml, ml->state, i, &entry, true)) {
+        if (!multilistIndexWide(ml->ml, ml->state, i, &entry, &wide)) {
             printf("  [verify] Failed to get index %u\n", i);
             return false;
         }

@@ -25,7 +25,15 @@ typedef int64_t mlOffsetId;
 /* Note: this is oversized for small/medium because we stuff required Full state
  * in the common iterator too.
  * If space is a problem, we could refactor this futher into an extensible
- * prefix struct type. */
+ * prefix struct type.
+ *
+ * 'wide' is the iterator's storage for one 96/128-bit element:
+ * multilistNext() decodes a wide element there, so the entry it fills
+ * points into the iterator until the next multilistNext() on it.  Narrow
+ * elements never touch it.  It is part of the struct, so nothing is
+ * allocated, Release stays optional, and a struct copy of an iterator has
+ * a slot of its own (a box read through the original still points into
+ * the original). */
 typedef struct multilistIterator {
     void *ml; /* pointer back to (untagged) multilist instance itself. */
     flexEntry *fe;
@@ -42,44 +50,50 @@ typedef struct multilistIterator {
     /* All */
     bool forward;
     uint32_t type; /* used for function dispatching */
-} multilistIterator;
 
-/* multilistEntry is the result of multilistNext(), multilistIndex() and
- * multilistIndexNear().  The library fills every field, so the entry needs
- * no initialization: its prior contents are never read.
+    databoxWide wide; /* payload of the last wide element from Next */
+} multilistIterator;  /* 80 bytes, 16-byte aligned */
+
+/* multilistEntry is the result of multilistNext(), multilistIndex(),
+ * multilistIndexNear() and their Wide forms.  The library sets ml, fe,
+ * nodeIdx, offset and f (when the tier uses them) and decodes the element
+ * into 'box' like flexGetByTypeInto(): it never reads the entry's prior
+ * contents, and for a narrow element only box's type, data and (for
+ * variable-length types) len are written, so read the type and the value,
+ * not the 'big' and 'allocated' bits.
  *
- * The element is 'box'.  'boxBig' is the same storage seen as a
- * databoxBig, whose 'extra' holds a 96/128-bit payload; for such a value
- * box.data.i128 / box.data.u128 points at boxBig.extra and box.big is 1.
- * Every other value has box.big = 0.
+ * A 96/128-bit element:
+ *   - from multilistNext() has big = 1 and data.i128 / data.u128 aimed at
+ *     the iterator's 'wide' slot;
+ *   - from multilistIndexWide() / multilistIndexNearWide() has big = 1 and
+ *     the pointer aimed at the caller's slot;
+ *   - from multilistIndex() / multilistIndexNear() is deferred: type only,
+ *     data.ptr = NULL, big = 0 (databoxIsWideDeferred).  Read it again
+ *     with a Wide form when the value is needed.
  *
  * 'box' borrows:
  *   - BYTES and containers point into the list's flex (on the Full tier,
  *     possibly a node decompressed into the caller's mflexState), valid
  *     until the list is next modified or that state is reused;
- *   - a 96/128-bit value points into the entry itself, valid until the
- *     entry is reused or goes out of scope, so a plain struct copy of
- *     'box' still points back into this entry.
+ *   - a 96/128-bit value points into its slot, valid until the next
+ *     multilistNext() on that iterator, or for as long as the caller's
+ *     slot lives.
  * To keep a value past either, copy it with databoxCopy() (owned; release
- * with databoxFreeData()) or databoxBigCopyFrom() (re-homed into another
+ * with databoxFreeData()) or databoxBigCopyFrom() (re-homed into a
  * databoxBig, no allocation). */
 typedef struct multilistEntry {
     void *ml; /* pointer back to (untagged) multilist instance itself. */
     flexEntry *fe;
-    union {
-        databox box;       /* the element */
-        databoxBig boxBig; /* same bytes; 'extra' holds a wide payload */
-    };
+    databox box;
     mlNodeId nodeIdx; /* only used for Medium and Full */
     int32_t offset;
-    flex *f;      /* Full only */
-} multilistEntry; /* 64 bytes, 16-byte aligned */
+    flex *f; /* Full only */
+} multilistEntry;
 
-_Static_assert(sizeof(multilistEntry) == 64,
-               "multilistEntry must stay one 64-byte cache line");
-_Static_assert(_Alignof(multilistEntry) == _Alignof(databoxBig),
-               "multilistEntry must carry databoxBig's alignment");
-_Static_assert(offsetof(multilistEntry, boxBig) % 16 == 0,
-               "the wide payload in multilistEntry must be 16-byte aligned");
+_Static_assert(sizeof(multilistEntry) == 48, "multilistEntry must be 48 bytes");
+_Static_assert(sizeof(multilistIterator) == 80,
+               "multilistIterator must be 80 bytes");
+_Static_assert(offsetof(multilistIterator, wide) % 16 == 0,
+               "the iterator's wide slot must be 16-byte aligned");
 
 typedef mflexState multilistState;

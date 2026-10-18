@@ -84,10 +84,10 @@ bool multilistIteratorInitAtIdx(const multilist *ml, mflexState *state[2],
 #define multilistIteratorInitAtIdxReverseReadOnly(ml, s, iter, idx)            \
     multilistIteratorInitAtIdx(ml, s, iter, idx, false, true)
 
-/* multilistNext, multilistIndex and multilistIndexNear fill 'entry'
- * completely (it needs no initialization) and decode the element into
- * entry->box with its own wide storage, so a 96/128-bit element reads back
- * whole.  entry->box borrows from the list and from the entry; see
+/* multilistNext fills 'entry' (it needs no initialization) and decodes the
+ * element into entry->box.  A 96/128-bit element reads back whole, with
+ * its payload in iter->wide, valid until the next multilistNext on 'iter'.
+ * entry->box borrows from the list and from the iterator; see
  * multilistEntry in multilistCommon.h for how long it stays valid. */
 bool multilistNext(multilistIterator *iter, multilistEntry *entry);
 
@@ -96,18 +96,36 @@ void multilistRewindTail(multilist *ml, multilistIterator *iter);
 
 void multilistIteratorRelease(multilistIterator *iter);
 
-/* With openNode false the Full tier only checks that 'index' exists and
+/* multilistIndex fills 'entry' (it needs no initialization) with the
+ * element at 'index'; negative indexes count from the tail.  A 96/128-bit
+ * element is reported deferred: type only, data.ptr = NULL
+ * (databoxIsWideDeferred), because a single read has no storage of its
+ * own for the payload.  Use multilistIndexWide when the value is needed.
+ * With openNode false the Full tier only checks that 'index' exists and
  * leaves entry->fe and entry->box unset; Small and Medium always decode. */
 bool multilistIndex(const multilist *ml, mflexState *state, mlOffsetId index,
                     multilistEntry *entry, bool openNode);
 #define multilistIndexGet(ml, s, i, e) multilistIndex(ml, s, i, e, true)
 #define multilistIndexCheck(ml, s, i, e) multilistIndex(ml, s, i, e, false)
 
+/* multilistIndexWide is multilistIndexGet that reads a 96/128-bit element
+ * whole: its payload goes to 'slot' (big = 1, allocated = 0), so
+ * entry->box is valid for as long as 'slot' is and the list is unchanged.
+ * Narrow elements decode exactly as with multilistIndexGet and never
+ * touch 'slot'.  The entry is a full result, usable as an IndexNear
+ * anchor or with DelEntry-style cursor calls. */
+bool multilistIndexWide(const multilist *ml, mflexState *state,
+                        mlOffsetId index, multilistEntry *entry,
+                        databoxWide *slot);
+
 /* Index starting from a caller-held anchor entry (with its known global
  * index) when the anchor is closer than either endpoint; on the Full
  * tier whole nodes are skipped by their counts from the anchor's node
  * in either direction.  The anchor must have been obtained after the
- * most recent mutation.  Never slower than multilistIndex. */
+ * most recent mutation.  Never slower than multilistIndex.  A 96/128-bit
+ * element is reported deferred, as with multilistIndex;
+ * multilistIndexNearWide reads it whole into 'slot', as
+ * multilistIndexWide does. */
 bool multilistIndexNear(const multilist *ml, mflexState *state,
                         mlOffsetId index, const multilistEntry *anchor,
                         mlOffsetId anchorIdx, multilistEntry *entry,
@@ -116,6 +134,10 @@ bool multilistIndexNear(const multilist *ml, mflexState *state,
     multilistIndexNear(ml, s, i, a, ai, e, true)
 #define multilistIndexNearCheck(ml, s, i, a, ai, e)                            \
     multilistIndexNear(ml, s, i, a, ai, e, false)
+bool multilistIndexNearWide(const multilist *ml, mflexState *state,
+                            mlOffsetId index, const multilistEntry *anchor,
+                            mlOffsetId anchorIdx, multilistEntry *entry,
+                            databoxWide *slot);
 
 void multilistRotate(multilist *m, mflexState *state[2]);
 

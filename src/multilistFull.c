@@ -450,13 +450,14 @@ multilistFull *multilistFullNewFromFlexConsumeGrow(void *_ml, mflexState *state,
 multilistFull *multilistFullAppendValuesFromFlex(multilistFull *ml,
                                                  mflexState *state,
                                                  const flex *fl) {
-    /* databoxBig so a 96/128-bit value has storage to decode into */
-    databoxBig holder;
+    /* A 96/128-bit value lands in 'wide', reused for each element */
+    databox holder = {{0}};
+    databoxWide wide;
     flexEntry *fe = flexHead(fl);
 
     while (fe) {
-        flexGetByTypeBig(fe, &holder);
-        multilistFullPushByTypeTail(ml, state, (const databox *)&holder);
+        flexGetByTypeInto(fe, &holder, &wide);
+        multilistFullPushByTypeTail(ml, state, &holder);
         fe = flexNext(fl, fe);
     }
 
@@ -1022,8 +1023,9 @@ bool multilistFullNext(multilistIterator *iter, multilistEntry *entry) {
     const multilistFull *ml = iter->ml;
 
     if (iter->fe) {
-        /* Populate value from existing flex position */
-        flexGetByTypeBig(iter->fe, &entry->boxBig);
+        /* Populate value from existing flex position; a wide value
+         * lands in the iterator's slot */
+        flexGetByTypeInto(iter->fe, &entry->box, &iter->wide);
 
         entry->ml = iter->ml;
         entry->nodeIdx = iter->nodeIdx;
@@ -1201,7 +1203,8 @@ DK_STATIC bool multilistFullIndexEngine_(multilistFull *ml, mflexState *state,
                     return false;
                 }
 
-                flexGetByTypeBig(entry->fe, &entry->boxBig);
+                /* No wide storage here: a wide value is deferred */
+                flexGetByTypeInto(entry->fe, &entry->box, NULL);
             }
 
             return true;
@@ -1291,7 +1294,8 @@ DK_STATIC bool multilistFullIndexEngine_(multilistFull *ml, mflexState *state,
             return false;
         }
 
-        flexGetByTypeBig(entry->fe, &entry->boxBig);
+        /* A single read has no wide storage: a wide value is deferred */
+        flexGetByTypeInto(entry->fe, &entry->box, NULL);
         return true;
     }
 
@@ -1351,15 +1355,16 @@ void multilistFullRotate(multilistFull *ml, mflexState *state[2]) {
     flex *fTail = mflexOpen(*tail, state[0]);
     flexEntry *fe = flexTail(fTail);
 
-    /* Get tail entry (a databoxBig, so a 96/128-bit value has storage) */
-    databoxBig box;
-    flexGetByTypeBig(fe, &box);
+    /* Get tail entry (a 96/128-bit value lands in 'wide') */
+    databox box = {{0}};
+    databoxWide wide;
+    flexGetByTypeInto(fe, &box, &wide);
 
     /* Copy tail entry to head (must happen before tail is deleted) */
     if (ml->count > 1) {
         /* If more than one node, then head != tail and we can add
          * to the head mflex. */
-        multilistFullPushByTypeHead(ml, state[1], (const databox *)&box);
+        multilistFullPushByTypeHead(ml, state[1], &box);
 
         /* a new head could have been created, causing the tail to
          * move its origin pointer position. */
@@ -1388,7 +1393,7 @@ void multilistFullRotate(multilistFull *ml, mflexState *state[2]) {
     } else {
         /* else, multilistFull only has one node, the head flex is also the
          * tail flex, and we already opened it, so just use it directly. */
-        flexPushByType(&fTail, (const databox *)&box, FLEX_ENDPOINT_HEAD);
+        flexPushByType(&fTail, &box, FLEX_ENDPOINT_HEAD);
 
         /* now get new tail entry again since it just moved */
         fe = flexTail(fTail);
@@ -1716,6 +1721,31 @@ static bool mlfWideSame(const databox *box, const databoxBig *want,
     }
 
     return box->data.i == want->data.i;
+}
+
+/* multilistFullIndex into a poisoned entry matches 'want': a 96/128-bit
+ * element must come back deferred, and decoding the entry's position
+ * again into a slot must give the value. */
+static bool mlfIndexSame(multilistFull *ml, mflexState *state, mlOffsetId i,
+                         const databoxBig *want) {
+    multilistEntry entry;
+    memset(&entry, 0xFF, sizeof(entry));
+    if (!multilistFullIndex(ml, state, i, &entry, true)) {
+        return false;
+    }
+
+    if (want->type != DATABOX_SIGNED_128 &&
+        want->type != DATABOX_UNSIGNED_128) {
+        return mlfWideSame(&entry.box, want, NULL);
+    }
+
+    if (entry.box.type != want->type || !databoxIsWideDeferred(&entry.box)) {
+        return false;
+    }
+
+    databoxWide slot;
+    flexGetByTypeInto(entry.fe, &entry.box, &slot);
+    return mlfWideSame(&entry.box, want, &slot);
 }
 
 int multilistFullTest(int argc, char *argv[]) {
@@ -3070,7 +3100,7 @@ int multilistFullTest(int argc, char *argv[]) {
             for (int i = 0; i < WIDE_N; i++) {
                 memset(&entry, 0xFF, sizeof(entry));
                 if (!multilistFullNext(&iter, &entry) ||
-                    !mlfWideSame(&entry.box, &want[i], entry.boxBig.extra)) {
+                    !mlfWideSame(&entry.box, &want[i], &iter.wide)) {
                     ERR("depth %u: NewFromFlex element %d differs", d, i);
                     break;
                 }
@@ -3080,10 +3110,7 @@ int multilistFullTest(int argc, char *argv[]) {
             /* Append the same values again: 2 x WIDE_N in order. */
             multilistFullAppendValuesFromFlex(ml, s0, src);
             for (int i = 0; i < 2 * WIDE_N; i++) {
-                memset(&entry, 0xFF, sizeof(entry));
-                if (!multilistFullIndex(ml, s0, i, &entry, true) ||
-                    !mlfWideSame(&entry.box, &want[i % WIDE_N],
-                                 entry.boxBig.extra)) {
+                if (!mlfIndexSame(ml, s0, i, &want[i % WIDE_N])) {
                     ERR("depth %u: appended element %d differs", d, i);
                     break;
                 }
@@ -3093,10 +3120,8 @@ int multilistFullTest(int argc, char *argv[]) {
              * and two wide values move to the head. */
             for (int r = 0; r < 4; r++) {
                 multilistFullRotate(ml, s);
-                memset(&entry, 0xFF, sizeof(entry));
                 const int at = WIDE_N - 1 - r;
-                if (!multilistFullIndex(ml, s0, 0, &entry, true) ||
-                    !mlfWideSame(&entry.box, &want[at], entry.boxBig.extra)) {
+                if (!mlfIndexSame(ml, s0, 0, &want[at])) {
                     ERR("depth %u: rotate %d moved element %d wrong", d, r, at);
                 }
             }

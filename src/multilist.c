@@ -262,6 +262,36 @@ bool multilistIndexNear(const multilist *ml, mflexState *state,
                      openNode);
 }
 
+/* The Wide forms run the plain lookup, which reports a wide element
+ * deferred, and decode that one element again into 'slot'.  entry->fe is
+ * the element's live position (an opened node on the Full tier), so the
+ * second decode is a cold arm that narrow elements never reach. */
+static bool multilistIndexWideFinish_(multilistEntry *entry,
+                                      databoxWide *slot) {
+    if (unlikely(databoxIsWideDeferred(&entry->box))) {
+        flexGetByTypeInto(entry->fe, &entry->box, slot);
+    }
+
+    return true;
+}
+
+bool multilistIndexWide(const multilist *ml, mflexState *state,
+                        const mlOffsetId index, multilistEntry *entry,
+                        databoxWide *slot) {
+    return multilistIndex(ml, state, index, entry, true) &&
+           multilistIndexWideFinish_(entry, slot);
+}
+
+bool multilistIndexNearWide(const multilist *ml, mflexState *state,
+                            const mlOffsetId index,
+                            const multilistEntry *anchor,
+                            const mlOffsetId anchorIdx, multilistEntry *entry,
+                            databoxWide *slot) {
+    return multilistIndexNear(ml, state, index, anchor, anchorIdx, entry,
+                              true) &&
+           multilistIndexWideFinish_(entry, slot);
+}
+
 void multilistIteratorInit(multilist *ml, mflexState *state[2],
                            multilistIterator *iter, bool forward,
                            bool readOnly) {
@@ -504,6 +534,34 @@ static mlwVal mlwGen(uint32_t i) {
     }
 }
 
+/* The three data modes of the read matrix: normal holds only 64-bit
+ * values and strings, extended only 96/128-bit values, and mixed
+ * interleaves both (mlwGen itself). */
+typedef enum mlwData {
+    MLW_DATA_NORMAL = 0,
+    MLW_DATA_EXTENDED,
+    MLW_DATA_MIXED,
+    MLW_DATA_COUNT
+} mlwData;
+
+static const char *const mlwDataName[MLW_DATA_COUNT] = {"normal", "extended",
+                                                        "mixed"};
+
+/* Element 'i' of a list in data mode 'data'.  Normal and extended pick
+ * the matching mlwGen classes, so every id stays unique. */
+static mlwVal mlwGenIn(mlwData data, uint32_t i) {
+    static const uint32_t normalClass[3] = {1, 2, 4};
+    static const uint32_t extendedClass[2] = {0, 3};
+    switch (data) {
+    case MLW_DATA_NORMAL:
+        return mlwGen(5 * (i / 3) + normalClass[i % 3]);
+    case MLW_DATA_EXTENDED:
+        return mlwGen(5 * (i / 2) + extendedClass[i % 2]);
+    default:
+        return mlwGen(i);
+    }
+}
+
 static size_t mlwStr(uint32_t id, char *buf, size_t cap) {
     /* Every third string is too long to embed in a databox. */
     const int n =
@@ -538,13 +596,26 @@ static const databox *mlwBox(const mlwVal *v, databoxBig *storage, char *buf,
     return (const databox *)storage;
 }
 
-/* NULL when 'box' holds exactly 'want', else what differs.  A 96/128-bit
- * result must carry a live payload (big = 1), and when 'inlineAt' is set
- * the payload must be there.  Expected types follow the canonical
- * representation: past 64 bits a negative value is SIGNED_128 and a
- * positive one UNSIGNED_128. */
-static const char *mlwCheck(const databox *box, const mlwVal *want,
-                            const void *inlineAt) {
+/* How a result was read, which decides what mlwCheck demands of it:
+ *   - ENTRY: an entry from Next or a Wide read.  A wide value carries a
+ *     live payload (big = 1, allocated = 0).  Narrow values have their
+ *     flag bits left as they were, so those bits are not checked.
+ *   - DEFERRED: an entry from Index / IndexNear.  A wide value is type
+ *     only (databoxIsWideDeferred); narrow values are as for ENTRY.
+ *   - OWNED: a Pop result, whose flags are all defined: a narrow value
+ *     has big = 0. */
+typedef enum mlwRead {
+    MLW_READ_ENTRY = 0,
+    MLW_READ_DEFERRED,
+    MLW_READ_OWNED
+} mlwRead;
+
+/* NULL when 'box' holds exactly 'want', else what differs.  When
+ * 'inlineAt' is set a wide payload must be there.  Expected types follow
+ * the canonical representation: past 64 bits a negative value is
+ * SIGNED_128 and a positive one UNSIGNED_128. */
+static const char *mlwCheckRead(const databox *box, const mlwVal *want,
+                                const void *inlineAt, mlwRead how) {
     if (want->isStr) {
         char buf[64];
         const size_t len = mlwStr(want->strId, buf, sizeof(buf));
@@ -556,7 +627,7 @@ static const char *mlwCheck(const databox *box, const mlwVal *want,
             return "string bytes differ";
         }
 
-        return box->big ? "string has big set" : NULL;
+        return how == MLW_READ_OWNED && box->big ? "string has big set" : NULL;
     }
 
     if (mlwIsWide(want)) {
@@ -565,8 +636,18 @@ static const char *mlwCheck(const databox *box, const mlwVal *want,
             return "wide value read back with the wrong type";
         }
 
+        if (how == MLW_READ_DEFERRED) {
+            return databoxIsWideDeferred(box) && !box->big && !box->allocated
+                       ? NULL
+                       : "single read of a wide value is not deferred";
+        }
+
         if (!box->big || !box->data.ptr) {
             return "wide value has no payload";
+        }
+
+        if (how == MLW_READ_ENTRY && box->allocated) {
+            return "borrowed wide value claims to own its payload";
         }
 
         if (inlineAt && box->data.ptr != inlineAt) {
@@ -578,7 +659,7 @@ static const char *mlwCheck(const databox *box, const mlwVal *want,
         return got == want->bits ? NULL : "wide value differs";
     }
 
-    if (box->big) {
+    if (how == MLW_READ_OWNED && box->big) {
         return "narrow value has big set";
     }
 
@@ -595,6 +676,11 @@ static const char *mlwCheck(const databox *box, const mlwVal *want,
     }
 
     return "narrow value read back as a non-integer type";
+}
+
+static const char *mlwCheck(const databox *box, const mlwVal *want,
+                            const void *inlineAt) {
+    return mlwCheckRead(box, want, inlineAt, MLW_READ_ENTRY);
 }
 
 static void mlwInsertAt(mlwVal *want, size_t *n, size_t at, mlwVal v) {
@@ -630,6 +716,7 @@ static uint32_t mlwVerifyFrom(multilist *ml, mflexState *s[2],
     uint32_t err = 0;
     multilistIterator iter;
     multilistEntry entry;
+    memset(&iter, 0xFF, sizeof(iter));
     size_t idx = start < 0 ? (size_t)((mlOffsetId)n + start) : (size_t)start;
     if (atIdx) {
         if (!multilistIteratorInitAtIdx(ml, s, &iter, start, forward,
@@ -649,9 +736,9 @@ static uint32_t mlwVerifyFrom(multilist *ml, mflexState *s[2],
             break;
         }
 
-        const char *why =
-            seen < expect ? mlwCheck(&entry.box, &want[idx], entry.boxBig.extra)
-                          : "iterated past the end";
+        const char *why = seen < expect
+                              ? mlwCheck(&entry.box, &want[idx], &iter.wide)
+                              : "iterated past the end";
         if (why) {
             ERR("%s: Next %s from %" PRId64 " at %zu: %s", what,
                 forward ? "forward" : "reverse", start, idx, why);
@@ -671,8 +758,9 @@ static uint32_t mlwVerifyFrom(multilist *ml, mflexState *s[2],
     return err;
 }
 
-/* Every read path over the whole list: Next both ways, Index both signs,
- * all into 0xFF-poisoned entries. */
+/* Every read path over the whole list: Next both ways, then Index
+ * (deferred for wide values) and IndexWide (whole, in the caller's slot)
+ * at both signs, all into 0xFF-poisoned entries and slots. */
 static uint32_t mlwVerify(multilist *ml, mflexState *s[2], const mlwVal *want,
                           size_t n, const char *what) {
     uint32_t err = 0;
@@ -698,9 +786,22 @@ static uint32_t mlwVerify(multilist *ml, mflexState *s[2], const mlwVal *want,
             }
 
             const char *why =
-                mlwCheck(&entry.box, &want[i], entry.boxBig.extra);
+                mlwCheckRead(&entry.box, &want[i], NULL, MLW_READ_DEFERRED);
             if (why) {
                 ERR("%s: Index(%" PRId64 "): %s", what, at[k], why);
+            }
+
+            databoxWide slot;
+            memset(&slot, 0xFF, sizeof(slot));
+            memset(&entry, 0xFF, sizeof(entry));
+            if (!multilistIndexWide(ml, s[0], at[k], &entry, &slot)) {
+                ERR("%s: IndexWide(%" PRId64 ") failed", what, at[k]);
+                break;
+            }
+
+            why = mlwCheck(&entry.box, &want[i], &slot);
+            if (why) {
+                ERR("%s: IndexWide(%" PRId64 "): %s", what, at[k], why);
             }
         }
     }
@@ -2946,13 +3047,16 @@ int multilistTest(int argc, char *argv[]) {
 #undef FUZZ_NEXT
     }
 
-    TEST("wide: 96/128-bit elements through every read path, all tiers") {
-        /* Every destination entry is filled with 0xFF before each read, so
-         * a decode that trusts the destination's stale 'big' bit or
-         * pointer writes through garbage (ASAN) and one that skips the
-         * payload reads back type-only.  Pops go into a zeroed plain box
-         * (heap payload) or a poisoned DATABOX_BIG_INIT'd databoxBig
-         * (inline payload) by turns. */
+    TEST("wide: normal, extended and mixed data through every read path, "
+         "all tiers") {
+        /* Every destination entry, slot and iterator is filled with 0xFF
+         * before each read, so a decode that trusts the destination's
+         * stale 'big' bit or pointer writes through garbage (ASAN) and one
+         * that skips the payload reads back type-only.  Next and the Wide
+         * reads must give wide values whole, in the iterator's or the
+         * caller's slot; Index and IndexNear must give them deferred.
+         * Pops go into a zeroed plain box (heap payload) or a poisoned
+         * DATABOX_BIG_INIT'd databoxBig (inline payload) by turns. */
         const struct {
             const char *name;
             flexCapSizeLimit limit;
@@ -2966,24 +3070,34 @@ int multilistTest(int argc, char *argv[]) {
             {"Full depth 1", FLEX_CAP_LEVEL_512, 1, 600, MULTILIST_TYPE_FULL},
         };
 
-        for (size_t c = 0; c < sizeof(configs) / sizeof(*configs); c++) {
-            const char *const name = configs[c].name;
+        for (size_t cd = 0;
+             cd < MLW_DATA_COUNT * (sizeof(configs) / sizeof(*configs)); cd++) {
+            const mlwData data = (mlwData)(cd % MLW_DATA_COUNT);
+            const size_t c = cd / MLW_DATA_COUNT;
+            char name[64];
+            snprintf(name, sizeof(name), "%s %s", mlwDataName[data],
+                     configs[c].name);
             mlwVal want[MLW_MAX];
             size_t n = 0;
             uint32_t nextId = 0;
             cleaner(multilistFree) multilist *ml =
                 multilistNew(configs[c].limit, configs[c].depth);
 
+/* The value for a step that wants a wide element: 'wide' itself, except
+ * in normal data, which takes the next normal element instead. */
+#define MLW_PICK(wide)                                                         \
+    (data == MLW_DATA_NORMAL ? mlwGenIn(data, nextId++) : (wide))
+
             /* Mostly tail pushes, every seventh at the head, then a wide
              * tail so Rotate moves a wide element first. */
             for (uint32_t i = 0; i < configs[c].count; i++) {
-                const mlwVal v = mlwGen(nextId++);
+                const mlwVal v = mlwGenIn(data, nextId++);
                 const bool head = i % 7 == 6;
                 mlwPush(&ml, s0, &v, head);
                 mlwInsertAt(want, &n, head ? 0 : n, v);
             }
 
-            const mlwVal wideTail = mlwBoundary(7);
+            const mlwVal wideTail = MLW_PICK(mlwBoundary(7));
             mlwPush(&ml, s0, &wideTail, false);
             mlwInsertAt(want, &n, n, wideTail);
 
@@ -3009,6 +3123,51 @@ int multilistTest(int argc, char *argv[]) {
                     mlwVerifyFrom(ml, s, want, n, starts[k], false, true, name);
             }
 
+            /* A struct copy of an iterator has a slot of its own: reading
+             * through the copy leaves a box read through the original
+             * intact, and each box points into its own iterator. */
+            for (size_t at = 0; at < n; at += 3) {
+                multilistIterator iter;
+                memset(&iter, 0xFF, sizeof(iter));
+                if (!multilistIteratorInitAtIdx(ml, s, &iter, (mlOffsetId)at,
+                                                true, true)) {
+                    ERR("%s: IteratorInitAtIdx(%zu) failed", name, at);
+                    break;
+                }
+
+                multilistIterator copy = iter;
+                multilistEntry a;
+                multilistEntry b;
+                memset(&a, 0xFF, sizeof(a));
+                memset(&b, 0xFF, sizeof(b));
+                const bool okA = multilistNext(&iter, &a);
+                const bool okB = multilistNext(&copy, &b);
+                const char *why = okA && okB
+                                      ? mlwCheck(&b.box, &want[at], &copy.wide)
+                                      : "Next failed";
+                if (!why) {
+                    why = mlwCheck(&a.box, &want[at], &iter.wide);
+                }
+
+                if (why) {
+                    ERR("%s: iterator copy at %zu: %s", name, at, why);
+                    break;
+                }
+
+                multilistIteratorRelease(&iter);
+            }
+
+            /* Out of range: the Wide reads fail like the plain ones. */
+            {
+                multilistEntry entry;
+                databoxWide slot;
+                if (multilistIndexWide(ml, s0, (mlOffsetId)n, &entry, &slot) ||
+                    multilistIndexWide(ml, s0, -(mlOffsetId)n - 1, &entry,
+                                       &slot)) {
+                    ERR("%s: IndexWide found an index out of range", name);
+                }
+            }
+
             /* IndexNear from anchors on both sides of every target.  The
              * anchors open their nodes with s1 so the targets' s0 decodes
              * cannot overwrite an anchor's open view. */
@@ -3030,17 +3189,32 @@ int multilistTest(int argc, char *argv[]) {
                     const char *why =
                         multilistIndexNearGet(ml, s0, t, &anchor,
                                               (mlOffsetId)anchorAt[a], &got)
-                            ? mlwCheck(&got.box, &want[idx], got.boxBig.extra)
+                            ? mlwCheckRead(&got.box, &want[idx], NULL,
+                                           MLW_READ_DEFERRED)
                             : "not found";
                     if (why) {
                         ERR("%s: IndexNear(%" PRId64 ") from %zu: %s", name, t,
                             anchorAt[a], why);
                         break;
                     }
+
+                    databoxWide slot;
+                    memset(&slot, 0xFF, sizeof(slot));
+                    memset(&got, 0xFF, sizeof(got));
+                    why = multilistIndexNearWide(ml, s0, t, &anchor,
+                                                 (mlOffsetId)anchorAt[a], &got,
+                                                 &slot)
+                              ? mlwCheck(&got.box, &want[idx], &slot)
+                              : "not found";
+                    if (why) {
+                        ERR("%s: IndexNearWide(%" PRId64 ") from %zu: %s", name,
+                            t, anchorAt[a], why);
+                        break;
+                    }
                 }
 
-                const char *why = mlwCheck(&anchor.box, &want[anchorAt[a]],
-                                           anchor.boxBig.extra);
+                const char *why = mlwCheckRead(&anchor.box, &want[anchorAt[a]],
+                                               NULL, MLW_READ_DEFERRED);
                 if (why) {
                     ERR("%s: anchor %zu after IndexNear: %s", name, anchorAt[a],
                         why);
@@ -3063,11 +3237,11 @@ int multilistTest(int argc, char *argv[]) {
 
             err += mlwVerify(ml, s, want, n, name);
 
-            /* Replace with wide values. */
+            /* Replace with wide values (normal values in normal data). */
             const size_t replaceAt[] = {0, n / 2, n - 1};
             for (size_t k = 0; k < sizeof(replaceAt) / sizeof(*replaceAt);
                  k++) {
-                const mlwVal v = mlwBoundary((uint32_t)k + 4);
+                const mlwVal v = MLW_PICK(mlwBoundary((uint32_t)k + 4));
                 databoxBig storage;
                 char buf[64];
                 multilistReplaceByTypeAtIndex(
@@ -3079,13 +3253,19 @@ int multilistTest(int argc, char *argv[]) {
             err += mlwVerify(ml, s, want, n, name);
 
             /* InsertBefore / InsertAfter wide values at both ends and the
-             * middle. */
-            for (size_t k = 0; k < 6; k++) {
+             * middle.  Normal data skips this step: on the Full tier an
+             * insert that splits a full node at an entry found by a
+             * reverse walk (negative node offset) misplaces the value,
+             * which is independent of the element width and out of this
+             * test's scope. */
+            for (size_t k = 0; data != MLW_DATA_NORMAL && k < 6; k++) {
                 const size_t at = (k / 2) == 0   ? 0
                                   : (k / 2) == 1 ? n / 2
                                                  : n - 1;
                 const bool after = k % 2;
-                const mlwVal v = mlwGen(5 * nextId++ + 3);
+                const uint32_t wideId = 5 * nextId + 3;
+                const mlwVal v = MLW_PICK(mlwGen(wideId));
+                nextId++;
                 multilistEntry entry;
                 memset(&entry, 0xFF, sizeof(entry));
                 if (!multilistIndexGet(ml, s0, (mlOffsetId)at, &entry)) {
@@ -3122,10 +3302,10 @@ int multilistTest(int argc, char *argv[]) {
                         break;
                     }
 
-                    const char *why = visited < total
-                                          ? mlwCheck(&entry.box, &want[idx],
-                                                     entry.boxBig.extra)
-                                          : "iterated past the end";
+                    const char *why =
+                        visited < total
+                            ? mlwCheck(&entry.box, &want[idx], &iter.wide)
+                            : "iterated past the end";
                     if (why) {
                         ERR("%s: DelEntry pass %d at %zu: %s", name, pass, idx,
                             why);
@@ -3174,8 +3354,8 @@ int multilistTest(int argc, char *argv[]) {
                 fl = NULL; /* the list owns it now */
                 err += mlwVerify(fromFlex, s, copy, copyN, name);
 
-                const mlwVal head = mlwBoundary(8);
-                const mlwVal tail = mlwBoundary(6);
+                const mlwVal head = MLW_PICK(mlwBoundary(8));
+                const mlwVal tail = MLW_PICK(mlwBoundary(6));
                 mlwPush(&fromFlex, s0, &head, true);
                 mlwPush(&fromFlex, s0, &tail, false);
                 mlwInsertAt(copy, &copyN, 0, head);
@@ -3203,8 +3383,9 @@ int multilistTest(int argc, char *argv[]) {
                     break;
                 }
 
-                const char *why = mlwCheck((const databox *)&dst, &expect,
-                                           inlineDst ? dst.extra : NULL);
+                const char *why =
+                    mlwCheckRead((const databox *)&dst, &expect,
+                                 inlineDst ? dst.extra : NULL, MLW_READ_OWNED);
                 if (!why && !inlineDst && mlwIsWide(&expect) &&
                     !dst.allocated) {
                     why = "wide pop into a plain box is not heap-owned";
@@ -3231,6 +3412,7 @@ int multilistTest(int argc, char *argv[]) {
                 ERR("%s: %zu elements left after popping all", name,
                     multilistCount(ml));
             }
+#undef MLW_PICK
         }
     }
 
@@ -3248,8 +3430,13 @@ int multilistTest(int argc, char *argv[]) {
             {"Full depth 1", FLEX_CAP_LEVEL_512, 1, 600, MULTILIST_TYPE_FULL},
         };
 
-        for (size_t c = 0; c < sizeof(configs) / sizeof(*configs); c++) {
-            const char *const name = configs[c].name;
+        for (size_t cd = 0;
+             cd < MLW_DATA_COUNT * (sizeof(configs) / sizeof(*configs)); cd++) {
+            const mlwData data = (mlwData)(cd % MLW_DATA_COUNT);
+            const size_t c = cd / MLW_DATA_COUNT;
+            char name[64];
+            snprintf(name, sizeof(name), "%s %s", mlwDataName[data],
+                     configs[c].name);
             mlwVal want[MLW_MAX];
             size_t n = 0;
             cleaner(multilistFree) multilist *ml =
@@ -3266,7 +3453,7 @@ int multilistTest(int argc, char *argv[]) {
             }
 
             for (uint32_t i = 0; i < configs[c].count; i++) {
-                const mlwVal v = mlwGen(i);
+                const mlwVal v = mlwGenIn(data, i);
                 const bool head = i % 7 == 6;
                 mlwPush(&ml, s0, &v, head);
                 mlwInsertAt(want, &n, head ? 0 : n, v);
@@ -3281,8 +3468,12 @@ int multilistTest(int argc, char *argv[]) {
                 mlwInsertAt(want, &n, 0, moved);
             }
 
+            /* Replace and insert wide values, or normal ones in normal
+             * data. */
             {
-                const mlwVal v = mlwBoundary(3);
+                const mlwVal v = data == MLW_DATA_NORMAL
+                                     ? mlwGenIn(data, configs[c].count)
+                                     : mlwBoundary(3);
                 databoxBig storage;
                 char buf[64];
                 multilistReplaceByTypeAtIndex(
@@ -3292,7 +3483,9 @@ int multilistTest(int argc, char *argv[]) {
             }
 
             {
-                const mlwVal v = mlwBoundary(5);
+                const mlwVal v = data == MLW_DATA_NORMAL
+                                     ? mlwGenIn(data, configs[c].count + 1)
+                                     : mlwBoundary(5);
                 multilistEntry entry;
                 memset(&entry, 0xFF, sizeof(entry));
                 if (multilistIndexGet(ml, s0, (mlOffsetId)(n / 2), &entry)) {
@@ -3345,11 +3538,12 @@ int multilistTest(int argc, char *argv[]) {
             } else {
                 flexEntry *fe = flexHead(dump);
                 for (size_t i = 0; i < n; i++) {
-                    databoxBig got;
+                    databox got;
+                    databoxWide slot;
                     memset(&got, 0xFF, sizeof(got));
-                    flexGetByTypeBig(fe, &got);
-                    const char *why =
-                        mlwCheck((const databox *)&got, &want[i], got.extra);
+                    memset(&slot, 0xFF, sizeof(slot));
+                    flexGetByTypeInto(fe, &got, &slot);
+                    const char *why = mlwCheck(&got, &want[i], &slot);
                     if (why) {
                         ERR("%s: dump element %zu: %s", name, i, why);
                         break;

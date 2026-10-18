@@ -3239,9 +3239,11 @@ static bool multilistApplyPopIdentity(multilist **ml, mflexState *state,
                                   memory_order_relaxed);
         return true;
     }
-    multilistEntry end = {0};
-    if (multilistIndexGet(*ml, state, fromTail ? (mlOffsetId)(cnt - 1) : 0,
-                          &end) &&
+    /* The Wide read, so a 96/128-bit end element compares by value. */
+    multilistEntry end;
+    databoxWide endWide;
+    if (multilistIndexWide(*ml, state, fromTail ? (mlOffsetId)(cnt - 1) : 0,
+                           &end, &endWide) &&
         databoxEqual(&end.box, want)) {
         /* The popped value is an owned copy nobody needs. */
         databox got = {{0}};

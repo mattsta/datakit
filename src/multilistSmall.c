@@ -186,8 +186,9 @@ bool multilistSmallNext(multilistIterator *iter, multilistEntry *entry) {
     flex *const fl = ((multilistSmall *)iter->ml)->fl;
 
     if (iter->fe) {
-        /* Populate value from existing flex position */
-        flexGetByTypeBig(iter->fe, &entry->boxBig);
+        /* Populate value from existing flex position; a wide value
+         * lands in the iterator's slot */
+        flexGetByTypeInto(iter->fe, &entry->box, &iter->wide);
 
         entry->fe = iter->fe;
         entry->offset = iter->offset;
@@ -231,7 +232,8 @@ bool multilistSmallIndexNear(multilistSmall *ml, mlOffsetId index,
         return false;
     }
 
-    flexGetByTypeBig(entry->fe, &entry->boxBig);
+    /* A single read has no wide storage: a wide value is deferred */
+    flexGetByTypeInto(entry->fe, &entry->box, NULL);
     return true;
 }
 
@@ -251,12 +253,13 @@ void multilistSmallRotate(multilistSmall *ml) {
     /* Get tail entry position */
     flexEntry *fe = flexTail(ml->fl);
 
-    /* Get tail entry (a databoxBig, so a 96/128-bit value has storage) */
-    databoxBig box;
-    flexGetByTypeBig(fe, &box);
+    /* Get tail entry (a 96/128-bit value lands in 'wide') */
+    databox box = {{0}};
+    databoxWide wide;
+    flexGetByTypeInto(fe, &box, &wide);
 
     /* Copy tail entry to head (must happen before tail is deleted). */
-    flexPushByType(&ml->fl, (const databox *)&box, FLEX_ENDPOINT_HEAD);
+    flexPushByType(&ml->fl, &box, FLEX_ENDPOINT_HEAD);
 
     /* Remove tail entry. */
     flexDeleteRange(&ml->fl, -1, 1);

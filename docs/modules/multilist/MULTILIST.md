@@ -107,21 +107,20 @@ typedef struct multilistIterator {
     /* All */
     bool forward;
     uint32_t type; /* variant tag, used for function dispatching */
-} multilistIterator;
 
-/* Result of multilistNext(), multilistIndex() or multilistIndexNear();
- * the value itself is in 'box' */
+    databoxWide wide; /* payload of the last wide element from Next */
+} multilistIterator; /* 80 bytes, 16-byte aligned */
+
+/* Result of multilistNext(), multilistIndex(), multilistIndexNear() and
+ * their Wide forms; the value itself is in 'box' */
 typedef struct multilistEntry {
     void *ml;         /* pointer back to the (untagged) multilist instance */
     flexEntry *fe;
-    union {
-        databox box;       /* the element */
-        databoxBig boxBig; /* same bytes; 'extra' holds a wide payload */
-    };
+    databox box;
     mlNodeId nodeIdx; /* only used for Medium and Full */
     int32_t offset;
     flex *f;          /* Full only */
-} multilistEntry; /* 64 bytes, 16-byte aligned */
+} multilistEntry; /* 48 bytes */
 
 /* State for compression operations (Full variant) */
 typedef mflexState multilistState;
@@ -129,28 +128,40 @@ typedef mflexState multilistState;
 
 Note the field order above matches the header exactly; `multilistEntry` has no
 `type` field, and neither struct is meant to be constructed by hand - always
-fill one via `multilistNext()` / `multilistIndex()` / `multilistIndexNear()`.
-They fill every field and never read the entry's previous contents, so an
-uninitialized entry is fine.
+fill one via `multilistNext()` / `multilistIndex()` / `multilistIndexNear()`
+(or a Wide form). They never read the entry's previous contents, so an
+uninitialized entry is fine. The element is decoded into `box` like
+`flexGetByTypeInto()`: for a narrow element only `box`'s type, data and (for
+variable-length types) length are written, so test the type and read the
+value; don't rely on the `big` and `allocated` bits.
 
-The entry carries its own storage for 96/128-bit elements. Every read decodes
-with `flexGetByTypeBig()` into `boxBig`, so a wide element reads back whole:
-`box.type` is `DATABOX_SIGNED_128` / `DATABOX_UNSIGNED_128`, `box.big` is 1,
-and `box.data.i128` / `box.data.u128` points at `boxBig.extra`. Every other
-value has `box.big == 0`.
+96/128-bit elements (`DATABOX_SIGNED_128` / `DATABOX_UNSIGNED_128`) need
+16 bytes of payload storage, which a 16-byte `databox` doesn't have. Where the
+payload goes depends on the read:
+
+| Read | A wide element comes back |
+|---|---|
+| `multilistNext()` | whole: `big` is 1 and `data.i128` / `data.u128` points at the iterator's `wide` slot, valid until the next `multilistNext()` on that iterator |
+| `multilistIndexWide()`, `multilistIndexNearWide()` | whole: the payload is in the `databoxWide` slot you pass |
+| `multilistIndex()`, `multilistIndexNear()` | **deferred**: the type only, with `data.ptr == NULL` (`databoxIsWideDeferred()`) |
+| `multilistPop()` | an owned value (see [Pop from Ends](#pop-from-ends)) |
+
+Narrow elements never touch a slot, so iteration and the Wide reads cost
+nothing extra on lists without wide values. The slot is part of the iterator
+struct: nothing is allocated, `multilistIteratorRelease()` stays as optional as
+before, and a struct copy of an iterator has a slot of its own.
 
 `entry.box` **borrows**, in two ways:
 
 - BYTES and containers point into the list's flex. They stay valid until the
   list is next modified.
-- A 96/128-bit value points into the entry itself. It stays valid until the
-  entry is reused or goes out of scope, so a struct copy
-  (`databox v = entry.box;`) still points back into the entry.
+- A 96/128-bit value points into its slot: the iterator's, until the next
+  `multilistNext()` on it, or yours, for as long as your slot lives.
 
 To keep a value beyond that, copy it. `databoxCopy(&entry.box)` gives an owned
 copy (a wide payload goes to a 16-byte heap block; release it with
 `databoxFreeData()`). `databoxBigCopyFrom(&dst, &entry.box)` re-homes the value
-into another `databoxBig` without allocating.
+into a `databoxBig` without allocating.
 
 ## Creation Functions
 
@@ -535,12 +546,40 @@ if (multilistIndexCheck(ml, state, 100, &entry)) {
 ```
 
 The returned `entry.box` borrows (see the lifetime rules under
-`multilistEntry`): a byte value is valid only until the next mutation, a
-96/128-bit value lives in the entry itself, and the box must not be passed to
-`databoxFreeData()`. An entry's byte value is always plain `DATABOX_BYTES`, so
-`entry.box.data.bytes.cstart` is safe here (and `databoxCBytes(&entry.box)`
-works too). With `openNode` false the Full tier only checks that the index
-exists; it does not set `entry.fe` or `entry.box`.
+`multilistEntry`): a byte value is valid only until the next mutation, and the
+box must not be passed to `databoxFreeData()`. An entry's byte value is always
+plain `DATABOX_BYTES`, so `entry.box.data.bytes.cstart` is safe here (and
+`databoxCBytes(&entry.box)` works too). With `openNode` false the Full tier
+only checks that the index exists; it does not set `entry.fe` or `entry.box`.
+
+A single read has nowhere to put a 96/128-bit payload, so `multilistIndex()`
+and `multilistIndexNear()` report a wide element **deferred**: the type is set
+and `data.ptr` is NULL (`databoxIsWideDeferred(&entry.box)`). Don't compare
+or re-insert a deferred box; those paths abort on one. To get the value, read
+it with a Wide form, which takes a 16-byte slot you own:
+
+```c
+bool multilistIndexWide(const multilist *ml, mflexState *state,
+                        mlOffsetId index, multilistEntry *entry,
+                        databoxWide *slot);
+bool multilistIndexNearWide(const multilist *ml, mflexState *state,
+                            mlOffsetId index, const multilistEntry *anchor,
+                            mlOffsetId anchorIdx, multilistEntry *entry,
+                            databoxWide *slot);
+```
+
+They behave like `multilistIndexGet()` / `multilistIndexNearGet()` (the node is
+always opened), and a wide element lands in `slot` with `big = 1` and
+`allocated = 0`. Narrow elements decode exactly as with the plain reads and
+never touch `slot`.
+
+```c
+databoxWide slot;
+if (multilistIndexWide(ml, state, -1, &entry, &slot) &&
+    entry.box.type == DATABOX_UNSIGNED_128) {
+    const __uint128_t v = *entry.box.data.u128; /* the value, in 'slot' */
+}
+```
 
 ## Iteration
 
@@ -615,6 +654,11 @@ if (multilistIteratorInitAtIdxForwardReadOnly(ml, s, &iter, 50)) {
 
 Zero-initialize the iterator (`multilistIterator iter = {0};`) before the first
 init call, matching the test suite's usage.
+
+A 96/128-bit element read by `multilistNext()` comes back whole, with its
+payload in `iter.wide`. The next `multilistNext()` on the same iterator
+overwrites it, so copy the value (`databoxCopy()` or `databoxBigCopyFrom()`)
+if you need it past that.
 
 ### Restarting Iteration
 
