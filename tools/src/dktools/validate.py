@@ -41,11 +41,14 @@ from . import steps, gitutil, leakcheck, toolchain
 from .steps import CtestResult, SanitizerHit, Step, Warning_
 from .gitutil import ToolError
 
-#: Tests that share fixed temp paths or measure timing: run one at a time.
-DEFAULT_SERIAL = (
-    r".*P|persist|persistCtx|dkTestNonceLogEvictionPerf"
-    r"|dkTestKeyringGetRawCopyMigrationCluster"
-)
+#: Timing-sensitive tests, run one at a time so the parallel set does
+#: not compete with them for CPUs: dkTestNonceLogEvictionPerf holds
+#: the measured cost of an eviction to a bound, and
+#: dkTestKeyringGetRawCopyMigrationCluster races writer and rotator
+#: threads that need to actually interleave.  The persist tests (the
+#: *P wrappers, persist, persistCtx) each take a private mkdtemp
+#: scratch directory, share no paths, and run in parallel.
+DEFAULT_SERIAL = r"dkTestNonceLogEvictionPerf|dkTestKeyringGetRawCopyMigrationCluster"
 #: Tests validate never runs: vendored suites and benchmarks.
 DEFAULT_SKIP = r"varint-.*|perfRegression|compressionBench"
 #: Tests too slow for a Debug + sanitizer build.

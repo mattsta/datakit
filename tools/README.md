@@ -76,8 +76,9 @@ uv run --project tools dktools verify NAME --tests REGEX [--serial REGEX] \
   `--root`, else `$DKTOOLS_SCRATCH`, else `dktools/` under the system
   temp dir.
 - `--tests` runs in parallel (`-j N`, default the CPU count);
-  `--serial` runs one test at a time (the `*P` tests that share fixed
-  temp paths) and is excluded from the parallel run. Both are
+  `--serial` runs one test at a time (the timing-sensitive tests, as in
+  `validate`'s default serial set) and is excluded from the parallel
+  run. Both are
   whole-name ctest regexes, and one that matches nothing fails.
 - Without `--target`, the build covers the four preset targets plus
   every target the selected tests run. Configure writes the CMake File
@@ -138,8 +139,13 @@ uv run --project tools dktools validate [--rev REV] \
 - Per configuration: a clean configure, an all-targets build,
   warnings grouped by file, the parallel ctest set (everything outside
   the serial and skip sets), then the serial set one test at a time.
-- Default serial set: `.*P`, `persist`, `persistCtx`,
-  `dkTestNonceLogEvictionPerf`, `dkTestKeyringGetRawCopyMigrationCluster`.
+- Default serial set: the timing-sensitive tests
+  `dkTestNonceLogEvictionPerf` (holds the measured cost of an eviction
+  to a bound) and `dkTestKeyringGetRawCopyMigrationCluster` (races
+  writer and rotator threads that need to actually interleave), run
+  alone so the parallel set does not compete with them for CPUs. The
+  persist tests (the `*P` wrappers, `persist`, `persistCtx`) each take
+  a private `mkdtemp` scratch directory and run in the parallel set.
   Default skip set: `varint-.*`, `perfRegression`, `compressionBench`.
   Debug builds also skip `multimap` and `multiFenwick` (too slow under
   Debug with sanitizers; `--debug-skip ''` runs them), and the summary

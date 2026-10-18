@@ -179,7 +179,7 @@ def main(argv: list[str] | None = None) -> int:
     va.add_argument(
         "--serial",
         default=validate.DEFAULT_SERIAL,
-        help="ctest name regex run one at a time (default: the *P and persist tests)",
+        help="ctest name regex run one at a time (default: the timing-sensitive tests)",
     )
     va.add_argument(
         "--skip",

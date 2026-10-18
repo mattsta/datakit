@@ -16,9 +16,9 @@ built there with the chosen compiler and preset (see
 ``dktools.toolchain``).
 
 ``--tests`` names the ctest tests run in parallel (``-j N``);
-``--serial`` names tests run one at a time, such as the ``*P`` tests
-that share fixed temp paths, and those are excluded from the parallel
-run.  Both are whole-name regexes, and a regex that matches no test is
+``--serial`` names tests run one at a time, such as the
+timing-sensitive tests in ``validate.DEFAULT_SERIAL``, and those are
+excluded from the parallel run.  Both are whole-name regexes, and a regex that matches no test is
 a failure.  ``allocaudit check --constructors`` runs on the tree with
 the tree's own dktools.
 

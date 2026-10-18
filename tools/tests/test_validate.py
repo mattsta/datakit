@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -150,6 +151,18 @@ class ValidateRun(unittest.TestCase):
         gcc = out.split("### gcc15-release", 1)[1]
         self.assertIn("- datakit src/: 1\n  - `src/a.c`: 1", gcc)
         self.assertIn("- deps/: 1\n  - `deps/varint/src/v.c`: 1", gcc)
+
+    def test_default_serial_set_is_the_timing_sensitive_tests(self) -> None:
+        serial = re.compile(steps.anchored(validate.DEFAULT_SERIAL))
+        for name in (
+            "dkTestNonceLogEvictionPerf",
+            "dkTestKeyringGetRawCopyMigrationCluster",
+        ):
+            self.assertRegex(name, serial)
+        # The persist tests use private scratch directories and run in
+        # the parallel set.
+        for name in ("flexP", "multimapP", "persist", "persistCtx", "databox"):
+            self.assertNotRegex(name, serial)
 
     def test_linker_notes_are_counted_but_pass(self) -> None:
         note = "warning: no debug symbols in executable (-arch arm64)\n"
