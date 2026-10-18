@@ -17,7 +17,7 @@ option(Build32Bit "Build 32-bit Library" OFF)
 
 # If you need debug, build with:
 # cmake -DCMAKE_BUILD_TYPE=Debug ..
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O2 -Wall -Wextra -pedantic -std=c99 -Wno-extra-semi -Wno-missing-field-initializers")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O2 -Wall -Wextra -pedantic -std=c99 -Wno-missing-field-initializers")
 
 add_library(xxhash OBJECT
     xxhash.c)
