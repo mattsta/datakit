@@ -153,13 +153,14 @@ uv run --project tools dktools validate [--rev REV] \
 - Per configuration: a clean configure, an all-targets build,
   warnings grouped by file, the parallel ctest set (everything outside
   the serial and skip sets), then the serial set one test at a time.
-- Default serial set: the timing-sensitive tests
-  `dkTestNonceLogEvictionPerf` (holds the measured cost of an eviction
-  to a bound) and `dkTestKeyringGetRawCopyMigrationCluster` (races
-  writer and rotator threads that need to actually interleave), run
-  alone so the parallel set does not compete with them for CPUs. The
-  persist tests (the `*P` wrappers, `persist`, `persistCtx`) each take
-  a private `mkdtemp` scratch directory and run in the parallel set.
+- Default serial set: `dkTestNonceLogEvictionPerf`, the one
+  timing-sensitive test. It times 20000 evictions with the monotonic
+  clock and fails above 5000 ns each, so it runs alone, where the
+  parallel set cannot preempt it. Everything else runs in parallel:
+  the persist tests (the `*P` wrappers, `persist`, `persistCtx`) each
+  take a private `mkdtemp` scratch directory, and
+  `dkTestKeyringGetRawCopyMigrationCluster` asserts its thread race
+  deterministically.
   Default skip set: `varint-.*`, `perfRegression`, `compressionBench`.
   Debug builds also skip `multimap` and `multiFenwick` (too slow under
   Debug with sanitizers; `--debug-skip ''` runs them), and the summary

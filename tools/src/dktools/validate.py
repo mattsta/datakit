@@ -42,13 +42,14 @@ from .steps import CtestResult, SanitizerHit, Step, Warning_
 from .gitutil import ToolError
 
 #: Timing-sensitive tests, run one at a time so the parallel set does
-#: not compete with them for CPUs: dkTestNonceLogEvictionPerf holds
-#: the measured cost of an eviction to a bound, and
-#: dkTestKeyringGetRawCopyMigrationCluster races writer and rotator
-#: threads that need to actually interleave.  The persist tests (the
-#: *P wrappers, persist, persistCtx) each take a private mkdtemp
-#: scratch directory, share no paths, and run in parallel.
-DEFAULT_SERIAL = r"dkTestNonceLogEvictionPerf|dkTestKeyringGetRawCopyMigrationCluster"
+#: not compete with them for CPUs.  dkTestNonceLogEvictionPerf times
+#: 20000 evictions with the monotonic clock and fails above 5000 ns
+#: each, so a preempted run can fail with nothing wrong.  Everything
+#: else runs in parallel: the persist tests (the *P wrappers, persist,
+#: persistCtx) each take a private mkdtemp scratch directory, and
+#: dkTestKeyringGetRawCopyMigrationCluster asserts its thread race
+#: deterministically.
+DEFAULT_SERIAL = r"dkTestNonceLogEvictionPerf"
 #: Tests validate never runs: vendored suites and benchmarks.
 DEFAULT_SKIP = r"varint-.*|perfRegression|compressionBench"
 #: Tests too slow for a Debug + sanitizer build.

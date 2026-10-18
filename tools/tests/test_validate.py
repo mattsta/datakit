@@ -154,14 +154,17 @@ class ValidateRun(unittest.TestCase):
 
     def test_default_serial_set_is_the_timing_sensitive_tests(self) -> None:
         serial = re.compile(steps.anchored(validate.DEFAULT_SERIAL))
+        self.assertRegex("dkTestNonceLogEvictionPerf", serial)
+        # The persist tests use private scratch directories, and the
+        # keyring race test is deterministic: both run in parallel.
         for name in (
-            "dkTestNonceLogEvictionPerf",
+            "flexP",
+            "multimapP",
+            "persist",
+            "persistCtx",
             "dkTestKeyringGetRawCopyMigrationCluster",
+            "databox",
         ):
-            self.assertRegex(name, serial)
-        # The persist tests use private scratch directories and run in
-        # the parallel set.
-        for name in ("flexP", "multimapP", "persist", "persistCtx", "databox"):
             self.assertNotRegex(name, serial)
 
     def test_linker_notes_are_counted_but_pass(self) -> None:
