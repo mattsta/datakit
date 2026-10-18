@@ -25,6 +25,8 @@ These changes are datakit's own and are not upstream. Carry them forward when re
 - imath
   - `imath.c` allocates through the `IMATH_CALLOC`, `IMATH_REALLOC` and `IMATH_FREE` seams. The datakit build defines them before including `imath.c` textually from `src/bigmath-imath.c`; the standalone `libimath` target falls back to libc. `imath.c` must not include datakit headers.
   - `IMATH_NO_SANITIZE_UNSIGNED_WRAP` applies `no_sanitize("unsigned-integer-overflow")` under clang only, because GCC has no such sanitizer. `s_usqr` uses it.
+  - `mp_int_to_string` reserves the terminator before generating digits, so it never writes past `limit`. On `MP_TRUNC` the output is still terminated and holds the sign and the lowest-order digits that fit, at most `limit - 1` characters. The completeness check reads the remaining quotient after the digit loop. Upstream wrote `limit` digits plus the terminator.
+  - `mp_rat_to_string` returns `MP_TRUNC` with the numerator still terminated when fewer than three characters remain for the slash, a denominator digit and the terminator.
   - `pi.c` parses its digit count and radix with checked `strtoimax`. It sizes its output buffer with `mp_int_string_len()` and checks the allocation and the conversion.
 - xxHash
   - `deps/xxHash/CMakeLists.txt` is datakit's own build file; upstream has no root CMake build. It builds the C library without the C++-only `-Wno-extra-semi`.

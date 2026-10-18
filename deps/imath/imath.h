@@ -184,7 +184,10 @@ mp_result mp_int_to_int(mp_int z, mp_small *out);
 mp_result mp_int_to_uint(mp_int z, mp_usmall *out);
 
 /* Convert to nul-terminated string with the specified radix, writing at
-   most limit characters including the nul terminator  */
+   most limit characters including the nul terminator. Returns MP_TRUNC
+   when the value needs more than limit - 1 characters; the output is
+   then still terminated and holds the sign and the lowest-order digits
+   that fit. Size the buffer with mp_int_string_len() for full output. */
 mp_result mp_int_to_string(mp_int z, mp_size radix, char *str, size_t limit);
 
 /* Return the number of characters required to represent

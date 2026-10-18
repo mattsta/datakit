@@ -1856,34 +1856,59 @@ mp_result mp_int_to_string(mp_int z, mp_size radix, char *str, size_t limit) {
         return MP_RANGE;
     }
 
+    /* No room for even the terminator: write nothing. */
+    if (limit == 0) {
+        return MP_TRUNC;
+    }
+
+    /* Reserve the terminator up front, so at most limit - 1 characters
+       (sign included) precede it and nothing is ever written past
+       str[limit - 1]. */
+    limit--;
+
     if (CMPZ(z) == 0) {
+        if (limit == 0) {
+            *str = '\0';
+            return MP_TRUNC;
+        }
+
         *str++ = s_val2ch(0, 1);
     } else {
         mpz_t tmp;
         char *h, *t;
 
-        if ((res = mp_int_init_copy(&tmp, z)) != MP_OK) {
-            return res;
-        }
-
         if (MP_SIGN(z) == MP_NEG) {
+            if (limit == 0) {
+                *str = '\0';
+                return MP_TRUNC;
+            }
+
             *str++ = '-';
             limit--;
         }
 
+        if ((res = mp_int_init_copy(&tmp, z)) != MP_OK) {
+            *str = '\0';
+            return res;
+        }
+
         h = str;
 
-        /* Generate digits in reverse order until finished or limit reached */
+        /* Generate digits in reverse order until finished or limit
+           reached. On truncation the low-order digits are kept. */
         for (; limit > 0; limit--) {
             mp_digit d;
 
-            if ((cmp = CMPZ(&tmp)) == 0) {
+            if (CMPZ(&tmp) == 0) {
                 break;
             }
 
             d = s_ddiv(&tmp, (mp_digit)radix);
             *str++ = s_val2ch(d, 1);
         }
+
+        /* Anything left in tmp is digits that did not fit. */
+        cmp = CMPZ(&tmp);
 
         t = str - 1;
 

@@ -535,12 +535,15 @@ mp_result mp_rat_to_string(mp_rat r, mp_size radix, char *str, int limit) {
         return MP_OK;
     }
 
-    /* Locate the end of the numerator, and make sure we are not going to exceed
-       the limit by writing a slash. */
+    /* Locate the end of the numerator. The remaining limit counts the
+       numerator's terminator slot; the slash, at least one denominator
+       digit and a new terminator need three, and mp_int_to_string()
+       needs a limit of at least 2. On truncation here the output stays
+       the terminated numerator. */
     len = strlen(str);
     start = str + len;
     limit -= len;
-    if (limit == 0) {
+    if (limit < 3) {
         return MP_TRUNC;
     }
 
