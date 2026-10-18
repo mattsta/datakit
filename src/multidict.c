@@ -1327,17 +1327,22 @@ bool multidictPopRandom(multidict *d, databox *keybox, databox *valbox) {
             continue; /* Retry - might have landed on empty slot */
         }
 
+        /* The key borrows its bytes from its slot, and the rehash step the
+         * find below runs can move the entry and free that slot: copy it
+         * first, then find and delete by the copy */
+        databox ownedKey = databoxCopy(&key);
+
         /* Get the value for this key */
         databox val;
         databoxWide valWide;
         mdBoxAim_(&val, &valWide);
-        if (!multidictFind(d, &key, &val)) {
+        if (!multidictFind(d, &ownedKey, &val)) {
+            databoxFreeData(&ownedKey);
             continue; /* Key might have moved during rehash - retry */
         }
 
-        /* The entry goes away with the delete: hand back owned copies, and
-         * delete by the copied key, which no longer points into the slot */
-        *keybox = databoxCopy(&key);
+        /* The entry goes away with the delete: hand back owned copies */
+        *keybox = ownedKey;
         *valbox = databoxCopy(&val);
 
         /* Delete the entry */
@@ -1904,22 +1909,31 @@ uint32_t multidictEvictToLimit(multidict *d) {
             /* Fallback to random eviction */
             mdBoxAim_(&keybox, &keyWide);
             if (!multidictGetRandomKey(d, &keybox)) {
-                break; /* No keys left or error */
+                /* While a rehash is in flight the pick can land on an
+                 * emptied slot; the loop guard ends this when no keys are
+                 * left or the attempts run out */
+                continue;
             }
             mdBoxSettle_(&keybox);
             gotVictim = true;
             randomVictims++;
         }
 
+        /* The victim key borrows its bytes from its slot, and the rehash
+         * step that the find and the delete below each run can move the
+         * entry and free that slot: work from an owned copy instead */
+        databox victim = databoxCopy(&keybox);
+
         /* Call eviction callback if set */
         if (d->evictionCb) {
             databox valbox;
             databoxWide valWide;
             mdBoxAim_(&valbox, &valWide);
-            if (multidictFind(d, &keybox, &valbox)) {
+            if (multidictFind(d, &victim, &valbox)) {
                 mdBoxSettle_(&valbox);
-                if (!d->evictionCb(d->evictionPrivdata, &keybox, &valbox)) {
+                if (!d->evictionCb(d->evictionPrivdata, &victim, &valbox)) {
                     /* Callback vetoed this eviction, try another key */
+                    databoxFreeData(&victim);
                     continue;
                 }
             }
@@ -1928,7 +1942,9 @@ uint32_t multidictEvictToLimit(multidict *d) {
         /* Delete the entry (LRU tracking already handled by
          * multidictLRUSelectVictim or will be handled by multidictDelete for
          * random eviction) */
-        if (multidictDelete(d, &keybox)) {
+        const bool deleted = multidictDelete(d, &victim);
+        databoxFreeData(&victim);
+        if (deleted) {
             evicted++;
         } else {
             deleteFailures++;
@@ -3185,6 +3201,34 @@ static bool vetoEvictionCb_(void *privdata, const databox *key,
     return true; /* Allow */
 }
 
+/* Checks each victim of the rehash-in-flight eviction test: the key must
+ * read "evict-rehash-key-NNNNNN" and the value the matching
+ * "evict-rehash-val-NNNNNN" */
+static int testEvictRehashSeen_ = 0;
+static int testEvictRehashBad_ = 0;
+static bool evictRehashCb_(void *privdata, const databox *key,
+                           const databox *val) {
+    (void)privdata;
+    testEvictRehashSeen_++;
+    static const char keyPrefix[] = "evict-rehash-key-";
+    static const char valPrefix[] = "evict-rehash-val-";
+    const size_t prefixLen = sizeof(keyPrefix) - 1;
+    if (!DATABOX_IS_BYTES(key) || !DATABOX_IS_BYTES(val) ||
+        key->len != prefixLen + 6 || val->len != key->len) {
+        testEvictRehashBad_++;
+        return true;
+    }
+
+    const char *k = databoxCBytes(key);
+    const char *v = databoxCBytes(val);
+    if (memcmp(k, keyPrefix, prefixLen) != 0 ||
+        memcmp(v, valPrefix, prefixLen) != 0 ||
+        memcmp(k + prefixLen, v + prefixLen, 6) != 0) {
+        testEvictRehashBad_++;
+    }
+    return true;
+}
+
 /* ====================================================================
  * 96/128-bit keys and values
  * ====================================================================
@@ -3796,13 +3840,15 @@ static int multidictTestWide_(mdWideMode mode) {
             multidictAdd(e, (databox *)&key, (databox *)&val);
         }
 
-        /* multidictEvictToLimit holds the victim's borrowed BYTES key
-         * across rehash steps, and a step can free it (a separate defect),
-         * so the table is kept stable here: this checks only what the
-         * callback receives */
-        while (multidictRehash(e, 100)) {
+        /* Evict with a rehash in flight and resizing on, so the find and
+         * delete of each victim run rehash steps that move entries and
+         * free their slots, and the evictions themselves shrink the table */
+        multidictExpand(e, (uint64_t)n * 4);
+        if (!multidictIsRehashing(e)) {
+            printf("ERROR: policy %d eviction did not start rehashing\n",
+                   policy);
+            err++;
         }
-        multidictResizeDisable(e);
 
         mdWideEvictPairs_ = p;
         mdWideEvictCount_ = n;
@@ -3830,7 +3876,6 @@ static int multidictTestWide_(mdWideMode mode) {
                         mdWideMatches_((databox *)&val, &p[i].val);
         }
         multidictSetMaxMemory(e, 0);
-        multidictResizeEnable(e);
         err += mdWideVerify_(e, p, n);
     }
 
@@ -6123,6 +6168,69 @@ int multidictTest(int argc, char *argv[]) {
         multidictSetMaxMemory(d, 0); /* Unlimited */
         uint32_t evicted = multidictEvictToLimit(d);
         assert(evicted == 0);
+    }
+
+    printf("Test 14.7: Eviction with a rehash in flight...\n");
+    {
+        /* Random then LRU victims, chosen while the table is rehashing
+         * and resizing is on: each victim's find and delete runs rehash
+         * steps that move entries and free their old slots, and the
+         * evictions shrink the table.  Keys are long enough to be stored
+         * out of line, so a borrowed victim key would point into a freed
+         * slot. */
+        for (int policy = 0; policy < 2; policy++) {
+            cleaner(multidictFree) multidict *e =
+                multidictNew(&multidictTypeExactKey, qdc, 777);
+            if (policy == 1) {
+                multidictEnableLRU(e, 4);
+                multidictSetEvictPolicy(e, MULTIDICT_EVICT_LRU);
+            }
+
+            const int total = 800;
+            char kbuf[64];
+            char vbuf[64];
+            for (int j = 0; j < total; j++) {
+                snprintf(kbuf, sizeof(kbuf), "evict-rehash-key-%06d", j);
+                snprintf(vbuf, sizeof(vbuf), "evict-rehash-val-%06d", j);
+                databox key = databoxNewBytesString(kbuf);
+                databox val = databoxNewBytesString(vbuf);
+                const multidictResult added = multidictAdd(e, &key, &val);
+                assert(added == MULTIDICT_OK_INSERTED);
+                (void)added;
+            }
+
+            multidictExpand(e, (uint64_t)total * 4);
+            assert(multidictIsRehashing(e));
+
+            testEvictRehashSeen_ = 0;
+            testEvictRehashBad_ = 0;
+            multidictSetEvictionCallback(e, evictRehashCb_, NULL);
+            multidictSetMaxMemory(
+                e, (multidictKeyBytes(e) + multidictValBytes(e)) / 4);
+            const uint32_t evicted = multidictEvictToLimit(e);
+            printf("  policy %d: evicted %u of %d\n", policy, evicted, total);
+            assert(evicted > 0);
+            assert(testEvictRehashBad_ == 0);
+            assert(testEvictRehashSeen_ == (int)evicted);
+            assert(multidictCount(e) == (uint64_t)(total - (int)evicted));
+            assert(!multidictIsOverLimit(e));
+
+            /* Exactly the survivors remain, each with its own value */
+            uint64_t found = 0;
+            for (int j = 0; j < total; j++) {
+                snprintf(kbuf, sizeof(kbuf), "evict-rehash-key-%06d", j);
+                snprintf(vbuf, sizeof(vbuf), "evict-rehash-val-%06d", j);
+                databox key = databoxNewBytesString(kbuf);
+                databox val = {{0}};
+                if (multidictFind(e, &key, &val)) {
+                    found++;
+                    assert(DATABOX_IS_BYTES(&val));
+                    assert(val.len == strlen(vbuf));
+                    assert(memcmp(databoxCBytes(&val), vbuf, val.len) == 0);
+                }
+            }
+            assert(found == multidictCount(e));
+        }
     }
 
     printf("=== Self-management tests passed! ===\n");

@@ -234,7 +234,9 @@ bool multidictIsRehashing_(const multidict *d);  /* Is rehash in progress? */
  *     keybox) are filled in place, as flexGetByType fills them: pass a
  *     DATABOX_BIG_INIT'd databoxBig, re-initialized before each call, to
  *     receive a wide value; a zeroed box receives the type only.  BYTES
- *     results borrow from the dict until it changes.
+ *     results borrow from the dict until its next call: even a lookup can
+ *     run a rehash step that moves the entry and frees the bytes, so pass
+ *     a databoxCopy of the key when finding or deleting it.
  *   - multidictGetSomeKeys ignores the prior contents of 'keys': each
  *     slot is cleared before it is filled, so a 96/128-bit key comes back
  *     deferred (type only, data.ptr == NULL; databoxIsWideDeferred).

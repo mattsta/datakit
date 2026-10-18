@@ -617,6 +617,12 @@ before it is filled, so a 96/128-bit key comes back deferred (type only,
 it lands on an empty slot; `multidictPopRandom` already retries internally
 for this reason.
 
+A BYTES key from either sampler borrows from its slot. Any later call on
+the dict, a lookup included, can run a rehash step that moves the entry and
+frees that slot, so copy the key (`databoxCopy`) before using it with the
+dict again, for example to find or delete it. `multidictEvictToLimit` and
+`multidictPopRandom` do this themselves.
+
 ## Resize Operations
 
 ### Manual Resize
