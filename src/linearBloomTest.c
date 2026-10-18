@@ -320,6 +320,127 @@ int linearBloomTest(int argc, char *argv[]) {
         linearBloomCountFree(bloom);
     }
 
+    TEST("linearBloomCount: saturation is exact and stays inside counters") {
+        linearBloomCount *bloom = linearBloomCountNew();
+
+        uint64_t hash[2];
+        hashFromInt(424242, hash);
+
+        /* Far more sets than a 3-bit counter holds */
+        for (int32_t i = 0; i < 40; i++) {
+            linearBloomCountHashSet(bloom, hash);
+        }
+
+        if (linearBloomCountHashCheck(bloom, hash) != 7) {
+            ERR("saturated count is %" PRIuFAST32 ", expected exactly 7",
+                linearBloomCountHashCheck(bloom, hash));
+        }
+
+        /* Every hashed counter is 7 and every other counter is still 0 */
+        size_t nonZero = 0;
+        for (uint64_t e = 0; e < LINEARBLOOMCOUNT_EXTENT_ENTRIES; e++) {
+            const uint8_t v = varintPacked3Get(bloom, e);
+            if (v == 0) {
+                continue;
+            }
+
+            nonZero++;
+            bool hashed = false;
+            for (uint32_t k = 0; k < LINEARBLOOMCOUNT_HASHES; k++) {
+                if (LINEARBLOOMCOUNT_KIRSCHMITZENMACHER(k, hash[0], hash[1]) %
+                        LINEARBLOOMCOUNT_EXTENT_ENTRIES ==
+                    e) {
+                    hashed = true;
+                }
+            }
+
+            if (!hashed || v != 7) {
+                ERR("counter %" PRIu64 " is %u (hashed: %d)", e, v, hashed);
+            }
+        }
+
+        if (nonZero == 0 || nonZero > LINEARBLOOMCOUNT_HASHES) {
+            ERR("%zu non-zero counters after saturating one item", nonZero);
+        }
+
+        linearBloomCountFree(bloom);
+    }
+
+    TEST("linearBloomCount: counters next to word boundaries saturate alone") {
+        linearBloomCount *bloom = linearBloomCountNew();
+
+        /* Entries 21 and 42 straddle 64-bit words; 0 and 63 sit at the
+         * ends of a word group */
+        static const uint64_t targets[] = {0,  1,  20, 21, 22,
+                                           41, 42, 43, 63, 64};
+        for (size_t t = 0; t < sizeof(targets) / sizeof(*targets); t++) {
+            const uint64_t at = targets[t];
+            linearBloomCountReset(bloom);
+            if (at > 0) {
+                varintPacked3Set(bloom, at - 1, 5);
+            }
+
+            varintPacked3Set(bloom, at + 1, 2);
+            varintPacked3Set(bloom, at, 7);
+            varintPacked3SetIncr(bloom, at, 1); /* max + 1 */
+            varintPacked3SetIncr(bloom, at, 100);
+            const uint8_t atMax = varintPacked3Get(bloom, at);
+
+            varintPacked3Set(bloom, at, 0);
+            varintPacked3SetIncr(bloom, at, -1); /* 0 - 1 */
+            const uint8_t atZero = varintPacked3Get(bloom, at);
+
+            if (atMax != 7 || atZero != 0 ||
+                (at > 0 && varintPacked3Get(bloom, at - 1) != 5) ||
+                varintPacked3Get(bloom, at + 1) != 2) {
+                ERR("entry %" PRIu64 ": max+1 gave %u, 0-1 gave %u, "
+                    "neighbours %u/%u",
+                    at, atMax, atZero,
+                    at > 0 ? varintPacked3Get(bloom, at - 1) : 5,
+                    varintPacked3Get(bloom, at + 1));
+            }
+        }
+
+        linearBloomCountFree(bloom);
+    }
+
+    TEST("linearBloomCount: decay LUTs stay within [0, 7]") {
+        uint8_t lut[8];
+        const double factors[] = {-1.0, -0.5, 0.0, 0.3, 0.75,
+                                  1.0,  2.0,  1e9, NAN};
+        for (size_t f = 0; f < sizeof(factors) / sizeof(*factors); f++) {
+            linearBloomCountBuildDecayLUT(lut, factors[f]);
+            for (int v = 0; v < 8; v++) {
+                const double exact = v * factors[f];
+                const uint8_t expect = !(exact > 0.0) ? 0
+                                       : exact >= 7.0 ? 7
+                                                      : (uint8_t)exact;
+                if (lut[v] != expect) {
+                    ERR("factor %g: lut[%d] = %u, expected %u", factors[f], v,
+                        lut[v], expect);
+                }
+            }
+        }
+
+        /* A caller-built LUT entry above 7 saturates instead of spilling */
+        linearBloomCount *bloom = linearBloomCountNew();
+        varintPacked3Set(bloom, 20, 3);
+        varintPacked3Set(bloom, 21, 1);
+        varintPacked3Set(bloom, 22, 4);
+        const uint8_t wild[8] = {0, 200, 2, 255, 9, 5, 6, 7};
+        linearBloomCountDecayByLUT(bloom, wild);
+        if (varintPacked3Get(bloom, 20) != 7 ||
+            varintPacked3Get(bloom, 21) != 7 ||
+            varintPacked3Get(bloom, 22) != 7 ||
+            varintPacked3Get(bloom, 23) != 0) {
+            ERR("wild LUT: got %u %u %u %u, expected 7 7 7 0",
+                varintPacked3Get(bloom, 20), varintPacked3Get(bloom, 21),
+                varintPacked3Get(bloom, 22), varintPacked3Get(bloom, 23));
+        }
+
+        linearBloomCountFree(bloom);
+    }
+
     TEST("linearBloomCount: half (decay) functionality") {
         linearBloomCount *bloom = linearBloomCountNew();
 

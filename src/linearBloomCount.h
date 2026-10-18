@@ -32,6 +32,10 @@ typedef uint64_t linearBloomCount;
 #define PACK_FUNCTION_PREFIX varintPacked
 #include "../deps/varint/src/varintPacked.h"
 
+/* Counting-Bloom counters saturate: a counter at the 3-bit maximum stays
+ * there, and decay never takes a counter below 0. */
+#define LINEARBLOOMCOUNT_COUNTER_MAX ((1u << LINEAR_BLOOM_BITS) - 1)
+
 /* Define divCeil BEFORE using it */
 #define divCeil(a, b) (((a) + (b) - 1) / (b))
 
@@ -89,9 +93,15 @@ linearBloomCountHashSet(linearBloomCount *restrict const bloom,
         }
     }
 
+    /* Every position already at the maximum: the counters are saturated */
+    if (minimumValue >= LINEARBLOOMCOUNT_COUNTER_MAX) {
+        return;
+    }
+
     /* O(N) */
     for (uint32_t i = 0; i < LINEARBLOOMCOUNT_HASHES; i++) {
-        /* If position is minimum value, increment */
+        /* If position is minimum value, increment (minimumValue is below the
+         * maximum here, so the increment stays inside the counter) */
         if (bitPositions[i].value == minimumValue) {
             varintPacked3SetIncr(bloom, bitPositions[i].bit, 1);
         }
@@ -382,8 +392,8 @@ DK_INLINE_ALWAYS double linearBloomCountRNGDouble(linearBloomCountRNG *rng) {
  * This maintains statistical accuracy for discrete counters over time. */
 DK_INLINE_ALWAYS uint8_t linearBloomCountProbRound(double value,
                                                    linearBloomCountRNG *rng) {
-    if (value <= 0.0) {
-        return 0;
+    if (!(value > 0.0)) {
+        return 0; /* also catches NaN */
     }
     if (value >= 7.0) {
         return 7;
@@ -457,21 +467,35 @@ linearBloomCountDecayByFactor(linearBloomCount *restrict const bloom,
  *
  * The LUT maps each 3-bit value (0-7) to its decayed value.
  * This avoids floating-point operations in the hot loop.
+ * An entry above the counter maximum is stored as the maximum.
  */
 DK_INLINE_ALWAYS void
 linearBloomCountDecayByLUT(linearBloomCount *restrict const bloom,
                            const uint8_t lut[8]) {
     for (uint64_t i = 0; i < LINEARBLOOMCOUNT_EXTENT_ENTRIES; i++) {
         uint8_t old_val = varintPacked3Get(bloom, i);
-        varintPacked3Set(bloom, i, lut[old_val]);
+        const uint8_t new_val = lut[old_val];
+        varintPacked3Set(bloom, i,
+                         new_val > LINEARBLOOMCOUNT_COUNTER_MAX
+                             ? (uint8_t)LINEARBLOOMCOUNT_COUNTER_MAX
+                             : new_val);
     }
 }
 
-/* Build a decay LUT for a given factor */
+/* Build a decay LUT for a given factor. Each entry is floor(v * factor)
+ * clamped to [0, LINEARBLOOMCOUNT_COUNTER_MAX], so a negative factor maps
+ * every counter to 0 and a factor above 1 saturates. */
 DK_INLINE_ALWAYS void linearBloomCountBuildDecayLUT(uint8_t lut[8],
                                                     double decay_factor) {
     for (int v = 0; v < 8; v++) {
-        lut[v] = (uint8_t)(v * decay_factor);
+        const double scaled = v * decay_factor;
+        if (!(scaled > 0.0)) {
+            lut[v] = 0; /* also catches NaN */
+        } else if (scaled >= (double)LINEARBLOOMCOUNT_COUNTER_MAX) {
+            lut[v] = (uint8_t)LINEARBLOOMCOUNT_COUNTER_MAX;
+        } else {
+            lut[v] = (uint8_t)scaled;
+        }
     }
 }
 
