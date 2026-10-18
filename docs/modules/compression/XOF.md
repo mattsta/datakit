@@ -14,7 +14,9 @@ temporal locality: consecutive values often share most of their bit pattern.
 
 - Lossless compression for IEEE 754 double-precision floats
 - Optimized for time-series data with smooth changes
-- Achieves 10-20x compression for typical sensor data
+- Compresses repeated and low-precision values well (~64x for a constant,
+  ~14x for readings rounded to 0.1). Full-precision computed doubles,
+  whose low mantissa bits change every sample, barely compress (~1.1x).
 - Bit-level encoding for maximum space efficiency
 - Streaming write and random read support
 - Based on XOR operations for fast encoding/decoding
@@ -41,7 +43,7 @@ Instead of storing 64 bits, we only store the unique bits!
 
 ### Compression Algorithm
 
-```c
+```text
 1. First value: Store full 64 bits (no compression possible)
 
 2. For each subsequent value:
@@ -89,7 +91,7 @@ typedef uint64_t xofVal;    /* Value type (for casting) */
 
 ```c
 typedef struct xofWriter {
-    xof *d;                             /* Compressed data array */
+    xof *d;                             /* Stream, owned and grown by the writer */
 
     /* Write state */
     size_t usedBits;                    /* Next write position */
@@ -99,9 +101,24 @@ typedef struct xofWriter {
 
     /* Metadata */
     size_t count;                       /* Number of values */
-    size_t totalBytes;                  /* Allocated bytes */
+    size_t totalBytes;                  /* Bytes allocated for d */
 } xofWriter;
 ```
+
+Writer rules:
+
+- Start from `xofWriter writer = {0};` and write every value through
+  `xofWrite()`. The first value resets the XOR window, so leftover writer
+  state is ignored. Never call `xofInit()` on a writer's stream or set
+  `count` by hand.
+- The writer owns `d`. `xofWrite()` allocates it when it is NULL, then
+  grows it with `zrealloc` as values arrive, keeping `totalBytes` current
+  and leaving room for readers to decode everything written.
+- You may preallocate instead. `d` must then come zero-filled from the
+  zmalloc family (`zcalloc`), with `totalBytes` set to its size.
+- Free the stream with `zfree(writer.d)`.
+- A stream never records how many values it holds; track the count
+  yourself, for example `writer.count`.
 
 ### xofReader
 
@@ -123,49 +140,56 @@ typedef struct xofReader {
 
 ### Initialization
 
+`xofInit()` and `xofAppend()` write a **raw** stream: you own the buffer
+and its size, and carry the XOR window yourself. Most code should use the
+writer (below), which does all of this.
+
 ```c
 /* Initialize first value in stream */
 void xofInit(xof *x, size_t *bitsUsed, double val);
-
-/* Example */
-xof compressed[1024];  /* Allocate space */
-size_t bitsUsed = 0;
-
-double firstValue = 25.5;
-xofInit(compressed, &bitsUsed, firstValue);
-/* bitsUsed is now 64 (full double stored) */
 ```
 
 ### Appending Values
 
 ```c
-/* Append new value to stream */
+/* Append new value to stream. '*prevLeadingZeroes' and
+ * '*prevTrailingZeroes' carry the XOR window between calls and must
+ * start at -1. */
 void xofAppend(xof *x, size_t *bitsUsed,
                int_fast32_t *prevLeadingZeroes,
                int_fast32_t *prevTrailingZeroes,
                double prevVal, double newVal);
+```
 
-/* Example: Compress a sequence */
-xof compressed[1024];
-size_t bitsUsed = 0;
-int_fast32_t leadingZeros = 0;
-int_fast32_t trailingZeros = 0;
+```c
+#include "xof.h"
 
-double values[] = {25.5, 25.6, 25.7, 25.8, 25.9};
+#include <stdio.h>
 
-/* Initialize with first value */
-xofInit(compressed, &bitsUsed, values[0]);
-double prev = values[0];
+/* Example: compress a sequence into a raw stream */
+void exampleRawStream(void) {
+    /* 64 bits for the first value plus at most 78 per later one */
+    xof compressed[8] = {0};
+    size_t bitsUsed = 0;
+    int_fast32_t leadingZeros = -1; /* no XOR window yet */
+    int_fast32_t trailingZeros = -1;
 
-/* Append remaining values */
-for (int i = 1; i < 5; i++) {
-    xofAppend(compressed, &bitsUsed, &leadingZeros, &trailingZeros,
-              prev, values[i]);
-    prev = values[i];
+    const double values[] = {25.5, 25.6, 25.7, 25.8, 25.9};
+
+    /* Initialize with first value */
+    xofInit(compressed, &bitsUsed, values[0]);
+    double prev = values[0];
+
+    /* Append remaining values */
+    for (int i = 1; i < 5; i++) {
+        xofAppend(compressed, &bitsUsed, &leadingZeros, &trailingZeros,
+                  prev, values[i]);
+        prev = values[i];
+    }
+
+    printf("Compressed %d doubles from 320 bits to %zu bits (%.1fx)\n", 5,
+           bitsUsed, 320.0 / bitsUsed);
 }
-
-printf("Compressed %d doubles from 320 bits to %zu bits (%.1fx)\n",
-       5, bitsUsed, 320.0 / bitsUsed);
 ```
 
 ### Reading Values
@@ -183,16 +207,25 @@ double xofGetCached(const xof *x, size_t *bitOffset,
 
 /* Read all values at once */
 bool xofReadAll(const xof *d, double *vals, size_t count);
+```
 
-/* Example: Random access */
-xof *compressed = /* ... compressed data ... */;
+```c
+#include "xof.h"
 
-double value = xofGet(compressed, 42);
-printf("Value at index 42: %.2f\n", value);
+#include <stdio.h>
 
-/* Example: Sequential read (faster) */
-double values[100];
-xofReadAll(compressed, values, 100);
+/* Example: reading a stream of 'count' values (count tracked by you) */
+void exampleReadStream(const xof *compressed, size_t count) {
+    if (count > 42) {
+        /* Random access (replays from the start) */
+        const double value = xofGet(compressed, 42);
+        printf("Value at index 42: %.2f\n", value);
+    }
+
+    /* Sequential read (faster) */
+    double values[100];
+    xofReadAll(compressed, values, count < 100 ? count : 100);
+}
 ```
 
 ### Resumable Reader (O(1) Sequential Access)
@@ -221,13 +254,24 @@ size_t xofReaderRemaining(const xofReader *r, size_t totalCount);
 ```
 
 ```c
-xofReader r;
-xofReaderInitFromWriter(&r, &writer);
+#include "xof.h"
 
-/* Remaining shrinks as you read, so re-test rather than caching it */
-while (xofReaderRemaining(&r, writer.count) > 0) {
-    const double v = xofReaderNext(&r, writer.d);
-    consume(v);
+/* Sum every value a writer holds, in one O(n) pass */
+double exampleSum(const xofWriter *writer) {
+    if (writer->count == 0) {
+        return 0.0;
+    }
+
+    xofReader r;
+    xofReaderInitFromWriter(&r, writer);
+    double sum = xofReaderCurrent(&r); /* the first value */
+
+    /* Remaining shrinks as you read, so re-test rather than caching it */
+    while (xofReaderRemaining(&r, writer->count) > 0) {
+        sum += xofReaderNext(&r, writer->d);
+    }
+
+    return sum;
 }
 ```
 
@@ -244,36 +288,32 @@ code should use `xofReader`.
 ```c
 /* Write value to xofWriter */
 void xofWrite(xofWriter *const w, const double val);
+```
 
-/* Example: Using xofWriter */
-xofWriter writer = {
-    .d = zcalloc(1024, sizeof(xof)),
-    .usedBits = 0,
-    .currentLeadingZeroes = 0,
-    .currentTrailingZeroes = 0,
-    .prevVal = 0.0,
-    .count = 0,
-    .totalBytes = 1024 * sizeof(xof)
-};
+```c
+#include "datakit.h"
+#include "xof.h"
 
-/* Write first value (initializes stream) */
-double firstVal = 20.5;
-writer.prevVal = firstVal;
-xofInit(writer.d, &writer.usedBits, firstVal);
-writer.count = 1;
+#include <stdio.h>
 
-/* Write subsequent values */
-for (int i = 0; i < 1000; i++) {
-    double val = 20.5 + (i * 0.1);
-    xofWrite(&writer, val);
+/* Example: using xofWriter */
+void exampleWriter(void) {
+    /* Every field zero: the writer allocates and grows its stream, and
+     * the first xofWrite() sets up the XOR window */
+    xofWriter writer = {0};
+
+    for (int i = 0; i < 1000; i++) {
+        const double val = 20.5 + (i * 0.1);
+        xofWrite(&writer, val);
+    }
+
+    printf("Compressed %zu values into %zu bits\n", writer.count,
+           writer.usedBits);
+    printf("Compression ratio: %.2fx\n",
+           (writer.count * 64.0) / writer.usedBits);
+
+    zfree(writer.d);
 }
-
-printf("Compressed %zu values into %zu bits\n",
-       writer.count, writer.usedBits);
-printf("Compression ratio: %.2fx\n",
-       (writer.count * 64.0) / writer.usedBits);
-
-zfree(writer.d);
 ```
 
 ## Real-World Examples
@@ -281,7 +321,12 @@ zfree(writer.d);
 ### Example 1: Temperature Sensor Compression
 
 ```c
+#include "datakit.h"
 #include "xof.h"
+
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <time.h>
 
 typedef struct TempSensor {
@@ -291,15 +336,8 @@ typedef struct TempSensor {
 } TempSensor;
 
 TempSensor *tempSensorNew(void) {
+    /* zcalloc zeroes the writer: it allocates and grows its stream */
     TempSensor *sensor = zcalloc(1, sizeof(*sensor));
-
-    sensor->writer.d = zcalloc(4096, sizeof(xof));
-    sensor->writer.usedBits = 0;
-    sensor->writer.currentLeadingZeroes = 0;
-    sensor->writer.currentTrailingZeroes = 0;
-    sensor->writer.prevVal = 0.0;
-    sensor->writer.count = 0;
-    sensor->writer.totalBytes = 4096 * sizeof(xof);
 
     sensor->startTime = time(NULL);
     sensor->sampleInterval = 60;  /* 1 minute */
@@ -308,15 +346,8 @@ TempSensor *tempSensorNew(void) {
 }
 
 void tempSensorRecord(TempSensor *sensor, double temperature) {
-    if (sensor->writer.count == 0) {
-        /* First value */
-        xofInit(sensor->writer.d, &sensor->writer.usedBits, temperature);
-        sensor->writer.prevVal = temperature;
-        sensor->writer.count = 1;
-    } else {
-        /* Subsequent values */
-        xofWrite(&sensor->writer, temperature);
-    }
+    /* Every value, the first included, goes through xofWrite() */
+    xofWrite(&sensor->writer, temperature);
 }
 
 void tempSensorGetHistory(TempSensor *sensor, double *temps, size_t count) {
@@ -385,7 +416,13 @@ void exampleTempSensor(void) {
 ### Example 2: Stock Price Compression
 
 ```c
+#include "datakit.h"
 #include "xof.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
 
 typedef struct StockTick {
     xofWriter prices;
@@ -397,22 +434,10 @@ typedef struct StockTick {
 StockTick *stockTickNew(const char *symbol) {
     StockTick *stock = zcalloc(1, sizeof(*stock));
 
-    /* Initialize price writer */
+    /* Preallocate 64 KB per writer to skip early growth (optional) */
     stock->prices.d = zcalloc(8192, sizeof(xof));
-    stock->prices.usedBits = 0;
-    stock->prices.currentLeadingZeroes = 0;
-    stock->prices.currentTrailingZeroes = 0;
-    stock->prices.prevVal = 0.0;
-    stock->prices.count = 0;
     stock->prices.totalBytes = 8192 * sizeof(xof);
-
-    /* Initialize volume writer */
     stock->volumes.d = zcalloc(8192, sizeof(xof));
-    stock->volumes.usedBits = 0;
-    stock->volumes.currentLeadingZeroes = 0;
-    stock->volumes.currentTrailingZeroes = 0;
-    stock->volumes.prevVal = 0.0;
-    stock->volumes.count = 0;
     stock->volumes.totalBytes = 8192 * sizeof(xof);
 
     stock->startTime = time(NULL);
@@ -422,18 +447,8 @@ StockTick *stockTickNew(const char *symbol) {
 }
 
 void stockTickRecord(StockTick *stock, double price, double volume) {
-    if (stock->prices.count == 0) {
-        xofInit(stock->prices.d, &stock->prices.usedBits, price);
-        stock->prices.prevVal = price;
-        stock->prices.count = 1;
-
-        xofInit(stock->volumes.d, &stock->volumes.usedBits, volume);
-        stock->volumes.prevVal = volume;
-        stock->volumes.count = 1;
-    } else {
-        xofWrite(&stock->prices, price);
-        xofWrite(&stock->volumes, volume);
-    }
+    xofWrite(&stock->prices, price);
+    xofWrite(&stock->volumes, volume);
 }
 
 void stockTickGetOHLC(StockTick *stock, double *open, double *high,
@@ -492,7 +507,12 @@ void exampleStockTick(void) {
 ### Example 3: Sensor Array Compression
 
 ```c
+#include "datakit.h"
 #include "xof.h"
+
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #define NUM_SENSORS 100
 
@@ -502,32 +522,14 @@ typedef struct SensorArray {
 } SensorArray;
 
 SensorArray *sensorArrayNew(void) {
+    /* zcalloc zeroes every writer: each allocates and grows its stream */
     SensorArray *array = zcalloc(1, sizeof(*array));
-
-    for (int i = 0; i < NUM_SENSORS; i++) {
-        array->sensors[i].d = zcalloc(1024, sizeof(xof));
-        array->sensors[i].usedBits = 0;
-        array->sensors[i].currentLeadingZeroes = 0;
-        array->sensors[i].currentTrailingZeroes = 0;
-        array->sensors[i].prevVal = 0.0;
-        array->sensors[i].count = 0;
-        array->sensors[i].totalBytes = 1024 * sizeof(xof);
-    }
-
-    array->sampleCount = 0;
     return array;
 }
 
 void sensorArrayRecord(SensorArray *array, double values[NUM_SENSORS]) {
     for (int i = 0; i < NUM_SENSORS; i++) {
-        if (array->sensors[i].count == 0) {
-            xofInit(array->sensors[i].d, &array->sensors[i].usedBits,
-                   values[i]);
-            array->sensors[i].prevVal = values[i];
-            array->sensors[i].count = 1;
-        } else {
-            xofWrite(&array->sensors[i], values[i]);
-        }
+        xofWrite(&array->sensors[i], values[i]);
     }
     array->sampleCount++;
 }
@@ -586,15 +588,22 @@ void exampleSensorArray(void) {
 
 ### Compression Ratio
 
-Typical compression ratios for different data patterns:
+Measured with `xofWrite()` over 10,000 values. What matters is how many
+low mantissa bits change from value to value, not how smooth the series
+looks:
 
-| Data Pattern        | Compression Ratio | Example              |
-| ------------------- | ----------------- | -------------------- |
-| Constant            | ~64x              | Same value repeated  |
-| Slowly varying      | 10-20x            | Temperature sensors  |
-| Linearly increasing | 8-15x             | Timestamps, counters |
-| Random walk         | 4-8x              | Stock prices         |
-| Random values       | 1-2x              | White noise          |
+| Data Pattern                        | Bits/Value | Ratio  |
+| ----------------------------------- | ---------- | ------ |
+| Constant                            | 1.0        | ~64x   |
+| Smooth readings rounded to 0.1      | 4.7        | ~14x   |
+| Integer counter `0, 1, 2, ...`      | 16         | 4x     |
+| Random walk in cents                | 31         | ~2x    |
+| Smooth `25 + sin(i/100)`, full bits | 55         | ~1.16x |
+| Linear `20.5 + i*0.1`               | 56         | ~1.14x |
+| Random values in [0, 1]             | 65         | ~0.99x |
+
+Round or quantize values to the precision you actually need before
+writing them; that is what makes the low bits repeat.
 
 ### Speed
 
@@ -611,15 +620,15 @@ Iterating with `xofGet(x, i)` is O(n^2). Use `xofReader` or `xofReadAll`.
 
 ### Memory Usage
 
-```c
-/* Storage overhead */
-First value: 64 bits
-Unchanged: 1 bit
-Same pattern: 2 + N bits (typically N=10-20)
-New pattern: 2 + 6 + 6 + N bits (typically N=10-30)
+```text
+Storage per value:
+  First value:   64 bits
+  Unchanged:     1 bit
+  Same window:   2 + N bits (N = the current window's width)
+  New window:    2 + 6 + 6 + N bits (at most 78)
 
-Average: 15-20 bits per value for time-series data
-vs 64 bits uncompressed = ~3.2-4.3x compression
+N is the span of mantissa bits that changed: a few bits for values
+rounded to a coarse precision, ~50 for full-precision computed doubles.
 ```
 
 ## Best Practices
@@ -627,57 +636,100 @@ vs 64 bits uncompressed = ~3.2-4.3x compression
 ### 1. Use for Time-Series Data
 
 ```c
-/* GOOD: Slowly changing values */
-for (int i = 0; i < 1000; i++) {
-    double temp = 25.0 + sin(i / 100.0);  /* Smooth */
-    xofWrite(&writer, temp);
-}
-/* Achieves 15-20x compression */
+#include "datakit.h"
+#include "xof.h"
 
-/* BAD: Random values */
-for (int i = 0; i < 1000; i++) {
-    double random = rand() / (double)RAND_MAX;  /* No pattern */
-    xofWrite(&writer, random);
+#include <math.h>
+#include <stdlib.h>
+
+void exampleSeriesShapes(void) {
+    /* GOOD: Smooth readings at the precision you need (0.1): ~14x */
+    xofWriter rounded = {0};
+    for (int i = 0; i < 1000; i++) {
+        const double temp = round((25.0 + sin(i / 100.0)) * 10.0) / 10.0;
+        xofWrite(&rounded, temp);
+    }
+
+    /* POOR: The same curve at full precision: ~1.16x, since the low
+     * mantissa bits change every sample */
+    xofWriter full = {0};
+    for (int i = 0; i < 1000; i++) {
+        xofWrite(&full, 25.0 + sin(i / 100.0));
+    }
+
+    /* BAD: Random values: ~1x */
+    xofWriter random = {0};
+    for (int i = 0; i < 1000; i++) {
+        xofWrite(&random, rand() / (double)RAND_MAX);
+    }
+
+    zfree(rounded.d);
+    zfree(full.d);
+    zfree(random.d);
 }
-/* Achieves only 1-2x compression */
 ```
 
 ### 2. Batch Decompression
 
 ```c
-/* SLOW: Random access */
-for (int i = 0; i < count; i++) {
-    double val = xofGet(compressed, i);  /* Replays from start each time */
-}
+#include "datakit.h"
+#include "xof.h"
 
-/* FAST: Decompress all at once */
-double *values = zmalloc(sizeof(double) * count);
-xofReadAll(compressed, values, count);
-for (size_t i = 0; i < count; i++) {
-    /* Use values[i] */
+double exampleBatchRead(const xof *compressed, size_t count) {
+    double sum = 0.0;
+
+    /* SLOW: Random access replays from the start each time: O(n^2) */
+    for (size_t i = 0; i < count; i++) {
+        sum += xofGet(compressed, i);
+    }
+
+    /* FAST: Decompress all at once: O(n) */
+    double *values = zmalloc(sizeof(double) * (count ? count : 1));
+    xofReadAll(compressed, values, count);
+    for (size_t i = 0; i < count; i++) {
+        sum += values[i];
+    }
+
+    zfree(values);
+    return sum;
 }
-zfree(values);
 ```
 
-### 3. Allocate Sufficient Space
+### 3. Preallocate to Skip Growth (Optional)
+
+A `xofWriter` grows its own stream, so preallocating only saves the
+reallocations. Raw `xofInit()`/`xofAppend()` streams do not grow; size
+those for the worst case yourself.
 
 ```c
-/* Worst case: every value uses new pattern */
-/* Max bits per value: 2 + 6 + 6 + 64 = 78 bits */
-/* Safe allocation: count * 78 / 64 * sizeof(uint64_t) */
+#include "datakit.h"
+#include "xof.h"
 
-size_t count = 10000;
-size_t safeSize = (count * 78 + 63) / 64;  /* Round up */
-xof *compressed = zcalloc(safeSize, sizeof(xof));
+void examplePreallocate(xofWriter *writer, size_t count) {
+    /* Worst case: 64 bits for the first value, 78 for each later one, plus
+     * one slot because a read near the end may touch the next word */
+    const size_t safeSize = (64 + count * 78 + 63) / 64 + 1;
+
+    *writer = (xofWriter){0};
+    writer->d = zcalloc(safeSize, sizeof(xof));
+    writer->totalBytes = safeSize * sizeof(xof);
+}
 ```
 
 ### 4. Monitor Compression Ratio
 
 ```c
-/* Check if data is suitable for XOF */
-if ((writer.count * 64.0) / writer.usedBits < 2.0) {
-    printf("Warning: Poor compression ratio - data may not be suitable\n");
-    /* Consider alternative compression or store uncompressed */
+#include "xof.h"
+
+#include <stdio.h>
+
+void exampleCheckRatio(const xofWriter *writer) {
+    /* Check if data is suitable for XOF */
+    if (writer->count > 0 &&
+        (writer->count * 64.0) / writer->usedBits < 2.0) {
+        printf("Warning: Poor compression ratio - data may not be suitable\n");
+        /* Quantize the values, use another codec, or store them as is */
+    }
 }
 ```
 
