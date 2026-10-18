@@ -225,9 +225,6 @@ static inline mflex **mlTailPtr(const multilistFull *ml) {
 #define multilistFullCompressRenew__(ml, state)                                \
     multilistFullCompress__(ml, state, 0, false)
 
-#define multilistFullCompressMiddle__(ml, state, idx)                          \
-    multilistFullCompress__(ml, state, idx, true)
-
 /* Force 'multilistFull' to meet compression guidelines set by compress depth.
  * The only way to guarantee interior nodes get compressed is to iterate
  * to our "interior" compress depth then compress the next node we find.
@@ -275,6 +272,77 @@ DK_STATIC void multilistFullCompress__(const multilistFull *ml,
     }
     printf("\b\b]\n");
 #endif
+}
+
+/* Put nodes [lo, hi] (clamped to the list) on the compress depth rule:
+ * the 'compress' nodes at each end are never compressed, and every node
+ * between them is compressed.  An interior node that is already
+ * compressed is left alone. */
+DK_STATIC void multilistFullCompressRange__(const multilistFull *ml,
+                                            mflexState *state, mlNodeId lo,
+                                            mlNodeId hi) {
+    const mlNodeId tail = mlTailIdx(ml);
+    const mlNodeId depth = (mlNodeId)ml->compress;
+    if (lo < 0) {
+        lo = 0;
+    }
+
+    if (hi > tail) {
+        hi = tail;
+    }
+
+    for (mlNodeId at = lo; at <= hi; at++) {
+        mflex **node = getNodePtr(at);
+        if (at < depth || at > tail - depth) {
+            mflexSetCompressNever(node, state);
+        } else if (!mflexIsCompressed(*node)) {
+            mflexSetCompressAuto(node, state);
+        }
+    }
+}
+
+/* Restore the compress depth rule after a split insert at 'nodeIdx' and
+ * the merges around it changed the node count from 'countBefore'.
+ *
+ * The split and the merges only touch nodes in [nodeIdx - 2, nodeIdx + 2]
+ * (merges only move indexes down, and the lowest merge partner stays
+ * put), so that window is re-checked as a whole.  Every other node is
+ * unchanged.  A node before the window keeps its index, so only its
+ * distance from the tail changed.  A node after the window moved by the
+ * net count change, so only its distance from the head changed.  Those
+ * are re-checked only where that change carried them across a depth
+ * boundary. */
+DK_STATIC void multilistFullCompressAfterSplit__(const multilistFull *ml,
+                                                 mflexState *state,
+                                                 mlNodeId nodeIdx,
+                                                 mlNodeId countBefore) {
+    if (!multilistFullAllowsCompression(ml)) {
+        return;
+    }
+
+    const mlNodeId depth = (mlNodeId)ml->compress;
+    const mlNodeId net = ml->count - countBefore;
+    const mlNodeId lo = nodeIdx - 2;
+    const mlNodeId hi = nodeIdx + 2;
+    multilistFullCompressRange__(ml, state, lo, hi);
+
+    /* Before the window: the last interior index moved from
+     * (countBefore - 1 - depth) to (count - 1 - depth). */
+    const mlNodeId edgeBefore = countBefore - 1 - depth;
+    const mlNodeId edgeAfter = ml->count - 1 - depth;
+    const mlNodeId tailLo = (edgeBefore < edgeAfter ? edgeBefore : edgeAfter);
+    const mlNodeId tailHi = (edgeBefore < edgeAfter ? edgeAfter : edgeBefore);
+    multilistFullCompressRange__(ml, state, tailLo + 1,
+                                 tailHi < lo - 1 ? tailHi : lo - 1);
+
+    /* After the window: nodes moved by 'net' across the first interior
+     * index 'depth'. */
+    if (net != 0) {
+        const mlNodeId headLo = net > 0 ? depth : depth + net;
+        const mlNodeId headHi = net > 0 ? depth + net - 1 : depth - 1;
+        multilistFullCompressRange__(ml, state,
+                                     headLo > hi + 1 ? headLo : hi + 1, headHi);
+    }
 }
 
 DK_STATIC mlNodeId multilistFullInsertNodeAfter__(multilistFull *ml,
@@ -815,6 +883,7 @@ DK_STATIC void multilistFullInsert_(multilistFull *ml, mflexState *state[2],
         /* node is full we need to split it. */
         /* covers both after and !after cases */
         D("\tsplitting node [%d], %d...", entry->nodeIdx, entry->offset);
+        const mlNodeId countBefore = ml->count;
         mlNodeId newIdx = multilistFullSplitNodeFromOpen_(
             ml, state[0], node, &f, entry->nodeIdx, entry->offset, after);
 
@@ -827,8 +896,12 @@ DK_STATIC void multilistFullInsert_(multilistFull *ml, mflexState *state[2],
 
         ml->values++;
 
+        /* The merges can remove nodes on either side of the split, so
+         * 'newIdx' may no longer name the new node: re-apply the depth
+         * rule over everything the split and merges could have moved. */
         multilistFullMergeNodes_(ml, state, entry->nodeIdx);
-        multilistFullCompressMiddle__(ml, state[0], newIdx);
+        multilistFullCompressAfterSplit__(ml, state[0], entry->nodeIdx,
+                                          countBefore);
     } else {
         if (after) {
             D("Not full, inserting after current position.");
@@ -1770,10 +1843,43 @@ static bool mlfIndexSame(multilistFull *ml, mflexState *state, mlOffsetId i,
 }
 
 /* Split test elements: fixed-width strings, one per id. */
-#define MLF_SPLIT_LEN 24
+/* Split test elements: fixed-width strings, one per id.  The long run of
+ * 'x' makes any node of two or more of them compress, so an interior
+ * node that is not compressed is a real depth-rule failure. */
+#define MLF_SPLIT_LEN 48
 static databox mlfSplitBox(uint32_t id, char buf[MLF_SPLIT_LEN + 1]) {
-    snprintf(buf, MLF_SPLIT_LEN + 1, "split-%06" PRIu32 "-xxxxxxxxxxx", id);
+    snprintf(buf, MLF_SPLIT_LEN + 1,
+             "split-%06" PRIu32 "-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", id);
     return databoxNewBytes(buf, MLF_SPLIT_LEN);
+}
+
+/* Check every node of 'ml' against the compress depth rule: the
+ * 'compress' nodes at each end are not compressed, and every node between
+ * them is (unless it is too small to be worth it, as mlVerify_ allows).
+ * Returns NULL, or what failed with its node in 'badNode'. */
+static const char *mlfDepthRuleCheck(const multilistFull *ml,
+                                     mlNodeId *badNode) {
+    if (!multilistFullAllowsCompression(ml)) {
+        return NULL;
+    }
+
+    const mlNodeId tail = mlTailIdx(ml);
+    const mlNodeId depth = (mlNodeId)ml->compress;
+    for (mlNodeId at = 0; at <= tail; at++) {
+        const mflex *node = getNode(at);
+        const bool edge = at < depth || at > tail - depth;
+        *badNode = at;
+        if (edge && mflexIsCompressed(node)) {
+            return "an end node is compressed";
+        }
+
+        if (!edge && !mflexIsCompressed(node) &&
+            mflexBytesUncompressed(node) > 64) {
+            return "an interior node is not compressed";
+        }
+    }
+
+    return NULL;
 }
 
 static bool mlfSplitIs(const databox *box, uint32_t id) {
@@ -3236,6 +3342,119 @@ int multilistFullTest(int argc, char *argv[]) {
 
                     multilistFullFree(ml);
                 }
+            }
+        }
+    }
+
+    TEST("split and merge inserts keep every node's compression on the "
+         "depth rule") {
+        /* Lists of full nodes with one-element nodes between them (built
+         * with fill 0 pushes), so an insert into a full node splits it
+         * and a split half can merge with a small neighbour.  After every
+         * random insert each node must match the depth rule and the list
+         * must match an array oracle.  Both splits and merges must
+         * occur. */
+        enum {
+            CR_GROUPS = 8,
+            CR_PER_GROUP = 12,
+            CR_INSERTS = 48,
+            CR_ROUNDS = 6,
+            CR_MAX = 256,
+            CR_INS = 200000
+        };
+        static uint32_t want[CR_MAX];
+        for (uint32_t d = 1; d <= 2; d++) {
+            uint32_t splits = 0;
+            uint32_t merges = 0;
+            bool failed = false;
+            uint64_t seed = 0x9E3779B97F4A7C15ULL * d;
+            for (uint32_t round = 0; round < CR_ROUNDS && !failed; round++) {
+                char buf[MLF_SPLIT_LEN + 1];
+                multilistFull *ml = multilistFullNew(FLEX_CAP_LEVEL_512, d);
+                uint32_t n = 0;
+                for (uint32_t g = 0; g < CR_GROUPS; g++) {
+                    multilistFullSetFill(ml, FLEX_CAP_LEVEL_512);
+                    for (uint32_t k = 0; k < CR_PER_GROUP + 2; k++) {
+                        if (k == CR_PER_GROUP) {
+                            /* one-element node, then a fresh node */
+                            multilistFullSetFill(ml, FLEX_CAP_LEVEL_0);
+                        }
+
+                        const databox box = mlfSplitBox(n, buf);
+                        multilistFullPushByTypeTail(ml, s0, &box);
+                        want[n] = n;
+                        n++;
+                    }
+                }
+
+                multilistFullSetFill(ml, FLEX_CAP_LEVEL_512);
+
+                mlNodeId bad = -1;
+                const char *why = mlfDepthRuleCheck(ml, &bad);
+                if (why) {
+                    ERR("depth %u round %u: after building, node %d: %s", d,
+                        round, bad, why);
+                    failed = true;
+                }
+
+                for (uint32_t i = 0; i < CR_INSERTS && !failed; i++) {
+                    seed =
+                        seed * 6364136223846793005ULL + 1442695040888963407ULL;
+                    const uint32_t g = (uint32_t)((seed >> 33) % n);
+                    const bool after = (seed >> 13) & 1;
+                    const uint32_t id = CR_INS + round * CR_INSERTS + i;
+                    const databox ins = mlfSplitBox(id, buf);
+                    multilistEntry entry;
+                    if (!multilistFullIndexGet(ml, s0, g, &entry)) {
+                        ERR("depth %u round %u: index %u not found", d, round,
+                            g);
+                        failed = true;
+                        break;
+                    }
+
+                    const bool split = !mflexAllowInsert_(ml, entry.nodeIdx,
+                                                          DATABOX_SIZE(&ins));
+                    const mlNodeId countBefore = ml->count;
+                    if (after) {
+                        multilistFullInsertByTypeAfter(ml, s, &entry, &ins);
+                    } else {
+                        multilistFullInsertByTypeBefore(ml, s, &entry, &ins);
+                    }
+
+                    if (split) {
+                        splits++;
+                        if (ml->count <= countBefore) {
+                            merges++;
+                        }
+                    }
+
+                    const uint32_t pos = after ? g + 1 : g;
+                    memmove(&want[pos + 1], &want[pos],
+                            (n - pos) * sizeof(*want));
+                    want[pos] = id;
+                    n++;
+
+                    why = mlfSplitCheck(ml, s, want, n);
+                    if (!why) {
+                        why = mlfDepthRuleCheck(ml, &bad);
+                    }
+
+                    if (why) {
+                        ERR("depth %u round %u insert %u (%s element %u, "
+                            "%s): node %d: %s",
+                            d, round, i, after ? "after" : "before", g,
+                            split ? "split" : "no split", bad, why);
+                        failed = true;
+                    }
+                }
+
+                multilistFullFree(ml);
+            }
+
+            if (!failed && (splits == 0 || merges == 0)) {
+                ERR("depth %u: %u split inserts, %u with merges: both must "
+                    "happen",
+                    d, splits, merges);
             }
         }
     }
