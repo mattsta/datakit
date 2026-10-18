@@ -27,6 +27,9 @@
   SOFTWARE.
  */
 
+#include <errno.h>
+#include <inttypes.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,15 +37,38 @@
 
 #include "imath.h"
 
+/* Largest digit count accepted. The printed form needs about one byte
+   per digit, and mp_int_string_len() reports that size as an int-sized
+   mp_result, so the cap keeps it far from overflow. */
+#define PI_MAX_DIGITS ((mp_small)(INT32_MAX / 2))
+
 int g_radix = 10; /* use this radix for output */
 
 mp_result arctan(mp_small radix, mp_small mul, mp_small x, mp_small prec,
                  mp_int sum);
 
+/* Parse all of str as a base-10 integer in [lo, hi]. Rejects empty
+   input, trailing characters, out-of-range values and overflow. */
+static bool parseBounded(const char *str, intmax_t lo, intmax_t hi,
+                         intmax_t *out) {
+    char *end = NULL;
+
+    errno = 0;
+    const intmax_t v = strtoimax(str, &end, 10);
+    if (end == str || *end != '\0' || errno == ERANGE || v < lo || v > hi) {
+        return false;
+    }
+
+    *out = v;
+    return true;
+}
+
 int main(int argc, char *argv[]) {
     mp_result res;
     mpz_t sum1, sum2;
-    uint32_t ndigits, out = 0;
+    mp_small ndigits;
+    intmax_t parsed;
+    int out = 0;
     clock_t start, end;
 
     if (argc < 2) {
@@ -50,26 +76,24 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    if ((ndigits = abs(atoi(argv[1]))) == 0) {
-        fprintf(stderr, "%s: you must request at least 1 digit\n", argv[0]);
-        return 1;
-    } else if (ndigits > MP_DIGIT_MAX) {
-        fprintf(stderr, "%s: you may request at most %u digits\n", argv[0],
-                (unsigned int)MP_DIGIT_MAX);
+    if (!parseBounded(argv[1], 1, PI_MAX_DIGITS, &parsed)) {
+        fprintf(stderr,
+                "%s: the digit count must be an integer from 1 to %" PRId64
+                "\n",
+                argv[0], (int64_t)PI_MAX_DIGITS);
         return 1;
     }
+    ndigits = (mp_small)parsed;
 
     if (argc > 2) {
-        int radix = atoi(argv[2]);
-
-        if (radix < MP_MIN_RADIX || radix > MP_MAX_RADIX) {
+        if (!parseBounded(argv[2], MP_MIN_RADIX, MP_MAX_RADIX, &parsed)) {
             fprintf(stderr,
                     "%s: you may only specify a radix between %d and %d\n",
                     argv[0], MP_MIN_RADIX, MP_MAX_RADIX);
             return 1;
         }
 
-        g_radix = radix;
+        g_radix = (int)parsed;
     }
 
     mp_int_init(&sum1);
@@ -99,8 +123,27 @@ int main(int argc, char *argv[]) {
 
     end = clock();
 
-    char *g_buf = malloc(ndigits * 2);
-    mp_int_to_string(&sum1, g_radix, g_buf, ndigits * 2);
+    /* Size the buffer from the value itself: digits plus terminator. */
+    const mp_result len = mp_int_string_len(&sum1, g_radix);
+    if (len < 2) {
+        fprintf(stderr, "%s: error sizing output: %d\n", argv[0], len);
+        out = 1;
+        goto CLEANUP;
+    }
+
+    char *g_buf = malloc((size_t)len);
+    if (g_buf == NULL) {
+        fprintf(stderr, "%s: out of memory\n", argv[0]);
+        out = 1;
+        goto CLEANUP;
+    }
+
+    if ((res = mp_int_to_string(&sum1, g_radix, g_buf, (size_t)len)) != MP_OK) {
+        fprintf(stderr, "%s: error converting pi: %d\n", argv[0], res);
+        free(g_buf);
+        out = 1;
+        goto CLEANUP;
+    }
     printf("%c.%s\n", g_buf[0], g_buf + 1);
     free(g_buf);
 
