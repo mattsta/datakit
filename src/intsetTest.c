@@ -463,7 +463,7 @@ int intsetTest(int argc, char *argv[]) {
         /* Verify all values are present and sorted */
         for (int64_t i = 0; i < 1000; i++) {
             if (!intsetFind(is, i)) {
-                ERR("Should find value %lld", (long long)i);
+                ERR("Should find value %" PRId64, i);
                 break;
             }
         }
@@ -769,8 +769,9 @@ int intsetTest(int argc, char *argv[]) {
             if (i % 1000 == 0 && i > 0) {
                 size_t actualCount = intsetCount(is);
                 if ((int64_t)actualCount != expectedCount) {
-                    ERR("Count mismatch at op %d: expected %lld, got %zu", i,
-                        (long long)expectedCount, actualCount);
+                    ERR("Count mismatch at op %d: expected %" PRId64
+                        ", got %zu",
+                        i, expectedCount, actualCount);
                     break;
                 }
             }
@@ -778,12 +779,12 @@ int intsetTest(int argc, char *argv[]) {
 
         printf("  Operations: %d adds (%d succeeded), %d removes\n",
                NUM_OPS * 70 / 100, addCount, removeCount);
-        printf("  Final count: %zu (expected %lld)\n", intsetCount(is),
-               (long long)expectedCount);
+        printf("  Final count: %zu (expected %" PRId64 ")\n", intsetCount(is),
+               expectedCount);
 
         if ((int64_t)intsetCount(is) != expectedCount) {
-            ERR("Final count mismatch: expected %lld, got %zu",
-                (long long)expectedCount, intsetCount(is));
+            ERR("Final count mismatch: expected %" PRId64 ", got %zu",
+                expectedCount, intsetCount(is));
         }
 
         intsetRepr(is);
@@ -816,7 +817,7 @@ int intsetTest(int argc, char *argv[]) {
         for (int i = 0; i < 100; i++) {
             r = intsetRandom(is);
             if (r < 0 || r >= 100) {
-                ERR("Random value %lld out of range [0,100)", (long long)r);
+                ERR("Random value %" PRId64 " out of range [0,100)", r);
                 break;
             }
             if (r != first) {
@@ -917,7 +918,7 @@ int intsetTest(int argc, char *argv[]) {
             bool success;
             intsetRemove(&is, i, &success);
             if (!success) {
-                ERR("Failed to remove %lld", (long long)i);
+                ERR("Failed to remove %" PRId64, i);
                 break;
             }
         }
@@ -929,7 +930,7 @@ int intsetTest(int argc, char *argv[]) {
         /* Verify odd values remain */
         for (int64_t i = 1; i < 1000; i += 2) {
             if (!intsetFind(is, i)) {
-                ERR("Should find odd value %lld", (long long)i);
+                ERR("Should find odd value %" PRId64, i);
                 break;
             }
         }
@@ -937,7 +938,7 @@ int intsetTest(int argc, char *argv[]) {
         /* Verify even values are gone */
         for (int64_t i = 0; i < 1000; i += 2) {
             if (intsetFind(is, i)) {
-                ERR("Should not find removed even value %lld", (long long)i);
+                ERR("Should not find removed even value %" PRId64, i);
                 break;
             }
         }

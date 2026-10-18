@@ -300,10 +300,10 @@ static void ok(void) {
     printf("OK\n");
 }
 
-static long long usec(void) {
+static int64_t usec(void) {
     struct timeval tv;
     gettimeofday(&tv, NULL);
-    return (((long long)tv.tv_sec) * 1000000) + tv.tv_usec;
+    return (((int64_t)tv.tv_sec) * 1000000) + tv.tv_usec;
 }
 
 #define intsetU32Assert(_e)                                                    \
@@ -432,17 +432,18 @@ int intsetU32Test(int argc, char **argv) {
 
     printf("Stress lookups: ");
     {
-        long num = 100000, size = 10000;
+        int32_t num = 100000, size = 10000;
         int i, bits = 20;
-        long long start;
+        int64_t start;
         cleaner(intsetU32Free) intsetU32 *is = createSet(bits, size);
 
         start = usec();
         for (i = 0; i < num; i++) {
             intsetU32Search(is, random() % ((1 << bits) - 1), NULL);
         }
-        printf("%ld lookups, %ld element set, %" PRId64 "usec\n", num, size,
-               usec() - start);
+        printf("%" PRId32 " lookups, %" PRId32 " element set, %" PRId64
+               "usec\n",
+               num, size, usec() - start);
     }
 
     printf("Stress add+delete: ");
