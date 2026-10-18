@@ -114,6 +114,8 @@ void multilistSmallDelEntry(multilistIterator *iter, multilistEntry *entry) {
             iter->fe = entry->fe;
         }
     }
+
+    multilistIterOffsetAfterDelete_(iter, entry->offset);
 }
 
 /* ====================================================================

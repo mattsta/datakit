@@ -93,8 +93,9 @@ typedef int64_t mlOffsetId;
  * Oversized for Small/Medium because the Full-only state lives here too. */
 typedef struct multilistIterator {
     void *ml;       /* pointer back to the (untagged) multilist instance */
-    flexEntry *fe;  /* current entry position inside the current flex */
-    int32_t offset; /* offset in current flex */
+    flexEntry *fe;  /* the entry the next multilistNext() returns */
+    int32_t offset; /* fe's offset in the current flex (>= 0 from the
+                     * head, < 0 from the tail) */
 
     /* Medium and Full */
     mlNodeId nodeIdx;
@@ -118,7 +119,8 @@ typedef struct multilistEntry {
     flexEntry *fe;
     databox box;
     mlNodeId nodeIdx; /* only used for Medium and Full */
-    int32_t offset;
+    int32_t offset;   /* fe's offset in its flex (>= 0 from the head,
+                       * < 0 from the tail) */
     flex *f;          /* Full only */
 } multilistEntry; /* 48 bytes */
 
@@ -491,7 +493,10 @@ multilistIteratorRelease(&iter);
 ```
 
 **Delete during iteration is supported** (`multilistDelEntry()` fixes up the
-iterator position, and the test suite relies on it). **Insert during iteration
+iterator position, and the test suite relies on it). On every tier and in both
+directions the iterator's `offset` keeps naming the element it returns next, so
+every later entry's `offset` names its own element, whether it counts from the
+head or from the tail. **Insert during iteration
 is not**: after `multilistInsertByType{Before,After}()` you must stop iterating
 immediately, because the insert can split a node or upgrade the variant out from
 under the iterator.

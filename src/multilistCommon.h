@@ -38,7 +38,10 @@ typedef int64_t mlOffsetId;
 typedef struct multilistIterator {
     void *ml; /* pointer back to (untagged) multilist instance itself. */
     flexEntry *fe;
-    int32_t offset; /* offset in current flex */
+    /* offset of 'fe' (the element the next multilistNext returns) in the
+     * current flex: head-relative when >= 0, tail-relative when < 0.
+     * multilistDelEntry keeps it naming 'fe'. */
+    int32_t offset;
 
     /* Medium and Full */
     mlNodeId nodeIdx; /* only used for Medium and Full */
@@ -87,6 +90,8 @@ typedef struct multilistEntry {
     flexEntry *fe;
     databox box;
     mlNodeId nodeIdx; /* only used for Medium and Full */
+    /* offset of 'fe' in its flex: head-relative when >= 0, tail-relative
+     * when < 0 (a reverse walk, or a lookup that walked from the tail) */
     int32_t offset;
     flex *f; /* Full only */
 } multilistEntry;
@@ -98,6 +103,24 @@ _Static_assert(offsetof(multilistIterator, wide) % 16 == 0,
                "the iterator's wide slot must be 16-byte aligned");
 
 typedef mflexState multilistState;
+
+/* Internal to the tier DelEntry implementations: re-aim iter->offset at
+ * iter->fe after the element at 'deletedOffset' (the entry Next just
+ * returned) is deleted.  A delete moves the head-relative offsets (>= 0)
+ * of the elements after it down by one, and the tail-relative offsets
+ * (< 0) of the elements before it up by one.  A forward iterator's next
+ * element is after the deleted one and a reverse iterator's is before
+ * it, so only those two cases change. */
+static inline void multilistIterOffsetAfterDelete_(multilistIterator *iter,
+                                                   int32_t deletedOffset) {
+    if (iter->forward) {
+        if (deletedOffset >= 0) {
+            iter->offset--;
+        }
+    } else if (deletedOffset < 0) {
+        iter->offset++;
+    }
+}
 
 /* Internal to the tier Pop implementations: the self-contained copy of
  * the element at 'fe', which is about to be deleted.  It is

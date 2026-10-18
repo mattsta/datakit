@@ -765,6 +765,9 @@ void multilistFullDelEntry(multilistIterator *iter, multilistEntry *entry) {
             iter->fe = entry->fe;
         }
     }
+
+    /* (After a node removal 'fe' is NULL and Next resets the offset.) */
+    multilistIterOffsetAfterDelete_(iter, entry->offset);
 }
 
 /* Replace multilistFull entry at offset 'index' by 'data' with length 'bytes'.

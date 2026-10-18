@@ -872,6 +872,18 @@ static void mlrTierRelease(multilist *ml, multilistIterator *iter) {
     }
 }
 
+/* The flex an entry's element lives in, on each tier. */
+static const flex *mloFlex(const multilist *ml, const multilistEntry *entry) {
+    switch (_multilistType(ml)) {
+    case MULTILIST_TYPE_SMALL:
+        return mls(ml)->fl;
+    case MULTILIST_TYPE_MEDIUM:
+        return mlm(ml)->fl[entry->nodeIdx];
+    default:
+        return entry->f;
+    }
+}
+
 /* Take 'steps' elements from 'iter', which must start at the head
  * (forward) or the tail (reverse) of ids 0..n-1.  When steps >= n the
  * walk must then be exhausted.  Returns NULL, or what went wrong. */
@@ -2821,6 +2833,187 @@ int multilistTest(int argc, char *argv[]) {
                 ERR("pass %d: %zu elements left, want %d", pass,
                     multilistCount(ml), remaining);
             }
+        }
+    }
+
+    TEST("DelEntry keeps every entry and iterator offset naming its element, "
+         "every tier") {
+        /* Walks forward and in reverse, from either end or from an index
+         * (positive or negative, so Full entries carry head- and
+         * tail-relative offsets), deleting by pattern: every element,
+         * every other one (both phases), the first or the last element of
+         * each node, whole nodes, and a mix.  After every Next the
+         * entry's offset must name its element, and after every
+         * DelEntry the iterator's offset must name the element it
+         * returns next.  The walk must visit exactly the expected
+         * elements, and the list must then match an array oracle. */
+        enum { DO_MAX = 600, DO_PATTERNS = 7, DO_STARTS = 6 };
+        const struct {
+            const char *name;
+            flexCapSizeLimit limit;
+            uint32_t depth;
+            uint32_t count;
+            multilistType wantType;
+        } configs[] = {
+            {"Small", FLEX_CAP_LEVEL_65536, 0, 60, MULTILIST_TYPE_SMALL},
+            {"Medium", FLEX_CAP_LEVEL_512, 0, 40, MULTILIST_TYPE_MEDIUM},
+            {"Full depth 0", FLEX_CAP_LEVEL_512, 0, 300, MULTILIST_TYPE_FULL},
+            {"Full depth 1", FLEX_CAP_LEVEL_512, 1, 600, MULTILIST_TYPE_FULL},
+        };
+        static bool firstIn[DO_MAX];
+        static bool lastIn[DO_MAX];
+        static mlNodeId nodeOf[DO_MAX];
+        static bool gone[DO_MAX];
+        uint32_t negativeOffsets = 0;
+        for (size_t c = 0; c < sizeof(configs) / sizeof(*configs); c++) {
+            const uint32_t n = configs[c].count;
+            for (int from = 0; from < DO_STARTS; from++) {
+                /* forward from the head, reverse from the tail, then
+                 * forward / reverse from indexes 2n/3, n/3, -n/2, -n/4 */
+                const bool forward = from % 2 == 0;
+                const mlOffsetId at[DO_STARTS] = {
+                    0,     (mlOffsetId)n - 1,  2 * (mlOffsetId)n / 3,
+                    n / 3, -(mlOffsetId)n / 2, -(mlOffsetId)n / 4};
+                const uint32_t first =
+                    (uint32_t)(at[from] < 0 ? n + at[from] : at[from]);
+                for (int pattern = 0; pattern < DO_PATTERNS; pattern++) {
+                    cleaner(multilistFree) multilist *ml =
+                        multilistNew(configs[c].limit, configs[c].depth);
+                    char buf[MLR_LEN + 1];
+                    for (uint32_t i = 0; i < n; i++) {
+                        const databox box = mlrBox(i, buf);
+                        multilistPushByTypeTail(&ml, s0, &box);
+                    }
+
+                    if (_multilistType(ml) != configs[c].wantType) {
+                        ERR("%s: landed tier %d", configs[c].name,
+                            (int)_multilistType(ml));
+                        break;
+                    }
+
+                    /* The node layout, from a read-only walk */
+                    multilistIterator iter;
+                    multilistEntry entry;
+                    multilistIteratorInitForwardReadOnly(ml, s, &iter);
+                    for (uint32_t i = 0; multilistNext(&iter, &entry); i++) {
+                        const flex *fl = mloFlex(ml, &entry);
+                        firstIn[i] = entry.fe == flexHead(fl);
+                        lastIn[i] = flexNext(fl, entry.fe) == NULL;
+                        nodeOf[i] = entry.nodeIdx;
+                        gone[i] = false;
+                    }
+                    multilistIteratorRelease(&iter);
+
+                    const char *why = NULL;
+                    if (from < 2) {
+                        multilistIteratorInit(ml, s, &iter, forward, false);
+                    } else if (!multilistIteratorInitAtIdx(
+                                   ml, s, &iter, at[from], forward, false)) {
+                        why = "InitAtIdx refused a valid index";
+                    }
+
+                    const uint32_t steps = forward ? n - first : first + 1;
+                    uint32_t k = 0;
+                    for (; !why && multilistNext(&iter, &entry); k++) {
+                        const uint32_t id = forward ? first + k : first - k;
+                        if (k >= steps || !mlrIs(&entry.box, id)) {
+                            why = "the walk read the wrong element";
+                            break;
+                        }
+
+                        if (flexIndex(mloFlex(ml, &entry), entry.offset) !=
+                            entry.fe) {
+                            why = "an entry offset does not name its element";
+                            break;
+                        }
+
+                        negativeOffsets += entry.offset < 0;
+                        bool del;
+                        switch (pattern) {
+                        case 0:
+                            del = true;
+                            break;
+                        case 1:
+                            del = k % 2 == 0;
+                            break;
+                        case 2:
+                            del = k % 2 == 1;
+                            break;
+                        case 3:
+                            del = firstIn[id];
+                            break;
+                        case 4:
+                            del = lastIn[id];
+                            break;
+                        case 5:
+                            del = nodeOf[id] % 2 == 0;
+                            break;
+                        default:
+                            del = id % 7 == 3 || lastIn[id];
+                            break;
+                        }
+
+                        if (!del) {
+                            continue;
+                        }
+
+                        multilistDelEntry(&iter, &entry);
+                        gone[id] = true;
+                        if (iter.fe) {
+                            const multilistEntry next = {
+                                .nodeIdx = iter.nodeIdx, .f = iter.f};
+                            if (flexIndex(mloFlex(ml, &next), iter.offset) !=
+                                iter.fe) {
+                                why = "after DelEntry the iterator offset does "
+                                      "not name its next element";
+                            }
+                        }
+                    }
+
+                    multilistIteratorRelease(&iter);
+                    if (!why && k != steps) {
+                        why = "the walk did not visit every element";
+                    }
+
+                    /* What is left, against the oracle */
+                    uint32_t left = 0;
+                    if (!why) {
+                        multilistIteratorInitForwardReadOnly(ml, s, &iter);
+                        for (uint32_t i = 0; i < n && !why; i++) {
+                            if (gone[i]) {
+                                continue;
+                            }
+
+                            if (!multilistNext(&iter, &entry) ||
+                                !mlrIs(&entry.box, i)) {
+                                why = "a kept element is missing";
+                            }
+
+                            left++;
+                        }
+
+                        if (!why && multilistNext(&iter, &entry)) {
+                            why = "a deleted element is still there";
+                        }
+
+                        multilistIteratorRelease(&iter);
+                    }
+
+                    if (!why && multilistCount(ml) != left) {
+                        why = "the count does not match";
+                    }
+
+                    if (why) {
+                        ERR("%s, %s from %" PRId64 ", pattern %d, step %u: %s",
+                            configs[c].name, forward ? "forward" : "reverse",
+                            at[from], pattern, k, why);
+                    }
+                }
+            }
+        }
+
+        if (!negativeOffsets) {
+            ERRR("no walk produced a tail-relative offset");
         }
     }
 
