@@ -104,6 +104,9 @@ defcleanerName(int *, zfree, Ints);
 defcleanerName(int64_t *, zfree, I64);
 defcleanerName(char *, zfree, Chars);
 defcleaner(flex *, flexFree);
+#ifdef DATAKIT_TEST
+defcleaner(multimapAtom *, multimapAtomFree);
+#endif
 
 /* This configuration define allows building flex without 'mdsc', but disabling
  * MDSC support does NOT remove the MDSC types. It only removes the ability for
@@ -1387,8 +1390,65 @@ DK_STATIC size_t flexWritePayload(flexEntry *const fe,
 /* ====================================================================
  * flex internal physical reading
  * ==================================================================== */
-/* Read value pointed to by 'entry', store result in databox 'r' */
-DK_STATIC void flexLoadFixedLength_(const flexEntryData *entry, databox *r) {
+/* Where the 96/128-bit arms of flexLoadFixedLength_ put a wide payload.
+ * Narrow arms never look at it. */
+typedef enum flexWideStore_ {
+    /* Into the caller's 'slot', which the box then borrows (big = 1,
+     * allocated = 0).  A NULL slot reports the value deferred: type only,
+     * data.ptr = NULL, big = 0, allocated = 0. */
+    FLEX_WIDE_STORE_SLOT_ = 0,
+    /* Through the box's own pointer when big = 1, and deferred otherwise;
+     * the flag bits are left as they were (flexGetByType). */
+    FLEX_WIDE_STORE_IN_BAND_,
+    /* As in band when big = 1, and otherwise into a new 16-byte heap block
+     * the box owns, with allocated = 1 and big = 1 (flexGetByTypeCopy). */
+    FLEX_WIDE_STORE_OWNED_,
+} flexWideStore_;
+
+/* Set up 'r' for a 96/128-bit value and return the storage to write it
+ * through, or NULL to leave it deferred.  Only the wide arms call this,
+ * so it stays out of line and off the narrow path. */
+static __attribute__((noinline, cold)) void *
+flexWideTarget_(databox *r, databoxWide *slot, const flexWideStore_ store) {
+    switch (store) {
+    case FLEX_WIDE_STORE_SLOT_:
+        r->data.ptr = slot;
+        r->big = slot != NULL;
+        r->allocated = false;
+        return slot;
+    case FLEX_WIDE_STORE_IN_BAND_:
+        if (!r->big) {
+            /* A plain databox has no 128-bit store: report the type only,
+             * and never write through whatever its pointer holds. */
+            r->data.ptr = NULL;
+            return NULL;
+        }
+
+        assert(r->data.ptr);
+        return r->data.ptr;
+    case FLEX_WIDE_STORE_OWNED_:
+        if (!r->big) {
+            /* @own: caller; free=databoxFreeData */
+            __uint128_t *payload = zmalloc(sizeof(*payload));
+            assert(((uintptr_t)payload % _Alignof(__uint128_t)) == 0);
+            r->data.u128 = payload;
+            r->big = true;
+            r->allocated = true;
+        }
+
+        assert(r->data.ptr);
+        return r->data.ptr;
+    }
+
+    __builtin_unreachable();
+}
+
+/* Read value pointed to by 'entry', store result in databox 'r'.  Narrow
+ * arms write only type, data and (for variable-length types) len; a
+ * 96/128-bit value finds its storage through flexWideTarget_. */
+DK_STATIC void flexLoadFixedLength_(const flexEntryData *entry, databox *r,
+                                    databoxWide *const slot,
+                                    const flexWideStore_ store) {
     flexData *d = FLEX_ENTRY_DATA(entry);
     const flexEncoding encoding = entry->encoding;
 
@@ -1413,18 +1473,15 @@ DK_STATIC void flexLoadFixedLength_(const flexEntryData *entry, databox *r) {
         r->type = DATABOX_UNSIGNED_64;
         break;
     case FLEX_UINT_96B:
-    case FLEX_UINT_128B:
+    case FLEX_UINT_128B: {
         r->type = DATABOX_UNSIGNED_128;
-        if (!r->big) {
-            /* A plain databox has no 128-bit store: report the type only,
-             * and never write through whatever its pointer holds. */
-            r->data.ptr = NULL;
-            break;
+        __uint128_t *const out = flexWideTarget_(r, slot, store);
+        if (out) {
+            *out = varintBigExternalGet(d, encoding == FLEX_UINT_96B ? 96 / 8
+                                                                     : 128 / 8);
         }
-        assert(r->data.u128);
-        *r->data.u128 = varintBigExternalGet(
-            d, encoding == FLEX_UINT_96B ? 96 / 8 : 128 / 8);
         break;
+    }
     case FLEX_NEG_8B:
     case FLEX_NEG_16B:
     case FLEX_NEG_24B:
@@ -1444,30 +1501,24 @@ DK_STATIC void flexLoadFixedLength_(const flexEntryData *entry, databox *r) {
 
         /* A FLEX_NEG_64B value below INT64_MIN (see flexNeg64IsWide_). */
         r->type = DATABOX_SIGNED_128;
-        if (!r->big) {
-            /* Type only, as for the unsigned case above. */
-            r->data.ptr = NULL;
-            break;
+        __int128_t *const out = flexWideTarget_(r, slot, store);
+        if (out) {
+            *out = -(__int128_t)magnitude - 1;
         }
-        assert(r->data.i128);
-        *r->data.i128 = -(__int128_t)magnitude - 1;
         break;
     }
     case FLEX_NEG_96B:
     case FLEX_NEG_128B: {
         r->type = DATABOX_SIGNED_128;
-        if (!r->big) {
-            /* Type only, as for the unsigned case above. */
-            r->data.ptr = NULL;
-            break;
+        __int128_t *const out = flexWideTarget_(r, slot, store);
+        if (out) {
+            const __uint128_t magnitude = varintBigExternalGet(
+                d, encoding == FLEX_NEG_96B ? 96 / 8 : 128 / 8);
+            /* -magnitude - 1 is ~magnitude.  Computing it unsigned keeps
+             * the decode defined for a FLEX_NEG_128B magnitude above
+             * INT128_MAX, which has no 128-bit value (it wraps). */
+            *out = (__int128_t)~magnitude;
         }
-        assert(r->data.i128);
-        const __uint128_t magnitude = varintBigExternalGet(
-            d, encoding == FLEX_NEG_96B ? 96 / 8 : 128 / 8);
-        /* -magnitude - 1 is ~magnitude.  Computing it unsigned keeps the
-         * decode defined for a FLEX_NEG_128B magnitude above INT128_MAX,
-         * which has no 128-bit value (it wraps). */
-        *r->data.i128 = (__int128_t)~magnitude;
         break;
     }
     case FLEX_REAL_B16B:
@@ -1552,44 +1603,43 @@ DK_STATIC void flexLoadFixedLength_(const flexEntryData *entry, databox *r) {
 DK_STATIC int64_t flexLoadSigned(const flexEntryData *entry) {
     assert(!flexEntryIsIntegerWide_(entry->fe));
     databox box;
-    flexLoadFixedLength_(entry, &box);
+    flexLoadFixedLength_(entry, &box, NULL, FLEX_WIDE_STORE_SLOT_);
     return box.data.i64;
 }
 
+/* The wide loaders take wide entries only: the value lands in 'wide'. */
 DK_STATIC __int128_t flexLoadSignedBig(const flexEntryData *entry) {
-    /* 128-bit decode writes THROUGH data.i128, so it must point at the
-     * box's own wide storage before the load */
-    databoxBig box;
-    DATABOX_BIG_INIT(&box);
-    flexLoadFixedLength_(entry, (databox *)&box);
+    databox box;
+    databoxWide wide;
+    flexLoadFixedLength_(entry, &box, &wide, FLEX_WIDE_STORE_SLOT_);
+    assert(box.data.ptr == &wide);
     return *box.data.i128;
 }
 
 DK_STATIC uint64_t flexLoadUnsigned(const flexEntryData *entry) {
     assert(!flexEntryIsIntegerWide_(entry->fe));
     databox box;
-    flexLoadFixedLength_(entry, &box);
+    flexLoadFixedLength_(entry, &box, NULL, FLEX_WIDE_STORE_SLOT_);
     return box.data.u64;
 }
 
 DK_STATIC __uint128_t flexLoadUnsignedBig(const flexEntryData *entry) {
-    /* 128-bit decode writes THROUGH data.u128, so it must point at the
-     * box's own wide storage before the load */
-    databoxBig box;
-    DATABOX_BIG_INIT(&box);
-    flexLoadFixedLength_(entry, (databox *)&box);
+    databox box;
+    databoxWide wide;
+    flexLoadFixedLength_(entry, &box, &wide, FLEX_WIDE_STORE_SLOT_);
+    assert(box.data.ptr == &wide);
     return *box.data.u128;
 }
 
 DK_STATIC float flexLoadFloat(const flexEntryData *entry) {
     databox box;
-    flexLoadFixedLength_(entry, &box);
+    flexLoadFixedLength_(entry, &box, NULL, FLEX_WIDE_STORE_SLOT_);
     return box.data.f32;
 }
 
 DK_STATIC double flexLoadDouble(const flexEntryData *entry) {
     databox box;
-    flexLoadFixedLength_(entry, &box);
+    flexLoadFixedLength_(entry, &box, NULL, FLEX_WIDE_STORE_SLOT_);
     return box.data.d64;
 }
 
@@ -3874,8 +3924,14 @@ flexEntry *flexPrev(const flex *const f, flexEntry *fe) {
 /* ====================================================================
  * flex element retrieval
  * ==================================================================== */
-void flexGetByType(const flexEntry *const fe, databox *box) {
-    /* get at fe, populate type in box, populate box, return found */
+/* The one decoder.  Every flexGetByType* entry point is this with its
+ * own choice of wide storage, and narrow values decode identically
+ * through all of them.  Returns the entry's encoding so the reference
+ * variants can tell a reference id from a stored value. */
+DK_INLINE_ALWAYS flexEncoding flexDecode_(const flexEntry *const fe,
+                                          databox *const box,
+                                          databoxWide *const slot,
+                                          const flexWideStore_ store) {
     flexEntryData entry = {0};
     flexEntryDataPopulate(fe, &entry);
     if (FLEX_IS_STR(entry.encoding)) {
@@ -3883,25 +3939,63 @@ void flexGetByType(const flexEntry *const fe, databox *box) {
         box->len = entry.len;
         box->type = DATABOX_BYTES;
     } else {
-        flexLoadFixedLength_(&entry, box);
+        flexLoadFixedLength_(&entry, box, slot, store);
     }
+
+    return entry.encoding;
+}
+
+/* Replace the reference id decoded into 'box' with the value it names
+ * in 'referenceContainer'.  A 96/128-bit value goes to 'slot' as in
+ * flexGetByTypeInto (deferred with a NULL slot).  Any other value
+ * writes only type, data and len, like a narrow decode.  An id the
+ * container doesn't hold stays as the id. */
+static void flexResolveReferenceInto_(databox *const box,
+                                      databoxWide *const slot,
+                                      const multimapAtom *referenceContainer) {
+    /* multimapAtomLookupConvertBig reads only the id's data and type. */
+    databoxBig resolved = {.data = box->data, .type = box->type};
+    multimapAtomLookupConvertBig(referenceContainer, &resolved);
+
+    box->type = resolved.type;
+    if (resolved.big) {
+        if (slot) {
+            memcpy(slot, resolved.extra, sizeof(*slot));
+        }
+
+        box->data.ptr = slot;
+        box->big = slot != NULL;
+        box->allocated = false;
+    } else {
+        box->data = resolved.data;
+        box->len = resolved.len;
+    }
+}
+
+void flexGetByTypeInto(const flexEntry *const fe, databox *box,
+                       databoxWide *slot) {
+    flexDecode_(fe, box, slot, FLEX_WIDE_STORE_SLOT_);
+}
+
+void flexGetByTypeIntoWithReference(const flexEntry *const fe, databox *box,
+                                    databoxWide *slot,
+                                    const multimapAtom *referenceContainer) {
+    if (FLEX_IS_REF_EXTERNAL(
+            flexDecode_(fe, box, slot, FLEX_WIDE_STORE_SLOT_))) {
+        flexResolveReferenceInto_(box, slot, referenceContainer);
+    }
+}
+
+void flexGetByType(const flexEntry *const fe, databox *box) {
+    flexDecode_(fe, box, NULL, FLEX_WIDE_STORE_IN_BAND_);
 }
 
 void flexGetByTypeWithReference(const flexEntry *const fe, databox *box,
                                 const multimapAtom *referenceContainer) {
-    /* get at fe, populate type in box, populate box, return found */
-    flexEntryData entry = {0};
-    flexEntryDataPopulate(fe, &entry);
-    if (FLEX_IS_STR(entry.encoding)) {
-        box->data.bytes.start = FLEX_ENTRY_DATA(&entry);
-        box->len = entry.len;
-        box->type = DATABOX_BYTES;
-    } else {
-        flexLoadFixedLength_(&entry, box);
-        if (FLEX_IS_REF_EXTERNAL(entry.encoding)) {
-            /* TODO: make copying version here if atom map is compressed? */
-            multimapAtomLookupConvert(referenceContainer, box);
-        }
+    if (FLEX_IS_REF_EXTERNAL(
+            flexDecode_(fe, box, NULL, FLEX_WIDE_STORE_IN_BAND_))) {
+        /* TODO: make copying version here if atom map is compressed? */
+        multimapAtomLookupConvert(referenceContainer, box);
     }
 }
 
@@ -3917,22 +4011,17 @@ void flexGetByTypeCopy(const flexEntry *const fe, databox *box) {
         box->type = DATABOX_BYTES;
         box->allocated = true;
         box->big = false;
-    } else if (flexEntryIsIntegerWide_(fe)) {
-        /* With big set the caller supplied the storage, and its owner is
-         * unchanged.  Otherwise the value goes to a heap block the box
-         * owns, so the result never depends on storage outside the box. */
-        if (!box->big) {
-            /* @own: caller; free=databoxFreeData */
-            __uint128_t *payload = zmalloc(sizeof(*payload));
-            assert(((uintptr_t)payload % _Alignof(__uint128_t)) == 0);
-            box->data.u128 = payload;
-            box->big = true;
-            box->allocated = true;
+    } else {
+        /* A 96/128-bit value goes where 'box' already points when big is
+         * set, with its owner unchanged, and otherwise to a heap block the
+         * box owns, so the result never depends on storage outside the
+         * box.  flexWideTarget_ sets up both. */
+        flexLoadFixedLength_(&entry, box, NULL, FLEX_WIDE_STORE_OWNED_);
+        if (box->type == DATABOX_SIGNED_128 ||
+            box->type == DATABOX_UNSIGNED_128) {
+            return;
         }
 
-        flexLoadFixedLength_(&entry, box);
-    } else {
-        flexLoadFixedLength_(&entry, box);
         /* Nothing here borrows a wide pointer, and only a copied
          * subcontainer below owns memory. */
         box->big = false;
@@ -3992,7 +4081,11 @@ flexGetByTypeBigResolve_(const flexEntry *const fe, databoxBig *const box,
 }
 
 void flexGetByTypeBig(const flexEntry *const fe, databoxBig *box) {
-    flexGetByTypeBigResolve_(fe, box, false, NULL);
+    /* Clear every header bit so the result never depends on the box's
+     * prior state, then decode with 'extra' as the slot. */
+    *(databox *)box = (databox){{0}};
+    flexDecode_(fe, (databox *)box, (databoxWide *)box->extra,
+                FLEX_WIDE_STORE_SLOT_);
 }
 
 bool flexGetNextByTypeBig(flex *const f, flexEntry **const fe,
@@ -4319,25 +4412,21 @@ bool flexCompareSigned(flexEntry *fe, int64_t val) {
 /* ====================================================================
  * flex homogeneous container math
  * ==================================================================== */
-/* 96/128-bit entries decode THROUGH data.u128, so those (and only
- * those) need the box pointed at wide storage first. Narrow entries -
- * the overwhelmingly common case - skip the setup entirely and write
- * straight into the union as before. The re-init must stay inside the
- * loop: a narrow decode writes data.u64, which shares storage with
- * the data.u128 pointer and destroys it. */
+/* 96/128-bit entries decode into the stack slot '_wide'; narrow entries,
+ * the overwhelmingly common case, never touch it and write straight into
+ * the union as before. */
 #define flexLoopyProcess_(f, doer)                                             \
     do {                                                                       \
         uint_fast32_t _count = flexCount_(f);                                  \
         flexEntry *_fe = FLEX_ENTRY_HEAD(f);                                   \
-        databoxBig _big;                                                       \
-        databox *const _box = (databox *)&_big;                                \
+        databox _boxStore;                                                     \
+        databoxWide _wide;                                                     \
+        databox *const _box = &_boxStore;                                      \
         while (_count--) {                                                     \
             flexEntryData _entry = {0};                                        \
             flexEntryDataPopulate(_fe, &_entry);                               \
-            if (flexEntryIsIntegerWide_(_fe)) {                                \
-                DATABOX_BIG_INIT(&_big);                                       \
-            }                                                                  \
-            flexLoadFixedLength_(&_entry, _box);                               \
+            flexLoadFixedLength_(&_entry, _box, &_wide,                        \
+                                 FLEX_WIDE_STORE_SLOT_);                       \
             (doer);                                                            \
             _fe = flexNext(f, _fe);                                            \
         }                                                                      \
@@ -6790,6 +6879,143 @@ static int32_t flexTestWideDecoders(void) {
     if (i != n) {
         printf("  FAIL: decoded %zu of %zu entries\n", i, n);
         bad++;
+    }
+
+    /* flexGetByTypeInto: a wide value lands in the slot and the box borrows
+     * it.  A narrow value writes only type and data, so the poisoned flag
+     * bits and the poisoned slot survive it.  A NULL slot defers a wide
+     * value and changes nothing for a narrow one. */
+    i = 0;
+    for (flexEntry *fe = flexHeadIfAny(f); fe && i < n;
+         fe = flexNext(f, fe), i++) {
+        const bool wide = flexTestWideIsWide(vals[i]);
+        databoxWide untouched;
+        memset(&untouched, 0xA5, sizeof(untouched));
+        databoxWide slot = untouched;
+        databox box;
+        memset(&box, 0xFF, sizeof(box));
+        flexGetByTypeInto(fe, &box, &slot);
+        bool ok = flexTestWideMatches(&box, vals[i]);
+        if (wide) {
+            ok = ok && box.big && !box.allocated && box.data.ptr == &slot;
+        } else {
+            ok = ok && box.big && box.allocated && box.created &&
+                 memcmp(&slot, &untouched, sizeof(slot)) == 0;
+        }
+
+        databox deferred;
+        memset(&deferred, 0xFF, sizeof(deferred));
+        flexGetByTypeInto(fe, &deferred, NULL);
+        if (wide) {
+            ok = ok && databoxIsWideDeferred(&deferred) &&
+                 deferred.type == flexTestWideType(vals[i]) && !deferred.big &&
+                 !deferred.allocated;
+        } else {
+            ok = ok && flexTestWideMatches(&deferred, vals[i]);
+        }
+
+        if (!ok) {
+            printf("  FAIL: flexGetByTypeInto entry %zu\n", i);
+            bad++;
+        }
+    }
+
+    /* Narrow decodes are byte-identical through flexGetByType and
+     * flexGetByTypeInto, for every narrow type. */
+    {
+        cleaner(flexFree) flex *mixed = flexNew();
+        const databox narrow[] = {
+            databoxNewSigned(-5),
+            databoxNewUnsigned(77),
+            DATABOX_DOUBLE(1.5),
+            databoxNull(),
+            databoxBool(true),
+            databoxBool(false),
+            databoxNewBytesString("short"),
+            databoxNewBytesString("a value longer than eight bytes"),
+            databoxNewBytesString(""),
+        };
+        for (size_t k = 0; k < COUNT_ARRAY(narrow); k++) {
+            flexPushByType(&mixed, &narrow[k], FLEX_ENDPOINT_TAIL);
+        }
+
+        size_t k = 0;
+        for (flexEntry *fe = flexHeadIfAny(mixed); fe;
+             fe = flexNext(mixed, fe), k++) {
+            databox viaGet = {{0}};
+            databox viaInto = {{0}};
+            databoxWide slot;
+            flexGetByType(fe, &viaGet);
+            flexGetByTypeInto(fe, &viaInto, &slot);
+            if (memcmp(&viaGet, &viaInto, sizeof(viaGet)) != 0 ||
+                databoxCompare(&viaInto, &narrow[k]) != 0) {
+                printf("  FAIL: narrow Into decode %zu differs\n", k);
+                bad++;
+            }
+        }
+
+        if (k != COUNT_ARRAY(narrow)) {
+            printf("  FAIL: mixed flex decoded %zu of %zu\n", k,
+                   COUNT_ARRAY(narrow));
+            bad++;
+        }
+    }
+
+    /* flexGetByTypeIntoWithReference resolves a reference to a wide value
+     * into the slot (deferred with a NULL slot), and one to a narrow value
+     * in place.  Each atom table holds a single value. */
+    {
+        __uint128_t wideStore = ((__uint128_t)1 << 100) + 17;
+        databox wideVal = {
+            .type = DATABOX_UNSIGNED_128, .big = true, .data.u128 = &wideStore};
+        const databox bytesVal =
+            databoxNewBytesString("an atom value longer than eight");
+        cleaner(multimapAtomFree) multimapAtom *wideAtoms = multimapAtomNew();
+        cleaner(multimapAtomFree) multimapAtom *bytesAtoms = multimapAtomNew();
+        databox wideRef = wideVal;
+        databox bytesRef = bytesVal;
+        multimapAtomInsertConvert(wideAtoms, &wideRef);
+        multimapAtomInsertConvert(bytesAtoms, &bytesRef);
+
+        cleaner(flexFree) flex *refs = flexNew();
+        flexPushByType(&refs, &wideRef, FLEX_ENDPOINT_TAIL);
+        flexPushByType(&refs, &bytesRef, FLEX_ENDPOINT_TAIL);
+        flexEntry *const wideFE = flexHead(refs);
+        flexEntry *const bytesFE = flexNext(refs, wideFE);
+
+        databoxWide slot;
+        databox got;
+        memset(&got, 0xFF, sizeof(got));
+        flexGetByTypeIntoWithReference(wideFE, &got, &slot, wideAtoms);
+        const bool wideOk = got.type == DATABOX_UNSIGNED_128 && got.big &&
+                            !got.allocated && got.data.ptr == &slot &&
+                            *got.data.u128 == wideStore;
+
+        memset(&got, 0xFF, sizeof(got));
+        flexGetByTypeIntoWithReference(wideFE, &got, NULL, wideAtoms);
+        const bool deferredOk = databoxIsWideDeferred(&got) &&
+                                got.type == DATABOX_UNSIGNED_128 && !got.big;
+
+        databox gotBytes = {{0}};
+        flexGetByTypeIntoWithReference(bytesFE, &gotBytes, &slot, bytesAtoms);
+        const bool bytesOk = databoxEqual(&gotBytes, &bytesVal);
+
+        /* An id the table doesn't hold stays the id. */
+        const databox unknownRef = {.type =
+                                        DATABOX_CONTAINER_REFERENCE_EXTERNAL,
+                                    .data.u = wideRef.data.u + 1000};
+        flexPushByType(&refs, &unknownRef, FLEX_ENDPOINT_TAIL);
+        databox miss = {{0}};
+        flexGetByTypeIntoWithReference(flexTail(refs), &miss, &slot, wideAtoms);
+        const bool missOk = miss.type == DATABOX_CONTAINER_REFERENCE_EXTERNAL &&
+                            miss.data.u == unknownRef.data.u;
+
+        if (!wideOk || !deferredOk || !bytesOk || !missOk) {
+            printf("  FAIL: flexGetByTypeIntoWithReference (wide %d, "
+                   "deferred %d, bytes %d, miss %d)\n",
+                   wideOk, deferredOk, bytesOk, missOk);
+            bad++;
+        }
     }
 
     /* flexGetNextByTypeBig walks the same values. */

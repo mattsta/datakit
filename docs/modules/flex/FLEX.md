@@ -722,6 +722,13 @@ void flexGetByType(const flexEntry *fe, databox *outbox);
 void flexGetByTypeWithReference(const flexEntry *const fe, databox *box,
                                 const struct multimapAtom *referenceContainer);
 
+/* Decode into a plain databox; a 96/128-bit value goes to 'slot'
+ * (deferred when 'slot' is NULL) */
+void flexGetByTypeInto(const flexEntry *fe, databox *box, databoxWide *slot);
+void flexGetByTypeIntoWithReference(
+    const flexEntry *fe, databox *box, databoxWide *slot,
+    const struct multimapAtom *referenceContainer);
+
 /* Get data as a copy (allocated) */
 void flexGetByTypeCopy(const flexEntry *const fe, databox *box);
 
@@ -789,14 +796,37 @@ value through the pointer; with `big = 0` it reports only the type
 the destination sets this up, and an uninitialized box is a bug (see
 databox's "Who sets up the wide capability").
 
-When the box is yours, use `flexGetByTypeBig` instead. It never reads the
-box's prior state, so uninitialized or reused storage is fine. On return
-`allocated = 0`, and `big = 1` exactly when the value is wide, with
-`data.i128` / `data.u128` aimed at the box's own `extra`. A narrow result
-has `big = 0`, so its first 16 bytes can be copied out as a plain
-`databox`. A wide value borrows from the box, the way BYTES borrow from the
-flex; keep it with `databoxCopy` (owned) or `databoxBigCopyFrom`
-(re-homed).
+When the box is yours, choose the wide storage explicitly with
+`flexGetByTypeInto(fe, box, slot)`. A wide value goes to the `databoxWide`
+slot: `data.i128` / `data.u128` is aimed at it, with `big = 1` and
+`allocated = 0`, so the box borrows the slot. With a `NULL` slot the value
+is reported deferred (type only, `data.ptr == NULL`, `big = 0`; see
+`databoxIsWideDeferred`). Into never reads the box's prior state. Narrow
+values decode exactly as with `flexGetByType`, writing only `type`, `data`
+and `len` and leaving the flag bits alone, and never touch the slot. That
+makes it the decode for temporaries, probes and iterator entries: a slot
+on the stack or at the tail of an iterator costs nothing until a wide value
+arrives. `flexGetByTypeIntoWithReference` also resolves a reference entry
+through a `multimapAtom`, and a wide resolved value lands in the slot the
+same way.
+
+```c
+databox box;                          /* no initialization needed */
+databoxWide wide;
+flexGetByTypeInto(fe, &box, &wide);
+if (box.type == DATABOX_SIGNED_128) {
+    __int128_t v = *box.data.i128;    /* points at 'wide' */
+}
+```
+
+`flexGetByTypeBig` is the same decode with the box's own `extra` as the
+slot, after clearing the header. Its result never depends on the box's
+prior state: on return `allocated = 0`, and `big = 1` exactly when the
+value is wide, with `data.i128` / `data.u128` aimed at `extra`. A narrow
+result has `big = 0`, so its first 16 bytes can be copied out as a plain
+`databox`. A wide value borrows from the box (or from the slot, for Into),
+the way BYTES borrow from the flex; keep it with `databoxCopy` (owned) or
+`databoxBigCopyFrom` (re-homed).
 
 ```c
 databoxBig box;                       /* no initialization needed */

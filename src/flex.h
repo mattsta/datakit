@@ -393,10 +393,28 @@ flexEntry DK_FN_PURE *flexTailWithElements(const flex *const f,
  *     the flag bits ('allocated', 'big') are left as they were.
  *   - An MDSC entry reports DATABOX_PTR_MDSC with the stored pointer.
  *
+ * flexGetByTypeInto decodes like flexGetByType, except that a 96/128-bit
+ * value goes to 'slot' rather than wherever 'box' points: data.i128 /
+ * data.u128 is aimed at 'slot', with big = 1 and allocated = 0, so the box
+ * borrows the slot and the value is valid for as long as the slot is.
+ * With a NULL slot the value is reported deferred: type only,
+ * data.ptr = NULL, big = 0, allocated = 0 (see databoxIsWideDeferred).
+ * It never reads the box's prior state.  Every other value writes only
+ * type, data and (for variable-length types) len, exactly as
+ * flexGetByType, and the flag bits are left as they were, so don't hand
+ * it a box whose consumer reads stale 'allocated' or 'big' bits.  This is
+ * the decode for temporaries and iterator entries: a narrow value never
+ * touches the slot, so a stack or struct-tail databoxWide costs nothing
+ * until a wide value arrives.  flexGetByTypeIntoWithReference also
+ * resolves a reference entry through 'referenceContainer', and a wide
+ * resolved value lands in 'slot' the same way.
+ *
  * flexGetByTypeBig decodes into a databoxBig and owns its wide capability:
  * it never reads the box's prior state, so uninitialized or poisoned
  * storage is fine.  On return allocated = 0, and big = 1 exactly when the
  * value is 96/128-bit, with data.i128 / data.u128 aimed at box->extra.
+ * It is flexGetByTypeInto with 'extra' as the slot, after clearing the
+ * header.
  * Any other value has big = 0, so its leading 16 bytes can be copied out
  * as a plain databox.  BYTES and containers borrow from the flex as with
  * flexGetByType, and a wide value borrows from 'box' itself: copy the box
@@ -416,6 +434,10 @@ flexEntry DK_FN_PURE *flexTailWithElements(const flex *const f,
 void flexGetByType(const flexEntry *fe, databox *box);
 void flexGetByTypeWithReference(const flexEntry *const fe, databox *box,
                                 const struct multimapAtom *referenceContainer);
+void flexGetByTypeInto(const flexEntry *fe, databox *box, databoxWide *slot);
+void flexGetByTypeIntoWithReference(
+    const flexEntry *fe, databox *box, databoxWide *slot,
+    const struct multimapAtom *referenceContainer);
 void flexGetByTypeCopy(const flexEntry *const fe, databox *box);
 bool flexGetNextByType(flex *f, flexEntry **fe, databox *box);
 void flexGetByTypeBig(const flexEntry *fe, databoxBig *box);
