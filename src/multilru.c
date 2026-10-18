@@ -2987,7 +2987,7 @@ int multilruTest(int argc, char *argv[]) {
         assert(multilruTotalWeight(mlru) <= 500);
 
         /* Test GetNLowest */
-        multilruPtr lowest[10];
+        multilruPtr lowest[10] = {0};
         multilruGetNLowest(mlru, lowest, 10);
         for (int i = 0; i < 10 && lowest[i] != 0; i++) {
             assert(multilruGetLevel(mlru, lowest[i]) == 0);
@@ -3155,7 +3155,7 @@ int multilruTest(int argc, char *argv[]) {
         }
 
         /* Promote entries */
-        multilruPtr lowest[10];
+        multilruPtr lowest[10] = {0};
         multilruGetNLowest(mlru, lowest, 10);
         for (int i = 0; i < 10; i++) {
             if (lowest[i] != 0) {
@@ -3351,7 +3351,7 @@ int multilruTest(int argc, char *argv[]) {
                         multilruPtr removed;
                         multilruRemoveMinimum(mlru, &removed);
                     } else {
-                        multilruPtr lowest[1];
+                        multilruPtr lowest[1] = {0};
                         multilruGetNLowest(mlru, lowest, 1);
                         if (lowest[0] != 0) {
                             multilruIncrease(mlru, lowest[0]);
@@ -4005,11 +4005,13 @@ int multilruTest(int argc, char *argv[]) {
             multilruInsert(mlru);
         }
 
-        /* Check how many hot entries survived */
+        /* Check how many hot entries survived. Inserts never promote an
+         * existing entry, so the scan can only have demoted a survivor. */
         int survived = 0;
         for (int i = 0; i < 100; i++) {
             if (multilruIsPopulated(mlru, hotSet[i])) {
                 survived++;
+                assert(multilruGetLevel(mlru, hotSet[i]) <= hotLevelsBefore[i]);
             }
         }
 
@@ -4420,6 +4422,15 @@ int multilruTest(int argc, char *argv[]) {
         /* Should now be within limits */
         assert(multilruCount(mlru) <= 10);
         assert(multilruNeedsEviction(mlru) == false);
+
+        /* Every entry sat at level 0, so each call was a true eviction of
+         * the oldest entry: the 10 handed back are the first 10 inserted,
+         * in order, and none is still populated. */
+        assert(evictedCount == 10);
+        for (size_t i = 0; i < evictedCount; i++) {
+            assert(evictedPtrs[i] == ptrs[i]);
+            assert(!multilruIsPopulated(mlru, evictedPtrs[i]));
+        }
 
         /* Re-enable auto-evict for further insertions */
         multilruSetAutoEvict(mlru, true);
