@@ -21,24 +21,35 @@ struct multiFenwick {
     mflexState *state; /* State for multilist operations */
 };
 
-/* The sums run through databoxAdd / databoxSubtract, which have no
- * 96/128-bit arithmetic, so wide values are refused at every entry
- * point (Update, Set, NewFromArray, LowerBound). */
-static inline bool multiFenwickIsWide_(const databox *box) {
-    return box->type == DATABOX_SIGNED_128 || box->type == DATABOX_UNSIGNED_128;
+/* The documented value types: the only ones databoxAdd / databoxSubtract
+ * do arithmetic on.  Everything else (VOID, BYTES, booleans, pointers,
+ * containers, and 96/128-bit values, which have no wide arithmetic here)
+ * is refused at every entry point (Update, Set, NewFromArray, LowerBound),
+ * so no other type is ever stored or returned. */
+static inline bool multiFenwickIsNumeric_(const databox *box) {
+    switch (box->type) {
+    case DATABOX_SIGNED_64:
+    case DATABOX_UNSIGNED_64:
+    case DATABOX_FLOAT_32:
+    case DATABOX_DOUBLE_64:
+        return true;
+    default:
+        return false;
+    }
 }
 
 /* Read the BIT cell at 0-based position 'pos' into 'entry'.  Cells only
- * ever hold 64-bit and floating-point values (wide values are refused on
- * the way in), so a cell never decodes deferred.  A deferred box is still
- * refused here: it has no payload, and the arithmetic must never see it. */
+ * ever hold the numeric types (everything else is refused on the way in),
+ * so this never sees anything else.  Any other cell, such as a deferred
+ * 96/128-bit box with no payload, is still refused here so that it can
+ * never reach the arithmetic. */
 static inline bool multiFenwickCellGet_(const multiFenwick *mfw, uint64_t pos,
                                         multilistEntry *entry) {
     if (!multilistIndex(mfw->tree, mfw->state, (mlOffsetId)pos, entry, true)) {
         return false;
     }
 
-    return !databoxIsWideDeferred(&entry->box);
+    return multiFenwickIsNumeric_(&entry->box);
 }
 
 /* Create new multiFenwick tree */
@@ -82,9 +93,23 @@ multiFenwick *multiFenwickNewFromArray(const databox *values, size_t count) {
         return multiFenwickNew();
     }
 
+    /* A VOID element means zero (it is skipped below, never stored).  Any
+     * other non-numeric element refuses the whole array.  The cells take
+     * the zero of the first numeric element. */
+    databox zero = DATABOX_SIGNED(0);
+    bool haveZero = false;
     for (size_t i = 0; i < count; i++) {
-        if (multiFenwickIsWide_(&values[i])) {
+        if (DATABOX_IS_VOID(&values[i])) {
+            continue;
+        }
+
+        if (!multiFenwickIsNumeric_(&values[i])) {
             return NULL;
+        }
+
+        if (!haveZero) {
+            zero = databoxZeroLike(&values[i]);
+            haveZero = true;
         }
     }
 
@@ -100,7 +125,6 @@ multiFenwick *multiFenwickNewFromArray(const databox *values, size_t count) {
     }
 
     /* Pre-populate multilist with zero values up to capacity */
-    databox zero = databoxZeroLike(&values[0]);
     for (uint64_t i = 0; i < capacity; i++) {
         multilistPushByTypeTail(&mfw->tree, mfw->state, &zero);
     }
@@ -233,7 +257,7 @@ static bool multiFenwickEnsureCapacity(multiFenwick *mfw, uint64_t idx) {
 
 /* Update: add delta to element at idx */
 bool multiFenwickUpdate(multiFenwick **mfw, size_t idx, const databox *delta) {
-    if (!mfw || !delta || multiFenwickIsWide_(delta)) {
+    if (!mfw || !delta || !multiFenwickIsNumeric_(delta)) {
         return false;
     }
 
@@ -394,7 +418,7 @@ bool multiFenwickGet(const multiFenwick *mfw, size_t idx, databox *result) {
 
 /* Set single element to exact value */
 bool multiFenwickSet(multiFenwick **mfw, size_t idx, const databox *value) {
-    if (!mfw || !value || multiFenwickIsWide_(value)) {
+    if (!mfw || !value || !multiFenwickIsNumeric_(value)) {
         return false;
     }
 
@@ -446,7 +470,7 @@ size_t multiFenwickBytes(const multiFenwick *mfw) {
 /* Lower bound search - O(log²n) implementation using binary search on queries
  * Simpler and more reliable than binary lifting on BIT values */
 size_t multiFenwickLowerBound(const multiFenwick *mfw, const databox *target) {
-    if (!mfw || !target || mfw->count == 0 || multiFenwickIsWide_(target)) {
+    if (!mfw || !target || mfw->count == 0 || !multiFenwickIsNumeric_(target)) {
         return SIZE_MAX;
     }
 

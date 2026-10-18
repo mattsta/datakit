@@ -108,11 +108,14 @@
  * - Does not support range updates directly
  * - Does not support minimum/maximum queries (use segment tree)
  * - Requires non-negative indices
- * - All values must be numeric databox types
- * - 96/128-bit values (SIGNED_128, UNSIGNED_128) are not supported: the
- *   sums have no wide arithmetic.  They are refused on the way in
- *   (Update and Set return false, NewFromArray returns NULL, LowerBound
- *   returns SIZE_MAX), so no wide value is ever stored or returned.
+ * - All values must be SIGNED_64, UNSIGNED_64, FLOAT_32 or DOUBLE_64.
+ *   Every other type is refused on the way in: VOID, BYTES, booleans,
+ *   pointers, containers, and 96/128-bit values (SIGNED_128,
+ *   UNSIGNED_128), which the sums have no wide arithmetic for.  Update
+ *   and Set return false, NewFromArray returns NULL and LowerBound
+ *   returns SIZE_MAX, before anything changes, so no other type is ever
+ *   stored or returned.  The one exception: a VOID element of
+ *   NewFromArray's array means zero.
  */
 
 /* Opaque multiFenwick tree type */
@@ -127,7 +130,9 @@ multiFenwick *multiFenwickNew(void);
 
 /* Create multiFenwick tree from databox array
  * Time: O(n log n) via repeated updates
- * Returns NULL on allocation failure, or if any value is 96/128-bit
+ * Returns NULL on allocation failure, or if any value is neither numeric
+ * nor VOID (a VOID element is zero; cells take the zero of the first
+ * numeric element, SIGNED_64 if there is none)
  * All databoxes should be the same numeric type */
 multiFenwick *multiFenwickNewFromArray(const databox *values, size_t count);
 
@@ -144,7 +149,8 @@ void multiFenwickFree(multiFenwick *mfw);
  * idx: 0-based index
  * delta: databox value to add (can be negative for signed types)
  * Returns true on success, false on allocation failure or invalid type
- * (a 96/128-bit delta is refused before anything changes) */
+ * (a non-numeric delta, such as VOID, BYTES or 96/128-bit, is refused
+ * before anything changes) */
 bool multiFenwickUpdate(multiFenwick **mfw, size_t idx, const databox *delta);
 
 /* Query: compute prefix sum [0, idx]
@@ -174,7 +180,8 @@ bool multiFenwickGet(const multiFenwick *mfw, size_t idx, databox *result);
 /* Set single element to exact value (not delta)
  * Time: O(log n)
  * Computes delta = value - get(idx), then updates
- * Returns true on success, false for a 96/128-bit value (nothing changes) */
+ * Returns true on success, false for a non-numeric value (nothing
+ * changes) */
 bool multiFenwickSet(multiFenwick **mfw, size_t idx, const databox *value);
 
 /* ====================================================================
@@ -194,7 +201,7 @@ size_t multiFenwickBytes(const multiFenwick *mfw);
 /* Find smallest index with cumulative sum >= target
  * Time: O(log^2 n) naive, O(log n) with binary lifting
  * Returns SIZE_MAX if no such index exists, the tree is empty, or 'target'
- * is 96/128-bit
+ * is not numeric
  * Requires non-negative values for correctness
  * Comparison uses databox comparison logic */
 size_t multiFenwickLowerBound(const multiFenwick *mfw, const databox *target);

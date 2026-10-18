@@ -747,6 +747,112 @@ int multiFenwickTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("non-numeric values are refused and never stored") {
+        /* Only SIGNED_64, UNSIGNED_64, FLOAT_32 and DOUBLE_64 have
+         * arithmetic: every other type is refused by every entry point,
+         * and the tree is left as it was. */
+        enum { NN_N = 6, NN_TYPES = 6 };
+        databox odd[NN_TYPES];
+        memset(odd, 0, sizeof(odd));
+        odd[0].type = DATABOX_VOID;
+        odd[1] = databoxNewBytesString("not a number");
+        odd[2].type = DATABOX_TRUE;
+        odd[3].type = DATABOX_FALSE;
+        odd[4].type = DATABOX_NULL;
+        odd[5].type = DATABOX_PTR;
+        odd[5].data.ptr = odd;
+
+        cleaner(multiFenwickFree) multiFenwick *none = NULL;
+        if (multiFenwickUpdate(&none, 0, &odd[1]) || none) {
+            ERRR("Update accepted BYTES into an empty tree");
+        }
+
+        const int64_t vals[NN_N] = {7, -4, 0, 12, -9, 3};
+        databox values[NN_N];
+        for (size_t i = 0; i < NN_N; i++) {
+            values[i] = DATABOX_SIGNED(vals[i]);
+        }
+
+        cleaner(multiFenwickFree) multiFenwick *mfw =
+            multiFenwickNewFromArray(values, NN_N);
+        for (size_t t = 0; mfw && t < NN_TYPES; t++) {
+            for (size_t i = 0; i < NN_N; i++) {
+                if (multiFenwickUpdate(&mfw, i, &odd[t]) ||
+                    multiFenwickSet(&mfw, i, &odd[t])) {
+                    ERR("type %d: Update or Set(%zu) accepted it",
+                        (int)odd[t].type, i);
+                }
+            }
+
+            if (multiFenwickUpdate(&mfw, 3 * NN_N, &odd[t]) ||
+                multiFenwickCount(mfw) != NN_N) {
+                ERR("type %d: an update past the end was not refused cleanly",
+                    (int)odd[t].type);
+            }
+
+            if (multiFenwickLowerBound(mfw, &odd[t]) != SIZE_MAX) {
+                ERR("type %d: LowerBound did not refuse it", (int)odd[t].type);
+            }
+
+            /* Not numeric and not VOID: the array is refused. */
+            if (odd[t].type != DATABOX_VOID) {
+                for (size_t at = 0; at < NN_N; at += NN_N - 1) {
+                    databox mixed[NN_N];
+                    memcpy(mixed, values, sizeof(mixed));
+                    mixed[at] = odd[t];
+                    cleaner(multiFenwickFree) multiFenwick *bad =
+                        multiFenwickNewFromArray(mixed, NN_N);
+                    if (bad) {
+                        ERR("type %d at %zu: NewFromArray accepted it",
+                            (int)odd[t].type, at);
+                    }
+                }
+            }
+        }
+
+        int64_t prefix = 0;
+        for (size_t i = 0; mfw && i < NN_N; i++) {
+            prefix += vals[i];
+            databox el;
+            databox sum;
+            if (!multiFenwickGet(mfw, i, &el) || !mfwIntIs(&el, vals[i]) ||
+                !multiFenwickQuery(mfw, i, &sum) || !mfwIntIs(&sum, prefix)) {
+                ERR("index %zu changed after refused writes", i);
+            }
+        }
+
+        /* A VOID element of NewFromArray's array is zero, never stored. */
+        databox sparse[4];
+        sparse[0] = odd[0];
+        sparse[1] = DATABOX_SIGNED(4);
+        sparse[2] = odd[0];
+        sparse[3] = DATABOX_SIGNED(-3);
+        const int64_t sparseWant[4] = {0, 4, 0, -3};
+        cleaner(multiFenwickFree) multiFenwick *withVoid =
+            multiFenwickNewFromArray(sparse, 4);
+        prefix = 0;
+        for (size_t i = 0; i < 4; i++) {
+            prefix += sparseWant[i];
+            databox el;
+            databox sum;
+            if (!withVoid || !multiFenwickGet(withVoid, i, &el) ||
+                !mfwIntIs(&el, sparseWant[i]) ||
+                !multiFenwickQuery(withVoid, i, &sum) ||
+                !mfwIntIs(&sum, prefix)) {
+                ERR("VOID-as-zero array differs at %zu", i);
+                break;
+            }
+        }
+
+        databox allVoid[3] = {odd[0], odd[0], odd[0]};
+        cleaner(multiFenwickFree) multiFenwick *zeros =
+            multiFenwickNewFromArray(allVoid, 3);
+        databox z;
+        if (!zeros || !multiFenwickQuery(zeros, 2, &z) || !mfwIntIs(&z, 0)) {
+            ERRR("an all-VOID array is not a tree of zeros");
+        }
+    }
+
     TEST("differential: signed Update, Set, Get and Query against an array") {
         /* Random signed values, small and beyond 2^53, through Update
          * (add) and Set (assign), growing the tree as indexes arrive.
