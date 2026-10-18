@@ -351,6 +351,13 @@ bool StrScanToDouble(const void *str, databox *box, bool allowFloatWords,
                      bool skipSpaces);
 
 bool StrScanScanReliable(const void *p, const size_t len, databox *box);
+/* StrScanScanReliable extended to integers beyond 64 bits: a canonical
+ * integer of 20 to 40 bytes is parsed as up to 128 bits, and every other
+ * input gets StrScanScanReliable's verdict.  On success exactly one of
+ * 'small' (a 64-bit integer or a real) or 'box' (SIGNED_128 or
+ * UNSIGNED_128, payload in box->extra) is written as a fully defined box,
+ * and *use points at it.  On failure nothing is written.  The PreVerified
+ * form skips the digit check for callers that already made it. */
 bool StrScanScanReliableConvert128(const void *p, const size_t len,
                                    databox *small, databoxBig *box,
                                    databoxBig **use);

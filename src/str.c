@@ -227,79 +227,81 @@ bool StrScanScanReliable(const void *const p_, const size_t len,
  * required
  *   - and whichever databox is populated gets assigned to '*use' */
 /* This is an abstract implementation because sometimes we know we ALREADY have
- * 100% digits in the buffer so we can skip running StrIsDigitsFast() again. */
+ * 100% digits in the buffer so we can skip running StrIsDigitsFast() again.
+ *
+ * On success exactly one of 'small' or 'big' is written, as a fully defined
+ * box (no stale allocated, created, big, unused or len bits from the
+ * caller's storage), and *use points at it.  On failure nothing is
+ * written. */
 DK_INLINE_ALWAYS bool StrScanScanReliableConvert128_(
     const void *const p_, const size_t len, databox *restrict small,
     databoxBig *restrict big, databoxBig **use, const bool requireDigitCheck) {
     const uint8_t *buf = (const uint8_t *)p_;
-    /* If byte length is within the range of a 128 bit integer... */
-    if (len >= 20 && len <= 40) {
-        /* Reject leading zeros, before or after the sign, as
-         * StrScanScanReliable does. */
-        if (buf[0] == '0' || (buf[0] == '-' && buf[1] == '0')) {
+    const bool negative = len > 0 && buf[0] == '-';
+    const size_t signLen = negative ? 1 : 0;
+
+    /* A 20 to 40 byte buffer may be an integer beyond 64 bits.  Only a
+     * canonical integer (digits after an optional '-', no leading zero)
+     * takes the 128-bit path; anything else of that length, such as a
+     * real, gets the 64-bit scanner's verdict like any shorter buffer. */
+    const bool wideInteger =
+        len >= 20 && len <= 40 && buf[signLen] != '0' &&
+        (!requireDigitCheck || StrIsDigitsFast(buf + signLen, len - signLen));
+
+    if (!wideInteger) {
+        databox narrow = {{0}};
+        if (!StrScanScanReliable(p_, len, &narrow)) {
             return false;
         }
-        if (buf[0] == '-') {
-            /* and if all bytes of the buffer are numeric... */
-            if (requireDigitCheck) {
-                if (!StrIsDigitsFast(buf + 1, len - 1)) {
-                    return false;
-                }
-            }
 
-            /* Attempt to convert the buffer to an integer (its form is
-             * verified above, so skip the public parser's re-check) */
-            __int128_t result;
-            if (!strBufToInt128Digits_(buf, len, &result)) {
-                return false;
-            }
-
-            /* If we converted a value fitting int64_t, use int64 */
-            /* Note: since this is the NEGATIVE comparison branch, we
-             * are checking for result between -1 and INT64_MIN.
-             *       Anything smaller _must_ be in the 128 bit
-             * container. */
-            if (result >= INT64_MIN) {
-                small->type = DATABOX_SIGNED_64;
-                small->data.i = (int64_t)result;
-                *use = (databoxBig *)small;
-            } else {
-                /* else, populate an actual int128 */
-                DATABOX_BIG_SIGNED_128(big, result);
-                *use = big;
-            }
-        } else {
-            /* The unsigned comparsion branch */
-            if (requireDigitCheck) {
-                if (!StrIsDigitsFast(buf, len)) {
-                    return false;
-                }
-            }
-
-            __uint128_t result;
-            if (!strBufToUInt128Digits_(buf, len, &result)) {
-                return false;
-            }
-
-            /* If we converted a value fitting uint64_t, use uint64 */
-            if (result <= UINT64_MAX) {
-                small->type = DATABOX_UNSIGNED_64;
-                small->data.u = (uint64_t)result;
-                *use = (databoxBig *)small;
-            } else {
-                /* else, value requires more than 64 bits of storage: */
-                DATABOX_BIG_UNSIGNED_128(big, result);
-                *use = big;
-            }
-        }
-
-        /* successfully converted user input! */
+        *small = narrow;
+        *use = (databoxBig *)small;
         return true;
     }
 
-    /* else, try to convert to a smaller integer or float or something */
-    *use = (databoxBig *)small;
-    return StrScanScanReliable(p_, len, small);
+    if (negative) {
+        /* Its form is verified above, so skip the public parser's check */
+        __int128_t result;
+        if (!strBufToInt128Digits_(buf, len, &result)) {
+            return false;
+        }
+
+        /* A negative value from -1 down to INT64_MIN is a SIGNED_64, as
+         * StrScanScanReliable makes it; anything smaller needs 128 bits */
+        if (result >= INT64_MIN) {
+            *small = (databox){.data.i64 = (int64_t)result,
+                               .type = DATABOX_SIGNED_64};
+            *use = (databoxBig *)small;
+            return true;
+        }
+
+        DATABOX_BIG_SIGNED_128(big, result);
+    } else {
+        __uint128_t result;
+        if (!strBufToUInt128Digits_(buf, len, &result)) {
+            return false;
+        }
+
+        /* 20 digits is above INT64_MAX, so a value that fits 64 bits is an
+         * UNSIGNED_64, again as StrScanScanReliable makes it */
+        if (result <= UINT64_MAX) {
+            *small = (databox){.data.u64 = (uint64_t)result,
+                               .type = DATABOX_UNSIGNED_64};
+            *use = (databoxBig *)small;
+            return true;
+        }
+
+        DATABOX_BIG_UNSIGNED_128(big, result);
+    }
+
+    /* The macro set the type, the payload pointer and 'big'; clear the
+     * rest of the metadata the caller's storage may hold */
+    big->allocated = false;
+    big->created = false;
+    big->unused = 0;
+    big->len = 0;
+    *use = big;
+    return true;
 }
 
 bool StrScanScanReliableConvert128(const void *const p_, const size_t len,
@@ -4504,6 +4506,144 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
         if (!StrBufToInt128("-1", 2, &s) || s != -1) {
             ERRR("\"-1\" must parse as -1");
         }
+    }
+
+    TEST("StrScanScanReliableConvert128 writes fully defined boxes") {
+        /* Poison every metadata bit of both outputs, then check the box
+         * *use names holds exactly the expected type, payload and clear
+         * metadata */
+        static const struct {
+            const char *s;
+            databoxType type;
+            bool wide;
+        } cases[] = {
+            {"340282366920938463463374607431768211455", DATABOX_UNSIGNED_128,
+             true},
+            {"18446744073709551616", DATABOX_UNSIGNED_128, true},
+            {"-170141183460469231731687303715884105728", DATABOX_SIGNED_128,
+             true},
+            {"-9223372036854775809", DATABOX_SIGNED_128, true},
+            {"18446744073709551615", DATABOX_UNSIGNED_64, false},
+            {"-9223372036854775808", DATABOX_SIGNED_64, false},
+            {"-1000000000000000000", DATABOX_SIGNED_64, false},
+            {"12345", DATABOX_SIGNED_64, false},
+        };
+
+        for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
+            databox small;
+            databoxBig big;
+            memset(&small, 0xA5, sizeof(small));
+            memset(&big, 0xA5, sizeof(big));
+            databoxBig *use = NULL;
+            const size_t len = strlen(cases[i].s);
+            if (!StrScanScanReliableConvert128(cases[i].s, len, &small, &big,
+                                               &use)) {
+                ERR("Convert128 refused %s", cases[i].s);
+                continue;
+            }
+
+            if (use != (cases[i].wide ? &big : (databoxBig *)&small)) {
+                ERR("Convert128 put %s in the wrong box", cases[i].s);
+                continue;
+            }
+
+            if (use->type != cases[i].type || use->allocated || use->created ||
+                use->unused || use->len || use->big != cases[i].wide ||
+                (cases[i].wide && use->data.u128 != (__uint128_t *)big.extra)) {
+                ERR("Convert128 left stale metadata for %s", cases[i].s);
+                continue;
+            }
+
+            /* The payload round-trips through the public parsers */
+            if (cases[i].type == DATABOX_UNSIGNED_128) {
+                __uint128_t want = 0;
+                StrBufToUInt128(cases[i].s, len, &want);
+                if (*use->data.u128 != want) {
+                    ERR("Convert128 payload wrong for %s", cases[i].s);
+                }
+            } else if (cases[i].type == DATABOX_SIGNED_128) {
+                __int128_t want = 0;
+                StrBufToInt128(cases[i].s, len, &want);
+                if (*use->data.i128 != want) {
+                    ERR("Convert128 payload wrong for %s", cases[i].s);
+                }
+            } else {
+                databox want = {{0}};
+                StrScanScanReliable(cases[i].s, len, &want);
+                if (want.type != use->type || want.data.u64 != use->data.u64) {
+                    ERR("Convert128 payload wrong for %s", cases[i].s);
+                }
+            }
+        }
+
+        /* A refused buffer writes neither output nor *use */
+        databox small;
+        databoxBig big;
+        memset(&small, 0xA5, sizeof(small));
+        memset(&big, 0xA5, sizeof(big));
+        databoxBig *use = (databoxBig *)&small;
+        const char *bad = "340282366920938463463374607431768211456";
+        if (StrScanScanReliableConvert128(bad, strlen(bad), &small, &big,
+                                          &use)) {
+            ERRR("Convert128 accepted UINT128_MAX + 1");
+        }
+        const uint8_t *sp = (const uint8_t *)&small;
+        const uint8_t *bp = (const uint8_t *)&big;
+        bool untouched = use == (databoxBig *)&small;
+        for (size_t b = 0; b < sizeof(small); b++) {
+            untouched = untouched && sp[b] == 0xA5;
+        }
+        for (size_t b = 0; b < sizeof(big); b++) {
+            untouched = untouched && bp[b] == 0xA5;
+        }
+        if (!untouched) {
+            ERRR("Convert128 wrote output on failure");
+        }
+    }
+
+    TEST("StrScanScanReliableConvert128 gives 20-40 byte non-integers the "
+         "64-bit scanner's verdict") {
+        /* Reals and other non-integers of integer-like length must get
+         * exactly what StrScanScanReliable says, accepted or not */
+        static const char *const inputs[] = {
+            "-0.30000000000000004",  "0.30000000000000004",
+            "0.12345678901234567",   "-0.12345678901234567",
+            "1234567.8901234567",    "-1234567.8901234567",
+            "0.1000000000000000000", "1.5000000000000000000",
+            "12345678901234567.89",  "-0.0000000000000000001",
+            "00000000000000000001",  "-00000000000000000001",
+            "1e100000000000000000",  "+1000000000000000000000",
+            "1000000000000000000.0", "12345678901234567890a",
+        };
+        size_t accepted = 0;
+        for (size_t i = 0; i < sizeof(inputs) / sizeof(*inputs); i++) {
+            const size_t len = strlen(inputs[i]);
+            databox narrow = {{0}};
+            const bool want = StrScanScanReliable(inputs[i], len, &narrow);
+
+            databox small = {{0}};
+            databoxBig big = {{0}};
+            databoxBig *use = NULL;
+            const bool got = StrScanScanReliableConvert128(inputs[i], len,
+                                                           &small, &big, &use);
+            if (got != want) {
+                ERR("Convert128(%s) = %d, 64-bit scanner says %d", inputs[i],
+                    got, want);
+                continue;
+            }
+
+            if (got) {
+                accepted++;
+                if (use != (databoxBig *)&small || small.type != narrow.type ||
+                    small.data.u64 != narrow.data.u64) {
+                    ERR("Convert128(%s) differs from the 64-bit scanner",
+                        inputs[i]);
+                }
+            }
+        }
+
+        printf("    %zu of %zu long non-integers are numerals\n", accepted,
+               sizeof(inputs) / sizeof(*inputs));
     }
 
     TEST_FINAL_RESULT;
