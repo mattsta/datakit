@@ -3352,7 +3352,22 @@ static bool multilistPersistApplyOp(void *structure, persistOp op,
         if (!flexGetTwoDataboxes(data, len, &startBox, &countBox)) {
             return false;
         }
-        return multilistDelRange(ml, state, startBox.data.i, countBox.data.i);
+        /* Both operands are int64s at the origin. */
+        if ((startBox.type != DATABOX_SIGNED_64 &&
+             startBox.type != DATABOX_UNSIGNED_64) ||
+            (countBox.type != DATABOX_SIGNED_64 &&
+             countBox.type != DATABOX_UNSIGNED_64) ||
+            (startBox.type == DATABOX_UNSIGNED_64 &&
+             startBox.data.u > (uint64_t)INT64_MAX) ||
+            (countBox.type == DATABOX_UNSIGNED_64 &&
+             countBox.data.u > (uint64_t)INT64_MAX)) {
+            return false;
+        }
+        /* Replay runs against the state the origin had, so a range that
+         * deletes nothing here deleted nothing there: a no-op, not a
+         * failure.  Older writers logged such calls. */
+        (void)multilistDelRange(ml, state, startBox.data.i, countBox.data.i);
+        return true;
     }
 
     case PERSIST_OP_TRIM: {
@@ -3403,8 +3418,18 @@ static bool multilistPersistApplyOp(void *structure, persistOp op,
             indexBox.type != DATABOX_UNSIGNED_64) {
             return false;
         }
-        return multilistReplaceByTypeAtIndex(
-            ml, state, (mlNodeId)indexBox.data.i, (const databox *)&valueBox);
+        /* The origin's index is an int64: an unsigned operand above
+         * INT64_MAX is malformed, not a negative index. */
+        if (indexBox.type == DATABOX_UNSIGNED_64 &&
+            indexBox.data.u > (uint64_t)INT64_MAX) {
+            return false;
+        }
+
+        /* As for DELETE_AT: an index the origin refused is refused here
+         * too, so the record is a no-op. */
+        (void)multilistReplaceByTypeAtIndex(ml, state, indexBox.data.i,
+                                            (const databox *)&valueBox);
+        return true;
     }
 
     case PERSIST_OP_CLEAR:
@@ -6072,7 +6097,7 @@ int persistTest(int argc, char *argv[]) {
                 persistTestMlValue(id, &storage, buf, sizeof(buf));
             const databox idxBox = DATABOX_SIGNED((int64_t)replaceAt[k]);
             const databox *args[2] = {&idxBox, box};
-            multilistReplaceByTypeAtIndex(&ml, s0, (mlNodeId)replaceAt[k], box);
+            multilistReplaceByTypeAtIndex(&ml, s0, replaceAt[k], box);
             persistLogOp(p, PERSIST_OP_REPLACE, args, 2);
             ids[replaceAt[k]] = id;
         }
@@ -6216,6 +6241,133 @@ int persistTest(int argc, char *argv[]) {
         }
 
         persistSetReplayState(NULL);
+    }
+
+    TEST("multilist WAL: refused DELETE_AT and REPLACE replay as no-ops") {
+        /* Older writers logged range deletes and replaces that the list
+         * refused.  Replay sees the same state, so it refuses them too;
+         * the record must apply as a no-op, not stop recovery.  Run at
+         * three fill limits, from one node to many. */
+        const flexCapSizeLimit limits[] = {
+            FLEX_CAP_LEVEL_2048, FLEX_CAP_LEVEL_512, FLEX_CAP_LEVEL_64};
+        for (size_t t = 0; t < COUNT_ARRAY(limits); t++) {
+            cleaner(multilistFree) multilist *ml = multilistNew(limits[t], 0);
+            cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
+            persistSetReplayState(state);
+            uint32_t ids[40];
+            size_t n = 0;
+            databoxBig storage;
+            char buf[64];
+            for (uint32_t id = 0; id < 40; id++) {
+                multilistPushByTypeTail(
+                    &ml, state,
+                    persistTestMlValue(id, &storage, buf, sizeof(buf)));
+                ids[n++] = id;
+            }
+
+            const struct {
+                const char *what;
+                persistOp op;
+                int64_t a;
+                int64_t b;
+            } noops[] = {
+                {"zero-count DELETE_AT", PERSIST_OP_DELETE_AT, 3, 0},
+                {"negative-count DELETE_AT", PERSIST_OP_DELETE_AT, 3, -2},
+                {"DELETE_AT past the tail", PERSIST_OP_DELETE_AT, 40, 2},
+                {"DELETE_AT past the head", PERSIST_OP_DELETE_AT, -41, 2},
+                {"REPLACE past the tail", PERSIST_OP_REPLACE, 40, 7},
+                {"REPLACE past the head", PERSIST_OP_REPLACE, -41, 7},
+            };
+            for (size_t k = 0; k < COUNT_ARRAY(noops); k++) {
+                const databox a = DATABOX_SIGNED(noops[k].a);
+                const databox b = DATABOX_SIGNED(noops[k].b);
+                const databox *args[2] = {&a, &b};
+                size_t len = 0;
+                cleanerName(zfree, Bytes) uint8_t *row =
+                    persistOpsMultilist.encodeOp(noops[k].op, args, 2, &len);
+                if (!row ||
+                    !persistOpsMultilist.applyOp(&ml, noops[k].op, row, len)) {
+                    ERR("tier %zu: %s did not replay as a no-op", t,
+                        noops[k].what);
+                }
+
+                err += persistTestMlVerify(ml, ids, n, noops[k].what);
+            }
+
+            /* A real range delete still applies. */
+            {
+                const databox a = DATABOX_SIGNED(5);
+                const databox b = DATABOX_SIGNED(3);
+                const databox *args[2] = {&a, &b};
+                size_t len = 0;
+                cleanerName(zfree, Bytes) uint8_t *row =
+                    persistOpsMultilist.encodeOp(PERSIST_OP_DELETE_AT, args, 2,
+                                                 &len);
+                if (!row || !persistOpsMultilist.applyOp(
+                                &ml, PERSIST_OP_DELETE_AT, row, len)) {
+                    ERR("tier %zu: DELETE_AT [5, 3] did not apply", t);
+                }
+
+                memmove(&ids[5], &ids[8], (n - 8) * sizeof(*ids));
+                n -= 3;
+                err +=
+                    persistTestMlVerify(ml, ids, n, "after DELETE_AT [5, 3]");
+            }
+
+            /* A DELETE_AT whose operands are not integers is malformed. */
+            {
+                const databox a = databoxNewBytesString("five");
+                const databox b = DATABOX_SIGNED(1);
+                const databox *args[2] = {&a, &b};
+                size_t len = 0;
+                cleanerName(zfree, Bytes) uint8_t *row =
+                    persistOpsMultilist.encodeOp(PERSIST_OP_DELETE_AT, args, 2,
+                                                 &len);
+                if (!row || persistOpsMultilist.applyOp(
+                                &ml, PERSIST_OP_DELETE_AT, row, len)) {
+                    ERR("tier %zu: a string DELETE_AT start was not refused",
+                        t);
+                }
+
+                err += persistTestMlVerify(ml, ids, n, "after malformed op");
+            }
+
+            /* An unsigned operand above INT64_MAX is malformed, never a
+             * negative index: UINT64_MAX would otherwise address the
+             * tail. */
+            {
+                const databox huge = DATABOX_UNSIGNED(UINT64_MAX);
+                const databox one = DATABOX_SIGNED(1);
+                const databox value = DATABOX_SIGNED(7);
+                const struct {
+                    const char *what;
+                    persistOp op;
+                    const databox *a;
+                    const databox *b;
+                } bad[] = {
+                    {"REPLACE at UINT64_MAX", PERSIST_OP_REPLACE, &huge,
+                     &value},
+                    {"DELETE_AT from UINT64_MAX", PERSIST_OP_DELETE_AT, &huge,
+                     &one},
+                    {"DELETE_AT of UINT64_MAX", PERSIST_OP_DELETE_AT, &one,
+                     &huge},
+                };
+                for (size_t k = 0; k < COUNT_ARRAY(bad); k++) {
+                    const databox *args[2] = {bad[k].a, bad[k].b};
+                    size_t len = 0;
+                    cleanerName(zfree, Bytes) uint8_t *row =
+                        persistOpsMultilist.encodeOp(bad[k].op, args, 2, &len);
+                    if (!row ||
+                        persistOpsMultilist.applyOp(&ml, bad[k].op, row, len)) {
+                        ERR("tier %zu: %s was not refused", t, bad[k].what);
+                    }
+
+                    err += persistTestMlVerify(ml, ids, n, bad[k].what);
+                }
+            }
+
+            persistSetReplayState(NULL);
+        }
     }
 
     /* ================================================================
