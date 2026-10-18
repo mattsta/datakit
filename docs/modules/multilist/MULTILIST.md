@@ -669,11 +669,18 @@ if you need it past that.
 
 ### Restarting Iteration
 
-`multilist.h` declares `multilistRewind()` and `multilistRewindTail()`, but
-**neither has an implementation in the multilist sources** - only the
-per-variant `multilistSmallRewind()` / `multilistFullRewind()` style functions
-exist, and they are not wired into the dispatcher. Referencing the unified names
-will not link. To make a second pass, just initialize the iterator again:
+```c
+void multilistRewind(multilist *ml, multilistIterator *iter);
+void multilistRewindTail(multilist *ml, multilistIterator *iter);
+```
+
+`multilistRewind()` restarts an iterator that has already been initialized
+from the head, and `multilistRewindTail()` restarts it from the tail. Both
+work on every tier. Each one releases the iterator (closing any open node)
+and initializes it again with the iterator's own `state` pair and `readOnly`
+mode, so it is safe to rewind mid-iteration. `multilistRewindTail()` also
+flips a forward iterator to reverse, and `multilistRewind()` flips a reverse
+iterator to forward.
 
 ```c
 multilistIterator iter = {0};
@@ -682,14 +689,23 @@ multilistIteratorInitForwardReadOnly(ml, s, &iter);
 while (multilistNext(&iter, &entry)) {
     /* first pass */
 }
-multilistIteratorRelease(&iter);
 
-multilistIteratorInitForwardReadOnly(ml, s, &iter);
+multilistRewind(ml, &iter);
 while (multilistNext(&iter, &entry)) {
-    /* second pass */
+    /* second pass, from the head again */
 }
+
+multilistRewindTail(ml, &iter);
+while (multilistNext(&iter, &entry)) {
+    /* third pass, from the tail */
+}
+
 multilistIteratorRelease(&iter);
 ```
+
+Call the unified names. The tier headers also declare
+`multilistSmallRewind()`, `multilistMediumRewind()`, `multilistFullRewind()`
+and their `RewindTail` forms, but those have no definitions.
 
 ## Special Operations
 
