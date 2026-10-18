@@ -585,18 +585,27 @@ DK_STATIC void multilistFullDelNode__(multilistFull *ml, mflexState *state,
  * Note: multilistFullDelIndex() *requires* uncompressed nodes because you
  *       already had to get *fe from an uncompressed node somewhere.
  *
+ * '*ff' is the node opened through 'state'.  For a compressed node it is
+ * the state's scratch buffer, not the node's own memory, so an emptied
+ * node is closed back through 'state' before it is freed.  Freeing '*ff'
+ * directly would free the scratch buffer out from under 'state' and leak
+ * the node.  Removing a node shifts its neighbours across the compress
+ * depth boundaries, so the depth rule is re-applied.
+ *
  * Returns true if the entire node was deleted, false if node still exists.
  * Also updates in/out param 'fe' with the next offset in the flex. */
-DK_STATIC bool multilistFullDelIndex(multilistFull *ml, const mlNodeId nodeIdx,
-                                     flex **ff, flexEntry **fe) {
+DK_STATIC bool multilistFullDelIndex(multilistFull *ml, mflexState *state,
+                                     const mlNodeId nodeIdx, flex **ff,
+                                     flexEntry **fe) {
     flexDelete(ff, fe);
     ml->values--;
 
     if (flexIsEmpty(*ff) && ml->count > 1) {
         /* Only delete node if it's not the only node. */
-        flexFree(*ff);
-        *getNodePtr(nodeIdx) = NULL;
+        mflex **node = getNodePtr(nodeIdx);
+        mflexCloseNoCompress(node, state, *ff);
         reallocDecrCount(ml, nodeIdx);
+        multilistFullCompressRenew__(ml, state);
 
         *ff = NULL;
         *fe = NULL;
@@ -616,7 +625,16 @@ DK_STATIC bool multilistFullDelIndex(multilistFull *ml, const mlNodeId nodeIdx,
 void multilistFullDelEntry(multilistIterator *iter, multilistEntry *entry) {
     assert(!iter->readOnly);
 
-    multilistFullDelIndex(iter->ml, iter->nodeIdx, &entry->f, &entry->fe);
+    const bool nodeDeleted = multilistFullDelIndex(
+        iter->ml, iter->state[0], iter->nodeIdx, &entry->f, &entry->fe);
+
+    if (nodeDeleted && iter->forward) {
+        /* The following nodes moved down one index, so the next node is
+         * now at this node's index: step back so Next's advance lands on
+         * it instead of skipping it.  (In reverse the previous node keeps
+         * its index.) */
+        iter->nodeIdx--;
+    }
 
     iter->f = entry->f;
 
@@ -1482,7 +1500,7 @@ void multilistFullRotate(multilistFull *ml, mflexState *state[2]) {
             ml->values--;
         } else {
             /* Remove tail entry. */
-            multilistFullDelIndex(ml, mlTailIdx(ml), &fTail, &fe);
+            multilistFullDelIndex(ml, state[0], mlTailIdx(ml), &fTail, &fe);
 
             /* re-store 'fTail' in 'tail' */
             mflexCloseNoCompress(tail, state[0], fTail);
@@ -1538,7 +1556,7 @@ bool multilistFullPop(multilistFull *ml, mflexState *state, databox *box,
         /* The element is about to be deleted, so hand out an owned copy. */
         multilistPopCopy_(fe, box);
 
-        if (!multilistFullDelIndex(ml, nodeIdx, &f, &fe)) {
+        if (!multilistFullDelIndex(ml, state, nodeIdx, &f, &fe)) {
             mflexCloseShrink(node, state, f);
         }
 
@@ -1859,9 +1877,26 @@ static databox mlfSplitBox(uint32_t id, char buf[MLF_SPLIT_LEN + 1]) {
     return databoxNewBytes(buf, MLF_SPLIT_LEN);
 }
 
+/* An uncompressed node is still on auto compression (as opposed to
+ * marked never-compress) if closing a copy of it compresses the copy.
+ * mflex may leave an auto node uncompressed after a shrink, when its
+ * uncompressed form needs no larger allocation; the next grow compresses
+ * it.  A never-compress node's copy stays uncompressed. */
+defcleaner(mflex *, mflexFree);
+static bool mlfNodeIsAutoCompress(const mflex *node) {
+    cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
+    cleaner(mflexFree) mflex *copy = mflexDuplicate(node);
+    flex *f = mflexOpen(copy, state);
+    mflexCloseGrow(&copy, state, f);
+    return mflexIsCompressed(copy);
+}
+
 /* Check every node of 'ml' against the compress depth rule: the
- * 'compress' nodes at each end are not compressed, and every node between
- * them is (unless it is too small to be worth it, as mlVerify_ allows).
+ * 'compress' nodes at each end are not compressed and are marked
+ * never-compress (when big enough to tell), and every node between
+ * them is compressed, or is on auto compression and left uncompressed by
+ * mflex's shrink policy (see mlfNodeIsAutoCompress), or is too small to
+ * be worth it (as mlVerify_ allows).
  * Returns NULL, or what failed with its node in 'badNode'. */
 static const char *mlfDepthRuleCheck(const multilistFull *ml,
                                      mlNodeId *badNode) {
@@ -1879,9 +1914,15 @@ static const char *mlfDepthRuleCheck(const multilistFull *ml,
             return "an end node is compressed";
         }
 
+        if (edge && mflexBytesUncompressed(node) > 64 &&
+            mlfNodeIsAutoCompress(node)) {
+            return "an end node is on auto compression (the next grow "
+                   "would compress it)";
+        }
+
         if (!edge && !mflexIsCompressed(node) &&
-            mflexBytesUncompressed(node) > 64) {
-            return "an interior node is not compressed";
+            mflexBytesUncompressed(node) > 64 && !mlfNodeIsAutoCompress(node)) {
+            return "an interior node is marked never-compress";
         }
     }
 
@@ -1908,7 +1949,8 @@ static const char *mlfSplitCheck(multilistFull *ml, mflexState *state[2],
     size_t sum = 0;
     for (mlNodeId at = 0; at < ml->count; at++) {
         const size_t c = mflexCount(getNode(at));
-        if (c == 0) {
+        if (c == 0 && !(n == 0 && ml->count == 1)) {
+            /* (an empty list keeps its one node) */
             return "empty node";
         }
 
@@ -3461,6 +3503,253 @@ int multilistFullTest(int argc, char *argv[]) {
                 ERR("depth %u: %u split inserts, %u with merges: both must "
                     "happen",
                     d, splits, merges);
+            }
+        }
+    }
+
+    TEST("every node-moving operation keeps the depth rule and the contents") {
+        /* Random mixes of split/merge inserts, DelRange (positive and
+         * negative starts), DelEntry walks (forward and reverse, emptying
+         * whole nodes, compressed ones included), Pop from either end,
+         * Rotate, Replace and Push at either end, on lists of full nodes
+         * with one-element nodes between them.  After every operation the
+         * list must match an array oracle and every node must match the
+         * depth rule.  Each kind of node removal must actually happen. */
+        enum {
+            MV_GROUPS = 8,
+            MV_PER_GROUP = 12,
+            MV_OPS = 120,
+            MV_ROUNDS = 4,
+            MV_MAX = 512,
+            MV_NEW = 300000
+        };
+        static uint32_t want[MV_MAX];
+        static const char *const opName[] = {"insert", "DelRange", "DelEntry",
+                                             "Pop",    "Rotate",   "Replace",
+                                             "Push"};
+        for (uint32_t d = 1; d <= 2; d++) {
+            uint32_t opsRun[7] = {0};
+            uint32_t entryNodeDrops = 0;
+            uint32_t popNodeDrops = 0;
+            uint32_t rangeNodeDrops = 0;
+            uint32_t nextId = MV_NEW;
+            bool failed = false;
+            uint64_t seed = 0xD1B54A32D192ED03ULL * d;
+#define MV_RAND()                                                              \
+    ((seed = seed * 6364136223846793005ULL + 1442695040888963407ULL) >> 33)
+            for (uint32_t round = 0; round < MV_ROUNDS && !failed; round++) {
+                char buf[MLF_SPLIT_LEN + 1];
+                multilistFull *ml = multilistFullNew(FLEX_CAP_LEVEL_512, d);
+                uint32_t n = 0;
+                for (uint32_t g = 0; g < MV_GROUPS; g++) {
+                    multilistFullSetFill(ml, FLEX_CAP_LEVEL_512);
+                    for (uint32_t k = 0; k < MV_PER_GROUP + 2; k++) {
+                        if (k == MV_PER_GROUP) {
+                            multilistFullSetFill(ml, FLEX_CAP_LEVEL_0);
+                        }
+
+                        const databox box = mlfSplitBox(n, buf);
+                        multilistFullPushByTypeTail(ml, s0, &box);
+                        want[n] = n;
+                        n++;
+                    }
+                }
+
+                multilistFullSetFill(ml, FLEX_CAP_LEVEL_512);
+
+                for (uint32_t op = 0; op < MV_OPS && !failed; op++) {
+                    uint32_t kind = (uint32_t)(MV_RAND() % 7);
+                    if (n == 0 ||
+                        (n < 24 && (kind == 1 || kind == 2 || kind == 3))) {
+                        kind = 6; /* too small to shrink: grow instead */
+                    } else if (n > MV_MAX - 40 && (kind == 0 || kind == 6)) {
+                        kind = 1; /* too large to grow: shrink instead */
+                    }
+
+                    const mlNodeId countBefore = ml->count;
+                    const char *why = NULL;
+                    switch (kind) {
+                    case 0: { /* insert before / after a random element */
+                        const uint32_t g = (uint32_t)(MV_RAND() % n);
+                        const bool after = MV_RAND() & 1;
+                        const databox ins = mlfSplitBox(nextId, buf);
+                        multilistEntry entry;
+                        if (!multilistFullIndexGet(ml, s0, g, &entry)) {
+                            why = "index not found";
+                            break;
+                        }
+
+                        if (after) {
+                            multilistFullInsertByTypeAfter(ml, s, &entry, &ins);
+                        } else {
+                            multilistFullInsertByTypeBefore(ml, s, &entry,
+                                                            &ins);
+                        }
+
+                        const uint32_t pos = after ? g + 1 : g;
+                        memmove(&want[pos + 1], &want[pos],
+                                (n - pos) * sizeof(*want));
+                        want[pos] = nextId++;
+                        n++;
+                        break;
+                    }
+                    case 1: { /* DelRange from a positive or negative start */
+                        const int64_t count = 1 + (int64_t)(MV_RAND() % 24);
+                        const bool fromTail = MV_RAND() & 1;
+                        const uint32_t at = (uint32_t)(MV_RAND() % n);
+                        const mlOffsetId from =
+                            fromTail ? -(mlOffsetId)(n - at) : (mlOffsetId)at;
+                        const uint32_t room = n - at;
+                        const uint32_t del =
+                            count < (int64_t)room ? (uint32_t)count : room;
+                        if (!multilistFullDelRange(ml, s0, from, count)) {
+                            why = "DelRange refused a valid range";
+                            break;
+                        }
+
+                        memmove(&want[at], &want[at + del],
+                                (n - at - del) * sizeof(*want));
+                        n -= del;
+                        if (ml->count < countBefore) {
+                            rangeNodeDrops++;
+                        }
+                        break;
+                    }
+                    case 2: { /* DelEntry walk deleting ids == r mod 3 */
+                        const bool forward = MV_RAND() & 1;
+                        const uint32_t r = (uint32_t)(MV_RAND() % 3);
+                        multilistIterator iter;
+                        multilistEntry entry;
+                        multilistFullIteratorInit(ml, s, &iter, forward, false);
+                        uint32_t seen = 0;
+                        uint32_t kept = 0;
+                        static uint32_t keep[MV_MAX];
+                        while (multilistFullNext(&iter, &entry)) {
+                            const uint32_t idx = forward ? seen : n - 1 - seen;
+                            if (seen >= n ||
+                                !mlfSplitIs(&entry.box, want[idx])) {
+                                why =
+                                    "the DelEntry walk read the wrong element";
+                                break;
+                            }
+
+                            seen++;
+                            if (want[idx] % 3 == r) {
+                                multilistFullDelEntry(&iter, &entry);
+                            } else {
+                                keep[kept++] = want[idx];
+                            }
+                        }
+
+                        multilistFullIteratorRelease(&iter);
+                        if (!why && seen != n) {
+                            why = "the DelEntry walk skipped elements";
+                        }
+
+                        if (!why) {
+                            /* 'keep' is in walk order */
+                            for (uint32_t k = 0; k < kept; k++) {
+                                want[k] =
+                                    forward ? keep[k] : keep[kept - 1 - k];
+                            }
+
+                            n = kept;
+                        }
+
+                        if (ml->count < countBefore) {
+                            entryNodeDrops++;
+                        }
+                        break;
+                    }
+                    case 3: { /* Pop from either end */
+                        const bool fromTail = MV_RAND() & 1;
+                        databox got = {{0}};
+                        if (!multilistFullPop(ml, s0, &got, fromTail) ||
+                            !mlfSplitIs(&got, want[fromTail ? n - 1 : 0])) {
+                            why = "Pop returned the wrong element";
+                        } else if (fromTail) {
+                            n--;
+                        } else {
+                            memmove(&want[0], &want[1],
+                                    (n - 1) * sizeof(*want));
+                            n--;
+                        }
+
+                        databoxFreeData(&got);
+                        if (ml->count < countBefore) {
+                            popNodeDrops++;
+                        }
+                        break;
+                    }
+                    case 4: { /* Rotate: the tail moves to the head */
+                        multilistFullRotate(ml, s);
+                        const uint32_t last = want[n - 1];
+                        memmove(&want[1], &want[0], (n - 1) * sizeof(*want));
+                        want[0] = last;
+                        break;
+                    }
+                    case 5: { /* Replace a random element */
+                        const uint32_t at = (uint32_t)(MV_RAND() % n);
+                        const databox rep = mlfSplitBox(nextId, buf);
+                        if (!multilistFullReplaceByTypeAtIndex(ml, s0, at,
+                                                               &rep)) {
+                            why = "Replace refused a valid index";
+                            break;
+                        }
+
+                        want[at] = nextId++;
+                        break;
+                    }
+                    default: { /* Push at either end */
+                        const bool head = MV_RAND() & 1;
+                        const databox box = mlfSplitBox(nextId, buf);
+                        if (head) {
+                            multilistFullPushByTypeHead(ml, s0, &box);
+                            memmove(&want[1], &want[0], n * sizeof(*want));
+                            want[0] = nextId++;
+                        } else {
+                            multilistFullPushByTypeTail(ml, s0, &box);
+                            want[n] = nextId++;
+                        }
+
+                        n++;
+                        break;
+                    }
+                    }
+
+                    opsRun[kind]++;
+                    mlNodeId bad = -1;
+                    if (!why) {
+                        why = mlfSplitCheck(ml, s, want, n);
+                    }
+
+                    if (!why) {
+                        why = mlfDepthRuleCheck(ml, &bad);
+                    }
+
+                    if (why) {
+                        ERR("depth %u round %u op %u (%s, %u elements): node "
+                            "%d: %s",
+                            d, round, op, opName[kind], n, bad, why);
+                        failed = true;
+                    }
+                }
+
+                multilistFullFree(ml);
+            }
+#undef MV_RAND
+
+            for (uint32_t k = 0; !failed && k < 7; k++) {
+                if (!opsRun[k]) {
+                    ERR("depth %u: %s never ran", d, opName[k]);
+                }
+            }
+
+            if (!failed &&
+                (!entryNodeDrops || !popNodeDrops || !rangeNodeDrops)) {
+                ERR("depth %u: node removals: DelEntry %u, Pop %u, DelRange "
+                    "%u; each must happen",
+                    d, entryNodeDrops, popNodeDrops, rangeNodeDrops);
             }
         }
     }
