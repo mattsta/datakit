@@ -62,10 +62,9 @@ bool StrScanScanReliable(const void *const p_, const size_t len,
 
     uint32_t dig = 0; /* byte index into 'p', the sign included */
 
-    /* This dumb type is because GCC sees 'uint64_t'
-     * as 'long unsigned int' but the overflow functions
-     * only take 'long long unsigned int' */
-    unsigned long long int x = 0; /* significand */
+    /* The overflow builtins below take every operand as uint64_t, so
+     * their constants are spelled UINT64_C to keep all types equal. */
+    uint64_t x = 0; /* significand */
     /* Largest magnitude a SIGNED_64 holds for the sign: INT64_MAX, or 2^63
      * after a leading '-'. */
     uint64_t maxAbsoluteValueX = INT64_MAX;
@@ -105,15 +104,15 @@ bool StrScanScanReliable(const void *const p_, const size_t len,
 
         if (StrCharIsa(pDeref, StrCharDIGIT)) {
             /* This is just: x = (x * 10) + (*p & 0x0f) */
-            /* Note: DO NOT remove the ULL type specifiers below
+            /* Note: DO NOT remove the UINT64_C type specifiers below
              *       or else this function goes from 500 cycles to 12,000 cycles
              *       per run.
              *       (We could also use __builtin_uaddll_overflow, etc here
              *        which also fixes the performance problem because it forces
              *        types at compile time too, but the current situation is
              *        fine as long as all the types match.) */
-            if (__builtin_mul_overflow(x, 10ULL, &x) ||
-                __builtin_add_overflow(x, pDeref & 0x0FULL, &x)) {
+            if (__builtin_mul_overflow(x, UINT64_C(10), &x) ||
+                __builtin_add_overflow(x, pDeref & UINT64_C(0x0F), &x)) {
                 /* If multiply or add caused overflow, we can't
                  * continue.
                  *
@@ -2340,11 +2339,11 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
 
             /* Verify correctness */
             if (resultSWAR != resultScalar) {
-                ERR("Mismatch! SWAR=%lu Scalar=%lu", (unsigned long)resultSWAR,
-                    (unsigned long)resultScalar);
+                ERR("Mismatch! SWAR=%" PRIu64 " Scalar=%" PRIu64, resultSWAR,
+                    resultScalar);
             }
-            printf("    %zu digits: result=%lu (verified)\n", len,
-                   (unsigned long)resultSWAR);
+            printf("    %zu digits: result=%" PRIu64 " (verified)\n", len,
+                   resultSWAR);
         }
     }
 
@@ -2377,11 +2376,10 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
         PERF_TIMERS_RESULT_PRINT_BYTES(iterations, bufSize);
 
         if (resultOpt != resultScalar) {
-            ERR("Mismatch! Opt=%lu Scalar=%lu", (unsigned long)resultOpt,
-                (unsigned long)resultScalar);
+            ERR("Mismatch! Opt=%" PRIu64 " Scalar=%" PRIu64, resultOpt,
+                resultScalar);
         }
-        printf("    4KB popcount: %lu bits (verified)\n",
-               (unsigned long)resultOpt);
+        printf("    4KB popcount: %" PRIu64 " bits (verified)\n", resultOpt);
     }
 
     TEST("Benchmark: StrLenUtf8 SIMD vs Scalar") {
@@ -2458,7 +2456,7 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
         }
         TIME_FINISH(iterations, "StrUInt9DigitsToBuf");
 
-        printf("    Checksum: %lu\n", (unsigned long)checksum);
+        printf("    Checksum: %" PRIu64 "\n", checksum);
     }
 
     /* ====================================================================

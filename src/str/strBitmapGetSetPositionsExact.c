@@ -10,7 +10,7 @@
  *   - 'Exact' functions don't pre-align data or calculate data beyond
  *     the step size.
  *       - Meaning: this only works if your data is exactly divisible by
- *                  sizeof(unsigned long)
+ *                  sizeof(uint64_t)
  *   - GetPositionsExact8 limits you to 255 bit positions
  *   - GetPositionsExact16 limits you to 65535 bit positions
  *   - GetPositionsExact32 limits you to 4 billion bit positions
@@ -20,15 +20,15 @@
     RETURN_STORAGE StrBitmapGet##SET_UNSET##PositionsExact##POSITION_STORAGE(  \
         const void *data_, size_t len,                                         \
         uint##POSITION_STORAGE##_t position[]) {                               \
-        const unsigned long *data = data_;                                     \
-        const size_t lenAsLong = len / (sizeof(unsigned long));                \
+        const uint64_t *data = data_;                                          \
+        const size_t lenInWords = len / (sizeof(uint64_t));                    \
         size_t idx = 0;                                                        \
                                                                                \
-        for (size_t i = 0; i < lenAsLong; i++) {                               \
-            unsigned long myword = IS_INVERSE data[i];                         \
+        for (size_t i = 0; i < lenInWords; i++) {                              \
+            uint64_t myword = IS_INVERSE data[i];                              \
             while (myword != 0) {                                              \
-                const unsigned long unsetAfterCheck = myword & -myword;        \
-                const int r = __builtin_ctzl(myword);                          \
+                const uint64_t unsetAfterCheck = myword & -myword;             \
+                const int r = __builtin_ctzll(myword);                         \
                 position[idx++] = i * 64 + r;                                  \
                 myword ^= unsetAfterCheck;                                     \
             }                                                                  \
