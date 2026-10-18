@@ -192,6 +192,8 @@ void example_bit_matrix(void) {
         int v = edges[i][1];
         assert(varintDimensionPairEntryGetBit(adjMatrix, u, v, dim));
         assert(varintDimensionPairEntryGetBit(adjMatrix, v, u, dim));
+        (void)u;
+        (void)v;
     }
 
     printf("✓ Bit matrix storage works\n");
@@ -256,6 +258,7 @@ void example_dimension_encoding(void) {
 
         // Verify the metadata matches what we calculated
         assert(encoded == dim);
+        (void)encoded;
     }
 
     printf("✓ Dimension encoding/decoding works\n");

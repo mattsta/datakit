@@ -78,6 +78,7 @@ START: What are you storing?
 | **varintDeltaDelta** | Regular-interval time series     | 3-4x        | Fast        | Timestamps, smooth sensors   |
 | **varintStride**     | Arithmetic progressions          | ~24 B/any   | Fast (SIMD) | Paginated IDs, fixed grids   |
 | **varintCompete**    | Unknown / heterogeneous data     | best-of-N   | N× encode   | Encode-once, read-many       |
+| **varintDDStream**   | 106-bit double-double arrays     | 1.07-6.6x   | 0.8-2 GB/s  | High-precision measurements  |
 
 ## Use Case Scenarios
 

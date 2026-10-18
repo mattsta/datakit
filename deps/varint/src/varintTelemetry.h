@@ -12,6 +12,7 @@ __BEGIN_DECLS
  *   - wins       : times it produced the smallest output and was written
  *   - bytesIn    : cumulative input bytes considered
  *   - bytesOut   : cumulative encoded bytes emitted
+ *   - timeNs     : cumulative wall-clock nanoseconds spent evaluating
  *
  * Counters are compiled out entirely unless VARINT_TELEMETRY is defined.
  * When enabled, updates use __atomic_fetch_add (lock-free, thread-safe).
@@ -48,16 +49,16 @@ const char *varintCodecName(varintCodecID id);
 
 #ifdef VARINT_TELEMETRY
 
-/* Counters are exposed as a plain array so callers can snapshot/reset.
- * Each entry is 32 bytes — fits 2 entries per cache line. */
+/* Counters are exposed as a plain array so callers can snapshot/reset. */
 typedef struct varintTelemetryEntry {
-    unsigned long calls;
-    unsigned long wins;
-    unsigned long bytesIn;
-    unsigned long bytesOut;
+    uint64_t calls;
+    uint64_t wins;
+    uint64_t bytesIn;
+    uint64_t bytesOut;
+    uint64_t timeNs;
 } varintTelemetryEntry;
 
-_Static_assert(sizeof(varintTelemetryEntry) == 32,
+_Static_assert(sizeof(varintTelemetryEntry) == 40,
                "varintTelemetryEntry size changed!");
 
 extern varintTelemetryEntry varintTelemetry[VARINT_CODEC_MAX];
@@ -66,14 +67,21 @@ extern varintTelemetryEntry varintTelemetry[VARINT_CODEC_MAX];
  * without VARINT_TELEMETRY (since the externs would be unused). */
 static inline void varintTelemetryRecordCall_(varintCodecID id,
                                               size_t bytesIn) {
-    __atomic_fetch_add(&varintTelemetry[id].calls, 1UL, __ATOMIC_RELAXED);
-    __atomic_fetch_add(&varintTelemetry[id].bytesIn, (unsigned long)bytesIn,
+    __atomic_fetch_add(&varintTelemetry[id].calls, UINT64_C(1),
+                       __ATOMIC_RELAXED);
+    __atomic_fetch_add(&varintTelemetry[id].bytesIn, (uint64_t)bytesIn,
                        __ATOMIC_RELAXED);
 }
 static inline void varintTelemetryRecordWin_(varintCodecID id,
                                              size_t bytesOut) {
-    __atomic_fetch_add(&varintTelemetry[id].wins, 1UL, __ATOMIC_RELAXED);
-    __atomic_fetch_add(&varintTelemetry[id].bytesOut, (unsigned long)bytesOut,
+    __atomic_fetch_add(&varintTelemetry[id].wins, UINT64_C(1),
+                       __ATOMIC_RELAXED);
+    __atomic_fetch_add(&varintTelemetry[id].bytesOut, (uint64_t)bytesOut,
+                       __ATOMIC_RELAXED);
+}
+static inline void varintTelemetryRecordTime_(varintCodecID id,
+                                              uint64_t elapsedNs) {
+    __atomic_fetch_add(&varintTelemetry[id].timeNs, elapsedNs,
                        __ATOMIC_RELAXED);
 }
 
@@ -81,6 +89,8 @@ static inline void varintTelemetryRecordWin_(varintCodecID id,
     varintTelemetryRecordCall_((id), (bytesIn))
 #define VARINT_TELEMETRY_WIN(id, bytesOut)                                     \
     varintTelemetryRecordWin_((id), (bytesOut))
+#define VARINT_TELEMETRY_TIME_NS(id, elapsedNs)                                \
+    varintTelemetryRecordTime_((id), (elapsedNs))
 
 /* Read a snapshot (non-atomic read, but each field is atomic individually). */
 void varintTelemetrySnapshot(varintTelemetryEntry *out, size_t maxEntries);
@@ -92,6 +102,7 @@ void varintTelemetryReset(void);
 
 #define VARINT_TELEMETRY_CALL(id, bytesIn) ((void)(id), (void)(bytesIn))
 #define VARINT_TELEMETRY_WIN(id, bytesOut) ((void)(id), (void)(bytesOut))
+#define VARINT_TELEMETRY_TIME_NS(id, elapsedNs) ((void)(id), (void)(elapsedNs))
 
 #endif /* VARINT_TELEMETRY */
 

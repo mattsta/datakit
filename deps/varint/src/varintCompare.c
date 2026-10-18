@@ -90,6 +90,7 @@ int32_t main(int argc, char **argv) {
                 x &= (((uint64_t)1) << nbit) - 1;
             }
             const uint8_t z[20] = {0};
+            (void)z;
 
             /* Baseline overhead check - intentional self-comparison */
             // cppcheck-suppress duplicateExpression
@@ -112,6 +113,7 @@ int32_t main(int argc, char **argv) {
             uint64_t y = 0;
             varintTaggedGet(z, n1, &y);
             assert(x == y);
+            (void)y;
 /* Tagged varint is big endian and sorts in-order with memcmp(),
  * but we don't test this due to additional overhead not relevant
  * to other varint types. */
@@ -143,6 +145,7 @@ int32_t main(int argc, char **argv) {
             varintTaggedPut64FixedWidthQuick_(z, x, width);
             uint64_t y = varintTaggedGet64Quick_(z);
             assert(x == y);
+            (void)y;
 
             ACCOUNT_LOOP;
         }
@@ -157,10 +160,13 @@ int32_t main(int argc, char **argv) {
 
             int32_t n1 = (int32_t)varintChainedPutVarint(z, x);
             assert(n1 >= 1 && n1 <= 9);
+            (void)n1;
             uint64_t y = 0;
             int32_t n2 = (int32_t)varintChainedGetVarint(z, &y);
             assert(n1 == n2);
+            (void)n2;
             assert(x == y);
+            (void)y;
 
             ACCOUNT_LOOP;
         }
@@ -175,9 +181,11 @@ int32_t main(int argc, char **argv) {
 
             int32_t n1 = varintChained_putVarint32(z, x);
             assert(n1 >= 1 && n1 <= 9);
+            (void)n1;
             uint64_t y = 0;
             varintChained_getVarint32(z, y);
             assert(x == y);
+            (void)y;
 
             ACCOUNT_LOOP;
         }
@@ -192,10 +200,13 @@ int32_t main(int argc, char **argv) {
 
             int32_t n1 = (int32_t)varintChainedSimpleEncode64(z, x);
             assert(n1 >= 1 && n1 <= 9);
+            (void)n1;
             uint64_t y = 0;
             int32_t n2 = (int32_t)varintChainedSimpleDecode64(z, &y);
             assert(n1 == n2);
+            (void)n2;
             assert(x == y);
+            (void)y;
 
             ACCOUNT_LOOP;
         }
@@ -211,9 +222,11 @@ int32_t main(int argc, char **argv) {
 
             int32_t n1 = (int32_t)varintChainedSimpleEncode32(z, (uint32_t)x);
             assert(n1 >= 1 && n1 <= 5);
+            (void)n1;
             uint32_t y = 0;
             int32_t n2 = (int32_t)varintChainedSimpleDecode32(z, &y);
             assert(n1 == n2);
+            (void)n2;
             assert(x == (uint64_t)y);
 
             ACCOUNT_LOOP;
@@ -232,6 +245,7 @@ int32_t main(int argc, char **argv) {
             uint64_t y = varintExternalGet(z, encoding);
             // printf("decoded as: %llu\n", y);
             assert(x == y);
+            (void)y;
 
             ACCOUNT_LOOP;
         }
@@ -255,6 +269,7 @@ int32_t main(int argc, char **argv) {
             varintExternalGetQuick_(z, encoding, y);
             // printf("decoded as: %llu\n", y);
             assert(x == y);
+            (void)y;
 
             ACCOUNT_LOOP;
         }
@@ -272,6 +287,7 @@ int32_t main(int argc, char **argv) {
             uint64_t y = varintExternalBigEndianGet(z, encoding);
             // printf("decoded as: %llu\n", y);
             assert(x == y);
+            (void)y;
 
             ACCOUNT_LOOP;
         }
@@ -295,6 +311,7 @@ int32_t main(int argc, char **argv) {
             varintExternalBigEndianGetQuick_(z, encoding, y);
             // printf("decoded as: %llu\n", y);
             assert(x == y);
+            (void)y;
 
             ACCOUNT_LOOP;
         }
@@ -320,6 +337,7 @@ int32_t main(int argc, char **argv) {
             varintSplitFullNoZeroGet_(z, width, y);
             // printf("decoded as: %llu\n", y);
             assert(x == y);
+            (void)y;
 
             ACCOUNT_LOOP;
         }
@@ -374,6 +392,7 @@ int32_t main(int argc, char **argv) {
             varintSplitFullNoZeroGet_(z, width, y);
             // printf("decoded as: %llu\n", y);
             assert(x == y);
+            (void)y;
 
             ACCOUNT_LOOP;
         }
@@ -395,6 +414,7 @@ int32_t main(int argc, char **argv) {
             varintSplitFullGet_(z, width, y);
             // printf("decoded as: %llu\n", y);
             assert(x == y);
+            (void)y;
 
             ACCOUNT_LOOP;
         }
@@ -416,6 +436,7 @@ int32_t main(int argc, char **argv) {
             varintSplitFullGet_(z, width, y);
             // printf("decoded as: %llu\n", y);
             assert(x == y);
+            (void)y;
 
             ACCOUNT_LOOP;
         }
@@ -437,6 +458,7 @@ int32_t main(int argc, char **argv) {
             varintSplitFull16Get_(z, width, y);
             // printf("decoded as: %llu\n", y);
             assert(x == y);
+            (void)y;
 
             ACCOUNT_LOOP;
         }
@@ -459,6 +481,7 @@ int32_t main(int argc, char **argv) {
             varintSplitFull16Get_(z, width, y);
             // printf("decoded as: %llu\n", y);
             assert(x == y);
+            (void)y;
 
             ACCOUNT_LOOP;
         }
@@ -480,6 +503,7 @@ int32_t main(int argc, char **argv) {
             varintSplitGet_(z, width, y);
             // printf("decoded as: %llu\n", y);
             assert(x == y);
+            (void)y;
 
             ACCOUNT_LOOP;
         }
@@ -501,6 +525,7 @@ int32_t main(int argc, char **argv) {
             varintSplitGet_(z, width, y);
             // printf("decoded as: %llu\n", y);
             assert(x == y);
+            (void)y;
 
             ACCOUNT_LOOP;
         }
@@ -522,6 +547,7 @@ int32_t main(int argc, char **argv) {
             varintSplitReversedGet_(z + len - 1, width, y);
             // printf("decoded as: %llu\n", y);
             assert(x == y);
+            (void)y;
 
             ACCOUNT_LOOP;
         }
@@ -544,6 +570,7 @@ int32_t main(int argc, char **argv) {
             varintSplitReversedGet_(zend, width, y);
             // printf("decoded as: %llu\n", y);
             assert(x == y);
+            (void)y;
 
             ACCOUNT_LOOP;
         }
@@ -566,6 +593,7 @@ int32_t main(int argc, char **argv) {
             varintSplitReversedGet_(z + len - 1, width, y);
             // printf("decoded as: %llu\n", y);
             assert(x == y);
+            (void)y;
 
             ACCOUNT_LOOP;
         }
@@ -589,6 +617,7 @@ int32_t main(int argc, char **argv) {
             varintSplitReversedGet_(zend, width, y);
             // printf("decoded as: %llu\n", y);
             assert(x == y);
+            (void)y;
 
             ACCOUNT_LOOP;
         }
@@ -611,6 +640,7 @@ int32_t main(int argc, char **argv) {
             varintSplitFullReversedGet_(z + len - 1, width, y);
             // printf("decoded as: %llu\n", y);
             assert(x == y);
+            (void)y;
 
             ACCOUNT_LOOP;
         }
@@ -634,6 +664,7 @@ int32_t main(int argc, char **argv) {
             varintSplitFullReversedGet_(zend, width, y);
             // printf("decoded as: %llu\n", y);
             assert(x == y);
+            (void)y;
 
             ACCOUNT_LOOP;
         }
@@ -656,6 +687,7 @@ int32_t main(int argc, char **argv) {
             varintSplitFullReversedGet_(z + len - 1, width, y);
             // printf("decoded as: %llu\n", y);
             assert(x == y);
+            (void)y;
 
             ACCOUNT_LOOP;
         }
@@ -679,6 +711,7 @@ int32_t main(int argc, char **argv) {
             varintSplitFullReversedGet_(zend, width, y);
             // printf("decoded as: %llu\n", y);
             assert(x == y);
+            (void)y;
 
             ACCOUNT_LOOP;
         }
@@ -705,6 +738,7 @@ int32_t main(int argc, char **argv) {
             varintSplitFullNoZeroReversedGet_(z + len - 1, width, y);
             // printf("decoded as: %llu\n", y);
             assert(x == y);
+            (void)y;
 
             ACCOUNT_LOOP;
         }
@@ -733,6 +767,7 @@ int32_t main(int argc, char **argv) {
             varintSplitFullNoZeroReversedGet_(zend, width, y);
             // printf("decoded as: %llu\n", y);
             assert(x == y);
+            (void)y;
 
             ACCOUNT_LOOP;
         }
@@ -760,6 +795,7 @@ int32_t main(int argc, char **argv) {
             varintSplitFullNoZeroReversedGet_(z + len - 1, width, y);
             // printf("decoded as: %llu\n", y);
             assert(x == y);
+            (void)y;
 
             ACCOUNT_LOOP;
         }
@@ -788,6 +824,7 @@ int32_t main(int argc, char **argv) {
             varintSplitFullNoZeroReversedGet_(zend, width, y);
             // printf("decoded as: %llu\n", y);
             assert(x == y);
+            (void)y;
 
             ACCOUNT_LOOP;
         }

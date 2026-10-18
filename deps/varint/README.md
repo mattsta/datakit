@@ -85,11 +85,11 @@ positions for the highest numbers capable of being stored:
 
 Varints are defined by how they track their size. Since varints have variable lengths, a varint must know how many bytes it contains.
 
-We have **twenty-two types of varints** organized into three categories:
+We have **twenty-six types of varints** organized into three categories:
 
 **Basic Encodings** (5 types): tagged, bijou, external, split, and chained. The chained type is the slowest and is not recommended for use in new systems.
 
-**Advanced Encodings** (16 types): delta, delta-of-delta, stride, FOR (Frame-of-Reference), group, PFOR (Patched FOR), dictionary, bitmap, adaptive, compete, float, RLE (Run-Length Encoding), Elias (Gamma/Delta universal codes), BP128 (SIMD block-packed), palette (Huffman over top-16 values with verbatim-block outlier routing), and palette-of-deltas (palette coding over wrapped first differences for skewed gap alphabets). These provide 2-100x compression for specialized use cases like sorted data, regular-interval time series, arithmetic progressions, clustered values, repetitive data, floating point arrays, repeated values, small integers, and large sorted arrays. (The `compete` selector is supported by opt-in `varintTelemetry` per-codec counters.)
+**Advanced Encodings** (18 types): delta, delta-of-delta, stride, FOR (Frame-of-Reference), group, PFOR (Patched FOR), dictionary, bitmap, adaptive, compete, record (schema-driven columnar struct compression), float, double-double stream (106-bit values compressed via the normalization invariant), RLE (Run-Length Encoding), Elias (Gamma/Delta universal codes), BP128 (SIMD block-packed), palette (Huffman over top-16 values with verbatim-block outlier routing), and palette-of-deltas (palette coding over wrapped first differences for skewed gap alphabets). These provide 2-100x compression for specialized use cases like sorted data, regular-interval time series, arithmetic progressions, clustered values, repetitive data, floating point arrays, repeated values, small integers, and large sorted arrays. (The `compete` selector is supported by opt-in `varintTelemetry` per-codec counters.)
 
 **Specialized Encodings** (3 types): packed (fixed-width bit arrays), dimension (matrix encoding), and bitstream (bit-level operations).
 
@@ -166,6 +166,20 @@ Intelligent encoding selector that automatically analyzes data characteristics a
 
 Variable-precision floating point compression with configurable precision modes (FULL/HIGH/MEDIUM/LOW) and encoding strategies (INDEPENDENT/COMMON_EXPONENT/DELTA_EXPONENT). Achieves 1.5x-4.0x compression for sensor data, scientific measurements, and GPS coordinates while maintaining specified accuracy bounds. FULL mode is lossless. Full details in [varintFloat.h](https://github.com/mattsta/varint/blob/main/src/varintFloat.h).
 
+### Double-Double Arithmetic (varintDD)
+
+106-bit floating point built from two IEEE doubles held as an unevaluated sum, giving ~31 decimal digits without leaving the FPU. Provides the error-free transformations (`twoSum`, `fastTwoSum`, `twoProduct` via hardware FMA, with Dekker splitting as a fallback), the full arithmetic set (add/sub/mul/div/sqrt), exact `int64` conversion, and vectorized array operations with NEON, AVX2, and portable scalar backends. On an M-series machine a dependent chain costs **11.6x** a `double` add, **4.9x** a multiply, and **15.0x** a divide — against ~20-50x for soft-float `__float128` at similar width.
+
+The compensated reductions (`varintDDSumDoubles`, `varintDDDotDoubles`) are the standout: they run at **~0.6x the cost of a naive `double` summation loop** — _faster than the thing they replace_ — because splitting the accumulator across SIMD lanes breaks the serial dependency that limits `acc += x`, which more than pays for the compensation arithmetic. This is also the one place hand-written vector code is irreplaceable: a compiler may not reassociate a floating-point reduction, so it cannot vectorize this on its own. Building the same source with `-DVARINT_DD_FORCE_SCALAR` costs 1.7x naive instead of 0.6x, a **~2.9x** swing. For _elementwise_ operations the opposite holds — clang already emits the identical `ld2.2d`/`fadd.2d` sequence for a plain loop, and the explicit backend adds nothing beyond making it guaranteed rather than hoped for.
+
+Correctness is not checked against the same arithmetic it is testing: a separate 1536-bit integer oracle evaluates every sum and product exactly, confirming the transformations are bit-exact over 200k random cases and that add/multiply land at ~2^-105 relative error. `varintDDSelfCheck()` re-verifies at runtime that the transformations survived compilation, catching the `-ffast-math` class of breakage that silently collapses the extra precision to zero. Full details in [varintDD.h](https://github.com/mattsta/varint/blob/main/src/varintDD.h) and [module documentation](docs/modules/varintDD.md).
+
+### Double-Double Stream Compression (varintDDStream)
+
+Compresses arrays of `varintDD`. A normalized double-double satisfies `|lo| <= ulp(hi)/2`, so the trailing limb's 11-bit exponent field carries almost no information given the leading limb; the codec stores the **gap** `g = E(hi) - E(lo) - 53` instead, which is geometrically distributed (`g = 0` about half the time) and costs ~2.3 bits under Elias-gamma rather than 11. Trailing limbs that are exactly zero — every value promoted from a plain `double` — cost one bitmap bit and nothing else. Leading limbs are stored verbatim or XOR-chained (Gorilla), selected by measurement rather than estimate.
+
+Measured lossless, 262k values: **8.13 bytes/value (1.97x)** for exactly-representable values, **2.41 (6.64x)** for instrument-style data where both mechanisms fire, **7.25 (2.21x)** constant, and **15.02 (1.07x)** for fully generic double-doubles — that last number is the honest floor, because a full trailing mantissa is 52 bits of incompressible entropy. The real lever there is the precision ladder: one knob from 106-bit lossless down to plain `double`, in ~1-bit steps (20 retained bits → 11.12 bytes/value at 1.1e-22 relative error). Encode 0.77-2.1 GB/s, decode 0.7-12 GB/s, with bit I/O buffered through a 64-bit accumulator (MSB-first packing is big-endian, so a word store reproduces the bit-at-a-time result while touching memory an eighth as often). The `srcBytes`-bounded decoder fully validates untrusted input — it carries its own bounds-checked bit reader rather than the one in `varintElias.h`, which only asserts — and is hardened by a deterministic fuzzer (`varintDDStreamFuzz`) that also asserts encode idempotency. Full details in [varintDDStream.h](https://github.com/mattsta/varint/blob/main/src/varintDDStream.h) and [module documentation](docs/modules/varintDDStream.md).
+
 ### Run-Length Encoding (varintRLE)
 
 Run-length encoding compresses sequences with consecutive repeated values by storing (length, value) pairs using varintTagged. Achieves 8-100x compression for data with long runs (sensor readings, audio silence, sparse matrices). Supports random access via `varintRLEGetAt()`, run analysis, and both header-prefixed and raw formats. Ideal for database column compression, game state serialization, and log aggregation. Full details in [varintRLE.h](https://github.com/mattsta/varint/blob/main/src/varintRLE.h) and [module documentation](docs/modules/varintRLE.md).
@@ -192,13 +206,17 @@ Palette encoding entropy-codes streams dominated by a small value set: the ≤16
 
 ### Evidence-Based Selection (varintCompete + varintTelemetry)
 
-Where `varintAdaptive` picks a codec by a single-pass heuristic, `varintCompete` _runs_ a configurable subset of codecs, measures the actual encoded size each produces, and emits the smallest inside a self-describing frame (`[VCMP magic][version][codec ID][bodyLen][body]`) so the decoder selects the matching codec automatically. The companion `varintTelemetry` adds opt-in, lock-free atomic per-codec counters (calls/wins/bytes) that compile to zero-cost no-ops unless `-DVARINT_TELEMETRY` is set — use it to learn which codecs actually win on your data. Full details in [module documentation](docs/modules/varintCompete.md).
+Where `varintAdaptive` picks a codec by a single-pass heuristic, `varintCompete` _runs_ a configurable subset of codecs, measures the actual encoded size each produces, and emits the smallest inside a self-describing frame (`[VCMP magic][version][codec ID][bodyLen][body]`) so the decoder selects the matching codec automatically. A chunked mode (`varintCompeteEncodeChunked*`) runs the competition independently per block (default 4096 values) so heterogeneous streams get a different winner per region: chunked streams carry their own counts (the decoder needs no external metadata), blocks forming one exact arithmetic progression are grown into a single ~30-byte stride record no matter how long, and a sampling probe (`varintCompetePruneMask`) skips codecs that cannot plausibly win a block before spending encode CPU on them. The companion `varintTelemetry` adds opt-in, lock-free atomic per-codec counters (calls/wins/bytes/wall-clock ns) that compile to zero-cost no-ops unless `-DVARINT_TELEMETRY` is set — use it to learn which codecs actually win, and what they cost, on your data. Full details in [module documentation](docs/modules/varintCompete.md).
+
+### Schema-Driven Record Compression (varintRecord)
+
+Where every other codec starts from a `uint64_t[]` column, `varintRecord` starts from **your structs**. A field-descriptor table (one `VARINT_RECORD_FIELD(struct, member, kind)` line per field, layout captured at compile time by `offsetof`/`sizeof`) describes a fixed-stride record over the full kind set — unsigned/signed integers, `F32`/`F64`, `BOOL`, opaque `BYTES`, and 106-bit `DD` double-doubles. Encode gathers each field into a column and runs it through **every strategy lane its kind supports**, measured, smallest wins per column: the chunked `varintCompete` competition (14 codecs) for integers, XOR-with-previous and `varintFloat` sign/exponent/mantissa streams for floats, byte-plane decomposition for opaque bytes and wide integers, `varintDDStream` for double-doubles, and a verbatim floor that guarantees no column ever expands past raw. Float-pipeline lanes are verified bit-exact by decode before they may win, so every stream round-trips byte-identically — NaN payloads, subnormals, and negative zeros included. The schema travels inside the stream (`VREC` frame), so decode needs zero external metadata, re-validates the schema and per-column strategies by encode's own rules, and bounds-checks all structure — exercised by a per-kind eval matrix (ratio + strategy assertions for every kind) and a deterministic fuzzer (`varintRecordFuzz`). Measured: 12.2x on telemetry rows, 3.8x on float sensor curves, 24.8x on structured tags via byte planes, 2.3x on double-double columns, with a verbatim floor on incompressible data. Full details in [varintRecord.h](https://github.com/mattsta/varint/blob/main/src/varintRecord.h) and [module documentation](docs/modules/varintRecord.md).
 
 ## Comprehensive Examples
 
-The `examples/` directory contains **43 production-quality examples** demonstrating real-world applications:
+The `examples/` directory contains **44 production-quality examples** demonstrating real-world applications:
 
-### **16 Standalone Examples** - Individual module demonstrations
+### **17 Standalone Examples** - Individual module demonstrations
 
 - **Basic encodings**: Tagged, External, Split, Chained, Packed, Dimension, Bitstream
 - **Advanced encodings**: Delta, FOR, Group, PFOR, Dictionary, Bitmap, Adaptive, Float
@@ -206,6 +224,7 @@ The `examples/` directory contains **43 production-quality examples** demonstrat
 - **Delta-of-Delta** (`varintDeltaDelta`) for regular-interval time series (Gorilla pattern, first-class module)
 - **Stride** (`varintStride`) for arithmetic progressions: exact mode ~24 bytes any length, fuzzy mode tolerates outliers
 - **Compete + Telemetry**: evidence-based codec selection runner with opt-in atomic per-codec wins/calls counters
+- **Record** (`varintRecord`): schema-driven columnar struct compression — describe a struct once, every field competes for its best codec (11.2x on telemetry rows)
 
 ### **9 Integration Examples** - Combining multiple varint types
 
@@ -284,6 +303,9 @@ make varint-check-warnings
 ./build/src/varint-compare
 ./build/src/varintDimensionTest
 ./build/src/varintPackedTest 3000
+./build/src/varintCompeteBench     # compete-layer SIMD kernels + chunked codec throughput
+./build/src/varintPaletteBench
+./build/src/varintDDBench
 ```
 
 See [`scripts/README.md`](scripts/README.md) for complete testing documentation.

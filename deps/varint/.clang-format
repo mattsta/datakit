@@ -1,0 +1,11 @@
+# Project formatting: the persistent form of the `form` wrapper
+# (clang-format, LLVM base). With this file present, plain
+# `clang-format -i <files>` and editor/CI integrations all pick up the
+# project style automatically; explicit -style flags keep working and
+# produce identical output.
+BasedOnStyle: LLVM
+IndentWidth: 4
+AllowShortFunctionsOnASingleLine: None
+KeepEmptyLinesAtTheStartOfBlocks: false
+InsertBraces: true
+InsertNewlineAtEOF: true

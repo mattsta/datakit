@@ -43,6 +43,8 @@ The mode byte is the first byte of the buffer, so dispatchers can peek without p
 
 The dispatcher (`strideCountMismatches_`) picks NEON/AVX2/scalar at compile time, with a runtime length threshold (`VARINT_STRIDE_SIMD_MIN_COUNT = 16`) below which scalar wins on setup overhead.
 
+A second SIMD primitive, `varintStrideMatchingPrefix[Unsigned]`, returns the length of the longest prefix forming one exact arithmetic progression, exiting at the first deviating vector group so the cost is bounded by the run length. It processes 8 values per iteration with the four compare results ANDed into a single vector→scalar check — per-vector lane extracts are expensive enough (especially on Apple silicon) that a 2-wide check-every-vector loop measures _slower_ than scalar. This is the block-growth planner behind `varintCompete`'s chunked mode; measure it with `varintCompeteBench`.
+
 ## API
 
 ```c

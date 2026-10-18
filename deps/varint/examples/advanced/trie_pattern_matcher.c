@@ -868,8 +868,11 @@ void naiveInsert(NaivePatternList *list, const char *pattern,
         list->patterns =
             realloc(list->patterns, list->capacity * sizeof(NaivePattern));
     }
-    strncpy(list->patterns[list->count].pattern, pattern, 127);
-    list->patterns[list->count].pattern[127] = '\0';
+    // Keep at most 127 bytes and always terminate
+    char *dst = list->patterns[list->count].pattern;
+    const size_t len = strnlen(pattern, sizeof(list->patterns[0].pattern) - 1);
+    memcpy(dst, pattern, len);
+    dst[len] = '\0';
     list->patterns[list->count].subscriberId = subscriberId;
     parsePattern(pattern, &list->patterns[list->count].parsed);
     list->count++;

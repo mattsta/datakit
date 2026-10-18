@@ -33,7 +33,35 @@ target_link_libraries(example_dimension varintDimension)
 add_executable(example_bitstream standalone/example_bitstream.c)
 target_link_libraries(example_bitstream varint)
 
+# Double-double examples.
+# varintDD and varintDDStream are not part of the varint object library
+# (neither are the other codec modules), so their sources compile in
+# directly here rather than being linked.
+# Schema-driven columnar record compression. varintRecord delegates all
+# codec selection to varintCompete, so the whole compete family compiles
+# in alongside it.
+add_executable(example_record standalone/example_record.c
+               ../src/varintRecord.c ../src/varintCompete.c
+               ../src/varintFloat.c ../src/varintDD.c ../src/varintDDStream.c
+               ../src/varintTelemetry.c ../src/varintDeltaDelta.c
+               ../src/varintStride.c ../src/varintDelta.c ../src/varintRLE.c
+               ../src/varintFOR.c ../src/varintPFOR.c ../src/varintDict.c
+               ../src/varintPalette.c ../src/varintBP128.c ../src/varintElias.c
+               ../src/varintExternal.c ../src/varintTagged.c)
+target_link_libraries(example_record m)
+
+add_executable(example_dd standalone/example_dd.c ../src/varintDD.c)
+target_link_libraries(example_dd m)
+
+add_executable(example_ddstream standalone/example_ddstream.c
+               ../src/varintDDStream.c ../src/varintDD.c ../src/varintTagged.c)
+target_link_libraries(example_ddstream m)
+
 # Integration examples
+add_executable(dd_column_store integration/dd_column_store.c
+               ../src/varintDDStream.c ../src/varintDD.c ../src/varintTagged.c)
+target_link_libraries(dd_column_store m)
+
 add_executable(database_system integration/database_system.c)
 target_link_libraries(database_system varint)
 
@@ -102,6 +130,10 @@ target_link_libraries(trie_client varint)
 add_executable(autocomplete_trie advanced/autocomplete_trie.c)
 target_link_libraries(autocomplete_trie varint m)
 
+add_executable(orbit_propagator advanced/orbit_propagator.c
+               ../src/varintDDStream.c ../src/varintDD.c ../src/varintTagged.c)
+target_link_libraries(orbit_propagator m)
+
 add_executable(pointcloud_octree advanced/pointcloud_octree.c)
 target_link_libraries(pointcloud_octree varint m)
 
@@ -137,6 +169,10 @@ add_custom_target(examples DEPENDS
     trie_client
     autocomplete_trie
     pointcloud_octree
+    example_dd
+    example_ddstream
+    dd_column_store
+    orbit_propagator
 )
 
 message(STATUS "Examples configured. Build with 'make examples'")

@@ -8,7 +8,8 @@ This directory contains all automation scripts for building, testing, and valida
 scripts/
 ├── build/          # Build and compiler checking scripts
 │   ├── check_warnings.sh       # Single compiler warning check
-│   └── run_all_compilers.sh    # Multi-compiler verification (GCC + Clang)
+│   ├── run_all_compilers.sh    # Multi-compiler verification (GCC + Clang)
+│   └── validate_workflows.py   # YAML-validate .github/workflows before pushing
 └── test/           # Test execution scripts
     ├── run_all_tests.sh                # Unit tests with optional sanitizers
     ├── run_unit_tests.sh               # Unit tests with ASan+UBSan
@@ -66,7 +67,11 @@ Single compiler warning checker (used by `run_all_compilers.sh`).
 
 #### `scripts/test/run_all_tests.sh`
 
-Runs all 8 unit tests with configurable sanitizers.
+Builds the full CMake tree with the requested sanitizer into
+`build_tests/<sanitizer>/` and runs **every registered ctest suite**.
+`src/CMakeLists.txt` is the single source of truth for the test list,
+defines, and dependencies — a suite added there is automatically covered
+here, so this script cannot drift out of sync with the tree.
 
 **Usage:**
 
@@ -82,17 +87,6 @@ Runs all 8 unit tests with configurable sanitizers.
 ./scripts/test/run_all_tests.sh ubsan      # UndefinedBehaviorSanitizer only
 ./scripts/test/run_all_tests.sh both       # Both sanitizers (recommended)
 ```
-
-**Tests:**
-
-- varintDeltaTest
-- varintFORTest
-- varintPFORTest
-- varintFloatTest
-- varintBitmapTest
-- varintDictTest
-- varintAdaptiveTest
-- varintGroupTest
 
 #### `scripts/test/run_unit_tests.sh`
 

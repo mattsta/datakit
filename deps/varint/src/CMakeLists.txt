@@ -99,6 +99,10 @@ if(VARINT_BUILD_TESTS)
     # BUILD ALL UNIT TESTS
     # ====================================================================
 
+    # varintExternalTest - tests the external varint checked loader
+    add_executable(varintExternalTest varintExternalTest.c varintExternal.c)
+    target_compile_definitions(varintExternalTest PRIVATE VARINT_EXTERNAL_TEST_STANDALONE)
+
     # varintDeltaTest - tests delta encoding with ZigZag
     add_executable(varintDeltaTest varintDeltaTest.c varintDelta.c varintExternal.c)
     target_compile_definitions(varintDeltaTest PRIVATE VARINT_DELTA_TEST_STANDALONE)
@@ -177,14 +181,87 @@ if(VARINT_BUILD_TESTS)
                    varintGroup.c varintBitmap.c
                    varintExternal.c varintTagged.c)
 
+    # varintDDTest - double-double arithmetic checked against an exact
+    # integer oracle, plus vector/scalar backend equivalence
+    add_executable(varintDDTest varintDDTest.c varintDD.c)
+    target_compile_definitions(varintDDTest PRIVATE VARINT_DD_TEST)
+
+    # varintDDScalarTest - the same suite with the vector backend
+    # compiled out, so the portable fallback is covered even when the
+    # build machine has NEON or AVX2
+    add_executable(varintDDScalarTest varintDDTest.c varintDD.c)
+    target_compile_definitions(varintDDScalarTest PRIVATE VARINT_DD_TEST VARINT_DD_FORCE_SCALAR)
+
+    # varintDDStreamTest - tests double-double stream compression
+    add_executable(varintDDStreamTest varintDDStreamTest.c
+                   varintDDStream.c varintDD.c varintTagged.c)
+    target_compile_definitions(varintDDStreamTest PRIVATE VARINT_DD_STREAM_TEST)
+
+    # varintDDStreamScalarTest - stream codec without the vector backend
+    add_executable(varintDDStreamScalarTest varintDDStreamTest.c
+                   varintDDStream.c varintDD.c varintTagged.c)
+    target_compile_definitions(varintDDStreamScalarTest PRIVATE VARINT_DD_STREAM_TEST VARINT_DD_FORCE_SCALAR)
+
+    # varintDDStreamFuzz - self-contained deterministic fuzzer (no libFuzzer)
+    add_executable(varintDDStreamFuzz varintDDStream.c varintDD.c varintTagged.c)
+    target_compile_definitions(varintDDStreamFuzz PRIVATE VARINT_DD_STREAM_FUZZ)
+
+    # varintDDDocTest - compiles and runs every code block from
+    # docs/modules/varintDD*.md, so documentation cannot drift out of
+    # step with the API without breaking the build
+    add_executable(varintDDDocTest varintDDDocTest.c
+                   varintDDStream.c varintDD.c varintTagged.c)
+
+    # varintDDBench - latency/throughput/codec benchmark (not registered
+    # with ctest). The Scalar twin is the control: identical source and
+    # flags with only the vector backend removed, which is the only
+    # honest way to measure what SIMD contributes here - the compiler
+    # auto-vectorizes the plain loops on its own.
+    add_executable(varintDDBench varintDDBench.c
+                   varintDDStream.c varintDD.c varintTagged.c)
+    add_executable(varintDDBenchScalar varintDDBench.c
+                   varintDDStream.c varintDD.c varintTagged.c)
+    target_compile_definitions(varintDDBenchScalar PRIVATE VARINT_DD_FORCE_SCALAR)
+
     # varintCompeteTest - tests evidence-based codec selection runner
     add_executable(varintCompeteTest varintCompeteTest.c
                    varintCompete.c varintTelemetry.c
                    varintDeltaDelta.c varintStride.c varintDelta.c
                    varintRLE.c varintFOR.c varintPFOR.c varintDict.c
-                   varintPalette.c varintBP128.c varintExternal.c
-                   varintTagged.c)
+                   varintPalette.c varintBP128.c varintElias.c
+                   varintExternal.c varintTagged.c)
     target_compile_definitions(varintCompeteTest PRIVATE VARINT_COMPETE_TEST)
+
+    # varintCompeteBench - compete-layer performance validation (not
+    # registered with ctest): SIMD scan kernels vs scalar references,
+    # and chunked vs single-frame codec throughput per dataset shape.
+    add_executable(varintCompeteBench varintCompeteBench.c
+                   varintCompete.c varintTelemetry.c
+                   varintDeltaDelta.c varintStride.c varintDelta.c
+                   varintRLE.c varintFOR.c varintPFOR.c varintDict.c
+                   varintPalette.c varintBP128.c varintElias.c
+                   varintExternal.c varintTagged.c)
+
+    # varintRecord builds on the whole compete family: the record layer
+    # only gathers/scatters columns and frames the stream — every codec
+    # decision is delegated to varintCompete.
+    set(VARINT_RECORD_DEPS
+        varintRecord.c varintCompete.c varintTelemetry.c
+        varintFloat.c varintDD.c varintDDStream.c
+        varintDeltaDelta.c varintStride.c varintDelta.c
+        varintRLE.c varintFOR.c varintPFOR.c varintDict.c
+        varintPalette.c varintBP128.c varintElias.c
+        varintExternal.c varintTagged.c)
+
+    # varintRecordTest - tests schema-driven columnar record compression
+    add_executable(varintRecordTest varintRecordTest.c ${VARINT_RECORD_DEPS})
+    target_compile_definitions(varintRecordTest PRIVATE VARINT_RECORD_TEST)
+
+    # varintRecordFuzz - self-contained deterministic fuzzer (no libFuzzer)
+    add_executable(varintRecordFuzz varintRecordFuzz.c ${VARINT_RECORD_DEPS})
+
+    # varintRecordBench - throughput benchmark (not registered with ctest)
+    add_executable(varintRecordBench varintRecordBench.c ${VARINT_RECORD_DEPS})
 
     # Link math library on non-Apple systems
     if(NOT APPLE)
@@ -193,6 +270,17 @@ if(VARINT_BUILD_TESTS)
         target_link_libraries(${PACKED}Test m)
         target_link_libraries(varintFloatTest m)
         target_link_libraries(varintAdaptiveTest m)
+        target_link_libraries(varintDDTest m)
+        target_link_libraries(varintDDScalarTest m)
+        target_link_libraries(varintDDStreamTest m)
+        target_link_libraries(varintDDStreamScalarTest m)
+        target_link_libraries(varintDDStreamFuzz m)
+        target_link_libraries(varintDDBench m)
+        target_link_libraries(varintDDBenchScalar m)
+        target_link_libraries(varintRecordTest m)
+        target_link_libraries(varintRecordFuzz m)
+        target_link_libraries(varintRecordBench m)
+        target_link_libraries(varintDDDocTest m)
     endif()
 
     # ====================================================================
@@ -201,6 +289,7 @@ if(VARINT_BUILD_TESTS)
 
     add_test(NAME varint-packed COMMAND ${PACKED}Test 1)
     add_test(NAME varint-dimension COMMAND ${DIMENSION}Test)
+    add_test(NAME varint-external COMMAND varintExternalTest)
     add_test(NAME varint-delta COMMAND varintDeltaTest)
     add_test(NAME varint-for COMMAND varintFORTest)
     add_test(NAME varint-pfor COMMAND varintPFORTest)
@@ -217,6 +306,14 @@ if(VARINT_BUILD_TESTS)
     add_test(NAME varint-palette COMMAND varintPaletteTest)
     add_test(NAME varint-palette-fuzz COMMAND varintPaletteFuzz 20000 24151)
     add_test(NAME varint-compete COMMAND varintCompeteTest)
+    add_test(NAME varint-record COMMAND varintRecordTest)
+    add_test(NAME varint-record-fuzz COMMAND varintRecordFuzz 20000 24151)
+    add_test(NAME varint-dd COMMAND varintDDTest)
+    add_test(NAME varint-dd-scalar COMMAND varintDDScalarTest)
+    add_test(NAME varint-dd-stream COMMAND varintDDStreamTest)
+    add_test(NAME varint-dd-stream-scalar COMMAND varintDDStreamScalarTest)
+    add_test(NAME varint-dd-stream-fuzz COMMAND varintDDStreamFuzz 20000 24151)
+    add_test(NAME varint-dd-docs COMMAND varintDDDocTest)
 
     # Generate debug symbols on macOS
     if(APPLE)
@@ -238,6 +335,10 @@ if(VARINT_BUILD_TESTS)
         add_custom_command(TARGET varintStrideTest POST_BUILD COMMAND dsymutil varintStrideTest)
         add_custom_command(TARGET varintPaletteTest POST_BUILD COMMAND dsymutil varintPaletteTest)
         add_custom_command(TARGET varintCompeteTest POST_BUILD COMMAND dsymutil varintCompeteTest)
+        add_custom_command(TARGET varintDDTest POST_BUILD COMMAND dsymutil varintDDTest)
+        add_custom_command(TARGET varintDDScalarTest POST_BUILD COMMAND dsymutil varintDDScalarTest)
+        add_custom_command(TARGET varintDDStreamTest POST_BUILD COMMAND dsymutil varintDDStreamTest)
+        add_custom_command(TARGET varintDDStreamScalarTest POST_BUILD COMMAND dsymutil varintDDStreamScalarTest)
     endif()
 endif()
 

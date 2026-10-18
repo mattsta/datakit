@@ -803,8 +803,40 @@ bool varintBP128IsBeneficial64(const uint64_t *values, size_t count) {
     return estimatedSize < count * sizeof(uint64_t);
 }
 
+/* Sortedness checks compare each value against its predecessor with two
+ * overlapping unaligned loads per step; a violating vector exits early,
+ * so unsorted input stays cheap while sorted input (the case the delta
+ * encoders actually scan to completion) runs at full SIMD width. */
+
 bool varintBP128IsSorted32(const uint32_t *values, size_t count) {
-    for (size_t i = 1; i < count; i++) {
+    size_t i = 1;
+
+#if defined(VARINT_BP128_NEON)
+    for (; i + 3 < count; i += 4) {
+        uint32x4_t prev = vld1q_u32(&values[i - 1]);
+        uint32x4_t cur = vld1q_u32(&values[i]);
+        uint32x4_t gt = vcgtq_u32(prev, cur);
+        uint64x2_t gt64 = vreinterpretq_u64_u32(gt);
+        if ((vgetq_lane_u64(gt64, 0) | vgetq_lane_u64(gt64, 1)) != 0) {
+            return false;
+        }
+    }
+#elif defined(VARINT_BP128_AVX2)
+    /* No unsigned compare in AVX2 — bias by the sign bit so signed
+     * greater-than orders the same as unsigned. */
+    const __m256i bias = _mm256_set1_epi32((int32_t)UINT32_C(0x80000000));
+    for (; i + 7 < count; i += 8) {
+        __m256i prev = _mm256_loadu_si256((const __m256i *)&values[i - 1]);
+        __m256i cur = _mm256_loadu_si256((const __m256i *)&values[i]);
+        __m256i gt = _mm256_cmpgt_epi32(_mm256_xor_si256(prev, bias),
+                                        _mm256_xor_si256(cur, bias));
+        if (_mm256_movemask_epi8(gt) != 0) {
+            return false;
+        }
+    }
+#endif
+
+    for (; i < count; i++) {
         if (values[i] < values[i - 1]) {
             return false;
         }
@@ -813,7 +845,41 @@ bool varintBP128IsSorted32(const uint32_t *values, size_t count) {
 }
 
 bool varintBP128IsSorted64(const uint64_t *values, size_t count) {
-    for (size_t i = 1; i < count; i++) {
+    size_t i = 1;
+
+#if defined(VARINT_BP128_NEON)
+#if defined(__aarch64__)
+    /* 8 comparisons per iteration, ORed into one exit check, so only
+     * one vector→scalar transfer happens per iteration. */
+    for (; i + 7 < count; i += 8) {
+        uint64x2_t g0 =
+            vcgtq_u64(vld1q_u64(&values[i - 1]), vld1q_u64(&values[i]));
+        uint64x2_t g1 =
+            vcgtq_u64(vld1q_u64(&values[i + 1]), vld1q_u64(&values[i + 2]));
+        uint64x2_t g2 =
+            vcgtq_u64(vld1q_u64(&values[i + 3]), vld1q_u64(&values[i + 4]));
+        uint64x2_t g3 =
+            vcgtq_u64(vld1q_u64(&values[i + 5]), vld1q_u64(&values[i + 6]));
+        uint64x2_t any = vorrq_u64(vorrq_u64(g0, g1), vorrq_u64(g2, g3));
+        if ((vgetq_lane_u64(any, 0) | vgetq_lane_u64(any, 1)) != 0) {
+            return false;
+        }
+    }
+#endif
+#elif defined(VARINT_BP128_AVX2)
+    const __m256i bias = _mm256_set1_epi64x((long long)UINT64_C(1) << 63);
+    for (; i + 3 < count; i += 4) {
+        __m256i prev = _mm256_loadu_si256((const __m256i *)&values[i - 1]);
+        __m256i cur = _mm256_loadu_si256((const __m256i *)&values[i]);
+        __m256i gt = _mm256_cmpgt_epi64(_mm256_xor_si256(prev, bias),
+                                        _mm256_xor_si256(cur, bias));
+        if (_mm256_movemask_epi8(gt) != 0) {
+            return false;
+        }
+    }
+#endif
+
+    for (; i < count; i++) {
         if (values[i] < values[i - 1]) {
             return false;
         }
@@ -1546,6 +1612,42 @@ int varintBP128Test(int argc, char *argv[]) {
         if (!varintBP128IsSorted64(sorted64, 5)) {
             ERRR("64-bit sorted should be detected");
         }
+    }
+
+    TEST("BP128 IsSorted SIMD paths: violations at every lane offset") {
+        enum { N = 1024 };
+        uint64_t *v64 = malloc(N * sizeof(uint64_t));
+        uint32_t *v32 = malloc(N * sizeof(uint32_t));
+
+        /* Sorted with plateaus, including values above the unsigned
+         * midpoint so a signed-compare implementation would misorder. */
+        for (size_t i = 0; i < N; i++) {
+            v64[i] = UINT64_C(0x7FFFFFFFFFFFFF00) + (uint64_t)i * 3;
+            v32[i] = UINT32_C(0x7FFFFF00) + (uint32_t)i * 3;
+        }
+        v64[N / 2] = v64[N / 2 - 1];
+        v32[N / 2] = v32[N / 2 - 1];
+        if (!varintBP128IsSorted64(v64, N) || !varintBP128IsSorted32(v32, N)) {
+            ERRR("sorted arrays crossing the sign bit misdetected");
+        }
+
+        /* A single out-of-order value at each offset near lane
+         * boundaries must be caught wherever it lands in a vector. */
+        static const size_t at[] = {1, 2, 3, 4, 5, 7, 8, 9, 500, 1023};
+        for (size_t b = 0; b < sizeof(at) / sizeof(at[0]); b++) {
+            uint64_t s64 = v64[at[b]];
+            uint32_t s32 = v32[at[b]];
+            v64[at[b]] = v64[at[b] - 1] - 1;
+            v32[at[b]] = v32[at[b] - 1] - 1;
+            if (varintBP128IsSorted64(v64, N) ||
+                varintBP128IsSorted32(v32, N)) {
+                ERR("violation at %zu missed", at[b]);
+            }
+            v64[at[b]] = s64;
+            v32[at[b]] = s32;
+        }
+        free(v64);
+        free(v32);
     }
 
     TEST("BP128 mixed small and large values") {

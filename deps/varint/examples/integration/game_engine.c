@@ -257,7 +257,10 @@ typedef struct {
 } NetworkPacket;
 
 void packetInit(NetworkPacket *packet, size_t capacity) {
-    packet->buffer = malloc(capacity);
+    // Zeroed: a packed Set rewrites its whole storage slot, keeping the bits
+    // around the value, so those bytes must be initialized before they are
+    // read back or sent.
+    packet->buffer = calloc(1, capacity);
     packet->size = 0;
     packet->capacity = capacity;
 }

@@ -317,6 +317,9 @@ void example_trie_node(void) {
     assert(readWildcard == wildcardType);
     assert(readChildren == childCount);
     assert(readValueId == valueId);
+    (void)readWildcard;
+    (void)readChildren;
+    (void)readValueId;
 
     printf("✓ Trie node encoding works\n");
 }

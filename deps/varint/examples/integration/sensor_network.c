@@ -338,6 +338,7 @@ void demonstrateSensorNetwork(void) {
                                                                 : "hour",
                width);
         assert(decoded.value == timestamps[i].value);
+        (void)decoded;
     }
 
     // 2. Sensor value encoding
@@ -366,6 +367,7 @@ void demonstrateSensorNetwork(void) {
                        : readings[i].type == SENSOR_TYPE_LIGHT    ? "light"
                                                                   : "voltage");
         assert(decoded.value == readings[i].value);
+        (void)decoded;
     }
 
     // 3. Delta encoding

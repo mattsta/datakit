@@ -32,7 +32,10 @@
  *  storage patterns where sometimes you store 1,000 values and other times
  *  you store one value.)
  * Obviously, your SLOT_STORAGE_TYPE can't contain fewer bytes than your
- * STORAGE_BITS (e.g. STORAGE_BITS of 17 *must* use uint32_t) */
+ * STORAGE_BITS (e.g. STORAGE_BITS of 17 *must* use uint32_t)
+ *
+ * Set reads and rewrites whole slots, keeping the bits beside the value, so
+ * the storage must be initialized (e.g. from calloc) before the first Set. */
 
 /* If user didn't request explicit slot storage, provide defaults. */
 #ifndef PACK_STORAGE_SLOT_STORAGE_TYPE

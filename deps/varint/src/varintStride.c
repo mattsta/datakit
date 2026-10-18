@@ -179,6 +179,115 @@ static size_t strideCountMismatches_(const int64_t *values, size_t count,
 }
 
 /* ====================================================================
+ * Matching-prefix scan (SIMD, early exit)
+ * ====================================================================
+ * Length of the longest prefix forming one exact arithmetic progression.
+ * Same expected-progression-vector trick as the mismatch counters above,
+ * but bailing out at the first deviating vector instead of scanning the
+ * whole array: the block-growth planner in varintCompete calls this on
+ * every block, so non-progression blocks must stay cheap. */
+
+static size_t strideMatchingPrefixScalar_(const uint64_t *values, size_t count,
+                                          size_t start) {
+    const uint64_t base = values[0];
+    const uint64_t s = values[1] - values[0];
+    for (size_t i = start; i < count; i++) {
+        if (values[i] != base + i * s) {
+            return i;
+        }
+    }
+    return count;
+}
+
+#ifdef VARINT_STRIDE_NEON
+static size_t strideMatchingPrefixNEON_(const uint64_t *values, size_t count) {
+    const uint64_t base = values[0];
+    const uint64_t s = values[1] - values[0];
+
+    /* Process 8 values per iteration and AND the four compare results
+     * so only one vector→scalar transfer happens per iteration —
+     * per-vector lane extracts dominate a 2-wide loop and make it
+     * slower than scalar. The exit lands at the vector-group start; the
+     * scalar finisher pinpoints the exact deviation. */
+    uint64_t lanes[2] = {base + 2 * s, base + 3 * s};
+    uint64x2_t e0 = vld1q_u64(lanes);
+    const uint64x2_t pairStep = vdupq_n_u64(2 * s);
+    uint64x2_t e1 = vaddq_u64(e0, pairStep);
+    uint64x2_t e2 = vaddq_u64(e1, pairStep);
+    uint64x2_t e3 = vaddq_u64(e2, pairStep);
+    const uint64x2_t groupStep = vdupq_n_u64(8 * s);
+
+    size_t i = 2;
+    for (; i + 7 < count; i += 8) {
+        uint64x2_t q0 = vceqq_u64(vld1q_u64(&values[i]), e0);
+        uint64x2_t q1 = vceqq_u64(vld1q_u64(&values[i + 2]), e1);
+        uint64x2_t q2 = vceqq_u64(vld1q_u64(&values[i + 4]), e2);
+        uint64x2_t q3 = vceqq_u64(vld1q_u64(&values[i + 6]), e3);
+        uint64x2_t all = vandq_u64(vandq_u64(q0, q1), vandq_u64(q2, q3));
+        if ((vgetq_lane_u64(all, 0) & vgetq_lane_u64(all, 1)) != UINT64_MAX) {
+            break;
+        }
+        e0 = vaddq_u64(e0, groupStep);
+        e1 = vaddq_u64(e1, groupStep);
+        e2 = vaddq_u64(e2, groupStep);
+        e3 = vaddq_u64(e3, groupStep);
+    }
+    return strideMatchingPrefixScalar_(values, count, i);
+}
+#endif /* VARINT_STRIDE_NEON */
+
+#ifdef VARINT_STRIDE_AVX2
+static size_t strideMatchingPrefixAVX2_(const uint64_t *values, size_t count) {
+    const uint64_t base = values[0];
+    const uint64_t s = values[1] - values[0];
+
+    /* 8 values per iteration, one movemask on the ANDed compares. */
+    __m256i e0 =
+        _mm256_set_epi64x((long long)(base + 5 * s), (long long)(base + 4 * s),
+                          (long long)(base + 3 * s), (long long)(base + 2 * s));
+    const __m256i quadStep = _mm256_set1_epi64x((long long)(4 * s));
+    __m256i e1 = _mm256_add_epi64(e0, quadStep);
+    const __m256i groupStep = _mm256_set1_epi64x((long long)(8 * s));
+
+    size_t i = 2;
+    for (; i + 7 < count; i += 8) {
+        __m256i q0 = _mm256_cmpeq_epi64(
+            _mm256_loadu_si256((const __m256i *)&values[i]), e0);
+        __m256i q1 = _mm256_cmpeq_epi64(
+            _mm256_loadu_si256((const __m256i *)&values[i + 4]), e1);
+        if (_mm256_movemask_epi8(_mm256_and_si256(q0, q1)) != -1) {
+            break;
+        }
+        e0 = _mm256_add_epi64(e0, groupStep);
+        e1 = _mm256_add_epi64(e1, groupStep);
+    }
+    return strideMatchingPrefixScalar_(values, count, i);
+}
+#endif /* VARINT_STRIDE_AVX2 */
+
+size_t varintStrideMatchingPrefixUnsigned(const uint64_t *values,
+                                          size_t count) {
+    assert(values != NULL || count == 0);
+    if (count <= 2) {
+        return count;
+    }
+    if (count < VARINT_STRIDE_SIMD_MIN_COUNT) {
+        return strideMatchingPrefixScalar_(values, count, 2);
+    }
+#if defined(VARINT_STRIDE_AVX2)
+    return strideMatchingPrefixAVX2_(values, count);
+#elif defined(VARINT_STRIDE_NEON)
+    return strideMatchingPrefixNEON_(values, count);
+#else
+    return strideMatchingPrefixScalar_(values, count, 2);
+#endif
+}
+
+size_t varintStrideMatchingPrefix(const int64_t *values, size_t count) {
+    return varintStrideMatchingPrefixUnsigned((const uint64_t *)values, count);
+}
+
+/* ====================================================================
  * Analysis
  * ==================================================================== */
 
@@ -688,6 +797,51 @@ int varintStrideTest(int argc, char *argv[]) {
         free(vals);
         free(buf);
         free(dec);
+    }
+
+    TEST("MatchingPrefix: exact positions across SIMD widths") {
+        enum { N = 4096 };
+        uint64_t *vals = malloc(N * sizeof(uint64_t));
+        for (size_t i = 0; i < N; i++) {
+            vals[i] = 100 + (uint64_t)i * 7;
+        }
+
+        if (varintStrideMatchingPrefixUnsigned(vals, N) != N) {
+            ERRR("full progression should match to the end");
+        }
+        if (varintStrideMatchingPrefixUnsigned(vals, 0) != 0 ||
+            varintStrideMatchingPrefixUnsigned(vals, 1) != 1 ||
+            varintStrideMatchingPrefixUnsigned(vals, 2) != 2) {
+            ERRR("count <= 2 must return count");
+        }
+
+        /* Break the progression at every offset near SIMD lane
+         * boundaries and deep in the vectorized region; the reported
+         * prefix must be exactly the break position. */
+        static const size_t breaks[] = {2,  3,  4,  5,  7,  8,    9,
+                                        15, 16, 17, 63, 64, 1000, 4095};
+        for (size_t b = 0; b < sizeof(breaks) / sizeof(breaks[0]); b++) {
+            size_t at = breaks[b];
+            uint64_t saved = vals[at];
+            vals[at] ^= 1;
+            size_t got = varintStrideMatchingPrefixUnsigned(vals, N);
+            if (got != at) {
+                ERR("break at %zu reported as %zu", at, got);
+            }
+            vals[at] = saved;
+        }
+
+        /* Wrapping progression: descending stride in two's complement. */
+        for (size_t i = 0; i < N; i++) {
+            vals[i] = (uint64_t)(int64_t)(5 - (int64_t)i * 1000);
+        }
+        if (varintStrideMatchingPrefixUnsigned(vals, N) != N) {
+            ERRR("descending (wrapping) progression should match");
+        }
+        if (varintStrideMatchingPrefix((const int64_t *)vals, N) != N) {
+            ERRR("signed wrapper disagrees with unsigned scan");
+        }
+        free(vals);
     }
 
     TEST_FINAL_RESULT;

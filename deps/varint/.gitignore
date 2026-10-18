@@ -1,8 +1,10 @@
-# Build artifacts
-build
-build_tests
-build_examples_sanitizers
-build_sanitizers
+# Build artifacts (root-anchored: a bare "build" pattern would also
+# swallow tracked source directories like scripts/build/)
+/build/
+/build_release/
+/build_tests/
+/build_examples_sanitizers/
+/build_sanitizers/
 
 # Compiler check results
 compiler_check_results

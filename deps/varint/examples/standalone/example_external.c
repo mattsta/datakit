@@ -88,6 +88,7 @@ void example_width_detection(void) {
         uint64_t decoded;
         varintExternalGetQuick_(buffer, width, decoded);
         assert(decoded == tests[i].value);
+        (void)decoded;
 
         printf("✓\n");
     }
@@ -231,6 +232,7 @@ void example_array_compression(void) {
         uint64_t value;
         varintExternalGetQuick_(compressed + (i * width), width, value);
         assert(value == timestamps[i]);
+        (void)value;
     }
 
     size_t compressedSize = width * count;
@@ -264,6 +266,7 @@ void example_endianness(void) {
     varintExternalGetQuick_(buffer, 8, decoded);
 
     assert(decoded == value);
+    (void)decoded;
     printf("✓ Endianness handled correctly\n");
 }
 
@@ -289,6 +292,7 @@ void example_signed(void) {
 
         printf("  %10" PRId64 " -> %d bytes\n", signedValues[i], width);
         assert((int64_t)decoded == signedValues[i]);
+        (void)decoded;
     }
 
     printf("✓ Signed values handled correctly\n");

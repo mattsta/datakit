@@ -25,7 +25,7 @@
 
 // Creates: varintPacked12Set(), varintPacked12Get(), etc.
 
-uint8_t *array = calloc(1000, 12 / 8 + 1);  // Storage for packed values
+uint8_t *array = calloc(1000, 12 / 8 + 1);  // Storage must start zeroed
 
 // Store values (0-4095 in 12 bits)
 varintPacked12Set(array, 0, 2048);  // array[0] = 2048

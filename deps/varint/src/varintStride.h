@@ -65,6 +65,15 @@ _Static_assert(sizeof(varintStrideMeta) <= 64,
  * Analysis
  * ==================================================================== */
 
+/* Length of the longest prefix of values forming one exact arithmetic
+ * progression: values[i] == values[0] + i*(values[1]-values[0]) in
+ * wrapping two's-complement arithmetic. Returns count for count <= 2
+ * (any two values are a progression). SIMD-accelerated (NEON/AVX2) with
+ * early exit at the first deviation, so the cost is bounded by the run
+ * length, not the array length. */
+size_t varintStrideMatchingPrefix(const int64_t *values, size_t count);
+size_t varintStrideMatchingPrefixUnsigned(const uint64_t *values, size_t count);
+
 /* Analyze a signed array, detecting:
  *   - Exact stride: every consecutive delta equals values[1]-values[0]
  *   - Fuzzy stride: most deltas match; up to FUZZY_MAX_FRACTION outliers

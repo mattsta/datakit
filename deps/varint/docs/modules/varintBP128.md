@@ -115,6 +115,11 @@ bool varintBP128IsBeneficial32(const uint32_t *values, size_t count);
 bool varintBP128IsBeneficial64(const uint64_t *values, size_t count);
 
 // Check if data is sorted (for delta encoding)
+/* SIMD-accelerated (NEON/AVX2): overlapping loads compare each value
+ * against its predecessor, with violations ORed into one exit check per
+ * 8 comparisons; unsorted input exits early, sorted input (the case the
+ * delta encoders scan to completion) runs at full vector width.
+ * Measured ~2.7-2.8x scalar on Apple M-series; see varintCompeteBench. */
 bool varintBP128IsSorted32(const uint32_t *values, size_t count);
 bool varintBP128IsSorted64(const uint64_t *values, size_t count);
 ```

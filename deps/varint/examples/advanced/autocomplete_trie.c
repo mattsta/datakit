@@ -451,8 +451,7 @@ void fuzzyResultsAdd(FuzzyResults *results, const char *term,
     }
 
     FuzzyResult *result = &results->results[results->count++];
-    strncpy(result->term, term, MAX_TERM_LENGTH - 1);
-    result->term[MAX_TERM_LENGTH - 1] = '\0';
+    snprintf(result->term, MAX_TERM_LENGTH, "%s", term);
     result->frequency = frequency;
     result->editDistance = distance;
 }

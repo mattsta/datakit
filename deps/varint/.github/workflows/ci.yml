@@ -18,7 +18,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install dependencies (Ubuntu)
         if: startsWith(matrix.os, 'ubuntu')
@@ -29,7 +29,10 @@ jobs:
       - name: Install dependencies (macOS)
         if: startsWith(matrix.os, 'macos')
         run: |
-          brew install gcc llvm cmake
+          brew untap aws/tap 2>/dev/null || true
+          for pkg in gcc llvm cmake; do
+            brew list "$pkg" >/dev/null 2>&1 || brew install "$pkg"
+          done
 
       - name: Verify GCC and Clang versions
         run: |
@@ -58,7 +61,7 @@ jobs:
 
       - name: Upload compiler check results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: compiler-results-${{ matrix.os }}
           path: compiler_check_results/
@@ -75,7 +78,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install dependencies (Ubuntu)
         if: startsWith(matrix.os, 'ubuntu')
@@ -86,7 +89,10 @@ jobs:
       - name: Install dependencies (macOS)
         if: startsWith(matrix.os, 'macos')
         run: |
-          brew install gcc cmake
+          brew untap aws/tap 2>/dev/null || true
+          for pkg in gcc cmake; do
+            brew list "$pkg" >/dev/null 2>&1 || brew install "$pkg"
+          done
 
       - name: Run unit tests (ASan + UBSan)
         run: |
@@ -114,7 +120,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install dependencies (Ubuntu)
         if: startsWith(matrix.os, 'ubuntu')
@@ -125,7 +131,10 @@ jobs:
       - name: Install dependencies (macOS)
         if: startsWith(matrix.os, 'macos')
         run: |
-          brew install gcc cmake
+          brew untap aws/tap 2>/dev/null || true
+          for pkg in gcc cmake; do
+            brew list "$pkg" >/dev/null 2>&1 || brew install "$pkg"
+          done
 
       - name: Run comprehensive example tests
         timeout-minutes: 15
@@ -152,7 +161,7 @@ jobs:
 
       - name: Upload test output
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: comprehensive-test-output-${{ matrix.os }}
           path: comprehensive_test_output.log
@@ -170,7 +179,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install dependencies (Ubuntu)
         if: startsWith(matrix.os, 'ubuntu')
@@ -181,7 +190,10 @@ jobs:
       - name: Install dependencies (macOS)
         if: startsWith(matrix.os, 'macos')
         run: |
-          brew install gcc llvm cmake
+          brew untap aws/tap 2>/dev/null || true
+          for pkg in gcc llvm cmake; do
+            brew list "$pkg" >/dev/null 2>&1 || brew install "$pkg"
+          done
 
       - name: Set compiler environment
         run: |
@@ -242,7 +254,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install dependencies
         run: |
@@ -272,7 +284,7 @@ jobs:
 
       - name: Upload sanitizer results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sanitizer-${{ matrix.sanitizer }}-${{ matrix.os }}
           path: sanitizer_output.log
@@ -290,7 +302,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install dependencies
         run: |
@@ -314,7 +326,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install cppcheck
         run: |
@@ -342,7 +354,7 @@ jobs:
 
       - name: Upload static analysis results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: static-analysis
           path: cppcheck_output.log

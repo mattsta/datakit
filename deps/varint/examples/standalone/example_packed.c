@@ -172,6 +172,7 @@ void example_member(void) {
 
         bool expectedMember = (strcmp(expected[i], "member") == 0);
         assert(isMember == expectedMember);
+        (void)expectedMember;
         printf("✓\n");
     }
 

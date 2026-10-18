@@ -21,7 +21,9 @@
 void example_basic(void) {
     printf("\n=== Example 1: Basic Encode/Decode ===\n");
 
-    uint8_t buffer[9];
+    // Zeroed: decoding reads only the bytes the type byte says were
+    // written, but the compiler cannot follow that through the macros.
+    uint8_t buffer[9] = {0};
     uint64_t original = 12345;
     varintWidth width;
 
@@ -305,6 +307,7 @@ void example_length(void) {
 
         printf("  Value: %" PRIu64 ", Length: %d bytes ", decoded, width);
         assert(len == width);
+        (void)len;
         printf("✓\n");
 
         offset += width;

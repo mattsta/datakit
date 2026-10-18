@@ -152,6 +152,7 @@ void decodeProtobuf(const uint8_t *buffer, size_t *offset, UserInfo *user) {
 
         uint32_t fieldNumber = tag >> 3;
         uint32_t wireType = tag & 0x07;
+        (void)wireType;
 
         switch (fieldNumber) {
         case 1: // user_id

@@ -57,24 +57,26 @@ Each standalone example demonstrates a single varint type with:
 - Common use patterns
 - Error handling
 
-| Example                        | Module          | Description                                               |
-| ------------------------------ | --------------- | --------------------------------------------------------- |
-| `example_tagged.c`             | varintTagged    | Sortable database keys                                    |
-| `example_external.c`           | varintExternal  | Zero-overhead encoding                                    |
-| `example_split.c`              | varintSplit     | Three-level encoding                                      |
-| `example_chained.c`            | varintChained   | Legacy Protocol Buffers format                            |
-| `example_packed.c`             | varintPacked    | Fixed-width bit-packed arrays                             |
-| `example_dimension.c`          | varintDimension | Matrix storage                                            |
-| `example_bitstream.c`          | varintBitstream | Bit-level operations                                      |
-| `rle_codec.c`                  | varintExternal  | Run-length encoding (11x-2560x compression)               |
-| `example_delta.c` **[NEW]**    | varintDelta     | Delta encoding with ZigZag (70-90% compression)           |
-| `example_for.c` **[NEW]**      | varintFOR       | Frame-of-Reference (2-7.5x compression)                   |
-| `example_group.c` **[NEW]**    | varintGroup     | Shared metadata encoding (30-40% savings)                 |
-| `example_pfor.c` **[NEW]**     | varintPFOR      | Patched FOR with exceptions (57-83% compression)          |
-| `example_dict.c` **[NEW]**     | varintDict      | Dictionary encoding (83-87% compression, 8x)              |
-| `example_bitmap.c` **[NEW]**   | varintBitmap    | Hybrid dense/sparse (Roaring-style)                       |
-| `example_adaptive.c` **[NEW]** | varintAdaptive  | Automatic encoding selection (1.35x-6.45x compression)    |
-| `example_float.c` **[NEW]**    | varintFloat     | Variable-precision floating point (1.5x-4.0x compression) |
+| Example                        | Module          | Description                                                |
+| ------------------------------ | --------------- | ---------------------------------------------------------- |
+| `example_tagged.c`             | varintTagged    | Sortable database keys                                     |
+| `example_external.c`           | varintExternal  | Zero-overhead encoding                                     |
+| `example_split.c`              | varintSplit     | Three-level encoding                                       |
+| `example_chained.c`            | varintChained   | Legacy Protocol Buffers format                             |
+| `example_packed.c`             | varintPacked    | Fixed-width bit-packed arrays                              |
+| `example_dimension.c`          | varintDimension | Matrix storage                                             |
+| `example_bitstream.c`          | varintBitstream | Bit-level operations                                       |
+| `rle_codec.c`                  | varintExternal  | Run-length encoding (11x-2560x compression)                |
+| `example_delta.c` **[NEW]**    | varintDelta     | Delta encoding with ZigZag (70-90% compression)            |
+| `example_for.c` **[NEW]**      | varintFOR       | Frame-of-Reference (2-7.5x compression)                    |
+| `example_group.c` **[NEW]**    | varintGroup     | Shared metadata encoding (30-40% savings)                  |
+| `example_pfor.c` **[NEW]**     | varintPFOR      | Patched FOR with exceptions (57-83% compression)           |
+| `example_dict.c` **[NEW]**     | varintDict      | Dictionary encoding (83-87% compression, 8x)               |
+| `example_bitmap.c` **[NEW]**   | varintBitmap    | Hybrid dense/sparse (Roaring-style)                        |
+| `example_adaptive.c` **[NEW]** | varintAdaptive  | Automatic encoding selection (1.35x-6.45x compression)     |
+| `example_float.c` **[NEW]**    | varintFloat     | Variable-precision floating point (1.5x-4.0x compression)  |
+| `example_dd.c` **[NEW]**       | varintDD        | 106-bit arithmetic, exact reductions, printing             |
+| `example_ddstream.c` **[NEW]** | varintDDStream  | Compressing double-doubles (1.06x-3.88x, precision ladder) |
 
 ## Integration Examples
 
@@ -147,6 +149,10 @@ Real-world scenarios combining multiple varint types:
 - 76-100% of deltas fit in 1 byte
 - Applications: Prometheus, InfluxDB, monitoring systems
 
+### dd_column_store.c **[NEW]**
+
+Columnar storage of 106-bit measurements, combining `varintDD` with `varintDDStream`. Carries a per-column precision policy (one integer in the schema, from bit-exact down to plain double), computes sum/mean/variance at full width during the scan, and verifies the lossy column's observed error against its declared bound. Shows why the two-pass variance formula is still the right one even with 106 bits available — precision buys headroom for a sound formula, it does not rescue an unsound one.
+
 ### sparse_matrix_csr.c **[NEW]**
 
 **Combines**: varintExternal (indices) + varintDimension (metadata)
@@ -208,6 +214,7 @@ Production-quality real-world systems with comprehensive benchmarks. See [advanc
 - **pointcloud_octree.c** **[NEW]** - 3D spatial data (1.61x compression, sub-ms queries)
 - **trie_pattern_matcher.c** - AMQP routing (2391x faster, 0.7 bytes/pattern)
 - **trie_interactive.c** - Interactive pattern matcher with CRUD and persistence
+- **orbit_propagator.c** **[NEW]** - Two-body orbit integrated for millions of steps in 106-bit arithmetic, then archived. Deliberately separates truncation error from rounding error, and shows one observable where extra precision buys nothing (position: identical error at both widths) beside one where it buys 79,000x (energy conservation)
 
 ## Building Examples
 

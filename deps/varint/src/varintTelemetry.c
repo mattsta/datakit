@@ -59,15 +59,23 @@ void varintTelemetrySnapshot(varintTelemetryEntry *out, size_t maxEntries) {
             __atomic_load_n(&varintTelemetry[i].bytesIn, __ATOMIC_RELAXED);
         out[i].bytesOut =
             __atomic_load_n(&varintTelemetry[i].bytesOut, __ATOMIC_RELAXED);
+        out[i].timeNs =
+            __atomic_load_n(&varintTelemetry[i].timeNs, __ATOMIC_RELAXED);
     }
 }
 
 void varintTelemetryReset(void) {
     for (size_t i = 0; i < VARINT_CODEC_MAX; i++) {
-        __atomic_store_n(&varintTelemetry[i].calls, 0UL, __ATOMIC_RELAXED);
-        __atomic_store_n(&varintTelemetry[i].wins, 0UL, __ATOMIC_RELAXED);
-        __atomic_store_n(&varintTelemetry[i].bytesIn, 0UL, __ATOMIC_RELAXED);
-        __atomic_store_n(&varintTelemetry[i].bytesOut, 0UL, __ATOMIC_RELAXED);
+        __atomic_store_n(&varintTelemetry[i].calls, UINT64_C(0),
+                         __ATOMIC_RELAXED);
+        __atomic_store_n(&varintTelemetry[i].wins, UINT64_C(0),
+                         __ATOMIC_RELAXED);
+        __atomic_store_n(&varintTelemetry[i].bytesIn, UINT64_C(0),
+                         __ATOMIC_RELAXED);
+        __atomic_store_n(&varintTelemetry[i].bytesOut, UINT64_C(0),
+                         __ATOMIC_RELAXED);
+        __atomic_store_n(&varintTelemetry[i].timeNs, UINT64_C(0),
+                         __ATOMIC_RELAXED);
     }
 }
 

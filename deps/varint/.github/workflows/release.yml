@@ -18,7 +18,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install dependencies (Ubuntu)
         if: startsWith(matrix.os, 'ubuntu')
@@ -29,7 +29,10 @@ jobs:
       - name: Install dependencies (macOS)
         if: startsWith(matrix.os, 'macos')
         run: |
-          brew install gcc llvm cmake
+          brew untap aws/tap 2>/dev/null || true
+          for pkg in gcc llvm cmake; do
+            brew list "$pkg" >/dev/null 2>&1 || brew install "$pkg"
+          done
 
       - name: Run ALL compiler checks (GCC + Clang)
         run: |
@@ -73,7 +76,7 @@ jobs:
 
       - name: Upload release artifacts
         if: startsWith(matrix.os, 'ubuntu')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-archive
           path: varint-*.tar.gz
@@ -86,7 +89,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Quality gate summary
         run: |
