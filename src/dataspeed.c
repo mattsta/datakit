@@ -267,6 +267,191 @@ DK_FN_UNUSED static bool dataspeedReadLine_(const char *path, char *buf,
 }
 
 /* ============================================================================
+ * Cache Layout Decoding
+ * ============================================================================
+ * The kernel's cache description is read through a callback so the decoding
+ * can be tested against sample layouts.
+ */
+
+/* Linux sysfs: write attribute 'attr' ("level", "type", "size",
+ * "coherency_line_size") of cache entry 'index' (.../cache/index<N>/) into
+ * buf, NUL-terminated; false when that file does not exist */
+typedef bool (*dataspeedSysfsReadFn)(void *ctx, int32_t index, const char *attr,
+                                     char *buf, size_t len);
+
+/* Apple sysctl: write the integer sysctl 'name' to *value; false when it
+ * does not exist */
+typedef bool (*dataspeedSysctlReadFn)(void *ctx, const char *name,
+                                      int64_t *value);
+
+#define DATASPEED_SYSFS_MAX_INDEX 32
+#define DATASPEED_MAX_LINE_SIZE (1 << 20)
+#define DATASPEED_DEFAULT_LINE_SIZE 64
+
+/* A sysfs "type" value, without its trailing newline */
+DK_FN_UNUSED static bool dataspeedSysfsTypeIs_(const char *type,
+                                               const char *want) {
+    const size_t n = strlen(want);
+    return strncmp(type, want, n) == 0 && (type[n] == '\0' || type[n] == '\n');
+}
+
+/* Decode cpu0's sysfs cache entries into 'cache'.  Each entry is placed by
+ * its level and type: a level 1 "Data" cache is l1d_size and a level 1
+ * "Instruction" cache is l1i_size, whatever order the indices list them in;
+ * a level 1 "Unified" cache (or one with no readable type) fills whichever
+ * of the two no dedicated entry claimed.  Levels 2 and 3 take any type but
+ * "Instruction".  The line size is the L1 data cache's, else the first
+ * readable one, else DATASPEED_DEFAULT_LINE_SIZE.  An entry whose level does
+ * not parse is skipped; the scan ends at the first index with no level. */
+DK_FN_UNUSED static void dataspeedCacheFromSysfs_(dataspeedCacheInfo *cache,
+                                                  dataspeedSysfsReadFn read,
+                                                  void *ctx) {
+    bool l1dDedicated = false;
+    bool l1iDedicated = false;
+    size_t l1dLine = 0;
+    size_t firstLine = 0;
+
+    for (int32_t index = 0; index < DATASPEED_SYSFS_MAX_INDEX; index++) {
+        char buf[64];
+        uint64_t level = 0;
+        if (!read(ctx, index, "level", buf, sizeof(buf))) {
+            break; /* no more entries */
+        }
+
+        if (!dataspeedParseSysfsUInt_(buf, 16, &level)) {
+            continue;
+        }
+
+        char type[32] = {0};
+        if (!read(ctx, index, "type", type, sizeof(type))) {
+            type[0] = '\0';
+        }
+
+        const bool data = dataspeedSysfsTypeIs_(type, "Data");
+        const bool instruction = dataspeedSysfsTypeIs_(type, "Instruction");
+
+        size_t size = 0;
+        const bool hasSize = read(ctx, index, "size", buf, sizeof(buf)) &&
+                             dataspeedParseCacheSize_(buf, &size);
+
+        uint64_t line = 0;
+        const bool hasLine =
+            read(ctx, index, "coherency_line_size", buf, sizeof(buf)) &&
+            dataspeedParseSysfsUInt_(buf, DATASPEED_MAX_LINE_SIZE, &line) &&
+            line > 0;
+        if (hasLine && firstLine == 0) {
+            firstLine = (size_t)line;
+        }
+
+        if (level == 1) {
+            if (instruction) {
+                if (hasSize) {
+                    cache->l1i_size = size;
+                }
+                l1iDedicated = true;
+            } else if (data) {
+                if (hasSize) {
+                    cache->l1d_size = size;
+                }
+                if (hasLine) {
+                    l1dLine = (size_t)line;
+                }
+                l1dDedicated = true;
+            } else {
+                /* Unified, or of unknown type */
+                if (!l1dDedicated && hasSize) {
+                    cache->l1d_size = size;
+                }
+                if (!l1dDedicated && hasLine) {
+                    l1dLine = (size_t)line;
+                }
+                if (!l1iDedicated && hasSize) {
+                    cache->l1i_size = size;
+                }
+            }
+        } else if (hasSize && !instruction) {
+            if (level == 2) {
+                cache->l2_size = size;
+            } else if (level == 3) {
+                cache->l3_size = size;
+            }
+        }
+    }
+
+    cache->line_size = l1dLine     ? l1dLine
+                       : firstLine ? firstLine
+                                   : DATASPEED_DEFAULT_LINE_SIZE;
+}
+
+/* Decode Apple's hw.* cache sysctls into 'cache'.  Missing or nonpositive
+ * values stay 0 (unknown); a missing or out-of-range line size is
+ * DATASPEED_DEFAULT_LINE_SIZE. */
+DK_FN_UNUSED static void dataspeedCacheFromSysctl_(dataspeedCacheInfo *cache,
+                                                   dataspeedSysctlReadFn read,
+                                                   void *ctx) {
+    const struct {
+        const char *name;
+        size_t *dst;
+    } sizes[] = {
+        {"hw.l1dcachesize", &cache->l1d_size},
+        {"hw.l1icachesize", &cache->l1i_size},
+        {"hw.l2cachesize", &cache->l2_size},
+        {"hw.l3cachesize", &cache->l3_size},
+    };
+
+    for (size_t i = 0; i < sizeof(sizes) / sizeof(*sizes); i++) {
+        int64_t value = 0;
+        if (read(ctx, sizes[i].name, &value) && value > 0) {
+            *sizes[i].dst = (size_t)value;
+        }
+    }
+
+    int64_t line = 0;
+    const bool lineOk = read(ctx, "hw.cachelinesize", &line) && line > 0 &&
+                        line <= DATASPEED_MAX_LINE_SIZE;
+    cache->line_size = lineOk ? (size_t)line : DATASPEED_DEFAULT_LINE_SIZE;
+}
+
+#if defined(__linux__)
+static bool dataspeedSysfsReadFile_(void *ctx, int32_t index, const char *attr,
+                                    char *buf, size_t len) {
+    (void)ctx;
+    char path[128];
+    snprintf(path, sizeof(path),
+             "/sys/devices/system/cpu/cpu0/cache/index%" PRId32 "/%s", index,
+             attr);
+    return dataspeedReadLine_(path, buf, len);
+}
+#endif
+
+#if defined(__APPLE__)
+/* hw.* integer sysctls are int64_t, but accept a 32-bit one too: reading
+ * an int64_t sysctl into a smaller buffer fails outright */
+static bool dataspeedSysctlReadInt_(void *ctx, const char *name,
+                                    int64_t *value) {
+    (void)ctx;
+    union {
+        int64_t i64;
+        int32_t i32;
+    } got = {0};
+    size_t len = sizeof(got);
+    if (sysctlbyname(name, &got, &len, NULL, 0) != 0) {
+        return false;
+    }
+
+    if (len == sizeof(int64_t)) {
+        *value = got.i64;
+    } else if (len == sizeof(int32_t)) {
+        *value = got.i32;
+    } else {
+        return false;
+    }
+
+    return true;
+}
+#endif
+
+/* ============================================================================
  * System Information Detection
  * ============================================================================
  */
@@ -285,33 +470,8 @@ void dataspeedGetSystemInfo(dataspeedSystemInfo *info) {
     sysctlbyname("hw.ncpu", &cpu_count, &len, NULL, 0);
     info->cpu_count = cpu_count > 0 ? cpu_count : 1;
 
-    /* Cache sizes */
-    size_t cache_size = 0;
-    len = sizeof(cache_size);
-    if (sysctlbyname("hw.l1dcachesize", &cache_size, &len, NULL, 0) == 0) {
-        info->cache.l1d_size = cache_size;
-    }
-    len = sizeof(cache_size);
-    if (sysctlbyname("hw.l1icachesize", &cache_size, &len, NULL, 0) == 0) {
-        info->cache.l1i_size = cache_size;
-    }
-    len = sizeof(cache_size);
-    if (sysctlbyname("hw.l2cachesize", &cache_size, &len, NULL, 0) == 0) {
-        info->cache.l2_size = cache_size;
-    }
-    len = sizeof(cache_size);
-    if (sysctlbyname("hw.l3cachesize", &cache_size, &len, NULL, 0) == 0) {
-        info->cache.l3_size = cache_size;
-    }
-
-    /* Cache line size */
-    int line_size = 0;
-    len = sizeof(line_size);
-    if (sysctlbyname("hw.cachelinesize", &line_size, &len, NULL, 0) == 0) {
-        info->cache.line_size = line_size;
-    } else {
-        info->cache.line_size = 64; /* Default assumption */
-    }
+    /* Cache sizes and line size */
+    dataspeedCacheFromSysctl_(&info->cache, dataspeedSysctlReadInt_, NULL);
 
     /* Total memory */
     int64_t memsize = 0;
@@ -345,55 +505,12 @@ void dataspeedGetSystemInfo(dataspeedSystemInfo *info) {
         fclose(fp);
     }
 
-    /* CPU count */
-    info->cpu_count = sysconf(_SC_NPROCESSORS_ONLN);
-    if (info->cpu_count == 0) {
-        info->cpu_count = 1;
-    }
+    /* CPU count (sysconf returns -1 when it cannot tell) */
+    const int64_t onlineCpus = sysconf(_SC_NPROCESSORS_ONLN);
+    info->cpu_count = onlineCpus > 0 ? (size_t)onlineCpus : 1;
 
-    /* Cache sizes from sysfs */
-    char path[256];
-    for (int i = 0; i < 4; i++) {
-        snprintf(path, sizeof(path),
-                 "/sys/devices/system/cpu/cpu0/cache/index%d/size", i);
-        fp = fopen(path, "r");
-        if (fp) {
-            char buf[32];
-            size_t size = 0;
-            /* A malformed size leaves this cache level unreported */
-            if (fgets(buf, sizeof(buf), fp) &&
-                dataspeedParseCacheSize_(buf, &size)) {
-                snprintf(path, sizeof(path),
-                         "/sys/devices/system/cpu/cpu0/cache/index%d/level", i);
-                char levelBuf[32];
-                uint64_t level = 0;
-                if (dataspeedReadLine_(path, levelBuf, sizeof(levelBuf)) &&
-                    dataspeedParseSysfsUInt_(levelBuf, 16, &level)) {
-                    if (level == 1) {
-                        info->cache.l1d_size = size;
-                    } else if (level == 2) {
-                        info->cache.l2_size = size;
-                    } else if (level == 3) {
-                        info->cache.l3_size = size;
-                    }
-                }
-            }
-            fclose(fp);
-        }
-    }
-
-    /* Cache line size */
-    snprintf(path, sizeof(path),
-             "/sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size");
-    char lineBuf[32];
-    uint64_t lineSize = 0;
-    if (dataspeedReadLine_(path, lineBuf, sizeof(lineBuf)) &&
-        dataspeedParseSysfsUInt_(lineBuf, 1 << 20, &lineSize)) {
-        info->cache.line_size = (size_t)lineSize;
-    }
-    if (info->cache.line_size == 0) {
-        info->cache.line_size = 64;
-    }
+    /* Cache sizes and line size from sysfs */
+    dataspeedCacheFromSysfs_(&info->cache, dataspeedSysfsReadFile_, NULL);
 
     /* Total memory */
     info->total_memory =
@@ -1393,6 +1510,221 @@ int dataspeedTest(int argc, char *argv[]) {
         assert(results.float_add_gops > 0.1);
         assert(results.call_overhead_ns > 0);
         assert(results.call_overhead_ns < 1000); /* Should be < 1us */
+    }
+
+    TEST_FINAL_RESULT;
+}
+
+/* A sample sysfs cache directory: one attribute value per row */
+typedef struct dataspeedSysfsRow_ {
+    int32_t index;
+    const char *attr;
+    const char *value;
+} dataspeedSysfsRow_;
+
+typedef struct dataspeedSysfsLayout_ {
+    const dataspeedSysfsRow_ *rows;
+    size_t count;
+} dataspeedSysfsLayout_;
+
+static bool dataspeedSysfsReadSample_(void *ctx, int32_t index,
+                                      const char *attr, char *buf, size_t len) {
+    const dataspeedSysfsLayout_ *layout = ctx;
+    for (size_t i = 0; i < layout->count; i++) {
+        if (layout->rows[i].index == index &&
+            strcmp(layout->rows[i].attr, attr) == 0) {
+            snprintf(buf, len, "%s", layout->rows[i].value);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/* A sample sysctl namespace: name and value per row */
+typedef struct dataspeedSysctlRow_ {
+    const char *name;
+    int64_t value;
+} dataspeedSysctlRow_;
+
+typedef struct dataspeedSysctlLayout_ {
+    const dataspeedSysctlRow_ *rows;
+    size_t count;
+} dataspeedSysctlLayout_;
+
+static bool dataspeedSysctlReadSample_(void *ctx, const char *name,
+                                       int64_t *value) {
+    const dataspeedSysctlLayout_ *layout = ctx;
+    for (size_t i = 0; i < layout->count; i++) {
+        if (strcmp(layout->rows[i].name, name) == 0) {
+            *value = layout->rows[i].value;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+#define DS_LAYOUT_(rows) {(rows), sizeof(rows) / sizeof(*(rows))}
+
+static int dataspeedCheckCache_(const char *what, const dataspeedCacheInfo *got,
+                                const dataspeedCacheInfo *want) {
+    int err = 0;
+    if (got->l1d_size != want->l1d_size || got->l1i_size != want->l1i_size ||
+        got->l2_size != want->l2_size || got->l3_size != want->l3_size ||
+        got->line_size != want->line_size) {
+        ERR("%s: got l1d %zu l1i %zu l2 %zu l3 %zu line %zu; want l1d %zu "
+            "l1i %zu l2 %zu l3 %zu line %zu",
+            what, got->l1d_size, got->l1i_size, got->l2_size, got->l3_size,
+            got->line_size, want->l1d_size, want->l1i_size, want->l2_size,
+            want->l3_size, want->line_size);
+    }
+    return err;
+}
+
+int dataspeedParseTest(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+    int err = 0;
+
+    TEST("sysfs number parsers") {
+        size_t bytes = 7;
+        assert(dataspeedParseCacheSize_("32K\n", &bytes) && bytes == 32768);
+        assert(dataspeedParseCacheSize_("8M\n", &bytes) &&
+               bytes == 8 * 1024 * 1024);
+        assert(dataspeedParseCacheSize_("64", &bytes) && bytes == 64);
+        bytes = 7;
+        assert(!dataspeedParseCacheSize_("", &bytes) && bytes == 7);
+        assert(!dataspeedParseCacheSize_("-1K\n", &bytes) && bytes == 7);
+        assert(!dataspeedParseCacheSize_(" 32K\n", &bytes) && bytes == 7);
+        assert(!dataspeedParseCacheSize_("32KB\n", &bytes) && bytes == 7);
+        assert(!dataspeedParseCacheSize_("18014398509481984K", &bytes) &&
+               bytes == 7);
+        assert(!dataspeedParseCacheSize_("18446744073709551616\n", &bytes) &&
+               bytes == 7);
+
+        uint64_t v = 7;
+        assert(dataspeedParseSysfsUInt_("64\n", 1 << 20, &v) && v == 64);
+        assert(dataspeedParseSysfsUInt_("16", 16, &v) && v == 16);
+        v = 7;
+        assert(!dataspeedParseSysfsUInt_("17\n", 16, &v) && v == 7);
+        assert(!dataspeedParseSysfsUInt_("-1\n", UINT64_MAX, &v) && v == 7);
+        assert(!dataspeedParseSysfsUInt_("1x\n", 16, &v) && v == 7);
+        assert(!dataspeedParseSysfsUInt_("\n", 16, &v) && v == 7);
+        assert(
+            !dataspeedParseSysfsUInt_("99999999999999999999", UINT64_MAX, &v) &&
+            v == 7);
+        (void)bytes;
+        (void)v;
+    }
+
+    TEST("sysfs: L1 data size comes from the Data entry, not the last L1") {
+        /* x86 order: index0 L1d, index1 L1i (read last, and larger) */
+        static const dataspeedSysfsRow_ x86[] = {
+            {0, "level", "1\n"},     {0, "type", "Data\n"},
+            {0, "size", "48K\n"},    {0, "coherency_line_size", "64\n"},
+            {1, "level", "1\n"},     {1, "type", "Instruction\n"},
+            {1, "size", "32K\n"},    {1, "coherency_line_size", "64\n"},
+            {2, "level", "2\n"},     {2, "type", "Unified\n"},
+            {2, "size", "2048K\n"},  {2, "coherency_line_size", "64\n"},
+            {3, "level", "3\n"},     {3, "type", "Unified\n"},
+            {3, "size", "36864K\n"}, {3, "coherency_line_size", "64\n"},
+        };
+        dataspeedSysfsLayout_ layout = DS_LAYOUT_(x86);
+        dataspeedCacheInfo got = {0};
+        dataspeedCacheFromSysfs_(&got, dataspeedSysfsReadSample_, &layout);
+        const dataspeedCacheInfo want = {.l1d_size = 48 * 1024,
+                                         .l1i_size = 32 * 1024,
+                                         .l2_size = 2048 * 1024,
+                                         .l3_size = 36864 * 1024,
+                                         .line_size = 64};
+        err += dataspeedCheckCache_("x86 layout", &got, &want);
+    }
+
+    TEST("sysfs: instruction cache listed first, distinct line sizes") {
+        static const dataspeedSysfsRow_ armish[] = {
+            {0, "level", "1\n"},   {0, "type", "Instruction\n"},
+            {0, "size", "192K\n"}, {0, "coherency_line_size", "128\n"},
+            {1, "level", "1\n"},   {1, "type", "Data\n"},
+            {1, "size", "128K\n"}, {1, "coherency_line_size", "64\n"},
+            {2, "level", "2\n"},   {2, "type", "Unified\n"},
+            {2, "size", "12M\n"},
+        };
+        dataspeedSysfsLayout_ layout = DS_LAYOUT_(armish);
+        dataspeedCacheInfo got = {0};
+        dataspeedCacheFromSysfs_(&got, dataspeedSysfsReadSample_, &layout);
+        const dataspeedCacheInfo want = {.l1d_size = 128 * 1024,
+                                         .l1i_size = 192 * 1024,
+                                         .l2_size = 12 * 1024 * 1024,
+                                         .line_size = 64};
+        err += dataspeedCheckCache_("instruction-first layout", &got, &want);
+    }
+
+    TEST("sysfs: unified or untyped L1, skipped and malformed entries") {
+        static const dataspeedSysfsRow_ unified[] = {
+            {0, "level", "1\n"},
+            {0, "size", "16K\n"}, /* no type file: unified */
+            {1, "level", "x\n"},  /* unparsable level: skipped */
+            {1, "type", "Data\n"},
+            {1, "size", "999K\n"},
+            {2, "level", "2\n"},
+            {2, "type", "Instruction\n"}, /* not a data or unified L2 */
+            {2, "size", "64K\n"},
+            {3, "level", "2\n"},
+            {3, "type", "Unified\n"},
+            {3, "size", "256KB\n"}, /* malformed size: unknown */
+            {3, "coherency_line_size", "32\n"},
+            {5, "level", "3\n"}, /* after the gap at index 4: not read */
+            {5, "size", "8M\n"},
+        };
+        dataspeedSysfsLayout_ layout = DS_LAYOUT_(unified);
+        dataspeedCacheInfo got = {0};
+        dataspeedCacheFromSysfs_(&got, dataspeedSysfsReadSample_, &layout);
+        const dataspeedCacheInfo want = {
+            .l1d_size = 16 * 1024, .l1i_size = 16 * 1024, .line_size = 32};
+        err += dataspeedCheckCache_("unified layout", &got, &want);
+    }
+
+    TEST("sysfs: no cache entries at all") {
+        static const dataspeedSysfsRow_ none[] = {{9, "level", "1\n"}};
+        dataspeedSysfsLayout_ layout = DS_LAYOUT_(none);
+        dataspeedCacheInfo got = {0};
+        dataspeedCacheFromSysfs_(&got, dataspeedSysfsReadSample_, &layout);
+        const dataspeedCacheInfo want = {.line_size =
+                                             DATASPEED_DEFAULT_LINE_SIZE};
+        err += dataspeedCheckCache_("empty layout", &got, &want);
+    }
+
+    TEST("sysctl: Apple hw.* layout") {
+        static const dataspeedSysctlRow_ apple[] = {
+            {"hw.l1dcachesize", 65536},
+            {"hw.l1icachesize", 131072},
+            {"hw.l2cachesize", 4194304},
+            {"hw.cachelinesize", 128},
+        };
+        dataspeedSysctlLayout_ layout = DS_LAYOUT_(apple);
+        dataspeedCacheInfo got = {0};
+        dataspeedCacheFromSysctl_(&got, dataspeedSysctlReadSample_, &layout);
+        const dataspeedCacheInfo want = {.l1d_size = 65536,
+                                         .l1i_size = 131072,
+                                         .l2_size = 4194304,
+                                         .line_size = 128};
+        err += dataspeedCheckCache_("apple sysctls", &got, &want);
+    }
+
+    TEST("sysctl: missing and nonsensical values") {
+        static const dataspeedSysctlRow_ odd[] = {
+            {"hw.l1dcachesize", 0},
+            {"hw.l1icachesize", -1},
+            {"hw.l3cachesize", 33554432},
+            {"hw.cachelinesize", INT64_C(1) << 40},
+        };
+        dataspeedSysctlLayout_ layout = DS_LAYOUT_(odd);
+        dataspeedCacheInfo got = {0};
+        dataspeedCacheFromSysctl_(&got, dataspeedSysctlReadSample_, &layout);
+        const dataspeedCacheInfo want = {
+            .l3_size = 33554432, .line_size = DATASPEED_DEFAULT_LINE_SIZE};
+        err += dataspeedCheckCache_("odd sysctls", &got, &want);
     }
 
     TEST_FINAL_RESULT;

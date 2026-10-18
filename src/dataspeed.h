@@ -196,5 +196,8 @@ void dataspeedRunWithConfig(dataspeedReport *report,
                             const dataspeedConfig *config);
 
 #ifdef DATAKIT_TEST
+/* The benchmarks themselves: timing-sensitive, so not in ctest */
 int dataspeedTest(int argc, char *argv[]);
+/* Deterministic: cache-layout and number parsing on sample input */
+int dataspeedParseTest(int argc, char *argv[]);
 #endif
