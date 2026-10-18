@@ -2381,8 +2381,7 @@ static void *intsetBigPersistRestore(const uint8_t *data, size_t len) {
     flexEntry *fe = flexHead(f);
     for (size_t i = 0; i < count && fe; i++) {
         databoxBig dbig;
-        DATABOX_BIG_INIT(&dbig);
-        flexGetByType(fe, (databox *)&dbig);
+        flexGetByTypeBig(fe, &dbig);
         switch (dbig.type) {
         case DATABOX_SIGNED_64:
         case DATABOX_UNSIGNED_64:
@@ -2900,8 +2899,7 @@ static void *multimapPersistRestore(const uint8_t *data, size_t len) {
     for (size_t e = 0; e < numEntries; e++) {
         /* Read elementsPerEntry databoxes for one entry */
         for (uint32_t i = 0; i < elementsPerEntry; i++) {
-            DATABOX_BIG_INIT(&elementStorage[i]);
-            flexGetByType(fe, elements[i]);
+            flexGetByTypeBig(fe, &elementStorage[i]);
             fe = flexNext(f, fe);
         }
         multimapInsertFullWidth(&m, (const databox **)elements);
@@ -3016,8 +3014,7 @@ static bool multimapPersistApplyOp(void *structure, persistOp op,
         const databox *boxPtrs[32];
         flexEntry *fe = flexHead(f);
         for (size_t i = 0; i < argc; i++) {
-            DATABOX_BIG_INIT(&boxes[i]);
-            flexGetByType(fe, (databox *)&boxes[i]);
+            flexGetByTypeBig(fe, &boxes[i]);
             boxPtrs[i] = (const databox *)&boxes[i];
             fe = flexNext(f, fe);
         }
