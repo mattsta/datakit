@@ -132,7 +132,7 @@ auto-discovers CTest targets from it.
 
 **Compression & Encoding:**
 
-- [xof](docs/modules/compression/XOF.md) - XOR filter for double compression
+- [xof](docs/modules/compression/XOF.md) - XOR-encoded doubles
 - [dod](docs/modules/compression/DOD.md) - Delta-of-delta integer encoding
 - [float16](docs/modules/compression/FLOAT16.md) - Half-precision floats
 

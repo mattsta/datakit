@@ -512,13 +512,20 @@ Result: USE UNCOMPRESSED (no real savings)
 - Adjustable via `mflexStateNew(size)`
 - Buffers shrink/grow to `lenPreferred` on reset
 
-**Compression Ratio** (typical):
+**Compression Ratio** (measured by `compressionBench`, one mflex per pattern;
+"stored" is the size the mflex keeps, flex or cflex):
 
-- Repeated integers: 10-20x
-- Sequential integers: 5-10x
-- Random integers: 1-2x
-- Strings: 2-5x
-- Mixed data: 2-3x
+| Pattern                                    | Values | Flex     | Stored   | Ratio  |
+| ------------------------------------------ | ------ | -------- | -------- | ------ |
+| Repeated integers (42)                     | 512    | 1,540 B  | 23 B     | ~67x   |
+| Repeated integers (42)                     | 4096   | 12,293 B | 67 B     | ~183x  |
+| Sequential integers `0, 1, 2, ...`         | 4096   | 16,133 B | 16,133 B | 1.00x  |
+| Random 64-bit integers                     | 4096   | 40,924 B | 40,924 B | 1.00x  |
+| Strings `"user:N:session:M"`               | 4096   | 96,862 B | 37,211 B | ~2.6x  |
+| Mixed integers and `"event-N"` strings     | 4096   | 28,315 B | 12,934 B | ~2.2x  |
+
+LZ4 finds repeated byte sequences, not arithmetic patterns: sequential
+integers have no repeats, so they do not compress at all.
 
 ### Compression Overhead
 

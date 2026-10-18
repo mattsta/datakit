@@ -153,23 +153,45 @@ multimapBulkAppend(&m, batch);  // Single operation
 
 #### Compression Trade-offs
 
+The depth argument of `multilistNew(limit, depth)` is how many nodes at
+each end stay uncompressed; every node between them is LZ4 compressed, and
+depth 0 never compresses. Pushes and pops work at the ends, so a higher
+depth only saves work when access spills past the end nodes.
+
 ```c
-/* No compression: fastest access */
+/* No compression: every node stays a plain flex */
 multilist *fast = multilistNew(FLEX_CAP_LEVEL_4096, 0);
-// Push/pop: ~2.0s per 1M operations
 
-/* Moderate compression: balanced */
+/* Compress everything but the two nodes at each end */
 multilist *balanced = multilistNew(FLEX_CAP_LEVEL_4096, 2);
-// Push/pop: ~2.2s per 1M operations
-// Memory: 40-60% savings
 
-/* Aggressive compression: smallest */
+/* Compress everything but the end nodes */
 multilist *compact = multilistNew(FLEX_CAP_LEVEL_4096, 1);
-// Push/pop: ~2.5s per 1M operations
-// Memory: 60-70% savings
 ```
 
-**Guideline**: Use `compress=2` for most applications (good balance).
+Measured by `compressionBench`: 1,000,000 pushes to the tail, then 1,000,000
+pops from the head, median of 7 rounds that interleave the depths.
+
+| Data (pattern)                   | depth 0  | depth 2  | depth 1  |
+| -------------------------------- | -------- | -------- | -------- |
+| 64-bit integers `0, 1, 2, ...`   | 128 ms   | 141 ms   | 141 ms   |
+| 100-byte structured log lines    | 489 ms   | 573 ms   | 572 ms   |
+| Stored size, the same log lines  | 104.1 MB | 24.9 MB  | 24.9 MB  |
+
+These timings are from one machine: an Apple M1 Max (10 cores) on macOS
+14.8, clang 22 with the `perf` preset (`-O3 -mcpu=native -flto`). Expect
+other hardware to differ. Reproduce them with:
+
+```sh
+cmake --preset perf && cmake --build --preset perf
+./build-perf/src/datakit-test test compressionBench
+```
+
+**Guideline**: for large lists, depth 1 and depth 2 store the same bytes,
+since nearly every node is interior. Depth 2 keeps one more node at each
+end uncompressed for workloads that read just past the ends. Depth 0 makes
+pushes and pops 10-17% faster in the measurements above, at ~4x the memory
+on text like the log lines.
 
 #### Iterator vs Index Access
 

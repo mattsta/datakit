@@ -116,20 +116,25 @@ Overhead: 0.5%
 **Medium**: 16 bytes + 2 flex
 **Full**: 24 bytes + N mflex nodes
 
-**With compression** (Full variant only):
+**With compression** (Full variant only): the depth argument of
+`multilistNew(limit, depth)` is how many nodes at **each end** stay
+uncompressed for fast head/tail access; every node between them is LZ4
+compressed, and depth 0 never compresses. On a large list nearly every node
+is interior, so depths 1, 2 and 5 store almost exactly the same bytes.
 
-```c
-/* Text data compression ratios */
-No compression:     100%
-compress=1:         40-50% (aggressive)
-compress=2:         50-60% (balanced)
-compress=5:         70-80% (light)
+```text
+Measured by compressionBench (FLEX_CAP_LEVEL_4096 nodes):
+1,000,000 structured 100-byte log lines, 100 MB of text, 104.1 MB as flex
 
-/* Example: 1 million log entries, 100 bytes each */
-Uncompressed: 100 MB
-compress=1:   40 MB (60% savings)
-compress=2:   50 MB (50% savings)
+  depth 0 (never compress): 104.1 MB stored (100%)
+  depth 1:                   24.9 MB stored (23.9%, 4.18x)
+  depth 2:                   24.9 MB stored (23.9%, 4.18x)
+  depth 5:                   24.9 MB stored (23.9%, 4.18x)
 ```
+
+The ratio depends on the text: repetitive log lines compress well, random
+bytes not at all. Measure your own data with the bench (see
+[PERFORMANCE.md](PERFORMANCE.md#multilist-performance)).
 
 ### multiarray Overhead
 
@@ -300,21 +305,26 @@ Savings: 50% (16 MB)
 ### LZ4 Compression (multilist Full)
 
 ```c
-/* Log entries with repeated text */
+/* Log entries with repeated text. Depth 1: only the head and tail nodes
+ * stay uncompressed. */
 multilist *logs = multilistNew(FLEX_CAP_LEVEL_4096, 1);
-// compress=1: aggressive compression
+mflexState *state = mflexStateCreate();
 
 for (int i = 0; i < 100000; i++) {
     char entry[200];
     snprintf(entry, sizeof(entry),
              "[INFO] User %d logged in at timestamp %" PRId64,
              i % 1000, (int64_t)time(NULL));
-    databox box = databoxNewBytesString(entry);
+    const databox box = databoxNewBytesString(entry);
     multilistPushByTypeTail(&logs, state, &box);
 }
 
-/* Uncompressed: 100,000 * 200 = 20 MB */
-/* LZ4 compressed: ~4-6 MB (70-80% savings) */
+/* Each entry is ~49 bytes (the 200-byte buffer is not stored).
+ * Measured by compressionBench for this pattern: 4.9 MB of text, 5.1 MB
+ * as flex, 0.59 MB stored at depth 1 (11.7%, 8.57x). */
+
+mflexStateFree(state);
+multilistFree(logs);
 ```
 
 ## Memory Allocation Strategies
