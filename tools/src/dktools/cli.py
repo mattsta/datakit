@@ -89,10 +89,22 @@ def main(argv: list[str] | None = None) -> int:
     vf.add_argument("name", help="work-dir name under ROOT/verify")
     vf.add_argument(
         "specs",
-        nargs="+",
+        nargs="*",
         metavar="PATH[=FILE]",
         help="repo path to take from the working tree, or FILE's content "
-        "staged at PATH",
+        "staged at PATH (not with --staged or --all-changed)",
+    )
+    vf_source = vf.add_mutually_exclusive_group()
+    vf_source.add_argument(
+        "--staged",
+        action="store_true",
+        help="build exactly the current index (HEAD plus what is staged)",
+    )
+    vf_source.add_argument(
+        "--all-changed",
+        action="store_true",
+        help="build HEAD plus every tracked path that differs in the working "
+        "tree (modified, added or deleted)",
     )
     vf.add_argument("--tests", default=None, help="ctest name regex, run in parallel")
     vf.add_argument(
@@ -299,6 +311,8 @@ def _dispatch(args: argparse.Namespace) -> int:
                 targets=args.target,
                 root=args.root,
                 jobs=args.jobs,
+                staged=args.staged,
+                all_changed=args.all_changed,
             ),
         )
 

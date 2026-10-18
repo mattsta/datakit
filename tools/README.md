@@ -65,7 +65,7 @@ uncommitted work in the tree cannot make a change look good or bad:
 ```sh
 uv run --project tools dktools verify NAME --tests REGEX [--serial REGEX] \
     [--compiler clang22|gcc15] [--preset dev|debug] [--target T]... \
-    [--root DIR] [-j N] PATH[=FILE]...
+    [--root DIR] [-j N] (PATH[=FILE]... | --staged | --all-changed)
 ```
 
 - Each `PATH` takes its working-tree content (or its deletion, when it
@@ -75,6 +75,20 @@ uv run --project tools dktools verify NAME --tests REGEX [--serial REGEX] \
   `ROOT/verify/NAME/src`, then configured and built there. `ROOT` is
   `--root`, else `$DKTOOLS_SCRATCH`, else `dktools/` under the system
   temp dir.
+- Instead of `PATH`s: `--staged` builds exactly the current index
+  (HEAD plus what is staged, written from a copy of the index), so a
+  64-file vendored re-land staged by `vendorsync --stage` needs no path
+  list. `--all-changed` builds HEAD plus every tracked path that
+  differs in the working tree: modified, added to the index, or
+  deleted. Untracked files never take part. The two flags exclude each
+  other and `PATH` arguments.
+- Either flag refuses (exit 2) when the tree would be plain HEAD
+  (nothing staged, or no tracked path changed): an empty change set
+  there is a mistake, not a request. To build HEAD on purpose, name an
+  unchanged `PATH`.
+- The result's `tree` line says what was taken, and a `changed` line
+  follows for every path that differs from HEAD (`A`, `M`, `D` or `T`
+  and the path), in every mode.
 - `--tests` runs in parallel (`-j N`, default the CPU count);
   `--serial` runs one test at a time (the timing-sensitive tests, as in
   `validate`'s default serial set) and is excluded from the parallel

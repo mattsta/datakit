@@ -209,6 +209,42 @@ def build_tree(
     return git_text(repo, "write-tree", env=env)
 
 
+def index_tree(repo: Path, index_file: Path, base: str = "HEAD") -> str:
+    """Write a tree of exactly the current index.
+
+    The real index is copied to `index_file` and the tree written from
+    the copy, so the real one is never touched (``git write-tree`` may
+    otherwise rewrite it to cache the tree).  A repository without an
+    index file yet gives `base`'s tree.  Unmerged entries are an
+    error.  Returns the tree object id."""
+    env = {"GIT_INDEX_FILE": str(index_file)}
+    real = Path(
+        git_text(repo, "rev-parse", "--path-format=absolute", "--git-path", "index")
+    )
+    if real.is_file():
+        shutil.copyfile(real, index_file)
+    else:
+        git(repo, "read-tree", base, env=env)
+    return git_text(repo, "write-tree", env=env)
+
+
+def changed_paths(repo: Path, base: str = "HEAD") -> list[str]:
+    """Every tracked path whose working-tree state differs from `base`:
+    modified, added to the index, or deleted.  Untracked files are not
+    included."""
+    out = git(repo, "diff", "--name-only", "-z", "--no-renames", base, "--")
+    return split_z(out)
+
+
+def tree_changes(repo: Path, base: str, tree: str) -> list[tuple[str, str]]:
+    """(status letter, path) for each path that differs from `base` to
+    `tree` (A added, D deleted, M modified, T type changed)."""
+    fields = split_z(
+        git(repo, "diff-tree", "-r", "-z", "--no-renames", "--name-status", base, tree)
+    )
+    return [(fields[i], fields[i + 1]) for i in range(0, len(fields) - 1, 2)]
+
+
 def export_tree(repo: Path, treeish: str, dest: Path) -> None:
     """Extract ``git archive treeish`` into `dest` with tarfile."""
     dest.mkdir(parents=True, exist_ok=True)

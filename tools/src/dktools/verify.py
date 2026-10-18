@@ -4,22 +4,30 @@ Usage::
 
     dktools verify NAME --tests REGEX [--serial REGEX]
         [--compiler clang22|gcc15] [--preset dev|debug]
-        [--target T ...] [--root DIR] [-j N] PATH[=FILE]...
+        [--target T ...] [--root DIR] [-j N]
+        (PATH[=FILE]... | --staged | --all-changed)
 
 The tree under test is HEAD with each PATH replaced by its working-tree
 content (or removed, when PATH is deleted in the working tree), or
-with FILE's content staged at PATH for ``PATH=FILE``.  Nothing else
-from the working tree leaks in, and the real index is never touched:
-the tree is written through a private GIT_INDEX_FILE, exported with
-``git archive`` into ``ROOT/verify/NAME/src``, then configured and
-built there with the chosen compiler and preset (see
-``dktools.toolchain``).
+with FILE's content staged at PATH for ``PATH=FILE``.  Instead of
+PATHs, ``--staged`` takes exactly the current index (HEAD plus what
+is staged), and ``--all-changed`` takes HEAD plus every tracked path
+that differs in the working tree (modified, added to the index, or
+deleted); untracked files never take part.  Either flag refuses (exit
+2) when the result would be plain HEAD: name an unchanged PATH to
+build HEAD on purpose.  Nothing else from the working tree leaks in,
+and the real index is never touched: the tree is written through a
+private GIT_INDEX_FILE (a copy of the index for ``--staged``),
+exported with ``git archive`` into ``ROOT/verify/NAME/src``, then
+configured and built there with the chosen compiler and preset (see
+``dktools.toolchain``).  The result lists every path that differs
+from HEAD, one ``changed`` line each.
 
 ``--tests`` names the ctest tests run in parallel (``-j N``);
 ``--serial`` names tests run one at a time, such as the
 timing-sensitive tests in ``validate.DEFAULT_SERIAL``, and those are
-excluded from the parallel run.  Both are whole-name regexes, and a regex that matches no test is
-a failure.  ``allocaudit check --constructors`` runs on the tree with
+excluded from the parallel run.  Both are whole-name regexes, and a
+regex that matches no test is a failure.  ``allocaudit check --constructors`` runs on the tree with
 the tree's own dktools.
 
 Without ``--target`` the build covers the four preset targets plus
@@ -75,12 +83,14 @@ class VerifyOptions:
     targets: list[str] | None = None
     root: Path | None = None
     jobs: int | None = None
+    staged: bool = False  # the tree is exactly the current index
+    all_changed: bool = False  # HEAD plus every changed tracked path
 
 
 def parse_specs(specs: list[str]) -> list[tuple[str, Path | None]]:
     """``PATH`` or ``PATH=FILE`` arguments as (repo path, FILE or None)."""
     if not specs:
-        raise ToolError("verify needs at least one PATH")
+        raise ToolError("verify needs PATH arguments, --staged or --all-changed")
     parsed: list[tuple[str, Path | None]] = []
     for spec in specs:
         path, sep, file = spec.partition("=")
@@ -88,6 +98,50 @@ def parse_specs(specs: list[str]) -> list[tuple[str, Path | None]]:
             raise ToolError(f"{spec}: PATH=FILE needs a FILE")
         parsed.append((gitutil.repo_path(path), Path(file) if sep else None))
     return parsed
+
+
+def check_source(opts: VerifyOptions) -> str:
+    """Which tree the options select: "paths", "staged" or
+    "all-changed"; ToolError when they conflict."""
+    if opts.staged and opts.all_changed:
+        raise ToolError("--staged and --all-changed are mutually exclusive")
+    flag = "--staged" if opts.staged else "--all-changed" if opts.all_changed else ""
+    if flag and opts.specs:
+        raise ToolError(f"{flag} takes no PATH arguments (got {opts.specs[0]})")
+    return flag.lstrip("-") or "paths"
+
+
+def build_source_tree(
+    repo: Path, index_file: Path, source: str, specs: list[tuple[str, Path | None]]
+) -> tuple[str, list[tuple[str, str]]]:
+    """The tree to verify and its (status, path) changes from HEAD.
+
+    --staged and --all-changed refuse a tree that equals HEAD: an empty
+    change set there is a mistake (nothing saved or staged), not a
+    request to build HEAD."""
+    if source == "staged":
+        tree = gitutil.index_tree(repo, index_file)
+    elif source == "all-changed":
+        paths = gitutil.changed_paths(repo)
+        tree = gitutil.build_tree(repo, index_file, [(p, None) for p in paths])
+    else:
+        tree = gitutil.build_tree(repo, index_file, specs)
+    changes = gitutil.tree_changes(repo, "HEAD", tree)
+    if not changes and source != "paths":
+        what = "nothing is staged" if source == "staged" else "no tracked path changed"
+        raise ToolError(
+            f"--{source}: {what}, so the tree would be plain HEAD "
+            "(name an unchanged PATH to build HEAD on purpose)"
+        )
+    return tree, changes
+
+
+def _source_label(source: str, specs: list[tuple[str, Path | None]]) -> str:
+    if source == "staged":
+        return "the index"
+    if source == "all-changed":
+        return "all changed paths"
+    return f"{len(specs)} path(s)"
 
 
 def _ctest_line(step: Step, result: steps.CtestResult) -> str:
@@ -194,7 +248,8 @@ def run(repo: Path, opts: VerifyOptions) -> int:
         raise ToolError("verify needs --tests and/or --serial")
     if opts.jobs is not None and opts.jobs < 1:
         raise ToolError(f"-j must be at least 1 (got {opts.jobs})")
-    specs = parse_specs(opts.specs)
+    source = check_source(opts)
+    specs = parse_specs(opts.specs) if source == "paths" else []
     config = toolchain.build_config(opts.compiler, opts.preset)
     jobs = opts.jobs or os.cpu_count() or 4
 
@@ -203,7 +258,7 @@ def run(repo: Path, opts: VerifyOptions) -> int:
     src = work / "src"
 
     head = gitutil.git_text(repo, "rev-parse", "--short", "HEAD")
-    tree = gitutil.build_tree(repo, work / "index", specs)
+    tree, changes = build_source_tree(repo, work / "index", source, specs)
     gitutil.export_tree(repo, tree, src)
     config.compiler.check()
     config.check_presets_file(src)
@@ -284,7 +339,9 @@ def run(repo: Path, opts: VerifyOptions) -> int:
         build_line = f"ok, {counts}"
     lines = [
         f"verify {name}: {'PASS' if passed else 'FAIL'}",
-        f"  tree      {tree} (HEAD {head} + {len(specs)} path(s))",
+        f"  tree      {tree} (HEAD {head} + {_source_label(source, specs)}, "
+        f"{len(changes)} changed)",
+        *(f"  changed   {status} {path}" for status, path in changes),
         f"  config    {config.label}",
         f"  targets   {plan.line() if plan else '-'}",
         f"  build     {build_line}",

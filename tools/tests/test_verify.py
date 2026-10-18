@@ -603,6 +603,85 @@ class VerifyRun(unittest.TestCase):
         serial = calls["ctest-serial"]
         self.assertEqual(serial[serial.index("-j") + 1], "1")
 
+    PASSING = {"ctest": CTEST_PASS, "allocaudit": "100% clean pattern\n"}
+
+    def exported(self, rel: str) -> Path:
+        return self.root / "verify" / "t" / "src" / rel
+
+    def test_staged_builds_exactly_the_index(self) -> None:
+        self.repo.write("src/a.c", "int staged;\n")
+        self.repo.write("src/new.c", "int added;\n")
+        self.repo.git("add", "--", "src/a.c", "src/new.c")
+        self.repo.write("src/a.c", "int unstaged;\n")
+        self.repo.write("src/stray.c", "int stray;\n")
+        index = self.repo.path / ".git" / "index"
+        before = index.read_bytes()
+        code, out = self.run_verify(FakeRunner({}, self.PASSING), specs=[], staged=True)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(index.read_bytes(), before)
+        self.assertEqual(self.exported("src/a.c").read_text(), "int staged;\n")
+        self.assertTrue(self.exported("src/new.c").exists())
+        self.assertFalse(self.exported("src/stray.c").exists())
+        self.assertIn("(HEAD ", out)
+        self.assertIn(" + the index, 2 changed)\n", out)
+        self.assertIn("  changed   M src/a.c\n  changed   A src/new.c\n", out)
+
+    def test_all_changed_builds_every_changed_tracked_path(self) -> None:
+        self.repo.write("src/gone.c", "int gone;\n")
+        self.repo.write("src/same.c", "int same;\n")
+        self.repo.commit("more", "src/gone.c", "src/same.c")
+        self.repo.write("src/a.c", "int worktree;\n")
+        (self.repo.path / "src" / "gone.c").unlink()
+        self.repo.write("src/added.c", "int added;\n")
+        self.repo.git("add", "--", "src/added.c")
+        self.repo.write("src/stray.c", "int stray;\n")
+        code, out = self.run_verify(
+            FakeRunner({}, self.PASSING), specs=[], all_changed=True
+        )
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.exported("src/a.c").read_text(), "int worktree;\n")
+        self.assertTrue(self.exported("src/added.c").exists())
+        self.assertTrue(self.exported("src/same.c").exists())
+        self.assertFalse(self.exported("src/gone.c").exists())
+        self.assertFalse(self.exported("src/stray.c").exists())
+        self.assertIn(" + all changed paths, 3 changed)\n", out)
+        for line in ("M src/a.c", "A src/added.c", "D src/gone.c"):
+            self.assertIn(f"  changed   {line}\n", out)
+        self.assertNotIn("same.c", out)
+
+    def test_staged_and_all_changed_refuse_plain_head(self) -> None:
+        self.repo.write("src/stray.c", "int stray;\n")  # untracked: not a change
+        for kw in ({"staged": True}, {"all_changed": True}):
+            with self.subTest(kw=kw):
+                with self.assertRaisesRegex(ToolError, "plain HEAD"):
+                    self.run_verify(FakeRunner({}, self.PASSING), specs=[], **kw)
+        # An unchanged PATH builds plain HEAD on purpose.
+        code, out = self.run_verify(FakeRunner({}, self.PASSING), specs=["src/a.c"])
+        self.assertEqual(code, 0, out)
+        self.assertIn(" + 1 path(s), 0 changed)\n", out)
+
+    def test_source_flags_conflict(self) -> None:
+        for kw in (
+            {"staged": True},
+            {"all_changed": True},
+            {"specs": [], "staged": True, "all_changed": True},
+            {"specs": []},
+        ):
+            with self.subTest(kw=kw), self.assertRaises(ToolError):
+                self.run_verify(FakeRunner({}, self.PASSING), **kw)
+
+    def test_cli_staged_with_paths_is_an_input_error(self) -> None:
+        err = io.StringIO()
+        argv = ["--repo", str(self.repo.path), "verify", "t", "--tests", "x"]
+        argv += ["--root", str(self.root), "--staged", "src/a.c"]
+        with contextlib.redirect_stderr(err):
+            code = cli.main(argv)
+        self.assertEqual(code, 2)
+        self.assertEqual(
+            err.getvalue().strip(),
+            "dktools verify: --staged takes no PATH arguments (got src/a.c)",
+        )
+
     def test_input_errors(self) -> None:
         for kw in (
             {"specs": ["missing.c"]},
