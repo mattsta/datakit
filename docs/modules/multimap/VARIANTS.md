@@ -185,7 +185,9 @@ return (head <= key) ? 1 : 0;
 ```
 
 So a Medium lookup is O(1) routing plus one binary search over roughly half the
-rows.
+rows. The head of `map[1]` is decoded into a `databoxBig` temporary (resolving
+a reference through the atom container on surrogate-keyed maps), so a
+96/128-bit head key is compared by value.
 
 ### Characteristics
 
@@ -265,7 +267,7 @@ From `multimapFullInternal.h`:
 struct multimapFull {
     multiarray *map;           /* flex *; maps in low->high order */
     multiarray *middle;        /* multimapFullMiddle; middle byte offsets */
-    multiarray *rangeBox;      /* databox; head key of maps 1..N-1 */
+    multiarray *rangeBox;      /* databoxBig; head key of maps 1..N-1 */
     multimapFullIdx count;     /* number of submaps */
     multimapFullValues values; /* total rows across every submap */
     multimapElements elementsPerEntry;
@@ -424,6 +426,12 @@ Range boxes may own an allocation (a copy of the head key's bytes) or point
 into the submap's flex. Any in-submap mutation that can realloc the flex -
 replace, resize, field increment - refreshes the owning rangeBox afterwards, so
 a stale box can never survive into the next range search.
+
+Each range box is a 32-byte `databoxBig`, so a 96/128-bit head key is stored
+inline in its `extra` (`big = 1`, never heap-owned). The multiarray moves
+entries as submaps are added, removed and regrouped, which leaves that inline
+pointer aimed at the old slot, so every access goes through `getRangeBox()`,
+which re-aims it.
 
 ## multimapAtom
 

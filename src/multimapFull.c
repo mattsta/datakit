@@ -34,7 +34,7 @@ defcleaner(flex *, flexFree);
 #define CACHE_FILL 65536
 #define MAP_STORAGE_MAX (CACHE_FILL / (sizeof(flex *)))
 #define MIDDLE_STORAGE_MAX (CACHE_FILL / sizeof(multimapFullMiddle))
-#define RANGEBOX_STORAGE_MAX (CACHE_FILL / (sizeof(databox)))
+#define RANGEBOX_STORAGE_MAX (CACHE_FILL / (sizeof(databoxBig)))
 
 /* Create new array entries at 'idx' and populate them with values */
 #define reallocIncrCount(m, idx, newMap, newMiddle, newRangeBox)               \
@@ -53,7 +53,7 @@ defcleaner(flex *, flexFree);
             assert((m)->count > 0);                                            \
             /* Use (count - 1) because there's no rangeBox for map[0] */       \
             enterCount_ = (m)->count - 1;                                      \
-            multiarrayNativeInsert((m)->rangeBox, databox,                     \
+            multiarrayNativeInsert((m)->rangeBox, databoxBig,                  \
                                    RANGEBOX_STORAGE_MAX, enterCount_,          \
                                    (idx) - 1, &(newRangeBox));                 \
         }                                                                      \
@@ -93,7 +93,7 @@ defcleaner(flex *, flexFree);
                 databoxFreeData(rangeBox_);                                    \
             }                                                                  \
                                                                                \
-            multiarrayNativeDelete((m)->rangeBox, databox, enterCount_,        \
+            multiarrayNativeDelete((m)->rangeBox, databoxBig, enterCount_,     \
                                    whichIdx);                                  \
         }                                                                      \
                                                                                \
@@ -130,10 +130,19 @@ static inline multimapFullMiddle getMiddle(const multimapFull *m,
     return *middle;
 }
 
+/* Each rangeBox is a databoxBig, so a 96/128-bit head key is stored inline
+ * in its 'extra' (big = 1, allocated = 0) and never owns a heap payload.
+ * The multiarray moves entries when it inserts, deletes or regroups them,
+ * which leaves an inline payload pointer aimed at the old slot, so every
+ * access goes through here and re-aims it. */
 static inline databox *getRangeBox(const multimapFull *m, multimapFullIdx idx) {
-    databox *box;
-    multiarrayNativeGet(m->rangeBox, databox, box, idx);
-    return box;
+    databoxBig *box;
+    multiarrayNativeGet(m->rangeBox, databoxBig, box, idx);
+    if (box->big) {
+        box->data.u128 = (__uint128_t *)box->extra;
+    }
+
+    return (databox *)box;
 }
 
 static inline void setMiddle(multimapFull *m, multimapFullIdx idx,
@@ -163,7 +172,10 @@ static inline void setMiddle(multimapFull *m, multimapFullIdx idx,
         /* TODO: optimize rangeBox to only update if head changed? */          \
         if ((idx) > 0 && flexCount(map_) > 0) {                                \
             /* Minus one becase rangeBox[0] is for map[1], etc */              \
-            flexGetByType(flexHead(map_), getRangeBox(m, (idx) - 1));          \
+            databox *rangeBox_ = getRangeBox(m, (idx) - 1);                    \
+            /* The decode resets 'allocated', so release a copy first */       \
+            databoxFreeData(rangeBox_);                                        \
+            flexGetByTypeBig(flexHead(map_), (databoxBig *)rangeBox_);         \
         }                                                                      \
     } while (0)
 
@@ -183,9 +195,13 @@ static inline void setMiddle(multimapFull *m, multimapFullIdx idx,
             databoxFreeData(rangeBox);                                         \
                                                                                \
             /* This looks weird, but we want to COPY the value inside rangeBox \
-             * if it is referencing data inside 'map_' */                      \
-            flexGetByTypeWithReference(flexHead(map_), rangeBox, ref);         \
-            (void)databoxAllocateIfNeeded(rangeBox);                           \
+             * if it is referencing data inside 'map_'.  A 96/128-bit value    \
+             * already lives in the rangeBox's own 'extra'. */                 \
+            multimapGetByTypeBig_(flexHead(map_), (databoxBig *)rangeBox,      \
+                                  ref);                                        \
+            if (!rangeBox->big) {                                              \
+                (void)databoxAllocateIfNeeded(rangeBox);                       \
+            }                                                                  \
         }                                                                      \
     } while (0)
 
@@ -209,17 +225,18 @@ static inline void setMiddle(multimapFull *m, multimapFullIdx idx,
 #define updateRangeBoxForIdxAfterInMapMutation(m, idx, map_)                   \
     do {                                                                       \
         if ((idx) > 0 && flexCount(map_) > 0) {                                \
-            /* zero-init: flexGetByType sets type/len/data but leaves          \
-             * flag bits (e.g. .allocated) untouched, and a garbage            \
-             * .allocated stored into the rangeBox becomes a bad free          \
-             * on the next refresh */                                          \
-            databox mutatedHead_ = {{0}};                                      \
-            flexGetByType(flexHead(map_), &mutatedHead_);                      \
+            /* flexGetByTypeBig resets every flag bit (a garbage .allocated    \
+             * stored into the rangeBox would become a bad free on the next    \
+             * refresh) and gives a wide head key its own storage */           \
+            databoxBig mutatedHead_;                                           \
+            flexGetByTypeBig(flexHead(map_), &mutatedHead_);                   \
             if (mutatedHead_.type != DATABOX_CONTAINER_REFERENCE_EXTERNAL) {   \
                 /* Minus one because rangeBox[0] is for map[1], etc */         \
                 databox *rangeBox_ = getRangeBox(m, (idx) - 1);                \
                 databoxFreeData(rangeBox_);                                    \
-                *rangeBox_ = mutatedHead_;                                     \
+                /* re-homes a wide payload into the rangeBox's 'extra' */      \
+                databoxBigCopyFrom((databoxBig *)rangeBox_,                    \
+                                   (const databox *)&mutatedHead_);            \
             }                                                                  \
         }                                                                      \
     } while (0)
@@ -230,7 +247,7 @@ static inline void setMiddle(multimapFull *m, multimapFullIdx idx,
  * Creation
  * ==================================================================== */
 static const multimapFull multimapFullNull = {0};
-static const databox rangeBoxNull = {{0}};
+static const databoxBig rangeBoxNull = {{0}};
 
 multimapFull *multimapFullNew(multimapElements elementsPerEntry) {
     /* @own: caller; free=multimapFullFree */
@@ -613,7 +630,7 @@ size_t multimapFullBytesFull(const multimapFull *m) {
      * have grown to individual types, etc, but we don't have
      * multiarrayBytes() implemented yet! */
     Bytes += sizeof(*m);
-    Bytes += sizeof(databox) * (m->count - 1);
+    Bytes += sizeof(databoxBig) * (m->count - 1);
     Bytes += sizeof(multimapFullMiddle) * m->count;
     Bytes += sizeof(flex *) * m->count;
 
@@ -1147,23 +1164,17 @@ int64_t multimapFullFieldIncr(multimapFull *m, const databox *key,
         return newVal;
     }
 
-    /* (unlikely) else, return current value */
-    databox curVal = {{0}};
-    flexGetByType(current, &curVal);
-    return curVal.data.i;
+    /* (unlikely) else, return current value; a 96/128-bit value can't be
+     * read as int64_t, so it reports 0 */
+    databoxBig curVal;
+    flexGetByTypeBig(current, &curVal);
+    return curVal.big ? 0 : curVal.data.i;
 }
 
 /* ====================================================================
  * Debuggles API
  * ==================================================================== */
 DK_FN_UNUSED static void strictConsistencyCheck(const multimapFull *m) {
-    databox key;
-    databox b;
-    databox c;
-    databox d;
-    multimapIterator iter;
-    databox *ele[4] = {&key, &b, &c, &d};
-
     /* Verify all range boxes are not sequentially equal... */
     /* Note: will fail if duplicate keys are allowed, kinda obviously. */
     databox *rangeBoxPrev;
@@ -1176,28 +1187,39 @@ DK_FN_UNUSED static void strictConsistencyCheck(const multimapFull *m) {
         rangeBoxPrev = box;
     }
 
+    /* Walk only the key of each row, so any row width works. */
     bool isFirst = true;
-    multimapFullIteratorInit((multimapFull *)m, &iter, true);
-    databox prev;
-    while (multimapFullIteratorNext(&iter, ele)) {
-        if (isFirst) {
-            prev = key;
-            isFirst = false;
-            continue;
-        }
+    databoxBig prev;
+    for (multimapFullIdx i = 0; i < m->count; i++) {
+        const flex *map = getMap(m, i);
+        flexEntry *fe = flexCount(map) ? flexHead(map) : NULL;
+        while (fe) {
+            databoxBig key;
+            flexGetByTypeBig(fe, &key);
+            for (multimapElements e = 0; fe && e < m->elementsPerEntry; e++) {
+                fe = flexNext(map, fe);
+            }
 
-        /* Consistency means previous element is EITHER:
-         *  - less than current element, OR
-         *  - equals current element (we allow duplicate keys)
-         */
-        /* Also: 'reference' types don't sort based on their own equality
-         * because they may be part of a self-sorting foreign key list. */
-        if (prev.type != DATABOX_CONTAINER_REFERENCE_EXTERNAL &&
-            key.type != DATABOX_CONTAINER_REFERENCE_EXTERNAL) {
-            assert(databoxCompare(&prev, &key) <= 0);
-        }
+            if (isFirst) {
+                databoxBigCopyFrom(&prev, (const databox *)&key);
+                isFirst = false;
+                continue;
+            }
 
-        prev = key;
+            /* Consistency means previous element is EITHER:
+             *  - less than current element, OR
+             *  - equals current element (we allow duplicate keys)
+             */
+            /* Also: 'reference' types don't sort based on their own
+             * equality because they may be part of a self-sorting foreign
+             * key list. */
+            if (prev.type != DATABOX_CONTAINER_REFERENCE_EXTERNAL &&
+                key.type != DATABOX_CONTAINER_REFERENCE_EXTERNAL) {
+                assert(databoxCompare((databox *)&prev, (databox *)&key) <= 0);
+            }
+
+            databoxBigCopyFrom(&prev, (const databox *)&key);
+        }
     }
 }
 
@@ -1350,19 +1372,17 @@ abstractInsert(multimapFull *m, const databox *elements[],
                  * range boxes because map[0] has no range box,
                  * so just use the head value directly for insert
                  * comparisons. */
-                databox got;
+                databoxBig got;
                 const flexEntry *fe = flexHead(*map);
-                if (useSurrogateKey) {
-                    flexGetByTypeWithReference(fe, &got, referenceContainer);
-                } else {
-                    flexGetByType(fe, &got);
-                }
+                multimapGetByTypeBig_(
+                    fe, &got, useSurrogateKey ? referenceContainer : NULL);
 
 #if NOISY_MAPPING
-                databoxReprSay("Deciding based on head[0] of:", &got);
+                databoxReprSay("Deciding based on head[0] of:",
+                               (databox *)&got);
 #endif
                 currentPositionLargerThanNewKey =
-                    databoxCompare(&got, elements[0]) > 0;
+                    databoxCompare((databox *)&got, elements[0]) > 0;
             } else {
                 /* else, this multimapFull has multiple maps,
                  * but the one we're trying to insert into ONLY
@@ -2372,9 +2392,9 @@ bool multimapFullDeleteByPredicate(multimapFull *m,
     const size_t before = flexCount(*me.map) / m->elementsPerEntry;
     int compared = 1;
     if (flexEntryIsValid(*me.map, me.fe)) {
-        databox value = {{0}};
-        flexGetByType(me.fe, &value);
-        compared = databoxCompare(&value, &p->compareAgainst);
+        databoxBig value;
+        flexGetByTypeBig(me.fe, &value);
+        compared = databoxCompare((databox *)&value, &p->compareAgainst);
     }
 
     /* see multimapSmall for comments */
@@ -2407,7 +2427,7 @@ bool multimapFullDeleteByPredicate(multimapFull *m,
 #define CTEST_INCLUDE_KVGEN
 #include "ctest.h"
 
-#include "multimap.h" /* multimapInsertReplacingSweep */
+#include "multimap.h" /* multimapInsertReplacingSweep, multimapWideSweep */
 
 #define DOUBLE_NEWLINE 0
 #include "perf.h"
@@ -2480,7 +2500,7 @@ static size_t multimapFullReport_(const multimapFull *m, const bool print) {
         Count += flexCount(getMap(m, q));
     }
 
-    size_t rangeBoxBytes = sizeof(databox) * (m->count - 1);
+    size_t rangeBoxBytes = sizeof(databoxBig) * (m->count - 1);
     size_t middleBytes = sizeof(multimapFullMiddle) * m->count;
     size_t mapPtrBytes = sizeof(flex *) * m->count;
     size_t containerBytes = sizeof(*m);
@@ -2512,9 +2532,9 @@ void multimapFullVerify(const multimapFull *m) {
         return;
     }
 
-    databox lowest = {{0}};
+    databoxBig lowest;
     size_t lowestMapIdx = 0;
-    flexGetByType(getMapLowest(m), &lowest);
+    flexGetByTypeBig(getMapLowest(m), &lowest);
 
     for (multimapFullIdx i = 0; i < m->count; i++) {
         flex *zl = getMap(m, i);
@@ -2526,28 +2546,40 @@ void multimapFullVerify(const multimapFull *m) {
          * so it must equal map[i]'s live head key, and when it holds a
          * borrowed bytes pointer, that pointer must live INSIDE the
          * current flex allocation (a stale pointer into a freed/moved
-         * allocation is a use-after-free waiting for the next search). */
+         * allocation is a use-after-free waiting for the next search).
+         * A 96/128-bit key must live inline in the rangeBox itself. */
         if (i > 0 && flexCount(zl) > 0) {
-            databox head = {{0}};
-            flexGetByType(flexHead(zl), &head);
+            databoxBig head;
+            flexGetByTypeBig(flexHead(zl), &head);
 
             const databox *rangeBox = getRangeBox(m, i - 1);
+            const databoxBig *rangeBoxBig = (const databoxBig *)rangeBox;
             if (head.type != DATABOX_CONTAINER_REFERENCE_EXTERNAL) {
-                assert(databoxCompare(&head, rangeBox) == 0);
+                assert(databoxCompare((databox *)&head, rangeBox) == 0);
                 if (rangeBox->type == DATABOX_BYTES && !rangeBox->allocated &&
                     !DATABOX_IS_BYTES_EMBED(rangeBox)) {
                     const uint8_t *start = rangeBox->data.bytes.start;
                     assert(start >= zl && start < zl + flexBytes(zl));
                 }
             }
+
+            if (rangeBox->type == DATABOX_SIGNED_128 ||
+                rangeBox->type == DATABOX_UNSIGNED_128) {
+                assert(rangeBox->big && !rangeBox->allocated);
+                assert(rangeBox->data.u128 ==
+                       (const __uint128_t *)rangeBoxBig->extra);
+            } else {
+                assert(!rangeBox->big);
+            }
         }
 
         for (multimapFullIdx j = 0; j < flexCount(zl);
              j += m->elementsPerEntry) {
-            databox next = {{0}};
-            flexGetByType(flexIndex(zl, j), &next);
+            databoxBig next;
+            flexGetByTypeBig(flexIndex(zl, j), &next);
 
-            if (i > 0 && databoxCompare(&lowest, &next) > 0) {
+            if (i > 0 &&
+                databoxCompare((databox *)&lowest, (databox *)&next) > 0) {
                 printf("Lowest was previously %.*s from map %zu, but found "
                        "element %.*s at (%d, %d)\n",
                        (int)lowest.len, lowest.data.bytes.start, lowestMapIdx,
@@ -2556,7 +2588,7 @@ void multimapFullVerify(const multimapFull *m) {
                 __builtin_unreachable();
             }
 
-            lowest = next;
+            databoxBigCopyFrom(&lowest, (const databox *)&next);
             lowestMapIdx = i;
         }
     }
@@ -2579,6 +2611,10 @@ int multimapFullTest(int argc, char *argv[]) {
          * insert, so this suite runs the cross-layer sweep (defined in
          * multimap.c) as well. */
         err += multimapInsertReplacingSweep();
+    }
+
+    TEST("96/128-bit keys and values through every tier") {
+        err += multimapWideSweep();
     }
 
     TEST("create") {
@@ -3465,6 +3501,191 @@ int multimapFullTest(int argc, char *argv[]) {
                 ERR("Sentinel %u corrupted: %" PRIu64, j, out[j].data.u64);
             }
         }
+    }
+
+    TEST("rangeBoxes hold 96/128-bit head keys inline across 2048+ "
+         "sub-maps") {
+        /* One row per sub-map (maxSize 64), so the rangeBox multiarray
+         * grows past its native row limit and regroups, and inserts,
+         * splits, merges and trims keep moving rangeBoxes.  Each move
+         * leaves an inline payload pointer aimed at the old slot. */
+        enum { fwRows = 5000 };
+        cleaner(multimapFullFree) multimapFull *m = multimapFullNew(2);
+        m->maxSize = 64;
+
+        __uint128_t keys[fwRows];
+        bool neg[fwRows];
+        bool present[fwRows];
+        bool replaced[fwRows];
+        uint64_t s = 0x2545F4914F6CDD1DULL;
+        for (size_t i = 0; i < fwRows; i++) {
+            /* A random 96- or 128-bit magnitude above 2^80 whose low 16
+             * bits are the row index, so every key is distinct. */
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            const unsigned width = (s & 2) ? 95 : 127;
+            const __uint128_t mask = ((__uint128_t)1 << width) - 1;
+            __uint128_t mag = ((__uint128_t)s << 64) & mask;
+            mag = (mag & ~(__uint128_t)0xFFFF) | ((__uint128_t)1 << 80) |
+                  (__uint128_t)i;
+            neg[i] = s & 1;
+            keys[i] = neg[i] ? (__uint128_t)0 - mag : mag;
+            replaced[i] = false;
+        }
+
+#define FW_KEY(i)                                                              \
+    ((databox){.type = neg[i] ? DATABOX_SIGNED_128 : DATABOX_UNSIGNED_128,     \
+               .big = true,                                                    \
+               .data.u128 = &keys[i]})
+
+        for (size_t i = 0; i < fwRows; i++) {
+            const databox key = FW_KEY(i);
+            const databox *row[2] = {&key, &key};
+            multimapFullInsert(m, row);
+            present[i] = true;
+        }
+
+        if (_multiarrayType(m->rangeBox) == MULTIARRAY_TYPE_NATIVE) {
+            ERR("only %" PRIu32 " sub-maps: the rangeBoxes never left the "
+                "native array",
+                m->count);
+        }
+
+        for (int round = 0; round < 4; round++) {
+            multimapFullVerify(m);
+            strictConsistencyCheck(m);
+            size_t missing = 0;
+            for (size_t i = 0; i < fwRows; i++) {
+                const databox key = FW_KEY(i);
+                databoxBig out;
+                memset(&out, 0xFF, sizeof(out));
+                DATABOX_BIG_INIT(&out);
+                databox *values[1] = {(databox *)&out};
+                const bool found = multimapFullLookup(m, &key, values);
+                bool right = found == present[i];
+                if (found && replaced[i]) {
+                    right = out.type == DATABOX_UNSIGNED_64 && out.data.u == i;
+                } else if (found) {
+                    right = out.type == key.type && *out.data.u128 == keys[i];
+                }
+
+                missing += !right;
+            }
+
+            if (missing) {
+                ERR("round %d: %zu rows wrong", round, missing);
+            }
+
+            if (round == 0) {
+                /* Delete every third row: sub-maps empty out and merge. */
+                for (size_t i = 0; i < fwRows; i += 3) {
+                    const databox key = FW_KEY(i);
+                    multimapFullDelete(m, &key);
+                    present[i] = false;
+                }
+            } else if (round == 1) {
+                /* Shrink the value of every fifth row in place, which
+                 * reallocates its sub-map and refreshes its rangeBox. */
+                for (size_t i = 1; i < fwRows; i += 5) {
+                    const databox key = FW_KEY(i);
+                    multimapEntry me;
+                    if (present[i] &&
+                        multimapFullGetUnderlyingEntry(m, &key, &me)) {
+                        const databox small = databoxNewUnsigned(i);
+                        me.fe = flexNext(*me.map, me.fe);
+                        multimapFullReplaceEntry(m, &me, &small);
+                        replaced[i] = true;
+                    }
+                }
+            } else if (round == 2) {
+                /* Trim every negative key and the smallest positive one:
+                 * whole leading sub-maps go. */
+                size_t lowest = fwRows;
+                for (size_t i = 0; i < fwRows; i++) {
+                    if (present[i] && !neg[i] &&
+                        (lowest == fwRows || keys[i] < keys[lowest])) {
+                        lowest = i;
+                    }
+                }
+
+                const multimapPredicate p = {
+                    .condition = MULTIMAP_CONDITION_LESS_THAN_EQUAL,
+                    .compareAgainst = FW_KEY(lowest)};
+                multimapFullDeleteByPredicate(m, &p);
+                for (size_t i = 0; i < fwRows; i++) {
+                    if (neg[i] || i == lowest) {
+                        present[i] = false;
+                    }
+                }
+            }
+        }
+
+#undef FW_KEY
+    }
+
+    TEST("a surrogate-keyed rangeBox holds a 96/128-bit atom value inline") {
+        /* The rangeBox of a surrogate-keyed map holds the resolved head
+         * key.  The atom table holds narrow values and one wide value,
+         * inserted last so building the table never resolves it. */
+        multimapAtom *ma = multimapAtomNew();
+        for (int64_t v = 10; v <= 30; v += 10) {
+            const databox atom = databoxNewSigned(v);
+            multimapAtomInsert(ma, &atom);
+        }
+
+        __uint128_t wideAtom = (__uint128_t)1 << 70;
+        const databox wide = {
+            .type = DATABOX_UNSIGNED_128, .big = true, .data.u128 = &wideAtom};
+        multimapAtomInsert(ma, &wide);
+
+        /* map[0] holds ids 0-2 (10, 20, 30); map[1] holds id 3.  The new
+         * multimapFull takes both flexes. */
+        /* @own: container; free=multimapFullFree */
+        flex *maps[2] = {flexNew(), flexNew()};
+        for (uint64_t id = 0; id <= 3; id++) {
+            const databox ref = {.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL,
+                                 .data.u = id};
+            flexPushByType(&maps[id == 3], &ref, FLEX_ENDPOINT_TAIL);
+        }
+
+        multimapFullMiddle middles[2] = {0, 0};
+        cleaner(multimapFullFree) multimapFull *m =
+            multimapFullNewFromTwoGrowWithReference(NULL, maps, middles, 1,
+                                                    false, ma);
+
+        const databox *rb = getRangeBox(m, 0);
+        if (rb->type != DATABOX_UNSIGNED_128 || !rb->big || rb->allocated ||
+            rb->data.u128 !=
+                (const __uint128_t *)((const databoxBig *)rb)->extra ||
+            *rb->data.u128 != wideAtom) {
+            ERRR("rangeBox does not hold the wide atom value inline");
+        }
+
+        __uint128_t above = (__uint128_t)1 << 80;
+        __uint128_t below = ((__uint128_t)1 << 70) - 1;
+        const struct {
+            databox probe;
+            multimapFullIdx mapIdx;
+        } cases[] = {
+            {databoxNewSigned(20), 0},
+            {{.type = DATABOX_UNSIGNED_128, .big = true, .data.u128 = &below},
+             0},
+            {wide, 1},
+            {{.type = DATABOX_UNSIGNED_128, .big = true, .data.u128 = &above},
+             1},
+        };
+
+        for (size_t i = 0; i < COUNT_ARRAY(cases); i++) {
+            const multimapFullIdx got =
+                multimapFullBinarySearch(m, &cases[i].probe);
+            if (got != cases[i].mapIdx) {
+                ERR("probe %zu routed to map %" PRIu32 ", expected %" PRIu32, i,
+                    got, cases[i].mapIdx);
+            }
+        }
+
+        multimapAtomFree(ma);
     }
 
     /* RandomValue's selection checks (uniformity, fromTail, the random()

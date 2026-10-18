@@ -438,10 +438,11 @@ int64_t multimapSmallFieldIncr(multimapSmall *m, const databox *key,
         return newVal;
     }
 
-    /* (unlikely) else, return current value */
-    databox curVal;
-    flexGetByType(current, &curVal);
-    return curVal.data.i;
+    /* (unlikely) else, return current value; a 96/128-bit value can't be
+     * read as int64_t, so it reports 0 */
+    databoxBig curVal;
+    flexGetByTypeBig(current, &curVal);
+    return curVal.big ? 0 : curVal.data.i;
 }
 
 void multimapSmallReset(multimapSmall *m) {
@@ -575,10 +576,10 @@ bool multimapSmallDeleteByPredicate(multimapSmall *m,
     /* By default, assume the value we found is at the end of the list. */
     int compared = 1;
     if (flexEntryIsValid(m->map, startP)) {
-        databox value;
-        flexGetByType(startP, &value);
+        databoxBig value;
+        flexGetByTypeBig(startP, &value);
 
-        compared = databoxCompare(&value, &p->compareAgainst);
+        compared = databoxCompare((databox *)&value, &p->compareAgainst);
     }
 
     switch (p->condition) {

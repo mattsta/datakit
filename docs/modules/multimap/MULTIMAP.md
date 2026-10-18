@@ -137,6 +137,34 @@ Byte pointers are valid only until the next mutation of that multimap. Copy
 them (`strndup`, `memcpy`, `databoxCopyBytesFromBox`) before inserting,
 deleting, replacing, or incrementing anything.
 
+### 96/128-bit Values
+
+Keys and values may be 96/128-bit integers on every tier. A wide value does
+not fit a plain `databox`, so the read APIs above follow the `databox.h`
+rule: **the owner of the output box sets up its wide capability**.
+
+- To receive a wide value, pass a `databoxBig` armed with
+  `DATABOX_BIG_INIT`. Re-arm it before each read: a narrow value overwrites
+  the payload pointer.
+- A zeroed box receives only the type (`SIGNED_128` / `UNSIGNED_128`, with
+  `data.ptr == NULL`). An uninitialized box is a caller bug.
+- `multimapDeleteRandomValue()` copies through `flexGetByTypeCopy()`, so its
+  boxes need an initialized `big` flag too.
+
+```c
+databoxBig val;
+DATABOX_BIG_INIT(&val);
+databox *out[1] = {(databox *)&val};
+if (multimapLookup(m, &key, out) && val.type == DATABOX_UNSIGNED_128) {
+    __uint128_t v = *val.data.u128; /* lives in val.extra */
+}
+```
+
+Rows the library decodes for itself always carry wide storage: the
+`multimapProcessUntil()` walker and the key set operations see a box per
+column with `big` set exactly on wide values, and internal searches (Medium
+routing, Full range boxes) compare wide keys by value.
+
 ## Creation Functions
 
 ### Basic Creation
@@ -637,8 +665,10 @@ bool multimapProcessPredicate(const multimapPredicate *p, const databox *value);
 Returning `false` from the walker also stops the walk.
 
 Unlike `multimapDeleteByPredicate()`, this path supports every
-`multimapCondition`. Keep `elementsPerEntry <= 16`: that is the size of the
-stack-allocated box array the walk uses.
+`multimapCondition`. The walk decodes each row into its own `databoxBig`
+storage (16 columns on the stack, wider rows on the heap), so the walker
+receives 96/128-bit values with live payloads. The boxes are reused for the
+next row: copy anything the walker keeps.
 
 ```c
 static bool printElement(void *userData, const databox *elements[]) {
@@ -822,7 +852,7 @@ the search seed.
 | ------- | --------- | ----------------------------------------------------------- | ------------------ |
 | Small   | 16 bytes  | none (1 flex)                                               | bytes > limit      |
 | Medium  | 28 bytes  | none (2 flex)                                               | bytes > limit \* 3 |
-| Full    | 48 bytes  | 8 (flex\*) + 4 (middle) + 16 (rangeBox, for submaps 1..N-1) | never              |
+| Full    | 48 bytes  | 8 (flex\*) + 4 (middle) + 32 (rangeBox, for submaps 1..N-1) | never              |
 
 Full's metadata lives in three `multiarray` containers, which add their own
 allocation overhead on top of the per-submap figures.
@@ -866,8 +896,8 @@ multimap *users = multimapNew(4);  /* id, name, age, email */
 ```
 
 Every read API fills `elementsPerEntry` boxes, the `*Into` helpers stop at 16
-columns, and `multimapProcessUntil()` only has stack space for 16. Split wide
-rows across multiple multimaps rather than growing one.
+columns, and `multimapProcessUntil()` allocates its row on the heap above 16.
+Split wide rows across multiple multimaps rather than growing one.
 
 ### 3. Pick map mode or set mode deliberately
 

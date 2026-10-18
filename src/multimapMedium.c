@@ -104,14 +104,10 @@ DK_INLINE_ALWAYS size_t multimapMediumBinarySearch_(
     }
 
     const flexEntry *restrict head = flexHead(m->map[1]);
-    databox got;
-    if (useReference) {
-        flexGetByTypeWithReference(head, &got, referenceContainer);
-    } else {
-        flexGetByType(head, &got);
-    }
+    databoxBig got;
+    multimapGetByTypeBig_(head, &got, useReference ? referenceContainer : NULL);
 
-    const int compared = databoxCompare(&got, key);
+    const int compared = databoxCompare((databox *)&got, key);
 
     if (compared <= 0) {
         /* head of map 1 is <= key, so insert into [1] */
@@ -137,7 +133,7 @@ DK_STATIC size_t multimapMediumBinarySearchFullWidth(
     multimapMedium *m, const databox *elements[]) {
     /* We split the search space based on the head element of map[1],
      * so if we're < element[x], use map[0], else use map[1] */
-    databox got;
+    databoxBig got;
     flexEntry *start = flexHead(m->map[1]);
     size_t mapIdx = 1;
 
@@ -147,10 +143,10 @@ DK_STATIC size_t multimapMediumBinarySearchFullWidth(
         return 0;
     }
 
-    flexGetByType(start, &got);
+    flexGetByTypeBig(start, &got);
 
     for (size_t i = 0; i < m->elementsPerEntry; i++) {
-        const int compared = databoxCompare(&got, elements[i]);
+        const int compared = databoxCompare((databox *)&got, elements[i]);
 
         if (compared < 0) {
             /* head of map 1 is < key, so insert into [1] */
@@ -170,7 +166,7 @@ DK_STATIC size_t multimapMediumBinarySearchFullWidth(
 
             start = flexNext(m->map[1], start);
             assert(start);
-            flexGetByType(start, &got);
+            flexGetByTypeBig(start, &got);
             /* if same, loop again and check next element pair */
             /* If this is the last loop, we were equal against every
              * compare element, and we return mapIdx==1 as mapIdx
@@ -659,10 +655,11 @@ int64_t multimapMediumFieldIncr(multimapMedium *m, const databox *key,
         return newVal;
     }
 
-    /* (unlikely) else, return current value */
-    databox curVal;
-    flexGetByType(current, &curVal);
-    return curVal.data.i;
+    /* (unlikely) else, return current value; a 96/128-bit value can't be
+     * read as int64_t, so it reports 0 */
+    databoxBig curVal;
+    flexGetByTypeBig(current, &curVal);
+    return curVal.big ? 0 : curVal.data.i;
 }
 
 void multimapMediumReset(multimapMedium *m) {
@@ -850,10 +847,10 @@ bool multimapMediumDeleteByPredicate(multimapMedium *m,
     /* By default, assume the value we found is at the end of the list. */
     int compared = 1;
     if (flexEntryIsValid(m->map[mapIdx], startP)) {
-        databox value;
-        flexGetByType(startP, &value);
+        databoxBig value;
+        flexGetByTypeBig(startP, &value);
 
-        compared = databoxCompare(&value, &p->compareAgainst);
+        compared = databoxCompare((databox *)&value, &p->compareAgainst);
     }
 
     switch (p->condition) {
@@ -1240,6 +1237,168 @@ int multimapMediumTest(int argc, char *argv[]) {
         if (expect != 0) {
             ERR("reverse iteration stopped with %" PRIu64 " rows left", expect);
         }
+    }
+
+    TEST("medium: 96/128-bit keys route between the two maps") {
+        /* map[1]'s head key is read on every search to pick a map; with
+         * wide keys that read needs wide storage.  Rows are {key, value}
+         * with wide keys of both signs and wide values, split 5/5. */
+        const __uint128_t base = (__uint128_t)1 << 100;
+        __uint128_t keys[12];
+        __uint128_t vals[12];
+        databox keyBox[12];
+        databox valBox[12];
+        for (size_t i = 0; i < 12; i++) {
+            /* Rows 0-3 are negative (-(2^100 + 4 - i)), the rest positive
+             * (2^100 + i); rows 10 and 11 are inserted later. */
+            const bool neg = i < 4;
+            keys[i] = neg ? (__uint128_t)0 - (base + (4 - i)) : base + i;
+            vals[i] = ((__uint128_t)1 << 90) + i * 7;
+            keyBox[i] = (databox){.type = neg ? DATABOX_SIGNED_128
+                                              : DATABOX_UNSIGNED_128,
+                                  .big = true,
+                                  .data.u128 = &keys[i]};
+            valBox[i] = (databox){.type = DATABOX_UNSIGNED_128,
+                                  .big = true,
+                                  .data.u128 = &vals[i]};
+        }
+
+        /* @own: container; free=multimapMediumFree */
+        flex *f = flexNew();
+        for (size_t i = 0; i < 10; i++) {
+            flexPushByType(&f, &keyBox[i], FLEX_ENDPOINT_TAIL);
+            flexPushByType(&f, &valBox[i], FLEX_ENDPOINT_TAIL);
+        }
+
+        flexEntry *split = flexMiddle(f, 2);
+        cleaner(multimapMediumFree) multimapMedium *m =
+            multimapMediumNewFromOneGrow(NULL, f, (uint32_t)(split - f), 2,
+                                         false);
+
+        /* A key below every row, and one above, through Insert. */
+        __uint128_t lowKey = (__uint128_t)0 - (base << 1);
+        keyBox[10] = (databox){
+            .type = DATABOX_SIGNED_128, .big = true, .data.u128 = &lowKey};
+        keys[10] = lowKey;
+        keys[11] = base << 1;
+        for (size_t i = 10; i < 12; i++) {
+            const databox *row[2] = {&keyBox[i], &valBox[i]};
+            multimapMediumInsert(m, row);
+        }
+
+        for (size_t i = 0; i < 12; i++) {
+            /* Rows 0-4 and the low key live in map[0]. */
+            const size_t wantMap = (i < 5 || i == 10) ? 0 : 1;
+            multimapEntry me = {0};
+            if (!multimapMediumGetUnderlyingEntry(m, &keyBox[i], &me) ||
+                me.mapIdx != wantMap) {
+                ERR("row %zu: found in map %" PRIu32 ", expected map %zu", i,
+                    me.mapIdx, wantMap);
+            }
+
+            databoxBig out;
+            memset(&out, 0xFF, sizeof(out));
+            DATABOX_BIG_INIT(&out);
+            databox *values[1] = {(databox *)&out};
+            if (!multimapMediumLookup(m, &keyBox[i], values) ||
+                out.type != DATABOX_UNSIGNED_128 || *out.data.u128 != vals[i]) {
+                ERR("row %zu: lookup gave a wrong value", i);
+            }
+
+            const databox *row[2] = {&keyBox[i], &valBox[i]};
+            if (!multimapMediumExistsFullWidth(m, row)) {
+                ERR("row %zu: full-width exists failed", i);
+            }
+        }
+
+        /* A second row for key 7 with a smaller value: the full-width
+         * route compares map[1]'s head row element by element. */
+        __uint128_t smallerVal = vals[7] - 1;
+        const databox smaller = {.type = DATABOX_UNSIGNED_128,
+                                 .big = true,
+                                 .data.u128 = &smallerVal};
+        const databox *dupRow[2] = {&keyBox[7], &smaller};
+        multimapMediumInsertFullWidth(m, dupRow);
+        if (!multimapMediumExistsFullWidth(m, dupRow) ||
+            multimapMediumCount(m) != 13) {
+            ERRR("full-width duplicate of a wide key not stored");
+        }
+
+        /* A wide field can't be incremented: FieldIncr reports 0. */
+        if (multimapMediumFieldIncr(m, &keyBox[2], 1, 1) != 0) {
+            ERRR("FieldIncr of a wide value returned non-zero");
+        }
+
+        /* Trim every row at or below key 6, which lives in map[1]. */
+        const multimapPredicate p = {.condition =
+                                         MULTIMAP_CONDITION_LESS_THAN_EQUAL,
+                                     .compareAgainst = keyBox[6]};
+        multimapMediumDeleteByPredicate(m, &p);
+        for (size_t i = 0; i < 12; i++) {
+            const bool keep = i >= 7 && i != 10;
+            if (multimapMediumExists(m, &keyBox[i]) != keep) {
+                ERR("after trim: row %zu exists %d, expected %d", i, !keep,
+                    keep);
+            }
+        }
+
+        multimapMediumVerify(m);
+    }
+
+    TEST("medium: routing resolves a 96/128-bit atom at map[1]'s head") {
+        /* Surrogate-keyed rows store atom references; routing resolves
+         * map[1]'s head reference to its value.  The atom table holds a
+         * narrow value and a wide one; the wide one is inserted last, so
+         * building the table never resolves it. */
+        multimapAtom *ma = multimapAtomNew();
+        const databox narrow = databoxNewSigned(10);
+        multimapAtomInsert(ma, &narrow);
+
+        __uint128_t wideAtom = (__uint128_t)1 << 70;
+        const databox wide = {
+            .type = DATABOX_UNSIGNED_128, .big = true, .data.u128 = &wideAtom};
+        multimapAtomInsert(ma, &wide);
+
+        /* Atom ids follow insertion order: id 0 is 10 and id 1 is wide.
+         * Splitting the two rows at the middle puts id 1 in map[1]. */
+        /* @own: container; free=multimapMediumFree */
+        flex *f = flexNew();
+        for (uint64_t id = 0; id <= 1; id++) {
+            const databox ref = {.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL,
+                                 .data.u = id};
+            flexPushByType(&f, &ref, FLEX_ENDPOINT_TAIL);
+        }
+
+        flexEntry *split = flexMiddle(f, 1);
+        cleaner(multimapMediumFree) multimapMedium *m =
+            multimapMediumNewFromOneGrow(NULL, f, (uint32_t)(split - f), 1,
+                                         false);
+
+        __uint128_t above = (__uint128_t)1 << 80;
+        __uint128_t below = ((__uint128_t)1 << 70) - 1;
+        const struct {
+            databox probe;
+            size_t mapIdx;
+        } cases[] = {
+            {databoxNewSigned(30), 0},
+            {databoxNewUnsigned(UINT64_MAX), 0},
+            {{.type = DATABOX_UNSIGNED_128, .big = true, .data.u128 = &below},
+             0},
+            {wide, 1},
+            {{.type = DATABOX_UNSIGNED_128, .big = true, .data.u128 = &above},
+             1},
+        };
+
+        for (size_t i = 0; i < COUNT_ARRAY(cases); i++) {
+            const size_t got =
+                multimapMediumBinarySearchWithReference(m, &cases[i].probe, ma);
+            if (got != cases[i].mapIdx) {
+                ERR("probe %zu routed to map %zu, expected %zu", i, got,
+                    cases[i].mapIdx);
+            }
+        }
+
+        multimapAtomFree(ma);
     }
 
     TEST_FINAL_RESULT;

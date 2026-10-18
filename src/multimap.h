@@ -53,6 +53,17 @@ bool multimapExistsWithReference(const multimap *m, const databox *key,
                                  databox *foundRef,
                                  const struct multimapAtom *referenceContainer);
 
+/* Output boxes.  Every read that fills caller boxes (Lookup, First, Last,
+ * LookupByPosition, RandomValue, IteratorNext and the *Into helpers)
+ * decodes in place under the databox.h rule: the caller owns the boxes
+ * and sets up their wide capability.  To receive a 96/128-bit value, pass
+ * a databoxBig armed with DATABOX_BIG_INIT, and re-arm it before each
+ * read, since a narrow value overwrites the payload pointer.  A zeroed box
+ * receives only the type (data.ptr NULL).  An uninitialized box is a
+ * caller bug.  DeleteRandomValue copies through flexGetByTypeCopy, so its
+ * boxes need an initialized 'big' too.  Rows the library decodes for
+ * itself (ProcessUntil walkers, the key set operations) always carry
+ * wide storage, with 'big' set exactly on 96/128-bit values. */
 bool multimapLookup(const multimap *m, const databox *key, databox *elements[]);
 
 /* NOTE: despite the scalar-looking `databox **found`, this fills a
@@ -189,4 +200,11 @@ int multimapTest(int argc, char *argv[]);
  * reports the tuple it overwrote, a fresh insert reports VOID.  Returns the
  * number of failures.  Run by multimapTest and multimapFullTest. */
 int32_t multimapInsertReplacingSweep(void);
+/* Drives 96/128-bit keys and values through Small, Medium and Full maps
+ * (insert, lookup, exists, iterate, range, positional reads, ProcessUntil,
+ * the key set operations, FieldIncr, delete, trim by predicate, refill,
+ * copy, and full-width rows) against an independent 128-bit oracle, with
+ * 0xFF-poisoned output boxes.  Returns the number of failures.  Run by
+ * multimapTest and multimapFullTest. */
+int32_t multimapWideSweep(void);
 #endif
