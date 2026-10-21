@@ -1348,7 +1348,7 @@ multidictResult multidictAddNX(multidict *d, const databox *keybox,
         return MULTIDICT_ERR;
     }
 
-    /* Check if key exists */
+    /* Check if key exists; a present key is named, so this is its one use */
     if (multidictExists(d, keybox)) {
         return MULTIDICT_ERR; /* Key exists - NX fails */
     }
@@ -1367,8 +1367,10 @@ multidictResult multidictAddXX(multidict *d, const databox *keybox,
         return MULTIDICT_ERR;
     }
 
-    /* Check if key exists */
-    if (!multidictExists(d, keybox)) {
+    /* Check if key exists without promoting: the update below is the one
+     * use this call makes */
+    databox unused = {{0}};
+    if (!multidictFindNoTouch_(d, keybox, &unused)) {
         return MULTIDICT_ERR; /* Key doesn't exist - XX fails */
     }
 
@@ -1679,11 +1681,11 @@ bool multidictFindByString(multidict *d, const char *key, uint8_t **val) {
  * Convenience Functions
  * ==================================================================== */
 
-/* Check if a key exists without retrieving the value.  A pure read: it
- * does not promote the key in the LRU. */
+/* Check if a key exists without retrieving the value.  Naming an existing
+ * key is one LRU use, so a hit promotes it once (multidict.h, "LRU use"). */
 bool multidictExists(multidict *d, const databox *keybox) {
     databox unused = {{0}};
-    return multidictFindNoTouch_(d, keybox, &unused);
+    return multidictFind(d, keybox, &unused);
 }
 
 /* Check if a string key exists */
@@ -1704,8 +1706,9 @@ multidictResult multidictIncrBy(multidict *d, const databox *keybox,
         return MULTIDICT_ERR;
     }
 
-    /* Try to find existing value.  The store below is the one LRU access
-     * an increment makes, so the read does not promote. */
+    /* Try to find existing value.  The call makes one LRU use of an
+     * existing key: the store below on success, an explicit promotion on a
+     * refusal.  So the read does not promote. */
     databox valbox = {{0}};
     bool exists = multidictFindNoTouch_(d, keybox, &valbox);
 
@@ -1722,10 +1725,12 @@ multidictResult multidictIncrBy(multidict *d, const databox *keybox,
                    valbox.data.u64 <= (uint64_t)INT64_MAX) {
             current = (int64_t)valbox.data.u64;
         } else {
+            multidictLRUOnAccess(d, keybox);
             return MULTIDICT_ERR; /* not an int64 value */
         }
 
         if (__builtin_add_overflow(current, increment, &newVal)) {
+            multidictLRUOnAccess(d, keybox);
             return MULTIDICT_ERR; /* result outside int64 */
         }
     } else {
@@ -1751,8 +1756,9 @@ multidictResult multidictIncrByFloat(multidict *d, const databox *keybox,
         return MULTIDICT_ERR;
     }
 
-    /* Try to find existing value; as in multidictIncrBy, only the store
-     * below promotes */
+    /* Try to find existing value; as in multidictIncrBy, an existing key
+     * gets one LRU use: the store on success, an explicit promotion on a
+     * refusal */
     databox valbox = {{0}};
     bool exists = multidictFindNoTouch_(d, keybox, &valbox);
 
@@ -1760,6 +1766,7 @@ multidictResult multidictIncrByFloat(multidict *d, const databox *keybox,
     if (exists) {
         /* Check if value is numeric */
         if (!DATABOX_IS_NUMERIC(&valbox)) {
+            multidictLRUOnAccess(d, keybox);
             return MULTIDICT_ERR; /* Value is not numeric */
         }
 
@@ -1779,6 +1786,7 @@ multidictResult multidictIncrByFloat(multidict *d, const databox *keybox,
                 newVal = (double)valbox.data.u64 + increment;
             }
         } else {
+            multidictLRUOnAccess(d, keybox);
             return MULTIDICT_ERR; /* a 96/128-bit value: not a double */
         }
     } else {
@@ -1789,6 +1797,10 @@ multidictResult multidictIncrByFloat(multidict *d, const databox *keybox,
     /* Increment policy: a non-finite result (inf, NaN) is refused with the
      * stored value unchanged. */
     if (!isfinite(newVal)) {
+        if (exists) {
+            multidictLRUOnAccess(d, keybox);
+        }
+
         return MULTIDICT_ERR;
     }
 
@@ -5535,30 +5547,39 @@ static int multidictTestLruPromotion_(multidictType *type) {
 
     TEST_RANK_STEP("insert", 0);
 
-    /* Reads that change nothing */
+    /* Named-key rule: naming an existing key is one use, whatever the
+     * outcome */
     databox k = TEST_RANK_KEY();
     if (!multidictExists(d, &k)) {
         err++;
     }
-    TEST_RANK_STEP("exists", 0);
+    TEST_RANK_STEP("exists", 1);
 
     if (!multidictExistsByString(d, fold ? "RANK" : "rank")) {
         err++;
     }
-    TEST_RANK_STEP("exists by string", 0);
+    TEST_RANK_STEP("exists by string", 1);
 
     k = TEST_RANK_KEY();
     if (multidictAddNX(d, &k, &ten) != MULTIDICT_ERR) {
         err++;
     }
-    TEST_RANK_STEP("add-NX of a present key", 0);
+    TEST_RANK_STEP("add-NX of a present key", 1);
 
     int64_t ires = 0;
     k = TEST_RANK_KEY();
     if (multidictIncrBy(d, &k, 1, &ires) != MULTIDICT_ERR) {
         err++; /* the value is text */
     }
-    TEST_RANK_STEP("failed increment", 0);
+    TEST_RANK_STEP("refused increment", 1);
+
+    /* A miss names no existing key: it promotes nothing */
+    const databox absent = databoxNewBytesString("absent-key");
+    if (multidictExists(d, &absent) ||
+        multidictIncrByFloat(d, &absent, NAN, NULL) != MULTIDICT_ERR) {
+        err++;
+    }
+    TEST_RANK_STEP("a miss", 0);
 
     multidictIterator iter;
     multidictEntry e;

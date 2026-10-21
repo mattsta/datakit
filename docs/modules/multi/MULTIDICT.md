@@ -807,17 +807,20 @@ multidictSetMaxMemory(d, 256ULL * 1024 * 1024);
 The LRU levels are backed by [multilru](MULTILRU.md), so the level count
 here means the same thing it does there.
 
-A new key is tracked at the coldest level. Each access promotes a key one
-level, once per call:
+A new key is tracked at the coldest level, and a delete stops tracking it.
+Usage follows the **named-key rule**: every call that names an existing key
+is one use of it and promotes it exactly one level, whatever the outcome:
 
 - `multidictFind`, `multidictFindByString`, `multidictTouch`;
-- a successful replace: `multidictAdd` of a present key, `multidictAddXX`,
-  `multidictReplace`;
-- a successful `multidictIncrBy` / `multidictIncrByFloat` of a present key.
+- `multidictExists`, `multidictExistsByString`;
+- `multidictAdd` of a present key, `multidictAddNX` (also when it refuses
+  because the key exists), `multidictAddXX`, `multidictReplace`;
+- `multidictIncrBy` / `multidictIncrByFloat` of a present key, also when the
+  increment policy refuses the result.
 
-Reads that change nothing do not promote: `multidictExists`,
-`multidictExistsByString`, `multidictAddNX` of a present key,
-`multidictGetLRULevel`, a failed increment, iteration, scans and random keys.
+Calls that name no existing key never promote: a miss, iteration, scans,
+random keys, persistence, rehashing, and `multidictGetLRULevel` (an
+inspector).
 
 Under `MULTIDICT_EVICT_LRU`, `multidictEvictToLimit` evicts the coldest
 entry first: the lowest level, oldest within it. A victim leaves LRU

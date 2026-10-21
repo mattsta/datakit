@@ -409,17 +409,18 @@ typedef enum multidictEvictPolicy {
 
 /* LRU Tracking (optional, zero overhead when disabled)
  *
- * Accesses promote a key one LRU level, once per call:
- *   - multidictFind (and multidictFindByString), multidictTouch;
- *   - a successful replace: multidictAdd of a present key,
- *     multidictAddXX, multidictReplace;
- *   - a successful multidictIncrBy / multidictIncrByFloat of a present
- *     key.
- * An insert tracks a new key at the coldest level.  These do not
- * promote: multidictExists, multidictExistsByString, multidictAddNX of a
- * present key (it changes nothing), multidictGetLRULevel, a failed
- * increment, iteration, scans, random keys, and the value read for an
- * eviction callback. */
+ * LRU use, the named-key rule: every call that names an existing key is one
+ * use of it and promotes it exactly one LRU level, whatever the outcome:
+ *   - multidictFind, multidictFindByString, multidictTouch;
+ *   - multidictExists, multidictExistsByString;
+ *   - multidictAdd of a present key, multidictAddNX (even when it refuses
+ *     because the key is present), multidictAddXX, multidictReplace;
+ *   - multidictIncrBy / multidictIncrByFloat of a present key, including
+ *     one the increment policy refuses.
+ * An insert tracks a new key at the coldest level, and a delete stops
+ * tracking it.  Calls that name no existing key never promote: a miss,
+ * iteration, scans, random keys, persistence, rehashing, the value read
+ * for an eviction callback, and multidictGetLRULevel (an inspector). */
 bool multidictEnableLRU(multidict *d, size_t levels);
 void multidictDisableLRU(multidict *d);
 bool multidictHasLRU(multidict *d);
