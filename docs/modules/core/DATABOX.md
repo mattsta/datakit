@@ -680,8 +680,14 @@ Unequal values may share a key: it is a hash input, not an identity.
   rounding conversion. The order is a strict weak order:
   - `-0.0` equals `+0.0` (and the integer 0);
   - `-inf` and `+inf` sit below and above every finite value;
-  - NaN sorts above `+inf` and equals only NaN. Every NaN, whatever its sign
-    or payload, float or double, is the same value.
+  - NaN sorts above `+inf`. Every NaN, whatever its sign or payload, float
+    or double, is the same position in this order, so containers, which find
+    keys with `databoxCompare(...) == 0`, can find and delete a NaN key.
+
+`databoxCompare` is the identity order. For value equality use
+`databoxEqual`, which follows IEEE: NaN equals nothing, itself included, and
+`-0.0` equals `+0.0`. This is the same split as Java's `Double.equals` (keys)
+versus `==` (values).
 - **`DATABOX_PTR`** and **`DATABOX_CONTAINER_REFERENCE_EXTERNAL`** — join
   the numeric class as unsigned integers (raw pointer bits, or the
   reference id), against every numeric type. flex stores a pointer as an

@@ -543,7 +543,15 @@ databox databoxNewBytesAllowEmbed(const void *ptr, size_t len);
 databox databoxNewBytesAllocateOrEmbed(const void *ptr, size_t len);
 databox databoxNewOffsetAllowEmbed(const void *ptr, size_t offset, size_t len);
 databox databoxNewReal(double value);
+/* Value equality, following IEEE for reals: NaN equals nothing, not even
+ * itself, and -0.0 equals +0.0.  Otherwise the same as databoxCompare == 0. */
 bool databoxEqual(const databox *a, const databox *b);
+
+/* Total order for sorting and for container key identity (multimap,
+ * multidict and the rest find keys with compare == 0).  Deterministic on every
+ * platform: NaN sorts above +inf, and every NaN is the same position, so a
+ * NaN key can be found and deleted again.  Use databoxEqual, not
+ * compare == 0, when a NaN must not equal itself. */
 int databoxCompare(const databox *a, const databox *b);
 
 /* A 64-bit key for hashing a number by value, so that boxes databoxCompare

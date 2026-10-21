@@ -2,6 +2,7 @@
 #include "floatExtended.h"
 #include "str.h"
 
+#include <math.h>   /* isnan */
 #include <stdio.h>  /* fprintf */
 #include <stdlib.h> /* abort */
 
@@ -484,7 +485,27 @@ databox databoxNull(void) {
 #define IS_INTEGER(a)                                                          \
     (DATABOX_IS_INTEGER(a) || (a)->type == DATABOX_CONTAINER_REFERENCE_EXTERNAL)
 
+/* True for a float or double box holding NaN. */
+static bool databoxIsNaN_(const databox *box) {
+    if (box->type == DATABOX_FLOAT_32) {
+        return isnan(box->data.f32);
+    }
+
+    if (box->type == DATABOX_DOUBLE_64) {
+        return isnan(box->data.d64);
+    }
+
+    return false;
+}
+
 bool databoxEqual(const databox *a, const databox *b) {
+    /* Value equality follows IEEE: NaN equals nothing, itself included.
+     * databoxCompare is the identity order containers use for keys, where
+     * every NaN is one position so a NaN key stays findable. */
+    if (databoxIsNaN_(a) || databoxIsNaN_(b)) {
+        return false;
+    }
+
     return databoxCompare(a, b) == 0;
 }
 
@@ -2025,6 +2046,51 @@ int databoxTest(int argc, char *argv[]) {
         if (databoxCompare(&s1, &s2) >= 0) {
             ERRR(
                 "'file2.txt' should be less than 'file10.txt' in natural sort");
+        }
+    }
+
+    TEST("databoxEqual is IEEE value equality; compare is identity") {
+        const databox nanD = databoxNewReal(NAN);
+        const databox nanNegD = databoxNewReal(-NAN);
+        const databox nanF = {.type = DATABOX_FLOAT_32, .data.f32 = NAN};
+        const databox inf = databoxNewReal(INFINITY);
+        const databox zero = databoxNewReal(0.0);
+        const databox negZero = databoxNewReal(-0.0);
+        const databox intZero = databoxNewSigned(0);
+        const databox one = databoxNewSigned(1);
+        const databox *const nans[] = {&nanD, &nanNegD, &nanF};
+
+        for (size_t i = 0; i < COUNT_ARRAY(nans); i++) {
+            /* NaN equals nothing, not even itself... */
+            if (databoxEqual(nans[i], nans[i])) {
+                ERR("NaN %zu equals itself", i);
+            }
+            for (size_t j = 0; j < COUNT_ARRAY(nans); j++) {
+                if (databoxEqual(nans[i], nans[j])) {
+                    ERR("NaN %zu equals NaN %zu", i, j);
+                }
+                /* ...but every NaN is one identity position. */
+                if (databoxCompare(nans[i], nans[j]) != 0) {
+                    ERR("NaN %zu and NaN %zu differ in the identity order", i,
+                        j);
+                }
+            }
+            if (databoxEqual(nans[i], &one) || databoxEqual(&one, nans[i])) {
+                ERR("NaN %zu equals 1", i);
+            }
+            /* NaN sorts above +inf, on every run. */
+            if (databoxCompare(nans[i], &inf) <= 0 ||
+                databoxCompare(&inf, nans[i]) >= 0) {
+                ERR("NaN %zu does not sort above +inf", i);
+            }
+        }
+
+        if (!databoxEqual(&zero, &negZero) || !databoxEqual(&negZero, &zero) ||
+            !databoxEqual(&negZero, &intZero)) {
+            ERRR("-0.0, +0.0 and 0 are not equal");
+        }
+        if (!databoxEqual(&one, &one) || databoxEqual(&one, &intZero)) {
+            ERRR("integer equality is wrong");
         }
     }
 

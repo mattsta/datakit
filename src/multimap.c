@@ -6703,6 +6703,32 @@ int multimapTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("a NaN key can be found and deleted (keys use identity order)") {
+        /* databoxEqual says NaN != NaN, but key identity is the total
+         * order, where every NaN is one position: a stored NaN key stays
+         * reachable instead of leaking. */
+        cleaner(multimapFree) multimap *m = multimapNew(2);
+        const databox nanKey = databoxNewReal(NAN);
+        const databox otherNan = databoxNewReal(-NAN);
+        const databox inf = databoxNewReal(INFINITY);
+        const databox val = databoxNewSigned(7);
+        const databox *rowNan[] = {&nanKey, &val};
+        const databox *rowInf[] = {&inf, &val};
+        multimapInsert(&m, rowInf);
+        multimapInsert(&m, rowNan);
+        multimapInsert(&m, rowNan); /* replaces, does not duplicate */
+
+        if (multimapCount(m) != 2 || !multimapExists(m, &nanKey) ||
+            !multimapExists(m, &otherNan)) {
+            ERRR("NaN key is not one reachable entry");
+        }
+
+        if (!multimapDelete(&m, &otherNan) || multimapExists(m, &nanKey) ||
+            multimapCount(m) != 1 || !multimapExists(m, &inf)) {
+            ERRR("NaN key could not be deleted cleanly");
+        }
+    }
+
     TEST_FINAL_RESULT;
 }
 #endif /* DATAKIT_TEST */

@@ -3249,9 +3249,10 @@ static bool multilistApplyPopIdentity(multilist **ml, mflexState *state,
     /* The Wide read, so a 96/128-bit end element compares by value. */
     multilistEntry end;
     databoxWide endWide;
+    /* Identity, not IEEE equality: a NaN element must match its pop. */
     if (multilistIndexWide(*ml, state, fromTail ? (mlOffsetId)(cnt - 1) : 0,
                            &end, &endWide) &&
-        databoxEqual(&end.box, want)) {
+        databoxCompare(&end.box, want) == 0) {
         /* The popped value is an owned copy nobody needs. */
         databox got = {{0}};
         const bool popped = multilistPop(ml, state, &got, fromTail);
@@ -3276,7 +3277,7 @@ static bool multilistApplyPopIdentity(multilist **ml, mflexState *state,
     }
     multilistEntry entry = {0};
     while (multilistNext(&iter, &entry)) {
-        if (databoxEqual(&entry.box, want)) {
+        if (databoxCompare(&entry.box, want) == 0) {
             multilistDelEntry(&iter, &entry);
             removed = true;
             break;
