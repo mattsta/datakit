@@ -151,6 +151,8 @@ def _ctest_line(step: Step, result: steps.CtestResult) -> str:
     if step.code is None:
         return "not run"
     detail = result.summary or ("no tests matched" if result.no_tests else "no summary")
+    if step.timed_out:
+        return f"FAILED (timed out; {detail})"
     return f"{'ok' if step.ok else 'FAILED'} ({detail})"
 
 
@@ -198,6 +200,7 @@ def _plan_targets(bindir: Path, work: Path, opts: VerifyOptions) -> TargetPlan:
         steps.list_tests_command(bindir, include),
         work / "tests.json",
         cwd=bindir,
+        timeout=steps.QUERY_TIMEOUT,
     )
     commands_out = work / "test-commands.txt"
     steps.run_logged(
@@ -205,6 +208,7 @@ def _plan_targets(bindir: Path, work: Path, opts: VerifyOptions) -> TargetPlan:
         steps.test_commands_command(bindir, commands_out),
         work / "test-commands.log",
         cwd=bindir,
+        timeout=steps.QUERY_TIMEOUT,
     )
     commands = steps.parse_test_commands(commands_out)
     selected = {
@@ -273,14 +277,22 @@ def run(repo: Path, opts: VerifyOptions) -> int:
 
     steps.request_codemodel(bindir)
     configure = steps.run_logged(
-        "configure", config.configure_command(src), work / "configure.log", cwd=src
+        "configure",
+        config.configure_command(src),
+        work / "configure.log",
+        cwd=src,
+        timeout=steps.CONFIGURE_TIMEOUT,
     )
     build = Step("build", work / "build.log")
     plan: TargetPlan | None = None
     if configure.ok:
         plan = _plan_targets(bindir, work, opts)
         build = steps.run_logged(
-            "build", config.build_command(src, jobs, plan.targets), build.log, cwd=src
+            "build",
+            config.build_command(src, jobs, plan.targets),
+            build.log,
+            cwd=src,
+            timeout=steps.BUILD_TIMEOUT,
         )
     warn = steps.count_warning_lines(build.log)
     notes = steps.count_linker_notes(build.log)
@@ -294,6 +306,7 @@ def run(repo: Path, opts: VerifyOptions) -> int:
             steps.ctest_command(bindir, jobs, opts.tests, exclude=[opts.serial or ""]),
             ctest.log,
             cwd=bindir,
+            timeout=steps.CTEST_TIMEOUT,
         )
         kept = steps.keep_test_log(bindir, work / "ctest-output.log")
         if kept:
@@ -304,6 +317,7 @@ def run(repo: Path, opts: VerifyOptions) -> int:
             steps.ctest_command(bindir, 1, opts.serial),
             serial.log,
             cwd=bindir,
+            timeout=steps.CTEST_TIMEOUT,
         )
         kept = steps.keep_test_log(bindir, work / "ctest-serial-output.log")
         if kept:
@@ -324,6 +338,7 @@ def run(repo: Path, opts: VerifyOptions) -> int:
             steps.allocaudit_command(uv, src),
             alloc.log,
             cwd=src / "tools",
+            timeout=steps.ALLOCAUDIT_TIMEOUT,
         )
 
     failed = ctest_result.failed + serial_result.failed
@@ -339,9 +354,9 @@ def run(repo: Path, opts: VerifyOptions) -> int:
 
     counts = f"{warn} warning lines, {notes} linker notes"
     if not configure.ok:
-        build_line = f"FAILED (configure exit {configure.code})"
+        build_line = f"FAILED (configure {configure.describe_failure()})"
     elif not build.ok:
-        build_line = f"FAILED (exit {build.code}), {counts}"
+        build_line = f"FAILED ({build.describe_failure()}), {counts}"
     else:
         build_line = f"ok, {counts}"
     lines = [

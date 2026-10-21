@@ -36,8 +36,17 @@ uv run dktools allocaudit report --constructors # markdown report
   report goes to stdout.
 - Discovery is lexical over libclang's pre-expansion token stream
   (macro-definition sites are audited at the definition), parallelized
-  per-file with a process pool (`-j N`); compile args come from
-  `build/compile_commands.json`, headers parse as plain C.
+  per-file with a process pool (`-j N`, default the CPU count); compile
+  args come from `build/compile_commands.json`, headers parse as plain
+  C. The whole tree takes a few seconds; `--timings N` prints the N
+  slowest files to stderr.
+- The pool starts its workers with `spawn` (each loads libclang
+  itself) and hands out the largest files first. It never hangs: a
+  worker that dies (a signal, out of memory) or a run where no file
+  finishes for `--timeout` seconds (default 120, `0` waits forever)
+  exits 2 with one stderr line naming the files involved, after every
+  worker is killed. Workers ignore Ctrl-C (dktools stops them) and
+  exit by themselves if dktools is killed.
 
 The audit is enforced as the ctest test `allocOwnership`
 (registered in `src/CMakeLists.txt` whenever `uv` is on PATH), so it
@@ -50,12 +59,42 @@ uv run --project tools python -m unittest discover -s tools/tests
 ```
 
 Both ctest entries go through `uvGate.sh`, which reports the test as
-skipped rather than failed when uv cannot set up this environment (an
-offline machine with nothing cached), and runs uv with `--frozen` so a
-test never rewrites `uv.lock`.
+skipped rather than failed when `uv sync` cannot set up this
+environment (an offline machine with nothing cached), and runs uv with
+`--frozen` so a test never rewrites `uv.lock`. Only that setup step
+can skip: once the environment exists, the command's own status,
+a crash or a signal included, is the gate's status.
 
 Coding-practice documentation: `docs/development/CONTRIBUTING.md`
 (Memory Management) and the idiom block in `src/cleaner.h`.
+
+## Child processes
+
+Every program dktools runs (git, cmake, the build, ctest, the
+allocaudit gate) goes through `src/dktools/procs.py`:
+
+- An argument list, never a shell; stdin is `/dev/null`, so nothing
+  can wait on a prompt.
+- Each program runs in its own session. On a timeout, Ctrl-C, SIGTERM
+  or SIGHUP, its whole process group (cmake, make, the compilers,
+  ctest and the tests it started) gets SIGTERM, then SIGKILL two
+  seconds later, and is reaped before dktools exits: Ctrl-C (exit
+  130) leaves nothing running. Git gets the same two seconds to
+  remove its lock files.
+- Output goes to a log file or is read with `communicate`, so no
+  pipe can fill and stall a program.
+- Limits: 10 minutes per git command (an input error, exit 2); in
+  `verify` and `validate`, 30 minutes for configure and allocaudit,
+  10 for the test listing, 3 hours for a build or a ctest run, and
+  `ctest --timeout 1500` for each test without its own TIMEOUT. A
+  step past its limit is killed, its log ends with a `timed out`
+  line, and it fails the run (`FAILED (timed out)`).
+- `kill -USR1 PID` makes a dktools process (or a pool worker) print
+  every thread's stack to stderr, to see where something waits.
+- An interrupted `verify` or `validate` leaves a partial work dir
+  under `ROOT`; the next run with the same name or revision recreates
+  it. The private index `verify` writes the tree through lives in a
+  temporary directory that is always removed.
 
 ## verify — build HEAD plus one change in isolation
 

@@ -10,6 +10,7 @@ from . import (
     allocaudit,
     leakcheck,
     perfdiff,
+    procs,
     toolchain,
     validate,
     vendorsync,
@@ -65,6 +66,21 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="also audit container-constructor call sites "
         "(flexNew/multimapNew/... — see CONSTRUCTORS)",
+    )
+    aa.add_argument(
+        "--timeout",
+        type=float,
+        default=allocaudit.STALL_TIMEOUT,
+        metavar="SECONDS",
+        help="fail (exit 2) when no file finishes for this long "
+        f"(default {allocaudit.STALL_TIMEOUT:g}; 0 waits forever)",
+    )
+    aa.add_argument(
+        "--timings",
+        type=int,
+        default=0,
+        metavar="N",
+        help="print the N slowest files and their seconds to stderr",
     )
 
     pd = sub.add_parser(
@@ -253,11 +269,18 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
 
+    # Children run in their own process groups (procs), so a terminal
+    # Ctrl-C reaches only dktools: KeyboardInterrupt and these handlers
+    # unwind through the finally blocks that stop them.
     try:
-        return _dispatch(args)
+        with procs.signal_handlers():
+            return _dispatch(args)
     except ToolError as exc:
         print(f"dktools {args.command}: {exc}", file=sys.stderr)
         return 2
+    except KeyboardInterrupt:
+        print(f"dktools {args.command}: interrupted", file=sys.stderr)
+        return 130
 
 
 def _split(value: str) -> list[str]:
@@ -321,9 +344,21 @@ def _dispatch(args: argparse.Namespace) -> int:
         return perfdiff.run(args.baseline, args.current, args.tolerance)
 
     if args.command == "allocaudit":
+        if args.jobs is not None and args.jobs < 1:
+            raise ToolError(f"-j must be at least 1 (got {args.jobs})")
+        if args.timeout < 0:
+            raise ToolError(f"--timeout must not be negative (got {args.timeout:g})")
+        timings: list[tuple[str, float]] = []
         result = allocaudit.run_audit(
-            args.repo, jobs=args.jobs, include_constructors=args.constructors
+            args.repo,
+            jobs=args.jobs,
+            include_constructors=args.constructors,
+            stall_timeout=args.timeout or None,
+            timings=timings,
         )
+        if args.timings > 0:
+            for path, seconds in sorted(timings, key=lambda t: -t[1])[: args.timings]:
+                print(f"{seconds:8.2f}s  {path}", file=sys.stderr)
         if args.mode == "report":
             report = allocaudit.render_report(result)
             if args.out is None:

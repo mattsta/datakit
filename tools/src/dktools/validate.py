@@ -114,11 +114,16 @@ def _run_config(
         config.configure_command(src),
         logs / "configure.log",
         cwd=src,
+        timeout=steps.CONFIGURE_TIMEOUT,
     )
     build = Step("build", logs / "build.log")
     if configure.ok:
         build = steps.run_logged(
-            f"{tag} build", config.build_command(src, jobs, None), build.log, cwd=src
+            f"{tag} build",
+            config.build_command(src, jobs, None),
+            build.log,
+            cwd=src,
+            timeout=steps.BUILD_TIMEOUT,
         )
     extra_skip = opts.debug_skip if config.preset == "debug" else ""
     ctest = Step("ctest", logs / "ctest.log")
@@ -132,6 +137,7 @@ def _run_config(
             ),
             ctest.log,
             cwd=bindir,
+            timeout=steps.CTEST_TIMEOUT,
         )
         kept = steps.keep_test_log(bindir, logs / "ctest-output.log")
         if kept:
@@ -144,6 +150,7 @@ def _run_config(
                 ),
                 serial.log,
                 cwd=bindir,
+                timeout=steps.CTEST_TIMEOUT,
             )
             kept = steps.keep_test_log(bindir, logs / "ctest-serial-output.log")
             if kept:
@@ -170,7 +177,12 @@ def _run_config(
 def _step_cell(step: Step, result: CtestResult | None = None) -> str:
     if step.code is None:
         return "not run"
-    word = "ok" if step.ok else f"FAIL ({step.code})"
+    if step.ok:
+        word = "ok"
+    elif step.timed_out:
+        word = "FAIL (timed out)"
+    else:
+        word = f"FAIL ({step.code})"
     if result is not None and result.summary:
         return f"{word}: {result.summary}"
     return word
@@ -328,6 +340,7 @@ def run(repo: Path, opts: ValidateOptions) -> int:
             steps.allocaudit_command(uv, src),
             alloc.log,
             cwd=src / "tools",
+            timeout=steps.ALLOCAUDIT_TIMEOUT,
         )
 
     leak = None

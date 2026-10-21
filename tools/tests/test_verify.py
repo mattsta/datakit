@@ -355,9 +355,16 @@ class FakeRunner:
         self.outputs = outputs
         self.codemodel = codemodel  # written by "configure", when given
         self.calls: list[tuple[str, list[str]]] = []
+        self.timeouts: dict[str, float | None] = {}
+        self.timed_out: set[str] = set()  # step names that "time out"
 
-    def __call__(self, name, cmd, log, cwd=None, env=None) -> Step:
+    def __call__(self, name, cmd, log, cwd=None, env=None, timeout=None) -> Step:
         self.calls.append((name, list(cmd)))
+        self.timeouts[name] = timeout
+        if name in self.timed_out:
+            log.parent.mkdir(parents=True, exist_ok=True)
+            log.write_text(f"dktools: {name}: timed out after {timeout:g}s; killed\n")
+            return Step(name, log, 124, timed_out=True)
         log.parent.mkdir(parents=True, exist_ok=True)
         log.write_text(self.outputs.get(name, ""))
         if name == "configure" and self.codemodel is not None:
@@ -480,6 +487,31 @@ class VerifyRun(unittest.TestCase):
                 self.assertIn("verify t: FAIL", out)
         code, out = self.run_verify(FakeRunner({"ctest": 8}, {"ctest": CTEST_FAIL}))
         self.assertIn("failed    flex multimapP", out)
+
+    def test_every_step_has_a_timeout(self) -> None:
+        runner = FakeRunner({}, {"ctest": CTEST_PASS, "allocaudit": "100% clean\n"})
+        code, out = self.run_verify(runner, serial="flexP")
+        self.assertEqual(code, 0, out)
+        self.assertIn("ctest-serial", runner.timeouts)
+        for name, timeout in runner.timeouts.items():
+            with self.subTest(step=name):
+                self.assertIsNotNone(timeout)
+                self.assertGreater(timeout, 0)
+
+    def test_timed_out_steps_fail_and_say_so(self) -> None:
+        cases = {
+            "configure": "build     FAILED (configure timed out)",
+            "build": "build     FAILED (timed out)",
+            "ctest": "ctest     FAILED (timed out;",
+            "allocaudit": "alloc     FAILED (dktools: allocaudit: timed out after",
+        }
+        for step, needle in cases.items():
+            with self.subTest(step=step):
+                runner = FakeRunner({}, {"ctest": CTEST_PASS})
+                runner.timed_out.add(step)
+                code, out = self.run_verify(runner)
+                self.assertEqual(code, 1, out)
+                self.assertIn(needle, out)
 
     def test_sanitizer_reports_print_test_and_full_line(self) -> None:
         long = "src/dod.c:723:26: runtime error: signed integer overflow: " + "7" * 200

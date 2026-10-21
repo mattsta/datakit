@@ -4,6 +4,11 @@ Each step runs one program with an argument list, sends its combined
 output to a log file, and returns a ``Step`` with the exit code; the
 scanners read those logs back (compiler warnings, ctest results,
 sanitizer reports) so every result line can name the log behind it.
+
+Every step has a wall-clock limit (the ``*_TIMEOUT`` constants): far
+above a normal run, so only a hung program reaches it.  A step past
+its limit has its whole process group killed (``procs``), ends its log
+with a ``timed out`` line and counts as failed with exit code 124.
 """
 
 from __future__ import annotations
@@ -12,13 +17,24 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import sys
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .gitutil import ToolError
+from . import procs
+
+#: Step wall-clock limits, in seconds.
+CONFIGURE_TIMEOUT = 30 * 60
+#: ``ctest --show-only`` and ``ctestCommands.cmake`` only read files.
+QUERY_TIMEOUT = 10 * 60
+BUILD_TIMEOUT = 3 * 3600
+CTEST_TIMEOUT = 3 * 3600
+ALLOCAUDIT_TIMEOUT = 30 * 60
+#: ``ctest --timeout``: the limit for each test that sets no TIMEOUT
+#: property of its own (ctest's conventional default), so one hung
+#: test fails alone instead of running into CTEST_TIMEOUT.
+CTEST_TEST_TIMEOUT = 1500
 
 
 @dataclass
@@ -28,10 +44,15 @@ class Step:
     name: str
     log: Path
     code: int | None = None  # None: not run
+    timed_out: bool = False  # killed at its timeout; code is 124
 
     @property
     def ok(self) -> bool:
         return self.code == 0
+
+    def describe_failure(self) -> str:
+        """``timed out`` or ``exit N`` for a failed step."""
+        return "timed out" if self.timed_out else f"exit {self.code}"
 
 
 def run_logged(
@@ -40,8 +61,13 @@ def run_logged(
     log: Path,
     cwd: Path | None = None,
     env: Mapping[str, str] | None = None,
+    timeout: float | None = None,
 ) -> Step:
-    """Run `cmd`, stdout and stderr both to `log`; never raises on exit."""
+    """Run `cmd`, stdout and stderr both to `log`; never raises on exit.
+
+    After `timeout` seconds the program's process group is killed and
+    the step fails (code 124, ``timed_out``).  On Ctrl-C or SIGTERM the
+    group is killed and reaped before the interrupt propagates."""
     log.parent.mkdir(parents=True, exist_ok=True)
     print(f"dktools: {name}: {' '.join(cmd)}", file=sys.stderr, flush=True)
     full_env = None
@@ -50,19 +76,15 @@ def run_logged(
         full_env.update(env)
     with open(log, "wb") as out:
         out.write(("$ " + " ".join(cmd) + "\n").encode())
-        out.flush()
         try:
-            proc = subprocess.run(
-                list(cmd),
-                cwd=cwd,
-                stdout=out,
-                stderr=subprocess.STDOUT,
-                env=full_env,
-                check=False,
-            )
-        except FileNotFoundError as exc:
-            raise ToolError(f"{cmd[0]}: not found on PATH") from exc
-    return Step(name, log, proc.returncode)
+            code = procs.run_to_file(cmd, out, cwd=cwd, env=full_env, timeout=timeout)
+        except procs.TimedOut:
+            assert timeout is not None
+            message = f"dktools: {name}: timed out after {timeout:g}s; killed"
+            out.write(f"\n{message}\n".encode())
+            print(message, file=sys.stderr, flush=True)
+            return Step(name, log, procs.TIMEOUT_CODE, timed_out=True)
+    return Step(name, log, code)
 
 
 def read_lines(path: Path) -> list[str]:
@@ -215,6 +237,8 @@ def ctest_command(
         str(jobs),
         "--output-on-failure",
         "--no-tests=error",
+        "--timeout",
+        str(CTEST_TEST_TIMEOUT),
     ]
     if include:
         cmd += ["-R", anchored(include)]

@@ -34,17 +34,24 @@ class MatrixRunner:
     `outputs` and `codes` take either the full key or just the step
     ("build", "ctest", "ctest-serial", "ctest-output", ...)."""
 
-    def __init__(self, codes=None, outputs=None) -> None:
+    def __init__(self, codes=None, outputs=None, timed_out=()) -> None:
         self.codes = codes or {}
         self.outputs = outputs or {}
+        self.timed_out = set(timed_out)  # step names that "time out"
         self.calls: list[tuple[str, list[str]]] = []
+        self.timeouts: dict[str, float | None] = {}
 
     def _get(self, table: dict, key: str, default):
         step = key.split(" ", 1)[-1]
         return table.get(key, table.get(step, default))
 
-    def __call__(self, name, cmd, log, cwd=None, env=None) -> Step:
+    def __call__(self, name, cmd, log, cwd=None, env=None, timeout=None) -> Step:
         self.calls.append((name, list(cmd)))
+        self.timeouts[name] = timeout
+        if name in self.timed_out:
+            log.parent.mkdir(parents=True, exist_ok=True)
+            log.write_text(f"dktools: {name}: timed out after {timeout:g}s; killed\n")
+            return Step(name, log, 124, timed_out=True)
         log.parent.mkdir(parents=True, exist_ok=True)
         default = (
             PASS if name.endswith("ctest") or name.endswith("ctest-serial") else ""
@@ -208,6 +215,27 @@ class ValidateRun(unittest.TestCase):
                 code, out = self.run_validate(MatrixRunner(codes, outputs))
                 self.assertEqual(code, 1, out)
                 self.assertIn(needle, out)
+
+    def test_every_step_has_a_timeout(self) -> None:
+        runner = MatrixRunner(outputs={"allocaudit": "100% clean pattern\n"})
+        code, out = self.run_validate(runner)
+        self.assertEqual(code, 0, out)
+        for name, timeout in runner.timeouts.items():
+            with self.subTest(step=name):
+                self.assertIsNotNone(timeout)
+                self.assertGreater(timeout, 0)
+        ctest = runner.command("clang22-dev ctest")
+        self.assertEqual(
+            ctest[ctest.index("--timeout") + 1], str(steps.CTEST_TEST_TIMEOUT)
+        )
+
+    def test_timed_out_steps_fail_and_say_so(self) -> None:
+        for step in ("clang22-dev build", "clang22-dev ctest", "allocaudit"):
+            with self.subTest(step=step):
+                runner = MatrixRunner(timed_out=[step])
+                code, out = self.run_validate(runner)
+                self.assertEqual(code, 1, out)
+                self.assertIn("FAIL (timed out)", out)
 
     def test_leakage_gate_over_the_range(self) -> None:
         # Only leakcheck.py and its tests may spell the terms out.

@@ -43,11 +43,13 @@ from __future__ import annotations
 
 import os
 import re
-from concurrent.futures import ProcessPoolExecutor
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from clang import cindex
+
+from . import procs
 
 ALLOCATORS = ("zmalloc", "zcalloc", "zrealloc")
 
@@ -178,6 +180,27 @@ class AuditResult:
         return not self.violations and not self.parse_errors
 
 
+@dataclass(frozen=True, slots=True)
+class _Loc:
+    line: int
+    column: int
+
+
+@dataclass(frozen=True, slots=True)
+class _Tok:
+    """A libclang token's spelling, kind and location, read once.
+
+    Every ``cindex.Token`` attribute is a libclang call that builds a
+    new object, and the classification reads each token's location
+    once per allocation site in its function: on the large files that
+    made the audit quadratic in libclang calls (minutes per file on a
+    loaded machine)."""
+
+    spelling: str
+    kind: cindex.TokenKind
+    location: _Loc
+
+
 def _compile_args(repo: Path, path: Path) -> list[str]:
     """Compile args for a TU: from compile_commands.json when present,
     else a minimal include set sufficient for tokenization."""
@@ -221,9 +244,14 @@ def _compile_args(repo: Path, path: Path) -> list[str]:
 def _function_extents(
     tu: cindex.TranslationUnit, path: str
 ) -> list[tuple[int, int, str]]:
-    """(startLine, endLine, name) for every function defined in path."""
+    """(startLine, endLine, name) for every function defined in path.
+
+    Only the translation unit's top-level cursors are visited: C has
+    no nested function definitions (clang rejects GNU nested
+    functions), and walking every statement of every included header
+    dominated the audit's run time."""
     out = []
-    for c in tu.cursor.walk_preorder():
+    for c in tu.cursor.get_children():
         if (
             c.kind == cindex.CursorKind.FUNCTION_DECL
             and c.is_definition()
@@ -465,13 +493,13 @@ def audit_file(
     # Comments are excluded so statement spans anchor on real code (a
     # leading comment line would otherwise become the statement start
     # and shift where annotations are looked up).
-    tokens = [
-        t
-        for t in tu.cursor.get_tokens()
-        if t.location.file
-        and t.location.file.name == str(path)
-        and t.kind != cindex.TokenKind.COMMENT
-    ]
+    tokens = []
+    for t in tu.cursor.get_tokens():
+        loc = t.location
+        if loc.file and loc.file.name == str(path):
+            kind = t.kind
+            if kind != cindex.TokenKind.COMMENT:
+                tokens.append(_Tok(t.spelling, kind, _Loc(loc.line, loc.column)))
 
     for i, tok in enumerate(tokens):
         if tok.kind != cindex.TokenKind.IDENTIFIER:
@@ -549,35 +577,90 @@ def discover(repo: Path) -> list[Path]:
     return out
 
 
+#: Seconds the audit waits for some file to finish before it fails:
+#: the slowest file takes about 3 s alone, so only a stuck worker
+#: reaches this even on a heavily loaded machine.  Below the
+#: allocOwnership ctest TIMEOUT (300 s), so a stuck run fails with
+#: this module's message rather than being killed by ctest.
+STALL_TIMEOUT = 120.0
+
 #: Per-worker libclang Index (libclang contexts must not be shared
-#: across processes; each pool worker lazily creates its own).
+#: across processes); created by the pool initializer in each worker.
 _WORKER_INDEX: cindex.Index | None = None
 
 
-def _audit_one(args: tuple[str, str, bool]) -> AuditResult:
-    """Process-pool map fn: audit a single file with a per-worker Index."""
+def _init_worker() -> None:
+    """Pool initializer: load libclang in the worker itself."""
     global _WORKER_INDEX
+    _WORKER_INDEX = cindex.Index.create()
+
+
+@dataclass
+class FileAudit:
+    """One worker's answer: the file's result and the seconds it took."""
+
+    result: AuditResult
+    seconds: float
+
+
+def _audit_one(args: tuple[str, str, bool]) -> FileAudit:
+    """Process-pool map fn: audit a single file with the worker's Index."""
     repo_s, path_s, ctors = args
     if _WORKER_INDEX is None:
-        _WORKER_INDEX = cindex.Index.create()
-    return audit_file(
+        _init_worker()
+    assert _WORKER_INDEX is not None
+    start = time.monotonic()
+    result = audit_file(
         Path(repo_s), Path(path_s), _WORKER_INDEX, include_constructors=ctors
     )
+    return FileAudit(result, time.monotonic() - start)
+
+
+def _size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
 
 
 def run_audit(
-    repo: Path, jobs: int | None = None, include_constructors: bool = False
+    repo: Path,
+    jobs: int | None = None,
+    include_constructors: bool = False,
+    stall_timeout: float | None = STALL_TIMEOUT,
+    timings: list[tuple[str, float]] | None = None,
 ) -> AuditResult:
-    """Map: parse+audit each file in parallel worker processes.
-    Reduce: merge per-file results in stable file order."""
+    """Map: parse+audit each file in parallel worker processes
+    (``procs.parallel_map``: spawn-started workers, a dead worker or a
+    stall past `stall_timeout` seconds is a ToolError, never a hang).
+    Reduce: merge per-file results in stable file order.
+
+    Files are handed out largest first so the slowest ones start early
+    instead of running alone at the end.  When `timings` is given it
+    receives (repo-relative path, seconds) for every file."""
     files = discover(repo)
     workers = jobs or os.cpu_count() or 4
+    order = sorted(range(len(files)), key=lambda i: -_size(files[i]))
+    work = [(str(repo), str(files[i]), include_constructors) for i in order]
+    answers = procs.parallel_map(
+        _audit_one,
+        work,
+        jobs=workers,
+        stall_timeout=stall_timeout,
+        init=_init_worker,
+        describe=lambda item: str(Path(item[1]).relative_to(repo)),
+        noun="file",
+    )
+    by_file: list[FileAudit | None] = [None] * len(files)
+    for i, answer in zip(order, answers):
+        by_file[i] = answer
     total = AuditResult()
-    work = [(str(repo), str(p), include_constructors) for p in files]
-    with ProcessPoolExecutor(max_workers=workers) as pool:
-        for r in pool.map(_audit_one, work, chunksize=4):
-            total.sites.extend(r.sites)
-            total.parse_errors.extend(r.parse_errors)
+    for path, answer in zip(files, by_file):
+        assert answer is not None
+        total.sites.extend(answer.result.sites)
+        total.parse_errors.extend(answer.result.parse_errors)
+        if timings is not None:
+            timings.append((str(path.relative_to(repo)), answer.seconds))
     return total
 
 

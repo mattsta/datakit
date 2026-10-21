@@ -1,24 +1,30 @@
-"""Shared process, git and tree-export helpers for dktools subcommands.
+"""Shared git and tree-export helpers for dktools subcommands.
 
-Every external program runs through ``subprocess`` with an argument
-list (never a shell), and every failure a user can cause (a bad path,
-an unknown revision, a missing program) surfaces as ``ToolError``,
-which the CLI prints as one line on stderr with exit code 2.
+Every external program runs through ``procs`` with an argument list
+(never a shell), in its own process group that is killed on a
+timeout or an interrupt, and every failure a user can cause (a bad
+path, an unknown revision, a missing program, a git command that
+hangs) surfaces as ``ToolError``, which the CLI prints as one line on
+stderr with exit code 2.
 """
 
 from __future__ import annotations
 
 import os
 import shutil
-import subprocess
 import tarfile
 import tempfile
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path, PurePosixPath
 
+from . import procs
+from .procs import ToolError  # subcommands import it from here
 
-class ToolError(Exception):
-    """An input or environment error: exit code 2, one stderr line."""
+#: Seconds any single git command may run.  Every git call dktools
+#: makes is local and finishes in seconds; one still running after
+#: this is stuck (and stdin is /dev/null, so it is not waiting on a
+#: prompt).
+GIT_TIMEOUT = 600.0
 
 
 #: Environment variable naming the scratch root shared by verify and
@@ -79,22 +85,23 @@ def git(
     env: Mapping[str, str] | None = None,
     input: bytes | None = None,
     ok_codes: Sequence[int] = (0,),
+    timeout: float = GIT_TIMEOUT,
 ) -> bytes:
-    """Run ``git -C repo ARGS`` and return stdout; ToolError on failure."""
+    """Run ``git -C repo ARGS`` and return stdout; ToolError on failure
+    or after `timeout` seconds (the git process group is killed)."""
     full_env = None
     if env is not None:
         full_env = dict(os.environ)
         full_env.update(env)
     try:
-        proc = subprocess.run(
+        proc = procs.run(
             ["git", "-C", str(repo), *args],
             input=input,
-            capture_output=True,
             env=full_env,
-            check=False,
+            timeout=timeout,
         )
-    except FileNotFoundError as exc:
-        raise ToolError("git: not found on PATH") from exc
+    except procs.TimedOut as exc:
+        raise ToolError(f"git {args[0]}: timed out after {timeout:g}s") from exc
     if proc.returncode not in ok_codes:
         detail = proc.stderr.decode("utf-8", "replace").strip().splitlines()
         first = detail[0] if detail else f"exit {proc.returncode}"
@@ -246,29 +253,29 @@ def tree_changes(repo: Path, base: str, tree: str) -> list[tuple[str, str]]:
 
 
 def export_tree(repo: Path, treeish: str, dest: Path) -> None:
-    """Extract ``git archive treeish`` into `dest` with tarfile."""
+    """Extract ``git archive treeish`` into `dest` with tarfile.
+
+    git's stderr goes to a temporary file, not a second pipe: a pipe
+    read only after the archive could fill and stall git while we wait
+    on its stdout.  An extraction error stops git's whole process
+    group; any other exception (Ctrl-C, a full disk) does too, and git
+    is always reaped.  `dest` may then hold a partial tree: callers
+    extract into a work dir they recreate on the next run."""
     dest.mkdir(parents=True, exist_ok=True)
-    try:
-        proc = subprocess.Popen(
-            ["git", "-C", str(repo), "archive", "--format=tar", treeish],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-    except FileNotFoundError as exc:
-        raise ToolError("git: not found on PATH") from exc
-    assert proc.stdout is not None and proc.stderr is not None
+    cmd = ["git", "-C", str(repo), "archive", "--format=tar", treeish]
     tar_error: tarfile.TarError | None = None
-    try:
-        with tarfile.open(fileobj=proc.stdout, mode="r|") as archive:
-            archive.extractall(dest, filter="data")
-    except tarfile.TarError as exc:
-        tar_error = exc
-        proc.kill()
-    finally:
-        proc.stdout.close()
-    err = proc.stderr.read().decode("utf-8", "replace").strip()
-    proc.stderr.close()
-    code = proc.wait()
+    with tempfile.TemporaryFile() as errfile:
+        with procs.streaming(cmd, errfile) as proc:
+            assert proc.stdout is not None
+            try:
+                with tarfile.open(fileobj=proc.stdout, mode="r|") as archive:
+                    archive.extractall(dest, filter="data")
+            except tarfile.TarError as exc:
+                tar_error = exc
+                procs.kill_group(proc)
+        code = proc.returncode
+        errfile.seek(0)
+        err = errfile.read().decode("utf-8", "replace").strip()
     if err and code != 0:
         raise ToolError(f"git archive {treeish}: {err.splitlines()[0]}")
     if tar_error is not None:
