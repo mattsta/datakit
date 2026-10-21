@@ -231,6 +231,41 @@ int multiFenwick2dTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("storage: 8 bytes per int64 cell, 9 with kinds, 8 after Clear") {
+        cleaner(multiFenwick2dFree) multiFenwick2d *t = multiFenwick2dNew();
+        const size_t base = multiFenwick2dBytes(t);
+        const databox three = DATABOX_SIGNED(3);
+        const databox half = DATABOX_DOUBLE(0.5);
+        const databox big = DATABOX_UNSIGNED(UINT64_MAX);
+        databox r;
+
+        /* (5, 2): capacity 8 x 4 */
+        if (!multiFenwick2dUpdate(&t, 5, 2, &three) ||
+            !multiFenwick2dUpdate(&t, 1, 1, &three) ||
+            multiFenwick2dBytes(t) != base + 8 * 32) {
+            ERR("int64 cells: %zu bytes, want %zu", multiFenwick2dBytes(t),
+                base + 8 * (size_t)32);
+        }
+
+        if (!multiFenwick2dUpdate(&t, 0, 0, &half) ||
+            multiFenwick2dBytes(t) != base + 9 * 32 ||
+            !multiFenwick2dQuery(t, 7, 3, &r) || r.type != DATABOX_DOUBLE_64 ||
+            r.data.d64 != 6.5 || !multiFenwick2dGet(t, 5, 2, &r) ||
+            !mf2tIsInt_(&r, 3)) {
+            ERRR("adding a double lost values or did not add the kinds");
+        }
+
+        /* A cell above INT64_MAX also needs kinds; Clear drops them */
+        multiFenwick2dClear(t);
+        if (multiFenwick2dBytes(t) != base + 8 * 32 ||
+            !multiFenwick2dQuery(t, 7, 3, &r) || !mf2tIsInt_(&r, 0) ||
+            !multiFenwick2dUpdate(&t, 2, 0, &big) ||
+            multiFenwick2dBytes(t) != base + 9 * 32 ||
+            !multiFenwick2dGet(t, 2, 0, &r) || !mf2tIsInt_(&r, UINT64_MAX)) {
+            ERRR("Clear or an unsigned cell mishandled the kinds array");
+        }
+    }
+
     TEST("exact sums past 64 bits: refused cells, unreturnable prefixes") {
         const __int128_t u = UINT64_MAX;
         const __int128_t m = INT64_MIN;

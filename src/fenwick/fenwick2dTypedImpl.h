@@ -37,25 +37,68 @@ static inline F2D_VALUE_T F2D_PUB_(Sub_)(F2D_VALUE_T a, F2D_VALUE_T b) {
 #endif
 }
 
+/* The cell store: one row-major array of values */
+typedef struct F2D_PUB_(Store_) {
+    F2D_VALUE_T *cells;
+} F2D_PUB_(Store_);
+
+/* Re-lay oldR x oldC cells out as newR x newC (each at least the old
+ * one), the new cells zero.  OOM is fail-fast. */
+static void F2D_PUB_(Relayout_)(F2D_PUB_(Store_) * s, uint64_t oldR,
+                                uint64_t oldC, uint64_t newR, uint64_t newC) {
+    if (newC == oldC) {
+        /* @own: container; free=zfree */
+        s->cells = zrealloc(s->cells, newR * newC * sizeof(*s->cells));
+        memset(&s->cells[oldR * oldC], 0,
+               (newR - oldR) * newC * sizeof(*s->cells));
+        return;
+    }
+
+    /* @own: container; free=zfree */
+    F2D_VALUE_T *cells = zcalloc(newR * newC, sizeof(*cells));
+    for (uint64_t r = 0; r < oldR; r++) {
+        memcpy(&cells[r * newC], &s->cells[r * oldC], oldC * sizeof(*cells));
+    }
+
+    zfree(s->cells);
+    s->cells = cells;
+}
+
 #define F2D_FN(name) F2D_PUB_(name)
 #define F2D_STRUCT F2D_T_
-#define F2D_CELL_T F2D_VALUE_T
+#define F2D_STORE_T F2D_PUB_(Store_)
+#define F2D_PLAN_T F2D_VALUE_T
 #define F2D_NUM_T F2D_VALUE_T
 #define F2D_NUM_ZERO ((F2D_VALUE_T)0)
 #define F2D_NUM_ADD(a, b) F2D_PUB_(Add_)(a, b)
 #define F2D_NUM_SUB(a, b) F2D_PUB_(Sub_)(a, b)
-#define F2D_CELL_LOAD(cell) (*(cell))
-#define F2D_CELL_ENCODE(num, out) (*(out) = (num), true)
+#define F2D_LOAD(s, idx) ((s)->cells[idx])
+#define F2D_ENCODE(num, out) (*(out) = (num), true)
+#define F2D_PUT(s, n, idx, plan) ((void)(n), (s)->cells[idx] = (plan))
+#define F2D_COPY(s, dst, src) ((s)->cells[dst] = (s)->cells[src])
+#define F2D_RELAYOUT(s, oR, oC, nR, nC) F2D_PUB_(Relayout_)(s, oR, oC, nR, nC)
+#define F2D_CLEAR(s, n)                                                        \
+    ((s)->cells ? (void)memset((s)->cells, 0, (n) * sizeof(*(s)->cells))       \
+                : (void)0)
+#define F2D_BYTES(s, n) ((n) * sizeof(*(s)->cells))
+#define F2D_FREE(s) zfree((s)->cells)
 #include "fenwick2dCoreImpl.h"
 #undef F2D_FN
 #undef F2D_STRUCT
-#undef F2D_CELL_T
+#undef F2D_STORE_T
+#undef F2D_PLAN_T
 #undef F2D_NUM_T
 #undef F2D_NUM_ZERO
 #undef F2D_NUM_ADD
 #undef F2D_NUM_SUB
-#undef F2D_CELL_LOAD
-#undef F2D_CELL_ENCODE
+#undef F2D_LOAD
+#undef F2D_ENCODE
+#undef F2D_PUT
+#undef F2D_COPY
+#undef F2D_RELAYOUT
+#undef F2D_CLEAR
+#undef F2D_BYTES
+#undef F2D_FREE
 
 F2D_T_ *F2D_PUB_(New)(void) {
     /* @own: caller */
@@ -64,7 +107,7 @@ F2D_T_ *F2D_PUB_(New)(void) {
 
 void F2D_PUB_(Free)(F2D_T_ *t) {
     if (t) {
-        zfree(t->cells);
+        F2D_PUB_(FreeStore_)(t);
         zfree(t);
     }
 }

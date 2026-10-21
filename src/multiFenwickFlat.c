@@ -1,6 +1,7 @@
 #include "multiFenwickFlat.h"
 #include "cleaner.h"
 #include "datakit.h"
+#include "multiFenwickCells.h"
 #include "multiFenwickCommon.h"
 
 /* Scope-exit cleaners (see cleaner.h idioms) */
@@ -8,102 +9,31 @@ defcleaner(multiFenwickFlat *, multiFenwickFlatFree);
 #include <stdio.h>
 #include <string.h>
 
-/* What a cell's 64 bits hold.  SIGNED is 0, so zero-filled memory is a
- * cell holding the integer 0. */
-typedef enum multiFenwickFlatKind {
-    MFWF_SIGNED = 0,
-    MFWF_UNSIGNED = 1,
-    MFWF_DOUBLE = 2,
-} multiFenwickFlatKind;
-
-/* Cells live in flat arrays of 'capacity' entries, so every cell read and
- * write is O(1): the value bits, and a one-byte kind per cell.  The kinds
- * array exists only once some cell needs a kind other than SIGNED (a
- * value above INT64_MAX, or a double); until then every cell is an int64
- * (8 bytes per cell) and sums take an integer-only fast path. */
+/* The cells are an adaptive store (multiFenwickCells.h): 8 bytes per cell
+ * while every cell is an int64, which is when sums, updates and lifting
+ * take integer-only fast paths; a kinds array joins once a cell holds a
+ * value above INT64_MAX or a double. */
 struct multiFenwickFlat {
-    uint64_t *bits;    /* cell values: int64, uint64 or double bits */
-    uint8_t *kinds;    /* multiFenwickFlatKind per cell; NULL: all SIGNED */
-    uint64_t count;    /* Logical count: highest index + 1 */
-    uint64_t capacity; /* Allocated cells (power of two, for BIT traversal) */
+    multiFenwickCells cells; /* 'capacity' cells */
+    uint64_t count;          /* Logical count: highest index + 1 */
+    uint64_t capacity;       /* Allocated cells (power of two) */
 };
 
 /* ====================================================================
  * Cells
  * ==================================================================== */
 
-/* The cell at 0-based position 'pos' < capacity.  Cells only ever hold
- * what multiFenwickFlatCellSet_ stores, so a read cannot fail. */
 static multiFenwickNum multiFenwickFlatCellGet_(const multiFenwickFlat *mfw,
                                                 uint64_t pos) {
     assert(pos < mfw->capacity);
-    const uint64_t bits = mfw->bits[pos];
-    const multiFenwickFlatKind kind =
-        mfw->kinds ? (multiFenwickFlatKind)mfw->kinds[pos] : MFWF_SIGNED;
-    switch (kind) {
-    case MFWF_UNSIGNED:
-        return (multiFenwickNum){.i = bits};
-    case MFWF_DOUBLE: {
-        double d;
-        memcpy(&d, &bits, sizeof(d));
-        return (multiFenwickNum){.d = d, .isFloat = true};
-    }
-    case MFWF_SIGNED:
-    default:
-        assert(kind == MFWF_SIGNED);
-        return (multiFenwickNum){.i = (int64_t)bits};
-    }
+    return multiFenwickCellsGet(&mfw->cells, pos);
 }
 
-/* Store 'box' (SIGNED_64, UNSIGNED_64 or DOUBLE_64, as multiFenwickNumBox_
- * makes it) in the cell at 0-based position 'pos' < capacity.  The first
- * cell that is not an int64 creates the kinds array (all SIGNED, which is
- * what every cell so far is).  OOM is fail-fast. */
-static void multiFenwickFlatCellSet_(multiFenwickFlat *mfw, uint64_t pos,
-                                     const databox *box) {
-    assert(pos < mfw->capacity);
-    multiFenwickFlatKind kind = MFWF_SIGNED;
-    switch (box->type) {
-    case DATABOX_SIGNED_64:
-        mfw->bits[pos] = (uint64_t)box->data.i64;
-        break;
-    case DATABOX_DOUBLE_64:
-        memcpy(&mfw->bits[pos], &box->data.d64, sizeof(mfw->bits[pos]));
-        kind = MFWF_DOUBLE;
-        break;
-    case DATABOX_UNSIGNED_64:
-    default:
-        assert(box->type == DATABOX_UNSIGNED_64);
-        mfw->bits[pos] = box->data.u64;
-        kind = box->data.u64 > INT64_MAX ? MFWF_UNSIGNED : MFWF_SIGNED;
-        break;
-    }
-
-    if (kind != MFWF_SIGNED && !mfw->kinds) {
-        /* @own: container; free=zfree */
-        mfw->kinds = zcalloc(mfw->capacity, sizeof(*mfw->kinds));
-    }
-
-    if (mfw->kinds) {
-        mfw->kinds[pos] = (uint8_t)kind;
-    }
-}
-
-/* Grow the cell arrays to 'newCapacity' cells, zero-filling the new cells
- * (each then holds the integer 0).  OOM is fail-fast. */
+/* Grow the cells to 'newCapacity', the new ones zero */
 static void multiFenwickFlatCellsGrow_(multiFenwickFlat *mfw,
                                        uint64_t newCapacity) {
     assert(newCapacity > mfw->capacity);
-    const uint64_t added = newCapacity - mfw->capacity;
-    /* @own: container; free=zfree */
-    mfw->bits = zrealloc(mfw->bits, newCapacity * sizeof(*mfw->bits));
-    memset(&mfw->bits[mfw->capacity], 0, added * sizeof(*mfw->bits));
-    if (mfw->kinds) {
-        /* @own: container; free=zfree */
-        mfw->kinds = zrealloc(mfw->kinds, newCapacity * sizeof(*mfw->kinds));
-        memset(&mfw->kinds[mfw->capacity], 0, added * sizeof(*mfw->kinds));
-    }
-
+    multiFenwickCellsGrow(&mfw->cells, mfw->capacity, newCapacity);
     mfw->capacity = newCapacity;
 }
 
@@ -111,10 +41,11 @@ static void multiFenwickFlatCellsGrow_(multiFenwickFlat *mfw,
  * the sum stays integer: int128 adds only (at most 64 cells of 64 bits). */
 static multiFenwickNum multiFenwickFlatPrefix_(const multiFenwickFlat *mfw,
                                                uint64_t idx) {
-    if (!mfw->kinds) {
+    const multiFenwickCells *c = &mfw->cells;
+    if (multiFenwickCellsAllInt(c)) {
         __int128_t sum = 0;
         for (uint64_t i = idx + 1; i > 0; i = multiFenwickPrev(i)) {
-            sum += (int64_t)mfw->bits[i - 1];
+            sum += multiFenwickCellsInt(c, i - 1);
         }
 
         return (multiFenwickNum){.i = sum};
@@ -122,7 +53,7 @@ static multiFenwickNum multiFenwickFlatPrefix_(const multiFenwickFlat *mfw,
 
     multiFenwickNum acc = {0};
     for (uint64_t i = idx + 1; i > 0; i = multiFenwickPrev(i)) {
-        acc = multiFenwickNumAdd_(acc, multiFenwickFlatCellGet_(mfw, i - 1));
+        acc = multiFenwickNumAdd_(acc, multiFenwickCellsGet(c, i - 1));
     }
 
     return acc;
@@ -134,20 +65,21 @@ static multiFenwickNum multiFenwickFlatPrefix_(const multiFenwickFlat *mfw,
  * element i alone, in O(log n) reads and with no prefix sum ever formed. */
 static multiFenwickNum multiFenwickFlatElement_(const multiFenwickFlat *mfw,
                                                 uint64_t idx) {
+    const multiFenwickCells *c = &mfw->cells;
     const uint64_t i = idx + 1;
     const uint64_t stop = multiFenwickPrev(i);
-    if (!mfw->kinds) {
-        __int128_t value = (int64_t)mfw->bits[i - 1];
+    if (multiFenwickCellsAllInt(c)) {
+        __int128_t value = multiFenwickCellsInt(c, i - 1);
         for (uint64_t j = i - 1; j > stop; j = multiFenwickPrev(j)) {
-            value -= (int64_t)mfw->bits[j - 1];
+            value -= multiFenwickCellsInt(c, j - 1);
         }
 
         return (multiFenwickNum){.i = value};
     }
 
-    multiFenwickNum acc = multiFenwickFlatCellGet_(mfw, i - 1);
+    multiFenwickNum acc = multiFenwickCellsGet(c, i - 1);
     for (uint64_t j = i - 1; j > stop; j = multiFenwickPrev(j)) {
-        acc = multiFenwickNumSub_(acc, multiFenwickFlatCellGet_(mfw, j - 1));
+        acc = multiFenwickNumSub_(acc, multiFenwickCellsGet(c, j - 1));
     }
 
     return acc;
@@ -196,12 +128,12 @@ multiFenwickFlat *multiFenwickFlatNewFromArray(const databox *values,
     multiFenwickFlatCellsGrow_(mfw, capacity); /* zero past the end */
     for (uint64_t i = 0; i < count; i++) {
         multiFenwickNum n;
-        databox cell;
+        multiFenwickCell cell;
         const bool ok = multiFenwickNumFrom_(&values[i], &n) &&
-                        multiFenwickNumBox_(n, &cell);
-        assert(ok); /* one checked element always boxes */
+                        multiFenwickCellEncode(n, &cell);
+        assert(ok); /* one checked element always encodes */
         (void)ok;
-        multiFenwickFlatCellSet_(mfw, i, &cell);
+        multiFenwickCellsPut(&mfw->cells, capacity, i, cell);
     }
 
     mfw->count = count;
@@ -214,15 +146,15 @@ multiFenwickFlat *multiFenwickFlatNewFromArray(const databox *values,
 
         /* A block of elements whose sum has no 64-bit value refuses the
          * whole array (the cleaner frees the partial tree). */
-        databox box;
-        if (!multiFenwickNumBox_(
+        multiFenwickCell cell;
+        if (!multiFenwickCellEncode(
                 multiFenwickNumAdd_(multiFenwickFlatCellGet_(mfw, parent - 1),
                                     multiFenwickFlatCellGet_(mfw, j - 1)),
-                &box)) {
+                &cell)) {
             return NULL;
         }
 
-        multiFenwickFlatCellSet_(mfw, parent - 1, &box);
+        multiFenwickCellsPut(&mfw->cells, capacity, parent - 1, cell);
     }
 
     multiFenwickFlat *out = mfw;
@@ -235,26 +167,23 @@ void multiFenwickFlatFree(multiFenwickFlat *mfw) {
         return;
     }
 
-    zfree(mfw->bits);
-    zfree(mfw->kinds);
+    multiFenwickCellsFree(&mfw->cells);
     zfree(mfw);
 }
 
 /* Grow the tree's cells to 'newCapacity' (a power of two above the
- * current capacity), keeping every element's value.  'total' is the
- * value of cell 'oldCapacity' (1-based), the sum of every existing
- * element.
+ * current capacity), keeping every element's value.
  *
  * A new cell j in (oldCapacity, newCapacity] covers (j - LSB(j), j],
  * which reaches an existing element only when j is a power of two, and
- * then holds exactly that total; every other new cell is zero. */
-static void multiFenwickFlatGrow_(multiFenwickFlat *mfw, uint64_t newCapacity,
-                                  const databox *total) {
+ * then holds exactly the total: a copy of cell oldCapacity.  Every other
+ * new cell is zero. */
+static void multiFenwickFlatGrow_(multiFenwickFlat *mfw, uint64_t newCapacity) {
     const uint64_t oldCapacity = mfw->capacity;
     multiFenwickFlatCellsGrow_(mfw, newCapacity);
     for (uint64_t j = oldCapacity * 2; oldCapacity > 0 && j <= newCapacity;
          j <<= 1) {
-        multiFenwickFlatCellSet_(mfw, j - 1, total);
+        multiFenwickCellsCopy(&mfw->cells, j - 1, oldCapacity - 1);
     }
 }
 
@@ -271,14 +200,15 @@ static bool multiFenwickFlatApply_(multiFenwickFlat **mfw, uint64_t idx,
      * Plan in int128, then write; anything else takes the general path
      * below (which may add the kinds array). */
     multiFenwickFlat *tree = *mfw;
-    if (tree && !tree->kinds && !delta.isFloat && idx < tree->capacity) {
+    if (tree && multiFenwickCellsAllInt(&tree->cells) && !delta.isFloat &&
+        idx < tree->capacity) {
         int64_t fast[64];
         size_t n = 0;
         bool fits = true;
         for (uint64_t i = idx + 1; i <= tree->capacity;
              i = multiFenwickParent(i)) {
             const __int128_t v =
-                (__int128_t)(int64_t)tree->bits[i - 1] + delta.i;
+                (__int128_t)multiFenwickCellsInt(&tree->cells, i - 1) + delta.i;
             if (v < INT64_MIN || v > INT64_MAX) {
                 fits = false;
                 break;
@@ -291,7 +221,7 @@ static bool multiFenwickFlatApply_(multiFenwickFlat **mfw, uint64_t idx,
             n = 0;
             for (uint64_t i = idx + 1; i <= tree->capacity;
                  i = multiFenwickParent(i)) {
-                tree->bits[i - 1] = (uint64_t)fast[n++];
+                multiFenwickCellsPutInt(&tree->cells, i - 1, fast[n++]);
             }
 
             if (idx + 1 > tree->count) {
@@ -311,17 +241,13 @@ static bool multiFenwickFlatApply_(multiFenwickFlat **mfw, uint64_t idx,
     const uint64_t newCapacity =
         idx < oldCapacity ? oldCapacity
                           : multiFenwickCapacityFor_(oldCapacity, idx);
-    multiFenwickNum total = {0};
-    databox totalBox = DATABOX_UNSIGNED(0);
-    if (newCapacity > oldCapacity && oldCapacity > 0) {
-        total = multiFenwickFlatCellGet_(cur, oldCapacity - 1);
-        const bool boxed = multiFenwickNumBox_(total, &totalBox);
-        assert(boxed); /* a stored cell always boxes */
-        (void)boxed;
-    }
+    const multiFenwickNum total =
+        newCapacity > oldCapacity && oldCapacity > 0
+            ? multiFenwickFlatCellGet_(cur, oldCapacity - 1)
+            : (multiFenwickNum){0};
 
     /* A chain has at most one cell per bit of the capacity */
-    databox planned[64];
+    multiFenwickCell planned[64];
     size_t steps = 0;
     for (uint64_t i = idx + 1; i <= newCapacity; i = multiFenwickParent(i)) {
         multiFenwickNum base = {0};
@@ -332,8 +258,8 @@ static bool multiFenwickFlatApply_(multiFenwickFlat **mfw, uint64_t idx,
         }
 
         assert(steps < sizeof(planned) / sizeof(*planned));
-        if (!multiFenwickNumBox_(multiFenwickNumAdd_(base, delta),
-                                 &planned[steps])) {
+        if (!multiFenwickCellEncode(multiFenwickNumAdd_(base, delta),
+                                    &planned[steps])) {
             return false;
         }
 
@@ -351,12 +277,13 @@ static bool multiFenwickFlatApply_(multiFenwickFlat **mfw, uint64_t idx,
 
     tree = *mfw;
     if (newCapacity > oldCapacity) {
-        multiFenwickFlatGrow_(tree, newCapacity, &totalBox);
+        multiFenwickFlatGrow_(tree, newCapacity);
     }
 
     steps = 0;
     for (uint64_t i = idx + 1; i <= tree->capacity; i = multiFenwickParent(i)) {
-        multiFenwickFlatCellSet_(tree, i - 1, &planned[steps++]);
+        multiFenwickCellsPut(&tree->cells, tree->capacity, i - 1,
+                             planned[steps++]);
     }
 
     if (idx + 1 > tree->count) {
@@ -464,8 +391,7 @@ size_t multiFenwickFlatBytes(const multiFenwickFlat *mfw) {
         return 0;
     }
 
-    return sizeof(*mfw) + mfw->capacity * sizeof(*mfw->bits) +
-           (mfw->kinds ? mfw->capacity * sizeof(*mfw->kinds) : 0);
+    return sizeof(*mfw) + multiFenwickCellsBytes(&mfw->cells, mfw->capacity);
 }
 
 /* Lower bound: binary lifting down the implicit tree, O(log n) cell reads,
@@ -486,13 +412,15 @@ size_t multiFenwickFlatLowerBound(const multiFenwickFlat *mfw,
         bit <<= 1;
     }
 
+    const multiFenwickCells *c = &mfw->cells;
     uint64_t pos = 0;
-    if (!mfw->kinds && !want.isFloat) {
+    if (multiFenwickCellsAllInt(c) && !want.isFloat) {
         __int128_t sum = 0;
         for (bit >>= 1; bit > 0; bit >>= 1) {
             const uint64_t next = pos + bit;
             if (next <= mfw->count) {
-                const __int128_t withNext = sum + (int64_t)mfw->bits[next - 1];
+                const __int128_t withNext =
+                    sum + multiFenwickCellsInt(c, next - 1);
                 if (withNext < want.i) {
                     pos = next;
                     sum = withNext;
@@ -504,8 +432,8 @@ size_t multiFenwickFlatLowerBound(const multiFenwickFlat *mfw,
         for (bit >>= 1; bit > 0; bit >>= 1) {
             const uint64_t next = pos + bit;
             if (next <= mfw->count) {
-                const multiFenwickNum withNext = multiFenwickNumAdd_(
-                    sum, multiFenwickFlatCellGet_(mfw, next - 1));
+                const multiFenwickNum withNext =
+                    multiFenwickNumAdd_(sum, multiFenwickCellsGet(c, next - 1));
                 if (multiFenwickNumCompare_(withNext, want) < 0) {
                     pos = next;
                     sum = withNext;
@@ -523,9 +451,7 @@ void multiFenwickFlatClear(multiFenwickFlat *mfw) {
     }
 
     /* Every cell becomes the int64 0, so the kinds array is not needed */
-    memset(mfw->bits, 0, mfw->capacity * sizeof(*mfw->bits));
-    zfree(mfw->kinds);
-    mfw->kinds = NULL;
+    multiFenwickCellsClear(&mfw->cells, mfw->capacity);
 }
 
 #ifdef DATAKIT_TEST

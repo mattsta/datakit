@@ -4,16 +4,16 @@
  *
  * The traversal, growth and transactional-write machinery of a 2D Binary
  * Indexed Tree, written once for every cell model (the typed trees in
- * fenwick2d<Suffix>.c and the databox tree in multiFenwick2d.c).  Every
- * function is static to the including file.
+ * fenwick2d<Suffix>.c and the adaptive databox tree in multiFenwick2d.c).
+ * Every function is static to the including file.
  *
  * MODEL
  * -----
  * Elements e[r][c], 0-based.  Cell (i, j), 1-based, holds the sum of the
  * elements in rows (i - LSB(i), i] and columns (j - LSB(j), j].  Cells are
- * stored row-major in rowCap x colCap (both powers of two), cell (i, j) at
- * (i - 1) * colCap + (j - 1).  Point updates, prefix sums and element
- * reads are O(log R * log C).
+ * row-major in rowCap x colCap (both powers of two), cell (i, j) at index
+ * (i - 1) * colCap + (j - 1) of the cell store.  Point updates, prefix
+ * sums and element reads are O(log R * log C).
  *
  * GROWTH
  * ------
@@ -26,20 +26,33 @@
  * Cell (i, j) of the grown tree can also be read virtually, before the
  * growth happens (CellVirtual_), which is what keeps writes transactional.
  *
- * REQUIRED DEFINES
- * ----------------
- *   F2D_FN(name)          - static function name for this instantiation
- *   F2D_STRUCT            - the tree struct tag (members below)
- *   F2D_CELL_T            - stored cell type; all-zero bytes must be 0
- *   F2D_NUM_T             - arithmetic type
- *   F2D_NUM_ZERO          - the arithmetic zero
- *   F2D_NUM_ADD(a, b), F2D_NUM_SUB(a, b)
- *   F2D_CELL_LOAD(cell)   - F2D_NUM_T from an F2D_CELL_T
- *   F2D_CELL_ENCODE(num, cellOut) - store num into *cellOut; false (and
- *                           nothing written) when no cell can hold it
+ * CELL STORE (required defines)
+ * -----------------------------
+ *   F2D_FN(name)               static function name for this instantiation
+ *   F2D_STRUCT                 the tree struct tag (members below)
+ *   F2D_STORE_T                the cell store; zero-initialized is empty
+ *   F2D_PLAN_T                 one encoded cell value
+ *   F2D_NUM_T, F2D_NUM_ZERO, F2D_NUM_ADD(a, b), F2D_NUM_SUB(a, b)
+ *   F2D_LOAD(store, idx)       the F2D_NUM_T of cell idx
+ *   F2D_ENCODE(num, planOut)   encode; false (nothing written) when no
+ *                              cell can hold num
+ *   F2D_PUT(store, cells, idx, plan)  store a plan; 'cells' is the
+ *                              store's cell count
+ *   F2D_COPY(store, dst, src)  copy one cell
+ *   F2D_RELAYOUT(store, oldR, oldC, newR, newC)  grow, new cells zero
+ *   F2D_CLEAR(store, cells), F2D_BYTES(store, cells), F2D_FREE(store)
+ *
+ * OPTIONAL INTEGER FAST PATH (define F2D_FAST_INT)
+ * ------------------------------------------------
+ * For stores that know when every cell is an int64:
+ *   F2D_ALL_INT(store), F2D_INT(store, idx) -> int64_t,
+ *   F2D_PUT_INT(store, idx, int64_t),
+ *   F2D_NUM_FROM_I128(v), F2D_NUM_IS_INT(num), F2D_NUM_I128(num)
+ * Sums then accumulate in int128, and in-capacity integer writes whose
+ * cells all stay int64 skip encoding.
  *
  * The struct (defined here) is:
- *   struct F2D_STRUCT { F2D_CELL_T *cells; uint64_t rowCap, colCap,
+ *   struct F2D_STRUCT { F2D_STORE_T store; uint64_t rowCap, colCap,
  *                       rows, cols; };
  * rows and cols are the extents: highest written index + 1. */
 
@@ -55,7 +68,7 @@
 #define F2D_MAX_CHAIN 289
 
 struct F2D_STRUCT {
-    F2D_CELL_T *cells;
+    F2D_STORE_T store;
     uint64_t rowCap;
     uint64_t colCap;
     uint64_t rows;
@@ -72,9 +85,14 @@ static inline uint64_t F2D_FN(CapFor_)(uint64_t current, uint64_t idx) {
     return cap;
 }
 
+static inline uint64_t F2D_FN(Index_)(const struct F2D_STRUCT *t, uint64_t i,
+                                      uint64_t j) {
+    return (i - 1) * t->colCap + (j - 1);
+}
+
 static inline F2D_NUM_T F2D_FN(Cell_)(const struct F2D_STRUCT *t, uint64_t i,
                                       uint64_t j) {
-    return F2D_CELL_LOAD(&t->cells[(i - 1) * t->colCap + (j - 1)]);
+    return F2D_LOAD(&t->store, F2D_FN(Index_)(t, i, j));
 }
 
 /* Where a cell of the grown tree takes its value from: itself when it
@@ -124,24 +142,7 @@ static void F2D_FN(Grow_)(struct F2D_STRUCT *t, uint64_t rowCap,
         return;
     }
 
-    if (colCap == oldC) {
-        /* Only rows grow: the layout keeps its stride */
-        /* @own: container; free=zfree */
-        t->cells = zrealloc(t->cells, rowCap * colCap * sizeof(F2D_CELL_T));
-        memset(&t->cells[oldR * colCap], 0,
-               (rowCap - oldR) * colCap * sizeof(F2D_CELL_T));
-    } else {
-        /* @own: container; free=zfree */
-        F2D_CELL_T *cells = zcalloc(rowCap * colCap, sizeof(F2D_CELL_T));
-        for (uint64_t r = 0; r < oldR; r++) {
-            memcpy(&cells[r * colCap], &t->cells[r * oldC],
-                   oldC * sizeof(F2D_CELL_T));
-        }
-
-        zfree(t->cells);
-        t->cells = cells;
-    }
-
+    F2D_RELAYOUT(&t->store, oldR, oldC, rowCap, colCap);
     t->rowCap = rowCap;
     t->colCap = colCap;
     if (oldR == 0 || oldC == 0) {
@@ -151,14 +152,16 @@ static void F2D_FN(Grow_)(struct F2D_STRUCT *t, uint64_t rowCap,
     /* New power-of-two rows copy row oldR, then new power-of-two columns
      * copy column oldC (in every row, new rows included) */
     for (uint64_t i = oldR * 2; i <= rowCap; i <<= 1) {
-        memcpy(&t->cells[(i - 1) * colCap], &t->cells[(oldR - 1) * colCap],
-               oldC * sizeof(F2D_CELL_T));
+        for (uint64_t j = 1; j <= oldC; j++) {
+            F2D_COPY(&t->store, F2D_FN(Index_)(t, i, j),
+                     F2D_FN(Index_)(t, oldR, j));
+        }
     }
 
     for (uint64_t j = oldC * 2; j <= colCap; j <<= 1) {
         for (uint64_t i = 1; i <= rowCap; i++) {
-            t->cells[(i - 1) * colCap + (j - 1)] =
-                t->cells[(i - 1) * colCap + (oldC - 1)];
+            F2D_COPY(&t->store, F2D_FN(Index_)(t, i, j),
+                     F2D_FN(Index_)(t, i, oldC));
         }
     }
 }
@@ -169,13 +172,12 @@ static void F2D_FN(Grow_)(struct F2D_STRUCT *t, uint64_t rowCap,
  * new value. */
 static bool F2D_FN(Plan_)(const struct F2D_STRUCT *t, uint64_t row,
                           uint64_t col, uint64_t rowCap, uint64_t colCap,
-                          F2D_NUM_T delta, F2D_CELL_T *plan) {
+                          F2D_NUM_T delta, F2D_PLAN_T *plan) {
     size_t n = 0;
     for (uint64_t i = row + 1; i <= rowCap; i = fenwickParent(i)) {
         for (uint64_t j = col + 1; j <= colCap; j = fenwickParent(j)) {
-            if (!F2D_CELL_ENCODE(
-                    F2D_NUM_ADD(F2D_FN(CellVirtual_)(t, i, j), delta),
-                    &plan[n])) {
+            if (!F2D_ENCODE(F2D_NUM_ADD(F2D_FN(CellVirtual_)(t, i, j), delta),
+                            &plan[n])) {
                 return false;
             }
 
@@ -186,17 +188,19 @@ static bool F2D_FN(Plan_)(const struct F2D_STRUCT *t, uint64_t row,
     return true;
 }
 
-/* Write a plan made by Plan_ for (row, col) (the tree already grown) and
- * extend the extents */
+/* Write a plan made by Plan_ for (row, col) (the tree already grown) */
 static void F2D_FN(Apply_)(struct F2D_STRUCT *t, uint64_t row, uint64_t col,
-                           const F2D_CELL_T *plan) {
+                           const F2D_PLAN_T *plan) {
+    const uint64_t cells = t->rowCap * t->colCap;
     size_t n = 0;
     for (uint64_t i = row + 1; i <= t->rowCap; i = fenwickParent(i)) {
         for (uint64_t j = col + 1; j <= t->colCap; j = fenwickParent(j)) {
-            t->cells[(i - 1) * t->colCap + (j - 1)] = plan[n++];
+            F2D_PUT(&t->store, cells, F2D_FN(Index_)(t, i, j), plan[n++]);
         }
     }
+}
 
+static void F2D_FN(Extend_)(struct F2D_STRUCT *t, uint64_t row, uint64_t col) {
     if (row >= t->rows) {
         t->rows = row + 1;
     }
@@ -210,13 +214,26 @@ static void F2D_FN(Apply_)(struct F2D_STRUCT *t, uint64_t row, uint64_t col,
  * elements past them are zero); zero for an empty tree */
 static F2D_NUM_T F2D_FN(Prefix_)(const struct F2D_STRUCT *t, uint64_t row,
                                  uint64_t col) {
-    F2D_NUM_T acc = F2D_NUM_ZERO;
     if (t->rows == 0 || t->cols == 0) {
-        return acc;
+        return F2D_NUM_ZERO;
     }
 
     const uint64_t r = (row < t->rows ? row : t->rows - 1) + 1;
     const uint64_t c = (col < t->cols ? col : t->cols - 1) + 1;
+#ifdef F2D_FAST_INT
+    if (F2D_ALL_INT(&t->store)) {
+        __int128_t sum = 0;
+        for (uint64_t i = r; i > 0; i = fenwickPrev(i)) {
+            for (uint64_t j = c; j > 0; j = fenwickPrev(j)) {
+                sum += F2D_INT(&t->store, F2D_FN(Index_)(t, i, j));
+            }
+        }
+
+        return F2D_NUM_FROM_I128(sum);
+    }
+#endif
+
+    F2D_NUM_T acc = F2D_NUM_ZERO;
     for (uint64_t i = r; i > 0; i = fenwickPrev(i)) {
         for (uint64_t j = c; j > 0; j = fenwickPrev(j)) {
             acc = F2D_NUM_ADD(acc, F2D_FN(Cell_)(t, i, j));
@@ -245,9 +262,28 @@ static F2D_NUM_T F2D_FN(Element_)(const struct F2D_STRUCT *t, uint64_t row,
                                   uint64_t col) {
     const uint64_t r = row + 1;
     const uint64_t c = col + 1;
+    const uint64_t rStop = fenwickPrev(r);
+#ifdef F2D_FAST_INT
+    if (F2D_ALL_INT(&t->store)) {
+        const uint64_t cStop = fenwickPrev(c);
+        __int128_t sum = 0;
+        for (uint64_t i = r; i > rStop; i = i == r ? r - 1 : fenwickPrev(i)) {
+            __int128_t rowSum = 0;
+            for (uint64_t j = c; j > cStop;
+                 j = j == c ? c - 1 : fenwickPrev(j)) {
+                const int64_t v = F2D_INT(&t->store, F2D_FN(Index_)(t, i, j));
+                rowSum += j == c ? v : -(__int128_t)v;
+            }
+
+            sum += i == r ? rowSum : -rowSum;
+        }
+
+        return F2D_NUM_FROM_I128(sum);
+    }
+#endif
+
     F2D_NUM_T acc = F2D_FN(RowElement_)(t, r, c);
-    const uint64_t stop = fenwickPrev(r);
-    for (uint64_t i = r - 1; i > stop; i = fenwickPrev(i)) {
+    for (uint64_t i = r - 1; i > rStop; i = fenwickPrev(i)) {
         acc = F2D_NUM_SUB(acc, F2D_FN(RowElement_)(t, i, c));
     }
 
@@ -274,14 +310,58 @@ static F2D_NUM_T F2D_FN(Rect_)(const struct F2D_STRUCT *t, uint64_t r1,
     return acc;
 }
 
+#ifdef F2D_FAST_INT
+/* The integer fast write: within the capacity, into an all-int64 store,
+ * every touched cell staying an int64.  False (nothing written) when any
+ * of that does not hold. */
+static bool F2D_FN(WriteInt_)(struct F2D_STRUCT *t, uint64_t row, uint64_t col,
+                              F2D_NUM_T delta) {
+    if (!F2D_ALL_INT(&t->store) || !F2D_NUM_IS_INT(delta) || row >= t->rowCap ||
+        col >= t->colCap) {
+        return false;
+    }
+
+    const __int128_t d = F2D_NUM_I128(delta);
+    int64_t plan[F2D_MAX_CHAIN];
+    size_t n = 0;
+    for (uint64_t i = row + 1; i <= t->rowCap; i = fenwickParent(i)) {
+        for (uint64_t j = col + 1; j <= t->colCap; j = fenwickParent(j)) {
+            const __int128_t v =
+                F2D_INT(&t->store, F2D_FN(Index_)(t, i, j)) + d;
+            if (v < INT64_MIN || v > INT64_MAX) {
+                return false;
+            }
+
+            plan[n++] = (int64_t)v;
+        }
+    }
+
+    n = 0;
+    for (uint64_t i = row + 1; i <= t->rowCap; i = fenwickParent(i)) {
+        for (uint64_t j = col + 1; j <= t->colCap; j = fenwickParent(j)) {
+            F2D_PUT_INT(&t->store, F2D_FN(Index_)(t, i, j), plan[n++]);
+        }
+    }
+
+    F2D_FN(Extend_)(t, row, col);
+    return true;
+}
+#endif
+
 /* Write delta at (row, col): plan against the grown tree, then grow and
  * apply.  False, changing nothing, when the capacity would pass
  * F2D_MAX_CELLS or a cell cannot hold its new value. */
 static bool F2D_FN(Write_)(struct F2D_STRUCT *t, uint64_t row, uint64_t col,
                            F2D_NUM_T delta) {
+#ifdef F2D_FAST_INT
+    if (F2D_FN(WriteInt_)(t, row, col, delta)) {
+        return true;
+    }
+#endif
+
     uint64_t rowCap;
     uint64_t colCap;
-    F2D_CELL_T plan[F2D_MAX_CHAIN];
+    F2D_PLAN_T plan[F2D_MAX_CHAIN];
     if (!F2D_FN(CapsFor_)(t, row, col, &rowCap, &colCap) ||
         !F2D_FN(Plan_)(t, row, col, rowCap, colCap, delta, plan)) {
         return false;
@@ -289,17 +369,20 @@ static bool F2D_FN(Write_)(struct F2D_STRUCT *t, uint64_t row, uint64_t col,
 
     F2D_FN(Grow_)(t, rowCap, colCap);
     F2D_FN(Apply_)(t, row, col, plan);
+    F2D_FN(Extend_)(t, row, col);
     return true;
 }
 
 static size_t F2D_FN(Bytes_)(const struct F2D_STRUCT *t) {
-    return sizeof(*t) + t->rowCap * t->colCap * sizeof(F2D_CELL_T);
+    return sizeof(*t) + F2D_BYTES(&t->store, t->rowCap * t->colCap);
 }
 
 static void F2D_FN(Clear_)(struct F2D_STRUCT *t) {
-    if (t->cells) {
-        memset(t->cells, 0, t->rowCap * t->colCap * sizeof(F2D_CELL_T));
-    }
+    F2D_CLEAR(&t->store, t->rowCap * t->colCap);
+}
+
+static void F2D_FN(FreeStore_)(struct F2D_STRUCT *t) {
+    F2D_FREE(&t->store);
 }
 
 #undef F2D_MAX_CELLS

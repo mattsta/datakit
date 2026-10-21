@@ -14,8 +14,10 @@
  * values.  It is the 2D form of multiFenwickFlat: the same accepted
  * values, exact arithmetic and value-typed results (multiFenwick.h,
  * VALUES), on the 2D layout and growth of the typed trees (fenwick2d.h).
- * Cells are packed 9-byte records (value bits + kind) in one contiguous
- * rowCap x colCap array.
+ * Cells use multiFenwickFlat's adaptive store (multiFenwickCells.h):
+ * rowCap x colCap cells of 8 bytes while every cell is an int64 (sums and
+ * writes then take integer-only paths), plus 1 byte per cell once any
+ * cell holds a value above INT64_MAX or a double.  Clear drops back to 8.
  *
  * VALUES
  * ------

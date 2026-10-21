@@ -1,76 +1,36 @@
 #include "multiFenwick2d.h"
 #include "datakit.h"
+#include "multiFenwickCells.h"
 #include "multiFenwickCommon.h"
 
-#include <string.h>
-
-/* What a cell's 64 bits hold.  UNSIGNED is 0, so zero-filled memory is a
- * cell holding the unsigned integer 0. */
-typedef enum multiFenwick2dKind {
-    MFW2D_UNSIGNED = 0,
-    MFW2D_SIGNED = 1,
-    MFW2D_DOUBLE = 2,
-} multiFenwick2dKind;
-
-/* One cell: 8 bytes of value bits and its kind, packed to 9 bytes */
-typedef struct __attribute__((packed)) multiFenwick2dCell {
-    uint64_t bits;
-    uint8_t kind;
-} multiFenwick2dCell;
-
-static multiFenwickNum multiFenwick2dLoad_(const multiFenwick2dCell *cell) {
-    const uint64_t bits = cell->bits;
-    switch ((multiFenwick2dKind)cell->kind) {
-    case MFW2D_SIGNED:
-        return (multiFenwickNum){.i = (int64_t)bits};
-    case MFW2D_DOUBLE: {
-        double d;
-        memcpy(&d, &bits, sizeof(d));
-        return (multiFenwickNum){.d = d, .isFloat = true};
-    }
-    case MFW2D_UNSIGNED:
-    default:
-        return (multiFenwickNum){.i = bits};
-    }
-}
-
-/* Encode 'n' into '*out'; false (nothing written) when no cell holds it */
-static bool multiFenwick2dEncode_(multiFenwickNum n, multiFenwick2dCell *out) {
-    databox box;
-    if (!multiFenwickNumBox_(n, &box)) {
-        return false;
-    }
-
-    switch (box.type) {
-    case DATABOX_SIGNED_64:
-        *out = (multiFenwick2dCell){.bits = (uint64_t)box.data.i64,
-                                    .kind = MFW2D_SIGNED};
-        break;
-    case DATABOX_DOUBLE_64: {
-        uint64_t bits;
-        memcpy(&bits, &box.data.d64, sizeof(bits));
-        *out = (multiFenwick2dCell){.bits = bits, .kind = MFW2D_DOUBLE};
-        break;
-    }
-    case DATABOX_UNSIGNED_64:
-    default:
-        *out =
-            (multiFenwick2dCell){.bits = box.data.u64, .kind = MFW2D_UNSIGNED};
-        break;
-    }
-
-    return true;
-}
-
+/* The cells are the adaptive store multiFenwickFlat uses
+ * (multiFenwickCells.h): 8 bytes per cell while every cell is an int64,
+ * with integer-only sums and writes; a kinds array joins once a cell
+ * holds a value above INT64_MAX or a double. */
 #define F2D_FN(name) multiFenwick2d##name
 #define F2D_STRUCT multiFenwick2d
-#define F2D_CELL_T multiFenwick2dCell
+#define F2D_STORE_T multiFenwickCells
+#define F2D_PLAN_T multiFenwickCell
 #define F2D_NUM_T multiFenwickNum
 #define F2D_NUM_ZERO ((multiFenwickNum){0})
 #define F2D_NUM_ADD(a, b) multiFenwickNumAdd_(a, b)
 #define F2D_NUM_SUB(a, b) multiFenwickNumSub_(a, b)
-#define F2D_CELL_LOAD(cell) multiFenwick2dLoad_(cell)
-#define F2D_CELL_ENCODE(num, out) multiFenwick2dEncode_(num, out)
+#define F2D_LOAD(s, idx) multiFenwickCellsGet(s, idx)
+#define F2D_ENCODE(num, out) multiFenwickCellEncode(num, out)
+#define F2D_PUT(s, n, idx, plan) multiFenwickCellsPut(s, n, idx, plan)
+#define F2D_COPY(s, dst, src) multiFenwickCellsCopy(s, dst, src)
+#define F2D_RELAYOUT(s, oR, oC, nR, nC)                                        \
+    multiFenwickCellsRelayout(s, oR, oC, nR, nC)
+#define F2D_CLEAR(s, n) multiFenwickCellsClear(s, n)
+#define F2D_BYTES(s, n) multiFenwickCellsBytes(s, n)
+#define F2D_FREE(s) multiFenwickCellsFree(s)
+#define F2D_FAST_INT
+#define F2D_ALL_INT(s) multiFenwickCellsAllInt(s)
+#define F2D_INT(s, idx) multiFenwickCellsInt(s, idx)
+#define F2D_PUT_INT(s, idx, v) multiFenwickCellsPutInt(s, idx, v)
+#define F2D_NUM_FROM_I128(v) ((multiFenwickNum){.i = (v)})
+#define F2D_NUM_IS_INT(num) (!(num).isFloat)
+#define F2D_NUM_I128(num) ((num).i)
 #include "fenwick/fenwick2dCoreImpl.h"
 
 multiFenwick2d *multiFenwick2dNew(void) {
@@ -80,7 +40,7 @@ multiFenwick2d *multiFenwick2dNew(void) {
 
 void multiFenwick2dFree(multiFenwick2d *t) {
     if (t) {
-        zfree(t->cells);
+        multiFenwick2dFreeStore_(t);
         zfree(t);
     }
 }
