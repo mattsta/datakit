@@ -15,7 +15,9 @@
 #include "timeUtil.h"
 
 #include <assert.h>
+#include <float.h> /* DBL_MAX (tests) */
 #include <limits.h>
+#include <math.h> /* isfinite */
 #include <stdio.h>
 #include <sys/time.h>
 
@@ -1707,24 +1709,24 @@ multidictResult multidictIncrBy(multidict *d, const databox *keybox,
     databox valbox = {{0}};
     bool exists = multidictFindNoTouch_(d, keybox, &valbox);
 
+    /* Increment policy (DATABOX.md "Numeric updates"): exact integer
+     * arithmetic, and a result outside int64 (the result's type) is
+     * refused with the stored value unchanged.  A float value is not an
+     * integer counter: use multidictIncrByFloat. */
     int64_t newVal;
     if (exists) {
-        /* Check if value is numeric */
-        if (!DATABOX_IS_NUMERIC(&valbox)) {
-            return MULTIDICT_ERR; /* Value is not numeric */
+        int64_t current;
+        if (valbox.type == DATABOX_SIGNED_64) {
+            current = valbox.data.i64;
+        } else if (valbox.type == DATABOX_UNSIGNED_64 &&
+                   valbox.data.u64 <= (uint64_t)INT64_MAX) {
+            current = (int64_t)valbox.data.u64;
+        } else {
+            return MULTIDICT_ERR; /* not an int64 value */
         }
 
-        /* Get current value based on type */
-        if (DATABOX_IS_INTEGER(&valbox)) {
-            if (valbox.type == DATABOX_SIGNED_64) {
-                newVal = valbox.data.i64 + increment;
-            } else {
-                /* Unsigned - be careful with overflow */
-                newVal = (int64_t)valbox.data.u64 + increment;
-            }
-        } else {
-            /* Float/double - convert */
-            newVal = (int64_t)valbox.data.d64 + increment;
+        if (__builtin_add_overflow(current, increment, &newVal)) {
+            return MULTIDICT_ERR; /* result outside int64 */
         }
     } else {
         /* Key doesn't exist - create with increment value */
@@ -1768,17 +1770,26 @@ multidictResult multidictIncrByFloat(multidict *d, const databox *keybox,
             } else {
                 newVal = valbox.data.f32 + increment;
             }
-        } else {
+        } else if (valbox.type == DATABOX_SIGNED_64 ||
+                   valbox.type == DATABOX_UNSIGNED_64) {
             /* Integer - convert */
             if (valbox.type == DATABOX_SIGNED_64) {
                 newVal = (double)valbox.data.i64 + increment;
             } else {
                 newVal = (double)valbox.data.u64 + increment;
             }
+        } else {
+            return MULTIDICT_ERR; /* a 96/128-bit value: not a double */
         }
     } else {
         /* Key doesn't exist - create with increment value */
         newVal = increment;
+    }
+
+    /* Increment policy: a non-finite result (inf, NaN) is refused with the
+     * stored value unchanged. */
+    if (!isfinite(newVal)) {
+        return MULTIDICT_ERR;
     }
 
     /* Store result if requested */
@@ -8497,6 +8508,62 @@ int multidictTest(int argc, char *argv[]) {
         multidictResult r = multidictIncrBy(d, &key, 1, &result);
         if (r != MULTIDICT_ERR) {
             printf("ERROR: IncrBy on non-numeric should fail\n");
+            err++;
+        }
+    }
+
+    /* Increment policy: exact, refuse overflow, value unchanged on refusal;
+     * IncrBy needs an int64 value; IncrByFloat refuses inf and NaN. */
+    {
+        const databox kMax = databoxNewBytesString("incr-max");
+        const databox kMin = databoxNewBytesString("incr-min");
+        const databox kBig = databoxNewBytesString("incr-big-unsigned");
+        const databox kFloat = databoxNewBytesString("incr-float");
+        const databox kHuge = databoxNewBytesString("incr-huge");
+        const databox vMax = databoxNewSigned(INT64_MAX);
+        const databox vMin = databoxNewSigned(INT64_MIN);
+        const databox vBig = databoxNewUnsigned(UINT64_MAX);
+        const databox vFloat = {.type = DATABOX_FLOAT_32, .data.f32 = 2.5f};
+        const databox vHuge = databoxNewReal(DBL_MAX);
+        multidictAdd(d, &kMax, &vMax);
+        multidictAdd(d, &kMin, &vMin);
+        multidictAdd(d, &kBig, &vBig);
+        multidictAdd(d, &kFloat, &vFloat);
+        multidictAdd(d, &kHuge, &vHuge);
+
+        int64_t ir = 42;
+        double dr = 42;
+        databox now = {{0}};
+        if (multidictIncrBy(d, &kMax, 1, &ir) != MULTIDICT_ERR || ir != 42 ||
+            !multidictFind(d, &kMax, &now) || now.data.i64 != INT64_MAX) {
+            printf("ERROR: INT64_MAX + 1 was not refused unchanged\n");
+            err++;
+        }
+        if (multidictIncrBy(d, &kMin, -1, &ir) != MULTIDICT_ERR) {
+            printf("ERROR: INT64_MIN - 1 was not refused\n");
+            err++;
+        }
+        if (multidictIncrBy(d, &kBig, 1, &ir) != MULTIDICT_ERR) {
+            printf("ERROR: IncrBy on UINT64_MAX was not refused\n");
+            err++;
+        }
+        if (multidictIncrBy(d, &kFloat, 1, &ir) != MULTIDICT_ERR) {
+            printf("ERROR: IncrBy on a float value was not refused\n");
+            err++;
+        }
+        if (multidictIncrByFloat(d, &kFloat, 0.25, &dr) !=
+                MULTIDICT_OK_REPLACED ||
+            dr != 2.75) {
+            printf("ERROR: IncrByFloat on a float value read it wrongly\n");
+            err++;
+        }
+        if (multidictIncrByFloat(d, &kHuge, DBL_MAX, &dr) != MULTIDICT_ERR ||
+            !multidictFind(d, &kHuge, &now) || now.data.d64 != DBL_MAX) {
+            printf("ERROR: an infinite IncrByFloat result was not refused\n");
+            err++;
+        }
+        if (multidictIncrByFloat(d, &kHuge, NAN, &dr) != MULTIDICT_ERR) {
+            printf("ERROR: a NaN IncrByFloat result was not refused\n");
             err++;
         }
     }

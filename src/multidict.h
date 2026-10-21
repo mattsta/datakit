@@ -318,7 +318,17 @@ bool multidictGetAndDelete(multidict *d, const databox *keybox,
                            databox *valbox);
 bool multidictPopRandom(multidict *d, databox *keybox, databox *valbox);
 
-/* Numeric Operations */
+/* Numeric Operations (the platform increment policy, DATABOX.md "Numeric
+ * updates").  A missing key is created holding 'increment'.
+ *
+ * multidictIncrBy: the stored value must be an integer that fits int64; the
+ * sum is exact, and a result outside int64 is refused.  A float, a 96/128-bit
+ * value or a non-number returns MULTIDICT_ERR (use IncrByFloat for floats).
+ *
+ * multidictIncrByFloat: the stored value must be a float, double or 64-bit
+ * integer; the sum is a double, and an inf or NaN result is refused.
+ *
+ * On MULTIDICT_ERR the stored value and '*result' are unchanged. */
 multidictResult multidictIncrBy(multidict *d, const databox *keybox,
                                 int64_t increment, int64_t *result);
 multidictResult multidictIncrByFloat(multidict *d, const databox *keybox,
