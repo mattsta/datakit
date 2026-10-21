@@ -29,16 +29,17 @@ cmake --preset perf && cmake --build --preset perf
 | BLAKE3 NEON Compress4 (raw)  | ~1.57 GB/s | 4-chunk batched compress                     |
 | BLAKE3 NEON single-block     | ~372 MiB/s | per-block compress (not batch — much slower) |
 | SHA-256 ARMv8 crypto         | ~2.0 GB/s  | sha256h/h2/su0/su1 hardware                  |
-| SHA-256 portable scalar      | not measured | see note below                             |
+| SHA-256 portable scalar      | ~195 MiB/s | fallback without ARMv8 Crypto / SHA-NI       |
 | HMAC-SHA-256 envelope        | ~2.0 GB/s  | inherits SHA-256 dispatch automatically      |
 | HMAC-BLAKE3 envelope         | ~1.40 GB/s | inherits BLAKE3 SIMD dispatch                |
 | BLAKE3_KEYED envelope        | ~1.40 GB/s | native keyed-hash mode                       |
 
 Last re-measured on an Apple M1 Max (macOS 14.8, clang 22 `perf` preset)
-with the commands above. The SHA-256 portable row has no current figure:
-the `sha256ArmCrypto` bench's "portable" line times the public
-`sha256Update()`, which dispatches to the ARMv8 Crypto path on this
-hardware, so it does not measure the scalar fallback.
+with the commands above. The `sha256ArmCrypto` bench's "portable" line
+times the scalar compress function directly (193-198 MiB/s over three
+runs), so it measures the fallback even on hardware with the crypto
+extensions; the public `sha256Update()` dispatches to the hardware path
+there.
 
 ## Small-payload numbers (latency-dominated, 64-byte payload)
 
