@@ -117,7 +117,9 @@ with aliases.
 - `hyperloglog` (`hll`) - Cardinality estimation
 - `linearBloom` (`bloom`) - Bloom filter
 - `fenwickI64` (`fw`), `segmentI64` (`seg`), `multiFenwick` (`mfw`),
-  `multiFenwickFlat` (`mfwf`)
+  `multiFenwickFlat` (`mfwf`), `fenwick2d` (`fw2d`), `multiFenwick2d`
+  (`mfw2d`); `fenwickTypes` and `segmentTypes` test every typed tree;
+  `fenwickBench` (`fwbench`) prints their speed and size matrix
 
 **Specialized Containers:**
 
