@@ -751,6 +751,38 @@ const databox *key = databoxCanonical(callerKey, &scratch);
 /* store or compare 'key' */
 ```
 
+## Numeric Updates
+
+Every operation that adds to a stored number follows one policy, chosen by
+what the number is.
+
+**Stored values** (container values, scores and counters: `flexIncrby*`,
+`multidictIncrBy` / `IncrByFloat`, `multimapFieldIncrBy`,
+`multiOrderedSetIncrBy`, `multiFenwick`):
+
+- Integers add **exactly**. A result outside the value's range (int64, or
+  [INT64_MIN, UINT64_MAX] where the API can return either kind) is
+  **refused**: the call reports failure and the stored value is unchanged.
+  Nothing wraps and nothing saturates.
+- A float or double operand makes the sum a double. An `inf` or NaN result is
+  refused the same way.
+- Adding zero succeeds and changes nothing.
+- An integer result keeps an integer type; it may come back in its minimal
+  same-type form (a non-negative SIGNED reads as UNSIGNED).
+
+**Fixed-width bit fields** (`varintPacked` `SetIncr`): the value
+**saturates** at 0 and `2^bits - 1`, so an overflow never spills into the
+neighbouring slot. A saturated value is an ordinary number: it can be
+decremented again.
+
+**Estimator counters** (the counting Bloom filter in `linearBloomCount.h`):
+the counter **saturates and sticks**. A saturated
+counter's true count is unknown, so insertion never lowers it. Only the
+structure's own aging (Bloom decay) reduces counters, and never below 0.
+
+**Wrapping arithmetic** (modulo 2^64) appears only inside codecs and hashes
+(dod deltas, xof XORs, hash mixing). No API exposes it as a value operation.
+
 ## Debugging and Display
 
 ```c
