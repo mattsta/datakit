@@ -15,19 +15,6 @@ static uint64_t mosRandomState = 0xABCDEF0123456789ULL;
  * Databox Arithmetic Helper
  * ==================================================================== */
 
-/* Add delta to base, store result in out. Returns true on success. */
-static bool mosDataboxAdd(const databox *base, const databox *delta,
-                          databox *out) {
-    double baseVal, deltaVal;
-    if (!mosScoreToDouble(base, &baseVal) ||
-        !mosScoreToDouble(delta, &deltaVal)) {
-        return false;
-    }
-
-    DATABOX_SET_DOUBLE(out, baseVal + deltaVal);
-    return true;
-}
-
 /* ====================================================================
  * Atom Pool Helpers
  * ==================================================================== */
@@ -965,7 +952,7 @@ bool multiOrderedSetFullIncrBy(multiOrderedSetFull *m, const databox *delta,
     bool existed = findScore(m, member, &existingScore, &existingScoreWide);
 
     if (existed) {
-        if (!mosDataboxAdd(&existingScore, delta, result)) {
+        if (!mosScoreAdd(&existingScore, delta, result)) {
             return false;
         }
 

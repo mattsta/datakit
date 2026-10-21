@@ -14,19 +14,6 @@ static uint64_t mosRandomState = 0x98765432FEDCBA01ULL;
  * Databox Arithmetic Helper
  * ==================================================================== */
 
-/* Add delta to base, store result in out. Returns true on success. */
-static bool mosDataboxAdd(const databox *base, const databox *delta,
-                          databox *out) {
-    double baseVal, deltaVal;
-    if (!mosScoreToDouble(base, &baseVal) ||
-        !mosScoreToDouble(delta, &deltaVal)) {
-        return false;
-    }
-
-    DATABOX_SET_DOUBLE(out, baseVal + deltaVal);
-    return true;
-}
-
 /* ====================================================================
  * Macros for middle management
  * ==================================================================== */
@@ -326,7 +313,7 @@ bool multiOrderedSetMediumIncrBy(multiOrderedSetMedium *m, const databox *delta,
         databoxWide currentScoreWide;
         flexGetByTypeInto(existing, &currentScore, &currentScoreWide);
 
-        if (!mosDataboxAdd(&currentScore, delta, result)) {
+        if (!mosScoreAdd(&currentScore, delta, result)) {
             return false;
         }
 

@@ -11,6 +11,9 @@
 
 #include "cleaner.h"
 
+#include <float.h> /* DBL_MAX (tests) */
+#include <math.h>  /* isfinite */
+
 /* Fixed-width key/member buffer used by test scratch allocations below. */
 typedef char mosKeyBuf32[32];
 defcleanerName(mosKeyBuf32 *, zfree, KeyBuf32);
@@ -289,6 +292,19 @@ bool multiOrderedSetAddGetPrevious(multiOrderedSet **mos, const databox *score,
 
 bool multiOrderedSetIncrBy(multiOrderedSet **mos, const databox *delta,
                            const databox *member, databox *result) {
+    /* Increment policy: the delta must be a 64-bit integer or a finite real
+     * (it becomes a new member's score as is); sums are checked by
+     * mosScoreAdd. */
+    double asReal;
+    const bool deltaOk = delta->type == DATABOX_SIGNED_64 ||
+                         delta->type == DATABOX_UNSIGNED_64 ||
+                         ((delta->type == DATABOX_FLOAT_32 ||
+                           delta->type == DATABOX_DOUBLE_64) &&
+                          mosScoreToDouble(delta, &asReal) && isfinite(asReal));
+    if (!deltaOk) {
+        return false;
+    }
+
     bool ret;
     MOS_SETRESULT(ret, *mos, IncrBy, delta, member, result);
     mosUpgradeIfNecessary(mos);
@@ -3376,6 +3392,51 @@ int multiOrderedSetTest(int argc, char *argv[]) {
                     ERR("union score wrong for member %zu", i);
                 }
             }
+        }
+    }
+
+    TEST("IncrBy: exact integer sums, refused overflow and non-finite") {
+        cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+            multiOrderedSetNew();
+        const databox mInt = databoxNewBytesString("int");
+        const databox mBig = databoxNewBytesString("big");
+        const databox mReal = databoxNewBytesString("real");
+        const databox mNew = databoxNewBytesString("new");
+        const databox two53 = databoxNewSigned((int64_t)1 << 53);
+        const databox one = databoxNewSigned(1);
+        const databox maxU = databoxNewUnsigned(UINT64_MAX);
+        const databox half = databoxNewReal(0.5);
+        const databox dmax = databoxNewReal(DBL_MAX);
+        const databox nan = databoxNewReal(NAN);
+        databox r = {{0}};
+
+        /* 2^53 + 1 is exact as an integer (a double would round it) */
+        if (!multiOrderedSetIncrBy(&mos, &two53, &mInt, &r) ||
+            !multiOrderedSetIncrBy(&mos, &one, &mInt, &r) ||
+            r.type != DATABOX_SIGNED_64 ||
+            r.data.i64 != ((int64_t)1 << 53) + 1) {
+            ERRR("2^53 + 1 was not exact");
+        }
+
+        /* UINT64_MAX + 1 is refused and the score stays */
+        if (!multiOrderedSetIncrBy(&mos, &maxU, &mBig, &r) ||
+            multiOrderedSetIncrBy(&mos, &one, &mBig, &r)) {
+            ERRR("UINT64_MAX + 1 was not refused");
+        }
+
+        databox s = {{0}};
+        if (!multiOrderedSetGetScore(mos, &mBig, &s) ||
+            s.type != DATABOX_UNSIGNED_64 || s.data.u64 != UINT64_MAX) {
+            ERRR("a refused IncrBy changed the score");
+        }
+
+        /* A real operand sums in double; inf and NaN are refused */
+        if (!multiOrderedSetIncrBy(&mos, &dmax, &mReal, &r) ||
+            !multiOrderedSetIncrBy(&mos, &half, &mInt, &r) ||
+            multiOrderedSetIncrBy(&mos, &dmax, &mReal, &r) ||
+            multiOrderedSetIncrBy(&mos, &nan, &mNew, &r) ||
+            multiOrderedSetExists(mos, &mNew)) {
+            ERRR("real IncrBy did not follow the policy");
         }
     }
 

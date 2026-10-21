@@ -4,7 +4,8 @@
 #include "databox.h"
 #include "flex.h"
 #include "flexCapacityManagement.h"
-#include "str.h" /* xorshift64star */
+#include "str.h"  /* xorshift64star */
+#include <math.h> /* isfinite */
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -172,6 +173,58 @@ DK_INLINE_ALWAYS bool mosScoreToDouble(const databox *box, double *out) {
     default:
         return false;
     }
+}
+
+/* base + delta for IncrBy, following the platform increment policy
+ * (DATABOX.md "Numeric updates").  Two 64-bit integers add exactly; the
+ * result is SIGNED_64 or UNSIGNED_64, whichever holds it, and a result
+ * outside [INT64_MIN, UINT64_MAX] is refused.  Any real operand makes the
+ * sum a double, and an inf or NaN result is refused.  A 96/128-bit operand
+ * is refused.  Returns false, leaving '*out' unwritten, on any refusal. */
+DK_INLINE_ALWAYS bool mosScoreAdd(const databox *base, const databox *delta,
+                                  databox *out) {
+    const bool baseInt =
+        base->type == DATABOX_SIGNED_64 || base->type == DATABOX_UNSIGNED_64;
+    const bool deltaInt =
+        delta->type == DATABOX_SIGNED_64 || delta->type == DATABOX_UNSIGNED_64;
+    if (baseInt && deltaInt) {
+        const __int128_t a = base->type == DATABOX_SIGNED_64
+                                 ? (__int128_t)base->data.i64
+                                 : (__int128_t)base->data.u64;
+        const __int128_t b = delta->type == DATABOX_SIGNED_64
+                                 ? (__int128_t)delta->data.i64
+                                 : (__int128_t)delta->data.u64;
+        const __int128_t sum = a + b; /* cannot overflow 128 bits */
+        if (sum >= INT64_MIN && sum <= INT64_MAX) {
+            *out = databoxNewSigned((int64_t)sum);
+            return true;
+        }
+
+        if (sum >= 0 && sum <= (__int128_t)UINT64_MAX) {
+            *out = databoxNewUnsigned((uint64_t)sum);
+            return true;
+        }
+
+        return false;
+    }
+
+    const bool wide = base->type == DATABOX_SIGNED_128 ||
+                      base->type == DATABOX_UNSIGNED_128 ||
+                      delta->type == DATABOX_SIGNED_128 ||
+                      delta->type == DATABOX_UNSIGNED_128;
+    double a;
+    double b;
+    if (wide || !mosScoreToDouble(base, &a) || !mosScoreToDouble(delta, &b)) {
+        return false;
+    }
+
+    const double sum = a + b;
+    if (!isfinite(sum)) {
+        return false;
+    }
+
+    DATABOX_SET_DOUBLE(out, sum);
+    return true;
 }
 
 /* ====================================================================

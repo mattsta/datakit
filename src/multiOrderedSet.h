@@ -322,9 +322,14 @@ bool multiOrderedSetAddXX(multiOrderedSet **mos, const databox *score,
 bool multiOrderedSetAddGetPrevious(multiOrderedSet **mos, const databox *score,
                                    const databox *member, databox *prevScore);
 
-/* Increment score of member by delta (numeric scores only).
- * If member doesn't exist, adds with delta as score.
- * Returns true on success, stores new score in result. */
+/* Increment score of member by delta, following the platform increment
+ * policy (DATABOX.md "Numeric updates").  If member doesn't exist, adds it
+ * with delta as its score.  The delta must be a 64-bit integer or a finite
+ * float/double.  Two 64-bit integers add exactly, giving SIGNED_64 or
+ * UNSIGNED_64; a sum outside [INT64_MIN, UINT64_MAX] is refused.  A real
+ * operand makes the sum a double, and an inf or NaN sum is refused.  A
+ * 96/128-bit score or delta is refused.  Returns true with the new score in
+ * 'result'; on false nothing changes. */
 bool multiOrderedSetIncrBy(multiOrderedSet **mos, const databox *delta,
                            const databox *member, databox *result);
 
