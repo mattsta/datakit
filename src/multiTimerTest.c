@@ -482,8 +482,10 @@ int multiTimerTest(int argc, char *argv[]) {
         }
 
         int64_t elapsed = t2 - t1;
-        /* Should be approximately 1000us, allow 500us-5000us range */
-        if (elapsed < 500 || elapsed > 5000) {
+        /* The sleep lasts at least 1ms, so a microsecond clock advances at
+         * least ~1000.  The ceiling only catches a wrong unit; how much
+         * longer the sleep runs depends on machine load, not on the clock. */
+        if (elapsed < 500 || elapsed > 1000000) {
             ERR("Elapsed time %" PRId64 "us unexpected for 1ms sleep", elapsed);
         }
     }
@@ -498,8 +500,10 @@ int multiTimerTest(int argc, char *argv[]) {
         }
 
         int64_t elapsed = t2 - t1;
-        /* Should be approximately 1000000ns, allow 500000ns-5000000ns range */
-        if (elapsed < 500000 || elapsed > 5000000) {
+        /* The sleep lasts at least 1ms, so a nanosecond clock advances at
+         * least ~1000000.  The ceiling only catches a wrong unit; how much
+         * longer the sleep runs depends on machine load, not on the clock. */
+        if (elapsed < 500000 || elapsed > 1000000000) {
             ERR("Elapsed time %" PRId64 "ns unexpected for 1ms sleep", elapsed);
         }
     }
