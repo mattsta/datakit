@@ -145,8 +145,14 @@ class ValidateRun(unittest.TestCase):
 
         # Debug also skips the slow tests, and says so.
         dbg = runner.command("clang22-debug ctest")
-        self.assertTrue(dbg[dbg.index("-E") + 1].endswith("|multimap|multiFenwick)$"))
-        self.assertIn("clang22-debug: also multimap, multiFenwick", out)
+        self.assertTrue(
+            dbg[dbg.index("-E") + 1].endswith(f"|{validate.DEFAULT_DEBUG_SKIP})$")
+        )
+        self.assertIn(
+            "clang22-debug: also multimap, multiFenwick, blake3, fenwickI64, "
+            "segmentI64 (too slow",
+            out,
+        )
 
         summary = self.root / "validate" / self.head[:10] / "summary.md"
         self.assertEqual(summary.read_text(), out.rsplit("summary: ", 1)[0])

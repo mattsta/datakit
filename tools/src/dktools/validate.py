@@ -12,8 +12,9 @@ For each (compiler, preset) of the matrix (see
 ``toolchain.matrix``: gcc15 builds ``release``) it runs a clean
 configure, an all-targets build, then ctest twice: every test outside
 the serial and skip sets in parallel, then the serial set one test at
-a time.  Tests matching ``--debug-skip`` (default ``multimap`` and
-``multiFenwick``, too slow under Debug with sanitizers) are also
+a time.  Tests matching ``--debug-skip`` (default ``multimap``,
+``multiFenwick``, ``blake3``, ``fenwickI64`` and ``segmentI64``, too
+slow under Debug with sanitizers) are also
 skipped in debug builds, and tests matching ``--tsan-skip`` (default
 ``flex``, ``multimap`` and ``dkTestNonceLogEvictionPerf``: single-threaded
 suites that outrun the timeout under TSan, and a wall-clock limit) in
@@ -55,8 +56,9 @@ from .gitutil import ToolError
 DEFAULT_SERIAL = r"dkTestNonceLogEvictionPerf"
 #: Tests validate never runs: vendored suites and benchmarks.
 DEFAULT_SKIP = r"varint-.*|perfRegression|compressionBench"
-#: Tests too slow for a Debug + sanitizer build.
-DEFAULT_DEBUG_SKIP = r"multimap|multiFenwick"
+#: Tests too slow for a Debug + sanitizer build (each outruns the 1500 s
+#: ctest timeout there; the dev preset runs them with sanitizers).
+DEFAULT_DEBUG_SKIP = r"multimap|multiFenwick|blake3|fenwickI64|segmentI64"
 #: Tests a ThreadSanitizer build cannot judge: single-threaded suites
 #: that outrun the ctest timeout under TSan, and wall-clock limits.
 DEFAULT_TSAN_SKIP = r"flex|multimap|dkTestNonceLogEvictionPerf"
