@@ -11958,6 +11958,7 @@ static const TestEntry testRegistry[] = {
     T_A_ADJ(segmentI64, "seg,segtree,segment"),          /* New 2-tier system */
     T_A_ADJ(multiFenwick, "mfw,mbit"), /* Multi-tree wrapper system */
     T_A(multiFenwickFlat, "mfwf"),     /* multiFenwick, flat cells */
+    T_A(fenwickTypes, "fwtypes"),      /* every typed fenwick vs naive */
 #if USE_INTSET_BIG
     T(intsetBig),
 #endif

@@ -8,14 +8,31 @@
  * type-specific Fenwick tree implementations. It follows the pattern:
  *   dks → mds → mdsc
  *
- * Architecture: Small (contiguous) → Full (unlimited)
- * - Benefit: 37% fewer files, 50% fewer transitions vs 3-tier
- * - Small: Cache-friendly, 0 indirection, 20-33% faster for hot cache
- * - Full: Unlimited growth, overflow protection
+ * Architecture: Small (one contiguous allocation) → Full (separately
+ * allocated cells, uint64_t indexes, capacity overflow refused).
  *
- * All core algorithms are defined once as macros, then instantiated
- * for each supported type (I16, I32, I64, U16, U32, U64, Float, Double,
- * I128, U128).
+ * The algorithms (fenwickCoreAlgo.h), both tiers (fenwickCoreImpl.h,
+ * fenwickCoreFullImpl.h) and the public API (fenwickCoreDispatchImpl.h)
+ * are each written once and instantiated for every supported type (I16,
+ * I32, I64, U16, U32, U64, Float, Double, I128, U128).
+ *
+ * VALUES
+ * ------
+ * - Elements are stored values and never wrap: Update refuses (returns
+ *   false, changing nothing; a NULL tree stays NULL) a delta whose new
+ *   element would not fit the type.  Set always fits.  Float trees also
+ *   refuse a non-finite delta, value or element (and a Set whose change
+ *   from the current element is not finite).
+ * - Get returns the element exactly.  Query and RangeQuery return the
+ *   exact sum whenever it fits the type; an integer sum that does not
+ *   fit comes back modulo 2^bits (cells add with wrapping, never signed-
+ *   overflow UB, and Fenwick sums are linear, so wrapped cells still
+ *   give every representable sum exactly).
+ * - Query, RangeQuery and Get past the count return zero.  LowerBound
+ *   assumes non-negative elements.
+ * - Time: Update, Set, Query, RangeQuery and Get are O(log n) (Update
+ *   and Set read the element first); NewFromArray and growth by doubling
+ *   are O(n) and O(log n) per doubling.
  *
  * USAGE:
  *   #define FENWICK_SUFFIX I64
@@ -35,6 +52,11 @@
 
 #include "../datakit.h"
 #include "fenwickCommon.h"
+
+#ifdef DATAKIT_TEST
+/* Differential tests of every typed tree (fenwickTypesTest.c) */
+int fenwickTypesTest(int argc, char *argv[]);
+#endif
 
 /* ====================================================================
  * TYPE PARAMETERS

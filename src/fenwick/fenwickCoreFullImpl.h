@@ -2,9 +2,9 @@
  * Fenwick Tree Full Tier Implementation Template (2-TIER SYSTEM)
  * ====================================================================
  *
- * Full tier: {small_max}+ elements, unlimited growth.
- * Converts from Small tier in 2-tier architecture.
- * Generated via macro instantiation.
+ * Full tier: {small_max}+ elements, unlimited growth (capacity overflow
+ * is refused).  Converts from the Small tier by copying its cells.
+ * Shares the algorithms and arithmetic of fenwickCoreAlgo.h.
  *
  * REQUIRED DEFINES: Same as fenwickCoreImpl.h
  */
@@ -22,6 +22,12 @@
 #define FENWICK_INDEX_TYPE_FULL uint64_t
 #endif
 
+/* The Small tier's index type is part of the shared define set; the Full
+ * tier copies cells by count, so it only needs the name to exist */
+#ifndef FENWICK_INDEX_TYPE_SMALL
+#define FENWICK_INDEX_TYPE_SMALL uint32_t
+#endif
+
 #ifndef FENWICK_IS_SIGNED
 #define FENWICK_IS_SIGNED 1
 #endif
@@ -34,22 +40,19 @@
 #define FENWICK_IMPL_SCOPE
 #endif
 
-#include "../cleaner.h"
+#include "fenwickCoreAlgo.h"
 
-/* Scope-exit cleaner for value-array scratch. Each instantiation TU
- * includes this template exactly once, so the static is unique. */
-defcleanerName(FENWICK_VALUE_TYPE *, zfree, FenwickVals);
+#define FENWICK_FULL_T_ FENWICK_FULL_TYPENAME(FENWICK_SUFFIX)
+#define FENWICK_FULL_FN_(name) FENWICK_NAME(FENWICK_SUFFIX, name)
 
 /* ====================================================================
  * FULL TIER IMPLEMENTATIONS
  * ==================================================================== */
 
 /* Create new full Fenwick tree */
-FENWICK_IMPL_SCOPE FENWICK_FULL_TYPENAME(FENWICK_SUFFIX) *
-    FENWICK_NAME(FENWICK_SUFFIX, FullNew)(void) {
+FENWICK_IMPL_SCOPE FENWICK_FULL_T_ *FENWICK_FULL_FN_(FullNew)(void) {
     /* @own: caller */
-    FENWICK_FULL_TYPENAME(FENWICK_SUFFIX) *fw =
-        zcalloc(1, sizeof(FENWICK_FULL_TYPENAME(FENWICK_SUFFIX)));
+    FENWICK_FULL_T_ *fw = zcalloc(1, sizeof(FENWICK_FULL_T_));
     fw->count = 0;
     fw->capacity = 0;
     fw->maxCapacity = (FENWICK_INDEX_TYPE_FULL)-1;
@@ -57,328 +60,198 @@ FENWICK_IMPL_SCOPE FENWICK_FULL_TYPENAME(FENWICK_SUFFIX) *
     return fw;
 }
 
-/* Create from array */
-FENWICK_IMPL_SCOPE FENWICK_FULL_TYPENAME(FENWICK_SUFFIX) *
-    FENWICK_NAME(FENWICK_SUFFIX,
-                 FullNewFromArray)(const FENWICK_VALUE_TYPE *values,
+/* Create from array in O(n).  NULL values or count 0 give an empty tree;
+ * a float tree refuses (NULL) an array holding a non-finite value. */
+FENWICK_IMPL_SCOPE FENWICK_FULL_T_ *
+FENWICK_FULL_FN_(FullNewFromArray)(const FENWICK_VALUE_TYPE *values,
                                    FENWICK_INDEX_TYPE_FULL count) {
     if (!values || count == 0) {
-        return FENWICK_NAME(FENWICK_SUFFIX, FullNew)();
+        return FENWICK_FULL_FN_(FullNew)();
     }
 
-    FENWICK_INDEX_TYPE_FULL capacity = 1;
-    while (capacity <= count) {
-        capacity <<= 1;
-    }
-
-    /* @own: caller */
-    FENWICK_FULL_TYPENAME(FENWICK_SUFFIX) *fw =
-        zcalloc(1, sizeof(FENWICK_FULL_TYPENAME(FENWICK_SUFFIX)));
-    fw->count = count;
-    fw->capacity = capacity;
-    fw->maxCapacity = (FENWICK_INDEX_TYPE_FULL)-1;
-    /* @own: container */
-    fw->tree = zcalloc(capacity, sizeof(FENWICK_VALUE_TYPE));
-
-    /* Build BIT */
     for (FENWICK_INDEX_TYPE_FULL i = 0; i < count; i++) {
-        FENWICK_VALUE_TYPE value = values[i];
-        if (FENWICK_IS_FLOATING) {
-            if (value == (FENWICK_VALUE_TYPE)0.0) {
-                continue;
-            }
-        } else {
-            if (value == (FENWICK_VALUE_TYPE)0) {
-                continue;
-            }
-        }
-
-        FENWICK_INDEX_TYPE_FULL idx = i + 1;
-        while (idx <= capacity) {
-            fw->tree[idx - 1] += value;
-            idx = fenwickParent(idx);
+        if (!FENWICK_FULL_FN_(AlgoValid_)(values[i])) {
+            return NULL;
         }
     }
 
+    FENWICK_FULL_T_ *fw = FENWICK_FULL_FN_(FullNew)();
+    fw->count = count;
+    fw->capacity = FENWICK_FULL_FN_(AlgoCapacityFor_)(0, count - 1);
+    /* @own: container */
+    fw->tree = zcalloc(fw->capacity, sizeof(FENWICK_VALUE_TYPE));
+    memcpy(fw->tree, values, count * sizeof(FENWICK_VALUE_TYPE));
+    FENWICK_FULL_FN_(AlgoBuild_)(fw->tree, fw->capacity);
     return fw;
 }
 
-/* Convert from Small tier (2-TIER SYSTEM) */
-FENWICK_IMPL_SCOPE FENWICK_FULL_TYPENAME(FENWICK_SUFFIX) *
-    FENWICK_NAME(FENWICK_SUFFIX,
-                 FullFromSmall)(FENWICK_SMALL_TYPENAME(FENWICK_SUFFIX) *
-                                small) {
-    if (!small) {
-        return FENWICK_NAME(FENWICK_SUFFIX, FullNew)();
+/* Convert from the Small tier: the same capacity means the same cells */
+FENWICK_IMPL_SCOPE FENWICK_FULL_T_ *FENWICK_FULL_FN_(FullFromSmall)(
+    FENWICK_SMALL_TYPENAME(FENWICK_SUFFIX) * small) {
+    FENWICK_FULL_T_ *fw = FENWICK_FULL_FN_(FullNew)();
+    if (!small || small->capacity == 0) {
+        return fw;
     }
 
-    /* Extract all values from Small tier */
-    FENWICK_INDEX_TYPE_SMALL count = small->count;
-    cleanerName(zfree, FenwickVals) FENWICK_VALUE_TYPE *values =
-        zmalloc(count * sizeof(FENWICK_VALUE_TYPE));
-
-    for (FENWICK_INDEX_TYPE_SMALL i = 0; i < count; i++) {
-        values[i] = FENWICK_NAME(FENWICK_SUFFIX, SmallGet)(small, i);
-    }
-
-    /* Create Full from values */
-    return FENWICK_NAME(FENWICK_SUFFIX, FullNewFromArray)(values, count);
+    fw->count = small->count;
+    fw->capacity = small->capacity;
+    /* @own: container */
+    fw->tree = zmalloc(fw->capacity * sizeof(FENWICK_VALUE_TYPE));
+    memcpy(fw->tree, small->tree, fw->capacity * sizeof(FENWICK_VALUE_TYPE));
+    return fw;
 }
 
 /* Free full Fenwick tree */
-FENWICK_IMPL_SCOPE void
-FENWICK_NAME(FENWICK_SUFFIX,
-             FullFree)(FENWICK_FULL_TYPENAME(FENWICK_SUFFIX) * fw) {
+FENWICK_IMPL_SCOPE void FENWICK_FULL_FN_(FullFree)(FENWICK_FULL_T_ *fw) {
     if (fw) {
         if (fw->tree) {
             zfree(fw->tree);
         }
+
         zfree(fw);
     }
 }
 
-/* Update with unlimited growth */
-FENWICK_IMPL_SCOPE FENWICK_FULL_TYPENAME(FENWICK_SUFFIX) *
-    FENWICK_NAME(FENWICK_SUFFIX,
-                 FullUpdate)(FENWICK_FULL_TYPENAME(FENWICK_SUFFIX) * fw,
-                             FENWICK_INDEX_TYPE_FULL idx,
-                             FENWICK_VALUE_TYPE delta, bool *success) {
-    if (!fw) {
-        if (success) {
-            *success = false;
+/* Add 'delta' to element idx, growing the cells; false (nothing changed)
+ * when the capacity idx needs would overflow.  The caller has checked
+ * the new element.  OOM is fail-fast. */
+static bool FENWICK_FULL_FN_(FullApply_)(FENWICK_FULL_T_ *fw,
+                                         FENWICK_INDEX_TYPE_FULL idx,
+                                         FENWICK_VALUE_TYPE delta) {
+    if (idx >= fw->capacity) {
+        if (idx > fw->maxCapacity / 2) {
+            return false;
         }
-        return NULL;
+
+        const uint64_t oldCapacity = fw->capacity;
+        const uint64_t newCapacity =
+            FENWICK_FULL_FN_(AlgoCapacityFor_)(oldCapacity, idx);
+        /* @own: container */
+        fw->tree = zrealloc(fw->tree, newCapacity * sizeof(FENWICK_VALUE_TYPE));
+        memset(&fw->tree[oldCapacity], 0,
+               (newCapacity - oldCapacity) * sizeof(FENWICK_VALUE_TYPE));
+        FENWICK_FULL_FN_(AlgoGrow_)(fw->tree, oldCapacity, newCapacity);
+        fw->capacity = newCapacity;
     }
 
-    /* Ensure capacity */
-    if (idx >= fw->capacity) {
-        FENWICK_INDEX_TYPE_FULL oldCapacity = fw->capacity;
-        FENWICK_INDEX_TYPE_FULL newCount = idx + 1;
-        FENWICK_INDEX_TYPE_FULL newCapacity =
-            (oldCapacity == 0) ? 1 : oldCapacity;
-
-        while (newCapacity <= newCount) {
-            /* Check for overflow */
-            if (newCapacity > fw->maxCapacity / 2) {
-                if (success) {
-                    *success = false;
-                }
-                return fw;
-            }
-            newCapacity <<= 1;
-        }
-
-        /* @own: container */
-        FENWICK_VALUE_TYPE *newTree =
-            zrealloc(fw->tree, newCapacity * sizeof(FENWICK_VALUE_TYPE));
-        if (!newTree) {
-            if (success) {
-                *success = false;
-            }
-            return fw;
-        }
-
-        /* Zero new elements */
-        memset(&newTree[oldCapacity], 0,
-               (newCapacity - oldCapacity) * sizeof(FENWICK_VALUE_TYPE));
-
-        FENWICK_INDEX_TYPE_FULL oldCount = fw->count;
-        fw->tree = newTree;
-        fw->count = newCount;
-        fw->capacity = newCapacity;
-
-        /* Retroactive propagation */
-        if (oldCapacity > 0 && oldCount > 0) {
-            for (FENWICK_INDEX_TYPE_FULL pos = 1; pos <= oldCount; pos++) {
-                FENWICK_VALUE_TYPE value;
-                if (pos == 1) {
-                    value = fw->tree[0];
-                } else {
-                    FENWICK_VALUE_TYPE sum_pos =
-                        FENWICK_ZERO(FENWICK_VALUE_TYPE, FENWICK_IS_FLOATING);
-                    FENWICK_VALUE_TYPE sum_prev =
-                        FENWICK_ZERO(FENWICK_VALUE_TYPE, FENWICK_IS_FLOATING);
-
-                    FENWICK_INDEX_TYPE_FULL p = pos;
-                    while (p > 0 && p <= oldCapacity) {
-                        sum_pos += fw->tree[p - 1];
-                        p -= (p & -p);
-                    }
-
-                    p = pos - 1;
-                    while (p > 0 && p <= oldCapacity) {
-                        sum_prev += fw->tree[p - 1];
-                        p -= (p & -p);
-                    }
-
-                    value = sum_pos - sum_prev;
-                }
-
-                FENWICK_INDEX_TYPE_FULL parent = pos + (pos & -pos);
-                while (parent <= newCapacity) {
-                    if (parent > oldCapacity) {
-                        fw->tree[parent - 1] += value;
-                    }
-                    parent += (parent & -parent);
-                }
-            }
-        }
-    } else if (idx >= fw->count) {
+    if (idx >= fw->count) {
         fw->count = idx + 1;
     }
 
-    /* BIT update */
-    FENWICK_INDEX_TYPE_FULL i = idx + 1;
-    while (i <= fw->capacity) {
-        fw->tree[i - 1] += delta;
-        i = fenwickParent(i);
+    FENWICK_FULL_FN_(AlgoAddChain_)(fw->tree, fw->capacity, idx, delta);
+    return true;
+}
+
+/* Update: add delta to element at idx.  Refused (*success false, nothing
+ * changed) when the new element would not fit the type (floats: when the
+ * delta or the new element is not finite) or the capacity would
+ * overflow. */
+FENWICK_IMPL_SCOPE FENWICK_FULL_T_ *
+FENWICK_FULL_FN_(FullUpdate)(FENWICK_FULL_T_ *fw, FENWICK_INDEX_TYPE_FULL idx,
+                             FENWICK_VALUE_TYPE delta, bool *success) {
+    FENWICK_VALUE_TYPE element;
+    const bool ok = fw &&
+                    FENWICK_FULL_FN_(AlgoNewElement_)(fw->tree, fw->count, idx,
+                                                      delta, &element) &&
+                    FENWICK_FULL_FN_(FullApply_)(fw, idx, delta);
+    if (success) {
+        *success = ok;
     }
 
-    if (success) {
-        *success = true;
-    }
     return fw;
 }
 
 /* Query: prefix sum */
-FENWICK_IMPL_SCOPE FENWICK_VALUE_TYPE FENWICK_NAME(FENWICK_SUFFIX, FullQuery)(
-    const FENWICK_FULL_TYPENAME(FENWICK_SUFFIX) * fw,
-    FENWICK_INDEX_TYPE_FULL idx) {
+FENWICK_IMPL_SCOPE FENWICK_VALUE_TYPE FENWICK_FULL_FN_(FullQuery)(
+    const FENWICK_FULL_T_ *fw, FENWICK_INDEX_TYPE_FULL idx) {
     if (!fw || idx >= fw->count) {
-        return FENWICK_ZERO(FENWICK_VALUE_TYPE, FENWICK_IS_FLOATING);
+        return 0;
     }
 
-    FENWICK_VALUE_TYPE sum =
-        FENWICK_ZERO(FENWICK_VALUE_TYPE, FENWICK_IS_FLOATING);
-    FENWICK_INDEX_TYPE_FULL i = idx + 1;
-
-    while (i > 0) {
-        sum += fw->tree[i - 1];
-        i = fenwickPrev(i);
-    }
-
-    return sum;
+    return FENWICK_FULL_FN_(AlgoPrefix_)(fw->tree, idx);
 }
 
 /* Range query */
-FENWICK_IMPL_SCOPE FENWICK_VALUE_TYPE FENWICK_NAME(FENWICK_SUFFIX,
-                                                   FullRangeQuery)(
-    const FENWICK_FULL_TYPENAME(FENWICK_SUFFIX) * fw,
-    FENWICK_INDEX_TYPE_FULL left, FENWICK_INDEX_TYPE_FULL right) {
+FENWICK_IMPL_SCOPE FENWICK_VALUE_TYPE FENWICK_FULL_FN_(FullRangeQuery)(
+    const FENWICK_FULL_T_ *fw, FENWICK_INDEX_TYPE_FULL left,
+    FENWICK_INDEX_TYPE_FULL right) {
     if (!fw || left > right || right >= fw->count) {
-        return FENWICK_ZERO(FENWICK_VALUE_TYPE, FENWICK_IS_FLOATING);
+        return 0;
     }
 
-    FENWICK_VALUE_TYPE rightSum =
-        FENWICK_NAME(FENWICK_SUFFIX, FullQuery)(fw, right);
-
+    const FENWICK_VALUE_TYPE hi =
+        FENWICK_FULL_FN_(AlgoPrefix_)(fw->tree, right);
     if (left == 0) {
-        return rightSum;
+        return hi;
     }
 
-    FENWICK_VALUE_TYPE leftSum =
-        FENWICK_NAME(FENWICK_SUFFIX, FullQuery)(fw, left - 1);
-    return rightSum - leftSum;
+    return FENWICK_FULL_FN_(AlgoSub_)(
+        hi, FENWICK_FULL_FN_(AlgoPrefix_)(fw->tree, left - 1));
 }
 
-/* Get single element */
-FENWICK_IMPL_SCOPE FENWICK_VALUE_TYPE FENWICK_NAME(FENWICK_SUFFIX, FullGet)(
-    const FENWICK_FULL_TYPENAME(FENWICK_SUFFIX) * fw,
-    FENWICK_INDEX_TYPE_FULL idx) {
+/* Get single element, in one O(log n) walk */
+FENWICK_IMPL_SCOPE FENWICK_VALUE_TYPE FENWICK_FULL_FN_(FullGet)(
+    const FENWICK_FULL_T_ *fw, FENWICK_INDEX_TYPE_FULL idx) {
     if (!fw || idx >= fw->count) {
-        return FENWICK_ZERO(FENWICK_VALUE_TYPE, FENWICK_IS_FLOATING);
+        return 0;
     }
 
-    FENWICK_VALUE_TYPE current =
-        FENWICK_NAME(FENWICK_SUFFIX, FullQuery)(fw, idx);
-
-    if (idx == 0) {
-        return current;
-    }
-
-    FENWICK_VALUE_TYPE previous =
-        FENWICK_NAME(FENWICK_SUFFIX, FullQuery)(fw, idx - 1);
-    return current - previous;
+    return FENWICK_FULL_FN_(AlgoElement_)(fw->tree, idx);
 }
 
-/* Set single element */
-FENWICK_IMPL_SCOPE FENWICK_FULL_TYPENAME(FENWICK_SUFFIX) *
-    FENWICK_NAME(FENWICK_SUFFIX,
-                 FullSet)(FENWICK_FULL_TYPENAME(FENWICK_SUFFIX) * fw,
-                          FENWICK_INDEX_TYPE_FULL idx, FENWICK_VALUE_TYPE value,
-                          bool *success) {
-    if (!fw) {
-        if (success) {
-            *success = false;
-        }
-        return NULL;
+/* Set single element.  A float tree refuses a non-finite value, or a
+ * change from the current element that is not finite. */
+FENWICK_IMPL_SCOPE FENWICK_FULL_T_ *
+FENWICK_FULL_FN_(FullSet)(FENWICK_FULL_T_ *fw, FENWICK_INDEX_TYPE_FULL idx,
+                          FENWICK_VALUE_TYPE value, bool *success) {
+    bool ok = fw && FENWICK_FULL_FN_(AlgoValid_)(value);
+    if (ok) {
+        const FENWICK_VALUE_TYPE current =
+            idx < fw->count ? FENWICK_FULL_FN_(AlgoElement_)(fw->tree, idx) : 0;
+        const FENWICK_VALUE_TYPE delta =
+            FENWICK_FULL_FN_(AlgoSub_)(value, current);
+        ok = FENWICK_FULL_FN_(AlgoValid_)(delta) &&
+             FENWICK_FULL_FN_(FullApply_)(fw, idx, delta);
     }
 
-    FENWICK_VALUE_TYPE current = FENWICK_NAME(FENWICK_SUFFIX, FullGet)(fw, idx);
-    FENWICK_VALUE_TYPE delta = value - current;
+    if (success) {
+        *success = ok;
+    }
 
-    return FENWICK_NAME(FENWICK_SUFFIX, FullUpdate)(fw, idx, delta, success);
+    return fw;
 }
 
 /* Get count */
 FENWICK_IMPL_SCOPE FENWICK_INDEX_TYPE_FULL
-FENWICK_NAME(FENWICK_SUFFIX,
-             FullCount)(const FENWICK_FULL_TYPENAME(FENWICK_SUFFIX) * fw) {
+FENWICK_FULL_FN_(FullCount)(const FENWICK_FULL_T_ *fw) {
     return fw ? fw->count : 0;
 }
 
 /* Get bytes */
-FENWICK_IMPL_SCOPE size_t FENWICK_NAME(FENWICK_SUFFIX, FullBytes)(
-    const FENWICK_FULL_TYPENAME(FENWICK_SUFFIX) * fw) {
+FENWICK_IMPL_SCOPE size_t
+FENWICK_FULL_FN_(FullBytes)(const FENWICK_FULL_T_ *fw) {
     if (!fw) {
         return 0;
     }
-    return sizeof(FENWICK_FULL_TYPENAME(FENWICK_SUFFIX)) +
-           fw->capacity * sizeof(FENWICK_VALUE_TYPE);
+
+    return sizeof(FENWICK_FULL_T_) + fw->capacity * sizeof(FENWICK_VALUE_TYPE);
 }
 
-/* Lower bound */
-FENWICK_IMPL_SCOPE FENWICK_INDEX_TYPE_FULL
-FENWICK_NAME(FENWICK_SUFFIX,
-             FullLowerBound)(const FENWICK_FULL_TYPENAME(FENWICK_SUFFIX) * fw,
-                             FENWICK_VALUE_TYPE target) {
-    if (!fw || fw->count == 0) {
+/* Lower bound (non-negative elements); (index type)-1 when none */
+FENWICK_IMPL_SCOPE FENWICK_INDEX_TYPE_FULL FENWICK_FULL_FN_(FullLowerBound)(
+    const FENWICK_FULL_T_ *fw, FENWICK_VALUE_TYPE target) {
+    if (!fw) {
         return (FENWICK_INDEX_TYPE_FULL)-1;
     }
 
-    FENWICK_INDEX_TYPE_FULL pos = 0;
-    FENWICK_INDEX_TYPE_FULL bitMask = 1;
-    while (bitMask <= fw->count) {
-        bitMask <<= 1;
-    }
-    bitMask >>= 1;
-
-    FENWICK_VALUE_TYPE currentSum =
-        FENWICK_ZERO(FENWICK_VALUE_TYPE, FENWICK_IS_FLOATING);
-
-    while (bitMask > 0) {
-        FENWICK_INDEX_TYPE_FULL nextPos = pos + bitMask;
-
-        if (nextPos <= fw->count &&
-            currentSum + fw->tree[nextPos - 1] < target) {
-            pos = nextPos;
-            currentSum += fw->tree[pos - 1];
-        }
-
-        bitMask >>= 1;
-    }
-
-    if (pos < fw->count) {
-        return pos;
-    }
-
-    return (FENWICK_INDEX_TYPE_FULL)-1;
+    const uint64_t pos =
+        FENWICK_FULL_FN_(AlgoLowerBound_)(fw->tree, fw->count, target);
+    return pos == UINT64_MAX ? (FENWICK_INDEX_TYPE_FULL)-1
+                             : (FENWICK_INDEX_TYPE_FULL)pos;
 }
 
-/* Clear */
-FENWICK_IMPL_SCOPE void
-FENWICK_NAME(FENWICK_SUFFIX,
-             FullClear)(FENWICK_FULL_TYPENAME(FENWICK_SUFFIX) * fw) {
+/* Clear; count and capacity stay */
+FENWICK_IMPL_SCOPE void FENWICK_FULL_FN_(FullClear)(FENWICK_FULL_T_ *fw) {
     if (!fw || !fw->tree) {
         return;
     }
@@ -387,9 +260,7 @@ FENWICK_NAME(FENWICK_SUFFIX,
 }
 
 #ifdef DATAKIT_TEST
-FENWICK_IMPL_SCOPE void
-FENWICK_NAME(FENWICK_SUFFIX,
-             FullRepr)(const FENWICK_FULL_TYPENAME(FENWICK_SUFFIX) * fw) {
+FENWICK_IMPL_SCOPE void FENWICK_FULL_FN_(FullRepr)(const FENWICK_FULL_T_ *fw) {
     if (!fw) {
         printf("FenwickFull: (nil)\n");
         return;
@@ -397,14 +268,18 @@ FENWICK_NAME(FENWICK_SUFFIX,
 
     printf("FenwickFull [count=%" PRIu64 ", capacity=%" PRIu64 ", bytes=%zu]\n",
            (uint64_t)fw->count, (uint64_t)fw->capacity,
-           FENWICK_NAME(FENWICK_SUFFIX, FullBytes)(fw));
+           FENWICK_FULL_FN_(FullBytes)(fw));
 }
 #endif
+
+#undef FENWICK_FULL_T_
+#undef FENWICK_FULL_FN_
 
 /* Clean up */
 #undef FENWICK_SUFFIX
 #undef FENWICK_VALUE_TYPE
 #undef FENWICK_INDEX_TYPE_FULL
+#undef FENWICK_INDEX_TYPE_SMALL
 #undef FENWICK_IS_SIGNED
 #undef FENWICK_IS_FLOATING
 #undef FENWICK_IMPL_SCOPE
