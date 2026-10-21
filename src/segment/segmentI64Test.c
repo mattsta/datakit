@@ -328,7 +328,8 @@ int segmentI64Test(int argc, char *argv[]) {
 
     TEST("BENCH: Segment vs Naive - SUM queries (1K)") {
         const size_t N = 1000;
-        const size_t NUM_OPS = 10000000;
+        /* Checksum-verified smoke size; timing lives in benchmarks */
+        const size_t NUM_OPS = 20000;
         uint64_t seed = 12345;
 
         cleanerName(zfree, I64Array) int64_t *init =
@@ -380,7 +381,8 @@ int segmentI64Test(int argc, char *argv[]) {
 
     TEST("BENCH: Segment vs Naive - MIN queries (1K)") {
         const size_t N = 1000;
-        const size_t NUM_OPS = 10000000;
+        /* Checksum-verified smoke size; timing lives in benchmarks */
+        const size_t NUM_OPS = 20000;
         uint64_t seed = 12345;
 
         cleanerName(zfree, I64Array) int64_t *init =
@@ -432,7 +434,8 @@ int segmentI64Test(int argc, char *argv[]) {
 
     TEST("BENCH: Segment vs Naive - MAX queries (1K)") {
         const size_t N = 1000;
-        const size_t NUM_OPS = 10000000;
+        /* Checksum-verified smoke size; timing lives in benchmarks */
+        const size_t NUM_OPS = 20000;
         uint64_t seed = 12345;
 
         cleanerName(zfree, I64Array) int64_t *init =
@@ -484,7 +487,8 @@ int segmentI64Test(int argc, char *argv[]) {
 
     TEST("BENCH: Update performance (1K)") {
         const size_t N = 1000;
-        const size_t NUM_OPS = 10000000;
+        /* Checksum-verified smoke size; timing lives in benchmarks */
+        const size_t NUM_OPS = 20000;
         uint64_t seed = 12345;
 
         void *seg = segmentI64New(SEGMENT_OP_SUM);
@@ -526,7 +530,8 @@ int segmentI64Test(int argc, char *argv[]) {
 
         /* Stop at 10K for naive comparison - larger sizes take too long */
         size_t sizes[] = {100, 500, 1000, 5000, 10000, 100000};
-        const size_t NUM_OPS = 1000000;
+        /* Smoke size (naive scans reach 100K elements per op) */
+        const size_t NUM_OPS = 5000;
 
         for (size_t s = 0; s < sizeof(sizes) / sizeof(sizes[0]); s++) {
             size_t N = sizes[s];
@@ -605,7 +610,8 @@ int segmentI64Test(int argc, char *argv[]) {
 
         /* Stop at 10K for naive comparison - larger sizes take too long */
         size_t sizes[] = {100, 500, 1000, 5000, 10000, 100000};
-        const size_t NUM_OPS = 1000000;
+        /* Smoke size (naive scans reach 100K elements per op) */
+        const size_t NUM_OPS = 5000;
 
         for (size_t s = 0; s < sizeof(sizes) / sizeof(sizes[0]); s++) {
             size_t N = sizes[s];
@@ -674,7 +680,8 @@ int segmentI64Test(int argc, char *argv[]) {
 
         /* Stop at 10K for naive comparison - larger sizes take too long */
         size_t sizes[] = {100, 500, 1000, 5000, 10000, 100000};
-        const size_t NUM_OPS = 1000000;
+        /* Smoke size (naive scans reach 100K elements per op) */
+        const size_t NUM_OPS = 5000;
 
         for (size_t s = 0; s < sizeof(sizes) / sizeof(sizes[0]); s++) {
             size_t N = sizes[s];

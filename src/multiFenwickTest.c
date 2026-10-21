@@ -1789,14 +1789,15 @@ int multiFenwickTest(int argc, char *argv[]) {
     }
 
     TEST("COMPARISON: Query performance across sizes") {
-        printf("\n=== Query Performance Comparison (1M ops each) ===\n");
+        printf("\n=== Query Performance Comparison (20K ops each) ===\n");
         printf("Size | multiFenwick | fenwick    | Naive      | mfw/fw  | "
                "fw/naive\n");
         printf("-----|--------------|------------|------------|---------|------"
                "---\n");
 
         size_t sizes[] = {100, 500, 1000, 2000, 3000};
-        const size_t NUM_OPS = 1000000;
+        /* Checksum-verified smoke size; timing lives in fenwickBench */
+        const size_t NUM_OPS = 20000;
 
         for (size_t s = 0; s < 5; s++) {
             size_t N = sizes[s];
@@ -1877,12 +1878,13 @@ int multiFenwickTest(int argc, char *argv[]) {
     }
 
     TEST("COMPARISON: Update performance across sizes") {
-        printf("\n=== Update Performance Comparison (1M ops each) ===\n");
+        printf("\n=== Update Performance Comparison (20K ops each) ===\n");
         printf("Size | multiFenwick | fenwick    | Naive      | mfw/fw\n");
         printf("-----|--------------|------------|------------|---------\n");
 
         size_t sizes[] = {100, 500, 1000, 2000, 3000};
-        const size_t NUM_OPS = 1000000;
+        /* Checksum-verified smoke size; timing lives in fenwickBench */
+        const size_t NUM_OPS = 20000;
 
         for (size_t s = 0; s < 5; s++) {
             size_t N = sizes[s];
@@ -2125,7 +2127,7 @@ int multiFenwickTest(int argc, char *argv[]) {
 
     TEST("BENCH: Query performance - int64 (1K elements)") {
         const size_t N = 1000;
-        const size_t NUM_OPS = 1000000; /* 1M queries */
+        const size_t NUM_OPS = 20000; /* smoke size; see fenwickBench */
         uint64_t seed = 12345;
 
         /* Build test data */
@@ -2176,7 +2178,7 @@ int multiFenwickTest(int argc, char *argv[]) {
 
     TEST("BENCH: Update performance - double (500 elements)") {
         const size_t N = 500;
-        const size_t NUM_OPS = 1000000; /* 1M updates */
+        const size_t NUM_OPS = 20000; /* smoke size; see fenwickBench */
         uint64_t seed = 99999;
 
         cleaner(multiFenwickFree) multiFenwick *mfw = multiFenwickNew();
@@ -2198,7 +2200,7 @@ int multiFenwickTest(int argc, char *argv[]) {
 
     TEST("BENCH: Mixed workload - uint64 (1K elements)") {
         const size_t N = 1000;
-        const size_t NUM_OPS = 1000000; /* 1M mixed ops */
+        const size_t NUM_OPS = 20000; /* smoke size; see fenwickBench */
         uint64_t seed = 11111;
 
         cleanerName(zfree, DataboxArray) databox *init =

@@ -749,7 +749,8 @@ int fenwickI64Test(int argc, char *argv[]) {
 
     TEST("BENCH: Small dataset (1K) - Query Performance") {
         const size_t N = 1000;
-        const size_t NUM_OPS = 50000000; /* 50M for ~1 second */
+        /* Checksum-verified smoke size; timing lives in fenwickBench */
+        const size_t NUM_OPS = 20000;
         uint64_t seed = 12345;
 
         cleanerName(zfree, I64Array) int64_t *init =
@@ -797,7 +798,8 @@ int fenwickI64Test(int argc, char *argv[]) {
 
     TEST("BENCH: Medium dataset (20K) - Full Tier Performance") {
         const size_t N = 20000;          /* Forces Full tier */
-        const size_t NUM_OPS = 25000000; /* 25M */
+        /* Checksum-verified smoke size; timing lives in fenwickBench */
+        const size_t NUM_OPS = 20000;
         uint64_t seed = 12345;
 
         cleanerName(zfree, I64Array) int64_t *init =
@@ -850,7 +852,8 @@ int fenwickI64Test(int argc, char *argv[]) {
 
     TEST("BENCH: Update Performance") {
         const size_t N = 5000;
-        const size_t NUM_OPS = 25000000;
+        /* Smoke size; timing lives in fenwickBench */
+        const size_t NUM_OPS = 20000;
         uint64_t seed = 12345;
 
         void *fw = fenwickI64New();
@@ -879,7 +882,8 @@ int fenwickI64Test(int argc, char *argv[]) {
 
     TEST("BENCH: Mixed workload (50% query / 50% update)") {
         const size_t N = 10000;
-        const size_t NUM_OPS = 25000000;
+        /* Checksum-verified smoke size; timing lives in fenwickBench */
+        const size_t NUM_OPS = 20000;
         uint64_t seed = 12345;
 
         cleanerName(zfree, I64Array) int64_t *init =
