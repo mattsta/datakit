@@ -589,8 +589,9 @@ the opened flex, so the printed bytes are only valid while that flex is
 open. Use `databoxBytes()` rather than reaching into `box.data.bytes.start`
 so the code stays correct if the box ever arrives embedded.
 
-Also remember flex canonicalises numeral-looking pushes: a log line of
-`"12345"` comes back as an integer, not bytes.
+Also remember that `mflexPushBytes` and `mflexPushByType` auto-convert
+numeral-looking bytes: a log line of `"12345"` comes back as an integer. Use
+`mflexPushByTypeExact` to keep it as bytes.
 
 ### Pattern 2: Adaptive Compression
 

@@ -208,13 +208,34 @@ Flex automatically selects the most compact encoding:
 Length prefixes above 4210750 bytes jump from 3 to 5 bytes: the split varint
 has no 4-byte external form, so the next width up is `1 + 4`.
 
-### Automatic Value Canonicalisation
+### Two Write Paths: Auto-Convert and Exact
 
-`flexPushBytes` and `flexInsertBytes` run the byte string through
-`databoxCanonical` (see [databox](../core/DATABOX.md#canonical-numerals))
-first. A string that spells a number is stored in its **numeric** encoding,
-not as bytes, so pushing `"42"` and reading it back yields
-`DATABOX_UNSIGNED_64`, not `DATABOX_BYTES`:
+flex has two ways to write a value, and the caller chooses:
+
+| Path | Functions | `"42"` reads back as |
+|---|---|---|
+| Auto-convert | `flexPushBytes`, `flexPushByType`, `flexInsertBytes`, `flexNewFromDatabox*`, `flexPushDataboxBig` | the integer 42 |
+| Exact | `flexPushBytesExact`, `flexPushByTypeExact`, `flexNewFromDatabox*Exact`, `flexPushDataboxBigExact`, `mflexPushByTypeExact`, and every positional and sorted insert (`flexInsertByType` and friends) | the bytes `"42"` |
+
+Both paths store numbers in their smallest encoding of the **same** type
+(integer width, a double that fits exactly in a float). Only the auto-convert
+path also turns bytes into numbers.
+
+```c
+flexPushBytes(&f, "42", 2, FLEX_ENDPOINT_TAIL);      /* stored as 42 */
+flexPushBytesExact(&f, "42", 2, FLEX_ENDPOINT_TAIL); /* stored as "42" */
+```
+
+Use the exact path whenever the value must come back as given, for example
+opaque blobs, keys that callers look up again as strings, and anything
+persisted. datakit's containers and persistence write through the exact path.
+
+#### The auto-convert path
+
+The auto-convert path runs the byte string through `databoxCanonical` (see
+[databox](../core/DATABOX.md#canonical-numerals)). A string that spells a
+number is stored in its **numeric** encoding, not as bytes, so pushing `"42"`
+and reading it back yields `DATABOX_UNSIGNED_64`, not `DATABOX_BYTES`:
 
 ```c
 flexPushBytes(&f, "42", 2, FLEX_ENDPOINT_TAIL);
@@ -224,8 +245,8 @@ flexGetByType(flexHead(f), &box);
 assert(DATABOX_IS_INTEGER(&box));   /* NOT DATABOX_IS_BYTES */
 ```
 
-This is a storage win for numeral-heavy data, and it is why round-tripping a
-flex is value-preserving rather than byte-preserving.
+This saves space for numeral-heavy data, but an auto-converted value comes back
+as its number, not as the bytes pushed.
 
 What counts as a numeral:
 
@@ -244,10 +265,9 @@ A numeral beyond 64 bits is a 96/128-bit element, so read it back with
 [96/128-bit elements](#96128-bit-elements)).
 
 `flexPushByType` routes `DATABOX_BYTES` / `DATABOX_BYTES_EMBED` through
-`flexInsertBytes`, so **endpoint pushes canonicalise too**. The positional
-`flexInsertByType` does not: it stores byte boxes verbatim. If you need
-digit strings preserved as bytes, insert at a position rather than pushing,
-or prefix/wrap the value so it no longer parses as a number.
+`flexInsertBytes`, so it auto-converts too. To keep digit strings as bytes,
+use the exact path (`flexPushByTypeExact`, `flexPushBytesExact`) or a
+positional insert.
 
 `flexPushByType` also stores `DATABOX_PTR` as an unsigned integer, which is
 why a pointer read back out of a flex arrives as `DATABOX_UNSIGNED_64` — see
@@ -2182,10 +2202,16 @@ flexGetByType(flexHead(f), &box);
 assert(DATABOX_IS_BYTES(&box));   /* fails: it is an integer */
 ```
 
-Any push of a numeral lands in a numeric encoding, including a 96/128-bit
-integer for integer numerals beyond 64 bits. Test with `DATABOX_IS_INTEGER` /
-`DATABOX_IS_FLOAT` and the 128-bit types as well, or keep the value out of
-numeral form.
+An auto-convert push of a numeral lands in a numeric encoding, including a
+96/128-bit integer for integer numerals beyond 64 bits. To get the bytes back,
+push through the exact path instead:
+
+```c
+/* RIGHT - the exact path stores the bytes as given */
+flexPushBytesExact(&f, "42", 2, FLEX_ENDPOINT_TAIL);
+flexGetByType(flexHead(f), &box);
+assert(DATABOX_IS_BYTES(&box));
+```
 
 ### 6. Holding Decoded Bytes Across a Mutation
 

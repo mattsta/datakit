@@ -695,9 +695,11 @@ Comparing a `DATABOX_VOID` box asserts in debug builds.
 
 ## Canonical Numerals
 
-datakit stores a byte string that spells a number as that number, in its
-minimum representation, and readers interpret. These two functions are the
-one home of that rule; `flexInsertBytes` (and so every flex push) uses them.
+These two functions turn a byte string that spells a number into that
+number, in its minimum representation. They are an explicit, opt-in
+conversion: flex's auto-convert push path (`flexPushBytes`, `flexPushByType`)
+uses them, while flex's exact path, datakit's containers and persistence
+never do. Call them yourself when you want numeral strings stored as numbers.
 
 ```c
 /* true, with *out holding the canonical number, when 'in' is a BYTES or
@@ -732,7 +734,7 @@ Ownership and lifetime:
   `databoxBigCopyFrom`.
 - On a rejection, `*out` (or `scratch`) is not written.
 
-`databoxCanonical` is the form to use at a boundary. Its inline fast reject
+`databoxCanonical` is the form to use when you opt in. Its inline fast reject
 returns `in` without a call for non-bytes boxes, empty strings, and strings
 whose first byte is neither `-` nor a digit, so ordinary string keys pay one
 or two branches and only numeral-looking strings reach the scanner:
