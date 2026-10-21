@@ -70,16 +70,6 @@ bool bbitsDodDodAppend(bbitsDodDod *dd, const dodVal newKey,
         /* @own: container; free=zfree */
         dd->val = zrealloc(dd->val, sizeof(*dd->val) * dd->count);
 
-        /* Grow original t0/t1 storage arrays */
-        /* @own: container; free=zfree */
-        dd->keyT0 = zrealloc(dd->keyT0, sizeof(*dd->keyT0) * dd->count);
-        /* @own: container; free=zfree */
-        dd->keyT1 = zrealloc(dd->keyT1, sizeof(*dd->keyT1) * dd->count);
-        /* @own: container; free=zfree */
-        dd->valT0 = zrealloc(dd->valT0, sizeof(*dd->valT0) * dd->count);
-        /* @own: container; free=zfree */
-        dd->valT1 = zrealloc(dd->valT1, sizeof(*dd->valT1) * dd->count);
-
         /* Re-bind variables */
         kw = &dd->key[dd->count - 1];
         vw = &dd->val[dd->count - 1];
@@ -95,25 +85,10 @@ bool bbitsDodDodAppend(bbitsDodDod *dd, const dodVal newKey,
         /* @own: container; free=zfree */
         vw->d = zcalloc(1, BYTES_PER_BITMAP);
         vw->totalBytes = BYTES_PER_BITMAP;
-
-        /* Initialize original t0/t1 - will be set on first two writes */
-        dd->keyT0[dd->count - 1] = 0;
-        dd->keyT1[dd->count - 1] = 0;
-        dd->valT0[dd->count - 1] = 0;
-        dd->valT1[dd->count - 1] = 0;
     }
 
-    /* Capture original t0 and t1 values before they get rotated */
-    size_t idx = dd->count - 1;
-    if (kw->count == 0) {
-        dd->keyT0[idx] = newKey;
-        dd->valT0[idx] = newVal;
-    } else if (kw->count == 1) {
-        dd->keyT1[idx] = newKey;
-        dd->valT1[idx] = newVal;
-    }
-
-    /* Now we can almost start working on something */
+    /* The writers keep the first two values themselves: a lone value in
+     * t[0], and from two values on in the stream header. */
     dodWrite(kw, newKey);
     dodWrite(vw, newVal);
 
@@ -122,23 +97,20 @@ bool bbitsDodDodAppend(bbitsDodDod *dd, const dodVal newKey,
     return true;
 }
 
-/* Helper: Read all values from a dodWrite() bitmap. A single value lives
- * only in the writer (stored here as t0); from two values on, the bitmap's
- * header holds the first two and dodReadAll() decodes the rest after it. */
-static void bbitsReadDodAll(const dod *d, dodVal t0, dodVal t1, uint64_t *vals,
-                            size_t elemCount) {
-    if (elemCount == 0) {
+/* Helper: Read all values from a dodWrite() writer. A single value lives
+ * only in the writer's t[0]; from two values on, the stream's header holds
+ * the first two and dodReadAll() decodes the rest after it. */
+static void bbitsReadDodAll(const dodWriter *w, uint64_t *vals) {
+    if (w->count == 0) {
         return;
     }
 
-    if (elemCount == 1) {
-        vals[0] = (uint64_t)t0;
+    if (w->count == 1) {
+        vals[0] = (uint64_t)w->t[0];
         return;
     }
 
-    dodReadAll(d, vals, elemCount);
-    assert(vals[0] == (uint64_t)t0 && vals[1] == (uint64_t)t1);
-    (void)t1;
+    dodReadAll(w->d, vals, w->count);
 }
 
 bool bbitsDodDodGetOffsetCount(bbitsDodDod *dd, ssize_t offset,
@@ -218,8 +190,8 @@ bool bbitsDodDodGetOffsetCount(bbitsDodDod *dd, ssize_t offset,
         cleanerName(zfree, U64) uint64_t *tmpVal =
             zmalloc(vw->count * sizeof(*tmpVal));
 
-        bbitsReadDodAll(kw->d, dd->keyT0[i], dd->keyT1[i], tmpKey, kw->count);
-        bbitsReadDodAll(vw->d, dd->valT0[i], dd->valT1[i], tmpVal, vw->count);
+        bbitsReadDodAll(kw, tmpKey);
+        bbitsReadDodAll(vw, tmpVal);
 
         memcpy(*key, tmpKey + startOffset, elementsToRead * sizeof(**key));
         memcpy(*val, tmpVal + startOffset, elementsToRead * sizeof(**val));
@@ -242,8 +214,8 @@ bool bbitsDodDodGetOffsetCount(bbitsDodDod *dd, ssize_t offset,
         cleanerName(zfree, U64) uint64_t *tmpVal =
             zmalloc(vw->count * sizeof(*tmpVal));
 
-        bbitsReadDodAll(kw->d, dd->keyT0[i], dd->keyT1[i], tmpKey, kw->count);
-        bbitsReadDodAll(vw->d, dd->valT0[i], dd->valT1[i], tmpVal, vw->count);
+        bbitsReadDodAll(kw, tmpKey);
+        bbitsReadDodAll(vw, tmpVal);
 
         memcpy(*key + totalWritten, tmpKey, elementsToRead * sizeof(**key));
         memcpy(*val + totalWritten, tmpVal, elementsToRead * sizeof(**val));
@@ -285,10 +257,6 @@ void bbitsDodDodFree(bbitsDodDod *dd) {
 
         zfree(dd->key);
         zfree(dd->val);
-        zfree(dd->keyT0);
-        zfree(dd->keyT1);
-        zfree(dd->valT0);
-        zfree(dd->valT1);
     }
 }
 
@@ -342,12 +310,6 @@ bool bbitsDodXofAppend(bbitsDodXof *dx, const dodVal newKey,
         /* @own: container; free=zfree */
         dx->val = zrealloc(dx->val, sizeof(*dx->val) * dx->count);
 
-        /* Grow original t0/t1 storage arrays for keys */
-        /* @own: container; free=zfree */
-        dx->keyT0 = zrealloc(dx->keyT0, sizeof(*dx->keyT0) * dx->count);
-        /* @own: container; free=zfree */
-        dx->keyT1 = zrealloc(dx->keyT1, sizeof(*dx->keyT1) * dx->count);
-
         /* Re-bind variables */
         kw = &dx->key[dx->count - 1];
         vw = &dx->val[dx->count - 1];
@@ -364,21 +326,10 @@ bool bbitsDodXofAppend(bbitsDodXof *dx, const dodVal newKey,
         /* @own: container; free=zfree */
         vw->d = zcalloc(1, BYTES_PER_BITMAP);
         vw->totalBytes = BYTES_PER_BITMAP;
-
-        /* Initialize original t0/t1 for keys */
-        dx->keyT0[dx->count - 1] = 0;
-        dx->keyT1[dx->count - 1] = 0;
     }
 
-    /* Capture original t0 and t1 values for keys before rotation */
-    size_t idx = dx->count - 1;
-    if (kw->count == 0) {
-        dx->keyT0[idx] = newKey;
-    } else if (kw->count == 1) {
-        dx->keyT1[idx] = newKey;
-    }
-
-    /* Now we can almost start working on something */
+    /* The key writer keeps its first two values itself: a lone value in
+     * t[0], and from two values on in the stream header. */
     dodWrite(kw, newKey);
     xofWrite(vw, newVal);
 
@@ -400,8 +351,6 @@ void bbitsDodXofFree(bbitsDodXof *dx) {
 
         zfree(dx->key);
         zfree(dx->val);
-        zfree(dx->keyT0);
-        zfree(dx->keyT1);
     }
 }
 
@@ -481,7 +430,7 @@ bool bbitsDodXofGetOffsetCount(bbitsDodXof *dx, ssize_t offset, ssize_t *count,
         cleanerName(zfree, Doubles) double *tmpVal =
             zmalloc(vw->count * sizeof(*tmpVal));
 
-        bbitsReadDodAll(kw->d, dx->keyT0[i], dx->keyT1[i], tmpKey, kw->count);
+        bbitsReadDodAll(kw, tmpKey);
         xofReadAll(vw->d, tmpVal, vw->count);
 
         memcpy(*key, tmpKey + startOffset, elementsToRead * sizeof(**key));
@@ -505,7 +454,7 @@ bool bbitsDodXofGetOffsetCount(bbitsDodXof *dx, ssize_t offset, ssize_t *count,
         cleanerName(zfree, Doubles) double *tmpVal =
             zmalloc(vw->count * sizeof(*tmpVal));
 
-        bbitsReadDodAll(kw->d, dx->keyT0[i], dx->keyT1[i], tmpKey, kw->count);
+        bbitsReadDodAll(kw, tmpKey);
         xofReadAll(vw->d, tmpVal, vw->count);
 
         memcpy(*key + totalWritten, tmpKey, elementsToRead * sizeof(**key));

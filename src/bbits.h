@@ -5,17 +5,10 @@
 
 /* DoD needs two initial values to start writing. */
 typedef struct bbitsDodDod {
-    /* Arrays of key and value writers */
+    /* Arrays of key and value writers.  Each writer keeps its segment's
+     * first two values itself (t[0], then the stream header). */
     dodWriter *key;
     dodWriter *val;
-
-    /* Original t0/t1 values for each bitmap segment (needed for reading) */
-    /* These store the first two values written to each segment before rotation
-     */
-    dodVal *keyT0;
-    dodVal *keyT1;
-    dodVal *valT0;
-    dodVal *valT1;
 
     /* Length of both 'key' and 'val' arrays. */
     size_t count;
@@ -26,13 +19,10 @@ typedef struct bbitsDodDod {
 
 /* XoF only needs one value to start writing. */
 typedef struct bbitsDodXof {
-    /* Arrays of key and value writers */
+    /* Arrays of key and value writers.  Each key writer keeps its segment's
+     * first two values itself (t[0], then the stream header). */
     dodWriter *key;
     xofWriter *val;
-
-    /* Original t0/t1 values for key bitmap segments (needed for reading) */
-    dodVal *keyT0;
-    dodVal *keyT1;
 
     /* Length of both 'key' and 'val' arrays. */
     size_t count;
