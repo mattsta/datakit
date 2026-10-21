@@ -98,6 +98,21 @@ bool multimapDeleteWithFound(multimap **m, const databox *key,
                              databox *foundReference);
 bool multimapDeleteRandomValue(multimap **m, bool fromTail, databox **deleted);
 
+/* Add 'incrBy' to the integer field at 'fieldOffset' (1 = first value
+ * after the key) of 'key''s row, following the platform increment policy
+ * (DATABOX.md "Numeric updates").  The field must be a SIGNED_64, an
+ * UNSIGNED_64 up to INT64_MAX, or TRUE/FALSE (counted as 1/0; a boolean
+ * stays boolean while the result is 0 or 1).  The sum is exact.
+ *
+ * multimapFieldIncrBy returns true with the new value in '*newValue' (if
+ * non-NULL); it returns false, changing nothing, for a missing key, a field
+ * that is not such a counter, or a result outside int64.
+ *
+ * multimapFieldIncr returns the new value, or on any refusal the current
+ * value (0 for a missing key or a non-counter field); it cannot report a
+ * refusal, so prefer multimapFieldIncrBy. */
+bool multimapFieldIncrBy(multimap **m, const databox *key, uint32_t fieldOffset,
+                         int64_t incrBy, int64_t *newValue);
 int64_t multimapFieldIncr(multimap **m, const databox *key,
                           uint32_t fieldOffset, int64_t incrBy);
 

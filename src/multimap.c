@@ -516,73 +516,95 @@ int64_t multimapFieldIncr(multimap **m, const databox *key,
      *       but we aren't upgrading maps here. */
 }
 #else
+/* The field at 'fieldOffset' of 'key''s row as an int64 counter: TRUE and
+ * FALSE count as 1 and 0.  False for a missing key or a field that is not
+ * an int64-range integer or boolean. */
+static bool multimapFieldCounter_(multimap *m, const databox *key,
+                                  uint32_t fieldOffset, multimapEntry *me,
+                                  databox *field, int64_t *value) {
+    if (!multimapGetUnderlyingEntry(m, key, me)) {
+        return false;
+    }
+
+    while (fieldOffset--) {
+        me->fe = flexNext(*me->map, me->fe);
+    }
+
+    databoxWide fieldWide;
+    flexGetByTypeInto(me->fe, field, &fieldWide);
+    switch (field->type) {
+    case DATABOX_SIGNED_64:
+        *value = field->data.i64;
+        return true;
+    case DATABOX_UNSIGNED_64:
+        if (field->data.u64 > (uint64_t)INT64_MAX) {
+            return false;
+        }
+
+        *value = (int64_t)field->data.u64;
+        return true;
+    case DATABOX_TRUE:
+        *value = 1;
+        return true;
+    case DATABOX_FALSE:
+        *value = 0;
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool multimapFieldIncrBy(multimap **m, const databox *key, uint32_t fieldOffset,
+                         int64_t incrBy, int64_t *newValue) {
+    multimapEntry me;
+    databox field;
+    int64_t current;
+    if (!multimapFieldCounter_(*m, key, fieldOffset, &me, &field, &current)) {
+        return false;
+    }
+
+    /* Increment policy: exact; refuse a result outside int64. */
+    int64_t next;
+    if (__builtin_add_overflow(current, incrBy, &next)) {
+        return false;
+    }
+
+    if (incrBy != 0) {
+        /* A boolean field stays boolean while the result is 0 or 1. */
+        const bool wasBool =
+            field.type == DATABOX_TRUE || field.type == DATABOX_FALSE;
+        databox result;
+        if (wasBool && (next == 0 || next == 1)) {
+            result = next ? DATABOX_BOX_TRUE : DATABOX_BOX_FALSE;
+        } else {
+            result = databoxNewSigned(next);
+        }
+
+        multimapReplaceEntry(m, &me, &result);
+    }
+
+    if (newValue) {
+        *newValue = next;
+    }
+
+    return true;
+}
+
 int64_t multimapFieldIncr(multimap **m, const databox *key,
                           uint32_t fieldOffset, int64_t incrBy) {
-    /* Step 1: fetch entry for key */
+    int64_t next;
+    if (multimapFieldIncrBy(m, key, fieldOffset, incrBy, &next)) {
+        return next;
+    }
+
+    /* Refused or not a counter: report the current value, or 0 for a
+     * missing key or a field that is not an int64 counter. */
     multimapEntry me;
-    if (!multimapGetUnderlyingEntry(*m, key, &me)) {
-        /* No such key: a miss leaves me.fe NULL, so return 0 rather
-         * than dereferencing it. Reachable via a stale or forged atom
-         * reference handed to Retain/Release. */
-        return 0;
-    }
-
-    /* Step 2: iterate to offset field */
-    while (fieldOffset--) {
-        me.fe = flexNext(*me.map, me.fe);
-    }
-
-    /* Step 3: read offset field */
-    databox current;
-    databoxWide currentWide;
-    flexGetByTypeInto(me.fe, &current, &currentWide);
-
-    /* Nothing to change... */
-    if (incrBy == 0) {
-        return current.data.i;
-    }
-
-    /* Step 4: run increment */
-    /* We're safe using 'i' because we only incr/decr by int64_t,
-     * but this also implies you shouldn't FieldIncr anything
-     * with value > INT64_MAX */
-    assert(/* This isn't fully inclusive of conditions, but enough for now */
-           (current.type == DATABOX_UNSIGNED_64 &&
-            current.data.u <= INT64_MAX) ||
-           (current.type == DATABOX_SIGNED_64) ||
-           (current.type == DATABOX_TRUE) || (current.type == DATABOX_FALSE));
-
-    /* This is a bit weird because we allow FALSE to be an implicit 0 and
-     * we allow TRUE to be an implicit 1, and we allow math operations against
-     * bool types. */
-    if (incrBy < 0) {
-        /* If incrementing negative, FALSE becomes signed; TRUE becomes FALSE */
-        if (incrBy == -1 && current.type == DATABOX_TRUE) {
-            current.type = DATABOX_FALSE;
-        } else {
-            current.type = DATABOX_SIGNED_64;
-        }
-    } else {
-        /* If incrementing positive, FALSE becomes TRUE; TRUE becomes signed. */
-        if (incrBy == 1 && current.type == DATABOX_FALSE) {
-            current.type = DATABOX_TRUE;
-        } else {
-            current.type = DATABOX_SIGNED_64;
-        }
-    }
-
-    /* Also note: we aren't checking for overflow here... */
-    current.data.i += incrBy;
-
-#if 0
-    databoxReprSay("Setting value to", &current);
-#endif
-
-    /* Step 5: replace entry */
-    multimapReplaceEntry(m, &me, &current);
-
-    /* Step 6: return updated count */
-    return current.data.i;
+    databox field;
+    int64_t current;
+    return multimapFieldCounter_(*m, key, fieldOffset, &me, &field, &current)
+               ? current
+               : 0;
 }
 
 #endif
@@ -6726,6 +6748,42 @@ int multimapTest(int argc, char *argv[]) {
         if (!multimapDelete(&m, &otherNan) || multimapExists(m, &nanKey) ||
             multimapCount(m) != 1 || !multimapExists(m, &inf)) {
             ERRR("NaN key could not be deleted cleanly");
+        }
+    }
+
+    TEST("FieldIncrBy: exact, refuses overflow and non-counters") {
+        cleaner(multimapFree) multimap *m = multimapNew(2);
+        const databox kMax = databoxNewSigned(1);
+        const databox kBool = databoxNewSigned(2);
+        const databox kStr = databoxNewSigned(3);
+        const databox kMissing = databoxNewSigned(4);
+        const databox vMax = databoxNewSigned(INT64_MAX);
+        const databox vStr = databoxNewBytesString("text");
+        const databox *rowMax[] = {&kMax, &vMax};
+        const databox *rowBool[] = {&kBool, &DATABOX_BOX_FALSE};
+        const databox *rowStr[] = {&kStr, &vStr};
+        multimapInsert(&m, rowMax);
+        multimapInsert(&m, rowBool);
+        multimapInsert(&m, rowStr);
+
+        int64_t got = 42;
+        if (multimapFieldIncrBy(&m, &kMax, 1, 1, &got) || got != 42 ||
+            multimapFieldIncr(&m, &kMax, 1, 0) != INT64_MAX) {
+            ERRR("INT64_MAX + 1 was not refused unchanged");
+        }
+        if (!multimapFieldIncrBy(&m, &kMax, 1, -2, &got) ||
+            got != INT64_MAX - 2) {
+            ERRR("INT64_MAX - 2 did not apply");
+        }
+        if (!multimapFieldIncrBy(&m, &kBool, 1, 1, &got) || got != 1 ||
+            !multimapFieldIncrBy(&m, &kBool, 1, 1, &got) || got != 2 ||
+            !multimapFieldIncrBy(&m, &kBool, 1, -2, &got) || got != 0) {
+            ERRR("boolean counter arithmetic is wrong");
+        }
+        if (multimapFieldIncrBy(&m, &kStr, 1, 1, NULL) ||
+            multimapFieldIncrBy(&m, &kMissing, 1, 1, NULL) ||
+            multimapFieldIncr(&m, &kMissing, 1, 1) != 0) {
+            ERRR("a non-counter field or missing key was not refused");
         }
     }
 
