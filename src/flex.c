@@ -106,6 +106,7 @@ defcleanerName(char *, zfree, Chars);
 defcleaner(flex *, flexFree);
 #ifdef DATAKIT_TEST
 defcleaner(multimapAtom *, multimapAtomFree);
+#include <math.h> /* NAN (tests) */
 #endif
 
 /* This configuration define allows building flex without 'mdsc', but disabling
@@ -4435,40 +4436,71 @@ bool flexCompareBytes(flexEntry *fe, const void *data, const size_t len) {
 }
 #endif
 
+/* The 64-bit integer at 'entry' as a value: true with '*neg' and '*mag'
+ * (the magnitude) set, false for any other entry. */
+DK_STATIC bool flexEntryInteger_(const flexEntryData *entry, bool *neg,
+                                 uint64_t *mag) {
+    if (!flexEntryIsIntegerNarrow_(entry->fe)) {
+        return false;
+    }
+
+    databox box = {{0}};
+    flexGetByTypeInto(entry->fe, &box, NULL);
+    if (box.type == DATABOX_SIGNED_64) {
+        *neg = box.data.i64 < 0;
+        *mag = *neg ? (uint64_t)0 - (uint64_t)box.data.i64
+                    : (uint64_t)box.data.i64;
+        return true;
+    }
+
+    if (box.type == DATABOX_UNSIGNED_64) {
+        *neg = false;
+        *mag = box.data.u64;
+        return true;
+    }
+
+    return false;
+}
+
+/* Integer finds match by mathematical value: -1 never matches a stored
+ * UINT64_MAX, and 5 matches 5 however it is encoded. */
 DK_STATIC bool flexEntryCompareSigned__(const flexEntryData *entry,
                                         const uint8_t *src, const size_t len) {
     DK_NOTUSED(len);
-
-    /* Compare current entry with specified entry */
-    if (flexEntryIsIntegerNarrow_(entry->fe)) {
-        const int64_t val = flexLoadSigned(entry);
-        if (val == *(int64_t *)src) {
-            return true;
-        }
+    int64_t want;
+    memcpy(&want, src, sizeof(want));
+    bool neg;
+    uint64_t mag;
+    if (!flexEntryInteger_(entry, &neg, &mag)) {
+        return false;
     }
-    return false;
+
+    const bool wantNeg = want < 0;
+    const uint64_t wantMag =
+        wantNeg ? (uint64_t)0 - (uint64_t)want : (uint64_t)want;
+    return neg == wantNeg && mag == wantMag;
 }
 
 DK_STATIC bool flexEntryCompareUnsigned__(const flexEntryData *entry,
                                           const uint8_t *src,
                                           const size_t len) {
     DK_NOTUSED(len);
-
-    /* Compare current entry with specified entry */
-    if (flexEntryIsIntegerNarrow_(entry->fe)) {
-        const uint64_t val = flexLoadUnsigned(entry);
-        if (val == *(uint64_t *)src) {
-            return true;
-        }
-    }
-    return false;
+    uint64_t want;
+    memcpy(&want, src, sizeof(want));
+    bool neg;
+    uint64_t mag;
+    return flexEntryInteger_(entry, &neg, &mag) && !neg && mag == want;
 }
 
 DK_STATIC bool flexEntryCompareString__(const flexEntryData *entry,
                                         const uint8_t *src, const size_t len) {
+    /* The empty string has an encoding of its own. */
+    if (entry->encoding == FLEX_BYTES_EMPTY) {
+        return len == 0;
+    }
+
     if (FLEX_IS_STR(entry->encoding) && (entry->len == len)) {
-        return (memcmp(FLEX_ENTRY_DATA(entry), src,
-                       entry->len < len ? entry->len : len) == 0);
+        return len == 0 || memcmp(FLEX_ENTRY_DATA(entry), src, len) == 0;
     }
 
     return false;
@@ -5538,13 +5570,41 @@ flexEntry *flexFindUnsignedReverse(const flex *const f, flexEntry *const fe,
 flexEntry *flexFindString(const flex *const f, flexEntry *const fe,
                           const void *val, const size_t len,
                           const uint32_t skip) {
-    flexFindForward_((uint8_t *)&val, len, flexEntryCompareString__);
+    flexFindForward_((const uint8_t *)val, len, flexEntryCompareString__);
 }
 
 flexEntry *flexFindStringReverse(const flex *const f, flexEntry *const fe,
                                  const void *val, const size_t len,
                                  const uint32_t skip) {
-    flexFindReverse_((uint8_t *)&val, len, flexEntryCompareString__);
+    flexFindReverse_((const uint8_t *)val, len, flexEntryCompareString__);
+}
+
+/* Typed match for the probe kinds without a dedicated comparator: 'src' is
+ * the probe databox.  A number matches a numeric entry of the same value
+ * (identity order, so a NaN probe finds a NaN entry); TRUE, FALSE and NULL
+ * match only their own type.  Strings never match here. */
+DK_STATIC bool flexEntryCompareBox__(const flexEntryData *entry,
+                                     const uint8_t *src, const size_t len) {
+    DK_NOTUSED(len);
+    const databox *const probe = (const databox *)src;
+    if (FLEX_IS_STR(entry->encoding) || entry->encoding == FLEX_BYTES_EMPTY) {
+        return false;
+    }
+
+    databox got = {{0}};
+    databoxWide slot;
+    flexGetByTypeInto(entry->fe, &got, &slot);
+    const bool probeNumeric = DATABOX_IS_NUMERIC(probe) ||
+                              probe->type == DATABOX_SIGNED_128 ||
+                              probe->type == DATABOX_UNSIGNED_128;
+    if (probeNumeric) {
+        const bool gotNumeric = DATABOX_IS_NUMERIC(&got) ||
+                                got.type == DATABOX_SIGNED_128 ||
+                                got.type == DATABOX_UNSIGNED_128;
+        return gotNumeric && databoxCompare(&got, probe) == 0;
+    }
+
+    return got.type == probe->type;
 }
 
 DK_STATIC flexEntry *flexFindByTypeDirectional_(flex *const f,
@@ -5569,23 +5629,26 @@ DK_STATIC flexEntry *flexFindByTypeDirectional_(flex *const f,
         return NULL; /* flexFind__ macro returns, but this satisfies static
                         analyzers */
     case DATABOX_FLOAT_32:
-    //        flexFind__(forward, (uint8_t *)&box->data.f32,
-    //        sizeof(box->data.f32), flexEntryCompareFloat__);
-    //        break;
     case DATABOX_DOUBLE_64:
-    //        flexFind__(forward, (uint8_t *)&box->data.d64,
-    //        sizeof(box->data.d64), flexEntryCompareDouble__);
-    //        break;
+    case DATABOX_SIGNED_128:
+    case DATABOX_UNSIGNED_128:
     case DATABOX_TRUE:
     case DATABOX_FALSE:
     case DATABOX_NULL:
-        return NULL; /* not implemented yet! Need to refactor finding to
-                        support
-                        finding by encoding and not just finding by value
-                        (since
-                        immediate encodings have no values). */
+        if ((box->type == DATABOX_SIGNED_128 ||
+             box->type == DATABOX_UNSIGNED_128) &&
+            databoxIsWideDeferred(box)) {
+            return NULL; /* a wide probe with no payload has no value */
+        }
+
+        flexFind__(forward, (const uint8_t *)box, sizeof(*box),
+                   flexEntryCompareBox__);
+        return NULL; /* flexFind__ macro returns, but this satisfies static
+                        analyzers */
     default:
-        return f;
+        /* No find semantics for this type (containers, pointers): no
+         * match, never the flex itself. */
+        return NULL;
     }
 }
 
@@ -8363,6 +8426,94 @@ static bool flexTestEntryIsBytes(const flexEntry *fe, const char *s,
 /* The exact path stores every string as the bytes given, numerals and
  * near-numerals included, through each exact entry point.  The auto path
  * still converts a numeral. */
+/* Position of 'fe' in 'f' from the head, or -1 for NULL. */
+static int32_t flexTestIndexOf(const flex *f, const flexEntry *fe) {
+    if (!fe) {
+        return -1;
+    }
+
+    int32_t i = 0;
+    for (flexEntry *at = flexHead(f); at; at = flexNext(f, at), i++) {
+        if (at == fe) {
+            return i;
+        }
+    }
+
+    return -2; /* not an entry of 'f' at all (e.g. the flex itself) */
+}
+
+/* Every typed find against an oracle of entry positions, in a flex holding
+ * one entry of each kind. */
+static int32_t flexTestTypedFind(void) {
+    int32_t bad = 0;
+    cleaner(flexFree) flex *f = flexNew();
+    const databox entries[] = {
+        databoxNewBytes("", 0),         /* 0 */
+        databoxNewBytes("a", 1),        /* 1 */
+        databoxNewBytes("22", 2),       /* 2: bytes, stored exactly */
+        databoxNewSigned(22),           /* 3 */
+        databoxNewSigned(-1),           /* 4 */
+        databoxNewUnsigned(UINT64_MAX), /* 5 */
+        databoxNewReal(1.5),            /* 6 */
+        databoxNewReal(NAN),            /* 7 */
+        DATABOX_BOX_TRUE,               /* 8 */
+        DATABOX_BOX_FALSE,              /* 9 */
+        DATABOX_BOX_NULL,               /* 10 */
+    };
+    for (size_t i = 0; i < COUNT_ARRAY(entries); i++) {
+        flexPushByTypeExact(&f, &entries[i], FLEX_ENDPOINT_TAIL);
+    }
+
+    databoxBig wide;
+    DATABOX_BIG_UNSIGNED_128(&wide, (__uint128_t)1 << 100);
+    flexPushByTypeExact(&f, (const databox *)&wide,
+                        FLEX_ENDPOINT_TAIL); /* 11 */
+
+    flexEntry *head = flexHead(f);
+    flexEntry *tail = flexTail(f);
+    const databox probe22 = databoxNewBytes("22", 2);
+    const databox probe15 = databoxNewReal(1.5);
+    const databox probeNan = databoxNewReal(-NAN);
+    const databox probeMissing = databoxNewReal(2.5);
+    const databox probeContainer = {.type = DATABOX_CONTAINER_FLEX_LIST};
+    const struct {
+        const char *what;
+        const flexEntry *got;
+        int32_t want;
+    } checks[] = {
+        {"string \"\"", flexFindString(f, head, "", 0, 0), 0},
+        {"string \"\" reverse", flexFindStringReverse(f, tail, "", 0, 0), 0},
+        {"string \"22\"", flexFindString(f, head, "22", 2, 0), 2},
+        {"signed 22", flexFindSigned(f, head, 22, 0), 3},
+        {"unsigned 22", flexFindUnsigned(f, head, 22, 0), 3},
+        {"signed -1", flexFindSigned(f, head, -1, 0), 4},
+        {"signed -1 reverse", flexFindSignedReverse(f, tail, -1, 0), 4},
+        {"unsigned UINT64_MAX", flexFindUnsigned(f, head, UINT64_MAX, 0), 5},
+        {"signed -1 past -1",
+         flexFindSigned(f, flexNext(f, flexIndex(f, 4)), -1, 0), -1},
+        {"by type bytes \"22\"", flexFindByType(f, head, &probe22, 0), 2},
+        {"by type 1.5", flexFindByType(f, head, &probe15, 0), 6},
+        {"by type NaN", flexFindByType(f, head, &probeNan, 0), 7},
+        {"by type TRUE", flexFindByType(f, head, &DATABOX_BOX_TRUE, 0), 8},
+        {"by type FALSE", flexFindByType(f, head, &DATABOX_BOX_FALSE, 0), 9},
+        {"by type NULL", flexFindByType(f, head, &DATABOX_BOX_NULL, 0), 10},
+        {"by type 2^100", flexFindByType(f, head, (const databox *)&wide, 0),
+         11},
+        {"by type missing 2.5", flexFindByType(f, head, &probeMissing, 0), -1},
+        {"by type container", flexFindByType(f, head, &probeContainer, 0), -1},
+    };
+    for (size_t i = 0; i < COUNT_ARRAY(checks); i++) {
+        const int32_t at = flexTestIndexOf(f, checks[i].got);
+        if (at != checks[i].want) {
+            printf("  FAIL: %s found at %" PRId32 ", expected %" PRId32 "\n",
+                   checks[i].what, at, checks[i].want);
+            bad++;
+        }
+    }
+
+    return bad;
+}
+
 static int32_t flexTestExactPath(void) {
     int32_t bad = 0;
     static const char *const strs[] = {
@@ -9842,6 +9993,16 @@ int32_t flexTest(int32_t argc, char **argv) {
         const int32_t bad = flexTestNegWideRange();
         if (bad) {
             printf("  FAIL: %" PRId32 " negative wide range checks\n", bad);
+            return bad;
+        }
+        printf("  ok\n");
+    }
+
+    printf("Verify typed finds match by kind and value:\n");
+    {
+        const int32_t bad = flexTestTypedFind();
+        if (bad) {
+            printf("  FAIL: %" PRId32 " typed find checks\n", bad);
             return bad;
         }
         printf("  ok\n");

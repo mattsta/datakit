@@ -510,8 +510,22 @@ bool flexCompareSigned(flexEntry *fe, int64_t val);
  * exactly the same bytes, and a numeric entry (96/128-bit included) matches
  * when 'vstr' is a numeral whose canonical number (databoxCanonical) has the
  * same value, so "22" finds a stored 22 and 22.0, and a raw stored "22".
- * Returns NULL when nothing matches. */
+ * flexFind is the read-side partner of the auto-convert push path
+ * (flexPushBytes stores "22" as 22).  Returns NULL when nothing matches. */
 flexEntry *flexFind(flex *f, const void *vstr, uint32_t vlen, uint32_t skip);
+
+/* Typed finds, starting at 'fe' and skipping 'skip' entries after each
+ * comparison; NULL when nothing matches.  They match by kind and value and
+ * never across kinds:
+ *   flexFindSigned / flexFindUnsigned: a 64-bit integer entry of the same
+ *     mathematical value (-1 never matches a stored UINT64_MAX).
+ *   flexFindString: a string entry with exactly these bytes, the empty
+ *     string included.
+ *   flexFindByType: by the box's type: bytes match bytes as above;
+ *     integers, reals and 96/128-bit integers match any numeric entry of
+ *     equal value (databoxCompare, so a NaN finds a NaN); TRUE, FALSE and
+ *     NULL match only themselves.  Other types (containers, pointers) match
+ *     nothing. */
 flexEntry *flexFindSigned(const flex *f, flexEntry *fe, int64_t val,
                           uint32_t skip);
 flexEntry *flexFindUnsigned(const flex *f, flexEntry *fe, uint64_t val,
