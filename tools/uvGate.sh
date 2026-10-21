@@ -7,7 +7,15 @@
 # the environment cannot be set up: uv must fetch Python 3.12, the
 # build backend, and the libclang wheel on first use, so an offline
 # machine without a cached environment skips the gate instead of
-# failing it.  --frozen keeps uv from rewriting uv.lock during a test.
+# failing it.  Only that setup step can skip: once the environment
+# exists, a COMMAND that fails, crashes or is killed fails the gate
+# with its own status (a broken dktools must never read as a skip).
+# --frozen keeps uv from rewriting uv.lock during a test, and
+# --inexact matches what `uv run` itself syncs.
+#
+# COMMAND replaces this shell (exec), so a signal ctest sends on a
+# timeout reaches uv, which passes SIGTERM and SIGINT on to COMMAND;
+# dktools then stops its own children before exiting.
 set -u
 
 if [ "$#" -lt 3 ]; then
@@ -19,7 +27,7 @@ uv=$1
 tools=$2
 shift 2
 
-if ! setupLog=$("$uv" run --frozen --project "$tools" dktools --help 2>&1); then
+if ! setupLog=$("$uv" sync --frozen --inexact --project "$tools" 2>&1); then
     echo "dktools environment unavailable (offline, or uv cannot fetch" \
         "its dependencies); skipping:" >&2
     printf '%s\n' "$setupLog" >&2
