@@ -154,8 +154,9 @@ size_t multiFenwickFlatBytes(const multiFenwickFlat *mfw);
  * ==================================================================== */
 
 /* Find smallest index with cumulative sum >= target
- * Time: O(log^2 n) (binary search over prefix sums)
- * Same contract as multiFenwickLowerBound, negative elements included. */
+ * Time: O(log n) (binary lifting down the tree's cells)
+ * Same contract, algorithm and results as multiFenwickLowerBound,
+ * negative elements included. */
 size_t multiFenwickFlatLowerBound(const multiFenwickFlat *mfw,
                                   const databox *target);
 

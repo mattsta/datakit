@@ -241,7 +241,7 @@ size_t multiFenwickBytes(const multiFenwick *mfw);
  * ==================================================================== */
 
 /* Find smallest index with cumulative sum >= target
- * Time: O(log^2 n) (binary search over prefix sums)
+ * Time: O(log n) (binary lifting down the tree's cells)
  * Comparisons are exact, integers against doubles included.
  * Returns SIZE_MAX for a NULL or empty tree, a NULL target, a target
  * that is not an accepted value, or when no prefix sum reaches the

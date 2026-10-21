@@ -468,14 +468,11 @@ size_t multiFenwickFlatBytes(const multiFenwickFlat *mfw) {
            (mfw->kinds ? mfw->capacity * sizeof(*mfw->kinds) : 0);
 }
 
-/* Lower bound: binary search over the prefix sums, O(log^2 n).
- *
- * The search keeps 'result' as the lowest index seen whose prefix sum
- * reaches the target, and only ever moves 'left' past an index whose
- * prefix sum is below it.  So a returned index i always has
- * prefix(i) >= target and either i == 0 or prefix(i - 1) < target; with
- * non-negative elements the prefix sums never fall, and that index is
- * the smallest one. */
+/* Lower bound: binary lifting down the implicit tree, O(log n) cell reads,
+ * the same algorithm and results as multiFenwickLowerBound (see there for
+ * why the result is a crossing, and the smallest one for non-negative
+ * elements).  With every cell an int64 and an integer target, the
+ * running sum stays in int128. */
 size_t multiFenwickFlatLowerBound(const multiFenwickFlat *mfw,
                                   const databox *target) {
     multiFenwickNum want;
@@ -484,26 +481,40 @@ size_t multiFenwickFlatLowerBound(const multiFenwickFlat *mfw,
         return SIZE_MAX;
     }
 
-    size_t left = 0;
-    size_t right = mfw->count - 1;
-    size_t result = SIZE_MAX;
-    while (left <= right) {
-        const size_t mid = left + (right - left) / 2;
-        if (multiFenwickNumCompare_(multiFenwickFlatPrefix_(mfw, mid), want) >=
-            0) {
-            /* prefix(mid) >= target, so mid is a candidate */
-            result = mid;
-            if (mid == 0) {
-                break;
-            }
+    uint64_t bit = 1;
+    while (bit <= mfw->count) {
+        bit <<= 1;
+    }
 
-            right = mid - 1;
-        } else {
-            left = mid + 1;
+    uint64_t pos = 0;
+    if (!mfw->kinds && !want.isFloat) {
+        __int128_t sum = 0;
+        for (bit >>= 1; bit > 0; bit >>= 1) {
+            const uint64_t next = pos + bit;
+            if (next <= mfw->count) {
+                const __int128_t withNext = sum + (int64_t)mfw->bits[next - 1];
+                if (withNext < want.i) {
+                    pos = next;
+                    sum = withNext;
+                }
+            }
+        }
+    } else {
+        multiFenwickNum sum = {0};
+        for (bit >>= 1; bit > 0; bit >>= 1) {
+            const uint64_t next = pos + bit;
+            if (next <= mfw->count) {
+                const multiFenwickNum withNext = multiFenwickNumAdd_(
+                    sum, multiFenwickFlatCellGet_(mfw, next - 1));
+                if (multiFenwickNumCompare_(withNext, want) < 0) {
+                    pos = next;
+                    sum = withNext;
+                }
+            }
         }
     }
 
-    return result;
+    return pos < mfw->count ? (size_t)pos : SIZE_MAX;
 }
 
 void multiFenwickFlatClear(multiFenwickFlat *mfw) {

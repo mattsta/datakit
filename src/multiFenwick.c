@@ -439,14 +439,16 @@ size_t multiFenwickBytes(const multiFenwick *mfw) {
     return total;
 }
 
-/* Lower bound: binary search over the prefix sums, O(log^2 n).
+/* Lower bound: binary lifting down the implicit tree, O(log n) cell reads.
  *
- * The search keeps 'result' as the lowest index seen whose prefix sum
- * reaches the target, and only ever moves 'left' past an index whose
- * prefix sum is below it.  So a returned index i always has
- * prefix(i) >= target and either i == 0 or prefix(i - 1) < target; with
- * non-negative elements the prefix sums never fall, and that index is
- * the smallest one. */
+ * From the largest power of two at or below the count, each step tries
+ * the block of cells after 'pos' and takes it while the running sum (a
+ * prefix sum) stays below the target.  So prefix(pos) < target always
+ * (or pos is 0), and the single element after the final pos was not
+ * taken: prefix(pos + 1) >= target.  The result pos is therefore a
+ * crossing (prefix(i) >= target, and i == 0 or prefix(i - 1) < target),
+ * the smallest one when the elements are non-negative; it is SIZE_MAX
+ * when the lifting runs past the count. */
 size_t multiFenwickLowerBound(const multiFenwick *mfw, const databox *target) {
     multiFenwickNum want;
     if (!mfw || !target || mfw->count == 0 ||
@@ -454,32 +456,32 @@ size_t multiFenwickLowerBound(const multiFenwick *mfw, const databox *target) {
         return SIZE_MAX;
     }
 
-    size_t left = 0;
-    size_t right = mfw->count - 1;
-    size_t result = SIZE_MAX;
+    uint64_t bit = 1;
+    while (bit <= mfw->count) {
+        bit <<= 1;
+    }
 
-    while (left <= right) {
-        const size_t mid = left + (right - left) / 2;
+    uint64_t pos = 0;
+    multiFenwickNum sum = {0};
+    for (bit >>= 1; bit > 0; bit >>= 1) {
+        const uint64_t next = pos + bit;
+        if (next > mfw->count) {
+            continue;
+        }
 
-        multiFenwickNum midSum;
-        if (!multiFenwickPrefix_(mfw, mid, &midSum)) {
+        multiFenwickNum cell;
+        if (!multiFenwickCellGet_(mfw, next - 1, &cell)) {
             return SIZE_MAX;
         }
 
-        if (multiFenwickNumCompare_(midSum, want) >= 0) {
-            /* midSum >= target, so mid is a candidate */
-            result = mid;
-            if (mid == 0) {
-                break;
-            }
-
-            right = mid - 1;
-        } else {
-            left = mid + 1;
+        const multiFenwickNum withNext = multiFenwickNumAdd_(sum, cell);
+        if (multiFenwickNumCompare_(withNext, want) < 0) {
+            pos = next;
+            sum = withNext;
         }
     }
 
-    return result;
+    return pos < mfw->count ? (size_t)pos : SIZE_MAX;
 }
 
 /* Clear all values to zero */
