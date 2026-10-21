@@ -529,6 +529,9 @@ add_library(${PROJECT_NAME} OBJECT
     # multiFenwick wraps multiple Fenwick trees - separate system
     multiFenwick.c
     multiFenwickTest.c
+    # The same tree with flat O(1) cells (9 bytes per cell)
+    multiFenwickFlat.c
+    multiFenwickFlatTest.c
 
     # multiSegment wraps multiple Segment trees - separate system
     # DISABLED: multiSegment.c

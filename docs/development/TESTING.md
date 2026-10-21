@@ -91,6 +91,7 @@ Frequently used names, with aliases in comments:
 ./build-dev/src/datakit-test test fenwickI64      # fw, bit, fenwick
 ./build-dev/src/datakit-test test segmentI64      # seg, segtree, segment
 ./build-dev/src/datakit-test test multiFenwick    # mfw, mbit
+./build-dev/src/datakit-test test multiFenwickFlat # mfwf
 
 # Encoding / compression
 ./build-dev/src/datakit-test test dod

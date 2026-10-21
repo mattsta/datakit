@@ -22,154 +22,10 @@ struct multiFenwick {
     mflexState *state; /* State for multilist operations */
 };
 
-/* ====================================================================
- * Arithmetic
- * ====================================================================
- * Every value the tree reads, sums or stores is a multiFenwickNum: an
- * exact integer part 'i' plus a floating part 'd'.  A value with
- * 'isFloat' false is the integer 'i' (and 'd' is 0); otherwise it is
- * i + d, and becomes the double nearest that when it is stored or
- * returned.
- *
- * Integer cells come back from storage as SIGNED_64 or UNSIGNED_64 by
- * value (flex stores integers canonically), so integer arithmetic never
- * depends on which of the two carries a value.  Float cells come back as
- * FLOAT_32 or DOUBLE_64 (flex keeps a double in a float when that loses
- * nothing), so all floating arithmetic runs in double.
- *
- * A sum over many cells keeps its integer cells exact even when some
- * cells are floats: the integer part only meets the floating part once,
- * at the end. */
-typedef struct multiFenwickNum {
-    __int128_t i;
-    double d;
-    bool isFloat;
-} multiFenwickNum;
-
-/* The value of 'box', which must be SIGNED_64, UNSIGNED_64, or a finite
- * FLOAT_32 or DOUBLE_64.  Every other type (VOID, BYTES, booleans,
- * pointers, containers, 96/128-bit values) and every NaN or infinity is
- * refused, so no entry point ever stores one. */
-static bool multiFenwickNumFrom_(const databox *box, multiFenwickNum *n) {
-    switch (box->type) {
-    case DATABOX_SIGNED_64:
-        *n = (multiFenwickNum){.i = box->data.i64};
-        return true;
-    case DATABOX_UNSIGNED_64:
-        *n = (multiFenwickNum){.i = box->data.u64};
-        return true;
-    case DATABOX_FLOAT_32:
-        if (!isfinite(box->data.f32)) {
-            return false;
-        }
-
-        *n = (multiFenwickNum){.d = box->data.f32, .isFloat = true};
-        return true;
-    case DATABOX_DOUBLE_64:
-        if (!isfinite(box->data.d64)) {
-            return false;
-        }
-
-        *n = (multiFenwickNum){.d = box->data.d64, .isFloat = true};
-        return true;
-    default:
-        return false;
-    }
-}
-
-static multiFenwickNum multiFenwickNumAdd_(const multiFenwickNum a,
-                                           const multiFenwickNum b) {
-    return (multiFenwickNum){
-        .i = a.i + b.i, .d = a.d + b.d, .isFloat = a.isFloat || b.isFloat};
-}
-
-static multiFenwickNum multiFenwickNumSub_(const multiFenwickNum a,
-                                           const multiFenwickNum b) {
-    return (multiFenwickNum){
-        .i = a.i - b.i, .d = a.d - b.d, .isFloat = a.isFloat || b.isFloat};
-}
-
-/* 'n' as one value: unchanged for an integer, else the double nearest
- * i + d (in 'd', with 'i' zero). */
-static multiFenwickNum multiFenwickNumCollapse_(multiFenwickNum n) {
-    if (n.isFloat && n.i != 0) {
-        n.d += (double)n.i;
-        n.i = 0;
-    }
-
-    return n;
-}
-
-/* Box 'n' into 'out'.  Fails, leaving 'out' alone, when 'n' has no 64-bit
- * value: an integer outside [INT64_MIN, UINT64_MAX], or a float that is
- * not finite.  An integer result is SIGNED_64 when negative and
- * UNSIGNED_64 otherwise (the form flex reads it back in); a float result
- * is DOUBLE_64. */
-static bool multiFenwickNumBox_(multiFenwickNum n, databox *out) {
-    n = multiFenwickNumCollapse_(n);
-    if (n.isFloat) {
-        if (!isfinite(n.d)) {
-            return false;
-        }
-
-        *out = DATABOX_DOUBLE(n.d);
-        return true;
-    }
-
-    if (n.i < INT64_MIN || n.i > (__int128_t)UINT64_MAX) {
-        return false;
-    }
-
-    if (n.i < 0) {
-        *out = DATABOX_SIGNED((int64_t)n.i);
-    } else {
-        *out = DATABOX_UNSIGNED((uint64_t)n.i);
-    }
-
-    return true;
-}
-
-/* Exact comparison of the integer 'a' with the double 'd' (not NaN).
- * Every integer the tree sums stays far inside +/-2^100. */
-static int multiFenwickCompareIntDouble_(const __int128_t a, const double d) {
-    if (d >= 0x1p100) {
-        return -1;
-    }
-
-    if (d <= -0x1p100) {
-        return 1;
-    }
-
-    /* |d| < 2^100, so its integer part fits, and both the integer part
-     * and the fraction left over are exact doubles. */
-    const __int128_t whole = (__int128_t)d;
-    if (a != whole) {
-        return a < whole ? -1 : 1;
-    }
-
-    const double frac = d - (double)whole;
-    return frac > 0 ? -1 : frac < 0 ? 1 : 0;
-}
-
-/* <0, 0 or >0 as a is below, equal to or above b.  Integers compare
- * exactly, with each other and with doubles. */
-static int multiFenwickNumCompare_(multiFenwickNum a, multiFenwickNum b) {
-    a = multiFenwickNumCollapse_(a);
-    b = multiFenwickNumCollapse_(b);
-    if (!a.isFloat && !b.isFloat) {
-        return (a.i > b.i) - (a.i < b.i);
-    }
-
-    if (a.isFloat && b.isFloat) {
-        return (a.d > b.d) - (a.d < b.d);
-    }
-
-    if (!a.isFloat) {
-        return multiFenwickCompareIntDouble_(a.i, b.d);
-    }
-
-    return -multiFenwickCompareIntDouble_(b.i, a.d);
-}
+/* Arithmetic is multiFenwickNum (multiFenwickCommon.h).  Integer cells come
+ * back from storage as SIGNED_64 or UNSIGNED_64 by value (flex stores
+ * integers canonically); float cells come back as FLOAT_32 or DOUBLE_64
+ * (flex keeps a double in a float when that loses nothing). */
 
 /* ====================================================================
  * Cells
@@ -268,17 +124,6 @@ multiFenwick *multiFenwickNew(void) {
     multiFenwick *out = mfw;
     mfw = NULL;
     return out;
-}
-
-/* Capacity (the smallest power of two, at least 'current', that holds
- * index 'idx') */
-static uint64_t multiFenwickCapacityFor_(uint64_t current, uint64_t idx) {
-    uint64_t capacity = current == 0 ? 1 : current;
-    while (capacity < idx + 1) {
-        capacity <<= 1;
-    }
-
-    return capacity;
 }
 
 /* Create from array of databoxes.

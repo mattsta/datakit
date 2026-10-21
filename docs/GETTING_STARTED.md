@@ -116,7 +116,8 @@ with aliases.
   toolchain provides `__int128`
 - `hyperloglog` (`hll`) - Cardinality estimation
 - `linearBloom` (`bloom`) - Bloom filter
-- `fenwickI64` (`fw`), `segmentI64` (`seg`), `multiFenwick` (`mfw`)
+- `fenwickI64` (`fw`), `segmentI64` (`seg`), `multiFenwick` (`mfw`),
+  `multiFenwickFlat` (`mfwf`)
 
 **Specialized Containers:**
 

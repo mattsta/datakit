@@ -65,6 +65,7 @@
 #include "mflex.h"
 #include "monotonicCond.h"
 #include "multiFenwick.h" /* Separate multi-fenwick system (wraps multiple trees) */
+#include "multiFenwickFlat.h" /* multiFenwick with flat O(1) cells */
 #include "multiOrderedSet.h"
 #include "multiTimer.h"
 #include "multiarray.h"
@@ -11956,6 +11957,7 @@ static const TestEntry testRegistry[] = {
     T(intsetU32), T_A_ADJ(fenwickI64, "fw,bit,fenwick"), /* New 2-tier system */
     T_A_ADJ(segmentI64, "seg,segtree,segment"),          /* New 2-tier system */
     T_A_ADJ(multiFenwick, "mfw,mbit"), /* Multi-tree wrapper system */
+    T_A(multiFenwickFlat, "mfwf"),     /* multiFenwick, flat cells */
 #if USE_INTSET_BIG
     T(intsetBig),
 #endif

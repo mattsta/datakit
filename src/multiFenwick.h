@@ -23,7 +23,10 @@
  * DOUBLE_64)
  * - Integer sums are exact; floating sums run in double precision
  * - Uses multilist for efficient storage
- * - Same O(log n) performance as standard fenwick
+ * - O(log n) cell accesses per operation, but each access walks a flex
+ *   node, so operations run hundreds of times slower than the standard
+ *   fenwick; multiFenwickFlat (multiFenwickFlat.h) is the same tree with
+ *   O(1) cells, at about 9 bytes per cell instead of about 4
  * - Tiered architecture for optimal memory usage
  *
  * OPERATIONS

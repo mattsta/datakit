@@ -106,6 +106,8 @@ CONSTRUCTORS = {
     "multiTimerNew": "multiTimerFree",
     "multiFenwickNew": "multiFenwickFree",
     "multiFenwickNewFromArray": "multiFenwickFree",
+    "multiFenwickFlatNew": "multiFenwickFlatFree",
+    "multiFenwickFlatNewFromArray": "multiFenwickFlatFree",
     "aeadNonceLogCreate": "aeadNonceLogFree",
     "clusterRingNew": "clusterRingFree",
     "clusterRingNewDefault": "clusterRingFree",
