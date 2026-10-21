@@ -714,8 +714,14 @@ if(BuildTestBinary)
                 dktools --repo ${PROJECT_SOURCE_DIR}
                 allocaudit check --constructors
             WORKING_DIRECTORY ${DK_TOOLS_DIR})
+        # The audit takes seconds.  On a timeout ctest sends SIGTERM (CMake
+        # 3.27+; older CMake ignores these two properties), which dktools
+        # handles by killing and reaping its whole process tree, instead of
+        # killing only uv and leaving dktools behind.
         set_tests_properties(allocOwnership PROPERTIES
-            TIMEOUT 300
+            TIMEOUT 120
+            TIMEOUT_SIGNAL_NAME SIGTERM
+            TIMEOUT_SIGNAL_GRACE_PERIOD 5
             SKIP_RETURN_CODE 77
             LABELS "gate")
         # The tools' own unit tests (tools/tests: every dktools
@@ -726,6 +732,8 @@ if(BuildTestBinary)
             WORKING_DIRECTORY ${DK_TOOLS_DIR})
         set_tests_properties(dktoolsSelfTest PROPERTIES
             TIMEOUT 120
+            TIMEOUT_SIGNAL_NAME SIGTERM
+            TIMEOUT_SIGNAL_GRACE_PERIOD 5
             SKIP_RETURN_CODE 77
             LABELS "gate")
         message(STATUS "Registered allocOwnership gate (dktools allocaudit)")
