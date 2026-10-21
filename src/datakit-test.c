@@ -32,6 +32,7 @@
 #include "fastmutex.h"
 #include "fenwick/fenwick2d.h"  /* 2D typed fenwick trees */
 #include "fenwick/fenwickI64.h" /* New 2-tier template system */
+#include "fenwickBench.h"
 #include "fibbuf.h"
 #include "flex.h"
 #include "flexEnvelope.h"
@@ -12070,7 +12071,7 @@ static const TestEntry testRegistry[] = {
     T_A(testMailboxRestoreWrappedStructAwareFuzz, "mailboxRestoreWrappedFuzz"),
 
     /* Benchmarks */
-    T_A_ADJ(compressionBench, "compress,cbench"),
+    T_A_ADJ(compressionBench, "compress,cbench"), T_A(fenwickBench, "fwbench"),
 
     T_END};
 

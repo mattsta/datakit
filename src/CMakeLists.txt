@@ -454,6 +454,7 @@ add_library(${PROJECT_NAME} OBJECT
     dod.c
     xof.c
     compressionBench.c
+    fenwickBench.c
     bbits.c
     linearBloomTest.c
     multiTimerTest.c

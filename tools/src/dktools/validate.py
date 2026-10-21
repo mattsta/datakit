@@ -55,7 +55,7 @@ from .gitutil import ToolError
 #: deterministically.
 DEFAULT_SERIAL = r"dkTestNonceLogEvictionPerf"
 #: Tests validate never runs: vendored suites and benchmarks.
-DEFAULT_SKIP = r"varint-.*|perfRegression|compressionBench"
+DEFAULT_SKIP = r"varint-.*|perfRegression|compressionBench|fenwickBench"
 #: Tests too slow for a Debug + sanitizer build (each outruns the 1500 s
 #: ctest timeout there; the dev preset runs them with sanitizers).
 DEFAULT_DEBUG_SKIP = r"multimap|multiFenwick|blake3|fenwickI64|segmentI64"
