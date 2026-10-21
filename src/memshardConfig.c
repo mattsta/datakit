@@ -18,6 +18,7 @@ datakitConfig datakitMemshardConfig(void) {
             mi_realloc, /* matches default (realloc==realloc) */
         .localFree = mi_free,
         .localMemalign = mi_posix_memalign,
+        .localUsableSize = mi_usable_size,
     };
     return c;
 }

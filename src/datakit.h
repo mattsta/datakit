@@ -329,10 +329,23 @@ typedef struct datakitConfig {
     /* Secondary Interface */
     void *(*localMalloc)(size_t sz);
     int (*localMemalign)(void **memptr, size_t alignment, size_t size);
+
+    /* Optional: the bytes usable at a live allocation (at least the size
+     * requested), so secure wipes also clear the allocator's slack.  NULL
+     * when the allocator cannot report it; wipes then cover only the
+     * bytes their owner tracks. */
+    size_t (*localUsableSize)(const void *ptr);
 } datakitConfig;
 
 extern datakitConfig datakitConfigMemory__;
 bool datakitConfigSet(datakitConfig *conf);
+
+/* Bytes usable at the live allocation 'ptr', or 0 when the allocator
+ * cannot report it (see datakitConfig.localUsableSize) */
+#define zusablesize(ptr)                                                       \
+    (datakitConfigMemory__.localUsableSize                                     \
+         ? datakitConfigMemory__.localUsableSize(ptr)                          \
+         : (size_t)0)
 
 #if !defined(IKNOWWHATIMDOING) && defined(__GNUC__)
 void *calloc(size_t count, size_t size) __attribute__((deprecated));

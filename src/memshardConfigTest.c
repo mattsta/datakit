@@ -26,6 +26,10 @@ int main(void) {
     assert(p);
     assert(mi_usable_size(p) >= 123); /* owned by memshard */
 
+    /* zusablesize reports memshard's usable size, so secure wipes
+     * (DKS_FREEZERO) clear the whole block */
+    assert(zusablesize(p) == mi_usable_size(p));
+
     /* zcalloc -> mi_calloc, zeroed */
     cleanerName(zfree, U64) uint64_t *c =
         (uint64_t *)zcalloc(100, sizeof(uint64_t));

@@ -620,10 +620,14 @@ uint8_t *mdscnative(mdsc *s, size_t *len);
 mds *s = mdsnew("Hello");
 mdsfree(s);
 
-/* Secure erase: wipes the header, contents, free space and terminator with
- * dkSecureZero, then frees. Bytes the string no longer tracks are not
- * covered: an mdsc shrunk after growing, or free space mdsclear() had to
- * hide. Wipe a secret before shrinking such a string. */
+/* Secure erase: wipes the header, contents, free space and terminator,
+ * plus the allocator's slack past them when the allocator reports its
+ * usable size (datakitConfig.localUsableSize: the libc default on macOS,
+ * Linux and FreeBSD, and memshard), with dkSecureZero, then frees.
+ * Without that report, bytes the string no longer tracks are not covered:
+ * an mdsc shrunk after growing, or free space mdsclear() had to hide.
+ * Memory a shrinking realloc already gave back is never covered, so wipe
+ * a secret before shrinking its string. */
 mds *secret = mdsnew("password123");
 mdsfreezero(secret);
 

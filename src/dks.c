@@ -308,12 +308,13 @@ void DKS_FREE(DKS_TYPE *s) {
 
 DK_FN_NO_OPTIMIZE void DKS_FREEZERO(DKS_TYPE *s) {
     if (s) {
-        /* Wipe everything the string tracks: header, contents, free space
-         * and the terminator. dkSecureZero cannot be dropped as a dead
-         * store before the free. */
-        const size_t size = DKS_ALLOCSIZE(s);
+        /* Wipe everything the string tracks (header, contents, free space
+         * and the terminator) and any slack the allocator reports past it.
+         * dkSecureZero cannot be dropped as a dead store before the free. */
         void *const base = DKS_BASE(s, NULL);
-        dkSecureZero(base, size);
+        const size_t tracked = DKS_ALLOCSIZE(s);
+        const size_t usable = zusablesize(base);
+        dkSecureZero(base, usable > tracked ? usable : tracked);
         zfree(base);
     }
 }
@@ -2970,15 +2971,29 @@ int DKS_TEST(int argc, char *argv[]) {
 
     {
         /* DKS_FREEZERO must leave every tracked byte zero, including spare
-         * capacity, by the time the allocation reaches the allocator */
+         * capacity, and the allocator's slack past them, by the time the
+         * allocation reaches the allocator */
         DKS_TYPE *x = DKS_NEW("correct horse battery staple");
         x = DKS_EXPANDBY(x, 200);
         const size_t fzLen = DKS_LEN(x);
         const size_t fzAvail = DKS_AVAIL(x);
         memset(x + fzLen, 'S', fzAvail); /* secret bytes in the free space */
 
-        freezeroWatch = DKS_BASE(x, NULL);
-        freezeroWatchLen = DKS_ALLOCSIZE(x);
+        uint8_t *const fzBase = DKS_BASE(x, NULL);
+        const size_t fzTracked = DKS_ALLOCSIZE(x);
+        const size_t fzUsable = zusablesize(fzBase);
+        if (datakitConfigMemory__.localUsableSize) {
+            testCondGte("usable size covers the tracked bytes", fzUsable,
+                        fzTracked, "%zu");
+        }
+
+        if (fzUsable > fzTracked) {
+            /* secret bytes in the allocator's slack */
+            memset(fzBase + fzTracked, 'S', fzUsable - fzTracked);
+        }
+
+        freezeroWatch = fzBase;
+        freezeroWatchLen = fzUsable > fzTracked ? fzUsable : fzTracked;
         freezeroSawWatch = false;
         freezeroWatchZero = false;
 

@@ -173,9 +173,13 @@ DKS_TYPE *DKS_EMPTYLEN(size_t len);
 DKS_TYPE *DKS_DUP(const DKS_TYPE *s);
 void DKS_FREE(DKS_TYPE *s);
 /* Wipe all DKS_ALLOCSIZE(s) bytes (header, contents, free space and the
- * terminator) with dkSecureZero, then free. Bytes the string no longer
- * tracks are not covered: a compact string shrunk after growing, or free
- * space DKS_CLEAR could not record. Wipe a secret before shrinking those. */
+ * terminator), and the allocator's slack past them when the allocator
+ * reports its usable size (datakitConfig.localUsableSize), with
+ * dkSecureZero, then free. Without that report, bytes the string no longer
+ * tracks are not covered (a compact string shrunk after growing, or free
+ * space DKS_CLEAR could not record). Memory an earlier shrinking realloc
+ * gave back to the allocator is never covered. Wipe a secret before
+ * shrinking its string. */
 void DKS_FREEZERO(DKS_TYPE *s);
 uint8_t *DKS_NATIVE(DKS_TYPE *s, size_t *len);
 DKS_TYPE *DKS_GROWZERO(DKS_TYPE *s, size_t len);
