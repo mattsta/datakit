@@ -8380,11 +8380,11 @@ static int32_t flexTestExactPath(void) {
         databoxBig big = {0};
         memcpy(&big, &box, sizeof(box));
 
-        flex *viaBytes = flexNew();
+        cleaner(flexFree) flex *viaBytes = flexNew();
         flexPushBytesExact(&viaBytes, s, len, FLEX_ENDPOINT_TAIL);
         flexPushByTypeExact(&viaBytes, &box, FLEX_ENDPOINT_HEAD);
-        flex *viaFactory = flexNewFromDataboxExact(&box);
-        flex *viaBig = flexNewFromDataboxBigExact(&big);
+        cleaner(flexFree) flex *viaFactory = flexNewFromDataboxExact(&box);
+        cleaner(flexFree) flex *viaBig = flexNewFromDataboxBigExact(&big);
 
         const flex *const all[] = {viaBytes, viaFactory, viaBig};
         for (size_t f = 0; f < COUNT_ARRAY(all); f++) {
@@ -8396,27 +8396,22 @@ static int32_t flexTestExactPath(void) {
                 }
             }
         }
-
-        flexFree(viaBytes);
-        flexFree(viaFactory);
-        flexFree(viaBig);
     }
 
     /* Binary bytes with a NUL that spell no numeral, and bytes that do. */
     {
         static const char bin[] = {'1', '2', '\0', '3'};
-        flex *f = flexNew();
+        cleaner(flexFree) flex *f = flexNew();
         flexPushBytesExact(&f, bin, sizeof(bin), FLEX_ENDPOINT_TAIL);
         if (!flexTestEntryIsBytes(flexHead(f), bin, sizeof(bin))) {
             printf("  exact path changed a binary blob\n");
             bad++;
         }
-        flexFree(f);
     }
 
     /* Numbers keep their value on the exact path. */
     {
-        flex *f = flexNew();
+        cleaner(flexFree) flex *f = flexNew();
         const databox neg = DATABOX_SIGNED(-5);
         const databox dbl = DATABOX_DOUBLE(1.5);
         flexPushByTypeExact(&f, &neg, FLEX_ENDPOINT_TAIL);
@@ -8436,12 +8431,11 @@ static int32_t flexTestExactPath(void) {
             printf("  exact path changed 1.5\n");
             bad++;
         }
-        flexFree(f);
     }
 
     /* The auto path is unchanged: "22" is stored as the integer 22. */
     {
-        flex *f = flexNew();
+        cleaner(flexFree) flex *f = flexNew();
         flexPushBytes(&f, "22", 2, FLEX_ENDPOINT_TAIL);
         databox a = {{0}};
         flexGetByType(flexHead(f), &a);
@@ -8449,7 +8443,6 @@ static int32_t flexTestExactPath(void) {
             printf("  auto path no longer converts \"22\"\n");
             bad++;
         }
-        flexFree(f);
     }
 
     return bad;
