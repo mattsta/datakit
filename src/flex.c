@@ -2996,11 +2996,6 @@ bool flexReplaceUnsigned(flex **const ff, flexEntry *const fe,
  * ==================================================================== */
 bool flexIncrbySigned(flex **const ff, flexEntry *const fe,
                       const int64_t incrby, int64_t *newval) {
-    /* Increment by zero — nothing to do! */
-    if (incrby == 0) {
-        return false;
-    }
-
     flexEntryData entry;
     flexEntryDataPopulate(fe, &entry);
 
@@ -3023,14 +3018,20 @@ bool flexIncrbySigned(flex **const ff, flexEntry *const fe,
     /* Get current value */
     const int64_t value = flexLoadSigned(&entry);
 
-    /* Check for overflow */
-    /* TODO: move to built-in overflow intrinsic */
-    if ((value < 0 && incrby < (INT64_MIN - value)) ||
-        (value > 0 && incrby > (INT64_MAX - value))) {
-        return false;
+    /* Incrementing by zero succeeds and changes nothing. */
+    if (incrby == 0) {
+        if (newval) {
+            *newval = value;
+        }
+
+        return true;
     }
 
-    int64_t incremented = value + incrby;
+    /* Refuse a result outside int64: no wrap, no saturation. */
+    int64_t incremented;
+    if (__builtin_add_overflow(value, incrby, &incremented)) {
+        return false;
+    }
     if (newval) {
         *newval = incremented;
     }
@@ -3064,11 +3065,6 @@ bool flexIncrbySigned(flex **const ff, flexEntry *const fe,
 
 bool flexIncrbyUnsigned(flex **const ff, flexEntry *const fe,
                         const int64_t incrby, uint64_t *newval) {
-    /* Increment by zero — nothing to do! */
-    if (incrby == 0) {
-        return false;
-    }
-
     flexEntryData entry;
     flexEntryDataPopulate(fe, &entry);
     if (!flexEntryIsIntegerNarrow_(fe)) {
@@ -3077,6 +3073,15 @@ bool flexIncrbyUnsigned(flex **const ff, flexEntry *const fe,
 
     /* Get current value */
     uint64_t value = flexLoadUnsigned(&entry);
+
+    /* Incrementing by zero succeeds and changes nothing. */
+    if (incrby == 0) {
+        if (newval) {
+            *newval = value;
+        }
+
+        return true;
+    }
 
     /* Reject wrap: incrby is signed while value and the result are
      * unsigned, so a negative delta larger than value would wrap to a
@@ -8629,6 +8634,55 @@ static int32_t flexTestReplaceSign(void) {
             got != want || !flexTestReplaceReadsBack(f, flexTestWideS(want))) {
             printf("  FAIL: %" PRId64 " incremented by %" PRId64 "\n",
                    incrs[i].start, incrs[i].by);
+            bad++;
+        }
+    }
+
+    /* Increment policy: by zero succeeds unchanged; a result outside the
+     * value's range is refused, leaving the value unchanged.  The value
+     * sits between "a" and "b", as flexTestReplaceReadsBack expects. */
+    {
+        cleaner(flexFree) flex *f = flexNew();
+        flexPushBytes(&f, "a", 1, FLEX_ENDPOINT_TAIL);
+        flexPushSigned(&f, -7, FLEX_ENDPOINT_TAIL);
+        flexPushBytes(&f, "b", 1, FLEX_ENDPOINT_TAIL);
+        int64_t got = 1;
+        if (!flexIncrbySigned(&f, flexNext(f, flexHead(f)), 0, &got) ||
+            got != -7 || !flexTestReplaceReadsBack(f, flexTestWideS(-7))) {
+            printf("  FAIL: signed increment by zero\n");
+            bad++;
+        }
+    }
+    {
+        const struct {
+            int64_t start;
+            int64_t by;
+        } over[] = {{INT64_MAX, 1}, {INT64_MIN, -1}, {INT64_MAX - 5, 6}};
+        for (size_t i = 0; i < sizeof(over) / sizeof(over[0]); i++) {
+            cleaner(flexFree) flex *f = flexNew();
+            flexPushBytes(&f, "a", 1, FLEX_ENDPOINT_TAIL);
+            flexPushSigned(&f, over[i].start, FLEX_ENDPOINT_TAIL);
+            flexPushBytes(&f, "b", 1, FLEX_ENDPOINT_TAIL);
+            if (flexIncrbySigned(&f, flexNext(f, flexHead(f)), over[i].by,
+                                 NULL) ||
+                !flexTestReplaceReadsBack(f, flexTestWideS(over[i].start))) {
+                printf("  FAIL: %" PRId64 " + %" PRId64 " was not refused\n",
+                       over[i].start, over[i].by);
+                bad++;
+            }
+        }
+    }
+    {
+        cleaner(flexFree) flex *f = flexNew();
+        flexPushBytes(&f, "a", 1, FLEX_ENDPOINT_TAIL);
+        flexPushUnsigned(&f, 5, FLEX_ENDPOINT_TAIL);
+        flexPushBytes(&f, "b", 1, FLEX_ENDPOINT_TAIL);
+        uint64_t got = 0;
+        if (!flexIncrbyUnsigned(&f, flexNext(f, flexHead(f)), 0, &got) ||
+            got != 5 ||
+            flexIncrbyUnsigned(&f, flexNext(f, flexHead(f)), -6, NULL) ||
+            !flexTestReplaceReadsBack(f, flexTestWideU(5))) {
+            printf("  FAIL: unsigned increment by zero or below zero\n");
             bad++;
         }
     }
