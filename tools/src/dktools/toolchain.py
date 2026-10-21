@@ -20,6 +20,8 @@ Build presets (``PRESETS``):
 
   dev      ``cmake --preset dev`` (Release-O3 + ASan/UBSan), clang22.
   debug    ``cmake --preset debug`` (Debug + ASan/UBSan), clang22.
+  tsan     ``cmake --preset tsan`` (RelWithDebInfo + ThreadSanitizer),
+           clang22; opt-in, for data races.
   release  no preset, ``-DCMAKE_BUILD_TYPE=Release``; the only build
            gcc15 runs (GCC on macOS has no sanitizer runtimes).
 
@@ -52,11 +54,16 @@ PRESET_TARGETS = ("datakit-test", "datakit-static", "datakit-shared", "datakit-l
 
 #: preset name -> CMakePresets.json configure preset, or None for a
 #: plain ``-DCMAKE_BUILD_TYPE=Release`` configure without a preset.
-PRESETS: dict[str, str | None] = {"dev": "dev", "debug": "debug", "release": None}
+PRESETS: dict[str, str | None] = {
+    "dev": "dev",
+    "debug": "debug",
+    "tsan": "tsan",
+    "release": None,
+}
 
 #: compiler name -> the presets it builds, default first.
 COMPILER_PRESETS: dict[str, tuple[str, ...]] = {
-    "clang22": ("dev", "debug"),
+    "clang22": ("dev", "debug", "tsan"),
     "gcc15": ("release",),
 }
 

@@ -56,6 +56,15 @@
         "EnableASAN": "ON",
         "EnableUBSAN": "ON"
       }
+    },
+    {
+      "name": "tsan",
+      "inherits": "_base",
+      "displayName": "Release-O2 + ThreadSanitizer (data races)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "EnableTSAN": "ON"
+      }
     }
   ],
 
@@ -74,6 +83,10 @@
     },
     {
       "name": "safe", "configurePreset": "safe",
+      "targets": ["datakit-test", "datakit-static", "datakit-shared", "datakit-library"]
+    },
+    {
+      "name": "tsan", "configurePreset": "tsan",
       "targets": ["datakit-test", "datakit-static", "datakit-shared", "datakit-library"]
     }
   ]
