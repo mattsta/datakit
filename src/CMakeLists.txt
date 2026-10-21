@@ -637,7 +637,8 @@ if(BuildTestBinary)
     add_executable(${PROJECT_NAME}-test datakit-test.c
                    fenwick/fenwickI64Test.c
                    fenwick/fenwickTypesTest.c
-                   segment/segmentI64Test.c)
+                   segment/segmentI64Test.c
+                   segment/segmentTypesTest.c)
     target_link_libraries(${PROJECT_NAME}-test ${PROJECT_NAME}-static)
 
     if(APPLE)

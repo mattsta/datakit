@@ -7,13 +7,27 @@
  * Macro-based template system for generating type-specific segment tree
  * implementations. Follows the proven Fenwick pattern: dks → mds → mdsc
  *
- * Architecture: Small (eager updates) → Full (lazy propagation)
- * - Benefit: 37% fewer files, 50% fewer transitions vs 3-tier
- * - Small: Cache-friendly, eager updates, optimal for small trees
- * - Full: Unlimited growth, lazy propagation for range updates
+ * Architecture: Small (one contiguous allocation) → Full (separately
+ * allocated nodes, uint64_t indexes).  The algorithms
+ * (segmentCoreAlgo.h), both tiers and the public API
+ * (segmentCoreDispatchImpl.h) are each written once and instantiated for
+ * every type.
  *
  * Supported operations: MIN, MAX, SUM (all types)
  * Supported types: I16, I32, I64, U16, U32, U64, Float, Double, I128, U128
+ *
+ * CONTRACT
+ * --------
+ * - Update assigns one element in O(log n); an index past the end extends
+ *   the tree (amortized O(1) growth), the elements between holding the
+ *   operation's identity (0 for SUM, the type's max for MIN, its min for
+ *   MAX).  Update on a NULL tree creates a SUM tree.
+ * - RangeUpdate assigns every existing element in [left, right] in
+ *   O(k + log n) and never extends or moves the tree.
+ * - Query folds [left, right] in O(log n).  An integer SUM adds with
+ *   wrapping: exact whenever the sum fits the type, modulo 2^bits
+ *   otherwise (never signed-overflow UB).  Query and Get outside the tree
+ *   return the identity (0 for a NULL tree).
  *
  * USAGE:
  *   #define SEGMENT_SUFFIX I64
@@ -36,6 +50,11 @@
 
 #include "../datakit.h"
 #include "segmentCommon.h"
+
+#ifdef DATAKIT_TEST
+/* Differential tests of every typed tree (segmentTypesTest.c) */
+int segmentTypesTest(int argc, char *argv[]);
+#endif
 
 /* ====================================================================
  * TYPE PARAMETERS (must be defined before including templates)
@@ -134,6 +153,9 @@
         const SEGMENT_SMALL_TYPENAME(suffix) * seg);                           \
     bool SEGMENT_NAME(suffix, SmallShouldUpgrade)(                             \
         const SEGMENT_SMALL_TYPENAME(suffix) * seg);                           \
+    void SEGMENT_NAME(suffix, SmallRangeUpdate)(                               \
+        SEGMENT_SMALL_TYPENAME(suffix) * seg, index_type_small left,           \
+        index_type_small right, value_type value);                             \
                                                                                \
     /* Full tier (2-TIER: no Medium) */                                        \
     SEGMENT_FULL_TYPENAME(suffix) *                                            \

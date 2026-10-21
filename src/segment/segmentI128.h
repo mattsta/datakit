@@ -16,8 +16,10 @@
 
 #include "segmentCore.h"
 
+/* Min and max built from the unsigned type (1 << 127 is signed overflow) */
 SEGMENT_DECLARE_TYPE(I128, __int128_t, uint32_t, uint64_t, (4 * 1024),
-                     ((__int128_t)1 << 127), (~((__int128_t)1 << 127)))
+                     (-(__int128_t)(~(__uint128_t)0 >> 1) - 1),
+                     ((__int128_t)(~(__uint128_t)0 >> 1)))
 
 /* Tier type enum (2-TIER) */
 typedef enum segmentI128Type {

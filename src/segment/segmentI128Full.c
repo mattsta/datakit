@@ -10,8 +10,9 @@
 #define SEGMENT_VALUE_TYPE __int128_t
 #define SEGMENT_INDEX_TYPE_SMALL uint32_t
 #define SEGMENT_INDEX_TYPE_FULL uint64_t
-#define SEGMENT_TYPE_MIN ((__int128_t)1 << 127)
-#define SEGMENT_TYPE_MAX (~((__int128_t)1 << 127))
+/* Built from the unsigned type: 1 << 127 is signed-overflow UB */
+#define SEGMENT_TYPE_MAX ((__int128_t)(~(__uint128_t)0 >> 1))
+#define SEGMENT_TYPE_MIN (-SEGMENT_TYPE_MAX - 1)
 #define SEGMENT_IS_SIGNED 1
 #define SEGMENT_IS_FLOATING 0
 #define SEGMENT_IMPL_SCOPE
