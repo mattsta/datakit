@@ -132,7 +132,7 @@ int varintFORTest(int argc, char *argv[]) {
     TEST("Single value array") {
         const uint64_t value[] = {12345};
         uint8_t buffer[64];
-        varintFORMeta meta;
+        varintFORMeta meta = {0}; /* Encode trusts a meta whose count matches */
 
         size_t encoded = varintFOREncode(buffer, value, 1, &meta);
         (void)encoded; /* Intentionally unused in test */
@@ -152,7 +152,7 @@ int varintFORTest(int argc, char *argv[]) {
         const uint64_t values[] = {0, 100000000, 200000000};
         size_t count = 3;
         uint8_t buffer[256];
-        varintFORMeta meta;
+        varintFORMeta meta = {0}; /* Encode trusts a meta whose count matches */
 
         size_t encoded = varintFOREncode(buffer, values, count, &meta);
         uint64_t decoded[3];
@@ -175,7 +175,7 @@ int varintFORTest(int argc, char *argv[]) {
         }
 
         uint8_t buffer[256];
-        varintFORMeta meta;
+        varintFORMeta meta = {0}; /* Encode trusts a meta whose count matches */
         size_t encoded = varintFOREncode(buffer, values, 10, &meta);
         (void)encoded; /* Intentionally unused in test */
 
