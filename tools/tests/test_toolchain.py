@@ -120,7 +120,18 @@ class Presets(unittest.TestCase):
             ["clang22-dev", "clang22-debug", "gcc15-release"],
         )
         with self.assertRaises(ToolError):
-            toolchain.matrix([self.clang], ["perf"])
+            toolchain.matrix([self.clang], ["nosuch"])
+
+    def test_perf_preset_is_clang22_only(self) -> None:
+        perf = toolchain.build_config(self.clang, "perf")
+        self.assertEqual(
+            perf.configure_command(Path("tree"))[:7],
+            ["cmake", "-S", "tree", "-B", "tree/build-clang22-perf", "--preset", "perf"],
+        )
+        with self.assertRaises(ToolError):
+            toolchain.build_config(self.gcc, "perf")
+        # perf is opt-in: never a compiler's default build.
+        self.assertEqual(toolchain.build_config(self.clang, None).preset, "dev")
 
     def test_presets_file_check(self) -> None:
         with tempfile.TemporaryDirectory() as d:

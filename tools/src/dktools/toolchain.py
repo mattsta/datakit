@@ -22,6 +22,8 @@ Build presets (``PRESETS``):
   debug    ``cmake --preset debug`` (Debug + ASan/UBSan), clang22.
   tsan     ``cmake --preset tsan`` (RelWithDebInfo + ThreadSanitizer),
            clang22; opt-in, for data races.
+  perf     ``cmake --preset perf`` (Release -O3 -mcpu=native -flto, no
+           sanitizers), clang22; opt-in, for benchmark numbers.
   release  no preset, ``-DCMAKE_BUILD_TYPE=Release``; the only build
            gcc15 runs (GCC on macOS has no sanitizer runtimes).
 
@@ -58,12 +60,13 @@ PRESETS: dict[str, str | None] = {
     "dev": "dev",
     "debug": "debug",
     "tsan": "tsan",
+    "perf": "perf",
     "release": None,
 }
 
 #: compiler name -> the presets it builds, default first.
 COMPILER_PRESETS: dict[str, tuple[str, ...]] = {
-    "clang22": ("dev", "debug", "tsan"),
+    "clang22": ("dev", "debug", "tsan", "perf"),
     "gcc15": ("release",),
 }
 
