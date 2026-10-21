@@ -3806,12 +3806,16 @@ static void *cmStatsRaceReader(void *vctx) {
     const size_t READER_ITERS = 5000u;
     uint64_t last_seen = 0u;
     for (size_t i = 0; i < READER_ITERS; i++) {
-        /* Sample the writer's claimed high-water FIRST so any
-         * last_applied <= sample is allowed; last_applied > sample is a
-         * torn / non-atomic read. */
+        /* Read last_applied FIRST, then the writer's high-water.  The
+         * writer publishes a seq's high-water before it ingests that seq,
+         * so whatever last_applied this read saw, the high-water read after
+         * it is at least as large; last_applied > that high-water is a torn
+         * or out-of-thin-air read.  (Sampling the high-water first would
+         * let the writer advance and ingest between the two reads, a
+         * legitimate interleaving that reports a false failure.) */
+        const uint64_t la = clusterMailboxLastApplied(c->mb, c->origin);
         const uint64_t hw =
             atomic_load_explicit(&c->writer_high_water, memory_order_acquire);
-        const uint64_t la = clusterMailboxLastApplied(c->mb, c->origin);
         const size_t oc = clusterMailboxOriginCount(c->mb);
 
         if (la > hw) {
