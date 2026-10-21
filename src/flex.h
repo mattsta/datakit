@@ -156,14 +156,25 @@ typedef struct flexBytesMember {
 void flexBulkPushBytesMembers(flex **ff, const flexBytesMember *members,
                               size_t count);
 
-/* Insert to head or tail of flex */
-/* Bytes content that spells a numeral is always stored as its canonical
- * number, in its minimum representation (databoxCanonical in databox.h): a
- * 64-bit integer, float or double, or a 96/128-bit integer for integer
- * numerals beyond 64 bits.  That is the platform contract.  Readers interpret
- * the stored encoding; writers never force a wider one.  flexPushByType does
- * the same for BYTES and BYTES_EMBED boxes. */
+/* Insert to head or tail of flex.
+ *
+ * Two paths, chosen by the caller:
+ *
+ *   Auto-convert (flexPushBytes, flexPushByType, flexNewFromDatabox*,
+ *   flexPushDataboxBig): bytes content that spells a numeral is stored as that
+ *   number (databoxCanonical in databox.h): "22" is stored and read back as the
+ *   integer 22.
+ *
+ *   Exact (the *Exact functions): stores exactly the value given.  Only the
+ *   same-type minimal width applies (integer width, lossless double-to-float);
+ *   BYTES stay BYTES, so "22" reads back as the 2-byte string "22".  The sorted
+ *   and positional inserts (flexInsertByType and friends) are exact too.
+ *   Anything that must round-trip its input, such as persistence, uses this
+ *   path. */
 void flexPushBytes(flex **ff, const void *data, size_t len, flexEndpoint where);
+void flexPushBytesExact(flex **ff, const void *data, size_t len,
+                        flexEndpoint where);
+void flexPushByTypeExact(flex **ff, const databox *box, flexEndpoint where);
 void flexPushSigned(flex **ff, int64_t i, flexEndpoint where);
 void flexPushUnsigned(flex **ff, uint64_t u, flexEndpoint where);
 void flexPushFloat16(flex **ff, float value, flexEndpoint where);
@@ -219,6 +230,12 @@ flex *flexNewFromDataboxes(const databox *boxes, size_t n);
  * boxes into a contiguous value array just to build the flex. */
 flex *flexNewFromDataboxPtrs(const databox *const *boxes, size_t n);
 
+/* The exact-path factories: the same as the three above, but each value is
+ * stored exactly as given (flexPushByTypeExact). */
+flex *flexNewFromDataboxExact(const databox *box);
+flex *flexNewFromDataboxesExact(const databox *boxes, size_t n);
+flex *flexNewFromDataboxPtrsExact(const databox *const *boxes, size_t n);
+
 /* databoxBig arm of the factory — for values that may exceed 64 bits (numeric
  * quantum sets / intsetBig).  A plain databox cannot hold a 128-bit value
  * inline (its data.i128 is a pointer), and flexGetByType into a plain databox
@@ -242,6 +259,9 @@ flex *flexNewFromDataboxPtrs(const databox *const *boxes, size_t n);
  * BYTES point into `buf`. */
 void flexPushDataboxBig(flex **ff, const databoxBig *b, flexEndpoint where);
 flex *flexNewFromDataboxBig(const databoxBig *b);
+void flexPushDataboxBigExact(flex **ff, const databoxBig *b,
+                             flexEndpoint where);
+flex *flexNewFromDataboxBigExact(const databoxBig *b);
 bool flexGetSingleDataboxBig(const uint8_t *buf, size_t buflen,
                              databoxBig *out);
 bool flexGetTwoDataboxesBig(const uint8_t *buf, size_t buflen, databoxBig *a,

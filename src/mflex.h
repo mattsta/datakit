@@ -50,6 +50,10 @@ void mflexPushDouble(mflex **mm, mflexState *state, const double d,
                      flexEndpoint where);
 void mflexPushByType(mflex **mm, mflexState *state, const databox *box,
                      flexEndpoint where);
+/* Exact path: stores `box` as given (flexPushByTypeExact); mflexPushByType
+ * and mflexPushBytes auto-convert numeral bytes like flexPushByType. */
+void mflexPushByTypeExact(mflex **mm, mflexState *state, const databox *box,
+                          flexEndpoint where);
 
 /* mflex delete by position */
 void mflexDeleteOffsetCount(mflex **mm, mflexState *state, int32_t offset,

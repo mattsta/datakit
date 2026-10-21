@@ -3391,6 +3391,28 @@ void flexPushByType(flex **const ff, const databox *box, flexEndpoint where) {
     }
 }
 
+/* Exact push: store `box` as given.  Only the same-type minimal width
+ * applies (integer width, lossless double-to-float); BYTES stay BYTES.
+ * flexInsertByType is the raw insert the sorted and positional paths use. */
+void flexPushByTypeExact(flex **const ff, const databox *box,
+                         flexEndpoint where) {
+    if (!box) {
+        flexPush_(flexInsertNull, NULL);
+        return;
+    }
+
+    flexInsertByType(ff,
+                     (where == FLEX_ENDPOINT_HEAD) ? FLEX_ENTRY_HEAD(*ff)
+                                                   : FLEX_ENTRY_AFTER_TAIL(*ff),
+                     box);
+}
+
+void flexPushBytesExact(flex **const ff, const void *data, size_t len,
+                        flexEndpoint where) {
+    const databox box = databoxNewBytes(data, len);
+    flexPushByTypeExact(ff, &box, where);
+}
+
 /* flex <-> databox single-element isomorphism (see flex.h). */
 flex *flexNewFromDatabox(const databox *box) {
     /* @own: caller; free=flexFree */
@@ -3422,6 +3444,40 @@ flex *flexNewFromDataboxPtrs(const databox *const *boxes, size_t n) {
     }
     for (size_t i = 0; i < n; i++) {
         flexPushByType(&f, boxes[i], FLEX_ENDPOINT_TAIL);
+    }
+    return f;
+}
+
+flex *flexNewFromDataboxExact(const databox *box) {
+    /* @own: caller; free=flexFree */
+    flex *f = flexNew();
+    if (!f) {
+        return NULL;
+    }
+    flexPushByTypeExact(&f, box, FLEX_ENDPOINT_TAIL);
+    return f;
+}
+
+flex *flexNewFromDataboxesExact(const databox *boxes, size_t n) {
+    /* @own: caller; free=flexFree */
+    flex *f = flexNew();
+    if (!f) {
+        return NULL;
+    }
+    for (size_t i = 0; i < n; i++) {
+        flexPushByTypeExact(&f, &boxes[i], FLEX_ENDPOINT_TAIL);
+    }
+    return f;
+}
+
+flex *flexNewFromDataboxPtrsExact(const databox *const *boxes, size_t n) {
+    /* @own: caller; free=flexFree */
+    flex *f = flexNew();
+    if (!f) {
+        return NULL;
+    }
+    for (size_t i = 0; i < n; i++) {
+        flexPushByTypeExact(&f, boxes[i], FLEX_ENDPOINT_TAIL);
     }
     return f;
 }
@@ -3490,6 +3546,43 @@ flex *flexNewFromDataboxBig(const databoxBig *b) {
         return NULL;
     }
     flexPushDataboxBig(&f, b, FLEX_ENDPOINT_TAIL);
+    return f;
+}
+
+void flexPushDataboxBigExact(flex **const ff, const databoxBig *b,
+                             flexEndpoint where) {
+    if (!b) {
+        return;
+    }
+
+    switch (b->type) {
+    case DATABOX_SIGNED_128: {
+        databoxWidePayloadRequire((const databox *)b);
+        databoxBig t;
+        DATABOX_BIG_SIGNED_128(&t, *b->data.i128);
+        flexPushByTypeExact(ff, (const databox *)&t, where);
+        break;
+    }
+    case DATABOX_UNSIGNED_128: {
+        databoxWidePayloadRequire((const databox *)b);
+        databoxBig t;
+        DATABOX_BIG_UNSIGNED_128(&t, *b->data.u128);
+        flexPushByTypeExact(ff, (const databox *)&t, where);
+        break;
+    }
+    default:
+        flexPushByTypeExact(ff, (const databox *)b, where);
+        break;
+    }
+}
+
+flex *flexNewFromDataboxBigExact(const databoxBig *b) {
+    /* @own: caller; free=flexFree */
+    flex *f = flexNew();
+    if (!f) {
+        return NULL;
+    }
+    flexPushDataboxBigExact(&f, b, FLEX_ENDPOINT_TAIL);
     return f;
 }
 
@@ -8248,6 +8341,120 @@ static bool flexTestWideMiddleReads(const flex *const f,
     return flexTestWideMatches((const databox *)&b, want);
 }
 
+/* True when the entry at `fe` holds exactly the bytes `s[0..len)`. */
+static bool flexTestEntryIsBytes(const flexEntry *fe, const char *s,
+                                 size_t len) {
+    databoxBig got;
+    flexGetByTypeBig(fe, &got);
+    const databox *box = (const databox *)&got;
+    if (box->type != DATABOX_BYTES && box->type != DATABOX_BYTES_EMBED) {
+        return false;
+    }
+
+    return databoxLen(box) == len &&
+           (len == 0 || memcmp(databoxBytes(box), s, len) == 0);
+}
+
+/* The exact path stores every string as the bytes given, numerals and
+ * near-numerals included, through each exact entry point.  The auto path
+ * still converts a numeral. */
+static int32_t flexTestExactPath(void) {
+    int32_t bad = 0;
+    static const char *const strs[] = {
+        "22",
+        "-5",
+        "0",
+        "007",
+        "1e3",
+        "22.0",
+        "",
+        "18446744073709551616",
+        "170141183460469231731687303715884105727",
+        "hello",
+    };
+
+    for (size_t i = 0; i < COUNT_ARRAY(strs); i++) {
+        const char *s = strs[i];
+        const size_t len = strlen(s);
+        const databox box = databoxNewBytes(s, len);
+        databoxBig big = {0};
+        memcpy(&big, &box, sizeof(box));
+
+        flex *viaBytes = flexNew();
+        flexPushBytesExact(&viaBytes, s, len, FLEX_ENDPOINT_TAIL);
+        flexPushByTypeExact(&viaBytes, &box, FLEX_ENDPOINT_HEAD);
+        flex *viaFactory = flexNewFromDataboxExact(&box);
+        flex *viaBig = flexNewFromDataboxBigExact(&big);
+
+        const flex *const all[] = {viaBytes, viaFactory, viaBig};
+        for (size_t f = 0; f < COUNT_ARRAY(all); f++) {
+            for (flexEntry *fe = flexHead(all[f]); fe;
+                 fe = flexNext(all[f], fe)) {
+                if (!flexTestEntryIsBytes(fe, s, len)) {
+                    printf("  exact path changed \"%s\" (flex %zu)\n", s, f);
+                    bad++;
+                }
+            }
+        }
+
+        flexFree(viaBytes);
+        flexFree(viaFactory);
+        flexFree(viaBig);
+    }
+
+    /* Binary bytes with a NUL that spell no numeral, and bytes that do. */
+    {
+        static const char bin[] = {'1', '2', '\0', '3'};
+        flex *f = flexNew();
+        flexPushBytesExact(&f, bin, sizeof(bin), FLEX_ENDPOINT_TAIL);
+        if (!flexTestEntryIsBytes(flexHead(f), bin, sizeof(bin))) {
+            printf("  exact path changed a binary blob\n");
+            bad++;
+        }
+        flexFree(f);
+    }
+
+    /* Numbers keep their value on the exact path. */
+    {
+        flex *f = flexNew();
+        const databox neg = DATABOX_SIGNED(-5);
+        const databox dbl = DATABOX_DOUBLE(1.5);
+        flexPushByTypeExact(&f, &neg, FLEX_ENDPOINT_TAIL);
+        flexPushByTypeExact(&f, &dbl, FLEX_ENDPOINT_TAIL);
+        databox a = {{0}};
+        databox b = {{0}};
+        flexGetByType(flexHead(f), &a);
+        flexGetByType(flexNext(f, flexHead(f)), &b);
+        if (a.type != DATABOX_SIGNED_64 || a.data.i != -5) {
+            printf("  exact path changed -5\n");
+            bad++;
+        }
+        const double back =
+            b.type == DATABOX_FLOAT_32 ? b.data.f32 : b.data.d64;
+        if ((b.type != DATABOX_FLOAT_32 && b.type != DATABOX_DOUBLE_64) ||
+            back != 1.5) {
+            printf("  exact path changed 1.5\n");
+            bad++;
+        }
+        flexFree(f);
+    }
+
+    /* The auto path is unchanged: "22" is stored as the integer 22. */
+    {
+        flex *f = flexNew();
+        flexPushBytes(&f, "22", 2, FLEX_ENDPOINT_TAIL);
+        databox a = {{0}};
+        flexGetByType(flexHead(f), &a);
+        if (a.type != DATABOX_UNSIGNED_64 || a.data.u != 22) {
+            printf("  auto path no longer converts \"22\"\n");
+            bad++;
+        }
+        flexFree(f);
+    }
+
+    return bad;
+}
+
 /* Negative 96/128-bit magnitudes at the edge of the range.  A
  * FLEX_NEG_128B magnitude above INT128_MAX stands for a value below
  * INT128_MIN; deep validation rejects it.  FLEX_NEG_96B has no
@@ -9588,6 +9795,16 @@ int32_t flexTest(int32_t argc, char **argv) {
         const int32_t bad = flexTestNegWideRange();
         if (bad) {
             printf("  FAIL: %" PRId32 " negative wide range checks\n", bad);
+            return bad;
+        }
+        printf("  ok\n");
+    }
+
+    printf("Verify the exact push path stores values as given:\n");
+    {
+        const int32_t bad = flexTestExactPath();
+        if (bad) {
+            printf("  FAIL: %" PRId32 " exact path checks\n", bad);
             return bad;
         }
         printf("  ok\n");

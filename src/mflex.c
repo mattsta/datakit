@@ -269,6 +269,11 @@ void mflexPushByType(mflex **mm, mflexState *state, const databox *box,
     MFLEX_GROW(flexPushByType, box, where);
 }
 
+void mflexPushByTypeExact(mflex **mm, mflexState *state, const databox *box,
+                          flexEndpoint where) {
+    MFLEX_GROW(flexPushByTypeExact, box, where);
+}
+
 /* ====================================================================
  * Simple deleting
  * ==================================================================== */
