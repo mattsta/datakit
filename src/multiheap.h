@@ -51,7 +51,10 @@ typedef multimap multiheap;
         multiheapReadByKey((multiheap *)*(heap), key);                         \
     })
 
-/* Macro returns the aligned pointer for 'ref' inside 'heap' */
+/* Macro returns a pointer to the bytes stored for 'ref' inside 'heap'.  The
+ * bytes live inside a flex entry and are NOT aligned for any type: copy them
+ * out with multiheapRestore (memcpy) rather than dereferencing the pointer as
+ * a struct. */
 #define multiheapRead(heap, ref)                                               \
     ({                                                                         \
         databox key_ = {.data.u = ref, .type = DATABOX_UNSIGNED_64};           \

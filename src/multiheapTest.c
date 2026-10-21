@@ -26,10 +26,13 @@ int multiheapTest(int argc, char *argv[]) {
         mhCursor save = {.position = 12345, .extent = 500, .generation = 7};
         multiheapInsert(&heap, 1, &save);
 
-        const mhCursor *live = multiheapRead(heap, 1);
+        /* The stored bytes are unaligned: copy them out before reading. */
+        const void *live = multiheapRead(heap, 1);
         assert(live);
-        assert(live->position == 12345 && live->extent == 500 &&
-               live->generation == 7);
+        mhCursor liveCopy;
+        memcpy(&liveCopy, live, sizeof(liveCopy));
+        assert(liveCopy.position == 12345 && liveCopy.extent == 500 &&
+               liveCopy.generation == 7);
 
         mhCursor restored = {0};
         multiheapRestore(heap, 1, &restored);
