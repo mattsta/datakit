@@ -301,7 +301,7 @@ int multiFenwickFlatTest(int argc, char *argv[]) {
         }
     }
 
-    TEST("storage: 9 bytes per cell, capacity doubles") {
+    TEST("storage: 8 bytes per int64 cell, 9 with kinds, capacity doubles") {
         cleaner(multiFenwickFlatFree) multiFenwickFlat *mfw =
             multiFenwickFlatNew();
         const size_t base = multiFenwickFlatBytes(mfw);
@@ -315,16 +315,39 @@ int multiFenwickFlatTest(int argc, char *argv[]) {
                 ERR("Update(%zu) refused", steps[s].idx);
             }
 
-            if (multiFenwickFlatBytes(mfw) != base + 9 * steps[s].capacity) {
+            if (multiFenwickFlatBytes(mfw) != base + 8 * steps[s].capacity) {
                 ERR("after Update(%zu): %zu bytes, want %zu", steps[s].idx,
-                    multiFenwickFlatBytes(mfw), base + 9 * steps[s].capacity);
+                    multiFenwickFlatBytes(mfw), base + 8 * steps[s].capacity);
             }
         }
 
-        /* Elements 0, 1, 2, 4, 5 and 1000 are 1; everything else is 0 */
+        /* A cell above INT64_MAX or a double adds the kinds array; every
+         * value survives the switch */
+        const databox half = DATABOX_DOUBLE(0.5);
+        if (!multiFenwickFlatUpdate(&mfw, 3, &half) ||
+            multiFenwickFlatBytes(mfw) != base + 9 * 1024) {
+            ERR("after a double: %zu bytes, want %zu",
+                multiFenwickFlatBytes(mfw), base + 9 * (size_t)1024);
+        }
+
+        databox d;
+        if (!multiFenwickFlatQuery(mfw, 1000, &d) ||
+            d.type != DATABOX_DOUBLE_64 || d.data.d64 != 6.5 ||
+            !multiFenwickFlatGet(mfw, 4, &d) || d.type != DATABOX_UNSIGNED_64 ||
+            d.data.u64 != 1) {
+            ERRR("values changed when the kinds array was added");
+        }
+
+        const databox minusHalf = DATABOX_DOUBLE(-0.5);
+        if (!multiFenwickFlatUpdate(&mfw, 3, &minusHalf)) {
+            ERRR("Update(-0.5) refused");
+        }
+
+        /* Elements 0, 1, 2, 4, 5 and 1000 are 1; everything else is 0,
+         * though cells touched by element 3 stay doubles */
         databox r;
         if (!multiFenwickFlatQuery(mfw, 1000, &r) ||
-            r.type != DATABOX_UNSIGNED_64 || r.data.u64 != 6 ||
+            r.type != DATABOX_DOUBLE_64 || r.data.d64 != 6 ||
             !multiFenwickFlatGet(mfw, 3, &r) || r.data.u64 != 0 ||
             !multiFenwickFlatGet(mfw, 1000, &r) || r.data.u64 != 1) {
             ERRR("values lost across growth");
@@ -332,10 +355,11 @@ int multiFenwickFlatTest(int argc, char *argv[]) {
 
         multiFenwickFlatClear(mfw);
         if (multiFenwickFlatCount(mfw) != 1001 ||
-            multiFenwickFlatBytes(mfw) != base + 9 * 1024 ||
+            multiFenwickFlatBytes(mfw) != base + 8 * 1024 ||
             !multiFenwickFlatQuery(mfw, 1000, &r) ||
             r.type != DATABOX_UNSIGNED_64 || r.data.u64 != 0) {
-            ERRR("Clear did not zero every cell and keep count and capacity");
+            ERRR("Clear did not zero every cell, keep count and capacity, "
+                 "and drop the kinds array");
         }
     }
 

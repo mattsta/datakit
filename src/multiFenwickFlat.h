@@ -19,13 +19,15 @@
  * - multiFenwick keeps its cells in a multilist of flex nodes: compact
  *   (about 2-9 bytes per cell), but every cell access walks a flex node,
  *   so each operation costs O(log n) cell walks.
- * - multiFenwickFlat keeps its cells in two flat arrays: 8 bytes of value
- *   bits and a 1-byte kind (unsigned, signed or double) per cell, 9 bytes
- *   per cell in all.  Every cell access is O(1), so every operation is
- *   O(log n) like an int64 Fenwick tree.
+ * - multiFenwickFlat keeps its cells in flat arrays: 8 bytes of value
+ *   bits per cell, plus a 1-byte kind (signed, unsigned or double) per
+ *   cell once any cell holds a value above INT64_MAX or a double.  Every
+ *   cell access is O(1), so every operation is O(log n) like an int64
+ *   Fenwick tree; while every cell is an int64, sums also skip the
+ *   float bookkeeping.
  *
- * Choose multiFenwickFlat when operation speed matters more than about
- * 9 bytes per cell; choose multiFenwick for the most compact tree.
+ * Choose multiFenwickFlat when operation speed matters more than 8 (or
+ * 9) bytes per cell; choose multiFenwick for the most compact tree.
  *
  * OPERATIONS
  * ----------
@@ -38,7 +40,9 @@
  * -------
  * The arrays hold 'capacity' cells, the smallest power of two at or
  * above the count, and grow by doubling, so appending indexes one by one
- * costs amortized O(1) growth.  Cells past the count hold zero.
+ * costs amortized O(1) growth.  Cells past the count hold zero.  The
+ * per-cell kinds array is created by the first cell that is not an int64
+ * and dropped again by Clear.
  *
  * INDEXING
  * --------
@@ -141,7 +145,8 @@ bool multiFenwickFlatSet(multiFenwickFlat **mfw, size_t idx,
 /* Get number of elements */
 size_t multiFenwickFlatCount(const multiFenwickFlat *mfw);
 
-/* Get total bytes used: the struct plus 9 bytes per allocated cell */
+/* Get total bytes used: the struct plus 8 bytes per allocated cell, 9 once
+ * the kinds array exists */
 size_t multiFenwickFlatBytes(const multiFenwickFlat *mfw);
 
 /* ====================================================================
