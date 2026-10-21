@@ -126,9 +126,12 @@ void fastMutexUnlockSlow(fastMutex *m) {
 
     // Note that someone else can still lock/unlock here, so this has to
     // cas.  We have the list locked though, so the list cannot change
-    // release lock, release queue lock
+    // release lock, release queue lock.  This store is the unlock: it must
+    // be a release so the critical section's writes happen-before the next
+    // owner's acquire (a relaxed store let them be seen late on weakly
+    // ordered CPUs).
     atomic_store_explicit(&m->word, (uint64_t)next_waiter,
-                          memory_order_relaxed);
+                          memory_order_release);
     pthread_mutex_lock(&waiter->lock);
     waiter->waiting = false;
     pthread_cond_signal(&waiter->cond);
