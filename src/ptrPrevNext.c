@@ -1,19 +1,39 @@
 #include "ptrPrevNext.h"
 #include "../deps/varint/src/varintSplitFull16.h"
 
-/* Entries start at byte offsets that are multiples of SPATIAL_OFFSET and
- * never reach past the next such offset after their last byte (their
- * aligned span).  Free space is exact, never inferred from zero bytes (an
- * entry of three zeros is itself all zero bytes):
+#define SPATIAL_OFFSET 6
+
+/* The largest entry: three fields of at most 9 bytes, rounded up to the
+ * next slot boundary */
+#define PTR_PREV_NEXT_MAX_SPAN 30
+
+/* Free runs are listed by size in slots: class k (k < 5) holds runs of
+ * exactly k + 1 slots, the last class every run of 6 slots or more */
+#define PTR_PREV_NEXT_CLASSES 6
+
+typedef struct ptrPrevNextFreeList {
+    size_t *slots; /* first slot of each listed run (may be stale) */
+    size_t count;
+    size_t cap;
+} ptrPrevNextFreeList;
+
+/* Entries start at byte offsets that are multiples of SPATIAL_OFFSET (a
+ * slot) and never reach past the next slot boundary after their last byte
+ * (their aligned span, 1 to 5 slots).  Free space is exact, never inferred
+ * from zero bytes (an entry of three zeros is itself all zero bytes):
  *   - the tail [writeFromEnd, len), all zero bytes;
- *   - at most one hole [bestFree, bestFree + bestFreeLen) below it, all
- *     zero bytes, aligned at both ends (bestFreeLen 0: no hole). */
+ *   - below it, a bitmap with one bit per slot marks every free (zeroed)
+ *     slot.  Freeing merges a span with its free neighbours into one run,
+ *     and a run that reaches the tail gives itself back to the tail, so no
+ *     freed byte is lost.  Runs are listed by size for allocation; a list
+ *     entry whose run has since merged or been used is stale and is
+ *     dropped when met (the bitmap decides). */
 typedef struct memspace {
     void *mem;
-    size_t bestFree;
-    int64_t bestFreeLen;
     size_t writeFromEnd;
     size_t len;
+    uint8_t *freeBits; /* one bit per slot of 'len' */
+    ptrPrevNextFreeList free[PTR_PREV_NEXT_CLASSES];
 } memspace;
 
 struct ptrPrevNext {
@@ -22,17 +42,8 @@ struct ptrPrevNext {
 
 size_t ptrPrevNextReprSingle(ptrPrevNext *ppn, size_t restoredOffset);
 
-#define SPATIAL_OFFSET 6
-
 #define MEMSPACE_FITS(ms, size) (((ms).writeFromEnd + (size)) <= (ms).len)
 #define MOFF(ms, off) ((uint8_t *)((ms).mem) + (off))
-
-/* We check 'off' AND 'off+1' because our allocations are two byte minimum, and
- * the first byte of a valid allocation can be 0, but two zeroes never appear
- * next to each other without traversing a non-zero type byte. */
-#define MOFF_ZERO(ms, off)                                                     \
-    (((off) < ((ms).len - 1)) && (*((uint8_t *)((ms).mem) + (off)) == 0) &&    \
-     (*((uint8_t *)((ms).mem) + (off + 1)) == 0))
 
 ptrPrevNext *ptrPrevNextNew(void) {
     /* @own: caller; free=ptrPrevNextFree */
@@ -41,15 +52,19 @@ ptrPrevNext *ptrPrevNextNew(void) {
     /* @own: container; free=zfree */
     ppn->ms.mem = zcalloc(1, ppn->ms.len);
 
-    ppn->ms.bestFree = 0;
-    ppn->ms.bestFreeLen = 0; /* no hole: everything is tail */
-    ppn->ms.writeFromEnd = 0;
-
+    /* @own: container; free=zfree */
+    ppn->ms.freeBits = zcalloc(1, ppn->ms.len / SPATIAL_OFFSET / 8 + 1);
+    ppn->ms.writeFromEnd = 0; /* no entries: everything is tail */
     return ppn;
 }
 
 void ptrPrevNextFree(ptrPrevNext *ppn) {
     if (ppn) {
+        for (size_t k = 0; k < PTR_PREV_NEXT_CLASSES; k++) {
+            zfree(ppn->ms.free[k].slots);
+        }
+
+        zfree(ppn->ms.freeBits);
         zfree(ppn->ms.mem);
         zfree(ppn);
     }
@@ -122,10 +137,6 @@ DK_STATIC size_t ptrPrevNextPopulateAll(const size_t atomIndex,
         }                                                                      \
     } while (0)
 
-/* The largest entry: three fields of at most 9 bytes, rounded up to the
- * next slot boundary */
-#define PTR_PREV_NEXT_MAX_SPAN 30
-
 /* 'off' rounded up to a slot boundary */
 static size_t ptrPrevNextAlignUp_(size_t off) {
     alignAlignedOffset(off);
@@ -152,56 +163,147 @@ static void ptrPrevNextEnsureTail_(ptrPrevNext *ppn) {
         /* @own: container; free=zfree */
         ppn->ms.mem = zrealloc(ppn->ms.mem, ppn->ms.len);
         memset(MOFF(ppn->ms, oldLen), 0, ppn->ms.len - oldLen);
+
+        const size_t oldBits = oldLen / SPATIAL_OFFSET / 8 + 1;
+        const size_t newBits = ppn->ms.len / SPATIAL_OFFSET / 8 + 1;
+        /* @own: container; free=zfree */
+        ppn->ms.freeBits = zrealloc(ppn->ms.freeBits, newBits);
+        memset(ppn->ms.freeBits + oldBits, 0, newBits - oldBits);
     }
 }
 
-/* Return the zeroed aligned span [at, end) to free space: it shrinks the
- * tail when it ends there, else joins or replaces the hole (the larger
- * hole is kept, the lower on a tie). */
+static bool ptrPrevNextSlotFree_(const memspace *ms, const size_t slot) {
+    return (ms->freeBits[slot >> 3] >> (slot & 7)) & 1;
+}
+
+static void ptrPrevNextSlotsMark_(memspace *ms, const size_t first,
+                                  const size_t n, const bool free) {
+    for (size_t s = first; s < first + n; s++) {
+        if (free) {
+            ms->freeBits[s >> 3] |= (uint8_t)(1u << (s & 7));
+        } else {
+            ms->freeBits[s >> 3] &= (uint8_t)~(1u << (s & 7));
+        }
+    }
+}
+
+/* Free slots from 'slot' up to the next used slot or the tail */
+static size_t ptrPrevNextRunSlots_(const memspace *ms, const size_t slot) {
+    const size_t tailSlot = ms->writeFromEnd / SPATIAL_OFFSET;
+    size_t end = slot;
+    while (end < tailSlot && ptrPrevNextSlotFree_(ms, end)) {
+        end++;
+    }
+
+    return end - slot;
+}
+
+static size_t ptrPrevNextClass_(const size_t slots) {
+    return (slots < PTR_PREV_NEXT_CLASSES ? slots : PTR_PREV_NEXT_CLASSES) - 1;
+}
+
+/* List the free run starting at 'slot' (its slots already marked).  OOM
+ * is fail-fast. */
+static void ptrPrevNextListRun_(memspace *ms, const size_t slot,
+                                const size_t slots) {
+    ptrPrevNextFreeList *list = &ms->free[ptrPrevNextClass_(slots)];
+    if (list->count == list->cap) {
+        list->cap = list->cap ? list->cap * 2 : 8;
+        /* @own: container; free=zfree */
+        list->slots = zrealloc(list->slots, list->cap * sizeof(*list->slots));
+    }
+
+    list->slots[list->count++] = slot;
+}
+
+/* Return the zeroed aligned span [at, end) to free space: merge it with
+ * its free neighbours into one run, which goes back to the tail when it
+ * reaches it, and onto its size's list otherwise. */
 static void ptrPrevNextFreeSpan_(ptrPrevNext *ppn, const size_t at,
                                  const size_t end) {
     memspace *ms = &ppn->ms;
-    const int64_t len = (int64_t)(end - at);
-    const bool haveHole = ms->bestFreeLen > 0;
-    if (end == ms->writeFromEnd) {
-        ms->writeFromEnd = at;
-        if (haveHole && ms->bestFree + (size_t)ms->bestFreeLen == at) {
-            ms->writeFromEnd = ms->bestFree;
-            ms->bestFree = 0;
-            ms->bestFreeLen = 0;
-        }
-    } else if (haveHole && ms->bestFree + (size_t)ms->bestFreeLen == at) {
-        ms->bestFreeLen += len;
-    } else if (haveHole && end == ms->bestFree) {
-        ms->bestFree = at;
-        ms->bestFreeLen += len;
-    } else if (len > ms->bestFreeLen ||
-               (len == ms->bestFreeLen && at < ms->bestFree)) {
-        ms->bestFree = at;
-        ms->bestFreeLen = len;
+    size_t first = at / SPATIAL_OFFSET;
+    const size_t last = end / SPATIAL_OFFSET;
+    ptrPrevNextSlotsMark_(ms, first, last - first, true);
+    while (first > 0 && ptrPrevNextSlotFree_(ms, first - 1)) {
+        first--;
     }
+
+    const size_t slots = (last - first) + ptrPrevNextRunSlots_(ms, last);
+    if ((first + slots) * SPATIAL_OFFSET == ms->writeFromEnd) {
+        ptrPrevNextSlotsMark_(ms, first, slots, false);
+        ms->writeFromEnd = first * SPATIAL_OFFSET;
+        return;
+    }
+
+    ptrPrevNextListRun_(ms, first, slots);
+}
+
+/* A free run of at least 'size' bytes (smallest class first), taken and
+ * marked used; what is left of a longer run is listed again.  SIZE_MAX
+ * when no free run is long enough. */
+static size_t ptrPrevNextFreeTake_(ptrPrevNext *ppn, const size_t size) {
+    memspace *ms = &ppn->ms;
+    const size_t need = size / SPATIAL_OFFSET;
+    for (size_t k = ptrPrevNextClass_(need); k < PTR_PREV_NEXT_CLASSES; k++) {
+        ptrPrevNextFreeList *list = &ms->free[k];
+        for (size_t e = list->count; e > 0; e--) {
+            const size_t slot = list->slots[e - 1];
+            const bool starts =
+                ptrPrevNextSlotFree_(ms, slot) &&
+                (slot == 0 || !ptrPrevNextSlotFree_(ms, slot - 1));
+            const size_t slots = starts ? ptrPrevNextRunSlots_(ms, slot) : 0;
+            if (slots == 0 || ptrPrevNextClass_(slots) != k) {
+                /* Stale: merged, absorbed by the tail, or used */
+                list->slots[e - 1] = list->slots[--list->count];
+                continue;
+            }
+
+            if (slots < need) {
+                continue; /* a large-class run too short for this entry */
+            }
+
+            list->slots[e - 1] = list->slots[--list->count];
+            ptrPrevNextSlotsMark_(ms, slot, need, false);
+            if (slots > need) {
+                /* The rest stays one maximal run: its right neighbour was
+                 * already used */
+                ptrPrevNextListRun_(ms, slot + need, slots - need);
+            }
+
+            return slot * SPATIAL_OFFSET;
+        }
+    }
+
+    return SIZE_MAX;
+}
+
+/* Bytes an entry of these values takes */
+static size_t ptrPrevNextEncodedLen_(const size_t atomIndex,
+                                     const size_t prevOffset,
+                                     const size_t nextOffset) {
+    uint8_t a;
+    uint8_t p;
+    uint8_t n;
+    varintSplitFull16Length_(a, atomIndex);
+    varintSplitFull16Length_(p, prevOffset);
+    varintSplitFull16Length_(n, nextOffset);
+    return (size_t)a + p + n;
 }
 
 ptrPrevNextPtr ptrPrevNextAdd(ptrPrevNext *ppn, const size_t atomIndex,
                               const size_t prevOffset,
                               const size_t nextOffset) {
-    /* Step 1: the hole, when the entry fits there */
-    if (ppn->ms.bestFreeLen > 0) {
-        const size_t at = ppn->ms.bestFree;
+    /* Step 1: a freed span that fits */
+    const size_t span = ptrPrevNextAlignUp_(
+        ptrPrevNextEncodedLen_(atomIndex, prevOffset, nextOffset));
+    const size_t freeAt = ptrPrevNextFreeTake_(ppn, span);
+    if (freeAt != SIZE_MAX) {
         const size_t written = ptrPrevNextPopulateAll(
-            atomIndex, prevOffset, nextOffset, MOFF(ppn->ms, at),
-            (size_t)ppn->ms.bestFreeLen);
-        if (written) {
-            /* The hole is aligned at both ends, so this stays inside it */
-            const size_t used = ptrPrevNextAlignUp_(written);
-            ppn->ms.bestFree += used;
-            ppn->ms.bestFreeLen -= (int64_t)used;
-            if (ppn->ms.bestFreeLen == 0) {
-                ppn->ms.bestFree = 0;
-            }
-
-            return at / SPATIAL_OFFSET;
-        }
+            atomIndex, prevOffset, nextOffset, MOFF(ppn->ms, freeAt), span);
+        assert(written);
+        (void)written;
+        return freeAt / SPATIAL_OFFSET;
     }
 
     /* Step 2: the tail */
@@ -240,8 +342,12 @@ ptrPrevNextPtr ptrPrevNextUpdate(ptrPrevNext *ppn,
             memset(MOFF(ppn->ms, newEnd), 0, oldEnd - newEnd);
         }
 
+        const size_t newSpanEnd = ptrPrevNextAlignUp_(newEnd);
         if (isLast) {
-            ppn->ms.writeFromEnd = ptrPrevNextAlignUp_(newEnd);
+            ppn->ms.writeFromEnd = newSpanEnd;
+        } else if (newSpanEnd < spanEnd) {
+            /* The slots the entry no longer reaches are free (zero) */
+            ptrPrevNextFreeSpan_(ppn, newSpanEnd, spanEnd);
         }
 
         return memOffset;
@@ -316,31 +422,27 @@ size_t ptrPrevNextReprSingle(ptrPrevNext *ppn, size_t restoredOffset) {
 }
 
 void ptrPrevNextRepr(ptrPrevNext *ppn) {
+    printf("{meta {writeFromEnd %zu} {len %zu} {bytesFree %zu}}\n",
+           ppn->ms.writeFromEnd, ppn->ms.len,
+           ppn->ms.len - ppn->ms.writeFromEnd);
     size_t currentOffset = 0;
-    printf("{meta {bestFree %zu} {bestFreeLen %" PRId64 "}\n"
-           "      {writeFromEnd %zu} {len %zu}\n"
-           "      {bytesFree %zd}}\n",
-           ppn->ms.bestFree, ppn->ms.bestFreeLen, ppn->ms.writeFromEnd,
-           ppn->ms.len, ppn->ms.len - ppn->ms.writeFromEnd);
     for (size_t i = 0; currentOffset < ppn->ms.writeFromEnd; i++) {
-        size_t gap = 0;
-#if 1
-        while (MOFF_ZERO(ppn->ms, currentOffset)) {
-            currentOffset++;
-            gap++;
-        }
-#endif
-
+        /* Free slots are known exactly; an entry may be all zero bytes */
+        const size_t gap =
+            ptrPrevNextRunSlots_(&ppn->ms, currentOffset / SPATIAL_OFFSET) *
+            SPATIAL_OFFSET;
+        currentOffset += gap;
         if (gap) {
-            printf("[GAP LEN %zu]\n", gap);
+            printf("[FREE %zu]\n", gap);
         }
 
-        assert(currentOffset % SPATIAL_OFFSET == 0);
+        if (currentOffset >= ppn->ms.writeFromEnd) {
+            break;
+        }
 
         printf("{offset {%2zu %4zu %4zu} ", i, currentOffset,
                currentOffset / SPATIAL_OFFSET);
         currentOffset += ptrPrevNextReprSingle(ppn, currentOffset);
-
         alignAlignedOffset(currentOffset);
     }
 }
@@ -611,6 +713,61 @@ int ptrPrevNextTest(int argc, char *argv[]) {
 
             ptrPrevNextFree(ppn);
         }
+    }
+
+    TEST("churn: freed spans are all reused; the arena stops growing") {
+        enum { ENTRIES = 600, ROUNDS = 8 };
+        uint64_t s = 99;
+        ptrPrevNext *ppn = ptrPrevNextNew();
+        ptrPrevNextPtr ptrs[ENTRIES];
+        size_t vals[ENTRIES][3];
+        size_t lenAfterFirst = 0;
+        for (size_t round = 0; round < ROUNDS && !err; round++) {
+            /* Fill with entries of every size, update some (moving or
+             * shrinking them), then release all in random order */
+            for (size_t e = 0; e < ENTRIES; e++) {
+                for (size_t f = 0; f < 3; f++) {
+                    vals[e][f] = ppnSoakValue_(&s);
+                }
+
+                ptrs[e] =
+                    ptrPrevNextAdd(ppn, vals[e][0], vals[e][1], vals[e][2]);
+            }
+
+            for (size_t e = 0; e < ENTRIES; e += 3) {
+                vals[e][1] = ppnSoakValue_(&s);
+                vals[e][2] = ppnSoakValue_(&s);
+                ptrs[e] =
+                    ptrPrevNextUpdate(ppn, ptrs[e], vals[e][1], vals[e][2]);
+            }
+
+            for (size_t e = 0; e < ENTRIES; e++) {
+                size_t got[3];
+                ptrPrevNextRead(ppn, ptrs[e], &got[0], &got[1], &got[2]);
+                if (memcmp(got, vals[e], sizeof(got)) != 0) {
+                    ERR("round %zu: entry %zu reads back wrong", round, e);
+                    break;
+                }
+            }
+
+            for (size_t e = ENTRIES; e > 1; e--) {
+                const size_t k = (size_t)(ppnSoakRand_(&s) % e);
+                ptrPrevNextRelease(ppn, ptrs[k]);
+                ptrs[k] = ptrs[e - 1];
+                memcpy(vals[k], vals[e - 1], sizeof(vals[k]));
+            }
+
+            ptrPrevNextRelease(ppn, ptrs[0]);
+            if (round == 0) {
+                lenAfterFirst = ppn->ms.len;
+            } else if (ppn->ms.len > lenAfterFirst) {
+                ERR("round %zu: arena grew from %zu to %zu bytes although "
+                    "everything was freed",
+                    round, lenAfterFirst, ppn->ms.len);
+            }
+        }
+
+        ptrPrevNextFree(ppn);
     }
 
     TEST_FINAL_RESULT;
