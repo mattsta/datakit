@@ -200,6 +200,19 @@ class Scanners(unittest.TestCase):
         self.assertTrue(steps.is_linker_note(note))
         self.assertFalse(steps.is_linker_note("ld: " + note))
 
+    def test_lto_object_note_is_a_linker_note(self) -> None:
+        lto = "warning: (arm64) /tmp/lto.o unable to open object file: No such file or directory"
+        log = self.log(
+            "lto.log",
+            f"Generating OS X Debug Info\n{lto}\n"
+            "warning: no debug symbols in executable (-arch arm64)\n"
+            # Another missing object is a real problem.
+            "warning: (arm64) /tmp/other.o unable to open object file: "
+            "No such file or directory\n",
+        )
+        self.assertEqual(steps.count_linker_notes(log), 2)
+        self.assertEqual(steps.count_warning_lines(log), 1)
+
     def test_sanitizer_reports(self) -> None:
         log = self.log(
             "out.log",

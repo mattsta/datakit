@@ -115,16 +115,20 @@ class Warning_:
 #: info of an executable that was linked without any (vendored builds
 #: run it after linking each test executable, also in Release builds).
 #: It is a linker-stage note, not a diagnostic about the code: verify
-#: and validate count it apart and never fail on it.  Only this exact
-#: shape matches; every other ``warning:`` line, ``ld: warning:``
+#: and validate count it apart and never fail on it.  Under -flto (the
+#: perf preset) dsymutil also notes that the linker's temporary LTO
+#: object is gone; that is the same kind of note.  Only these exact
+#: shapes match; every other ``warning:`` line, ``ld: warning:``
 #: included, still counts as a warning.
 _LINKER_NOTE = re.compile(
     r"^warning: no debug symbols in executable \(-arch [^)\s]+\)$"
+    r"|^warning: \([^)\s]+\) /tmp/lto\.o unable to open object file: "
+    r"No such file or directory$"
 )
 
 
 def is_linker_note(line: str) -> bool:
-    """True for the macOS "no debug symbols in executable" note."""
+    """True for the macOS dsymutil "no debug symbols" and LTO notes."""
     return _LINKER_NOTE.match(line.strip()) is not None
 
 
