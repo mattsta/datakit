@@ -532,6 +532,9 @@ add_library(${PROJECT_NAME} OBJECT
     # The same tree with flat O(1) cells (9 bytes per cell)
     multiFenwickFlat.c
     multiFenwickFlatTest.c
+    # The 2D tree over databox values
+    multiFenwick2d.c
+    multiFenwick2dTest.c
 
     # multiSegment wraps multiple Segment trees - separate system
     # DISABLED: multiSegment.c
@@ -637,6 +640,7 @@ if(BuildTestBinary)
     add_executable(${PROJECT_NAME}-test datakit-test.c
                    fenwick/fenwickI64Test.c
                    fenwick/fenwickTypesTest.c
+                   fenwick/fenwick2dTest.c
                    segment/segmentI64Test.c
                    segment/segmentTypesTest.c)
     target_link_libraries(${PROJECT_NAME}-test ${PROJECT_NAME}-static)

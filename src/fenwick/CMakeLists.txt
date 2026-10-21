@@ -50,6 +50,10 @@ else()
     message(STATUS "Fenwick: 128-bit integers not supported on this platform")
 endif()
 
+# 2D trees (typed): one source instantiates every type
+list(APPEND FENWICK_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/fenwick2d.c)
+list(APPEND FENWICK_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/fenwick2d.h)
+
 # Add all fenwick sources to parent target (relative to parent)
 target_sources(datakit PRIVATE ${FENWICK_SOURCES})
 

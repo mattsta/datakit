@@ -30,6 +30,7 @@
 #include "dkTestTmp.h"
 #include "dod.h"
 #include "fastmutex.h"
+#include "fenwick/fenwick2d.h"  /* 2D typed fenwick trees */
 #include "fenwick/fenwickI64.h" /* New 2-tier template system */
 #include "fibbuf.h"
 #include "flex.h"
@@ -65,6 +66,7 @@
 #include "mflex.h"
 #include "monotonicCond.h"
 #include "multiFenwick.h" /* Separate multi-fenwick system (wraps multiple trees) */
+#include "multiFenwick2d.h"   /* 2D fenwick over databox values */
 #include "multiFenwickFlat.h" /* multiFenwick with flat O(1) cells */
 #include "multiOrderedSet.h"
 #include "multiTimer.h"
@@ -11960,6 +11962,8 @@ static const TestEntry testRegistry[] = {
     T_A(multiFenwickFlat, "mfwf"),     /* multiFenwick, flat cells */
     T_A(fenwickTypes, "fwtypes"),      /* every typed fenwick vs naive */
     T_A(segmentTypes, "segtypes"),     /* every typed segment vs naive */
+    T_A(fenwick2d, "fw2d"),            /* 2D typed fenwick trees */
+    T_A(multiFenwick2d, "mfw2d"),      /* 2D fenwick, databox values */
 #if USE_INTSET_BIG
     T(intsetBig),
 #endif
