@@ -211,6 +211,21 @@ class Scanners(unittest.TestCase):
         self.assertEqual([h.line for h in hits], [2, 3, 4])
         self.assertEqual({h.test for h in hits}, {None})
 
+    def test_sanitizer_reports_thread_sanitizer(self) -> None:
+        # TSan reports races as WARNINGs (the program still exits 66);
+        # its closing tally and summary line are not new reports.
+        log = self.log(
+            "out.log",
+            "==================\n"
+            "WARNING: ThreadSanitizer: data race (pid=73502)\n"
+            "  Write of size 8 at 0x00016bade7c8 by thread T3:\n"
+            "SUMMARY: ThreadSanitizer: data race fastmutexTest.c:22 in fmWorker\n"
+            "==3==ERROR: ThreadSanitizer: SEGV on unknown address\n"
+            "ThreadSanitizer: reported 1 warnings\n",
+        )
+        hits = steps.sanitizer_reports([log])
+        self.assertEqual([h.line for h in hits], [2, 5])
+
     def test_sanitizer_reports_name_their_test(self) -> None:
         long = "src/dod.c:723:26: runtime error: signed integer overflow: " + "9" * 200
         log = self.log("LastTest.log", LAST_TEST_LOG.format(long=long))

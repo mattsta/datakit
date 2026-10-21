@@ -14,10 +14,13 @@ configure, an all-targets build, then ctest twice: every test outside
 the serial and skip sets in parallel, then the serial set one test at
 a time.  Tests matching ``--debug-skip`` (default ``multimap`` and
 ``multiFenwick``, too slow under Debug with sanitizers) are also
-skipped in debug builds, and the output says so.
+skipped in debug builds, and tests matching ``--tsan-skip`` (default
+``flex``, ``multimap`` and ``dkTestNonceLogEvictionPerf``: single-threaded
+suites that outrun the timeout under TSan, and a wall-clock limit) in
+tsan builds; the output says so.
 
-After the matrix it scans the test logs for UBSan ("runtime error:")
-and ASan/LSan reports, runs ``allocaudit check --constructors`` on the
+After the matrix it scans the test logs for UBSan ("runtime error:"),
+ASan/LSan and TSan ("WARNING: ThreadSanitizer:") reports, runs ``allocaudit check --constructors`` on the
 exported tree, and runs the leakage gate over the added lines of
 ``merge-base(BASE, REV)..REV`` (BASE default ``origin/main``; an empty
 ``--leak-base`` skips it).
@@ -54,6 +57,9 @@ DEFAULT_SERIAL = r"dkTestNonceLogEvictionPerf"
 DEFAULT_SKIP = r"varint-.*|perfRegression|compressionBench"
 #: Tests too slow for a Debug + sanitizer build.
 DEFAULT_DEBUG_SKIP = r"multimap|multiFenwick"
+#: Tests a ThreadSanitizer build cannot judge: single-threaded suites
+#: that outrun the ctest timeout under TSan, and wall-clock limits.
+DEFAULT_TSAN_SKIP = r"flex|multimap|dkTestNonceLogEvictionPerf"
 DEFAULT_LEAK_BASE = "origin/main"
 
 
@@ -65,6 +71,7 @@ class ValidateOptions:
     serial: str = DEFAULT_SERIAL
     skip: str = DEFAULT_SKIP
     debug_skip: str = DEFAULT_DEBUG_SKIP
+    tsan_skip: str = DEFAULT_TSAN_SKIP
     leak_base: str = DEFAULT_LEAK_BASE
     root: Path | None = None
     jobs: int | None = None
@@ -98,6 +105,11 @@ class ConfigResult:
         )
 
 
+def preset_skip(opts: ValidateOptions, preset: str) -> str:
+    """The ctest name regex a `preset` build skips on top of --skip."""
+    return {"debug": opts.debug_skip, "tsan": opts.tsan_skip}.get(preset, "")
+
+
 def _run_config(
     config: toolchain.BuildConfig,
     src: Path,
@@ -125,7 +137,7 @@ def _run_config(
             cwd=src,
             timeout=steps.BUILD_TIMEOUT,
         )
-    extra_skip = opts.debug_skip if config.preset == "debug" else ""
+    extra_skip = preset_skip(opts, config.preset)
     ctest = Step("ctest", logs / "ctest.log")
     serial = Step("ctest-serial", logs / "ctest-serial.log")
     outputs: list[Path] = []
@@ -223,10 +235,12 @@ def render(
     md.append(f"- every config: {_names(opts.skip) or '(none)'}")
     for r in results:
         if r.extra_skip:
-            md.append(
-                f"- {r.config.label}: also {_names(r.extra_skip)} "
-                "(too slow under Debug + sanitizers; `--debug-skip ''` runs them)"
+            why = (
+                "single-threaded or wall-clock; `--tsan-skip ''` runs them"
+                if r.config.preset == "tsan"
+                else "too slow under Debug + sanitizers; `--debug-skip ''` runs them"
             )
+            md.append(f"- {r.config.label}: also {_names(r.extra_skip)} ({why})")
         not_run = r.ctest_result.not_run + r.serial_result.not_run
         if not_run:
             md.append(f"- {r.config.label}: did not run: {', '.join(not_run)}")

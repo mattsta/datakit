@@ -222,6 +222,12 @@ def main(argv: list[str] | None = None) -> int:
         f"(default {validate.DEFAULT_DEBUG_SKIP}; '' runs them)",
     )
     va.add_argument(
+        "--tsan-skip",
+        default=validate.DEFAULT_TSAN_SKIP,
+        help="ctest name regex also skipped in tsan builds "
+        f"(default {validate.DEFAULT_TSAN_SKIP}; '' runs them)",
+    )
+    va.add_argument(
         "--leak-base",
         default=validate.DEFAULT_LEAK_BASE,
         help="leakage gate checks merge-base(BASE, REV)..REV "
@@ -312,6 +318,7 @@ def _dispatch(args: argparse.Namespace) -> int:
                 serial=args.serial,
                 skip=args.skip,
                 debug_skip=args.debug_skip,
+                tsan_skip=args.tsan_skip,
                 leak_base=args.leak_base,
                 root=args.root,
                 jobs=args.jobs,

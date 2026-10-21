@@ -440,9 +440,12 @@ def targets_for_tests(
 # -- sanitizers -------------------------------------------------------
 
 #: Report headers: UBSan prints "runtime error:", ASan and LSan print
-#: "ERROR: AddressSanitizer" / "ERROR: LeakSanitizer".
+#: "ERROR: AddressSanitizer" / "ERROR: LeakSanitizer", and TSan prints
+#: "WARNING: ThreadSanitizer:" for a race or misuse and
+#: "ERROR: ThreadSanitizer:" for a crash.
 _SANITIZER = re.compile(
     r"runtime error:|ERROR: (?:AddressSanitizer|LeakSanitizer|ThreadSanitizer)"
+    r"|WARNING: ThreadSanitizer:"
 )
 
 

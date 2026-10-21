@@ -75,7 +75,15 @@ class ValidateRun(unittest.TestCase):
         self.repo = TempRepo()
         self.repo.write(
             "CMakePresets.json",
-            json.dumps({"configurePresets": [{"name": "dev"}, {"name": "debug"}]}),
+            json.dumps(
+                {
+                    "configurePresets": [
+                        {"name": "dev"},
+                        {"name": "debug"},
+                        {"name": "tsan"},
+                    ]
+                }
+            ),
         )
         self.repo.write("src/a.c", "int a;\n")
         self.base = self.repo.commit("base", "CMakePresets.json", "src/a.c")
@@ -145,6 +153,39 @@ class ValidateRun(unittest.TestCase):
         # The export is the commit, not the working tree.
         self.repo.write("src/stray.c", "int stray;\n")
         self.assertTrue((summary.parent / "src" / "src" / "b.c").exists())
+
+    def test_tsan_skips_its_own_set_and_says_so(self) -> None:
+        runner = MatrixRunner(outputs={"allocaudit": "100% clean pattern\n"})
+        code, out = self.run_validate(
+            runner, compilers=self.compilers[:1], presets=["dev", "tsan"]
+        )
+        self.assertEqual(code, 0, out)
+        tail = f"|{validate.DEFAULT_TSAN_SKIP})$"
+        for step in ("ctest", "ctest-serial"):
+            cmd = runner.command(f"clang22-tsan {step}")
+            self.assertTrue(cmd[cmd.index("-E") + 1].endswith(tail), cmd)
+        self.assertIn(
+            "clang22-tsan: also flex, multimap, dkTestNonceLogEvictionPerf "
+            "(single-threaded or wall-clock",
+            out,
+        )
+        # dev skips neither the debug nor the tsan set.
+        dev = runner.command("clang22-dev ctest")
+        self.assertNotIn("flex", dev[dev.index("-E") + 1])
+
+    def test_tsan_reports_fail_the_run(self) -> None:
+        runner = MatrixRunner(
+            outputs={
+                "allocaudit": "100% clean pattern\n",
+                "clang22-tsan ctest-output": "1/2 Testing: fastmutex\n"
+                "WARNING: ThreadSanitizer: data race (pid=1)\n",
+            }
+        )
+        code, out = self.run_validate(
+            runner, compilers=self.compilers[:1], presets=["tsan"]
+        )
+        self.assertEqual(code, 1, out)
+        self.assertIn("fastmutex: WARNING: ThreadSanitizer: data race", out)
 
     def test_warnings_are_split_by_area(self) -> None:
         tree = (self.root / "validate" / self.head[:10] / "src").resolve()
