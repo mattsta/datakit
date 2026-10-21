@@ -31,7 +31,11 @@ typedef enum segmentDoubleType {
     ((void *)((uintptr_t)(seg) & ~SEGMENT_DOUBLE_TYPE_MASK))
 #define SEGMENT_DOUBLE_TAG(ptr, type) ((void *)((uintptr_t)(ptr) | (type)))
 
-/* Public API - 2-tier automatic tier management */
+/* Public API (contract: segmentCore.h, CONTRACT).  New(op) makes a SUM,
+ * MIN or MAX tree.  Update assigns one element, extending the tree (gaps
+ * hold the op's identity); on a NULL tree it creates a SUM tree, so make
+ * MIN and MAX trees with New first.  RangeUpdate assigns existing
+ * elements only.  Query and Get outside the tree return the identity. */
 void *segmentDoubleNew(segmentOp op);
 void segmentDoubleFree(void *seg);
 void segmentDoubleUpdate(void **seg, size_t idx, double value);

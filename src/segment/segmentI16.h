@@ -31,7 +31,11 @@ typedef enum segmentI16Type {
     ((void *)((uintptr_t)(seg) & ~SEGMENT_I16_TYPE_MASK))
 #define SEGMENT_I16_TAG(ptr, type) ((void *)((uintptr_t)(ptr) | (type)))
 
-/* Public API - 2-tier automatic tier management */
+/* Public API (contract: segmentCore.h, CONTRACT).  New(op) makes a SUM,
+ * MIN or MAX tree.  Update assigns one element, extending the tree (gaps
+ * hold the op's identity); on a NULL tree it creates a SUM tree, so make
+ * MIN and MAX trees with New first.  RangeUpdate assigns existing
+ * elements only.  Query and Get outside the tree return the identity. */
 void *segmentI16New(segmentOp op);
 void segmentI16Free(void *seg);
 void segmentI16Update(void **seg, size_t idx, int16_t value);
