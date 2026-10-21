@@ -119,7 +119,7 @@ void multilistSmallInsertByTypeAfter(multilistSmall *ml,
                                      const databox *box) {
     flexEntry *next = flexNext(ml->fl, entry->fe);
     if (next == NULL) {
-        flexPushByType(&ml->fl, box, FLEX_ENDPOINT_TAIL);
+        flexPushByTypeExact(&ml->fl, box, FLEX_ENDPOINT_TAIL);
     } else {
         flexInsertByType(&ml->fl, next, box);
     }
@@ -324,7 +324,7 @@ void multilistSmallRotate(multilistSmall *ml) {
     flexGetByTypeInto(fe, &box, &wide);
 
     /* Copy tail entry to head (must happen before tail is deleted). */
-    flexPushByType(&ml->fl, &box, FLEX_ENDPOINT_HEAD);
+    flexPushByTypeExact(&ml->fl, &box, FLEX_ENDPOINT_HEAD);
 
     /* Remove tail entry. */
     flexDeleteRange(&ml->fl, -1, 1);
@@ -356,11 +356,11 @@ bool multilistSmallPop(multilistSmall *ml, databox *box, bool fromTail) {
  * Insert by endpoint
  * ==================================================================== */
 void multilistSmallPushByTypeHead(multilistSmall *ml, const databox *box) {
-    flexPushByType(&ml->fl, box, FLEX_ENDPOINT_HEAD);
+    flexPushByTypeExact(&ml->fl, box, FLEX_ENDPOINT_HEAD);
 }
 
 void multilistSmallPushByTypeTail(multilistSmall *ml, const databox *box) {
-    flexPushByType(&ml->fl, box, FLEX_ENDPOINT_TAIL);
+    flexPushByTypeExact(&ml->fl, box, FLEX_ENDPOINT_TAIL);
 }
 
 /* ====================================================================

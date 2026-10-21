@@ -513,7 +513,7 @@ void multilistFullPushByTypeHead(multilistFull *ml, mflexState *state,
                                  const databox *box) {
     (void)_multilistFullMflexForHead(ml, state, DATABOX_SIZE(box));
 
-    mflexPushByType(mlHeadPtr(ml), state, box, FLEX_ENDPOINT_HEAD);
+    mflexPushByTypeExact(mlHeadPtr(ml), state, box, FLEX_ENDPOINT_HEAD);
 
     ml->values++;
 }
@@ -523,7 +523,7 @@ void multilistFullPushByTypeTail(multilistFull *ml, mflexState *state,
                                  const databox *box) {
     (void)_multilistFullMflexForTail(ml, state, DATABOX_SIZE(box));
 
-    mflexPushByType(mlTailPtr(ml), state, box, FLEX_ENDPOINT_TAIL);
+    mflexPushByTypeExact(mlTailPtr(ml), state, box, FLEX_ENDPOINT_TAIL);
 
     ml->values++;
 }
@@ -1056,8 +1056,8 @@ DK_STATIC void multilistFullInsert_(multilistFull *ml, mflexState *state[2],
         /* Insert into new split node */
         mflex **newNode = getNodePtr(newIdx);
         flex *newF = mflexOpen(*newNode, state[0]);
-        flexPushByType(&newF, box,
-                       after ? FLEX_ENDPOINT_HEAD : FLEX_ENDPOINT_TAIL);
+        flexPushByTypeExact(&newF, box,
+                            after ? FLEX_ENDPOINT_HEAD : FLEX_ENDPOINT_TAIL);
         mflexCloseGrow(newNode, state[0], newF);
 
         ml->values++;
@@ -1073,7 +1073,7 @@ DK_STATIC void multilistFullInsert_(multilistFull *ml, mflexState *state[2],
             D("Not full, inserting after current position.");
             flexEntry *next = flexNext(f, entry->fe);
             if (next == NULL) {
-                flexPushByType(&f, box, FLEX_ENDPOINT_TAIL);
+                flexPushByTypeExact(&f, box, FLEX_ENDPOINT_TAIL);
             } else {
                 flexInsertByType(&f, next, box);
             }
@@ -1675,7 +1675,7 @@ void multilistFullRotate(multilistFull *ml, mflexState *state[2]) {
     } else {
         /* else, multilistFull only has one node, the head flex is also the
          * tail flex, and we already opened it, so just use it directly. */
-        flexPushByType(&fTail, &box, FLEX_ENDPOINT_HEAD);
+        flexPushByTypeExact(&fTail, &box, FLEX_ENDPOINT_HEAD);
 
         /* now get new tail entry again since it just moved */
         fe = flexTail(fTail);
@@ -2415,14 +2415,24 @@ int multilistFullTest(int argc, char *argv[]) {
         TEST("pop head 1 number from 1") {
             multilistFull *ml =
                 multilistFullNew(defaultCompressSizeLimit, depth[_i]);
+            /* An integer pops as that integer; a numeral string pops as the
+             * same string (multilist stores exactly what it is given). */
+            const databox num = databoxNewSigned(55513);
+            multilistFullPushByTypeHead(ml, s0, &num);
             multilistFullPushHead(ml, s0, "55513", 5);
-            int64_t lv;
             mlInfo(ml);
             databox box = {{0}};
             multilistFullPopHead(ml, s0, &box);
-            lv = box.data.i;
-            assert(lv == 55513);
-            (void)lv;
+            if (!DATABOX_IS_BYTES(&box) || databoxLen(&box) != 5 ||
+                memcmp(databoxBytes(&box), "55513", 5) != 0) {
+                ERRR("numeral string did not pop as the same string");
+            }
+            databoxFreeData(&box);
+            box = (databox){{0}};
+            multilistFullPopHead(ml, s0, &box);
+            if (!DATABOX_IS_INTEGER(&box) || box.data.i != 55513) {
+                ERRR("integer did not pop as 55513");
+            }
             mlVerify(ml, 1, 0, 0, 0);
             databoxFreeData(&box);
             multilistFullFree(ml);
@@ -2947,10 +2957,10 @@ int multilistFullTest(int argc, char *argv[]) {
         TEST("numbers only list read") {
             multilistFull *ml =
                 multilistFullNew(defaultCompressSizeLimit, depth[_i]);
-            multilistFullPushTail(ml, s0, "1111", 4);
-            multilistFullPushTail(ml, s0, "2222", 4);
-            multilistFullPushTail(ml, s0, "3333", 4);
-            multilistFullPushTail(ml, s0, "4444", 4);
+            for (int64_t v = 1111; v <= 4444; v += 1111) {
+                const databox num = databoxNewSigned(v);
+                multilistFullPushByTypeTail(ml, s0, &num);
+            }
             mlVerify(ml, 1, 4, 4, 4);
             multilistEntry entry;
             multilistFullIndexGet(ml, s0, 0, &entry);
@@ -3273,12 +3283,11 @@ int multilistFullTest(int argc, char *argv[]) {
                 /* Force-disable compression because our 33 sequential
                  * integers don't compress and the check always fails. */
                 multilistFull *ml = multilistFullNew(f, 0);
-                char num[32];
                 int64_t nums[5000];
                 for (int i = 0; i < 33; i++) {
                     nums[i] = i;
-                    int bytes = StrInt64ToBuf(num, sizeof(num), nums[i]);
-                    multilistFullPushTail(ml, s0, num, bytes);
+                    const databox numBox = databoxNewSigned(nums[i]);
+                    multilistFullPushByTypeTail(ml, s0, &numBox);
                 }
 
                 if (f == 32) {
@@ -3369,12 +3378,11 @@ int multilistFullTest(int argc, char *argv[]) {
         for (size_t f = 0; f < flexOptimizationSizeLimits; f++) {
             TEST_DESC("ltrim test D at fill %zu at compress %d", f, depth[_i]) {
                 multilistFull *ml = multilistFullNew(f, depth[_i]);
-                char num[32];
                 int64_t nums[5000];
                 for (int i = 0; i < 33; i++) {
                     nums[i] = -5157318210846258176 + i;
-                    int bytes = StrInt64ToBuf(num, sizeof(num), nums[i]);
-                    multilistFullPushTail(ml, s0, num, bytes);
+                    const databox numBox = databoxNewSigned(nums[i]);
+                    multilistFullPushByTypeTail(ml, s0, &numBox);
                 }
 
                 if (f == 32) {

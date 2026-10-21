@@ -1474,13 +1474,23 @@ int multilistTest(int argc, char *argv[]) {
         TEST("pop head 1 number from 1") {
             cleaner(multilistFree) multilist *ml =
                 multilistNew(defaultCompressSizeLimit, depth[_i]);
+            /* An integer pops as that integer; a numeral string pops as the
+             * same string (multilist stores exactly what it is given). */
+            const databox num = databoxNewSigned(55513);
+            multilistPushByTypeHead(&ml, s0, &num);
             multilistPushHead(ml, s0, "55513", 5);
-            int64_t lv;
             databox box = {{0}};
             multilistPopHead(&ml, s0, &box);
-            lv = box.data.i;
-            assert(lv == 55513);
-            (void)lv;
+            if (!DATABOX_IS_BYTES(&box) || databoxLen(&box) != 5 ||
+                memcmp(databoxBytes(&box), "55513", 5) != 0) {
+                ERRR("numeral string did not pop as the same string");
+            }
+            databoxFreeData(&box);
+            box = (databox){{0}};
+            multilistPopHead(&ml, s0, &box);
+            if (!DATABOX_IS_INTEGER(&box) || box.data.i != 55513) {
+                ERRR("integer did not pop as 55513");
+            }
             databoxFreeData(&box);
         }
 
@@ -1949,10 +1959,10 @@ int multilistTest(int argc, char *argv[]) {
         TEST("numbers only list read") {
             cleaner(multilistFree) multilist *ml =
                 multilistNew(defaultCompressSizeLimit, depth[_i]);
-            multilistPushTail(ml, s0, "1111", 4);
-            multilistPushTail(ml, s0, "2222", 4);
-            multilistPushTail(ml, s0, "3333", 4);
-            multilistPushTail(ml, s0, "4444", 4);
+            for (int64_t v = 1111; v <= 4444; v += 1111) {
+                const databox num = databoxNewSigned(v);
+                multilistPushByTypeTail(&ml, s0, &num);
+            }
             multilistEntry entry;
             multilistIndexGet(ml, s0, 0, &entry);
             if (entry.box.data.i64 != 1111) {
@@ -2267,12 +2277,11 @@ int multilistTest(int argc, char *argv[]) {
                 /* Force-disable compression because our 33 sequential
                  * integers don't compress and the check always fails. */
                 cleaner(multilistFree) multilist *ml = multilistNew(f, 0);
-                char num[32];
                 int64_t nums[5000];
                 for (int i = 0; i < 33; i++) {
                     nums[i] = i;
-                    int bytes = StrInt64ToBuf(num, sizeof(num), nums[i]);
-                    multilistPushTail(ml, s0, num, bytes);
+                    const databox numBox = databoxNewSigned(nums[i]);
+                    multilistPushByTypeTail(&ml, s0, &numBox);
                 }
 
                 if (f == 32) {
@@ -2358,12 +2367,11 @@ int multilistTest(int argc, char *argv[]) {
             TEST_DESC("ltrim test D at fill %zu at compress %d", f, depth[_i]) {
                 cleaner(multilistFree) multilist *ml =
                     multilistNew(f, depth[_i]);
-                char num[32];
                 int64_t nums[5000];
                 for (int i = 0; i < 33; i++) {
                     nums[i] = -5157318210846258176 + i;
-                    int bytes = StrInt64ToBuf(num, sizeof(num), nums[i]);
-                    multilistPushTail(ml, s0, num, bytes);
+                    const databox numBox = databoxNewSigned(nums[i]);
+                    multilistPushByTypeTail(&ml, s0, &numBox);
                 }
 
                 if (f == 32) {

@@ -2362,7 +2362,7 @@ static uint8_t *intsetBigPersistSnapshot(const void *structure, size_t *len) {
         intsetBigIteratorInit(isb, &it);
         databoxBig dbig = {0};
         while (intsetBigIteratorNextBox(&it, &dbig)) {
-            flexPushDataboxBig(&f, &dbig, FLEX_ENDPOINT_TAIL);
+            flexPushDataboxBigExact(&f, &dbig, FLEX_ENDPOINT_TAIL);
         }
     }
     *len = flexBytes(f);
@@ -2467,7 +2467,7 @@ static uint8_t *intsetBigPersistEncodeOp(persistOp op, const void *args,
         *len = 0;
         return NULL;
     }
-    flex *f = flexNewFromDataboxBig(b);
+    flex *f = flexNewFromDataboxBigExact(b);
     if (!f) {
         *len = 0;
         return NULL;
@@ -2725,10 +2725,11 @@ static uint8_t *hyperloglogPersistEncodeOp(persistOp op, const void *args,
      * byte count. hyperloglogAdd hashes internally, so the WAL
      * carries the original member bytes verbatim.
      *
-     * IMPORTANT: this MUST stay raw bytes — do NOT migrate to a flex element.
-     * flex canonicalises numeric strings (e.g. "1.50" -> 1.5), which would
-     * change the bytes fed to the hash and desync the cardinality estimate
-     * between leader and follower.  The exact member bytes are load-bearing.
+     * IMPORTANT: the exact member bytes are what the hash sees.  Never encode
+     * them through flex's auto-convert push path, which turns a numeral
+     * string such as "22" into the integer 22; that would change the bytes
+     * fed to the hash and desync the cardinality estimate between leader and
+     * follower.  Raw bytes, or flex's exact path, keep them as given.
      *
      * For PERSIST_OP_MERGE: args is the byte image of a source-union HLL
      * (an mdsc-prefixed hyperloglog, the snapshot shape); the fold
@@ -2940,7 +2941,7 @@ static uint8_t *multimapPersistEncodeOp(persistOp op, const void *args,
             *len = 0;
             return NULL;
         }
-        flex *f = flexNewFromDataboxPtrs(boxes, argc);
+        flex *f = flexNewFromDataboxPtrsExact(boxes, argc);
         if (!f) {
             *len = 0;
             return NULL;
@@ -2955,7 +2956,7 @@ static uint8_t *multimapPersistEncodeOp(persistOp op, const void *args,
             *len = 0;
             return NULL;
         }
-        flex *f = flexNewFromDatabox(boxes[0]);
+        flex *f = flexNewFromDataboxExact(boxes[0]);
         if (!f) {
             *len = 0;
             return NULL;
@@ -3162,7 +3163,7 @@ static uint8_t *multilistPersistEncodeOp(persistOp op, const void *args,
     case PERSIST_OP_PUSH_TAIL: {
         /* args is a single const databox* — the pushed value — as a 1-element
          * flex. */
-        flex *f = flexNewFromDatabox((const databox *)args);
+        flex *f = flexNewFromDataboxExact((const databox *)args);
         if (!f) {
             *len = 0;
             return NULL;
@@ -3193,7 +3194,7 @@ static uint8_t *multilistPersistEncodeOp(persistOp op, const void *args,
             *len = 0;
             return NULL;
         }
-        flex *f = flexNewFromDataboxPtrs((const databox *const *)args, 2);
+        flex *f = flexNewFromDataboxPtrsExact((const databox *const *)args, 2);
         if (!f) {
             *len = 0;
             return NULL;
@@ -3508,7 +3509,7 @@ static uint8_t *multidictPersistSnapshot(const void *structure, size_t *len) {
     const mdPersistKeys keys = mdPersistKeysOf(multidictGetType(d));
     if (keys != MD_PERSIST_KEYS_EXACT) {
         const databox tag = DATABOX_UNSIGNED(keys);
-        flexPushByType(&f, &tag, FLEX_ENDPOINT_TAIL);
+        flexPushByTypeExact(&f, &tag, FLEX_ENDPOINT_TAIL);
     }
 
     /* Iterate through all entries and add to flex as [key, val, key, val, ...]
@@ -3517,8 +3518,8 @@ static uint8_t *multidictPersistSnapshot(const void *structure, size_t *len) {
     if (multidictIteratorInit((multidict *)d, &iter)) {
         multidictEntry entry;
         while (multidictIteratorNext(&iter, &entry)) {
-            flexPushByType(&f, &entry.key, FLEX_ENDPOINT_TAIL);
-            flexPushByType(&f, &entry.val, FLEX_ENDPOINT_TAIL);
+            flexPushByTypeExact(&f, &entry.key, FLEX_ENDPOINT_TAIL);
+            flexPushByTypeExact(&f, &entry.val, FLEX_ENDPOINT_TAIL);
         }
         multidictIteratorRelease(&iter);
     }
@@ -3658,7 +3659,7 @@ static uint8_t *multidictPersistEncodeOp(persistOp op, const void *args,
             *len = 0;
             return NULL;
         }
-        return mdPersistOpRecord_(flexNewFromDataboxPtrs(args, 2), len);
+        return mdPersistOpRecord_(flexNewFromDataboxPtrsExact(args, 2), len);
     }
 
     case PERSIST_OP_DELETE: {
@@ -3667,7 +3668,7 @@ static uint8_t *multidictPersistEncodeOp(persistOp op, const void *args,
             *len = 0;
             return NULL;
         }
-        return mdPersistOpRecord_(flexNewFromDatabox(args), len);
+        return mdPersistOpRecord_(flexNewFromDataboxExact(args), len);
     }
 
     case PERSIST_OP_CLEAR:
@@ -4329,8 +4330,10 @@ static uint8_t *multiOrderedSetPersistSnapshot(const void *structure,
             }
 
             /* Store score first, then member (matches sorted order) */
-            flexPushByType(&f, (const databox *)&score, FLEX_ENDPOINT_TAIL);
-            flexPushByType(&f, (const databox *)&member, FLEX_ENDPOINT_TAIL);
+            flexPushByTypeExact(&f, (const databox *)&score,
+                                FLEX_ENDPOINT_TAIL);
+            flexPushByTypeExact(&f, (const databox *)&member,
+                                FLEX_ENDPOINT_TAIL);
         }
 
         multiOrderedSetIteratorRelease(&iter);
@@ -7284,6 +7287,158 @@ int persistTest(int argc, char *argv[]) {
             testMultidictFreeWithClass(restored);
         }
         persistClose(p);
+    }
+
+    TEST("exact persistence: numeral strings stay strings") {
+        /* Persistence stores values exactly as the container held them:
+         * "22" stays the 2-byte string and the integer 22 stays a
+         * separate integer, through the snapshot and through WAL replay. */
+        const databox s22 = databoxNewBytesString("22");
+        const databox s007 = databoxNewBytesString("007");
+        const databox s1e3 = databoxNewBytesString("1e3");
+        const databox s42 = databoxNewBytesString("42");
+        const databox i22 = DATABOX_SIGNED(22);
+
+        /* multidict: one key live and in the snapshot, one via the WAL. */
+        {
+            /* @own: container; free=multidictDefaultClassFree */
+            multidictClass *qdc = multidictDefaultClassNew();
+            cleanerName(testMultidictFreeWithClass, Dict) multidict *d =
+                multidictNew(&multidictTypeExactKey, qdc, 0);
+            multidictAdd(d, &s22, &s42);
+            multidictAdd(d, &i22, &s007);
+
+            persist *p = persistCreate(&persistOpsMultidict, NULL);
+            persistStore *snapStore = persistStoreMemory(0);
+            persistStore *walStore = persistStoreMemory(0);
+            persistAttachSnapshot(p, snapStore);
+            persistAttachWAL(p, walStore);
+            persistSnapshot(p, d);
+            const databox *ins[] = {&s1e3, &s22};
+            persistLogOp(p, PERSIST_OP_INSERT, ins, 2);
+            persistSync(p);
+
+            walStore->seek(walStore->ctx, 0, SEEK_SET);
+            snapStore->seek(snapStore->ctx, 0, SEEK_SET);
+            multidict *r = persistRecover(p);
+            databox v = {{0}};
+            if (!r || multidictCount(r) != 3) {
+                ERRR("multidict: recovered count is not 3");
+            } else {
+                if (!multidictFind(r, &s22, &v) || !DATABOX_IS_BYTES(&v) ||
+                    databoxCompare(&v, &s42) != 0) {
+                    ERRR("multidict: \"22\" -> \"42\" did not survive");
+                }
+                if (!multidictFind(r, &i22, &v) || !DATABOX_IS_BYTES(&v) ||
+                    databoxCompare(&v, &s007) != 0) {
+                    ERRR("multidict: 22 -> \"007\" did not survive");
+                }
+                if (!multidictFind(r, &s1e3, &v) || !DATABOX_IS_BYTES(&v) ||
+                    databoxCompare(&v, &s22) != 0) {
+                    ERRR("multidict: WAL \"1e3\" -> \"22\" did not replay");
+                }
+            }
+            if (r) {
+                testMultidictFreeWithClass(r);
+            }
+            persistClose(p);
+        }
+
+        /* multimap: the snapshot is a byte copy; the WAL row must match. */
+        {
+            cleaner(multimapFree) multimap *m = multimapNew(2);
+            persist *p = persistCreate(&persistOpsMultimap, NULL);
+            persistStore *snapStore = persistStoreMemory(0);
+            persistStore *walStore = persistStoreMemory(0);
+            persistAttachSnapshot(p, snapStore);
+            persistAttachWAL(p, walStore);
+            persistSnapshot(p, m);
+            const databox *row[] = {&s22, &s42};
+            multimapInsert(&m, row);
+            persistLogOp(p, PERSIST_OP_INSERT, row, 2);
+            persistSync(p);
+
+            walStore->seek(walStore->ctx, 0, SEEK_SET);
+            snapStore->seek(snapStore->ctx, 0, SEEK_SET);
+            multimap *r = persistRecover(p);
+            if (!r || multimapCount(r) != 1 || !multimapExists(r, &s22) ||
+                multimapExists(r, &i22)) {
+                ERRR("multimap: WAL row \"22\" did not replay as a string");
+            }
+            if (r) {
+                multimapFree(r);
+            }
+            persistClose(p);
+        }
+
+        /* multilist: pushes and the WAL keep strings and integers apart. */
+        {
+            cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
+            persistSetReplayState(state);
+            cleaner(multilistFree) multilist *ml =
+                multilistNew(FLEX_CAP_LEVEL_2048, 0);
+            multilistPushByTypeTail(&ml, state, &s22);
+            multilistPushByTypeTail(&ml, state, &i22);
+
+            persist *p = persistCreate(&persistOpsMultilist, NULL);
+            persistStore *snapStore = persistStoreMemory(0);
+            persistStore *walStore = persistStoreMemory(0);
+            persistAttachSnapshot(p, snapStore);
+            persistAttachWAL(p, walStore);
+            persistSnapshot(p, ml);
+            multilistPushByTypeTail(&ml, state, &s007);
+            persistLogOp(p, PERSIST_OP_PUSH_TAIL, &s007, 1);
+            persistSync(p);
+
+            walStore->seek(walStore->ctx, 0, SEEK_SET);
+            snapStore->seek(snapStore->ctx, 0, SEEK_SET);
+            multilist *r = persistRecover(p);
+            const databox *want[] = {&s22, &i22, &s007};
+            if (!r || multilistCount(r) != COUNT_ARRAY(want)) {
+                ERRR("multilist: recovered count is not 3");
+            } else {
+                for (size_t i = 0; i < COUNT_ARRAY(want); i++) {
+                    multilistEntry e = {0};
+                    /* A string stays a string and a number a number; a
+                     * number may come back in its minimal same-type
+                     * form (a non-negative SIGNED reads as UNSIGNED). */
+                    if (!multilistIndexGet(r, state, (mlOffsetId)i, &e) ||
+                        DATABOX_IS_BYTES(&e.box) != DATABOX_IS_BYTES(want[i]) ||
+                        databoxCompare(&e.box, want[i]) != 0) {
+                        ERR("multilist: element %zu changed type or value", i);
+                    }
+                }
+            }
+            if (r) {
+                multilistFree(r);
+            }
+            persistClose(p);
+            persistSetReplayState(NULL);
+        }
+
+        /* multiOrderedSet: a "22" member is not the integer 22. */
+        {
+            cleaner(multiOrderedSetFree) multiOrderedSet *mos =
+                multiOrderedSetNew();
+            const databox score = DATABOX_DOUBLE(1.5);
+            multiOrderedSetAdd(&mos, &score, &s22);
+
+            persist *p = persistCreate(&persistOpsMultiOrderedSet, NULL);
+            persistStore *snapStore = persistStoreMemory(0);
+            persistAttachSnapshot(p, snapStore);
+            persistSnapshot(p, mos);
+            snapStore->seek(snapStore->ctx, 0, SEEK_SET);
+            multiOrderedSet *r = persistRestore(p);
+            if (!r || multiOrderedSetCount(r) != 1 ||
+                !multiOrderedSetExists(r, &s22) ||
+                multiOrderedSetExists(r, &i22)) {
+                ERRR("multiOrderedSet: member \"22\" did not survive");
+            }
+            if (r) {
+                multiOrderedSetFree(r);
+            }
+            persistClose(p);
+        }
     }
 
     TEST("multidict: unmarked WAL records still apply") {

@@ -193,7 +193,7 @@ void multilistMediumInsertByTypeAfter(multilistMedium *ml,
     flex **const fl = &ml->fl[entry->nodeIdx];
     flexEntry *next = flexNext(*fl, entry->fe);
     if (next == NULL) {
-        flexPushByType(fl, box, FLEX_ENDPOINT_TAIL);
+        flexPushByTypeExact(fl, box, FLEX_ENDPOINT_TAIL);
     } else {
         flexInsertByType(fl, next, box);
     }
@@ -569,7 +569,7 @@ void multilistMediumRotate(multilistMedium *ml) {
     flexGetByTypeInto(fe, &box, &wide);
 
     /* Copy tail entry to head (must happen before tail is deleted). */
-    flexPushByType(&F0, &box, FLEX_ENDPOINT_HEAD);
+    flexPushByTypeExact(&F0, &box, FLEX_ENDPOINT_HEAD);
 
     /* Remove tail entry. */
     flexDeleteRange(tail, -1, 1);
@@ -617,7 +617,7 @@ bool multilistMediumPop(multilistMedium *ml, databox *box, bool fromTail) {
  * Insert by endpoint
  * ==================================================================== */
 void multilistMediumPushByTypeHead(multilistMedium *ml, const databox *box) {
-    flexPushByType(&F0, box, FLEX_ENDPOINT_HEAD);
+    flexPushByTypeExact(&F0, box, FLEX_ENDPOINT_HEAD);
     /* todo: rebalance */
 }
 
@@ -625,9 +625,9 @@ void multilistMediumPushByTypeTail(multilistMedium *ml, const databox *box) {
     /* F0 must hold elements whenever the list is nonempty, so the
      * first element of an empty list goes to F0, not F1 */
     if (flexCount(F0) == 0 && flexCount(F1) == 0) {
-        flexPushByType(&F0, box, FLEX_ENDPOINT_TAIL);
+        flexPushByTypeExact(&F0, box, FLEX_ENDPOINT_TAIL);
     } else {
-        flexPushByType(&F1, box, FLEX_ENDPOINT_TAIL);
+        flexPushByTypeExact(&F1, box, FLEX_ENDPOINT_TAIL);
     }
     /* todo: rebalance */
 }
