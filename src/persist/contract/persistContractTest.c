@@ -17,7 +17,7 @@
 defcleanerName(uint8_t *, zfree, Bytes);
 
 /* ====================================================================
- * Registry: one line per persistOps descriptor
+ * Registry: one entry per persistOps descriptor
  * ==================================================================== */
 extern const persistContractType persistContractFlex;
 extern const persistContractType persistContractMultimap;
@@ -25,11 +25,13 @@ extern const persistContractType persistContractMultiroar;
 extern const persistContractType persistContractIntset;
 extern const persistContractType persistContractIntsetBig;
 extern const persistContractType persistContractHyperloglog;
+extern const persistContractType persistContractMultiarray;
 
 static const persistContractType *const pcRegistry[] = {
-    &persistContractFlex,      &persistContractMultimap,
-    &persistContractMultiroar, &persistContractIntset,
-    &persistContractIntsetBig, &persistContractHyperloglog,
+    &persistContractFlex,       &persistContractMultimap,
+    &persistContractMultiroar,  &persistContractIntset,
+    &persistContractIntsetBig,  &persistContractHyperloglog,
+    &persistContractMultiarray,
 };
 
 /* ====================================================================

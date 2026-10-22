@@ -165,6 +165,20 @@ void multiarrayDelete(multiarray **m, const uint32_t index);
 size_t multiarrayCount(const multiarray *m);
 size_t multiarrayBytes(const multiarray *m);
 
+/* The element width and the entries per node it was created with */
+uint16_t multiarrayElementLen(const multiarray *m);
+uint16_t multiarrayRowMax(const multiarray *m);
+
+/* Copy every element, in order, to 'out' (multiarrayCount * element
+ * width bytes): a walk over the nodes, O(n), unlike per-index Get */
+void multiarrayCopyTo(const multiarray *m, void *out);
+
+/* A multiarray of 'count' elements of 'len' bytes copied from 'elements',
+ * built straight into the tier and nodes inserts would reach (full nodes
+ * of 'rowMax'), in O(count).  rowMax and len must be at least 1. */
+multiarray *multiarrayNewFromArray(uint16_t len, uint16_t rowMax,
+                                   const void *elements, size_t count);
+
 #if 0
 bool multiarrayDelRange(multiarray **m, const int64_t start, const int64_t stop);
 bool multiarrayReplaceAtIndex(multiarray **m, nodeId index, databox *box);

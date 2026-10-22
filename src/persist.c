@@ -3848,19 +3848,193 @@ const persistOps persistOpsMultidict = {
     .free = multidictPersistFree,
 };
 
+/* ============================================================================
+ * Structure-Specific Operations: multiarray
+ * ============================================================================
+ *
+ * Snapshot: a flex [element width, entries per node, every element's bytes
+ * in order as one blob].  WAL (args: const databox *const *):
+ *   INSERT_AT [index, element bytes]   insert before index (count appends)
+ *   DELETE_AT [index]
+ *   UPDATE    [index, element bytes]   an element rewritten in place
+ *   CLEAR
+ * The shape is fixed at creation, so there is no newEmpty.
+ */
+#include "multiarray.h"
+
+defcleaner(multiarray *, multiarrayFree);
+
+static uint8_t *multiarrayPersistSnapshot(const void *structure, size_t *len) {
+    const multiarray *m = structure;
+    const uint16_t width = multiarrayElementLen(m);
+    const size_t bytes = multiarrayCount(m) * width;
+    cleanerName(zfree, Bytes) uint8_t *blob = zmalloc(bytes ? bytes : 1);
+    multiarrayCopyTo(m, blob);
+
+    const databox w = DATABOX_UNSIGNED(width);
+    const databox r = DATABOX_UNSIGNED(multiarrayRowMax(m));
+    const databox b = DATABOX_WITH_BYTES(blob, bytes);
+    const databox *parts[] = {&w, &r, &b};
+    /* @own: caller; free=zfree */
+    flex *f = flexNewFromDataboxPtrsExact(parts, 3);
+    *len = flexBytes(f);
+    return (uint8_t *)f;
+}
+
+/* An unsigned operand up to 'max' */
+static bool multiarrayPersistUnsigned_(const databoxBig *b, uint64_t max,
+                                       uint64_t *out) {
+    if (b->type != DATABOX_UNSIGNED_64 || b->data.u64 > max) {
+        return false;
+    }
+    *out = b->data.u64;
+    return true;
+}
+
+/* A bytes operand, pointing into the decoded flex */
+static bool multiarrayPersistBytes_(databoxBig *b, const uint8_t **bytes,
+                                    size_t *len) {
+    uint8_t *start;
+    if ((b->type != DATABOX_BYTES && b->type != DATABOX_BYTES_EMBED) ||
+        !databoxGetBytes((databox *)b, &start, len)) {
+        return false;
+    }
+    *bytes = start;
+    return true;
+}
+
+static void *multiarrayPersistRestore(const uint8_t *data, size_t len) {
+    if (!flexValidateBufferDeep(data, len)) {
+        return NULL;
+    }
+    const flex *f = (const flex *)data;
+    if (flexCount(f) != 3) {
+        return NULL;
+    }
+
+    databoxBig parts[3];
+    flexEntry *fe = flexHead(f);
+    for (size_t i = 0; i < 3; i++) {
+        flexGetByTypeBig(fe, &parts[i]);
+        fe = flexNext(f, fe);
+    }
+
+    uint64_t width;
+    uint64_t rowMax;
+    const uint8_t *blob;
+    size_t blobLen;
+    if (!multiarrayPersistUnsigned_(&parts[0], UINT16_MAX, &width) ||
+        width == 0 ||
+        !multiarrayPersistUnsigned_(&parts[1], UINT16_MAX, &rowMax) ||
+        rowMax == 0 || !multiarrayPersistBytes_(&parts[2], &blob, &blobLen) ||
+        blobLen % width) {
+        return NULL;
+    }
+
+    /* @own: caller; free=multiarrayFree */
+    return multiarrayNewFromArray((uint16_t)width, (uint16_t)rowMax, blob,
+                                  blobLen / width);
+}
+
+static size_t multiarrayPersistCount(const void *structure) {
+    return multiarrayCount(structure);
+}
+
+static size_t multiarrayPersistEstimateSize(const void *structure) {
+    return multiarrayBytes(structure);
+}
+
+static uint8_t *multiarrayPersistEncodeOp(persistOp op, const void *args,
+                                          size_t argc, size_t *len) {
+    const databox *const *boxes = args;
+    *len = 0;
+
+    const size_t want = op == PERSIST_OP_INSERT_AT   ? 2
+                        : op == PERSIST_OP_UPDATE    ? 2
+                        : op == PERSIST_OP_DELETE_AT ? 1
+                                                     : 0;
+    if (want == 0 || argc != want || !boxes) {
+        /* CLEAR has no operand; nothing else is replayed */
+        return NULL;
+    }
+
+    flex *f = flexNewFromDataboxPtrsExact(boxes, argc);
+    if (f) {
+        *len = flexBytes(f);
+    }
+    return (uint8_t *)f;
+}
+
+static bool multiarrayPersistApplyOp(void *structure, persistOp op,
+                                     const uint8_t *data, size_t len) {
+    multiarray **m = structure;
+    const size_t count = multiarrayCount(*m);
+    const uint16_t width = multiarrayElementLen(*m);
+
+    if (op == PERSIST_OP_CLEAR) {
+        const uint16_t rowMax = multiarrayRowMax(*m);
+        multiarrayFree(*m);
+        /* @own: caller; free=multiarrayFree */
+        *m = multiarrayNewFromArray(width, rowMax, NULL, 0);
+        return true;
+    }
+
+    if (op == PERSIST_OP_DELETE_AT) {
+        databoxBig idx;
+        uint64_t at;
+        if (!flexGetSingleDataboxBig(data, len, &idx) || !count ||
+            !multiarrayPersistUnsigned_(&idx, count - 1, &at)) {
+            return false;
+        }
+        multiarrayDelete(m, (uint32_t)at);
+        return true;
+    }
+
+    if (op != PERSIST_OP_INSERT_AT && op != PERSIST_OP_UPDATE) {
+        return false;
+    }
+
+    /* [index, element bytes]: an insert may append (index == count); an
+     * update rewrites an existing element */
+    databoxBig idx;
+    databoxBig value;
+    uint64_t at;
+    const uint8_t *bytes;
+    size_t bytesLen;
+    if (!flexGetTwoDataboxesBig(data, len, &idx, &value) ||
+        !multiarrayPersistUnsigned_(
+            &idx, op == PERSIST_OP_INSERT_AT ? count : count - 1, &at) ||
+        (op == PERSIST_OP_UPDATE && !count) ||
+        !multiarrayPersistBytes_(&value, &bytes, &bytesLen) ||
+        bytesLen != width || count >= UINT32_MAX) {
+        return false;
+    }
+
+    if (op == PERSIST_OP_INSERT_AT) {
+        multiarrayInsert(m, (multiarrayIdx)at, (void *)bytes);
+    } else {
+        memcpy(multiarrayGet(*m, (multiarrayIdx)at), bytes, width);
+    }
+    return true;
+}
+
+static void multiarrayPersistFree(void *structure) {
+    multiarrayFree(structure);
+}
+
 const persistOps persistOpsMultiarray = {
     .type = PERSIST_TYPE_MULTIARRAY,
     .name = "multiarray",
-    .snapshot = NULL,
-    .restore = NULL,
-    .count = NULL,
-    .estimateSize = NULL,
-    .encodeOp = NULL,
-    .applyOp = NULL,
+    .snapshot = multiarrayPersistSnapshot,
+    .restore = multiarrayPersistRestore,
+    .count = multiarrayPersistCount,
+    .estimateSize = multiarrayPersistEstimateSize,
+    .encodeOp = multiarrayPersistEncodeOp,
+    .applyOp = multiarrayPersistApplyOp,
     .streamSnapshot = NULL,
     .streamRestore = NULL,
     .validate = NULL,
-    .free = NULL,
+    .free = multiarrayPersistFree,
 };
 
 /* ============================================================================

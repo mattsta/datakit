@@ -132,10 +132,124 @@ void multiarrayFree(multiarray *m) {
     MULTIARRAY_SINGLE_NORETURN(m, Free);
 }
 
+uint16_t multiarrayElementLen(const multiarray *m) {
+    switch (_multiarrayType(m)) {
+    case MULTIARRAY_TYPE_SMALL:
+        return mars(m)->len;
+    case MULTIARRAY_TYPE_MEDIUM:
+        return marm(m)->len;
+    case MULTIARRAY_TYPE_LARGE:
+        return marl(m)->len;
+    default:
+        assert(NULL && "container API on a native multiarray");
+        __builtin_unreachable();
+    }
+}
+
+uint16_t multiarrayRowMax(const multiarray *m) {
+    switch (_multiarrayType(m)) {
+    case MULTIARRAY_TYPE_SMALL:
+        return mars(m)->rowMax;
+    case MULTIARRAY_TYPE_MEDIUM:
+        return marm(m)->rowMax;
+    case MULTIARRAY_TYPE_LARGE:
+        return marl(m)->rowMax;
+    default:
+        assert(NULL && "container API on a native multiarray");
+        __builtin_unreachable();
+    }
+}
+
+void multiarrayCopyTo(const multiarray *m, void *out) {
+    uint8_t *to = out;
+    switch (_multiarrayType(m)) {
+    case MULTIARRAY_TYPE_SMALL: {
+        const multiarraySmall *s = mars(m);
+        if (s->count) {
+            memcpy(to, s->data, (size_t)s->count * s->len);
+        }
+        break;
+    }
+    case MULTIARRAY_TYPE_MEDIUM: {
+        const multiarrayMedium *med = marm(m);
+        for (uint32_t i = 0; i < med->count; i++) {
+            const size_t bytes = (size_t)med->node[i].count * med->len;
+            if (bytes) {
+                memcpy(to, med->node[i].data, bytes);
+                to += bytes;
+            }
+        }
+        break;
+    }
+    case MULTIARRAY_TYPE_LARGE: {
+        const multiarrayLarge *large = marl(m);
+        multiarrayLargeNode *prev = NULL;
+        multiarrayLargeNode *cur = large->head;
+        while (cur) {
+            const size_t bytes = (size_t)cur->count * large->len;
+            memcpy(to, cur->data, bytes);
+            to += bytes;
+            /* XOR-linked: the next node is prev ^ cur->prevNext */
+            multiarrayLargeNode *next =
+                (multiarrayLargeNode *)((uintptr_t)prev ^
+                                        (uintptr_t)cur->prevNext);
+            prev = cur;
+            cur = next;
+        }
+        break;
+    }
+    default:
+        assert(NULL && "container API on a native multiarray");
+        __builtin_unreachable();
+    }
+}
+
+multiarray *multiarrayNewFromArray(uint16_t len, uint16_t rowMax,
+                                   const void *elements, size_t count) {
+    const uint8_t *from = elements;
+
+    /* One node's worth: Small */
+    if (count <= rowMax) {
+        multiarraySmall *s = multiarraySmallNew(len, rowMax);
+        if (count) {
+            /* @own: container; free=multiarraySmallFree */
+            s->data = zrealloc(s->data, count * len);
+            memcpy(s->data, from, count * len);
+            s->count = (uint16_t)count;
+        }
+        return _MULTIARRAY_TAG(s, MULTIARRAY_TYPE_SMALL);
+    }
+
+    /* Full nodes of rowMax entries (the last holds the rest) in a Medium,
+     * which becomes Large at rowMax nodes, as inserts would make it */
+    const size_t nodes = (count + rowMax - 1) / rowMax;
+    /* @own: caller; free=multiarrayMediumFree */
+    multiarrayMedium *med = zcalloc(1, sizeof(*med));
+    /* @own: container; free=multiarrayMediumFree */
+    med->node = zcalloc(nodes, sizeof(*med->node));
+    med->count = (uint32_t)nodes;
+    med->len = len;
+    med->rowMax = rowMax;
+    for (size_t i = 0; i < nodes; i++) {
+        const size_t here = i + 1 < nodes ? rowMax : count - i * rowMax;
+        /* @own: container; free=multiarrayMediumFree */
+        med->node[i].data = zmalloc(here * len);
+        memcpy(med->node[i].data, from + i * rowMax * (size_t)len, here * len);
+        med->node[i].count = (uint16_t)here;
+    }
+
+    if (nodes >= rowMax) {
+        multiarrayLarge *large = multiarrayLargeFromMedium(med);
+        return _MULTIARRAY_TAG(large, MULTIARRAY_TYPE_LARGE);
+    }
+    return _MULTIARRAY_TAG(med, MULTIARRAY_TYPE_MEDIUM);
+}
+
 #ifdef DATAKIT_TEST
 
 #include "cleaner.h"
 #include "ctest.h"
+#include "str.h"
 
 typedef struct s16 {
     int64_t a;
@@ -152,8 +266,10 @@ int multiarrayTest(int argc, char *argv[]) {
     int err = 0;
 
     printf("Testing direct...\n");
-    static const int globalMax = 512000;
-    static const int rowMax = 512;
+    /* Small up to rowMax, Medium up to rowMax * rowMax, Large beyond: three
+     * times the Large threshold covers every tier and its transitions */
+    static const int rowMax = 64;
+    static const int globalMax = 3 * 64 * 64;
     TEST("create") {
         multiarray *s = multiarrayNativeNew(s16);
         assert(s);
@@ -668,6 +784,69 @@ int multiarrayTest(int argc, char *argv[]) {
     }
 
     printf("\n=== All multiarray fuzz tests completed! ===\n\n");
+
+    TEST("NewFromArray and CopyTo round trip in every tier; edits agree") {
+        /* Counts that make Small, Medium and Large at rowMax 8; the bulk
+         * build copies out the same elements, keeps its shape accessors,
+         * head and tail, and later inserts and deletes leave it equal to
+         * an insert-built twin */
+        static const size_t counts[] = {0, 5, 8, 9, 40, 63, 64, 65, 500};
+        const uint16_t perNode = 8;
+        for (size_t c = 0; c < COUNT_ARRAY(counts); c++) {
+            const size_t n = counts[c];
+            cleanerName(zfree, S16) s16 *want = zcalloc(n + 1, sizeof(s16));
+            cleaner(multiarrayFree) multiarray *twin =
+                multiarrayNew(sizeof(s16), perNode);
+            for (size_t i = 0; i < n; i++) {
+                want[i] = (s16){.a = (int64_t)i, .b = -(int64_t)i * 3};
+                multiarrayInsert(&twin, (multiarrayIdx)i, &want[i]);
+            }
+
+            cleaner(multiarrayFree) multiarray *bulk =
+                multiarrayNewFromArray(sizeof(s16), perNode, want, n);
+            cleanerName(zfree, S16) s16 *got = zcalloc(n + 1, sizeof(s16));
+            multiarrayCopyTo(bulk, got);
+            if (multiarrayCount(bulk) != n ||
+                memcmp(got, want, n * sizeof(s16)) != 0 ||
+                multiarrayElementLen(bulk) != sizeof(s16) ||
+                multiarrayRowMax(bulk) != perNode) {
+                ERR("count %zu: bulk build differs", n);
+                continue;
+            }
+            if (n &&
+                (memcmp(multiarrayGetHead(bulk), &want[0], sizeof(s16)) != 0 ||
+                 memcmp(multiarrayGetTail(bulk), &want[n - 1], sizeof(s16)) !=
+                     0)) {
+                ERR("count %zu: head or tail wrong", n);
+            }
+
+            /* The same edits to both */
+            uint64_t rng = 0xa77a + n;
+            for (int e = 0; e < 60; e++) {
+                const size_t count = multiarrayCount(twin);
+                const uint64_t at = splitmix64(&rng);
+                if (count && at % 3 == 0) {
+                    multiarrayDelete(&twin, (uint32_t)(at % count));
+                    multiarrayDelete(&bulk, (uint32_t)(at % count));
+                } else {
+                    s16 v = {.a = e, .b = (int64_t)at};
+                    multiarrayInsert(&twin, (multiarrayIdx)(at % (count + 1)),
+                                     &v);
+                    multiarrayInsert(&bulk, (multiarrayIdx)(at % (count + 1)),
+                                     &v);
+                }
+            }
+            const size_t after = multiarrayCount(twin);
+            cleanerName(zfree, S16) s16 *a = zcalloc(after + 1, sizeof(s16));
+            cleanerName(zfree, S16) s16 *b = zcalloc(after + 1, sizeof(s16));
+            multiarrayCopyTo(twin, a);
+            multiarrayCopyTo(bulk, b);
+            if (multiarrayCount(bulk) != after ||
+                memcmp(a, b, after * sizeof(s16)) != 0) {
+                ERR("count %zu: edits disagree after a bulk build", n);
+            }
+        }
+    }
 
     TEST_FINAL_RESULT;
 }
