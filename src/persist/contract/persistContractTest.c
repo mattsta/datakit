@@ -273,10 +273,9 @@ static void pcWal(pcRow *row, const persistOps *ops,
         ops->free(s);
     }
 
-    /* Onto newEmpty(), when that is the starting structure */
-    if (!ops->newEmpty) {
-        PC_FAIL(row, ops, "%s", "no newEmpty");
-    } else {
+    /* Onto newEmpty(), when that is the starting structure (a type with
+     * no meaningful empty state has no newEmpty; see persistOps) */
+    if (ops->newEmpty) {
         void *e = ops->newEmpty();
         size_t eLen = 0;
         uint8_t *eSnap = e ? ops->snapshot(e, &eLen) : NULL;
