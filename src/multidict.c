@@ -172,7 +172,7 @@ struct multidict {
  * storage set up for it:
  *   - iteration decodes straight into the slots (the slot iterator's
  *     'wide', or a stack pair) through multimapIteratorNextWithSlots;
- *   - a slot class or multidict read that fills a box in place (lastKey,
+ *   - a slot class or multidict read that fills a box in place (lastEntry,
  *     findValueByKey, findKeyByPosition, multidictFind) gets a box aimed
  *     at a stack slot with mdBoxAim_ first.
  * Narrow values never touch the slot. */
@@ -620,6 +620,7 @@ DK_STATIC void *multidictOperate(multidict *d, multidictOp *op,
         op->result = result;
         op->ht = HT(d, htidx);
         op->d = d;
+        op->slot = foundSlot;
     }
 
     return result;
@@ -897,9 +898,10 @@ multidict *multidictNew(multidictType *type, multidictClass *qdc,
     d->iterators = 0;
     d->expandLoadFactor = MULTIDICT_DEFAULT_EXPAND_LOAD_FACTOR;
     d->shrinkLoadFactor = MULTIDICT_DEFAULT_SHRINK_LOAD_FACTOR;
-    d->autoResize = true; /* DEBUG: re-enabled for tracing */
-    d->useByteBasedExpand =
-        false; /* Disabled by default - enable after validation */
+    d->autoResize = true;
+    /* Count-based resizing unless multidictEnableByteBasedExpansion asks
+     * for byte-based */
+    d->useByteBasedExpand = false;
     d->targetSlotBytes = MULTIDICT_DEFAULT_TARGET_SLOT_BYTES;
     d->maxSlotBytes = MULTIDICT_DEFAULT_MAX_SLOT_BYTES;
     DBG_DICT_STATE(d, "multidictNew created");
@@ -1075,14 +1077,17 @@ bool multidictRehash(multidict *d, int32_t n) {
          * This should be efficient since, on a well behaved multidict class,
          * 'current' will fit entirely into L1 cache. */
         databox keybox;
+        databox valbox;
         databoxWide keyWide;
+        databoxWide valWide;
         bool freeCurrentContainer = true;
 
         /* We check 'current' in the while condition because if we move
          * the entire slot, we need to abort the while loop with no cleanup. */
         while (current) {
             mdBoxAim_(&keybox, &keyWide);
-            if (!shared->lastKey(current, &keybox)) {
+            mdBoxAim_(&valbox, &valWide);
+            if (!shared->lastEntry(current, &keybox, &valbox)) {
                 break;
             }
 
@@ -1093,14 +1098,9 @@ bool multidictRehash(multidict *d, int32_t n) {
             /* All slots should be previously allocated. Target must exist. */
             assert(target);
 
-            /* Get key and value sizes for byte tracking transfer.  The
-             * value is only measured, so its type is enough. */
+            /* Key and value sizes for the byte tracking transfer */
             const size_t keySize = mdBoxSize_(&keybox);
-            size_t valSize = 0;
-            databox valbox = {{0}};
-            if (shared->findValueByKey(shared, current, &keybox, &valbox)) {
-                valSize = mdBoxSize_(&valbox);
-            }
+            const size_t valSize = mdBoxSize_(&valbox);
 
             /* Update HT counts and byte tracking; elements migrate one-by-one
              */
@@ -1139,8 +1139,8 @@ bool multidictRehash(multidict *d, int32_t n) {
                     targetBefore = shared->sizeBytes(*target);
                 }
 
-                /* Move last key to 'target' from 'current' */
-                shared->migrateLast(*target, current);
+                /* Move the last entry (as read above) to 'target' */
+                shared->migrateLast(target, &current, &keybox, &valbox);
 
                 /* Update usedBytes based on size changes */
                 size_t targetAfter = shared->sizeBytes(*target);
@@ -1253,25 +1253,20 @@ DK_STATIC multidictResult multidictAddExact_(multidict *d,
     multidictOp op;
     multidictFindSlotForKeyNewest(d, &op, keybox);
 
-    const size_t lenBefore = d->shared->sizeBytes(op.result);
+    /* The insert may reallocate the slot: read it through its cell */
+    const size_t lenBefore = d->shared->sizeBytes(*op.slot);
 
     /* Get key and value sizes for tracking */
     const size_t keySize = mdBoxSize_(keybox);
     const size_t valSize = mdBoxSize_(valbox);
 
-    /* For replacements, we need to know the old value size to track accurately.
-     * Look up the existing value if it might exist.  The old value is only
-     * measured, so its type is enough. */
-    size_t oldValSize = 0;
+    /* One insert, reporting the value a replace overwrote (only measured,
+     * so its type and length are enough) */
     databox oldVal = {{0}};
-    bool hadOldValue =
-        d->shared->findValueByKey(d->shared, op.result, keybox, &oldVal);
-    if (hadOldValue) {
-        oldValSize = mdBoxSize_(&oldVal);
-    }
     const int64_t insertResult =
-        d->shared->insertByType(d->shared, op.result, keybox, valbox);
-    const size_t lenAfter = d->shared->sizeBytes(op.result);
+        d->shared->insertByType(d->shared, op.slot, keybox, valbox, &oldVal);
+    const size_t oldValSize = insertResult == 0 ? mdBoxSize_(&oldVal) : 0;
+    const size_t lenAfter = d->shared->sizeBytes(*op.slot);
 
     /* Adjust 'usedBytes' by actual slot size change */
     op.ht->usedBytes += (lenAfter - lenBefore);
@@ -3163,24 +3158,24 @@ void multidictOpRepr(const multidictOp *op) {
  * Multimap-Based Slot Implementation
  * ==================================================================== */
 
-/* Wrapper struct so slot address is stable even when multimap reallocates */
-typedef struct {
-    multimap *m;
-} mmSlotWrapper;
+/* A slot is the multimap itself (key + value rows): the table cell holds
+ * it, and the hooks that may reallocate it take the cell */
+#define MM_SLOT(slot) ((multimap *)(slot))
+#define MM_SLOT_REF(slot) ((multimap **)(slot))
 
-DK_STATIC int64_t mmSlotInsert(multidictClass *qdc, multidictSlot *slot,
-                               const databox *keybox, const databox *valbox) {
+DK_STATIC int64_t mmSlotInsert(multidictClass *qdc, multidictSlot **slot,
+                               const databox *keybox, const databox *valbox,
+                               databox *replaced) {
     (void)qdc;
-    mmSlotWrapper *wrapper = (mmSlotWrapper *)slot;
-
-    if (wrapper->m == NULL) {
+    if (*slot == NULL) {
         return -1;
     }
 
     const databox *elements[2] = {keybox, valbox};
-    bool replaced = multimapInsert(&wrapper->m, elements);
-
-    return replaced ? 0 : 1; /* 1 = new insert, 0 = replaced */
+    databox overwritten;
+    const bool wasReplaced = multimapInsertReplacing(
+        MM_SLOT_REF(slot), elements, replaced ? replaced : &overwritten);
+    return wasReplaced ? 0 : 1; /* 1 = new insert, 0 = replaced */
 }
 
 DK_STATIC void *mmSlotGetOrCreate(multidictClass *qdc, multidictSlot **slot,
@@ -3189,10 +3184,7 @@ DK_STATIC void *mmSlotGetOrCreate(multidictClass *qdc, multidictSlot **slot,
     (void)keybox;
     if (*slot == NULL) {
         /* @own: container; free=mmSlotFree */
-        mmSlotWrapper *wrapper = zcalloc(1, sizeof(*wrapper));
-        /* @own: container; free=mmSlotFree */
-        wrapper->m = multimapNew(2); /* key + value */
-        *slot = wrapper;
+        *slot = multimapNew(2); /* key + value */
     }
     return *slot;
 }
@@ -3204,8 +3196,7 @@ DK_STATIC void *mmSlotRemove(multidictClass *qdc, multidictSlot **slot,
         return NULL;
     }
 
-    mmSlotWrapper *wrapper = (mmSlotWrapper *)*slot;
-    bool deleted = multimapDelete(&wrapper->m, keybox);
+    bool deleted = multimapDelete(MM_SLOT_REF(slot), keybox);
     // cppcheck-suppress intToPointerCast - non-NULL sentinel to indicate
     // deletion occurred
     return deleted ? (void *)1 : NULL;
@@ -3218,39 +3209,29 @@ DK_STATIC bool mmSlotFindValue(multidictClass *qdc, multidictSlot *slot,
         return false;
     }
 
-    mmSlotWrapper *wrapper = (mmSlotWrapper *)slot;
     /* multimapLookup returns only the non-key elements in the array.
      * For a 2-element multimap (key + value), elements[0] gets the value. */
     databox *elements[1] = {valbox};
-    return multimapLookup(wrapper->m, keybox, elements);
+    return multimapLookup(MM_SLOT(slot), keybox, elements);
 }
 
 DK_STATIC void *mmSlotCreate(void) {
     /* @own: container; free=mmSlotFree */
-    mmSlotWrapper *wrapper = zcalloc(1, sizeof(*wrapper));
-    /* @own: container; free=mmSlotFree */
-    wrapper->m = multimapNew(2); /* key + value */
-    return wrapper;
+    return multimapNew(2); /* key + value */
 }
 
 DK_STATIC uint32_t mmSlotFree(multidictClass *qdc, multidictSlot *slot) {
     (void)qdc;
     if (slot) {
-        mmSlotWrapper *wrapper = (mmSlotWrapper *)slot;
-        uint32_t count = multimapCount(wrapper->m);
-        multimapFree(wrapper->m);
-        zfree(wrapper);
+        const uint32_t count = multimapCount(MM_SLOT(slot));
+        multimapFree(MM_SLOT(slot));
         return count;
     }
     return 0;
 }
 
 DK_STATIC size_t mmSlotSizeBytes(multidictSlot *slot) {
-    if (slot == NULL) {
-        return 0;
-    }
-    mmSlotWrapper *wrapper = (mmSlotWrapper *)slot;
-    return multimapBytes(wrapper->m);
+    return slot ? multimapBytes(MM_SLOT(slot)) : 0;
 }
 
 /* Iterator state stored in multidictSlotIterator.iterspace */
@@ -3263,13 +3244,12 @@ DK_STATIC bool mmSlotGetIter(multidictSlotIterator *iter, multidictSlot *slot) {
         return false;
     }
 
-    mmSlotWrapper *wrapper = (mmSlotWrapper *)slot;
-    if (wrapper->m == NULL || multimapCount(wrapper->m) == 0) {
+    if (multimapCount(MM_SLOT(slot)) == 0) {
         return false;
     }
 
     mmSlotIterState *state = (mmSlotIterState *)iter->iterspace;
-    multimapIteratorInit(wrapper->m, &state->mmIter, true);
+    multimapIteratorInit(MM_SLOT(slot), &state->mmIter, true);
     iter->slot = slot;
     iter->index = 0;
     return true;
@@ -3302,11 +3282,7 @@ DK_STATIC bool mmSlotIterNext(multidictSlotIterator *iter,
 }
 
 DK_STATIC uint32_t mmSlotCount(multidictSlot *slot) {
-    if (slot == NULL) {
-        return 0;
-    }
-    mmSlotWrapper *wrapper = (mmSlotWrapper *)slot;
-    return multimapCount(wrapper->m);
+    return slot ? multimapCount(MM_SLOT(slot)) : 0;
 }
 
 DK_STATIC bool mmSlotFindKeyByPos(multidictClass *qdc, multidictSlot *slot,
@@ -3316,11 +3292,9 @@ DK_STATIC bool mmSlotFindKeyByPos(multidictClass *qdc, multidictSlot *slot,
         return false;
     }
 
-    mmSlotWrapper *wrapper = (mmSlotWrapper *)slot;
-
     /* Iterate to find key at position */
     multimapIterator mmIter;
-    multimapIteratorInit(wrapper->m, &mmIter, true);
+    multimapIteratorInit(MM_SLOT(slot), &mmIter, true);
 
     /* Walk with our own boxes, then deliver only the key at 'pos' into
      * the caller's box: decoding every key into it would let a narrow
@@ -3347,9 +3321,8 @@ DK_STATIC void mmSlotIterateAll(multidictClass *qdc, multidictSlot *slot,
         return;
     }
 
-    mmSlotWrapper *wrapper = (mmSlotWrapper *)slot;
     multimapIterator mmIter;
-    multimapIteratorInit(wrapper->m, &mmIter, true);
+    multimapIteratorInit(MM_SLOT(slot), &mmIter, true);
 
     /* The callback sees big = 1 exactly for a wide value */
     databox key, val;
@@ -3366,41 +3339,23 @@ DK_STATIC void mmSlotIterateAll(multidictClass *qdc, multidictSlot *slot,
     }
 }
 
-DK_STATIC bool mmSlotLastKey(multidictSlot *slot, databox *keybox) {
+DK_STATIC bool mmSlotLastEntry(multidictSlot *slot, databox *keybox,
+                               databox *valbox) {
     if (slot == NULL) {
         return false;
     }
 
-    mmSlotWrapper *wrapper = (mmSlotWrapper *)slot;
-    /* multimapLast populates all elements: elements[0]=key, elements[1]=value
-     */
-    /* The value is discarded, so its type is enough */
-    databox lastVal = {{0}};
-    databox *elements[2] = {keybox, &lastVal};
-    return multimapLast(wrapper->m, elements);
+    databox *elements[2] = {keybox, valbox};
+    return multimapLast(MM_SLOT(slot), elements);
 }
 
-DK_STATIC bool mmSlotMigrateLast(void *dst, void *src) {
-    mmSlotWrapper *srcWrapper = (mmSlotWrapper *)src;
-    mmSlotWrapper *dstWrapper = (mmSlotWrapper *)dst;
-
-    /* Get last key-value from source */
-    databox key, val;
-    databoxWide keyWide, valWide;
-    mdBoxAim_(&key, &keyWide);
-    mdBoxAim_(&val, &valWide);
-    databox *elements[2] = {&key, &val};
-    if (!multimapLast(srcWrapper->m, elements)) {
-        return false;
-    }
-
-    /* Insert into destination */
-    const databox *insertElements[2] = {&key, &val};
-    multimapInsert(&dstWrapper->m, insertElements);
-
-    /* Delete from source */
-    multimapDelete(&srcWrapper->m, &key);
-    return true;
+DK_STATIC bool mmSlotMigrateLast(multidictSlot **dst, multidictSlot **src,
+                                 const databox *keybox, const databox *valbox) {
+    /* Insert into the destination (copying any bytes the boxes borrow
+     * from the source), then drop the source's last row by position */
+    const databox *insertElements[2] = {keybox, valbox};
+    multimapInsert(MM_SLOT_REF(dst), insertElements);
+    return multimapDeleteByPosition(MM_SLOT_REF(src), -1);
 }
 
 DK_STATIC void mmSlotClassFree(multidictClass *qdc) {
@@ -3431,7 +3386,7 @@ DK_STATIC multidictClass *multidictMmClassNew(void) {
     qdc->countSlot = mmSlotCount;
     qdc->findKeyByPosition = mmSlotFindKeyByPos;
     qdc->iterateAll = mmSlotIterateAll;
-    qdc->lastKey = mmSlotLastKey;
+    qdc->lastEntry = mmSlotLastEntry;
     qdc->migrateLast = mmSlotMigrateLast;
     qdc->free = mmSlotClassFree;
     qdc->freeClass = mmSlotFreeClass;
@@ -3935,6 +3890,7 @@ typedef struct mdWideScanState {
 } mdWideScanState;
 
 defcleanerName(uint8_t *, zfree, SeenBytes);
+defcleanerName(char *, zfree, BenchKeys);
 
 static void mdWideScanCb_(void *privdata, const databox *key,
                           const databox *val) {
@@ -4339,10 +4295,10 @@ static int multidictTestSlotIteratorWide_(void) {
     memset(&val, 0, sizeof(val));
     DATABOX_BIG_UNSIGNED_128(&key, k1);
     DATABOX_BIG_SIGNED_128(&val, v1);
-    qdc->insertByType(qdc, slot, (databox *)&key, (databox *)&val);
+    qdc->insertByType(qdc, &slot, (databox *)&key, (databox *)&val, NULL);
     DATABOX_BIG_UNSIGNED_128(&key, k2);
     DATABOX_BIG_SIGNED_128(&val, v2);
-    qdc->insertByType(qdc, slot, (databox *)&key, (databox *)&val);
+    qdc->insertByType(qdc, &slot, (databox *)&key, (databox *)&val, NULL);
 
     multidictSlotIterator iter;
     multidictEntry first;
@@ -9817,6 +9773,96 @@ int multidictTest(int argc, char *argv[]) {
     err += multidictTestWide_(MD_WIDE_EXTENDED);
     err += multidictTestWide_(MD_WIDE_MIXED);
     err += multidictTestSlotIteratorWide_();
+
+    /* ================================================================
+     * Smoke benchmark: per-entry cost of the core operations (meaningful
+     * under the perf preset; checks the results too)
+     * ================================================================ */
+    printf("\n--- Smoke benchmark (ns per entry) ---\n");
+    {
+        enum { MD_BENCH_KEYS = 100000 };
+        cleaner(multidictMmClassFree) multidictClass *bc =
+            multidictMmClassNew();
+        cleaner(multidictFree) multidict *bd =
+            multidictNew(&multidictTypeExactKey, bc, 7);
+
+        /* 16-byte keys, built before timing */
+        enum { MD_BENCH_KEY_LEN = 16 };
+        cleanerName(zfree, BenchKeys) char *keys =
+            zmalloc((size_t)MD_BENCH_KEYS * MD_BENCH_KEY_LEN + 1);
+        for (uint64_t i = 0; i < MD_BENCH_KEYS; i++) {
+            snprintf(keys + i * MD_BENCH_KEY_LEN, MD_BENCH_KEY_LEN + 1,
+                     "key:%012" PRIu64, i);
+        }
+#define MD_BENCH_KEY(i)                                                        \
+    databoxNewBytes(keys + (i) * MD_BENCH_KEY_LEN, MD_BENCH_KEY_LEN)
+
+        uint64_t start = timeUtilMonotonicNs();
+        for (uint64_t i = 0; i < MD_BENCH_KEYS; i++) {
+            const databox k = MD_BENCH_KEY(i);
+            const databox v = databoxNewUnsigned(i);
+            multidictAdd(bd, &k, &v);
+        }
+        const uint64_t addNs = timeUtilMonotonicNs() - start;
+
+        /* The same adds into a dict sized for them up front (no rehash) */
+        uint64_t presizedNs = 0;
+        {
+            cleaner(multidictFree) multidict *pd =
+                multidictNew(&multidictTypeExactKey, bc, 7);
+            multidictExpand(pd, MD_BENCH_KEYS / 2);
+            start = timeUtilMonotonicNs();
+            for (uint64_t i = 0; i < MD_BENCH_KEYS; i++) {
+                const databox k = MD_BENCH_KEY(i);
+                const databox v = databoxNewUnsigned(i);
+                multidictAdd(pd, &k, &v);
+            }
+            presizedNs = timeUtilMonotonicNs() - start;
+        }
+
+        start = timeUtilMonotonicNs();
+        uint64_t found = 0;
+        for (uint64_t i = 0; i < MD_BENCH_KEYS; i++) {
+            const databox k = MD_BENCH_KEY(i);
+            databox v;
+            found += multidictFind(bd, &k, &v) && v.data.u == i;
+        }
+        const uint64_t findNs = timeUtilMonotonicNs() - start;
+
+        start = timeUtilMonotonicNs();
+        uint64_t iterated = 0;
+        multidictIterator it;
+        multidictEntry e;
+        multidictIteratorInit(bd, &it);
+        while (multidictIteratorNext(&it, &e)) {
+            iterated++;
+        }
+        multidictIteratorRelease(&it);
+        const uint64_t iterNs = timeUtilMonotonicNs() - start;
+
+        start = timeUtilMonotonicNs();
+        uint64_t deleted = 0;
+        for (uint64_t i = 0; i < MD_BENCH_KEYS; i++) {
+            const databox k = MD_BENCH_KEY(i);
+            deleted += multidictDelete(bd, &k);
+        }
+        const uint64_t deleteNs = timeUtilMonotonicNs() - start;
+#undef MD_BENCH_KEY
+
+        printf("  add %.1f  add presized %.1f  find %.1f  iterate %.1f  "
+               "delete %.1f\n",
+               (double)addNs / MD_BENCH_KEYS,
+               (double)presizedNs / MD_BENCH_KEYS,
+               (double)findNs / MD_BENCH_KEYS, (double)iterNs / MD_BENCH_KEYS,
+               (double)deleteNs / MD_BENCH_KEYS);
+        if (found != MD_BENCH_KEYS || iterated != MD_BENCH_KEYS ||
+            deleted != MD_BENCH_KEYS || multidictSize(bd) != 0) {
+            printf("benchmark results wrong: found %" PRIu64
+                   " iterated %" PRIu64 " deleted %" PRIu64 "\n",
+                   found, iterated, deleted);
+            err++;
+        }
+    }
 
     /* ================================================================
      * Cleanup

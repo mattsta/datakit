@@ -88,14 +88,16 @@ typedef struct multidictType {
 } multidictType;
 
 /* Pluggable storage class: 17 pointer-sized fields plus one flag byte.
- * (The "124 byte" comment still in multidict.h predates later additions
- * to this interface - do not rely on it.) */
+ * A slot is whatever the class stores in a table cell; hooks that may
+ * reallocate it take the cell (multidictSlot **) and update it. */
 typedef struct multidictClass {
     void *privdata;  /* Private data for this class */
 
-    /* Core operations */
-    int64_t (*insertByType)(struct multidictClass *qdc, multidictSlot *slot,
-                            const databox *keybox, const databox *valbox);
+    /* Core operations.  insertByType returns 1 (new key), 0 (replaced; the
+     * overwritten value goes to 'replaced' when not NULL) or -1. */
+    int64_t (*insertByType)(struct multidictClass *qdc, multidictSlot **slot,
+                            const databox *keybox, const databox *valbox,
+                            databox *replaced);
     void *(*operationSlotGetOrCreate)(struct multidictClass *qdc,
                                       multidictSlot **slot,
                                       const databox *keybox);
@@ -121,9 +123,10 @@ typedef struct multidictClass {
     void (*iterateAll)(struct multidictClass *qdc, multidictSlot *slot,
                        multidictIterProcess process, void *privdata);
 
-    /* Rehashing support */
-    bool (*lastKey)(multidictSlot *slot, databox *keybox);
-    bool (*migrateLast)(void *dst, void *src);
+    /* Rehashing support: read the last entry, then move exactly it */
+    bool (*lastEntry)(multidictSlot *slot, databox *keybox, databox *valbox);
+    bool (*migrateLast)(multidictSlot **dst, multidictSlot **src,
+                        const databox *keybox, const databox *valbox);
 
     /* Cleanup */
     void (*free)(struct multidictClass *qdc);
@@ -995,31 +998,30 @@ size_t sizeBytesImpl(multidictSlot *slot) {
  * Getting this backwards corrupts the dictionary's count and byte
  * accounting, because multidict trusts it to decide whether to bump
  * count and keyBytes. */
-int64_t insertByTypeImpl(multidictClass *qdc, multidictSlot *slot,
-                         const databox *keybox, const databox *valbox) {
-    flex *f = slot;
+int64_t insertByTypeImpl(multidictClass *qdc, multidictSlot **slot,
+                         const databox *keybox, const databox *valbox,
+                         databox *replaced) {
+    (void)qdc;
+    flex **f = (flex **)slot; /* writes may move the flex: update the cell */
 
-    /* Search for existing key */
-    flexEntry *fe = flexHead(f);
-    while (fe) {
+    /* Rows are [key, value] pairs: look for the key */
+    for (flexEntry *fe = flexHead(*f); fe; fe = flexNext(*f, flexNext(*f, fe))) {
         databox existingKey;
-        flexGetByType(f, &fe, &existingKey);
-
+        flexGetByType(fe, &existingKey);
         if (databoxCompare(&existingKey, keybox) == 0) {
-            /* Replace value */
-            flexGetByType(f, &fe, NULL);  /* skip old value */
-            /* Delete old value and insert new one */
-            /* ... implementation ... */
-            return 0;  /* replaced */
+            flexEntry *valueEntry = flexNext(*f, fe);
+            if (replaced) {
+                flexGetByType(valueEntry, replaced); /* measured only */
+            }
+            flexReplaceByType(f, valueEntry, valbox);
+            return 0; /* replaced */
         }
-
-        flexGetByType(f, &fe, NULL);  /* skip value */
     }
 
-    /* Not found, append */
-    flexPushByType(&f, keybox, FLEX_ENDPOINT_TAIL);
-    flexPushByType(&f, valbox, FLEX_ENDPOINT_TAIL);
-    return 1;  /* inserted new */
+    /* Not found: append the pair */
+    flexPushByType(f, keybox, FLEX_ENDPOINT_TAIL);
+    flexPushByType(f, valbox, FLEX_ENDPOINT_TAIL);
+    return 1; /* inserted new */
 }
 
 /* ... implement other required functions ... */

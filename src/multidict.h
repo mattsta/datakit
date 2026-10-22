@@ -107,6 +107,7 @@ typedef struct multidictOp {
     struct multidict *d;
     struct multidictHT *ht;
     void *result;
+    multidictSlot **slot; /* the table cell the operation used */
 } multidictOp;
 
 typedef void(multidictIterProcess)(void *privdata, const databox *key,
@@ -122,16 +123,21 @@ typedef void(multidictIterProcess)(void *privdata, const databox *key,
 typedef bool(multidictEvictionCallback)(void *privdata, const databox *key,
                                         const databox *val);
 
-/* multidictClass is a (17 * 8) + 1, padded = 144 byte struct. */
-/* RE-ORGANIZE BASED ON COMMON USAGE PER CACHE LINE. */
+/* multidictClass is a (17 * 8) + 1, padded = 144 byte struct: the
+ * per-operation hooks fill the first cache line. */
 typedef struct multidictClass {
     /* Private data this class needs (atom dict, key dict, etc) */
     void *privdata;
 
     /*** INTERFACE ***/
-    /* Group by operation type per-cache line */
-    int64_t (*insertByType)(struct multidictClass *qdc, multidictSlot *slot,
-                            const databox *keybox, const databox *valbox);
+    /* Group by operation type per-cache line.  A hook that may reallocate
+     * a slot takes its table cell (multidictSlot **) and updates it.
+     * insertByType returns 1 for a new key, 0 for a replaced one (filling
+     * 'replaced', when not NULL, with the value it overwrote, as
+     * multimapInsertReplacing reports it) and -1 for no slot. */
+    int64_t (*insertByType)(struct multidictClass *qdc, multidictSlot **slot,
+                            const databox *keybox, const databox *valbox,
+                            databox *replaced);
     /* this is operation too: */
     void *(*operationSlotGetOrCreate)(struct multidictClass *qdc,
                                       multidictSlot **slot,
@@ -162,18 +168,17 @@ typedef struct multidictClass {
     void (*iterateAll)(struct multidictClass *qdc, multidictSlot *slot,
                        multidictIterProcess process, void *privdata);
 
-    /* For rehash (lookup last key, hash, move last key to new slot) */
-    bool (*lastKey)(multidictSlot *slot, databox *keybox);
-    bool (*migrateLast)(void *dst, void *src);
+    /* For rehash: read the slot's last entry (the key to hash, the value
+     * to measure), then move that entry to its new slot */
+    bool (*lastEntry)(multidictSlot *slot, databox *keybox, databox *valbox);
+    bool (*migrateLast)(multidictSlot **dst, multidictSlot **src,
+                        const databox *keybox, const databox *valbox);
     void (*free)(struct multidictClass *qdc);
     /*** END OF INTERFACE ***/
 
     uint32_t (*freeClass)(struct multidictClass *qdc);
-    /* Shared flags for entire class (could make this a 64 bit bitfield) */
+    /* Shared flags for entire class */
     uint8_t disableResize; /* one resize switch across all shared dicts */
-
-    /* RE-DO MATH */
-    /* END OF CACHE LINE 2 (Currently 4 remaining bytes to fill up line) */
 } multidictClass;
 
 /* A slot class's iteration state.  'wide' is the wide storage for the
