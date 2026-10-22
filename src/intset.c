@@ -204,32 +204,124 @@ bool intsetFind(intset *is, int64_t value) {
     return false;
 }
 
-/* Get value at position */
-bool intsetGet(intset *is, uint32_t pos, int64_t *value) {
+/* How many of the sorted values are negative */
+static uint64_t intsetNegatives32_(const int32_t *v, uint64_t n) {
+    uint64_t lo = 0;
+    uint64_t hi = n;
+    while (lo < hi) {
+        const uint64_t mid = lo + (hi - lo) / 2;
+        if (v[mid] < 0) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+static uint64_t intsetNegatives64_(const int64_t *v, uint64_t n) {
+    uint64_t lo = 0;
+    uint64_t hi = n;
+    while (lo < hi) {
+        const uint64_t mid = lo + (hi - lo) / 2;
+        if (v[mid] < 0) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+static void intsetRunAdd_(intsetIterator *it, const void *first, uint64_t count,
+                          uint8_t width) {
+    if (count) {
+        it->run[it->runs] = first;
+        it->left[it->runs] = count;
+        it->width[it->runs] = width;
+        it->runs++;
+    }
+}
+
+/* Each value lives in the narrowest array it fits, so in ascending order
+ * the values are runs of those arrays: the negative int64s, the negative
+ * int32s, every int16, the non-negative int32s, the non-negative int64s */
+void intsetIteratorInit(intsetIterator *it, const intset *is) {
+    *it = (intsetIterator){0};
     if (!is) {
+        return;
+    }
+
+    const void *ptr = INTSET_UNTAG(is);
+    switch (INTSET_TYPE(is)) {
+    case INTSET_TYPE_SMALL: {
+        const intsetSmall *s = ptr;
+        intsetRunAdd_(it, s->values16, s->count16, 2);
+        break;
+    }
+    case INTSET_TYPE_MEDIUM: {
+        const intsetMedium *m = ptr;
+        const uint64_t neg32 = intsetNegatives32_(m->values32, m->count32);
+        intsetRunAdd_(it, m->values32, neg32, 4);
+        intsetRunAdd_(it, m->values16, m->count16, 2);
+        intsetRunAdd_(it, m->values32 + neg32, m->count32 - neg32, 4);
+        break;
+    }
+    case INTSET_TYPE_FULL: {
+        const intsetFull *f = ptr;
+        const uint64_t neg64 = intsetNegatives64_(f->values64, f->count64);
+        const uint64_t neg32 = intsetNegatives32_(f->values32, f->count32);
+        intsetRunAdd_(it, f->values64, neg64, 8);
+        intsetRunAdd_(it, f->values32, neg32, 4);
+        intsetRunAdd_(it, f->values16, f->count16, 2);
+        intsetRunAdd_(it, f->values32 + neg32, f->count32 - neg32, 4);
+        intsetRunAdd_(it, f->values64 + neg64, f->count64 - neg64, 8);
+        break;
+    }
+    }
+}
+
+static int64_t intsetRunValue_(const void *run, uint8_t width, uint64_t i) {
+    switch (width) {
+    case 2:
+        return ((const int16_t *)run)[i];
+    case 4:
+        return ((const int32_t *)run)[i];
+    default:
+        return ((const int64_t *)run)[i];
+    }
+}
+
+bool intsetIteratorNext(intsetIterator *it, int64_t *value) {
+    while (it->current < it->runs && it->left[it->current] == 0) {
+        it->current++;
+    }
+    if (it->current == it->runs) {
         return false;
     }
 
-    intsetType type = INTSET_TYPE(is);
-    void *ptr = INTSET_UNTAG(is);
+    const uint8_t r = it->current;
+    *value = intsetRunValue_(it->run[r], it->width[r], 0);
+    it->run[r] = (const uint8_t *)it->run[r] + it->width[r];
+    it->left[r]--;
+    return true;
+}
 
-    switch (type) {
-    case INTSET_TYPE_SMALL: {
-        intsetSmall *small = (intsetSmall *)ptr;
-        return intsetSmallGet(small, pos, value);
+/* Get value at position: the run holding it, then an index (O(log n) for
+ * the run boundaries, never a walk) */
+bool intsetGet(intset *is, uint32_t pos, int64_t *value) {
+    intsetIterator it;
+    intsetIteratorInit(&it, is);
+    uint64_t at = pos;
+    for (uint8_t r = 0; r < it.runs; r++) {
+        if (at < it.left[r]) {
+            if (value) {
+                *value = intsetRunValue_(it.run[r], it.width[r], at);
+            }
+            return true;
+        }
+        at -= it.left[r];
     }
-
-    case INTSET_TYPE_MEDIUM: {
-        intsetMedium *medium = (intsetMedium *)ptr;
-        return intsetMediumGet(medium, pos, value);
-    }
-
-    case INTSET_TYPE_FULL: {
-        intsetFull *full = (intsetFull *)ptr;
-        return intsetFullGet(full, pos, value);
-    }
-    }
-
     return false;
 }
 

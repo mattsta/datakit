@@ -904,6 +904,53 @@ int intsetPTest(int argc, char *argv[]) {
         ptestCleanupFiles(basePath);
     }
 
+    TEST("intsetP every width survives recovery; readers agree") {
+        /* Values in all three tier widths, both signs; after a sync and a
+         * reopen the raw set holds exactly them */
+        static const int64_t values[] = {INT64_MIN, -5000000000, -70000,
+                                         -3,        0,           7,
+                                         40000,     9000000000,  INT64_MAX};
+        const size_t n = sizeof(values) / sizeof(*values);
+        ptestCleanupFiles(basePath);
+        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        intsetP *is = intsetNewP(ctx);
+        for (size_t i = 0; i < n; i++) {
+            intsetAddP(is, values[i]);
+        }
+        intsetAddP(is, 123);
+        intsetRemoveP(is, 123);
+        if (!intsetSyncP(is) || intsetBytesP(is) == 0 ||
+            intsetCount(intsetGetRawP(is)) != n) {
+            ERRR("Sync, bytes or raw count wrong");
+        }
+        intsetCloseP(is);
+        persistCtxFree(ctx);
+
+        ctx = persistCtxOpen(basePath, NULL);
+        is = intsetOpenP(ctx);
+        if (!is) {
+            ERRR("Recovery failed");
+        } else {
+            intsetIterator it;
+            intsetIteratorInit(&it, intsetGetRawP(is));
+            int64_t got;
+            size_t seen = 0;
+            while (intsetIteratorNext(&it, &got)) {
+                if (seen >= n || got != values[seen]) {
+                    ERR("value %zu wrong after recovery", seen);
+                    break;
+                }
+                seen++;
+            }
+            if (seen != n) {
+                ERR("recovered %zu of %zu values", seen, n);
+            }
+            intsetCloseP(is);
+        }
+        persistCtxFree(ctx);
+        ptestCleanupFiles(basePath);
+    }
+
     TEST_FINAL_RESULT;
 }
 #endif /* DATAKIT_TEST */

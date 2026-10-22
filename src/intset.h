@@ -44,11 +44,23 @@ void intsetRemove(intset **is, int64_t value, bool *success);
 /* Find if value exists in intset */
 bool intsetFind(intset *is, int64_t value);
 
-/* Get value at position (0-indexed)
- * Note: In tiered implementation, this performs virtual merge of arrays.
- * For Medium/Full tiers, this is O(n) worst case. Use iterator for traversal.
- */
+/* Get value at position (0-indexed), in O(log n).  To visit every value,
+ * use the iterator below (O(1) per value). */
 bool intsetGet(intset *is, uint32_t pos, int64_t *value);
+
+/* Walks an intset's values in ascending order, O(1) per value.  The
+ * intset must not change during the walk.  Values are runs of the tier's
+ * arrays (see intset.c); the fields are private. */
+typedef struct intsetIterator {
+    const void *run[5];
+    uint64_t left[5];
+    uint8_t width[5];
+    uint8_t runs;
+    uint8_t current;
+} intsetIterator;
+
+void intsetIteratorInit(intsetIterator *it, const intset *is);
+bool intsetIteratorNext(intsetIterator *it, int64_t *value);
 
 /* Get random value from intset */
 int64_t intsetRandom(intset *is);

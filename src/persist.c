@@ -2172,15 +2172,14 @@ static uint8_t *intsetPersistSnapshot(const void *structure, size_t *len) {
     uint64_t countU64 = count;
     memcpy(buf, &countU64, sizeof(uint64_t));
 
-    /* Write all values using intsetGet */
-    int64_t *values = (int64_t *)(buf + sizeof(uint64_t));
-    for (size_t i = 0; i < count; i++) {
-        int64_t value;
-        if (intsetGet(is, (uint32_t)i, &value)) {
-            values[i] = value;
-        } else {
-            values[i] = 0; /* Should not happen */
-        }
+    /* Every value in ascending order, O(1) each */
+    intsetIterator it;
+    intsetIteratorInit(&it, is);
+    uint8_t *at = buf + sizeof(uint64_t);
+    int64_t value;
+    while (intsetIteratorNext(&it, &value)) {
+        memcpy(at, &value, sizeof(value));
+        at += sizeof(value);
     }
 
     return buf;
@@ -2204,28 +2203,35 @@ static void *intsetPersistRestore(const uint8_t *data, size_t len) {
         return NULL;
     }
 
-    /* Validate length */
+    /* Exactly the values the count names */
     size_t expectedLen = sizeof(uint64_t) + (count * sizeof(int64_t));
-    if (len < expectedLen) {
+    if (len != expectedLen) {
         return NULL;
     }
 
-    /* Create new intset and add all values. Use memcpy rather than a
-     * pointer cast — the payload buffer may sit at an arbitrary offset
-     * inside the envelope wrapper, so an int64_t-aligned address is not
-     * guaranteed. On aarch64 / x86_64 the compiler folds this into a
-     * single load instruction; there is no runtime overhead. */
-    /* @own: caller; free=intsetFree */
-    intset *is = intsetNew();
+    /* The values as the snapshot wrote them: strictly ascending (damaged
+     * bytes are refused, not re-sorted), so every add appends to the end
+     * of its width's array.  memcpy rather than a pointer cast: the
+     * payload may sit at any offset inside the envelope, so an
+     * int64_t-aligned address is not guaranteed. */
+    cleaner(intsetFree) intset *is = intsetNew();
     const uint8_t *valueBytes = data + sizeof(uint64_t);
+    int64_t prev = 0;
     for (uint64_t i = 0; i < count; i++) {
         int64_t value;
         memcpy(&value, valueBytes + i * sizeof(int64_t), sizeof(int64_t));
+        if (i > 0 && value <= prev) {
+            return NULL;
+        }
+        prev = value;
         bool success;
         intsetAdd(&is, value, &success);
     }
 
-    return is;
+    /* @own: caller; free=intsetFree */
+    intset *out = is;
+    is = NULL;
+    return out;
 }
 
 static size_t intsetPersistCount(const void *structure) {
@@ -2305,11 +2311,17 @@ static void intsetPersistFree(void *structure) {
     intsetFree(structure);
 }
 
+static void *intsetPersistNewEmpty(void) {
+    /* @own: caller; free=intsetFree */
+    return intsetNew();
+}
+
 const persistOps persistOpsIntset = {
     .type = PERSIST_TYPE_INTSET,
     .name = "intset",
     .snapshot = intsetPersistSnapshot,
     .restore = intsetPersistRestore,
+    .newEmpty = intsetPersistNewEmpty,
     .count = intsetPersistCount,
     .estimateSize = intsetPersistEstimateSize,
     .encodeOp = intsetPersistEncodeOp,

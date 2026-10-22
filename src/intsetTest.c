@@ -1381,5 +1381,58 @@ int intsetTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("iterator and Get agree with a sorted oracle in every tier") {
+        /* Values of every width and sign; the iterator yields exactly the
+         * sorted distinct values and Get(i) is the i-th of them */
+        static const int64_t scale[] = {1, 100000, INT64_C(10000000000)};
+        for (size_t tier = 0; tier < 3; tier++) {
+            cleaner(intsetFree) intset *is = intsetNew();
+            cleanerName(zfree, I64) int64_t *want =
+                zcalloc(600, sizeof(int64_t));
+            size_t n = 0;
+            uint64_t rng = 0x1d5e7 + tier;
+            for (int i = 0; i < 600; i++) {
+                rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+                const size_t width = (rng >> 33) % (tier + 1);
+                const int64_t v =
+                    ((int64_t)((rng >> 40) % 4000) - 2000) * scale[width];
+                bool added;
+                intsetAdd(&is, v, &added);
+                if (added) {
+                    size_t at = n++;
+                    while (at > 0 && want[at - 1] > v) {
+                        want[at] = want[at - 1];
+                        at--;
+                    }
+                    want[at] = v;
+                }
+            }
+
+            intsetIterator it;
+            intsetIteratorInit(&it, is);
+            int64_t got;
+            size_t seen = 0;
+            while (intsetIteratorNext(&it, &got)) {
+                if (seen >= n || got != want[seen]) {
+                    ERR("tier %zu: iterator value %zu wrong", tier, seen);
+                    break;
+                }
+                seen++;
+            }
+            if (seen != n || intsetCount(is) != n) {
+                ERR("tier %zu: iterated %zu of %zu", tier, seen, n);
+            }
+            for (size_t i = 0; i < n; i++) {
+                if (!intsetGet(is, (uint32_t)i, &got) || got != want[i]) {
+                    ERR("tier %zu: Get(%zu) wrong", tier, i);
+                    break;
+                }
+            }
+            if (intsetGet(is, (uint32_t)n, &got)) {
+                ERR("tier %zu: Get past the end succeeded", tier);
+            }
+        }
+    }
+
     TEST_FINAL_RESULT;
 }

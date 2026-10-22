@@ -22,11 +22,13 @@ defcleanerName(uint8_t *, zfree, Bytes);
 extern const persistContractType persistContractFlex;
 extern const persistContractType persistContractMultimap;
 extern const persistContractType persistContractMultiroar;
+extern const persistContractType persistContractIntset;
 
 static const persistContractType *const pcRegistry[] = {
     &persistContractFlex,
     &persistContractMultimap,
     &persistContractMultiroar,
+    &persistContractIntset,
 };
 
 /* ====================================================================
