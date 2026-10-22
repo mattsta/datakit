@@ -221,12 +221,18 @@ _Static_assert(offsetof(databoxBig, extra) == sizeof(databox),
  * 'big' bits turn into a write through a stale pointer.  Library-filled
  * results and library temporaries always carry their own wide storage.
  *
- * DATABOX_BIG_INIT aims the pointer at dbig->extra and sets big = 1.  It
- * leaves every other field as it was.  A narrow decode overwrites the
- * pointer, so re-run it before each decode into the same box. */
+ * DATABOX_BIG_INIT aims the pointer at dbig->extra, sets big = 1 and
+ * clears 'allocated': storage the box holds in its own 'extra' is owned
+ * by nobody, so databoxFreeData leaves it alone.  It leaves every other
+ * field as it was.  A narrow decode overwrites the pointer, so re-run it
+ * before each decode into the same box.
+ *
+ * Ownership is the 'allocated' bit alone: a wide box with allocated = 1
+ * owns a heap payload, whatever its address. */
 #define DATABOX_BIG_INIT(dbig)                                                 \
     do {                                                                       \
         (dbig)->big = true;                                                    \
+        (dbig)->allocated = false;                                             \
         (dbig)->data.u128 = (__uint128_t *)(dbig)->extra;                      \
     } while (0)
 

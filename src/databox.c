@@ -383,14 +383,13 @@ void databoxFreeData(databox *box) {
                 box->allocated = false;
                 box->type = DATABOX_VOID;
             } else if (databoxIsWide_(box)) {
-                /* A databoxBig whose pointer is aimed at its own 'extra'
-                 * holds the value inline; DATABOX_BIG_INIT does not clear
-                 * 'allocated', so that flag may be stale here. */
-                if (box->data.ptr == (void *)((uint8_t *)box + sizeof(*box))) {
-                    return;
-                }
-
-                /* The payload is gone, so the pointer is no longer live. */
+                /* 'allocated' alone says the payload is the box's to
+                 * free: DATABOX_BIG_INIT clears it for a value held in
+                 * 'extra'.  An address test ("data.ptr is just past the
+                 * box") cannot tell a databoxBig's inline value from a
+                 * plain box whose heap payload happens to follow it in
+                 * memory, as a one-entry rangeBox array and its 16-byte
+                 * payload can, so it would leak that payload. */
                 zfree(box->data.ptr);
                 box->data.ptr = NULL;
                 box->allocated = false;
@@ -1727,6 +1726,16 @@ static int dbOrderCompare_(const dbOrderValue_ *a, const dbOrderValue_ *b) {
     }
 
     return a->negative ? -cmp : cmp;
+}
+
+/* A free hook that records what it is asked to free and frees nothing,
+ * so a test can hand databoxFreeData a pointer it does not own and see
+ * whether the free is attempted */
+static const void *dbFreeRecorded_;
+static size_t dbFreeCalls_;
+static void dbFreeRecord_(void *ptr) {
+    dbFreeRecorded_ = ptr;
+    dbFreeCalls_ += ptr != NULL;
 }
 
 int databoxTest(int argc, char *argv[]) {
@@ -4065,6 +4074,49 @@ int databoxTest(int argc, char *argv[]) {
 
         if (tally.narrow == 0 || tally.wide == 0 || tally.reals == 0) {
             ERRR("the first-byte sweep reached no numeral");
+        }
+    }
+
+    TEST("databoxFreeData: a wide payload is freed by 'allocated', never by "
+         "address") {
+        datakitConfig saved = datakitConfigMemory__;
+        datakitConfig recording = saved;
+        recording.localFree = dbFreeRecord_;
+
+        /* An array of two plain boxes: [0] owns a "payload" that sits
+         * exactly where a databoxBig would keep its inline value, as a
+         * one-entry rangeBox array and a heap payload allocated next to
+         * it can.  The free must still happen. */
+        databox pair[2];
+        memset(pair, 0, sizeof(pair));
+        pair[0].type = DATABOX_UNSIGNED_128;
+        pair[0].big = true;
+        pair[0].allocated = true;
+        pair[0].data.ptr = &pair[1];
+
+        dbFreeRecorded_ = NULL;
+        dbFreeCalls_ = 0;
+        datakitConfigSet(&recording);
+        databoxFreeData(&pair[0]);
+        datakitConfigSet(&saved);
+        if (dbFreeCalls_ != 1 || dbFreeRecorded_ != (const void *)&pair[1] ||
+            pair[0].allocated || pair[0].data.ptr) {
+            ERRR("an owned wide payload next to its box was not freed");
+        }
+
+        /* DATABOX_BIG_INIT over stale bits owns nothing: freeing the box
+         * leaves its inline value alone. */
+        databoxBig armed;
+        memset(&armed, 0xFF, sizeof(armed));
+        DATABOX_BIG_INIT(&armed);
+        armed.type = DATABOX_SIGNED_128;
+        dbFreeCalls_ = 0;
+        datakitConfigSet(&recording);
+        databoxFreeData((databox *)&armed);
+        datakitConfigSet(&saved);
+        if (armed.allocated || dbFreeCalls_ != 0 ||
+            armed.data.ptr != (void *)armed.extra) {
+            ERRR("DATABOX_BIG_INIT left the box claiming its inline value");
         }
     }
 
