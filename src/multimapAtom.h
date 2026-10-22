@@ -1,5 +1,33 @@
 #pragma once
 
+/* multimapAtom: a reference-counted atom table (interning).  Each distinct
+ * value is stored once and named by a small integer id, handed out as a
+ * DATABOX_CONTAINER_REFERENCE_EXTERNAL box (a "ref").  Two multimaps hold
+ * it: forward {id -> value, refcount} sorted by id, and reverse {id}
+ * sorted by value, so value -> id and id -> value are both O(log n).
+ *
+ * REFERENCES
+ * - An Insert creates the atom with one reference.  Retain adds one;
+ *   Release drops one and deletes the atom when the last one goes (and
+ *   returns true then).  Delete removes an atom whatever its count.
+ * - The count is stored 0-based (0 = one reference), so it costs one byte
+ *   while it is a single reference.  LookupRefcount and LookupResult
+ *   report that stored 0-based count; add 1 for the number of references.
+ *
+ * IDS
+ * - Generated ids (Insert*Convert, Retain of a new value) count up from 0
+ *   and always continue past every id InsertWithExactAtomID has bound, so
+ *   a generated id is never one already in use.  InsertWithExactAtomID
+ *   binds the caller's id, replacing any earlier binding of that id or of
+ *   that value.
+ * - An id is valid while its atom exists.  Once the atom is deleted (by
+ *   the last Release or by a Delete) its id is not reused while the table
+ *   holds anything, but when the table empties, by any call, ids restart
+ *   at 0 to stay small.  So a caller must not keep a bare id past the
+ *   point where its own references are released, or across a point where
+ *   the table can empty and refill: it may then name a later, unrelated
+ *   value.  Hold a reference (Retain) for as long as the id is kept. */
+
 #include "mflex.h"
 #include "multimap.h"
 

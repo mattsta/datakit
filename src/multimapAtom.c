@@ -98,6 +98,8 @@ void multimapAtomInsertConvert(multimapAtom *ma, databox *box) {
  * ==================================================================== */
 /* Exact-key atom maps *don't* have refcounts. It's basically a fancy
  * inverted index. */
+/* Generated ids continue past every exact id, so an InsertConvert after
+ * an exact insert never hands out an id that is already bound. */
 void multimapAtomInsertWithExactAtomID(multimapAtom *ma, const uint64_t atomRef,
                                        const databox *reverseKey) {
     const databox atomId = {.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL,
@@ -126,6 +128,11 @@ void multimapAtomInsertWithExactAtomID(multimapAtom *ma, const uint64_t atomRef,
     multimapInsert(&ma->mapAtomForward, elements);
     multimapInsertWithSurrogateKey(&ma->mapAtomReverse, &reverseKey, &atomId,
                                    ma);
+
+    /* After the deletes above, which restart ids when they empty the table */
+    if (atomRef >= ma->highest && atomRef < UINT64_MAX) {
+        ma->highest = atomRef + 1;
+    }
 }
 
 /* ====================================================================
@@ -313,8 +320,42 @@ void multimapAtomRetainConvert(multimapAtom *ma, databox *key) {
 /* ====================================================================
  * Un-use
  * ==================================================================== */
+/* An empty table restarts ids at 0 so they stay small (fewer
+ * external-reference storage bytes), whichever call emptied it.
+ *
+ * CONTRACT: a full drain to empty invalidates every atom id/ref
+ * previously handed out.  A caller MUST NOT cache a bare id/ref across a
+ * point where the table can empty and refill, or it may resolve to an
+ * unrelated later entry (ids are reused from 0).  Re-resolve refs instead
+ * of holding them across that boundary. */
+static void atomRestartIdsIfEmpty(multimapAtom *ma) {
+    if (multimapCount(ma->mapAtomForward) == 0) {
+        ma->highest = 0;
+    }
+}
+
+/* Remove the atom 'key' <-> 'ref' from both maps, when the caller already
+ * knows both (saves the forward lookup DeleteByRef needs to find the key) */
+static void atomDeleteKnown(multimapAtom *ma, const databox *key,
+                            const databox *ref) {
+    databox found = {{0}};
+    const bool deleteReverse =
+        multimapDeleteWithReference(&ma->mapAtomReverse, key, ma, &found);
+    assert(deleteReverse && found.data.u == ref->data.u);
+    (void)deleteReverse;
+
+    const bool deleteForward = multimapDelete(&ma->mapAtomForward, ref);
+    assert(deleteForward);
+    (void)deleteForward;
+
+    atomRestartIdsIfEmpty(ma);
+}
+
+/* Drop one reference to 'foundRef'; delete the atom when it was the last.
+ * 'key', when non-NULL, is the atom's value, already known to the caller. */
 DK_INLINE_ALWAYS bool conformRefcountDecr(multimapAtom *ma,
-                                          const databox *foundRef) {
+                                          const databox *foundRef,
+                                          const databox *key) {
     /* Decrement refcount first, then delete if it goes negative.
      * We use 0-based internal refcounts for memory efficiency:
      * Internal 0 = 1 ref, 1 = 2 refs, etc. (DATABOX_FALSE = 1 byte vs 3 bytes)
@@ -324,30 +365,12 @@ DK_INLINE_ALWAYS bool conformRefcountDecr(multimapAtom *ma,
 
     /* Internal 0-based: goes negative when last reference released */
     if (checkedOut < 0) {
-        const bool deleted = multimapAtomDeleteByRef(ma, foundRef);
-        assert(deleted);
-        (void)deleted;
-
-#if 0
-        assert(multimapCount(ma->mapAtomForward) ==
-               multimapCount(ma->mapAtomReverse));
-#endif
-
-        /* Potential optimization: we could track _total_ checkouts and _total_
-         * releases in our local multimapAtom struct to avoid this call out to
-         * multimapCount() */
-        if (multimapCount(ma->mapAtomForward) == 0) {
-            /* With zero elements, reset the atom counter so ids stay
-             * small (fewer external-reference storage bytes) - this
-             * compactness is the point of the atom table.
-             *
-             * CONTRACT: a full drain to empty invalidates every atom
-             * id/ref previously handed out. A caller MUST NOT cache a
-             * bare id/ref across a point where the table can empty and
-             * refill, or it may resolve to an unrelated later entry
-             * (ids are reused from 0). Re-resolve refs instead of
-             * holding them across that boundary. */
-            ma->highest = 0;
+        if (key) {
+            atomDeleteKnown(ma, key, foundRef);
+        } else {
+            const bool deleted = multimapAtomDeleteByRef(ma, foundRef);
+            assert(deleted);
+            (void)deleted;
         }
 
         return true;
@@ -357,13 +380,13 @@ DK_INLINE_ALWAYS bool conformRefcountDecr(multimapAtom *ma,
 }
 
 bool multimapAtomReleaseById(multimapAtom *ma, const databox *foundRef) {
-    return conformRefcountDecr(ma, foundRef);
+    return conformRefcountDecr(ma, foundRef, NULL);
 }
 
 bool multimapAtomRelease(multimapAtom *ma, const databox *key) {
     databox foundRef = {{0}};
     if (multimapExistsWithReference(ma->mapAtomReverse, key, &foundRef, ma)) {
-        return conformRefcountDecr(ma, &foundRef);
+        return conformRefcountDecr(ma, &foundRef, key);
     }
 
     /* else, releasing something we don't have is an error */
@@ -372,32 +395,20 @@ bool multimapAtomRelease(multimapAtom *ma, const databox *key) {
 }
 
 bool multimapAtomDelete(multimapAtom *ma, const databox *key) {
-    databox atomRef = {{0}};
-
-    if (multimapExistsWithReference(ma->mapAtomReverse, key, &atomRef, ma)) {
-        databox foundReference = {{0}};
-        const bool del1 = multimapDeleteWithReference(&ma->mapAtomReverse, key,
-                                                      ma, &foundReference);
-        const bool del2 = multimapDelete(&ma->mapAtomForward, &foundReference);
-        assert(del1);
-        assert(del2);
-#if 0
-        databox kkey;
-        databox count;
-
-        databox *gots[2] = {&kkey, &count};
-
-        assert(!multimapExistsWithReference(ma->mapAtomReverse, key,
-                                            &foundReference, ma));
-        assert(!multimapLookup(ma->mapAtomForward, &foundReference, gots));
-#endif
-        (void)del1;
-        (void)del2;
-
-        return true;
+    /* One reverse search: the delete itself reports the atom's id */
+    databox foundReference = {{0}};
+    if (!multimapDeleteWithReference(&ma->mapAtomReverse, key, ma,
+                                     &foundReference)) {
+        return false;
     }
 
-    return false;
+    const bool deleteForward =
+        multimapDelete(&ma->mapAtomForward, &foundReference);
+    assert(deleteForward);
+    (void)deleteForward;
+
+    atomRestartIdsIfEmpty(ma);
+    return true;
 }
 
 bool multimapAtomDeleteByRef(multimapAtom *ma, const databox *ref) {
@@ -436,6 +447,7 @@ bool multimapAtomDeleteByRef(multimapAtom *ma, const databox *ref) {
         assert(deleteForward);
         (void)deleteForward;
 
+        atomRestartIdsIfEmpty(ma);
         return true;
     }
 
@@ -1888,6 +1900,117 @@ int multimapAtomTest(int argc, char *argv[]) {
 
             multimapAtomFree(ma);
         }
+    }
+
+    TEST("generated ids never collide with exact ids") {
+        multimapAtom *ma = multimapAtomNew();
+        const databox exactKey = databoxNewSigned(500);
+        multimapAtomInsertWithExactAtomID(ma, 5, &exactKey);
+
+        databox gen = databoxNewSigned(600);
+        multimapAtomInsertConvert(ma, &gen);
+        if (gen.data.u <= 5) {
+            ERR("generated id %" PRIu64 " reuses the exact-id range",
+                (uint64_t)gen.data.u);
+        }
+
+        const databox exactRef = {.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL,
+                                  .data.u = 5};
+        databox found = {{0}};
+        if (multimapCount(ma->mapAtomForward) != 2 ||
+            !multimapAtomLookup(ma, &exactRef, &found) ||
+            databoxCompare(&found, &exactKey) != 0 ||
+            !multimapAtomLookup(ma, &gen, &found) || found.data.i != 600) {
+            ERRR("an exact id and a generated id do not resolve separately");
+        }
+
+        multimapAtomFree(ma);
+    }
+
+    TEST("every way of emptying the table restarts ids at 0") {
+        /* Release, Delete, DeleteByRef and DeleteById each empty it */
+        for (int how = 0; how < 4; how++) {
+            multimapAtom *ma = multimapAtomNew();
+            databox a = databoxNewSigned(1);
+            databox b = databoxNewSigned(2);
+            const databox aKey = a;
+            const databox bKey = b;
+            multimapAtomInsertConvert(ma, &a);
+            multimapAtomInsertConvert(ma, &b);
+
+            bool ok = true;
+            switch (how) {
+            case 0:
+                ok = multimapAtomRelease(ma, &aKey) &&
+                     multimapAtomRelease(ma, &bKey);
+                break;
+            case 1:
+                ok = multimapAtomDelete(ma, &aKey) &&
+                     multimapAtomDelete(ma, &bKey);
+                break;
+            case 2:
+                ok = multimapAtomDeleteByRef(ma, &a) &&
+                     multimapAtomDeleteByRef(ma, &b);
+                break;
+            default:
+                ok = multimapAtomDeleteById(ma, a.data.u) &&
+                     multimapAtomDeleteById(ma, b.data.u);
+                break;
+            }
+
+            databox ref = {{0}};
+            if (!ok || multimapAtomCount(ma) != 0 ||
+                multimapCount(ma->mapAtomReverse) != 0 ||
+                multimapAtomLookupReference(ma, &aKey, &ref) ||
+                multimapAtomLookupReference(ma, &bKey, &ref)) {
+                ERR("way %d: the table did not empty on both sides", how);
+            }
+
+            databox c = databoxNewSigned(3);
+            multimapAtomInsertConvert(ma, &c);
+            if (c.data.u != 0) {
+                ERR("way %d: first id after emptying is %" PRIu64 ", want 0",
+                    how, (uint64_t)c.data.u);
+            }
+
+            multimapAtomFree(ma);
+        }
+    }
+
+    TEST("Delete and Release by key remove both rows; misses change nothing") {
+        multimapAtom *ma = multimapAtomNew();
+        databox keep = databoxNewSigned(10);
+        databox gone = databoxNewSigned(20);
+        const databox keepKey = keep;
+        const databox goneKey = gone;
+        const databox missing = databoxNewSigned(30);
+        multimapAtomInsertConvert(ma, &keep);
+        multimapAtomInsertConvert(ma, &gone);
+        multimapAtomRetain(ma, &goneKey); /* two references */
+
+        if (multimapAtomDelete(ma, &missing) || multimapAtomCount(ma) != 2) {
+            ERRR("deleting a missing key changed the table");
+        }
+
+        if (multimapAtomRelease(ma, &goneKey) || multimapAtomCount(ma) != 2) {
+            ERRR("releasing one of two references removed the atom");
+        }
+
+        databox ref = {{0}};
+        if (!multimapAtomRelease(ma, &goneKey) || multimapAtomCount(ma) != 1 ||
+            multimapCount(ma->mapAtomReverse) != 1 ||
+            multimapAtomLookupReference(ma, &goneKey, &ref)) {
+            ERRR("the last release did not remove both rows");
+        }
+
+        databox found = {{0}};
+        if (!multimapAtomLookup(ma, &keep, &found) || found.data.i != 10 ||
+            !multimapAtomDelete(ma, &keepKey) || multimapAtomCount(ma) != 0 ||
+            multimapCount(ma->mapAtomReverse) != 0) {
+            ERRR("Delete by key did not remove both rows of a live atom");
+        }
+
+        multimapAtomFree(ma);
     }
 
     TEST_FINAL_RESULT;

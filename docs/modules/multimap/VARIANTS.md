@@ -559,8 +559,9 @@ interned** and false when it created a new entry. It also sets the box's
 
 Refcounts are stored 0-based so that a single-reference entry costs one byte:
 internal 0 means one outstanding reference, internal 1 means two, and so on.
-`multimapAtomLookupRefcount()` / `multimapAtomLookupResult()` report the
-adjusted, human-facing count.
+`multimapAtomLookupRefcount()` / `multimapAtomLookupResult()` report that
+stored 0-based count (a single reference may come back as `DATABOX_FALSE`);
+add 1 for the number of references.
 
 ```c
 multimapAtomRetain(atoms, &helloKey);   /* one more reference */
@@ -572,10 +573,16 @@ bool gone = multimapAtomRelease(atoms, &helloKey);
 
 Releasing a string that is not in the table is a programming error and asserts.
 
-> **ID reuse contract**: when the table drains to empty, the ID counter resets
-> to 0. Any reference handed out before that point may resolve to an unrelated
-> later entry. Do not cache bare atom IDs across a boundary where the table can
-> empty and refill; re-resolve them instead.
+`multimapAtomDelete()` removes an atom whatever its count.
+
+> **ID contract**: generated IDs count up from 0 and always continue past every
+> ID bound by `multimapAtomInsertWithExactAtomID()`, so a generated ID is never
+> one in use. A deleted atom's ID is not reused while the table holds anything,
+> but when the table empties, by any call (the last Release, or a Delete), the
+> ID counter restarts at 0 to keep IDs small. Any reference handed out before
+> that point may then resolve to an unrelated later entry. Keep an ID only
+> while you hold a reference to it, and never across a point where the table
+> can empty and refill; re-resolve it instead.
 
 ### Using an Atom Container With a multimap
 
