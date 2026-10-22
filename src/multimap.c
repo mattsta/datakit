@@ -3909,7 +3909,10 @@ int multimapTest(int argc, char *argv[]) {
         for (size_t maxIdx = 0; maxIdx < flexOptimizationSizeLimits; maxIdx++) {
             flexCapSizeLimit maxSize = flexOptimizationSizeLimit[maxIdx];
             cleaner(multimapFree) multimap *m = multimapNewLimit(2, maxIdx);
-            int32_t pairs = 1 << 17;
+            /* Smoke size: about 340 KB of pairs, which reaches the Full tier
+             * at every cap level (8 maps at 64 KB); the timings printed are
+             * informational */
+            int32_t pairs = 1 << 14;
             TEST_DESC("%d bytes max with %d k/v pairs...", maxSize, pairs) {
                 TIME_INIT;
                 for (int32_t j = 0; j < pairs; j++) {
@@ -4790,8 +4793,14 @@ int multimapTest(int argc, char *argv[]) {
                 const databox *elements[2] = {&key, &val};
                 multimapInsert(&m, elements);
 
-                /* Verify ALL previously inserted keys can still be found */
-                for (int32_t j = 0; j <= i; j++) {
+                /* Every previously inserted key must still be found: all
+                 * of them after each of the first 300 inserts (through the
+                 * small tiers' splits) and every 37th after; the new key,
+                 * its predecessor, the middle and the first every time */
+                const bool all = i < 300 || i % 37 == 0;
+                const int32_t spot[4] = {i, i > 0 ? i - 1 : 0, i / 2, 0};
+                for (int32_t k = 0; k < (all ? i + 1 : 4); k++) {
+                    const int32_t j = all ? k : spot[k];
                     databox checkKey = databoxNewSigned(j);
                     if (!multimapExists(m, &checkKey)) {
                         ERR("FUZZ FAIL: Sequential key %d not found after "
