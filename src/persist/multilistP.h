@@ -67,33 +67,33 @@ size_t multilistBytesP(const multilistP *ml);
  * ============================================================================
  */
 
-/* Push to head - automatically persisted */
-void multilistPushHeadP(multilistP *ml, const databox *box);
+/* Every mutation logs first and applies exactly when the result is not
+ * PERSIST_LOG_REFUSED (see persistLogResult).  One that would change
+ * nothing (popping an empty list, a range that deletes nothing) is
+ * PERSIST_LOG_UNCHANGED and logs nothing. */
 
-/* Push to tail - automatically persisted */
-void multilistPushTailP(multilistP *ml, const databox *box);
+/* Push to head / tail */
+persistLogResult multilistPushHeadP(multilistP *ml, const databox *box);
+persistLogResult multilistPushTailP(multilistP *ml, const databox *box);
 
-/* Pop from head - automatically persisted.  *got receives an owned copy
- * of the removed element; 'got' must be zeroed or a DATABOX_BIG_INIT'd
+/* Pop from head / tail.  When an element is popped, *got receives an
+ * owned copy of it; 'got' must be zeroed or a DATABOX_BIG_INIT'd
  * databoxBig, and the result is released with databoxFreeData (see
- * multilistPop in multilist.h).  The same holds for multilistPopTailP. */
-bool multilistPopHeadP(multilistP *ml, databox *got);
+ * multilistPop in multilist.h). */
+persistLogResult multilistPopHeadP(multilistP *ml, databox *got);
+persistLogResult multilistPopTailP(multilistP *ml, databox *got);
 
-/* Pop from tail - automatically persisted */
-bool multilistPopTailP(multilistP *ml, databox *got);
+/* Delete range: values <= 0, an empty list or a start outside the list
+ * deletes nothing (UNCHANGED) */
+persistLogResult multilistDelRangeP(multilistP *ml, mlOffsetId start,
+                                    int64_t values);
 
-/* Delete range - automatically persisted.  A range that would delete
- * nothing (values <= 0, an empty list, or a start outside the list)
- * returns false and is not logged. */
-bool multilistDelRangeP(multilistP *ml, mlOffsetId start, int64_t values);
+/* Replace at index: an index outside the list is REFUSED */
+persistLogResult multilistReplaceAtIndexP(multilistP *ml, mlOffsetId index,
+                                          const databox *box);
 
-/* Replace at index - automatically persisted.  An index outside the list
- * returns false and is not logged. */
-bool multilistReplaceAtIndexP(multilistP *ml, mlOffsetId index,
-                              const databox *box);
-
-/* Reset (clear all entries) - automatically persisted */
-void multilistResetP(multilistP *ml);
+/* Reset (clear all entries) */
+persistLogResult multilistResetP(multilistP *ml);
 
 /* ============================================================================
  * Lookups (read-only, no persistence needed)

@@ -150,164 +150,128 @@ size_t multilistBytesP(const multilistP *ml) {
  * ============================================================================
  */
 
-void multilistPushHeadP(multilistP *ml, const databox *box) {
-    if (!ml || !ml->ml || !ml->ctx || !box) {
-        return;
-    }
-
-    /* Log to WAL first */
-    if (!persistCtxLogOp(ml->ctx, PERSIST_OP_PUSH_HEAD, box, 1)) {
-        return;
-    }
-
-    /* Update in-memory */
-    multilistPushByTypeHead(&ml->ml, ml->state, box);
-
-    /* Check compaction threshold */
-    persistCtxMaybeCompact(ml->ctx, ml->ml, &persistOpsMultilist);
+static bool multilistLoggableP(const multilistP *ml) {
+    return ml && ml->ml && ml->ctx;
 }
 
-void multilistPushTailP(multilistP *ml, const databox *box) {
-    if (!ml || !ml->ml || !ml->ctx || !box) {
-        return;
+static persistLogResult multilistPushP(multilistP *ml, const databox *box,
+                                       bool tail) {
+    if (!multilistLoggableP(ml) || !box) {
+        return PERSIST_LOG_REFUSED;
     }
 
-    /* Log to WAL first */
-    if (!persistCtxLogOp(ml->ctx, PERSIST_OP_PUSH_TAIL, box, 1)) {
-        return;
+    const persistLogResult logged = persistCtxLogOp(
+        ml->ctx, tail ? PERSIST_OP_PUSH_TAIL : PERSIST_OP_PUSH_HEAD, box, 1);
+    if (logged == PERSIST_LOG_REFUSED) {
+        return logged;
     }
-
-    /* Update in-memory */
-    multilistPushByTypeTail(&ml->ml, ml->state, box);
-
-    /* Check compaction threshold */
+    if (tail) {
+        multilistPushByTypeTail(&ml->ml, ml->state, box);
+    } else {
+        multilistPushByTypeHead(&ml->ml, ml->state, box);
+    }
     persistCtxMaybeCompact(ml->ctx, ml->ml, &persistOpsMultilist);
+    return logged;
 }
 
-bool multilistPopHeadP(multilistP *ml, databox *got) {
-    if (!ml || !ml->ml || !ml->ctx) {
-        return false;
-    }
+persistLogResult multilistPushHeadP(multilistP *ml, const databox *box) {
+    return multilistPushP(ml, box, false);
+}
 
-    /* Check if there's anything to pop */
+persistLogResult multilistPushTailP(multilistP *ml, const databox *box) {
+    return multilistPushP(ml, box, true);
+}
+
+static persistLogResult multilistPopP(multilistP *ml, databox *got, bool tail) {
+    if (!multilistLoggableP(ml)) {
+        return PERSIST_LOG_REFUSED;
+    }
     if (multilistCount(ml->ml) == 0) {
-        return false;
+        return PERSIST_LOG_UNCHANGED;
     }
 
-    /* Log to WAL first */
-    if (!persistCtxLogOp(ml->ctx, PERSIST_OP_POP_HEAD, NULL, 0)) {
-        return false;
+    const persistLogResult logged = persistCtxLogOp(
+        ml->ctx, tail ? PERSIST_OP_POP_TAIL : PERSIST_OP_POP_HEAD, NULL, 0);
+    if (logged == PERSIST_LOG_REFUSED) {
+        return logged;
     }
-
-    /* Update in-memory */
-    bool result = multilistPop(&ml->ml, ml->state, got, false);
-
-    /* Check compaction threshold */
+    multilistPop(&ml->ml, ml->state, got, tail);
     persistCtxMaybeCompact(ml->ctx, ml->ml, &persistOpsMultilist);
-
-    return result;
+    return logged;
 }
 
-bool multilistPopTailP(multilistP *ml, databox *got) {
-    if (!ml || !ml->ml || !ml->ctx) {
-        return false;
-    }
-
-    /* Check if there's anything to pop */
-    if (multilistCount(ml->ml) == 0) {
-        return false;
-    }
-
-    /* Log to WAL first */
-    if (!persistCtxLogOp(ml->ctx, PERSIST_OP_POP_TAIL, NULL, 0)) {
-        return false;
-    }
-
-    /* Update in-memory */
-    bool result = multilistPop(&ml->ml, ml->state, got, true);
-
-    /* Check compaction threshold */
-    persistCtxMaybeCompact(ml->ctx, ml->ml, &persistOpsMultilist);
-
-    return result;
+persistLogResult multilistPopHeadP(multilistP *ml, databox *got) {
+    return multilistPopP(ml, got, false);
 }
 
-bool multilistDelRangeP(multilistP *ml, mlOffsetId start, int64_t values) {
-    if (!ml || !ml->ml || !ml->ctx) {
-        return false;
+persistLogResult multilistPopTailP(multilistP *ml, databox *got) {
+    return multilistPopP(ml, got, true);
+}
+
+persistLogResult multilistDelRangeP(multilistP *ml, mlOffsetId start,
+                                    int64_t values) {
+    if (!multilistLoggableP(ml)) {
+        return PERSIST_LOG_REFUSED;
     }
 
-    /* A range that deletes nothing is refused before it is logged, so
-     * the WAL only holds operations that change the list. */
+    /* A range that deletes nothing logs nothing, so the WAL only holds
+     * operations that change the list */
     const mlOffsetId count = (mlOffsetId)multilistCount(ml->ml);
     if (values <= 0 || start >= count || start < -count) {
-        return false;
+        return PERSIST_LOG_UNCHANGED;
     }
 
-    /* Encode start and values as databoxes for WAL */
     const databox startBox = DATABOX_SIGNED(start);
     const databox valuesBox = DATABOX_SIGNED(values);
     const databox *args[] = {&startBox, &valuesBox};
-
-    /* Log to WAL first */
-    if (!persistCtxLogOp(ml->ctx, PERSIST_OP_DELETE_AT, args, 2)) {
-        return false;
+    const persistLogResult logged =
+        persistCtxLogOp(ml->ctx, PERSIST_OP_DELETE_AT, args, 2);
+    if (logged == PERSIST_LOG_REFUSED) {
+        return logged;
     }
-
-    /* Update in-memory */
-    bool result = multilistDelRange(&ml->ml, ml->state, start, values);
-
-    /* Check compaction threshold */
+    multilistDelRange(&ml->ml, ml->state, start, values);
     persistCtxMaybeCompact(ml->ctx, ml->ml, &persistOpsMultilist);
-
-    return result;
+    return logged;
 }
 
-bool multilistReplaceAtIndexP(multilistP *ml, mlOffsetId index,
-                              const databox *box) {
-    if (!ml || !ml->ml || !ml->ctx || !box) {
-        return false;
+persistLogResult multilistReplaceAtIndexP(multilistP *ml, mlOffsetId index,
+                                          const databox *box) {
+    if (!multilistLoggableP(ml) || !box) {
+        return PERSIST_LOG_REFUSED;
     }
 
-    /* An index outside the list is refused before it is logged. */
+    /* An index outside the list is refused before it is logged */
     const mlOffsetId count = (mlOffsetId)multilistCount(ml->ml);
     if (index >= count || index < -count) {
-        return false;
+        return PERSIST_LOG_REFUSED;
     }
 
-    /* Encode index and value for WAL */
     const databox indexBox = DATABOX_SIGNED(index);
     const databox *args[] = {&indexBox, box};
-
-    /* Log to WAL first */
-    if (!persistCtxLogOp(ml->ctx, PERSIST_OP_REPLACE, args, 2)) {
-        return false;
+    const persistLogResult logged =
+        persistCtxLogOp(ml->ctx, PERSIST_OP_REPLACE, args, 2);
+    if (logged == PERSIST_LOG_REFUSED) {
+        return logged;
     }
-
-    /* Update in-memory */
-    bool result = multilistReplaceByTypeAtIndex(&ml->ml, ml->state, index, box);
-
-    /* Check compaction threshold */
+    multilistReplaceByTypeAtIndex(&ml->ml, ml->state, index, box);
     persistCtxMaybeCompact(ml->ctx, ml->ml, &persistOpsMultilist);
-
-    return result;
+    return logged;
 }
 
-void multilistResetP(multilistP *ml) {
-    if (!ml || !ml->ml || !ml->ctx) {
-        return;
+persistLogResult multilistResetP(multilistP *ml) {
+    if (!multilistLoggableP(ml)) {
+        return PERSIST_LOG_REFUSED;
     }
 
-    /* Log to WAL first */
-    if (!persistCtxLogOp(ml->ctx, PERSIST_OP_CLEAR, NULL, 0)) {
-        return;
+    const persistLogResult logged =
+        persistCtxLogOp(ml->ctx, PERSIST_OP_CLEAR, NULL, 0);
+    if (logged == PERSIST_LOG_REFUSED) {
+        return logged;
     }
-
-    /* Update in-memory: empty, keeping the configuration */
+    /* Empty, keeping the configuration */
     multilistReset(&ml->ml);
-
-    /* Check compaction threshold */
     persistCtxMaybeCompact(ml->ctx, ml->ml, &persistOpsMultilist);
+    return logged;
 }
 
 /* ============================================================================
@@ -1121,8 +1085,10 @@ int multilistPTest(int argc, char *argv[]) {
             multilistP *ml = multilistNewP(ctx, FLEX_CAP_LEVEL_2048, 0);
             const databox rep = DATABOX_SIGNED(-77);
 
-            /* Empty list first */
-            if (multilistDelRangeP(ml, 0, 1) || multilistDelRangeP(ml, -1, 1) ||
+            /* Empty list first: deletes change nothing, replaces have no
+             * element to replace */
+            if (multilistDelRangeP(ml, 0, 1) != PERSIST_LOG_UNCHANGED ||
+                multilistDelRangeP(ml, -1, 1) != PERSIST_LOG_UNCHANGED ||
                 multilistReplaceAtIndexP(ml, 0, &rep) ||
                 multilistReplaceAtIndexP(ml, -1, &rep)) {
                 ERRR("an empty list accepted a delete or a replace");
@@ -1148,7 +1114,8 @@ int multilistPTest(int argc, char *argv[]) {
                          {(mlOffsetId)1 << 32, 1},
                          {-1, 0}};
             for (size_t k = 0; k < sizeof(noops) / sizeof(*noops); k++) {
-                if (multilistDelRangeP(ml, noops[k].start, noops[k].values)) {
+                if (multilistDelRangeP(ml, noops[k].start, noops[k].values) !=
+                    PERSIST_LOG_UNCHANGED) {
                     ERR("DelRangeP(%" PRId64 ", %" PRId64 ") was accepted",
                         noops[k].start, noops[k].values);
                 }

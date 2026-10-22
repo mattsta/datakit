@@ -119,69 +119,65 @@ size_t multiOrderedSetBytesP(const multiOrderedSetP *mos) {
  * ============================================================================
  */
 
-bool multiOrderedSetAddP(multiOrderedSetP *mos, const databox *score,
-                         const databox *member) {
+persistLogResult multiOrderedSetAddP(multiOrderedSetP *mos,
+                                     const databox *score,
+                                     const databox *member, bool *updated) {
+    if (updated) {
+        *updated = false;
+    }
     if (!mos || !mos->ctx || !score || !member) {
-        return false;
+        return PERSIST_LOG_REFUSED;
     }
 
-    /* Log to WAL first */
     const databox *args[2] = {score, member};
-    if (!persistCtxLogOp(mos->ctx, PERSIST_OP_INSERT, args, 2)) {
-        return false;
+    const persistLogResult logged =
+        persistCtxLogOp(mos->ctx, PERSIST_OP_INSERT, args, 2);
+    if (logged == PERSIST_LOG_REFUSED) {
+        return logged;
     }
-
-    /* Update in-memory */
-    bool added = multiOrderedSetAdd(&mos->mos, score, member);
-
-    /* Check compaction threshold */
+    const bool existed = multiOrderedSetAdd(&mos->mos, score, member);
+    if (updated) {
+        *updated = existed;
+    }
     persistCtxMaybeCompact(mos->ctx, mos->mos, &persistOpsMultiOrderedSet);
-
-    return added;
+    return logged;
 }
 
-bool multiOrderedSetRemoveP(multiOrderedSetP *mos, const databox *member) {
+persistLogResult multiOrderedSetRemoveP(multiOrderedSetP *mos,
+                                        const databox *member) {
     if (!mos || !mos->ctx || !member) {
-        return false;
+        return PERSIST_LOG_REFUSED;
+    }
+    if (!mos->mos || !multiOrderedSetExists(mos->mos, member)) {
+        return PERSIST_LOG_UNCHANGED;
     }
 
-    /* Empty set - nothing to remove */
-    if (!mos->mos) {
-        return false;
-    }
-
-    /* Log to WAL first */
     const databox *args[1] = {member};
-    if (!persistCtxLogOp(mos->ctx, PERSIST_OP_DELETE, args, 1)) {
-        return false;
+    const persistLogResult logged =
+        persistCtxLogOp(mos->ctx, PERSIST_OP_DELETE, args, 1);
+    if (logged == PERSIST_LOG_REFUSED) {
+        return logged;
     }
-
-    /* Update in-memory */
-    bool removed = multiOrderedSetRemove(&mos->mos, member);
-
-    /* Check compaction threshold */
+    multiOrderedSetRemove(&mos->mos, member);
     persistCtxMaybeCompact(mos->ctx, mos->mos, &persistOpsMultiOrderedSet);
-
-    return removed;
+    return logged;
 }
 
-void multiOrderedSetResetP(multiOrderedSetP *mos) {
+persistLogResult multiOrderedSetResetP(multiOrderedSetP *mos) {
     if (!mos || !mos->ctx) {
-        return;
+        return PERSIST_LOG_REFUSED;
     }
 
-    /* Log to WAL first */
-    if (!persistCtxLogOp(mos->ctx, PERSIST_OP_CLEAR, NULL, 0)) {
-        return;
+    const persistLogResult logged =
+        persistCtxLogOp(mos->ctx, PERSIST_OP_CLEAR, NULL, 0);
+    if (logged == PERSIST_LOG_REFUSED) {
+        return logged;
     }
-
-    /* Update in-memory */
     if (mos->mos) {
         multiOrderedSetReset(mos->mos);
     }
-
-    /* Check compaction threshold */
     persistCtxMaybeCompact(mos->ctx, mos->mos, &persistOpsMultiOrderedSet);
+    return logged;
 }
 
 /* ============================================================================
@@ -327,18 +323,24 @@ static int test_multiOrderedSetP_basic(int argc, char *argv[]) {
         ERRR("Failed to create multiOrderedSetP");
     }
 
-    /* Add some entries (return value false = new insert, true = replaced) */
+    /* Add some entries ('updated': the member was already present) */
+    bool updated = true;
     databox score1 = databoxNewSigned(100);
     databox member1 = databoxNewBytesAllowEmbed("alice", 5);
-    multiOrderedSetAddP(mos, &score1, &member1);
+    if (!multiOrderedSetAddP(mos, &score1, &member1, &updated) || updated) {
+        ERRR("alice was not added as a new member");
+    }
 
     databox score2 = databoxNewSigned(200);
     databox member2 = databoxNewBytesAllowEmbed("bob", 3);
-    multiOrderedSetAddP(mos, &score2, &member2);
+    multiOrderedSetAddP(mos, &score2, &member2, NULL);
 
     databox score3 = databoxNewSigned(50);
     databox member3 = databoxNewBytesAllowEmbed("charlie", 7);
-    multiOrderedSetAddP(mos, &score3, &member3);
+    multiOrderedSetAddP(mos, &score3, &member3, NULL);
+    if (!multiOrderedSetAddP(mos, &score3, &member3, &updated) || !updated) {
+        ERRR("re-adding charlie was not an update");
+    }
 
     /* Verify entries */
     if (!multiOrderedSetExistsP(mos, &member1)) {
@@ -396,6 +398,9 @@ static int test_multiOrderedSetP_basic(int argc, char *argv[]) {
     /* Remove an entry */
     if (!multiOrderedSetRemoveP(mos, &member2)) {
         ERRR("Failed to remove bob");
+    }
+    if (multiOrderedSetRemoveP(mos, &member2) != PERSIST_LOG_UNCHANGED) {
+        ERRR("removing absent bob was logged");
     }
     if (multiOrderedSetExistsP(mos, &member2)) {
         ERRR("bob should be removed");
@@ -462,7 +467,7 @@ static int test_multiOrderedSetP_iteration(int argc, char *argv[]) {
         databox score = databoxNewSigned(scores[i]);
         databox member =
             databoxNewBytesAllowEmbed(members[i], strlen(members[i]));
-        multiOrderedSetAddP(mos, &score, &member);
+        multiOrderedSetAddP(mos, &score, &member, NULL);
     }
 
     /* Close and reopen */
@@ -550,7 +555,7 @@ static int test_multiOrderedSetP_compaction(int argc, char *argv[]) {
         snprintf(memberBuf, sizeof(memberBuf), "member_%02" PRId64, i);
         databox member =
             databoxNewBytesAllowEmbed(memberBuf, strlen(memberBuf));
-        multiOrderedSetAddP(mos, &score, &member);
+        multiOrderedSetAddP(mos, &score, &member, NULL);
     }
 
     /* Attempt compaction */
@@ -605,7 +610,7 @@ static int test_multiOrderedSetP_resetReuse(int argc, char *argv[]) {
             snprintf(buf, sizeof(buf), "pre-%d", i);
             const databox score = databoxNewUnsigned((uint64_t)i);
             const databox member = databoxNewBytesString(buf);
-            multiOrderedSetAddP(mos, &score, &member);
+            multiOrderedSetAddP(mos, &score, &member, NULL);
         }
 
         multiOrderedSetResetP(mos);
@@ -619,7 +624,7 @@ static int test_multiOrderedSetP_resetReuse(int argc, char *argv[]) {
             snprintf(buf, sizeof(buf), "post-%d", i);
             const databox score = databoxNewUnsigned((uint64_t)(i + 100));
             const databox member = databoxNewBytesString(buf);
-            multiOrderedSetAddP(mos, &score, &member);
+            multiOrderedSetAddP(mos, &score, &member, NULL);
         }
 
         multiOrderedSetCloseP(mos);
@@ -677,7 +682,7 @@ static int test_multiOrderedSetP_readers(int argc, char *argv[]) {
             snprintf(name, sizeof(name), "m%d", i);
             const databox score = DATABOX_SIGNED(i * 10);
             const databox member = databoxNewBytesString(name);
-            multiOrderedSetAddP(mos, &score, &member);
+            multiOrderedSetAddP(mos, &score, &member, NULL);
         }
 
         databox member = {{0}};

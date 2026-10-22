@@ -26,19 +26,33 @@ defcleanerName(multilruPtr *, zfree, MultilruPtrs);
  * records and never runs the eviction policy itself, so it reaches the
  * same state whatever the restored LRU's recency order. */
 
-/* Log, then take, one eviction step; false when there is nothing to take
- * or the WAL write fails (then nothing changes) */
-static bool multilruPEvictStep(multilruP *mlru, multilruPtr *victimOut) {
+/* The weaker durability of two logged results: a logged op is as durable
+ * as the least durable of its steps */
+static persistLogResult multilruPWorse(persistLogResult a, persistLogResult b) {
+    if (a == PERSIST_LOG_NOT_DURABLE || b == PERSIST_LOG_NOT_DURABLE) {
+        return PERSIST_LOG_NOT_DURABLE;
+    }
+    if (a == PERSIST_LOG_BUFFERED || b == PERSIST_LOG_BUFFERED) {
+        return PERSIST_LOG_BUFFERED;
+    }
+    return a;
+}
+
+/* Log, then take, one eviction step: UNCHANGED when there is nothing to
+ * take, REFUSED (nothing changes) when the WAL write fails */
+static persistLogResult multilruPEvictStep(multilruP *mlru,
+                                           multilruPtr *victimOut) {
     multilruPtr victim = multilruPeekMinimum(mlru->mlru);
     if (!victim) {
-        return false;
+        return PERSIST_LOG_UNCHANGED;
     }
     const persistOp op = multilruGetLevel(mlru->mlru, victim) > 0
                              ? PERSIST_OP_NUM_DECR_F0
                              : PERSIST_OP_DELETE;
     const void *args[1] = {&victim};
-    if (!persistCtxLogOp(mlru->ctx, op, args, 1)) {
-        return false;
+    const persistLogResult logged = persistCtxLogOp(mlru->ctx, op, args, 1);
+    if (logged == PERSIST_LOG_REFUSED) {
+        return logged;
     }
     multilruPtr taken;
     multilruRemoveMinimum(mlru->mlru, &taken);
@@ -46,35 +60,53 @@ static bool multilruPEvictStep(multilruP *mlru, multilruPtr *victimOut) {
     if (victimOut) {
         *victimOut = victim;
     }
-    return true;
+    return logged;
 }
 
-static void multilruPEnforceLimits(multilruP *mlru) {
-    while (multilruNeedsEviction(mlru->mlru) &&
-           multilruPEvictStep(mlru, NULL)) {
+/* Evict, step by logged step, until the limits hold; folds each step's
+ * durability into 'result'.  A refused step stops eviction (the LRU stays
+ * over its limit, as the WAL records it; the next change retries). */
+static persistLogResult multilruPEnforceLimits(multilruP *mlru,
+                                               persistLogResult result) {
+    while (multilruNeedsEviction(mlru->mlru)) {
+        const persistLogResult step = multilruPEvictStep(mlru, NULL);
+        if (step == PERSIST_LOG_REFUSED || step == PERSIST_LOG_UNCHANGED) {
+            break;
+        }
+        result = multilruPWorse(result, step);
     }
+    return result;
 }
 
 /* Insert with every step logged before it is taken: the handle the insert
- * will get, then the eviction steps the limits require.  0 when the WAL
- * write fails (nothing changes) or the new entry was itself evicted. */
-static multilruPtr multilruPInsert_(multilruP *mlru, uint64_t weight) {
+ * will get, then the eviction steps the limits require.  '*handle' is the
+ * new entry, or 0 when it was itself evicted. */
+static persistLogResult multilruPInsert_(multilruP *mlru, uint64_t weight,
+                                         multilruPtr *handleOut) {
+    if (handleOut) {
+        *handleOut = 0;
+    }
     if (!mlru || !mlru->mlru || !mlru->ctx) {
-        return 0;
+        return PERSIST_LOG_REFUSED;
     }
 
     multilruPtr handle = multilruPeekNextHandle(mlru->mlru);
     const void *args[2] = {&handle, &weight};
-    if (!persistCtxLogOp(mlru->ctx, PERSIST_OP_INSERT, args, 2)) {
-        return 0;
+    persistLogResult logged =
+        persistCtxLogOp(mlru->ctx, PERSIST_OP_INSERT, args, 2);
+    if (logged == PERSIST_LOG_REFUSED) {
+        return logged;
     }
     const multilruPtr got = multilruInsertWeighted(mlru->mlru, weight);
     assert(got == handle);
     (void)got;
 
-    multilruPEnforceLimits(mlru);
+    logged = multilruPEnforceLimits(mlru, logged);
     persistCtxMaybeCompact(mlru->ctx, mlru->mlru, &persistOpsMultiLRU);
-    return multilruIsPopulated(mlru->mlru, handle) ? handle : 0;
+    if (handleOut && multilruIsPopulated(mlru->mlru, handle)) {
+        *handleOut = handle;
+    }
+    return logged;
 }
 
 /* ============================================================================
@@ -225,81 +257,99 @@ bool multilruIsPopulatedP(const multilruP *mlru, multilruPtr ptr) {
  * ============================================================================
  */
 
-multilruPtr multilruInsertP(multilruP *mlru) {
-    return multilruPInsert_(mlru, 0);
+persistLogResult multilruInsertP(multilruP *mlru, multilruPtr *handle) {
+    return multilruPInsert_(mlru, 0, handle);
 }
 
-multilruPtr multilruInsertWeightedP(multilruP *mlru, uint64_t weight) {
-    return multilruPInsert_(mlru, weight);
+persistLogResult multilruInsertWeightedP(multilruP *mlru, uint64_t weight,
+                                         multilruPtr *handle) {
+    return multilruPInsert_(mlru, weight, handle);
 }
 
-void multilruIncreaseP(multilruP *mlru, multilruPtr ptr) {
-    if (!mlru || !mlru->mlru || !mlru->ctx || ptr == 0) {
-        return;
-    }
-
-    /* Log to WAL first: [handle] using PERSIST_OP_CUSTOM for PROMOTE */
-    const void *args[1] = {&ptr};
-    if (!persistCtxLogOp(mlru->ctx, PERSIST_OP_CUSTOM, args, 1)) {
-        return;
-    }
-
-    /* Update in-memory */
-    multilruIncrease(mlru->mlru, ptr);
-
-    /* Check compaction threshold */
-    persistCtxMaybeCompact(mlru->ctx, mlru->mlru, &persistOpsMultiLRU);
+/* A live entry this wrapper can log a change of */
+static bool multilruPEntry(const multilruP *mlru, multilruPtr ptr) {
+    return mlru && mlru->mlru && mlru->ctx && ptr != 0 &&
+           multilruIsPopulated(mlru->mlru, ptr);
 }
 
-void multilruUpdateWeightP(multilruP *mlru, multilruPtr ptr,
-                           uint64_t newWeight) {
-    if (!mlru || !mlru->mlru || !mlru->ctx || ptr == 0) {
-        return;
-    }
-
-    /* Log to WAL first: [handle][newWeight] */
-    const void *args[2] = {&ptr, &newWeight};
-    if (!persistCtxLogOp(mlru->ctx, PERSIST_OP_UPDATE, args, 2)) {
-        return;
-    }
-
-    /* Update in-memory */
-    multilruUpdateWeight(mlru->mlru, ptr, newWeight);
-
-    /* Check compaction threshold */
-    persistCtxMaybeCompact(mlru->ctx, mlru->mlru, &persistOpsMultiLRU);
-}
-
-bool multilruRemoveMinimumP(multilruP *mlru, multilruPtr *out) {
+persistLogResult multilruIncreaseP(multilruP *mlru, multilruPtr ptr) {
     if (!mlru || !mlru->mlru || !mlru->ctx) {
-        return false;
+        return PERSIST_LOG_REFUSED;
+    }
+    if (!multilruPEntry(mlru, ptr)) {
+        return PERSIST_LOG_UNCHANGED; /* as multilruIncrease: a no-op */
+    }
+
+    /* [handle], PERSIST_OP_CUSTOM for PROMOTE */
+    const void *args[1] = {&ptr};
+    const persistLogResult logged =
+        persistCtxLogOp(mlru->ctx, PERSIST_OP_CUSTOM, args, 1);
+    if (logged == PERSIST_LOG_REFUSED) {
+        return logged;
+    }
+    multilruIncrease(mlru->mlru, ptr);
+    persistCtxMaybeCompact(mlru->ctx, mlru->mlru, &persistOpsMultiLRU);
+    return logged;
+}
+
+persistLogResult multilruUpdateWeightP(multilruP *mlru, multilruPtr ptr,
+                                       uint64_t newWeight) {
+    if (!mlru || !mlru->mlru || !mlru->ctx) {
+        return PERSIST_LOG_REFUSED;
+    }
+    if (!multilruPEntry(mlru, ptr) ||
+        multilruGetWeight(mlru->mlru, ptr) == newWeight) {
+        return PERSIST_LOG_UNCHANGED;
+    }
+
+    /* [handle][newWeight]; a heavier entry can put the LRU over its
+     * weight limit, so the limits are enforced (logged) at once */
+    const void *args[2] = {&ptr, &newWeight};
+    persistLogResult logged =
+        persistCtxLogOp(mlru->ctx, PERSIST_OP_UPDATE, args, 2);
+    if (logged == PERSIST_LOG_REFUSED) {
+        return logged;
+    }
+    multilruUpdateWeight(mlru->mlru, ptr, newWeight);
+    logged = multilruPEnforceLimits(mlru, logged);
+    persistCtxMaybeCompact(mlru->ctx, mlru->mlru, &persistOpsMultiLRU);
+    return logged;
+}
+
+persistLogResult multilruRemoveMinimumP(multilruP *mlru, multilruPtr *out) {
+    if (out) {
+        *out = 0;
+    }
+    if (!mlru || !mlru->mlru || !mlru->ctx) {
+        return PERSIST_LOG_REFUSED;
     }
 
     /* One step, logged first: a demotion above level 0, an eviction at
      * level 0 (multilruIsPopulated afterwards tells which) */
-    if (!multilruPEvictStep(mlru, out)) {
-        return false;
+    const persistLogResult logged = multilruPEvictStep(mlru, out);
+    if (logged != PERSIST_LOG_REFUSED && logged != PERSIST_LOG_UNCHANGED) {
+        persistCtxMaybeCompact(mlru->ctx, mlru->mlru, &persistOpsMultiLRU);
     }
-    persistCtxMaybeCompact(mlru->ctx, mlru->mlru, &persistOpsMultiLRU);
-    return true;
+    return logged;
 }
 
-void multilruDeleteP(multilruP *mlru, multilruPtr ptr) {
-    if (!mlru || !mlru->mlru || !mlru->ctx || ptr == 0) {
-        return;
+persistLogResult multilruDeleteP(multilruP *mlru, multilruPtr ptr) {
+    if (!mlru || !mlru->mlru || !mlru->ctx) {
+        return PERSIST_LOG_REFUSED;
+    }
+    if (!multilruPEntry(mlru, ptr)) {
+        return PERSIST_LOG_UNCHANGED;
     }
 
-    /* Log to WAL first */
     const void *args[1] = {&ptr};
-    if (!persistCtxLogOp(mlru->ctx, PERSIST_OP_DELETE, args, 1)) {
-        return;
+    const persistLogResult logged =
+        persistCtxLogOp(mlru->ctx, PERSIST_OP_DELETE, args, 1);
+    if (logged == PERSIST_LOG_REFUSED) {
+        return logged;
     }
-
-    /* Update in-memory */
     multilruDelete(mlru->mlru, ptr);
-
-    /* Check compaction threshold */
     persistCtxMaybeCompact(mlru->ctx, mlru->mlru, &persistOpsMultiLRU);
+    return logged;
 }
 
 /* ============================================================================
@@ -307,32 +357,38 @@ void multilruDeleteP(multilruP *mlru, multilruPtr ptr) {
  * ============================================================================
  */
 
-void multilruSetMaxCountP(multilruP *mlru, uint64_t maxCount) {
-    if (!mlru || !mlru->mlru) {
-        return;
+/* A new limit is applied, evicted to (each step logged) and made durable
+ * by a snapshot, since the limits live in the snapshot.  NOT_DURABLE when
+ * that snapshot fails (the limit holds in memory; the next compaction
+ * records it). */
+static persistLogResult multilruPSetLimit(multilruP *mlru, bool count,
+                                          uint64_t limit) {
+    if (!mlru || !mlru->mlru || !mlru->ctx) {
+        return PERSIST_LOG_REFUSED;
     }
-    multilruSetMaxCount(mlru->mlru, maxCount);
-    /* The limits live in the snapshot: write one now so the change is
-     * durable (limits change rarely; eviction to them happens on the
-     * next insert, logged step by step) */
-    if (mlru->ctx) {
-        persistCtxCompact(mlru->ctx, mlru->mlru, &persistOpsMultiLRU);
+    if (count) {
+        multilruSetMaxCount(mlru->mlru, limit);
+    } else {
+        multilruSetMaxWeight(mlru->mlru, limit);
     }
+    const persistLogResult evicted =
+        multilruPEnforceLimits(mlru, PERSIST_LOG_DURABLE);
+    if (!persistCtxCompact(mlru->ctx, mlru->mlru, &persistOpsMultiLRU)) {
+        return PERSIST_LOG_NOT_DURABLE;
+    }
+    return evicted;
+}
+
+persistLogResult multilruSetMaxCountP(multilruP *mlru, uint64_t maxCount) {
+    return multilruPSetLimit(mlru, true, maxCount);
 }
 
 uint64_t multilruGetMaxCountP(const multilruP *mlru) {
     return mlru && mlru->mlru ? multilruGetMaxCount(mlru->mlru) : 0;
 }
 
-void multilruSetMaxWeightP(multilruP *mlru, uint64_t maxWeight) {
-    if (!mlru || !mlru->mlru) {
-        return;
-    }
-    multilruSetMaxWeight(mlru->mlru, maxWeight);
-    /* Durable at once, as for the count limit */
-    if (mlru->ctx) {
-        persistCtxCompact(mlru->ctx, mlru->mlru, &persistOpsMultiLRU);
-    }
+persistLogResult multilruSetMaxWeightP(multilruP *mlru, uint64_t maxWeight) {
+    return multilruPSetLimit(mlru, false, maxWeight);
 }
 
 uint64_t multilruGetMaxWeightP(const multilruP *mlru) {
@@ -375,6 +431,14 @@ void multilruGetStatsP(const multilruP *mlru, persistCtxStats *stats) {
 #include "persistTestCommon.h"
 
 defcleaner(multilru *, multilruFree);
+
+/* The inserted handle (0 when refused or evicted at once), for tests that
+ * only follow handles */
+static multilruPtr mlruTestInsert(multilruP *mlru, uint64_t weight) {
+    multilruPtr handle = 0;
+    multilruInsertWeightedP(mlru, weight, &handle);
+    return handle;
+}
 defcleanerName(uint8_t *, zfree, SnapBytes);
 
 static int test_multilruP_basic(int argc, char *argv[]) {
@@ -402,9 +466,9 @@ static int test_multilruP_basic(int argc, char *argv[]) {
     }
 
     /* Insert some entries */
-    multilruPtr h1 = multilruInsertP(mlru);
-    multilruPtr h2 = multilruInsertP(mlru);
-    multilruPtr h3 = multilruInsertP(mlru);
+    multilruPtr h1 = mlruTestInsert(mlru, 0);
+    multilruPtr h2 = mlruTestInsert(mlru, 0);
+    multilruPtr h3 = mlruTestInsert(mlru, 0);
 
     if (h1 == 0 || h2 == 0 || h3 == 0) {
         ERRR("Failed to insert entries");
@@ -521,9 +585,9 @@ static int test_multilruP_weighted(int argc, char *argv[]) {
     }
 
     /* Insert weighted entries */
-    multilruPtr h1 = multilruInsertWeightedP(mlru, 100);
-    multilruPtr h2 = multilruInsertWeightedP(mlru, 200);
-    multilruInsertWeightedP(mlru, 150); /* h3 */
+    multilruPtr h1 = mlruTestInsert(mlru, 100);
+    multilruPtr h2 = mlruTestInsert(mlru, 200);
+    mlruTestInsert(mlru, 150); /* h3 */
 
     /* Verify weights */
     if (multilruGetWeightP(mlru, h1) != 100) {
@@ -608,7 +672,7 @@ static int test_multilruP_compaction(int argc, char *argv[]) {
     /* Insert many entries to trigger compaction */
     multilruPtr handles[20];
     for (int i = 0; i < 20; i++) {
-        handles[i] = multilruInsertP(mlru);
+        handles[i] = mlruTestInsert(mlru, 0);
     }
 
     /* Force compaction */
@@ -677,7 +741,7 @@ static int test_multilruP_empty_recovery(int argc, char *argv[]) {
     }
 
     /* Verify we can still use it */
-    multilruPtr h1 = multilruInsertP(mlru);
+    multilruPtr h1 = mlruTestInsert(mlru, 0);
     if (h1 == 0) {
         ERRR("Failed to insert into recovered empty cache");
     }
@@ -722,7 +786,7 @@ static int test_multilruP_large_dataset(int argc, char *argv[]) {
     cleanerName(zfree, MultilruPtrs) multilruPtr *handles =
         zmalloc(numEntries * sizeof(multilruPtr));
     for (size_t i = 0; i < numEntries; i++) {
-        handles[i] = multilruInsertP(mlru);
+        handles[i] = mlruTestInsert(mlru, 0);
         if (handles[i] == 0) {
             ERR("Failed to insert entry %zu", i);
         }
@@ -821,7 +885,7 @@ static int test_multilruP_handle_gaps(int argc, char *argv[]) {
     /* Insert 10 entries */
     multilruPtr handles[10];
     for (int i = 0; i < 10; i++) {
-        handles[i] = multilruInsertP(mlru);
+        handles[i] = mlruTestInsert(mlru, 0);
     }
 
     /* Delete every other entry to create gaps */
@@ -858,7 +922,7 @@ static int test_multilruP_handle_gaps(int argc, char *argv[]) {
     }
 
     /* Insert more entries - they should fill gaps or continue */
-    multilruPtr newHandle = multilruInsertP(mlru);
+    multilruPtr newHandle = mlruTestInsert(mlru, 0);
     if (newHandle == 0) {
         ERRR("Failed to insert new entry after recovery");
     }
@@ -916,7 +980,7 @@ static int test_multilruP_mixed_operations(int argc, char *argv[]) {
         if (choice < 40 && handleCount < 100) {
             /* INSERT (40%) */
             uint64_t weight = (xorshift % 1000) + 1;
-            multilruPtr h = multilruInsertWeightedP(mlru, weight);
+            multilruPtr h = mlruTestInsert(mlru, weight);
             if (h != 0) {
                 handles[handleCount++] = h;
             }
@@ -1011,21 +1075,21 @@ static int test_multilruP_weight_extremes(int argc, char *argv[]) {
     }
 
     /* Test zero weight */
-    multilruPtr h0 = multilruInsertWeightedP(mlru, 0);
+    multilruPtr h0 = mlruTestInsert(mlru, 0);
     if (multilruGetWeightP(mlru, h0) != 0) {
         ERR("Zero weight should be preserved, got %" PRIu64,
             multilruGetWeightP(mlru, h0));
     }
 
     /* Test max weight */
-    multilruPtr hMax = multilruInsertWeightedP(mlru, UINT64_MAX);
+    multilruPtr hMax = mlruTestInsert(mlru, UINT64_MAX);
     if (multilruGetWeightP(mlru, hMax) != UINT64_MAX) {
         ERR("Max weight should be preserved, got %" PRIu64,
             multilruGetWeightP(mlru, hMax));
     }
 
     /* Test updating to extremes */
-    multilruPtr h1 = multilruInsertWeightedP(mlru, 500);
+    multilruPtr h1 = mlruTestInsert(mlru, 500);
     multilruUpdateWeightP(mlru, h1, 0);
     if (multilruGetWeightP(mlru, h1) != 0) {
         ERR("Updated weight should be 0, got %" PRIu64,
@@ -1097,7 +1161,7 @@ static int test_multilruP_auto_evict(int argc, char *argv[]) {
     /* Insert 15 entries - should trigger evictions at maxCount=10 */
     multilruPtr handles[15];
     for (int i = 0; i < 15; i++) {
-        handles[i] = multilruInsertP(mlru);
+        handles[i] = mlruTestInsert(mlru, 0);
         if (handles[i] == 0) {
             ERR("Failed to insert entry %d", i);
         }
@@ -1176,7 +1240,7 @@ static int test_multilruP_auto_evict_crash_before_compact(int argc,
     enum { INSERTED = 30 };
     multilruPtr handles[INSERTED];
     for (int i = 0; i < INSERTED; i++) {
-        handles[i] = multilruInsertP(mlru);
+        handles[i] = mlruTestInsert(mlru, 0);
         if (handles[i] == 0) {
             ERR("Failed to insert entry %d", i);
         }
@@ -1244,7 +1308,7 @@ static int test_multilruP_level_promotion(int argc, char *argv[]) {
     }
 
     /* Insert entry and promote through all levels */
-    multilruPtr h1 = multilruInsertP(mlru);
+    multilruPtr h1 = mlruTestInsert(mlru, 0);
     if (multilruGetLevelP(mlru, h1) != 0) {
         ERR("New entry should be at level 0, got %zu",
             multilruGetLevelP(mlru, h1));
@@ -1317,7 +1381,7 @@ static int test_multilruP_demotions_replay(int argc, char *argv[]) {
     size_t liveCount = 0;
     uint64_t rng = 0x1234;
     for (int i = 0; i < 60; i++) {
-        const multilruPtr h = multilruInsertP(mlru);
+        const multilruPtr h = mlruTestInsert(mlru, 0);
         if (h && liveCount < 64) {
             live[liveCount++] = h;
         }
@@ -1345,6 +1409,14 @@ static int test_multilruP_demotions_replay(int argc, char *argv[]) {
     if (stats.demotions == 0) {
         ERRR("The workload never demoted (test does not cover demotion)");
     }
+
+    /* A lower limit is evicted to at once, each step logged */
+    if (!multilruSetMaxCountP(mlru, 5) ||
+        multilruCount(multilruGetRawP(mlru)) > 5) {
+        ERR("after lowering the limit to 5 the LRU holds %zu",
+            multilruCount(multilruGetRawP(mlru)));
+    }
+    multilruGetStats(multilruGetRawP(mlru), &stats);
     const uint64_t slots = stats.nextFresh;
     cleanerName(zfree, MultilruPtrs) multilruPtr *levelBefore =
         zcalloc(slots, sizeof(multilruPtr));
@@ -1354,7 +1426,6 @@ static int test_multilruP_demotions_replay(int argc, char *argv[]) {
     }
     const multilruPtr nextBefore =
         multilruPeekNextHandle(multilruGetRawP(mlru));
-    multilruSetMaxCountP(mlru, 5);
     multilruCloseP(mlru);
     persistCtxFree(ctx);
 
@@ -1381,6 +1452,62 @@ static int test_multilruP_demotions_replay(int argc, char *argv[]) {
         }
         multilruCloseP(mlru);
     }
+    persistCtxFree(ctx);
+    ptestCleanupFiles(basePath);
+
+    TEST_FINAL_RESULT;
+}
+
+static int test_multilruP_weight_limit(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+
+    int err = 0;
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    char basePath[PATH_MAX];
+    if (!dkTestTmpDirPath(&tmp, "multilruPTest_weightLimit", basePath,
+                          sizeof(basePath))) {
+        ERR("could not create a scratch directory: %s", strerror(errno));
+        return err;
+    }
+
+    TEST("multilruP evicts at once when a weight update passes the limit")
+
+    ptestCleanupFiles(basePath);
+    persistCtx *ctx = persistCtxNew(basePath, NULL);
+    const multilruConfig config = {.maxLevels = 4,
+                                   .maxWeight = 100,
+                                   .policy = MLRU_POLICY_SIZE,
+                                   .enableWeights = true};
+    multilruP *mlru = multilruNewWithConfigP(ctx, &config);
+    multilruPtr h[3];
+    for (size_t i = 0; i < 3; i++) {
+        h[i] = mlruTestInsert(mlru, 30);
+    }
+    if (multilruUpdateWeightP(mlru, h[2], 30) != PERSIST_LOG_UNCHANGED ||
+        multilruIncreaseP(mlru, 9999) != PERSIST_LOG_UNCHANGED ||
+        multilruDeleteP(mlru, 9999) != PERSIST_LOG_UNCHANGED) {
+        ERRR("a change to nothing was logged");
+    }
+
+    /* 30 + 30 + 80 = 140 > 100: eviction runs now, not at the next insert */
+    if (!multilruUpdateWeightP(mlru, h[2], 80) ||
+        multilruTotalWeightP(mlru) > 100) {
+        ERR("weight %" PRIu64 " left above the limit",
+            multilruTotalWeightP(mlru));
+    }
+    const size_t count = multilruCountP(mlru);
+    const uint64_t weight = multilruTotalWeightP(mlru);
+    multilruCloseP(mlru);
+    persistCtxFree(ctx);
+
+    ctx = persistCtxOpen(basePath, NULL);
+    mlru = multilruOpenP(ctx);
+    if (!mlru || multilruCountP(mlru) != count ||
+        multilruTotalWeightP(mlru) != weight) {
+        ERRR("the eviction did not survive reopen");
+    }
+    multilruCloseP(mlru);
     persistCtxFree(ctx);
     ptestCleanupFiles(basePath);
 
@@ -1456,6 +1583,7 @@ int multilruPTest(int argc, char *argv[]) {
     int err = 0;
 
     err += test_multilruP_recency_order(argc, argv);
+    err += test_multilruP_weight_limit(argc, argv);
     err += test_multilruP_demotions_replay(argc, argv);
 
     /* Basic functionality tests */

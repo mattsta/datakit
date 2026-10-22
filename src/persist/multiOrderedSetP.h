@@ -63,15 +63,22 @@ size_t multiOrderedSetBytesP(const multiOrderedSetP *mos);
  * ============================================================================
  */
 
-/* Add (score, member) pair - updates score if member exists */
-bool multiOrderedSetAddP(multiOrderedSetP *mos, const databox *score,
-                         const databox *member);
+/* Every mutation logs first and applies exactly when the result is not
+ * PERSIST_LOG_REFUSED (see persistLogResult); removing an absent member is
+ * PERSIST_LOG_UNCHANGED and logs nothing. */
+
+/* Add (score, member), or update a present member's score ('updated', may
+ * be NULL: the member was present) */
+persistLogResult multiOrderedSetAddP(multiOrderedSetP *mos,
+                                     const databox *score,
+                                     const databox *member, bool *updated);
 
 /* Remove member by name */
-bool multiOrderedSetRemoveP(multiOrderedSetP *mos, const databox *member);
+persistLogResult multiOrderedSetRemoveP(multiOrderedSetP *mos,
+                                        const databox *member);
 
 /* Remove all entries */
-void multiOrderedSetResetP(multiOrderedSetP *mos);
+persistLogResult multiOrderedSetResetP(multiOrderedSetP *mos);
 
 /* ============================================================================
  * Lookups (read-only, no persistence needed)

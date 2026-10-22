@@ -80,34 +80,43 @@ bool multilruIsPopulatedP(const multilruP *mlru, multilruPtr ptr);
  * ============================================================================
  */
 
-/* Insert new entry - returns handle */
-multilruPtr multilruInsertP(multilruP *mlru);
+/* Every mutation logs each step before taking it and applies exactly when
+ * the result is not PERSIST_LOG_REFUSED (see persistLogResult); a step
+ * the limits force (eviction, demotion) is logged too, and the result is
+ * the least durable of the steps.  A change to an entry that is not live,
+ * a weight that is already set, or removing from an empty LRU is
+ * PERSIST_LOG_UNCHANGED and logs nothing. */
 
-/* Insert with weight */
-multilruPtr multilruInsertWeightedP(multilruP *mlru, uint64_t weight);
+/* Insert a new entry; '*handle' (may be NULL) gets it, or 0 when the
+ * limits evicted it at once */
+persistLogResult multilruInsertP(multilruP *mlru, multilruPtr *handle);
+persistLogResult multilruInsertWeightedP(multilruP *mlru, uint64_t weight,
+                                         multilruPtr *handle);
 
 /* Promote entry to next level (on cache hit) */
-void multilruIncreaseP(multilruP *mlru, multilruPtr ptr);
+persistLogResult multilruIncreaseP(multilruP *mlru, multilruPtr ptr);
 
-/* Update weight of existing entry */
-void multilruUpdateWeightP(multilruP *mlru, multilruPtr ptr,
-                           uint64_t newWeight);
+/* Update the weight of a live entry, then evict to the limits */
+persistLogResult multilruUpdateWeightP(multilruP *mlru, multilruPtr ptr,
+                                       uint64_t newWeight);
 
-/* Remove LRU entry with S4LRU demotion */
-bool multilruRemoveMinimumP(multilruP *mlru, multilruPtr *out);
+/* Take one S4LRU step ('*out': the entry; multilruIsPopulated afterwards
+ * tells a demotion from an eviction) */
+persistLogResult multilruRemoveMinimumP(multilruP *mlru, multilruPtr *out);
 
 /* Delete specific entry immediately */
-void multilruDeleteP(multilruP *mlru, multilruPtr ptr);
+persistLogResult multilruDeleteP(multilruP *mlru, multilruPtr ptr);
 
 /* ============================================================================
- * Configuration (changes are persisted via snapshot on next compact)
+ * Configuration: a new limit is applied, evicted to at once (each step
+ * logged) and made durable by a snapshot (NOT_DURABLE when that fails)
  * ============================================================================
  */
 
-void multilruSetMaxCountP(multilruP *mlru, uint64_t maxCount);
+persistLogResult multilruSetMaxCountP(multilruP *mlru, uint64_t maxCount);
 uint64_t multilruGetMaxCountP(const multilruP *mlru);
 
-void multilruSetMaxWeightP(multilruP *mlru, uint64_t maxWeight);
+persistLogResult multilruSetMaxWeightP(multilruP *mlru, uint64_t maxWeight);
 uint64_t multilruGetMaxWeightP(const multilruP *mlru);
 
 /* ============================================================================
