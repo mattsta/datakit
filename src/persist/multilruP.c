@@ -1484,6 +1484,31 @@ static int test_multilruP_weight_limit(int argc, char *argv[]) {
     for (size_t i = 0; i < 3; i++) {
         h[i] = mlruTestInsert(mlru, 30);
     }
+
+    /* The readers agree with the LRU they wrap */
+    multilru *raw = multilruGetRawP(mlru);
+    if (multilruGetMaxWeightP(mlru) != 100 ||
+        multilruBytesP(mlru) != multilruBytes(raw) ||
+        multilruLevelCountP(mlru, 0) != multilruLevelCount(raw, 0) ||
+        multilruLevelCountP(mlru, 0) != 3 ||
+        multilruLevelWeightP(mlru, 0) != 90 || !multilruSyncP(mlru)) {
+        ERRR("a multilruP reader disagrees with the LRU");
+    }
+    persistCtxStats stats;
+    multilruGetStatsP(mlru, &stats);
+    if (stats.totalOps != 3) {
+        ERR("stats report %" PRIu64 " ops for 3 inserts", stats.totalOps);
+    }
+
+    /* An unweighted insert, and a raised weight limit that evicts nothing */
+    multilruPtr extra = 0;
+    if (!multilruInsertP(mlru, &extra) || !extra ||
+        multilruSetMaxWeightP(mlru, 1000) != PERSIST_LOG_DURABLE ||
+        multilruGetMaxWeightP(mlru) != 1000 || multilruCountP(mlru) != 4) {
+        ERRR("InsertP or SetMaxWeightP misbehaved");
+    }
+    multilruDeleteP(mlru, extra);
+    multilruSetMaxWeightP(mlru, 100);
     if (multilruUpdateWeightP(mlru, h[2], 30) != PERSIST_LOG_UNCHANGED ||
         multilruIncreaseP(mlru, 9999) != PERSIST_LOG_UNCHANGED ||
         multilruDeleteP(mlru, 9999) != PERSIST_LOG_UNCHANGED) {

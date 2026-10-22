@@ -338,6 +338,13 @@ int flexPTest(int argc, char *argv[]) {
             ERRR("a NULL push was not refused");
         }
 
+        /* The readers agree with the flex they wrap */
+        if (flexBytesP(f) != flexBytes(flexGetP(f)) || flexBytesP(f) == 0 ||
+            !flexSyncP(f) || flexBytesP(NULL) != 0 || flexGetP(NULL) ||
+            flexSyncP(NULL)) {
+            ERRR("flexBytesP / flexGetP / flexSyncP disagree");
+        }
+
         for (int pass = 0; pass < 2; pass++) {
             for (size_t i = 0; i < 4; i++) {
                 databox got;

@@ -8876,6 +8876,13 @@ int persistTest(int argc, char *argv[]) {
             ERRR("an ALWAYS op with a working sync was not durable");
         }
 
+        /* The store accessors name the attached stores */
+        if (persistWALStore(p) != p->walStore ||
+            persistSnapshotStore(p) != p->snapshotStore ||
+            persistWALStore(NULL) || persistSnapshotStore(NULL)) {
+            ERRR("the store accessors disagree with the attached stores");
+        }
+
         /* The device fills: logged, not durable, counted, never refused */
         bool (*sync)(void *) = p->walStore->sync;
         p->walStore->sync = persistTestFailSync;
