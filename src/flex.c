@@ -106,8 +106,8 @@ defcleanerName(char *, zfree, Chars);
 defcleaner(flex *, flexFree);
 #ifdef DATAKIT_TEST
 defcleaner(multimapAtom *, multimapAtomFree);
-#include <math.h> /* NAN (tests) */
 #endif
+#include <math.h> /* isfinite (container math) */
 
 /* This configuration define allows building flex without 'mdsc', but disabling
  * MDSC support does NOT remove the MDSC types. It only removes the ability for
@@ -4525,88 +4525,162 @@ bool flexCompareSigned(flexEntry *fe, int64_t val) {
 }
 
 /* ====================================================================
- * flex homogeneous container math
+ * flex container math (the numeric policy: exact integers, refusal)
  * ==================================================================== */
-/* 96/128-bit entries decode into the stack slot '_wide'; narrow entries,
- * the overwhelmingly common case, never touch it and write straight into
- * the union as before. */
-#define flexLoopyProcess_(f, doer)                                             \
-    do {                                                                       \
-        uint_fast32_t _count = flexCount_(f);                                  \
-        flexEntry *_fe = FLEX_ENTRY_HEAD(f);                                   \
-        databox _boxStore;                                                     \
-        databoxWide _wide;                                                     \
-        databox *const _box = &_boxStore;                                      \
-        while (_count--) {                                                     \
-            flexEntryData _entry = {0};                                        \
-            flexEntryDataPopulate(_fe, &_entry);                               \
-            flexLoadFixedLength_(&_entry, _box, &_wide,                        \
-                                 FLEX_WIDE_STORE_SLOT_);                       \
-            (doer);                                                            \
-            _fe = flexNext(f, _fe);                                            \
+typedef enum flexMathOp_ {
+    FLEX_MATH_ADD_,
+    FLEX_MATH_SUBTRACT_,
+    FLEX_MATH_MULTIPLY_,
+} flexMathOp_;
+
+/* The integer entry 'fe' as a 128-bit value (any width); false for an
+ * entry that is not an integer or an unsigned value above INT128_MAX */
+DK_STATIC bool flexMathInteger_(const flexEntry *fe, __int128_t *out) {
+    databox box;
+    databoxWide wide;
+    flexGetByTypeInto(fe, &box, &wide);
+    switch (box.type) {
+    case DATABOX_SIGNED_64:
+        *out = box.data.i64;
+        return true;
+    case DATABOX_UNSIGNED_64:
+        *out = box.data.u64;
+        return true;
+    case DATABOX_SIGNED_128:
+        *out = *box.data.i128;
+        return true;
+    case DATABOX_UNSIGNED_128:
+        if (*box.data.u128 >> 127) {
+            return false;
+        }
+        *out = (__int128_t)*box.data.u128;
+        return true;
+    default:
+        return false;
+    }
+}
+
+/* Fold the integers of 'f' with 'op' (subtract: the first minus the rest)
+ * inside [lo, hi]; false for a non-integer entry, an entry or partial
+ * result outside the range, leaving '*result' unset */
+DK_STATIC bool flexMathIntegers_(const flex *f, flexMathOp_ op, __int128_t lo,
+                                 __int128_t hi, __int128_t *result) {
+    __int128_t acc = op == FLEX_MATH_MULTIPLY_ ? 1 : 0;
+    bool first = true;
+    flexEntry *fe = flexHead(f);
+    for (size_t n = flexCount(f); n; n--, fe = flexNext(f, fe)) {
+        __int128_t v;
+        if (!flexMathInteger_(fe, &v) || v < lo || v > hi) {
+            return false;
+        }
+        if (op == FLEX_MATH_SUBTRACT_ && first) {
+            acc = v;
+        } else if (op == FLEX_MATH_MULTIPLY_) {
+            if (__builtin_mul_overflow(acc, v, &acc)) {
+                return false;
+            }
+        } else if (__builtin_add_overflow(
+                       acc, op == FLEX_MATH_SUBTRACT_ ? -v : v, &acc)) {
+            return false;
+        }
+        if (acc < lo || acc > hi) {
+            return false;
+        }
+        first = false;
+    }
+    *result = acc;
+    return true;
+}
+
+/* Fold the numbers of 'f' (integers and reals alike) in double; false for
+ * a non-number or an inf / NaN result */
+DK_STATIC bool flexMathReals_(const flex *f, flexMathOp_ op, double *result) {
+    double acc = op == FLEX_MATH_MULTIPLY_ ? 1 : 0;
+    bool first = true;
+    flexEntry *fe = flexHead(f);
+    for (size_t n = flexCount(f); n; n--, fe = flexNext(f, fe)) {
+        databox box;
+        databoxWide wide;
+        flexGetByTypeInto(fe, &box, &wide);
+        double v;
+        __int128_t whole;
+        if (box.type == DATABOX_FLOAT_32) {
+            v = box.data.f32;
+        } else if (box.type == DATABOX_DOUBLE_64) {
+            v = box.data.d64;
+        } else if (flexMathInteger_(fe, &whole)) {
+            v = (double)whole;
+        } else if (box.type == DATABOX_UNSIGNED_128) {
+            v = (double)*box.data.u128;
+        } else {
+            return false;
+        }
+
+        if (op == FLEX_MATH_SUBTRACT_ && first) {
+            acc = v;
+        } else if (op == FLEX_MATH_MULTIPLY_) {
+            acc *= v;
+        } else {
+            acc += op == FLEX_MATH_SUBTRACT_ ? -v : v;
+        }
+        if (!isfinite(acc)) {
+            return false;
+        }
+        first = false;
+    }
+    *result = acc;
+    return true;
+}
+
+#define FLEX_MATH_SIGNED_(name, op)                                            \
+    bool name(const flex *f, int64_t *result) {                                \
+        __int128_t r;                                                          \
+        if (!flexMathIntegers_(f, op, INT64_MIN, INT64_MAX, &r)) {             \
+            return false;                                                      \
         }                                                                      \
-        return result;                                                         \
-    } while (0)
+        *result = (int64_t)r;                                                  \
+        return true;                                                           \
+    }
 
-int64_t flexAddSigned(const flex *f) {
-    int64_t result = 0;
-    flexLoopyProcess_(f, result += _box->data.i);
-}
+#define FLEX_MATH_UNSIGNED_(name, op)                                          \
+    bool name(const flex *f, uint64_t *result) {                               \
+        __int128_t r;                                                          \
+        if (!flexMathIntegers_(f, op, 0, UINT64_MAX, &r)) {                    \
+            return false;                                                      \
+        }                                                                      \
+        *result = (uint64_t)r;                                                 \
+        return true;                                                           \
+    }
 
-uint64_t flexAddUnsigned(const flex *f) {
-    uint64_t result = 0;
-    flexLoopyProcess_(f, result += _box->data.u);
-}
+#define FLEX_MATH_DOUBLE_(name, op)                                            \
+    bool name(const flex *f, double *result) {                                 \
+        return flexMathReals_(f, op, result);                                  \
+    }
 
-int64_t flexSubtractSigned(const flex *f) {
-    int64_t result = 0;
-    flexLoopyProcess_(f, result -= _box->data.i);
-}
+/* The double fold narrowed to float: refused when it does not stay
+ * finite in float */
+#define FLEX_MATH_FLOAT_(name, op)                                             \
+    bool name(const flex *f, float *result) {                                  \
+        double r;                                                              \
+        if (!flexMathReals_(f, op, &r) || !isfinite((float)r)) {               \
+            return false;                                                      \
+        }                                                                      \
+        *result = (float)r;                                                    \
+        return true;                                                           \
+    }
 
-uint64_t flexSubtractUnsigned(const flex *f) {
-    uint64_t result = 0;
-    flexLoopyProcess_(f, result -= _box->data.u);
-}
-
-int64_t flexMultiplySigned(const flex *f) {
-    int64_t result = 1;
-    flexLoopyProcess_(f, result *= _box->data.i);
-}
-
-uint64_t flexMultiplyUnsigned(const flex *f) {
-    uint64_t result = 1;
-    flexLoopyProcess_(f, result *= _box->data.u);
-}
-
-double flexAddFloat(const flex *f) {
-    double result = 1;
-    flexLoopyProcess_(f, result += _box->data.f32);
-}
-
-double flexSubtractFloat(const flex *f) {
-    double result = 0;
-    flexLoopyProcess_(f, result -= _box->data.f32);
-}
-
-double flexMultiplyFloat(const flex *f) {
-    double result = 1;
-    flexLoopyProcess_(f, result *= _box->data.f32);
-}
-
-double flexAddDouble(const flex *f) {
-    double result = 1;
-    flexLoopyProcess_(f, result += _box->data.d64);
-}
-
-double flexSubtractDouble(const flex *f) {
-    double result = 0;
-    flexLoopyProcess_(f, result -= _box->data.d64);
-}
-
-double flexMultiplyDouble(const flex *f) {
-    double result = 1;
-    flexLoopyProcess_(f, result *= _box->data.d64);
-}
+FLEX_MATH_SIGNED_(flexAddSigned, FLEX_MATH_ADD_)
+FLEX_MATH_SIGNED_(flexSubtractSigned, FLEX_MATH_SUBTRACT_)
+FLEX_MATH_SIGNED_(flexMultiplySigned, FLEX_MATH_MULTIPLY_)
+FLEX_MATH_UNSIGNED_(flexAddUnsigned, FLEX_MATH_ADD_)
+FLEX_MATH_UNSIGNED_(flexSubtractUnsigned, FLEX_MATH_SUBTRACT_)
+FLEX_MATH_UNSIGNED_(flexMultiplyUnsigned, FLEX_MATH_MULTIPLY_)
+FLEX_MATH_FLOAT_(flexAddFloat, FLEX_MATH_ADD_)
+FLEX_MATH_FLOAT_(flexSubtractFloat, FLEX_MATH_SUBTRACT_)
+FLEX_MATH_FLOAT_(flexMultiplyFloat, FLEX_MATH_MULTIPLY_)
+FLEX_MATH_DOUBLE_(flexAddDouble, FLEX_MATH_ADD_)
+FLEX_MATH_DOUBLE_(flexSubtractDouble, FLEX_MATH_SUBTRACT_)
+FLEX_MATH_DOUBLE_(flexMultiplyDouble, FLEX_MATH_MULTIPLY_)
 
 /* ====================================================================
  * flex find / search
@@ -9180,6 +9254,119 @@ int32_t flexTest(int32_t argc, char **argv) {
             }
         }
 #endif
+
+        if (bad) {
+            return bad;
+        }
+        printf("  ok\n");
+    }
+
+    printf("Verify container math is exact or refused:\n");
+    {
+        int32_t bad = 0;
+#define FLEX_MATH_CHECK_(cond, what)                                           \
+    do {                                                                       \
+        if (!(cond)) {                                                         \
+            printf("  FAIL: %s\n", what);                                      \
+            bad++;                                                             \
+        }                                                                      \
+    } while (0)
+
+        cleaner(flexFree) flex *m = flexNew();
+        int64_t s = 77;
+        uint64_t u = 77;
+        double d = 77;
+        float fl = 77;
+
+        /* Empty: the identities */
+        FLEX_MATH_CHECK_(flexAddSigned(m, &s) && s == 0 &&
+                             flexSubtractUnsigned(m, &u) && u == 0 &&
+                             flexMultiplyDouble(m, &d) && d == 1,
+                         "empty folds give 0, 0 and 1");
+
+        /* [10, -3, 4]: sum, first minus the rest, product */
+        flexPushSigned(&m, 10, FLEX_ENDPOINT_TAIL);
+        flexPushSigned(&m, -3, FLEX_ENDPOINT_TAIL);
+        flexPushSigned(&m, 4, FLEX_ENDPOINT_TAIL);
+        FLEX_MATH_CHECK_(flexAddSigned(m, &s) && s == 11 &&
+                             flexSubtractSigned(m, &s) && s == 9 &&
+                             flexMultiplySigned(m, &s) && s == -120,
+                         "signed folds of [10, -3, 4]");
+        u = 77;
+        FLEX_MATH_CHECK_(!flexAddUnsigned(m, &u) && u == 77,
+                         "a negative entry refused by an unsigned fold");
+        FLEX_MATH_CHECK_(flexAddDouble(m, &d) && d == 11 &&
+                             flexSubtractFloat(m, &fl) && fl == 9.0f,
+                         "integers fold as reals");
+        flexFree(m);
+
+        /* The range edges: UINT64_MAX is unsigned only; overflow refuses */
+        m = flexNew();
+        flexPushUnsigned(&m, UINT64_MAX, FLEX_ENDPOINT_TAIL);
+        s = 77;
+        FLEX_MATH_CHECK_(flexAddUnsigned(m, &u) && u == UINT64_MAX &&
+                             !flexAddSigned(m, &s) && s == 77,
+                         "UINT64_MAX fits unsigned only");
+        flexPushUnsigned(&m, 1, FLEX_ENDPOINT_TAIL);
+        FLEX_MATH_CHECK_(
+            !flexAddUnsigned(m, &u) && flexSubtractUnsigned(m, &u) &&
+                u == UINT64_MAX - 1,
+            "an unsigned sum overflow refused, the difference not");
+        flexFree(m);
+
+        m = flexNew();
+        flexPushSigned(&m, INT64_MIN, FLEX_ENDPOINT_TAIL);
+        flexPushSigned(&m, 1, FLEX_ENDPOINT_TAIL);
+        FLEX_MATH_CHECK_(!flexSubtractSigned(m, &s) && flexAddSigned(m, &s) &&
+                             s == INT64_MIN + 1,
+                         "INT64_MIN - 1 refused, INT64_MIN + 1 exact");
+        flexFree(m);
+
+        m = flexNew();
+        flexPushSigned(&m, (int64_t)1 << 32, FLEX_ENDPOINT_TAIL);
+        flexPushSigned(&m, (int64_t)1 << 32, FLEX_ENDPOINT_TAIL);
+        FLEX_MATH_CHECK_(!flexMultiplySigned(m, &s) &&
+                             flexMultiplyDouble(m, &d) && d == 0x1p64,
+                         "a product overflow refused as an integer only");
+        flexFree(m);
+
+        /* A 128-bit entry folds by value when it fits */
+        m = flexNew();
+        databoxBig big;
+        DATABOX_BIG_SIGNED_128(&big, -((__int128_t)1 << 70));
+        flexPushDataboxBig(&m, &big, FLEX_ENDPOINT_TAIL);
+        FLEX_MATH_CHECK_(!flexAddSigned(m, &s) && flexAddDouble(m, &d) &&
+                             d == -0x1p70,
+                         "a 128-bit entry outside int64 refused");
+        flexFree(m);
+
+        /* Reals: a real entry is refused by integer folds; inf refused */
+        m = flexNew();
+        const databox a = DATABOX_DOUBLE(1.5);
+        const databox b = DATABOX_DOUBLE(2.25);
+        flexPushByTypeExact(&m, &a, FLEX_ENDPOINT_TAIL);
+        flexPushByTypeExact(&m, &b, FLEX_ENDPOINT_TAIL);
+        FLEX_MATH_CHECK_(flexAddDouble(m, &d) && d == 3.75 &&
+                             flexAddFloat(m, &fl) && fl == 3.75f &&
+                             flexMultiplyFloat(m, &fl) && fl == 3.375f &&
+                             !flexAddSigned(m, &s),
+                         "real folds");
+        flexFree(m);
+
+        m = flexNew();
+        const databox huge = DATABOX_DOUBLE(1e300);
+        flexPushByTypeExact(&m, &huge, FLEX_ENDPOINT_TAIL);
+        flexPushByTypeExact(&m, &huge, FLEX_ENDPOINT_TAIL);
+        FLEX_MATH_CHECK_(!flexMultiplyDouble(m, &d) && flexAddDouble(m, &d) &&
+                             d == 2e300 && !flexAddFloat(m, &fl),
+                         "an infinite result refused");
+
+        /* A string is not a number (stored exactly: the auto-converting
+         * push would store "7" as the integer 7) */
+        const databox seven = databoxNewBytesString("7");
+        flexPushByTypeExact(&m, &seven, FLEX_ENDPOINT_TAIL);
+        FLEX_MATH_CHECK_(!flexAddDouble(m, &d), "a string refused");
+#undef FLEX_MATH_CHECK_
 
         if (bad) {
             return bad;

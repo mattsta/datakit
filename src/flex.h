@@ -663,19 +663,27 @@ void flexDeleteCountDrain(flex **ff, flexEntry **fe, uint32_t count);
 void flexDeleteOffsetCountDrain(flex **ff, int32_t offset, uint32_t count);
 void flexDeleteRangeDrain(flex **ff, int32_t index, uint32_t num);
 
-/* Do math on one flex of all the same type element */
-int64_t flexAddSigned(const flex *f);
-uint64_t flexAddUnsigned(const flex *f);
-int64_t flexSubtractSigned(const flex *f);
-uint64_t flexSubtractUnsigned(const flex *f);
-int64_t flexMultiplySigned(const flex *f);
-uint64_t flexMultiplyUnsigned(const flex *f);
-double flexAddFloat(const flex *f);
-double flexSubtractFloat(const flex *f);
-double flexMultiplyFloat(const flex *f);
-double flexAddDouble(const flex *f);
-double flexSubtractDouble(const flex *f);
-double flexMultiplyDouble(const flex *f);
+/* Fold every entry of a flex: the sum, the first entry minus the rest, or
+ * the product (an empty flex gives 0, 0 and 1).  Under the numeric policy
+ * (DATABOX.md "Numeric Updates"): the Signed / Unsigned folds take integer
+ * entries of any width whose values fit int64 / uint64 and compute
+ * exactly; Float / Double take any numbers (integers converted) and
+ * compute in double (Float narrows the result).  Each returns false,
+ * leaving '*result' unset, for an entry of another kind, an integer
+ * entry or partial result outside the range, or a result that is not
+ * finite. */
+bool flexAddSigned(const flex *f, int64_t *result);
+bool flexAddUnsigned(const flex *f, uint64_t *result);
+bool flexSubtractSigned(const flex *f, int64_t *result);
+bool flexSubtractUnsigned(const flex *f, uint64_t *result);
+bool flexMultiplySigned(const flex *f, int64_t *result);
+bool flexMultiplyUnsigned(const flex *f, uint64_t *result);
+bool flexAddFloat(const flex *f, float *result);
+bool flexSubtractFloat(const flex *f, float *result);
+bool flexMultiplyFloat(const flex *f, float *result);
+bool flexAddDouble(const flex *f, double *result);
+bool flexSubtractDouble(const flex *f, double *result);
+bool flexMultiplyDouble(const flex *f, double *result);
 
 /* CFlex */
 size_t cflexBytesCompressed(const cflex *c);
