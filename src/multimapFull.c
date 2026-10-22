@@ -665,10 +665,9 @@ size_t multimapFullBytes(const multimapFull *m) {
 size_t multimapFullBytesFull(const multimapFull *m) {
     size_t Bytes = multimapFullBytes(m);
 
-    /* This is a rough estimate taken from multimap.c testing, but
-     * still doesn't account for 100% (like when multiarrays
-     * have grown to individual types, etc, but we don't have
-     * multiarrayBytes() implemented yet! */
+    /* The maps' bytes plus the struct and, per map, its range box, middle
+     * and map pointer.  The per-map arrays are native multiarrays (no
+     * container to measure), so their node overhead is not counted. */
     Bytes += sizeof(*m);
     Bytes += sizeof(databox) * (m->count - 1);
     Bytes += sizeof(multimapFullMiddle) * m->count;
@@ -1722,7 +1721,22 @@ bool multimapFullInsertAllowExternalizeKeysReplacing(multimapFull *m,
 }
 
 void multimapFullAppend(multimapFull *m, const databox *elements[]) {
-    /* directly insert into highest map */
+    /* Straight into the highest map for a row at or past its last key;
+     * any other row goes where an insert puts it, so the maps stay
+     * ordered */
+    const flex *highest = getMapHighest(m);
+    if (flexCount(highest) == 0) {
+        multimapFullInsert(m, elements);
+        return;
+    }
+    databox last;
+    databoxWide wide;
+    flexGetByTypeInto(flexIndex(highest, -(int32_t)m->elementsPerEntry), &last,
+                      &wide);
+    if (databoxCompare(elements[0], &last) < 0) {
+        multimapFullInsert(m, elements);
+        return;
+    }
     multimapFullInsert_(m, elements, m->count - 1, NULL);
 }
 
@@ -2113,40 +2127,28 @@ bool multimapFullDelete(multimapFull *m, const databox *key) {
 bool multimapFullDeleteNMapsIterate(multimapFull *m, const size_t n,
                                     multimapFullMapDeleter *mapIter,
                                     void *data) {
-    for (size_t i = 0; i < n; i++) {
-        /* If we run out of maps, return failure because there's
-         * nothing more to process. */
-        if (m->count == 0) {
-            break;
-        }
-
-        /* Always delete zero map... */
-        const size_t mapIdx = 0;
-
-        /* Get map 0 */
-        flex **map = getMapPtr(m, mapIdx);
-
+    for (size_t i = 0; i < n && m->values > 0; i++) {
+        /* Always the lowest map: its rows leave the count with it */
+        flex **map = getMapPtr(m, 0);
         if (mapIter) {
             mapIter(*map, data);
         }
+        m->values -= flexCount(*map) / m->elementsPerEntry;
 
-        /* Free map 0 */
-        flexFree(*map);
-
-#if 0
-        if (nextMapIdxExists(m, mapIdx)) {
-            databox *rangeBox = getRangeBox(m, mapIdx + 1);
-            databoxFreeData(rangeBox);
+        /* The last map empties in place: a multimapFull always keeps one */
+        if (m->count == 1) {
+            flexReset(map);
+            SET_MIDDLE_FORCE(m, 0, *map);
+            break;
         }
-#endif
 
-        /* Remove range box and middle for map 0 */
-        reallocDecrCount(m, mapIdx);
+        /* Free map 0, then its range box and middle */
+        flexFree(*map);
+        reallocDecrCount(m, 0);
     }
 
-    /* Return true if more maps can be deleted next time. */
-    /* Return false if no more maps exist. */
-    return !!m->count;
+    /* True while rows remain for a later call to delete */
+    return m->values > 0;
 }
 
 bool multimapFullDeleteNMaps(multimapFull *m, const size_t n) {
@@ -3854,6 +3856,119 @@ int multimapFullTest(int argc, char *argv[]) {
 
         if (missing > 0) {
             ERR("%zu of 200 wide-entry keys missing", missing);
+        }
+    }
+
+    TEST("Append keeps the maps ordered whatever order rows arrive in") {
+        /* Ascending rows take the fast path; a row below the last key
+         * must land where an insert puts it, not in the highest map */
+        cleaner(multimapFullFree) multimapFull *m = multimapFullNew(2);
+        char pad[64];
+        memset(pad, 'p', sizeof(pad));
+        const databox val = databoxNewBytes(pad, sizeof(pad));
+        for (int64_t k = 0; k < 3000; k += 2) {
+            const databox key = DATABOX_SIGNED(k);
+            const databox *row[2] = {&key, &val};
+            multimapFullAppend(m, row);
+        }
+        for (int64_t k = 2999; k > 0; k -= 2) { /* the odd keys, descending */
+            const databox key = DATABOX_SIGNED(k);
+            const databox *row[2] = {&key, &val};
+            multimapFullAppend(m, row);
+        }
+        if (multimapFullNodeCount(m) < 2 || multimapFullCount(m) != 3000) {
+            ERR("%zu maps, %zu rows", multimapFullNodeCount(m),
+                multimapFullCount(m));
+        }
+        for (int64_t k = 0; k < 3000; k++) {
+            const databox key = DATABOX_SIGNED(k);
+            if (!multimapFullExists(m, &key)) {
+                ERR("key %" PRId64 " not found after appends", k);
+                break;
+            }
+        }
+    }
+
+    TEST("DeleteNMaps drops whole maps and their rows from the count") {
+        cleaner(multimapFullFree) multimapFull *m = multimapFullNew(2);
+        char pad[64];
+        memset(pad, 'q', sizeof(pad));
+        const databox val = databoxNewBytes(pad, sizeof(pad));
+        for (int64_t k = 0; k < 3000; k++) {
+            const databox key = DATABOX_SIGNED(k);
+            const databox *row[2] = {&key, &val};
+            multimapFullInsert(m, row);
+        }
+        const size_t maps = multimapFullNodeCount(m);
+        const size_t lowest = flexCount(getMap(m, 0)) / 2;
+        if (maps < 3 || multimapFullBytesFull(m) <= multimapFullBytes(m)) {
+            ERR("%zu maps; BytesFull %zu, Bytes %zu", maps,
+                multimapFullBytesFull(m), multimapFullBytes(m));
+        }
+        if (!multimapFullDeleteNMaps(m, 1) ||
+            multimapFullCount(m) != 3000 - lowest ||
+            multimapFullNodeCount(m) != maps - 1) {
+            ERR("after one map: %zu rows, %zu maps", multimapFullCount(m),
+                multimapFullNodeCount(m));
+        }
+        const databox gone = DATABOX_SIGNED(0);
+        const databox kept = DATABOX_SIGNED(2999);
+        if (multimapFullExists(m, &gone) || !multimapFullExists(m, &kept)) {
+            ERRR("the deleted map's rows or the rest are wrong");
+        }
+
+        /* Past the last map: empty, one map kept, usable again */
+        if (multimapFullDeleteNMaps(m, maps + 5) || multimapFullCount(m) != 0 ||
+            multimapFullNodeCount(m) != 1) {
+            ERR("after all maps: %zu rows, %zu maps", multimapFullCount(m),
+                multimapFullNodeCount(m));
+        }
+        const databox *row[2] = {&kept, &val};
+        multimapFullInsert(m, row);
+        if (multimapFullCount(m) != 1 || !multimapFullExists(m, &kept)) {
+            ERRR("an emptied map did not take a new row");
+        }
+    }
+
+    TEST("a Full map grows from one sorted flex and deletes rows it found") {
+        /* @own: container; free=multimapFullFree */
+        flex *one = flexNew();
+        flexEntry *middle = one + FLEX_EMPTY_SIZE;
+        for (int64_t k = 0; k < 40; k++) {
+            const databox key = DATABOX_SIGNED(k * 3);
+            const databox val = DATABOX_SIGNED(k);
+            const databox *row[2] = {&key, &val};
+            flexInsertReplaceByTypeSortedWithMiddleMultiDirect(&one, 2, row,
+                                                               &middle, true);
+        }
+        cleaner(multimapFullFree) multimapFull *m =
+            multimapFullNewFromOneGrow(NULL, one, 0, 2, false);
+        const databox k30 = DATABOX_SIGNED(30);
+        const databox v10 = DATABOX_SIGNED(10);
+        const databox v11 = DATABOX_SIGNED(11);
+        const databox *wrong[2] = {&k30, &v11};
+        const databox *right[2] = {&k30, &v10};
+        databox found = {{0}};
+        if (multimapFullCount(m) != 40 || !multimapFullExists(m, &k30) ||
+            multimapFullDeleteFullWidthWithFound(m, wrong, &found) ||
+            !multimapFullDeleteFullWidthWithFound(m, right, &found) ||
+            found.data.i != 30 || multimapFullExists(m, &k30) ||
+            multimapFullCount(m) != 39) {
+            ERRR("NewFromOneGrow / DeleteFullWidthWithFound misbehaved");
+        }
+
+        /* An oversize map splits the same with or without a (NULL)
+         * reference container */
+        flex **map = getMapPtr(m, 0);
+        m->maxSize = 64;
+        const databox k33 = DATABOX_SIGNED(33);
+        const databox k117 = DATABOX_SIGNED(117);
+        const databox k31 = DATABOX_SIGNED(31);
+        if (!multimapFullRegularizeMapWithReference(m, 0, map, NULL) ||
+            multimapFullNodeCount(m) < 2 || multimapFullCount(m) != 39 ||
+            !multimapFullExists(m, &k33) || !multimapFullExists(m, &k117) ||
+            multimapFullExists(m, &k31)) {
+            ERRR("RegularizeMapWithReference did not split the map");
         }
     }
 

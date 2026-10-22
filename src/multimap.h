@@ -44,6 +44,10 @@ bool multimapInsert(multimap **m, const databox *elements[]);
 bool multimapInsertReplacing(multimap **m, const databox *elements[],
                              databox *replacedOut);
 void multimapInsertFullWidth(multimap **m, const databox *elements[]);
+
+/* multimapInsert for rows arriving in ascending key order: a row at or past
+ * the last key goes straight into the highest map; any other row is
+ * inserted where it belongs, so the map stays ordered either way */
 void multimapAppend(multimap **m, const databox *elements[]);
 
 void multimapInsertWithSurrogateKey(

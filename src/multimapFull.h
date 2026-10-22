@@ -24,7 +24,7 @@ multimapFull *multimapFullNewFromTwoGrowWithReference(
     multimapElements elementsPerEntry, bool mapIsSet,
     const struct multimapAtom *referenceContainer);
 multimapFull *multimapFullNewFromOneGrow(void *m, flex *one,
-                                         multimapElements mid,
+                                         multimapFullMiddle mid,
                                          multimapElements elementsPerEntry,
                                          bool mapIsSet);
 multimapFull *multimapFullCopy(const multimapFull *m);
@@ -97,6 +97,10 @@ bool multimapFullRegularizeMapWithReference(
     const struct multimapAtom *referenceContainer);
 
 bool multimapFullDelete(multimapFull *m, const databox *key);
+
+/* Drop the lowest 'n' maps whole (their rows leave the count; the last map
+ * empties in place, as a multimapFull keeps one), handing each to
+ * 'mapIter' (may be NULL) before it goes.  True while rows remain. */
 bool multimapFullDeleteNMaps(multimapFull *m, size_t n);
 bool multimapFullDeleteNMapsIterate(multimapFull *m, const size_t n,
                                     multimapFullMapDeleter *mapIter,

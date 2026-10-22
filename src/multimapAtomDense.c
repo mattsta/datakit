@@ -418,6 +418,26 @@ int multimapAtomDenseTest(int argc, char *argv[]) {
         multimapAtomDenseFree(d);
     }
 
+    TEST("Retain interns a new value and counts one more use of a known one") {
+        multimapAtomDense *d = multimapAtomDenseNew();
+        const databox apple = databoxNewBytesString("apple");
+        multimapAtomDenseRetain(d, &apple); /* interned: one reference */
+        multimapAtomDenseRetain(d, &apple); /* two */
+        multimapAtomDenseRetain(d, &apple); /* three */
+        if (multimapAtomDenseCount(d) != 1) {
+            ERR("%zu atoms after retaining one value",
+                multimapAtomDenseCount(d));
+        }
+        /* Two releases leave it; the third deletes it */
+        if (multimapAtomDenseRelease(d, &apple) ||
+            multimapAtomDenseRelease(d, &apple) ||
+            !multimapAtomDenseRelease(d, &apple) ||
+            multimapAtomDenseCount(d) != 0) {
+            ERRR("three retains did not take three releases");
+        }
+        multimapAtomDenseFree(d);
+    }
+
     TEST("differential soak against an oracle, allocations balanced") {
         multimapTestAllocCountBegin();
         for (uint64_t seed = 1; seed <= 3; seed++) {

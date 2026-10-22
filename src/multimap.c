@@ -7219,6 +7219,60 @@ int multimapTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("Append in any order builds the map Insert builds, every tier") {
+        const flexCapSizeLimit limits[] = {
+            FLEX_CAP_LEVEL_2048, FLEX_CAP_LEVEL_512, FLEX_CAP_LEVEL_64};
+        const multimapType tiers[] = {MULTIMAP_TYPE_SMALL, MULTIMAP_TYPE_MEDIUM,
+                                      MULTIMAP_TYPE_FULL};
+        /* Two passes of rows each: sized so each tier is reached */
+        const int64_t counts[] = {10, 60, 1000};
+        for (size_t t = 0; t < COUNT_ARRAY(limits); t++) {
+            for (int compress = 0; compress <= 1; compress++) {
+                cleaner(multimapFree) multimap *appended =
+                    compress ? multimapNewCompress(2, limits[t])
+                             : multimapNewLimit(2, limits[t]);
+                cleaner(multimapFree) multimap *inserted =
+                    multimapNewLimit(2, limits[t]);
+
+                /* Even keys ascending (the fast path), then odd keys
+                 * descending (every one below the last key) */
+                for (int64_t pass = 0; pass < 2; pass++) {
+                    for (int64_t i = 0; i < counts[t]; i++) {
+                        const int64_t k =
+                            pass == 0 ? 2 * i : 2 * (counts[t] - i) - 1;
+                        const databox key = databoxNewSigned(k);
+                        const databox val = databoxNewSigned(k * 7);
+                        const databox *row[] = {&key, &val};
+                        multimapAppend(&appended, row);
+                        multimapInsert(&inserted, row);
+                    }
+                }
+                multimapVerify(appended);
+                if (multimapType_(appended) != tiers[t] ||
+                    multimapCount(appended) != multimapCount(inserted)) {
+                    ERR("tier %zu compress %d: type %d, %zu rows", t, compress,
+                        (int)multimapType_(appended), multimapCount(appended));
+                    continue;
+                }
+
+                multimapIterator a;
+                multimapIterator b;
+                multimapIteratorInit(appended, &a, true);
+                multimapIteratorInit(inserted, &b, true);
+                databox ra[2];
+                databox rb[2];
+                while (multimapIteratorNextInto(&a, ra, 2)) {
+                    if (!multimapIteratorNextInto(&b, rb, 2) ||
+                        databoxCompare(&ra[0], &rb[0]) != 0 ||
+                        databoxCompare(&ra[1], &rb[1]) != 0) {
+                        ERR("tier %zu compress %d: rows differ", t, compress);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     TEST("IteratorInitAt an absent key starts at the next key, every tier") {
         /* Even keys only; starting at each odd key must give the next
          * even key, including where the search point falls between two

@@ -237,8 +237,29 @@ void multimapMediumInsertFullWidth(multimapMedium *m,
 
 DK_INLINE_ALWAYS void multimapMediumConform_(multimapMedium *m, size_t mapIdx);
 
+/* Whether 'key' sorts at or after the last row of the non-empty 'map' */
+static bool multimapMediumAtOrPastLast_(const flex *map,
+                                        multimapElements elementsPerEntry,
+                                        const databox *key) {
+    if (flexCount(map) == 0) {
+        return false;
+    }
+    databox last;
+    databoxWide wide;
+    flexGetByTypeInto(flexIndex(map, -(int32_t)elementsPerEntry), &last, &wide);
+    return databoxCompare(key, &last) >= 0;
+}
+
 void multimapMediumAppend(multimapMedium *m, const databox *elements[]) {
     static const size_t mapIdx = 1; /* always insert into highest map! */
+
+    /* The fast path is for a row at or past the last key; any other row
+     * goes where an insert puts it, so the maps stay ordered */
+    if (!multimapMediumAtOrPastLast_(m->map[mapIdx], m->elementsPerEntry,
+                                     elements[0])) {
+        multimapMediumInsert(m, elements);
+        return;
+    }
 
     flexEntry *middle = GET_MIDDLE(m, mapIdx);
     /* Maps: key-only compare.  Sets: the dedupe variant — see
