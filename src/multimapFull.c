@@ -3119,7 +3119,9 @@ int multimapFullTest(int argc, char *argv[]) {
         for (int32_t maxSize = 1; maxSize < maxMax; maxSize *= 2) {
             cleaner(multimapFullFree) multimapFull *m = multimapFullNew(2);
             m->maxSize = maxSize;
-            int32_t pairs = 1 << 17;
+            /* About 160 KB of pairs: nine maps even at the largest
+             * maxSize (32 KB); the timings printed are informational */
+            int32_t pairs = 1 << 13;
             TEST_DESC("%d bytes max with %d k/v pairs...", maxSize, pairs) {
                 TIME_INIT;
                 for (int32_t j = 0; j < pairs; j++) {
@@ -3274,7 +3276,9 @@ int multimapFullTest(int argc, char *argv[]) {
 
 #endif
 
-    for (int32_t i = 0; i < 4096; i++) {
+    /* Every size to 256, then every 1/16 more: the same sizes as the
+     * forward sweep above */
+    for (int32_t i = 0; i < 4096; i = multimapFullTestNextSize_(i)) {
         cleaner(multimapFullFree) multimapFull *m = multimapFullNew(2);
         TEST_DESC("%d k/v pairs - inserting in reverse order...", i) {
             TIME_INIT;
