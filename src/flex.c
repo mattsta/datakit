@@ -11072,8 +11072,9 @@ int32_t flexTest(int32_t argc, char **argv) {
                            ((double)(searched)) / totalVals, flexBytes(f));
                 }
 
-                /* LOOKUP */
-                size_t looper = totalVals * 1024;
+                /* LOOKUP: 64 random finds per value hit every value many
+                 * times over; the timings printed are informational */
+                size_t looper = totalVals * 64;
                 flexEntry *middleEntry = flexIndex(f, totalVals / 2);
 
                 if (sorted) {
@@ -11416,7 +11417,9 @@ int32_t flexTest(int32_t argc, char **argv) {
         f = flexMerge(&f, &f2);
         cleaner(flexFree) flex *orig = flexDuplicate(f);
 
-        size_t biglen = 64 * 1024 * 1024; /* 64 MB */
+        /* 24 MB: past VARINT_SPLIT_FULL_NO_ZERO_MAX_22 + 2^24, so each
+         * entry's byte length takes a 5-byte encoding */
+        size_t biglen = 24 * 1024 * 1024;
         cleanerName(zfree, Bytes) uint8_t *big = zmalloc(biglen);
         randbytes(big, biglen, biglen);
         databox box = databoxNewBytes(big, biglen);
@@ -11427,7 +11430,7 @@ int32_t flexTest(int32_t argc, char **argv) {
 
         flexRepr(f);
         printf("Inserting and deleting large elements in random spots:\n");
-        for (int32_t i = 0; i < 32; i++) {
+        for (int32_t i = 0; i < 8; i++) {
             if (i > 0) {
                 printf(".");
                 fflush(stdout);
@@ -11555,7 +11558,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         flexFree(f);
     }
 
-    printf("Create long list and check indices:\n");
+    printf("Test create long list and check indices:\n");
     {
         f = flexNew();
         char buf[32];
@@ -11580,10 +11583,32 @@ int32_t flexTest(int32_t argc, char **argv) {
 
         printf("Validating big list...\n");
         uint64_t tstart = timeUtilUs();
+
+        /* Every value, walking each way */
+        int64_t walked = 0;
+        for (fe = flexHead(f); fe; fe = flexNext(f, fe)) {
+            assert(flexGet(fe, NULL, NULL, &value));
+            assert(walked == value);
+            walked++;
+        }
+
+        assert(walked == loops);
+        for (fe = flexTail(f); fe; fe = flexPrev(f, fe)) {
+            walked--;
+            assert(flexGet(fe, NULL, NULL, &value));
+            assert(walked == value);
+        }
+
+        assert(walked == 0);
+
+        /* Indexing from either end (each lookup walks from the nearer
+         * end): every index within 1024 of the ends or of 2^16, where the
+         * values change integer width, and every 61st elsewhere */
         for (int64_t i = start; i < loops; i++) {
-            if (i % (9000) == 0) {
-                printf("Validating %" PRIi64 " (%" PRIi64 " remaining)\n", i,
-                       (loops - i));
+            const bool nearEdge = i < 1024 || loops - i <= 1024 ||
+                                  (i >= 65536 - 1024 && i < 65536 + 1024);
+            if (!nearEdge && i % 61 != 0) {
+                continue;
             }
 
             fe = flexIndex(f, i);
@@ -11724,18 +11749,24 @@ int32_t flexTest(int32_t argc, char **argv) {
         printf("SUCCESS\n\n");
     }
 
+    /* Each entry is three bytes.  Both sizes take the count past 67823 to
+     * its 4-byte width and back; 2 M (about 6 MB) also takes the byte
+     * count to its 4-byte width.  The sanitized size is smaller because
+     * every exact-size append reallocates there.  The byte count's 5-byte
+     * width has its own boundary test below. */
 #if !FLEX_TEST_SANITIZED
-    printf("Create flex in single byte increments up to 8 M entries:\n");
+    printf("Test create flex in single byte increments up to 2 M entries:\n");
 #else
-    printf("Create flex in single byte increments up to 128 k entries:\n");
+    printf("Test create flex in single byte increments up to 72 k "
+           "entries:\n");
 #endif
     {
         f = flexNew();
 
 #if !FLEX_TEST_SANITIZED
-        const int32_t contentsSize = 1024 * 1024 * 8; /* 8 MB */
+        const int32_t contentsSize = 1024 * 1024 * 2; /* 2 M */
 #else
-        const int32_t contentsSize = 1024 * 128; /* 128 k */
+        const int32_t contentsSize = 1024 * 72; /* 72 k */
 #endif
 
         int32_t fill = contentsSize;
@@ -11787,6 +11818,83 @@ int32_t flexTest(int32_t argc, char **argv) {
 
         flexFree(f);
         printf("SUCCESS\n\n");
+    }
+
+    printf("Test header byte count crossing its 5-byte width one entry at a "
+           "time:\n");
+    {
+        /* The header's byte count is 5 bytes wide from MAX_22 + 2^24 up.
+         * One padding entry brings the flex just under that; single-byte
+         * pushes cross it, tail deletes cross back, and every step checks
+         * the width against the total and the entries read back intact. */
+        const size_t widen =
+            VARINT_SPLIT_FULL_NO_ZERO_MAX_22 + ((size_t)1 << 24);
+        const size_t padLen = widen - 256;
+        cleanerName(zfree, Bytes) uint8_t *pad = zmalloc(padLen);
+        for (size_t i = 0; i < padLen; i++) {
+            pad[i] = (uint8_t)(i * 31 + 7);
+        }
+
+        f = flexNew();
+        flexPushBytes(&f, pad, padLen, FLEX_ENDPOINT_TAIL);
+        assert(FLEX_TOTAL_BYTES_WIDTH(f) == 4);
+
+        int32_t pushed = 0;
+        while (FLEX_TOTAL_BYTES_WIDTH(f) == 4) {
+            assert(flexBytes(f) < widen);
+            assert(pushed < 1024);
+            flexPushBytes(&f, "a", 1, FLEX_ENDPOINT_TAIL);
+            pushed++;
+        }
+
+        /* cross well past the boundary */
+        for (int32_t i = 0; i < 64; i++) {
+            flexPushBytes(&f, "a", 1, FLEX_ENDPOINT_TAIL);
+            pushed++;
+        }
+
+        assert(FLEX_TOTAL_BYTES_WIDTH(f) == 5);
+        assert(flexBytes(f) >= widen);
+        assert(flexCount(f) == (size_t)(1 + pushed));
+
+        databox got = {{0}};
+        flexGetByType(flexHead(f), &got);
+        assert(got.len == padLen);
+        assert(memcmp(got.data.bytes.start, pad, padLen) == 0);
+        for (flexEntry *walk = flexNext(f, flexHead(f)); walk;
+             walk = flexNext(f, walk)) {
+            flexGetByType(walk, &got);
+            assert(got.len == 1 && got.data.bytes.start[0] == 'a');
+        }
+
+        int32_t deleted = 0;
+        while (FLEX_TOTAL_BYTES_WIDTH(f) == 5) {
+            assert(flexBytes(f) >= widen);
+            flexDeleteOffsetCountDrain(&f, -1, 1);
+            deleted++;
+        }
+
+        assert(FLEX_TOTAL_BYTES_WIDTH(f) == 4);
+        assert(flexBytes(f) < widen);
+        assert(deleted > 64);
+        assert(flexCount(f) == (size_t)(1 + pushed - deleted));
+        flexGetByType(flexHead(f), &got);
+        assert(got.len == padLen);
+        assert(memcmp(got.data.bytes.start, pad, padLen) == 0);
+
+        /* dropping the padding from the head narrows the field to the
+         * width of the few hundred bytes left */
+        flexDeleteOffsetCountDrain(&f, 0, 1);
+        assert(FLEX_TOTAL_BYTES_WIDTH(f) <= 2);
+        assert(flexCount(f) == (size_t)(pushed - deleted));
+        for (flexEntry *walk = flexHead(f); walk; walk = flexNext(f, walk)) {
+            flexGetByType(walk, &got);
+            assert(got.len == 1 && got.data.bytes.start[0] == 'a');
+        }
+
+        flexFree(f);
+        f = NULL;
+        printf("SUCCESS (%d pushes, %d deletes)\n\n", pushed, deleted);
     }
 #endif
 
@@ -12130,10 +12238,11 @@ int32_t flexTest(int32_t argc, char **argv) {
 
     printf("Stress with variable flex sizes (insert + delete):\n");
     {
-        /* 2000 push+pop pairs at every size: a smoke-size run of what
-         * was a throughput benchmark */
-        float headTotal = stress(FLEX_ENDPOINT_HEAD, 2000, 16384, 256);
-        float tailTotal = stress(FLEX_ENDPOINT_TAIL, 2000, 16384, 256);
+        /* 500 push+pop pairs every 512 entries up to 16 k, which takes
+         * both header fields through their 1-, 2- and 3-byte widths: a
+         * smoke-size run of what was a throughput benchmark */
+        float headTotal = stress(FLEX_ENDPOINT_HEAD, 500, 16384, 512);
+        float tailTotal = stress(FLEX_ENDPOINT_TAIL, 500, 16384, 512);
 
         printf("SUCCESS (%f sec head)\nSUCCESS (%f sec tail)\n\n",
                headTotal / 1e6, tailTotal / 1e6);
@@ -12142,9 +12251,9 @@ int32_t flexTest(int32_t argc, char **argv) {
     printf("Stress with variable flex sizes (insert replace):\n");
     {
         float headTotal =
-            stressReplaceInline(FLEX_ENDPOINT_HEAD, 2000, 16384, 256);
+            stressReplaceInline(FLEX_ENDPOINT_HEAD, 500, 16384, 512);
         float tailTotal =
-            stressReplaceInline(FLEX_ENDPOINT_TAIL, 2000, 16384, 256);
+            stressReplaceInline(FLEX_ENDPOINT_TAIL, 500, 16384, 512);
 
         printf("SUCCESS (%f sec head)\nSUCCESS (%f sec tail)\n\n",
                headTotal / 1e6, tailTotal / 1e6);

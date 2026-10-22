@@ -197,7 +197,7 @@ uv run --project tools dktools validate [--rev REV] \
   slow tests, `--slow` in every build (default `multimapFull`, `xof`,
   `timerWheel`, `multilist`, `multilistFull`: over ~40 s under dev)
   and also `--debug-slow` in debug and tsan builds (default
-  `multimap`, `hyperloglog`, `blake3`, `flex`, `str`: over ~60 s
+  `multimap`, `hyperloglog`, `blake3`, `str`: over ~60 s
   there). `--full` is the milestone tier and runs them all. `verify`
   has no tiers; it runs exactly the tests it is given.
 - Per configuration: a clean configure, an all-targets build,

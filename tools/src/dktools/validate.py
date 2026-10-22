@@ -67,7 +67,7 @@ DEFAULT_TSAN_SKIP = r"dkTestNonceLogEvictionPerf"
 #: in debug and tsan builds, also those over ~60 s there.  verify always
 #: runs exactly the tests it is given.
 DEFAULT_SLOW = r"multimapFull|xof|timerWheel|multilist|multilistFull"
-DEFAULT_DEBUG_SLOW = r"multimap|hyperloglog|blake3|flex|str"
+DEFAULT_DEBUG_SLOW = r"multimap|hyperloglog|blake3|str"
 DEFAULT_LEAK_BASE = "origin/main"
 
 
