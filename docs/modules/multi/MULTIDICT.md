@@ -939,9 +939,8 @@ those lookups (two entries a slot on average at the default load factor).
 A `persistOpsMultidict` snapshot records how the dict's keys match, so a
 restore rebuilds the same kind of dict:
 
-- An exact-key dict writes its key/value pairs only, the original layout. A
-  snapshot without a record (including any written before the record existed)
-  restores as an exact-key dict.
+- An exact-key dict writes its key/value pairs only; a snapshot without a
+  record restores as an exact-key dict.
 - A case dict, or a dict with any other type, writes one leading unsigned
   element first (case or custom), which makes the element count odd.
 - The WAL carries no record: its operations replay onto the dict the snapshot
