@@ -166,9 +166,11 @@ struct clusterRing {
     uint32_t nodeCapacity;
     uint32_t healthyNodeCount;
 
-    /* Strategy: the ring's own (never DEFAULT) and its custom hooks */
+    /* Strategy: the ring's own (never DEFAULT) and its custom hooks (whose
+     * data a copy shares and leaves to the original to free) */
     clusterStrategyType strategyType;
     clusterStrategy *customStrategy;
+    bool sharesCustomStrategy;
 
     /* Placement state per strategy, live while some user (the ring itself
      * or a keyspace) places with a strategy that needs it, and current
@@ -200,9 +202,8 @@ struct clusterRing {
     uint32_t keySpaceCount;
     uint32_t keySpaceCapacity;
 
-    /* Rebalancing */
+    /* Rebalancing: the plan clusterRingPlanRebalance made, if any */
     clusterRebalancePlan *rebalancePlan;
-    bool rebalanceInProgress;
 
     /* Health provider (a copy; installed while hasHealthProvider) */
     clusterHealthProvider healthProvider;
@@ -266,11 +267,6 @@ uint32_t clusterHash32(const void *key, uint32_t len, uint32_t seed);
 bool clusterCheckAffinity(const clusterRing *ring, const clusterNode **nodes,
                           uint32_t count, const clusterAffinityRule *rules,
                           uint8_t ruleCount);
-
-/* Rebalance planning */
-clusterRebalancePlan *clusterPlanRebalanceKetama(const clusterRing *ring,
-                                                 const clusterNode *added,
-                                                 const clusterNode *removed);
 
 /* Node array management */
 clusterResult clusterRingGrowNodeArray(clusterRing *ring);

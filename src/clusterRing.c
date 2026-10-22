@@ -20,7 +20,10 @@
 #include <string.h>
 
 /* Scope-exit cleaners (see cleaner.h idioms) */
+static void clusterRebalancePlanFree(clusterRebalancePlan *plan);
+static flex *clusterRingBuildSnapshotFlex(const clusterRing *ring);
 defcleaner(clusterRing *, clusterRingFree);
+defcleaner(clusterRebalancePlan *, clusterRebalancePlanFree);
 defcleaner(void *, zfree);
 defcleanerName(uint64_t *, zfree, U64);
 defcleanerName(uint32_t *, zfree, U32);
@@ -738,7 +741,7 @@ void clusterRingFree(clusterRing *ring) {
     clusterRingFreeJump(ring);
     clusterRingFreeMaglev(ring);
     if (ring->strategyType == CLUSTER_STRATEGY_CUSTOM && ring->customStrategy &&
-        ring->customStrategy->freeStrategyData) {
+        !ring->sharesCustomStrategy && ring->customStrategy->freeStrategyData) {
         ring->customStrategy->freeStrategyData(
             ring->customStrategy->strategyData);
     }
@@ -784,13 +787,7 @@ void clusterRingFree(clusterRing *ring) {
         zfree(ring->affinityRules);
     }
 
-    /* Free rebalance plan */
-    if (ring->rebalancePlan) {
-        if (ring->rebalancePlan->moves) {
-            zfree(ring->rebalancePlan->moves);
-        }
-        zfree(ring->rebalancePlan);
-    }
+    clusterRebalancePlanFree(ring->rebalancePlan);
 
     clusterRingSetHealthProvider(ring, NULL);
 
@@ -1634,6 +1631,10 @@ const clusterLocation *clusterNodeGetLocation(const clusterNode *node) {
  * Strategy-Specific Locate Functions
  * ==================================================================== */
 
+static uint32_t clusterKetamaWalkFrom(const clusterRing *ring, uint32_t lo,
+                                      const clusterNode **out,
+                                      uint32_t maxNodes, double fillBound);
+
 /* Walk the vnode ring clockwise from the key's hash, collecting up to
  * maxNodes distinct healthy nodes in ring order.  With fillBound >= 0, a
  * node whose fill is above it is passed over and taken only after every
@@ -1690,6 +1691,17 @@ static uint32_t clusterKetamaWalk(const clusterRing *ring, const void *key,
     if (lo >= data->vnodeCount) {
         lo = 0;
     }
+
+    return clusterKetamaWalkFrom(ring, lo, out, maxNodes, fillBound);
+}
+
+/* Up to maxNodes distinct healthy nodes in vnode order from vnode `lo` (a
+ * key's placement starts at the first vnode at or after its hash), nodes
+ * over `fillBound` (when not negative) after the rest */
+static uint32_t clusterKetamaWalkFrom(const clusterRing *ring, uint32_t lo,
+                                      const clusterNode **out,
+                                      uint32_t maxNodes, double fillBound) {
+    const clusterKetamaData *data = &ring->vnodes;
 
     /* Collect unique nodes using bitmap-based deduplication */
     uint32_t effectiveMax =
@@ -1997,6 +2009,13 @@ static uint32_t clusterSelectReplicas(const clusterNode *const *cand,
     return n;
 }
 
+static clusterResult clusterRingSelect(const clusterRing *ring,
+                                       const clusterNode **replicas,
+                                       uint32_t *foundOut, uint32_t maxReplicas,
+                                       uint32_t replicaCount,
+                                       const clusterAffinityRule *rules,
+                                       uint8_t ruleCount, bool *spreadMet);
+
 /* Places `key` with an explicit strategy (resolved, its state live),
  * replica count and rule set */
 static clusterResult
@@ -2035,6 +2054,7 @@ clusterRingPlace(const clusterRing *ring, clusterStrategyType strategy,
     }
 
     uint32_t found = 0;
+    const clusterStrategy *custom = ring->customStrategy;
 
     switch (strategy) {
     case CLUSTER_STRATEGY_DEFAULT:
@@ -2057,15 +2077,53 @@ clusterRingPlace(const clusterRing *ring, clusterStrategyType strategy,
         found = clusterLocateBounded(ring, key, keyLen, replicas, maxReplicas);
         break;
     case CLUSTER_STRATEGY_CUSTOM:
-        if (ring->customStrategy && ring->customStrategy->locate) {
-            found = ring->customStrategy->locate(ring, key, keyLen, replicas,
-                                                 maxReplicas);
+        /* The full ranking comes from preferenceOrder when it is set */
+        if (custom && spread && custom->preferenceOrder) {
+            found = custom->preferenceOrder(ring, key, keyLen, replicas,
+                                            maxReplicas);
+        } else if (custom && custom->locate) {
+            found = custom->locate(ring, key, keyLen, replicas, maxReplicas);
         }
         break;
     }
 
-    if (found == 0) {
+    const clusterResult result =
+        clusterRingSelect(ring, replicas, &found, maxReplicas, replicaCount,
+                          rules, ruleCount, &out->spreadMet);
+    if (result != CLUSTER_OK) {
         clusterPlacementFree(out);
+        return result;
+    }
+
+    /* Copy results to the placement */
+    out->primary = replicas[0];
+    out->healthyCount = 0;
+    for (uint32_t i = 0; i < found; i++) {
+        clusterPlacementAddReplica(out, replicas[i]);
+        if (replicas[i]->state == CLUSTER_NODE_UP) {
+            out->healthyCount++;
+        }
+    }
+
+    return CLUSTER_OK;
+}
+
+/* Turn a strategy's `*found` candidates (preference order, room for
+ * maxReplicas) into the replica set in place: with rules, healthy nodes the
+ * strategy left out join after its ranking (ring order) and the selection
+ * spreads replicaCount of them; without, the candidates are the set.
+ * CLUSTER_ERR_NO_NODES with no candidate, CLUSTER_ERR_AFFINITY when a
+ * required rule cannot be met. */
+static clusterResult clusterRingSelect(const clusterRing *ring,
+                                       const clusterNode **replicas,
+                                       uint32_t *foundOut, uint32_t maxReplicas,
+                                       uint32_t replicaCount,
+                                       const clusterAffinityRule *rules,
+                                       uint8_t ruleCount, bool *spreadMet) {
+    uint32_t found = *foundOut;
+    const bool spread = rules && ruleCount > 0;
+    *spreadMet = true;
+    if (found == 0) {
         return CLUSTER_ERR_NO_NODES;
     }
 
@@ -2073,7 +2131,6 @@ clusterRingPlace(const clusterRing *ring, clusterStrategyType strategy,
      * preference order, so it never overtakes the candidates it reads).
      * A strategy may rank only some nodes (Jump's probes collide), so the
      * healthy nodes it left out follow its ranking, in ring order. */
-    out->spreadMet = true;
     if (spread && found < maxReplicas) {
         seenTracker listed;
         seenTrackerInit(&listed, ring->nodeCount);
@@ -2092,25 +2149,15 @@ clusterRingPlace(const clusterRing *ring, clusterStrategyType strategy,
 
     if (spread) {
         bool requiredMet = true;
-        found = clusterSelectReplicas(replicas, found, replicaCount, rules,
-                                      ruleCount, replicas, &requiredMet,
-                                      &out->spreadMet);
+        found =
+            clusterSelectReplicas(replicas, found, replicaCount, rules,
+                                  ruleCount, replicas, &requiredMet, spreadMet);
         if (!requiredMet) {
-            clusterPlacementFree(out);
             return CLUSTER_ERR_AFFINITY;
         }
     }
 
-    /* Copy results to the placement */
-    out->primary = replicas[0];
-    out->healthyCount = 0;
-    for (uint32_t i = 0; i < found; i++) {
-        clusterPlacementAddReplica(out, replicas[i]);
-        if (replicas[i]->state == CLUSTER_NODE_UP) {
-            out->healthyCount++;
-        }
-    }
-
+    *foundOut = found;
     return CLUSTER_OK;
 }
 
@@ -2644,6 +2691,395 @@ const clusterKeySpace *clusterRingGetKeySpace(const clusterRing *ring,
  * Rebalancing
  * ==================================================================== */
 
+static void clusterRebalancePlanFree(clusterRebalancePlan *plan) {
+    if (plan) {
+        zfree(plan->moves);
+        zfree(plan);
+    }
+}
+
+clusterResult clusterRebalancePlanAddMove(clusterRebalancePlan *plan,
+                                          const clusterRebalanceMove *move) {
+    if (!plan || !move) {
+        return CLUSTER_ERR;
+    }
+    if (plan->moveCount == plan->moveCapacity) {
+        const uint32_t capacity =
+            plan->moveCapacity ? plan->moveCapacity * 2 : 16;
+        /* @own: container; free=clusterRebalancePlanFree */
+        plan->moves = zrealloc(plan->moves, capacity * sizeof(*plan->moves));
+        plan->moveCapacity = capacity;
+    }
+    clusterRebalanceMove *added = &plan->moves[plan->moveCount++];
+    *added = *move;
+    added->state = CLUSTER_MOVE_PENDING;
+    return CLUSTER_OK;
+}
+
+/* A Ketama ring's placement per arc: arc i holds the hashes in
+ * (points[i-1], points[i]] (arc 0 also those above the last point) and
+ * places them on nodes[i * width ...] (counts[i] of them).  A placement
+ * starts at the first vnode at or after the key's hash, so one walk per
+ * distinct vnode point gives every arc's replica set. */
+typedef struct clusterArcs {
+    uint64_t *points;
+    const clusterNode **nodes;
+    uint32_t *counts;
+    uint32_t count;
+    uint32_t width;
+} clusterArcs;
+
+static void clusterArcsRelease_cleanup(clusterArcs *a) {
+    zfree(a->points);
+    zfree(a->nodes);
+    zfree(a->counts);
+}
+
+/* The arcs of `r`'s own placement (its replica count and rules) */
+static void clusterArcsBuild(const clusterRing *r, clusterArcs *a) {
+    const clusterKetamaData *v = &r->vnodes;
+    uint32_t replicaCount = r->defaultQuorum.replicaCount;
+    if (replicaCount > 256) {
+        replicaCount = 256;
+    }
+    const bool spread = r->affinityRules && r->affinityRuleCount > 0;
+    const uint32_t maxReplicas = spread ? r->nodeCount : replicaCount;
+
+    *a = (clusterArcs){.width = replicaCount ? replicaCount : 1};
+    if (v->vnodeCount == 0 || maxReplicas == 0) {
+        return;
+    }
+
+    /* @own: container; free=clusterArcsRelease */
+    a->points = zcalloc(v->vnodeCount, sizeof(*a->points));
+    /* @own: container; free=clusterArcsRelease */
+    a->counts = zcalloc(v->vnodeCount, sizeof(*a->counts));
+    /* @own: container; free=clusterArcsRelease */
+    a->nodes = zcalloc((size_t)v->vnodeCount * a->width, sizeof(*a->nodes));
+    cleanerName(zfree, NodePtrs) const clusterNode **scratch =
+        zcalloc(maxReplicas, sizeof(*scratch));
+
+    for (uint32_t i = 0; i < v->vnodeCount; i++) {
+        if (i > 0 && v->vnodes[i].hashPoint == v->vnodes[i - 1].hashPoint) {
+            continue; /* placements start at the first of equal points */
+        }
+        uint32_t found =
+            clusterKetamaWalkFrom(r, i, scratch, maxReplicas, -1.0);
+        bool spreadMet;
+        if (clusterRingSelect(r, scratch, &found, maxReplicas, replicaCount,
+                              r->affinityRules, r->affinityRuleCount,
+                              &spreadMet) != CLUSTER_OK) {
+            found = 0; /* no placement: the arc has no holders */
+        }
+        a->points[a->count] = v->vnodes[i].hashPoint;
+        a->counts[a->count] = found;
+        memcpy(&a->nodes[(size_t)a->count * a->width], scratch,
+               found * sizeof(*scratch));
+        a->count++;
+    }
+}
+
+/* Called for each hash range [lo, hi] over which both rings' placements
+ * are constant: `from` places it on oldNodes, `to` on newNodes */
+typedef void clusterArcSegmentFn(void *ctx, uint64_t lo, uint64_t hi,
+                                 const clusterNode **oldNodes,
+                                 uint32_t oldCount,
+                                 const clusterNode **newNodes,
+                                 uint32_t newCount);
+
+/* Visit the hash space in segments bounded by every point of either arc
+ * table; a segment ending at u lies in the arc of each table's first
+ * point at or after u (wrapping to arc 0) */
+static void clusterArcsOverlay(const clusterArcs *a, const clusterArcs *b,
+                               clusterArcSegmentFn *fn, void *ctx) {
+    if (a->count == 0 && b->count == 0) {
+        return;
+    }
+
+    uint32_t ia = 0;
+    uint32_t ib = 0;
+    uint64_t lo = 0;
+    bool done = false;
+    while (!done && (ia < a->count || ib < b->count)) {
+        uint64_t hi = UINT64_MAX;
+        if (ia < a->count && a->points[ia] < hi) {
+            hi = a->points[ia];
+        }
+        if (ib < b->count && b->points[ib] < hi) {
+            hi = b->points[ib];
+        }
+
+        const uint32_t arcA = ia < a->count ? ia : 0;
+        const uint32_t arcB = ib < b->count ? ib : 0;
+        fn(ctx, lo, hi, a->count ? &a->nodes[(size_t)arcA * a->width] : NULL,
+           a->count ? a->counts[arcA] : 0,
+           b->count ? &b->nodes[(size_t)arcB * b->width] : NULL,
+           b->count ? b->counts[arcB] : 0);
+
+        ia += ia < a->count && a->points[ia] == hi;
+        ib += ib < b->count && b->points[ib] == hi;
+        done = hi == UINT64_MAX;
+        lo = hi + 1;
+    }
+
+    /* Past the last point: arc 0 of each */
+    if (!done) {
+        fn(ctx, lo, UINT64_MAX, a->count ? a->nodes : NULL,
+           a->count ? a->counts[0] : 0, b->count ? b->nodes : NULL,
+           b->count ? b->counts[0] : 0);
+    }
+}
+
+typedef struct clusterPlanContext {
+    const clusterRing *from;
+    const clusterRing *to;
+    clusterRebalancePlan *plan;
+    unsigned __int128 *held; /* hash count each `from` node holds */
+    uint32_t *open;          /* moves ending just before this segment */
+    uint32_t openCount;
+    uint32_t *next; /* moves ending at this segment */
+    uint32_t nextCount;
+} clusterPlanContext;
+
+static bool clusterNodesHoldId(const clusterNode **nodes, uint32_t count,
+                               uint64_t id) {
+    for (uint32_t i = 0; i < count; i++) {
+        if (nodes[i]->id == id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void clusterPlanCountHeld(void *ctx, uint64_t lo, uint64_t hi,
+                                 const clusterNode **oldNodes,
+                                 uint32_t oldCount,
+                                 const clusterNode **newNodes,
+                                 uint32_t newCount) {
+    (void)newNodes;
+    (void)newCount;
+    clusterPlanContext *c = ctx;
+    for (uint32_t i = 0; i < oldCount; i++) {
+        c->held[oldNodes[i]->arrayIndex] += (unsigned __int128)(hi - lo) + 1;
+    }
+}
+
+static void clusterPlanSegment(void *ctx, uint64_t lo, uint64_t hi,
+                               const clusterNode **oldNodes, uint32_t oldCount,
+                               const clusterNode **newNodes,
+                               uint32_t newCount) {
+    clusterPlanContext *c = ctx;
+    c->nextCount = 0;
+
+    for (uint32_t t = 0; t < newCount && oldCount > 0; t++) {
+        const uint64_t target = newNodes[t]->id;
+        if (clusterNodesHoldId(oldNodes, oldCount, target)) {
+            continue;
+        }
+
+        /* The first holder still serving: UP, or removed (decommission) */
+        const clusterNode *source = oldNodes[0];
+        for (uint32_t o = 0; o < oldCount; o++) {
+            const clusterNode *now = clusterRingGetNode(c->to, oldNodes[o]->id);
+            if (!now || now->state == CLUSTER_NODE_UP) {
+                source = oldNodes[o];
+                break;
+            }
+        }
+
+        /* The source's bytes in proportion to the hashes it holds */
+        const clusterNode *sourceNow = clusterRingGetNode(c->to, source->id);
+        const uint64_t used =
+            sourceNow ? sourceNow->usedBytes : source->usedBytes;
+        const unsigned __int128 held = c->held[source->arrayIndex];
+        const uint64_t estimate =
+            held ? (uint64_t)((unsigned __int128)used *
+                              ((unsigned __int128)(hi - lo) + 1) / held)
+                 : 0;
+
+        /* Extend this pair's move from the segment before, else add one */
+        uint32_t index = UINT32_MAX;
+        for (uint32_t m = 0; m < c->openCount; m++) {
+            const clusterRebalanceMove *move = &c->plan->moves[c->open[m]];
+            if (move->sourceNodeId == source->id &&
+                move->targetNodeId == target) {
+                index = c->open[m];
+                break;
+            }
+        }
+        if (index != UINT32_MAX) {
+            c->plan->moves[index].rangeEnd = hi;
+            c->plan->moves[index].estimatedBytes += estimate;
+        } else {
+            const clusterRebalanceMove move = {.rangeStart = lo,
+                                               .rangeEnd = hi,
+                                               .sourceNodeId = source->id,
+                                               .targetNodeId = target,
+                                               .estimatedBytes = estimate};
+            index = c->plan->moveCount;
+            clusterRebalancePlanAddMove(c->plan, &move);
+        }
+        c->next[c->nextCount++] = index;
+    }
+
+    uint32_t *swap = c->open;
+    c->open = c->next;
+    c->next = swap;
+    c->openCount = c->nextCount;
+}
+
+/* Exact Ketama plan: overlay both rings' arc tables */
+static void clusterPlanKetama(const clusterRing *from, const clusterRing *to,
+                              clusterRebalancePlan *plan) {
+    cleaner(clusterArcsRelease) clusterArcs before;
+    cleaner(clusterArcsRelease) clusterArcs after;
+    clusterArcsBuild(from, &before);
+    clusterArcsBuild(to, &after);
+
+    cleanerName(zfree, U32) uint32_t *open =
+        zcalloc(after.width, sizeof(*open));
+    cleanerName(zfree, U32) uint32_t *next =
+        zcalloc(after.width, sizeof(*next));
+    cleaner(zfree) void *held = zcalloc(from->nodeCount ? from->nodeCount : 1,
+                                        sizeof(unsigned __int128));
+    clusterPlanContext c = {.from = from,
+                            .to = to,
+                            .plan = plan,
+                            .held = held,
+                            .open = open,
+                            .next = next};
+
+    clusterArcsOverlay(&before, &after, clusterPlanCountHeld, &c);
+    clusterArcsOverlay(&before, &after, clusterPlanSegment, &c);
+}
+
+clusterRing *clusterRingCopy(const clusterRing *ring) {
+    if (!ring) {
+        return NULL;
+    }
+    flex *f = clusterRingBuildSnapshotFlex(ring);
+    /* @own: caller; free=clusterRingFree */
+    clusterRing *copy = clusterRingDeserialize(f, flexBytes(f));
+    flexFree(f);
+
+    /* Custom hooks are code: the copy shares them, and their data stays
+     * the original's to free */
+    if (copy && ring->strategyType == CLUSTER_STRATEGY_CUSTOM) {
+        copy->customStrategy = ring->customStrategy;
+        copy->sharesCustomStrategy = true;
+    }
+    return copy;
+}
+
+clusterResult clusterRingPlanRebalance(clusterRing *ring,
+                                       const clusterRing *from) {
+    if (!ring || !from) {
+        return CLUSTER_ERR;
+    }
+
+    cleaner(clusterRebalancePlanFree) clusterRebalancePlan *plan =
+        zcalloc(1, sizeof(*plan));
+    plan->createdAt = clusterGetTimeMs();
+
+    const clusterStrategy *custom = ring->customStrategy;
+    if (ring->strategyType == CLUSTER_STRATEGY_KETAMA) {
+        if (from->strategyType != CLUSTER_STRATEGY_KETAMA ||
+            from->hashSeed != ring->hashSeed) {
+            return CLUSTER_ERR_INVALID_CONFIG;
+        }
+        clusterPlanKetama(from, ring, plan);
+    } else if (ring->strategyType == CLUSTER_STRATEGY_CUSTOM && custom &&
+               custom->planRebalance) {
+        if (!custom->planRebalance(from, ring, plan)) {
+            return CLUSTER_ERR;
+        }
+    } else {
+        return CLUSTER_ERR_UNSUPPORTED;
+    }
+
+    for (uint32_t m = 0; m < plan->moveCount; m++) {
+        plan->totalBytes += plan->moves[m].estimatedBytes;
+    }
+
+    clusterRebalancePlanFree(ring->rebalancePlan);
+    ring->rebalancePlan = plan;
+    plan = NULL;
+
+    if (ring->rebalanceCallback) {
+        ring->rebalanceCallback(ring, ring->rebalancePlan,
+                                ring->rebalanceCallbackData);
+    }
+    return CLUSTER_OK;
+}
+
+void clusterRebalancePlanGetInfo(const clusterRebalancePlan *plan,
+                                 clusterRebalanceInfo *info) {
+    if (!info) {
+        return;
+    }
+    *info = (clusterRebalanceInfo){0};
+    if (plan) {
+        *info = (clusterRebalanceInfo){.moveCount = plan->moveCount,
+                                       .completedCount = plan->completedCount,
+                                       .failedCount = plan->failedCount,
+                                       .totalBytes = plan->totalBytes,
+                                       .movedBytes = plan->movedBytes,
+                                       .createdAtMs = plan->createdAt,
+                                       .startedAtMs = plan->startedAt};
+    }
+}
+
+/* The ring's move `moveIndex` when it is in `state`, else why not */
+static clusterResult clusterRingMoveIn(clusterRing *ring, uint32_t moveIndex,
+                                       clusterMoveState state,
+                                       clusterRebalanceMove **move) {
+    if (!ring || !ring->rebalancePlan) {
+        return CLUSTER_ERR;
+    }
+    if (moveIndex >= ring->rebalancePlan->moveCount) {
+        return CLUSTER_ERR_NOT_FOUND;
+    }
+    *move = &ring->rebalancePlan->moves[moveIndex];
+    return (*move)->state == state ? CLUSTER_OK : CLUSTER_ERR_INVALID_STATE;
+}
+
+clusterResult clusterRingStartMove(clusterRing *ring, uint32_t moveIndex) {
+    clusterRebalanceMove *move = NULL;
+    clusterResult result =
+        clusterRingMoveIn(ring, moveIndex, CLUSTER_MOVE_PENDING, &move);
+    if (result == CLUSTER_ERR_INVALID_STATE &&
+        move->state == CLUSTER_MOVE_FAILED) {
+        ring->rebalancePlan->failedCount--;
+        result = CLUSTER_OK;
+    }
+    if (result != CLUSTER_OK) {
+        return result;
+    }
+
+    move->state = CLUSTER_MOVE_IN_PROGRESS;
+    if (!ring->rebalancePlan->startedAt) {
+        ring->rebalancePlan->startedAt = clusterGetTimeMs();
+    }
+    return CLUSTER_OK;
+}
+
+clusterResult clusterRingFailMove(clusterRing *ring, uint32_t moveIndex) {
+    clusterRebalanceMove *move = NULL;
+    const clusterResult result =
+        clusterRingMoveIn(ring, moveIndex, CLUSTER_MOVE_IN_PROGRESS, &move);
+    if (result != CLUSTER_OK) {
+        return result;
+    }
+
+    move->state = CLUSTER_MOVE_FAILED;
+    ring->rebalancePlan->failedCount++;
+    if (ring->rebalanceCallback) {
+        ring->rebalanceCallback(ring, ring->rebalancePlan,
+                                ring->rebalanceCallbackData);
+    }
+    return CLUSTER_OK;
+}
+
 const clusterRebalancePlan *
 clusterRingGetRebalancePlan(const clusterRing *ring) {
     return ring ? ring->rebalancePlan : NULL;
@@ -2669,17 +3105,11 @@ float clusterRebalancePlanProgress(const clusterRebalancePlan *plan) {
 }
 
 clusterResult clusterRingCompleteMove(clusterRing *ring, uint32_t moveIndex) {
-    if (!ring || !ring->rebalancePlan) {
-        return CLUSTER_ERR;
-    }
-
-    if (moveIndex >= ring->rebalancePlan->moveCount) {
-        return CLUSTER_ERR_NOT_FOUND;
-    }
-
-    clusterRebalanceMove *move = &ring->rebalancePlan->moves[moveIndex];
-    if (move->state != CLUSTER_MOVE_IN_PROGRESS) {
-        return CLUSTER_ERR_INVALID_STATE;
+    clusterRebalanceMove *move = NULL;
+    const clusterResult result =
+        clusterRingMoveIn(ring, moveIndex, CLUSTER_MOVE_IN_PROGRESS, &move);
+    if (result != CLUSTER_OK) {
+        return result;
     }
 
     move->state = CLUSTER_MOVE_COMPLETED;
@@ -2701,13 +3131,8 @@ clusterResult clusterRingCancelRebalance(clusterRing *ring) {
         return CLUSTER_ERR;
     }
 
-    if (ring->rebalancePlan->moves) {
-        zfree(ring->rebalancePlan->moves);
-    }
-    zfree(ring->rebalancePlan);
+    clusterRebalancePlanFree(ring->rebalancePlan);
     ring->rebalancePlan = NULL;
-    ring->rebalanceInProgress = false;
-
     return CLUSTER_OK;
 }
 
@@ -2897,6 +3322,11 @@ void clusterRingGetStats(const clusterRing *ring, clusterRingStats *stats) {
     stats->memoryBytes += ring->vnodes.vnodeCapacity * sizeof(clusterVnode);
     stats->memoryBytes += ring->jump.bucketCount * sizeof(*ring->jump.nodes);
     stats->memoryBytes += ring->maglev.tableSize * sizeof(*ring->maglev.lookup);
+    if (ring->rebalancePlan) {
+        stats->memoryBytes +=
+            sizeof(*ring->rebalancePlan) +
+            ring->rebalancePlan->moveCapacity * sizeof(clusterRebalanceMove);
+    }
 }
 
 /* ====================================================================
@@ -6000,6 +6430,121 @@ static void clusterRingTestFreeHealth(void *data) {
     h->frees++;
 }
 
+/* Check `to`'s plan against both rings' placements of test keys: each
+ * node `to` places a key on that `from` did not gets exactly one move
+ * covering the key's hash, from a node `from` placed it on; no other move
+ * covers it.  Returns the violations. */
+static uint32_t clusterRingTestCheckPlan(const clusterRing *from,
+                                         const clusterRing *to) {
+    const clusterRebalancePlan *plan = clusterRingGetRebalancePlan(to);
+    const uint32_t moveCount = clusterRebalancePlanMoveCount(plan);
+    uint32_t violations = 0;
+    for (uint32_t k = 0; k < CLUSTER_RING_TEST_KEYS; k++) {
+        char key[16];
+        const int len = snprintf(key, sizeof(key), "c%u", k);
+        clusterPlacement before;
+        clusterPlacement after;
+        clusterRingLocate(from, key, (uint32_t)len, &before);
+        clusterRingLocate(to, key, (uint32_t)len, &after);
+        const uint64_t hash = after.hashValue;
+
+        uint32_t covering = 0;
+        for (uint32_t m = 0; m < moveCount; m++) {
+            const clusterRebalanceMove *move =
+                clusterRebalancePlanGetMove(plan, m);
+            if (hash < move->rangeStart || hash > move->rangeEnd) {
+                continue;
+            }
+            covering++;
+            bool sourceHeld = false;
+            bool targetNew = false;
+            bool targetHeld = false;
+            for (size_t r = 0; r < clusterPlacementReplicaCount(&before); r++) {
+                const uint64_t id = clusterPlacementGetReplica(&before, r)->id;
+                sourceHeld |= id == move->sourceNodeId;
+                targetHeld |= id == move->targetNodeId;
+            }
+            for (size_t r = 0; r < clusterPlacementReplicaCount(&after); r++) {
+                targetNew |= clusterPlacementGetReplica(&after, r)->id ==
+                             move->targetNodeId;
+            }
+            violations += !sourceHeld || !targetNew || targetHeld;
+        }
+
+        uint32_t gained = 0;
+        for (size_t r = 0; r < clusterPlacementReplicaCount(&after); r++) {
+            const uint64_t id = clusterPlacementGetReplica(&after, r)->id;
+            bool held = false;
+            for (size_t o = 0; o < clusterPlacementReplicaCount(&before); o++) {
+                held |= clusterPlacementGetReplica(&before, o)->id == id;
+            }
+            gained += !held && clusterPlacementReplicaCount(&before) > 0;
+        }
+        violations += covering != gained;
+        clusterPlacementFree(&before);
+        clusterPlacementFree(&after);
+    }
+    return violations;
+}
+
+static void clusterRingTestCountPlan(clusterRing *ring,
+                                     const clusterRebalancePlan *plan,
+                                     void *userData) {
+    (void)ring;
+    (void)plan;
+    (*(uint32_t *)userData)++;
+}
+
+/* A CUSTOM strategy: locate ranks nodes by ascending id, preferenceOrder
+ * by descending id, and planRebalance plans one whole-ring move */
+static uint32_t clusterRingTestRankNodes(const clusterRing *ring,
+                                         const clusterNode **out,
+                                         uint32_t maxNodes, bool descending) {
+    uint32_t found = 0;
+    const uint32_t count = clusterRingNodeCount(ring);
+    for (uint32_t i = 0; i < count && found < maxNodes; i++) {
+        const uint64_t id = descending ? count - i : i + 1;
+        const clusterNode *node = clusterRingGetNode(ring, id);
+        if (node && clusterNodeGetState(node) == CLUSTER_NODE_UP) {
+            out[found++] = node;
+        }
+    }
+    return found;
+}
+
+static uint32_t clusterRingTestAscending(const clusterRing *ring,
+                                         const void *key, uint32_t keyLen,
+                                         const clusterNode **out,
+                                         uint32_t maxNodes) {
+    (void)key;
+    (void)keyLen;
+    return clusterRingTestRankNodes(ring, out, maxNodes, false);
+}
+
+static uint32_t clusterRingTestDescending(const clusterRing *ring,
+                                          const void *key, uint32_t keyLen,
+                                          const clusterNode **out,
+                                          uint32_t maxNodes) {
+    (void)key;
+    (void)keyLen;
+    return clusterRingTestRankNodes(ring, out, maxNodes, true);
+}
+
+static bool clusterRingTestPlanWhole(const clusterRing *from,
+                                     const clusterRing *to,
+                                     clusterRebalancePlan *plan) {
+    const clusterRebalanceMove move = {
+        .rangeEnd = UINT64_MAX,
+        .sourceNodeId = clusterRingNodeCount(from),
+        .targetNodeId = clusterRingNodeCount(to),
+    };
+    return clusterRebalancePlanAddMove(plan, &move) == CLUSTER_OK;
+}
+
+static void clusterRingTestFreeStrategy(void *data) {
+    (*(uint32_t *)data)++;
+}
+
 typedef struct clusterRingTestConcurrent {
     const clusterRing *ring;
     const clusterKeySpace *ks;
@@ -6720,6 +7265,289 @@ int clusterRingTest(int argc, char *argv[]) {
         }
         if (first.frees != 1 || second.frees != 1) {
             ERR("frees after ring free: %u %u", first.frees, second.frees);
+        }
+    }
+
+    TEST("rebalance plans move exactly what placements gained") {
+        clusterAffinityRule rackSpread = CLUSTER_AFFINITY_RACK_SPREAD;
+        for (int withRules = 0; withRules <= 1; withRules++) {
+            const clusterRingConfig rc = {
+                .strategyType = CLUSTER_STRATEGY_KETAMA,
+                .defaultQuorum = {.replicaCount = 3},
+                .affinityRules = withRules ? &rackSpread : NULL,
+                .affinityRuleCount = withRules ? 1 : 0};
+            cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&rc);
+            for (uint64_t id = 1; id <= 8; id++) {
+                const clusterNodeConfig nc = {
+                    .id = id,
+                    .location = {.nodeId = id, .rackId = (uint32_t)(id % 4)},
+                    .capacityBytes = 1u << 30};
+                clusterRingAddNode(ring, &nc);
+                clusterRingSetNodeUsedBytes(ring, id, id << 20);
+            }
+            uint32_t callbacks = 0;
+            clusterRingSetRebalanceCallback(ring, clusterRingTestCountPlan,
+                                            &callbacks);
+
+            /* Each change, planned from the layout before it */
+            for (int change = 0; change < 6; change++) {
+                cleaner(clusterRingFree) clusterRing *settled =
+                    clusterRingCopy(ring);
+                switch (change) {
+                case 0: /* nothing changed: nothing moves */
+                    break;
+                case 1: {
+                    const clusterNodeConfig nc = {
+                        .id = 9, .location = {.nodeId = 9, .rackId = 1}};
+                    clusterRingAddNode(ring, &nc);
+                    break;
+                }
+                case 2:
+                    clusterRingRemoveNode(ring, 3);
+                    break;
+                case 3:
+                    clusterRingSetNodeState(ring, 5, CLUSTER_NODE_DOWN);
+                    break;
+                case 4:
+                    clusterRingSetNodeWeight(ring, 2, 400);
+                    break;
+                case 5:
+                    clusterRingSetNodeState(ring, 5, CLUSTER_NODE_UP);
+                    break;
+                }
+                if (clusterRingPlanRebalance(ring, settled) != CLUSTER_OK) {
+                    ERR("rules %d change %d: plan refused", withRules, change);
+                    continue;
+                }
+                const uint32_t moves = clusterRebalancePlanMoveCount(
+                    clusterRingGetRebalancePlan(ring));
+                if ((change == 0) != (moves == 0)) {
+                    ERR("rules %d change %d: %u moves", withRules, change,
+                        moves);
+                }
+                const uint32_t violations =
+                    clusterRingTestCheckPlan(settled, ring);
+                if (violations) {
+                    ERR("rules %d change %d: %u violations", withRules, change,
+                        violations);
+                }
+
+                /* A down node is not a source while another holder is up;
+                 * a removed one may be (it still serves its data) */
+                const clusterRebalancePlan *plan =
+                    clusterRingGetRebalancePlan(ring);
+                for (uint32_t m = 0; m < moves; m++) {
+                    const clusterRebalanceMove *move =
+                        clusterRebalancePlanGetMove(plan, m);
+                    if (change == 3 && move->sourceNodeId == 5) {
+                        ERRR("planned a copy from the down node");
+                    }
+                }
+            }
+            if (callbacks != 6) {
+                ERR("rules %d: %u plan callbacks", withRules, callbacks);
+            }
+        }
+    }
+
+    TEST("rebalance estimates divide a removed node's bytes") {
+        const clusterRingConfig rc = {.strategyType = CLUSTER_STRATEGY_KETAMA,
+                                      .defaultQuorum = {.replicaCount = 1}};
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&rc);
+        for (uint64_t id = 1; id <= 6; id++) {
+            const clusterNodeConfig nc = {.id = id};
+            clusterRingAddNode(ring, &nc);
+        }
+        const uint64_t used = (uint64_t)7 << 40;
+        clusterRingSetNodeUsedBytes(ring, 4, used);
+        cleaner(clusterRingFree) clusterRing *settled = clusterRingCopy(ring);
+        clusterRingRemoveNode(ring, 4);
+        clusterRingPlanRebalance(ring, settled);
+
+        /* With one replica every range node 4 held moves off it, so its
+         * moves' estimates add up to its bytes (less per-range rounding) */
+        clusterRebalanceInfo info;
+        clusterRebalancePlanGetInfo(clusterRingGetRebalancePlan(ring), &info);
+        uint64_t fromRemoved = 0;
+        for (uint32_t m = 0; m < info.moveCount; m++) {
+            const clusterRebalanceMove *move = clusterRebalancePlanGetMove(
+                clusterRingGetRebalancePlan(ring), m);
+            if (move->sourceNodeId != 4) {
+                ERRR("a move from a node that lost nothing");
+            }
+            fromRemoved += move->estimatedBytes;
+        }
+        if (fromRemoved > used || used - fromRemoved > info.moveCount * 1000u ||
+            info.totalBytes != fromRemoved) {
+            ERR("estimates %" PRIu64 " of %" PRIu64 " (total %" PRIu64 ")",
+                fromRemoved, used, info.totalBytes);
+        }
+    }
+
+    TEST("rebalance moves run start to finish") {
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
+        for (uint64_t id = 1; id <= 4; id++) {
+            const clusterNodeConfig nc = {.id = id};
+            clusterRingAddNode(ring, &nc);
+        }
+        if (clusterRingStartMove(ring, 0) != CLUSTER_ERR ||
+            clusterRingCancelRebalance(ring) != CLUSTER_ERR) {
+            ERRR("moves without a plan");
+        }
+        cleaner(clusterRingFree) clusterRing *settled = clusterRingCopy(ring);
+        const clusterNodeConfig nc = {.id = 5};
+        clusterRingAddNode(ring, &nc);
+        uint32_t callbacks = 0;
+        clusterRingSetRebalanceCallback(ring, clusterRingTestCountPlan,
+                                        &callbacks);
+        clusterRingPlanRebalance(ring, settled);
+
+        const clusterRebalancePlan *plan = clusterRingGetRebalancePlan(ring);
+        const uint32_t moves = clusterRebalancePlanMoveCount(plan);
+        clusterRebalanceInfo info;
+        clusterRebalancePlanGetInfo(plan, &info);
+        if (moves < 2 || info.moveCount != moves || info.startedAtMs != 0 ||
+            clusterRebalancePlanProgress(plan) != 0.0f) {
+            ERR("fresh plan: %u moves", moves);
+        }
+        if (clusterRingCompleteMove(ring, 0) != CLUSTER_ERR_INVALID_STATE ||
+            clusterRingFailMove(ring, 0) != CLUSTER_ERR_INVALID_STATE ||
+            clusterRingStartMove(ring, moves) != CLUSTER_ERR_NOT_FOUND) {
+            ERRR("transitions out of order were accepted");
+        }
+
+        /* Move 0 fails once, then every move starts and completes */
+        clusterRingStartMove(ring, 0);
+        clusterRingFailMove(ring, 0);
+        clusterRebalancePlanGetInfo(plan, &info);
+        if (info.failedCount != 1 || info.startedAtMs == 0) {
+            ERRR("failed move not counted");
+        }
+        for (uint32_t m = 0; m < moves; m++) {
+            if (clusterRingStartMove(ring, m) != CLUSTER_OK ||
+                clusterRingCompleteMove(ring, m) != CLUSTER_OK) {
+                ERR("move %u did not run", m);
+            }
+        }
+        clusterRebalancePlanGetInfo(plan, &info);
+        clusterRingStats stats;
+        clusterRingGetStats(ring, &stats);
+        if (info.completedCount != moves || info.failedCount != 0 ||
+            clusterRebalancePlanProgress(plan) != 1.0f ||
+            stats.rebalanceMoves != moves || callbacks != 2 + moves ||
+            clusterRingCompleteMove(ring, 0) != CLUSTER_ERR_INVALID_STATE) {
+            ERR("finished plan: %u of %u, %u callbacks", info.completedCount,
+                moves, callbacks);
+        }
+        if (clusterRingCancelRebalance(ring) != CLUSTER_OK ||
+            clusterRingGetRebalancePlan(ring)) {
+            ERRR("cancel kept the plan");
+        }
+    }
+
+    TEST("rebalance refuses what it cannot plan by ranges") {
+        cleaner(clusterRingFree) clusterRing *ketama = clusterRingNewDefault();
+        for (clusterStrategyType s = CLUSTER_STRATEGY_JUMP;
+             s <= CLUSTER_STRATEGY_BOUNDED; s++) {
+            const clusterRingConfig rc = {.strategyType = s};
+            cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&rc);
+            if (clusterRingPlanRebalance(ring, ring) !=
+                CLUSTER_ERR_UNSUPPORTED) {
+                ERR("strategy %d planned by ranges", s);
+            }
+        }
+        const clusterRingConfig seeded = {
+            .strategyType = CLUSTER_STRATEGY_KETAMA, .hashSeed = 99};
+        cleaner(clusterRingFree) clusterRing *other = clusterRingNew(&seeded);
+        if (clusterRingPlanRebalance(other, ketama) !=
+            CLUSTER_ERR_INVALID_CONFIG) {
+            ERRR("planned across hash seeds");
+        }
+    }
+
+    TEST("custom strategies rank, plan and copy through their hooks") {
+        uint32_t frees = 0;
+        clusterStrategy custom = {.name = "ranked",
+                                  .locate = clusterRingTestAscending,
+                                  .preferenceOrder = clusterRingTestDescending,
+                                  .planRebalance = clusterRingTestPlanWhole,
+                                  .strategyData = &frees,
+                                  .freeStrategyData =
+                                      clusterRingTestFreeStrategy};
+        clusterAffinityRule nodeSpread = {.spreadLevel = CLUSTER_LEVEL_NODE,
+                                          .minSpread = 1};
+        const clusterRingConfig rc = {.strategyType = CLUSTER_STRATEGY_CUSTOM,
+                                      .customStrategy = &custom,
+                                      .defaultQuorum = {.replicaCount = 2}};
+        {
+            cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&rc);
+            for (uint64_t id = 1; id <= 5; id++) {
+                const clusterNodeConfig nc = {.id = id,
+                                              .location = {.nodeId = id}};
+                clusterRingAddNode(ring, &nc);
+            }
+
+            /* locate places the ring; preferenceOrder ranks for rules */
+            clusterPlacement p;
+            clusterRingLocate(ring, "k", 1, &p);
+            const uint64_t plainPrimary = p.primary->id;
+            clusterPlacementFree(&p);
+            const clusterKeySpaceConfig kc = {
+                .name = "spread", .rules = &nodeSpread, .ruleCount = 1};
+            clusterKeySpace *ks = NULL;
+            clusterRingAddKeySpace(ring, &kc, &ks);
+            clusterRingLocateKeyspace(ring, ks, "k", 1, &p);
+            const uint64_t rankedPrimary = p.primary->id;
+            clusterPlacementFree(&p);
+            if (plainPrimary != 1 || rankedPrimary != 5) {
+                ERR("primaries %" PRIu64 " / %" PRIu64, plainPrimary,
+                    rankedPrimary);
+            }
+
+            /* The copy shares the hooks and leaves their data alone */
+            {
+                cleaner(clusterRingFree) clusterRing *copy =
+                    clusterRingCopy(ring);
+                clusterRingLocate(copy, "k", 1, &p);
+                if (!p.primary || p.primary->id != plainPrimary) {
+                    ERRR("copy places differently");
+                }
+                clusterPlacementFree(&p);
+                if (clusterRingPlanRebalance(ring, copy) != CLUSTER_OK ||
+                    clusterRebalancePlanGetMove(
+                        clusterRingGetRebalancePlan(ring), 0)
+                            ->targetNodeId != 5) {
+                    ERRR("custom plan not used");
+                }
+            }
+            if (frees != 0) {
+                ERRR("freeing the copy freed the hooks' data");
+            }
+        }
+        if (frees != 1) {
+            ERR("hooks' data freed %u times", frees);
+        }
+    }
+
+    TEST("copies place as the original does") {
+        for (clusterStrategyType s = CLUSTER_STRATEGY_KETAMA;
+             s < CLUSTER_STRATEGY_CUSTOM; s++) {
+            const clusterRingConfig rc = {.strategyType = s,
+                                          .defaultQuorum = {.replicaCount = 2}};
+            cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&rc);
+            for (uint64_t id = 1; id <= 7; id++) {
+                const clusterNodeConfig nc = {.id = id, .weight = 50 * id};
+                clusterRingAddNode(ring, &nc);
+            }
+            clusterRingSetNodeState(ring, 3, CLUSTER_NODE_DOWN);
+            cleaner(clusterRingFree) clusterRing *copy = clusterRingCopy(ring);
+            for (uint32_t k = 0; k < 500; k++) {
+                if (clusterRingTestPrimary(ring, k) !=
+                    clusterRingTestPrimary(copy, k)) {
+                    ERR("strategy %d: key %u placed differently", s, k);
+                    break;
+                }
+            }
         }
     }
 

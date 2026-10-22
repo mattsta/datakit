@@ -80,8 +80,9 @@ typedef enum clusterResult {
     CLUSTER_ERR_INVALID_STATE = -6,
     CLUSTER_ERR_ALLOC_FAILED = -7,
     CLUSTER_ERR_INVALID_CONFIG = -8,
-    CLUSTER_ERR_AFFINITY = -9, /* no replica set meets a required affinity
-                                  rule (too few distinct locations) */
+    CLUSTER_ERR_AFFINITY = -9,     /* no replica set meets a required affinity
+                                      rule (too few distinct locations) */
+    CLUSTER_ERR_UNSUPPORTED = -10, /* the strategy cannot do this */
 } clusterResult;
 
 /* ====================================================================
@@ -223,10 +224,18 @@ typedef uint32_t (*clusterLocateFn)(const clusterRing *ring, const void *key,
                                     uint32_t maxNodes);
 
 typedef struct clusterRebalanceMove clusterRebalanceMove;
-typedef clusterRebalancePlan *(*clusterRebalanceFn)(const clusterRing *ring,
-                                                    const clusterNode *added,
-                                                    const clusterNode *removed);
 
+/* Fill `plan` (clusterRebalancePlanAddMove) with the moves that take data
+ * placed by `from` to where `to` places it; false refuses the plan */
+typedef bool (*clusterRebalanceFn)(const clusterRing *from,
+                                   const clusterRing *to,
+                                   clusterRebalancePlan *plan);
+
+/* A CUSTOM strategy: `locate` ranks up to maxNodes healthy nodes for a key
+ * (the first replicaCount are its replicas); `preferenceOrder`, when set,
+ * ranks every healthy node and is used instead when affinity rules need
+ * candidates past the replicas; `planRebalance`, when set, serves
+ * clusterRingPlanRebalance. */
 struct clusterStrategy {
     const char *name;
     clusterLocateFn locate;
@@ -383,7 +392,7 @@ clusterResult clusterRingAddNodes(clusterRing *ring,
 clusterResult clusterRingSetNodeState(clusterRing *ring, uint64_t nodeId,
                                       clusterNodeState state);
 
-/* Update node weight (triggers rebalance); 0 sets the default, 100 */
+/* Update node weight (its vnode share follows); 0 sets the default, 100 */
 clusterResult clusterRingSetNodeWeight(clusterRing *ring, uint64_t nodeId,
                                        uint32_t weight);
 
@@ -505,7 +514,20 @@ const clusterKeySpace *clusterRingGetKeySpace(const clusterRing *ring,
 
 /* ====================================================================
  * Rebalancing
- * ==================================================================== */
+ * ====================================================================
+ * A plan lists the copies that take data from where one ring placed it
+ * to where another places it.  Keep a copy of the ring (clusterRingCopy)
+ * from when the data last settled; after any number of topology changes,
+ * clusterRingPlanRebalance(ring, settled) plans from that copy to the
+ * ring.  Run each move (Start, copy the range, Complete or Fail; a failed
+ * move may start again); once every move completes, the data sits where
+ * the ring places it, and the ring is the next settled copy.
+ *
+ * A move's range is inclusive over clusterPlacement.hashValue (the key's
+ * clusterHash64 under the ring's hashSeed).  Plans cover the ring's own
+ * placement (its strategy, defaultQuorum.replicaCount and affinity
+ * rules); a keyspace placing differently needs its own accounting.  A
+ * plan is runtime state: snapshots and copies do not carry it. */
 
 typedef enum clusterMoveState {
     CLUSTER_MOVE_PENDING = 0,
@@ -515,32 +537,73 @@ typedef enum clusterMoveState {
 } clusterMoveState;
 
 struct clusterRebalanceMove {
-    uint64_t rangeStart;     /* Hash range start */
-    uint64_t rangeEnd;       /* Hash range end */
-    uint64_t sourceNodeId;   /* From node */
-    uint64_t targetNodeId;   /* To node */
-    uint64_t estimatedBytes; /* Estimated data size */
+    uint64_t rangeStart;     /* first hash of the range */
+    uint64_t rangeEnd;       /* last hash of the range (inclusive) */
+    uint64_t sourceNodeId;   /* a node holding the range's data */
+    uint64_t targetNodeId;   /* the node that must come to hold it */
+    uint64_t estimatedBytes; /* source usedBytes x the range's share of
+                                what the source holds (0 if unknown) */
     clusterMoveState state;
 };
 
-/* Get current rebalance plan (NULL if none pending) */
+/* A plan's progress */
+typedef struct clusterRebalanceInfo {
+    uint32_t moveCount;
+    uint32_t completedCount;
+    uint32_t failedCount; /* moves now FAILED */
+    uint64_t totalBytes;  /* sum of estimatedBytes */
+    uint64_t movedBytes;  /* estimatedBytes of the completed moves */
+    uint64_t createdAtMs; /* monotonic ms */
+    uint64_t startedAtMs; /* first StartMove; 0 before */
+} clusterRebalanceInfo;
+
+/* A copy of the ring's topology, configuration and keyspaces (as a
+ * snapshot round trip would give); NULL on allocation failure */
+clusterRing *clusterRingCopy(const clusterRing *ring);
+
+/* Plan the moves from `from`'s placement to `ring`'s, replacing any plan.
+ * For every range and every node `ring` places it on that `from` did not,
+ * one move copies it from a node `from` placed it on: the first such node
+ * that is UP in `ring` or no longer in it (a removed node still serves its
+ * data until the plan completes), else `from`'s primary.  Adjacent ranges
+ * with the same source and target are one move.
+ *
+ * KETAMA plans exactly (both rings KETAMA with the same hashSeed, else
+ * CLUSTER_ERR_INVALID_CONFIG); CUSTOM asks the strategy's planRebalance;
+ * Jump, Rendezvous, Maglev and bounded-load do not place by hash ranges
+ * (CLUSTER_ERR_UNSUPPORTED: re-locate each key in both rings instead).
+ * The rebalance callback sees the new plan. */
+clusterResult clusterRingPlanRebalance(clusterRing *ring,
+                                       const clusterRing *from);
+
+/* Add a PENDING move to a plan (for a CUSTOM planRebalance) */
+clusterResult clusterRebalancePlanAddMove(clusterRebalancePlan *plan,
+                                          const clusterRebalanceMove *move);
+
+/* The ring's plan; NULL when none */
 const clusterRebalancePlan *
 clusterRingGetRebalancePlan(const clusterRing *ring);
 
-/* Get rebalance move count */
 uint32_t clusterRebalancePlanMoveCount(const clusterRebalancePlan *plan);
 
-/* Get specific move */
 const clusterRebalanceMove *
 clusterRebalancePlanGetMove(const clusterRebalancePlan *plan, uint32_t index);
 
-/* Rebalance progress (0.0 - 1.0) */
+/* Completed share of the moves (1.0 for an empty plan) */
 float clusterRebalancePlanProgress(const clusterRebalancePlan *plan);
 
-/* Mark a move as completed (by external data transfer logic) */
-clusterResult clusterRingCompleteMove(clusterRing *ring, uint32_t moveIndex);
+void clusterRebalancePlanGetInfo(const clusterRebalancePlan *plan,
+                                 clusterRebalanceInfo *info);
 
-/* Cancel pending rebalance */
+/* Move transitions: Start takes a PENDING or FAILED move IN_PROGRESS;
+ * Complete and Fail end an IN_PROGRESS one (CLUSTER_ERR_INVALID_STATE
+ * otherwise, CLUSTER_ERR_NOT_FOUND for an index past the plan).  The
+ * rebalance callback runs after each Complete and Fail. */
+clusterResult clusterRingStartMove(clusterRing *ring, uint32_t moveIndex);
+clusterResult clusterRingCompleteMove(clusterRing *ring, uint32_t moveIndex);
+clusterResult clusterRingFailMove(clusterRing *ring, uint32_t moveIndex);
+
+/* Drop the plan (CLUSTER_ERR when there is none) */
 clusterResult clusterRingCancelRebalance(clusterRing *ring);
 
 /* ====================================================================
