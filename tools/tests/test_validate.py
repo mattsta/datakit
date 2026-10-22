@@ -134,25 +134,26 @@ class ValidateRun(unittest.TestCase):
         self.assertIn("-DCMAKE_BUILD_TYPE=Release", gcc)
         self.assertNotIn("--preset", gcc)
 
+        # The default quick tier skips the slow set on top of --skip.
         par = runner.command("clang22-dev ctest")
         self.assertEqual(
             par[par.index("-E") + 1],
-            f"^({validate.DEFAULT_SERIAL}|{validate.DEFAULT_SKIP})$",
+            f"^({validate.DEFAULT_SERIAL}|{validate.DEFAULT_SKIP}"
+            f"|{validate.DEFAULT_SLOW})$",
         )
         ser = runner.command("clang22-dev ctest-serial")
         self.assertEqual(ser[ser.index("-j") + 1], "1")
         self.assertEqual(ser[ser.index("-R") + 1], f"^({validate.DEFAULT_SERIAL})$")
 
-        # Debug also skips the slow tests, and says so.
+        # Debug also skips its own slow set in the quick tier, and says so.
         dbg = runner.command("clang22-debug ctest")
         self.assertTrue(
-            dbg[dbg.index("-E") + 1].endswith(f"|{validate.DEFAULT_DEBUG_SKIP})$")
+            dbg[dbg.index("-E") + 1].endswith(
+                f"|{validate.DEFAULT_SLOW}|{validate.DEFAULT_DEBUG_SLOW})$"
+            )
         )
-        self.assertIn(
-            "clang22-debug: also multimap, multiFenwick, blake3, fenwickI64, "
-            "segmentI64 (too slow",
-            out,
-        )
+        self.assertIn("- tier: quick (iterative", out)
+        self.assertIn("clang22-debug: slow, skipped in the quick tier: ", out)
 
         summary = self.root / "validate" / self.head[:10] / "summary.md"
         self.assertEqual(summary.read_text(), out.rsplit("summary: ", 1)[0])
@@ -166,18 +167,37 @@ class ValidateRun(unittest.TestCase):
             runner, compilers=self.compilers[:1], presets=["dev", "tsan"]
         )
         self.assertEqual(code, 0, out)
-        tail = f"|{validate.DEFAULT_TSAN_SKIP})$"
+        quick = (
+            f"|{validate.DEFAULT_TSAN_SKIP}|{validate.DEFAULT_SLOW}"
+            f"|{validate.DEFAULT_DEBUG_SLOW})$"
+        )
         for step in ("ctest", "ctest-serial"):
             cmd = runner.command(f"clang22-tsan {step}")
-            self.assertTrue(cmd[cmd.index("-E") + 1].endswith(tail), cmd)
+            self.assertTrue(cmd[cmd.index("-E") + 1].endswith(quick), cmd)
         self.assertIn(
-            "clang22-tsan: also flex, multimap, dkTestNonceLogEvictionPerf "
-            "(single-threaded or wall-clock",
-            out,
+            "clang22-tsan: cannot be judged here: dkTestNonceLogEvictionPerf", out
         )
-        # dev skips neither the debug nor the tsan set.
+        # dev skips neither the tsan set nor the debug/tsan slow set.
         dev = runner.command("clang22-dev ctest")
         self.assertNotIn("flex", dev[dev.index("-E") + 1])
+
+    def test_full_tier_runs_the_slow_tests(self) -> None:
+        runner = MatrixRunner(outputs={"allocaudit": "100% clean pattern\n"})
+        code, out = self.run_validate(
+            runner, compilers=self.compilers[:1], presets=["dev", "tsan"], full=True
+        )
+        self.assertEqual(code, 0, out)
+        dev = runner.command("clang22-dev ctest")
+        self.assertEqual(
+            dev[dev.index("-E") + 1],
+            f"^({validate.DEFAULT_SERIAL}|{validate.DEFAULT_SKIP})$",
+        )
+        tsan = runner.command("clang22-tsan ctest")
+        self.assertTrue(
+            tsan[tsan.index("-E") + 1].endswith(f"|{validate.DEFAULT_TSAN_SKIP})$")
+        )
+        self.assertIn("- tier: full (milestone", out)
+        self.assertNotIn("skipped in the quick tier", out)
 
     def test_tsan_reports_fail_the_run(self) -> None:
         runner = MatrixRunner(

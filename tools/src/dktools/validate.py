@@ -12,13 +12,13 @@ For each (compiler, preset) of the matrix (see
 ``toolchain.matrix``: gcc15 builds ``release``) it runs a clean
 configure, an all-targets build, then ctest twice: every test outside
 the serial and skip sets in parallel, then the serial set one test at
-a time.  Tests matching ``--debug-skip`` (default ``multimap``,
-``multiFenwick``, ``blake3``, ``fenwickI64`` and ``segmentI64``, too
-slow under Debug with sanitizers) are also
-skipped in debug builds, and tests matching ``--tsan-skip`` (default
-``flex``, ``multimap`` and ``dkTestNonceLogEvictionPerf``: single-threaded
-suites that outrun the timeout under TSan, and a wall-clock limit) in
-tsan builds; the output says so.
+a time.  Two tiers: the default quick tier (iterative work) also skips
+the slow tests, ``--slow`` in every build and ``--debug-slow`` in debug
+and tsan builds; ``--full`` (milestones) runs them.  In every tier,
+tests a preset cannot judge are skipped there: ``--debug-skip`` (default
+none) and ``--tsan-skip`` (default ``dkTestNonceLogEvictionPerf``, a
+wall-clock limit TSan breaks).  The summary names every skipped test,
+why, and how to run it.
 
 After the matrix it scans the test logs for UBSan ("runtime error:"),
 ASan/LSan and TSan ("WARNING: ThreadSanitizer:") reports, runs ``allocaudit check --constructors`` on the
@@ -56,12 +56,18 @@ from .gitutil import ToolError
 DEFAULT_SERIAL = r"dkTestNonceLogEvictionPerf"
 #: Tests validate never runs: vendored suites and benchmarks.
 DEFAULT_SKIP = r"varint-.*|perfRegression|compressionBench|fenwickBench"
-#: Tests too slow for a Debug + sanitizer build (each outruns the 1500 s
-#: ctest timeout there; the dev preset runs them with sanitizers).
-DEFAULT_DEBUG_SKIP = r"multimap|multiFenwick|blake3|fenwickI64|segmentI64"
-#: Tests a ThreadSanitizer build cannot judge: single-threaded suites
-#: that outrun the ctest timeout under TSan, and wall-clock limits.
-DEFAULT_TSAN_SKIP = r"flex|multimap|dkTestNonceLogEvictionPerf"
+#: Tests a Debug + sanitizer build cannot judge, in any tier (none: every
+#: suite finishes there since the in-test benchmarks became smoke-size).
+DEFAULT_DEBUG_SKIP = r""
+#: Tests a ThreadSanitizer build cannot judge, in any tier: wall-clock
+#: limits that TSan's instrumentation breaks.
+DEFAULT_TSAN_SKIP = r"dkTestNonceLogEvictionPerf"
+#: The quick tier (the default; --full is the milestone tier) also skips
+#: the slow tests: in every build, those over ~40 s under the dev preset;
+#: in debug and tsan builds, also those over ~60 s there.  verify always
+#: runs exactly the tests it is given.
+DEFAULT_SLOW = r"multimapFull|xof|timerWheel|multilist|multilistFull"
+DEFAULT_DEBUG_SLOW = r"multimap|hyperloglog|blake3|flex|str"
 DEFAULT_LEAK_BASE = "origin/main"
 
 
@@ -74,6 +80,9 @@ class ValidateOptions:
     skip: str = DEFAULT_SKIP
     debug_skip: str = DEFAULT_DEBUG_SKIP
     tsan_skip: str = DEFAULT_TSAN_SKIP
+    slow: str = DEFAULT_SLOW
+    debug_slow: str = DEFAULT_DEBUG_SLOW
+    full: bool = False
     leak_base: str = DEFAULT_LEAK_BASE
     root: Path | None = None
     jobs: int | None = None
@@ -108,8 +117,15 @@ class ConfigResult:
 
 
 def preset_skip(opts: ValidateOptions, preset: str) -> str:
-    """The ctest name regex a `preset` build skips on top of --skip."""
-    return {"debug": opts.debug_skip, "tsan": opts.tsan_skip}.get(preset, "")
+    """The ctest name regex a `preset` build skips on top of --skip: the
+    tests the preset cannot judge (always), and in the quick tier (the
+    default; --full is the milestone tier) the slow ones."""
+    parts = [{"debug": opts.debug_skip, "tsan": opts.tsan_skip}.get(preset, "")]
+    if not opts.full:
+        parts.append(opts.slow)
+        if preset in ("debug", "tsan"):
+            parts.append(opts.debug_slow)
+    return "|".join(p for p in parts if p)
 
 
 def _run_config(
@@ -234,15 +250,30 @@ def render(
             f"| {len(r.sanitizer)} |"
         )
     md += ["", "## Skipped tests", ""]
+    md.append(
+        "- tier: full (milestone: slow tests run)"
+        if opts.full
+        else "- tier: quick (iterative: slow tests skipped; `--full` runs them)"
+    )
     md.append(f"- every config: {_names(opts.skip) or '(none)'}")
     for r in results:
-        if r.extra_skip:
-            why = (
-                "single-threaded or wall-clock; `--tsan-skip ''` runs them"
-                if r.config.preset == "tsan"
-                else "too slow under Debug + sanitizers; `--debug-skip ''` runs them"
+        preset = r.config.preset
+        cannot = {"debug": opts.debug_skip, "tsan": opts.tsan_skip}.get(preset, "")
+        if cannot:
+            flag = "--tsan-skip" if preset == "tsan" else "--debug-skip"
+            md.append(
+                f"- {r.config.label}: cannot be judged here: {_names(cannot)} "
+                f"(`{flag} ''` runs them)"
             )
-            md.append(f"- {r.config.label}: also {_names(r.extra_skip)} ({why})")
+        slow = [] if opts.full else [opts.slow]
+        if not opts.full and preset in ("debug", "tsan"):
+            slow.append(opts.debug_slow)
+        slow_regex = "|".join(s for s in slow if s)
+        if slow_regex:
+            md.append(
+                f"- {r.config.label}: slow, skipped in the quick tier: "
+                f"{_names(slow_regex)}"
+            )
         not_run = r.ctest_result.not_run + r.serial_result.not_run
         if not_run:
             md.append(f"- {r.config.label}: did not run: {', '.join(not_run)}")

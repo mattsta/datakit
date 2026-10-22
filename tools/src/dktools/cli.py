@@ -252,6 +252,26 @@ def main(argv: list[str] | None = None) -> int:
         f"(default {validate.DEFAULT_TSAN_SKIP}; '' runs them)",
     )
     va.add_argument(
+        "--full",
+        action="store_true",
+        help="milestone tier: also run the slow tests (--slow, --debug-slow) "
+        "that the default quick tier skips",
+    )
+    slow_default = validate.DEFAULT_SLOW or "none"
+    debug_slow_default = validate.DEFAULT_DEBUG_SLOW or "none"
+    va.add_argument(
+        "--slow",
+        default=validate.DEFAULT_SLOW,
+        help="ctest name regex skipped in the quick tier in every build "
+        f"(default {slow_default})",
+    )
+    va.add_argument(
+        "--debug-slow",
+        default=validate.DEFAULT_DEBUG_SLOW,
+        help="ctest name regex skipped in the quick tier in debug and tsan "
+        f"builds (default {debug_slow_default})",
+    )
+    va.add_argument(
         "--leak-base",
         default=validate.DEFAULT_LEAK_BASE,
         help="leakage gate checks merge-base(BASE, REV)..REV "
@@ -343,6 +363,9 @@ def _dispatch(args: argparse.Namespace) -> int:
                 skip=args.skip,
                 debug_skip=args.debug_skip,
                 tsan_skip=args.tsan_skip,
+                slow=args.slow,
+                debug_slow=args.debug_slow,
+                full=args.full,
                 leak_base=args.leak_base,
                 root=args.root,
                 jobs=args.jobs,
