@@ -286,10 +286,11 @@ DK_STATIC uint16_t insertPositionalNumber(multiroar *r, const databox *key,
         multimapLookupInto(r->map, key, value, 1);
 
         /* Bigger varint means the start of our packed array needs
-         * to move down by exactly one byte. */
+         * to move down by exactly one byte: the packed bytes are the old
+         * value after its type byte and 1-byte count. */
         if (growVarint) {
             memmove(value->data.bytes.start + 3, value->data.bytes.start + 2,
-                    value->len - grow);
+                    (value->len - grow) - 2);
         }
     }
 
@@ -478,9 +479,11 @@ DK_STATIC uint16_t deletePackedArrayMember(multiroar *r, const databox *value,
         if (shrink) {
             if (shrinkVarint) {
                 /* Varint is shrinking, so move values down to cover
-                 * the old second varint byte we don't need anymore. */
+                 * the old second varint byte we don't need anymore: the
+                 * packed bytes are the value after its type byte and
+                 * 2-byte count. */
                 memmove(value->data.bytes.start + 2,
-                        value->data.bytes.start + 3, value->len - shrink);
+                        value->data.bytes.start + 3, value->len - 3);
             }
 
             /* Now shrink the actual entry */
@@ -718,30 +721,22 @@ bool multiroarRemove(multiroar *r, uint64_t position) {
         return true;
     }
     case CHUNK_TYPE_UNDER_FULL_DIRECT_POSITION_NUMBERS: {
-        /* Sparse list - need to remove position if present */
-        uint8_t *packedArrayStart = GET_CHUNK_PACKED_START(&value);
+        /* Sparse list - need to remove position if present.  The shared
+         * delete rewrites the count, moving the packed array when the
+         * count's varint shrinks (241 -> 240). */
         const uint16_t currentElementCount = PACKED_COUNT_FROM_VALUE(&value);
-        const uint16_t bitOffset = DIRECT_BIT_POSITION(position);
-
-        int64_t memberIdx = varintPacked13Member(
-            packedArrayStart, currentElementCount, bitOffset);
-        if (memberIdx < 0) {
+        const uint16_t newCount = deletePackedArrayMember(
+            r, &value, &me, DIRECT_BIT_POSITION(position));
+        if (newCount == currentElementCount) {
             /* Bit wasn't set */
             return false;
         }
 
-        /* Delete the position */
-        varintPacked13Delete(packedArrayStart, currentElementCount,
-                             (uint16_t)memberIdx);
-        const uint16_t newCount = currentElementCount - 1;
-
         if (newCount == 0) {
             /* Chunk is now empty, delete it entirely */
             multimapDelete(&r->map, &key);
-        } else {
-            /* Update count */
-            varintTaggedPut64(value.data.bytes.start + 1, newCount);
         }
+
         return true;
     }
     case CHUNK_TYPE_FULL_BITMAP: {
@@ -9538,6 +9533,61 @@ int multiroarTest(int argc, char *argv[]) {
         printf("    per-bit: %.1f ns/bit, batched: %.1f ns/bit (%.1fx)\n",
                (double)perBitNs / n, (double)batchedNs / n,
                (double)perBitNs / (double)batchedNs);
+    }
+
+    TEST("removing every set bit leaves an empty bitmap, in any chunk form") {
+        /* Counts that make each chunk form (sparse list, bitmap, all-set,
+         * near-full list) and cross the sparse count's encoding widths,
+         * removed in both orders and from the middle out; after every
+         * removal the remaining bits, the minimum and emptiness must
+         * match an oracle. */
+        const uint32_t counts[] = {1,    2,    240,  241,  300, 2287,
+                                   2288, 4000, 8191, 8192, 9000};
+        for (size_t c = 0; c < COUNT_ARRAY(counts); c++) {
+            for (uint64_t stride = 1; stride <= 2; stride++) {
+                for (int order = 0; order < 3; order++) {
+                    const uint32_t n = counts[c];
+                    /* Two sentinel bits in a later chunk, whose entry sits
+                     * right after the tested chunk's: rewriting a chunk
+                     * must never touch the bytes that follow it */
+                    const uint64_t sentinel = (uint64_t)1 << 20;
+                    cleaner(multiroarFree) multiroar *r = multiroarBitNew();
+                    multiroarBitSet(r, sentinel);
+                    multiroarBitSet(r, sentinel + 3);
+                    for (uint32_t i = 0; i < n; i++) {
+                        multiroarBitSet(r, (uint64_t)i * stride);
+                    }
+
+                    bool failed = false;
+                    for (uint32_t k = 0; k < n && !failed; k++) {
+                        const uint32_t i = order == 0   ? k
+                                           : order == 1 ? n - 1 - k
+                                                        : (k * 7919u) % n;
+                        if (!multiroarRemove(r, (uint64_t)i * stride) ||
+                            multiroarBitGet(r, (uint64_t)i * stride) ||
+                            !multiroarBitGet(r, sentinel) ||
+                            !multiroarBitGet(r, sentinel + 3) ||
+                            multiroarBitCount(r) != n - 1 - k + 2) {
+                            ERR("n %u stride %" PRIu64 " order %d: removing "
+                                "%u of %u broke the bitmap",
+                                n, stride, order, k, n);
+                            failed = true;
+                        }
+                    }
+
+                    uint64_t min = 0;
+                    if (!failed &&
+                        (!multiroarMin(r, &min) || min != sentinel ||
+                         !multiroarRemove(r, sentinel) ||
+                         !multiroarRemove(r, sentinel + 3) ||
+                         !multiroarIsEmpty(r) || multiroarMin(r, &min))) {
+                        ERR("n %u stride %" PRIu64 " order %d: no bits are "
+                            "set but the bitmap is not empty",
+                            n, stride, order);
+                    }
+                }
+            }
+        }
     }
 
     TEST_FINAL_RESULT;
