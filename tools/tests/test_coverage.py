@@ -44,6 +44,9 @@ typedef struct widgetIter {
 
 FENWICK_DECLARE_TYPE(I64, int64_t, uint32_t)
 
+DKS_TYPE *DKS_NEW(const char *init);
+void *calloc(size_t count, size_t size) __attribute__((deprecated));
+
 #ifdef DATAKIT_TEST
 int widgetTest(int argc, char *argv[]);
 #endif
@@ -161,6 +164,13 @@ class Coverage(unittest.TestCase):
         self.assertTrue(coverage.PRIVATE_HEADER.search("src/multimapFullInternal.h"))
         self.assertTrue(
             coverage.PRIVATE_HEADER.search("src/fenwick/fenwick2dCoreImpl.h")
+        )
+        self.assertTrue(
+            coverage.PRIVATE_HEADER.search("src/memshard/include/mimalloc/types.h")
+        )
+        self.assertTrue(coverage.PRIVATE_HEADER.search("src/memshard/src/bitmap.h"))
+        self.assertFalse(
+            coverage.PRIVATE_HEADER.search("src/memshard/include/mimalloc.h")
         )
         self.assertFalse(coverage.PRIVATE_HEADER.search("src/multimap.h"))
 

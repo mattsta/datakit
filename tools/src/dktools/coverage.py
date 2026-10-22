@@ -43,8 +43,11 @@ from .steps import Step
 #: Library sources only: vendored code, test files and benches are out.
 IGNORE_FILES = r"(^|/)deps/|Test\.c$|Bench\.c$|(^|/)datakit-test\.c$"
 
-#: Headers that are not public API.
-PRIVATE_HEADER = re.compile(r"(Internal|Impl)\.h$")
+#: Headers that are not public API: internal and implementation headers
+#: and memshard's allocator internals (its public header is mimalloc.h).
+PRIVATE_HEADER = re.compile(
+    r"(Internal|Impl)\.h$|(^|/)memshard/(src|include/mimalloc)/"
+)
 
 #: Identifiers that look like a function name before '(' but are not:
 #: return types of function-pointer declarations and keywords.
@@ -114,7 +117,9 @@ def declared_functions(header_text: str) -> list[str]:
     File-scope statements only (anything inside braces is skipped, so
     inline bodies and struct members are not declarations); typedefs,
     static functions and macro invocations without a return type are
-    not public functions."""
+    not public functions.  ALL_CAPS names are template macros that
+    expand to the real names (``DKS_NEW``), and ``deprecated``
+    declarations exist only to stop callers using a libc function."""
     text = _strip_comments_and_preprocessor(header_text)
     statements: list[str] = []
     depth = 0
@@ -152,6 +157,8 @@ def declared_functions(header_text: str) -> list[str]:
             continue
         prefix, name = match.group(1).strip(), match.group(2)
         if not prefix or name in NOT_A_NAME or not re.search(r"\w", prefix):
+            continue
+        if not re.search(r"[a-z]", name) or "deprecated" in flat:
             continue
         names.append(name)
     return names
