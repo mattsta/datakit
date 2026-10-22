@@ -831,22 +831,8 @@ DK_STATIC void _multiroarValueModeCheck(const multiroar *r,
 
     /* rows/cols of 0 mean "unbounded" in that dimension; when both are
      * declared, position must address a cell inside rows * cols. */
-    varintWidth colLen;
-    uint64_t cols;
-    varintSplitFullGet_(_metaOffsetToColValue(r), colLen, cols);
-
-    varintWidth rowLen;
-    uint64_t rows;
-    varintSplitFullGet_(r->meta + 1 + colLen, rowLen, rows);
-    (void)rowLen;
-
-    if (rows && cols) {
-        uint64_t bound;
-        if (!__builtin_mul_overflow(rows, cols, &bound)) {
-            assert(position < bound && "position outside declared rows*cols");
-        }
-    }
-
+    assert(multiroarValueInBounds(r, position) &&
+           "position outside declared rows*cols");
     (void)position;
 }
 
@@ -902,6 +888,51 @@ bool multiroarValueSetGetPrevious(multiroar *r, uint64_t position,
 
 bool multiroarValueSet(multiroar *r, uint64_t position, databox *value) {
     return multiroarValueSetGetPrevious(r, position, value, NULL);
+}
+
+uint8_t multiroarValueWidth(const multiroar *r) {
+    return r ? r->meta[0] : 0;
+}
+
+void multiroarValueDimensions(const multiroar *r, uint64_t *rows,
+                              uint64_t *cols) {
+    uint64_t c = 0;
+    uint64_t rw = 0;
+    if (r && r->meta[0] != 0) {
+        varintWidth colLen;
+        varintSplitFullGet_(_metaOffsetToColValue(r), colLen, c);
+        varintWidth rowLen;
+        varintSplitFullGet_(r->meta + 1 + colLen, rowLen, rw);
+        (void)rowLen;
+    }
+    if (rows) {
+        *rows = rw;
+    }
+    if (cols) {
+        *cols = c;
+    }
+}
+
+bool multiroarValueInBounds(const multiroar *r, uint64_t position) {
+    uint64_t rows;
+    uint64_t cols;
+    uint64_t bound;
+    multiroarValueDimensions(r, &rows, &cols);
+    return !rows || !cols || __builtin_mul_overflow(rows, cols, &bound) ||
+           position < bound;
+}
+
+uint64_t multiroarValueCount(const multiroar *r) {
+    return r && r->meta[0] != 0 ? multimapCount(r->map) : 0;
+}
+
+void multiroarClear(multiroar *r) {
+    if (r) {
+        /* A fresh map: a cleared roar keeps none of the old one's memory */
+        multimapFree(r->map);
+        /* @own: container; free=multimapFree */
+        r->map = multimapNew(ELEMENTS_PER_ENTRY);
+    }
 }
 
 bool multiroarValueGet(const multiroar *r, uint64_t position, databox *value) {
@@ -2242,8 +2273,13 @@ uint64_t multiroarMemoryUsage(const multiroar *r) {
 /*
  * Wire format (multiroarSerialize): the dkFormat prefix (format id
  * MULTIROAR_FORMAT_ID, version MULTIROAR_FORMAT_VERSION, features), then
- * the chunk stream (multiroarSerializeRaw, which a stamping container such
- * as persist stores on its own):
+ * the stream (multiroarSerializeRaw, which a stamping container such as
+ * persist stores on its own):
+ * - Mode: 1 byte, the value bit width (1..64), 0 for bit mode
+ * - Value mode: cols varint, rows varint, value count varint, then per
+ *   value in ascending position: the gap from the previous position (the
+ *   first: the position itself) varint, the value varint
+ * - Bit mode: the chunk stream
  * - Chunk count: varint
  * - For each chunk:
  *   - Chunk ID: varint
@@ -2313,17 +2349,41 @@ DK_STATIC uint64_t readVarint(const uint8_t *buf, uint64_t bufSize,
     return 0; /* Incomplete varint */
 }
 
-/* Size of the chunk stream, without serializing */
+/* Size of a value-mode body: dimensions, count, then each value after the
+ * gap from the previous position */
+static uint64_t multiroarValuesSize(const multiroar *r) {
+    uint8_t tmp[10];
+    uint64_t rows;
+    uint64_t cols;
+    multiroarValueDimensions(r, &rows, &cols);
+    uint64_t size = writeVarint(tmp, cols) + writeVarint(tmp, rows) +
+                    writeVarint(tmp, multimapCount(r->map));
+
+    multimapIterator iter;
+    multimapIteratorInit(r->map, &iter, true);
+    databox entry[2];
+    uint64_t prev = 0;
+    while (multimapIteratorNextInto(&iter, entry, 2)) {
+        size += writeVarint(tmp, entry[0].data.u - prev) +
+                writeVarint(tmp, entry[1].data.u);
+        prev = entry[0].data.u;
+    }
+    return size;
+}
+
+static uint64_t multiroarChunksSize(const multiroar *r);
+
+/* Size of the stream, without serializing: the mode byte, then the body */
 uint64_t multiroarSerializedSizeRaw(const multiroar *r) {
     if (!r || !r->map) {
-        return 1; /* varint(0) chunks */
+        return 2; /* bit mode, varint(0) chunks */
     }
+    return 1 +
+           (r->meta[0] != 0 ? multiroarValuesSize(r) : multiroarChunksSize(r));
+}
 
-    /* The format holds bit chunks; value rows have none */
-    if (r->meta[0] != 0) {
-        return 0;
-    }
-
+/* Size of a bit-mode body: the chunk stream */
+static uint64_t multiroarChunksSize(const multiroar *r) {
     uint64_t size = 0;
 
     /* Count chunks */
@@ -2387,24 +2447,66 @@ uint64_t multiroarSerializedSizeRaw(const multiroar *r) {
     return size;
 }
 
-/* Serialize the chunk stream to buffer; 0 when it does not fit */
+/* Write a value-mode body at *p; false when it does not fit */
+static bool multiroarWriteValues(const multiroar *r, uint8_t **p,
+                                 const uint8_t *end) {
+    uint64_t rows;
+    uint64_t cols;
+    multiroarValueDimensions(r, &rows, &cols);
+    if (!writeVarintBounded(p, end, cols) ||
+        !writeVarintBounded(p, end, rows) ||
+        !writeVarintBounded(p, end, multimapCount(r->map))) {
+        return false;
+    }
+
+    multimapIterator iter;
+    multimapIteratorInit(r->map, &iter, true);
+    databox entry[2];
+    uint64_t prev = 0;
+    while (multimapIteratorNextInto(&iter, entry, 2)) {
+        if (!writeVarintBounded(p, end, entry[0].data.u - prev) ||
+            !writeVarintBounded(p, end, entry[1].data.u)) {
+            return false;
+        }
+        prev = entry[0].data.u;
+    }
+    return true;
+}
+
+static bool multiroarWriteChunks(const multiroar *r, uint8_t **p,
+                                 const uint8_t *end);
+
+/* Serialize the stream to buffer; 0 when it does not fit */
 uint64_t multiroarSerializeRaw(const multiroar *r, void *buf,
                                uint64_t bufSize) {
-    /* The format holds bit chunks; value rows have none */
-    if (!buf || (r && r->meta[0] != 0)) {
+    if (!buf || bufSize == 0) {
         return 0;
     }
 
     uint8_t *p = (uint8_t *)buf;
     const uint8_t *const end = p + bufSize;
+    const uint8_t width = r ? r->meta[0] : 0;
+    *p++ = width;
+
+    const bool written = width != 0 ? multiroarWriteValues(r, &p, end)
+                                    : multiroarWriteChunks(r, &p, end);
+    return written ? (uint64_t)(p - (uint8_t *)buf) : 0;
+}
+
+/* Write a bit-mode body (the chunk stream) at *p; false when it does not
+ * fit */
+static bool multiroarWriteChunks(const multiroar *r, uint8_t **pOut,
+                                 const uint8_t *end) {
+    uint8_t *p = *pOut;
 
     /* Chunk count (0 for an empty roar) */
     const uint64_t chunkCount = (r && r->map) ? multimapCount(r->map) : 0;
     if (!writeVarintBounded(&p, end, chunkCount)) {
-        return 0;
+        return false;
     }
     if (chunkCount == 0) {
-        return (uint64_t)(p - (uint8_t *)buf);
+        *pOut = p;
+        return true;
     }
 
     /* Serialize each chunk */
@@ -2421,7 +2523,7 @@ uint64_t multiroarSerializeRaw(const multiroar *r, void *buf,
 
         /* Chunk ID, then chunk type */
         if (!writeVarintBounded(&p, end, chunkId) || p >= end) {
-            return 0;
+            return false;
         }
         uint8_t chunkKind = GET_CHUNK_TYPE(value);
         *p++ = chunkKind;
@@ -2441,13 +2543,13 @@ uint64_t multiroarSerializeRaw(const multiroar *r, void *buf,
 
             /* Write count, then positions */
             if (!writeVarintBounded(&p, end, count)) {
-                return 0;
+                return false;
             }
 
             for (uint64_t i = 0; i < count; i++) {
                 if (!writeVarintBounded(&p, end,
                                         varintPacked13Get(packedStart, i))) {
-                    return 0;
+                    return false;
                 }
             }
             break;
@@ -2456,7 +2558,7 @@ uint64_t multiroarSerializeRaw(const multiroar *r, void *buf,
         case CHUNK_TYPE_FULL_BITMAP: {
             /* Write bitmap data */
             if (end - p < 1024) {
-                return 0;
+                return false;
             }
 
             const uint8_t *bitmap = GET_CHUNK_BITMAP_START(value);
@@ -2467,14 +2569,15 @@ uint64_t multiroarSerializeRaw(const multiroar *r, void *buf,
 
         default:
             /* Unknown chunk type */
-            return 0;
+            return false;
         }
     }
 
-    return (uint64_t)(p - (uint8_t *)buf);
+    *pOut = p;
+    return true;
 }
 
-/* The stamp multiroarSerialize writes ahead of the chunk stream */
+/* The stamp multiroarSerialize writes ahead of the stream */
 static dkFormatStamp multiroarStamp(void) {
     return dkFormatStampFor(&multiroarFormat, 0);
 }
@@ -2489,7 +2592,7 @@ uint64_t multiroarSerializedSize(const multiroar *r) {
 }
 
 uint64_t multiroarSerialize(const multiroar *r, void *buf, uint64_t bufSize) {
-    if (!buf || (r && r->meta[0] != 0)) {
+    if (!buf) {
         return 0;
     }
     const dkFormatStamp stamp = multiroarStamp();
@@ -2513,7 +2616,67 @@ multiroar *multiroarDeserialize(const void *buf, uint64_t bufSize) {
                                    bufSize - prefix);
 }
 
-/* Deserialize the chunk stream */
+/* Read a value-mode body of width `width` filling exactly [p, end): the
+ * values must fit the width, positions ascend and stay inside a declared
+ * rows x cols */
+static multiroar *multiroarReadValues(uint8_t width, const uint8_t *p,
+                                      const uint8_t *end) {
+    if (width > 64) {
+        return NULL;
+    }
+
+    uint64_t cols;
+    uint64_t rows;
+    uint64_t count;
+    uint64_t n = readVarint(p, (uint64_t)(end - p), &cols);
+    if (n == 0) {
+        return NULL;
+    }
+    p += n;
+    n = readVarint(p, (uint64_t)(end - p), &rows);
+    if (n == 0) {
+        return NULL;
+    }
+    p += n;
+    n = readVarint(p, (uint64_t)(end - p), &count);
+    if (n == 0) {
+        return NULL;
+    }
+    p += n;
+
+    cleaner(multiroarFree) multiroar *r = multiroarValueNew(width, rows, cols);
+    uint64_t position = 0;
+    for (uint64_t i = 0; i < count; i++) {
+        uint64_t gap;
+        uint64_t value;
+        n = readVarint(p, (uint64_t)(end - p), &gap);
+        if (n == 0 || (i > 0 && gap == 0) ||
+            __builtin_add_overflow(position, gap, &position)) {
+            return NULL;
+        }
+        p += n;
+        n = readVarint(p, (uint64_t)(end - p), &value);
+        if (n == 0 || (width < 64 && value >> width) ||
+            !multiroarValueInBounds(r, position)) {
+            return NULL;
+        }
+        p += n;
+
+        databox box = databoxNewUnsigned(value);
+        multiroarValueSet(r, position, &box);
+    }
+    if (p != end) {
+        return NULL;
+    }
+
+    multiroar *out = r;
+    r = NULL;
+    return out;
+}
+
+static multiroar *multiroarReadChunks(const uint8_t *p, const uint8_t *end);
+
+/* Deserialize the stream: the mode byte, then a value or chunk body */
 multiroar *multiroarDeserializeRaw(const void *buf, uint64_t bufSize) {
     if (!buf || bufSize == 0) {
         return NULL;
@@ -2521,7 +2684,13 @@ multiroar *multiroarDeserializeRaw(const void *buf, uint64_t bufSize) {
 
     const uint8_t *p = (const uint8_t *)buf;
     const uint8_t *end = p + bufSize;
+    const uint8_t width = *p++;
+    return width != 0 ? multiroarReadValues(width, p, end)
+                      : multiroarReadChunks(p, end);
+}
 
+/* Read a bit-mode body (the chunk stream) filling exactly [p, end) */
+static multiroar *multiroarReadChunks(const uint8_t *p, const uint8_t *end) {
     /* Read chunk count */
     uint64_t chunkCount;
     uint64_t bytesRead = readVarint(p, (uint64_t)(end - p), &chunkCount);
@@ -2675,6 +2844,11 @@ multiroar *multiroarDeserializeRaw(const void *buf, uint64_t bufSize) {
             /* Unknown chunk type */
             return NULL;
         }
+    }
+
+    /* Every byte belongs to the stream */
+    if (p != end) {
+        return NULL;
     }
 
     /* Success: hand ownership to the caller (disarm the cleaner) */
@@ -8707,16 +8881,104 @@ int multiroarTest(int argc, char *argv[]) {
         }
     }
 
-    TEST("multiroarSerialize refuses a value-mode roar") {
-        /* Value rows are integers, not chunks: serializing them read an
-         * integer as a chunk pointer */
-        cleaner(multiroarFree) multiroar *r = multiroarValueNew(8, 0, 0);
-        databox v = databoxNewUnsigned(7);
-        multiroarValueSet(r, 3, &v);
-        uint8_t buf[64];
-        if (multiroarSerializedSize(r) != 0 ||
-            multiroarSerialize(r, buf, sizeof(buf)) != 0) {
-            ERRR("A value-mode roar serialized");
+    TEST("value-mode roars round-trip with their width and dimensions") {
+        static const struct {
+            uint8_t width;
+            uint64_t rows;
+            uint64_t cols;
+        } shapes[] = {{1, 0, 0}, {8, 100, 100}, {33, 0, 7}, {64, 3, 0}};
+        for (size_t s = 0; s < 4; s++) {
+            cleaner(multiroarFree) multiroar *r = multiroarValueNew(
+                shapes[s].width, shapes[s].rows, shapes[s].cols);
+            const uint64_t limit = shapes[s].rows && shapes[s].cols
+                                       ? shapes[s].rows * shapes[s].cols
+                                       : UINT64_MAX;
+            const uint64_t top = shapes[s].width == 64
+                                     ? UINT64_MAX
+                                     : (UINT64_C(1) << shapes[s].width) - 1;
+
+            /* Positions at both ends of the space, values at both ends of
+             * the width, in no particular order */
+            uint64_t positions[64];
+            uint64_t values[64];
+            size_t n = 0;
+            uint64_t rng = 0x5eed + s;
+            for (; n < 64; n++) {
+                positions[n] =
+                    n < 2 ? (n ? limit - 1 : 0) : splitmix64(&rng) % limit;
+                values[n] = n % 3 == 0 ? top : splitmix64(&rng) & top;
+                databox v = databoxNewUnsigned(values[n]);
+                multiroarValueSet(r, positions[n], &v);
+            }
+
+            const uint64_t size = multiroarSerializedSize(r);
+            cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(size);
+            if (multiroarSerialize(r, buf, size) != size) {
+                ERR("shape %zu: serialize failed", s);
+                continue;
+            }
+            cleaner(multiroarFree) multiroar *back =
+                multiroarDeserialize(buf, size);
+            uint64_t rows;
+            uint64_t cols;
+            multiroarValueDimensions(back, &rows, &cols);
+            if (!back || multiroarValueWidth(back) != shapes[s].width ||
+                rows != shapes[s].rows || cols != shapes[s].cols ||
+                multiroarValueCount(back) != multiroarValueCount(r)) {
+                ERR("shape %zu: width, dimensions or count lost", s);
+                continue;
+            }
+
+            /* The last value set at each position survives */
+            for (size_t i = 0; i < n; i++) {
+                uint64_t expect = values[i];
+                for (size_t later = i + 1; later < n; later++) {
+                    if (positions[later] == positions[i]) {
+                        expect = values[later];
+                    }
+                }
+                databox got = {{0}};
+                if (!multiroarValueGet(back, positions[i], &got) ||
+                    got.data.u != expect) {
+                    ERR("shape %zu: position %" PRIu64 " lost its value", s,
+                        positions[i]);
+                    break;
+                }
+            }
+
+            /* Clearing keeps the mode, width and dimensions */
+            multiroarClear(back);
+            multiroarValueDimensions(back, &rows, &cols);
+            if (multiroarValueCount(back) != 0 ||
+                multiroarValueWidth(back) != shapes[s].width ||
+                rows != shapes[s].rows || cols != shapes[s].cols) {
+                ERR("shape %zu: clear changed the roar's shape", s);
+            }
+        }
+    }
+
+    TEST("value-mode streams that break their declarations are refused") {
+        /* Raw streams: [width][cols][rows][count]([gap][value])* */
+        static const struct {
+            uint8_t bytes[12];
+            uint8_t len;
+            bool valid;
+        } streams[] = {
+            {{4, 0, 0, 1, 5, 15}, 6, true},       /* 15 fits 4 bits */
+            {{4, 0, 0, 1, 5, 16}, 6, false},      /* 16 does not */
+            {{65, 0, 0, 0}, 4, false},            /* no 65-bit width */
+            {{8, 2, 2, 1, 3, 1}, 6, true},        /* position 3 < 2 x 2 */
+            {{8, 2, 2, 1, 4, 1}, 6, false},       /* position 4 is outside */
+            {{8, 0, 0, 2, 1, 1, 0, 1}, 8, false}, /* repeated position */
+            {{8, 0, 0, 1, 1, 1, 0}, 7, false},    /* a stray byte */
+            {{8, 0, 0, 2, 1, 1}, 6, false},       /* a value missing */
+        };
+        for (size_t s = 0; s < sizeof(streams) / sizeof(*streams); s++) {
+            cleaner(multiroarFree) multiroar *r =
+                multiroarDeserializeRaw(streams[s].bytes, streams[s].len);
+            if ((r != NULL) != streams[s].valid) {
+                ERR("stream %zu: restored %d", s, r != NULL);
+            }
         }
     }
 

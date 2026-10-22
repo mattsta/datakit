@@ -38,7 +38,12 @@ typedef struct multiroarP {
 /* Create new persistent multiroar */
 multiroarP *multiroarNewP(persistCtx *ctx);
 
-/* Open existing persistent multiroar (recover from files) */
+/* Create a new persistent value-mode multiroar (see multiroarValueNew);
+ * NULL for a width outside 1..64 */
+multiroarP *multiroarValueNewP(persistCtx *ctx, uint8_t bitWidth, uint64_t rows,
+                               uint64_t cols);
+
+/* Open existing persistent multiroar (recover from files; either mode) */
 multiroarP *multiroarOpenP(persistCtx *ctx);
 
 /* Close persistent multiroar (syncs and frees) */
@@ -73,6 +78,14 @@ void multiroarBitSetRangeP(multiroarP *r, size_t start, size_t extent);
 /* Clear range of bits [start, start+extent) */
 void multiroarBitClearRangeP(multiroarP *r, uint64_t start, uint64_t extent);
 
+/* Value mode: store `value` at `position` / remove the value there.  True
+ * once the change is logged and applied (Remove: also when there was no
+ * value); false when it is refused (a bit-mode roar, a value that is not
+ * an integer of the roar's width, a position outside its dimensions) or
+ * the log write fails, leaving the roar unchanged. */
+bool multiroarValueSetP(multiroarP *r, uint64_t position, const databox *value);
+bool multiroarValueRemoveP(multiroarP *r, uint64_t position);
+
 /* ============================================================================
  * Lookups (read-only, no persistence needed)
  * ============================================================================
@@ -80,6 +93,11 @@ void multiroarBitClearRangeP(multiroarP *r, uint64_t start, uint64_t extent);
 
 /* Check if bit is set */
 bool multiroarBitGetP(const multiroarP *r, size_t position);
+
+/* Value mode: the value at `position` (false when there is none) and the
+ * count of stored values */
+bool multiroarValueGetP(const multiroarP *r, uint64_t position, databox *value);
+uint64_t multiroarValueCountP(const multiroarP *r);
 
 /* Get min/max set bits */
 bool multiroarMinP(const multiroarP *r, uint64_t *position);

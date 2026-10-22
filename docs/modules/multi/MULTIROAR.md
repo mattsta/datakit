@@ -317,8 +317,16 @@ multiroarFree(restored);
 zfree(buf);
 ```
 
-The serialized stream begins with a 4-byte magic, a 1-byte version, and a
-1-byte flags field, followed by a varint chunk count and the encoded chunks.
+Both modes serialize.  `multiroarSerialize` writes the `multiroarFormat`
+dkFormat prefix (format id, version, features), then the stream: a mode byte
+(a value roar's bit width, 0 for bit mode), then for value mode the cols,
+rows, value count and each value after the gap from the previous position,
+and for bit mode a varint chunk count and the encoded chunks.  The `Raw`
+forms (`multiroarSerializeRaw`, `multiroarDeserializeRaw`,
+`multiroarSerializedSizeRaw`) are the stream alone, for a container that
+records the stamp itself, as persist does.  Deserialize refuses malformed
+bytes, including trailing bytes and values that break the roar's width or
+dimensions.
 
 ## Value Operations
 
@@ -347,6 +355,13 @@ Contracts:
   same multiroar (asserted via the mode byte). A bit-mode multiroar comes from
   `multiroarBitNew()`; a value-mode one from `multiroarValueNew()`.
 - `multiroarDuplicate` preserves value-mode metadata (bit width and bounds).
+- `multiroarValueWidth` (0 for a bit-mode roar), `multiroarValueDimensions`,
+  `multiroarValueCount` and `multiroarValueInBounds` describe a value roar;
+  `multiroarClear` empties either mode, keeping width and dimensions.
+- Persistence: `multiroarValueNewP`, `multiroarValueSetP`,
+  `multiroarValueRemoveP`, `multiroarValueGetP` and `multiroarValueCountP`
+  (`persist/multiroarP.h`) log value ops; a value that does not fit is
+  refused (false) rather than logged.
 
 ```c
 multiroar *m = multiroarValueNew(16, 1000, 1000);

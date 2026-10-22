@@ -18,20 +18,17 @@ defcleanerName(multiroarP *, zfree, MultiroarP);
  * ============================================================================
  */
 
-multiroarP *multiroarNewP(persistCtx *ctx) {
-    if (!ctx) {
+/* Wrap `roar` (taken over) as a new persistent multiroar: its starting
+ * snapshot records its mode, so recovery restores the same kind */
+static multiroarP *multiroarStartP(persistCtx *ctx, multiroar *roar) {
+    if (!ctx || !roar) {
+        multiroarFree(roar);
         return NULL;
     }
 
     cleanerName(zfree, MultiroarP) multiroarP *r = zcalloc(1, sizeof(*r));
     r->ctx = ctx;
-
-    /* Create underlying multiroar */
-    /* @own: container; free=multiroarFree */
-    r->r = multiroarBitNew();
-    if (!r->r) {
-        return NULL;
-    }
+    r->r = roar;
 
     /* Initialize persistence context for multiroar type */
     if (!persistCtxInitForType(ctx, &persistOpsMultiroar)) {
@@ -48,6 +45,18 @@ multiroarP *multiroarNewP(persistCtx *ctx) {
     multiroarP *out = r;
     r = NULL;
     return out;
+}
+
+multiroarP *multiroarNewP(persistCtx *ctx) {
+    /* @own: container; free=multiroarFree */
+    return multiroarStartP(ctx, ctx ? multiroarBitNew() : NULL);
+}
+
+multiroarP *multiroarValueNewP(persistCtx *ctx, uint8_t bitWidth, uint64_t rows,
+                               uint64_t cols) {
+    /* @own: container; free=multiroarFree */
+    return multiroarStartP(ctx, ctx ? multiroarValueNew(bitWidth, rows, cols)
+                                    : NULL);
 }
 
 multiroarP *multiroarOpenP(persistCtx *ctx) {
@@ -205,10 +214,84 @@ void multiroarBitClearRangeP(multiroarP *r, uint64_t start, uint64_t extent) {
     persistCtxMaybeCompact(r->ctx, r->r, &persistOpsMultiroar);
 }
 
+bool multiroarValueSetP(multiroarP *r, uint64_t position,
+                        const databox *value) {
+    if (!r || !r->r || !r->ctx || !value) {
+        return false;
+    }
+    const uint8_t width = multiroarValueWidth(r->r);
+    if (!width || !multiroarValueInBounds(r->r, position)) {
+        return false;
+    }
+
+    /* The integer kinds multiroarValueSet stores, within the width */
+    uint64_t v;
+    switch (value->type) {
+    case DATABOX_UNSIGNED_64:
+        v = value->data.u;
+        break;
+    case DATABOX_SIGNED_64:
+        if (value->data.i < 0) {
+            return false;
+        }
+        v = (uint64_t)value->data.i;
+        break;
+    case DATABOX_TRUE:
+        v = 1;
+        break;
+    case DATABOX_FALSE:
+        v = 0;
+        break;
+    default:
+        return false;
+    }
+    if (width < 64 && v >> width) {
+        return false;
+    }
+
+    const uint64_t words[2] = {position, v};
+    if (!persistCtxLogOp(r->ctx, PERSIST_OP_INSERT, words, 2)) {
+        return false;
+    }
+    databox stored = databoxNewUnsigned(v);
+    multiroarValueSet(r->r, position, &stored);
+    persistCtxMaybeCompact(r->ctx, r->r, &persistOpsMultiroar);
+    return true;
+}
+
+bool multiroarValueRemoveP(multiroarP *r, uint64_t position) {
+    if (!r || !r->r || !r->ctx || !multiroarValueWidth(r->r)) {
+        return false;
+    }
+    if (!multiroarValueGetP(r, position, NULL)) {
+        return true; /* nothing there: nothing to log */
+    }
+
+    if (!persistCtxLogOp(r->ctx, PERSIST_OP_DELETE, &position, 1)) {
+        return false;
+    }
+    multiroarValueRemoveGetRemoved(r->r, position, NULL);
+    persistCtxMaybeCompact(r->ctx, r->r, &persistOpsMultiroar);
+    return true;
+}
+
 /* ============================================================================
  * Lookups
  * ============================================================================
  */
+
+bool multiroarValueGetP(const multiroarP *r, uint64_t position,
+                        databox *value) {
+    if (!r || !r->r || !multiroarValueWidth(r->r) ||
+        !multiroarValueInBounds(r->r, position)) {
+        return false;
+    }
+    return multiroarValueGet(r->r, position, value);
+}
+
+uint64_t multiroarValueCountP(const multiroarP *r) {
+    return r && r->r ? multiroarValueCount(r->r) : 0;
+}
 
 bool multiroarBitGetP(const multiroarP *r, size_t position) {
     if (!r || !r->r) {
@@ -651,9 +734,102 @@ static int test_multiroarP_ranges(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
+static int test_multiroarP_values(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+
+    int err = 0;
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    char basePath[PATH_MAX];
+    if (!dkTestTmpDirPath(&tmp, "multiroarPTest_values", basePath,
+                          sizeof(basePath))) {
+        ERR("could not create a scratch directory: %s", strerror(errno));
+        return err;
+    }
+
+    TEST("multiroarP value mode survives a crash and refuses what it cannot "
+         "store")
+
+    ptestCleanupFiles(basePath);
+
+    /* 12-bit values in a 50 x 40 grid */
+    persistCtx *ctx = persistCtxNew(basePath, NULL);
+    multiroarP *r = multiroarValueNewP(ctx, 12, 50, 40);
+    if (!r) {
+        ERRR("value-mode multiroarP not created");
+        persistCtxFree(ctx);
+        return err;
+    }
+    for (uint64_t i = 0; i < 200; i++) {
+        const databox v = databoxNewUnsigned((i * 37) & 0xfff);
+        if (!multiroarValueSetP(r, i * 9, &v)) {
+            ERR("set at %" PRIu64 " refused", i * 9);
+        }
+    }
+    for (uint64_t i = 0; i < 200; i += 5) {
+        if (!multiroarValueRemoveP(r, i * 9)) {
+            ERR("remove at %" PRIu64 " refused", i * 9);
+        }
+    }
+
+    /* Refused without a change: too wide, outside the grid, not an
+     * integer, negative */
+    const databox wide = databoxNewUnsigned(0x1000);
+    const databox fits = databoxNewUnsigned(1);
+    const databox text = databoxNewBytesString("7");
+    const databox negative = databoxNewSigned(-1);
+    if (multiroarValueSetP(r, 1, &wide) || multiroarValueSetP(r, 2000, &fits) ||
+        multiroarValueSetP(r, 1, &text) ||
+        multiroarValueSetP(r, 1, &negative) || multiroarValueCountP(r) != 160) {
+        ERRR("an unstorable value was accepted");
+    }
+
+    /* Crash: no close */
+    persistCtxFree(ctx);
+    multiroarFree(r->r);
+    zfree(r);
+
+    ctx = persistCtxNew(basePath, NULL);
+    r = multiroarOpenP(ctx);
+    if (!r) {
+        ERRR("value-mode multiroarP did not recover");
+        persistCtxFree(ctx);
+        return err;
+    }
+    uint64_t rows;
+    uint64_t cols;
+    multiroarValueDimensions(multiroarGetRawP(r), &rows, &cols);
+    if (multiroarValueWidth(multiroarGetRawP(r)) != 12 || rows != 50 ||
+        cols != 40 || multiroarValueCountP(r) != 160) {
+        ERRR("recovery lost the width, dimensions or values");
+    }
+    for (uint64_t i = 0; i < 200; i++) {
+        databox got = {{0}};
+        const bool present = multiroarValueGetP(r, i * 9, &got);
+        if (present != (i % 5 != 0) ||
+            (present && got.data.u != ((i * 37) & 0xfff))) {
+            ERR("position %" PRIu64 " recovered wrongly", i * 9);
+        }
+    }
+
+    /* Bit ops are not value ops */
+    cleaner(multiroarFree) multiroar *bits = multiroarBitNew();
+    const multiroarP bitWrapper = {.r = bits, .ctx = ctx};
+    if (multiroarValueSetP((multiroarP *)&bitWrapper, 1, &fits)) {
+        ERRR("a bit-mode roar took a value");
+    }
+
+    multiroarCloseP(r);
+    persistCtxFree(ctx);
+    ptestCleanupFiles(basePath);
+
+    TEST_FINAL_RESULT;
+}
+
 int multiroarPTest(int argc, char *argv[]) {
     int err = 0;
 
+    err += test_multiroarP_values(argc, argv);
     err += test_multiroarP_ranges(argc, argv);
     err += test_multiroarP_basic(argc, argv);
     err += test_multiroarP_recovery(argc, argv);

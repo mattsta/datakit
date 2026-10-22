@@ -2813,30 +2813,30 @@ static void *multiroarPersistRestore(const uint8_t *data, size_t len) {
 }
 
 static size_t multiroarPersistCount(const void *structure) {
-    return multiroarBitCount(structure);
+    return multiroarValueWidth(structure) ? multiroarValueCount(structure)
+                                          : multiroarBitCount(structure);
 }
 
 static size_t multiroarPersistEstimateSize(const void *structure) {
     return multiroarMemoryUsage(structure);
 }
 
-/* NOTE: a BITMAP op carries a single raw uint64_t bit position — a fixed-width
- * value with no self-describing framing, so it is NOT a flex-migration target
- * (unlike the multi-element set/list deltas).  Wrapping it in flex would only
- * add header overhead for zero correctness benefit. */
+/* Ops carry raw fixed-width uint64_t words, no framing: INSERT a bit
+ * position (bit mode) or a [position, value] pair (value mode), DELETE a
+ * position, CLEAR_RANGE / FLIP_RANGE a [start, extent] pair (bit mode),
+ * CLEAR nothing.  Apply refuses an op the roar's mode does not have. */
 static uint8_t *multiroarPersistEncodeOp(persistOp op, const void *args,
                                          size_t argc, size_t *len) {
-    (void)argc;
-
     switch (op) {
     case PERSIST_OP_INSERT:
     case PERSIST_OP_DELETE: {
-        /* args is uint64_t* (position) */
-        const uint64_t *position = args;
-        *len = sizeof(uint64_t);
+        /* args is uint64_t[argc]: the position, then (a value-mode
+         * INSERT) the value */
+        const size_t words = op == PERSIST_OP_INSERT && argc == 2 ? 2 : 1;
+        *len = words * sizeof(uint64_t);
         /* @own: caller; free=zfree */
         uint8_t *buf = zmalloc(*len);
-        memcpy(buf, position, sizeof(uint64_t));
+        memcpy(buf, args, *len);
         return buf;
     }
 
@@ -2865,15 +2865,27 @@ static uint8_t *multiroarPersistEncodeOp(persistOp op, const void *args,
 static bool multiroarPersistApplyOp(void *structure, persistOp op,
                                     const uint8_t *data, size_t len) {
     multiroar **r = structure; /* Pointer to multiroar pointer */
+    const uint8_t width = multiroarValueWidth(*r);
 
     switch (op) {
     case PERSIST_OP_INSERT: {
-        if (len != sizeof(uint64_t)) {
+        if (len != (width ? 2 : 1) * sizeof(uint64_t)) {
             return false;
         }
-        uint64_t position;
-        memcpy(&position, data, sizeof(uint64_t));
-        multiroarBitSet(*r, position);
+        uint64_t words[2];
+        memcpy(words, data, len);
+        if (!width) {
+            multiroarBitSet(*r, words[0]);
+            return true;
+        }
+
+        /* A value must fit the width and its position the dimensions */
+        if ((width < 64 && words[1] >> width) ||
+            !multiroarValueInBounds(*r, words[0])) {
+            return false;
+        }
+        databox value = databoxNewUnsigned(words[1]);
+        multiroarValueSet(*r, words[0], &value);
         return true;
     }
 
@@ -2883,13 +2895,20 @@ static bool multiroarPersistApplyOp(void *structure, persistOp op,
         }
         uint64_t position;
         memcpy(&position, data, sizeof(uint64_t));
-        multiroarRemove(*r, position);
+        if (width) {
+            if (!multiroarValueInBounds(*r, position)) {
+                return false;
+            }
+            multiroarValueRemoveGetRemoved(*r, position, NULL);
+        } else {
+            multiroarRemove(*r, position);
+        }
         return true;
     }
 
     case PERSIST_OP_CLEAR_RANGE:
     case PERSIST_OP_FLIP_RANGE: {
-        if (len != 2 * sizeof(uint64_t)) {
+        if (width || len != 2 * sizeof(uint64_t)) {
             return false;
         }
         uint64_t range[2];
@@ -2902,12 +2921,9 @@ static bool multiroarPersistApplyOp(void *structure, persistOp op,
         return true;
     }
 
-    case PERSIST_OP_CLEAR: {
-        multiroarFree(*r);
-        /* @own: caller; free=multiroarFree */
-        *r = multiroarBitNew();
+    case PERSIST_OP_CLEAR:
+        multiroarClear(*r);
         return true;
-    }
 
     default:
         return false;

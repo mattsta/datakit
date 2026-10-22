@@ -1,6 +1,7 @@
 /* multiroarContractTest.c - persistOpsMultiroar in the persistence contract
  *
- * Bit mode: the mode multiroarP writes a WAL for. */
+ * Even seeds build bit-mode roars, odd seeds value-mode roars (seeded
+ * width and dimensions); both log the ops multiroarP writes. */
 
 #include "persistContract.h"
 
@@ -20,7 +21,45 @@ static uint64_t pcMultiroarPosition(uint64_t *rng) {
     return bases[(r >> 3) % 4] + splitmix64(rng) % 9000;
 }
 
+/* Values set and removed at positions inside seeded dimensions, values
+ * spanning the seeded width, with a CLEAR partway */
+static void *pcMultiroarBuildValues(const persistContractBuild *b) {
+    uint64_t rng = b->seed;
+    const uint8_t width = (uint8_t)(1 + splitmix64(&rng) % 64);
+    const uint64_t rows = splitmix64(&rng) % 3 ? 1 + splitmix64(&rng) % 500 : 0;
+    const uint64_t cols = splitmix64(&rng) % 3 ? 1 + splitmix64(&rng) % 500 : 0;
+    const uint64_t space = rows && cols ? rows * cols : UINT64_C(1) << 40;
+    const uint64_t top = width == 64 ? UINT64_MAX : (UINT64_C(1) << width) - 1;
+
+    /* @own: caller; free=multiroarFree */
+    multiroar *r = multiroarValueNew(width, rows, cols);
+    persistContractStart(b->log, r);
+
+    for (size_t i = 0; i < b->size; i++) {
+        const uint64_t position = splitmix64(&rng) % space;
+        if (splitmix64(&rng) % 4) {
+            const uint64_t words[2] = {position, splitmix64(&rng) & top};
+            const databox value = databoxNewUnsigned(words[1]);
+            multiroarValueSet(r, position, (databox *)&value);
+            persistContractRecord(b->log, PERSIST_OP_INSERT, words, 2);
+        } else {
+            multiroarValueRemoveGetRemoved(r, position, NULL);
+            persistContractRecord(b->log, PERSIST_OP_DELETE, &position, 1);
+        }
+
+        if (b->size >= 100 && i == b->size / 3) {
+            multiroarClear(r);
+            persistContractRecord(b->log, PERSIST_OP_CLEAR, NULL, 0);
+        }
+    }
+    return r;
+}
+
 static void *pcMultiroarBuild(const persistContractBuild *b) {
+    if (b->seed & 1) {
+        return pcMultiroarBuildValues(b);
+    }
+
     /* @own: caller; free=multiroarFree */
     multiroar *r = multiroarBitNew();
     persistContractStart(b->log, r);
@@ -49,9 +88,7 @@ static void *pcMultiroarBuild(const persistContractBuild *b) {
         }
 
         if (b->size >= 100 && i == b->size / 3) {
-            multiroarFree(r);
-            /* @own: caller; free=multiroarFree */
-            r = multiroarBitNew();
+            multiroarClear(r);
             persistContractRecord(b->log, PERSIST_OP_CLEAR, NULL, 0);
         }
     }

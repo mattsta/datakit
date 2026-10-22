@@ -31,6 +31,21 @@ bool multiroarValueGet(const multiroar *r, uint64_t position, databox *value);
 bool multiroarValueRemoveGetRemoved(multiroar *r, uint64_t position,
                                     databox *removed);
 
+/* A value-mode roar's bit width (0: a bit-mode roar), declared rows and
+ * cols (0: unbounded; both 0 for bit mode) and count of stored values (0
+ * for bit mode; multiroarBitCount counts bits) */
+uint8_t multiroarValueWidth(const multiroar *r);
+void multiroarValueDimensions(const multiroar *r, uint64_t *rows,
+                              uint64_t *cols);
+uint64_t multiroarValueCount(const multiroar *r);
+
+/* Whether `position` is inside the declared rows x cols (always, when
+ * either is 0 or their product overflows) */
+bool multiroarValueInBounds(const multiroar *r, uint64_t position);
+
+/* Empty the roar, keeping its mode, width and dimensions */
+void multiroarClear(multiroar *r);
+
 /* Bitcount - count total set bits */
 uint64_t multiroarBitCount(const multiroar *r);
 
@@ -124,17 +139,19 @@ double multiroarDice(const multiroar *a, const multiroar *b);
 /* Statistics and memory */
 uint64_t multiroarMemoryUsage(const multiroar *r);
 
-/* Serialization of bit-mode multiroars.  A value-mode multiroar does not
- * serialize: both size and serialize return 0 for it (as does serialize
- * into a buffer too small).  Deserialize returns NULL for malformed bytes:
- * it checks the framing, that chunk ids ascend, and that each position
- * listing holds 1 to 629 ascending in-chunk positions.
+/* Serialization of either mode: the stream records the mode (with a value
+ * roar's width and dimensions), then its bits or values.  Serialize
+ * returns 0 when the buffer is too small.  Deserialize returns NULL for
+ * malformed bytes: it checks the framing, that every byte belongs to the
+ * stream, that chunk ids ascend and each position listing holds 1 to 629
+ * ascending in-chunk positions, and that values ascend by position, fit
+ * the width and stay inside declared dimensions.
  *
  * multiroarSerialize writes a standalone artifact: the dkFormat prefix of
- * multiroarFormat, then the chunk stream; multiroarDeserialize refuses a
- * stamp this build does not read.  The Raw forms are the chunk stream
- * alone, for a container that stamps it (persist files record the stamp
- * in their header). */
+ * multiroarFormat, then the stream; multiroarDeserialize refuses a stamp
+ * this build does not read.  The Raw forms are the stream alone, for a
+ * container that stamps it (persist files record the stamp in their
+ * header). */
 #define MULTIROAR_FORMAT_ID ((uint32_t)70) /* PERSIST_TYPE_MULTIROAR */
 #define MULTIROAR_FORMAT_VERSION ((uint32_t)1)
 extern const dkFormatSpec multiroarFormat;
