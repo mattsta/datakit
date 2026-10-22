@@ -8951,6 +8951,16 @@ static size_t flexTestSpellNumber_(const databox *box, char *buf) {
     return at;
 }
 
+/* Sanitized builds (ASan or TSan, both several times slower per memory
+ * access) run the big-memory loops below at smaller sizes, unless
+ * TEST_MEMORY_BIG asks for the full sizes. */
+#if !defined(TEST_MEMORY_BIG) &&                                               \
+    (__has_feature(address_sanitizer) || __has_feature(thread_sanitizer))
+#define FLEX_TEST_SANITIZED 1
+#else
+#define FLEX_TEST_SANITIZED 0
+#endif
+
 int32_t flexTest(int32_t argc, char **argv) {
     setlocale(LC_ALL, "");
 
@@ -11552,7 +11562,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         int64_t len;
 
         int64_t start = 0;
-#if defined(TEST_MEMORY_BIG) || !__has_feature(address_sanitizer)
+#if !FLEX_TEST_SANITIZED
         int64_t loops = (1LL << 16) + 1800;
 #else
         int64_t loops = (1LL << 14);
@@ -11714,7 +11724,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         printf("SUCCESS\n\n");
     }
 
-#if defined(TEST_MEMORY_BIG) || !__has_feature(address_sanitizer)
+#if !FLEX_TEST_SANITIZED
     printf("Create flex in single byte increments up to 8 M entries:\n");
 #else
     printf("Create flex in single byte increments up to 128 k entries:\n");
@@ -11722,7 +11732,7 @@ int32_t flexTest(int32_t argc, char **argv) {
     {
         f = flexNew();
 
-#if defined(TEST_MEMORY_BIG) || !__has_feature(address_sanitizer)
+#if !FLEX_TEST_SANITIZED
         const int32_t contentsSize = 1024 * 1024 * 8; /* 8 MB */
 #else
         const int32_t contentsSize = 1024 * 128; /* 128 k */
@@ -11894,13 +11904,13 @@ int32_t flexTest(int32_t argc, char **argv) {
 /* If using a big memory test
  *   - or -
  * If not running under ASan */
-#if defined(TEST_MEMORY_BIG) || !__has_feature(address_sanitizer)
+#if !FLEX_TEST_SANITIZED
             const int numloops = 200;
 #else
-            /* else, (ASan && !TEST_MEMORY_BIG), use fewer loops: each
-             * builds up to 256 random payloads of up to 32 KB, and without
-             * preallocation every insert reallocates a flex of megabytes,
-             * which ASan's realloc always copies */
+            /* sanitized: fewer loops: each builds up to 256 random
+             * payloads of up to 32 KB, and without preallocation every
+             * insert reallocates a flex of megabytes, which ASan's realloc
+             * always copies */
             const int numloops = preallocate ? 50 : 8;
 #endif
             const uint32_t maxTestElementCount = 256;
