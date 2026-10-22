@@ -71,27 +71,37 @@ size_t multimapBytesP(const multimapP *m);
  * ============================================================================
  */
 
-/* Insert entry - returns true if replaced existing */
-bool multimapInsertP(multimapP *m, const databox *elements[]);
+/* Every mutation logs first and applies exactly when the result is not
+ * PERSIST_LOG_REFUSED (see persistLogResult).  One that would change
+ * nothing (an existing key for IfNotExists, deleting an absent key or row,
+ * an increment by 0) is PERSIST_LOG_UNCHANGED and logs nothing.  The
+ * optional out-parameters report what changed. */
 
-/* Insert only if the key is absent: true when inserted; false, changing
- * nothing, when the key exists or the WAL write fails */
-bool multimapInsertIfNotExistsP(multimapP *m, const databox *elements[]);
+/* Insert or replace an entry ('replaced': the key existed) */
+persistLogResult multimapInsertP(multimapP *m, const databox *elements[],
+                                 bool *replaced);
 
-/* Delete by key - returns true if found and deleted */
-bool multimapDeleteP(multimapP *m, const databox *key);
+/* Insert only if the key is absent (UNCHANGED when it exists) */
+persistLogResult multimapInsertIfNotExistsP(multimapP *m,
+                                            const databox *elements[]);
 
-/* Delete full-width entry (for sets) */
-bool multimapDeleteFullWidthP(multimapP *m, const databox *elements[]);
+/* Delete by key / the full-width row (for sets) */
+persistLogResult multimapDeleteP(multimapP *m, const databox *key);
+persistLogResult multimapDeleteFullWidthP(multimapP *m,
+                                          const databox *elements[]);
 
-/* Reset (clear all entries) */
-void multimapResetP(multimapP *m);
+/* Reset (clear all entries), then compact */
+persistLogResult multimapResetP(multimapP *m);
 
-/* multimapFieldIncr, logged as the increment (not the result) so replay
- * folds it again: the new value, or the current value (0 for a missing key
- * or a non-counter field) when refused or when the WAL write fails */
-int64_t multimapFieldIncrP(multimapP *m, const databox *key,
-                           uint32_t fieldOffset, int64_t incrBy);
+/* multimapFieldIncrBy, logged as the increment (not the result) so replay
+ * folds it again.  An increment the map refuses (a missing key, a field
+ * that is not a counter, a result outside int64) is REFUSED before
+ * anything is logged.  '*newValue' (may be NULL) gets the new value, or
+ * the current one (0 for a missing key or a non-counter) when nothing
+ * changed. */
+persistLogResult multimapFieldIncrP(multimapP *m, const databox *key,
+                                    uint32_t fieldOffset, int64_t incrBy,
+                                    int64_t *newValue);
 
 /* ============================================================================
  * Lookups (read-only, no persistence needed)

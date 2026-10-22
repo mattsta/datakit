@@ -10,7 +10,9 @@
  * Usage:
  *   persistCtx *ctx = persistCtxNew("/path/to/data", &config);
  *   multimapP *m = multimapNewP(ctx, 2);
- *   multimapInsertP(m, entries);   // Automatically logged to WAL
+ *   if (multimapInsertP(m, entries, NULL) == PERSIST_LOG_NOT_DURABLE) {
+ *       // applied and logged; the sync failed (counted in the stats)
+ *   }
  *   multimapCloseP(m);
  *   persistCtxFree(ctx);
  */

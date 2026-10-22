@@ -131,131 +131,142 @@ size_t multimapBytesP(const multimapP *m) {
  * ============================================================================
  */
 
-bool multimapInsertP(multimapP *m, const databox *elements[]) {
-    if (!m || !m->m || !m->ctx) {
-        return false;
-    }
-
-    /* 1. Log to WAL first (write-ahead) */
-    if (!persistCtxLogOp(m->ctx, PERSIST_OP_INSERT, elements,
-                         m->elementsPerEntry)) {
-        return false;
-    }
-
-    /* 2. Update in-memory structure */
-    bool replaced = multimapInsert(&m->m, elements);
-
-    /* 3. Check compaction threshold */
-    persistCtxMaybeCompact(m->ctx, m->m, &persistOpsMultimap);
-
-    return replaced;
+static bool multimapLoggableP(const multimapP *m) {
+    return m && m->m && m->ctx;
 }
 
-bool multimapInsertIfNotExistsP(multimapP *m, const databox *elements[]) {
-    if (!m || !m->m || !m->ctx) {
-        return false;
+persistLogResult multimapInsertP(multimapP *m, const databox *elements[],
+                                 bool *replaced) {
+    if (replaced) {
+        *replaced = false;
+    }
+    if (!multimapLoggableP(m)) {
+        return PERSIST_LOG_REFUSED;
     }
 
+    const persistLogResult logged = persistCtxLogOp(
+        m->ctx, PERSIST_OP_INSERT, elements, m->elementsPerEntry);
+    if (logged == PERSIST_LOG_REFUSED) {
+        return logged;
+    }
+    const bool wasReplaced = multimapInsert(&m->m, elements);
+    if (replaced) {
+        *replaced = wasReplaced;
+    }
+    persistCtxMaybeCompact(m->ctx, m->m, &persistOpsMultimap);
+    return logged;
+}
+
+persistLogResult multimapInsertIfNotExistsP(multimapP *m,
+                                            const databox *elements[]) {
+    if (!multimapLoggableP(m)) {
+        return PERSIST_LOG_REFUSED;
+    }
     if (multimapExists(m->m, elements[0])) {
-        return false;
+        return PERSIST_LOG_UNCHANGED;
     }
-
-    /* As multimapInsertP, but the result is "inserted": the key is absent,
-     * so the insert never replaces */
-    if (!persistCtxLogOp(m->ctx, PERSIST_OP_INSERT, elements,
-                         m->elementsPerEntry)) {
-        return false;
-    }
-    multimapInsert(&m->m, elements);
-    persistCtxMaybeCompact(m->ctx, m->m, &persistOpsMultimap);
-    return true;
+    return multimapInsertP(m, elements, NULL);
 }
 
-bool multimapDeleteP(multimapP *m, const databox *key) {
-    if (!m || !m->m || !m->ctx) {
-        return false;
+persistLogResult multimapDeleteP(multimapP *m, const databox *key) {
+    if (!multimapLoggableP(m)) {
+        return PERSIST_LOG_REFUSED;
     }
-
-    /* Check if exists (to return correct result) */
     if (!multimapExists(m->m, key)) {
-        return false;
+        return PERSIST_LOG_UNCHANGED;
     }
 
-    /* 1. Log to WAL first (pass as array of pointers for encodeOp) */
     const databox *keyArray[] = {key};
-    if (!persistCtxLogOp(m->ctx, PERSIST_OP_DELETE, keyArray, 1)) {
-        return false;
+    const persistLogResult logged =
+        persistCtxLogOp(m->ctx, PERSIST_OP_DELETE, keyArray, 1);
+    if (logged == PERSIST_LOG_REFUSED) {
+        return logged;
     }
-
-    /* 2. Update in-memory structure */
-    bool deleted = multimapDelete(&m->m, key);
-
-    /* 3. Check compaction threshold */
+    multimapDelete(&m->m, key);
     persistCtxMaybeCompact(m->ctx, m->m, &persistOpsMultimap);
-
-    return deleted;
+    return logged;
 }
 
-bool multimapDeleteFullWidthP(multimapP *m, const databox *elements[]) {
-    if (!m || !m->m || !m->ctx) {
-        return false;
+persistLogResult multimapDeleteFullWidthP(multimapP *m,
+                                          const databox *elements[]) {
+    if (!multimapLoggableP(m)) {
+        return PERSIST_LOG_REFUSED;
+    }
+    if (!multimapExistsFullWidth(m->m, elements)) {
+        return PERSIST_LOG_UNCHANGED;
     }
 
-    /* 1. Log to WAL first: the full row, so replay removes the same row */
-    if (!persistCtxLogOp(m->ctx, PERSIST_OP_DELETE, elements,
-                         m->elementsPerEntry)) {
-        return false;
+    /* The full row, so replay removes the same row */
+    const persistLogResult logged = persistCtxLogOp(
+        m->ctx, PERSIST_OP_DELETE, elements, m->elementsPerEntry);
+    if (logged == PERSIST_LOG_REFUSED) {
+        return logged;
     }
-
-    /* 2. Update in-memory structure */
-    bool deleted = multimapDeleteFullWidth(&m->m, elements);
-
-    /* 3. Check compaction threshold */
+    multimapDeleteFullWidth(&m->m, elements);
     persistCtxMaybeCompact(m->ctx, m->m, &persistOpsMultimap);
-
-    return deleted;
+    return logged;
 }
 
-void multimapResetP(multimapP *m) {
-    if (!m || !m->m || !m->ctx) {
-        return;
+persistLogResult multimapResetP(multimapP *m) {
+    if (!multimapLoggableP(m)) {
+        return PERSIST_LOG_REFUSED;
     }
 
-    /* 1. Log clear operation to WAL */
-    persistCtxLogOp(m->ctx, PERSIST_OP_CLEAR, NULL, 0);
-
-    /* 2. Reset in-memory structure */
+    /* Reset only what the WAL records as reset */
+    const persistLogResult logged =
+        persistCtxLogOp(m->ctx, PERSIST_OP_CLEAR, NULL, 0);
+    if (logged == PERSIST_LOG_REFUSED) {
+        return logged;
+    }
     multimapReset(m->m);
 
-    /* 3. Force compaction after reset (WAL is now stale) */
+    /* The WAL is all stale now: compaction makes the empty map the
+     * snapshot (best effort: on failure the WAL still replays to it) */
     persistCtxCompact(m->ctx, m->m, &persistOpsMultimap);
+    return logged;
 }
 
-int64_t multimapFieldIncrP(multimapP *m, const databox *key,
-                           uint32_t fieldOffset, int64_t incrBy) {
-    if (!m || !m->m || !m->ctx) {
-        return 0;
+persistLogResult multimapFieldIncrP(multimapP *m, const databox *key,
+                                    uint32_t fieldOffset, int64_t incrBy,
+                                    int64_t *newValue) {
+    if (newValue) {
+        *newValue = 0;
+    }
+    if (!multimapLoggableP(m)) {
+        return PERSIST_LOG_REFUSED;
     }
 
-    /* 1. Log to WAL: the increment, not the result.  A refused increment
-     * replays as the same refusal. */
+    /* Decide the map's refusal first (an increment by 0 reads the value
+     * and whether the field is a counter), so a refused increment is never
+     * logged */
+    int64_t current = 0;
+    int64_t sum = 0;
+    if (!multimapFieldIncrBy(&m->m, key, fieldOffset, 0, &current) ||
+        __builtin_add_overflow(current, incrBy, &sum)) {
+        if (newValue) {
+            *newValue = current;
+        }
+        return PERSIST_LOG_REFUSED;
+    }
+    if (newValue) {
+        *newValue = current;
+    }
+    if (incrBy == 0) {
+        return PERSIST_LOG_UNCHANGED;
+    }
+
+    /* Logged as the increment, not the result */
     const databox offsetBox = DATABOX_UNSIGNED(fieldOffset);
     const databox deltaBox = DATABOX_SIGNED(incrBy);
     const databox *args[] = {key, &offsetBox, &deltaBox};
-    if (!persistCtxLogOp(m->ctx, PERSIST_OP_NUM_INCR, args, 3)) {
-        /* Not logged, so not applied: report the current value, as
-         * multimapFieldIncr does for any refusal (an increment by 0 changes
-         * nothing) */
-        return multimapFieldIncr(&m->m, key, fieldOffset, 0);
+    const persistLogResult logged =
+        persistCtxLogOp(m->ctx, PERSIST_OP_NUM_INCR, args, 3);
+    if (logged == PERSIST_LOG_REFUSED) {
+        return logged;
     }
-
-    /* 2. Update in-memory structure */
-    int64_t result = multimapFieldIncr(&m->m, key, fieldOffset, incrBy);
-
-    /* 3. Check compaction threshold */
+    multimapFieldIncrBy(&m->m, key, fieldOffset, incrBy, newValue);
     persistCtxMaybeCompact(m->ctx, m->m, &persistOpsMultimap);
-
-    return result;
+    return logged;
 }
 
 /* ============================================================================
@@ -403,7 +414,7 @@ int multimapPTest(int argc, char *argv[]) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i * 100);
             const databox *entry[] = {&key, &val};
-            multimapInsertP(m, entry);
+            multimapInsertP(m, entry, NULL);
             ptestKVTrackerInsert(&tracker, &key, &val);
         }
 
@@ -428,7 +439,7 @@ int multimapPTest(int argc, char *argv[]) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i * 10);
             const databox *entry[] = {&key, &val};
-            multimapInsertP(m, entry);
+            multimapInsertP(m, entry, NULL);
             ptestKVTrackerInsert(&tracker, &key, &val);
         }
 
@@ -437,7 +448,7 @@ int multimapPTest(int argc, char *argv[]) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i * 1000);
             const databox *entry[] = {&key, &val};
-            multimapInsertP(m, entry);
+            multimapInsertP(m, entry, NULL);
             ptestKVTrackerInsert(&tracker, &key, &val);
         }
 
@@ -464,7 +475,7 @@ int multimapPTest(int argc, char *argv[]) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i * 50);
                 const databox *entry[] = {&key, &val};
-                multimapInsertP(m, entry);
+                multimapInsertP(m, entry, NULL);
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
@@ -504,7 +515,7 @@ int multimapPTest(int argc, char *argv[]) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i * 100);
             const databox *entry[] = {&key, &val};
-            multimapInsertP(m, entry);
+            multimapInsertP(m, entry, NULL);
             ptestKVTrackerInsert(&tracker, &key, &val);
         }
 
@@ -546,7 +557,7 @@ int multimapPTest(int argc, char *argv[]) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i * 50);
                 const databox *entry[] = {&key, &val};
-                multimapInsertP(m, entry);
+                multimapInsertP(m, entry, NULL);
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
@@ -593,7 +604,7 @@ int multimapPTest(int argc, char *argv[]) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i);
             const databox *entry[] = {&key, &val};
-            multimapInsertP(m, entry);
+            multimapInsertP(m, entry, NULL);
         }
 
         if (multimapCountP(m) != 10) {
@@ -612,7 +623,7 @@ int multimapPTest(int argc, char *argv[]) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i * 2);
             const databox *entry[] = {&key, &val};
-            multimapInsertP(m, entry);
+            multimapInsertP(m, entry, NULL);
             ptestKVTrackerInsert(&tracker, &key, &val);
         }
 
@@ -639,7 +650,7 @@ int multimapPTest(int argc, char *argv[]) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i);
                 const databox *entry[] = {&key, &val};
-                multimapInsertP(m, entry);
+                multimapInsertP(m, entry, NULL);
             }
 
             multimapResetP(m);
@@ -648,7 +659,7 @@ int multimapPTest(int argc, char *argv[]) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i * 3);
                 const databox *entry[] = {&key, &val};
-                multimapInsertP(m, entry);
+                multimapInsertP(m, entry, NULL);
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
@@ -690,7 +701,7 @@ int multimapPTest(int argc, char *argv[]) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i * round);
                 const databox *entry[] = {&key, &val};
-                multimapInsertP(m, entry);
+                multimapInsertP(m, entry, NULL);
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
@@ -699,7 +710,7 @@ int multimapPTest(int argc, char *argv[]) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i * 9999);
                 const databox *entry[] = {&key, &val};
-                multimapInsertP(m, entry);
+                multimapInsertP(m, entry, NULL);
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
@@ -745,7 +756,7 @@ int multimapPTest(int argc, char *argv[]) {
                 databox key = DATABOX_SIGNED(cycle * 100 + i);
                 databox val = DATABOX_SIGNED(cycle * 1000 + i);
                 const databox *entry[] = {&key, &val};
-                multimapInsertP(m, entry);
+                multimapInsertP(m, entry, NULL);
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
@@ -774,7 +785,7 @@ int multimapPTest(int argc, char *argv[]) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i * 1000);
                 const databox *entry[] = {&key, &val};
-                multimapInsertP(m, entry);
+                multimapInsertP(m, entry, NULL);
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
@@ -842,7 +853,7 @@ int multimapPTest(int argc, char *argv[]) {
             persistCtx *ctx = persistCtxNew(basePath, NULL);
             multimapP *m = multimapNewP(ctx, 2);
             const databox *entry[] = {&expectedKey, &expectedVal};
-            multimapInsertP(m, entry);
+            multimapInsertP(m, entry, NULL);
             multimapCloseP(m);
             persistCtxFree(ctx);
         }
@@ -887,7 +898,7 @@ int multimapPTest(int argc, char *argv[]) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i);
             const databox *entry[] = {&key, &val};
-            multimapInsertP(m, entry);
+            multimapInsertP(m, entry, NULL);
         }
 
         /* Delete a few */
@@ -920,7 +931,7 @@ int multimapPTest(int argc, char *argv[]) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i * 10);
             const databox *entry[] = {&key, &val};
-            multimapInsertP(m, entry);
+            multimapInsertP(m, entry, NULL);
         }
 
         multimapResetP(m);
@@ -934,7 +945,7 @@ int multimapPTest(int argc, char *argv[]) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i * 7);
             const databox *entry[] = {&key, &val};
-            multimapInsertP(m, entry);
+            multimapInsertP(m, entry, NULL);
         }
 
         multimapCloseP(m);
@@ -977,7 +988,7 @@ int multimapPTest(int argc, char *argv[]) {
             const databox key = DATABOX_SIGNED(i);
             const databox counter = DATABOX_SIGNED(i);
             const databox *row[] = {&key, &counter, &label};
-            multimapInsertP(m, row);
+            multimapInsertP(m, row, NULL);
         }
 
         const databox k3 = DATABOX_SIGNED(3);
@@ -985,22 +996,43 @@ int multimapPTest(int argc, char *argv[]) {
         const databox k5 = DATABOX_SIGNED(5);
         const databox k50 = DATABOX_SIGNED(50);
         const databox k99 = DATABOX_SIGNED(99);
-        if (multimapFieldIncrP(m, &k3, 1, 5) != 8) {
+        int64_t value = 0;
+        if (!multimapFieldIncrP(m, &k3, 1, 5, &value) || value != 8) {
             ERRR("3 + 5 should be 8");
         }
-        if (multimapFieldIncrP(m, &k4, 1, -10) != -6) {
+        if (!multimapFieldIncrP(m, &k4, 1, -10, &value) || value != -6) {
             ERRR("4 - 10 should be -6");
         }
-        if (multimapFieldIncrP(m, &k99, 1, 1) != 0) {
-            ERRR("A missing key's increment reports 0");
+
+        /* Refused increments, an overflow included, log nothing */
+        persistCtxStats before;
+        persistCtxGetStats(ctx, &before);
+        if (multimapFieldIncrP(m, &k99, 1, 1, &value) != PERSIST_LOG_REFUSED ||
+            value != 0) {
+            ERRR("A missing key's increment was not refused with 0");
         }
-        if (multimapFieldIncrP(m, &k3, 2, 1) != 0) {
-            ERRR("A bytes field's increment reports 0");
+        if (multimapFieldIncrP(m, &k3, 2, 1, &value) != PERSIST_LOG_REFUSED ||
+            value != 0) {
+            ERRR("A bytes field's increment was not refused with 0");
+        }
+        if (multimapFieldIncrP(m, &k3, 1, INT64_MAX, &value) !=
+                PERSIST_LOG_REFUSED ||
+            value != 8) {
+            ERRR("An overflowing increment was not refused at 8");
+        }
+        if (multimapFieldIncrP(m, &k3, 1, 0, &value) != PERSIST_LOG_UNCHANGED ||
+            value != 8) {
+            ERRR("An increment by 0 was logged");
         }
         const databox other = DATABOX_SIGNED(-1);
         const databox *dup[] = {&k5, &other, &label};
-        if (multimapInsertIfNotExistsP(m, dup)) {
+        if (multimapInsertIfNotExistsP(m, dup) != PERSIST_LOG_UNCHANGED) {
             ERRR("Insert-if-absent replaced key 5");
+        }
+        persistCtxStats after;
+        persistCtxGetStats(ctx, &after);
+        if (after.totalOps != before.totalOps) {
+            ERRR("refused or unchanged ops wrote WAL entries");
         }
         const databox fifty = DATABOX_SIGNED(500);
         const databox *added[] = {&k50, &fifty, &label};
@@ -1055,13 +1087,14 @@ int multimapPTest(int argc, char *argv[]) {
             const databox key = DATABOX_SIGNED(rows[i][0]);
             const databox val = DATABOX_SIGNED(rows[i][1]);
             const databox *row[] = {&key, &val};
-            multimapInsertP(m, row);
+            multimapInsertP(m, row, NULL);
         }
         const databox one = DATABOX_SIGNED(1);
         const databox eleven = DATABOX_SIGNED(11);
         const databox *gone[] = {&one, &eleven};
-        if (!multimapDeleteFullWidthP(m, gone)) {
-            ERRR("Full-row delete found no row");
+        if (!multimapDeleteFullWidthP(m, gone) ||
+            multimapDeleteFullWidthP(m, gone) != PERSIST_LOG_UNCHANGED) {
+            ERRR("Full-row delete found no row, or deleted it twice");
         }
         multimapCloseP(m);
         persistCtxFree(ctx);

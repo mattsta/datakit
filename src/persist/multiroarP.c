@@ -127,96 +127,94 @@ bool multiroarIsEmptyP(const multiroarP *r) {
  * ============================================================================
  */
 
-bool multiroarBitSetP(multiroarP *r, size_t position) {
-    if (!r || !r->r || !r->ctx) {
-        return false;
-    }
-
-    /* Check if already set */
-    bool wasSet = multiroarBitGet(r->r, position);
-
-    /* Log to WAL first */
-    uint64_t pos64 = position;
-    if (!persistCtxLogOp(r->ctx, PERSIST_OP_INSERT, &pos64, 1)) {
-        return false;
-    }
-
-    /* Update in-memory */
-    multiroarBitSet(r->r, position);
-
-    /* Check compaction threshold */
-    persistCtxMaybeCompact(r->ctx, r->r, &persistOpsMultiroar);
-
-    return !wasSet; /* Return true if bit was not previously set */
+/* A bit-mode roar this wrapper can log for */
+static bool multiroarBitModeP(const multiroarP *r) {
+    return r && r->r && r->ctx && !multiroarValueWidth(r->r);
 }
 
-bool multiroarRemoveP(multiroarP *r, size_t position) {
-    if (!r || !r->r || !r->ctx) {
-        return false;
+/* Log and apply a set (adding) or clear of one bit; a no-op logs
+ * nothing */
+static persistLogResult multiroarBitChangeP(multiroarP *r, uint64_t position,
+                                            bool adding, bool *changed) {
+    if (changed) {
+        *changed = false;
+    }
+    if (!multiroarBitModeP(r)) {
+        return PERSIST_LOG_REFUSED;
+    }
+    if (multiroarBitGet(r->r, position) == adding) {
+        return PERSIST_LOG_UNCHANGED;
     }
 
-    /* Check if currently set */
-    bool wasSet = multiroarBitGet(r->r, position);
-
-    /* Log to WAL first */
-    uint64_t pos64 = position;
-    if (!persistCtxLogOp(r->ctx, PERSIST_OP_DELETE, &pos64, 1)) {
-        return false;
+    const persistLogResult logged = persistCtxLogOp(
+        r->ctx, adding ? PERSIST_OP_INSERT : PERSIST_OP_DELETE, &position, 1);
+    if (logged == PERSIST_LOG_REFUSED) {
+        return logged;
     }
-
-    /* Update in-memory */
-    multiroarRemove(r->r, position);
-
-    /* Check compaction threshold */
+    if (adding) {
+        multiroarBitSet(r->r, position);
+    } else {
+        multiroarRemove(r->r, position);
+    }
+    if (changed) {
+        *changed = true;
+    }
     persistCtxMaybeCompact(r->ctx, r->r, &persistOpsMultiroar);
-
-    return wasSet; /* Return true if bit was previously set */
+    return logged;
 }
 
-void multiroarBitSetRangeP(multiroarP *r, size_t start, size_t extent) {
-    if (!r || !r->r || !r->ctx) {
-        return;
+persistLogResult multiroarBitSetP(multiroarP *r, uint64_t position,
+                                  bool *added) {
+    return multiroarBitChangeP(r, position, true, added);
+}
+
+persistLogResult multiroarRemoveP(multiroarP *r, uint64_t position,
+                                  bool *removed) {
+    return multiroarBitChangeP(r, position, false, removed);
+}
+
+/* Log and apply a range op as one row: the whole range or none of it */
+static persistLogResult multiroarRangeP(multiroarP *r, persistOp op,
+                                        uint64_t start, uint64_t extent) {
+    if (!multiroarBitModeP(r)) {
+        return PERSIST_LOG_REFUSED;
+    }
+    if (extent == 0) {
+        return PERSIST_LOG_UNCHANGED;
     }
 
-    /* One SET_RANGE row: the whole range is logged or none of it */
     const uint64_t range[2] = {start, extent};
-    if (!persistCtxLogOp(r->ctx, PERSIST_OP_SET_RANGE, range, 2)) {
-        return;
+    const persistLogResult logged = persistCtxLogOp(r->ctx, op, range, 2);
+    if (logged == PERSIST_LOG_REFUSED) {
+        return logged;
     }
-
-    /* Update in-memory */
-    multiroarBitSetRange(r->r, start, extent);
-
-    /* Check compaction threshold */
+    if (op == PERSIST_OP_SET_RANGE) {
+        multiroarBitSetRange(r->r, start, extent);
+    } else {
+        multiroarBitClearRange(r->r, start, extent);
+    }
     persistCtxMaybeCompact(r->ctx, r->r, &persistOpsMultiroar);
+    return logged;
 }
 
-void multiroarBitClearRangeP(multiroarP *r, uint64_t start, uint64_t extent) {
-    if (!r || !r->r || !r->ctx) {
-        return;
-    }
-
-    /* One CLEAR_RANGE row: the whole range is logged or none of it */
-    const uint64_t range[2] = {start, extent};
-    if (!persistCtxLogOp(r->ctx, PERSIST_OP_CLEAR_RANGE, range, 2)) {
-        return;
-    }
-
-    /* Update in-memory */
-    multiroarBitClearRange(r->r, start, extent);
-
-    /* Check compaction threshold */
-    persistCtxMaybeCompact(r->ctx, r->r, &persistOpsMultiroar);
+persistLogResult multiroarBitSetRangeP(multiroarP *r, uint64_t start,
+                                       uint64_t extent) {
+    return multiroarRangeP(r, PERSIST_OP_SET_RANGE, start, extent);
 }
 
-bool multiroarValueSetP(multiroarP *r, uint64_t position,
-                        const databox *value) {
+persistLogResult multiroarBitClearRangeP(multiroarP *r, uint64_t start,
+                                         uint64_t extent) {
+    return multiroarRangeP(r, PERSIST_OP_CLEAR_RANGE, start, extent);
+}
+
+persistLogResult multiroarValueSetP(multiroarP *r, uint64_t position,
+                                    const databox *value) {
     if (!r || !r->r || !r->ctx || !value) {
-        return false;
+        return PERSIST_LOG_REFUSED;
     }
     const uint8_t width = multiroarValueWidth(r->r);
     if (!width || !multiroarValueInBounds(r->r, position)) {
-        return false;
+        return PERSIST_LOG_REFUSED;
     }
 
     /* The integer kinds multiroarValueSet stores, within the width */
@@ -227,7 +225,7 @@ bool multiroarValueSetP(multiroarP *r, uint64_t position,
         break;
     case DATABOX_SIGNED_64:
         if (value->data.i < 0) {
-            return false;
+            return PERSIST_LOG_REFUSED;
         }
         v = (uint64_t)value->data.i;
         break;
@@ -238,36 +236,47 @@ bool multiroarValueSetP(multiroarP *r, uint64_t position,
         v = 0;
         break;
     default:
-        return false;
+        return PERSIST_LOG_REFUSED;
     }
     if (width < 64 && v >> width) {
-        return false;
+        return PERSIST_LOG_REFUSED;
     }
 
     const uint64_t words[2] = {position, v};
-    if (!persistCtxLogOp(r->ctx, PERSIST_OP_INSERT, words, 2)) {
-        return false;
+    const persistLogResult logged =
+        persistCtxLogOp(r->ctx, PERSIST_OP_INSERT, words, 2);
+    if (logged == PERSIST_LOG_REFUSED) {
+        return logged;
     }
     databox stored = databoxNewUnsigned(v);
     multiroarValueSet(r->r, position, &stored);
     persistCtxMaybeCompact(r->ctx, r->r, &persistOpsMultiroar);
-    return true;
+    return logged;
 }
 
-bool multiroarValueRemoveP(multiroarP *r, uint64_t position) {
+persistLogResult multiroarValueRemoveP(multiroarP *r, uint64_t position,
+                                       bool *removed) {
+    if (removed) {
+        *removed = false;
+    }
     if (!r || !r->r || !r->ctx || !multiroarValueWidth(r->r)) {
-        return false;
+        return PERSIST_LOG_REFUSED;
     }
     if (!multiroarValueGetP(r, position, NULL)) {
-        return true; /* nothing there: nothing to log */
+        return PERSIST_LOG_UNCHANGED; /* nothing there: nothing to log */
     }
 
-    if (!persistCtxLogOp(r->ctx, PERSIST_OP_DELETE, &position, 1)) {
-        return false;
+    const persistLogResult logged =
+        persistCtxLogOp(r->ctx, PERSIST_OP_DELETE, &position, 1);
+    if (logged == PERSIST_LOG_REFUSED) {
+        return logged;
     }
     multiroarValueRemoveGetRemoved(r->r, position, NULL);
+    if (removed) {
+        *removed = true;
+    }
     persistCtxMaybeCompact(r->ctx, r->r, &persistOpsMultiroar);
-    return true;
+    return logged;
 }
 
 /* ============================================================================
@@ -288,7 +297,7 @@ uint64_t multiroarValueCountP(const multiroarP *r) {
     return r && r->r ? multiroarValueCount(r->r) : 0;
 }
 
-bool multiroarBitGetP(const multiroarP *r, size_t position) {
+bool multiroarBitGetP(const multiroarP *r, uint64_t position) {
     if (!r || !r->r) {
         return false;
     }
@@ -382,14 +391,20 @@ static int test_multiroarP_basic(int argc, char *argv[]) {
     }
 
     /* Add some bits */
-    if (!multiroarBitSetP(r, 100)) {
+    bool added = false;
+    if (!multiroarBitSetP(r, 100, &added) || !added) {
         ERRR("Failed to set bit 100");
     }
-    if (!multiroarBitSetP(r, 200)) {
+    if (!multiroarBitSetP(r, 200, &added) || !added) {
         ERRR("Failed to set bit 200");
     }
-    if (!multiroarBitSetP(r, 8192)) {
+    if (!multiroarBitSetP(r, 8192, &added) || !added) {
         ERRR("Failed to set bit 8192");
+    }
+
+    /* Setting a set bit changes nothing and logs nothing */
+    if (multiroarBitSetP(r, 100, &added) != PERSIST_LOG_UNCHANGED || added) {
+        ERRR("re-setting bit 100 was logged");
     }
 
     /* Verify bits */
@@ -436,7 +451,8 @@ static int test_multiroarP_basic(int argc, char *argv[]) {
     }
 
     /* Remove a bit */
-    if (!multiroarRemoveP(r, 200)) {
+    bool removed = false;
+    if (!multiroarRemoveP(r, 200, &removed) || !removed) {
         ERRR("Failed to remove bit 200");
     }
     if (multiroarBitGetP(r, 200)) {
@@ -501,7 +517,7 @@ static int test_multiroarP_recovery(int argc, char *argv[]) {
     multiroarP *r = multiroarNewP(ctx);
 
     for (uint64_t i = 0; i < 100; i++) {
-        multiroarBitSetP(r, i * 10);
+        multiroarBitSetP(r, i * 10, NULL);
     }
 
     /* Simulate crash - don't call multiroarCloseP */
@@ -564,7 +580,7 @@ static int test_multiroarP_compaction(int argc, char *argv[]) {
 
     /* Add many bits */
     for (uint64_t i = 0; i < 50; i++) {
-        multiroarBitSetP(r, i);
+        multiroarBitSetP(r, i, NULL);
     }
 
     /* Attempt compaction */
@@ -622,10 +638,10 @@ static int test_multiroarP_fuzzing(int argc, char *argv[]) {
 
         if (op % 2 == 0) {
             /* Insert */
-            multiroarBitSetP(r, pos);
+            multiroarBitSetP(r, pos, NULL);
         } else {
             /* Delete */
-            multiroarRemoveP(r, pos);
+            multiroarRemoveP(r, pos, NULL);
         }
     }
 
@@ -683,8 +699,8 @@ static int test_multiroarP_ranges(int argc, char *argv[]) {
     /* [100, 400) set, [150, 200) cleared, 120 removed, 9000 set: 250 bits */
     multiroarBitSetRangeP(r, 100, 300);
     multiroarBitClearRangeP(r, 150, 50);
-    multiroarRemoveP(r, 120);
-    multiroarBitSetP(r, 9000);
+    multiroarRemoveP(r, 120, NULL);
+    multiroarBitSetP(r, 9000, NULL);
     cleaner(multiroarFree) multiroar *want =
         multiroarDuplicate(multiroarGetRawP(r));
     if (!multiroarSyncP(r) || multiroarMemoryUsageP(r) == 0) {
@@ -766,7 +782,7 @@ static int test_multiroarP_values(int argc, char *argv[]) {
         }
     }
     for (uint64_t i = 0; i < 200; i += 5) {
-        if (!multiroarValueRemoveP(r, i * 9)) {
+        if (!multiroarValueRemoveP(r, i * 9, NULL)) {
             ERR("remove at %" PRIu64 " refused", i * 9);
         }
     }

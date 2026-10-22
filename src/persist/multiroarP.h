@@ -66,25 +66,33 @@ bool multiroarIsEmptyP(const multiroarP *r);
  * ============================================================================
  */
 
-/* Set bit at position - returns true if bit was not previously set */
-bool multiroarBitSetP(multiroarP *r, size_t position);
+/* Every mutation logs first and applies exactly when the result is not
+ * PERSIST_LOG_REFUSED (see persistLogResult).  One that would change
+ * nothing (setting a set bit, removing an absent one, an empty range,
+ * removing an absent value) is PERSIST_LOG_UNCHANGED and logs nothing.
+ * The optional 'changed' out-parameters report whether the roar changed. */
 
-/* Remove bit at position - returns true if bit was previously set */
-bool multiroarRemoveP(multiroarP *r, size_t position);
+/* Set the bit at position */
+persistLogResult multiroarBitSetP(multiroarP *r, uint64_t position,
+                                  bool *added);
 
-/* Set range of bits [start, start+extent) */
-void multiroarBitSetRangeP(multiroarP *r, size_t start, size_t extent);
+/* Clear the bit at position */
+persistLogResult multiroarRemoveP(multiroarP *r, uint64_t position,
+                                  bool *removed);
 
-/* Clear range of bits [start, start+extent) */
-void multiroarBitClearRangeP(multiroarP *r, uint64_t start, uint64_t extent);
+/* Set / clear the bits in [start, start+extent): one log row each */
+persistLogResult multiroarBitSetRangeP(multiroarP *r, uint64_t start,
+                                       uint64_t extent);
+persistLogResult multiroarBitClearRangeP(multiroarP *r, uint64_t start,
+                                         uint64_t extent);
 
-/* Value mode: store `value` at `position` / remove the value there.  True
- * once the change is logged and applied (Remove: also when there was no
- * value); false when it is refused (a bit-mode roar, a value that is not
- * an integer of the roar's width, a position outside its dimensions) or
- * the log write fails, leaving the roar unchanged. */
-bool multiroarValueSetP(multiroarP *r, uint64_t position, const databox *value);
-bool multiroarValueRemoveP(multiroarP *r, uint64_t position);
+/* Value mode: store `value` at `position` / remove the value there.
+ * REFUSED for a bit-mode roar, a value that is not an integer of the
+ * roar's width or a position outside its dimensions. */
+persistLogResult multiroarValueSetP(multiroarP *r, uint64_t position,
+                                    const databox *value);
+persistLogResult multiroarValueRemoveP(multiroarP *r, uint64_t position,
+                                       bool *removed);
 
 /* ============================================================================
  * Lookups (read-only, no persistence needed)
@@ -92,7 +100,7 @@ bool multiroarValueRemoveP(multiroarP *r, uint64_t position);
  */
 
 /* Check if bit is set */
-bool multiroarBitGetP(const multiroarP *r, size_t position);
+bool multiroarBitGetP(const multiroarP *r, uint64_t position);
 
 /* Value mode: the value at `position` (false when there is none) and the
  * count of stored values */
