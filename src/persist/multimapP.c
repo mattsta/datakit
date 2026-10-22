@@ -7,6 +7,7 @@
 #include "../cleaner.h"
 #include "../datakit.h"
 
+#include <inttypes.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -155,13 +156,19 @@ bool multimapInsertIfNotExistsP(multimapP *m, const databox *elements[]) {
         return false;
     }
 
-    /* Check if exists first */
     if (multimapExists(m->m, elements[0])) {
-        return false; /* Already exists, no insert */
+        return false;
     }
 
-    /* Insert (will log to WAL) */
-    return multimapInsertP(m, elements);
+    /* As multimapInsertP, but the result is "inserted": the key is absent,
+     * so the insert never replaces */
+    if (!persistCtxLogOp(m->ctx, PERSIST_OP_INSERT, elements,
+                         m->elementsPerEntry)) {
+        return false;
+    }
+    multimapInsert(&m->m, elements);
+    persistCtxMaybeCompact(m->ctx, m->m, &persistOpsMultimap);
+    return true;
 }
 
 bool multimapDeleteP(multimapP *m, const databox *key) {
@@ -194,7 +201,7 @@ bool multimapDeleteFullWidthP(multimapP *m, const databox *elements[]) {
         return false;
     }
 
-    /* 1. Log to WAL first (use the full entry for deletion) */
+    /* 1. Log to WAL first: the full row, so replay removes the same row */
     if (!persistCtxLogOp(m->ctx, PERSIST_OP_DELETE, elements,
                          m->elementsPerEntry)) {
         return false;
@@ -230,21 +237,16 @@ int64_t multimapFieldIncrP(multimapP *m, const databox *key,
         return 0;
     }
 
-    /* For increment, we need to encode the operation specially.
-     * We'll use a custom encoding: [key][fieldOffset][incrBy] */
-    struct {
-        const databox *key;
-        uint32_t fieldOffset;
-        int64_t incrBy;
-    } args = {key, fieldOffset, incrBy};
-
-    /* 1. Log to WAL
-     * Note: This uses PERSIST_OP_UPDATE with special encoding.
-     * The applyOp handler needs to understand this format. */
-    if (!persistCtxLogOp(m->ctx, PERSIST_OP_UPDATE, &args, 3)) {
-        /* If logging fails, we still do the in-memory update for consistency
-         * but return 0 to indicate failure */
-        return multimapFieldIncr(&m->m, key, fieldOffset, incrBy);
+    /* 1. Log to WAL: the increment, not the result.  A refused increment
+     * replays as the same refusal. */
+    const databox offsetBox = DATABOX_UNSIGNED(fieldOffset);
+    const databox deltaBox = DATABOX_SIGNED(incrBy);
+    const databox *args[] = {key, &offsetBox, &deltaBox};
+    if (!persistCtxLogOp(m->ctx, PERSIST_OP_NUM_INCR, args, 3)) {
+        /* Not logged, so not applied: report the current value, as
+         * multimapFieldIncr does for any refusal (an increment by 0 changes
+         * nothing) */
+        return multimapFieldIncr(&m->m, key, fieldOffset, 0);
     }
 
     /* 2. Update in-memory structure */
@@ -958,6 +960,152 @@ int multimapPTest(int argc, char *argv[]) {
                 ERRR("Post-reset key lost in recovery");
             }
 
+            multimapCloseP(m);
+        }
+        persistCtxFree(ctx);
+        ptestCleanupFiles(basePath);
+    }
+
+    TEST("multimapP field increments and insert-if-absent survive recovery") {
+        /* key -> [counter, label]; increments replay as increments, a
+         * refused one (missing key, a bytes field) changes nothing */
+        ptestCleanupFiles(basePath);
+        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        multimapP *m = multimapNewP(ctx, 3);
+        const databox label = databoxNewBytesString("label");
+        for (int64_t i = 0; i < 10; i++) {
+            const databox key = DATABOX_SIGNED(i);
+            const databox counter = DATABOX_SIGNED(i);
+            const databox *row[] = {&key, &counter, &label};
+            multimapInsertP(m, row);
+        }
+
+        const databox k3 = DATABOX_SIGNED(3);
+        const databox k4 = DATABOX_SIGNED(4);
+        const databox k5 = DATABOX_SIGNED(5);
+        const databox k50 = DATABOX_SIGNED(50);
+        const databox k99 = DATABOX_SIGNED(99);
+        if (multimapFieldIncrP(m, &k3, 1, 5) != 8) {
+            ERRR("3 + 5 should be 8");
+        }
+        if (multimapFieldIncrP(m, &k4, 1, -10) != -6) {
+            ERRR("4 - 10 should be -6");
+        }
+        if (multimapFieldIncrP(m, &k99, 1, 1) != 0) {
+            ERRR("A missing key's increment reports 0");
+        }
+        if (multimapFieldIncrP(m, &k3, 2, 1) != 0) {
+            ERRR("A bytes field's increment reports 0");
+        }
+        const databox other = DATABOX_SIGNED(-1);
+        const databox *dup[] = {&k5, &other, &label};
+        if (multimapInsertIfNotExistsP(m, dup)) {
+            ERRR("Insert-if-absent replaced key 5");
+        }
+        const databox fifty = DATABOX_SIGNED(500);
+        const databox *added[] = {&k50, &fifty, &label};
+        if (!multimapInsertIfNotExistsP(m, added)) {
+            ERRR("Insert-if-absent refused absent key 50");
+        }
+        if (!multimapSyncP(m) || multimapBytesP(m) == 0) {
+            ERRR("Sync or byte count failed");
+        }
+        multimapCloseP(m);
+        persistCtxFree(ctx);
+
+        ctx = persistCtxOpen(basePath, NULL);
+        m = multimapOpenP(ctx);
+        if (!m) {
+            ERRR("Recovery failed");
+        } else {
+            static const struct {
+                int64_t key;
+                int64_t counter;
+            } want[] = {{3, 8}, {4, -6}, {5, 5}, {50, 500}};
+            for (size_t i = 0; i < sizeof(want) / sizeof(*want); i++) {
+                const databox key = DATABOX_SIGNED(want[i].key);
+                const databox expect = DATABOX_SIGNED(want[i].counter);
+                databox vals[2];
+                databox *out[] = {&vals[0], &vals[1]};
+                if (!multimapLookupP(m, &key, out) ||
+                    !databoxEqual(&vals[0], &expect)) {
+                    ERR("key %" PRId64 ": counter not %" PRId64
+                        " after recovery",
+                        want[i].key, want[i].counter);
+                }
+            }
+            if (multimapCountP(m) != 11) {
+                ERR("Expected 11 rows, got %zu", multimapCountP(m));
+            }
+            multimapCloseP(m);
+        }
+        persistCtxFree(ctx);
+        ptestCleanupFiles(basePath);
+    }
+
+    TEST("multimapP set: full-row delete removes that row after recovery") {
+        /* One key with several rows: replay must remove the same row,
+         * not the key's first row */
+        ptestCleanupFiles(basePath);
+        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        multimapP *m =
+            multimapNewConfigureP(ctx, 2, true, false, FLEX_CAP_LEVEL_2048);
+        static const int64_t rows[][2] = {{1, 10}, {1, 11}, {1, 12}, {2, 20}};
+        for (size_t i = 0; i < 4; i++) {
+            const databox key = DATABOX_SIGNED(rows[i][0]);
+            const databox val = DATABOX_SIGNED(rows[i][1]);
+            const databox *row[] = {&key, &val};
+            multimapInsertP(m, row);
+        }
+        const databox one = DATABOX_SIGNED(1);
+        const databox eleven = DATABOX_SIGNED(11);
+        const databox *gone[] = {&one, &eleven};
+        if (!multimapDeleteFullWidthP(m, gone)) {
+            ERRR("Full-row delete found no row");
+        }
+        multimapCloseP(m);
+        persistCtxFree(ctx);
+
+        ctx = persistCtxOpen(basePath, NULL);
+        m = multimapOpenP(ctx);
+        if (!m) {
+            ERRR("Recovery failed");
+        } else {
+            if (!multimapIsSet(multimapGetP(m))) {
+                ERRR("A set came back as a map");
+            }
+            static const int64_t remain[][2] = {{1, 10}, {1, 12}, {2, 20}};
+            multimapIterator iter;
+            multimapIteratorInitP(m, &iter, true);
+            databox got[2];
+            databox *out[] = {&got[0], &got[1]};
+            size_t n = 0;
+            while (multimapIteratorNext(&iter, out)) {
+                const databox k = DATABOX_SIGNED(remain[n < 3 ? n : 2][0]);
+                const databox v = DATABOX_SIGNED(remain[n < 3 ? n : 2][1]);
+                if (n >= 3 || !databoxEqual(&got[0], &k) ||
+                    !databoxEqual(&got[1], &v)) {
+                    ERR("Row %zu differs after recovery", n);
+                }
+                n++;
+            }
+            if (n != 3) {
+                ERR("Expected 3 rows, got %zu", n);
+            }
+
+            /* The readers see the same rows */
+            const databox two = DATABOX_SIGNED(2);
+            if (!multimapFirstP(m, out) || !databoxEqual(&got[0], &one) ||
+                !multimapLastP(m, out) || !databoxEqual(&got[0], &two) ||
+                !multimapIteratorInitAtP(m, &iter, true, &two) ||
+                !multimapIteratorNext(&iter, out) ||
+                !databoxEqual(&got[0], &two)) {
+                ERRR("First/Last/IteratorInitAt disagree with the rows");
+            }
+            multimapEntry me;
+            if (!multimapRandomValueP(m, false, out, &me)) {
+                ERRR("RandomValue found no row");
+            }
             multimapCloseP(m);
         }
         persistCtxFree(ctx);

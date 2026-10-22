@@ -74,7 +74,8 @@ size_t multimapBytesP(const multimapP *m);
 /* Insert entry - returns true if replaced existing */
 bool multimapInsertP(multimapP *m, const databox *elements[]);
 
-/* Insert only if key doesn't exist */
+/* Insert only if the key is absent: true when inserted; false, changing
+ * nothing, when the key exists or the WAL write fails */
 bool multimapInsertIfNotExistsP(multimapP *m, const databox *elements[]);
 
 /* Delete by key - returns true if found and deleted */
@@ -86,7 +87,9 @@ bool multimapDeleteFullWidthP(multimapP *m, const databox *elements[]);
 /* Reset (clear all entries) */
 void multimapResetP(multimapP *m);
 
-/* Increment field value atomically */
+/* multimapFieldIncr, logged as the increment (not the result) so replay
+ * folds it again: the new value, or the current value (0 for a missing key
+ * or a non-counter field) when refused or when the WAL write fails */
 int64_t multimapFieldIncrP(multimapP *m, const databox *key,
                            uint32_t fieldOffset, int64_t incrBy);
 

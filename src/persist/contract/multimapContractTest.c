@@ -15,6 +15,18 @@ static void pcMultimapKey(uint64_t seed, size_t i, databoxBig *key,
     persistContractValue(&rng, key, buf, bufLen);
 }
 
+/* One row's elements and the bytes they point into */
+typedef struct pcMultimapRow {
+    uint8_t bufs[3][64];
+    databoxBig boxes[3];
+} pcMultimapRow;
+
+static void pcMultimapRowAim(pcMultimapRow *row, const databox *elements[3]) {
+    for (uint32_t w = 0; w < 3; w++) {
+        elements[w] = (const databox *)&row->boxes[w];
+    }
+}
+
 static void pcMultimapInsert(multimap **m, const persistContractBuild *b,
                              const databox *const *elements, uint32_t width) {
     multimapInsert(m, (const databox **)elements);
@@ -31,30 +43,59 @@ static void *pcMultimapBuild(const persistContractBuild *b) {
     multimap *m = set ? multimapSetNew(width) : multimapNew(width);
     persistContractStart(b->log, m);
 
-    uint8_t bufs[3][64];
-    databoxBig boxes[3];
-    const databox *elements[3];
-    for (uint32_t w = 0; w < 3; w++) {
-        elements[w] = (const databox *)&boxes[w];
-    }
+    /* Two rows: each insert fills the other one, so the last inserted row
+     * stays intact for a full-width delete */
+    pcMultimapRow rows[2];
+    size_t cur = 0;
+    bool haveLast = false;
 
     for (size_t i = 0; i < b->size; i++) {
+        pcMultimapRow *row = &rows[cur];
         const uint64_t roll = splitmix64(&rng) % 8;
         if (roll == 0 && i > 0) {
             /* Delete an earlier key */
             const size_t j = (size_t)(splitmix64(&rng) % i);
-            pcMultimapKey(b->seed, j, &boxes[0], bufs[0], sizeof(bufs[0]));
-            multimapDelete(&m, elements[0]);
-            persistContractRecord(b->log, PERSIST_OP_DELETE, elements, 1);
+            pcMultimapKey(b->seed, j, &row->boxes[0], row->bufs[0],
+                          sizeof(row->bufs[0]));
+            const databox *key[1] = {(const databox *)&row->boxes[0]};
+            multimapDelete(&m, key[0]);
+            persistContractRecord(b->log, PERSIST_OP_DELETE, key, 1);
+        } else if (roll == 2 && haveLast) {
+            /* Delete exactly the last inserted row */
+            const databox *last[3];
+            pcMultimapRowAim(&rows[cur ^ 1], last);
+            multimapDeleteFullWidth(&m, last);
+            persistContractRecord(b->log, PERSIST_OP_DELETE, last, width);
+        } else if (roll == 3 && i > 0 && width > 1) {
+            /* Add a small delta to a field of an earlier key: refused
+             * unless that field holds a counter */
+            const size_t j = (size_t)(splitmix64(&rng) % i);
+            pcMultimapKey(b->seed, j, &row->boxes[0], row->bufs[0],
+                          sizeof(row->bufs[0]));
+            const uint32_t offset =
+                1 + (uint32_t)(splitmix64(&rng) % (width - 1));
+            const int64_t delta = (int64_t)(splitmix64(&rng) % 7) - 3;
+            const databox offsetBox = DATABOX_UNSIGNED(offset);
+            const databox deltaBox = DATABOX_SIGNED(delta);
+            const databox *args[3] = {(const databox *)&row->boxes[0],
+                                      &offsetBox, &deltaBox};
+            multimapFieldIncr(&m, args[0], offset, delta);
+            persistContractRecord(b->log, PERSIST_OP_NUM_INCR, args, 3);
         } else {
             /* Insert key i; one in eight re-inserts an earlier key */
             const size_t k =
                 (roll == 1 && i > 0) ? (size_t)(splitmix64(&rng) % i) : i;
-            pcMultimapKey(b->seed, k, &boxes[0], bufs[0], sizeof(bufs[0]));
+            pcMultimapKey(b->seed, k, &row->boxes[0], row->bufs[0],
+                          sizeof(row->bufs[0]));
             for (uint32_t w = 1; w < width; w++) {
-                persistContractValue(&rng, &boxes[w], bufs[w], sizeof(bufs[w]));
+                persistContractValue(&rng, &row->boxes[w], row->bufs[w],
+                                     sizeof(row->bufs[w]));
             }
+            const databox *elements[3];
+            pcMultimapRowAim(row, elements);
             pcMultimapInsert(&m, b, elements, width);
+            cur ^= 1;
+            haveLast = true;
         }
 
         if (b->size >= 100 && i == b->size / 3) {

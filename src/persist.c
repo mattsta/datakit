@@ -2976,12 +2976,29 @@ static uint8_t *multimapPersistEncodeOp(persistOp op, const void *args,
     }
 
     case PERSIST_OP_DELETE: {
-        /* Just the key (first element) as a 1-element flex. */
-        if (argc < 1 || !boxes[0]) {
+        /* One element: delete by key.  The full row (multimapDeleteFullWidth,
+         * which picks one row of a set's key): every element. */
+        if (argc < 1 || !boxes || !boxes[0]) {
             *len = 0;
             return NULL;
         }
-        flex *f = flexNewFromDataboxExact(boxes[0]);
+        flex *f = flexNewFromDataboxPtrsExact(boxes, argc);
+        if (!f) {
+            *len = 0;
+            return NULL;
+        }
+        *len = flexBytes(f);
+        return (uint8_t *)f;
+    }
+
+    case PERSIST_OP_NUM_INCR: {
+        /* multimapFieldIncr: args are [key, field offset (unsigned), delta
+         * (signed)], stored as a 3-element flex */
+        if (argc != 3 || !boxes || !boxes[0] || !boxes[1] || !boxes[2]) {
+            *len = 0;
+            return NULL;
+        }
+        flex *f = flexNewFromDataboxPtrsExact(boxes, argc);
         if (!f) {
             *len = 0;
             return NULL;
@@ -2998,6 +3015,43 @@ static uint8_t *multimapPersistEncodeOp(persistOp op, const void *args,
         *len = 0;
         return NULL;
     }
+}
+
+/* An int64 operand of a WAL row: flex stores an integer by value, so a
+ * non-negative one decodes as unsigned whichever way it was written */
+static bool multimapPersistInt64(const databoxBig *b, int64_t *out) {
+    if (b->type == DATABOX_SIGNED_64) {
+        *out = b->data.i64;
+        return true;
+    }
+    if (b->type == DATABOX_UNSIGNED_64 && b->data.u64 <= INT64_MAX) {
+        *out = (int64_t)b->data.u64;
+        return true;
+    }
+    return false;
+}
+
+/* Decode a WAL row (a flex of up to 32 elements, from untrusted bytes)
+ * into `boxes`, with `ptrs` aimed at them.  databoxBig so a 96/128-bit
+ * element decodes into storage the box owns. */
+static bool multimapPersistDecodeRow(const uint8_t *data, size_t len,
+                                     databoxBig boxes[32],
+                                     const databox *ptrs[32], size_t *count) {
+    if (!flexValidateBufferDeep(data, len)) {
+        return false;
+    }
+    const flex *f = (const flex *)data;
+    *count = flexCount(f);
+    if (*count == 0 || *count > 32) {
+        return false;
+    }
+    flexEntry *fe = flexHead(f);
+    for (size_t i = 0; i < *count; i++) {
+        flexGetByTypeBig(fe, &boxes[i]);
+        ptrs[i] = (const databox *)&boxes[i];
+        fe = flexNext(f, fe);
+    }
+    return true;
 }
 
 /* Helper to determine encoded value length from databoxLinear type byte */
@@ -3029,42 +3083,47 @@ static size_t databoxLinearTypeValueLen(uint8_t type) {
 static bool multimapPersistApplyOp(void *structure, persistOp op,
                                    const uint8_t *data, size_t len) {
     multimap **m = structure;
+    databoxBig boxes[32];
+    const databox *ptrs[32];
+    size_t count;
 
     switch (op) {
-    case PERSIST_OP_INSERT: {
-        /* Decode the member boxes from the self-describing flex (defensive
-         * against malformed replicated bytes).  Fixed-size stack arrays — the
-         * 32-element cap matches the encode-side limit, so no VLA. */
-        if (!flexValidateBufferDeep(data, len)) {
+    case PERSIST_OP_INSERT:
+        /* A full row: anything else would leave elements unread */
+        if (!multimapPersistDecodeRow(data, len, boxes, ptrs, &count) ||
+            count != multimapPersistGetElementsPerEntry(*m)) {
             return false;
         }
-        const flex *f = (const flex *)data;
-        const size_t argc = flexCount(f);
-        if (argc == 0 || argc > 32) {
-            return false;
-        }
-        /* databoxBig so a 96/128-bit member decodes into storage the box
-         * owns; a plain databox would carry no payload for it. */
-        databoxBig boxes[32];
-        const databox *boxPtrs[32];
-        flexEntry *fe = flexHead(f);
-        for (size_t i = 0; i < argc; i++) {
-            flexGetByTypeBig(fe, &boxes[i]);
-            boxPtrs[i] = (const databox *)&boxes[i];
-            fe = flexNext(f, fe);
-        }
-        multimapInsert(m, boxPtrs);
+        multimapInsert(m, ptrs);
         return true;
-    }
 
-    case PERSIST_OP_DELETE: {
-        /* databoxBig: a 96/128-bit key must replay too; the plain unwrap
-         * refuses wide entries, which silently dropped the delete. */
-        databoxBig key;
-        if (!flexGetSingleDataboxBig(data, len, &key)) {
+    case PERSIST_OP_DELETE:
+        if (!multimapPersistDecodeRow(data, len, boxes, ptrs, &count)) {
             return false;
         }
-        multimapDelete(m, (const databox *)&key);
+        if (count == 1) {
+            multimapDelete(m, ptrs[0]);
+        } else if (count == multimapPersistGetElementsPerEntry(*m)) {
+            multimapDeleteFullWidth(m, ptrs);
+        } else {
+            return false;
+        }
+        return true;
+
+    case PERSIST_OP_NUM_INCR: {
+        int64_t offset;
+        int64_t delta;
+        if (!multimapPersistDecodeRow(data, len, boxes, ptrs, &count) ||
+            count != 3 || !multimapPersistInt64(&boxes[1], &offset) ||
+            offset < 0 || offset > UINT32_MAX ||
+            !multimapPersistInt64(&boxes[2], &delta)) {
+            return false;
+        }
+        /* A refused increment (missing key, not a counter, outside int64)
+         * was refused the same way where it was logged, so replaying the
+         * refusal is the faithful replay */
+        int64_t ignored;
+        multimapFieldIncrBy(m, ptrs[0], (uint32_t)offset, delta, &ignored);
         return true;
     }
 
