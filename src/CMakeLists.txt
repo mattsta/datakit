@@ -584,6 +584,7 @@ add_library(${PROJECT_NAME} OBJECT
     persist/contract/multimapContractTest.c
     persist/contract/multiroarContractTest.c
     persist/contract/intsetContractTest.c
+    persist/contract/intsetBigContractTest.c
 )
 
 # ============================================================================

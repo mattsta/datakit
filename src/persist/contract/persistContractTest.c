@@ -23,12 +23,14 @@ extern const persistContractType persistContractFlex;
 extern const persistContractType persistContractMultimap;
 extern const persistContractType persistContractMultiroar;
 extern const persistContractType persistContractIntset;
+extern const persistContractType persistContractIntsetBig;
 
 static const persistContractType *const pcRegistry[] = {
     &persistContractFlex,
     &persistContractMultimap,
     &persistContractMultiroar,
     &persistContractIntset,
+    &persistContractIntsetBig,
 };
 
 /* ====================================================================

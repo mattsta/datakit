@@ -46,7 +46,17 @@ intsetBig *intsetBigNew(void);
 void intsetBigFree(intsetBig *isb);
 intsetBig *intsetBigCopy(const intsetBig *isb);
 
+/* True for a value intsetBig can hold: a 64-bit integer, or a 128-bit one
+ * inside INTSET_BIG_INT128_MIN/MAX or INTSET_BIG_UINT128_MAX (outside them
+ * intsetBig makes no guarantees).  For checking values from untrusted
+ * sources before adding them. */
+bool intsetBigCanHold(const databoxBig *v);
 bool intsetBigAdd(intsetBig *isb, const databoxBig *val);
+/* An intsetBig holding 'members' (a flex of integers) given in the order
+ * the iterator walks them, as a snapshot writes them: built a bucket at a
+ * time, with no lookup or insert per member.  NULL when a member is not an
+ * integer intsetBig can hold, or the members are not in that order. */
+intsetBig *intsetBigNewFromMembers(const flex *members);
 bool intsetBigRemove(intsetBig *isb, const databoxBig *val);
 bool intsetBigExists(const intsetBig *isb, const databoxBig *val);
 bool intsetBigRandom(const intsetBig *isb, databoxBig *val);

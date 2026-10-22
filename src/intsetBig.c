@@ -7,6 +7,7 @@
 
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleaner(intsetBig *, intsetBigFree);
+defcleaner(flex *, flexFree);
 
 struct intsetBigSet {
     multimap *i;
@@ -252,9 +253,11 @@ size_t intsetBigBytes(const intsetBig *isb) {
     return totalBytes;
 }
 
-DK_INLINE_ALWAYS bool setFromInput(const intsetBig *isb, const databoxBig *val,
-                                   uint32_t *offsetIn, bool *isNegative,
-                                   databoxBig *lookup, databox *found) {
+/* The bucket key 'val' is stored under (in 'lookup') and its offset in
+ * that bucket */
+DK_INLINE_ALWAYS bool bucketKeyFromInput(const databoxBig *val,
+                                         uint32_t *offsetIn, bool *isNegative,
+                                         databoxBig *lookup) {
 #if USE_128_BIT_BUCKETS
     __uint128_t bucket;
 #else
@@ -320,6 +323,16 @@ DK_INLINE_ALWAYS bool setFromInput(const intsetBig *isb, const databoxBig *val,
         }
     }
 
+    return true;
+}
+
+DK_INLINE_ALWAYS bool setFromInput(const intsetBig *isb, const databoxBig *val,
+                                   uint32_t *offsetIn, bool *isNegative,
+                                   databoxBig *lookup, databox *found) {
+    if (!bucketKeyFromInput(val, offsetIn, isNegative, lookup)) {
+        return false;
+    }
+
     databox *ptr[] = {found};
     if (multimapLookup(isb->i, (databox *)lookup, ptr)) {
         return true;
@@ -370,6 +383,129 @@ bool intsetBigAdd(intsetBig *isb, const databoxBig *val) {
     }
 
     return added;
+}
+
+bool intsetBigCanHold(const databoxBig *v) {
+    switch (v->type) {
+    case DATABOX_SIGNED_64:
+    case DATABOX_UNSIGNED_64:
+        return true;
+    case DATABOX_SIGNED_128:
+        return INTSET_BIG_RANGECHECK_INT128(*v->data.i128);
+    case DATABOX_UNSIGNED_128:
+        /* Unsigned: only the upper bound can be crossed */
+        return *v->data.u128 <= INTSET_BIG_UINT128_MAX;
+    default:
+        return false;
+    }
+}
+
+/* Free the bucket sets a [key, set] row flex points at, then the flex */
+static void intsetBigFreeRows_(flex *rows) {
+    const size_t n = flexCount(rows);
+    flexEntry *fe = flexHead(rows);
+    for (size_t i = 0; i + 1 < n; i += 2) {
+        fe = flexNext(rows, fe);
+        databox set;
+        flexGetByType(fe, &set);
+        intsetU32Free(boxPtrToU32(set));
+        fe = flexNext(rows, fe);
+    }
+    flexFree(rows);
+}
+
+/* Append the finished bucket ['key' -> the 'count' offsets in 'offsets',
+ * reversed for a negative bucket] as a row */
+static void intsetBigEmitBucket_(flex **rows, const databoxBig *key,
+                                 const uint32_t *offsets, uint32_t count,
+                                 bool negative) {
+    /* @own: container; free=intsetU32Free */
+    intsetU32 *set = intsetU32NewLen(count);
+    uint32_t *to = intsetU32Array(set);
+    for (uint32_t i = 0; i < count; i++) {
+        to[i] = offsets[negative ? count - 1 - i : i];
+    }
+    intsetU32UpdateCount(set, count);
+    const databox setBox = {.type = DATABOX_PTR, .data.ptr = set};
+    const databox *row[] = {(const databox *)key, &setBox};
+    flexAppendMultipleExact(rows, 2, row);
+}
+
+intsetBig *intsetBigNewFromMembers(const flex *members) {
+    /* Members arrive bucket by bucket in bucket-map order, as the iterator
+     * walks them: a bucket's offsets ascend, except a negative bucket's,
+     * which descend (its largest offset is its smallest value).  Each
+     * bucket's offsets gather in 'scratch' and become its set in one
+     * write; the bucket map is built once from the finished rows. */
+    /* @own: container; free=flexFree */
+    flex *rows = flexNew();
+    uint32_t *scratch = NULL;
+    uint32_t scratchCap = 0;
+    uint32_t inBucket = 0;
+    databoxBig curKey = {0};
+    bool curNegative = false;
+    size_t total = 0;
+
+    const size_t n = flexCount(members);
+    flexEntry *fe = flexHead(members);
+    for (size_t i = 0; i < n; i++, fe = flexNext(members, fe)) {
+        databoxBig v;
+        flexGetByTypeBig(fe, &v);
+        databoxBig key;
+        uint32_t offset;
+        bool negative;
+        if (!intsetBigCanHold(&v) ||
+            !bucketKeyFromInput(&v, &offset, &negative, &key)) {
+            goto refuse;
+        }
+
+        const int cmp = inBucket ? databoxCompare((const databox *)&curKey,
+                                                  (const databox *)&key)
+                                 : -1;
+        if (cmp > 0) {
+            goto refuse; /* buckets out of order */
+        }
+        if (cmp == 0) {
+            const uint32_t last = scratch[inBucket - 1];
+            if (negative ? offset >= last : offset <= last) {
+                goto refuse; /* offsets out of order */
+            }
+        } else {
+            if (inBucket) {
+                intsetBigEmitBucket_(&rows, &curKey, scratch, inBucket,
+                                     curNegative);
+            }
+            curKey = key;
+            curNegative = negative;
+            inBucket = 0;
+        }
+
+        if (inBucket == scratchCap) {
+            scratchCap = scratchCap ? scratchCap * 2 : 64;
+            /* @own: container; free=zfree */
+            scratch = zrealloc(scratch, scratchCap * sizeof(*scratch));
+        }
+        scratch[inBucket++] = offset;
+        total++;
+    }
+    if (inBucket) {
+        intsetBigEmitBucket_(&rows, &curKey, scratch, inBucket, curNegative);
+    }
+    zfree(scratch);
+
+    /* @own: caller; free=intsetBigFree */
+    intsetBig *isb = intsetBigNew();
+    multimapFree(isb->i);
+    /* The rows ascend by key (checked above), so this never refuses */
+    /* @own: container; free=multimapFree */
+    isb->i = multimapNewFromDump(2, false, rows);
+    isb->count = total;
+    return isb;
+
+refuse:
+    zfree(scratch);
+    intsetBigFreeRows_(rows);
+    return NULL;
 }
 
 bool intsetBigRemove(intsetBig *isb, const databoxBig *val) {
@@ -2768,6 +2904,61 @@ DK_FN_NO_OPTIMIZE int intsetBigTest(int argc, char *argv[]) {
     }
 
 #undef BUCKET_SIZE
+
+    TEST("NewFromMembers rebuilds a walked set; refuses disorder and range") {
+        /* Dense positive and negative buckets, one-member buckets and
+         * 128-bit buckets, walked into a flex as a snapshot does */
+        cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
+        for (int64_t i = -3000; i < 3000; i += 7) {
+            const databoxBig v = DATABOX_BIG_SIGNED(i);
+            intsetBigAdd(isb, &v);
+        }
+        for (int64_t i = 1; i < 40; i++) {
+            const databoxBig v = DATABOX_BIG_SIGNED(i * INT64_C(-5000000001));
+            intsetBigAdd(isb, &v);
+            const databoxBig u = DATABOX_BIG_UNSIGNED((uint64_t)i << 40);
+            intsetBigAdd(isb, &u);
+            databoxBig w;
+            DATABOX_BIG_SIGNED_128(&w, INTSET_BIG_INT128_MIN + i * 3);
+            intsetBigAdd(isb, &w);
+        }
+
+        cleaner(flexFree) flex *walked = flexNew();
+        intsetBigIterator it = {0};
+        intsetBigIteratorInit(isb, &it);
+        databoxBig v = {0};
+        while (intsetBigIteratorNextBox(&it, &v)) {
+            flexPushDataboxBigExact(&walked, &v, FLEX_ENDPOINT_TAIL);
+            v = (databoxBig){0};
+        }
+
+        cleaner(intsetBigFree) intsetBig *back =
+            intsetBigNewFromMembers(walked);
+        if (!back || !intsetBigEqual(isb, back) ||
+            intsetBigCountElements(back) != intsetBigCountElements(isb)) {
+            ERRR("A walked set did not rebuild equal");
+        }
+
+        /* Disorder: the walk backwards */
+        cleaner(flexFree) flex *reversed = flexNew();
+        intsetBigIteratorInit(isb, &it);
+        while (intsetBigIteratorNextBox(&it, &v)) {
+            flexPushDataboxBigExact(&reversed, &v, FLEX_ENDPOINT_HEAD);
+            v = (databoxBig){0};
+        }
+        /* Out of range: past INTSET_BIG_UINT128_MAX */
+        cleaner(flexFree) flex *wide = flexNew();
+        databoxBig huge;
+        DATABOX_BIG_UNSIGNED_128(&huge, INTSET_BIG_UINT128_MAX + 1);
+        flexPushDataboxBigExact(&wide, &huge, FLEX_ENDPOINT_TAIL);
+        intsetBig *bad1 = intsetBigNewFromMembers(reversed);
+        intsetBig *bad2 = intsetBigNewFromMembers(wide);
+        if (bad1 || bad2) {
+            ERRR("Disordered or out-of-range members were accepted");
+        }
+        intsetBigFree(bad1);
+        intsetBigFree(bad2);
+    }
 
     TEST_FINAL_RESULT;
 }

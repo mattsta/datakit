@@ -23,6 +23,7 @@
  * `intsetU32 **`): there is no new handle to hand back. */
 typedef struct intsetU32 {
     uint32_t count;
+    uint32_t capacity; /* slots allocated in 'contents' (>= count) */
     uint32_t *contents;
 } intsetU32;
 

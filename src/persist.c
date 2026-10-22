@@ -2336,14 +2336,9 @@ const persistOps persistOpsIntset = {
  * Structure-Specific Operations: intsetBig
  * ============================================================================
  *
- * On-disk / wire format:
- * [count: u64 LE]
- * N entries of [type: u8][payload: 8 bytes for i64/u64, 16 for i128/u128]
- * type values:
- * 1 = SIGNED_64
- * 2 = UNSIGNED_64
- * 3 = SIGNED_128
- * 4 = UNSIGNED_128
+ * Snapshot: a flex holding every member (signed/unsigned, 64 or 128-bit),
+ * stored exactly.  WAL: INSERT and DELETE carry one member as a 1-element
+ * flex; CLEAR has no operand.
  *
  * intsetBig stores numeric values directly with no atom-table
  * indirection — single byte content represents the same value on every
@@ -2402,35 +2397,11 @@ static void *intsetBigPersistRestore(const uint8_t *data, size_t len) {
     if (!flexValidateBufferDeep(data, len)) {
         return NULL;
     }
+
+    /* The members in the order the snapshot walked them: built a bucket at
+     * a time; members out of that order or out of range are refused */
     /* @own: caller; free=intsetBigFree */
-    intsetBig *isb = intsetBigNew();
-    if (!isb) {
-        return NULL;
-    }
-    const flex *f = (const flex *)data;
-    /* flexHead returns non-NULL even for an EMPTY flex (it points to the end
-     * marker) — an empty intsetBig snapshots to a 2-byte empty flex, so a bare
-     * `while (fe)` walk would call flexGetByType on the terminator and read off
-     * the end.  Bound the walk by flexCount exactly like the multimap / qset
-     * restores do (an empty set restores to an empty intsetBig). */
-    const size_t count = flexCount(f);
-    flexEntry *fe = flexHead(f);
-    for (size_t i = 0; i < count && fe; i++) {
-        databoxBig dbig;
-        flexGetByTypeBig(fe, &dbig);
-        switch (dbig.type) {
-        case DATABOX_SIGNED_64:
-        case DATABOX_UNSIGNED_64:
-        case DATABOX_SIGNED_128:
-        case DATABOX_UNSIGNED_128:
-            intsetBigAdd(isb, &dbig);
-            break;
-        default:
-            break; /* skip non-numeric defensively */
-        }
-        fe = flexNext(f, fe);
-    }
-    return isb;
+    return intsetBigNewFromMembers((const flex *)data);
 }
 
 static size_t intsetBigPersistCount(const void *structure) {
@@ -2442,25 +2413,25 @@ static size_t intsetBigPersistEstimateSize(const void *structure) {
 }
 
 /* applyOp: PERSIST_OP_INSERT adds, PERSIST_OP_DELETE removes a single
- * value encoded with the same single-entry shape. */
+ * value encoded with the same single-entry shape; PERSIST_OP_CLEAR empties
+ * the set. */
 static bool intsetBigPersistApplyOp(void *structure, persistOp op,
                                     const uint8_t *data, size_t len) {
     intsetBig **isb_p = structure;
+    if (op == PERSIST_OP_CLEAR) {
+        intsetBigFree(*isb_p);
+        /* @own: caller; free=intsetBigFree */
+        *isb_p = intsetBigNew();
+        return true;
+    }
+
     intsetBig *isb = *isb_p;
     /* Unwrap the 1-element flex back to the numeric member (128-bit-capable;
      * defensive against malformed replicated bytes). */
     databoxBig dbig;
-    if (!flexGetSingleDataboxBig(data, len, &dbig)) {
+    if (!flexGetSingleDataboxBig(data, len, &dbig) ||
+        !intsetBigCanHold(&dbig)) {
         return false;
-    }
-    switch (dbig.type) {
-    case DATABOX_SIGNED_64:
-    case DATABOX_UNSIGNED_64:
-    case DATABOX_SIGNED_128:
-    case DATABOX_UNSIGNED_128:
-        break;
-    default:
-        return false; /* only numeric members belong in an intsetBig */
     }
     switch (op) {
     case PERSIST_OP_INSERT:
@@ -2477,21 +2448,19 @@ static bool intsetBigPersistApplyOp(void *structure, persistOp op,
 
 static uint8_t *intsetBigPersistEncodeOp(persistOp op, const void *args,
                                          size_t argc, size_t *len) {
-    (void)op;
     (void)argc;
+    *len = 0;
+    if (op != PERSIST_OP_INSERT && op != PERSIST_OP_DELETE) {
+        /* CLEAR has no operand; nothing else is replayed */
+        return NULL;
+    }
+
     /* args is a const databoxBig *.  Only numeric members belong in an
      * intsetBig; reject anything else (the factory would otherwise push it
      * verbatim).  The member is written as a 1-element flex through the
      * databoxBig factory arm, like any other value. */
     const databoxBig *b = args;
-    switch (b->type) {
-    case DATABOX_SIGNED_64:
-    case DATABOX_UNSIGNED_64:
-    case DATABOX_SIGNED_128:
-    case DATABOX_UNSIGNED_128:
-        break;
-    default:
-        *len = 0;
+    if (!b || !intsetBigCanHold(b)) {
         return NULL;
     }
     flex *f = flexNewFromDataboxBigExact(b);

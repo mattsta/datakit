@@ -40,6 +40,7 @@ intsetU32 *intsetU32NewLen(const uint32_t len) {
     if (len) {
         /* @own: container; free=zfree */
         is->contents = zcalloc(len, sizeof(uint32_t));
+        is->capacity = len;
     }
     return is;
 }
@@ -60,21 +61,37 @@ intsetU32 *intsetU32Copy(const intsetU32 *is) {
         /* @own: container; free=zfree */
         result->contents = zmalloc(bufBytes);
         memcpy(result->contents, is->contents, bufBytes);
+        result->capacity = is->count;
     }
     return result;
 }
 
-/* Resize the element buffer to hold 'len' slots.  Reallocates the buffer
- * behind the stable handle — the handle pointer itself never changes.
- * 'len' == 0 releases the buffer (empty set carries a NULL buffer). */
+/* Resize the element buffer to hold exactly 'len' slots.  Reallocates the
+ * buffer behind the stable handle — the handle pointer itself never
+ * changes.  'len' == 0 releases the buffer (empty set carries a NULL
+ * buffer). */
 void intsetU32Resize(intsetU32 *is, const uint32_t len) {
     if (len == 0) {
         zfree(is->contents);
         is->contents = NULL;
+        is->capacity = 0;
         return;
     }
     /* @own: container; free=zfree */
     is->contents = zrealloc(is->contents, sizeof(uint32_t) * len);
+    is->capacity = len;
+}
+
+/* Room for 'need' slots: grows by half again (plus a few), so a run of
+ * adds reallocates O(log n) times instead of once per add */
+static void intsetU32Reserve_(intsetU32 *is, const uint32_t need) {
+    if (need <= is->capacity) {
+        return;
+    }
+    uint64_t cap = (uint64_t)is->capacity + is->capacity / 2 + 4;
+    cap = cap < need ? need : cap;
+    cap = cap > UINT32_MAX ? UINT32_MAX : cap;
+    intsetU32Resize(is, (uint32_t)cap);
 }
 
 void intsetU32ShrinkToSize(intsetU32 *is) {
@@ -167,7 +184,7 @@ bool intsetU32Add(intsetU32 *is, uint32_t value) {
         return false;
     }
 
-    intsetU32Resize(is, is->count + 1);
+    intsetU32Reserve_(is, is->count + 1);
     if (pos < is->count) {
         intsetU32MoveTail(is, pos, pos + 1);
     }
@@ -190,9 +207,15 @@ bool intsetU32Remove(intsetU32 *is, uint32_t value) {
         }
 
         /* Update count BEFORE shrinking: Resize(0) frees the buffer, and
-         * MoveTail above already consumed the pre-shrink count. */
+         * MoveTail above already consumed the pre-shrink count.  The
+         * buffer halves once it is a quarter full (and is freed when the
+         * set empties), so a run of removes reallocates rarely too. */
         is->count = len - 1;
-        intsetU32Resize(is, len - 1);
+        if (is->count == 0) {
+            intsetU32Resize(is, 0);
+        } else if (is->count <= is->capacity / 4) {
+            intsetU32Resize(is, is->capacity / 2);
+        }
 
         return true;
     }
@@ -281,7 +304,7 @@ size_t intsetU32Count(const intsetU32 *is) {
 
 /* Return intsetU32 blob size in bytes. */
 size_t intsetU32Bytes(const intsetU32 *is) {
-    return sizeof(intsetU32) + (sizeof(uint32_t) * is->count);
+    return sizeof(intsetU32) + (sizeof(uint32_t) * is->capacity);
 }
 
 void intsetU32Repr(const intsetU32 *is) {
@@ -460,6 +483,36 @@ int intsetU32Test(int argc, char **argv) {
             intsetU32Assert(!intsetU32Exists(is, v2));
         }
 
+        ok();
+    }
+
+    printf("Capacity grows ahead and shrinks back: ");
+    {
+        /* Adds grow the buffer geometrically; removes halve it once a
+         * quarter full and free it when empty; Bytes reports what is
+         * allocated, and the values stay intact throughout */
+        cleaner(intsetU32Free) intsetU32 *is = intsetU32New();
+        for (uint32_t v = 0; v < 10000; v++) {
+            intsetU32Add(is, v);
+        }
+        intsetU32Assert(intsetU32Count(is) == 10000);
+        intsetU32Assert(is->capacity >= 10000 && is->capacity < 15100);
+        intsetU32Assert(intsetU32Bytes(is) ==
+                        sizeof(intsetU32) + sizeof(uint32_t) * is->capacity);
+
+        for (uint32_t v = 0; v < 9990; v++) {
+            intsetU32Remove(is, v);
+        }
+        intsetU32Assert(intsetU32Count(is) == 10 && is->capacity < 64);
+        for (uint32_t v = 9990; v < 10000; v++) {
+            intsetU32Assert(intsetU32Exists(is, v));
+        }
+
+        for (uint32_t v = 9990; v < 10000; v++) {
+            intsetU32Remove(is, v);
+        }
+        intsetU32Assert(intsetU32Count(is) == 0 && is->capacity == 0 &&
+                        intsetU32Array(is) == NULL);
         ok();
     }
 
