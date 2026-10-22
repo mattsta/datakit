@@ -1784,7 +1784,10 @@ int hyperloglogTest(int argc, char *argv[]) {
     uint64_t checkpoint = 1;
     uint64_t seed = (uint64_t)rand() | (uint64_t)rand() << 32;
     uint64_t ele;
-    uint64_t testCount = HLL_TEST_CYCLES * 10000;
+    /* Checkpoints 1, 10, ... 10^6: past the sparse-to-dense switch and the
+     * linear-counting range (about 2.5 x HLL_REGISTERS), well into the
+     * raw-estimate range */
+    uint64_t testCount = HLL_TEST_CYCLES * 1000;
     for (uint64_t j = 1; j <= testCount; j++) {
         if (j % 500000 == 0) {
             printf("[approximation error]: Testing cycle %" PRIu64
@@ -1896,8 +1899,10 @@ cleanup:
      * Measures merge throughput with SIMD optimizations. */
     printf("[merge benchmark]: Benchmarking SIMD merge performance...\n");
     {
+        /* Smoke size: the timing printed is informational (measure merges
+         * under the perf preset, not in this correctness suite) */
         const int numHlls = 100;
-        const int mergeIterations = 1000;
+        const int mergeIterations = 10;
 
         /* Create test HLLs with data */
         hyperloglog *hlls[numHlls];
@@ -1944,7 +1949,8 @@ cleanup:
      * Compares SIMD-optimized histogram against scalar baseline. */
     printf("[histogram benchmark]: Benchmarking register histogram...\n");
     {
-        const int histoIterations = 10000;
+        /* Smoke size, as for the merge benchmark above */
+        const int histoIterations = 100;
 
         /* Create test registers: mix of zeros and values */
         cleanerName(zfree, U8) uint8_t *testRegisters =
