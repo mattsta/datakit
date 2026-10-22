@@ -2676,15 +2676,23 @@ static bool clusterRingValidTopologyLevel(uint64_t v) {
     return v < (uint64_t)CLUSTER_LEVEL_COUNT;
 }
 
-/* Push the ring's quorum (6 entries, in spec order). */
-static void crPushQuorum(flex **f, const clusterQuorum *q) {
-    flexPushUnsigned(f, (uint64_t)q->replicaCount, FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(f, (uint64_t)q->writeQuorum, FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(f, (uint64_t)q->writeSync, FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(f, (uint64_t)q->readQuorum, FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(f, (uint64_t)(q->readRepairEnabled ? 1u : 0u),
-                     FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(f, (uint64_t)q->consistency, FLEX_ENDPOINT_TAIL);
+/* The snapshot is written a section at a time: each section's entries are
+ * gathered into a flexRow and appended exactly (flexRowAppendExact), so a
+ * name or address that reads as a number stays bytes (crReadBytes accepts
+ * only bytes).  A missing name is the empty string. */
+static void crRowName(flexRow *r, const mdsc *name) {
+    const size_t len = name ? mdsclen(name) : 0;
+    flexRowBytes(r, len ? (const void *)name : "", len);
+}
+
+/* The ring's quorum (6 entries, in spec order). */
+static void crRowQuorum(flexRow *r, const clusterQuorum *q) {
+    flexRowUnsigned(r, (uint64_t)q->replicaCount);
+    flexRowUnsigned(r, (uint64_t)q->writeQuorum);
+    flexRowUnsigned(r, (uint64_t)q->writeSync);
+    flexRowUnsigned(r, (uint64_t)q->readQuorum);
+    flexRowUnsigned(r, (uint64_t)(q->readRepairEnabled ? 1u : 0u));
+    flexRowUnsigned(r, (uint64_t)q->consistency);
 }
 
 /* Build the canonical flex for this ring.  Returns a freshly-allocated
@@ -2702,22 +2710,17 @@ static flex *clusterRingBuildSnapshotFlex(const clusterRing *ring) {
     }
 
     /* ---- Header (18 entries) ---- */
-    flexPushUnsigned(&f, CLUSTER_RING_WIRE_VERSION, FLEX_ENDPOINT_TAIL);
-    const size_t name_len = ring->name ? mdsclen(ring->name) : 0;
-    flexPushBytes(&f, name_len ? (const void *)ring->name : (const void *)"",
-                  name_len, FLEX_ENDPOINT_TAIL);
-    crPushQuorum(&f, &ring->defaultQuorum);
-    flexPushUnsigned(&f, (uint64_t)ring->vnodeConfig.vnodeMultiplier,
-                     FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(&f, (uint64_t)ring->vnodeConfig.minVnodesPerNode,
-                     FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(&f, (uint64_t)ring->vnodeConfig.maxVnodesPerNode,
-                     FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(&f,
-                     (uint64_t)(ring->vnodeConfig.replicaPointSpread ? 1u : 0u),
-                     FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(&f, (uint64_t)ring->strategyType, FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(&f, (uint64_t)ring->hashSeed, FLEX_ENDPOINT_TAIL);
+    flexRow row = FLEX_ROW_INIT;
+    flexRowUnsigned(&row, CLUSTER_RING_WIRE_VERSION);
+    crRowName(&row, ring->name);
+    crRowQuorum(&row, &ring->defaultQuorum);
+    flexRowUnsigned(&row, (uint64_t)ring->vnodeConfig.vnodeMultiplier);
+    flexRowUnsigned(&row, (uint64_t)ring->vnodeConfig.minVnodesPerNode);
+    flexRowUnsigned(&row, (uint64_t)ring->vnodeConfig.maxVnodesPerNode);
+    flexRowUnsigned(&row,
+                    (uint64_t)(ring->vnodeConfig.replicaPointSpread ? 1u : 0u));
+    flexRowUnsigned(&row, (uint64_t)ring->strategyType);
+    flexRowUnsigned(&row, (uint64_t)ring->hashSeed);
 
     /* Count only non-NULL slots so the deserializer can iterate
      * sequentially without re-checking sparse positions. */
@@ -2733,10 +2736,11 @@ static flex *clusterRingBuildSnapshotFlex(const clusterRing *ring) {
             live_keyspaces++;
         }
     }
-    flexPushUnsigned(&f, live_nodes, FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(&f, live_keyspaces, FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
+    flexRowUnsigned(&row, live_nodes);
+    flexRowUnsigned(&row, live_keyspaces);
+    flexRowUnsigned(&row, 0u);
+    flexRowUnsigned(&row, 0u);
+    flexRowAppendExact(&f, &row);
 
     /* ---- Nodes (15 entries each) ---- */
     for (uint32_t i = 0; i < ring->nodeCount; i++) {
@@ -2744,52 +2748,43 @@ static flex *clusterRingBuildSnapshotFlex(const clusterRing *ring) {
         if (node == NULL) {
             continue;
         }
-        flexPushUnsigned(&f, node->id, FLEX_ENDPOINT_TAIL);
-        const size_t nn = node->name ? mdsclen(node->name) : 0;
-        flexPushBytes(&f, nn ? (const void *)node->name : (const void *)"", nn,
-                      FLEX_ENDPOINT_TAIL);
-        const size_t an = node->address ? mdsclen(node->address) : 0;
-        flexPushBytes(&f, an ? (const void *)node->address : (const void *)"",
-                      an, FLEX_ENDPOINT_TAIL);
-        flexPushUnsigned(&f, node->location.nodeId, FLEX_ENDPOINT_TAIL);
-        flexPushUnsigned(&f, (uint64_t)node->location.rackId,
-                         FLEX_ENDPOINT_TAIL);
-        flexPushUnsigned(&f, (uint64_t)node->location.cageId,
-                         FLEX_ENDPOINT_TAIL);
-        flexPushUnsigned(&f, (uint64_t)node->location.dcId, FLEX_ENDPOINT_TAIL);
-        flexPushUnsigned(&f, (uint64_t)node->location.azId, FLEX_ENDPOINT_TAIL);
-        flexPushUnsigned(&f, (uint64_t)node->location.regionId,
-                         FLEX_ENDPOINT_TAIL);
-        flexPushUnsigned(&f, (uint64_t)node->location.countryId,
-                         FLEX_ENDPOINT_TAIL);
-        flexPushUnsigned(&f, (uint64_t)node->location.continentId,
-                         FLEX_ENDPOINT_TAIL);
-        flexPushUnsigned(&f, (uint64_t)node->weight, FLEX_ENDPOINT_TAIL);
-        flexPushUnsigned(&f, node->capacityBytes, FLEX_ENDPOINT_TAIL);
-        flexPushUnsigned(&f, (uint64_t)node->state, FLEX_ENDPOINT_TAIL);
-        flexPushUnsigned(&f, node->usedBytes, FLEX_ENDPOINT_TAIL);
+        flexRowUnsigned(&row, node->id);
+        crRowName(&row, node->name);
+        crRowName(&row, node->address);
+        flexRowUnsigned(&row, node->location.nodeId);
+        flexRowUnsigned(&row, (uint64_t)node->location.rackId);
+        flexRowUnsigned(&row, (uint64_t)node->location.cageId);
+        flexRowUnsigned(&row, (uint64_t)node->location.dcId);
+        flexRowUnsigned(&row, (uint64_t)node->location.azId);
+        flexRowUnsigned(&row, (uint64_t)node->location.regionId);
+        flexRowUnsigned(&row, (uint64_t)node->location.countryId);
+        flexRowUnsigned(&row, (uint64_t)node->location.continentId);
+        flexRowUnsigned(&row, (uint64_t)node->weight);
+        flexRowUnsigned(&row, node->capacityBytes);
+        flexRowUnsigned(&row, (uint64_t)node->state);
+        flexRowUnsigned(&row, node->usedBytes);
+        flexRowAppendExact(&f, &row);
     }
 
-    /* ---- Keyspaces ---- */
+    /* ---- Keyspaces (11 entries, then 3 per rule) ---- */
     for (uint32_t i = 0; i < ring->keySpaceCount; i++) {
         const clusterKeySpace *ks = ring->keySpaces[i];
         if (ks == NULL) {
             continue;
         }
-        const size_t kn = ks->name ? mdsclen(ks->name) : 0;
-        flexPushBytes(&f, kn ? (const void *)ks->name : (const void *)"", kn,
-                      FLEX_ENDPOINT_TAIL);
-        crPushQuorum(&f, &ks->quorum);
-        flexPushUnsigned(&f, (uint64_t)ks->strategy, FLEX_ENDPOINT_TAIL);
-        flexPushUnsigned(&f, (uint64_t)ks->ruleCount, FLEX_ENDPOINT_TAIL);
-        flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
-        flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
+        crRowName(&row, ks->name);
+        crRowQuorum(&row, &ks->quorum);
+        flexRowUnsigned(&row, (uint64_t)ks->strategy);
+        flexRowUnsigned(&row, (uint64_t)ks->ruleCount);
+        flexRowUnsigned(&row, 0u);
+        flexRowUnsigned(&row, 0u);
+        flexRowAppendExact(&f, &row);
         for (uint8_t r = 0; r < ks->ruleCount; r++) {
             const clusterAffinityRule *rr = &ks->rules[r];
-            flexPushUnsigned(&f, (uint64_t)rr->spreadLevel, FLEX_ENDPOINT_TAIL);
-            flexPushUnsigned(&f, (uint64_t)rr->minSpread, FLEX_ENDPOINT_TAIL);
-            flexPushUnsigned(&f, (uint64_t)(rr->required ? 1u : 0u),
-                             FLEX_ENDPOINT_TAIL);
+            flexRowUnsigned(&row, (uint64_t)rr->spreadLevel);
+            flexRowUnsigned(&row, (uint64_t)rr->minSpread);
+            flexRowUnsigned(&row, (uint64_t)(rr->required ? 1u : 0u));
+            flexRowAppendExact(&f, &row);
         }
     }
 
@@ -4030,6 +4025,51 @@ static int testSerialization(void) {
                 clusterPlacementFree(&p2);
                 clusterRingFree(restored);
             }
+        }
+    }
+
+    TEST("Serialization keeps names that spell numbers as their bytes") {
+        /* Names and addresses are strings even when they read as numbers;
+         * the snapshot must store them exactly, or restore rejects them. */
+        cleaner(clusterRingFree) clusterRing *numeric = clusterRingNewDefault();
+        const char *names[] = {"22", "007", "1.5"};
+        const char *addrs[] = {"10", "-3", "1e3"};
+        for (uint64_t i = 1; i <= 3; i++) {
+            clusterNodeConfig nc = {
+                .id = i,
+                .name = names[i - 1],
+                .address = addrs[i - 1],
+                .weight = 100,
+                .initialState = CLUSTER_NODE_UP,
+            };
+            clusterRingAddNode(numeric, &nc);
+        }
+
+        clusterKeySpaceConfig kc = {.name = "123",
+                                    .quorum = CLUSTER_QUORUM_BALANCED};
+        clusterRingAddKeySpace(numeric, &kc, NULL);
+
+        const size_t need = clusterRingSerializeSize(numeric);
+        cleaner(zfree) void *buf = zmalloc(need ? need : 1);
+        const size_t written = clusterRingSerialize(numeric, buf, need);
+        clusterRing *restored =
+            written ? clusterRingDeserialize(buf, written) : NULL;
+        if (!restored) {
+            ERRR("a ring whose names spell numbers did not restore");
+        } else {
+            for (uint64_t i = 1; i <= 3; i++) {
+                const clusterNode *n = clusterRingGetNode(restored, i);
+                if (!n || strcmp(clusterNodeGetName(n), names[i - 1]) != 0 ||
+                    strcmp(clusterNodeGetAddress(n), addrs[i - 1]) != 0) {
+                    ERR("node %" PRIu64 " lost its name or address", i);
+                }
+            }
+
+            if (!clusterRingGetKeySpace(restored, "123")) {
+                ERRR("keyspace \"123\" did not restore");
+            }
+
+            clusterRingFree(restored);
         }
     }
 

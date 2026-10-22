@@ -718,18 +718,23 @@ static flex *hkrBuildSnapshotFlex(const hmacKeyring *ring) {
      * avoids a wire bump. Old readers without floor awareness would
      * reject id == 0 entries; the existing rejection path in Restore
      * (see id-non-zero check) is exactly the safe behavior. */
+    /* Each record is one row of HMAC_KEYRING_ENTRIES_PER_SLOT entries,
+     * appended in one reallocation and stored exactly as given: a salt or
+     * key whose bytes spell a number stays bytes (Restore accepts only
+     * bytes there). */
     if (ring->min_valid_key_id != HMAC_KEY_ID_INVALID) {
-        flexPushUnsigned(&f, (uint64_t)HMAC_KEY_ID_INVALID, FLEX_ENDPOINT_TAIL);
-        flexPushUnsigned(&f, HMAC_KEYRING_ALGO_TAG_FLOOR, FLEX_ENDPOINT_TAIL);
-        flexPushUnsigned(&f, (uint64_t)ring->min_valid_key_id,
-                         FLEX_ENDPOINT_TAIL);
-        flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
         /* Final entry must be a bytes record to match the per-slot record
          * shape so Restore's record-length math stays uniform. It holds
          * one harmless marker byte (0xFF), and Restore requires exactly
          * one byte. */
         static const uint8_t marker = 0xFFu;
-        flexPushBytes(&f, &marker, 1, FLEX_ENDPOINT_TAIL);
+        flexRow row = FLEX_ROW_INIT;
+        flexRowUnsigned(&row, (uint64_t)HMAC_KEY_ID_INVALID);
+        flexRowUnsigned(&row, HMAC_KEYRING_ALGO_TAG_FLOOR);
+        flexRowUnsigned(&row, (uint64_t)ring->min_valid_key_id);
+        flexRowUnsigned(&row, 0u);
+        flexRowBytes(&row, &marker, 1);
+        flexRowAppendExact(&f, &row);
     }
     for (size_t i = 0; i < HMAC_KEYRING_CAPACITY; i++) {
         const hmacKeyringEntry *e = &ring->entries[i];
@@ -741,14 +746,14 @@ static flex *hkrBuildSnapshotFlex(const hmacKeyring *ring) {
             pthread_rwlock_unlock((pthread_rwlock_t *)&ring->lock);
             return NULL;
         }
-        flexPushUnsigned(&f, (uint64_t)e->id, FLEX_ENDPOINT_TAIL);
-        flexPushUnsigned(&f, tag, FLEX_ENDPOINT_TAIL);
-        flexPushBytes(&f, e->aead_salt, sizeof(e->aead_salt),
-                      FLEX_ENDPOINT_TAIL);
-        flexPushUnsigned(
-            &f, atomic_load_explicit(&e->aead_counter, memory_order_relaxed),
-            FLEX_ENDPOINT_TAIL);
-        flexPushBytes(&f, e->raw_key_bytes, e->raw_key_len, FLEX_ENDPOINT_TAIL);
+        flexRow row = FLEX_ROW_INIT;
+        flexRowUnsigned(&row, (uint64_t)e->id);
+        flexRowUnsigned(&row, tag);
+        flexRowBytes(&row, e->aead_salt, sizeof(e->aead_salt));
+        flexRowUnsigned(
+            &row, atomic_load_explicit(&e->aead_counter, memory_order_relaxed));
+        flexRowBytes(&row, e->raw_key_bytes, e->raw_key_len);
+        flexRowAppendExact(&f, &row);
     }
     pthread_rwlock_unlock((pthread_rwlock_t *)&ring->lock);
     /* @own: caller; free=flexFree */
@@ -1223,6 +1228,39 @@ int hmacKeyringTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int err = 0;
+
+    TEST("snapshot/restore: salts and keys that spell numbers stay bytes") {
+        /* A 4-byte random salt is all ASCII digits about once in 400 K
+         * installs, and a caller's key may be digits; the snapshot must
+         * store both exactly or Restore refuses them as non-bytes. */
+        hmacKeyring *ring = hmacKeyringCreate();
+        const uint8_t key[16] = {'1', '2', '3', '4', '5', '6', '7', '8',
+                                 '9', '0', '1', '2', '3', '4', '5', '6'};
+        const uint8_t salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {'1', '2', '3', '4'};
+        if (!hmacKeyringInstall(ring, 3u, &hmacAlgoSHA256, key, sizeof(key),
+                                salt)) {
+            ERRR("install failed");
+        }
+
+        const size_t sz = hmacKeyringSnapshotSize(ring);
+        cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(sz ? sz : 1);
+        size_t written = 0;
+        hmacKeyring *dst = hmacKeyringCreate();
+        uint8_t got[sizeof(key)] = {0};
+        size_t gotLen = 0;
+        if (!hmacKeyringSnapshot(ring, buf, sz, &written) ||
+            !hmacKeyringRestore(dst, buf, written)) {
+            ERRR("a keyring with a digit salt and key did not restore");
+        } else if (!hmacKeyringGetRawCopy(dst, 3u, got, sizeof(got), &gotLen,
+                                          NULL) ||
+                   gotLen != sizeof(key) ||
+                   memcmp(got, key, sizeof(key)) != 0) {
+            ERRR("the restored key differs");
+        }
+
+        hmacKeyringFree(dst);
+        hmacKeyringFree(ring);
+    }
 
     TEST("snapshot/restore: a 96/128-bit value in any field is refused") {
         /* A floor sentinel plus a salted and an unsalted slot, so every
