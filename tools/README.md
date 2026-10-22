@@ -250,7 +250,8 @@ uv run --project tools dktools leakcheck --tree         # every tracked file
   skipped unless `--include-vendored` is given.
 - `QUOTED_OUTPUT` lets a named file contain a named term because it
   quotes another program's fixed output (dktools recognises dsymutil's
-  `/tmp/lto.o` note); every other term still applies there.
+  note naming the linker's temporary LTO object); every other term
+  still applies there.
 - Each hit prints as `path:line: [term] text`. Hard terms fail the
   gate (exit 1); patterns that also match ordinary code print under a
   separate `REVIEW` heading and do not change the exit code. Exits 0
