@@ -7,6 +7,7 @@
 #include "aesGcm.h"
 #include "ctmem.h"
 #include "datakit.h"
+#include "dkFormat.h"
 #include "flex.h"
 #include "hmacKeyring.h"
 
@@ -19,6 +20,14 @@
 #include "sha256.h"
 
 #include <string.h>
+
+const dkFormatSpec flexEnvelopeFormat = {
+    .name = "flexEnvelope framing",
+    .id = DK_FORMAT_ID_FLEX_ENVELOPE,
+    .version = FLEX_ENVELOPE_VERSION_CURRENT,
+    .minReadVersion = FLEX_ENVELOPE_VERSION_CURRENT,
+    .knownFeatures = 0,
+};
 
 /* === Internal: algorithm descriptor table =========================== */
 

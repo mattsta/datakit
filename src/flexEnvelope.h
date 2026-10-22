@@ -37,6 +37,11 @@ extern "C" {
  * stay decodable as long as we want; new versions add reader support. */
 #define FLEX_ENVELOPE_VERSION_CURRENT ((uint8_t)1)
 
+/* The envelope framing as a dkFormat (the format manifest lists it); the
+ * version travels on the wire as a varint */
+struct dkFormatSpec;
+extern const struct dkFormatSpec flexEnvelopeFormat;
+
 /* Default cap on payload_len during verify. An attacker forging a huge
  * length field would otherwise force readers into multi-GB allocations
  * before failing the digest check. 1 GiB is generous for any data

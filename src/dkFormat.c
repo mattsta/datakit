@@ -142,6 +142,9 @@ dkFormatResult dkFormatPrefixRead(const dkFormatSpec *spec, const uint8_t *buf,
 #include "ctest.h"
 #include "datakit.h" /* zmalloc / zfree */
 
+#include <inttypes.h>
+#include <stdio.h>
+
 defcleanerName(uint8_t *, zfree, FormatBytes);
 
 int dkFormatTest(int argc, char *argv[]) {
@@ -275,6 +278,40 @@ int dkFormatTest(int argc, char *argv[]) {
         if (dkFormatPrefixRead(&spec, NULL, 10, NULL, NULL) !=
             DK_FORMAT_MALFORMED) {
             ERRR("a NULL buffer was read");
+        }
+    }
+
+    /* The catalog: every format named once, with a sane read range; the
+     * table is the operator's view of what this build writes and reads */
+    TEST("manifest: every format once, versions in range") {
+        dkFormatSpec specs[64];
+        const size_t n = dkFormatManifest(specs, 64);
+        if (n != dkFormatManifest(NULL, 0) || n < 19 || n > 64) {
+            ERR("manifest lists %zu formats", n);
+        }
+        printf("%-34s %8s %8s %8s %18s\n", "format", "id", "writes",
+               "reads>=", "known features");
+        for (size_t i = 0; i < n && i < 64; i++) {
+            const dkFormatSpec *s = &specs[i];
+            printf("%-34s %8" PRIu32 " %8" PRIu32 " %8" PRIu32 " 0x%016" PRIx64
+                   "\n",
+                   s->name ? s->name : "?", s->id, s->version,
+                   s->minReadVersion, s->knownFeatures);
+            if (!s->name || s->version == 0 || s->minReadVersion > s->version ||
+                s->minReadVersion == 0) {
+                ERR("format %zu has a bad spec", i);
+            }
+            for (size_t j = 0; j < i; j++) {
+                if (specs[j].id == s->id) {
+                    ERR("format id %" PRIu32 " listed twice", s->id);
+                }
+            }
+
+            /* Every format reads what it writes */
+            const dkFormatStamp own = dkFormatStampFor(s, 0);
+            if (dkFormatCheck(s, &own) != DK_FORMAT_OK) {
+                ERR("%s does not read its own stamp", s->name);
+            }
         }
     }
 

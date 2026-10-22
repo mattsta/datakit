@@ -93,6 +93,16 @@ dkFormatResult dkFormatPrefixRead(const dkFormatSpec *spec, const uint8_t *buf,
                                   size_t len, dkFormatStamp *stamp,
                                   size_t *prefixLen);
 
+/* ---- Manifest ------------------------------------------------------------
+ *
+ * Every format this build writes and reads: the persist file framings,
+ * each persistable structure's format, the cluster frame protocol and the
+ * envelope framing.  It is the release's compatibility catalog: comparing
+ * two releases' manifests format by format says which can read what the
+ * other writes.  Writes up to `cap` specs to `out` (may be NULL) and
+ * returns how many there are. */
+size_t dkFormatManifest(dkFormatSpec *out, size_t cap);
+
 #ifdef DATAKIT_TEST
 int dkFormatTest(int argc, char *argv[]);
 #endif

@@ -499,6 +499,7 @@ add_library(${PROJECT_NAME} OBJECT
     hmacKeyring.c
     aeadNonceLog.c
     dkFormat.c
+    dkFormatManifest.c
     rapidhash.c
     clusterMailbox.c
     clusterReplicator.c
