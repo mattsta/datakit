@@ -21,36 +21,36 @@
  * -----------------
  *   - Opaque types: Implementation hidden from users
  *   - Zero network dependencies: Pure algorithmic API
- *   - Self-managing: Automatic rebalancing, health-aware routing
+ *   - Self-managing: health-aware routing, per-strategy state kept current
  *   - Scale-aware: Optimized for both small and large clusters
  *
  * THREAD SAFETY
  * -------------
- * NOT thread-safe by default. External synchronization required.
- * Ring structure is read-heavy; consider RCU for high-read workloads.
+ * Placements (Locate*, PlanWrite, PlanRead) may run concurrently with each
+ * other; every call that changes the ring needs exclusive access.
  *
  * USAGE EXAMPLE
  * -------------
  *   clusterRingConfig config = {
  *       .name = "cache-ring",
- *       .strategy = CLUSTER_STRATEGY_KETAMA,
+ *       .strategyType = CLUSTER_STRATEGY_KETAMA,
  *       .defaultQuorum = CLUSTER_QUORUM_BALANCED,
  *   };
  *   clusterRing *ring = clusterRingNew(&config);
  *
- *   clusterNode node = { .id = 1, .weight = 100, ... };
+ *   clusterNodeConfig node = {.id = 1, .name = "a", .weight = 100};
  *   clusterRingAddNode(ring, &node);
  *
  *   clusterPlacement p;
  *   clusterRingLocate(ring, "key", 3, &p);
- *   // p.replicas now contains target nodes
+ *   // clusterPlacementGetReplica(&p, 0..ReplicaCount-1): primary first
+ *   clusterPlacementFree(&p);
  *
  *   clusterRingFree(ring);
  */
 
 #include "databox.h"
 #include "mdsc.h"
-#include "multilist.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -186,13 +186,20 @@ extern const clusterQuorum CLUSTER_QUORUM_WRITE_HEAVY; /* W=1, R=ALL */
  * Placement Strategies
  * ==================================================================== */
 
+/* A ring places with one strategy; each keyspace may place with another.
+ * The ring keeps each strategy's state (Ketama and bounded-load share one
+ * vnode ring) while some user places with it, and updates every live
+ * strategy on each node change, so a keyspace places exactly as a ring of
+ * its strategy over the same nodes would. */
 typedef enum clusterStrategyType {
-    CLUSTER_STRATEGY_KETAMA = 0, /* Classic consistent hashing + vnodes */
-    CLUSTER_STRATEGY_JUMP,       /* Jump consistent hash (no vnodes) */
-    CLUSTER_STRATEGY_RENDEZVOUS, /* Highest Random Weight */
-    CLUSTER_STRATEGY_MAGLEV,     /* Google Maglev lookup tables */
-    CLUSTER_STRATEGY_BOUNDED,    /* Bounded-load consistent hashing */
-    CLUSTER_STRATEGY_CUSTOM,     /* User-provided strategy */
+    CLUSTER_STRATEGY_DEFAULT = 0, /* ring: Ketama; keyspace: the ring's */
+    CLUSTER_STRATEGY_KETAMA,      /* Classic consistent hashing + vnodes */
+    CLUSTER_STRATEGY_JUMP,        /* Jump consistent hash (no vnodes) */
+    CLUSTER_STRATEGY_RENDEZVOUS,  /* Highest Random Weight */
+    CLUSTER_STRATEGY_MAGLEV,      /* Google Maglev lookup tables */
+    CLUSTER_STRATEGY_BOUNDED,     /* Bounded-load consistent hashing */
+    CLUSTER_STRATEGY_CUSTOM,      /* The ring's clusterStrategy hooks */
+    CLUSTER_STRATEGY_COUNT
 } clusterStrategyType;
 
 /* Most virtual nodes one node can own */
@@ -254,7 +261,7 @@ typedef struct clusterRingConfig {
     const char *name; /* Ring identifier (copied) */
 
     /* Strategy selection */
-    clusterStrategyType strategyType; /* Built-in strategy */
+    clusterStrategyType strategyType; /* DEFAULT = Ketama */
     clusterStrategy *customStrategy;  /* For CLUSTER_STRATEGY_CUSTOM */
 
     /* Virtual nodes (for Ketama) */
@@ -282,11 +289,21 @@ typedef struct clusterRingConfig {
  * Placement Results
  * ==================================================================== */
 
-/* Placement result: uses multilist for dynamic node pointer storage.
- * Use clusterPlacementFree() to release resources. */
+/* Nodes a placement or plan names, in preference order (read them with the
+ * accessors below; the owning result's Free releases them).  Results hold
+ * no shared state, so placements and plans may run concurrently.  Every
+ * placement and plan call initializes its result first, so the result is
+ * readable (empty on a refusal) and safe to Free whatever it returns. */
+typedef struct clusterNodeList {
+    const clusterNode **nodes;
+    uint32_t count;
+    uint32_t capacity;
+} clusterNodeList;
+
+/* Placement result.  Use clusterPlacementFree() to release resources. */
 typedef struct clusterPlacement {
     const clusterNode *primary; /* Primary replica */
-    multilist *replicas;        /* All replicas (self-managing) */
+    clusterNodeList replicas;   /* All replicas, primary first */
     uint32_t healthyCount;      /* Currently healthy */
     bool spreadMet;     /* every affinity rule (soft ones too) reached its
                            minSpread; required ones always do */
@@ -296,7 +313,7 @@ typedef struct clusterPlacement {
 
 /* Write set: nodes that need to receive a write */
 typedef struct clusterWriteSet {
-    multilist *targets;          /* Write targets (self-managing) */
+    clusterNodeList targets;     /* Write targets */
     uint8_t syncRequired;        /* Sync acks required */
     uint8_t asyncAllowed;        /* Async writes allowed */
     uint32_t suggestedTimeoutMs; /* Suggested timeout */
@@ -304,9 +321,9 @@ typedef struct clusterWriteSet {
 
 /* Read set: nodes to query for a read, in preference order */
 typedef struct clusterReadSet {
-    multilist *candidates;     /* Read candidates (self-managing) */
-    uint8_t requiredResponses; /* Responses needed */
-    bool readRepair;           /* Do read repair if inconsistent */
+    clusterNodeList candidates; /* Read candidates */
+    uint8_t requiredResponses;  /* Responses needed */
+    bool readRepair;            /* Do read repair if inconsistent */
 } clusterReadSet;
 
 /* Placement helper functions */
@@ -419,9 +436,9 @@ clusterResult clusterRingLocate(const clusterRing *ring, const void *key,
 clusterResult clusterRingLocateBox(const clusterRing *ring, const databox *key,
                                    clusterPlacement *out);
 
-/* clusterRingLocate under a keyspace's settings: its quorum.replicaCount
- * (the ring's default when 0) and its affinity rules (the ring's when it
- * has none) */
+/* clusterRingLocate under a keyspace's settings: its strategy (the ring's
+ * for DEFAULT), its quorum.replicaCount (the ring's default when 0) and
+ * its affinity rules (the ring's when it has none) */
 clusterResult clusterRingLocateKeyspace(const clusterRing *ring,
                                         const clusterKeySpace *ks,
                                         const void *key, uint32_t keyLen,
@@ -467,7 +484,8 @@ typedef struct clusterKeySpaceConfig {
     clusterQuorum quorum;       /* Override default quorum */
     clusterAffinityRule *rules; /* Affinity constraints */
     uint8_t ruleCount;
-    clusterStrategyType strategy; /* Override default strategy */
+    clusterStrategyType strategy; /* DEFAULT = the ring's strategy; CUSTOM
+                                     = the ring's clusterStrategy hooks */
 } clusterKeySpaceConfig;
 
 /* Refuses (CLUSTER_ERR_INVALID_CONFIG) an unknown strategy, an affinity

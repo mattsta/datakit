@@ -29,6 +29,17 @@ defcleanerName(clusterAffinityRule *, zfree, Rules);
 defcleanerName(char *, zfree, Chars);
 defcleanerName(bool *, zfree, Bools);
 
+/* Strategy state (see "Strategy State" below) */
+static clusterResult clusterRingUseStrategy(clusterRing *ring,
+                                            clusterStrategyType strategy);
+static void clusterRingReleaseStrategy(clusterRing *ring,
+                                       clusterStrategyType strategy);
+static void clusterRingFreeVnodes(clusterRing *ring);
+static void clusterRingFreeJump(clusterRing *ring);
+static void clusterRingFreeMaglev(clusterRing *ring);
+static void clusterRingRebuildJump(clusterRing *ring);
+static void clusterRingRebuildMaglev(clusterRing *ring);
+
 /* ====================================================================
  * Platform-Specific Optimization Hints
  * ==================================================================== */
@@ -131,20 +142,6 @@ const clusterAffinityRule CLUSTER_AFFINITY_REGION_SPREAD = {
 #define MIN_VNODES_PER_NODE 10
 #define MAX_VNODES_PER_NODE 500
 #define MAGLEV_TABLE_SIZE 65537 /* Prime number */
-
-/* Multilist configuration for placement results */
-#define PLACEMENT_LIST_LIMIT FLEX_CAP_LEVEL_256
-#define PLACEMENT_LIST_DEPTH 0
-
-/* Singleton mflexState for clusterRing multilist operations */
-static mflexState *clusterMflexState(void) {
-    static mflexState *state = NULL;
-    if (!state) {
-        /* @own: static */
-        state = mflexStateCreate();
-    }
-    return state;
-}
 
 /* ====================================================================
  * Seen-Node Tracking (Optimized Deduplication)
@@ -350,131 +347,106 @@ static uint64_t clusterGetTimeMs(void) {
  * Placement/Set Helper Functions
  * ==================================================================== */
 
+/* Appends a node; the list grows geometrically from 4 entries */
+static void clusterNodeListAdd(clusterNodeList *list, const clusterNode *node) {
+    if (!node) {
+        return;
+    }
+    if (list->count == list->capacity) {
+        const uint32_t capacity = list->capacity ? list->capacity * 2 : 4;
+        /* @own: container; free=zfree */
+        list->nodes = zrealloc(list->nodes, capacity * sizeof(*list->nodes));
+        list->capacity = capacity;
+    }
+    list->nodes[list->count++] = node;
+}
+
+static void clusterNodeListFree(clusterNodeList *list) {
+    zfree(list->nodes);
+    *list = (clusterNodeList){0};
+}
+
+static const clusterNode *clusterNodeListGet(const clusterNodeList *list,
+                                             size_t idx) {
+    return idx < list->count ? list->nodes[idx] : NULL;
+}
+
 void clusterPlacementInit(clusterPlacement *p) {
     if (p) {
         memset(p, 0, sizeof(*p));
-        /* @own: container; free=multilistFree */
-        p->replicas = multilistNew(PLACEMENT_LIST_LIMIT, PLACEMENT_LIST_DEPTH);
     }
 }
 
 void clusterPlacementFree(clusterPlacement *p) {
-    if (p && p->replicas) {
-        multilistFree(p->replicas);
-        p->replicas = NULL;
+    if (p) {
+        clusterNodeListFree(&p->replicas);
     }
 }
 
 size_t clusterPlacementReplicaCount(const clusterPlacement *p) {
-    return p && p->replicas ? multilistCount(p->replicas) : 0;
+    return p ? p->replicas.count : 0;
 }
 
 const clusterNode *clusterPlacementGetReplica(const clusterPlacement *p,
                                               size_t idx) {
-    if (!p || !p->replicas) {
-        return NULL;
-    }
-    multilistEntry entry;
-    if (multilistIndex(p->replicas, clusterMflexState(), (mlOffsetId)idx,
-                       &entry, true)) {
-        return entry.box.data.ptr;
-    }
-    return NULL;
+    return p ? clusterNodeListGet(&p->replicas, idx) : NULL;
 }
 
-/* Helper to add node pointer to placement replicas */
 static void clusterPlacementAddReplica(clusterPlacement *p,
                                        const clusterNode *node) {
-    if (!p || !p->replicas || !node) {
-        return;
-    }
-    databox box = databoxNewPtr((void *)node);
-    multilistPushByTypeTail(&p->replicas, clusterMflexState(), &box);
+    clusterNodeListAdd(&p->replicas, node);
 }
 
 void clusterWriteSetInit(clusterWriteSet *ws) {
     if (ws) {
         memset(ws, 0, sizeof(*ws));
-        /* @own: container; free=multilistFree */
-        ws->targets = multilistNew(PLACEMENT_LIST_LIMIT, PLACEMENT_LIST_DEPTH);
     }
 }
 
 void clusterWriteSetFree(clusterWriteSet *ws) {
-    if (ws && ws->targets) {
-        multilistFree(ws->targets);
-        ws->targets = NULL;
+    if (ws) {
+        clusterNodeListFree(&ws->targets);
     }
 }
 
 size_t clusterWriteSetTargetCount(const clusterWriteSet *ws) {
-    return ws && ws->targets ? multilistCount(ws->targets) : 0;
+    return ws ? ws->targets.count : 0;
 }
 
 const clusterNode *clusterWriteSetGetTarget(const clusterWriteSet *ws,
                                             size_t idx) {
-    if (!ws || !ws->targets) {
-        return NULL;
-    }
-    multilistEntry entry;
-    if (multilistIndex(ws->targets, clusterMflexState(), (mlOffsetId)idx,
-                       &entry, true)) {
-        return entry.box.data.ptr;
-    }
-    return NULL;
+    return ws ? clusterNodeListGet(&ws->targets, idx) : NULL;
 }
 
-/* Helper to add node pointer to write set targets */
 static void clusterWriteSetAddTarget(clusterWriteSet *ws,
                                      const clusterNode *node) {
-    if (!ws || !ws->targets || !node) {
-        return;
-    }
-    databox box = databoxNewPtr((void *)node);
-    multilistPushByTypeTail(&ws->targets, clusterMflexState(), &box);
+    clusterNodeListAdd(&ws->targets, node);
 }
 
 void clusterReadSetInit(clusterReadSet *rs) {
     if (rs) {
         memset(rs, 0, sizeof(*rs));
-        /* @own: container; free=multilistFree */
-        rs->candidates =
-            multilistNew(PLACEMENT_LIST_LIMIT, PLACEMENT_LIST_DEPTH);
     }
 }
 
 void clusterReadSetFree(clusterReadSet *rs) {
-    if (rs && rs->candidates) {
-        multilistFree(rs->candidates);
-        rs->candidates = NULL;
+    if (rs) {
+        clusterNodeListFree(&rs->candidates);
     }
 }
 
 size_t clusterReadSetCandidateCount(const clusterReadSet *rs) {
-    return rs && rs->candidates ? multilistCount(rs->candidates) : 0;
+    return rs ? rs->candidates.count : 0;
 }
 
 const clusterNode *clusterReadSetGetCandidate(const clusterReadSet *rs,
                                               size_t idx) {
-    if (!rs || !rs->candidates) {
-        return NULL;
-    }
-    multilistEntry entry;
-    if (multilistIndex(rs->candidates, clusterMflexState(), (mlOffsetId)idx,
-                       &entry, true)) {
-        return entry.box.data.ptr;
-    }
-    return NULL;
+    return rs ? clusterNodeListGet(&rs->candidates, idx) : NULL;
 }
 
-/* Helper to add node pointer to read set candidates */
 static void clusterReadSetAddCandidate(clusterReadSet *rs,
                                        const clusterNode *node) {
-    if (!rs || !rs->candidates || !node) {
-        return;
-    }
-    databox box = databoxNewPtr((void *)node);
-    multilistPushByTypeTail(&rs->candidates, clusterMflexState(), &box);
+    clusterNodeListAdd(&rs->candidates, node);
 }
 
 /* ====================================================================
@@ -619,8 +591,10 @@ clusterRing *clusterRingNew(const clusterRingConfig *config) {
         return NULL;
     }
 
-    /* Strategy configuration */
-    ring->strategyType = config->strategyType;
+    /* Strategy configuration (a ring's DEFAULT is Ketama) */
+    ring->strategyType = config->strategyType == CLUSTER_STRATEGY_DEFAULT
+                             ? CLUSTER_STRATEGY_KETAMA
+                             : config->strategyType;
     ring->customStrategy = config->customStrategy;
     ring->hashSeed = config->hashSeed;
     ring->boundedLoadPercent =
@@ -663,30 +637,8 @@ clusterRing *clusterRingNew(const clusterRingConfig *config) {
     ring->keySpaceByName =
         multidictNew(&multidictTypeExactKey, keySpaceClass, 0);
 
-    /* Initialize strategy-specific data */
-    clusterResult strategyResult = CLUSTER_OK;
-    switch (ring->strategyType) {
-    case CLUSTER_STRATEGY_KETAMA:
-        strategyResult = clusterRingInitKetama(ring);
-        break;
-    case CLUSTER_STRATEGY_JUMP:
-        strategyResult = clusterRingInitJump(ring);
-        break;
-    case CLUSTER_STRATEGY_RENDEZVOUS:
-        strategyResult = clusterRingInitRendezvous(ring);
-        break;
-    case CLUSTER_STRATEGY_MAGLEV:
-        strategyResult = clusterRingInitMaglev(ring);
-        break;
-    case CLUSTER_STRATEGY_BOUNDED:
-        strategyResult = clusterRingInitBounded(ring);
-        break;
-    case CLUSTER_STRATEGY_CUSTOM:
-        /* Custom strategy should be fully initialized by caller */
-        break;
-    }
-
-    if (strategyResult != CLUSTER_OK) {
+    /* The ring is its own strategy's first user */
+    if (clusterRingUseStrategy(ring, ring->strategyType) != CLUSTER_OK) {
         return NULL;
     }
 
@@ -717,29 +669,14 @@ void clusterRingFree(clusterRing *ring) {
         return;
     }
 
-    /* Free strategy-specific data */
-    switch (ring->strategyType) {
-    case CLUSTER_STRATEGY_KETAMA:
-        clusterRingFreeKetama(ring);
-        break;
-    case CLUSTER_STRATEGY_JUMP:
-        clusterRingFreeJump(ring);
-        break;
-    case CLUSTER_STRATEGY_RENDEZVOUS:
-        clusterRingFreeRendezvous(ring);
-        break;
-    case CLUSTER_STRATEGY_MAGLEV:
-        clusterRingFreeMaglev(ring);
-        break;
-    case CLUSTER_STRATEGY_BOUNDED:
-        clusterRingFreeBounded(ring);
-        break;
-    case CLUSTER_STRATEGY_CUSTOM:
-        if (ring->customStrategy && ring->customStrategy->freeStrategyData) {
-            ring->customStrategy->freeStrategyData(
-                ring->customStrategy->strategyData);
-        }
-        break;
+    /* Free every live strategy's state (and the custom hooks' data) */
+    clusterRingFreeVnodes(ring);
+    clusterRingFreeJump(ring);
+    clusterRingFreeMaglev(ring);
+    if (ring->strategyType == CLUSTER_STRATEGY_CUSTOM && ring->customStrategy &&
+        ring->customStrategy->freeStrategyData) {
+        ring->customStrategy->freeStrategyData(
+            ring->customStrategy->strategyData);
     }
 
     /* Free nodes */
@@ -805,59 +742,147 @@ void clusterRingFree(clusterRing *ring) {
 }
 
 /* ====================================================================
- * Strategy Initialization
+ * Strategy State
  * ==================================================================== */
 
-clusterResult clusterRingInitKetama(clusterRing *ring) {
-    clusterKetamaData *data = &ring->strategyData.ketama;
+static bool clusterRingHasVnodes(const clusterRing *ring) {
+    return ring->strategyUsers[CLUSTER_STRATEGY_KETAMA] +
+               ring->strategyUsers[CLUSTER_STRATEGY_BOUNDED] >
+           0;
+}
+
+static bool clusterRingHasJump(const clusterRing *ring) {
+    return ring->strategyUsers[CLUSTER_STRATEGY_JUMP] > 0;
+}
+
+static bool clusterRingHasMaglev(const clusterRing *ring) {
+    return ring->strategyUsers[CLUSTER_STRATEGY_MAGLEV] > 0;
+}
+
+/* The strategy a user places with: a keyspace's DEFAULT is the ring's */
+static clusterStrategyType
+clusterRingResolveStrategy(const clusterRing *ring,
+                           clusterStrategyType strategy) {
+    return strategy == CLUSTER_STRATEGY_DEFAULT ? ring->strategyType : strategy;
+}
+
+/* Build the vnode ring over every node (the vnode users are counted) */
+static clusterResult clusterRingBuildVnodes(clusterRing *ring) {
+    clusterKetamaData *data = &ring->vnodes;
     data->vnodeCapacity = INITIAL_VNODE_CAPACITY;
-    /* @own: container; free=clusterRingFree */
+    /* @own: container; free=clusterRingFreeVnodes */
     data->vnodes = zcalloc(data->vnodeCapacity, sizeof(clusterVnode));
     if (!data->vnodes) {
         return CLUSTER_ERR_ALLOC_FAILED;
     }
     data->vnodeCount = 0;
     data->needsSort = false;
-    return CLUSTER_OK;
-}
-
-clusterResult clusterRingInitJump(clusterRing *ring) {
-    clusterJumpData *data = &ring->strategyData.jump;
-    data->nodeIds = NULL;
-    data->bucketCount = 0;
-    return CLUSTER_OK;
-}
-
-clusterResult clusterRingInitRendezvous(clusterRing *ring) {
-    /* Rendezvous needs no extra state */
-    (void)ring;
-    return CLUSTER_OK;
-}
-
-clusterResult clusterRingInitMaglev(clusterRing *ring) {
-    clusterMaglevData *data = &ring->strategyData.maglev;
-    data->tableSize = MAGLEV_TABLE_SIZE;
-    /* @own: container; free=clusterRingFree */
-    data->lookup = zcalloc(data->tableSize, sizeof(uint64_t));
-    if (!data->lookup) {
-        return CLUSTER_ERR_ALLOC_FAILED;
+    for (uint32_t i = 0; i < ring->nodeCount; i++) {
+        const clusterResult r = clusterRingAddVnodes(ring, ring->nodeArray[i]);
+        if (r != CLUSTER_OK) {
+            return r;
+        }
     }
-    /* Initialize all slots to invalid */
-    memset(data->lookup, 0xFF, data->tableSize * sizeof(uint64_t));
-    data->needsRebuild = true;
+    clusterRingSortVnodes(ring);
     return CLUSTER_OK;
 }
 
-clusterResult clusterRingInitBounded(clusterRing *ring) {
-    const clusterResult vnodes = clusterRingInitKetama(ring);
-    if (vnodes != CLUSTER_OK) {
-        return vnodes;
+static void clusterRingFreeVnodes(clusterRing *ring) {
+    zfree(ring->vnodes.vnodes);
+    memset(&ring->vnodes, 0, sizeof(ring->vnodes));
+}
+
+static void clusterRingFreeJump(clusterRing *ring) {
+    zfree(ring->jump.nodes);
+    memset(&ring->jump, 0, sizeof(ring->jump));
+}
+
+static void clusterRingFreeMaglev(clusterRing *ring) {
+    if (ring->maglev.lookup) {
+        pthread_mutex_destroy(&ring->maglev.lock);
+        zfree(ring->maglev.lookup);
+    }
+    memset(&ring->maglev, 0, sizeof(ring->maglev));
+}
+
+/* After any change to membership or health: rebuild Jump's buckets and
+ * mark Maglev's table stale (when live; its next placement rebuilds it) */
+static void clusterRingRefreshHealthy(clusterRing *ring) {
+    if (clusterRingHasJump(ring)) {
+        clusterRingRebuildJump(ring);
+    }
+    if (clusterRingHasMaglev(ring)) {
+        atomic_store_explicit(&ring->maglev.stale, true, memory_order_release);
+    }
+}
+
+/* Rebuild a stale Maglev table before a placement reads it: concurrent
+ * placements wait for one rebuild (double-checked under the lock) */
+static void clusterRingSettleMaglev(const clusterRing *ring) {
+    clusterMaglevData *data = (clusterMaglevData *)&ring->maglev;
+    if (!atomic_load_explicit(&data->stale, memory_order_acquire)) {
+        return;
     }
 
-    clusterBoundedData *data = &ring->strategyData.bounded;
-    data->fillSum = 0;
-    data->fillNodes = 0;
+    pthread_mutex_lock(&data->lock);
+    if (atomic_load_explicit(&data->stale, memory_order_relaxed)) {
+        clusterRingRebuildMaglev((clusterRing *)ring);
+        atomic_store_explicit(&data->stale, false, memory_order_release);
+    }
+    pthread_mutex_unlock(&data->lock);
+}
+
+/* Count a user (the ring, or a keyspace) of `strategy`; the first user of
+ * a strategy that keeps state builds it from the current nodes */
+static clusterResult clusterRingUseStrategy(clusterRing *ring,
+                                            clusterStrategyType strategy) {
+    const bool hadVnodes = clusterRingHasVnodes(ring);
+    ring->strategyUsers[strategy]++;
+
+    if (!hadVnodes && clusterRingHasVnodes(ring)) {
+        const clusterResult r = clusterRingBuildVnodes(ring);
+        if (r != CLUSTER_OK) {
+            ring->strategyUsers[strategy]--;
+            clusterRingFreeVnodes(ring);
+            return r;
+        }
+    }
+
+    if (ring->strategyUsers[strategy] == 1) {
+        if (strategy == CLUSTER_STRATEGY_JUMP) {
+            clusterRingRebuildJump(ring);
+        } else if (strategy == CLUSTER_STRATEGY_MAGLEV) {
+            /* Built by its first placement */
+            ring->maglev.tableSize = MAGLEV_TABLE_SIZE;
+            /* @own: container; free=clusterRingFreeMaglev */
+            ring->maglev.lookup =
+                zcalloc(ring->maglev.tableSize, sizeof(*ring->maglev.lookup));
+            pthread_mutex_init(&ring->maglev.lock, NULL);
+            atomic_store_explicit(&ring->maglev.stale, true,
+                                  memory_order_release);
+        }
+    }
+
     return CLUSTER_OK;
+}
+
+/* Drop a user of `strategy`; the last user of a strategy's state frees it */
+static void clusterRingReleaseStrategy(clusterRing *ring,
+                                       clusterStrategyType strategy) {
+    if (ring->strategyUsers[strategy] == 0) {
+        return;
+    }
+
+    ring->strategyUsers[strategy]--;
+    if (!clusterRingHasVnodes(ring)) {
+        clusterRingFreeVnodes(ring);
+    }
+    if (!clusterRingHasJump(ring)) {
+        clusterRingFreeJump(ring);
+    }
+    if (!clusterRingHasMaglev(ring)) {
+        clusterRingFreeMaglev(ring);
+    }
 }
 
 /* A node's fill: the share of its capacity in use (0 without a capacity) */
@@ -868,58 +893,19 @@ static double clusterNodeFill(const clusterNode *node) {
 }
 
 /* Count a healthy node with a capacity into (sign 1) or out of (sign -1)
- * a bounded-load ring's fill sum; call around every change to the
- * node's state or usage, and on add / remove */
+ * the ring's fill sum (bounded-load's mean); call around every change to
+ * the node's state or usage, and on add / remove */
 static void clusterBoundedAccount(clusterRing *ring, const clusterNode *node,
                                   int sign) {
-    if (ring->strategyType != CLUSTER_STRATEGY_BOUNDED ||
-        node->state != CLUSTER_NODE_UP || node->capacityBytes == 0) {
+    if (node->state != CLUSTER_NODE_UP || node->capacityBytes == 0) {
         return;
     }
 
-    clusterBoundedData *data = &ring->strategyData.bounded;
-    data->fillSum += sign * clusterNodeFill(node);
-    data->fillNodes = (uint32_t)((int64_t)data->fillNodes + sign);
-    if (data->fillNodes == 0) {
-        data->fillSum = 0; /* no rounding residue survives an empty set */
+    ring->fillSum += sign * clusterNodeFill(node);
+    ring->fillNodes = (uint32_t)((int64_t)ring->fillNodes + sign);
+    if (ring->fillNodes == 0) {
+        ring->fillSum = 0; /* no rounding residue survives an empty set */
     }
-}
-
-/* ====================================================================
- * Strategy Cleanup
- * ==================================================================== */
-
-void clusterRingFreeKetama(clusterRing *ring) {
-    clusterKetamaData *data = &ring->strategyData.ketama;
-    if (data->vnodes) {
-        zfree(data->vnodes);
-        data->vnodes = NULL;
-    }
-}
-
-void clusterRingFreeJump(clusterRing *ring) {
-    clusterJumpData *data = &ring->strategyData.jump;
-    if (data->nodeIds) {
-        zfree(data->nodeIds);
-        data->nodeIds = NULL;
-    }
-}
-
-void clusterRingFreeRendezvous(clusterRing *ring) {
-    (void)ring;
-    /* Nothing to free */
-}
-
-void clusterRingFreeMaglev(clusterRing *ring) {
-    clusterMaglevData *data = &ring->strategyData.maglev;
-    if (data->lookup) {
-        zfree(data->lookup);
-        data->lookup = NULL;
-    }
-}
-
-void clusterRingFreeBounded(clusterRing *ring) {
-    clusterRingFreeKetama(ring);
 }
 
 /* ====================================================================
@@ -942,7 +928,7 @@ static int vnodeCompare(const void *a, const void *b) {
 }
 
 void clusterRingSortVnodes(clusterRing *ring) {
-    clusterKetamaData *data = &ring->strategyData.ketama;
+    clusterKetamaData *data = &ring->vnodes;
     if (data->needsSort && data->vnodeCount > 1) {
         qsort(data->vnodes, data->vnodeCount, sizeof(clusterVnode),
               vnodeCompare);
@@ -950,15 +936,10 @@ void clusterRingSortVnodes(clusterRing *ring) {
     data->needsSort = false;
 }
 
-static bool clusterRingHasVnodes(const clusterRing *ring) {
-    return ring->strategyType == CLUSTER_STRATEGY_KETAMA ||
-           ring->strategyType == CLUSTER_STRATEGY_BOUNDED;
-}
-
 /* The count of leading vnodes known to be in order (all of them unless a
  * sort is pending), taken before clusterRingAddVnodes appends */
 static uint32_t clusterRingSortedVnodes(const clusterRing *ring) {
-    const clusterKetamaData *data = &ring->strategyData.ketama;
+    const clusterKetamaData *data = &ring->vnodes;
     return clusterRingHasVnodes(ring) && !data->needsSort ? data->vnodeCount
                                                           : 0;
 }
@@ -972,7 +953,7 @@ static void clusterRingMergeVnodes(clusterRing *ring, uint32_t sorted) {
         return;
     }
 
-    clusterKetamaData *data = &ring->strategyData.ketama;
+    clusterKetamaData *data = &ring->vnodes;
     const uint32_t added = data->vnodeCount - sorted;
     if (sorted == 0 || added == 0) {
         clusterRingSortVnodes(ring);
@@ -1000,12 +981,11 @@ static void clusterRingMergeVnodes(clusterRing *ring, uint32_t sorted) {
 }
 
 clusterResult clusterRingAddVnodes(clusterRing *ring, clusterNode *node) {
-    if (ring->strategyType != CLUSTER_STRATEGY_KETAMA &&
-        ring->strategyType != CLUSTER_STRATEGY_BOUNDED) {
-        return CLUSTER_OK; /* No vnodes for other strategies */
+    if (!clusterRingHasVnodes(ring)) {
+        return CLUSTER_OK; /* No strategy in use places on vnodes */
     }
 
-    clusterKetamaData *data = &ring->strategyData.ketama;
+    clusterKetamaData *data = &ring->vnodes;
 
     /* Number of vnodes from the weight, clamped to [min, max] (max is at
      * most CLUSTER_VNODES_PER_NODE_MAX, so every index fits vnodeIndex) */
@@ -1060,12 +1040,11 @@ clusterResult clusterRingAddVnodes(clusterRing *ring, clusterNode *node) {
 }
 
 clusterResult clusterRingRemoveVnodes(clusterRing *ring, uint64_t nodeId) {
-    if (ring->strategyType != CLUSTER_STRATEGY_KETAMA &&
-        ring->strategyType != CLUSTER_STRATEGY_BOUNDED) {
+    if (!clusterRingHasVnodes(ring)) {
         return CLUSTER_OK;
     }
 
-    clusterKetamaData *data = &ring->strategyData.ketama;
+    clusterKetamaData *data = &ring->vnodes;
 
     /* Remove all vnodes belonging to this node */
     uint32_t writeIdx = 0;
@@ -1088,23 +1067,21 @@ clusterResult clusterRingRemoveVnodes(clusterRing *ring, uint64_t nodeId) {
  * ==================================================================== */
 
 static void clusterRingRebuildJump(clusterRing *ring) {
-    clusterJumpData *data = &ring->strategyData.jump;
+    clusterJumpData *data = &ring->jump;
 
     /* Free old array */
-    if (data->nodeIds) {
-        zfree(data->nodeIds);
-    }
+    zfree(data->nodes);
 
-    /* Build new array of healthy node IDs */
+    /* The healthy nodes, in ring order, are the buckets */
     data->bucketCount = ring->healthyNodeCount;
     if (data->bucketCount == 0) {
-        data->nodeIds = NULL;
+        data->nodes = NULL;
         return;
     }
 
-    /* @own: container; free=clusterRingFree */
-    data->nodeIds = zcalloc(data->bucketCount, sizeof(uint64_t));
-    if (!data->nodeIds) {
+    /* @own: container; free=clusterRingFreeJump */
+    data->nodes = zcalloc(data->bucketCount, sizeof(*data->nodes));
+    if (!data->nodes) {
         data->bucketCount = 0;
         return;
     }
@@ -1113,7 +1090,7 @@ static void clusterRingRebuildJump(clusterRing *ring) {
     for (uint32_t i = 0; i < ring->nodeCount && idx < data->bucketCount; i++) {
         const clusterNode *node = ring->nodeArray[i];
         if (node && node->state == CLUSTER_NODE_UP) {
-            data->nodeIds[idx++] = node->id;
+            data->nodes[idx++] = node;
         }
     }
 }
@@ -1135,17 +1112,19 @@ static int32_t jumpConsistentHash(uint64_t key, int32_t numBuckets) {
  * ==================================================================== */
 
 static void clusterRingRebuildMaglev(clusterRing *ring) {
-    clusterMaglevData *data = &ring->strategyData.maglev;
+    clusterMaglevData *data = &ring->maglev;
+    if (!data->lookup) {
+        return;
+    }
 
     if (ring->healthyNodeCount == 0) {
-        memset(data->lookup, 0xFF, data->tableSize * sizeof(uint64_t));
-        data->needsRebuild = false;
+        memset(data->lookup, 0, data->tableSize * sizeof(*data->lookup));
         return;
     }
 
     /* Collect healthy nodes */
-    cleanerName(zfree, U64) uint64_t *healthyNodes =
-        zcalloc(ring->healthyNodeCount, sizeof(uint64_t));
+    cleanerName(zfree, NodePtrs) const clusterNode **healthyNodes =
+        zcalloc(ring->healthyNodeCount, sizeof(*healthyNodes));
     if (!healthyNodes) {
         return;
     }
@@ -1154,7 +1133,7 @@ static void clusterRingRebuildMaglev(clusterRing *ring) {
     for (uint32_t i = 0; i < ring->nodeCount; i++) {
         const clusterNode *node = ring->nodeArray[i];
         if (node && node->state == CLUSTER_NODE_UP) {
-            healthyNodes[healthyIdx++] = node->id;
+            healthyNodes[healthyIdx++] = node;
         }
     }
 
@@ -1162,44 +1141,50 @@ static void clusterRingRebuildMaglev(clusterRing *ring) {
     uint32_t N = data->tableSize;
     uint32_t M = ring->healthyNodeCount;
 
-    /* Allocate per-node offset and skip */
-    cleanerName(zfree, U32) uint32_t *offset = zcalloc(M, sizeof(uint32_t));
+    /* Each node's permutation of the table: it starts at an offset and
+     * steps by a skip (both from its id).  The walk keeps each node's
+     * current position and steps it by addition with one wrap, the same
+     * sequence as (offset + j * skip) % N without a multiply and modulo
+     * per probe. */
+    cleanerName(zfree, U32) uint32_t *pos = zcalloc(M, sizeof(uint32_t));
     cleanerName(zfree, U32) uint32_t *skip = zcalloc(M, sizeof(uint32_t));
-    cleanerName(zfree, U32) uint32_t *next = zcalloc(M, sizeof(uint32_t));
-
-    if (!offset || !skip || !next) {
+    if (!pos || !skip) {
         return;
     }
 
-    /* Calculate offset and skip for each node */
     for (uint32_t i = 0; i < M; i++) {
-        uint64_t h1 =
-            clusterHash64(&healthyNodes[i], sizeof(uint64_t), ring->hashSeed);
-        uint64_t h2 = clusterHash64(&healthyNodes[i], sizeof(uint64_t),
-                                    ring->hashSeed + 1);
-        offset[i] = h1 % N;
-        skip[i] = (h2 % (N - 1)) + 1;
-        next[i] = 0;
+        const uint64_t id = healthyNodes[i]->id;
+        uint64_t h1 = clusterHash64(&id, sizeof(id), ring->hashSeed);
+        uint64_t h2 = clusterHash64(&id, sizeof(id), ring->hashSeed + 1);
+        pos[i] = (uint32_t)(h1 % N);
+        skip[i] = (uint32_t)(h2 % (N - 1)) + 1;
     }
 
-    /* Fill lookup table using Maglev algorithm */
-    memset(data->lookup, 0xFF, N * sizeof(uint64_t));
+    /* Fill lookup table using Maglev algorithm: nodes take turns claiming
+     * the next free slot of their permutation */
+    const clusterNode **const lookup = data->lookup;
+    memset(lookup, 0, N * sizeof(*lookup));
     uint32_t filled = 0;
 
     while (filled < N) {
         for (uint32_t i = 0; i < M && filled < N; i++) {
-            uint32_t c = (offset[i] + next[i] * skip[i]) % N;
-            while (data->lookup[c] != UINT64_MAX) {
-                next[i]++;
-                c = (offset[i] + next[i] * skip[i]) % N;
+            uint32_t c = pos[i];
+            const uint32_t step = skip[i];
+            while (lookup[c] != NULL) {
+                c += step;
+                if (c >= N) {
+                    c -= N;
+                }
             }
-            data->lookup[c] = healthyNodes[i];
-            next[i]++;
+            lookup[c] = healthyNodes[i];
+            c += step;
+            if (c >= N) {
+                c -= N;
+            }
+            pos[i] = c;
             filled++;
         }
     }
-
-    data->needsRebuild = false;
 }
 
 /* ====================================================================
@@ -1244,18 +1229,18 @@ void clusterRingCompactNodeArray(clusterRing *ring) {
  * Node Management API
  * ==================================================================== */
 
-/* Bring the placement structures up to date after nodes were added with
- * place = false: one sort of the vnode ring, one Jump rebuild. */
+/* Bring the live placement state up to date after nodes were added with
+ * place = false: one sort of the vnode ring, one Jump and Maglev rebuild */
 static void clusterRingPlaceNodes(clusterRing *ring) {
     if (clusterRingHasVnodes(ring)) {
         clusterRingSortVnodes(ring);
-    } else if (ring->strategyType == CLUSTER_STRATEGY_JUMP) {
-        clusterRingRebuildJump(ring);
     }
+    clusterRingRefreshHealthy(ring);
 }
 
-/* Add a node; with place = false the vnode sort and Jump rebuild are
- * left to clusterRingPlaceNodes, so a bulk load pays for them once. */
+/* Add a node; with place = false the vnode sort and the Jump and Maglev
+ * rebuilds are left to clusterRingPlaceNodes, so a bulk load pays for
+ * them once. */
 static clusterResult clusterRingAddNodeInternal(clusterRing *ring,
                                                 const clusterNodeConfig *config,
                                                 bool place) {
@@ -1315,19 +1300,11 @@ static clusterResult clusterRingAddNodeInternal(clusterRing *ring,
 
     /* Keep the placement structures current (or leave them to
      * clusterRingPlaceNodes) */
-    if (place) {
-        if (clusterRingHasVnodes(ring)) {
-            clusterRingMergeVnodes(ring, sortedVnodes);
-        } else if (ring->strategyType == CLUSTER_STRATEGY_JUMP) {
-            clusterRingRebuildJump(ring);
-        }
-    }
-
-    if (ring->strategyType == CLUSTER_STRATEGY_MAGLEV) {
-        ring->strategyData.maglev.needsRebuild = true;
-    }
-
     clusterBoundedAccount(ring, node, 1);
+    if (place) {
+        clusterRingMergeVnodes(ring, sortedVnodes);
+        clusterRingRefreshHealthy(ring);
+    }
 
     /* Update version */
     ring->version++;
@@ -1390,15 +1367,9 @@ clusterResult clusterRingRemoveNode(clusterRing *ring, uint64_t nodeId) {
                             ring->stateCallbackData);
     }
 
-    /* Free node */
+    /* Free node, then rebuild the state that pointed at it */
     clusterNodeFreeInternal(node);
-
-    /* Rebuild strategies */
-    if (ring->strategyType == CLUSTER_STRATEGY_JUMP) {
-        clusterRingRebuildJump(ring);
-    } else if (ring->strategyType == CLUSTER_STRATEGY_MAGLEV) {
-        ring->strategyData.maglev.needsRebuild = true;
-    }
+    clusterRingRefreshHealthy(ring);
 
     /* Update version */
     ring->version++;
@@ -1460,12 +1431,8 @@ clusterResult clusterRingSetNodeState(clusterRing *ring, uint64_t nodeId,
     clusterBoundedAccount(ring, node, 1);
     node->stateChangedAt = clusterGetTimeMs();
 
-    /* Rebuild strategies that depend on healthy node list */
-    if (ring->strategyType == CLUSTER_STRATEGY_JUMP) {
-        clusterRingRebuildJump(ring);
-    } else if (ring->strategyType == CLUSTER_STRATEGY_MAGLEV) {
-        ring->strategyData.maglev.needsRebuild = true;
-    }
+    /* Rebuild the state that lists healthy nodes */
+    clusterRingRefreshHealthy(ring);
 
     /* Invoke callback */
     if (ring->stateCallback) {
@@ -1613,7 +1580,7 @@ const clusterLocation *clusterNodeGetLocation(const clusterNode *node) {
 static uint32_t clusterKetamaWalk(const clusterRing *ring, const void *key,
                                   uint32_t keyLen, const clusterNode **out,
                                   uint32_t maxNodes, double fillBound) {
-    const clusterKetamaData *data = &ring->strategyData.ketama;
+    const clusterKetamaData *data = &ring->vnodes;
 
     if (CLUSTER_UNLIKELY(data->vnodeCount == 0 || maxNodes == 0)) {
         return 0;
@@ -1729,7 +1696,7 @@ uint32_t clusterLocateKetama(const clusterRing *ring, const void *key,
 uint32_t clusterLocateJump(const clusterRing *ring, const void *key,
                            uint32_t keyLen, const clusterNode **out,
                            uint32_t maxNodes) {
-    const clusterJumpData *data = &ring->strategyData.jump;
+    const clusterJumpData *data = &ring->jump;
 
     if (CLUSTER_UNLIKELY(data->bucketCount == 0 || maxNodes == 0)) {
         return 0;
@@ -1743,21 +1710,15 @@ uint32_t clusterLocateJump(const clusterRing *ring, const void *key,
         return 0;
     }
 
-    uint32_t found = 0;
-
     /* Use bitmap for O(1) deduplication */
     seenTracker seen;
     seenTrackerInit(&seen, ring->nodeCount);
 
-    /* Primary node - use direct array access via nodeIdToIndex */
-    int32_t primaryIdx = nodeIdToIndex(ring, data->nodeIds[bucket]);
-    if (primaryIdx >= 0) {
-        const clusterNode *primary = ring->nodeArray[primaryIdx];
-        if (CLUSTER_LIKELY(primary != NULL)) {
-            out[found++] = primary;
-            seenTrackerSet(&seen, (uint32_t)primaryIdx);
-        }
-    }
+    /* The buckets hold the nodes themselves */
+    const clusterNode *primary = data->nodes[bucket];
+    uint32_t found = 0;
+    out[found++] = primary;
+    seenTrackerSet(&seen, primary->arrayIndex);
 
     /* For replicas, use different hash seeds */
     for (uint32_t r = 1; r < maxNodes && found < maxNodes; r++) {
@@ -1766,17 +1727,10 @@ uint32_t clusterLocateJump(const clusterRing *ring, const void *key,
             jumpConsistentHash(replicaHash, (int32_t)data->bucketCount);
 
         if (replicaBucket >= 0 && (uint32_t)replicaBucket < data->bucketCount) {
-            int32_t replicaIdx =
-                nodeIdToIndex(ring, data->nodeIds[replicaBucket]);
-
-            if (replicaIdx >= 0 &&
-                !seenTrackerTest(&seen, (uint32_t)replicaIdx)) {
-                seenTrackerSet(&seen, (uint32_t)replicaIdx);
-
-                const clusterNode *replica = ring->nodeArray[replicaIdx];
-                if (CLUSTER_LIKELY(replica != NULL)) {
-                    out[found++] = replica;
-                }
+            const clusterNode *replica = data->nodes[replicaBucket];
+            if (!seenTrackerTest(&seen, replica->arrayIndex)) {
+                seenTrackerSet(&seen, replica->arrayIndex);
+                out[found++] = replica;
             }
         }
     }
@@ -1837,25 +1791,18 @@ uint32_t clusterLocateRendezvous(const clusterRing *ring, const void *key,
 uint32_t clusterLocateMaglev(const clusterRing *ring, const void *key,
                              uint32_t keyLen, const clusterNode **out,
                              uint32_t maxNodes) {
-    const clusterMaglevData *data = &ring->strategyData.maglev;
+    /* A table left stale by node changes is rebuilt once, first */
+    clusterRingSettleMaglev(ring);
+    const clusterMaglevData *data = &ring->maglev;
 
-    /* Rebuild lookup table if needed (non-const operation) */
-    if (CLUSTER_UNLIKELY(data->needsRebuild)) {
-        clusterRingRebuildMaglev((clusterRing *)ring);
-        /* Re-read after rebuild - defensive programming in case rebuild
-         * implementation changes */
-        // cppcheck-suppress redundantAssignment - intentional re-read after
-        // rebuild for future-proofing
-        data = &ring->strategyData.maglev;
-    }
-
-    if (CLUSTER_UNLIKELY(ring->healthyNodeCount == 0 || maxNodes == 0)) {
+    if (CLUSTER_UNLIKELY(ring->healthyNodeCount == 0 || maxNodes == 0 ||
+                         !data->lookup)) {
         return 0;
     }
 
-    /* Cap maxNodes by ring node count */
+    /* The table holds only healthy nodes: stop once all are found */
     uint32_t effectiveMax =
-        maxNodes < ring->nodeCount ? maxNodes : ring->nodeCount;
+        maxNodes < ring->healthyNodeCount ? maxNodes : ring->healthyNodeCount;
 
     /* Use bitmap for O(1) seen tracking instead of O(n) linear search */
     seenTracker seen;
@@ -1876,22 +1823,11 @@ uint32_t clusterLocateMaglev(const clusterRing *ring, const void *key,
             CLUSTER_PREFETCH(&data->lookup[(idx + i + 8) % data->tableSize]);
         }
 
-        uint64_t nodeId = data->lookup[lookupIdx];
-
-        if (CLUSTER_UNLIKELY(nodeId == UINT64_MAX)) {
-            continue;
-        }
-
-        /* Get node index for bitmap tracking */
-        int32_t nodeIdx = nodeIdToIndex(ring, nodeId);
-
-        if (nodeIdx >= 0 && !seenTrackerTest(&seen, (uint32_t)nodeIdx)) {
-            seenTrackerSet(&seen, (uint32_t)nodeIdx);
-
-            const clusterNode *node = ring->nodeArray[nodeIdx];
-            if (CLUSTER_LIKELY(node != NULL)) {
-                out[found++] = node;
-            }
+        const clusterNode *node = data->lookup[lookupIdx];
+        if (CLUSTER_LIKELY(node != NULL) &&
+            !seenTrackerTest(&seen, node->arrayIndex)) {
+            seenTrackerSet(&seen, node->arrayIndex);
+            out[found++] = node;
         }
     }
 
@@ -1904,9 +1840,8 @@ uint32_t clusterLocateBounded(const clusterRing *ring, const void *key,
                               uint32_t maxNodes) {
     /* Ketama order, passing over nodes filled above boundedLoadPercent of
      * the mean fill; with no fill recorded there is nothing to pass over */
-    const clusterBoundedData *data = &ring->strategyData.bounded;
     const double mean =
-        data->fillNodes ? data->fillSum / (double)data->fillNodes : 0.0;
+        ring->fillNodes ? ring->fillSum / (double)ring->fillNodes : 0.0;
     const double bound =
         mean > 0 ? mean * (double)ring->boundedLoadPercent / 100.0 : -1.0;
     return clusterKetamaWalk(ring, key, keyLen, out, maxNodes, bound);
@@ -2001,16 +1936,17 @@ static uint32_t clusterSelectReplicas(const clusterNode *const *cand,
     return n;
 }
 
-/* clusterRingLocate with an explicit replica count and rule set */
+/* clusterRingLocate with an explicit strategy (resolved, its state live),
+ * replica count and rule set */
 static clusterResult
-clusterRingLocateWith(const clusterRing *ring, const void *key, uint32_t keyLen,
-                      uint32_t replicaCount, const clusterAffinityRule *rules,
-                      uint8_t ruleCount, clusterPlacement *out) {
+clusterRingLocateWith(const clusterRing *ring, clusterStrategyType strategy,
+                      const void *key, uint32_t keyLen, uint32_t replicaCount,
+                      const clusterAffinityRule *rules, uint8_t ruleCount,
+                      clusterPlacement *out) {
     if (!ring || !key || keyLen == 0 || !out) {
         return CLUSTER_ERR;
     }
 
-    /* Initialize output with multilist */
     clusterPlacementInit(out);
     out->hashValue = clusterHash64(key, keyLen, ring->hashSeed);
 
@@ -2019,7 +1955,8 @@ clusterRingLocateWith(const clusterRing *ring, const void *key, uint32_t keyLen,
     }
 
     /* Update stats */
-    ((clusterRing *)ring)->stats.locateOps++; /* Cast away const */
+    atomic_fetch_add_explicit(&((clusterRing *)ring)->locateOps, 1,
+                              memory_order_relaxed);
 
     /* With affinity rules the strategy ranks every node, so the selection
      * can reach past the first replicaCount for the spread it needs.
@@ -2046,7 +1983,10 @@ clusterRingLocateWith(const clusterRing *ring, const void *key, uint32_t keyLen,
 
     uint32_t found = 0;
 
-    switch (ring->strategyType) {
+    switch (strategy) {
+    case CLUSTER_STRATEGY_DEFAULT:
+    case CLUSTER_STRATEGY_COUNT:
+        break; /* resolved before placement; never reached */
     case CLUSTER_STRATEGY_KETAMA:
         found = clusterLocateKetama(ring, key, keyLen, replicas, maxReplicas);
         break;
@@ -2108,7 +2048,7 @@ clusterRingLocateWith(const clusterRing *ring, const void *key, uint32_t keyLen,
         }
     }
 
-    /* Copy results to output multilist */
+    /* Copy results to the placement */
     out->primary = replicas[0];
     out->healthyCount = 0;
     for (uint32_t i = 0; i < found; i++) {
@@ -2123,11 +2063,12 @@ clusterRingLocateWith(const clusterRing *ring, const void *key, uint32_t keyLen,
 
 clusterResult clusterRingLocate(const clusterRing *ring, const void *key,
                                 uint32_t keyLen, clusterPlacement *out) {
+    clusterPlacementInit(out);
     if (!ring) {
         return CLUSTER_ERR;
     }
     return clusterRingLocateWith(
-        ring, key, keyLen, ring->defaultQuorum.replicaCount,
+        ring, ring->strategyType, key, keyLen, ring->defaultQuorum.replicaCount,
         ring->affinityRules, ring->affinityRuleCount, out);
 }
 
@@ -2189,6 +2130,7 @@ clusterResult clusterRingLocateBox(const clusterRing *ring, const databox *key,
     uint8_t scratch[16];
     const void *keyData = NULL;
     uint32_t keyLen = 0;
+    clusterPlacementInit(out);
     if (!key || !clusterKeyBytes(key, scratch, &keyData, &keyLen)) {
         return CLUSTER_ERR;
     }
@@ -2200,18 +2142,19 @@ clusterResult clusterRingLocateKeyspace(const clusterRing *ring,
                                         const clusterKeySpace *ks,
                                         const void *key, uint32_t keyLen,
                                         clusterPlacement *out) {
+    clusterPlacementInit(out);
     if (!ring || !ks) {
         return CLUSTER_ERR;
     }
 
-    /* The keyspace's replica count and rules, else the ring's */
+    /* The keyspace's strategy, replica count and rules, else the ring's */
     const uint32_t replicaCount = ks->quorum.replicaCount
                                       ? ks->quorum.replicaCount
                                       : ring->defaultQuorum.replicaCount;
     const bool ownRules = ks->rules && ks->ruleCount > 0;
     clusterResult result = clusterRingLocateWith(
-        ring, key, keyLen, replicaCount,
-        ownRules ? ks->rules : ring->affinityRules,
+        ring, clusterRingResolveStrategy(ring, ks->strategy), key, keyLen,
+        replicaCount, ownRules ? ks->rules : ring->affinityRules,
         ownRules ? ks->ruleCount : ring->affinityRuleCount, out);
     if (result == CLUSTER_OK) {
         out->keySpace = ks;
@@ -2222,13 +2165,19 @@ clusterResult clusterRingLocateKeyspace(const clusterRing *ring,
 clusterResult clusterRingLocateBulk(const clusterRing *ring,
                                     const databox *keys, uint32_t keyCount,
                                     clusterPlacement *placements) {
-    if (CLUSTER_UNLIKELY(!ring || !keys || !placements || keyCount == 0)) {
+    if (CLUSTER_UNLIKELY(!placements)) {
+        return CLUSTER_ERR;
+    }
+    if (CLUSTER_UNLIKELY(!ring || !keys || keyCount == 0)) {
+        for (uint32_t i = 0; i < keyCount; i++) {
+            clusterPlacementInit(&placements[i]);
+        }
         return CLUSTER_ERR;
     }
 
     /* Each key is placed exactly as clusterRingLocateBox places it; the
      * next string key's bytes are prefetched while this one is placed.
-     * Every key is attempted: a failed key's placement is left freed and
+     * Every key is attempted: a failed key's placement is left empty and
      * the last failure is returned. */
     clusterResult finalResult = CLUSTER_OK;
     for (uint32_t i = 0; i < keyCount; i++) {
@@ -2253,19 +2202,17 @@ clusterResult clusterRingLocateBulk(const clusterRing *ring,
 clusterResult clusterRingPlanWrite(const clusterRing *ring, const void *key,
                                    uint32_t keyLen, const clusterQuorum *quorum,
                                    clusterWriteSet *out) {
+    clusterWriteSetInit(out);
     if (!ring || !key || !out) {
         return CLUSTER_ERR;
     }
 
     const clusterQuorum *q = quorum ? quorum : &ring->defaultQuorum;
 
-    /* Initialize with multilist */
-    clusterWriteSetInit(out);
-
     /* Get placement */
     clusterPlacement placement;
     clusterResult result = clusterRingLocateWith(
-        ring, key, keyLen,
+        ring, ring->strategyType, key, keyLen,
         q->replicaCount ? q->replicaCount : ring->defaultQuorum.replicaCount,
         ring->affinityRules, ring->affinityRuleCount, &placement);
     if (result != CLUSTER_OK) {
@@ -2292,7 +2239,8 @@ clusterResult clusterRingPlanWrite(const clusterRing *ring, const void *key,
     out->suggestedTimeoutMs = 100 + (out->syncRequired * 50);
 
     /* Update stats */
-    ((clusterRing *)ring)->stats.writeOps++;
+    atomic_fetch_add_explicit(&((clusterRing *)ring)->writeOps, 1,
+                              memory_order_relaxed);
 
     /* Check if quorum is achievable */
     if (placement.healthyCount < q->writeQuorum) {
@@ -2307,19 +2255,17 @@ clusterResult clusterRingPlanWrite(const clusterRing *ring, const void *key,
 clusterResult clusterRingPlanRead(const clusterRing *ring, const void *key,
                                   uint32_t keyLen, const clusterQuorum *quorum,
                                   clusterReadSet *out) {
+    clusterReadSetInit(out);
     if (!ring || !key || !out) {
         return CLUSTER_ERR;
     }
 
     const clusterQuorum *q = quorum ? quorum : &ring->defaultQuorum;
 
-    /* Initialize with multilist */
-    clusterReadSetInit(out);
-
     /* Get placement */
     clusterPlacement placement;
     clusterResult result = clusterRingLocateWith(
-        ring, key, keyLen,
+        ring, ring->strategyType, key, keyLen,
         q->replicaCount ? q->replicaCount : ring->defaultQuorum.replicaCount,
         ring->affinityRules, ring->affinityRuleCount, &placement);
     if (result != CLUSTER_OK) {
@@ -2342,7 +2288,8 @@ clusterResult clusterRingPlanRead(const clusterRing *ring, const void *key,
     out->readRepair = q->readRepairEnabled;
 
     /* Update stats */
-    ((clusterRing *)ring)->stats.readOps++;
+    atomic_fetch_add_explicit(&((clusterRing *)ring)->readOps, 1,
+                              memory_order_relaxed);
 
     /* Check if quorum is achievable */
     if (placement.healthyCount < q->readQuorum) {
@@ -2528,6 +2475,16 @@ clusterResult clusterRingAddKeySpace(clusterRing *ring,
     ks->name = mdscnew(config->name);
     ks->id = ring->keySpaceCount;
     ks->quorum = config->quorum;
+
+    /* The keyspace places with its strategy: build that strategy's state
+     * if no one used it yet */
+    const clusterResult used = clusterRingUseStrategy(
+        ring, clusterRingResolveStrategy(ring, config->strategy));
+    if (used != CLUSTER_OK) {
+        mdscfree(ks->name);
+        zfree(ks);
+        return used;
+    }
     ks->strategy = config->strategy;
 
     /* Copy rules */
@@ -2585,10 +2542,13 @@ clusterResult clusterRingRemoveKeySpace(clusterRing *ring, const char *name) {
         }
     }
 
+    /* Its strategy loses a user (the last frees the strategy's state) */
+    clusterRingReleaseStrategy(ring,
+                               clusterRingResolveStrategy(ring, ks->strategy));
+
     /* Free keyspace */
-    if (ks->rules) {
-        zfree(ks->rules);
-    }
+    mdscfree(ks->name);
+    zfree(ks->rules);
     zfree(ks);
 
     ring->version++;
@@ -2762,18 +2722,15 @@ void clusterRingGetStats(const clusterRing *ring, clusterRingStats *stats) {
     stats->healthyNodes = ring->healthyNodeCount;
     stats->keySpaceCount = ring->keySpaceCount;
 
-    /* Virtual node count */
-    if (ring->strategyType == CLUSTER_STRATEGY_KETAMA ||
-        ring->strategyType == CLUSTER_STRATEGY_BOUNDED) {
-        stats->vnodeCount = ring->strategyData.ketama.vnodeCount;
-    } else {
-        stats->vnodeCount = 0;
-    }
+    /* Virtual node count (0 while no strategy in use places on vnodes) */
+    stats->vnodeCount = ring->vnodes.vnodeCount;
 
     /* Copy operation stats */
-    stats->locateOps = ring->stats.locateOps;
-    stats->writeOps = ring->stats.writeOps;
-    stats->readOps = ring->stats.readOps;
+    stats->locateOps =
+        atomic_load_explicit(&ring->locateOps, memory_order_relaxed);
+    stats->writeOps =
+        atomic_load_explicit(&ring->writeOps, memory_order_relaxed);
+    stats->readOps = atomic_load_explicit(&ring->readOps, memory_order_relaxed);
     stats->rebalanceMoves = ring->stats.rebalanceMoves;
 
     /* Copy timing stats */
@@ -2782,8 +2739,7 @@ void clusterRingGetStats(const clusterRing *ring, clusterRingStats *stats) {
     stats->maxLocateNs = ring->stats.maxLocateNs;
 
     /* Calculate load distribution */
-    if (ring->healthyNodeCount > 0 &&
-        ring->strategyType == CLUSTER_STRATEGY_KETAMA) {
+    if (ring->healthyNodeCount > 0 && clusterRingHasVnodes(ring)) {
         /* Count vnodes per healthy node */
         uint32_t maxVnodes = 0, minVnodes = UINT32_MAX;
         uint64_t totalVnodes = 0;
@@ -2826,13 +2782,10 @@ void clusterRingGetStats(const clusterRing *ring, clusterRingStats *stats) {
     stats->memoryBytes += ring->nodeCapacity * sizeof(clusterNode *);
     stats->memoryBytes += ring->nodeCount * sizeof(clusterNode);
 
-    if (ring->strategyType == CLUSTER_STRATEGY_KETAMA) {
-        stats->memoryBytes +=
-            ring->strategyData.ketama.vnodeCapacity * sizeof(clusterVnode);
-    } else if (ring->strategyType == CLUSTER_STRATEGY_MAGLEV) {
-        stats->memoryBytes +=
-            ring->strategyData.maglev.tableSize * sizeof(uint64_t);
-    }
+    /* Every live strategy's state (zero for the ones not in use) */
+    stats->memoryBytes += ring->vnodes.vnodeCapacity * sizeof(clusterVnode);
+    stats->memoryBytes += ring->jump.bucketCount * sizeof(*ring->jump.nodes);
+    stats->memoryBytes += ring->maglev.tableSize * sizeof(*ring->maglev.lookup);
 }
 
 /* ====================================================================
@@ -2939,7 +2892,7 @@ void clusterRingIterateNodesByLocation(const clusterRing *ring,
  *       [ 8] vnodeConfig.minVnodesPerNode (unsigned, 0..UINT32_MAX)
  *       [ 9] vnodeConfig.maxVnodesPerNode (unsigned, 0..UINT32_MAX)
  *       [10] vnodeConfig.replicaPointSpread (unsigned, 0|1)
- *       [11] strategyType            (unsigned, 0..5)
+ *       [11] strategyType            (unsigned, 1..6: never DEFAULT)
  *       [12] hashSeed                (unsigned, 0..UINT32_MAX)
  *       [13] boundedLoadPercent      (unsigned, 100..UINT32_MAX)
  *       [14] ring affinity rule count RR (unsigned, 0..255)
@@ -2974,7 +2927,7 @@ void clusterRingIterateNodesByLocation(const clusterRing *ring,
  *       [ 4] quorum.readQuorum       (unsigned, 0..255)
  *       [ 5] quorum.readRepairEnabled (unsigned, 0|1)
  *       [ 6] quorum.consistency      (unsigned, 0..5)
- *       [ 7] strategy                (unsigned, 0..5)
+ *       [ 7] strategy                (unsigned, 0..6; 0 = the ring's)
  *       [ 8] ruleCount RR            (unsigned, 0..255)
  *       then RR rules, 3 entries each as for the ring's rules
  *
@@ -3278,8 +3231,9 @@ clusterRing *clusterRingDeserialize(const void *buf, size_t bufLen) {
     }
     config.vnodes.replicaPointSpread = (v != 0);
 
-    /* [11] strategy */
-    if (!crReadUnsignedRange(f, &fe, 0, CLUSTER_STRATEGY_CUSTOM, &v)) {
+    /* [11] strategy (a ring's is never DEFAULT) */
+    if (!crReadUnsignedRange(f, &fe, CLUSTER_STRATEGY_KETAMA,
+                             CLUSTER_STRATEGY_CUSTOM, &v)) {
         return NULL;
     }
     config.strategyType = (clusterStrategyType)v;
@@ -3513,6 +3467,7 @@ static bool clusterRingPersistValidate(const void *structure) {
 
     /* The ring's configuration passes the checks clusterRingNew makes */
     if (!clusterRingValidStrategyType((uint64_t)ring->strategyType) ||
+        ring->strategyType == CLUSTER_STRATEGY_DEFAULT ||
         !clusterRingValidQuorum(&ring->defaultQuorum) ||
         !clusterRingValidRules(ring->affinityRules, ring->affinityRuleCount)) {
         return false;
@@ -3592,8 +3547,8 @@ void clusterRingRepr(const clusterRing *ring) {
     printf("  Keyspaces: %u\n", ring->keySpaceCount);
     printf("  Version: %" PRIu64 "\n", ring->version);
 
-    if (ring->strategyType == CLUSTER_STRATEGY_KETAMA) {
-        printf("  VNodes: %u\n", ring->strategyData.ketama.vnodeCount);
+    if (clusterRingHasVnodes(ring)) {
+        printf("  VNodes: %u\n", ring->vnodes.vnodeCount);
     }
 
     printf("  Default Quorum: N=%u W=%u R=%u\n",
@@ -5726,7 +5681,7 @@ static int testOptimizationEdgeCases(void) {
         clusterRingAddNode(ring, &nodeConfig);
 
         /* Check that vnodes have valid nodePtr */
-        const clusterKetamaData *data = &ring->strategyData.ketama;
+        const clusterKetamaData *data = &ring->vnodes;
         bool allPointersValid = true;
         for (uint32_t i = 0; i < data->vnodeCount; i++) {
             if (data->vnodes[i].nodePtr == NULL) {
@@ -5857,6 +5812,85 @@ static int testOptimizationEdgeCases(void) {
     }
 
     return err;
+}
+
+#define CLUSTER_RING_TEST_KEYS 2000u
+
+/* Primary node id for test key `k` ("c<k>") */
+static uint64_t clusterRingTestPrimary(const clusterRing *ring, uint32_t k) {
+    char key[16];
+    const int len = snprintf(key, sizeof(key), "c%u", k);
+    clusterPlacement p;
+    uint64_t id = 0;
+    if (clusterRingLocate(ring, key, (uint32_t)len, &p) == CLUSTER_OK) {
+        id = p.primary->id;
+        clusterPlacementFree(&p);
+    }
+    return id;
+}
+
+/* Primary node id for test key `k` placed in keyspace `ks` */
+static uint64_t clusterRingTestKeyspacePrimary(const clusterRing *ring,
+                                               const clusterKeySpace *ks,
+                                               uint32_t k) {
+    char key[16];
+    const int len = snprintf(key, sizeof(key), "c%u", k);
+    clusterPlacement p;
+    uint64_t id = 0;
+    if (clusterRingLocateKeyspace(ring, ks, key, (uint32_t)len, &p) ==
+        CLUSTER_OK) {
+        id = p.primary->id;
+        clusterPlacementFree(&p);
+    }
+    return id;
+}
+
+/* First write target and first read candidate for test key `k` */
+static void clusterRingTestPlanned(const clusterRing *ring, uint32_t k,
+                                   uint64_t *writeId, uint64_t *readId) {
+    char key[16];
+    const int len = snprintf(key, sizeof(key), "c%u", k);
+    clusterWriteSet ws;
+    clusterReadSet rs;
+    *writeId = *readId = 0;
+    if (clusterRingPlanWrite(ring, key, (uint32_t)len, NULL, &ws) ==
+        CLUSTER_OK) {
+        const clusterNode *n = clusterWriteSetGetTarget(&ws, 0);
+        *writeId = n ? n->id : 0;
+        clusterWriteSetFree(&ws);
+    }
+    if (clusterRingPlanRead(ring, key, (uint32_t)len, NULL, &rs) ==
+        CLUSTER_OK) {
+        const clusterNode *n = clusterReadSetGetCandidate(&rs, 0);
+        *readId = n ? n->id : 0;
+        clusterReadSetFree(&rs);
+    }
+}
+
+typedef struct clusterRingTestConcurrent {
+    const clusterRing *ring;
+    const clusterKeySpace *ks;
+    const uint64_t *expect;
+    const uint64_t *expectKs;
+    uint32_t mismatches;
+} clusterRingTestConcurrent;
+
+/* Every placement kind for every test key, each against its expectation:
+ * a placement, a keyspace placement, and the write and read plans (which
+ * lead with the primary) */
+static void *clusterRingTestPlaceAll(void *arg) {
+    clusterRingTestConcurrent *c = arg;
+    for (uint32_t k = 0; k < CLUSTER_RING_TEST_KEYS; k++) {
+        uint64_t writeId;
+        uint64_t readId;
+        clusterRingTestPlanned(c->ring, k, &writeId, &readId);
+        c->mismatches += clusterRingTestPrimary(c->ring, k) != c->expect[k];
+        c->mismatches += writeId != c->expect[k];
+        c->mismatches += readId != c->expect[k];
+        c->mismatches +=
+            clusterRingTestKeyspacePrimary(c->ring, c->ks, k) != c->expectKs[k];
+    }
+    return NULL;
 }
 
 int clusterRingTest(int argc, char *argv[]) {
@@ -6242,11 +6276,10 @@ int clusterRingTest(int argc, char *argv[]) {
                 nodes++;
             }
         }
-        const clusterBoundedData *bd = &ring->strategyData.bounded;
-        if (bd->fillNodes != nodes || bd->fillSum < sum - 1e-9 ||
-            bd->fillSum > sum + 1e-9) {
-            ERR("fill sum %f over %u, recomputed %f over %u", bd->fillSum,
-                bd->fillNodes, sum, nodes);
+        if (ring->fillNodes != nodes || ring->fillSum < sum - 1e-9 ||
+            ring->fillSum > sum + 1e-9) {
+            ERR("fill sum %f over %u, recomputed %f over %u", ring->fillSum,
+                ring->fillNodes, sum, nodes);
         }
         if (clusterRingSetNodeUsedBytes(ring, 99, 1) != CLUSTER_ERR_NOT_FOUND) {
             ERRR("usage set on a node not in the ring");
@@ -6258,7 +6291,7 @@ int clusterRingTest(int argc, char *argv[]) {
         clusterRing *back = persistOpsClusterRing.restore(snap, len);
         if (!back || back->boundedLoadPercent != 150 ||
             clusterNodeGetUsedBytes(clusterRingGetNode(back, 3)) != 900 ||
-            back->strategyData.bounded.fillNodes != nodes) {
+            back->fillNodes != nodes) {
             ERRR("bounded-load state did not round-trip");
         }
         clusterRingFree(back);
@@ -6267,6 +6300,159 @@ int clusterRingTest(int argc, char *argv[]) {
         cleaner(clusterRingFree) clusterRing *refused = clusterRingNew(&low);
         if (refused) {
             ERRR("a bound below 100 percent was accepted");
+        }
+    }
+
+    /* A keyspace places with its own strategy exactly as a ring of that
+     * strategy over the same nodes would, through node changes and a
+     * snapshot round trip, for every ring/keyspace strategy pair; the
+     * state a strategy keeps lives exactly while someone uses it */
+    TEST("keyspace strategies place as a ring of their strategy would") {
+        for (clusterStrategyType r = CLUSTER_STRATEGY_KETAMA;
+             r < CLUSTER_STRATEGY_CUSTOM; r++) {
+            for (clusterStrategyType s = CLUSTER_STRATEGY_DEFAULT;
+                 s < CLUSTER_STRATEGY_CUSTOM; s++) {
+                const clusterStrategyType eff =
+                    s == CLUSTER_STRATEGY_DEFAULT ? r : s;
+                const clusterRingConfig rc = {
+                    .strategyType = r,
+                    .defaultQuorum = {.replicaCount = 3},
+                    .hashSeed = 7};
+                const clusterRingConfig qc = {
+                    .strategyType = eff,
+                    .defaultQuorum = {.replicaCount = 3},
+                    .hashSeed = 7};
+                cleaner(clusterRingFree) clusterRing *ring =
+                    clusterRingNew(&rc);
+                cleaner(clusterRingFree) clusterRing *ref = clusterRingNew(&qc);
+                clusterRing *both[2] = {ring, ref};
+
+                /* The keyspace exists before most nodes: its strategy's
+                 * state must follow every later change */
+                for (uint64_t id = 1; id <= 3; id++) {
+                    const clusterNodeConfig nc = {.id = id,
+                                                  .capacityBytes = 1000};
+                    clusterRingAddNode(ring, &nc);
+                    clusterRingAddNode(ref, &nc);
+                }
+                const clusterKeySpaceConfig kc = {.name = "ks", .strategy = s};
+                clusterKeySpace *ks = NULL;
+                clusterRingAddKeySpace(ring, &kc, &ks);
+                for (int b = 0; b < 2; b++) {
+                    for (uint64_t id = 4; id <= 16; id++) {
+                        const clusterNodeConfig nc = {
+                            .id = id,
+                            .weight = (uint32_t)(50 + id * 10),
+                            .capacityBytes = 1000};
+                        clusterRingAddNode(both[b], &nc);
+                        clusterRingSetNodeUsedBytes(both[b], id, id * 40);
+                    }
+                    clusterRingRemoveNode(both[b], 5);
+                    clusterRingSetNodeState(both[b], 7, CLUSTER_NODE_DOWN);
+                    clusterRingSetNodeWeight(both[b], 9, 400);
+                }
+
+                for (int round = 0; round < 2; round++) {
+                    for (uint32_t k = 0; k < 150; k++) {
+                        char key[16];
+                        const int len = snprintf(key, sizeof(key), "q%u", k);
+                        clusterPlacement p;
+                        clusterPlacement q;
+                        clusterRingLocateKeyspace(ring, ks, key, (uint32_t)len,
+                                                  &p);
+                        clusterRingLocate(ref, key, (uint32_t)len, &q);
+                        const size_t n = clusterPlacementReplicaCount(&p);
+                        bool same = n == clusterPlacementReplicaCount(&q);
+                        for (size_t i = 0; same && i < n; i++) {
+                            same = clusterPlacementGetReplica(&p, i)->id ==
+                                   clusterPlacementGetReplica(&q, i)->id;
+                        }
+                        clusterPlacementFree(&p);
+                        clusterPlacementFree(&q);
+                        if (!same) {
+                            ERR("ring %d keyspace %d round %d: key %u placed "
+                                "differently",
+                                (int)r, (int)s, round, k);
+                            k = 150;
+                            round = 2;
+                        }
+                    }
+
+                    /* Round two: the same through a snapshot round trip */
+                    if (round == 0) {
+                        size_t snapLen = 0;
+                        uint8_t *snap =
+                            persistOpsClusterRing.snapshot(ring, &snapLen);
+                        clusterRing *back =
+                            persistOpsClusterRing.restore(snap, snapLen);
+                        zfree(snap);
+                        if (!back) {
+                            ERRR("restore refused the ring");
+                            break;
+                        }
+                        clusterRingFree(ring);
+                        ring = back;
+                        ks = (clusterKeySpace *)clusterRingGetKeySpace(ring,
+                                                                       "ks");
+                    }
+                }
+
+                /* Removing the keyspace frees state only it used */
+                clusterRingRemoveKeySpace(ring, "ks");
+                const bool vnodesLive = r == CLUSTER_STRATEGY_KETAMA ||
+                                        r == CLUSTER_STRATEGY_BOUNDED;
+                if ((ring->vnodes.vnodes != NULL) != vnodesLive ||
+                    (ring->jump.nodes != NULL) !=
+                        (r == CLUSTER_STRATEGY_JUMP) ||
+                    (ring->maglev.lookup != NULL) !=
+                        (r == CLUSTER_STRATEGY_MAGLEV)) {
+                    ERR("ring %d keyspace %d: state outlived its users", (int)r,
+                        (int)s);
+                }
+            }
+        }
+    }
+
+    /* Placements may run concurrently: a Maglev table a node change left
+     * stale is rebuilt once by whichever placement comes first, and every
+     * thread sees the same placements a single thread does */
+    TEST("concurrent placements on a stale Maglev table agree") {
+        const clusterRingConfig mc = {.strategyType = CLUSTER_STRATEGY_MAGLEV,
+                                      .defaultQuorum = {.replicaCount = 2}};
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&mc);
+        for (uint64_t id = 1; id <= 9; id++) {
+            const clusterNodeConfig nc = {.id = id};
+            clusterRingAddNode(ring, &nc);
+        }
+        const clusterKeySpaceConfig kc = {.name = "jump",
+                                          .quorum = {.replicaCount = 2},
+                                          .strategy = CLUSTER_STRATEGY_JUMP};
+        clusterKeySpace *ks = NULL;
+        if (clusterRingAddKeySpace(ring, &kc, &ks) != CLUSTER_OK) {
+            ERRR("jump keyspace refused");
+        }
+
+        clusterRingTestConcurrent ctx[4];
+        uint64_t expect[CLUSTER_RING_TEST_KEYS];
+        uint64_t expectKs[CLUSTER_RING_TEST_KEYS];
+        for (uint32_t k = 0; k < CLUSTER_RING_TEST_KEYS; k++) {
+            expect[k] = clusterRingTestPrimary(ring, k);
+            expectKs[k] = clusterRingTestKeyspacePrimary(ring, ks, k);
+        }
+        clusterRingSetNodeState(ring, 4, CLUSTER_NODE_DOWN);
+        clusterRingSetNodeState(ring, 4, CLUSTER_NODE_UP); /* stale, same set */
+
+        pthread_t threads[4];
+        for (int t = 0; t < 4; t++) {
+            ctx[t] = (clusterRingTestConcurrent){
+                .ring = ring, .ks = ks, .expect = expect, .expectKs = expectKs};
+            pthread_create(&threads[t], NULL, clusterRingTestPlaceAll, &ctx[t]);
+        }
+        for (int t = 0; t < 4; t++) {
+            pthread_join(threads[t], NULL);
+            if (ctx[t].mismatches) {
+                ERR("thread %d: %u placements differed", t, ctx[t].mismatches);
+            }
         }
     }
 

@@ -10,6 +10,9 @@
 #include "multiarray.h"
 #include "multidict.h"
 
+#include <pthread.h>
+#include <stdatomic.h>
+
 __BEGIN_DECLS
 
 /* ====================================================================
@@ -115,40 +118,22 @@ typedef struct clusterKetamaData {
     bool needsSort; /* Dirty flag after modifications */
 } clusterKetamaData;
 
+/* Healthy nodes in ring order: Jump's buckets */
 typedef struct clusterJumpData {
-    uint64_t *nodeIds; /* Node IDs in bucket order */
+    const clusterNode **nodes;
     uint32_t bucketCount;
 } clusterJumpData;
 
+/* Maglev's lookup table of healthy nodes (NULL: no healthy node).  A node
+ * change marks it stale; the first placement after rebuilds it under
+ * `lock` (double-checked on `stale`), so a run of changes costs one
+ * rebuild and concurrent placements stay safe. */
 typedef struct clusterMaglevData {
-    uint64_t *lookup;   /* Lookup table */
+    const clusterNode **lookup;
     uint32_t tableSize; /* Prime number size */
-    bool needsRebuild;
+    _Atomic bool stale;
+    pthread_mutex_t lock;
 } clusterMaglevData;
-
-typedef struct clusterRendezvousData {
-    /* No extra data needed - computed on-demand */
-    uint32_t _unused;
-} clusterRendezvousData;
-
-/* Bounded-load places on a Ketama vnode ring: `ketama` leads so the
- * vnode code reaches it as strategyData.ketama for either strategy.  The
- * fill sum (usedBytes / capacityBytes over healthy nodes with a capacity)
- * is kept current by every change to a node's state or usage, so the
- * mean fill a placement compares against costs nothing to read. */
-typedef struct clusterBoundedData {
-    clusterKetamaData ketama;
-    double fillSum;
-    uint32_t fillNodes;
-} clusterBoundedData;
-
-typedef union clusterStrategyData {
-    clusterKetamaData ketama;
-    clusterJumpData jump;
-    clusterMaglevData maglev;
-    clusterRendezvousData rendezvous;
-    clusterBoundedData bounded;
-} clusterStrategyData;
 
 /* ====================================================================
  * Main Ring Structure
@@ -164,10 +149,22 @@ struct clusterRing {
     uint32_t nodeCapacity;
     uint32_t healthyNodeCount;
 
-    /* Strategy */
+    /* Strategy: the ring's own (never DEFAULT) and its custom hooks */
     clusterStrategyType strategyType;
     clusterStrategy *customStrategy;
-    clusterStrategyData strategyData;
+
+    /* Placement state per strategy, live while some user (the ring itself
+     * or a keyspace) places with a strategy that needs it, and current
+     * after every node change: the vnode ring (Ketama and bounded-load),
+     * Jump's buckets and Maglev's table.  Rendezvous and custom keep none.
+     * The bounded-load fill sum (usedBytes / capacityBytes over healthy
+     * nodes with a capacity) is always kept. */
+    uint32_t strategyUsers[CLUSTER_STRATEGY_COUNT];
+    clusterKetamaData vnodes;
+    clusterJumpData jump;
+    clusterMaglevData maglev;
+    double fillSum;
+    uint32_t fillNodes;
 
     /* Configuration */
     clusterVnodeConfig vnodeConfig;
@@ -204,29 +201,20 @@ struct clusterRing {
     uint64_t version;
     uint64_t lastModified;
 
-    /* Stats */
+    /* Stats.  Placement reads may run concurrently, so the counters they
+     * bump are relaxed atomics */
     clusterRingStats stats;
+    _Atomic uint64_t locateOps;
+    _Atomic uint64_t writeOps;
+    _Atomic uint64_t readOps;
 };
 
 /* ====================================================================
  * Internal Functions
  * ==================================================================== */
 
-/* Strategy initialization */
-clusterResult clusterRingInitKetama(clusterRing *ring);
-clusterResult clusterRingInitJump(clusterRing *ring);
-clusterResult clusterRingInitMaglev(clusterRing *ring);
-clusterResult clusterRingInitRendezvous(clusterRing *ring);
-clusterResult clusterRingInitBounded(clusterRing *ring);
-
-/* Strategy cleanup */
-void clusterRingFreeKetama(clusterRing *ring);
-void clusterRingFreeJump(clusterRing *ring);
-void clusterRingFreeMaglev(clusterRing *ring);
-void clusterRingFreeRendezvous(clusterRing *ring);
-void clusterRingFreeBounded(clusterRing *ring);
-
-/* Strategy-specific locate */
+/* Strategy-specific locate: up to maxNodes distinct healthy nodes in the
+ * strategy's preference order (the strategy's state must be live) */
 uint32_t clusterLocateKetama(const clusterRing *ring, const void *key,
                              uint32_t keyLen, const clusterNode **out,
                              uint32_t maxNodes);
