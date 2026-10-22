@@ -792,10 +792,7 @@ void clusterRingFree(clusterRing *ring) {
         zfree(ring->rebalancePlan);
     }
 
-    /* Free health provider */
-    if (ring->healthProvider && ring->healthProvider->freeProvider) {
-        ring->healthProvider->freeProvider(ring->healthProvider->providerData);
-    }
+    clusterRingSetHealthProvider(ring, NULL);
 
     /* Free ring name */
     if (ring->name) {
@@ -2393,30 +2390,21 @@ clusterResult clusterRingSelectReadNode(const clusterRing *ring,
     *selected = NULL;
     size_t replicaCount = clusterPlacementReplicaCount(placement);
 
-    /* If load-aware routing, pick lowest-load healthy node */
-    if (ring->loadAwareRouting && ring->healthProvider) {
-        float lowestLoad = 2.0f; /* > 1.0 */
-
-        for (size_t i = 0; i < replicaCount; i++) {
-            const clusterNode *node = clusterPlacementGetReplica(placement, i);
-            if (!node || node->state != CLUSTER_NODE_UP) {
-                continue;
-            }
-
-            /* Use cached load or query provider */
-            float load = node->lastLoad.cpuUsage;
-            if (load < lowestLoad) {
-                lowestLoad = load;
-                *selected = node;
-            }
-        }
-
-        if (*selected) {
-            return CLUSTER_OK;
+    /* The least loaded healthy replica with a load report (the first of
+     * equals, so ties keep preference order) */
+    for (size_t i = 0; i < replicaCount; i++) {
+        const clusterNode *node = clusterPlacementGetReplica(placement, i);
+        if (node && node->state == CLUSTER_NODE_UP && node->loadReported &&
+            (!*selected ||
+             node->lastLoad.cpuUsage < (*selected)->lastLoad.cpuUsage)) {
+            *selected = node;
         }
     }
+    if (*selected) {
+        return CLUSTER_OK;
+    }
 
-    /* Default: return first healthy node */
+    /* Else the first healthy replica */
     for (size_t i = 0; i < replicaCount; i++) {
         const clusterNode *node = clusterPlacementGetReplica(placement, i);
         if (node && node->state == CLUSTER_NODE_UP) {
@@ -2728,11 +2716,51 @@ clusterResult clusterRingCancelRebalance(clusterRing *ring) {
  * ==================================================================== */
 
 void clusterRingSetHealthProvider(clusterRing *ring,
-                                  clusterHealthProvider *provider) {
-    if (ring) {
-        ring->healthProvider = provider;
-        ring->loadAwareRouting = (provider != NULL);
+                                  const clusterHealthProvider *provider) {
+    if (!ring) {
+        return;
     }
+
+    const clusterHealthProvider old = ring->healthProvider;
+    const bool hadProvider = ring->hasHealthProvider;
+    ring->healthProvider = provider ? *provider : (clusterHealthProvider){0};
+    ring->hasHealthProvider = provider != NULL;
+
+    /* The replaced provider's data goes unless the new one keeps it */
+    if (hadProvider && old.freeProvider &&
+        !(provider && provider->providerData == old.providerData)) {
+        old.freeProvider(old.providerData);
+    }
+}
+
+const clusterNodeHealth *clusterNodeGetHealth(const clusterNode *node) {
+    return node ? &node->lastHealth : NULL;
+}
+
+const clusterNodeLoad *clusterNodeGetLoad(const clusterNode *node) {
+    return node ? &node->lastLoad : NULL;
+}
+
+clusterResult clusterRingPollHealth(clusterRing *ring) {
+    if (!ring || !ring->hasHealthProvider) {
+        return CLUSTER_ERR;
+    }
+
+    /* By id: a health update may change the node's state */
+    const clusterHealthProvider *p = &ring->healthProvider;
+    for (uint32_t i = 0; i < ring->nodeCount; i++) {
+        const uint64_t id = ring->nodeArray[i]->id;
+        if (p->checkHealth) {
+            const clusterNodeHealth health =
+                p->checkHealth(p->providerData, id);
+            clusterRingUpdateNodeHealth(ring, id, &health);
+        }
+        if (p->getLoad) {
+            const clusterNodeLoad load = p->getLoad(p->providerData, id);
+            clusterRingUpdateNodeLoad(ring, id, &load);
+        }
+    }
+    return CLUSTER_OK;
 }
 
 clusterResult clusterRingUpdateNodeHealth(clusterRing *ring, uint64_t nodeId,
@@ -2751,15 +2779,18 @@ clusterResult clusterRingUpdateNodeHealth(clusterRing *ring, uint64_t nodeId,
     node->lastHealth = *health;
     node->lastHealthCheck = clusterGetTimeMs();
 
-    /* Auto-update state based on health */
-    if (!health->reachable && node->state == CLUSTER_NODE_UP) {
+    /* Consecutive unreachable reports suspect an UP node; a reachable one
+     * clears the count and restores a SUSPECT node */
+    if (!health->reachable) {
         node->failureCount++;
-        if (node->failureCount >= 3) {
+        if (node->state == CLUSTER_NODE_UP && node->failureCount >= 3) {
             clusterRingSetNodeState(ring, nodeId, CLUSTER_NODE_SUSPECT);
         }
-    } else if (health->reachable && node->state == CLUSTER_NODE_SUSPECT) {
+    } else {
         node->failureCount = 0;
-        clusterRingSetNodeState(ring, nodeId, CLUSTER_NODE_UP);
+        if (node->state == CLUSTER_NODE_SUSPECT) {
+            clusterRingSetNodeState(ring, nodeId, CLUSTER_NODE_UP);
+        }
     }
 
     return CLUSTER_OK;
@@ -2780,6 +2811,7 @@ clusterResult clusterRingUpdateNodeLoad(clusterRing *ring, uint64_t nodeId,
     clusterNode *node = (clusterNode *)valbox.data.ptr;
     node->lastLoad = *load;
     node->lastLoadCheck = clusterGetTimeMs();
+    node->loadReported = true;
 
     return CLUSTER_OK;
 }
@@ -5946,6 +5978,28 @@ static void clusterRingTestPlanned(const clusterRing *ring, uint32_t k,
     }
 }
 
+/* A health provider over per-node reachability and cpu (ids 1..8) */
+typedef struct clusterRingTestHealth {
+    bool reachable[9];
+    float cpu[9];
+    uint32_t frees;
+} clusterRingTestHealth;
+
+static clusterNodeHealth clusterRingTestCheckHealth(void *data, uint64_t id) {
+    const clusterRingTestHealth *h = data;
+    return (clusterNodeHealth){.reachable = h->reachable[id]};
+}
+
+static clusterNodeLoad clusterRingTestGetLoad(void *data, uint64_t id) {
+    const clusterRingTestHealth *h = data;
+    return (clusterNodeLoad){.cpuUsage = h->cpu[id]};
+}
+
+static void clusterRingTestFreeHealth(void *data) {
+    clusterRingTestHealth *h = data;
+    h->frees++;
+}
+
 typedef struct clusterRingTestConcurrent {
     const clusterRing *ring;
     const clusterKeySpace *ks;
@@ -6568,6 +6622,104 @@ int clusterRingTest(int argc, char *argv[]) {
             stats.p99LocateNs == 0 || stats.p99LocateNs > stats.maxLocateNs) {
             ERR("latency avg %" PRIu64 " p99 %" PRIu64 " max %" PRIu64,
                 stats.avgLocateNs, stats.p99LocateNs, stats.maxLocateNs);
+        }
+    }
+
+    TEST("a health provider drives node state and read selection") {
+        clusterRingTestHealth first = {0};
+        clusterRingTestHealth second = {0};
+        for (uint64_t id = 1; id <= 8; id++) {
+            second.reachable[id] = true;
+            second.cpu[id] = 0.9f - 0.1f * (float)id;
+        }
+
+        {
+            const clusterRingConfig rc = {.strategyType =
+                                              CLUSTER_STRATEGY_KETAMA,
+                                          .defaultQuorum = {.replicaCount = 3}};
+            cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&rc);
+            for (uint64_t id = 1; id <= 8; id++) {
+                const clusterNodeConfig nc = {.id = id};
+                clusterRingAddNode(ring, &nc);
+            }
+            if (clusterRingPollHealth(ring) != CLUSTER_ERR) {
+                ERRR("polled without a provider");
+            }
+
+            /* Without load reports the read goes to the first replica */
+            clusterPlacement p;
+            clusterRingLocate(ring, "k", 1, &p);
+            const clusterNode *selected = NULL;
+            clusterRingSelectReadNode(ring, &p, &selected);
+            if (selected != p.primary) {
+                ERRR("unreported loads should keep preference order");
+            }
+
+            /* Replacing the provider frees the replaced one's data once;
+             * the stack-built provider is copied */
+            {
+                const clusterHealthProvider hp = {
+                    .checkHealth = clusterRingTestCheckHealth,
+                    .providerData = &first,
+                    .freeProvider = clusterRingTestFreeHealth};
+                clusterRingSetHealthProvider(ring, &hp);
+            }
+            {
+                const clusterHealthProvider hp = {
+                    .checkHealth = clusterRingTestCheckHealth,
+                    .getLoad = clusterRingTestGetLoad,
+                    .providerData = &second,
+                    .freeProvider = clusterRingTestFreeHealth};
+                clusterRingSetHealthProvider(ring, &hp);
+            }
+            if (first.frees != 1 || second.frees != 0) {
+                ERR("frees after replace: %u %u", first.frees, second.frees);
+            }
+
+            /* Loads arrive by polling: the least loaded replica reads */
+            clusterRingPollHealth(ring);
+            const clusterNode *least = NULL;
+            for (size_t r = 0; r < clusterPlacementReplicaCount(&p); r++) {
+                const clusterNode *n = clusterPlacementGetReplica(&p, r);
+                if (!least || second.cpu[n->id] < second.cpu[least->id]) {
+                    least = n;
+                }
+            }
+            clusterRingSelectReadNode(ring, &p, &selected);
+            if (selected != least || clusterNodeGetLoad(selected)->cpuUsage !=
+                                         second.cpu[least->id]) {
+                ERRR("read did not go to the least loaded replica");
+            }
+            clusterPlacementFree(&p);
+
+            /* Three consecutive unreachable polls suspect a node; a
+             * reachable report between them restarts the count */
+            const uint64_t victim = 5;
+            const clusterNode *node = clusterRingGetNode(ring, victim);
+            second.reachable[victim] = false;
+            clusterRingPollHealth(ring);
+            clusterRingPollHealth(ring);
+            second.reachable[victim] = true;
+            clusterRingPollHealth(ring);
+            second.reachable[victim] = false;
+            clusterRingPollHealth(ring);
+            clusterRingPollHealth(ring);
+            if (clusterNodeGetState(node) != CLUSTER_NODE_UP) {
+                ERRR("non-consecutive failures suspected the node");
+            }
+            clusterRingPollHealth(ring);
+            if (clusterNodeGetState(node) != CLUSTER_NODE_SUSPECT ||
+                clusterNodeGetHealth(node)->reachable) {
+                ERRR("three consecutive failures did not suspect the node");
+            }
+            second.reachable[victim] = true;
+            clusterRingPollHealth(ring);
+            if (clusterNodeGetState(node) != CLUSTER_NODE_UP) {
+                ERRR("a reachable report did not restore the node");
+            }
+        }
+        if (first.frees != 1 || second.frees != 1) {
+            ERR("frees after ring free: %u %u", first.frees, second.frees);
         }
     }
 

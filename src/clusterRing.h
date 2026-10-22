@@ -470,7 +470,9 @@ clusterResult clusterRingPlanRead(const clusterRing *ring, const void *key,
                                   uint32_t keyLen, const clusterQuorum *quorum,
                                   clusterReadSet *out);
 
-/* Select best read node from placement (load-aware if enabled) */
+/* Select the read node from a placement: the least loaded healthy replica
+ * among those with a load report (clusterRingUpdateNodeLoad or the
+ * provider), else the first healthy replica */
 clusterResult clusterRingSelectReadNode(const clusterRing *ring,
                                         const clusterPlacement *placement,
                                         const clusterNode **selected);
@@ -573,16 +575,32 @@ typedef struct clusterHealthProvider {
     void (*freeProvider)(void *data);
 } clusterHealthProvider;
 
-/* Enable health/load-aware routing */
+/* Install the provider clusterRingPollHealth asks (copied; NULL removes
+ * it).  The ring owns providerData from here: it calls freeProvider on it
+ * when the provider is replaced or removed and when the ring is freed. */
 void clusterRingSetHealthProvider(clusterRing *ring,
-                                  clusterHealthProvider *provider);
+                                  const clusterHealthProvider *provider);
 
-/* Manual health update (if not using provider) */
+/* Ask the provider about every node (checkHealth and getLoad, each when
+ * set) and apply the answers as clusterRingUpdateNodeHealth/Load would.
+ * CLUSTER_ERR when no provider is installed. */
+clusterResult clusterRingPollHealth(clusterRing *ring);
+
+/* Record a node's health.  Three consecutive unreachable reports mark an
+ * UP node SUSPECT (it leaves placement); a reachable report clears the
+ * count and returns a SUSPECT node to UP.  Other states change only by
+ * clusterRingSetNodeState. */
 clusterResult clusterRingUpdateNodeHealth(clusterRing *ring, uint64_t nodeId,
                                           const clusterNodeHealth *health);
 
+/* Record a node's load; clusterRingSelectReadNode prefers the least
+ * loaded (by cpuUsage) of the replicas with a load report */
 clusterResult clusterRingUpdateNodeLoad(clusterRing *ring, uint64_t nodeId,
                                         const clusterNodeLoad *load);
+
+/* A node's last recorded health and load (zeroed before the first) */
+const clusterNodeHealth *clusterNodeGetHealth(const clusterNode *node);
+const clusterNodeLoad *clusterNodeGetLoad(const clusterNode *node);
 
 /* ====================================================================
  * Statistics & Observability

@@ -41,6 +41,7 @@ struct clusterNode {
     clusterNodeLoad lastLoad;
     uint64_t lastHealthCheck;
     uint64_t lastLoadCheck;
+    bool loadReported; /* lastLoad holds a report */
 
     /* Virtual nodes (for Ketama) */
     uint32_t vnodeCount;
@@ -203,9 +204,9 @@ struct clusterRing {
     clusterRebalancePlan *rebalancePlan;
     bool rebalanceInProgress;
 
-    /* Health provider */
-    clusterHealthProvider *healthProvider;
-    bool loadAwareRouting;
+    /* Health provider (a copy; installed while hasHealthProvider) */
+    clusterHealthProvider healthProvider;
+    bool hasHealthProvider;
 
     /* Callbacks */
     clusterNodeStateCallback stateCallback;
