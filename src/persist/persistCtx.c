@@ -191,42 +191,34 @@ bool persistCtxInitForType(persistCtx *ctx, const persistOps *ops) {
  * ============================================================================
  */
 
-bool persistCtxLogOp(persistCtx *ctx, persistOp op, const void *args,
-                     size_t argc) {
+persistLogResult persistCtxLogOp(persistCtx *ctx, persistOp op,
+                                 const void *args, size_t argc) {
     if (!ctx || !ctx->p) {
-        return false;
+        return PERSIST_LOG_REFUSED;
     }
 
-    /* Log to WAL */
-    if (!persistLogOp(ctx->p, op, args, argc)) {
-        return false;
+    /* Log to WAL; a refused op is not in it, so the caller applies
+     * nothing */
+    persistLogResult result = persistLogOp(ctx->p, op, args, argc);
+    if (result == PERSIST_LOG_REFUSED) {
+        return result;
     }
 
     /* Update counters */
     ctx->opsSinceCompact++;
     ctx->totalOps++;
 
-    /* Handle sync policy. These modes exist to promise durability, so a
-     * failed fsync must surface as a failed op rather than a silent
-     * durability lie - the entry is in the WAL but not yet on stable
-     * storage, and the caller needs to know that. */
-    if (ctx->config.syncMode == PERSIST_CTX_SYNC_ALWAYS) {
-        if (!persistSync(ctx->p)) {
-            return false;
-        }
+    /* The persist carries this context's sync mode, so persistLogOp made
+     * the sync the policy asks for.  The entry is logged either way: a
+     * failed sync (NOT_DURABLE) never fails the op, or the caller would
+     * leave memory behind the WAL; the next sync retries */
+    if (result == PERSIST_LOG_DURABLE) {
         ctx->totalSyncs++;
-    } else if (ctx->config.syncMode == PERSIST_CTX_SYNC_EVERYSEC) {
-        uint64_t now = getTimeMicroseconds();
-        if (now - ctx->lastSyncTime >= 1000000) { /* 1 second */
-            if (!persistSync(ctx->p)) {
-                return false;
-            }
-            ctx->lastSyncTime = now;
-            ctx->totalSyncs++;
-        }
+        ctx->lastSyncTime = getTimeMicroseconds();
+    } else if (result == PERSIST_LOG_NOT_DURABLE) {
+        ctx->notDurableOps++;
     }
-
-    return true;
+    return result;
 }
 
 bool persistCtxMaybeCompact(persistCtx *ctx, void *structure,
@@ -388,12 +380,15 @@ void persistCtxGetStats(const persistCtx *ctx, persistCtxStats *stats) {
 
     stats->totalOps = ctx->totalOps;
     stats->totalSyncs = ctx->totalSyncs;
+    stats->notDurableOps = ctx->notDurableOps;
     stats->totalCompactions = ctx->totalCompactions;
     stats->opsSinceCompact = ctx->opsSinceCompact;
 
     if (ctx->p) {
         persistStats pstats;
         persistGetStats(ctx->p, &pstats);
+        stats->syncFailures = pstats.syncFailures;
+        stats->lastSyncError = pstats.lastSyncError;
         stats->snapshotBytes = pstats.snapshotBytes;
         stats->walBytes = pstats.walBytes;
         /* Compaction starts a fresh WAL, so the live WAL size IS the
@@ -413,6 +408,13 @@ void persistCtxGetStats(const persistCtx *ctx, persistCtxStats *stats) {
 #include "../dkTestTmp.h"
 #include "flexP.h"
 #include <unistd.h>
+
+/* A store sync that fails as a full device would */
+static bool persistCtxTestFailSync(void *ctx) {
+    (void)ctx;
+    errno = ENOSPC;
+    return false;
+}
 
 int persistCtxTest(int argc, char *argv[]) {
     (void)argc;
@@ -507,6 +509,60 @@ int persistCtxTest(int argc, char *argv[]) {
                 ERRR("accepted a NULL context");
             }
 
+            flexCloseP(f);
+            persistCtxFree(ctx);
+        }
+    }
+
+    TEST("a failed sync keeps the op applied, logged and counted") {
+        char path[PATH_MAX];
+        if (!dkTestTmpDirPath(&tmp, "persistCtxSyncFail", path, sizeof(path))) {
+            ERR("could not create a scratch directory: %s", strerror(errno));
+        } else {
+            persistCtxConfig config = persistCtxDefaultConfig();
+            config.syncMode = PERSIST_CTX_SYNC_ALWAYS;
+            /* @own: caller; free=persistCtxFree */
+            persistCtx *ctx = persistCtxNew(path, &config);
+            /* @own: caller; free=flexCloseP */
+            flexP *f = flexNewP(ctx);
+            const databox one = DATABOX_SIGNED(1);
+            flexPushTailP(f, &one);
+
+            /* The device fills for one op: the op is applied in memory
+             * and in the WAL alike, reported and counted */
+            persistStore *wal = persistWALStore(ctx->p);
+            bool (*sync)(void *) = wal->sync;
+            wal->sync = persistCtxTestFailSync;
+            const databox two = DATABOX_SIGNED(2);
+            if (persistCtxLogOp(ctx, PERSIST_OP_PUSH_TAIL, &two, 1) !=
+                PERSIST_LOG_NOT_DURABLE) {
+                ERRR("a failed sync was not reported as NOT_DURABLE");
+            }
+            flexPushTailP(f, &two);
+            wal->sync = sync;
+
+            persistCtxStats stats;
+            persistCtxGetStats(ctx, &stats);
+            if (stats.notDurableOps != 2 || stats.syncFailures != 2 ||
+                stats.lastSyncError != ENOSPC) {
+                ERR("not durable %" PRIu64 ", failures %" PRIu64 ", error %d",
+                    stats.notDurableOps, stats.syncFailures,
+                    stats.lastSyncError);
+            }
+            if (flexCountP(f) != 2) {
+                ERRR("the wrapper dropped an op whose sync failed");
+            }
+            flexCloseP(f);
+            persistCtxFree(ctx);
+
+            /* Recovery replays all three logged pushes */
+            /* @own: caller; free=persistCtxFree */
+            ctx = persistCtxNew(path, &config);
+            /* @own: caller; free=flexCloseP */
+            f = flexOpenP(ctx);
+            if (!f || flexCountP(f) != 3) {
+                ERRR("ops logged across a failed sync did not recover");
+            }
             flexCloseP(f);
             persistCtxFree(ctx);
         }

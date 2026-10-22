@@ -434,6 +434,14 @@ bool persistAttachWAL(persist *p, persistStore *store) {
     return true;
 }
 
+persistStore *persistSnapshotStore(const persist *p) {
+    return p ? p->snapshotStore : NULL;
+}
+
+persistStore *persistWALStore(const persist *p) {
+    return p ? p->walStore : NULL;
+}
+
 bool persistSetIntegrityKey(persist *p, const uint8_t *key, size_t key_len) {
     if (!p) {
         return false;
@@ -1196,20 +1204,21 @@ static bool persistWALWrite(persist *p, const void *data, size_t len) {
  * checksum. */
 #define PERSIST_WAL_ENTRY_PREAMBLE_LEN ((size_t)9) /* seq(8) + op(1) */
 
-bool persistLogOp(persist *p, persistOp op, const void *args, size_t argc) {
+persistLogResult persistLogOp(persist *p, persistOp op, const void *args,
+                              size_t argc) {
     if (!p || !p->walStore || !p->ops->encodeOp) {
-        return false;
+        return PERSIST_LOG_REFUSED;
     }
 
     flexEnvelopeWrapParams wrap;
     flexEnvelopeAlgo algo;
     if (!persistBuildWrapParams(p, &wrap, &algo)) {
-        return false;
+        return PERSIST_LOG_REFUSED;
     }
 
     if (!p->walInitialized) {
         if (!persistWALInit(p)) {
-            return false;
+            return PERSIST_LOG_REFUSED;
         }
         p->walInitialized = true;
     }
@@ -1217,7 +1226,7 @@ bool persistLogOp(persist *p, persistOp op, const void *args, size_t argc) {
     size_t opDataLen = 0;
     uint8_t *opData = p->ops->encodeOp(op, args, argc, &opDataLen);
     if (!opData && opDataLen > 0) {
-        return false;
+        return PERSIST_LOG_REFUSED;
     }
 
     const size_t payloadLen = PERSIST_WAL_ENTRY_PREAMBLE_LEN + opDataLen;
@@ -1225,7 +1234,7 @@ bool persistLogOp(persist *p, persistOp op, const void *args, size_t argc) {
         flexEnvelopeWrappedSize((uint64_t)payloadLen, algo, wrap.on_wire_flags);
     if (envelopeLen == 0 || envelopeLen > (size_t)PERSIST_WAL_ENTRY_MAX_BYTES) {
         zfree(opData);
-        return false;
+        return PERSIST_LOG_REFUSED;
     }
 
     /* Braced so both scratch buffers - each up to a full WAL entry -
@@ -1249,7 +1258,7 @@ bool persistLogOp(persist *p, persistOp op, const void *args, size_t argc) {
                                   (uint64_t)payloadLen, &wrap,
                                   &envelopeWritten) ||
                 envelopeWritten != envelopeLen) {
-                return false;
+                return PERSIST_LOG_REFUSED;
             }
         }
 
@@ -1263,28 +1272,24 @@ bool persistLogOp(persist *p, persistOp op, const void *args, size_t argc) {
         if (!persistWALWrite(p, &envelopeLen32, sizeof(envelopeLen32)) ||
             !persistWALWrite(p, envelope, envelopeLen)) {
             persistWALRollback(p, entryStart);
-            return false;
+            return PERSIST_LOG_REFUSED;
         }
     }
 
     p->walSequence++;
     p->stats.walEntries++;
 
-    /* Handle sync mode */
+    /* The sync the policy asks for now, if any: best effort, reported */
+    bool syncNow = false;
     switch (p->config.syncMode) {
     case PERSIST_SYNC_ALWAYS:
-        persistWALFlush(p);
-        if (p->walStore->sync) {
-            p->walStore->sync(p->walStore->ctx);
-        }
+        syncNow = true;
         break;
     case PERSIST_SYNC_EVERYSEC: {
-        uint64_t now = persistGetMicroseconds();
+        const uint64_t now = persistGetMicroseconds();
         if (now - p->lastSyncTime >= 1000000) { /* 1 second */
-            persistWALFlush(p);
-            if (p->walStore->sync) {
-                p->walStore->sync(p->walStore->ctx);
-            }
+            syncNow = true;
+            /* A failed sync waits for the next second, not the next op */
             p->lastSyncTime = now;
         }
         break;
@@ -1294,7 +1299,10 @@ bool persistLogOp(persist *p, persistOp op, const void *args, size_t argc) {
         break;
     }
 
-    return true;
+    if (!syncNow) {
+        return PERSIST_LOG_BUFFERED;
+    }
+    return persistSync(p) ? PERSIST_LOG_DURABLE : PERSIST_LOG_NOT_DURABLE;
 }
 
 /* Thread-local state for WAL replay to avoid repeated allocation/free.
@@ -1677,18 +1685,17 @@ bool persistSync(persist *p) {
         return false;
     }
 
-    /* Flush WAL buffer */
-    if (!persistWALFlush(p)) {
+    /* Write out the buffer, then sync the store; a failure keeps what is
+     * buffered (or written) for the next sync */
+    if (!persistWALFlush(p) || (p->walStore && p->walStore->sync &&
+                                !p->walStore->sync(p->walStore->ctx))) {
+        p->stats.syncFailures++;
+        p->stats.lastSyncError = errno ? (int32_t)errno : EIO;
         return false;
     }
 
-    /* Sync WAL to disk */
-    if (p->walStore && p->walStore->sync) {
-        if (!p->walStore->sync(p->walStore->ctx)) {
-            return false;
-        }
-    }
-
+    p->stats.syncCount++;
+    p->stats.lastSyncError = 0;
     p->lastSyncTime = persistGetMicroseconds();
     return true;
 }
@@ -5093,6 +5100,13 @@ static ssize_t persistTestBudgetWrite(void *ctx, const void *data, size_t len) {
     persistTestWriteBudget -= fit;
     const ssize_t wrote = persistTestMemWrite(ctx, data, fit);
     return fit == len ? wrote : -1;
+}
+
+/* A store sync that fails as a full device would */
+static bool persistTestFailSync(void *ctx) {
+    (void)ctx;
+    errno = ENOSPC;
+    return false;
 }
 
 /* Element 'id' of the multilist wide-element tests, built in 'out' (and
@@ -8849,6 +8863,58 @@ int persistTest(int argc, char *argv[]) {
                 ERR("buffer %zu: entries after a failed write were lost",
                     buffers[b]);
             }
+        }
+    }
+
+    TEST("a failed sync reports the op logged but not durable, then retries") {
+        persistConfig config = persistDefaultConfig();
+        config.syncMode = PERSIST_SYNC_ALWAYS;
+        cleaner(persistClose) persist *p = persistTestFlexPersist(&config);
+        const databox v = DATABOX_SIGNED(1);
+        if (persistLogOp(p, PERSIST_OP_PUSH_TAIL, &v, 1) !=
+            PERSIST_LOG_DURABLE) {
+            ERRR("an ALWAYS op with a working sync was not durable");
+        }
+
+        /* The device fills: logged, not durable, counted, never refused */
+        bool (*sync)(void *) = p->walStore->sync;
+        p->walStore->sync = persistTestFailSync;
+        persistStats stats;
+        if (persistLogOp(p, PERSIST_OP_PUSH_TAIL, &v, 1) !=
+            PERSIST_LOG_NOT_DURABLE) {
+            ERRR("a failed sync was not reported as NOT_DURABLE");
+        }
+        persistGetStats(p, &stats);
+        if (stats.syncFailures != 1 || stats.lastSyncError != ENOSPC ||
+            stats.walEntries != 2) {
+            ERR("after a failed sync: %" PRIu64 " failures, error %d, %" PRIu64
+                " entries",
+                stats.syncFailures, stats.lastSyncError, stats.walEntries);
+        }
+
+        /* The device recovers: the next sync clears the error */
+        p->walStore->sync = sync;
+        if (persistLogOp(p, PERSIST_OP_PUSH_TAIL, &v, 1) !=
+            PERSIST_LOG_DURABLE) {
+            ERRR("the sync after recovery was not durable");
+        }
+        persistGetStats(p, &stats);
+        if (stats.lastSyncError != 0 || stats.syncFailures != 1) {
+            ERRR("a successful sync did not clear lastSyncError");
+        }
+
+        /* Every op logged, so every op recovers */
+        const int64_t want[] = {1, 1, 1};
+        if (!persistTestRecoversTo(p, want, 3)) {
+            ERRR("an op logged across the failed sync was lost");
+        }
+
+        /* Without a sync policy the op is buffered */
+        config.syncMode = PERSIST_SYNC_NONE;
+        persistSetConfig(p, &config);
+        if (persistLogOp(p, PERSIST_OP_PUSH_TAIL, &v, 1) !=
+            PERSIST_LOG_BUFFERED) {
+            ERRR("a SYNC_NONE op was not reported buffered");
         }
     }
 

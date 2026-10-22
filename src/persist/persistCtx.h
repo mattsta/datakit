@@ -80,6 +80,7 @@ typedef struct persistCtx {
     /* Statistics */
     uint64_t totalOps;
     uint64_t totalSyncs;
+    uint64_t notDurableOps;
     uint64_t totalCompactions;
 } persistCtx;
 
@@ -104,16 +105,19 @@ void persistCtxFree(persistCtx *ctx);
  * ============================================================================
  */
 
-/* Log an operation to WAL - returns false on failure */
-bool persistCtxLogOp(persistCtx *ctx, persistOp op, const void *args,
-                     size_t argc);
+/* Log an operation to the WAL and sync as the context's syncMode asks.
+ * Apply the change exactly when the result is not PERSIST_LOG_REFUSED;
+ * a failed sync reports PERSIST_LOG_NOT_DURABLE (never undoing the op)
+ * and the next sync retries (see persistLogResult). */
+persistLogResult persistCtxLogOp(persistCtx *ctx, persistOp op,
+                                 const void *args, size_t argc);
 
 /* Check and perform compaction if thresholds exceeded
  * structurePtr: pointer to the in-memory structure for snapshotting */
 bool persistCtxMaybeCompact(persistCtx *ctx, void *structure,
                             const persistOps *ops);
 
-/* Force sync WAL to disk */
+/* Force sync WAL to disk; false (counted in syncFailures) when it fails */
 bool persistCtxSync(persistCtx *ctx);
 
 /* EVERYSEC helper for event loops: syncs only when a full interval has
@@ -157,6 +161,10 @@ bool persistCtxSaveSnapshot(persistCtx *ctx, void *structure,
 typedef struct persistCtxStats {
     uint64_t totalOps;
     uint64_t totalSyncs;
+    uint64_t syncFailures;  /* flushes or syncs that failed */
+    uint64_t notDurableOps; /* ops logged as PERSIST_LOG_NOT_DURABLE */
+    int32_t lastSyncError;  /* errno of the latest sync when it failed; 0
+                               once a later sync succeeds */
     uint64_t totalCompactions;
     size_t opsSinceCompact;
     size_t bytesSinceCompact;

@@ -580,6 +580,12 @@ struct persistStats {
     uint64_t walBytes;    /* Total WAL bytes */
     uint64_t walSequence; /* Current sequence number */
 
+    /* Sync stats (persistSync and the syncs syncMode makes) */
+    uint64_t syncCount;    /* syncs that reached stable storage */
+    uint64_t syncFailures; /* flushes or syncs that failed */
+    int32_t lastSyncError; /* errno of the latest sync when it failed; 0
+                              once a later sync succeeds */
+
     /* Compaction stats */
     uint64_t compactionCount; /* Number of compactions */
     uint64_t lastCompactionTime;
@@ -612,6 +618,10 @@ persist *persistCreate(const persistOps *ops, const persistConfig *config);
 /* Attach storage backends (snapshot and WAL can be different) */
 bool persistAttachSnapshot(persist *p, persistStore *store);
 bool persistAttachWAL(persist *p, persistStore *store);
+
+/* The attached stores (NULL when none) */
+persistStore *persistSnapshotStore(const persist *p);
+persistStore *persistWALStore(const persist *p);
 
 /* Configuration.  A change of walBufferSize first writes out the buffered
  * WAL bytes; when that write fails persistSetConfig returns false and
@@ -789,8 +799,28 @@ void *persistRestore(persist *p);
 
 /* ---- WAL Operations ---- */
 
-/* Log an operation (appends to WAL) */
-bool persistLogOp(persist *p, persistOp op, const void *args, size_t argc);
+/* What logging an operation achieved.  Only REFUSED (0, so a plain
+ * truth test reads "logged") means the op is not in the WAL: apply the
+ * change exactly when the result is not REFUSED.  Durability is best
+ * effort: a failed flush or sync never undoes, blocks or aborts the op;
+ * it reports NOT_DURABLE, counts in persistStats.syncFailures (with
+ * lastSyncError), and the next sync tries again. */
+typedef enum persistLogResult {
+    PERSIST_LOG_REFUSED = 0,     /* not logged (encode or write failed, WAL
+                                    refused): apply nothing */
+    PERSIST_LOG_BUFFERED = 1,    /* logged; the sync policy writes it out
+                                    later (SYNC_NONE, or EVERYSEC between
+                                    syncs) */
+    PERSIST_LOG_DURABLE = 2,     /* logged and synced to stable storage */
+    PERSIST_LOG_NOT_DURABLE = 3, /* logged, but the sync the policy asked
+                                    for failed: apply it; it is in the WAL
+                                    buffer or file, durability unknown */
+} persistLogResult;
+
+/* Log an operation (appends to WAL), syncing as the config's syncMode
+ * asks */
+persistLogResult persistLogOp(persist *p, persistOp op, const void *args,
+                              size_t argc);
 
 /* Replay WAL entries, applying each to structure */
 bool persistReplayWAL(persist *p, void *structure);
@@ -826,7 +856,9 @@ void *persistRecover(persist *p);
 
 /* ---- Lifecycle ---- */
 
-/* Sync any buffered data */
+/* Write out buffered WAL entries and sync them; false (counted in
+ * persistStats.syncFailures, errno in lastSyncError) when either step
+ * fails, leaving the entries buffered or written for the next sync */
 bool persistSync(persist *p);
 
 /* Get statistics.  Always writes '*stats' when it is non-NULL: all zeros
