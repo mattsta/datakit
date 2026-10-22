@@ -190,7 +190,7 @@ compiler and preset, and runs the whole suite. It has two tiers:
 
 | Tier            | Command                                   | Skips                                                                                 | Use for        |
 | --------------- | ----------------------------------------- | ------------------------------------------------------------------------------------- | -------------- |
-| quick (default) | `uv run --project tools dktools validate` | the slow set in every build (`--slow`), plus the debug/tsan slow set (`--debug-slow`) | iterative work |
+| quick (default) | `uv run --project tools dktools validate` | the slow set in every build (`--slow`), plus the debug/tsan slow set (`--debug-slow`); both empty by default | iterative work |
 | full            | `... validate --full`                     | nothing but the benchmarks and vendored suites                                        | milestones     |
 
 In every tier a preset also skips the tests it cannot judge (`--tsan-skip`:
@@ -204,8 +204,12 @@ tree and runs exactly the named tests, in any preset.
 Correctness suites stay fast: loops that only time code run at smoke size
 (enough iterations to exercise every path, with their checksums still
 checked), and real timing lives in the bench tests run on the `perf`
-preset (`fenwickBench`, `perfRegression`, `compressionBench`). Under dev
-every suite finishes in under a minute; the slowest are about 45 s.
+preset (`fenwickBench`, `perfRegression`, `compressionBench`). A sweep
+that existed only to cross a size or width boundary is written as a
+boundary test: pad to just under the boundary and cross it step by step.
+The suites that used to be slow (xof, multimap, multimapFull, multilist,
+multilistFull, hyperloglog, timerWheel, flex, str, blake3) now finish
+alone in about 10 s or less under dev, so the slow sets are empty.
 
 To see where a suite spends its time:
 

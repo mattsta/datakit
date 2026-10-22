@@ -64,10 +64,14 @@ DEFAULT_DEBUG_SKIP = r""
 DEFAULT_TSAN_SKIP = r"dkTestNonceLogEvictionPerf"
 #: The quick tier (the default; --full is the milestone tier) also skips
 #: the slow tests: in every build, those over ~40 s under the dev preset;
-#: in debug and tsan builds, also those over ~60 s there.  verify always
-#: runs exactly the tests it is given.
-DEFAULT_SLOW = r"multimapFull|xof|timerWheel|multilist|multilistFull"
-DEFAULT_DEBUG_SLOW = r"multimap|hyperloglog|blake3|str"
+#: in debug and tsan builds, also those over ~60 s there.  None at
+#: present: the suites that were here run alone in about 10 s or less on
+#: dev (measured 2026-10-21, after their oversized loops became boundary
+#: tests).  A suite that must stay long goes here rather than slowing
+#: every quick run.
+#: verify always runs exactly the tests it is given.
+DEFAULT_SLOW = r""
+DEFAULT_DEBUG_SLOW = r""
 DEFAULT_LEAK_BASE = "origin/main"
 
 

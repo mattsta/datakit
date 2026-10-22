@@ -26,6 +26,10 @@ from dktools.steps import Step
 from repofixture import IsolatedGitEnv, TempRepo
 
 PASS = "100% tests passed out of 3\n"
+# Slow sets named by the tests, so the tiers are checked whatever the
+# defaults hold (they can be empty)
+SLOW = "slowEverywhere|slowToo"
+DEBUG_SLOW = "slowUnderSanitizers"
 
 
 class MatrixRunner:
@@ -119,7 +123,7 @@ class ValidateRun(unittest.TestCase):
 
     def test_pass_runs_the_whole_matrix(self) -> None:
         runner = MatrixRunner(outputs={"allocaudit": "100% clean pattern\n"})
-        code, out = self.run_validate(runner)
+        code, out = self.run_validate(runner, slow=SLOW, debug_slow=DEBUG_SLOW)
         self.assertEqual(code, 0, out)
         self.assertIn(": PASS", out)
         names = [name for name, _ in runner.calls]
@@ -138,8 +142,7 @@ class ValidateRun(unittest.TestCase):
         par = runner.command("clang22-dev ctest")
         self.assertEqual(
             par[par.index("-E") + 1],
-            f"^({validate.DEFAULT_SERIAL}|{validate.DEFAULT_SKIP}"
-            f"|{validate.DEFAULT_SLOW})$",
+            f"^({validate.DEFAULT_SERIAL}|{validate.DEFAULT_SKIP}|{SLOW})$",
         )
         ser = runner.command("clang22-dev ctest-serial")
         self.assertEqual(ser[ser.index("-j") + 1], "1")
@@ -147,11 +150,7 @@ class ValidateRun(unittest.TestCase):
 
         # Debug also skips its own slow set in the quick tier, and says so.
         dbg = runner.command("clang22-debug ctest")
-        self.assertTrue(
-            dbg[dbg.index("-E") + 1].endswith(
-                f"|{validate.DEFAULT_SLOW}|{validate.DEFAULT_DEBUG_SLOW})$"
-            )
-        )
+        self.assertTrue(dbg[dbg.index("-E") + 1].endswith(f"|{SLOW}|{DEBUG_SLOW})$"))
         self.assertIn("- tier: quick (iterative", out)
         self.assertIn("clang22-debug: slow, skipped in the quick tier: ", out)
 
@@ -164,13 +163,14 @@ class ValidateRun(unittest.TestCase):
     def test_tsan_skips_its_own_set_and_says_so(self) -> None:
         runner = MatrixRunner(outputs={"allocaudit": "100% clean pattern\n"})
         code, out = self.run_validate(
-            runner, compilers=self.compilers[:1], presets=["dev", "tsan"]
+            runner,
+            compilers=self.compilers[:1],
+            presets=["dev", "tsan"],
+            slow=SLOW,
+            debug_slow=DEBUG_SLOW,
         )
         self.assertEqual(code, 0, out)
-        quick = (
-            f"|{validate.DEFAULT_TSAN_SKIP}|{validate.DEFAULT_SLOW}"
-            f"|{validate.DEFAULT_DEBUG_SLOW})$"
-        )
+        quick = f"|{validate.DEFAULT_TSAN_SKIP}|{SLOW}|{DEBUG_SLOW})$"
         cmd = runner.command("clang22-tsan ctest")
         self.assertTrue(cmd[cmd.index("-E") + 1].endswith(quick), cmd)
         # Every serial test is skipped under tsan, so the serial step does
@@ -185,7 +185,7 @@ class ValidateRun(unittest.TestCase):
         )
         # dev skips neither the tsan set nor the debug/tsan slow set.
         dev = runner.command("clang22-dev ctest")
-        self.assertNotIn("flex", dev[dev.index("-E") + 1])
+        self.assertNotIn(DEBUG_SLOW, dev[dev.index("-E") + 1])
 
     def test_serial_for_drops_names_a_build_skips(self) -> None:
         self.assertEqual(validate.serial_for("a|b", ["x|b", ""]), "a")
@@ -196,7 +196,12 @@ class ValidateRun(unittest.TestCase):
     def test_full_tier_runs_the_slow_tests(self) -> None:
         runner = MatrixRunner(outputs={"allocaudit": "100% clean pattern\n"})
         code, out = self.run_validate(
-            runner, compilers=self.compilers[:1], presets=["dev", "tsan"], full=True
+            runner,
+            compilers=self.compilers[:1],
+            presets=["dev", "tsan"],
+            full=True,
+            slow=SLOW,
+            debug_slow=DEBUG_SLOW,
         )
         self.assertEqual(code, 0, out)
         dev = runner.command("clang22-dev ctest")
@@ -209,6 +214,25 @@ class ValidateRun(unittest.TestCase):
             tsan[tsan.index("-E") + 1].endswith(f"|{validate.DEFAULT_TSAN_SKIP})$")
         )
         self.assertIn("- tier: full (milestone", out)
+        self.assertNotIn("skipped in the quick tier", out)
+
+    def test_empty_slow_sets_skip_nothing_extra(self) -> None:
+        runner = MatrixRunner(outputs={"allocaudit": "100% clean pattern\n"})
+        code, out = self.run_validate(
+            runner,
+            compilers=self.compilers[:1],
+            presets=["dev", "debug"],
+            slow="",
+            debug_slow="",
+        )
+        self.assertEqual(code, 0, out)
+        for label in ("clang22-dev", "clang22-debug"):
+            cmd = runner.command(f"{label} ctest")
+            self.assertEqual(
+                cmd[cmd.index("-E") + 1],
+                f"^({validate.DEFAULT_SERIAL}|{validate.DEFAULT_SKIP})$",
+            )
+        self.assertIn("- tier: quick (iterative", out)
         self.assertNotIn("skipped in the quick tier", out)
 
     def test_tsan_reports_fail_the_run(self) -> None:

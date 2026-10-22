@@ -194,12 +194,13 @@ uv run --project tools dktools validate [--rev REV] \
   by default `clang22-dev`, `clang22-debug` and `gcc15-release`;
   `--presets dev,debug,tsan` adds `clang22-tsan`.
 - Two tiers. The default quick tier is for iteration: it skips the
-  slow tests, `--slow` in every build (default `multimapFull`, `xof`,
-  `timerWheel`, `multilist`, `multilistFull`: over ~40 s under dev)
-  and also `--debug-slow` in debug and tsan builds (default
-  `multimap`, `hyperloglog`, `blake3`, `str`: over ~60 s
-  there). `--full` is the milestone tier and runs them all. `verify`
-  has no tiers; it runs exactly the tests it is given.
+  slow tests, `--slow` in every build (over ~40 s under dev) and also
+  `--debug-slow` in debug and tsan builds (over ~60 s there).
+  `--full` is the milestone tier and runs them all. Both sets are
+  empty by default: the suites that used to be in them run alone in
+  about 10 s or less under dev. A suite that must stay long belongs
+  in a set, not in every quick run. `verify` has no tiers; it runs exactly the tests it is
+  given.
 - Per configuration: a clean configure, an all-targets build,
   warnings grouped by file, the parallel ctest set (everything outside
   the serial and skip sets), then the serial set one test at a time.
