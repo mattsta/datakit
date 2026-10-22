@@ -411,6 +411,7 @@ void persistCtxGetStats(const persistCtx *ctx, persistCtxStats *stats) {
 #ifdef DATAKIT_TEST
 #include "../ctest.h"
 #include "../dkTestTmp.h"
+#include "flexP.h"
 #include <unistd.h>
 
 int persistCtxTest(int argc, char *argv[]) {
@@ -471,6 +472,43 @@ int persistCtxTest(int argc, char *argv[]) {
             if (!persistCtxExists(path)) {
                 ERRR("Context should exist now");
             }
+        }
+    }
+
+    TEST("SyncIfDue syncs an EVERYSEC context once its second is up") {
+        char path[PATH_MAX];
+        if (!dkTestTmpDirPath(&tmp, "persistCtxSyncIfDue", path,
+                              sizeof(path))) {
+            ERR("could not create a scratch directory: %s", strerror(errno));
+        } else {
+            /* @own: caller; free=persistCtxFree */
+            persistCtx *ctx = persistCtxNew(path, NULL);
+            /* @own: caller; free=flexCloseP */
+            flexP *f = flexNewP(ctx);
+            const databox one = DATABOX_SIGNED(1);
+            flexPushTailP(f, &one);
+
+            const uint64_t syncs = ctx->totalSyncs;
+            if (!persistCtxSyncIfDue(ctx) || ctx->totalSyncs != syncs) {
+                ERRR("synced before a second had passed");
+            }
+            ctx->lastSyncTime -= 2000000;
+            if (!persistCtxSyncIfDue(ctx) || ctx->totalSyncs != syncs + 1) {
+                ERRR("did not sync once a second had passed");
+            }
+
+            /* Other modes leave syncing to their own policy */
+            ctx->config.syncMode = PERSIST_CTX_SYNC_NONE;
+            ctx->lastSyncTime -= 2000000;
+            if (!persistCtxSyncIfDue(ctx) || ctx->totalSyncs != syncs + 1) {
+                ERRR("synced a SYNC_NONE context");
+            }
+            if (persistCtxSyncIfDue(NULL)) {
+                ERRR("accepted a NULL context");
+            }
+
+            flexCloseP(f);
+            persistCtxFree(ctx);
         }
     }
 

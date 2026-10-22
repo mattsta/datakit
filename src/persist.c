@@ -180,7 +180,12 @@ struct persist {
     uint8_t *walBuffer;    /* Write buffer */
     size_t walBufferUsed;  /* Bytes used in buffer */
     uint64_t lastSyncTime; /* Last sync timestamp (microseconds) */
-    bool walInitialized;   /* Whether WAL header has been written */
+    /* Where the next WAL bytes go: the end of the last complete entry.
+     * WAL readers (replay, iterate, verify) move the store's cursor and
+     * set walCursorMoved; the writer seeks back here before writing. */
+    int64_t walAppendOffset;
+    bool walCursorMoved;
+    bool walInitialized; /* WAL header verified or written; appendOffset set */
 };
 
 /* ============================================================================
@@ -379,6 +384,8 @@ persist *persistCreate(const persistOps *ops, const persistConfig *config) {
     p->walBuffer = NULL;
     p->walBufferUsed = 0;
     p->lastSyncTime = persistGetMicroseconds();
+    p->walAppendOffset = 0;
+    p->walCursorMoved = false;
     p->walInitialized = false;
 
     /* Allocate WAL buffer if needed */
@@ -551,22 +558,28 @@ uint32_t persistLastExpectedKeyId(const persist *p) {
     return p->lastExpectedKeyId;
 }
 
-void persistSetConfig(persist *p, const persistConfig *config) {
-    if (p && config) {
-        /* Check if buffer size is changing before updating config */
-        size_t oldBufferSize = p->config.walBufferSize;
-        p->config = *config;
+static bool persistWALFlush(persist *p);
 
-        /* Reallocate WAL buffer if size changed */
-        if (oldBufferSize != config->walBufferSize) {
-            zfree(p->walBuffer);
-            /* @own: container; free=persistClose */
-            p->walBuffer = config->walBufferSize > 0
-                               ? zmalloc(config->walBufferSize)
-                               : NULL;
-            p->walBufferUsed = 0;
-        }
+bool persistSetConfig(persist *p, const persistConfig *config) {
+    if (!p || !config) {
+        return false;
     }
+
+    /* A new WAL buffer size takes a new buffer: write out what the old
+     * one holds first, or keep the old configuration when that fails */
+    if (config->walBufferSize != p->config.walBufferSize) {
+        if (!persistWALFlush(p)) {
+            return false;
+        }
+
+        zfree(p->walBuffer);
+        /* @own: container; free=persistClose */
+        p->walBuffer =
+            config->walBufferSize > 0 ? zmalloc(config->walBufferSize) : NULL;
+    }
+
+    p->config = *config;
+    return true;
 }
 
 void persistGetConfig(const persist *p, persistConfig *config) {
@@ -928,9 +941,16 @@ static bool persistWALWriteHeader(persist *p) {
         (ssize_t)sizeof(header)) {
         return false;
     }
+    /* A fresh WAL is the header alone: nothing that followed in the store
+     * may be read back as entries */
+    if (store->truncate && !store->truncate(store->ctx)) {
+        return false;
+    }
     if (store->sync) {
         store->sync(store->ctx);
     }
+    p->walAppendOffset = (int64_t)sizeof(header);
+    p->walCursorMoved = false;
     return true;
 }
 
@@ -975,21 +995,73 @@ static bool persistWALReadVerifyHeader(persistStore *store,
     return true;
 }
 
-/* Initialize WAL file with header — appending if one already exists. */
+/* Called per WAL entry by persistWALWalk; false stops the walk */
+typedef bool (*persistWALEntryFn)(persist *p, uint64_t seq, persistOp op,
+                                  const uint8_t *data, size_t len, void *ctx);
+static int persistWALWalk(persist *p, persistWALEntryFn cb, void *ctx,
+                          int64_t *goodEnd);
+static bool persistWALResume(persist *p, int64_t goodEnd, int stop);
+
+/* Ready the WAL for appending: an existing WAL is walked to the end of
+ * its last complete entry (cutting a torn tail, and continuing sequence
+ * numbers past the ones it holds); otherwise a fresh header starts it. */
 static bool persistWALInit(persist *p) {
     if (!p->walStore) {
         return false;
     }
 
     persistStore *store = p->walStore;
-
-    /* If a valid header already exists, just seek to end for appending. */
     if (persistWALReadVerifyHeader(store, p->ops->type, NULL)) {
-        store->seek(store->ctx, 0, SEEK_END);
-        return true;
+        int64_t goodEnd = 0;
+        const int rc = persistWALWalk(p, NULL, NULL, &goodEnd);
+        return persistWALResume(p, goodEnd, rc);
     }
 
     return persistWALWriteHeader(p);
+}
+
+/* Write `len` bytes at the WAL's append offset */
+static bool persistWALAppend(persist *p, const void *data, size_t len) {
+    persistStore *store = p->walStore;
+    if (p->walCursorMoved) {
+        if (store->seek(store->ctx, p->walAppendOffset, SEEK_SET) !=
+            p->walAppendOffset) {
+            return false;
+        }
+        p->walCursorMoved = false;
+    }
+
+    if (store->write(store->ctx, data, len) != (ssize_t)len) {
+        /* A partial write leaves the cursor unknown */
+        p->walCursorMoved = true;
+        return false;
+    }
+
+    p->walAppendOffset += (int64_t)len;
+    p->stats.walBytes += len;
+    return true;
+}
+
+/* Drop a partly written entry that starts at stream offset `entryStart`.
+ * When none of it reached the store, its bytes leave the buffer; when
+ * some did (a buffer flush wrote the earlier entries and part of this
+ * one), the store is cut back to the entry's start and the buffer
+ * emptied, everything before the entry having been written. */
+static void persistWALRollback(persist *p, int64_t entryStart) {
+    if (p->walAppendOffset <= entryStart) {
+        p->walBufferUsed = (size_t)(entryStart - p->walAppendOffset);
+        return;
+    }
+
+    persistStore *store = p->walStore;
+    p->stats.walBytes -= (uint64_t)(p->walAppendOffset - entryStart);
+    p->walBufferUsed = 0;
+    p->walAppendOffset = entryStart;
+    p->walCursorMoved = true;
+    if (store->seek(store->ctx, entryStart, SEEK_SET) == entryStart &&
+        store->truncate) {
+        store->truncate(store->ctx);
+    }
 }
 
 /* Flush WAL buffer to storage */
@@ -998,13 +1070,10 @@ static bool persistWALFlush(persist *p) {
         return true;
     }
 
-    persistStore *store = p->walStore;
-    ssize_t written = store->write(store->ctx, p->walBuffer, p->walBufferUsed);
-    if (written != (ssize_t)p->walBufferUsed) {
+    if (!persistWALAppend(p, p->walBuffer, p->walBufferUsed)) {
         return false;
     }
 
-    p->stats.walBytes += p->walBufferUsed;
     p->walBufferUsed = 0;
     return true;
 }
@@ -1013,15 +1082,7 @@ static bool persistWALFlush(persist *p) {
 static bool persistWALWrite(persist *p, const void *data, size_t len) {
     if (!p->walBuffer) {
         /* No buffer, write directly */
-        if (!p->walStore) {
-            return false;
-        }
-        ssize_t written = p->walStore->write(p->walStore->ctx, data, len);
-        if (written == (ssize_t)len) {
-            p->stats.walBytes += len;
-            return true;
-        }
-        return false;
+        return p->walStore && persistWALAppend(p, data, len);
     }
 
     const uint8_t *src = data;
@@ -1115,11 +1176,16 @@ bool persistLogOp(persist *p, persistOp op, const void *args, size_t argc) {
             }
         }
 
+        /* Where this entry starts in the WAL stream (the store's append
+         * offset plus the bytes buffered ahead of it): a failed write
+         * rolls back to it, so no partial entry is left for later
+         * entries to follow */
+        const int64_t entryStart =
+            p->walAppendOffset + (int64_t)p->walBufferUsed;
         const uint32_t envelopeLen32 = (uint32_t)envelopeLen;
-        if (!persistWALWrite(p, &envelopeLen32, sizeof(envelopeLen32))) {
-            return false;
-        }
-        if (!persistWALWrite(p, envelope, envelopeLen)) {
+        if (!persistWALWrite(p, &envelopeLen32, sizeof(envelopeLen32)) ||
+            !persistWALWrite(p, envelope, envelopeLen)) {
+            persistWALRollback(p, entryStart);
             return false;
         }
     }
@@ -1166,18 +1232,24 @@ void persistSetReplayState(mflexState *state) {
     replayMflexState = state;
 }
 
+/* persistWALReadOneEntry results */
+#define PERSIST_WAL_ENTRY ((int)1)
+#define PERSIST_WAL_END ((int)0)
+/* The store ends inside the entry: an append a crash cut short */
+#define PERSIST_WAL_TORN ((int)-1)
+/* A complete entry that does not verify or decode (damage, or a key that
+ * is not the one it was written under) */
+#define PERSIST_WAL_BAD ((int)-2)
+
 /* Read the next WAL entry envelope from the current position of `store`,
  * unwrap it under `p`'s verify policy, and present the payload's split as
  * (seq, op, opData, opDataLen).
  *
- * Return codes:
- * 1 — entry successfully read and verified. *envelope is malloc'd
- * and OWNED by the caller (must zfree). opData points into it.
- * 0 — clean end-of-file. Nothing allocated.
- * -1 — corrupt or truncated entry. Nothing allocated. In strict
- * recovery the caller must abort; in lenient recovery the caller
- * must NOT continue iterating because there is no length-prefix
- * anchor to recover to — the file is treated as ending here. */
+ * Returns PERSIST_WAL_ENTRY with *envelope malloc'd and OWNED by the
+ * caller (must zfree; opData points into it), or, with nothing
+ * allocated, PERSIST_WAL_END at a clean end of the store,
+ * PERSIST_WAL_TORN or PERSIST_WAL_BAD.  After TORN or BAD there is no
+ * length-prefix anchor to continue from: readers stop there. */
 static int persistWALReadOneEntry(persist *p, uint8_t **envelopeOut,
                                   size_t *envelopeLenOut, uint64_t *seqOut,
                                   persistOp *opOut, const uint8_t **opDataOut,
@@ -1188,35 +1260,35 @@ static int persistWALReadOneEntry(persist *p, uint8_t **envelopeOut,
     const ssize_t headerRead =
         store->read(store->ctx, &envelopeLen32, sizeof(envelopeLen32));
     if (headerRead == 0) {
-        return 0; /* EOF on clean boundary */
+        return PERSIST_WAL_END;
     }
     if (headerRead != (ssize_t)sizeof(envelopeLen32)) {
-        return -1;
+        return headerRead < 0 ? PERSIST_WAL_BAD : PERSIST_WAL_TORN;
     }
     if (envelopeLen32 == 0 || envelopeLen32 > PERSIST_WAL_ENTRY_MAX_BYTES) {
-        return -1;
+        return PERSIST_WAL_BAD;
     }
 
     const size_t envelopeLen = (size_t)envelopeLen32;
     cleanerName(zfree, Bytes) uint8_t *envelope = zmalloc(envelopeLen);
-    if (store->read(store->ctx, envelope, envelopeLen) !=
-        (ssize_t)envelopeLen) {
-        return -1;
+    const ssize_t bodyRead = store->read(store->ctx, envelope, envelopeLen);
+    if (bodyRead != (ssize_t)envelopeLen) {
+        return bodyRead < 0 ? PERSIST_WAL_BAD : PERSIST_WAL_TORN;
     }
 
     flexEnvelopeVerifyParams verify;
     if (!persistBuildVerifyParams(p, &verify)) {
-        return -1;
+        return PERSIST_WAL_BAD;
     }
 
     const uint8_t *payload = NULL;
     uint64_t payloadLen = 0;
     if (!flexEnvelopeVerify(envelope, envelopeLen, &verify, &payload,
                             &payloadLen)) {
-        return -1;
+        return PERSIST_WAL_BAD;
     }
     if (payloadLen < (uint64_t)PERSIST_WAL_ENTRY_PREAMBLE_LEN) {
-        return -1;
+        return PERSIST_WAL_BAD;
     }
 
     memcpy(seqOut, payload, sizeof(uint64_t));
@@ -1228,7 +1300,95 @@ static int persistWALReadOneEntry(persist *p, uint8_t **envelopeOut,
     *envelopeOut = envelope;
     envelope = NULL;
     *envelopeLenOut = envelopeLen;
-    return 1;
+    return PERSIST_WAL_ENTRY;
+}
+
+/* Make the WAL appendable after a reader stopped at `goodEnd`, the end of
+ * the last entry that read completely, having met `stop` there.  A torn
+ * tail (a crash mid-append) is cut off, so what is logged next follows
+ * complete entries and a later recovery reaches it.  A bad entry is left
+ * in place (it may only need the right key); appends then go to the end
+ * of the store. */
+static bool persistWALResume(persist *p, int64_t goodEnd, int stop) {
+    persistStore *store = p->walStore;
+    int64_t append = goodEnd;
+    if (stop == PERSIST_WAL_TORN) {
+        if (store->seek(store->ctx, goodEnd, SEEK_SET) != goodEnd ||
+            !store->truncate || !store->truncate(store->ctx)) {
+            return false;
+        }
+    } else if (stop == PERSIST_WAL_BAD) {
+        append = store->seek(store->ctx, 0, SEEK_END);
+        if (append < 0) {
+            return false;
+        }
+    }
+
+    p->walAppendOffset = append;
+    p->walCursorMoved = true;
+    p->walInitialized = true;
+    return true;
+}
+
+/* Read every entry from just past the WAL header, handing each to `cb`
+ * (when non-NULL; returning false stops the walk), and advancing
+ * walSequence past every sequence seen.  Returns the result that ended
+ * the walk (PERSIST_WAL_END, _TORN, _BAD, or PERSIST_WAL_ENTRY when `cb`
+ * stopped it) and the end of the last complete entry in *goodEnd. */
+static int persistWALWalk(persist *p, persistWALEntryFn cb, void *ctx,
+                          int64_t *goodEnd) {
+    persistStore *store = p->walStore;
+    *goodEnd = store->tell(store->ctx);
+    for (;;) {
+        uint8_t *envelope = NULL;
+        size_t envelopeLen = 0;
+        uint64_t seq = 0;
+        persistOp op = PERSIST_OP_NOP;
+        const uint8_t *opData = NULL;
+        size_t opDataLen = 0;
+        const int rc = persistWALReadOneEntry(p, &envelope, &envelopeLen, &seq,
+                                              &op, &opData, &opDataLen);
+        if (rc != PERSIST_WAL_ENTRY) {
+            return rc;
+        }
+
+        *goodEnd = store->tell(store->ctx);
+        const bool more = cb ? cb(p, seq, op, opData, opDataLen, ctx) : true;
+        if (seq >= p->walSequence) {
+            p->walSequence = seq + 1;
+        }
+        zfree(envelope);
+        if (!more) {
+            return PERSIST_WAL_ENTRY;
+        }
+    }
+}
+
+typedef struct persistReplayCtx {
+    void *structure; /* what applyOp takes (a pointer to the pointer) */
+    bool failed;     /* strict recovery met an op that does not apply */
+} persistReplayCtx;
+
+static bool persistReplayEntry(persist *p, uint64_t seq, persistOp op,
+                               const uint8_t *data, size_t len, void *ctx) {
+    persistReplayCtx *r = ctx;
+
+    /* Already folded into the restored snapshot (a stale WAL left by a
+     * crash between snapshot publish and WAL truncate): applying it
+     * again would double-count. */
+    if (seq < p->snapshotWalSequence) {
+        p->stats.entriesSkipped++;
+        return true;
+    }
+
+    if (!p->ops->applyOp(r->structure, op, data, len)) {
+        p->stats.entriesSkipped++;
+        r->failed = p->config.strictRecovery;
+        return !r->failed;
+    }
+
+    p->stats.entriesRecovered++;
+    return true;
 }
 
 bool persistReplayWAL(persist *p, void *structure) {
@@ -1236,7 +1396,13 @@ bool persistReplayWAL(persist *p, void *structure) {
         return false;
     }
 
+    /* The store holds only complete entries once the buffer is out */
+    if (!persistWALFlush(p)) {
+        return false;
+    }
+
     persistStore *store = p->walStore;
+    p->walCursorMoved = true;
     persistWALHeader walHdr;
     if (!persistWALReadVerifyHeader(store, p->ops->type, &walHdr)) {
         return false;
@@ -1250,51 +1416,38 @@ bool persistReplayWAL(persist *p, void *structure) {
         return false;
     }
 
-    while (1) {
-        uint8_t *envelope = NULL;
-        size_t envelopeLen = 0;
-        uint64_t seq = 0;
-        persistOp op = PERSIST_OP_NOP;
-        const uint8_t *opData = NULL;
-        size_t opDataLen = 0;
-
-        const int rc = persistWALReadOneEntry(p, &envelope, &envelopeLen, &seq,
-                                              &op, &opData, &opDataLen);
-        if (rc == 0) {
-            return true;
-        }
-        if (rc < 0) {
-            p->stats.entriesSkipped++;
-            return p->config.strictRecovery ? false : true;
-        }
-
-        /* Already folded into the restored snapshot (a stale WAL left by
-         * a crash between snapshot publish and WAL truncate): applying
-         * it again would double-count. Advance the sequence and move on. */
-        if (seq < p->snapshotWalSequence) {
-            if (seq >= p->walSequence) {
-                p->walSequence = seq + 1;
-            }
-            p->stats.entriesSkipped++;
-            zfree(envelope);
-            continue;
-        }
-
-        if (!p->ops->applyOp(structure, op, opData, opDataLen)) {
-            zfree(envelope);
-            p->stats.entriesSkipped++;
-            if (p->config.strictRecovery) {
-                return false;
-            }
-            continue;
-        }
-
-        if (seq >= p->walSequence) {
-            p->walSequence = seq + 1;
-        }
-        p->stats.entriesRecovered++;
-        zfree(envelope);
+    persistReplayCtx r = {.structure = structure};
+    int64_t goodEnd = 0;
+    const int rc = persistWALWalk(p, persistReplayEntry, &r, &goodEnd);
+    if (r.failed) {
+        return false;
     }
+
+    /* A torn or bad entry ends the WAL: strict recovery fails there;
+     * lenient recovery keeps what came before, and the WAL resumes
+     * after it (a torn tail is cut off) */
+    if (rc == PERSIST_WAL_TORN || rc == PERSIST_WAL_BAD) {
+        p->stats.entriesSkipped++;
+        if (p->config.strictRecovery) {
+            return false;
+        }
+    }
+
+    return persistWALResume(p, goodEnd, rc);
+}
+
+typedef struct persistIterateCtx {
+    persistWALCallback cb;
+    void *ctx;
+} persistIterateCtx;
+
+static bool persistIterateEntry(persist *p, uint64_t seq, persistOp op,
+                                const uint8_t *data, size_t len, void *ctx) {
+    (void)p;
+    const persistIterateCtx *it = ctx;
+    const persistWALEntry entry = {
+        .sequence = seq, .op = op, .data = data, .len = len};
+    return it->cb(&entry, it->ctx);
 }
 
 bool persistIterateWAL(persist *p, persistWALCallback cb, void *ctx) {
@@ -1302,37 +1455,20 @@ bool persistIterateWAL(persist *p, persistWALCallback cb, void *ctx) {
         return false;
     }
 
-    persistStore *store = p->walStore;
-    if (!persistWALReadVerifyHeader(store, p->ops->type, NULL)) {
+    /* Every logged entry is visited, buffered ones included */
+    if (!persistWALFlush(p)) {
         return false;
     }
 
-    while (1) {
-        uint8_t *envelope = NULL;
-        size_t envelopeLen = 0;
-        uint64_t seq = 0;
-        persistOp op = PERSIST_OP_NOP;
-        const uint8_t *opData = NULL;
-        size_t opDataLen = 0;
-
-        const int rc = persistWALReadOneEntry(p, &envelope, &envelopeLen, &seq,
-                                              &op, &opData, &opDataLen);
-        if (rc <= 0) {
-            return rc == 0;
-        }
-
-        persistWALEntry walEntry = {
-            .sequence = seq,
-            .op = op,
-            .data = opData,
-            .len = opDataLen,
-        };
-        const bool cont = cb(&walEntry, ctx);
-        zfree(envelope);
-        if (!cont) {
-            return true;
-        }
+    p->walCursorMoved = true;
+    if (!persistWALReadVerifyHeader(p->walStore, p->ops->type, NULL)) {
+        return false;
     }
+
+    persistIterateCtx it = {.cb = cb, .ctx = ctx};
+    int64_t goodEnd = 0;
+    const int rc = persistWALWalk(p, persistIterateEntry, &it, &goodEnd);
+    return rc == PERSIST_WAL_END || rc == PERSIST_WAL_ENTRY;
 }
 
 /* ============================================================================
@@ -1379,16 +1515,13 @@ bool persistCompact(persist *p, void *structure) {
     }
 
     if (p->walStore) {
-        persistStore *store = p->walStore;
-        if (store->seek(store->ctx, 0, SEEK_SET) >= 0) {
-            if (store->truncate) {
-                store->truncate(store->ctx);
-            }
-        }
+        /* The snapshot holds every logged op, buffered ones included: the
+         * WAL starts over as a fresh header */
         p->walBufferUsed = 0;
         if (!persistWALWriteHeader(p)) {
             return false;
         }
+        p->walInitialized = true;
     }
 
     p->stats.compactionCount++;
@@ -1541,7 +1674,13 @@ bool persistVerifyWAL(persist *p) {
         return false;
     }
 
+    /* Every logged entry is checked, buffered ones included */
+    if (!persistWALFlush(p)) {
+        return false;
+    }
+
     persistStore *store = p->walStore;
+    p->walCursorMoved = true;
     persistWALHeader walHdr;
     if (!persistWALReadVerifyHeader(store, p->ops->type, &walHdr)) {
         return false;
@@ -1551,24 +1690,8 @@ bool persistVerifyWAL(persist *p) {
         return false;
     }
 
-    while (1) {
-        uint8_t *envelope = NULL;
-        size_t envelopeLen = 0;
-        uint64_t seq = 0;
-        persistOp op = PERSIST_OP_NOP;
-        const uint8_t *opData = NULL;
-        size_t opDataLen = 0;
-
-        const int rc = persistWALReadOneEntry(p, &envelope, &envelopeLen, &seq,
-                                              &op, &opData, &opDataLen);
-        if (rc == 0) {
-            return true;
-        }
-        if (rc < 0) {
-            return false;
-        }
-        zfree(envelope);
-    }
+    int64_t goodEnd = 0;
+    return persistWALWalk(p, NULL, NULL, &goodEnd) == PERSIST_WAL_END;
 }
 
 /* ============================================================================
@@ -4622,6 +4745,79 @@ static void testMultidictFreeWithClass(multidict *d) {
 }
 
 defcleanerName(multidict *, testMultidictFreeWithClass, Dict);
+defcleaner(persist *, persistClose);
+
+/* A flex persist over two memory stores, starting from an empty flex
+ * snapshot, with `config` (NULL for the defaults) */
+static persist *persistTestFlexPersist(const persistConfig *config) {
+    /* @own: caller; free=persistClose */
+    persist *p = persistCreate(&persistOpsFlex, config);
+    persistAttachSnapshot(p, persistStoreMemory(0));
+    persistAttachWAL(p, persistStoreMemory(0));
+    cleaner(flexFree) flex *empty = flexNew();
+    persistSnapshot(p, empty);
+    return p;
+}
+
+/* Log PUSH_TAIL of each of `count` integers from `first` */
+static bool persistTestPushRange(persist *p, int64_t first, size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        const databox box = DATABOX_SIGNED(first + (int64_t)i);
+        if (!persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box, 1)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* True iff recovering `p` gives exactly the integers `want[0..n)` */
+static bool persistTestRecoversTo(persist *p, const int64_t *want, size_t n) {
+    cleaner(flexFree) flex *f = persistRecover(p);
+    if (!f || flexCount(f) != n) {
+        return false;
+    }
+    size_t i = 0;
+    for (flexEntry *fe = flexHead(f); fe; fe = flexNext(f, fe), i++) {
+        databox box;
+        flexGetByType(fe, &box);
+        if (!DATABOX_IS_INTEGER(&box) || box.data.i64 != want[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* WAL entries seen by persistTestCountEntries, stopping at `stopAfter` */
+typedef struct persistTestWalCount {
+    size_t seen;
+    size_t stopAfter;
+    uint64_t lastSeq;
+    bool ordered;
+} persistTestWalCount;
+
+static bool persistTestCountEntries(const persistWALEntry *entry, void *ctx) {
+    persistTestWalCount *c = ctx;
+    c->ordered = c->ordered && (c->seen == 0 || entry->sequence > c->lastSeq);
+    c->lastSeq = entry->sequence;
+    c->seen++;
+    return c->seen < c->stopAfter;
+}
+
+/* A memory store whose writes fail once `persistTestWriteBudget` bytes
+ * have been written (SIZE_MAX: never), writing the bytes that fit */
+static size_t persistTestWriteBudget = SIZE_MAX;
+static ssize_t (*persistTestMemWrite)(void *, const void *, size_t);
+
+static ssize_t persistTestBudgetWrite(void *ctx, const void *data, size_t len) {
+    if (persistTestWriteBudget == SIZE_MAX) {
+        return persistTestMemWrite(ctx, data, len);
+    }
+    const size_t fit =
+        len < persistTestWriteBudget ? len : persistTestWriteBudget;
+    persistTestWriteBudget -= fit;
+    const ssize_t wrote = persistTestMemWrite(ctx, data, fit);
+    return fit == len ? wrote : -1;
+}
 
 /* Element 'id' of the multilist wide-element tests, built in 'out' (and
  * 'buf' for a string): 96/128-bit values around each limit and generated
@@ -8251,6 +8447,239 @@ int persistTest(int argc, char *argv[]) {
             ERRR("persistOpsHyperloglog.newEmpty returned NULL");
         } else {
             persistOpsHyperloglog.free(empty);
+        }
+    }
+
+    TEST("SetConfig writes out the WAL buffer it replaces") {
+        cleaner(persistClose) persist *p = persistTestFlexPersist(NULL);
+        persistTestPushRange(p, 0, 5); /* held in the 64 KB buffer */
+        persistConfig config;
+        persistGetConfig(p, &config);
+        config.walBufferSize = 16;
+        if (!persistSetConfig(p, &config)) {
+            ERRR("SetConfig refused a new buffer size");
+        }
+        persistConfig back;
+        persistGetConfig(p, &back);
+        if (back.walBufferSize != 16) {
+            ERRR("GetConfig does not report the new buffer size");
+        }
+        persistTestPushRange(p, 5, 5);
+        persistSync(p);
+        const int64_t want[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+        if (!persistTestRecoversTo(p, want, 10)) {
+            ERRR("ops buffered before SetConfig were lost");
+        }
+    }
+
+    TEST("WAL readers leave appends at the end of the WAL") {
+        cleaner(persistClose) persist *p = persistTestFlexPersist(NULL);
+        persistTestPushRange(p, 0, 6); /* buffered, not yet in the store */
+
+        /* Iteration sees buffered entries; stopping early is allowed */
+        persistTestWalCount early = {.stopAfter = 2, .ordered = true};
+        if (!persistIterateWAL(p, persistTestCountEntries, &early) ||
+            early.seen != 2) {
+            ERR("early-stopped iteration saw %zu", early.seen);
+        }
+        persistTestWalCount all = {.stopAfter = SIZE_MAX, .ordered = true};
+        if (!persistIterateWAL(p, persistTestCountEntries, &all) ||
+            all.seen != 6 || !all.ordered) {
+            ERR("iteration saw %zu entries (ordered %d)", all.seen,
+                (int)all.ordered);
+        }
+        persistTestWalCount stop = {.stopAfter = 3, .ordered = true};
+        persistIterateWAL(p, persistTestCountEntries, &stop);
+        if (!persistVerifyWAL(p)) {
+            ERRR("VerifyWAL refused a sound WAL");
+        }
+
+        /* Appends after the readers go to the end, not over entries */
+        persistTestPushRange(p, 6, 4);
+        persistSync(p);
+        const int64_t want[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+        if (!persistTestRecoversTo(p, want, 10)) {
+            ERRR("an append after a WAL reader overwrote entries");
+        }
+        persistTestWalCount after = {.stopAfter = SIZE_MAX, .ordered = true};
+        persistIterateWAL(p, persistTestCountEntries, &after);
+        if (after.seen != 10 || !after.ordered) {
+            ERR("WAL holds %zu entries after recovery", after.seen);
+        }
+    }
+
+    TEST("lenient recovery cuts a torn tail; later entries recover") {
+        persistConfig config = persistDefaultConfig();
+        config.walBufferSize = 0;
+        cleaner(persistClose) persist *p = persistTestFlexPersist(&config);
+        persistTestPushRange(p, 0, 5);
+
+        /* A crash cut the last entry short */
+        persistStore *wal = p->walStore;
+        const int64_t size = wal->size(wal->ctx);
+        wal->seek(wal->ctx, size - 3, SEEK_SET);
+        wal->truncate(wal->ctx);
+
+        /* Strict recovery refuses the torn WAL and leaves it as found */
+        p->config.strictRecovery = true;
+        void *strict = persistRecover(p);
+        if (strict) {
+            ERRR("strict recovery accepted a torn WAL");
+            flexFree(strict);
+        }
+        if (wal->size(wal->ctx) != size - 3) {
+            ERRR("strict recovery changed the WAL");
+        }
+
+        p->config.strictRecovery = false;
+        const int64_t four[] = {0, 1, 2, 3};
+        if (!persistTestRecoversTo(p, four, 4)) {
+            ERRR("lenient recovery did not keep the complete entries");
+        }
+        persistTestPushRange(p, 100, 3);
+        const int64_t seven[] = {0, 1, 2, 3, 100, 101, 102};
+        if (!persistTestRecoversTo(p, seven, 7)) {
+            ERRR("entries logged after a torn tail were not recovered");
+        }
+    }
+
+    TEST("an entry whose write fails leaves no partial bytes behind") {
+        /* Unbuffered: the length prefix lands, the envelope does not;
+         * buffered (24 bytes): the failure comes mid-flush */
+        const size_t buffers[] = {0, 24};
+        for (size_t b = 0; b < 2; b++) {
+            persistConfig config = persistDefaultConfig();
+            config.walBufferSize = buffers[b];
+            cleaner(persistClose) persist *p = persistTestFlexPersist(&config);
+            persistTestPushRange(p, 0, 3);
+            persistSync(p);
+
+            persistTestMemWrite = p->walStore->write;
+            p->walStore->write = persistTestBudgetWrite;
+            persistTestWriteBudget = 4 + 8;
+            const databox lost = DATABOX_SIGNED(77);
+            if (persistLogOp(p, PERSIST_OP_PUSH_TAIL, &lost, 1) &&
+                persistSync(p)) {
+                ERR("buffer %zu: the failing write was not reported",
+                    buffers[b]);
+            }
+            persistTestWriteBudget = SIZE_MAX;
+            p->walStore->write = persistTestMemWrite;
+
+            persistTestPushRange(p, 3, 2);
+            persistSync(p);
+            const int64_t want[] = {0, 1, 2, 3, 4};
+            if (!persistTestRecoversTo(p, want, 5)) {
+                ERR("buffer %zu: entries after a failed write were lost",
+                    buffers[b]);
+            }
+        }
+    }
+
+    TEST("ShouldCompact follows autoCompact, walMaxSize and compactRatio") {
+        persistConfig config = persistDefaultConfig();
+        config.autoCompact = false;
+        cleaner(persistClose) persist *p = persistTestFlexPersist(&config);
+        persistTestPushRange(p, 0, 50);
+        persistSync(p);
+        if (persistShouldCompact(p)) {
+            ERRR("compaction recommended with autoCompact off");
+        }
+
+        /* The WAL is past the size limit */
+        config.autoCompact = true;
+        config.walMaxSize = 64;
+        persistSetConfig(p, &config);
+        if (!persistShouldCompact(p)) {
+            ERRR("a WAL past walMaxSize did not recommend compaction");
+        }
+
+        /* Under the size limit, past compactRatio times the snapshot */
+        config.walMaxSize = SIZE_MAX;
+        config.compactRatio = 1.0;
+        persistSetConfig(p, &config);
+        if (!persistShouldCompact(p)) {
+            ERRR("a WAL past compactRatio did not recommend compaction");
+        }
+        config.compactRatio = 1e9;
+        persistSetConfig(p, &config);
+        if (persistShouldCompact(p)) {
+            ERRR("compaction recommended under both limits");
+        }
+
+        /* Compaction empties the WAL; nothing to recommend */
+        cleaner(flexFree) flex *f = persistRecover(p);
+        persistCompact(p, f);
+        config.compactRatio = 1.0;
+        persistSetConfig(p, &config);
+        if (persistShouldCompact(p)) {
+            ERRR("compaction recommended right after compacting");
+        }
+    }
+
+    TEST("ResetStats zeroes every counter") {
+        cleaner(persistClose) persist *p = persistTestFlexPersist(NULL);
+        persistTestPushRange(p, 0, 4);
+        persistSync(p);
+        persistStats stats;
+        persistGetStats(p, &stats);
+        if (stats.walEntries != 4) {
+            ERR("walEntries %" PRIu64, stats.walEntries);
+        }
+        persistResetStats(p);
+        persistGetStats(p, &stats);
+
+        /* walSequence is the WAL's next sequence, not a counter */
+        if (stats.walSequence != 5) {
+            ERR("walSequence %" PRIu64 " after reset", stats.walSequence);
+        }
+        stats.walSequence = 0;
+        const persistStats zero = {0};
+        if (memcmp(&stats, &zero, sizeof(stats)) != 0) {
+            ERRR("ResetStats left a counter set");
+        }
+    }
+
+    TEST("a prepared HMAC key is the one verification uses") {
+        static const uint8_t key[] = "persist prepared-key test key";
+        static const uint8_t other[] = "a different key of the same size";
+        uint8_t storage[2][1024];
+        hmacKey right;
+        hmacKey wrong;
+        hmacPrepareKey(&right, &hmacAlgoSHA256, storage[0], sizeof(storage[0]),
+                       key, sizeof(key));
+        hmacPrepareKey(&wrong, &hmacAlgoSHA256, storage[1], sizeof(storage[1]),
+                       other, sizeof(other));
+
+        persistConfig config = persistDefaultConfig();
+        config.checksumType = PERSIST_CHECKSUM_HMAC_SHA256;
+        cleaner(persistClose) persist *p =
+            persistCreate(&persistOpsFlex, &config);
+        persistAttachSnapshot(p, persistStoreMemory(0));
+        persistAttachWAL(p, persistStoreMemory(0));
+        persistSetIntegrityKey(p, key, sizeof(key));
+        if (!persistSetIntegrityPreparedKey(p, &right)) {
+            ERRR("SetIntegrityPreparedKey refused a key");
+        }
+        cleaner(flexFree) flex *empty = flexNew();
+        persistSnapshot(p, empty);
+        persistTestPushRange(p, 0, 3);
+        persistSync(p);
+        const int64_t want[] = {0, 1, 2};
+        if (!persistTestRecoversTo(p, want, 3)) {
+            ERRR("recovery under the matching prepared key failed");
+        }
+
+        /* A prepared key from other bytes fails verification even with
+         * the right raw key set: the prepared state is what is used */
+        persistSetIntegrityPreparedKey(p, &wrong);
+        void *bad = persistRecover(p);
+        if (bad) {
+            ERRR("recovery passed under a mismatched prepared key");
+            flexFree(bad);
+        }
+        if (persistSetIntegrityPreparedKey(NULL, &right)) {
+            ERRR("SetIntegrityPreparedKey accepted a NULL persist");
         }
     }
 

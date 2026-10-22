@@ -588,9 +588,11 @@ persist *persistCreate(const persistOps *ops, const persistConfig *config);
 bool persistAttachSnapshot(persist *p, persistStore *store);
 bool persistAttachWAL(persist *p, persistStore *store);
 
-/* Configuration */
+/* Configuration.  A change of walBufferSize first writes out the buffered
+ * WAL bytes; when that write fails persistSetConfig returns false and
+ * keeps the old configuration. */
 persistConfig persistDefaultConfig(void);
-void persistSetConfig(persist *p, const persistConfig *config);
+bool persistSetConfig(persist *p, const persistConfig *config);
 void persistGetConfig(const persist *p, persistConfig *config);
 
 /* ---- Integrity key (for keyed checksum algos) ------------------------
@@ -761,7 +763,7 @@ bool persistSync(persist *p);
  * when 'p' is NULL. */
 void persistGetStats(const persist *p, persistStats *stats);
 
-/* Reset statistics */
+/* Zero every counter (walSequence, the WAL's next sequence, stays) */
 void persistResetStats(persist *p);
 
 /* Close and free */
