@@ -35,7 +35,6 @@
 
 #include "persist.h"
 #include "cleaner.h"
-#include "databoxLinear.h"
 #include "datakit.h"
 #include "flexEnvelope.h"
 #include "hmacKeyring.h"
@@ -130,8 +129,8 @@ struct persist {
      * called, these raw fields are NOT used — every wrap/verify call
      * resolves the live key via persistResolveAttachedKey (which
      * checks the generation counter and returns NULL on rotation).
-     * They remain in use only when the caller went through the legacy
-     * persistSetIntegrityKey API directly. */
+     * They are used only when the caller provides the key directly with
+     * persistSetIntegrityKey. */
     const uint8_t *integrityKey;
     size_t integrityKeyLen;
 
@@ -293,8 +292,8 @@ static bool persistBuildVerifyParams(persist *p,
  * back via persistLastExpectedKeyId.
  *
  * Semantics:
- * - If no keyring is attached, accept any header (legacy direct-key
- * callers still work; they get plain VERIFY_FAILED on key mismatch).
+ * - If no keyring is attached, accept any header (a direct-key caller
+ * gets plain VERIFY_FAILED on a key mismatch).
  * - If the header's key_id is 0 (writer had no keyring attached when
  * it wrote the file), accept — there is nothing to compare against,
  * and the envelope's MAC still gates correctness.
@@ -2830,13 +2829,12 @@ const persistOps persistOpsHyperloglog = {
 
 defcleaner(multimap *, multimapFree);
 
-/* Get elementsPerEntry using the iterator interface (avoids internal headers)
- */
-/* Set in a snapshot's shape word for a set; elementsPerEntry is at most
- * 1024, so snapshots written before sets were recorded restore as maps,
- * as they always did */
+/* A snapshot's shape word is elementsPerEntry (at most 1024) with this bit
+ * set for a set */
 #define MULTIMAP_PERSIST_SET (UINT32_C(1) << 31)
 
+/* Get elementsPerEntry using the iterator interface (avoids internal
+ * headers) */
 static uint32_t multimapPersistGetElementsPerEntry(const multimap *m) {
     /* The iterator caches elementsPerEntry, so we can use it to extract the
      * value */
@@ -3018,32 +3016,6 @@ static bool multimapPersistDecodeRow(const uint8_t *data, size_t len,
         fe = flexNext(f, fe);
     }
     return true;
-}
-
-/* Helper to determine encoded value length from databoxLinear type byte */
-static size_t databoxLinearTypeValueLen(uint8_t type) {
-    /* Type byte encoding (from databoxLinear.c):
-     * 0: invalid
-     * 1: BYTES (variable, handled separately)
-     * 2-17: integers (2-3 = 1 byte, 4-5 = 2 bytes, ... 16-17 = 8 bytes)
-     * 18: REAL_16B (2 bytes)
-     * 19: REAL_32B (4 bytes)
-     * 20: REAL_64B (8 bytes)
-     * 21-23: TRUE/FALSE/NULL (0 bytes)
-     */
-    if (type >= 2 && type <= 17) {
-        /* Integer types: ((type - 2) / 2) + 1 bytes */
-        return ((type - 2) / 2) + 1;
-    } else if (type == 18) {
-        return 2; /* REAL_16B */
-    } else if (type == 19) {
-        return 4; /* REAL_32B */
-    } else if (type == 20) {
-        return 8; /* REAL_64B */
-    } else if (type >= 21 && type <= 23) {
-        return 0; /* TRUE/FALSE/NULL */
-    }
-    return 0; /* Invalid or BYTES */
 }
 
 static bool multimapPersistApplyOp(void *structure, persistOp op,
@@ -3410,7 +3382,7 @@ static bool multilistPersistApplyOp(void *structure, persistOp op,
         }
         /* Replay runs against the state the origin had, so a range that
          * deletes nothing here deleted nothing there: a no-op, not a
-         * failure.  Older writers logged such calls. */
+         * failure. */
         (void)multilistDelRange(ml, state, startBox.data.i, countBox.data.i);
         return true;
     }
@@ -3526,15 +3498,11 @@ const persistOps persistOpsMultilist = {
  */
 #include "multidict.h"
 
-/* A multidict snapshot is a flex of [key, val, key, val, ...].  A dict
- * whose keys are not exact records how they match as one leading
- * unsigned element (mdPersistKeys), which makes the element count odd.
- * An even count is a snapshot without that element: an exact-key dict,
- * which is also what every snapshot written before the element existed
- * restores as.  An exact-key dict still writes no element, so its
- * snapshots keep the original layout.  The WAL needs no element: its
- * operations replay onto the dict the snapshot restores, and every
- * recovery starts from a snapshot. */
+/* A multidict snapshot is a flex of [keys, key, val, key, val, ...]:
+ * 'keys' (mdPersistKeys) records how the dict matches keys, then the
+ * pairs in key order.  The WAL needs no such element: its operations
+ * replay onto the dict the snapshot restores, and every recovery starts
+ * from a snapshot. */
 typedef enum mdPersistKeys {
     MD_PERSIST_KEYS_EXACT = 0,  /* multidictTypeExactKey */
     MD_PERSIST_KEYS_CASE = 1,   /* multidictTypeCaseKey */
@@ -3577,11 +3545,8 @@ static uint8_t *multidictPersistSnapshot(const void *structure, size_t *len) {
     /* Create a flex to hold all key-value pairs */
     cleaner(flexFree) flex *f = flexNew();
 
-    const mdPersistKeys keys = mdPersistKeysOf(multidictGetType(d));
-    if (keys != MD_PERSIST_KEYS_EXACT) {
-        const databox tag = DATABOX_UNSIGNED(keys);
-        flexPushByTypeExact(&f, &tag, FLEX_ENDPOINT_TAIL);
-    }
+    const databox keys = DATABOX_UNSIGNED(mdPersistKeysOf(multidictGetType(d)));
+    flexPushByTypeExact(&f, &keys, FLEX_ENDPOINT_TAIL);
 
     /* [key, val, key, val, ...] in key order: the hash table's order
      * depends on its size and growth history, so pairs are sorted to make
@@ -3639,19 +3604,19 @@ static void *multidictPersistRestoreTyped_(const uint8_t *data, size_t len,
     size_t count = flexCount(f);
     flexEntry *fe = flexHead(f);
 
-    /* An odd count leads with the key-matching element */
-    mdPersistKeys keys = MD_PERSIST_KEYS_EXACT;
-    if (count % 2 == 1) {
-        databox tag = {{0}};
-        flexGetByType(fe, &tag);
-        if (!DATABOX_IS_INTEGER(&tag) || tag.data.u > MD_PERSIST_KEYS_CUSTOM) {
-            return NULL; /* not a snapshot this code wrote */
-        }
-
-        keys = (mdPersistKeys)tag.data.u;
-        fe = flexNext(f, fe);
-        count--;
+    /* The key-matching element, then whole pairs */
+    if (count % 2 != 1) {
+        return NULL;
     }
+    databox tag = {{0}};
+    flexGetByType(fe, &tag);
+    if (tag.type != DATABOX_UNSIGNED_64 ||
+        tag.data.u > MD_PERSIST_KEYS_CUSTOM) {
+        return NULL;
+    }
+    const mdPersistKeys keys = (mdPersistKeys)tag.data.u;
+    fe = flexNext(f, fe);
+    count--;
 
     multidictType *type;
     if (want) {
@@ -3721,60 +3686,38 @@ static size_t multidictPersistEstimateSize(const void *structure) {
     return multidictBytes((multidict *)structure);
 }
 
-/* A multidict WAL record for an insert, replace or delete is this marker
- * byte followed by a self-describing flex of [key, val] or [key], so keys
- * and values of every type (byte strings of any length, 96/128-bit
- * integers) replay intact.  The marker is no databoxLinear type byte, so
- * a record written before it existed is told apart by its first byte and
- * still decodes: [keyType][key][valType][val] or [keyType][key]. */
-#define MD_PERSIST_OP_FLEX ((uint8_t)0xF1)
-
-/* A marked record of 'f'; NULL when 'f' could not be built */
-static uint8_t *mdPersistOpRecord_(flex *f, size_t *len) {
-    if (!f) {
-        *len = 0;
-        return NULL;
-    }
-
-    *len = 1 + flexBytes(f);
-    /* @own: caller; free=zfree */
-    uint8_t *buf = zmalloc(*len);
-    buf[0] = MD_PERSIST_OP_FLEX;
-    memcpy(buf + 1, f, flexBytes(f));
-    flexFree(f);
-    return buf;
-}
-
+/* A multidict WAL record for an insert or replace is an exact flex of
+ * [key, val]; for a delete, of [key]; so keys and values of every type
+ * (byte strings of any length, 96/128-bit integers) replay intact. */
 static uint8_t *multidictPersistEncodeOp(persistOp op, const void *args,
                                          size_t argc, size_t *len) {
+    *len = 0;
+    flex *f = NULL;
     switch (op) {
     case PERSIST_OP_INSERT:
-    case PERSIST_OP_REPLACE: {
+    case PERSIST_OP_REPLACE:
         /* args is const databox*[] with [key, val] */
-        if (argc < 2 || !args) {
-            *len = 0;
-            return NULL;
+        if (argc >= 2 && args) {
+            f = flexNewFromDataboxPtrsExact(args, 2);
         }
-        return mdPersistOpRecord_(flexNewFromDataboxPtrsExact(args, 2), len);
-    }
+        break;
 
-    case PERSIST_OP_DELETE: {
+    case PERSIST_OP_DELETE:
         /* args is const databox* (key only) */
-        if (!args) {
-            *len = 0;
-            return NULL;
+        if (args) {
+            f = flexNewFromDataboxExact(args);
         }
-        return mdPersistOpRecord_(flexNewFromDataboxExact(args), len);
-    }
-
-    case PERSIST_OP_CLEAR:
-        *len = 0;
-        return NULL;
+        break;
 
     default:
-        *len = 0;
-        return NULL;
+        /* CLEAR has no operand */
+        break;
     }
+
+    if (f) {
+        *len = flexBytes(f);
+    }
+    return (uint8_t *)f;
 }
 
 static bool multidictPersistApplyOp(void *structure, persistOp op,
@@ -3784,79 +3727,25 @@ static bool multidictPersistApplyOp(void *structure, persistOp op,
     switch (op) {
     case PERSIST_OP_INSERT:
     case PERSIST_OP_REPLACE: {
-        if (len < 2) {
+        databoxBig key;
+        databoxBig val;
+        if (!flexGetTwoDataboxesBig(data, len, &key, &val)) {
             return false;
         }
-
-        databoxBig keyBig;
-        databoxBig valBig;
-        const databox *key = (const databox *)&keyBig;
-        const databox *val = (const databox *)&valBig;
-        databox oldKey;
-        databox oldVal;
-        if (data[0] == MD_PERSIST_OP_FLEX) {
-            if (!flexGetTwoDataboxesBig(data + 1, len - 1, &keyBig, &valBig)) {
-                return false;
-            }
-        } else {
-            /* An unmarked record: [keyType][key][valType][val], whose key
-             * had to be fixed-width (a byte-string key carried no length,
-             * so no such record could be read back) */
-            size_t offset = 0;
-            const uint8_t keyType = data[offset++];
-            const size_t keyLen = databoxLinearTypeValueLen(keyType);
-            if (DATABOX_LINEAR_TYPE_IS_BYTES(keyType) ||
-                offset + keyLen > len - 1) {
-                return false;
-            }
-            DATABOX_LINEAR_PARTS_DECODE(keyType, data + offset, keyLen,
-                                        &oldKey);
-            offset += keyLen;
-
-            /* The value is last, so a byte-string value is the rest */
-            const uint8_t valType = data[offset++];
-            const size_t valLen = DATABOX_LINEAR_TYPE_IS_BYTES(valType)
-                                      ? len - offset
-                                      : databoxLinearTypeValueLen(valType);
-            if (offset + valLen > len) {
-                return false;
-            }
-            DATABOX_LINEAR_PARTS_DECODE(valType, data + offset, valLen,
-                                        &oldVal);
-            key = &oldKey;
-            val = &oldVal;
-        }
-
         if (op == PERSIST_OP_REPLACE) {
-            multidictReplace(*d, key, val);
+            multidictReplace(*d, (const databox *)&key, (const databox *)&val);
         } else {
-            multidictAdd(*d, key, val);
+            multidictAdd(*d, (const databox *)&key, (const databox *)&val);
         }
         return true;
     }
 
     case PERSIST_OP_DELETE: {
-        if (len < 1) {
+        databoxBig key;
+        if (!flexGetSingleDataboxBig(data, len, &key)) {
             return false;
         }
-
-        databoxBig keyBig;
-        databox oldKey;
-        const databox *key = (const databox *)&keyBig;
-        if (data[0] == MD_PERSIST_OP_FLEX) {
-            if (!flexGetSingleDataboxBig(data + 1, len - 1, &keyBig)) {
-                return false;
-            }
-        } else {
-            /* An unmarked record: [keyType][key], the key the rest */
-            if (!DATABOX_LINEAR_TYPE_IS_BYTES(data[0]) &&
-                databoxLinearTypeValueLen(data[0]) > len - 1) {
-                return false;
-            }
-            DATABOX_LINEAR_PARTS_DECODE(data[0], data + 1, len - 1, &oldKey);
-            key = &oldKey;
-        }
-        multidictDelete(*d, key);
+        multidictDelete(*d, (const databox *)&key);
         return true;
     }
 
@@ -6308,10 +6197,10 @@ int persistTest(int argc, char *argv[]) {
     }
 
     TEST("multilist WAL: refused DELETE_AT and REPLACE replay as no-ops") {
-        /* Older writers logged range deletes and replaces that the list
-         * refused.  Replay sees the same state, so it refuses them too;
-         * the record must apply as a no-op, not stop recovery.  Run at
-         * three fill limits, from one node to many. */
+        /* A logged range delete or replace the list refused: replay sees
+         * the same state, so it refuses it too, and the record applies as
+         * a no-op instead of stopping recovery.  Run at three fill limits,
+         * from one node to many. */
         const flexCapSizeLimit limits[] = {
             FLEX_CAP_LEVEL_2048, FLEX_CAP_LEVEL_512, FLEX_CAP_LEVEL_64};
         for (size_t t = 0; t < COUNT_ARRAY(limits); t++) {
@@ -7492,69 +7381,6 @@ int persistTest(int argc, char *argv[]) {
                 multiOrderedSetFree(r);
             }
             persistClose(p);
-        }
-    }
-
-    TEST("multidict: unmarked WAL records still apply") {
-        /* @own: container; free=multidictDefaultClassFree */
-        multidictClass *qdc = multidictDefaultClassNew();
-        cleanerName(testMultidictFreeWithClass, Dict) multidict *d =
-            multidictNew(&multidictTypeExactKey, qdc, 0);
-
-        /* The layout written before records were marked:
-         * [keyType][key][valType][val] and [keyType][key] */
-        const databox k7 = DATABOX_SIGNED(7);
-        const databox k8 = DATABOX_SIGNED(8);
-        const databox hello = databoxNewBytesString("hello");
-        const databox nine = DATABOX_SIGNED(9);
-        const databox *pairs[2][2] = {{&k7, &hello}, {&k8, &nine}};
-        for (size_t i = 0; i < 2; i++) {
-            uint8_t rec[64];
-            size_t n = 0;
-            for (size_t j = 0; j < 2; j++) {
-                databoxLinear dl;
-                size_t partLen;
-                const void *part;
-                uint8_t partType;
-                DATABOX_LINEAR_PARTS_ENCODE(pairs[i][j], partLen, part,
-                                            partType, &dl);
-                rec[n++] = partType;
-                memcpy(rec + n, part, partLen);
-                n += partLen;
-            }
-            if (!persistOpsMultidict.applyOp(&d, PERSIST_OP_INSERT, rec, n)) {
-                ERR("unmarked insert record %zu was refused", i);
-            }
-        }
-
-        databoxLinear dl;
-        size_t partLen;
-        const void *part;
-        uint8_t partType;
-        DATABOX_LINEAR_PARTS_ENCODE(&k8, partLen, part, partType, &dl);
-        uint8_t del[16];
-        del[0] = partType;
-        memcpy(del + 1, part, partLen);
-        if (!persistOpsMultidict.applyOp(&d, PERSIST_OP_DELETE, del,
-                                         1 + partLen)) {
-            ERRR("unmarked delete record was refused");
-        }
-
-        /* A byte-string value is the rest of the record */
-        databox v = {{0}};
-        if (multidictCount(d) != 1 || !multidictFind(d, &k7, &v) ||
-            !DATABOX_IS_BYTES(&v) || v.len != 5 ||
-            memcmp(databoxCBytes(&v), "hello", 5) != 0) {
-            ERRR("unmarked records did not apply");
-        }
-
-        /* An unmarked record with a byte-string key has no key length
-         * and is refused rather than misread */
-        const uint8_t bytesKey[] = {DATABOX_LINEAR_TYPE_BYTES, 'k', 2, 1};
-        if (persistOpsMultidict.applyOp(&d, PERSIST_OP_INSERT, bytesKey,
-                                        sizeof(bytesKey)) ||
-            multidictCount(d) != 1) {
-            ERRR("unmarked byte-string key record was not refused");
         }
     }
 

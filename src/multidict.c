@@ -5112,9 +5112,9 @@ static bool testRestoreIs_(const uint8_t *snap, size_t len, multidictType *as,
 }
 
 /* Persist snapshots record how keys match: case dicts restore as case
- * dicts, exact and untagged (older) snapshots as exact dicts, custom
- * types only through multidictPersistRestoreAs with a custom type, and
- * every mismatch or unknown record is refused */
+ * dicts, exact as exact, custom types only through
+ * multidictPersistRestoreAs with a custom type, and every mismatch,
+ * unknown or missing record is refused */
 static int multidictTestPersistKeys_(void) {
     int err = 0;
     cleaner(multidictMmClassFree) multidictClass *qdc = multidictMmClassNew();
@@ -5145,8 +5145,8 @@ static int multidictTestPersistKeys_(void) {
     cleanerName(zfree, SeenBytes) uint8_t *customSnap =
         testSnapshot_(custom, &customLen);
 
-    /* An exact dict keeps the untagged layout: just its pairs */
-    if (!exactSnap || flexCount((const flex *)exactSnap) != 4 || !ciSnap ||
+    /* The key record, then the pairs */
+    if (!exactSnap || flexCount((const flex *)exactSnap) != 5 || !ciSnap ||
         flexCount((const flex *)ciSnap) != 5 || !ciEmptySnap ||
         flexCount((const flex *)ciEmptySnap) != 1 || !customSnap) {
         printf("ERROR: multidict snapshot layout\n");
@@ -5196,21 +5196,17 @@ static int multidictTestPersistKeys_(void) {
         err++;
     }
 
-    /* Data written before the record existed: pairs only, restored as
-     * exact keys, so the two spellings stay two entries */
+    /* Pairs without the key record are refused */
     {
-        cleaner(flexFree) flex *old = flexNew();
-        const databox fooUpper = databoxNewBytesString("FOO");
-        const databox two = DATABOX_SIGNED(2);
-        const databox *pairs[] = {&foo, &one, &fooUpper, &two};
+        cleaner(flexFree) flex *pairsOnly = flexNew();
+        const databox *pairs[] = {&foo, &one, &bar, &one};
         for (size_t i = 0; i < 4; i++) {
-            flexPushByType(&old, pairs[i], FLEX_ENDPOINT_TAIL);
+            flexPushByTypeExact(&pairsOnly, pairs[i], FLEX_ENDPOINT_TAIL);
         }
-        if (!testRestoreIs_(old, flexBytes(old), NULL, &multidictTypeExactKey,
-                            2) ||
-            multidictPersistRestoreAs(old, flexBytes(old),
-                                      &multidictTypeCaseKey)) {
-            printf("ERROR: an untagged snapshot did not restore exact\n");
+        if (persistOpsMultidict.restore(pairsOnly, flexBytes(pairsOnly)) ||
+            multidictPersistRestoreAs(pairsOnly, flexBytes(pairsOnly),
+                                      &multidictTypeExactKey)) {
+            printf("ERROR: a snapshot without its key record restored\n");
             err++;
         }
     }
