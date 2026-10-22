@@ -9999,7 +9999,7 @@ static int dkTestClusterRingFlexSerializeTest(int argc, char *argv[]) {
  * ==================================================================== */
 /* A snapshot of a JUMP ring holding nodes 41, 42, ... (count of them),
  * with entry `idx` replaced by `value` unless idx is SIZE_MAX (caller
- * frees with flexFree).  Snapshot entries: a 16-entry header (no ring
+ * frees with flexFree).  Snapshot entries: a 17-entry header (no ring
  * affinity rules here), then 15 per node; a node's state is its entry
  * 13. */
 static flex *dkTestClusterRingSnapshotWith(uint32_t count, size_t idx,
@@ -10045,7 +10045,7 @@ static int dkTestClusterRingMaliciousStateTest(int argc, char *argv[]) {
     clusterRingFree(g);
 
     cleaner(flexFree) flex *f =
-        dkTestClusterRingSnapshotWith(1, 16 + 13, 0xDEADBEEFu);
+        dkTestClusterRingSnapshotWith(1, 17 + 13, 0xDEADBEEFu);
 
     const size_t buflen = flexBytes(f);
     clusterRing *r = clusterRingDeserialize((const void *)f, buflen);
@@ -10092,7 +10092,7 @@ static int dkTestClusterRingDuplicateIdTest(int argc, char *argv[]) {
     }
     clusterRingFree(g);
 
-    cleaner(flexFree) flex *f = dkTestClusterRingSnapshotWith(2, 16 + 15, 41u);
+    cleaner(flexFree) flex *f = dkTestClusterRingSnapshotWith(2, 17 + 15, 41u);
 
     const size_t buflen = flexBytes(f);
     clusterRing *r = clusterRingDeserialize((const void *)f, buflen);

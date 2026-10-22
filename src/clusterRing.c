@@ -570,7 +570,8 @@ clusterRing *clusterRingNew(const clusterRingConfig *config) {
         !clusterRingValidRules(config->affinityRules,
                                config->affinityRuleCount) ||
         (config->defaultQuorum.replicaCount &&
-         !clusterRingValidQuorum(&config->defaultQuorum))) {
+         !clusterRingValidQuorum(&config->defaultQuorum)) ||
+        (config->boundedLoadPercent != 0 && config->boundedLoadPercent < 100)) {
         return NULL;
     }
 
@@ -622,6 +623,8 @@ clusterRing *clusterRingNew(const clusterRingConfig *config) {
     ring->strategyType = config->strategyType;
     ring->customStrategy = config->customStrategy;
     ring->hashSeed = config->hashSeed;
+    ring->boundedLoadPercent =
+        config->boundedLoadPercent ? config->boundedLoadPercent : 125;
 
     /* Virtual node configuration */
     ring->vnodeConfig = config->vnodes;
@@ -852,10 +855,34 @@ clusterResult clusterRingInitBounded(clusterRing *ring) {
     }
 
     clusterBoundedData *data = &ring->strategyData.bounded;
-    data->loadFactor = 1.25f; /* 25% above average max load */
-    data->nodeLoads = NULL;
-    data->nodeCount = 0;
+    data->fillSum = 0;
+    data->fillNodes = 0;
     return CLUSTER_OK;
+}
+
+/* A node's fill: the share of its capacity in use (0 without a capacity) */
+static double clusterNodeFill(const clusterNode *node) {
+    return node->capacityBytes
+               ? (double)node->usedBytes / (double)node->capacityBytes
+               : 0.0;
+}
+
+/* Count a healthy node with a capacity into (sign 1) or out of (sign -1)
+ * a bounded-load ring's fill sum; call around every change to the
+ * node's state or usage, and on add / remove */
+static void clusterBoundedAccount(clusterRing *ring, const clusterNode *node,
+                                  int sign) {
+    if (ring->strategyType != CLUSTER_STRATEGY_BOUNDED ||
+        node->state != CLUSTER_NODE_UP || node->capacityBytes == 0) {
+        return;
+    }
+
+    clusterBoundedData *data = &ring->strategyData.bounded;
+    data->fillSum += sign * clusterNodeFill(node);
+    data->fillNodes = (uint32_t)((int64_t)data->fillNodes + sign);
+    if (data->fillNodes == 0) {
+        data->fillSum = 0; /* no rounding residue survives an empty set */
+    }
 }
 
 /* ====================================================================
@@ -892,12 +919,6 @@ void clusterRingFreeMaglev(clusterRing *ring) {
 }
 
 void clusterRingFreeBounded(clusterRing *ring) {
-    clusterBoundedData *data = &ring->strategyData.bounded;
-    if (data->nodeLoads) {
-        zfree(data->nodeLoads);
-        data->nodeLoads = NULL;
-    }
-
     clusterRingFreeKetama(ring);
 }
 
@@ -1306,6 +1327,8 @@ static clusterResult clusterRingAddNodeInternal(clusterRing *ring,
         ring->strategyData.maglev.needsRebuild = true;
     }
 
+    clusterBoundedAccount(ring, node, 1);
+
     /* Update version */
     ring->version++;
     ring->lastModified = clusterGetTimeMs();
@@ -1337,6 +1360,7 @@ clusterResult clusterRingRemoveNode(clusterRing *ring, uint64_t nodeId) {
     }
 
     clusterNode *node = (clusterNode *)valbox.data.ptr;
+    clusterBoundedAccount(ring, node, -1);
 
     /* Remove virtual nodes first */
     clusterRingRemoveVnodes(ring, nodeId);
@@ -1431,7 +1455,9 @@ clusterResult clusterRingSetNodeState(clusterRing *ring, uint64_t nodeId,
         ring->healthyNodeCount++;
     }
 
+    clusterBoundedAccount(ring, node, -1);
     node->state = state;
+    clusterBoundedAccount(ring, node, 1);
     node->stateChangedAt = clusterGetTimeMs();
 
     /* Rebuild strategies that depend on healthy node list */
@@ -1450,6 +1476,28 @@ clusterResult clusterRingSetNodeState(clusterRing *ring, uint64_t nodeId,
     ring->version++;
     ring->lastModified = clusterGetTimeMs();
 
+    return CLUSTER_OK;
+}
+
+clusterResult clusterRingSetNodeUsedBytes(clusterRing *ring, uint64_t nodeId,
+                                          uint64_t usedBytes) {
+    if (!ring) {
+        return CLUSTER_ERR;
+    }
+
+    databox keybox = databoxNewUnsigned(nodeId);
+    databox valbox;
+    if (!multidictFind(ring->nodeById, &keybox, &valbox)) {
+        return CLUSTER_ERR_NOT_FOUND;
+    }
+
+    clusterNode *node = (clusterNode *)valbox.data.ptr;
+    clusterBoundedAccount(ring, node, -1);
+    node->usedBytes = usedBytes;
+    clusterBoundedAccount(ring, node, 1);
+
+    ring->version++;
+    ring->lastModified = clusterGetTimeMs();
     return CLUSTER_OK;
 }
 
@@ -1558,9 +1606,13 @@ const clusterLocation *clusterNodeGetLocation(const clusterNode *node) {
  * Strategy-Specific Locate Functions
  * ==================================================================== */
 
-uint32_t clusterLocateKetama(const clusterRing *ring, const void *key,
-                             uint32_t keyLen, const clusterNode **out,
-                             uint32_t maxNodes) {
+/* Walk the vnode ring clockwise from the key's hash, collecting up to
+ * maxNodes distinct healthy nodes in ring order.  With fillBound >= 0, a
+ * node whose fill is above it is passed over and taken only after every
+ * other node (bounded-load), in the order the walk met it. */
+static uint32_t clusterKetamaWalk(const clusterRing *ring, const void *key,
+                                  uint32_t keyLen, const clusterNode **out,
+                                  uint32_t maxNodes, double fillBound) {
     const clusterKetamaData *data = &ring->strategyData.ketama;
 
     if (CLUSTER_UNLIKELY(data->vnodeCount == 0 || maxNodes == 0)) {
@@ -1619,6 +1671,15 @@ uint32_t clusterLocateKetama(const clusterRing *ring, const void *key,
     seenTracker seen;
     seenTrackerInit(&seen, ring->nodeCount);
 
+    /* Nodes over the fill bound, in walk order, for after the rest */
+    const clusterNode *deferStack[64];
+    cleanerName(zfree, NodePtrs) const clusterNode **deferHeap =
+        (fillBound >= 0 && effectiveMax > 64)
+            ? zcalloc(effectiveMax, sizeof(*deferHeap))
+            : NULL;
+    const clusterNode **deferred = deferHeap ? deferHeap : deferStack;
+    uint32_t deferredCount = 0;
+
     uint32_t found = 0;
     uint32_t checked = 0;
 
@@ -1632,16 +1693,17 @@ uint32_t clusterLocateKetama(const clusterRing *ring, const void *key,
                 &data->vnodes[(lo + checked + 1) % data->vnodeCount]);
         }
 
-        /* Use nodePtr directly instead of hash table lookup */
-        clusterNode *node = vn->nodePtr;
-
-        if (CLUSTER_LIKELY(node != NULL)) {
-            /* Get node's index in nodeArray for bitmap tracking */
-            int32_t nodeIdx = nodeIdToIndex(ring, node->id);
-
-            if (nodeIdx >= 0 && !seenTrackerTest(&seen, (uint32_t)nodeIdx)) {
-                seenTrackerSet(&seen, (uint32_t)nodeIdx);
-                if (node->state == CLUSTER_NODE_UP) {
+        /* The vnode points at its node, which knows its array slot */
+        const clusterNode *node = vn->nodePtr;
+        if (CLUSTER_LIKELY(node != NULL) &&
+            !seenTrackerTest(&seen, node->arrayIndex)) {
+            seenTrackerSet(&seen, node->arrayIndex);
+            if (node->state == CLUSTER_NODE_UP) {
+                if (fillBound >= 0 && clusterNodeFill(node) > fillBound) {
+                    if (deferredCount < effectiveMax) {
+                        deferred[deferredCount++] = node;
+                    }
+                } else {
                     out[found++] = node;
                 }
             }
@@ -1650,8 +1712,18 @@ uint32_t clusterLocateKetama(const clusterRing *ring, const void *key,
         checked++;
     }
 
+    for (uint32_t d = 0; d < deferredCount && found < effectiveMax; d++) {
+        out[found++] = deferred[d];
+    }
+
     seenTrackerFree(&seen);
     return found;
+}
+
+uint32_t clusterLocateKetama(const clusterRing *ring, const void *key,
+                             uint32_t keyLen, const clusterNode **out,
+                             uint32_t maxNodes) {
+    return clusterKetamaWalk(ring, key, keyLen, out, maxNodes, -1.0);
 }
 
 uint32_t clusterLocateJump(const clusterRing *ring, const void *key,
@@ -1830,10 +1902,14 @@ uint32_t clusterLocateMaglev(const clusterRing *ring, const void *key,
 uint32_t clusterLocateBounded(const clusterRing *ring, const void *key,
                               uint32_t keyLen, const clusterNode **out,
                               uint32_t maxNodes) {
-    /* Bounded load uses Ketama with load checking */
-    /* For now, delegate to Ketama (full bounded load implementation
-       would check node loads and skip overloaded nodes) */
-    return clusterLocateKetama(ring, key, keyLen, out, maxNodes);
+    /* Ketama order, passing over nodes filled above boundedLoadPercent of
+     * the mean fill; with no fill recorded there is nothing to pass over */
+    const clusterBoundedData *data = &ring->strategyData.bounded;
+    const double mean =
+        data->fillNodes ? data->fillSum / (double)data->fillNodes : 0.0;
+    const double bound =
+        mean > 0 ? mean * (double)ring->boundedLoadPercent / 100.0 : -1.0;
+    return clusterKetamaWalk(ring, key, keyLen, out, maxNodes, bound);
 }
 
 /* ====================================================================
@@ -2851,7 +2927,7 @@ void clusterRingIterateNodesByLocation(const clusterRing *ring,
  *
  *   Layout:
  *
- *     Header (16 entries):
+ *     Header (17 entries):
  *       [ 0] ring name               (bytes, may be empty)
  *       [ 1] defaultQuorum.replicaCount      (unsigned, 0..255)
  *       [ 2] defaultQuorum.writeQuorum       (unsigned, 0..255)
@@ -2865,9 +2941,10 @@ void clusterRingIterateNodesByLocation(const clusterRing *ring,
  *       [10] vnodeConfig.replicaPointSpread (unsigned, 0|1)
  *       [11] strategyType            (unsigned, 0..5)
  *       [12] hashSeed                (unsigned, 0..UINT32_MAX)
- *       [13] ring affinity rule count RR (unsigned, 0..255)
- *       [14] nodeCount NN            (unsigned)
- *       [15] keySpaceCount KK        (unsigned)
+ *       [13] boundedLoadPercent      (unsigned, 100..UINT32_MAX)
+ *       [14] ring affinity rule count RR (unsigned, 0..255)
+ *       [15] nodeCount NN            (unsigned)
+ *       [16] keySpaceCount KK        (unsigned)
  *
  *     Ring affinity rules (3 entries × RR): spreadLevel (unsigned,
  *     0..7), minSpread (unsigned, 0..255), required (unsigned, 0|1)
@@ -2905,7 +2982,7 @@ void clusterRingIterateNodesByLocation(const clusterRing *ring,
  * custom strategy's functions, the modification version) is not part
  * of a snapshot. */
 
-#define CLUSTER_RING_HEADER_ENTRY_COUNT ((size_t)16)
+#define CLUSTER_RING_HEADER_ENTRY_COUNT ((size_t)17)
 #define CLUSTER_RING_NODE_ENTRY_COUNT ((size_t)15)
 #define CLUSTER_RING_KEYSPACE_FIXED_ENTRY_COUNT ((size_t)9)
 #define CLUSTER_RING_RULE_ENTRY_COUNT ((size_t)3)
@@ -2946,7 +3023,7 @@ static flex *clusterRingBuildSnapshotFlex(const clusterRing *ring) {
     /* @own: caller; free=flexFree */
     flex *f = flexNew();
 
-    /* ---- Header (16 entries), then the ring's rules ---- */
+    /* ---- Header (17 entries), then the ring's rules ---- */
     flexRow row = FLEX_ROW_INIT;
     crRowName(&row, ring->name);
     crRowQuorum(&row, &ring->defaultQuorum);
@@ -2957,6 +3034,7 @@ static flex *clusterRingBuildSnapshotFlex(const clusterRing *ring) {
                     (uint64_t)(ring->vnodeConfig.replicaPointSpread ? 1u : 0u));
     flexRowUnsigned(&row, (uint64_t)ring->strategyType);
     flexRowUnsigned(&row, (uint64_t)ring->hashSeed);
+    flexRowUnsigned(&row, (uint64_t)ring->boundedLoadPercent);
 
     /* Count only non-NULL slots so the deserializer can iterate
      * sequentially without re-checking sparse positions. */
@@ -3212,7 +3290,13 @@ clusterRing *clusterRingDeserialize(const void *buf, size_t bufLen) {
     }
     config.hashSeed = (uint32_t)v;
 
-    /* [13-15] ring rule, node and keyspace counts */
+    /* [13] bounded-load percent */
+    if (!crReadUnsignedRange(f, &fe, 100, UINT32_MAX, &v)) {
+        return NULL;
+    }
+    config.boundedLoadPercent = (uint32_t)v;
+
+    /* [14-16] ring rule, node and keyspace counts */
     uint64_t ringRuleCount = 0;
     uint64_t nodeCount = 0;
     uint64_t ksCount = 0;
@@ -3318,7 +3402,10 @@ clusterRing *clusterRingDeserialize(const void *buf, size_t bufLen) {
         }
 
         /* The node just added is the array's last */
-        ring->nodeArray[ring->nodeCount - 1]->usedBytes = usedBytes;
+        clusterNode *added = ring->nodeArray[ring->nodeCount - 1];
+        clusterBoundedAccount(ring, added, -1);
+        added->usedBytes = usedBytes;
+        clusterBoundedAccount(ring, added, 1);
     }
 
     clusterRingPlaceNodes(ring);
@@ -6092,6 +6179,94 @@ int clusterRingTest(int argc, char *argv[]) {
                 ERR("strategy %d: write plan ignored its quorum", (int)s);
             }
             clusterWriteSetFree(&ws);
+        }
+    }
+
+    /* Bounded-load passes over a node filled above boundedLoadPercent of
+     * the mean fill (Ketama on the same nodes does not), takes it last,
+     * and keeps its fill sum exact through usage, state and membership
+     * changes */
+    TEST("bounded-load passes over overfilled nodes") {
+        const clusterRingConfig boundedConfig = {
+            .strategyType = CLUSTER_STRATEGY_BOUNDED,
+            .defaultQuorum = {.replicaCount = 8},
+            .boundedLoadPercent = 150,
+        };
+        const clusterRingConfig ketamaConfig = {
+            .strategyType = CLUSTER_STRATEGY_KETAMA,
+            .defaultQuorum = {.replicaCount = 8},
+        };
+        cleaner(clusterRingFree) clusterRing *ring =
+            clusterRingNew(&boundedConfig);
+        cleaner(clusterRingFree) clusterRing *ketama =
+            clusterRingNew(&ketamaConfig);
+        for (uint64_t id = 1; id <= 8; id++) {
+            const clusterNodeConfig nc = {.id = id, .capacityBytes = 1000};
+            clusterRingAddNode(ring, &nc);
+            clusterRingAddNode(ketama, &nc);
+            clusterRingSetNodeUsedBytes(ring, id, 100);
+        }
+        clusterRingSetNodeUsedBytes(ring, 3, 900); /* 0.9 vs mean 0.2 */
+
+        uint32_t ketamaPrimary3 = 0;
+        for (uint32_t k = 0; k < 400; k++) {
+            char key[16];
+            const int len = snprintf(key, sizeof(key), "b%u", k);
+            clusterPlacement p;
+            clusterPlacement q;
+            clusterRingLocate(ring, key, (uint32_t)len, &p);
+            clusterRingLocate(ketama, key, (uint32_t)len, &q);
+            ketamaPrimary3 += q.primary->id == 3;
+            if (p.primary->id == 3 || clusterPlacementReplicaCount(&p) != 8 ||
+                clusterPlacementGetReplica(&p, 7)->id != 3) {
+                ERR("key %u: overfilled node 3 not passed over", k);
+                k = 400;
+            }
+            clusterPlacementFree(&p);
+            clusterPlacementFree(&q);
+        }
+        if (ketamaPrimary3 == 0) {
+            ERRR("ketama never chose node 3: the test proves nothing");
+        }
+
+        /* The fill sum tracks every change exactly */
+        clusterRingSetNodeState(ring, 5, CLUSTER_NODE_DOWN);
+        clusterRingRemoveNode(ring, 6);
+        clusterRingSetNodeUsedBytes(ring, 7, 400);
+        double sum = 0;
+        uint32_t nodes = 0;
+        for (uint32_t i = 0; i < ring->nodeCount; i++) {
+            const clusterNode *n = ring->nodeArray[i];
+            if (n && n->state == CLUSTER_NODE_UP && n->capacityBytes) {
+                sum += (double)n->usedBytes / (double)n->capacityBytes;
+                nodes++;
+            }
+        }
+        const clusterBoundedData *bd = &ring->strategyData.bounded;
+        if (bd->fillNodes != nodes || bd->fillSum < sum - 1e-9 ||
+            bd->fillSum > sum + 1e-9) {
+            ERR("fill sum %f over %u, recomputed %f over %u", bd->fillSum,
+                bd->fillNodes, sum, nodes);
+        }
+        if (clusterRingSetNodeUsedBytes(ring, 99, 1) != CLUSTER_ERR_NOT_FOUND) {
+            ERRR("usage set on a node not in the ring");
+        }
+
+        /* The setting and the usage persist; below 100% is refused */
+        size_t len = 0;
+        uint8_t *snap = persistOpsClusterRing.snapshot(ring, &len);
+        clusterRing *back = persistOpsClusterRing.restore(snap, len);
+        if (!back || back->boundedLoadPercent != 150 ||
+            clusterNodeGetUsedBytes(clusterRingGetNode(back, 3)) != 900 ||
+            back->strategyData.bounded.fillNodes != nodes) {
+            ERRR("bounded-load state did not round-trip");
+        }
+        clusterRingFree(back);
+        zfree(snap);
+        const clusterRingConfig low = {.boundedLoadPercent = 99};
+        cleaner(clusterRingFree) clusterRing *refused = clusterRingNew(&low);
+        if (refused) {
+            ERRR("a bound below 100 percent was accepted");
         }
     }
 

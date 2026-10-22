@@ -54,6 +54,7 @@ static void *pcRingBuild(const persistContractBuild *b) {
         .affinityRules = ringRules,
         .affinityRuleCount = pcRingRules(&rng, ringRules),
         .hashSeed = (uint32_t)splitmix64(&rng),
+        .boundedLoadPercent = 100 + (uint32_t)(splitmix64(&rng) % 200),
     };
     /* @own: caller; free=clusterRingFree */
     clusterRing *ring = clusterRingNew(&config);
@@ -94,9 +95,11 @@ static void *pcRingBuild(const persistContractBuild *b) {
                 ring, id,
                 (clusterNodeState)(splitmix64(&rng) %
                                    (CLUSTER_NODE_MAINTENANCE + 1)));
-        } else if (roll < 14) {
+        } else if (roll == 12) {
             clusterRingSetNodeWeight(ring, id,
                                      (uint32_t)(splitmix64(&rng) % 400));
+        } else if (roll == 13) {
+            clusterRingSetNodeUsedBytes(ring, id, splitmix64(&rng) >> 4);
         } else if (roll == 14) {
             snprintf(name, sizeof(name), "ks-%" PRIu64, id % 32);
             clusterAffinityRule rules[3];

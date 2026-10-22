@@ -270,6 +270,12 @@ typedef struct clusterRingConfig {
     /* Sizing hints */
     uint32_t expectedNodeCount; /* Pre-allocate for efficiency */
     uint32_t hashSeed;          /* Hash randomization seed */
+
+    /* Bounded-load placement passes over a healthy node whose fill
+     * (usedBytes / capacityBytes, see clusterRingSetNodeUsedBytes) is above
+     * this percentage of the mean fill of healthy nodes with a capacity,
+     * taking it only when no other node remains.  0 = 125; at least 100. */
+    uint32_t boundedLoadPercent;
 } clusterRingConfig;
 
 /* ====================================================================
@@ -363,6 +369,12 @@ clusterResult clusterRingSetNodeState(clusterRing *ring, uint64_t nodeId,
 /* Update node weight (triggers rebalance); 0 sets the default, 100 */
 clusterResult clusterRingSetNodeWeight(clusterRing *ring, uint64_t nodeId,
                                        uint32_t weight);
+
+/* Record how many of the node's capacityBytes are in use (persisted with
+ * the ring; bounded-load placement reads the fill it gives, see
+ * clusterRingConfig.boundedLoadPercent) */
+clusterResult clusterRingSetNodeUsedBytes(clusterRing *ring, uint64_t nodeId,
+                                          uint64_t usedBytes);
 
 /* Get node by ID (NULL if not found) */
 const clusterNode *clusterRingGetNode(const clusterRing *ring, uint64_t nodeId);

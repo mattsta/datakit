@@ -132,12 +132,14 @@ typedef struct clusterRendezvousData {
 } clusterRendezvousData;
 
 /* Bounded-load places on a Ketama vnode ring: `ketama` leads so the
- * vnode code reaches it as strategyData.ketama for either strategy. */
+ * vnode code reaches it as strategyData.ketama for either strategy.  The
+ * fill sum (usedBytes / capacityBytes over healthy nodes with a capacity)
+ * is kept current by every change to a node's state or usage, so the
+ * mean fill a placement compares against costs nothing to read. */
 typedef struct clusterBoundedData {
     clusterKetamaData ketama;
-    float loadFactor;    /* Max load = avg * (1 + loadFactor) */
-    uint64_t *nodeLoads; /* Current load per node */
-    uint32_t nodeCount;
+    double fillSum;
+    uint32_t fillNodes;
 } clusterBoundedData;
 
 typedef union clusterStrategyData {
@@ -171,6 +173,8 @@ struct clusterRing {
     clusterVnodeConfig vnodeConfig;
     clusterQuorum defaultQuorum;
     uint32_t hashSeed;
+    uint32_t boundedLoadPercent; /* bounded-load: pass over nodes whose fill
+                                    is above this % of the mean fill */
 
     /* Affinity */
     clusterAffinityRule *affinityRules;
