@@ -113,7 +113,7 @@ static int mfwfCompareAll_(const multiFenwickFlat *flat,
     return err;
 }
 
-/* Run 'ops' random operations on both trees, checking that every call
+/* Run 'ops' random operations on the two trees, checking that every call
  * returns the same result.  Returns the number of mismatches. */
 static int mfwfDifferential_(uint64_t seed, size_t ops, size_t maxIdx,
                              bool integersOnly) {

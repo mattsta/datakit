@@ -51,6 +51,17 @@ class Terms(unittest.TestCase):
         self.assertEqual(labels("arm 2 of the trial"), [("arm N", False)])
         self.assertEqual(labels("ship the product"), [("the product", False)])
 
+    def test_quoted_output_allows_only_its_term_in_its_file(self) -> None:
+        note = "warning: (arm64) /tmp/lto.o unable to open object file"
+        quoted = "tools/src/dktools/steps.py"
+        self.assertEqual(leakcheck.scan(quoted, [(1, note)]), [])
+        # Other terms still apply to that file ...
+        hits = leakcheck.scan(quoted, [(1, "a Carrier build")])
+        self.assertEqual([h.term.label for h in hits], ["carrier"])
+        # ... and the term still applies to every other file.
+        hits = leakcheck.scan("src/a.c", [(1, note)])
+        self.assertEqual([h.term.label for h in hits], ["/tmp/"])
+
     def test_clean_text(self) -> None:
         for text in (
             "a caller",

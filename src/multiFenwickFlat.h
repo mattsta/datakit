@@ -91,7 +91,7 @@ void multiFenwickFlatFree(multiFenwickFlat *mfw);
  * ==================================================================== */
 
 /* Largest index Update and Set accept, the same as MULTIFENWICK_INDEX_MAX
- * so both trees accept the same indexes.  Capacity stays at or below 2^30
+ * so the two trees accept the same indexes.  Capacity stays at or below 2^30
  * cells (9 GiB of cells). */
 #define MULTIFENWICK_FLAT_INDEX_MAX ((((uint64_t)1) << 30) - 1)
 

@@ -10,7 +10,9 @@ from the merge base), and ``--tree`` every line of every tracked file
 under ``TREE_DIRS`` plus the top-level ``*.md`` files.  Vendored code
 (``VENDORED_DIRS``) mirrors its upstream exactly and is skipped unless
 ``--include-vendored`` is given; ``SELF_FILES`` (this module and its
-tests, which must spell the terms out) are always skipped.
+tests, which must spell the terms out) are always skipped, and
+``QUOTED_OUTPUT`` lets a named file contain a named term because it
+quotes another program's fixed output.
 
 Each hit prints as ``path:line: [term] text``.  ``HARD_TERMS`` fail the
 gate; ``REVIEW_TERMS`` are known to match ordinary code too, so their
@@ -120,6 +122,17 @@ VENDORED_DIRS = ("deps/", "src/memshard/")
 #: Files that must spell the terms out: the gate and its tests.
 SELF_FILES = ("tools/src/dktools/leakcheck.py", "tools/tests/test_leakcheck.py")
 
+#: Terms a file may contain because it quotes another program's fixed
+#: output, not a local path or a name: path -> term labels.  Every other
+#: term still applies to the file, and the terms still apply everywhere
+#: else.
+QUOTED_OUTPUT: dict[str, tuple[str, ...]] = {
+    # macOS dsymutil names the linker's temporary LTO object /tmp/lto.o;
+    # dktools recognises that note and tests it
+    "tools/src/dktools/steps.py": ("/tmp/",),
+    "tools/tests/test_verify.py": ("/tmp/",),
+}
+
 
 @dataclass(frozen=True)
 class Hit:
@@ -130,11 +143,13 @@ class Hit:
 
 
 def scan(path: str, lines: Iterable[tuple[int, str]]) -> list[Hit]:
-    """Every term match in (line number, text) pairs of `path`."""
+    """Every term match in (line number, text) pairs of `path`, except the
+    terms QUOTED_OUTPUT allows in that file."""
+    allowed = QUOTED_OUTPUT.get(path, ())
     hits: list[Hit] = []
     for number, text in lines:
         for term in TERMS:
-            if term.pattern.search(text):
+            if term.label not in allowed and term.pattern.search(text):
                 hits.append(Hit(path, number, term, text))
     return hits
 
