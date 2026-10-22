@@ -27,12 +27,14 @@ extern const persistContractType persistContractIntsetBig;
 extern const persistContractType persistContractHyperloglog;
 extern const persistContractType persistContractMultiarray;
 extern const persistContractType persistContractMultilist;
+extern const persistContractType persistContractMultidict;
 
 static const persistContractType *const pcRegistry[] = {
     &persistContractFlex,       &persistContractMultimap,
     &persistContractMultiroar,  &persistContractIntset,
     &persistContractIntsetBig,  &persistContractHyperloglog,
     &persistContractMultiarray, &persistContractMultilist,
+    &persistContractMultidict,
 };
 
 /* ====================================================================
@@ -507,9 +509,10 @@ static double pcPer(uint64_t total, size_t n) {
     return n ? (double)total / (double)n : 0.0;
 }
 
+/* 'datakit-test test persistContract [type]': every registered type, or
+ * just the one named */
 int persistContractTest(int argc, char *argv[]) {
-    (void)argc;
-    (void)argv;
+    const char *only = argc > 3 ? argv[3] : NULL;
     int err = 0;
 
     printf("| type | elements | snapshot B/elem | snapshot ns/elem | "
@@ -518,6 +521,9 @@ int persistContractTest(int argc, char *argv[]) {
     printf("| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n");
     for (size_t i = 0; i < sizeof(pcRegistry) / sizeof(*pcRegistry); i++) {
         const persistContractType *t = pcRegistry[i];
+        if (only && strcmp(only, t->ops->name) != 0) {
+            continue;
+        }
         const pcRow row = pcRun(t);
         printf("| %s | %zu | %.2f | %.1f | %.1f | %zu | %zu | %zu | %s |\n",
                t->ops->name, row.elements, pcPer(row.snapshotLen, row.elements),

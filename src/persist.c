@@ -3553,6 +3553,24 @@ static mdPersistKeys mdPersistKeysOf(const multidictType *type) {
     return MD_PERSIST_KEYS_CUSTOM;
 }
 
+/* One entry while a snapshot sorts them.  databoxBig: a 96/128-bit key or
+ * value is copied into the pair (the iterator may decode it into storage
+ * it reuses), so pairs stay where they are and pointers to them are
+ * sorted. */
+typedef struct mdPersistPair {
+    databoxBig key;
+    databoxBig val;
+} mdPersistPair;
+
+defcleanerName(mdPersistPair *, zfree, MdPairs);
+defcleanerName(mdPersistPair **, zfree, MdPairOrder);
+
+static int mdPersistPairCompare_(const void *a, const void *b) {
+    const mdPersistPair *pa = *(const mdPersistPair *const *)a;
+    const mdPersistPair *pb = *(const mdPersistPair *const *)b;
+    return databoxCompare((const databox *)&pa->key, (const databox *)&pb->key);
+}
+
 static uint8_t *multidictPersistSnapshot(const void *structure, size_t *len) {
     const multidict *d = structure;
 
@@ -3565,16 +3583,34 @@ static uint8_t *multidictPersistSnapshot(const void *structure, size_t *len) {
         flexPushByTypeExact(&f, &tag, FLEX_ENDPOINT_TAIL);
     }
 
-    /* Iterate through all entries and add to flex as [key, val, key, val, ...]
-     */
+    /* [key, val, key, val, ...] in key order: the hash table's order
+     * depends on its size and growth history, so pairs are sorted to make
+     * the bytes a function of the contents alone (equal dicts snapshot to
+     * equal bytes, and a restored dict snapshots to the bytes it came
+     * from).  Byte strings still point into the dict, which does not
+     * change while they are read. */
+    const size_t n = multidictCount(d);
+    cleanerName(zfree, MdPairs) mdPersistPair *pairs =
+        zcalloc(n ? n : 1, sizeof(*pairs));
+    cleanerName(zfree, MdPairOrder) mdPersistPair **order =
+        zcalloc(n ? n : 1, sizeof(*order));
+    size_t got = 0;
     multidictIterator iter;
     if (multidictIteratorInit((multidict *)d, &iter)) {
         multidictEntry entry;
-        while (multidictIteratorNext(&iter, &entry)) {
-            const databox *pair[2] = {&entry.key, &entry.val};
-            flexAppendMultipleExact(&f, 2, pair);
+        while (got < n && multidictIteratorNext(&iter, &entry)) {
+            databoxBigCopyFrom(&pairs[got].key, &entry.key);
+            databoxBigCopyFrom(&pairs[got].val, &entry.val);
+            order[got] = &pairs[got];
+            got++;
         }
         multidictIteratorRelease(&iter);
+    }
+    qsort(order, got, sizeof(*order), mdPersistPairCompare_);
+    for (size_t i = 0; i < got; i++) {
+        const databox *pair[2] = {(const databox *)&order[i]->key,
+                                  (const databox *)&order[i]->val};
+        flexAppendMultipleExact(&f, 2, pair);
     }
 
     *len = flexBytes(f);
@@ -3590,7 +3626,8 @@ static uint8_t *multidictPersistSnapshot(const void *structure, size_t *len) {
  * custom type), and any mismatch is refused. */
 static void *multidictPersistRestoreTyped_(const uint8_t *data, size_t len,
                                            multidictType *want) {
-    if (!flexValidateBuffer(data, len)) {
+    /* Every entry is decoded below, so every entry is checked first */
+    if (!flexValidateBufferDeep(data, len)) {
         return NULL;
     }
     /* Restore the flex */
@@ -3835,11 +3872,20 @@ static void multidictPersistFree(void *structure) {
     multidictDefaultClassFree(cls);
 }
 
+static void *multidictPersistNewEmpty(void) {
+    /* An exact-key dict with its own default class, as restore makes */
+    /* @own: container; free=multidictDefaultClassFree */
+    multidictClass *cls = multidictDefaultClassNew();
+    /* @own: caller; free=multidictFree */
+    return multidictNew(&multidictTypeExactKey, cls, 0);
+}
+
 const persistOps persistOpsMultidict = {
     .type = PERSIST_TYPE_MULTIDICT,
     .name = "multidict",
     .snapshot = multidictPersistSnapshot,
     .restore = multidictPersistRestore,
+    .newEmpty = multidictPersistNewEmpty,
     .count = multidictPersistCount,
     .estimateSize = multidictPersistEstimateSize,
     .encodeOp = multidictPersistEncodeOp,

@@ -1123,6 +1123,25 @@ int multidictPTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("multidictP readers: CountP, BytesP and SyncP") {
+        ptestCleanupFiles(basePath);
+        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        multidictP *d = multidictNewP(ctx);
+        const uint64_t emptyBytes = multidictBytesP(d);
+        for (int64_t i = 0; i < 50; i++) {
+            const databox key = DATABOX_SIGNED(i);
+            const databox val = DATABOX_SIGNED(i * i);
+            multidictAddP(d, &key, &val);
+        }
+        if (!multidictSyncP(d) || multidictCountP(d) != 50 ||
+            multidictBytesP(d) <= emptyBytes) {
+            ERRR("CountP/BytesP/SyncP disagree with 50 adds");
+        }
+        multidictCloseP(d);
+        persistCtxFree(ctx);
+        ptestCleanupFiles(basePath);
+    }
+
     TEST_FINAL_RESULT;
 }
 #endif /* DATAKIT_TEST */
