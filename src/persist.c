@@ -3160,13 +3160,6 @@ static void *multilistPersistRestore(const uint8_t *data, size_t len) {
         return NULL;
     }
 
-    /* Restore the flex */
-    cleaner(flexFree) flex *f = zmalloc(len);
-    memcpy(f, data, len);
-
-    /* Create multilist and populate from flex */
-    cleaner(multilistFree) multilist *ml =
-        multilistNew(FLEX_CAP_LEVEL_2048, 0); /* default config */
     /* Use thread-local replay state set by persistRecover. That state is
      * borrowed; only a locally created fallback is owned here. */
     cleaner(mflexStateFree) mflexState *ownedState = NULL;
@@ -3180,22 +3173,15 @@ static void *multilistPersistRestore(const uint8_t *data, size_t len) {
         state = ownedState;
     }
 
-    /* Iterate through flex and push each element to multilist
-     * Note: flexHead returns non-NULL even for empty flex (points to end
-     * marker), so we must check count to know when to stop */
-    size_t count = flexCount(f);
-    flexEntry *fe = flexHead(f);
-    for (size_t i = 0; i < count; i++) {
-        databoxBig box; /* room for a 96/128-bit element */
-        flexGetByTypeBig(fe, &box);
-        multilistPushByTypeTail(&ml, state, (databox *)&box);
-        fe = flexNext(f, fe);
-    }
+    /* The elements in order: built straight into node-sized pieces (the
+     * snapshot does not record the list's configuration, so the default
+     * one is used) */
+    /* @own: container; free=flexFree */
+    flex *f = zmalloc(len);
+    memcpy(f, data, len);
 
     /* @own: caller; free=multilistFree */
-    multilist *out = ml;
-    ml = NULL;
-    return out;
+    return multilistNewFromDump(FLEX_CAP_LEVEL_2048, 0, state, f);
 }
 
 static size_t multilistPersistCount(const void *structure) {

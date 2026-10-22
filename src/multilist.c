@@ -26,6 +26,10 @@
  * compression state argument. */
 #include "multilistAdapter.h"
 
+#include "cleaner.h"
+
+defcleanerName(flex **, zfree, Flexes);
+
 typedef enum multilistType {
     MULTILIST_TYPE_INVALID = 0,
     MULTILIST_TYPE_SMALL = 1,  /* 8 bytes, fixed. */
@@ -177,6 +181,43 @@ static void multilistUpgradeIfNecessary(multilist **m, mflexState *state,
             *m = _MULTILIST_TAG(*m, MULTILIST_TYPE_FULL);
         }
     } /* else, is FULL and no grow necessary. */
+}
+
+multilist *multilistNewFromDump(flexCapSizeLimit limit, uint32_t depth,
+                                mflexState *state, flex *elements) {
+    const size_t bytes = flexBytes(elements);
+    const size_t nodeBytes = flexOptimizationSizeLimit[limit];
+
+    /* What Small or Medium holds: adopt it, then grow as a write would */
+    if (bytes <= nodeBytes * 3) {
+        multilist *ml = multilistNewFromFlex(limit, depth, elements);
+        multilistUpgradeIfNecessary(&ml, state, depth, limit);
+        return ml;
+    }
+
+    /* Larger: cut whole elements into chunks of about two nodes (tail
+     * first, so each cut only shortens the dump); Full splits each chunk
+     * into two nodes and applies the compression depth once */
+    const size_t count = flexCount(elements);
+    size_t perChunk = (count * 2 * nodeBytes) / bytes;
+    perChunk = perChunk ? perChunk : 1;
+    const size_t chunks = (count + perChunk - 1) / perChunk;
+    cleanerName(zfree, Flexes) flex **chunk = zcalloc(chunks, sizeof(flex *));
+    for (size_t i = chunks - 1; i > 0; i--) {
+        const size_t end =
+            (i + 1) * perChunk < count ? (i + 1) * perChunk : count;
+        const size_t entries = end - i * perChunk;
+        /* @own: container; free=flexFree */
+        chunk[i] =
+            flexSplitRange(&elements, -(int32_t)entries, (uint32_t)entries);
+    }
+    chunk[0] = elements;
+
+    /* @own: caller; free=multilistFree */
+    multilistFull *full = multilistFullNewFromFlexConsumeGrow(
+        NULL, state, chunk, chunks, depth, limit);
+    multilist *ml = SET_COMPRESS_DEPTH_LIMIT(full, depth, limit);
+    return _MULTILIST_TAG(ml, MULTILIST_TYPE_FULL);
 }
 
 /* ====================================================================
@@ -4619,6 +4660,57 @@ int multilistTest(int argc, char *argv[]) {
             if (flexCount(emptied) != 0 || multilistCount(ml) != 0) {
                 ERR("%s: emptied list dumped %zu elements", name,
                     flexCount(emptied));
+            }
+        }
+    }
+
+    TEST("NewFromDump rebuilds every tier; later edits agree") {
+        /* Sizes reaching Small, Medium and Full, with and without
+         * compression: the rebuild dumps the same bytes, and the same
+         * pops and pushes give the same results on both */
+        static const int64_t dumpSizes[] = {0, 5, 120, 400, 5000};
+        static const uint32_t compressDepths[] = {0, 2};
+        cleaner(mflexStateFree) mflexState *scratch = mflexStateCreate();
+        for (size_t d = 0; d < COUNT_ARRAY(compressDepths); d++) {
+            const uint32_t compressDepth = compressDepths[d];
+            for (size_t z = 0; z < COUNT_ARRAY(dumpSizes); z++) {
+                cleaner(multilistFree) multilist *orig =
+                    multilistNew(FLEX_CAP_LEVEL_512, compressDepth);
+                for (int64_t i = 0; i < dumpSizes[z]; i++) {
+                    const databox v = DATABOX_SIGNED(i * 7 - 3000);
+                    multilistPushByTypeTail(&orig, scratch, &v);
+                }
+                cleaner(multilistFree) multilist *rebuilt =
+                    multilistNewFromDump(FLEX_CAP_LEVEL_512, compressDepth,
+                                         scratch, multilistDump(orig, scratch));
+                for (int round = 0; round < 2; round++) {
+                    cleaner(flexFree) flex *a = multilistDump(orig, scratch);
+                    cleaner(flexFree) flex *b = multilistDump(rebuilt, scratch);
+                    if (flexBytes(a) != flexBytes(b) ||
+                        memcmp(a, b, flexBytes(a)) != 0) {
+                        ERR("size %" PRId64 " depth %u round %d: dumps "
+                            "differ",
+                            dumpSizes[z], compressDepth, round);
+                        break;
+                    }
+                    for (int64_t k = 0; k < 40; k++) {
+                        databox x = {{0}};
+                        databox y = {{0}};
+                        const bool tail = k & 1;
+                        const bool px = multilistPop(&orig, scratch, &x, tail);
+                        const bool py =
+                            multilistPop(&rebuilt, scratch, &y, tail);
+                        if (px != py || (px && !databoxEqual(&x, &y))) {
+                            ERR("size %" PRId64 ": pop %" PRId64 " differs",
+                                dumpSizes[z], k);
+                        }
+                        databoxFreeData(&x);
+                        databoxFreeData(&y);
+                        const databox v = DATABOX_SIGNED(k * 1000);
+                        multilistPushByTypeHead(&orig, scratch, &v);
+                        multilistPushByTypeHead(&rebuilt, scratch, &v);
+                    }
+                }
             }
         }
     }
