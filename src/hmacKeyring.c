@@ -999,6 +999,8 @@ static void hkrPersistFree(void *structure) {
 const persistOps persistOpsHmacKeyring = {
     .type = PERSIST_TYPE_HMAC_KEYRING,
     .name = "hmacKeyring",
+    .formatVersion = 1,
+    .minReadVersion = 1,
     .snapshot = hkrPersistSnapshot,
     .restore = hkrPersistRestore,
     .newEmpty = hkrPersistNewEmpty,

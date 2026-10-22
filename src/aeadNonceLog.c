@@ -635,6 +635,8 @@ static void anlPersistFree(void *structure) {
 const persistOps persistOpsAeadNonceLog = {
     .type = PERSIST_TYPE_AEAD_NONCE_LOG,
     .name = "aeadNonceLog",
+    .formatVersion = 1,
+    .minReadVersion = 1,
     .snapshot = anlPersistSnapshot,
     .restore = anlPersistRestore,
     .newEmpty = anlPersistNewEmpty,

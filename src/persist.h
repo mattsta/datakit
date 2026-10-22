@@ -47,15 +47,20 @@
  *
  * SNAPSHOT FILE (.snap):
  * ┌────────────────────────────────────────────────────────────────┐
- * │ Header (40 bytes, format version 2) │
+ * │ Header (72 bytes as written; headerLen covers fields a later │
+ * │ container version appends ahead of the digest) │
  * │ magic[4] = "DKSP" │
- * │ version[2] = format version │
- * │ flags[2] = reserved │
- * │ structType[4] = PERSIST_TYPE_* enum │
+ * │ headerLen[4] = header bytes, digest included │
+ * │ containerVersion[4] = file framing version (dkFormat stamp) │
+ * │ formatId[4] = the structure's format id (its persistType) │
+ * │ containerFeatures[8] = file framing feature bits │
+ * │ formatVersion[4] = the structure format's version │
+ * │ keyId[4] = attached keyring key_id (0 if no keyring) │
+ * │ formatFeatures[8] = the structure format's feature bits │
  * │ count[8] = element count │
  * │ envelopeLen[8] = size of the body envelope in bytes │
- * │ keyId[4] = attached keyring key_id (0 if no keyring) │
- * │ headerXxh64[8] = XXH64 over bytes [0..31] (fast bootstrap) │
+ * │ walSequence[8] = WAL sequence the snapshot includes │
+ * │ digest[8] = XXH64 over the header's other bytes │
  * ├────────────────────────────────────────────────────────────────┤
  * │ Body envelope (envelopeLen bytes) │
  * │ flexEnvelopeWrap(serialized payload, configured algorithm). │
@@ -73,14 +78,14 @@
  *
  * WAL FILE (.wal):
  * ┌────────────────────────────────────────────────────────────────┐
- * │ WAL Header (28 bytes, format version 2) │
+ * │ WAL Header (56 bytes as written; growable like the snapshot's) │
  * │ magic[4] = "DKWL" │
- * │ version[2] = format version │
- * │ flags[2] = reserved │
- * │ structType[4] = must match snapshot │
+ * │ headerLen[4], containerVersion[4], formatId[4], │
+ * │ containerFeatures[8], formatVersion[4], keyId[4], │
+ * │ formatFeatures[8] = as in the snapshot header; every entry │
+ * │ in the file is in this structure format │
  * │ sequence[8] = starting sequence number │
- * │ keyId[4] = attached keyring key_id (0 if no keyring) │
- * │ headerXxh32[4] = XXH32 over bytes [0..23] (fast bootstrap) │
+ * │ digest[8] = XXH64 over the header's other bytes │
  * ├────────────────────────────────────────────────────────────────┤
  * │ Entry 0 │
  * │ envelopeLen[4] = byte length of the entry envelope │
@@ -91,13 +96,22 @@
  * │ Entry 1...N │
  * └────────────────────────────────────────────────────────────────┘
  *
- * The 8-byte (snap) / 4-byte (WAL) header digest is a cheap consistency
+ * A reader refuses a file whose container or structure stamp it does not
+ * read (dkFormatCheck: version outside its range, or a must-understand
+ * feature it lacks) with PERSIST_ERR_CONTAINER_FORMAT /
+ * PERSIST_ERR_STRUCTURE_FORMAT; persistInspect reports the stamps without
+ * reading the body.  A WAL this build refuses is never appended to or
+ * overwritten.
+ *
+ * The header digest is a cheap consistency
  * tag — its only job is to reject obviously-corrupt files before the
  * envelope verify runs. The envelope is the source of truth for body /
  * entry integrity.
  *
  * ============================================================================
  */
+
+#include "dkFormat.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -338,6 +352,16 @@ struct persistOps {
     /* Structure identification */
     persistType type;
     const char *name; /* Human-readable name, e.g., "multimap" */
+
+    /* The structure's byte format (its snapshot payload and WAL op
+     * encodings; see dkFormat.h): the version this build writes, the
+     * oldest it reads and the feature bits it understands.  persist files
+     * record the format's stamp, and the persist layer refuses a stamp
+     * outside these before restore or applyOp see any bytes.  A
+     * descriptor must set formatVersion (persistCreate refuses 0). */
+    uint32_t formatVersion;
+    uint32_t minReadVersion;
+    uint64_t knownFeatures;
 
     /* ---- Snapshot Operations ---- */
 
@@ -678,6 +702,12 @@ typedef enum persistErr {
                                                          currently-attached keyring's
                                                          key_id (operator pointed the
                                                          reader at the wrong key) */
+    PERSIST_ERR_CONTAINER_FORMAT = 5, /* the snapshot/WAL file framing is a
+                                         version or feature set this build
+                                         does not read (persistLastFormat) */
+    PERSIST_ERR_STRUCTURE_FORMAT = 6, /* the structure's format stamp in the
+                                         file is one this build does not
+                                         read (persistLastFormat) */
 } persistErr;
 
 /* Read the typed error code from the most recent failed operation on
@@ -708,6 +738,45 @@ persistErr persistLastError(const persist *p);
  * }
  */
 uint32_t persistLastExpectedKeyId(const persist *p);
+
+/* After a failure that set PERSIST_ERR_CONTAINER_FORMAT or
+ * PERSIST_ERR_STRUCTURE_FORMAT: why the stamp was refused, with the stamp
+ * found in *found (when non-NULL).  DK_FORMAT_OK otherwise. */
+dkFormatResult persistLastFormat(const persist *p, dkFormatStamp *found);
+
+/* ---- Formats and inspection ---- */
+
+/* The persist file framings (layer below every structure's own format) */
+extern const dkFormatSpec persistFormatSnapshotFile;
+extern const dkFormatSpec persistFormatWALFile;
+
+/* The format spec a descriptor declares (id = its type) */
+dkFormatSpec persistOpsFormat(const persistOps *ops);
+
+/* What a snapshot or WAL file header says, read without decoding the body */
+typedef struct persistFileInfo {
+    bool wal;                /* a WAL file (else a snapshot file) */
+    uint32_t headerLen;      /* header bytes, as stored */
+    dkFormatStamp container; /* the file framing's stamp */
+    dkFormatStamp format;    /* the structure format's stamp */
+    uint32_t keyId;          /* key_id of the writer's keyring (0: none) */
+    uint64_t count;          /* snapshot: element count; WAL: 0 */
+    uint64_t envelopeLen;    /* snapshot: body bytes; WAL: 0 */
+    uint64_t sequence;       /* snapshot: WAL sequence included;
+                                WAL: sequence of its first entry */
+} persistFileInfo;
+
+/* Read the header at the start of `store` (a snapshot or a WAL; the magic
+ * decides).  Returns false when it is not a readable persist header (bad
+ * magic, length or digest).  Whether this build reads the file is
+ * dkFormatCheck of `container` against persistFormatSnapshotFile /
+ * persistFormatWALFile and of `format` against the descriptor's
+ * persistOpsFormat.  Moves the store's cursor: for stores attached to a
+ * live persist use persistInspectAttached. */
+bool persistInspect(persistStore *store, persistFileInfo *info);
+
+/* persistInspect of `p`'s WAL store (wal) or snapshot store */
+bool persistInspectAttached(persist *p, bool wal, persistFileInfo *info);
 
 /* ---- Snapshot Operations ---- */
 

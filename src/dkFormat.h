@@ -26,6 +26,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* Format ids: a data structure's format id is its persistType (below
+ * 0x10000); containers and protocols use ids from 0x10000 */
+#define DK_FORMAT_ID_PERSIST_SNAPSHOT ((uint32_t)0x10001)
+#define DK_FORMAT_ID_PERSIST_WAL ((uint32_t)0x10002)
+#define DK_FORMAT_ID_CLUSTER_MAILBOX ((uint32_t)0x10003)
+#define DK_FORMAT_ID_FLEX_ENVELOPE ((uint32_t)0x10004)
+
 /* Feature bits a reader must know to read the bytes at all */
 #define DK_FORMAT_MUST_UNDERSTAND UINT64_C(0x00000000FFFFFFFF)
 

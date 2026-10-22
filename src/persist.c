@@ -88,22 +88,33 @@ _Static_assert(__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__,
  */
 #define PERSIST_SNAP_MAGIC ((uint32_t)0x50534B44) /* "DKSP" little-endian */
 #define PERSIST_WAL_MAGIC ((uint32_t)0x4C574B44)  /* "DKWL" little-endian */
-/* Version 2 adds a `keyId` field to both snap+WAL headers.
- * No backward compat with v1: pre-release software, readers reject the
- * old size+digest layout outright via the version check. */
-#define PERSIST_VERSION ((uint16_t)3)
 
-#define PERSIST_SNAP_HEADER_SIZE ((size_t)48)
-#define PERSIST_WAL_HEADER_SIZE ((size_t)28)
+/* The file framings this build writes and reads */
+const dkFormatSpec persistFormatSnapshotFile = {
+    .name = "persist snapshot file",
+    .id = DK_FORMAT_ID_PERSIST_SNAPSHOT,
+    .version = 1,
+    .minReadVersion = 1,
+    .knownFeatures = 0,
+};
 
-/* Header self-check digest sizes (raw XXH32/XXH64 on the persist header
- * itself). The full body / entry integrity is carried by the envelope. */
-#define PERSIST_SNAP_HEADER_DIGEST_LEN ((size_t)8)
-#define PERSIST_SNAP_HEADER_PREFIX_LEN                                         \
-    (PERSIST_SNAP_HEADER_SIZE - PERSIST_SNAP_HEADER_DIGEST_LEN)
-#define PERSIST_WAL_HEADER_DIGEST_LEN ((size_t)4)
-#define PERSIST_WAL_HEADER_PREFIX_LEN                                          \
-    (PERSIST_WAL_HEADER_SIZE - PERSIST_WAL_HEADER_DIGEST_LEN)
+const dkFormatSpec persistFormatWALFile = {
+    .name = "persist WAL file",
+    .id = DK_FORMAT_ID_PERSIST_WAL,
+    .version = 1,
+    .minReadVersion = 1,
+    .knownFeatures = 0,
+};
+
+/* Headers grow by appending fields ahead of the digest (headerLen covers
+ * them); a reader accepts headers up to this size and skips fields past
+ * the ones it knows */
+#define PERSIST_HEADER_MAX_BYTES ((uint32_t)4096)
+
+/* Every header ends with an XXH64 over its other bytes: a cheap check that
+ * rejects corrupt files before the envelope (which carries the body's
+ * integrity) is read */
+#define PERSIST_HEADER_DIGEST_LEN ((size_t)8)
 
 /* Upper bound on a single WAL entry envelope. Same value the old code
  * used; protects readers from a bogus length field forcing a huge
@@ -170,6 +181,11 @@ struct persist {
      * which key to rotate the reader to. */
     uint32_t lastExpectedKeyId;
 
+    /* With PERSIST_ERR_CONTAINER_FORMAT / _STRUCTURE_FORMAT: why the file's
+     * stamp was refused, and the stamp (persistLastFormat) */
+    dkFormatResult lastFormatResult;
+    dkFormatStamp lastFormatStamp;
+
     /* WAL state */
     uint64_t walSequence; /* Next sequence number */
     /* WAL sequence the restored snapshot already includes; replay
@@ -216,14 +232,17 @@ static flexEnvelopeAlgo persistChecksumToEnvelopeAlgo(persistChecksum t) {
     return FLEX_ENV_ALGO_NONE;
 }
 
-/* Compute the persist-header self-check digest (XXH64 over the header
- * prefix). Used identically by writer and reader. */
-static uint64_t persistSnapHeaderDigest(const void *headerBytes) {
-    return (uint64_t)XXH64(headerBytes, PERSIST_SNAP_HEADER_PREFIX_LEN, 0);
+/* The digest closing a header of `headerLen` bytes */
+static uint64_t persistHeaderDigest(const void *header, size_t headerLen) {
+    return (uint64_t)XXH64(header, headerLen - PERSIST_HEADER_DIGEST_LEN, 0);
 }
 
-static uint32_t persistWalHeaderDigest(const void *headerBytes) {
-    return (uint32_t)XXH32(headerBytes, PERSIST_WAL_HEADER_PREFIX_LEN, 0);
+dkFormatSpec persistOpsFormat(const persistOps *ops) {
+    return (dkFormatSpec){.name = ops->name,
+                          .id = (uint32_t)ops->type,
+                          .version = ops->formatVersion,
+                          .minReadVersion = ops->minReadVersion,
+                          .knownFeatures = ops->knownFeatures};
 }
 
 /* Build the envelope wrap params for a persist's current configuration.
@@ -357,12 +376,14 @@ persistConfig persistDefaultConfig(void) {
  */
 
 persist *persistCreate(const persistOps *ops, const persistConfig *config) {
-    if (!ops) {
+    /* A descriptor states the format it writes and reads */
+    if (!ops || ops->formatVersion == 0 ||
+        ops->minReadVersion > ops->formatVersion) {
         return NULL;
     }
 
     /* @own: caller; free=persistClose */
-    persist *p = zmalloc(sizeof(*p));
+    persist *p = zcalloc(1, sizeof(*p));
     p->ops = ops;
     p->config = config ? *config : persistDefaultConfig();
     p->snapshotStore = NULL;
@@ -558,6 +579,42 @@ uint32_t persistLastExpectedKeyId(const persist *p) {
     return p->lastExpectedKeyId;
 }
 
+dkFormatResult persistLastFormat(const persist *p, dkFormatStamp *found) {
+    if (p == NULL || (p->lastError != PERSIST_ERR_CONTAINER_FORMAT &&
+                      p->lastError != PERSIST_ERR_STRUCTURE_FORMAT)) {
+        return DK_FORMAT_OK;
+    }
+    if (found) {
+        *found = p->lastFormatStamp;
+    }
+    return p->lastFormatResult;
+}
+
+/* Check a file's two stamps against this build, recording a refusal for
+ * persistLastError / persistLastFormat */
+static bool persistCheckFileFormat(persist *p, const dkFormatSpec *container,
+                                   const dkFormatStamp *containerStamp,
+                                   const dkFormatStamp *formatStamp) {
+    dkFormatResult r = dkFormatCheck(container, containerStamp);
+    if (r != DK_FORMAT_OK) {
+        p->lastError = PERSIST_ERR_CONTAINER_FORMAT;
+        p->lastFormatResult = r;
+        p->lastFormatStamp = *containerStamp;
+        return false;
+    }
+
+    const dkFormatSpec structure = persistOpsFormat(p->ops);
+    r = dkFormatCheck(&structure, formatStamp);
+    if (r != DK_FORMAT_OK) {
+        p->lastError = PERSIST_ERR_STRUCTURE_FORMAT;
+        p->lastFormatResult = r;
+        p->lastFormatStamp = *formatStamp;
+        return false;
+    }
+
+    return true;
+}
+
 static bool persistWALFlush(persist *p);
 
 bool persistSetConfig(persist *p, const persistConfig *config) {
@@ -637,26 +694,21 @@ void persistClose(persist *p) {
  * ============================================================================
  */
 
-/* Snapshot header layout (48 bytes, packed; see persist.h for prose).
- *
- * 0-3: magic (PERSIST_SNAP_MAGIC, "DKSP")
- * 4-5: version (PERSIST_VERSION)
- * 6-7: flags (reserved, must be 0 — readers reject unknown bits)
- * 8-11: structType (must match p->ops->type at restore)
- * 12-19: count (element count reported by p->ops->count)
- * 20-27: envelopeLen (byte length of the body envelope that follows)
- * 28-31: keyId (attached keyring key_id; 0 = none)
- * 32-39: walSequence (WAL sequence this snapshot reflects; replay skips
- *        lower-sequenced ops — see the struct field)
- * 40-47: headerXxh64 (XXH64 over bytes 0..39 — see persistSnapHeaderDigest) */
-typedef struct __attribute__((packed)) persistSnapHeader {
-    uint32_t magic;
-    uint16_t version;
-    uint16_t flags;
-    uint32_t structType;
-    uint64_t count;
-    uint64_t envelopeLen;
-    uint32_t keyId;
+/* Snapshot header (72 bytes as this build writes it; see persist.h).
+ * Every field is naturally aligned.  A later container version may store
+ * more fields between walSequence and the digest (headerLen covers
+ * them); this build skips them. */
+typedef struct persistSnapHeader {
+    uint32_t magic;            /* PERSIST_SNAP_MAGIC */
+    uint32_t headerLen;        /* header bytes, digest included */
+    uint32_t containerVersion; /* persistFormatSnapshotFile stamp */
+    uint32_t formatId;         /* the structure's format (its persistType) */
+    uint64_t containerFeatures;
+    uint32_t formatVersion; /* the structure format's stamp */
+    uint32_t keyId;         /* attached keyring key_id; 0 = none */
+    uint64_t formatFeatures;
+    uint64_t count;       /* element count reported by p->ops->count */
+    uint64_t envelopeLen; /* byte length of the body envelope */
     /* WAL sequence this snapshot already reflects: every WAL op with a
      * lower sequence is folded in, so replay skips them. This is what
      * makes a snapshot-then-truncate compaction crash-consistent - a
@@ -664,10 +716,47 @@ typedef struct __attribute__((packed)) persistSnapHeader {
      * leaves stale WAL entries that all sort below this and are
      * skipped rather than double-applied. */
     uint64_t walSequence;
-    uint64_t headerXxh64;
+    uint64_t digest; /* persistHeaderDigest over the bytes before it */
 } persistSnapHeader;
 
-DK_SIZECHECK(persistSnapHeader, PERSIST_SNAP_HEADER_SIZE);
+_Static_assert(sizeof(persistSnapHeader) == 72,
+               "persistSnapHeader has no padding");
+
+/* Read a header of the type `known` points at (`knownSize` bytes, digest
+ * last) whose stored length may be larger: the bytes past the known
+ * fields are skipped, the digest is the stored header's last 8 bytes.
+ * Returns false on a short read, a wrong magic, a length outside
+ * [knownSize, PERSIST_HEADER_MAX_BYTES] or a digest mismatch; leaves the
+ * store just past the header. */
+static bool persistHeaderRead(persistStore *store, uint32_t magic, void *known,
+                              size_t knownSize) {
+    uint32_t lead[2];
+    if (store->read(store->ctx, lead, sizeof(lead)) != (ssize_t)sizeof(lead) ||
+        lead[0] != magic || lead[1] < knownSize ||
+        lead[1] > PERSIST_HEADER_MAX_BYTES) {
+        return false;
+    }
+
+    const size_t headerLen = lead[1];
+    uint8_t bytes[PERSIST_HEADER_MAX_BYTES];
+    memcpy(bytes, lead, sizeof(lead));
+    const size_t rest = headerLen - sizeof(lead);
+    if (store->read(store->ctx, bytes + sizeof(lead), rest) != (ssize_t)rest) {
+        return false;
+    }
+
+    uint64_t digest = 0;
+    memcpy(&digest, bytes + headerLen - PERSIST_HEADER_DIGEST_LEN,
+           sizeof(digest));
+    if (persistHeaderDigest(bytes, headerLen) != digest) {
+        return false;
+    }
+
+    memcpy(known, bytes, knownSize - PERSIST_HEADER_DIGEST_LEN);
+    memcpy((uint8_t *)known + knownSize - PERSIST_HEADER_DIGEST_LEN, &digest,
+           sizeof(digest));
+    return true;
+}
 
 bool persistSnapshot(persist *p, const void *structure) {
     if (!p || !structure || !p->snapshotStore || !p->ops->snapshot) {
@@ -708,9 +797,12 @@ bool persistSnapshot(persist *p, const void *structure) {
 
     persistSnapHeader header = {
         .magic = PERSIST_SNAP_MAGIC,
-        .version = PERSIST_VERSION,
-        .flags = (uint16_t)0,
-        .structType = (uint32_t)p->ops->type,
+        .headerLen = (uint32_t)sizeof(persistSnapHeader),
+        .containerVersion = persistFormatSnapshotFile.version,
+        .containerFeatures = 0,
+        .formatId = (uint32_t)p->ops->type,
+        .formatVersion = p->ops->formatVersion,
+        .formatFeatures = 0,
         .count =
             p->ops->count ? (uint64_t)p->ops->count(structure) : (uint64_t)0,
         .envelopeLen = (uint64_t)envelopeLen,
@@ -724,9 +816,9 @@ bool persistSnapshot(persist *p, const void *structure) {
          * mismatch (operator pointed reader at the wrong key). */
         .keyId = (p->attachedKeyring != NULL) ? (uint32_t)p->attachedKeyId
                                               : (uint32_t)0u,
-        .headerXxh64 = 0,
+        .digest = 0,
     };
-    header.headerXxh64 = persistSnapHeaderDigest(&header);
+    header.digest = persistHeaderDigest(&header, sizeof(header));
 
     /* Braced so the envelope buffer - which is the whole serialized
      * structure - is released before the durability barrier below. */
@@ -793,37 +885,24 @@ bool persistSnapshot(persist *p, const void *structure) {
     return true;
 }
 
-/* Read and verify a snapshot header from `store`. On success, *out is
- * populated. Returns true iff the magic, version, and self-check digest
- * all pass and structType matches `expectedType`. */
-static bool persistSnapHeaderReadVerify(persistStore *store,
-                                        persistType expectedType,
-                                        persistSnapHeader *out) {
-    persistSnapHeader header;
-    if (store->read(store->ctx, &header, sizeof(header)) !=
-        (ssize_t)sizeof(header)) {
+/* Read the snapshot header at the snapshot store's cursor into *out and
+ * check that this build reads it: the file framing and the structure's
+ * format (a different structure is a WRONG_ID refusal).  A refusal is
+ * recorded for persistLastError / persistLastFormat. */
+static bool persistSnapHeaderReadVerify(persist *p, persistSnapHeader *out) {
+    if (!persistHeaderRead(p->snapshotStore, PERSIST_SNAP_MAGIC, out,
+                           sizeof(*out))) {
         return false;
     }
-    if (header.magic != PERSIST_SNAP_MAGIC) {
-        return false;
-    }
-    if (header.version != PERSIST_VERSION) {
-        return false;
-    }
-    if (header.flags != 0) {
-        return false;
-    }
-    const uint64_t savedDigest = header.headerXxh64;
-    header.headerXxh64 = 0;
-    if (persistSnapHeaderDigest(&header) != savedDigest) {
-        return false;
-    }
-    header.headerXxh64 = savedDigest;
-    if (header.structType != (uint32_t)expectedType) {
-        return false;
-    }
-    *out = header;
-    return true;
+
+    const dkFormatStamp container = {.id = DK_FORMAT_ID_PERSIST_SNAPSHOT,
+                                     .version = out->containerVersion,
+                                     .features = out->containerFeatures};
+    const dkFormatStamp format = {.id = out->formatId,
+                                  .version = out->formatVersion,
+                                  .features = out->formatFeatures};
+    return persistCheckFileFormat(p, &persistFormatSnapshotFile, &container,
+                                  &format);
 }
 
 void *persistRestore(persist *p) {
@@ -837,7 +916,7 @@ void *persistRestore(persist *p) {
     }
 
     persistSnapHeader header;
-    if (!persistSnapHeaderReadVerify(store, p->ops->type, &header)) {
+    if (!persistSnapHeaderReadVerify(p, &header)) {
         return NULL;
     }
     /* Cross-key safety: identical contract to persistVerifySnapshot. */
@@ -899,41 +978,43 @@ void *persistRestore(persist *p) {
  * ============================================================================
  */
 
-/* WAL header layout (28 bytes, packed):
- *
- * 0-3: magic (PERSIST_WAL_MAGIC, "DKWL")
- * 4-5: version (PERSIST_VERSION = 2)
- * 6-7: flags (reserved, must be 0)
- * 8-11: structType (must match snapshot's structType)
- * 12-19: startSequence (sequence number of the first entry in this file)
- * 20-23: keyId (attached keyring key_id; 0 = none)
- * 24-27: headerXxh32 (XXH32 over bytes 0..23 — fast bootstrap check) */
-typedef struct __attribute__((packed)) persistWALHeader {
-    uint32_t magic;
-    uint16_t version;
-    uint16_t flags;
-    uint32_t structType;
-    uint64_t startSequence;
-    uint32_t keyId;
-    uint32_t headerXxh32;
+/* WAL header (56 bytes as this build writes it; see persist.h).  Every
+ * field is naturally aligned; a later container version may store more
+ * fields ahead of the digest.  Every entry in the file is encoded in the
+ * structure format the header stamps. */
+typedef struct persistWALHeader {
+    uint32_t magic;            /* PERSIST_WAL_MAGIC */
+    uint32_t headerLen;        /* header bytes, digest included */
+    uint32_t containerVersion; /* persistFormatWALFile stamp */
+    uint32_t formatId;         /* the structure's format (its persistType) */
+    uint64_t containerFeatures;
+    uint32_t formatVersion; /* the structure format's stamp */
+    uint32_t keyId;         /* attached keyring key_id; 0 = none */
+    uint64_t formatFeatures;
+    uint64_t startSequence; /* sequence of the first entry in this file */
+    uint64_t digest;        /* persistHeaderDigest over the bytes before it */
 } persistWALHeader;
 
-DK_SIZECHECK(persistWALHeader, PERSIST_WAL_HEADER_SIZE);
+_Static_assert(sizeof(persistWALHeader) == 56,
+               "persistWALHeader has no padding");
 
 /* Write a fresh WAL header at offset 0. Caller owns seeking afterward. */
 static bool persistWALWriteHeader(persist *p) {
     persistStore *store = p->walStore;
     persistWALHeader header = {
         .magic = PERSIST_WAL_MAGIC,
-        .version = PERSIST_VERSION,
-        .flags = (uint16_t)0,
-        .structType = (uint32_t)p->ops->type,
+        .headerLen = (uint32_t)sizeof(persistWALHeader),
+        .containerVersion = persistFormatWALFile.version,
+        .containerFeatures = 0,
+        .formatId = (uint32_t)p->ops->type,
+        .formatVersion = p->ops->formatVersion,
+        .formatFeatures = 0,
         .startSequence = p->walSequence,
         .keyId = (p->attachedKeyring != NULL) ? (uint32_t)p->attachedKeyId
                                               : (uint32_t)0u,
-        .headerXxh32 = 0,
+        .digest = 0,
     };
-    header.headerXxh32 = persistWalHeaderDigest(&header);
+    header.digest = persistHeaderDigest(&header, sizeof(header));
     if (store->seek(store->ctx, 0, SEEK_SET) < 0) {
         return false;
     }
@@ -954,41 +1035,31 @@ static bool persistWALWriteHeader(persist *p) {
     return true;
 }
 
-/* Read+verify the WAL header that already exists in `store`. Returns
- * true and leaves the file pointer positioned just after the header iff
- * everything checks out (magic, version, flags, structType, digest).
- * Caller-supplied `expectedType` is what the persist ops define.
- * If `outHeader` is non-NULL, the parsed header (with digest restored)
- * is written there on success. */
-static bool persistWALReadVerifyHeader(persistStore *store,
-                                       persistType expectedType,
+/* Read the WAL header at offset 0 of `p`'s WAL store and check that this
+ * build reads it (file framing and structure format; a refusal is
+ * recorded for persistLastError / persistLastFormat).  Leaves the store
+ * just past the header.  If `outHeader` is non-NULL, the header is
+ * written there. */
+static bool persistWALReadVerifyHeader(persist *p,
                                        persistWALHeader *outHeader) {
+    persistStore *store = p->walStore;
     persistWALHeader header;
-    if (store->seek(store->ctx, 0, SEEK_SET) < 0) {
+    if (store->seek(store->ctx, 0, SEEK_SET) < 0 ||
+        !persistHeaderRead(store, PERSIST_WAL_MAGIC, &header, sizeof(header))) {
         return false;
     }
-    if (store->read(store->ctx, &header, sizeof(header)) !=
-        (ssize_t)sizeof(header)) {
+
+    const dkFormatStamp container = {.id = DK_FORMAT_ID_PERSIST_WAL,
+                                     .version = header.containerVersion,
+                                     .features = header.containerFeatures};
+    const dkFormatStamp format = {.id = header.formatId,
+                                  .version = header.formatVersion,
+                                  .features = header.formatFeatures};
+    if (!persistCheckFileFormat(p, &persistFormatWALFile, &container,
+                                &format)) {
         return false;
     }
-    if (header.magic != PERSIST_WAL_MAGIC) {
-        return false;
-    }
-    if (header.version != PERSIST_VERSION) {
-        return false;
-    }
-    if (header.flags != 0) {
-        return false;
-    }
-    if (header.structType != (uint32_t)expectedType) {
-        return false;
-    }
-    const uint32_t savedDigest = header.headerXxh32;
-    header.headerXxh32 = 0;
-    if (persistWalHeaderDigest(&header) != savedDigest) {
-        return false;
-    }
-    header.headerXxh32 = savedDigest;
+
     if (outHeader != NULL) {
         *outHeader = header;
     }
@@ -1004,17 +1075,23 @@ static bool persistWALResume(persist *p, int64_t goodEnd, int stop);
 
 /* Ready the WAL for appending: an existing WAL is walked to the end of
  * its last complete entry (cutting a torn tail, and continuing sequence
- * numbers past the ones it holds); otherwise a fresh header starts it. */
+ * numbers past the ones it holds); an empty store gets a fresh header.  A
+ * store holding anything else (a WAL this build refuses, or bytes that
+ * are no WAL header) is never overwritten: appends are refused. */
 static bool persistWALInit(persist *p) {
     if (!p->walStore) {
         return false;
     }
 
     persistStore *store = p->walStore;
-    if (persistWALReadVerifyHeader(store, p->ops->type, NULL)) {
+    if (persistWALReadVerifyHeader(p, NULL)) {
         int64_t goodEnd = 0;
         const int rc = persistWALWalk(p, NULL, NULL, &goodEnd);
         return persistWALResume(p, goodEnd, rc);
+    }
+
+    if (store->size(store->ctx) != 0) {
+        return false;
     }
 
     return persistWALWriteHeader(p);
@@ -1401,10 +1478,9 @@ bool persistReplayWAL(persist *p, void *structure) {
         return false;
     }
 
-    persistStore *store = p->walStore;
     p->walCursorMoved = true;
     persistWALHeader walHdr;
-    if (!persistWALReadVerifyHeader(store, p->ops->type, &walHdr)) {
+    if (!persistWALReadVerifyHeader(p, &walHdr)) {
         return false;
     }
     /* Cross-key safety: same contract as snapshot verify. A WAL keyed
@@ -1461,7 +1537,7 @@ bool persistIterateWAL(persist *p, persistWALCallback cb, void *ctx) {
     }
 
     p->walCursorMoved = true;
-    if (!persistWALReadVerifyHeader(p->walStore, p->ops->type, NULL)) {
+    if (!persistWALReadVerifyHeader(p, NULL)) {
         return false;
     }
 
@@ -1633,7 +1709,7 @@ bool persistVerifySnapshot(persist *p) {
     }
 
     persistSnapHeader header;
-    if (!persistSnapHeaderReadVerify(store, p->ops->type, &header)) {
+    if (!persistSnapHeaderReadVerify(p, &header)) {
         return false;
     }
     /* Cross-key safety: when a keyring is attached, reject early if the
@@ -1679,10 +1755,9 @@ bool persistVerifyWAL(persist *p) {
         return false;
     }
 
-    persistStore *store = p->walStore;
     p->walCursorMoved = true;
     persistWALHeader walHdr;
-    if (!persistWALReadVerifyHeader(store, p->ops->type, &walHdr)) {
+    if (!persistWALReadVerifyHeader(p, &walHdr)) {
         return false;
     }
     /* Cross-key safety: same contract as persistVerifySnapshot. */
@@ -1692,6 +1767,77 @@ bool persistVerifyWAL(persist *p) {
 
     int64_t goodEnd = 0;
     return persistWALWalk(p, NULL, NULL, &goodEnd) == PERSIST_WAL_END;
+}
+
+/* ============================================================================
+ * Inspection
+ * ============================================================================
+ */
+
+bool persistInspect(persistStore *store, persistFileInfo *info) {
+    if (!store || !info) {
+        return false;
+    }
+
+    /* The magic says which header follows */
+    uint32_t magic = 0;
+    if (store->seek(store->ctx, 0, SEEK_SET) != 0 ||
+        store->read(store->ctx, &magic, sizeof(magic)) !=
+            (ssize_t)sizeof(magic) ||
+        store->seek(store->ctx, 0, SEEK_SET) != 0) {
+        return false;
+    }
+
+    memset(info, 0, sizeof(*info));
+    if (magic == PERSIST_SNAP_MAGIC) {
+        persistSnapHeader h;
+        if (!persistHeaderRead(store, PERSIST_SNAP_MAGIC, &h, sizeof(h))) {
+            return false;
+        }
+        *info = (persistFileInfo){
+            .headerLen = h.headerLen,
+            .container = {DK_FORMAT_ID_PERSIST_SNAPSHOT, h.containerVersion,
+                          h.containerFeatures},
+            .format = {h.formatId, h.formatVersion, h.formatFeatures},
+            .keyId = h.keyId,
+            .count = h.count,
+            .envelopeLen = h.envelopeLen,
+            .sequence = h.walSequence,
+        };
+        return true;
+    }
+
+    persistWALHeader h;
+    if (!persistHeaderRead(store, PERSIST_WAL_MAGIC, &h, sizeof(h))) {
+        return false;
+    }
+    *info = (persistFileInfo){
+        .wal = true,
+        .headerLen = h.headerLen,
+        .container = {DK_FORMAT_ID_PERSIST_WAL, h.containerVersion,
+                      h.containerFeatures},
+        .format = {h.formatId, h.formatVersion, h.formatFeatures},
+        .keyId = h.keyId,
+        .sequence = h.startSequence,
+    };
+    return true;
+}
+
+bool persistInspectAttached(persist *p, bool wal, persistFileInfo *info) {
+    if (!p) {
+        return false;
+    }
+
+    /* The WAL's buffered bytes go out first; the writer finds its own
+     * append offset again after the cursor moves */
+    if (wal) {
+        if (!persistWALFlush(p)) {
+            return false;
+        }
+        p->walCursorMoved = true;
+    }
+
+    return persistInspect(wal ? p->walStore : p->snapshotStore, info);
 }
 
 /* ============================================================================
@@ -2259,6 +2405,8 @@ static bool flexPersistValidate(const void *structure) {
 const persistOps persistOpsFlex = {
     .type = PERSIST_TYPE_FLEX,
     .name = "flex",
+    .formatVersion = 1,
+    .minReadVersion = 1,
     .snapshot = flexPersistSnapshot,
     .restore = flexPersistRestore,
     .newEmpty = flexPersistNewEmpty,
@@ -2441,6 +2589,8 @@ static void *intsetPersistNewEmpty(void) {
 const persistOps persistOpsIntset = {
     .type = PERSIST_TYPE_INTSET,
     .name = "intset",
+    .formatVersion = 1,
+    .minReadVersion = 1,
     .snapshot = intsetPersistSnapshot,
     .restore = intsetPersistRestore,
     .newEmpty = intsetPersistNewEmpty,
@@ -2607,6 +2757,8 @@ const persistOps persistOpsIntsetBig = {
     .deletesWhenEmpty = true,
     .type = PERSIST_TYPE_INTSETBIG,
     .name = "intsetBig",
+    .formatVersion = 1,
+    .minReadVersion = 1,
     .snapshot = intsetBigPersistSnapshot,
     .restore = intsetBigPersistRestore,
     .newEmpty = intsetBigPersistNewEmpty,
@@ -2771,6 +2923,8 @@ static void *multiroarPersistNewEmpty(void) {
 const persistOps persistOpsMultiroar = {
     .type = PERSIST_TYPE_MULTIROAR,
     .name = "multiroar",
+    .formatVersion = 1,
+    .minReadVersion = 1,
     .snapshot = multiroarPersistSnapshot,
     .restore = multiroarPersistRestore,
     .newEmpty = multiroarPersistNewEmpty,
@@ -2931,6 +3085,8 @@ static bool hyperloglogPersistValidate(const void *structure) {
 const persistOps persistOpsHyperloglog = {
     .type = PERSIST_TYPE_HYPERLOGLOG,
     .name = "hyperloglog",
+    .formatVersion = 1,
+    .minReadVersion = 1,
     .snapshot = hyperloglogPersistSnapshot,
     .restore = hyperloglogPersistRestore,
     .newEmpty = hyperloglogPersistNewEmpty,
@@ -3210,6 +3366,8 @@ const persistOps persistOpsMultimap = {
     .deletesWhenEmpty = true,
     .type = PERSIST_TYPE_MULTIMAP,
     .name = "multimap",
+    .formatVersion = 1,
+    .minReadVersion = 1,
     .snapshot = multimapPersistSnapshot,
     .restore = multimapPersistRestore,
     .newEmpty = multimapPersistNewEmpty,
@@ -3630,6 +3788,8 @@ const persistOps persistOpsMultilist = {
     .deletesWhenEmpty = true,
     .type = PERSIST_TYPE_MULTILIST,
     .name = "multilist",
+    .formatVersion = 1,
+    .minReadVersion = 1,
     .snapshot = multilistPersistSnapshot,
     .restore = multilistPersistRestore,
     .newEmpty = multilistPersistNewEmpty,
@@ -3929,6 +4089,8 @@ static void *multidictPersistNewEmpty(void) {
 const persistOps persistOpsMultidict = {
     .type = PERSIST_TYPE_MULTIDICT,
     .name = "multidict",
+    .formatVersion = 1,
+    .minReadVersion = 1,
     .snapshot = multidictPersistSnapshot,
     .restore = multidictPersistRestore,
     .newEmpty = multidictPersistNewEmpty,
@@ -4119,6 +4281,8 @@ static void multiarrayPersistFree(void *structure) {
 const persistOps persistOpsMultiarray = {
     .type = PERSIST_TYPE_MULTIARRAY,
     .name = "multiarray",
+    .formatVersion = 1,
+    .minReadVersion = 1,
     .snapshot = multiarrayPersistSnapshot,
     .restore = multiarrayPersistRestore,
     .count = multiarrayPersistCount,
@@ -4700,6 +4864,8 @@ static void *multiOrderedSetPersistNewEmpty(void) {
 const persistOps persistOpsMultiOrderedSet = {
     .type = PERSIST_TYPE_MULTIORDEREDSET,
     .name = "multiOrderedSet",
+    .formatVersion = 1,
+    .minReadVersion = 1,
     .snapshot = multiOrderedSetPersistSnapshot,
     .restore = multiOrderedSetPersistRestore,
     .newEmpty = multiOrderedSetPersistNewEmpty,
@@ -4716,6 +4882,8 @@ const persistOps persistOpsMultiOrderedSet = {
 const persistOps persistOpsMultiLRU = {
     .type = PERSIST_TYPE_MULTILRU,
     .name = "multilru",
+    .formatVersion = 1,
+    .minReadVersion = 1,
     .snapshot = multilruPersistSnapshot,
     .restore = multilruPersistRestore,
     .count = multilruPersistCount,
@@ -4785,6 +4953,57 @@ static bool persistTestRecoversTo(persist *p, const int64_t *want, size_t n) {
         }
     }
     return true;
+}
+
+/* Rewrite the header at the start of memory store `store`, whose known
+ * header is `knownSize` bytes (a persistSnapHeader or persistWALHeader):
+ * `edit` changes its fields, `extra` zero bytes are inserted ahead of the
+ * digest (a header a later container version grew), and the length and
+ * digest are recomputed */
+static void persistTestRewriteHeader(persistStore *store, size_t knownSize,
+                                     void (*edit)(void *header), size_t extra) {
+    size_t len = 0;
+    const uint8_t *bytes = persistStoreMemoryBuffer(store, &len);
+    uint32_t headerLen = 0;
+    memcpy(&headerLen, bytes + 4, sizeof(headerLen));
+    const size_t body = len - headerLen;
+    const size_t newLen = knownSize + extra;
+
+    cleanerName(zfree, Bytes) uint8_t *out = zcalloc(1, newLen + body);
+    memcpy(out, bytes, knownSize - PERSIST_HEADER_DIGEST_LEN);
+    if (edit) {
+        edit(out);
+    }
+    const uint32_t newLen32 = (uint32_t)newLen;
+    memcpy(out + 4, &newLen32, sizeof(newLen32));
+    memcpy(out + newLen, bytes + headerLen, body);
+    const uint64_t digest = persistHeaderDigest(out, newLen);
+    memcpy(out + newLen - PERSIST_HEADER_DIGEST_LEN, &digest, sizeof(digest));
+
+    store->seek(store->ctx, 0, SEEK_SET);
+    store->write(store->ctx, out, newLen + body);
+    store->truncate(store->ctx);
+}
+
+static void persistTestSnapContainerNext(void *h) {
+    ((persistSnapHeader *)h)->containerVersion++;
+}
+
+static void persistTestSnapFormatNext(void *h) {
+    ((persistSnapHeader *)h)->formatVersion++;
+}
+
+static void persistTestSnapMustUnderstand(void *h) {
+    ((persistSnapHeader *)h)->formatFeatures |= 1;
+}
+
+static void persistTestSnapIgnorable(void *h) {
+    ((persistSnapHeader *)h)->formatFeatures |= UINT64_C(1) << 40;
+    ((persistSnapHeader *)h)->containerFeatures |= UINT64_C(1) << 63;
+}
+
+static void persistTestWALFormatNext(void *h) {
+    ((persistWALHeader *)h)->formatVersion++;
 }
 
 /* WAL entries seen by persistTestCountEntries, stopping at `stopAfter` */
@@ -5057,19 +5276,19 @@ int persistTest(int argc, char *argv[]) {
             size_t storeLen = 0;
             const uint8_t *storeBytes =
                 persistStoreMemoryBuffer(snapStore, &storeLen);
-            if (storeLen < PERSIST_SNAP_HEADER_SIZE + 8) {
+            if (storeLen < sizeof(persistSnapHeader) + 8) {
                 ERR("Snapshot too small: %zu bytes", storeLen);
             }
             /* Flip a byte in the header self-check digest. */
-            uint8_t saved = storeBytes[PERSIST_SNAP_HEADER_SIZE - 1];
-            ((uint8_t *)storeBytes)[PERSIST_SNAP_HEADER_SIZE - 1] = saved ^ 1u;
+            uint8_t saved = storeBytes[sizeof(persistSnapHeader) - 1];
+            ((uint8_t *)storeBytes)[sizeof(persistSnapHeader) - 1] = saved ^ 1u;
             if (persistVerifySnapshot(p)) {
                 ERRR("Header-digest corruption must be rejected");
             }
             if (persistRestore(p)) {
                 ERRR("Header-digest corruption must reject restore");
             }
-            ((uint8_t *)storeBytes)[PERSIST_SNAP_HEADER_SIZE - 1] = saved;
+            ((uint8_t *)storeBytes)[sizeof(persistSnapHeader) - 1] = saved;
             if (!persistVerifySnapshot(p)) {
                 ERRR("Restoring the byte should re-pass verify");
             }
@@ -5097,7 +5316,7 @@ int persistTest(int argc, char *argv[]) {
             const uint8_t *storeBytes =
                 persistStoreMemoryBuffer(snapStore, &storeLen);
             /* Flip a byte well inside the envelope payload. */
-            const size_t target = PERSIST_SNAP_HEADER_SIZE + storeLen / 2u;
+            const size_t target = sizeof(persistSnapHeader) + storeLen / 2u;
             uint8_t saved = storeBytes[target];
             ((uint8_t *)storeBytes)[target] = saved ^ 0x80u;
             if (persistVerifySnapshot(p)) {
@@ -5167,7 +5386,7 @@ int persistTest(int argc, char *argv[]) {
             size_t storeLen = 0;
             const uint8_t *storeBytes =
                 persistStoreMemoryBuffer(snapStore, &storeLen);
-            if (storeLen < PERSIST_SNAP_HEADER_SIZE + 16u) {
+            if (storeLen < sizeof(persistSnapHeader) + 16u) {
                 ERR("Snapshot unexpectedly small: %zu bytes", storeLen);
             }
 
@@ -5222,7 +5441,7 @@ int persistTest(int argc, char *argv[]) {
             size_t walLen = 0;
             const uint8_t *walBytes =
                 persistStoreMemoryBuffer(walStore, &walLen);
-            if (walLen < PERSIST_WAL_HEADER_SIZE + 4u) {
+            if (walLen < sizeof(persistWALHeader) + 4u) {
                 ERR("WAL unexpectedly small: %zu bytes", walLen);
             }
 
@@ -8680,6 +8899,129 @@ int persistTest(int argc, char *argv[]) {
         }
         if (persistSetIntegrityPreparedKey(NULL, &right)) {
             ERRR("SetIntegrityPreparedKey accepted a NULL persist");
+        }
+    }
+
+    /* Format stamps: a file is refused, with a typed result naming the
+     * stamp, when its framing or its structure format is one this build
+     * does not read; growth through ignorable features and longer headers
+     * is read */
+    TEST("snapshot stamps: refusals are typed, growth is read") {
+        struct {
+            void (*edit)(void *header);
+            size_t extra;
+            persistErr err;
+            dkFormatResult result;
+        } cases[] = {
+            {persistTestSnapContainerNext, 0, PERSIST_ERR_CONTAINER_FORMAT,
+             DK_FORMAT_VERSION_TOO_NEW},
+            {persistTestSnapFormatNext, 0, PERSIST_ERR_STRUCTURE_FORMAT,
+             DK_FORMAT_VERSION_TOO_NEW},
+            {persistTestSnapMustUnderstand, 0, PERSIST_ERR_STRUCTURE_FORMAT,
+             DK_FORMAT_FEATURE_UNKNOWN},
+            {persistTestSnapIgnorable, 0, PERSIST_ERR_NONE, DK_FORMAT_OK},
+            {NULL, 24, PERSIST_ERR_NONE, DK_FORMAT_OK},
+        };
+        for (size_t c = 0; c < sizeof(cases) / sizeof(*cases); c++) {
+            cleaner(persistClose) persist *p = persistTestFlexPersist(NULL);
+            persistTestPushRange(p, 0, 3);
+            cleaner(flexFree) flex *live = persistRecover(p);
+            persistSnapshot(p, live);
+            persistTestRewriteHeader(p->snapshotStore,
+                                     sizeof(persistSnapHeader), cases[c].edit,
+                                     cases[c].extra);
+
+            void *got = persistRestore(p);
+            const bool accepted = got != NULL;
+            if (got) {
+                flexFree(got);
+            }
+            dkFormatStamp found = {0};
+            const dkFormatResult result = persistLastFormat(p, &found);
+            if (accepted != (cases[c].err == PERSIST_ERR_NONE) ||
+                (!accepted && (persistLastError(p) != cases[c].err ||
+                               result != cases[c].result))) {
+                ERR("case %zu: accepted %d, error %d, result %s", c,
+                    (int)accepted, (int)persistLastError(p),
+                    dkFormatResultName(result));
+            }
+            if (c == 1 && found.version != 2) {
+                ERR("the refused stamp reports version %u", found.version);
+            }
+
+            persistFileInfo info;
+            if (!persistInspectAttached(p, false, &info) || info.wal ||
+                info.headerLen != sizeof(persistSnapHeader) + cases[c].extra ||
+                info.format.id != PERSIST_TYPE_FLEX || info.count != 3) {
+                ERR("case %zu: inspection disagrees with the header", c);
+            }
+        }
+    }
+
+    TEST("a WAL stamped newer is refused and never overwritten") {
+        cleaner(persistClose) persist *p = persistTestFlexPersist(NULL);
+        persistTestPushRange(p, 0, 2);
+        persistSync(p);
+        persistTestRewriteHeader(p->walStore, sizeof(persistWALHeader),
+                                 persistTestWALFormatNext, 0);
+        size_t before = 0;
+        persistStoreMemoryBuffer(p->walStore, &before);
+
+        /* A fresh handle on the same bytes cannot replay or append */
+        cleaner(persistClose) persist *q = persistCreate(&persistOpsFlex, NULL);
+        persistAttachSnapshot(q, persistStoreMemory(0));
+        persistAttachWAL(q, persistStoreMemory(0));
+        size_t len = 0;
+        const uint8_t *bytes = persistStoreMemoryBuffer(p->walStore, &len);
+        q->walStore->write(q->walStore->ctx, bytes, len);
+        cleaner(flexFree) flex *empty = flexNew();
+        persistSnapshot(q, empty);
+
+        cleaner(flexFree) flex *f = persistRecover(q);
+        if (persistLastError(q) != PERSIST_ERR_STRUCTURE_FORMAT) {
+            ERR("replay error %d", (int)persistLastError(q));
+        }
+        const databox one = DATABOX_SIGNED(1);
+        if (persistLogOp(q, PERSIST_OP_PUSH_TAIL, &one, 1)) {
+            ERRR("appended to a WAL this build does not read");
+        }
+        size_t after = 0;
+        persistStoreMemoryBuffer(q->walStore, &after);
+        if (after != before) {
+            ERR("the refused WAL changed size %zu -> %zu", before, after);
+        }
+
+        persistFileInfo info;
+        if (!persistInspectAttached(q, true, &info) || !info.wal ||
+            info.format.version != 2 ||
+            info.container.id != DK_FORMAT_ID_PERSIST_WAL) {
+            ERRR("WAL inspection disagrees with the header");
+        }
+    }
+
+    TEST("a descriptor must state its format; a structure's own file only") {
+        persistOps unstated = persistOpsFlex;
+        unstated.formatVersion = 0;
+        cleaner(persistClose) persist *none = persistCreate(&unstated, NULL);
+        if (none) {
+            ERRR("a descriptor without a format version was accepted");
+        }
+
+        /* A flex snapshot read as an intset is a different format */
+        cleaner(persistClose) persist *p = persistTestFlexPersist(NULL);
+        cleaner(persistClose) persist *q =
+            persistCreate(&persistOpsIntset, NULL);
+        size_t len = 0;
+        const uint8_t *bytes = persistStoreMemoryBuffer(p->snapshotStore, &len);
+        persistStore *store = persistStoreMemory(0);
+        store->write(store->ctx, bytes, len);
+        persistAttachSnapshot(q, store);
+        void *wrong = persistRestore(q);
+        dkFormatStamp found = {0};
+        if (wrong || persistLastError(q) != PERSIST_ERR_STRUCTURE_FORMAT ||
+            persistLastFormat(q, &found) != DK_FORMAT_WRONG_ID ||
+            found.id != PERSIST_TYPE_FLEX) {
+            ERRR("a flex snapshot was not refused as a different format");
         }
     }
 

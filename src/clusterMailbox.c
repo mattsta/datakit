@@ -1556,6 +1556,8 @@ static void cmPersistFree(void *structure) {
 const persistOps persistOpsClusterMailbox = {
     .type = PERSIST_TYPE_CLUSTER_MAILBOX_WATERMARKS,
     .name = "clusterMailboxWatermarks",
+    .formatVersion = 1,
+    .minReadVersion = 1,
     .snapshot = cmPersistSnapshot,
     .restore = cmPersistRestore,
     .newEmpty = cmPersistNewEmpty,

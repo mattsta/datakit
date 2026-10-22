@@ -3356,6 +3356,8 @@ static bool clusterRingPersistValidate(const void *structure) {
 const persistOps persistOpsClusterRing = {
     .type = PERSIST_TYPE_CLUSTER_RING,
     .name = "clusterRing",
+    .formatVersion = 1,
+    .minReadVersion = 1,
     .snapshot = clusterRingPersistSnapshot,
     .restore = clusterRingPersistRestore,
     .newEmpty = crPersistNewEmpty,
