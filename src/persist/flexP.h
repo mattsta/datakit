@@ -61,14 +61,19 @@ size_t flexBytesP(const flexP *f);
  * ============================================================================
  */
 
-/* Push to head - automatically persisted */
-void flexPushHeadP(flexP *f, const databox *box);
+/* Every mutation logs first and applies exactly when the result is not
+ * PERSIST_LOG_REFUSED (see persistLogResult: NOT_DURABLE means applied and
+ * logged, the sync failed).  Values are stored exactly as given, as
+ * recovery replays them. */
 
-/* Push to tail - automatically persisted */
-void flexPushTailP(flexP *f, const databox *box);
+/* Push to head */
+persistLogResult flexPushHeadP(flexP *f, const databox *box);
 
-/* Reset (clear all entries) - automatically persisted */
-void flexResetP(flexP *f);
+/* Push to tail */
+persistLogResult flexPushTailP(flexP *f, const databox *box);
+
+/* Reset (clear all entries) */
+persistLogResult flexResetP(flexP *f);
 
 /* ============================================================================
  * Lookups (read-only, no persistence needed)

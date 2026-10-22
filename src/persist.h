@@ -815,6 +815,9 @@ typedef enum persistLogResult {
     PERSIST_LOG_NOT_DURABLE = 3, /* logged, but the sync the policy asked
                                     for failed: apply it; it is in the WAL
                                     buffer or file, durability unknown */
+    PERSIST_LOG_UNCHANGED = 4,   /* (P wrappers) the op would leave the
+                                    structure as it is, so nothing was
+                                    logged or applied */
 } persistLogResult;
 
 /* Log an operation (appends to WAL), syncing as the config's syncMode

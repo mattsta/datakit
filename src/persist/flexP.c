@@ -114,55 +114,45 @@ size_t flexBytesP(const flexP *f) {
  * ============================================================================
  */
 
-void flexPushHeadP(flexP *f, const databox *box) {
+/* Log a push, then store the value exactly as replay will */
+static persistLogResult flexPushP(flexP *f, const databox *box, persistOp op,
+                                  flexEndpoint where) {
     if (!f || !f->f || !f->ctx || !box) {
-        return;
+        return PERSIST_LOG_REFUSED;
     }
 
-    /* Log to WAL first */
-    if (!persistCtxLogOp(f->ctx, PERSIST_OP_PUSH_HEAD, box, 1)) {
-        return;
+    const persistLogResult logged = persistCtxLogOp(f->ctx, op, box, 1);
+    if (logged == PERSIST_LOG_REFUSED) {
+        return logged;
     }
 
-    /* Update in-memory */
-    flexPushByType(&f->f, box, FLEX_ENDPOINT_HEAD);
-
-    /* Check compaction threshold */
+    flexPushByTypeExact(&f->f, box, where);
     persistCtxMaybeCompact(f->ctx, f->f, &persistOpsFlex);
+    return logged;
 }
 
-void flexPushTailP(flexP *f, const databox *box) {
-    if (!f || !f->f || !f->ctx || !box) {
-        return;
-    }
-
-    /* Log to WAL first */
-    if (!persistCtxLogOp(f->ctx, PERSIST_OP_PUSH_TAIL, box, 1)) {
-        return;
-    }
-
-    /* Update in-memory */
-    flexPushByType(&f->f, box, FLEX_ENDPOINT_TAIL);
-
-    /* Check compaction threshold */
-    persistCtxMaybeCompact(f->ctx, f->f, &persistOpsFlex);
+persistLogResult flexPushHeadP(flexP *f, const databox *box) {
+    return flexPushP(f, box, PERSIST_OP_PUSH_HEAD, FLEX_ENDPOINT_HEAD);
 }
 
-void flexResetP(flexP *f) {
+persistLogResult flexPushTailP(flexP *f, const databox *box) {
+    return flexPushP(f, box, PERSIST_OP_PUSH_TAIL, FLEX_ENDPOINT_TAIL);
+}
+
+persistLogResult flexResetP(flexP *f) {
     if (!f || !f->f || !f->ctx) {
-        return;
+        return PERSIST_LOG_REFUSED;
     }
 
-    /* Log to WAL first */
-    if (!persistCtxLogOp(f->ctx, PERSIST_OP_CLEAR, NULL, 0)) {
-        return;
+    const persistLogResult logged =
+        persistCtxLogOp(f->ctx, PERSIST_OP_CLEAR, NULL, 0);
+    if (logged == PERSIST_LOG_REFUSED) {
+        return logged;
     }
 
-    /* Update in-memory */
     flexReset(&f->f);
-
-    /* Check compaction threshold */
     persistCtxMaybeCompact(f->ctx, f->f, &persistOpsFlex);
+    return logged;
 }
 
 /* ============================================================================
@@ -326,6 +316,51 @@ int flexPTest(int argc, char *argv[]) {
 
         flexCloseP(f);
         persistCtxFree(ctx);
+        ptestCleanupFiles(basePath);
+    }
+
+    TEST("flexP stores values exactly, live and recovered, and reports "
+         "each log") {
+        ptestCleanupFiles(basePath);
+        persistCtxConfig config = persistCtxDefaultConfig();
+        config.syncMode = PERSIST_CTX_SYNC_ALWAYS;
+        persistCtx *ctx = persistCtxNew(basePath, &config);
+        flexP *f = flexNewP(ctx);
+        static const char *const numerals[] = {"22", "007", "1.5", "-3"};
+        for (size_t i = 0; i < 4; i++) {
+            const databox s = databoxNewBytesString(numerals[i]);
+            if (flexPushTailP(f, &s) != PERSIST_LOG_DURABLE) {
+                ERR("push %zu was not durable", i);
+            }
+        }
+        if (flexPushTailP(f, NULL) != PERSIST_LOG_REFUSED ||
+            flexCountP(f) != 4) {
+            ERRR("a NULL push was not refused");
+        }
+
+        for (int pass = 0; pass < 2; pass++) {
+            for (size_t i = 0; i < 4; i++) {
+                databox got;
+                flexGetByTypeP(f, flexIndexP(f, (int32_t)i), &got);
+                if (got.type != DATABOX_BYTES ||
+                    got.len != strlen(numerals[i]) ||
+                    memcmp(databoxBytes(&got), numerals[i], got.len) != 0) {
+                    ERR("%s: \"%s\" changed type or bytes",
+                        pass ? "recovered" : "live", numerals[i]);
+                }
+            }
+            flexCloseP(f);
+            persistCtxFree(ctx);
+            if (pass == 0) {
+                ctx = persistCtxOpen(basePath, &config);
+                f = flexOpenP(ctx);
+                if (!f) {
+                    ERRR("recovery failed");
+                    persistCtxFree(ctx);
+                    break;
+                }
+            }
+        }
         ptestCleanupFiles(basePath);
     }
 

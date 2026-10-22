@@ -60,11 +60,12 @@ size_t intsetBytesP(const intsetP *is);
  * ============================================================================
  */
 
-/* Add value - returns true if added, false if already exists */
-bool intsetAddP(intsetP *is, int64_t value);
-
-/* Remove value - returns true if removed, false if not found */
-bool intsetRemoveP(intsetP *is, int64_t value);
+/* Mutations log first and apply exactly when the result is not
+ * PERSIST_LOG_REFUSED (see persistLogResult); an add of a present value
+ * or a remove of an absent one is PERSIST_LOG_UNCHANGED (nothing logged).
+ * 'added' / 'removed' (may be NULL) report whether the set changed. */
+persistLogResult intsetAddP(intsetP *is, int64_t value, bool *added);
+persistLogResult intsetRemoveP(intsetP *is, int64_t value, bool *removed);
 
 /* ============================================================================
  * Lookups (read-only, no persistence needed)
