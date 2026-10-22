@@ -3303,6 +3303,148 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         multiOrderedSetFullFree(m);
     }
 
+    TEST("NX/XX/IncrBy, rank iterators and range removals agree with an "
+         "oracle in every tier") {
+        static const size_t sizes[3] = {12, 400, 900};
+        static const multiOrderedSetType tiers[3] = {
+            MOS_TYPE_SMALL, MOS_TYPE_MEDIUM, MOS_TYPE_FULL};
+        for (size_t t = 0; t < 3; t++) {
+            for (int compress = 0; compress <= 1; compress++) {
+                cleaner(multiOrderedSetFree) multiOrderedSet *s =
+                    compress ? multiOrderedSetNewCompress(FLEX_CAP_LEVEL_2048)
+                             : multiOrderedSetNew();
+                const size_t n = sizes[t];
+                /* The oracle: score per member id; -1 marks removed */
+                int64_t oracle[900];
+                char name[16];
+                for (size_t i = 0; i < n; i++) {
+                    oracle[i] = (int64_t)((i * 7919) % 1000);
+                    snprintf(name, sizeof(name), "m%04zu", i);
+                    const databox member = databoxNewBytesString(name);
+                    const databox score = DATABOX_SIGNED(oracle[i]);
+                    if (!multiOrderedSetAddNX(&s, &score, &member)) {
+                        ERR("tier %zu: AddNX refused new member %zu", t, i);
+                    }
+                }
+                if (!compress && mosType_(s) != tiers[t]) {
+                    ERR("tier %zu built type %d", t, (int)mosType_(s));
+                }
+
+                /* NX refuses a present member; XX refuses an absent one */
+                const databox m0 = databoxNewBytesString("m0000");
+                const databox absent = databoxNewBytesString("zzzz");
+                const databox high = DATABOX_SIGNED(5000);
+                if (multiOrderedSetAddNX(&s, &high, &m0) ||
+                    multiOrderedSetAddXX(&s, &high, &absent) ||
+                    !multiOrderedSetAddXX(&s, &high, &m0)) {
+                    ERR("tier %zu: NX/XX accepted the wrong member", t);
+                }
+                oracle[0] = 5000;
+                const databox five = DATABOX_SIGNED(5);
+                databox incr = {{0}};
+                if (!multiOrderedSetIncrBy(&s, &five, &m0, &incr) ||
+                    incr.data.i64 != 5005) {
+                    ERR("tier %zu: IncrBy gave %" PRId64, t, incr.data.i64);
+                }
+                oracle[0] = 5005;
+
+                /* Rank order of the oracle: by score, then member name */
+                size_t order[900];
+                size_t live = 0;
+#define MOS_ORACLE_ORDER_()                                                    \
+    do {                                                                       \
+        live = 0;                                                              \
+        for (size_t i = 0; i < n; i++) {                                       \
+            if (oracle[i] >= 0) {                                              \
+                size_t at = live++;                                            \
+                while (at > 0 && (oracle[order[at - 1]] > oracle[i] ||         \
+                                  (oracle[order[at - 1]] == oracle[i] &&       \
+                                   order[at - 1] > i))) {                      \
+                    order[at] = order[at - 1];                                 \
+                    at--;                                                      \
+                }                                                              \
+                order[at] = i;                                                 \
+            }                                                                  \
+        }                                                                      \
+    } while (0)
+                MOS_ORACLE_ORDER_();
+
+                /* An iterator at a rank yields that rank's member, forward
+                 * and backward */
+                const int64_t ranks[3] = {0, (int64_t)live / 2,
+                                          (int64_t)live - 1};
+                for (size_t r = 0; r < 3; r++) {
+                    for (int forward = 0; forward <= 1; forward++) {
+                        mosIterator it;
+                        databox member;
+                        databox score;
+                        if (!multiOrderedSetIteratorInitAtRank(s, &it, ranks[r],
+                                                               forward) ||
+                            !multiOrderedSetIteratorNext(&it, &member,
+                                                         &score)) {
+                            ERR("tier %zu: no iterator at rank %" PRId64, t,
+                                ranks[r]);
+                            continue;
+                        }
+                        snprintf(name, sizeof(name), "m%04zu", order[ranks[r]]);
+                        if (member.len != strlen(name) ||
+                            memcmp(databoxBytes(&member), name, member.len)) {
+                            ERR("tier %zu: rank %" PRId64 " (%s) gave the "
+                                "wrong member",
+                                t, ranks[r], forward ? "fwd" : "rev");
+                        }
+                        multiOrderedSetIteratorRelease(&it);
+                    }
+                }
+
+                /* Removing ranks 1..3, then scores in [100, 300] */
+                const size_t byRank =
+                    multiOrderedSetRemoveRangeByRank(&s, 1, 3);
+                for (size_t k = 1; k <= 3 && k < live; k++) {
+                    oracle[order[k]] = -1;
+                }
+                const mosRangeSpec range = {.min = DATABOX_SIGNED(100),
+                                            .max = DATABOX_SIGNED(300)};
+                const size_t byScore =
+                    multiOrderedSetRemoveRangeByScore(&s, &range);
+                size_t wantByScore = 0;
+                for (size_t i = 0; i < n; i++) {
+                    if (oracle[i] >= 100 && oracle[i] <= 300) {
+                        oracle[i] = -1;
+                        wantByScore++;
+                    }
+                }
+                MOS_ORACLE_ORDER_();
+                if (byRank != (live + 3 + wantByScore > 3 ? 3 : 0) ||
+                    byScore != wantByScore || multiOrderedSetCount(s) != live) {
+                    ERR("tier %zu: removed %zu by rank, %zu by score (want "
+                        "%zu); %zu left, want %zu",
+                        t, byRank, byScore, wantByScore,
+                        multiOrderedSetCount(s), live);
+                }
+
+                /* The whole set, in order */
+                mosIterator it;
+                multiOrderedSetIteratorInit(s, &it, true);
+                databox member;
+                databox score;
+                for (size_t k = 0; k < live; k++) {
+                    snprintf(name, sizeof(name), "m%04zu", order[k]);
+                    if (!multiOrderedSetIteratorNext(&it, &member, &score) ||
+                        member.len != strlen(name) ||
+                        memcmp(databoxBytes(&member), name, member.len) ||
+                        score.data.i64 != oracle[order[k]]) {
+                        ERR("tier %zu compress %d: rank %zu differs", t,
+                            compress, k);
+                        break;
+                    }
+                }
+                multiOrderedSetIteratorRelease(&it);
+#undef MOS_ORACLE_ORDER_
+            }
+        }
+    }
+
     TEST("multiOrderedSet: 96/128-bit scores and members in every tier") {
         const mosWideMode modes[3] = {MOS_WIDE_NORMAL, MOS_WIDE_EXTENDED,
                                       MOS_WIDE_MIXED};

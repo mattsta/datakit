@@ -1772,6 +1772,40 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
         multiOrderedSetFullFree(mos);
     }
 
+    TEST(
+        "multiOrderedSetFull — pooled members: an external and an owned pool") {
+        /* @own: caller; free=atomPoolFree */
+        atomPool *shared = atomPoolNew(ATOM_POOL_HASH);
+        multiOrderedSetFull *a = multiOrderedSetFullNewWithPool(shared);
+        multiOrderedSetFull *b = multiOrderedSetFullNewWithOwnedPool();
+        for (int i = 0; i < 50; i++) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "a-long-shared-member-%03d", i);
+            const databox member = databoxNewBytesString(buf);
+            const databox score = databoxNewSigned(i);
+            multiOrderedSetFullAdd(a, &score, &member);
+            multiOrderedSetFullAdd(b, &score, &member);
+        }
+        const databox m7 = databoxNewBytesString("a-long-shared-member-007");
+        databox sa;
+        databox sb;
+        if (multiOrderedSetFullCount(a) != 50 ||
+            multiOrderedSetFullCount(b) != 50 ||
+            !multiOrderedSetFullGetScore(a, &m7, &sa) || sa.data.i64 != 7 ||
+            !multiOrderedSetFullGetScore(b, &m7, &sb) || sb.data.i64 != 7 ||
+            atomPoolCount(shared) != 50) {
+            ERRR("a pooled set lost members or scores");
+        }
+
+        /* Freeing the set leaves the external pool to its owner */
+        multiOrderedSetFullFree(a);
+        multiOrderedSetFullFree(b);
+        if (atomPoolCount(shared) > 50) {
+            ERRR("the external pool grew after its set was freed");
+        }
+        atomPoolFree(shared);
+    }
+
     TEST("multiOrderedSetFull — add and lookup") {
         multiOrderedSetFull *mos = multiOrderedSetFullNew();
 
