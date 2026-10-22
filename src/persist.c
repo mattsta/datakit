@@ -2694,8 +2694,18 @@ static void *hyperloglogPersistRestore(const uint8_t *data, size_t len) {
         return NULL;
     }
 
-    /* @own: caller; free=mdscfree */
-    return (void *)mdscnewlen(data, len);
+    /* The bytes may be damaged: refuse any whose header does not describe
+     * a walkable register set before a reader (count, merge) walks it */
+    cleaner(hyperloglogFree) hyperloglog *h =
+        (hyperloglog *)mdscnewlen(data, len);
+    if (!hyperloglogDetect(h)) {
+        return NULL;
+    }
+
+    /* @own: caller; free=hyperloglogFree */
+    hyperloglog *out = h;
+    h = NULL;
+    return out;
 }
 
 static void *hyperloglogPersistNewEmpty(void) {

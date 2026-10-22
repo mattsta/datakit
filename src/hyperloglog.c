@@ -2048,6 +2048,54 @@ cleanup:
         hyperloglogFree(ph);
     }
 
+    {
+        /* A copy is independent of its source; pfcount over several HLLs
+         * counts their union, the same as merging them first */
+        cleaner(hyperloglogFree) hyperloglog *a = hyperloglogNewSparse();
+        cleaner(hyperloglogFree) hyperloglog *b = hyperloglogNew();
+        bool invalid = false;
+        if (hyperloglogCount(a, &invalid) != 0 || invalid) {
+            printf("  [FAIL] a new sparse HLL is not empty\n");
+            errors++;
+        }
+        /* Fixed-size keys: members 0..1499, a holds 0..999, b 500..1499 */
+        for (uint64_t i = 0; i < 1500; i++) {
+            if (i < 1000) {
+                hyperloglogAdd(&a, &i, sizeof(i));
+            }
+            if (i >= 500) {
+                hyperloglogAdd(&b, &i, sizeof(i));
+            }
+        }
+        hyperloglogInvalidateCache(a);
+        hyperloglogInvalidateCache(b);
+
+        const uint64_t countA = hyperloglogCount(a, &invalid);
+        cleaner(hyperloglogFree) hyperloglog *c = hyperloglogCopy(a);
+        for (uint64_t i = 100000; i < 100200; i++) {
+            hyperloglogAdd(&c, &i, sizeof(i));
+        }
+        hyperloglogInvalidateCache(a);
+
+        cleaner(hyperloglogFree) hyperloglog *merged = hyperloglogCopy(a);
+        hyperloglogMergeInto(&merged, b);
+        const uint64_t unionCount = pfcount(a, b, NULL);
+        const uint64_t mergedCount = hyperloglogCount(merged, &invalid);
+        if (hyperloglogCount(a, &invalid) != countA ||
+            unionCount != mergedCount || unionCount < 1400 ||
+            unionCount > 1600) {
+            printf("  [FAIL] copy/pfcount: a %" PRIu64 " (was %" PRIu64
+                   "), union %" PRIu64 ", merged %" PRIu64 "\n",
+                   hyperloglogCount(a, &invalid), countA, unionCount,
+                   mergedCount);
+            errors++;
+        } else {
+            printf("  [OK] copy independent; pfcount union %" PRIu64
+                   " == merged\n",
+                   unionCount);
+        }
+    }
+
     return errors;
 }
 #endif
