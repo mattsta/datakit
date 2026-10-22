@@ -3989,10 +3989,14 @@ int databoxTest(int argc, char *argv[]) {
          * moves into it (ASan watches both buffers) */
         const char *shortText = "abc";
         databox small = databoxNewBytes(shortText, 3);
-        databoxRetainBytesSelfExact(&small, zmalloc(3));
+        /* @own: container; free=databoxRetainBytesSelfExact */
+        void *smallBuf = zmalloc(3);
+        databoxRetainBytesSelfExact(&small, smallBuf);
         const char *longText = "a value longer than any embed";
         databox big = databoxNewBytes(longText, strlen(longText));
-        databoxRetainBytesSelfExact(&big, zmalloc(strlen(longText)));
+        /* @own: container; free=databoxFreeData */
+        void *bigBuf = zmalloc(strlen(longText));
+        databoxRetainBytesSelfExact(&big, bigBuf);
         if (small.type != DATABOX_BYTES_EMBED ||
             memcmp(databoxBytes(&small), "abc", 3) != 0 || !big.allocated ||
             databoxBytes(&big) == (const uint8_t *)longText ||
