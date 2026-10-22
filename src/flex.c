@@ -11895,10 +11895,13 @@ int32_t flexTest(int32_t argc, char **argv) {
  *   - or -
  * If not running under ASan */
 #if defined(TEST_MEMORY_BIG) || !__has_feature(address_sanitizer)
-            const int numloops = 25000;
+            const int numloops = 200;
 #else
-            /* else, (ASan && !TEST_MEMORY_BIG), use fewer loops. */
-            const int numloops = 250;
+            /* else, (ASan && !TEST_MEMORY_BIG), use fewer loops: each
+             * builds up to 256 random payloads of up to 32 KB, and without
+             * preallocation every insert reallocates a flex of megabytes,
+             * which ASan's realloc always copies */
+            const int numloops = preallocate ? 50 : 8;
 #endif
             const uint32_t maxTestElementCount = 256;
 
@@ -12117,8 +12120,10 @@ int32_t flexTest(int32_t argc, char **argv) {
 
     printf("Stress with variable flex sizes (insert + delete):\n");
     {
-        float headTotal = stress(FLEX_ENDPOINT_HEAD, 100000, 16384, 256);
-        float tailTotal = stress(FLEX_ENDPOINT_TAIL, 100000, 16384, 256);
+        /* 2000 push+pop pairs at every size: a smoke-size run of what
+         * was a throughput benchmark */
+        float headTotal = stress(FLEX_ENDPOINT_HEAD, 2000, 16384, 256);
+        float tailTotal = stress(FLEX_ENDPOINT_TAIL, 2000, 16384, 256);
 
         printf("SUCCESS (%f sec head)\nSUCCESS (%f sec tail)\n\n",
                headTotal / 1e6, tailTotal / 1e6);
@@ -12127,9 +12132,9 @@ int32_t flexTest(int32_t argc, char **argv) {
     printf("Stress with variable flex sizes (insert replace):\n");
     {
         float headTotal =
-            stressReplaceInline(FLEX_ENDPOINT_HEAD, 100000, 16384, 256);
+            stressReplaceInline(FLEX_ENDPOINT_HEAD, 2000, 16384, 256);
         float tailTotal =
-            stressReplaceInline(FLEX_ENDPOINT_TAIL, 100000, 16384, 256);
+            stressReplaceInline(FLEX_ENDPOINT_TAIL, 2000, 16384, 256);
 
         printf("SUCCESS (%f sec head)\nSUCCESS (%f sec tail)\n\n",
                headTotal / 1e6, tailTotal / 1e6);

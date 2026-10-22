@@ -2804,6 +2804,14 @@ static int32_t surrogateCopyCheck_(const char *where, const multimapFull *m,
     return err;
 }
 
+/* Sizes for the build-up sweep: every size to 256, then steps of about
+ * 6%.  Building a map to size i crosses every internal split below i (and
+ * deleting it crosses them back), so sampled sizes keep the coverage of
+ * the old every-size sweep at about 1/80 of its work. */
+static int32_t multimapFullTestNextSize_(int32_t i) {
+    return i < 256 ? i + 1 : i + i / 16;
+}
+
 int multimapFullTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -3163,7 +3171,7 @@ int multimapFullTest(int argc, char *argv[]) {
 
     printf("\n\n");
 
-    for (int32_t i = 0; i < 4096; i++) {
+    for (int32_t i = 0; i < 4096; i = multimapFullTestNextSize_(i)) {
         cleaner(multimapFullFree) multimapFull *m = multimapFullNew(2);
         TEST_DESC("%d k/v pairs - inserting...", i) {
             TIME_INIT;

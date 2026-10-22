@@ -1714,7 +1714,9 @@ defcleaner(hyperloglog *, hyperloglogFree);
 /* PFSELFTEST
  * This command performs a self-test of the HLL registers implementation.
  * Something that is not easy to test from within the outside. */
-#define HLL_TEST_CYCLES 100000
+/* Register-access cycles; the approximation test adds 10000x as many
+ * elements (10M), still crossing every sparse/dense checkpoint */
+#define HLL_TEST_CYCLES 1000
 int hyperloglogTest(int argc, char *argv[]) {
     DK_NOTUSED(argc);
     DK_NOTUSED(argv);

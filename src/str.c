@@ -1731,8 +1731,9 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     }
 
     TEST("Perf Number Conversions") {
-        const size_t loopBooster = 9000000;
-        const size_t looperDeDoBooster = 12;
+        /* Smoke size: every string parses; perf builds time larger runs */
+        const size_t loopBooster = 100000;
+        const size_t looperDeDoBooster = 2;
 
         char *str[] = {"454545454545.5",       "9223372036854775808",
                        "-9223372036854775809", "2147483648",
@@ -1956,7 +1957,8 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     testStrInt64ToBuf(StrInt64ToBuf);
 
     TEST("benchmark multiply vs. shifting by 100") {
-        const size_t loopBooster = 1e4;
+        /* Smoke size: both forms agree on every input */
+        const size_t loopBooster = 100;
         const uint32_t innerFunctionIteration = 1e6;
 
         {
@@ -1985,7 +1987,8 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
     }
 
     TEST("string to unsigned integer speeds") {
-        const size_t loopBooster = 4 * 1e7;
+        /* Smoke size: every parser agrees on the input */
+        const size_t loopBooster = 100000;
 
         {
             TIME_INIT;
@@ -2193,7 +2196,9 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
             memcpy(tester + i, foo, len);
         }
 
-        const size_t loopBooster = 1000;
+        /* Each pass reads the whole ~38 MB buffer; a few passes check
+         * the count (perf builds can raise this to time it) */
+        const size_t loopBooster = 3;
         size_t utf8len;
         {
             TIME_INIT;
@@ -2224,7 +2229,9 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
             memcpy(tester + i, foo, len);
         }
 
-        const size_t loopBooster = 1000;
+        /* Each pass reads the whole ~38 MB buffer; a few passes check
+         * the count (perf builds can raise this to time it) */
+        const size_t loopBooster = 3;
         size_t utf8len;
         {
             TIME_INIT;
@@ -2428,7 +2435,9 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
             memcpy(tester + i, foo, len);
         }
 
-        const size_t loopBooster = 1000;
+        /* Each pass reads the whole ~38 MB buffer; a few passes check
+         * the count (perf builds can raise this to time it) */
+        const size_t loopBooster = 3;
         size_t utf8len;
         {
             TIME_INIT;
@@ -2470,7 +2479,9 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
                 memcpy(startTester + i, foo, len);
             }
 
-            const size_t loopBooster = 1000;
+            /* Each pass reads the whole ~38 MB buffer; a few passes check
+             * the count (perf builds can raise this to time it) */
+            const size_t loopBooster = 3;
             size_t utf8len;
             {
                 TIME_INIT;

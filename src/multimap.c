@@ -3298,6 +3298,14 @@ static int32_t rvSelectionCheck(const char *where, void *m, rvInsertFn insert,
     return err;
 }
 
+/* Sizes for the build-up sweeps: every size to 256, then steps of about
+ * 6%.  Building a map to size i crosses every tier transition below i
+ * (and deleting it crosses them back), so sampled sizes keep the
+ * coverage of the old every-size sweep at about 1/80 of its work. */
+static int32_t multimapTestNextSize_(int32_t i) {
+    return i < 256 ? i + 1 : i + i / 16;
+}
+
 int multimapTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -3932,7 +3940,7 @@ int multimapTest(int argc, char *argv[]) {
     TEST("(full width) small->medium->full: insert / exists / lookup / delete "
          "/ type "
          "check...") {
-        for (int32_t i = 0; i < 4096; i++) {
+        for (int32_t i = 0; i < 4096; i = multimapTestNextSize_(i)) {
             cleaner(multimapFree) multimap *m =
                 multimapNewLimit(2, FLEX_CAP_LEVEL_2048);
             TEST_DESC("%d k/v pairs - inserting...", i) {
@@ -4025,7 +4033,7 @@ int multimapTest(int argc, char *argv[]) {
     TEST("(key only) small->medium->full: insert / exists / lookup / delete / "
          "type "
          "check...") {
-        for (int32_t i = 0; i < 4096; i++) {
+        for (int32_t i = 0; i < 4096; i = multimapTestNextSize_(i)) {
             cleaner(multimapFree) multimap *m =
                 multimapNewLimit(2, FLEX_CAP_LEVEL_2048);
             TEST_DESC("%d k/v pairs - inserting...", i) {

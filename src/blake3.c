@@ -1509,9 +1509,10 @@ int blake3Test(int argc, char *argv[]) {
          * Compress4 only applies when there are >= 4 chunks; the
          * column reads "n/a" below that. */
         const size_t chunks[] = {1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 32, 64};
-        const uint32_t iters_per_size[] = {200000, 100000, 80000, 60000,
-                                           50000,  40000,  35000, 30000,
-                                           20000,  15000,  8000,  4000};
+        /* Smoke-size runs (every primitive, every size); the perf preset
+         * benches give the real numbers */
+        const uint32_t iters_per_size[] = {4000, 2000, 1600, 1200, 1000, 800,
+                                           700,  600,  400,  300,  160,  80};
         const size_t n_sizes = sizeof(chunks) / sizeof(chunks[0]);
         const size_t maxBlocks = chunks[n_sizes - 1] * 16;
         const size_t maxBytes = maxBlocks * BLAKE3_BLOCK_LEN;
@@ -1684,9 +1685,10 @@ int blake3Test(int argc, char *argv[]) {
          * therefore agree exactly for 1-3 chunk inputs and that's a
          * real datapoint, not a measurement artifact. */
         const size_t chunks[] = {1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 32, 64};
-        const uint32_t iters_per_size[] = {200000, 100000, 80000, 60000,
-                                           50000,  40000,  35000, 30000,
-                                           20000,  15000,  8000,  4000};
+        /* Smoke-size runs (every primitive, every size); the perf preset
+         * benches give the real numbers */
+        const uint32_t iters_per_size[] = {4000, 2000, 1600, 1200, 1000, 800,
+                                           700,  600,  400,  300,  160,  80};
         const size_t n_sizes = sizeof(chunks) / sizeof(chunks[0]);
 
         const size_t maxBytes = chunks[n_sizes - 1] * BLAKE3_CHUNK_LEN;
@@ -1771,7 +1773,7 @@ int blake3Test(int argc, char *argv[]) {
          * call.  Measure ns/op for the sizes that show up most often
          * in real workloads (cluster RPC bodies, replication frames). */
         const size_t sizes[] = {16, 32, 64, 128, 256, 512};
-        const uint32_t iters = 1000000;
+        const uint32_t iters = 20000; /* smoke size; perf preset for numbers */
         uint8_t small_input[512];
         for (size_t i = 0; i < sizeof(small_input); i++) {
             small_input[i] = (uint8_t)i;
