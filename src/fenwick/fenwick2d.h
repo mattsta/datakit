@@ -1,8 +1,16 @@
 #pragma once
 
 /* ====================================================================
- * 2D Fenwick Trees (typed): fenwick2dI64, fenwick2dU64, fenwick2dDouble
+ * 2D Fenwick Trees (typed): fenwick2dI16 ... fenwick2dDouble
  * ====================================================================
+ *
+ * One tree per value type, each in its own header and source, like the
+ * 1D family: fenwick2dI16.h, fenwick2dI32.h, fenwick2dI64.h,
+ * fenwick2dI128.h, fenwick2dU16.h, fenwick2dU32.h, fenwick2dU64.h,
+ * fenwick2dU128.h, fenwick2dFloat.h and fenwick2dDouble.h.  Include one
+ * of them for one type, or this header for all.  The 128-bit trees exist
+ * where the compiler has __int128 (__SIZEOF_INT128__).  Every type shares
+ * the contract below.
  *
  * A grid of numbers e[row][col] (0-based) with point updates and
  * rectangle sums, each O(log R * log C).  The grid grows on demand: any
@@ -17,11 +25,12 @@
  * ------
  * - Elements are stored values and never wrap: Update refuses (returns
  *   false, changing nothing; a NULL tree stays NULL) a delta whose new
- *   element would not fit the type; Set always fits.  The Double tree
- *   refuses a non-finite delta, value or element.
+ *   element would not fit the type; Set always fits.  The Float and
+ *   Double trees refuse a non-finite delta, value or element.
  * - Get returns the element exactly.  Query and RangeQuery return the
  *   exact sum whenever it fits the type; an integer sum that does not fit
- *   comes back modulo 2^64 (cells add with wrapping, never UB).
+ *   comes back modulo 2^N for the type's N bits (cells add with wrapping,
+ *   never UB).  Float sums are computed in the tree's own type.
  * - A write that would grow the grid past 2^32 cells is refused.
  *
  * RANGES
@@ -35,33 +44,16 @@
  *
  * Not thread-safe. */
 
-#include <stdbool.h>
-#include <stddef.h>
-#include <stdint.h>
-
-#define FENWICK2D_DECLARE(suffix, value_type)                                  \
-    typedef struct fenwick2d##suffix fenwick2d##suffix;                        \
-    fenwick2d##suffix *fenwick2d##suffix##New(void);                           \
-    void fenwick2d##suffix##Free(fenwick2d##suffix *t);                        \
-    bool fenwick2d##suffix##Update(fenwick2d##suffix **t, size_t row,          \
-                                   size_t col, value_type delta);              \
-    bool fenwick2d##suffix##Set(fenwick2d##suffix **t, size_t row, size_t col, \
-                                value_type value);                             \
-    value_type fenwick2d##suffix##Get(const fenwick2d##suffix *t, size_t row,  \
-                                      size_t col);                             \
-    value_type fenwick2d##suffix##Query(const fenwick2d##suffix *t,            \
-                                        size_t row, size_t col);               \
-    value_type fenwick2d##suffix##RangeQuery(const fenwick2d##suffix *t,       \
-                                             size_t r1, size_t c1, size_t r2,  \
-                                             size_t c2);                       \
-    size_t fenwick2d##suffix##Rows(const fenwick2d##suffix *t);                \
-    size_t fenwick2d##suffix##Cols(const fenwick2d##suffix *t);                \
-    size_t fenwick2d##suffix##Bytes(const fenwick2d##suffix *t);               \
-    void fenwick2d##suffix##Clear(fenwick2d##suffix *t);
-
-FENWICK2D_DECLARE(I64, int64_t)
-FENWICK2D_DECLARE(U64, uint64_t)
-FENWICK2D_DECLARE(Double, double)
+#include "fenwick2dDouble.h"
+#include "fenwick2dFloat.h"
+#include "fenwick2dI128.h"
+#include "fenwick2dI16.h"
+#include "fenwick2dI32.h"
+#include "fenwick2dI64.h"
+#include "fenwick2dU128.h"
+#include "fenwick2dU16.h"
+#include "fenwick2dU32.h"
+#include "fenwick2dU64.h"
 
 #ifdef DATAKIT_TEST
 int fenwick2dTest(int argc, char *argv[]);

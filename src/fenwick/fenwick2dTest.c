@@ -31,8 +31,9 @@ static size_t f2tIndex_(uint64_t *s) {
 }
 
 /* Differential run for one type.  Integer prefix sums are taken in the
- * unsigned type (the sum modulo 2^64, the documented result when it does
- * not fit); Double values are small integers, so every sum is exact. */
+ * same-width unsigned type (the sum modulo 2^N, the documented result
+ * when it does not fit); float values are small integers, so every sum is
+ * exact in both float types. */
 #define F2T_DIFF(T, VT, UT, VMIN, VMAX, IS_FLOAT, FITS_ADD)                    \
     static int f2tDiff##T(uint64_t seed) {                                     \
         int err = 0;                                                           \
@@ -132,44 +133,113 @@ static size_t f2tIndex_(uint64_t *s) {
 
 /* a + b into *out; false when it does not fit the type */
 #define F2T_INT_FITS(a, b, out) (!__builtin_add_overflow(a, b, out))
-#define F2T_DOUBLE_FITS(a, b, out) (*(out) = (a) + (b), true)
+#define F2T_FLOAT_FITS(a, b, out) (*(out) = (a) + (b), true)
 
-F2T_DIFF(I64, int64_t, uint64_t, INT64_MIN, INT64_MAX, 0, F2T_INT_FITS)
-F2T_DIFF(U64, uint64_t, uint64_t, 0, UINT64_MAX, 0, F2T_INT_FITS)
-F2T_DIFF(Double, double, double, -DBL_MAX, DBL_MAX, 1, F2T_DOUBLE_FITS)
+/* Per-type edges: a NULL tree is empty; refusals change nothing and
+ * leave a NULL tree NULL; an element at the type's limit refuses one
+ * more step (for floats, a step to infinity); cells are sizeof(VT) each,
+ * so one row doubling of a 4 x 4 capacity adds 16 cells. */
+#define F2T_EDGES(T, VT, VMAX, IS_FLOAT)                                       \
+    static int f2tEdges##T(void) {                                             \
+        int err = 0;                                                           \
+        if (fenwick2d##T##Rows(NULL) != 0 || fenwick2d##T##Cols(NULL) != 0 ||  \
+            fenwick2d##T##Bytes(NULL) != 0 ||                                  \
+            fenwick2d##T##Get(NULL, 0, 0) != 0 ||                              \
+            fenwick2d##T##Query(NULL, 5, 5) != 0 ||                            \
+            fenwick2d##T##RangeQuery(NULL, 0, 0, 5, 5) != 0 ||                 \
+            fenwick2d##T##Update(NULL, 0, 0, 1)) {                             \
+            ERRR(#T ": a NULL tree is not an empty tree");                     \
+        }                                                                      \
+        fenwick2d##T##Clear(NULL);                                             \
+        fenwick2d##T##Free(NULL);                                              \
+                                                                               \
+        fenwick2d##T *t = NULL;                                                \
+        if (fenwick2d##T##Update(&t, (size_t)1 << 32, 0, 1) ||                 \
+            fenwick2d##T##Update(&t, (size_t)1 << 20, (size_t)1 << 20, 1) ||   \
+            t != NULL) {                                                       \
+            ERRR(#T ": a write past 2^32 cells was accepted or left a tree");  \
+        }                                                                      \
+                                                                               \
+        const VT step = (IS_FLOAT) ? (VT)(VMAX) : (VT)1;                       \
+        if (!fenwick2d##T##Set(&t, 3, 2, (VT)(VMAX)) ||                        \
+            fenwick2d##T##Update(&t, 3, 2, step) ||                            \
+            fenwick2d##T##Get(t, 3, 2) != (VT)(VMAX) ||                        \
+            fenwick2d##T##Rows(t) != 4 || fenwick2d##T##Cols(t) != 3) {        \
+            ERRR(#T ": an element overflow was accepted or changed the tree"); \
+        }                                                                      \
+                                                                               \
+        const size_t bytes = fenwick2d##T##Bytes(t);                           \
+        if (!fenwick2d##T##Update(&t, 6, 1, 1) ||                              \
+            fenwick2d##T##Bytes(t) != bytes + 16 * sizeof(VT)) {               \
+            ERR(#T ": Bytes %zu -> %zu, want +%zu for one row doubling",       \
+                bytes, fenwick2d##T##Bytes(t), 16 * sizeof(VT));               \
+        }                                                                      \
+        fenwick2d##T##Free(t);                                                 \
+        return err;                                                            \
+    }
+
+#define F2T_TYPE(T, VT, UT, VMIN, VMAX, IS_FLOAT, FITS_ADD)                    \
+    F2T_DIFF(T, VT, UT, VMIN, VMAX, IS_FLOAT, FITS_ADD)                        \
+    F2T_EDGES(T, VT, VMAX, IS_FLOAT)
+
+F2T_TYPE(I16, int16_t, uint16_t, INT16_MIN, INT16_MAX, 0, F2T_INT_FITS)
+F2T_TYPE(I32, int32_t, uint32_t, INT32_MIN, INT32_MAX, 0, F2T_INT_FITS)
+F2T_TYPE(I64, int64_t, uint64_t, INT64_MIN, INT64_MAX, 0, F2T_INT_FITS)
+F2T_TYPE(U16, uint16_t, uint16_t, 0, UINT16_MAX, 0, F2T_INT_FITS)
+F2T_TYPE(U32, uint32_t, uint32_t, 0, UINT32_MAX, 0, F2T_INT_FITS)
+F2T_TYPE(U64, uint64_t, uint64_t, 0, UINT64_MAX, 0, F2T_INT_FITS)
+F2T_TYPE(Float, float, float, -FLT_MAX, FLT_MAX, 1, F2T_FLOAT_FITS)
+F2T_TYPE(Double, double, double, -DBL_MAX, DBL_MAX, 1, F2T_FLOAT_FITS)
+#ifdef __SIZEOF_INT128__
+#define F2T_I128_MAX ((__int128_t)(((__uint128_t)1 << 127) - 1))
+#define F2T_U128_MAX (~(__uint128_t)0)
+F2T_TYPE(I128, __int128_t, __uint128_t, -F2T_I128_MAX - 1, F2T_I128_MAX, 0,
+         F2T_INT_FITS)
+F2T_TYPE(U128, __uint128_t, __uint128_t, 0, F2T_U128_MAX, 0, F2T_INT_FITS)
+#endif
 
 int fenwick2dTest(int argc, char *argv[]) {
     int err = 0;
     (void)argc;
     (void)argv;
 
-    TEST("differential: fenwick2d I64, U64, Double against a dense grid") {
+    TEST("differential: every fenwick2d type against a dense grid") {
         for (uint64_t seed = 1; seed <= 3; seed++) {
+            err += f2tDiffI16(seed);
+            err += f2tDiffI32(seed);
             err += f2tDiffI64(seed);
+            err += f2tDiffU16(seed);
+            err += f2tDiffU32(seed);
             err += f2tDiffU64(seed);
+            err += f2tDiffFloat(seed);
             err += f2tDiffDouble(seed);
+#ifdef __SIZEOF_INT128__
+            err += f2tDiffI128(seed);
+            err += f2tDiffU128(seed);
+#endif
         }
     }
 
-    TEST("NULL and empty trees") {
-        if (fenwick2dI64Rows(NULL) != 0 || fenwick2dI64Bytes(NULL) != 0 ||
-            fenwick2dI64Get(NULL, 0, 0) != 0 ||
-            fenwick2dI64Query(NULL, 5, 5) != 0 ||
-            fenwick2dI64RangeQuery(NULL, 0, 0, 5, 5) != 0 ||
-            fenwick2dI64Update(NULL, 0, 0, 1)) {
-            ERRR("NULL tree is not an empty tree");
-        }
-
-        fenwick2dI64Clear(NULL);
-        fenwick2dI64Free(NULL);
+    TEST("every type: NULL trees, refusals, limits, cell size") {
+        err += f2tEdgesI16();
+        err += f2tEdgesI32();
+        err += f2tEdgesI64();
+        err += f2tEdgesU16();
+        err += f2tEdgesU32();
+        err += f2tEdgesU64();
+        err += f2tEdgesFloat();
+        err += f2tEdgesDouble();
+#ifdef __SIZEOF_INT128__
+        err += f2tEdgesI128();
+        err += f2tEdgesU128();
+#endif
     }
 
-    TEST("refusals change nothing; a NULL tree stays NULL") {
-        fenwick2dI64 *t = NULL;
-        if (fenwick2dI64Update(&t, (size_t)1 << 32, 0, 1) ||
-            fenwick2dI64Update(&t, (size_t)1 << 20, (size_t)1 << 20, 1) ||
-            t != NULL) {
-            ERRR("a write past 2^32 cells was accepted or left a tree");
+    TEST("float trees refuse non-finite values; a NULL tree stays NULL") {
+        fenwick2dFloat *f = NULL;
+        if (fenwick2dFloatUpdate(&f, 0, 0, NAN) ||
+            fenwick2dFloatSet(&f, 0, 0, INFINITY) || f != NULL) {
+            ERRR("a non-finite float was accepted or left a tree");
         }
 
         fenwick2dDouble *d = NULL;
@@ -177,23 +247,6 @@ int fenwick2dTest(int argc, char *argv[]) {
             fenwick2dDoubleSet(&d, 0, 0, INFINITY) || d != NULL) {
             ERRR("a non-finite double was accepted or left a tree");
         }
-
-        if (!fenwick2dI64Update(&t, 3, 2, INT64_MAX) ||
-            fenwick2dI64Update(&t, 3, 2, 1) ||
-            fenwick2dI64Get(t, 3, 2) != INT64_MAX || fenwick2dI64Rows(t) != 4 ||
-            fenwick2dI64Cols(t) != 3) {
-            ERRR("an element overflow was accepted or changed the tree");
-        }
-
-        /* Bytes: the struct plus 8 bytes per capacity cell (4 x 4) */
-        const size_t bytes = fenwick2dI64Bytes(t);
-        if (!fenwick2dI64Update(&t, 6, 1, 1) ||
-            fenwick2dI64Bytes(t) != bytes + 8 * 16) {
-            ERR("Bytes %zu -> %zu, want +128 for one row doubling", bytes,
-                fenwick2dI64Bytes(t));
-        }
-
-        fenwick2dI64Free(t);
     }
 
     TEST_FINAL_RESULT;

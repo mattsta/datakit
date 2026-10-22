@@ -2,8 +2,10 @@
  * 2D Fenwick Tree Typed Template: the public API of one value type
  * ====================================================================
  *
- * Included once per type by fenwick2d.c, with:
- *   F2D_SUFFIX       - I64, U64, Double
+ * Included by each type's source (fenwick2dI16.c ... fenwick2dDouble.c),
+ * after that type's header, with:
+ *   F2D_SUFFIX       - I16, I32, I64, I128, U16, U32, U64, U128, Float,
+ *                      Double
  *   F2D_VALUE_T      - the C value type
  *   F2D_IS_FLOATING  - 1 for a float type
  * Cells are the value type; integer cells add with wrapping (exact for

@@ -50,9 +50,32 @@ else()
     message(STATUS "Fenwick: 128-bit integers not supported on this platform")
 endif()
 
-# 2D trees (typed): one source instantiates every type
-list(APPEND FENWICK_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/fenwick2d.c)
-list(APPEND FENWICK_HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/fenwick2d.h)
+# 2D trees (typed): one source and one header per type, the same types.
+# Every header is installed (the 128-bit ones declare nothing without
+# __int128, so fenwick2d.h can include all of them); the 128-bit sources
+# build only where the type exists.
+foreach(TYPE ${FENWICK_TYPES} ${FENWICK_128BIT_TYPES})
+    list(APPEND FENWICK_HEADERS
+        ${CMAKE_CURRENT_SOURCE_DIR}/fenwick2d${TYPE}.h
+    )
+endforeach()
+
+set(FENWICK2D_TYPES ${FENWICK_TYPES})
+if(SIZEOF_INT128)
+    list(APPEND FENWICK2D_TYPES ${FENWICK_128BIT_TYPES})
+endif()
+
+foreach(TYPE ${FENWICK2D_TYPES})
+    list(APPEND FENWICK_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/fenwick2d${TYPE}.c
+    )
+endforeach()
+
+list(APPEND FENWICK_HEADERS
+    ${CMAKE_CURRENT_SOURCE_DIR}/fenwick2d.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/fenwick2dCoreImpl.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/fenwick2dTypedImpl.h
+)
 
 # Add all fenwick sources to parent target (relative to parent)
 target_sources(datakit PRIVATE ${FENWICK_SOURCES})
