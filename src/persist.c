@@ -3351,8 +3351,18 @@ static bool multilistApplyPopIdentity(multilist **ml, mflexState *state,
 static bool multilistPersistApplyOp(void *structure, persistOp op,
                                     const uint8_t *data, size_t len) {
     multilist **ml = structure;
-    /* Use thread-local replay state set by persistReplayWAL */
+    /* The replay's scratch state when persistReplayWAL is running; any
+     * other caller (another restore engine, a direct apply) gets a local
+     * one, so applyOp never depends on being called from a replay */
+    cleaner(mflexStateFree) mflexState *ownedState = NULL;
     mflexState *state = persistGetReplayState();
+    if (!state) {
+        ownedState = mflexStateCreate();
+        if (!ownedState) {
+            return false;
+        }
+        state = ownedState;
+    }
 
     switch (op) {
     case PERSIST_OP_PUSH_HEAD:
@@ -3423,7 +3433,14 @@ static bool multilistPersistApplyOp(void *structure, persistOp op,
         /* [head_cut, tail_cut] as a 2-element flex — the normalized
          * element counts the origin's LTRIM removed from each end. */
         databox headBox, tailBox;
-        if (!flexGetTwoDataboxes(data, len, &headBox, &tailBox)) {
+        if (!flexGetTwoDataboxes(data, len, &headBox, &tailBox) ||
+            (headBox.type != DATABOX_SIGNED_64 &&
+             headBox.type != DATABOX_UNSIGNED_64) ||
+            (tailBox.type != DATABOX_SIGNED_64 &&
+             tailBox.type != DATABOX_UNSIGNED_64) ||
+            headBox.data.u > (uint64_t)INT64_MAX ||
+            tailBox.data.u > (uint64_t)INT64_MAX) {
+            /* Two non-negative counts, as the origin computed them */
             return false;
         }
         const int64_t headCut = (int64_t)headBox.data.u;
@@ -3482,9 +3499,8 @@ static bool multilistPersistApplyOp(void *structure, persistOp op,
     }
 
     case PERSIST_OP_CLEAR:
-        multilistFree(*ml);
-        /* @own: caller; free=multilistFree */
-        *ml = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+        /* Empty, keeping the list's node size and compression */
+        multilistReset(ml);
         return true;
 
     default:

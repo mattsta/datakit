@@ -26,12 +26,13 @@ extern const persistContractType persistContractIntset;
 extern const persistContractType persistContractIntsetBig;
 extern const persistContractType persistContractHyperloglog;
 extern const persistContractType persistContractMultiarray;
+extern const persistContractType persistContractMultilist;
 
 static const persistContractType *const pcRegistry[] = {
     &persistContractFlex,       &persistContractMultimap,
     &persistContractMultiroar,  &persistContractIntset,
     &persistContractIntsetBig,  &persistContractHyperloglog,
-    &persistContractMultiarray,
+    &persistContractMultiarray, &persistContractMultilist,
 };
 
 /* ====================================================================

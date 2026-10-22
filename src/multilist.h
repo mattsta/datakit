@@ -181,6 +181,9 @@ bool multilistPop(multilist **m, mflexState *state, databox *got,
 #define multilistPopHead(ml, s, box) multilistPop(ml, s, box, false)
 
 void multilistFree(multilist *m);
+/* Remove every element, keeping the node size limit and compression
+ * depth the list was created with */
+void multilistReset(multilist **ml);
 
 /* Bulk appending — use for growing
 multilist *multilistlNewFromFlex(int fill, int compress, flex *fl);

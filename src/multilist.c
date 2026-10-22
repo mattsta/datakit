@@ -134,6 +134,14 @@ void multilistFree(multilist *m) {
     }
 }
 
+void multilistReset(multilist **ml) {
+    const flexCapSizeLimit limit = COMPRESS_LIMIT(*ml);
+    const uint32_t depth = COMPRESS_DEPTH(*ml);
+    multilistFree(*ml);
+    /* @own: caller; free=multilistFree */
+    *ml = multilistNew(limit, depth);
+}
+
 size_t multilistCount(const multilist *m) {
     MULTILIST_SINGLE_RETURN(m, Count);
 }

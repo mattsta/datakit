@@ -308,10 +308,8 @@ void multilistResetP(multilistP *ml) {
         return;
     }
 
-    /* Update in-memory - free and recreate */
-    multilistFree(ml->ml);
-    /* @own: container; free=multilistFree */
-    ml->ml = multilistNew(ml->limit, ml->depth);
+    /* Update in-memory: empty, keeping the configuration */
+    multilistReset(&ml->ml);
 
     /* Check compaction threshold */
     persistCtxMaybeCompact(ml->ctx, ml->ml, &persistOpsMultilist);
@@ -377,6 +375,8 @@ void multilistGetStatsP(const multilistP *ml, persistCtxStats *stats) {
 
 #ifdef DATAKIT_TEST
 #include "persistTestCommon.h"
+
+defcleaner(mflexState *, mflexStateFree);
 
 /* Helper to verify multilist matches tracker */
 static bool verifyMultilistMatchesTracker(multilistP *ml,
@@ -1530,6 +1530,32 @@ int multilistPTest(int argc, char *argv[]) {
                 ptestCleanupFiles(basePath);
             }
         }
+    }
+
+    TEST("multilistP readers: GetP, IndexP and SyncP") {
+        ptestCleanupFiles(basePath);
+        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        multilistP *ml = multilistNewP(ctx, FLEX_CAP_LEVEL_2048, 0);
+        for (int64_t i = 0; i < 10; i++) {
+            const databox v = DATABOX_SIGNED(i * 11);
+            multilistPushTailP(ml, &v);
+        }
+        cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
+        multilistEntry first = {0};
+        multilistEntry last = {0};
+        const databox want0 = DATABOX_SIGNED(0);
+        const databox want9 = DATABOX_SIGNED(99);
+        if (!multilistSyncP(ml) || multilistCount(multilistGetP(ml)) != 10 ||
+            !multilistIndexGetP(ml, state, 0, &first) ||
+            !databoxEqual(&first.box, &want0) ||
+            !multilistIndexGetP(ml, state, -1, &last) ||
+            !databoxEqual(&last.box, &want9) ||
+            multilistIndexCheckP(ml, state, 10, &last)) {
+            ERRR("GetP/IndexP/SyncP disagree with the pushes");
+        }
+        multilistCloseP(ml);
+        persistCtxFree(ctx);
+        ptestCleanupFiles(basePath);
     }
 
     TEST_FINAL_RESULT;
