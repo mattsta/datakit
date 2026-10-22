@@ -3430,28 +3430,44 @@ flex *flexNewFromDatabox(const databox *box) {
     return f;
 }
 
-flex *flexNewFromDataboxes(const databox *boxes, size_t n) {
+/* Build a flex from n values, given as an array of boxes or of box
+ * pointers, with the row append of the chosen conversion: one
+ * reallocation per chunk of values instead of one per value. */
+static flex *flexNewFromBoxes_(const databox *boxes, const databox *const *ptrs,
+                               const size_t n, const bool exact) {
     /* @own: caller; free=flexFree */
     flex *f = flexNew();
     if (!f) {
         return NULL;
     }
-    for (size_t i = 0; i < n; i++) {
-        flexPushByType(&f, &boxes[i], FLEX_ENDPOINT_TAIL);
+
+    enum { FACTORY_CHUNK_ = 64 };
+    const databox *chunk[FACTORY_CHUNK_];
+    for (size_t at = 0; at < n; at += FACTORY_CHUNK_) {
+        const size_t len = n - at < FACTORY_CHUNK_ ? n - at : FACTORY_CHUNK_;
+        const databox *const *row = ptrs ? ptrs + at : chunk;
+        if (!ptrs) {
+            for (size_t i = 0; i < len; i++) {
+                chunk[i] = &boxes[at + i];
+            }
+        }
+
+        if (exact) {
+            flexAppendMultipleExact(&f, (uint_fast32_t)len, row);
+        } else {
+            flexAppendMultiple(&f, (uint_fast32_t)len, row);
+        }
     }
+
     return f;
 }
 
+flex *flexNewFromDataboxes(const databox *boxes, size_t n) {
+    return flexNewFromBoxes_(boxes, NULL, n, false);
+}
+
 flex *flexNewFromDataboxPtrs(const databox *const *boxes, size_t n) {
-    /* @own: caller; free=flexFree */
-    flex *f = flexNew();
-    if (!f) {
-        return NULL;
-    }
-    for (size_t i = 0; i < n; i++) {
-        flexPushByType(&f, boxes[i], FLEX_ENDPOINT_TAIL);
-    }
-    return f;
+    return flexNewFromBoxes_(NULL, boxes, n, false);
 }
 
 flex *flexNewFromDataboxExact(const databox *box) {
@@ -3465,27 +3481,11 @@ flex *flexNewFromDataboxExact(const databox *box) {
 }
 
 flex *flexNewFromDataboxesExact(const databox *boxes, size_t n) {
-    /* @own: caller; free=flexFree */
-    flex *f = flexNew();
-    if (!f) {
-        return NULL;
-    }
-    for (size_t i = 0; i < n; i++) {
-        flexPushByTypeExact(&f, &boxes[i], FLEX_ENDPOINT_TAIL);
-    }
-    return f;
+    return flexNewFromBoxes_(boxes, NULL, n, true);
 }
 
 flex *flexNewFromDataboxPtrsExact(const databox *const *boxes, size_t n) {
-    /* @own: caller; free=flexFree */
-    flex *f = flexNew();
-    if (!f) {
-        return NULL;
-    }
-    for (size_t i = 0; i < n; i++) {
-        flexPushByTypeExact(&f, boxes[i], FLEX_ENDPOINT_TAIL);
-    }
-    return f;
+    return flexNewFromBoxes_(NULL, boxes, n, true);
 }
 
 bool flexGetSingleDatabox(const uint8_t *buf, size_t buflen, databox *out) {
@@ -5367,8 +5367,8 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKey(
         NULL);
 }
 
-void flexAppendMultiple(flex **ff, const uint_fast32_t elementsPerEntry,
-                        const databox **const box) {
+void flexAppendMultipleExact(flex **ff, const uint_fast32_t elementsPerEntry,
+                             const databox *const *const box) {
     if (elementsPerEntry == 0) {
         return;
     }
@@ -5405,13 +5405,60 @@ void flexAppendMultiple(flex **ff, const uint_fast32_t elementsPerEntry,
     }
 
     for (uint_fast32_t i = 0; i < elementsPerEntry; i++) {
-        copyBox[i] = *box[i];
+        /* A NULL value is stored as null, as the pushes store it */
+        copyBox[i] = box[i] ? *box[i] : DATABOX_BOX_NULL;
         insertContentsFromBox(&copyBox[i], &content[i],
                               CONVERSION_OVERRIDE_NONE, i, bigBuffer);
         contents[i] = &content[i];
     }
 
     flexInsert_____(ff, FLEX_ENTRY_END(*ff), contents, elementsPerEntry, NULL);
+}
+
+void flexAppendMultiple(flex **ff, const uint_fast32_t elementsPerEntry,
+                        const databox *const *const box) {
+    /* The auto path differs from the exact one only for strings that spell
+     * a number (databoxCanonical, as flexInsertBytes applies it), so swap
+     * those for their canonical boxes and append exactly.  A canonical
+     * 96/128-bit result lives in its scratch slot, so rows are appended a
+     * chunk at a time; a row of at most one chunk is one reallocation. */
+    enum { APPEND_AUTO_CHUNK_ = 32 };
+    databoxBig scratch[APPEND_AUTO_CHUNK_];
+    const databox *chunk[APPEND_AUTO_CHUNK_];
+    uint_fast32_t n = 0;
+    for (uint_fast32_t i = 0; i < elementsPerEntry; i++) {
+        chunk[n] = box[i] ? databoxCanonical(box[i], &scratch[n]) : NULL;
+        if (++n == APPEND_AUTO_CHUNK_) {
+            flexAppendMultipleExact(ff, n, chunk);
+            n = 0;
+        }
+    }
+
+    if (n) {
+        flexAppendMultipleExact(ff, n, chunk);
+    }
+}
+
+/* The row's boxes as the pointer array the appends take */
+static void flexRowPointers_(const flexRow *r,
+                             const databox *at[FLEX_ROW_MAX]) {
+    for (uint32_t i = 0; i < r->n; i++) {
+        at[i] = &r->box[i];
+    }
+}
+
+void flexRowAppend(flex **ff, flexRow *r) {
+    const databox *at[FLEX_ROW_MAX];
+    flexRowPointers_(r, at);
+    flexAppendMultiple(ff, r->n, at);
+    r->n = 0;
+}
+
+void flexRowAppendExact(flex **ff, flexRow *r) {
+    const databox *at[FLEX_ROW_MAX];
+    flexRowPointers_(r, at);
+    flexAppendMultipleExact(ff, r->n, at);
+    r->n = 0;
 }
 
 int flexCompareEntries(const flex *const f,
@@ -7750,7 +7797,7 @@ int32_t flexValidateTotalitySweep(void) {
             const databox ref = {.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL,
                                  .data.u64 = refs[i]};
             const databox *refBox[1] = {&ref};
-            flexAppendMultiple(&fixed, 1, refBox);
+            flexAppendMultipleExact(&fixed, 1, refBox);
         }
 
         flexPushBytes(&fixed, "", 0, FLEX_ENDPOINT_TAIL);
@@ -8883,7 +8930,7 @@ static bool flexTestDeferredAborts_(int32_t path, databoxType type) {
             flexReplaceByType(&f, flexHead(f), box);
             break;
         case 2: /* insertContentsFromBox through a multi-element append */
-            flexAppendMultiple(&f, 1, row);
+            flexAppendMultipleExact(&f, 1, row);
             break;
         default: /* flexPushDataboxBig */
             flexPushDataboxBig(&f, &deferred, FLEX_ENDPOINT_TAIL);
@@ -9057,7 +9104,7 @@ int32_t flexTest(int32_t argc, char **argv) {
         const databox ptrBox = {.type = DATABOX_PTR_MDSC, .data.ptr = s};
         const databox *ptrRow[1] = {&ptrBox};
         cleaner(flexFree) flex *ptrs = flexNew();
-        flexAppendMultiple(&ptrs, 1, ptrRow);
+        flexAppendMultipleExact(&ptrs, 1, ptrRow);
         databox local = {{0}};
         flexGetByType(flexHead(ptrs), &local);
         if (local.type != DATABOX_PTR_MDSC || local.data.ptr != s ||
@@ -9195,7 +9242,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             /* The multi-element writer chooses its width separately. */
             const databox *row[1] = {(const databox *)&in};
             cleaner(flexFree) flex *appended = flexNew();
-            flexAppendMultiple(&appended, 1, row);
+            flexAppendMultipleExact(&appended, 1, row);
             databoxBig single;
             if (!flexGetSingleDataboxBig(appended, flexBytes(appended),
                                          &single) ||
@@ -9584,7 +9631,7 @@ int32_t flexTest(int32_t argc, char **argv) {
 
             const databox *row[1] = {&in};
             cleaner(flexFree) flex *oracle = flexNew();
-            flexAppendMultiple(&oracle, 1, row);
+            flexAppendMultipleExact(&oracle, 1, row);
 
             cleaner(flexFree) flex *pushed = flexNew();
             flexPushByType(&pushed, &in, FLEX_ENDPOINT_TAIL);
@@ -9617,6 +9664,168 @@ int32_t flexTest(int32_t argc, char **argv) {
         if (bad) {
             return bad;
         }
+        printf("  ok\n");
+    }
+
+    printf("Verify both row appends write the bytes of their pushes:\n");
+    {
+        /* flexAppendMultipleExact is the batched form of flexPushByTypeExact
+         * and flexAppendMultiple of flexPushByType: a row of every type
+         * (numeral strings included, up to 128 bits), element by element,
+         * whole, and three times over (past the auto form's 32-value
+         * chunks), must give byte-identical flexes.  Containers that build
+         * rows from components rely on this to batch their pushes. */
+        int32_t bad = 0;
+        static const char longText[] =
+            "a string long enough to need a two-byte length prefix, "
+            "past sixty-four bytes";
+        databoxBig s128;
+        databoxBig u128;
+        DATABOX_BIG_SIGNED_128(&s128, -((__int128_t)1 << 100));
+        DATABOX_BIG_UNSIGNED_128(&u128, ((__uint128_t)1 << 127) + 5);
+        databox float32 = {.type = DATABOX_FLOAT_32};
+        float32.data.f32 = 0.578125f;
+        databox ptr = {.type = DATABOX_PTR};
+        ptr.data.ptr = &bad;
+        databox ref = {.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
+        ref.data.u64 = 70000;
+        const databox boxes[] = {
+            databoxNewSigned(INT64_MIN),
+            databoxNewSigned(-1),
+            databoxNewSigned(127),
+            databoxNewSigned(INT64_MAX),
+            databoxNewUnsigned(0),
+            databoxNewUnsigned(255),
+            databoxNewUnsigned(256),
+            databoxNewUnsigned(UINT64_MAX),
+            databoxNewReal(0.578125),
+            databoxNewReal(1e300),
+            databoxNewReal(-0.0),
+            float32,
+            databoxNewBytesString("hello"),
+            databoxNewBytesString("22"),
+            databoxNewBytesString("007"),
+            databoxNewBytesString("-5"),
+            databoxNewBytesString("1.5"),
+            databoxNewBytesString("170141183460469231731687303715884105727"),
+            databoxNewBytesString("-170141183460469231731687303715884105728"),
+            databoxNewBytesString(longText),
+            databoxNewBytesAllowEmbed("ab", 2),
+            DATABOX_BOX_TRUE,
+            DATABOX_BOX_FALSE,
+            DATABOX_BOX_NULL,
+            *(const databox *)&s128,
+            *(const databox *)&u128,
+            ptr,
+            ref,
+        };
+        /* Every box, then a NULL value (stored as null) */
+        enum { ROW_REPEAT_ = 3 };
+        const size_t types = COUNT_ARRAY(boxes) + 1;
+        const databox *row[(COUNT_ARRAY(boxes) + 1) * ROW_REPEAT_];
+        for (size_t i = 0; i < types * ROW_REPEAT_; i++) {
+            row[i] = i % types < COUNT_ARRAY(boxes) ? &boxes[i % types] : NULL;
+        }
+
+        size_t converted = 0;
+        for (int exact = 0; exact < 2; exact++) {
+            void (*push)(flex **, const databox *, flexEndpoint) =
+                exact ? flexPushByTypeExact : flexPushByType;
+            void (*append)(flex **, uint_fast32_t, const databox *const *) =
+                exact ? flexAppendMultipleExact : flexAppendMultiple;
+            const char *mode = exact ? "exact" : "auto";
+
+            for (size_t i = 0; i < types; i++) {
+                cleaner(flexFree) flex *pushed = flexNew();
+                push(&pushed, row[i], FLEX_ENDPOINT_TAIL);
+                cleaner(flexFree) flex *appended = flexNew();
+                append(&appended, 1, &row[i]);
+                if (flexBytes(pushed) != flexBytes(appended) ||
+                    memcmp(pushed, appended, flexBytes(pushed)) != 0) {
+                    printf("  FAIL: %s element %zu (type %d) appends "
+                           "differently\n",
+                           mode, i, row[i] ? (int)row[i]->type : -1);
+                    bad++;
+                }
+
+                /* The auto form really converts some of the strings */
+                if (!exact && row[i] && DATABOX_IS_BYTES(row[i])) {
+                    databox got = {{0}};
+                    flexGetByType(flexHead(appended), &got);
+                    converted += !DATABOX_IS_BYTES(&got);
+                }
+            }
+
+            for (size_t len = types; len <= types * ROW_REPEAT_;
+                 len += types * (ROW_REPEAT_ - 1)) {
+                cleaner(flexFree) flex *pushedRow = flexNew();
+                for (size_t i = 0; i < len; i++) {
+                    push(&pushedRow, row[i], FLEX_ENDPOINT_TAIL);
+                }
+
+                cleaner(flexFree) flex *appendedRow = flexNew();
+                append(&appendedRow, (uint_fast32_t)len, row);
+                if (flexBytes(pushedRow) != flexBytes(appendedRow) ||
+                    memcmp(pushedRow, appendedRow, flexBytes(pushedRow)) != 0 ||
+                    flexCount(appendedRow) != len) {
+                    printf("  FAIL: a %s row of %zu appends differently\n",
+                           mode, len);
+                    bad++;
+                }
+            }
+        }
+
+        /* "22", "-5", "1.5" and both 128-bit numerals; "007" stays bytes */
+        if (bad || converted != 5) {
+            printf("  %zu numeral strings converted, want 5\n", converted);
+            assert(NULL && "a row append differs from its pushes");
+        }
+
+        printf("  ok (%zu types, rows of %zu and %zu)\n", types, types,
+               types * ROW_REPEAT_);
+    }
+
+    printf("Verify a flexRow appends like its pushes and empties itself:\n");
+    {
+        int32_t bad = 0;
+        for (int exact = 0; exact < 2; exact++) {
+            cleaner(flexFree) flex *pushed = flexNew();
+            const databox v22 = databoxNewBytesString("22");
+            const databox five = databoxNewSigned(-5);
+            const databox x = databoxNewBytes("x", 1);
+            const databox big = databoxNewUnsigned(UINT64_MAX);
+            const databox *const order[] = {&v22, &five, &x, &big};
+            for (size_t i = 0; i < COUNT_ARRAY(order); i++) {
+                if (exact) {
+                    flexPushByTypeExact(&pushed, order[i], FLEX_ENDPOINT_TAIL);
+                } else {
+                    flexPushByType(&pushed, order[i], FLEX_ENDPOINT_TAIL);
+                }
+            }
+
+            cleaner(flexFree) flex *rowed = flexNew();
+            flexRow row = FLEX_ROW_INIT;
+            flexRowBytes(&row, "22", 2);
+            flexRowSigned(&row, -5);
+            flexRowAdd(&row, &x);
+            flexRowUnsigned(&row, UINT64_MAX);
+            if (exact) {
+                flexRowAppendExact(&rowed, &row);
+            } else {
+                flexRowAppend(&rowed, &row);
+            }
+
+            if (row.n != 0 || flexBytes(rowed) != flexBytes(pushed) ||
+                memcmp(rowed, pushed, flexBytes(pushed)) != 0) {
+                printf("  FAIL: %s row\n", exact ? "exact" : "auto");
+                bad++;
+            }
+        }
+
+        if (bad) {
+            assert(NULL && "a flexRow differs from its pushes");
+        }
+
         printf("  ok\n");
     }
 
@@ -11233,7 +11442,7 @@ int32_t flexTest(int32_t argc, char **argv) {
             &clusterId,    &nodeId,       &runId,     &term,   &previousIndex,
             &previousTerm, &leaderCommit, &timestamp, &rpcCmd, &entry_};
 
-        flexAppendMultiple(&f, 10, fields);
+        flexAppendMultipleExact(&f, 10, fields);
 
         flexRepr(f);
         flexFree(f);

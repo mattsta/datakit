@@ -214,8 +214,8 @@ flex has two ways to write a value, and the caller chooses:
 
 | Path         | Functions                                                                                                                                                                                           | `"42"` reads back as |
 | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
-| Auto-convert | `flexPushBytes`, `flexPushByType`, `flexInsertBytes`, `flexNewFromDatabox*`, `flexPushDataboxBig`                                                                                                   | the integer 42       |
-| Exact        | `flexPushBytesExact`, `flexPushByTypeExact`, `flexNewFromDatabox*Exact`, `flexPushDataboxBigExact`, `mflexPushByTypeExact`, and every positional and sorted insert (`flexInsertByType` and friends) | the bytes `"42"`     |
+| Auto-convert | `flexPushBytes`, `flexPushByType`, `flexInsertBytes`, `flexNewFromDatabox*`, `flexPushDataboxBig`, `flexAppendMultiple`, `flexRowAppend`                                                            | the integer 42       |
+| Exact        | `flexPushBytesExact`, `flexPushByTypeExact`, `flexNewFromDatabox*Exact`, `flexPushDataboxBigExact`, `flexAppendMultipleExact`, `flexRowAppendExact`, `mflexPushByTypeExact`, and every positional and sorted insert (`flexInsertByType` and friends) | the bytes `"42"`     |
 
 Both paths store numbers in their smallest encoding of the **same** type
 (integer width, a double that fits exactly in a float). Only the auto-convert
@@ -491,12 +491,49 @@ flexFree(f);
 
 ### Bulk Append
 
-```c
-/* Append multiple databox elements at once */
-void flexAppendMultiple(flex **ff, const uint_fast32_t elementsPerEntry,
-                        const databox **const box);
+Pushing a record field by field reallocates the flex once per field. The
+row appends write a whole row in one reallocation, and each writes exactly
+the bytes its single-value push writes, so the choice is only about
+conversion:
 
-/* Example: Create a record with multiple fields */
+```c
+/* Auto-convert, as flexPushByType: "42" is stored as 42 */
+void flexAppendMultiple(flex **ff, uint_fast32_t elementsPerEntry,
+                        const databox *const *box);
+/* Exact, as flexPushByTypeExact: every value stored as given */
+void flexAppendMultipleExact(flex **ff, uint_fast32_t elementsPerEntry,
+                             const databox *const *box);
+```
+
+A NULL value is stored as null, as the pushes store it. The auto form
+appends 32 values per reallocation (it holds converted 96/128-bit values in
+scratch slots); the exact form appends any row at once. The
+`flexNewFromDatabox*` factories build through these.
+
+`flexRow` gathers a record field by field without a box array and a pointer
+array of its own:
+
+```c
+flexRow row = FLEX_ROW_INIT;          /* up to FLEX_ROW_MAX (32) values */
+flexRowUnsigned(&row, id);
+flexRowBytes(&row, name, nameLen);
+flexRowSigned(&row, delta);
+flexRowAdd(&row, &anyBox);
+flexRowAppendExact(&f, &row);         /* or flexRowAppend; the row is empty again */
+```
+
+The row copies each box, but a BYTES or 96/128-bit value still points at
+the caller's storage, which must live until the append.
+
+Which conversion: the application knows its schema. Snapshots, wire
+formats, keys looked up again as strings, salts and key material must come
+back as given: use the exact forms (a node named `"1"` or a salt that
+happens to be ASCII digits must stay bytes). The auto forms pay off for
+large stores of numeral-like strings whose reader converts values back to
+its own types anyway, where the smaller numeric encoding adds up.
+
+```c
+/* A record with mixed fields, stored exactly */
 flex *f = flexNew();
 
 databox id = databoxNewUnsigned(12345);
@@ -505,7 +542,7 @@ databox score = databoxNewReal(98.5);
 databox active = databoxBool(true);
 
 const databox *fields[] = {&id, &name, &score, &active};
-flexAppendMultiple(&f, 4, fields);
+flexAppendMultipleExact(&f, 4, fields);
 
 /* f now contains all 4 fields in order */
 flexFree(f);
@@ -1698,7 +1735,7 @@ fields[2] = databoxNewReal(user.balance);
 fields[3] = databoxBool(user.active);
 
 const databox *fieldPtrs[] = {&fields[0], &fields[1], &fields[2], &fields[3]};
-flexAppendMultiple(&record, 4, fieldPtrs);
+flexAppendMultipleExact(&record, 4, fieldPtrs); /* a name "123" stays bytes */
 
 /* Decode from flex */
 flexEntry *fe = flexHeadIfAny(record);

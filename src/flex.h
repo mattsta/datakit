@@ -340,8 +340,65 @@ bool flexInsertByTypeSortedWithMiddleMultiDirect(flex **ff,
                                                  flexEntry **middleEntry);
 void flexResizeEntry(flex **ff, flexEntry *fe, size_t newLenForEntry);
 
-void flexAppendMultiple(flex **ff, const uint_fast32_t elementsPerEntry,
-                        const databox **const box);
+/* Append the 'elementsPerEntry' values of 'box' to the tail in one
+ * reallocation (the auto form: one per 32 values); a NULL value is stored
+ * as null, as the pushes store it.  The two forms
+ * name their conversion as the single-value pushes do:
+ *   - flexAppendMultiple converts like flexPushByType: a string that
+ *     spells a number is stored as that number (the smallest encoding,
+ *     for a reader that converts back to its own schema);
+ *   - flexAppendMultipleExact stores every value as given, like
+ *     flexPushByTypeExact (persisted and wire formats, keys whose type
+ *     must survive).
+ * Each writes exactly the bytes its single-value push writes, value by
+ * value, so a row may be built either way. */
+void flexAppendMultiple(flex **ff, uint_fast32_t elementsPerEntry,
+                        const databox *const *box);
+void flexAppendMultipleExact(flex **ff, uint_fast32_t elementsPerEntry,
+                             const databox *const *box);
+
+/* A row of up to FLEX_ROW_MAX values gathered for one append, for code
+ * that writes a record field by field (snapshots, wire headers, tuples):
+ *
+ *     flexRow row = FLEX_ROW_INIT;
+ *     flexRowUnsigned(&row, id);
+ *     flexRowBytes(&row, name, nameLen);
+ *     flexRowAppendExact(&f, &row);   (or flexRowAppend: auto conversion)
+ *
+ * The append writes the row in one reallocation, with the conversion its
+ * name gives (see flexAppendMultiple), and leaves the row empty for the
+ * next record.  The row copies each box; a BYTES or 96/128-bit value
+ * still points at the caller's storage, which must live until the
+ * append. */
+#define FLEX_ROW_MAX 32
+typedef struct flexRow {
+    databox box[FLEX_ROW_MAX];
+    uint32_t n;
+} flexRow;
+#define FLEX_ROW_INIT ((flexRow){.n = 0})
+
+static inline void flexRowAdd(flexRow *r, const databox *box) {
+    assert(r->n < FLEX_ROW_MAX);
+    r->box[r->n++] = *box;
+}
+
+static inline void flexRowUnsigned(flexRow *r, const uint64_t v) {
+    const databox box = databoxNewUnsigned(v);
+    flexRowAdd(r, &box);
+}
+
+static inline void flexRowSigned(flexRow *r, const int64_t v) {
+    const databox box = databoxNewSigned(v);
+    flexRowAdd(r, &box);
+}
+
+static inline void flexRowBytes(flexRow *r, const void *data, size_t len) {
+    const databox box = databoxNewBytes(data, len);
+    flexRowAdd(r, &box);
+}
+
+void flexRowAppend(flex **ff, flexRow *r);
+void flexRowAppendExact(flex **ff, flexRow *r);
 
 flexEntry *flexFindByTypeSortedWithMiddleFullWidthWithReference(
     const flex *const f, const uint_fast32_t elementsPerEntry,
