@@ -4,6 +4,7 @@
 #include "datakit.h"
 #include "fibbuf.h"
 #include "multidict.h"
+#include "multiroar.h"
 
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleaner(stringPool *, stringPoolFree);
@@ -43,9 +44,14 @@ struct stringPool {
     size_t capacity;         /* Allocated slots in entries array */
     size_t count;            /* Active (non-free) entries */
     uint64_t nextId;         /* Next fresh ID to allocate */
-    uint64_t *freeList;      /* Stack of recycled IDs */
-    size_t freeCount;        /* Number of IDs in free list */
-    size_t freeCapacity;     /* Allocated size of free list */
+    union {
+        uint64_t *freeList;   /* REUSE: stack of recycled IDs */
+        multiroar *freeHoles; /* LOWEST: recycled IDs below nextId - 1,
+                               * NULL while there are none */
+    };
+    size_t freeCount;    /* REUSE: number of IDs in free list */
+    size_t freeCapacity; /* REUSE: allocated size of free list */
+    stringPoolIds ids;   /* the id behaviour, fixed at creation */
 };
 
 /* Initial capacities */
@@ -98,10 +104,43 @@ stringPool *stringPoolNew(void) {
     pool->nextId = 1;
     pool->count = 0;
     pool->freeCount = 0;
+    pool->ids = STRING_POOL_IDS_REUSE;
 
     stringPool *out = pool;
     pool = NULL;
     return out;
+}
+
+stringPool *stringPoolNewWithIds(const stringPoolIds ids) {
+    if (ids != STRING_POOL_IDS_REUSE && ids != STRING_POOL_IDS_PERMANENT &&
+        ids != STRING_POOL_IDS_LOWEST) {
+        return NULL;
+    }
+
+    /* @own: caller; free=stringPoolFree */
+    stringPool *pool = stringPoolNew();
+    if (pool && ids != STRING_POOL_IDS_REUSE) {
+        /* Neither keeps the recycling stack: PERMANENT reuses nothing,
+         * LOWEST keeps a free set, created on its first hole */
+        zfree(pool->freeList);
+        pool->freeList = NULL;
+        pool->freeCapacity = 0;
+        pool->ids = ids;
+    }
+
+    return pool;
+}
+
+stringPoolIds stringPoolIdsOf(const stringPool *pool) {
+    return pool->ids;
+}
+
+/* The LOWEST free set's storage, freed when it empties */
+static void releaseHolesIfEmpty(stringPool *pool) {
+    if (pool->freeHoles && multiroarIsEmpty(pool->freeHoles)) {
+        multiroarFree(pool->freeHoles);
+        pool->freeHoles = NULL;
+    }
 }
 
 void stringPoolFree(stringPool *pool) {
@@ -117,7 +156,11 @@ void stringPoolFree(stringPool *pool) {
     }
 
     zfree(pool->entries);
-    zfree(pool->freeList);
+    if (pool->ids == STRING_POOL_IDS_LOWEST) {
+        multiroarFree(pool->freeHoles);
+    } else {
+        zfree(pool->freeList);
+    }
     multidictFree(pool->strToId);
     multidictDefaultClassFree(pool->mdClass);
     zfree(pool);
@@ -145,6 +188,10 @@ void stringPoolReset(stringPool *pool) {
     pool->nextId = 1;
     pool->count = 0;
     pool->freeCount = 0;
+    if (pool->ids == STRING_POOL_IDS_LOWEST) {
+        multiroarFree(pool->freeHoles);
+        pool->freeHoles = NULL;
+    }
 }
 
 /* ====================================================================
@@ -193,6 +240,35 @@ static bool pushFreeId(stringPool *pool, uint64_t id) {
     return true;
 }
 
+/* 'id' is free again.  LOWEST keeps only holes below nextId - 1: freeing
+ * the highest id lowers nextId past any holes directly below it, so the
+ * next fresh id is the lowest one above every live id. */
+static void recycleId(stringPool *pool, uint64_t id) {
+    if (pool->ids == STRING_POOL_IDS_REUSE) {
+        pushFreeId(pool, id);
+        return;
+    }
+
+    if (id + 1 != pool->nextId) {
+        if (!pool->freeHoles) {
+            /* @own: container; free=stringPoolFree */
+            pool->freeHoles = multiroarBitNew();
+        }
+
+        multiroarBitSet(pool->freeHoles, id);
+        return;
+    }
+
+    pool->nextId--;
+    while (pool->freeHoles && pool->nextId > 1 &&
+           multiroarBitGet(pool->freeHoles, pool->nextId - 1)) {
+        multiroarRemove(pool->freeHoles, pool->nextId - 1);
+        pool->nextId--;
+    }
+
+    releaseHolesIfEmpty(pool);
+}
+
 /* Pop ID from free list (returns 0 if empty) */
 static uint64_t popFreeId(stringPool *pool) {
     if (pool->freeCount == 0) {
@@ -203,8 +279,17 @@ static uint64_t popFreeId(stringPool *pool) {
 
 /* Allocate next available ID */
 static uint64_t allocateId(stringPool *pool) {
-    /* Prefer recycled IDs */
-    uint64_t id = popFreeId(pool);
+    /* Prefer recycled IDs: the most recent (REUSE) or the lowest
+     * (LOWEST); PERMANENT never recycles */
+    uint64_t id = 0;
+    if (pool->ids == STRING_POOL_IDS_REUSE) {
+        id = popFreeId(pool);
+    } else if (pool->ids == STRING_POOL_IDS_LOWEST && pool->freeHoles &&
+               multiroarMin(pool->freeHoles, &id)) {
+        multiroarRemove(pool->freeHoles, id);
+        releaseHolesIfEmpty(pool);
+    }
+
     if (id != 0) {
         return id;
     }
@@ -312,7 +397,8 @@ bool stringPoolLookup(const stringPool *pool, uint64_t id, databox *str) {
  * ==================================================================== */
 
 void stringPoolRetain(stringPool *pool, uint64_t id) {
-    if (!pool || id == 0 || id >= pool->nextId) {
+    if (!pool || id == 0 || id >= pool->nextId ||
+        pool->ids == STRING_POOL_IDS_PERMANENT) {
         return;
     }
 
@@ -323,8 +409,9 @@ void stringPoolRetain(stringPool *pool, uint64_t id) {
 }
 
 bool stringPoolRelease(stringPool *pool, uint64_t id) {
-    if (!pool || id == 0 || id >= pool->nextId) {
-        return false;
+    if (!pool || id == 0 || id >= pool->nextId ||
+        pool->ids == STRING_POOL_IDS_PERMANENT) {
+        return false; /* PERMANENT: strings live until Reset or Free */
     }
 
     poolEntry *entry = &pool->entries[id];
@@ -346,7 +433,7 @@ bool stringPoolRelease(stringPool *pool, uint64_t id) {
         entry->len = 0;
 
         /* Recycle ID */
-        pushFreeId(pool, id);
+        recycleId(pool, id);
         pool->count--;
 
         return true; /* Entry was freed */
@@ -377,7 +464,12 @@ size_t stringPoolBytes(const stringPool *pool) {
 
     size_t bytes = sizeof(stringPool);
     bytes += pool->capacity * sizeof(poolEntry);
-    bytes += pool->freeCapacity * sizeof(uint64_t);
+    if (pool->ids == STRING_POOL_IDS_LOWEST) {
+        bytes +=
+            pool->freeHoles ? (size_t)multiroarMemoryUsage(pool->freeHoles) : 0;
+    } else {
+        bytes += pool->freeCapacity * sizeof(uint64_t);
+    }
     bytes += multidictBytes(pool->strToId);
 
     /* Add string data bytes */

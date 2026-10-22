@@ -6,8 +6,26 @@ struct multimapAtom {
 #if 0
     mflexState *state;
 #endif
+    /* The next generated id, with the table's id behaviour in the top bit
+     * (set: permanent), so the behaviour costs no bytes.  Ids stay below
+     * MULTIMAP_ATOM_ID_LIMIT. */
     uint64_t highest;
 };
+
+#define ATOM_PERMANENT_BIT_ MULTIMAP_ATOM_ID_LIMIT
+
+static inline uint64_t atomNextId_(const multimapAtom *ma) {
+    return ma->highest & ~ATOM_PERMANENT_BIT_;
+}
+
+static inline void atomSetNextId_(multimapAtom *ma, const uint64_t id) {
+    assert(id < MULTIMAP_ATOM_ID_LIMIT);
+    ma->highest = (ma->highest & ATOM_PERMANENT_BIT_) | id;
+}
+
+bool multimapAtomIsPermanent(const multimapAtom *ma) {
+    return (ma->highest & ATOM_PERMANENT_BIT_) != 0;
+}
 
 /* ====================================================================
  * Create
@@ -28,6 +46,13 @@ multimapAtom *multimapAtomNew(void) {
     /* @own: caller; free=multimapAtomFree */
     multimapAtom *ma = zcalloc(1, sizeof(*ma));
     multimapAtomInit(ma);
+    return ma;
+}
+
+multimapAtom *multimapAtomNewPermanent(void) {
+    /* @own: caller; free=multimapAtomFree */
+    multimapAtom *ma = multimapAtomNew();
+    ma->highest |= ATOM_PERMANENT_BIT_;
     return ma;
 }
 
@@ -78,18 +103,21 @@ static void abstractInsert(multimapAtom *ma, const databox *reverseKey,
     assert(multimapCount(ma->mapAtomForward) ==
            multimapCount(ma->mapAtomReverse));
 
-    ma->highest++;
+    if (id >= atomNextId_(ma)) {
+        atomSetNextId_(ma, id + 1);
+    }
 }
 
 void multimapAtomInsert(multimapAtom *ma, const databox *box) {
-    abstractInsert(ma, box, ma->highest);
+    abstractInsert(ma, box, atomNextId_(ma));
 }
 
 void multimapAtomInsertConvert(multimapAtom *ma, databox *box) {
-    const databox incr = {.data.u = ma->highest,
+    const uint64_t id = atomNextId_(ma);
+    const databox incr = {.data.u = id,
                           .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
 
-    abstractInsert(ma, box, ma->highest);
+    abstractInsert(ma, box, id);
     *box = incr;
 }
 
@@ -130,8 +158,8 @@ void multimapAtomInsertWithExactAtomID(multimapAtom *ma, const uint64_t atomRef,
                                    ma);
 
     /* After the deletes above, which restart ids when they empty the table */
-    if (atomRef >= ma->highest && atomRef < UINT64_MAX) {
-        ma->highest = atomRef + 1;
+    if (atomRef >= atomNextId_(ma) && atomRef + 1 < MULTIMAP_ATOM_ID_LIMIT) {
+        atomSetNextId_(ma, atomRef + 1);
     }
 }
 
@@ -280,6 +308,10 @@ void multimapAtomRetainByRef(multimapAtom *ma, const databox *foundRef) {
     assert(multimapLookup(ma->mapAtomForward, foundRef, gots));
     assert(multimapExistsWithReference(ma->mapAtomReverse, &kkey, &count, ma));
 #endif
+    if (multimapAtomIsPermanent(ma)) {
+        return; /* no count is kept: the atom lives until Delete or Free */
+    }
+
     multimapFieldIncr(&ma->mapAtomForward, foundRef, 2, 1);
 }
 
@@ -293,7 +325,7 @@ void multimapAtomRetain(multimapAtom *ma, const databox *key) {
 
     if (multimapExistsWithReference(ma->mapAtomReverse, key, &foundRef, ma)) {
         /* if exists, just increment refcount */
-        multimapFieldIncr(&ma->mapAtomForward, &foundRef, 2, 1);
+        multimapAtomRetainByRef(ma, &foundRef);
     } else {
         /* else, insert as new */
         multimapAtomInsert(ma, key);
@@ -307,7 +339,7 @@ void multimapAtomRetainConvert(multimapAtom *ma, databox *key) {
 
     if (multimapExistsWithReference(ma->mapAtomReverse, key, &foundRef, ma)) {
         /* if exists, just increment refcount */
-        multimapFieldIncr(&ma->mapAtomForward, &foundRef, 2, 1);
+        multimapAtomRetainByRef(ma, &foundRef);
 
         /* give reference back to user */
         *key = foundRef;
@@ -320,17 +352,35 @@ void multimapAtomRetainConvert(multimapAtom *ma, databox *key) {
 /* ====================================================================
  * Un-use
  * ==================================================================== */
-/* An empty table restarts ids at 0 so they stay small (fewer
- * external-reference storage bytes), whichever call emptied it.
+/* After the atom 'deletedId' is deleted, whichever call deleted it.  A
+ * permanent table never hands an id out again.  A reusing table keeps its
+ * ids small (fewer external-reference storage bytes) where that costs
+ * nothing to discover: an empty table restarts at 0, and deleting the
+ * atom with the highest id lowers the next id to just past the largest
+ * live one (the forward map's last row, as it is sorted by id), so
+ * last-in-first-out churn reuses the same ids.  An interior hole stays
+ * unused until the table empties; multimapAtomDense reuses every hole,
+ * lowest first.
  *
- * CONTRACT: a full drain to empty invalidates every atom id/ref
- * previously handed out.  A caller MUST NOT cache a bare id/ref across a
- * point where the table can empty and refill, or it may resolve to an
- * unrelated later entry (ids are reused from 0).  Re-resolve refs instead
- * of holding them across that boundary. */
-static void atomRestartIdsIfEmpty(multimapAtom *ma) {
+ * CONTRACT (reusing tables): an id is valid while its atom exists.  A
+ * caller MUST NOT keep a bare id/ref after releasing its references: it
+ * may then resolve to an unrelated later entry. */
+static void atomAfterDelete_(multimapAtom *ma, const uint64_t deletedId) {
+    if (multimapAtomIsPermanent(ma)) {
+        return;
+    }
+
     if (multimapCount(ma->mapAtomForward) == 0) {
-        ma->highest = 0;
+        atomSetNextId_(ma, 0);
+        return;
+    }
+
+    if (deletedId + 1 == atomNextId_(ma)) {
+        databox last[3] = {{{0}}};
+        if (multimapLastInto(ma->mapAtomForward, last, 3) &&
+            last[0].data.u + 1 < MULTIMAP_ATOM_ID_LIMIT) {
+            atomSetNextId_(ma, last[0].data.u + 1);
+        }
     }
 }
 
@@ -348,7 +398,7 @@ static void atomDeleteKnown(multimapAtom *ma, const databox *key,
     assert(deleteForward);
     (void)deleteForward;
 
-    atomRestartIdsIfEmpty(ma);
+    atomAfterDelete_(ma, ref->data.u);
 }
 
 /* Drop one reference to 'foundRef'; delete the atom when it was the last.
@@ -360,6 +410,10 @@ DK_INLINE_ALWAYS bool conformRefcountDecr(multimapAtom *ma,
      * We use 0-based internal refcounts for memory efficiency:
      * Internal 0 = 1 ref, 1 = 2 refs, etc. (DATABOX_FALSE = 1 byte vs 3 bytes)
      * When it goes negative, no more references exist. */
+    if (multimapAtomIsPermanent(ma)) {
+        return false; /* permanent atoms live until Delete or Free */
+    }
+
     const int64_t checkedOut =
         multimapFieldIncr(&ma->mapAtomForward, foundRef, 2, -1);
 
@@ -407,7 +461,7 @@ bool multimapAtomDelete(multimapAtom *ma, const databox *key) {
     assert(deleteForward);
     (void)deleteForward;
 
-    atomRestartIdsIfEmpty(ma);
+    atomAfterDelete_(ma, foundReference.data.u);
     return true;
 }
 
@@ -447,7 +501,7 @@ bool multimapAtomDeleteByRef(multimapAtom *ma, const databox *ref) {
         assert(deleteForward);
         (void)deleteForward;
 
-        atomRestartIdsIfEmpty(ma);
+        atomAfterDelete_(ma, ref->data.u);
         return true;
     }
 
@@ -1900,6 +1954,121 @@ int multimapAtomTest(int argc, char *argv[]) {
 
             multimapAtomFree(ma);
         }
+    }
+
+    TEST("permanent: atoms outlive their references; ids never repeat") {
+        multimapAtom *ma = multimapAtomNewPermanent();
+        multimapAtom *reusing = multimapAtomNew();
+        if (!multimapAtomIsPermanent(ma) || multimapAtomIsPermanent(reusing)) {
+            ERRR("the id behaviour is not what the constructor chose");
+        }
+
+        multimapAtomFree(reusing);
+
+        databox ids[3];
+        for (int i = 0; i < 3; i++) {
+            ids[i] = databoxNewSigned(100 + i);
+            multimapAtomInsertConvert(ma, &ids[i]);
+            if (ids[i].data.u != (uint64_t)i) {
+                ERR("atom %d got id %" PRIu64, i, (uint64_t)ids[i].data.u);
+            }
+        }
+
+        const databox a = databoxNewSigned(100);
+        for (int i = 0; i < 3; i++) {
+            if (multimapAtomRelease(ma, &a) ||
+                multimapAtomReleaseById(ma, &ids[0])) {
+                ERRR("a permanent atom reported being freed");
+            }
+        }
+
+        multimapAtomRetainById(ma, ids[1].data.u);
+        databox count = {{0}};
+        databox found = {{0}};
+        multimapAtomLookupRefcount(ma, &ids[1], &count);
+        if (multimapAtomCount(ma) != 3 ||
+            !multimapAtomLookup(ma, &ids[0], &found) || found.data.i != 100 ||
+            count.data.u != 0) {
+            ERRR("Release or Retain changed a permanent table");
+        }
+
+        /* Delete the top atom, then everything: no id comes back */
+        const databox c = databoxNewSigned(102);
+        databox d = databoxNewSigned(103);
+        if (!multimapAtomDelete(ma, &c)) {
+            ERRR("Delete refused a permanent atom");
+        }
+
+        multimapAtomInsertConvert(ma, &d);
+        const databox b = databoxNewSigned(101);
+        const databox dKey = databoxNewSigned(103);
+        multimapAtomDelete(ma, &a);
+        multimapAtomDelete(ma, &b);
+        multimapAtomDelete(ma, &dKey);
+        databox e = databoxNewSigned(104);
+        multimapAtomInsertConvert(ma, &e);
+        if (d.data.u != 3 || e.data.u != 4 || multimapAtomCount(ma) != 1) {
+            ERR("permanent ids repeated: d %" PRIu64 ", e %" PRIu64,
+                (uint64_t)d.data.u, (uint64_t)e.data.u);
+        }
+
+        multimapAtomFree(ma);
+    }
+
+    TEST("reusing: the top id comes back; interior holes wait") {
+        multimapAtom *ma = multimapAtomNew();
+        databox v[5];
+        for (int i = 0; i < 5; i++) {
+            v[i] = databoxNewSigned(200 + i);
+            multimapAtomInsertConvert(ma, &v[i]); /* ids 0..4 */
+        }
+
+        /* Releasing the top atom frees its id for the next atom */
+        if (!multimapAtomReleaseById(ma, &v[4])) {
+            ERRR("the last release did not delete the atom");
+        }
+
+        databox f = databoxNewSigned(300);
+        multimapAtomInsertConvert(ma, &f);
+        if (f.data.u != 4) {
+            ERR("after the top release the next id is %" PRIu64 ", want 4",
+                (uint64_t)f.data.u);
+        }
+
+        /* An interior hole stays unused */
+        multimapAtomReleaseById(ma, &v[2]);
+        databox g = databoxNewSigned(301);
+        multimapAtomInsertConvert(ma, &g);
+        if (g.data.u != 5) {
+            ERR("an interior release moved the next id to %" PRIu64 ", want 5",
+                (uint64_t)g.data.u);
+        }
+
+        /* Releasing down from the top skips back over the hole only to
+         * the largest live id */
+        multimapAtomReleaseById(ma, &g); /* live 0 1 3 4: next 5 */
+        multimapAtomReleaseById(ma, &f); /* live 0 1 3: next 4 */
+        databox h = databoxNewSigned(302);
+        multimapAtomInsertConvert(ma, &h);
+        if (h.data.u != 4) {
+            ERR("the next id after releasing 5 and 4 is %" PRIu64 ", want 4",
+                (uint64_t)h.data.u);
+        }
+
+        /* Last-in-first-out churn reuses one id */
+        for (int i = 0; i < 10000; i++) {
+            databox x = databoxNewSigned(1000000 + i);
+            multimapAtomInsertConvert(ma, &x);
+            if (x.data.u != 5) {
+                ERR("churn %d got id %" PRIu64 ", want 5", i,
+                    (uint64_t)x.data.u);
+                break;
+            }
+
+            multimapAtomReleaseById(ma, &x);
+        }
+
+        multimapAtomFree(ma);
     }
 
     TEST("generated ids never collide with exact ids") {

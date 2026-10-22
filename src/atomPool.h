@@ -83,6 +83,24 @@ typedef enum atomPoolType {
     ATOM_POOL_TREE = 1, /* multimapAtom - O(log n) tree, compact */
 } atomPoolType;
 
+/* The id behaviour, fixed at creation; both backends offer all three and
+ * none adds a byte per atom:
+ *   ATOM_POOL_IDS_REUSE      the last release frees an atom; its id is
+ *                            reused (HASH: most recently freed first;
+ *                            TREE: ids freed from the top, and all ids
+ *                            when the pool empties).  atomPoolNew.
+ *   ATOM_POOL_IDS_PERMANENT  like Erlang atoms: an atom lives until Reset
+ *                            or Free; Retain and Release change nothing
+ *                            (Refcount reports 1); no id is reused.
+ *   ATOM_POOL_IDS_LOWEST     the last release frees an atom; a new atom
+ *                            always gets the lowest id not in use (a
+ *                            multiroar of free ids: ~2 bytes per hole). */
+typedef enum atomPoolIds {
+    ATOM_POOL_IDS_REUSE = 0,
+    ATOM_POOL_IDS_PERMANENT,
+    ATOM_POOL_IDS_LOWEST,
+} atomPoolIds;
+
 /* Forward declaration */
 typedef struct atomPool atomPool;
 
@@ -92,6 +110,10 @@ typedef struct atomPool atomPool;
 
 /* Create a new atom pool with specified backend */
 atomPool *atomPoolNew(atomPoolType type);
+
+/* Create with a backend and an id behaviour; NULL for an unknown one */
+atomPool *atomPoolNewWithIds(atomPoolType type, atomPoolIds ids);
+atomPoolIds atomPoolGetIds(const atomPool *pool);
 
 /* Create with default backend (ATOM_POOL_HASH for speed) */
 atomPool *atomPoolNewDefault(void);

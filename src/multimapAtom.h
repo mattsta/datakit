@@ -19,19 +19,32 @@
  *   and always continue past every id InsertWithExactAtomID has bound, so
  *   a generated id is never one already in use.  InsertWithExactAtomID
  *   binds the caller's id, replacing any earlier binding of that id or of
- *   that value.
- * - An id is valid while its atom exists.  Once the atom is deleted (by
- *   the last Release or by a Delete) its id is not reused while the table
- *   holds anything, but when the table empties, by any call, ids restart
- *   at 0 to stay small.  So a caller must not keep a bare id past the
- *   point where its own references are released, or across a point where
- *   the table can empty and refill: it may then name a later, unrelated
- *   value.  Hold a reference (Retain) for as long as the id is kept. */
+ *   that value.  Ids are below MULTIMAP_ATOM_ID_LIMIT.
+ *
+ * ID BEHAVIOURS (chosen at creation; neither adds a byte per atom)
+ * - Reusing (multimapAtomNew): the last Release deletes an atom, and ids
+ *   are reused where that costs nothing to discover: deleting the atom
+ *   with the highest id lowers the next id to just past the largest live
+ *   one, so last-in-first-out churn reuses the same ids, and an emptied
+ *   table restarts at 0.  An interior hole stays unused until the table
+ *   empties.  An id is valid while its atom exists: a caller must not keep
+ *   a bare id after releasing its references, as it may then name a later,
+ *   unrelated value.  Hold a reference (Retain) for as long as the id is
+ *   kept.
+ * - Permanent (multimapAtomNewPermanent), like Erlang atoms: an atom lives
+ *   until Delete or Free.  Retain and Release are accepted and change
+ *   nothing (no count is kept), and no id is ever handed out twice, not
+ *   even after a Delete, so an id names one value for the table's life.
+ * - Lowest first: multimapAtomDense (multimapAtomDense.h) reuses every
+ *   freed id, always handing out the lowest id not in use. */
 
 #include "mflex.h"
 #include "multimap.h"
 
 typedef struct multimapAtom multimapAtom;
+
+/* Ids are below this (the counter's top bit records the id behaviour) */
+#define MULTIMAP_ATOM_ID_LIMIT ((uint64_t)1 << 63)
 
 typedef struct multimapAtomResult {
     databox val;
@@ -40,6 +53,9 @@ typedef struct multimapAtomResult {
 
 void multimapAtomInit(multimapAtom *ma);
 multimapAtom *multimapAtomNew(void);
+/* A permanent table (see ID BEHAVIOURS above) */
+multimapAtom *multimapAtomNewPermanent(void);
+bool multimapAtomIsPermanent(const multimapAtom *ma);
 multimapAtom *multimapAtomNewCompress(mflexState *state);
 void multimapAtomFree(multimapAtom *ma);
 

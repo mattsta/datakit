@@ -463,7 +463,7 @@ integer reference wherever a repeated byte string would otherwise go.
 struct multimapAtom {
     multimap *mapAtomForward; /* 3-element rows: {ID, Key, Refcount} */
     multimap *mapAtomReverse; /* 1-element rows: IDs sorted by their Key */
-    uint64_t highest;         /* next ID to hand out */
+    uint64_t highest;         /* next ID to hand out; top bit: permanent */
 };
 ```
 
@@ -575,14 +575,37 @@ Releasing a string that is not in the table is a programming error and asserts.
 
 `multimapAtomDelete()` removes an atom whatever its count.
 
-> **ID contract**: generated IDs count up from 0 and always continue past every
-> ID bound by `multimapAtomInsertWithExactAtomID()`, so a generated ID is never
-> one in use. A deleted atom's ID is not reused while the table holds anything,
-> but when the table empties, by any call (the last Release, or a Delete), the
-> ID counter restarts at 0 to keep IDs small. Any reference handed out before
-> that point may then resolve to an unrelated later entry. Keep an ID only
-> while you hold a reference to it, and never across a point where the table
-> can empty and refill; re-resolve it instead.
+Generated IDs count up from 0 and always continue past every ID bound by
+`multimapAtomInsertWithExactAtomID()`, so a generated ID is never one in use.
+IDs stay below `MULTIMAP_ATOM_ID_LIMIT` (2^63).
+
+### ID Behaviours
+
+How IDs are handed out and reused is chosen at creation. None adds a byte per
+atom:
+
+| Behaviour | Create with | Last Release | IDs reused | Extra memory |
+| --- | --- | --- | --- | --- |
+| Reusing | `multimapAtomNew()` | deletes the atom | where free to find: deleting the highest ID lowers the next ID to just past the largest live one, and an emptied table restarts at 0; interior holes wait | none |
+| Permanent (Erlang-style) | `multimapAtomNewPermanent()` | changes nothing: atoms live until Delete or Free | never, not even after a Delete | none |
+| Lowest first | `multimapAtomDenseNew()` (`multimapAtomDense.h`) | deletes the atom | every freed ID, lowest first | a `multiroar` of holes: ~2 B per isolated hole, none without holes |
+
+The permanent behaviour is the counter's top bit, so it costs no bytes;
+`multimapAtomIsPermanent()` reports it. `multimapAtomDense` is a parallel
+implementation over the public multimapAtom API: a new atom takes the lowest
+hole or the next unused ID, and freeing the highest ID lowers the next unused
+ID past any holes directly below it. Read through `multimapAtomDenseBase()`;
+write through the `multimapAtomDense*` calls so the free set stays exact.
+
+`atomPool` offers the same three behaviours on both its backends
+(`atomPoolNewWithIds(type, ATOM_POOL_IDS_REUSE | _PERMANENT | _LOWEST)`), and
+`stringPool` has them as `stringPoolNewWithIds()`; its reusing behaviour
+reuses the most recently freed ID first.
+
+> **ID contract**: in the reusing and lowest-first behaviours an ID is valid
+> while its atom exists. Keep an ID only while you hold a reference to it: once
+> the atom is gone, its ID may name a later, unrelated value. Permanent IDs
+> name one value for the table's life.
 
 ### Using an Atom Container With a multimap
 

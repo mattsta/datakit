@@ -6,6 +6,7 @@ defcleaner(void *, zfree);
 
 #include "datakit.h"
 #include "multimapAtom.h"
+#include "multimapAtomDense.h"
 #include "stringPool.h"
 #include "timeUtil.h"
 
@@ -37,6 +38,7 @@ struct atomPool {
     void *impl;                   /* Backend implementation */
     const atomPoolVTable *vtable; /* Function pointers */
     atomPoolType type;            /* Backend type */
+    atomPoolIds ids;              /* Id behaviour */
 };
 
 /* ====================================================================
@@ -211,22 +213,104 @@ static const atomPoolVTable treeVTable = {
 };
 
 /* ====================================================================
+ * multimapAtomDense Backend Wrappers (TREE, lowest-first ids)
+ * ==================================================================== */
+
+static uint64_t denseIntern(void *impl, const databox *str) {
+    databox key = *str;
+    multimapAtomDenseInsertIfNewConvertAndRetain((multimapAtomDense *)impl,
+                                                 &key);
+    return TREE_ID_TO_EXTERNAL(key.data.u);
+}
+
+static uint64_t denseGetId(const void *impl, const databox *str) {
+    return treeGetId(multimapAtomDenseBase(impl), str);
+}
+
+static bool denseExists(const void *impl, const databox *str) {
+    return treeExists(multimapAtomDenseBase(impl), str);
+}
+
+static bool denseLookup(const void *impl, uint64_t id, databox *str) {
+    return treeLookup(multimapAtomDenseBase(impl), id, str);
+}
+
+static void denseRetain(void *impl, uint64_t id) {
+    multimapAtomDenseRetainById((multimapAtomDense *)impl,
+                                TREE_ID_FROM_EXTERNAL(id));
+}
+
+static bool denseRelease(void *impl, uint64_t id) {
+    return multimapAtomDenseReleaseById((multimapAtomDense *)impl,
+                                        TREE_ID_FROM_EXTERNAL(id));
+}
+
+static uint64_t denseRefcount(const void *impl, uint64_t id) {
+    return treeRefcount(multimapAtomDenseBase(impl), id);
+}
+
+static size_t denseCount(const void *impl) {
+    return multimapAtomDenseCount((const multimapAtomDense *)impl);
+}
+
+static size_t denseBytes(const void *impl) {
+    return multimapAtomDenseBytes((const multimapAtomDense *)impl);
+}
+
+static void denseFree(void *impl) {
+    multimapAtomDenseFree((multimapAtomDense *)impl);
+}
+
+static const atomPoolVTable denseVTable = {
+    .intern = denseIntern,
+    .getId = denseGetId,
+    .exists = denseExists,
+    .lookup = denseLookup,
+    .retain = denseRetain,
+    .release = denseRelease,
+    .refcount = denseRefcount,
+    .count = denseCount,
+    .bytes = denseBytes,
+    .reset = NULL,
+    .free = denseFree,
+};
+
+/* ====================================================================
  * Public API Implementation
  * ==================================================================== */
 
-static void *atomPoolImplNew(atomPoolType type) {
+static void *atomPoolImplNew(atomPoolType type, atomPoolIds ids) {
     switch (type) {
-    case ATOM_POOL_HASH:
+    case ATOM_POOL_HASH: {
+        static const stringPoolIds hashIds[] = {
+            [ATOM_POOL_IDS_REUSE] = STRING_POOL_IDS_REUSE,
+            [ATOM_POOL_IDS_PERMANENT] = STRING_POOL_IDS_PERMANENT,
+            [ATOM_POOL_IDS_LOWEST] = STRING_POOL_IDS_LOWEST,
+        };
         /* @own: caller; free=stringPoolFree */
-        return stringPoolNew();
+        return stringPoolNewWithIds(hashIds[ids]);
+    }
     case ATOM_POOL_TREE:
-        return multimapAtomNew();
+        switch (ids) {
+        case ATOM_POOL_IDS_PERMANENT:
+            return multimapAtomNewPermanent();
+        case ATOM_POOL_IDS_LOWEST:
+            return multimapAtomDenseNew();
+        default:
+            return multimapAtomNew();
+        }
     default:
         return NULL;
     }
 }
 
-atomPool *atomPoolNew(atomPoolType type) {
+atomPool *atomPoolNewWithIds(atomPoolType type, atomPoolIds ids) {
+    if ((type != ATOM_POOL_HASH && type != ATOM_POOL_TREE) ||
+        (ids != ATOM_POOL_IDS_REUSE && ids != ATOM_POOL_IDS_PERMANENT &&
+         ids != ATOM_POOL_IDS_LOWEST)) {
+        return NULL;
+    }
+
     /* atomPoolFree is safe on a partially-constructed pool (it only
      * tears down impl when both impl and vtable are set). */
     cleaner(atomPoolFree) atomPool *pool = zcalloc(1, sizeof(*pool));
@@ -235,26 +319,30 @@ atomPool *atomPoolNew(atomPoolType type) {
     }
 
     pool->type = type;
-    pool->impl = atomPoolImplNew(type);
-
-    switch (type) {
-    case ATOM_POOL_HASH:
+    pool->ids = ids;
+    pool->impl = atomPoolImplNew(type, ids);
+    if (type == ATOM_POOL_HASH) {
         pool->vtable = &hashVTable;
-        break;
-    case ATOM_POOL_TREE:
-        pool->vtable = &treeVTable;
-        break;
-    default:
-        break;
+    } else {
+        pool->vtable = ids == ATOM_POOL_IDS_LOWEST ? &denseVTable : &treeVTable;
     }
 
-    if (!pool->impl || !pool->vtable) {
+    if (!pool->impl) {
         return NULL;
     }
 
     atomPool *out = pool;
     pool = NULL;
     return out;
+}
+
+atomPool *atomPoolNew(atomPoolType type) {
+    /* @own: caller; free=atomPoolFree */
+    return atomPoolNewWithIds(type, ATOM_POOL_IDS_REUSE);
+}
+
+atomPoolIds atomPoolGetIds(const atomPool *pool) {
+    return pool->ids;
 }
 
 atomPool *atomPoolNewDefault(void) {
@@ -282,7 +370,7 @@ void atomPoolReset(atomPool *pool) {
             /* Backend has no in-place clear: recreate it empty (was a
              * silent no-op for TREE, leaving atoms interned forever) */
             pool->vtable->free(pool->impl);
-            pool->impl = atomPoolImplNew(pool->type);
+            pool->impl = atomPoolImplNew(pool->type, pool->ids);
         }
     }
 }
@@ -929,6 +1017,120 @@ int atomPoolTest(int argc, char *argv[]) {
         printf("Recommendation:\n");
         printf("  - Use ATOM_POOL_HASH when lookup speed is critical\n");
         printf("  - Use ATOM_POOL_TREE when memory efficiency is critical\n");
+    }
+
+    TEST("id behaviours: an unknown one is refused; each reports itself") {
+        if (atomPoolNewWithIds(ATOM_POOL_TREE, (atomPoolIds)7) ||
+            atomPoolNewWithIds((atomPoolType)7, ATOM_POOL_IDS_REUSE)) {
+            ERRR("an unknown type or id behaviour was accepted");
+        }
+
+        for (int t = 0; t < 2; t++) {
+            for (int ids = 0; ids < 3; ids++) {
+                atomPool *pool =
+                    atomPoolNewWithIds((atomPoolType)t, (atomPoolIds)ids);
+                if (!pool || atomPoolGetIds(pool) != (atomPoolIds)ids) {
+                    ERR("type %d ids %d: not created as asked", t, ids);
+                }
+
+                atomPoolFree(pool);
+            }
+        }
+    }
+
+    TEST("permanent: atoms outlive Release in both backends") {
+        for (int t = 0; t < 2; t++) {
+            atomPool *pool =
+                atomPoolNewWithIds((atomPoolType)t, ATOM_POOL_IDS_PERMANENT);
+            const databox a = databoxNewBytesString("alpha");
+            const databox b = databoxNewBytesString("beta");
+            const uint64_t ida = atomPoolIntern(pool, &a);
+            const uint64_t idb = atomPoolIntern(pool, &b);
+            atomPoolRetain(pool, ida);
+            if (atomPoolRelease(pool, ida) || atomPoolRelease(pool, ida) ||
+                atomPoolCount(pool) != 2 || atomPoolRefcount(pool, ida) != 1 ||
+                !atomPoolExists(pool, &a)) {
+                ERR("%s: a released permanent atom changed",
+                    atomPoolTypeName((atomPoolType)t));
+            }
+
+            atomPoolReset(pool);
+            const databox c = databoxNewBytesString("gamma");
+            if (atomPoolCount(pool) != 0 || atomPoolIntern(pool, &c) == 0 ||
+                atomPoolGetIds(pool) != ATOM_POOL_IDS_PERMANENT) {
+                ERR("%s: Reset did not keep the permanent behaviour",
+                    atomPoolTypeName((atomPoolType)t));
+            }
+
+            (void)idb;
+            atomPoolFree(pool);
+        }
+    }
+
+    TEST("lowest: both backends hand out the oracle's lowest free id") {
+        /* The same seeded interns and releases on both backends: each new
+         * atom must get the lowest id not in use (ids are 1-based), so
+         * the two id sequences are identical */
+        enum { LOW_IDS_ = 512 };
+        uint64_t sequence[2][2000] = {{0}};
+        for (int t = 0; t < 2; t++) {
+            atomPool *pool =
+                atomPoolNewWithIds((atomPoolType)t, ATOM_POOL_IDS_LOWEST);
+            bool live[LOW_IDS_ + 1] = {false};
+            size_t liveCount = 0;
+            uint64_t rng = 0x5EED;
+            for (size_t op = 0; op < 2000; op++) {
+                rng =
+                    rng * UINT64_C(6364136223846793005) + 1442695040888963407u;
+                const uint64_t r = rng >> 33;
+                if (r % 3 != 0 || liveCount == 0) {
+                    if (liveCount == LOW_IDS_) {
+                        continue;
+                    }
+
+                    uint64_t want = 1;
+                    while (live[want]) {
+                        want++;
+                    }
+
+                    char buf[32];
+                    snprintf(buf, sizeof(buf), "atom%zu", op);
+                    const databox s = databoxNewBytesString(buf);
+                    const uint64_t got = atomPoolIntern(pool, &s);
+                    sequence[t][op] = got;
+                    if (got != want) {
+                        ERR("%s op %zu: intern got id %" PRIu64
+                            ", want %" PRIu64,
+                            atomPoolTypeName((atomPoolType)t), op, got, want);
+                        break;
+                    }
+
+                    live[want] = true;
+                    liveCount++;
+                } else {
+                    uint64_t id = 1 + (r % LOW_IDS_);
+                    while (!live[id]) {
+                        id = id % LOW_IDS_ + 1;
+                    }
+
+                    if (!atomPoolRelease(pool, id)) {
+                        ERR("%s op %zu: release of id %" PRIu64
+                            " kept the atom",
+                            atomPoolTypeName((atomPoolType)t), op, id);
+                        break;
+                    }
+
+                    live[id] = false;
+                    liveCount--;
+                }
+            }
+
+            atomPoolFree(pool);
+        }
+
+        if (memcmp(sequence[0], sequence[1], sizeof(sequence[0])) != 0) {
+            ERRR("the two backends handed out different ids");
+        }
     }
 
     TEST_FINAL_RESULT;

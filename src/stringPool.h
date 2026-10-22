@@ -66,11 +66,28 @@
 
 typedef struct stringPool stringPool;
 
+/* The id behaviour, fixed at creation.  None adds a byte per string. */
+typedef enum stringPoolIds {
+    /* The last Release frees a string; its id is reused, most recently
+     * freed first (a stack of 8 bytes per free id).  stringPoolNew. */
+    STRING_POOL_IDS_REUSE = 0,
+    /* Like Erlang atoms: strings live until Reset or Free; Retain and
+     * Release change nothing; no id is ever reused. */
+    STRING_POOL_IDS_PERMANENT,
+    /* The last Release frees a string; a new string always gets the
+     * lowest id not in use (a multiroar of free ids: about 2 bytes per
+     * isolated hole, none while there are no holes). */
+    STRING_POOL_IDS_LOWEST,
+} stringPoolIds;
+
 /* ====================================================================
  * Creation / Destruction
  * ==================================================================== */
 
-stringPool *stringPoolNew(void);
+stringPool *stringPoolNew(void); /* STRING_POOL_IDS_REUSE */
+/* NULL for an unknown 'ids' or on allocation failure */
+stringPool *stringPoolNewWithIds(stringPoolIds ids);
+stringPoolIds stringPoolIdsOf(const stringPool *pool);
 void stringPoolFree(stringPool *pool);
 void stringPoolReset(stringPool *pool);
 
