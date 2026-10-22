@@ -541,6 +541,10 @@ extern const databox DATABOX_BOX_VOID;
 
 bool databoxGetBytes(databox *box, uint8_t **buf, size_t *len);
 bool databoxGetSize(const databox *box, size_t *len);
+
+/* The bytes of 'box''s value for every type: databoxGetSize's size, 16 for
+ * a 96/128-bit integer, a pointer's width, and 0 for a type with no
+ * payload (markers, true/false/null, void) */
 size_t databoxGetSizeMinimum(const databox *box);
 void databoxCopyBytes(databox *box, const void *ptr, size_t len);
 databox databoxNewBytes(const void *ptr, size_t len);
@@ -665,6 +669,9 @@ databox databoxBool(bool which);
 databox databoxNull(void);
 databox databoxVoid(void);
 
+/* Make BYTES box 'dst' own its value: copied into 'bytes' (heap memory of
+ * at least dst->len bytes, handed to the box and freed with it), or, when
+ * short enough, embedded in the box with 'bytes' freed at once */
 void databoxRetainBytesSelfExact(databox *dst, void *bytes);
 ssize_t databoxRetainBytesSelf(databox *dst, databoxRetainCache *cache);
 /* Owning copies.  databoxCopy returns, and databoxCopyBytesFromBox writes

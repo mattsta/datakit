@@ -102,39 +102,20 @@ bool databoxGetSize(const databox *box, size_t *len) {
 }
 
 size_t databoxGetSizeMinimum(const databox *box) {
-    switch (box->type) {
-    case DATABOX_BYTES:
-    case DATABOX_BYTES_EMBED:
-    case DATABOX_CONTAINER_FLEX_MAP:
-    case DATABOX_CONTAINER_FLEX_LIST:
-    case DATABOX_CONTAINER_FLEX_SET:
-    case DATABOX_CONTAINER_FLEX_TUPLE:
-    case DATABOX_CONTAINER_CFLEX_MAP:
-    case DATABOX_CONTAINER_CFLEX_LIST:
-    case DATABOX_CONTAINER_CFLEX_SET:
-    case DATABOX_CONTAINER_CFLEX_TUPLE:
-        return box->len;
-        break;
-    case DATABOX_SIGNED_64:
-    case DATABOX_UNSIGNED_64:
-    case DATABOX_DOUBLE_64:
-        return 8;
-        break;
-    case DATABOX_FLOAT_32:
-        return 4;
-        break;
-    case DATABOX_TRUE:
-    case DATABOX_FALSE:
-    case DATABOX_NULL:
-        return 0;
-        break;
-    default:
-        assert(NULL && "Invalid type!");
-        return 0;
+    size_t len = 0;
+    if (databoxGetSize(box, &len)) {
+        return len;
     }
 
-    assert(NULL && "Really Wrong!");
-    __builtin_unreachable();
+    switch (box->type) {
+    case DATABOX_SIGNED_128:
+    case DATABOX_UNSIGNED_128:
+        return sizeof(__uint128_t);
+    case DATABOX_PTR:
+        return sizeof(void *);
+    default:
+        return 0; /* markers and other payload-free types */
+    }
 }
 
 databox databoxVoid(void) {
@@ -153,16 +134,17 @@ void databoxCopyBytes(databox *box, const void *ptr, size_t len) {
 /* A more pre-prepared version of databoxRetainBytesSelf() where the
  * memory size determination has been done out of band of databox.
  * This version also pre-supposes you're only passing in type DATABOX_BYTES.
- * OWNERSHIP: 'bytes' is handed to the box (allocated = true), so a later
- * databoxFreeData() frees it — pass heap memory the box may keep. */
+ * OWNERSHIP: 'bytes' (heap memory of at least dst->len bytes) is handed to
+ * the box: it holds the copy (allocated = true, freed by a later
+ * databoxFreeData()), or, for a value short enough to embed, is freed
+ * here. */
 void databoxRetainBytesSelfExact(databox *restrict dst, void *restrict bytes) {
     if (dst->len <= sizeof(dst->data.bytes.embed8)) {
-        /* If source bytes small enough to become embed, do
-         * embed instead of allocating actual memory */
+        /* Small enough to embed: the box keeps the bytes inline, so the
+         * buffer it was handed is not needed and is freed here */
         memcpy(dst->data.bytes.embed8, dst->data.bytes.start, databoxLen(dst));
         dst->type = DATABOX_BYTES_EMBED;
-
-        /* Success! */
+        zfree(bytes);
         return;
     }
 
@@ -4000,6 +3982,58 @@ int databoxTest(int argc, char *argv[]) {
                " wide, %" PRIu32 " reals, %" PRIu32 " bytes\n",
                tally.strings, tally.narrow, tally.wide, tally.reals,
                tally.bytes);
+    }
+
+    TEST("RetainBytesSelfExact, GetSizeMinimum, NewOffsetAllowEmbed, Free") {
+        /* A short value embeds and frees the handed buffer; a long one
+         * moves into it (ASan watches both buffers) */
+        const char *shortText = "abc";
+        databox small = databoxNewBytes(shortText, 3);
+        databoxRetainBytesSelfExact(&small, zmalloc(3));
+        const char *longText = "a value longer than any embed";
+        databox big = databoxNewBytes(longText, strlen(longText));
+        databoxRetainBytesSelfExact(&big, zmalloc(strlen(longText)));
+        if (small.type != DATABOX_BYTES_EMBED ||
+            memcmp(databoxBytes(&small), "abc", 3) != 0 || !big.allocated ||
+            databoxBytes(&big) == (const uint8_t *)longText ||
+            memcmp(databoxBytes(&big), longText, big.len) != 0) {
+            ERRR("RetainBytesSelfExact did not take its value");
+        }
+        databoxFreeData(&small);
+        databoxFreeData(&big);
+
+        /* Every type has a payload size */
+        databoxBig wide;
+        DATABOX_BIG_SIGNED_128(&wide, -((__int128_t)1 << 90));
+        const databox ptr = databoxNewPtr(&wide);
+        const databox flag = DATABOX_BOX_TRUE;
+        const databox real = DATABOX_DOUBLE(1.5);
+        const databox bytes = databoxNewBytesString("hello");
+        if (databoxGetSizeMinimum((databox *)&wide) != 16 ||
+            databoxGetSizeMinimum(&ptr) != sizeof(void *) ||
+            databoxGetSizeMinimum(&flag) != 0 ||
+            databoxGetSizeMinimum(&real) != 8 ||
+            databoxGetSizeMinimum(&bytes) != 5) {
+            ERRR("GetSizeMinimum gave a wrong size");
+        }
+
+        /* A short slice of a base embeds its bytes; a long one keeps the
+         * offset into the base */
+        const char base[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+        const databox shortSlice = databoxNewOffsetAllowEmbed(base, 10, 4);
+        const databox longSlice = databoxNewOffsetAllowEmbed(base, 3, 30);
+        if (shortSlice.type != DATABOX_BYTES_EMBED || shortSlice.len != 4 ||
+            memcmp(databoxBytes(&shortSlice), "abcd", 4) != 0 ||
+            longSlice.type != DATABOX_BYTES_OFFSET || longSlice.len != 30 ||
+            longSlice.data.bytes.offset != 3) {
+            ERRR("NewOffsetAllowEmbed built the wrong box");
+        }
+
+        /* databoxFree releases the box and what it owns */
+        databox *heap = zcalloc(1, sizeof(*heap));
+        databoxCopyBytes(heap, longText, strlen(longText));
+        databoxFree(heap);
+        databoxFree(NULL);
     }
 
     TEST("databoxCanonicalNumeral: real-shaped strings follow the scanner") {
