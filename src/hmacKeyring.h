@@ -66,7 +66,7 @@
  * nonces — silently destroying ChaCha20-Poly1305 confidentiality
  * AND integrity. Install refuses an all-zero salt for that
  * reason.
- * - `hmacKeyringInstallUnsalted(...)` is the explicitly-named legacy
+ * - `hmacKeyringInstallUnsalted(...)` is the explicitly-named
  * path for single-process tests / scenarios that derive nonce
  * uniqueness from another channel. The slot is tagged "unsalted"
  * so `hmacKeyringNextAeadNonce` will issue zero-salt nonces. Do
@@ -102,9 +102,8 @@
  * - The floor and Retire are independent layers: Retire physically
  * removes the key bytes; the floor is policy. Set both when an
  * operator intends to revoke an id.
- * - Survives Snapshot/Restore via a leading sentinel record in the
- * flex serialization so a restart cannot silently drop revocations
- * (legacy snapshots without the sentinel default to zero floor).
+ * - Survives Snapshot/Restore as the snapshot's first entry, so a
+ * restart cannot silently drop revocations.
  * - At envelope verify time: `flexEnvelopeVerify` consults the floor
  * via the wire-key-id auto-resolution path and rejects below-floor
  * ids with `FLEX_ENV_VERIFY_FAILED_KEY_REVOKED` (read via
@@ -395,11 +394,8 @@ bool hmacKeyringGetGeneration(hmacKeyring *ring, hmacKeyId id,
  * - Set(floor) succeeds only if floor >= current floor. Backward
  * moves are refused because they would re-open the replay window
  * for ids the operator already declared revoked.
- * - The floor survives Snapshot/Restore so a restart cannot silently
- * drop revocations. Format: a leading sentinel entry (4 flex
- * entries with a reserved algo tag) prefixed before the per-slot
- * records. Old snapshots that lack the sentinel default to a
- * zero floor on restore.
+ * - The floor survives Snapshot/Restore (the snapshot's first entry)
+ * so a restart cannot silently drop revocations.
  *
  * Floor and Retire are independent layers — Retire physically removes
  * the key bytes; the floor is policy. Both should be set together when
@@ -534,29 +530,18 @@ bool hmacKeyringRestoreAeadCounter(hmacKeyring *ring, hmacKeyId id,
  * format. No hand-rolled integer encodings — flex carries its own
  * framing, length prefixes, and typed entries.
  *
- * Optional leading sentinel record (5 flex entries) preserves the
- * revoked-key floor across Snapshot/Restore:
- *
- * 1. sentinel id (unsigned: HMAC_KEY_ID_INVALID == 0)
- * 2. algo tag (unsigned: HMAC_KEYRING_ALGO_TAG_FLOOR == 0xFF)
- * 3. floor key id (unsigned)
- * 4. padding (unsigned 0)
- * 5. padding (bytes, exactly 1: a 0xFF marker)
- *
- * Per-installed-slot encoding (five sequential flex entries):
+ * The first entry is the revoked-key floor (unsigned; 0 = no floor),
+ * then five entries per installed slot:
  *
  * 1. id (unsigned, non-zero)
  * 2. algo_tag (unsigned: 0 = SHA-256, 1 = BLAKE3)
- * 3. salt (bytes, exactly 4)
+ * 3. salt (bytes, exactly 4; all zero for an unsalted slot)
  * 4. aead_counter (unsigned)
  * 5. key (bytes, raw key)
  *
- * Total flex entry count is 5 * N when no floor is set, 5 * (N + 1) when
- * one is. The sentinel uses id == 0 (otherwise invalid for a slot) so a
- * legacy snapshot without a sentinel is unambiguously detected on
- * restore. Restore bounds every entry of the buffer with
- * `flexValidateBufferDeep` before reading it, and refuses a buffer
- * that fails.
+ * Total flex entry count is 1 + 5 * N.  Restore bounds every entry of
+ * the buffer with `flexValidateBufferDeep` before reading it, and
+ * refuses a buffer that fails or does not have that shape.
  *
  * SECURITY: snapshot bytes carry the raw keys. They MUST be wrapped
  * through flexEnvelopeSeal (AEAD class) before being written anywhere

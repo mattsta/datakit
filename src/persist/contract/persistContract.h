@@ -9,9 +9,11 @@
  *   1. Round trip: snapshot -> restore -> snapshot gives identical
  *      bytes, an equal count(), and validate() true when the descriptor
  *      has one.  The empty structure round-trips too.
- *   2. WAL: the generator records its starting structure and every
- *      mutation it makes, encoded through encodeOp as a WAL writer
- *      would.  Applying those ops through applyOp to
+ *   2. WAL (descriptors with encodeOp and applyOp; a snapshot-only type
+ *      makes every change durable with a new snapshot): the generator
+ *      records its starting structure and every mutation it makes,
+ *      encoded through encodeOp as a WAL writer would.  Applying those
+ *      ops through applyOp to
  *        - restore(the starting snapshot),
  *        - newEmpty(), when its snapshot equals the starting snapshot,
  *        - restore(snapshot of the first half replayed), then the

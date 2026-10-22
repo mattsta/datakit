@@ -31,6 +31,7 @@ extern const persistContractType persistContractMultilist;
 extern const persistContractType persistContractMultidict;
 extern const persistContractType persistContractMultiOrderedSet;
 extern const persistContractType persistContractMultiLRU;
+extern const persistContractType persistContractHmacKeyring;
 
 static const persistContractType *const pcRegistry[] = {
     &persistContractFlex,       &persistContractMultimap,
@@ -38,7 +39,7 @@ static const persistContractType *const pcRegistry[] = {
     &persistContractIntsetBig,  &persistContractHyperloglog,
     &persistContractMultiarray, &persistContractMultilist,
     &persistContractMultidict,  &persistContractMultiOrderedSet,
-    &persistContractMultiLRU,
+    &persistContractMultiLRU,   &persistContractHmacKeyring,
 };
 
 /* ====================================================================
@@ -429,7 +430,10 @@ static void pcCase(pcRow *row, const persistContractType *t, uint64_t seed,
     uint8_t *snap = NULL;
     size_t snapLen = 0;
     if (pcRoundTrip(row, ops, live, "round trip", &snap, &snapLen)) {
-        pcWal(row, ops, &log, snap, snapLen);
+        /* A snapshot-only type (no encodeOp/applyOp) has no WAL */
+        if (ops->encodeOp && ops->applyOp) {
+            pcWal(row, ops, &log, snap, snapLen);
+        }
         if (strings) {
             pcHolds(row, t, live, strings, "live");
             void *r = pcRestore(ops, snap, snapLen);

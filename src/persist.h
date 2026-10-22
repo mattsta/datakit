@@ -322,8 +322,9 @@ typedef enum persistChecksum {
  * configuration:
  *   1. snapshot -> restore -> snapshot gives identical bytes, an equal
  *      count and validate() true; the empty structure included.
- *   2. Ops recorded through encodeOp while a structure is built, applied
- *      through applyOp to the restored starting structure (and to
+ *   2. For a descriptor with a WAL (encodeOp and applyOp): ops recorded
+ *      through encodeOp while a structure is built, applied through
+ *      applyOp to the restored starting structure (and to
  *      newEmpty() when that is the start, and to a restored mid-point
  *      snapshot for the remaining ops), give the live snapshot bytes.
  *   3. Every truncation and single-byte corruption of a snapshot makes

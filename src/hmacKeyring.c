@@ -71,9 +71,9 @@ struct hmacKeyring {
     /* Revoked key floor . Monotonically non-decreasing
      * minimum key id permitted by floor-aware consumers
      * (flexEnvelopeVerify reads it via hmacKeyringMinValidKeyId). Zero
-     * means "no floor"; any installed id is acceptable. Persisted via
-     * the snapshot sentinel record so a restart cannot silently un-
-     * revoke ids. */
+     * means "no floor"; any installed id is acceptable. Persisted as the
+     * snapshot's first entry so a restart cannot silently un-revoke
+     * ids. */
     hmacKeyId min_valid_key_id;
 };
 
@@ -675,12 +675,6 @@ bool hmacKeyringRestoreAeadCounter(hmacKeyring *ring, hmacKeyId id,
 #define HMAC_KEYRING_ENTRIES_PER_SLOT ((size_t)5)
 #define HMAC_KEYRING_ALGO_TAG_SHA256 ((uint64_t)0)
 #define HMAC_KEYRING_ALGO_TAG_BLAKE3 ((uint64_t)1)
-/* Reserved algo tag carried by the floor sentinel record. Picked at the
- * top of the unsigned-8 range so a future real algorithm cannot collide.
- * The sentinel always sits at slot id == HMAC_KEY_ID_INVALID (0), which
- * is already invalid for a real slot, so the (id == 0, algo == 0xFF)
- * pair unambiguously identifies the floor entry on restore. */
-#define HMAC_KEYRING_ALGO_TAG_FLOOR ((uint64_t)0xFF)
 
 /* Map an algo descriptor pointer to its persisted tag value. */
 static bool hkrAlgoToTag(const hmacHashAlgo *algo, uint64_t *out_tag) {
@@ -712,30 +706,14 @@ static const hmacHashAlgo *hkrTagToAlgo(uint64_t tag) {
 static flex *hkrBuildSnapshotFlex(const hmacKeyring *ring) {
     cleaner(flexFree) flex *f = flexNew();
     pthread_rwlock_rdlock((pthread_rwlock_t *)&ring->lock);
-    /* leading floor sentinel. Only written when the floor is non-
-     * zero so a fresh keyring snapshot stays bit-identical to the legacy
-     * (pre-floor) format, which keeps the round-trip tests stable and
-     * avoids a wire bump. Old readers without floor awareness would
-     * reject id == 0 entries; the existing rejection path in Restore
-     * (see id-non-zero check) is exactly the safe behavior. */
-    /* Each record is one row of HMAC_KEYRING_ENTRIES_PER_SLOT entries,
-     * appended in one reallocation and stored exactly as given: a salt or
-     * key whose bytes spell a number stays bytes (Restore accepts only
-     * bytes there). */
-    if (ring->min_valid_key_id != HMAC_KEY_ID_INVALID) {
-        /* Final entry must be a bytes record to match the per-slot record
-         * shape so Restore's record-length math stays uniform. It holds
-         * one harmless marker byte (0xFF), and Restore requires exactly
-         * one byte. */
-        static const uint8_t marker = 0xFFu;
-        flexRow row = FLEX_ROW_INIT;
-        flexRowUnsigned(&row, (uint64_t)HMAC_KEY_ID_INVALID);
-        flexRowUnsigned(&row, HMAC_KEYRING_ALGO_TAG_FLOOR);
-        flexRowUnsigned(&row, (uint64_t)ring->min_valid_key_id);
-        flexRowUnsigned(&row, 0u);
-        flexRowBytes(&row, &marker, 1);
-        flexRowAppendExact(&f, &row);
-    }
+    /* [floor, then one row per installed slot]: the minimum valid key id
+     * (0 when none is set), then rows of HMAC_KEYRING_ENTRIES_PER_SLOT
+     * entries [id, algo tag, salt, counter, key], each appended in one
+     * reallocation and stored exactly as given (a salt or key whose
+     * bytes spell a number stays bytes; Restore accepts only bytes
+     * there). */
+    const databox floor = DATABOX_UNSIGNED(ring->min_valid_key_id);
+    flexPushByTypeExact(&f, &floor, FLEX_ENDPOINT_TAIL);
     for (size_t i = 0; i < HMAC_KEYRING_CAPACITY; i++) {
         const hmacKeyringEntry *e = &ring->entries[i];
         if (e->id == HMAC_KEY_ID_INVALID) {
@@ -844,87 +822,22 @@ bool hmacKeyringRestore(hmacKeyring *ring, const uint8_t *buf, size_t len) {
     }
     const flex *f = (const flex *)buf;
     const size_t count = flexCount(f);
-    if ((count % HMAC_KEYRING_ENTRIES_PER_SLOT) != 0u) {
+    /* [floor, then whole slot rows] */
+    if (count < 1 || ((count - 1) % HMAC_KEYRING_ENTRIES_PER_SLOT) != 0u) {
         return false;
     }
-    size_t records = count / HMAC_KEYRING_ENTRIES_PER_SLOT;
+    const size_t records = (count - 1) / HMAC_KEYRING_ENTRIES_PER_SLOT;
     hkrRestoreUndoLog undo = {0};
-    /* Hold the parsed floor (if any) and apply it AFTER all real slots
-     * have installed. Apply order is irrelevant for correctness — a
-     * rollback nukes the installed ids regardless of the floor — but
-     * applying-last keeps the rollback path code identical to the
-     * prior implementation: undo only walks installed ids, never the
-     * sentinel. */
-    hmacKeyId parsed_floor = HMAC_KEY_ID_INVALID;
-    bool have_floor_sentinel = false;
 
+    /* The floor applies after every slot has installed (a rollback then
+     * only retires installed ids) */
     flexEntry *fe = flexHead(f);
-
-    /* Floor-sentinel detection. If the first record is (id == 0, algo ==
-     * 0xFF) it carries the persisted floor; consume it and continue with
-     * the remaining records as real slots. Otherwise the first record
-     * is a regular slot and we fall through to the per-slot loop with
-     * `fe` still pointing at entry 1.
-     *
-     * Implementation note: peek the first two entries (id + algo). If
-     * they match the sentinel pattern, read entries 3..5 and skip to
-     * the next record. If they DON'T, the per-slot loop below will
-     * re-walk those two entries via the regular id/algo decoders — which
-     * is correct only if our peek didn't advance the iterator. Decoding
-     * an entry is read-only, so the iterator stays put until we
-     * explicitly call flexNext. */
-    if (records > 0 && fe != NULL) {
-        uint64_t peek_id = 0;
-        if (hkrReadU64(fe, &peek_id) && peek_id == 0u) {
-            /* id == 0 means either (a) sentinel or (b) malformed slot.
-             * Disambiguate via the algo tag in entry 2. */
-            flexEntry *fe_algo = flexNext(f, fe);
-            if (fe_algo == NULL) {
-                return false;
-            }
-            uint64_t peek_algo = 0;
-            if (!hkrReadU64(fe_algo, &peek_algo) ||
-                peek_algo != HMAC_KEYRING_ALGO_TAG_FLOOR) {
-                /* id == 0 with a real-algo tag is a malformed slot.
-                 * Reject up front rather than letting the per-slot loop
-                 * trip on the same id == 0 check. */
-                return false;
-            }
-            /* Consume entries 3 (floor value), 4 (padding), 5 (padding). */
-            flexEntry *fe_floor = flexNext(f, fe_algo);
-            if (fe_floor == NULL) {
-                return false;
-            }
-            uint64_t floor_id = 0;
-            if (!hkrReadU64(fe_floor, &floor_id) || floor_id > UINT32_MAX) {
-                return false;
-            }
-            parsed_floor = (hmacKeyId)floor_id;
-            have_floor_sentinel = true;
-
-            flexEntry *fe_pad1 = flexNext(f, fe_floor);
-            if (fe_pad1 == NULL) {
-                return false;
-            }
-            uint64_t pad1 = 0;
-            if (!hkrReadU64(fe_pad1, &pad1)) {
-                return false;
-            }
-            flexEntry *fe_pad2 = flexNext(f, fe_pad1);
-            if (fe_pad2 == NULL) {
-                return false;
-            }
-            const uint8_t *pad2 = NULL;
-            size_t pad2_len = 0;
-            if (!hkrReadBytes(fe_pad2, &pad2, &pad2_len) || pad2_len != 1u) {
-                return false;
-            }
-            /* Advance the iterator past the sentinel and decrement the
-             * slot count we still have to consume. */
-            fe = flexNext(f, fe_pad2);
-            records -= 1u;
-        }
+    uint64_t floor_id = 0;
+    if (!hkrReadU64(fe, &floor_id) || floor_id > UINT32_MAX) {
+        return false;
     }
+    const hmacKeyId parsed_floor = (hmacKeyId)floor_id;
+    fe = flexNext(f, fe);
 
     for (size_t i = 0; i < records; i++) {
         if (fe == NULL) {
@@ -991,14 +904,9 @@ bool hmacKeyringRestore(hmacKeyring *ring, const uint8_t *buf, size_t len) {
              * not redundant. */
             goto rollback;
         }
-        /* Snapshot wire format predates the explicit unsalted-vs-salted
-         * distinction. Infer the install path from the salt bytes:
-         * - all-zero salt => restore as Unsalted (preserves the legacy
-         * semantic that an all-zero salt is OK for nonce issuance);
-         * - non-zero salt => restore via the salted install path.
-         * Either way the post-install slot state matches what an
-         * Install / Set sequence would have produced before the
-         * fail-closed all-zero-salt-rejection contract landed. */
+        /* The salt says how the slot was installed: a salted install
+         * refuses an all-zero salt, so an all-zero salt is exactly an
+         * unsalted slot */
         bool installed;
         if (hmacKeyringSaltIsZero(salt)) {
             installed =
@@ -1021,7 +929,7 @@ bool hmacKeyringRestore(hmacKeyring *ring, const uint8_t *buf, size_t len) {
      * persisted floor is by definition a forward move. Be explicit
      * about that via the helper rather than a raw assignment so the
      * monotonic invariant has a single owner. */
-    if (have_floor_sentinel && parsed_floor != HMAC_KEY_ID_INVALID) {
+    if (parsed_floor != HMAC_KEY_ID_INVALID) {
         if (!hmacKeyringSetMinValidKeyId(ring, parsed_floor)) {
             /* Only reachable if a concurrent caller already raised the
              * floor above the persisted value — possible on a hot
@@ -1263,8 +1171,8 @@ int hmacKeyringTest(int argc, char *argv[]) {
     }
 
     TEST("snapshot/restore: a 96/128-bit value in any field is refused") {
-        /* A floor sentinel plus a salted and an unsalted slot, so every
-         * field Restore decodes is covered: 15 entries. */
+        /* A floor plus a salted and an unsalted slot, so every field
+         * Restore decodes is covered: 11 entries. */
         hmacKeyring *ring = hmacKeyringCreate();
         const uint8_t key[16] = {0x5A, 0x5A, 0x5A, 0x01};
         const uint8_t salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {0x0A, 0x0B, 0x0C,
@@ -1283,8 +1191,8 @@ int hmacKeyringTest(int argc, char *argv[]) {
         hmacKeyringFree(ring);
         const flex *src = (const flex *)buf;
         const size_t entries = flexCount(src);
-        if (entries != 3u * HMAC_KEYRING_ENTRIES_PER_SLOT) {
-            ERR("snapshot has %zu entries, expected 15", entries);
+        if (entries != 1u + 2u * HMAC_KEYRING_ENTRIES_PER_SLOT) {
+            ERR("snapshot has %zu entries, expected 11", entries);
         }
 
         databoxBig wides[3];
@@ -1873,6 +1781,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
         cleanerName(zfree, Bytes) uint8_t *oversize_key = zmalloc(oversize_len);
         memset(oversize_key, 0xAB, oversize_len);
 
+        flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL); /* no floor */
         flexPushUnsigned(&f, (uint64_t)id, FLEX_ENDPOINT_TAIL);
         flexPushUnsigned(&f, algo_tag, FLEX_ENDPOINT_TAIL);
         flexPushBytes(&f, salt, sizeof(salt), FLEX_ENDPOINT_TAIL);
@@ -1898,6 +1807,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
         cleanerName(zfree, Bytes) uint8_t *max_key =
             zmalloc(HMAC_KEYRING_MAX_KEY_BYTES);
         memset(max_key, 0xCD, HMAC_KEYRING_MAX_KEY_BYTES);
+        flexPushUnsigned(&f_ok, 0u, FLEX_ENDPOINT_TAIL); /* no floor */
         flexPushUnsigned(&f_ok, (uint64_t)id, FLEX_ENDPOINT_TAIL);
         flexPushUnsigned(&f_ok, algo_tag, FLEX_ENDPOINT_TAIL);
         flexPushBytes(&f_ok, salt, sizeof(salt), FLEX_ENDPOINT_TAIL);
@@ -2242,7 +2152,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
         }
         hmacKeyring *dst = hmacKeyringCreate();
         if (!hmacKeyringRestore(dst, buf, written)) {
-            ERRR("restore with sentinel must succeed");
+            ERRR("restore with a floor must succeed");
         }
         if (hmacKeyringMinValidKeyId(dst) != 10u) {
             ERR("restored floor expected 10 got %u",
@@ -2255,12 +2165,9 @@ int hmacKeyringTest(int argc, char *argv[]) {
         hmacKeyringFree(dst);
     }
 
-    TEST("revoked key floor: legacy (no sentinel) snapshot restores with "
-         "floor=0") {
-        /* Build a snapshot from a keyring with NO floor set — confirm
-         * the wire bytes do NOT carry a sentinel and that restoring
-         * yields floor == 0. Closes the regression risk that we
-         * accidentally start emitting sentinels for empty floors. */
+    TEST("revoked key floor: no floor snapshots as 0 and restores as none") {
+        /* A keyring with no floor still writes its floor entry (0), and
+         * restoring it sets no floor */
         hmacKeyring *src = hmacKeyringCreate();
         const uint8_t key[16] = {0x88};
         hmacKeyringInstallUnsalted(src, 1u, &hmacAlgoSHA256, key, sizeof(key));
@@ -2268,18 +2175,17 @@ int hmacKeyringTest(int argc, char *argv[]) {
         cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(sz);
         hmacKeyringSnapshot(src, buf, sz, NULL);
 
-        /* Total flex entry count must be exactly HMAC_KEYRING_ENTRIES_PER_SLOT
-         * (== 5) — sentinel would have added 5 more. */
-        if (flexCount((const flex *)buf) != HMAC_KEYRING_ENTRIES_PER_SLOT) {
-            ERR("expected %zu flex entries (no sentinel), got %zu",
-                HMAC_KEYRING_ENTRIES_PER_SLOT, flexCount((const flex *)buf));
+        if (flexCount((const flex *)buf) != 1 + HMAC_KEYRING_ENTRIES_PER_SLOT) {
+            ERR("expected %zu flex entries, got %zu",
+                1 + HMAC_KEYRING_ENTRIES_PER_SLOT,
+                flexCount((const flex *)buf));
         }
         hmacKeyring *dst = hmacKeyringCreate();
         if (!hmacKeyringRestore(dst, buf, sz)) {
-            ERRR("restore of legacy snapshot must succeed");
+            ERRR("restore of a no-floor snapshot must succeed");
         }
         if (hmacKeyringMinValidKeyId(dst) != HMAC_KEY_ID_INVALID) {
-            ERR("legacy restore expected floor=0 got %u",
+            ERR("no-floor restore expected floor=0 got %u",
                 (unsigned)hmacKeyringMinValidKeyId(dst));
         }
         hmacKeyringFree(src);
