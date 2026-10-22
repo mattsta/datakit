@@ -74,13 +74,13 @@ struct ptrPrevNext {
     memspace ms;  /* Internal memory space */
 };
 
-/* Internal memspace structure (40 bytes on 64-bit) */
+/* Internal memspace structure */
 typedef struct memspace {
     void *mem;           /* Memory pool */
-    size_t bestFree;     /* Offset to best free space */
-    int64_t bestFreeLen; /* Length of best free space */
-    size_t writeFromEnd; /* Offset to end of used space */
+    size_t writeFromEnd; /* Offset to end of used space (the tail starts here) */
     size_t len;          /* Total pool length */
+    uint8_t *freeBits;   /* One bit per 6-byte slot: set = free */
+    ptrPrevNextFreeList free[6]; /* Free runs by size: 1..5 slots, 6+ slots */
 } memspace;
 ```
 
@@ -88,11 +88,9 @@ typedef struct memspace {
 
 ```
 ┌────────────────────────────────────────────┐
-│  Entry 0  │  Entry 1  │  Entry 2  │  ...   │  Used Space
-├────────────────────────────────────────────┤
-│          [Free Space / Gaps]               │
-├────────────────────────────────────────────┤
-│             Unused Memory                  │  writeFromEnd → len
+│  Entry 0  │ [free] │  Entry 2  │  ...      │  Used space: entries and
+├────────────────────────────────────────────┤  freed runs (tracked exactly)
+│             Tail (all zero)                │  writeFromEnd → len
 └────────────────────────────────────────────┘
 
 Each entry starts on a 6-byte boundary:
@@ -477,15 +475,15 @@ void demonstrateRelocation(void) {
 
 ## Performance Characteristics
 
-| Operation             | Complexity | Notes                          |
-| --------------------- | ---------- | ------------------------------ |
-| Create                | O(1)       | Allocates 4096-byte pool       |
-| Add (space available) | O(1)       | Append to writeFromEnd         |
-| Add (need growth)     | O(n)       | Reallocates and copies pool    |
-| Read                  | O(1)       | Direct varint decode           |
-| Update (in-place)     | O(1)       | Overwrites existing space      |
-| Update (relocate)     | O(1)       | Adds to end, marks old as free |
-| Release               | O(1)       | Marks space free               |
+| Operation             | Complexity | Notes                                                        |
+| --------------------- | ---------- | ------------------------------------------------------------ |
+| Create                | O(1)       | Allocates 4096-byte pool                                     |
+| Add (space available) | O(1)       | A listed free run that fits, else the tail                   |
+| Add (need growth)     | O(n)       | Reallocates and copies pool                                  |
+| Read                  | O(1)       | Direct varint decode                                         |
+| Update (in-place)     | O(1)       | Overwrites its slots; slots it no longer reaches become free |
+| Update (relocate)     | O(1)       | Frees its slots, adds again                                  |
+| Release               | O(run)     | Frees its slots and merges them with free neighbours         |
 
 ### Memory Overhead
 
@@ -496,8 +494,9 @@ Per entry overhead:
 - Control structures: Shared across all entries
 
 Total pool overhead:
-- memspace struct: 40 bytes (once)
-- Alignment gaps: ~10-20% of used space
+- memspace struct and free lists (once)
+- Free-slot bitmap: 1 bit per 6-byte slot (~2% of the pool)
+- Alignment padding: up to 5 bytes per entry
 ```
 
 ### Space Savings
@@ -553,7 +552,22 @@ ptrPrevNextPtr ptr4 = ptrPrevNextAdd(ppn, 4, 0, 0);
 // Fills gap at offset 6 if new entry fits!
 ```
 
-The allocator tracks `bestFree` and `bestFreeLen` to reuse gaps.
+Free space is tracked exactly, never guessed from zero bytes (an entry of
+three zeros is itself all zero bytes):
+
+- A bitmap marks every free 6-byte slot below the tail.
+- Releasing an entry (or relocating it, or shrinking it in place) frees its
+  slots and merges them with any free neighbours into one run. A run that
+  reaches the tail returns to the tail.
+- Runs are listed by size (1 to 5 slots exactly, and one list for longer
+  runs). `Add` takes the smallest listed run that fits and lists the rest of
+  a longer run again. List entries whose run has since merged or been used
+  are recognised through the bitmap and dropped.
+
+So every freed byte is reusable: after releasing everything, the pool's
+used space returns to empty, and a pool that is filled and emptied
+repeatedly stops growing after the first round (the `churn` test checks
+this).
 
 ## Best Practices
 
@@ -673,12 +687,13 @@ void ptrPrevNextRepr(ptrPrevNext *ppn);
 /* Usage */
 ptrPrevNextRepr(ppn);
 /* Output:
-{meta {bestFree 0} {bestFreeLen 0}
-      {writeFromEnd 54} {len 4096}
-      {bytesFree 4042}}
-{offset {0 0 0} {atomIndex {bytes 1} 1} ...}
-{offset {1 6 1} {atomIndex {bytes 1} 2} ...}
+{meta {writeFromEnd 54} {len 4096} {bytesFree 4042}}
+{offset { 0    0    0} {atomIndex {bytes 2} 1} ...}
+[FREE 6]
+{offset { 1   12    2} {atomIndex {bytes 2} 3} ...}
 ...
+(free runs are read from the free-slot bitmap, so an all-zero entry still
+prints as an entry)
 */
 #endif
 ```
@@ -705,3 +720,7 @@ The test suite validates:
 - Random value insertion and updates
 - Memory growth and gap filling
 - Offset relocation handling
+- A fixed-seed soak that re-reads every live entry after every add, update
+  and release, over values of every encoding width
+- A churn test: fill, update, release everything, repeat; every entry reads
+  back and the pool never grows past its first-round size

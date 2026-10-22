@@ -131,6 +131,12 @@ static inline bool fastMutexTryLock(fastMutex *m);
 static inline void fastMutexUnlock(fastMutex *m);
 ```
 
+Both unlock paths publish the critical section: the fast path's CAS and
+the slow path's store that hands the word to the next waiter are release
+operations, and every lock path acquires. So writes made while holding the
+lock are visible to the next owner on weakly ordered CPUs (arm64) too; the
+`fastmutex` test's contention case checks it under the `tsan` preset.
+
 #### Status Check
 
 ```c

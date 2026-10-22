@@ -183,6 +183,42 @@ cmake --build build-dev --target datakit-check       # ctest -VV
 cmake --build build-dev --target datakit-quickcheck  # ctest --output-on-failure
 ```
 
+### Validation tiers (dktools)
+
+`dktools validate` builds a commit in a clean export, in every configured
+compiler and preset, and runs the whole suite. It has two tiers:
+
+| Tier            | Command                                   | Skips                                                                                 | Use for        |
+| --------------- | ----------------------------------------- | ------------------------------------------------------------------------------------- | -------------- |
+| quick (default) | `uv run --project tools dktools validate` | the slow set in every build (`--slow`), plus the debug/tsan slow set (`--debug-slow`) | iterative work |
+| full            | `... validate --full`                     | nothing but the benchmarks and vendored suites                                        | milestones     |
+
+In every tier a preset also skips the tests it cannot judge (`--tsan-skip`:
+the wall-clock nonce-log test, which TSan's instrumentation breaks). The
+summary names every skipped test, why, and the flag that runs it. For
+day-to-day changes, `dktools verify --tests '^(a|b)$'` builds the working
+tree and runs exactly the named tests, in any preset.
+
+### Test sizes and finding slow sections
+
+Correctness suites stay fast: loops that only time code run at smoke size
+(enough iterations to exercise every path, with their checksums still
+checked), and real timing lives in the bench tests run on the `perf`
+preset (`fenwickBench`, `perfRegression`, `compressionBench`). Under dev
+every suite finishes in under a minute; the slowest are about 45 s.
+
+To see where a suite spends its time:
+
+```sh
+uv run --project tools dktools testtime ./build-dev/src/datakit-test multimap
+```
+
+It times each section (ctest.h's `test — NAME` headers and the `Test `,
+`Testing `, `Stress `, `FUZZ: ` headers suites print themselves) and lists
+the slowest groups (generated sections with their numbers masked add up)
+and sections. datakit-test line-buffers stdout, so headers arrive on time
+even through a pipe.
+
 ### Test Exit Codes
 
 - `0` - All tests passed
@@ -407,6 +443,14 @@ SUCCESS (0.123456 sec total; 0.012345 sec deletion; 1,234,567 total bytes)
 ./build-perf/src/datakit-test speed            # defaults: 64 MB working set
 ./build-perf/src/datakit-test speed 64 10      # 64 MB, 10 legacy iterations
 ./build-perf/src/datakit-test speed --json     # machine-readable
+```
+
+Data-structure benches print markdown tables of ns per operation and bytes
+per element, for example the Fenwick/segment workload matrix
+([FENWICK.md](../modules/fenwick/FENWICK.md#performance)):
+
+```sh
+./build-perf/src/datakit-test test fenwickBench   # ~90 s
 ```
 
 Always measure with the `perf` preset. Sanitizer builds invalidate every

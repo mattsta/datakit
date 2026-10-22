@@ -78,8 +78,7 @@ allocaudit gate) goes through `src/dktools/procs.py`:
 - Each program runs in its own session. On a timeout, Ctrl-C, SIGTERM
   or SIGHUP, its whole process group (cmake, make, the compilers,
   ctest and the tests it started) gets SIGTERM, then SIGKILL two
-  seconds later, and is reaped before dktools exits: Ctrl-C (exit
-  130) leaves nothing running. Git gets the same two seconds to
+  seconds later, and is reaped before dktools exits: Ctrl-C (exit 130) leaves nothing running. Git gets the same two seconds to
   remove its lock files.
 - Output goes to a log file or is read with `communicate`, so no
   pipe can fill and stall a program.
@@ -187,11 +186,20 @@ Runs every compiler and preset on a committed revision, exported with
 uv run --project tools dktools validate [--rev REV] \
     [--compilers clang22,gcc15] [--presets dev,debug] \
     [--serial REGEX] [--skip REGEX] [--debug-skip REGEX] \
+    [--tsan-skip REGEX] [--full] [--slow REGEX] [--debug-slow REGEX] \
     [--leak-base BASE] [--root DIR] [-j N]
 ```
 
 - The matrix is every requested preset each compiler supports:
-  by default `clang22-dev`, `clang22-debug` and `gcc15-release`.
+  by default `clang22-dev`, `clang22-debug` and `gcc15-release`;
+  `--presets dev,debug,tsan` adds `clang22-tsan`.
+- Two tiers. The default quick tier is for iteration: it skips the
+  slow tests, `--slow` in every build (default `multimapFull`, `xof`,
+  `timerWheel`, `multilist`, `multilistFull`: over ~40 s under dev)
+  and also `--debug-slow` in debug and tsan builds (default
+  `multimap`, `hyperloglog`, `blake3`, `flex`, `str`: over ~60 s
+  there). `--full` is the milestone tier and runs them all. `verify`
+  has no tiers; it runs exactly the tests it is given.
 - Per configuration: a clean configure, an all-targets build,
   warnings grouped by file, the parallel ctest set (everything outside
   the serial and skip sets), then the serial set one test at a time.
@@ -203,10 +211,15 @@ uv run --project tools dktools validate [--rev REV] \
   take a private `mkdtemp` scratch directory, and
   `dkTestKeyringGetRawCopyMigrationCluster` asserts its thread race
   deterministically.
-  Default skip set: `varint-.*`, `perfRegression`, `compressionBench`.
-  Debug builds also skip `multimap` and `multiFenwick` (too slow under
-  Debug with sanitizers; `--debug-skip ''` runs them), and the summary
-  says so.
+  A serial set whose tests are all skipped in a build is dropped there
+  rather than reported as "no tests".
+  Default skip set: `varint-.*`, `perfRegression`, `compressionBench`,
+  `fenwickBench` (vendored suites and benchmarks).
+  Tests a build cannot judge are skipped in both tiers: none in debug
+  (`--debug-skip`), `dkTestNonceLogEvictionPerf` in tsan
+  (`--tsan-skip`; its wall-clock limit cannot hold under TSan). The
+  summary's "Skipped tests" section names the tier and every skipped
+  set per configuration.
 - Then: UBSan (`runtime error:`) and ASan/LSan reports in the test
   output, `allocaudit check --constructors` on the exported tree, and
   the leakage gate over `merge-base(BASE, REV)..REV` (`BASE` defaults
@@ -285,7 +298,7 @@ uv run --project tools dktools testtime ./build-dev/src/datakit-test multimap [-
 
 - Sections open at ctest.h's `test — NAME` headers and at the headers
   suites print themselves (`Test `, `Testing `, `Stress `, `FUZZ: `);
-  `--prefix` adds more (repeatable).  datakit-test line-buffers stdout,
+  `--prefix` adds more (repeatable). datakit-test line-buffers stdout,
   so every header arrives when printed, even through the pipe.
 - A section lasts from its header to the next one (the last to the
   program's exit); the report lists the total, the N slowest section

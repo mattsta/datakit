@@ -74,6 +74,11 @@ These containers use **scale-aware** implementations with small/medium/large var
 where the toolchain provides `__int128`, and its `intsetBig` test is
 dropped from the CTest list otherwise.
 
+### Prefix-Sum and Range-Query Trees
+
+- [Fenwick trees](modules/fenwick/FENWICK.md) - Prefix sums, point updates, rank (LowerBound): typed `fenwick<T>`, databox `multiFenwickFlat` / `multiFenwick`, 2D `fenwick2d<T>` / `multiFenwick2d`; architecture, contracts, choosing guide and measured performance
+- [Segment trees](modules/fenwick/SEGMENT.md) - Range SUM / MIN / MAX with point and range assignment, every integer and float type
+
 ### Compression and Encoding
 
 - [xof](modules/compression/XOF.md) - XOR filter for double compression (delta-of-delta)
@@ -159,7 +164,7 @@ installed. They carry their own upstream documentation:
 
 - **170+ header files** under `src/` with comprehensive APIs
 - **140+ registered tests** in `src/datakit-test.c`, each also a CTest target
-- **12 module categories** under `docs/modules/`
+- **13 module categories** under `docs/modules/`
 - **POSIX platforms**: Linux, macOS, and the BSD family (there is no
   Windows/MSVC support)
 - **Performance-focused** with aggressive optimizations and minimal overhead

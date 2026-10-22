@@ -663,15 +663,15 @@ Each value after the first two costs the bits of its delta-of-delta's
 range. Measured with `dodWrite()`, 10,000 values per pattern (header
 included):
 
-| Data Pattern                                   | Bits/Value | Ratio vs 64-bit |
-| ---------------------------------------------- | ---------- | --------------- |
-| Constant step `t, t+1, t+2, ...`               | 1.00       | ~64x            |
-| Counter stepping by `1 + rand() % 10`          | 8.2        | ~7.8x           |
-| Delta-of-delta uniform in [-64, 64]            | 8.9        | ~7.2x           |
-| Step 1000 with jitter uniform in [-64, 64]     | 9.7        | ~6.6x           |
-| Delta-of-delta uniform in [-2368, 2368]        | 15.4       | ~4.2x           |
-| `rand()` values (31-bit)                       | 40         | ~1.6x           |
-| Uniform 64-bit values                          | 71.9       | ~0.89x          |
+| Data Pattern                               | Bits/Value | Ratio vs 64-bit |
+| ------------------------------------------ | ---------- | --------------- |
+| Constant step `t, t+1, t+2, ...`           | 1.00       | ~64x            |
+| Counter stepping by `1 + rand() % 10`      | 8.2        | ~7.8x           |
+| Delta-of-delta uniform in [-64, 64]        | 8.9        | ~7.2x           |
+| Step 1000 with jitter uniform in [-64, 64] | 9.7        | ~6.6x           |
+| Delta-of-delta uniform in [-2368, 2368]    | 15.4       | ~4.2x           |
+| `rand()` values (31-bit)                   | 40         | ~1.6x           |
+| Uniform 64-bit values                      | 71.9       | ~0.89x          |
 
 ### Speed
 

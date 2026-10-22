@@ -23,6 +23,7 @@ A task-oriented quick reference for common operations across all datakit modules
 11. [String Operations](#string-operations)
 12. [Compression](#compression)
 13. [Set Operations](#set-operations)
+14. [Prefix Sums & Range Queries](#prefix-sums--range-queries)
 
 ---
 
@@ -1257,6 +1258,55 @@ while (fe) {
 
 ---
 
+## Prefix Sums & Range Queries
+
+### "I want running totals or counts by position"
+
+```c
+void *fw = NULL;                        /* fenwickI64; also I16..U128, Double */
+fenwickI64Update(&fw, idx, delta);      /* e[idx] += delta */
+int64_t upTo = fenwickI64Query(fw, idx);          /* e[0..idx] */
+int64_t span = fenwickI64RangeQuery(fw, lo, hi);  /* e[lo..hi] */
+fenwickI64Free(fw);
+```
+
+### "I want rank / select (first position reaching a total)"
+
+```c
+size_t pos = fenwickI64LowerBound(fw, target);  /* SIZE_MAX: none */
+```
+
+### "I want exact totals over mixed ints and doubles"
+
+```c
+multiFenwickFlat *mf = NULL;
+const databox amount = DATABOX_DOUBLE(2.5);   /* or DATABOX_SIGNED(n), ... */
+multiFenwickFlatUpdate(&mf, idx, &amount);
+databox total;
+multiFenwickFlatQuery(mf, idx, &total);  /* typed by value */
+```
+
+### "I want rectangle sums on a grid"
+
+```c
+fenwick2dI64 *g = NULL;
+fenwick2dI64Update(&g, row, col, 1);
+int64_t inBox = fenwick2dI64RangeQuery(g, r1, c1, r2, c2);
+```
+
+### "I want range minimum / maximum"
+
+```c
+void *seg = segmentI64New(SEGMENT_OP_MIN);
+segmentI64Update(&seg, idx, value);              /* assigns */
+int64_t lo = segmentI64Query(seg, left, right);
+```
+
+Which tree for which job, and measured speed and memory:
+[FENWICK.md](modules/fenwick/FENWICK.md), [SEGMENT.md](modules/fenwick/SEGMENT.md).
+
+---
+
 ## Module Reference
 
 - [databox](modules/core/DATABOX.md) - Universal 16-byte container
@@ -1269,6 +1319,8 @@ while (fe) {
 - [multidict](modules/multi/MULTIDICT.md) - Generic hash table
 - [multilru](modules/multi/MULTILRU.md) - Multi-level LRU cache
 - [multiroar](modules/multi/MULTIROAR.md) - Roaring bitmap
+- [Fenwick trees](modules/fenwick/FENWICK.md) - Prefix sums, rank, 2D grids
+- [Segment trees](modules/fenwick/SEGMENT.md) - Range sum/min/max
 - [str](modules/string/STR.md) - String utilities
 - [fibbuf](modules/memory/FIBBUF.md) - Fibonacci growth
 - [jebuf](modules/memory/JEBUF.md) - Jemalloc size classes

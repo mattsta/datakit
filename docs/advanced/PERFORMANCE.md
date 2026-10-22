@@ -172,11 +172,11 @@ multilist *compact = multilistNew(FLEX_CAP_LEVEL_4096, 1);
 Measured by `compressionBench`: 1,000,000 pushes to the tail, then 1,000,000
 pops from the head, median of 7 rounds that interleave the depths.
 
-| Data (pattern)                   | depth 0  | depth 2  | depth 1  |
-| -------------------------------- | -------- | -------- | -------- |
-| 64-bit integers `0, 1, 2, ...`   | 129 ms   | 143 ms   | 142 ms   |
-| 100-byte structured log lines    | 495 ms   | 579 ms   | 573 ms   |
-| Stored size, the same log lines  | 104.1 MB | 24.9 MB  | 24.9 MB  |
+| Data (pattern)                  | depth 0  | depth 2 | depth 1 |
+| ------------------------------- | -------- | ------- | ------- |
+| 64-bit integers `0, 1, 2, ...`  | 129 ms   | 143 ms  | 142 ms  |
+| 100-byte structured log lines   | 495 ms   | 579 ms  | 573 ms  |
+| Stored size, the same log lines | 104.1 MB | 24.9 MB | 24.9 MB |
 
 These timings are from one machine: an Apple M1 Max (10 cores) on macOS
 14.8, clang 22 with the `perf` preset (`-O3 -mcpu=native -flto`). Expect
@@ -369,10 +369,10 @@ functions `float16Encode_()` / `float16Decode_()`.
 Measured by `compressionBench` over 4,000,000 values, median of 7
 interleaved rounds, on an Apple M1 Max with clang 22 (`perf` preset):
 
-| Path               | Encode         | Decode         |
-| ------------------ | -------------- | -------------- |
-| NEON hardware      | 0.38 ns/value  | 0.99 ns/value  |
-| Portable software  | 0.46 ns/value  | 0.99 ns/value  |
+| Path              | Encode        | Decode        |
+| ----------------- | ------------- | ------------- |
+| NEON hardware     | 0.38 ns/value | 0.99 ns/value |
+| Portable software | 0.46 ns/value | 0.99 ns/value |
 
 On this machine the compiler vectorizes the portable loops, so hardware
 conversion gains little (1.2x encode, 1.0x decode) in bulk loops. F16C on
@@ -425,15 +425,15 @@ fibbuf *fb = fibbufNew();
 
 ### flex Operations
 
-| Operation        | Complexity     | Notes               |
-| ---------------- | -------------- | ------------------- |
-| Push tail        | O(1) amortized | Single realloc      |
-| Push head        | O(n)           | Must shift all data |
-| Index access     | O(n)           | Sequential scan     |
-| Binary search    | O(log n)       | Sorted flex only    |
+| Operation        | Complexity     | Notes                                                           |
+| ---------------- | -------------- | --------------------------------------------------------------- |
+| Push tail        | O(1) amortized | Single realloc                                                  |
+| Push head        | O(n)           | Must shift all data                                             |
+| Index access     | O(n)           | Sequential scan                                                 |
+| Binary search    | O(log n)       | Sorted flex only                                                |
 | Find with middle | O(log n)       | caller passes the middle entry, so the search skips locating it |
-| Delete           | O(n)           | Must shift data     |
-| Merge            | O(n+m)         | Concatenation       |
+| Delete           | O(n)           | Must shift data                                                 |
+| Merge            | O(n+m)         | Concatenation                                                   |
 
 ### multimap Operations
 

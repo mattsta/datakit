@@ -688,6 +688,7 @@ Unequal values may share a key: it is a hash input, not an identity.
 `databoxEqual`, which follows IEEE: NaN equals nothing, itself included, and
 `-0.0` equals `+0.0`. This is the same split as Java's `Double.equals` (keys)
 versus `==` (values).
+
 - **`DATABOX_PTR`** and **`DATABOX_CONTAINER_REFERENCE_EXTERNAL`** — join
   the numeric class as unsigned integers (raw pointer bits, or the
   reference id), against every numeric type. flex stores a pointer as an
@@ -717,14 +718,14 @@ static inline const databox *databoxCanonical(const databox *in,
                                               databoxBig *scratch);
 ```
 
-| Bytes | Canonical form |
-|---|---|
-| `"22"`, `"0"`, `"-5"`, up to `"9223372036854775807"`, down to `"-9223372036854775808"` | `DATABOX_SIGNED_64` |
-| `"9223372036854775808"` to `"18446744073709551615"` | `DATABOX_UNSIGNED_64` |
-| `"18446744073709551616"` to `"340282366920938463463374607431768211455"` | `DATABOX_UNSIGNED_128` |
-| `"-9223372036854775809"` to `"-170141183460469231731687303715884105728"` | `DATABOX_SIGNED_128` |
-| `"22.0"`, `"-0.5"`, `"0.4"`: reals whose re-print gives exactly the input bytes | `DATABOX_FLOAT_32` when the value is exact as a float, else `DATABOX_DOUBLE_64` |
-| `"007"`, `"01"`, `"-0"`, `"-01"`, `"+5"`, `" 22"`, `"22 "`, `"1e3"`, `".5"`, `"5."`, `"-0.0"`, `"299.5000"`, `"123.10"`, `"nan"`, `"inf"`, numerals outside the 128-bit range | not a numeral: the caller keeps the bytes |
+| Bytes                                                                                                                                                                         | Canonical form                                                                  |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `"22"`, `"0"`, `"-5"`, up to `"9223372036854775807"`, down to `"-9223372036854775808"`                                                                                        | `DATABOX_SIGNED_64`                                                             |
+| `"9223372036854775808"` to `"18446744073709551615"`                                                                                                                           | `DATABOX_UNSIGNED_64`                                                           |
+| `"18446744073709551616"` to `"340282366920938463463374607431768211455"`                                                                                                       | `DATABOX_UNSIGNED_128`                                                          |
+| `"-9223372036854775809"` to `"-170141183460469231731687303715884105728"`                                                                                                      | `DATABOX_SIGNED_128`                                                            |
+| `"22.0"`, `"-0.5"`, `"0.4"`: reals whose re-print gives exactly the input bytes                                                                                               | `DATABOX_FLOAT_32` when the value is exact as a float, else `DATABOX_DOUBLE_64` |
+| `"007"`, `"01"`, `"-0"`, `"-01"`, `"+5"`, `" 22"`, `"22 "`, `"1e3"`, `".5"`, `"5."`, `"-0.0"`, `"299.5000"`, `"123.10"`, `"nan"`, `"inf"`, numerals outside the 128-bit range | not a numeral: the caller keeps the bytes                                       |
 
 The 64-bit forms are exactly what `StrScanScanReliable` accepts; the 128-bit
 forms are the integers beyond 64 bits that `StrScanScanReliableConvert128`
@@ -758,7 +759,9 @@ what the number is.
 
 **Stored values** (container values, scores and counters: `flexIncrby*`,
 `multidictIncrBy` / `IncrByFloat`, `multimapFieldIncrBy`,
-`multiOrderedSetIncrBy`, `multiFenwick`):
+`multiOrderedSetIncrBy`, `multiFenwick`, `multiFenwickFlat`,
+`multiFenwick2d`, and the elements of the typed `fenwick<T>` /
+`fenwick2d<T>` trees):
 
 - Integers add **exactly**. A result outside the value's range (int64, or
   [INT64_MIN, UINT64_MAX] where the API can return either kind) is
@@ -781,7 +784,12 @@ counter's true count is unknown, so insertion never lowers it. Only the
 structure's own aging (Bloom decay) reduces counters, and never below 0.
 
 **Wrapping arithmetic** (modulo 2^64) appears only inside codecs and hashes
-(dod deltas, xof XORs, hash mixing). No API exposes it as a value operation.
+(dod deltas, xof XORs, hash mixing), and inside the typed Fenwick and
+segment trees' internal cells. Their stored elements never wrap (see
+above); a derived _sum_ that does not fit the tree's C type comes back
+modulo 2^bits, since those APIs return a bare C value and have no way to
+refuse. Sums that fit are always exact. The databox trees return exact
+sums or refuse.
 
 ## Debugging and Display
 

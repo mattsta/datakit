@@ -136,6 +136,11 @@ auto-discovers CTest targets from it.
 - [intsetBig](docs/modules/intset/INTSET_BIG.md) - Bucketed wide-range integer sets (128-bit inputs)
 - [hyperloglog](docs/modules/intset/HYPERLOGLOG.md) - Probabilistic cardinality estimation
 
+**Prefix Sums & Range Queries:**
+
+- [Fenwick trees](docs/modules/fenwick/FENWICK.md) - Prefix sums, point updates and rank: typed, databox and 2D variants, with a choosing guide and measured performance
+- [Segment trees](docs/modules/fenwick/SEGMENT.md) - Range SUM / MIN / MAX with point and range assignment
+
 **Compression & Encoding:**
 
 - [xof](docs/modules/compression/XOF.md) - XOR-encoded doubles

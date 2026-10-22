@@ -45,13 +45,13 @@ there.
 
 For RPC / cluster mailbox / replication-frame use cases:
 
-| Path                                  | Per-op latency | Notes                                        |
-| ------------------------------------- | -------------- | -------------------------------------------- |
-| xxh64 envelope                        | wrap ~21 ns, verify ~31 ns | flexEnvelope bench                |
-| HMAC-SHA-256 envelope (plain key)     | verify ~417 ns | dominated by 2 setup block compressions      |
-| HMAC-SHA-256 envelope (prepared key)  | verify ~192 ns | setup blocks pre-absorbed, 2.2x faster       |
-| HMAC-SHA-256 raw (plain hmacCompute)  | 386 ns/op      | hmac test bench                              |
-| HMAC-SHA-256 raw (hmacComputeWithKey) | **164 ns/op**  | **2.36x speedup** for high-throughput verify |
+| Path                                  | Per-op latency             | Notes                                        |
+| ------------------------------------- | -------------------------- | -------------------------------------------- |
+| xxh64 envelope                        | wrap ~21 ns, verify ~31 ns | flexEnvelope bench                           |
+| HMAC-SHA-256 envelope (plain key)     | verify ~417 ns             | dominated by 2 setup block compressions      |
+| HMAC-SHA-256 envelope (prepared key)  | verify ~192 ns             | setup blocks pre-absorbed, 2.2x faster       |
+| HMAC-SHA-256 raw (plain hmacCompute)  | 386 ns/op                  | hmac test bench                              |
+| HMAC-SHA-256 raw (hmacComputeWithKey) | **164 ns/op**              | **2.36x speedup** for high-throughput verify |
 
 Envelope figures are from perfRegression and the flexEnvelope bench, raw
 HMAC from the hmac bench, all re-measured on the machine above.

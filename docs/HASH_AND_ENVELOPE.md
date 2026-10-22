@@ -119,12 +119,12 @@ Apple M1 Max (single thread, macOS 14.8, clang 22 `perf` preset), with the
 backend auto-selected (NEON for ChaCha20-Poly1305, ARMv8 Crypto for
 SHA-256):
 
-| Primitive                 | 64 B      | 1 KiB      | 16 KiB     | 1 MiB      |
-| ------------------------- | --------- | ---------- | ---------- | ---------- |
-| ChaCha20-Poly1305 Seal    | 201 MB/s  | 497 MB/s   | 579 MB/s   | 585 MB/s   |
-| ChaCha20-Poly1305 Open    | 201 MB/s  | 492 MB/s   | 579 MB/s   | 585 MB/s   |
-| SHA-256                   | 685 MB/s  | 1787 MB/s  | 1996 MB/s  | 1999 MB/s  |
-| BLAKE3                    | 580 MB/s  | 778 MB/s   | 1391 MB/s  | 1424 MB/s  |
+| Primitive              | 64 B     | 1 KiB     | 16 KiB    | 1 MiB     |
+| ---------------------- | -------- | --------- | --------- | --------- |
+| ChaCha20-Poly1305 Seal | 201 MB/s | 497 MB/s  | 579 MB/s  | 585 MB/s  |
+| ChaCha20-Poly1305 Open | 201 MB/s | 492 MB/s  | 579 MB/s  | 585 MB/s  |
+| SHA-256                | 685 MB/s | 1787 MB/s | 1996 MB/s | 1999 MB/s |
+| BLAKE3                 | 580 MB/s | 778 MB/s  | 1391 MB/s | 1424 MB/s |
 
 The other backends have no measured figures here:
 

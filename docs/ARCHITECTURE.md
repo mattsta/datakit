@@ -647,6 +647,13 @@ Need to store data?
 ├─ Need LRU eviction?
 │  └─ Use: multilru
 │
+├─ Running totals, prefix sums, rank/select over numbers?
+│  ├─ One C type        └─ Use: fenwick<T> (fenwickI64, fenwickDouble, ...)
+│  ├─ Mixed / 65-bit    └─ Use: multiFenwickFlat (multiFenwick: most compact)
+│  ├─ A 2D grid         └─ Use: fenwick2d<T> or multiFenwick2d
+│  └─ Range min/max     └─ Use: segment<T>
+│     (see modules/fenwick/FENWICK.md "Choosing one")
+│
 ├─ Variable-length byte sequences?
 │  └─ Use: flex or mflex
 │
@@ -672,12 +679,17 @@ Need to store data?
 │ intset       │ O(log n)  │ O(log n) │ O(n)     │ Excellent    │
 │ hyperloglog  │ O(1)      │ N/A      │ N/A      │ ~12KB dense  │
 │ multiroar    │ O(1)      │ O(1)     │ O(1)     │ Excellent    │
+│ fenwick<T>   │ O(log n)‡ │ O(log n) │ N/A      │ 2-16 B/elem  │
+│ segment<T>   │ O(log n)‡ │ O(log n) │ N/A      │ 2x fenwick   │
 └──────────────┴───────────┴──────────┴──────────┴──────────────┘
 * When iterator positioned
 ** Amortized
 † multimap is a SORTED container backed by flex, not a hash table:
   binary search to locate, plus a memmove inside the target flex.
   Use multidict when you want hashing.
+‡ Point update; growth is amortized O(1) per appended index.  Lookup is
+  a prefix sum or range fold.  Measured numbers, all variants and sizes:
+  modules/fenwick/FENWICK.md and PERFORMANCE_BASELINES.md.
 ```
 
 ## Thread Safety

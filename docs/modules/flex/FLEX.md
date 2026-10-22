@@ -212,10 +212,10 @@ has no 4-byte external form, so the next width up is `1 + 4`.
 
 flex has two ways to write a value, and the caller chooses:
 
-| Path | Functions | `"42"` reads back as |
-|---|---|---|
-| Auto-convert | `flexPushBytes`, `flexPushByType`, `flexInsertBytes`, `flexNewFromDatabox*`, `flexPushDataboxBig` | the integer 42 |
-| Exact | `flexPushBytesExact`, `flexPushByTypeExact`, `flexNewFromDatabox*Exact`, `flexPushDataboxBigExact`, `mflexPushByTypeExact`, and every positional and sorted insert (`flexInsertByType` and friends) | the bytes `"42"` |
+| Path         | Functions                                                                                                                                                                                           | `"42"` reads back as |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
+| Auto-convert | `flexPushBytes`, `flexPushByType`, `flexInsertBytes`, `flexNewFromDatabox*`, `flexPushDataboxBig`                                                                                                   | the integer 42       |
+| Exact        | `flexPushBytesExact`, `flexPushByTypeExact`, `flexNewFromDatabox*Exact`, `flexPushDataboxBigExact`, `mflexPushByTypeExact`, and every positional and sorted insert (`flexInsertByType` and friends) | the bytes `"42"`     |
 
 Both paths store numbers in their smallest encoding of the **same** type
 (integer width, a double that fits exactly in a float). Only the auto-convert
@@ -250,14 +250,14 @@ as its number, not as the bytes pushed.
 
 What counts as a numeral:
 
-| Pushed bytes | Stored as |
-|---|---|
-| `"22"`, `"0"`, `"-5"` | integer |
-| `"9223372036854775808"` to `"18446744073709551615"` | unsigned 64-bit integer |
-| `"18446744073709551616"` to `"340282366920938463463374607431768211455"` | 96/128-bit unsigned integer |
-| `"-9223372036854775809"` to `"-170141183460469231731687303715884105728"` | 96/128-bit signed integer |
-| `"22.0"`, `"-0.5"`, and reals whose re-print gives exactly the input bytes | float or double |
-| `"007"`, `"01"`, `"-0"`, `"-01"`, `"+5"`, `" 22"`, `"22 "`, `"1e3"`, `".5"`, `"5."`, `"-0.0"`, `"299.5000"`, `"123.10"`, `"nan"`, numerals beyond the 128-bit range | bytes, verbatim |
+| Pushed bytes                                                                                                                                                        | Stored as                   |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
+| `"22"`, `"0"`, `"-5"`                                                                                                                                               | integer                     |
+| `"9223372036854775808"` to `"18446744073709551615"`                                                                                                                 | unsigned 64-bit integer     |
+| `"18446744073709551616"` to `"340282366920938463463374607431768211455"`                                                                                             | 96/128-bit unsigned integer |
+| `"-9223372036854775809"` to `"-170141183460469231731687303715884105728"`                                                                                            | 96/128-bit signed integer   |
+| `"22.0"`, `"-0.5"`, and reals whose re-print gives exactly the input bytes                                                                                          | float or double             |
+| `"007"`, `"01"`, `"-0"`, `"-01"`, `"+5"`, `" 22"`, `"22 "`, `"1e3"`, `".5"`, `"5."`, `"-0.0"`, `"299.5000"`, `"123.10"`, `"nan"`, numerals beyond the 128-bit range | bytes, verbatim             |
 
 A numeral beyond 64 bits is a 96/128-bit element, so read it back with
 `flexGetByTypeInto` (a `databoxWide` slot) or `flexGetByTypeBig`; a plain
