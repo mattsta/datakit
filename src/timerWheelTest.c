@@ -75,6 +75,18 @@ defcleanerName(testCallbackState *, zfree, States);
 defcleaner(timerWheel *, timerWheelFree);
 defcleaner(multiTimer *, multiTimerFree);
 
+/* True when the event time 'next' is 'delayUs' after a clock read taken
+ * between 'before' and 'after', give or take one 1 ms wheel slot of
+ * rounding.  Bracketing the calls checks the units and the offset without
+ * depending on how long a loaded machine (a sanitizer, parallel suites)
+ * takes between the reads, which a fixed tolerance around one read does. */
+static bool twDueWithin_(const int64_t next, const int64_t before,
+                         const int64_t after, const uint64_t delayUs) {
+    const int64_t slotUs = 1000;
+    return next >= before + (int64_t)delayUs - slotUs &&
+           next <= after + (int64_t)delayUs + slotUs;
+}
+
 static bool testCountingCallback(timerWheel *tw, timerWheelId id,
                                  void *clientData) {
     (void)tw;
@@ -483,21 +495,20 @@ int timerWheelTest(int argc, char *argv[]) {
     }
 
     TEST("timerWheel: nextTimerEventStartUs returns correct time") {
+        const uint64_t delayUs = 100000;
+        const int64_t before = (int64_t)timeUtilMonotonicUs();
         cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
         testCallbackState state = {0};
 
-        uint64_t delayUs = 100000;
-        uint64_t beforeRegister = (uint64_t)timeUtilMonotonicUs();
-
         timerWheelRegister(tw, delayUs, 0, testCountingCallback, &state);
 
-        timerWheelSystemMonotonicUs next = timerWheelNextTimerEventStartUs(tw);
-
-        int64_t expected = (int64_t)(beforeRegister + delayUs);
-        int64_t diff = next - expected;
-
-        if (diff < -5000 || diff > 5000) {
-            ERR("nextTimerEventStartUs off by %" PRId64 "us", diff);
+        const timerWheelSystemMonotonicUs next =
+            timerWheelNextTimerEventStartUs(tw);
+        const int64_t after = (int64_t)timeUtilMonotonicUs();
+        if (!twDueWithin_(next, before, after, delayUs)) {
+            ERR("nextTimerEventStartUs %" PRId64 " is not %" PRIu64
+                "us after a time in [%" PRId64 ", %" PRId64 "]",
+                (int64_t)next, delayUs, before, after);
         }
     }
 
@@ -1264,9 +1275,11 @@ int timerWheelTest(int argc, char *argv[]) {
         timerWheelRegister(tw, dayUs, 0, testCountingCallback, &state);
 
         timerWheelSystemMonotonicUs next = timerWheelNextTimerEventStartUs(tw);
-        const int64_t diff = next - (int64_t)(before + dayUs);
-        if (diff < -5000 || diff > 5000) {
-            ERR("Overflow-timer query off by %" PRId64 "us", diff);
+        const uint64_t after = timeUtilMonotonicUs();
+        if (!twDueWithin_(next, (int64_t)before, (int64_t)after, dayUs)) {
+            ERR("Overflow-timer query %" PRId64 " is not a day after the "
+                "registration",
+                (int64_t)next);
         }
 
         /* Overflow plus a nearer wheel timer: min must win */
@@ -1300,16 +1313,14 @@ int timerWheelTest(int argc, char *argv[]) {
 
         const timerWheelSystemMonotonicUs next =
             timerWheelNextTimerEventStartUs(tw);
+        const uint64_t after = timeUtilMonotonicUs();
         if (next == 0) {
             ERRR("A live timer was masked by a tombstone-only nearer slot: "
                  "the query answered no timer");
-        } else {
-            const int64_t diff = next - (int64_t)(before + bDelayUs);
-            if (diff < -5000 || diff > 5000) {
-                ERR("Query should name the live %" PRIu64
-                    "us timer, off by %" PRId64 "us",
-                    bDelayUs, diff);
-            }
+        } else if (!twDueWithin_(next, (int64_t)before, (int64_t)after,
+                                 bDelayUs)) {
+            ERR("Query should name the live %" PRIu64 "us timer, got %" PRId64,
+                bDelayUs, (int64_t)next);
         }
 
         timerWheelAdvanceTime(tw, bDelayUs + aDelayUs);
@@ -1336,16 +1347,14 @@ int timerWheelTest(int argc, char *argv[]) {
 
         const timerWheelSystemMonotonicUs next =
             timerWheelNextTimerEventStartUs(tw);
+        const uint64_t after = timeUtilMonotonicUs();
         if (next == 0) {
             ERRR("A live wheel-1 timer was masked by a cancelled nearer "
                  "wheel-1 slot: the query answered no timer");
-        } else {
-            const int64_t diff = next - (int64_t)(before + pDelayUs);
-            if (diff < -5000 || diff > 5000) {
-                ERR("Query should name the live %" PRIu64
-                    "us timer, off by %" PRId64 "us",
-                    pDelayUs, diff);
-            }
+        } else if (!twDueWithin_(next, (int64_t)before, (int64_t)after,
+                                 pDelayUs)) {
+            ERR("Query should name the live %" PRIu64 "us timer, got %" PRId64,
+                pDelayUs, (int64_t)next);
         }
 
         timerWheelAdvanceTime(tw, pDelayUs + qDelayUs);
@@ -1380,11 +1389,12 @@ int timerWheelTest(int argc, char *argv[]) {
 
         const timerWheelSystemMonotonicUs next =
             timerWheelNextTimerEventStartUs(tw);
-        const int64_t diff = next - (int64_t)(s.registeredAtUs + s.nearDelayUs);
-        if (next == 0 || diff < -5000 || diff > 5000) {
+        const uint64_t after = timeUtilMonotonicUs();
+        if (next == 0 || !twDueWithin_(next, (int64_t)s.registeredAtUs,
+                                       (int64_t)after, s.nearDelayUs)) {
             ERR("Query should name the near %" PRIu64
-                "us timer, not the wrapped far one: off by %" PRId64 "us",
-                s.nearDelayUs, diff);
+                "us timer, not the wrapped far one: got %" PRId64,
+                s.nearDelayUs, (int64_t)next);
         }
 
         /* Both still fire, each at its own time */
@@ -1470,6 +1480,7 @@ int timerWheelTest(int argc, char *argv[]) {
 
         const uint64_t beforeY = timeUtilMonotonicUs();
         timerWheelRegister(tw, yDelayUs, 0, testCountingCallback, &y);
+        const uint64_t afterY = timeUtilMonotonicUs();
         timerWheelAdvanceTime(tw, phaseUs);
         timerWheelRegister(tw, xDelayUs, 0, testCountingCallback, &x);
 
@@ -1477,12 +1488,12 @@ int timerWheelTest(int argc, char *argv[]) {
          * Y's absolute due time is phaseUs earlier than registered */
         const timerWheelSystemMonotonicUs next =
             timerWheelNextTimerEventStartUs(tw);
-        const int64_t diff = next - (int64_t)(beforeY + yDelayUs - phaseUs);
-        if (next == 0 || diff < -5000 || diff > 5000) {
+        if (next == 0 || !twDueWithin_(next, (int64_t)beforeY, (int64_t)afterY,
+                                       yDelayUs - phaseUs)) {
             ERR("Query should name the %" PRIu64
                 "us timer in the next wheel-1 slot, not the %" PRIu64
-                "us one: off by %" PRId64 "us",
-                yDelayUs, xDelayUs, diff);
+                "us one: got %" PRId64,
+                yDelayUs, xDelayUs, (int64_t)next);
         }
 
         /* Y fires before X, each at its own time */
@@ -1524,12 +1535,13 @@ int timerWheelTest(int argc, char *argv[]) {
 
         const timerWheelSystemMonotonicUs next =
             timerWheelNextTimerEventStartUs(tw);
-        const int64_t diff = next - (int64_t)(s.registeredAtUs + s.nearDelayUs);
-        if (next == 0 || diff < -5000 || diff > 5000) {
+        const uint64_t after = timeUtilMonotonicUs();
+        if (next == 0 || !twDueWithin_(next, (int64_t)s.registeredAtUs,
+                                       (int64_t)after, s.nearDelayUs)) {
             ERR("Query should name the near %" PRIu64
                 "us timer, not the far %" PRIu64
-                "us one wrapped nearer in wheel 1: off by %" PRId64 "us",
-                s.nearDelayUs, s.farDelayUs, diff);
+                "us one wrapped nearer in wheel 1: got %" PRId64,
+                s.nearDelayUs, s.farDelayUs, (int64_t)next);
         }
 
         /* Both fire, each at its own time */
@@ -1605,11 +1617,11 @@ int timerWheelTest(int argc, char *argv[]) {
         timerWheelProcessTimerEvents(tw);
         const timerWheelSystemMonotonicUs next =
             timerWheelNextTimerEventStartUs(tw);
-        const int64_t diff = next - (int64_t)(before + 30 * hourUs);
-        if (diff < -5000 || diff > 5000) {
-            ERR("Query should name the live 30h overflow timer, off by "
-                "%" PRId64 "us",
-                diff);
+        const uint64_t after = timeUtilMonotonicUs();
+        if (!twDueWithin_(next, (int64_t)before, (int64_t)after, 30 * hourUs)) {
+            ERR("Query should name the live 30h overflow timer, got "
+                "%" PRId64,
+                (int64_t)next);
         }
     }
 

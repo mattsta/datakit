@@ -433,20 +433,24 @@ int multiTimerTest(int argc, char *argv[]) {
         cleaner(multiTimerFree) multiTimer *t = multiTimerNew();
         testCallbackState state = {0};
 
-        uint64_t delayUs = 100000; /* 100ms */
-        uint64_t beforeRegister = (uint64_t)timeUtilMonotonicUs();
+        const uint64_t delayUs = 100000; /* 100ms */
+        const int64_t before = (int64_t)timeUtilMonotonicUs();
 
         multiTimerRegister(t, delayUs, 0, testCountingCallback, &state);
 
-        multiTimerSystemMonotonicUs next = multiTimerNextTimerEventStartUs(t);
+        const multiTimerSystemMonotonicUs next =
+            multiTimerNextTimerEventStartUs(t);
+        const int64_t after = (int64_t)timeUtilMonotonicUs();
 
-        /* Next event should be approximately beforeRegister + delayUs */
-        int64_t expected = (int64_t)(beforeRegister + delayUs);
-        int64_t diff = next - expected;
-
-        /* Allow 5ms tolerance for timing variance */
-        if (diff < -5000 || diff > 5000) {
-            ERR("nextTimerEventStartUs off by %" PRId64 "us", diff);
+        /* The event is delayUs after a clock read between the two reads
+         * (with 1ms of rounding): bracketing checks units and offset
+         * without depending on how long a loaded machine takes */
+        const int64_t earliest = before + (int64_t)delayUs - 1000;
+        const int64_t latest = after + (int64_t)delayUs + 1000;
+        if (next < earliest || next > latest) {
+            ERR("nextTimerEventStartUs %" PRId64 " outside [%" PRId64
+                ", %" PRId64 "]",
+                (int64_t)next, earliest, latest);
         }
     }
 
