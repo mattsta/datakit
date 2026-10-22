@@ -277,19 +277,22 @@ uv run --project tools dktools vendorsync varint --upstream DIR [--rev REV] \
 
 ## testtime — where a slow test spends its time
 
-Runs one datakit test and times each `test — SECTION` it prints:
+Runs one datakit test and times each section it prints:
 
 ```sh
-uv run --project tools dktools testtime ./build-dev/src/datakit-test multimap [--top N] [--timeout SECONDS]
+uv run --project tools dktools testtime ./build-dev/src/datakit-test multimap [--top N] [--timeout SECONDS] [--prefix P]
 ```
 
+- Sections open at ctest.h's `test — NAME` headers and at the headers
+  suites print themselves (`Test `, `Testing `, `Stress `, `FUZZ: `);
+  `--prefix` adds more (repeatable).  datakit-test line-buffers stdout,
+  so every header arrives when printed, even through the pipe.
 - A section lasts from its header to the next one (the last to the
-  program's exit); the report lists the total and the N slowest
-  sections (default 15) with their share.
+  program's exit); the report lists the total, the N slowest section
+  groups (names with their numbers masked, so generated sections add
+  up) and the N slowest sections (default 15), with their share.
 - The test runs in its own process group and is stopped, children
   included, after `--timeout` seconds (default 1800).
-- Suites that print their own headers (flex prints `Test ...:`) can
-  add prefixes with `--prefix 'Test '` (repeatable).
 - Exits 0 when the test passes, 1 when it fails or is stopped, 2 on an
   input error (such as a missing binary).
 

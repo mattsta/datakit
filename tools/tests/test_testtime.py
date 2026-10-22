@@ -111,6 +111,18 @@ class Run(unittest.TestCase):
         single = report[report.index("slowest sections:") + 1 :]
         self.assertTrue(single[0].endswith("slow"), out)
 
+    def test_suite_headers_are_sections_by_default(self) -> None:
+        binary = self.fake(
+            "print('Test own header:', flush=True)\n"
+            "print('Stress loop:', flush=True)\n"
+            "time.sleep(0.2)"
+        )
+        code, out = self.run_tool(binary)
+        self.assertEqual(code, 0, out)
+        self.assertIn("2 sections", out.splitlines()[0])
+        single = out.splitlines()[out.splitlines().index("slowest sections:") + 1 :]
+        self.assertTrue(single[0].endswith("loop:"), out)
+
     def test_a_failing_test_exits_1(self) -> None:
         binary = self.fake("print('test — a', flush=True)\nsys.exit(3)")
         code, out = self.run_tool(binary)

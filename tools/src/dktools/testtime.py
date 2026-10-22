@@ -5,10 +5,10 @@ the ctest.h harness prints.  A section lasts from its header to the next
 header (the last one to the program's exit).  Prints the slowest
 sections, so a slow suite shows which part to shrink or to mark slow.
 
-Timestamps are taken when a line arrives, so headers must be flushed when
-printed: ctest.h's TEST and TEST_DESC flush; a suite printing its own
-headers with plain printf through a pipe arrives in buffered batches and
-is timed only per batch.
+Timestamps are taken when a line arrives: datakit-test line-buffers its
+stdout, so every line, a suite's own printf headers included, arrives
+when printed.  Besides ctest.h's "test — " headers, the headers suites
+print themselves (SUITE_PREFIXES) open sections too; --prefix adds more.
 
 The program runs in its own process group, bounded by ``--timeout``
 (stopped, with its children, when it runs over).  Exits with 1 when the
@@ -30,6 +30,10 @@ from . import procs
 
 #: The section header ctest.h's TEST and TEST_DESC macros print.
 SECTION_PREFIX = "test — "
+
+#: Headers suites print themselves (flex's "Test ...:", "Stress ...",
+#: "FUZZ: ...", and "Testing ..."), recognized by default too.
+SUITE_PREFIXES = ("Test ", "Testing ", "Stress ", "FUZZ: ")
 
 
 @dataclass(frozen=True)
@@ -130,7 +134,9 @@ def run(
             finally:
                 watchdog.cancel()
     end = time.monotonic()
-    found = sections(stamped, end, (SECTION_PREFIX, *extra_prefixes))
+    found = sections(
+        stamped, end, (SECTION_PREFIX, *SUITE_PREFIXES, *extra_prefixes)
+    )
     print(render(found, end - start, top))
     if timed_out.is_set():
         print(f"testtime: {test} ran past {timeout:g}s; stopped", file=sys.stderr)

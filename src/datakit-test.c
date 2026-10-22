@@ -12257,6 +12257,12 @@ int main(int argc, char *argv[]) {
     /* Don't break the databox size contract! */
     assert(sizeof(databox) == 16);
 
+    /* Line-buffer stdout even through a pipe, so every test's output (its
+     * section headers included, whether printed by ctest.h or by the
+     * suite itself) arrives when printed: ctest logs interleave with
+     * stderr in order, and dktools testtime times sections exactly. */
+    setvbuf(stdout, NULL, _IOLBF, BUFSIZ);
+
     if (argc < 2) {
         printUsage(argv[0]);
         return 1;
