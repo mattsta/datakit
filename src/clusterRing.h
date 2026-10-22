@@ -80,6 +80,8 @@ typedef enum clusterResult {
     CLUSTER_ERR_INVALID_STATE = -6,
     CLUSTER_ERR_ALLOC_FAILED = -7,
     CLUSTER_ERR_INVALID_CONFIG = -8,
+    CLUSTER_ERR_AFFINITY = -9, /* no replica set meets a required affinity
+                                  rule (too few distinct locations) */
 } clusterResult;
 
 /* ====================================================================
@@ -277,10 +279,12 @@ typedef struct clusterRingConfig {
 /* Placement result: uses multilist for dynamic node pointer storage.
  * Use clusterPlacementFree() to release resources. */
 typedef struct clusterPlacement {
-    const clusterNode *primary;      /* Primary replica */
-    multilist *replicas;             /* All replicas (self-managing) */
-    uint32_t healthyCount;           /* Currently healthy */
-    uint64_t hashValue;              /* Computed hash of key */
+    const clusterNode *primary; /* Primary replica */
+    multilist *replicas;        /* All replicas (self-managing) */
+    uint32_t healthyCount;      /* Currently healthy */
+    bool spreadMet;     /* every affinity rule (soft ones too) reached its
+                           minSpread; required ones always do */
+    uint64_t hashValue; /* Computed hash of key */
     const clusterKeySpace *keySpace; /* Resolved keyspace */
 } clusterPlacement;
 
@@ -384,7 +388,15 @@ const clusterLocation *clusterNodeGetLocation(const clusterNode *node);
  * Data Placement (Core API)
  * ==================================================================== */
 
-/* Locate replicas for a key */
+/* Locate replicas for a key: defaultQuorum.replicaCount nodes from the
+ * ring's strategy, chosen to meet the ring's affinity rules.  The
+ * strategy's preference order decides among nodes; nodes that add a
+ * location value a rule still needs (at the rule's level, until its
+ * minSpread) are taken first, then the most preferred of the rest, and
+ * the replicas keep preference order (primary first).  Returns
+ * CLUSTER_ERR_AFFINITY when a required rule cannot be met (too few
+ * distinct locations, or minSpread above the replica count); a soft rule
+ * that cannot be met leaves out->spreadMet false. */
 clusterResult clusterRingLocate(const clusterRing *ring, const void *key,
                                 uint32_t keyLen, clusterPlacement *out);
 
@@ -395,7 +407,9 @@ clusterResult clusterRingLocate(const clusterRing *ring, const void *key,
 clusterResult clusterRingLocateBox(const clusterRing *ring, const databox *key,
                                    clusterPlacement *out);
 
-/* Locate with keyspace override */
+/* clusterRingLocate under a keyspace's settings: its quorum.replicaCount
+ * (the ring's default when 0) and its affinity rules (the ring's when it
+ * has none) */
 clusterResult clusterRingLocateKeyspace(const clusterRing *ring,
                                         const clusterKeySpace *ks,
                                         const void *key, uint32_t keyLen,
@@ -413,12 +427,16 @@ clusterResult clusterRingLocateBulk(const clusterRing *ring,
  * Routing Decisions
  * ==================================================================== */
 
-/* Plan a write operation */
+/* Plan a write operation.  `quorum` (the ring default when NULL) gives
+ * the replica count (the ring default when its replicaCount is 0) and
+ * the sync/ack requirements; replicas meet the ring's affinity rules as
+ * in clusterRingLocate. */
 clusterResult clusterRingPlanWrite(const clusterRing *ring, const void *key,
                                    uint32_t keyLen, const clusterQuorum *quorum,
                                    clusterWriteSet *out);
 
-/* Plan a read operation */
+/* Plan a read operation (replica count and affinity as in
+ * clusterRingPlanWrite) */
 clusterResult clusterRingPlanRead(const clusterRing *ring, const void *key,
                                   uint32_t keyLen, const clusterQuorum *quorum,
                                   clusterReadSet *out);
@@ -609,7 +627,7 @@ void clusterRingIterateNodesByState(const clusterRing *ring,
 /* Iterate nodes at topology level */
 void clusterRingIterateNodesByLocation(const clusterRing *ring,
                                        clusterTopologyLevel level,
-                                       uint32_t levelValue,
+                                       uint64_t levelValue,
                                        clusterNodeIterFn fn, void *userData);
 
 /* ====================================================================

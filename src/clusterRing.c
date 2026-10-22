@@ -27,6 +27,7 @@ defcleanerName(uint32_t *, zfree, U32);
 defcleanerName(const clusterNode **, zfree, NodePtrs);
 defcleanerName(clusterAffinityRule *, zfree, Rules);
 defcleanerName(char *, zfree, Chars);
+defcleanerName(bool *, zfree, Bools);
 
 /* ====================================================================
  * Platform-Specific Optimization Hints
@@ -1839,8 +1840,96 @@ uint32_t clusterLocateBounded(const clusterRing *ring, const void *key,
  * Core Placement API
  * ==================================================================== */
 
-clusterResult clusterRingLocate(const clusterRing *ring, const void *key,
-                                uint32_t keyLen, clusterPlacement *out) {
+static uint64_t getLocationValue(const clusterLocation *loc,
+                                 clusterTopologyLevel level);
+
+/* Whether `node`'s location value at `level` differs from every picked
+ * node's */
+static bool clusterValueIsNew(const clusterNode *node,
+                              clusterTopologyLevel level,
+                              const clusterNode *const *picked,
+                              uint32_t pickedCount) {
+    const uint64_t v = getLocationValue(&node->location, level);
+    for (uint32_t p = 0; p < pickedCount; p++) {
+        if (getLocationValue(&picked[p]->location, level) == v) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Choose `want` of the `count` candidates (strategy preference order) to
+ * meet `rules`: candidates that add a location value some rule still
+ * needs (at its level, below its minSpread) are taken first, most
+ * preferred first; then the most preferred of the rest.  The chosen keep
+ * preference order in `out`.  Returns how many were chosen; *requiredMet
+ * / *allMet say whether the required / all rules reached minSpread. */
+static uint32_t clusterSelectReplicas(const clusterNode *const *cand,
+                                      uint32_t count, uint32_t want,
+                                      const clusterAffinityRule *rules,
+                                      uint8_t ruleCount,
+                                      const clusterNode **out,
+                                      bool *requiredMet, bool *allMet) {
+    bool chosenStack[64];
+    cleanerName(zfree, Bools) bool *chosenHeap =
+        count > 64 ? zcalloc(count, sizeof(bool)) : NULL;
+    bool *chosen = count > 64 ? chosenHeap : chosenStack;
+    memset(chosen, 0, (count > 64 ? count : 64) * sizeof(bool));
+
+    uint32_t distinct[256] = {0}; /* per rule, distinct values chosen */
+    const clusterNode *picked[256];
+    uint32_t pickedCount = 0;
+
+    /* Spread pass: take what a rule still needs */
+    for (uint32_t i = 0; i < count && pickedCount < want; i++) {
+        bool needed = false;
+        for (uint8_t r = 0; r < ruleCount && !needed; r++) {
+            needed = distinct[r] < rules[r].minSpread &&
+                     clusterValueIsNew(cand[i], rules[r].spreadLevel, picked,
+                                       pickedCount);
+        }
+        if (!needed) {
+            continue;
+        }
+        for (uint8_t r = 0; r < ruleCount; r++) {
+            distinct[r] += clusterValueIsNew(cand[i], rules[r].spreadLevel,
+                                             picked, pickedCount);
+        }
+        chosen[i] = true;
+        picked[pickedCount++] = cand[i];
+    }
+
+    /* Fill pass: the most preferred of the rest */
+    for (uint32_t i = 0; i < count && pickedCount < want; i++) {
+        if (!chosen[i]) {
+            chosen[i] = true;
+            pickedCount++;
+        }
+    }
+
+    *requiredMet = true;
+    *allMet = true;
+    for (uint8_t r = 0; r < ruleCount; r++) {
+        if (distinct[r] < rules[r].minSpread) {
+            *allMet = false;
+            *requiredMet = *requiredMet && !rules[r].required;
+        }
+    }
+
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        if (chosen[i]) {
+            out[n++] = cand[i];
+        }
+    }
+    return n;
+}
+
+/* clusterRingLocate with an explicit replica count and rule set */
+static clusterResult
+clusterRingLocateWith(const clusterRing *ring, const void *key, uint32_t keyLen,
+                      uint32_t replicaCount, const clusterAffinityRule *rules,
+                      uint8_t ruleCount, clusterPlacement *out) {
     if (!ring || !key || keyLen == 0 || !out) {
         return CLUSTER_ERR;
     }
@@ -1856,8 +1945,14 @@ clusterResult clusterRingLocate(const clusterRing *ring, const void *key,
     /* Update stats */
     ((clusterRing *)ring)->stats.locateOps++; /* Cast away const */
 
-    /* Use a reasonable buffer for strategy results - no static limit */
-    uint32_t maxReplicas = ring->defaultQuorum.replicaCount;
+    /* With affinity rules the strategy ranks every node, so the selection
+     * can reach past the first replicaCount for the spread it needs.
+     * Replica sets are bounded by the picked-node scratch (256). */
+    if (replicaCount > 256) {
+        replicaCount = 256;
+    }
+    const bool spread = rules && ruleCount > 0;
+    uint32_t maxReplicas = spread ? ring->nodeCount : replicaCount;
 
     /* Temporary stack buffer for strategy results */
     const clusterNode *stackReplicas[64];
@@ -1905,6 +2000,38 @@ clusterResult clusterRingLocate(const clusterRing *ring, const void *key,
         return CLUSTER_ERR_NO_NODES;
     }
 
+    /* Spread the replicas as the rules ask (in place: the selection keeps
+     * preference order, so it never overtakes the candidates it reads).
+     * A strategy may rank only some nodes (Jump's probes collide), so the
+     * healthy nodes it left out follow its ranking, in ring order. */
+    out->spreadMet = true;
+    if (spread && found < maxReplicas) {
+        seenTracker listed;
+        seenTrackerInit(&listed, ring->nodeCount);
+        for (uint32_t c = 0; c < found; c++) {
+            seenTrackerSet(&listed, replicas[c]->arrayIndex);
+        }
+        for (uint32_t i = 0; i < ring->nodeCount && found < maxReplicas; i++) {
+            const clusterNode *node = ring->nodeArray[i];
+            if (node && node->state == CLUSTER_NODE_UP &&
+                !seenTrackerTest(&listed, i)) {
+                replicas[found++] = node;
+            }
+        }
+        seenTrackerFree(&listed);
+    }
+
+    if (spread) {
+        bool requiredMet = true;
+        found = clusterSelectReplicas(replicas, found, replicaCount, rules,
+                                      ruleCount, replicas, &requiredMet,
+                                      &out->spreadMet);
+        if (!requiredMet) {
+            clusterPlacementFree(out);
+            return CLUSTER_ERR_AFFINITY;
+        }
+    }
+
     /* Copy results to output multilist */
     out->primary = replicas[0];
     out->healthyCount = 0;
@@ -1916,6 +2043,16 @@ clusterResult clusterRingLocate(const clusterRing *ring, const void *key,
     }
 
     return CLUSTER_OK;
+}
+
+clusterResult clusterRingLocate(const clusterRing *ring, const void *key,
+                                uint32_t keyLen, clusterPlacement *out) {
+    if (!ring) {
+        return CLUSTER_ERR;
+    }
+    return clusterRingLocateWith(
+        ring, key, keyLen, ring->defaultQuorum.replicaCount,
+        ring->affinityRules, ring->affinityRuleCount, out);
 }
 
 /* The bytes a boxed key places by: a string's content (embedded or not)
@@ -1987,7 +2124,19 @@ clusterResult clusterRingLocateKeyspace(const clusterRing *ring,
                                         const clusterKeySpace *ks,
                                         const void *key, uint32_t keyLen,
                                         clusterPlacement *out) {
-    clusterResult result = clusterRingLocate(ring, key, keyLen, out);
+    if (!ring || !ks) {
+        return CLUSTER_ERR;
+    }
+
+    /* The keyspace's replica count and rules, else the ring's */
+    const uint32_t replicaCount = ks->quorum.replicaCount
+                                      ? ks->quorum.replicaCount
+                                      : ring->defaultQuorum.replicaCount;
+    const bool ownRules = ks->rules && ks->ruleCount > 0;
+    clusterResult result = clusterRingLocateWith(
+        ring, key, keyLen, replicaCount,
+        ownRules ? ks->rules : ring->affinityRules,
+        ownRules ? ks->ruleCount : ring->affinityRuleCount, out);
     if (result == CLUSTER_OK) {
         out->keySpace = ks;
     }
@@ -2039,7 +2188,10 @@ clusterResult clusterRingPlanWrite(const clusterRing *ring, const void *key,
 
     /* Get placement */
     clusterPlacement placement;
-    clusterResult result = clusterRingLocate(ring, key, keyLen, &placement);
+    clusterResult result = clusterRingLocateWith(
+        ring, key, keyLen,
+        q->replicaCount ? q->replicaCount : ring->defaultQuorum.replicaCount,
+        ring->affinityRules, ring->affinityRuleCount, &placement);
     if (result != CLUSTER_OK) {
         clusterWriteSetFree(out);
         return result;
@@ -2090,7 +2242,10 @@ clusterResult clusterRingPlanRead(const clusterRing *ring, const void *key,
 
     /* Get placement */
     clusterPlacement placement;
-    clusterResult result = clusterRingLocate(ring, key, keyLen, &placement);
+    clusterResult result = clusterRingLocateWith(
+        ring, key, keyLen,
+        q->replicaCount ? q->replicaCount : ring->defaultQuorum.replicaCount,
+        ring->affinityRules, ring->affinityRuleCount, &placement);
     if (result != CLUSTER_OK) {
         clusterReadSetFree(out);
         return result;
@@ -2172,11 +2327,11 @@ clusterResult clusterRingSelectReadNode(const clusterRing *ring,
  * Affinity Checking
  * ==================================================================== */
 
-static uint32_t getLocationValue(const clusterLocation *loc,
+static uint64_t getLocationValue(const clusterLocation *loc,
                                  clusterTopologyLevel level) {
     switch (level) {
     case CLUSTER_LEVEL_NODE:
-        return (uint32_t)loc->nodeId;
+        return loc->nodeId;
     case CLUSTER_LEVEL_RACK:
         return loc->rackId;
     case CLUSTER_LEVEL_CAGE:
@@ -2206,7 +2361,7 @@ bool clusterCheckAffinity(const clusterRing *ring, const clusterNode **nodes,
     }
 
     /* Dynamically allocate tracking array based on count */
-    cleanerName(zfree, U32) uint32_t *values = zcalloc(count, sizeof(uint32_t));
+    cleanerName(zfree, U64) uint64_t *values = zcalloc(count, sizeof(uint64_t));
     if (!values) {
         return false; /* Allocation failure - fail constraint check */
     }
@@ -2220,7 +2375,7 @@ bool clusterCheckAffinity(const clusterRing *ring, const clusterNode **nodes,
         uint32_t uniqueCount = 0;
 
         for (uint32_t i = 0; i < count; i++) {
-            uint32_t val =
+            const uint64_t val =
                 getLocationValue(&nodes[i]->location, rule->spreadLevel);
 
             /* Check if we've seen this value */
@@ -2664,7 +2819,7 @@ void clusterRingIterateNodesByState(const clusterRing *ring,
 
 void clusterRingIterateNodesByLocation(const clusterRing *ring,
                                        clusterTopologyLevel level,
-                                       uint32_t levelValue,
+                                       uint64_t levelValue,
                                        clusterNodeIterFn fn, void *userData) {
     if (!ring || !fn) {
         return;
@@ -5823,6 +5978,123 @@ int clusterRingTest(int argc, char *argv[]) {
         }
     }
 
+    /* Placement meets affinity rules: required spread is reached or the
+     * placement is refused, soft spread is best effort and reported, the
+     * primary stays the strategy's first choice, keyspaces bring their
+     * own replica count and rules, and write plans size by their quorum */
+    TEST("affinity rules and keyspace settings shape every placement") {
+        for (clusterStrategyType s = CLUSTER_STRATEGY_KETAMA;
+             s < CLUSTER_STRATEGY_CUSTOM; s++) {
+            clusterAffinityRule racks = {.spreadLevel = CLUSTER_LEVEL_RACK,
+                                         .minSpread = 3,
+                                         .required = true};
+            const clusterRingConfig config = {
+                .strategyType = s,
+                .defaultQuorum = {.replicaCount = 3},
+                .affinityRules = &racks,
+                .affinityRuleCount = 1,
+            };
+            cleaner(clusterRingFree) clusterRing *ring =
+                clusterRingNew(&config);
+            const clusterRingConfig plainConfig = {
+                .strategyType = s, .defaultQuorum = {.replicaCount = 3}};
+            cleaner(clusterRingFree) clusterRing *plain =
+                clusterRingNew(&plainConfig);
+            for (uint64_t id = 1; id <= 12; id++) {
+                /* Racks 0-3, zones 0-2; nodes 1-4 share rack 1's zone */
+                const clusterNodeConfig nc = {
+                    .id = id,
+                    .location = {.nodeId = id,
+                                 .rackId = (uint32_t)(id % 4),
+                                 .azId = (uint32_t)(id % 3)}};
+                clusterRingAddNode(ring, &nc);
+                clusterRingAddNode(plain, &nc);
+            }
+
+            for (uint32_t k = 0; k < 200; k++) {
+                char key[16];
+                const int len = snprintf(key, sizeof(key), "key%u", k);
+                clusterPlacement p;
+                clusterPlacement q;
+                if (clusterRingLocate(ring, key, (uint32_t)len, &p) !=
+                    CLUSTER_OK) {
+                    ERR("strategy %d key %u not placed", (int)s, k);
+                    continue;
+                }
+                clusterRingLocate(plain, key, (uint32_t)len, &q);
+                const size_t n = clusterPlacementReplicaCount(&p);
+                uint64_t rackSeen = 0;
+                for (size_t r = 0; r < n; r++) {
+                    rackSeen |=
+                        UINT64_C(1)
+                        << clusterPlacementGetReplica(&p, r)->location.rackId;
+                }
+                if (n != 3 || __builtin_popcountll(rackSeen) != 3 ||
+                    !p.spreadMet || p.primary->id != q.primary->id) {
+                    ERR("strategy %d key %u: %zu replicas over %d racks, "
+                        "primary %" PRIu64 " vs %" PRIu64,
+                        (int)s, k, n, __builtin_popcountll(rackSeen),
+                        p.primary->id, q.primary->id);
+                    k = 200;
+                }
+                clusterPlacementFree(&p);
+                clusterPlacementFree(&q);
+            }
+
+            /* Five racks cannot be had from four: required refuses, soft
+             * places and reports */
+            clusterAffinityRule five = {.spreadLevel = CLUSTER_LEVEL_RACK,
+                                        .minSpread = 5,
+                                        .required = true};
+            clusterKeySpaceConfig hard = {.name = "hard",
+                                          .quorum = {.replicaCount = 6},
+                                          .rules = &five,
+                                          .ruleCount = 1,
+                                          .strategy = s};
+            clusterKeySpace *hardKs = NULL;
+            clusterRingAddKeySpace(ring, &hard, &hardKs);
+            five.required = false;
+            hard.name = "soft";
+            clusterKeySpace *softKs = NULL;
+            clusterRingAddKeySpace(ring, &hard, &softKs);
+            clusterPlacement p;
+            if (clusterRingLocateKeyspace(ring, hardKs, "k", 1, &p) !=
+                CLUSTER_ERR_AFFINITY) {
+                ERR("strategy %d: unmeetable required spread placed", (int)s);
+            }
+            if (clusterRingLocateKeyspace(ring, softKs, "k", 1, &p) !=
+                    CLUSTER_OK ||
+                p.spreadMet || clusterPlacementReplicaCount(&p) != 6 ||
+                p.keySpace != softKs) {
+                ERR("strategy %d: soft spread not best-effort", (int)s);
+            }
+            clusterPlacementFree(&p);
+
+            /* A keyspace without rules uses the ring's; its replica count
+             * is its own */
+            const clusterKeySpaceConfig two = {
+                .name = "two", .quorum = {.replicaCount = 2}, .strategy = s};
+            clusterKeySpace *twoKs = NULL;
+            clusterRingAddKeySpace(ring, &two, &twoKs);
+            if (clusterRingLocateKeyspace(ring, twoKs, "k", 1, &p) !=
+                CLUSTER_ERR_AFFINITY) {
+                ERR("strategy %d: ring rule (3 racks) met by 2 replicas",
+                    (int)s);
+            }
+
+            /* Write plans size by their quorum */
+            const clusterQuorum five_replicas = {.replicaCount = 5,
+                                                 .writeQuorum = 3};
+            clusterWriteSet ws;
+            if (clusterRingPlanWrite(ring, "k", 1, &five_replicas, &ws) !=
+                    CLUSTER_OK ||
+                clusterWriteSetTargetCount(&ws) != 5) {
+                ERR("strategy %d: write plan ignored its quorum", (int)s);
+            }
+            clusterWriteSetFree(&ws);
+        }
+    }
+
     TEST("strategies place identically after a snapshot round trip") {
         char longName[6000];
         memset(longName, 'n', sizeof(longName) - 1);
@@ -5840,12 +6112,19 @@ int clusterRingTest(int argc, char *argv[]) {
             };
             cleaner(clusterRingFree) clusterRing *ring =
                 clusterRingNew(&config);
+            /* Nodes spread over 4 racks and 3 zones, so the ring's spread
+             * rules can be met */
             const clusterNodeConfig batch[] = {
-                {.id = 1, .weight = 50}, {.id = 2}, {.id = 3, .weight = 200}};
+                {.id = 1, .weight = 50, .location = {.rackId = 1, .azId = 1}},
+                {.id = 2, .location = {.rackId = 2, .azId = 2}},
+                {.id = 3, .weight = 200, .location = {.rackId = 3}}};
             clusterRingAddNodes(ring, batch, 3);
             for (uint64_t id = 4; id <= 40; id++) {
-                const clusterNodeConfig nc = {.id = id,
-                                              .weight = (uint32_t)(id * 7)};
+                const clusterNodeConfig nc = {
+                    .id = id,
+                    .weight = (uint32_t)(id * 7),
+                    .location = {.rackId = (uint32_t)(id % 4),
+                                 .azId = (uint32_t)(id % 3)}};
                 clusterRingAddNode(ring, &nc);
             }
             clusterRingRemoveNode(ring, 5);
