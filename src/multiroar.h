@@ -123,7 +123,11 @@ double multiroarDice(const multiroar *a, const multiroar *b);
 /* Statistics and memory */
 uint64_t multiroarMemoryUsage(const multiroar *r);
 
-/* Serialization */
+/* Serialization of bit-mode multiroars.  A value-mode multiroar does not
+ * serialize: both size and serialize return 0 for it.  Deserialize returns
+ * NULL for malformed bytes: it checks the framing, that chunk ids ascend,
+ * and that each position listing holds 1 to 629 ascending in-chunk
+ * positions. */
 uint64_t multiroarSerialize(const multiroar *r, void *buf, uint64_t bufSize);
 multiroar *multiroarDeserialize(const void *buf, uint64_t bufSize);
 uint64_t multiroarSerializedSize(const multiroar *r);

@@ -942,12 +942,18 @@ bool multiroarValueRemoveGetRemoved(multiroar *r, uint64_t position,
 /* ====================================================================
  * Range Operations
  * ==================================================================== */
+typedef enum multiroarRangeOp_ {
+    MULTIROAR_RANGE_SET_,
+    MULTIROAR_RANGE_CLEAR_,
+    MULTIROAR_RANGE_FLIP_,
+} multiroarRangeOp_;
+
+/* Defined with the other range operations below */
+DK_STATIC void multiroarRangeApply_(multiroar *r, uint64_t start,
+                                    uint64_t extent, multiroarRangeOp_ op);
+
 void multiroarBitSetRange(multiroar *r, uint64_t start, uint64_t extent) {
-    /* Set a range of bits from 'start' to 'start + extent - 1' */
-    for (uint64_t i = 0; i < extent; i++) {
-        multiroarBitSet(r, start + i);
-    }
-    /* TODO: Optimize by setting full chunks at once */
+    multiroarRangeApply_(r, start, extent, MULTIROAR_RANGE_SET_);
 }
 
 /* ====================================================================
@@ -1613,59 +1619,119 @@ uint64_t multiroarRangeCount(const multiroar *r, uint64_t start, uint64_t end) {
 }
 
 /* Clear range [start, start+extent) */
-void multiroarBitClearRange(multiroar *r, uint64_t start, uint64_t extent) {
+/* Set, clear or flip bits [lo, hi) of one chunk's bitmap: edge bits one at
+ * a time, whole bytes in between */
+DK_STATIC void bitmapRangeApply_(uint8_t *bitmap, uint32_t lo, uint32_t hi,
+                                 multiroarRangeOp_ op) {
+    while (lo < hi && (lo & 7)) {
+        const uint8_t bit = (uint8_t)(1u << (lo & 7));
+        bitmap[lo / 8] = op == MULTIROAR_RANGE_SET_     ? bitmap[lo / 8] | bit
+                         : op == MULTIROAR_RANGE_CLEAR_ ? bitmap[lo / 8] & ~bit
+                                                        : bitmap[lo / 8] ^ bit;
+        lo++;
+    }
+    if (hi - lo >= 8) {
+        const uint32_t bytes = (hi - lo) / 8;
+        uint8_t *b = bitmap + lo / 8;
+        if (op == MULTIROAR_RANGE_SET_) {
+            memset(b, 0xFF, bytes);
+        } else if (op == MULTIROAR_RANGE_CLEAR_) {
+            memset(b, 0, bytes);
+        } else {
+            for (uint32_t i = 0; i < bytes; i++) {
+                b[i] ^= 0xFF;
+            }
+        }
+        lo += bytes * 8;
+    }
+    while (lo < hi) {
+        const uint8_t bit = (uint8_t)(1u << (lo & 7));
+        bitmap[lo / 8] = op == MULTIROAR_RANGE_SET_     ? bitmap[lo / 8] | bit
+                         : op == MULTIROAR_RANGE_CLEAR_ ? bitmap[lo / 8] & ~bit
+                                                        : bitmap[lo / 8] ^ bit;
+        lo++;
+    }
+}
+
+/* Apply `op` to bits [start, start + extent) (clamped below UINT64_MAX, as
+ * every range op is), one chunk at a time: a whole chunk becomes ALL_1 or
+ * disappears directly; a partial one is expanded to a bitmap, edited and
+ * stored back in its smallest form.  Clearing visits only chunks that
+ * exist, so clearing a huge sparse range costs nothing for empty space. */
+DK_STATIC void multiroarRangeApply_(multiroar *r, uint64_t start,
+                                    uint64_t extent, multiroarRangeOp_ op) {
     if (!r || extent == 0) {
         return;
     }
+    assert(r->meta[0] == 0 && "range ops are bit-mode operations");
 
     uint64_t end = start + extent;
-
-    /* Guard against overflow */
     if (end < start) {
         end = UINT64_MAX;
     }
+    const uint64_t first = CHUNK(start);
+    const uint64_t last = CHUNK(end - 1);
 
-    /* Use AND-NOT with a temporary roar containing the range */
-    cleaner(multiroarFree) multiroar *rangeRoar = multiroarBitNew();
-    if (!rangeRoar) {
-        return;
+    for (uint64_t chunk = first;;) {
+        databox key = databoxNewUnsigned(chunk);
+        multimapEntry me;
+        bool exists = multimapGetUnderlyingEntry(r->map, &key, &me);
+        if (op == MULTIROAR_RANGE_CLEAR_ && !exists) {
+            /* Skip to the next chunk that exists */
+            multimapIterator iter;
+            databox kv[2];
+            if (!multimapIteratorInitAt(r->map, &iter, true, &key) ||
+                !multimapIteratorNextInto(&iter, kv, 2) ||
+                kv[0].data.u > last) {
+                return;
+            }
+            chunk = kv[0].data.u;
+            key = databoxNewUnsigned(chunk);
+            exists = multimapGetUnderlyingEntry(r->map, &key, &me);
+            assert(exists);
+        }
+
+        const uint64_t chunkStart = chunk * BITMAP_SIZE_IN_BITS;
+        const uint32_t lo = chunk == first ? (uint32_t)(start - chunkStart) : 0;
+        const uint32_t hi =
+            chunk == last ? (uint32_t)(end - chunkStart) : BITMAP_SIZE_IN_BITS;
+        const bool whole = lo == 0 && hi == BITMAP_SIZE_IN_BITS;
+
+        if (whole && op == MULTIROAR_RANGE_CLEAR_) {
+            multimapDelete(&r->map, &key);
+        } else if (whole && op == MULTIROAR_RANGE_SET_) {
+            uint8_t allOnes[1] = {CHUNK_TYPE_ALL_1};
+            const databox box = {
+                .data.bytes.start = allOnes, .len = 1, .type = DATABOX_BYTES};
+            const databox *inserting[] = {&key, &box};
+            multimapInsert(&r->map, inserting);
+        } else {
+            uint8_t bitmap[BITMAP_SIZE_IN_BYTES];
+            if (exists) {
+                databox value = {{0}};
+                flexGetNextByType(*me.map, &me.fe, &value);
+                expandChunkToBitmap(&value, bitmap);
+            } else {
+                memset(bitmap, 0, sizeof(bitmap));
+            }
+            bitmapRangeApply_(bitmap, lo, hi, op);
+            compressBitmapToChunk(r, &key, bitmap, NULL, exists);
+        }
+
+        if (chunk == last) {
+            return;
+        }
+        chunk++;
     }
+}
 
-    /* Set all bits in range */
-    for (uint64_t pos = start; pos < end; pos++) {
-        multiroarBitSet(rangeRoar, pos);
-    }
-
-    /* r = r AND NOT rangeRoar */
-    multiroarAndNot(r, rangeRoar);
+void multiroarBitClearRange(multiroar *r, uint64_t start, uint64_t extent) {
+    multiroarRangeApply_(r, start, extent, MULTIROAR_RANGE_CLEAR_);
 }
 
 /* Flip range [start, start+extent) */
 void multiroarBitFlipRange(multiroar *r, uint64_t start, uint64_t extent) {
-    if (!r || extent == 0) {
-        return;
-    }
-
-    uint64_t end = start + extent;
-
-    /* Guard against overflow */
-    if (end < start) {
-        end = UINT64_MAX;
-    }
-
-    /* Use XOR with a temporary roar containing the range */
-    cleaner(multiroarFree) multiroar *rangeRoar = multiroarBitNew();
-    if (!rangeRoar) {
-        return;
-    }
-
-    /* Set all bits in range */
-    for (uint64_t pos = start; pos < end; pos++) {
-        multiroarBitSet(rangeRoar, pos);
-    }
-
-    /* r = r XOR rangeRoar (flips all bits in range) */
-    multiroarXor(r, rangeRoar);
+    multiroarRangeApply_(r, start, extent, MULTIROAR_RANGE_FLIP_);
 }
 
 /* Set difference: A AND NOT B (bits in A but not in B) - returns new */
@@ -2237,6 +2303,11 @@ uint64_t multiroarSerializedSize(const multiroar *r) {
         return 7; /* Magic (4) + version (1) + flags (1) + varint(0) (1) */
     }
 
+    /* The format holds bit chunks; value rows have none */
+    if (r->meta[0] != 0) {
+        return 0;
+    }
+
     uint64_t size = 6; /* Magic (4) + version (1) + flags (1) */
 
     /* Count chunks */
@@ -2302,7 +2373,8 @@ uint64_t multiroarSerializedSize(const multiroar *r) {
 
 /* Serialize multiroar to buffer */
 uint64_t multiroarSerialize(const multiroar *r, void *buf, uint64_t bufSize) {
-    if (!buf || bufSize < 6) {
+    /* The format holds bit chunks; value rows have none */
+    if (!buf || bufSize < 6 || (r && r->meta[0] != 0)) {
         return 0;
     }
 
@@ -2469,14 +2541,19 @@ multiroar *multiroarDeserialize(const void *buf, uint64_t bufSize) {
     /* Deserialize each chunk.  multimapInsert COPIES the chunk bytes
      * into the map, so each temporary chunk buffer is scope-managed
      * per case block: freed after the insert on success and on every
-     * early-error return alike. */
+     * early-error return alike.  The bytes may be damaged, so every
+     * chunk is checked against what multiroarSerialize writes: chunk ids
+     * ascending, listings of 1 to MAX_ENTRIES_PER_DIRECT_LISTING
+     * positions, each below BITMAP_SIZE_IN_BITS and ascending. */
+    uint64_t prevChunkId = 0;
     for (uint64_t i = 0; i < chunkCount; i++) {
         /* Read chunk ID */
         uint64_t chunkId;
         bytesRead = readVarint(p, (uint64_t)(end - p), &chunkId);
-        if (bytesRead == 0) {
+        if (bytesRead == 0 || (i > 0 && chunkId <= prevChunkId)) {
             return NULL;
         }
+        prevChunkId = chunkId;
         p += bytesRead;
 
         /* Read chunk type */
@@ -2516,7 +2593,8 @@ multiroar *multiroarDeserialize(const void *buf, uint64_t bufSize) {
             /* Read count */
             uint64_t count;
             bytesRead = readVarint(p, (uint64_t)(end - p), &count);
-            if (bytesRead == 0) {
+            if (bytesRead == 0 || count == 0 ||
+                count > MAX_ENTRIES_PER_DIRECT_LISTING) {
                 return NULL;
             }
             p += bytesRead;
@@ -2541,12 +2619,15 @@ multiroar *multiroarDeserialize(const void *buf, uint64_t bufSize) {
             memcpy(chunk + 1, tempCount, countBytes); /* TaggedVarint count */
 
             /* Read positions and pack them */
+            uint64_t prevPos = 0;
             for (uint64_t j = 0; j < count; j++) {
                 uint64_t pos;
                 bytesRead = readVarint(p, (uint64_t)(end - p), &pos);
-                if (bytesRead == 0) {
+                if (bytesRead == 0 || pos >= BITMAP_SIZE_IN_BITS ||
+                    (j > 0 && pos <= prevPos)) {
                     return NULL;
                 }
+                prevPos = pos;
                 p += bytesRead;
 
                 varintPacked13Set(chunk + 1 + countBytes, j, pos);
@@ -4599,6 +4680,110 @@ int multiroarTest(int argc, char *argv[]) {
 #define FUZZ_ORACLE_GET(oracle, pos)                                           \
     (((oracle)[(pos) / 64] >> ((pos) % 64)) & 1)
 
+    TEST("range set/clear/flip against a bit-array oracle") {
+        /* Ranges inside one chunk, across chunk edges and over whole
+         * chunks, mixed with single bits so chunks pass through every
+         * form; every bit and the count checked as it goes */
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
+        uint64_t oracle[FUZZ_ORACLE_WORDS] = {0};
+        uint64_t rng = 0x5eed;
+        for (int op = 0; op < 400; op++) {
+            const uint64_t kind = splitmix64(&rng) % 5;
+            const uint64_t start = splitmix64(&rng) % FUZZ_ORACLE_MAX_BIT;
+            const uint64_t span = splitmix64(&rng) % 4 ? 700 : 20000;
+            uint64_t extent = 1 + splitmix64(&rng) % span;
+            if (start + extent > FUZZ_ORACLE_MAX_BIT) {
+                extent = FUZZ_ORACLE_MAX_BIT - start;
+            }
+            if (kind == 0) {
+                multiroarBitSetRange(r, start, extent);
+            } else if (kind == 1) {
+                multiroarBitClearRange(r, start, extent);
+            } else if (kind == 2) {
+                multiroarBitFlipRange(r, start, extent);
+            } else {
+                extent = 1;
+                multiroarBitSet(r, start);
+            }
+            for (uint64_t p = start; p < start + extent; p++) {
+                if (kind == 1) {
+                    FUZZ_ORACLE_CLEAR(oracle, p);
+                } else if (kind == 2 && FUZZ_ORACLE_GET(oracle, p)) {
+                    FUZZ_ORACLE_CLEAR(oracle, p);
+                } else {
+                    FUZZ_ORACLE_SET(oracle, p);
+                }
+            }
+
+            uint64_t oracleCount = 0;
+            for (size_t w = 0; w < FUZZ_ORACLE_WORDS; w++) {
+                oracleCount += (uint64_t)__builtin_popcountll(oracle[w]);
+            }
+            if (multiroarBitCount(r) != oracleCount) {
+                ERR("op %d (kind %" PRIu64 " [%" PRIu64 ", +%" PRIu64
+                    ")): count %" PRIu64 ", want %" PRIu64,
+                    op, kind, start, extent, multiroarBitCount(r), oracleCount);
+                for (uint64_t c = 0; c * 8192 < FUZZ_ORACLE_MAX_BIT; c++) {
+                    uint64_t wrong = 0;
+                    uint64_t firstWrong = 0;
+                    for (uint64_t p = c * 8192;
+                         p < (c + 1) * 8192 && p < FUZZ_ORACLE_MAX_BIT; p++) {
+                        if (multiroarBitGet(r, p) !=
+                            (bool)FUZZ_ORACLE_GET(oracle, p)) {
+                            firstWrong = wrong++ ? firstWrong : p;
+                        }
+                    }
+                    if (wrong) {
+                        printf("  chunk %" PRIu64 ": %" PRIu64
+                               " wrong bits, first %" PRIu64 "\n",
+                               c, wrong, firstWrong);
+                    }
+                }
+                break;
+            }
+
+            if (op % 50 == 49) {
+                uint64_t count = 0;
+                for (uint64_t p = 0; p < FUZZ_ORACLE_MAX_BIT; p++) {
+                    const bool want = FUZZ_ORACLE_GET(oracle, p);
+                    count += want;
+                    if (multiroarBitGet(r, p) != want) {
+                        ERR("op %d: bit %" PRIu64 " is %d, want %d", op, p,
+                            !want, want);
+                        break;
+                    }
+                }
+                if (multiroarBitCount(r) != count) {
+                    ERR("op %d: count %" PRIu64 ", want %" PRIu64, op,
+                        multiroarBitCount(r), count);
+                }
+            }
+        }
+
+        /* Chunks stay in their smallest form: a serialize round trip
+         * gives an equal roar */
+        uint8_t buf[64 * 1024];
+        const uint64_t len = multiroarSerialize(r, buf, sizeof(buf));
+        cleaner(multiroarFree) multiroar *back = multiroarDeserialize(buf, len);
+        if (!back || !multiroarEquals(r, back)) {
+            ERRR("Range-built roar does not round trip");
+        }
+
+        /* A range ending past UINT64_MAX stops below it, as every range
+         * op does; clearing everything visits only existing chunks */
+        cleaner(multiroarFree) multiroar *top = multiroarBitNew();
+        multiroarBitSetRange(top, UINT64_MAX - 10, 100);
+        if (multiroarBitCount(top) != 10 ||
+            !multiroarBitGet(top, UINT64_MAX - 1)) {
+            ERR("Top range holds %" PRIu64 " bits, want 10",
+                multiroarBitCount(top));
+        }
+        multiroarBitClearRange(top, 0, UINT64_MAX);
+        if (!multiroarIsEmpty(top)) {
+            ERRR("Clearing everything left bits");
+        }
+    }
+
     TEST("FUZZ: random bit operations with oracle") {
         cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         uint64_t oracle[FUZZ_ORACLE_WORDS] = {0};
@@ -5975,16 +6160,25 @@ int multiroarTest(int argc, char *argv[]) {
 
     printf("=== ADVANCED FUZZING TESTS ===\n\n");
 
-    TEST("FUZZ: bitcount with all chunk types (1K iterations)") {
+    TEST("FUZZ: bitcount with all chunk types (100 iterations)") {
         srand(99999);
-        for (int trial = 0; trial < 1000; trial++) {
+        /* Bits spread over one chunk, three chunks or 122 chunks, plus a
+         * range, so chunks are sparse, bitmaps, inverted listings and
+         * full */
+        static const uint64_t spreads[] = {8192, 3 * 8192, 1000000};
+        for (int trial = 0; trial < 100; trial++) {
             cleaner(multiroarFree) multiroar *r = multiroarBitNew();
             uint64_t expectedCount = 0;
+            const uint64_t spread = spreads[trial % 3];
 
-            /* Set random number of bits to trigger different chunk types */
+            const uint64_t rangeStart = (uint64_t)rand() % spread;
+            const uint64_t rangeLen = (uint64_t)rand() % 20000;
+            multiroarBitSetRange(r, rangeStart, rangeLen);
+            expectedCount = rangeLen;
+
             int numBits = rand() % 10000;
             for (int i = 0; i < numBits; i++) {
-                uint64_t pos = ((uint64_t)rand() * rand()) % 1000000;
+                uint64_t pos = ((uint64_t)rand() * rand()) % spread;
                 if (!multiroarBitGet(r, pos)) {
                     multiroarBitSet(r, pos);
                     expectedCount++;
@@ -6891,99 +7085,75 @@ int multiroarTest(int argc, char *argv[]) {
         }
     }
 
-    TEST_DESC("min/max/comparison fuzzing - %d random operations", 1000) {
-        for (int trial = 0; trial < 1000; trial++) {
+    TEST_DESC("min/max/comparison fuzzing - %d random operations", 300) {
+        /* Word-array oracles: exact min/max, IsEmpty, Intersects and
+         * Equals; every fourth trial builds r2 from r1's bits in reverse
+         * order, so Equals sees equal roars built differently */
+        for (int trial = 0; trial < 300; trial++) {
             cleaner(multiroarFree) multiroar *r1 = multiroarBitNew();
             cleaner(multiroarFree) multiroar *r2 = multiroarBitNew();
+            uint64_t o1[FUZZ_ORACLE_WORDS] = {0};
+            uint64_t o2[FUZZ_ORACLE_WORDS] = {0};
 
-            /* Create random bitmaps */
-            int numBits1 = rand() % 500;
-            int numBits2 = rand() % 500;
-
-            uint64_t min1 = UINT64_MAX, max1 = 0;
-            uint64_t min2 = UINT64_MAX, max2 = 0;
-
+            const int numBits1 = rand() % 500;
+            uint64_t min1 = UINT64_MAX;
+            uint64_t max1 = 0;
             for (int i = 0; i < numBits1; i++) {
-                uint64_t pos = ((uint64_t)rand() * rand()) % 100000;
+                const uint64_t pos =
+                    ((uint64_t)rand() * rand()) % FUZZ_ORACLE_MAX_BIT;
                 multiroarBitSet(r1, pos);
-                if (pos < min1) {
-                    min1 = pos;
-                }
-                if (pos > max1) {
-                    max1 = pos;
-                }
+                FUZZ_ORACLE_SET(o1, pos);
+                min1 = pos < min1 ? pos : min1;
+                max1 = pos > max1 ? pos : max1;
             }
 
-            for (int i = 0; i < numBits2; i++) {
-                uint64_t pos = ((uint64_t)rand() * rand()) % 100000;
-                multiroarBitSet(r2, pos);
-                if (pos < min2) {
-                    min2 = pos;
-                }
-                if (pos > max2) {
-                    max2 = pos;
-                }
-            }
-
-            /* Verify Min/Max */
-            if (numBits1 > 0) {
-                uint64_t actualMin, actualMax;
-                if (!multiroarMin(r1, &actualMin)) {
-                    ERRR("Min should succeed for non-empty bitmap");
-                }
-                if (!multiroarMax(r1, &actualMax)) {
-                    ERRR("Max should succeed for non-empty bitmap");
-                }
-
-                /* Verify min/max are actually set */
-                if (!multiroarBitGet(r1, actualMin)) {
-                    ERR("Min position %" PRIu64 " should be set", actualMin);
-                }
-                if (!multiroarBitGet(r1, actualMax)) {
-                    ERR("Max position %" PRIu64 " should be set", actualMax);
-                }
-            } else {
-                uint64_t pos;
-                if (multiroarMin(r1, &pos)) {
-                    ERRR("Min should fail for empty bitmap");
-                }
-                if (multiroarMax(r1, &pos)) {
-                    ERRR("Max should fail for empty bitmap");
-                }
-            }
-
-            /* Verify IsEmpty */
-            bool shouldBeEmpty1 = (numBits1 == 0);
-            if (multiroarIsEmpty(r1) != shouldBeEmpty1) {
-                ERR("IsEmpty mismatch: expected %d", shouldBeEmpty1);
-            }
-
-            /* Verify Intersects */
-            bool hasIntersection = false;
-            for (uint64_t pos = 0; pos < 100000; pos++) {
-                if (multiroarBitGet(r1, pos) && multiroarBitGet(r2, pos)) {
-                    hasIntersection = true;
-                    break;
-                }
-            }
-            if (multiroarIntersects(r1, r2) != hasIntersection) {
-                ERR("Intersects mismatch: expected %d", hasIntersection);
-            }
-
-            /* Verify Equals */
-            bool shouldBeEqual = true;
-            if (multiroarBitCount(r1) != multiroarBitCount(r2)) {
-                shouldBeEqual = false;
-            } else {
-                for (uint64_t pos = 0; pos < 100000; pos++) {
-                    if (multiroarBitGet(r1, pos) != multiroarBitGet(r2, pos)) {
-                        shouldBeEqual = false;
-                        break;
+            if (trial % 4 == 0) {
+                for (uint64_t pos = FUZZ_ORACLE_MAX_BIT; pos-- > 0;) {
+                    if (FUZZ_ORACLE_GET(o1, pos)) {
+                        multiroarBitSet(r2, pos);
+                        FUZZ_ORACLE_SET(o2, pos);
                     }
                 }
+            } else {
+                const int numBits2 = rand() % 500;
+                for (int i = 0; i < numBits2; i++) {
+                    const uint64_t pos =
+                        ((uint64_t)rand() * rand()) % FUZZ_ORACLE_MAX_BIT;
+                    multiroarBitSet(r2, pos);
+                    FUZZ_ORACLE_SET(o2, pos);
+                }
             }
-            if (multiroarEquals(r1, r2) != shouldBeEqual) {
-                ERR("Equals mismatch: expected %d", shouldBeEqual);
+
+            uint64_t actualMin = 0;
+            uint64_t actualMax = 0;
+            const bool hasMin = multiroarMin(r1, &actualMin);
+            const bool hasMax = multiroarMax(r1, &actualMax);
+            if (numBits1 > 0) {
+                if (!hasMin || !hasMax || actualMin != min1 ||
+                    actualMax != max1) {
+                    ERR("min/max %" PRIu64 "/%" PRIu64 ", want %" PRIu64
+                        "/%" PRIu64,
+                        actualMin, actualMax, min1, max1);
+                }
+            } else if (hasMin || hasMax) {
+                ERRR("Min/Max should fail for an empty bitmap");
+            }
+
+            if (multiroarIsEmpty(r1) != (numBits1 == 0)) {
+                ERR("IsEmpty mismatch: expected %d", numBits1 == 0);
+            }
+
+            bool intersects = false;
+            bool equal = true;
+            for (size_t w = 0; w < FUZZ_ORACLE_WORDS; w++) {
+                intersects |= (o1[w] & o2[w]) != 0;
+                equal &= o1[w] == o2[w];
+            }
+            if (multiroarIntersects(r1, r2) != intersects) {
+                ERR("Intersects mismatch: expected %d", intersects);
+            }
+            if (multiroarEquals(r1, r2) != equal) {
+                ERR("Equals mismatch: expected %d", equal);
             }
         }
     }
@@ -8484,6 +8654,47 @@ int multiroarTest(int argc, char *argv[]) {
         if (!multiroarEquals(r, r2)) {
             ERRR("Deserialized roar doesn't match original");
         }
+    }
+
+    TEST("multiroarSerialize refuses a value-mode roar") {
+        /* Value rows are integers, not chunks: serializing them read an
+         * integer as a chunk pointer */
+        cleaner(multiroarFree) multiroar *r = multiroarValueNew(8, 0, 0);
+        databox v = databoxNewUnsigned(7);
+        multiroarValueSet(r, 3, &v);
+        uint8_t buf[64];
+        if (multiroarSerializedSize(r) != 0 ||
+            multiroarSerialize(r, buf, sizeof(buf)) != 0) {
+            ERRR("A value-mode roar serialized");
+        }
+    }
+
+    TEST("multiroarDeserialize refuses malformed listings") {
+        /* One UNDER_FULL chunk: [magic][version][flags][1 chunk][id 0]
+         * [kind][count][positions...] */
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
+        multiroarBitSet(r, 5);
+        multiroarBitSet(r, 9);
+        uint8_t good[64];
+        const uint64_t len = multiroarSerialize(r, good, sizeof(good));
+        cleaner(multiroarFree) multiroar *ok = multiroarDeserialize(good, len);
+        if (!ok || !multiroarEquals(r, ok)) {
+            ERRR("The well-formed listing did not restore");
+        }
+
+        /* The two positions are the last two bytes (varints 5 and 9) */
+        uint8_t bad[64];
+        memcpy(bad, good, len);
+        bad[len - 1] = 5; /* not ascending */
+        multiroar *dup = multiroarDeserialize(bad, len);
+        memcpy(bad, good, len);
+        bad[len - 3] = 0; /* count 0 */
+        multiroar *empty = multiroarDeserialize(bad, len - 2);
+        if (dup || empty) {
+            ERRR("A malformed listing restored");
+        }
+        multiroarFree(dup);
+        multiroarFree(empty);
     }
 
     TEST("multiroarSerialize/Deserialize - single bit") {

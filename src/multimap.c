@@ -7012,6 +7012,46 @@ int multimapTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("IteratorInitAt an absent key starts at the next key, every tier") {
+        /* Even keys only; starting at each odd key must give the next
+         * even key, including where the search point falls between two
+         * of the tier's inner maps */
+        const flexCapSizeLimit limits[] = {
+            FLEX_CAP_LEVEL_2048, FLEX_CAP_LEVEL_512, FLEX_CAP_LEVEL_64};
+        const multimapType tiers[] = {MULTIMAP_TYPE_SMALL, MULTIMAP_TYPE_MEDIUM,
+                                      MULTIMAP_TYPE_FULL};
+        const int64_t counts[] = {20, 120, 2000};
+        for (size_t t = 0; t < COUNT_ARRAY(limits); t++) {
+            cleaner(multimapFree) multimap *m = multimapNewLimit(2, limits[t]);
+            for (int64_t k = 0; k < counts[t]; k++) {
+                const databox key = databoxNewSigned(2 * k);
+                const databox val = databoxNewSigned(k);
+                const databox *row[] = {&key, &val};
+                multimapInsert(&m, row);
+            }
+            if (multimapType_(m) != tiers[t]) {
+                ERR("tier %zu: built type %d", t, (int)multimapType_(m));
+                continue;
+            }
+            for (int64_t odd = -1; odd < 2 * counts[t]; odd += 2) {
+                const databox at = databoxNewSigned(odd);
+                multimapIterator iter;
+                databox got[2];
+                const bool found =
+                    multimapIteratorInitAt(m, &iter, true, &at) &&
+                    multimapIteratorNextInto(&iter, got, 2);
+                const bool wantFound = odd + 1 < 2 * counts[t];
+                const databox want = databoxNewSigned(odd + 1);
+                if (found != wantFound ||
+                    (found && !databoxEqual(&got[0], &want))) {
+                    ERR("tier %zu: start at %" PRId64 " found %d", t, odd,
+                        found);
+                    break;
+                }
+            }
+        }
+    }
+
     TEST_FINAL_RESULT;
 }
 #endif /* DATAKIT_TEST */

@@ -2319,8 +2319,19 @@ bool multimapFullIteratorInitAt(multimapFull *m, multimapIterator *iter,
     multimapFullGetUnderlyingEntryGetEntry(m, box, &me);
 
     /* If we iterated past all elements, we can't iterate any more... */
+    flex *next = NULL;
     if (me.fe == *me.map + flexBytes(*me.map)) {
-        me.fe = NULL;
+        /* ...unless the position merely ran off the end of one map while
+         * a later map holds the keys above the search point (interior maps
+         * are never empty) */
+        if (forward && me.mapIdx + 1 < m->count) {
+            me.mapIdx++;
+            next = getMap(m, me.mapIdx);
+            me.map = &next;
+            me.fe = flexHead(next);
+        } else {
+            me.fe = NULL;
+        }
     }
 
     multimapFullIteratorInitAt_(m, iter, forward, &me);

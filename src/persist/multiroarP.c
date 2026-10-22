@@ -169,17 +169,19 @@ void multiroarBitSetRangeP(multiroarP *r, size_t start, size_t extent) {
         return;
     }
 
-    /* Log each bit individually (could be optimized with batch WAL operations)
-     */
-    for (size_t i = 0; i < extent; i++) {
-        uint64_t pos = start + i;
+    /* One INSERT per bit (there is no set-range op).  If a write fails,
+     * apply exactly the bits already logged, so memory and WAL agree. */
+    size_t logged = 0;
+    while (logged < extent) {
+        uint64_t pos = start + logged;
         if (!persistCtxLogOp(r->ctx, PERSIST_OP_INSERT, &pos, 1)) {
-            return;
+            break;
         }
+        logged++;
     }
 
     /* Update in-memory */
-    multiroarBitSetRange(r->r, start, extent);
+    multiroarBitSetRange(r->r, start, logged);
 
     /* Check compaction threshold */
     persistCtxMaybeCompact(r->ctx, r->r, &persistOpsMultiroar);
@@ -190,12 +192,10 @@ void multiroarBitClearRangeP(multiroarP *r, uint64_t start, uint64_t extent) {
         return;
     }
 
-    /* Log each bit individually */
-    for (uint64_t i = 0; i < extent; i++) {
-        uint64_t pos = start + i;
-        if (!persistCtxLogOp(r->ctx, PERSIST_OP_DELETE, &pos, 1)) {
-            return;
-        }
+    /* One CLEAR_RANGE row: the whole range is logged or none of it */
+    const uint64_t range[2] = {start, extent};
+    if (!persistCtxLogOp(r->ctx, PERSIST_OP_CLEAR_RANGE, range, 2)) {
+        return;
     }
 
     /* Update in-memory */
@@ -578,9 +578,83 @@ static int test_multiroarP_fuzzing(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
+defcleaner(multiroar *, multiroarFree);
+
+static int test_multiroarP_ranges(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+
+    int err = 0;
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    char basePath[PATH_MAX];
+    if (!dkTestTmpDirPath(&tmp, "multiroarPTest_ranges", basePath,
+                          sizeof(basePath))) {
+        ERR("could not create a scratch directory: %s", strerror(errno));
+        return err;
+    }
+
+    TEST("multiroarP range set/clear and the readers survive recovery")
+
+    ptestCleanupFiles(basePath);
+    persistCtx *ctx = persistCtxNew(basePath, NULL);
+    multiroarP *r = multiroarNewP(ctx);
+    if (!multiroarIsEmptyP(r)) {
+        ERRR("A new roar is not empty");
+    }
+
+    /* [100, 400) set, [150, 200) cleared, 120 removed, 9000 set: 250 bits */
+    multiroarBitSetRangeP(r, 100, 300);
+    multiroarBitClearRangeP(r, 150, 50);
+    multiroarRemoveP(r, 120);
+    multiroarBitSetP(r, 9000);
+    cleaner(multiroarFree) multiroar *want =
+        multiroarDuplicate(multiroarGetRawP(r));
+    if (!multiroarSyncP(r) || multiroarMemoryUsageP(r) == 0) {
+        ERRR("Sync or memory usage failed");
+    }
+    persistCtxStats stats;
+    multiroarGetStatsP(r, &stats);
+    multiroarCloseP(r);
+    persistCtxFree(ctx);
+
+    ctx = persistCtxOpen(basePath, NULL);
+    r = multiroarOpenP(ctx);
+    if (!r) {
+        ERRR("Recovery failed");
+    } else {
+        uint64_t min = 0;
+        uint64_t max = 0;
+        uint64_t sel = 0;
+        if (!multiroarEquals(multiroarGetRawP(r), want)) {
+            ERRR("Recovered bits differ");
+        }
+        if (multiroarBitCountP(r) != 250 || multiroarIsEmptyP(r)) {
+            ERR("Expected 250 bits, got %zu", multiroarBitCountP(r));
+        }
+        if (!multiroarMinP(r, &min) || min != 100 || !multiroarMaxP(r, &max) ||
+            max != 9000) {
+            ERR("min/max %" PRIu64 "/%" PRIu64 ", want 100/9000", min, max);
+        }
+        /* Below 200: 100..149 except 120 */
+        if (multiroarRankP(r, 200) != 49) {
+            ERR("rank(200) = %zu, want 49", multiroarRankP(r, 200));
+        }
+        /* The 50th bit: 100..149 holds 49, so the 50th is 200 */
+        if (!multiroarSelectP(r, 50, &sel) || sel != 200) {
+            ERR("select(50) = %" PRIu64 ", want 200", sel);
+        }
+        multiroarCloseP(r);
+    }
+    persistCtxFree(ctx);
+    ptestCleanupFiles(basePath);
+
+    TEST_FINAL_RESULT;
+}
+
 int multiroarPTest(int argc, char *argv[]) {
     int err = 0;
 
+    err += test_multiroarP_ranges(argc, argv);
     err += test_multiroarP_basic(argc, argv);
     err += test_multiroarP_recovery(argc, argv);
     err += test_multiroarP_compaction(argc, argv);
