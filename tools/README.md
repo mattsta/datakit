@@ -230,6 +230,33 @@ uv run --project tools dktools validate [--rev REV] \
   everything passed with no warning, sanitizer report or hard leak
   hit; 1 on any failure; 2 on an input error.
 
+## coverage — what the tests reach, and the public API they never call
+
+```sh
+uv run --project tools dktools coverage [--rev REV] [--top N] [--skip REGEX] \
+    [--serial REGEX] [--root DIR] [-j N]
+```
+
+- Exports REV (default HEAD) like validate, builds the `coverage`
+  preset (clang 22, Release, `-fprofile-instr-generate
+  -fcoverage-mapping`, no sanitizers), runs every test with its own
+  profile file (the serial set alone, as validate does), and merges
+  the profiles with `llvm-profdata`.
+- Reports, over the library sources (`deps/`, `*Test.c`, `*Bench.c`
+  and `datakit-test.c` left out; a module's in-file tests count with
+  it): line, function, branch and region totals, and the N
+  least-covered files.
+- Splits the public API (every function declared in a `src/` header
+  other than `*Internal.h` / `*Impl.h`, without the `*Test` entry
+  points) into called, never called (count 0), and not built (no
+  counters in the test binary: a declaration without a definition, or
+  a platform's).
+- Writes `ROOT/coverage/<hash>/summary.md` and `summary.json` and
+  prints the summary. There is no percentage target: the output is
+  the list of gaps to triage. Exits 0 when every test passed, 1
+  otherwise (the report is still written once the build succeeded), 2
+  on an input error.
+
 ## leakcheck — the leakage gate
 
 Checks text about to enter history for terms that must never appear in

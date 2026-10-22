@@ -24,6 +24,8 @@ Build presets (``PRESETS``):
            clang22; opt-in, for data races.
   perf     ``cmake --preset perf`` (Release -O3 -mcpu=native -flto, no
            sanitizers), clang22; opt-in, for benchmark numbers.
+  coverage ``cmake --preset coverage`` (Release + clang source coverage,
+           no sanitizers), clang22; what ``dktools coverage`` builds.
   release  no preset, ``-DCMAKE_BUILD_TYPE=Release``; the only build
            gcc15 runs (GCC on macOS has no sanitizer runtimes).
 
@@ -61,12 +63,13 @@ PRESETS: dict[str, str | None] = {
     "debug": "debug",
     "tsan": "tsan",
     "perf": "perf",
+    "coverage": "coverage",
     "release": None,
 }
 
 #: compiler name -> the presets it builds, default first.
 COMPILER_PRESETS: dict[str, tuple[str, ...]] = {
-    "clang22": ("dev", "debug", "tsan", "perf"),
+    "clang22": ("dev", "debug", "tsan", "perf", "coverage"),
     "gcc15": ("release",),
 }
 

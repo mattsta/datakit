@@ -8,6 +8,7 @@ from pathlib import Path
 
 from . import (
     allocaudit,
+    coverage,
     leakcheck,
     perfdiff,
     procs,
@@ -90,9 +91,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     tt.add_argument("binary", type=Path, help="the datakit-test binary")
     tt.add_argument("test", help="test name, as for 'datakit-test test NAME'")
-    tt.add_argument(
-        "--top", type=int, default=15, help="sections to show (default 15)"
-    )
+    tt.add_argument("--top", type=int, default=15, help="sections to show (default 15)")
     tt.add_argument(
         "--timeout",
         type=float,
@@ -286,6 +285,34 @@ def main(argv: list[str] | None = None) -> int:
     va.add_argument("-j", "--jobs", type=int, default=None, help="parallel jobs")
     toolchain.add_arguments(va)
 
+    cv = sub.add_parser(
+        "coverage",
+        help="source coverage of a revision and the public API no test calls "
+        "(exit 0 all tests passed, 1 a failure, 2 input error)",
+    )
+    cv.add_argument("--rev", default="HEAD", help="revision to export (default HEAD)")
+    cv.add_argument(
+        "--top", type=int, default=25, help="least-covered files to list (default 25)"
+    )
+    cv.add_argument(
+        "--serial",
+        default=validate.DEFAULT_SERIAL,
+        help="ctest name regex run one at a time (default: as validate)",
+    )
+    cv.add_argument(
+        "--skip",
+        default=validate.DEFAULT_SKIP,
+        help=f"ctest name regex never run (default {validate.DEFAULT_SKIP})",
+    )
+    cv.add_argument(
+        "--root",
+        type=Path,
+        default=None,
+        help="scratch root (env DKTOOLS_SCRATCH, default: dktools/ in the temp dir)",
+    )
+    cv.add_argument("-j", "--jobs", type=int, default=None, help="parallel jobs")
+    toolchain.add_arguments(cv)
+
     vs = sub.add_parser(
         "vendorsync",
         help="mirror a vendored dependency from its upstream repository "
@@ -369,6 +396,20 @@ def _dispatch(args: argparse.Namespace) -> int:
                 leak_base=args.leak_base,
                 root=args.root,
                 jobs=args.jobs,
+            ),
+        )
+
+    if args.command == "coverage":
+        return coverage.run(
+            args.repo,
+            coverage.CoverageOptions(
+                rev=args.rev,
+                serial=args.serial,
+                skip=args.skip,
+                top=args.top,
+                root=args.root,
+                jobs=args.jobs,
+                compiler=toolchain.from_args("clang22", args),
             ),
         )
 

@@ -29,6 +29,7 @@ option(EnableASAN "Enable AddressSanitizer" OFF)
 option(EnableUBSAN "Enable UndefinedBehaviorSanitizer" OFF)
 option(EnableMSAN "Enable MemorySanitizer (Clang only)" OFF)
 option(EnableTSAN "Enable ThreadSanitizer" OFF)
+option(EnableCoverage "Instrument for clang source coverage (dktools coverage)" OFF)
 
 include(CheckCSourceRuns)
 include(CheckCSourceCompiles)
@@ -364,6 +365,22 @@ endif()
 if(EnableTSAN)
     message(STATUS "Sanitizer: ThreadSanitizer enabled")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=thread")
+endif()
+
+# Source-based coverage: every function gets execution counters, written
+# to LLVM_PROFILE_FILE at exit; `dktools coverage` merges and reports them.
+if(EnableCoverage)
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+        message(STATUS "Coverage: clang source coverage enabled")
+        set(CMAKE_C_FLAGS
+            "${CMAKE_C_FLAGS} -fprofile-instr-generate -fcoverage-mapping")
+        set(CMAKE_EXE_LINKER_FLAGS
+            "${CMAKE_EXE_LINKER_FLAGS} -fprofile-instr-generate")
+        set(CMAKE_SHARED_LINKER_FLAGS
+            "${CMAKE_SHARED_LINKER_FLAGS} -fprofile-instr-generate")
+    else()
+        message(WARNING "EnableCoverage requires Clang - ignoring")
+    endif()
 endif()
 
 # Legacy behavior: silently suppress UBSAN's alignment check on every

@@ -65,6 +65,17 @@
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
         "EnableTSAN": "ON"
       }
+    },
+    {
+      "name": "coverage",
+      "inherits": "_base",
+      "displayName": "Release + clang source coverage, NO sanitizers (dktools coverage)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "EnableASAN": "OFF",
+        "EnableUBSAN": "OFF",
+        "EnableCoverage": "ON"
+      }
     }
   ],
 
@@ -87,6 +98,10 @@
     },
     {
       "name": "tsan", "configurePreset": "tsan",
+      "targets": ["datakit-test", "datakit-static", "datakit-shared", "datakit-library"]
+    },
+    {
+      "name": "coverage", "configurePreset": "coverage",
       "targets": ["datakit-test", "datakit-static", "datakit-shared", "datakit-library"]
     }
   ]
