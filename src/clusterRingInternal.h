@@ -131,7 +131,10 @@ typedef struct clusterRendezvousData {
     uint32_t _unused;
 } clusterRendezvousData;
 
+/* Bounded-load places on a Ketama vnode ring: `ketama` leads so the
+ * vnode code reaches it as strategyData.ketama for either strategy. */
 typedef struct clusterBoundedData {
+    clusterKetamaData ketama;
     float loadFactor;    /* Max load = avg * (1 + loadFactor) */
     uint64_t *nodeLoads; /* Current load per node */
     uint32_t nodeCount;

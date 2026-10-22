@@ -139,7 +139,7 @@ typedef struct clusterNodeConfig {
 
     clusterLocation location; /* Topology placement */
 
-    uint32_t weight;        /* Relative capacity (affects vnodes) */
+    uint32_t weight;        /* Relative capacity (affects vnodes); 0 = 100 */
     uint64_t capacityBytes; /* Total storage capacity */
 
     clusterNodeState initialState; /* Starting state */
@@ -193,9 +193,14 @@ typedef enum clusterStrategyType {
     CLUSTER_STRATEGY_CUSTOM,     /* User-provided strategy */
 } clusterStrategyType;
 
-/* Virtual node configuration (for Ketama) */
+/* Most virtual nodes one node can own */
+#define CLUSTER_VNODES_PER_NODE_MAX 65536u
+
+/* Virtual node configuration (for Ketama and bounded-load).  A zero field
+ * takes its default (multiplier 150, min 10, max 500); clusterRingNew
+ * refuses min > max and max > CLUSTER_VNODES_PER_NODE_MAX. */
 typedef struct clusterVnodeConfig {
-    uint32_t vnodeMultiplier;  /* vnodes = weight * multiplier */
+    uint32_t vnodeMultiplier;  /* vnodes = weight * multiplier / 100 */
     uint32_t minVnodesPerNode; /* Floor for low-weight nodes */
     uint32_t maxVnodesPerNode; /* Cap for high-weight nodes */
     bool replicaPointSpread;   /* Spread replica points evenly */
@@ -318,7 +323,11 @@ const clusterNode *clusterReadSetGetCandidate(const clusterReadSet *rs,
  * Ring Lifecycle
  * ==================================================================== */
 
-/* Create ring with configuration */
+/* Create ring with configuration.  Returns NULL for an unknown strategy,
+ * a vnode configuration clusterVnodeConfig refuses, an affinity rule with
+ * an unknown level, or a quorum that is not valid (see
+ * clusterRingAddKeySpace); a zero defaultQuorum.replicaCount takes
+ * CLUSTER_QUORUM_BALANCED. */
 clusterRing *clusterRingNew(const clusterRingConfig *config);
 
 /* Create ring with defaults */
@@ -347,7 +356,7 @@ clusterResult clusterRingAddNodes(clusterRing *ring,
 clusterResult clusterRingSetNodeState(clusterRing *ring, uint64_t nodeId,
                                       clusterNodeState state);
 
-/* Update node weight (triggers rebalance) */
+/* Update node weight (triggers rebalance); 0 sets the default, 100 */
 clusterResult clusterRingSetNodeWeight(clusterRing *ring, uint64_t nodeId,
                                        uint32_t weight);
 
@@ -425,6 +434,10 @@ typedef struct clusterKeySpaceConfig {
     clusterStrategyType strategy; /* Override default strategy */
 } clusterKeySpaceConfig;
 
+/* Refuses (CLUSTER_ERR_INVALID_CONFIG) an unknown strategy, an affinity
+ * rule with an unknown level, and a quorum that is not valid: a known
+ * consistency level and, when replicaCount is not 0, writeQuorum,
+ * writeSync and readQuorum each at most replicaCount. */
 clusterResult clusterRingAddKeySpace(clusterRing *ring,
                                      const clusterKeySpaceConfig *config,
                                      clusterKeySpace **out);

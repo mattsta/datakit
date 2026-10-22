@@ -9969,40 +9969,55 @@ static int dkTestClusterRingFlexSerializeTest(int argc, char *argv[]) {
 /* ====================================================================
  * persistOpsClusterRing must REJECT wire input with out-of-enum state.
  * ==================================================================== */
+/* A snapshot of a JUMP ring holding nodes 41, 42, ... (count of them),
+ * with entry `idx` replaced by `value` unless idx is SIZE_MAX (caller
+ * frees with flexFree).  Snapshot entries: a 16-entry header (no ring
+ * affinity rules here), then 15 per node; a node's state is its entry
+ * 13. */
+static flex *dkTestClusterRingSnapshotWith(uint32_t count, size_t idx,
+                                           uint64_t value) {
+    clusterRingConfig config = {
+        .name = "evil",
+        .strategyType = CLUSTER_STRATEGY_JUMP,
+    };
+    cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&config);
+    for (uint32_t i = 0; i < count; i++) {
+        clusterNodeConfig nc = {
+            .id = 41u + i,
+            .name = "x",
+            .address = "y",
+            .initialState = CLUSTER_NODE_UP,
+        };
+        clusterRingAddNode(ring, &nc);
+    }
+
+    size_t len = 0;
+    /* @own: caller; free=flexFree */
+    flex *f = (flex *)persistOpsClusterRing.snapshot(ring, &len);
+    if (idx != SIZE_MAX) {
+        flexReplaceUnsigned(&f, flexIndex(f, (int32_t)idx), value);
+    }
+    return f;
+}
+
 static int dkTestClusterRingMaliciousStateTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int failures = 0;
 
-    cleaner(flexFree) flex *f = flexNew();
-    flexPushUnsigned(&f, 3u, FLEX_ENDPOINT_TAIL);
-    flexPushBytes(&f, "evil", 4u, FLEX_ENDPOINT_TAIL);
-    for (int i = 0; i < 4; i++) {
-        flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
+    /* The unmodified snapshot restores, so the refusal below is the
+     * state's */
+    cleaner(flexFree) flex *good =
+        dkTestClusterRingSnapshotWith(1, SIZE_MAX, 0);
+    clusterRing *g = clusterRingDeserialize(good, flexBytes(good));
+    if (g == NULL) {
+        printf("dkTestClusterRingMaliciousState: valid snapshot refused\n");
+        failures++;
     }
-    flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
-    for (int i = 0; i < 3; i++) {
-        flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
-    }
-    flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(&f, 1u, FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(&f, 1u, FLEX_ENDPOINT_TAIL);
-    flexPushBytes(&f, "x", 1u, FLEX_ENDPOINT_TAIL);
-    flexPushBytes(&f, "y", 1u, FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(&f, 1u, FLEX_ENDPOINT_TAIL);
-    for (int i = 0; i < 7; i++) {
-        flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
-    }
-    flexPushUnsigned(&f, 1u, FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(&f, 0xDEADBEEFull, FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
+    clusterRingFree(g);
+
+    cleaner(flexFree) flex *f =
+        dkTestClusterRingSnapshotWith(1, 16 + 13, 0xDEADBEEFu);
 
     const size_t buflen = flexBytes(f);
     clusterRing *r = clusterRingDeserialize((const void *)f, buflen);
@@ -10038,38 +10053,18 @@ static int dkTestClusterRingDuplicateIdTest(int argc, char *argv[]) {
     (void)argv;
     int failures = 0;
 
-    cleaner(flexFree) flex *f = flexNew();
-    flexPushUnsigned(&f, 3u, FLEX_ENDPOINT_TAIL);
-    flexPushBytes(&f, "dup", 3u, FLEX_ENDPOINT_TAIL);
-    for (int i = 0; i < 4; i++) {
-        flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
+    /* Nodes 41 and 42 restore; renaming the second node's id to 41 must
+     * be refused */
+    cleaner(flexFree) flex *good =
+        dkTestClusterRingSnapshotWith(2, SIZE_MAX, 0);
+    clusterRing *g = clusterRingDeserialize(good, flexBytes(good));
+    if (g == NULL) {
+        printf("dkTestClusterRingDuplicateId: valid snapshot refused\n");
+        failures++;
     }
-    flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
-    for (int i = 0; i < 3; i++) {
-        flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
-    }
-    flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(&f, 2u, FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
+    clusterRingFree(g);
 
-    for (int n = 0; n < 2; n++) {
-        flexPushUnsigned(&f, 42u, FLEX_ENDPOINT_TAIL);
-        flexPushBytes(&f, "n", 1u, FLEX_ENDPOINT_TAIL);
-        flexPushBytes(&f, "a", 1u, FLEX_ENDPOINT_TAIL);
-        flexPushUnsigned(&f, 42u, FLEX_ENDPOINT_TAIL);
-        for (int i = 0; i < 7; i++) {
-            flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
-        }
-        flexPushUnsigned(&f, 1u, FLEX_ENDPOINT_TAIL);
-        flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
-        flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
-        flexPushUnsigned(&f, 0u, FLEX_ENDPOINT_TAIL);
-    }
+    cleaner(flexFree) flex *f = dkTestClusterRingSnapshotWith(2, 16 + 15, 41u);
 
     const size_t buflen = flexBytes(f);
     clusterRing *r = clusterRingDeserialize((const void *)f, buflen);

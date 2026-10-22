@@ -33,6 +33,7 @@ extern const persistContractType persistContractMultiOrderedSet;
 extern const persistContractType persistContractMultiLRU;
 extern const persistContractType persistContractHmacKeyring;
 extern const persistContractType persistContractClusterMailbox;
+extern const persistContractType persistContractClusterRing;
 
 static const persistContractType *const pcRegistry[] = {
     &persistContractFlex,           &persistContractMultimap,
@@ -41,7 +42,7 @@ static const persistContractType *const pcRegistry[] = {
     &persistContractMultiarray,     &persistContractMultilist,
     &persistContractMultidict,      &persistContractMultiOrderedSet,
     &persistContractMultiLRU,       &persistContractHmacKeyring,
-    &persistContractClusterMailbox,
+    &persistContractClusterMailbox, &persistContractClusterRing,
 };
 
 /* ====================================================================
@@ -433,7 +434,8 @@ static void pcCase(pcRow *row, const persistContractType *t, uint64_t seed,
     size_t snapLen = 0;
     if (pcRoundTrip(row, ops, live, "round trip", &snap, &snapLen)) {
         /* A snapshot-only type (no encodeOp/applyOp) has no WAL */
-        if (ops->encodeOp && ops->applyOp) {
+        const bool hasWal = ops->encodeOp && ops->applyOp;
+        if (hasWal) {
             pcWal(row, ops, &log, snap, snapLen);
         }
         if (strings) {
@@ -443,8 +445,9 @@ static void pcCase(pcRow *row, const persistContractType *t, uint64_t seed,
                 pcHolds(row, t, r, strings, "restored");
                 ops->free(r);
             }
-            void *w =
-                log.start ? pcRestore(ops, log.start, log.startLen) : NULL;
+            void *w = hasWal && log.start
+                          ? pcRestore(ops, log.start, log.startLen)
+                          : NULL;
             if (w &&
                 pcReplay(row, ops, &w, &log, 0, log.count, "numeral replay")) {
                 pcHolds(row, t, w, strings, "replayed");

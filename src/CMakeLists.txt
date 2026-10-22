@@ -593,6 +593,7 @@ add_library(${PROJECT_NAME} OBJECT
     persist/contract/multilruContractTest.c
     persist/contract/hmacKeyringContractTest.c
     persist/contract/clusterMailboxContractTest.c
+    persist/contract/clusterRingContractTest.c
 )
 
 # ============================================================================
