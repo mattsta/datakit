@@ -116,6 +116,15 @@ class ConfigResult:
         )
 
 
+def serial_for(serial: str, skips: list[str]) -> str:
+    """The serial set this build runs: its names that no skip regex names
+    literally.  Empty when every serial test is skipped here (the serial
+    step is then not run, rather than failing on no tests); a name that
+    matches no test at all still fails the step, as a typo must."""
+    skipped = {name for regex in skips for name in regex.split("|") if name}
+    return "|".join(n for n in serial.split("|") if n and n not in skipped)
+
+
 def preset_skip(opts: ValidateOptions, preset: str) -> str:
     """The ctest name regex a `preset` build skips on top of --skip: the
     tests the preset cannot judge (always), and in the quick tier (the
@@ -172,11 +181,12 @@ def _run_config(
         kept = steps.keep_test_log(bindir, logs / "ctest-output.log")
         if kept:
             outputs.append(kept)
-        if opts.serial:
+        serial_here = serial_for(opts.serial, [opts.skip, extra_skip])
+        if serial_here:
             serial = steps.run_logged(
                 f"{tag} ctest-serial",
                 steps.ctest_command(
-                    bindir, 1, opts.serial, exclude=[opts.skip, extra_skip]
+                    bindir, 1, serial_here, exclude=[opts.skip, extra_skip]
                 ),
                 serial.log,
                 cwd=bindir,

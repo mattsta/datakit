@@ -171,15 +171,27 @@ class ValidateRun(unittest.TestCase):
             f"|{validate.DEFAULT_TSAN_SKIP}|{validate.DEFAULT_SLOW}"
             f"|{validate.DEFAULT_DEBUG_SLOW})$"
         )
-        for step in ("ctest", "ctest-serial"):
-            cmd = runner.command(f"clang22-tsan {step}")
-            self.assertTrue(cmd[cmd.index("-E") + 1].endswith(quick), cmd)
+        cmd = runner.command("clang22-tsan ctest")
+        self.assertTrue(cmd[cmd.index("-E") + 1].endswith(quick), cmd)
+        # Every serial test is skipped under tsan, so the serial step does
+        # not run (and passes) instead of failing on "no tests".
+        names = [name for name, _ in runner.calls]
+        self.assertNotIn("clang22-tsan ctest-serial", names)
+        self.assertIn("clang22-dev ctest-serial", names)
+        self.assertIn("| clang22-tsan |", out)
+        self.assertNotIn("FAIL", out.split("## Skipped tests")[0])
         self.assertIn(
             "clang22-tsan: cannot be judged here: dkTestNonceLogEvictionPerf", out
         )
         # dev skips neither the tsan set nor the debug/tsan slow set.
         dev = runner.command("clang22-dev ctest")
         self.assertNotIn("flex", dev[dev.index("-E") + 1])
+
+    def test_serial_for_drops_names_a_build_skips(self) -> None:
+        self.assertEqual(validate.serial_for("a|b", ["x|b", ""]), "a")
+        self.assertEqual(validate.serial_for("a", ["a"]), "")
+        # A pattern is kept unless a skip names it literally
+        self.assertEqual(validate.serial_for("a.*|b", ["b|c"]), "a.*")
 
     def test_full_tier_runs_the_slow_tests(self) -> None:
         runner = MatrixRunner(outputs={"allocaudit": "100% clean pattern\n"})
