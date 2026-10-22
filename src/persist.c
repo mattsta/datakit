@@ -2358,11 +2358,28 @@ static uint8_t *intsetBigPersistSnapshot(const void *structure, size_t *len) {
         return NULL;
     }
     if (isb) {
+        /* Members are appended a chunk at a time, each decoded into its
+         * own slot (a 96/128-bit value lives in its databoxBig), so a
+         * large set grows its flex once per chunk, not once per member */
+        enum { ISB_CHUNK_ = 32 };
+        databoxBig values[ISB_CHUNK_];
+        const databox *chunk[ISB_CHUNK_];
         intsetBigIterator it = {0};
         intsetBigIteratorInit(isb, &it);
-        databoxBig dbig = {0};
-        while (intsetBigIteratorNextBox(&it, &dbig)) {
-            flexPushDataboxBigExact(&f, &dbig, FLEX_ENDPOINT_TAIL);
+        uint32_t n = 0;
+        memset(&values[0], 0, sizeof(values[0]));
+        while (intsetBigIteratorNextBox(&it, &values[n])) {
+            chunk[n] = (const databox *)&values[n];
+            if (++n == ISB_CHUNK_) {
+                flexAppendMultipleExact(&f, n, chunk);
+                n = 0;
+            }
+
+            memset(&values[n], 0, sizeof(values[n]));
+        }
+
+        if (n) {
+            flexAppendMultipleExact(&f, n, chunk);
         }
     }
     *len = flexBytes(f);
@@ -3519,8 +3536,8 @@ static uint8_t *multidictPersistSnapshot(const void *structure, size_t *len) {
     if (multidictIteratorInit((multidict *)d, &iter)) {
         multidictEntry entry;
         while (multidictIteratorNext(&iter, &entry)) {
-            flexPushByTypeExact(&f, &entry.key, FLEX_ENDPOINT_TAIL);
-            flexPushByTypeExact(&f, &entry.val, FLEX_ENDPOINT_TAIL);
+            const databox *pair[2] = {&entry.key, &entry.val};
+            flexAppendMultipleExact(&f, 2, pair);
         }
         multidictIteratorRelease(&iter);
     }
@@ -3843,43 +3860,31 @@ static uint8_t *multilruPersistSnapshot(const void *structure, size_t *len) {
         /* Check if weights are enabled using the new API */
         bool enableWeights = multilruHasWeights(mlru);
 
-        /* Store configuration */
-        databox dbMaxLevels = databoxNewUnsigned(stats.maxLevels);
-        databox dbEnableWeights = databoxNewUnsigned(enableWeights ? 1 : 0);
-        databox dbPolicy =
-            databoxNewUnsigned(0); /* Policy not exposed in API, use 0 */
-        databox dbEvictStrategy =
-            databoxNewUnsigned(0); /* Strategy not exposed, use 0 */
-        databox dbMaxCount = databoxNewUnsigned(stats.maxCount);
-        databox dbMaxWeight = databoxNewUnsigned(stats.maxWeight);
-        databox dbNextFresh = databoxNewUnsigned(
-            stats.nextFresh); /* Track next handle to preserve gaps */
+        /* Store configuration: one row */
+        flexRow row = FLEX_ROW_INIT;
+        flexRowUnsigned(&row, stats.maxLevels);
+        flexRowUnsigned(&row, enableWeights ? 1 : 0);
+        flexRowUnsigned(&row, 0); /* Policy not exposed in API, use 0 */
+        flexRowUnsigned(&row, 0); /* Strategy not exposed, use 0 */
+        flexRowUnsigned(&row, stats.maxCount);
+        flexRowUnsigned(&row, stats.maxWeight);
+        flexRowUnsigned(&row, stats.nextFresh); /* next handle, to keep gaps */
+        flexRowAppendExact(&f, &row);
 
-        flexPushByType(&f, &dbMaxLevels, FLEX_ENDPOINT_TAIL);
-        flexPushByType(&f, &dbEnableWeights, FLEX_ENDPOINT_TAIL);
-        flexPushByType(&f, &dbPolicy, FLEX_ENDPOINT_TAIL);
-        flexPushByType(&f, &dbEvictStrategy, FLEX_ENDPOINT_TAIL);
-        flexPushByType(&f, &dbMaxCount, FLEX_ENDPOINT_TAIL);
-        flexPushByType(&f, &dbMaxWeight, FLEX_ENDPOINT_TAIL);
-        flexPushByType(&f, &dbNextFresh, FLEX_ENDPOINT_TAIL);
-
-        /* Store entries - iterate through all populated handles */
+        /* Store entries - iterate through all populated handles, one row
+         * each */
         for (size_t handle = 1; handle < stats.nextFresh; handle++) {
             if (multilruIsPopulated(mlru, handle)) {
-                databox dbHandle = databoxNewUnsigned(handle);
-                databox dbLevel =
-                    databoxNewUnsigned(multilruGetLevel(mlru, handle));
-
-                flexPushByType(&f, &dbHandle, FLEX_ENDPOINT_TAIL);
-                flexPushByType(&f, &dbLevel, FLEX_ENDPOINT_TAIL);
+                flexRowUnsigned(&row, handle);
+                flexRowUnsigned(&row, multilruGetLevel(mlru, handle));
 
                 /* ALWAYS store weight if weights are enabled (even if zero) to
                  * maintain consistent field count */
                 if (enableWeights) {
-                    databox dbWeight =
-                        databoxNewUnsigned(multilruGetWeight(mlru, handle));
-                    flexPushByType(&f, &dbWeight, FLEX_ENDPOINT_TAIL);
+                    flexRowUnsigned(&row, multilruGetWeight(mlru, handle));
                 }
+
+                flexRowAppendExact(&f, &row);
             }
         }
     }
@@ -4331,10 +4336,9 @@ static uint8_t *multiOrderedSetPersistSnapshot(const void *structure,
             }
 
             /* Store score first, then member (matches sorted order) */
-            flexPushByTypeExact(&f, (const databox *)&score,
-                                FLEX_ENDPOINT_TAIL);
-            flexPushByTypeExact(&f, (const databox *)&member,
-                                FLEX_ENDPOINT_TAIL);
+            const databox *pair[2] = {(const databox *)&score,
+                                      (const databox *)&member};
+            flexAppendMultipleExact(&f, 2, pair);
         }
 
         multiOrderedSetIteratorRelease(&iter);
@@ -8265,6 +8269,40 @@ int persistTest(int argc, char *argv[]) {
             }
             persistOpsIntsetBig.free(restored);
         }
+        zfree(snap);
+    }
+
+    TEST("intsetBig round trip: 100 members, half beyond 64 bits") {
+        /* The snapshot appends members in chunks, each wide value in its
+         * own slot: past several chunks the set must come back equal. */
+        cleaner(intsetBigFree) intsetBig *isb = intsetBigNew();
+        for (int64_t i = 0; i < 100; i++) {
+            databoxBig v;
+            if (i % 2) {
+                const __int128_t wide = ((__int128_t)1 << 70) + i;
+                DATABOX_BIG_SIGNED_128(&v, i % 4 == 1 ? wide : -wide);
+            } else {
+                memset(&v, 0, sizeof(v));
+                v.type = DATABOX_SIGNED_64;
+                v.data.i = i * 1000 - 50000;
+            }
+
+            intsetBigAdd(isb, &v);
+        }
+
+        size_t snapLen = 0;
+        uint8_t *snap = persistOpsIntsetBig.snapshot(isb, &snapLen);
+        intsetBig *restored =
+            snap ? persistOpsIntsetBig.restore(snap, snapLen) : NULL;
+        if (!restored || intsetBigCountElements(restored) != 100 ||
+            !intsetBigEqual(restored, isb)) {
+            ERRR("a 100-member intsetBig did not round-trip equal");
+        }
+
+        if (restored) {
+            persistOpsIntsetBig.free(restored);
+        }
+
         zfree(snap);
     }
 

@@ -297,18 +297,18 @@ static void insertTimerIntoSlot(flex **slot, const timerWheelEntry *e) {
         *slot = flexNew();
     }
 
-    const databox expireBox = databoxNewUnsigned(e->expireTimeUs);
+    /* Append the timer's 5 elements to the end of the slot (unsorted
+     * within a slot) in one reallocation, not one per element */
+    flexRow row = FLEX_ROW_INIT;
+    flexRowUnsigned(&row, e->expireTimeUs);
     const databox cbBox = databoxNewPtrAsUnsigned(e->cb);
+    flexRowAdd(&row, &cbBox);
     const databox dataBox = databoxNewPtrAsUnsigned(e->clientData);
-    const databox idBox = databoxNewUnsigned(e->id);
-    const databox repeatBox = databoxNewUnsigned(e->repeatIntervalUs);
-
-    /* Append all 5 elements to end of flex (unsorted within slot) */
-    flexPushByType(slot, &expireBox, FLEX_ENDPOINT_TAIL);
-    flexPushByType(slot, &cbBox, FLEX_ENDPOINT_TAIL);
-    flexPushByType(slot, &dataBox, FLEX_ENDPOINT_TAIL);
-    flexPushByType(slot, &idBox, FLEX_ENDPOINT_TAIL);
-    flexPushByType(slot, &repeatBox, FLEX_ENDPOINT_TAIL);
+    flexRowAdd(&row, &dataBox);
+    flexRowUnsigned(&row, e->id);
+    flexRowUnsigned(&row, e->repeatIntervalUs);
+    assert(row.n == ELEMENTS_PER_TIMER);
+    flexRowAppendExact(slot, &row);
 }
 
 /* Insert timer into overflow multimap (sorted by expiry time) */

@@ -380,9 +380,11 @@ static flex *anlBuildSnapshotFlex(const aeadNonceLog *log) {
     pthread_mutex_lock((pthread_mutex_t *)&log->lock);
 
     /* Header: version, capacity, record_count. */
-    flexPushUnsigned(&f, AEAD_NONCE_LOG_PERSIST_VERSION, FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(&f, (uint64_t)log->cap, FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(&f, (uint64_t)log->count, FLEX_ENDPOINT_TAIL);
+    flexRow row = FLEX_ROW_INIT;
+    flexRowUnsigned(&row, AEAD_NONCE_LOG_PERSIST_VERSION);
+    flexRowUnsigned(&row, (uint64_t)log->cap);
+    flexRowUnsigned(&row, (uint64_t)log->count);
+    flexRowAppendExact(&f, &row);
 
     /* Per-record block: key_id, nonce_lo (8B LE), nonce_hi (4B LE), gen. */
     for (size_t i = 0; i < log->cap; i++) {
@@ -394,10 +396,11 @@ static flex *anlBuildSnapshotFlex(const aeadNonceLog *log) {
         uint32_t nonce_hi = 0;
         memcpy(&nonce_lo, s->nonce, 8);
         memcpy(&nonce_hi, s->nonce + 8, 4);
-        flexPushUnsigned(&f, (uint64_t)s->key_id, FLEX_ENDPOINT_TAIL);
-        flexPushUnsigned(&f, nonce_lo, FLEX_ENDPOINT_TAIL);
-        flexPushUnsigned(&f, (uint64_t)nonce_hi, FLEX_ENDPOINT_TAIL);
-        flexPushUnsigned(&f, s->gen, FLEX_ENDPOINT_TAIL);
+        flexRowUnsigned(&row, (uint64_t)s->key_id);
+        flexRowUnsigned(&row, nonce_lo);
+        flexRowUnsigned(&row, (uint64_t)nonce_hi);
+        flexRowUnsigned(&row, s->gen);
+        flexRowAppendExact(&f, &row);
     }
 
     pthread_mutex_unlock((pthread_mutex_t *)&log->lock);

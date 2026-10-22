@@ -379,9 +379,11 @@ static flex *cmBuildInnerHeaderFlex(uint32_t origin_id, uint64_t sequence,
     if (f == NULL) {
         return NULL;
     }
-    flexPushUnsigned(&f, (uint64_t)origin_id, FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(&f, sequence, FLEX_ENDPOINT_TAIL);
-    flexPushUnsigned(&f, (uint64_t)msg_type, FLEX_ENDPOINT_TAIL);
+    flexRow row = FLEX_ROW_INIT;
+    flexRowUnsigned(&row, (uint64_t)origin_id);
+    flexRowUnsigned(&row, sequence);
+    flexRowUnsigned(&row, (uint64_t)msg_type);
+    flexRowAppendExact(&f, &row);
     return f;
 }
 
@@ -1204,9 +1206,11 @@ static flex *cmBuildSnapshotFlex(const clusterMailbox *mb) {
         }
         const uint32_t oid =
             atomic_load_explicit(&o->origin_id, memory_order_relaxed);
-        flexPushUnsigned(&f, (uint64_t)oid, FLEX_ENDPOINT_TAIL);
-        flexPushUnsigned(&f, la, FLEX_ENDPOINT_TAIL);
-        flexPushUnsigned(&f, o->window_bits, FLEX_ENDPOINT_TAIL);
+        flexRow row = FLEX_ROW_INIT;
+        flexRowUnsigned(&row, (uint64_t)oid);
+        flexRowUnsigned(&row, la);
+        flexRowUnsigned(&row, o->window_bits);
+        flexRowAppendExact(&f, &row);
     }
     return f;
 }
