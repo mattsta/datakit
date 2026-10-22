@@ -388,7 +388,10 @@ const clusterLocation *clusterNodeGetLocation(const clusterNode *node);
 clusterResult clusterRingLocate(const clusterRing *ring, const void *key,
                                 uint32_t keyLen, clusterPlacement *out);
 
-/* Locate with databox key */
+/* Locate with databox key.  The key places by its value: a string's bytes
+ * (embedded or not), a number's value bytes, true/false/null by type, so
+ * equal keys always place alike.  CLUSTER_ERR for an offset box or a
+ * 128-bit box without its value. */
 clusterResult clusterRingLocateBox(const clusterRing *ring, const databox *key,
                                    clusterPlacement *out);
 
@@ -398,7 +401,10 @@ clusterResult clusterRingLocateKeyspace(const clusterRing *ring,
                                         const void *key, uint32_t keyLen,
                                         clusterPlacement *out);
 
-/* Bulk placement for batch operations */
+/* Bulk placement: placements[i] is clusterRingLocateBox of keys[i] (each
+ * placement initialized by the call; free each successful one with
+ * clusterPlacementFree).  Every key is attempted; returns CLUSTER_OK or
+ * the last key's failure. */
 clusterResult clusterRingLocateBulk(const clusterRing *ring,
                                     const databox *keys, uint32_t keyCount,
                                     clusterPlacement *placements);

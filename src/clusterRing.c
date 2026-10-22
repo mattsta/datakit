@@ -1918,33 +1918,66 @@ clusterResult clusterRingLocate(const clusterRing *ring, const void *key,
     return CLUSTER_OK;
 }
 
-clusterResult clusterRingLocateBox(const clusterRing *ring, const databox *key,
-                                   clusterPlacement *out) {
-    if (!key) {
-        return CLUSTER_ERR;
-    }
-
-    const void *keyData;
-    uint32_t keyLen;
-
+/* The bytes a boxed key places by: a string's content (embedded or not)
+ * and a container's bytes, a number's value bytes (16 for a 128-bit
+ * value), and the type alone for true/false/null, so equal keys always
+ * place alike.  False for a key with no readable value (an offset box, a
+ * 128-bit box without its value). */
+static bool clusterKeyBytes(const databox *key, uint8_t scratch[16],
+                            const void **data, uint32_t *len) {
     switch (key->type) {
     case DATABOX_BYTES:
-        keyData = key->data.ptr;
-        keyLen = (uint32_t)key->len;
-        break;
+    case DATABOX_BYTES_EMBED:
+        *data = databoxBytes(key);
+        *len = (uint32_t)key->len;
+        return true;
+    case DATABOX_CONTAINER_FLEX_MAP:
+    case DATABOX_CONTAINER_FLEX_LIST:
+    case DATABOX_CONTAINER_FLEX_SET:
+    case DATABOX_CONTAINER_FLEX_TUPLE:
+        *data = key->data.bytes.start;
+        *len = (uint32_t)key->len;
+        return true;
     case DATABOX_SIGNED_64:
-        keyData = &key->data.i64;
-        keyLen = sizeof(key->data.i64);
-        break;
     case DATABOX_UNSIGNED_64:
-        keyData = &key->data.u64;
-        keyLen = sizeof(key->data.u64);
+        memcpy(scratch, &key->data.u64, sizeof(key->data.u64));
+        *len = sizeof(key->data.u64);
         break;
+    case DATABOX_FLOAT_32:
+        memcpy(scratch, &key->data.f32, sizeof(key->data.f32));
+        *len = sizeof(key->data.f32);
+        break;
+    case DATABOX_DOUBLE_64:
+        memcpy(scratch, &key->data.d64, sizeof(key->data.d64));
+        *len = sizeof(key->data.d64);
+        break;
+    case DATABOX_SIGNED_128:
+    case DATABOX_UNSIGNED_128:
+        if (!key->data.u128) {
+            return false;
+        }
+        memcpy(scratch, key->data.u128, 16);
+        *len = 16;
+        break;
+    case DATABOX_BYTES_OFFSET:
+        return false;
     default:
-        /* For other types, use the raw data union */
-        keyData = &key->data;
-        keyLen = sizeof(key->data);
+        scratch[0] = (uint8_t)key->type;
+        *len = 1;
         break;
+    }
+
+    *data = scratch;
+    return true;
+}
+
+clusterResult clusterRingLocateBox(const clusterRing *ring, const databox *key,
+                                   clusterPlacement *out) {
+    uint8_t scratch[16];
+    const void *keyData = NULL;
+    uint32_t keyLen = 0;
+    if (!key || !clusterKeyBytes(key, scratch, &keyData, &keyLen)) {
+        return CLUSTER_ERR;
     }
 
     return clusterRingLocate(ring, keyData, keyLen, out);
@@ -1968,93 +2001,19 @@ clusterResult clusterRingLocateBulk(const clusterRing *ring,
         return CLUSTER_ERR;
     }
 
-    /* For small batches, use simple loop with prefetching */
-    if (keyCount <= 4) {
-        for (uint32_t i = 0; i < keyCount; i++) {
-            /* Prefetch next key's data */
-            if (i + 1 < keyCount) {
-                const databox *nextKey = &keys[i + 1];
-                if (nextKey->data.ptr) {
-                    CLUSTER_PREFETCH(nextKey->data.ptr);
-                }
-            }
-            clusterResult result =
-                clusterRingLocateBox(ring, &keys[i], &placements[i]);
-            if (CLUSTER_UNLIKELY(result != CLUSTER_OK)) {
-                return result;
-            }
-        }
-        return CLUSTER_OK;
-    }
-
-    /* For larger batches, batch-compute hashes first for better cache
-     * efficiency */
-    cleanerName(zfree, U64) uint64_t *hashes =
-        zcalloc(keyCount, sizeof(uint64_t));
-    if (CLUSTER_UNLIKELY(!hashes)) {
-        /* Fallback to simple loop on allocation failure */
-        for (uint32_t i = 0; i < keyCount; i++) {
-            clusterResult result =
-                clusterRingLocateBox(ring, &keys[i], &placements[i]);
-            if (result != CLUSTER_OK) {
-                return result;
-            }
-        }
-        return CLUSTER_OK;
-    }
-
-    /* Batch hash computation - prefetch ahead for streaming */
-    for (uint32_t i = 0; i < keyCount; i++) {
-        /* Prefetch next key data */
-        if (i + 2 < keyCount && keys[i + 2].data.ptr) {
-            CLUSTER_PREFETCH(keys[i + 2].data.ptr);
-        }
-
-        const databox *key = &keys[i];
-        const void *keyData;
-        uint32_t keyLen;
-
-        /* Extract key data based on type */
-        switch (key->type) {
-        case DATABOX_BYTES:
-        case DATABOX_CONTAINER_FLEX_MAP:
-        case DATABOX_CONTAINER_FLEX_LIST:
-        case DATABOX_CONTAINER_FLEX_SET:
-        case DATABOX_CONTAINER_FLEX_TUPLE:
-            keyData = key->data.bytes.start;
-            keyLen = key->len;
-            break;
-        case DATABOX_SIGNED_64:
-        case DATABOX_UNSIGNED_64:
-            keyData = &key->data.u64;
-            keyLen = sizeof(uint64_t);
-            break;
-        default:
-            keyData = &key->data;
-            keyLen = sizeof(key->data);
-            break;
-        }
-
-        hashes[i] = clusterHash64(keyData, keyLen, ring->hashSeed);
-    }
-
-    /* Now use pre-computed hashes for placement decisions */
-    /* This improves cache locality since we're not jumping between key data */
+    /* Each key is placed exactly as clusterRingLocateBox places it; the
+     * next string key's bytes are prefetched while this one is placed.
+     * Every key is attempted: a failed key's placement is left freed and
+     * the last failure is returned. */
     clusterResult finalResult = CLUSTER_OK;
-
     for (uint32_t i = 0; i < keyCount; i++) {
-        /* Initialize placement */
-        clusterPlacementInit(&placements[i]);
+        if (i + 1 < keyCount && keys[i + 1].type == DATABOX_BYTES) {
+            CLUSTER_PREFETCH(keys[i + 1].data.bytes.start);
+        }
 
-        /* Use the pre-computed hash directly based on strategy */
-        /* Note: For full optimization, strategy-specific bulk functions would
-         * be needed */
-        /* For now, we still call the locate function but could optimize further
-         */
-        clusterResult result =
+        const clusterResult result =
             clusterRingLocateBox(ring, &keys[i], &placements[i]);
         if (CLUSTER_UNLIKELY(result != CLUSTER_OK)) {
-            /* Continue processing remaining keys but track error */
             finalResult = result;
         }
     }
@@ -5810,6 +5769,60 @@ int clusterRingTest(int argc, char *argv[]) {
      * way after a snapshot round trip; the snapshot keeps the ring's
      * affinity rules and names of any length.  Bounded-load places on
      * its own sorted vnode ring. */
+    /* A key places by its value: a short string embedded in its box
+     * places as the same string by pointer, a float ignores the box's
+     * unused bytes, and bulk placement equals one-at-a-time placement
+     * (with every placement freed: no leak) */
+    TEST("boxed keys place by value; bulk equals single placement") {
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
+        for (uint64_t id = 1; id <= 12; id++) {
+            const clusterNodeConfig nc = {.id = id};
+            clusterRingAddNode(ring, &nc);
+        }
+
+        const char text[] = "abc";
+        const databox byPtr = databoxNewBytes(text, 3);
+        const databox embedded = databoxNewBytesAllowEmbed(text, 3);
+        databox f1 = {.type = DATABOX_FLOAT_32};
+        databox f2 = {.type = DATABOX_FLOAT_32};
+        memset(&f1.data, 0x00, sizeof(f1.data));
+        memset(&f2.data, 0xFF, sizeof(f2.data));
+        f1.data.f32 = 1.5f;
+        f2.data.f32 = 1.5f;
+        const databox *pairs[][2] = {{&byPtr, &embedded}, {&f1, &f2}};
+        for (size_t i = 0; i < 2; i++) {
+            clusterPlacement a;
+            clusterPlacement b;
+            clusterRingLocateBox(ring, pairs[i][0], &a);
+            clusterRingLocateBox(ring, pairs[i][1], &b);
+            if (a.hashValue != b.hashValue || a.primary != b.primary) {
+                ERR("pair %zu placed differently", i);
+            }
+            clusterPlacementFree(&a);
+            clusterPlacementFree(&b);
+        }
+
+        databox keys[10];
+        char names[10][8];
+        for (size_t i = 0; i < 10; i++) {
+            snprintf(names[i], sizeof(names[i]), "k%zu", i);
+            keys[i] = databoxNewBytesString(names[i]);
+        }
+        clusterPlacement bulk[10];
+        if (clusterRingLocateBulk(ring, keys, 10, bulk) != CLUSTER_OK) {
+            ERRR("bulk placement failed");
+        }
+        for (size_t i = 0; i < 10; i++) {
+            clusterPlacement one;
+            clusterRingLocateBox(ring, &keys[i], &one);
+            if (one.primary != bulk[i].primary) {
+                ERR("key %zu placed differently in bulk", i);
+            }
+            clusterPlacementFree(&one);
+            clusterPlacementFree(&bulk[i]);
+        }
+    }
+
     TEST("strategies place identically after a snapshot round trip") {
         char longName[6000];
         memset(longName, 'n', sizeof(longName) - 1);
