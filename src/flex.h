@@ -634,6 +634,8 @@ flexEntry *flexFindByTypeReverse(flex *f, flexEntry *fe, const databox *box,
 bool DK_FN_PURE flexIsEmpty(const flex *f);
 size_t DK_FN_PURE flexCount(const flex *f);
 size_t DK_FN_PURE flexBytes(const flex *f);
+/* The width in bytes of the header's total-bytes field (it widens as the
+ * flex grows) */
 size_t DK_FN_PURE flexBytesLength(const flex *f);
 
 /* Verify metadata and physical entries are equal in both flexes. */

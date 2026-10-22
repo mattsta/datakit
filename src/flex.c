@@ -9374,6 +9374,173 @@ int32_t flexTest(int32_t argc, char **argv) {
         printf("  ok\n");
     }
 
+    printf("Verify factories, bulk pushes, drains, reverse and sorted finds "
+           "against their direct forms:\n");
+    {
+        int32_t bad = 0;
+#define FLEX_API_CHECK_(cond, what)                                            \
+    do {                                                                       \
+        if (!(cond)) {                                                         \
+            printf("  FAIL: %s\n", what);                                      \
+            bad++;                                                             \
+        }                                                                      \
+    } while (0)
+
+        /* Factories build what the push loops build */
+        const databox vals[3] = {databoxNewBytesString("22"), DATABOX_SIGNED(5),
+                                 DATABOX_DOUBLE(1.5)};
+        const databox *ptrs[3] = {&vals[0], &vals[1], &vals[2]};
+        cleaner(flexFree) flex *autoLoop = flexNew();
+        cleaner(flexFree) flex *exactLoop = flexNew();
+        for (size_t i = 0; i < 3; i++) {
+            flexPushByType(&autoLoop, &vals[i], FLEX_ENDPOINT_TAIL);
+            flexPushByTypeExact(&exactLoop, &vals[i], FLEX_ENDPOINT_TAIL);
+        }
+        cleaner(flexFree) flex *fromBoxes = flexNewFromDataboxes(vals, 3);
+        cleaner(flexFree) flex *fromPtrs = flexNewFromDataboxPtrs(ptrs, 3);
+        cleaner(flexFree) flex *fromExact = flexNewFromDataboxesExact(vals, 3);
+        FLEX_API_CHECK_(flexEqual(fromBoxes, autoLoop) &&
+                            flexEqual(fromPtrs, autoLoop) &&
+                            flexEqual(fromExact, exactLoop) &&
+                            !flexEqual(autoLoop, exactLoop),
+                        "the databox factories");
+
+        /* The bulk byte push is the flexPushBytes loop, after any content
+         * already there */
+        const flexBytesMember members[] = {
+            {"a", 1}, {"22", 2}, {"bbb", 3}, {"", 0}};
+        cleaner(flexFree) flex *bulk = flexNew();
+        cleaner(flexFree) flex *loop = flexNew();
+        flexPushBytes(&bulk, "head", 4, FLEX_ENDPOINT_TAIL);
+        flexPushBytes(&loop, "head", 4, FLEX_ENDPOINT_TAIL);
+        flexBulkPushBytesMembers(&bulk, members, 4);
+        for (size_t i = 0; i < 4; i++) {
+            flexPushBytes(&loop, members[i].data, members[i].len,
+                          FLEX_ENDPOINT_TAIL);
+        }
+        FLEX_API_CHECK_(flexEqual(bulk, loop), "the bulk byte push");
+
+        /* The header's total-bytes field widens as the flex grows */
+        cleaner(flexFree) flex *wide = flexNew();
+        const size_t narrowWidth = flexBytesLength(wide);
+        char block[512] = {0};
+        for (int i = 0; i < 256; i++) {
+            flexPushBytes(&wide, block, sizeof(block), FLEX_ENDPOINT_TAIL);
+        }
+        FLEX_API_CHECK_(narrowWidth >= 1 &&
+                            flexBytesLength(wide) > narrowWidth &&
+                            flexBytesLength(wide) <= 9,
+                        "flexBytesLength");
+
+        /* A drained range delete leaves what a range delete leaves */
+        cleaner(flexFree) flex *ten = flexNew();
+        for (int64_t i = 0; i < 10; i++) {
+            flexPushSigned(&ten, i, FLEX_ENDPOINT_TAIL);
+        }
+        cleaner(flexFree) flex *drained = flexDuplicate(ten);
+        cleaner(flexFree) flex *ranged = flexDuplicate(ten);
+        flexDeleteRangeDrain(&drained, 2, 3);
+        flexDeleteRange(&ranged, 2, 3);
+        FLEX_API_CHECK_(flexEqual(drained, ranged) && flexCount(drained) == 7,
+                        "flexDeleteRangeDrain");
+
+        /* Reverse finds land on the last match */
+        cleaner(flexFree) flex *pal = flexNew();
+        static const uint64_t palValues[] = {1, 2, 3, 2, 1};
+        for (size_t i = 0; i < 5; i++) {
+            flexPushUnsigned(&pal, palValues[i], FLEX_ENDPOINT_TAIL);
+        }
+        const databox two = DATABOX_UNSIGNED(2);
+        FLEX_API_CHECK_(flexFindUnsignedReverse(pal, flexTail(pal), 2, 0) ==
+                                flexIndex(pal, 3) &&
+                            flexFindByTypeReverse(pal, flexTail(pal), &two,
+                                                  0) == flexIndex(pal, 3) &&
+                            !flexFindUnsignedReverse(pal, flexTail(pal), 9, 0),
+                        "the reverse finds");
+
+        /* Sorted maps: the reference variants with no reference container
+         * act as their direct forms */
+        cleaner(flexFree) flex *direct = flexNew();
+        cleaner(flexFree) flex *byRef = flexNew();
+        cleaner(flexFree) flex *setDirect = flexNew();
+        cleaner(flexFree) flex *setByRef = flexNew();
+        flexEntry *midDirect = direct + FLEX_EMPTY_SIZE;
+        flexEntry *midRef = byRef + FLEX_EMPTY_SIZE;
+        flexEntry *midSet = setDirect + FLEX_EMPTY_SIZE;
+        flexEntry *midSetRef = setByRef + FLEX_EMPTY_SIZE;
+        static const int64_t rows[][2] = {{5, 50}, {1, 10}, {3, 30},
+                                          {3, 31}, {9, 90}, {1, 10}};
+        for (size_t i = 0; i < 6; i++) {
+            const databox k = DATABOX_SIGNED(rows[i][0]);
+            const databox v = DATABOX_SIGNED(rows[i][1]);
+            const databox *row[2] = {&k, &v};
+            flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
+                &direct, 2, row, &midDirect, false);
+            flexInsertReplaceByTypeSortedWithMiddleMultiWithReference(
+                &byRef, 2, row, &midRef, false, NULL);
+            flexInsertReplaceByTypeSortedWithMiddleMultiDirectSet(&setDirect, 2,
+                                                                  row, &midSet);
+            flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceSet(
+                &setByRef, 2, row, &midSetRef, NULL);
+        }
+        FLEX_API_CHECK_(flexEqual(direct, byRef) &&
+                            flexEqual(setDirect, setByRef) &&
+                            flexCount(setDirect) == 10,
+                        "reference inserts without a container");
+
+        const databox three = DATABOX_SIGNED(3);
+        const databox thirtyOne = DATABOX_SIGNED(31);
+        const databox thirtyTwo = DATABOX_SIGNED(32);
+        const databox *hit[2] = {&three, &thirtyOne};
+        const databox *miss[2] = {&three, &thirtyTwo};
+        flexEntry *const hitRow =
+            flexFindByTypeSortedFullWidth(setDirect, 2, hit);
+        databox hitKey;
+        databox hitVal;
+        if (hitRow) {
+            flexGetByType(hitRow, &hitKey);
+            flexGetByType(flexNext(setDirect, hitRow), &hitVal);
+        }
+        FLEX_API_CHECK_(
+            hitRow && hitKey.data.i == 3 && hitVal.data.i == 31 &&
+                !flexFindByTypeSortedFullWidth(setDirect, 2, miss) &&
+                flexFindByTypeSortedWithMiddleFullWidthWithReference(
+                    setDirect, 2, hit, midSet, NULL) == hitRow,
+            "the full-width sorted finds");
+        FLEX_API_CHECK_(flexFindByTypeSortedWithMiddleLowestWithReference(
+                            setDirect, 2, &three, midSet, NULL) ==
+                            flexFindByTypeSortedWithMiddleLowest(
+                                setDirect, 2, &three, midSet),
+                        "the lowest-row find with no container");
+
+        /* A compressed flex duplicates byte for byte */
+        cleaner(flexFree) flex *big = flexNew();
+        for (int i = 0; i < 64; i++) {
+            flexPushBytes(&big, "repeat repeat repeat repeat", 27,
+                          FLEX_ENDPOINT_TAIL);
+        }
+        const size_t cSize = flexBytes(big) + 64;
+        cleaner(zfree) void *cBuf = zcalloc(1, cSize);
+        if (flexConvertToCFlex(big, cBuf, cSize)) {
+            cleaner(zfree) void *copy = cflexDuplicate(cBuf);
+            size_t backLen = flexBytes(big);
+            cleanerName(zfree, Bytes) flex *back = zcalloc(1, backLen);
+            FLEX_API_CHECK_(cflexBytes(copy) == cflexBytes(cBuf) &&
+                                memcmp(copy, cBuf, cflexBytes(cBuf)) == 0 &&
+                                cflexConvertToFlex(copy, &back, &backLen) &&
+                                flexEqual(back, big),
+                            "cflexDuplicate");
+        } else {
+            FLEX_API_CHECK_(false, "a repetitive flex did not compress");
+        }
+#undef FLEX_API_CHECK_
+
+        if (bad) {
+            return bad;
+        }
+        printf("  ok\n");
+    }
+
     printf("Verify inserting or encoding a deferred wide box fails fast:\n");
     {
         int32_t bad = 0;
