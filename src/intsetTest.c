@@ -12,6 +12,7 @@
 
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleanerName(int64_t *, zfree, I64);
+defcleanerName(int16_t *, zfree, I16);
 defcleaner(intset *, intsetFree);
 
 /* Differential oracle for INTSET_BRANCHLESS_LOWER_BOUND: a branchy
@@ -1430,6 +1431,76 @@ int intsetTest(int argc, char *argv[]) {
             }
             if (intsetGet(is, (uint32_t)n, &got)) {
                 ERR("tier %zu: Get past the end succeeded", tier);
+            }
+
+            /* The tier's own Get and iterator agree with the oracle too */
+            const void *raw = INTSET_UNTAG(is);
+            size_t tierSeen = 0;
+            switch (INTSET_TYPE(is)) {
+            case INTSET_TYPE_SMALL: {
+                const intsetSmall *s = raw;
+                intsetSmallIterator sit;
+                intsetSmallIteratorInit(&sit, s);
+                while (intsetSmallIteratorNext(&sit, &got) && tierSeen < n &&
+                       got == want[tierSeen]) {
+                    tierSeen++;
+                }
+                for (size_t i = 0; i < n; i++) {
+                    if (!intsetSmallGet(s, (uint32_t)i, &got) ||
+                        got != want[i]) {
+                        tierSeen = 0;
+                        break;
+                    }
+                }
+
+                /* FromArray rebuilds the same tier from the sorted values */
+                cleanerName(zfree, I16) int16_t *raw16 =
+                    zcalloc(n ? n : 1, sizeof(int16_t));
+                for (size_t i = 0; i < n; i++) {
+                    raw16[i] = (int16_t)want[i];
+                }
+                intsetSmall *rebuilt = intsetSmallFromArray(raw16, (uint32_t)n);
+                for (size_t i = 0; i < n; i++) {
+                    if (!intsetSmallGet(rebuilt, (uint32_t)i, &got) ||
+                        got != want[i]) {
+                        ERR("tier %zu: FromArray value %zu wrong", tier, i);
+                        break;
+                    }
+                }
+                intsetSmallFree(rebuilt);
+                break;
+            }
+            case INTSET_TYPE_MEDIUM: {
+                const intsetMedium *m = raw;
+                intsetMediumIterator mit;
+                intsetMediumIteratorInit(&mit, m);
+                while (intsetMediumIteratorNext(&mit, &got) && tierSeen < n &&
+                       got == want[tierSeen]) {
+                    tierSeen++;
+                }
+                for (size_t i = 0; i < n; i++) {
+                    if (!intsetMediumGet(m, i, &got) || got != want[i]) {
+                        tierSeen = 0;
+                        break;
+                    }
+                }
+                break;
+            }
+            case INTSET_TYPE_FULL: {
+                const intsetFull *f = raw;
+                tierSeen = n;
+                for (size_t i = 0; i < n; i++) {
+                    if (!intsetFullGet(f, i, &got) || got != want[i]) {
+                        tierSeen = 0;
+                        break;
+                    }
+                }
+                break;
+            }
+            }
+            if (tierSeen != n) {
+                ERR("tier %zu (type %d): the tier's Get or iterator disagree",
+                    tier, (int)INTSET_TYPE(is));
             }
         }
     }

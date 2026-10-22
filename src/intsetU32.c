@@ -1,6 +1,7 @@
 #include "intsetU32.h"
 #include "cleaner.h"
 #include "datakit.h"
+#include "dkRandom.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -274,7 +275,8 @@ uint32_t intsetU32Random(intsetU32 *is) {
         return 0;
     }
 
-    return intsetU32Get_(is, random() % is->count);
+    /* A uniform position from the per-thread generator */
+    return intsetU32Get_(is, (uint32_t)dkRandomBounded(is->count));
 }
 
 bool intsetU32RandomDelete(intsetU32 *is, uint32_t *deleted) {
@@ -360,6 +362,31 @@ int intsetU32Test(int argc, char **argv) {
 
     (void)argc;
     (void)argv;
+
+    printf("Random picks are members; RandomDelete drains every member: ");
+    {
+        cleaner(intsetU32Free) intsetU32 *is = intsetU32New();
+        uint32_t deleted = 0;
+        intsetU32Assert(intsetU32Random(is) == 0);
+        intsetU32Assert(!intsetU32RandomDelete(is, &deleted));
+        for (uint32_t v = 0; v < 100; v++) {
+            intsetU32Add(is, v * 3);
+        }
+        for (int i = 0; i < 200; i++) {
+            intsetU32Assert(intsetU32Exists(is, intsetU32Random(is)));
+        }
+        bool seen[300] = {0};
+        for (uint32_t n = 100; n > 0; n--) {
+            intsetU32Assert(intsetU32RandomDelete(is, &deleted));
+            intsetU32Assert(deleted % 3 == 0 && deleted < 300 &&
+                            !seen[deleted]);
+            seen[deleted] = true;
+            intsetU32Assert(!intsetU32Exists(is, deleted));
+            intsetU32Assert(intsetU32Count(is) == n - 1);
+        }
+        intsetU32Assert(!intsetU32RandomDelete(is, &deleted));
+        printf("SUCCESS\n");
+    }
 
     printf("Basic adding: ");
     {

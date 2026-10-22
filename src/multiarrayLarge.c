@@ -428,6 +428,26 @@ int multiarrayLargeTest(int argc, char *argv[]) {
     static const int globalMax =
         7280; /* max 512 16-byte entries per container */
 
+    TEST("GetForward reaches what Get reaches, one node or many") {
+        multiarrayLarge *mar = multiarrayLargeNew(sizeof(int64_t), 16);
+        for (int64_t i = 0; i < 200; i++) {
+            multiarrayLargeInsert(mar, (int32_t)i, &i);
+            if (multiarrayLargeGetForward(mar, 0) !=
+                multiarrayLargeGet(mar, 0)) {
+                ERR("index 0 differs at %" PRId64 " entries", i + 1);
+                break;
+            }
+        }
+        for (int32_t i = 0; i < 200; i++) {
+            const int64_t *got = multiarrayLargeGetForward(mar, (uint32_t)i);
+            if (got != multiarrayLargeGet(mar, i) || *got != i) {
+                ERR("GetForward(%" PRId32 ") differs from Get", i);
+                break;
+            }
+        }
+        multiarrayLargeFree(mar);
+    }
+
     TEST("create") {
         multiarrayLarge *mar = multiarrayLargeNew(sizeof(s16), rowMax);
         assert(mar->head);

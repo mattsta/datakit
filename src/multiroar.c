@@ -5552,6 +5552,20 @@ int multiroarTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("multiroarNewNot - a new complement, the input unchanged") {
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
+        multiroarBitSet(r, 3);
+        multiroarBitSet(r, 9000);
+        cleaner(multiroarFree) multiroar *before = multiroarDuplicate(r);
+        cleaner(multiroarFree) multiroar *notted = multiroarNewNot(r);
+        cleaner(multiroarFree) multiroar *inPlace = multiroarDuplicate(r);
+        multiroarNot(inPlace);
+        if (!multiroarEquals(r, before) || !multiroarEquals(notted, inPlace) ||
+            multiroarBitGet(notted, 3) || !multiroarBitGet(notted, 4)) {
+            ERRR("NewNot is not Not applied to a copy");
+        }
+    }
+
     TEST("multiroarNot - basic NOT operation") {
         cleaner(multiroarFree) multiroar *r = multiroarBitNew();
         /* Set specific bits in a chunk */

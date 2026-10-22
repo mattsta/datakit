@@ -1,6 +1,7 @@
 #include "intsetBig.h"
 
 #include "cleaner.h"
+#include "dkRandom.h"
 #include "intersectInt.h"
 #include "intsetU32.h"
 #include "str.h"
@@ -942,14 +943,12 @@ bool intsetBigRandom(const intsetBig *isb, databoxBig *val) {
     /* Successful method: */
     /* Step 1: pick random position index from count of all elements
      * Step 2: return value for random position. */
-    /* TODO: if this random() is too slow, we could augment with
-     *       xorshift128plus() */
     if (isb->count == 0) {
         return false;
     }
 
-    const uint64_t bigRandom = ((uint64_t)random() << 32) | random();
-    const uint64_t selectedIndex = bigRandom % isb->count;
+    /* A uniform position from the per-thread generator */
+    const uint64_t selectedIndex = dkRandomBounded(isb->count);
 
     /* Set up initial conditions */
     intsetBigIterator isbIter;
