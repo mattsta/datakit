@@ -2778,15 +2778,18 @@ const persistOps persistOpsIntsetBig = {
  */
 #include "multiroar.h"
 
+_Static_assert(MULTIROAR_FORMAT_ID == (uint32_t)PERSIST_TYPE_MULTIROAR,
+               "multiroar's format id is its persistType");
+
 static uint8_t *multiroarPersistSnapshot(const void *structure, size_t *len) {
     const multiroar *r = structure;
 
-    /* Get serialized size first */
-    size_t size = multiroarSerializedSize(r);
+    /* The chunk stream alone: the file header carries the stamp */
+    size_t size = multiroarSerializedSizeRaw(r);
     cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(size);
 
     /* Serialize into buffer */
-    size_t written = multiroarSerialize(r, buf, size);
+    size_t written = multiroarSerializeRaw(r, buf, size);
     if (written == 0 || written != size) {
         *len = 0;
         return NULL;
@@ -2806,7 +2809,7 @@ static void *multiroarPersistRestore(const uint8_t *data, size_t len) {
     }
     /* Deserialize multiroar from snapshot */
     /* @own: caller; free=multiroarFree */
-    return multiroarDeserialize(data, len);
+    return multiroarDeserializeRaw(data, len);
 }
 
 static size_t multiroarPersistCount(const void *structure) {
@@ -2923,8 +2926,9 @@ static void *multiroarPersistNewEmpty(void) {
 const persistOps persistOpsMultiroar = {
     .type = PERSIST_TYPE_MULTIROAR,
     .name = "multiroar",
-    .formatVersion = 1,
-    .minReadVersion = 1,
+    /* multiroar owns its encoder and so its format version */
+    .formatVersion = MULTIROAR_FORMAT_VERSION,
+    .minReadVersion = MULTIROAR_FORMAT_VERSION,
     .snapshot = multiroarPersistSnapshot,
     .restore = multiroarPersistRestore,
     .newEmpty = multiroarPersistNewEmpty,

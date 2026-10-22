@@ -1,6 +1,7 @@
 #pragma once
 
 #include "databox.h"
+#include "dkFormat.h"
 #include "multimap.h"
 
 typedef struct multiroar multiroar;
@@ -124,13 +125,26 @@ double multiroarDice(const multiroar *a, const multiroar *b);
 uint64_t multiroarMemoryUsage(const multiroar *r);
 
 /* Serialization of bit-mode multiroars.  A value-mode multiroar does not
- * serialize: both size and serialize return 0 for it.  Deserialize returns
- * NULL for malformed bytes: it checks the framing, that chunk ids ascend,
- * and that each position listing holds 1 to 629 ascending in-chunk
- * positions. */
+ * serialize: both size and serialize return 0 for it (as does serialize
+ * into a buffer too small).  Deserialize returns NULL for malformed bytes:
+ * it checks the framing, that chunk ids ascend, and that each position
+ * listing holds 1 to 629 ascending in-chunk positions.
+ *
+ * multiroarSerialize writes a standalone artifact: the dkFormat prefix of
+ * multiroarFormat, then the chunk stream; multiroarDeserialize refuses a
+ * stamp this build does not read.  The Raw forms are the chunk stream
+ * alone, for a container that stamps it (persist files record the stamp
+ * in their header). */
+#define MULTIROAR_FORMAT_ID ((uint32_t)70) /* PERSIST_TYPE_MULTIROAR */
+#define MULTIROAR_FORMAT_VERSION ((uint32_t)1)
+extern const dkFormatSpec multiroarFormat;
+
 uint64_t multiroarSerialize(const multiroar *r, void *buf, uint64_t bufSize);
 multiroar *multiroarDeserialize(const void *buf, uint64_t bufSize);
 uint64_t multiroarSerializedSize(const multiroar *r);
+uint64_t multiroarSerializeRaw(const multiroar *r, void *buf, uint64_t bufSize);
+multiroar *multiroarDeserializeRaw(const void *buf, uint64_t bufSize);
+uint64_t multiroarSerializedSizeRaw(const multiroar *r);
 
 #ifdef DATAKIT_TEST
 int multiroarTest(int argc, char *argv[]);

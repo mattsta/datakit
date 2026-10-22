@@ -2240,10 +2240,10 @@ uint64_t multiroarMemoryUsage(const multiroar *r) {
  * ==================================================================== */
 
 /*
- * Wire format:
- * - Magic: 4 bytes "ROAR"
- * - Version: 1 byte (current: 1)
- * - Flags: 1 byte (reserved, must be 0)
+ * Wire format (multiroarSerialize): the dkFormat prefix (format id
+ * MULTIROAR_FORMAT_ID, version MULTIROAR_FORMAT_VERSION, features), then
+ * the chunk stream (multiroarSerializeRaw, which a stamping container such
+ * as persist stores on its own):
  * - Chunk count: varint
  * - For each chunk:
  *   - Chunk ID: varint
@@ -2256,11 +2256,13 @@ uint64_t multiroarMemoryUsage(const multiroar *r) {
  *     - OVER_FULL: varint count, then varintPacked data
  */
 
-#define MULTIROAR_MAGIC_0 'R'
-#define MULTIROAR_MAGIC_1 'O'
-#define MULTIROAR_MAGIC_2 'A'
-#define MULTIROAR_MAGIC_3 'R'
-#define MULTIROAR_VERSION 1
+const dkFormatSpec multiroarFormat = {
+    .name = "multiroar",
+    .id = MULTIROAR_FORMAT_ID,
+    .version = MULTIROAR_FORMAT_VERSION,
+    .minReadVersion = MULTIROAR_FORMAT_VERSION,
+    .knownFeatures = 0,
+};
 
 /* Helper: write varint to buffer, return bytes written */
 DK_STATIC uint64_t writeVarint(uint8_t *buf, uint64_t value) {
@@ -2271,6 +2273,20 @@ DK_STATIC uint64_t writeVarint(uint8_t *buf, uint64_t value) {
     }
     buf[bytes++] = (uint8_t)value;
     return bytes;
+}
+
+/* Write `value` as a varint at *p when it fits before `end` (advancing
+ * *p); false when it does not, writing nothing */
+static bool writeVarintBounded(uint8_t **p, const uint8_t *end,
+                               uint64_t value) {
+    uint8_t tmp[10];
+    const uint64_t n = writeVarint(tmp, value);
+    if ((uint64_t)(end - *p) < n) {
+        return false;
+    }
+    memcpy(*p, tmp, n);
+    *p += n;
+    return true;
 }
 
 /* Helper: read varint from buffer, return bytes read (0 on error) */
@@ -2297,10 +2313,10 @@ DK_STATIC uint64_t readVarint(const uint8_t *buf, uint64_t bufSize,
     return 0; /* Incomplete varint */
 }
 
-/* Calculate serialized size without actually serializing */
-uint64_t multiroarSerializedSize(const multiroar *r) {
+/* Size of the chunk stream, without serializing */
+uint64_t multiroarSerializedSizeRaw(const multiroar *r) {
     if (!r || !r->map) {
-        return 7; /* Magic (4) + version (1) + flags (1) + varint(0) (1) */
+        return 1; /* varint(0) chunks */
     }
 
     /* The format holds bit chunks; value rows have none */
@@ -2308,7 +2324,7 @@ uint64_t multiroarSerializedSize(const multiroar *r) {
         return 0;
     }
 
-    uint64_t size = 6; /* Magic (4) + version (1) + flags (1) */
+    uint64_t size = 0;
 
     /* Count chunks */
     uint64_t chunkCount = multimapCount(r->map);
@@ -2371,47 +2387,24 @@ uint64_t multiroarSerializedSize(const multiroar *r) {
     return size;
 }
 
-/* Serialize multiroar to buffer */
-uint64_t multiroarSerialize(const multiroar *r, void *buf, uint64_t bufSize) {
+/* Serialize the chunk stream to buffer; 0 when it does not fit */
+uint64_t multiroarSerializeRaw(const multiroar *r, void *buf,
+                               uint64_t bufSize) {
     /* The format holds bit chunks; value rows have none */
-    if (!buf || bufSize < 6 || (r && r->meta[0] != 0)) {
+    if (!buf || (r && r->meta[0] != 0)) {
         return 0;
     }
 
     uint8_t *p = (uint8_t *)buf;
-    uint8_t *end = p + bufSize;
+    const uint8_t *const end = p + bufSize;
 
-    /* Magic */
-    *p++ = MULTIROAR_MAGIC_0;
-    *p++ = MULTIROAR_MAGIC_1;
-    *p++ = MULTIROAR_MAGIC_2;
-    *p++ = MULTIROAR_MAGIC_3;
-
-    /* Version */
-    *p++ = MULTIROAR_VERSION;
-
-    /* Flags */
-    *p++ = 0;
-
-    if (!r || !r->map) {
-        /* Empty roar: 0 chunks */
-        if (p > end) {
-            return 0;
-        }
-
-        uint64_t written = writeVarint(p, 0);
-        return 6 + written;
-    }
-
-    /* Chunk count */
-    uint64_t chunkCount = multimapCount(r->map);
-
-    uint64_t written = writeVarint(p, chunkCount);
-
-    p += written;
-
-    if (p > end) {
+    /* Chunk count (0 for an empty roar) */
+    const uint64_t chunkCount = (r && r->map) ? multimapCount(r->map) : 0;
+    if (!writeVarintBounded(&p, end, chunkCount)) {
         return 0;
+    }
+    if (chunkCount == 0) {
+        return (uint64_t)(p - (uint8_t *)buf);
     }
 
     /* Serialize each chunk */
@@ -2426,16 +2419,8 @@ uint64_t multiroarSerialize(const multiroar *r, void *buf, uint64_t bufSize) {
 
         uint64_t chunkId = key->data.u;
 
-        /* Chunk ID */
-        written = writeVarint(p, chunkId);
-        p += written;
-
-        if (p > end) {
-            return 0;
-        }
-
-        /* Chunk type */
-        if (p >= end) {
+        /* Chunk ID, then chunk type */
+        if (!writeVarintBounded(&p, end, chunkId) || p >= end) {
             return 0;
         }
         uint8_t chunkKind = GET_CHUNK_TYPE(value);
@@ -2454,22 +2439,14 @@ uint64_t multiroarSerialize(const multiroar *r, void *buf, uint64_t bufSize) {
             const uint8_t *packedStart = GET_CHUNK_PACKED_START(value);
             uint64_t count = PACKED_COUNT_FROM_VALUE(value);
 
-            /* Write count */
-            written = writeVarint(p, count);
-            p += written;
-
-            if (p > end) {
+            /* Write count, then positions */
+            if (!writeVarintBounded(&p, end, count)) {
                 return 0;
             }
 
-            /* Write positions */
             for (uint64_t i = 0; i < count; i++) {
-                uint64_t pos = varintPacked13Get(packedStart, i);
-
-                written = writeVarint(p, pos);
-                p += written;
-
-                if (p > end) {
+                if (!writeVarintBounded(&p, end,
+                                        varintPacked13Get(packedStart, i))) {
                     return 0;
                 }
             }
@@ -2478,7 +2455,7 @@ uint64_t multiroarSerialize(const multiroar *r, void *buf, uint64_t bufSize) {
 
         case CHUNK_TYPE_FULL_BITMAP: {
             /* Write bitmap data */
-            if (p + 1024 > end) {
+            if (end - p < 1024) {
                 return 0;
             }
 
@@ -2497,31 +2474,53 @@ uint64_t multiroarSerialize(const multiroar *r, void *buf, uint64_t bufSize) {
     return (uint64_t)(p - (uint8_t *)buf);
 }
 
-/* Deserialize multiroar from buffer */
+/* The stamp multiroarSerialize writes ahead of the chunk stream */
+static dkFormatStamp multiroarStamp(void) {
+    return dkFormatStampFor(&multiroarFormat, 0);
+}
+
+uint64_t multiroarSerializedSize(const multiroar *r) {
+    const uint64_t raw = multiroarSerializedSizeRaw(r);
+    if (raw == 0) {
+        return 0;
+    }
+    const dkFormatStamp stamp = multiroarStamp();
+    return dkFormatPrefixSize(&stamp) + raw;
+}
+
+uint64_t multiroarSerialize(const multiroar *r, void *buf, uint64_t bufSize) {
+    if (!buf || (r && r->meta[0] != 0)) {
+        return 0;
+    }
+    const dkFormatStamp stamp = multiroarStamp();
+    const size_t prefix = dkFormatPrefixWrite(&stamp, buf, (size_t)bufSize);
+    if (prefix == 0) {
+        return 0;
+    }
+    const uint64_t raw =
+        multiroarSerializeRaw(r, (uint8_t *)buf + prefix, bufSize - prefix);
+    return raw == 0 ? 0 : prefix + raw;
+}
+
 multiroar *multiroarDeserialize(const void *buf, uint64_t bufSize) {
-    if (!buf || bufSize < 6) {
+    dkFormatStamp stamp;
+    size_t prefix = 0;
+    if (!buf || dkFormatPrefixRead(&multiroarFormat, buf, (size_t)bufSize,
+                                   &stamp, &prefix) != DK_FORMAT_OK) {
+        return NULL;
+    }
+    return multiroarDeserializeRaw((const uint8_t *)buf + prefix,
+                                   bufSize - prefix);
+}
+
+/* Deserialize the chunk stream */
+multiroar *multiroarDeserializeRaw(const void *buf, uint64_t bufSize) {
+    if (!buf || bufSize == 0) {
         return NULL;
     }
 
     const uint8_t *p = (const uint8_t *)buf;
     const uint8_t *end = p + bufSize;
-
-    /* Verify magic */
-    if (p[0] != MULTIROAR_MAGIC_0 || p[1] != MULTIROAR_MAGIC_1 ||
-        p[2] != MULTIROAR_MAGIC_2 || p[3] != MULTIROAR_MAGIC_3) {
-        return NULL;
-    }
-    p += 4;
-
-    /* Check version */
-    uint8_t version = *p++;
-    if (version != MULTIROAR_VERSION) {
-        return NULL;
-    }
-
-    /* Flags (currently unused) */
-    uint8_t flags = *p++;
-    (void)flags;
 
     /* Read chunk count */
     uint64_t chunkCount;
@@ -8653,6 +8652,58 @@ int multiroarTest(int argc, char *argv[]) {
 
         if (!multiroarEquals(r, r2)) {
             ERRR("Deserialized roar doesn't match original");
+        }
+    }
+
+    /* Every buffer short of the serialized size is refused without a
+     * write past its end (exact-size heap buffers under ASan), and the
+     * stamp gates deserialization */
+    TEST("multiroarSerialize: short buffers and format stamps") {
+        cleaner(multiroarFree) multiroar *r = multiroarBitNew();
+        for (uint64_t b = 0; b < 600; b += 7) {
+            multiroarBitSet(r, b);
+        }
+        multiroarBitSet(r, 70000); /* a second chunk */
+        for (uint64_t b = 8192 * 3; b < 8192 * 4; b++) {
+            multiroarBitSet(r, b); /* a full chunk */
+        }
+        const uint64_t size = multiroarSerializedSize(r);
+        for (uint64_t cap = 0; cap < size; cap++) {
+            cleanerName(zfree, Bytes) uint8_t *shortBuf =
+                zmalloc(cap ? cap : 1);
+            if (multiroarSerialize(r, shortBuf, cap) != 0) {
+                ERR("serialized into %" PRIu64 " of %" PRIu64 " bytes", cap,
+                    size);
+            }
+        }
+
+        cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(size);
+        if (multiroarSerialize(r, buf, size) != size) {
+            ERRR("exact-size serialize failed");
+        }
+        cleaner(multiroarFree) multiroar *back =
+            multiroarDeserialize(buf, size);
+        if (!back || !multiroarEquals(r, back)) {
+            ERRR("round trip failed");
+        }
+
+        /* The same chunk stream under other stamps */
+        const uint64_t raw = multiroarSerializedSizeRaw(r);
+        const dkFormatStamp stamps[] = {
+            {MULTIROAR_FORMAT_ID, MULTIROAR_FORMAT_VERSION + 1, 0},
+            {MULTIROAR_FORMAT_ID, MULTIROAR_FORMAT_VERSION, 1},
+            {MULTIROAR_FORMAT_ID + 1, MULTIROAR_FORMAT_VERSION, 0},
+            {MULTIROAR_FORMAT_ID, MULTIROAR_FORMAT_VERSION, UINT64_C(1) << 40},
+        };
+        for (size_t s = 0; s < 4; s++) {
+            cleanerName(zfree, Bytes) uint8_t *stamped = zmalloc(32 + raw);
+            const size_t prefix = dkFormatPrefixWrite(&stamps[s], stamped, 32);
+            memcpy(stamped + prefix, buf + (size - raw), raw);
+            cleaner(multiroarFree) multiroar *got =
+                multiroarDeserialize(stamped, prefix + raw);
+            if ((got != NULL) != (s == 3)) {
+                ERR("stamp %zu: restored %d", s, got != NULL);
+            }
         }
     }
 
