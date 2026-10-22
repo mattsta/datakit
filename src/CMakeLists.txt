@@ -577,6 +577,11 @@ add_library(${PROJECT_NAME} OBJECT
     persist/multiOrderedSetP.c
     persist/multilruP.c
     persist/multiroarP.c
+
+    # The persistence contract: harness and one registration per type
+    persist/contract/persistContractTest.c
+    persist/contract/flexContractTest.c
+    persist/contract/multimapContractTest.c
 )
 
 # ============================================================================

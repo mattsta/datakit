@@ -20,6 +20,10 @@ multimap *multimapCopy(const multimap *m);
 size_t multimapCount(const multimap *m);
 size_t multimapBytes(const multimap *m);
 flex *multimapDump(const multimap *m);
+/* True for a multimap made by multimapSetNew (or multimapNewConfigure
+ * with isSet): rows are deduplicated whole, so one key may hold several
+ * rows.  False for a map, where inserting a key replaces its row. */
+bool multimapIsSet(const multimap *m);
 
 bool multimapInsert(multimap **m, const databox *elements[]);
 /* multimapInsert that also reports the value entries a replace overwrote

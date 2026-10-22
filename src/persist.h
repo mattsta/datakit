@@ -316,6 +316,22 @@ typedef enum persistChecksum {
  * ============================================================================
  * Each data structure implements this interface to be persistable.
  * The framework is structure-agnostic; all specifics are in these callbacks.
+ *
+ * Every descriptor meets one contract, checked by persistContractTest
+ * (src/persist/contract/) at several sizes and seeds in every build
+ * configuration:
+ *   1. snapshot -> restore -> snapshot gives identical bytes, an equal
+ *      count and validate() true; the empty structure included.
+ *   2. Ops recorded through encodeOp while a structure is built, applied
+ *      through applyOp to the restored starting structure (and to
+ *      newEmpty() when that is the start, and to a restored mid-point
+ *      snapshot for the remaining ops), give the live snapshot bytes.
+ *   3. Every truncation and single-byte corruption of a snapshot makes
+ *      restore return NULL or a structure that itself meets (1); never a
+ *      crash.  Restore is where untrusted bytes enter.
+ *   4. Strings that look like numbers ("22", "007", "1.5", 128-bit
+ *      numerals) stay the same bytes through snapshot, restore and
+ *      replay: persistence stores values exactly as given.
  */
 struct persistOps {
     /* Structure identification */

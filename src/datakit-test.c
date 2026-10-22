@@ -93,6 +93,7 @@
 #include "ownedState.h"
 #include "perfRegression.h"
 #include "persist.h"
+#include "persist/contract/persistContract.h"
 #include "persist/flexP.h"
 #include "persist/intsetP.h"
 #include "persist/multiOrderedSetP.h"
@@ -12014,9 +12015,10 @@ static const TestEntry testRegistry[] = {
     T(util), T_ADJ(databox), T_ADJ(databoxLinear), T(offsetArray), T(multiheap),
     T_ADJ(membound), T_ADJ(memtest), T_ADJ(bbits), T_ADJ(ulid), T(persist),
     T(OSRegulate), T(dataspeedParse), T_A(persistCtx, "pctx"),
-    T_A(multimapP, "mmP"), T_A(multilistP, "mlP"), T_A(multidictP, "mdP"),
-    T_A(flexP, "fP"), T_A(intsetP, "isP"), T_A(multiOrderedSetP, "mosP"),
-    T_A(multiroarP, "mrP"), T_A(multilruP, "mlruP"),
+    T_A(persistContract, "pcontract"), T_A(multimapP, "mmP"),
+    T_A(multilistP, "mlP"), T_A(multidictP, "mdP"), T_A(flexP, "fP"),
+    T_A(intsetP, "isP"), T_A(multiOrderedSetP, "mosP"), T_A(multiroarP, "mrP"),
+    T_A(multilruP, "mlruP"),
 
     /* Distributed / Cluster */
     T_A_ADJ(clusterRing, "ring,cluster,chr"),

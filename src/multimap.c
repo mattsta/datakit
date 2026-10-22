@@ -192,6 +192,20 @@ flex *multimapDump(const multimap *m) {
     MULTIMAP_SINGLE_RETURN(m, Dump);
 }
 
+bool multimapIsSet(const multimap *m) {
+    switch (multimapType_(m)) {
+    case MULTIMAP_TYPE_SMALL:
+        return mms(m)->mapIsSet;
+    case MULTIMAP_TYPE_MEDIUM:
+        return mmm(m)->mapIsSet;
+    case MULTIMAP_TYPE_FULL:
+        return mmf(m)->mapIsSet;
+    default:
+        assert(NULL);
+        __builtin_unreachable();
+    }
+}
+
 DK_INLINE_ALWAYS void multimapUpgradeIfNecessary_(
     multimap **m, const uint_fast32_t depth, const flexCapSizeLimit limit,
     const bool useReference, const multimapAtom *restrict referenceContainer) {

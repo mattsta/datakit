@@ -2044,9 +2044,11 @@ static uint8_t *flexPersistSnapshot(const void *structure, size_t *len) {
 }
 
 static void *flexPersistRestore(const uint8_t *data, size_t len) {
-    /* flexValidateBuffer also refuses NULL; testing it here as well lets
-     * the compiler see that the copy below never reads from NULL. */
-    if (!data || !flexValidateBuffer(data, len)) {
+    /* The restored flex is iterated by its owner, so every entry is
+     * checked, not just the header.  flexValidateBufferDeep also refuses
+     * NULL; testing it here as well lets the compiler see that the copy
+     * below never reads from NULL. */
+    if (!data || !flexValidateBufferDeep(data, len)) {
         return NULL;
     }
     /* @own: caller; free=flexFree */
@@ -2065,41 +2067,28 @@ static size_t flexPersistEstimateSize(const void *structure) {
 
 static uint8_t *flexPersistEncodeOp(persistOp op, const void *args, size_t argc,
                                     size_t *len) {
-    /* args is expected to be const databox* for most operations */
+    /* args is one const databox* */
     const databox *box = args;
+    *len = 0;
 
     switch (op) {
     case PERSIST_OP_PUSH_HEAD:
-    case PERSIST_OP_PUSH_TAIL:
-    case PERSIST_OP_INSERT:
-    case PERSIST_OP_DELETE: {
+    case PERSIST_OP_PUSH_TAIL: {
         if (!box || argc < 1) {
-            *len = 0;
             return NULL;
         }
 
-        /* Encode single databox using databoxLinear */
-        databoxLinear dl;
-        size_t encodedLength;
-        const void *encodedValue;
-        uint8_t encodedType;
-        DATABOX_LINEAR_PARTS_ENCODE(box, encodedLength, encodedValue,
-                                    encodedType, &dl);
-
-        *len = 1 + encodedLength; /* type + value */
-        /* @own: caller; free=zfree */
-        uint8_t *buf = zmalloc(*len);
-        buf[0] = encodedType;
-        memcpy(buf + 1, encodedValue, encodedLength);
-        return buf;
+        /* The value as a 1-element flex, stored exactly as given, so
+         * 128-bit values and numeral-looking strings replay unchanged */
+        flex *f = flexNewFromDataboxExact(box);
+        if (f) {
+            *len = flexBytes(f);
+        }
+        return (uint8_t *)f;
     }
 
-    case PERSIST_OP_CLEAR:
-        *len = 0;
-        return NULL;
-
     default:
-        *len = 0;
+        /* CLEAR has no operand */
         return NULL;
     }
 }
@@ -2111,16 +2100,14 @@ static bool flexPersistApplyOp(void *structure, persistOp op,
     switch (op) {
     case PERSIST_OP_PUSH_HEAD:
     case PERSIST_OP_PUSH_TAIL: {
-        if (len < 1) {
+        databoxBig box;
+        if (!flexGetSingleDataboxBig(data, len, &box)) {
             return false;
         }
 
-        databox box;
-        DATABOX_LINEAR_PARTS_DECODE(data[0], data + 1, len - 1, &box);
-
-        flexPushByType(ff, &box,
-                       op == PERSIST_OP_PUSH_HEAD ? FLEX_ENDPOINT_HEAD
-                                                  : FLEX_ENDPOINT_TAIL);
+        flexPushByTypeExact(ff, (const databox *)&box,
+                            op == PERSIST_OP_PUSH_HEAD ? FLEX_ENDPOINT_HEAD
+                                                       : FLEX_ENDPOINT_TAIL);
         return true;
     }
 
@@ -2137,18 +2124,29 @@ static void flexPersistFree(void *structure) {
     flexFree(structure);
 }
 
+static void *flexPersistNewEmpty(void) {
+    /* @own: caller; free=flexFree */
+    return flexNew();
+}
+
+static bool flexPersistValidate(const void *structure) {
+    const flex *f = structure;
+    return flexValidateBufferDeep((const uint8_t *)f, flexBytes(f));
+}
+
 const persistOps persistOpsFlex = {
     .type = PERSIST_TYPE_FLEX,
     .name = "flex",
     .snapshot = flexPersistSnapshot,
     .restore = flexPersistRestore,
+    .newEmpty = flexPersistNewEmpty,
     .count = flexPersistCount,
     .estimateSize = flexPersistEstimateSize,
     .encodeOp = flexPersistEncodeOp,
     .applyOp = flexPersistApplyOp,
     .streamSnapshot = NULL,
     .streamRestore = NULL,
-    .validate = NULL,
+    .validate = flexPersistValidate,
     .free = flexPersistFree,
 };
 
@@ -2843,6 +2841,11 @@ defcleaner(multimap *, multimapFree);
 
 /* Get elementsPerEntry using the iterator interface (avoids internal headers)
  */
+/* Set in a snapshot's shape word for a set; elementsPerEntry is at most
+ * 1024, so snapshots written before sets were recorded restore as maps,
+ * as they always did */
+#define MULTIMAP_PERSIST_SET (UINT32_C(1) << 31)
+
 static uint32_t multimapPersistGetElementsPerEntry(const multimap *m) {
     /* The iterator caches elementsPerEntry, so we can use it to extract the
      * value */
@@ -2869,13 +2872,16 @@ static uint8_t *multimapPersistSnapshot(const void *structure, size_t *len) {
         return NULL;
     }
 
-    /* Snapshot format: [elementsPerEntry: 4 bytes][flex data: N bytes] */
+    /* Snapshot format: [shape: 4 bytes][flex data: N bytes], where shape
+     * is elementsPerEntry with MULTIMAP_PERSIST_SET set for a set */
+    const uint32_t shape =
+        elementsPerEntry | (multimapIsSet(m) ? MULTIMAP_PERSIST_SET : 0);
     size_t flexLen = flexBytes(f);
     *len = sizeof(uint32_t) + flexLen;
     /* @own: caller; free=zfree */
     uint8_t *buf = zmalloc(*len);
 
-    memcpy(buf, &elementsPerEntry, sizeof(uint32_t));
+    memcpy(buf, &shape, sizeof(uint32_t));
     memcpy(buf + sizeof(uint32_t), f, flexLen);
 
     flexFree(f);
@@ -2883,20 +2889,22 @@ static uint8_t *multimapPersistSnapshot(const void *structure, size_t *len) {
 }
 
 static void *multimapPersistRestore(const uint8_t *data, size_t len) {
-    /* Snapshot format: [elementsPerEntry: 4 bytes][flex data: N bytes] */
+    /* Snapshot format: [shape: 4 bytes][flex data: N bytes] */
     if (!data || len < sizeof(uint32_t)) {
         return NULL;
     }
 
-    /* Read elementsPerEntry */
-    uint32_t elementsPerEntry;
-    memcpy(&elementsPerEntry, data, sizeof(uint32_t));
+    uint32_t shape;
+    memcpy(&shape, data, sizeof(uint32_t));
+    const bool isSet = shape & MULTIMAP_PERSIST_SET;
+    const uint32_t elementsPerEntry = shape & ~MULTIMAP_PERSIST_SET;
     if (elementsPerEntry == 0 || elementsPerEntry > 1024) {
         return NULL; /* Sanity check */
     }
 
+    /* Every entry is decoded below, so every entry is checked first */
     size_t flexLen = len - sizeof(uint32_t);
-    if (!flexValidateBuffer(data + sizeof(uint32_t), flexLen)) {
+    if (!flexValidateBufferDeep(data + sizeof(uint32_t), flexLen)) {
         return NULL;
     }
 
@@ -2904,9 +2912,9 @@ static void *multimapPersistRestore(const uint8_t *data, size_t len) {
     cleaner(flexFree) flex *f = zmalloc(flexLen);
     memcpy(f, data + sizeof(uint32_t), flexLen);
 
-    /* Create multimap */
     /* @own: caller; free=multimapFree */
-    multimap *m = multimapNew(elementsPerEntry);
+    multimap *m = isSet ? multimapSetNew(elementsPerEntry)
+                        : multimapNew(elementsPerEntry);
 
     /* Iterate through entries in the flex
      * Note: flexHead returns non-NULL even for empty flex,
