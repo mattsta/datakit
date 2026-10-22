@@ -17,6 +17,8 @@ defcleanerName(databoxWide *, zfree, DataboxWides);
 defcleanerName(databox **, zfree, DataboxPtrs);
 defcleanerName(int64_t *, zfree, Int64);
 defcleanerName(int32_t *, zfree, Int32);
+defcleanerName(void *, zfree, Void);
+defcleaner(flex *, flexFree);
 defcleanerName(uint8_t *, zfree, Bytes);
 defcleanerName(char *, zfree, Chars);
 defcleanerName(char **, zfree, CharPtrs);
@@ -204,6 +206,106 @@ bool multimapIsSet(const multimap *m) {
         assert(NULL);
         __builtin_unreachable();
     }
+}
+
+/* True when `rows` holds whole rows in the order a multimap keeps them:
+ * ascending by the whole row, strictly for a set (it holds each row once);
+ * a map's rows have distinct keys unless they were added with
+ * multimapInsertFullWidth, which may repeat a key */
+static bool multimapDumpAscends_(const flex *rows,
+                                 multimapElements elementsPerEntry,
+                                 bool isSet) {
+    const size_t count = flexCount(rows);
+    if (elementsPerEntry == 0 || count % elementsPerEntry) {
+        return false;
+    }
+
+    cleanerName(zfree, Void) void *storage =
+        zcalloc(2 * (size_t)elementsPerEntry, sizeof(databoxBig));
+    databoxBig *prev = storage;
+    databoxBig *cur = prev + elementsPerEntry;
+    flexEntry *fe = flexHead(rows);
+    for (size_t row = 0; row < count / elementsPerEntry; row++) {
+        for (multimapElements e = 0; e < elementsPerEntry; e++) {
+            flexGetByTypeBig(fe, &cur[e]);
+            fe = flexNext(rows, fe);
+        }
+
+        if (row > 0) {
+            int cmp = 0;
+            for (size_t e = 0; e < elementsPerEntry && cmp == 0; e++) {
+                cmp = databoxCompare((const databox *)&prev[e],
+                                     (const databox *)&cur[e]);
+            }
+            if (cmp > 0 || (cmp == 0 && isSet)) {
+                return false;
+            }
+        }
+
+        /* The rows' storage is the flex, so swapping halves keeps the
+         * previous row's boxes valid */
+        databoxBig *swap = prev;
+        prev = cur;
+        cur = swap;
+    }
+    return true;
+}
+
+multimap *multimapNewFromDump(multimapElements elementsPerEntry, bool isSet,
+                              flex *rows) {
+    if (!multimapDumpAscends_(rows, elementsPerEntry, isSet)) {
+        flexFree(rows);
+        return NULL;
+    }
+
+    /* Up to what Medium holds: insert the rows */
+    const size_t bytes = flexBytes(rows);
+    if (bytes <= (size_t)flexOptimizationSizeLimit[FLEX_CAP_LEVEL_2048] * 3) {
+        /* @own: caller; free=multimapFree */
+        multimap *m = isSet ? multimapSetNew(elementsPerEntry)
+                            : multimapNew(elementsPerEntry);
+        cleanerName(zfree, Void) void *storage =
+            zcalloc(elementsPerEntry, sizeof(databoxBig) + sizeof(databox *));
+        databoxBig *boxes = storage;
+        const databox **row = (const databox **)(boxes + elementsPerEntry);
+        flexEntry *fe = flexHead(rows);
+        for (size_t r = 0; r < flexCount(rows) / elementsPerEntry; r++) {
+            for (multimapElements e = 0; e < elementsPerEntry; e++) {
+                flexGetByTypeBig(fe, &boxes[e]);
+                row[e] = (const databox *)&boxes[e];
+                fe = flexNext(rows, fe);
+            }
+            multimapInsertFullWidth(&m, row);
+        }
+        flexFree(rows);
+        return m;
+    }
+
+    /* Larger: cut whole rows into inner maps of about the split size
+     * (tail first, so each cut only shortens the rows) and build Full
+     * directly from them */
+    const size_t total = flexCount(rows) / elementsPerEntry;
+    const size_t splitSize = flexOptimizationSizeLimit[FLEX_CAP_LEVEL_2048];
+    size_t perMap = (total * splitSize) / bytes;
+    perMap = perMap ? perMap : 1;
+    const size_t maps = (total + perMap - 1) / perMap;
+    cleanerName(zfree, Void) void *storage =
+        zcalloc(maps, sizeof(flex *) + sizeof(multimapFullMiddle));
+    flex **map = storage;
+    multimapFullMiddle *middle = (multimapFullMiddle *)(map + maps);
+    for (size_t i = maps - 1; i > 0; i--) {
+        /* Map i holds rows [i * perMap, min((i + 1) * perMap, total)) */
+        const size_t end = (i + 1) * perMap < total ? (i + 1) * perMap : total;
+        const size_t entries = (end - i * perMap) * elementsPerEntry;
+        /* @own: container; free=flexFree */
+        map[i] = flexSplitRange(&rows, -(int32_t)entries, (uint32_t)entries);
+    }
+    map[0] = rows;
+
+    /* @own: caller; free=multimapFree */
+    multimapFull *full = multimapFullNewFromManyGrow(NULL, map, middle, maps,
+                                                     elementsPerEntry, isSet);
+    return MULTIMAP_TAG_(full, MULTIMAP_TYPE_FULL);
 }
 
 DK_INLINE_ALWAYS void multimapUpgradeIfNecessary_(
@@ -7009,6 +7111,111 @@ int multimapTest(int argc, char *argv[]) {
             multimapFieldIncrBy(&m, &kMissing, 1, 1, NULL) ||
             multimapFieldIncr(&m, &kMissing, 1, 1) != 0) {
             ERRR("a non-counter field or missing key was not refused");
+        }
+    }
+
+    TEST("a set's key addresses its first row, every tier") {
+        /* Five rows per key (values 0..4); lookup sees value 0, and each
+         * delete by key removes the lowest remaining row, including keys
+         * whose rows run across inner maps */
+        /* 20, 120 and 6000 rows at shrinking split sizes: Small, Medium
+         * and Full */
+        const int64_t keys[] = {4, 24, 1200};
+        const flexCapSizeLimit limits[] = {
+            FLEX_CAP_LEVEL_2048, FLEX_CAP_LEVEL_512, FLEX_CAP_LEVEL_64};
+        for (size_t t = 0; t < COUNT_ARRAY(keys); t++) {
+            cleaner(multimapFree) multimap *m =
+                multimapNewConfigure(2, true, false, limits[t]);
+            for (int64_t k = 0; k < keys[t]; k++) {
+                for (int64_t v = 4; v >= 0; v--) {
+                    const databox key = databoxNewSigned(k);
+                    const databox val = databoxNewSigned(v);
+                    const databox *row[] = {&key, &val};
+                    multimapInsert(&m, row);
+                }
+            }
+            const multimapType tiers[] = {
+                MULTIMAP_TYPE_SMALL, MULTIMAP_TYPE_MEDIUM, MULTIMAP_TYPE_FULL};
+            if (multimapType_(m) != tiers[t]) {
+                ERR("tier %zu: built type %d", t, (int)multimapType_(m));
+            }
+            for (int round = 0; round < 3; round++) {
+                for (int64_t k = 0; k < keys[t]; k++) {
+                    const databox key = databoxNewSigned(k);
+                    const databox want = databoxNewSigned(round);
+                    databox got;
+                    databox *out[] = {&got};
+                    if (!multimapLookup(m, &key, out) ||
+                        !databoxEqual(&got, &want)) {
+                        ERR("tier %zu round %d key %" PRId64
+                            ": lookup not the first row",
+                            t, round, k);
+                        break;
+                    }
+                    multimapDelete(&m, &key);
+                }
+            }
+            if (multimapCount(m) != (size_t)keys[t] * 2) {
+                ERR("tier %zu: %zu rows left", t, multimapCount(m));
+            }
+        }
+    }
+
+    TEST("NewFromDump rebuilds every tier and kind; later edits agree") {
+        /* For maps and sets of each tier: the rebuilt dump is the same
+         * bytes, the rebuild verifies, and the same later inserts and
+         * deletes leave both with the same dump */
+        const int64_t counts[] = {10, 150, 3000};
+        for (int set = 0; set < 2; set++) {
+            for (size_t t = 0; t < COUNT_ARRAY(counts); t++) {
+                cleaner(multimapFree) multimap *m =
+                    set ? multimapSetNew(2) : multimapNew(2);
+                for (int64_t k = 0; k < counts[t]; k++) {
+                    const databox key = databoxNewSigned((k * 7919) % 10007);
+                    const databox val = databoxNewSigned(k % 3);
+                    const databox *row[] = {&key, &val};
+                    multimapInsert(&m, row);
+                }
+                cleaner(multimapFree) multimap *b =
+                    multimapNewFromDump(2, set, multimapDump(m));
+                if (!b || multimapIsSet(b) != (bool)set) {
+                    ERR("set %d tier %zu: no rebuild", set, t);
+                    continue;
+                }
+                multimapVerify(b);
+                for (int round = 0; round < 2; round++) {
+                    cleaner(flexFree) flex *dm = multimapDump(m);
+                    cleaner(flexFree) flex *db = multimapDump(b);
+                    if (flexBytes(dm) != flexBytes(db) ||
+                        memcmp(dm, db, flexBytes(dm)) != 0) {
+                        ERR("set %d tier %zu round %d: dumps differ", set, t,
+                            round);
+                    }
+                    for (int64_t k = 0; k < 200; k++) {
+                        const databox key = databoxNewSigned(k * 31 - 500);
+                        const databox val = databoxNewSigned(k);
+                        const databox *row[] = {&key, &val};
+                        multimapInsert(&m, row);
+                        multimapInsert(&b, row);
+                        const databox gone =
+                            databoxNewSigned((k * 7919) % 10007);
+                        multimapDelete(&m, &gone);
+                        multimapDelete(&b, &gone);
+                    }
+                    multimapVerify(b);
+                }
+            }
+        }
+
+        /* Refused: rows out of order, and a row cut short */
+        const databox one = databoxNewSigned(1);
+        const databox two = databoxNewSigned(2);
+        const databox *down[] = {&two, &one, &one, &one};
+        if (multimapNewFromDump(2, false,
+                                flexNewFromDataboxPtrsExact(down, 4)) ||
+            multimapNewFromDump(2, false,
+                                flexNewFromDataboxPtrsExact(down, 3))) {
+            ERRR("NewFromDump accepted unordered or partial rows");
         }
     }
 

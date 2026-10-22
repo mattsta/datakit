@@ -607,6 +607,17 @@ flexEntry *flexFindByTypeSortedWithMiddle(const flex *f,
 flexEntry *flexFindByTypeSortedWithMiddleFullWidth(
     const flex *f, uint_fast32_t elementsPerEntry,
     const databox **compareAgainst, const flexEntry *middleFE);
+/* flexFindByTypeSortedWithMiddle, returning the FIRST row whose key
+ * matches when several rows share it (a set's rows), so the row chosen
+ * does not depend on where the search happened to land */
+flexEntry *flexFindByTypeSortedWithMiddleLowest(const flex *f,
+                                                uint_fast32_t elementsPerEntry,
+                                                const databox *compareAgainst,
+                                                const flexEntry *middleFE);
+flexEntry *flexFindByTypeSortedWithMiddleLowestWithReference(
+    const flex *f, uint_fast32_t elementsPerEntry,
+    const databox *compareAgainst, const flexEntry *middleFE,
+    const struct multimapAtom *referenceContainer);
 flexEntry *flexFindByTypeHead(flex *f, const databox *box, uint32_t skip);
 
 /* Finding (tail to head) */

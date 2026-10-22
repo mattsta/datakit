@@ -109,10 +109,31 @@ void multimapSmallAppend(multimapSmall *m, const databox *elements[]) {
     multimapSmallInsert(m, elements);
 }
 
+/* The row 'key' addresses.  A set can hold several rows with one key: its
+ * first row, so which row a lookup, delete or increment touches never
+ * depends on where the binary search happened to land. */
+DK_INLINE_ALWAYS flexEntry *
+multimapSmallFindKey_(multimapSmall *m, const databox *key,
+                      const bool useReference,
+                      const multimapAtom *referenceContainer) {
+    flexEntry *middle = GET_MIDDLE(m);
+    if (useReference) {
+        return m->mapIsSet ? flexFindByTypeSortedWithMiddleLowestWithReference(
+                                 m->map, m->elementsPerEntry, key, middle,
+                                 referenceContainer)
+                           : flexFindByTypeSortedWithMiddleWithReference(
+                                 m->map, m->elementsPerEntry, key, middle,
+                                 referenceContainer);
+    }
+    return m->mapIsSet ? flexFindByTypeSortedWithMiddleLowest(
+                             m->map, m->elementsPerEntry, key, middle)
+                       : flexFindByTypeSortedWithMiddle(
+                             m->map, m->elementsPerEntry, key, middle);
+}
+
 bool multimapSmallGetUnderlyingEntry(multimapSmall *m, const databox *key,
                                      multimapEntry *me) {
-    me->fe = flexFindByTypeSortedWithMiddle(m->map, m->elementsPerEntry, key,
-                                            GET_MIDDLE(m));
+    me->fe = multimapSmallFindKey_(m, key, false, NULL);
     me->map = &m->map;
     return !!me->fe;
 }
@@ -120,8 +141,7 @@ bool multimapSmallGetUnderlyingEntry(multimapSmall *m, const databox *key,
 bool multimapSmallGetUnderlyingEntryWithReference(
     multimapSmall *m, const databox *key, multimapEntry *me,
     const multimapAtom *referenceContainer) {
-    me->fe = flexFindByTypeSortedWithMiddleWithReference(
-        m->map, m->elementsPerEntry, key, GET_MIDDLE(m), referenceContainer);
+    me->fe = multimapSmallFindKey_(m, key, true, referenceContainer);
     me->map = &m->map;
     return !!me->fe;
 }
@@ -183,17 +203,8 @@ DK_INLINE_ALWAYS bool abstractLookup(multimapSmall *m, const databox *key,
                                      databox *elements[],
                                      const bool useReference,
                                      const multimapAtom *referenceContainer) {
-    flexEntry *middle = GET_MIDDLE(m);
-
-    flexEntry *foundP;
-
-    if (useReference) {
-        foundP = flexFindByTypeSortedWithMiddleWithReference(
-            m->map, m->elementsPerEntry, key, middle, referenceContainer);
-    } else {
-        foundP = flexFindByTypeSortedWithMiddle(m->map, m->elementsPerEntry,
-                                                key, middle);
-    }
+    flexEntry *foundP =
+        multimapSmallFindKey_(m, key, useReference, referenceContainer);
 
     if (foundP) {
         flexEntry *nextFound = foundP;
@@ -318,13 +329,8 @@ DK_INLINE_ALWAYS bool abstractDelete(multimapSmall *m, const databox **elements,
                 m->map, m->elementsPerEntry, elements, middle);
         }
     } else {
-        if (useReference) {
-            foundP = flexFindByTypeSortedWithMiddleWithReference(
-                m->map, m->elementsPerEntry, key, middle, referenceContainer);
-        } else {
-            foundP = flexFindByTypeSortedWithMiddle(m->map, m->elementsPerEntry,
-                                                    key, middle);
-        }
+        foundP =
+            multimapSmallFindKey_(m, key, useReference, referenceContainer);
     }
 
     if (foundP) {
@@ -415,8 +421,7 @@ bool multimapSmallDeleteByPosition(multimapSmall *m, int64_t keyIndex) {
 
 int64_t multimapSmallFieldIncr(multimapSmall *m, const databox *key,
                                uint32_t fieldOffset, int64_t incrBy) {
-    flexEntry *current = flexFindByTypeSortedWithMiddle(
-        m->map, m->elementsPerEntry, key, GET_MIDDLE(m));
+    flexEntry *current = multimapSmallFindKey_(m, key, false, NULL);
     if (!current) {
         /* No such key: return 0 rather than walking flexNext from NULL.
          * Matches the multimap-level FieldIncr miss contract. */

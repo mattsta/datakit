@@ -24,6 +24,13 @@ flex *multimapDump(const multimap *m);
  * with isSet): rows are deduplicated whole, so one key may hold several
  * rows.  False for a map, where inserting a key replaces its row. */
 bool multimapIsSet(const multimap *m);
+/* A multimap holding `rows` (full-width rows, as multimapDump writes them);
+ * a dump larger than the Medium tier holds is cut straight into Full's
+ * inner maps in O(rows), with no per-row insert.  Takes `rows`.  NULL,
+ * with `rows` freed, when the rows are not whole or not in the multimap's
+ * row order (ascending by whole row; a set's rows strictly ascending). */
+multimap *multimapNewFromDump(multimapElements elementsPerEntry, bool isSet,
+                              flex *rows);
 
 bool multimapInsert(multimap **m, const databox *elements[]);
 /* multimapInsert that also reports the value entries a replace overwrote
@@ -89,6 +96,11 @@ bool multimapLookup(const multimap *m, const databox *key, databox *elements[]);
 bool multimapRandomValue(multimap *m, bool fromTail, databox **found,
                          multimapEntry *me);
 
+/* In a set, where one key can hold several rows, a key addresses its FIRST
+ * row (the lowest in row order): Lookup returns it, Delete removes it,
+ * FieldIncr and GetUnderlyingEntry reach it.  The choice is fixed by the
+ * rows alone, never by how the map is laid out, so replaying the same
+ * operations always touches the same rows. */
 bool multimapDelete(multimap **m, const databox *key);
 bool multimapDeleteFullWidth(multimap **m, const databox *elements[]);
 /* foundReference, when non-NULL, receives the deleted row's key as stored

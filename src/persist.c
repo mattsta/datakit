@@ -2908,39 +2908,14 @@ static void *multimapPersistRestore(const uint8_t *data, size_t len) {
         return NULL;
     }
 
-    /* Restore the flex from remaining data */
-    cleaner(flexFree) flex *f = zmalloc(flexLen);
-    memcpy(f, data + sizeof(uint32_t), flexLen);
+    /* The rows, as multimapDump wrote them: a dump that is not whole,
+     * strictly ascending rows is refused */
+    /* @own: container; free=flexFree */
+    flex *rows = zmalloc(flexLen);
+    memcpy(rows, data + sizeof(uint32_t), flexLen);
 
     /* @own: caller; free=multimapFree */
-    multimap *m = isSet ? multimapSetNew(elementsPerEntry)
-                        : multimapNew(elementsPerEntry);
-
-    /* Iterate through entries in the flex
-     * Note: flexHead returns non-NULL even for empty flex,
-     * so we must check count */
-    size_t count = flexCount(f);
-    size_t numEntries = count / elementsPerEntry;
-    flexEntry *fe = flexHead(f);
-
-    databox *elements[elementsPerEntry];
-    /* databoxBig so a 96/128-bit member decodes into storage the box
-     * owns; a plain databox would carry no payload for it. */
-    databoxBig elementStorage[elementsPerEntry];
-    for (uint32_t i = 0; i < elementsPerEntry; i++) {
-        elements[i] = (databox *)&elementStorage[i];
-    }
-
-    for (size_t e = 0; e < numEntries; e++) {
-        /* Read elementsPerEntry databoxes for one entry */
-        for (uint32_t i = 0; i < elementsPerEntry; i++) {
-            flexGetByTypeBig(fe, &elementStorage[i]);
-            fe = flexNext(f, fe);
-        }
-        multimapInsertFullWidth(&m, (const databox **)elements);
-    }
-
-    return m;
+    return multimapNewFromDump(elementsPerEntry, isSet, rows);
 }
 
 static size_t multimapPersistCount(const void *structure) {

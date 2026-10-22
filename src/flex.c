@@ -4707,7 +4707,10 @@ DK_INLINE_ALWAYS flexEntry *abstractFindPositionByTypeSortedDirect(
     const databox **compareAgainst, bool *const found,
     const flexEntry *startMiddle, const uint_fast32_t compareElementDepth,
     const bool useReference, const multimapAtom *const referenceContainer,
-    const bool useHighestInsertPosition) {
+    const bool useHighestInsertPosition, const bool useLowestMatch) {
+    /* useLowestMatch: on a match keep searching lower, so among rows that
+     * match 'compareElementDepth' elements the first one is returned */
+    flexEntry *lowest = NULL;
     const uint_fast32_t count = flexCount_(f);
     const uint_fast32_t countValues = count / elementsPerEntry;
     size_t min = 0;
@@ -4879,6 +4882,11 @@ DK_INLINE_ALWAYS flexEntry *abstractFindPositionByTypeSortedDirect(
                  * full width of 'compareElementDepth', so we found
                  * the exact entry starting at 'fe'. */
                 *found = true;
+                if (useLowestMatch) {
+                    lowest = fe;
+                    max = mid;
+                    break;
+                }
                 return fe;
             }
 
@@ -4891,6 +4899,10 @@ DK_INLINE_ALWAYS flexEntry *abstractFindPositionByTypeSortedDirect(
 
     if (useHighestInsertPosition && *found) {
         return fe;
+    }
+
+    if (useLowestMatch && *found) {
+        return lowest;
     }
 
     /* The binary search didn't find a match. */
@@ -4918,7 +4930,7 @@ DK_STATIC flexEntry *flexFindPositionByTypeSortedDirect_(
     const flexEntry *startMiddle, const uint_fast32_t compareElementDepth) {
     return abstractFindPositionByTypeSortedDirect(
         f, elementsPerEntry, compareAgainst, found, startMiddle,
-        compareElementDepth, false, NULL, false);
+        compareElementDepth, false, NULL, false, false);
 }
 
 DK_STATIC flexEntry *flexFindPositionByTypeSortedDirectHighest_(
@@ -4927,7 +4939,7 @@ DK_STATIC flexEntry *flexFindPositionByTypeSortedDirectHighest_(
     const flexEntry *startMiddle, const uint_fast32_t compareElementDepth) {
     return abstractFindPositionByTypeSortedDirect(
         f, elementsPerEntry, compareAgainst, found, startMiddle,
-        compareElementDepth, false, NULL, true);
+        compareElementDepth, false, NULL, true, false);
 }
 
 DK_STATIC flexEntry *flexFindPositionByTypeSortedWithReference_(
@@ -4937,7 +4949,7 @@ DK_STATIC flexEntry *flexFindPositionByTypeSortedWithReference_(
     const multimapAtom *referenceContainer) {
     return abstractFindPositionByTypeSortedDirect(
         f, elementsPerEntry, compareAgainst, found, startMiddle,
-        compareElementDepth, true, referenceContainer, false);
+        compareElementDepth, true, referenceContainer, false, false);
 }
 
 DK_STATIC flexEntry *flexFindPositionByTypeSortedWithReferenceHighest_(
@@ -4947,7 +4959,28 @@ DK_STATIC flexEntry *flexFindPositionByTypeSortedWithReferenceHighest_(
     const multimapAtom *referenceContainer) {
     return abstractFindPositionByTypeSortedDirect(
         f, elementsPerEntry, compareAgainst, found, startMiddle,
-        compareElementDepth, true, referenceContainer, true);
+        compareElementDepth, true, referenceContainer, true, false);
+}
+
+flexEntry *flexFindByTypeSortedWithMiddleLowest(
+    const flex *const f, const uint_fast32_t elementsPerEntry,
+    const databox *compareAgainst, const flexEntry *middleFE) {
+    bool found = false;
+    flexEntry *fe = abstractFindPositionByTypeSortedDirect(
+        f, elementsPerEntry, &compareAgainst, &found, middleFE, 1, false, NULL,
+        false, true);
+    return found ? fe : NULL;
+}
+
+flexEntry *flexFindByTypeSortedWithMiddleLowestWithReference(
+    const flex *const f, const uint_fast32_t elementsPerEntry,
+    const databox *compareAgainst, const flexEntry *middleFE,
+    const multimapAtom *referenceContainer) {
+    bool found = false;
+    flexEntry *fe = abstractFindPositionByTypeSortedDirect(
+        f, elementsPerEntry, &compareAgainst, &found, middleFE, 1, true,
+        referenceContainer, false, true);
+    return found ? fe : NULL;
 }
 
 /* Allow duplicate keys while inserting into map. */

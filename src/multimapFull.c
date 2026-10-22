@@ -844,6 +844,52 @@ DK_STATIC multimapFullIdx multimapFullBinarySearch(const multimapFull *m,
     return min;
 }
 
+/* The map holding the row 'key' addresses.  A set can hold several rows
+ * with one key, running from the end of one map into the next, and the
+ * search lands on the map that starts with the key: step back while the
+ * map before ends with the key, so the key's FIRST row is addressed and
+ * which row a lookup, delete or increment touches never depends on where
+ * the maps happen to split. */
+DK_INLINE_ALWAYS multimapFullIdx multimapFullKeyMap_(
+    const multimapFull *m, const databox *key, const bool useReference,
+    const multimapAtom *referenceContainer) {
+    multimapFullIdx idx = multimapFullBinarySearch(m, key);
+    while (m->mapIsSet && idx > 0 &&
+           databoxCompare(getRangeBox(m, idx - 1), key) == 0) {
+        databox last;
+        databoxWide lastWide;
+        multimapGetByTypeInto_(
+            flexIndex(getMap(m, idx - 1), -(int32_t)m->elementsPerEntry), &last,
+            &lastWide, useReference ? referenceContainer : NULL);
+        if (databoxCompare(&last, key) != 0) {
+            break;
+        }
+        idx--;
+    }
+    return idx;
+}
+
+/* The row 'key' addresses within one map: a set's first row with it */
+DK_INLINE_ALWAYS flexEntry *
+multimapFullFindKeyInMap_(const multimapFull *m, const flex *map,
+                          const flexEntry *middle, const databox *key,
+                          const bool useReference,
+                          const multimapAtom *referenceContainer) {
+    if (useReference) {
+        return m->mapIsSet ? flexFindByTypeSortedWithMiddleLowestWithReference(
+                                 map, m->elementsPerEntry, key, middle,
+                                 referenceContainer)
+                           : flexFindByTypeSortedWithMiddleWithReference(
+                                 map, m->elementsPerEntry, key, middle,
+                                 referenceContainer);
+    }
+    return m->mapIsSet
+               ? flexFindByTypeSortedWithMiddleLowest(map, m->elementsPerEntry,
+                                                      key, middle)
+               : flexFindByTypeSortedWithMiddle(map, m->elementsPerEntry, key,
+                                                middle);
+}
+
 DK_STATIC multimapFullIdx
 multimapFullBinarySearchFullWidth(multimapFull *m, const databox *elements[]) {
     multimapFullIdx min = 0;
@@ -1047,14 +1093,8 @@ DK_INLINE_ALWAYS bool abstractFlexDelete(
                 *map, m->elementsPerEntry, elements, middle);
         }
     } else {
-        if (useReference) {
-            foundP = flexFindByTypeSortedWithMiddleWithReference(
-                *map, m->elementsPerEntry, elements[0], middle,
-                referenceContainer);
-        } else {
-            foundP = flexFindByTypeSortedWithMiddle(*map, m->elementsPerEntry,
-                                                    elements[0], middle);
-        }
+        foundP = multimapFullFindKeyInMap_(m, *map, middle, elements[0],
+                                           useReference, referenceContainer);
     }
 
     if (foundP) {
@@ -1201,13 +1241,13 @@ bool multimapFullDeleteByPosition(multimapFull *m, int64_t keyIndex) {
 
 int64_t multimapFullFieldIncr(multimapFull *m, const databox *key,
                               uint32_t fieldOffset, int64_t incrBy) {
-    uint32_t mapIdx = multimapFullBinarySearch(m, key);
+    uint32_t mapIdx = multimapFullKeyMap_(m, key, false, NULL);
 
     flex **map = getMapPtr(m, mapIdx);
     flexEntry *middle = GET_MIDDLE(m, mapIdx, *map);
 
     flexEntry *current =
-        flexFindByTypeSortedWithMiddle(*map, m->elementsPerEntry, key, middle);
+        multimapFullFindKeyInMap_(m, *map, middle, key, false, NULL);
     if (!current) {
         /* No such key: return 0 rather than walking flexNext from NULL.
          * Matches the multimap-level FieldIncr miss contract. */
@@ -1698,11 +1738,10 @@ void multimapFullInsertFullWidth(multimapFull *m, const databox *elements[]) {
 
 bool multimapFullGetUnderlyingEntry(multimapFull *m, const databox *key,
                                     multimapEntry *me) {
-    me->mapIdx = multimapFullBinarySearch(m, key);
+    me->mapIdx = multimapFullKeyMap_(m, key, false, NULL);
     me->map = getMapPtr(m, me->mapIdx);
-    me->fe =
-        flexFindByTypeSortedWithMiddle(*me->map, m->elementsPerEntry, key,
-                                       GET_MIDDLE(m, me->mapIdx, *me->map));
+    me->fe = multimapFullFindKeyInMap_(
+        m, *me->map, GET_MIDDLE(m, me->mapIdx, *me->map), key, false, NULL);
     return !!me->fe;
 }
 
@@ -1719,11 +1758,11 @@ bool multimapFullGetUnderlyingEntryGetEntry(multimapFull *m, const databox *key,
 bool multimapFullGetUnderlyingEntryWithReference(
     multimapFull *m, const databox *key, multimapEntry *me,
     const multimapAtom *referenceContainer) {
-    me->mapIdx = multimapFullBinarySearch(m, key);
+    me->mapIdx = multimapFullKeyMap_(m, key, true, referenceContainer);
     me->map = getMapPtr(m, me->mapIdx);
-    me->fe = flexFindByTypeSortedWithMiddleWithReference(
-        *me->map, m->elementsPerEntry, key, GET_MIDDLE(m, me->mapIdx, *me->map),
-        referenceContainer);
+    me->fe = multimapFullFindKeyInMap_(m, *me->map,
+                                       GET_MIDDLE(m, me->mapIdx, *me->map), key,
+                                       true, referenceContainer);
     return !!me->fe;
 }
 
@@ -1896,19 +1935,13 @@ DK_INLINE_ALWAYS bool abstractLookup(multimapFull *m, const databox *key,
                                      databox *elements[],
                                      const bool useReference,
                                      const multimapAtom *referenceContainer) {
-    /* TODO: bloom filter */
-    multimapFullIdx mapIdx = multimapFullBinarySearch(m, key);
+    multimapFullIdx mapIdx =
+        multimapFullKeyMap_(m, key, useReference, referenceContainer);
     flex *map = getMap(m, mapIdx);
     flexEntry *middle = GET_MIDDLE(m, mapIdx, map);
 
-    flexEntry *foundP;
-    if (useReference) {
-        foundP = flexFindByTypeSortedWithMiddleWithReference(
-            map, m->elementsPerEntry, key, middle, referenceContainer);
-    } else {
-        foundP = flexFindByTypeSortedWithMiddle(map, m->elementsPerEntry, key,
-                                                middle);
-    }
+    flexEntry *foundP = multimapFullFindKeyInMap_(
+        m, map, middle, key, useReference, referenceContainer);
 
     if (foundP) {
         flexEntry *nextFound = foundP;
@@ -1949,7 +1982,7 @@ DK_INLINE_ALWAYS bool abstractDelete(multimapFull *m, const databox **elements,
     if (fullWidth) {
         mapIdx = multimapFullBinarySearchFullWidth(m, elements);
     } else {
-        mapIdx = multimapFullBinarySearch(m, key);
+        mapIdx = multimapFullKeyMap_(m, key, useReference, referenceContainer);
     }
 
     flex **map = getMapPtr(m, mapIdx);
