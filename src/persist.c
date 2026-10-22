@@ -3675,6 +3675,12 @@ static void *multidictPersistRestoreTyped_(const uint8_t *data, size_t len,
     /* @own: caller; free=multidictFree */
     multidict *d = multidictNew(type, qdc, 0);
 
+    /* Size the table for every pair once, instead of rehashing as it
+     * grows through the adds */
+    if (count >= 2) {
+        multidictExpand(d, count / 2);
+    }
+
     /* Iterate through flex and add each key-value pair */
     for (size_t i = 0; i + 1 < count; i += 2) {
         databoxBig key, val; /* room for 96/128-bit keys and values */
