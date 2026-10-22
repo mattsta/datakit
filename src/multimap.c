@@ -1054,7 +1054,9 @@ void multimapVerify(const multimap *m) {
 
 #include "mdsc.h" /* mdscfree for the replacing sweep's externalized keys */
 #include "persist/multimapP.h" /* the wide persist sweep's round trips */
+#include <execinfo.h> /* backtrace: the allocation window's live-block stacks */
 #include <inttypes.h>
+#include <stdlib.h> /* getenv */
 #include <unistd.h> /* getpid, unlink for the wide persist sweep */
 
 #define REPORT_TIME 1
@@ -2546,23 +2548,117 @@ int32_t multimapWideSweep(void) {
 static datakitConfig mxSavedAlloc;
 static int64_t mxLive;
 
+/* The blocks the window allocated and has not freed, so a window that
+ * ends with blocks live can name them: address and size always, and the
+ * allocating stack when DK_TEST_ALLOC_STACKS is set in the environment.
+ * An open-addressing table with backward-shift deletion, allocated with
+ * the saved allocator so it is never counted itself. */
+enum { mxTrackBits = 16, mxTrackFrames = 12 };
+#define mxTrackSlots ((size_t)1 << mxTrackBits)
+typedef struct mxTracked {
+    const void *p;
+    size_t size;
+} mxTracked;
+typedef struct mxTrackedStack {
+    int depth;
+    void *frames[mxTrackFrames];
+} mxTrackedStack;
+static mxTracked *mxTrack;
+static mxTrackedStack *mxTrackStacks;
+static size_t mxTrackLive;
+static bool mxTrackFull;
+
+static size_t mxTrackHome(const void *p) {
+    return (size_t)(((uint64_t)(uintptr_t)p * UINT64_C(0x9E3779B97F4A7C15)) >>
+                    (64 - mxTrackBits));
+}
+
+static void mxTrackAdd(const void *p, const size_t sz) {
+    if (!mxTrack || !p) {
+        return;
+    }
+
+    if (mxTrackLive >= mxTrackSlots / 2) {
+        mxTrackFull = true;
+        return;
+    }
+
+    size_t i = mxTrackHome(p);
+    while (mxTrack[i].p) {
+        i = (i + 1) & (mxTrackSlots - 1);
+    }
+
+    mxTrack[i] = (mxTracked){.p = p, .size = sz};
+    if (mxTrackStacks) {
+        mxTrackStacks[i].depth =
+            backtrace(mxTrackStacks[i].frames, mxTrackFrames);
+    }
+
+    mxTrackLive++;
+}
+
+/* Forget 'p'; false when the window never allocated it */
+static bool mxTrackDel(const void *p) {
+    if (!mxTrack || !p) {
+        return false;
+    }
+
+    size_t i = mxTrackHome(p);
+    while (mxTrack[i].p != p) {
+        if (!mxTrack[i].p) {
+            return false;
+        }
+
+        i = (i + 1) & (mxTrackSlots - 1);
+    }
+
+    /* Backward-shift: pull later entries of the probe run into the hole */
+    size_t j = i;
+    for (;;) {
+        mxTrack[i].p = NULL;
+        size_t home;
+        do {
+            j = (j + 1) & (mxTrackSlots - 1);
+            if (!mxTrack[j].p) {
+                mxTrackLive--;
+                return true;
+            }
+
+            home = mxTrackHome(mxTrack[j].p);
+        } while (i <= j ? (i < home && home <= j) : (i < home || home <= j));
+
+        mxTrack[i] = mxTrack[j];
+        if (mxTrackStacks) {
+            mxTrackStacks[i] = mxTrackStacks[j];
+        }
+
+        i = j;
+    }
+}
+
 static void *mxCalloc(size_t count, size_t sz) {
     void *p = mxSavedAlloc.localCalloc(count, sz);
     mxLive += p != NULL;
+    mxTrackAdd(p, count * sz);
     return p;
 }
 
 static void *mxMalloc(size_t sz) {
     void *p = mxSavedAlloc.localMalloc(sz);
     mxLive += p != NULL;
+    mxTrackAdd(p, sz);
     return p;
 }
 
 static void mxReallocCount(const void *ptr, const void *p, const size_t sz) {
     if (!ptr && p) {
         mxLive++;
+        mxTrackAdd(p, sz);
     } else if (ptr && !p && !sz) {
         mxLive--;
+        (void)mxTrackDel(ptr);
+    } else if (ptr && p && mxTrackDel(ptr)) {
+        mxTrackAdd(p, sz);
     }
 }
 
@@ -2580,17 +2676,30 @@ static void *mxReallocSlate(void *ptr, size_t sz) {
 
 static void mxFree(void *ptr) {
     mxLive -= ptr != NULL;
+    (void)mxTrackDel(ptr);
     mxSavedAlloc.localFree(ptr);
 }
 
 static int mxMemalign(void **ptr, size_t alignment, size_t sz) {
     const int r = mxSavedAlloc.localMemalign(ptr, alignment, sz);
     mxLive += r == 0;
+    if (r == 0) {
+        mxTrackAdd(*ptr, sz);
+    }
+
     return r;
 }
 
 static void mxCountBegin(void) {
     mxSavedAlloc = datakitConfigMemory__;
+    mxTrack = mxSavedAlloc.localCalloc(mxTrackSlots, sizeof(*mxTrack));
+    mxTrackStacks =
+        getenv("DK_TEST_ALLOC_STACKS")
+            ? mxSavedAlloc.localCalloc(mxTrackSlots, sizeof(*mxTrackStacks))
+            : NULL;
+    mxTrackLive = 0;
+    mxTrackFull = false;
+
     datakitConfig counting = mxSavedAlloc;
     counting.localCalloc = mxCalloc;
     counting.localMalloc = mxMalloc;
@@ -2602,8 +2711,33 @@ static void mxCountBegin(void) {
     datakitConfigSet(&counting);
 }
 
+/* Close the window and return its live count; when blocks are left,
+ * print each one (and its stack, when recorded) first */
 static int64_t mxCountEnd(void) {
     datakitConfigSet(&mxSavedAlloc);
+    if (mxLive != 0 || mxTrackLive != 0) {
+        printf("allocation window: %" PRId64 " live by count, %zu tracked%s\n",
+               mxLive, mxTrackLive,
+               mxTrackFull ? " (table full: some untracked)" : "");
+        for (size_t i = 0; mxTrack && i < mxTrackSlots; i++) {
+            if (!mxTrack[i].p) {
+                continue;
+            }
+
+            printf("  live block %p: %zu bytes\n", mxTrack[i].p,
+                   mxTrack[i].size);
+            if (mxTrackStacks) {
+                fflush(stdout);
+                backtrace_symbols_fd(mxTrackStacks[i].frames,
+                                     mxTrackStacks[i].depth, STDOUT_FILENO);
+            }
+        }
+    }
+
+    mxSavedAlloc.localFree(mxTrack);
+    mxSavedAlloc.localFree(mxTrackStacks);
+    mxTrack = NULL;
+    mxTrackStacks = NULL;
     return mxLive;
 }
 
@@ -2783,8 +2917,10 @@ static bool mxTypeOnly(const databox *got, const mwInt *want) {
 /* The removing reads: InsertReplacing's replacedOut, DeleteWithFound and
  * a DeleteRandomValue drain that empties the map, alternating armed and
  * zeroed boxes. */
-static int32_t mxRemovingReads(const char *where, multimap **m, mwRow *rows,
-                               const size_t n, uint64_t *rng) {
+/* Replace every third row's value (alternating wide and narrow) and
+ * delete every fourth row, checking each reported old value and key. */
+static int32_t mxReplaceAndDelete(const char *where, multimap **m, mwRow *rows,
+                                  const size_t n, uint64_t *rng) {
     int32_t err = 0;
     for (size_t i = 0; i < n; i += 3) {
         if (!rows[i].present) {
@@ -2826,8 +2962,12 @@ static int32_t mxRemovingReads(const char *where, multimap **m, mwRow *rows,
         rows[i].present = false;
     }
 
-    err += mwCheckReads(where, *m, rows, n);
+    return err + mwCheckReads(where, *m, rows, n);
+}
 
+static int32_t mxRemovingReads(const char *where, multimap **m, mwRow *rows,
+                               const size_t n, uint64_t *rng) {
+    int32_t err = mxReplaceAndDelete(where, m, rows, n, rng);
     for (size_t k = 0; multimapCount(*m); k++) {
         const bool armed = k % 2 == 0;
         databoxBig kb;
@@ -2945,6 +3085,53 @@ static int32_t mxRemovedBytes(const char *where, const flexCapSizeLimit limit,
     return err;
 }
 
+/* The matrix's drain uses DeleteRandomValue, whose row comes from an
+ * OS-seeded generator, so its delete order differs from run to run.
+ * DeleteByPosition takes the same delete path with a reproducible row:
+ * bring the extended (96/128-bit) map of each tier to the matrix's
+ * pre-drain state (the exercise, then the replaces and deletes), then
+ * drain it in 'orders' seeded orders, each inside a counting window, so
+ * an order that leaks a rangeBox payload or row copy fails every run and
+ * names its seed. */
+static int32_t mxDrainOrders(const char *where, const flexCapSizeLimit limit,
+                             const multimapType expect, const mwRow *base,
+                             const size_t n, const uint64_t rngAtBuild,
+                             const uint64_t orders) {
+    int32_t err = 0;
+    for (uint64_t seed = 1; seed <= orders; seed++) {
+        uint64_t rng = rngAtBuild;
+        uint64_t order = seed * UINT64_C(0x9E3779B97F4A7C15);
+        mwRow rows[mxPoolMax];
+        memcpy(rows, base, n * sizeof(*rows));
+        mxCountBegin();
+        {
+            cleaner(multimapFree) multimap *m = multimapNewLimit(2, limit);
+            err += mwExercise(where, &m, rows, n, expect, &rng);
+            err += mxReplaceAndDelete(where, &m, rows, n, &rng);
+
+            while (multimapCount(m)) {
+                const int64_t pos =
+                    (int64_t)(mwRand(&order) % multimapCount(m));
+                if (!multimapDeleteByPosition(&m, pos)) {
+                    ERR("%s drain order %" PRIu64 ": DeleteByPosition(%" PRId64
+                        ") failed with %zu rows left",
+                        where, seed, pos, multimapCount(m));
+                    break;
+                }
+            }
+        }
+
+        const int64_t live = mxCountEnd();
+        if (live != 0) {
+            ERR("%s drain order %" PRIu64 ": %" PRId64
+                " allocations outlived the map",
+                where, seed, live);
+        }
+    }
+
+    return err;
+}
+
 int32_t multimapWideMatrixSweep(void) {
     int32_t err = 0;
     uint64_t rng = 0xD1B54A32D192ED03ULL;
@@ -2974,6 +3161,9 @@ int32_t multimapWideMatrixSweep(void) {
 
             mwRow rows[mxPoolMax];
             const size_t n = mxSubset(rows, pool, built, want);
+            mwRow rowsAtBuild[mxPoolMax];
+            memcpy(rowsAtBuild, rows, n * sizeof(*rows));
+            const uint64_t rngAtBuild = rng;
 
             /* Build, exercise every read path, drain and free inside one
              * counting window: every rangeBox payload, row copy and
@@ -2997,6 +3187,10 @@ int32_t multimapWideMatrixSweep(void) {
                 ERR("%s: %" PRId64 " allocations outlived the map", where,
                     live);
             }
+
+            /* The same map, drained in reproducible orders */
+            err += mxDrainOrders(where, plans[p].limit, plans[p].expect,
+                                 rowsAtBuild, n, rngAtBuild, 32);
         }
     }
 
