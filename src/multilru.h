@@ -315,6 +315,27 @@ bool multilruRemoveMinimum(multilru *mlru, multilruPtr *out);
  * Safe to call with invalid pointer (no-op). */
 void multilruDelete(multilru *mlru, multilruPtr ptr);
 
+/* Demote entry from level N to the head of level N-1, exactly as
+ * multilruRemoveMinimum demotes its victim.  No-op at level 0 and for an
+ * invalid pointer.  For replaying a logged demotion. */
+void multilruDecrease(multilru *mlru, multilruPtr ptr);
+
+/* The entry multilruRemoveMinimum would take next (0 when empty): it
+ * demotes it when multilruGetLevel > 0 and evicts it at level 0.  Lets a
+ * writer log an eviction step before taking it. */
+multilruPtr multilruPeekMinimum(const multilru *mlru);
+
+/* The handle the next insert will return: the most recently freed slot,
+ * else the next never-used one.  Lets a writer log an insert before
+ * making it. */
+multilruPtr multilruPeekNextHandle(const multilru *mlru);
+
+/* The recycled slots in the order inserts will reuse them (up to 'n'
+ * written to 'out'); multilruGetStats reports how many there are.  A
+ * snapshot that keeps this order restores to a multilru that hands out
+ * the same handles. */
+size_t multilruFreeHandles(const multilru *mlru, multilruPtr out[], size_t n);
+
 /* ====================================================================
  * Bulk Eviction Operations
  * ==================================================================== */
@@ -477,6 +498,8 @@ void multilruSetPolicy(multilru *mlru, multilruPolicy policy);
 
 /* Change victim selection strategy */
 void multilruSetEvictStrategy(multilru *mlru, multilruEvictStrategy strategy);
+multilruPolicy multilruGetPolicy(const multilru *mlru);
+multilruEvictStrategy multilruGetEvictStrategy(const multilru *mlru);
 
 /* Set/get max entry count (0 = unlimited) */
 void multilruSetMaxCount(multilru *mlru, uint64_t maxCount);

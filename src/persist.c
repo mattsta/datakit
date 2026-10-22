@@ -4100,12 +4100,18 @@ const persistOps persistOpsMultiarray = {
 
 defcleaner(multilru *, multilruFree);
 
-/* Snapshot format (using flex):
- * - Config:
- * [maxLevels][enableWeights][policy][evictStrategy][maxCount][maxWeight]
- * - Entries: For each active entry in handle order:
- * [handle (size_t)][level (uint8_t)][weight (uint64_t, if weights enabled)]
- */
+/* Snapshot (one flex, every value exact):
+ *   [maxLevels, weights (0/1), policy, evictStrategy, maxCount, maxWeight,
+ *    nextFresh, entryCount, freeCount]
+ *   entryCount rows [handle, level(, weight when weights)], handles
+ *   ascending
+ *   freeCount recycled handles in the order inserts reuse them, so the
+ *   restored LRU hands out the same handles the live one would (which a
+ *   WAL replayed after the snapshot depends on) */
+#define MLRU_PERSIST_CONFIG 9 /* elements before the entries */
+
+defcleanerName(multilruPtr *, zfree, MultilruPtrs);
+defcleanerName(bool *, zfree, MlruBools);
 
 static uint8_t *multilruPersistSnapshot(const void *structure, size_t *len) {
     const multilru *mlru = structure;
@@ -4114,39 +4120,47 @@ static uint8_t *multilruPersistSnapshot(const void *structure, size_t *len) {
 
     /* Handle NULL (empty LRU) */
     if (mlru) {
-        /* Get stats */
         multilruStats stats;
         multilruGetStats(mlru, &stats);
+        const bool enableWeights = multilruHasWeights(mlru);
 
-        /* Check if weights are enabled using the new API */
-        bool enableWeights = multilruHasWeights(mlru);
-
-        /* Store configuration: one row */
         flexRow row = FLEX_ROW_INIT;
         flexRowUnsigned(&row, stats.maxLevels);
         flexRowUnsigned(&row, enableWeights ? 1 : 0);
-        flexRowUnsigned(&row, 0); /* Policy not exposed in API, use 0 */
-        flexRowUnsigned(&row, 0); /* Strategy not exposed, use 0 */
+        flexRowUnsigned(&row, multilruGetPolicy(mlru));
+        flexRowUnsigned(&row, multilruGetEvictStrategy(mlru));
         flexRowUnsigned(&row, stats.maxCount);
         flexRowUnsigned(&row, stats.maxWeight);
-        flexRowUnsigned(&row, stats.nextFresh); /* next handle, to keep gaps */
+        flexRowUnsigned(&row, stats.nextFresh);
+        flexRowUnsigned(&row, stats.count);
+        flexRowUnsigned(&row, stats.freeCount);
         flexRowAppendExact(&f, &row);
 
-        /* Store entries - iterate through all populated handles, one row
-         * each */
+        /* Every populated handle, one row each */
         for (size_t handle = 1; handle < stats.nextFresh; handle++) {
             if (multilruIsPopulated(mlru, handle)) {
                 flexRowUnsigned(&row, handle);
                 flexRowUnsigned(&row, multilruGetLevel(mlru, handle));
-
-                /* ALWAYS store weight if weights are enabled (even if zero) to
-                 * maintain consistent field count */
                 if (enableWeights) {
                     flexRowUnsigned(&row, multilruGetWeight(mlru, handle));
                 }
-
                 flexRowAppendExact(&f, &row);
             }
+        }
+
+        /* The free list, in reuse order */
+        if (stats.freeCount) {
+            cleanerName(zfree, MultilruPtrs) multilruPtr *freed =
+                zcalloc(stats.freeCount, sizeof(multilruPtr));
+            const size_t n =
+                multilruFreeHandles(mlru, freed, (size_t)stats.freeCount);
+            for (size_t i = 0; i < n; i++) {
+                flexRowUnsigned(&row, freed[i]);
+                if (row.n == FLEX_ROW_MAX) {
+                    flexRowAppendExact(&f, &row);
+                }
+            }
+            flexRowAppendExact(&f, &row);
         }
     }
 
@@ -4157,177 +4171,123 @@ static uint8_t *multilruPersistSnapshot(const void *structure, size_t *len) {
     return buf;
 }
 
+/* The next element of a snapshot as an unsigned integer up to 'max' */
+static bool mlruPersistNext_(const flex *f, flexEntry **fe, uint64_t max,
+                             uint64_t *out) {
+    databox b = {{0}};
+    flexGetByType(*fe, &b);
+    *fe = flexNext(f, *fe);
+    if ((b.type != DATABOX_UNSIGNED_64 && b.type != DATABOX_SIGNED_64) ||
+        (b.type == DATABOX_SIGNED_64 && b.data.i64 < 0) || b.data.u64 > max) {
+        return false;
+    }
+    *out = b.data.u64;
+    return true;
+}
+
 static void *multilruPersistRestore(const uint8_t *data, size_t len) {
-    if (!flexValidateBuffer(data, len)) {
+    /* Every element is decoded below, so every element is checked first */
+    if (!flexValidateBufferDeep(data, len)) {
         return NULL;
     }
-    /* Restore flex from data */
-    cleaner(flexFree) flex *f = zmalloc(len);
-    memcpy(f, data, len);
-
-    size_t count = flexCount(f);
-    if (count < 6) {
-        /* Invalid: need at least config fields */
+    const flex *f = (const flex *)data;
+    const size_t count = flexCount(f);
+    if (count < MLRU_PERSIST_CONFIG) {
         return NULL;
     }
 
-    /* Read configuration */
     flexEntry *fe = flexHead(f);
-    /* Zeroed: these fields are 64-bit integers, so 'big' must be clear
-     * for a malformed wide entry to decode type-only instead of writing
-     * through an uninitialised pointer. */
-    databox db = {{0}};
-
-    flexGetByType(fe, &db);
-    size_t maxLevels = (size_t)db.data.u64;
-    fe = flexNext(f, fe);
-
-    flexGetByType(fe, &db);
-    bool enableWeights = db.data.u64 != 0;
-    fe = flexNext(f, fe);
-
-    flexGetByType(fe, &db);
-    /* uint64_t policy = db.data.u64; */ /* Not used currently */
-    fe = flexNext(f, fe);
-
-    flexGetByType(fe, &db);
-    /* uint64_t evictStrategy = db.data.u64; */ /* Not used currently */
-    fe = flexNext(f, fe);
-
-    flexGetByType(fe, &db);
-    uint64_t maxCount = db.data.u64;
-    fe = flexNext(f, fe);
-
-    flexGetByType(fe, &db);
-    uint64_t maxWeight = db.data.u64;
-    fe = flexNext(f, fe);
-
-    /* Check if snapshot has nextFresh field (new format) or not (old format) */
-    bool hasNextFresh = (count >= 7);
-    size_t targetNextFresh = 0;
-    size_t configFields = 6;
-
-    if (hasNextFresh) {
-        flexGetByType(fe, &db);
-        targetNextFresh = (size_t)db.data.u64;
-        fe = flexNext(f, fe);
-        configFields = 7;
+    uint64_t maxLevels, weights, policy, strategy, maxCount, maxWeight;
+    uint64_t nextFresh, entries, freeCount;
+    if (!mlruPersistNext_(f, &fe, 64, &maxLevels) || maxLevels == 0 ||
+        !mlruPersistNext_(f, &fe, 1, &weights) ||
+        !mlruPersistNext_(f, &fe, MLRU_POLICY_HYBRID, &policy) ||
+        !mlruPersistNext_(f, &fe, MLRU_EVICT_SIZE_LRU, &strategy) ||
+        !mlruPersistNext_(f, &fe, UINT64_MAX, &maxCount) ||
+        !mlruPersistNext_(f, &fe, UINT64_MAX, &maxWeight) ||
+        !mlruPersistNext_(f, &fe, UINT64_MAX, &nextFresh) ||
+        !mlruPersistNext_(f, &fe, count, &entries) ||
+        !mlruPersistNext_(f, &fe, count, &freeCount)) {
+        return NULL;
     }
 
-    /* Create multilru with config */
-    multilruConfig config = {
+    /* Every slot after the level heads is an entry or a recycled hole, and
+     * the element count is exactly the config, the entries and the holes */
+    const uint64_t first = maxLevels + 1;
+    const uint64_t fields = weights ? 3 : 2;
+    if (nextFresh != first + entries + freeCount ||
+        count != MLRU_PERSIST_CONFIG + entries * fields + freeCount) {
+        return NULL;
+    }
+
+    const multilruConfig config = {
         .maxLevels = maxLevels,
-        .startCapacity = 0, /* Auto */
+        .startCapacity = (size_t)(entries + freeCount),
         .maxWeight = maxWeight,
         .maxCount = maxCount,
-        .policy = MLRU_POLICY_COUNT,     /* Default */
-        .evictStrategy = MLRU_EVICT_LRU, /* Default */
-        .enableWeights = enableWeights,
+        .policy = (multilruPolicy)policy,
+        .evictStrategy = (multilruEvictStrategy)strategy,
+        .enableWeights = weights != 0,
     };
-    /* @own: caller; free=multilruFree */
-    multilru *mlru = multilruNewWithConfig(&config);
+    cleaner(multilruFree) multilru *mlru = multilruNewWithConfig(&config);
     if (!mlru) {
         return NULL;
     }
-
-    /* Disable auto-eviction during restore */
     multilruSetAutoEvict(mlru, false);
 
-    /* Restore entries */
-    size_t fieldsPerEntry = enableWeights ? 3 : 2;
-    size_t numEntries = (count - configFields) / fieldsPerEntry;
-
-    /* Track which handles are real (from snapshot) vs dummy (gap fillers) */
-    cleanerName(zfree, Bools) bool *isRealEntry =
-        hasNextFresh && targetNextFresh > 0
-            ? zcalloc(targetNextFresh + 1, sizeof(bool))
-            : NULL;
-
-    for (size_t i = 0; i < numEntries && fe; i++) {
-        /* Read handle */
-        flexGetByType(fe, &db);
-        size_t targetHandle = (size_t)db.data.u64;
-        fe = flexNext(f, fe);
-        if (!fe) {
-            break;
+    /* Fill every slot in handle order (a new LRU hands them out in
+     * sequence), entries with their weight and level; the holes are
+     * freed afterwards in the recorded order */
+    cleanerName(zfree, MlruBools) bool *isEntry =
+        zcalloc((size_t)nextFresh, sizeof(bool));
+    uint64_t prev = 0;
+    for (uint64_t i = 0; i < entries; i++) {
+        uint64_t handle, level, weight = 0;
+        if (!mlruPersistNext_(f, &fe, nextFresh - 1, &handle) ||
+            handle < first || handle <= prev ||
+            !mlruPersistNext_(f, &fe, maxLevels - 1, &level) ||
+            (weights && !mlruPersistNext_(f, &fe, UINT64_MAX, &weight))) {
+            return NULL;
         }
-
-        /* Read level */
-        flexGetByType(fe, &db);
-        size_t targetLevel = (size_t)db.data.u64;
-        fe = flexNext(f, fe);
-
-        /* Read weight if enabled */
-        uint64_t weight = 0;
-        if (enableWeights) {
-            if (!fe) {
-                break;
-            }
-            flexGetByType(fe, &db);
-            weight = db.data.u64;
-            fe = flexNext(f, fe);
+        prev = handle;
+        while (multilruPeekNextHandle(mlru) < handle) {
+            multilruInsert(mlru); /* a hole, freed below */
         }
-
-        /* Insert entries until we reach the target handle value
-         * This ensures handle values match after restore
-         * Use nextFresh instead of count to handle gaps from deleted entries */
-        multilruStats stats;
-        multilruGetStats(mlru, &stats);
-        while (stats.nextFresh < targetHandle) {
-            if (enableWeights) {
-                multilruInsertWeighted(mlru, 0);
-            } else {
-                multilruInsert(mlru);
-            }
-            multilruGetStats(mlru, &stats);
+        const multilruPtr got = multilruInsertWeighted(mlru, weight);
+        if (got != handle) {
+            return NULL;
         }
-
-        /* Insert the actual entry */
-        multilruPtr handle;
-        if (enableWeights) {
-            handle = multilruInsertWeighted(mlru, weight);
-        } else {
-            handle = multilruInsert(mlru);
-        }
-
-        /* Mark this as a real entry */
-        if (isRealEntry && handle <= targetNextFresh) {
-            isRealEntry[handle] = true;
-        }
-
-        /* Promote to target level */
-        for (size_t lvl = 0; lvl < targetLevel; lvl++) {
-            multilruIncrease(mlru, handle);
+        isEntry[handle] = true;
+        for (uint64_t l = 0; l < level; l++) {
+            multilruIncrease(mlru, got);
         }
     }
-
-    /* If we have nextFresh info, fill to that point and delete dummies to
-     * preserve gaps */
-    if (hasNextFresh && targetNextFresh > 0 && isRealEntry) {
-        /* Fill to nextFresh */
-        multilruStats finalStats;
-        multilruGetStats(mlru, &finalStats);
-        while (finalStats.nextFresh < targetNextFresh) {
-            if (enableWeights) {
-                multilruInsertWeighted(mlru, 0);
-            } else {
-                multilruInsert(mlru);
-            }
-            multilruGetStats(mlru, &finalStats);
-        }
-
-        /* Now delete all dummy entries to create gaps */
-        for (size_t handle = 1; handle < targetNextFresh; handle++) {
-            if (multilruIsPopulated(mlru, handle) && !isRealEntry[handle]) {
-                multilruDelete(mlru, handle);
-            }
-        }
+    while (multilruPeekNextHandle(mlru) < nextFresh) {
+        multilruInsert(mlru);
     }
 
-    /* Re-enable auto-eviction */
+    /* Free the holes so the first recorded is reused first: each delete
+     * pushes onto the free list, so delete them last to first */
+    cleanerName(zfree, MultilruPtrs) multilruPtr *holes =
+        zcalloc(freeCount ? (size_t)freeCount : 1, sizeof(multilruPtr));
+    for (uint64_t i = 0; i < freeCount; i++) {
+        uint64_t hole;
+        if (!mlruPersistNext_(f, &fe, nextFresh - 1, &hole) || hole < first ||
+            isEntry[hole]) {
+            return NULL;
+        }
+        isEntry[hole] = true; /* each hole once */
+        holes[i] = hole;
+    }
+    for (uint64_t i = freeCount; i > 0; i--) {
+        multilruDelete(mlru, holes[i - 1]);
+    }
+
     multilruSetAutoEvict(mlru, true);
-
-    return mlru;
+    /* @own: caller; free=multilruFree */
+    multilru *out = mlru;
+    mlru = NULL;
+    return out;
 }
 
 static size_t multilruPersistCount(const void *structure) {
@@ -4347,12 +4307,15 @@ static void multilruPersistFree(void *structure) {
     }
 }
 
-/* WAL operation encoding for multilru:
+/* WAL operation encoding for multilru (args: const void *[] of pointers to
+ * the handle and, where present, the weight):
  * - INSERT: [handle (varint)][weight (varint)]
- * - DELETE: [handle (varint)]
- * - PROMOTE: [handle (varint)]
+ * - DELETE: [handle (varint)] (also a true eviction)
+ * - CUSTOM (promote, multilruIncrease): [handle (varint)]
+ * - NUM_DECR_F0 (demote, multilruDecrease): [handle (varint)]
  * - UPDATE (weight update): [handle (varint)][newWeight (varint)]
- */
+ * Eviction policy never runs during replay: every eviction step a writer
+ * took is its own DELETE or NUM_DECR_F0 record. */
 
 static uint8_t *multilruPersistEncodeOp(persistOp op, const void *args,
                                         size_t nargs, size_t *len) {
@@ -4387,9 +4350,10 @@ static uint8_t *multilruPersistEncodeOp(persistOp op, const void *args,
     }
 
     case PERSIST_OP_DELETE:
-    case PERSIST_OP_CUSTOM: /* PROMOTE */
+    case PERSIST_OP_CUSTOM:      /* PROMOTE */
+    case PERSIST_OP_NUM_DECR_F0: /* DEMOTE: level - 1, floor 0 */
     {
-        /* DELETE/PROMOTE: [handle (self-describing varint)] */
+        /* DELETE/PROMOTE/DEMOTE: [handle (self-describing varint)] */
         /* @own: caller; free=zfree */
         uint8_t *buf = zmalloc(9);
         varintWidth handleWidth = varintTaggedPut64(buf, handle);
@@ -4421,6 +4385,21 @@ static uint8_t *multilruPersistEncodeOp(persistOp op, const void *args,
     }
 }
 
+/* The tagged varint at data[*at], within 'len', advancing *at */
+static bool mlruPersistVarint_(const uint8_t *data, size_t len, size_t *at,
+                               uint64_t *out) {
+    if (!data || *at >= len) {
+        return false;
+    }
+    const varintWidth width = varintTaggedGetLen(data + *at);
+    if (width == 0 || width > len - *at) {
+        return false;
+    }
+    varintTaggedGet64(data + *at, out);
+    *at += width;
+    return true;
+}
+
 static bool multilruPersistApplyOp(void *structure, persistOp op,
                                    const uint8_t *data, size_t len) {
     multilru **mlru = structure;
@@ -4431,129 +4410,59 @@ static bool multilruPersistApplyOp(void *structure, persistOp op,
         *mlru = multilruNew();
     }
 
-    /* Disable auto-eviction during WAL replay to prevent infinite loops
-     * when inserting dummy entries to fill gaps */
-    bool wasAutoEvict = multilruGetAutoEvict(*mlru);
-    if (op == PERSIST_OP_INSERT) {
-        multilruSetAutoEvict(*mlru, false);
-    }
-
     switch (op) {
     case PERSIST_OP_INSERT: {
-        /* Decode: [handle (self-describing varint)][weight (self-describing
-         * varint)] */
-        if (len < 2) {
-            return false;
-        }
-
-        /* Decode handle */
+        /* [handle][weight] */
+        size_t at = 0;
         uint64_t handle;
-        varintWidth handleWidth = varintTaggedGet64(data, &handle);
-        if (handleWidth == 0 || handleWidth > len) {
-            return false;
-        }
-
-        /* Decode weight */
-        size_t offset = handleWidth;
-        if (offset >= len) {
-            return false;
-        }
         uint64_t weight;
-        varintWidth weightWidth = varintTaggedGet64(data + offset, &weight);
-        if (weightWidth == 0 || offset + weightWidth > len) {
+        if (!mlruPersistVarint_(data, len, &at, &handle) ||
+            !mlruPersistVarint_(data, len, &at, &weight) || at != len) {
             return false;
         }
 
-        /* Insert dummy entries to fill gaps, then insert the actual entry
-         * multilru assigns handles sequentially starting from 1
-         * If we're inserting handle 5, we need to ensure handles 1-4 exist
-         * first */
-        multilruStats stats;
-        multilruGetStats(*mlru, &stats);
-
-        /* Insert dummy entries until nextFresh == handle */
-        while (stats.nextFresh < handle) {
-            multilruInsert(*mlru); /* Insert dummy with no weight */
-            multilruGetStats(*mlru, &stats);
+        /* Replay reproduces the writer's state exactly (snapshots keep the
+         * free-list order; evictions and demotions are logged), so the
+         * insert lands on the logged handle; anything else is a log that
+         * does not belong to this structure.  Evictions arrive as their
+         * own records, so none runs here. */
+        if (multilruPeekNextHandle(*mlru) != (multilruPtr)handle) {
+            return false;
         }
+        const bool autoEvict = multilruGetAutoEvict(*mlru);
+        multilruSetAutoEvict(*mlru, false);
+        const multilruPtr inserted = multilruInsertWeighted(*mlru, weight);
+        multilruSetAutoEvict(*mlru, autoEvict);
+        return inserted == (multilruPtr)handle;
+    }
 
-        /* Now insert the actual entry with its weight */
-        multilruPtr inserted;
-        if (weight > 0) {
-            inserted = multilruInsertWeighted(*mlru, weight);
+    case PERSIST_OP_DELETE:
+    case PERSIST_OP_CUSTOM:        /* PROMOTE */
+    case PERSIST_OP_NUM_DECR_F0: { /* DEMOTE */
+        size_t at = 0;
+        uint64_t handle;
+        if (!mlruPersistVarint_(data, len, &at, &handle) || at != len) {
+            return false;
+        }
+        if (op == PERSIST_OP_DELETE) {
+            multilruDelete(*mlru, (multilruPtr)handle);
+        } else if (op == PERSIST_OP_CUSTOM) {
+            multilruIncrease(*mlru, (multilruPtr)handle);
         } else {
-            inserted = multilruInsert(*mlru);
+            multilruDecrease(*mlru, (multilruPtr)handle);
         }
-
-        /* Verify we got the expected handle */
-        if (inserted != (multilruPtr)handle) {
-            /* Handle mismatch - this is unexpected */
-            multilruSetAutoEvict(*mlru, wasAutoEvict); /* Restore */
-            return false;
-        }
-
-        /* Restore auto-eviction setting */
-        multilruSetAutoEvict(*mlru, wasAutoEvict);
-        return true;
-    }
-
-    case PERSIST_OP_DELETE: {
-        /* Decode: [handle (self-describing varint)] */
-        if (len < 1) {
-            return false;
-        }
-
-        uint64_t handle;
-        varintWidth handleWidth = varintTaggedGet64(data, &handle);
-        if (handleWidth == 0 || handleWidth > len) {
-            return false;
-        }
-
-        multilruDelete(*mlru, (multilruPtr)handle);
-        return true;
-    }
-
-    case PERSIST_OP_CUSTOM: { /* PROMOTE */
-        /* Decode: [handle (self-describing varint)] */
-        if (len < 1) {
-            return false;
-        }
-
-        uint64_t handle;
-        varintWidth handleWidth = varintTaggedGet64(data, &handle);
-        if (handleWidth == 0 || handleWidth > len) {
-            return false;
-        }
-
-        multilruIncrease(*mlru, (multilruPtr)handle);
         return true;
     }
 
     case PERSIST_OP_UPDATE: {
-        /* Decode: [handle (self-describing varint)][newWeight (self-describing
-         * varint)] */
-        if (len < 2) {
-            return false;
-        }
-
-        /* Decode handle */
+        /* [handle][newWeight] */
+        size_t at = 0;
         uint64_t handle;
-        varintWidth handleWidth = varintTaggedGet64(data, &handle);
-        if (handleWidth == 0 || handleWidth > len) {
-            return false;
-        }
-
-        /* Decode new weight */
-        size_t offset = handleWidth;
-        if (offset >= len) {
-            return false;
-        }
         uint64_t newWeight;
-        varintWidth weightWidth = varintTaggedGet64(data + offset, &newWeight);
-        if (weightWidth == 0 || offset + weightWidth > len) {
+        if (!mlruPersistVarint_(data, len, &at, &handle) ||
+            !mlruPersistVarint_(data, len, &at, &newWeight) || at != len) {
             return false;
         }
-
         multilruUpdateWeight(*mlru, (multilruPtr)handle, newWeight);
         return true;
     }

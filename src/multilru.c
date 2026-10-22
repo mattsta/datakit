@@ -1587,6 +1587,48 @@ void multilruUpdateWeight(multilru *mlru, multilruPtr ptr, uint64_t newWeight) {
         mlru->levels[level].weight - oldWeight + newWeight;
 }
 
+void multilruDecrease(multilru *mlru, multilruPtr ptr) {
+    const uint64_t idx = ptr;
+    if (idx == 0 || idx >= mlru->capacity || !E_POPULATED(mlru, idx) ||
+        E_HEAD(mlru, idx)) {
+        return; /* Invalid entry */
+    }
+
+    const size_t level = E_LEVEL(mlru, idx);
+    if (level == 0) {
+        return;
+    }
+
+    /* Remove from the current level (which subtracts the weight), then
+     * restore the weight for the re-insertion at the head of level - 1
+     * (second chance) */
+    const uint64_t entryWeight = mlru->weights ? mlru->weights[idx] : 0;
+    removeFromList(mlru, idx);
+    if (mlru->weights) {
+        mlru->weights[idx] = entryWeight;
+    }
+    insertAtLevelHead(mlru, idx, level - 1);
+    updateLowest(mlru);
+    mlru->statDemotions++;
+}
+
+multilruPtr multilruPeekMinimum(const multilru *mlru) {
+    return mlru->count ? mlru->lowest : 0;
+}
+
+multilruPtr multilruPeekNextHandle(const multilru *mlru) {
+    return mlru->freeHead ? mlru->freeHead : mlru->nextFresh;
+}
+
+size_t multilruFreeHandles(const multilru *mlru, multilruPtr out[], size_t n) {
+    size_t got = 0;
+    for (uint64_t idx = mlru->freeHead; idx && got < n;
+         idx = E_NEXT(mlru, idx)) {
+        out[got++] = idx;
+    }
+    return got;
+}
+
 bool multilruRemoveMinimum(multilru *mlru, multilruPtr *out) {
     if (mlru->count == 0 || mlru->lowest == 0) {
         return false;
@@ -1599,30 +1641,10 @@ bool multilruRemoveMinimum(multilru *mlru, multilruPtr *out) {
         *out = idx;
     }
 
-    /* S4LRU Demotion: if level > 0, demote instead of evict */
+    /* S4LRU Demotion: if level > 0, demote instead of evict.  The demoted
+     * entry is returned; the caller decides whether to continue. */
     if (level > 0) {
-        /* Save weight */
-        uint64_t entryWeight = mlru->weights ? mlru->weights[idx] : 0;
-
-        /* Remove from current level */
-        removeFromList(mlru, idx);
-
-        /* Restore weight for re-insertion */
-        if (mlru->weights) {
-            mlru->weights[idx] = entryWeight;
-        }
-
-        /* Insert at head of level-1 (second chance) */
-        insertAtLevelHead(mlru, idx, level - 1);
-
-        /* Update lowest */
-        updateLowest(mlru);
-        mlru->statDemotions++;
-
-        /* Entry was demoted, not evicted - return the demoted entry */
-        /* Note: For true S4LRU, we'd continue evicting until something
-         * is actually removed from level 0. For simplicity, we just
-         * return the demoted entry and let the caller decide. */
+        multilruDecrease(mlru, idx);
         return true;
     }
 
@@ -1918,6 +1940,14 @@ void multilruSetPolicy(multilru *mlru, multilruPolicy policy) {
 
 void multilruSetEvictStrategy(multilru *mlru, multilruEvictStrategy strategy) {
     mlru->evictStrategy = strategy;
+}
+
+multilruPolicy multilruGetPolicy(const multilru *mlru) {
+    return mlru->policy;
+}
+
+multilruEvictStrategy multilruGetEvictStrategy(const multilru *mlru) {
+    return mlru->evictStrategy;
 }
 
 void multilruSetMaxCount(multilru *mlru, uint64_t maxCount) {
