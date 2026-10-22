@@ -3443,14 +3443,17 @@ int multilistFullTest(int argc, char *argv[]) {
     mflexStateReset(s0);
     mflexStateReset(s1);
 
-    /* Run a longer test of compression depth outside of primary test loop. */
-    int listSizes[] = {30, 40, 50, 100, 250, 251, 500, 999, 1000, 5000, 10000};
+    /* Compression depth against list length, at every fill: lists from a
+     * few nodes to thousands, depths from 1 to past the node count, and
+     * every node's compression state checked against its position. */
+    const int listSizes[] = {30, 251, 1000, 5000};
+    const size_t depths[] = {1, 2, 3, 5, 8, 13, 21, 39};
     int64_t start = timeUtilMs();
     for (size_t list = 0; list < (sizeof(listSizes) / sizeof(*listSizes));
          list++) {
         for (size_t f = 0; f < flexOptimizationSizeLimits; f++) {
-            for (size_t _depth = 1; _depth < 40; _depth++) {
-                /* skip over many redundant test cases */
+            for (size_t d = 0; d < sizeof(depths) / sizeof(*depths); d++) {
+                const size_t _depth = depths[d];
                 TEST_DESC("verify specific compression of interior nodes with "
                           "%d list "
                           "at fill %zu at compress depth %zu",

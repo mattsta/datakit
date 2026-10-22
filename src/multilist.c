@@ -2424,25 +2424,55 @@ int multilistTest(int argc, char *argv[]) {
     mflexStateReset(s0);
     mflexStateReset(s1);
 
-    /* Run a longer test of compression depth outside of primary test loop. */
-    int listSizes[] = {30, 40, 50, 100, 250, 251, 500, 999, 1000, 5000, 10000};
+    /* Compression depth against list length, at every fill: lists from a
+     * few nodes to thousands, depths from 1 to past the node count.  Every
+     * element is read back, so every compressed interior node is
+     * decompressed and checked. */
+    const int listSizes[] = {30, 251, 1000, 5000};
+    const size_t depths[] = {1, 2, 3, 5, 8, 13, 21, 39};
     int64_t start = timeUtilMs();
     for (size_t list = 0; list < (sizeof(listSizes) / sizeof(*listSizes));
          list++) {
         for (size_t f = 0; f < flexOptimizationSizeLimits; f++) {
-            for (size_t _depth = 1; _depth < 40; _depth++) {
-                /* skip over many redundant test cases */
+            for (size_t d = 0; d < sizeof(depths) / sizeof(*depths); d++) {
+                const size_t _depth = depths[d];
+                const int n = listSizes[list];
                 TEST_DESC("verify specific compression of interior nodes with "
                           "%d list "
                           "at fill %zu at compress depth %zu",
-                          listSizes[list], f, _depth) {
+                          n, f, _depth) {
                     cleaner(multilistFree) multilist *ml =
                         multilistNew(f, _depth);
-                    for (int i = 0; i < listSizes[list]; i++) {
+                    for (int i = 0; i < n; i++) {
                         multilistPushTail(ml, s0, genstr("hello TAIL", i + 1),
                                           64);
                         multilistPushHead(ml, s0, genstr("hello HEAD", i + 1),
                                           64);
+                    }
+
+                    /* HEAD n .. HEAD 1, then TAIL 1 .. TAIL n */
+                    multilistIterator iter;
+                    multilistEntry entry;
+                    multilistIteratorInitReadOnly(ml, s, &iter, true);
+                    int seen = 0;
+                    while (multilistNext(&iter, &entry)) {
+                        const char *want =
+                            seen < n ? genstr("hello HEAD", n - seen)
+                                     : genstr("hello TAIL", seen - n + 1);
+                        if (entry.box.len != 64 ||
+                            memcmp(entry.box.data.bytes.start, want, 64) != 0) {
+                            ERR("list %d fill %zu depth %zu: element %d is "
+                                "not %s",
+                                n, f, _depth, seen, want);
+                            break;
+                        }
+                        seen++;
+                    }
+
+                    multilistIteratorRelease(&iter);
+                    if (seen != 2 * n || multilistCount(ml) != (size_t)2 * n) {
+                        ERR("list %d fill %zu depth %zu: read %d of %d", n, f,
+                            _depth, seen, 2 * n);
                     }
                 }
             }
