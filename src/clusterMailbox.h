@@ -61,7 +61,7 @@
  * via its own internal rwlock.
  * - Multi-origin: a small open-addressed table tracks per-origin
  * replay watermarks. Capacity is a compile-time constant.
- * - Replay-evident, not ordering-fixing: V1 rejects out-of-order
+ * - Replay-evident, not ordering-fixing: Ingest rejects out-of-order
  * frames whose sequence is <= last_applied. Higher-sequence
  * frames are dispatched immediately; the caller deals with gaps
  * according to its protocol (e.g. NACK + retransmit). */
@@ -307,9 +307,7 @@ clusterMailboxIngestResult clusterMailboxIngest(clusterMailbox *mb,
  *
  * Per-mailbox event counters. Snapshot via clusterMailboxStats and
  * read; counters never wrap in practice (uint64_t covers ~580 years
- * at 1 GHz event rate). The struct is wire-stable: new counters MUST
- * be appended (never inserted) so callers compiled against an older
- * header remain compatible.
+ * at 1 GHz event rate).
  *
  * Suggested operator monitoring (rules of thumb):
  * - verify_failed > 0 over short windows: alert (active attacker

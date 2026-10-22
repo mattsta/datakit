@@ -1,8 +1,8 @@
 /* clusterMailbox — see clusterMailbox.h for the API contract.
  *
- * Inner wire format (the envelope's payload bytes),
- * CLUSTER_MAILBOX_WIRE_VERSION = 2: [flex header (3 entries: origin_id
- * unsigned, sequence unsigned, msg_type unsigned)] [opaque N B]
+ * Inner wire format (the envelope's payload bytes):
+ * [flex header (3 entries: origin_id unsigned, sequence unsigned,
+ * msg_type unsigned)] [opaque N B]
  *
  * The flex prefix self-describes its byte length via the standard flex
  * leading varint; cmDecodeInnerHeader peeks the claim via
@@ -11,24 +11,11 @@
  * past the prefix to expose the opaque payload bytes to the apply
  * callback.
  *
- * the previous hand-rolled
- * [origin_id 4B LE] [sequence 8B LE] [msg_type 1B] [opaque N B]
- * format violated the "USE THE PLATFORM" rule. Replaced with a flex
- * to match the rest of datakit's wire-format discipline. The outer
- * envelope is unchanged — a standard flexEnvelope using the keyed-class
- * algorithm selected at create time — so the integrity tag still
- * covers both the new flex-encoded inner header and the opaque
- * payload. Any tamper to origin_id, sequence, msg_type, OR the
- * flex framing itself fails envelope verify.
- *
- * Wire-version bump (1 → 2) tracks both the inner-header migration
- * here and the rotate-announce migration in clusterMailboxBuildRotateAnnounce.
- * In-flight cluster traffic produced under v1 is REJECTED by v2 nodes
- * via the natural flex framing / flexCount mismatch; there is no
- * negotiated overlap. This is acceptable because no in-flight cluster
- * traffic exists in the dev environment, and production rollouts
- * coordinate restart waves so peers always speak the same wire
- * version. */
+ * The outer envelope is a standard flexEnvelope using the keyed-class
+ * algorithm selected at create time, so the integrity tag covers both
+ * the flex inner header and the opaque payload: any tamper to
+ * origin_id, sequence, msg_type, or the flex framing itself fails
+ * envelope verify.  Every peer in a cluster speaks this one format. */
 
 #include "clusterMailbox.h"
 
@@ -51,23 +38,6 @@ defcleaner(flex *, flexFree);
 #include <string.h>
 
 #define CLUSTER_MAILBOX_ORIGIN_CAP ((size_t)64)
-
-/* Wire-format version. Bump in lockstep with any layout change to the
- * inner header OR the rotate-announce payload. This is not written on
- * the wire (there is no per-frame version byte; the format change is
- * detectable by a parser-error on the new flex framing). It exists for
- * code-review traceability — a future migration must touch this symbol
- * so the bump is visible in diffs.
- *
- * The static-assert below pins the value: it WILL trip if a future
- * migration tries to revive any older version without re-reviewing
- * this file's encoders, so the bump becomes load-bearing rather than
- * cosmetic. */
-#define CLUSTER_MAILBOX_WIRE_VERSION ((uint8_t)2)
-_Static_assert(CLUSTER_MAILBOX_WIRE_VERSION == 2u,
-               "bump CLUSTER_MAILBOX_WIRE_VERSION when changing the "
-               "inner-header flex layout OR the rotate-announce flex layout; "
-               "see the wire-format block above for the policy");
 
 /* Inner header is a 3-entry flex of unsigned values: origin_id (u32),
  * sequence (u64), msg_type (u8). All three pushed via
@@ -136,21 +106,14 @@ typedef struct clusterMailboxOrigin {
 /* Per-mailbox counter block. _Atomic for safe concurrent observation
  * by a metrics scraper running off-thread.
  *
- * cache-line padding (forward-looking SMP hardening):
- * The 14 counters used to pack into ~112 bytes that straddled two
- * 64B cache lines. Today every writer is the single I/O thread so
- * the layout is benign — but if a future variant ever lands
- * multi-threaded ingest, ping-ponging the line that holds
- * `ingest_total` + `apply_ok` against the line that holds the
- * rejection counters would cost ~100 cycles per cross-line touch.
- * We pre-emptively split the struct into a HOT group (incremented on
- * every successful Ingest or Seal) and a COLD group (rejection /
- * error paths) and force the cold group onto its own cache line via
- * explicit padding. The whole struct is `_Alignas(64)` so the hot
- * block also starts on a cache-line boundary inside the parent
- * `clusterMailbox`. A `_Static_assert` below proves the cold offset
- * so a future refactor that breaks the alignment trips at compile
- * time.
+ * Cache-line layout: the 14 counters are split into a HOT group
+ * (incremented on every successful Ingest or Seal) and a COLD group
+ * (rejection / error paths), with explicit padding putting the cold
+ * group on its own cache line, so the success path never shares a
+ * line with the rejection counters (~100 cycles per cross-line touch
+ * under concurrent observation). The whole struct is `_Alignas(64)` so
+ * the hot block also starts on a cache-line boundary inside the parent
+ * `clusterMailbox`. A `_Static_assert` below pins the cold offset.
  *
  * Hot/cold rationale: ingest_total + bytes_ingested + apply_ok fire on
  * every accepted frame; bytes_sealed + seal_total fire on every Seal.
@@ -211,8 +174,8 @@ struct clusterMailbox {
      * BLAKE3_KEYED) the field is a no-op at the wire — those algos carry
      * no nonce so envelope Wrap/Verify ignore the field. The wiring
      * remains for two forward-looking reasons:
-     * 1. A future mailbox variant that uses an AEAD envelope_algo
-     * gets the defense automatically — no second migration pass.
+     * 1. A mailbox that uses an AEAD envelope_algo gets the defense
+     * automatically.
      * 2. End-to-end clusters that interleave keyed-MAC and AEAD
      * traffic under the same mailbox topology can attach the same
      * log via clusterMailboxNonceLog for cross-cutting checks.
@@ -805,8 +768,8 @@ static clusterMailboxIngestResult cmIngestImpl(clusterMailbox *mb,
      * The prepared-key fast path (hmacKeyringLookup) is intentionally
      * NOT used here: the `hmacKey` struct embeds borrowed pointers into
      * the keyring slot's inner/outer-ctx storage, which a concurrent
-     * Retire would `dkSecureZero` + free mid-verify (the same hazard
-     * the raw-bytes migration closes). flexEnvelopeVerify falls back
+     * Retire would `dkSecureZero` + free mid-verify; the raw-bytes copy
+     * closes that hazard. flexEnvelopeVerify falls back
      * to per-call hmacPrepareKey on the raw bytes — costs ~2 extra
      * block compressions per Ingest, gain is closing the prepared-
      * key UAF window. */
@@ -1113,10 +1076,8 @@ bool clusterRotationAccepts(const clusterRotationState *st, hmacKeyId id) {
 size_t clusterMailboxBuildRotateAnnounce(
     uint8_t out[CLUSTER_MAILBOX_ROTATE_ANNOUNCE_PAYLOAD_LEN],
     hmacKeyId new_id) {
-    /* flex-encode the rotate announce as a 1-entry
-     * flex (new_id unsigned). Matches the rest of datakit's wire
-     * formats — see the inner-header migration commentary at the top
-     * of the file for the wire-version bump rationale.
+    /* The rotate announce is a 1-entry flex (new_id unsigned), like
+     * the inner header described at the top of the file.
      *
      * Buffer-size contract: the API still pins `out` to a fixed-size
      * array of CLUSTER_MAILBOX_ROTATE_ANNOUNCE_PAYLOAD_LEN bytes. The
@@ -1501,29 +1462,10 @@ bool clusterMailboxRestoreWrapped(clusterMailbox *mb,
 /* ---- persistOps descriptor ----------------------------------------- */
 
 static uint8_t *cmPersistSnapshot(const void *structure, size_t *len) {
-    const clusterMailbox *mb = (const clusterMailbox *)structure;
-    const size_t need = clusterMailboxSnapshotSize(mb);
-    if (need == 0) {
-        /* Empty mailbox — emit an empty flex (still valid). */
-        cleaner(flexFree) flex *f = flexNew();
-        const size_t n = flexBytes(f);
-        /* @own: caller; free=zfree */
-        uint8_t *out = zmalloc(n);
-        memcpy(out, f, n);
-        *len = n;
-        return out;
-    }
-    cleanerName(zfree, Bytes) uint8_t *buf = zmalloc(need);
-    size_t written = 0;
-    if (!clusterMailboxSnapshot(mb, buf, need, &written)) {
-        return NULL;
-    }
-    *len = written;
-
-    /* Caller owns the snapshot buffer. */
-    uint8_t *out = buf;
-    buf = NULL;
-    return out;
+    /* The snapshot flex is the persisted bytes; the caller frees it */
+    flex *f = cmBuildSnapshotFlex((const clusterMailbox *)structure);
+    *len = flexBytes(f);
+    return (uint8_t *)f;
 }
 
 /* Internal allocator for a "restore shell" mailbox: a mailbox with no
@@ -1590,8 +1532,17 @@ static void *cmPersistNewEmpty(void) {
     return cmCreateRestoreShell();
 }
 
+/* Persisted watermarks: origins with an applied sequence (an origin
+ * whose only frame was apply-rejected holds a slot but no watermark,
+ * and is not persisted) */
 static size_t cmPersistCount(const void *structure) {
-    return clusterMailboxOriginCount((const clusterMailbox *)structure);
+    const clusterMailbox *mb = (const clusterMailbox *)structure;
+    size_t n = 0;
+    for (size_t i = 0; i < CLUSTER_MAILBOX_ORIGIN_CAP; i++) {
+        n += atomic_load_explicit(&mb->origins[i].last_applied,
+                                  memory_order_relaxed) != 0u;
+    }
+    return n;
 }
 
 static size_t cmPersistEstimateSize(const void *structure) {
