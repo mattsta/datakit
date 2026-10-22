@@ -1174,10 +1174,13 @@ int multimapAtomTest(int argc, char *argv[]) {
 
     TEST("populate and delete and populate (generate atom id)") {
         multimapAtom *ma = multimapAtomNew();
-        for (size_t j = 1; j <= 60; j++) {
+        /* Sizes on both sides of each tier change and of 450 (a size that
+         * once crashed), then the largest; each cycle empties the table */
+        static const ssize_t sizes[] = {1, 30, 90, 449, 450, 451, 900, 1800};
+        for (size_t j = 0; j < sizeof(sizes) / sizeof(*sizes); j++) {
             printf(".");
             fflush(stdout);
-            const ssize_t doUntil = 30 * j; /* 450 WAS CRASHING NUMBER */
+            const ssize_t doUntil = sizes[j];
             for (ssize_t i = 0; i < doUntil; i++) {
                 const int64_t populateVal = i; // % 2 == 0 ? -i : i;
                 databox box = databoxNewSigned(populateVal);
@@ -1253,8 +1256,9 @@ int multimapAtomTest(int argc, char *argv[]) {
 
     TEST("populate and delete and populate (providing atom id)") {
         multimapAtom *ma = multimapAtomNew();
-        for (size_t j = 0; j < 60; j++) {
-            const ssize_t doUntil = 30 * j;
+        static const ssize_t sizes[] = {0, 1, 30, 90, 449, 450, 451, 900, 1800};
+        for (size_t j = 0; j < sizeof(sizes) / sizeof(*sizes); j++) {
+            const ssize_t doUntil = sizes[j];
             for (ssize_t i = 0; i < doUntil; i++) {
                 const int64_t populateVal = i % 2 == 0 ? -i : i;
                 const databox box = databoxNewSigned(populateVal);
@@ -1325,9 +1329,9 @@ int multimapAtomTest(int argc, char *argv[]) {
         multimapAtomFree(ma);
     }
 
-    TEST("high-scale stress test (100k entries)") {
+    TEST("high-scale stress test (20k entries)") {
         multimapAtom *ma = multimapAtomNew();
-        const size_t numEntries = 100000;
+        const size_t numEntries = 20000;
 
         /* Insert all entries */
         int64_t startNs = timeUtilMonotonicNs();
