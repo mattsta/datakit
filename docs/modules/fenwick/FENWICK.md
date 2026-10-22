@@ -160,30 +160,39 @@ B/elem includes the power-of-two capacity (10.5 B at 100K is 8 B cells over
 a 131072-cell capacity). The full tables, with every size, are in
 [PERFORMANCE_BASELINES.md](../../PERFORMANCE_BASELINES.md).
 
-**Counter table** (integer counts, +1 updates), 100K and 4M elements:
+**All-integer counters** (+1 updates):
 
-| tree             |    N | update | query |  get | range | lower | B/elem |
-| ---------------- | ---: | -----: | ----: | ---: | ----: | ----: | -----: |
-| fenwickI16       | 100K |     33 |    20 |   12 |    25 |    31 |    2.6 |
-| fenwickI64       | 100K |     31 |    19 |   12 |    24 |    47 |   10.5 |
-| fenwickDouble    | 100K |     32 |    18 |   12 |    24 |    53 |   10.5 |
-| multiFenwickFlat | 100K |     37 |    19 |   13 |    26 |    76 |   10.5 |
-| multiFenwick     | 100K |  32510 | 15910 | 4552 | 31130 | 32341 |    3.9 |
-| segmentI64 SUM   | 100K |     44 |    63 |  1.5 |    62 |     - |   21.0 |
-| fenwickI16       |   4M |     44 |    22 |   12 |    32 |    90 |    2.1 |
-| fenwickI64       |   4M |     50 |    27 |   12 |    49 |   327 |    8.4 |
-| fenwickI128      |   4M |    106 |    46 |   14 |    79 |   557 |   16.8 |
-| multiFenwickFlat |   4M |     74 |    38 |   14 |    65 |   455 |    8.4 |
-| multiFenwick     |   4M |  70103 | 34166 | 6246 | 63617 | 67082 |    3.2 |
-| segmentI64 SUM   |   4M |    108 |    86 |    7 |    84 |     - |   16.8 |
+| tree                    | N    | update | query | lowerBound | B/elem |
+| ----------------------- | ---- | -----: | ----: | ---------: | -----: |
+| fenwickI64 (typed)      | 100K |     31 |    19 |         47 |   10.5 |
+| multiFenwickFlat        | 100K |     37 |    19 |         76 |   10.5 |
+| multiFenwick            | 100K | 32,510 | 15,910 |    32,341 |    3.9 |
+| fenwickI64 (typed)      | 4M   |     50 |    27 |        327 |    8.4 |
+| multiFenwickFlat        | 4M   |     74 |    38 |        455 |    8.4 |
+| multiFenwick            | 4M   | 70,103 | 34,166 |    67,082 |    3.2 |
 
-**Mixed values** (1% doubles): `multiFenwickFlat` adds its kinds array
-(9.4 B/elem at 4M) and takes the general path: update 73 ns at 100K (37
-all-integer), 158 ns at 4M (74). `fenwickDouble` stays at 30/61 ns.
+**Mixed values** (1% of values and updates are doubles; the typed tree that
+can hold them is `fenwickDouble`):
+
+| tree                    | N    | update | query | lowerBound | B/elem |
+| ----------------------- | ---- | -----: | ----: | ---------: | -----: |
+| fenwickDouble (typed)   | 100K |     30 |    19 |         53 |   10.5 |
+| multiFenwickFlat        | 100K |     73 |    33 |        258 |   11.8 |
+| multiFenwick            | 100K | 39,394 | 18,677 |    37,473 |    4.0 |
+| fenwickDouble (typed)   | 4M   |     61 |    22 |        300 |    8.4 |
+| multiFenwickFlat        | 4M   |    158 |    55 |        650 |    9.4 |
+| multiFenwick            | 4M   | 79,703 | 39,086 |    73,656 |    3.2 |
+
+`fenwickDouble` holds every integer as a double, so it is exact only up to
+2^53; `multiFenwickFlat` keeps integer cells exact.
+
+**Other types and trees** (4M elements, all-integer): `fenwickI16` update 44,
+query 22, lowerBound 90, 2.1 B/elem; `fenwickI128` 106 / 46 / 557, 16.8
+B/elem; segment SUM 108 / 86, get 7, 16.8 B/elem.
 
 **Sparse growth** (n writes at random indexes of an empty tree, ns per write,
 growth included): `fenwickI64` 35/50 ns at 100K/4M, `multiFenwickFlat`
-38/86, segment SUM 42/106, `multiFenwick` 32800 at 100K.
+38/86, segment SUM 42/106, `multiFenwick` 32,800 at 100K.
 
 **2D grids** (about N cells): `fenwick2dI64` update 113 ns, query 27, rectangle
 59 at 100K cells; 317/71/227 at 4M. `multiFenwick2d` is level with it on
@@ -199,9 +208,12 @@ integers (98/27/63 at 100K) and about 1.5-2x slower with 1% doubles.
   at the same speed; at 4M, cells stop fitting in cache and the narrow types
   pull ahead (I16 lower bound 90 ns vs 327 for I64; I128 is 2x slower than
   I64). Use the narrowest type whose elements and read sums fit.
-- **Integer vs mixed**: `multiFenwickFlat` matches `fenwickI64` exactly while
-  every value is an int64. The first double makes it 1.5-2x slower and 12%
-  larger. If the data is mostly doubles, `fenwickDouble` is faster.
+- **Flat vs typed**: while every value is an int64, `multiFenwickFlat` runs
+  level with `fenwickI64` up to about 100K elements (update 1.2x) and
+  1.4-1.5x slower at 4M, in the same memory. Mixed values make it about 2x
+  slower (about 3x for lowerBound) and 12% larger; it is then 2-2.5x behind
+  `fenwickDouble`, which is faster when the data is all doubles but exact
+  only to 2^53.
 - **Fenwick vs segment for sums**: segment trees use 2x the memory and run
   queries 2-3x slower, but read an element in O(1) (1.5 ns), and support
   min/max and range assignment. For sums alone, prefer Fenwick.
