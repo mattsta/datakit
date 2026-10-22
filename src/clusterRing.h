@@ -601,12 +601,14 @@ typedef struct clusterRingStats {
     float minNodeLoad;  /* Least busy node's share */
 
     /* Operation counters (lifetime) */
-    uint64_t locateOps;
+    uint64_t locateOps; /* placements, including each plan's own */
     uint64_t writeOps;
     uint64_t readOps;
     uint64_t rebalanceMoves;
 
-    /* Timing (nanoseconds) */
+    /* Placement time (nanoseconds) over a sample of one placement in 64:
+     * mean, 99th percentile (within 25% above the true value) and the
+     * slowest; all 0 until the first sample */
     uint64_t avgLocateNs;
     uint64_t p99LocateNs;
     uint64_t maxLocateNs;

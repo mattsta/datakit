@@ -343,6 +343,73 @@ static uint64_t clusterGetTimeMs(void) {
     return timeUtilMonotonicMs();
 }
 
+/* Latency histogram bucket of `ns`: values below CLUSTER_LATENCY_SUB have
+ * their own bucket; above, each power of two splits into
+ * CLUSTER_LATENCY_SUB equal buckets */
+static uint32_t clusterLatencyBucket(uint64_t ns) {
+    if (ns < CLUSTER_LATENCY_SUB) {
+        return (uint32_t)ns;
+    }
+    const uint32_t msb = 63u - (uint32_t)__builtin_clzll(ns);
+    const uint32_t shift = msb - CLUSTER_LATENCY_SUB_BITS;
+    return (msb - CLUSTER_LATENCY_SUB_BITS + 1u) * CLUSTER_LATENCY_SUB +
+           (uint32_t)((ns >> shift) & (CLUSTER_LATENCY_SUB - 1u));
+}
+
+/* The largest value bucket `b` holds */
+static uint64_t clusterLatencyBucketMax(uint32_t b) {
+    if (b < CLUSTER_LATENCY_SUB) {
+        return b;
+    }
+    const uint32_t shift = b / CLUSTER_LATENCY_SUB - 1u;
+    const uint64_t lowest =
+        (uint64_t)(CLUSTER_LATENCY_SUB + b % CLUSTER_LATENCY_SUB) << shift;
+    return lowest + (((uint64_t)1 << shift) - 1u);
+}
+
+static void clusterLatencyRecord(clusterLatency *lat, uint64_t ns) {
+    atomic_fetch_add_explicit(&lat->count, 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&lat->sumNs, ns, memory_order_relaxed);
+    atomic_fetch_add_explicit(&lat->buckets[clusterLatencyBucket(ns)], 1,
+                              memory_order_relaxed);
+    uint64_t max = atomic_load_explicit(&lat->maxNs, memory_order_relaxed);
+    while (ns > max && !atomic_compare_exchange_weak_explicit(
+                           &lat->maxNs, &max, ns, memory_order_relaxed,
+                           memory_order_relaxed)) {
+    }
+}
+
+/* Mean, 99th percentile (the upper edge of the bucket holding it, so at
+ * most 1/CLUSTER_LATENCY_SUB above the true value) and maximum of the
+ * recorded samples; all 0 before the first */
+static void clusterLatencySummary(const clusterLatency *lat, uint64_t *avg,
+                                  uint64_t *p99, uint64_t *max) {
+    const uint64_t count =
+        atomic_load_explicit(&lat->count, memory_order_relaxed);
+    *avg = *p99 = *max = 0;
+    if (count == 0) {
+        return;
+    }
+
+    *avg = atomic_load_explicit(&lat->sumNs, memory_order_relaxed) / count;
+    *max = atomic_load_explicit(&lat->maxNs, memory_order_relaxed);
+
+    /* The sample ranked ceil(0.99 * count); during concurrent placements
+     * the walk also sees samples recorded after `count` was read, so it is
+     * off by at most those */
+    const uint64_t rank = count - count / 100;
+    uint64_t seen = 0;
+    for (uint32_t b = 0; b < CLUSTER_LATENCY_BUCKETS; b++) {
+        seen += atomic_load_explicit(&lat->buckets[b], memory_order_relaxed);
+        if (seen >= rank) {
+            const uint64_t edge = clusterLatencyBucketMax(b);
+            *p99 = edge < *max ? edge : *max;
+            return;
+        }
+    }
+    *p99 = *max;
+}
+
 /* ====================================================================
  * Placement/Set Helper Functions
  * ==================================================================== */
@@ -645,9 +712,6 @@ clusterRing *clusterRingNew(const clusterRingConfig *config) {
     /* Initialize version tracking */
     ring->version = 1;
     ring->lastModified = clusterGetTimeMs();
-
-    /* Initialize stats */
-    memset(&ring->stats, 0, sizeof(ring->stats));
 
     clusterRing *out = ring;
     ring = NULL;
@@ -1936,27 +2000,19 @@ static uint32_t clusterSelectReplicas(const clusterNode *const *cand,
     return n;
 }
 
-/* clusterRingLocate with an explicit strategy (resolved, its state live),
+/* Places `key` with an explicit strategy (resolved, its state live),
  * replica count and rule set */
 static clusterResult
-clusterRingLocateWith(const clusterRing *ring, clusterStrategyType strategy,
-                      const void *key, uint32_t keyLen, uint32_t replicaCount,
-                      const clusterAffinityRule *rules, uint8_t ruleCount,
-                      clusterPlacement *out) {
-    if (!ring || !key || keyLen == 0 || !out) {
-        return CLUSTER_ERR;
-    }
-
+clusterRingPlace(const clusterRing *ring, clusterStrategyType strategy,
+                 const void *key, uint32_t keyLen, uint32_t replicaCount,
+                 const clusterAffinityRule *rules, uint8_t ruleCount,
+                 clusterPlacement *out) {
     clusterPlacementInit(out);
     out->hashValue = clusterHash64(key, keyLen, ring->hashSeed);
 
     if (ring->nodeCount == 0) {
         return CLUSTER_ERR_NO_NODES;
     }
-
-    /* Update stats */
-    atomic_fetch_add_explicit(&((clusterRing *)ring)->locateOps, 1,
-                              memory_order_relaxed);
 
     /* With affinity rules the strategy ranks every node, so the selection
      * can reach past the first replicaCount for the spread it needs.
@@ -2059,6 +2115,32 @@ clusterRingLocateWith(const clusterRing *ring, clusterStrategyType strategy,
     }
 
     return CLUSTER_OK;
+}
+
+/* clusterRingPlace, counted in locateOps; one call in
+ * CLUSTER_LATENCY_SAMPLE_EVERY is also timed into the latency stats */
+static clusterResult
+clusterRingLocateWith(const clusterRing *ring, clusterStrategyType strategy,
+                      const void *key, uint32_t keyLen, uint32_t replicaCount,
+                      const clusterAffinityRule *rules, uint8_t ruleCount,
+                      clusterPlacement *out) {
+    if (!ring || !key || keyLen == 0 || !out) {
+        return CLUSTER_ERR;
+    }
+
+    clusterRing *stats = (clusterRing *)ring;
+    const uint64_t op =
+        atomic_fetch_add_explicit(&stats->locateOps, 1, memory_order_relaxed);
+    if (CLUSTER_LIKELY(op % CLUSTER_LATENCY_SAMPLE_EVERY != 0)) {
+        return clusterRingPlace(ring, strategy, key, keyLen, replicaCount,
+                                rules, ruleCount, out);
+    }
+
+    const uint64_t start = clusterGetTimeNs();
+    const clusterResult result = clusterRingPlace(
+        ring, strategy, key, keyLen, replicaCount, rules, ruleCount, out);
+    clusterLatencyRecord(&stats->locateLatency, clusterGetTimeNs() - start);
+    return result;
 }
 
 clusterResult clusterRingLocate(const clusterRing *ring, const void *key,
@@ -2615,7 +2697,7 @@ clusterResult clusterRingCompleteMove(clusterRing *ring, uint32_t moveIndex) {
     move->state = CLUSTER_MOVE_COMPLETED;
     ring->rebalancePlan->completedCount++;
     ring->rebalancePlan->movedBytes += move->estimatedBytes;
-    ring->stats.rebalanceMoves++;
+    ring->rebalanceMoves++;
 
     /* Invoke callback */
     if (ring->rebalanceCallback) {
@@ -2731,12 +2813,9 @@ void clusterRingGetStats(const clusterRing *ring, clusterRingStats *stats) {
     stats->writeOps =
         atomic_load_explicit(&ring->writeOps, memory_order_relaxed);
     stats->readOps = atomic_load_explicit(&ring->readOps, memory_order_relaxed);
-    stats->rebalanceMoves = ring->stats.rebalanceMoves;
-
-    /* Copy timing stats */
-    stats->avgLocateNs = ring->stats.avgLocateNs;
-    stats->p99LocateNs = ring->stats.p99LocateNs;
-    stats->maxLocateNs = ring->stats.maxLocateNs;
+    stats->rebalanceMoves = ring->rebalanceMoves;
+    clusterLatencySummary(&ring->locateLatency, &stats->avgLocateNs,
+                          &stats->p99LocateNs, &stats->maxLocateNs);
 
     /* Calculate load distribution */
     if (ring->healthyNodeCount > 0 && clusterRingHasVnodes(ring)) {
@@ -6416,6 +6495,82 @@ int clusterRingTest(int argc, char *argv[]) {
     /* Placements may run concurrently: a Maglev table a node change left
      * stale is rebuilt once by whichever placement comes first, and every
      * thread sees the same placements a single thread does */
+    TEST("latency buckets cover every value within a quarter of it") {
+        /* Buckets are contiguous and in order, and each holds values
+         * within 1/CLUSTER_LATENCY_SUB of its own */
+        uint64_t next = 0;
+        bool reachedMax = false;
+        for (uint32_t b = 0; b < CLUSTER_LATENCY_BUCKETS; b++) {
+            const uint64_t top = clusterLatencyBucketMax(b);
+            if (clusterLatencyBucket(next) != b ||
+                clusterLatencyBucket(top) != b) {
+                ERR("bucket %u does not hold %" PRIu64 "..%" PRIu64, b, next,
+                    top);
+                break;
+            }
+            if (next >= CLUSTER_LATENCY_SUB &&
+                (top - next) * CLUSTER_LATENCY_SUB > next) {
+                ERR("bucket %u is too wide: %" PRIu64 "..%" PRIu64, b, next,
+                    top);
+            }
+            if (top == UINT64_MAX) {
+                reachedMax = true;
+                break;
+            }
+            next = top + 1;
+        }
+        if (!reachedMax) {
+            ERR("buckets end below UINT64_MAX at %" PRIu64, next);
+        }
+
+        /* 1..1000 (in reverse): mean 500, p99 the edge of the bucket
+         * holding 990 (the 990th sample), capped at the maximum */
+        clusterLatency latency = {0};
+        clusterLatency *lat = &latency;
+        uint64_t avg;
+        uint64_t p99;
+        uint64_t max;
+        clusterLatencySummary(lat, &avg, &p99, &max);
+        if (avg || p99 || max) {
+            ERRR("an empty histogram reports latency");
+        }
+        for (uint64_t ns = 1000; ns >= 1; ns--) {
+            clusterLatencyRecord(lat, ns);
+        }
+        clusterLatencySummary(lat, &avg, &p99, &max);
+        const uint64_t edge =
+            clusterLatencyBucketMax(clusterLatencyBucket(990));
+        if (avg != 500 || max != 1000 || p99 != (edge < 1000 ? edge : 1000)) {
+            ERR("summary avg %" PRIu64 " p99 %" PRIu64 " max %" PRIu64, avg,
+                p99, max);
+        }
+    }
+
+    TEST("ring stats report sampled placement latency") {
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
+        for (uint64_t id = 1; id <= 5; id++) {
+            const clusterNodeConfig nc = {.id = id};
+            clusterRingAddNode(ring, &nc);
+        }
+        clusterRingStats stats;
+        clusterRingGetStats(ring, &stats);
+        if (stats.avgLocateNs || stats.p99LocateNs || stats.maxLocateNs) {
+            ERRR("latency before any placement");
+        }
+        for (uint32_t k = 0; k < 10 * CLUSTER_LATENCY_SAMPLE_EVERY; k++) {
+            (void)clusterRingTestPrimary(ring, k);
+        }
+        clusterRingGetStats(ring, &stats);
+        if (stats.locateOps != 10 * CLUSTER_LATENCY_SAMPLE_EVERY) {
+            ERR("locateOps %" PRIu64, stats.locateOps);
+        }
+        if (stats.avgLocateNs == 0 || stats.avgLocateNs > stats.maxLocateNs ||
+            stats.p99LocateNs == 0 || stats.p99LocateNs > stats.maxLocateNs) {
+            ERR("latency avg %" PRIu64 " p99 %" PRIu64 " max %" PRIu64,
+                stats.avgLocateNs, stats.p99LocateNs, stats.maxLocateNs);
+        }
+    }
+
     TEST("concurrent placements on a stale Maglev table agree") {
         const clusterRingConfig mc = {.strategyType = CLUSTER_STRATEGY_MAGLEV,
                                       .defaultQuorum = {.replicaCount = 2}};
