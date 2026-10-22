@@ -589,6 +589,7 @@ add_library(${PROJECT_NAME} OBJECT
     persist/contract/multiarrayContractTest.c
     persist/contract/multilistContractTest.c
     persist/contract/multidictContractTest.c
+    persist/contract/multiOrderedSetContractTest.c
 )
 
 # ============================================================================

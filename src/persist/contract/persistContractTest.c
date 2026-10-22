@@ -12,6 +12,7 @@
 #include "../../timeUtil.h"
 
 #include <inttypes.h>
+#include <stdlib.h>
 #include <string.h>
 
 defcleanerName(uint8_t *, zfree, Bytes);
@@ -28,13 +29,14 @@ extern const persistContractType persistContractHyperloglog;
 extern const persistContractType persistContractMultiarray;
 extern const persistContractType persistContractMultilist;
 extern const persistContractType persistContractMultidict;
+extern const persistContractType persistContractMultiOrderedSet;
 
 static const persistContractType *const pcRegistry[] = {
     &persistContractFlex,       &persistContractMultimap,
     &persistContractMultiroar,  &persistContractIntset,
     &persistContractIntsetBig,  &persistContractHyperloglog,
     &persistContractMultiarray, &persistContractMultilist,
-    &persistContractMultidict,
+    &persistContractMultidict,  &persistContractMultiOrderedSet,
 };
 
 /* ====================================================================
@@ -509,10 +511,13 @@ static double pcPer(uint64_t total, size_t n) {
     return n ? (double)total / (double)n : 0.0;
 }
 
-/* 'datakit-test test persistContract [type]': every registered type, or
- * just the one named */
+/* Every registered type, or with PERSIST_CONTRACT_ONLY=name in the
+ * environment, just that one (extra datakit-test arguments name more
+ * tests, so the choice is not an argument) */
 int persistContractTest(int argc, char *argv[]) {
-    const char *only = argc > 3 ? argv[3] : NULL;
+    (void)argc;
+    (void)argv;
+    const char *only = getenv("PERSIST_CONTRACT_ONLY");
     int err = 0;
 
     printf("| type | elements | snapshot B/elem | snapshot ns/elem | "

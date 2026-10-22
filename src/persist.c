@@ -4613,7 +4613,8 @@ static uint8_t *multiOrderedSetPersistSnapshot(const void *structure,
 }
 
 static void *multiOrderedSetPersistRestore(const uint8_t *data, size_t len) {
-    if (!flexValidateBuffer(data, len)) {
+    /* Every entry is decoded below, so every entry is checked first */
+    if (!flexValidateBufferDeep(data, len)) {
         return NULL;
     }
     /* Restore flex from data */
@@ -4669,79 +4670,25 @@ static size_t multiOrderedSetPersistEstimateSize(const void *structure) {
 
 static uint8_t *multiOrderedSetPersistEncodeOp(persistOp op, const void *args,
                                                size_t argc, size_t *len) {
-    /* args is array of databox pointers: [score, member] for add/remove */
+    /* args is array of databox pointers: INSERT [score, member], DELETE
+     * [member]; the operand is those boxes as an exact flex, so 96/128-bit
+     * scores and numeral-looking members replay unchanged */
     const databox *const *boxes = args;
+    *len = 0;
 
-    switch (op) {
-    case PERSIST_OP_INSERT: {
-        /* Encode: [score][member] */
-        if (argc != 2) {
-            return NULL;
-        }
-
-        size_t totalLen = 0;
-        databoxLinear dls[2];
-
-        /* Calculate total length */
-        for (size_t i = 0; i < 2; i++) {
-            size_t encodedLen;
-            const void *encodedVal;
-            uint8_t encodedType;
-            DATABOX_LINEAR_PARTS_ENCODE(boxes[i], encodedLen, encodedVal,
-                                        encodedType, &dls[i]);
-            (void)encodedVal;
-            (void)encodedType;
-            totalLen += 1 + encodedLen; /* type + value */
-        }
-
-        *len = totalLen;
-        /* @own: caller; free=zfree */
-        uint8_t *buf = zmalloc(totalLen);
-        size_t offset = 0;
-
-        /* Encode score and member */
-        for (size_t i = 0; i < 2; i++) {
-            size_t encodedLen;
-            const void *encodedVal;
-            uint8_t encodedType;
-            DATABOX_LINEAR_PARTS_ENCODE(boxes[i], encodedLen, encodedVal,
-                                        encodedType, &dls[i]);
-            buf[offset++] = encodedType;
-            memcpy(buf + offset, encodedVal, encodedLen);
-            offset += encodedLen;
-        }
-        return buf;
-    }
-
-    case PERSIST_OP_DELETE: {
-        /* Encode: [member] */
-        if (argc != 1) {
-            return NULL;
-        }
-
-        size_t encodedLen;
-        const void *encodedVal;
-        uint8_t encodedType;
-        databoxLinear dl;
-        DATABOX_LINEAR_PARTS_ENCODE(boxes[0], encodedLen, encodedVal,
-                                    encodedType, &dl);
-
-        *len = 1 + encodedLen;
-        /* @own: caller; free=zfree */
-        uint8_t *buf = zmalloc(*len);
-        buf[0] = encodedType;
-        memcpy(buf + 1, encodedVal, encodedLen);
-        return buf;
-    }
-
-    case PERSIST_OP_CLEAR: {
-        *len = 0;
+    const size_t want = op == PERSIST_OP_INSERT   ? 2
+                        : op == PERSIST_OP_DELETE ? 1
+                                                  : 0;
+    if (want == 0 || argc != want || !boxes) {
+        /* CLEAR has no operand; nothing else is replayed */
         return NULL;
     }
 
-    default:
-        return NULL;
+    flex *f = flexNewFromDataboxPtrsExact(boxes, argc);
+    if (f) {
+        *len = flexBytes(f);
     }
+    return (uint8_t *)f;
 }
 
 static bool multiOrderedSetPersistApplyOp(void *structure, persistOp op,
@@ -4754,100 +4701,26 @@ static bool multiOrderedSetPersistApplyOp(void *structure, persistOp op,
         *mos = multiOrderedSetNew();
     }
 
+    /* Byte strings decode pointing into 'data', valid for this call; the
+     * set copies what it keeps */
     switch (op) {
     case PERSIST_OP_INSERT: {
-        /* Decode: [score][member] */
-        if (len < 2) {
+        databoxBig score;
+        databoxBig member;
+        if (!flexGetTwoDataboxesBig(data, len, &score, &member)) {
             return false;
         }
-
-        /* Decode score */
-        databox score;
-        size_t offset = 0;
-        uint8_t scoreType = data[offset++];
-        size_t scoreLen = databoxLinearTypeValueLen(scoreType);
-        if (scoreLen == 0 || offset + scoreLen > len) {
-            return false;
-        }
-        DATABOX_LINEAR_PARTS_DECODE(scoreType, data + offset, scoreLen, &score);
-        offset += scoreLen;
-
-        /* Normalize score type: databoxLinear encodes positive SIGNED_64 as
-         * UNSIGNED, so convert back to SIGNED_64 for multiOrderedSet
-         * compatibility */
-        if (score.type == DATABOX_UNSIGNED_64 &&
-            score.data.u64 <= (uint64_t)INT64_MAX) {
-            score.type = DATABOX_SIGNED_64;
-        }
-
-        /* Decode member */
-        if (offset >= len) {
-            return false;
-        }
-        uint8_t memberType = data[offset++];
-        size_t memberLen;
-        if (DATABOX_LINEAR_TYPE_IS_BYTES(memberType)) {
-            memberLen = len - offset;
-        } else {
-            memberLen = databoxLinearTypeValueLen(memberType);
-            if (memberLen == 0 || offset + memberLen > len) {
-                return false;
-            }
-        }
-
-        databox memberTemp;
-        DATABOX_LINEAR_PARTS_DECODE(memberType, data + offset, memberLen,
-                                    &memberTemp);
-
-        /* CRITICAL: DATABOX_LINEAR_PARTS_DECODE creates a pointer-based BYTES
-         * databox that points into the WAL data buffer. We must copy/embed the
-         * bytes data because the buffer will be freed after applyOp returns. */
-        databox member;
-        if (memberTemp.type == DATABOX_BYTES) {
-            /* Use databoxNewBytesAllowEmbed to create embedded or allocated
-             * copy */
-            member = databoxNewBytesAllowEmbed(memberTemp.data.bytes.start,
-                                               memberTemp.len);
-        } else {
-            /* For non-BYTES types (shouldn't happen for member), just copy */
-            member = memberTemp;
-        }
-
-        multiOrderedSetAdd(mos, &score, &member);
+        multiOrderedSetAdd(mos, (const databox *)&score,
+                           (const databox *)&member);
         return true;
     }
 
     case PERSIST_OP_DELETE: {
-        /* Decode: [member] */
-        if (len < 1) {
+        databoxBig member;
+        if (!flexGetSingleDataboxBig(data, len, &member)) {
             return false;
         }
-
-        uint8_t memberType = data[0];
-        size_t memberLen;
-        if (DATABOX_LINEAR_TYPE_IS_BYTES(memberType)) {
-            memberLen = len - 1;
-        } else {
-            memberLen = databoxLinearTypeValueLen(memberType);
-            if (memberLen == 0 || 1 + memberLen > len) {
-                return false;
-            }
-        }
-
-        databox memberTemp;
-        DATABOX_LINEAR_PARTS_DECODE(memberType, data + 1, memberLen,
-                                    &memberTemp);
-
-        /* Copy/embed bytes data (same issue as INSERT) */
-        databox member;
-        if (memberTemp.type == DATABOX_BYTES) {
-            member = databoxNewBytesAllowEmbed(memberTemp.data.bytes.start,
-                                               memberTemp.len);
-        } else {
-            member = memberTemp;
-        }
-
-        multiOrderedSetRemove(mos, &member);
+        multiOrderedSetRemove(mos, (const databox *)&member);
         return true;
     }
 
@@ -4870,11 +4743,17 @@ static void multiOrderedSetPersistFree(void *structure) {
     }
 }
 
+static void *multiOrderedSetPersistNewEmpty(void) {
+    /* @own: caller; free=multiOrderedSetFree */
+    return multiOrderedSetNew();
+}
+
 const persistOps persistOpsMultiOrderedSet = {
     .type = PERSIST_TYPE_MULTIORDEREDSET,
     .name = "multiOrderedSet",
     .snapshot = multiOrderedSetPersistSnapshot,
     .restore = multiOrderedSetPersistRestore,
+    .newEmpty = multiOrderedSetPersistNewEmpty,
     .count = multiOrderedSetPersistCount,
     .estimateSize = multiOrderedSetPersistEstimateSize,
     .encodeOp = multiOrderedSetPersistEncodeOp,

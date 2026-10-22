@@ -654,9 +654,85 @@ static int test_multiOrderedSetP_resetReuse(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
+static int test_multiOrderedSetP_readers(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+
+    int err = 0;
+    cleaner(dkTestTmpDirRemove) dkTestTmpDir tmp = {{0}};
+    char basePath[PATH_MAX];
+    if (!dkTestTmpDirPath(&tmp, "multiOrderedSetPTest_readers", basePath,
+                          sizeof(basePath))) {
+        ERR("could not create a scratch directory: %s", strerror(errno));
+        return err;
+    }
+
+    TEST("multiOrderedSetP readers agree with ten scored members") {
+        /* m0..m9 scored 0, 10, ..., 90 */
+        ptestCleanupFiles(basePath);
+        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        multiOrderedSetP *mos = multiOrderedSetNewP(ctx);
+        char name[8];
+        for (int i = 0; i < 10; i++) {
+            snprintf(name, sizeof(name), "m%d", i);
+            const databox score = DATABOX_SIGNED(i * 10);
+            const databox member = databoxNewBytesString(name);
+            multiOrderedSetAddP(mos, &score, &member);
+        }
+
+        databox member = {{0}};
+        databox score = {{0}};
+        const databox m0 = databoxNewBytesString("m0");
+        const databox m3 = databoxNewBytesString("m3");
+        const databox m5 = databoxNewBytesString("m5");
+        const databox m9 = databoxNewBytesString("m9");
+        if (!multiOrderedSetFirstP(mos, &member, &score) ||
+            !databoxEqual(&member, &m0)) {
+            ERRR("FirstP is not m0");
+        }
+        if (!multiOrderedSetLastP(mos, &member, &score) ||
+            !databoxEqual(&member, &m9)) {
+            ERRR("LastP is not m9");
+        }
+        if (!multiOrderedSetGetByRankP(mos, 3, &member, &score) ||
+            !databoxEqual(&member, &m3)) {
+            ERRR("GetByRankP(3) is not m3");
+        }
+        const mosRangeSpec range = {.min = DATABOX_SIGNED(20),
+                                    .max = DATABOX_SIGNED(50)};
+        if (multiOrderedSetCountByScoreP(mos, &range) != 4) {
+            ERR("CountByScoreP [20, 50] = %zu, want 4",
+                multiOrderedSetCountByScoreP(mos, &range));
+        }
+        mosIterator iter;
+        const databox at = DATABOX_SIGNED(45);
+        if (!multiOrderedSetIteratorInitAtScoreP(mos, &iter, &at, true) ||
+            !multiOrderedSetIteratorNextP(&iter, &member, &score) ||
+            !databoxEqual(&member, &m5)) {
+            ERRR("IteratorInitAtScoreP(45) does not start at m5");
+        }
+        multiOrderedSetIteratorReleaseP(&iter);
+
+        persistCtxStats stats;
+        multiOrderedSetGetStatsP(mos, &stats);
+        if (!multiOrderedSetSyncP(mos) || multiOrderedSetBytesP(mos) == 0 ||
+            multiOrderedSetCount(multiOrderedSetGetRawP(mos)) != 10 ||
+            stats.totalOps < 10) {
+            ERRR("SyncP/BytesP/GetRawP/GetStatsP disagree");
+        }
+
+        multiOrderedSetCloseP(mos);
+        persistCtxFree(ctx);
+        ptestCleanupFiles(basePath);
+    }
+
+    TEST_FINAL_RESULT;
+}
+
 int multiOrderedSetPTest(int argc, char *argv[]) {
     int err = 0;
 
+    err += test_multiOrderedSetP_readers(argc, argv);
     err += test_multiOrderedSetP_basic(argc, argv);
     err += test_multiOrderedSetP_iteration(argc, argv);
     err += test_multiOrderedSetP_compaction(argc, argv);
