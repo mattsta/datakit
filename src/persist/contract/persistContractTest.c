@@ -34,6 +34,7 @@ extern const persistContractType persistContractMultiLRU;
 extern const persistContractType persistContractHmacKeyring;
 extern const persistContractType persistContractClusterMailbox;
 extern const persistContractType persistContractClusterRing;
+extern const persistContractType persistContractAeadNonceLog;
 
 static const persistContractType *const pcRegistry[] = {
     &persistContractFlex,           &persistContractMultimap,
@@ -43,6 +44,7 @@ static const persistContractType *const pcRegistry[] = {
     &persistContractMultidict,      &persistContractMultiOrderedSet,
     &persistContractMultiLRU,       &persistContractHmacKeyring,
     &persistContractClusterMailbox, &persistContractClusterRing,
+    &persistContractAeadNonceLog,
 };
 
 /* ====================================================================

@@ -18,13 +18,12 @@
  *
  * Trade-offs (intentional):
  * - Bounded memory. The window is a fixed-capacity open-addressing
- * hash set with FIFO eviction. Calls outside the window are
+ * hash set holding at most 7/8 of its capacity; past that the oldest
+ * observation is evicted (FIFO). Calls outside the window are
  * forgotten — callers should rotate the key well before that.
  * - No false negatives within the window: a reuse IS detected as
- * long as both observations land in the live window.
- * - Fail-safe on collision overflow: if the probe chain saturates we
- * return false (treat as reuse). That biases the caller toward key
- * rotation rather than silent acceptance.
+ * long as both observations land in the live window (removing an
+ * entry never hides another from lookup).
  *
  * Thread-safety: one mutex guards the whole structure. Contended
  * workloads can shard by creating N logs and partitioning by key_id.
@@ -44,9 +43,13 @@ typedef struct aeadNonceLog aeadNonceLog;
  * and AES-GCM (both 12 bytes). */
 #define AEAD_NONCE_LOG_NONCE_LEN ((size_t)12)
 
+/* Largest capacity a tracker can have (2^24 slots, about 600 MB) */
+#define AEAD_NONCE_LOG_MAX_CAP ((size_t)1 << 24u)
+
 /* Construct a tracker with at least `min_capacity` slots. Internally
  * rounded up to the next power of two; minimum effective capacity is
- * 64. Returns NULL on allocation failure. */
+ * 64. Returns NULL on allocation failure or when min_capacity exceeds
+ * AEAD_NONCE_LOG_MAX_CAP. */
 aeadNonceLog *aeadNonceLogCreate(size_t min_capacity);
 
 /* Tear down the tracker. Safe to call with NULL. Memory is wiped on
@@ -57,7 +60,6 @@ void aeadNonceLogFree(aeadNonceLog *log);
  * - Returns true if the tuple was inserted (not seen in window).
  * - Returns false if the tuple is a duplicate of one already in the
  * window — caller MUST NOT proceed with Seal.
- * - Returns false if the probe chain saturates (treat as reuse).
  *
  * `key_id` must be non-zero; passing zero returns false (reserved). */
 bool aeadNonceLogObserve(aeadNonceLog *log, uint32_t key_id,
@@ -76,19 +78,12 @@ size_t aeadNonceLogCapacity(const aeadNonceLog *log);
 /* ---- Persistence (flex-based) ------------------------------------------
  *
  * Wire format (a single flex):
- * Entry 0: version (unsigned, currently 1)
- * Entry 1: capacity (unsigned, post-round-up cap from create)
- * Entry 2: record_count (unsigned, N — number of live (key_id, nonce, gen)
- * tuples following)
- * Entry 3..3+4N-1: per-record block of 4 entries:
- * (a) key_id (unsigned 32-bit)
- * (b) nonce_lo (unsigned 64-bit; first 8 bytes of nonce, little-endian)
- * (c) nonce_hi (unsigned 32-bit; last 4 bytes of nonce, little-endian)
- * (d) gen (unsigned 64-bit; monotonic insertion sequence)
+ * Entry 0: capacity (unsigned, post-round-up cap from create)
+ * Then one 2-entry record per tracked tuple, oldest first:
+ * (a) nonce (12 bytes)
+ * (b) key_id (unsigned, 1..UINT32_MAX)
  *
- * total flex entry count is always 3 + 4*record_count. */
-
-#define AEAD_NONCE_LOG_PERSIST_VERSION ((uint64_t)1)
+ * The flex entry count is 1 + 2N for N tuples. */
 
 /* Serialize the log into `out`. If `out == NULL` returns the required
  * buffer size and does not modify anything. Otherwise writes at most
@@ -98,12 +93,14 @@ size_t aeadNonceLogToBytes(const aeadNonceLog *log, uint8_t *out,
                            size_t out_cap);
 
 /* Parse a previously-serialized log. Returns a freshly-allocated
- * aeadNonceLog populated with the same capacity and record set; caller
- * frees via aeadNonceLogFree. Every entry of the buffer is bounded with
- * flexValidateBufferDeep before it is read. Returns NULL on
- * parse/validation failure, including a malformed entry anywhere in the
- * buffer and any field that is not a 64-bit unsigned integer (a
- * 96/128-bit entry is refused). */
+ * aeadNonceLog populated with the same capacity, tuples and eviction
+ * order; caller frees via aeadNonceLogFree. Every entry of the buffer is
+ * bounded with flexValidateBufferDeep before it is read. Returns NULL on
+ * parse/validation failure: a malformed entry anywhere in the buffer, a
+ * nonce that is not 12 bytes, a key_id or capacity that is not a 64-bit
+ * unsigned integer in range (a 96/128-bit entry is refused), a capacity
+ * that is not a power of two in [64, AEAD_NONCE_LOG_MAX_CAP], more
+ * tuples than 7/8 of the capacity, or a repeated tuple. */
 aeadNonceLog *aeadNonceLogFromBytes(const uint8_t *buf, size_t len);
 
 /* persistOps descriptor for use by the persist framework

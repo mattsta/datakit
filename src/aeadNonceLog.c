@@ -2,25 +2,30 @@
  *
  * Internal layout: open-addressing hash set with linear probing for
  * (key_id, nonce) lookup, layered with a FIFO doubly-linked list
- * (indexed by slot) used purely to make eviction O(1).
+ * (indexed by slot) that makes eviction O(1) and gives snapshots their
+ * order (oldest first).
  *
  * Insertion ordering:
  * - Probe FIRST. If the tuple is already present we return duplicate
- * and do NOT touch the table. This avoids the pre-fix bug where an
- * eviction unconditionally fired before the probe and could evict
- * the candidate's own pre-existing slot, then "accept" it as a
- * fresh insert.
+ * and do NOT touch the table, so an eviction can never remove the
+ * candidate's own earlier observation before the probe sees it.
  * - If not found and load >= 7/8 capacity, evict the FIFO head
- * (oldest gen) in O(1).
+ * (oldest) in O(1).
  * - Insert at the FIFO tail.
  *
- * gen is kept per-slot purely for persistence — the wire format
- * exposes it so a snapshot/restore preserves insertion order. The
- * live data structure no longer scans for the oldest gen on every
- * eviction; that field is now read-only at runtime.
+ * Removal (eviction, ClearKey) uses backward-shift deletion: the
+ * entries after the emptied slot in its probe run move back over it
+ * when their home slot allows, so every entry stays reachable from its
+ * home slot without tombstones.  (Merely emptying the slot would end
+ * the probe run there and hide the entries past it from lookup, and a
+ * nonce reused within the window would go undetected.)
  *
- * Thread-safety: single mutex covers the table, the FIFO list, and
- * next_gen. Snapshot/restore takes the same lock during serialization. */
+ * A slot is occupied iff key_id != 0 (0 is never a valid key id).  Each
+ * slot keeps its tuple's hash, so probes compare hashes before nonces
+ * and backward shifts read home slots without rehashing.
+ *
+ * Thread-safety: single mutex covers the table and the FIFO list.
+ * Snapshot/restore takes the same lock during serialization. */
 
 #include "aeadNonceLog.h"
 
@@ -40,8 +45,8 @@
 #define AEAD_NONCE_LOG_NIL ((size_t)SIZE_MAX)
 
 typedef struct aeadNonceLogSlot {
-    uint64_t gen;    /* 0 = empty; else monotonic insertion seq */
-    uint32_t key_id; /* HMAC_KEY_ID_INVALID (==0) marks empty alongside gen=0 */
+    uint64_t hash;   /* aeadNonceLogHash(key_id, nonce) */
+    uint32_t key_id; /* HMAC_KEY_ID_INVALID (0) marks an empty slot */
     uint8_t nonce[AEAD_NONCE_LOG_NONCE_LEN];
 } aeadNonceLogSlot;
 
@@ -58,7 +63,6 @@ struct aeadNonceLog {
     pthread_mutex_t lock;
     aeadNonceLogSlot *slots;
     aeadNonceLogLink *links;
-    uint64_t next_gen;
     size_t cap;
     size_t mask;
     size_t count;
@@ -77,17 +81,20 @@ defcleanerName(aeadNonceLogLink *, zfree, Links);
 defcleanerName(uint8_t *, zfree, Bytes);
 defcleaner(aeadNonceLog *, aeadNonceLogFree);
 
-/* Round up to next power of two, with a floor at AEAD_NONCE_LOG_MIN_CAP. */
+/* Round up to next power of two, with a floor at AEAD_NONCE_LOG_MIN_CAP
+ * (the caller has checked req <= AEAD_NONCE_LOG_MAX_CAP). */
 static size_t aeadNonceLogRoundCap(size_t req) {
     size_t c = AEAD_NONCE_LOG_MIN_CAP;
     while (c < req) {
         c <<= 1u;
-        if (c == 0) {
-            /* Overflow — clamp to a very large sane value. */
-            return ((size_t)1) << (sizeof(size_t) * 8u - 2u);
-        }
     }
     return c;
+}
+
+/* Most entries the table holds: at this load the oldest is evicted
+ * before an insert, so a probe always meets an empty slot */
+static size_t aeadNonceLogLoadLimit(size_t cap) {
+    return cap - (cap >> 3u);
 }
 
 /* splitmix64 mix. Non-cryptographic but fine for hash-bucket
@@ -111,15 +118,11 @@ static uint64_t aeadNonceLogHash(uint32_t key_id, const uint8_t *nonce) {
     return aeadNonceLogMix64(lo ^ aeadNonceLogMix64(hi));
 }
 
-static bool aeadNonceLogSlotMatches(const aeadNonceLogSlot *s, uint32_t key_id,
-                                    const uint8_t *nonce) {
-    if (s->gen == 0) {
-        return false;
-    }
-    if (s->key_id != key_id) {
-        return false;
-    }
-    return dkCtMemEq(s->nonce, nonce, AEAD_NONCE_LOG_NONCE_LEN);
+/* The occupied slot `s` holds (key_id, nonce), whose hash is `h` */
+static bool aeadNonceLogSlotMatches(const aeadNonceLogSlot *s, uint64_t h,
+                                    uint32_t key_id, const uint8_t *nonce) {
+    return s->hash == h && s->key_id == key_id &&
+           dkCtMemEq(s->nonce, nonce, AEAD_NONCE_LOG_NONCE_LEN);
 }
 
 /* ---- FIFO list helpers (caller must hold the lock) -------------------- */
@@ -160,6 +163,9 @@ static void aeadNonceLogFifoUnlink(aeadNonceLog *log, size_t idx) {
 }
 
 aeadNonceLog *aeadNonceLogCreate(size_t min_capacity) {
+    if (min_capacity > AEAD_NONCE_LOG_MAX_CAP) {
+        return NULL;
+    }
     const size_t cap = aeadNonceLogRoundCap(min_capacity);
     cleanerName(zfree, Log) aeadNonceLog *log = zmalloc(sizeof(*log));
     cleanerName(zfree, Slots) aeadNonceLogSlot *slots =
@@ -185,7 +191,6 @@ aeadNonceLog *aeadNonceLogCreate(size_t min_capacity) {
     slots = NULL;
     log->links = links;
     links = NULL;
-    log->next_gen = 1u; /* gen 0 reserved for empty */
     log->cap = cap;
     log->mask = cap - 1u;
     log->count = 0;
@@ -213,24 +218,100 @@ void aeadNonceLogFree(aeadNonceLog *log) {
     zfree(log);
 }
 
-/* Evict the FIFO head (oldest gen, by insertion order) in O(1).
- * Caller MUST hold the lock and MUST have verified the list is
- * non-empty. Returns the index that became free. */
-static size_t aeadNonceLogEvictHead(aeadNonceLog *log) {
-    const size_t victim = log->fifo_head;
-    /* victim == AEAD_NONCE_LOG_NIL would imply count > 0 with empty list;
-     * that's a structural invariant violation — clamp defensively. */
-    if (victim == AEAD_NONCE_LOG_NIL) {
-        return 0; /* unreachable when invariants hold */
-    }
-    aeadNonceLogFifoUnlink(log, victim);
-    /* Wipe contents of evicted slot. */
-    volatile uint8_t *p = (volatile uint8_t *)&log->slots[victim];
+/* Zero a slot's bytes (observed nonces never linger in freed slots) */
+static void aeadNonceLogWipeSlot(aeadNonceLog *log, size_t idx) {
+    volatile uint8_t *p = (volatile uint8_t *)&log->slots[idx];
     for (size_t i = 0; i < sizeof(aeadNonceLogSlot); i++) {
         p[i] = 0;
     }
+}
+
+/* Move the occupied slot `from` to the vacated slot `to`, keeping its
+ * FIFO position (the neighbours, head and tail follow it).  `from` is
+ * left for the next move to overwrite or the remover to wipe. */
+static void aeadNonceLogMoveSlot(aeadNonceLog *log, size_t from, size_t to) {
+    log->slots[to] = log->slots[from];
+    log->links[to] = log->links[from];
+
+    const size_t prev = log->links[to].prev;
+    const size_t next = log->links[to].next;
+    if (prev != AEAD_NONCE_LOG_NIL) {
+        log->links[prev].next = to;
+    } else {
+        log->fifo_head = to;
+    }
+    if (next != AEAD_NONCE_LOG_NIL) {
+        log->links[next].prev = to;
+    } else {
+        log->fifo_tail = to;
+    }
+}
+
+/* Remove the entry in slot `idx` (caller holds the lock).  Backward-shift
+ * deletion: each later entry of the probe run whose home slot is not in
+ * (hole, entry] cyclically moves back into the hole, so lookups from any
+ * home slot still reach every entry.  Returns the one slot the removal
+ * leaves empty (wiped): `idx` itself, or the last slot an entry moved
+ * out of. */
+static size_t aeadNonceLogRemoveSlot(aeadNonceLog *log, size_t idx) {
+    aeadNonceLogFifoUnlink(log, idx);
     log->count--;
-    return victim;
+
+    size_t hole = idx;
+    size_t j = idx;
+    for (;;) {
+        j = (j + 1u) & log->mask;
+        const aeadNonceLogSlot *s = &log->slots[j];
+        if (s->key_id == 0u) {
+            break;
+        }
+        const size_t home = (size_t)(s->hash & log->mask);
+        const bool stays =
+            hole <= j ? (hole < home && home <= j) : (hole < home || home <= j);
+        if (!stays) {
+            aeadNonceLogMoveSlot(log, j, hole);
+            hole = j;
+        }
+    }
+
+    aeadNonceLogWipeSlot(log, hole);
+    log->links[hole].prev = AEAD_NONCE_LOG_NIL;
+    log->links[hole].next = AEAD_NONCE_LOG_NIL;
+    return hole;
+}
+
+/* Probe for (key_id, nonce), whose hash is `h`, from its home slot.  True
+ * when present; otherwise *empty is the first empty slot of its probe
+ * run (SIZE_MAX only if the table has no empty slot, which the load
+ * limit rules out). */
+static bool aeadNonceLogFind(const aeadNonceLog *log, uint64_t h,
+                             uint32_t key_id, const uint8_t *nonce,
+                             size_t *empty) {
+    size_t idx = (size_t)(h & log->mask);
+    for (size_t step = 0; step < log->cap; step++) {
+        const aeadNonceLogSlot *s = &log->slots[idx];
+        if (s->key_id == 0u) {
+            *empty = idx;
+            return false;
+        }
+        if (aeadNonceLogSlotMatches(s, h, key_id, nonce)) {
+            return true;
+        }
+        idx = (idx + 1u) & log->mask;
+    }
+    *empty = SIZE_MAX;
+    return false;
+}
+
+/* Fill the empty slot `idx` and append it to the FIFO tail */
+static void aeadNonceLogPlace(aeadNonceLog *log, size_t idx, uint64_t h,
+                              uint32_t key_id, const uint8_t *nonce) {
+    aeadNonceLogSlot *s = &log->slots[idx];
+    s->hash = h;
+    s->key_id = key_id;
+    memcpy(s->nonce, nonce, AEAD_NONCE_LOG_NONCE_LEN);
+    aeadNonceLogFifoPushTail(log, idx);
+    log->count++;
 }
 
 bool aeadNonceLogObserve(aeadNonceLog *log, uint32_t key_id,
@@ -241,86 +322,32 @@ bool aeadNonceLogObserve(aeadNonceLog *log, uint32_t key_id,
     const uint64_t h = aeadNonceLogHash(key_id, nonce);
     pthread_mutex_lock(&log->lock);
 
-    /* PROBE FIRST. Walk the chain until we find either:
-     * - a matching (key_id, nonce) → duplicate, return false without
-     * touching the table. This is the correctness fix for the
-     * pre-existing "evict-then-probe" bug where the candidate's
-     * own slot could be evicted before the probe noticed it.
-     * - an empty slot → record its index for the eventual insert and
-     * stop walking.
-     * - the entire table → all-saturated; treat as needing eviction. */
-    size_t idx = (size_t)(h & log->mask);
-    size_t first_empty = SIZE_MAX;
-    for (size_t step = 0; step < log->cap; step++) {
-        aeadNonceLogSlot *s = &log->slots[idx];
-        if (s->gen == 0u) {
-            first_empty = idx;
-            /* Wipe-on-evict makes an empty slot terminate the chain. */
-            break;
-        }
-        if (aeadNonceLogSlotMatches(s, key_id, nonce)) {
-            pthread_mutex_unlock(&log->lock);
-            return false;
-        }
-        idx = (idx + 1u) & log->mask;
+    /* Probe first: a duplicate leaves the table untouched */
+    size_t empty = SIZE_MAX;
+    if (aeadNonceLogFind(log, h, key_id, nonce, &empty)) {
+        pthread_mutex_unlock(&log->lock);
+        return false;
     }
 
-    /* Not a duplicate. Apply eviction policy if we're at-or-over the
-     * 7/8 load threshold. This is O(1): we evict the FIFO head. */
-    if (log->count >= (log->cap - (log->cap >> 3u))) {
-        const size_t evicted = aeadNonceLogEvictHead(log);
-        /* Eviction may have wiped a slot anywhere in the table,
-         * including INSIDE our probe chain at a position earlier than
-         * `first_empty`. If we inserted at the original first_empty
-         * a future lookup would walk from h, hit the newly-emptied
-         * earlier slot, and terminate without finding our entry.
-         *
-         * Re-walk the chain to take the earliest empty. We already
-         * proved no duplicate exists, so we only need to find the
-         * first empty (skipping matches isn't needed). */
-        idx = (size_t)(h & log->mask);
-        first_empty = SIZE_MAX;
-        for (size_t step = 0; step < log->cap; step++) {
-            if (log->slots[idx].gen == 0u) {
-                first_empty = idx;
-                break;
-            }
-            idx = (idx + 1u) & log->mask;
-        }
-        if (first_empty == SIZE_MAX) {
-            /* No empty on chain even after eviction (eviction freed a
-             * slot we never probe). Fall back to the evicted slot,
-             * which lives on its own (possibly different) chain — but
-             * the natural insertion point for OUR hash is still the
-             * evicted index because we'll never reach it via the
-             * regular probe from h. This is the same compromise the
-             * pre-fix code made for the saturation case; the only
-             * lookup that finds it is by full-scan re-probe (we never
-             * use one). Accept the loss as fail-safe degradation. */
-            first_empty = evicted;
+    /* At the load limit, evict the oldest entry.  The removal leaves one
+     * new empty slot (every other slot stays occupied or empty), so the
+     * first empty of this probe run is that slot when it lies in
+     * [home, empty), and `empty` otherwise. */
+    if (log->count >= aeadNonceLogLoadLimit(log->cap) && empty != SIZE_MAX) {
+        const size_t freed = aeadNonceLogRemoveSlot(log, log->fifo_head);
+        const size_t home = (size_t)(h & log->mask);
+        if (((freed - home) & log->mask) < ((empty - home) & log->mask)) {
+            empty = freed;
         }
     }
 
-    if (first_empty == SIZE_MAX) {
-        /* Table was full and load policy didn't trigger (e.g. all
-         * cap=64 slots are full but count miscounted). Force one
-         * eviction. */
-        first_empty = aeadNonceLogEvictHead(log);
+    /* No empty slot means a broken table: refuse, as for a reuse */
+    const bool placed = empty != SIZE_MAX;
+    if (placed) {
+        aeadNonceLogPlace(log, empty, h, key_id, nonce);
     }
-
-    aeadNonceLogSlot *s = &log->slots[first_empty];
-    s->gen = log->next_gen++;
-    if (log->next_gen == 0u) {
-        /* Wrap is astronomical (2^64 inserts) but be defensive: skip
-         * 0 to keep "0 == empty" invariant. */
-        log->next_gen = 1u;
-    }
-    s->key_id = key_id;
-    memcpy(s->nonce, nonce, AEAD_NONCE_LOG_NONCE_LEN);
-    aeadNonceLogFifoPushTail(log, first_empty);
-    log->count++;
     pthread_mutex_unlock(&log->lock);
-    return true;
+    return placed;
 }
 
 void aeadNonceLogClearKey(aeadNonceLog *log, uint32_t key_id) {
@@ -328,14 +355,13 @@ void aeadNonceLogClearKey(aeadNonceLog *log, uint32_t key_id) {
         return;
     }
     pthread_mutex_lock(&log->lock);
-    for (size_t i = 0; i < log->cap; i++) {
-        if (log->slots[i].gen != 0u && log->slots[i].key_id == key_id) {
-            aeadNonceLogFifoUnlink(log, i);
-            volatile uint8_t *p = (volatile uint8_t *)&log->slots[i];
-            for (size_t j = 0; j < sizeof(aeadNonceLogSlot); j++) {
-                p[j] = 0;
-            }
-            log->count--;
+    /* A removal can shift a later entry into slot i, so i advances only
+     * past a slot that stays */
+    for (size_t i = 0; i < log->cap;) {
+        if (log->slots[i].key_id == key_id) {
+            aeadNonceLogRemoveSlot(log, i);
+        } else {
+            i++;
         }
     }
     pthread_mutex_unlock(&log->lock);
@@ -362,44 +388,25 @@ size_t aeadNonceLogCapacity(const aeadNonceLog *log) {
  * Persistence (flex serialization + persistOps descriptor)
  * ======================================================================== */
 
-/* Entries-per-record in the serialized flex. */
-#define AEAD_NONCE_LOG_PERSIST_HEADER_ENTRIES ((size_t)3)
-#define AEAD_NONCE_LOG_PERSIST_ENTRIES_PER_RECORD ((size_t)4)
+/* Entries per record in the serialized flex: nonce, key_id */
+#define AEAD_NONCE_LOG_PERSIST_ENTRIES_PER_RECORD ((size_t)2)
 
-/* Build the flex encoding under the lock. Returns a freshly-allocated
- * flex; caller owns and frees via flexFree. Returns NULL on failure. */
+/* Build the flex encoding under the lock: [capacity], then each entry
+ * oldest first.  Caller owns and frees via flexFree. */
 static flex *anlBuildSnapshotFlex(const aeadNonceLog *log) {
-    if (log == NULL) {
-        return NULL;
-    }
     /* @own: caller; free=flexFree */
     flex *f = flexNew();
-    if (f == NULL) {
-        return NULL;
-    }
     pthread_mutex_lock((pthread_mutex_t *)&log->lock);
 
-    /* Header: version, capacity, record_count. */
     flexRow row = FLEX_ROW_INIT;
-    flexRowUnsigned(&row, AEAD_NONCE_LOG_PERSIST_VERSION);
     flexRowUnsigned(&row, (uint64_t)log->cap);
-    flexRowUnsigned(&row, (uint64_t)log->count);
     flexRowAppendExact(&f, &row);
 
-    /* Per-record block: key_id, nonce_lo (8B LE), nonce_hi (4B LE), gen. */
-    for (size_t i = 0; i < log->cap; i++) {
+    for (size_t i = log->fifo_head; i != AEAD_NONCE_LOG_NIL;
+         i = log->links[i].next) {
         const aeadNonceLogSlot *s = &log->slots[i];
-        if (s->gen == 0u) {
-            continue;
-        }
-        uint64_t nonce_lo = 0;
-        uint32_t nonce_hi = 0;
-        memcpy(&nonce_lo, s->nonce, 8);
-        memcpy(&nonce_hi, s->nonce + 8, 4);
+        flexRowBytes(&row, s->nonce, AEAD_NONCE_LOG_NONCE_LEN);
         flexRowUnsigned(&row, (uint64_t)s->key_id);
-        flexRowUnsigned(&row, nonce_lo);
-        flexRowUnsigned(&row, (uint64_t)nonce_hi);
-        flexRowUnsigned(&row, s->gen);
         flexRowAppendExact(&f, &row);
     }
 
@@ -413,9 +420,6 @@ size_t aeadNonceLogToBytes(const aeadNonceLog *log, uint8_t *out,
         return 0;
     }
     flex *f = anlBuildSnapshotFlex(log);
-    if (f == NULL) {
-        return 0;
-    }
     const size_t need = flexBytes(f);
     if (out == NULL) {
         flexFree(f);
@@ -428,28 +432,6 @@ size_t aeadNonceLogToBytes(const aeadNonceLog *log, uint8_t *out,
     memcpy(out, f, need);
     flexFree(f);
     return need;
-}
-
-/* Restore helper: scratch record collected from the flex stream so we
- * can re-establish FIFO order in ascending gen across all records. */
-typedef struct anlRestoreRec {
-    uint64_t gen;
-    uint32_t key_id;
-    uint8_t nonce[AEAD_NONCE_LOG_NONCE_LEN];
-} anlRestoreRec;
-
-defcleanerName(anlRestoreRec *, zfree, Recs);
-
-static int anlRestoreCmpGen(const void *a, const void *b) {
-    const anlRestoreRec *ra = (const anlRestoreRec *)a;
-    const anlRestoreRec *rb = (const anlRestoreRec *)b;
-    if (ra->gen < rb->gen) {
-        return -1;
-    }
-    if (ra->gen > rb->gen) {
-        return 1;
-    }
-    return 0;
 }
 
 /* Decode one snapshot field, which must be a 64-bit unsigned integer.
@@ -478,188 +460,57 @@ aeadNonceLog *aeadNonceLogFromBytes(const uint8_t *buf, size_t len) {
     }
     const flex *f = (const flex *)buf;
     const size_t total = flexCount(f);
-    if (total < AEAD_NONCE_LOG_PERSIST_HEADER_ENTRIES) {
+    if (total == 0 ||
+        (total - 1) % AEAD_NONCE_LOG_PERSIST_ENTRIES_PER_RECORD != 0u) {
         return NULL;
     }
-    const size_t payload = total - AEAD_NONCE_LOG_PERSIST_HEADER_ENTRIES;
-    if ((payload % AEAD_NONCE_LOG_PERSIST_ENTRIES_PER_RECORD) != 0u) {
-        return NULL;
-    }
-    const size_t declared_records =
-        payload / AEAD_NONCE_LOG_PERSIST_ENTRIES_PER_RECORD;
+    const size_t records =
+        (total - 1) / AEAD_NONCE_LOG_PERSIST_ENTRIES_PER_RECORD;
 
+    /* [0] capacity: a power of two in [MIN, MAX] (so a damaged field
+     * cannot size an allocation), holding the records within the load
+     * limit, as a live log does */
     flexEntry *fe = flexHead(f);
-    if (fe == NULL) {
-        return NULL;
-    }
-
-    /* Header entry 0: version. */
-    uint64_t version = 0;
-    if (!anlReadU64(fe, &version) ||
-        version != AEAD_NONCE_LOG_PERSIST_VERSION) {
+    uint64_t cap = 0;
+    if (!anlReadU64(fe, &cap) || cap < AEAD_NONCE_LOG_MIN_CAP ||
+        cap > AEAD_NONCE_LOG_MAX_CAP || (cap & (cap - 1u)) != 0u ||
+        records > aeadNonceLogLoadLimit((size_t)cap)) {
         return NULL;
     }
     fe = flexNext(f, fe);
-    if (fe == NULL) {
-        return NULL;
-    }
 
-    /* Header entry 1: capacity. */
-    uint64_t saved_cap = 0;
-    if (!anlReadU64(fe, &saved_cap)) {
-        return NULL;
-    }
-    if (saved_cap == 0u || saved_cap > ((uint64_t)1 << 40u)) {
-        return NULL; /* obviously bogus */
-    }
-    fe = flexNext(f, fe);
-    if (fe == NULL) {
-        return NULL;
-    }
-
-    /* Header entry 2: record_count. */
-    uint64_t saved_count = 0;
-    if (!anlReadU64(fe, &saved_count)) {
-        return NULL;
-    }
-    if (saved_count != (uint64_t)declared_records) {
-        return NULL; /* header and payload disagree */
-    }
-    if (saved_count > saved_cap) {
-        return NULL; /* count exceeds declared capacity */
-    }
-    fe = flexNext(f, fe);
-
-    /* Allocate a fresh log with the saved capacity. */
     cleaner(aeadNonceLogFree) aeadNonceLog *log =
-        aeadNonceLogCreate((size_t)saved_cap);
+        aeadNonceLogCreate((size_t)cap);
     if (log == NULL) {
         return NULL;
     }
-    /* Round-up should match the original cap; if not the snapshot is
-     * malformed. */
-    if (aeadNonceLogCapacity(log) != (size_t)saved_cap) {
-        return NULL;
-    }
 
-    /* Collect every record from the flex into a scratch array so we
-     * can sort by gen and rebuild the FIFO list in insertion order. */
-    cleanerName(zfree, Recs) anlRestoreRec *recs = NULL;
-    if (declared_records > 0u) {
-        recs = zmalloc(declared_records * sizeof(*recs));
-        if (recs == NULL) {
+    /* Records oldest first: [nonce (12 bytes), key_id (1..UINT32_MAX)],
+     * each inserted at the FIFO tail; a repeated tuple is refused */
+    for (size_t i = 0; i < records; i++) {
+        databoxBig nonceBox;
+        flexGetByTypeBig(fe, &nonceBox);
+        if (!DATABOX_IS_BYTES(&nonceBox) ||
+            nonceBox.len != AEAD_NONCE_LOG_NONCE_LEN) {
             return NULL;
         }
-    }
-    uint64_t max_gen = 0;
-    for (size_t i = 0; i < declared_records; i++) {
-        if (fe == NULL) {
-            return NULL;
-        }
-        /* a) key_id (unsigned, range-checked to uint32_t, non-zero). */
+        uint8_t nonce[AEAD_NONCE_LOG_NONCE_LEN];
+        memcpy(nonce, databoxBytes(&nonceBox), AEAD_NONCE_LOG_NONCE_LEN);
+        fe = flexNext(f, fe);
+
         uint64_t key_id = 0;
-        if (!anlReadU64(fe, &key_id)) {
-            return NULL;
-        }
-        if (key_id == 0u || key_id > UINT32_MAX) {
-            return NULL;
-        }
-        recs[i].key_id = (uint32_t)key_id;
-        fe = flexNext(f, fe);
-        if (fe == NULL) {
-            return NULL;
-        }
-
-        /* b) nonce_lo (unsigned 64-bit). */
-        uint64_t nonce_lo = 0;
-        if (!anlReadU64(fe, &nonce_lo)) {
+        if (!anlReadU64(fe, &key_id) || key_id == 0u || key_id > UINT32_MAX) {
             return NULL;
         }
         fe = flexNext(f, fe);
-        if (fe == NULL) {
-            return NULL;
-        }
 
-        /* c) nonce_hi (unsigned, range-checked to uint32_t). */
-        uint64_t nonce_hi_wide = 0;
-        if (!anlReadU64(fe, &nonce_hi_wide)) {
+        const uint64_t h = aeadNonceLogHash((uint32_t)key_id, nonce);
+        size_t empty = SIZE_MAX;
+        if (aeadNonceLogFind(log, h, (uint32_t)key_id, nonce, &empty) ||
+            empty == SIZE_MAX) {
             return NULL;
         }
-        if (nonce_hi_wide > UINT32_MAX) {
-            return NULL;
-        }
-        const uint32_t nonce_hi = (uint32_t)nonce_hi_wide;
-        fe = flexNext(f, fe);
-        if (fe == NULL) {
-            return NULL;
-        }
-
-        /* d) gen (unsigned 64-bit, non-zero). */
-        uint64_t gen = 0;
-        if (!anlReadU64(fe, &gen)) {
-            return NULL;
-        }
-        if (gen == 0u) {
-            return NULL;
-        }
-        recs[i].gen = gen;
-        if (recs[i].gen > max_gen) {
-            max_gen = recs[i].gen;
-        }
-        fe = flexNext(f, fe);
-
-        /* Reconstruct the nonce bytes from the two halves (little-endian
-         * layout — matches the serializer above). */
-        memcpy(recs[i].nonce, &nonce_lo, 8);
-        memcpy(recs[i].nonce + 8, &nonce_hi, 4);
-    }
-
-    /* Sort by gen ascending so FIFO order in the rebuilt list matches
-     * the original insertion order: oldest gen at head, newest at tail. */
-    if (declared_records > 1u) {
-        qsort(recs, declared_records, sizeof(*recs), anlRestoreCmpGen);
-    }
-
-    /* Install each record (in gen order) using the same hash + probe
-     * logic as Observe, but write the saved gen rather than the fresh
-     * counter, and link into the FIFO list in order. */
-    for (size_t i = 0; i < declared_records; i++) {
-        const uint64_t h = aeadNonceLogHash(recs[i].key_id, recs[i].nonce);
-        size_t idx = (size_t)(h & log->mask);
-        bool placed = false;
-        for (size_t step = 0; step < log->cap; step++) {
-            aeadNonceLogSlot *s = &log->slots[idx];
-            if (s->gen == 0u) {
-                s->gen = recs[i].gen;
-                s->key_id = recs[i].key_id;
-                memcpy(s->nonce, recs[i].nonce, AEAD_NONCE_LOG_NONCE_LEN);
-                aeadNonceLogFifoPushTail(log, idx);
-                log->count++;
-                placed = true;
-                break;
-            }
-            if (s->key_id == recs[i].key_id &&
-                dkCtMemEq(s->nonce, recs[i].nonce, AEAD_NONCE_LOG_NONCE_LEN)) {
-                /* Duplicate (key_id, nonce) pair — refuse the snapshot.
-                 * validate also enforces this on top, but rejecting
-                 * here keeps the freshly-built log internally consistent. */
-                return NULL;
-            }
-            idx = (idx + 1u) & log->mask;
-        }
-        if (!placed) {
-            /* probe chain saturated — impossible if header
-             * record_count <= capacity, but be defensive. */
-            return NULL;
-        }
-    }
-
-    /* Advance next_gen past the highest restored gen so the first new
-     * Observe doesn't collide with a restored slot. */
-    if (max_gen + 1u != 0u) {
-        log->next_gen = max_gen + 1u;
-    } else {
-        log->next_gen = 1u;
+        aeadNonceLogPlace(log, empty, h, (uint32_t)key_id, nonce);
     }
 
     aeadNonceLog *out = log;
@@ -670,34 +521,10 @@ aeadNonceLog *aeadNonceLogFromBytes(const uint8_t *buf, size_t len) {
 /* ---- persistOps descriptor ----------------------------------------- */
 
 static uint8_t *anlPersistSnapshot(const void *structure, size_t *len) {
-    const aeadNonceLog *log = (const aeadNonceLog *)structure;
-    const size_t need = aeadNonceLogToBytes(log, NULL, 0);
-    if (need == 0) {
-        if (len != NULL) {
-            *len = 0;
-        }
-        return NULL;
-    }
-    cleanerName(zfree, Bytes) uint8_t *out = zmalloc(need);
-    if (out == NULL) {
-        if (len != NULL) {
-            *len = 0;
-        }
-        return NULL;
-    }
-    const size_t written = aeadNonceLogToBytes(log, out, need);
-    if (written != need) {
-        if (len != NULL) {
-            *len = 0;
-        }
-        return NULL;
-    }
-    if (len != NULL) {
-        *len = written;
-    }
-    uint8_t *ret = out;
-    out = NULL;
-    return ret;
+    /* The snapshot flex is the persisted bytes; the caller frees it */
+    flex *f = anlBuildSnapshotFlex((const aeadNonceLog *)structure);
+    *len = flexBytes(f);
+    return (uint8_t *)f;
 }
 
 static void *anlPersistRestore(const uint8_t *data, size_t len) {
@@ -717,54 +544,44 @@ static size_t anlPersistEstimateSize(const void *structure) {
     return aeadNonceLogToBytes((const aeadNonceLog *)structure, NULL, 0);
 }
 
-/* validate hook: confirms the restored set has unique (key_id, nonce)
- * pairs and that count matches the live slot count. Called after
- * restore returns; takes the structure pointer. */
+/* validate hook: the table's shape and load, every entry reachable from
+ * its home slot as the first match (so no tuple repeats and no lookup
+ * misses one), and a FIFO list through exactly the occupied slots. */
 static bool anlPersistValidate(const void *structure) {
     const aeadNonceLog *log = (const aeadNonceLog *)structure;
     if (log == NULL) {
         return false;
     }
-    /* Live-slot count must agree with the count field. */
+    /* Capacity: a power of two in [MIN, MAX], within the load limit */
+    if (log->cap < AEAD_NONCE_LOG_MIN_CAP ||
+        log->cap > AEAD_NONCE_LOG_MAX_CAP ||
+        (log->cap & (log->cap - 1u)) != 0u || log->mask != log->cap - 1u ||
+        log->count > aeadNonceLogLoadLimit(log->cap)) {
+        return false;
+    }
+    /* Every occupied slot holds its tuple's hash and is the first match
+     * of a probe from its home, and the occupied slots number count */
     size_t live = 0;
     for (size_t i = 0; i < log->cap; i++) {
-        if (log->slots[i].gen != 0u) {
-            live++;
+        const aeadNonceLogSlot *s = &log->slots[i];
+        if (s->key_id == 0u) {
+            continue;
+        }
+        live++;
+        if (s->hash != aeadNonceLogHash(s->key_id, s->nonce)) {
+            return false;
+        }
+        for (size_t idx = (size_t)(s->hash & log->mask); idx != i;
+             idx = (idx + 1u) & log->mask) {
+            const aeadNonceLogSlot *o = &log->slots[idx];
+            if (o->key_id == 0u ||
+                aeadNonceLogSlotMatches(o, s->hash, s->key_id, s->nonce)) {
+                return false;
+            }
         }
     }
     if (live != log->count) {
         return false;
-    }
-    /* Capacity must be a power of two and >= the minimum. */
-    if (log->cap < AEAD_NONCE_LOG_MIN_CAP) {
-        return false;
-    }
-    if ((log->cap & (log->cap - 1u)) != 0u) {
-        return false;
-    }
-    if (log->mask != log->cap - 1u) {
-        return false;
-    }
-    /* No duplicate (key_id, nonce) pairs. O(N^2) but only runs once
-     * post-restore. */
-    for (size_t i = 0; i < log->cap; i++) {
-        const aeadNonceLogSlot *a = &log->slots[i];
-        if (a->gen == 0u) {
-            continue;
-        }
-        if (a->key_id == 0u) {
-            return false;
-        }
-        for (size_t j = i + 1; j < log->cap; j++) {
-            const aeadNonceLogSlot *b = &log->slots[j];
-            if (b->gen == 0u) {
-                continue;
-            }
-            if (a->key_id == b->key_id &&
-                dkCtMemEq(a->nonce, b->nonce, AEAD_NONCE_LOG_NONCE_LEN)) {
-                return false;
-            }
-        }
     }
     /* FIFO list invariants: head/tail consistent with count;
      * traversing head->tail visits exactly `count` occupied slots. */
@@ -794,7 +611,7 @@ static bool anlPersistValidate(const void *structure) {
             if (cur >= log->cap) {
                 return false;
             }
-            if (log->slots[cur].gen == 0u) {
+            if (log->slots[cur].key_id == 0u) {
                 return false;
             }
             if (log->links[cur].prev != prev) {
@@ -823,8 +640,7 @@ const persistOps persistOpsAeadNonceLog = {
     .newEmpty = anlPersistNewEmpty,
     .count = anlPersistCount,
     .estimateSize = anlPersistEstimateSize,
-    .encodeOp = NULL, /* nonce-log changes are observation-driven; full
-                            re-snapshot is the durability model */
+    .encodeOp = NULL, /* snapshot-only: each durable point is a snapshot */
     .applyOp = NULL,
     .streamSnapshot = NULL,
     .streamRestore = NULL,
@@ -942,7 +758,7 @@ int aeadNonceLogTest(int argc, char *argv[]) {
             }
         }
 
-        /* Give the last entry (the second record's small gen) the
+        /* Give the last entry (the second record's small key_id) the
          * encoding byte of a full 64-bit integer: the total-bytes header
          * still matches the buffer, but the entry now claims payload bytes
          * past the end of it */
@@ -992,8 +808,7 @@ int aeadNonceLogTest(int argc, char *argv[]) {
         }
         const flex *src = (const flex *)snap;
         const size_t entries = flexCount(src);
-        if (entries != AEAD_NONCE_LOG_PERSIST_HEADER_ENTRIES +
-                           2u * AEAD_NONCE_LOG_PERSIST_ENTRIES_PER_RECORD) {
+        if (entries != 1u + 2u * AEAD_NONCE_LOG_PERSIST_ENTRIES_PER_RECORD) {
             ERR("snapshot has %zu entries", entries);
         }
 
@@ -1117,6 +932,157 @@ int aeadNonceLogTest(int argc, char *argv[]) {
             }
             if (aeadNonceLogSize(log) > aeadNonceLogCapacity(log)) {
                 ERRR("size exceeded capacity");
+            }
+        }
+    }
+
+    /* Two tuples sharing a home slot sit in one probe run; removing the
+     * first (by ClearKey or by eviction) must leave the second findable,
+     * or its reuse would be accepted */
+    TEST("removal keeps the rest of a probe run reachable") {
+        uint8_t first[AEAD_NONCE_LOG_NONCE_LEN] = {0};
+        uint8_t second[AEAD_NONCE_LOG_NONCE_LEN] = {0};
+        nonceFromCounter(1u, first);
+        const uint64_t home = aeadNonceLogHash(1u, first) & 63u;
+        uint64_t v = 2u;
+        do {
+            nonceFromCounter(v++, second);
+        } while ((aeadNonceLogHash(2u, second) & 63u) != home);
+
+        cleaner(aeadNonceLogFree) aeadNonceLog *log = aeadNonceLogCreate(64u);
+        aeadNonceLogObserve(log, 1u, first);
+        aeadNonceLogObserve(log, 2u, second);
+        aeadNonceLogClearKey(log, 1u);
+        if (aeadNonceLogObserve(log, 2u, second)) {
+            ERRR("reuse accepted after ClearKey emptied its run's head");
+        }
+
+        /* Eviction: the oldest tuple heads the run; filling to the load
+         * limit (56 of 64) evicts it and nothing else */
+        cleaner(aeadNonceLogFree) aeadNonceLog *full = aeadNonceLogCreate(64u);
+        aeadNonceLogObserve(full, 1u, first);
+        aeadNonceLogObserve(full, 2u, second);
+        uint8_t filler[AEAD_NONCE_LOG_NONCE_LEN] = {0};
+        for (uint64_t i = 0; i < 55u; i++) {
+            nonceFromCounter(1000000u + i, filler);
+            aeadNonceLogObserve(full, 3u, filler);
+        }
+        if (aeadNonceLogSize(full) != 56u) {
+            ERR("expected 56 tuples, got %zu", aeadNonceLogSize(full));
+        }
+        if (aeadNonceLogObserve(full, 2u, second)) {
+            ERRR("reuse accepted after eviction emptied its run's head");
+        }
+        if (!persistOpsAeadNonceLog.validate(full)) {
+            ERRR("validate refused the log after an eviction");
+        }
+    }
+
+    /* Differential: Observe and ClearKey against a FIFO list model with
+     * the same 7/8 load limit, over a small tuple space so reuses and
+     * evictions are frequent and probe runs collide; validate (every
+     * tuple reachable, FIFO intact) holds after every step */
+    TEST("observe and clear match a FIFO model") {
+        cleaner(aeadNonceLogFree) aeadNonceLog *log = aeadNonceLogCreate(64u);
+        uint32_t modelKey[56];
+        uint64_t modelVal[56];
+        size_t modelCount = 0;
+        uint64_t rng = 0xA5A5A5A5u;
+        for (size_t step = 0; step < 20000u && !err; step++) {
+            rng = rng * 6364136223846793005ull + 1442695040888963407ull;
+            const uint32_t key = 1u + (uint32_t)((rng >> 33) % 3u);
+            const uint64_t val = (rng >> 40) % 120u;
+            if ((rng >> 20) % 64u == 0) {
+                aeadNonceLogClearKey(log, key);
+                size_t w = 0;
+                for (size_t m = 0; m < modelCount; m++) {
+                    if (modelKey[m] != key) {
+                        modelKey[w] = modelKey[m];
+                        modelVal[w++] = modelVal[m];
+                    }
+                }
+                modelCount = w;
+            } else {
+                bool present = false;
+                for (size_t m = 0; m < modelCount && !present; m++) {
+                    present = modelKey[m] == key && modelVal[m] == val;
+                }
+                uint8_t nonce[AEAD_NONCE_LOG_NONCE_LEN];
+                nonceFromCounter(val, nonce);
+                if (aeadNonceLogObserve(log, key, nonce) == present) {
+                    ERR("step %zu: observe(%u, %" PRIu64 ") disagrees", step,
+                        key, val);
+                }
+                if (!present) {
+                    if (modelCount == 56u) {
+                        memmove(modelKey, modelKey + 1,
+                                55u * sizeof(*modelKey));
+                        memmove(modelVal, modelVal + 1,
+                                55u * sizeof(*modelVal));
+                        modelCount--;
+                    }
+                    modelKey[modelCount] = key;
+                    modelVal[modelCount++] = val;
+                }
+            }
+            if (aeadNonceLogSize(log) != modelCount ||
+                !persistOpsAeadNonceLog.validate(log)) {
+                ERR("step %zu: size %zu (model %zu) or validate failed", step,
+                    aeadNonceLogSize(log), modelCount);
+            }
+        }
+    }
+
+    TEST("capacity limit and snapshot order") {
+        {
+            cleaner(aeadNonceLogFree) aeadNonceLog *huge =
+                aeadNonceLogCreate(AEAD_NONCE_LOG_MAX_CAP + 1u);
+            if (huge != NULL) {
+                ERRR("a capacity past the limit was accepted");
+            }
+        }
+
+        /* The snapshot lists tuples oldest first, so a restored log
+         * evicts in the same order and snapshots to the same bytes */
+        cleaner(aeadNonceLogFree) aeadNonceLog *log = aeadNonceLogCreate(64u);
+        uint8_t nonce[AEAD_NONCE_LOG_NONCE_LEN];
+        for (uint64_t i = 0; i < 300u; i++) {
+            nonceFromCounter(i * 7919u, nonce);
+            aeadNonceLogObserve(log, 1u + (uint32_t)(i % 3u), nonce);
+            if (i % 50u == 49u) {
+                aeadNonceLogClearKey(log, 2u);
+            }
+        }
+
+        size_t len = 0;
+        cleaner(flexFree) flex *snap =
+            (flex *)persistOpsAeadNonceLog.snapshot(log, &len);
+        cleaner(aeadNonceLogFree) aeadNonceLog *back =
+            aeadNonceLogFromBytes((const uint8_t *)snap, len);
+        if (!back) {
+            ERRR("restore refused a live snapshot");
+        } else {
+            size_t len2 = 0;
+            cleaner(flexFree) flex *snap2 =
+                (flex *)persistOpsAeadNonceLog.snapshot(back, &len2);
+            if (len2 != len || memcmp(snap, snap2, len) != 0) {
+                ERRR("restored log does not snapshot to the same bytes");
+            }
+
+            /* Further evictions remove the same (oldest) tuples */
+            for (uint64_t i = 0; i < 10u; i++) {
+                nonceFromCounter(5000000u + i, nonce);
+                aeadNonceLogObserve(log, 9u, nonce);
+                aeadNonceLogObserve(back, 9u, nonce);
+            }
+            size_t lenA = 0;
+            size_t lenB = 0;
+            cleaner(flexFree) flex *a =
+                (flex *)persistOpsAeadNonceLog.snapshot(log, &lenA);
+            cleaner(flexFree) flex *b =
+                (flex *)persistOpsAeadNonceLog.snapshot(back, &lenB);
+            if (lenA != lenB || memcmp(a, b, lenA) != 0) {
+                ERRR("live and restored logs diverged after evictions");
             }
         }
     }
