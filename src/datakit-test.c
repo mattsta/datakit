@@ -26,6 +26,7 @@
 #include "databoxLinear.h"
 #include "dataspeed.h"
 #include "dj.h"
+#include "dkFormat.h"
 #include "dkRandom.h"
 #include "dkTestTmp.h"
 #include "dod.h"
@@ -11963,8 +11964,8 @@ static const TestEntry testRegistry[] = {
     T_A(blake3, "b3"), T_A(blake3Neon, "b3-neon"), T_A(blake3SSE41, "b3-sse"),
     T_A(blake3AVX2, "b3-avx"), T_A(chacha20poly1305, "c20,chacha,aead-prim"),
     T(hmac), T_A(hmacKeyring, "keyring"),
-    T_A(aeadNonceLog, "noncelog,nonce-log"), T_A(x25519, "ecdh"),
-    T_A(rapidhash, "rh,rapid"), T_A(aesGcm, "aes,aesgcm"),
+    T_A(aeadNonceLog, "noncelog,nonce-log"), T_A(dkFormat, "format"),
+    T_A(x25519, "ecdh"), T_A(rapidhash, "rh,rapid"), T_A(aesGcm, "aes,aesgcm"),
     T_A(clusterMailbox, "mailbox,mb"), T_A(clusterReplicator, "replicator,rep"),
     T_A(perfRegression, "perf-baseline,perfbase"), T(mflex),
     T_A(multilist, "ml"), T(multilistFull), T(multidict), T_ADJ(multimap),
