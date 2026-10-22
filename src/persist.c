@@ -3111,12 +3111,17 @@ defcleaner(multilist *, multilistFree);
 static uint8_t *multilistPersistSnapshot(const void *structure, size_t *len) {
     const multilist *ml = structure;
 
-    /* Every element in order as one flex.  The dump copies the element
-     * encodings without decoding them, so its bytes are exactly those of
-     * pushing each element in turn, and 96/128-bit elements need no
-     * special handling. */
+    /* Every element in order, then the list's node size limit and
+     * compression depth: [elements..., limit, depth].  The dump copies
+     * the element encodings without decoding them, so 96/128-bit elements
+     * need no special handling; the configuration goes last so restore
+     * takes it off without moving the elements. */
     cleaner(mflexStateFree) mflexState *state = mflexStateCreate();
     cleaner(flexFree) flex *f = multilistDump(ml, state);
+    flexRow row = FLEX_ROW_INIT;
+    flexRowUnsigned(&row, multilistLimit(ml));
+    flexRowUnsigned(&row, multilistDepth(ml));
+    flexRowAppendExact(&f, &row);
 
     *len = flexBytes(f);
     /* @own: caller; free=zfree */
@@ -3145,15 +3150,38 @@ static void *multilistPersistRestore(const uint8_t *data, size_t len) {
         state = ownedState;
     }
 
-    /* The elements in order: built straight into node-sized pieces (the
-     * snapshot does not record the list's configuration, so the default
-     * one is used) */
+    /* [elements..., limit, depth]: the configuration comes off the tail,
+     * then the elements build straight into node-sized pieces */
+    const size_t count = flexCount((const flex *)data);
+    if (count < 2) {
+        return NULL;
+    }
+
     /* @own: container; free=flexFree */
     flex *f = zmalloc(len);
     memcpy(f, data, len);
 
+    /* Untrusted bytes are walked forward only (their reverse trailers
+     * are not validated) */
+    flexEntry *config = flexHead(f);
+    for (size_t i = 0; i < count - 2; i++) {
+        config = flexNext(f, config);
+    }
+    databox limit = {{0}};
+    databox depth = {{0}};
+    flexGetByType(config, &limit);
+    flexGetByType(flexNext(f, config), &depth);
+    if (limit.type != DATABOX_UNSIGNED_64 ||
+        limit.data.u64 > FLEX_CAP_LEVEL_65536 ||
+        depth.type != DATABOX_UNSIGNED_64 || depth.data.u64 > UINT8_MAX) {
+        flexFree(f);
+        return NULL;
+    }
+    flexDeleteCount(&f, &config, 2);
+
     /* @own: caller; free=multilistFree */
-    return multilistNewFromDump(FLEX_CAP_LEVEL_2048, 0, state, f);
+    return multilistNewFromDump((flexCapSizeLimit)limit.data.u64,
+                                (uint32_t)depth.data.u64, state, f);
 }
 
 static size_t multilistPersistCount(const void *structure) {
@@ -5807,9 +5835,15 @@ int persistTest(int argc, char *argv[]) {
         persistClose(pm);
 
         /* multilist restore decodes from the snapshot flex directly, so
-         * hand it a flex carrying the 128-bit element. */
+         * hand it one carrying the 128-bit element: [element, limit,
+         * depth] */
         cleaner(flexFree) flex *mlSnap = flexNew();
-        flexPushByType(&mlSnap, (const databox *)&wideBox, FLEX_ENDPOINT_TAIL);
+        flexPushByTypeExact(&mlSnap, (const databox *)&wideBox,
+                            FLEX_ENDPOINT_TAIL);
+        const databox mlLimit = DATABOX_UNSIGNED(FLEX_CAP_LEVEL_2048);
+        const databox mlDepth = DATABOX_UNSIGNED(0);
+        flexPushByTypeExact(&mlSnap, &mlLimit, FLEX_ENDPOINT_TAIL);
+        flexPushByTypeExact(&mlSnap, &mlDepth, FLEX_ENDPOINT_TAIL);
         cleaner(multilistFree) multilist *mlr = persistOpsMultilist.restore(
             (const uint8_t *)mlSnap, flexBytes(mlSnap));
         if (!mlr || multilistCount(mlr) != 1) {
@@ -5960,13 +5994,18 @@ int persistTest(int argc, char *argv[]) {
             cleaner(multilistFree) multilist *restored = persistRestore(p);
             err += persistTestMlVerify(restored, ids, n, name);
 
-            /* The snapshot is the list's dump, byte for byte. */
+            /* The snapshot is the list's dump, byte for byte, then its
+             * node size limit and compression depth */
             size_t len = 0;
             cleanerName(zfree, Bytes) uint8_t *snap =
                 persistOpsMultilist.snapshot(ml, &len);
             cleaner(flexFree) flex *dump = multilistDump(ml, state);
+            flexRow cfg = FLEX_ROW_INIT;
+            flexRowUnsigned(&cfg, multilistLimit(ml));
+            flexRowUnsigned(&cfg, multilistDepth(ml));
+            flexRowAppendExact(&dump, &cfg);
             if (!snap || len != flexBytes(dump) || memcmp(snap, dump, len)) {
-                ERR("%s: snapshot bytes differ from the dump", name);
+                ERR("%s: snapshot bytes differ from the dump and config", name);
             }
 
             persistClose(p);

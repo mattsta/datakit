@@ -190,6 +190,9 @@ void multilistFree(multilist *m);
 /* Remove every element, keeping the node size limit and compression
  * depth the list was created with */
 void multilistReset(multilist **ml);
+/* The node size limit and compression depth the list was created with */
+flexCapSizeLimit multilistLimit(const multilist *ml);
+uint32_t multilistDepth(const multilist *ml);
 
 /* Bulk appending — use for growing
 multilist *multilistlNewFromFlex(int fill, int compress, flex *fl);

@@ -37,8 +37,6 @@ multilistP *multilistNewP(persistCtx *ctx, flexCapSizeLimit limit,
 
     cleanerName(zfree, MultilistP) multilistP *ml = zcalloc(1, sizeof(*ml));
     ml->ctx = ctx;
-    ml->limit = limit;
-    ml->depth = depth;
 
     /* Create mflex state for compressed node operations */
     /* @own: container; free=mflexStateFree */
@@ -93,9 +91,6 @@ multilistP *multilistOpenP(persistCtx *ctx) {
     cleanerName(zfree, MultilistP) multilistP *ml = zcalloc(1, sizeof(*ml));
     ml->ctx = ctx;
     ml->ml = recovered;
-    /* Note: limit and depth not recoverable from snapshot, use defaults */
-    ml->limit = FLEX_CAP_LEVEL_2048;
-    ml->depth = 0;
 
     /* Create mflex state for compressed node operations */
     /* @own: container; free=mflexStateFree */
@@ -1552,6 +1547,30 @@ int multilistPTest(int argc, char *argv[]) {
             !databoxEqual(&last.box, &want9) ||
             multilistIndexCheckP(ml, state, 10, &last)) {
             ERRR("GetP/IndexP/SyncP disagree with the pushes");
+        }
+        multilistCloseP(ml);
+        persistCtxFree(ctx);
+        ptestCleanupFiles(basePath);
+    }
+
+    TEST("multilistP keeps its node size and compression across reopen") {
+        ptestCleanupFiles(basePath);
+        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        multilistP *ml = multilistNewP(ctx, FLEX_CAP_LEVEL_512, 2);
+        for (int64_t i = 0; i < 300; i++) {
+            const databox v = DATABOX_SIGNED(i);
+            multilistPushTailP(ml, &v);
+        }
+        multilistCompactP(ml);
+        multilistCloseP(ml);
+        persistCtxFree(ctx);
+
+        ctx = persistCtxOpen(basePath, NULL);
+        ml = multilistOpenP(ctx);
+        if (!ml || multilistLimit(multilistGetP(ml)) != FLEX_CAP_LEVEL_512 ||
+            multilistDepth(multilistGetP(ml)) != 2 ||
+            multilistCount(multilistGetP(ml)) != 300) {
+            ERRR("Reopened list lost its configuration or elements");
         }
         multilistCloseP(ml);
         persistCtxFree(ctx);

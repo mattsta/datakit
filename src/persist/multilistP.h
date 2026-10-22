@@ -31,11 +31,9 @@
  */
 
 typedef struct multilistP {
-    multilist *ml;          /* Underlying multilist */
-    persistCtx *ctx;        /* Persistence context */
-    mflexState *state;      /* State for compressed node operations */
-    flexCapSizeLimit limit; /* Cached for recreation */
-    uint32_t depth;         /* Cached for recreation */
+    multilist *ml;     /* Underlying multilist */
+    persistCtx *ctx;   /* Persistence context */
+    mflexState *state; /* State for compressed node operations */
 } multilistP;
 
 /* ============================================================================

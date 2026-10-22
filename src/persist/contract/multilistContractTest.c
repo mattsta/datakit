@@ -91,9 +91,7 @@ static void *pcMultilistBuild(const persistContractBuild *b) {
         }
 
         if (b->size >= 100 && i == b->size / 3) {
-            multilistFree(ml);
-            /* @own: caller; free=multilistFree */
-            ml = multilistNew(FLEX_CAP_LEVEL_2048, 0);
+            multilistReset(&ml);
             persistContractRecord(b->log, PERSIST_OP_CLEAR, NULL, 0);
         }
     }

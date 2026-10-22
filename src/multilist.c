@@ -138,6 +138,14 @@ void multilistFree(multilist *m) {
     }
 }
 
+flexCapSizeLimit multilistLimit(const multilist *ml) {
+    return (flexCapSizeLimit)COMPRESS_LIMIT(ml);
+}
+
+uint32_t multilistDepth(const multilist *ml) {
+    return COMPRESS_DEPTH(ml);
+}
+
 void multilistReset(multilist **ml) {
     const flexCapSizeLimit limit = COMPRESS_LIMIT(*ml);
     const uint32_t depth = COMPRESS_DEPTH(*ml);
