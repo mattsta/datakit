@@ -417,14 +417,26 @@ wiring a keyring into a long-lived subsystem. Quick reference:
    resolution path and rejects below-floor ids with
    `FLEX_ENV_VERIFY_FAILED_KEY_REVOKED` (read via
    `flexEnvelopeLastVerifyError()`). The floor survives
-   snapshot/restore via a leading sentinel record.
+   snapshot/restore as the snapshot's first entry.
 4. **Persist header `key_id`.** Both snapshot and WAL
    headers carry the attached `key_id`. A cross-key mistake on read
    fails fast with `PERSIST_ERR_KEY_ID_MISMATCH` instead of the opaque
    generic verify-failed; the expected id is recoverable via
    `persistLastExpectedKeyId(p)` so operator tooling can rebind to the
    correct key.
-5. **Threading.** Read lock for `Lookup`, `GetRaw`, `Size`,
+5. **Format stamps.** Bytes that leave a process name their format
+   (`dkFormat.h`): persist headers carry the file framing's and the
+   structure's (format id, version, features); cluster frames carry the
+   frame protocol's; replicated structures and wrapped mailbox snapshots
+   carry the structure's as a prefix. A reader refuses a version or
+   must-understand feature it does not know with a typed result
+   (`PERSIST_ERR_CONTAINER_FORMAT` / `_STRUCTURE_FORMAT` and
+   `persistLastFormat`, `CLUSTER_MAILBOX_ERR_PROTOCOL`,
+   `clusterReplicatorFormatRefusedCount`); ignorable features (high 32
+   bits) are read. `dkFormatManifest` lists every format with the
+   version this build writes and the range it reads; `persistInspect`
+   reports a file's stamps without reading its body.
+6. **Threading.** Read lock for `Lookup`, `GetRaw`, `Size`,
    `GetGeneration`, `MinValidKeyId`, `NextAeadNonce`,
    `PeekAeadCounter`, `Snapshot`. Write lock for `Install`,
    `InstallUnsalted`, `Retire`, `SetAeadSalt`, `SetMinValidKeyId`,
