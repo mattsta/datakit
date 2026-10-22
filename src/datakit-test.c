@@ -8990,14 +8990,25 @@ static int testMailboxRestoreWrappedStructAwareFuzzTest(int argc,
     };
 
     /* Build a non-trivial mailbox + snapshot it as raw bytes. */
-    size_t inner_len = 0u;
-    cleanerName(zfree, Bytes) uint8_t *inner =
-        mailboxBuildSnapshotFor(mailboxSnapshotDirect, &inner_len, key);
-    if (inner == NULL || inner_len == 0u) {
+    size_t raw_len = 0u;
+    cleanerName(zfree, Bytes) uint8_t *raw =
+        mailboxBuildSnapshotFor(mailboxSnapshotDirect, &raw_len, key);
+    if (raw == NULL || raw_len == 0u) {
         printf("testMailboxRestoreWrappedStructAwareFuzz: build snapshot "
                "failed\n");
         return 1;
     }
+
+    /* The envelope's inner bytes, as clusterMailboxSnapshotWrapped lays
+     * them out: the format prefix, then the watermark bytes.  The sweep
+     * below flips bits in both. */
+    const dkFormatSpec spec = persistOpsFormat(&persistOpsClusterMailbox);
+    const dkFormatStamp stamp = dkFormatStampFor(&spec, 0);
+    const size_t prefix_len = dkFormatPrefixSize(&stamp);
+    const size_t inner_len = prefix_len + raw_len;
+    cleanerName(zfree, Bytes) uint8_t *inner = zmalloc(inner_len);
+    dkFormatPrefixWrite(&stamp, inner, prefix_len);
+    memcpy(inner + prefix_len, raw, raw_len);
 
     flexEnvelopeWrapParams wp = {
         .algo = FLEX_ENV_ALGO_HMAC_SHA256,

@@ -1398,12 +1398,21 @@ bool clusterMailboxRestore(clusterMailbox *mb, const uint8_t *buf, size_t len) {
 
 /* --- Envelope-wrapped snapshot/restore ----------------------------- */
 
+/* A wrapped snapshot is a standalone artifact: inside the envelope, the
+ * watermark bytes follow the dkFormat prefix of the descriptor's format */
+static dkFormatStamp cmWrappedStamp(void) {
+    const dkFormatSpec spec = persistOpsFormat(&persistOpsClusterMailbox);
+    return dkFormatStampFor(&spec, 0);
+}
+
 size_t clusterMailboxSnapshotWrappedSize(const clusterMailbox *mb,
                                          flexEnvelopeAlgo envelope_algo) {
     if (mb == NULL) {
         return 0;
     }
-    const size_t inner = clusterMailboxSnapshotSize(mb);
+    const dkFormatStamp stamp = cmWrappedStamp();
+    const size_t inner =
+        dkFormatPrefixSize(&stamp) + clusterMailboxSnapshotSize(mb);
     return flexEnvelopeWrappedSize((uint64_t)inner, envelope_algo,
                                    FLEX_ENV_FLAG_NONE);
 }
@@ -1424,13 +1433,17 @@ bool clusterMailboxSnapshotWrapped(const clusterMailbox *mb,
         FLEX_ENV_ALGO_IS_AEAD(params->algo)) {
         return false;
     }
-    const size_t inner_size = clusterMailboxSnapshotSize(mb);
-    cleaner(zfree) void *inner = inner_size > 0 ? zmalloc(inner_size) : NULL;
-    /* Empty mailbox (origin_count == 0) has an 8-byte header-only
-     * snapshot. Always sized > 0. inner frees itself at scope exit. */
+    const dkFormatStamp stamp = cmWrappedStamp();
+    const size_t prefix_size = dkFormatPrefixSize(&stamp);
+    const size_t inner_size = prefix_size + clusterMailboxSnapshotSize(mb);
+    /* inner frees itself at scope exit */
+    cleaner(zfree) void *inner = zmalloc(inner_size);
+    uint8_t *const bytes = inner;
     size_t inner_written = 0;
-    if (!clusterMailboxSnapshot(mb, inner, inner_size, &inner_written) ||
-        inner_written != inner_size) {
+    if (dkFormatPrefixWrite(&stamp, bytes, prefix_size) != prefix_size ||
+        !clusterMailboxSnapshot(mb, bytes + prefix_size,
+                                inner_size - prefix_size, &inner_written) ||
+        prefix_size + inner_written != inner_size) {
         return false;
     }
     size_t written = 0;
@@ -1456,7 +1469,17 @@ bool clusterMailboxRestoreWrapped(clusterMailbox *mb,
     if (!flexEnvelopeVerify(buf, len, params, &payload, &payload_len)) {
         return false;
     }
-    return clusterMailboxRestore(mb, payload, (size_t)payload_len);
+
+    /* Only a watermark format this build reads is parsed */
+    const dkFormatSpec spec = persistOpsFormat(&persistOpsClusterMailbox);
+    dkFormatStamp stamp;
+    size_t prefix = 0;
+    if (dkFormatPrefixRead(&spec, payload, (size_t)payload_len, &stamp,
+                           &prefix) != DK_FORMAT_OK) {
+        return false;
+    }
+    return clusterMailboxRestore(mb, payload + prefix,
+                                 (size_t)payload_len - prefix);
 }
 
 /* ---- persistOps descriptor ----------------------------------------- */
@@ -1626,6 +1649,22 @@ cmTestPoisonStack(void) {
     for (size_t i = 0; i < sizeof(junk); i++) {
         junk[i] = 0xFF;
     }
+}
+
+/* Wrap raw watermark bytes as clusterMailboxSnapshotWrapped does (format
+ * prefix, then the bytes, inside the envelope); false when `cap` is short */
+static bool cmTestWrapStamped(uint8_t *out, size_t cap, const uint8_t *raw,
+                              size_t rawLen,
+                              const flexEnvelopeWrapParams *params,
+                              size_t *written) {
+    const dkFormatStamp stamp = cmWrappedStamp();
+    uint8_t inner[512];
+    const size_t prefix = dkFormatPrefixWrite(&stamp, inner, sizeof(inner));
+    if (prefix == 0 || prefix + rawLen > sizeof(inner)) {
+        return false;
+    }
+    memcpy(inner + prefix, raw, rawLen);
+    return flexEnvelopeWrap(out, cap, inner, prefix + rawLen, params, written);
 }
 
 /* Copy of 'src' with entry 'idx' replaced by 'wide' (a SIZE_MAX index
@@ -1844,8 +1883,9 @@ int clusterMailboxTest(int argc, char *argv[]) {
             size_t n = 0;
             dst = clusterMailboxCreate(ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL,
                                        NULL);
-            if (!flexEnvelopeWrap(wrapped, sizeof(wrapped), same,
-                                  flexBytes(same), &wp, &n) ||
+            if (!cmTestWrapStamped(wrapped, sizeof(wrapped),
+                                   (const uint8_t *)same, flexBytes(same), &wp,
+                                   &n) ||
                 !clusterMailboxRestoreWrapped(dst, &vp, wrapped, n) ||
                 clusterMailboxLastApplied(dst, 60u) != 63u) {
                 ERRR("unmodified rebuild did not restore wrapped");
@@ -1866,8 +1906,9 @@ int clusterMailboxTest(int argc, char *argv[]) {
                 clusterMailboxFree(dst);
 
                 size_t n = 0;
-                if (!flexEnvelopeWrap(wrapped, sizeof(wrapped), bad,
-                                      flexBytes(bad), &wp, &n)) {
+                if (!cmTestWrapStamped(wrapped, sizeof(wrapped),
+                                       (const uint8_t *)bad, flexBytes(bad),
+                                       &wp, &n)) {
                     ERR("wrap failed for value %zu at entry %zu", w, idx);
                     continue;
                 }
@@ -2877,6 +2918,63 @@ int clusterMailboxTest(int argc, char *argv[]) {
         }
 
         clusterMailboxFree(mb_b);
+        hmacKeyringFree(ring);
+    }
+
+    /* The wrapped artifact names its format: one stamped with a version
+     * newer than this build reads, a must-understand feature it lacks, or
+     * no stamp at all is refused, leaving the mailbox unchanged; unknown
+     * ignorable features are read */
+    TEST("wrapped snapshot: format stamp gates the restore") {
+        hmacKeyring *ring = hmacKeyringCreate();
+        static const uint8_t key[32] = {7};
+        const flexEnvelopeWrapParams wp = {
+            .algo = FLEX_ENV_ALGO_HMAC_SHA256, .key = key, .key_len = 32};
+        const flexEnvelopeVerifyParams vp = {.key = key, .key_len = 32};
+
+        /* One watermark: origin 5 at sequence 3 */
+        cleaner(flexFree) flex *raw = flexNew();
+        flexRow row = FLEX_ROW_INIT;
+        flexRowUnsigned(&row, 5);
+        flexRowUnsigned(&row, 3);
+        flexRowUnsigned(&row, 0);
+        flexRowAppendExact(&raw, &row);
+
+        const dkFormatStamp current = cmWrappedStamp();
+        const struct {
+            dkFormatStamp stamp;
+            bool stamped;
+            bool accepted;
+        } cases[] = {
+            {current, true, true},
+            {{current.id, current.version + 1, 0}, true, false},
+            {{current.id, current.version, 1}, true, false},
+            {{current.id, current.version, UINT64_C(1) << 50}, true, true},
+            {{PERSIST_TYPE_CLUSTER_RING, current.version, 0}, true, false},
+            {current, false, false},
+        };
+        for (size_t c = 0; c < sizeof(cases) / sizeof(*cases); c++) {
+            uint8_t inner[128];
+            size_t n = 0;
+            if (cases[c].stamped) {
+                n = dkFormatPrefixWrite(&cases[c].stamp, inner, sizeof(inner));
+            }
+            memcpy(inner + n, raw, flexBytes(raw));
+            n += flexBytes(raw);
+
+            uint8_t wrapped[256];
+            size_t written = 0;
+            flexEnvelopeWrap(wrapped, sizeof(wrapped), inner, n, &wp, &written);
+            clusterMailbox *mb = clusterMailboxCreate(
+                ring, FLEX_ENV_ALGO_HMAC_SHA256, NULL, NULL);
+            const bool ok =
+                clusterMailboxRestoreWrapped(mb, &vp, wrapped, written);
+            if (ok != cases[c].accepted ||
+                clusterMailboxLastApplied(mb, 5u) != (ok ? 3u : 0u)) {
+                ERR("case %zu: restore %d", c, (int)ok);
+            }
+            clusterMailboxFree(mb);
+        }
         hmacKeyringFree(ring);
     }
 

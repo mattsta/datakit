@@ -562,10 +562,12 @@ bool clusterMailboxRestore(clusterMailbox *mb, const uint8_t *buf, size_t len);
 /* --- Envelope-wrapped snapshot/restore convenience helpers --------
  *
  * The plain Snapshot/Restore above produces/consumes raw watermark
- * bytes with no integrity tag. The Wrapped variants compose the
- * raw bytes inside a flexEnvelope so the on-disk (or on-wire)
- * representation is tamper-evident under the caller's chosen
- * keyed algorithm.
+ * bytes with no integrity tag and no format stamp (a container such as
+ * persist stamps them). The Wrapped variants are the standalone
+ * artifact: inside a flexEnvelope (tamper-evident under the caller's
+ * chosen keyed algorithm) the watermark bytes follow a dkFormat prefix
+ * naming their format (persistOpsClusterMailbox's), and RestoreWrapped
+ * refuses a stamp this build does not read.
  *
  * Use these when the snapshot will cross a trust boundary — e.g.
  * stored on a disk that another process can write, or shipped to a
