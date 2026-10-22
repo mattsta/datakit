@@ -52,6 +52,9 @@ int widgetTest(int argc, char *argv[]);
 #endif
 """
 
+#: Where a coverage run exported the tree (llvm-cov reports absolute paths)
+EXPORT_ROOT = "/coverage/export/src"
+
 PROFILE = """Counters:
   widgetNew:
     Hash: 0x0000000000000018
@@ -124,7 +127,7 @@ class Coverage(unittest.TestCase):
         )
 
     def test_export_summary(self) -> None:
-        root = Path("/tmp/x").resolve()
+        root = Path(EXPORT_ROOT)
         files, total = coverage.parse_export_summary(summary(str(root)), root)
         self.assertEqual([f.path for f in files], ["src/widget.c", "src/gadget.c"])
         self.assertEqual(files[0].lines, (5, 10))
@@ -143,7 +146,7 @@ class Coverage(unittest.TestCase):
         )
 
     def test_render_lists_gaps_least_covered_first(self) -> None:
-        root = Path("/tmp/x").resolve()
+        root = Path(EXPORT_ROOT)
         files, total = coverage.parse_export_summary(summary(str(root)), root)
         api = coverage.public_api(
             {"src/widget.h": HEADER}, coverage.parse_profile_counts(PROFILE)
