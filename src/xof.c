@@ -463,6 +463,39 @@ static int xofCheckGrownWriter(const char *what, const uint64_t *bits,
     return err;
 }
 
+/* Check all 'n' values of 'bits' against EXPECTED_AT (an expression in
+ * 'i'): every value through one sequential reader pass, then xofGet's own
+ * random access at the first and last 64 indexes and every 97th.  Calling
+ * xofGet for every index would decode from the start each time, O(n^2)
+ * for the stream. */
+#define XOF_TEST_DECODE_ALL(bits, n, EXPECTED_AT)                              \
+    do {                                                                       \
+        xofReader r_;                                                          \
+        xofReaderInit(&r_, (bits));                                            \
+        for (size_t i = 0; i < (n); i++) {                                     \
+            const double got =                                                 \
+                i == 0 ? xofReaderCurrent(&r_) : xofReaderNext(&r_, (bits));   \
+            const double expected = (EXPECTED_AT);                             \
+            if (got != expected) {                                             \
+                ERR("reader [%'zu] Expected %f but got %f instead!", i,        \
+                    expected, got);                                            \
+                break;                                                         \
+            }                                                                  \
+        }                                                                      \
+        for (size_t i = 0; i < (n); i++) {                                     \
+            if (i >= 64 && (n) - i > 64 && i % 97 != 0) {                      \
+                continue;                                                      \
+            }                                                                  \
+            const double got = xofGet((bits), i);                              \
+            const double expected = (EXPECTED_AT);                             \
+            if (got != expected) {                                             \
+                ERR("xofGet [%'zu] Expected %f but got %f instead!", i,        \
+                    expected, got);                                            \
+                break;                                                         \
+            }                                                                  \
+        }                                                                      \
+    } while (0)
+
 int xofTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -481,9 +514,10 @@ int xofTest(int argc, char *argv[]) {
                 size_t bitsUsed = 0;
                 xofInit(bits, &bitsUsed, val);
 
+                /* xofInit wrote value 0; append values 1 .. loopers-1 */
                 int_fast32_t prevLZ = -1;
                 int_fast32_t prevTZ = -1;
-                for (size_t i = 2; i < loopers; i++) {
+                for (size_t i = 1; i < loopers; i++) {
                     xofAppend(bits, &bitsUsed, &prevLZ, &prevTZ, val, val);
                 }
 
@@ -508,18 +542,8 @@ int xofTest(int argc, char *argv[]) {
                 PERF_TIMERS_FINISH_PRINT_RESULTS(1, "decode last");
             }
 
-            TEST("decode all (n^2)") {
-                PERF_TIMERS_SETUP;
-                for (size_t i = 0; i < loopers; i++) {
-                    double got = xofGet(bits, i);
-                    double expected = val;
-                    if (got != expected) {
-                        ERR("[%'zu] Expected %f but got %f instead!\n", i,
-                            expected, got);
-                    }
-                }
-                PERF_TIMERS_FINISH_PRINT_RESULTS(
-                    loopers, "decode from beginning per lookup");
+            TEST("decode all") {
+                XOF_TEST_DECODE_ALL(bits, loopers, (double)val);
             }
             printf("\n");
         }
@@ -567,18 +591,9 @@ int xofTest(int argc, char *argv[]) {
                 PERF_TIMERS_FINISH_PRINT_RESULTS(1, "decode last");
             }
 
-            TEST("decode all (n^2)") {
-                PERF_TIMERS_SETUP;
-                for (size_t i = 0; i < loopers; i++) {
-                    double got = xofGet(bits, i);
-                    double expected = i % 2 == 0 ? val : val + 1;
-                    if (got != expected) {
-                        ERR("[%'zu] Expected %f but got %f instead!\n", i,
-                            expected, got);
-                    }
-                }
-                PERF_TIMERS_FINISH_PRINT_RESULTS(
-                    loopers, "decode from beginning per lookup");
+            TEST("decode all") {
+                XOF_TEST_DECODE_ALL(bits, loopers,
+                                    i % 2 == 0 ? (double)val : (double)val + 1);
             }
             printf("\n");
         }
@@ -591,10 +606,11 @@ int xofTest(int argc, char *argv[]) {
             size_t bitsUsed = 0;
             xofInit(bits, &bitsUsed, 1);
 
+            /* values 1 .. loopers: index i holds i + 1 */
             double prevVal = 1;
             int_fast32_t prevLZ = -1;
             int_fast32_t prevTZ = -1;
-            for (size_t i = 2; i < loopers; i++) {
+            for (size_t i = 2; i <= loopers; i++) {
                 xofAppend(bits, &bitsUsed, &prevLZ, &prevTZ, prevVal, i);
                 prevVal = i;
             }
@@ -611,25 +627,15 @@ int xofTest(int argc, char *argv[]) {
         TEST("decode last (n)") {
             PERF_TIMERS_SETUP;
             double got = xofGet(bits, loopers - 1);
-            double expected = loopers - 1;
+            double expected = loopers;
             if (got != expected) {
                 ERR("Expected %f but got %f instead!\n", expected, got);
             }
             PERF_TIMERS_FINISH_PRINT_RESULTS(1, "decode last");
         }
 
-        TEST("decode all (n^2)") {
-            PERF_TIMERS_SETUP;
-            for (size_t i = 1; i < loopers; i++) {
-                double got = xofGet(bits, i - 1);
-                double expected = i;
-                if (got != expected) {
-                    ERR("[%'zu] Expected %f but got %f instead!\n", i, expected,
-                        got);
-                }
-            }
-            PERF_TIMERS_FINISH_PRINT_RESULTS(
-                loopers, "decode from beginning per lookup");
+        TEST("decode all") {
+            XOF_TEST_DECODE_ALL(bits, loopers, (double)(i + 1));
         }
         printf("\n");
     }
@@ -675,19 +681,8 @@ int xofTest(int argc, char *argv[]) {
             PERF_TIMERS_FINISH_PRINT_RESULTS(1, "decode last");
         }
 
-        TEST("decode all (n^2)") {
-            PERF_TIMERS_SETUP;
-            for (size_t i = 0; i < loopers; i++) {
-                double got = xofGet(bits, i);
-                double expected = values[i];
-                if (got != expected) {
-                    ERR("[%'zu] Expected %f but got %f instead!\n", i, expected,
-                        got);
-                    assert(NULL);
-                }
-            }
-            PERF_TIMERS_FINISH_PRINT_RESULTS(
-                loopers, "decode from beginning per lookup");
+        TEST("decode all") {
+            XOF_TEST_DECODE_ALL(bits, loopers, values[i]);
         }
         printf("\n");
     }
@@ -736,18 +731,8 @@ int xofTest(int argc, char *argv[]) {
                 PERF_TIMERS_FINISH_PRINT_RESULTS(1, "decode last");
             }
 
-            TEST("decode all (n^2)") {
-                PERF_TIMERS_SETUP;
-                for (size_t i = 0; i < loopers; i++) {
-                    double got = xofGet(bits, i);
-                    double expected = values[i];
-                    if (got != expected) {
-                        ERR("[%'zu] Expected %f but got %f instead!\n", i,
-                            expected, got);
-                    }
-                }
-                PERF_TIMERS_FINISH_PRINT_RESULTS(
-                    loopers, "decode from beginning per lookup");
+            TEST("decode all") {
+                XOF_TEST_DECODE_ALL(bits, loopers, values[i]);
             }
             printf("\n");
         }
@@ -802,18 +787,8 @@ int xofTest(int argc, char *argv[]) {
                 PERF_TIMERS_FINISH_PRINT_RESULTS(1, "decode last");
             }
 
-            TEST("decode all (n^2)") {
-                PERF_TIMERS_SETUP;
-                for (size_t i = 0; i < loopers; i++) {
-                    double got = xofGet(bits, i);
-                    double expected = values[i];
-                    if (got != expected) {
-                        ERR("[%'zu] Expected %f but got %f instead!\n", i,
-                            expected, got);
-                    }
-                }
-                PERF_TIMERS_FINISH_PRINT_RESULTS(
-                    loopers, "decode from beginning per lookup");
+            TEST("decode all") {
+                XOF_TEST_DECODE_ALL(bits, loopers, values[i]);
             }
             printf("\n");
         }
