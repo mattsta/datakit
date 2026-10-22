@@ -39,31 +39,35 @@ defcleaner(flex *, flexFree);
 
 #define CLUSTER_MAILBOX_ORIGIN_CAP ((size_t)64)
 
-/* Inner header is a 3-entry flex of unsigned values: origin_id (u32),
- * sequence (u64), msg_type (u8). All three pushed via
- * flexPushUnsigned for type uniformity. The flex framing carries its
- * own bytes-claim varint, so the inner-frame staging code does not need
- * a separate length prefix — the flex IS the length prefix. */
-#define CLUSTER_MAILBOX_INNER_HEADER_FLEX_COUNT ((size_t)3)
+const dkFormatSpec clusterMailboxProtocol = {
+    .name = "cluster mailbox frame protocol",
+    .id = DK_FORMAT_ID_CLUSTER_MAILBOX,
+    .version = 1,
+    .minReadVersion = 1,
+    .knownFeatures = 0,
+};
 
-/* Worst-case bytes occupied by the flex-encoded inner header. Computed
- * as: total-bytes varint (5B worst case for the SplitFullNoZero
- * encoding) + count varint (1B for count == 3) + per-entry encoding
- * (worst case ~6B for the u64 sequence, ~5B for the u32 origin_id, ~2B
- * for the u8 msg_type) + tail marker (1B). The actual encoded size
- * for typical small ids is much smaller (~14B) — this constant is the
- * cap used for stack-vs-heap staging decisions and for sealedSize
- * over-approximation. Sized generously (32B) to leave headroom for
- * future encoding tweaks without bumping any caller's buffer math.
+/* Inner header is a 5-entry flex of unsigned values: protocol version
+ * (u32), protocol features (u64), origin_id (u32), sequence (u64),
+ * msg_type (u8). The flex framing carries its own bytes-claim varint,
+ * so the inner-frame staging code does not need a separate length
+ * prefix — the flex IS the length prefix. */
+#define CLUSTER_MAILBOX_INNER_HEADER_FLEX_COUNT ((size_t)5)
+
+/* Worst-case bytes occupied by the flex-encoded inner header: total-bytes
+ * varint (5B) + count varint (1B) + entries (at most 9B each for the two
+ * 64-bit values, 5B each for the two 32-bit values, 2B for msg_type) +
+ * tail marker (1B) = 45B.  Typical headers (small ids, version 1, no
+ * features) take about 16B.  The cap sizes stack staging and the
+ * sealedSize over-approximation.
  *
  * Pinned to the public CLUSTER_MAILBOX_INNER_HEADER_MAX_BYTES (header)
  * so the contract presented to test/external callers matches the
  * internal staging math. */
 #define CLUSTER_MAILBOX_INNER_HEADER_MAX_LEN                                   \
     CLUSTER_MAILBOX_INNER_HEADER_MAX_BYTES
-_Static_assert(CLUSTER_MAILBOX_INNER_HEADER_MAX_LEN == (size_t)32,
-               "inner-header worst-case bytes pinned at 32 — bump in lockstep "
-               "with the per-entry encoding analysis above");
+_Static_assert(CLUSTER_MAILBOX_INNER_HEADER_MAX_LEN >= (size_t)45,
+               "inner-header cap below the worst-case encoding above");
 
 /* Open-addressed entry; `last_applied` of 0 means the slot is unused
  * (callers must start at sequence 1, which the API documents). */
@@ -148,6 +152,7 @@ typedef struct clusterMailboxCounters {
     _Atomic uint64_t param_error;
     _Atomic uint64_t seal_total;
     _Atomic uint64_t seal_param_error;
+    _Atomic uint64_t protocol_rejected;
 } clusterMailboxCounters;
 
 /* Alignment invariants (forward-looking SMP hardening). */
@@ -227,6 +232,9 @@ static void cmRecordIngestResult(clusterMailbox *mb,
         break;
     case CLUSTER_MAILBOX_ERR_BAD_FRAME:
         cmBumpCounter(&mb->counters.bad_frame, 1);
+        break;
+    case CLUSTER_MAILBOX_ERR_PROTOCOL:
+        cmBumpCounter(&mb->counters.protocol_rejected, 1);
         break;
     case CLUSTER_MAILBOX_ERR_ALGO_MISMATCH:
         cmBumpCounter(&mb->counters.algo_mismatch, 1);
@@ -323,9 +331,9 @@ static clusterMailboxOrigin *cmInsertOrigin(clusterMailbox *mb,
 
 /* Encode the inner frame header (flex-based).
  *
- * Builds a 3-entry flex of unsigned values into `*out_flex` (caller
- * frees via flexFree on success). Returns the encoded byte length on
- * success or 0 on allocation failure. Output bytes are bit-identical
+ * Builds the 5-entry flex of unsigned values, led by this build's
+ * protocol stamp (caller frees via flexFree). Output bytes are
+ * bit-identical
  * across producers thanks to flex's canonical encoding for unsigned
  * values, so the envelope's integrity tag covers a deterministic byte
  * stream — a tamper that flips any framing or value byte breaks verify.
@@ -343,6 +351,8 @@ static flex *cmBuildInnerHeaderFlex(uint32_t origin_id, uint64_t sequence,
         return NULL;
     }
     flexRow row = FLEX_ROW_INIT;
+    flexRowUnsigned(&row, (uint64_t)clusterMailboxProtocol.version);
+    flexRowUnsigned(&row, 0); /* protocol features */
     flexRowUnsigned(&row, (uint64_t)origin_id);
     flexRowUnsigned(&row, sequence);
     flexRowUnsigned(&row, (uint64_t)msg_type);
@@ -398,13 +408,15 @@ static bool cmReadU64(const flexEntry *fe, uint64_t *out) {
  * length as `src + *hdr_len` and `src_len - *hdr_len`). Returns false
  * on any of: short buffer, malformed flex framing, wrong entry count,
  * an entry that is not a 64-bit unsigned integer (96/128-bit included),
- * or any value outside its representable range (origin_id >
- * UINT32_MAX, msg_type > UINT8_MAX). */
+ * or any value outside its representable range (protocol version or
+ * origin_id > UINT32_MAX, msg_type > UINT8_MAX). The protocol stamp is
+ * returned for the caller to check. */
 bool cmDecodeInnerHeader(const uint8_t *src, size_t src_len,
-                         uint32_t *origin_id, uint64_t *sequence,
-                         uint8_t *msg_type, size_t *hdr_len) {
-    if (src == NULL || origin_id == NULL || sequence == NULL ||
-        msg_type == NULL || hdr_len == NULL) {
+                         dkFormatStamp *protocol, uint32_t *origin_id,
+                         uint64_t *sequence, uint8_t *msg_type,
+                         size_t *hdr_len) {
+    if (src == NULL || protocol == NULL || origin_id == NULL ||
+        sequence == NULL || msg_type == NULL || hdr_len == NULL) {
         return false;
     }
     /* Step 1: safely peek the flex prefix's claimed length so we know
@@ -428,14 +440,31 @@ bool cmDecodeInnerHeader(const uint8_t *src, size_t src_len,
     if (flexCount(f) != CLUSTER_MAILBOX_INNER_HEADER_FLEX_COUNT) {
         return false;
     }
-    /* Step 3: walk + strict-type-check the three entries. */
+    /* Step 3: walk + strict-type-check the five entries. */
     flexEntry *fe = flexHead(f);
     if (fe == NULL) {
         return false;
     }
     uint64_t v = 0;
 
-    /* Entry 1: origin_id (unsigned, must fit in uint32_t). */
+    /* Entries 1-2: protocol version (fits in uint32_t) and features */
+    uint64_t features = 0;
+    if (!cmReadU64(fe, &v) || v > UINT32_MAX) {
+        return false;
+    }
+    fe = flexNext(f, fe);
+    if (fe == NULL || !cmReadU64(fe, &features)) {
+        return false;
+    }
+    const dkFormatStamp stamp = {.id = DK_FORMAT_ID_CLUSTER_MAILBOX,
+                                 .version = (uint32_t)v,
+                                 .features = features};
+    fe = flexNext(f, fe);
+    if (fe == NULL) {
+        return false;
+    }
+
+    /* Entry 3: origin_id (unsigned, must fit in uint32_t). */
     if (!cmReadU64(fe, &v) || v > UINT32_MAX) {
         return false;
     }
@@ -445,7 +474,7 @@ bool cmDecodeInnerHeader(const uint8_t *src, size_t src_len,
     if (fe == NULL) {
         return false;
     }
-    /* Entry 2: sequence (unsigned 64-bit). */
+    /* Entry 4: sequence (unsigned 64-bit). */
     if (!cmReadU64(fe, &v)) {
         return false;
     }
@@ -455,12 +484,13 @@ bool cmDecodeInnerHeader(const uint8_t *src, size_t src_len,
     if (fe == NULL) {
         return false;
     }
-    /* Entry 3: msg_type (unsigned, must fit in uint8_t). */
+    /* Entry 5: msg_type (unsigned, must fit in uint8_t). */
     if (!cmReadU64(fe, &v) || v > UINT8_MAX) {
         return false;
     }
     const uint8_t mtype = (uint8_t)v;
 
+    *protocol = stamp;
     *origin_id = origin;
     *sequence = seq;
     *msg_type = mtype;
@@ -810,10 +840,18 @@ static clusterMailboxIngestResult cmIngestImpl(clusterMailbox *mb,
     uint64_t sequence = 0;
     uint8_t msg_type = 0;
     size_t hdr_len = 0;
+    dkFormatStamp protocol;
     if (!cmDecodeInnerHeader(payload_bytes, (size_t)payload_bytes_len,
-                             &origin_id, &sequence, &msg_type, &hdr_len)) {
+                             &protocol, &origin_id, &sequence, &msg_type,
+                             &hdr_len)) {
         dkSecureZero(key_copy, sizeof(key_copy));
         return CLUSTER_MAILBOX_ERR_BAD_FRAME;
+    }
+    /* A frame from a peer speaking a protocol this build does not read
+     * is refused before any of it is interpreted */
+    if (dkFormatCheck(&clusterMailboxProtocol, &protocol) != DK_FORMAT_OK) {
+        dkSecureZero(key_copy, sizeof(key_copy));
+        return CLUSTER_MAILBOX_ERR_PROTOCOL;
     }
     if (sequence == 0 || origin_id == 0u) {
         /* Both sequence 0 and origin 0 are reserved sentinels — the
@@ -997,6 +1035,8 @@ void clusterMailboxGetStats(const clusterMailbox *mb,
         atomic_load_explicit(&mb->counters.bad_frame, memory_order_relaxed);
     out->origin_table_full = atomic_load_explicit(
         &mb->counters.origin_table_full, memory_order_relaxed);
+    out->protocol_rejected = atomic_load_explicit(
+        &mb->counters.protocol_rejected, memory_order_relaxed);
     out->param_error =
         atomic_load_explicit(&mb->counters.param_error, memory_order_relaxed);
     out->seal_total =
@@ -1024,6 +1064,8 @@ void clusterMailboxResetStats(clusterMailbox *mb) {
     atomic_store_explicit(&mb->counters.key_missing, 0, memory_order_relaxed);
     atomic_store_explicit(&mb->counters.bad_frame, 0, memory_order_relaxed);
     atomic_store_explicit(&mb->counters.origin_table_full, 0,
+                          memory_order_relaxed);
+    atomic_store_explicit(&mb->counters.protocol_rejected, 0,
                           memory_order_relaxed);
     atomic_store_explicit(&mb->counters.param_error, 0, memory_order_relaxed);
     atomic_store_explicit(&mb->counters.seal_total, 0, memory_order_relaxed);
@@ -1736,6 +1778,59 @@ int clusterMailboxTest(int argc, char *argv[]) {
         0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0xfe, 0xff};
     const hmacKeyId K1 = 100u;
 
+    /* Frames from a peer on a protocol this build does not read (newer
+     * version, unknown must-understand feature) are refused with their
+     * own result and counter, never applied; unknown ignorable features
+     * are read */
+    TEST("inner header: the protocol stamp gates every frame") {
+        hmacKeyring *ring = hmacKeyringCreate();
+        hmacKeyringInstallUnsalted(ring, K1, &hmacAlgoSHA256, test_key,
+                                   sizeof(test_key));
+        cmTestCtx ctx = {0};
+        clusterMailbox *mb = clusterMailboxCreate(
+            ring, FLEX_ENV_ALGO_HMAC_SHA256, cmRecordApply, &ctx);
+
+        const uint64_t v = clusterMailboxProtocol.version;
+        const struct {
+            uint64_t version;
+            uint64_t features;
+            clusterMailboxIngestResult want;
+        } cases[] = {
+            {v, 0, CLUSTER_MAILBOX_OK},
+            {v + 1, 0, CLUSTER_MAILBOX_ERR_PROTOCOL},
+            {v, 1, CLUSTER_MAILBOX_ERR_PROTOCOL},
+            {v, UINT64_C(1) << 40, CLUSTER_MAILBOX_OK},
+        };
+        for (size_t c = 0; c < sizeof(cases) / sizeof(*cases); c++) {
+            cleaner(flexFree) flex *hdr = flexNew();
+            flexRow row = FLEX_ROW_INIT;
+            flexRowUnsigned(&row, cases[c].version);
+            flexRowUnsigned(&row, cases[c].features);
+            flexRowUnsigned(&row, 9);
+            flexRowUnsigned(&row, 1 + c);
+            flexRowUnsigned(&row, 0);
+            flexRowAppendExact(&hdr, &row);
+
+            uint8_t sealed[256];
+            const size_t n = cmTestSealInner(hdr, test_key, sizeof(test_key),
+                                             sealed, sizeof(sealed));
+            const clusterMailboxIngestResult rc =
+                clusterMailboxIngest(mb, sealed, n, K1);
+            if (rc != cases[c].want) {
+                ERR("case %zu: rc %d", c, (int32_t)rc);
+            }
+        }
+
+        clusterMailboxStats stats;
+        clusterMailboxGetStats(mb, &stats);
+        if (stats.protocol_rejected != 2 || ctx.apply_count != 2) {
+            ERR("protocol_rejected %" PRIu64 ", applied %u",
+                stats.protocol_rejected, (unsigned)ctx.apply_count);
+        }
+        clusterMailboxFree(mb);
+        hmacKeyringFree(ring);
+    }
+
     TEST("inner header: a 96/128-bit field is refused, sealed or not") {
         databoxBig wides[CM_TEST_WIDE_COUNT];
         cmTestWideValues(wides);
@@ -1771,7 +1866,8 @@ int clusterMailboxTest(int argc, char *argv[]) {
         }
 
         for (size_t w = 0; w < CM_TEST_WIDE_COUNT; w++) {
-            for (size_t idx = 0; idx < 3u; idx++) {
+            for (size_t idx = 0; idx < CLUSTER_MAILBOX_INNER_HEADER_FLEX_COUNT;
+                 idx++) {
                 cleaner(flexFree) flex *bad =
                     cmTestReplaceEntry(src, idx, &wides[w]);
                 uint32_t origin = 0;
@@ -1779,8 +1875,9 @@ int clusterMailboxTest(int argc, char *argv[]) {
                 uint8_t mtype = 0;
                 size_t consumed = 0;
                 cmTestPoisonStack();
-                if (cmDecodeInnerHeader(bad, flexBytes(bad), &origin, &seq,
-                                        &mtype, &consumed)) {
+                dkFormatStamp protocol;
+                if (cmDecodeInnerHeader(bad, flexBytes(bad), &protocol, &origin,
+                                        &seq, &mtype, &consumed)) {
                     ERR("decode accepted value %zu at entry %zu", w, idx);
                 }
 

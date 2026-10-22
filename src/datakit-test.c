@@ -8194,6 +8194,12 @@ cleanup:
  * accountability bucketing). See testFlexEnvelopeStructAwareFuzzTest
  * for the precedent.
  * ==================================================================== */
+/* The two leading inner-header entries: this build's protocol stamp */
+static void dkTestPushMailboxProtocol(flex **f) {
+    flexPushUnsigned(f, clusterMailboxProtocol.version, FLEX_ENDPOINT_TAIL);
+    flexPushUnsigned(f, 0u, FLEX_ENDPOINT_TAIL);
+}
+
 static int testMailboxInnerFlexStructAwareFuzzTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -8345,6 +8351,7 @@ static int testMailboxInnerFlexStructAwareFuzzTest(int argc, char *argv[]) {
     /* ---------------- Case 2: wrong entry count (2 entries) ----------- */
     {
         cleaner(flexFree) flex *f2 = flexNew();
+        dkTestPushMailboxProtocol(&f2);
         flexPushUnsigned(&f2, (uint64_t)ORIGIN, FLEX_ENDPOINT_TAIL);
         flexPushUnsigned(&f2, SEQ, FLEX_ENDPOINT_TAIL);
         const size_t f2_bytes = flexBytes(f2);
@@ -8357,6 +8364,7 @@ static int testMailboxInnerFlexStructAwareFuzzTest(int argc, char *argv[]) {
     /* ---------------- Case 3: wrong entry count (4 entries) ----------- */
     {
         cleaner(flexFree) flex *f4 = flexNew();
+        dkTestPushMailboxProtocol(&f4);
         flexPushUnsigned(&f4, (uint64_t)ORIGIN, FLEX_ENDPOINT_TAIL);
         flexPushUnsigned(&f4, SEQ, FLEX_ENDPOINT_TAIL);
         flexPushUnsigned(&f4, (uint64_t)MTYPE, FLEX_ENDPOINT_TAIL);
@@ -8371,6 +8379,7 @@ static int testMailboxInnerFlexStructAwareFuzzTest(int argc, char *argv[]) {
     /* ---------------- Case 4: signed entry instead of unsigned -------- */
     {
         cleaner(flexFree) flex *fs = flexNew();
+        dkTestPushMailboxProtocol(&fs);
         /* origin slot with a signed value violates the type check. */
         flexPushSigned(&fs, -1, FLEX_ENDPOINT_TAIL);
         flexPushUnsigned(&fs, SEQ, FLEX_ENDPOINT_TAIL);
@@ -8385,6 +8394,7 @@ static int testMailboxInnerFlexStructAwareFuzzTest(int argc, char *argv[]) {
     /* ---------------- Case 5: origin_id > UINT32_MAX ------------------ */
     {
         cleaner(flexFree) flex *foor = flexNew();
+        dkTestPushMailboxProtocol(&foor);
         flexPushUnsigned(&foor, (uint64_t)UINT32_MAX + 1ULL,
                          FLEX_ENDPOINT_TAIL);
         flexPushUnsigned(&foor, SEQ, FLEX_ENDPOINT_TAIL);
@@ -8400,6 +8410,7 @@ static int testMailboxInnerFlexStructAwareFuzzTest(int argc, char *argv[]) {
     /* ---------------- Case 6: msg_type > UINT8_MAX -------------------- */
     {
         cleaner(flexFree) flex *fmoor = flexNew();
+        dkTestPushMailboxProtocol(&fmoor);
         flexPushUnsigned(&fmoor, (uint64_t)ORIGIN, FLEX_ENDPOINT_TAIL);
         flexPushUnsigned(&fmoor, SEQ, FLEX_ENDPOINT_TAIL);
         flexPushUnsigned(&fmoor, (uint64_t)UINT8_MAX + 1u, FLEX_ENDPOINT_TAIL);
@@ -8414,6 +8425,7 @@ static int testMailboxInnerFlexStructAwareFuzzTest(int argc, char *argv[]) {
     /* ---------------- Case 7: origin_id == 0 (sentinel) --------------- */
     {
         cleaner(flexFree) flex *fz = flexNew();
+        dkTestPushMailboxProtocol(&fz);
         flexPushUnsigned(&fz, 0u, FLEX_ENDPOINT_TAIL);
         flexPushUnsigned(&fz, SEQ, FLEX_ENDPOINT_TAIL);
         flexPushUnsigned(&fz, (uint64_t)MTYPE, FLEX_ENDPOINT_TAIL);
@@ -8427,6 +8439,7 @@ static int testMailboxInnerFlexStructAwareFuzzTest(int argc, char *argv[]) {
     /* ---------------- Case 8: sequence == 0 (sentinel) ---------------- */
     {
         cleaner(flexFree) flex *fsz = flexNew();
+        dkTestPushMailboxProtocol(&fsz);
         flexPushUnsigned(&fsz, (uint64_t)ORIGIN, FLEX_ENDPOINT_TAIL);
         flexPushUnsigned(&fsz, 0u, FLEX_ENDPOINT_TAIL);
         flexPushUnsigned(&fsz, (uint64_t)MTYPE, FLEX_ENDPOINT_TAIL);
@@ -8519,7 +8532,10 @@ static int testMailboxInnerFlexStructAwareFuzzTest(int argc, char *argv[]) {
             sweep_total++;
             if (rc == CLUSTER_MAILBOX_OK) {
                 sweep_ok++;
-            } else if (rc == CLUSTER_MAILBOX_ERR_BAD_FRAME) {
+            } else if (rc == CLUSTER_MAILBOX_ERR_BAD_FRAME ||
+                       rc == CLUSTER_MAILBOX_ERR_PROTOCOL) {
+                /* A flip in the protocol stamp reads as a version or
+                 * feature this build does not read */
                 sweep_bad_frame++;
             } else {
                 /* Any other outcome (verify_failed, replay, or an
@@ -10389,6 +10405,7 @@ int dkTestMailboxInnerHeaderFlexTest(int argc, char *argv[]) {
     const uint32_t ORIGIN = 0x12345678u;
     const uint64_t SEQ = 0xFEDCBA9876543210ULL;
     const uint8_t MTYPE = 5u;
+    dkFormatStamp protocol = {0};
 
     TEST("inner-header: encode -> decode round-trip preserves all fields") {
         uint8_t buf[CLUSTER_MAILBOX_INNER_HEADER_MAX_BYTES];
@@ -10406,10 +10423,15 @@ int dkTestMailboxInnerHeaderFlexTest(int argc, char *argv[]) {
         uint64_t seq = 0;
         uint8_t mtype = 0;
         size_t consumed = 0;
-        if (!cmDecodeInnerHeader(buf, hdr_len, &origin, &seq, &mtype,
+        if (!cmDecodeInnerHeader(buf, hdr_len, &protocol, &origin, &seq, &mtype,
                                  &consumed)) {
             ERRR("round-trip decode failed");
             TEST_FINAL_RESULT;
+        }
+        if (protocol.id != DK_FORMAT_ID_CLUSTER_MAILBOX ||
+            protocol.version != clusterMailboxProtocol.version ||
+            protocol.features != 0) {
+            ERRR("the header does not carry this build's protocol stamp");
         }
         if (origin != ORIGIN) {
             ERR("origin mismatch: got 0x%x", origin);
@@ -10443,8 +10465,8 @@ int dkTestMailboxInnerHeaderFlexTest(int argc, char *argv[]) {
             uint64_t seq = 0;
             uint8_t mtype = 0;
             size_t consumed = 0;
-            const bool ok = cmDecodeInnerHeader(mutated, hdr_len, &origin, &seq,
-                                                &mtype, &consumed);
+            const bool ok = cmDecodeInnerHeader(
+                mutated, hdr_len, &protocol, &origin, &seq, &mtype, &consumed);
             total++;
             if (!ok || origin != ORIGIN || seq != SEQ || mtype != MTYPE) {
                 detected++;
@@ -10521,8 +10543,8 @@ int dkTestMailboxInnerHeaderFlexTest(int argc, char *argv[]) {
         uint64_t seq = 0;
         uint8_t mtype = 0;
         size_t consumed = 0;
-        if (cmDecodeInnerHeader(buf, hdr_len - 1u, &origin, &seq, &mtype,
-                                &consumed)) {
+        if (cmDecodeInnerHeader(buf, hdr_len - 1u, &protocol, &origin, &seq,
+                                &mtype, &consumed)) {
             ERRR("truncated decode unexpectedly succeeded");
         }
     }
@@ -10546,13 +10568,15 @@ int dkTestMailboxInnerHeaderFlexTest(int argc, char *argv[]) {
         uint64_t seq = 0;
         uint8_t mtype = 0;
         size_t consumed = 0;
-        if (cmDecodeInnerHeader(scratch, n, &origin, &seq, &mtype, &consumed)) {
+        if (cmDecodeInnerHeader(scratch, n, &protocol, &origin, &seq, &mtype,
+                                &consumed)) {
             ERRR("wrong-count decode unexpectedly succeeded");
         }
     }
 
     TEST("inner-header: origin_id > UINT32_MAX rejected") {
         cleaner(flexFree) flex *f = flexNew();
+        dkTestPushMailboxProtocol(&f);
         flexPushUnsigned(&f, (uint64_t)UINT32_MAX + 1ULL, FLEX_ENDPOINT_TAIL);
         flexPushUnsigned(&f, SEQ, FLEX_ENDPOINT_TAIL);
         flexPushUnsigned(&f, (uint64_t)MTYPE, FLEX_ENDPOINT_TAIL);
@@ -10567,13 +10591,15 @@ int dkTestMailboxInnerHeaderFlexTest(int argc, char *argv[]) {
         uint64_t seq = 0;
         uint8_t mtype = 0;
         size_t consumed = 0;
-        if (cmDecodeInnerHeader(scratch, n, &origin, &seq, &mtype, &consumed)) {
+        if (cmDecodeInnerHeader(scratch, n, &protocol, &origin, &seq, &mtype,
+                                &consumed)) {
             ERRR("origin > UINT32_MAX decode unexpectedly succeeded");
         }
     }
 
     TEST("inner-header: msg_type > UINT8_MAX rejected") {
         cleaner(flexFree) flex *f = flexNew();
+        dkTestPushMailboxProtocol(&f);
         flexPushUnsigned(&f, (uint64_t)ORIGIN, FLEX_ENDPOINT_TAIL);
         flexPushUnsigned(&f, SEQ, FLEX_ENDPOINT_TAIL);
         flexPushUnsigned(&f, (uint64_t)UINT8_MAX + 1ULL, FLEX_ENDPOINT_TAIL);
@@ -10588,7 +10614,8 @@ int dkTestMailboxInnerHeaderFlexTest(int argc, char *argv[]) {
         uint64_t seq = 0;
         uint8_t mtype = 0;
         size_t consumed = 0;
-        if (cmDecodeInnerHeader(scratch, n, &origin, &seq, &mtype, &consumed)) {
+        if (cmDecodeInnerHeader(scratch, n, &protocol, &origin, &seq, &mtype,
+                                &consumed)) {
             ERRR("msg_type > UINT8_MAX decode unexpectedly succeeded");
         }
     }

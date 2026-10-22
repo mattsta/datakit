@@ -70,6 +70,7 @@
 extern "C" {
 #endif
 
+#include "dkFormat.h"
 #include "flexEnvelope.h"
 #include "hmacKeyring.h"
 
@@ -292,6 +293,9 @@ typedef enum clusterMailboxIngestResult {
     CLUSTER_MAILBOX_ERR_REPLAY = 6,            /* sequence <= last applied */
     CLUSTER_MAILBOX_ERR_APPLY_REJECTED = 7,    /* on_apply returned false */
     CLUSTER_MAILBOX_ERR_ORIGIN_TABLE_FULL = 8, /* too many distinct origins */
+    CLUSTER_MAILBOX_ERR_PROTOCOL = 9, /* frame protocol this build does not
+                                         read (a newer peer's version or
+                                         must-understand feature) */
 } clusterMailboxIngestResult;
 
 /* Consumer: verify and dispatch a single envelope. The caller-
@@ -332,6 +336,7 @@ typedef struct clusterMailboxStats {
     uint64_t key_missing;       /* ERR_KEY_MISSING */
     uint64_t bad_frame;         /* ERR_BAD_FRAME */
     uint64_t origin_table_full; /* ERR_ORIGIN_TABLE_FULL */
+    uint64_t protocol_rejected; /* ERR_PROTOCOL */
     uint64_t param_error;       /* ERR_PARAM */
     uint64_t seal_total;        /* successful Seal calls */
     uint64_t seal_param_error;  /* failed Seal calls (bad args) */
@@ -459,28 +464,38 @@ bool clusterMailboxParseRotateAnnounce(const uint8_t *payload, size_t len,
  * needs to compose or inspect a pre-framed inner header without going
  * through the full envelope path. */
 
+/* The frame protocol (the inner header's layout and meaning): every frame
+ * carries its stamp, and Ingest refuses (CLUSTER_MAILBOX_ERR_PROTOCOL) a
+ * version or must-understand feature this build does not read, so peers
+ * running different releases never misread each other's frames. */
+extern const dkFormatSpec clusterMailboxProtocol;
+
 /* Worst-case bytes the inner-header flex can occupy. Caller-supplied
  * buffer to cmEncodeInnerHeader MUST be at least this large. */
-#define CLUSTER_MAILBOX_INNER_HEADER_MAX_BYTES ((size_t)32)
+#define CLUSTER_MAILBOX_INNER_HEADER_MAX_BYTES ((size_t)48)
 
-/* Encode an inner-frame header into `out` (cap >=
+/* Encode an inner-frame header (stamped with this build's
+ * clusterMailboxProtocol version) into `out` (cap >=
  * CLUSTER_MAILBOX_INNER_HEADER_MAX_BYTES). Returns the encoded byte length on
  * success or 0 on bad args / insufficient capacity / allocation failure. */
 size_t cmEncodeInnerHeader(uint8_t *out, size_t out_cap, uint32_t origin_id,
                            uint64_t sequence, uint8_t msg_type);
 
 /* Decode an inner-frame header from `src` (length `src_len`, which may
- * include trailing opaque payload bytes after the flex prefix).
+ * include trailing opaque payload bytes after the flex prefix).  The
+ * header is a flex [protocol version, protocol features, origin_id,
+ * sequence, msg_type].
  *
- * On success returns true; sets `*origin_id`, `*sequence`, `*msg_type`
- * to the decoded values and `*hdr_len` to the byte length the flex
- * prefix consumed (caller computes payload region as `src + *hdr_len`,
- * `src_len - *hdr_len`).
+ * On success returns true; sets `*protocol` to the frame's protocol stamp
+ * (the caller checks it against clusterMailboxProtocol), `*origin_id`,
+ * `*sequence`, `*msg_type` to the decoded values and `*hdr_len` to the
+ * byte length the flex prefix consumed (caller computes payload region as
+ * `src + *hdr_len`, `src_len - *hdr_len`).
  *
  * Returns false on any of: short buffer, malformed flex framing, wrong
  * entry count, an entry that is not a 64-bit unsigned integer
  * (96/128-bit included), or any value outside its representable range
- * (origin_id > UINT32_MAX, msg_type > UINT8_MAX).
+ * (protocol version or origin_id > UINT32_MAX, msg_type > UINT8_MAX).
  *
  * Safe under arbitrary input: the framing check uses
  * flexValidateBufferDeep, which performs an O(N) walk of every entry's
@@ -489,8 +504,9 @@ size_t cmEncodeInnerHeader(uint8_t *out, size_t out_cap, uint32_t origin_id,
  * in production, trivial inside a unit test) cannot induce flexNext /
  * flexGetByTypeBig to overread the buffer here. */
 bool cmDecodeInnerHeader(const uint8_t *src, size_t src_len,
-                         uint32_t *origin_id, uint64_t *sequence,
-                         uint8_t *msg_type, size_t *hdr_len);
+                         dkFormatStamp *protocol, uint32_t *origin_id,
+                         uint64_t *sequence, uint8_t *msg_type,
+                         size_t *hdr_len);
 
 /* === Durable watermarks (snapshot / restore) ========================
  *

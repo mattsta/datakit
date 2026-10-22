@@ -24,9 +24,11 @@
  * structure plus the frame's (origin_id, sequence)
  *
  * The frame's msg_type byte carries the persistType. PERSIST_TYPE_MAX
- * is 255, fitting in 8 bits. Frame payload = persistOps.snapshot
- * output bytes, themselves a valid flex (every shipped persistOps in
- * datakit emits flex now). */
+ * is 255, fitting in 8 bits. Frame payload = the structure format's
+ * dkFormat prefix (persistOpsFormat of the descriptor), then the
+ * persistOps.snapshot bytes: a consumer restores only a format version
+ * it reads, so nodes on different releases never misread each other's
+ * structures (refusals: clusterReplicatorFormatRefusedCount). */
 
 #ifdef __cplusplus
 extern "C" {
@@ -137,6 +139,12 @@ void clusterReplicatorFree(clusterReplicator *rep);
  * Thread-safety: relaxed atomic load — safe to call concurrently with
  * Ingest. Returns 0 for NULL `rep`. */
 uint64_t clusterReplicatorDroppedCount(const clusterReplicator *rep);
+
+/* Frames whose structure format this build does not read (a newer
+ * peer's version or must-understand feature, another format, or no
+ * prefix); each is refused like an unrestorable payload.  Relaxed
+ * atomic load; 0 for NULL `rep`. */
+uint64_t clusterReplicatorFormatRefusedCount(const clusterReplicator *rep);
 
 /* Borrow the owned mailbox handle (e.g. for stats, snapshot/restore
  * of watermarks). Caller MUST NOT free it. */

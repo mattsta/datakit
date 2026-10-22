@@ -46,6 +46,7 @@ struct clusterReplicator {
     uint32_t max_apply_retries;        /* 0 = infinite (legacy) */
     replicatorRejectState last_reject; /* trampoline-local, sole writer */
     _Atomic uint64_t dropped_count;
+    _Atomic uint64_t format_refused_count;
 };
 
 /* Type-table sanity check: every populated entry must have a non-NULL
@@ -85,7 +86,23 @@ static bool replicatorMailboxApply(const clusterFrame *frame, void *ctx) {
     if (ops->free == NULL) {
         return false;
     }
-    void *structure = ops->restore(frame->payload, frame->payload_len);
+
+    /* The payload names its structure format: only one this build reads
+     * (from a peer on the same or an older compatible release) is
+     * restored; any other is counted and refused like an unrestorable
+     * payload */
+    const dkFormatSpec spec = persistOpsFormat(ops);
+    dkFormatStamp stamp;
+    size_t prefix = 0;
+    if (dkFormatPrefixRead(&spec, frame->payload, frame->payload_len, &stamp,
+                           &prefix) != DK_FORMAT_OK) {
+        atomic_fetch_add_explicit(&rep->format_refused_count, 1u,
+                                  memory_order_relaxed);
+        return false;
+    }
+
+    void *structure =
+        ops->restore(frame->payload + prefix, frame->payload_len - prefix);
     if (structure == NULL) {
         return false;
     }
@@ -169,6 +186,7 @@ clusterReplicator *clusterReplicatorCreateEx(
     rep->last_reject.sequence = 0;
     rep->last_reject.consecutive_rejects = 0;
     atomic_init(&rep->dropped_count, (uint64_t)0);
+    atomic_init(&rep->format_refused_count, (uint64_t)0);
     /* build the mailbox via the full-options constructor so the
      * caller's nonce-log knobs (disable / capacity) actually plumb
      * through to the underlying mailbox. Defaults are equivalent to
@@ -221,6 +239,15 @@ uint64_t clusterReplicatorDroppedCount(const clusterReplicator *rep) {
                                 memory_order_relaxed);
 }
 
+uint64_t clusterReplicatorFormatRefusedCount(const clusterReplicator *rep) {
+    if (rep == NULL) {
+        return 0u;
+    }
+    return atomic_load_explicit(
+        &((clusterReplicator *)rep)->format_refused_count,
+        memory_order_relaxed);
+}
+
 void clusterReplicatorFree(clusterReplicator *rep) {
     if (rep == NULL) {
         return;
@@ -240,7 +267,10 @@ size_t clusterReplicatorSnapshotSize(clusterReplicator *rep,
         structure == NULL) {
         return 0;
     }
-    const size_t inner_payload = ops->estimateSize(structure);
+    const dkFormatSpec spec = persistOpsFormat(ops);
+    const dkFormatStamp stamp = dkFormatStampFor(&spec, 0);
+    const size_t inner_payload =
+        dkFormatPrefixSize(&stamp) + ops->estimateSize(structure);
     return clusterMailboxSealedSize(rep->mb, inner_payload);
 }
 
@@ -252,16 +282,24 @@ bool clusterReplicatorSeal(clusterReplicator *rep, const persistOps *ops,
         ops->type > UINT8_MAX) {
         return false;
     }
-    size_t payload_len = 0;
-    uint8_t *payload = ops->snapshot(structure, &payload_len);
-    if (payload == NULL) {
+    size_t snapshot_len = 0;
+    cleanerName(zfree, Wire) uint8_t *snapshot =
+        ops->snapshot(structure, &snapshot_len);
+    if (snapshot == NULL) {
         return false;
     }
-    const bool ok = clusterMailboxSeal(rep->mb, origin_id, sequence,
-                                       (uint8_t)ops->type, payload, payload_len,
-                                       key_id, out, out_cap, out_written);
-    zfree(payload);
-    return ok;
+
+    /* The frame payload: the structure format's prefix, then the
+     * snapshot, so the receiver knows which encoding it holds */
+    const dkFormatSpec spec = persistOpsFormat(ops);
+    const dkFormatStamp stamp = dkFormatStampFor(&spec, 0);
+    const size_t prefix = dkFormatPrefixSize(&stamp);
+    cleanerName(zfree, Wire) uint8_t *payload = zmalloc(prefix + snapshot_len);
+    dkFormatPrefixWrite(&stamp, payload, prefix);
+    memcpy(payload + prefix, snapshot, snapshot_len);
+    return clusterMailboxSeal(rep->mb, origin_id, sequence, (uint8_t)ops->type,
+                              payload, prefix + snapshot_len, key_id, out,
+                              out_cap, out_written);
 }
 
 clusterMailboxIngestResult clusterReplicatorIngest(clusterReplicator *rep,
@@ -415,6 +453,62 @@ int clusterReplicatorTest(int argc, char *argv[]) {
         }
         flexFree(app_ctx.restored[0]);
 
+        clusterReplicatorFree(rep);
+        hmacKeyringFree(ring);
+    }
+
+    /* A peer on a newer release ships a structure format this build does
+     * not read: the frame is refused and counted, never restored; an
+     * unknown ignorable feature or the current stamp is restored */
+    TEST("structure format stamp gates every shipped payload") {
+        const uint8_t key[32] = {0xEF};
+        hmacKeyring *ring = hmacKeyringCreate();
+        const hmacKeyId KID = 1u;
+        hmacKeyringInstallUnsalted(ring, KID, &hmacAlgoSHA256, key,
+                                   sizeof(key));
+        replicatorTestCtx app_ctx = {0};
+        clusterReplicator *rep = clusterReplicatorCreate(
+            ring, FLEX_ENV_ALGO_HMAC_SHA256, CLUSTER_MAILBOX_FLAG_NONE,
+            type_table, 256u, testApply, &app_ctx);
+        clusterMailbox *mb = clusterReplicatorMailbox(rep);
+
+        cleaner(flexFree) flex *body = flexNew();
+        flexPushUnsigned(&body, 5u, FLEX_ENDPOINT_TAIL);
+        const dkFormatSpec spec = persistOpsFormat(&persistOpsFlex);
+        const struct {
+            dkFormatStamp stamp;
+            bool restored;
+        } cases[] = {
+            {{spec.id, spec.version + 1, 0}, false},
+            {{spec.id, spec.version, 1}, false},
+            {{PERSIST_TYPE_INTSET, spec.version, 0}, false},
+            {{spec.id, spec.version, UINT64_C(1) << 33}, true},
+        };
+        uint64_t refused = 0;
+        for (size_t c = 0; c < sizeof(cases) / sizeof(*cases); c++) {
+            uint8_t payload[64];
+            const size_t prefix =
+                dkFormatPrefixWrite(&cases[c].stamp, payload, sizeof(payload));
+            memcpy(payload + prefix, body, flexBytes(body));
+            const size_t len = prefix + flexBytes(body);
+
+            uint8_t wire[256];
+            size_t written = 0;
+            clusterMailboxSeal(mb, 9u, 1u + c, (uint8_t)PERSIST_TYPE_FLEX,
+                               payload, len, KID, wire, sizeof(wire), &written);
+            const size_t before = app_ctx.count;
+            clusterReplicatorIngest(rep, wire, written, KID);
+            refused += !cases[c].restored;
+            if ((app_ctx.count > before) != cases[c].restored ||
+                clusterReplicatorFormatRefusedCount(rep) != refused) {
+                ERR("case %zu: restored %d, refused %" PRIu64, c,
+                    (int)(app_ctx.count > before),
+                    clusterReplicatorFormatRefusedCount(rep));
+            }
+        }
+        for (size_t i = 0; i < app_ctx.count; i++) {
+            flexFree(app_ctx.restored[i]);
+        }
         clusterReplicatorFree(rep);
         hmacKeyringFree(ring);
     }
