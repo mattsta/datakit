@@ -75,24 +75,26 @@ uint64_t multidictBytesP(const multidictP *d);
  * ============================================================================
  */
 
-/* Each mutation returns exactly what its multidict counterpart returns
- * for the same dict state, and its WAL record replays to the same result.
+/* Every mutation logs first and applies exactly when the result is not
+ * PERSIST_LOG_REFUSED (see persistLogResult); its WAL record replays to
+ * the same change.  One that would change nothing (replacing or deleting
+ * an absent key) is PERSIST_LOG_UNCHANGED and logs nothing.  Each call is
+ * one LRU use of a key it names, as its multidict counterpart is.
  *
- * Add or replace a key-value pair, as multidictAdd */
-multidictResult multidictAddP(multidictP *d, const databox *key,
-                              const databox *val);
+ * Add or replace a key-value pair, as multidictAdd ('result', may be
+ * NULL: its INSERTED / REPLACED) */
+persistLogResult multidictAddP(multidictP *d, const databox *key,
+                               const databox *val, multidictResult *result);
 
-/* Replace the value of a present key, as multidictReplace does: returns
- * MULTIDICT_OK_REPLACED, or MULTIDICT_ERR (logging nothing) when the key
- * is absent.  Use multidictAddP to insert or replace. */
-multidictResult multidictReplaceP(multidictP *d, const databox *key,
-                                  const databox *val);
+/* Replace the value of a present key, as multidictReplace */
+persistLogResult multidictReplaceP(multidictP *d, const databox *key,
+                                   const databox *val);
 
-/* Delete by key, as multidictDelete: true if found and deleted */
-bool multidictDeleteP(multidictP *d, const databox *key);
+/* Delete by key, as multidictDelete */
+persistLogResult multidictDeleteP(multidictP *d, const databox *key);
 
 /* Clear all entries */
-void multidictEmptyP(multidictP *d);
+persistLogResult multidictEmptyP(multidictP *d);
 
 /* ============================================================================
  * Lookups (read-only, no persistence needed)

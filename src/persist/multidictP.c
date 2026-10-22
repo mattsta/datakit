@@ -134,89 +134,85 @@ uint64_t multidictBytesP(const multidictP *d) {
  * ============================================================================
  */
 
-multidictResult multidictAddP(multidictP *d, const databox *key,
-                              const databox *val) {
+persistLogResult multidictAddP(multidictP *d, const databox *key,
+                               const databox *val, multidictResult *result) {
+    if (result) {
+        *result = MULTIDICT_ERR;
+    }
     if (!d || !d->d || !d->ctx || !key || !val) {
-        return MULTIDICT_ERR;
+        return PERSIST_LOG_REFUSED;
     }
 
-    /* Log to WAL first */
     const databox *args[] = {key, val};
-    if (!persistCtxLogOp(d->ctx, PERSIST_OP_INSERT, args, 2)) {
-        return MULTIDICT_ERR;
+    const persistLogResult logged =
+        persistCtxLogOp(d->ctx, PERSIST_OP_INSERT, args, 2);
+    if (logged == PERSIST_LOG_REFUSED) {
+        return logged;
     }
-
-    /* Update in-memory */
-    multidictResult result = multidictAdd(d->d, key, val);
-
-    /* Check compaction threshold */
+    const multidictResult added = multidictAdd(d->d, key, val);
+    if (result) {
+        *result = added;
+    }
     persistCtxMaybeCompact(d->ctx, d->d, &persistOpsMultidict);
-
-    return result;
+    return logged;
 }
 
-multidictResult multidictReplaceP(multidictP *d, const databox *key,
-                                  const databox *val) {
+persistLogResult multidictReplaceP(multidictP *d, const databox *key,
+                                   const databox *val) {
     if (!d || !d->d || !d->ctx || !key || !val) {
-        return MULTIDICT_ERR;
+        return PERSIST_LOG_REFUSED;
     }
 
-    /* multidictReplace changes only a present key and fails otherwise;
-     * an absent key logs nothing, since replaying it would change nothing
-     * either */
-    if (!multidictExists(d->d, key)) {
-        return MULTIDICT_ERR;
+    /* multidictReplace changes only a present key: an absent key logs
+     * nothing (replaying it would change nothing either).  The check is
+     * no LRU use; the replace below is the call's one use. */
+    if (!multidictExistsNoTouch(d->d, key)) {
+        return PERSIST_LOG_UNCHANGED;
     }
 
-    /* Log to WAL first */
     const databox *args[] = {key, val};
-    if (!persistCtxLogOp(d->ctx, PERSIST_OP_REPLACE, args, 2)) {
-        return MULTIDICT_ERR;
+    const persistLogResult logged =
+        persistCtxLogOp(d->ctx, PERSIST_OP_REPLACE, args, 2);
+    if (logged == PERSIST_LOG_REFUSED) {
+        return logged;
     }
-
-    /* Update in-memory */
-    multidictResult result = multidictReplace(d->d, key, val);
-
-    /* Check compaction threshold */
+    multidictReplace(d->d, key, val);
     persistCtxMaybeCompact(d->ctx, d->d, &persistOpsMultidict);
-
-    return result;
+    return logged;
 }
 
-bool multidictDeleteP(multidictP *d, const databox *key) {
+persistLogResult multidictDeleteP(multidictP *d, const databox *key) {
     if (!d || !d->d || !d->ctx || !key) {
-        return false;
+        return PERSIST_LOG_REFUSED;
+    }
+    if (!multidictExistsNoTouch(d->d, key)) {
+        return PERSIST_LOG_UNCHANGED;
     }
 
-    /* Log to WAL first - note: delete takes a single databox*, not array */
-    if (!persistCtxLogOp(d->ctx, PERSIST_OP_DELETE, key, 1)) {
-        return false;
+    /* Delete takes a single databox*, not an array */
+    const persistLogResult logged =
+        persistCtxLogOp(d->ctx, PERSIST_OP_DELETE, key, 1);
+    if (logged == PERSIST_LOG_REFUSED) {
+        return logged;
     }
-
-    /* Update in-memory */
-    bool result = multidictDelete(d->d, key);
-
-    /* Check compaction threshold */
+    multidictDelete(d->d, key);
     persistCtxMaybeCompact(d->ctx, d->d, &persistOpsMultidict);
-
-    return result;
+    return logged;
 }
 
-void multidictEmptyP(multidictP *d) {
+persistLogResult multidictEmptyP(multidictP *d) {
     if (!d || !d->d || !d->ctx) {
-        return;
+        return PERSIST_LOG_REFUSED;
     }
 
-    /* Log to WAL first */
-    if (!persistCtxLogOp(d->ctx, PERSIST_OP_CLEAR, NULL, 0)) {
-        return;
+    const persistLogResult logged =
+        persistCtxLogOp(d->ctx, PERSIST_OP_CLEAR, NULL, 0);
+    if (logged == PERSIST_LOG_REFUSED) {
+        return logged;
     }
-
-    /* Update in-memory */
     multidictEmpty(d->d);
-
-    /* Check compaction threshold */
     persistCtxMaybeCompact(d->ctx, d->d, &persistOpsMultidict);
+    return logged;
 }
 
 /* ============================================================================
@@ -287,6 +283,26 @@ void multidictGetStatsP(const multidictP *d, persistCtxStats *stats) {
 #include <fcntl.h>
 #include <inttypes.h>
 #include <sys/stat.h>
+
+/* The P mutations as their multidict counterparts report them, so a test
+ * can compare a P dict with a plain one call for call */
+static multidictResult mdpAdd(multidictP *d, const databox *key,
+                              const databox *val) {
+    multidictResult result = MULTIDICT_ERR;
+    return multidictAddP(d, key, val, &result) ? result : MULTIDICT_ERR;
+}
+
+static multidictResult mdpReplace(multidictP *d, const databox *key,
+                                  const databox *val) {
+    const persistLogResult logged = multidictReplaceP(d, key, val);
+    return logged && logged != PERSIST_LOG_UNCHANGED ? MULTIDICT_OK_REPLACED
+                                                     : MULTIDICT_ERR;
+}
+
+static bool mdpDelete(multidictP *d, const databox *key) {
+    const persistLogResult logged = multidictDeleteP(d, key);
+    return logged && logged != PERSIST_LOG_UNCHANGED;
+}
 
 /* Helper to verify multidict matches tracker */
 static bool verifyMultidictMatchesTracker(multidictP *d,
@@ -360,7 +376,7 @@ int multidictPTest(int argc, char *argv[]) {
         for (int i = 0; i < 20; i++) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i * 100);
-            multidictAddP(d, &key, &val);
+            mdpAdd(d, &key, &val);
             ptestKVTrackerInsert(&tracker, &key, &val);
         }
 
@@ -384,7 +400,7 @@ int multidictPTest(int argc, char *argv[]) {
         for (int i = 0; i < 10; i++) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i * 10);
-            multidictAddP(d, &key, &val);
+            mdpAdd(d, &key, &val);
             ptestKVTrackerInsert(&tracker, &key, &val);
         }
 
@@ -392,7 +408,7 @@ int multidictPTest(int argc, char *argv[]) {
         for (int i = 0; i < 10; i++) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i * 1000);
-            multidictAddP(d, &key, &val);
+            mdpAdd(d, &key, &val);
             ptestKVTrackerInsert(&tracker, &key, &val);
         }
 
@@ -418,7 +434,7 @@ int multidictPTest(int argc, char *argv[]) {
             for (int i = 0; i < 30; i++) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i * 50);
-                multidictAddP(d, &key, &val);
+                mdpAdd(d, &key, &val);
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
@@ -457,14 +473,14 @@ int multidictPTest(int argc, char *argv[]) {
         for (int i = 0; i < 20; i++) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i * 100);
-            multidictAddP(d, &key, &val);
+            mdpAdd(d, &key, &val);
             ptestKVTrackerInsert(&tracker, &key, &val);
         }
 
         /* Delete every other entry */
         for (int i = 0; i < 20; i += 2) {
             databox key = DATABOX_SIGNED(i);
-            multidictDeleteP(d, &key);
+            mdpDelete(d, &key);
             ptestKVTrackerDelete(&tracker, &key);
         }
 
@@ -498,14 +514,14 @@ int multidictPTest(int argc, char *argv[]) {
             for (int i = 0; i < 15; i++) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i * 50);
-                multidictAddP(d, &key, &val);
+                mdpAdd(d, &key, &val);
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
             /* Delete entries 3, 7, 11 */
             for (int i = 3; i < 15; i += 4) {
                 databox key = DATABOX_SIGNED(i);
-                multidictDeleteP(d, &key);
+                mdpDelete(d, &key);
                 ptestKVTrackerDelete(&tracker, &key);
             }
 
@@ -544,7 +560,7 @@ int multidictPTest(int argc, char *argv[]) {
         for (int i = 0; i < 10; i++) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i);
-            multidictAddP(d, &key, &val);
+            mdpAdd(d, &key, &val);
         }
 
         if (multidictCountP(d) != 10) {
@@ -562,7 +578,7 @@ int multidictPTest(int argc, char *argv[]) {
         for (int i = 100; i < 115; i++) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i * 2);
-            multidictAddP(d, &key, &val);
+            mdpAdd(d, &key, &val);
             ptestKVTrackerInsert(&tracker, &key, &val);
         }
 
@@ -588,7 +604,7 @@ int multidictPTest(int argc, char *argv[]) {
             for (int i = 0; i < 10; i++) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i);
-                multidictAddP(d, &key, &val);
+                mdpAdd(d, &key, &val);
             }
 
             multidictEmptyP(d);
@@ -596,7 +612,7 @@ int multidictPTest(int argc, char *argv[]) {
             for (int i = 50; i < 60; i++) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i * 3);
-                multidictAddP(d, &key, &val);
+                mdpAdd(d, &key, &val);
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
@@ -637,7 +653,7 @@ int multidictPTest(int argc, char *argv[]) {
             for (int i = round * 10; i < round * 10 + 8; i++) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i * round);
-                multidictAddP(d, &key, &val);
+                mdpAdd(d, &key, &val);
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
@@ -645,13 +661,13 @@ int multidictPTest(int argc, char *argv[]) {
             for (int i = round * 10; i < round * 10 + 3; i++) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i * 9999);
-                multidictAddP(d, &key, &val);
+                mdpAdd(d, &key, &val);
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
             /* Delete one */
             databox key = DATABOX_SIGNED(round * 10 + 5);
-            multidictDeleteP(d, &key);
+            mdpDelete(d, &key);
             ptestKVTrackerDelete(&tracker, &key);
         }
 
@@ -690,7 +706,7 @@ int multidictPTest(int argc, char *argv[]) {
             for (int i = 0; i < 10; i++) {
                 databox key = DATABOX_SIGNED(cycle * 100 + i);
                 databox val = DATABOX_SIGNED(cycle * 1000 + i);
-                multidictAddP(d, &key, &val);
+                mdpAdd(d, &key, &val);
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
@@ -718,7 +734,7 @@ int multidictPTest(int argc, char *argv[]) {
             for (int i = 0; i < 200; i++) {
                 databox key = DATABOX_SIGNED(i);
                 databox val = DATABOX_SIGNED(i * 1000);
-                multidictAddP(d, &key, &val);
+                mdpAdd(d, &key, &val);
                 ptestKVTrackerInsert(&tracker, &key, &val);
             }
 
@@ -785,7 +801,7 @@ int multidictPTest(int argc, char *argv[]) {
         {
             persistCtx *ctx = persistCtxNew(basePath, NULL);
             multidictP *d = multidictNewP(ctx);
-            multidictAddP(d, &expectedKey, &expectedVal);
+            mdpAdd(d, &expectedKey, &expectedVal);
             multidictCloseP(d);
             persistCtxFree(ctx);
         }
@@ -828,13 +844,13 @@ int multidictPTest(int argc, char *argv[]) {
         for (int i = 0; i < 15; i++) {
             databox key = DATABOX_SIGNED(i);
             databox val = DATABOX_SIGNED(i);
-            multidictAddP(d, &key, &val);
+            mdpAdd(d, &key, &val);
         }
 
         /* Delete a few */
         for (int i = 0; i < 5; i++) {
             databox key = DATABOX_SIGNED(i);
-            multidictDeleteP(d, &key);
+            mdpDelete(d, &key);
         }
 
         persistCtxStats stats;
@@ -881,9 +897,9 @@ int multidictPTest(int argc, char *argv[]) {
         {
             persistCtx *ctx = persistCtxNew(basePath, NULL);
             multidictP *d = multidictNewPWithType(ctx, &multidictTypeCaseKey);
-            if (!d || multidictAddP(d, &alpha, &one) != MULTIDICT_OK_INSERTED ||
-                multidictAddP(d, &beta, &two) != MULTIDICT_OK_INSERTED ||
-                multidictAddP(d, &ALPHA, &three) != MULTIDICT_OK_REPLACED ||
+            if (!d || mdpAdd(d, &alpha, &one) != MULTIDICT_OK_INSERTED ||
+                mdpAdd(d, &beta, &two) != MULTIDICT_OK_INSERTED ||
+                mdpAdd(d, &ALPHA, &three) != MULTIDICT_OK_REPLACED ||
                 multidictCountP(d) != 2) {
                 ERRR("case multidictP session 1");
             }
@@ -899,14 +915,14 @@ int multidictPTest(int argc, char *argv[]) {
             if (!d ||
                 multidictGetType(multidictGetP(d)) != &multidictTypeCaseKey ||
                 multidictCountP(d) != 2 || !multidictFindP(d, &aLpHa, &v) ||
-                !ptestBoxesEqual(&v, &three) ||
-                !multidictDeleteP(d, &betaLow) || multidictCountP(d) != 1) {
+                !ptestBoxesEqual(&v, &three) || !mdpDelete(d, &betaLow) ||
+                multidictCountP(d) != 1) {
                 ERRR("case multidictP after WAL replay");
             }
 
             /* Compact, then keep logging on top of the new snapshot */
             if (!multidictCompactP(d) ||
-                multidictAddP(d, &gamma, &one) != MULTIDICT_OK_INSERTED) {
+                mdpAdd(d, &gamma, &one) != MULTIDICT_OK_INSERTED) {
                 ERRR("case multidictP compaction");
             }
             multidictCloseP(d);
@@ -925,7 +941,7 @@ int multidictPTest(int argc, char *argv[]) {
                 multidictCountP(d) != 2 || !multidictExistsP(d, &GAMMA) ||
                 !multidictFindP(d, &ALPHA, &v) ||
                 !ptestBoxesEqual(&v, &three) ||
-                multidictAddP(d, &aLpHa, &two) != MULTIDICT_OK_REPLACED ||
+                mdpAdd(d, &aLpHa, &two) != MULTIDICT_OK_REPLACED ||
                 multidictCountP(d) != 2) {
                 ERRR("case multidictP after compaction");
             }
@@ -959,9 +975,9 @@ int multidictPTest(int argc, char *argv[]) {
         {
             persistCtx *ctx = persistCtxNew(basePath, NULL);
             multidictP *d = multidictNewP(ctx);
-            multidictAddP(d, &lower, &one);
+            mdpAdd(d, &lower, &one);
             multidictCompactP(d);
-            multidictAddP(d, &upper, &two);
+            mdpAdd(d, &upper, &two);
             multidictCloseP(d);
             persistCtxFree(ctx);
         }
@@ -998,7 +1014,7 @@ int multidictPTest(int argc, char *argv[]) {
         persistCtxStats before;
         persistCtxStats after;
         multidictGetStatsP(d, &before);
-        if (multidictReplaceP(d, &absent, &one) != MULTIDICT_ERR ||
+        if (mdpReplace(d, &absent, &one) != MULTIDICT_ERR ||
             multidictReplace(plain, &absent, &one) != MULTIDICT_ERR ||
             multidictCountP(d) != 0) {
             ERRR("replace of an absent key did not fail");
@@ -1021,14 +1037,12 @@ int multidictPTest(int argc, char *argv[]) {
             const uint32_t op = (r >> 8) % 100;
             bool same = true;
             if (op < 35) {
-                same = multidictAddP(d, &key, &val) ==
-                       multidictAdd(plain, &key, &val);
+                same = mdpAdd(d, &key, &val) == multidictAdd(plain, &key, &val);
             } else if (op < 60) {
-                same = multidictReplaceP(d, &key, &val) ==
+                same = mdpReplace(d, &key, &val) ==
                        multidictReplace(plain, &key, &val);
             } else if (op < 80) {
-                same =
-                    multidictDeleteP(d, &key) == multidictDelete(plain, &key);
+                same = mdpDelete(d, &key) == multidictDelete(plain, &key);
             } else if (op < 98) {
                 databox pv = {{0}};
                 databox nv = {{0}};
@@ -1123,6 +1137,43 @@ int multidictPTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("multidictP mutations are one LRU use each and report no-ops") {
+        ptestCleanupFiles(basePath);
+        persistCtx *ctx = persistCtxNew(basePath, NULL);
+        multidictP *d = multidictNewP(ctx);
+        multidictEnableLRU(multidictGetP(d), 4);
+        const databox key = DATABOX_SIGNED(7);
+        const databox one = DATABOX_SIGNED(1);
+        const databox two = DATABOX_SIGNED(2);
+        multidictResult added = MULTIDICT_ERR;
+        if (!multidictAddP(d, &key, &one, &added) ||
+            added != MULTIDICT_OK_INSERTED) {
+            ERRR("add was not an insert");
+        }
+        const int before = multidictGetLRULevel(multidictGetP(d), &key);
+        if (!multidictReplaceP(d, &key, &two) ||
+            multidictGetLRULevel(multidictGetP(d), &key) != before + 1) {
+            ERR("replace moved the key from level %d to %d", before,
+                multidictGetLRULevel(multidictGetP(d), &key));
+        }
+
+        const databox absent = DATABOX_SIGNED(8);
+        persistCtxStats stats;
+        persistCtxGetStats(ctx, &stats);
+        const uint64_t ops = stats.totalOps;
+        if (multidictReplaceP(d, &absent, &one) != PERSIST_LOG_UNCHANGED ||
+            multidictDeleteP(d, &absent) != PERSIST_LOG_UNCHANGED) {
+            ERRR("an absent key's replace or delete was not UNCHANGED");
+        }
+        persistCtxGetStats(ctx, &stats);
+        if (stats.totalOps != ops) {
+            ERRR("no-op mutations were logged");
+        }
+        multidictCloseP(d);
+        persistCtxFree(ctx);
+        ptestCleanupFiles(basePath);
+    }
+
     TEST("multidictP readers: CountP, BytesP and SyncP") {
         ptestCleanupFiles(basePath);
         persistCtx *ctx = persistCtxNew(basePath, NULL);
@@ -1131,7 +1182,7 @@ int multidictPTest(int argc, char *argv[]) {
         for (int64_t i = 0; i < 50; i++) {
             const databox key = DATABOX_SIGNED(i);
             const databox val = DATABOX_SIGNED(i * i);
-            multidictAddP(d, &key, &val);
+            mdpAdd(d, &key, &val);
         }
         if (!multidictSyncP(d) || multidictCountP(d) != 50 ||
             multidictBytesP(d) <= emptyBytes) {

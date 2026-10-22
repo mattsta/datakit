@@ -1678,6 +1678,11 @@ bool multidictFindByString(multidict *d, const char *key, uint8_t **val) {
 
 /* Check if a key exists without retrieving the value.  Naming an existing
  * key is one LRU use, so a hit promotes it once (multidict.h, "LRU use"). */
+bool multidictExistsNoTouch(multidict *d, const databox *keybox) {
+    databox unused = {{0}};
+    return d && keybox && multidictFindNoTouch_(d, keybox, &unused);
+}
+
 bool multidictExists(multidict *d, const databox *keybox) {
     databox unused = {{0}};
     return multidictFind(d, keybox, &unused);

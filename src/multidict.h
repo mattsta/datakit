@@ -434,6 +434,10 @@ multidictEvictPolicy multidictGetEvictPolicy(multidict *d);
 void multidictTouch(multidict *d, const databox *keybox);
 int multidictGetLRULevel(multidict *d, const databox *keybox);
 
+/* Whether 'keybox' is present, as an inspector: no LRU use (for a caller
+ * that names the key in the operation it decides on) */
+bool multidictExistsNoTouch(multidict *d, const databox *keybox);
+
 /* Hashes */
 uint32_t multidictIntHashFunction(uint32_t key);
 uint32_t multidictLongLongHashFunction(uint64_t key);
