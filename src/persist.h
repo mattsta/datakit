@@ -217,11 +217,12 @@ typedef enum persistOp {
 
     /* Range operations (operand: two raw uint64_t — [start, extent]).
      * Fixed-width like the single-position bitmap ops, so no flex
-     * framing.  CLEAR_RANGE is idempotent; FLIP_RANGE is NOT (applying
-     * it twice un-flips), so it must never be re-folded on a replica
-     * without executor-identity dedupe. */
+     * framing.  SET_RANGE and CLEAR_RANGE are idempotent; FLIP_RANGE is
+     * NOT (applying it twice un-flips), so it must never be re-folded on
+     * a replica without executor-identity dedupe. */
     PERSIST_OP_CLEAR_RANGE = 24, /* Clear all bits in [start, start+extent) */
     PERSIST_OP_FLIP_RANGE = 25,  /* Flip all bits in [start, start+extent) */
+    PERSIST_OP_SET_RANGE = 33,   /* Set all bits in [start, start+extent) */
 
     /* Numeric scalar deltas (operand: 1-element flex databox).
      * The row carries the INCREMENT, never the absolute result, so

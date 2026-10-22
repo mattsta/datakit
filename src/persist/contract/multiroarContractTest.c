@@ -68,17 +68,20 @@ static void *pcMultiroarBuild(const persistContractBuild *b) {
     for (size_t i = 0; i < b->size; i++) {
         const uint64_t roll = splitmix64(&rng) % 16;
         const uint64_t pos = pcMultiroarPosition(&rng);
-        if (roll < 9) {
+        if (roll < 8) {
             multiroarBitSet(r, pos);
             persistContractRecord(b->log, PERSIST_OP_INSERT, &pos, 1);
-        } else if (roll < 13) {
+        } else if (roll < 12) {
             multiroarRemove(r, pos);
             persistContractRecord(b->log, PERSIST_OP_DELETE, &pos, 1);
         } else {
             /* Up to just over a chunk, so ranges cover whole chunks and
              * cross chunk edges */
             const uint64_t range[2] = {pos, 1 + splitmix64(&rng) % 9000};
-            if (roll == 13) {
+            if (roll == 12) {
+                multiroarBitSetRange(r, range[0], range[1]);
+                persistContractRecord(b->log, PERSIST_OP_SET_RANGE, range, 2);
+            } else if (roll == 13) {
                 multiroarBitClearRange(r, range[0], range[1]);
                 persistContractRecord(b->log, PERSIST_OP_CLEAR_RANGE, range, 2);
             } else {

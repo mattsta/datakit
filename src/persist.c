@@ -2823,8 +2823,9 @@ static size_t multiroarPersistEstimateSize(const void *structure) {
 
 /* Ops carry raw fixed-width uint64_t words, no framing: INSERT a bit
  * position (bit mode) or a [position, value] pair (value mode), DELETE a
- * position, CLEAR_RANGE / FLIP_RANGE a [start, extent] pair (bit mode),
- * CLEAR nothing.  Apply refuses an op the roar's mode does not have. */
+ * position, SET_RANGE / CLEAR_RANGE / FLIP_RANGE a [start, extent] pair
+ * (bit mode), CLEAR nothing.  Apply refuses an op the roar's mode does not
+ * have. */
 static uint8_t *multiroarPersistEncodeOp(persistOp op, const void *args,
                                          size_t argc, size_t *len) {
     switch (op) {
@@ -2840,6 +2841,7 @@ static uint8_t *multiroarPersistEncodeOp(persistOp op, const void *args,
         return buf;
     }
 
+    case PERSIST_OP_SET_RANGE:
     case PERSIST_OP_CLEAR_RANGE:
     case PERSIST_OP_FLIP_RANGE: {
         /* args is uint64_t[2] ([start, extent]) — same fixed-width
@@ -2906,6 +2908,7 @@ static bool multiroarPersistApplyOp(void *structure, persistOp op,
         return true;
     }
 
+    case PERSIST_OP_SET_RANGE:
     case PERSIST_OP_CLEAR_RANGE:
     case PERSIST_OP_FLIP_RANGE: {
         if (width || len != 2 * sizeof(uint64_t)) {
@@ -2913,7 +2916,9 @@ static bool multiroarPersistApplyOp(void *structure, persistOp op,
         }
         uint64_t range[2];
         memcpy(range, data, sizeof(range));
-        if (op == PERSIST_OP_CLEAR_RANGE) {
+        if (op == PERSIST_OP_SET_RANGE) {
+            multiroarBitSetRange(*r, range[0], range[1]);
+        } else if (op == PERSIST_OP_CLEAR_RANGE) {
             multiroarBitClearRange(*r, range[0], range[1]);
         } else {
             multiroarBitFlipRange(*r, range[0], range[1]);

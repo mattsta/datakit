@@ -178,19 +178,14 @@ void multiroarBitSetRangeP(multiroarP *r, size_t start, size_t extent) {
         return;
     }
 
-    /* One INSERT per bit (there is no set-range op).  If a write fails,
-     * apply exactly the bits already logged, so memory and WAL agree. */
-    size_t logged = 0;
-    while (logged < extent) {
-        uint64_t pos = start + logged;
-        if (!persistCtxLogOp(r->ctx, PERSIST_OP_INSERT, &pos, 1)) {
-            break;
-        }
-        logged++;
+    /* One SET_RANGE row: the whole range is logged or none of it */
+    const uint64_t range[2] = {start, extent};
+    if (!persistCtxLogOp(r->ctx, PERSIST_OP_SET_RANGE, range, 2)) {
+        return;
     }
 
     /* Update in-memory */
-    multiroarBitSetRange(r->r, start, logged);
+    multiroarBitSetRange(r->r, start, extent);
 
     /* Check compaction threshold */
     persistCtxMaybeCompact(r->ctx, r->r, &persistOpsMultiroar);
@@ -695,8 +690,12 @@ static int test_multiroarP_ranges(int argc, char *argv[]) {
     if (!multiroarSyncP(r) || multiroarMemoryUsageP(r) == 0) {
         ERRR("Sync or memory usage failed");
     }
+    /* Each call is one logged op, however wide its range */
     persistCtxStats stats;
     multiroarGetStatsP(r, &stats);
+    if (stats.totalOps != 4) {
+        ERR("logged %" PRIu64 " ops for 4 calls", stats.totalOps);
+    }
     multiroarCloseP(r);
     persistCtxFree(ctx);
 
