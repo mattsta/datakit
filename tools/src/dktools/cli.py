@@ -11,6 +11,7 @@ from . import (
     leakcheck,
     perfdiff,
     procs,
+    testtime,
     toolchain,
     validate,
     vendorsync,
@@ -81,6 +82,29 @@ def main(argv: list[str] | None = None) -> int:
         default=0,
         metavar="N",
         help="print the N slowest files and their seconds to stderr",
+    )
+
+    tt = sub.add_parser(
+        "testtime",
+        help="time each section of one datakit test (exit 0 pass, 1 fail)",
+    )
+    tt.add_argument("binary", type=Path, help="the datakit-test binary")
+    tt.add_argument("test", help="test name, as for 'datakit-test test NAME'")
+    tt.add_argument(
+        "--top", type=int, default=15, help="sections to show (default 15)"
+    )
+    tt.add_argument(
+        "--timeout",
+        type=float,
+        default=1800.0,
+        help="stop the test after this many seconds (default 1800)",
+    )
+    tt.add_argument(
+        "--prefix",
+        action="append",
+        default=[],
+        help="another section header prefix (repeatable), for suites that "
+        "print their own, such as 'Test '",
     )
 
     pd = sub.add_parser(
@@ -349,6 +373,13 @@ def _dispatch(args: argparse.Namespace) -> int:
 
     if args.command == "perfdiff":
         return perfdiff.run(args.baseline, args.current, args.tolerance)
+
+    if args.command == "testtime":
+        if args.top < 1 or args.timeout <= 0:
+            raise ToolError("--top must be at least 1 and --timeout positive")
+        return testtime.run(
+            args.binary, args.test, args.timeout, args.top, tuple(args.prefix)
+        )
 
     if args.command == "allocaudit":
         if args.jobs is not None and args.jobs < 1:
