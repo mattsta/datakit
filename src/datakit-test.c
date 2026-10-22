@@ -132,6 +132,7 @@ extern int bigmathTest(int argc, char *argv[]);
 #include <errno.h>
 #include <fcntl.h>  /* descriptor flags of OSRegulate pairs */
 #include <poll.h>   /* process-exit watch fd readiness */
+#include <sched.h>  /* sched_yield: the owned-arena soak's reader handshake */
 #include <signal.h> /* kill */
 #include <stdbool.h>
 #include <string.h>
@@ -1950,6 +1951,7 @@ typedef struct dkOwnedSoakReader {
     ownedArena *arena;
     ownedCell *cell;
     _Atomic bool *stop;
+    _Atomic uint32_t *readersReading; /* readers that have read once */
     uint64_t reads;
     uint64_t bad;
 } dkOwnedSoakReader;
@@ -1960,7 +1962,11 @@ static void *dkOwnedSoakReaderMain_(void *arg) {
         ownedArenaEnter(r->arena);
         const dkOwnedSoakObj *o = ownedCellRead(r->cell);
         if (o) {
-            r->reads++;
+            if (r->reads++ == 0) {
+                atomic_fetch_add_explicit(r->readersReading, 1,
+                                          memory_order_release);
+            }
+
             if (o->magic != DK_OWNED_SOAK_MAGIC) {
                 r->bad++;
             }
@@ -1995,12 +2001,15 @@ static int dkTestOwnedArenaSoak(void) {
         ownedCell cell;
         ownedCellInit(&cell, &dkOwnedSoakCellDecl_, NULL, &arena);
         _Atomic bool stop = false;
+        _Atomic uint32_t readersReading = 0;
         dkOwnedSoakReader readers[DK_OWNED_SOAK_READERS];
         pthread_t th[DK_OWNED_SOAK_READERS];
         int started = 0;
         for (int i = 0; i < DK_OWNED_SOAK_READERS; i++) {
-            readers[i] = (dkOwnedSoakReader){
-                .arena = &arena, .cell = &cell, .stop = &stop};
+            readers[i] = (dkOwnedSoakReader){.arena = &arena,
+                                             .cell = &cell,
+                                             .stop = &stop,
+                                             .readersReading = &readersReading};
             if (pthread_create(&th[i], NULL, dkOwnedSoakReaderMain_,
                                &readers[i]) != 0) {
                 break;
@@ -2008,7 +2017,20 @@ static int dkTestOwnedArenaSoak(void) {
             started++;
         }
         SOAKEXPECT(started == DK_OWNED_SOAK_READERS, "readers started");
-        for (uint32_t i = 0; i < DK_OWNED_SOAK_PUBLISHES; i++) {
+
+        /* The publishes take a few milliseconds, which a loaded machine
+         * can spend before scheduling the readers at all: publish one
+         * object and let every reader read it before the soak starts
+         * (bounded, so a reader that never runs still fails below). */
+        ownedCellPublish(&cell, dkOwnedSoakObjNew_(0));
+        const uint64_t waitUntil = dkOwnedSoakNowUs_() + 5000000;
+        while (atomic_load_explicit(&readersReading, memory_order_acquire) <
+                   (uint32_t)started &&
+               dkOwnedSoakNowUs_() < waitUntil) {
+            sched_yield();
+        }
+
+        for (uint32_t i = 1; i < DK_OWNED_SOAK_PUBLISHES; i++) {
             ownedCellPublish(&cell, dkOwnedSoakObjNew_(i));
             if (i % DK_OWNED_SOAK_DRAIN_EVERY == 0) {
                 ownedArenaDrain(&arena);
