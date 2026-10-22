@@ -4332,8 +4332,9 @@ defcleaner(multilru *, multilruFree);
 /* Snapshot (one flex, every value exact):
  *   [maxLevels, weights (0/1), policy, evictStrategy, maxCount, maxWeight,
  *    nextFresh, entryCount, freeCount]
- *   entryCount rows [handle, level(, weight when weights)], handles
- *   ascending
+ *   entryCount rows [handle, level(, weight when weights)] in recency
+ *   order, coldest first (level 0 oldest to newest, then level 1, ...),
+ *   so the restored LRU evicts and demotes in the live one's order
  *   freeCount recycled handles in the order inserts reuse them, so the
  *   restored LRU hands out the same handles the live one would (which a
  *   WAL replayed after the snapshot depends on) */
@@ -4341,6 +4342,7 @@ defcleaner(multilru *, multilruFree);
 
 defcleanerName(multilruPtr *, zfree, MultilruPtrs);
 defcleanerName(bool *, zfree, MlruBools);
+defcleanerName(uint64_t *, zfree, MlruWeights);
 
 static uint8_t *multilruPersistSnapshot(const void *structure, size_t *len) {
     const multilru *mlru = structure;
@@ -4365,13 +4367,17 @@ static uint8_t *multilruPersistSnapshot(const void *structure, size_t *len) {
         flexRowUnsigned(&row, stats.freeCount);
         flexRowAppendExact(&f, &row);
 
-        /* Every populated handle, one row each */
-        for (size_t handle = 1; handle < stats.nextFresh; handle++) {
-            if (multilruIsPopulated(mlru, handle)) {
-                flexRowUnsigned(&row, handle);
-                flexRowUnsigned(&row, multilruGetLevel(mlru, handle));
+        /* Every entry, one row each, coldest first */
+        if (stats.count) {
+            cleanerName(zfree, MultilruPtrs) multilruPtr *order =
+                zcalloc(stats.count, sizeof(multilruPtr));
+            const size_t n =
+                multilruCollectLowest(mlru, order, (size_t)stats.count);
+            for (size_t i = 0; i < n; i++) {
+                flexRowUnsigned(&row, order[i]);
+                flexRowUnsigned(&row, multilruGetLevel(mlru, order[i]));
                 if (enableWeights) {
-                    flexRowUnsigned(&row, multilruGetWeight(mlru, handle));
+                    flexRowUnsigned(&row, multilruGetWeight(mlru, order[i]));
                 }
                 flexRowAppendExact(&f, &row);
             }
@@ -4464,35 +4470,61 @@ static void *multilruPersistRestore(const uint8_t *data, size_t len) {
     }
     multilruSetAutoEvict(mlru, false);
 
-    /* Fill every slot in handle order (a new LRU hands them out in
-     * sequence), entries with their weight and level; the holes are
-     * freed afterwards in the recorded order */
+    /* The entries in recency order: each handle once, levels never
+     * falling (coldest first) */
     cleanerName(zfree, MlruBools) bool *isEntry =
         zcalloc((size_t)nextFresh, sizeof(bool));
-    uint64_t prev = 0;
+    cleanerName(zfree, MultilruPtrs) multilruPtr *order =
+        zcalloc(entries ? (size_t)entries : 1, sizeof(multilruPtr));
+    cleanerName(zfree, Bytes) uint8_t *levelOf =
+        zcalloc(entries ? (size_t)entries : 1, sizeof(uint8_t));
+    cleanerName(zfree, MlruWeights) uint64_t *weightOf =
+        weights ? zcalloc((size_t)nextFresh, sizeof(uint64_t)) : NULL;
+    uint64_t prevLevel = 0;
     for (uint64_t i = 0; i < entries; i++) {
         uint64_t handle, level, weight = 0;
         if (!mlruPersistNext_(f, &fe, nextFresh - 1, &handle) ||
-            handle < first || handle <= prev ||
+            handle < first || isEntry[handle] ||
             !mlruPersistNext_(f, &fe, maxLevels - 1, &level) ||
+            level < prevLevel ||
             (weights && !mlruPersistNext_(f, &fe, UINT64_MAX, &weight))) {
             return NULL;
         }
-        prev = handle;
-        while (multilruPeekNextHandle(mlru) < handle) {
-            multilruInsert(mlru); /* a hole, freed below */
+        isEntry[handle] = true;
+        order[i] = handle;
+        levelOf[i] = (uint8_t)level;
+        prevLevel = level;
+        if (weights) {
+            weightOf[handle] = weight;
         }
-        const multilruPtr got = multilruInsertWeighted(mlru, weight);
+    }
+
+    /* Fill every slot in handle order (a new LRU hands them out in
+     * sequence), entries with their weights; the holes are freed below */
+    for (uint64_t handle = first; handle < nextFresh; handle++) {
+        const multilruPtr got =
+            weights && isEntry[handle]
+                ? multilruInsertWeighted(mlru, weightOf[handle])
+                : multilruInsert(mlru);
         if (got != handle) {
             return NULL;
         }
-        isEntry[handle] = true;
-        for (uint64_t l = 0; l < level; l++) {
-            multilruIncrease(mlru, got);
-        }
     }
-    while (multilruPeekNextHandle(mlru) < nextFresh) {
-        multilruInsert(mlru);
+
+    /* Coldest first, move each entry to the head of its level, so each
+     * level ends newest at its head as recorded: Increase lands at the
+     * head of the next level (re-heads at the top one), Decrease at the
+     * head of the one below */
+    const uint64_t top = maxLevels - 1;
+    for (uint64_t i = 0; i < entries; i++) {
+        const uint64_t raises =
+            levelOf[i] == top ? (top ? top : 1) : levelOf[i] + 1u;
+        for (uint64_t l = 0; l < raises; l++) {
+            multilruIncrease(mlru, order[i]);
+        }
+        if (levelOf[i] != top) {
+            multilruDecrease(mlru, order[i]);
+        }
     }
 
     /* Free the holes so the first recorded is reused first: each delete

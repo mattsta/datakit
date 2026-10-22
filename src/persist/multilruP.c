@@ -371,7 +371,11 @@ void multilruGetStatsP(const multilruP *mlru, persistCtxStats *stats) {
  */
 
 #ifdef DATAKIT_TEST
+#include "../str.h"
 #include "persistTestCommon.h"
+
+defcleaner(multilru *, multilruFree);
+defcleanerName(uint8_t *, zfree, SnapBytes);
 
 static int test_multilruP_basic(int argc, char *argv[]) {
     (void)argc;
@@ -1383,9 +1387,75 @@ static int test_multilruP_demotions_replay(int argc, char *argv[]) {
     TEST_FINAL_RESULT;
 }
 
+static int test_multilruP_recency_order(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+
+    int err = 0;
+
+    TEST("a restored LRU demotes and evicts in the live one's order")
+
+    for (size_t levels = 1; levels <= 4; levels++) {
+        const multilruConfig config = {.maxLevels = levels,
+                                       .policy = MLRU_POLICY_COUNT,
+                                       .enableWeights = levels % 2 == 0};
+        cleaner(multilruFree) multilru *live = multilruNewWithConfig(&config);
+
+        /* Entries touched in a scrambled order, some deleted (holes) */
+        multilruPtr handles[200];
+        for (size_t i = 0; i < 200; i++) {
+            handles[i] = config.enableWeights
+                             ? multilruInsertWeighted(live, i * 3 + 1)
+                             : multilruInsert(live);
+        }
+        uint64_t rng = 0xa11ce + levels;
+        for (size_t i = 0; i < 600; i++) {
+            const multilruPtr h = handles[splitmix64(&rng) % 200];
+            if (multilruIsPopulated(live, h)) {
+                multilruIncrease(live, h);
+            }
+        }
+        for (size_t i = 0; i < 200; i += 7) {
+            multilruDelete(live, handles[i]);
+        }
+
+        size_t len = 0;
+        cleanerName(zfree, SnapBytes) uint8_t *snap =
+            persistOpsMultiLRU.snapshot(live, &len);
+        cleaner(multilruFree) multilru *back =
+            snap ? persistOpsMultiLRU.restore(snap, len) : NULL;
+        size_t againLen = 0;
+        cleanerName(zfree, SnapBytes) uint8_t *again =
+            back ? persistOpsMultiLRU.snapshot(back, &againLen) : NULL;
+        if (!back || againLen != len || memcmp(snap, again, len) != 0) {
+            ERR("levels %zu: restore did not reproduce the snapshot", levels);
+        }
+
+        /* Draining both gives the same steps: who, and demoted or gone */
+        size_t steps = 0;
+        multilruPtr a;
+        multilruPtr b;
+        while (back && multilruRemoveMinimum(live, &a)) {
+            if (!multilruRemoveMinimum(back, &b) || a != b ||
+                multilruIsPopulated(live, a) != multilruIsPopulated(back, b)) {
+                ERR("levels %zu: step %zu took %zu, live took %zu", levels,
+                    steps, b, a);
+                break;
+            }
+            steps++;
+        }
+        if (back && multilruCount(back) != 0) {
+            ERR("levels %zu: restored LRU outlived the live one", levels);
+        }
+    }
+
+    TEST_FINAL_RESULT;
+}
+
 int multilruPTest(int argc, char *argv[]) {
     int err = 0;
 
+    err += test_multilruP_recency_order(argc, argv);
     err += test_multilruP_demotions_replay(argc, argv);
 
     /* Basic functionality tests */

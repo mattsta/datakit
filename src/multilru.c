@@ -1856,7 +1856,8 @@ void multilruGetStats(const multilru *mlru, multilruStats *stats) {
  * Bulk Queries
  * ==================================================================== */
 
-size_t multilruCollectLowest(multilru *mlru, multilruPtr out[], size_t n) {
+size_t multilruCollectLowest(const multilru *mlru, multilruPtr out[],
+                             size_t n) {
     size_t found = 0;
 
     /* Scan levels from 0 upward */
@@ -1884,7 +1885,8 @@ size_t multilruCollectLowest(multilru *mlru, multilruPtr out[], size_t n) {
     return found;
 }
 
-size_t multilruCollectHighest(multilru *mlru, multilruPtr out[], size_t n) {
+size_t multilruCollectHighest(const multilru *mlru, multilruPtr out[],
+                              size_t n) {
     size_t found = 0;
 
     /* Scan levels from highest downward */
@@ -1916,14 +1918,14 @@ size_t multilruCollectHighest(multilru *mlru, multilruPtr out[], size_t n) {
 }
 
 /* Slots past the last entry found are set to 0, which no live entry uses */
-void multilruGetNLowest(multilru *mlru, multilruPtr out[], size_t n) {
+void multilruGetNLowest(const multilru *mlru, multilruPtr out[], size_t n) {
     const size_t found = multilruCollectLowest(mlru, out, n);
     for (size_t i = found; i < n; i++) {
         out[i] = 0;
     }
 }
 
-void multilruGetNHighest(multilru *mlru, multilruPtr out[], size_t n) {
+void multilruGetNHighest(const multilru *mlru, multilruPtr out[], size_t n) {
     const size_t found = multilruCollectHighest(mlru, out, n);
     for (size_t i = found; i < n; i++) {
         out[i] = 0;
