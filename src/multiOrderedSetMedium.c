@@ -42,7 +42,17 @@ static int getMapIndexForScore(const multiOrderedSetMedium *m,
     /* Get the maximum score in map[0] to determine split */
     size_t count0 = mapCount(m->map[0]);
     if (count0 == 0) {
-        return 0; /* map[0] is empty, use it */
+        /* map[0] is empty (pops or removals drained it): a score below
+         * map[1]'s lowest goes there, any other to map[1], so every
+         * map[1] score stays above map[0]'s highest */
+        if (mapCount(m->map[1]) == 0) {
+            return 0;
+        }
+
+        databox lowest1;
+        databoxWide lowest1Wide;
+        flexGetByTypeInto(flexHead(m->map[1]), &lowest1, &lowest1Wide);
+        return databoxCompare(score, &lowest1) < 0 ? 0 : 1;
     }
 
     /* Get last entry in map[0] */
@@ -183,8 +193,14 @@ multiOrderedSetMediumNewFromSmall(struct multiOrderedSetSmall *small, flex *map,
         SET_MIDDLE_FORCE(m, 0);
         SET_MIDDLE_FORCE(m, 1);
 
-        /* Copy entries to appropriate maps */
+        /* Copy entries to appropriate maps: the first half to map[0], and
+         * past it any row with the score of the row before (map[1] must
+         * hold only scores above map[0]'s: routing by score alone puts a
+         * later member of a shared score in map[0], out of member order
+         * with the ones in map[1]) */
         flexEntry *entry = flexHead(map);
+        flexEntry *prevScoreEntry = NULL;
+        bool upper = false;
         size_t idx = 0;
         while (entry) {
             flexEntry *memberEntry = flexNext(map, entry);
@@ -198,10 +214,17 @@ multiOrderedSetMediumNewFromSmall(struct multiOrderedSetSmall *small, flex *map,
             flexGetByTypeInto(entry, &score, &scoreWide);
             flexGetByTypeInto(memberEntry, &member, &memberWide);
 
-            int targetMap = (idx < splitPoint) ? 0 : 1;
-            insertIntoMap(m, targetMap, &score, &member);
+            if (!upper && idx >= splitPoint) {
+                databox prev = {{0}};
+                databoxWide prevWide;
+                flexGetByTypeInto(prevScoreEntry, &prev, &prevWide);
+                upper = databoxCompare(&score, &prev) != 0;
+            }
+
+            insertIntoMap(m, upper ? 1 : 0, &score, &member);
 
             idx++;
+            prevScoreEntry = entry;
             entry = flexNext(map, memberEntry);
         }
 
@@ -385,7 +408,7 @@ size_t multiOrderedSetMediumRemoveRangeByScore(multiOrderedSetMedium *m,
 
     /* Process both maps */
     for (int mapIdx = 0; mapIdx < 2; mapIdx++) {
-        flexEntry *entry = flexHead(m->map[mapIdx]);
+        flexEntry *entry = flexHeadIfAny(m->map[mapIdx]);
 
         while (entry) {
             flexEntry *memberEntry = flexNext(m->map[mapIdx], entry);
@@ -484,7 +507,7 @@ size_t multiOrderedSetMediumPopMin(multiOrderedSetMedium *m, size_t count,
 
     while (popped < count) {
         /* Pop from map[0] first (lower scores) */
-        flexEntry *head = flexHead(m->map[0]);
+        flexEntry *head = flexHeadIfAny(m->map[0]);
         if (head) {
             flexEntry *memberEntry = flexNext(m->map[0], head);
             if (memberEntry) {
@@ -497,7 +520,7 @@ size_t multiOrderedSetMediumPopMin(multiOrderedSetMedium *m, size_t count,
         }
 
         /* map[0] empty, try map[1] */
-        head = flexHead(m->map[1]);
+        head = flexHeadIfAny(m->map[1]);
         if (head) {
             flexEntry *memberEntry = flexNext(m->map[1], head);
             if (memberEntry) {
@@ -655,7 +678,7 @@ size_t multiOrderedSetMediumCountByScore(const multiOrderedSetMedium *m,
     size_t count = 0;
 
     for (int mapIdx = 0; mapIdx < 2; mapIdx++) {
-        flexEntry *entry = flexHead(m->map[mapIdx]);
+        flexEntry *entry = flexHeadIfAny(m->map[mapIdx]);
 
         while (entry) {
             databox score;
@@ -695,10 +718,10 @@ void multiOrderedSetMediumIteratorInit(const multiOrderedSetMedium *m,
 
     if (forward) {
         iter->mapIndex = 0;
-        iter->current = flexHead(m->map[0]);
+        iter->current = flexHeadIfAny(m->map[0]);
         if (!iter->current) {
             iter->mapIndex = 1;
-            iter->current = flexHead(m->map[1]);
+            iter->current = flexHeadIfAny(m->map[1]);
         }
     } else {
         iter->mapIndex = 1;
@@ -734,7 +757,7 @@ bool multiOrderedSetMediumIteratorInitAtScore(const multiOrderedSetMedium *m,
 
     /* Find first entry with score >= given score */
     for (int mapIdx = targetMap; mapIdx < 2; mapIdx++) {
-        flexEntry *entry = flexHead(m->map[mapIdx]);
+        flexEntry *entry = flexHeadIfAny(m->map[mapIdx]);
         while (entry) {
             databox currentScore;
             databoxWide currentScoreWide;
@@ -819,7 +842,7 @@ bool multiOrderedSetMediumIteratorNext(mosIterator *iter, databox *member,
         if (!next && iter->mapIndex == 0) {
             /* Move to map[1] */
             iter->mapIndex = 1;
-            next = flexHead(m->map[1]);
+            next = flexHeadIfAny(m->map[1]);
         }
         iter->current = next;
     } else {
@@ -854,10 +877,10 @@ bool multiOrderedSetMediumFirst(const multiOrderedSetMedium *m, databox *member,
                                 databox *score) {
     /* First entry is in map[0] */
     int mapIdx = 0;
-    flexEntry *entry = flexHead(m->map[0]);
+    flexEntry *entry = flexHeadIfAny(m->map[0]);
     if (!entry) {
         mapIdx = 1;
-        entry = flexHead(m->map[1]);
+        entry = flexHeadIfAny(m->map[1]);
     }
     if (!entry) {
         return false;
@@ -967,10 +990,218 @@ void multiOrderedSetMediumRepr(const multiOrderedSetMedium *m) {
     printf("}\n");
 }
 
+/* The differential's members: member s holds score s, s < MOSM_N */
+#define MOSM_N 120
+static bool mosmIs_(const databox *member, const databox *score, int64_t s) {
+    char want[16];
+    snprintf(want, sizeof(want), "m%03" PRId64, s);
+    const bool scoreOk = score->type == DATABOX_SIGNED_64 ? score->data.i64 == s
+                         : score->type == DATABOX_UNSIGNED_64
+                             ? s >= 0 && score->data.u64 == (uint64_t)s
+                             : false;
+    return scoreOk && databoxLen(member) == strlen(want) &&
+           memcmp(databoxBytes(member), want, strlen(want)) == 0;
+}
+
+/* Every read of 'm' against 'present'; returns the mismatches */
+static int mosmCheck_(const multiOrderedSetMedium *m, const bool *present,
+                      int step) {
+    int64_t order[MOSM_N];
+    int64_t n = 0;
+    for (int64_t s = 0; s < MOSM_N; s++) {
+        if (present[s]) {
+            order[n++] = s;
+        }
+    }
+    if ((int64_t)multiOrderedSetMediumCount(m) != n) {
+        printf("ERROR: step %d: count %zu, want %" PRId64 "\n", step,
+               multiOrderedSetMediumCount(m), n);
+        return 1;
+    }
+    databox mb;
+    databox sb;
+    if (n ? (!multiOrderedSetMediumFirst(m, &mb, &sb) ||
+             !mosmIs_(&mb, &sb, order[0]) ||
+             !multiOrderedSetMediumLast(m, &mb, &sb) ||
+             !mosmIs_(&mb, &sb, order[n - 1]))
+          : (multiOrderedSetMediumFirst(m, &mb, &sb) ||
+             multiOrderedSetMediumLast(m, &mb, &sb))) {
+        databox fm = {{0}};
+        databox fs = {{0}};
+        databox lm = {{0}};
+        databox ls = {{0}};
+        const bool hf = multiOrderedSetMediumFirst(m, &fm, &fs);
+        const bool hl = multiOrderedSetMediumLast(m, &lm, &ls);
+        printf("ERROR: step %d: first %d (score %" PRId64 "), last %d (score "
+               "%" PRId64 "); want %" PRId64 " entries, %" PRId64 "..%" PRId64
+               "; map sizes %zu/%zu\n",
+               step, hf, fs.data.i64, hl, ls.data.i64, n, n ? order[0] : -1,
+               n ? order[n - 1] : -1, mapCount(m->map[0]), mapCount(m->map[1]));
+        return 1;
+    }
+    for (int dir = 0; dir < 2; dir++) {
+        mosIterator it;
+        multiOrderedSetMediumIteratorInit(m, &it, dir == 0);
+        int64_t k = 0;
+        while (multiOrderedSetMediumIteratorNext(&it, &mb, &sb)) {
+            if (k >= n ||
+                !mosmIs_(&mb, &sb, dir == 0 ? order[k] : order[n - 1 - k])) {
+                printf("ERROR: step %d: iteration %d at %" PRId64 "\n", step,
+                       dir, k);
+                return 1;
+            }
+            k++;
+        }
+        if (k != n) {
+            printf("ERROR: step %d: iteration %d gave %" PRId64 " of %" PRId64
+                   "\n",
+                   step, dir, k, n);
+            return 1;
+        }
+    }
+    for (int64_t r = 0; r < n; r++) {
+        char name[16];
+        snprintf(name, sizeof(name), "m%03" PRId64, order[r]);
+        const databox key = databoxNewBytesString(name);
+        mosIterator it;
+        if (!multiOrderedSetMediumGetByRank(m, r, &mb, &sb) ||
+            !mosmIs_(&mb, &sb, order[r]) ||
+            multiOrderedSetMediumGetRank(m, &key) != r ||
+            multiOrderedSetMediumGetReverseRank(m, &key) != n - 1 - r ||
+            !multiOrderedSetMediumIteratorInitAtRank(m, &it, r, r % 2 == 0) ||
+            !multiOrderedSetMediumIteratorNext(&it, &mb, &sb) ||
+            !mosmIs_(&mb, &sb, order[r])) {
+            printf("ERROR: step %d: rank %" PRId64 "\n", step, r);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int multiOrderedSetMediumTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int err = 0;
+
+    TEST("multiOrderedSetMedium — random ops against a sorted oracle") {
+        /* Adds, removes, pops from both ends and rank/score range removals
+         * empty one map or the other again and again; after every step
+         * every read agrees with the oracle */
+        multiOrderedSetMedium *m = multiOrderedSetMediumNew();
+        bool present[MOSM_N] = {0};
+        uint64_t rng = 0x3d1u;
+        for (int step = 0; step < 1500 && !err; step++) {
+            const uint64_t op = splitmix64(&rng) % 10;
+            if (op < 4) {
+                const int64_t s = (int64_t)(splitmix64(&rng) % MOSM_N);
+                char name[16];
+                snprintf(name, sizeof(name), "m%03" PRId64, s);
+                const databox member = databoxNewBytesString(name);
+                const databox score = databoxNewSigned(s);
+                multiOrderedSetMediumAdd(m, &score, &member);
+                present[s] = true;
+            } else if (op == 4) {
+                const int64_t s = (int64_t)(splitmix64(&rng) % MOSM_N);
+                char name[16];
+                snprintf(name, sizeof(name), "m%03" PRId64, s);
+                const databox member = databoxNewBytesString(name);
+                if (multiOrderedSetMediumRemove(m, &member) != present[s]) {
+                    ERR("step %d: remove of %" PRId64 " wrong", step, s);
+                }
+                present[s] = false;
+            } else if (op == 5 || op == 6) {
+                const size_t want = 1 + splitmix64(&rng) % 4;
+                databox pm[4];
+                databox ps[4];
+                const size_t got =
+                    op == 5 ? multiOrderedSetMediumPopMin(m, want, pm, ps)
+                            : multiOrderedSetMediumPopMax(m, want, pm, ps);
+                for (size_t i = 0; i < got; i++) {
+                    int64_t s = -1;
+                    for (int64_t k = 0; k < MOSM_N; k++) {
+                        const int64_t c = op == 5 ? k : MOSM_N - 1 - k;
+                        if (present[c]) {
+                            s = c;
+                            break;
+                        }
+                    }
+                    if (s < 0 || !mosmIs_(&pm[i], &ps[i], s)) {
+                        ERR("step %d: pop %zu wrong", step, i);
+                    }
+                    if (s >= 0) {
+                        present[s] = false;
+                    }
+                    databoxFreeData(&pm[i]);
+                    databoxFreeData(&ps[i]);
+                }
+            } else if (op == 7) {
+                int64_t n = 0;
+                for (int64_t s = 0; s < MOSM_N; s++) {
+                    n += present[s];
+                }
+                if (n) {
+                    const int64_t a = (int64_t)(splitmix64(&rng) % (uint64_t)n);
+                    const int64_t b = a + (int64_t)(splitmix64(&rng) % 5);
+                    int64_t rank = 0;
+                    size_t want = 0;
+                    /* A stop past the end removes nothing (not clamped) */
+                    for (int64_t s = 0; b < n && s < MOSM_N; s++) {
+                        if (present[s]) {
+                            if (rank >= a && rank <= b) {
+                                present[s] = false;
+                                want++;
+                            }
+                            rank++;
+                        }
+                    }
+                    if (multiOrderedSetMediumRemoveRangeByRank(m, a, b) !=
+                        want) {
+                        ERR("step %d: rank range [%" PRId64 ", %" PRId64 "]",
+                            step, a, b);
+                    }
+                }
+            } else if (op == 8) {
+                const int64_t lo = (int64_t)(splitmix64(&rng) % MOSM_N);
+                const int64_t hi = lo + (int64_t)(splitmix64(&rng) % 8);
+                const mosRangeSpec range = {.min = databoxNewSigned(lo),
+                                            .max = databoxNewSigned(hi)};
+                size_t want = 0;
+                for (int64_t s = lo; s <= hi && s < MOSM_N; s++) {
+                    want += present[s];
+                    present[s] = false;
+                }
+                if (multiOrderedSetMediumRemoveRangeByScore(m, &range) !=
+                    want) {
+                    ERR("step %d: score range [%" PRId64 ", %" PRId64 "]", step,
+                        lo, hi);
+                }
+            } else {
+                /* Drain the low end, then add above everything */
+                databox pm[4];
+                databox ps[4];
+                const size_t got = multiOrderedSetMediumPopMin(m, 4, pm, ps);
+                for (size_t i = 0; i < got; i++) {
+                    for (int64_t k = 0; k < MOSM_N; k++) {
+                        if (present[k]) {
+                            present[k] = false;
+                            break;
+                        }
+                    }
+                    databoxFreeData(&pm[i]);
+                    databoxFreeData(&ps[i]);
+                }
+                const int64_t s = MOSM_N - 1 - (int64_t)(splitmix64(&rng) % 10);
+                char name[16];
+                snprintf(name, sizeof(name), "m%03" PRId64, s);
+                const databox member = databoxNewBytesString(name);
+                const databox score = databoxNewSigned(s);
+                multiOrderedSetMediumAdd(m, &score, &member);
+                present[s] = true;
+            }
+            err += mosmCheck_(m, present, step);
+        }
+        multiOrderedSetMediumFree(m);
+    }
 
     TEST("multiOrderedSetMedium — create and free") {
         multiOrderedSetMedium *mos = multiOrderedSetMediumNew();

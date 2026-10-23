@@ -1857,6 +1857,56 @@ int multiOrderedSetTest(int argc, char *argv[]) {
         err += mosUpdateOracle_(1200, MOS_TYPE_FULL);
     }
 
+    TEST("multiOrderedSet: equal scores stay in member order across a "
+         "Small->Medium split") {
+        /* Promotion splits Small's rows in half whatever their scores, so
+         * equal scores can land in both of Medium's maps; members added
+         * at that score afterwards must still iterate in member order */
+        multiOrderedSet *mos = multiOrderedSetNewLimit(FLEX_CAP_LEVEL_128);
+        const databox five = databoxNewSigned(5);
+        int added = 0;
+        while (mosType_(mos) == MOS_TYPE_SMALL && added < 500) {
+            char buf[16];
+            snprintf(buf, sizeof(buf), "k%03d", added++);
+            const databox member = databoxNewBytesString(buf);
+            multiOrderedSetAdd(&mos, &five, &member);
+        }
+        if (mosType_(mos) != MOS_TYPE_MEDIUM) {
+            ERR("equal-score split: tier %d after %d adds", (int)mosType_(mos),
+                added);
+        }
+        static const char *later[] = {"zzz", "a", "k0005x", "k9"};
+        for (size_t i = 0; i < 4; i++) {
+            const databox member = databoxNewBytesString(later[i]);
+            multiOrderedSetAdd(&mos, &five, &member);
+        }
+        mosIterator iter;
+        multiOrderedSetIteratorInit(mos, &iter, true);
+        databox gotMember;
+        databox gotScore;
+        /* Member order is databoxCompare's (natural sort: "k9" < "k000") */
+        char prev[32] = "";
+        size_t prevLen = 0;
+        size_t seen = 0;
+        bool ordered = true;
+        while (multiOrderedSetIteratorNext(&iter, &gotMember, &gotScore)) {
+            const size_t len = databoxLen(&gotMember);
+            const databox before = databoxNewBytes(prev, prevLen);
+            if (seen && databoxCompare(&before, &gotMember) >= 0) {
+                ordered = false;
+            }
+            prevLen = len < sizeof(prev) ? len : sizeof(prev);
+            memcpy(prev, databoxBytes(&gotMember), prevLen);
+            seen++;
+        }
+        if (!ordered || seen != (size_t)added + 4 ||
+            multiOrderedSetCount(mos) != (size_t)added + 4) {
+            ERR("equal-score split: %zu iterated of %d, ordered %d", seen,
+                added + 4, ordered);
+        }
+        multiOrderedSetFree(mos);
+    }
+
     TEST("multiOrderedSet: tier promotion") {
         /* Use small size limit to force promotion */
         multiOrderedSet *mos = multiOrderedSetNewLimit(FLEX_CAP_LEVEL_128);

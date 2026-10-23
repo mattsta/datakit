@@ -353,7 +353,8 @@ size_t multiOrderedSetRemoveRangeByScore(multiOrderedSet **mos,
                                          const mosRangeSpec *range);
 
 /* Remove members by rank range (0-based, inclusive).
- * Negative ranks count from end (-1 = last).
+ * Negative ranks count from end (-1 = last).  A start or stop outside the
+ * set (rank >= count, or below -count) is not clamped: nothing is removed.
  * Returns count of members removed. */
 size_t multiOrderedSetRemoveRangeByRank(multiOrderedSet **mos, int64_t start,
                                         int64_t stop);
