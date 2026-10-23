@@ -312,11 +312,15 @@ typedef enum persistOp {
     PERSIST_OP_MAX = 255
 } persistOp;
 
-/* Does this op's operand carry a COMPLETE serialized value rather than
- * a delta?  Every replay/compaction/restore fold asks this instead of
- * naming REPLACE directly: such a row RESETS the structure (restore the
- * bytes, discard whatever was folded before it) and can never be routed
- * through applyOp, whose per-type handlers accept only delta verbs.
+/* For a store whose rows each hold one whole structure (an embedding
+ * key-value layer folding a WAL per key): does this row's op carry a
+ * COMPLETE serialized value rather than a delta?  The store's replay,
+ * compaction and restore folds ask this instead of naming REPLACE
+ * directly: such a row RESETS the structure (restore the bytes, discard
+ * whatever was folded before it) and is not routed through applyOp.
+ * (Inside one structure's own WAL, REPLACE is an element verb that
+ * descriptors such as multidict's and multilist's replay through
+ * applyOp; this predicate is about the store's rows, not those.)
  *
  * Two ops answer yes and they are NOT interchangeable on the wire —
  * REPLACE is the absolute, unstamped, anyone-could-have-produced-it

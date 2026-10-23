@@ -5314,6 +5314,17 @@ int persistTest(int argc, char *argv[]) {
         persistClose(p);
     }
 
+    TEST("only REPLACE and OPAQUE_SET rows carry a whole value") {
+        for (uint16_t op = 0; op < 64; op++) {
+            const bool whole =
+                op == PERSIST_OP_REPLACE || op == PERSIST_OP_OPAQUE_SET;
+            if (persistOpCarriesFullValue(op) != whole) {
+                ERR("op %u carries a whole value: %d", op,
+                    persistOpCarriesFullValue(op));
+            }
+        }
+    }
+
     TEST("default config values") {
         persistConfig config = persistDefaultConfig();
         if (config.compression != PERSIST_COMPRESS_NONE) {
