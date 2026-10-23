@@ -5,12 +5,14 @@
  *
  * Usage:
  *   persistCtx *ctx = persistCtxNew("/data/mycache", NULL);
- *   multilruP *cache = multilruNewP(ctx, 7, 10000);  // 7 levels, 10K entries
- * max
+ *   // 7 levels, at most 10K entries
+ *   multilruP *cache = multilruNewWithLevelsP(ctx, 7, 10000);
  *
  *   // Operations are automatically persisted
- *   multilruPtr handle = multilruInsertP(cache);
- *   multilruIncreaseP(cache, handle);  // Promote on cache hit
+ *   multilruPtr handle = 0;
+ *   if (multilruInsertP(cache, &handle) != PERSIST_LOG_REFUSED) {
+ *       multilruIncreaseP(cache, handle);  // Promote on cache hit
+ *   }
  *
  *   // Clean shutdown
  *   multilruCloseP(cache);

@@ -8,7 +8,7 @@
  *   multimapP *m = multimapNewP(ctx, 2);  // key + value
  *
  *   // Operations are automatically persisted
- *   multimapInsertP(m, entries);
+ *   multimapInsertP(m, entries, NULL);  // optional bool *replaced
  *   multimapDeleteP(m, &key);
  *
  *   // Clean shutdown

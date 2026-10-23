@@ -8,10 +8,10 @@
  *   multiOrderedSetP *mos = multiOrderedSetNewP(ctx);
  *
  *   // Operations are automatically persisted
- *   databox score, member;
- *   databoxSetInt64(&score, 100);
- *   databoxSetBytes(&member, "alice", 5);
- *   multiOrderedSetAddP(mos, &score, &member);
+ *   const databox score = databoxNewSigned(100);
+ *   const databox member = databoxNewBytesString("alice");
+ *   bool updated = false;  // true when "alice" already had a score
+ *   multiOrderedSetAddP(mos, &score, &member, &updated);
  *
  *   // Clean shutdown
  *   multiOrderedSetCloseP(mos);

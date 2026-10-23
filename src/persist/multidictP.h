@@ -10,7 +10,7 @@
  *   // Operations are automatically persisted
  *   databox key = DATABOX_WITH_BYTES("hello", 5);
  *   databox val = DATABOX_SIGNED(42);
- *   multidictAddP(d, &key, &val);
+ *   multidictAddP(d, &key, &val, NULL);  // optional multidictResult *
  *
  *   // Clean shutdown
  *   multidictCloseP(d);

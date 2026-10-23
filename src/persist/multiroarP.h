@@ -8,7 +8,7 @@
  *   multiroarP *r = multiroarNewP(ctx);
  *
  *   // Operations are automatically persisted
- *   multiroarBitSetP(r, 42);
+ *   multiroarBitSetP(r, 42, NULL);  // optional bool *added
  *
  *   // Clean shutdown
  *   multiroarCloseP(r);

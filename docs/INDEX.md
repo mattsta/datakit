@@ -63,6 +63,10 @@ These containers use **scale-aware** implementations with small/medium/large var
 - [multilru](modules/multi/MULTILRU.md) - Least Recently Used cache
 - [multiroar](modules/multi/MULTIROAR.md) - Roaring bitmap implementation
 
+#### Persistence
+
+- [persist](modules/persist/PERSIST.md) - Snapshots, WAL, compaction and recovery; the P wrappers and their durability results
+
 ### Integer Sets and Cardinality
 
 - [intset](modules/intset/INTSET.md) - Variable-width integer set (16/32/64-bit)

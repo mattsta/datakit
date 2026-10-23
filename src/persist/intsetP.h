@@ -8,7 +8,7 @@
  *   intsetP *is = intsetNewP(ctx);
  *
  *   // Operations are automatically persisted
- *   intsetAddP(is, 42);
+ *   intsetAddP(is, 42, NULL);  // optional bool *added
  *
  *   // Clean shutdown
  *   intsetCloseP(is);
