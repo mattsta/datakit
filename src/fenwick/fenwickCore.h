@@ -23,11 +23,18 @@
  *   element would not fit the type.  Set always fits.  Float trees also
  *   refuse a non-finite delta, value or element (and a Set whose change
  *   from the current element is not finite).
- * - Get returns the element exactly.  Query and RangeQuery return the
- *   exact sum whenever it fits the type; an integer sum that does not
- *   fit comes back modulo 2^bits (cells add with wrapping, never signed-
- *   overflow UB, and Fenwick sums are linear, so wrapped cells still
- *   give every representable sum exactly).
+ * - Integer trees: Get returns the element exactly.  Query and
+ *   RangeQuery return the exact sum whenever it fits the type; an
+ *   integer sum that does not fit comes back modulo 2^bits (cells add
+ *   with wrapping, never signed-overflow UB, and Fenwick sums are
+ *   linear, so wrapped cells still give every representable sum
+ *   exactly).
+ * - Float and Double trees round: each cell is a sum computed in the
+ *   tree's type, and Get is a difference of cells, so elements and sums
+ *   are exact only while every partial sum is.  An element far smaller
+ *   than its neighbours' sum can read back as 0 (Set(0, 1e16) then
+ *   Set(1, 1.0) leaves Get(1) == 0); Update and Set, which start from
+ *   Get, carry that error.  Use multiFenwickFlat for exact mixed sums.
  * - Query, RangeQuery and Get past the count return zero.  LowerBound
  *   assumes non-negative elements.
  * - Time: Update, Set, Query, RangeQuery and Get are O(log n) (Update

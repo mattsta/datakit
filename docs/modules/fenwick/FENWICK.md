@@ -102,10 +102,16 @@ changes nothing.
 |               | Typed `fenwick<T>`, `fenwick2d<T>`                                                        | Databox trees                                                                                                       |
 | ------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | Accepted      | the C type; float types refuse NaN/inf                                                    | SIGNED_64, UNSIGNED_64, finite FLOAT_32/DOUBLE_64; anything else is refused                                         |
-| Elements      | stored exactly; an Update whose element would leave the type is refused                   | each stored cell must fit `[INT64_MIN, UINT64_MAX]` (or be a finite double); a write pushing one outside is refused |
+| Elements      | integers: exact; Float/Double: a difference of rounded cells (see below); an Update whose element would leave the type is refused | each stored cell must fit `[INT64_MIN, UINT64_MAX]` (or be a finite double); a write pushing one outside is refused |
 | Sums          | exact when they fit the type; otherwise modulo 2^bits (cells add with wrapping, never UB) | exact (int128); a result outside 64 bits returns false (result VOID)                                                |
 | Results       | the C type                                                                                | typed by value: SIGNED_64 when negative, UNSIGNED_64 otherwise, DOUBLE_64 with any floating part                    |
 | Refused write | changes nothing; a NULL tree stays NULL                                                   | the same                                                                                                            |
+
+Float and Double trees round.  Each cell is a sum computed in the tree's
+type and `Get` subtracts cells, so elements and sums are exact only while
+every partial sum is: after `Set(0, 1e16)` and `Set(1, 1.0)`, `Get(1)` reads
+0.  `Update` and `Set` start from `Get`, so they carry the same error.  For
+exact sums over mixed values use `multiFenwickFlat`.
 
 Out of range: 1D `Query`/`Get` past the count return 0 (typed) or false
 (databox); 2D `Query`/`RangeQuery` clamp to the extents and `Get` outside them

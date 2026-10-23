@@ -27,10 +27,13 @@
  *   false, changing nothing; a NULL tree stays NULL) a delta whose new
  *   element would not fit the type; Set always fits.  The Float and
  *   Double trees refuse a non-finite delta, value or element.
- * - Get returns the element exactly.  Query and RangeQuery return the
- *   exact sum whenever it fits the type; an integer sum that does not fit
- *   comes back modulo 2^N for the type's N bits (cells add with wrapping,
- *   never UB).  Float sums are computed in the tree's own type.
+ * - Integer trees: Get returns the element exactly.  Query and
+ *   RangeQuery return the exact sum whenever it fits the type; an integer
+ *   sum that does not fit comes back modulo 2^N for the type's N bits
+ *   (cells add with wrapping, never UB).
+ * - Float and Double trees round as the 1D ones do (fenwickCore.h):
+ *   cells are sums in the tree's type and Get is a difference of cells,
+ *   so elements and sums are exact only while every partial sum is.
  * - A write that would grow the grid past 2^32 cells is refused.
  *
  * RANGES
