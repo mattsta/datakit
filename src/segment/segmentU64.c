@@ -5,4 +5,6 @@
 
 #define SEGMENT_SUFFIX U64
 #define SEGMENT_VALUE_TYPE uint64_t
+#define SEGMENT_IS_FLOATING 0
+#define SEGMENT_PERSIST_TYPE PERSIST_TYPE_SEGMENT_U64
 #include "segmentCoreDispatchImpl.h"

@@ -178,6 +178,68 @@ SGT_DIFF(I128, __int128_t, __uint128_t, -SGT_I128_MAX - 1, SGT_I128_MAX, 0)
 SGT_DIFF(U128, __uint128_t, __uint128_t, 0, ~(__uint128_t)0, 0)
 #endif
 
+/* NewFromArray and CopyTo against the source array and a tree built with
+ * one Update per element.  Every node folds its children, so the two
+ * trees answer every query identically, float sums included: the floats
+ * here are arbitrary, not small integers. */
+#define SGT_BULK(T, VT, IS_FLOAT)                                              \
+    static int sgtBulk##T(segmentOp op, uint64_t seed) {                       \
+        int err = 0;                                                           \
+        static const size_t sizes[] = {0, 1, 5, 1000, 20000};                  \
+        for (size_t s = 0; s < COUNT_ARRAY(sizes); s++) {                      \
+            const size_t n = sizes[s];                                         \
+            cleaner(zfree) void *bufA = zcalloc(n + 1, sizeof(VT));            \
+            cleaner(zfree) void *bufB = zcalloc(n + 1, sizeof(VT));            \
+            VT *values = bufA;                                                 \
+            VT *copied = bufB;                                                 \
+            void *byUpdate = segment##T##New(op);                              \
+            for (size_t i = 0; i < n; i++) {                                   \
+                const uint64_t r = sgtRand_(&seed);                            \
+                values[i] = IS_FLOAT ? (VT)((double)(int64_t)r / 1e9) : (VT)r; \
+                segment##T##Update(&byUpdate, i, values[i]);                   \
+            }                                                                  \
+                                                                               \
+            void *seg = segment##T##NewFromArray(op, n ? values : NULL, n);    \
+            segment##T##CopyTo(seg, copied);                                   \
+            if (!seg || segment##T##Count(seg) != n ||                         \
+                memcmp(copied, values, n * sizeof(VT)) != 0) {                 \
+                ERR(#T ": NewFromArray/CopyTo of %zu elements", n);            \
+            }                                                                  \
+                                                                               \
+            for (size_t q = 0; n && q < 64; q++) {                             \
+                const size_t a = (size_t)(sgtRand_(&seed) % n);                \
+                const size_t z = (size_t)(sgtRand_(&seed) % n);                \
+                const size_t left = a < z ? a : z;                             \
+                const size_t right = a < z ? z : a;                            \
+                const VT x = segment##T##Query(seg, left, right);              \
+                const VT y = segment##T##Query(byUpdate, left, right);         \
+                if (memcmp(&x, &y, sizeof(x)) != 0) {                          \
+                    ERR(#T ": [%zu, %zu] of %zu differs from the Update tree", \
+                        left, right, n);                                       \
+                    break;                                                     \
+                }                                                              \
+            }                                                                  \
+                                                                               \
+            segment##T##Free(seg);                                             \
+            segment##T##Free(byUpdate);                                        \
+        }                                                                      \
+                                                                               \
+        return err;                                                            \
+    }
+
+SGT_BULK(I16, int16_t, 0)
+SGT_BULK(I32, int32_t, 0)
+SGT_BULK(I64, int64_t, 0)
+SGT_BULK(U16, uint16_t, 0)
+SGT_BULK(U32, uint32_t, 0)
+SGT_BULK(U64, uint64_t, 0)
+SGT_BULK(Float, float, 1)
+SGT_BULK(Double, double, 1)
+#ifdef __SIZEOF_INT128__
+SGT_BULK(I128, __int128_t, 0)
+SGT_BULK(U128, __uint128_t, 0)
+#endif
+
 int segmentTypesTest(int argc, char *argv[]) {
     int err = 0;
     (void)argc;
@@ -195,6 +257,11 @@ int segmentTypesTest(int argc, char *argv[]) {
             }                                                                  \
         }                                                                      \
         err += typeErr;                                                        \
+    }                                                                          \
+    TEST("NewFromArray and CopyTo: segment" #T " SUM, MIN and MAX") {          \
+        err += sgtBulk##T(SEGMENT_OP_SUM, 31);                                 \
+        err += sgtBulk##T(SEGMENT_OP_MIN, 32);                                 \
+        err += sgtBulk##T(SEGMENT_OP_MAX, 33);                                 \
     }
 
     SGT_RUN(I16)

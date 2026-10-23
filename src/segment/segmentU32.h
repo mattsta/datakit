@@ -45,6 +45,11 @@ size_t segmentU32Count(const void *seg);
 size_t segmentU32Bytes(const void *seg);
 void segmentU32RangeUpdate(void *seg, size_t left, size_t right,
                            uint32_t value);
+/* A tree of 'count' elements in O(n) (count 0 or NULL: an empty tree) */
+void *segmentU32NewFromArray(segmentOp op, const uint32_t *values,
+                             size_t count);
+/* Every element, as Get returns it, into out[0, Count) in O(n) */
+void segmentU32CopyTo(const void *seg, uint32_t *out);
 
 #ifdef DATAKIT_TEST
 void segmentU32Repr(const void *seg);

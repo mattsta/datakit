@@ -45,6 +45,11 @@ size_t segmentU64Count(const void *seg);
 size_t segmentU64Bytes(const void *seg);
 void segmentU64RangeUpdate(void *seg, size_t left, size_t right,
                            uint64_t value);
+/* A tree of 'count' elements in O(n) (count 0 or NULL: an empty tree) */
+void *segmentU64NewFromArray(segmentOp op, const uint64_t *values,
+                             size_t count);
+/* Every element, as Get returns it, into out[0, Count) in O(n) */
+void segmentU64CopyTo(const void *seg, uint64_t *out);
 
 #ifdef DATAKIT_TEST
 void segmentU64Repr(const void *seg);

@@ -45,6 +45,11 @@ size_t segmentDoubleCount(const void *seg);
 size_t segmentDoubleBytes(const void *seg);
 void segmentDoubleRangeUpdate(void *seg, size_t left, size_t right,
                               double value);
+/* A tree of 'count' elements in O(n) (count 0 or NULL: an empty tree) */
+void *segmentDoubleNewFromArray(segmentOp op, const double *values,
+                                size_t count);
+/* Every element, as Get returns it, into out[0, Count) in O(n) */
+void segmentDoubleCopyTo(const void *seg, double *out);
 
 #ifdef DATAKIT_TEST
 void segmentDoubleRepr(const void *seg);

@@ -178,6 +178,209 @@ void SEGMENT_D_FN_(RangeUpdate)(void *seg, size_t left, size_t right,
     }
 }
 
+/* ====================================================================
+ * Bulk build, element copy and persistence
+ * ==================================================================== */
+#include "../cleaner.h"
+#include "../flex.h"
+#include "../persist.h"
+
+defcleanerName(SEGMENT_VALUE_TYPE *, zfree, SegmentValues);
+
+#define FPV_T SEGMENT_VALUE_TYPE
+#define FPV_IS_FLOATING SEGMENT_IS_FLOATING
+#define FPV_FN(name) SEGMENT_D_FN_(SEGMENT_CAT(Persist, name))
+#include "../fenwick/fenwickPersistValueImpl.h"
+
+void *SEGMENT_D_FN_(NewFromArray)(segmentOp op,
+                                  const SEGMENT_VALUE_TYPE *values,
+                                  size_t count) {
+    if (!values || count == 0) {
+        return SEGMENT_D_FN_(New)(op);
+    }
+
+    uint64_t leaves = 1;
+    while (leaves < count) {
+        leaves <<= 1;
+    }
+
+    /* The tier Update would keep it in (see Update) */
+    if (2 * leaves * sizeof(SEGMENT_VALUE_TYPE) + sizeof(SEGMENT_D_SMALL_) <=
+        256 * 1024) {
+        SEGMENT_D_SMALL_ *small =
+            SEGMENT_D_FN_(SmallNewFromArray)(values, (uint32_t)count, op);
+        return SEGMENT_D_TAG_(small, SEGMENT_D_TAG_SMALL_);
+    }
+
+    SEGMENT_D_FULL_ *full =
+        SEGMENT_D_FN_(FullNewFromArray)(values, (uint64_t)count, op);
+    return SEGMENT_D_TAG_(full, SEGMENT_D_TAG_FULL_);
+}
+
+/* The leaves, count and operation of 'seg' */
+static const SEGMENT_VALUE_TYPE *
+SEGMENT_D_FN_(Leaves_)(const void *seg, uint64_t *count, segmentOp *op) {
+    if (SEGMENT_D_IS_SMALL_(seg)) {
+        const SEGMENT_D_SMALL_ *small = SEGMENT_D_UNTAG_(seg);
+        *count = small->count;
+        *op = small->operation;
+        return &small->tree[small->capacity / 2];
+    }
+
+    const SEGMENT_D_FULL_ *full = SEGMENT_D_UNTAG_(seg);
+    *count = full->count;
+    *op = full->operation;
+    return full->tree ? &full->tree[full->capacity / 2] : NULL;
+}
+
+void SEGMENT_D_FN_(CopyTo)(const void *seg, SEGMENT_VALUE_TYPE *out) {
+    if (!seg) {
+        return;
+    }
+
+    uint64_t count;
+    segmentOp op;
+    const SEGMENT_VALUE_TYPE *leaves = SEGMENT_D_FN_(Leaves_)(seg, &count, &op);
+    if (count) {
+        memcpy(out, leaves, count * sizeof(*out));
+    }
+}
+
+/* Persistence.  Every node is its children's fold, so the elements
+ * determine the tree (float sums included).
+ *   flex [operation, element 0, ..., element count-1]
+ * WAL (args: const databox *const *): UPDATE [index, value] (Update),
+ * UPDATE [left, right, value] (RangeUpdate). */
+static uint8_t *SEGMENT_D_FN_(PersistSnapshot_)(const void *structure,
+                                                size_t *len) {
+    uint64_t count;
+    segmentOp op;
+    const SEGMENT_VALUE_TYPE *leaves =
+        SEGMENT_D_FN_(Leaves_)(structure, &count, &op);
+
+    /* @own: caller; free=zfree */
+    flex *f = flexNew();
+    const databox operation = DATABOX_UNSIGNED((uint64_t)op);
+    flexPushByTypeExact(&f, &operation, FLEX_ENDPOINT_TAIL);
+    SEGMENT_D_FN_(PersistAppend_)(&f, leaves, count);
+    *len = flexBytes(f);
+    return (uint8_t *)f;
+}
+
+static void *SEGMENT_D_FN_(PersistRestore_)(const uint8_t *data, size_t len) {
+    if (!flexValidateBufferDeep(data, len)) {
+        return NULL;
+    }
+
+    const flex *f = (const flex *)data;
+    const size_t n = flexCount(f);
+    if (n < 1) {
+        return NULL;
+    }
+
+    flexEntry *fe = flexHead(f);
+    databoxBig box;
+    flexGetByTypeBig(fe, &box);
+    fe = flexNext(f, fe);
+    /* SUM, MIN or MAX (MAX is the last operation) */
+    if (box.type != DATABOX_UNSIGNED_64 ||
+        box.data.u64 > (uint64_t)SEGMENT_OP_MAX) {
+        return NULL;
+    }
+
+    const segmentOp op = (segmentOp)box.data.u64;
+    const size_t count = n - 1;
+    cleanerName(zfree, SegmentValues) SEGMENT_VALUE_TYPE *values =
+        zmalloc((count ? count : 1) * sizeof(*values));
+    for (size_t i = 0; i < count; i++) {
+        flexGetByTypeBig(fe, &box);
+        fe = flexNext(f, fe);
+        if (!SEGMENT_D_FN_(PersistUnbox_)(&box, &values[i])) {
+            return NULL;
+        }
+    }
+
+    return SEGMENT_D_FN_(NewFromArray)(op, values, count);
+}
+
+static uint8_t *SEGMENT_D_FN_(PersistEncodeOp_)(persistOp op, const void *args,
+                                                size_t argc, size_t *len) {
+    const databox *const *boxes = args;
+    *len = 0;
+    if (op != PERSIST_OP_UPDATE || (argc != 2 && argc != 3) || !boxes) {
+        return NULL;
+    }
+
+    flex *f = flexNewFromDataboxPtrsExact(boxes, argc);
+    if (f) {
+        *len = flexBytes(f);
+    }
+
+    return (uint8_t *)f;
+}
+
+static bool SEGMENT_D_FN_(PersistApplyOp_)(void *structure, persistOp op,
+                                           const uint8_t *data, size_t len) {
+    void **seg = structure;
+    if (op != PERSIST_OP_UPDATE || !flexValidateBufferDeep(data, len)) {
+        return false;
+    }
+
+    const flex *f = (const flex *)data;
+    const size_t argc = flexCount(f);
+    if (argc != 2 && argc != 3) {
+        return false;
+    }
+
+    /* Two or three operands: the index (or range), then the value */
+    databoxBig args[3];
+    flexEntry *fe = flexHead(f);
+    for (size_t i = 0; i < argc; i++) {
+        flexGetByTypeBig(fe, &args[i]);
+        fe = flexNext(f, fe);
+    }
+
+    SEGMENT_VALUE_TYPE v;
+    for (size_t i = 0; i + 1 < argc; i++) {
+        if (args[i].type != DATABOX_UNSIGNED_64 ||
+            args[i].data.u64 > SIZE_MAX) {
+            return false;
+        }
+    }
+
+    if (!SEGMENT_D_FN_(PersistUnbox_)(&args[argc - 1], &v)) {
+        return false;
+    }
+
+    if (argc == 2) {
+        SEGMENT_D_FN_(Update)(seg, (size_t)args[0].data.u64, v);
+    } else {
+        SEGMENT_D_FN_(RangeUpdate)
+        (*seg, (size_t)args[0].data.u64, (size_t)args[1].data.u64, v);
+    }
+
+    return true;
+}
+
+static void *SEGMENT_D_FN_(PersistNewEmpty_)(void) {
+    return SEGMENT_D_FN_(New)(SEGMENT_OP_SUM);
+}
+
+const persistOps SEGMENT_CAT(persistOpsSegment, SEGMENT_SUFFIX) = {
+    .type = SEGMENT_PERSIST_TYPE,
+    .name = "segment" SEGMENT_D_STR_(SEGMENT_SUFFIX),
+    .formatVersion = 1,
+    .minReadVersion = 1,
+    .snapshot = SEGMENT_D_FN_(PersistSnapshot_),
+    .restore = SEGMENT_D_FN_(PersistRestore_),
+    .newEmpty = SEGMENT_D_FN_(PersistNewEmpty_),
+    .count = SEGMENT_D_FN_(Count),
+    .estimateSize = SEGMENT_D_FN_(Bytes),
+    .encodeOp = SEGMENT_D_FN_(PersistEncodeOp_),
+    .applyOp = SEGMENT_D_FN_(PersistApplyOp_),
+    .free = SEGMENT_D_FN_(Free),
+};
+
 #ifdef DATAKIT_TEST
 void SEGMENT_D_FN_(Repr)(const void *seg) {
     if (!seg) {
@@ -207,3 +410,5 @@ void SEGMENT_D_FN_(Repr)(const void *seg) {
 #undef SEGMENT_D_TAG_
 #undef SEGMENT_SUFFIX
 #undef SEGMENT_VALUE_TYPE
+#undef SEGMENT_IS_FLOATING
+#undef SEGMENT_PERSIST_TYPE

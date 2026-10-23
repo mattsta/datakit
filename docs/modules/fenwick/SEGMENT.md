@@ -74,11 +74,28 @@ counter-table update is a Get plus an Update, since Update assigns):
 Sparse growth (random-order writes from empty): 42 ns per write at 100K,
 106 at 4M.
 
+## Bulk build and persistence
+
+`segment<T>NewFromArray(op, values, count)` builds a tree in O(n), and
+`segment<T>CopyTo(seg, out)` copies every element in O(n).
+
+Every node is its children's fold, so the elements determine a tree, float
+sums included: a tree built from an array answers every query bit for bit
+as one built by `Update`.  `persistOpsSegment<T>` (`segment/segmentPersist.h`)
+persist every type that way (see [PERSIST.md](../persist/PERSIST.md)):
+
+- Snapshot: the operation, then the elements; restore through
+  `NewFromArray`.
+- WAL: `UPDATE [index, value]` replays `Update`, `UPDATE [left, right,
+  value]` replays `RangeUpdate`.
+
 ## Testing
 
 - `segmentTypes`: every type and operation against a naive array (range
-  updates, tier crossings, identity past the end, wrapping sums).
+  updates, tier crossings, identity past the end, wrapping sums), and
+  NewFromArray / CopyTo against the source array and an Update-built tree.
 - `segmentI64`: the original I64 suite with smoke-size benchmarks.
+- `persistContract`: the ten `persistOpsSegment<T>` descriptors.
 
 ## See Also
 

@@ -44,6 +44,10 @@ float segmentFloatGet(const void *seg, size_t idx);
 size_t segmentFloatCount(const void *seg);
 size_t segmentFloatBytes(const void *seg);
 void segmentFloatRangeUpdate(void *seg, size_t left, size_t right, float value);
+/* A tree of 'count' elements in O(n) (count 0 or NULL: an empty tree) */
+void *segmentFloatNewFromArray(segmentOp op, const float *values, size_t count);
+/* Every element, as Get returns it, into out[0, Count) in O(n) */
+void segmentFloatCopyTo(const void *seg, float *out);
 
 #ifdef DATAKIT_TEST
 void segmentFloatRepr(const void *seg);

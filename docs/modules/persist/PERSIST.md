@@ -221,7 +221,8 @@ Built-in descriptors: `persistOpsFlex`, `persistOpsIntset`,
 states), `persistOpsFenwick<T>` / `persistOpsFenwick2d<T>` for the typed
 Fenwick trees (`fenwick/fenwickPersist.h`) and `persistOpsMultiFenwick`,
 `persistOpsMultiFenwickFlat`, `persistOpsMultiFenwick2d` for the databox
-ones (see FENWICK.md).
+ones (see FENWICK.md), and `persistOpsSegment<T>` for the typed segment trees
+(`segment/segmentPersist.h`; see SEGMENT.md).
 
 ## Writing a persistOps Descriptor
 

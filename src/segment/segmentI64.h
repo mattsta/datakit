@@ -44,6 +44,10 @@ int64_t segmentI64Get(const void *seg, size_t idx);
 size_t segmentI64Count(const void *seg);
 size_t segmentI64Bytes(const void *seg);
 void segmentI64RangeUpdate(void *seg, size_t left, size_t right, int64_t value);
+/* A tree of 'count' elements in O(n) (count 0 or NULL: an empty tree) */
+void *segmentI64NewFromArray(segmentOp op, const int64_t *values, size_t count);
+/* Every element, as Get returns it, into out[0, Count) in O(n) */
+void segmentI64CopyTo(const void *seg, int64_t *out);
 
 #ifdef DATAKIT_TEST
 void segmentI64Repr(const void *seg);

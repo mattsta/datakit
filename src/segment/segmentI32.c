@@ -5,4 +5,6 @@
 
 #define SEGMENT_SUFFIX I32
 #define SEGMENT_VALUE_TYPE int32_t
+#define SEGMENT_IS_FLOATING 0
+#define SEGMENT_PERSIST_TYPE PERSIST_TYPE_SEGMENT_I32
 #include "segmentCoreDispatchImpl.h"

@@ -47,6 +47,11 @@ size_t segmentU128Count(const void *seg);
 size_t segmentU128Bytes(const void *seg);
 void segmentU128RangeUpdate(void *seg, size_t left, size_t right,
                             __uint128_t value);
+/* A tree of 'count' elements in O(n) (count 0 or NULL: an empty tree) */
+void *segmentU128NewFromArray(segmentOp op, const __uint128_t *values,
+                              size_t count);
+/* Every element, as Get returns it, into out[0, Count) in O(n) */
+void segmentU128CopyTo(const void *seg, __uint128_t *out);
 
 #ifdef DATAKIT_TEST
 void segmentU128Repr(const void *seg);

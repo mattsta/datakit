@@ -1950,6 +1950,26 @@ const char *persistTypeName(persistType type) {
         return "multiFenwickFlat";
     case PERSIST_TYPE_MULTIFENWICK_2D:
         return "multiFenwick2d";
+    case PERSIST_TYPE_SEGMENT_I16:
+        return "segmentI16";
+    case PERSIST_TYPE_SEGMENT_I32:
+        return "segmentI32";
+    case PERSIST_TYPE_SEGMENT_I64:
+        return "segmentI64";
+    case PERSIST_TYPE_SEGMENT_I128:
+        return "segmentI128";
+    case PERSIST_TYPE_SEGMENT_U16:
+        return "segmentU16";
+    case PERSIST_TYPE_SEGMENT_U32:
+        return "segmentU32";
+    case PERSIST_TYPE_SEGMENT_U64:
+        return "segmentU64";
+    case PERSIST_TYPE_SEGMENT_U128:
+        return "segmentU128";
+    case PERSIST_TYPE_SEGMENT_FLOAT:
+        return "segmentFloat";
+    case PERSIST_TYPE_SEGMENT_DOUBLE:
+        return "segmentDouble";
     default:
         return "unknown";
     }
