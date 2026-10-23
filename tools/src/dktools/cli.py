@@ -10,6 +10,7 @@ from . import (
     allocaudit,
     coverage,
     leakcheck,
+    perfcompare,
     perfdiff,
     procs,
     testtime,
@@ -178,6 +179,50 @@ def main(argv: list[str] | None = None) -> int:
     )
     vf.add_argument("-j", "--jobs", type=int, default=None, help="parallel jobs")
     toolchain.add_arguments(vf)
+
+    pc = sub.add_parser(
+        "perfcompare",
+        help="time a base revision and the working tree on the same "
+        "perfRegression benchmarks (exit 0 ok, 1 regression or failure, "
+        "2 input error)",
+    )
+    pc.add_argument("name", help="work-dir name under ROOT/perfcompare")
+    pc.add_argument("--base", required=True, help="base revision")
+    pc.add_argument(
+        "--modules",
+        default=None,
+        help="comma-separated perfRegression modules (default: all)",
+    )
+    pc.add_argument(
+        "--runs", type=int, default=5, help="runs per side, alternated (default 5)"
+    )
+    pc.add_argument(
+        "--tolerance",
+        type=float,
+        default=None,
+        help="exit 1 when a row's median grows by more than PCT percent",
+    )
+    pc.add_argument(
+        "--bench-path",
+        action="append",
+        default=None,
+        help="benchmark source taken from the working tree into the base "
+        "(repeatable; default src/perfRegression.c and .h)",
+    )
+    pc.add_argument(
+        "--compiler",
+        choices=toolchain.COMPILERS,
+        default=toolchain.DEFAULT_COMPILER,
+        help=f"named compiler (default {toolchain.DEFAULT_COMPILER})",
+    )
+    pc.add_argument(
+        "--root",
+        type=Path,
+        default=None,
+        help="scratch root (env DKTOOLS_SCRATCH, default: dktools/ in the temp dir)",
+    )
+    pc.add_argument("-j", "--jobs", type=int, default=None, help="parallel jobs")
+    toolchain.add_arguments(pc)
 
     lc = sub.add_parser(
         "leakcheck",
@@ -437,6 +482,22 @@ def _dispatch(args: argparse.Namespace) -> int:
 
     if args.command == "perfdiff":
         return perfdiff.run(args.baseline, args.current, args.tolerance)
+
+    if args.command == "perfcompare":
+        return perfcompare.run(
+            args.repo,
+            perfcompare.PerfCompareOptions(
+                name=args.name,
+                base=args.base,
+                modules=args.modules,
+                runs=args.runs,
+                tolerance=args.tolerance,
+                bench_paths=args.bench_path or list(perfcompare.DEFAULT_BENCH_PATHS),
+                compiler=toolchain.from_args(args.compiler, args),
+                root=args.root,
+                jobs=args.jobs,
+            ),
+        )
 
     if args.command == "testtime":
         if args.top < 1 or args.timeout <= 0:

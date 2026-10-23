@@ -21,10 +21,14 @@
 #include "hmac.h"
 #include "hmacKeyring.h"
 #include "membound.h"
+#include "multiOrderedSet.h"
+#include "multidict.h"
 #include "rapidhash.h"
 #include "sha256.h"
 
+#include <inttypes.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -61,6 +65,27 @@ static DK_FN_UNUSED void perfRegPtrArray_cleanup(perfRegPtrArray *pa) {
         }
         zfree(pa->items);
     }
+}
+
+/* True when DK_PERF_MODULES is unset or names 'module' */
+static bool perfWanted(const char *module) {
+    const char *list = getenv("DK_PERF_MODULES");
+    if (!list || !*list) {
+        return true;
+    }
+
+    const size_t len = strlen(module);
+    for (const char *p = list; *p;) {
+        const char *end = strchr(p, ',');
+        const size_t n = end ? (size_t)(end - p) : strlen(p);
+        if (n == len && strncmp(p, module, n) == 0) {
+            return true;
+        }
+
+        p += n + (end ? 1 : 0);
+    }
+
+    return false;
 }
 
 static double monoNowSec(void) {
@@ -555,6 +580,178 @@ static void benchMembound(const char *name, membound *pool, size_t bytes) {
     (void)sink;
 }
 
+/* Container rows: one operation type per row over PERF_CONTAINER_N
+ * distinct 16-byte keys, in a fixed order.  "op" = one call. */
+#define PERF_CONTAINER_N 100000u
+#define PERF_CONTAINER_KEY 16u
+
+defcleanerName(char *, zfree, PerfKeys);
+defcleaner(multiOrderedSet *, multiOrderedSetFree);
+defcleaner(multidict *, multidictFree);
+defcleaner(multidictClass *, multidictDefaultClassFree);
+
+/* PERF_CONTAINER_N keys, each PERF_CONTAINER_KEY bytes plus a NUL */
+static char *perfContainerKeys(void) {
+    /* @own: caller; free=zfree */
+    char *keys = zmalloc(PERF_CONTAINER_N * (PERF_CONTAINER_KEY + 1));
+    for (uint32_t i = 0; i < PERF_CONTAINER_N; i++) {
+        snprintf(keys + i * (PERF_CONTAINER_KEY + 1), PERF_CONTAINER_KEY + 1,
+                 "key%013" PRIu32, i);
+    }
+
+    return keys;
+}
+
+static databox perfContainerKey(const char *keys, uint32_t i) {
+    return databoxNewBytes(keys + i * (PERF_CONTAINER_KEY + 1),
+                           PERF_CONTAINER_KEY);
+}
+
+/* Sink for results the timed loops produce, so none is optimised out */
+static volatile uint64_t perfContainerSink;
+
+static void benchMultidict(void) {
+    cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
+    const uint32_t n = PERF_CONTAINER_N;
+    /* Released in reverse: the dict before its class */
+    cleaner(multidictDefaultClassFree) multidictClass *qdc =
+        multidictDefaultClassNew();
+    cleaner(multidictFree) multidict *d =
+        multidictNew(&multidictTypeExactKey, qdc, 7);
+    uint64_t sink = 0;
+
+    double t0 = monoNowSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox k = perfContainerKey(keys, i);
+        const databox v = databoxNewSigned(i);
+        sink += multidictAdd(d, &k, &v);
+    }
+    emitRow("multidict", "add", 0, n, monoNowSec() - t0);
+
+    t0 = monoNowSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox k = perfContainerKey(keys, i);
+        databox v = {{0}};
+        sink += multidictFind(d, &k, &v);
+    }
+    emitRow("multidict", "find", 0, n, monoNowSec() - t0);
+
+    t0 = monoNowSec();
+    for (uint32_t r = 0; r < 3; r++) {
+        for (uint32_t i = 0; i < n; i++) {
+            const databox k = perfContainerKey(keys, i);
+            int64_t out = 0;
+            sink += multidictIncrBy(d, &k, 1, &out);
+        }
+    }
+    emitRow("multidict", "incrBy", 0, 3 * n, monoNowSec() - t0);
+
+    t0 = monoNowSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox k = perfContainerKey(keys, i);
+        const databox v = databoxNewSigned(-(int64_t)i);
+        sink += multidictAddXX(d, &k, &v);
+    }
+    emitRow("multidict", "addXX", 0, n, monoNowSec() - t0);
+
+    t0 = monoNowSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox k = perfContainerKey(keys, i);
+        double out = 0;
+        sink += multidictIncrByFloat(d, &k, 0.5, &out);
+    }
+    emitRow("multidict", "incrByFloat", 0, n, monoNowSec() - t0);
+
+    t0 = monoNowSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox k = perfContainerKey(keys, i);
+        sink += multidictDelete(d, &k);
+    }
+    emitRow("multidict", "delete", 0, n, monoNowSec() - t0);
+
+    /* Presized: adds without growth, then removals that take the value */
+    multidictExpand(d, n / 2);
+    t0 = monoNowSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox k = perfContainerKey(keys, i);
+        const databox v = databoxNewSigned(i);
+        sink += multidictAdd(d, &k, &v);
+    }
+    emitRow("multidict", "addPresized", 0, n, monoNowSec() - t0);
+
+    t0 = monoNowSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox k = perfContainerKey(keys, i);
+        databox v;
+        if (multidictGetAndDelete(d, &k, &v)) {
+            sink++;
+            databoxFreeData(&v);
+        }
+    }
+    emitRow("multidict", "getAndDelete", 0, n, monoNowSec() - t0);
+
+    perfContainerSink = sink;
+}
+
+/* A Full-tier set: adds of new members, then updates of existing ones
+ * (new scores by Add, AddXX and IncrBy), score reads and removals */
+static void benchMultiOrderedSet(void) {
+    cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
+    const uint32_t n = PERF_CONTAINER_N;
+    cleaner(multiOrderedSetFree) multiOrderedSet *mos = multiOrderedSetNew();
+    uint64_t sink = 0;
+
+    double t0 = monoNowSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox s = databoxNewSigned(i);
+        const databox m = perfContainerKey(keys, i);
+        sink += multiOrderedSetAdd(&mos, &s, &m);
+    }
+    emitRow("multiOrderedSet", "add", 0, n, monoNowSec() - t0);
+
+    t0 = monoNowSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox s = databoxNewSigned((int64_t)((i * 7919u) % n));
+        const databox m = perfContainerKey(keys, i);
+        sink += multiOrderedSetAdd(&mos, &s, &m);
+    }
+    emitRow("multiOrderedSet", "update", 0, n, monoNowSec() - t0);
+
+    t0 = monoNowSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox s = databoxNewSigned((int64_t)((i * 104729u) % n));
+        const databox m = perfContainerKey(keys, i);
+        sink += multiOrderedSetAddXX(&mos, &s, &m);
+    }
+    emitRow("multiOrderedSet", "addXX", 0, n, monoNowSec() - t0);
+
+    t0 = monoNowSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox delta = databoxNewSigned(3);
+        const databox m = perfContainerKey(keys, i);
+        databox result = {{0}};
+        sink += multiOrderedSetIncrBy(&mos, &delta, &m, &result);
+    }
+    emitRow("multiOrderedSet", "incrBy", 0, n, monoNowSec() - t0);
+
+    t0 = monoNowSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox m = perfContainerKey(keys, i);
+        databox s = {{0}};
+        sink += multiOrderedSetGetScore(mos, &m, &s);
+    }
+    emitRow("multiOrderedSet", "getScore", 0, n, monoNowSec() - t0);
+
+    t0 = monoNowSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox m = perfContainerKey(keys, i);
+        sink += multiOrderedSetRemove(&mos, &m);
+    }
+    emitRow("multiOrderedSet", "remove", 0, n, monoNowSec() - t0);
+
+    perfContainerSink = sink;
+}
+
 int perfRegressionTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -577,19 +774,19 @@ int perfRegressionTest(int argc, char *argv[]) {
         const uint32_t n_sizes =
             (uint32_t)(sizeof(sizes_hash) / sizeof(sizes_hash[0]));
 
-        for (uint32_t i = 0; i < n_sizes; i++) {
+        for (uint32_t i = 0; perfWanted("blake3") && i < n_sizes; i++) {
             benchBlake3(sizes_hash[i]);
         }
-        for (uint32_t i = 0; i < n_sizes; i++) {
+        for (uint32_t i = 0; perfWanted("sha256") && i < n_sizes; i++) {
             benchSha256(sizes_hash[i]);
         }
-        for (uint32_t i = 0; i < n_sizes; i++) {
+        for (uint32_t i = 0; perfWanted("xxh64") && i < n_sizes; i++) {
             benchXxh64(sizes_hash[i]);
         }
-        for (uint32_t i = 0; i < n_sizes; i++) {
+        for (uint32_t i = 0; perfWanted("xxh3_64") && i < n_sizes; i++) {
             benchXxh3_64(sizes_hash[i]);
         }
-        for (uint32_t i = 0; i < n_sizes; i++) {
+        for (uint32_t i = 0; perfWanted("xxh3_128") && i < n_sizes; i++) {
             benchXxh3_128(sizes_hash[i]);
         }
 
@@ -606,7 +803,9 @@ int perfRegressionTest(int argc, char *argv[]) {
             8u,   16u,  32u,  48u,  49u,  64u,   80u,    81u,    96u,     112u,
             113u, 128u, 224u, 225u, 256u, 1024u, 16384u, 65536u, 1048576u};
         const uint32_t n_rh =
-            (uint32_t)(sizeof(sizes_rh) / sizeof(sizes_rh[0]));
+            perfWanted("rapidhash")
+                ? (uint32_t)(sizeof(sizes_rh) / sizeof(sizes_rh[0]))
+                : 0;
         for (uint32_t i = 0; i < n_rh; i++) {
             benchRapidhashOneShot("main", rapidhash, sizes_rh[i]);
             benchRapidhashOneShot("micro", rapidhashMicro, sizes_rh[i]);
@@ -637,7 +836,9 @@ int perfRegressionTest(int argc, char *argv[]) {
          * that the bulk path is actually exercised. */
         const size_t sizes_rh_stream[] = {1024u, 16384u, 1048576u};
         for (uint32_t i = 0;
-             i < sizeof(sizes_rh_stream) / sizeof(sizes_rh_stream[0]); i++) {
+             perfWanted("rapidhash") &&
+             i < sizeof(sizes_rh_stream) / sizeof(sizes_rh_stream[0]);
+             i++) {
             benchRapidhashStream("stream-main", RAPIDHASH_VARIANT_MAIN,
                                  RAPIDHASH_MODE_FAST, sizes_rh_stream[i]);
             benchRapidhashStream("stream-micro", RAPIDHASH_VARIANT_MICRO,
@@ -648,13 +849,17 @@ int perfRegressionTest(int argc, char *argv[]) {
         /* 4-lane multi-buffer SHA-256: aggregate throughput across the
          * four parallel streams.  64 B = one block per lane; 65536 B is
          * the bulk-throughput sweet spot. */
-        benchSha256Multi4(64u);
-        benchSha256Multi4(65536u);
+        if (perfWanted("sha256")) {
+            benchSha256Multi4(64u);
+            benchSha256Multi4(65536u);
+        }
 
         /* HMAC: prepared-key advantage shows on small messages. */
         const size_t sizes_hmac[] = {64u, 256u, 1024u, 65536u};
         for (uint32_t i = 0;
-             i < (uint32_t)(sizeof(sizes_hmac) / sizeof(sizes_hmac[0])); i++) {
+             perfWanted("hmac") &&
+             i < (uint32_t)(sizeof(sizes_hmac) / sizeof(sizes_hmac[0]));
+             i++) {
             benchHmacSha256Plain(sizes_hmac[i]);
             benchHmacSha256Prepared(sizes_hmac[i]);
         }
@@ -673,14 +878,16 @@ int perfRegressionTest(int argc, char *argv[]) {
             {FLEX_ENV_ALGO_HMAC_SHA256, "hmac_sha256"},
             {FLEX_ENV_ALGO_HMAC_BLAKE3, "hmac_blake3"},
         };
-        for (uint32_t a = 0; a < sizeof(algos) / sizeof(algos[0]); a++) {
+        for (uint32_t a = 0;
+             perfWanted("envelope") && a < sizeof(algos) / sizeof(algos[0]);
+             a++) {
             for (uint32_t s = 0; s < n_sizes; s++) {
                 benchEnvelope(algos[a].algo, algos[a].label, sizes_hash[s]);
             }
         }
 
         /* AEAD across the same sizes. */
-        for (uint32_t i = 0; i < n_sizes; i++) {
+        for (uint32_t i = 0; perfWanted("aead") && i < n_sizes; i++) {
             benchAead(sizes_hash[i]);
         }
 
@@ -688,8 +895,19 @@ int perfRegressionTest(int argc, char *argv[]) {
          * representative message sizes. */
         const size_t sizes_mb[] = {64u, 1024u, 65536u};
         for (uint32_t i = 0;
-             i < (uint32_t)(sizeof(sizes_mb) / sizeof(sizes_mb[0])); i++) {
+             perfWanted("mailbox") &&
+             i < (uint32_t)(sizeof(sizes_mb) / sizeof(sizes_mb[0]));
+             i++) {
             benchMailbox(sizes_mb[i]);
+        }
+
+        /* Containers whose layered operations are tuned */
+        if (perfWanted("multidict")) {
+            benchMultidict();
+        }
+
+        if (perfWanted("multiOrderedSet")) {
+            benchMultiOrderedSet();
         }
 
         /* membound allocator: per-op alloc/free cost for the three
@@ -697,6 +915,10 @@ int perfRegressionTest(int argc, char *argv[]) {
          * locks), and ENTERPRISE+threadCache (the lock-free fast path).
          * Single-thread by design; the MT comparison is in memboundBench. */
         const size_t sizes_mb_alloc[] = {64u, 256u, 1024u};
+        const uint32_t n_mb_alloc =
+            perfWanted("membound")
+                ? (uint32_t)(sizeof(sizes_mb_alloc) / sizeof(sizes_mb_alloc[0]))
+                : 0;
         membound *mbStd = memboundCreateDynamic(8u << 20, 0, 8u << 20);
         membound *mbEnt = memboundCreateEnterprise(8u << 20, 0);
         const memboundConfig mbTcCfg = {.mode = MEMBOUND_MODE_DYNAMIC,
@@ -706,9 +928,7 @@ int perfRegressionTest(int argc, char *argv[]) {
                                         .growthSize = 8u << 20,
                                         .threadCache = true};
         membound *mbTc = memboundCreateWithConfig(&mbTcCfg);
-        for (uint32_t i = 0;
-             i < (uint32_t)(sizeof(sizes_mb_alloc) / sizeof(sizes_mb_alloc[0]));
-             i++) {
+        for (uint32_t i = 0; i < n_mb_alloc; i++) {
             benchMembound("standard", mbStd, sizes_mb_alloc[i]);
             benchMembound("enterprise", mbEnt, sizes_mb_alloc[i]);
             benchMembound("threadcache", mbTc, sizes_mb_alloc[i]);

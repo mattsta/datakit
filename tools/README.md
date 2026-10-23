@@ -369,3 +369,34 @@ uv run dktools perfdiff BASELINE.tsv CURRENT.tsv [--tolerance PCT]
   Paths are relative to `tools/` when run as shown; from the repository
   root, where the TSVs are generated, use
   `uv run --project tools dktools perfdiff perf.baseline.tsv perf.current.tsv`.
+
+## perfcompare — a change's performance against a base revision
+
+Builds a base revision and the working tree side by side and times them
+on the same perfRegression benchmarks:
+
+```sh
+uv run dktools perfcompare NAME --base REV [--modules M[,M...]] \
+    [--runs N] [--tolerance PCT] [--bench-path PATH ...] \
+    [--compiler clang22|gcc15] [--root DIR] [-j N]
+```
+
+- `current` is HEAD plus every changed tracked path (as `verify
+  --all-changed`); `base` is REV with the benchmark sources
+  (`--bench-path`, default `src/perfRegression.c` and `.h`) taken from
+  the working tree, so a benchmark added for the change also times the
+  base.  Both build only `datakit-test`, with the perf preset (gcc15:
+  release), under `ROOT/perfcompare/NAME/{base,current}`.
+- `datakit-test test perfRegression` runs on the two builds alternately,
+  `--runs` times each (default 5; the first side alternates by round),
+  limited to `--modules` through `DK_PERF_MODULES`.  Each run is kept as
+  `run-<side>-<round>.tsv`.
+- Prints, and writes to `result.txt`, the median ns/op of each side per
+  row (module, name, bytes) with the change in percent, and the rows only
+  one side has.
+- Exits 0; 1 when `--tolerance PCT` is given and a row's median grew by
+  more than PCT percent, or when a build or run fails; 2 on an input
+  error.
+
+Use it for every before/after claim about a change: the benchmark lands
+in perfRegression with the change, and the comparison is reproducible.
