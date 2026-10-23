@@ -478,13 +478,16 @@ bool hmacKeyringGetAesGcmKeyCopy(hmacKeyring *ring, hmacKeyId id,
  *
  * Persistence: the counter is process-local memory. After process
  * restart the counter starts at zero unless the caller invokes
- * RestoreAeadCounter with a saved high-water mark. Production callers
- * MUST either (a) restore on startup from durable state, OR (b) rotate
- * the key on restart, OR (c) supply a unique per-process salt at
- * install time. Failing any of these reuses a (key, nonce) pair —
- * which destroys both confidentiality and integrity for ChaCha20-
- * Poly1305. The AEAD nonce-reuse detection layer (see aeadNonceLog.h)
- * sits on top of this. */
+ * RestoreAeadCounter with a saved high-water mark, and a snapshot only
+ * records the counter as it stood when taken (nonces issued after it are
+ * not covered). Production callers MUST either (a) install a durable
+ * reservation (hmacKeyringSetAeadReservation below; with persist,
+ * hmacKeyringReserveThroughPersist), OR (b) rotate the key on restart,
+ * OR (c) supply a unique per-process salt at install time. Failing any
+ * of these reuses a (key, nonce) pair — which destroys both
+ * confidentiality and integrity for ChaCha20-Poly1305. The AEAD
+ * nonce-reuse detection layer (see aeadNonceLog.h) sits on top of
+ * this. */
 
 /* Reserve the next AEAD nonce for `id`. Refuses if:
  * - `id` is not installed
@@ -524,6 +527,49 @@ bool hmacKeyringPeekAeadCounter(hmacKeyring *ring, hmacKeyId id,
 bool hmacKeyringRestoreAeadCounter(hmacKeyring *ring, hmacKeyId id,
                                    uint64_t value);
 
+/* ---- Durable nonce reservation -----------------------------------------
+ *
+ * The counter lives in memory and a snapshot records it as it stood, so
+ * every nonce issued after a snapshot is issued again after a restore from
+ * that snapshot (a crash restarts from the last one): a (key, nonce) reuse.
+ * A reservation closes that.  With a reservation function installed,
+ * NextAeadNonce issues only counter values below the slot's confirmed
+ * limit.  On reaching it, the issuing thread calls fn(ctx, id, counter +
+ * window) and issues again only if fn returns true, which fn does only once
+ * "every nonce below limit may have been used" is durable: stored so that
+ * a restore starts the counter at or above `limit`.  A false return makes
+ * that NextAeadNonce fail (fail-closed); the next call tries again.
+ *
+ * Snapshot records, per slot, the larger of the counter and every limit
+ * handed to fn (including one fn is still making durable), so a snapshot
+ * taken at any moment restores the counter above every nonce issued or
+ * about to be.  A reservation made for a key that was retired, reinstalled
+ * or re-salted meanwhile is not applied to the new one; its next nonce
+ * reserves again.
+ *
+ * fn runs on the issuing thread holding the ring's reservation lock (one
+ * reservation at a time per ring) and no keyring lock, so it may snapshot
+ * this ring.  Installing a function makes every slot reserve before its
+ * next nonce.  fn NULL turns reservation off (`window` is then ignored):
+ * the counter is again process-local, as the Persistence note above says.
+ * Returns false for a NULL ring, or a zero window with fn set.  The setting
+ * is not persisted: install it again after a restore. */
+typedef bool (*hmacKeyringAeadReserveFn)(void *ctx, hmacKeyId id,
+                                         uint64_t limit);
+bool hmacKeyringSetAeadReservation(hmacKeyring *ring, uint64_t window,
+                                   hmacKeyringAeadReserveFn fn, void *ctx);
+
+/* A reservation function for a keyring persisted through `persist` (ctx is
+ * the `persist *` whose descriptor is persistOpsHmacKeyring).  It logs the
+ * limit as the descriptor's WAL op and returns true only once the op is
+ * synced (it syncs a buffered op itself; a failed sync returns false), so
+ * recovery (snapshot, then WAL replay) starts the counter at or above the
+ * limit.  persist is single-threaded: no other thread may use that
+ * persist while a reservation can run, unless the caller serializes it
+ * (for example with a wrapper function that takes the caller's lock). */
+bool hmacKeyringReserveThroughPersist(void *persist, hmacKeyId id,
+                                      uint64_t limit);
+
 /* ---- Snapshot / restore -------------------------------------------------
  *
  * Snapshot serialises every installed slot through datakit's `flex`
@@ -536,7 +582,9 @@ bool hmacKeyringRestoreAeadCounter(hmacKeyring *ring, hmacKeyId id,
  * 1. id (unsigned, non-zero)
  * 2. algo_tag (unsigned: 0 = SHA-256, 1 = BLAKE3)
  * 3. salt (bytes, exactly 4; all zero for an unsalted slot)
- * 4. aead_counter (unsigned)
+ * 4. aead_counter (unsigned): where a restore starts the counter, the
+ *    larger of the counter and every reservation limit (see Durable
+ *    nonce reservation)
  * 5. key (bytes, raw key)
  *
  * Total flex entry count is 1 + 5 * N.  Restore bounds every entry of
@@ -575,7 +623,13 @@ bool hmacKeyringRestore(hmacKeyring *ring, const uint8_t *buf, size_t len);
  * pipeline. Snapshot/restore route through hmacKeyringSnapshot /
  * hmacKeyringRestore above (which use flex); the persist framework
  * wraps every byte through a flexEnvelope under the operator's chosen
- * integrity algorithm. See persist.h for the surrounding contract. */
+ * integrity algorithm. See persist.h for the surrounding contract.
+ *
+ * Installs, retires, salt changes and the floor are made durable with a
+ * new snapshot.  The WAL carries one op, a nonce reservation
+ * (PERSIST_OP_UPDATE with args [id, limit], both unsigned), which
+ * hmacKeyringReserveThroughPersist logs; replay raises that slot's counter
+ * to at least `limit` (a retired id is skipped). */
 extern const struct persistOps persistOpsHmacKeyring;
 
 #ifdef DATAKIT_TEST

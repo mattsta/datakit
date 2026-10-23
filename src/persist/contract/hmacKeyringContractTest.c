@@ -1,8 +1,12 @@
 /* hmacKeyringContractTest.c - persistOpsHmacKeyring in the persistence
  * contract
  *
- * Snapshot-only: every keyring change is made durable with a new
- * snapshot, so contracts 1 and 3 apply. */
+ * Installs, retires, counter restores and the floor are made durable with
+ * a new snapshot, so the generator makes them before the starting
+ * snapshot.  Nonce reservations are the WAL: after the start, nonces are
+ * issued under a reservation function that records each reservation as
+ * the op hmacKeyringReserveThroughPersist would log, so contracts 1-3
+ * apply. */
 
 #include "persistContract.h"
 
@@ -13,10 +17,18 @@
 
 #include <string.h>
 
+/* Records each reservation as the WAL op persistOpsHmacKeyring replays. */
+static bool pcKeyringReserve(void *ctx, hmacKeyId id, uint64_t limit) {
+    const databox idBox = DATABOX_UNSIGNED(id);
+    const databox limitBox = DATABOX_UNSIGNED(limit);
+    const databox *const args[2] = {&idBox, &limitBox};
+    persistContractRecord(ctx, PERSIST_OP_UPDATE, args, 2);
+    return true;
+}
+
 static void *pcKeyringBuild(const persistContractBuild *b) {
     /* @own: caller; free=hmacKeyringFree */
     hmacKeyring *ring = hmacKeyringCreate();
-    persistContractStart(b->log, ring);
 
     uint64_t rng = b->seed;
     hmacKeyId floor = 0;
@@ -50,6 +62,17 @@ static void *pcKeyringBuild(const persistContractBuild *b) {
             hmacKeyringSetMinValidKeyId(ring, floor);
         }
     }
+
+    /* The WAL part: nonces under reservations of a seeded window */
+    persistContractStart(b->log, ring);
+    const uint64_t window = 1 + splitmix64(&rng) % 16;
+    hmacKeyringSetAeadReservation(ring, window, pcKeyringReserve, b->log);
+    for (size_t i = 0; i < b->size; i++) {
+        const hmacKeyId id = 1 + (hmacKeyId)(splitmix64(&rng) % 40);
+        uint8_t nonce[12];
+        hmacKeyringNextAeadNonce(ring, id, nonce); /* absent ids refuse */
+    }
+    hmacKeyringSetAeadReservation(ring, 0, NULL, NULL);
     return ring;
 }
 

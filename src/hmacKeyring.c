@@ -45,6 +45,13 @@ typedef struct hmacKeyringEntry {
     aesGcmKey *aead_schedule;
     hmacKey prepared;
     _Atomic uint64_t aead_counter; /* next-to-be-issued AEAD nonce counter */
+    /* Durable nonce reservation (used while the ring has a reservation
+     * function): counter values below aead_limit may be issued, and
+     * aead_reserved is the highest limit handed to the function,
+     * confirmed or not, which Snapshot records.  Both change under the
+     * write lock and are read under the lock. */
+    uint64_t aead_limit;
+    uint64_t aead_reserved;
     /* Generation counter — bumped on EVERY mutation of this slot
      * (Install, Retire, SetAeadSalt). Attach-style consumers cache the
      * value observed at attach time and refuse to use the key if the
@@ -75,6 +82,15 @@ struct hmacKeyring {
      * snapshot's first entry so a restart cannot silently un-revoke
      * ids. */
     hmacKeyId min_valid_key_id;
+    /* Durable nonce reservation (hmacKeyringSetAeadReservation).  The
+     * function, its context and the window change under the write lock;
+     * reserve_mu serializes reservations, so one runs at a time and a
+     * change of function waits for one in flight.  Lock order: reserve_mu,
+     * then `lock`. */
+    pthread_mutex_t reserve_mu;
+    hmacKeyringAeadReserveFn reserve_fn;
+    void *reserve_ctx;
+    uint64_t reserve_window;
 };
 
 /* Thin forwarder kept so call sites stay self-describing. The actual
@@ -131,6 +147,8 @@ static void hmacKeyringEntryClear(hmacKeyringEntry *e) {
     e->id = HMAC_KEY_ID_INVALID;
     /* @sync: relaxed owner */
     atomic_store_explicit(&e->aead_counter, 0u, memory_order_relaxed);
+    e->aead_limit = 0;
+    e->aead_reserved = 0;
     /* Salt is sensitive: it scopes AEAD nonce derivation; wipe DCE-resistantly
      * even though most callers reach this via the destructor path. */
     dkSecureZero(e->aead_salt, sizeof(e->aead_salt));
@@ -192,6 +210,10 @@ hmacKeyring *hmacKeyringCreate(void) {
     if (pthread_rwlock_init(&ring->lock, NULL) != 0) {
         return NULL;
     }
+    if (pthread_mutex_init(&ring->reserve_mu, NULL) != 0) {
+        pthread_rwlock_destroy(&ring->lock);
+        return NULL;
+    }
     hmacKeyring *out = ring;
     ring = NULL;
     return out;
@@ -205,6 +227,7 @@ void hmacKeyringFree(hmacKeyring *ring) {
     for (size_t i = 0; i < HMAC_KEYRING_CAPACITY; i++) {
         hmacKeyringEntryClear(&ring->entries[i]);
     }
+    pthread_mutex_destroy(&ring->reserve_mu);
     pthread_rwlock_destroy(&ring->lock);
     zfree(ring);
 }
@@ -312,6 +335,9 @@ static bool hmacKeyringInstallInternal(
     slot->id = id;
     /* @sync: relaxed owner */
     atomic_store_explicit(&slot->aead_counter, 0u, memory_order_relaxed);
+    /* With a reservation function, the first nonce reserves. */
+    slot->aead_limit = 0;
+    slot->aead_reserved = 0;
     memcpy(slot->aead_salt, aead_salt, HMAC_KEYRING_AEAD_SALT_BYTES);
     slot->is_unsalted = is_unsalted;
     /* Bump generation on Install — a previously-attached consumer holding
@@ -543,55 +569,199 @@ static void hmacKeyringPutLe64(uint8_t out[8], uint64_t v) {
     out[7] = (uint8_t)((v >> 56) & 0xFFu);
 }
 
+/* Reservation slow path: `id`'s counter reached its confirmed limit.
+ * Hands counter + window to the reservation function and, once it reports
+ * the limit durable, confirms it for the same key incarnation.  Returns
+ * false when the function refuses or the slot is gone; true when the
+ * caller may try to issue again (also when another thread reserved first,
+ * or reservation was turned off meanwhile). */
+static bool hkrAeadReserve(hmacKeyring *ring, hmacKeyId id) {
+    pthread_mutex_lock(&ring->reserve_mu);
+    pthread_rwlock_wrlock(&ring->lock);
+    hmacKeyringEntry *slot = hmacKeyringFindLockedMut(ring, id);
+    if (slot == NULL) {
+        pthread_rwlock_unlock(&ring->lock);
+        pthread_mutex_unlock(&ring->reserve_mu);
+        return false;
+    }
+    const hmacKeyringAeadReserveFn fn = ring->reserve_fn;
+    void *const ctx = ring->reserve_ctx;
+    /* @sync: relaxed owner */
+    const uint64_t counter =
+        atomic_load_explicit(&slot->aead_counter, memory_order_relaxed);
+    if (fn == NULL || counter < slot->aead_limit) {
+        pthread_rwlock_unlock(&ring->lock);
+        pthread_mutex_unlock(&ring->reserve_mu);
+        return true;
+    }
+    const uint64_t window = ring->reserve_window;
+    const uint64_t limit =
+        counter > UINT64_MAX - window ? UINT64_MAX : counter + window;
+    /* Recorded before fn runs, so a snapshot taken while fn makes the
+     * limit durable already restores the counter above it. */
+    if (slot->aead_reserved < limit) {
+        slot->aead_reserved = limit;
+    }
+    const size_t index = (size_t)(slot - ring->entries);
+    const uint64_t generation = slot->generation;
+    pthread_rwlock_unlock(&ring->lock);
+
+    /* No keyring lock held: fn may snapshot this ring. */
+    const bool durable = fn(ctx, id, limit);
+
+    if (durable) {
+        pthread_rwlock_wrlock(&ring->lock);
+        hmacKeyringEntry *const e = &ring->entries[index];
+        /* Only for the key that asked: a retire, reinstall or salt change
+         * meanwhile bumped the generation. */
+        if (e->id == id && e->generation == generation &&
+            e->aead_limit < limit) {
+            e->aead_limit = limit;
+        }
+        pthread_rwlock_unlock(&ring->lock);
+    }
+    pthread_mutex_unlock(&ring->reserve_mu);
+    return durable;
+}
+
 bool hmacKeyringNextAeadNonce(hmacKeyring *ring, hmacKeyId id,
                               uint8_t out_nonce[12]) {
     if (ring == NULL || id == HMAC_KEY_ID_INVALID || out_nonce == NULL) {
         return false;
     }
-    pthread_rwlock_rdlock(&ring->lock);
-    const hmacKeyringEntry *slot = hmacKeyringFindLockedConst(ring, id);
-    if (slot == NULL) {
-        pthread_rwlock_unlock(&ring->lock);
-        return false;
-    }
-    /* Fail-closed: refuse to issue a nonce whose salt is all-zero unless
-     * the slot was explicitly installed as unsalted. A zero salt on a
-     * "supposed-to-be-salted" slot would silently reuse counter-0 nonces
-     * across processes that share the same key, which destroys both
-     * ChaCha20-Poly1305 confidentiality and integrity. */
-    if (!slot->is_unsalted && hmacKeyringSaltIsZero(slot->aead_salt)) {
-        pthread_rwlock_unlock(&ring->lock);
-        return false;
-    }
-    /* CAS-loop to allocate the next counter atomically and refuse to
-     * advance past UINT64_MAX (which would wrap on subsequent calls
-     * and silently reuse a nonce). Cast away const on the atomic field
-     * — the rwlock keeps the slot alive; the field itself is atomic. */
-    _Atomic uint64_t *ctr = (_Atomic uint64_t *)&slot->aead_counter;
-    /* @sync: relaxed seed */
-    uint64_t prev = atomic_load_explicit(ctr, memory_order_relaxed);
     for (;;) {
-        if (prev == UINT64_MAX) {
-            /* Counter exhausted — caller must rotate the key. */
+        pthread_rwlock_rdlock(&ring->lock);
+        const hmacKeyringEntry *slot = hmacKeyringFindLockedConst(ring, id);
+        if (slot == NULL) {
             pthread_rwlock_unlock(&ring->lock);
             return false;
         }
-        /* @sync: relaxed counter */
-        if (atomic_compare_exchange_weak_explicit(ctr, &prev, prev + 1u,
-                                                  memory_order_relaxed,
-                                                  memory_order_relaxed)) {
-            break;
+        /* Fail-closed: refuse to issue a nonce whose salt is all-zero
+         * unless the slot was explicitly installed as unsalted. A zero
+         * salt on a "supposed-to-be-salted" slot would silently reuse
+         * counter-0 nonces across processes that share the same key,
+         * which destroys both ChaCha20-Poly1305 confidentiality and
+         * integrity. */
+        if (!slot->is_unsalted && hmacKeyringSaltIsZero(slot->aead_salt)) {
+            pthread_rwlock_unlock(&ring->lock);
+            return false;
         }
-        /* prev updated by the failed CAS; retry. */
+        /* CAS-loop to allocate the next counter atomically and refuse to
+         * advance past UINT64_MAX (which would wrap on subsequent calls
+         * and silently reuse a nonce), or, with a reservation function,
+         * past the confirmed limit. Cast away const on the atomic field —
+         * the rwlock keeps the slot alive (and the limit fixed); the
+         * field itself is atomic. */
+        _Atomic uint64_t *ctr = (_Atomic uint64_t *)&slot->aead_counter;
+        const bool reserving = ring->reserve_fn != NULL;
+        bool reserve = false;
+        /* @sync: relaxed seed */
+        uint64_t prev = atomic_load_explicit(ctr, memory_order_relaxed);
+        for (;;) {
+            if (prev == UINT64_MAX) {
+                /* Counter exhausted — caller must rotate the key. */
+                pthread_rwlock_unlock(&ring->lock);
+                return false;
+            }
+            if (reserving && prev >= slot->aead_limit) {
+                reserve = true;
+                break;
+            }
+            /* @sync: relaxed counter */
+            if (atomic_compare_exchange_weak_explicit(ctr, &prev, prev + 1u,
+                                                      memory_order_relaxed,
+                                                      memory_order_relaxed)) {
+                break;
+            }
+            /* prev updated by the failed CAS; retry. */
+        }
+        if (!reserve) {
+            /* Build the nonce: 8 bytes counter LE || 4 bytes salt. */
+            hmacKeyringPutLe64(out_nonce, prev);
+            out_nonce[8] = slot->aead_salt[0];
+            out_nonce[9] = slot->aead_salt[1];
+            out_nonce[10] = slot->aead_salt[2];
+            out_nonce[11] = slot->aead_salt[3];
+            pthread_rwlock_unlock(&ring->lock);
+            return true;
+        }
+        pthread_rwlock_unlock(&ring->lock);
+        if (!hkrAeadReserve(ring, id)) {
+            return false;
+        }
     }
-    /* Build the nonce: 8 bytes counter LE || 4 bytes salt. */
-    hmacKeyringPutLe64(out_nonce, prev);
-    out_nonce[8] = slot->aead_salt[0];
-    out_nonce[9] = slot->aead_salt[1];
-    out_nonce[10] = slot->aead_salt[2];
-    out_nonce[11] = slot->aead_salt[3];
+}
+
+bool hmacKeyringSetAeadReservation(hmacKeyring *ring, uint64_t window,
+                                   hmacKeyringAeadReserveFn fn, void *ctx) {
+    if (ring == NULL || (fn != NULL && window == 0)) {
+        return false;
+    }
+    /* Waits out a reservation in flight, so the old function is not
+     * called after this returns. */
+    pthread_mutex_lock(&ring->reserve_mu);
+    pthread_rwlock_wrlock(&ring->lock);
+    ring->reserve_fn = fn;
+    ring->reserve_ctx = fn != NULL ? ctx : NULL;
+    ring->reserve_window = fn != NULL ? window : 0;
+    for (size_t i = 0; i < HMAC_KEYRING_CAPACITY; i++) {
+        hmacKeyringEntry *const e = &ring->entries[i];
+        if (e->id == HMAC_KEY_ID_INVALID) {
+            continue;
+        }
+        /* Every slot reserves before its next nonce. */
+        /* @sync: relaxed owner */
+        e->aead_limit =
+            atomic_load_explicit(&e->aead_counter, memory_order_relaxed);
+    }
     pthread_rwlock_unlock(&ring->lock);
+    pthread_mutex_unlock(&ring->reserve_mu);
     return true;
+}
+
+/* Raise `id`'s counter (and recorded reservation) to at least `limit`:
+ * nonces below it may have been issued.  For WAL replay of a reservation
+ * and for Restore's per-slot counter (UINT64_MAX restores an exhausted
+ * key as exhausted).  A retired id is skipped. */
+static void hkrApplyReservation(hmacKeyring *ring, hmacKeyId id,
+                                uint64_t limit) {
+    pthread_rwlock_wrlock(&ring->lock);
+    hmacKeyringEntry *slot = hmacKeyringFindLockedMut(ring, id);
+    if (slot != NULL) {
+        /* @sync: relaxed owner */
+        if (atomic_load_explicit(&slot->aead_counter, memory_order_relaxed) <
+            limit) {
+            /* @sync: relaxed owner */
+            atomic_store_explicit(&slot->aead_counter, limit,
+                                  memory_order_relaxed);
+        }
+        if (slot->aead_reserved < limit) {
+            slot->aead_reserved = limit;
+        }
+    }
+    pthread_rwlock_unlock(&ring->lock);
+}
+
+bool hmacKeyringReserveThroughPersist(void *persistPtr, hmacKeyId id,
+                                      uint64_t limit) {
+    persist *p = persistPtr;
+    if (p == NULL) {
+        return false;
+    }
+    const databox idBox = DATABOX_UNSIGNED(id);
+    const databox limitBox = DATABOX_UNSIGNED(limit);
+    const databox *const args[2] = {&idBox, &limitBox};
+    switch (persistLogOp(p, PERSIST_OP_UPDATE, args, 2)) {
+    case PERSIST_LOG_DURABLE:
+        return true;
+    case PERSIST_LOG_BUFFERED:
+        /* The sync policy would write it later; a reservation must be
+         * durable before a nonce below it is issued. */
+        return persistSync(p);
+    default:
+        /* REFUSED, or logged with a failed sync (durability unknown) */
+        return false;
+    }
 }
 
 bool hmacKeyringSetAeadSalt(hmacKeyring *ring, hmacKeyId id,
@@ -735,9 +905,14 @@ static flex *hkrBuildSnapshotFlex(const hmacKeyring *ring) {
         flexRowUnsigned(&row, (uint64_t)e->id);
         flexRowUnsigned(&row, tag);
         flexRowBytes(&row, e->aead_salt, sizeof(e->aead_salt));
+        /* Where a restore starts the counter: above every nonce issued,
+         * and every limit handed to a reservation function (one may be
+         * in flight; its nonces are not issued until it is durable). */
         /* @sync: relaxed counter */
-        flexRowUnsigned(
-            &row, atomic_load_explicit(&e->aead_counter, memory_order_relaxed));
+        const uint64_t counter =
+            atomic_load_explicit(&e->aead_counter, memory_order_relaxed);
+        flexRowUnsigned(&row, counter > e->aead_reserved ? counter
+                                                         : e->aead_reserved);
         flexRowBytes(&row, e->raw_key_bytes, e->raw_key_len);
         flexRowAppendExact(&f, &row);
     }
@@ -926,7 +1101,10 @@ bool hmacKeyringRestore(hmacKeyring *ring, const uint8_t *buf, size_t len) {
         if (!installed) {
             goto rollback;
         }
-        hmacKeyringRestoreAeadCounter(ring, id, counter);
+        /* Raised directly, not through RestoreAeadCounter: that refuses
+         * UINT64_MAX, and an exhausted key (or a reservation that
+         * saturated) must come back exhausted, not at 0. */
+        hkrApplyReservation(ring, id, counter);
         undo.ids[undo.count++] = id;
         fe = flexNext(f, fe);
     }
@@ -1004,6 +1182,36 @@ static void hkrPersistFree(void *structure) {
     hmacKeyringFree((hmacKeyring *)structure);
 }
 
+/* The one WAL op: a nonce reservation [id, limit]. */
+static uint8_t *hkrPersistEncodeOp(persistOp op, const void *args, size_t argc,
+                                   size_t *len) {
+    const databox *const *boxes = args;
+    *len = 0;
+    if (op != PERSIST_OP_UPDATE || argc != 2 || boxes == NULL) {
+        return NULL;
+    }
+    flex *f = flexNewFromDataboxPtrsExact(boxes, argc);
+    if (f != NULL) {
+        *len = flexBytes(f);
+    }
+    return (uint8_t *)f;
+}
+
+static bool hkrPersistApplyOp(void *structure, persistOp op,
+                              const uint8_t *data, size_t len) {
+    hmacKeyring *ring = *(hmacKeyring **)structure;
+    databoxBig id;
+    databoxBig limit;
+    if (op != PERSIST_OP_UPDATE ||
+        !flexGetTwoDataboxesBig(data, len, &id, &limit) ||
+        id.type != DATABOX_UNSIGNED_64 || id.data.u64 == 0 ||
+        id.data.u64 > UINT32_MAX || limit.type != DATABOX_UNSIGNED_64) {
+        return false;
+    }
+    hkrApplyReservation(ring, (hmacKeyId)id.data.u64, limit.data.u64);
+    return true;
+}
+
 const persistOps persistOpsHmacKeyring = {
     .type = PERSIST_TYPE_HMAC_KEYRING,
     .name = "hmacKeyring",
@@ -1014,9 +1222,10 @@ const persistOps persistOpsHmacKeyring = {
     .newEmpty = hkrPersistNewEmpty,
     .count = hkrPersistCount,
     .estimateSize = hkrPersistEstimateSize,
-    .encodeOp = NULL, /* keyring changes are operator-rare; full
-                            re-snapshot is the durability model */
-    .applyOp = NULL,
+    /* Installs, retires, salts and the floor are operator-rare and made
+     * durable by a new snapshot; the WAL carries nonce reservations. */
+    .encodeOp = hkrPersistEncodeOp,
+    .applyOp = hkrPersistApplyOp,
     .streamSnapshot = NULL,
     .streamRestore = NULL,
     .validate = NULL,
@@ -1111,6 +1320,65 @@ static void *hmacKeyringMtWorker(void *arg) {
 }
 
 #include <pthread.h>
+#include <stdlib.h> /* qsort */
+
+static int hkrTestCmpU64(const void *a, const void *b) {
+    const uint64_t x = *(const uint64_t *)a;
+    const uint64_t y = *(const uint64_t *)b;
+    return (x > y) - (x < y);
+}
+
+/* The counter a nonce carries (bytes 0..7, little-endian). */
+static uint64_t hkrTestNonceCounter(const uint8_t n[12]) {
+    uint64_t v = 0;
+    for (int32_t j = 7; j >= 0; j--) {
+        v = (v << 8) | (uint64_t)n[(uint32_t)j];
+    }
+    return v;
+}
+
+/* A reservation function for the tests: counts calls, keeps the last
+ * limit, refuses while `refuse` is set, and can act on the ring from
+ * inside the reservation once.  Calls are serialized by the ring's
+ * reservation lock; the test reads the fields after its threads join. */
+typedef enum hkrTestReserveAction {
+    HKR_TEST_RESERVE_NONE,
+    HKR_TEST_RESERVE_SNAPSHOT, /* snapshot the ring while reserving */
+    HKR_TEST_RESERVE_REPLACE,  /* retire and reinstall the key meanwhile */
+} hkrTestReserveAction;
+
+typedef struct hkrTestReserve {
+    hmacKeyring *ring;
+    uint64_t calls;
+    uint64_t lastLimit;
+    bool refuse;
+    hkrTestReserveAction action;
+    uint8_t snap[512];
+    size_t snapLen;
+} hkrTestReserve;
+
+static bool hkrTestReserveFn(void *ctx, hmacKeyId id, uint64_t limit) {
+    hkrTestReserve *r = ctx;
+    r->calls++;
+    if (r->refuse) {
+        return false;
+    }
+    r->lastLimit = limit;
+    const hkrTestReserveAction action = r->action;
+    r->action = HKR_TEST_RESERVE_NONE;
+    if (action == HKR_TEST_RESERVE_SNAPSHOT) {
+        if (!hmacKeyringSnapshot(r->ring, r->snap, sizeof(r->snap),
+                                 &r->snapLen)) {
+            r->snapLen = 0;
+        }
+    } else if (action == HKR_TEST_RESERVE_REPLACE) {
+        const uint8_t key[32] = {0x5A};
+        hmacKeyringRetire(r->ring, id);
+        hmacKeyringInstallUnsalted(r->ring, id, &hmacAlgoSHA256, key,
+                                   sizeof(key));
+    }
+    return true;
+}
 
 /* Fill the stack below the caller with 0xFF so a decoder that reads an
  * uninitialized box sees big = 1 and an all-ones pointer.  ASan is off
@@ -1586,15 +1854,7 @@ int hmacKeyringTest(int argc, char *argv[]) {
             pthread_join(tids[t], NULL);
         }
         /* Sort and check uniqueness. */
-        for (size_t i = 1; i < total; i++) {
-            uint64_t cur = collected[i];
-            size_t j = i;
-            while (j > 0 && collected[j - 1] > cur) {
-                collected[j] = collected[j - 1];
-                j--;
-            }
-            collected[j] = cur;
-        }
+        qsort(collected, total, sizeof(*collected), hkrTestCmpU64);
         for (size_t i = 1; i < total; i++) {
             if (collected[i] == collected[i - 1]) {
                 ERR("duplicate nonce at index %zu (value %" PRIu64 ")", i,
@@ -1608,6 +1868,236 @@ int hmacKeyringTest(int argc, char *argv[]) {
                 total - 1, collected[0], collected[total - 1]);
         }
         hmacKeyringFree(ring);
+    }
+
+    TEST("AEAD reservation: issues below a durable limit, one per window") {
+        hmacKeyring *ring = hmacKeyringCreate();
+        const uint8_t key[32] = {0x31};
+        hmacKeyringInstallUnsalted(ring, 31u, &hmacAlgoSHA256, key,
+                                   sizeof(key));
+        hkrTestReserve r = {.ring = ring};
+        if (hmacKeyringSetAeadReservation(ring, 0, hkrTestReserveFn, &r) ||
+            hmacKeyringSetAeadReservation(NULL, 4, hkrTestReserveFn, &r)) {
+            ERRR("a zero window or a NULL ring must be refused");
+        }
+        if (!hmacKeyringSetAeadReservation(ring, 4, hkrTestReserveFn, &r)) {
+            ERRR("SetAeadReservation");
+        }
+        for (uint64_t i = 0; i < 10; i++) {
+            uint8_t n[12];
+            if (!hmacKeyringNextAeadNonce(ring, 31u, n) ||
+                hkrTestNonceCounter(n) != i) {
+                ERR("nonce %" PRIu64 " not issued in order", i);
+            }
+        }
+        /* Limits 4, 8, 12: a reservation before nonces 0, 4 and 8 */
+        if (r.calls != 3 || r.lastLimit != 12) {
+            ERR("expected 3 reservations up to 12, got %" PRIu64
+                " up to %" PRIu64,
+                r.calls, r.lastLimit);
+        }
+        /* The counter stays 10; the snapshot starts a restore at 12 */
+        uint64_t peek = 0;
+        hmacKeyringPeekAeadCounter(ring, 31u, &peek);
+        uint8_t snap[256];
+        size_t snapLen = 0;
+        hmacKeyring *back = hmacKeyringCreate();
+        uint64_t restored = 0;
+        if (peek != 10 ||
+            !hmacKeyringSnapshot(ring, snap, sizeof(snap), &snapLen) ||
+            !hmacKeyringRestore(back, snap, snapLen) ||
+            !hmacKeyringPeekAeadCounter(back, 31u, &restored) ||
+            restored != 12) {
+            ERR("counter %" PRIu64 ", restored %" PRIu64 " (want 10, 12)", peek,
+                restored);
+        }
+        hmacKeyringFree(back);
+        /* Off: unlimited again, no more reservations */
+        hmacKeyringSetAeadReservation(ring, 0, NULL, NULL);
+        for (int i = 0; i < 20; i++) {
+            uint8_t n[12];
+            if (!hmacKeyringNextAeadNonce(ring, 31u, n)) {
+                ERRR("issuance with reservation off");
+            }
+        }
+        if (r.calls != 3) {
+            ERRR("a reservation ran after it was turned off");
+        }
+        hmacKeyringFree(ring);
+    }
+
+    TEST("AEAD counter: an exhausted key restores exhausted") {
+        /* Restore once routed the counter through RestoreAeadCounter,
+         * which refuses UINT64_MAX, so an exhausted key came back at 0
+         * and issued every nonce again. */
+        hmacKeyring *ring = hmacKeyringCreate();
+        const uint8_t key[32] = {0x37};
+        hmacKeyringInstallUnsalted(ring, 37u, &hmacAlgoSHA256, key,
+                                   sizeof(key));
+        hmacKeyringRestoreAeadCounter(ring, 37u, UINT64_MAX - 1u);
+        uint8_t n[12];
+        hmacKeyringNextAeadNonce(ring, 37u, n); /* the last nonce */
+        uint8_t snap[256];
+        size_t snapLen = 0;
+        hmacKeyring *back = hmacKeyringCreate();
+        uint64_t restored = 0;
+        if (!hmacKeyringSnapshot(ring, snap, sizeof(snap), &snapLen) ||
+            !hmacKeyringRestore(back, snap, snapLen) ||
+            !hmacKeyringPeekAeadCounter(back, 37u, &restored) ||
+            restored != UINT64_MAX || hmacKeyringNextAeadNonce(back, 37u, n)) {
+            ERR("restored counter %" PRIu64 " (want UINT64_MAX, refusing)",
+                restored);
+        }
+        hmacKeyringFree(back);
+        hmacKeyringFree(ring);
+    }
+
+    TEST("AEAD reservation: a refused reservation issues nothing") {
+        hmacKeyring *ring = hmacKeyringCreate();
+        const uint8_t key[32] = {0x32};
+        hmacKeyringInstallUnsalted(ring, 32u, &hmacAlgoSHA256, key,
+                                   sizeof(key));
+        hkrTestReserve r = {.ring = ring, .refuse = true};
+        hmacKeyringSetAeadReservation(ring, 8, hkrTestReserveFn, &r);
+        uint8_t n[12];
+        uint64_t peek = UINT64_MAX;
+        if (hmacKeyringNextAeadNonce(ring, 32u, n) ||
+            !hmacKeyringPeekAeadCounter(ring, 32u, &peek) || peek != 0) {
+            ERRR("a refused reservation must fail closed, counter unmoved");
+        }
+        r.refuse = false;
+        if (!hmacKeyringNextAeadNonce(ring, 32u, n) ||
+            hkrTestNonceCounter(n) != 0 || r.calls != 2) {
+            ERRR("after the refusal, the next nonce reserves and is 0");
+        }
+        hmacKeyringFree(ring);
+    }
+
+    TEST("AEAD reservation: a snapshot during it restores above its limit") {
+        /* The limit is recorded before the function runs, so a snapshot
+         * taken while it makes the limit durable already covers it. */
+        hmacKeyring *ring = hmacKeyringCreate();
+        const uint8_t key[32] = {0x33};
+        hmacKeyringInstallUnsalted(ring, 33u, &hmacAlgoSHA256, key,
+                                   sizeof(key));
+        hkrTestReserve r = {.ring = ring, .action = HKR_TEST_RESERVE_SNAPSHOT};
+        hmacKeyringSetAeadReservation(ring, 16, hkrTestReserveFn, &r);
+        uint8_t n[12];
+        hmacKeyring *back = hmacKeyringCreate();
+        uint64_t restored = 0;
+        if (!hmacKeyringNextAeadNonce(ring, 33u, n) || r.snapLen == 0 ||
+            !hmacKeyringRestore(back, r.snap, r.snapLen) ||
+            !hmacKeyringPeekAeadCounter(back, 33u, &restored) ||
+            restored != 16) {
+            ERR("restored at %" PRIu64 ", want the in-flight limit 16",
+                restored);
+        }
+        hmacKeyringFree(back);
+        hmacKeyringFree(ring);
+    }
+
+    TEST("AEAD reservation: a key replaced during it is not given it") {
+        /* The function retires and reinstalls the id before confirming:
+         * the confirmation belongs to the old key, so the new key
+         * reserves for itself before its first nonce. */
+        hmacKeyring *ring = hmacKeyringCreate();
+        const uint8_t key[32] = {0x34};
+        hmacKeyringInstallUnsalted(ring, 34u, &hmacAlgoSHA256, key,
+                                   sizeof(key));
+        hkrTestReserve r = {.ring = ring, .action = HKR_TEST_RESERVE_REPLACE};
+        hmacKeyringSetAeadReservation(ring, 8, hkrTestReserveFn, &r);
+        uint8_t n[12];
+        if (!hmacKeyringNextAeadNonce(ring, 34u, n) ||
+            hkrTestNonceCounter(n) != 0 || r.calls != 2) {
+            ERR("calls %" PRIu64 " (want 2: the new key reserves again)",
+                r.calls);
+        }
+        hmacKeyringFree(ring);
+    }
+
+    TEST("AEAD reservation: concurrent issuers, one reservation per window") {
+        hmacKeyring *ring = hmacKeyringCreate();
+        const uint8_t key[32] = {0x35};
+        hmacKeyringInstallUnsalted(ring, 21u, &hmacAlgoSHA256, key,
+                                   sizeof(key));
+        hkrTestReserve r = {.ring = ring};
+        const uint64_t window = 64;
+        hmacKeyringSetAeadReservation(ring, window, hkrTestReserveFn, &r);
+        enum { kThreads = 8, kIters = 1024 };
+        const size_t total = (size_t)kThreads * kIters;
+        cleanerName(zfree, U64) uint64_t *collected =
+            zmalloc(total * sizeof(uint64_t));
+        hmacKeyringNonceWorkerCtx ctxs[kThreads];
+        pthread_t tids[kThreads];
+        for (uint32_t t = 0; t < kThreads; t++) {
+            ctxs[t] = (hmacKeyringNonceWorkerCtx){.ring = ring,
+                                                  .iters = kIters,
+                                                  .out = collected +
+                                                         (size_t)t * kIters,
+                                                  .id = 21u};
+            pthread_create(&tids[t], NULL, hmacKeyringNonceWorker, &ctxs[t]);
+        }
+        for (uint32_t t = 0; t < kThreads; t++) {
+            pthread_join(tids[t], NULL);
+        }
+        qsort(collected, total, sizeof(*collected), hkrTestCmpU64);
+        bool contiguous = true;
+        for (size_t i = 0; i < total; i++) {
+            contiguous = contiguous && collected[i] == (uint64_t)i;
+        }
+        /* The counter never passes a confirmed limit, so each reservation
+         * starts exactly at the previous limit: total / window of them. */
+        if (!contiguous || r.calls != total / window ||
+            r.lastLimit != (uint64_t)total) {
+            ERR("contiguous %d, %" PRIu64 " reservations up to %" PRIu64
+                " (want %" PRIu64 " up to %zu)",
+                contiguous, r.calls, r.lastLimit, (uint64_t)total / window,
+                total);
+        }
+        hmacKeyringFree(ring);
+    }
+
+    TEST("AEAD reservation through persist: recovery never reissues") {
+        /* Snapshot at counter 0, then issue past it with reservations in
+         * the WAL; a second snapshot halfway (the WAL before it is folded
+         * in), more nonces, then recover from the same stores as a restart
+         * would: the counter must start above every nonce issued. */
+        persist *p = persistCreate(&persistOpsHmacKeyring, NULL);
+        persistAttachSnapshot(p, persistStoreMemory(0));
+        persistAttachWAL(p, persistStoreMemory(0));
+        hmacKeyring *ring = hmacKeyringCreate();
+        const uint8_t key[32] = {0x36};
+        const uint8_t salt[HMAC_KEYRING_AEAD_SALT_BYTES] = {1, 2, 3, 4};
+        hmacKeyringInstall(ring, 36u, &hmacAlgoSHA256, key, sizeof(key), salt);
+        if (!persistSnapshot(p, ring) ||
+            !hmacKeyringSetAeadReservation(
+                ring, 16, hmacKeyringReserveThroughPersist, p)) {
+            ERRR("persist setup");
+        }
+        uint64_t highest = 0;
+        for (int i = 0; i < 40; i++) {
+            uint8_t n[12];
+            if (!hmacKeyringNextAeadNonce(ring, 36u, n)) {
+                ERRR("issuance through persist reservations");
+                break;
+            }
+            highest = hkrTestNonceCounter(n);
+            if (i == 19 && !persistSnapshot(p, ring)) {
+                ERRR("mid-way snapshot");
+            }
+        }
+        hmacKeyring *recovered = persistRecover(p);
+        uint64_t start = 0;
+        if (recovered == NULL ||
+            !hmacKeyringPeekAeadCounter(recovered, 36u, &start) ||
+            start <= highest || start != 48) {
+            ERR("recovered counter %" PRIu64 " after issuing up to %" PRIu64
+                " (want 48: three windows of 16)",
+                start, highest);
+        }
+        hmacKeyringFree(recovered);
+        hmacKeyringFree(ring);
+        persistClose(p);
     }
 
     TEST("snapshot/restore: round-trip with counter + salt + multi-algo") {
