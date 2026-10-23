@@ -468,7 +468,9 @@ struct persistOps {
                          size_t *len);
 
     /* Decode and apply a single operation.
-     * structure: mutable pointer to structure
+     * structure: the ADDRESS of the structure pointer (a void ** passed
+     *            as void *), so the op may replace the structure (a flex
+     *            reallocates); the other hooks take the pointer itself
      * op: operation type
      * data: operation data from WAL
      * len: data length

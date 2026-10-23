@@ -5238,6 +5238,7 @@ const persistOps persistOpsMultiLRU = {
 #ifdef DATAKIT_TEST
 #include "ctest.h"
 #include "dkTestTmp.h"
+#include "str.h" /* splitmix64 */
 
 /* Free a test multidict together with the default class it holds; the
  * class must outlive the dict because teardown runs class callbacks. */
@@ -5288,6 +5289,115 @@ static bool persistTestRecoversTo(persist *p, const int64_t *want, size_t n) {
         }
     }
     return true;
+}
+
+/* Append the bytes of a flex holding `n` boxes to the corpus slot `out`
+ * (at most `cap` bytes); returns the length, 0 when it does not fit */
+static size_t persistTestFlexPayload(uint8_t *out, size_t cap,
+                                     const databox *boxes, size_t n) {
+    cleaner(flexFree) flex *f = flexNew();
+    for (size_t i = 0; i < n; i++) {
+        flexPushByType(&f, &boxes[i], FLEX_ENDPOINT_TAIL);
+    }
+    const size_t len = flexBytes(f);
+    if (len > cap) {
+        return 0;
+    }
+    memcpy(out, f, len);
+    return len;
+}
+
+/* Every op code with every payload of a corpus (empty, short, random,
+ * flex-framed numbers and strings, raw position pairs, a truncated flex)
+ * applied to one structure of `ops`'s type: no op may crash, a refused op
+ * must leave the snapshot exactly as it was, and the structure stays
+ * valid.  Accepted ops accumulate, so later payloads meet a populated
+ * structure.  Returns the violations. */
+static int persistTestDecoderMatrix(const persistOps *ops, void *start) {
+    enum { SLOTS = 18, CAP = 96 };
+    uint8_t payload[SLOTS][CAP];
+    size_t len[SLOTS] = {0};
+    size_t n = 0;
+    len[n++] = 0;
+    payload[n][0] = 0x00, len[n++] = 1;
+    payload[n][0] = 0xff, len[n++] = 1;
+    memset(payload[n], 0, 8), len[n++] = 8;
+    const uint64_t pair[2] = {3, 5};
+    memcpy(payload[n], pair, sizeof(pair)), len[n++] = sizeof(pair);
+    const uint64_t far[2] = {UINT64_MAX - 1, 10};
+    memcpy(payload[n], far, sizeof(far)), len[n++] = sizeof(far);
+    const databox one[] = {DATABOX_SIGNED(7)};
+    len[n] = persistTestFlexPayload(payload[n], CAP, one, 1), n++;
+    const databox two[] = {DATABOX_SIGNED(1), DATABOX_SIGNED(2)};
+    len[n] = persistTestFlexPayload(payload[n], CAP, two, 2), n++;
+    const databox kv[] = {databoxNewBytesString("member"), DATABOX_SIGNED(3)};
+    len[n] = persistTestFlexPayload(payload[n], CAP, kv, 2), n++;
+    const databox vk[] = {DATABOX_SIGNED(4), databoxNewBytesString("key")};
+    len[n] = persistTestFlexPayload(payload[n], CAP, vk, 2), n++;
+    const databox three[] = {databoxNewBytesString("a"),
+                             databoxNewBytesString("bb"),
+                             databoxNewBytesString("ccc")};
+    len[n] = persistTestFlexPayload(payload[n], CAP, three, 3), n++;
+    const databox dbl[] = {DATABOX_DOUBLE(2.5), DATABOX_SIGNED(-9)};
+    len[n] = persistTestFlexPayload(payload[n], CAP, dbl, 2), n++;
+    /* A flex whose header claims one byte more than is given */
+    len[n] = persistTestFlexPayload(payload[n], CAP, two, 2);
+    len[n] = len[n] ? len[n] - 1 : 0, n++;
+    uint64_t rng = 0xdec0de ^ ops->type;
+    static const size_t randomLens[] = {3, 7, 33, 64, 95};
+    for (size_t r = 0; r < 5 && n < SLOTS; r++) {
+        for (size_t k = 0; k < randomLens[r]; k++) {
+            payload[n][k] = (uint8_t)splitmix64(&rng);
+        }
+        len[n++] = randomLens[r];
+    }
+
+    int bad = 0;
+    void *tok = ops->foldEnter ? ops->foldEnter() : NULL;
+    /* The structure: `start` for a type without newEmpty, which the
+     * matrix then owns */
+    void *s = start ? start : ops->newEmpty ? ops->newEmpty() : NULL;
+    if (!s) {
+        printf("ERROR: %s: no structure to apply ops to\n", ops->name);
+        bad++;
+    }
+    for (int code = 0; s && code <= 256; code++) {
+        if (code > 40 && code != 99 && code != 255 && code != 256) {
+            continue;
+        }
+        for (size_t p = 0; p < n; p++) {
+            size_t beforeLen = 0;
+            uint8_t *before = ops->snapshot(s, &beforeLen);
+            /* applyOp takes the address of the structure pointer */
+            const bool ok =
+                ops->applyOp(&s, (persistOp)code, payload[p], len[p]);
+            if (!ok) {
+                size_t afterLen = 0;
+                uint8_t *after = ops->snapshot(s, &afterLen);
+                if (!before || !after || afterLen != beforeLen ||
+                    memcmp(before, after, beforeLen) != 0) {
+                    printf("ERROR: %s: refused op %d (payload %zu) changed "
+                           "the structure\n",
+                           ops->name, code, p);
+                    bad++;
+                }
+                zfree(after);
+            }
+            zfree(before);
+            if (ops->validate && !ops->validate(s)) {
+                printf("ERROR: %s: op %d (payload %zu, %s) left it invalid\n",
+                       ops->name, code, p, ok ? "accepted" : "refused");
+                bad++;
+            }
+        }
+    }
+    if (s) {
+        ops->free(s);
+    }
+    if (ops->foldExit) {
+        ops->foldExit(tok);
+    }
+    return bad;
 }
 
 /* Rewrite the header at the start of memory store `store`, whose known
@@ -8827,6 +8937,32 @@ int persistTest(int argc, char *argv[]) {
         if (persistOpsMultiroar.restore(NULL, 0) != NULL) {
             ERRR("multiroar restore accepted NULL input");
         }
+    }
+
+    TEST("decoders: any op with any payload: no crash, refusals change "
+         "nothing") {
+        static const persistOps *const tables[] = {
+            &persistOpsFlex,
+            &persistOpsIntset,
+            &persistOpsIntsetBig,
+            &persistOpsMultiroar,
+            &persistOpsHyperloglog,
+            &persistOpsMultilist,
+            &persistOpsMultimap,
+            &persistOpsMultidict,
+            &persistOpsMultiOrderedSet,
+        };
+        for (size_t t = 0; t < sizeof(tables) / sizeof(*tables); t++) {
+            err += persistTestDecoderMatrix(tables[t], NULL);
+        }
+
+        /* The types without newEmpty start from their constructors */
+        /* @own: container; free=multiarrayFree */
+        multiarray *ma = multiarrayNew(8, 64);
+        err += persistTestDecoderMatrix(&persistOpsMultiarray, ma);
+        /* @own: container; free=multilruFree */
+        multilru *lru = multilruNew();
+        err += persistTestDecoderMatrix(&persistOpsMultiLRU, lru);
     }
 
     TEST("restore: truncated flex header is rejected") {
