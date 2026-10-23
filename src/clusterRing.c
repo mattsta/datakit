@@ -6606,12 +6606,199 @@ static void *clusterRingTestPlaceAll(void *arg) {
     return NULL;
 }
 
+/* clusterCheckAffinity is an independent judge of spread: nodes that
+ * differ at exactly one topology level meet a spread rule there and no
+ * other, and every placement a spread-ruled ring makes meets its required
+ * rules as the judge sees them.  LocateBox places equal keys alike for
+ * every key type and refuses a box with no readable value. */
+static int testAffinityOracleAndKeyTypes(void) {
+    int err = 0;
+
+    TEST("affinity check: a spread rule holds only at the level that differs") {
+        static const clusterTopologyLevel levels[] = {
+            CLUSTER_LEVEL_NODE,
+            CLUSTER_LEVEL_RACK,
+            CLUSTER_LEVEL_CAGE,
+            CLUSTER_LEVEL_DATACENTER,
+            CLUSTER_LEVEL_AVAILABILITY_ZONE,
+            CLUSTER_LEVEL_REGION,
+            CLUSTER_LEVEL_COUNTRY,
+            CLUSTER_LEVEL_CONTINENT,
+        };
+        const size_t nLevels = sizeof(levels) / sizeof(levels[0]);
+        for (size_t l = 0; l < nLevels; l++) {
+            cleaner(clusterRingFree) clusterRing *ring =
+                clusterRingNewDefault();
+            const clusterNode *nodes[3];
+            for (uint32_t i = 0; i < 3; i++) {
+                clusterNodeConfig nc = {.id = 100 + i};
+                nc.location = (clusterLocation){.nodeId = 7,
+                                                .rackId = 7,
+                                                .cageId = 7,
+                                                .dcId = 7,
+                                                .azId = 7,
+                                                .regionId = 7,
+                                                .countryId = 7,
+                                                .continentId = 7};
+                switch (levels[l]) {
+                case CLUSTER_LEVEL_NODE:
+                    nc.location.nodeId = i;
+                    break;
+                case CLUSTER_LEVEL_RACK:
+                    nc.location.rackId = i;
+                    break;
+                case CLUSTER_LEVEL_CAGE:
+                    nc.location.cageId = i;
+                    break;
+                case CLUSTER_LEVEL_DATACENTER:
+                    nc.location.dcId = i;
+                    break;
+                case CLUSTER_LEVEL_AVAILABILITY_ZONE:
+                    nc.location.azId = i;
+                    break;
+                case CLUSTER_LEVEL_REGION:
+                    nc.location.regionId = i;
+                    break;
+                case CLUSTER_LEVEL_COUNTRY:
+                    nc.location.countryId = (uint16_t)i;
+                    break;
+                default:
+                    nc.location.continentId = (uint8_t)i;
+                    break;
+                }
+                clusterRingAddNode(ring, &nc);
+                nodes[i] = clusterRingGetNode(ring, 100 + i);
+            }
+            for (size_t m = 0; m < nLevels; m++) {
+                const clusterAffinityRule rule = {
+                    .spreadLevel = levels[m], .minSpread = 3, .required = true};
+                const bool met = clusterCheckAffinity(ring, nodes, 3, &rule, 1);
+                if (met != (m == l)) {
+                    ERR("nodes differing at level %zu: a rule at level %zu "
+                        "judged %d",
+                        l, m, met);
+                }
+                /* A soft rule never fails the check */
+                const clusterAffinityRule soft = {.spreadLevel = levels[m],
+                                                  .minSpread = 3,
+                                                  .required = false};
+                if (!clusterCheckAffinity(ring, nodes, 3, &soft, 1)) {
+                    ERRR("a soft rule failed the check");
+                }
+            }
+            if (!clusterCheckAffinity(ring, nodes, 0, NULL, 0)) {
+                ERRR("no nodes trivially meet any rule");
+            }
+        }
+    }
+
+    TEST("placements meet their required spread as the check judges it") {
+        clusterAffinityRule rule = {.spreadLevel = CLUSTER_LEVEL_RACK,
+                                    .minSpread = 3,
+                                    .required = true};
+        clusterRingConfig cfg = {.name = "spread",
+                                 .defaultQuorum = CLUSTER_QUORUM_BALANCED,
+                                 .affinityRules = &rule,
+                                 .affinityRuleCount = 1};
+        cfg.defaultQuorum.replicaCount = 3;
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNew(&cfg);
+        for (uint32_t i = 0; i < 12; i++) {
+            clusterNodeConfig nc = {.id = 1 + i};
+            nc.location.nodeId = i;
+            nc.location.rackId = i % 4; /* four racks, three nodes each */
+            clusterRingAddNode(ring, &nc);
+        }
+        uint32_t placed = 0;
+        for (uint32_t k = 0; k < 300; k++) {
+            char key[16];
+            const int len = snprintf(key, sizeof(key), "key-%u", k);
+            clusterPlacement p;
+            if (clusterRingLocate(ring, key, (uint32_t)len, &p) != CLUSTER_OK) {
+                clusterPlacementFree(&p);
+                continue;
+            }
+            placed++;
+            if (p.replicas.count != 3 ||
+                !clusterCheckAffinity(ring, p.replicas.nodes, p.replicas.count,
+                                      &rule, 1)) {
+                ERR("key %u: %u replicas do not span three racks", k,
+                    p.replicas.count);
+            }
+            clusterPlacementFree(&p);
+        }
+        if (placed != 300) {
+            ERR("only %u of 300 keys placed", placed);
+        }
+    }
+
+    TEST("LocateBox: equal keys place alike for every type; no value refuses") {
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
+        for (uint32_t i = 0; i < 8; i++) {
+            const clusterNodeConfig nc = {.id = 1 + i};
+            clusterRingAddNode(ring, &nc);
+        }
+        static uint8_t flexBytes[] = {1, 2, 3, 4, 5};
+        __uint128_t wide = ((__uint128_t)0x1234 << 64) | 0x5678;
+        databox keys[10] = {
+            databoxNewBytesString("a key"),
+            DATABOX_SIGNED(-42),
+            DATABOX_UNSIGNED(42),
+            DATABOX_DOUBLE(1.5),
+            DATABOX_BOX_TRUE,
+            DATABOX_BOX_FALSE,
+            DATABOX_BOX_NULL,
+        };
+        keys[7] = (databox){.type = DATABOX_FLOAT_32, .data.f32 = 2.5f};
+        keys[8] = (databox){
+            .type = DATABOX_UNSIGNED_128, .data.u128 = &wide, .big = 1};
+        keys[9] = (databox){.type = DATABOX_CONTAINER_FLEX_LIST,
+                            .data.bytes.start = flexBytes,
+                            .len = sizeof(flexBytes)};
+        for (size_t i = 0; i < 10; i++) {
+            clusterPlacement a;
+            clusterPlacement b;
+            const clusterResult ra = clusterRingLocateBox(ring, &keys[i], &a);
+            const clusterResult rb = clusterRingLocateBox(ring, &keys[i], &b);
+            if (ra != CLUSTER_OK || rb != CLUSTER_OK || !a.primary ||
+                a.primary != b.primary || a.hashValue != b.hashValue) {
+                ERR("key type %d placed %d/%d differently", keys[i].type, ra,
+                    rb);
+            }
+            clusterPlacementFree(&a);
+            clusterPlacementFree(&b);
+        }
+        /* The bytes of a string key: the same as locating the bytes */
+        clusterPlacement viaBox;
+        clusterPlacement viaBytes;
+        clusterRingLocateBox(ring, &keys[0], &viaBox);
+        clusterRingLocate(ring, "a key", 5, &viaBytes);
+        if (viaBox.hashValue != viaBytes.hashValue) {
+            ERRR("a string box hashed other than its bytes");
+        }
+        clusterPlacementFree(&viaBox);
+        clusterPlacementFree(&viaBytes);
+        /* No readable value: a 128-bit box without storage, an offset box */
+        const databox noWide = {.type = DATABOX_SIGNED_128, .big = 1};
+        const databox offset = {.type = DATABOX_BYTES_OFFSET};
+        clusterPlacement none;
+        if (clusterRingLocateBox(ring, &noWide, &none) == CLUSTER_OK ||
+            clusterRingLocateBox(ring, &offset, &none) == CLUSTER_OK ||
+            clusterRingLocateBox(ring, NULL, &none) == CLUSTER_OK) {
+            ERRR("a box with no readable value was placed");
+        }
+        clusterPlacementFree(&none);
+    }
+
+    return err;
+}
+
 int clusterRingTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
 
     int err = 0;
 
+    err += testAffinityOracleAndKeyTypes();
     err += testRingLifecycle();
     err += testNodeManagement();
     err += testPlacement();
