@@ -132,6 +132,7 @@ Frequently used names, with aliases in comments:
 ./build-dev/src/datakit-test test persistCtx      # pctx
 ./build-dev/src/datakit-test test multimapP       # mmP; also multilistP, multidictP, flexP,
                                                   # intsetP, multiOrderedSetP, multiroarP, multilruP
+./build-dev/src/datakit-test test persistContract # every persistOps descriptor (see below)
 
 # Hashing, MAC, AEAD, envelope
 ./build-dev/src/datakit-test test blake3          # b3; also blake3Neon, blake3SSE41, blake3AVX2
@@ -399,6 +400,47 @@ A test that only compiles under a feature guard belongs inside the same
 discovery block (see how `intsetBig` is handled for `__int128`).
 
 ## Test Coverage
+
+### Source coverage and untested API (dktools coverage)
+
+```sh
+uv run --project tools dktools coverage            # HEAD; --rev REV, --top N
+```
+
+builds an exported revision with clang's source-based coverage, runs the
+suite, and writes `summary.md` (and JSON): line, function, branch and region
+totals for the library sources, the least-covered files, and the public API
+(every function declared in a `src/` header) split into called by the tests,
+never called, and not built in the test binary (platform- or
+configuration-only code such as the Linux `OSRegulate` calls and the x86 SIMD
+variants).  A new public function belongs in the "called" list: add a test
+that calls it.
+
+### The persistence contract (persistContract)
+
+Every `persistOps` descriptor is registered in
+`src/persist/contract/persistContractTest.c` with a generator that builds a
+structure through the type's own API and records each mutation as a WAL op.
+The harness drives every type at several sizes and seeds, under every build
+configuration, and holds it to one frozen contract:
+
+1. **Round trip**: snapshot, restore, snapshot gives identical bytes, an equal
+   count and `validate()` true (empty structures included).
+2. **WAL**: the recorded ops, applied through `applyOp` to the starting
+   snapshot, to `newEmpty()` (when it matches), and to a mid-point snapshot,
+   all give the live structure's snapshot bytes.
+3. **Damage**: every truncation and a seeded set of single-byte corruptions
+   either make restore return NULL or give a structure that itself meets (1).
+   Never a crash, and never an allocation the snapshot's length does not
+   bound.
+4. **Strings**: numeral-looking strings (`"22"`, `"007"`, `"1.5"`, `"-3"`, 128-bit
+   numerals) keep their bytes through snapshot, restore and replay.
+
+It prints one table row per type (elements, snapshot bytes and ns per element,
+restore ns per element, WAL ops replayed, damaged snapshots refused and
+accepted).  A new descriptor adds a generator under `src/persist/contract/` and
+an entry in the registry; a type that cannot meet the contract is fixed, never
+excused.
 
 ### Manual Testing Patterns
 
