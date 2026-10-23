@@ -25,6 +25,7 @@ void fastMutexUnlockSlow(fastMutex *m);
 
 static inline void fast_mutex_lock(fastMutex *m) {
     uint64_t prev = 0;
+    /* @sync: acquire fastmutex.lock */
     if (!atomic_compare_exchange_weak_explicit(
             &m->word, &prev, 1, memory_order_acquire, memory_order_relaxed)) {
         fastMutexLockSlow(m);
@@ -33,6 +34,7 @@ static inline void fast_mutex_lock(fastMutex *m) {
 
 static inline void fastMutexUnlock(fastMutex *m) {
     uint64_t prev = 1;
+    /* @sync: release fastmutex.lock */
     if (!atomic_compare_exchange_strong_explicit(
             &m->word, &prev, 0, memory_order_release, memory_order_relaxed)) {
         assert((prev & 1) == 1);
@@ -47,15 +49,19 @@ static inline void fastMutexUnlock(fastMutex *m) {
  * the fast path of fast_mutex_lock(). */
 static inline bool fastMutexTryLock(fastMutex *m) {
     uint64_t prev = 0;
+    /* @sync: acquire fastmutex.lock */
     return atomic_compare_exchange_strong_explicit(
         &m->word, &prev, 1, memory_order_acquire, memory_order_relaxed);
 }
 
 static inline bool fastMutexIsLocked(fastMutex *m) {
+    /* A snapshot: the spin in fastMutexLockSlow re-decides with a CAS. */
+    /* @sync: relaxed hint */
     return (atomic_load_explicit(&m->word, memory_order_relaxed) & 1) != 0;
 }
 
 static inline void fastMutexInit(fastMutex *m) {
+    /* @sync: relaxed init */
     atomic_store_explicit(&m->word, 0, memory_order_relaxed);
 }
 

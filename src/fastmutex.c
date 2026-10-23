@@ -37,8 +37,10 @@ static void fast_waiter_destroy(fastWaiter *w) {
 void fastMutexLockSlow(fastMutex *m) {
     uint64_t sleeptime = 1;
     while (true) {
+        /* @sync: relaxed seed */
         uint64_t prev = atomic_load_explicit(&m->word, memory_order_relaxed);
         if (((prev & 1) == 0) &&
+            /* @sync: acquire fastmutex.lock */
             atomic_compare_exchange_weak_explicit(&m->word, &prev, prev | 1,
                                                   memory_order_acquire,
                                                   memory_order_relaxed)) {
@@ -55,6 +57,7 @@ void fastMutexLockSlow(fastMutex *m) {
             }
         }
 
+        /* @sync: relaxed seed */
         prev = atomic_load_explicit(&m->word, memory_order_relaxed);
         if ((prev & 1) == 0) {
             continue;
@@ -65,6 +68,9 @@ void fastMutexLockSlow(fastMutex *m) {
         }
 
         uint64_t expected = (uint64_t)prev | 2;
+        /* Bit 1 is the waiter-list lock; the list nodes it guards were
+         * last written by the previous holder before its release store. */
+        /* @sync: acquire fastmutex.queue */
         if (atomic_compare_exchange_weak_explicit(&m->word, &prev, expected,
                                                   memory_order_acquire,
                                                   memory_order_relaxed)) {
@@ -83,6 +89,8 @@ void fastMutexLockSlow(fastMutex *m) {
                 waiter.tail = &waiter;
             }
 
+            /* Drops the list lock (bit 1); the mutex stays held (bit 0). */
+            /* @sync: release fastmutex.queue */
             atomic_store_explicit(&m->word, (uint64_t)w | 1,
                                   memory_order_release);
             // sleep wait
@@ -98,14 +106,17 @@ void fastMutexLockSlow(fastMutex *m) {
 }
 
 void fastMutexUnlockSlow(fastMutex *m) {
+    /* @sync: relaxed seed */
     uint64_t w = atomic_load_explicit(&m->word, memory_order_relaxed);
     assert((w & 1) == 1);
     while (true) {
         while (w & 0x2) {
+            /* @sync: relaxed seed */
             w = atomic_load_explicit(&m->word, memory_order_relaxed);
         }
 
         assert((w & 0x2) == 0);
+        /* @sync: acquire fastmutex.queue */
         if (atomic_compare_exchange_weak_explicit(&m->word, &w, w | 2,
                                                   memory_order_acquire,
                                                   memory_order_relaxed)) {
@@ -130,6 +141,7 @@ void fastMutexUnlockSlow(fastMutex *m) {
     // be a release so the critical section's writes happen-before the next
     // owner's acquire (a relaxed store let them be seen late on weakly
     // ordered CPUs).
+    /* @sync: release fastmutex.lock; release fastmutex.queue */
     atomic_store_explicit(&m->word, (uint64_t)next_waiter,
                           memory_order_release);
     pthread_mutex_lock(&waiter->lock);
@@ -190,7 +202,11 @@ int fastMutexCondTimedWait(fastCond *c, fastMutex *m, struct timespec *ts) {
         if (head) {
             assert(head == &waiter);
             *last = waiter.next;
-            if (c->w && waiter.next == NULL) {
+            /* Only the head carries `tail`: a removed head hands it to
+             * its successor, and a removed last node moves it back. */
+            if (last == &c->w && waiter.next) {
+                waiter.next->tail = waiter.tail;
+            } else if (c->w && waiter.next == NULL) {
                 c->w->tail = lasttail;
             }
         } else {
