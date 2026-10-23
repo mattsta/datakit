@@ -29,8 +29,8 @@ from HEAD, one ``changed`` line each.
 ``--serial`` names tests run one at a time, such as the
 timing-sensitive tests in ``validate.DEFAULT_SERIAL``, and those are
 excluded from the parallel run.  Both are whole-name regexes, and a
-regex that matches no test is a failure.  ``allocaudit check --constructors`` runs on the tree with
-the tree's own dktools.
+regex that matches no test is a failure.  ``allocaudit check --constructors`` and
+``atomicaudit check`` run on the tree with the tree's own dktools.
 
 Without ``--target`` the build covers the four preset targets plus
 every target the selected tests run: configure is asked for the CMake
@@ -46,7 +46,7 @@ that leaves it out) is reported on its own ``missing`` line with the
 targets to add, not as an ordinary failure.
 
 Prints a result block (tree hash, build, warning and linker-note
-counts, ctest, sanitizer and allocaudit results, failing test names,
+counts, ctest, sanitizer, allocaudit and atomicaudit results, failing test names,
 log paths) and also writes it to ``ROOT/verify/NAME/result.txt``.
 Exits 0 only when every step passed with zero warning lines and no
 sanitizer report, 1 otherwise, and 2 on an input error.  The macOS
@@ -341,6 +341,21 @@ def run(repo: Path, opts: VerifyOptions) -> int:
             timeout=steps.ALLOCAUDIT_TIMEOUT,
         )
 
+    atomic = Step("atomicaudit", work / "atomic.log")
+    try:
+        uv = gitutil.require_program("uv")
+    except ToolError as exc:
+        atomic.log.write_text(f"{exc}\n")
+        atomic.code = 127
+    else:
+        atomic = steps.run_logged(
+            "atomicaudit",
+            steps.atomicaudit_command(uv, src),
+            atomic.log,
+            cwd=src / "tools",
+            timeout=steps.ATOMICAUDIT_TIMEOUT,
+        )
+
     failed = ctest_result.failed + serial_result.failed
     passed = (
         configure.ok
@@ -350,6 +365,7 @@ def run(repo: Path, opts: VerifyOptions) -> int:
         and (serial.ok or not opts.serial)
         and not sanitizer
         and alloc.ok
+        and atomic.ok
     )
 
     counts = f"{warn} warning lines, {notes} linker notes"
@@ -371,6 +387,7 @@ def run(repo: Path, opts: VerifyOptions) -> int:
         f"  serial    {_ctest_line(serial, serial_result) if opts.serial else '-'}",
         f"  sanitizer {_sanitizer_line(sanitizer)}",
         f"  alloc     {'ok' if alloc.ok else 'FAILED'} ({steps.last_line(alloc.log)})",
+        f"  atomic    {'ok' if atomic.ok else 'FAILED'} ({steps.last_line(atomic.log)})",
     ]
     if failed:
         lines.append(f"  failed    {' '.join(failed)}")
@@ -391,6 +408,7 @@ def run(repo: Path, opts: VerifyOptions) -> int:
         ctest.log,
         serial.log,
         alloc.log,
+        atomic.log,
     ):
         if log.exists():
             lines.append(f"    {log}")

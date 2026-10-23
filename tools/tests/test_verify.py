@@ -477,6 +477,7 @@ class VerifyRun(unittest.TestCase):
                 "build",
                 "ctest",
                 "allocaudit",
+                "atomicaudit",
             ],
         )
         script = runner.command("test-commands")[-2:]
@@ -506,6 +507,7 @@ class VerifyRun(unittest.TestCase):
                 {"ctest": CTEST_PASS, "ctest-output": "a.c:1: runtime error: x\n"},
             ),
             "alloc": ({"allocaudit": 1}, {"ctest": CTEST_PASS}),
+            "atomic": ({"atomicaudit": 1}, {"ctest": CTEST_PASS}),
             "configure": ({"configure": 1}, {}),
         }
         for label, (codes, outputs) in cases.items():
@@ -532,6 +534,7 @@ class VerifyRun(unittest.TestCase):
             "build": "build     FAILED (timed out)",
             "ctest": "ctest     FAILED (timed out;",
             "allocaudit": "alloc     FAILED (dktools: allocaudit: timed out after",
+            "atomicaudit": "atomic    FAILED (dktools: atomicaudit: timed out after",
         }
         for step, needle in cases.items():
             with self.subTest(step=step):

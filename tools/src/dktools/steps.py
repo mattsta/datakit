@@ -31,6 +31,8 @@ QUERY_TIMEOUT = 10 * 60
 BUILD_TIMEOUT = 3 * 3600
 CTEST_TIMEOUT = 3 * 3600
 ALLOCAUDIT_TIMEOUT = 30 * 60
+#: The atomic audit is lexical and takes about a second.
+ATOMICAUDIT_TIMEOUT = 10 * 60
 #: ``ctest --timeout``: the limit for each test that sets no TIMEOUT
 #: property of its own (ctest's conventional default), so one hung
 #: test fails alone instead of running into CTEST_TIMEOUT.
@@ -513,6 +515,23 @@ def allocaudit_command(uv: str, tree: Path) -> list[str]:
         "allocaudit",
         "check",
         "--constructors",
+    ]
+
+
+def atomicaudit_command(uv: str, tree: Path) -> list[str]:
+    """The atomicOrdering gate, run with the tree's own dktools (its tag
+    grammar must match the sources being audited)."""
+    return [
+        uv,
+        "run",
+        "--frozen",
+        "--project",
+        str(tree / "tools"),
+        "dktools",
+        "--repo",
+        str(tree),
+        "atomicaudit",
+        "check",
     ]
 
 

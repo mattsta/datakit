@@ -781,6 +781,20 @@ if(BuildTestBinary)
             TIMEOUT_SIGNAL_GRACE_PERIOD 5
             SKIP_RETURN_CODE 77
             LABELS "gate")
+        # Atomic-ordering gate: every atomic operation in src/ carries a
+        # @sync tag whose claim its memory order provides exactly, and
+        # every named edge has a publishing and an observing side.
+        add_test(NAME atomicOrdering
+            COMMAND sh ${DK_TOOLS_DIR}/uvGate.sh ${UV_EXECUTABLE} ${DK_TOOLS_DIR}
+                dktools --repo ${PROJECT_SOURCE_DIR}
+                atomicaudit check
+            WORKING_DIRECTORY ${DK_TOOLS_DIR})
+        set_tests_properties(atomicOrdering PROPERTIES
+            TIMEOUT 120
+            TIMEOUT_SIGNAL_NAME SIGTERM
+            TIMEOUT_SIGNAL_GRACE_PERIOD 5
+            SKIP_RETURN_CODE 77
+            LABELS "gate")
         # The tools' own unit tests (tools/tests: every dktools
         # subcommand), through the same environment and skip rule.
         add_test(NAME dktoolsSelfTest
@@ -793,9 +807,9 @@ if(BuildTestBinary)
             TIMEOUT_SIGNAL_GRACE_PERIOD 5
             SKIP_RETURN_CODE 77
             LABELS "gate")
-        message(STATUS "Registered allocOwnership gate (dktools allocaudit)")
+        message(STATUS "Registered allocOwnership and atomicOrdering gates (dktools)")
     else()
-        message(STATUS "allocOwnership gate skipped (uv or tools/ missing)")
+        message(STATUS "allocOwnership/atomicOrdering gates skipped (uv or tools/ missing)")
     endif()
 
     # check target - runs all tests with verbose output

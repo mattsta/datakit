@@ -76,6 +76,12 @@ uv run dktools atomicaudit check src/a.c src/a.h  # a subset while working
 uv run dktools atomicaudit report               # markdown edge map
 ```
 
+It is enforced as the ctest test `atomicOrdering` (registered beside
+`allocOwnership`), and `verify` and `validate` run it on the tree they
+build (the `atomic` line).  Clang builds add `-Watomic-implicit-seq-cst`,
+which catches the operator forms (`x++` on an `_Atomic`) a lexical audit
+cannot see.
+
 The allocation audit is enforced as the ctest test `allocOwnership`
 (registered in `src/CMakeLists.txt` whenever `uv` is on PATH), so it
 runs with plain `ctest`, `datakit-check`, and `datakit-quickcheck`.
