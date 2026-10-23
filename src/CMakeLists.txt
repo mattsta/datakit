@@ -600,6 +600,7 @@ add_library(${PROJECT_NAME} OBJECT
     persist/contract/fenwickContractTest.c
     persist/contract/multiFenwickContractTest.c
     persist/contract/segmentContractTest.c
+    persist/contract/atomContractTest.c
 )
 
 # ============================================================================

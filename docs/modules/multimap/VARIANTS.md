@@ -607,6 +607,18 @@ reuses the most recently freed ID first.
 > the atom is gone, its ID may name a later, unrelated value. Permanent IDs
 > name one value for the table's life.
 
+### Persistence
+
+`persistOpsMultimapAtom` (`atomPersist.h`, type id 140) keeps every ID
+exactly: a restored table resolves the same IDs and hands out the same IDs
+next.  The snapshot is the behaviour flag, the next ID and each atom's (ID,
+value, count) in ID order; values are stored exactly, so `"22"` stays bytes.
+Restore rebuilds the reverse map from the values sorted once, instead of one
+search per atom (perf preset, 100k atoms: snapshot 66 ns, restore 641 ns per
+atom, against 2.2 µs per atom to intern them again).  WAL ops: `INSERT [id,
+value]` (a new atom with one reference), `NUM_INCR [id, +1 | -1]` (retain;
+release, the last one deleting), `DELETE [id]`.
+
 ### Using an Atom Container With a multimap
 
 The `*WithReference` and `*WithSurrogateKey` multimap entry points take the atom

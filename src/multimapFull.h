@@ -15,6 +15,10 @@ multimapFull *multimapFullNewFromManyGrow(void *m, flex *map[],
                                           size_t count,
                                           multimapElements elementsPerEntry,
                                           bool mapIsSet);
+multimapFull *multimapFullNewFromManyGrowWithReference(
+    void *m, flex *map[], const multimapFullMiddle middle[], size_t count,
+    multimapElements elementsPerEntry, bool mapIsSet,
+    const struct multimapAtom *referenceContainer);
 multimapFull *multimapFullNewFromTwoGrow(void *m, flex *map[2],
                                          multimapFullMiddle middle[2],
                                          multimapElements elementsPerEntry,

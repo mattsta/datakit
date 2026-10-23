@@ -10,6 +10,7 @@
 
 #ifdef DATAKIT_TEST
 
+#include "atomPersist.h"
 #include "blake3.h"
 #include "chacha20poly1305.h"
 #include "cleaner.h"
@@ -877,6 +878,19 @@ static void benchMultimapAtom(void) {
         databox k = perfContainerKey(keys, i);
         multimapAtomInsertConvert(ma, &k);
     }
+
+    /* Persistence of the full table: one snapshot, one restore (ns/atom) */
+    size_t snapLen = 0;
+    t0 = monoNowSec();
+    cleanerName(zfree, U8Buf) uint8_t *snap =
+        persistOpsMultimapAtom.snapshot(ma, &snapLen);
+    emitRow("multimapAtom", "snapshot", 0, n, monoNowSec() - t0);
+
+    t0 = monoNowSec();
+    cleaner(multimapAtomFree) multimapAtom *restored =
+        persistOpsMultimapAtom.restore(snap, snapLen);
+    emitRow("multimapAtom", "restore", 0, n, monoNowSec() - t0);
+    sink += multimapAtomCount(restored);
 
     t0 = monoNowSec();
     for (uint32_t i = 0; i < n; i++) {

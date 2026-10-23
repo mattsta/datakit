@@ -312,6 +312,95 @@ multimap *multimapNewFromDump(multimapElements elementsPerEntry, bool isSet,
     return MULTIMAP_TAG_(full, MULTIMAP_TYPE_FULL);
 }
 
+static void multimapUpgradeIfNecessaryWithReference(
+    multimap **m, uint_fast32_t depth, flexCapSizeLimit limit,
+    const multimapAtom *restrict referenceContainer);
+
+/* Whether the rows' keys, resolved through 'referenceContainer', strictly
+ * ascend (a map of references holds each value once) */
+static bool
+multimapDumpAscendsWithReference_(const flex *rows,
+                                  multimapElements elementsPerEntry,
+                                  const multimapAtom *referenceContainer) {
+    const size_t count = flexCount(rows);
+    if (elementsPerEntry == 0 || count % elementsPerEntry) {
+        return false;
+    }
+
+    databox key[2];
+    databoxWide keyWide[2];
+    flexEntry *fe = flexHead(rows);
+    for (size_t row = 0; row < count / elementsPerEntry; row++) {
+        databox *cur = &key[row & 1];
+        *cur = (databox){{0}};
+        flexGetByTypeIntoWithReference(fe, cur, &keyWide[row & 1],
+                                       referenceContainer);
+        if (row > 0 && databoxCompare(&key[(row - 1) & 1], cur) >= 0) {
+            return false;
+        }
+
+        for (multimapElements e = 0; e < elementsPerEntry; e++) {
+            fe = flexNext(rows, fe);
+        }
+    }
+
+    return true;
+}
+
+multimap *
+multimapNewFromDumpWithReference(multimapElements elementsPerEntry,
+                                 flexCapSizeLimit limit, flex *rows,
+                                 const multimapAtom *referenceContainer) {
+    if (!multimapDumpAscendsWithReference_(rows, elementsPerEntry,
+                                           referenceContainer)) {
+        flexFree(rows);
+        return NULL;
+    }
+
+    const size_t bytes = flexBytes(rows);
+    const size_t splitSize = flexOptimizationSizeLimit[limit];
+    const size_t total = flexCount(rows) / elementsPerEntry;
+
+    /* Up to what Medium holds: the rows become a Small's one map, grown
+     * once as an insert would grow it */
+    if (bytes <= splitSize * 3 || total < 4) {
+        /* @own: caller; free=multimapFree */
+        multimapSmall *small = multimapSmallNew(elementsPerEntry, false);
+        flexFree(small->map);
+        small->map = rows;
+        small->middle =
+            (uint32_t)(flexMiddle(rows, elementsPerEntry) - small->map);
+        multimap *m = SET_COMPRESS_DEPTH_LIMIT(small, 0, limit);
+        m = MULTIMAP_TAG_(m, MULTIMAP_TYPE_SMALL);
+        multimapUpgradeIfNecessaryWithReference(&m, 0, limit,
+                                                referenceContainer);
+        return m;
+    }
+
+    /* Larger: whole rows cut into inner maps of about the split size, as
+     * multimapNewFromDump cuts them, with range boxes resolved */
+    size_t perMap = (total * splitSize) / bytes;
+    perMap = perMap ? perMap : 1;
+    const size_t maps = (total + perMap - 1) / perMap;
+    cleanerName(zfree, Void) void *storage =
+        zcalloc(maps, sizeof(flex *) + sizeof(multimapFullMiddle));
+    flex **map = storage;
+    multimapFullMiddle *middle = (multimapFullMiddle *)(map + maps);
+    for (size_t i = maps - 1; i > 0; i--) {
+        const size_t end = (i + 1) * perMap < total ? (i + 1) * perMap : total;
+        const size_t entries = (end - i * perMap) * elementsPerEntry;
+        /* @own: container; free=flexFree */
+        map[i] = flexSplitRange(&rows, -(int32_t)entries, (uint32_t)entries);
+    }
+    map[0] = rows;
+
+    /* @own: caller; free=multimapFree */
+    multimapFull *full = multimapFullNewFromManyGrowWithReference(
+        NULL, map, middle, maps, elementsPerEntry, false, referenceContainer);
+    full->maxSize = (uint32_t)splitSize;
+    return MULTIMAP_TAG_(full, MULTIMAP_TYPE_FULL);
+}
+
 DK_INLINE_ALWAYS void multimapUpgradeIfNecessary_(
     multimap **m, const uint_fast32_t depth, const flexCapSizeLimit limit,
     const bool useReference, const multimapAtom *restrict referenceContainer) {

@@ -1970,6 +1970,8 @@ const char *persistTypeName(persistType type) {
         return "segmentFloat";
     case PERSIST_TYPE_SEGMENT_DOUBLE:
         return "segmentDouble";
+    case PERSIST_TYPE_MULTIMAP_ATOM:
+        return "multimapAtom";
     default:
         return "unknown";
     }

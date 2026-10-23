@@ -1,4 +1,9 @@
 #include "multimapAtom.h"
+#include "atomPersist.h"
+#include "cleaner.h"
+
+defcleaner(multimapAtom *, multimapAtomFree);
+defcleanerName(void *, zfree, Void);
 
 struct multimapAtom {
     multimap *mapAtomForward; /* ID -> String, sorted by ID */
@@ -113,15 +118,18 @@ static void atomCreateForward_(void *ctx) {
     assert(!replaced);
     (void)replaced;
 
-    atomSetNextId_(c->ma, c->id + 1);
+    /* Generated ids continue past every id in use */
+    if (c->id >= atomNextId_(c->ma)) {
+        atomSetNextId_(c->ma, c->id + 1);
+    }
 }
 
 /* The atom of 'key' in one reverse search: true when it existed ('ref'
- * its reference), false when this call created it with one reference
- * ('ref' the new reference) */
-static bool atomFindOrCreate_(multimapAtom *ma, const databox *key,
-                              databox *ref) {
-    atomCreate_ create = {.ma = ma, .key = key, .id = atomNextId_(ma)};
+ * its reference), false when this call created it with one reference and
+ * the id 'id' ('ref' the new reference) */
+static bool atomFindOrCreateWithId_(multimapAtom *ma, const databox *key,
+                                    const uint64_t id, databox *ref) {
+    atomCreate_ create = {.ma = ma, .key = key, .id = id};
     const databox atomId = {.data.u = create.id,
                             .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
     const databox *reverseRow[1] = {key};
@@ -135,6 +143,11 @@ static bool atomFindOrCreate_(multimapAtom *ma, const databox *key,
            multimapCount(ma->mapAtomReverse));
     *ref = atomId;
     return false;
+}
+
+static bool atomFindOrCreate_(multimapAtom *ma, const databox *key,
+                              databox *ref) {
+    return atomFindOrCreateWithId_(ma, key, atomNextId_(ma), ref);
 }
 
 void multimapAtomInsert(multimapAtom *ma, const databox *box) {
@@ -519,6 +532,330 @@ size_t multimapAtomBytes(const multimapAtom *ma) {
            multimapBytes(ma->mapAtomReverse);
 }
 
+/* ====================================================================
+ * Persistence (atomPersist.h)
+ * ==================================================================== */
+#define ATOM_PERSIST_FLAG_PERMANENT_ 1u
+
+/* A stored count (0-based: 0 is one reference) as a number; FieldIncr
+ * leaves it FALSE, TRUE or an integer */
+static bool atomPersistCountOf_(const databox *box, uint64_t *count) {
+    switch (box->type) {
+    case DATABOX_FALSE:
+        *count = 0;
+        return true;
+    case DATABOX_TRUE:
+        *count = 1;
+        return true;
+    case DATABOX_UNSIGNED_64:
+        *count = box->data.u64;
+        return true;
+    case DATABOX_SIGNED_64:
+        *count = (uint64_t)box->data.i64;
+        return box->data.i64 >= 0;
+    default:
+        return false;
+    }
+}
+
+static uint8_t *multimapAtomPersistSnapshot_(const void *structure,
+                                             size_t *len) {
+    const multimapAtom *ma = structure;
+    /* @own: caller; free=zfree */
+    flex *f = flexNew();
+    const databox flags = DATABOX_UNSIGNED(
+        multimapAtomIsPermanent(ma) ? ATOM_PERSIST_FLAG_PERMANENT_ : 0);
+    const databox next = DATABOX_UNSIGNED(atomNextId_(ma));
+    const databox *header[2] = {&flags, &next};
+    flexAppendMultipleExact(&f, 2, header);
+
+    /* Rows in id order (the forward map's order), 21 at a time */
+    enum { BATCH = 21 };
+    databox boxes[BATCH * 3];
+    databoxWide wide[BATCH * 3];
+    const databox *ptrs[BATCH * 3];
+    size_t used = 0;
+    multimapIterator iter;
+    multimapIteratorInit(ma->mapAtomForward, &iter, true);
+    while (true) {
+        /* A narrow decode leaves the flag bits as they were: zero them */
+        databox *row[3] = {&boxes[used * 3], &boxes[used * 3 + 1],
+                           &boxes[used * 3 + 2]};
+        for (size_t i = 0; i < 3; i++) {
+            *row[i] = (databox){{0}};
+        }
+
+        const bool more =
+            multimapIteratorNextWithSlots(&iter, row, &wide[used * 3]);
+        if (more) {
+            uint64_t count = 0;
+            atomPersistCountOf_(row[2], &count);
+            boxes[used * 3].type = DATABOX_UNSIGNED_64; /* the id */
+            boxes[used * 3 + 2] = DATABOX_UNSIGNED(count);
+            for (size_t i = 0; i < 3; i++) {
+                ptrs[used * 3 + i] = &boxes[used * 3 + i];
+            }
+            used++;
+        }
+
+        if (used && (used == BATCH || !more)) {
+            flexAppendMultipleExact(&f, (uint_fast32_t)(used * 3), ptrs);
+            used = 0;
+        }
+
+        if (!more) {
+            break;
+        }
+    }
+
+    *len = flexBytes(f);
+    return (uint8_t *)f;
+}
+
+/* The next entry as an unsigned 64-bit value */
+static bool atomPersistUnsigned_(const flex *f, flexEntry **fe, uint64_t *out) {
+    databoxBig box;
+    flexGetByTypeBig(*fe, &box);
+    *fe = flexNext(f, *fe);
+    *out = box.data.u64;
+    return box.type == DATABOX_UNSIGNED_64;
+}
+
+/* A value an atom may intern from persisted bytes: a number, true,
+ * false, null or bytes */
+static bool atomPersistValueOk_(const databox *value) {
+    switch (value->type) {
+    case DATABOX_SIGNED_64:
+    case DATABOX_UNSIGNED_64:
+    case DATABOX_SIGNED_128:
+    case DATABOX_UNSIGNED_128:
+    case DATABOX_FLOAT_32:
+    case DATABOX_DOUBLE_64:
+    case DATABOX_TRUE:
+    case DATABOX_FALSE:
+    case DATABOX_NULL:
+    case DATABOX_BYTES:
+    case DATABOX_BYTES_EMBED:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static int atomPersistCompareValues_(const void *a, const void *b) {
+    return databoxCompare(*(const databox *const *)a,
+                          *(const databox *const *)b);
+}
+
+static void *multimapAtomPersistRestore_(const uint8_t *data, size_t len) {
+    if (!flexValidateBufferDeep(data, len)) {
+        return NULL;
+    }
+
+    const flex *f = (const flex *)data;
+    const size_t n = flexCount(f);
+    flexEntry *fe = flexHead(f);
+    uint64_t flags;
+    uint64_t next;
+    if (n < 2 || (n - 2) % 3 || !atomPersistUnsigned_(f, &fe, &flags) ||
+        !atomPersistUnsigned_(f, &fe, &next) ||
+        (flags & ~(uint64_t)ATOM_PERSIST_FLAG_PERMANENT_) ||
+        next >= MULTIMAP_ATOM_ID_LIMIT) {
+        return NULL;
+    }
+
+    cleaner(multimapAtomFree) multimapAtom *ma =
+        (flags & ATOM_PERSIST_FLAG_PERMANENT_) ? multimapAtomNewPermanent()
+                                               : multimapAtomNew();
+    const bool permanent = multimapAtomIsPermanent(ma);
+    const size_t atoms = (n - 2) / 3;
+
+    /* Each value, kept in place (a 96/128-bit box points into itself) and
+     * sorted through pointers, so the reverse map is built in value order
+     * instead of searched once per atom */
+    cleanerName(zfree, Void) void *storage =
+        zcalloc(atoms ? atoms : 1,
+                sizeof(databoxBig) + sizeof(databoxBig *) + sizeof(uint64_t));
+    databoxBig *values = storage;
+    databoxBig **byValue = (databoxBig **)(values + atoms);
+    uint64_t *ids = (uint64_t *)(byValue + atoms);
+    for (size_t r = 0; r < atoms; r++) {
+        uint64_t count;
+        databoxBig countBox;
+        if (!atomPersistUnsigned_(f, &fe, &ids[r])) {
+            return NULL;
+        }
+
+        flexGetByTypeBig(fe, &values[r]);
+        fe = flexNext(f, fe);
+        flexGetByTypeBig(fe, &countBox);
+        fe = flexNext(f, fe);
+
+        /* Ids ascend below the next id; a permanent table keeps no counts */
+        if ((r && ids[r] <= ids[r - 1]) || ids[r] >= next ||
+            !atomPersistValueOk_((const databox *)&values[r]) ||
+            countBox.type != DATABOX_UNSIGNED_64 ||
+            !atomPersistCountOf_((const databox *)&countBox, &count) ||
+            count > INT64_MAX || (permanent && count)) {
+            return NULL;
+        }
+
+        const databox ref = {.data.u = ids[r],
+                             .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
+        const databox countStored =
+            count ? DATABOX_UNSIGNED(count) : (databox){.type = DATABOX_FALSE};
+        const databox *forwardRow[3] = {&ref, (const databox *)&values[r],
+                                        &countStored};
+        multimapAppend(&ma->mapAtomForward, forwardRow);
+        byValue[r] = &values[r];
+    }
+
+    /* The ids in value order; the reverse map's builder refuses a value
+     * bound twice */
+    qsort(byValue, atoms, sizeof(*byValue), atomPersistCompareValues_);
+    /* The reverse map's builder takes the rows */
+    /* @own: container; free=multimapFree */
+    flex *rows = flexNew();
+    for (size_t r = 0; r < atoms; r++) {
+        const databox ref = {.data.u = ids[byValue[r] - values],
+                             .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
+        flexPushByType(&rows, &ref, FLEX_ENDPOINT_TAIL);
+    }
+
+    /* @own: container; free=multimapAtomFree */
+    multimap *reverse =
+        multimapNewFromDumpWithReference(1, FLEX_CAP_LEVEL_512, rows, ma);
+    if (!reverse) {
+        return NULL;
+    }
+
+    multimapFree(ma->mapAtomReverse);
+    ma->mapAtomReverse = reverse;
+    atomSetNextId_(ma, next);
+    multimapAtom *out = ma;
+    ma = NULL;
+    return out;
+}
+
+static uint8_t *multimapAtomPersistEncodeOp_(persistOp op, const void *args,
+                                             size_t argc, size_t *len) {
+    *len = 0;
+    const bool shaped = (op == PERSIST_OP_INSERT && argc == 2) ||
+                        (op == PERSIST_OP_NUM_INCR && argc == 2) ||
+                        (op == PERSIST_OP_DELETE && argc == 1);
+    if (!shaped || !args) {
+        return NULL;
+    }
+
+    flex *f = flexNewFromDataboxPtrsExact(args, argc);
+    if (f) {
+        *len = flexBytes(f);
+    }
+
+    return (uint8_t *)f;
+}
+
+/* The id box of a WAL op as a reference to a live atom */
+static bool atomPersistLiveRef_(const multimapAtom *ma, const databoxBig *id,
+                                databox *ref) {
+    if (id->type != DATABOX_UNSIGNED_64 ||
+        id->data.u64 >= MULTIMAP_ATOM_ID_LIMIT) {
+        return false;
+    }
+
+    *ref = (databox){.data.u = id->data.u64,
+                     .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
+    return multimapExists(ma->mapAtomForward, ref);
+}
+
+static bool multimapAtomPersistApplyOp_(void *structure, persistOp op,
+                                        const uint8_t *data, size_t len) {
+    multimapAtom *ma = *(multimapAtom **)structure;
+    databoxBig a;
+    databoxBig b;
+    databox ref;
+    switch (op) {
+    case PERSIST_OP_INSERT: {
+        /* A new atom, with one reference, under exactly the id the
+         * writer's table gave it */
+        if (!flexGetTwoDataboxesBig(data, len, &a, &b) ||
+            a.type != DATABOX_UNSIGNED_64 ||
+            a.data.u64 >= MULTIMAP_ATOM_ID_LIMIT - 1 ||
+            !atomPersistValueOk_((const databox *)&b) ||
+            atomPersistLiveRef_(ma, &a, &ref)) {
+            return false;
+        }
+
+        return !atomFindOrCreateWithId_(ma, (const databox *)&b, a.data.u64,
+                                        &ref);
+    }
+    case PERSIST_OP_NUM_INCR:
+        /* One reference more (+1) or fewer (-1; the last one deletes) */
+        if (!flexGetTwoDataboxesBig(data, len, &a, &b) ||
+            !atomPersistLiveRef_(ma, &a, &ref) ||
+            (b.type != DATABOX_SIGNED_64 && b.type != DATABOX_UNSIGNED_64)) {
+            return false;
+        }
+
+        if (b.data.i64 == 1) {
+            multimapAtomRetainByRef(ma, &ref);
+            return true;
+        }
+
+        if (b.type == DATABOX_SIGNED_64 && b.data.i64 == -1) {
+            conformRefcountDecr(ma, &ref, NULL);
+            return true;
+        }
+
+        return false;
+    case PERSIST_OP_DELETE:
+        return flexGetSingleDataboxBig(data, len, &a) &&
+               atomPersistLiveRef_(ma, &a, &ref) &&
+               multimapAtomDeleteByRef(ma, &ref);
+    default:
+        return false;
+    }
+}
+
+static void *multimapAtomPersistNewEmpty_(void) {
+    /* @own: caller; free=multimapAtomFree */
+    return multimapAtomNew();
+}
+
+static size_t multimapAtomPersistCount_(const void *structure) {
+    return multimapAtomCount(structure);
+}
+
+static size_t multimapAtomPersistBytes_(const void *structure) {
+    return multimapAtomBytes(structure);
+}
+
+static bool multimapAtomPersistValidate_(const void *structure) {
+    const multimapAtom *ma = structure;
+    return multimapCount(ma->mapAtomForward) ==
+           multimapCount(ma->mapAtomReverse);
+}
+
+static void multimapAtomPersistFree_(void *structure) {
+    multimapAtomFree(structure);
+}
+
+const persistOps persistOpsMultimapAtom = {
+    .type = PERSIST_TYPE_MULTIMAP_ATOM,
+    .name = "multimapAtom",
+    .formatVersion = 1,
+    .minReadVersion = 1,
+    .snapshot = multimapAtomPersistSnapshot_,
+    .restore = multimapAtomPersistRestore_,
+    .newEmpty = multimapAtomPersistNewEmpty_,
+    .count = multimapAtomPersistCount_,
+    .estimateSize = multimapAtomPersistBytes_,
+    .encodeOp = multimapAtomPersistEncodeOp_,
+    .applyOp = multimapAtomPersistApplyOp_,
+    .validate = multimapAtomPersistValidate_,
+    .free = multimapAtomPersistFree_,
+};
+
 #ifdef DATAKIT_TEST
 void multimapAtomRepr(const multimapAtom *ma) {
     printf("Forward Maps:\n");
@@ -537,13 +874,11 @@ bool populateSet(void *userData, const databox *elements[]) {
     return true;
 }
 
-#include "cleaner.h"
 #include "ctest.h"
 #include "multimapFull.h"
 #include "timeUtil.h"
 #include <inttypes.h>
 
-defcleaner(multimapAtom *, multimapAtomFree);
 defcleanerName(uint64_t *, zfree, U64);
 
 /* Fill the stack below the caller with 0xFF so a temporary that is read

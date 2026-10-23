@@ -215,6 +215,9 @@ typedef enum persistType {
     PERSIST_TYPE_SEGMENT_FLOAT = 138,
     PERSIST_TYPE_SEGMENT_DOUBLE = 139,
 
+    /* Atom tables (atomPersist.h) */
+    PERSIST_TYPE_MULTIMAP_ATOM = 140,
+
     /* Reserved for future use */
     PERSIST_TYPE_MAX = 255
 } persistType;

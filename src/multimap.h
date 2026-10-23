@@ -24,6 +24,16 @@ flex *multimapDump(const multimap *m);
  * with isSet): rows are deduplicated whole, so one key may hold several
  * rows.  False for a map, where inserting a key replaces its row. */
 bool multimapIsSet(const multimap *m);
+/* multimapNewFromDump for a map of atom references: 'rows' (taken) hold
+ * reference keys whose values, resolved through 'referenceContainer',
+ * strictly ascend.  Built straight into the tier and inner maps inserts
+ * would reach under the size limit 'limit', in O(rows) beyond the order
+ * check.  NULL, with 'rows' freed, when the rows are not whole, out of
+ * order or repeat a value. */
+multimap *
+multimapNewFromDumpWithReference(multimapElements elementsPerEntry,
+                                 flexCapSizeLimit limit, flex *rows,
+                                 const struct multimapAtom *referenceContainer);
 /* The tier currently holding the rows (Small, Medium or Full) */
 multimapType multimapGetType(const multimap *m);
 /* A multimap holding `rows` (full-width rows, as multimapDump writes them);
