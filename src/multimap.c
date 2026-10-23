@@ -1325,8 +1325,6 @@ void multimapVerify(const multimap *m) {
 #define TIME_FINISH(i, what)
 #endif
 
-#define multimapVerify(m)
-
 #define multimapReport(m) multimapReport_(m, true)
 #define multimapReportSizeOnly(m) multimapReport_(m, false)
 
@@ -3206,8 +3204,10 @@ static int32_t mxReplaceAndDelete(const char *where, multimap **m, mwRow *rows,
             continue;
         }
 
+        /* i steps by 4 from 1, so i % 12 cycles 1, 5, 9: DeleteTaking,
+         * DeleteReporting and DeleteWithFound in turn */
         const databox key = mwBox(&rows[i].key);
-        if (i % 8 == 5) {
+        if (i % 12 == 5) {
             /* DeleteReporting: the removed value, under replacedOut's
              * rules */
             databoxBig removed;
@@ -3224,7 +3224,7 @@ static int32_t mxReplaceAndDelete(const char *where, multimap **m, mwRow *rows,
             continue;
         }
 
-        if (i % 8 == 1) {
+        if (i % 12 == 1) {
             /* DeleteTaking into an armed box: the value whole, wide in
              * band */
             databoxBig taken;
@@ -4158,7 +4158,9 @@ int multimapTest(int argc, char *argv[]) {
             1, 100, 30000, 8000000, INT64_C(3000000000), INT64_MAX / 4};
         const size_t nDeltas = sizeof(deltas) / sizeof(*deltas);
 
-        for (int count = 4; count <= 1024; count *= 4) {
+        /* 256 keys already put a 64-byte-limit map deep into Full (many
+         * inner maps); verifying after every operation is O(n) */
+        for (int count = 4; count <= 256; count *= 4) {
             cleaner(multimapFree) multimap *m =
                 multimapNewLimit(2, FLEX_CAP_LEVEL_64);
             cleanerName(zfree, Int64) int64_t *shadow =
