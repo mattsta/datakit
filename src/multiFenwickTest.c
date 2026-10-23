@@ -86,8 +86,229 @@ static bool mfwIntIs(const databox *box, int64_t want) {
     return false;
 }
 
+/* 'box' is the integer 'want' (in either 64-bit integer type) */
+static bool mfwBoxIs128(const databox *box, __int128_t want) {
+    if (box->type == DATABOX_SIGNED_64) {
+        return box->data.i64 == want;
+    }
+
+    if (box->type == DATABOX_UNSIGNED_64) {
+        return want >= 0 && box->data.u64 == (uint64_t)want;
+    }
+
+    return false;
+}
+
+static bool mfwVoid(databox box) {
+    return DATABOX_IS_VOID(&box);
+}
+
+static bool mfwInt(databox box, __int128_t want) {
+    return mfwBoxIs128(&box, want);
+}
+
+/* One call site each for the header's inline helpers, which the helper
+ * test calls dozens of times (gcc -Winline warns on every call it will
+ * not inline); noinline keeps gcc from folding these back in */
+__attribute__((noinline)) static bool mfwAdd(const databox *a, const databox *b,
+                                             databox *r) {
+    return databoxAdd(a, b, r);
+}
+
+__attribute__((noinline)) static bool mfwSub(const databox *a, const databox *b,
+                                             databox *r) {
+    return databoxSubtract(a, b, r);
+}
+
+__attribute__((noinline)) static int mfwCmp(const databox *a,
+                                            const databox *b) {
+    return databoxCompareNumeric(a, b);
+}
+
+__attribute__((noinline)) static databox mfwConvert(const databox *src,
+                                                    databoxType type) {
+    return databoxConvertToType(src, type);
+}
+
+__attribute__((noinline)) static databoxType mfwResultType(const databox *a,
+                                                           const databox *b) {
+    return databoxResultType(a, b);
+}
+
 int multiFenwickTest(int argc, char *argv[]) {
     int err = 0;
+
+    TEST("helpers: databox arithmetic and conversion against exact oracles") {
+        const databox s = DATABOX_SIGNED(-7);
+        const databox u = DATABOX_UNSIGNED(UINT64_MAX);
+        const databox big = DATABOX_SIGNED((INT64_C(1) << 53) + 1);
+        const databox d = DATABOX_DOUBLE(0x1p53);
+        const databox half = DATABOX_DOUBLE(2.5);
+        const databox v = DATABOX_BOX_VOID;
+        const databox bytes = DATABOX_WITH_BYTES((void *)"xy", 2);
+        databox f;
+        DATABOX_SET_FLOAT(&f, 1.5f);
+        databox r;
+
+        /* Integers add and subtract exactly; the result's type follows
+         * its value */
+        static const int64_t ints[] = {INT64_MIN, -3, 0, 5, INT64_MAX};
+        for (size_t i = 0; i < 5; i++) {
+            for (size_t j = 0; j < 5; j++) {
+                const databox a = DATABOX_SIGNED(ints[i]);
+                const databox b = DATABOX_SIGNED(ints[j]);
+                __int128_t sum = (__int128_t)ints[i] + ints[j];
+                __int128_t diff = (__int128_t)ints[i] - ints[j];
+                /* Past the 64-bit range the helpers wrap modulo 2^64 */
+                if (sum > (__int128_t)UINT64_MAX || sum < INT64_MIN) {
+                    continue;
+                }
+                if (!mfwAdd(&a, &b, &r) || !mfwBoxIs128(&r, sum)) {
+                    ERR("add %" PRId64 " + %" PRId64, ints[i], ints[j]);
+                }
+                if (diff <= (__int128_t)UINT64_MAX && diff >= INT64_MIN &&
+                    (!mfwSub(&a, &b, &r) || !mfwBoxIs128(&r, diff))) {
+                    ERR("subtract %" PRId64 " - %" PRId64, ints[i], ints[j]);
+                }
+                const int cmp = mfwCmp(&a, &b);
+                if ((cmp > 0) != (ints[i] > ints[j]) ||
+                    (cmp < 0) != (ints[i] < ints[j])) {
+                    ERR("compare %" PRId64 " %" PRId64, ints[i], ints[j]);
+                }
+            }
+        }
+        if (!mfwAdd(&s, &u, &r) ||
+            !mfwBoxIs128(&r, (__int128_t)UINT64_MAX - 7) ||
+            !mfwSub(&s, &u, &r) ||
+            !mfwBoxIs128(&r,
+                         (__int128_t)-7 - UINT64_MAX + ((__int128_t)1 << 64))) {
+            ERRR("mixed signed/unsigned add or subtract");
+        }
+
+        /* VOID is zero; anything not a number is refused */
+        if (!mfwAdd(&v, &v, &r) || !DATABOX_IS_VOID(&r) ||
+            !mfwAdd(&v, &s, &r) || !mfwBoxIs128(&r, -7) ||
+            !mfwAdd(&s, &v, &r) || !mfwBoxIs128(&r, -7) ||
+            !mfwSub(&v, &v, &r) || !DATABOX_IS_VOID(&r) ||
+            !mfwSub(&v, &s, &r) || !mfwBoxIs128(&r, 7) ||
+            !mfwSub(&v, &half, &r) || r.data.d64 != -2.5 ||
+            !mfwSub(&s, &v, &r) || !mfwBoxIs128(&r, -7) ||
+            mfwSub(&v, &bytes, &r) || mfwAdd(&s, &bytes, &r) ||
+            mfwSub(&bytes, &s, &r) || mfwAdd(NULL, &s, &r) ||
+            mfwSub(&s, NULL, &r)) {
+            ERRR("VOID / non-numeric operands");
+        }
+
+        /* Floats: the wider float type wins */
+        if (!mfwAdd(&s, &half, &r) || r.type != DATABOX_DOUBLE_64 ||
+            r.data.d64 != -4.5 || !mfwAdd(&f, &s, &r) ||
+            r.type != DATABOX_FLOAT_32 || r.data.f32 != -5.5f ||
+            !mfwSub(&half, &f, &r) || r.type != DATABOX_DOUBLE_64 ||
+            r.data.d64 != 1.0 ||
+            mfwResultType(&f, &half) != DATABOX_DOUBLE_64 ||
+            mfwResultType(&u, &u) != DATABOX_UNSIGNED_64 ||
+            mfwResultType(&s, &u) != DATABOX_SIGNED_64 ||
+            mfwResultType(&v, &f) != DATABOX_FLOAT_32 ||
+            mfwResultType(&f, &v) != DATABOX_FLOAT_32 ||
+            mfwResultType(&bytes, &s) != DATABOX_BYTES) {
+            ERRR("float arithmetic or result type");
+        }
+
+        /* Compare: exact between an integer and a double, NaN and
+         * non-numbers equal, VOID lowest */
+        const databox nan = DATABOX_DOUBLE(NAN);
+        if (mfwCmp(&big, &d) <= 0 || mfwCmp(&d, &big) >= 0 ||
+            mfwCmp(&s, &half) >= 0 || mfwCmp(&f, &half) >= 0 ||
+            mfwCmp(&half, &f) <= 0 || mfwCmp(&f, &f) != 0 ||
+            mfwCmp(&u, &u) != 0 || mfwCmp(&half, &half) != 0 ||
+            mfwCmp(&nan, &s) != 0 || mfwCmp(&bytes, &s) != 0 ||
+            mfwCmp(&bytes, &bytes) != 0 || mfwCmp(&v, &s) >= 0 ||
+            mfwCmp(&s, &v) <= 0 || mfwCmp(&v, &v) != 0 ||
+            mfwCmp(NULL, &s) != 0) {
+            ERRR("compare");
+        }
+
+        /* Conversions: exact between integers, refused where the target
+         * cannot hold the value */
+        databox c = mfwConvert(&big, DATABOX_UNSIGNED_64);
+        if (c.type != DATABOX_UNSIGNED_64 ||
+            c.data.u64 != (UINT64_C(1) << 53) + 1 ||
+            !mfwVoid(mfwConvert(&s, DATABOX_UNSIGNED_64)) ||
+            !mfwVoid(mfwConvert(&u, DATABOX_SIGNED_64)) ||
+            !mfwVoid(mfwConvert(&nan, DATABOX_SIGNED_64)) ||
+            !mfwVoid(mfwConvert(&bytes, DATABOX_DOUBLE_64)) ||
+            !mfwVoid(mfwConvert(&s, DATABOX_VOID)) ||
+            !mfwVoid(mfwConvert(NULL, DATABOX_DOUBLE_64)) ||
+            !mfwInt(mfwConvert(&half, DATABOX_SIGNED_64), 2) ||
+            !mfwInt(mfwConvert(&v, DATABOX_UNSIGNED_64), 0) ||
+            mfwConvert(&s, DATABOX_DOUBLE_64).data.d64 != -7.0 ||
+            mfwConvert(&half, DATABOX_FLOAT_32).data.f32 != 2.5f ||
+            mfwConvert(&f, DATABOX_DOUBLE_64).data.d64 != 1.5 ||
+            mfwConvert(&half, DATABOX_DOUBLE_64).data.d64 != 2.5 ||
+            !mfwVoid(mfwConvert(&half, DATABOX_BYTES))) {
+            ERRR("convert");
+        }
+        static const double outside[] = {0x1p63, -0x1p64, 0x1p64, INFINITY,
+                                         NAN};
+        for (size_t i = 0; i < 5; i++) {
+            const databox sv = databoxFromDouble(outside[i], DATABOX_SIGNED_64);
+            const databox uv = databoxFromDouble(i == 1 ? -1.0 : outside[i],
+                                                 DATABOX_UNSIGNED_64);
+            if (!DATABOX_IS_VOID(&sv) || (i != 0 && !DATABOX_IS_VOID(&uv))) {
+                ERR("from double %g kept a value", outside[i]);
+            }
+        }
+        if (!mfwInt(databoxFromDouble(-0x1p63, DATABOX_SIGNED_64), INT64_MIN) ||
+            databoxFromDouble(0x1p63, DATABOX_UNSIGNED_64).data.u64 !=
+                UINT64_C(1) << 63 ||
+            !mfwVoid(databoxFromDouble(1.0, DATABOX_BYTES))) {
+            ERRR("from double at the integer bounds");
+        }
+
+        /* Zeros and double views */
+        double out = -1.0;
+        static const databoxType types[] = {
+            DATABOX_SIGNED_64, DATABOX_UNSIGNED_64, DATABOX_FLOAT_32,
+            DATABOX_DOUBLE_64};
+        for (size_t i = 0; i < 4; i++) {
+            const databox z = databoxZeroOfType(types[i]);
+            const databox zl = databoxZeroLike(&z);
+            if (z.type != types[i] || zl.type != types[i] ||
+                !databoxToDouble(&z, &out) || out != 0.0) {
+                ERR("zero of type %d", (int)types[i]);
+            }
+        }
+        if (!mfwVoid(databoxZeroOfType(DATABOX_BYTES)) ||
+            !mfwVoid(databoxZeroLike(&bytes)) ||
+            !mfwVoid(databoxZeroLike(NULL)) || !mfwVoid(databoxZeroLike(&v)) ||
+            databoxToDouble(&bytes, &out) || databoxToDouble(NULL, &out) ||
+            !databoxToDouble(&v, &out) || out != 0.0 ||
+            !databoxToDouble(&u, &out) || out != 0x1p64) {
+            ERRR("zeros / double views");
+        }
+
+        /* The trees' exact int/double compare at its edges */
+        if (multiFenwickCompareIntDouble_(0, 0x1p100) != -1 ||
+            multiFenwickCompareIntDouble_(0, -0x1p100) != 1 ||
+            multiFenwickCompareIntDouble_(3, 3.0) != 0 ||
+            multiFenwickCompareIntDouble_(3, 3.5) != -1 ||
+            multiFenwickCompareIntDouble_(3, 2.5) != 1 ||
+            multiFenwickCompareIntDouble_(-3, -3.5) != 1 ||
+            multiFenwickCompareIntDouble_(-3, -2.5) != -1 ||
+            multiFenwickCompareIntDouble_(((__int128_t)1 << 53) + 1, 0x1p53) !=
+                1) {
+            ERRR("int/double compare");
+        }
+        const multiFenwickNum ni = {.i = 4};
+        const multiFenwickNum nd = {.d = 4.5, .isFloat = true};
+        const multiFenwickNum mixed = {.i = 4, .d = 0.5, .isFloat = true};
+        if (multiFenwickNumCompare_(ni, nd) >= 0 ||
+            multiFenwickNumCompare_(nd, ni) <= 0 ||
+            multiFenwickNumCompare_(mixed, nd) != 0 ||
+            multiFenwickNumCompare_(ni, ni) != 0) {
+            ERRR("num compare");
+        }
+    }
 
     (void)argc;
     (void)argv;

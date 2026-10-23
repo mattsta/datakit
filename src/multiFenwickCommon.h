@@ -224,12 +224,22 @@ static inline bool databoxToDouble(const databox *box, double *value) {
     }
 }
 
-/* Create databox from double using specified type */
+/* Create databox from double using specified type (an integer type
+ * truncates toward zero).  VOID for an unsupported type, or for a value
+ * the integer type cannot hold (NaN included): casting one is undefined. */
 static inline databox databoxFromDouble(double value, databoxType type) {
     switch (type) {
     case DATABOX_SIGNED_64:
+        if (!(value >= -0x1p63 && value < 0x1p63)) {
+            return DATABOX_BOX_VOID;
+        }
+
         return DATABOX_SIGNED((int64_t)value);
     case DATABOX_UNSIGNED_64:
+        if (!(value > -1.0 && value < 0x1p64)) {
+            return DATABOX_BOX_VOID;
+        }
+
         return DATABOX_UNSIGNED((uint64_t)value);
     case DATABOX_FLOAT_32: {
         databox result;
@@ -500,23 +510,30 @@ static inline int databoxCompareNumeric(const databox *a, const databox *b) {
     /* Mixed SIGNED_64 / UNSIGNED_64: compare the exact values */
     __int128_t ia;
     __int128_t ib;
-    if (multiFenwickIntValue_(a, &ia) && multiFenwickIntValue_(b, &ib)) {
+    const bool aInt = multiFenwickIntValue_(a, &ia);
+    const bool bInt = multiFenwickIntValue_(b, &ib);
+    if (aInt && bInt) {
         return ia < ib ? -1 : ia > ib ? 1 : 0;
     }
 
-    /* Other mixed types: convert both to double and compare */
+    /* An integer against a float compares exactly (a double cannot hold
+     * every 64-bit integer); two floats compare as doubles.  A NaN, or a
+     * type that is not a number, compares equal. */
     double va, vb;
-    if (!databoxToDouble(a, &va) || !databoxToDouble(b, &vb)) {
+    if (!databoxToDouble(a, &va) || !databoxToDouble(b, &vb) || isnan(va) ||
+        isnan(vb)) {
         return 0;
     }
 
-    if (va < vb) {
-        return -1;
+    if (aInt) {
+        return multiFenwickCompareIntDouble_(ia, vb);
     }
-    if (va > vb) {
-        return 1;
+
+    if (bInt) {
+        return -multiFenwickCompareIntDouble_(ib, va);
     }
-    return 0;
+
+    return (va > vb) - (va < vb);
 }
 
 /* Create a zero-valued databox of the same type as template */
@@ -562,7 +579,9 @@ static inline databox databoxZeroOfType(databoxType type) {
 }
 
 /* Convert a databox to a target type (best effort numeric conversion)
- * Returns converted databox, or VOID if conversion not possible */
+ * Returns converted databox, or VOID if conversion not possible.  Between
+ * the integer types the value is exact (VOID if the target cannot hold
+ * it); from a float, as databoxFromDouble. */
 static inline databox databoxConvertToType(const databox *src,
                                            databoxType targetType) {
     if (!src || targetType == DATABOX_VOID) {
@@ -574,42 +593,22 @@ static inline databox databoxConvertToType(const databox *src,
         return *src;
     }
 
-    /* Extract numeric value from source */
-    double value = 0.0;
-    switch (src->type) {
-    case DATABOX_SIGNED_64:
-        value = (double)src->data.i64;
-        break;
-    case DATABOX_UNSIGNED_64:
-        value = (double)src->data.u64;
-        break;
-    case DATABOX_FLOAT_32:
-        value = (double)src->data.f32;
-        break;
-    case DATABOX_DOUBLE_64:
-        value = src->data.d64;
-        break;
-    case DATABOX_VOID:
-        value = 0.0;
-        break;
-    default:
+    __int128_t exact;
+    if ((targetType == DATABOX_SIGNED_64 ||
+         targetType == DATABOX_UNSIGNED_64) &&
+        multiFenwickIntValue_(src, &exact)) {
+        if (targetType == DATABOX_SIGNED_64) {
+            return exact > INT64_MAX ? DATABOX_BOX_VOID
+                                     : DATABOX_SIGNED((int64_t)exact);
+        }
+
+        return exact < 0 ? DATABOX_BOX_VOID : DATABOX_UNSIGNED((uint64_t)exact);
+    }
+
+    double value;
+    if (!databoxToDouble(src, &value)) {
         return DATABOX_BOX_VOID;
     }
 
-    /* Convert to target type */
-    switch (targetType) {
-    case DATABOX_SIGNED_64:
-        return DATABOX_SIGNED((int64_t)value);
-    case DATABOX_UNSIGNED_64:
-        return DATABOX_UNSIGNED((uint64_t)value);
-    case DATABOX_FLOAT_32: {
-        databox result;
-        DATABOX_SET_FLOAT(&result, (float)value);
-        return result;
-    }
-    case DATABOX_DOUBLE_64:
-        return DATABOX_DOUBLE(value);
-    default:
-        return DATABOX_BOX_VOID;
-    }
+    return databoxFromDouble(value, targetType);
 }
