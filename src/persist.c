@@ -1904,6 +1904,26 @@ const char *persistTypeName(persistType type) {
         return "clusterRing";
     case PERSIST_TYPE_AEAD_NONCE_LOG:
         return "aeadNonceLog";
+    case PERSIST_TYPE_FENWICK_I16:
+        return "fenwickI16";
+    case PERSIST_TYPE_FENWICK_I32:
+        return "fenwickI32";
+    case PERSIST_TYPE_FENWICK_I64:
+        return "fenwickI64";
+    case PERSIST_TYPE_FENWICK_I128:
+        return "fenwickI128";
+    case PERSIST_TYPE_FENWICK_U16:
+        return "fenwickU16";
+    case PERSIST_TYPE_FENWICK_U32:
+        return "fenwickU32";
+    case PERSIST_TYPE_FENWICK_U64:
+        return "fenwickU64";
+    case PERSIST_TYPE_FENWICK_U128:
+        return "fenwickU128";
+    case PERSIST_TYPE_FENWICK_FLOAT:
+        return "fenwickFloat";
+    case PERSIST_TYPE_FENWICK_DOUBLE:
+        return "fenwickDouble";
     default:
         return "unknown";
     }

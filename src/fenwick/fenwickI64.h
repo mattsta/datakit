@@ -45,6 +45,10 @@ size_t fenwickI64Count(const void *fw);
 size_t fenwickI64Bytes(const void *fw);
 size_t fenwickI64LowerBound(const void *fw, int64_t target);
 void fenwickI64Clear(void *fw);
+/* A tree of 'count' elements in O(n) (count 0 or NULL: an empty tree) */
+void *fenwickI64NewFromArray(const int64_t *values, size_t count);
+/* Every element, as Get returns it, into out[0, Count) in O(n) */
+void fenwickI64CopyTo(const void *fw, int64_t *out);
 
 #ifdef DATAKIT_TEST
 void fenwickI64Repr(const void *fw);

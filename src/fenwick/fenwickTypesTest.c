@@ -4,7 +4,8 @@
  *   - Elements are stored values: an Update whose new element would not fit
  *     the value type is refused (returns false) and changes nothing; float
  *     trees also refuse non-finite deltas, values and elements.
- *   - Get returns the element exactly.
+ *   - Get returns the element exactly (float trees: while every partial
+ *     sum is exact, which the float cases below keep to).
  *   - Query and RangeQuery return the exact sum when it fits the type; an
  *     integer sum that does not fit comes back modulo 2^bits (never UB).
  *   - Indexes past the count extend it; the tier change at the Small
@@ -311,6 +312,63 @@ FWT_FLOAT_DIFF(Double, double, DBL_MAX)
 FWT_LOWER_BOUND(Float, float)
 FWT_LOWER_BOUND(Double, double)
 
+/* NewFromArray and CopyTo against the array they came from and a tree
+ * built with one Set per element.  Sizes cover empty, tiny and past the
+ * Small tier; float values are small integers, so every sum is exact. */
+#define FWT_BULK(T, VT, FLOATING)                                              \
+    static int fwtBulk##T(uint64_t seed) {                                     \
+        int err = 0;                                                           \
+        static const size_t sizes[] = {0, 1, 5, 1000, 40000};                  \
+        for (size_t s = 0; s < COUNT_ARRAY(sizes); s++) {                      \
+            const size_t n = sizes[s];                                         \
+            cleaner(zfree) void *bufA = zcalloc(n + 1, sizeof(VT));            \
+            cleaner(zfree) void *bufB = zcalloc(n + 1, sizeof(VT));            \
+            VT *values = bufA;                                                 \
+            VT *copied = bufB;                                                 \
+            void *bySet = NULL;                                                \
+            for (size_t i = 0; i < n; i++) {                                   \
+                const uint64_t r = fwtRand_(&seed);                            \
+                /* floats: |sum| <= 400000, well inside float's 2^24 */        \
+                values[i] = FLOATING ? (VT)((int64_t)(r % 21) - 10) : (VT)r;   \
+                (void)fenwick##T##Set(&bySet, i, values[i]);                   \
+            }                                                                  \
+                                                                               \
+            void *fw = fenwick##T##NewFromArray(n ? values : NULL, n);         \
+            fenwick##T##CopyTo(fw, copied);                                    \
+            if (!fw || fenwick##T##Count(fw) != n ||                           \
+                memcmp(copied, values, n * sizeof(VT)) != 0) {                 \
+                ERR(#T ": NewFromArray/CopyTo of %zu elements", n);            \
+            }                                                                  \
+                                                                               \
+            for (size_t i = 0; i < n; i += 1 + n / 50) {                       \
+                if (fenwick##T##Get(fw, i) != values[i] ||                     \
+                    fenwick##T##Query(fw, i) != fenwick##T##Query(bySet, i)) { \
+                    ERR(#T ": index %zu of %zu differs from the Set tree", i,  \
+                        n);                                                    \
+                    break;                                                     \
+                }                                                              \
+            }                                                                  \
+                                                                               \
+            fenwick##T##Free(fw);                                              \
+            fenwick##T##Free(bySet);                                           \
+        }                                                                      \
+                                                                               \
+        return err;                                                            \
+    }
+
+FWT_BULK(I16, int16_t, 0)
+FWT_BULK(I32, int32_t, 0)
+FWT_BULK(I64, int64_t, 0)
+FWT_BULK(U16, uint16_t, 0)
+FWT_BULK(U32, uint32_t, 0)
+FWT_BULK(U64, uint64_t, 0)
+#ifdef __SIZEOF_INT128__
+FWT_BULK(I128, __int128_t, 0)
+FWT_BULK(U128, __uint128_t, 0)
+#endif
+FWT_BULK(Float, float, 1)
+FWT_BULK(Double, double, 1)
+
 int fenwickTypesTest(int argc, char *argv[]) {
     int err = 0;
     (void)argc;
@@ -326,6 +384,9 @@ int fenwickTypesTest(int argc, char *argv[]) {
     }                                                                          \
     TEST("LowerBound: fenwick" #T " over non-negative elements") {             \
         err += fwtLowerBound##T(7);                                            \
+    }                                                                          \
+    TEST("NewFromArray and CopyTo: fenwick" #T) {                              \
+        err += fwtBulk##T(11);                                                 \
     }
 
     FWT_RUN(I16)

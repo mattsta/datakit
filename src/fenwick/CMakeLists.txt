@@ -75,6 +75,7 @@ list(APPEND FENWICK_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/fenwick2d.h
     ${CMAKE_CURRENT_SOURCE_DIR}/fenwick2dCoreImpl.h
     ${CMAKE_CURRENT_SOURCE_DIR}/fenwick2dTypedImpl.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/fenwickPersist.h
 )
 
 # Add all fenwick sources to parent target (relative to parent)

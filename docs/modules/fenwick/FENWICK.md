@@ -269,10 +269,31 @@ uint64_t inBox = fenwick2dU64RangeQuery(heat, y0, x0, y1, x1);
 fenwick2dU64Free(heat);
 ```
 
+## Bulk build and persistence
+
+`fenwick<T>NewFromArray(values, count)` builds a tree in O(n), and
+`fenwick<T>CopyTo(fw, out)` writes every element, exactly as `Get` returns
+it, in O(n).
+
+`persistOpsFenwick<T>` (`fenwick/fenwickPersist.h`) persist every typed 1D
+tree (see [PERSIST.md](../persist/PERSIST.md)):
+
+- Integer trees snapshot their elements and restore through
+  `NewFromArray`; the elements determine the tree.
+- Float and Double trees snapshot their capacity, count and every cell, and
+  restore them bit for bit: the cells are rounded sums, so the elements
+  alone would rebuild a different tree.
+- WAL: `NUM_INCR [index, delta]` replays `Update`, `UPDATE [index, value]`
+  replays `Set`, `CLEAR` replays `Clear`.  Log only the writes the tree
+  accepted.
+
+All ten pass the persistence contract (`persistContract`).
+
 ## Testing
 
 - `fenwickTypes`: every typed tree against a naive array (refusals, wrapping
-  sums, tier crossings, LowerBound, Clear).
+  sums, tier crossings, LowerBound, Clear, NewFromArray and CopyTo).
+- `persistContract`: the ten `persistOpsFenwick<T>` descriptors.
 - `fenwickI64`: the original I64 suite (tiers, edge cases, smoke benchmarks).
 - `multiFenwick`, `multiFenwickFlat`: exact arithmetic, limits, refusals,
   growth; Flat is checked call by call against `multiFenwick`.

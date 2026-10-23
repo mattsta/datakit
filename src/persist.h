@@ -176,6 +176,18 @@ typedef enum persistType {
     /* AEAD replay-protection state (per-key nonce log). */
     PERSIST_TYPE_AEAD_NONCE_LOG = 93,
 
+    /* Typed Fenwick trees (fenwick/fenwickPersist.h) */
+    PERSIST_TYPE_FENWICK_I16 = 100,
+    PERSIST_TYPE_FENWICK_I32 = 101,
+    PERSIST_TYPE_FENWICK_I64 = 102,
+    PERSIST_TYPE_FENWICK_I128 = 103,
+    PERSIST_TYPE_FENWICK_U16 = 104,
+    PERSIST_TYPE_FENWICK_U32 = 105,
+    PERSIST_TYPE_FENWICK_U64 = 106,
+    PERSIST_TYPE_FENWICK_U128 = 107,
+    PERSIST_TYPE_FENWICK_FLOAT = 108,
+    PERSIST_TYPE_FENWICK_DOUBLE = 109,
+
     /* Reserved for future use */
     PERSIST_TYPE_MAX = 255
 } persistType;

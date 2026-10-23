@@ -597,6 +597,7 @@ add_library(${PROJECT_NAME} OBJECT
     persist/contract/clusterMailboxContractTest.c
     persist/contract/clusterRingContractTest.c
     persist/contract/aeadNonceLogContractTest.c
+    persist/contract/fenwickContractTest.c
 )
 
 # ============================================================================

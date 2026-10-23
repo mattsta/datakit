@@ -45,6 +45,11 @@ size_t fenwickFloatCount(const void *fw);
 size_t fenwickFloatBytes(const void *fw);
 size_t fenwickFloatLowerBound(const void *fw, float target);
 void fenwickFloatClear(void *fw);
+/* A tree of 'count' elements in O(n) (count 0 or NULL: an empty tree;
+ * NULL when a value is not finite) */
+void *fenwickFloatNewFromArray(const float *values, size_t count);
+/* Every element, as Get returns it, into out[0, Count) in O(n) */
+void fenwickFloatCopyTo(const void *fw, float *out);
 
 #ifdef DATAKIT_TEST
 void fenwickFloatRepr(const void *fw);

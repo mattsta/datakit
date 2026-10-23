@@ -225,6 +225,382 @@ void FENWICK_D_FN_(Clear)(void *fw) {
     }
 }
 
+/* ====================================================================
+ * Bulk build, element copy and persistence
+ * ==================================================================== */
+#include "../cleaner.h"
+#include "../flex.h"
+#include "../persist.h"
+#include "fenwickCoreAlgo.h"
+
+defcleanerName(FENWICK_VALUE_TYPE *, zfree, FenwickValues);
+
+#define FENWICK_D_SIGNED_ ((FENWICK_VALUE_TYPE) - 1 < (FENWICK_VALUE_TYPE)0)
+#define FENWICK_D_OPS_ FENWICK_CAT(persistOpsFenwick, FENWICK_SUFFIX)
+
+/* True when a tree of 'capacity' cells fits the Small tier */
+static bool FENWICK_D_FN_(FitsSmall_)(uint64_t capacity) {
+    return capacity * sizeof(FENWICK_VALUE_TYPE) + sizeof(FENWICK_D_SMALL_) <=
+           FENWICK_CALC_SMALL_MAX_BYTES;
+}
+
+void *FENWICK_D_FN_(NewFromArray)(const FENWICK_VALUE_TYPE *values,
+                                  size_t count) {
+    if (!values || count == 0) {
+        return FENWICK_D_FN_(New)();
+    }
+
+    const uint64_t capacity = FENWICK_D_FN_(AlgoCapacityFor_)(0, count - 1);
+    if (FENWICK_D_FN_(FitsSmall_)(capacity)) {
+        FENWICK_D_SMALL_ *small =
+            FENWICK_D_FN_(SmallNewFromArray)(values, (uint32_t)count);
+        return small ? FENWICK_D_TAG_(small, FENWICK_D_TAG_SMALL_) : NULL;
+    }
+
+    FENWICK_D_FULL_ *full =
+        FENWICK_D_FN_(FullNewFromArray)(values, (uint64_t)count);
+    return full ? FENWICK_D_TAG_(full, FENWICK_D_TAG_FULL_) : NULL;
+}
+
+/* The cells, the count and the capacity of 'fw' (all zero for NULL) */
+static void FENWICK_D_FN_(Cells_)(const void *fw,
+                                  const FENWICK_VALUE_TYPE **tree,
+                                  uint64_t *count, uint64_t *capacity) {
+    *tree = NULL;
+    *count = 0;
+    *capacity = 0;
+    if (!fw) {
+        return;
+    }
+
+    if (FENWICK_D_IS_SMALL_(fw)) {
+        const FENWICK_D_SMALL_ *small = FENWICK_D_UNTAG_(fw);
+        *tree = small->tree;
+        *count = small->count;
+        *capacity = small->capacity;
+    } else {
+        const FENWICK_D_FULL_ *full = FENWICK_D_UNTAG_(fw);
+        *tree = full->tree;
+        *count = full->count;
+        *capacity = full->capacity;
+    }
+}
+
+void FENWICK_D_FN_(CopyTo)(const void *fw, FENWICK_VALUE_TYPE *out) {
+    const FENWICK_VALUE_TYPE *tree;
+    uint64_t count;
+    uint64_t capacity;
+    FENWICK_D_FN_(Cells_)(fw, &tree, &count, &capacity);
+    if (count == 0) {
+        return;
+    }
+
+    /* Undo AlgoBuild_ over the first 'count' cells: in descending order
+     * each cell still holds its whole range when it is taken out of its
+     * parent, and every child of a cell below the count is below it too.
+     * The subtractions are Get's, in Get's order. */
+    memcpy(out, tree, count * sizeof(*out));
+    for (uint64_t j = count; j >= 1; j--) {
+        const uint64_t parent = fenwickParent(j);
+        if (parent <= count) {
+            out[parent - 1] =
+                FENWICK_D_FN_(AlgoSub_)(out[parent - 1], out[j - 1]);
+        }
+    }
+}
+
+/* Persistence.  Integer trees snapshot their elements, which determine
+ * the tree (wrapping cells are linear).  Float trees snapshot their
+ * capacity, count and every cell: rounding makes the cells history, not
+ * a function of the elements, so restore keeps them bit for bit.
+ *   integer: flex [element 0, ..., element count-1]
+ *   float:   flex [capacity, count, cell 0, ..., cell capacity-1]
+ * WAL (args: const databox *const *): NUM_INCR [index, delta] (Update),
+ * UPDATE [index, value] (Set), CLEAR. */
+static void FENWICK_D_FN_(PersistBox_)(FENWICK_VALUE_TYPE v, databoxBig *out) {
+    memset(out, 0, sizeof(*out));
+#if FENWICK_IS_FLOATING
+    if (sizeof(v) == sizeof(float)) {
+        out->type = DATABOX_FLOAT_32;
+        out->data.f32 = (float)v;
+    } else {
+        out->type = DATABOX_DOUBLE_64;
+        out->data.d64 = (double)v;
+    }
+#else
+    if (sizeof(v) == 16) {
+        DATABOX_BIG_INIT(out);
+        if (FENWICK_D_SIGNED_) {
+            out->type = DATABOX_SIGNED_128;
+            *out->data.i128 = (__int128_t)v;
+        } else {
+            out->type = DATABOX_UNSIGNED_128;
+            *out->data.u128 = (__uint128_t)v;
+        }
+    } else if (FENWICK_D_SIGNED_) {
+        out->type = DATABOX_SIGNED_64;
+        out->data.i64 = (int64_t)v;
+    } else {
+        out->type = DATABOX_UNSIGNED_64;
+        out->data.u64 = (uint64_t)v;
+    }
+#endif
+}
+
+/* A value of the tree's type, exactly: any integer box whose value fits
+ * the type; a Float tree takes FLOAT_32, a Double tree DOUBLE_64 or
+ * FLOAT_32 */
+static bool FENWICK_D_FN_(PersistUnbox_)(const databoxBig *b,
+                                         FENWICK_VALUE_TYPE *out) {
+#if FENWICK_IS_FLOATING
+    if (b->type == DATABOX_FLOAT_32) {
+        *out = (FENWICK_VALUE_TYPE)b->data.f32;
+        return true;
+    }
+
+    if (b->type == DATABOX_DOUBLE_64 &&
+        sizeof(FENWICK_VALUE_TYPE) == sizeof(double)) {
+        *out = (FENWICK_VALUE_TYPE)b->data.d64;
+        return true;
+    }
+
+    return false;
+#else
+    const __uint128_t int128Max = ~(__uint128_t)0 >> 1;
+    __int128_t s;
+    __uint128_t u;
+    switch (b->type) {
+    case DATABOX_SIGNED_64:
+        s = b->data.i64;
+        u = (__uint128_t)s;
+        break;
+    case DATABOX_UNSIGNED_64:
+        u = b->data.u64;
+        s = (__int128_t)u;
+        break;
+    case DATABOX_SIGNED_128:
+        s = *b->data.i128;
+        u = (__uint128_t)s;
+        break;
+    case DATABOX_UNSIGNED_128:
+        u = *b->data.u128;
+        s = u > int128Max ? -1 : (__int128_t)u; /* -1: no signed fit */
+        if (FENWICK_D_SIGNED_ && u > int128Max) {
+            return false;
+        }
+        break;
+    default:
+        return false;
+    }
+
+    if (FENWICK_D_SIGNED_) {
+        const __int128_t max =
+            (__int128_t)((((__uint128_t)1)
+                          << (8 * sizeof(FENWICK_VALUE_TYPE) - 1)) -
+                         1);
+        if (s > max || s < -max - 1) {
+            return false;
+        }
+
+        *out = (FENWICK_VALUE_TYPE)s;
+    } else {
+        const bool negative =
+            (b->type == DATABOX_SIGNED_64 || b->type == DATABOX_SIGNED_128) &&
+            s < 0;
+        if (negative ||
+            u > (__uint128_t)(FENWICK_VALUE_TYPE) ~(FENWICK_VALUE_TYPE)0) {
+            return false;
+        }
+
+        *out = (FENWICK_VALUE_TYPE)u;
+    }
+
+    return true;
+#endif
+}
+
+/* Append values[0, n) exactly, 64 entries per flex growth */
+static void FENWICK_D_FN_(PersistAppend_)(flex **f,
+                                          const FENWICK_VALUE_TYPE *values,
+                                          uint64_t n) {
+    enum { BATCH = 64 };
+    databoxBig boxes[BATCH];
+    const databox *ptrs[BATCH];
+    for (uint64_t at = 0; at < n; at += BATCH) {
+        const uint64_t len = n - at < BATCH ? n - at : BATCH;
+        for (uint64_t i = 0; i < len; i++) {
+            FENWICK_D_FN_(PersistBox_)(values[at + i], &boxes[i]);
+            ptrs[i] = (const databox *)&boxes[i];
+        }
+
+        flexAppendMultipleExact(f, (uint_fast32_t)len, ptrs);
+    }
+}
+
+static uint8_t *FENWICK_D_FN_(PersistSnapshot_)(const void *structure,
+                                                size_t *len) {
+    const FENWICK_VALUE_TYPE *tree;
+    uint64_t count;
+    uint64_t capacity;
+    FENWICK_D_FN_(Cells_)(structure, &tree, &count, &capacity);
+
+    /* @own: caller; free=zfree */
+    flex *f = flexNew();
+#if FENWICK_IS_FLOATING
+    const databox cap = DATABOX_UNSIGNED(capacity);
+    const databox cnt = DATABOX_UNSIGNED(count);
+    flexPushByTypeExact(&f, &cap, FLEX_ENDPOINT_TAIL);
+    flexPushByTypeExact(&f, &cnt, FLEX_ENDPOINT_TAIL);
+    FENWICK_D_FN_(PersistAppend_)(&f, tree, capacity);
+#else
+    if (count) {
+        cleanerName(zfree, FenwickValues) FENWICK_VALUE_TYPE *elements =
+            zmalloc(count * sizeof(*elements));
+        FENWICK_D_FN_(CopyTo)(structure, elements);
+        FENWICK_D_FN_(PersistAppend_)(&f, elements, count);
+    }
+#endif
+
+    *len = flexBytes(f);
+    return (uint8_t *)f;
+}
+
+static void *FENWICK_D_FN_(PersistRestore_)(const uint8_t *data, size_t len) {
+    if (!flexValidateBufferDeep(data, len)) {
+        return NULL;
+    }
+
+    const flex *f = (const flex *)data;
+    const size_t n = flexCount(f);
+    flexEntry *fe = flexHead(f);
+    databoxBig box;
+#if FENWICK_IS_FLOATING
+    if (n < 2) {
+        return NULL;
+    }
+
+    flexGetByTypeBig(fe, &box);
+    const uint64_t capacity = box.data.u64;
+    const bool capOk = box.type == DATABOX_UNSIGNED_64;
+    fe = flexNext(f, fe);
+    flexGetByTypeBig(fe, &box);
+    const uint64_t count = box.data.u64;
+    if (!capOk || box.type != DATABOX_UNSIGNED_64 || n - 2 != capacity ||
+        count > capacity || (capacity & (capacity - 1)) ||
+        (capacity == 0) != (count == 0)) {
+        return NULL;
+    }
+
+    if (capacity == 0) {
+        return FENWICK_D_FN_(New)();
+    }
+
+    /* Rebuild the tier holding these exact cells */
+    void *fw;
+    FENWICK_VALUE_TYPE *cells;
+    if (FENWICK_D_FN_(FitsSmall_)(capacity)) {
+        /* @own: caller; free=zfree */
+        FENWICK_D_SMALL_ *small =
+            zcalloc(1, sizeof(*small) + capacity * sizeof(FENWICK_VALUE_TYPE));
+        small->count = (uint32_t)count;
+        small->capacity = (uint32_t)capacity;
+        cells = small->tree;
+        fw = FENWICK_D_TAG_(small, FENWICK_D_TAG_SMALL_);
+    } else {
+        FENWICK_D_FULL_ *full = FENWICK_D_FN_(FullNew)();
+        /* @own: container; free=zfree */
+        full->tree = zcalloc(capacity, sizeof(FENWICK_VALUE_TYPE));
+        full->count = count;
+        full->capacity = capacity;
+        cells = full->tree;
+        fw = FENWICK_D_TAG_(full, FENWICK_D_TAG_FULL_);
+    }
+
+    for (uint64_t i = 0; i < capacity; i++) {
+        fe = flexNext(f, fe);
+        flexGetByTypeBig(fe, &box);
+        if (!FENWICK_D_FN_(PersistUnbox_)(&box, &cells[i])) {
+            FENWICK_D_FN_(Free)(fw);
+            return NULL;
+        }
+    }
+
+    return fw;
+#else
+    cleanerName(zfree, FenwickValues) FENWICK_VALUE_TYPE *values =
+        zmalloc((n ? n : 1) * sizeof(*values));
+    for (size_t i = 0; i < n; i++) {
+        flexGetByTypeBig(fe, &box);
+        if (!FENWICK_D_FN_(PersistUnbox_)(&box, &values[i])) {
+            return NULL;
+        }
+
+        fe = flexNext(f, fe);
+    }
+
+    return FENWICK_D_FN_(NewFromArray)(values, n);
+#endif
+}
+
+static uint8_t *FENWICK_D_FN_(PersistEncodeOp_)(persistOp op, const void *args,
+                                                size_t argc, size_t *len) {
+    const databox *const *boxes = args;
+    *len = 0;
+    if ((op != PERSIST_OP_NUM_INCR && op != PERSIST_OP_UPDATE) || argc != 2 ||
+        !boxes) {
+        /* CLEAR has no operand; nothing else is replayed */
+        return NULL;
+    }
+
+    flex *f = flexNewFromDataboxPtrsExact(boxes, argc);
+    if (f) {
+        *len = flexBytes(f);
+    }
+
+    return (uint8_t *)f;
+}
+
+static bool FENWICK_D_FN_(PersistApplyOp_)(void *structure, persistOp op,
+                                           const uint8_t *data, size_t len) {
+    void **fw = structure;
+    if (op == PERSIST_OP_CLEAR) {
+        FENWICK_D_FN_(Clear)(*fw);
+        return true;
+    }
+
+    if (op != PERSIST_OP_NUM_INCR && op != PERSIST_OP_UPDATE) {
+        return false;
+    }
+
+    databoxBig idx;
+    databoxBig value;
+    FENWICK_VALUE_TYPE v;
+    if (!flexGetTwoDataboxesBig(data, len, &idx, &value) ||
+        idx.type != DATABOX_UNSIGNED_64 || idx.data.u64 > SIZE_MAX ||
+        !FENWICK_D_FN_(PersistUnbox_)(&value, &v)) {
+        return false;
+    }
+
+    return op == PERSIST_OP_NUM_INCR
+               ? FENWICK_D_FN_(Update)(fw, (size_t)idx.data.u64, v)
+               : FENWICK_D_FN_(Set)(fw, (size_t)idx.data.u64, v);
+}
+
+const persistOps FENWICK_D_OPS_ = {
+    .type = FENWICK_PERSIST_TYPE,
+    .name = "fenwick" FENWICK_D_STR_(FENWICK_SUFFIX),
+    .formatVersion = 1,
+    .minReadVersion = 1,
+    .snapshot = FENWICK_D_FN_(PersistSnapshot_),
+    .restore = FENWICK_D_FN_(PersistRestore_),
+    .newEmpty = FENWICK_D_FN_(New),
+    .count = FENWICK_D_FN_(Count),
+    .estimateSize = FENWICK_D_FN_(Bytes),
+    .encodeOp = FENWICK_D_FN_(PersistEncodeOp_),
+    .applyOp = FENWICK_D_FN_(PersistApplyOp_),
+    .free = FENWICK_D_FN_(Free),
+};
+
 #ifdef DATAKIT_TEST
 void FENWICK_D_FN_(Repr)(const void *fw) {
     if (!fw) {
@@ -245,6 +621,9 @@ void FENWICK_D_FN_(Repr)(const void *fw) {
 }
 #endif
 
+#undef FENWICK_D_SIGNED_
+#undef FENWICK_D_OPS_
+#undef FENWICK_PERSIST_TYPE
 #undef FENWICK_D_FN_
 #undef FENWICK_D_STR2_
 #undef FENWICK_D_STR_

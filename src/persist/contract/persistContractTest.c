@@ -35,6 +35,16 @@ extern const persistContractType persistContractHmacKeyring;
 extern const persistContractType persistContractClusterMailbox;
 extern const persistContractType persistContractClusterRing;
 extern const persistContractType persistContractAeadNonceLog;
+extern const persistContractType persistContractFenwickI16;
+extern const persistContractType persistContractFenwickI32;
+extern const persistContractType persistContractFenwickI64;
+extern const persistContractType persistContractFenwickI128;
+extern const persistContractType persistContractFenwickU16;
+extern const persistContractType persistContractFenwickU32;
+extern const persistContractType persistContractFenwickU64;
+extern const persistContractType persistContractFenwickU128;
+extern const persistContractType persistContractFenwickFloat;
+extern const persistContractType persistContractFenwickDouble;
 
 static const persistContractType *const pcRegistry[] = {
     &persistContractFlex,           &persistContractMultimap,
@@ -44,7 +54,12 @@ static const persistContractType *const pcRegistry[] = {
     &persistContractMultidict,      &persistContractMultiOrderedSet,
     &persistContractMultiLRU,       &persistContractHmacKeyring,
     &persistContractClusterMailbox, &persistContractClusterRing,
-    &persistContractAeadNonceLog,
+    &persistContractAeadNonceLog,   &persistContractFenwickI16,
+    &persistContractFenwickI32,     &persistContractFenwickI64,
+    &persistContractFenwickI128,    &persistContractFenwickU16,
+    &persistContractFenwickU32,     &persistContractFenwickU64,
+    &persistContractFenwickU128,    &persistContractFenwickFloat,
+    &persistContractFenwickDouble,
 };
 
 /* ====================================================================

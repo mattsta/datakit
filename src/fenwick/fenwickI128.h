@@ -47,6 +47,10 @@ size_t fenwickI128Count(const void *fw);
 size_t fenwickI128Bytes(const void *fw);
 size_t fenwickI128LowerBound(const void *fw, __int128_t target);
 void fenwickI128Clear(void *fw);
+/* A tree of 'count' elements in O(n) (count 0 or NULL: an empty tree) */
+void *fenwickI128NewFromArray(const __int128_t *values, size_t count);
+/* Every element, as Get returns it, into out[0, Count) in O(n) */
+void fenwickI128CopyTo(const void *fw, __int128_t *out);
 
 #ifdef DATAKIT_TEST
 void fenwickI128Repr(const void *fw);

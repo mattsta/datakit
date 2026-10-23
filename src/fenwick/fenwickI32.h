@@ -45,6 +45,10 @@ size_t fenwickI32Count(const void *fw);
 size_t fenwickI32Bytes(const void *fw);
 size_t fenwickI32LowerBound(const void *fw, int32_t target);
 void fenwickI32Clear(void *fw);
+/* A tree of 'count' elements in O(n) (count 0 or NULL: an empty tree) */
+void *fenwickI32NewFromArray(const int32_t *values, size_t count);
+/* Every element, as Get returns it, into out[0, Count) in O(n) */
+void fenwickI32CopyTo(const void *fw, int32_t *out);
 
 #ifdef DATAKIT_TEST
 void fenwickI32Repr(const void *fw);

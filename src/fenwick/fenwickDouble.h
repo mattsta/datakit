@@ -45,6 +45,11 @@ size_t fenwickDoubleCount(const void *fw);
 size_t fenwickDoubleBytes(const void *fw);
 size_t fenwickDoubleLowerBound(const void *fw, double target);
 void fenwickDoubleClear(void *fw);
+/* A tree of 'count' elements in O(n) (count 0 or NULL: an empty tree;
+ * NULL when a value is not finite) */
+void *fenwickDoubleNewFromArray(const double *values, size_t count);
+/* Every element, as Get returns it, into out[0, Count) in O(n) */
+void fenwickDoubleCopyTo(const void *fw, double *out);
 
 #ifdef DATAKIT_TEST
 void fenwickDoubleRepr(const void *fw);
