@@ -105,6 +105,31 @@ bool StrAtoF(const void *_z, double *pResult, int32_t length, strEnc enc,
 int32_t StrAtoi64(const void *zNum, int64_t *pNum, int32_t length, uint8_t enc,
                   bool skipSpaces);
 
+/* Decimal or 0x-hex text (zero-terminated) to int64_t: 0 when it fits, 1
+ * when too large or malformed, 2 for 9223372036854775808.  Hex is the
+ * bits of up to 16 digits (0xffffffffffffffff is -1). */
+int32_t StrDecOrHexToInt64(const char *z, int64_t *pOut);
+
+/* Decimal or 0x-hex text to int32_t; true when it fits.  Text after the
+ * number is ignored.  StrAtoi gives the value, or 0 when it does not
+ * fit. */
+bool StrGetInt32(const char *zNum, int32_t *pValue);
+int32_t StrAtoi(const char *z);
+
+/* The value of one hex digit ('0'-'9', 'a'-'f', 'A'-'F' only) */
+uint8_t StrHexToInt(int32_t h);
+
+/* The bytes of 'n' hex digits (an odd last digit is ignored), as a
+ * zero-terminated zmalloc'd buffer the caller zfrees */
+void *StrHexToBlob(const char *z, int32_t n);
+
+/* |x|, with INT32_MIN giving INT32_MAX */
+int32_t StrAbsInt32(int32_t x);
+
+/* Remove SQL quotes in place: 'a''b' -> a'b, "x", `x` and [x] alike; a
+ * string not starting with a quote is left as is */
+void StrDequote(char *z);
+
 int64_t StrDoubleToInt64(double r);
 bool StrDoubleCanBeCastToInt64(double r);
 

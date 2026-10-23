@@ -43,6 +43,7 @@ const uint8_t StrUpperToLower[] = {
 **   isxdigit()                       0x08
 **   toupper()                        0x20
 **   SQLite identifier character      0x40
+**   SQL quote character (" ' ` [)    0x80
 **
 ** Bit 0x20 is set if the mapped character requires translation to upper
 ** case. i.e. if the character is a lower-case ASCII character.
@@ -67,7 +68,7 @@ const uint8_t StrCtypeMap[256] = {
     0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, /* 08..0f    ........ */
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* 10..17    ........ */
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* 18..1f    ........ */
-    0x01, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, /* 20..27     !"#$%&' */
+    0x01, 0x00, 0x80, 0x00, 0x40, 0x00, 0x00, 0x80, /* 20..27     !"#$%&' */
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* 28..2f    ()*+,-./ */
     0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, /* 30..37    01234567 */
     0x0c, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* 38..3f    89:;<=>? */
@@ -75,8 +76,8 @@ const uint8_t StrCtypeMap[256] = {
     0x00, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x02, /* 40..47    @ABCDEFG */
     0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, /* 48..4f    HIJKLMNO */
     0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, /* 50..57    PQRSTUVW */
-    0x02, 0x02, 0x02, 0x00, 0x00, 0x00, 0x00, 0x40, /* 58..5f    XYZ[\]^_ */
-    0x00, 0x2a, 0x2a, 0x2a, 0x2a, 0x2a, 0x2a, 0x22, /* 60..67    `abcdefg */
+    0x02, 0x02, 0x02, 0x80, 0x00, 0x00, 0x00, 0x40, /* 58..5f    XYZ[\]^_ */
+    0x80, 0x2a, 0x2a, 0x2a, 0x2a, 0x2a, 0x2a, 0x22, /* 60..67    `abcdefg */
     0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, /* 68..6f    hijklmno */
     0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, /* 70..77    pqrstuvw */
     0x22, 0x22, 0x22, 0x00, 0x00, 0x00, 0x00, 0x00, /* 78..7f    xyz{|}~. */
@@ -133,14 +134,10 @@ const char StrIdChar[] = {
 ** is a no-op.
 **
 ** The input string must be zero-terminated.  A new zero-terminator
-** is added to the dequoted string.
+** is added to the dequoted string.  A doubled quote inside stands for
+** one; a string missing its closing quote dequotes to its end.
 **
-** The return value is -1 if no dequoting occurs or the length of the
-** dequoted string, exclusive of the zero terminator, if dequoting does
-** occur.
-**
-** 2002-Feb-14: This routine is extended to remove MS-Access style
-** brackets from around identifiers.  For example:  "[a-b-c]" becomes
+** Brackets dequote too, as MS-Access identifiers: "[a-b-c]" becomes
 ** "a-b-c".
 */
 void StrDequote(char *z) {
@@ -158,9 +155,9 @@ void StrDequote(char *z) {
         quote = ']';
     }
 
+    /* An unterminated quote dequotes to the end of the string */
     size_t j = 0;
-    for (size_t i = 1;; i++) {
-        assert(z[i]);
+    for (size_t i = 1; z[i]; i++) {
         if (z[i] == quote) {
             if (z[i + 1] == quote) {
                 z[j++] = quote;
@@ -259,33 +256,6 @@ int32_t StrNICmp(const char *zLeft, const char *zRight, int32_t N) {
  * Convert text to double (sqlite3)
  * ==================================================================== */
 /*
-** Compute 10 to the E-th power.  Examples:  E==1 results in 10.
-** E==2 results in 100.  E==50 results in 1.0e50.
-**
-** This routine only works for values of E between 1 and 341.
-** Uses extended precision (dk_float_extended) when available for
-** better accuracy with large exponents.
-*/
-static dk_float_extended StrLDPow10(int E) {
-    dk_float_extended x = 10.0;
-    dk_float_extended r = 1.0;
-    while (1) {
-        if (E & 1) {
-            r *= x;
-        }
-
-        E >>= 1;
-        if (E == 0) {
-            break;
-        }
-
-        x *= x;
-    }
-
-    return r;
-}
-
-/*
 ** The string z[] is an text representation of a real number.
 ** Convert this string to a double and write it into *pResult.
 **
@@ -319,12 +289,10 @@ bool StrAtoF(const void *z_, double *pResult, int32_t length, strEnc enc,
     int32_t eValid = 1; /* True exponent is either not used or is well-formed */
     int32_t nDigits = 0;
     int32_t nonNum = 0;
+    bool sticky = false; /* a nonzero digit past those kept in s */
     const uint8_t *zEnd;
     zEnd = z + length; /* sign * significand * (10 ^ (esign * exponent)) */
     double result;
-
-    /* We aren't using weird encoding types, so just globally set UTF8 here */
-    enc = STR_UTF8;
 
     assert(enc == STR_UTF8 || enc == STR_UTF16LE || enc == STR_UTF16BE);
     *pResult = 0.0; /* Default return value, in case of an error */
@@ -332,7 +300,10 @@ bool StrAtoF(const void *z_, double *pResult, int32_t length, strEnc enc,
     if (enc == STR_UTF8) {
         incr = 1;
     } else {
+        /* Read the low byte of each UTF-16 unit; a unit above 0xFF ends
+         * the number and makes the input non-numeric */
         int32_t i;
+        incr = 2;
         assert(STR_UTF16LE == 2 && STR_UTF16BE == 3);
         for (i = 3 - enc; i < length && z[i] == 0; i += 2) {
         }
@@ -376,6 +347,7 @@ bool StrAtoF(const void *z_, double *pResult, int32_t length, strEnc enc,
     /* skip non-significant significand digits
     ** (increase exponent by d to shift decimal left) */
     while (z < zEnd && StrIsdigit(*z)) {
+        sticky |= *z != '0';
         z += incr, nDigits++, d++;
     }
 
@@ -397,6 +369,7 @@ bool StrAtoF(const void *z_, double *pResult, int32_t length, strEnc enc,
 
         /* skip non-significant digits */
         while (z < zEnd && StrIsdigit(*z)) {
+            sticky |= *z != '0';
             z += incr, nDigits++;
         }
     }
@@ -438,14 +411,8 @@ bool StrAtoF(const void *z_, double *pResult, int32_t length, strEnc enc,
     }
 
 do_atof_calc:
-    /* adjust exponent by d, and update sign */
+    /* adjust exponent by d */
     e = (e * esign) + d;
-    if (e < 0) {
-        esign = -1;
-        e *= -1;
-    } else {
-        esign = 1;
-    }
 
     /* if 0 significand */
     if (!s) {
@@ -453,56 +420,20 @@ do_atof_calc:
         ** Add the sign if we've seen at least one digit */
         result = (sign < 0 && nDigits) ? -(double)0 : (double)0;
     } else {
-        /* attempt to reduce exponent */
-        if (esign > 0) {
-            for (; s < (INT64_MAX / 10) && e > 0; e--) {
-                s = StrValTimes10(s);
-            }
-        } else {
-            _Pragma("GCC diagnostic push") _Pragma(
-                "GCC diagnostic ignored \"-Wstrict-overflow\"") for (; !(s %
-                                                                         10) &&
-                                                                       e > 0;
-                                                                     e--) {
-                s /= 10;
-            }
-            _Pragma("GCC diagnostic pop")
-        }
-
-        /* adjust the sign of significand */
-        s = sign < 0 ? -s : s;
-
-        /* if exponent, scale significand as appropriate
-        ** and store in result. */
-        if (e) {
-            /* attempt to handle extremely small/large numbers better */
-            if (e > 307 && e < 342) {
-                const dk_float_extended scale = StrLDPow10(e - 308);
-
-                if (esign < 0) {
-                    result = s / scale;
-                    result /= 1.0e+308;
-                } else {
-                    result = s * scale;
-                    result *= 1.0e+308;
-                }
-            } else if (e >= 342) {
-                if (esign < 0) {
-                    result = 0.0 * s;
-                } else {
-                    result = 1e308 * 1e308 * s; /* Infinity */
-                }
-            } else {
-                const dk_float_extended scale = StrLDPow10(e);
-                if (esign < 0) {
-                    result = s / scale;
-                } else {
-                    result = s * scale;
-                }
-            }
-        } else {
-            result = (double)s;
-        }
+        /* s * 10^e rounded once to the nearest double by the exact
+         * decimal scanner (StrScanScan); scaling by a computed power of
+         * ten here rounded at every step, landing units in the last place
+         * away.  A nonzero digit dropped past those kept in s becomes a
+         * last digit 1, so a value just above a halfway point between two
+         * doubles is not read as on it (appended as text: s may already
+         * hold 19 digits). */
+        char text[48];
+        snprintf(text, sizeof(text), "%s%" PRId64 "%se%" PRId32,
+                 sign < 0 ? "-" : "", s, sticky ? "1" : "", e - sticky);
+        databox box = {{0}};
+        StrScanScan((const uint8_t *)text, &box, STRSCAN_OPT_TONUM, false,
+                    false);
+        result = box.data.d64;
     }
 
     /* store the result */

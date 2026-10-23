@@ -997,6 +997,236 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("StrAtoF: exponents, limits and partial numbers against strtod") {
+        static const struct {
+            const char *s;
+            bool ok;
+        } cases[] = {
+            {"1e5", true},
+            {"-2.5E-3", true},
+            {"+.5e+2", true},
+            {"0.0", true},
+            {"-0", true},
+            {"1e400", true},
+            {"1e-400", true},
+            {"1e310", true},
+            {"1e-310", true},
+            {"1.5e308", true},
+            {"2e-320", true},
+            {"4.9e-324", true},
+            {"123456789012345678901234", true},
+            {"0.000123", true},
+            {"1e", false},
+            {"1e+", false},
+            {"4x", false},
+            {"", false},
+            {"-", false},
+            {".", false},
+        };
+        for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
+            const char *s = cases[i].s;
+            double got = -1.0;
+            const bool ok =
+                StrAtoF(s, &got, (int32_t)strlen(s), STR_UTF8, false);
+            /* strtod reads the same prefix StrAtoF converts, correctly
+             * rounded: StrAtoF must give the same double, subnormals,
+             * overflow to infinity and dropped digits included */
+            const double want = strtod(s, NULL);
+            const bool close = memcmp(&got, &want, sizeof(got)) == 0;
+            if (ok != cases[i].ok || !close || signbit(got) != signbit(want)) {
+                ERR("StrAtoF(%s) = %d, %.17g; want %d, %.17g", s, ok, got,
+                    cases[i].ok, want);
+            }
+        }
+        /* Random decimals across the double range, 1-25 digits */
+        uint64_t rng = 0xa70f;
+        for (int n = 0; n < 3000; n++) {
+            char s[64];
+            size_t at = 0;
+            if (splitmix64(&rng) & 1) {
+                s[at++] = '-';
+            }
+            const size_t digits = 1 + splitmix64(&rng) % 25;
+            const size_t point = splitmix64(&rng) % (digits + 1);
+            for (size_t k = 0; k < digits; k++) {
+                if (k == point && k > 0) {
+                    s[at++] = '.';
+                }
+                s[at++] = (char)('0' + splitmix64(&rng) % 10);
+            }
+            at += (size_t)snprintf(s + at, sizeof(s) - at, "e%d",
+                                   (int)(splitmix64(&rng) % 680) - 340);
+            double got = 0;
+            const bool ok = StrAtoF(s, &got, (int32_t)at, STR_UTF8, false);
+            const double want = strtod(s, NULL);
+            if (!ok || memcmp(&got, &want, sizeof(got)) != 0) {
+                ERR("StrAtoF(%s) = %d, %.17g; strtod %.17g", s, ok, got, want);
+                break;
+            }
+        }
+
+        double spaced = 0;
+        if (!StrAtoF("  42  ", &spaced, 6, STR_UTF8, true) || spaced != 42.0 ||
+            StrAtoF("  42  ", &spaced, 6, STR_UTF8, false)) {
+            ERRR("StrAtoF space skipping");
+        }
+    }
+
+    TEST("StrAtoF and StrAtoi64 read UTF-16 as they read UTF-8") {
+        static const char *nums[] = {"1e5",
+                                     "-2.5E-3",
+                                     "123",
+                                     "  7 ",
+                                     "-0",
+                                     "4x",
+                                     "1e310",
+                                     "",
+                                     "92233720368547758070",
+                                     "-9223372036854775808"};
+        for (size_t i = 0; i < sizeof(nums) / sizeof(*nums); i++) {
+            const size_t n = strlen(nums[i]);
+            uint8_t le[64] = {0};
+            uint8_t be[64] = {0};
+            for (size_t k = 0; k < n; k++) {
+                le[2 * k] = (uint8_t)nums[i][k];
+                be[2 * k + 1] = (uint8_t)nums[i][k];
+            }
+            const int32_t len16 = (int32_t)(2 * n);
+            double d8 = 0;
+            double dle = 0;
+            double dbe = 0;
+            const bool f8 = StrAtoF(nums[i], &d8, (int32_t)n, STR_UTF8, true);
+            const bool fle = StrAtoF(le, &dle, len16, STR_UTF16LE, true);
+            const bool fbe = StrAtoF(be, &dbe, len16, STR_UTF16BE, true);
+            int64_t i8 = 0;
+            int64_t ile = 0;
+            int64_t ibe = 0;
+            const int32_t r8 =
+                StrAtoi64(nums[i], &i8, (int32_t)n, STR_UTF8, true);
+            const int32_t rle = StrAtoi64(le, &ile, len16, STR_UTF16LE, true);
+            const int32_t rbe = StrAtoi64(be, &ibe, len16, STR_UTF16BE, true);
+            if (f8 != fle || f8 != fbe || memcmp(&d8, &dle, sizeof(d8)) != 0 ||
+                memcmp(&d8, &dbe, sizeof(d8)) != 0 || r8 != rle || r8 != rbe ||
+                i8 != ile || i8 != ibe) {
+                ERR("UTF-16 read of \"%s\" differs: atof %d/%d/%d, atoi "
+                    "%" PRId32 "/%" PRId32 "/%" PRId32,
+                    nums[i], f8, fle, fbe, r8, rle, rbe);
+            }
+        }
+        /* A unit above 0xFF is not part of a number */
+        const uint8_t wide[] = {'1', 0, '2', 0, 0x31, 0x01};
+        double dw = 0;
+        int64_t iw = 0;
+        if (StrAtoF(wide, &dw, 6, STR_UTF16LE, true) || dw != 12.0 ||
+            StrAtoi64(wide, &iw, 6, STR_UTF16LE, true) != 1 || iw != 12) {
+            ERRR("UTF-16 non-Latin unit read as part of a number");
+        }
+    }
+
+    TEST("sqlite integer and hex text helpers") {
+        static const struct {
+            const char *s;
+            int32_t rc;
+            int64_t want;
+        } h64[] = {
+            {"0x10", 0, 16},
+            {"0xffffffffffffffff", 0, -1},
+            {"0x1ffffffffffffffff", 1, 0},
+            {"0x0000000000000000001", 0, 1},
+            {"0x1g", 1, 0},
+            {"123", 0, 123},
+            {"-45", 0, -45},
+            {"9223372036854775808", 2, INT64_MAX},
+            {"12a", 1, 12},
+        };
+        for (size_t i = 0; i < sizeof(h64) / sizeof(*h64); i++) {
+            int64_t got = 0;
+            const int32_t rc = StrDecOrHexToInt64(h64[i].s, &got);
+            if (rc != h64[i].rc || (rc != 1 && got != h64[i].want) ||
+                (h64[i].rc == 1 && h64[i].want && got != h64[i].want)) {
+                ERR("StrDecOrHexToInt64(%s) = %" PRId32 ", %" PRId64, h64[i].s,
+                    rc, got);
+            }
+        }
+
+        static const struct {
+            const char *s;
+            bool ok;
+            int32_t want;
+        } i32[] = {
+            {"2147483647", true, INT32_MAX},
+            {"2147483648", false, 0},
+            {"-2147483648", true, INT32_MIN},
+            {"-2147483649", false, 0},
+            {"+12", true, 12},
+            {"0x7fffffff", true, INT32_MAX},
+            {"0x80000000", false, 0},
+            {"0x123456789", false, 0},
+            {"0x00000000ff", true, 255},
+            {"00000000042abc", true, 42},
+            {"12345678901", false, 0},
+        };
+        for (size_t i = 0; i < sizeof(i32) / sizeof(*i32); i++) {
+            int32_t got = -1;
+            const bool ok = StrGetInt32(i32[i].s, &got);
+            if (ok != i32[i].ok || (ok && got != i32[i].want) ||
+                StrAtoi(i32[i].s) != (ok ? i32[i].want : 0)) {
+                ERR("StrGetInt32(%s) = %d, %" PRId32, i32[i].s, ok, got);
+            }
+        }
+        if (StrAtoi(NULL) != 0 || StrAtoi("-17") != -17) {
+            ERRR("StrAtoi");
+        }
+
+        static const char digits[] = "0123456789abcdefABCDEF";
+        for (size_t i = 0; digits[i]; i++) {
+            const char one[2] = {digits[i], 0};
+            if (StrHexToInt(digits[i]) != strtol(one, NULL, 16)) {
+                ERR("StrHexToInt(%c)", digits[i]);
+            }
+        }
+
+        cleanerName(zfree, Chars) char *blob = StrHexToBlob("00ff7A", 6);
+        cleanerName(zfree, Chars) char *odd = StrHexToBlob("abc", 3);
+        cleanerName(zfree, Chars) char *none = StrHexToBlob("", 0);
+        if (memcmp(blob, "\x00\xff\x7a", 4) != 0 ||
+            memcmp(odd, "\xab", 2) != 0 || none[0] != 0) {
+            ERRR("StrHexToBlob");
+        }
+
+        if (StrAbsInt32(5) != 5 || StrAbsInt32(-5) != 5 ||
+            StrAbsInt32(0) != 0 || StrAbsInt32(INT32_MIN) != INT32_MAX) {
+            ERRR("StrAbsInt32");
+        }
+
+        static const struct {
+            const char *in;
+            const char *out;
+        } dq[] = {
+            {"'a''b'", "a'b"},  {"\"x\"", "x"},
+            {"`y`", "y"},       {"[a-b-c]", "a-b-c"},
+            {"plain", "plain"}, {"'unterminated", "unterminated"},
+            {"''", ""},         {"'", ""},
+            {"'a'tail", "a"},
+        };
+        for (size_t i = 0; i < sizeof(dq) / sizeof(*dq); i++) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%s", dq[i].in);
+            StrDequote(buf);
+            if (strcmp(buf, dq[i].out) != 0) {
+                ERR("StrDequote(%s) = %s, want %s", dq[i].in, buf, dq[i].out);
+            }
+        }
+        StrDequote(NULL);
+
+        if (StrNICmp(NULL, NULL, 3) != 0 || StrNICmp(NULL, "a", 3) >= 0 ||
+            StrNICmp("a", NULL, 3) <= 0 || StrNICmp("abcX", "ABCY", 3) != 0 ||
+            StrNICmp("abcX", "ABCY", 4) >= 0 || StrICmp("ABC", "abd") >= 0 ||
+            StrICmp("abc", "ABC") != 0 || StrICmp("abc", "ab") <= 0) {
+            ERRR("StrICmp / StrNICmp");
+        }
+    }
+
     TEST("StrAddInt64 / StrSubInt64 / StrMulInt64 detect overflow exactly") {
         static const struct {
             char op; /* '+', '-', '*' */
