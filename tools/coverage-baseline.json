@@ -1,5 +1,5 @@
 {
- "commit": "6fe986507c8ba54c4bc3c47d194a436f226387cb",
+ "commit": "d6c5a4b568f1817c84311f11c8cbd1d5aa09e85b",
  "files": {
   "src/OSRegulate.c": {
    "lines": 240,
@@ -107,7 +107,7 @@
   },
   "src/databox.h": {
    "lines": 2,
-   "branches": 15
+   "branches": 13
   },
   "src/databoxLinear.c": {
    "lines": 6,
@@ -190,8 +190,8 @@
    "branches": 0
   },
   "src/fastmutex.c": {
-   "lines": 21,
-   "branches": 25
+   "lines": 23,
+   "branches": 26
   },
   "src/fastmutex.h": {
    "lines": 2,
@@ -402,8 +402,8 @@
    "branches": 5
   },
   "src/flex.c": {
-   "lines": 301,
-   "branches": 463
+   "lines": 297,
+   "branches": 461
   },
   "src/flex.h": {
    "lines": 0,
@@ -502,8 +502,8 @@
    "branches": 0
   },
   "src/hyperloglog.c": {
-   "lines": 63,
-   "branches": 89
+   "lines": 57,
+   "branches": 86
   },
   "src/inflightGate.c": {
    "lines": 2,
@@ -538,8 +538,8 @@
    "branches": 2
   },
   "src/intsetFull.c": {
-   "lines": 36,
-   "branches": 58
+   "lines": 30,
+   "branches": 55
   },
   "src/intsetFull.h": {
    "lines": 0,
@@ -586,7 +586,7 @@
    "branches": 0
   },
   "src/membound.c": {
-   "lines": 383,
+   "lines": 378,
    "branches": 354
   },
   "src/memboundInternal.h": {
@@ -642,8 +642,8 @@
    "branches": 21
   },
   "src/multiOrderedSetFull.c": {
-   "lines": 173,
-   "branches": 196
+   "lines": 124,
+   "branches": 175
   },
   "src/multiOrderedSetFullInternal.h": {
    "lines": 0,
@@ -690,8 +690,8 @@
    "branches": 16
   },
   "src/multidict.c": {
-   "lines": 215,
-   "branches": 198
+   "lines": 189,
+   "branches": 183
   },
   "src/multidict.h": {
    "lines": 0,
@@ -734,8 +734,8 @@
    "branches": 6
   },
   "src/multilru.c": {
-   "lines": 125,
-   "branches": 101
+   "lines": 123,
+   "branches": 99
   },
   "src/multimap.c": {
    "lines": 64,
@@ -774,8 +774,8 @@
    "branches": 39
   },
   "src/multiroar.c": {
-   "lines": 291,
-   "branches": 300
+   "lines": 243,
+   "branches": 272
   },
   "src/multiroar.h": {
    "lines": 0,
@@ -802,8 +802,8 @@
    "branches": 33
   },
   "src/persist.c": {
-   "lines": 476,
-   "branches": 390
+   "lines": 388,
+   "branches": 329
   },
   "src/persist.h": {
    "lines": 0,
@@ -1042,8 +1042,8 @@
    "branches": 7
   },
   "src/str.h": {
-   "lines": 2,
-   "branches": 2
+   "lines": 0,
+   "branches": 0
   },
   "src/str/strBitmapGetSetPositionsExact.c": {
    "lines": 2,
@@ -1058,8 +1058,8 @@
    "branches": 0
   },
   "src/str/strLuajitStr.c": {
-   "lines": 208,
-   "branches": 208
+   "lines": 33,
+   "branches": 61
   },
   "src/str/strPopcnt.c": {
    "lines": 8,
@@ -1082,8 +1082,8 @@
    "branches": 2
   },
   "src/str/strSqliteStr.c": {
-   "lines": 218,
-   "branches": 196
+   "lines": 12,
+   "branches": 30
   },
   "src/str/strToBufFast.c": {
    "lines": 3,
@@ -1229,6 +1229,75 @@
     "branch 0.1",
     "if (atomic_compare_exchange_weak_explicit(&m->word, &prev, expected,",
     "/* @sync: acquire fastmutex.queue */"
+   ]
+  ],
+  "src/inflightGate.c": [
+   [
+    "branch 0.1",
+    "!atomic_load_explicit(&g->ready, memory_order_relaxed)) {",
+    "/* @sync: relaxed hint */"
+   ]
+  ],
+  "src/membound.c": [
+   [
+    "branch 0.0",
+    "for (pos = 0; pos < index->count; pos++) {",
+    "const uintptr_t start = (uintptr_t)extent->zPool;"
+   ],
+   [
+    "branch 0.0",
+    "if (ranges[pos].start == start) {",
+    "for (pos = 0; pos < index->count; pos++) {"
+   ],
+   [
+    "branch 0.1",
+    "if (pos >= index->count) {",
+    "}"
+   ],
+   [
+    "branch 0.1",
+    "if (ranges[pos].start == start) {",
+    "for (pos = 0; pos < index->count; pos++) {"
+   ],
+   [
+    "branch 1.2",
+    "if (pos >= index->count || ranges[pos].extent != extent) {",
+    "size_t pos = extent->sortedIndex;"
+   ],
+   [
+    "line",
+    "break;",
+    "if (ranges[pos].start == start) {"
+   ],
+   [
+    "line",
+    "const uintptr_t start = (uintptr_t)extent->zPool;",
+    "/* sortedIndex is stale, search for it */"
+   ],
+   [
+    "line",
+    "for (pos = 0; pos < index->count; pos++) {",
+    "const uintptr_t start = (uintptr_t)extent->zPool;"
+   ],
+   [
+    "line",
+    "if (pos >= index->count) {",
+    "}"
+   ],
+   [
+    "line",
+    "if (ranges[pos].start == start) {",
+    "for (pos = 0; pos < index->count; pos++) {"
+   ],
+   [
+    "line",
+    "}",
+    "break;"
+   ],
+   [
+    "line",
+    "}",
+    "}"
    ]
   ],
   "src/multiTimer.c": [
