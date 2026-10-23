@@ -329,6 +329,22 @@ def render(
         md.append(
             f"| {f.path} | {_pct(f.lines)} | {_pct(f.functions)} | {_pct(f.branches)} |"
         )
+    # Where the uncovered lines are: a large file at 80% can hold more of
+    # them than every small file at 0%.
+    md += ["", f"## Most uncovered lines ({top} shown)", ""]
+    md += [
+        "| file | uncovered lines | lines | branches |",
+        "| --- | --- | --- | --- |",
+    ]
+    by_missed = sorted(
+        (f for f in files if f.lines[1] > f.lines[0]),
+        key=lambda f: (-(f.lines[1] - f.lines[0]), f.path),
+    )
+    for f in by_missed[:top]:
+        md.append(
+            f"| {f.path} | {f.lines[1] - f.lines[0]} | {_pct(f.lines)} "
+            f"| {_pct(f.branches)} |"
+        )
     declared = api.count(api.called) + api.count(api.never) + api.count(api.not_built)
     md += ["", "## Public API", ""]
     md.append(
