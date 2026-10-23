@@ -23,6 +23,7 @@
 #include "membound.h"
 #include "multiOrderedSet.h"
 #include "multidict.h"
+#include "multimapAtom.h"
 #include "rapidhash.h"
 #include "sha256.h"
 
@@ -589,6 +590,7 @@ defcleanerName(char *, zfree, PerfKeys);
 defcleaner(multiOrderedSet *, multiOrderedSetFree);
 defcleaner(multidict *, multidictFree);
 defcleaner(multidictClass *, multidictDefaultClassFree);
+defcleaner(multimapAtom *, multimapAtomFree);
 
 /* PERF_CONTAINER_N keys, each PERF_CONTAINER_KEY bytes plus a NUL */
 static char *perfContainerKeys(void) {
@@ -827,6 +829,64 @@ static void benchMultiOrderedSetTier(const char *tier, uint32_t members) {
     perfContainerSink = sink;
 }
 
+/* A reusing atom table of PERF_CONTAINER_N string atoms: interning new
+ * and present values, retains and releases by value (the last release
+ * deletes), and deletes by id */
+static void benchMultimapAtom(void) {
+    cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
+    const uint32_t n = PERF_CONTAINER_N;
+    cleaner(multimapAtomFree) multimapAtom *ma = multimapAtomNew();
+    uint64_t sink = 0;
+
+    double t0 = monoNowSec();
+    for (uint32_t i = 0; i < n; i++) {
+        databox k = perfContainerKey(keys, i);
+        sink += multimapAtomInsertIfNewConvert(ma, &k);
+    }
+    emitRow("multimapAtom", "internNew", 0, n, monoNowSec() - t0);
+
+    t0 = monoNowSec();
+    for (uint32_t i = 0; i < n; i++) {
+        databox k = perfContainerKey(keys, i);
+        sink += multimapAtomInsertIfNewConvert(ma, &k);
+    }
+    emitRow("multimapAtom", "internPresent", 0, n, monoNowSec() - t0);
+
+    t0 = monoNowSec();
+    for (uint32_t i = 0; i < n; i++) {
+        databox k = perfContainerKey(keys, i);
+        sink += multimapAtomInsertIfNewConvertAndRetain(ma, &k);
+    }
+    emitRow("multimapAtom", "retain", 0, n, monoNowSec() - t0);
+
+    t0 = monoNowSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox k = perfContainerKey(keys, i);
+        sink += multimapAtomRelease(ma, &k);
+    }
+    emitRow("multimapAtom", "release", 0, n, monoNowSec() - t0);
+
+    t0 = monoNowSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox k = perfContainerKey(keys, i);
+        sink += multimapAtomRelease(ma, &k);
+    }
+    emitRow("multimapAtom", "releaseLast", 0, n, monoNowSec() - t0);
+
+    for (uint32_t i = 0; i < n; i++) {
+        databox k = perfContainerKey(keys, i);
+        multimapAtomInsertConvert(ma, &k);
+    }
+
+    t0 = monoNowSec();
+    for (uint32_t i = 0; i < n; i++) {
+        sink += multimapAtomDeleteById(ma, i);
+    }
+    emitRow("multimapAtom", "deleteById", 0, n, monoNowSec() - t0);
+
+    perfContainerSink = sink;
+}
+
 int perfRegressionTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -985,6 +1045,10 @@ int perfRegressionTest(int argc, char *argv[]) {
             benchMultiOrderedSet();
             benchMultiOrderedSetTier("small", 48);
             benchMultiOrderedSetTier("medium", 160);
+        }
+
+        if (perfWanted("multimapAtom")) {
+            benchMultimapAtom();
         }
 
         /* membound allocator: per-op alloc/free cost for the three

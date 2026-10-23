@@ -492,6 +492,15 @@ void multimapRegularizeMap(multimap **m, multimapFullIdx mapIdx, flex **map) {
     }
 }
 
+void multimapDeleteEntry(multimap **m, multimapEntry *me) {
+    MULTIMAP_NORETURN(*m, DeleteEntryWithReference, me, NULL);
+}
+
+void multimapDeleteEntryWithReference(multimap **m, multimapEntry *me,
+                                      const multimapAtom *referenceContainer) {
+    MULTIMAP_NORETURN(*m, DeleteEntryWithReference, me, referenceContainer);
+}
+
 void multimapResizeEntry(multimap **m, multimapEntry *me, size_t newLen) {
     MULTIMAP_NORETURN(*m, ResizeEntry, me, newLen);
     multimapRegularizeMap(m, me->mapIdx, me->map);
@@ -3785,11 +3794,89 @@ static int32_t multimapInsertIfAbsentSweep_(void) {
     return err;
 }
 
+/* multimapDeleteEntry through Small, Medium and Full: rows found by
+ * GetUnderlyingEntry and deleted where they are leave exactly the others,
+ * with the map still searchable (middles, range boxes, merged sub-maps) */
+static int32_t multimapDeleteEntrySweep_(void) {
+    int32_t err = 0;
+    const int64_t sizes[] = {20, 200, 3000};
+    bool sawType[MULTIMAP_TYPE_FULL + 1] = {false};
+    for (size_t s = 0; s < sizeof(sizes) / sizeof(*sizes); s++) {
+        const int64_t n = sizes[s];
+        cleaner(multimapFree) multimap *m =
+            multimapNewLimit(2, FLEX_CAP_LEVEL_512);
+        for (int64_t i = 0; i < n; i++) {
+            const databox k = databoxNewSigned(i);
+            const databox v = databoxNewSigned(i * 10);
+            const databox *row[2] = {&k, &v};
+            multimapInsert(&m, row);
+        }
+
+        const multimapType tier = multimapType_(m);
+        sawType[tier] = true;
+        /* Delete every key not divisible by 3, from the middle outwards */
+        for (int64_t step = 0; step < n; step++) {
+            const int64_t i =
+                (step & 1) ? n / 2 + 1 + step / 2 : n / 2 - step / 2;
+            if (i < 0 || i >= n || i % 3 == 0) {
+                continue;
+            }
+
+            const databox k = databoxNewSigned(i);
+            multimapEntry me = {0};
+            if (!multimapGetUnderlyingEntry(m, &k, &me)) {
+                ERR("delete-entry (%" PRId64 " rows, tier %d): key %" PRId64
+                    " not found before its delete",
+                    n, tier, i);
+                continue;
+            }
+
+            multimapDeleteEntry(&m, &me);
+        }
+
+        int64_t kept = 0;
+        for (int64_t i = 0; i < n; i++) {
+            const databox k = databoxNewSigned(i);
+            databox got = {{0}};
+            databox *out[1] = {&got};
+            const bool found = multimapLookup(m, &k, out);
+            if (found != (i % 3 == 0) || (found && got.data.i != i * 10)) {
+                ERR("delete-entry (%" PRId64 " rows, tier %d): key %" PRId64
+                    " found %d value %" PRId64,
+                    n, tier, i, found, (int64_t)got.data.i);
+            }
+
+            kept += i % 3 == 0;
+        }
+
+        if ((int64_t)multimapCount(m) != kept) {
+            ERR("delete-entry (%" PRId64 " rows, tier %d): count %zu, "
+                "expected %" PRId64,
+                n, tier, multimapCount(m), kept);
+        }
+
+        multimapVerify(m);
+    }
+
+    if (!sawType[MULTIMAP_TYPE_SMALL] || !sawType[MULTIMAP_TYPE_MEDIUM] ||
+        !sawType[MULTIMAP_TYPE_FULL]) {
+        ERR("delete-entry: tiers visited small %d medium %d full %d",
+            sawType[MULTIMAP_TYPE_SMALL], sawType[MULTIMAP_TYPE_MEDIUM],
+            sawType[MULTIMAP_TYPE_FULL]);
+    }
+
+    return err;
+}
+
 int multimapTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
 
     int err = 0;
+
+    TEST("delete by entry through every tier") {
+        err += multimapDeleteEntrySweep_();
+    }
 
     TEST("insert-if-absent through every tier") {
         err += multimapInsertIfAbsentSweep_();

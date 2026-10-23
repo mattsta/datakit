@@ -159,6 +159,18 @@ bool multimapSmallGetUnderlyingEntryWithReference(
     return !!me->fe;
 }
 
+/* Delete the row 'me' found (by GetUnderlyingEntry*), without a search.
+ * A Small map keeps no range boxes, so 'referenceContainer' is unused. */
+void multimapSmallDeleteEntryWithReference(
+    multimapSmall *m, multimapEntry *me,
+    const multimapAtom *referenceContainer) {
+    (void)referenceContainer;
+    flexEntry *middle = GET_MIDDLE(m);
+    flexDeleteSortedValueWithMiddle(&m->map, m->elementsPerEntry, me->fe,
+                                    &middle);
+    SET_MIDDLE(m, middle);
+}
+
 /* Resizing/replacing one entry keeps the entry COUNT, so the middle ROW
  * is unchanged — but its BYTE offset is not recoverable from the entry's
  * own size delta alone: when the map's total size crosses a varint width

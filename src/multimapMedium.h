@@ -38,6 +38,9 @@ bool multimapMediumGetUnderlyingEntry(multimapMedium *m, const databox *key,
 bool multimapMediumGetUnderlyingEntryWithReference(
     multimapMedium *m, const databox *key, multimapEntry *me,
     const struct multimapAtom *referenceContainer);
+void multimapMediumDeleteEntryWithReference(
+    multimapMedium *m, multimapEntry *me,
+    const struct multimapAtom *referenceContainer);
 void multimapMediumResizeEntry(multimapMedium *m, multimapEntry *me,
                                size_t newLen);
 void multimapMediumReplaceEntry(multimapMedium *m, multimapEntry *me,

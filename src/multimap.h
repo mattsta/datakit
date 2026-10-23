@@ -63,6 +63,13 @@ bool multimapGetUnderlyingEntry(multimap *m, const databox *key,
 bool multimapGetUnderlyingEntryWithReference(
     multimap *m, const databox *key, multimapEntry *me,
     const struct multimapAtom *referenceContainer);
+/* Delete the row 'me' names (filled by GetUnderlyingEntry*, with no change
+ * to the map since), without searching for it again.  A map of atom
+ * references passes its referenceContainer. */
+void multimapDeleteEntry(multimap **m, multimapEntry *me);
+void multimapDeleteEntryWithReference(
+    multimap **m, multimapEntry *me,
+    const struct multimapAtom *referenceContainer);
 void multimapResizeEntry(multimap **m, multimapEntry *me, size_t newLen);
 void multimapReplaceEntry(multimap **m, multimapEntry *me, const databox *box);
 

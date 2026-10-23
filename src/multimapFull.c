@@ -2095,6 +2095,14 @@ abstractDelete(multimapFull *m, const databox **elements, const bool fullWidth,
 }
 
 void multimapFullDeleteEntry(multimapFull *m, multimapEntry *me) {
+    multimapFullDeleteEntryWithReference(m, me, NULL);
+}
+
+/* 'referenceContainer' (NULL for a map of plain keys) resolves the keys of
+ * a reference map, whose range boxes hold copies of resolved keys */
+void multimapFullDeleteEntryWithReference(
+    multimapFull *m, multimapEntry *me,
+    const multimapAtom *referenceContainer) {
     /* Step 1: pick victim map */
     const multimapFullIdx mapIdx = me->mapIdx;
 
@@ -2115,9 +2123,11 @@ void multimapFullDeleteEntry(multimapFull *m, multimapEntry *me) {
     m->values--;
     SET_MIDDLE(m, mapIdx, middle, *map);
 
-    /* TODO: this doesn't work for reference maps since we can leak the
-     * reference rangebox */
-    updateRangeBoxForIdx(m, mapIdx, *map);
+    if (referenceContainer) {
+        updateRangeBoxForIdxWithReference(m, mapIdx, *map, referenceContainer);
+    } else {
+        updateRangeBoxForIdx(m, mapIdx, *map);
+    }
 
     /* Step 3b: Repair state if map is now empty (from 'abstractDelete') */
     if (m->count > 1) {
@@ -2128,11 +2138,13 @@ void multimapFullDeleteEntry(multimapFull *m, multimapEntry *me) {
             /* Compact into a neighbor: next preferred, previous as a
              * fallback so a shrunken tail sub-map is still reclaimed. */
             bool merged = false;
+            const bool useReference = referenceContainer != NULL;
             if (nextMapIdxExists(m, mapIdx)) {
-                merged = mergeSimple(m, mapIdx, false, NULL);
+                merged =
+                    mergeSimple(m, mapIdx, useReference, referenceContainer);
             }
             if (!merged && mapIdx > 0) {
-                mergeSimple(m, mapIdx - 1, false, NULL);
+                mergeSimple(m, mapIdx - 1, useReference, referenceContainer);
             }
         }
     }

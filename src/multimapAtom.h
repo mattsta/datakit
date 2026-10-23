@@ -105,6 +105,8 @@ bool multimapAtomLookupReference(const multimapAtom *ma, const databox *key,
 bool multimapAtomLookupMin(const multimapAtom *ma, databox *minRef);
 
 void multimapAtomRetain(multimapAtom *ma, const databox *key);
+/* Retain 'key' (inserting it when new) and replace it with its reference */
+void multimapAtomRetainConvert(multimapAtom *ma, databox *key);
 void multimapAtomRetainByRef(multimapAtom *ma, const databox *foundRef);
 void multimapAtomRetainById(multimapAtom *ma, uint64_t id);
 

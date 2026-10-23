@@ -87,6 +87,9 @@ void multimapFullResizeEntry(multimapFull *m, multimapEntry *me, size_t newLen);
 void multimapFullReplaceEntry(multimapFull *m, multimapEntry *me,
                               const databox *box);
 void multimapFullDeleteEntry(multimapFull *m, multimapEntry *me);
+void multimapFullDeleteEntryWithReference(
+    multimapFull *m, multimapEntry *me,
+    const struct multimapAtom *referenceContainer);
 
 bool multimapFullLookupByPosition(multimapFull *m, int64_t keyIndex,
                                   databox *elements[]);

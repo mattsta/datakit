@@ -594,6 +594,23 @@ DK_INLINE_ALWAYS bool abstractDelete(
     return !!foundP;
 }
 
+/* Delete the row 'me' found (by GetUnderlyingEntry*), without a search.
+ * A Medium map keeps no range boxes, so 'referenceContainer' is unused. */
+void multimapMediumDeleteEntryWithReference(
+    multimapMedium *m, multimapEntry *me,
+    const struct multimapAtom *referenceContainer) {
+    (void)referenceContainer;
+    const size_t mapIdx = me->mapIdx;
+    assert(m->map[mapIdx] == *me->map);
+    flexEntry *middle = GET_MIDDLE(m, mapIdx);
+    flexDeleteSortedValueWithMiddle(&m->map[mapIdx], m->elementsPerEntry,
+                                    me->fe, &middle);
+    SET_MIDDLE(m, mapIdx, middle);
+
+    /* If we removed the final element of map[0], we need to move map[1] */
+    multimapMediumConform_(m, mapIdx);
+}
+
 bool multimapMediumDelete(multimapMedium *m, const databox *key) {
     return abstractDelete(m, &key, false, false, NULL, NULL, NULL, false);
 }

@@ -50,6 +50,9 @@ bool multimapSmallGetUnderlyingEntry(multimapSmall *m, const databox *key,
 bool multimapSmallGetUnderlyingEntryWithReference(
     multimapSmall *m, const databox *key, multimapEntry *me,
     const struct multimapAtom *referenceContainer);
+void multimapSmallDeleteEntryWithReference(
+    multimapSmall *m, multimapEntry *me,
+    const struct multimapAtom *referenceContainer);
 void multimapSmallResizeEntry(multimapSmall *m, multimapEntry *me,
                               size_t newLen);
 void multimapSmallReplaceEntry(multimapSmall *m, multimapEntry *me,
