@@ -169,7 +169,9 @@ bool OSRegulateLinuxMemorySettingsAreOkay(void);
 size_t OSRegulateTotalMemoryGet(void);
 size_t OSRegulateRSSGet(void);
 
-/* Network */
+/* Network.  Private: loopback (127.0.0.0/8, ::1), RFC 1918 (10/8,
+ * 172.16/12, 192.168/16) and RFC 4193 unique-local (fc00::/7).  All: the
+ * unspecified address (0.0.0.0, ::). */
 bool OSRegulateNetworkIsPrivate(const struct addrinfo *ai);
 bool OSRegulateNetworkIsPrivateIPv4(const struct sockaddr_in *sa);
 bool OSRegulateNetworkIsPrivateIPv6(const struct sockaddr_in6 *sa6);

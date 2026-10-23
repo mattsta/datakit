@@ -3,9 +3,11 @@
 
 #include "ctest.h"
 #include <assert.h>
+#include <errno.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <unistd.h>
 
 #define FM_THREADS 8
 #define FM_ITERS 100000
@@ -25,10 +27,123 @@ static void *fmWorker(void *arg) {
     return NULL;
 }
 
+/* Block in fast_mutex_lock until the holder lets go */
+typedef struct fmBlocked {
+    fastMutex *m;
+    _Atomic bool acquired;
+} fmBlocked;
+
+static void *fmBlockedLocker(void *arg) {
+    fmBlocked *b = arg;
+    fast_mutex_lock(b->m);
+    atomic_store(&b->acquired, true);
+    fastMutexUnlock(b->m);
+    return NULL;
+}
+
+/* Wait on a condition until 'ready' */
+typedef struct fmCondWaiter {
+    fastMutex *m;
+    fastCond *c;
+    bool ready;    /* guarded by m */
+    bool sawReady; /* written by the waiter, read after join */
+} fmCondWaiter;
+
+static void *fmCondWaiterThread(void *arg) {
+    fmCondWaiter *w = arg;
+    fast_mutex_lock(w->m);
+    while (!w->ready) {
+        fastMutexCondWait(w->c, w->m);
+    }
+    w->sawReady = w->ready && fastMutexIsLocked(w->m);
+    fastMutexUnlock(w->m);
+    return NULL;
+}
+
+/* Poll (1 ms steps, up to 10 s) until 'done' reports true */
+static bool fmPollUntil(bool (*done)(void *), void *arg) {
+    for (int i = 0; i < 10000; i++) {
+        if (done(arg)) {
+            return true;
+        }
+        usleep(1000);
+    }
+    return false;
+}
+
+static bool fmHasWaiter(void *arg) {
+    const fastMutex *m = arg;
+    return (atomic_load(&m->word) & ~(uint64_t)3) != 0;
+}
+
+static bool fmCondHasWaiter(void *arg) {
+    fastCond *c = arg;
+    pthread_mutex_lock(&c->m);
+    const bool queued = c->w != NULL;
+    pthread_mutex_unlock(&c->m);
+    return queued;
+}
+
 int fastmutexTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int err = 0;
+
+    TEST("fastMutex: a queued waiter is woken by the slow unlock") {
+        /* The holder keeps the lock until the other thread has queued a
+         * waiter in the lock word, so the unlock must take the slow path
+         * and wake it */
+        fastMutex m;
+        fastMutexInit(&m);
+        fmBlocked b = {.m = &m};
+        fast_mutex_lock(&m);
+        pthread_t th;
+        pthread_create(&th, NULL, fmBlockedLocker, &b);
+        if (!fmPollUntil(fmHasWaiter, &m)) {
+            ERRR("the blocked locker never queued");
+        }
+        const bool earlyAcquire = atomic_load(&b.acquired);
+        fastMutexUnlock(&m);
+        pthread_join(th, NULL);
+        if (earlyAcquire || !atomic_load(&b.acquired) ||
+            fastMutexIsLocked(&m)) {
+            ERRR("the queued waiter did not get the lock exactly once");
+        }
+    }
+
+    TEST("fastMutex: condition wait, signal and a timed-out wait") {
+        fastMutex m;
+        fastCond c;
+        fastMutexInit(&m);
+        fastMutexCondInit(&c, NULL);
+        fmCondWaiter w = {.m = &m, .c = &c};
+        pthread_t th;
+        pthread_create(&th, NULL, fmCondWaiterThread, &w);
+        if (!fmPollUntil(fmCondHasWaiter, &c)) {
+            ERRR("the condition waiter never queued");
+        }
+        fast_mutex_lock(&m);
+        w.ready = true;
+        fastMutexCondSignal(&c);
+        fastMutexUnlock(&m);
+        pthread_join(th, NULL);
+        if (!w.sawReady) {
+            ERRR("the waiter did not wake holding the mutex with ready set");
+        }
+
+        /* A deadline already past: ETIMEDOUT, the mutex held again and
+         * no waiter left queued; a signal with no waiter is a no-op */
+        struct timespec past = {.tv_sec = 1, .tv_nsec = 0};
+        fast_mutex_lock(&m);
+        const int timed = fastMutexCondTimedWait(&c, &m, &past);
+        const bool relocked = fastMutexIsLocked(&m);
+        fastMutexUnlock(&m);
+        fastMutexCondSignal(&c);
+        if (timed != ETIMEDOUT || !relocked || fmCondHasWaiter(&c)) {
+            ERR("timed wait returned %d, relocked %d", timed, relocked);
+        }
+        pthread_mutex_destroy(&c.m);
+    }
 
     TEST("fastMutex: trylock semantics (true on acquire, false when held)") {
         fastMutex m;

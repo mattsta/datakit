@@ -1278,9 +1278,13 @@ bool OSRegulateNetworkIsPrivateIPv4(const struct sockaddr_in *const sa) {
 
     /* The address integer in 'sa' is big endian. */
 
-    /* RFC 1918 */
-    /* 127.0.0.0/8 */
+    /* Loopback (RFC 1122): 127.0.0.0/8 */
     if (netAddr[0] == 127) {
+        return true;
+    }
+
+    /* RFC 1918: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 */
+    if (netAddr[0] == 10) {
         return true;
     }
 
@@ -1370,6 +1374,69 @@ int OSRegulateTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int err = 0;
+
+    TEST("network classes of crafted addresses; the system readers") {
+        static const struct {
+            const char *addr;
+            bool isPrivate;
+            bool isAll;
+        } v4[] = {{"10.1.2.3", true, false},    {"172.16.9.9", true, false},
+                  {"172.32.0.1", false, false}, {"192.168.1.1", true, false},
+                  {"127.0.0.1", true, false},   {"8.8.8.8", false, false},
+                  {"0.0.0.0", false, true}};
+        for (size_t i = 0; i < sizeof(v4) / sizeof(*v4); i++) {
+            struct sockaddr_in sa = {.sin_family = AF_INET};
+            inet_pton(AF_INET, v4[i].addr, &sa.sin_addr);
+            struct addrinfo ai = {.ai_family = AF_INET,
+                                  .ai_addr = (struct sockaddr *)&sa};
+            if (OSRegulateNetworkIsPrivateIPv4(&sa) != v4[i].isPrivate ||
+                OSRegulateNetworkIsPrivate(&ai) != v4[i].isPrivate ||
+                OSRegulateNetworkIsAllIPv4(&sa) != v4[i].isAll ||
+                OSRegulateNetworkIsAll(&ai) != v4[i].isAll) {
+                ERR("IPv4 %s classified wrongly", v4[i].addr);
+            }
+        }
+        static const struct {
+            const char *addr;
+            bool isPrivate;
+            bool isAll;
+        } v6[] = {{"fc00::1", true, false},
+                  {"fd12::5", true, false},
+                  {"::1", true, false},
+                  {"2001:db8::1", false, false},
+                  {"::", false, true}};
+        for (size_t i = 0; i < sizeof(v6) / sizeof(*v6); i++) {
+            struct sockaddr_in6 sa6 = {.sin6_family = AF_INET6};
+            inet_pton(AF_INET6, v6[i].addr, &sa6.sin6_addr);
+            struct addrinfo ai = {.ai_family = AF_INET6,
+                                  .ai_addr = (struct sockaddr *)&sa6};
+            if (OSRegulateNetworkIsPrivateIPv6(&sa6) != v6[i].isPrivate ||
+                OSRegulateNetworkIsPrivate(&ai) != v6[i].isPrivate ||
+                OSRegulateNetworkIsAllIPv6(&sa6) != v6[i].isAll ||
+                OSRegulateNetworkIsAll(&ai) != v6[i].isAll) {
+                ERR("IPv6 %s classified wrongly", v6[i].addr);
+            }
+        }
+
+        int64_t selfRSS = 0;
+        int64_t childRSS = 0;
+        float sysCPU = 0;
+        float userCPU = 0;
+        float childSys = 0;
+        float childUser = 0;
+        size_t fdLimit = 0;
+        char *status = NULL;
+        if (OSRegulateCPUCountGet() < 1 || OSRegulateTotalMemoryGet() == 0 ||
+            !OSRegulateResourceUsageGet(&selfRSS, &childRSS, &sysCPU, &userCPU,
+                                        &childSys, &childUser) ||
+            selfRSS <= 0 || userCPU < 0 ||
+            !OSRegulateAdjustOpenFilesLimit(16, &fdLimit, &status) ||
+            fdLimit < 16 || OSRegulateTFOMode() < 0 ||
+            !OSRegulateTcpBacklogMeetsLimit(1)) {
+            ERR("a system reader failed (rss %" PRId64 ", fd limit %zu: %s)",
+                selfRSS, fdLimit, status ? status : "");
+        }
+    }
 
     TEST("/proc/<pid>/stat RSS field, comm with spaces and parentheses") {
         /* Fields 3..23 are filler ("S", then 1 to 20); field 24 (RSS) is
