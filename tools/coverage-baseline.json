@@ -1,5 +1,5 @@
 {
- "commit": "919b3663d91d67758948c1f85b3cef070517d4a8",
+ "commit": "c80afcf54dcdde7bc02fe4591bcfb3d6b3c3561d",
  "files": {
   "src/OSRegulate.c": {
    "lines": 240,
@@ -494,7 +494,7 @@
    "branches": 31
   },
   "src/hmacKeyring.c": {
-   "lines": 91,
+   "lines": 90,
    "branches": 83
   },
   "src/hmacKeyring.h": {
@@ -642,16 +642,16 @@
    "branches": 21
   },
   "src/multiOrderedSetFull.c": {
-   "lines": 124,
-   "branches": 175
+   "lines": 120,
+   "branches": 173
   },
   "src/multiOrderedSetFullInternal.h": {
    "lines": 0,
    "branches": 0
   },
   "src/multiOrderedSetMedium.c": {
-   "lines": 125,
-   "branches": 90
+   "lines": 58,
+   "branches": 59
   },
   "src/multiOrderedSetSmall.c": {
    "lines": 65,
@@ -734,8 +734,8 @@
    "branches": 6
   },
   "src/multilru.c": {
-   "lines": 123,
-   "branches": 99
+   "lines": 67,
+   "branches": 89
   },
   "src/multimap.c": {
    "lines": 64,
@@ -1158,8 +1158,8 @@
    "branches": 53
   },
   "src/ulid.c": {
-   "lines": 202,
-   "branches": 143
+   "lines": 160,
+   "branches": 105
   },
   "src/ulid.h": {
    "lines": 0,
@@ -1236,6 +1236,33 @@
     "branch 0.1",
     "if (atomic_compare_exchange_weak_explicit(&m->word, &prev, expected,",
     "/* @sync: acquire fastmutex.queue */"
+   ]
+  ],
+  "src/hmacKeyring.c": [
+   [
+    "branch 1.2",
+    "if (fn == NULL || counter < slot->aead_limit) {",
+    "atomic_load_explicit(&slot->aead_counter, memory_order_relaxed);"
+   ],
+   [
+    "line",
+    "pthread_mutex_unlock(&ring->reserve_mu);",
+    "pthread_rwlock_unlock(&ring->lock);"
+   ],
+   [
+    "line",
+    "pthread_rwlock_unlock(&ring->lock);",
+    "if (fn == NULL || counter < slot->aead_limit) {"
+   ],
+   [
+    "line",
+    "return true;",
+    "pthread_mutex_unlock(&ring->reserve_mu);"
+   ],
+   [
+    "line",
+    "}",
+    "return true;"
    ]
   ],
   "src/inflightGate.c": [
