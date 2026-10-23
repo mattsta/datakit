@@ -258,6 +258,28 @@ int timerWheelTest(int argc, char *argv[]) {
         timerWheelFree(NULL);
     }
 
+    TEST("timerWheel: ResetStats zeroes the counters, not the state") {
+        cleaner(timerWheelFree) timerWheel *tw = timerWheelNew();
+        int counter = 0;
+        const timerWheelId a =
+            timerWheelRegister(tw, 1000000, 0, testCountingCallback, &counter);
+        timerWheelRegister(tw, 2000000, 0, testCountingCallback, &counter);
+        timerWheelUnregister(tw, a);
+        timerWheelStats stats;
+        timerWheelGetStats(tw, &stats);
+        if (stats.totalRegistrations != 2 || stats.totalCancellations != 1) {
+            ERR("before reset: %zu registrations, %zu cancellations",
+                stats.totalRegistrations, stats.totalCancellations);
+        }
+        timerWheelResetStats(tw);
+        timerWheelGetStats(tw, &stats);
+        if (stats.totalRegistrations || stats.totalCancellations ||
+            stats.totalExpirations || stats.totalCascades ||
+            stats.memoryBytes == 0) {
+            ERRR("ResetStats left a counter or cleared the state");
+        }
+    }
+
     /* ================================================================
      * Timer Registration Tests
      * ================================================================ */

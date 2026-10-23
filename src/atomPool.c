@@ -482,6 +482,18 @@ int atomPoolTest(int argc, char *argv[]) {
 
     int err = 0;
 
+    TEST("the default pool, backend types and their names") {
+        cleaner(atomPoolFree) atomPool *def = atomPoolNewDefault();
+        cleaner(atomPoolFree) atomPool *tree = atomPoolNew(ATOM_POOL_TREE);
+        if (!def || atomPoolGetType(def) != ATOM_POOL_HASH ||
+            atomPoolGetType(tree) != ATOM_POOL_TREE ||
+            strcmp(atomPoolTypeName(ATOM_POOL_HASH),
+                   atomPoolTypeName(ATOM_POOL_TREE)) == 0 ||
+            strcmp(atomPoolTypeName((atomPoolType)99), "UNKNOWN") != 0) {
+            ERRR("default pool, GetType or TypeName wrong");
+        }
+    }
+
     /* Test both backends */
     atomPoolType types[] = {ATOM_POOL_HASH, ATOM_POOL_TREE};
     const char *typeNames[] = {"HASH", "TREE"};

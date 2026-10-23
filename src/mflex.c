@@ -9,6 +9,7 @@
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleaner(mflexState *, mflexStateFree);
 defcleaner(mflex *, mflexFree);
+defcleaner(flex *, flexFree);
 
 typedef enum mflexType {
     MFLEX_TYPE_FLEX = 1,        /* points to 'flex *' */
@@ -726,6 +727,32 @@ int mflexTest(int argc, char *argv[]) {
     }
 
     mflexStateReset(state);
+
+    TEST("typed pushes store what the flex pushes store; preferred length") {
+        cleaner(mflexStateFree) mflexState *st = mflexStateCreate();
+        cleaner(mflexFree) mflex *m = mflexNew();
+        cleaner(flexFree) flex *oracle = flexNew();
+        if (!mflexIsEmpty(m)) {
+            ERRR("a new mflex is not empty");
+        }
+        mflexPushUnsigned(&m, st, UINT64_MAX, FLEX_ENDPOINT_TAIL);
+        mflexPushFloat16(&m, st, 0.5f, FLEX_ENDPOINT_TAIL);
+        mflexPushFloat(&m, st, 1.25f, FLEX_ENDPOINT_HEAD);
+        flexPushUnsigned(&oracle, UINT64_MAX, FLEX_ENDPOINT_TAIL);
+        flexPushFloat16(&oracle, 0.5f, FLEX_ENDPOINT_TAIL);
+        flexPushFloat(&oracle, 1.25f, FLEX_ENDPOINT_HEAD);
+        if (mflexIsEmpty(m) || mflexCount(m) != 3 ||
+            !flexEqual(mflexOpenReadOnly(m, st), oracle)) {
+            ERRR("typed mflex pushes differ from the flex pushes");
+        }
+
+        /* The preferred buffer length rounds up to an allocation size */
+        mflexStatePreferredLenUpdate(st, 1000);
+        const size_t preferred = mflexStatePreferredLen(st);
+        if (preferred < 1000 || preferred > 2048) {
+            ERR("preferred length %zu for 1000", preferred);
+        }
+    }
 
     TEST("reset then reuse: push after reset round-trips") {
         cleaner(mflexStateFree) mflexState *resetState = mflexStateCreate();

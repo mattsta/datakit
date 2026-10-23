@@ -153,6 +153,11 @@ static size_t fwtIndex_(uint64_t *s) {
                 ERR(#T " sweep: Get(%zu) wrong", i);                           \
             }                                                                  \
         }                                                                      \
+        /* The tree holds at least one cell per element */                     \
+        if (count && fenwick##T##Bytes(fw) < count * sizeof(VT)) {             \
+            ERR(#T ": Bytes %zu below %zu elements", fenwick##T##Bytes(fw),    \
+                count);                                                        \
+        }                                                                      \
         fenwick##T##Clear(fw);                                                 \
         if (count && (fenwick##T##Count(fw) != count ||                        \
                       fenwick##T##Query(fw, count - 1) != 0 ||                 \
@@ -245,14 +250,25 @@ FWT_LOWER_BOUND(U128, __uint128_t)
             count = idx + 1 > count ? idx + 1 : count;                         \
                                                                                \
             const size_t q = (size_t)(fwtRand_(&seed) % count);                \
+            const size_t l = (size_t)(fwtRand_(&seed) % (q + 1));              \
             VT pre = 0;                                                        \
+            VT preL = 0;                                                       \
             for (size_t i = 0; i <= q; i++) {                                  \
                 pre += elem[i];                                                \
+                if (i + 1 == l) {                                              \
+                    preL = pre;                                                \
+                }                                                              \
             }                                                                  \
+            /* Small integer elements: every sum is exact in VT */             \
             if (fenwick##T##Get(fw, q) != elem[q] ||                           \
-                fenwick##T##Query(fw, q) != pre) {                             \
-                ERR(#T " op %zu: Get/Query(%zu) wrong", op, q);                \
+                fenwick##T##Query(fw, q) != pre ||                             \
+                fenwick##T##RangeQuery(fw, l, q) != pre - preL) {              \
+                ERR(#T " op %zu: Get/Query/RangeQuery(%zu) wrong", op, q);     \
             }                                                                  \
+        }                                                                      \
+        if (fenwick##T##Bytes(fw) < count * sizeof(VT)) {                      \
+            ERR(#T ": Bytes %zu below %zu elements", fenwick##T##Bytes(fw),    \
+                count);                                                        \
         }                                                                      \
                                                                                \
         /* Non-finite deltas, values and elements are refused */               \
@@ -275,6 +291,15 @@ FWT_LOWER_BOUND(U128, __uint128_t)
             fenwick##T##Get(fw, 0) != elem[0] ||                               \
             fenwick##T##Get(fw, 1) != big) {                                   \
             ERRR(#T ": growth lost a value");                                  \
+        }                                                                      \
+                                                                               \
+        /* Clear keeps the count and zeroes every element */                   \
+        const size_t grown = fenwick##T##Count(fw);                            \
+        fenwick##T##Clear(fw);                                                 \
+        if (fenwick##T##Count(fw) != grown ||                                  \
+            fenwick##T##Get(fw, 1) != (VT)0 ||                                 \
+            fenwick##T##Query(fw, grown - 1) != (VT)0) {                       \
+            ERRR(#T ": Clear did not zero the tree and keep the count");       \
         }                                                                      \
                                                                                \
         fenwick##T##Free(fw);                                                  \

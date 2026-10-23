@@ -171,6 +171,19 @@ int fibbufTest(int argc, char *argv[]) {
 
     int err = 0;
 
+    TEST("the next allocation size: past the current, at the next buffer") {
+        static const size_t sizes[] = {1, 100, 46367, 46368, 1u << 20};
+        for (size_t i = 0; i < sizeof(sizes) / sizeof(*sizes); i++) {
+            const size_t buffer = fibbufNextSizeBuffer(sizes[i]);
+            const size_t alloc = fibbufNextSizeAllocation(sizes[i]);
+            if (buffer <= sizes[i] || alloc < buffer ||
+                alloc != jebufSizeAllocation(buffer)) {
+                ERR("size %zu: buffer %zu, allocation %zu", sizes[i], buffer,
+                    alloc);
+            }
+        }
+    }
+
     TEST("exact fibonacci boundary (regression for infinite loop bug)") {
         /* When input is exactly a fibonacci number, we must return the NEXT
          * fibonacci, not the same value. This caused infinite loops in code

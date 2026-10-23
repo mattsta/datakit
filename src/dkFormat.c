@@ -160,6 +160,28 @@ int dkFormatTest(int argc, char *argv[]) {
                                .minReadVersion = 2,
                                .knownFeatures = 1 | (UINT64_C(1) << 32)};
 
+    TEST("every check result has its own name") {
+        const dkFormatResult results[] = {DK_FORMAT_OK,
+                                          DK_FORMAT_MALFORMED,
+                                          DK_FORMAT_WRONG_ID,
+                                          DK_FORMAT_VERSION_TOO_NEW,
+                                          DK_FORMAT_VERSION_TOO_OLD,
+                                          DK_FORMAT_FEATURE_UNKNOWN};
+        const size_t n = sizeof(results) / sizeof(*results);
+        for (size_t i = 0; i < n; i++) {
+            const char *name = dkFormatResultName(results[i]);
+            for (size_t j = 0; j < i; j++) {
+                if (!name || !*name ||
+                    strcmp(name, dkFormatResultName(results[j])) == 0) {
+                    ERR("result %zu has no name of its own", i);
+                }
+            }
+        }
+        if (strcmp(dkFormatResultName((dkFormatResult)99), "unknown result")) {
+            ERRR("an unknown result is not named as such");
+        }
+    }
+
     TEST("check: version range, id and feature rules") {
         const struct {
             dkFormatStamp stamp;

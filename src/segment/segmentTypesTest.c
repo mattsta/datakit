@@ -155,6 +155,11 @@ static size_t sgtIndex_(uint64_t *s) {
             segment##T##Query(seg, 0, count) != identity) {                    \
             ERR(#T " op %d: past the end is not the identity", (int)op);       \
         }                                                                      \
+        /* The tree holds at least one cell per element */                     \
+        if (count && segment##T##Bytes(seg) < count * sizeof(elem[0])) {       \
+            ERR(#T ": Bytes %zu below %zu elements", segment##T##Bytes(seg),   \
+                count);                                                        \
+        }                                                                      \
         segment##T##Free(seg);                                                 \
         return err;                                                            \
     }

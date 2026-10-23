@@ -3896,6 +3896,13 @@ typedef struct mdWideScanState {
 
 defcleanerName(uint8_t *, zfree, SeenBytes);
 defcleanerName(char *, zfree, BenchKeys);
+defcleanerName(uint32_t *, zfree, HashWords);
+
+static int mdTestCompareU32_(const void *a, const void *b) {
+    const uint32_t x = *(const uint32_t *)a;
+    const uint32_t y = *(const uint32_t *)b;
+    return (x > y) - (x < y);
+}
 
 static void mdWideScanCb_(void *privdata, const databox *key,
                           const databox *val) {
@@ -9783,6 +9790,39 @@ int multidictTest(int argc, char *argv[]) {
      * Smoke benchmark: per-entry cost of the core operations (meaningful
      * under the perf preset; checks the results too)
      * ================================================================ */
+    printf("\n--- Integer hash functions ---\n");
+    {
+        /* The 32-bit mixer is a bijection: distinct keys never collide.
+         * The 64-bit one folds to 32 bits: collisions stay rare. */
+        enum { MD_HASH_KEYS = 65536 };
+        cleanerName(zfree, HashWords) uint32_t *h32 =
+            zcalloc(MD_HASH_KEYS, sizeof(uint32_t));
+        cleanerName(zfree, HashWords) uint32_t *h64 =
+            zcalloc(MD_HASH_KEYS, sizeof(uint32_t));
+        for (uint32_t i = 0; i < MD_HASH_KEYS; i++) {
+            h32[i] = multidictIntHashFunction(i);
+            h64[i] = multidictLongLongHashFunction((uint64_t)i << 20 | i);
+        }
+        if (multidictIntHashFunction(12345) !=
+            multidictIntHashFunction(12345)) {
+            printf("an integer hash is not deterministic\n");
+            err++;
+        }
+        qsort(h32, MD_HASH_KEYS, sizeof(uint32_t), mdTestCompareU32_);
+        qsort(h64, MD_HASH_KEYS, sizeof(uint32_t), mdTestCompareU32_);
+        size_t same32 = 0;
+        size_t same64 = 0;
+        for (size_t i = 1; i < MD_HASH_KEYS; i++) {
+            same32 += h32[i] == h32[i - 1];
+            same64 += h64[i] == h64[i - 1];
+        }
+        if (same32 != 0 || same64 > 4) {
+            printf("hash collisions: %zu (32-bit), %zu (64-bit)\n", same32,
+                   same64);
+            err++;
+        }
+    }
+
     printf("\n--- Smoke benchmark (ns per entry) ---\n");
     {
         enum { MD_BENCH_KEYS = 100000 };

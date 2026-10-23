@@ -4156,6 +4156,19 @@ static int testRingLifecycle(void) {
         }
     }
 
+    TEST("the ring version rises with every topology change") {
+        cleaner(clusterRingFree) clusterRing *ring = clusterRingNewDefault();
+        const uint64_t v0 = clusterRingGetVersion(ring);
+        const clusterNodeConfig nc = {.id = 1};
+        clusterRingAddNode(ring, &nc);
+        const uint64_t v1 = clusterRingGetVersion(ring);
+        clusterRingSetNodeState(ring, 1, CLUSTER_NODE_DOWN);
+        const uint64_t v2 = clusterRingGetVersion(ring);
+        if (!(v0 < v1 && v1 < v2) || clusterRingGetVersion(NULL) != 0) {
+            ERR("versions %" PRIu64 ", %" PRIu64 ", %" PRIu64, v0, v1, v2);
+        }
+    }
+
     TEST("Ring creation with custom config") {
         clusterRingConfig config = {
             .name = "test-ring",

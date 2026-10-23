@@ -512,6 +512,16 @@ int stringPoolTest(int argc, char *argv[]) {
 
     int err = 0;
 
+    TEST("a pool reports the id behaviour it was made with") {
+        cleaner(stringPoolFree) stringPool *reuse = stringPoolNew();
+        cleaner(stringPoolFree) stringPool *permanent =
+            stringPoolNewWithIds(STRING_POOL_IDS_PERMANENT);
+        if (stringPoolIdsOf(reuse) != STRING_POOL_IDS_REUSE ||
+            stringPoolIdsOf(permanent) != STRING_POOL_IDS_PERMANENT) {
+            ERRR("stringPoolIdsOf misreports the id behaviour");
+        }
+    }
+
     TEST("create / free") {
         cleaner(stringPoolFree) stringPool *pool = stringPoolNew();
         assert(pool != NULL);
