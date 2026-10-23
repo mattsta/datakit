@@ -299,6 +299,12 @@ uv run --project tools dktools coverage [--rev REV] [--top N] [--skip REGEX] \
   suite.  The "Library code" totals and the per-file tables leave them
   out (per-line counts from `llvm-cov export -format=lcov`; a header's
   inline function counts as run if any copy ran).
+- The coverage ratchet: `tools/coverage-baseline.json` records each
+  file's uncovered library lines and branches.  A run fails (exit 1)
+  when any file has more of either than its baseline, lists the files
+  that improved and the new ones, and `--update-baseline` writes the
+  run's figures to the working tree (commit it with the tests that
+  earned it).
 - `--detail FILE` (repeatable, repo-relative) reads the earlier run for
   REV and lists FILE's functions by missed lines and its uncovered line
   ranges (each with its first source line): the worklist for one file.

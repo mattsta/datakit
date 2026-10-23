@@ -392,6 +392,12 @@ def main(argv: list[str] | None = None) -> int:
         help="from the earlier run for REV, list FILE's (repo-relative, "
         "repeatable) functions by missed lines and its uncovered line ranges",
     )
+    cv.add_argument(
+        "--update-baseline",
+        action="store_true",
+        help="write this run's per-file uncovered library lines and branches "
+        "to tools/coverage-baseline.json (the ratchet's baseline)",
+    )
     toolchain.add_arguments(cv)
 
     vs = sub.add_parser(
@@ -489,6 +495,7 @@ def _dispatch(args: argparse.Namespace) -> int:
             root=args.root,
             jobs=args.jobs,
             compiler=toolchain.from_args("clang22", args),
+            update_baseline=args.update_baseline,
         )
         if args.detail:
             return coverage.detail(args.repo, cov_opts, args.detail)

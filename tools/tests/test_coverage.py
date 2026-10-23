@@ -330,6 +330,41 @@ class LibraryOnly(unittest.TestCase):
         self.assertEqual(total.lines, (2, 3))
 
 
+class Ratchet(unittest.TestCase):
+    def row(self, path: str, lines: tuple, branches: tuple) -> coverage.FileCoverage:
+        return coverage.FileCoverage(path, lines, (0, 0), branches, (0, 0))
+
+    def test_regressions_improvements_and_new_files(self) -> None:
+        before = [
+            self.row("src/a.c", (90, 100), (40, 50)),
+            self.row("src/b.c", (10, 20), (5, 10)),
+            self.row("src/c.c", (5, 10), (2, 4)),
+        ]
+        doc = coverage.baseline_doc("a" * 40, before)
+        self.assertEqual(doc["files"]["src/a.c"], {"lines": 10, "branches": 10})
+        after = [
+            self.row("src/a.c", (88, 100), (40, 50)),  # 2 more lines missed
+            self.row("src/b.c", (15, 20), (5, 10)),  # better
+            self.row("src/c.c", (5, 10), (2, 4)),  # unchanged
+            self.row("src/d.c", (1, 3), (0, 0)),  # new
+            self.row("src/e.h", (0, 0), (0, 0)),  # no code
+        ]
+        r = coverage.ratchet(doc, after)
+        self.assertFalse(r.ok)
+        self.assertEqual(r.regressions, ["src/a.c: uncovered lines 10 -> 12"])
+        self.assertEqual(len(r.improved), 1)
+        self.assertTrue(r.improved[0].startswith("src/b.c"))
+        self.assertEqual(r.new, ["src/d.c: 2 uncovered lines, 0 branches"])
+        text = coverage.render_ratchet(r)
+        self.assertIn("REGRESSED", text)
+        self.assertIn("no baseline", coverage.render_ratchet(None))
+
+    def test_a_file_that_grew_with_tests_holds(self) -> None:
+        doc = coverage.baseline_doc("b" * 40, [self.row("src/a.c", (8, 10), (3, 4))])
+        r = coverage.ratchet(doc, [self.row("src/a.c", (58, 60), (13, 14))])
+        self.assertTrue(r.ok)
+
+
 class Detail(unittest.TestCase):
     def test_uncovered_ranges_span_lines_without_code(self) -> None:
         ranges = coverage.parse_show_uncovered(SHOW)

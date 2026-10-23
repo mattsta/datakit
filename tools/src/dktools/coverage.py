@@ -67,6 +67,7 @@ class CoverageOptions:
     root: Path | None = None
     jobs: int | None = None
     compiler: toolchain.Compiler | None = None
+    update_baseline: bool = False
 
 
 @dataclass
@@ -651,8 +652,10 @@ def run(repo: Path, opts: CoverageOptions) -> int:
         raise ToolError(f"llvm-profdata / llvm-cov failed; see {logs}")
 
     export_lcov(work, compiler)
-    report(work, commit, subject, tests, tests_ok, opts.top)
-    return 0 if tests_ok else 1
+    held = report(
+        work, commit, subject, tests, tests_ok, opts.top, repo, opts.update_baseline
+    )
+    return 0 if tests_ok and held else 1
 
 
 def export_lcov(work: Path, compiler: toolchain.Compiler) -> None:
@@ -682,11 +685,103 @@ def export_lcov(work: Path, compiler: toolchain.Compiler) -> None:
         raise ToolError(f"llvm-cov export -format=lcov failed; see {work / 'logs'}")
 
 
+#: The ratchet's baseline, in the measured tree (and written to the
+#: working tree by --update-baseline).
+BASELINE = Path("tools") / "coverage-baseline.json"
+
+
+def baseline_doc(commit: str, files: list[FileCoverage]) -> dict:
+    """Uncovered library lines and branches per file, for the ratchet."""
+    return {
+        "commit": commit,
+        "files": {
+            f.path: {
+                "lines": f.lines[1] - f.lines[0],
+                "branches": f.branches[1] - f.branches[0],
+            }
+            for f in sorted(files, key=lambda f: f.path)
+            if f.lines[1] > 0
+        },
+    }
+
+
+@dataclass
+class Ratchet:
+    baseline_commit: str = ""
+    regressions: list[str] = field(default_factory=list)  # "path: what"
+    improved: list[str] = field(default_factory=list)
+    new: list[str] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return not self.regressions
+
+
+def ratchet(baseline: dict, files: list[FileCoverage]) -> Ratchet:
+    """Compare per-file uncovered library lines and branches with the
+    baseline: more of either is a regression; fewer is an improvement
+    (record it with --update-baseline); a file the baseline lacks is new."""
+    out = Ratchet(baseline_commit=str(baseline.get("commit", ""))[:10])
+    known = baseline.get("files", {})
+    for f in sorted(files, key=lambda f: f.path):
+        if f.lines[1] == 0:
+            continue
+        lines = f.lines[1] - f.lines[0]
+        branches = f.branches[1] - f.branches[0]
+        was = known.get(f.path)
+        if was is None:
+            out.new.append(f"{f.path}: {lines} uncovered lines, {branches} branches")
+            continue
+        worse = []
+        if lines > was["lines"]:
+            worse.append(f"uncovered lines {was['lines']} -> {lines}")
+        if branches > was["branches"]:
+            worse.append(f"uncovered branches {was['branches']} -> {branches}")
+        if worse:
+            out.regressions.append(f"{f.path}: {', '.join(worse)}")
+        elif lines < was["lines"] or branches < was["branches"]:
+            out.improved.append(
+                f"{f.path}: lines {was['lines']} -> {lines}, "
+                f"branches {was['branches']} -> {branches}"
+            )
+    return out
+
+
+def render_ratchet(r: Ratchet | None) -> str:
+    md = ["", "## Coverage ratchet", ""]
+    if r is None:
+        md.append(f"no baseline ({BASELINE}); write one with --update-baseline")
+        return "\n".join(md) + "\n"
+    md.append(
+        f"against baseline {r.baseline_commit}: "
+        f"{'ok' if r.ok else 'REGRESSED'}, {len(r.improved)} improved, "
+        f"{len(r.new)} new"
+    )
+    for title, items in (
+        ("Regressions (fail)", r.regressions),
+        ("Improved (record with --update-baseline)", r.improved),
+        ("New files", r.new),
+    ):
+        if items:
+            md += ["", f"### {title}", ""]
+            md += [f"- {item}" for item in items]
+    return "\n".join(md) + "\n"
+
+
 def report(
-    work: Path, commit: str, subject: str, tests: str, tests_ok: bool, top: int
-) -> None:
+    work: Path,
+    commit: str,
+    subject: str,
+    tests: str,
+    tests_ok: bool,
+    top: int,
+    repo: Path | None = None,
+    update_baseline: bool = False,
+) -> bool:
     """Write and print the summary of the run in `work` (its exported
-    tree, profile listing and llvm-cov export)."""
+    tree, profile listing and llvm-cov export).  Returns False when the
+    coverage ratchet regressed against the measured tree's baseline;
+    with `update_baseline`, writes the run's figures as `repo`'s baseline."""
     logs = work / "logs"
     src = work / "src"
     export_text = (logs / "export.json").read_text().split("\n", 1)[1]
@@ -700,6 +795,12 @@ def report(
         library = library_coverage(parse_lcov(lcov.read_text(), src), src)
 
     text = render(commit, subject, tests, files, total, api, top, library)
+    result: Ratchet | None = None
+    if library is not None:
+        baseline_file = src / BASELINE
+        if baseline_file.exists():
+            result = ratchet(json.loads(baseline_file.read_text()), library[0])
+        text += render_ratchet(result)
     (work / "summary.md").write_text(text)
     (work / "summary.json").write_text(
         json.dumps(to_json(commit, tests_ok, files, total, api, library), indent=1)
@@ -707,6 +808,11 @@ def report(
     )
     sys.stdout.write(text)
     print(f"summary: {work / 'summary.md'}")
+    if update_baseline and repo is not None and library is not None:
+        target = repo / BASELINE
+        target.write_text(json.dumps(baseline_doc(commit, library[0]), indent=1) + "\n")
+        print(f"baseline: {target}")
+    return result is None or result.ok
 
 
 #: ``llvm-cov show`` line: ``  NN|  COUNT|source`` (COUNT empty for a
@@ -875,5 +981,7 @@ def rereport(repo: Path, opts: CoverageOptions) -> int:
     tests_ok = not failed
     tests = "all passed (earlier run)" if tests_ok else f"FAILED: {', '.join(failed)}"
     export_lcov(work, opts.compiler or toolchain.resolve_compiler("clang22"))
-    report(work, commit, subject, tests, tests_ok, top=opts.top)
-    return 0 if tests_ok else 1
+    held = report(
+        work, commit, subject, tests, tests_ok, opts.top, repo, opts.update_baseline
+    )
+    return 0 if tests_ok and held else 1
