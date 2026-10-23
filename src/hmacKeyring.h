@@ -224,6 +224,11 @@ void hmacKeyringFree(hmacKeyring *ring);
  * has another mechanism guaranteeing nonce uniqueness, the explicit
  * `hmacKeyringInstallUnsalted` variant below documents the choice.
  *
+ * Every Install starts the AEAD counter at 0: installing key bytes that
+ * were installed before (say, after a Retire) with the same salt issues
+ * their nonces again.  Reinstall a key only with a salt it never had, or
+ * restore its counter (RestoreAeadCounter) before issuing.
+ *
  * Returns false when:
  * - `id` is HMAC_KEY_ID_INVALID
  * - `id` is already installed and not yet retired
