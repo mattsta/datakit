@@ -28,6 +28,42 @@ the headline numbers and decisions; the TSV keeps every row.
 
 ---
 
+## 2026-10-23 — containers reusing inner-layer work; atom-table persistence
+
+Apple M1 Max, macOS 14.8, clang 22, `perf` preset, single thread, revision
+`c1c02c8`. ns per operation over 100k operations (`getRank`: 2,000) on 16-byte
+keys; one capture (rows vary a few percent run to run). The before/after
+figures were measured with `dktools perfcompare` (alternating runs, medians).
+
+| row | ns/op | changed by |
+| --- | ---: | --- |
+| multidict add | 274 | slot rehash in one pass, one hash per add |
+| multidict find | 84 | |
+| multidict addNX (absent / present) | 248 / 106 | one search: absent -7..-16%, present +6% (call overhead) |
+| multidict incrBy / addXX / incrByFloat | 141 / 145 / 211 | rewrite in place in one search: -28% / -28% / -23% |
+| multidict delete / getAndDelete | 191 / 158 | one search per removal: -26% / -46% |
+| multiOrderedSet (Full) add / update | 1529 / 3064 | update dominated by the sub-map insert (density layout) |
+| multiOrderedSet (Full) addXX / incrBy / remove | 2860 / 2750 / 1221 | member rows by binary search: -20% / -19% / -24% |
+| multiOrderedSet (Full) getRank | 3821 | was 1.40 ms (370x) |
+| multiOrderedSet small: incrBy / update / addNX present | 298 / 707 / 234 | in-place score rewrite (-33% incr), member match by bytes (-40..-67%) |
+| multiOrderedSet medium: incrBy / update / addNX present | 808 / 1606 / 756 | same two changes: -64% / -48% / -66% |
+| multimapAtom intern new / present | 2145 / 1374 | find-or-create in one reverse search: new -41% |
+| multimapAtom retain / release | 1565 / 1573 | |
+| multimapAtom last release / deleteById | 2569 / 2250 | delete the found row by its entry: -40% / -46% |
+| multimapAtom snapshot / restore | 63 / 635 | restore builds the reverse map in value order (re-interning: 2145) |
+| multimapAtomDense snapshot / restore | 47 / 631 | every fourth atom deleted: holes rebuilt from the ids |
+| stringPool snapshot / restore | 40 / 237 | restore presized, one AddNX per string (was 392) |
+
+### Reproduce
+
+```
+DK_PERF_MODULES=multidict,multiOrderedSet,multimapAtom \
+    ./build-perf/src/datakit-test test perfRegression
+uv run --project tools dktools perfcompare NAME --base REV --modules multidict
+```
+
+---
+
 ## 2026-10-21 — Fenwick and segment trees: workload matrix
 
 Apple M1 Max, macOS 14.8, clang 22, `perf` preset, single thread. ns per
