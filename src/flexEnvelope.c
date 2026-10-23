@@ -1178,6 +1178,48 @@ flex *flexEnvelopeUnwrapAsFlex(const uint8_t *buf, size_t buf_len,
  *    ciphertext + tag). The caller has not yet observed the nonce log or
  *    run the cipher.
  *  - `*desc_out` points at the algo descriptor. */
+/* The key length an AEAD algorithm takes (0: not an AEAD this build
+ * seals with).  Checked before anything else happens, so a wrong-length
+ * key never gets as far as observing its nonce. */
+static size_t sealKeyLen(flexEnvelopeAlgo algo) {
+    switch (algo) {
+    case FLEX_ENV_ALGO_AEAD_CHACHA20_POLY1305:
+        return CHACHA20_POLY1305_KEY_LEN;
+    case FLEX_ENV_ALGO_AEAD_AES128_GCM:
+        return AES128_KEY_LEN;
+    case FLEX_ENV_ALGO_AEAD_AES256_GCM:
+        return AES256_KEY_LEN;
+    default:
+        return 0;
+    }
+}
+
+/* The params a Seal runs with: the caller's, or, when they carry no key
+ * (key NULL, key_len 0) but a keyring and a key_id, a copy of the
+ * keyring's bytes for key_id in `buf` (the caller wipes it) and
+ * *fromRing set.  False when the keyring has no such key. */
+static bool sealResolveKey(const flexEnvelopeSealParams *params,
+                           flexEnvelopeSealParams *resolved,
+                           uint8_t buf[HMAC_KEYRING_MAX_KEY_BYTES],
+                           bool *fromRing) {
+    *resolved = *params;
+    *fromRing = false;
+    if (params->key != NULL || params->key_len != 0 ||
+        params->keyring == NULL || params->key_id == 0u) {
+        return true;
+    }
+    size_t len = 0;
+    if (!hmacKeyringGetRawCopy((struct hmacKeyring *)params->keyring,
+                               params->key_id, buf, HMAC_KEYRING_MAX_KEY_BYTES,
+                               &len, NULL)) {
+        return false;
+    }
+    resolved->key = buf;
+    resolved->key_len = len;
+    *fromRing = true;
+    return true;
+}
+
 static bool sealEmitHeader(uint8_t *out, size_t out_cap, uint64_t plaintext_len,
                            const flexEnvelopeSealParams *params,
                            const flexEnvelopeAlgoDesc **desc_out,
@@ -1199,7 +1241,7 @@ static bool sealEmitHeader(uint8_t *out, size_t out_cap, uint64_t plaintext_len,
     if (!d || !d->is_implemented || !d->is_aead) {
         return false;
     }
-    if (params->key == NULL || params->key_len == 0) {
+    if (params->key == NULL || params->key_len != sealKeyLen(params->algo)) {
         return false;
     }
     if (params->nonce == NULL || params->nonce_len != d->nonce_len) {
@@ -1291,7 +1333,7 @@ static bool sealEmitHeader(uint8_t *out, size_t out_cap, uint64_t plaintext_len,
 static bool sealRunCipher(uint8_t *out, size_t aad_len,
                           const uint8_t *plaintext, uint64_t plaintext_len,
                           const flexEnvelopeSealParams *params,
-                          const flexEnvelopeAlgoDesc *d) {
+                          const flexEnvelopeAlgoDesc *d, bool fromRing) {
     uint8_t *ciphertext_out = out + aad_len;
     uint8_t *tag_out = ciphertext_out + plaintext_len;
     if (params->algo == FLEX_ENV_ALGO_AEAD_CHACHA20_POLY1305) {
@@ -1312,7 +1354,13 @@ static bool sealRunCipher(uint8_t *out, size_t aad_len,
             return false;
         }
         aesGcmKey k;
-        if (!aesGcmInit(&k, params->key, params->key_len)) {
+        /* A key resolved from the keyring has its expanded schedule
+         * cached on the slot: copy it rather than expand again. */
+        const bool cached =
+            fromRing &&
+            hmacKeyringGetAesGcmKeyCopy((struct hmacKeyring *)params->keyring,
+                                        params->key_id, &k);
+        if (!cached && !aesGcmInit(&k, params->key, params->key_len)) {
             return false;
         }
         if (!aesGcmSeal(&k, params->nonce, out, aad_len, plaintext,
@@ -1345,10 +1393,10 @@ static bool sealObserveNonce(const flexEnvelopeSealParams *params,
     return true;
 }
 
-bool flexEnvelopeSeal(uint8_t *out, size_t out_cap, const uint8_t *plaintext,
-                      uint64_t plaintext_len,
-                      const flexEnvelopeSealParams *params,
-                      size_t *out_written) {
+static bool sealOneShot(uint8_t *out, size_t out_cap, const uint8_t *plaintext,
+                        uint64_t plaintext_len,
+                        const flexEnvelopeSealParams *params, bool fromRing,
+                        size_t *out_written) {
     if (plaintext_len > 0 && !plaintext) {
         return false;
     }
@@ -1380,7 +1428,8 @@ bool flexEnvelopeSeal(uint8_t *out, size_t out_cap, const uint8_t *plaintext,
      * entire prefix of the envelope before the ciphertext. Any tamper
      * to those bytes on the wire fails the tag check, so the algo /
      * payload_len / nonce fields are all integrity-protected. */
-    if (!sealRunCipher(out, aad_len, plaintext, plaintext_len, params, d)) {
+    if (!sealRunCipher(out, aad_len, plaintext, plaintext_len, params, d,
+                       fromRing)) {
         return false;
     }
 
@@ -1388,6 +1437,27 @@ bool flexEnvelopeSeal(uint8_t *out, size_t out_cap, const uint8_t *plaintext,
         *out_written = needed;
     }
     return true;
+}
+
+bool flexEnvelopeSeal(uint8_t *out, size_t out_cap, const uint8_t *plaintext,
+                      uint64_t plaintext_len,
+                      const flexEnvelopeSealParams *params,
+                      size_t *out_written) {
+    if (!params) {
+        return false;
+    }
+    uint8_t keyBuf[HMAC_KEYRING_MAX_KEY_BYTES];
+    flexEnvelopeSealParams resolved;
+    bool fromRing = false;
+    if (!sealResolveKey(params, &resolved, keyBuf, &fromRing)) {
+        return false;
+    }
+    const bool ok = sealOneShot(out, out_cap, plaintext, plaintext_len,
+                                &resolved, fromRing, out_written);
+    if (fromRing) {
+        dkSecureZero(keyBuf, sizeof(keyBuf));
+    }
+    return ok;
 }
 
 /* === Zero-copy Seal =================================================
@@ -1405,15 +1475,26 @@ bool flexEnvelopeReserveSeal(uint8_t *out, size_t out_cap,
                              const flexEnvelopeSealParams *params,
                              uint8_t **plaintext_region_out,
                              size_t *header_plus_nonce_len_out) {
-    if (!plaintext_region_out || !header_plus_nonce_len_out) {
+    if (!plaintext_region_out || !header_plus_nonce_len_out || !params) {
         return false;
+    }
+    /* The key is resolved (and its length checked) here too, so a
+     * reservation Finalize would refuse never observes its nonce. */
+    uint8_t keyBuf[HMAC_KEYRING_MAX_KEY_BYTES];
+    flexEnvelopeSealParams resolved;
+    bool fromRing = false;
+    if (!sealResolveKey(params, &resolved, keyBuf, &fromRing)) {
+        return false;
+    }
+    if (fromRing) {
+        dkSecureZero(keyBuf, sizeof(keyBuf));
     }
     const flexEnvelopeAlgoDesc *d = NULL;
     size_t header_size = 0;
     size_t aad_len = 0;
     size_t needed = 0;
-    if (!sealEmitHeader(out, out_cap, plaintext_len, params, &d, &header_size,
-                        &aad_len, &needed)) {
+    if (!sealEmitHeader(out, out_cap, plaintext_len, &resolved, &d,
+                        &header_size, &aad_len, &needed)) {
         return false;
     }
     (void)header_size;
@@ -1429,6 +1510,11 @@ bool flexEnvelopeReserveSeal(uint8_t *out, size_t out_cap,
     return true;
 }
 
+static bool sealFinalize(uint8_t *out, size_t out_cap,
+                         size_t header_plus_nonce_len, uint64_t plaintext_len,
+                         const flexEnvelopeSealParams *params, bool fromRing,
+                         size_t *written_out);
+
 bool flexEnvelopeFinalizeSeal(uint8_t *out, size_t out_cap,
                               size_t header_plus_nonce_len,
                               uint64_t plaintext_len,
@@ -1437,6 +1523,25 @@ bool flexEnvelopeFinalizeSeal(uint8_t *out, size_t out_cap,
     if (!out || !params) {
         return false;
     }
+    uint8_t keyBuf[HMAC_KEYRING_MAX_KEY_BYTES];
+    flexEnvelopeSealParams resolved;
+    bool fromRing = false;
+    if (!sealResolveKey(params, &resolved, keyBuf, &fromRing)) {
+        return false;
+    }
+    const bool ok =
+        sealFinalize(out, out_cap, header_plus_nonce_len, plaintext_len,
+                     &resolved, fromRing, written_out);
+    if (fromRing) {
+        dkSecureZero(keyBuf, sizeof(keyBuf));
+    }
+    return ok;
+}
+
+static bool sealFinalize(uint8_t *out, size_t out_cap,
+                         size_t header_plus_nonce_len, uint64_t plaintext_len,
+                         const flexEnvelopeSealParams *params, bool fromRing,
+                         size_t *written_out) {
     /* Re-validate everything Reserve checked; same fail-closed posture as
      * FinalizeWrap. We do NOT re-run sealObserveNonce — Reserve already
      * observed the (key_id, nonce) tuple, and a second observe would
@@ -1449,7 +1554,7 @@ bool flexEnvelopeFinalizeSeal(uint8_t *out, size_t out_cap,
     if (!d || !d->is_implemented || !d->is_aead) {
         return false;
     }
-    if (params->key == NULL || params->key_len == 0) {
+    if (params->key == NULL || params->key_len != sealKeyLen(params->algo)) {
         return false;
     }
     if (params->nonce == NULL || params->nonce_len != d->nonce_len) {
@@ -1509,7 +1614,7 @@ bool flexEnvelopeFinalizeSeal(uint8_t *out, size_t out_cap,
      * `src == dst`. */
     const uint8_t *plaintext = out + header_plus_nonce_len;
     if (!sealRunCipher(out, header_plus_nonce_len, plaintext, plaintext_len,
-                       params, d)) {
+                       params, d, fromRing)) {
         return false;
     }
 
@@ -2415,10 +2520,400 @@ static bool roundTripOne(flexEnvelopeAlgo algo, size_t payload_len,
     return true;
 }
 
+/* One invalid change to otherwise valid wrap params, for the matrix below */
+typedef enum envBadWrap {
+    ENV_BAD_PAD,
+    ENV_BAD_ALGO_UNKNOWN,
+    ENV_BAD_ALGO_AEAD,
+    ENV_BAD_ALGO_NONE,
+    ENV_BAD_NO_KEY,
+    ENV_BAD_KEY_EMPTY,
+    ENV_BAD_BLAKE3_KEY_LEN,
+    ENV_BAD_FLAGS,
+    ENV_BAD_KEYID_FLAG_NO_ID,
+    ENV_BAD_VERSION,
+    ENV_BAD_WRAP_COUNT
+} envBadWrap;
+
+static void envBreakWrap(flexEnvelopeWrapParams *p, envBadWrap bad,
+                         const uint8_t *key16) {
+    switch (bad) {
+    case ENV_BAD_PAD:
+        p->_pad[1] = 1;
+        break;
+    case ENV_BAD_ALGO_UNKNOWN:
+        p->algo = (flexEnvelopeAlgo)999;
+        break;
+    case ENV_BAD_ALGO_AEAD:
+        p->algo = FLEX_ENV_ALGO_AEAD_CHACHA20_POLY1305;
+        break;
+    case ENV_BAD_ALGO_NONE:
+        p->algo = FLEX_ENV_ALGO_NONE;
+        break;
+    case ENV_BAD_NO_KEY:
+        p->key = NULL;
+        break;
+    case ENV_BAD_KEY_EMPTY:
+        p->key_len = 0;
+        break;
+    case ENV_BAD_BLAKE3_KEY_LEN:
+        p->algo = FLEX_ENV_ALGO_BLAKE3_KEYED;
+        p->key = key16;
+        p->key_len = 16;
+        break;
+    case ENV_BAD_FLAGS:
+        p->on_wire_flags = 1u << 30;
+        break;
+    case ENV_BAD_KEYID_FLAG_NO_ID:
+        p->key_id = 0;
+        p->on_wire_flags = FLEX_ENV_FLAG_KEYID_PRESENT;
+        break;
+    case ENV_BAD_VERSION:
+        p->version = 99;
+        break;
+    default:
+        break;
+    }
+}
+
 int flexEnvelopeTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     int err = 0;
+
+    TEST("envelope: every wrap entry point agrees on the params it refuses") {
+        /* One-shot Wrap, Reserve/Finalize and the stream each validate
+         * the params themselves; each invalid change must be refused by
+         * all of them, and the valid params produce one identical
+         * envelope through all three, which Verify (one-shot and stream)
+         * accepts */
+        uint8_t key[32];
+        uint8_t key16[16];
+        for (size_t i = 0; i < sizeof(key); i++) {
+            key[i] = (uint8_t)(i * 7 + 1);
+        }
+        memcpy(key16, key, sizeof(key16));
+        const uint8_t payload[40] = "payload under three wrap entry points";
+        const flexEnvelopeWrapParams good = {.key = key,
+                                             .key_len = sizeof(key),
+                                             .algo = FLEX_ENV_ALGO_HMAC_SHA256,
+                                             .key_id = 7};
+        uint8_t oneShot[256];
+        uint8_t reserved[256];
+        size_t oneLen = 0;
+        size_t resLen = 0;
+        uint8_t *region = NULL;
+        size_t headerLen = 0;
+        const bool okOne = flexEnvelopeWrap(oneShot, sizeof(oneShot), payload,
+                                            sizeof(payload), &good, &oneLen);
+        const bool okRes =
+            flexEnvelopeReserveWrap(reserved, sizeof(reserved), sizeof(payload),
+                                    &good, &region, &headerLen);
+        if (okRes) {
+            memcpy(region, payload, sizeof(payload));
+        }
+        const bool okFin = okRes && flexEnvelopeFinalizeWrap(
+                                        reserved, sizeof(reserved), headerLen,
+                                        sizeof(payload), &good, &resLen);
+        flexEnvelopeWrapStream ws;
+        uint8_t streamed[256];
+        size_t sHead = 0;
+        size_t sDigest = 0;
+        bool okStream = flexEnvelopeWrapStreamInit(
+            &ws, sizeof(payload), &good, streamed, sizeof(streamed), &sHead);
+        okStream = okStream && flexEnvelopeWrapStreamUpdate(&ws, payload, 17) &&
+                   flexEnvelopeWrapStreamUpdate(&ws, payload + 17,
+                                                sizeof(payload) - 17);
+        if (okStream) {
+            memcpy(streamed + sHead, payload, sizeof(payload));
+            okStream = flexEnvelopeWrapStreamFinal(
+                &ws, streamed + sHead + sizeof(payload),
+                sizeof(streamed) - sHead - sizeof(payload), &sDigest);
+        }
+        const size_t streamLen = sHead + sizeof(payload) + sDigest;
+        if (!okOne || !okFin || !okStream || oneLen != resLen ||
+            oneLen != streamLen || memcmp(oneShot, reserved, oneLen) != 0 ||
+            memcmp(oneShot, streamed, oneLen) != 0) {
+            ERR("valid params: wrap %d, reserve/finalize %d, stream %d; "
+                "lengths %zu %zu %zu",
+                okOne, okFin, okStream, oneLen, resLen, streamLen);
+        }
+        flexEnvelopeVerifyParams vp = {.key = key, .key_len = sizeof(key)};
+        const uint8_t *got = NULL;
+        uint64_t gotLen = 0;
+        flexEnvelopeVerifyStream vs;
+        size_t consumed = 0;
+        uint64_t streamPayload = 0;
+        flexEnvelopeAlgo algo = FLEX_ENV_ALGO_NONE;
+        const bool vOne =
+            flexEnvelopeVerify(oneShot, oneLen, &vp, &got, &gotLen) &&
+            gotLen == sizeof(payload) &&
+            memcmp(got, payload, sizeof(payload)) == 0;
+        bool vStream = flexEnvelopeVerifyStreamInit(
+            &vs, &vp, oneShot, oneLen, &consumed, &streamPayload, &algo);
+        vStream = vStream && streamPayload == sizeof(payload) &&
+                  algo == FLEX_ENV_ALGO_HMAC_SHA256 &&
+                  flexEnvelopeVerifyStreamUpdate(&vs, oneShot + consumed,
+                                                 oneLen - consumed) &&
+                  flexEnvelopeVerifyStreamFinal(&vs);
+        if (!vOne || !vStream) {
+            ERR("the valid envelope: verify %d, verify stream %d", vOne,
+                vStream);
+        }
+
+        for (int b = 0; b < ENV_BAD_WRAP_COUNT; b++) {
+            flexEnvelopeWrapParams bad = good;
+            envBreakWrap(&bad, (envBadWrap)b, key16);
+            uint8_t out[256];
+            size_t outLen = 0;
+            uint8_t *r = NULL;
+            size_t h = 0;
+            flexEnvelopeWrapStream badStream;
+            size_t badHead = 0;
+            const bool wrap = flexEnvelopeWrap(out, sizeof(out), payload,
+                                               sizeof(payload), &bad, &outLen);
+            const bool reserve = flexEnvelopeReserveWrap(
+                out, sizeof(out), sizeof(payload), &bad, &r, &h);
+            /* Finalize with the bad params after a good Reserve */
+            uint8_t fin[256];
+            uint8_t *finRegion = NULL;
+            size_t finHead = 0;
+            flexEnvelopeReserveWrap(fin, sizeof(fin), sizeof(payload), &good,
+                                    &finRegion, &finHead);
+            memcpy(finRegion, payload, sizeof(payload));
+            const bool finalize = flexEnvelopeFinalizeWrap(
+                fin, sizeof(fin), finHead, sizeof(payload), &bad, &outLen);
+            const bool stream = flexEnvelopeWrapStreamInit(
+                &badStream, sizeof(payload), &bad, out, sizeof(out), &badHead);
+            if (wrap || reserve || stream || finalize) {
+                ERR("bad params %d: wrap %d, reserve %d, finalize %d, "
+                    "stream %d",
+                    b, wrap, reserve, finalize, stream);
+            }
+        }
+
+        /* Finalize also refuses what Reserve did not set up */
+        uint8_t fin[256];
+        uint8_t *finRegion = NULL;
+        size_t finHead = 0;
+        size_t finLen = 0;
+        flexEnvelopeReserveWrap(fin, sizeof(fin), sizeof(payload), &good,
+                                &finRegion, &finHead);
+        const bool wrongHeader = flexEnvelopeFinalizeWrap(
+            fin, sizeof(fin), finHead + 1, sizeof(payload), &good, &finLen);
+        const bool tooSmall =
+            flexEnvelopeFinalizeWrap(fin, finHead + sizeof(payload), finHead,
+                                     sizeof(payload), &good, &finLen);
+        fin[0] ^= 0xFF;
+        const bool mangled = flexEnvelopeFinalizeWrap(
+            fin, sizeof(fin), finHead, sizeof(payload), &good, &finLen);
+        if (wrongHeader || tooSmall || mangled ||
+            flexEnvelopeFinalizeWrap(NULL, 0, 0, 0, &good, &finLen) ||
+            flexEnvelopeFinalizeWrap(fin, sizeof(fin), finHead, 0, NULL,
+                                     &finLen)) {
+            ERR("finalize accepted: wrong header %d, short buffer %d, "
+                "mangled magic %d",
+                wrongHeader, tooSmall, mangled);
+        }
+    }
+
+    TEST("envelope: Seal resolves its key from a bound keyring by key id") {
+        hmacKeyring *ring = hmacKeyringCreate();
+        uint8_t key32[32];
+        uint8_t key16[16];
+        for (size_t i = 0; i < sizeof(key32); i++) {
+            key32[i] = (uint8_t)(0x55 ^ (i * 3));
+        }
+        memcpy(key16, key32, sizeof(key16));
+        hmacKeyringInstallUnsalted(ring, 5, &hmacAlgoSHA256, key32,
+                                   sizeof(key32));
+        hmacKeyringInstallUnsalted(ring, 8, &hmacAlgoSHA256, key16,
+                                   sizeof(key16));
+        uint8_t nonce[12] = {9, 8, 7, 6, 5, 4, 3, 2, 1, 0, 1, 2};
+        const uint8_t plain[21] = "keyring-sealed bytes";
+        static const flexEnvelopeAlgo algos[] = {
+            FLEX_ENV_ALGO_AEAD_CHACHA20_POLY1305,
+            FLEX_ENV_ALGO_AEAD_AES256_GCM};
+        for (size_t a = 0; a < sizeof(algos) / sizeof(algos[0]); a++) {
+            const flexEnvelopeSealParams byRing = {.nonce = nonce,
+                                                   .nonce_len = sizeof(nonce),
+                                                   .algo = algos[a],
+                                                   .key_id = 5,
+                                                   .keyring = ring};
+            flexEnvelopeSealParams direct = byRing;
+            direct.key = key32;
+            direct.key_len = sizeof(key32);
+            uint8_t viaRing[128];
+            uint8_t viaKey[128];
+            uint8_t viaReserve[128];
+            size_t ringLen = 0;
+            size_t keyLen = 0;
+            size_t resLen = 0;
+            uint8_t *region = NULL;
+            size_t head = 0;
+            const bool okRing =
+                flexEnvelopeSeal(viaRing, sizeof(viaRing), plain, sizeof(plain),
+                                 &byRing, &ringLen);
+            const bool okKey = flexEnvelopeSeal(
+                viaKey, sizeof(viaKey), plain, sizeof(plain), &direct, &keyLen);
+            bool okRes =
+                flexEnvelopeReserveSeal(viaReserve, sizeof(viaReserve),
+                                        sizeof(plain), &byRing, &region, &head);
+            if (okRes) {
+                memcpy(region, plain, sizeof(plain));
+                okRes = flexEnvelopeFinalizeSeal(viaReserve, sizeof(viaReserve),
+                                                 head, sizeof(plain), &byRing,
+                                                 &resLen);
+            }
+            const flexEnvelopeVerifyParams vp = {.keyring = ring};
+            uint8_t opened[64];
+            size_t openedLen = 0;
+            const bool okOpen = okRing &&
+                                flexEnvelopeOpen(viaRing, ringLen, &vp, opened,
+                                                 sizeof(opened), &openedLen) &&
+                                openedLen == sizeof(plain) &&
+                                memcmp(opened, plain, sizeof(plain)) == 0;
+            if (!okRing || !okKey || !okRes || ringLen != keyLen ||
+                resLen != keyLen || memcmp(viaRing, viaKey, keyLen) != 0 ||
+                memcmp(viaReserve, viaKey, keyLen) != 0 || !okOpen) {
+                ERR("algo %d: ring %d, key %d, reserve %d, open %d",
+                    (int)algos[a], okRing, okKey, okRes, okOpen);
+            }
+        }
+        /* No such key, and a key of the wrong length for the algorithm:
+         * refused by every entry point before any nonce is used */
+        static const uint32_t badIds[] = {99, 8};
+        for (size_t i = 0; i < 2; i++) {
+            const flexEnvelopeSealParams bad = {
+                .nonce = nonce,
+                .nonce_len = sizeof(nonce),
+                .algo = FLEX_ENV_ALGO_AEAD_CHACHA20_POLY1305,
+                .key_id = badIds[i],
+                .keyring = ring};
+            uint8_t out[128];
+            size_t outLen = 0;
+            uint8_t *r = NULL;
+            size_t h = 0;
+            if (flexEnvelopeSeal(out, sizeof(out), plain, sizeof(plain), &bad,
+                                 &outLen) ||
+                flexEnvelopeReserveSeal(out, sizeof(out), sizeof(plain), &bad,
+                                        &r, &h)) {
+                ERR("key id %u sealed", badIds[i]);
+            }
+        }
+        hmacKeyringFree(ring);
+    }
+
+    TEST("envelope: Seal and Reserve/Finalize Seal agree on what they refuse") {
+        uint8_t key[32];
+        uint8_t nonce[12];
+        for (size_t i = 0; i < sizeof(key); i++) {
+            key[i] = (uint8_t)(0xA0 ^ i);
+        }
+        for (size_t i = 0; i < sizeof(nonce); i++) {
+            nonce[i] = (uint8_t)(i + 1);
+        }
+        const uint8_t plain[33] = "sealed by two entry points alike";
+        const flexEnvelopeSealParams good = {
+            .key = key,
+            .key_len = sizeof(key),
+            .nonce = nonce,
+            .nonce_len = sizeof(nonce),
+            .algo = FLEX_ENV_ALGO_AEAD_CHACHA20_POLY1305};
+        uint8_t oneShot[256];
+        uint8_t reserved[256];
+        size_t oneLen = 0;
+        size_t resLen = 0;
+        uint8_t *region = NULL;
+        size_t headLen = 0;
+        const bool okOne = flexEnvelopeSeal(oneShot, sizeof(oneShot), plain,
+                                            sizeof(plain), &good, &oneLen);
+        const bool okRes =
+            flexEnvelopeReserveSeal(reserved, sizeof(reserved), sizeof(plain),
+                                    &good, &region, &headLen);
+        if (okRes) {
+            memcpy(region, plain, sizeof(plain));
+        }
+        const bool okFin = okRes && flexEnvelopeFinalizeSeal(
+                                        reserved, sizeof(reserved), headLen,
+                                        sizeof(plain), &good, &resLen);
+        flexEnvelopeVerifyParams vp = {.key = key, .key_len = sizeof(key)};
+        uint8_t opened[64];
+        size_t openedLen = 0;
+        const bool okOpen = okOne &&
+                            flexEnvelopeOpen(oneShot, oneLen, &vp, opened,
+                                             sizeof(opened), &openedLen) &&
+                            openedLen == sizeof(plain) &&
+                            memcmp(opened, plain, sizeof(plain)) == 0;
+        if (!okOne || !okFin || oneLen != resLen ||
+            memcmp(oneShot, reserved, oneLen) != 0 || !okOpen) {
+            ERR("valid seal: one-shot %d, reserve/finalize %d, open %d; "
+                "lengths %zu %zu",
+                okOne, okFin, okOpen, oneLen, resLen);
+        }
+
+        enum {
+            SEAL_BAD_PAD,
+            SEAL_BAD_NOT_AEAD,
+            SEAL_BAD_NO_KEY,
+            SEAL_BAD_KEY_LEN,
+            SEAL_BAD_NO_NONCE,
+            SEAL_BAD_NONCE_LEN,
+            SEAL_BAD_FLAGS,
+            SEAL_BAD_VERSION,
+            SEAL_BAD_COUNT
+        };
+        for (int b = 0; b < SEAL_BAD_COUNT; b++) {
+            flexEnvelopeSealParams bad = good;
+            switch (b) {
+            case SEAL_BAD_PAD:
+                bad._pad[2] = 1;
+                break;
+            case SEAL_BAD_NOT_AEAD:
+                bad.algo = FLEX_ENV_ALGO_HMAC_SHA256;
+                break;
+            case SEAL_BAD_NO_KEY:
+                bad.key = NULL;
+                bad.key_len = 0;
+                break;
+            case SEAL_BAD_KEY_LEN:
+                bad.key_len = 16;
+                break;
+            case SEAL_BAD_NO_NONCE:
+                bad.nonce = NULL;
+                break;
+            case SEAL_BAD_NONCE_LEN:
+                bad.nonce_len = 8;
+                break;
+            case SEAL_BAD_FLAGS:
+                bad.on_wire_flags = 1u << 30;
+                break;
+            default:
+                bad.version = 99;
+                break;
+            }
+            uint8_t out[256];
+            size_t outLen = 0;
+            uint8_t *r = NULL;
+            size_t h = 0;
+            const bool seal = flexEnvelopeSeal(out, sizeof(out), plain,
+                                               sizeof(plain), &bad, &outLen);
+            const bool reserve = flexEnvelopeReserveSeal(
+                out, sizeof(out), sizeof(plain), &bad, &r, &h);
+            uint8_t fin[256];
+            uint8_t *finRegion = NULL;
+            size_t finHead = 0;
+            flexEnvelopeReserveSeal(fin, sizeof(fin), sizeof(plain), &good,
+                                    &finRegion, &finHead);
+            memcpy(finRegion, plain, sizeof(plain));
+            const bool finalize = flexEnvelopeFinalizeSeal(
+                fin, sizeof(fin), finHead, sizeof(plain), &bad, &outLen);
+            if (seal || reserve || finalize) {
+                ERR("bad seal params %d: seal %d, reserve %d, finalize %d", b,
+                    seal, reserve, finalize);
+            }
+        }
+    }
 
     TEST("envelope: algorithm queries are sane") {
         if (flexEnvelopeAlgoDigestLen(FLEX_ENV_ALGO_XXH64) != 8) {
