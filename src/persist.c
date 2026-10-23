@@ -3650,11 +3650,13 @@ static _Atomic uint64_t mlPopIdentityDeepRemoveTotal = 0; /* arm 2 */
 static _Atomic uint64_t mlPopIdentityAbsentNoopTotal = 0; /* arm 3 */
 
 uint64_t persistMultilistPopIdentityDeepRemoveTotal(void) {
+    /* @sync: relaxed counter */
     return atomic_load_explicit(&mlPopIdentityDeepRemoveTotal,
                                 memory_order_relaxed);
 }
 
 uint64_t persistMultilistPopIdentityAbsentNoopTotal(void) {
+    /* @sync: relaxed counter */
     return atomic_load_explicit(&mlPopIdentityAbsentNoopTotal,
                                 memory_order_relaxed);
 }
@@ -3665,6 +3667,7 @@ static bool multilistApplyPopIdentity(multilist **ml, mflexState *state,
      * this apply path against a not-yet-created structure) */
     const size_t cnt = *ml ? multilistCount(*ml) : 0;
     if (cnt == 0) {
+        /* @sync: relaxed counter */
         atomic_fetch_add_explicit(&mlPopIdentityAbsentNoopTotal, 1,
                                   memory_order_relaxed);
         return true;
@@ -3712,6 +3715,7 @@ static bool multilistApplyPopIdentity(multilist **ml, mflexState *state,
      * skipping this drops the removal and leaves the node pointer
      * stale after a reallocating delete. */
     multilistIteratorRelease(&iter);
+    /* @sync: relaxed counter */
     atomic_fetch_add_explicit(removed ? &mlPopIdentityDeepRemoveTotal
                                       : &mlPopIdentityAbsentNoopTotal,
                               1, memory_order_relaxed);

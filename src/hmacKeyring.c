@@ -129,6 +129,7 @@ static void hmacKeyringEntryClear(hmacKeyringEntry *e) {
     e->algo = NULL;
     e->raw_key_len = 0;
     e->id = HMAC_KEY_ID_INVALID;
+    /* @sync: relaxed owner */
     atomic_store_explicit(&e->aead_counter, 0u, memory_order_relaxed);
     /* Salt is sensitive: it scopes AEAD nonce derivation; wipe DCE-resistantly
      * even though most callers reach this via the destructor path. */
@@ -309,6 +310,7 @@ static bool hmacKeyringInstallInternal(
     slot->aead_schedule = aead_sched;
     slot->raw_key_len = key_len;
     slot->id = id;
+    /* @sync: relaxed owner */
     atomic_store_explicit(&slot->aead_counter, 0u, memory_order_relaxed);
     memcpy(slot->aead_salt, aead_salt, HMAC_KEYRING_AEAD_SALT_BYTES);
     slot->is_unsalted = is_unsalted;
@@ -566,6 +568,7 @@ bool hmacKeyringNextAeadNonce(hmacKeyring *ring, hmacKeyId id,
      * and silently reuse a nonce). Cast away const on the atomic field
      * — the rwlock keeps the slot alive; the field itself is atomic. */
     _Atomic uint64_t *ctr = (_Atomic uint64_t *)&slot->aead_counter;
+    /* @sync: relaxed seed */
     uint64_t prev = atomic_load_explicit(ctr, memory_order_relaxed);
     for (;;) {
         if (prev == UINT64_MAX) {
@@ -573,6 +576,7 @@ bool hmacKeyringNextAeadNonce(hmacKeyring *ring, hmacKeyId id,
             pthread_rwlock_unlock(&ring->lock);
             return false;
         }
+        /* @sync: relaxed counter */
         if (atomic_compare_exchange_weak_explicit(ctr, &prev, prev + 1u,
                                                   memory_order_relaxed,
                                                   memory_order_relaxed)) {
@@ -631,6 +635,7 @@ bool hmacKeyringPeekAeadCounter(hmacKeyring *ring, hmacKeyId id,
         return false;
     }
     _Atomic uint64_t *ctr = (_Atomic uint64_t *)&slot->aead_counter;
+    /* @sync: relaxed counter */
     *out_counter = atomic_load_explicit(ctr, memory_order_relaxed);
     pthread_rwlock_unlock(&ring->lock);
     return true;
@@ -648,12 +653,14 @@ bool hmacKeyringRestoreAeadCounter(hmacKeyring *ring, hmacKeyId id,
         return false;
     }
     /* Strict forward-only: never move the counter backwards. */
+    /* @sync: relaxed owner */
     const uint64_t current =
         atomic_load_explicit(&slot->aead_counter, memory_order_relaxed);
     if (value < current) {
         pthread_rwlock_unlock(&ring->lock);
         return false;
     }
+    /* @sync: relaxed owner */
     atomic_store_explicit(&slot->aead_counter, value, memory_order_relaxed);
     pthread_rwlock_unlock(&ring->lock);
     return true;
@@ -728,6 +735,7 @@ static flex *hkrBuildSnapshotFlex(const hmacKeyring *ring) {
         flexRowUnsigned(&row, (uint64_t)e->id);
         flexRowUnsigned(&row, tag);
         flexRowBytes(&row, e->aead_salt, sizeof(e->aead_salt));
+        /* @sync: relaxed counter */
         flexRowUnsigned(
             &row, atomic_load_explicit(&e->aead_counter, memory_order_relaxed));
         flexRowBytes(&row, e->raw_key_bytes, e->raw_key_len);

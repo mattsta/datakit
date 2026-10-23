@@ -143,6 +143,7 @@ static void *mt_producer(void *arg) {
         void *p = mi_malloc((size_t)((i * 53) % 2048) + 1);
         assert(p);
         xq[i] = p;
+        /* @sync: release memshardTest.xqSlot */
         atomic_store_explicit(&xq_count, i + 1, memory_order_release);
     }
     return NULL;
@@ -151,10 +152,12 @@ static void *mt_producer(void *arg) {
 static void *mt_consumer(void *arg) {
     (void)arg;
     for (;;) {
+        /* @sync: relaxed counter */
         int idx = atomic_fetch_add_explicit(&xq_head, 1, memory_order_relaxed);
         if (idx >= XQ) {
             break;
         }
+        /* @sync: acquire memshardTest.xqSlot */
         while (atomic_load_explicit(&xq_count, memory_order_acquire) <= idx) {
             /* spin until producer has published this slot */
         }
@@ -167,7 +170,9 @@ static void test_mt_crossfree(void) {
     T("memshard: MT cross-thread free (lock-free xthread path)");
     xq = (void **)mi_malloc(sizeof(void *) * XQ);
     assert(xq);
+    /* @sync: relaxed init */
     atomic_store_explicit(&xq_head, 0, memory_order_relaxed);
+    /* @sync: relaxed init */
     atomic_store_explicit(&xq_count, 0, memory_order_relaxed);
     pthread_t prod, cons[3];
     pthread_create(&prod, NULL, mt_producer, NULL);

@@ -4889,9 +4889,11 @@ static void *envRetireRaceWriter(void *vctx) {
         if (pt_written != 0 && pt_written != c->aead_plaintext_len) {
             /* Anything other than zero (failure) or the expected length
              * is an invariant violation. */
+            /* @sync: relaxed counter */
             atomic_fetch_add_explicit(&c->writer_invariant_violations, 1,
                                       memory_order_relaxed);
         }
+        /* @sync: relaxed counter */
         atomic_fetch_add_explicit(&c->writer_iters_done, 1u,
                                   memory_order_relaxed);
     }
@@ -4908,6 +4910,7 @@ static void *envRetireRaceRotator(void *vctx) {
         (void)hmacKeyringInstall(c->ring, c->key_id, &hmacAlgoSHA256,
                                  c->hmac_key_bytes, c->hmac_key_len,
                                  c->aead_salt);
+        /* @sync: relaxed counter */
         atomic_fetch_add_explicit(&c->rotator_iters_done, 1u,
                                   memory_order_relaxed);
     }
@@ -5008,12 +5011,15 @@ int dkTestFlexEnvelopeKeyringRetireRaceTest(int argc, char *argv[]) {
         pthread_join(writer_thr, NULL);
         pthread_join(rotator_thr, NULL);
 
+        /* @sync: relaxed init */
         const int violations = atomic_load_explicit(
-            &ctx.writer_invariant_violations, memory_order_acquire);
+            &ctx.writer_invariant_violations, memory_order_relaxed);
+        /* @sync: relaxed init */
         const uint64_t writer_iters =
-            atomic_load_explicit(&ctx.writer_iters_done, memory_order_acquire);
+            atomic_load_explicit(&ctx.writer_iters_done, memory_order_relaxed);
+        /* @sync: relaxed init */
         const uint64_t rotator_iters =
-            atomic_load_explicit(&ctx.rotator_iters_done, memory_order_acquire);
+            atomic_load_explicit(&ctx.rotator_iters_done, memory_order_relaxed);
 
         if (violations != 0) {
             ERR("envRetireRace: writer observed %d invariant violations — "

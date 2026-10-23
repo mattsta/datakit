@@ -30,6 +30,7 @@ static _Atomic uint64_t forkGeneration;
 static pthread_once_t forkHandlerOnce = PTHREAD_ONCE_INIT;
 
 static void dkRandomForkChild(void) {
+    /* @sync: relaxed init */
     (void)atomic_fetch_add_explicit(&forkGeneration, 1, memory_order_relaxed);
 }
 
@@ -76,6 +77,9 @@ dkRandomRefill(dkRandomThread *const t, const uint64_t generation) {
 
 uint64_t dkRandom64(void) {
     dkRandomThread *const t = &dkRandomTls;
+    /* Every increment ran while the process had one thread, so it
+     * happens-before this thread's creation or is this thread's own. */
+    /* @sync: relaxed init */
     const uint64_t generation =
         atomic_load_explicit(&forkGeneration, memory_order_relaxed);
 
@@ -89,6 +93,7 @@ uint64_t dkRandom64(void) {
 
 uint64_t dkRandomBounded(const uint64_t bound) {
     if (bound == 0) {
+        /* @sync: relaxed counter */
         (void)atomic_fetch_add_explicit(&zeroBoundTotal, 1,
                                         memory_order_relaxed);
         return 0;
@@ -122,6 +127,7 @@ uint64_t dkRandomBounded(const uint64_t bound) {
 }
 
 uint64_t dkRandomZeroBoundTotal(void) {
+    /* @sync: relaxed counter */
     return atomic_load_explicit(&zeroBoundTotal, memory_order_relaxed);
 }
 

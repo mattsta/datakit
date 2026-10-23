@@ -34,13 +34,16 @@
 
 /* Observer only; not a synchronisation point. */
 #define sharrowCount(s)                                                        \
+    /* @sync: relaxed counter */                                               \
     atomic_load_explicit(sharrowElement_(s), memory_order_relaxed)
 
 /* Relaxed: legal only from a thread that already holds a reference. */
 #define sharrowRetain(s)                                                       \
+    /* @sync: relaxed counter */                                               \
     atomic_fetch_add_explicit(sharrowElement_(s), 1, memory_order_relaxed)
 
 #define sharrowRetainCount(s, n)                                               \
+    /* @sync: relaxed counter */                                               \
     atomic_fetch_add_explicit(sharrowElement_(s), n, memory_order_relaxed)
 
 /* If 'checkedOut' isn't a pointer (just a flat integer), run release check.
@@ -106,4 +109,5 @@
 #define sharrowReleaseCheckSafe_(s)
 
 #define sharrowRelease_(s)                                                     \
+    /* @sync: acq_rel sharrow.release */                                       \
     atomic_fetch_sub_explicit(sharrowElement_(s), 1, memory_order_acq_rel)

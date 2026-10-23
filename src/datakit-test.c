@@ -1261,13 +1261,16 @@ static void *dkTestGateFreeExiterMain(void *arg) {
     uint32_t seen = 0;
     for (;;) {
         uint32_t round;
+        /* @sync: acquire test.gateFree.round */
         while ((round = atomic_load_explicit(&c->round,
                                              memory_order_acquire)) == seen) {
-            if (atomic_load_explicit(&c->quit, memory_order_acquire)) {
+            /* @sync: relaxed hint */
+            if (atomic_load_explicit(&c->quit, memory_order_relaxed)) {
                 return NULL;
             }
         }
         seen = round;
+        /* @sync: relaxed owner */
         inflightGateExit(atomic_load_explicit(&c->cur, memory_order_relaxed));
     }
 }
@@ -1360,7 +1363,9 @@ static int dkTestInflightGateTest(int argc, char *argv[]) {
     {
         inflightGate fresh = INFLIGHT_GATE_INIT;
         inflightGateWakeAllWaiters(&fresh);
-        GEXPECT(atomic_load(&fresh.ready) && inflightGateDepth(&fresh) == 0,
+        /* @sync: relaxed owner */
+        GEXPECT(atomic_load_explicit(&fresh.ready, memory_order_relaxed) &&
+                    inflightGateDepth(&fresh) == 0,
                 "a wake on a fresh gate constructs it and changes no depth");
         pthread_mutex_destroy(&fresh.mu);
         pthread_cond_destroy(&fresh.cv);
@@ -1379,11 +1384,14 @@ static int dkTestInflightGateTest(int argc, char *argv[]) {
          * it, so once the count is visible the broadcast below (which
          * takes the mutex) reaches a parked waiter. */
         const uint64_t startMs = timeUtilMonotonicMs();
-        while (atomic_load(&gate.waiters) == 0 &&
+        /* @sync: relaxed counter */
+        while (atomic_load_explicit(&gate.waiters, memory_order_relaxed) == 0 &&
                timeUtilMonotonicMs() - startMs < DK_TEST_GATE_GENEROUS_MS) {
             sched_yield();
         }
-        GEXPECT(atomic_load(&gate.waiters) == 1, "wake-all waiter registered");
+        /* @sync: relaxed counter */
+        GEXPECT(atomic_load_explicit(&gate.waiters, memory_order_relaxed) == 1,
+                "wake-all waiter registered");
         inflightGateWakeAllWaiters(&gate);
         inflightGateWakeAllWaiters(&gate);
         GEXPECT(!dkTestGateAwait(&ctl, &ctl.waitDone, DK_TEST_GATE_SHORT_MS),
@@ -1437,7 +1445,9 @@ static int dkTestInflightGateTest(int argc, char *argv[]) {
                 zmalloc(sizeof(*g));
             *g = (inflightGate)INFLIGHT_GATE_INIT;
             inflightGateEnter(g);
+            /* @sync: relaxed owner */
             atomic_store_explicit(&fc.cur, g, memory_order_relaxed);
+            /* @sync: release test.gateFree.round */
             atomic_store_explicit(&fc.round, round, memory_order_release);
             if (inflightGateAwaitZeroMs(g, DK_TEST_GATE_GENEROUS_MS) !=
                 INFLIGHT_GATE_IDLE) {
@@ -1450,7 +1460,8 @@ static int dkTestInflightGateTest(int argc, char *argv[]) {
                 break;
             }
         }
-        atomic_store_explicit(&fc.quit, true, memory_order_release);
+        /* @sync: relaxed hint */
+        atomic_store_explicit(&fc.quit, true, memory_order_relaxed);
         pthread_join(exiter, NULL);
         GEXPECT(lost == 0, "every drain-then-free round read IDLE");
         GEXPECT(rounds > 0, "drain-then-free ran at least one round");
@@ -1661,6 +1672,7 @@ static bool dkSeqWriterOk_(const void *owner) {
 static void dkSeqNoteViolation_(const ownedSeqDecl *decl, const void *owner) {
     (void)decl;
     (void)owner;
+    /* @sync: relaxed counter */
     atomic_fetch_add_explicit(&g_dkSeqViolationNotes, 1, memory_order_relaxed);
 }
 
@@ -1813,11 +1825,13 @@ typedef struct dkSeqReaderCtx {
 static void *dkSeqReaderMain_(void *arg) {
     dkSeqReaderCtx *r = arg;
     uint8_t out[DK_SEQ_BYTES];
+    /* @sync: acquire test.seqOverlap.go */
     while (r->go && !atomic_load_explicit(r->go, memory_order_acquire)) {
         sched_yield();
     }
     bool stopped = false;
     do {
+        /* @sync: acquire test.seqOverlap.stop */
         stopped = atomic_load_explicit(r->stop, memory_order_acquire);
         const uint64_t want =
             stopped ? ownedSeqCursor(r->seq) : ownedSeqAssigned(r->seq);
@@ -1854,7 +1868,9 @@ static void dkSeqHoldFillFn_(ownedSeqVersionRef *v, void *ctx) {
     uint8_t payload[DK_SEQ_BYTES];
     dkSeqPayload_(payload, 0xA0);
     ownedSeqPutBytes(v, 0, payload, sizeof(payload));
+    /* @sync: release test.seqHold.aInside */
     atomic_store_explicit(f->aInside, true, memory_order_release);
+    /* @sync: acquire test.seqHold.bDone */
     while (!atomic_load_explicit(f->bDone, memory_order_acquire)) {
         sched_yield();
     }
@@ -1872,12 +1888,14 @@ static void *dkSeqHoldWriterA_(void *arg) {
 }
 static void *dkSeqHoldWriterB_(void *arg) {
     dkSeqHoldCtx *h = arg;
+    /* @sync: acquire test.seqHold.aInside */
     while (!atomic_load_explicit(&h->aInside, memory_order_acquire)) {
         sched_yield();
     }
     uint8_t payload[DK_SEQ_BYTES];
     dkSeqPayload_(payload, 0xB0);
     (void)ownedSeqPublish(h->seq, payload, sizeof(payload));
+    /* @sync: release test.seqHold.bDone */
     atomic_store_explicit(&h->bDone, true, memory_order_release);
     return NULL;
 }
@@ -2010,10 +2028,12 @@ static _Atomic bool g_dkOwnedSoakReleasedId[DK_OWNED_SOAK_ID_BOUND];
 static void dkOwnedSoakRelease_(void *cargo) {
     dkOwnedSoakObj *o = cargo;
     if (o->magic != DK_OWNED_SOAK_MAGIC) {
+        /* @sync: relaxed counter */
         atomic_fetch_add_explicit(&g_dkOwnedSoakBadReleases, 1,
                                   memory_order_relaxed);
     }
     if (o->id < DK_OWNED_SOAK_ID_BOUND) {
+        /* @sync: relaxed owner */
         atomic_store_explicit(&g_dkOwnedSoakReleasedId[o->id], true,
                               memory_order_relaxed);
     }
@@ -2036,7 +2056,9 @@ static void *dkOwnedStallReaderMain_(void *arg) {
     dkOwnedStallReader *s = arg;
     ownedArenaEnter(s->arena);
     const dkOwnedSoakObj *o = ownedCellRead(s->cell);
+    /* @sync: release test.ownedStall.held */
     atomic_store_explicit(&s->heldId, o->id, memory_order_release);
+    /* @sync: acquire test.ownedStall.resume */
     while (!atomic_load_explicit(&s->resume, memory_order_acquire)) {
         sched_yield();
     }
@@ -2104,13 +2126,15 @@ typedef struct dkOwnedSoakReader {
 
 static void *dkOwnedSoakReaderMain_(void *arg) {
     dkOwnedSoakReader *r = arg;
-    while (!atomic_load_explicit(r->stop, memory_order_acquire)) {
+    /* @sync: relaxed hint */
+    while (!atomic_load_explicit(r->stop, memory_order_relaxed)) {
         ownedArenaEnter(r->arena);
         const dkOwnedSoakObj *o = ownedCellRead(r->cell);
         if (o) {
             if (r->reads++ == 0) {
+                /* @sync: relaxed counter */
                 atomic_fetch_add_explicit(r->readersReading, 1,
-                                          memory_order_release);
+                                          memory_order_relaxed);
             }
 
             if (o->magic != DK_OWNED_SOAK_MAGIC) {
@@ -2140,10 +2164,12 @@ static int dkTestOwnedArenaSoak(void) {
             err++;                                                             \
         }                                                                      \
     } while (0)
+    /* @sync: relaxed init */
     atomic_store_explicit(&g_dkOwnedSoakBadReleases, 0, memory_order_relaxed);
     for (int rule = 0; rule < 2; rule++) {
         /* Both rules reuse the ids: clear what the previous rule freed */
         for (uint32_t id = 0; id < DK_OWNED_SOAK_ID_BOUND; id++) {
+            /* @sync: relaxed init */
             atomic_store_explicit(&g_dkOwnedSoakReleasedId[id], false,
                                   memory_order_relaxed);
         }
@@ -2175,7 +2201,8 @@ static int dkTestOwnedArenaSoak(void) {
          * (bounded, so a reader that never runs still fails below). */
         ownedCellPublish(&cell, dkOwnedSoakObjNew_(0));
         const uint64_t waitUntil = dkOwnedSoakNowUs_() + 5000000;
-        while (atomic_load_explicit(&readersReading, memory_order_acquire) <
+        /* @sync: relaxed counter */
+        while (atomic_load_explicit(&readersReading, memory_order_relaxed) <
                    (uint32_t)started &&
                dkOwnedSoakNowUs_() < waitUntil) {
             sched_yield();
@@ -2187,7 +2214,8 @@ static int dkTestOwnedArenaSoak(void) {
                 ownedArenaDrain(&arena);
             }
         }
-        atomic_store_explicit(&stop, true, memory_order_release);
+        /* @sync: relaxed hint */
+        atomic_store_explicit(&stop, true, memory_order_relaxed);
         uint64_t reads = 0;
         uint64_t bad = 0;
         for (int i = 0; i < started; i++) {
@@ -2196,14 +2224,16 @@ static int dkTestOwnedArenaSoak(void) {
             bad += readers[i].bad;
         }
         /* Observability: the run's whole state, one line per rule */
+        /* @sync: relaxed init */
         printf("owned soak rule %d: readers %d reading %" PRIu32
                " reads %" PRIu64 " bad %" PRIu64 " bad releases %" PRIu64
                " live rows %" PRIu64 "\n",
                rule, started,
                atomic_load_explicit(&readersReading, memory_order_relaxed),
                reads, bad,
-               atomic_load_explicit(&g_dkOwnedSoakBadReleases,
-                                    memory_order_relaxed),
+               atomic_load_explicit(
+                   &g_dkOwnedSoakBadReleases,
+                   memory_order_relaxed), /* @sync: relaxed counter */
                ownedArenaLiveRows());
         SOAKEXPECT(bad == 0, "no reader saw a released object");
         SOAKEXPECT(reads > 0, "the readers read published objects");
@@ -2214,19 +2244,22 @@ static int dkTestOwnedArenaSoak(void) {
          * survive every drain, and go once the reader leaves. */
         {
             dkOwnedStallReader stall = {.arena = &arena, .cell = &cell};
+            /* @sync: relaxed init */
             atomic_store_explicit(&stall.heldId, UINT64_MAX,
                                   memory_order_relaxed);
             pthread_t st;
             const bool stallStarted =
                 pthread_create(&st, NULL, dkOwnedStallReaderMain_, &stall) == 0;
             SOAKEXPECT(stallStarted, "stalled reader started");
+            /* @sync: acquire test.ownedStall.held */
             while (stallStarted &&
                    atomic_load_explicit(&stall.heldId, memory_order_acquire) ==
                        UINT64_MAX) {
                 sched_yield();
             }
+            /* @sync: relaxed owner */
             const uint64_t held =
-                atomic_load_explicit(&stall.heldId, memory_order_acquire);
+                atomic_load_explicit(&stall.heldId, memory_order_relaxed);
             for (uint32_t i = 0; stallStarted && i < 256; i++) {
                 ownedCellPublish(
                     &cell, dkOwnedSoakObjNew_(DK_OWNED_SOAK_PUBLISHES + 1 + i));
@@ -2235,16 +2268,19 @@ static int dkTestOwnedArenaSoak(void) {
                     ownedArenaDrain(&arena);
                 }
             }
+            /* @sync: relaxed owner */
             const bool heldSurvived =
                 held < DK_OWNED_SOAK_ID_BOUND &&
                 !atomic_load_explicit(&g_dkOwnedSoakReleasedId[held],
                                       memory_order_relaxed);
+            /* @sync: release test.ownedStall.resume */
             atomic_store_explicit(&stall.resume, true, memory_order_release);
             if (stallStarted) {
                 pthread_join(st, NULL);
             }
             usleep(1000);
             ownedArenaDrain(&arena);
+            /* @sync: relaxed owner */
             const bool heldReleased =
                 held < DK_OWNED_SOAK_ID_BOUND &&
                 atomic_load_explicit(&g_dkOwnedSoakReleasedId[held],
@@ -2283,6 +2319,7 @@ static int dkTestOwnedArenaSoak(void) {
         }
         ownedCellDestruct(&cell);
     }
+    /* @sync: relaxed init */
     SOAKEXPECT(atomic_load_explicit(&g_dkOwnedSoakBadReleases,
                                     memory_order_relaxed) == 0,
                "every release found its object intact");
@@ -2959,8 +2996,10 @@ static int dkTestOwnedStateTest(int argc, char *argv[]) {
             ownedSeqColumnTotal(&dkSeqDeclA_, OWNED_SEQ_C_PUBLISHED);
         /* The declared writer is silent. */
         g_dkSeqWriterOk = true;
+        /* @sync: relaxed owner */
         atomic_store_explicit(&g_dkSeqViolationNotes, 0, memory_order_relaxed);
         dkSeqPayload_(payload, 0x66);
+        /* @sync: relaxed owner */
         OEXPECT(ownedSeqPublish(&sc, payload, sizeof(payload)) &&
                     ownedCellWriterViolationTotal() == violBase &&
                     atomic_load_explicit(&g_dkSeqViolationNotes,
@@ -2969,6 +3008,7 @@ static int dkTestOwnedStateTest(int argc, char *argv[]) {
         /* A foreign writer is counted and reported, and still lands. */
         g_dkSeqWriterOk = false;
         dkSeqPayload_(payload, 0x77);
+        /* @sync: relaxed owner */
         OEXPECT(ownedSeqPublish(&sc, payload, sizeof(payload)) &&
                     ownedCellWriterViolationTotal() == violBase + 1 &&
                     atomic_load_explicit(&g_dkSeqViolationNotes,
@@ -3037,6 +3077,7 @@ static int dkTestOwnedStateTest(int argc, char *argv[]) {
                 (void)ownedSeqPublish(&sl, payload, sizeof(payload));
             }
             /* Version 0 now holds number 5; replay number 1 into it. */
+            /* @sync: relaxed owner */
             atomic_store_explicit(&sl.assigned, 0, memory_order_relaxed);
             dkSeqPayload_(payload, 0xEE);
             OEXPECT(
@@ -3046,6 +3087,7 @@ static int dkTestOwnedStateTest(int argc, char *argv[]) {
                     ownedSeqColumnTotal(&lateDecl, OWNED_SEQ_C_PUBLISHED) == 5,
                 "seq: a writer older than the version's publication "
                 "abandons");
+            /* @sync: relaxed owner */
             atomic_store_explicit(&sl.assigned, 5, memory_order_relaxed);
             uint8_t newest[DK_SEQ_BYTES];
             dkSeqPayload_(newest, 0x55);
@@ -3168,6 +3210,7 @@ static int dkTestOwnedStateTest(int argc, char *argv[]) {
                 startedA &&
                 pthread_create(&tb, NULL, dkSeqHoldWriterB_, &hold) == 0;
             if (startedA && !startedB) {
+                /* @sync: release test.seqHold.bDone */
                 atomic_store_explicit(&hold.bDone, true, memory_order_release);
             }
             OEXPECT(startedA && startedB, "seq hold: writers started");
@@ -3238,7 +3281,9 @@ static int dkTestOwnedStateTest(int argc, char *argv[]) {
                 for (int i = 0; schedule != 2 && i < kWriters; i++) {
                     pthread_join(th[i], NULL);
                 }
+                /* @sync: release test.seqOverlap.stop */
                 atomic_store_explicit(&stop, true, memory_order_release);
+                /* @sync: release test.seqOverlap.go */
                 atomic_store_explicit(&go, true, memory_order_release);
                 pthread_join(rt, NULL);
                 const uint64_t published = ownedSeqPublishedTotal() - pubBefore;
@@ -3362,12 +3407,19 @@ static pthread_mutex_t g_dkGateWriterLock = PTHREAD_MUTEX_INITIALIZER;
 
 static void dkGateRefAppend_(uint64_t h) {
     pthread_mutex_lock(&g_dkGateWriterLock);
+    /* @sync: relaxed owner */
     const uint64_t s =
         atomic_load_explicit(&g_dkGateRefSeq, memory_order_relaxed) + 1;
     dkGateRefSlot *slot = &g_dkGateRef[s & (DK_GATE_N - 1u)];
-    atomic_store_explicit(&slot->seq, 0, memory_order_release);
+    /* The release store of keyHash below orders this invalidation before
+     * the new data. */
+    /* @sync: relaxed hint */
+    atomic_store_explicit(&slot->seq, 0, memory_order_relaxed);
+    /* @sync: release test.gateRef.slotData */
     atomic_store_explicit(&slot->keyHash, h, memory_order_release);
+    /* @sync: release test.gateRef.slotSeq */
     atomic_store_explicit(&slot->seq, s, memory_order_release);
+    /* @sync: release test.gateRef.cursor */
     atomic_store_explicit(&g_dkGateRefSeq, s, memory_order_release);
     pthread_mutex_unlock(&g_dkGateWriterLock);
 }
@@ -3376,6 +3428,7 @@ static void dkGateRefAppend_(uint64_t h) {
  * not, and -1 if a slot fails validation or the window has been
  * lapped. */
 static int dkGateRefWalk_(uint64_t since, uint64_t until, uint64_t probe) {
+    /* @sync: acquire test.gateRef.cursor */
     const uint64_t cur =
         atomic_load_explicit(&g_dkGateRefSeq, memory_order_acquire);
     if (until > cur) {
@@ -3389,10 +3442,15 @@ static int dkGateRefWalk_(uint64_t since, uint64_t until, uint64_t probe) {
     }
     for (uint64_t s = until; s > since; s--) {
         const dkGateRefSlot *slot = &g_dkGateRef[s & (DK_GATE_N - 1u)];
+        /* @sync: acquire test.gateRef.slotSeq */
         const uint64_t s1 =
             atomic_load_explicit(&slot->seq, memory_order_acquire);
+        /* @sync: acquire test.gateRef.slotData */
         const uint64_t h =
             atomic_load_explicit(&slot->keyHash, memory_order_acquire);
+        /* Acquire like ownedSeq's R2, so the two readers compare like for
+         * like (the keyHash acquire already orders it). */
+        /* @sync: acquire test.gateRef.slotSeq */
         const uint64_t s2 =
             atomic_load_explicit(&slot->seq, memory_order_acquire);
         if (s1 != s || s2 != s) {
@@ -3471,12 +3529,16 @@ static int dkGateSeqWalkAcquire_(uint64_t since, uint64_t until,
         _Atomic uint64_t *const v =
             &g_dkGateSeqStorage_[(size_t)((s - 1) & (DK_GATE_N - 1u)) * stride];
         const uint64_t published = 4u * s;
+        /* @sync: acquire seq.stamp */
         const uint64_t v1 = atomic_load_explicit(&v[0], memory_order_acquire);
         if (v1 != published) {
             return -1;
         }
+        /* @sync: acquire seq.payload */
         const uint64_t h = atomic_load_explicit(&v[OWNED_SEQ_HEADER_WORDS],
                                                 memory_order_acquire);
+        /* Mirrors ownedSeq's R2 (an acquire). */
+        /* @sync: acquire seq.stamp */
         const uint64_t v2 = atomic_load_explicit(&v[0], memory_order_acquire);
         if (v2 != published) {
             return -1;
@@ -3504,7 +3566,8 @@ static void *dkGateWriterMain_(void *arg) {
     dkGateWriterCtx *w = arg;
     uint64_t x = UINT64_C(0x9E3779B97F4A7C15);
     uint64_t next = timeUtilMonotonicNs();
-    while (!atomic_load_explicit(w->stop, memory_order_acquire)) {
+    /* @sync: relaxed hint */
+    while (!atomic_load_explicit(w->stop, memory_order_relaxed)) {
         /* Appends are paced on the monotonic clock (busy-waiting), so a
          * whole-window walk sees a steady append rate instead of a ring
          * lapped underneath it. */
@@ -3534,6 +3597,8 @@ typedef struct dkGateReaderCtx {
 static void *dkGateReaderMain_(void *arg) {
     dkGateReaderCtx *r = arg;
     for (uint32_t i = 0; i < DK_GATE_WALKS; i++) {
+        /* Acquire like ownedSeqCursor, for a like-for-like comparison. */
+        /* @sync: acquire test.gateRef.cursor */
         const uint64_t cur =
             r->flavour != DK_GATE_REFERENCE
                 ? ownedSeqCursor(&g_dkGateSeq_)
@@ -3593,7 +3658,8 @@ static uint64_t dkGateRun_(dkGateFlavour flavour, uint32_t readers,
     for (uint32_t i = 0; i < readers; i++) {
         pthread_join(th[i], NULL);
     }
-    atomic_store_explicit(&stop, true, memory_order_release);
+    /* @sync: relaxed hint */
+    atomic_store_explicit(&stop, true, memory_order_relaxed);
     pthread_join(wt, NULL);
     const size_t total = (size_t)readers * DK_GATE_WALKS;
     cleanerName(zfree, U64s) uint64_t *all =

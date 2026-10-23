@@ -96,6 +96,7 @@ static bool replicatorMailboxApply(const clusterFrame *frame, void *ctx) {
     size_t prefix = 0;
     if (dkFormatPrefixRead(&spec, frame->payload, frame->payload_len, &stamp,
                            &prefix) != DK_FORMAT_OK) {
+        /* @sync: relaxed counter */
         atomic_fetch_add_explicit(&rep->format_refused_count, 1u,
                                   memory_order_relaxed);
         return false;
@@ -137,6 +138,7 @@ static bool replicatorMailboxApply(const clusterFrame *frame, void *ctx) {
      * the legacy prior behaviour. */
     if (rep->max_apply_retries != 0 &&
         rep->last_reject.consecutive_rejects >= rep->max_apply_retries) {
+        /* @sync: relaxed counter */
         atomic_fetch_add_explicit(&rep->dropped_count, 1u,
                                   memory_order_relaxed);
         /* Reset so the next reject after the drop starts a fresh count
@@ -235,6 +237,7 @@ uint64_t clusterReplicatorDroppedCount(const clusterReplicator *rep) {
     }
     /* Cast-away of const is local to this read of an _Atomic field;
      * the public contract is "thread-safe observer". */
+    /* @sync: relaxed counter */
     return atomic_load_explicit(&((clusterReplicator *)rep)->dropped_count,
                                 memory_order_relaxed);
 }
@@ -243,6 +246,7 @@ uint64_t clusterReplicatorFormatRefusedCount(const clusterReplicator *rep) {
     if (rep == NULL) {
         return 0u;
     }
+    /* @sync: relaxed counter */
     return atomic_load_explicit(
         &((clusterReplicator *)rep)->format_refused_count,
         memory_order_relaxed);

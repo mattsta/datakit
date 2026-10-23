@@ -371,11 +371,16 @@ static uint64_t clusterLatencyBucketMax(uint32_t b) {
 }
 
 static void clusterLatencyRecord(clusterLatency *lat, uint64_t ns) {
+    /* @sync: relaxed counter */
     atomic_fetch_add_explicit(&lat->count, 1, memory_order_relaxed);
+    /* @sync: relaxed counter */
     atomic_fetch_add_explicit(&lat->sumNs, ns, memory_order_relaxed);
+    /* @sync: relaxed counter */
     atomic_fetch_add_explicit(&lat->buckets[clusterLatencyBucket(ns)], 1,
                               memory_order_relaxed);
+    /* @sync: relaxed seed */
     uint64_t max = atomic_load_explicit(&lat->maxNs, memory_order_relaxed);
+    /* @sync: relaxed counter */
     while (ns > max && !atomic_compare_exchange_weak_explicit(
                            &lat->maxNs, &max, ns, memory_order_relaxed,
                            memory_order_relaxed)) {
@@ -387,6 +392,7 @@ static void clusterLatencyRecord(clusterLatency *lat, uint64_t ns) {
  * recorded samples; all 0 before the first */
 static void clusterLatencySummary(const clusterLatency *lat, uint64_t *avg,
                                   uint64_t *p99, uint64_t *max) {
+    /* @sync: relaxed counter */
     const uint64_t count =
         atomic_load_explicit(&lat->count, memory_order_relaxed);
     *avg = *p99 = *max = 0;
@@ -394,7 +400,9 @@ static void clusterLatencySummary(const clusterLatency *lat, uint64_t *avg,
         return;
     }
 
+    /* @sync: relaxed counter */
     *avg = atomic_load_explicit(&lat->sumNs, memory_order_relaxed) / count;
+    /* @sync: relaxed counter */
     *max = atomic_load_explicit(&lat->maxNs, memory_order_relaxed);
 
     /* The sample ranked ceil(0.99 * count); during concurrent placements
@@ -403,6 +411,7 @@ static void clusterLatencySummary(const clusterLatency *lat, uint64_t *avg,
     const uint64_t rank = count - count / 100;
     uint64_t seen = 0;
     for (uint32_t b = 0; b < CLUSTER_LATENCY_BUCKETS; b++) {
+        /* @sync: relaxed counter */
         seen += atomic_load_explicit(&lat->buckets[b], memory_order_relaxed);
         if (seen >= rank) {
             const uint64_t edge = clusterLatencyBucketMax(b);
@@ -870,7 +879,10 @@ static void clusterRingRefreshHealthy(clusterRing *ring) {
         clusterRingRebuildJump(ring);
     }
     if (clusterRingHasMaglev(ring)) {
-        atomic_store_explicit(&ring->maglev.stale, true, memory_order_release);
+        /* A ring change has exclusive access, so the caller's own
+         * synchronization orders it before any placement. */
+        /* @sync: relaxed owner */
+        atomic_store_explicit(&ring->maglev.stale, true, memory_order_relaxed);
     }
 }
 
@@ -878,13 +890,16 @@ static void clusterRingRefreshHealthy(clusterRing *ring) {
  * placements wait for one rebuild (double-checked under the lock) */
 static void clusterRingSettleMaglev(const clusterRing *ring) {
     clusterMaglevData *data = (clusterMaglevData *)&ring->maglev;
+    /* @sync: acquire ring.maglevRebuilt */
     if (!atomic_load_explicit(&data->stale, memory_order_acquire)) {
         return;
     }
 
     pthread_mutex_lock(&data->lock);
+    /* @sync: relaxed owner */
     if (atomic_load_explicit(&data->stale, memory_order_relaxed)) {
         clusterRingRebuildMaglev((clusterRing *)ring);
+        /* @sync: release ring.maglevRebuilt */
         atomic_store_explicit(&data->stale, false, memory_order_release);
     }
     pthread_mutex_unlock(&data->lock);
@@ -916,8 +931,9 @@ static clusterResult clusterRingUseStrategy(clusterRing *ring,
             ring->maglev.lookup =
                 zcalloc(ring->maglev.tableSize, sizeof(*ring->maglev.lookup));
             pthread_mutex_init(&ring->maglev.lock, NULL);
+            /* @sync: relaxed owner */
             atomic_store_explicit(&ring->maglev.stale, true,
-                                  memory_order_release);
+                                  memory_order_relaxed);
         }
     }
 
@@ -2173,6 +2189,7 @@ clusterRingLocateWith(const clusterRing *ring, clusterStrategyType strategy,
     }
 
     clusterRing *stats = (clusterRing *)ring;
+    /* @sync: relaxed counter */
     const uint64_t op =
         atomic_fetch_add_explicit(&stats->locateOps, 1, memory_order_relaxed);
     if (CLUSTER_LIKELY(op % CLUSTER_LATENCY_SAMPLE_EVERY != 0)) {
@@ -2365,6 +2382,7 @@ clusterResult clusterRingPlanWrite(const clusterRing *ring, const void *key,
     out->suggestedTimeoutMs = 100 + (out->syncRequired * 50);
 
     /* Update stats */
+    /* @sync: relaxed counter */
     atomic_fetch_add_explicit(&((clusterRing *)ring)->writeOps, 1,
                               memory_order_relaxed);
 
@@ -2414,6 +2432,7 @@ clusterResult clusterRingPlanRead(const clusterRing *ring, const void *key,
     out->readRepair = q->readRepairEnabled;
 
     /* Update stats */
+    /* @sync: relaxed counter */
     atomic_fetch_add_explicit(&((clusterRing *)ring)->readOps, 1,
                               memory_order_relaxed);
 
@@ -3265,10 +3284,13 @@ void clusterRingGetStats(const clusterRing *ring, clusterRingStats *stats) {
     stats->vnodeCount = ring->vnodes.vnodeCount;
 
     /* Copy operation stats */
+    /* @sync: relaxed counter */
     stats->locateOps =
         atomic_load_explicit(&ring->locateOps, memory_order_relaxed);
+    /* @sync: relaxed counter */
     stats->writeOps =
         atomic_load_explicit(&ring->writeOps, memory_order_relaxed);
+    /* @sync: relaxed counter */
     stats->readOps = atomic_load_explicit(&ring->readOps, memory_order_relaxed);
     stats->rebalanceMoves = ring->rebalanceMoves;
     clusterLatencySummary(&ring->locateLatency, &stats->avgLocateNs,
