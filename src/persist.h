@@ -939,6 +939,32 @@ persistStore *persistStoreMemory(size_t initialCapacity);
 /* Get memory store buffer (for inspection/testing) */
 const uint8_t *persistStoreMemoryBuffer(persistStore *store, size_t *len);
 
+/* Fault injection: a store wrapping `inner` (it takes ownership; closing it
+ * closes `inner`) that passes every call through until an operation kind
+ * is armed.  persistStoreFaultyArm(store, op, n) makes that kind's call
+ * numbered n (0 = the next) and every later one fail, as a full disk or a
+ * dead device would (write/read/seek -1, sync/truncate/rewrite false;
+ * errno ENOSPC or EIO).  Disarm restores pass-through.  With `rewrite`,
+ * the store offers the atomic rewrite protocol a snapshot publishes with,
+ * staging the rewrite in memory and copying it over `inner` on commit, so
+ * the crash-safe path runs in tests without files.  Calls counts a kind's
+ * calls since it was last armed. */
+typedef enum persistFaultOp {
+    PERSIST_FAULT_WRITE,
+    PERSIST_FAULT_READ,
+    PERSIST_FAULT_SEEK,
+    PERSIST_FAULT_SYNC,
+    PERSIST_FAULT_TRUNCATE,
+    PERSIST_FAULT_REWRITE_BEGIN,
+    PERSIST_FAULT_REWRITE_COMMIT,
+    PERSIST_FAULT_OP_COUNT
+} persistFaultOp;
+persistStore *persistStoreFaulty(persistStore *inner, bool rewrite);
+void persistStoreFaultyArm(persistStore *store, persistFaultOp op,
+                           uint64_t nth);
+void persistStoreFaultyDisarm(persistStore *store);
+uint64_t persistStoreFaultyCalls(const persistStore *store, persistFaultOp op);
+
 /* ============================================================================
  * Built-in persistOps Implementations
  * ============================================================================

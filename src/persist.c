@@ -874,11 +874,17 @@ bool persistSnapshot(persist *p, const void *structure) {
             return false;
         }
     } else {
+        /* In place: a tail the truncate leaves is ignored by restore (the
+         * header bounds the envelope), but a failed sync means the
+         * snapshot is not durable: count it as the WAL does and report
+         * the snapshot not taken, so compaction keeps the WAL. */
         if (store->truncate) {
-            store->truncate(store->ctx);
+            (void)store->truncate(store->ctx);
         }
-        if (store->sync) {
-            store->sync(store->ctx);
+        if (store->sync && !store->sync(store->ctx)) {
+            p->stats.syncFailures++;
+            p->stats.lastSyncError = errno ? (int32_t)errno : EIO;
+            return false;
         }
     }
 
@@ -2162,6 +2168,196 @@ const uint8_t *persistStoreMemoryBuffer(persistStore *store, size_t *len) {
         *len = m->size;
     }
     return m->data;
+}
+
+/* ============================================================================
+ * Fault-Injecting Storage Backend
+ * ============================================================================
+ * Wraps another store.  Each operation kind counts its calls; a kind armed
+ * at N fails its call numbered N (0 = the first after arming) and every
+ * later one, as a full disk or a dead device would.  With `rewrite`, a
+ * snapshot's atomic rewrite is staged in a memory store and copied over the
+ * inner one on commit, so the crash-safe publish path runs without files. */
+typedef struct persistFaultyStore {
+    persistStore *inner;
+    persistStore *staging; /* a rewrite in progress, else NULL */
+    uint64_t calls[PERSIST_FAULT_OP_COUNT];
+    uint64_t failFrom[PERSIST_FAULT_OP_COUNT]; /* UINT64_MAX: never */
+} persistFaultyStore;
+
+static bool persistFaultyTrip(persistFaultyStore *f, persistFaultOp op) {
+    return f->calls[op]++ >= f->failFrom[op];
+}
+
+/* Where writes go: the staged rewrite while one is open. */
+static persistStore *persistFaultyTarget(persistFaultyStore *f) {
+    return f->staging ? f->staging : f->inner;
+}
+
+static ssize_t persistFaultyWrite(void *ctx, const void *data, size_t len) {
+    persistFaultyStore *f = ctx;
+    if (persistFaultyTrip(f, PERSIST_FAULT_WRITE)) {
+        errno = ENOSPC;
+        return -1;
+    }
+    persistStore *t = persistFaultyTarget(f);
+    return t->write(t->ctx, data, len);
+}
+
+static ssize_t persistFaultyRead(void *ctx, void *buf, size_t len) {
+    persistFaultyStore *f = ctx;
+    if (persistFaultyTrip(f, PERSIST_FAULT_READ)) {
+        errno = EIO;
+        return -1;
+    }
+    return f->inner->read(f->inner->ctx, buf, len);
+}
+
+static int64_t persistFaultySeek(void *ctx, int64_t offset, int whence) {
+    persistFaultyStore *f = ctx;
+    if (persistFaultyTrip(f, PERSIST_FAULT_SEEK)) {
+        errno = EIO;
+        return -1;
+    }
+    persistStore *t = persistFaultyTarget(f);
+    return t->seek(t->ctx, offset, whence);
+}
+
+static int64_t persistFaultyTell(void *ctx) {
+    persistStore *t = persistFaultyTarget(ctx);
+    return t->tell(t->ctx);
+}
+
+static bool persistFaultySync(void *ctx) {
+    persistFaultyStore *f = ctx;
+    if (persistFaultyTrip(f, PERSIST_FAULT_SYNC)) {
+        errno = ENOSPC;
+        return false;
+    }
+    persistStore *t = persistFaultyTarget(f);
+    return t->sync(t->ctx);
+}
+
+static bool persistFaultyTruncate(void *ctx) {
+    persistFaultyStore *f = ctx;
+    if (persistFaultyTrip(f, PERSIST_FAULT_TRUNCATE)) {
+        errno = EIO;
+        return false;
+    }
+    persistStore *t = persistFaultyTarget(f);
+    return t->truncate(t->ctx);
+}
+
+static int64_t persistFaultySize(void *ctx) {
+    persistStore *t = persistFaultyTarget(ctx);
+    return t->size(t->ctx);
+}
+
+static void persistFaultyDropStaging(persistFaultyStore *f) {
+    if (f->staging) {
+        f->staging->close(f->staging->ctx);
+        zfree(f->staging);
+        f->staging = NULL;
+    }
+}
+
+static void persistFaultyClose(void *ctx) {
+    persistFaultyStore *f = ctx;
+    persistFaultyDropStaging(f);
+    if (f->inner->close) {
+        f->inner->close(f->inner->ctx);
+    }
+    zfree(f->inner);
+    zfree(f);
+}
+
+static bool persistFaultyRewriteBegin(void *ctx) {
+    persistFaultyStore *f = ctx;
+    if (persistFaultyTrip(f, PERSIST_FAULT_REWRITE_BEGIN) || f->staging) {
+        return false;
+    }
+    /* @own: container; free=persistFaultyDropStaging */
+    f->staging = persistStoreMemory(0);
+    return true;
+}
+
+static bool persistFaultyRewriteCommit(void *ctx) {
+    persistFaultyStore *f = ctx;
+    if (!f->staging || persistFaultyTrip(f, PERSIST_FAULT_REWRITE_COMMIT)) {
+        return false;
+    }
+    size_t len = 0;
+    const uint8_t *bytes = persistStoreMemoryBuffer(f->staging, &len);
+    persistStore *in = f->inner;
+    const bool ok =
+        in->seek(in->ctx, 0, SEEK_SET) == 0 &&
+        (len == 0 || in->write(in->ctx, bytes, len) == (ssize_t)len) &&
+        in->truncate(in->ctx) && in->sync(in->ctx);
+    persistFaultyDropStaging(f);
+    return ok;
+}
+
+static void persistFaultyRewriteAbort(void *ctx) {
+    persistFaultyDropStaging(ctx);
+}
+
+persistStore *persistStoreFaulty(persistStore *inner, bool rewrite) {
+    if (!inner) {
+        return NULL;
+    }
+    /* @own: container; free=persistFaultyClose */
+    persistFaultyStore *f = zcalloc(1, sizeof(*f));
+    f->inner = inner;
+    for (size_t i = 0; i < PERSIST_FAULT_OP_COUNT; i++) {
+        f->failFrom[i] = UINT64_MAX;
+    }
+    /* @own: caller; free=zfree */
+    persistStore *store = zcalloc(1, sizeof(*store));
+    store->ctx = f;
+    store->write = persistFaultyWrite;
+    store->read = persistFaultyRead;
+    store->seek = persistFaultySeek;
+    store->tell = persistFaultyTell;
+    store->sync = persistFaultySync;
+    store->truncate = persistFaultyTruncate;
+    store->size = persistFaultySize;
+    store->close = persistFaultyClose;
+    if (rewrite) {
+        store->rewriteBegin = persistFaultyRewriteBegin;
+        store->rewriteCommit = persistFaultyRewriteCommit;
+        store->rewriteAbort = persistFaultyRewriteAbort;
+    }
+    return store;
+}
+
+void persistStoreFaultyArm(persistStore *store, persistFaultOp op,
+                           uint64_t nth) {
+    if (!store || store->close != persistFaultyClose ||
+        (unsigned)op >= PERSIST_FAULT_OP_COUNT) {
+        return;
+    }
+    persistFaultyStore *f = store->ctx;
+    f->calls[op] = 0;
+    f->failFrom[op] = nth;
+}
+
+void persistStoreFaultyDisarm(persistStore *store) {
+    if (!store || store->close != persistFaultyClose) {
+        return;
+    }
+    persistFaultyStore *f = store->ctx;
+    for (size_t i = 0; i < PERSIST_FAULT_OP_COUNT; i++) {
+        f->failFrom[i] = UINT64_MAX;
+    }
+}
+
+uint64_t persistStoreFaultyCalls(const persistStore *store, persistFaultOp op) {
+    if (!store || store->close != persistFaultyClose ||
+        (unsigned)op >= PERSIST_FAULT_OP_COUNT) {
+        return 0;
+    }
+    const persistFaultyStore *f = store->ctx;
+    return f->calls[op];
 }
 
 /* ============================================================================
@@ -8949,6 +9145,122 @@ int persistTest(int argc, char *argv[]) {
                 ERR("buffer %zu: entries after a failed write were lost",
                     buffers[b]);
             }
+        }
+    }
+
+    TEST("fault store: a snapshot failing at any step leaves the last one") {
+        /* Atomic publish: whichever step fails (begin, seek, header write,
+         * envelope write, commit), the snapshot is refused and the one
+         * published before it still recovers; a working one then lands. */
+        cleaner(persistClose) persist *p = persistCreate(&persistOpsFlex, NULL);
+        persistStore *snap = persistStoreFaulty(persistStoreMemory(0), true);
+        persistAttachSnapshot(p, snap);
+        persistAttachWAL(p, persistStoreMemory(0));
+        cleaner(flexFree) flex *first = flexNew();
+        for (int64_t v = 1; v <= 3; v++) {
+            flexPushSigned(&first, v, FLEX_ENDPOINT_TAIL);
+        }
+        cleaner(flexFree) flex *second = flexNew();
+        flexPushSigned(&second, 9, FLEX_ENDPOINT_TAIL);
+        if (!persistSnapshot(p, first) ||
+            persistStoreFaultyCalls(snap, PERSIST_FAULT_REWRITE_COMMIT) != 1) {
+            ERRR("the first snapshot did not publish through the rewrite");
+        }
+        static const struct {
+            persistFaultOp op;
+            uint64_t nth;
+        } faults[] = {
+            {PERSIST_FAULT_REWRITE_BEGIN, 0},  {PERSIST_FAULT_SEEK, 0},
+            {PERSIST_FAULT_WRITE, 0},          {PERSIST_FAULT_WRITE, 1},
+            {PERSIST_FAULT_REWRITE_COMMIT, 0},
+        };
+        const int64_t wantFirst[] = {1, 2, 3};
+        for (size_t i = 0; i < sizeof(faults) / sizeof(faults[0]); i++) {
+            persistStoreFaultyArm(snap, faults[i].op, faults[i].nth);
+            if (persistSnapshot(p, second)) {
+                ERR("fault %zu: the snapshot succeeded through a failure", i);
+            }
+            persistStoreFaultyDisarm(snap);
+            if (!persistTestRecoversTo(p, wantFirst, 3)) {
+                ERR("fault %zu: the published snapshot did not survive", i);
+            }
+        }
+        const int64_t wantSecond[] = {9};
+        if (!persistSnapshot(p, second) ||
+            !persistTestRecoversTo(p, wantSecond, 1)) {
+            ERRR("a working snapshot after the failures did not land");
+        }
+    }
+
+    TEST("fault store: an in-place snapshot whose sync fails is not taken") {
+        cleaner(persistClose) persist *p = persistCreate(&persistOpsFlex, NULL);
+        persistStore *snap = persistStoreFaulty(persistStoreMemory(0), false);
+        persistAttachSnapshot(p, snap);
+        cleaner(flexFree) flex *f = flexNew();
+        flexPushSigned(&f, 5, FLEX_ENDPOINT_TAIL);
+        persistStoreFaultyArm(snap, PERSIST_FAULT_SYNC, 0);
+        persistStats stats;
+        const bool taken = persistSnapshot(p, f);
+        persistGetStats(p, &stats);
+        if (taken || stats.syncFailures != 1 || stats.lastSyncError != ENOSPC ||
+            stats.snapshotCount != 0) {
+            ERR("taken %d, sync failures %" PRIu64
+                ", error %d, snapshots %" PRIu64,
+                taken, stats.syncFailures, stats.lastSyncError,
+                stats.snapshotCount);
+        }
+        persistStoreFaultyDisarm(snap);
+        if (!persistSnapshot(p, f)) {
+            ERRR("the snapshot after the device recovered was refused");
+        }
+    }
+
+    TEST("fault store: compaction keeps the WAL when its snapshot fails") {
+        persistConfig config = persistDefaultConfig();
+        config.syncMode = PERSIST_SYNC_ALWAYS;
+        cleaner(persistClose) persist *p =
+            persistCreate(&persistOpsFlex, &config);
+        persistStore *snap = persistStoreFaulty(persistStoreMemory(0), true);
+        persistAttachSnapshot(p, snap);
+        persistAttachWAL(p, persistStoreMemory(0));
+        cleaner(flexFree) flex *live = flexNew();
+        persistSnapshot(p, live);
+        for (int64_t v = 0; v < 4; v++) {
+            const databox box = DATABOX_SIGNED(v);
+            persistLogOp(p, PERSIST_OP_PUSH_TAIL, &box, 1);
+            flexPushSigned(&live, v, FLEX_ENDPOINT_TAIL);
+        }
+        persistStoreFaultyArm(snap, PERSIST_FAULT_WRITE, 1);
+        const int64_t want[] = {0, 1, 2, 3};
+        if (persistCompact(p, live) || !persistTestRecoversTo(p, want, 4)) {
+            ERRR("a failed compaction lost the WAL it could not fold in");
+        }
+        persistStoreFaultyDisarm(snap);
+        if (!persistCompact(p, live) || !persistTestRecoversTo(p, want, 4)) {
+            ERRR("compaction after the device recovered lost data");
+        }
+    }
+
+    TEST("fault store: recovery refuses a snapshot it cannot read") {
+        cleaner(persistClose) persist *p = persistCreate(&persistOpsFlex, NULL);
+        persistStore *snap = persistStoreFaulty(persistStoreMemory(0), false);
+        persistAttachSnapshot(p, snap);
+        cleaner(flexFree) flex *f = flexNew();
+        flexPushSigned(&f, 7, FLEX_ENDPOINT_TAIL);
+        persistSnapshot(p, f);
+        for (uint64_t nth = 0; nth < 3; nth++) {
+            persistStoreFaultyArm(snap, PERSIST_FAULT_READ, nth);
+            flex *got = persistRecover(p);
+            if (got) {
+                ERR("read %" PRIu64 " failed, yet recovery gave a structure",
+                    nth);
+                flexFree(got);
+            }
+        }
+        persistStoreFaultyDisarm(snap);
+        const int64_t want[] = {7};
+        if (!persistTestRecoversTo(p, want, 1)) {
+            ERRR("recovery after the device recovered failed");
         }
     }
 
