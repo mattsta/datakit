@@ -48,7 +48,35 @@ uv run dktools allocaudit report --constructors # markdown report
   worker is killed. Workers ignore Ctrl-C (dktools stops them) and
   exit by themselves if dktools is killed.
 
-The audit is enforced as the ctest test `allocOwnership`
+## atomicaudit — atomic memory-order audit
+
+Every atomic operation in `src/` (vendored `memshard` excepted) carries
+a `@sync` tag saying why its memory order is what it is, on or
+directly above the operation:
+
+```c
+/* @sync: release arena.retire */          /* publishes along an edge */
+/* @sync: acquire arena.retire */          /* observes it */
+/* @sync: seq_cst gate.count */            /* needs the total order */
+/* @sync: relaxed counter */               /* counter|seed|owner|init|hint */
+/* @sync: local timing */                  /* timing|signal: not for threads */
+```
+
+`check` verifies each operation's order provides exactly what its tag
+claims (UNDER-ORDERED and OVER-ORDERED are both violations), that the
+order is valid for the operation, that every named edge has both a
+publishing and an observing side, and that a seq_cst edge is seq_cst
+everywhere.  `report` prints the edge map: who publishes and who
+observes each edge.  The grammar and rules are in
+`src/dktools/atomicaudit.py`.
+
+```sh
+uv run dktools atomicaudit check                # whole tree (the gate)
+uv run dktools atomicaudit check src/a.c src/a.h  # a subset while working
+uv run dktools atomicaudit report               # markdown edge map
+```
+
+The allocation audit is enforced as the ctest test `allocOwnership`
 (registered in `src/CMakeLists.txt` whenever `uv` is on PATH), so it
 runs with plain `ctest`, `datakit-check`, and `datakit-quickcheck`.
 The tools' own tests (`tests/`, stdlib `unittest`) run as the ctest

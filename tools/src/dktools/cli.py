@@ -8,6 +8,7 @@ from pathlib import Path
 
 from . import (
     allocaudit,
+    atomicaudit,
     coverage,
     leakcheck,
     perfcompare,
@@ -84,6 +85,27 @@ def main(argv: list[str] | None = None) -> int:
         default=0,
         metavar="N",
         help="print the N slowest files and their seconds to stderr",
+    )
+
+    at = sub.add_parser(
+        "atomicaudit",
+        help="atomic-ordering audit (@sync tags against memory orders and edges)",
+    )
+    at.add_argument(
+        "mode",
+        choices=("report", "check"),
+        help="report: markdown edge map; check: exit nonzero unless clean",
+    )
+    at.add_argument(
+        "paths",
+        nargs="*",
+        type=Path,
+        help="only these files (repo-relative); edges are then checked "
+        "within them, so an edge whose other side is elsewhere reads as "
+        "one-sided",
+    )
+    at.add_argument(
+        "--out", type=Path, default=None, help="report output path (default: stdout)"
     )
 
     tt = sub.add_parser(
@@ -511,6 +533,24 @@ def _dispatch(args: argparse.Namespace) -> int:
         return testtime.run(
             args.binary, args.test, args.timeout, args.top, tuple(args.prefix)
         )
+
+    if args.command == "atomicaudit":
+        result = atomicaudit.run_audit(args.repo, list(args.paths) or None)
+        if args.mode == "report":
+            report = atomicaudit.render_report(result)
+            if args.out is None:
+                print(atomicaudit.summary_line(result), file=sys.stderr)
+                sys.stdout.write(report)
+                return 0
+            print(atomicaudit.summary_line(result))
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_text(report)
+            print(f"report: {args.out}")
+            return 0
+        print(atomicaudit.summary_line(result))
+        for v in result.violations:
+            print(f"  VIOLATION {v.path}:{v.line}: {v.message}")
+        return 0 if result.clean else 1
 
     if args.command == "allocaudit":
         if args.jobs is not None and args.jobs < 1:
