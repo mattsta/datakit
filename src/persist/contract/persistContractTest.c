@@ -614,6 +614,29 @@ int persistContractTest(int argc, char *argv[]) {
     const char *only = getenv("PERSIST_CONTRACT_ONLY");
     int err = 0;
 
+    /* Every type and op code names itself uniquely (an unassigned code is
+     * "unknown"), so files and tools never print one name for two. */
+    for (int kind = 0; kind < 2; kind++) {
+        const char *seen[256] = {0};
+        for (unsigned v = 0; v < 256; v++) {
+            const char *name = kind == 0 ? persistTypeName((persistType)v)
+                                         : persistOpName((persistOp)v);
+            if (name == NULL || name[0] == '\0') {
+                ERR("%s %u has no name", kind == 0 ? "type" : "op", v);
+                continue;
+            }
+            seen[v] = name;
+            const bool unassigned =
+                strcmp(name, "unknown") == 0 || strcmp(name, "UNKNOWN") == 0;
+            for (unsigned w = 0; w < v && !unassigned; w++) {
+                if (seen[w] && strcmp(seen[w], name) == 0) {
+                    ERR("%s codes %u and %u are both \"%s\"",
+                        kind == 0 ? "type" : "op", w, v, name);
+                }
+            }
+        }
+    }
+
     printf("| type | elements | snapshot B/elem | snapshot ns/elem | "
            "restore ns/elem | WAL ops replayed | damaged refused | "
            "damaged accepted | result |\n");
@@ -622,6 +645,12 @@ int persistContractTest(int argc, char *argv[]) {
         const persistContractType *t = pcRegistry[i];
         if (only && strcmp(only, t->ops->name) != 0) {
             continue;
+        }
+        /* The type's registered name is the one its files and tools
+         * print for its type code. */
+        if (strcmp(persistTypeName(t->ops->type), t->ops->name) != 0) {
+            ERR("%s: persistTypeName(%u) is \"%s\"", t->ops->name,
+                (unsigned)t->ops->type, persistTypeName(t->ops->type));
         }
         const pcRow row = pcRun(t);
         printf("| %s | %zu | %.2f | %.1f | %.1f | %zu | %zu | %zu | %s |\n",
