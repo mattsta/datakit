@@ -65,11 +65,8 @@ static DK_FN_UNUSED void freeMflexStates2_cleanup(mflexState *(*arr)[2]) {
 #include <fcntl.h>
 #include <stdatomic.h>
 #include <sys/stat.h>
+#include <sys/time.h> /* gettimeofday */
 #include <unistd.h>
-
-#ifdef DATAKIT_TEST
-#include "perf.h"
-#endif
 
 /* The on-disk header structs below are packed and written/read raw — no
  * per-field byte-swap. That is correct on little-endian targets (every

@@ -1,46 +1,96 @@
 #pragma once
 
-#include <locale.h>
+/* perf.h - timers for the in-test smoke benchmarks.
+ *
+ * Every measurement reads two clocks:
+ *   - monotonic nanoseconds (perfNowNs), the primary measure.  The `us`
+ *     fields of perfState are this clock in microseconds.
+ *   - the CPU's cheapest counter (_perfTSC): x86-64 RDTSC, which counts
+ *     reference cycles, or AArch64 CNTVCT_EL0, a fixed-rate timer (24 MHz
+ *     on Apple silicon) that counts no cycles at all.  PERF_COUNTER_CYCLES
+ *     says which, and the printers show "cycles" only when they are.
+ *
+ * Usage, one timed region (per-TU state `lps`, single-threaded):
+ *     PERF_TIMERS_SETUP;
+ *     for (size_t i = 0; i < n; i++) { work(); }
+ *     PERF_TIMERS_FINISH_PRINT_RESULTS(n, "op");
+ *   prints, e.g.
+ *     12.345 ns per op, 81,004,455/s (12.345 ms for 1,000,000)
+ *   (x86-64 adds ", 41.20 cycles per op").  `units` may be a phrase
+ *   ("encode with cached results").
+ *   Per-sample statistics: PERF_TIMERS_STAT_START / PERF_TIMERS_STAT_STOP
+ *   around each sample add "mean 1.2 us ± 0.1 us over N samples".
+ *
+ * Printing never touches the process locale (thousands separators are
+ * formatted here).  GIMME_CSV adds a ":csv ns_per_unit,sample_mean_ns,
+ * sample_stddev_ns,units_per_s,units" line; DOUBLE_NEWLINE (default 1)
+ * adds a blank line after each result. */
+
+#include <inttypes.h>
 #include <math.h> /* sqrt */
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <sys/time.h>
+#include <time.h>
 
-/* TODO:
- *   - Refactor for optional ns resolution reporting (see multiTimer.c)
- *   - Refactor ways of requesting result ordering/printing/stats output
- *   - add ability to time an overhead loop then remove overhead from results */
-
-static inline uint64_t _perfTimeUs(void) {
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-
-    uint64_t us = (uint64_t)tv.tv_sec * 1000000;
-    us += tv.tv_usec;
-
-    return us;
+/* Monotonic nanoseconds.  Apple's CLOCK_MONOTONIC ticks in whole
+ * microseconds; its CLOCK_MONOTONIC_RAW is the nanosecond clock.  Linux's
+ * CLOCK_MONOTONIC is nanoseconds and read without a system call. */
+#if defined(__APPLE__)
+#define PERF_CLOCK_ID CLOCK_MONOTONIC_RAW
+#else
+#define PERF_CLOCK_ID CLOCK_MONOTONIC
+#endif
+static inline uint64_t perfNowNs(void) {
+    struct timespec ts;
+    clock_gettime(PERF_CLOCK_ID, &ts);
+    return (uint64_t)ts.tv_sec * UINT64_C(1000000000) + (uint64_t)ts.tv_nsec;
 }
 
+/* Monotonic microseconds (the same clock). */
+static inline uint64_t _perfTimeUs(void) {
+    return perfNowNs() / 1000u;
+}
+
+/* The CPU counter, ordered after the instructions before it. */
+#if defined(__x86_64__)
+#define PERF_COUNTER_CYCLES 1
 static inline uint64_t _perfTSC(void) {
-#if __has_builtin(__builtin_readcyclecounter) && !__arm64__
-    return __builtin_readcyclecounter();
-#elif __arm64__
-    uint64_t result;
-    __asm __volatile("mrs %0, CNTVCT_EL0" : "=&r"(result));
-    return result;
-#elif __x86_64__
     uint32_t lo = 0;
     uint32_t hi = 0;
-
     /* LFENCE keeps RDTSC from executing before the instructions ahead of
      * it complete (Intel SDM, RDTSC); MFENCE orders memory, not RDTSC. */
     __asm__ __volatile__("lfence\n\trdtsc" : "=a"(lo), "=d"(hi)::"memory");
     return ((uint64_t)hi << 32) | lo;
-#else
-#error "No TSC found?"
-#endif
 }
+#elif defined(__aarch64__)
+#define PERF_COUNTER_CYCLES 0
+static inline uint64_t _perfTSC(void) {
+    uint64_t ticks;
+    /* ISB: the read happens after the instructions before it. */
+    __asm__ __volatile__("isb\n\tmrs %0, CNTVCT_EL0" : "=r"(ticks)::"memory");
+    return ticks;
+}
+#elif __has_builtin(__builtin_readcyclecounter)
+#define PERF_COUNTER_CYCLES 1
+static inline uint64_t _perfTSC(void) {
+    return __builtin_readcyclecounter();
+}
+#else
+#error "perf.h: no cycle counter for this target"
+#endif
+
+/* Running statistics of samples (Welford). */
+typedef struct perfStateStat {
+    uint64_t start;
+    uint64_t stop;
+    uint64_t duration;
+    uint64_t samples;
+    double runningMean;
+    double runningVariance; /* sum of squared deviations */
+    double stddev;          /* population, set by PERF_TIMERS_STAT_RESULT */
+} perfStateStat;
 
 typedef struct perfStateGlobal {
     uint64_t start;
@@ -48,43 +98,76 @@ typedef struct perfStateGlobal {
     uint64_t duration;
 } perfStateGlobal;
 
-typedef struct perfStateStat {
-    uint64_t start;
-    uint64_t stop;
-    uint64_t duration;
-    double runningMean;
-    double runningVariance;
-    double stddev;
-} perfStateStat;
-
 typedef struct perfState {
     struct {
-        perfStateGlobal us;
-        perfStateGlobal tsc;
+        perfStateGlobal ns;
+        perfStateGlobal us;  /* ns / 1000 */
+        perfStateGlobal tsc; /* _perfTSC units (see PERF_COUNTER_CYCLES) */
     } global;
     struct {
-        perfStateStat us;
-        perfStateStat tsc;
+        perfStateStat ns;  /* per-sample nanoseconds */
+        perfStateStat tsc; /* per-sample counter units */
     } stat;
 } perfState;
 
 /* local perf state */
 static perfState lps = {{{0}}};
 
-#define PERF_TIMERS_SETUP                                                      \
-    do {                                                                       \
-        lps = (perfState){.global.us.start = _perfTimeUs(),                    \
-                          .global.tsc.start = _perfTSC()};                     \
-    } while (0)
+static inline void perfStatAdd(perfStateStat *s, double sample) {
+    s->samples++;
+    const double delta = sample - s->runningMean;
+    s->runningMean += delta / (double)s->samples;
+    s->runningVariance += delta * (sample - s->runningMean);
+}
 
-/* Simple flag to let you switch output from:
- *   0.775890 seconds at 172,985,510.83/s (15.00 cycles per test)
- * to:
- *   15.38 cycles per test is 168,644,261.64/s (took 0.795863 seconds)
- * to:
- *   3444.3/s for 200 seconds (17.32 cycles per test) */
-enum firstThing { FIRST_SECONDS, FIRST_CYCLES, FIRST_RATE };
-#define PERF_FIRST FIRST_CYCLES
+static inline double perfStatStddev(const perfStateStat *s) {
+    return s->samples > 0 ? sqrt(s->runningVariance / (double)s->samples) : 0;
+}
+
+/* `v` rounded to `decimals` (0..6) with ',' between thousands, into
+ * `out` (at least 40 bytes).  Returns out. */
+static inline char *perfFormatGrouped(double v, int decimals, char *out,
+                                      size_t cap) {
+    if (decimals < 0) {
+        decimals = 0;
+    } else if (decimals > 6) {
+        decimals = 6;
+    }
+    if (cap == 0) {
+        return out;
+    }
+    /* A value too long for `digits` (past 1e60) is cut; still grouped. */
+    char digits[64];
+    if (snprintf(digits, sizeof(digits), "%.*f", decimals, v) <= 0) {
+        out[0] = '\0';
+        return out;
+    }
+    const char *p = digits;
+    size_t o = 0;
+    if (*p == '-') {
+        if (o + 1 < cap) {
+            out[o++] = '-';
+        }
+        p++;
+    }
+    size_t intLen = 0;
+    while (p[intLen] >= '0' && p[intLen] <= '9') {
+        intLen++;
+    }
+    for (size_t k = 0; k < intLen; k++) {
+        if (k > 0 && (intLen - k) % 3 == 0 && o + 1 < cap) {
+            out[o++] = ',';
+        }
+        if (o + 1 < cap) {
+            out[o++] = p[k];
+        }
+    }
+    for (const char *q = p + intLen; *q && o + 1 < cap; q++) {
+        out[o++] = *q;
+    }
+    out[o] = '\0';
+    return out;
+}
 
 #ifndef GIMME_CSV
 #define GIMME_CSV 0
@@ -94,26 +177,37 @@ enum firstThing { FIRST_SECONDS, FIRST_CYCLES, FIRST_RATE };
 #define DOUBLE_NEWLINE 1
 #endif
 
-#define PERF_TIMERS_STAT_START                                                 \
+#define PERF_TIMERS_SETUP                                                      \
     do {                                                                       \
-        lps.stat.us.start = _perfTimeUs();                                     \
+        lps = (perfState){0};                                                  \
+        lps.global.tsc.start = _perfTSC();                                     \
+        lps.global.ns.start = perfNowNs();                                     \
+        lps.global.us.start = lps.global.ns.start / 1000u;                     \
     } while (0)
 
-#define _PERF_TIMERS_STAT_STOP(i, subField, dataPoint)                         \
+#define PERF_TIMERS_FINISH                                                     \
     do {                                                                       \
-        const double delta =                                                   \
-            (double)(dataPoint) - lps.stat.subField.runningMean;               \
-        lps.stat.subField.runningMean +=                                       \
-            delta / (i + 1); /* assume zero-based indexing */                  \
-        lps.stat.subField.runningVariance +=                                   \
-            delta * ((dataPoint) - lps.stat.subField.runningMean);             \
+        lps.global.ns.stop = perfNowNs();                                      \
+        lps.global.tsc.stop = _perfTSC();                                      \
+        lps.global.us.stop = lps.global.ns.stop / 1000u;                       \
+        lps.global.ns.duration = lps.global.ns.stop - lps.global.ns.start;     \
+        lps.global.us.duration = lps.global.us.stop - lps.global.us.start;     \
+        lps.global.tsc.duration = lps.global.tsc.stop - lps.global.tsc.start;  \
+    } while (0)
+
+/* One sample.  The argument (the caller's zero-based sample index) is not
+ * needed: samples are counted here. */
+#define PERF_TIMERS_STAT_START                                                 \
+    do {                                                                       \
+        lps.stat.ns.start = perfNowNs();                                       \
     } while (0)
 
 #define PERF_TIMERS_STAT_STOP(i)                                               \
     do {                                                                       \
-        lps.stat.us.stop = _perfTimeUs();                                      \
-        lps.stat.us.duration = lps.stat.us.stop - lps.stat.us.start;           \
-        _PERF_TIMERS_STAT_STOP(i, us, lps.stat.us.duration);                   \
+        (void)(i);                                                             \
+        lps.stat.ns.stop = perfNowNs();                                        \
+        lps.stat.ns.duration = lps.stat.ns.stop - lps.stat.ns.start;           \
+        perfStatAdd(&lps.stat.ns, (double)lps.stat.ns.duration);               \
     } while (0)
 
 #define PERF_TIMERS_CYCLE_STAT_START                                           \
@@ -123,92 +217,91 @@ enum firstThing { FIRST_SECONDS, FIRST_CYCLES, FIRST_RATE };
 
 #define PERF_TIMERS_CYCLE_STAT_STOP(i)                                         \
     do {                                                                       \
+        (void)(i);                                                             \
         lps.stat.tsc.stop = _perfTSC();                                        \
         lps.stat.tsc.duration = lps.stat.tsc.stop - lps.stat.tsc.start;        \
-        _PERF_TIMERS_STAT_STOP(i, tsc, lps.stat.tsc.duration);                 \
+        perfStatAdd(&lps.stat.tsc, (double)lps.stat.tsc.duration);             \
     } while (0)
 
+/* Kept for callers: the stddev is computed from the samples counted. */
 #define PERF_TIMERS_STAT_RESULT(totalLoops)                                    \
     do {                                                                       \
-        if ((totalLoops) > 0) {                                                \
-            lps.stat.us.stddev =                                               \
-                sqrt(lps.stat.us.runningVariance / (totalLoops));              \
-        }                                                                      \
+        (void)(totalLoops);                                                    \
+        lps.stat.ns.stddev = perfStatStddev(&lps.stat.ns);                     \
+        lps.stat.tsc.stddev = perfStatStddev(&lps.stat.tsc);                   \
     } while (0)
 
-/* GCC -pedantic complains about the %'0.2f format specifier, so let's disable
- * format warnings for that one line of code. */
+/* A duration in the unit that reads best, into `out` (>= 32 bytes). */
+static inline const char *perfFormatNs(double ns, char *out, size_t cap) {
+    if (ns >= 1e9) {
+        snprintf(out, cap, "%.3f s", ns / 1e9);
+    } else if (ns >= 1e6) {
+        snprintf(out, cap, "%.3f ms", ns / 1e6);
+    } else if (ns >= 1e3) {
+        snprintf(out, cap, "%.3f us", ns / 1e3);
+    } else {
+        snprintf(out, cap, "%.3f ns", ns);
+    }
+    return out;
+}
+
+/* Print the region timed by SETUP/FINISH: `count` units of work. */
 static void __attribute__((unused))
-PERF_TIMERS_RESULT_PRINT(const size_t i, const char *units) {
-    setlocale(LC_ALL, "");
+PERF_TIMERS_RESULT_PRINT(const size_t count, const char *units) {
+    PERF_TIMERS_STAT_RESULT(count);
+    const double ns = (double)lps.global.ns.duration;
+    const double seconds = ns / 1e9;
+    const double perUnit = count > 0 ? ns / (double)count : ns;
+    const double rate = seconds > 0 ? (double)count / seconds : 0;
 
-    PERF_TIMERS_STAT_RESULT(i);
-
-    const double totalSeconds =
-        (double)(lps.global.us.stop - lps.global.us.start) / 1000000;
-    const double speed = totalSeconds > 0 ? i / totalSeconds : 0;
-    const uint64_t cyclesTotal = lps.global.tsc.stop - lps.global.tsc.start;
-    const double cyclesAverage = i > 0 ? (double)cyclesTotal / i : cyclesTotal;
-
-    char deviations[128] = {0};
-
-    if (lps.stat.us.runningVariance > 0) {
-        if (lps.stat.us.runningMean > 1000) {
-            snprintf(deviations, sizeof(deviations), "median %f ms ± %f ms ",
-                     lps.stat.us.runningMean / 1000, lps.stat.us.stddev / 1000);
-        } else {
-            snprintf(deviations, sizeof(deviations), "median %f us ± %f us ",
-                     lps.stat.us.runningMean, lps.stat.us.stddev);
-        }
+    char perUnitText[32];
+    char rateText[48];
+    char countText[48];
+    printf("%s per %s, %s/s",
+           perfFormatNs(perUnit, perUnitText, sizeof(perUnitText)), units,
+           perfFormatGrouped(rate, rate >= 100 ? 0 : 2, rateText,
+                             sizeof(rateText)));
+    if (PERF_COUNTER_CYCLES && count > 0) {
+        printf(", %.2f cycles per %s",
+               (double)lps.global.tsc.duration / (double)count, units);
     }
-
-    _Pragma("GCC diagnostic push")
-        _Pragma("GCC diagnostic ignored \"-Wformat\"") if (PERF_FIRST ==
-                                                           FIRST_SECONDS) {
-        printf("%lf seconds at %'0.2f/s (%0.2f cycles per %s)\n", totalSeconds,
-               speed, cyclesAverage, units);
+    if (lps.stat.ns.samples > 1) {
+        char meanText[32];
+        char sdText[32];
+        printf(
+            ", mean %s ± %s over %" PRIu64 " samples",
+            perfFormatNs(lps.stat.ns.runningMean, meanText, sizeof(meanText)),
+            perfFormatNs(lps.stat.ns.stddev, sdText, sizeof(sdText)),
+            lps.stat.ns.samples);
     }
-    else if (PERF_FIRST == FIRST_RATE) {
-        printf("%'0.2f/s for %lf seconds (%0.2f cycles per %s)\n", speed,
-               totalSeconds, cyclesAverage, units);
-    }
-    else {
-        if (speed > 10000) {
-            printf("%0.4f cycles at %'0.0f/s %s(%lf seconds in %s)\n",
-                   cyclesAverage, speed, deviations, totalSeconds, units);
-        } else {
-            printf("%0.4f cycles at %'0.2f/s %s(%lf seconds in %s)\n",
-                   cyclesAverage, speed, deviations, totalSeconds, units);
-        }
-    }
+    char totalText[32];
+    printf(" (%s for %s)\n", perfFormatNs(ns, totalText, sizeof(totalText)),
+           perfFormatGrouped((double)count, 0, countText, sizeof(countText)));
 
     if (GIMME_CSV) {
-        printf(":csv %f,%f,%f,%f,%s\n", cyclesAverage, lps.stat.us.runningMean,
-               lps.stat.us.stddev, speed, units);
+        printf(":csv %f,%f,%f,%f,%s\n", perUnit, lps.stat.ns.runningMean,
+               lps.stat.ns.stddev, rate, units);
     }
-
-    _Pragma("GCC diagnostic pop")
-
-        if (DOUBLE_NEWLINE) {
+    if (DOUBLE_NEWLINE) {
         printf("\n");
     }
 }
 
+/* Throughput of the region timed by SETUP/FINISH over loops *
+ * bytesPerLoop bytes. */
 #define PERF_TIMERS_RESULT_PRINT_BYTES(_loops, _bytesPerLoop)                  \
     do {                                                                       \
-        const size_t loops = _loops;                                           \
-        const size_t bytesPerLoop = _bytesPerLoop;                             \
-        const double cyclesPerByte =                                           \
-            (double)lps.global.tsc.duration / (loops * bytesPerLoop);          \
-        printf("%0.4f cycles per byte\n", cyclesPerByte);                      \
-    } while (0)
-
-#define PERF_TIMERS_FINISH                                                     \
-    do {                                                                       \
-        lps.global.tsc.stop = _perfTSC();                                      \
-        lps.global.us.stop = _perfTimeUs();                                    \
-        lps.global.tsc.duration = lps.global.tsc.stop - lps.global.tsc.start;  \
-        lps.global.us.duration = lps.global.us.stop - lps.global.us.start;     \
+        const double perfBytes_ = (double)(_loops) * (double)(_bytesPerLoop);  \
+        const double perfNs_ = (double)lps.global.ns.duration;                 \
+        if (perfBytes_ > 0 && perfNs_ > 0) {                                   \
+            printf("%0.4f ns/byte, %0.1f MB/s", perfNs_ / perfBytes_,          \
+                   perfBytes_ * 1e3 / perfNs_);                                \
+            if (PERF_COUNTER_CYCLES) {                                         \
+                printf(", %0.4f cycles/byte",                                  \
+                       (double)lps.global.tsc.duration / perfBytes_);          \
+            }                                                                  \
+            printf("\n");                                                      \
+        }                                                                      \
     } while (0)
 
 #define PERF_TIMERS_FINISH_PRINT_RESULTS(i, units)                             \
@@ -217,10 +310,10 @@ PERF_TIMERS_RESULT_PRINT(const size_t i, const char *units) {
         PERF_TIMERS_RESULT_PRINT(i, units);                                    \
     } while (0)
 
+/* Time `code`, run once, as `i` units. */
 #define PERF_TIMERS_THIS(code, i, units)                                       \
     do {                                                                       \
         PERF_TIMERS_SETUP;                                                     \
-        (code);                                                                \
-        PERF_TIMERS_FINISH;                                                    \
-        PERF_TIMERS_PRINT_RESULTS(i, units);                                   \
+        code;                                                                  \
+        PERF_TIMERS_FINISH_PRINT_RESULTS(i, units);                            \
     } while (0)

@@ -1912,7 +1912,7 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
             char buf[128];
 
             /* Insert - Inline */
-            uint64_t inlineInsertStart = _perfTSC();
+            uint64_t inlineInsertStart = perfNowNs();
             for (size_t i = 0; i < N; i++) {
                 databox score = databoxNewUnsigned(i);
                 /* Generate string of exact length */
@@ -1922,10 +1922,10 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
                 databox member = databoxNewBytesAllowEmbed(buf, strLen);
                 multiOrderedSetFullAdd(mosInline, &score, &member);
             }
-            uint64_t inlineInsertEnd = _perfTSC();
+            uint64_t inlineInsertEnd = perfNowNs();
 
             /* Insert - Pool HASH */
-            uint64_t hashInsertStart = _perfTSC();
+            uint64_t hashInsertStart = perfNowNs();
             for (size_t i = 0; i < N; i++) {
                 databox score = databoxNewUnsigned(i);
                 memset(buf, 'A' + (i % 26), strLen);
@@ -1934,10 +1934,10 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
                 databox member = databoxNewBytesAllowEmbed(buf, strLen);
                 multiOrderedSetFullAdd(mosHash, &score, &member);
             }
-            uint64_t hashInsertEnd = _perfTSC();
+            uint64_t hashInsertEnd = perfNowNs();
 
             /* Insert - Pool TREE */
-            uint64_t treeInsertStart = _perfTSC();
+            uint64_t treeInsertStart = perfNowNs();
             for (size_t i = 0; i < N; i++) {
                 databox score = databoxNewUnsigned(i);
                 memset(buf, 'A' + (i % 26), strLen);
@@ -1946,7 +1946,7 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
                 databox member = databoxNewBytesAllowEmbed(buf, strLen);
                 multiOrderedSetFullAdd(mosTree, &score, &member);
             }
-            uint64_t treeInsertEnd = _perfTSC();
+            uint64_t treeInsertEnd = perfNowNs();
 
             size_t inlineBytes = multiOrderedSetFullBytes(mosInline);
             size_t hashBytes = multiOrderedSetFullBytes(mosHash);
@@ -1962,7 +1962,7 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
                    treeBytes, (double)treeBytes / N,
                    100.0 * ((double)treeBytes / inlineBytes - 1.0));
 
-            printf("  Insert (cycles/op):\n");
+            printf("  Insert (ns/op):\n");
             printf("    Inline:     %.1f\n",
                    (double)(inlineInsertEnd - inlineInsertStart) / N);
             printf("    Pool HASH:  %.1f\n",
@@ -1971,7 +1971,7 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
                    (double)(treeInsertEnd - treeInsertStart) / N);
 
             /* Lookup benchmark */
-            uint64_t inlineLookupStart = _perfTSC();
+            uint64_t inlineLookupStart = perfNowNs();
             for (size_t i = 0; i < N; i++) {
                 memset(buf, 'A' + (i % 26), strLen);
                 snprintf(buf, strLen + 1, "m%0*zu", (int)(strLen - 2), i);
@@ -1980,9 +1980,9 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
                 databox score;
                 multiOrderedSetFullGetScore(mosInline, &member, &score);
             }
-            uint64_t inlineLookupEnd = _perfTSC();
+            uint64_t inlineLookupEnd = perfNowNs();
 
-            uint64_t hashLookupStart = _perfTSC();
+            uint64_t hashLookupStart = perfNowNs();
             for (size_t i = 0; i < N; i++) {
                 memset(buf, 'A' + (i % 26), strLen);
                 snprintf(buf, strLen + 1, "m%0*zu", (int)(strLen - 2), i);
@@ -1991,9 +1991,9 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
                 databox score;
                 multiOrderedSetFullGetScore(mosHash, &member, &score);
             }
-            uint64_t hashLookupEnd = _perfTSC();
+            uint64_t hashLookupEnd = perfNowNs();
 
-            uint64_t treeLookupStart = _perfTSC();
+            uint64_t treeLookupStart = perfNowNs();
             for (size_t i = 0; i < N; i++) {
                 memset(buf, 'A' + (i % 26), strLen);
                 snprintf(buf, strLen + 1, "m%0*zu", (int)(strLen - 2), i);
@@ -2002,9 +2002,9 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
                 databox score;
                 multiOrderedSetFullGetScore(mosTree, &member, &score);
             }
-            uint64_t treeLookupEnd = _perfTSC();
+            uint64_t treeLookupEnd = perfNowNs();
 
-            printf("  Lookup (cycles/op):\n");
+            printf("  Lookup (ns/op):\n");
             printf("    Inline:     %.1f\n",
                    (double)(inlineLookupEnd - inlineLookupStart) / N);
             printf("    Pool HASH:  %.1f\n",
@@ -2016,25 +2016,25 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
             mosIterator iter;
             databox m, s;
 
-            uint64_t inlineIterStart = _perfTSC();
+            uint64_t inlineIterStart = perfNowNs();
             multiOrderedSetFullIteratorInit(mosInline, &iter, true);
             while (multiOrderedSetFullIteratorNext(&iter, &m, &s)) {
             }
-            uint64_t inlineIterEnd = _perfTSC();
+            uint64_t inlineIterEnd = perfNowNs();
 
-            uint64_t hashIterStart = _perfTSC();
+            uint64_t hashIterStart = perfNowNs();
             multiOrderedSetFullIteratorInit(mosHash, &iter, true);
             while (multiOrderedSetFullIteratorNext(&iter, &m, &s)) {
             }
-            uint64_t hashIterEnd = _perfTSC();
+            uint64_t hashIterEnd = perfNowNs();
 
-            uint64_t treeIterStart = _perfTSC();
+            uint64_t treeIterStart = perfNowNs();
             multiOrderedSetFullIteratorInit(mosTree, &iter, true);
             while (multiOrderedSetFullIteratorNext(&iter, &m, &s)) {
             }
-            uint64_t treeIterEnd = _perfTSC();
+            uint64_t treeIterEnd = perfNowNs();
 
-            printf("  Iteration (cycles/op):\n");
+            printf("  Iteration (ns/op):\n");
             printf("    Inline:     %.2f\n",
                    (double)(inlineIterEnd - inlineIterStart) / N);
             printf("    Pool HASH:  %.2f\n",
@@ -2108,7 +2108,7 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
                "│\n");
         printf("│   Memory:  ~84 bytes/entry overhead (2-3x more than TREE)   "
                "│\n");
-        printf("│   Speed:   O(1) lookup, ~2 cycles/op iteration              "
+        printf("│   Speed:   O(1) lookup, faster iteration                    "
                "│\n");
         printf("│   Best for: Read-heavy workloads, iteration-intensive apps  "
                "│\n");
@@ -2118,7 +2118,7 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
                "│\n");
         printf("│   Memory:  ~22 bytes/entry overhead (3-4x less than HASH)   "
                "│\n");
-        printf("│   Speed:   O(log n) lookup, ~10 cycles/op iteration (5-6x)  "
+        printf("│   Speed:   O(log n) lookup, iteration 5-6x slower           "
                "│\n");
         printf("│   Best for: Memory-constrained, write-heavy, small pools    "
                "│\n");

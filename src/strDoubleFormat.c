@@ -786,7 +786,6 @@ exponentialOffset: {
 #ifdef DATAKIT_TEST
 #include "ctest.h"
 #include "float16.h"
-#include <locale.h>
 
 #define DOUBLE_NEWLINE 0
 #include "perf.h"
@@ -1201,13 +1200,9 @@ int strDoubleFormatTest(int argc, char *argv[]) {
     printf("random seed: %d\n", rs);
     srand(rs);
 
-    /* LC_NUMERIC stays "C": the roundtrip checks below parse this
-     * formatter's '.'-radix output with strtod, which is
-     * locale-sensitive - a comma-decimal environment locale would
-     * false-fail every roundtrip. (Costs the %'zu banner grouping.) */
-    setlocale(LC_ALL, "");
-    setlocale(LC_NUMERIC, "C");
-
+    /* The process stays in the "C" locale: the roundtrip checks below
+     * parse this formatter's '.'-radix output with strtod, which is
+     * locale-sensitive. */
     const size_t testMax = 1e6;
     TEST_DESC("double formatting from random bit construction (100 dots; "
               "%'zu total tests)",

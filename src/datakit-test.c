@@ -1000,6 +1000,129 @@ static int dkTestDaemonizeReadyTest(int argc, char *argv[]) {
     return failures;
 }
 
+#define DOUBLE_NEWLINE 0
+#include "perf.h"
+
+#include <locale.h>   /* setlocale(LC_ALL, NULL): the printer leaves it */
+#include <sys/time.h> /* gettimeofday, the old clock, for comparison */
+
+/* perf.h's pieces: grouped formatting, sample statistics against known
+ * values, the clocks (monotonic, and covering a sleep), and a printer
+ * that leaves the process locale alone. */
+static int dkTestPerfHeaderTest(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+    int failures = 0;
+#define PHEXPECT(cond, msg)                                                    \
+    do {                                                                       \
+        if (!(cond)) {                                                         \
+            printf("dkTestPerfHeader FAIL: %s (%s:%d)\n", (msg), __FILE__,     \
+                   __LINE__);                                                  \
+            failures++;                                                        \
+        }                                                                      \
+    } while (0)
+
+    static const struct {
+        double v;
+        int decimals;
+        const char *want;
+    } grouped[] = {
+        {0, 0, "0"},
+        {999, 0, "999"},
+        {1000, 0, "1,000"},
+        {1234567.891, 2, "1,234,567.89"},
+        {-1234567, 0, "-1,234,567"},
+        {12.5, 1, "12.5"},
+        {100000, 0, "100,000"},
+    };
+    for (size_t i = 0; i < sizeof(grouped) / sizeof(grouped[0]); i++) {
+        char out[40];
+        perfFormatGrouped(grouped[i].v, grouped[i].decimals, out, sizeof(out));
+        if (strcmp(out, grouped[i].want) != 0) {
+            printf("dkTestPerfHeader: grouped %f -> \"%s\", want \"%s\"\n",
+                   grouped[i].v, out, grouped[i].want);
+            failures++;
+        }
+    }
+    char tiny[4];
+    perfFormatGrouped(1234567, 0, tiny, sizeof(tiny));
+    PHEXPECT(strlen(tiny) == 3, "a short buffer is filled and terminated");
+
+    /* Population mean 5 and stddev 2 */
+    perfStateStat st = {0};
+    static const double samples[] = {2, 4, 4, 4, 5, 5, 7, 9};
+    for (size_t i = 0; i < sizeof(samples) / sizeof(samples[0]); i++) {
+        perfStatAdd(&st, samples[i]);
+    }
+    PHEXPECT(st.samples == 8 && fabs(st.runningMean - 5.0) < 1e-12 &&
+                 fabs(perfStatStddev(&st) - 2.0) < 1e-12,
+             "Welford mean and stddev");
+
+    const uint64_t t0 = perfNowNs();
+    const uint64_t c0 = _perfTSC();
+    usleep(2000);
+    const uint64_t t1 = perfNowNs();
+    const uint64_t c1 = _perfTSC();
+    PHEXPECT(t1 - t0 >= 2000000u && t1 - t0 < 2000000000u,
+             "the ns clock covers a 2 ms sleep");
+    PHEXPECT(c1 > c0, "the counter advances");
+
+    const char *before = setlocale(LC_ALL, NULL);
+    char saved[64];
+    snprintf(saved, sizeof(saved), "%s", before ? before : "");
+    volatile uint64_t sink = 0;
+    PERF_TIMERS_SETUP;
+    for (int i = 0; i < 3; i++) {
+        PERF_TIMERS_STAT_START;
+        sink += (uint64_t)i;
+        PERF_TIMERS_STAT_STOP(i);
+    }
+    PERF_TIMERS_FINISH_PRINT_RESULTS(3, "sample");
+    PHEXPECT(lps.stat.ns.samples == 3, "samples are counted");
+    PHEXPECT(lps.global.us.duration ==
+                 lps.global.ns.stop / 1000u - lps.global.ns.start / 1000u,
+             "the us fields are the ns clock");
+    PERF_TIMERS_THIS(sink += 1, 1, "op");
+
+    /* What a clock read costs (reported; the bound is only a sanity
+     * check): the nanosecond clock and the counter, against
+     * gettimeofday, the microsecond clock perf.h used to read. */
+    enum { kReads = 100000 };
+    uint64_t acc = 0;
+    PERF_TIMERS_SETUP;
+    for (int i = 0; i < kReads; i++) {
+        acc += perfNowNs();
+    }
+    PERF_TIMERS_FINISH;
+    const double nowNs = (double)lps.global.ns.duration / kReads;
+    PERF_TIMERS_SETUP;
+    for (int i = 0; i < kReads; i++) {
+        acc += _perfTSC();
+    }
+    PERF_TIMERS_FINISH;
+    const double counterNs = (double)lps.global.ns.duration / kReads;
+    PERF_TIMERS_SETUP;
+    for (int i = 0; i < kReads; i++) {
+        struct timeval tv;
+        gettimeofday(&tv, NULL);
+        acc += (uint64_t)tv.tv_usec;
+    }
+    PERF_TIMERS_FINISH;
+    const double gtodNs = (double)lps.global.ns.duration / kReads;
+    sink += acc;
+    printf("perf.h clock reads: perfNowNs %.1f ns, counter %.1f ns, "
+           "gettimeofday %.1f ns\n",
+           nowNs, counterNs, gtodNs);
+    PHEXPECT(nowNs < 1000 && counterNs < 1000, "a clock read is cheap");
+
+    const char *after = setlocale(LC_ALL, NULL);
+    PHEXPECT(after && strcmp(saved, after) == 0,
+             "printing leaves the process locale alone");
+    (void)sink;
+#undef PHEXPECT
+    return failures;
+}
+
 /* Async-signal-safe wake descriptor (OSRegulate.h): an idle await
  * expires, a signalled one wakes and drains, several signals coalesce
  * into one wake, a wake raised inside a signal handler is delivered,
@@ -12451,7 +12574,7 @@ static const TestEntry testRegistry[] = {
 
     /* OS process/event primitives (tests live in this file) */
     T_A(dkTestProcessExitWait, "processExitWait,procWait"),
-    T_A(dkTestWakeFd, "wakeFd,wake"),
+    T_A(dkTestPerfHeader, "perfHeader"), T_A(dkTestWakeFd, "wakeFd,wake"),
     T_A(dkTestInflightGate, "inflightGate,inflight"),
     T_A(dkTestOwnedState, "ownedState,owned"),
     T_A(dkTestOwnedSeqGate, "ownedSeqGate,seqGate"),

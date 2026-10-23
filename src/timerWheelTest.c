@@ -2165,8 +2165,7 @@ int timerWheelTest(int argc, char *argv[]) {
                                    testCountingCallback, &state);
             }
             PERF_TIMERS_FINISH;
-            double twCycles =
-                (double)(lps.global.tsc.stop - lps.global.tsc.start) / count;
+            double twNs = (double)lps.global.ns.duration / count;
             /* Freed before the multiTimer half so the two halves never
              * hold their timers at the same time; the cleaner skips
              * NULL. */
@@ -2181,11 +2180,10 @@ int timerWheelTest(int argc, char *argv[]) {
                                    mtCountingCallback, &state);
             }
             PERF_TIMERS_FINISH;
-            double mtCycles =
-                (double)(lps.global.tsc.stop - lps.global.tsc.start) / count;
+            double mtNs = (double)lps.global.ns.duration / count;
 
-            printf("    %-12zu  %9.1f cy  %9.1f cy  %7.2fx\n", count, twCycles,
-                   mtCycles, mtCycles / twCycles);
+            printf("    %-12zu  %9.1f ns  %9.1f ns  %7.2fx\n", count, twNs,
+                   mtNs, mtNs / twNs);
         }
         printf("\n");
     }
@@ -2217,8 +2215,7 @@ int timerWheelTest(int argc, char *argv[]) {
                 timerWheelUnregister(tw, (timerWheelId)i);
             }
             PERF_TIMERS_FINISH;
-            double twCycles =
-                (double)(lps.global.tsc.stop - lps.global.tsc.start) / count;
+            double twNs = (double)lps.global.ns.duration / count;
             /* Freed before the multiTimer half so the two halves never
              * hold their timers at the same time; the cleaner skips
              * NULL. */
@@ -2237,11 +2234,10 @@ int timerWheelTest(int argc, char *argv[]) {
                 multiTimerUnregister(mt, (multiTimerId)i);
             }
             PERF_TIMERS_FINISH;
-            double mtCycles =
-                (double)(lps.global.tsc.stop - lps.global.tsc.start) / count;
+            double mtNs = (double)lps.global.ns.duration / count;
 
-            printf("    %-12zu  %9.1f cy  %9.1f cy  %7.2fx\n", count, twCycles,
-                   mtCycles, mtCycles / twCycles);
+            printf("    %-12zu  %9.1f ns  %9.1f ns  %7.2fx\n", count, twNs,
+                   mtNs, mtNs / twNs);
         }
         printf("\n");
     }
@@ -2272,8 +2268,7 @@ int timerWheelTest(int argc, char *argv[]) {
             PERF_TIMERS_SETUP;
             timerWheelProcessTimerEvents(tw);
             PERF_TIMERS_FINISH;
-            double twCycles =
-                (double)(lps.global.tsc.stop - lps.global.tsc.start) / count;
+            double twNs = (double)lps.global.ns.duration / count;
             /* Freed before the multiTimer half so the two halves never
              * hold their timers at the same time; the cleaner skips
              * NULL. */
@@ -2293,11 +2288,10 @@ int timerWheelTest(int argc, char *argv[]) {
             PERF_TIMERS_SETUP;
             multiTimerProcessTimerEvents(mt);
             PERF_TIMERS_FINISH;
-            double mtCycles =
-                (double)(lps.global.tsc.stop - lps.global.tsc.start) / count;
+            double mtNs = (double)lps.global.ns.duration / count;
 
-            printf("    %-12zu  %9.1f cy  %9.1f cy  %7.2fx\n", count, twCycles,
-                   mtCycles, mtCycles / twCycles);
+            printf("    %-12zu  %9.1f ns  %9.1f ns  %7.2fx\n", count, twNs,
+                   mtNs, mtNs / twNs);
         }
         printf("\n");
     }
@@ -2331,8 +2325,7 @@ int timerWheelTest(int argc, char *argv[]) {
                 sink += timerWheelNextTimerEventStartUs(tw);
             }
             PERF_TIMERS_FINISH;
-            double twCycles =
-                (double)(lps.global.tsc.stop - lps.global.tsc.start) / queries;
+            double twNs = (double)lps.global.ns.duration / queries;
             /* Freed before the multiTimer half so the two halves never
              * hold their timers at the same time; the cleaner skips
              * NULL. */
@@ -2353,12 +2346,11 @@ int timerWheelTest(int argc, char *argv[]) {
                 sink += multiTimerNextTimerEventStartUs(mt);
             }
             PERF_TIMERS_FINISH;
-            double mtCycles =
-                (double)(lps.global.tsc.stop - lps.global.tsc.start) / queries;
+            double mtNs = (double)lps.global.ns.duration / queries;
             (void)sink;
 
-            printf("    %-12zu  %9.1f cy  %9.1f cy  %7.2fx\n", count, twCycles,
-                   mtCycles, mtCycles / twCycles);
+            printf("    %-12zu  %9.1f ns  %9.1f ns  %7.2fx\n", count, twNs,
+                   mtNs, mtNs / twNs);
         }
         printf("\n");
     }
@@ -2450,8 +2442,7 @@ int timerWheelTest(int argc, char *argv[]) {
                 timerWheelRegister(tw, delay, 0, testCountingCallback, &state);
             }
             PERF_TIMERS_FINISH;
-            double twCycles =
-                (double)(lps.global.tsc.stop - lps.global.tsc.start) / count;
+            double twNs = (double)lps.global.ns.duration / count;
             /* Freed before the multiTimer half so the two halves never
              * hold their timers at the same time; the cleaner skips
              * NULL. */
@@ -2466,12 +2457,10 @@ int timerWheelTest(int argc, char *argv[]) {
                 multiTimerRegister(mt, delay, 0, mtCountingCallback, &state);
             }
             PERF_TIMERS_FINISH;
-            double mtCycles =
-                (double)(lps.global.tsc.stop - lps.global.tsc.start) / count;
+            double mtNs = (double)lps.global.ns.duration / count;
 
-            printf("    %-16s  %9.1f cy  %9.1f cy  %7.2fx\n",
-                   distributions[d].name, twCycles, mtCycles,
-                   mtCycles / twCycles);
+            printf("    %-16s  %9.1f ns  %9.1f ns  %7.2fx\n",
+                   distributions[d].name, twNs, mtNs, mtNs / twNs);
         }
         printf("\n");
     }
@@ -2500,8 +2489,7 @@ int timerWheelTest(int argc, char *argv[]) {
                 timerWheelUnregister(tw, id);
             }
             PERF_TIMERS_FINISH;
-            double twCycles =
-                (double)(lps.global.tsc.stop - lps.global.tsc.start) / count;
+            double twNs = (double)lps.global.ns.duration / count;
             /* Freed before the multiTimer half so the two halves never
              * hold their timers at the same time; the cleaner skips
              * NULL. */
@@ -2517,11 +2505,10 @@ int timerWheelTest(int argc, char *argv[]) {
                 multiTimerUnregister(mt, id);
             }
             PERF_TIMERS_FINISH;
-            double mtCycles =
-                (double)(lps.global.tsc.stop - lps.global.tsc.start) / count;
+            double mtNs = (double)lps.global.ns.duration / count;
 
-            printf("    %-12zu  %9.1f cy  %9.1f cy  %7.2fx\n", count, twCycles,
-                   mtCycles, mtCycles / twCycles);
+            printf("    %-12zu  %9.1f ns  %9.1f ns  %7.2fx\n", count, twNs,
+                   mtNs, mtNs / twNs);
         }
         printf("\n");
     }
@@ -2557,10 +2544,7 @@ int timerWheelTest(int argc, char *argv[]) {
             }
         }
         PERF_TIMERS_FINISH;
-        double twCycles =
-            (double)(lps.global.tsc.stop - lps.global.tsc.start) / iterations;
-        double twUsPerIter =
-            (double)(lps.global.us.stop - lps.global.us.start) / iterations;
+        double twNs = (double)lps.global.ns.duration / iterations;
         /* Freed before the multiTimer half so the two halves never
          * hold their timers at the same time; the cleaner skips NULL. */
         timerWheelFree(tw);
@@ -2588,16 +2572,11 @@ int timerWheelTest(int argc, char *argv[]) {
             }
         }
         PERF_TIMERS_FINISH;
-        double mtCycles =
-            (double)(lps.global.tsc.stop - lps.global.tsc.start) / iterations;
-        double mtUsPerIter =
-            (double)(lps.global.us.stop - lps.global.us.start) / iterations;
+        double mtNs = (double)lps.global.ns.duration / iterations;
 
-        printf("    timerWheel:  %.1f cycles/iter (%.3f us/iter)\n", twCycles,
-               twUsPerIter);
-        printf("    multiTimer:  %.1f cycles/iter (%.3f us/iter)\n", mtCycles,
-               mtUsPerIter);
-        printf("    Speedup:     %.2fx\n\n", mtCycles / twCycles);
+        printf("    timerWheel:  %.1f ns/iter\n", twNs);
+        printf("    multiTimer:  %.1f ns/iter\n", mtNs);
+        printf("    Speedup:     %.2fx\n\n", mtNs / twNs);
     }
 
     TEST("BENCHMARK: timerWheel memory at scale") {

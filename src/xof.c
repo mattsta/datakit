@@ -503,8 +503,6 @@ int xofTest(int argc, char *argv[]) {
     int err = 0;
     const size_t loopers = 10000;
 
-    setlocale(LC_ALL, "");
-
     for (int32_t val = -1; val < 2; val++) {
         TEST_DESC("all same (%d)", val) {
             cleanerName(zfree, Bits) xof *bits =

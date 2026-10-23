@@ -9054,7 +9054,6 @@ static int32_t flexTestReplaceSign(void) {
 }
 
 #include "jebuf.h"
-#include <locale.h>
 /* Feed a deferred wide box (wide type, data.ptr == NULL) to one insert or
  * encode path in a child and report whether the child aborted.  The
  * child turns SIGABRT into a distinct exit status, which keeps the
@@ -9174,8 +9173,6 @@ static size_t flexTestSpellNumber_(const databox *box, char *buf) {
 #endif
 
 int32_t flexTest(int32_t argc, char **argv) {
-    setlocale(LC_ALL, "");
-
     /* If an argument is given, use it as the random seed. */
     if (argc == 4) {
         srand(atoi(argv[3]));
