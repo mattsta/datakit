@@ -5490,6 +5490,97 @@ static int testFuzzStateTransitions(void) {
 static int testFuzzSerializationRoundtrip(void) {
     int err = 0;
 
+    TEST("Deserialize: every truncation refused, every flip consistent") {
+        /* A ring with nodes in several states and places and two
+         * keyspaces, serialized; each prefix is refused, and a ring
+         * deserialized from a copy with one byte flipped passes the
+         * persist validator, places a key, and serializes to bytes that
+         * deserialize to the same bytes again */
+        clusterRingConfig config = {.name = "mutate",
+                                    .strategyType = CLUSTER_STRATEGY_KETAMA};
+        cleaner(clusterRingFree) clusterRing *src = clusterRingNew(&config);
+        static const clusterNodeState states[] = {
+            CLUSTER_NODE_UP, CLUSTER_NODE_DOWN, CLUSTER_NODE_UP,
+            CLUSTER_NODE_LEAVING};
+        for (uint64_t i = 1; i <= 8; i++) {
+            clusterNodeConfig nc = {
+                .id = i,
+                .weight = (uint32_t)(50 + i * 13),
+                .capacityBytes = i << 30,
+                .initialState = states[i % 4],
+                .location = {.rackId = (uint32_t)(i % 3),
+                             .dcId = (uint32_t)(i % 2),
+                             .azId = (uint32_t)(i % 2)},
+            };
+            clusterRingAddNode(src, &nc);
+        }
+        const clusterKeySpaceConfig ks1 = {.name = "alpha",
+                                           .quorum = CLUSTER_QUORUM_BALANCED};
+        const clusterKeySpaceConfig ks2 = {.name = "beta",
+                                           .quorum = CLUSTER_QUORUM_BALANCED};
+        clusterRingAddKeySpace(src, &ks1, NULL);
+        clusterRingAddKeySpace(src, &ks2, NULL);
+
+        const size_t size = clusterRingSerializeSize(src);
+        cleaner(zfree) void *bufMem = zmalloc(size);
+        cleaner(zfree) void *againMem = zmalloc(size * 2 + 64);
+        uint8_t *buf = bufMem;
+        uint8_t *again = againMem;
+        const size_t len = clusterRingSerialize(src, buf, size);
+        if (len == 0) {
+            ERRR("mutation: serialize failed");
+        }
+
+        size_t truncAccepted = 0;
+        for (size_t cut = 0; cut < len; cut++) {
+            clusterRing *r = clusterRingDeserialize(buf, cut);
+            if (r) {
+                truncAccepted++;
+                clusterRingFree(r);
+            }
+        }
+        if (truncAccepted) {
+            ERR("mutation: %zu truncations deserialized", truncAccepted);
+        }
+
+        size_t inconsistent = 0;
+        size_t accepted = 0;
+        for (size_t at = 0; at < len; at++) {
+            buf[at] ^= 0x04;
+            clusterRing *r = clusterRingDeserialize(buf, len);
+            buf[at] ^= 0x04;
+            if (!r) {
+                continue;
+            }
+            accepted++;
+            bool ok = persistOpsClusterRing.validate(r);
+            const size_t n1 = clusterRingSerialize(r, again, size * 2 + 64);
+            clusterRing *r2 = n1 ? clusterRingDeserialize(again, n1) : NULL;
+            const size_t n2 =
+                r2 ? clusterRingSerialize(r2, again + n1, size * 2 + 64 - n1)
+                   : 0;
+            ok = ok && r2 && n1 == n2 && memcmp(again, again + n1, n1) == 0;
+            if (ok && clusterRingNodeCount(r) > 0) {
+                clusterPlacement p;
+                if (clusterRingLocate(r, "probe", 5, &p) == CLUSTER_OK) {
+                    clusterPlacementFree(&p);
+                }
+            }
+            if (!ok) {
+                inconsistent++;
+                if (inconsistent <= 3) {
+                    ERR("mutation: flip at %zu gave an inconsistent ring", at);
+                }
+            }
+            clusterRingFree(r2);
+            clusterRingFree(r);
+        }
+        if (inconsistent) {
+            ERR("mutation: %zu of %zu accepted flips inconsistent",
+                inconsistent, accepted);
+        }
+    }
+
     TEST("FUZZ: Serialization with random data") {
         for (int trial = 0; trial < 10; trial++) {
             clusterRingConfig config = {
