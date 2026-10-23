@@ -345,6 +345,9 @@ typedef enum StrScanOpt {
     STRSCAN_OPT_C = 0x10,
 } StrScanOpt;
 
+/* Scan a NUL-terminated number with an optional sign.  allowFloatWords
+ * also accepts "inf", "infinity" and "nan" (any case, after the sign);
+ * skipSpaces allows leading and trailing white space. */
 StrScanFmt StrScanScan(const uint8_t *p, databox *box, StrScanOpt opt,
                        bool allowFloatWords, bool skipSpaces);
 bool StrScanToDouble(const void *str, databox *box, bool allowFloatWords,
@@ -429,6 +432,8 @@ size_t StrInt64ToBuf(void *dst, size_t dstLen, int64_t svalue);
 size_t StrUInt32ToBuf(void *dst, size_t dstLen, uint32_t value);
 size_t StrUInt64ToBuf(void *dst, size_t dstLen, uint64_t svalue);
 
+/* The digits of 'value' (no terminator).  dstLen must be at least 40 for
+ * the unsigned form and 41 for the signed one, whatever the value. */
 size_t StrUInt128ToBuf(void *dst, size_t dstLen, __uint128_t value);
 size_t StrInt128ToBuf(void *dst, size_t dstLen, __int128_t svalue);
 

@@ -298,19 +298,21 @@ typedef struct databoxStr {
         .data.bytes.start = (b), .type = DATABOX_BYTES, .len = (l)             \
     }
 
+/* The DK_*_64 constants are IEEE bit patterns, so they go in through the
+ * u64 view of the value (an integer assigned to d64 would convert). */
 #define DATABOX_NAN                                                            \
     (databox) {                                                                \
-        .data.d64 = DK_NAN_64, .type = DATABOX_DOUBLE_64                       \
+        .data.u64 = DK_NAN_64, .type = DATABOX_DOUBLE_64                       \
     }
 
 #define DATABOX_INFINITY_POSITIVE                                              \
     (databox) {                                                                \
-        .data.d64 = DK_INFINITY_POSITIVE_64, .type = DATABOX_DOUBLE_64         \
+        .data.u64 = DK_INFINITY_POSITIVE_64, .type = DATABOX_DOUBLE_64         \
     }
 
 #define DATABOX_INFINITY_NEGATIVE                                              \
     (databox) {                                                                \
-        .data.d64 = DK_INFINITY_NEGATIVE_64, .type = DATABOX_DOUBLE_64         \
+        .data.u64 = DK_INFINITY_NEGATIVE_64, .type = DATABOX_DOUBLE_64         \
     }
 
 #define DATABOX_DOUBLE(d)                                                      \
@@ -355,19 +357,19 @@ typedef struct databoxStr {
 /* Direct Assignment */
 #define DATABOX_SET_NAN(box)                                                   \
     do {                                                                       \
-        (box)->data.d64 = DK_NAN_64;                                           \
+        (box)->data.u64 = DK_NAN_64;                                           \
         (box)->type = DATABOX_DOUBLE_64;                                       \
     } while (0)
 
 #define DATABOX_SET_INFINITY_POSITIVE(box)                                     \
     do {                                                                       \
-        (box)->data.d64 = DK_INFINITY_POSITIVE_64;                             \
+        (box)->data.u64 = DK_INFINITY_POSITIVE_64;                             \
         (box)->type = DATABOX_DOUBLE_64;                                       \
     } while (0)
 
 #define DATABOX_SET_INFINITY_NEGATIVE(box)                                     \
     do {                                                                       \
-        (box)->data.d64 = DK_INFINITY_NEGATIVE_64;                             \
+        (box)->data.u64 = DK_INFINITY_NEGATIVE_64;                             \
         (box)->type = DATABOX_DOUBLE_64;                                       \
     } while (0)
 

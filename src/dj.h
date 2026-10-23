@@ -47,13 +47,34 @@ _Static_assert(sizeof(djState) == 64 - 8, "Did you grow or shrink djState?");
 _Static_assert(sizeof(djState) == 64, "Did you grow or shrink djState?");
 #endif
 
+/* A state starts zeroed; djInit or djInitWithBuffer then gives it its
+ * first buffer.  Finalize, FinalizeMulti and Free leave it zeroed again,
+ * so it can be initialised anew, and djFree on a zeroed state is a
+ * no-op. */
 void djInit(djState *state);
 void djInitWithBuffer(djState *state, mds *buf);
 mds *djConsumeBuffer(djState *state, bool reset);
+
+/* Move every buffer of 'src' to the end of 'dst' without copying; 'dst'
+ * keeps writing into the last of them.  'src' is left zeroed.  The
+ * output then spans several buffers: read it with djGetMulti or take it
+ * with djFinalizeMulti (djFinalize refuses a multi-buffer state). */
 void djAppend(djState *dst, djState *src);
+
+/* Free every buffer and the state's own allocations. */
 void djFree(djState *state);
+
+/* Return the single output buffer (trailing comma removed), which the
+ * caller frees with mdsfree. */
 mds *djFinalize(djState *state);
+
+/* A view of the output buffers in order, still owned by the state and
+ * valid until its next write, append or free. */
 mds **djGetMulti(djState *state, size_t *arrayCount);
+
+/* Take the output buffers in order (trailing comma removed).  The caller
+ * owns the array (zfree) and each buffer (mdsfree), even when there is
+ * only one. */
 mds **djFinalizeMulti(djState *state, size_t *arrayCount);
 
 /* Auto-detect whether closing list or map and do the right thing */
@@ -78,7 +99,13 @@ void djSetOpen(djState *state);
 void djSetCloseElement(djState *state);
 void djSetCloseFinal(djState *state);
 
-void djBox(djState *state, const databox *const box);
+/* Write a scalar box: integers and floats as numbers, bytes as escaped
+ * strings, true/false/null as themselves.  In key position everything is
+ * written as a string key (numbers and the three words quoted).  Returns
+ * false and writes nothing for a box with no JSON form: a non-finite
+ * float value, or VOID, ERROR, BYTES_VOID, BYTES_OFFSET, a container
+ * reference, a container or a structure marker. */
+bool djBox(djState *state, const databox *const box);
 
 #ifdef DATAKIT_TEST
 int djTest(int argc, char *argv[]);

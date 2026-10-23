@@ -553,8 +553,9 @@ StrScanFmt StrScanScan(const uint8_t *p, databox *box, StrScanOpt opt,
                        const bool allowFloatWords, const bool skipSpaces) {
     int32_t neg = 0;
 
-    /* Remove leading space, parse sign and non-numbers. */
-    if (allowFloatWords && !StrCharIsdigit(*p)) {
+    /* Remove leading space, parse sign and non-numbers.  Only the words
+     * depend on allowFloatWords; without it a word fails as a number. */
+    if (!StrCharIsdigit(*p)) {
         if (skipSpaces) {
             while (StrCharIsspace(*p)) {
                 p++;
@@ -565,7 +566,8 @@ StrScanFmt StrScanScan(const uint8_t *p, databox *box, StrScanOpt opt,
             neg = (*p++ == '-');
         }
 
-        if (unlikely(*p >= 'A')) { /* Parse "inf", "infinity" or "nan". */
+        /* Parse "inf", "infinity" or "nan". */
+        if (allowFloatWords && unlikely(*p >= 'A')) {
             databox tmp = DATABOX_NAN;
             if (casecmp(p[0], 'i') && casecmp(p[1], 'n') &&
                 casecmp(p[2], 'f')) {

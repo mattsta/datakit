@@ -726,15 +726,16 @@ DKS_TYPE *DKS_CATLEN_CHECK_COMMA(DKS_TYPE *s, const void *t, size_t len) {
     s = NULL;
 
     if (unlikely(!len)) {
-        return s;
+        return info.buf;
     }
 
     DKS_INFOEXPANDBY(&info, len);
 
     /* If buffer has a comma as the previous element,
      * just overwrite it since whatever we are writing from 't'
-     * doesn't want to have a comma before it. */
-    if (info.buf[info.len - 1] == ',') {
+     * doesn't want to have a comma before it.  An empty buffer has no
+     * previous element (the byte before it is header). */
+    if (info.len && info.buf[info.len - 1] == ',') {
         memmove(info.buf + info.len - 1, t, len);
         /* We extended the DKS by one less than requested,
          * so reflect in update length. */
@@ -2189,6 +2190,23 @@ int DKS_TEST(int argc, char *argv[]) {
 
     int __failed_tests = 0;
     int __testNum = 0;
+
+    {
+        /* The comma-aware append replaces a trailing comma, appends
+         * otherwise (an empty string included), and an empty append
+         * returns the string unchanged */
+        DKS_TYPE *c = DKS_EMPTY();
+        c = DKS_CATLEN_CHECK_COMMA(c, "]", 1);
+        testCond("check-comma append to empty", DKS_LEN(c) == 1 && c[0] == ']',
+                 true, "%d");
+        c = DKS_CATLEN(c, "1,", 2);
+        c = DKS_CATLEN_CHECK_COMMA(c, "}", 1);
+        DKS_TYPE *same = DKS_CATLEN_CHECK_COMMA(c, "", 0);
+        testCond("check-comma replaces the comma; empty append is a no-op",
+                 same == c && DKS_LEN(c) == 3 && memcmp(c, "]1}\0", 4) == 0,
+                 true, "%d");
+        DKS_FREE(c);
+    }
 
     {
         DKS_TYPE *x = DKS_NEWLEN("foobar", 6);

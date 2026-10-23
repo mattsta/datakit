@@ -1,4 +1,6 @@
 #include "dj.h"
+
+#include <math.h> /* isfinite */
 /* ====================================================================
  * datakit JSON
  * (SIMD escape scanning adapted from rapidjson MIT:
@@ -42,52 +44,47 @@
 #define BOOL_IDX_BITS_PER_SLOT (sizeof(DJ_BITMAP) * 8)
 static void boolIdxSet(djState *state, size_t offset, bool value) {
     static const size_t bytesPerEntry = sizeof(*state->boolIdx.v);
-    const size_t byte = offset / 8;
-    const size_t vOffset = byte / bytesPerEntry;
+    const size_t vOffset = offset / BOOL_IDX_BITS_PER_SLOT;
     const DJ_BITMAP mask = 1ULL << (offset % BOOL_IDX_BITS_PER_SLOT);
 
     DJ_BITMAP *useBitmap =
         state->boolIdx.vBigExtent ? state->boolIdx.vBig : state->boolIdx.v;
 
-    /* If offset is larger than our static array, check the allocated array. */
+    /* Extents count entries: the inline array, or vBig once allocated. */
     static const size_t totalBytesInDefaultV =
         bytesPerEntry * COUNT_ARRAY(state->boolIdx.v);
+    const size_t extent = state->boolIdx.vBigExtent
+                              ? state->boolIdx.vBigExtent
+                              : COUNT_ARRAY(state->boolIdx.v);
 
-    if (byte >= totalBytesInDefaultV) {
-        /* If offset is larger than our extended array, we either need to
-         * allocate the extended array or grow the extended array. */
-        if (byte >= state->boolIdx.vBigExtent) {
-            /* new entry is beyond current vBig extent, so EITHER:
-             *   - first grow: copy v[2] to new vBig and extend
-             *   - OR -
-             *   - extend already-created vBig */
-            if (!state->boolIdx.vBigExtent) {
-                state->boolIdx.vBigExtent = vOffset * 2;
+    if (vOffset >= extent) {
+        /* The entry is past the current extent, so EITHER:
+         *   - first grow: copy v[2] to a new vBig and extend
+         *   - OR -
+         *   - extend the existing vBig */
+        if (!state->boolIdx.vBigExtent) {
+            state->boolIdx.vBigExtent = vOffset * 2;
 
-                /* Allocate the new vBig externally because it is in union with
-                 * 'v', so we can't assign to .vBig AND copy .v into .vBig at
-                 * the same time. */
-                /* @own: container; free=zfree */
-                DJ_BITMAP *vBig =
-                    zcalloc(state->boolIdx.vBigExtent, bytesPerEntry);
-                memcpy(vBig, state->boolIdx.v, totalBytesInDefaultV);
+            /* Allocate the new vBig externally because it is in union with
+             * 'v', so we can't assign to .vBig AND copy .v into .vBig at
+             * the same time. */
+            /* @own: container; free=zfree */
+            DJ_BITMAP *vBig = zcalloc(state->boolIdx.vBigExtent, bytesPerEntry);
+            memcpy(vBig, state->boolIdx.v, totalBytesInDefaultV);
 
-                /* attach vBig where it belongs since v is copied into it now */
-                state->boolIdx.vBig = vBig;
-            } else {
-                /* else, we already have vBig and need to grow it */
-                state->boolIdx.vBigExtent = vOffset * 2;
-                /* @own: container; free=zfree */
-                state->boolIdx.vBig =
-                    zrealloc(state->boolIdx.vBig,
-                             state->boolIdx.vBigExtent * bytesPerEntry);
+            /* attach vBig where it belongs since v is copied into it now */
+            state->boolIdx.vBig = vBig;
+        } else {
+            state->boolIdx.vBigExtent = vOffset * 2;
+            /* @own: container; free=zfree */
+            state->boolIdx.vBig = zrealloc(
+                state->boolIdx.vBig, state->boolIdx.vBigExtent * bytesPerEntry);
 
-                /* We don't need to zero out the new memory because of how we
-                 * zero out each new value before setting it. */
-            }
-
-            useBitmap = state->boolIdx.vBig;
+            /* The new entries need no zeroing: every depth's bit is set
+             * when that depth is entered, before it is read. */
         }
+
+        useBitmap = state->boolIdx.vBig;
     }
 
     if (value) {
@@ -100,9 +97,7 @@ static void boolIdxSet(djState *state, size_t offset, bool value) {
 }
 
 DK_INLINE_ALWAYS bool boolIdxRead(djState *state, const size_t offset) {
-    static const size_t bytesPerEntry = sizeof(*state->boolIdx.v);
-    const size_t byte = offset / 8;
-    const size_t vOffset = byte / bytesPerEntry;
+    const size_t vOffset = offset / BOOL_IDX_BITS_PER_SLOT;
     const DJ_BITMAP mask = 1ULL << (offset % BOOL_IDX_BITS_PER_SLOT);
 
     const DJ_BITMAP *useBitmap =
@@ -211,8 +206,15 @@ void djInitWithBuffer(djState *state, mds *buf) {
     state->ssCount = 0;
 }
 
-/* This is a CONSUME operation on 'src' and renders 'src' unusable after
- * all contents of 'src' are put into 'dst'. */
+/* Free the depth bitmap if it outgrew the inline array. */
+static void djReleaseDepthBitmap(djState *state) {
+    if (state->boolIdx.vBigExtent) {
+        zfree(state->boolIdx.vBig);
+    }
+
+    memset(&state->boolIdx, 0, sizeof(state->boolIdx));
+}
+
 void djAppend(djState *dst, djState *src) {
     assert(dst);
     assert(src);
@@ -224,49 +226,47 @@ void djAppend(djState *dst, djState *src) {
         return;
     }
 
-    /* Gather all elements from 'src' */
+    /* Gather all elements from 'src'; its depth state is no longer needed */
     size_t srcStrCount = 0;
     mds **srcStr = djGetMulti(src, &srcStrCount);
+    djReleaseDepthBitmap(src);
 
-    /* Count new total */
-    const size_t newTotalCount = (dst->ssCount ?: 1) + srcStrCount;
-
-    /* If current capacity isn't big enough, grow it. */
     if (!dst->ss) {
-        dst->ssCapacity = newTotalCount * 4;
+        dst->ssCapacity = (1 + srcStrCount) * 4;
         /* @own: container; free=zfree */
         dst->ss = zcalloc(dst->ssCapacity, sizeof(*dst->ss));
         dst->ss[0] = dst->s;
         dst->ssCount = 1;
     } else {
+        /* Writes since the last append may have moved the tail buffer. */
+        dst->ss[dst->ssCount - 1] = dst->s;
         if (dst->ssCount + srcStrCount > dst->ssCapacity) {
-            dst->ssCapacity = newTotalCount * 2;
+            dst->ssCapacity = (dst->ssCount + srcStrCount) * 2;
             /* @own: container; free=zfree */
             dst->ss = zrealloc(dst->ss, sizeof(*dst->ss) * dst->ssCapacity);
         }
     }
 
-    /* Append returned 'src' strings to our 'dst'-ness */
     for (size_t i = 0; i < srcStrCount; i++) {
         dst->ss[dst->ssCount + i] = srcStr[i];
     }
 
     /* 's' is always the tail write buffer */
-    dst->s = dst->ss[newTotalCount - 1];
-    dst->ssCount = newTotalCount;
+    dst->ssCount += srcStrCount;
+    dst->s = dst->ss[dst->ssCount - 1];
 
-    /* If count == 1, then there IS NO ARRAY we just received
-     * a pointer to the 's' inside 'src'. */
-    /* If count > 1, then 'srcStr' is an allocated array we need
-     * to vacate if we appended to a 'dst'-owned array. */
-    if (srcStrCount > 1) {
-        zfree(srcStr);
+    /* The buffers now belong to 'dst'; an array 'src' allocated is
+     * vacated. */
+    if (src->ss) {
+        zfree(src->ss);
     }
+
+    memset(src, 0, sizeof(*src));
 }
 
 DK_INLINE_ALWAYS void djTrailingCommaCleanup(djState *state) {
     const ssize_t last = mdslen(state->s) - 1;
-    if (last > 0 && state->s[last] == ',') {
+    if (last >= 0 && state->s[last] == ',') {
         mdsIncrLen(state->s, -1);
         state->s[last] = '\0';
     }
@@ -297,22 +297,29 @@ mds *djFinalize(djState *state) {
     assert(state->ssCount == 0 &&
            "Can't regular-finalize with multiple buffers!");
 
-    /* If we allocated a type-by-depth extent array, free it */
-    if (state->boolIdx.vBigExtent) {
-        zfree(state->boolIdx.vBig);
-    }
+    djReleaseDepthBitmap(state);
 
     /* 'false' because we don't want another mds after finalize */
     /* It's the caller's responsibility to free the resulting mds */
-    return djConsumeBuffer(state, false);
+    mds *out = djConsumeBuffer(state, false);
+    memset(state, 0, sizeof(*state));
+    return out;
 }
 
 void djFree(djState *state) {
-    if (state->boolIdx.vBigExtent) {
-        zfree(state->boolIdx.vBig);
+    djReleaseDepthBitmap(state);
+
+    /* The array's tail entry can lag 's', so 's' is freed in its place. */
+    if (state->ss) {
+        for (size_t i = 0; i + 1 < state->ssCount; i++) {
+            mdsfree(state->ss[i]);
+        }
+
+        zfree(state->ss);
     }
 
     mdsfree(state->s);
+    memset(state, 0, sizeof(*state));
 }
 
 mds **djGetMulti(djState *state, size_t *arrayCount) {
@@ -331,13 +338,22 @@ mds **djGetMulti(djState *state, size_t *arrayCount) {
 }
 
 mds **djFinalizeMulti(djState *state, size_t *arrayCount) {
-    /* If we allocated a type-by-depth extent array, free it */
-    if (state->boolIdx.vBigExtent) {
-        zfree(state->boolIdx.vBig);
+    djReleaseDepthBitmap(state);
+    djTrailingCommaCleanup(state);
+
+    mds **out = state->ss;
+    if (out) {
+        out[state->ssCount - 1] = state->s;
+        *arrayCount = state->ssCount;
+    } else {
+        /* @own: caller; free=zfree */
+        out = zmalloc(sizeof(*out));
+        out[0] = state->s;
+        *arrayCount = 1;
     }
 
-    djTrailingCommaCleanup(state);
-    return djGetMulti(state, arrayCount);
+    memset(state, 0, sizeof(*state));
+    return out;
 }
 
 /* ====================================================================
@@ -812,9 +828,10 @@ void djNumericDirect(djState *state, const void *data, size_t len) {
     logElement();
 }
 
-void djBox(djState *state, const databox *const box) {
-    uint8_t buf[40];
+bool djBox(djState *state, const databox *const box) {
+    uint8_t buf[48]; /* StrInt128ToBuf needs 41 */
     size_t len = 0;
+    const bool isKey = IS_KEY;
     switch (box->type) {
     case DATABOX_SIGNED_64:
         len = StrInt64ToBuf(&buf, sizeof(buf), box->data.i);
@@ -833,36 +850,49 @@ void djBox(djState *state, const databox *const box) {
         len = StrUInt128ToBuf(&buf, sizeof(buf), *box->data.u128);
         goto writeNumberBytesDirectly;
     case DATABOX_FLOAT_32:
-        len = StrDoubleFormatToBufNice(&buf, sizeof(buf), box->data.f32);
+    case DATABOX_DOUBLE_64: {
+        const double d = box->type == DATABOX_FLOAT_32 ? (double)box->data.f32
+                                                       : box->data.d64;
+        /* A key is quoted, so "nan" or "inf" is still a valid key; a
+         * value has no JSON form. */
+        if (!isfinite(d) && !isKey) {
+            return false;
+        }
+
+        len = StrDoubleFormatToBufNice(&buf, sizeof(buf), d);
         goto writeNumberBytesDirectly;
-    case DATABOX_DOUBLE_64:
-        len = StrDoubleFormatToBufNice(&buf, sizeof(buf), box->data.d64);
-        goto writeNumberBytesDirectly;
+    }
     case DATABOX_BYTES:
     case DATABOX_BYTES_EMBED:
+    case DATABOX_BYTES_NEVER_FREE:
     case DATABOX_PTR_MDSC:
         djString(state, databoxBytes(box), databoxLen(box), true);
-        break;
+        return true;
     case DATABOX_TRUE:
-        djTrue(state);
-        break;
     case DATABOX_FALSE:
-        djFalse(state);
-        break;
-    case DATABOX_NULL:
-        djNULL(state);
-        break;
-    default:
-        assert(NULL && "bad type for json implant?");
-        __builtin_unreachable();
-    }
+    case DATABOX_NULL: {
+        static const char *const words[] = {"true", "false", "null"};
+        const char *word = words[box->type - DATABOX_TRUE];
+        if (isKey) {
+            /* Keys are strings, as numeric keys are quoted */
+            djStringDirect(state, word, strlen(word));
+        } else if (box->type == DATABOX_TRUE) {
+            djTrue(state);
+        } else if (box->type == DATABOX_FALSE) {
+            djFalse(state);
+        } else {
+            djNULL(state);
+        }
 
-    /* Don't fall through to writeNumber */
-    return;
+        return true;
+    }
+    default:
+        return false;
+    }
 
 writeNumberBytesDirectly:
     djNumericDirect(state, buf, len);
-    return;
+    return true;
 }
 
 #ifdef DATAKIT_TEST
@@ -872,6 +902,30 @@ writeNumberBytesDirectly:
 /* Scope-exit cleaners (see cleaner.h idioms) */
 defcleanerName(uint8_t *, zfree, U8);
 defcleaner(mds *, mdsfree);
+
+/* Concatenate output buffers in order */
+static mds *djTestJoin(mds *const *parts, size_t count) {
+    /* @own: caller; free=mdsfree */
+    mds *joined = mdsempty();
+    for (size_t i = 0; i < count; i++) {
+        joined = mdscatlen(joined, parts[i], mdslen(parts[i]));
+    }
+
+    return joined;
+}
+
+static bool djTestIs(const mds *out, const char *want) {
+    return mdslen(out) == strlen(want) && memcmp(out, want, mdslen(out)) == 0;
+}
+
+/* Write the integers [from, to) as values */
+static void djTestNumbers(djState *state, int from, int to) {
+    for (int i = from; i < to; i++) {
+        char buf[16];
+        const int n = snprintf(buf, sizeof(buf), "%d", i);
+        djNumericDirect(state, buf, (size_t)n);
+    }
+}
 
 /* Helper to run djString and get output for testing */
 static mds *djTestEscapeString(const void *data, size_t len) {
@@ -919,6 +973,7 @@ static mds *djBuildExpectedEscape(const uint8_t *data, size_t len) {
 int djTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
+    int err = 0;
 
     TEST("true") {
         djState testA_ = {{0}};
@@ -1447,7 +1502,267 @@ int djTest(int argc, char *argv[]) {
         assert(passCount == testCount);
     }
 
-    return 0;
+    TEST("djBox: every scalar as a value; no JSON form writes nothing") {
+        djState st = {{0}};
+        djInit(&st);
+        djArrayOpen(&st);
+
+        __int128_t wide = -((__int128_t)1 << 100);
+        const databox wideBox = {
+            .type = DATABOX_SIGNED_128, .big = true, .data.i128 = &wide};
+        const databox written[] = {
+            databoxNewSigned(-5),
+            databoxNewUnsigned(7),
+            wideBox,
+            DATABOX_DOUBLE(1.5),
+            {.type = DATABOX_FLOAT_32, .data.f32 = 0.5f},
+            databoxNewBytesString("a\"b"),
+            databoxNewBytesAllowEmbed("hi", 2),
+            {.type = DATABOX_BYTES_NEVER_FREE,
+             .data.bytes.ccstart = "nf",
+             .len = 2},
+            DATABOX_BOX_TRUE,
+            DATABOX_BOX_FALSE,
+            DATABOX_BOX_NULL,
+        };
+        const databox refused[] = {
+            DATABOX_NAN,
+            DATABOX_INFINITY_POSITIVE,
+            {.type = DATABOX_FLOAT_32, .data.f32 = -INFINITY},
+            DATABOX_BOX_VOID,
+            {.type = DATABOX_ERROR},
+            {.type = DATABOX_BYTES_VOID, .len = 4},
+            {.type = DATABOX_BYTES_OFFSET, .data.bytes.offset = 3, .len = 2},
+            {.type = DATABOX_CONTAINER_REFERENCE_EXTERNAL, .data.u = 9},
+            {.type = DATABOX_CONTAINER_FLEX_MAP},
+            {.type = DATABOX_ARRAY_START},
+        };
+        for (size_t i = 0; i < COUNT_ARRAY(written); i++) {
+            if (!djBox(&st, &written[i])) {
+                ERR("scalar %zu was refused", i);
+            }
+
+            /* A refusal between writes leaves no trace in the output */
+            const databox *r = &refused[i % COUNT_ARRAY(refused)];
+            if (djBox(&st, r)) {
+                ERR("type %d was written", r->type);
+            }
+        }
+
+        djArrayCloseFinal(&st);
+        cleaner(mdsfree) mds *out = djFinalize(&st);
+        if (!djTestIs(out, "[-5,7,-1267650600228229401496703205376,1.5,0.5,"
+                           "\"a\\\"b\",\"hi\",\"nf\",true,false,null]")) {
+            ERR("scalars wrote %s", out);
+        }
+    }
+
+    TEST("djBox: keys are strings; a refused value keeps the pairing") {
+        djState st = {{0}};
+        djInit(&st);
+        djMapOpen(&st);
+        const databox x = databoxNewBytesString("x");
+        const databox steps[] = {
+            databoxNewSigned(3),
+            DATABOX_BOX_TRUE,
+            DATABOX_BOX_TRUE,
+            DATABOX_BOX_NULL,
+            DATABOX_NAN,
+            databoxNewUnsigned(1),
+            DATABOX_BOX_FALSE,
+            DATABOX_NAN, /* refused value */
+            x,
+        };
+        for (size_t i = 0; i < COUNT_ARRAY(steps); i++) {
+            const bool wrote = djBox(&st, &steps[i]);
+            if (wrote != (i != 7)) {
+                ERR("step %zu wrote %d", i, wrote);
+            }
+        }
+
+        djMapCloseFinal(&st);
+        cleaner(mdsfree) mds *out = djFinalize(&st);
+        if (!djTestIs(out, "{\"3\":true,\"true\":null,\"nan\":1,\"false\":"
+                           "\"x\"}")) {
+            ERR("keyed boxes wrote %s", out);
+        }
+    }
+
+    TEST("djNumericDirect and sets: bare values, quoted keys") {
+        djState st = {{0}};
+        djInit(&st);
+        djArrayOpen(&st);
+        djSetOpen(&st);
+        djNumericDirect(&st, "1", 1);
+        djNumericDirect(&st, "2", 1);
+        djSetCloseElement(&st);
+        djMapOpen(&st);
+        djNumericDirect(&st, "5", 1);
+        djNumericDirect(&st, "6", 1);
+        djMapCloseElement(&st);
+        djSetOpen(&st);
+        djSetCloseFinal(&st);
+        djArrayCloseFinal(&st);
+        cleaner(mdsfree) mds *out = djFinalize(&st);
+        if (!djTestIs(out, "[{1,2},{\"5\":6},{}]")) {
+            ERR("numeric and set output %s", out);
+        }
+
+        /* A lone separator is still a trailing comma */
+        djState lone = {{0}};
+        djInit(&lone);
+        djNumericDirect(&lone, "", 0);
+        cleaner(mdsfree) mds *empty = djFinalize(&lone);
+        if (!djTestIs(empty, "")) {
+            ERR("a lone separator finalized to '%s'", empty);
+        }
+    }
+
+    TEST("djAppend: buffers move in order; matches one buffer written "
+         "straight through") {
+        djState oracle = {{0}};
+        djInit(&oracle);
+        djTestNumbers(&oracle, 0, 740);
+
+        djState dst = {{0}};
+        djInit(&dst);
+        djTestNumbers(&dst, 0, 10);
+
+        djState src1 = {{0}};
+        djInit(&src1);
+        djTestNumbers(&src1, 10, 20);
+        djAppend(&dst, &src1);
+        if (src1.s || src1.ss) {
+            ERRR("the appended source was not left zeroed");
+        }
+
+        /* Enough to move the tail buffer before the next append */
+        djTestNumbers(&dst, 20, 700);
+
+        /* A source that itself spans two buffers */
+        djState src2 = {{0}};
+        djInit(&src2);
+        djTestNumbers(&src2, 700, 710);
+        djState src3 = {{0}};
+        djInit(&src3);
+        djTestNumbers(&src3, 710, 720);
+        djAppend(&src2, &src3);
+        djTestNumbers(&src2, 720, 730);
+        djAppend(&dst, &src2);
+
+        /* An empty source adds nothing */
+        djState src4 = {{0}};
+        djInit(&src4);
+        djAppend(&dst, &src4);
+
+        djTestNumbers(&dst, 730, 740);
+
+        size_t viewCount = 0;
+        mds **view = djGetMulti(&dst, &viewCount);
+        size_t oracleCount = 0;
+        mds **oracleView = djGetMulti(&oracle, &oracleCount);
+        cleaner(mdsfree) mds *joinedView = djTestJoin(view, viewCount);
+        cleaner(mdsfree) mds *oracleRaw = djTestJoin(oracleView, oracleCount);
+        if (viewCount != 4 || oracleCount != 1 ||
+            !djTestIs(joinedView, oracleRaw)) {
+            ERR("view has %zu buffers (want 4) and %s the oracle", viewCount,
+                djTestIs(joinedView, oracleRaw) ? "matches" : "differs from");
+        }
+
+        size_t count = 0;
+        mds **parts = djFinalizeMulti(&dst, &count);
+        cleaner(mdsfree) mds *joined = djTestJoin(parts, count);
+        cleaner(mdsfree) mds *want = djFinalize(&oracle);
+        if (count != 4 || !djTestIs(joined, want) || dst.s || dst.ss) {
+            ERR("finalized %zu buffers; output %s", count,
+                djTestIs(joined, want) ? "matches" : "differs");
+        }
+
+        for (size_t i = 0; i < count; i++) {
+            mdsfree(parts[i]);
+        }
+
+        zfree(parts);
+        djFree(&dst); /* zeroed by the finalize: a no-op */
+
+        /* One buffer still comes back as an owned array */
+        djState one = {{0}};
+        djInit(&one);
+        djTestNumbers(&one, 4, 5);
+        mds **single = djFinalizeMulti(&one, &count);
+        if (count != 1 || !djTestIs(single[0], "4")) {
+            ERR("single-buffer finalize gave %zu buffers", count);
+        }
+
+        mdsfree(single[0]);
+        zfree(single);
+    }
+
+    TEST("djFree: frees every appended buffer and leaves a zeroed state") {
+        djState dst = {{0}};
+        djInit(&dst);
+        djTestNumbers(&dst, 0, 5);
+        for (int i = 0; i < 6; i++) {
+            djState src = {{0}};
+            djInit(&src);
+            djTestNumbers(&src, i * 100, i * 100 + 50);
+            djAppend(&dst, &src);
+            djTestNumbers(&dst, 0, 200);
+        }
+
+        djFree(&dst);
+        djFree(&dst);
+        if (dst.s || dst.ss || dst.ssCount) {
+            ERRR("djFree did not leave the state zeroed");
+        }
+    }
+
+    TEST("deep nesting: types tracked past the inline bitmap") {
+        /* Alternate map and array levels with one entry each, close every
+         * inner level through the type-detecting close, and compare with
+         * the text the levels imply. */
+        const size_t depth = 300; /* even: the innermost level is an array */
+        djState st = {{0}};
+        djInit(&st);
+        cleaner(mdsfree) mds *want = mdsempty();
+        for (size_t i = 0; i < depth; i++) {
+            if (i % 2 == 0) {
+                djMapOpen(&st);
+                djStringDirect(&st, "k", 1);
+                want = mdscatlen(want, "{\"k\":", 5);
+            } else {
+                djArrayOpen(&st);
+                want = mdscatlen(want, "[", 1);
+            }
+        }
+
+        djNumericDirect(&st, "1", 1);
+        want = mdscatlen(want, "1", 1);
+        for (size_t i = depth; i-- > 1;) {
+            djCloseElement(&st);
+            want = mdscatlen(want, i % 2 == 0 ? "}" : "]", 1);
+        }
+
+        djMapCloseFinal(&st);
+        want = mdscatlen(want, "}", 1);
+        cleaner(mdsfree) mds *out = djFinalize(&st);
+        if (!djTestIs(out, want)) {
+            ERRR("deep nesting closed the wrong container types");
+        }
+
+        djFree(&st); /* the finalize released the bitmap: a no-op */
+
+        /* An unfinished deep state frees its bitmap too */
+        djState open = {{0}};
+        djInit(&open);
+        for (size_t i = 0; i < depth; i++) {
+            djArrayOpen(&open);
+        }
+
+        djFree(&open);
+    }
+
+    TEST_FINAL_RESULT;
 }
 
 #endif

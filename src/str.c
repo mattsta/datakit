@@ -949,11 +949,13 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
              UINT64_MAX},
         };
 
-        for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
+        /* The sign is parsed with or without the float words */
+        for (size_t c = 0; c < 2 * sizeof(cases) / sizeof(*cases); c++) {
+            const size_t i = c / 2;
+            const bool words = c % 2;
             databox box = {{0}};
-            /* The sign is only parsed with allowFloatWords set */
-            const StrScanFmt fmt = StrScanScan((const uint8_t *)cases[i].s,
-                                               &box, cases[i].opt, true, false);
+            const StrScanFmt fmt = StrScanScan(
+                (const uint8_t *)cases[i].s, &box, cases[i].opt, words, false);
             if (fmt != cases[i].fmt) {
                 ERR("StrScanScan(%s) format %d, want %d", cases[i].s, fmt,
                     cases[i].fmt);
@@ -2178,6 +2180,36 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
             !StrScanToDouble("inf", &box, true, false) ||
             !isinf(box.data.d64)) {
             ERRR("StrScanToDouble disagrees with the scanner rules");
+        }
+
+        /* "nan" and decimal overflow are real NaN and infinities */
+        if (!StrScanToDouble("nan", &box, true, false) ||
+            box.type != DATABOX_DOUBLE_64 || !isnan(box.data.d64) ||
+            !StrScanToDouble("1e400", &box, false, false) ||
+            box.data.d64 != INFINITY ||
+            !StrScanToDouble("-1e400", &box, false, false) ||
+            box.data.d64 != -INFINITY) {
+            ERR("nan / overflow scanned to %g", box.data.d64);
+        }
+
+        /* Sign and spaces do not depend on the float words */
+        if (!StrScanToDouble("-1.5", &box, false, false) ||
+            box.data.d64 != -1.5 ||
+            !StrScanToDouble("  2.5 ", &box, false, true) ||
+            box.data.d64 != 2.5 ||
+            StrScanToDouble(" 2.5", &box, false, false) ||
+            StrScanToDouble("-nan", &box, false, true)) {
+            ERRR("sign/space scanning depends on the float words");
+        }
+
+        databox setBox = {{0}};
+        DATABOX_SET_NAN(&setBox);
+        const databox nanBox = DATABOX_NAN;
+        const databox posBox = DATABOX_INFINITY_POSITIVE;
+        const databox negBox = DATABOX_INFINITY_NEGATIVE;
+        if (!isnan(setBox.data.d64) || !isnan(nanBox.data.d64) ||
+            posBox.data.d64 != INFINITY || negBox.data.d64 != -INFINITY) {
+            ERRR("the NaN/infinity box constants are not NaN/infinity");
         }
 
         /* The PreVerified 128-bit scan matches the checking one on

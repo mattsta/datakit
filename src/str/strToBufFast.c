@@ -545,7 +545,9 @@ size_t StrUInt128ToBuf(void *buf_, size_t bufLen, __uint128_t n) {
 size_t StrInt128ToBuf(void *buf_, size_t bufLen, __int128_t n) {
     uint8_t *buf = (uint8_t *)buf_;
 
-    assert(bufLen > 0);
+    /* The sign plus the unsigned form's 40, for every value, so a short
+     * buffer fails on its first use rather than on its first negative */
+    assert(bufLen >= 41);
 
     if (n < 0) {
         buf[0] = '-';
