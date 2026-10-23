@@ -563,12 +563,13 @@ void flexReplaceBytes(flex **ff, flexEntry *fe, const void *s,
 bool flexReplaceSigned(flex **ff, flexEntry *fe, int64_t value);
 bool flexReplaceUnsigned(flex **ff, flexEntry *fe, uint64_t value);
 /* Add 'incrby' to the integer at 'fe' (the platform increment policy, see
- * DATABOX.md "Numeric updates"): the sum is exact, and a result outside the
- * entry's range (int64 for Signed, uint64 for Unsigned) is refused, returning
- * false with the value unchanged; there is no wrap and no saturation.
- * Incrementing by zero returns true with the value unchanged.  On success
- * '*newval' (if non-NULL) receives the new value.  Also returns false for an
- * entry that is not a 64-bit integer. */
+ * DATABOX.md "Numeric updates"): the sum of the stored value (whichever sign
+ * it was stored with) and 'incrby' is exact, and a result outside the call's
+ * range (int64 for Signed, uint64 for Unsigned) is refused, returning false
+ * with the value unchanged; there is no wrap and no saturation.  So
+ * incrementing by zero returns true with the value unchanged when the value
+ * is in that range.  On success '*newval' (if non-NULL) receives the new
+ * value.  Also returns false for an entry that is not a 64-bit integer. */
 bool flexIncrbySigned(flex **ff, flexEntry *fe, int64_t incrby,
                       int64_t *newval);
 bool flexIncrbyUnsigned(flex **ff, flexEntry *fe, int64_t incrby,

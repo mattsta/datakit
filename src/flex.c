@@ -1620,6 +1620,16 @@ DK_STATIC int64_t flexLoadSigned(const flexEntryData *entry) {
     return box.data.i64;
 }
 
+/* The exact value of a narrow integer entry, whichever sign it is stored
+ * with (flexLoadSigned and flexLoadUnsigned reinterpret the other one) */
+DK_STATIC __int128_t flexLoadIntegerExact_(const flexEntryData *entry) {
+    assert(!flexEntryIsIntegerWide_(entry->fe));
+    databox box;
+    flexLoadFixedLength_(entry, &box, NULL, FLEX_WIDE_STORE_SLOT_);
+    return box.type == DATABOX_UNSIGNED_64 ? (__int128_t)box.data.u64
+                                           : (__int128_t)box.data.i64;
+}
+
 /* The wide loaders take wide entries only: the value lands in 'wide'. */
 DK_STATIC __int128_t flexLoadSignedBig(const flexEntryData *entry) {
     databox box;
@@ -3017,25 +3027,24 @@ bool flexIncrbySigned(flex **const ff, flexEntry *const fe,
         return false;
     }
 
-    /* Get current value */
-    const int64_t value = flexLoadSigned(&entry);
-
-    /* Incrementing by zero succeeds and changes nothing. */
-    if (incrby == 0) {
-        if (newval) {
-            *newval = value;
-        }
-
-        return true;
-    }
-
-    /* Refuse a result outside int64: no wrap, no saturation. */
-    int64_t incremented;
-    if (__builtin_add_overflow(value, incrby, &incremented)) {
+    /* The exact sum (a value stored unsigned above INT64_MAX included);
+     * refuse one outside int64: no wrap, no saturation.  Incrementing by
+     * zero then succeeds and changes nothing. */
+    const __int128_t value = FLEX_IS_BOOL(entry.encoding)
+                                 ? flexLoadSigned(&entry)
+                                 : flexLoadIntegerExact_(&entry);
+    const __int128_t sum = value + incrby;
+    if (sum < INT64_MIN || sum > INT64_MAX) {
         return false;
     }
+
+    int64_t incremented = (int64_t)sum;
     if (newval) {
         *newval = incremented;
+    }
+
+    if (incrby == 0) {
+        return true;
     }
 
     if (FLEX_IS_INTEGER(entry.encoding)) {
@@ -3073,38 +3082,21 @@ bool flexIncrbyUnsigned(flex **const ff, flexEntry *const fe,
         return false;
     }
 
-    /* Get current value */
-    uint64_t value = flexLoadUnsigned(&entry);
-
-    /* Incrementing by zero succeeds and changes nothing. */
-    if (incrby == 0) {
-        if (newval) {
-            *newval = value;
-        }
-
-        return true;
+    /* The exact sum (a value stored negative included); refuse one
+     * outside uint64: no wrap, no saturation.  Incrementing by zero then
+     * succeeds and changes nothing. */
+    const __int128_t sum = flexLoadIntegerExact_(&entry) + incrby;
+    if (sum < 0 || sum > (__int128_t)UINT64_MAX) {
+        return false;
     }
 
-    /* Reject wrap: incrby is signed while value and the result are
-     * unsigned, so a negative delta larger than value would wrap to a
-     * huge number and a positive delta past UINT64_MAX to a tiny one. */
-    if (incrby > 0) {
-        if ((uint64_t)incrby > UINT64_MAX - value) {
-            return false;
-        }
-    } else {
-        const uint64_t magnitude = (incrby == INT64_MIN)
-                                       ? ((uint64_t)INT64_MAX + 1)
-                                       : (uint64_t)(-incrby);
-        if (magnitude > value) {
-            return false;
-        }
-    }
-
-    const uint64_t incremented = value + (uint64_t)incrby;
-
+    const uint64_t incremented = (uint64_t)sum;
     if (newval) {
         *newval = incremented;
+    }
+
+    if (incrby == 0) {
+        return true;
     }
 
     return flexReplaceUnsigned(ff, fe, incremented);
@@ -9047,6 +9039,98 @@ static int32_t flexTestReplaceSign(void) {
             flexIncrbyUnsigned(&f, flexNext(f, flexHead(f)), -6, NULL) ||
             !flexTestReplaceReadsBack(f, flexTestWideU(5))) {
             printf("  FAIL: unsigned increment by zero or below zero\n");
+            bad++;
+        }
+    }
+
+    /* Both increments against the exact sum, stored values of either sign
+     * and every width: Signed accepts a sum in int64, Unsigned one in
+     * uint64, whatever type the value was stored as; a refusal leaves it
+     * as it was */
+    {
+        static const __int128_t stored[] = {
+            0,
+            1,
+            -1,
+            127,
+            -128,
+            255,
+            32767,
+            -32768,
+            65535,
+            INT32_MAX,
+            INT32_MIN,
+            1LL << 32,
+            -(1LL << 40),
+            INT64_MAX,
+            INT64_MIN,
+            (__int128_t)INT64_MAX + 6,
+            (__int128_t)UINT64_MAX - 1,
+            (__int128_t)UINT64_MAX,
+        };
+        static const int64_t deltas[] = {
+            0,         1,         -1,           2,  -2,  1000, -1000, INT64_MAX,
+            INT64_MIN, 1LL << 32, -(1LL << 32), -6, -10,
+        };
+        for (size_t s = 0; s < sizeof(stored) / sizeof(*stored); s++) {
+            for (size_t d = 0; d < sizeof(deltas) / sizeof(*deltas); d++) {
+                const __int128_t sum = stored[s] + deltas[d];
+                for (int sgn = 0; sgn < 2; sgn++) {
+                    cleaner(flexFree) flex *f = flexNew();
+                    flexPushBytes(&f, "a", 1, FLEX_ENDPOINT_TAIL);
+                    if (stored[s] < 0) {
+                        flexPushSigned(&f, (int64_t)stored[s],
+                                       FLEX_ENDPOINT_TAIL);
+                    } else {
+                        flexPushUnsigned(&f, (uint64_t)stored[s],
+                                         FLEX_ENDPOINT_TAIL);
+                    }
+                    flexPushBytes(&f, "b", 1, FLEX_ENDPOINT_TAIL);
+                    flexEntry *fe = flexNext(f, flexHead(f));
+                    bool ok;
+                    bool fits;
+                    __int128_t got = 0;
+                    if (sgn) {
+                        int64_t v = 0;
+                        ok = flexIncrbySigned(&f, fe, deltas[d], &v);
+                        fits = sum >= INT64_MIN && sum <= INT64_MAX;
+                        got = v;
+                    } else {
+                        uint64_t v = 0;
+                        ok = flexIncrbyUnsigned(&f, fe, deltas[d], &v);
+                        fits = sum >= 0 && sum <= (__int128_t)UINT64_MAX;
+                        got = v;
+                    }
+                    const __int128_t now = ok ? sum : stored[s];
+                    if (ok != fits || (ok && got != sum) ||
+                        !flexTestReplaceReadsBack(
+                            f, now < 0 ? flexTestWideS(now)
+                                       : flexTestWideU((__uint128_t)now))) {
+                        printf(
+                            "  FAIL: %s increment of %s%" PRIu64 " by %" PRId64
+                            ": %s\n",
+                            sgn ? "signed" : "unsigned",
+                            stored[s] < 0 ? "-" : "",
+                            (uint64_t)(stored[s] < 0 ? -stored[s] : stored[s]),
+                            deltas[d],
+                            ok == fits ? "wrong value" : "wrong verdict");
+                        bad++;
+                    }
+                }
+            }
+        }
+
+        /* A boolean increments as 0/1 through Signed only */
+        cleaner(flexFree) flex *f = flexNew();
+        flexPushBytes(&f, "a", 1, FLEX_ENDPOINT_TAIL);
+        const databox t = DATABOX_BOX_TRUE;
+        flexPushByType(&f, &t, FLEX_ENDPOINT_TAIL);
+        flexPushBytes(&f, "b", 1, FLEX_ENDPOINT_TAIL);
+        int64_t v = 0;
+        if (flexIncrbyUnsigned(&f, flexNext(f, flexHead(f)), 1, NULL) ||
+            !flexIncrbySigned(&f, flexNext(f, flexHead(f)), -3, &v) ||
+            v != -2 || !flexTestReplaceReadsBack(f, flexTestWideS(-2))) {
+            printf("  FAIL: boolean increment\n");
             bad++;
         }
     }
