@@ -115,6 +115,46 @@ static void removeFromMap(multiOrderedSetMedium *m, int mapIdx,
     SET_MIDDLE_FORCE(m, mapIdx);
 }
 
+/* Whether the row at 'entry' in map 'mapIdx' may take 'score' and stay in
+ * that map: every map[1] score stays above map[0]'s highest */
+static bool scoreKeepsMap(const multiOrderedSetMedium *m, int mapIdx,
+                          flexEntry *entry, const databox *score) {
+    if (mapIdx == 1) {
+        return getMapIndexForScore(m, score) == 1;
+    }
+
+    /* In map[0] only the last row can reach map[1]'s lowest score (the
+     * in-map order check bounds every other row by the row after it) */
+    if (flexNext(m->map[0], flexNext(m->map[0], entry)) ||
+        mapCount(m->map[1]) == 0) {
+        return true;
+    }
+
+    databox lowest1;
+    databoxWide lowest1Wide;
+    flexGetByTypeInto(flexHead(m->map[1]), &lowest1, &lowest1Wide);
+    return databoxCompare(score, &lowest1) < 0;
+}
+
+/* Gives the found row at 'entry' in map 'mapIdx' the score 'score':
+ * rewritten in place when the row keeps its place and its map, else
+ * removed and reinserted where the score routes it */
+static void setRowScore(multiOrderedSetMedium *m, int mapIdx, flexEntry *entry,
+                        const databox *score, const databox *member) {
+    const size_t bytes = flexBytes(m->map[mapIdx]);
+    if (scoreKeepsMap(m, mapIdx, entry, score) &&
+        mosRewriteScoreInPlace(&m->map[mapIdx], entry, score, member)) {
+        if (flexBytes(m->map[mapIdx]) != bytes) {
+            SET_MIDDLE_FORCE(m, mapIdx);
+        }
+
+        return;
+    }
+
+    removeFromMap(m, mapIdx, entry);
+    insertIntoMap(m, getMapIndexForScore(m, score), score, member);
+}
+
 /* ====================================================================
  * Creation / Destruction
  * ==================================================================== */
@@ -247,15 +287,14 @@ bool multiOrderedSetMediumAdd(multiOrderedSetMedium *m, const databox *score,
     flexEntry *existing = findMemberAnyMap(m, member, &existingMap);
 
     if (existing) {
-        /* Remove from old position */
-        removeFromMap(m, existingMap, existing);
+        setRowScore(m, existingMap, existing, score, member);
+        return true;
     }
 
     /* Insert into appropriate map based on score */
     int targetMap = getMapIndexForScore(m, score);
     insertIntoMap(m, targetMap, score, member);
-
-    return (existing != NULL);
+    return false;
 }
 
 bool multiOrderedSetMediumAddNX(multiOrderedSetMedium *m, const databox *score,
@@ -279,9 +318,7 @@ bool multiOrderedSetMediumAddXX(multiOrderedSetMedium *m, const databox *score,
         return false;
     }
 
-    removeFromMap(m, existingMap, existing);
-    int targetMap = getMapIndexForScore(m, score);
-    insertIntoMap(m, targetMap, score, member);
+    setRowScore(m, existingMap, existing, score, member);
     return true;
 }
 
@@ -294,13 +331,13 @@ bool multiOrderedSetMediumAddGetPrevious(multiOrderedSetMedium *m,
 
     if (existing) {
         mosReadOwned(existing, prevScore);
-        removeFromMap(m, existingMap, existing);
+        setRowScore(m, existingMap, existing, score, member);
+        return true;
     }
 
     int targetMap = getMapIndexForScore(m, score);
     insertIntoMap(m, targetMap, score, member);
-
-    return (existing != NULL);
+    return false;
 }
 
 bool multiOrderedSetMediumIncrBy(multiOrderedSetMedium *m, const databox *delta,
@@ -317,9 +354,7 @@ bool multiOrderedSetMediumIncrBy(multiOrderedSetMedium *m, const databox *delta,
             return false;
         }
 
-        removeFromMap(m, existingMap, existing);
-        int targetMap = getMapIndexForScore(m, result);
-        insertIntoMap(m, targetMap, result, member);
+        setRowScore(m, existingMap, existing, result, member);
         return true;
     }
 

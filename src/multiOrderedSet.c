@@ -1422,6 +1422,7 @@ static int mosWideScenario_(size_t n, multiOrderedSetType tier) {
 
 defcleanerName(databox *, zfree, Boxes);
 defcleanerName(uint8_t *, zfree, Seen);
+defcleanerName(uint32_t *, zfree, U32);
 
 /* Pair 'i' of the RandomMembers sets: member "rm-NNNNNN", score 3 * i */
 static void mosRandomPair_(size_t i, char *buf, size_t bufLen, databox *member,
@@ -1515,6 +1516,147 @@ static int mosRandomMembersCheck_(const multiOrderedSet *mos, size_t total) {
                 }
                 seen[at] = 1;
             }
+        }
+    }
+
+    return err;
+}
+
+/* Score updates against an oracle: members "u0000".."u<n-1>", scores
+ * drawn so that many tie, then Add / AddXX / AddGetPrevious / IncrBy with
+ * near moves (the row usually keeps its place) and far ones.  After every
+ * update the set iterates in (score, member) order exactly as the oracle
+ * sorts, and the tier never changes. */
+static int64_t *mosUpdateOracleScores_;
+
+static int mosUpdateOracleCompare_(const void *a, const void *b) {
+    const uint32_t ia = *(const uint32_t *)a;
+    const uint32_t ib = *(const uint32_t *)b;
+    const int64_t sa = mosUpdateOracleScores_[ia];
+    const int64_t sb = mosUpdateOracleScores_[ib];
+    if (sa != sb) {
+        return sa < sb ? -1 : 1;
+    }
+
+    /* Fixed-width names sort as their indexes */
+    return ia < ib ? -1 : (ia > ib);
+}
+
+static int mosUpdateOracleCheck_(const multiOrderedSet *mos, uint32_t n,
+                                 uint32_t *order, uint32_t step) {
+    int err = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        order[i] = i;
+    }
+    qsort(order, n, sizeof(*order), mosUpdateOracleCompare_);
+
+    mosIterator iter;
+    multiOrderedSetIteratorInit(mos, &iter, true);
+    databox member;
+    databox score;
+    uint32_t at = 0;
+    while (multiOrderedSetIteratorNext(&iter, &member, &score)) {
+        char want[16];
+        snprintf(want, sizeof(want), "u%04" PRIu32, at < n ? order[at] : 0);
+        if (at >= n || databoxLen(&member) != strlen(want) ||
+            memcmp(databoxCBytes(&member), want, strlen(want)) != 0 ||
+            score.data.i != mosUpdateOracleScores_[order[at]]) {
+            ERR("update oracle: step %" PRIu32 " row %" PRIu32
+                " is not %s with score %" PRId64,
+                step, at, want, at < n ? mosUpdateOracleScores_[order[at]] : 0);
+            break;
+        }
+        at++;
+    }
+    multiOrderedSetIteratorRelease(&iter);
+
+    if (at != n) {
+        ERR("update oracle: step %" PRIu32 " iterated %" PRIu32
+            " rows, expected %" PRIu32,
+            step, at, n);
+    }
+
+    return err;
+}
+
+static int mosUpdateOracle_(uint32_t n, multiOrderedSetType tier) {
+    int err = 0;
+    cleanerName(zfree, Int64) int64_t *scores = zcalloc(n, sizeof(*scores));
+    cleanerName(zfree, U32) uint32_t *order = zcalloc(n, sizeof(*order));
+    mosUpdateOracleScores_ = scores;
+    cleaner(multiOrderedSetFree) multiOrderedSet *mos = multiOrderedSetNew();
+    uint64_t rng = 0x5DEECE66DULL + n;
+    const int64_t span = (int64_t)n * 2; /* about two members per score */
+
+    for (uint32_t i = 0; i < n; i++) {
+        char name[16];
+        snprintf(name, sizeof(name), "u%04" PRIu32, i);
+        scores[i] = (int64_t)(xorshift64star(&rng) % (uint64_t)span);
+        const databox s = databoxNewSigned(scores[i]);
+        const databox m = databoxNewBytesString(name);
+        multiOrderedSetAdd(&mos, &s, &m);
+    }
+
+    if (mosType_(mos) != tier) {
+        ERR("update oracle: %" PRIu32 " members built tier %d, expected %d", n,
+            mosType_(mos), tier);
+        return err;
+    }
+
+    for (uint32_t step = 0; step < 600 && !err; step++) {
+        const uint32_t i = (uint32_t)(xorshift64star(&rng) % n);
+        char name[16];
+        snprintf(name, sizeof(name), "u%04" PRIu32, i);
+        const databox m = databoxNewBytesString(name);
+        const uint64_t r = xorshift64star(&rng);
+        /* Near moves mostly keep the row's place; far ones move it */
+        const int64_t move = (r & 1) ? (int64_t)(r >> 8) % 3 - 1
+                                     : (int64_t)(r >> 8) % span - span / 2;
+        const int64_t next = scores[i] + move;
+        switch ((r >> 4) % 4) {
+        case 0: {
+            const databox s = databoxNewSigned(next);
+            if (!multiOrderedSetAdd(&mos, &s, &m)) {
+                ERR("update oracle: Add of present %s reported new", name);
+            }
+            break;
+        }
+        case 1: {
+            const databox s = databoxNewSigned(next);
+            if (!multiOrderedSetAddXX(&mos, &s, &m)) {
+                ERR("update oracle: AddXX of present %s refused", name);
+            }
+            break;
+        }
+        case 2: {
+            const databox s = databoxNewSigned(next);
+            databox prev = {{0}};
+            if (!multiOrderedSetAddGetPrevious(&mos, &s, &m, &prev) ||
+                prev.data.i != scores[i]) {
+                ERR("update oracle: AddGetPrevious of %s gave %" PRId64
+                    ", expected %" PRId64,
+                    name, (int64_t)prev.data.i, scores[i]);
+            }
+            break;
+        }
+        default: {
+            const databox delta = databoxNewSigned(move);
+            databox result = {{0}};
+            if (!multiOrderedSetIncrBy(&mos, &delta, &m, &result) ||
+                result.data.i != next) {
+                ERR("update oracle: IncrBy of %s gave %" PRId64
+                    ", expected %" PRId64,
+                    name, (int64_t)result.data.i, next);
+            }
+            break;
+        }
+        }
+
+        scores[i] = next;
+        err += mosUpdateOracleCheck_(mos, n, order, step);
+        if (mosType_(mos) != tier) {
+            ERR("update oracle: step %" PRIu32 " moved to tier %d", step,
+                mosType_(mos));
         }
     }
 
@@ -1676,6 +1818,12 @@ int multiOrderedSetTest(int argc, char *argv[]) {
             count++;
         }
         assert(count == 5);
+    }
+
+    TEST("multiOrderedSet: score updates keep oracle order in every tier") {
+        err += mosUpdateOracle_(60, MOS_TYPE_SMALL);
+        err += mosUpdateOracle_(400, MOS_TYPE_MEDIUM);
+        err += mosUpdateOracle_(1200, MOS_TYPE_FULL);
     }
 
     TEST("multiOrderedSet: tier promotion") {

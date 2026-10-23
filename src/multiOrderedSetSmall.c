@@ -66,6 +66,23 @@ static void mosRemoveEntry(multiOrderedSetSmall *m, flexEntry *entry) {
     SET_MIDDLE_FORCE(m);
 }
 
+/* Gives the found row at 'entry' the score 'score': rewritten in place
+ * when the row keeps its place, else removed and reinserted */
+static void mosSetRowScore(multiOrderedSetSmall *m, flexEntry *entry,
+                           const databox *score, const databox *member) {
+    const size_t bytes = flexBytes(m->map);
+    if (mosRewriteScoreInPlace(&m->map, entry, score, member)) {
+        if (flexBytes(m->map) != bytes) {
+            SET_MIDDLE_FORCE(m);
+        }
+
+        return;
+    }
+
+    mosRemoveEntry(m, entry);
+    mosInsertSorted(m, score, member);
+}
+
 /* ====================================================================
  * Creation / Destruction
  * ==================================================================== */
@@ -126,9 +143,7 @@ bool multiOrderedSetSmallAdd(multiOrderedSetSmall *m, const databox *score,
     flexEntry *existing = mosFindMemberLinear(m->map, member);
 
     if (existing) {
-        /* Member exists: remove old entry and insert with new score */
-        mosRemoveEntry(m, existing);
-        mosInsertSorted(m, score, member);
+        mosSetRowScore(m, existing, score, member);
         return true; /* Replaced */
     }
 
@@ -157,8 +172,7 @@ bool multiOrderedSetSmallAddXX(multiOrderedSetSmall *m, const databox *score,
         return false; /* Doesn't exist, not updated */
     }
 
-    mosRemoveEntry(m, existing);
-    mosInsertSorted(m, score, member);
+    mosSetRowScore(m, existing, score, member);
     return true; /* Updated */
 }
 
@@ -171,8 +185,7 @@ bool multiOrderedSetSmallAddGetPrevious(multiOrderedSetSmall *m,
     if (existing) {
         /* Get the previous score before removing */
         mosReadOwned(existing, prevScore);
-        mosRemoveEntry(m, existing);
-        mosInsertSorted(m, score, member);
+        mosSetRowScore(m, existing, score, member);
         return true; /* Existed, prevScore filled */
     }
 
@@ -195,9 +208,7 @@ bool multiOrderedSetSmallIncrBy(multiOrderedSetSmall *m, const databox *delta,
             return false; /* Type mismatch or overflow */
         }
 
-        /* Remove old, insert with new score */
-        mosRemoveEntry(m, existing);
-        mosInsertSorted(m, result, member);
+        mosSetRowScore(m, existing, result, member);
         return true;
     }
 

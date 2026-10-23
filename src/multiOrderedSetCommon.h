@@ -266,6 +266,55 @@ DK_INLINE_ALWAYS flexEntry *mosFindMemberLinear(const flex *f,
     return NULL;
 }
 
+/* Whether row (aScore, aMember) sorts before row (bScore, bMember): rows
+ * order by score, then member */
+DK_INLINE_ALWAYS bool mosRowBefore(const databox *aScore,
+                                   const databox *aMember,
+                                   const databox *bScore,
+                                   const databox *bMember) {
+    const int compared = databoxCompare(aScore, bScore);
+    return compared < 0 ||
+           (compared == 0 && databoxCompare(aMember, bMember) < 0);
+}
+
+/* Rewrites the score of the row whose score entry is 'entry' (in '*f') to
+ * 'score' in place, when the row keeps its place: still after the row
+ * before it and before the row after it.  Returns false, changing
+ * nothing, when the row would move (the caller removes and reinserts it).
+ * The update that found the row reuses its position instead of a delete
+ * and a sorted insert.  The flex may be reallocated and resized: a caller
+ * keeping a middle offset refreshes it when flexBytes changed. */
+DK_INLINE_ALWAYS bool mosRewriteScoreInPlace(flex **f, flexEntry *entry,
+                                             const databox *score,
+                                             const databox *member) {
+    databox otherScore;
+    databox otherMember;
+    databoxWide otherScoreWide;
+    databoxWide otherMemberWide;
+    flexEntry *prevMember = flexPrev(*f, entry);
+    if (prevMember) {
+        flexGetByTypeInto(flexPrev(*f, prevMember), &otherScore,
+                          &otherScoreWide);
+        flexGetByTypeInto(prevMember, &otherMember, &otherMemberWide);
+        if (!mosRowBefore(&otherScore, &otherMember, score, member)) {
+            return false;
+        }
+    }
+
+    flexEntry *nextScore = flexNext(*f, flexNext(*f, entry));
+    if (nextScore) {
+        flexGetByTypeInto(nextScore, &otherScore, &otherScoreWide);
+        flexGetByTypeInto(flexNext(*f, nextScore), &otherMember,
+                          &otherMemberWide);
+        if (!mosRowBefore(score, member, &otherScore, &otherMember)) {
+            return false;
+        }
+    }
+
+    flexReplaceByType(f, entry, score);
+    return true;
+}
+
 /* Helper: normalize negative rank to positive index */
 DK_INLINE_ALWAYS int64_t mosNormalizeRank(int64_t rank, size_t count) {
     if (rank < 0) {

@@ -882,11 +882,12 @@ bool multiOrderedSetFullAdd(multiOrderedSetFull *m, const databox *score,
 
 bool multiOrderedSetFullAddNX(multiOrderedSetFull *m, const databox *score,
                               const databox *member) {
-    if (multidictExists(m->memberIndex, member)) {
+    /* One member-index search refuses a present member or indexes it */
+    if (multidictAddNX(m->memberIndex, member, score) !=
+        MULTIDICT_OK_INSERTED) {
         return false;
     }
 
-    multidictAdd(m->memberIndex, member, score);
     uint32_t mapIdx = findSubMapForScore(m, score);
     insertIntoSubMap(m, mapIdx, score, member);
 

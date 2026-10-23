@@ -779,6 +779,54 @@ static void benchMultiOrderedSet(void) {
     perfContainerSink = sink;
 }
 
+/* A set of 'members' members (scores spaced 16 apart), small enough to
+ * stay in the tier 'tier' names, driven PERF_CONTAINER_N operations at a
+ * time: increments that keep each member's place, scattered updates that
+ * move it, and AddNX offers of present members */
+static void benchMultiOrderedSetTier(const char *tier, uint32_t members) {
+    cleanerName(zfree, PerfKeys) char *keys = perfContainerKeys();
+    const uint32_t n = PERF_CONTAINER_N;
+    cleaner(multiOrderedSetFree) multiOrderedSet *mos = multiOrderedSetNew();
+    uint64_t sink = 0;
+    for (uint32_t i = 0; i < members; i++) {
+        const databox s = databoxNewSigned((int64_t)i * 16);
+        const databox m = perfContainerKey(keys, i);
+        sink += multiOrderedSetAdd(&mos, &s, &m);
+    }
+
+    char name[48];
+    double t0 = monoNowSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox delta = databoxNewSigned(1);
+        const databox m = perfContainerKey(keys, i % members);
+        databox result = {{0}};
+        sink += multiOrderedSetIncrBy(&mos, &delta, &m, &result);
+    }
+    snprintf(name, sizeof(name), "%sIncrBy", tier);
+    emitRow("multiOrderedSet", name, 0, n, monoNowSec() - t0);
+
+    t0 = monoNowSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox s =
+            databoxNewSigned((int64_t)((i * 7919u) % (members * 16)));
+        const databox m = perfContainerKey(keys, i % members);
+        sink += multiOrderedSetAdd(&mos, &s, &m);
+    }
+    snprintf(name, sizeof(name), "%sUpdate", tier);
+    emitRow("multiOrderedSet", name, 0, n, monoNowSec() - t0);
+
+    t0 = monoNowSec();
+    for (uint32_t i = 0; i < n; i++) {
+        const databox s = databoxNewSigned(i);
+        const databox m = perfContainerKey(keys, i % members);
+        sink += multiOrderedSetAddNX(&mos, &s, &m);
+    }
+    snprintf(name, sizeof(name), "%sAddNXPresent", tier);
+    emitRow("multiOrderedSet", name, 0, n, monoNowSec() - t0);
+
+    perfContainerSink = sink;
+}
+
 int perfRegressionTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -935,6 +983,8 @@ int perfRegressionTest(int argc, char *argv[]) {
 
         if (perfWanted("multiOrderedSet")) {
             benchMultiOrderedSet();
+            benchMultiOrderedSetTier("small", 48);
+            benchMultiOrderedSetTier("medium", 160);
         }
 
         /* membound allocator: per-op alloc/free cost for the three
