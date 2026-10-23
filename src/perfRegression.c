@@ -742,6 +742,15 @@ static void benchMultiOrderedSet(void) {
     }
     emitRow("multiOrderedSet", "getScore", 0, n, monoNowSec() - t0);
 
+    /* Rank of a member spread over the whole set */
+    const uint32_t ranks = 2000;
+    t0 = monoNowSec();
+    for (uint32_t i = 0; i < ranks; i++) {
+        const databox m = perfContainerKey(keys, (i * 7919u) % n);
+        sink += (uint64_t)multiOrderedSetGetRank(mos, &m);
+    }
+    emitRow("multiOrderedSet", "getRank", 0, ranks, monoNowSec() - t0);
+
     t0 = monoNowSec();
     for (uint32_t i = 0; i < n; i++) {
         const databox m = perfContainerKey(keys, i);

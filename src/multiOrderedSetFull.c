@@ -175,7 +175,7 @@ static void updateMiddle(multiOrderedSetFull *m, uint32_t idx) {
  *
  * Must be "last min <= score", NOT "first min >= score": the latter overshoots
  * interior scores to the next sub-map, mis-routing inserts (breaking global
- * order) and member lookups (findEntryByMember scans only the returned
+ * order) and member lookups (findEntryForScore searches only the returned
  * sub-map). Masked while mapCount==1; sub-map splitting makes it mandatory.
  * Relies on rangeBox being monotonic, which empty-sub-map reclaim guarantees
  * (no interior INT64_MAX sentinels). */
@@ -420,27 +420,23 @@ static bool findScore(const multiOrderedSetFull *m, const databox *member,
     return multidictFind((multidict *)m->memberIndex, member, score);
 }
 
-/* Find entry in score maps by member (using member index for score lookup) */
-static flexEntry *findEntryByMember(const multiOrderedSetFull *m,
-                                    const databox *member, uint32_t *mapIdx) {
-    /* First, get the score from member index */
-    databox score;
-    databoxWide scoreWide;
-    if (!findScore(m, member, &score, &scoreWide)) {
-        return NULL;
-    }
-
-    /* Find the sub-map containing this score */
-    *mapIdx = findSubMapForScore(m, &score);
+/* The score-map row of 'member' whose score is 'score' (the member
+ * index's value for it): the sub-map that holds the score, then a binary
+ * search for the (score, member or pool id) row, as the sub-maps are kept
+ * sorted by that pair.  NULL when there is no such row. */
+static flexEntry *findEntryForScore(const multiOrderedSetFull *m,
+                                    const databox *member, const databox *score,
+                                    uint32_t *mapIdx) {
+    *mapIdx = findSubMapForScore(m, score);
     flex *map = getSubMap(m, *mapIdx);
-    if (!map) {
+    if (!map || flexCount(map) == 0) {
         return NULL;
     }
 
-    /* In pool mode, get the pool ID for comparison */
+    /* In pool mode the row holds the member's pool ID */
     databox memberToMatch;
     if (m->pool) {
-        uint64_t id = atomPoolGetId(m->pool, member);
+        const uint64_t id = atomPoolGetId(m->pool, member);
         if (id == 0) {
             return NULL; /* Member not in pool */
         }
@@ -449,35 +445,22 @@ static flexEntry *findEntryByMember(const multiOrderedSetFull *m,
         memberToMatch = *member;
     }
 
-    /* Search for the (score, member/memberID) entry */
-    flexEntry *entry = flexHead(map);
-    while (entry) {
-        flexEntry *memberEntry = flexNext(map, entry);
-        if (!memberEntry) {
-            break;
-        }
+    const databox *row[MOS_ELEMENTS_PER_ENTRY] = {score, &memberToMatch};
+    const flexEntry *middle = map + getMiddle(m, *mapIdx);
+    return flexFindByTypeSortedWithMiddleFullWidth(map, MOS_ELEMENTS_PER_ENTRY,
+                                                   row, middle);
+}
 
-        databox currentScore, currentMemberOrId;
-        databoxWide currentScoreWide, currentMemberOrIdWide;
-        flexGetByTypeInto(entry, &currentScore, &currentScoreWide);
-        flexGetByTypeInto(memberEntry, &currentMemberOrId,
-                          &currentMemberOrIdWide);
-
-        const int scoreCmp = databoxCompare(&currentScore, &score);
-        if (scoreCmp == 0 &&
-            databoxCompare(&currentMemberOrId, &memberToMatch) == 0) {
-            return entry;
-        }
-
-        /* If we've passed the score, it's not in this map */
-        if (scoreCmp > 0) {
-            break;
-        }
-
-        entry = flexNext(map, memberEntry);
+/* Find entry in score maps by member (using member index for score lookup) */
+static flexEntry *findEntryByMember(const multiOrderedSetFull *m,
+                                    const databox *member, uint32_t *mapIdx) {
+    databox score;
+    databoxWide scoreWide;
+    if (!findScore(m, member, &score, &scoreWide)) {
+        return NULL;
     }
 
-    return NULL;
+    return findEntryForScore(m, member, &score, mapIdx);
 }
 
 /* ====================================================================
@@ -855,31 +838,45 @@ size_t multiOrderedSetFullBytes(const multiOrderedSetFull *m) {
  * Insertion / Update
  * ==================================================================== */
 
+/* Take the score-map row of 'member', whose stored score is 'old' */
+static void removeMemberRow(multiOrderedSetFull *m, const databox *member,
+                            const databox *old) {
+    uint32_t mapIdx;
+    flexEntry *entry = findEntryForScore(m, member, old, &mapIdx);
+    if (entry) {
+        removeFromSubMap(m, mapIdx, entry);
+        reclaimEmptySubMap(m, mapIdx);
+    }
+}
+
+/* Give 'member' the score 'score' in the member index and the score maps:
+ * an existing member ('existed', its row already taken out) has its index
+ * value rewritten in place, in one search */
+static bool setMemberScore(multiOrderedSetFull *m, const databox *member,
+                           const databox *score, bool existed) {
+    const multidictResult res =
+        existed ? multidictReplace(m->memberIndex, member, score)
+                : multidictAdd(m->memberIndex, member, score);
+    if (res == MULTIDICT_ERR) {
+        return false;
+    }
+
+    insertIntoSubMap(m, findSubMapForScore(m, score), score, member);
+    return true;
+}
+
 bool multiOrderedSetFullAdd(multiOrderedSetFull *m, const databox *score,
                             const databox *member) {
-    bool existed = multidictExists(m->memberIndex, member);
-
+    /* One member-index read gives both whether the member exists and the
+     * score that locates its row */
+    databox old;
+    databoxWide oldWide;
+    const bool existed = findScore(m, member, &old, &oldWide);
     if (existed) {
-        /* Remove old entry from score maps */
-        uint32_t mapIdx;
-        flexEntry *entry = findEntryByMember(m, member, &mapIdx);
-        if (entry) {
-            removeFromSubMap(m, mapIdx, entry);
-            reclaimEmptySubMap(m, mapIdx);
-        }
+        removeMemberRow(m, member, &old);
     }
 
-    /* Add to member index (multidictAdd does upsert - add or replace) */
-    multidictResult res = multidictAdd(m->memberIndex, member, score);
-    if (res == MULTIDICT_ERR) {
-        /* Failed to add to member index - don't add to scoreMap either */
-        return existed;
-    }
-
-    /* Add to score map */
-    uint32_t mapIdx = findSubMapForScore(m, score);
-    insertIntoSubMap(m, mapIdx, score, member);
-
+    setMemberScore(m, member, score, existed);
     return existed;
 }
 
@@ -898,23 +895,14 @@ bool multiOrderedSetFullAddNX(multiOrderedSetFull *m, const databox *score,
 
 bool multiOrderedSetFullAddXX(multiOrderedSetFull *m, const databox *score,
                               const databox *member) {
-    if (!multidictExists(m->memberIndex, member)) {
+    databox old;
+    databoxWide oldWide;
+    if (!findScore(m, member, &old, &oldWide)) {
         return false;
     }
 
-    /* Remove old entry */
-    uint32_t mapIdx;
-    flexEntry *entry = findEntryByMember(m, member, &mapIdx);
-    if (entry) {
-        removeFromSubMap(m, mapIdx, entry);
-        reclaimEmptySubMap(m, mapIdx);
-    }
-
-    /* Update with new score (entry must exist since XX checked) */
-    multidictAdd(m->memberIndex, member, score);
-    mapIdx = findSubMapForScore(m, score);
-    insertIntoSubMap(m, mapIdx, score, member);
-
+    removeMemberRow(m, member, &old);
+    setMemberScore(m, member, score, true);
     return true;
 }
 
@@ -924,24 +912,16 @@ bool multiOrderedSetFullAddGetPrevious(multiOrderedSetFull *m,
                                        databox *prevScore) {
     databox existingScore;
     databoxWide existingScoreWide;
-    bool existed = findScore(m, member, &existingScore, &existingScoreWide);
+    const bool existed =
+        findScore(m, member, &existingScore, &existingScoreWide);
 
     if (existed) {
         /* Self-contained: the stored score is replaced below */
         *prevScore = databoxCopy(&existingScore);
-        uint32_t mapIdx;
-        flexEntry *entry = findEntryByMember(m, member, &mapIdx);
-        if (entry) {
-            removeFromSubMap(m, mapIdx, entry);
-            reclaimEmptySubMap(m, mapIdx);
-        }
+        removeMemberRow(m, member, &existingScore);
     }
 
-    /* multidictAdd does upsert - add or replace */
-    multidictAdd(m->memberIndex, member, score);
-    uint32_t mapIdx = findSubMapForScore(m, score);
-    insertIntoSubMap(m, mapIdx, score, member);
-
+    setMemberScore(m, member, score, existed);
     return existed;
 }
 
@@ -949,28 +929,20 @@ bool multiOrderedSetFullIncrBy(multiOrderedSetFull *m, const databox *delta,
                                const databox *member, databox *result) {
     databox existingScore;
     databoxWide existingScoreWide;
-    bool existed = findScore(m, member, &existingScore, &existingScoreWide);
+    const bool existed =
+        findScore(m, member, &existingScore, &existingScoreWide);
 
     if (existed) {
         if (!mosScoreAdd(&existingScore, delta, result)) {
             return false;
         }
 
-        uint32_t mapIdx;
-        flexEntry *entry = findEntryByMember(m, member, &mapIdx);
-        if (entry) {
-            removeFromSubMap(m, mapIdx, entry);
-            reclaimEmptySubMap(m, mapIdx);
-        }
+        removeMemberRow(m, member, &existingScore);
     } else {
         *result = *delta;
     }
 
-    /* multidictAdd does upsert - add or replace */
-    multidictAdd(m->memberIndex, member, result);
-    uint32_t mapIdx = findSubMapForScore(m, result);
-    insertIntoSubMap(m, mapIdx, result, member);
-
+    setMemberScore(m, member, result, existed);
     return true;
 }
 
@@ -978,41 +950,32 @@ bool multiOrderedSetFullIncrBy(multiOrderedSetFull *m, const databox *delta,
  * Deletion
  * ==================================================================== */
 
-bool multiOrderedSetFullRemove(multiOrderedSetFull *m, const databox *member) {
-    if (!multidictExists(m->memberIndex, member)) {
+/* Remove 'member' with one member-index search, which hands back the
+ * score (owned) that locates its row */
+static bool removeMember(multiOrderedSetFull *m, const databox *member,
+                         databox *score) {
+    if (!multidictGetAndDelete(m->memberIndex, member, score)) {
         return false;
     }
 
-    uint32_t mapIdx;
-    flexEntry *entry = findEntryByMember(m, member, &mapIdx);
-    if (entry) {
-        removeFromSubMap(m, mapIdx, entry);
-        reclaimEmptySubMap(m, mapIdx);
+    removeMemberRow(m, member, score);
+    return true;
+}
+
+bool multiOrderedSetFullRemove(multiOrderedSetFull *m, const databox *member) {
+    databox score;
+    if (!removeMember(m, member, &score)) {
+        return false;
     }
 
-    multidictDelete(m->memberIndex, member);
+    databoxFreeData(&score);
     return true;
 }
 
 bool multiOrderedSetFullRemoveGetScore(multiOrderedSetFull *m,
                                        const databox *member, databox *score) {
-    databox existingScore;
-    databoxWide existingScoreWide;
-    if (!findScore(m, member, &existingScore, &existingScoreWide)) {
-        return false;
-    }
-
-    /* Self-contained: the stored score is deleted below */
-    *score = databoxCopy(&existingScore);
-    uint32_t mapIdx;
-    flexEntry *entry = findEntryByMember(m, member, &mapIdx);
-    if (entry) {
-        removeFromSubMap(m, mapIdx, entry);
-        reclaimEmptySubMap(m, mapIdx);
-    }
-
-    multidictDelete(m->memberIndex, member);
-    return true;
+    /* The removal's owned copy is the caller's */
+    return removeMember(m, member, score);
 }
 
 size_t multiOrderedSetFullRemoveRangeByScore(multiOrderedSetFull *m,
@@ -1254,52 +1217,30 @@ bool multiOrderedSetFullGetScore(const multiOrderedSetFull *m,
 
 int64_t multiOrderedSetFullGetRank(const multiOrderedSetFull *m,
                                    const databox *member) {
-    if (!multidictExists(m->memberIndex, member)) {
+    /* The member's score locates its row; every row of the sub-maps
+     * before its sub-map ranks below it, and within the sub-map the rows
+     * before it */
+    uint32_t mapIdx;
+    const flexEntry *row = findEntryByMember(m, member, &mapIdx);
+    if (!row) {
         return -1;
     }
 
-    /* In pool mode, get the member's pool ID for comparison */
-    databox memberToMatch;
-    if (m->pool) {
-        uint64_t id = atomPoolGetId(m->pool, member);
-        if (id == 0) {
-            return -1; /* Member not in pool */
-        }
-        memberToMatch = databoxNewUnsigned(id);
-    } else {
-        memberToMatch = *member;
-    }
-
     int64_t rank = 0;
-
-    for (uint32_t mapIdx = 0; mapIdx < m->mapCount; mapIdx++) {
-        flex *map = getSubMap(m, mapIdx);
-        if (!map) {
-            continue;
-        }
-
-        flexEntry *entry = flexHead(map);
-        while (entry) {
-            flexEntry *memberEntry = flexNext(map, entry);
-            if (!memberEntry) {
-                break;
-            }
-
-            databox currentMemberOrId;
-            databoxWide currentMemberOrIdWide;
-            flexGetByTypeInto(memberEntry, &currentMemberOrId,
-                              &currentMemberOrIdWide);
-
-            if (databoxCompare(&currentMemberOrId, &memberToMatch) == 0) {
-                return rank;
-            }
-
-            rank++;
-            entry = flexNext(map, memberEntry);
+    for (uint32_t i = 0; i < mapIdx; i++) {
+        const flex *map = getSubMap(m, i);
+        if (map) {
+            rank += (int64_t)(flexCount(map) / MOS_ELEMENTS_PER_ENTRY);
         }
     }
 
-    return -1;
+    flex *map = getSubMap(m, mapIdx);
+    for (flexEntry *e = flexHead(map); e && e != row;
+         e = flexNext(map, flexNext(map, e))) {
+        rank++;
+    }
+
+    return rank;
 }
 
 int64_t multiOrderedSetFullGetReverseRank(const multiOrderedSetFull *m,
