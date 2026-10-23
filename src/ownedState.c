@@ -45,6 +45,7 @@ static _Thread_local ownedStripe_ *g_owned_stripe_mine = NULL;
 static ownedStripe_ *ownedStripeMine_(void) {
     ownedStripe_ *s = g_owned_stripe_mine;
     if (!s) {
+        /* @sync: relaxed counter */
         const uint32_t i = atomic_fetch_add_explicit(&g_owned_stripe_next, 1,
                                                      memory_order_relaxed);
         s = &g_owned_stripes[i % OWNED_STRIPES];
@@ -54,11 +55,13 @@ static ownedStripe_ *ownedStripeMine_(void) {
 }
 
 static void ownedTotalAdd_(ownedTotal_ t) {
+    /* @sync: relaxed counter */
     atomic_fetch_add_explicit(&ownedStripeMine_()->c[t], 1,
                               memory_order_relaxed);
 }
 
 static void ownedTotalSub_(ownedTotal_ t) {
+    /* @sync: relaxed counter */
     atomic_fetch_sub_explicit(&ownedStripeMine_()->c[t], 1,
                               memory_order_relaxed);
 }
@@ -66,6 +69,7 @@ static void ownedTotalSub_(ownedTotal_ t) {
 static uint64_t ownedTotalRead_(ownedTotal_ t) {
     uint64_t sum = 0;
     for (uint32_t i = 0; i < OWNED_STRIPES; i++) {
+        /* @sync: relaxed counter */
         sum += atomic_load_explicit(&g_owned_stripes[i].c[t],
                                     memory_order_relaxed);
     }
@@ -110,8 +114,11 @@ void ownedArenaInit(ownedArena *arena, const ownedArenaDecl *decl) {
     arena->decl = decl;
     arena->initialized = false;
     arena->readers = (inflightGate)INFLIGHT_GATE_INIT;
+    /* @sync: relaxed init */
     atomic_store_explicit(&arena->idleUs, 0, memory_order_relaxed);
+    /* @sync: relaxed init */
     atomic_store_explicit(&arena->retireEpoch, 0, memory_order_relaxed);
+    /* @sync: relaxed init */
     atomic_store_explicit(&arena->idleEpoch, 0, memory_order_relaxed);
     /* Without a clock no row can be judged; leave the arena
      * uninitialised. */
@@ -164,13 +171,16 @@ void ownedArenaExit(ownedArena *arena) {
     if (!arena) {
         return;
     }
+    /* @sync: acquire arena.epoch */
     const uint64_t e =
         atomic_load_explicit(&arena->retireEpoch, memory_order_acquire);
     if (inflightGateExitPrev(&arena->readers) != 1) {
         return;
     }
+    /* @sync: relaxed seed */
     uint64_t prev =
         atomic_load_explicit(&arena->idleEpoch, memory_order_relaxed);
+    /* @sync: release arena.idle */
     while (prev < e && !atomic_compare_exchange_weak_explicit(
                            &arena->idleEpoch, &prev, e, memory_order_release,
                            memory_order_relaxed)) {
@@ -217,6 +227,7 @@ void ownedArenaRetire(ownedArena *arena, void *cargo, ownedReleaseFn release,
     /* Epochs are assigned under the lock, so rows carry increasing
      * epochs; the release pairs with the exiter's acquire. Both rules use
      * them. */
+    /* @sync: release arena.epoch */
     const uint64_t epoch = atomic_fetch_add_explicit(&arena->retireEpoch, 1,
                                                      memory_order_release) +
                            1;
@@ -274,8 +285,8 @@ void ownedArenaDrain(ownedArena *arena) {
      *   A plain acquire load would not do: it may read an older count, and
      *   "reader increments then loads the cell / writer swaps the cell then
      *   loads the count" is the store-buffering pattern C11 permits to miss
-     *   on both sides.  The default rule used such a load and leaned on its
-     *   grace period; the grace now only covers readers that skip the gate.
+     *   on both sides.  The grace period proves nothing here: it is a
+     *   timing allowance, the only one a reader that skips the gate gets.
      *
      * Both rules also accept the epoch: an exiter read retireEpoch >=
      * row.epoch (acquire) before a decrement that reached zero, so the
@@ -288,6 +299,7 @@ void ownedArenaDrain(ownedArena *arena) {
     const bool readers_only =
         arena->decl->release == OWNED_RELEASE_READERS_ONLY;
     const bool gate_idle_now = inflightGateSampleLatest(&arena->readers) == 0;
+    /* @sync: acquire arena.idle */
     const uint64_t idle_epoch =
         atomic_load_explicit(&arena->idleEpoch, memory_order_acquire);
     const uint64_t now = arena->decl->nowUs();
@@ -367,8 +379,10 @@ void ownedCellInit(ownedCell *c, const ownedCellDecl *decl, void *owner,
     c->owner = owner;
     c->arena = arena;
     if (decl && decl->form == OWNED_CELL_INLINE) {
+        /* @sync: relaxed init */
         atomic_store_explicit(&c->v.word, 0, memory_order_relaxed);
     } else {
+        /* @sync: relaxed init */
         atomic_store_explicit(&c->v.indirect, NULL, memory_order_relaxed);
     }
 }
@@ -382,6 +396,7 @@ void ownedCellPublish(ownedCell *c, void *fresh) {
      * this writer, which now owns `stale` and may release it inline, see
      * the initialisation by whichever writer published it, even when no
      * other happens-before edge orders the two writers. */
+    /* @sync: acq_rel cell.value */
     void *const stale =
         atomic_exchange_explicit(&c->v.indirect, fresh, memory_order_acq_rel);
     if (!stale) {
@@ -402,6 +417,7 @@ const void *ownedCellRead(const ownedCell *c) {
     if (!c || !c->decl || c->decl->form != OWNED_CELL_INDIRECT) {
         return NULL;
     }
+    /* @sync: acquire cell.value */
     return atomic_load_explicit(&((ownedCell *)c)->v.indirect,
                                 memory_order_acquire);
 }
@@ -411,6 +427,7 @@ void ownedCellStore(ownedCell *c, uint64_t value) {
         return;
     }
     ownedCellWriterCheck_(c);
+    /* @sync: release cell.word */
     atomic_store_explicit(&c->v.word, value, memory_order_release);
 }
 
@@ -418,6 +435,7 @@ uint64_t ownedCellLoad(const ownedCell *c) {
     if (!c || !c->decl || c->decl->form != OWNED_CELL_INLINE) {
         return 0;
     }
+    /* @sync: acquire cell.word */
     return atomic_load_explicit(&((ownedCell *)c)->v.word,
                                 memory_order_acquire);
 }
@@ -427,11 +445,13 @@ void ownedCellDestruct(ownedCell *c) {
         return;
     }
     if (c->decl->form == OWNED_CELL_INLINE) {
+        /* @sync: relaxed init */
         atomic_store_explicit(&c->v.word, 0, memory_order_relaxed);
         return;
     }
     /* Release the current value directly; the arena is usually already
      * destructed during teardown, and no reader remains. */
+    /* @sync: relaxed init */
     void *const cur =
         atomic_exchange_explicit(&c->v.indirect, NULL, memory_order_relaxed);
     if (cur && c->decl->release) {
@@ -456,30 +476,37 @@ void ownedStateRowEnrol(ownedStateRow *row, const char *name,
     /* Fast path: already enrolled. Otherwise one CAS winner writes name
      * and kind and pushes the row; every other caller returns without
      * touching a field. */
-    if (atomic_load_explicit(&row->enrolled, memory_order_acquire)) {
+    /* No order: a caller that sees `enrolled` reads none of the fields the
+     * winner writes, and the CAS only elects the one writer of them. */
+    /* @sync: relaxed hint */
+    if (atomic_load_explicit(&row->enrolled, memory_order_relaxed)) {
         return;
     }
     bool expected = false;
+    /* @sync: relaxed owner */
     if (!atomic_compare_exchange_strong_explicit(&row->enrolled, &expected,
-                                                 true, memory_order_acq_rel,
-                                                 memory_order_acquire)) {
+                                                 true, memory_order_relaxed,
+                                                 memory_order_relaxed)) {
         return;
     }
     /* Sequenced before the release CAS below; a walker reaches the row
      * only through an acquire load of the head. */
     row->name = name;
     row->kind = kind;
+    /* @sync: relaxed seed */
     ownedStateRow *head =
         atomic_load_explicit(&g_owned_rows_head, memory_order_relaxed);
     do {
         row->next = head;
-    } while (!atomic_compare_exchange_weak_explicit(&g_owned_rows_head, &head,
-                                                    row, memory_order_release,
-                                                    memory_order_relaxed));
+    } while (!atomic_compare_exchange_weak_explicit(
+        &g_owned_rows_head, &head, row, memory_order_release,
+        memory_order_relaxed)); /* @sync: release row.head */
+    /* @sync: release row.count */
     atomic_fetch_add_explicit(&g_owned_rows_count, 1, memory_order_release);
 }
 
 size_t ownedStateRowCount(void) {
+    /* @sync: acquire row.count */
     return atomic_load_explicit(&g_owned_rows_count, memory_order_acquire);
 }
 
@@ -487,6 +514,7 @@ const ownedStateRow *ownedStateRowAt(size_t i) {
     /* Rows are never removed and `next` is written before the release
      * CAS that publishes the row, so an acquire load of the head reads a
      * consistent list. */
+    /* @sync: acquire row.head */
     const ownedStateRow *r =
         atomic_load_explicit(&g_owned_rows_head, memory_order_acquire);
     while (r && i > 0) {
@@ -520,6 +548,7 @@ static uint64_t ownedSlotBump_(const ownedSlot *s, int column) {
     if (!s->decl || !s->decl->row) {
         return 0;
     }
+    /* @sync: relaxed counter */
     return atomic_fetch_add_explicit(&s->decl->row->c[column], 1,
                                      memory_order_relaxed) +
            1;
@@ -548,6 +577,7 @@ void ownedSlotInit(ownedSlot *s, const ownedSlotDecl *decl) {
         return;
     }
     s->decl = decl;
+    /* @sync: relaxed init */
     atomic_store_explicit(&s->word, OWNED_SLOT_EMPTY, memory_order_relaxed);
 }
 
@@ -567,6 +597,7 @@ ownedSlotState ownedSlotLoad(const ownedSlot *s) {
     if (!s) {
         return OWNED_SLOT_RETIRED;
     }
+    /* @sync: acquire slot.word */
     return ownedSlotPublic_(
         atomic_load_explicit(&((ownedSlot *)s)->word, memory_order_acquire));
 }
@@ -576,10 +607,14 @@ bool ownedSlotClaim(ownedSlot *s, ownedSlotState *out_prior) {
         return false;
     }
     ownedSlotEnrol_(s);
+    /* @sync: relaxed seed */
     int st = atomic_load_explicit(&s->word, memory_order_relaxed);
     while (st == OWNED_SLOT_EMPTY || st == OWNED_SLOT_ARMED) {
+        /* Acquire: the claimant reads the fields the last Publish wrote.
+         * It has written none yet, so nothing needs a release. */
+        /* @sync: acquire slot.word */
         if (atomic_compare_exchange_weak_explicit(
-                &s->word, &st, OWNED_SLOT_CLAIMED, memory_order_acq_rel,
+                &s->word, &st, OWNED_SLOT_CLAIMED, memory_order_acquire,
                 memory_order_relaxed)) {
             if (out_prior) {
                 *out_prior = (ownedSlotState)st;
@@ -600,12 +635,14 @@ bool ownedSlotPublish(ownedSlot *s, bool still_armed, ownedReleaseFn release,
     }
     ownedSlotEnrol_(s);
     int expect = OWNED_SLOT_CLAIMED;
-    /* Acquire on failure, so a release run below sees what the retirer
-     * wrote before its CAS. */
+    /* A failure needs no order: only RETIRED_CLAIMED leads on, to the
+     * acq_rel CAS below, which synchronizes with the retirer before the
+     * release runs. */
+    /* @sync: release slot.word */
     if (atomic_compare_exchange_strong_explicit(
             &s->word, &expect,
             still_armed ? OWNED_SLOT_ARMED : OWNED_SLOT_EMPTY,
-            memory_order_release, memory_order_acquire)) {
+            memory_order_release, memory_order_relaxed)) {
         return true;
     }
     if (expect != OWNED_SLOT_RETIRED_CLAIMED_) {
@@ -617,6 +654,7 @@ bool ownedSlotPublish(ownedSlot *s, bool still_armed, ownedReleaseFn release,
     /* A Retire happened while claimed. The CAS to RETIRED decides which
      * Publish releases, so the release runs once even if Publish is
      * repeated; acq_rel also publishes this claimant's field writes. */
+    /* @sync: acq_rel slot.word */
     if (!atomic_compare_exchange_strong_explicit(
             &s->word, &expect, OWNED_SLOT_RETIRED, memory_order_acq_rel,
             memory_order_relaxed)) {
@@ -640,6 +678,7 @@ ownedSlotState ownedSlotRetire(ownedSlot *s, ownedReleaseFn release,
     /* CLAIMED moves to the internal RETIRED_CLAIMED, which the claimant's
      * Publish consumes; EMPTY and ARMED move to RETIRED. A slot already
      * retired is left as it is. */
+    /* @sync: relaxed seed */
     int prior = atomic_load_explicit(&s->word, memory_order_relaxed);
     for (;;) {
         if (prior == OWNED_SLOT_RETIRED ||
@@ -649,6 +688,7 @@ ownedSlotState ownedSlotRetire(ownedSlot *s, ownedReleaseFn release,
         const int next = prior == OWNED_SLOT_CLAIMED
                              ? OWNED_SLOT_RETIRED_CLAIMED_
                              : OWNED_SLOT_RETIRED;
+        /* @sync: acq_rel slot.word */
         if (atomic_compare_exchange_weak_explicit(&s->word, &prior, next,
                                                   memory_order_acq_rel,
                                                   memory_order_relaxed)) {
@@ -681,6 +721,7 @@ static uint64_t ownedSlotRead_(const ownedSlotDecl *decl, int column) {
     if (!decl || !decl->row) {
         return 0;
     }
+    /* @sync: relaxed counter */
     return atomic_load_explicit(&decl->row->c[column], memory_order_relaxed);
 }
 
@@ -821,6 +862,7 @@ uint64_t ownedSeqColumnTotal(const ownedSeqDecl *decl, ownedSeqColumn column) {
         (int)column >= OWNED_ROW_COUNTER_MAX) {
         return 0;
     }
+    /* @sync: relaxed counter */
     return atomic_load_explicit(&decl->row->c[column], memory_order_relaxed);
 }
 
@@ -850,6 +892,7 @@ static void ownedSeqBump_(const ownedSeq *s, ownedSeqColumn column,
                           ownedTotal_ total) {
     ownedTotalAdd_(total);
     if (s->decl->row) {
+        /* @sync: relaxed counter */
         atomic_fetch_add_explicit(&s->decl->row->c[column], 1,
                                   memory_order_relaxed);
     }
@@ -892,7 +935,9 @@ void ownedSeqInit(ownedSeq *s, const ownedSeqDecl *decl, void *owner,
     s->decl = decl;
     s->owner = owner;
     s->versions = storage;
+    /* @sync: relaxed init */
     atomic_store_explicit(&s->assigned, 0, memory_order_relaxed);
+    /* @sync: relaxed init */
     atomic_store_explicit(&s->cursor, 0, memory_order_relaxed);
     if (decl && storage && decl->versions != 0) {
         /* T0: the one plain store of a stamp, sequenced before the
@@ -914,6 +959,7 @@ void ownedSeqPutWord(ownedSeqVersionRef *v, size_t wordIndex, uint64_t w) {
     if (!v || wordIndex >= (v->capacity + 7u) / 8u) {
         return;
     }
+    /* @sync: release seq.payload */
     atomic_store_explicit(&v->words[wordIndex], w, memory_order_release);
 }
 
@@ -937,9 +983,11 @@ void ownedSeqPutBytes(ownedSeqVersionRef *v, size_t offset, const void *src,
         if (take != 8u) {
             /* A partial word merges with what stands; a whole word
              * replaces it and needs no read. */
+            /* @sync: relaxed owner */
             w = atomic_load_explicit(&v->words[wi], memory_order_relaxed);
         }
         memcpy((uint8_t *)&w + within, in, take);
+        /* @sync: release seq.payload */
         atomic_store_explicit(&v->words[wi], w, memory_order_release);
         in += take;
         pos += take;
@@ -969,7 +1017,9 @@ bool ownedSeqPublish(ownedSeq *s, const void *src, size_t len) {
 
 /* Monotone max, as ownedArenaExit does for idleEpoch. */
 static void ownedSeqCursorAdvance_(ownedSeq *s, uint64_t n) {
+    /* @sync: relaxed seed */
     uint64_t prev = atomic_load_explicit(&s->cursor, memory_order_relaxed);
+    /* @sync: release seq.cursor */
     while (prev < n && !atomic_compare_exchange_weak_explicit(
                            &s->cursor, &prev, n, memory_order_release,
                            memory_order_relaxed)) {
@@ -1001,6 +1051,7 @@ bool ownedSeqPublishWith(ownedSeq *s, size_t len, ownedSeqFillFn fill,
      * or loses the CAS, abandons without writing, so a version's payload
      * is only stored by its current holder and a newer publication is
      * never replaced by an older one. */
+    /* @sync: relaxed counter */
     const uint64_t n =
         atomic_fetch_add_explicit(&s->assigned, 1, memory_order_relaxed) + 1;
     _Atomic uint64_t *const v =
@@ -1008,7 +1059,9 @@ bool ownedSeqPublishWith(ownedSeq *s, size_t len, ownedSeqFillFn fill,
     const uint64_t claim = 4u * n + OWNED_SEQ_TAG_INPROGRESS;
     /* The load only seeds the CAS, which compares against the stamp as it
      * stands; the acquire that window order needs is the CAS's own. */
+    /* @sync: relaxed seed */
     uint64_t standing = atomic_load_explicit(&v[0], memory_order_relaxed);
+    /* @sync: acquire seq.stamp */
     if ((standing & 3u) == OWNED_SEQ_TAG_INPROGRESS || (standing >> 2) >= n ||
         !atomic_compare_exchange_strong_explicit(&v[0], &standing, claim,
                                                  memory_order_acquire,
@@ -1023,6 +1076,7 @@ bool ownedSeqPublishWith(ownedSeq *s, size_t len, ownedSeqFillFn fill,
     }
     /* Fill: release stores into `used` and the payload, all inside this
      * writer's claim window. */
+    /* @sync: release seq.payload */
     atomic_store_explicit(&v[1], (uint64_t)len, memory_order_release);
     ownedSeqVersionRef ref = {.words = &v[OWNED_SEQ_HEADER_WORDS],
                               .capacity = s->decl->version_bytes};
@@ -1033,6 +1087,7 @@ bool ownedSeqPublishWith(ownedSeq *s, size_t len, ownedSeqFillFn fill,
      * while it is INPROGRESS, so the CAS finds the claim; strong, so a
      * spurious failure cannot leave the version INPROGRESS. */
     uint64_t expected = claim;
+    /* @sync: release seq.stamp */
     if (atomic_compare_exchange_strong_explicit(&v[0], &expected, 4u * n,
                                                 memory_order_release,
                                                 memory_order_relaxed)) {
@@ -1061,11 +1116,15 @@ ownedSeqReadResult ownedSeqReadMissed(ownedSeq *s, ownedSeqReadResult r) {
 }
 
 uint64_t ownedSeqCursor(const ownedSeq *s) {
+    /* @sync: acquire seq.cursor */
     return s ? atomic_load_explicit(&s->cursor, memory_order_acquire) : 0;
 }
 
 uint64_t ownedSeqAssigned(const ownedSeq *s) {
-    return s ? atomic_load_explicit(&s->assigned, memory_order_acquire) : 0;
+    /* A count: its only writer is the relaxed fetch_add that hands out
+     * numbers, so there is nothing to acquire. */
+    /* @sync: relaxed counter */
+    return s ? atomic_load_explicit(&s->assigned, memory_order_relaxed) : 0;
 }
 
 uint32_t ownedSeqVersions(const ownedSeq *s) {
@@ -1098,6 +1157,7 @@ ownedSeqReadResult ownedSeqReadAt(ownedSeq *s, uint64_t want, void *dst,
         ownedSeqVersion_(s, (want - 1) % s->decl->versions);
     const uint64_t published = 4u * want;
     /* R1. */
+    /* @sync: acquire seq.stamp */
     const uint64_t v1 = atomic_load_explicit(&v[0], memory_order_acquire);
     if (v1 != published) {
         /* TORN when `want` is in progress or the version still holds an
@@ -1115,10 +1175,12 @@ ownedSeqReadResult ownedSeqReadAt(ownedSeq *s, uint64_t want, void *dst,
         return OWNED_SEQ_OVERWRITTEN;
     }
     /* C: `used` first, then the payload words. */
+    /* @sync: acquire seq.payload */
     const uint64_t used = atomic_load_explicit(&v[1], memory_order_acquire);
     if (used > (uint64_t)dstCap || used > (uint64_t)s->decl->version_bytes) {
         /* A shortfall is trustworthy only if the stamp still stands:
          * validate (R2) before reporting a length. */
+        /* @sync: acquire seq.stamp */
         const uint64_t v2 = atomic_load_explicit(&v[0], memory_order_acquire);
         if (v2 == published && used <= (uint64_t)s->decl->version_bytes) {
             if (outLen) {
@@ -1137,6 +1199,7 @@ ownedSeqReadResult ownedSeqReadAt(ownedSeq *s, uint64_t want, void *dst,
         /* Copy whole words with a constant-size memcpy (one store each)
          * and only the tail with a variable-length one. */
         while (remaining >= 8u) {
+            /* @sync: acquire seq.payload */
             const uint64_t w = atomic_load_explicit(
                 &v[OWNED_SEQ_HEADER_WORDS + wi], memory_order_acquire);
             memcpy(out, &w, 8u);
@@ -1145,12 +1208,14 @@ ownedSeqReadResult ownedSeqReadAt(ownedSeq *s, uint64_t want, void *dst,
             wi++;
         }
         if (remaining > 0) {
+            /* @sync: acquire seq.payload */
             const uint64_t w = atomic_load_explicit(
                 &v[OWNED_SEQ_HEADER_WORDS + wi], memory_order_acquire);
             memcpy(out, &w, remaining);
         }
     }
     /* R2; the reader writes nothing (see the ordering argument above). */
+    /* @sync: acquire seq.stamp */
     const uint64_t v2 = atomic_load_explicit(&v[0], memory_order_acquire);
     if (v2 != published) {
         ownedSeqBump_(s, OWNED_SEQ_C_OVERWRITTEN_READS,

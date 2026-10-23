@@ -32,9 +32,11 @@
  *   elapsed since it was retired AND the reader gate has been observed
  *   empty at some instant after the retire (sampled at zero by Drain with
  *   an RMW, or brought to zero by an exit that had already observed the
- *   row's retire epoch). The grace covers short readers that never enter
- *   the gate; the idle observation covers readers that do, by itself
- *   (the argument is at ownedArenaDrain). A row still held
+ *   row's retire epoch). The idle observation covers readers that enter
+ *   the gate, by itself (the argument is at ownedArenaDrain); every
+ *   reader that must be safe enters it.  A reader that skips the gate
+ *   gets only the grace, a timing allowance with no ordering guarantee
+ *   behind it. A row still held
  *   after holdMultiple * graceUs (saturating; 0 reports as soon as the
  *   grace has passed) is reported once through noteHold and kept, never
  *   freed.
@@ -577,8 +579,10 @@ bool ownedSeqPublishWith(ownedSeq *s, size_t len, ownedSeqFillFn fill,
                          void *ctx);
 
 /* Copy publication `want` into `dst` and return the verdict. On VALID
- * and CAPACITY *outLen is the publication's length; otherwise 0. The
- * accessors are acquire loads. */
+ * and CAPACITY *outLen is the publication's length; otherwise 0.
+ * ownedSeqCursor is an acquire load: a reader that sees n there and asks
+ * for n reads publication n or a later one.  ownedSeqAssigned is a
+ * relaxed count. */
 uint64_t ownedSeqCursor(const ownedSeq *s);   /* highest completed */
 uint64_t ownedSeqAssigned(const ownedSeq *s); /* highest assigned */
 uint32_t ownedSeqVersions(const ownedSeq *s); /* N */
@@ -612,6 +616,7 @@ static inline ownedSeqReadResult ownedSeqReadWordAt(ownedSeq *s, uint64_t want,
                                                           sizeof(uint64_t)) *
                                   sizeof(uint64_t)));
     const uint64_t published = 4u * want;
+    /* @sync: acquire seq.stamp */
     const uint64_t v1 = atomic_load_explicit(&v[0], memory_order_acquire);
     if (v1 != published) {
         return ownedSeqReadMissed(
@@ -619,8 +624,10 @@ static inline ownedSeqReadResult ownedSeqReadWordAt(ownedSeq *s, uint64_t want,
                    ? OWNED_SEQ_TORN
                    : OWNED_SEQ_OVERWRITTEN);
     }
+    /* @sync: acquire seq.payload */
     const uint64_t w =
         atomic_load_explicit(&v[OWNED_SEQ_HEADER_WORDS], memory_order_acquire);
+    /* @sync: acquire seq.stamp */
     const uint64_t v2 = atomic_load_explicit(&v[0], memory_order_acquire);
     if (v2 != published) {
         return ownedSeqReadMissed(s, OWNED_SEQ_OVERWRITTEN);

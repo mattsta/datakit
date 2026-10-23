@@ -3,8 +3,8 @@
  * Callers bracket an operation with inflightGateEnter/inflightGateExit.
  * A shutdown path calls inflightGateAwaitZeroMs to park until every
  * operation has left or the budget expires (returns IDLE or EXPIRED).
- * On EXPIRED the caller decides what to do. inflightGateDepth is an
- * acquire load of the count, for diagnostics.
+ * On EXPIRED the caller decides what to do. inflightGateDepth is a
+ * relaxed load of the count, for diagnostics.
  *
  * The gate does not decide admission: a caller that refuses new work
  * during shutdown re-checks its own "open" flag after Enter and calls
@@ -122,6 +122,7 @@ uint32_t inflightGateExitArmed(inflightGate *g);
 inflightGateVerdict inflightGateAwaitZeroMs(inflightGate *g, uint64_t budgetMs);
 
 static inline void inflightGateEnter(inflightGate *g) {
+    /* @sync: seq_cst gate.count */
     atomic_fetch_add_explicit(&g->count, 1, memory_order_seq_cst);
 }
 
@@ -131,11 +132,13 @@ static inline void inflightGateEnter(inflightGate *g) {
  * synchronize with. The relaxed load only seeds the CAS, which compares
  * against the current value. */
 static inline uint32_t inflightGateExitPrev(inflightGate *g) {
+    /* @sync: relaxed seed */
     uint32_t cur = atomic_load_explicit(&g->count, memory_order_relaxed);
     for (;;) {
         if (cur == (INFLIGHT_GATE_ARMED | 1u)) {
             return inflightGateExitArmed(g);
         }
+        /* @sync: seq_cst gate.count */
         if (atomic_compare_exchange_weak_explicit(&g->count, &cur, cur - 1u,
                                                   memory_order_seq_cst,
                                                   memory_order_relaxed)) {
@@ -148,11 +151,12 @@ static inline void inflightGateExit(inflightGate *g) {
     (void)inflightGateExitPrev(g);
 }
 
-/* Acquire load of the depth. It may return a value older than the
- * latest in the count's modification order; use inflightGateSampleLatest
- * when that matters. */
+/* Relaxed load of the depth, for diagnostics: nothing is read through
+ * it, and it may return a value older than the latest in the count's
+ * modification order; use inflightGateSampleLatest when that matters. */
 static inline uint32_t inflightGateDepth(const inflightGate *g) {
-    return atomic_load_explicit(&g->count, memory_order_acquire) &
+    /* @sync: relaxed counter */
+    return atomic_load_explicit(&g->count, memory_order_relaxed) &
            INFLIGHT_GATE_DEPTH_MASK;
 }
 
@@ -162,6 +166,7 @@ static inline uint32_t inflightGateDepth(const inflightGate *g) {
  * means every earlier scope has exited and every later scope entered
  * after this read. */
 static inline uint32_t inflightGateSampleLatest(inflightGate *g) {
+    /* @sync: seq_cst gate.count */
     return atomic_fetch_add_explicit(&g->count, 0, memory_order_seq_cst) &
            INFLIGHT_GATE_DEPTH_MASK;
 }
