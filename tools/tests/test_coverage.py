@@ -239,5 +239,57 @@ class Coverage(unittest.TestCase):
         self.assertFalse(coverage.PRIVATE_HEADER.search("src/multimap.h"))
 
 
+SHOW = """\
+    1|       |/* widget.c */
+    2|      5|int widgetGet(int x) {
+    3|      5|    if (x < 0) {
+    4|      0|        return -1;
+    5|       |        /* unreachable note */
+    6|      0|    }
+    7|  1.20k|    return x;
+    8|      5|}
+    9|       |
+   10|      0|void widgetFree(void) {
+   11|      0|}
+"""
+
+REPORT = """\
+File '/x/src/widget.c':
+Name                                     Regions    Miss   Cover     Lines    Miss   Cover  Branches    Miss   Cover
+--------------------------------------------------------------------------------------------------------------------
+widgetGet                                      4       1  75.00%         6       2  66.67%         2       1  50.00%
+widgetFree                                     1       1   0.00%         2       2   0.00%         0       0   0.00%
+widgetOk                                       1       0 100.00%         3       0 100.00%         0       0   0.00%
+--------------------------------------------------------------------------------------------------------------------
+TOTAL                                          6       2  66.67%        11       4  63.64%         2       1  50.00%
+"""
+
+
+class Detail(unittest.TestCase):
+    def test_uncovered_ranges_span_lines_without_code(self) -> None:
+        ranges = coverage.parse_show_uncovered(SHOW)
+        self.assertEqual(
+            [(r.first, r.last, r.text) for r in ranges],
+            [(4, 6, "return -1;"), (10, 11, "void widgetFree(void) {")],
+        )
+
+    def test_functions_by_missed_lines(self) -> None:
+        funcs = coverage.parse_function_report(REPORT)
+        self.assertEqual(
+            [(f.name, f.lines, f.missed) for f in funcs],
+            [("widgetFree", 2, 2), ("widgetGet", 6, 2)],
+        )
+
+    def test_render(self) -> None:
+        text = coverage.render_detail(
+            "src/widget.c",
+            coverage.parse_function_report(REPORT),
+            coverage.parse_show_uncovered(SHOW),
+        )
+        self.assertIn("- widgetFree: 2 of 2 lines missed", text)
+        self.assertIn("- 4-6: `return -1;`", text)
+        self.assertIn("every line ran", coverage.render_detail("src/a.c", [], []))
+
+
 if __name__ == "__main__":
     unittest.main()

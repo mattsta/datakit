@@ -36,7 +36,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import gitutil, steps, toolchain, validate
+from . import gitutil, procs, steps, toolchain, validate
 from .gitutil import ToolError
 from .steps import Step
 
@@ -518,6 +518,139 @@ def report(
     )
     sys.stdout.write(text)
     print(f"summary: {work / 'summary.md'}")
+
+
+#: ``llvm-cov show`` line: ``  NN|  COUNT|source`` (COUNT empty for a
+#: line with no code; 0 for code never run; 1.2k-style for large counts).
+_SHOW_LINE_RE = re.compile(r"^\s*(\d+)\|\s*([0-9.]*[kMGTPE]?)\|(.*)$")
+
+
+@dataclass
+class UncoveredRange:
+    first: int
+    last: int
+    text: str  # the first uncovered line's source, stripped
+
+
+def parse_show_uncovered(text: str) -> list[UncoveredRange]:
+    """Ranges of never-run code lines from ``llvm-cov show`` of one file.
+    A range runs through lines without code between uncovered ones, and
+    ends at the next line that ran."""
+    ranges: list[UncoveredRange] = []
+    current: UncoveredRange | None = None
+    for raw in text.splitlines():
+        m = _SHOW_LINE_RE.match(raw)
+        if not m:
+            continue
+        line, count, source = int(m.group(1)), m.group(2), m.group(3)
+        if count == "0":
+            if current is None:
+                current = UncoveredRange(line, line, source.strip())
+                ranges.append(current)
+            else:
+                current.last = line
+        elif count:
+            current = None
+    return ranges
+
+
+@dataclass
+class FunctionMiss:
+    name: str
+    lines: int
+    missed: int
+
+
+def parse_function_report(text: str) -> list[FunctionMiss]:
+    """Functions with missed lines from ``llvm-cov report -show-functions``
+    (columns: Name, Regions, Miss, Cover, Lines, Miss, Cover, ...), most
+    missed first."""
+    out: list[FunctionMiss] = []
+    for raw in text.splitlines():
+        parts = raw.split()
+        if len(parts) < 7 or not parts[1].isdigit() or not parts[4].isdigit():
+            continue
+        if not parts[5].isdigit() or parts[0] in ("Name", "TOTAL"):
+            continue
+        lines, missed = int(parts[4]), int(parts[5])
+        if missed:
+            out.append(FunctionMiss(parts[0], lines, missed))
+    out.sort(key=lambda f: (-f.missed, f.name))
+    return out
+
+
+def render_detail(
+    path: str, functions: list[FunctionMiss], ranges: list[UncoveredRange]
+) -> str:
+    md = [f"## {path}", ""]
+    if not functions and not ranges:
+        md += ["every line ran", ""]
+        return "\n".join(md) + "\n"
+    md += ["### Functions with missed lines", ""]
+    md += [f"- {f.name}: {f.missed} of {f.lines} lines missed" for f in functions]
+    md += ["", "### Uncovered lines", ""]
+    for r in ranges:
+        span = f"{r.first}" if r.first == r.last else f"{r.first}-{r.last}"
+        md.append(f"- {span}: `{r.text}`")
+    return "\n".join(md) + "\n"
+
+
+def _earlier_run(repo: Path, opts: CoverageOptions) -> tuple[str, Path]:
+    commit = gitutil.resolve_commit(repo, opts.rev)
+    work = gitutil.scratch_root(opts.root).resolve() / "coverage" / commit[:10]
+    return commit, work
+
+
+def detail(repo: Path, opts: CoverageOptions, paths: list[str]) -> int:
+    """Per-file gaps (functions by missed lines, uncovered line ranges) from
+    the earlier run for REV: no build, no tests."""
+    commit, work = _earlier_run(repo, opts)
+    src = work / "src"
+    merged = work / "merged.profdata"
+    compiler = opts.compiler or toolchain.resolve_compiler("clang22")
+    llvm_cov = str(Path(compiler.cc).parent / "llvm-cov")
+    binary = toolchain.build_config(compiler, "coverage").binary_dir(src) / "src"
+    binary = binary / "datakit-test"
+    for need in (merged, binary):
+        if not need.exists():
+            raise ToolError(
+                f"no earlier coverage run for {commit[:10]}: {need} is missing"
+            )
+
+    def cov(command: list[str], source: Path) -> str:
+        done = procs.run(
+            [
+                llvm_cov,
+                *command,
+                f"-instr-profile={merged}",
+                str(binary),
+                str(source),
+            ],
+            timeout=steps.CONFIGURE_TIMEOUT,
+        )
+        if done.returncode != 0:
+            raise ToolError(
+                f"llvm-cov {command[0]} failed: "
+                f"{done.stderr.decode('utf-8', 'replace').strip()}"
+            )
+        return done.stdout.decode("utf-8", "replace")
+
+    out = []
+    for rel in paths:
+        source = src / rel
+        if not source.is_file():
+            raise ToolError(f"{rel}: not a file of the exported tree")
+        show = cov(["show", "-use-color=false"], source)
+        report_text = cov(["report", "-show-functions", "-use-color=false"], source)
+        out.append(
+            render_detail(
+                rel,
+                parse_function_report(report_text),
+                parse_show_uncovered(show),
+            )
+        )
+    sys.stdout.write("\n".join(out))
+    return 0
 
 
 def rereport(repo: Path, opts: CoverageOptions) -> int:

@@ -294,6 +294,9 @@ uv run --project tools dktools coverage [--rev REV] [--top N] [--skip REGEX] \
   copies, this list holds only the ones that never ran anywhere.
 - `--reuse` renders the summary again from the earlier run for REV (no
   build, no tests), for changes to the report itself.
+- `--detail FILE` (repeatable, repo-relative) reads the earlier run for
+  REV and lists FILE's functions by missed lines and its uncovered line
+  ranges (each with its first source line): the worklist for one file.
 - Writes `ROOT/coverage/<hash>/summary.md` and `summary.json` and
   prints the summary. There is no percentage target: the output is
   the list of gaps to triage. Exits 0 when every test passed, 1

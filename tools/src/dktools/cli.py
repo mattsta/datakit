@@ -384,6 +384,14 @@ def main(argv: list[str] | None = None) -> int:
         help="render the summary again from the earlier run for REV (no build, "
         "no tests)",
     )
+    cv.add_argument(
+        "--detail",
+        action="append",
+        default=[],
+        metavar="FILE",
+        help="from the earlier run for REV, list FILE's (repo-relative, "
+        "repeatable) functions by missed lines and its uncovered line ranges",
+    )
     toolchain.add_arguments(cv)
 
     vs = sub.add_parser(
@@ -473,18 +481,18 @@ def _dispatch(args: argparse.Namespace) -> int:
         )
 
     if args.command == "coverage":
-        return (coverage.rereport if args.reuse else coverage.run)(
-            args.repo,
-            coverage.CoverageOptions(
-                rev=args.rev,
-                serial=args.serial,
-                skip=args.skip,
-                top=args.top,
-                root=args.root,
-                jobs=args.jobs,
-                compiler=toolchain.from_args("clang22", args),
-            ),
+        cov_opts = coverage.CoverageOptions(
+            rev=args.rev,
+            serial=args.serial,
+            skip=args.skip,
+            top=args.top,
+            root=args.root,
+            jobs=args.jobs,
+            compiler=toolchain.from_args("clang22", args),
         )
+        if args.detail:
+            return coverage.detail(args.repo, cov_opts, args.detail)
+        return (coverage.rereport if args.reuse else coverage.run)(args.repo, cov_opts)
 
     if args.command == "leakcheck":
         mode = "range" if args.rev_range is not None else args.mode or "staged"
