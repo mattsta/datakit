@@ -390,6 +390,62 @@ class Ratchet(unittest.TestCase):
         self.assertIn("REGRESSED", text)
         self.assertIn("no baseline", coverage.render_ratchet(None))
 
+    def test_newly_uncovered_follows_source_across_edits(self) -> None:
+        old_text = "int f(int x) {\n  if (x) {\n    return 1;\n  }\n  return 0;\n}\n"
+        # Two lines added above: every line moves down by two
+        new_text = "// a\n// b\n" + old_text
+        old = coverage.LcovFile(
+            lines={1: 3, 2: 3, 3: 3, 5: 0},
+            branches={(2, 0, 0): True, (2, 0, 1): True},
+        )
+        new = coverage.LcovFile(
+            lines={3: 3, 4: 3, 5: 0, 7: 0},
+            branches={(4, 0, 0): False, (4, 0, 1): True},
+        )
+        lost = coverage.newly_uncovered(old, old_text, new, new_text)
+        # line 7 ("return 0;") was uncovered before too: not listed
+        self.assertEqual(
+            lost,
+            [(4, "branch 0.0: if (x) {"), (5, "line: return 1;")],
+        )
+
+    def test_report_lists_what_a_regression_lost(self) -> None:
+        import tempfile
+
+        text = "int g(int y) {\n  if (y) {\n    return 2;\n  }\n  return 3;\n}\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ("base", "head"):
+                (root / name / "src" / "src").mkdir(parents=True)
+                (root / name / "logs").mkdir()
+                (root / name / "src" / "src" / "g.c").write_text(text)
+            (root / "base" / "logs" / "coverage.lcov").write_text(
+                f"SF:{(root / 'base' / 'src').resolve()}/src/g.c\n"
+                "DA:1,1\nDA:3,1\nDA:5,0\nBRDA:2,0,0,1\nBRDA:2,0,1,1\n"
+                "end_of_record\n"
+            )
+            head_src = root / "head" / "src"
+            lcov = coverage.parse_lcov(
+                f"SF:{head_src.resolve()}/src/g.c\n"
+                "DA:1,1\nDA:3,1\nDA:5,0\nBRDA:2,0,0,1\nBRDA:2,0,1,0\n"
+                "end_of_record\n",
+                head_src,
+            )
+            files, _ = coverage.library_coverage(lcov, head_src)
+            doc = coverage.baseline_doc(
+                "base" + "0" * 36, [self.row("src/g.c", (2, 3), (2, 2))]
+            )
+            r = coverage.ratchet(doc, files)
+            self.assertEqual(r.regressed, ["src/g.c"])
+            coverage.attach_lost(r, root / "base", lcov, head_src)
+            # No cached run at that commit: nothing attached, no error
+            other = coverage.ratchet(doc, files)
+            coverage.attach_lost(other, root / "missing", lcov, head_src)
+        self.assertEqual(r.lost, {"src/g.c": [(2, "branch 0.1: if (y) {")]})
+        self.assertIn("src/g.c:2 branch 0.1: if (y) {", coverage.render_ratchet(r))
+        self.assertEqual(other.lost, {})
+        self.assertIn("re-run coverage", coverage.render_ratchet(other))
+
     def test_a_file_that_grew_with_tests_holds(self) -> None:
         doc = coverage.baseline_doc("b" * 40, [self.row("src/a.c", (8, 10), (3, 4))])
         r = coverage.ratchet(doc, [self.row("src/a.c", (58, 60), (13, 14))])

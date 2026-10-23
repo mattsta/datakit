@@ -743,10 +743,47 @@ class Ratchet:
     regressions: list[str] = field(default_factory=list)  # "path: what"
     improved: list[str] = field(default_factory=list)
     new: list[str] = field(default_factory=list)
+    regressed: list[str] = field(default_factory=list)  # paths
+    # path -> (line, what) newly uncovered, when the baseline run is cached
+    lost: dict[str, list[tuple[int, str]]] = field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
         return not self.regressions
+
+
+def uncovered_points(rec: LcovFile, text: str) -> dict[str, list[int]]:
+    """A file's uncovered library lines and untaken branches, keyed by what
+    they are ("line: SOURCE" or "branch B.R: SOURCE") rather than where, so
+    two runs of an edited file still line up; values are the line numbers."""
+    source = text.splitlines()
+    skip = test_lines(text)
+
+    def at(n: int) -> str:
+        return source[n - 1].strip() if 0 < n <= len(source) else ""
+
+    out: dict[str, list[int]] = {}
+    for n, count in sorted(rec.lines.items()):
+        if count == 0 and n not in skip:
+            out.setdefault(f"line: {at(n)}", []).append(n)
+    for (n, block, branch), taken in sorted(rec.branches.items()):
+        if not taken and n not in skip:
+            out.setdefault(f"branch {block}.{branch}: {at(n)}", []).append(n)
+    return out
+
+
+def newly_uncovered(
+    old: LcovFile, old_text: str, new: LcovFile, new_text: str
+) -> list[tuple[int, str]]:
+    """(line, what) the new run left uncovered beyond the old run: for each
+    kind of point, the excess over the old run's count, at its last lines."""
+    was = uncovered_points(old, old_text)
+    out: list[tuple[int, str]] = []
+    for key, lines in uncovered_points(new, new_text).items():
+        extra = len(lines) - len(was.get(key, []))
+        if extra > 0:
+            out += [(n, key) for n in lines[-extra:]]
+    return sorted(out)
 
 
 def ratchet(baseline: dict, files: list[FileCoverage]) -> Ratchet:
@@ -771,6 +808,7 @@ def ratchet(baseline: dict, files: list[FileCoverage]) -> Ratchet:
             worse.append(f"uncovered branches {was['branches']} -> {branches}")
         if worse:
             out.regressions.append(f"{f.path}: {', '.join(worse)}")
+            out.regressed.append(f.path)
         elif lines < was["lines"] or branches < was["branches"]:
             out.improved.append(
                 f"{f.path}: lines {was['lines']} -> {lines}, "
@@ -797,7 +835,40 @@ def render_ratchet(r: Ratchet | None) -> str:
         if items:
             md += ["", f"### {title}", ""]
             md += [f"- {item}" for item in items]
+    if r.lost:
+        md += ["", "### Newly uncovered (against the cached baseline run)", ""]
+        for path in sorted(r.lost):
+            md += [f"- {path}:{n} {what}" for n, what in r.lost[path]]
+    elif r.regressed:
+        md += [
+            "",
+            "(re-run coverage at the baseline commit to list the newly"
+            " uncovered lines)",
+        ]
     return "\n".join(md) + "\n"
+
+
+def attach_lost(
+    r: Ratchet, base_work: Path, lcov: dict[str, LcovFile], src: Path
+) -> None:
+    """Fill r.lost for each regressed file from the baseline commit's
+    cached run in `base_work` (skipped when that run is not cached)."""
+    base_lcov = base_work / "logs" / "coverage.lcov"
+    if not r.regressed or not base_lcov.exists():
+        return
+    base_src = base_work / "src"
+    old = parse_lcov(base_lcov.read_text(), base_src)
+    for path in r.regressed:
+        old_file = base_src / path
+        new_file = src / path
+        if path not in old or path not in lcov or not old_file.is_file():
+            continue
+        r.lost[path] = newly_uncovered(
+            old[path],
+            old_file.read_text(errors="replace"),
+            lcov[path],
+            new_file.read_text(errors="replace"),
+        )
 
 
 def report(
@@ -822,16 +893,22 @@ def report(
     api = public_api(collect_headers(src), counts)
     api.unrun_inline = unrun_inline(collect_headers(src, public_only=False), counts)
     library = None
-    lcov = logs / "coverage.lcov"
-    if lcov.exists():
-        library = library_coverage(parse_lcov(lcov.read_text(), src), src)
+    lcov_file = logs / "coverage.lcov"
+    lcov: dict[str, LcovFile] = {}
+    if lcov_file.exists():
+        lcov = parse_lcov(lcov_file.read_text(), src)
+        library = library_coverage(lcov, src)
 
     text = render(commit, subject, tests, files, total, api, top, library)
     result: Ratchet | None = None
     if library is not None:
         baseline_file = src / BASELINE
         if baseline_file.exists():
-            result = ratchet(json.loads(baseline_file.read_text()), library[0])
+            doc = json.loads(baseline_file.read_text())
+            result = ratchet(doc, library[0])
+            base = str(doc.get("commit", ""))[:10]
+            if base:
+                attach_lost(result, work.parent / base, lcov, src)
         text += render_ratchet(result)
     (work / "summary.md").write_text(text)
     (work / "summary.json").write_text(

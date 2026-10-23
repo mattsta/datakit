@@ -304,7 +304,13 @@ uv run --project tools dktools coverage [--rev REV] [--top N] [--skip REGEX] \
   when any file has more of either than its baseline, lists the files
   that improved and the new ones, and `--update-baseline` writes the
   run's figures to the working tree (commit it with the tests that
-  earned it).
+  earned it).  When the baseline commit's run is still under
+  `ROOT/coverage/`, a regression also lists each newly uncovered line
+  and branch with its source (matched by source text, so line shifts
+  from edits don't count); otherwise re-run coverage at that commit.
+  The coverage preset updates counters atomically: plain counters lose
+  counts in threaded tests, and the branch counts llvm derives from them
+  then drift by one or wrap, which read as coverage changes.
 - `--detail FILE` (repeatable, repo-relative) reads the earlier run for
   REV and lists FILE's functions by missed lines and its uncovered line
   ranges (each with its first source line): the worklist for one file.
