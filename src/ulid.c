@@ -2354,6 +2354,12 @@ bool ulid64IsValidVariantType(ulidVariantType type) {
 }
 
 bool ulid64ValidateTimestamp(uint64_t timestampNs, ulidVariantType type) {
+    /* The epoch variants store timestamp - epoch: an earlier timestamp
+     * would underflow into a garbage offset. */
+    if ((type == ULID_VARIANT_EPOCH2020 && timestampNs < ULID_EPOCH_2020_NS) ||
+        (type == ULID_VARIANT_EPOCH2024 && timestampNs < ULID_EPOCH_2024_NS)) {
+        return false;
+    }
     uint64_t maxTs = ulid64GetMaxTimestamp(type);
     return timestampNs <= maxTs;
 }
@@ -2440,11 +2446,86 @@ static int ulidTestSign(int v) {
     return (v > 0) - (v < 0);
 }
 
+/* Generate one id of `type` with the generator's clock steered to about
+ * `atNs`; *before / *after bracket the instant it read. */
+static void ulidTestGenerateAt(ulid64_t *out, ulidVariantType type,
+                               uint64_t atNs, uint64_t *before,
+                               uint64_t *after) {
+    ulidGen g;
+    ulidGenInit(&g, ULID_CLOCK_MONOTONIC_OFFSET);
+    /* Unsigned arithmetic: monotonic + offset is atNs modulo 2^64 */
+    g.clockOffsetNs = atNs - timeUtilMonotonicNs();
+    *before = timeUtilMonotonicNs() + g.clockOffsetNs;
+    ulid64Generate(&g, out, type);
+    *after = timeUtilMonotonicNs() + g.clockOffsetNs;
+}
+
 int ulidTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
 
     int32_t err = 0;
+
+    TEST("every 64-bit variant round-trips a timestamp in its range") {
+        /* At the middle of each variant's valid range and near its top,
+         * the extracted timestamp is the generation instant to the
+         * variant's precision, the random/sequence part fits its bits,
+         * and the range check agrees */
+        static const struct {
+            ulidVariantType type;
+            uint64_t lowNs;
+            uint64_t precisionNs;
+        } variants[] = {
+            {ULID_VARIANT_EPOCH2020, ULID_EPOCH_2020_NS, 1},
+            {ULID_VARIANT_EPOCH2024, ULID_EPOCH_2024_NS, 1},
+            {ULID_VARIANT_NS, 0, 1},
+            {ULID_VARIANT_US, 0, 1000},
+            {ULID_VARIANT_MS, 0, 1000000},
+            {ULID_VARIANT_NSCOUNT, 0, 1},
+            {ULID_VARIANT_HYBRID, 0, 1},
+            {ULID_VARIANT_SNOWFLAKE, 0, 1000000},
+        };
+        for (size_t v = 0; v < sizeof(variants) / sizeof(variants[0]); v++) {
+            const ulidVariantType type = variants[v].type;
+            const uint64_t lo = variants[v].lowNs;
+            const uint64_t hi = ulid64GetMaxTimestamp(type);
+            const uint64_t prec = variants[v].precisionNs;
+            const uint64_t points[2] = {lo + (hi - lo) / 2, hi - 10000000};
+            for (size_t p = 0; p < 2; p++) {
+                ulid64_t id;
+                uint64_t before = 0;
+                uint64_t after = 0;
+                ulidTestGenerateAt(&id, type, points[p], &before, &after);
+                const uint64_t got = ulid64GetTimestampNs(&id, type);
+                const uint8_t bits = ulid64GetVariantRandomBits(type);
+                const uint64_t rnd = ulid64GetRandom(&id, type);
+                if (got < before / prec * prec || got > after / prec * prec ||
+                    !ulid64ValidateTimestamp(got, type) ||
+                    (bits < 64 && rnd >> bits) || bits == 0) {
+                    ERR("%s at %" PRIu64 ": got %" PRIu64 " outside [%" PRIu64
+                        ", %" PRIu64 "], random %" PRIu64 " of %u bits",
+                        ulid64GetVariantName(type), points[p], got, before,
+                        after, rnd, bits);
+                }
+            }
+            if (!ulid64ValidateTimestamp(hi, type) ||
+                ulid64ValidateTimestamp(hi + 1, type) ||
+                (lo > 0 && ulid64ValidateTimestamp(lo - 1, type))) {
+                ERR("%s: range check wrong at its bounds",
+                    ulid64GetVariantName(type));
+            }
+            if (!ulid64IsValidVariantType(type) ||
+                !ulid64GetVariantDescription(type) ||
+                !ulid64GetVariantPrecision(type) ||
+                !(ulid64GetVariantRangeYears(type) > 0.0)) {
+                ERR("variant %d: metadata missing", (int)type);
+            }
+        }
+        if (ulid64ValidateTimestamp(ULID_EPOCH_2024_NS - 1,
+                                    ULID_VARIANT_EPOCH2024)) {
+            ERRR("a timestamp before the 2024 epoch read as valid");
+        }
+    }
 
     /* Shared generator for tests that don't exercise state itself */
     ulidGen g;
