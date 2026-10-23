@@ -1072,6 +1072,181 @@ DK_FN_NO_OPTIMIZE int strTest(int argc, char *argv[]) {
         }
     }
 
+    TEST("StrScanScan: decimals and hex floats against strtod") {
+        /* Rounding edges: the halfway cases at DBL_MIN, the smallest
+         * subnormal and its half, the largest double and just past it */
+        static const char *edges[] = {
+            "2.2250738585072011e-308",
+            "2.2250738585072012e-308",
+            "4.9406564584124654e-324",
+            "2.4703282292062327e-324",
+            "2.4703282292062328e-324",
+            "1.7976931348623157e308",
+            "1.7976931348623158e308",
+            "1.7976931348623159e308",
+            "9007199254740993",
+            "9007199254740992.5000000000000000000000001",
+            "0.1",
+            "123456789012345678901234567890123456789e-20",
+            "0x1.8p3",
+            "0x.1p-2",
+            "-0x1P-1074",
+            "0x1p-1075",
+            "0x1.0000000000000800000001p0",
+            "0x1.fffffffffffff8p1023",
+            "0x123456789abcdef0123p-40",
+        };
+        for (size_t i = 0; i < sizeof(edges) / sizeof(*edges); i++) {
+            databox box = {{0}};
+            const StrScanFmt fmt = StrScanScan((const uint8_t *)edges[i], &box,
+                                               STRSCAN_OPT_TONUM, false, false);
+            const double want = strtod(edges[i], NULL);
+            if (fmt != STRSCAN_NUM ||
+                memcmp(&box.data.d64, &want, sizeof(want)) != 0) {
+                ERR("StrScanScan(%s) = %d, %.17g; strtod %.17g", edges[i], fmt,
+                    box.data.d64, want);
+            }
+        }
+
+        /* Random decimals of up to 40 digits and random hex floats */
+        static const char hexd[] = "0123456789abcdef";
+        uint64_t rng = 0x5ca9;
+        for (int n = 0; n < 4000; n++) {
+            const bool hex = n & 1;
+            char s[96];
+            size_t at = 0;
+            if (splitmix64(&rng) & 1) {
+                s[at++] = '-';
+            }
+            if (hex) {
+                s[at++] = '0';
+                s[at++] = 'x';
+            }
+            const size_t digits = 1 + splitmix64(&rng) % (hex ? 24 : 40);
+            const size_t point = splitmix64(&rng) % (digits + 1);
+            for (size_t k = 0; k < digits; k++) {
+                if (k == point) {
+                    s[at++] = '.';
+                }
+                s[at++] = hexd[splitmix64(&rng) % (hex ? 16 : 10)];
+            }
+            const int span = hex ? 2300 : 700;
+            at += (size_t)snprintf(s + at, sizeof(s) - at, "%c%d",
+                                   hex ? 'p' : 'e',
+                                   (int)(splitmix64(&rng) % span) - span / 2);
+            databox box = {{0}};
+            const StrScanFmt fmt = StrScanScan((const uint8_t *)s, &box,
+                                               STRSCAN_OPT_TONUM, false, false);
+            const double want = strtod(s, NULL);
+            if (fmt != STRSCAN_NUM ||
+                memcmp(&box.data.d64, &want, sizeof(want)) != 0) {
+                ERR("StrScanScan(%s) = %d, %.17g; strtod %.17g", s, fmt,
+                    box.data.d64, want);
+                break;
+            }
+        }
+    }
+
+    TEST("StrScanScan: C integers, suffixes, imaginary and refusals") {
+        enum {
+            C = STRSCAN_OPT_C,
+            LL = STRSCAN_OPT_LL,
+            IM = STRSCAN_OPT_IMAG,
+        };
+        static const struct {
+            const char *s;
+            int opt;
+            StrScanFmt fmt;
+            uint64_t bits; /* integers: the box's 64 bits */
+            double d;      /* numbers */
+        } cases[] = {
+            {"0777", C, STRSCAN_INT, 511, 0},
+            {"0777", 0, STRSCAN_INT, 777, 0},
+            {"-0777", C, STRSCAN_INT, (uint64_t)-511, 0},
+            {"08", C, STRSCAN_ERROR, 0, 0},
+            {"077777777777", C, STRSCAN_ERROR, 0, 0},
+            {"020000000000", C, STRSCAN_U32, 0x80000000u, 0},
+            {"0777LL", C | LL, STRSCAN_I64, 511, 0},
+            {"0x1fu", C, STRSCAN_U32, 31, 0},
+            {"123u", C, STRSCAN_U32, 123, 0},
+            {"123u", 0, STRSCAN_ERROR, 0, 0},
+            {"4294967295u", C, STRSCAN_U32, 0xffffffffu, 0},
+            {"4294967296u", C, STRSCAN_ERROR, 0, 0},
+            {"123LL", LL, STRSCAN_I64, 123, 0},
+            {"123LL", 0, STRSCAN_ERROR, 0, 0},
+            {"-5LL", LL, STRSCAN_I64, (uint64_t)-5, 0},
+            {"5LLU", LL, STRSCAN_U64, 5, 0},
+            {"18446744073709551615ULL", LL, STRSCAN_U64, UINT64_MAX, 0},
+            {"18446744073709551616ULL", LL, STRSCAN_ERROR, 0, 0},
+            {"0x10ULL", LL, STRSCAN_U64, 16, 0},
+            {"0x12345678901234567ULL", LL, STRSCAN_ERROR, 0, 0},
+            {"10l", 0, STRSCAN_ERROR, 0, 0},
+            {"0x123456789", C, STRSCAN_ERROR, 0, 0},
+            {"0x80000000", C, STRSCAN_U32, 0x80000000u, 0},
+            {"0x80000000", 0, STRSCAN_NUM, 0, 2147483648.0},
+            {"9999999999", C, STRSCAN_ERROR, 0, 0},
+            {"9999999999", 0, STRSCAN_NUM, 0, 9999999999.0},
+            {"2i", IM, STRSCAN_IMAG, 0, 2.0},
+            {"2.5I", IM, STRSCAN_IMAG, 0, 2.5},
+            {"2i", 0, STRSCAN_ERROR, 0, 0},
+            {"1..2", 0, STRSCAN_ERROR, 0, 0},
+            {"..1", 0, STRSCAN_ERROR, 0, 0},
+            {"1e", 0, STRSCAN_ERROR, 0, 0},
+            {"1e+", 0, STRSCAN_ERROR, 0, 0},
+            {"0x", 0, STRSCAN_ERROR, 0, 0},
+            {".", 0, STRSCAN_ERROR, 0, 0},
+            {"1.2.3", 0, STRSCAN_ERROR, 0, 0},
+            {"++1", 0, STRSCAN_ERROR, 0, 0},
+            {"1x", 0, STRSCAN_ERROR, 0, 0},
+            {"0.000", 0, STRSCAN_NUM, 0, 0.0},
+            {"1e99999", 0, STRSCAN_NUM, 0, INFINITY},
+            {"-1e-99999", 0, STRSCAN_NUM, 0, -0.0},
+        };
+        for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); i++) {
+            databox box = {{0}};
+            const StrScanFmt fmt =
+                StrScanScan((const uint8_t *)cases[i].s, &box,
+                            (StrScanOpt)cases[i].opt, false, false);
+            const bool number =
+                cases[i].fmt == STRSCAN_NUM || cases[i].fmt == STRSCAN_IMAG;
+            if (fmt != cases[i].fmt ||
+                (fmt != STRSCAN_ERROR && !number &&
+                 box.data.u64 != cases[i].bits) ||
+                (number &&
+                 memcmp(&box.data.d64, &cases[i].d, sizeof(double)) != 0)) {
+                ERR("StrScanScan(%s, opt %d) = %d, %" PRIx64 " / %g; want %d",
+                    cases[i].s, cases[i].opt, fmt, box.data.u64, box.data.d64,
+                    cases[i].fmt);
+            }
+        }
+
+        /* Float words, spaces, and TOINT */
+        databox box = {{0}};
+        if (StrScanScan((const uint8_t *)"-inf", &box, 0, true, false) !=
+                STRSCAN_NUM ||
+            box.data.d64 != -INFINITY ||
+            StrScanScan((const uint8_t *)"Infinity", &box, 0, true, false) !=
+                STRSCAN_NUM ||
+            box.data.d64 != INFINITY ||
+            StrScanScan((const uint8_t *)"  NaN  ", &box, 0, true, true) !=
+                STRSCAN_NUM ||
+            !isnan(box.data.d64) ||
+            StrScanScan((const uint8_t *)"infx", &box, 0, true, false) !=
+                STRSCAN_ERROR ||
+            StrScanScan((const uint8_t *)" 12 ", &box, 0, false, false) !=
+                STRSCAN_ERROR ||
+            StrScanScan((const uint8_t *)" 1.5e1 ", &box, 0, false, true) !=
+                STRSCAN_NUM ||
+            box.data.d64 != 15.0 ||
+            StrScanScan((const uint8_t *)"3.0", &box, STRSCAN_OPT_TOINT, false,
+                        false) != STRSCAN_INT ||
+            box.data.i64 != 3 ||
+            StrScanScan((const uint8_t *)"3.5", &box, STRSCAN_OPT_TOINT, false,
+                        false) != STRSCAN_NUM) {
+            ERRR("StrScanScan float words, spaces or TOINT");
+        }
+    }
+
     TEST("StrAtoF and StrAtoi64 read UTF-16 as they read UTF-8") {
         static const char *nums[] = {"1e5",
                                      "-2.5E-3",

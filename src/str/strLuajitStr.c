@@ -121,6 +121,12 @@ StrScanSigned64_(uint64_t x, int32_t neg) {
     return neg ? UINT64_C(0) - x : x;
 }
 
+/* A STRSCAN_U32 result: the 32 bits of the signed value, zero-extended
+ * (as int32_t they would sign-extend 2^31 and above into the 64-bit box) */
+DK_INLINE_ALWAYS uint32_t StrScanUnsigned32_(uint64_t x, int32_t neg) {
+    return (uint32_t)StrScanSigned32_(x, neg);
+}
+
 /* Parse hexadecimal number. */
 DK_STATIC StrScanFmt StrScanHex(const uint8_t *p, databox *box, StrScanFmt fmt,
                                 StrScanOpt opt, int32_t ex2, int32_t neg,
@@ -162,7 +168,7 @@ DK_STATIC StrScanFmt StrScanHex(const uint8_t *p, databox *box, StrScanFmt fmt,
             return STRSCAN_ERROR;
         }
 
-        DATABOX_SET_UNSIGNED(box, StrScanSigned32_(x, neg));
+        DATABOX_SET_UNSIGNED(box, StrScanUnsigned32_(x, neg));
         return STRSCAN_U32;
     case STRSCAN_I64:
     case STRSCAN_U64:
@@ -217,7 +223,11 @@ DK_STATIC StrScanFmt StrScanOctal(const uint8_t *p, databox *box,
             return STRSCAN_ERROR;
         }
 
-        DATABOX_SET_SIGNED(box, StrScanSigned32_(x, neg));
+        if (fmt == STRSCAN_U32) {
+            DATABOX_SET_UNSIGNED(box, StrScanUnsigned32_(x, neg));
+        } else {
+            DATABOX_SET_SIGNED(box, StrScanSigned32_(x, neg));
+        }
         break;
     default:
     case STRSCAN_I64:
@@ -323,7 +333,7 @@ DK_STATIC StrScanFmt StrScanDecimal(const uint8_t *p, databox *box,
                     return STRSCAN_ERROR;
                 }
 
-                DATABOX_SET_UNSIGNED(box, StrScanSigned32_(x, neg));
+                DATABOX_SET_UNSIGNED(box, StrScanUnsigned32_(x, neg));
                 return STRSCAN_U32;
             case STRSCAN_I64:
             case STRSCAN_U64:
