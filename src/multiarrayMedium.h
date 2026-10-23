@@ -12,15 +12,15 @@ multiarrayMedium *multiarrayMediumNewWithData(int16_t len, int16_t rowMax,
 void multiarrayMediumFreeInside(multiarrayMedium *e);
 void multiarrayMediumFree(multiarrayMedium *e);
 
-/* multiarrayMediumInsert{Before,After} provided by multiarrayMediumMedium.c */
-/* need: delete-at-idx */
-/* need: delete-at-idx for count */
-/* need: index-by-head */
-/* need: index-by-tail */
-
 void multiarrayMediumInsert(multiarrayMedium *mar, const int32_t idx,
                             const void *s);
 void multiarrayMediumDelete(multiarrayMedium *mar, const int32_t idx);
+void multiarrayMediumDeleteTaking(multiarrayMedium *mar, const int32_t idx,
+                                  void *out);
+void multiarrayMediumDeleteRange(multiarrayMedium *mar, const uint32_t idx,
+                                 uint32_t count);
+void multiarrayMediumLocate(const multiarrayMedium *mar, const uint32_t idx,
+                            uint32_t *nodeIdx, uint32_t *offset);
 void *multiarrayMediumGet(const multiarrayMedium *mar, const int32_t idx);
 size_t multiarrayMediumCount(const multiarrayMedium *mar);
 size_t multiarrayMediumBytes(const multiarrayMedium *mar);

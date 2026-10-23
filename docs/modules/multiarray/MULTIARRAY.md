@@ -169,19 +169,49 @@ void multiarrayDelete(multiarray **m, const uint32_t index);
  * Count is O(1) on Small, O(nodes) on Medium/Large. */
 size_t multiarrayCount(const multiarray *m);
 size_t multiarrayBytes(const multiarray *m);
+
+/* The element width and per-node capacity the array was created with */
+uint16_t multiarrayElementLen(const multiarray *m);
+uint16_t multiarrayRowMax(const multiarray *m);
+
+/* Bulk copy out (O(n) node walk) and bulk build (straight into full nodes) */
+void multiarrayCopyTo(const multiarray *m, void *out);
+multiarray *multiarrayNewFromArray(uint16_t len, uint16_t rowMax,
+                                   const void *elements, size_t count);
+
+/* Overwrite one element in place */
+void multiarrayReplace(multiarray *m, multiarrayIdx idx, const void *what);
+/* Copy one element out and delete it, locating it once */
+void multiarrayPop(multiarray **m, multiarrayIdx idx, void *out);
+/* Delete 'count' elements from 'start': located once, whole nodes dropped,
+ * a partial node moved once */
+void multiarrayDeleteRange(multiarray **m, multiarrayIdx start,
+                           uint32_t count);
+/* Move the last element to the front */
+void multiarrayRotate(multiarray **m);
+
+/* Node-by-node walk in either direction, from an end or from an index */
+void multiarrayIteratorInit(const multiarray *m, multiarrayIter *iter,
+                            bool forward);
+void multiarrayIteratorInitAt(const multiarray *m, multiarrayIter *iter,
+                              multiarrayIdx idx, bool forward);
+void *multiarrayIteratorNext(multiarrayIter *iter);
 ```
 
-Notes on what is **not** here:
+Notes:
 
 - There is no `multiarrayInsertAfter()` or `multiarrayInsertBefore()`. There is
   one `multiarrayInsert()`, and `idx` is the position the new element will
   occupy (so "insert after element `i`" is `multiarrayInsert(&m, i + 1, x)`).
-- There is no iterator API. `multiarrayGetIterator()`, `multiarrayNext()`,
-  `multiarrayDelRange()`, `multiarrayRotate()`, and `multiarrayPop()` are all
-  inside the `#if 0` block in `multiarray.h`.
+- To visit every element, use the iterator: each `multiarrayIteratorNext()` is
+  O(1) amortized, while `multiarrayGet(m, i)` on a Medium or Large array walks
+  nodes from the front, so a `Get` loop is quadratic.  `Next` returns a pointer
+  to the element in place; the array must not change during the walk.  The
+  iterator is a stack struct and needs no release.
 
-`multiarrayInsert()` and `multiarrayDelete()` take `multiarray **` because the
-insert path may replace the pointer with a promoted representation.
+`multiarrayInsert()`, `multiarrayDelete()`, `multiarrayPop()`,
+`multiarrayDeleteRange()` and `multiarrayRotate()` take `multiarray **` because
+the insert path may replace the pointer with a promoted representation.
 
 ```c
 #include "multiarray.h"
@@ -518,8 +548,9 @@ handling) and, for Large, it short-circuits the single-node case. Use it when
 you know the index is non-negative; do not expect it to make an
 index-by-index loop cheaper than O(N\*K).
 
-To iterate a Large cheaply, walk the node list directly instead of calling
-`Get`/`GetForward` per index — see EXAMPLES.md.
+To iterate cheaply, use `multiarrayIteratorInit()` / `multiarrayIteratorNext()`
+on a container array (or walk a Native Large's node list directly) instead of
+calling `Get`/`GetForward` per index — see EXAMPLES.md.
 
 | Representation | Container bytes | Per-node bytes | Notes                        |
 | -------------- | --------------- | -------------- | ---------------------------- |

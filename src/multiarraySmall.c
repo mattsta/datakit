@@ -48,11 +48,21 @@ size_t multiarraySmallBytes(const multiarraySmall *mar) {
 }
 
 void multiarraySmallDelete(multiarraySmall *mar, uint16_t idx) {
+    multiarraySmallDeleteTaking(mar, idx, NULL);
+}
+
+/* Delete entry 'idx', first copying it to 'out' when 'out' is not NULL */
+void multiarraySmallDeleteTaking(multiarraySmall *mar, uint16_t idx,
+                                 void *out) {
     /* Deleting from an empty array or past the end is a caller bug
      * (silently dropping the tail element or requesting a ~SIZE_MAX
      * realloc otherwise) */
     assert(mar->count > 0);
     assert(idx < mar->count);
+
+    if (out) {
+        memcpy(out, mar->data + _mo(idx), mar->len);
+    }
 
     if (idx < mar->count) {
         const uint32_t remaining = mar->count - idx - 1;
@@ -62,6 +72,24 @@ void multiarraySmallDelete(multiarraySmall *mar, uint16_t idx) {
     /* @own: container; free=multiarraySmallFree */
     mar->data = zrealloc(mar->data, _mo(mar->count - 1));
     mar->count--;
+}
+
+/* Delete the 'count' entries from 'idx' (all within the array) with one
+ * move and one resize */
+void multiarraySmallDeleteRange(multiarraySmall *mar, uint16_t idx,
+                                uint16_t count) {
+    assert((uint32_t)idx + count <= mar->count);
+    if (count == 0) {
+        return;
+    }
+
+    const uint32_t after = (uint32_t)mar->count - idx - count;
+    memmove(mar->data + _mo(idx), mar->data + _mo((uint32_t)idx + count),
+            _mo(after));
+
+    /* @own: container; free=multiarraySmallFree */
+    mar->data = zrealloc(mar->data, _mo(mar->count - count));
+    mar->count -= count;
 }
 
 #ifdef DATAKIT_TEST

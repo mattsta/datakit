@@ -9,9 +9,10 @@ multiarray-specific, see the cross-module guides under `docs/examples/`.
 
 Two module facts shape almost every example below:
 
-- **multiarray does not track a total element count.** `multiarrayCount()` and
-  `multiarrayBytes()` are compiled out behind `#if 0` in `multiarray.c`. Every
-  example keeps its own counter.
+- **The container API counts; the Native macro API does not.**
+  `multiarrayCount()` and `multiarrayBytes()` answer for a `multiarrayNew()`
+  array (Count is O(nodes) on Medium/Large); a Native array's caller keeps the
+  count, as the examples below do.
 - **Struct fields need the internal headers.** `multiarray.h` transitively
   exposes `multiarraySmall` and `multiarrayMedium`; reaching into a
   `multiarrayLarge` needs an explicit `#include "multiarrayLargeInternal.h"`.
@@ -637,8 +638,13 @@ for (uint32_t i = 0; i < count; i++) {
     void *elem = multiarrayLargeGetForward(large, i);
 }
 
-/* O(E): one pass over the node list, contiguous within each node. */
-/* See Example 6. */
+/* O(E): one pass over the node list, contiguous within each node.  A
+ * container array does this with its iterator; a Native Large array walks
+ * its nodes as Example 6 does. */
+multiarrayIter it;
+multiarrayIteratorInit(arr, &it, true);
+for (void *elem; (elem = multiarrayIteratorNext(&it));) {
+}
 ```
 
 Medium has the same property, with the node scan running over a contiguous node

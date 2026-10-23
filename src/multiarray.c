@@ -15,7 +15,11 @@
 #include "multiarraySmall.c"
 #endif
 
+#include "cleaner.h"
+
 #include <assert.h>
+
+defcleaner(void *, zfree);
 
 #define mars(m) ((multiarraySmall *)_MULTIARRAY_USE(m))
 #define marm(m) ((multiarrayMedium *)_MULTIARRAY_USE(m))
@@ -126,6 +130,196 @@ void multiarrayDelete(multiarray **m, const uint32_t index) {
     /* TODO: auto-shrink behavior?  How to decide when to shrink
      * from Large -> Medium -> Small? */
     MULTIARRAY_NORETURN(*m, Delete, index);
+}
+
+void multiarrayPop(multiarray **m, multiarrayIdx idx, void *out) {
+    switch (_multiarrayType(*m)) {
+    case MULTIARRAY_TYPE_SMALL:
+        multiarraySmallDeleteTaking(mars(*m), (uint16_t)idx, out);
+        break;
+    case MULTIARRAY_TYPE_MEDIUM:
+        multiarrayMediumDeleteTaking(marm(*m), (int32_t)idx, out);
+        break;
+    case MULTIARRAY_TYPE_LARGE:
+        multiarrayLargeDeleteTaking(marl(*m), (int32_t)idx, out);
+        break;
+    default:
+        assert(NULL && "container API on a native multiarray");
+        __builtin_unreachable();
+    }
+}
+
+void multiarrayDeleteRange(multiarray **m, multiarrayIdx start,
+                           uint32_t count) {
+    switch (_multiarrayType(*m)) {
+    case MULTIARRAY_TYPE_SMALL:
+        multiarraySmallDeleteRange(mars(*m), (uint16_t)start, (uint16_t)count);
+        break;
+    case MULTIARRAY_TYPE_MEDIUM:
+        multiarrayMediumDeleteRange(marm(*m), start, count);
+        break;
+    case MULTIARRAY_TYPE_LARGE:
+        multiarrayLargeDeleteRange(marl(*m), start, count);
+        break;
+    default:
+        assert(NULL && "container API on a native multiarray");
+        __builtin_unreachable();
+    }
+}
+
+void multiarrayReplace(multiarray *m, multiarrayIdx idx, const void *what) {
+    memcpy(multiarrayGet(m, idx), what, multiarrayElementLen(m));
+}
+
+void multiarrayRotate(multiarray **m) {
+    const size_t count = multiarrayCount(*m);
+    if (count < 2) {
+        return;
+    }
+
+    /* The tail element, held while it moves to the front */
+    const uint16_t len = multiarrayElementLen(*m);
+    uint8_t onStack[64];
+    cleaner(zfree) void *onHeap = len > sizeof(onStack) ? zmalloc(len) : NULL;
+    void *tail = onHeap ? onHeap : onStack;
+    multiarrayPop(m, (multiarrayIdx)(count - 1), tail);
+    multiarrayInsert(m, 0, tail);
+}
+
+/* XOR-linked Large nodes: the node after 'node', walking from 'from' */
+#define multiarrayLargeStep_(from, node)                                       \
+    ((multiarrayLargeNode *)((uintptr_t)(from) ^ (uintptr_t)(node)->prevNext))
+
+void multiarrayIteratorInit(const multiarray *m, multiarrayIter *iter,
+                            bool forward) {
+    *iter = (multiarrayIter){.tier = _MULTIARRAY_USE(m),
+                             .type = (uint8_t)_multiarrayType(m),
+                             .forward = forward};
+    switch (_multiarrayType(m)) {
+    case MULTIARRAY_TYPE_SMALL:
+        iter->offset = forward ? 0 : (int32_t)mars(m)->count - 1;
+        break;
+    case MULTIARRAY_TYPE_MEDIUM: {
+        const multiarrayMedium *med = marm(m);
+        iter->nodeIdx = forward ? 0 : med->count - 1;
+        iter->offset =
+            forward ? 0 : (int32_t)med->node[iter->nodeIdx].count - 1;
+        break;
+    }
+    case MULTIARRAY_TYPE_LARGE: {
+        const multiarrayLarge *large = marl(m);
+        iter->node = forward ? large->head : large->tail;
+        iter->offset =
+            forward
+                ? 0
+                : (int32_t)((const multiarrayLargeNode *)iter->node)->count - 1;
+        break;
+    }
+    default:
+        assert(NULL && "container API on a native multiarray");
+        __builtin_unreachable();
+    }
+}
+
+void multiarrayIteratorInitAt(const multiarray *m, multiarrayIter *iter,
+                              multiarrayIdx idx, bool forward) {
+    assert(idx < multiarrayCount(m));
+    *iter = (multiarrayIter){.tier = _MULTIARRAY_USE(m),
+                             .type = (uint8_t)_multiarrayType(m),
+                             .forward = forward};
+    switch (_multiarrayType(m)) {
+    case MULTIARRAY_TYPE_SMALL:
+        iter->offset = (int32_t)idx;
+        break;
+    case MULTIARRAY_TYPE_MEDIUM: {
+        uint32_t offset;
+        multiarrayMediumLocate(marm(m), idx, &iter->nodeIdx, &offset);
+        iter->offset = (int32_t)offset;
+        break;
+    }
+    case MULTIARRAY_TYPE_LARGE: {
+        multiarrayLargeNode *prev;
+        multiarrayLargeNode *node;
+        uint32_t offset;
+        multiarrayLargeLocate(marl(m), idx, &prev, &node, &offset);
+        iter->node = node;
+        /* Walking backwards, the node 'behind' is the one after */
+        iter->prev = forward ? prev : multiarrayLargeStep_(prev, node);
+        iter->offset = (int32_t)offset;
+        break;
+    }
+    default:
+        assert(NULL && "container API on a native multiarray");
+        __builtin_unreachable();
+    }
+}
+
+void *multiarrayIteratorNext(multiarrayIter *iter) {
+    const int32_t step = iter->forward ? 1 : -1;
+    switch (iter->type) {
+    case MULTIARRAY_TYPE_SMALL: {
+        const multiarraySmall *s = iter->tier;
+        if (iter->offset < 0 || iter->offset >= (int32_t)s->count) {
+            return NULL;
+        }
+
+        void *at = s->data + (size_t)s->len * (uint32_t)iter->offset;
+        iter->offset += step;
+        return at;
+    }
+    case MULTIARRAY_TYPE_MEDIUM: {
+        const multiarrayMedium *med = iter->tier;
+        while (true) {
+            const multiarrayMediumNode *node = &med->node[iter->nodeIdx];
+            if (iter->offset >= 0 && iter->offset < (int32_t)node->count) {
+                void *at =
+                    node->data + (size_t)med->len * (uint32_t)iter->offset;
+                iter->offset += step;
+                return at;
+            }
+
+            /* This node is done (or empty): the next one in the walk */
+            if (iter->forward) {
+                if (iter->nodeIdx + 1 >= med->count) {
+                    return NULL;
+                }
+                iter->nodeIdx++;
+                iter->offset = 0;
+            } else {
+                if (iter->nodeIdx == 0) {
+                    return NULL;
+                }
+                iter->nodeIdx--;
+                iter->offset = (int32_t)med->node[iter->nodeIdx].count - 1;
+            }
+        }
+    }
+    case MULTIARRAY_TYPE_LARGE: {
+        const multiarrayLarge *large = iter->tier;
+        while (iter->node) {
+            const multiarrayLargeNode *node = iter->node;
+            if (iter->offset >= 0 && iter->offset < (int32_t)node->count) {
+                void *at =
+                    node->data + (size_t)large->len * (uint32_t)iter->offset;
+                iter->offset += step;
+                return at;
+            }
+
+            const multiarrayLargeNode *after =
+                multiarrayLargeStep_(iter->prev, node);
+            iter->prev = node;
+            iter->node = after;
+            if (after) {
+                iter->offset = iter->forward ? 0 : (int32_t)after->count - 1;
+            }
+        }
+
+        return NULL;
+    }
+    default:
+        assert(NULL && "container API on a native multiarray");
+        __builtin_unreachable();
+    }
 }
 
 void multiarrayFree(multiarray *m) {
@@ -247,7 +441,6 @@ multiarray *multiarrayNewFromArray(uint16_t len, uint16_t rowMax,
 
 #ifdef DATAKIT_TEST
 
-#include "cleaner.h"
 #include "ctest.h"
 #include "str.h"
 
@@ -259,11 +452,170 @@ typedef struct s16 {
 defcleanerName(s16 *, zfree, S16);
 defcleaner(multiarray *, multiarrayFree);
 
+/* Every element read back through iterators (both directions, from both
+ * ends and from 'at') and CopyTo matches 'oracle' */
+static int multiarrayOracleCheck_(const multiarray *m, const s16 *oracle,
+                                  uint32_t n, uint32_t at, const char *after) {
+    int err = 0;
+    if (multiarrayCount(m) != n) {
+        ERR("after %s: count %zu, oracle %" PRIu32, after, multiarrayCount(m),
+            n);
+        return err;
+    }
+
+    for (int32_t dir = 0; dir < 2; dir++) {
+        multiarrayIter it;
+        multiarrayIteratorInit(m, &it, dir == 0);
+        uint32_t seen = 0;
+        const s16 *e;
+        while ((e = multiarrayIteratorNext(&it))) {
+            const uint32_t want = dir == 0 ? seen : n - 1 - seen;
+            if (seen >= n || e->a != oracle[want].a || e->b != oracle[want].b) {
+                ERR("after %s: %s walk element %" PRIu32 " wrong", after,
+                    dir == 0 ? "forward" : "backward", want);
+                return err;
+            }
+            seen++;
+        }
+
+        if (seen != n) {
+            ERR("after %s: %s walk saw %" PRIu32 " of %" PRIu32, after,
+                dir == 0 ? "forward" : "backward", seen, n);
+        }
+
+        if (n == 0) {
+            continue;
+        }
+
+        multiarrayIteratorInitAt(m, &it, at % n, dir == 0);
+        uint32_t idx = at % n;
+        while ((e = multiarrayIteratorNext(&it))) {
+            if (e->a != oracle[idx].a) {
+                ERR("after %s: walk from %" PRIu32 " wrong at %" PRIu32, after,
+                    at % n, idx);
+                return err;
+            }
+            if (dir == 0) {
+                idx++;
+            } else if (idx-- == 0) {
+                break;
+            }
+        }
+    }
+
+    if (n) {
+        cleanerName(zfree, S16) s16 *copy = zcalloc(n, sizeof(*copy));
+        multiarrayCopyTo(m, copy);
+        if (memcmp(copy, oracle, n * sizeof(*copy)) != 0) {
+            ERR("after %s: CopyTo differs from the oracle", after);
+        }
+    }
+
+    return err;
+}
+
+/* Insert, Pop, DeleteRange, Replace and Rotate against a plain array,
+ * holding the size inside [lo, hi] so the array stays in one tier while
+ * every operation runs there */
+static int multiarrayOracleSoak_(uint32_t lo, uint32_t hi, uint16_t rowMax,
+                                 multiarrayType tier, uint64_t seed) {
+    int err = 0;
+    cleaner(multiarrayFree) multiarray *m = multiarrayNew(sizeof(s16), rowMax);
+    cleanerName(zfree, S16) s16 *oracle = zcalloc(hi + 64, sizeof(*oracle));
+    uint32_t n = 0;
+    int64_t serial = 0;
+    uint32_t inTier = 0;
+    const uint32_t ops = 1500;
+    for (uint32_t op = 0; op < ops && !err; op++) {
+        inTier += _multiarrayType(m) == tier;
+        seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+        const uint32_t r = (uint32_t)(seed >> 33);
+        const char *what;
+        if (n < lo || (n < hi && r % 3 == 0)) {
+            const uint32_t at = n ? r % (n + 1) : 0;
+            s16 s = {.a = serial, .b = -serial};
+            serial++;
+            multiarrayInsert(&m, at, &s);
+            memmove(&oracle[at + 1], &oracle[at], (n - at) * sizeof(s));
+            oracle[at] = s;
+            n++;
+            what = "Insert";
+        } else {
+            switch (r % 4) {
+            case 0: {
+                const uint32_t at = r % n;
+                s16 got;
+                multiarrayPop(&m, at, &got);
+                if (got.a != oracle[at].a || got.b != oracle[at].b) {
+                    ERR("Pop(%" PRIu32 ") returned %" PRId64
+                        ", oracle %" PRId64,
+                        at, got.a, oracle[at].a);
+                }
+                memmove(&oracle[at], &oracle[at + 1],
+                        (n - at - 1) * sizeof(*oracle));
+                n--;
+                what = "Pop";
+                break;
+            }
+            case 1: {
+                const uint32_t at = r % n;
+                const uint32_t most = n - at < 2 * rowMax ? n - at : 2 * rowMax;
+                const uint32_t count = (r >> 8) % (most + 1);
+                multiarrayDeleteRange(&m, at, count);
+                memmove(&oracle[at], &oracle[at + count],
+                        (n - at - count) * sizeof(*oracle));
+                n -= count;
+                what = "DeleteRange";
+                break;
+            }
+            case 2: {
+                const uint32_t at = r % n;
+                const s16 s = {.a = serial, .b = serial * 3};
+                serial++;
+                multiarrayReplace(m, at, &s);
+                oracle[at] = s;
+                what = "Replace";
+                break;
+            }
+            default:
+                multiarrayRotate(&m);
+                if (n > 1) {
+                    const s16 last = oracle[n - 1];
+                    memmove(&oracle[1], &oracle[0], (n - 1) * sizeof(*oracle));
+                    oracle[0] = last;
+                }
+                what = "Rotate";
+                break;
+            }
+        }
+
+        err += multiarrayOracleCheck_(m, oracle, n, r, what);
+    }
+
+    /* Tiers never shrink, and fragmenting deletes can promote early: most
+     * operations must still have run in the intended tier */
+    if (inTier < ops / 2) {
+        ERR("soak in [%" PRIu32 ", %" PRIu32 "] ran %" PRIu32 " of %" PRIu32
+            " operations in tier %d",
+            lo, hi, inTier, ops, tier);
+    }
+
+    return err;
+}
+
 int multiarrayTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
 
     int err = 0;
+
+    TEST("Insert / Pop / DeleteRange / Replace / Rotate / iterators vs an "
+         "oracle, per tier") {
+        /* rowMax 8: Small holds up to 8, Medium up to 8 nodes, then Large */
+        err += multiarrayOracleSoak_(2, 7, 8, MULTIARRAY_TYPE_SMALL, 1);
+        err += multiarrayOracleSoak_(12, 50, 8, MULTIARRAY_TYPE_MEDIUM, 2);
+        err += multiarrayOracleSoak_(120, 400, 8, MULTIARRAY_TYPE_LARGE, 3);
+    }
 
     printf("Testing direct...\n");
     /* Small up to rowMax, Medium up to rowMax * rowMax, Large beyond: three

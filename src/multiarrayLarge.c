@@ -375,6 +375,72 @@ void *multiarrayLargeGetTail(const multiarrayLarge *mar) {
 }
 
 void multiarrayLargeDelete(multiarrayLarge *mar, const int32_t idx) {
+    multiarrayLargeDeleteTaking(mar, idx, NULL);
+}
+
+void multiarrayLargeLocate(const multiarrayLarge *mar, const uint32_t idx,
+                           multiarrayLargeNode **prev,
+                           multiarrayLargeNode **node, uint32_t *offset) {
+    const multiarrayLargeResult worker =
+        multiarrayLargeGetForwardWorker(mar->head, (int32_t)idx, mar->len);
+    *prev = worker.prev;
+    *node = worker.current;
+    *offset = (uint32_t)worker.offset;
+}
+
+/* Delete the 'count' entries from 'idx' (all within the array), located
+ * once: whole nodes are unlinked, a partial node moves its tail once */
+void multiarrayLargeDeleteRange(multiarrayLarge *mar, const uint32_t idx,
+                                uint32_t count) {
+    assert(idx + (size_t)count <= multiarrayLargeCount(mar));
+    if (count == 0) {
+        return;
+    }
+
+    const size_t len = mar->len;
+    multiarrayLargeResult worker =
+        multiarrayLargeGetForwardWorker(mar->head, (int32_t)idx, mar->len);
+    uint32_t offset = (uint32_t)worker.offset;
+    while (count) {
+        multiarrayLargeNode *node = worker.current;
+        const uint32_t inNode = node->count - offset;
+        const uint32_t take = count < inNode ? count : inNode;
+        if (take == node->count) {
+            multiarrayLargeNode *prev = worker.prev;
+            multiarrayLargeNode *next = worker.next;
+            if (!prev && !next) {
+                /* The last node stays, empty */
+                zfree(node->data);
+                node->data = NULL;
+                node->count = 0;
+                break;
+            }
+
+            /* Unlinked and freed; 'prev' now links to 'next' */
+            multiarrayLargeNodeDelete(mar, worker);
+            worker.current = next;
+            worker.next = next ? getNext(prev, next) : NULL;
+        } else {
+            const uint32_t after = node->count - offset - take;
+            memmove(node->data + len * offset,
+                    node->data + len * (offset + take), len * after);
+            node->count -= take;
+            /* @own: container; free=multiarrayLargeFree */
+            node->data = zrealloc(node->data, len * node->count);
+            worker.prev = node;
+            worker.current = worker.next;
+            worker.next = worker.current ? getNext(node, worker.current) : NULL;
+        }
+
+        count -= take;
+        offset = 0;
+    }
+}
+
+/* Delete entry 'idx', first copying it to 'out' when 'out' is not NULL
+ * (one locate for both) */
+void multiarrayLargeDeleteTaking(multiarrayLarge *mar, const int32_t idx,
+                                 void *out) {
     /* Delete:
      *   1. Find entry index in node
      *   2. Remove entry from its node.
@@ -385,6 +451,9 @@ void multiarrayLargeDelete(multiarrayLarge *mar, const int32_t idx) {
         multiarrayLargeGetForwardWorker(mar->head, idx, len);
 
     multiarrayLargeNode *found = worker.current;
+    if (out) {
+        memcpy(out, worker.entry, len);
+    }
 
     const int32_t offset = worker.offset;
     const size_t offsetLen = offset * len;

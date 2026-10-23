@@ -548,14 +548,15 @@ for (flexEntry *fe = flexTail(f); fe; fe = flexPrev(f, fe)) {
 
 ### "I want to iterate an array"
 
-**multiarray**: there is no exported count or iterator — the public
-surface is `multiarrayNew`/`Free`/`Get`/`GetHead`/`GetTail`/`Insert`/
-`Delete`. Track the element count yourself alongside the container.
+**multiarray**: walk node by node with the iterator (a `multiarrayGet`
+loop re-walks nodes from the front on Medium/Large arrays):
 
 ```c
-for (size_t i = 0; i < myKnownCount; i++) {
-    int64_t *elem = (int64_t *)multiarrayGet(arr, i);
-    // Process elem
+multiarrayIter it;
+multiarrayIteratorInit(arr, &it, true); /* false: last to first */
+int64_t *elem;
+while ((elem = multiarrayIteratorNext(&it))) {
+    // Process elem (in place; don't change the array during the walk)
 }
 ```
 
@@ -675,8 +676,8 @@ size_t bytes = intsetBytes(is);
 size_t bytes = multilruBytes(lru);
 ```
 
-`multiarray` exports neither a count nor a byte-size accessor — track
-the element count yourself.
+`multiarrayCount(arr)` and `multiarrayBytes(arr)` cover the container API;
+the Native macro API tracks its count externally.
 
 ### "I want to check if empty"
 

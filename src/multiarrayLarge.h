@@ -10,15 +10,19 @@ multiarrayLarge *multiarrayLargeFromMedium(multiarrayMedium *medium);
 void multiarrayLargeFreeInside(multiarrayLarge *e);
 void multiarrayLargeFree(multiarrayLarge *e);
 
-/* multiarrayLargeInsert{,After} provided by multiarrayMediumLarge.c */
-/* need: delete-at-idx */
-/* need: delete-at-idx for count */
-/* need: index-by-head */
-/* need: index-by-tail */
+struct multiarrayLargeNode;
 
 void multiarrayLargeInsert(multiarrayLarge *mar, const int32_t idx,
                            const void *s);
 void multiarrayLargeDelete(multiarrayLarge *mar, const int32_t idx);
+void multiarrayLargeDeleteTaking(multiarrayLarge *mar, const int32_t idx,
+                                 void *out);
+void multiarrayLargeDeleteRange(multiarrayLarge *mar, const uint32_t idx,
+                                uint32_t count);
+/* The node holding entry 'idx', the node before it and the offset in it */
+void multiarrayLargeLocate(const multiarrayLarge *mar, const uint32_t idx,
+                           struct multiarrayLargeNode **prev,
+                           struct multiarrayLargeNode **node, uint32_t *offset);
 void *multiarrayLargeGet(const multiarrayLarge *mar, const int32_t idx);
 size_t multiarrayLargeCount(const multiarrayLarge *mar);
 size_t multiarrayLargeBytes(const multiarrayLarge *mar);

@@ -179,22 +179,43 @@ void multiarrayCopyTo(const multiarray *m, void *out);
 multiarray *multiarrayNewFromArray(uint16_t len, uint16_t rowMax,
                                    const void *elements, size_t count);
 
-#if 0
-bool multiarrayDelRange(multiarray **m, const int64_t start, const int64_t stop);
-bool multiarrayReplaceAtIndex(multiarray **m, nodeId index, databox *box);
+/* Overwrite element 'idx' with the multiarrayElementLen bytes at 'what' */
+void multiarrayReplace(multiarray *m, multiarrayIdx idx, const void *what);
 
-multiarrayIter *multiarrayGetIterator(const multiarray **multiarray, int direction);
-multiarrayIter *multiarrayGetIteratorAtIdx(const multiarray **multiarray,
-                                         int direction, const int64_t idx);
-bool multiarrayNext(multiarrayIter *iter, multiarrayEntry *node);
-void multiarrayReleaseIterator(multiarrayIter *iter);
+/* Copy element 'idx' to 'out' (multiarrayElementLen bytes) and delete it,
+ * locating it once */
+void multiarrayPop(multiarray **m, multiarrayIdx idx, void *out);
 
-bool multiarrayIndex(const multiarray *multiarray, const int64_t index,
-                    multiarrayEntry *entry);
+/* Delete the 'count' elements from 'start' (all within the array), located
+ * once: whole nodes are dropped and a partial node moves its tail once,
+ * where 'count' single Deletes would locate and move 'count' times */
+void multiarrayDeleteRange(multiarray **m, multiarrayIdx start, uint32_t count);
 
-void multiarrayRotate(multiarray *m);
-bool multiarrayPop(multiarray **m, int64_t idx, databox *got);
-#endif
+/* Move the last element to the front */
+void multiarrayRotate(multiarray **m);
+
+/* Walks the elements node by node in either direction: each Next is O(1)
+ * amortized, where Get(i) on a Medium or Large walks nodes from the front.
+ * Next returns a pointer to the element in place (valid until the array
+ * changes; the array must not change during the walk), NULL at the end.
+ * The iterator lives on the caller's stack and needs no release. */
+typedef struct multiarrayIter {
+    const void *tier;
+    const void *node; /* Large: the node being walked */
+    const void *prev; /* Large: the node behind it in the walk */
+    uint32_t nodeIdx; /* Medium: the node being walked */
+    int32_t offset;   /* the next element's index in its node */
+    uint8_t type;
+    bool forward;
+} multiarrayIter;
+
+/* From the first element (forward) or the last (backward) */
+void multiarrayIteratorInit(const multiarray *m, multiarrayIter *iter,
+                            bool forward);
+/* From element 'idx' (within the array), in either direction */
+void multiarrayIteratorInitAt(const multiarray *m, multiarrayIter *iter,
+                              multiarrayIdx idx, bool forward);
+void *multiarrayIteratorNext(multiarrayIter *iter);
 
 #ifdef DATAKIT_TEST
 int multiarrayTest(int argc, char *argv[]);

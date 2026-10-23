@@ -286,6 +286,64 @@ void *multiarrayMediumGetTail(const multiarrayMedium *mar) {
 }
 
 void multiarrayMediumDelete(multiarrayMedium *mar, const int32_t idx) {
+    multiarrayMediumDeleteTaking(mar, idx, NULL);
+}
+
+/* The node index and in-node offset of entry 'idx' */
+void multiarrayMediumLocate(const multiarrayMedium *mar, const uint32_t idx,
+                            uint32_t *nodeIdx, uint32_t *offset) {
+    const multiarrayMediumResult worker =
+        multiarrayMediumGetForwardWorker((multiarrayMedium *)mar, (int32_t)idx);
+    *nodeIdx = worker.nodeIdx;
+    *offset = (uint32_t)worker.offset;
+}
+
+/* Delete the 'count' entries from 'idx' (all within the array), located
+ * once: whole nodes are dropped, a partial node moves its tail once */
+void multiarrayMediumDeleteRange(multiarrayMedium *mar, const uint32_t idx,
+                                 uint32_t count) {
+    assert(idx + (size_t)count <= multiarrayMediumCount(mar));
+    if (count == 0) {
+        return;
+    }
+
+    const multiarrayMediumResult worker =
+        multiarrayMediumGetForwardWorker(mar, (int32_t)idx);
+    uint32_t nodeIdx = worker.nodeIdx;
+    uint32_t offset = (uint32_t)worker.offset;
+    const size_t len = mar->len;
+    while (count) {
+        multiarrayMediumNode *node = getNode(nodeIdx);
+        const uint32_t inNode = node->count - offset;
+        const uint32_t take = count < inNode ? count : inNode;
+        if (take == node->count) {
+            /* The whole node goes; the last node stays, empty */
+            zfree(node->data);
+            node->data = NULL;
+            node->count = 0;
+            if (mar->count > 1) {
+                multiarraySmallDirectDelete(mar->node, mar->count, nodeIdx);
+                mar->count--;
+            }
+        } else {
+            const uint32_t after = node->count - offset - take;
+            memmove(node->data + len * offset,
+                    node->data + len * (offset + take), len * after);
+            node->count -= take;
+            /* @own: container; free=multiarrayMediumFree */
+            node->data = zrealloc(node->data, len * node->count);
+            nodeIdx++;
+        }
+
+        count -= take;
+        offset = 0;
+    }
+}
+
+/* Delete entry 'idx', first copying it to 'out' when 'out' is not NULL
+ * (one locate for both) */
+void multiarrayMediumDeleteTaking(multiarrayMedium *mar, const int32_t idx,
+                                  void *out) {
     /* Delete:
      *   1. Find entry index in node
      *   2. Remove entry from its node.
@@ -294,6 +352,9 @@ void multiarrayMediumDelete(multiarrayMedium *mar, const int32_t idx) {
     multiarrayMediumResult worker = multiarrayMediumGetForwardWorker(mar, idx);
 
     multiarrayMediumNode *found = worker.current;
+    if (out) {
+        memcpy(out, worker.entry, mar->len);
+    }
 
     const uint16_t len = mar->len;
     const int32_t offset = worker.offset;
