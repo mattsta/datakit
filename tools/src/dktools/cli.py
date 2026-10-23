@@ -405,6 +405,12 @@ def main(argv: list[str] | None = None) -> int:
         "commit's cached run of the same sources (thread-scheduling noise) "
         "as volatile in the baseline, and write it",
     )
+    cv.add_argument(
+        "--accept-regressions",
+        action="store_true",
+        help="with --update-baseline, write the baseline even though the "
+        "ratchet regressed (an intended drop in coverage)",
+    )
     toolchain.add_arguments(cv)
 
     vs = sub.add_parser(
@@ -504,6 +510,7 @@ def _dispatch(args: argparse.Namespace) -> int:
             compiler=toolchain.from_args("clang22", args),
             update_baseline=args.update_baseline,
             learn_volatile=args.learn_volatile,
+            accept_regressions=args.accept_regressions,
         )
         if args.detail:
             return coverage.detail(args.repo, cov_opts, args.detail)

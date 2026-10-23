@@ -167,6 +167,55 @@ class Coverage(unittest.TestCase):
                 doc["publicApi"]["unrunInline"], {"src/tree.h": ["treeEmpty"]}
             )
 
+    def test_a_regressed_run_is_not_recorded_unless_accepted(self) -> None:
+        import contextlib
+        import io
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp) / "work"
+            repo = Path(tmp) / "repo"
+            (repo / "tools").mkdir(parents=True)
+            (work / "logs").mkdir(parents=True)
+            (work / "src" / "src").mkdir(parents=True)
+            (work / "src" / "tools").mkdir()
+            (work / "src" / "src" / "spin.c").write_text(SPIN)
+            (work / "src" / "src" / "tree.h").write_text(INLINE_HEADER)
+            (work / "logs" / "export.json").write_text(
+                "$ llvm-cov export\n" + summary(str(work / "src"))
+            )
+            (work / "logs" / "functions.txt").write_text(INLINE_PROFILE)
+            (work / "logs" / "coverage.lcov").write_text(spin_lcov(work / "src", False))
+            # The baseline had every point of spin.c but line 3 covered
+            base = {
+                "commit": "b" * 40,
+                "files": {"src/spin.c": {"lines": 1, "branches": 1}},
+            }
+            (work / "src" / coverage.BASELINE).write_text(json.dumps(base))
+            target = repo / coverage.BASELINE
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                held = coverage.report(
+                    work, "c" * 40, "s", "all passed", True, 5, repo, True
+                )
+            self.assertFalse(held)
+            self.assertFalse(target.exists())
+            self.assertIn("NOT written", out.getvalue())
+            with contextlib.redirect_stdout(io.StringIO()):
+                coverage.report(
+                    work,
+                    "c" * 40,
+                    "s",
+                    "all passed",
+                    True,
+                    5,
+                    repo,
+                    True,
+                    accept_regressions=True,
+                )
+            doc = json.loads(target.read_text())
+        self.assertEqual(doc["files"]["src/spin.c"], {"lines": 2, "branches": 2})
+
     def test_declared_functions(self) -> None:
         names = coverage.declared_functions(HEADER)
         self.assertEqual(

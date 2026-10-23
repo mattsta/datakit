@@ -69,6 +69,7 @@ class CoverageOptions:
     compiler: toolchain.Compiler | None = None
     update_baseline: bool = False
     learn_volatile: bool = False
+    accept_regressions: bool = False
 
 
 @dataclass
@@ -739,6 +740,7 @@ def run(repo: Path, opts: CoverageOptions) -> int:
         repo,
         opts.update_baseline,
         opts.learn_volatile,
+        opts.accept_regressions,
     )
     return 0 if tests_ok and held else 1
 
@@ -1037,6 +1039,7 @@ def report(
     repo: Path | None = None,
     update_baseline: bool = False,
     learn: bool = False,
+    accept_regressions: bool = False,
 ) -> bool:
     """Write and print the summary of the run in `work` (its exported
     tree, profile listing and llvm-cov export).  Returns False when the
@@ -1044,7 +1047,8 @@ def report(
     with `update_baseline`, writes the run's figures as `repo`'s baseline;
     with `learn`, first adds the points that differ from the baseline
     commit's run of the same sources to the baseline's volatile points
-    (and writes the baseline)."""
+    (and writes the baseline).  A run that regressed is not written as
+    the baseline unless `accept_regressions`."""
     logs = work / "logs"
     src = work / "src"
     export_text = (logs / "export.json").read_text().split("\n", 1)[1]
@@ -1094,10 +1098,18 @@ def report(
     print(f"summary: {work / 'summary.md'}")
     if (update_baseline or learn) and repo is not None and library is not None:
         target = repo / BASELINE
-        target.write_text(
-            json.dumps(baseline_doc(commit, library[0], volatile), indent=1) + "\n"
-        )
-        print(f"baseline: {target}")
+        if result is not None and not result.ok and not accept_regressions:
+            print(
+                f"baseline: NOT written ({target}): the ratchet regressed.  "
+                "Cover the newly uncovered points, learn scheduling noise "
+                "with --learn-volatile, or record the drop on purpose with "
+                "--accept-regressions"
+            )
+        else:
+            target.write_text(
+                json.dumps(baseline_doc(commit, library[0], volatile), indent=1) + "\n"
+            )
+            print(f"baseline: {target}")
     return result is None or result.ok
 
 
@@ -1277,5 +1289,6 @@ def rereport(repo: Path, opts: CoverageOptions) -> int:
         repo,
         opts.update_baseline,
         opts.learn_volatile,
+        opts.accept_regressions,
     )
     return 0 if tests_ok and held else 1

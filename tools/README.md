@@ -304,7 +304,8 @@ uv run --project tools dktools coverage [--rev REV] [--top N] [--skip REGEX] \
   when any file has more of either than its baseline, lists the files
   that improved and the new ones, and `--update-baseline` writes the
   run's figures to the working tree (commit it with the tests that
-  earned it).  When the baseline commit's run is still under
+  earned it).  A run that regressed is not written unless
+  `--accept-regressions` says the drop is intended.  When the baseline commit's run is still under
   `ROOT/coverage/`, a regression also lists each newly uncovered line
   and branch with its source (matched by source text, so line shifts
   from edits don't count); otherwise re-run coverage at that commit.
