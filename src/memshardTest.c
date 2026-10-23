@@ -186,6 +186,53 @@ static void test_mt_crossfree(void) {
     mi_free(xq);
 }
 
+/* ---- heap delete while another thread frees its blocks ----
+ * mi_heap_delete moves the heap's pages to the thread's default heap
+ * while a freeing thread may be pushing a block onto the deleted heap's
+ * delayed-free list (full pages use it).  The move must either wait the
+ * freer out or be seen by it; a freer that pushed onto the freed heap is
+ * a use-after-free ASan reports. */
+#define HD_ROUNDS 40
+#define HD_BLOCKS 2048
+static void *hd_blocks[HD_BLOCKS];
+static _Atomic int hd_go;
+
+static void *hd_freer(void *arg) {
+    (void)arg;
+    /* @sync: acquire memshardTest.hdGo */
+    while (!atomic_load_explicit(&hd_go, memory_order_acquire)) {
+        /* spin until the blocks are published */
+    }
+    for (int i = 0; i < HD_BLOCKS; i++) {
+        mi_free(hd_blocks[i]); /* cross-thread: the owner is deleting */
+    }
+    return NULL;
+}
+
+static void test_mt_heap_delete_crossfree(void) {
+    T("memshard: heap delete during cross-thread frees");
+    for (int r = 0; r < HD_ROUNDS; r++) {
+        mi_heap_t *h = mi_heap_new();
+        assert(h);
+        /* One size, so the pages fill and sit in the full queue, whose
+         * blocks are freed through the heap's delayed-free list. */
+        for (int i = 0; i < HD_BLOCKS; i++) {
+            hd_blocks[i] = mi_heap_malloc(h, 64);
+            assert(hd_blocks[i]);
+            memset(hd_blocks[i], r & 0xff, 64);
+        }
+        /* @sync: relaxed init */
+        atomic_store_explicit(&hd_go, 0, memory_order_relaxed);
+        pthread_t th;
+        assert(pthread_create(&th, NULL, hd_freer, NULL) == 0);
+        /* @sync: release memshardTest.hdGo */
+        atomic_store_explicit(&hd_go, 1, memory_order_release);
+        mi_heap_delete(h); /* pages move to this thread's default heap */
+        pthread_join(th, NULL);
+        mi_collect(true); /* process every delayed free */
+    }
+}
+
 int main(void) {
     test_basic();
     test_calloc_zero();
@@ -195,6 +242,7 @@ int main(void) {
     test_heap();
     test_mt_local();
     test_mt_crossfree();
+    test_mt_heap_delete_crossfree();
     printf("ALL MEMSHARD TESTS PASSED!\n");
     return 0;
 }

@@ -464,7 +464,34 @@ size_t _mi_page_queue_append(mi_heap_t *heap, mi_page_queue_t *pq,
         // which has as a side effect that it spins until any DELAYED_FREEING is
         // finished. This ensures that after appending only the new heap will be
         // used for delayed free operations.
-        _mi_page_use_delayed_free(page, MI_USE_DELAYED_FREE, false);
+        //
+        // datakit: always with a release RMW, even when the flag already
+        // reads MI_USE_DELAYED_FREE (`_mi_page_use_delayed_free` skips the
+        // write then).  "store xheap; load the flag" here against a
+        // freer's "CAS the flag; load xheap" is the store-buffering
+        // pattern: without the RMW both may miss, and the freer pushes
+        // onto `from` after `mi_heap_delete` frees it.  With it, a freer
+        // ordered first is seen in MI_DELAYED_FREEING and waited out (its
+        // reset's release is acquired here, so its push to `from` is
+        // collected below), and a freer ordered after reads this RMW and,
+        // through its acquire fence, the new heap.
+        size_t ticks = 0;
+        mi_thread_free_t tfree = mi_atomic_load_relaxed(&page->xthread_free);
+        for (;;) {
+            if (mi_tf_delayed(tfree) == MI_DELAYED_FREEING) {
+                mi_atomic_yield_sleep(&ticks, 10);
+                tfree = mi_atomic_load_relaxed(&page->xthread_free);
+                continue;
+            }
+            const mi_thread_free_t tfreex =
+                (mi_tf_delayed(tfree) == MI_NEVER_DELAYED_FREE)
+                    ? tfree
+                    : mi_tf_set_delayed(tfree, MI_USE_DELAYED_FREE);
+            if (mi_atomic_cas_weak_acq_rel(&page->xthread_free, &tfree,
+                                           tfreex)) {
+                break;
+            }
+        }
         count++;
     }
 

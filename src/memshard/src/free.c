@@ -327,6 +327,14 @@ static void mi_decl_noinline mi_free_block_delayed_mt(mi_page_t *page,
     // If this was the first non-local free, we need to push it on the heap
     // delayed free list instead
     if mi_unlikely (use_delayed) {
+        // datakit: the CAS above is release-only, so its read of
+        // MI_USE_DELAYED_FREE synchronized with nothing.  The thread that
+        // wrote that flag (a reclaim, or a heap absorb) stored `xheap`
+        // first and then wrote the flag with a release RMW; this acquire
+        // fence makes that store visible to the load below, so the block
+        // goes to the page's current heap, not a stale (NULL or deleted)
+        // one.  Only this rare branch pays for it.
+        mi_atomic(thread_fence)(mi_memory_order(acquire));
         // racy read on `heap`, but ok because MI_DELAYED_FREEING is set (see
         // `mi_heap_delete` and `mi_heap_collect_abandon`)
         mi_heap_t *const heap = (mi_heap_t *)(mi_atomic_load_acquire(
