@@ -25,6 +25,11 @@ bool multimapMediumInsertReplacing(multimapMedium *m, const databox *elements[],
                                    databox *replacedOut);
 /* As multimapInsertIfAbsent (multimap.h) */
 bool multimapMediumInsertIfAbsent(multimapMedium *m, const databox *elements[]);
+/* As multimapInsertWithSurrogateKeyIfAbsent (multimap.h) */
+bool multimapMediumInsertWithSurrogateKeyIfAbsent(
+    multimapMedium *m, const databox *elements[], const databox *insertKey,
+    const struct multimapAtom *referenceContainer, databox *foundKey,
+    flexWhenAbsent *whenAbsent, void *whenAbsentCtx);
 void multimapMediumInsertFullWidth(multimapMedium *m,
                                    const databox *elements[]);
 void multimapMediumAppend(multimapMedium *m, const databox *elements[]);

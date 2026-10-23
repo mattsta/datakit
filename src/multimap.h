@@ -57,6 +57,17 @@ void multimapAppend(multimap **m, const databox *elements[]);
 void multimapInsertWithSurrogateKey(
     multimap **m, const databox *elements[], const databox *insertKey,
     const struct multimapAtom *referenceContainer);
+/* For a map of atom references: insert the row under 'insertKey' only
+ * when no row holds the key elements[0] (compared by value through
+ * 'referenceContainer'), in one search.  True when inserted; false when
+ * present, with 'foundKey' the stored reference and the map unchanged.
+ * 'whenAbsent' (may be NULL) runs once the key is known absent, before the
+ * row goes in: an atom table adds the row the new reference resolves
+ * through, which the insert may already need. */
+bool multimapInsertWithSurrogateKeyIfAbsent(
+    multimap **m, const databox *elements[], const databox *insertKey,
+    const struct multimapAtom *referenceContainer, databox *foundKey,
+    flexWhenAbsent *whenAbsent, void *whenAbsentCtx);
 
 bool multimapGetUnderlyingEntry(multimap *m, const databox *key,
                                 multimapEntry *me);

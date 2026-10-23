@@ -196,6 +196,27 @@ void multimapMediumInsertWithSurrogateKey(
     SET_MIDDLE(m, mapIdx, middle);
 }
 
+/* As multimapSmallInsertWithSurrogateKeyIfAbsent, in the map the key
+ * belongs to */
+bool multimapMediumInsertWithSurrogateKeyIfAbsent(
+    multimapMedium *m, const databox *elements[], const databox *insertKey,
+    const multimapAtom *referenceContainer, databox *foundKey,
+    flexWhenAbsent *whenAbsent, void *whenAbsentCtx) {
+    const size_t mapIdx = multimapMediumBinarySearchWithReference(
+        m, elements[0], referenceContainer);
+    flexEntry *middle = GET_MIDDLE(m, mapIdx);
+    flexEntry *found = NULL;
+    if (flexInsertByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKeyIfAbsent(
+            &m->map[mapIdx], m->elementsPerEntry, elements, insertKey, &middle,
+            referenceContainer, &found, whenAbsent, whenAbsentCtx)) {
+        flexGetByType(found, foundKey);
+        return false;
+    }
+
+    SET_MIDDLE(m, mapIdx, middle);
+    return true;
+}
+
 bool multimapMediumInsert(multimapMedium *m, const databox *elements[]) {
     return multimapMediumInsertReplacing(m, elements, NULL);
 }

@@ -52,6 +52,11 @@ bool multimapFullInsertReplacing(multimapFull *m, const databox *elements[],
                                  databox *replacedOut);
 /* As multimapInsertIfAbsent (multimap.h) */
 bool multimapFullInsertIfAbsent(multimapFull *m, const databox *elements[]);
+/* As multimapInsertWithSurrogateKeyIfAbsent (multimap.h) */
+bool multimapFullInsertWithSurrogateKeyIfAbsent(
+    multimapFull *m, const databox *elements[], const databox *insertKey,
+    const struct multimapAtom *referenceContainer, databox *foundKey,
+    flexWhenAbsent *whenAbsent, void *whenAbsentCtx);
 bool multimapFullInsertAllowExternalizeKeysReplacing(multimapFull *m,
                                                      const databox *elements[],
                                                      void **keyAllocation,

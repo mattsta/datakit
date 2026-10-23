@@ -1696,6 +1696,53 @@ bool multimapFullInsertWithSurrogateKey(
                                                referenceContainer);
 }
 
+/* As multimapSmallInsertWithSurrogateKeyIfAbsent: the map the key belongs
+ * to is found once, and serves both the presence check and the insert */
+bool multimapFullInsertWithSurrogateKeyIfAbsent(
+    multimapFull *m, const databox *elements[], const databox *insertKey,
+    const multimapAtom *referenceContainer, databox *foundKey,
+    flexWhenAbsent *whenAbsent, void *whenAbsentCtx) {
+    const multimapFullIdx mapIdx = multimapFullBinarySearch(m, elements[0]);
+    flex **mapPtr = getMapPtr(m, mapIdx);
+
+    /* Room in the map (abstractInsert's direct-insert case): one search
+     * finds the key or inserts it, with abstractFlexInsert's upkeep */
+    if (flexBytes(*mapPtr) <= m->maxSize || flexCount(*mapPtr) == 0) {
+        flexEntry *middle = GET_MIDDLE(m, mapIdx, *mapPtr);
+        flexEntry *present = NULL;
+        if (flexInsertByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKeyIfAbsent(
+                mapPtr, m->elementsPerEntry, elements, insertKey, &middle,
+                referenceContainer, &present, whenAbsent, whenAbsentCtx)) {
+            flexGetByType(present, foundKey);
+            return false;
+        }
+
+        updateRangeBoxForIdxWithReference(m, mapIdx, *mapPtr,
+                                          referenceContainer);
+        SET_MIDDLE(m, mapIdx, middle, *mapPtr);
+        m->values++;
+        return true;
+    }
+
+    /* A full map splits before the insert: look first, then insert */
+    const flex *map = *mapPtr;
+    flexEntry *found =
+        multimapFullFindKeyInMap_(m, map, GET_MIDDLE(m, mapIdx, map),
+                                  elements[0], true, referenceContainer);
+    if (found) {
+        flexGetByType(found, foundKey);
+        return false;
+    }
+
+    if (whenAbsent) {
+        whenAbsent(whenAbsentCtx);
+    }
+
+    multimapFullInsertWithSurrogateKey_(m, elements, insertKey, mapIdx,
+                                        referenceContainer);
+    return true;
+}
+
 bool multimapFullInsert(multimapFull *m, const databox *elements[]) {
     return multimapFullInsertReplacing(m, elements, NULL);
 }

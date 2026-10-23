@@ -460,6 +460,24 @@ void multimapInsertWithSurrogateKey(multimap **m, const databox *elements[],
                                             referenceContainer);
 }
 
+bool multimapInsertWithSurrogateKeyIfAbsent(
+    multimap **m, const databox *elements[], const databox *insertKey,
+    const multimapAtom *referenceContainer, databox *foundKey,
+    flexWhenAbsent *whenAbsent, void *whenAbsentCtx) {
+    bool inserted;
+    MULTIMAP_SETRESULT(inserted, *m, InsertWithSurrogateKeyIfAbsent, elements,
+                       insertKey, referenceContainer, foundKey, whenAbsent,
+                       whenAbsentCtx);
+    if (inserted) {
+        const uint32_t depth = COMPRESS_DEPTH(*m);
+        const flexCapSizeLimit limit = COMPRESS_LIMIT(*m);
+        multimapUpgradeIfNecessaryWithReference(m, depth, limit,
+                                                referenceContainer);
+    }
+
+    return inserted;
+}
+
 void multimapAppend(multimap **m, const databox *elements[]) {
     MULTIMAP_NORETURN(*m, Append, elements);
 

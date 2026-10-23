@@ -340,6 +340,20 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKey(
     const databox *boxInsertKey, flexEntry **middleEntry,
     bool compareUsingKeyElementOnly,
     const struct multimapAtom *const referenceContainer);
+/* Runs once an insert-if-absent knows its key is absent, before the new
+ * entry goes in; it must not change the flex being inserted into. */
+typedef void(flexWhenAbsent)(void *ctx);
+
+/* Insert-if-absent for a map of atom references inserting under a
+ * surrogate key, in one search: true when the key (searched by value
+ * through 'referenceContainer') was present, with '*foundEntry' its entry
+ * and the flex unchanged; false when 'whenAbsent' (may be NULL) ran and
+ * 'boxInsertKey' was inserted. */
+bool flexInsertByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKeyIfAbsent(
+    flex **ff, uint_fast32_t elementsPerEntry, const databox **box,
+    const databox *boxInsertKey, flexEntry **middleEntry,
+    const struct multimapAtom *referenceContainer, flexEntry **foundEntry,
+    flexWhenAbsent *whenAbsent, void *whenAbsentCtx);
 bool flexInsertByTypeSortedWithMiddleMultiDirect(flex **ff,
                                                  uint_fast32_t elementsPerEntry,
                                                  const databox *box[],

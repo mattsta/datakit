@@ -23,6 +23,11 @@ bool multimapSmallInsertReplacing(multimapSmall *m, const databox *elements[],
                                   databox *replacedOut);
 /* As multimapInsertIfAbsent (multimap.h) */
 bool multimapSmallInsertIfAbsent(multimapSmall *m, const databox *elements[]);
+/* As multimapInsertWithSurrogateKeyIfAbsent (multimap.h) */
+bool multimapSmallInsertWithSurrogateKeyIfAbsent(
+    multimapSmall *m, const databox *elements[], const databox *insertKey,
+    const struct multimapAtom *referenceContainer, databox *foundKey,
+    flexWhenAbsent *whenAbsent, void *whenAbsentCtx);
 void multimapSmallInsertFullWidth(multimapSmall *m, const databox *elements[]);
 void multimapSmallAppend(multimapSmall *m, const databox *elements[]);
 

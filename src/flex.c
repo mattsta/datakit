@@ -5101,15 +5101,21 @@ void flexInsertByTypeSortedWithReference(
  * an external bytes allocation is created under these conditions, the returned
  * mdsc pointer is set inside '*keyAsAllocation' (and '*keyAsAllocation' is ONLY
  * valid if return value is 'false' because of INSERT — '*keyAsAllocation' is
- * never set during a replace). */
-DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMulti(
+ * never set during a replace).
+ * 'foundOut', when not NULL, receives the found entry of a 'keepFound'
+ * call that found its key (the flex is unchanged, so the entry stays
+ * valid).  'whenAbsent', when not NULL, runs once the key is known to be
+ * absent, before the new entry is built and inserted. */
+DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
     flex **const ff, int_fast32_t elementsPerEntry, const databox **const box,
     flexEntry **const middleEntry, bool compareUsingKeyElementOnly,
     const bool useReference,
     const struct multimapAtom *const referenceContainer,
     const bool useSurrogateKeyForInsert, const databox *const surrogateKey,
     const bool useHighestInsertPosition, const bool newKeysBecomeShared,
-    void **keyAsAllocation, const bool keepFound, databox *const replacedOut) {
+    void **keyAsAllocation, const bool keepFound, databox *const replacedOut,
+    flexEntry **const foundOut, flexWhenAbsent *const whenAbsent,
+    void *const whenAbsentCtx) {
     /* When 'replacedOut' is non-NULL it holds 'elementsPerEntry - 1' slots
      * that receive the value entries a replace overwrites, in tuple order.
      * A call that does not replace (new key, full-width insert, set dedupe
@@ -5175,7 +5181,17 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMulti(
         for (int_fast32_t i = 0; replacedOut && i < elementsPerEntry - 1; i++) {
             replacedOut[i] = (databox){.type = DATABOX_VOID};
         }
+
+        if (foundOut) {
+            *foundOut = fe;
+        }
         return true;
+    }
+
+    /* Absent: the caller prepares whatever the new entry depends on (this
+     * flex is not touched, so 'fe' and 'mid' stay valid) */
+    if (whenAbsent && !found) {
+        whenAbsent(whenAbsentCtx);
     }
 
     /* Entry count before this call (read only by a new-entry insert) */
@@ -5387,6 +5403,21 @@ DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMulti(
     return found;
 }
 
+DK_INLINE_ALWAYS bool abstractInsertReplaceByTypeSortedWithMiddleMulti(
+    flex **const ff, int_fast32_t elementsPerEntry, const databox **const box,
+    flexEntry **const middleEntry, bool compareUsingKeyElementOnly,
+    const bool useReference,
+    const struct multimapAtom *const referenceContainer,
+    const bool useSurrogateKeyForInsert, const databox *const surrogateKey,
+    const bool useHighestInsertPosition, const bool newKeysBecomeShared,
+    void **keyAsAllocation, const bool keepFound, databox *const replacedOut) {
+    return abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
+        ff, elementsPerEntry, box, middleEntry, compareUsingKeyElementOnly,
+        useReference, referenceContainer, useSurrogateKeyForInsert,
+        surrogateKey, useHighestInsertPosition, newKeysBecomeShared,
+        keyAsAllocation, keepFound, replacedOut, NULL, NULL, NULL);
+}
+
 bool flexInsertReplaceByTypeSortedWithMiddleMultiDirect(
     flex **const ff, const uint_fast32_t elementsPerEntry,
     const databox **const box, flexEntry **const middleEntry,
@@ -5481,6 +5512,24 @@ bool flexInsertReplaceByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKey(
         ff, elementsPerEntry, box, middleEntry, compareUsingKeyElementOnly,
         true, referenceContainer, true, boxInsertKey, false, false, NULL, false,
         NULL);
+}
+
+/* Insert-if-absent for a map of atom references inserting under a
+ * surrogate key: the key is searched by value through
+ * 'referenceContainer'; when found nothing changes and '*foundEntry' is the
+ * found entry (returns true), else 'whenAbsent' (if any) runs and
+ * 'boxInsertKey' is inserted in its place (returns false). */
+bool flexInsertByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKeyIfAbsent(
+    flex **const ff, const uint_fast32_t elementsPerEntry,
+    const databox **const box, const databox *const boxInsertKey,
+    flexEntry **const middleEntry,
+    const struct multimapAtom *const referenceContainer,
+    flexEntry **const foundEntry, flexWhenAbsent *const whenAbsent,
+    void *const whenAbsentCtx) {
+    return abstractInsertReplaceByTypeSortedWithMiddleMultiFound_(
+        ff, elementsPerEntry, box, middleEntry, true, true, referenceContainer,
+        true, boxInsertKey, false, false, NULL, true, NULL, foundEntry,
+        whenAbsent, whenAbsentCtx);
 }
 
 void flexAppendMultipleExact(flex **ff, const uint_fast32_t elementsPerEntry,

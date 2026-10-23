@@ -108,6 +108,49 @@ static void abstractInsert(multimapAtom *ma, const databox *reverseKey,
     }
 }
 
+/* A new atom's forward row, made by atomFindOrCreate_ once its reverse
+ * search knows the value is absent (before the reverse row goes in, as
+ * that insert may resolve the new id) */
+typedef struct atomCreate_ {
+    multimapAtom *ma;
+    const databox *key;
+    uint64_t id;
+} atomCreate_;
+
+static void atomCreateForward_(void *ctx) {
+    const atomCreate_ *c = ctx;
+    const databox atomId = {.data.u = c->id,
+                            .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
+    const databox refcount = {.type = DATABOX_FALSE}; /* one reference */
+    const databox *elements[3] = {&atomId, c->key, &refcount};
+    const bool replaced = multimapInsert(&c->ma->mapAtomForward, elements);
+    assert(!replaced);
+    (void)replaced;
+
+    atomSetNextId_(c->ma, c->id + 1);
+}
+
+/* The atom of 'key' in one reverse search: true when it existed ('ref'
+ * its reference), false when this call created it with one reference
+ * ('ref' the new reference) */
+static bool atomFindOrCreate_(multimapAtom *ma, const databox *key,
+                              databox *ref) {
+    atomCreate_ create = {.ma = ma, .key = key, .id = atomNextId_(ma)};
+    const databox atomId = {.data.u = create.id,
+                            .type = DATABOX_CONTAINER_REFERENCE_EXTERNAL};
+    const databox *reverseRow[1] = {key};
+    if (!multimapInsertWithSurrogateKeyIfAbsent(&ma->mapAtomReverse, reverseRow,
+                                                &atomId, ma, ref,
+                                                atomCreateForward_, &create)) {
+        return true;
+    }
+
+    assert(multimapCount(ma->mapAtomForward) ==
+           multimapCount(ma->mapAtomReverse));
+    *ref = atomId;
+    return false;
+}
+
 void multimapAtomInsert(multimapAtom *ma, const databox *box) {
     abstractInsert(ma, box, atomNextId_(ma));
 }
@@ -169,47 +212,27 @@ void multimapAtomInsertWithExactAtomID(multimapAtom *ma, const uint64_t atomRef,
 /* Returns true when value already existed.
  * Returns false when value is created */
 bool multimapAtomInsertIfNewConvert(multimapAtom *ma, databox *key) {
-    multimapEntry me = {0};
-
-    /* If 'box' exists in our map of atom IDs, return the found atom ID. */
-    if (multimapGetUnderlyingEntryWithReference(ma->mapAtomReverse, key, &me,
-                                                ma)) {
-        /* The reference replaces the whole box, as in InsertConvert: a
-         * decode straight into 'key' would keep the 'big' and 'allocated'
-         * bits of a 96/128-bit or heap value it held. */
-        databox foundRef = {{0}};
-        flexGetByType(me.fe, &foundRef);
-        *key = foundRef;
-        key->created = false;
-        return true;
-    }
-
-    /* else, insert as new */
-    multimapAtomInsertConvert(ma, key);
-    key->created = true;
-    return false;
+    /* The reference replaces the whole box, as in InsertConvert: a decode
+     * straight into 'key' would keep the 'big' and 'allocated' bits of a
+     * 96/128-bit or heap value it held. */
+    databox ref = {{0}};
+    const bool existed = atomFindOrCreate_(ma, key, &ref);
+    *key = ref;
+    key->created = !existed;
+    return existed;
 }
 
 bool multimapAtomInsertIfNewConvertAndRetain(multimapAtom *ma, databox *key) {
-    multimapEntry me = {0};
-
-    /* If 'box' exists in our map of atom IDs, return the found atom ID. */
-    if (multimapGetUnderlyingEntryWithReference(ma->mapAtomReverse, key, &me,
-                                                ma)) {
-        databox foundRef = {{0}};
-        flexGetByType(me.fe, &foundRef);
-        *key = foundRef;
-
+    databox ref = {{0}};
+    const bool existed = atomFindOrCreate_(ma, key, &ref);
+    if (existed) {
         /* Increase reference count automatically since is also a checkout */
-        multimapAtomRetainByRef(ma, key);
-        key->created = false;
-        return true;
+        multimapAtomRetainByRef(ma, &ref);
     }
 
-    /* else, insert as new */
-    multimapAtomInsertConvert(ma, key);
-    key->created = true;
-    return false;
+    *key = ref;
+    key->created = !existed;
+    return existed;
 }
 
 /* ====================================================================
@@ -321,32 +344,22 @@ void multimapAtomRetainById(multimapAtom *ma, const uint64_t id) {
 }
 
 void multimapAtomRetain(multimapAtom *ma, const databox *key) {
-    databox foundRef = {{0}};
-
-    if (multimapExistsWithReference(ma->mapAtomReverse, key, &foundRef, ma)) {
-        /* if exists, just increment refcount */
-        multimapAtomRetainByRef(ma, &foundRef);
-    } else {
-        /* else, insert as new */
-        multimapAtomInsert(ma, key);
+    /* A new atom is created with its one reference */
+    databox ref = {{0}};
+    if (atomFindOrCreate_(ma, key, &ref)) {
+        multimapAtomRetainByRef(ma, &ref);
     }
 }
 
 void multimapAtomRetainConvert(multimapAtom *ma, databox *key) {
     /* Zeroed: a reference id decodes narrow and leaves the flag bits as
      * they were, and this box is handed back to the caller whole. */
-    databox foundRef = {{0}};
-
-    if (multimapExistsWithReference(ma->mapAtomReverse, key, &foundRef, ma)) {
-        /* if exists, just increment refcount */
-        multimapAtomRetainByRef(ma, &foundRef);
-
-        /* give reference back to user */
-        *key = foundRef;
-    } else {
-        /* else, insert as new */
-        multimapAtomInsertConvert(ma, key);
+    databox ref = {{0}};
+    if (atomFindOrCreate_(ma, key, &ref)) {
+        multimapAtomRetainByRef(ma, &ref);
     }
+
+    *key = ref;
 }
 
 /* ====================================================================
@@ -538,10 +551,14 @@ bool populateSet(void *userData, const databox *elements[]) {
     return true;
 }
 
+#include "cleaner.h"
 #include "ctest.h"
 #include "multimapFull.h"
 #include "timeUtil.h"
 #include <inttypes.h>
+
+defcleaner(multimapAtom *, multimapAtomFree);
+defcleanerName(uint64_t *, zfree, U64);
 
 /* Fill the stack below the caller with 0xFF so a temporary that is read
  * before it is set up sees big = 1 and an all-ones pointer.  ASan is off
@@ -2173,6 +2190,63 @@ int multimapAtomTest(int argc, char *argv[]) {
         }
 
         multimapAtomFree(ma);
+    }
+
+    TEST("interning in shuffled and descending order resolves every atom") {
+        /* New values land anywhere in the reverse map, including at the
+         * head of a sub-map and across tier upgrades, where the insert
+         * itself resolves the new id: its forward row must already exist.
+         * Each value is offered twice; the second offer finds the first
+         * one's reference. */
+        enum { atoms = 3000 };
+        for (int32_t order = 0; order < 2; order++) {
+            cleaner(multimapAtomFree) multimapAtom *ma = multimapAtomNew();
+            cleanerName(zfree, U64) uint64_t *refs =
+                zcalloc(atoms, sizeof(*refs));
+            char name[32];
+            for (int32_t pass = 0; pass < 2; pass++) {
+                for (int32_t step = 0; step < atoms; step++) {
+                    const int32_t i =
+                        order ? atoms - 1 - step
+                              : (int32_t)(((int64_t)step * 1201) % atoms);
+                    snprintf(name, sizeof(name), "interned-%06" PRId32, i);
+                    databox k = databoxNewBytesString(name);
+                    const bool existed =
+                        (step & 1)
+                            ? multimapAtomInsertIfNewConvert(ma, &k)
+                            : (multimapAtomRetainConvert(ma, &k), pass == 1);
+                    if (pass == 0) {
+                        refs[i] = k.data.u;
+                    } else if (!existed || k.data.u != refs[i]) {
+                        ERR("order %d: second offer of %s gave ref %" PRIu64
+                            " existed %d, first gave %" PRIu64,
+                            order, name, (uint64_t)k.data.u, existed, refs[i]);
+                    }
+                }
+            }
+
+            if (multimapAtomCount(ma) != atoms) {
+                ERR("order %d: %zu atoms, expected %d", order,
+                    multimapAtomCount(ma), atoms);
+            }
+
+            for (int32_t i = 0; i < atoms; i++) {
+                snprintf(name, sizeof(name), "interned-%06" PRId32, i);
+                const databox k = databoxNewBytesString(name);
+                const databox ref = {.data.u = refs[i],
+                                     .type =
+                                         DATABOX_CONTAINER_REFERENCE_EXTERNAL};
+                databox found = {{0}};
+                databox back = {{0}};
+                if (!multimapAtomLookupReference(ma, &k, &found) ||
+                    found.data.u != refs[i] ||
+                    !multimapAtomLookup(ma, &ref, &back) ||
+                    databoxLen(&back) != strlen(name) ||
+                    memcmp(databoxCBytes(&back), name, strlen(name)) != 0) {
+                    ERR("order %d: %s does not resolve both ways", order, name);
+                }
+            }
+        }
     }
 
     TEST("last releases by key across sub-maps keep every survivor "

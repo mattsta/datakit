@@ -66,6 +66,24 @@ void multimapSmallInsertWithSurrogateKey(
     SET_MIDDLE(m, middle);
 }
 
+/* As multimapInsertWithSurrogateKeyIfAbsent (multimap.h) */
+bool multimapSmallInsertWithSurrogateKeyIfAbsent(
+    multimapSmall *m, const databox *elements[], const databox *insertKey,
+    const struct multimapAtom *referenceContainer, databox *foundKey,
+    flexWhenAbsent *whenAbsent, void *whenAbsentCtx) {
+    flexEntry *middle = GET_MIDDLE(m);
+    flexEntry *found = NULL;
+    if (flexInsertByTypeSortedWithMiddleMultiWithReferenceWithSurrogateKeyIfAbsent(
+            &m->map, m->elementsPerEntry, elements, insertKey, &middle,
+            referenceContainer, &found, whenAbsent, whenAbsentCtx)) {
+        flexGetByType(found, foundKey);
+        return false;
+    }
+
+    SET_MIDDLE(m, middle);
+    return true;
+}
+
 bool multimapSmallInsert(multimapSmall *m, const databox *elements[]) {
     return multimapSmallInsertReplacing(m, elements, NULL);
 }
