@@ -1,9 +1,9 @@
 {
- "commit": "f4381feedb0b691a1c18aa1821c4f85652f5b0c5",
+ "commit": "6fe986507c8ba54c4bc3c47d194a436f226387cb",
  "files": {
   "src/OSRegulate.c": {
-   "lines": 245,
-   "branches": 190
+   "lines": 240,
+   "branches": 187
   },
   "src/aeadNonceLog.c": {
    "lines": 54,
@@ -658,8 +658,8 @@
    "branches": 47
   },
   "src/multiTimer.c": {
-   "lines": 29,
-   "branches": 20
+   "lines": 27,
+   "branches": 19
   },
   "src/multiarray.c": {
    "lines": 40,
@@ -1185,5 +1185,68 @@
    "lines": 10,
    "branches": 3
   }
+ },
+ "volatile": {
+  "src/OSRegulate.c": [
+   [
+    "branch 0.0",
+    "if (kevent(kq, &ev, 1, NULL, 0, NULL) < 0) {",
+    "* the caller reads ESRCH as an exit report. */"
+   ],
+   [
+    "branch 0.0",
+    "} else if (armErrno == ESRCH) {",
+    "exitReported = n > 0 && (watch.revents & POLLIN) != 0;"
+   ],
+   [
+    "branch 0.1",
+    "if (watchFd >= 0) {",
+    "const int armErrno = errno;"
+   ],
+   [
+    "line",
+    "exitReported = true;",
+    "* cannot have been reused, so ESRCH counts as a reported exit. */"
+   ],
+   [
+    "line",
+    "return -1;",
+    "if (kevent(kq, &ev, 1, NULL, 0, NULL) < 0) {"
+   ],
+   [
+    "line",
+    "}",
+    "return -1;"
+   ],
+   [
+    "line",
+    "} else {",
+    "exitReported = true;"
+   ]
+  ],
+  "src/fastmutex.c": [
+   [
+    "branch 0.1",
+    "if (atomic_compare_exchange_weak_explicit(&m->word, &prev, expected,",
+    "/* @sync: acquire fastmutex.queue */"
+   ]
+  ],
+  "src/multiTimer.c": [
+   [
+    "branch 0.0",
+    "if (t->stopPending == 0) {",
+    "t->stopsMaybeStale = false;"
+   ],
+   [
+    "line",
+    "return;",
+    "* accounting is already exact */"
+   ],
+   [
+    "line",
+    "}",
+    "return;"
+   ]
+  ]
  }
 }
