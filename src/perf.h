@@ -33,10 +33,9 @@ static inline uint64_t _perfTSC(void) {
     uint32_t lo = 0;
     uint32_t hi = 0;
 
-    /* ask for something that can't be executed out-of-order
-     * to force the next _perf_rdtsc to not get re-ordered. */
-    __sync_synchronize();
-    __asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
+    /* LFENCE keeps RDTSC from executing before the instructions ahead of
+     * it complete (Intel SDM, RDTSC); MFENCE orders memory, not RDTSC. */
+    __asm__ __volatile__("lfence\n\trdtsc" : "=a"(lo), "=d"(hi)::"memory");
     return ((uint64_t)hi << 32) | lo;
 #else
 #error "No TSC found?"
