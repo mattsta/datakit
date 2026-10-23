@@ -1,5 +1,5 @@
 {
- "commit": "d6c5a4b568f1817c84311f11c8cbd1d5aa09e85b",
+ "commit": "919b3663d91d67758948c1f85b3cef070517d4a8",
  "files": {
   "src/OSRegulate.c": {
    "lines": 240,
@@ -190,8 +190,8 @@
    "branches": 0
   },
   "src/fastmutex.c": {
-   "lines": 23,
-   "branches": 26
+   "lines": 21,
+   "branches": 25
   },
   "src/fastmutex.h": {
    "lines": 2,
@@ -402,8 +402,8 @@
    "branches": 5
   },
   "src/flex.c": {
-   "lines": 297,
-   "branches": 461
+   "lines": 258,
+   "branches": 443
   },
   "src/flex.h": {
    "lines": 0,
@@ -586,8 +586,8 @@
    "branches": 0
   },
   "src/membound.c": {
-   "lines": 378,
-   "branches": 354
+   "lines": 352,
+   "branches": 342
   },
   "src/memboundInternal.h": {
    "lines": 39,
@@ -1222,6 +1222,13 @@
     "line",
     "} else {",
     "exitReported = true;"
+   ]
+  ],
+  "src/clusterRing.c": [
+   [
+    "branch 0.1",
+    "if (atomic_load_explicit(&data->stale, memory_order_relaxed)) {",
+    "/* @sync: relaxed owner */"
    ]
   ],
   "src/fastmutex.c": [
