@@ -356,6 +356,12 @@ def main(argv: list[str] | None = None) -> int:
         help="scratch root (env DKTOOLS_SCRATCH, default: dktools/ in the temp dir)",
     )
     cv.add_argument("-j", "--jobs", type=int, default=None, help="parallel jobs")
+    cv.add_argument(
+        "--reuse",
+        action="store_true",
+        help="render the summary again from the earlier run for REV (no build, "
+        "no tests)",
+    )
     toolchain.add_arguments(cv)
 
     vs = sub.add_parser(
@@ -445,7 +451,7 @@ def _dispatch(args: argparse.Namespace) -> int:
         )
 
     if args.command == "coverage":
-        return coverage.run(
+        return (coverage.rereport if args.reuse else coverage.run)(
             args.repo,
             coverage.CoverageOptions(
                 rev=args.rev,

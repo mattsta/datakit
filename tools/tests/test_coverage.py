@@ -105,7 +105,68 @@ def summary(root: str) -> str:
     )
 
 
+INLINE_HEADER = """
+#pragma once
+static inline uint64_t treeLeft(uint64_t i) { return i << 1; }
+DK_INLINE_ALWAYS bool treeEmpty(const tree *t) {
+    return t->count == 0;
+}
+static inline void treeNeverCompiled(void) {}
+#define TREE_TEMPLATE(T) static inline T T##Make(void) { return 0; }
+"""
+
+#: treeLeft runs in one of its two copies, treeEmpty in neither
+INLINE_PROFILE = """Counters:
+  a.c:treeLeft:
+    Function count: 0
+  b.c:treeLeft:
+    Function count: 7
+  a.c:treeEmpty:
+    Function count: 0
+  b.c:treeEmpty:
+    Function count: 0
+"""
+
+
 class Coverage(unittest.TestCase):
+    def test_inline_functions_are_header_definitions(self) -> None:
+        self.assertEqual(
+            coverage.inline_functions(INLINE_HEADER),
+            ["treeEmpty", "treeLeft", "treeNeverCompiled"],
+        )
+        # A prototype is not a definition
+        self.assertEqual(coverage.inline_functions(HEADER), ["widgetEmpty"])
+
+    def test_unrun_inline_sums_every_copy(self) -> None:
+        counts = coverage.parse_profile_counts(INLINE_PROFILE)
+        self.assertEqual(
+            coverage.unrun_inline({"src/tree.h": INLINE_HEADER}, counts),
+            {"src/tree.h": ["treeEmpty"]},
+        )
+
+    def test_report_renders_from_a_work_dir(self) -> None:
+        import contextlib
+        import io
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            (work / "logs").mkdir()
+            (work / "src" / "src").mkdir(parents=True)
+            (work / "src" / "src" / "tree.h").write_text(INLINE_HEADER)
+            (work / "logs" / "export.json").write_text(
+                "$ llvm-cov export\n" + summary(str(work / "src"))
+            )
+            (work / "logs" / "functions.txt").write_text(INLINE_PROFILE)
+            with contextlib.redirect_stdout(io.StringIO()):
+                coverage.report(work, "a" * 40, "subject", "all passed", True, 5)
+            text = (work / "summary.md").read_text()
+            self.assertIn("- `src/tree.h`: treeEmpty", text)
+            doc = json.loads((work / "summary.json").read_text())
+            self.assertEqual(
+                doc["publicApi"]["unrunInline"], {"src/tree.h": ["treeEmpty"]}
+            )
+
     def test_declared_functions(self) -> None:
         names = coverage.declared_functions(HEADER)
         self.assertEqual(

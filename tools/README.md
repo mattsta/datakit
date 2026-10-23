@@ -236,7 +236,7 @@ uv run --project tools dktools validate [--rev REV] \
 
 ```sh
 uv run --project tools dktools coverage [--rev REV] [--top N] [--skip REGEX] \
-    [--serial REGEX] [--root DIR] [-j N]
+    [--serial REGEX] [--root DIR] [-j N] [--reuse]
 ```
 
 - Exports REV (default HEAD) like validate, builds the `coverage`
@@ -253,6 +253,13 @@ uv run --project tools dktools coverage [--rev REV] [--top N] [--skip REGEX] \
   points) into called, never called (count 0), and not built (no
   counters in the test binary: a declaration without a definition, or
   a platform's).
+- Lists the functions any `src/` header defines inline (`static inline`,
+  `DK_INLINE_ALWAYS`) that no compiled copy ran.  Such a function gets
+  one copy per including file, so a header's own line numbers also count
+  the unused copies of functions that do run; summed by name over the
+  copies, this list holds only the ones that never ran anywhere.
+- `--reuse` renders the summary again from the earlier run for REV (no
+  build, no tests), for changes to the report itself.
 - Writes `ROOT/coverage/<hash>/summary.md` and `summary.json` and
   prints the summary. There is no percentage target: the output is
   the list of gaps to triage. Exits 0 when every test passed, 1

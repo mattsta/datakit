@@ -88,6 +88,8 @@ class PublicApi:
     called: dict[str, list[str]] = field(default_factory=dict)  # header -> names
     never: dict[str, list[str]] = field(default_factory=dict)
     not_built: dict[str, list[str]] = field(default_factory=dict)
+    # Header inline functions (any header) that no compiled copy ran
+    unrun_inline: dict[str, list[str]] = field(default_factory=dict)
 
     def count(self, which: dict[str, list[str]]) -> int:
         return sum(len(v) for v in which.values())
@@ -164,6 +166,44 @@ def declared_functions(header_text: str) -> list[str]:
     return names
 
 
+#: A function a header defines: ``static inline`` or ``DK_INLINE_ALWAYS``
+#: before its name, its parameter list, then its body.
+INLINE_DEFINITION = re.compile(
+    r"\b(?:static\s+inline|DK_INLINE_ALWAYS)\b[^;{}()]*?\b([A-Za-z_]\w*)\s*"
+    r"\([^;{}]*\)\s*\{"
+)
+
+
+def inline_functions(header_text: str) -> list[str]:
+    """Names of the functions a header defines inline (macro bodies are
+    left out with the rest of the preprocessor lines)."""
+    text = _strip_comments_and_preprocessor(header_text)
+    names = {m.group(1) for m in INLINE_DEFINITION.finditer(text)}
+    return sorted(names - NOT_A_NAME)
+
+
+def unrun_inline(
+    headers: dict[str, str], counts: dict[str, int]
+) -> dict[str, list[str]]:
+    """Header-defined functions that every compiled copy left unrun.
+
+    A header's inline function gets one copy per file that includes it
+    (``file.c:name`` in the profile), and the per-file line numbers count
+    every unused copy as uncovered even when another copy runs.  Summed
+    over its copies by name, a function counts as run when any copy ran;
+    a name absent from the profile was never compiled and is left out."""
+    totals: dict[str, int] = {}
+    for key, value in counts.items():
+        bare = key.rsplit(":", 1)[-1]
+        totals[bare] = totals.get(bare, 0) + value
+    unrun: dict[str, list[str]] = {}
+    for header in sorted(headers):
+        for name in inline_functions(headers[header]):
+            if totals.get(name) == 0:
+                unrun.setdefault(header, []).append(name)
+    return unrun
+
+
 def parse_profile_counts(text: str) -> dict[str, int]:
     """Function name -> entry count from ``llvm-profdata show
     --all-functions --counts``.  Static functions appear as
@@ -235,13 +275,14 @@ def public_api(headers: dict[str, str], counts: dict[str, int]) -> PublicApi:
     return api
 
 
-def collect_headers(src: Path) -> dict[str, str]:
-    """The public headers under `src`/src, by repo-relative path."""
+def collect_headers(src: Path, public_only: bool = True) -> dict[str, str]:
+    """The headers under `src`/src (the public ones unless `public_only`
+    is false), by repo-relative path."""
     headers: dict[str, str] = {}
     base = src / "src"
     for path in sorted(base.rglob("*.h")):
         rel = path.relative_to(src).as_posix()
-        if PRIVATE_HEADER.search(rel) or "/deps/" in rel:
+        if (public_only and PRIVATE_HEADER.search(rel)) or "/deps/" in rel:
             continue
         headers[rel] = path.read_text(encoding="utf-8", errors="replace")
     return headers
@@ -298,6 +339,12 @@ def render(
     for title, which in (
         ("Never called", api.never),
         ("Not built (no definition in the test binary)", api.not_built),
+        (
+            "Header inline functions no compiled copy ran (any header; a "
+            "header's per-file line numbers also count the unused copies of "
+            "functions that do run)",
+            api.unrun_inline,
+        ),
     ):
         md += ["", f"### {title}", ""]
         if not which:
@@ -332,6 +379,7 @@ def to_json(
             "called": api.called,
             "neverCalled": api.never,
             "notBuilt": api.not_built,
+            "unrunInline": api.unrun_inline,
         },
     }
 
@@ -446,16 +494,51 @@ def run(repo: Path, opts: CoverageOptions) -> int:
     if not (merge.ok and show.ok and export.ok):
         raise ToolError(f"llvm-profdata / llvm-cov failed; see {logs}")
 
-    export_text = export.log.read_text().split("\n", 1)[1]  # drop the "$ cmd" line
-    files, total = parse_export_summary(export_text, src)
-    counts = parse_profile_counts(show.log.read_text())
-    api = public_api(collect_headers(src), counts)
+    report(work, commit, subject, tests, tests_ok, opts.top)
+    return 0 if tests_ok else 1
 
-    text = render(commit, subject, tests, files, total, api, opts.top)
+
+def report(
+    work: Path, commit: str, subject: str, tests: str, tests_ok: bool, top: int
+) -> None:
+    """Write and print the summary of the run in `work` (its exported
+    tree, profile listing and llvm-cov export)."""
+    logs = work / "logs"
+    src = work / "src"
+    export_text = (logs / "export.json").read_text().split("\n", 1)[1]
+    files, total = parse_export_summary(export_text, src)
+    counts = parse_profile_counts((logs / "functions.txt").read_text())
+    api = public_api(collect_headers(src), counts)
+    api.unrun_inline = unrun_inline(collect_headers(src, public_only=False), counts)
+
+    text = render(commit, subject, tests, files, total, api, top)
     (work / "summary.md").write_text(text)
     (work / "summary.json").write_text(
         json.dumps(to_json(commit, tests_ok, files, total, api), indent=1) + "\n"
     )
     sys.stdout.write(text)
     print(f"summary: {work / 'summary.md'}")
+
+
+def rereport(repo: Path, opts: CoverageOptions) -> int:
+    """Render the summary again from an earlier run's results for REV,
+    with no build and no tests (the report's own changes, cheaply)."""
+    commit = gitutil.resolve_commit(repo, opts.rev)
+    subject = gitutil.git_text(repo, "log", "-1", "--format=%s", commit)
+    work = gitutil.scratch_root(opts.root).resolve() / "coverage" / commit[:10]
+    logs = work / "logs"
+    for need in (work / "src", logs / "export.json", logs / "functions.txt"):
+        if not need.exists():
+            raise ToolError(
+                f"no earlier coverage run for {commit[:10]}: {need} is missing"
+            )
+    results = [
+        steps.parse_ctest(logs / name)
+        for name in ("ctest.log", "ctest-serial.log")
+        if (logs / name).exists()
+    ]
+    failed = [name for r in results for name in r.failed]
+    tests_ok = not failed
+    tests = "all passed (earlier run)" if tests_ok else f"FAILED: {', '.join(failed)}"
+    report(work, commit, subject, tests, tests_ok, top=opts.top)
     return 0 if tests_ok else 1
