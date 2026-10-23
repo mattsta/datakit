@@ -642,14 +642,22 @@ multiOrderedSetFull *multiOrderedSetFullCopy(const multiOrderedSetFull *m) {
                     flexGetByTypeInto(memberEntry, &oldId, &oldIdWide);
                     databox member = {{0}};
                     if (atomPoolLookup(m->pool, oldId.data.u64, &member)) {
-                        /* Intern in new pool and update entry */
+                        /* Intern in new pool and update entry.  A new id
+                         * of another width reallocates the map: the entry
+                         * keeps its offset, so find it again from there */
+                        const size_t at = (size_t)(memberEntry - map);
                         uint64_t newId = atomPoolIntern(copy->pool, &member);
                         databox newIdBox = databoxNewUnsigned(newId);
                         flexReplaceByType(&map, memberEntry, &newIdBox);
                         setSubMap(copy, i, map);
+                        memberEntry = map + at;
                     }
                     ent = flexNext(map, memberEntry);
                 }
+
+                /* Ids of other widths moved the entries: the middle copied
+                 * from the source no longer points at an entry */
+                updateMiddle(copy, i);
             }
         } else {
             /* Source uses external pool - copy shares it and bumps refcounts */
@@ -1698,6 +1706,134 @@ static int mosFullCheckInvariants(const multiOrderedSetFull *m) {
     return bad;
 }
 
+/* The copy test's members: member s holds score s */
+#define MOS_COPY_N 3000
+static void mosCopyName_(char *buf, size_t len, int64_t s) {
+    snprintf(buf, len, "copied-member-%05" PRId64, s);
+}
+
+/* 'member' and 'score' are member s with score s */
+static bool mosCopyIs_(const databox *member, const databox *score, int64_t s) {
+    char want[32];
+    mosCopyName_(want, sizeof(want), s);
+    const bool scoreOk = score->type == DATABOX_SIGNED_64 ? score->data.i64 == s
+                         : score->type == DATABOX_UNSIGNED_64
+                             ? s >= 0 && score->data.u64 == (uint64_t)s
+                             : false;
+    return scoreOk && databoxLen(member) == strlen(want) &&
+           memcmp(databoxBytes(member), want, strlen(want)) == 0;
+}
+
+/* Every read of 'm' against 'present' (score s is in the set as member
+ * s); returns the mismatches */
+static int mosCopyCheck_(const multiOrderedSetFull *m, const bool *present,
+                         const char *what) {
+    int bad = 0;
+    int64_t order[MOS_COPY_N];
+    int64_t n = 0;
+    for (int64_t s = 0; s < MOS_COPY_N; s++) {
+        if (present[s]) {
+            order[n++] = s;
+        }
+    }
+
+    if ((int64_t)multiOrderedSetFullCount(m) != n ||
+        mosFullCheckInvariants(m) != 0) {
+        printf("%s: count %zu, want %" PRId64 " (or invariants)\n", what,
+               multiOrderedSetFullCount(m), n);
+        return 1;
+    }
+
+    /* Both directions, member names included */
+    for (int dir = 0; dir < 2; dir++) {
+        mosIterator it;
+        multiOrderedSetFullIteratorInit(m, &it, dir == 0);
+        databox member;
+        databox score;
+        int64_t k = 0;
+        while (multiOrderedSetFullIteratorNext(&it, &member, &score)) {
+            if (k >= n || !mosCopyIs_(&member, &score,
+                                      dir == 0 ? order[k] : order[n - 1 - k])) {
+                printf("%s: iteration %d step %" PRId64 " wrong\n", what, dir,
+                       k);
+                bad++;
+                break;
+            }
+            k++;
+        }
+        if (k != n) {
+            printf("%s: iteration %d gave %" PRId64 " of %" PRId64 "\n", what,
+                   dir, k, n);
+            bad++;
+        }
+    }
+
+    /* Ranks, positioned iterators, score lookups */
+    for (int64_t r = 0; r < n; r += 37) {
+        databox member;
+        databox score;
+        char name[32];
+        mosCopyName_(name, sizeof(name), order[r]);
+        const databox key = databoxNewBytesString(name);
+        mosIterator it;
+        databox im;
+        databox is;
+        const char *wrong = NULL;
+        if (!multiOrderedSetFullGetByRank(m, r, &member, &score) ||
+            !mosCopyIs_(&member, &score, order[r])) {
+            wrong = "GetByRank";
+        } else if (multiOrderedSetFullGetRank(m, &key) != r) {
+            wrong = "GetRank";
+        } else if (multiOrderedSetFullGetReverseRank(m, &key) != n - 1 - r) {
+            wrong = "GetReverseRank";
+        } else if (!multiOrderedSetFullIteratorInitAtRank(m, &it, r, true) ||
+                   !multiOrderedSetFullIteratorNext(&it, &im, &is) ||
+                   !mosCopyIs_(&im, &is, order[r])) {
+            wrong = "IteratorInitAtRank forward";
+        } else if (!multiOrderedSetFullIteratorInitAtRank(m, &it, r, false) ||
+                   !multiOrderedSetFullIteratorNext(&it, &im, &is) ||
+                   !mosCopyIs_(&im, &is, order[r])) {
+            wrong = "IteratorInitAtRank backward";
+        }
+        if (wrong) {
+            printf("%s: %s at rank %" PRId64 " (score %" PRId64 ") wrong\n",
+                   what, wrong, r, order[r]);
+            bad++;
+            break;
+        }
+        /* Positioned at a score that is absent lands on the next one */
+        const databox at = databoxNewSigned(order[r] - (r ? 0 : 1));
+        if (!multiOrderedSetFullIteratorInitAtScore(m, &it, &at, true) ||
+            !multiOrderedSetFullIteratorNext(&it, &im, &is) ||
+            !mosCopyIs_(&im, &is, order[r])) {
+            printf("%s: at score %" PRId64 " wrong\n", what, order[r]);
+            bad++;
+            break;
+        }
+    }
+
+    databox fm;
+    databox fs;
+    databox lm;
+    databox ls;
+    const mosRangeSpec range = {.min = databoxNewSigned(500),
+                                .max = databoxNewSigned(2500),
+                                .minExclusive = true};
+    int64_t inRange = 0;
+    for (int64_t k = 0; k < n; k++) {
+        inRange += order[k] > 500 && order[k] <= 2500;
+    }
+    if (n && (!multiOrderedSetFullFirst(m, &fm, &fs) ||
+              !mosCopyIs_(&fm, &fs, order[0]) ||
+              !multiOrderedSetFullLast(m, &lm, &ls) ||
+              !mosCopyIs_(&lm, &ls, order[n - 1]) ||
+              (int64_t)multiOrderedSetFullCountByScore(m, &range) != inRange)) {
+        printf("%s: first/last/count-by-score wrong\n", what);
+        bad++;
+    }
+    return bad;
+}
+
 int multiOrderedSetFullTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -1744,6 +1880,94 @@ int multiOrderedSetFullTest(int argc, char *argv[]) {
         multiOrderedSetFullFree(b);
         if (atomPoolCount(shared) > 50) {
             ERRR("the external pool grew after its set was freed");
+        }
+        atomPoolFree(shared);
+    }
+
+    TEST("MOS-Full: copies of plain, owned-pool and shared-pool sets") {
+        /* 3000 members over many sub-maps, then a score band, a rank band
+         * and both ends removed (emptying middle sub-maps); the copy,
+         * checked after its source is freed, answers every read as the
+         * oracle does, and keeps working when written to */
+        /* @own: caller; free=atomPoolFree */
+        atomPool *shared = atomPoolNew(ATOM_POOL_HASH);
+        static const char *kinds[] = {"plain", "owned pool", "shared pool"};
+        for (int kind = 0; kind < 3; kind++) {
+            /* @own: caller; free=multiOrderedSetFullFree */
+            multiOrderedSetFull *m =
+                kind == 0   ? multiOrderedSetFullNew()
+                : kind == 1 ? multiOrderedSetFullNewWithOwnedPool()
+                            : multiOrderedSetFullNewWithPool(shared);
+            bool present[MOS_COPY_N] = {0};
+            for (int64_t i = 0; i < MOS_COPY_N; i++) {
+                const int64_t s = (i * 1237) % MOS_COPY_N;
+                char name[32];
+                mosCopyName_(name, sizeof(name), s);
+                const databox member = databoxNewBytesString(name);
+                const databox score = databoxNewSigned(s);
+                multiOrderedSetFullAdd(m, &score, &member);
+                present[s] = true;
+            }
+
+            const mosRangeSpec band = {.min = databoxNewSigned(1000),
+                                       .max = databoxNewSigned(1599)};
+            const size_t byScore =
+                multiOrderedSetFullRemoveRangeByScore(m, &band);
+            for (int64_t s = 1000; s < 1600; s++) {
+                present[s] = false;
+            }
+            /* Ranks 100-199 are scores 100-199: nothing below is gone */
+            const size_t byRank =
+                multiOrderedSetFullRemoveRangeByRank(m, 100, 199);
+            for (int64_t s = 100; s < 200; s++) {
+                present[s] = false;
+            }
+            databox pm[5];
+            databox ps[5];
+            const size_t lows = multiOrderedSetFullPopMin(m, 5, pm, ps);
+            for (size_t i = 0; i < lows; i++) {
+                if (!mosCopyIs_(&pm[i], &ps[i], (int64_t)i)) {
+                    ERR("%s: PopMin %zu wrong", kinds[kind], i);
+                }
+                present[i] = false;
+                databoxFreeData(&pm[i]);
+                databoxFreeData(&ps[i]);
+            }
+            const size_t highs = multiOrderedSetFullPopMax(m, 5, pm, ps);
+            for (size_t i = 0; i < highs; i++) {
+                const int64_t s = MOS_COPY_N - 1 - (int64_t)i;
+                if (!mosCopyIs_(&pm[i], &ps[i], s)) {
+                    ERR("%s: PopMax %zu wrong", kinds[kind], i);
+                }
+                present[s] = false;
+                databoxFreeData(&pm[i]);
+                databoxFreeData(&ps[i]);
+            }
+            if (byScore != 600 || byRank != 100 || lows != 5 || highs != 5) {
+                ERR("%s: removed %zu by score, %zu by rank, popped %zu/%zu",
+                    kinds[kind], byScore, byRank, lows, highs);
+            }
+            char label[48];
+            snprintf(label, sizeof(label), "%s source", kinds[kind]);
+            err += mosCopyCheck_(m, present, label);
+
+            /* @own: caller; free=multiOrderedSetFullFree */
+            multiOrderedSetFull *copy = multiOrderedSetFullCopy(m);
+            multiOrderedSetFullFree(m);
+            snprintf(label, sizeof(label), "%s copy", kinds[kind]);
+            err += mosCopyCheck_(copy, present, label);
+
+            for (int64_t s = 1000; s < 1100; s++) {
+                char name[32];
+                mosCopyName_(name, sizeof(name), s);
+                const databox member = databoxNewBytesString(name);
+                const databox score = databoxNewSigned(s);
+                multiOrderedSetFullAdd(copy, &score, &member);
+                present[s] = true;
+            }
+            snprintf(label, sizeof(label), "%s copy after adds", kinds[kind]);
+            err += mosCopyCheck_(copy, present, label);
+            multiOrderedSetFullFree(copy);
         }
         atomPoolFree(shared);
     }
