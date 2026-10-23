@@ -126,6 +126,13 @@ typedef struct multidictClass {
     void (*iterateAll)(struct multidictClass *qdc, multidictSlot *slot,
                        multidictIterProcess process, void *privdata);
 
+    /* Rewrite a present key's value in one search: 'update' sees the
+     * stored value and supplies the new one (or refuses); 1 rewritten,
+     * 0 refused, -1 absent.  IncrBy, IncrByFloat, AddXX, Replace. */
+    int32_t (*updateByType)(struct multidictClass *qdc, multidictSlot **slot,
+                            const databox *keybox,
+                            multidictValueUpdate *update, void *ctx);
+
     /* Rehash reads each old slot with getIter/iterNext, inserts every row
      * into its new slot with insertByType (which copies what the row
      * borrows) and frees the old slot whole with freeSlot. */
@@ -194,9 +201,10 @@ typedef struct multidictStats {
     uint64_t count;      /* Total number of key-value pairs */
     uint64_t slots;      /* Total number of hash slots */
     uint32_t loadFactor; /* count * 100 / slots */
-    uint64_t usedBytes;  /* Bytes used by slot structures */
-    uint64_t keyBytes;   /* Bytes used by keys */
-    uint64_t valBytes;   /* Bytes used by values */
+    uint64_t usedBytes;  /* Bytes of the slots: the sum of their sizes */
+    uint64_t keyBytes;   /* Keys: a 64-bit number or real counts 8, a
+                            96/128-bit one 16, bytes their length */
+    uint64_t valBytes;   /* Values, counted as keys are */
     uint64_t totalBytes; /* Total memory usage */
     bool isRehashing;
 } multidictStats;
@@ -1050,8 +1058,9 @@ entries on average, so `k` below is small but never guaranteed to be 1.
 | Insert           | O(1) + O(k)   | O(n)       | Amortized; also removes any `ht[0]` twin during rehash |
 | Lookup           | O(1) + O(k)   | O(n)       | k depends on the slot implementation                   |
 | Delete           | O(1) + O(k)   | O(n)       | One slot search per table (GetAndDelete, PopRandom too) |
-| AddNX/AddXX      | O(1) + O(k)   | O(n)       | Existence probe followed by an Add                     |
-| IncrBy           | O(1) + O(k)   | O(n)       | Find, then Add - two slot walks                        |
+| AddNX            | O(1) + O(k)   | O(n)       | Existence probe followed by an Add                     |
+| AddXX/Replace    | O(1) + O(k)   | O(n)       | One slot search: the value is rewritten in place        |
+| IncrBy/IncrByFloat | O(1) + O(k) | O(n)       | One slot search for an existing key (an Add if absent)  |
 | Iteration        | O(n)          | O(n)       | Iterates all slots and entries                         |
 | SCAN             | O(1) per call | O(n)       | Full scan is O(n)                                      |
 | Rehash Step      | O(1)          | O(k)       | k = entries in a single slot                           |

@@ -235,10 +235,18 @@ DK_INLINE_ALWAYS void mdBoxRehome_(databox *dst, const databox *src,
     }
 }
 
-/* Bytes counted for a key or value in the byte statistics */
+/* Bytes counted for a key or value in the byte statistics.  The count must
+ * not depend on the form a value is stored in, since an add measures the
+ * box it was given and a removal or rewrite the box read back: a real
+ * counts 8 bytes whether given or stored as a float (flex keeps a double
+ * that fits a float as one). */
 DK_INLINE_ALWAYS size_t mdBoxSize_(const databox *box) {
     if (mdBoxIsWide_(box)) {
         return sizeof(__uint128_t);
+    }
+
+    if (box->type == DATABOX_FLOAT_32) {
+        return sizeof(double);
     }
 
     size_t len = 0;
@@ -318,6 +326,8 @@ static bool multidictRemoveFromTable_(multidict *d, int htidx,
                                       const databox *keybox, uint32_t hash,
                                       size_t keySize, databox *removedVal,
                                       bool take);
+DK_STATIC int32_t multidictUpdate_(multidict *d, const databox *keybox,
+                                   multidictValueUpdate *update, void *ctx);
 static bool multidictLRUSelectVictim(multidict *d, mdLRUCandidates *cands,
                                      databox *keybox, databoxWide *slot);
 DK_INLINE_ALWAYS bool multidictFindNoTouch_(multidict *d, const databox *keybox,
@@ -622,6 +632,7 @@ multidictOperate(multidict *d, multidictOp *op, const databox *keybox,
     int htidx;
     multidictSlot **foundSlot =
         multidictSlotForKey(d, onlyLatest, keybox, knownHash, &htidx);
+    const bool wasEmpty = !*foundSlot;
     void *result = operate(d->shared, foundSlot, keybox);
 
     if (op) {
@@ -629,6 +640,7 @@ multidictOperate(multidict *d, multidictOp *op, const databox *keybox,
         op->ht = HT(d, htidx);
         op->d = d;
         op->slot = foundSlot;
+        op->created = wasEmpty && *foundSlot;
     }
 
     return result;
@@ -1211,8 +1223,10 @@ DK_STATIC multidictResult multidictAddExact_(multidict *d,
     multidictOp op;
     multidictFindSlotForKeyNewest(d, &op, keybox, knownHash);
 
-    /* The insert may reallocate the slot: read it through its cell */
-    const size_t lenBefore = d->shared->sizeBytes(*op.slot);
+    /* The insert may reallocate the slot: read it through its cell.  A
+     * slot this add created counts whole, so usedBytes stays the sum of
+     * the slots' sizes (a slot leaves it whole when freed). */
+    const size_t lenBefore = op.created ? 0 : d->shared->sizeBytes(*op.slot);
 
     /* Get key and value sizes for tracking */
     const size_t keySize = mdBoxSize_(keybox);
@@ -1313,6 +1327,14 @@ multidictResult multidictAddNX(multidict *d, const databox *keybox,
     return result;
 }
 
+/* AddXX's rewrite: the new value, whatever was stored */
+static bool mdReplaceUpdate_(void *ctx, const databox *current,
+                             databox *replacement) {
+    (void)current;
+    *replacement = *(const databox *)ctx;
+    return true;
+}
+
 /* Add only if key DOES exist (update existing only) */
 multidictResult multidictAddXX(multidict *d, const databox *keybox,
                                const databox *valbox) {
@@ -1320,18 +1342,14 @@ multidictResult multidictAddXX(multidict *d, const databox *keybox,
         return MULTIDICT_ERR;
     }
 
-    /* Check if key exists without promoting: the update below is the one
-     * use this call makes */
-    databox unused = {{0}};
-    if (!multidictFindNoTouch_(d, keybox, &unused)) {
+    /* Rewrite the value in place, in one search; the rewrite is the one
+     * LRU use this call makes */
+    if (multidictUpdate_(d, keybox, mdReplaceUpdate_, (void *)valbox) < 0) {
         return MULTIDICT_ERR; /* Key doesn't exist - XX fails */
     }
 
-    /* Key exists - perform update (replace) */
-    multidictResult result = multidictAdd(d, keybox, valbox);
-
-    /* multidictAdd should return REPLACED since key exists */
-    return result;
+    multidictLRUOnAccess(d, keybox);
+    return MULTIDICT_OK_REPLACED;
 }
 
 /* Explicit replace - fails if key doesn't exist (same as XX, explicit intent)
@@ -1429,6 +1447,68 @@ DK_STATIC bool multidictRemove_(multidict *d, const databox *keybox,
 /* Search and remove an element - optimized for common case (key exists) */
 bool multidictDelete(multidict *d, const databox *keybox) {
     return multidictRemove_(d, keybox, NULL, false);
+}
+
+/* updateByType's callback wrapped to measure the value it replaces */
+typedef struct mdUpdateCtx {
+    multidictValueUpdate *update;
+    void *ctx;
+    size_t oldSize;
+    size_t newSize;
+} mdUpdateCtx;
+
+static bool mdUpdateMeasured_(void *ctx, const databox *current,
+                              databox *replacement) {
+    mdUpdateCtx *u = ctx;
+    if (!u->update(u->ctx, current, replacement)) {
+        return false;
+    }
+
+    u->oldSize = mdBoxSize_(current);
+    u->newSize = mdBoxSize_(replacement);
+    return true;
+}
+
+/* Rewrite the value of 'keybox' where it is stored: one hash and one
+ * slot search per table (the newer first while rehashing), keeping the
+ * byte counts.  The key is matched as the dict's type does.  Returns 1
+ * when rewritten, 0 when 'update' refused, -1 when the key is absent.
+ * LRU use is the caller's. */
+DK_STATIC int32_t multidictUpdate_(multidict *d, const databox *keybox,
+                                   multidictValueUpdate *update, void *ctx) {
+    if (unlikely(HTSIZE(d, 0) == 0)) {
+        return -1;
+    }
+
+    mdKeyCopy copy = {.heap = NULL};
+    const databox *key = MD_MATCH_BY_COMPARE(d, keybox)
+                             ? mdKeyForUpdate_(d, keybox, &copy)
+                             : keybox;
+
+    multidictRehashStep(d);
+    const uint32_t hash = multidictHashOfKey_(d, key);
+    int32_t result = -1;
+    for (int32_t t = d->rehashing ? 1 : 0; t >= 0 && result < 0; t--) {
+        multidictSlot **slot = SLOT_BY_HASH_PTR_PTR(d, t, hash);
+        if (!*slot) {
+            continue;
+        }
+
+        const size_t before = d->shared->sizeBytes(*slot);
+        mdUpdateCtx u = {.update = update, .ctx = ctx};
+        result = d->shared->updateByType(d->shared, slot, key,
+                                         mdUpdateMeasured_, &u);
+        if (result > 0) {
+            multidictHT *ht = HT(d, t);
+            ht->usedBytes =
+                ht->usedBytes - before + d->shared->sizeBytes(*slot);
+            ht->valBytes = ht->valBytes - u.oldSize + u.newSize;
+            HT_UPDATE_TOTAL(ht);
+        }
+    }
+
+    mdKeyCopyRelease_(&copy);
+    return result;
 }
 
 /* ====================================================================
@@ -1623,6 +1703,71 @@ bool multidictExistsByString(multidict *d, const char *key) {
  * Numeric Operations
  * ==================================================================== */
 
+/* multidictIncrBy's rewrite.  Increment policy (DATABOX.md "Numeric
+ * updates"): exact integer arithmetic; a value that is not an int64, or a
+ * result outside int64, is refused with the stored value unchanged.  A
+ * float value is not an integer counter: use multidictIncrByFloat. */
+typedef struct mdIncrCtx {
+    int64_t increment;
+    int64_t result;
+} mdIncrCtx;
+
+static bool mdIncrUpdate_(void *ctx, const databox *current,
+                          databox *replacement) {
+    mdIncrCtx *x = ctx;
+    int64_t value;
+    if (current->type == DATABOX_SIGNED_64) {
+        value = current->data.i64;
+    } else if (current->type == DATABOX_UNSIGNED_64 &&
+               current->data.u64 <= (uint64_t)INT64_MAX) {
+        value = (int64_t)current->data.u64;
+    } else {
+        return false;
+    }
+
+    if (__builtin_add_overflow(value, x->increment, &x->result)) {
+        return false;
+    }
+
+    *replacement = DATABOX_SIGNED(x->result);
+    return true;
+}
+
+/* multidictIncrByFloat's rewrite: any 64-bit number or float becomes a
+ * double; a 96/128-bit value or a non-finite result is refused */
+typedef struct mdIncrFloatCtx {
+    double increment;
+    double result;
+} mdIncrFloatCtx;
+
+static bool mdIncrFloatUpdate_(void *ctx, const databox *current,
+                               databox *replacement) {
+    mdIncrFloatCtx *x = ctx;
+    switch (current->type) {
+    case DATABOX_DOUBLE_64:
+        x->result = current->data.d64 + x->increment;
+        break;
+    case DATABOX_FLOAT_32:
+        x->result = current->data.f32 + x->increment;
+        break;
+    case DATABOX_SIGNED_64:
+        x->result = (double)current->data.i64 + x->increment;
+        break;
+    case DATABOX_UNSIGNED_64:
+        x->result = (double)current->data.u64 + x->increment;
+        break;
+    default:
+        return false;
+    }
+
+    if (!isfinite(x->result)) {
+        return false;
+    }
+
+    *replacement = DATABOX_DOUBLE(x->result);
+    return true;
+}
+
 /* Increment numeric value atomically. Creates key with increment if not exists.
  * Returns MULTIDICT_ERR if value exists but is not numeric. */
 multidictResult multidictIncrBy(multidict *d, const databox *keybox,
@@ -1631,45 +1776,29 @@ multidictResult multidictIncrBy(multidict *d, const databox *keybox,
         return MULTIDICT_ERR;
     }
 
-    /* Try to find existing value.  The call makes one LRU use of an
-     * existing key: the store below on success, an explicit promotion on a
-     * refusal.  So the read does not promote. */
-    databox valbox = {{0}};
-    bool exists = multidictFindNoTouch_(d, keybox, &valbox);
-
-    /* Increment policy (DATABOX.md "Numeric updates"): exact integer
-     * arithmetic, and a result outside int64 (the result's type) is
-     * refused with the stored value unchanged.  A float value is not an
-     * integer counter: use multidictIncrByFloat. */
-    int64_t newVal;
-    if (exists) {
-        int64_t current;
-        if (valbox.type == DATABOX_SIGNED_64) {
-            current = valbox.data.i64;
-        } else if (valbox.type == DATABOX_UNSIGNED_64 &&
-                   valbox.data.u64 <= (uint64_t)INT64_MAX) {
-            current = (int64_t)valbox.data.u64;
-        } else {
-            multidictLRUOnAccess(d, keybox);
-            return MULTIDICT_ERR; /* not an int64 value */
+    /* An existing key is rewritten in place, in one search; the call makes
+     * one LRU use of it, rewritten or refused */
+    mdIncrCtx x = {.increment = increment};
+    const int32_t updated = multidictUpdate_(d, keybox, mdIncrUpdate_, &x);
+    if (updated >= 0) {
+        multidictLRUOnAccess(d, keybox);
+        if (updated == 0) {
+            return MULTIDICT_ERR; /* not an int64 value, or out of range */
         }
 
-        if (__builtin_add_overflow(current, increment, &newVal)) {
-            multidictLRUOnAccess(d, keybox);
-            return MULTIDICT_ERR; /* result outside int64 */
+        if (result) {
+            *result = x.result;
         }
-    } else {
-        /* Key doesn't exist - create with increment value */
-        newVal = increment;
+
+        return MULTIDICT_OK_REPLACED;
     }
 
-    /* Store result if requested */
+    /* Key doesn't exist - create with increment value */
     if (result) {
-        *result = newVal;
+        *result = increment;
     }
 
-    /* Create new value and store */
-    databox newValbox = DATABOX_SIGNED(newVal);
+    databox newValbox = DATABOX_SIGNED(increment);
     return multidictAdd(d, keybox, &newValbox);
 }
 
@@ -1681,61 +1810,34 @@ multidictResult multidictIncrByFloat(multidict *d, const databox *keybox,
         return MULTIDICT_ERR;
     }
 
-    /* Try to find existing value; as in multidictIncrBy, an existing key
-     * gets one LRU use: the store on success, an explicit promotion on a
-     * refusal */
-    databox valbox = {{0}};
-    bool exists = multidictFindNoTouch_(d, keybox, &valbox);
-
-    double newVal;
-    if (exists) {
-        /* Check if value is numeric */
-        if (!DATABOX_IS_NUMERIC(&valbox)) {
-            multidictLRUOnAccess(d, keybox);
-            return MULTIDICT_ERR; /* Value is not numeric */
+    /* As in multidictIncrBy: an existing key is rewritten in place in one
+     * search, with one LRU use, rewritten or refused */
+    mdIncrFloatCtx x = {.increment = increment};
+    const int32_t updated = multidictUpdate_(d, keybox, mdIncrFloatUpdate_, &x);
+    if (updated >= 0) {
+        multidictLRUOnAccess(d, keybox);
+        if (updated == 0) {
+            return MULTIDICT_ERR; /* not a number, or a non-finite result */
         }
 
-        /* Get current value based on type */
-        if (DATABOX_IS_FLOAT(&valbox)) {
-            if (valbox.type == DATABOX_DOUBLE_64) {
-                newVal = valbox.data.d64 + increment;
-            } else {
-                newVal = valbox.data.f32 + increment;
-            }
-        } else if (valbox.type == DATABOX_SIGNED_64 ||
-                   valbox.type == DATABOX_UNSIGNED_64) {
-            /* Integer - convert */
-            if (valbox.type == DATABOX_SIGNED_64) {
-                newVal = (double)valbox.data.i64 + increment;
-            } else {
-                newVal = (double)valbox.data.u64 + increment;
-            }
-        } else {
-            multidictLRUOnAccess(d, keybox);
-            return MULTIDICT_ERR; /* a 96/128-bit value: not a double */
+        if (result) {
+            *result = x.result;
         }
-    } else {
-        /* Key doesn't exist - create with increment value */
-        newVal = increment;
+
+        return MULTIDICT_OK_REPLACED;
     }
 
-    /* Increment policy: a non-finite result (inf, NaN) is refused with the
-     * stored value unchanged. */
-    if (!isfinite(newVal)) {
-        if (exists) {
-            multidictLRUOnAccess(d, keybox);
-        }
-
+    /* Key doesn't exist - create with increment value; a non-finite one
+     * is refused as any non-finite result is */
+    if (!isfinite(increment)) {
         return MULTIDICT_ERR;
     }
 
-    /* Store result if requested */
     if (result) {
-        *result = newVal;
+        *result = increment;
     }
 
-    /* Create new value and store */
-    databox newValbox = DATABOX_DOUBLE(newVal);
+    databox newValbox = DATABOX_DOUBLE(increment);
     return multidictAdd(d, keybox, &newValbox);
 }
 
@@ -3267,6 +3369,33 @@ DK_STATIC void mmSlotIterateAll(multidictClass *qdc, multidictSlot *slot,
     }
 }
 
+DK_STATIC int32_t mmSlotUpdate(multidictClass *qdc, multidictSlot **slot,
+                               const databox *keybox,
+                               multidictValueUpdate *update, void *ctx) {
+    (void)qdc;
+    multimapEntry me;
+    if (*slot == NULL ||
+        !multimapGetUnderlyingEntry(MM_SLOT(*slot), keybox, &me)) {
+        return -1;
+    }
+
+    /* The row is found once: read the value through its entry and, unless
+     * refused, rewrite that entry in place */
+    me.fe = flexNext(*me.map, me.fe);
+    databox current;
+    databoxWide currentWide;
+    mdBoxAim_(&current, &currentWide);
+    flexGetByTypeInto(me.fe, &current, &currentWide);
+
+    databox replacement;
+    if (!update(ctx, &current, &replacement)) {
+        return 0;
+    }
+
+    multimapReplaceEntry(MM_SLOT_REF(slot), &me, &replacement);
+    return 1;
+}
+
 DK_STATIC void mmSlotClassFree(multidictClass *qdc) {
     (void)qdc;
     /* Nothing to free for this simple class */
@@ -3295,6 +3424,7 @@ DK_STATIC multidictClass *multidictMmClassNew(void) {
     qdc->countSlot = mmSlotCount;
     qdc->findKeyByPosition = mmSlotFindKeyByPos;
     qdc->iterateAll = mmSlotIterateAll;
+    qdc->updateByType = mmSlotUpdate;
     qdc->free = mmSlotClassFree;
     qdc->freeClass = mmSlotFreeClass;
     qdc->disableResize = false;
@@ -5529,6 +5659,115 @@ static int multidictTestLruPromotion_(multidictType *type) {
     return err;
 }
 
+/* Recount both tables' slots and entries and compare with the counters
+ * the dict maintains incrementally (count, usedBytes, keyBytes,
+ * valBytes) */
+static bool mdTestCountersHold_(multidict *d) {
+    for (int32_t t = 0; t < 2; t++) {
+        const multidictHT *ht = &d->ht[t];
+        uint64_t count = 0;
+        uint64_t used = 0;
+        uint64_t keyBytes = 0;
+        uint64_t valBytes = 0;
+        for (uint32_t s = 0; s < ht->size; s++) {
+            multidictSlot *slot = ht->table[s];
+            if (!slot) {
+                continue;
+            }
+
+            used += d->shared->sizeBytes(slot);
+            multidictSlotIterator iter;
+            multidictEntry e;
+            if (d->shared->getIter(&iter, slot)) {
+                while (d->shared->iterNext(&iter, &e)) {
+                    count++;
+                    keyBytes += mdBoxSize_(&e.key);
+                    valBytes += mdBoxSize_(&e.val);
+                }
+            }
+        }
+
+        if (count != ht->count || used != ht->usedBytes ||
+            keyBytes != ht->keyBytes || valBytes != ht->valBytes) {
+            printf("table %d recounts %" PRIu64 "/%" PRIu64 "/%" PRIu64
+                   "/%" PRIu64 ", counters say %" PRIu64 "/%" PRIu64 "/%" PRIu64
+                   "/%" PRIu64 "\n",
+                   t, count, used, keyBytes, valBytes, (uint64_t)ht->count,
+                   (uint64_t)ht->usedBytes, (uint64_t)ht->keyBytes,
+                   (uint64_t)ht->valBytes);
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/* Every in-place and removing path keeps the counters exact, mid-rehash
+ * included: values change type and size through AddXX / Replace, IncrBy,
+ * IncrByFloat, and leave through Delete, GetAndDelete and PopRandom. */
+static int multidictTestCountersUnderUpdates_(void) {
+    int err = 0;
+    cleaner(multidictMmClassFree) multidictClass *qdc = multidictMmClassNew();
+    cleaner(multidictFree) multidict *d =
+        multidictNew(&multidictTypeExactKey, qdc, 4242);
+    char longValue[200];
+    memset(longValue, 'v', sizeof(longValue));
+    uint64_t rng = 99;
+    for (int64_t i = 0; i < 4000; i++) {
+        char keyBuf[32];
+        snprintf(keyBuf, sizeof(keyBuf), "k%" PRId64, i % 1500);
+        const databox key = databoxNewBytesString(keyBuf);
+        rng = rng * 6364136223846793005ULL + 1442695040888963407ULL;
+        switch ((rng >> 33) % 7) {
+        case 0: {
+            const databox val = databoxNewSigned(i);
+            multidictAdd(d, &key, &val);
+            break;
+        }
+        case 1: {
+            /* A long string replaces whatever was there, or nothing */
+            const databox val =
+                databoxNewBytes(longValue, 1 + (size_t)(i % 199));
+            multidictAddXX(d, &key, &val);
+            break;
+        }
+        case 2:
+            multidictIncrBy(d, &key, i - 2000, NULL);
+            break;
+        case 3:
+            multidictIncrByFloat(d, &key, 0.5, NULL);
+            break;
+        case 4:
+            multidictDelete(d, &key);
+            break;
+        case 5: {
+            databox got;
+            if (multidictGetAndDelete(d, &key, &got)) {
+                databoxFreeData(&got);
+            }
+            break;
+        }
+        default: {
+            databox k;
+            databox v;
+            if (multidictPopRandom(d, &k, &v)) {
+                databoxFreeData(&k);
+                databoxFreeData(&v);
+            }
+            break;
+        }
+        }
+
+        if (!mdTestCountersHold_(d)) {
+            printf("counters wrong after operation %" PRId64 "\n", i);
+            err++;
+            break;
+        }
+    }
+
+    return err;
+}
+
 int multidictTest(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -7368,6 +7607,10 @@ int multidictTest(int argc, char *argv[]) {
      * SECTION 11: Bytes Tracking Verification
      * ================================================================ */
     printf("\n--- Section 11: Bytes Tracking Verification ---\n");
+
+    printf("Test 11.0: counters exact under in-place updates and removals, "
+           "mid-rehash too...\n");
+    assert(multidictTestCountersUnderUpdates_() == 0);
 
     printf("Test 11.1: Fresh dict has zero bytes...\n");
     {

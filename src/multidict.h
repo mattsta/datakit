@@ -23,9 +23,11 @@ typedef struct multidictStats {
     uint64_t count;      /* Total number of key-value pairs */
     uint64_t slots;      /* Total number of hash slots */
     uint32_t loadFactor; /* Current load factor (count * 100 / slots) */
-    uint64_t usedBytes;  /* Bytes used by slot structures */
-    uint64_t keyBytes;   /* Bytes used by keys */
-    uint64_t valBytes;   /* Bytes used by values */
+    uint64_t usedBytes;  /* Bytes of the slots: the sum of their sizes */
+    uint64_t keyBytes;   /* Bytes of the keys (a 64-bit number or real
+                            counts 8, a 96/128-bit one 16, bytes their
+                            length) */
+    uint64_t valBytes;   /* Bytes of the values, counted as keys are */
     uint64_t totalBytes; /* Total memory usage */
     bool isRehashing;    /* Whether rehashing is in progress */
 } multidictStats;
@@ -108,6 +110,7 @@ typedef struct multidictOp {
     struct multidictHT *ht;
     void *result;
     multidictSlot **slot; /* the table cell the operation used */
+    bool created;         /* the operation created the cell's slot */
 } multidictOp;
 
 typedef void(multidictIterProcess)(void *privdata, const databox *key,
@@ -123,7 +126,13 @@ typedef void(multidictIterProcess)(void *privdata, const databox *key,
 typedef bool(multidictEvictionCallback)(void *privdata, const databox *key,
                                         const databox *val);
 
-/* multidictClass is a (17 * 8) + 1, padded = 144 byte struct: the
+/* Rewrites a stored value for updateByType: 'current' is the stored
+ * value (borrowed, valid during the call); fill 'replacement' and return
+ * true, or return false to refuse, changing nothing. */
+typedef bool(multidictValueUpdate)(void *ctx, const databox *current,
+                                   databox *replacement);
+
+/* multidictClass is a (16 * 8) + 1, padded = 136 byte struct: the
  * per-operation hooks fill the first cache line. */
 typedef struct multidictClass {
     /* Private data this class needs (atom dict, key dict, etc) */
@@ -173,6 +182,14 @@ typedef struct multidictClass {
     /* For SCAN */
     void (*iterateAll)(struct multidictClass *qdc, multidictSlot *slot,
                        multidictIterProcess process, void *privdata);
+
+    /* Rewrite the value of 'keybox' where it is stored, in one search:
+     * 'update' sees the stored value and supplies the new one.  Returns 1
+     * when rewritten, 0 when 'update' refused, -1 when the key is not in
+     * the slot.  (IncrBy, IncrByFloat, AddXX and Replace use it.) */
+    int32_t (*updateByType)(struct multidictClass *qdc, multidictSlot **slot,
+                            const databox *keybox, multidictValueUpdate *update,
+                            void *ctx);
 
     /* Rehash uses getIter/iterNext, insertByType and freeSlot: every row
      * of an old slot is read in place and inserted into its new slot, then
